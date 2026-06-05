@@ -32,5 +32,6 @@ version = "0.1.0"
 dependencies = [
  "ramshared-block",
  "ramshared-cuda",
+ "ramshared-integrity",
  "ramshared-tier",
 ]

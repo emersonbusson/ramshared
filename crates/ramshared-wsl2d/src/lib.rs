@@ -4,9 +4,11 @@
 #![forbid(unsafe_code)]
 
 pub mod backend;
+pub mod canary_probe;
 pub mod residency;
 pub mod state;
 
 pub use backend::VramBackend;
-pub use residency::{Canary, DemoteReason, ResidencyConfig, Verdict};
+pub use canary_probe::{CANARY_BYTES, CANARY_EVERY, Cadence, CanaryProbe};
+pub use residency::{Canary, DemoteReason, ResidencyConfig, ResidencySampler, Verdict};
 pub use state::State;

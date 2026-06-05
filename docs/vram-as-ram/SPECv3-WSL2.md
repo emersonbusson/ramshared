@@ -280,6 +280,14 @@ de saída sem perda de dado.
 Dado sobrevive (hash ok); latência 4K → 1,18 s sob VRAM cheia. Confirma (a) como o
 gatilho relevante e justifica o DEMOTE em vez de confiar na VRAM sob pressão.
 
+### 9.4 Canário dedicado de conteúdo/free-floor — implementado (issue #8)
+Os gatilhos (b)/(c) do §9.1 são sondados por uma região-canário dedicada (separada da
+swap, **não endereçável** por NBD) + amostrador com histerese (`ResidencySampler`):
+corrupção de conteúdo demove imediato; free-floor e erros transientes exigem
+`consecutive` amostras (anti falso-positivo, DT-9/DT-11). A latência por-request (a)
+segue como gatilho primário. Spec/Impl:
+[`docs/008-vram-residency-canary/`](../008-vram-residency-canary/).
+
 ## 10. Tiers e backends
 
 - **zram:** `ramshared-tier/zram.rs` (criar, dimensionar, mkswap, swapon 200,
