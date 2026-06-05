@@ -1,13 +1,40 @@
 # CLAUDE.md — RamShared
 
+> **ATENÇÃO:** Mantenha este arquivo minúsculo. Todas as regras específicas do projeto foram movidas para `.claude/rules/*.md`. Não copie longos dossiers aqui.
+
 ## Agent Source Of Truth
 
-Para regras de codificação, arquitetura de memória, módulos do Kernel (LKM), PCIe e Rust for Linux, leia **`.claude/rules/kernel.md`**.
+`.claude/rules/*.md` são os documentos autoritativos de regras de código. `AGENTS.md` (e `.cursor/rules/*`, `.windsurf/rules/*` se houver) espelham essas diretrizes.
 
-Suas prioridades em código são a segurança do barramento (prevenir stalls no PCIe) e a estabilidade da árvore de páginas do kernel.
+Antes de alterar código:
 
-## Metodologia SSDV3
-Nunca escreva implementação direta baseada no PRD. Siga a metodologia SSDV3 descrita em `docs/SSDV3-PROMPTS.md` e `.claude/rules/ssdv3.md`.
+1. Leia este arquivo e `MEMORY.md`.
+2. Para módulos de kernel (LKM), HMM, Rust for Linux e CXL, leia `.claude/rules/kernel.md`.
+3. Se envolver mudança estrutural, manipulação de locks, alocação crônica ou novo hardware, siga a metodologia **SSDV3** (`.claude/rules/ssdv3.md` e `docs/SSDV3-PROMPTS.md`).
 
-## Disciplinas Kahneman
-Toda mudança estrutural deve documentar mitigação de Kernel Panic ou corrupção de memória (Sistema 2) usando `docs/methodology/KAHNEMAN-DISCIPLINES.md`.
+## Metodologias Core
+
+- **Kahneman Disciplines**: Toda decisão arquitetural ou de lock/DMA deve seguir as 14 disciplinas de Kahneman (`docs/methodology/KAHNEMAN-DISCIPLINES.md`). Evite decisões rápidas de "Sistema 1"; registre counterfactuals e triggers de reversão de patch explícitos.
+- **SSDV3**: Spec-Driven Development. Pipeline: PRD → SPEC → IMPL. Veja `.claude/rules/ssdv3.md`.
+
+## Day-0 Policy
+
+O RamShared exige que todo código enviado para o Ring 0 seja a versão definitiva para o Day-0. É proibido:
+- Shims de compatibilidade que introduzam latência.
+- Workarounds provisórios para contornar falhas de hardware ou coerência de cache.
+- Módulos que ignoram os avisos do `checkpatch.pl`.
+
+## Commits & Patches
+
+- **Inglês** em todo código C/Rust, branches, Makefiles, e títulos de commit (Conventional Commits: `feat(scope): title`).
+- **PT-BR** no corpo de commits, PRs, issues e documentos na raiz / `docs/`.
+- Commits estruturais ou que afetem a MMU/DRM requerem um `Rollback trigger:` no body.
+
+## Tech Stack Overview
+
+- **Kernel Linux**: Desenvolvimento de LKM (Loadable Kernel Modules) focados em CXL, PCIe Gen5.
+- **Linguagens**: C11 (Padrões do Kernel) e Rust for Linux.
+- **Subsistemas**: HMM (Heterogeneous Memory Management), DRM (Direct Rendering Manager), MMU.
+- **Validação**: kselftest, checkpatch.pl, sparse, lockdep, kmemleak.
+
+Consulte os arquivos em `.claude/rules/` para as diretrizes profundas sobre cada tópico.

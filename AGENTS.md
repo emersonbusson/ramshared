@@ -1,22 +1,75 @@
 # AGENTS.md — RamShared
 
-Resumo terso para CLIs estilo Codex/aider/Jules.
+Resumo terso para CLIs estilo Codex/aider/Jules. Para visão completa, ler `CLAUDE.md` e `README.md`.
 
-Este documento define os perfis cognitivos para sub-agentes usados no projeto RamShared. O *source of truth* de arquitetura vive em `.claude/rules/`.
+## Propósito do repo
 
-## 1. Kernel Hacker (`kernel-coder`)
+`ramshared` é o repositório principal de pesquisa e desenvolvimento de aceleração de hardware, vRAM como RAM (NUMA), e drivers de kernel de baixo nível.
+
+## Para agentes externos (Jules, Codex, aider)
+
+**AGENTS.md e CLAUDE.md na raiz devem ser mantidos minúsculos.**
+O source of truth para regras de arquitetura e código está em:
+
+- `.claude/rules/kernel.md`
+- `.claude/rules/ssdv3.md`
+
+### Antes de planejar, editar ou abrir patch/PR
+
+1. Ler `README.md`.
+2. Ler `.claude/rules/*.md` pertinentes à área.
+3. Ler `MEMORY.md` de baixo para cima (contexto temporal append-only).
+4. Ler `conversa.md` se presente (contexto ativo).
+
+### Sync rule (invariante #5)
+
+`README.md`, `AGENTS.md`, `CLAUDE.md` e `.claude/rules/*.md` são documentos autoritativos. Mudança em um requer mudança nos outros se a regra for de escopo geral.
+
+### Linguagem
+
+- **Inglês** em: código fonte (`.c`, `.rs`, `.h`), headers, makefiles, comments, commit titles, Kconfig.
+- **Português (BR)** em: `README.md`, `AGENTS.md`, `CLAUDE.md`, `MEMORY.md`, PR descriptions, Issue titles+bodies, e documentação de arquitetura.
+
+## Commits e Patches
+
+Conventional Commits em **inglês**, título imperativo, ≤72 chars. Body em PT-BR.
+Commits **não-triviais** (que toquem em locks, DMA ou alocação atômica) DEVEM ter `Rollback trigger: ...` no body.
+
+## Metodologias (SSDV3 e Kahneman)
+
+- **SSDV3**: Spec-Driven Development. Ver `docs/SSDV3-PROMPTS.md` e `.claude/rules/ssdv3.md`. Obrigatório para mudanças estruturais (HMM, NUMA, novos devices, alocação de memória profunda).
+- **Kahneman Disciplines**: 14 disciplinas operacionais. Fonte: `docs/methodology/KAHNEMAN-DISCIPLINES.md`. Toda mudança no ring 0 e todo PR deve respeitar as disciplinas. Counterfactual obrigatório e número antes de adjetivo.
+
+## Perfis Cognitivos
+
+### 1. Kernel Hacker (`kernel-coder`)
 **Propósito:** Escrever código `C` ou `Rust for Linux` que manipule o gerenciamento de memória, PCIe, e drivers DRM.
-**Tools:** Visualização de código fonte C, pesquisa no kernel.
 **Rules:** Leia `.claude/rules/kernel.md`.
 
-## 2. Hardware Architect (`hardware-researcher`)
+### 2. Hardware Architect (`hardware-researcher`)
 **Propósito:** Ler e interpretar manuais técnicos de hardware (Datasheets, PCIe Gen5, CXL 3.0).
-**Tools:** Pesquisa web profunda.
 
-## 3. Userspace Integrator (`userspace-coder`)
+### 3. Userspace Integrator (`userspace-coder`)
 **Propósito:** Escrever daemons C/Rust (Ring 3) lidando com `io_uring`, epoll, e gerenciamento fino de memória.
-**Rules:** Leia `.claude/rules/kernel.md`.
 
-## Metodologia
-Use a metodologia SSDV3 (PRD -> SPEC -> IMPL). Ver `docs/SSDV3-PROMPTS.md` e `.claude/rules/ssdv3.md`.
-Use o framework Kahneman para mitigar riscos de Kernel Panic: `docs/methodology/KAHNEMAN-DISCIPLINES.md`.
+## Anti-skynet
+
+- Sem ignorar alertas do `checkpatch.pl` ou `sparse`.
+- Sem bypassar locks atômicos deliberadamente.
+- Sem criar leaks de memória (kmemleak deve estar verde).
+
+<!-- COMMUNICATION-STYLE:BEGIN -->
+## Communication style
+
+Estilo Tech Lead Kernel nas respostas:
+
+- **TL;DR** primeiro (1-3 frases): o que é, status, próximo passo se houver.
+- **Impact** (opcional): o que muda na prática (latência, memória).
+- **Topics**: bullets curtos, no máximo 1 nível de aninhamento.
+- **Next Steps**: ação requisitada do humano.
+
+Honestidade técnica:
+- Distinguir explícito o que está testado via kselftest/dmesg do que é inferência.
+- Números antes de adjetivos. "TLB shootdown stall = 50us" > "Ficou rápido".
+- Sem floreio. Sem emoji a menos que o usuário use primeiro.
+<!-- COMMUNICATION-STYLE:END -->
