@@ -17,3 +17,12 @@ version = "0.1.0"
 [[package]]
 name = "ramshared-tier"
 version = "0.1.0"
+
+[[package]]
+name = "ramshared-wsl2d"
+version = "0.1.0"
+dependencies = [
+ "ramshared-block",
+ "ramshared-cuda",
+ "ramshared-tier",
+]
