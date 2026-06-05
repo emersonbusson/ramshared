@@ -42,9 +42,24 @@ fn mem_available_bytes() -> u64 {
         .unwrap_or(0)
 }
 
-fn vhdx_present() -> bool {
+/// Existe um tier de swap ESTRITAMENTE abaixo da VRAM (prio < VRAM) p/ o DEMOTE
+/// drenar? (rede A1). Ignora zram/nbd (os tiers que este tool gere) e checa a
+/// prioridade real em /proc/swaps — nao apenas "existe algum swap".
+fn lower_tier_present() -> bool {
+    let vram_prio = TierPriorities::default().vram;
     fs::read_to_string("/proc/swaps")
-        .map(|s| s.lines().count() > 1)
+        .map(|s| {
+            s.lines()
+                .skip(1)
+                .filter_map(|l| {
+                    let c: Vec<&str> = l.split_whitespace().collect();
+                    if c.len() < 5 || c[0].contains("zram") || c[0].contains("nbd") {
+                        return None;
+                    }
+                    c[4].parse::<i32>().ok()
+                })
+                .any(|p| p < vram_prio)
+        })
         .unwrap_or(false)
 }
 
@@ -108,11 +123,11 @@ pub fn up() -> Result<(), String> {
     validate_order(prios).map_err(|e| e.to_string())?;
 
     // A1 — rede de segurança do DEMOTE (precisa de um tier abaixo da VRAM).
-    let net = vram_safety_net(
-        vhdx_present(),
-        mem_available_bytes(),
-        a.vram_mb * 1024 * 1024,
-    );
+    let vram_bytes = a
+        .vram_mb
+        .checked_mul(1024 * 1024)
+        .ok_or("--vram: overflow (MiB grande demais)")?;
+    let net = vram_safety_net(lower_tier_present(), mem_available_bytes(), vram_bytes);
     if !net.is_safe() && !a.force {
         return Err(
             "sem rede de seguranca p/ DEMOTE (sem VHDX e RAM insuficiente); \
@@ -196,10 +211,22 @@ pub fn down() -> Result<(), String> {
             let _ = sh("zramctl", &["-r", &z]);
         }
     }
-    // nbd-client -d → daemon recebe EOF, zera a VRAM e sai
+    // nbd-client -d → daemon recebe EOF, zera a VRAM (§11) e sai sozinho.
     let _ = sh("nbd-client", &["-d", NBD]);
-    sleep(Duration::from_millis(300));
-    let _ = sh("pkill", &["-x", "ramshared-wsl2d"]); // backstop
+    // Espera ele sair por conta propria (ate ~5s) p/ NAO matar no meio do zero() da
+    // VRAM (senao sobra dado residual na GPU). pkill so' como ultimo recurso.
+    let mut exited = false;
+    for _ in 0..50 {
+        if sh("pgrep", &["-x", "ramshared-wsl2d"]).is_err() {
+            exited = true;
+            break;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    if !exited {
+        eprintln!("[down] daemon nao saiu em 5s; pkill (VRAM pode nao ter sido zerada)");
+        let _ = sh("pkill", &["-x", "ramshared-wsl2d"]);
+    }
     let _ = fs::remove_file(SOCK);
     let _ = fs::remove_file(ZRAM_DEV_FILE);
     eprintln!("[down] cascata desmontada");
