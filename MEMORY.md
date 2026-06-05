@@ -28,3 +28,24 @@ apagar/reescrever entradas antigas. Nunca gravar secrets nem endereços que vaze
 - **Pendente:** terminar de-web do `SSDV3-PROMPTS.md`; #9 (gatilhos web→kernel no
   `ssdv3.md`, exige sync `CLAUDE.md`/`AGENTS.md`); `docs/decisions/` + ADRs
   (ainda não existem, citados pelas disciplinas); `docs/LIBRARIES.md`.
+
+---
+
+## 2026-06-05 — vram-as-ram: cascata Rust fim-a-fim VALIDADA
+
+- **Passo 3 completo** (`faca tudo na ordem correta`): daemon com `mlockall`+
+  `oom_score_adj=-1000` (Disciplina 3); **canário §9 inline** no serve loop (mede
+  latência, arma `Canary` pós-baseline, dispara `swapoff <nbd>` numa thread no
+  DEMOTE mantendo o read-back); `check`+zram (linha "Tiers"); 6 crates verdes
+  (`fmt`/`clippy -D warnings`/testes).
+- **Aceitação §14 provada no sistema vivo** (RTX 2060, WSL2), pressão confinada
+  por cgroup v2 — ver [`docs/vram-as-ram/VALIDATION-CASCADE.md`](docs/vram-as-ram/VALIDATION-CASCADE.md):
+  - **§14.3 spill:** `up` montou `zram(200)>nbd0(100)>sdc(-2)`; hog 1300M/cgroup
+    768M → **511 MiB** na VRAM, **332.800 páginas íntegras**, canário sem
+    falso-positivo sob carga.
+  - **§14.4 DEMOTE:** **481 MiB vivos** migraram VRAM→VHDX via `swapoff` em 6 s,
+    **384.000 páginas íntegras, 0 corrupção**, daemon serviu o read-back.
+- **Harness** (fora do repo, em `/home/emdev/fase0/`): `cascade-validate.sh`,
+  `cascade-demote.sh`, `cascade-hog.c` (bug corrigido: `mmap` exigia `offset=0`).
+- **Pendente:** refinamentos não-bloqueantes (canário §9.4 dedicado p/
+  conteúdo/free-floor; daemon multi-conexão). **PR ainda NÃO** (revisar tudo antes).

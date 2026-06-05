@@ -45,21 +45,32 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
 - `ramshared-block` separa **protocolo/I/O** (lib pura, `#![forbid(unsafe_code)]`, 13 testes sem root) da **fiação do device** (`/dev/nbdX` via ioctl, `unsafe`+root) — esta fica para o módulo de integração, testada via `--ignored`/kselftest.
 - `VramBackend` (`ramshared-wsl2d`) é o ponto que liga CUDA↔NBD; composição validada em GPU real (WRITE/READ NBD round-trip na VRAM) — `cuda` + `block` formam o device de ponta a ponta (falta só a fiação do kernel).
 
-### Pendente (próximos incrementos, na ordem do SPECv3)
+### Concluído (Passo 3 — pipeline da cascata fim-a-fim)
 
-1. `check`: adicionar tiers **zram + cgroup** (§6.1).
-2. ✅ **`up`/`down`/`status` validado** (2026-06-05): monta `zram(200)>VRAM(100)>
-   VHDX(-2)` (swapon confirmado) e desmonta limpo (anti-panic).
-3. `ramshared-wsl2d`: **wiring** do canário (thread sampler CUDA + `swapoff` do
-   DEMOTE no daemon) + sequência `start` (mlockall/oom_score_adj §6.2). [estados
-   §7 ✅, VramBackend ✅, **decisão §9.3 do canário ✅** (5 testes; o spike 1,18 s
-   da Fase 0 dispara Demote(Latency))]
-4. ✅ **device-wiring NBD validado** (2026-06-05, smoke em `/home/emdev/fase0/`):
-   daemon serve `/dev/nbd0` real via `nbd-client -unix` (handshake interop OK,
-   **sem ioctl/`unsafe` no daemon**); write/readback de 1 MiB pelo block layer →
-   **VRAM round-trip OK**. Falta: canário/DEMOTE (§9), CLI `up`/`down`, zram.
-5. Testes de aceitação §14: cascata sob pressão **confinada em cgroup** (§14.3) e
-   **DEMOTE sob latência** (§14.4).
+1. ✅ **`check`+zram** (§6.1): probe de `CONFIG_ZRAM` + linha "Tiers (cascata)"
+   (texto e json) reportando `zram / vram=nbd / vhdx`.
+2. ✅ **`up`/`down`/`status`** (2026-06-05): monta `zram(200)>VRAM(100)>VHDX(-2)`
+   (swapon confirmado) e desmonta limpo (anti-panic; `swapoff` antes do disconnect).
+3. ✅ **Daemon `ramshared-wsl2d`**: `mlockall`+`oom_score_adj=-1000` (anti-deadlock,
+   Disciplina 3) + **wiring do canário §9 inline** (mede a latência do serve, arma
+   o `Canary` pós-baseline e dispara `swapoff <nbd>` numa thread no DEMOTE, mantendo
+   o serve loop p/ o read-back). Estados §7 ✅, `VramBackend` ✅, decisão §9.3 ✅
+   (5 testes; o spike 1,18 s da Fase 0 dispara `Demote(Latency)`).
+4. ✅ **device-wiring NBD** (smoke `/home/emdev/fase0/wiring-smoke.sh`): daemon serve
+   `/dev/nbd0` real via `nbd-client -unix` (handshake interop OK, **sem ioctl/`unsafe`
+   no daemon**); write/readback 1 MiB → VRAM round-trip OK.
+5. ✅ **Aceitação §14** — ver [`VALIDATION-CASCADE.md`](VALIDATION-CASCADE.md):
+   - §14.3 spill confinado em cgroup: **511 MiB** spillaram p/ VRAM, **332.800
+     páginas íntegras**, 0 falso-positivo do canário.
+   - §14.4 DEMOTE: **481 MiB vivos** migraram da VRAM p/ VHDX via `swapoff` em 6 s,
+     **384.000 páginas íntegras, 0 corrupção**, daemon serviu o read-back.
+
+### Refinamentos futuros (não bloqueiam Day-0)
+
+- Canário §9.4 **dedicado** (região-canário + checagem de conteúdo/free-floor): hoje
+  o wiring inline cobre o gatilho de latência (o dominante na Fase 0); conteúdo e
+  free-floor têm a lógica testada (`residency.rs`) mas exigem o sampler dedicado.
+- Multi-conexão no daemon (hoje serve 1 conexão = exatamente a vida do swap).
 
 ### Fase 0 (evidência que fundou o SPECv3)
 
