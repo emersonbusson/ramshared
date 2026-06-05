@@ -144,7 +144,14 @@ pub fn up() -> Result<(), String> {
     sh("modprobe", &["nbd", "nbds_max=1", "max_part=0"])?;
     let _ = fs::remove_file(SOCK);
     Command::new(&a.daemon)
-        .args(["--size", &a.vram_mb.to_string(), "--sock", SOCK])
+        .args([
+            "--size",
+            &a.vram_mb.to_string(),
+            "--sock",
+            SOCK,
+            "--nbd",
+            NBD,
+        ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

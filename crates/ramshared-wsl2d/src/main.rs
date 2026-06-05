@@ -14,7 +14,7 @@ use std::path::Path;
 use ramshared_block::protocol::{NBD_FLAG_HAS_FLAGS, NBD_FLAG_SEND_FLUSH, REQUEST_LEN};
 use ramshared_block::{BlockBackend, Command, parse_request, serve, server_handshake};
 use ramshared_cuda::Cuda;
-use ramshared_wsl2d::VramBackend;
+use ramshared_wsl2d::{Canary, ResidencyConfig, Verdict, VramBackend};
 
 // Disciplina 3 (anti-deadlock): o daemon serve o swap, logo nao pode ser swapado.
 unsafe extern "C" {
@@ -40,6 +40,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut size = DEFAULT_SIZE;
     let mut sock = "/run/ramshared/wsl2d.sock".to_string();
     let mut force = false;
+    let mut nbd_dev = "/dev/nbd0".to_string();
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
     while i < args.len() {
@@ -54,6 +55,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 sock = args.get(i).ok_or("--sock requer caminho")?.clone();
             }
             "--force" => force = true,
+            "--nbd" => {
+                i += 1;
+                nbd_dev = args.get(i).ok_or("--nbd requer caminho")?.clone();
+            }
             other => return Err(format!("argumento desconhecido: {other}").into()),
         }
         i += 1;
@@ -108,6 +113,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     server_handshake(&mut reader, &mut writer, backend.size_bytes(), tx_flags)?;
     eprintln!("[wsl2d] handshake ok; em transmissão");
 
+    let mut canary: Option<Canary> = None;
+    let mut baseline: Vec<u64> = Vec::new();
+    let mut demoted = false;
     let mut hdr = [0u8; REQUEST_LEN];
     loop {
         match reader.read_exact(&mut hdr) {
@@ -123,12 +131,41 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             Vec::new()
         };
+        let touches_vram = matches!(req.cmd, Command::Read | Command::Write);
+        let t0 = std::time::Instant::now();
         let out = serve(&req, &payload, &mut backend);
+        let lat_us = t0.elapsed().as_micros() as u64;
         writer.write_all(&out.reply)?;
         if !out.read_data.is_empty() {
             writer.write_all(&out.read_data)?;
         }
         writer.flush()?;
+        // Canario inline (§9): mede latencia do I/O da VRAM; DEMOTE sob spike.
+        if touches_vram && !demoted {
+            match canary.as_mut() {
+                None => {
+                    baseline.push(lat_us);
+                    if baseline.len() >= 16 {
+                        baseline.sort_unstable();
+                        let med = baseline[baseline.len() / 2].max(1);
+                        canary = Some(Canary::new(ResidencyConfig::default(), med));
+                        eprintln!("[wsl2d] canario armado (baseline={med} us)");
+                    }
+                }
+                Some(c) => {
+                    if let Verdict::Demote(reason) = c.sample(lat_us, true, u64::MAX) {
+                        eprintln!(
+                            "[wsl2d] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}"
+                        );
+                        let dev = nbd_dev.clone();
+                        std::thread::spawn(move || {
+                            let _ = std::process::Command::new("swapoff").arg(&dev).status();
+                        });
+                        demoted = true;
+                    }
+                }
+            }
+        }
         if out.disconnect {
             eprintln!("[wsl2d] disconnect");
             break;
