@@ -8,10 +8,12 @@
 //! root + device) — esta lib é só o protocolo e a lógica.
 #![forbid(unsafe_code)]
 
+pub mod handshake;
 pub mod inflight;
 pub mod protocol;
 pub mod request;
 
+pub use handshake::{HandshakeError, server_handshake};
 pub use inflight::Inflight;
 pub use protocol::{Command, ProtocolError, Request, encode_simple_reply, parse_request};
 pub use request::{BlockBackend, IoError, ServeOutcome, serve};
