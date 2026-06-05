@@ -2,7 +2,6 @@
 name: ssdv3
 description: Quando SSDV3 (Spec-Driven Development) é obrigatório vs opcional.
 paths:
-  - docs/specs/**
   - docs/**
 ---
 
@@ -37,7 +36,7 @@ Tudo o mais é opcional. Exemplos onde SSDV3 é **overhead**:
 
 Copie o prompt de `docs/SSDV3-PROMPTS.md` (PASSO 1 PRD), substitua placeholders, cole no chat.
 
-Output: `docs/specs/<feature-slug>/PRD.md`. 14 seções fixas:
+Output: `docs/<feature-slug>/PRD.md`. 14 seções fixas:
 
 1. Resumo
 2. Contexto técnico
@@ -62,21 +61,21 @@ Cada item marcado como:
 
 ### PASSO 2 — SPEC
 
-Copie o prompt PASSO 2 SPEC, cole o PRD aprovado, gere `docs/specs/<feature-slug>/SPEC.md`.
+Copie o prompt PASSO 2 SPEC, cole o PRD aprovado, gere `docs/<feature-slug>/SPEC.md`.
 
 SPEC traduz PRD em:
 
 - Arquivos a criar/modificar (paths absolutos)
-- Diffs SQL com placeholders
-- Validações em handlers (request/response shape)
-- Middleware chains
-- Links para `disciplines/KAHNEMAN-DISCIPLINES.md` para os passos críticos
+- Arquivos/patches com paths absolutos
+- Validações em handlers (ioctl/sysfs: `copy_{from,to}_user`, bounds, alinhamento)
+- Ordem de locks e seções críticas
+- Links para `docs/methodology/KAHNEMAN-DISCIPLINES.md` para os passos críticos
 
 ### PASSO 3 — IMPL
 
 Implementa estritamente conforme SPEC. **Zero criatividade fora do escopo.** Se nova decisão arise → volta para SPEC, atualiza, depois implementa.
 
-Output: `docs/specs/<feature-slug>/IMPL.md` documentando o que foi feito (commits, arquivos, decisões pequenas que não pediram nova ADR, métricas de validação).
+Output: `docs/<feature-slug>/IMPL.md` documentando o que foi feito (commits, arquivos, decisões pequenas que não pediram nova ADR, métricas de validação).
 
 ## Regras duras
 
@@ -84,21 +83,21 @@ Output: `docs/specs/<feature-slug>/IMPL.md` documentando o que foi feito (commit
 2. **Separação fato vs proposta.** Cada item do PRD é "Confirmado em codebase / Confirmado em docs / Inferência". Inferências precisam de validação em SPEC.
 3. **Zero criatividade no IMPL.** Code segue SPEC. Nova decisão → SPEC update → re-aprovação.
 4. **Rastreabilidade por requirement ID.** Cada commit cita `RF-3`, `RNF-2`, etc. PR de IMPL liga aos IDs cobertos.
-5. **Kahneman discipline link.** Passos críticos no SPEC referenciam `disciplines/KAHNEMAN-DISCIPLINES.md` (ex.: para mudança de schema, link disciplina #2 counterfactual).
+5. **Kahneman discipline link.** Passos críticos no SPEC referenciam `docs/methodology/KAHNEMAN-DISCIPLINES.md` (ex.: para mudança de lock/DMA, link disciplina #2 counterfactual).
 
 ## Localização
 
 - Prompts copiáveis: `docs/SSDV3-PROMPTS.md`.
-- Artifacts: `docs/specs/<feature-slug>/{PRD,SPEC,IMPL}.md`. Slug em kebab-case inglês.
-- Disciplinas Kahneman: `disciplines/KAHNEMAN-DISCIPLINES.md`.
+- Artifacts: `docs/<feature-slug>/{PRD,SPEC,IMPL}.md`. Slug em kebab-case inglês.
+- Disciplinas Kahneman: `docs/methodology/KAHNEMAN-DISCIPLINES.md`.
 
 ## Como linkar SPEC ao código
 
-Comentários Go/TS quando o código implementa requisito específico:
+Comentários C/Rust quando o código implementa requisito específico:
 
-```go
-// SPEC: docs/specs/auth-port/SPEC.md §RF-3 — Token versioning bump no logout-all
-func (s *AuthService) LogoutAll(ctx context.Context, userID string) error {
+```rust
+// SPEC: docs/vram-as-ram/SPECv3-WSL2.md §9 — DEMOTE da VRAM por latência
+fn demote(&mut self) -> Result<(), Error> {
     // ...
 }
 ```
