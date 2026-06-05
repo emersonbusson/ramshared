@@ -150,6 +150,11 @@ pub fn up() -> Result<(), String> {
             "lzo-rle",
         ],
     )?;
+    // M5: zramctl deveria devolver /dev/zramN; valida antes de passar a cmds privilegiados.
+    if !matches!(zdev.strip_prefix("/dev/zram"), Some(s) if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Err(format!("zramctl retornou device inesperado: {zdev}"));
+    }
     sh("mkswap", &[&zdev])?;
     sh("swapon", &["-p", &prios.zram.to_string(), &zdev])?;
     fs::write(ZRAM_DEV_FILE, &zdev).map_err(|e| e.to_string())?;
