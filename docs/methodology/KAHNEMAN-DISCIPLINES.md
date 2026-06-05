@@ -218,8 +218,8 @@ abaixo é o mapa para citar em patch review ou ADR.
 > **Nota sobre rubricas:** muitas disciplinas (#1, #3, #6, #10, #11) ainda
 > não têm rubrica externa formalizada — o sinal é checado em patch review
 > manual e a regra vive nesta seção do doc. Mover para
-> `.claude/rules/coding.md` ou criar `docs/runbooks/REVIEW-ADR.md` é
-> trabalho futuro (cf. seção "Auto-aplicação" no fim).
+> `.claude/rules/coding.md` é trabalho futuro; a revisão periódica está em
+> [`docs/runbooks/REVIEW-ADR.md`](../runbooks/REVIEW-ADR.md).
 
 | Disciplina                  | Rubrica/artefato no ramshared                                                                                                                                                         | Como o sinal é checado                                                                                                                       |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -330,7 +330,7 @@ fallacy) trazem o contra-exemplo na própria seção detalhada:
 skin-in-the-game viram ritual: ADR commita rollback trigger numérico
 mas trigger nunca é executado quando condição dispara — disciplina
 existe só no template, não na mente. Mitigação: revisão periódica
-(futuro: formalizar em `docs/runbooks/REVIEW-ADR.md` a criar) percorre
+(em [`docs/runbooks/REVIEW-ADR.md`](../runbooks/REVIEW-ADR.md)) percorre
 rollback triggers ativos em `docs/decisions/` e documenta acionamentos.
 Hoje, postmortems em `docs/postmortems/` capturam acionamentos quando
 ocorrem (ou justificam não-acionamento).
@@ -400,8 +400,7 @@ falhar — e tem condição de morte declarada:
   de 30% dos patches não-triviais citarem alguma disciplina, simplificar
   para Top-5 + 1-pager via ADR superseding. Sinal de cargo cult em
   escala.
-- **Auditoria:** revisão trimestral (futuro: `docs/runbooks/REVIEW-ADR.md`
-  a criar) cruza commits de patches não-triviais × disciplinas citadas.
+- **Auditoria:** revisão trimestral ([`docs/runbooks/REVIEW-ADR.md`](../runbooks/REVIEW-ADR.md)) cruza commits de patches não-triviais × disciplinas citadas.
   Hoje, métrica é manual via grep periódico em commits e patch review
   notes. Resultado documenta na próxima entrada de `docs/postmortems/`
   se houver desvio.
