@@ -9,6 +9,9 @@ version = "0.1.0"
 [[package]]
 name = "ramshared-cli"
 version = "0.1.0"
+dependencies = [
+ "ramshared-tier",
+]
 
 [[package]]
 name = "ramshared-cuda"
