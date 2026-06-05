@@ -14,12 +14,12 @@ SSDV3 (Spec-Driven Development V3) é a metodologia de spec do `ramshared` (cf. 
 
 SSDV3 é **mandatório** para mudanças em:
 
-1. `services/api/internal/platform/auth/**` — qualquer alteração em login, signup, JWT, sessions, password, OAuth.
-2. `services/api/internal/platform/rbac/**` — adição/remoção de papel ou ação no catalog.
-3. **Semântica de `workspace_id` ou schema-per-tenant** — qualquer migration que crie/altere coluna referenciando workspace, ou mudança em `tenancy/provisioner.go`.
-4. **Novo produto** em `apps/<slug>/` ou `services/api/internal/apps/<slug>/`.
-5. **Nova camada** em `internal/platform/` (ex.: `billing/`, `notifications/`).
-6. **Migration que `DROP COLUMN`, `RENAME COLUMN`, ou altera FK** — operações irreversíveis em produção.
+1. **Locks / concorrência** — nova ordem de lock, troca spinlock↔mutex, RCU, ou barreiras de memória em hot path / contexto de IRQ.
+2. **DMA / IOMMU / MMIO** — novo mapeamento DMA, `ioremap`, ReBAR ou coerência de cache PCIe.
+3. **Memória (mm)** — semântica de NUMA node, HMM/`DEVICE_PRIVATE`, memory hotplug, ou alocação crônica em hot path.
+4. **uAPI / ABI** — nova ioctl/sysfs/debugfs ou mudança de layout de struct exposta a user-space (irreversível após release).
+5. **Novo hardware / subsistema** — suporte a novo device, integração DRM/TTM, CXL.
+6. **MMU / DRM** — qualquer mudança estrutural que toque a MMU ou o driver DRM.
 
 ## Opcional
 
@@ -80,7 +80,7 @@ Output: `docs/specs/<feature-slug>/IMPL.md` documentando o que foi feito (commit
 
 ## Regras duras
 
-1. **Reuso antes de criação.** Antes de propor código novo, prove que utilitário existente não atende. Reference: `services/shared/`, `apps/web/src/lib/`, `packages/*`.
+1. **Reuso antes de criação.** Antes de propor código novo, prove que uma API do kernel ou helper existente não atende. Reference: subsistemas (`mm/`, `drm/`, `lib/`), helpers do módulo, crates do workspace.
 2. **Separação fato vs proposta.** Cada item do PRD é "Confirmado em codebase / Confirmado em docs / Inferência". Inferências precisam de validação em SPEC.
 3. **Zero criatividade no IMPL.** Code segue SPEC. Nova decisão → SPEC update → re-aprovação.
 4. **Rastreabilidade por requirement ID.** Cada commit cita `RF-3`, `RNF-2`, etc. PR de IMPL liga aos IDs cobertos.
@@ -107,9 +107,9 @@ PR description cita SPEC + requirement IDs cobertos.
 
 ## Don't
 
-- ❌ Pular PRD/SPEC para mudança em `internal/platform/auth/**`.
+- ❌ Pular PRD/SPEC para mudança estrutural em locks/DMA/uAPI/mm.
 - ❌ "Vou só fazer um SPEC pequeno" — se a mudança cabe em SPEC sem PRD, ela provavelmente é opcional, não obrigatória; e se é obrigatória, PRD é passo 1.
 - ❌ IMPL sem SPEC aprovado.
 - ❌ "Inferência" no PRD em >30% dos itens — sinal de que a investigação foi rasa.
-- ❌ Criar utilitário novo sem checar `services/shared/` ou `apps/web/src/lib/`.
+- ❌ Criar utilitário novo sem checar APIs do kernel (`lib/`, helpers do subsistema) ou os crates do workspace.
 - ❌ Commit no IMPL que não rastreia para requirement ID.

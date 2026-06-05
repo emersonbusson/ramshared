@@ -98,8 +98,8 @@ esse multiplicador pra projetos similares.
 
 **Viés.** Modelo lembra do caso frequente, esquece do raro mas caro.
 
-**Regra.** Listar explicitamente cenários raros antes de decidir: falha
-de rede total, PgBouncer reiniciando, Redis cluster failover. Design
+**Regra.** Listar explicitamente cenários raros antes de decidir: OOM killer com lock segurado, PCIe bus
+reset, IOMMU fault, eviction WDDM/GPU-PV. Design
 pra worst-case, não pra happy path.
 
 **Sinal.** `docs/reliability/DEGRADATION-MATRIX.md` existe e é atualizado.
