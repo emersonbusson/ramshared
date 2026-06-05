@@ -11,6 +11,8 @@ Antes de alterar código:
 1. Leia este arquivo e `MEMORY.md`.
 2. Para módulos de kernel (LKM), HMM, Rust for Linux e CXL, leia `.claude/rules/kernel.md`.
 3. Se envolver mudança estrutural, manipulação de locks, alocação crônica ou novo hardware, siga a metodologia **SSDV3** (`.claude/rules/ssdv3.md` e `docs/SSDV3-PROMPTS.md`).
+4. Siga sempre `.claude/rules/coding.md` para formatação, checkpatch e testes.
+5. Em Pull Requests, siga o formato de tabela de commits de `.claude/rules/governance.md`.
 
 ## Metodologias Core
 
