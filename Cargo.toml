@@ -1,0 +1,8 @@
+[workspace]
+resolver = "3"
+members = ["crates/ramshared-cli"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://example.invalid/ramshared"
