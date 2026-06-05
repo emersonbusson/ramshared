@@ -16,6 +16,13 @@ use ramshared_block::{BlockBackend, Command, parse_request, serve, server_handsh
 use ramshared_cuda::Cuda;
 use ramshared_wsl2d::VramBackend;
 
+// Disciplina 3 (anti-deadlock): o daemon serve o swap, logo nao pode ser swapado.
+unsafe extern "C" {
+    fn mlockall(flags: core::ffi::c_int) -> core::ffi::c_int;
+}
+const MCL_CURRENT: core::ffi::c_int = 1;
+const MCL_FUTURE: core::ffi::c_int = 2;
+
 const DEFAULT_SIZE: u64 = 256 * 1024 * 1024;
 const BLOCK_SIZE: u32 = 4096;
 
@@ -32,6 +39,7 @@ fn main() -> std::process::ExitCode {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut size = DEFAULT_SIZE;
     let mut sock = "/run/ramshared/wsl2d.sock".to_string();
+    let mut force = false;
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
     while i < args.len() {
@@ -45,6 +53,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 i += 1;
                 sock = args.get(i).ok_or("--sock requer caminho")?.clone();
             }
+            "--force" => force = true,
             other => return Err(format!("argumento desconhecido: {other}").into()),
         }
         i += 1;
@@ -64,6 +73,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     let mut mem = ctx.alloc(size as usize)?;
     mem.zero()?;
+
+    // Disciplina 3: trava memoria + protege do OOM killer ANTES de servir swap.
+    // SAFETY: mlockall e' uma syscall sem efeitos de memoria inseguros.
+    let rc = unsafe { mlockall(MCL_CURRENT | MCL_FUTURE) };
+    if rc != 0 && !force {
+        return Err(format!("mlockall falhou (rc={rc}); rode como root ou use --force").into());
+    }
+    if std::fs::write("/proc/self/oom_score_adj", "-1000").is_err() && !force {
+        return Err("nao consegui setar oom_score_adj=-1000; rode como root ou use --force".into());
+    }
+    eprintln!("[wsl2d] memoria travada (mlockall) + oom_score_adj=-1000");
     let mut backend = VramBackend::new(mem, BLOCK_SIZE);
     eprintln!(
         "[wsl2d] VRAM alocada: {} MiB, block_size={}",
