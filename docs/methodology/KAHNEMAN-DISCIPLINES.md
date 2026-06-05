@@ -238,8 +238,7 @@ abaixo é o mapa para citar em patch review ou ADR.
 | #13 Ilusão de validade      | Teste de integração `CONFIG_KASAN=y ou KVM tests` por ferramenta privilegiada (ex.: `tools/testing/selftests/ramshared/vram_test.c`); deploy valida função, não só `--check` | patch de ferramenta destrutiva sem teste de integração do modo de falha real é bloqueado; teste de recusa sem par "input legítimo passa" é flag |
 
 Artefatos comuns confirmados: `CLAUDE.md`, `AGENTS.md`,
-`.claude/rules/{coding,documentation,backend,frontend,testing,security,
-infra,civm}.md`, `docs/decisions/`, `docs/postmortems/`,
+`.claude/rules/{coding,kernel,ssdv3,governance}.md`, `docs/decisions/`, `docs/postmortems/`,
 `docs/reliability/DEGRADATION-MATRIX.md`,
 `docs/SSDV3-PROMPTS.md`.
 
