@@ -63,7 +63,7 @@ issues: [42]
 
 O status no índice é derivado da presença de arquivos: `PRD` → só PRD.md; `SPEC` → SPEC.md ou SPECv2.md também presente; `DONE` → IMPL.md presente.
 
-Regenerar o índice: `yarn docs:index` (ou `npm run docs:index`). Validar sincronia em CI: `yarn docs:check`.
+Regenerar/validar o índice ao adicionar ou remover specs (checado na CI).
 
 ## Referência cognitiva
 
@@ -89,7 +89,7 @@ Exceções só são permitidas quando houver requisito explícito e documentado 
 1. **Discovery antes de convergência**
    A investigação pode ser ampla, mas o documento final deve convergir para uma única direção recomendada.
 2. **Reuso antes de criação**
-   Antes de propor novo endpoint, tabela, evento, env var, cache key ou componente, prove que o padrão existente não atende.
+   Antes de propor novo ioctl/sysfs, struct, flag, module param ou caminho de código, prove que o existente não atende.
 3. **Separar fato de proposta**
    Todo documento deve diferenciar explicitamente:
    - `Confirmado no codebase`
@@ -156,18 +156,17 @@ Antes de escrever o PRD final, siga estas fases:
 
 #### 1. Codebase RamShared — contexto interno
 
-- Leia `.claude/rules/` (kernel.md, kernel.md, security.md, testing.md, infra.md, coding.md)
-- Leia `CLAUDE.md` (root) para topologia de serviços, multi-tenancy flow, auth modes, env vars
-- Identifique o(s) serviço(s) alvo em `services/ms-{name}/` e leia `cmd/api/main.go`, routes, handlers, services, repository e models existentes
-- Mapeie o schema PostgreSQL atual: migrações em `services/ms-{name}/migrations/` e schema processo vs. `public`
-- Identifique tabelas, índices, constraints e relações que tocam nessa feature
+- Leia `.claude/rules/` (kernel.md, coding.md, ssdv3.md, governance.md)
+- Leia `CLAUDE.md` (root) e `MEMORY.md` para topologia de módulos, metodologias e estado da sessão
+- Identifique o módulo alvo (ex.: `drivers/ramshared/`) e leia init/exit, `file_operations`/ops structs, handlers e estruturas existentes
+- Mapeie as estruturas de dados e o layout de memória que a feature toca (structs, flags, regiões DMA/MMIO)
+- Identifique structs, flags, locks e regiões de memória que a feature toca
 - Verifique uso de spinlocks, RCU, barreiras de memória e coerência de cache (TLB shootdown)
 - Leia o Kconfig existente para os parâmetros de módulo disponíveis
 - Leia a documentação de IRQs e Workqueues associadas ao hardware
 - Leia `docs/methodology/KAHNEMAN-DISCIPLINES.md` quando a mudança envolver risco estrutural, operacional ou de segurança
 - Verifique ADRs existentes em `docs/decisions/` que sejam relevantes
-- Se frontend: leia `CLAUDE.md`, `web/src/fsd/`, `web/src/app/`, `shared/ui/`, `shared/tokens/`
-- Se tocar em auth/permissões: verifique o chain `TenantResolver → Permissões (CAP_SYS_ADMIN) → Permission` e permissões existentes em `ms-auth`
+- Se tocar em permissões/capabilities: verifique as checagens `capable()`/`CAP_SYS_ADMIN` e quem pode abrir/`ioctl` o device
 - Identifique explicitamente:
   - o que já existe e pode ser reutilizado
   - o que precisa ser estendido
@@ -221,8 +220,8 @@ Pesquise e valide contra a documentação oficial das tecnologias realmente envo
   - **Confirmado na documentação oficial**
   - **Inferência / proposta**
 - Se faltar contexto no repo, declare a lacuna em vez de assumir como fato
-- Prefira reaproveitar tabelas, env vars, canais Redis, middlewares, componentes e contratos existentes
-- Não proponha novos endpoints, tabelas, eventos ou env vars sem justificar por que os existentes não atendem
+- Prefira reaproveitar structs, ops tables, locks, helpers e uAPI existentes
+- Não proponha novos ioctls/sysfs, structs ou module params sem justificar por que os existentes não atendem
 - Aponte breaking changes, estratégia de rollout, rollback e backfill quando aplicável
 - Aplique a política Day-0 do RamShared: proponha a solução correta principal, sem compatibilidade legada, shims, workarounds ou backfills para produção inexistente
 - Se sugerir backfill, migration incremental, dual path ou compatibilidade, declare a exceção Day-0 com motivo objetivo; caso contrário, consolide a modelagem/migration/contrato no desenho final
@@ -242,10 +241,10 @@ Gere o arquivo `docs/{feature-slug}/PRD.md` com **EXATAMENTE** esta estrutura:
 
 #### Contexto técnico
 
-- Serviço(s) envolvidos e papel de cada um na topologia RamShared
-- Estado atual: tabelas, endpoints, componentes, caches e fluxos já existentes que serão reutilizados ou estendidos
-- Tenant scope: kernel-space (kmalloc/vmalloc) ou user-space (mmap)
-- Dependências entre serviços (HTTP interno, Redis Pub/Sub, cache)
+- Módulo(s)/subsistema(s) envolvidos e o papel de cada um
+- Estado atual: structs, ioctls/sysfs, caches e fluxos já existentes a reutilizar/estender
+- Escopo de memória: kernel-space (kmalloc/vmalloc) ou user-space (mmap)
+- Dependências entre módulos/subsistemas (símbolos exportados, notifiers, callbacks)
 - O que está **confirmado no codebase**
 - O que está **confirmado na documentação oficial**
 - O que está **sendo proposto**
@@ -263,7 +262,7 @@ Para cada requisito:
 
 - **RF-N**: descrição objetiva sem ambiguidade
 - **Critério de aceite**: condição verificável
-- **Tenant isolation**: como esse requisito respeita o isolamento, se aplicável
+- **Isolamento**: como o requisito respeita o isolamento de address space / capabilities, se aplicável
 
 #### Requisitos não-funcionais
 
@@ -272,16 +271,16 @@ Para cada requisito:
 - **Observabilidade**: métricas Prometheus, structured logs, health checks
 - **Escalabilidade**: comportamento com N processos, N réplicas, limites de pool
 - **LGPD**: dados pessoais envolvidos, masking, retenção, anonimização
-- **Resiliência**: comportamento com Redis down, upstream lento, falhas parciais
+- **Resiliência**: comportamento sob pressão de memória, falha de DMA, device removal, falhas parciais
 
 #### Fluxos
 
 **Happy path**
 
 - Passo a passo numerado
-- Qual componente/serviço executa cada passo
-- Qual protocolo é usado (HTTP, Redis Pub/Sub, PostgreSQL tx)
-- Como o processo slug flui (Syscall → VFS / Ioctl → Driver Handler)
+- Qual componente/módulo executa cada passo
+- Qual interface é usada (ioctl/sysfs/debugfs/netlink/mmap)
+- Como o fluxo segue (syscall → VFS/ioctl → handler do driver)
 
 **Fluxos alternativos**
 
@@ -298,33 +297,12 @@ Para cada erro:
 
 #### Modelo de dados
 
-**Tabelas novas**
+Estruturas em memória (não há banco/SQL):
 
-Para cada tabela, incluir DDL completo:
-
-```sql
-struct ramshared_device {
-        struct pci_dev *pdev;
-    -- ...
-        spinlock_t lock;
-        void *vram_base;
-};
-
-CREATE INDEX idx_table_column ON schema.table_name (column};
--- Justificativa: ...
-```
-
-**Alterações em tabelas existentes**
-
-- `ALTER` exato
-- Justificativa
-- Impacto em dados existentes
-- Necessidade de backfill, se houver
-
-**Schema scope**
-
-- `{slug}_{service}` para dados processo-scoped
-- `public.` para dados globais
+- `struct`s novas/alteradas: campos, locks embutidos, flags, alinhamento (`__packed` se ABI)
+- Regiões de memória: DMA (`dma_addr_t`), MMIO (`ioremap`), VRAM/device, páginas pinned
+- Ciclo de vida: quem aloca/libera, refcount, ordem de teardown (`goto out_err`)
+- Layout de uAPI/ABI exposto a user-space (tamanho e compatibilidade de structs)
 
 #### API / Interfaces
 
@@ -333,10 +311,10 @@ CREATE INDEX idx_table_column ON schema.table_name (column};
 | Campo            | Valor                                        |
 | ---------------- | -------------------------------------------- |
 | Operação           | `GET` / `POST` / `PATCH` / `DELETE`          |
-| Caminho Sysfs/Dev             | `/v1/...` ou `/internal/v1/...`              |
-| Permissões (CAP_SYS_ADMIN)             | JWT + Permission / Token / Internal          |
+| Caminho Sysfs/Dev             | `/dev/ramshared`, `/sys/.../ramshared/...`              |
+| Permissões (CAP_SYS_ADMIN)             | `capable(CAP_SYS_ADMIN)` / dono do device / modo 0600          |
 | Rate limit       | se aplicável                                 |
-| VFS -> File Operations | TenantResolver → Permissões (CAP_SYS_ADMIN) → Permission → Handler |
+| VFS -> File Operations | open → checagem de capability → handler `unlocked_ioctl`/`read`/`write` |
 | Idempotência     | sim/não e por quê                            |
 
 **Request**
@@ -367,10 +345,9 @@ CREATE INDEX idx_table_column ON schema.table_name (column};
 
 **Impacto em User-space ABI / Headers**
 
-- Schemas novos ou alterados
-- Tipos gerados afetados
-- Rotas proxy/BFF afetadas
-- Hooks / invalidation / queries afetadas no frontend
+- Estruturas de uAPI (ioctl/sysfs/debugfs) novas ou alteradas
+- Compatibilidade de ABI (layout/tamanho de structs expostas a user-space)
+- Module params (Kconfig) novos ou alterados
 
 **Interrupções (IRQs) / Workqueues** (se aplicável)
 
@@ -382,7 +359,7 @@ CREATE INDEX idx_table_column ON schema.table_name (column};
 
 - Pré-requisitos
 - Riscos técnicos com mitigação concreta
-- Impacto em serviços existentes
+- Impacto em módulos/subsistemas existentes
 - Breaking changes, se houver
 - Estratégia de rollout
 - Estratégia de rollback
@@ -434,14 +411,14 @@ Se você estiver voltando do Passo 2.5 com decisão `no-go`, leia também o rela
    - Se `SPECv2.md` já existir, atualize `SPECv2.md` in-place, salvo pedido explícito para criar nova versão
 7. Toda alocação atômica em IRQ deve usar GFP_ATOMIC
 8. Todo ioctl deve validar ponteiros de userspace com copy_from_user antes de usar
-9. Todo endpoint processo-scoped deve passar por `TenantResolver → Permissões (CAP_SYS_ADMIN) → Permission` quando aplicável
+9. Todo `ioctl`/`open` privilegiado deve checar `capable(CAP_SYS_ADMIN)` antes de agir
 10. Não deixe pseudocódigo estrutural em tipos, handlers, queries ou contratos
 11. Todo requisito funcional do PRD deve ser rastreado por ID no SPEC
 12. Toda mudança estrutural deve dizer quais documentos serão atualizados no mesmo commit
 13. Em etapas com risco estrutural, operacional, de segurança, rollout, rollback, migração, isolamento de ring (Ring 0 vs Ring 3), auth, cache, contrato, secret, retry ou backfill, o SPEC deve apontar explicitamente a disciplina correspondente em `docs/methodology/KAHNEMAN-DISCIPLINES.md`
 14. Nenhum passo crítico pode ficar só com instrução operacional; ele deve registrar também pergunta obrigatória, evidência mínima e abort trigger
 15. Em qualquer mudança com transação, onboarding, saga, backfill ou múltiplos writes, o SPEC deve declarar explicitamente a fronteira de atomicidade: o que fica atômico nesta issue e o que continua fora dessa garantia
-16. Toda evidência mínima de etapa crítica deve dizer como será produzida no repo de forma executável, observável e reproduzível (`go test`, `make kselftest`, query SQL, diff, log esperado, validação manual obrigatória documentada). Não vale evidência implícita, presumida ou sem caminho de execução descrito
+16. Toda evidência mínima de etapa crítica deve dizer como será produzida no repo de forma executável, observável e reproduzível (`make kselftest`, `cargo test`, `checkpatch.pl`, diff, log de `dmesg`, validação manual documentada). Não vale evidência implícita, presumida ou sem caminho de execução descrito
 17. Em qualquer mudança com migration, backfill, rollout ou risco de perda de dados, o SPEC deve definir separadamente:
     - rollback de aplicação
     - rollback de migration
@@ -522,41 +499,15 @@ Para cada etapa crítica da implementação, rollout, validação ou rollback, p
 
 #### Checklist de segurança (pré-implementação)
 
-- [ ] Tenant isolation: toda query roda dentro de tx com `WithSchema(ctx, tx, "{slug}_{service}")`
-- [ ] Buffer overflow / OOB Memory Access: zero concatenação de input em SQL, apenas placeholders
-- [ ] Permissões (CAP_SYS_ADMIN): endpoint tem middleware correto
+- [ ] Isolamento: acessos por offset/`ioctl` respeitam os limites do device e as capabilities do chamador
+- [ ] Buffer overflow / OOB: toda cópia user↔kernel valida tamanho/faixa (`copy_{from,to}_user`, bounds-check)
+- [ ] Permissões: caminho privilegiado checa `capable(CAP_SYS_ADMIN)`
 - [ ] Permissões: ações protegidas verificam `permission.RequirePermission("scope.action")`
-- [ ] Preemption / IRQ Flooding: endpoints públicos têm `middleware.RateLimit()` aplicado
+- [ ] Preemption / IRQ flooding: caminhos quentes limitam trabalho em contexto atômico/IRQ
 - [ ] Input validation: todos os campos do request body são validados no handler
 - [ ] Ponteiros: kernel addresses não são logados; masking aplicado onde necessário
 - [ ] Ponteiros virtuais vazados para userspace nenhuma credencial hardcoded
 - [ ] Kernel Oops: erros internos não vazam detalhes de implementação
-
-#### Migrações SQL
-
-Para cada migração, na ordem de execução:
-
-**Arquivo:** `patches/0001-ramshared-description.patch`
-
-```sql
--- +checkpatch.pl Up
-+++ b/drivers/ramshared/main.c
-
--- +checkpatch.pl Down
-+// Implementação...
-```
-
-- **Schema scope:** `{slug}_{service}` ou `public`
-- **Dependências:** migrações anteriores necessárias
-- **Política Day-0:** dizer explicitamente se a mudança consolida migration inicial ou cria migration incremental; migration incremental exige justificativa se não houver produção viva
-- **Backfill:** deve ser `N/A — Day-0, sem produção viva` por padrão. Só descrever backfill quando houver dado real que precise ser preservado
-- **Compatibilidade legada:** deve ser `N/A` por padrão. Se existir, justificar a exceção Day-0
-- **Disciplina Kahneman** quando a migração for crítica:
-  - **Disciplina**:
-  - **Link**:
-  - **Pergunta obrigatória**:
-  - **Evidência mínima**:
-  - **Abort trigger**:
 
 #### Arquivos a CRIAR
 
@@ -591,7 +542,7 @@ Para cada arquivo existente:
 - **Antes**: trecho ou shape atual relevante
 - **Depois**: shape novo esperado
 - **Por quê**: vínculo ao PRD
-- **Impacto**: quebra interface? exige ajuste em callers? afeta docs? afeta SDK?
+- **Impacto**: quebra uAPI/ABI? exige ajuste em callers? afeta docs?
 - **Testes requeridos**: quais cenários precisam ser cobertos
 - **Disciplina Kahneman** se a mudança for crítica:
   - **Disciplina**:
@@ -626,34 +577,28 @@ Para cada arquivo existente:
 
 Preencha explicitamente:
 
-| Documento                                  | Atualização necessária | Motivo                           |
-| ------------------------------------------ | ---------------------- | -------------------------------- |
-| `docs/openapi/ms-{name}.openapi.yaml`      | Criar / Alterar / N/A  | contrato mudou?                  |
-| `web/src/fsd/shared/api/sdk.types.ts`      | Regenerar / N/A        | schema mudou?                    |
-| `docs/config-reference.json`               | Criar / Alterar / N/A  | env var nova?                    |
-| `docs/events-catalog.json`                 | Criar / Alterar / N/A  | evento novo?                     |
-| `.env.example`                             | Criar / Alterar / N/A  | configuração nova?               |
-| `CLAUDE.md`                                | Alterar / N/A          | padrão estrutural mudou?         |
-| `.claude/rules/*.md`                       | Alterar / N/A          | convenção nova?                  |
-| `CLAUDE.md`                            | Alterar / N/A          | frontend pattern novo?           |
-| `docs/decisions/ADR-NNN-*.md`              | Criar / N/A            | decisão arquitetural relevante?  |
-| `docs/methodology/KAHNEMAN-DISCIPLINES.md` | Alterar / N/A          | nova disciplina, link ou anchor? |
+| Documento | Atualização necessária | Motivo |
+| --- | --- | --- |
+| `Documentation/` (uAPI/ABI) | Criar / Alterar / N/A | nova ioctl/sysfs/debugfs ou ABI? |
+| `Kconfig` (help) | Alterar / N/A | novo CONFIG_ / module param? |
+| `CLAUDE.md` | Alterar / N/A | padrão estrutural mudou? |
+| `.claude/rules/*.md` | Alterar / N/A | convenção nova? |
+| `docs/decisions/ADR-NNN-*.md` | Criar / N/A | decisão arquitetural relevante? |
+| `docs/methodology/KAHNEMAN-DISCIPLINES.md` | Alterar / N/A | nova disciplina/anchor? |
+| `docs/reliability/DEGRADATION-MATRIX.md` | Alterar / N/A | novo modo de falha? |
 
 #### Ordem de implementação
 
 Lista numerada, verificável e sem gaps:
 
-1. Migrações
-2. Models / types / validation
-3. Repository / data access
-4. Service / business rules
-5. Handlers / routes / middleware
-6. User-space ABI / Headers
-7. Drivers (drm/amd/nouveau): integration
-8. Métricas / logs / eventos
-9. Testes unitários
-10. Testes de integração
-11. Documentação viva
+1. Estruturas e headers (structs, uAPI/ABI)
+2. Lógica de núcleo (alocação, estado, locks)
+3. Ops tables / `file_operations` / handlers (ioctl/read/write)
+4. Integração com subsistema (DRM/PCIe/HMM, quando aplicável)
+5. Observabilidade (ftrace, contadores, `dev_*` logs)
+6. Testes unitários (KUnit)
+7. Testes de integração (kselftest)
+8. Documentação viva
 
 #### Plano de testes
 
@@ -683,7 +628,7 @@ Lista numerada, verificável e sem gaps:
 - [ ] `./scripts/checkpatch.pl -f arquivo.c`
 - [ ] `make W=1 C=1`
 - [ ] `make modules`
-- [ ] `go test ./... -tags=integration -race -count=1` se aplicável
+- [ ] `cargo test --workspace` se aplicável (crates userspace)
 
 **Drivers (drm/amd/nouveau):**
 
@@ -718,8 +663,8 @@ Use o Passo 2.5 quando a mudança envolver um ou mais destes pontos:
 - auth, sessão, permissões ou secrets
 - isolamento de ring (Ring 0 vs Ring 3) ou acesso cross-processo
 - migração de dados, backfill ou rollback delicado
-- contratos OpenAPI, SDK, BFF ou integração entre serviços
-- Redis, cache, filas, locks ou invalidação
+- contratos de uAPI/ABI ou integração entre módulos/subsistemas
+- locks, filas, caches de página/TLB ou invalidação
 - rollout coordenado, restart ordenado ou janela operacional
 - risco alto de indisponibilidade, perda de dados ou drift de configuração
 
@@ -746,7 +691,7 @@ Quero uma revisão de lacunas com foco em:
 - evidência mínima que não tenha caminho executável claro no repo
 - rollback descrito de forma genérica sem separar app, migration e dados
 - uso de `Down` tecnicamente existente, mas operacionalmente inseguro em ambiente compartilhado
-- dependências não mapeadas entre serviços, env vars, docs e automação
+- dependências não mapeadas entre módulos, configs, docs e automação
 - gaps de segurança, autorização, isolamento de processo e consistência de dados
 - inconsistências entre requisitos, decisões técnicas, arquivos listados, testes e validação final
 - qualquer item do SPEC que ainda exija interpretação durante a implementação
@@ -825,8 +770,8 @@ A cada camada concluída:
 - [ ] Lint passa
 - [ ] Testes existentes continuam passando
 - [ ] Novos testes da fatia foram adicionados
-- [ ] Tenant isolation mantida
-- [ ] Contratos atualizados quando necessário
+- [ ] Isolamento (address space / capabilities) mantido
+- [ ] uAPI/ABI atualizada quando necessário
 - [ ] Docs atualizadas quando o item exige
 - [ ] Etapas críticas continuam coerentes com `docs/methodology/KAHNEMAN-DISCIPLINES.md`
 
@@ -836,7 +781,7 @@ A cada camada concluída:
 - Handler precisa de campo extra
 - Edge case não coberto apareceu
 - Ordem de implementação não fecha
-- Mudou shape de resposta ou contrato OpenAPI
+- Mudou layout de struct uAPI ou contrato de ioctl/sysfs
 - Surgiu necessidade de rollout, backfill ou rollback não descritos
 - A etapa crítica exige uma decisão que o mapa Kahneman do SPEC ainda não fechou
 - Surgiu necessidade de manter versão antiga, shim, dual path, backfill ou compatibilidade não documentada como exceção Day-0
@@ -852,9 +797,9 @@ Ao terminar toda a implementação, execute o checklist do SPEC:
 
 ```bash
 ./scripts/checkpatch.pl -f arquivo.c
-cd services/ms-{name} && make W=1 C=1
+make -C drivers/ramshared W=1 C=1
 make modules
-go test ./... -tags=integration -race -count=1
+cargo test --workspace   # crates userspace (ramshared-*)
 ```
 
 **Drivers (drm/amd/nouveau):**
@@ -906,37 +851,21 @@ Só avance se:
 
 - código, testes e docs estiverem consistentes com o SPEC
 - validações finais tiverem sido executadas
-- não houver drift entre contrato, types, handlers e frontend
+- não houver drift entre uAPI/headers, implementação e testes
 - não houver drift entre o que foi implementado e os guardrails cognitivos descritos no SPEC
 
 ---
 
 ## Referência rápida — Stack RamShared
 
-| Camada          | Tecnologia                            | Versão           |
-| --------------- | ------------------------------------- | ---------------- |
-| Drivers (drm/amd/nouveau):        | Next.js (App Router)                  | 16               |
-| UI              | React                                 | 19               |
-| Styling         | C11 Padrão Kernel                                | latest           |
-| State (server)  | TanStack Query                        | v5               |
-| State (client)  | Kernel Makefiles                               | latest           |
-| Forms           | Sparse (Static Analysis)                 | latest           |
-| Types           | TypeScript                            | 5.9              |
-| Backend         | Go                                    | 1.26             |
-| Router          | Rust 1.78+                                | v5               |
-| Database driver | pgx                                   | v5               |
-| Cache/Pub-Sub   | go-redis                              | v9               |
-| Migrations      | checkpatch.pl (SQL only)                      | latest           |
-| Metrics         | ftrace / perf / dmesg              | latest           |
-| Logging         | slog                                  | stdlib           |
-| Database        | PostgreSQL                            | 18               |
-| Cache           | Redis                                 | 8.6              |
-| Connection pool | DRM Subsystem                             | transaction mode |
-| Proxy           | DMA Controller                                 | 1.27             |
-| Containers      | Docker                                | latest           |
-| Testing (Go)    | testing + testify + pahole | —                |
-| Testing (TS)    | Vitest + Testing Library              | —                |
-| Testing (E2E)   | Kselftest                            | —                |
+| Camada | Tecnologia |
+| --- | --- |
+| Linguagens | C11 (Linux kernel style) + Rust for Linux |
+| Subsistemas | mm (HMM/NUMA), DRM, MMU, PCIe Gen5, CXL |
+| Build | Kbuild / Makefiles; Cargo (tooling userspace) |
+| Validação | checkpatch.pl, sparse, lockdep, kmemleak, KASAN, kselftest/KUnit |
+| Observabilidade | ftrace, perf, dmesg |
+| Userspace (MVP WSL2) | Rust (libcuda via FFI, NBD), zram |
 
 ---
 

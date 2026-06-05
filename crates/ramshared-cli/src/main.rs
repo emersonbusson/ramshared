@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::{fmt, ptr};
 
+mod cascade;
+
 #[link(name = "dl")]
 unsafe extern "C" {
     fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
@@ -101,6 +103,7 @@ struct KernelFeatures {
     io_uring: Option<KernelConfig>,
     nbd: Option<KernelConfig>,
     ublk: Option<KernelConfig>,
+    zram: Option<KernelConfig>,
 }
 
 #[derive(Debug)]
@@ -185,6 +188,9 @@ fn main() -> ExitCode {
                 Decision::Blocked => ExitCode::from(1),
             }
         }
+        Some("up") => to_exit(cascade::up()),
+        Some("down") => to_exit(cascade::down()),
+        Some("status") => to_exit(cascade::status()),
         Some("-h") | Some("--help") | None => {
             print_usage();
             ExitCode::SUCCESS
@@ -197,12 +203,23 @@ fn main() -> ExitCode {
     }
 }
 
+fn to_exit(r: Result<(), String>) -> ExitCode {
+    match r {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn print_usage() {
     eprintln!("usage:");
     eprintln!("  ramshared check [--json]");
     eprintln!("  ramshared doctor [--json]");
-    eprintln!();
-    eprintln!("This build only implements read-only WSL2/CUDA preflight checks.");
+    eprintln!("  ramshared up [--vram MiB] [--zram MiB] [--daemon PATH]");
+    eprintln!("  ramshared status");
+    eprintln!("  ramshared down");
 }
 
 fn run_check() -> CheckReport {
@@ -292,6 +309,9 @@ fn probe_kernel_features(release: &str) -> KernelFeatures {
         ublk: config_text
             .as_deref()
             .and_then(|text| parse_kernel_config(text, "CONFIG_BLK_DEV_UBLK")),
+        zram: config_text
+            .as_deref()
+            .and_then(|text| parse_kernel_config(text, "CONFIG_ZRAM")),
     }
 }
 
@@ -698,6 +718,20 @@ fn print_text_report(report: &CheckReport) {
         report.backends.nbd_status.as_str(),
         report.backends.ublk_status.as_str()
     );
+    println!(
+        "Tiers (cascata): zram={}, vram=nbd({}), vhdx={}",
+        if report.kernel.zram.is_some_and(KernelConfig::enabled) {
+            "ok"
+        } else {
+            "fail"
+        },
+        report.backends.nbd_status.as_str(),
+        report
+            .swaps
+            .first()
+            .map(|s| s.filename.as_str())
+            .unwrap_or("none")
+    );
     println!("Decisao: {}", report.decision().as_str());
 
     println!("Detalhes:");
@@ -709,6 +743,7 @@ fn print_text_report(report: &CheckReport) {
     println!("  CONFIG_IO_URING: {}", config_text(report.kernel.io_uring));
     println!("  CONFIG_BLK_DEV_NBD: {}", config_text(report.kernel.nbd));
     println!("  CONFIG_BLK_DEV_UBLK: {}", config_text(report.kernel.ublk));
+    println!("  CONFIG_ZRAM: {}", config_text(report.kernel.zram));
     println!("  nbd: {}", report.backends.nbd_detail);
     println!("  ublk: {}", report.backends.ublk_detail);
     println!(
@@ -876,7 +911,7 @@ fn render_json(report: &CheckReport) -> String {
             "\"swap\":[{}],",
             "\"kernel\":{{\"config_source\":{},\"CONFIG_SWAP\":{},",
             "\"CONFIG_IO_URING\":{},\"CONFIG_BLK_DEV_NBD\":{},",
-            "\"CONFIG_BLK_DEV_UBLK\":{}}},",
+            "\"CONFIG_BLK_DEV_UBLK\":{},\"CONFIG_ZRAM\":{}}},",
             "\"backends\":{{\"nbd\":\"{}\",\"nbd_detail\":\"{}\",",
             "\"ublk\":\"{}\",\"ublk_detail\":\"{}\"}},",
             "\"decision\":\"{}\",",
@@ -904,6 +939,7 @@ fn render_json(report: &CheckReport) -> String {
         json_config(report.kernel.io_uring),
         json_config(report.kernel.nbd),
         json_config(report.kernel.ublk),
+        json_config(report.kernel.zram),
         report.backends.nbd_status.as_str(),
         json_escape(&report.backends.nbd_detail),
         report.backends.ublk_status.as_str(),
@@ -1054,6 +1090,7 @@ CONFIG_BLK_DEV_NBD=m\n\
                 io_uring: Some(KernelConfig::BuiltIn),
                 nbd: Some(KernelConfig::Module),
                 ublk: Some(KernelConfig::Disabled),
+                zram: Some(KernelConfig::Module),
             },
             cuda: CudaProbe {
                 status: Status::Fail,

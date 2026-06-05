@@ -39,7 +39,7 @@ Commits **não-triviais** (que toquem em locks, DMA ou alocação atômica) DEVE
 
 ## Metodologias (SSDV3 e Kahneman)
 
-- **SSDV3**: Spec-Driven Development. Ver [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md) e [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md). Obrigatório para mudanças estruturais (HMM, NUMA, novos devices, alocação de memória profunda).
+- **SSDV3**: Spec-Driven Development. Ver [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md) e [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md). Obrigatório para mudanças estruturais: locks/concorrência, DMA/IOMMU/MMIO, mm (HMM/NUMA/hotplug), uAPI/ABI, novo hardware/subsistema, MMU/DRM.
 - **Kahneman Disciplines**: 14 disciplinas operacionais. Fonte: [`docs/methodology/KAHNEMAN-DISCIPLINES.md`](docs/methodology/KAHNEMAN-DISCIPLINES.md). Toda mudança no ring 0 e todo PR deve respeitar as disciplinas. Counterfactual obrigatório e número antes de adjetivo.
 
 ## Perfis Cognitivos
