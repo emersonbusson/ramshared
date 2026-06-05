@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::{fmt, ptr};
 
+mod cascade;
+
 #[link(name = "dl")]
 unsafe extern "C" {
     fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
@@ -185,6 +187,9 @@ fn main() -> ExitCode {
                 Decision::Blocked => ExitCode::from(1),
             }
         }
+        Some("up") => to_exit(cascade::up()),
+        Some("down") => to_exit(cascade::down()),
+        Some("status") => to_exit(cascade::status()),
         Some("-h") | Some("--help") | None => {
             print_usage();
             ExitCode::SUCCESS
@@ -197,12 +202,23 @@ fn main() -> ExitCode {
     }
 }
 
+fn to_exit(r: Result<(), String>) -> ExitCode {
+    match r {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 fn print_usage() {
     eprintln!("usage:");
     eprintln!("  ramshared check [--json]");
     eprintln!("  ramshared doctor [--json]");
-    eprintln!();
-    eprintln!("This build only implements read-only WSL2/CUDA preflight checks.");
+    eprintln!("  ramshared up [--vram MiB] [--zram MiB] [--daemon PATH]");
+    eprintln!("  ramshared status");
+    eprintln!("  ramshared down");
 }
 
 fn run_check() -> CheckReport {
