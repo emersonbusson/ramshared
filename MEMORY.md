@@ -85,3 +85,15 @@ Atacando a issue #3 (follow-up da revisao adversarial) via PRs gated (CI + gover
 - **Issue #3: 5/9.** Pendentes (features/decisao, nao mecanicos): **C1-full** (canario
   dedicado §9.4 conteudo/free), **H1** (daemon multi-thread), **M3** (doc de context CUDA
   por-thread), **LOW** (decisao: comentarios PT vs regra-EN; erros tipados; clap).
+
+---
+
+## 2026-06-05 — vram-as-ram: issue #3 — 6/9 + idioma resolvido
+
+- **PR #6:** regra de idioma alinhada — **comentarios de codigo em PT-BR** (coding.md +
+  AGENTS.md, governance sync), encerrando o conflito PT-vs-EN apontado pela revisao
+  (decisao do usuario: atualizar a regra, sem churn). + **M3** (doc de afinidade de
+  thread do Context CUDA).
+- **Issue #3: 6/9** (C3, M1, M2, M3, M4, M5). Decisao do usuario: deixar **C1-full**
+  (canario dedicado §9.4) e **H1** (daemon multi-thread) **rastreados** no #3 (features,
+  nao bloqueiam — cascata validada). LOW resta: erros tipados + clap.
