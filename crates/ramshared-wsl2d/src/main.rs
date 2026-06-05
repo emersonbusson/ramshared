@@ -7,7 +7,7 @@
 //! Aloca a VRAM e serve **N conexões** NBD (`nbd-client -C N`) por um leitor/escritor
 //! dedicados por conexão + um **worker CUDA único** (afinidade de thread, §9.4/H1), com
 //! `mlockall`+`oom_score_adj` (Disciplina 3) e o canário de residência §9 (latência
-//! por-request, agora incluindo a espera na fila) + §9.4 (sonda de conteúdo/free).
+//! por-request, **serve-only**) + §9.4 (sonda de conteúdo/free).
 //! Backoff segue como trabalho futuro.
 
 use std::os::unix::net::UnixListener;
@@ -193,8 +193,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // Canário de latência por-request (§9, gatilho PRIMÁRIO): inclui a espera na fila
-        // (DT-16). content_ok=true/free=u64::MAX DE PROPÓSITO aqui: o sinal é a latência;
+        // Canário de latência por-request (§9, gatilho PRIMÁRIO): mede o serve-only (op de
+        // VRAM), DT-16. content_ok=true/free=u64::MAX DE PROPÓSITO aqui: o sinal é a latência;
         // conteúdo e free-floor vêm da sonda dedicada §9.4 logo abaixo.
         if touches_vram && !demoted && demote_rx.is_none() {
             match canary.as_mut() {
