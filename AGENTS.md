@@ -11,19 +11,21 @@ Resumo terso para CLIs estilo Codex/aider/Jules. Para visão completa, ler `CLAU
 **AGENTS.md e CLAUDE.md na raiz devem ser mantidos minúsculos.**
 O source of truth para regras de arquitetura e código está em:
 
-- `.claude/rules/kernel.md`
-- `.claude/rules/ssdv3.md`
+- [`.claude/rules/kernel.md`](.claude/rules/kernel.md)
+- [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md)
+- [`.claude/rules/coding.md`](.claude/rules/coding.md)
+- [`.claude/rules/governance.md`](.claude/rules/governance.md)
 
 ### Antes de planejar, editar ou abrir patch/PR
 
 1. Ler `README.md`.
-2. Ler `.claude/rules/*.md` pertinentes à área.
+2. Ler [`.claude/rules/*.md`](.claude/rules/*.md) pertinentes à área.
 3. Ler `MEMORY.md` de baixo para cima (contexto temporal append-only).
 4. Ler `conversa.md` se presente (contexto ativo).
 
 ### Sync rule (invariante #5)
 
-`README.md`, `AGENTS.md`, `CLAUDE.md` e `.claude/rules/*.md` são documentos autoritativos. Mudança em um requer mudança nos outros se a regra for de escopo geral.
+`README.md`, `AGENTS.md`, `CLAUDE.md` e [`.claude/rules/*.md`](.claude/rules/*.md) são documentos autoritativos. Mudança em um requer mudança nos outros se a regra for de escopo geral.
 
 ### Linguagem
 
@@ -37,14 +39,14 @@ Commits **não-triviais** (que toquem em locks, DMA ou alocação atômica) DEVE
 
 ## Metodologias (SSDV3 e Kahneman)
 
-- **SSDV3**: Spec-Driven Development. Ver `docs/SSDV3-PROMPTS.md` e `.claude/rules/ssdv3.md`. Obrigatório para mudanças estruturais (HMM, NUMA, novos devices, alocação de memória profunda).
-- **Kahneman Disciplines**: 14 disciplinas operacionais. Fonte: `docs/methodology/KAHNEMAN-DISCIPLINES.md`. Toda mudança no ring 0 e todo PR deve respeitar as disciplinas. Counterfactual obrigatório e número antes de adjetivo.
+- **SSDV3**: Spec-Driven Development. Ver [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md) e [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md). Obrigatório para mudanças estruturais (HMM, NUMA, novos devices, alocação de memória profunda).
+- **Kahneman Disciplines**: 14 disciplinas operacionais. Fonte: [`docs/methodology/KAHNEMAN-DISCIPLINES.md`](docs/methodology/KAHNEMAN-DISCIPLINES.md). Toda mudança no ring 0 e todo PR deve respeitar as disciplinas. Counterfactual obrigatório e número antes de adjetivo.
 
 ## Perfis Cognitivos
 
 ### 1. Kernel Hacker (`kernel-coder`)
 **Propósito:** Escrever código `C` ou `Rust for Linux` que manipule o gerenciamento de memória, PCIe, e drivers DRM.
-**Rules:** Leia `.claude/rules/kernel.md`.
+**Rules:** Leia [`.claude/rules/kernel.md`](.claude/rules/kernel.md).
 
 ### 2. Hardware Architect (`hardware-researcher`)
 **Propósito:** Ler e interpretar manuais técnicos de hardware (Datasheets, PCIe Gen5, CXL 3.0).

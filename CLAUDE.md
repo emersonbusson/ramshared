@@ -1,23 +1,23 @@
 # CLAUDE.md — RamShared
 
-> **ATENÇÃO:** Mantenha este arquivo minúsculo. Todas as regras específicas do projeto foram movidas para `.claude/rules/*.md`. Não copie longos dossiers aqui.
+> **ATENÇÃO:** Mantenha este arquivo minúsculo. Todas as regras específicas do projeto foram movidas para [`.claude/rules/*.md`](.claude/rules/*.md). Não copie longos dossiers aqui.
 
 ## Agent Source Of Truth
 
-`.claude/rules/*.md` são os documentos autoritativos de regras de código. `AGENTS.md` (e `.cursor/rules/*`, `.windsurf/rules/*` se houver) espelham essas diretrizes.
+[`.claude/rules/*.md`](.claude/rules/*.md) são os documentos autoritativos de regras de código. `AGENTS.md` (e `.cursor/rules/*`, `.windsurf/rules/*` se houver) espelham essas diretrizes.
 
 Antes de alterar código:
 
 1. Leia este arquivo e `MEMORY.md`.
-2. Para módulos de kernel (LKM), HMM, Rust for Linux e CXL, leia `.claude/rules/kernel.md`.
-3. Se envolver mudança estrutural, manipulação de locks, alocação crônica ou novo hardware, siga a metodologia **SSDV3** (`.claude/rules/ssdv3.md` e `docs/SSDV3-PROMPTS.md`).
-4. Siga sempre `.claude/rules/coding.md` para formatação, checkpatch e testes.
-5. Em Pull Requests, siga o formato de tabela de commits de `.claude/rules/governance.md`.
+2. Para módulos de kernel (LKM), HMM, Rust for Linux e CXL, leia [`.claude/rules/kernel.md`](.claude/rules/kernel.md).
+3. Se envolver mudança estrutural, manipulação de locks, alocação crônica ou novo hardware, siga a metodologia **SSDV3** ([`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md) e [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md)).
+4. Siga sempre [`.claude/rules/coding.md`](.claude/rules/coding.md) para formatação, checkpatch e testes.
+5. Em Pull Requests, siga o formato de tabela de commits de [`.claude/rules/governance.md`](.claude/rules/governance.md).
 
 ## Metodologias Core
 
-- **Kahneman Disciplines**: Toda decisão arquitetural ou de lock/DMA deve seguir as 14 disciplinas de Kahneman (`docs/methodology/KAHNEMAN-DISCIPLINES.md`). Evite decisões rápidas de "Sistema 1"; registre counterfactuals e triggers de reversão de patch explícitos.
-- **SSDV3**: Spec-Driven Development. Pipeline: PRD → SPEC → IMPL. Veja `.claude/rules/ssdv3.md`.
+- **Kahneman Disciplines**: Toda decisão arquitetural ou de lock/DMA deve seguir as 14 disciplinas de Kahneman ([`docs/methodology/KAHNEMAN-DISCIPLINES.md`](docs/methodology/KAHNEMAN-DISCIPLINES.md)). Evite decisões rápidas de "Sistema 1"; registre counterfactuals e triggers de reversão de patch explícitos.
+- **SSDV3**: Spec-Driven Development. Pipeline: PRD → SPEC → IMPL. Veja [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md).
 
 ## Day-0 Policy
 
