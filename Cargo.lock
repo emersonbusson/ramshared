@@ -10,6 +10,7 @@ version = "0.1.0"
 name = "ramshared-cli"
 version = "0.1.0"
 dependencies = [
+ "ramshared-cuda",
  "ramshared-tier",
 ]
 
