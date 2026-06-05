@@ -4,8 +4,10 @@
 //! faz a fiação do kernel (os ioctls). Assim o daemon fica **sem `unsafe`** — o
 //! único `unsafe` do projeto vive isolado no `ramshared-cuda`.
 //!
-//! MVP/smoke: aloca a VRAM, serve **uma** conexão e sai. Sequência completa
-//! (`mlockall`, `oom_score_adj`, backoff, canário §9) entra nos próximos passos.
+//! MVP/smoke: aloca a VRAM, serve **uma** conexão e sai com `mlockall` +
+//! `oom_score_adj` (Disciplina 3) e o canário de residência §9 (latência
+//! por-request) + §9.4 (sonda dedicada de conteúdo/free em cadência). Multi-conexão
+//! e backoff seguem como trabalho futuro.
 
 use std::io::{BufReader, Read, Write};
 use std::os::unix::net::UnixListener;
@@ -14,7 +16,10 @@ use std::path::Path;
 use ramshared_block::protocol::{NBD_FLAG_HAS_FLAGS, NBD_FLAG_SEND_FLUSH, REQUEST_LEN};
 use ramshared_block::{BlockBackend, Command, parse_request, serve, server_handshake};
 use ramshared_cuda::Cuda;
-use ramshared_wsl2d::{Canary, ResidencyConfig, Verdict, VramBackend};
+use ramshared_wsl2d::{
+    CANARY_BYTES, CANARY_EVERY, Cadence, Canary, CanaryProbe, ResidencyConfig, ResidencySampler,
+    Verdict, VramBackend,
+};
 
 // Disciplina 3 (anti-deadlock): o daemon serve o swap, logo nao pode ser swapado.
 unsafe extern "C" {
@@ -109,6 +114,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         BLOCK_SIZE
     );
 
+    // --- canário dedicado de residência (§9.4): região separada da swap, NÃO
+    // endereçável por NBD (o device anunciado segue = região de swap). Alimenta a
+    // sonda de conteúdo/free em cadência (SPECv3 DT-1/DT-9). ---
+    let canary_region = ctx.alloc(CANARY_BYTES)?;
+    let mut probe = CanaryProbe::new(canary_region);
+    let mut cadence = Cadence::new(CANARY_EVERY);
+    let mut sampler = ResidencySampler::new(ResidencyConfig::default());
+
     // --- socket Unix ---
     let path = Path::new(&sock);
     let _ = std::fs::remove_file(path);
@@ -184,10 +197,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        // Canario inline (§9): mede a latencia do I/O da VRAM e dispara DEMOTE sob spike.
-        // content_ok=true e free=u64::MAX sao DE PROPOSITO: a eviction WDDM e' data-safe
-        // (Fase 0), entao a latencia e' o gatilho vivo aqui. O canario dedicado de
-        // conteudo/free-floor (§9.4) exige uma regiao-canario propria (trabalho futuro).
+        // Canario de latencia por-request (§9, gatilho PRIMARIO): mede a latencia do
+        // I/O da VRAM e dispara DEMOTE sob spike. content_ok=true e free=u64::MAX sao DE
+        // PROPOSITO aqui: a eviction WDDM e' data-safe mas latency-unsafe (Fase 0), entao
+        // a latencia e' o sinal vivo. Conteudo e free-floor sao cobertos pela sonda
+        // dedicada §9.4 logo abaixo (cadencia), nao por este bloco.
         if touches_vram && !demoted && demote_rx.is_none() {
             match canary.as_mut() {
                 None => {
@@ -206,19 +220,27 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         );
                         // Thread separada (nao bloqueia o serve); o resultado volta pelo
                         // canal e so' entao decidimos desarmar (ver poll acima).
-                        let dev = nbd_dev.clone();
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        std::thread::spawn(move || {
-                            let ok = std::process::Command::new("swapoff")
-                                .arg(&dev)
-                                .status()
-                                .map(|s| s.success())
-                                .unwrap_or(false);
-                            let _ = tx.send(ok);
-                        });
-                        demote_rx = Some(rx);
+                        demote_rx = Some(spawn_swapoff(&nbd_dev));
                     }
                 }
+            }
+        }
+        // Canario dedicado §9.4 (SPECv3): sonda de conteudo/free em cadencia.
+        // Conteudo corrompido demove imediato; free-floor e erros transientes exigem
+        // `consecutive` amostras (histerese, DT-9/DT-11). E' independente do streak de
+        // latencia por-request acima e so' roda quando nao ha DEMOTE em curso.
+        if touches_vram && !demoted && demote_rx.is_none() && cadence.tick() {
+            // DT-11: erro de sonda/`mem_info` vira amostra degradada (None), nao DEMOTE
+            // imediato — entra no streak como free baixo.
+            let content = probe.check_content().ok();
+            let free = ctx.mem_info().ok().map(|(f, _)| f as u64);
+            if let Verdict::Demote(reason) = sampler.sample(content, free) {
+                // M4: loga os valores reais (None = erro de sonda/meminfo) e o streak.
+                eprintln!(
+                    "[wsl2d] DEMOTE ({reason:?}) content={content:?} free={free:?} streak={} -> swapoff {nbd_dev}",
+                    sampler.bad_streak()
+                );
+                demote_rx = Some(spawn_swapoff(&nbd_dev));
             }
         }
         if out.disconnect {
@@ -228,8 +250,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // --- teardown: zera a VRAM (§11) e remove o socket ---
-    backend.zero()?;
+    // DT-12/§11: zera as DUAS regioes (swap + canario) incondicionalmente. Um erro no
+    // zero do backend NAO pode pular o scrub do canario; tenta ambos e so' entao propaga.
+    let backend_zero = backend.zero();
+    let _ = probe.zero();
+    backend_zero?;
     let _ = std::fs::remove_file(path);
     eprintln!("[wsl2d] encerrado (VRAM zerada)");
     Ok(())
+}
+
+/// Dispara `swapoff <dev>` numa thread separada (nao bloqueia o serve loop) e
+/// devolve o canal que confirma o resultado. Caminho unico de DEMOTE (DT-8):
+/// usado tanto pela latencia por-request quanto pela sonda em cadencia.
+fn spawn_swapoff(dev: &str) -> std::sync::mpsc::Receiver<bool> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let dev = dev.to_string();
+    std::thread::spawn(move || {
+        let ok = std::process::Command::new("swapoff")
+            .arg(&dev)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        let _ = tx.send(ok);
+    });
+    rx
 }

@@ -17,6 +17,7 @@ path = "src/main.rs"
 ramshared-cuda = { path = "../ramshared-cuda" }
 ramshared-block = { path = "../ramshared-block" }
 ramshared-tier = { path = "../ramshared-tier" }
+ramshared-integrity = { path = "../ramshared-integrity" }
 
 [lints.clippy]
 unwrap_used = "deny"
