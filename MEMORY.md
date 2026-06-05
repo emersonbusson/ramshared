@@ -97,3 +97,17 @@ Atacando a issue #3 (follow-up da revisao adversarial) via PRs gated (CI + gover
 - **Issue #3: 6/9** (C3, M1, M2, M3, M4, M5). Decisao do usuario: deixar **C1-full**
   (canario dedicado §9.4) e **H1** (daemon multi-thread) **rastreados** no #3 (features,
   nao bloqueiam — cascata validada). LOW resta: erros tipados + clap.
+
+---
+
+## 2026-06-05 — vram-as-ram: docs de raiz + esteira SSDV3 do canario (#8)
+
+- **Docs de raiz** (PR #7): README, ARCHITECTURE, ROADMAP (PT-BR).
+- **Issue #8 (C1, canario dedicado §9.4)** pela esteira SSDV3:
+  - PRD (Passo 1) + SPEC (Passo 2) — PR #9.
+  - **Passo 2.5: SPEC.md deu no-go** (substituir a latencia por-request validada §14 pela
+    sonda a cada 64 regredia a deteccao + atrasava baseline 64x) -> **SPECv2 hybrid**
+    (PR #10): latencia por-request intacta + sonda de conteudo/free em cadencia, imediata,
+    via `ResidencyConfig::check_residency` (DT-7) + `spawn_swapoff` unificado (DT-8).
+    SPEC.md preservado. **Candidato ativo: SPECv2.md; re-auditoria = go.**
+  - **Pendente: Passo 3 (IMPL)** do SPECv2. #8 segue aberta.
