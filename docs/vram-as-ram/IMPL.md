@@ -19,6 +19,7 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
 |---|---|---|---|---|
 | `ramshared-tier` — cascata: prioridades + invariante A1 | `crates/ramshared-tier/{Cargo.toml, src/lib.rs, src/priority.rs, src/cascade.rs}` | §1, §6.2, §9.2 | revisa **RF-3** | `cargo fmt --check` ok · `clippy -D warnings` limpo · **8 testes** verdes · `cargo check --workspace` ok |
 | (pré-existente) `ramshared check`/`doctor` | `crates/ramshared-cli/src/main.rs` | §6.1 | RF-1 (parcial) | testes verdes |
+| `ramshared-cuda` — wrapper seguro CUDA (FFI dlopen, RAII, Cuda/Context/DeviceMem) | `crates/ramshared-cuda/{Cargo.toml, src/lib.rs, src/ffi.rs, src/driver.rs}` | §4, §8 | RF-1 | fmt ok · `clippy -D warnings` limpo · 2 unit + doctest verdes · **roundtrip GPU real (RTX 2060) verde** (`--ignored`, 256 MiB write/read/OOB) |
 
 ### Decisões pequenas (não pediram ADR nova)
 
@@ -29,6 +30,10 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
   `.unwrap()/.expect()` em produção).
 - `#![forbid(unsafe_code)]` no `ramshared-tier` (lógica pura; `unsafe` só viverá
   vida no `ramshared-cuda`, isolado, conforme §4/§8).
+- `ramshared-cuda` carrega `libcuda` via **`dlopen` em runtime** (não link-time)
+  → **sem `build.rs`** (o §5 listava `build.rs`; desvio justificado: o WSL2 usa a
+  stub `libcuda` do host, sem toolkit). FFI cru isolado em `ffi.rs`; wrappers RAII
+  em `driver.rs`. Roundtrip validado em GPU real, não em mock (disciplina #13).
 
 ### Pendente (próximos incrementos, na ordem do SPECv3)
 
@@ -36,7 +41,8 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
 2. Comandos `up` / `status` / `down` (§6.2–6.4) usando `ramshared-tier`.
 3. `ramshared-wsl2d`: máquina de estados (§7, com `Demoted`) + canário de
    residência com **DEMOTE** por latência (§9).
-4. `ramshared-cuda` / `ramshared-block` / `ramshared-integrity` (§5, §8).
+4. `ramshared-block` (NBD fixed-newstyle §10.1) + `ramshared-integrity` (§8.1).
+   [`ramshared-cuda` ✅ feito]
 5. Testes de aceitação §14: cascata sob pressão **confinada em cgroup** (§14.3) e
    **DEMOTE sob latência** (§14.4).
 
