@@ -3,5 +3,33 @@
 version = 4
 
 [[package]]
+name = "ramshared-block"
+version = "0.1.0"
+
+[[package]]
 name = "ramshared-cli"
 version = "0.1.0"
+dependencies = [
+ "ramshared-tier",
+]
+
+[[package]]
+name = "ramshared-cuda"
+version = "0.1.0"
+
+[[package]]
+name = "ramshared-integrity"
+version = "0.1.0"
+
+[[package]]
+name = "ramshared-tier"
+version = "0.1.0"
+
+[[package]]
+name = "ramshared-wsl2d"
+version = "0.1.0"
+dependencies = [
+ "ramshared-block",
+ "ramshared-cuda",
+ "ramshared-tier",
+]

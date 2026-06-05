@@ -8,3 +8,6 @@ repository.workspace = true
 [[bin]]
 name = "ramshared"
 path = "src/main.rs"
+
+[dependencies]
+ramshared-tier = { path = "../ramshared-tier" }

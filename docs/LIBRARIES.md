@@ -1,0 +1,29 @@
+# LIBRARIES — decisões de API/subsistema (RamShared)
+
+Registro anti-halo (Kahneman #11): nenhuma API/subsistema/dependência entra sem
+**critério mensurável**, **alternativas** e um **"quando revisitar"**. Um LKM
+ideal tem zero deps externas — aqui o registro é de **escolhas de API de kernel**
+e das poucas deps userspace. Inclui "deliberadamente NÃO usado".
+
+## Escolhas ativas
+
+| Escolha | Critério (mensurável / compatibilidade dura) | Quando revisitar |
+| --- | --- | --- |
+| **Block backend: NBD** (Fase A) | único que funciona em GeForce consumer (`nvidia_p2p_*` → `EINVAL`); `nbd.ko` presente, só `modprobe` | quando o kernel WSL2 tiver `CONFIG_BLK_DEV_UBLK` |
+| **Block backend: ublk** (Fase B) | latência menor (io_uring), sem round-trip socket | exige kernel custom; só após Fase B |
+| **Tier quente: zram (lzo-rle)** | RAM comprimida, baixa latência; presente (`CONFIG_ZRAM=m`) | se `CONFIG_ZRAM_WRITEBACK` for habilitado → writeback p/ VRAM |
+| **VRAM: CUDA Driver API via `dlopen`** | funciona sem toolkit sobre a stub `libcuda` do WSL2; `cuMemcpyHtoD/DtoH` em qualquer GPU | se surgir caminho coerente (CXL bare-metal) |
+| **Userspace lang: Rust (std)** | safety + RAII de recursos GPU (ver [ADR-0002](decisions/ADR-0002-rust-userspace-port.md)) | se FFI provar instável (rollback do ADR-0002) |
+
+## Deliberadamente NÃO usado
+
+- **`nvidia_p2p_get_pages_persistent` / BAR1 `ioremap_wc`** — `EINVAL` em GeForce consumer; BAR1 mapeia só ~16 MiB (framebuffer).
+- **zram-writeback** — exige `CONFIG_ZRAM_WRITEBACK` (kernel custom); cascata por prioridade resolve Day-0.
+- **MTD/phram (MMIO direto)** — descartado por performance (CPU memcpy).
+- **OpenCL** (proposta original do PRD-2) — CUDA escolhido para o caminho WSL2/GPU-PV.
+
+## Forward (bare-metal — decisões a registrar quando aplicável)
+
+`HMM`/`devm_memremap_pages(DEVICE_PRIVATE)` vs NUMA hotplug · `spinlock` vs
+`mutex` em hot path · `workqueue` vs `kthread` — cada uma exigirá critério
+mensurável e ADR própria.

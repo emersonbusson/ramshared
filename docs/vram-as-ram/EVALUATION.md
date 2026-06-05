@@ -162,6 +162,13 @@ A pesquisa em issues, PRs e mailing lists do kernel Linux revelou os seguintes p
 | **vramfs** (Overv) | FUSE+OpenCL. Benchmark de 2.4GB/s leitura. Valida viabilidade OpenCL do PRD-5. |
 | **MTD/phram** (Arch Wiki legacy) | Mapeamento direto MMIO. Descartado por performance (CPU memcpy). |
 
-## Próximo Passo
+## Próximo Passo — RESOLVIDO (2026-06-05)
 
-O usuário deve selecionar um ou mais PRDs para convergência. A partir do PRD selecionado, geraremos o arquivo `SPEC.md` usando o **Passo 2** da metodologia SSDV3, com obrigatoriedade de apresentar as evidências exigidas pelo Portão Cognitivo de Kahneman de cada PRD.
+Convergência concluída: ambiente **WSL2/GPU-PV** → caminho executável é o **`PRD-2`
+adaptado para CUDA** (ver §"Matriz de Decisão › Ambiente WSL2/GPU-PV"). Cadeia de
+SPEC gerada e auditada (Passo 2.5): `SPEC-WSL2.md` (v1, superseded) →
+`SPECv2-WSL2.md` (superseded) → **`SPECv3-WSL2.md` (candidato ativo)**. A Fase 0
+(`FASE0-FINAL.md`) mediu e fixou a arquitetura final — VRAM como **tier frio** na
+cascata `zram→VRAM→VHDX`, não swap quente. Implementação (Passo 3) em Rust,
+registrada em `IMPL.md`. PRD-1/3/4/5/6 seguem como alternativas documentadas
+(bare-metal / kernel custom).

@@ -1,0 +1,40 @@
+name: CI
+
+# Gate de qualidade do RamShared (Rust userspace). Os crates compilam sem GPU:
+# ramshared-cuda faz dlopen(libcuda) em runtime e os testes que exigem GPU sao
+# #[ignore], logo `cargo test` roda so a logica pura no runner.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain (stable + rustfmt + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Formatacao
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (-D warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Testes (workspace; --ignored exigem GPU/root)
+        run: cargo test --workspace

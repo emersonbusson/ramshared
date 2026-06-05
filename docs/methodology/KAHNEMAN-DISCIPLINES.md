@@ -98,8 +98,8 @@ esse multiplicador pra projetos similares.
 
 **Viés.** Modelo lembra do caso frequente, esquece do raro mas caro.
 
-**Regra.** Listar explicitamente cenários raros antes de decidir: falha
-de rede total, PgBouncer reiniciando, Redis cluster failover. Design
+**Regra.** Listar explicitamente cenários raros antes de decidir: OOM killer com lock segurado, PCIe bus
+reset, IOMMU fault, eviction WDDM/GPU-PV. Design
 pra worst-case, não pra happy path.
 
 **Sinal.** `docs/reliability/DEGRADATION-MATRIX.md` existe e é atualizado.
@@ -204,7 +204,7 @@ todo teste de recusa carrega o par "legítimo passa".
 
 **Viés.** _WYSIATI_ e _Planning Fallacy_ combinados. A crença de que o Sistema 1 consegue antecipar todas as dependências ocultas de uma reescrita global.
 
-**Regra.** Toda eliminação de "Ruído" arquitetural (usando o `superprompt.md` ou IA autônoma) deve ser **fatiada ortogonalmente**. Nunca peça para a IA reescrever o repositório inteiro. O escopo deve ser fechado por padrão de ruído ou por diretório (ex: "aplique o superprompt apenas nos hooks do drm/ramshared" ou "padronize apenas a struct page e flags de memória nas patches"). Cada fatia vira um commit atômico.
+**Regra.** Toda eliminação de "Ruído" arquitetural (usando o [`SUPERPROMPT.md`](SUPERPROMPT.md) ou IA autônoma) deve ser **fatiada ortogonalmente**. Nunca peça para a IA reescrever o repositório inteiro. O escopo deve ser fechado por padrão de ruído ou por diretório (ex: "aplique o superprompt apenas nos hooks do drm/ramshared" ou "padronize apenas a struct page e flags de memória nas patches"). Cada fatia vira um commit atômico.
 
 **Sinal.** patches de auditoria de ruído contêm commits atômicos isolados por serviço ou componente, em vez de um gigantesco `refactor: clean codebase`.
 
@@ -218,16 +218,16 @@ abaixo é o mapa para citar em patch review ou ADR.
 > **Nota sobre rubricas:** muitas disciplinas (#1, #3, #6, #10, #11) ainda
 > não têm rubrica externa formalizada — o sinal é checado em patch review
 > manual e a regra vive nesta seção do doc. Mover para
-> `.claude/rules/coding.md` ou criar `docs/runbooks/REVIEW-ADR.md` é
-> trabalho futuro (cf. seção "Auto-aplicação" no fim).
+> `.claude/rules/coding.md` é trabalho futuro; a revisão periódica está em
+> [`docs/runbooks/REVIEW-ADR.md`](../runbooks/REVIEW-ADR.md).
 
 | Disciplina                  | Rubrica/artefato no ramshared                                                                                                                                                         | Como o sinal é checado                                                                                                                       |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | #1 WYSIATI                  | patch review (manual)                                                                                                                                                                | reviewer rejeita resposta sem "sem ter visto X..." quando aplicável                                                                          |
 | #2 Counterfactual           | ADRs em `docs/decisions/` com critério numérico/observável de reversão (formato livre dentro do ADR; futuro: padronizar via seção `## Rollback trigger`)                          | revisão periódica de ADRs ativos checa se há trigger numérico                                                                                |
 | #3 Número não adjetivo      | patch review (regra nesta seção #3)                                                                                                                                                  | patch com claim de perf sem número é bloqueado em review                                                                                        |
-| #4 Anchoring                | ADRs de rewrite citam reference class (ex.: `ADR-056-rust-for-linux-adoption.md`)                                                                                                 | ADR sem reference class é Sistema 1                                                                                                          |
-| #5 Availability heuristic   | `docs/reliability/DEGRADATION-MATRIX.md` + `ADR-007-numa-nodes.md` + `ADR-008-pcie-resets.md`                                                                       | matrix versionada por feature crítica                                                                                                        |
+| #4 Anchoring                | ADRs de rewrite citam reference class (ex.: [`ADR-0002`](../decisions/ADR-0002-rust-userspace-port.md))                                                                                                 | ADR sem reference class é Sistema 1                                                                                                          |
+| #5 Availability heuristic   | `docs/reliability/DEGRADATION-MATRIX.md` + [`ADR-0001`](../decisions/ADR-0001-vram-cascade-tiering.md)                                                                       | matrix versionada por feature crítica                                                                                                        |
 | #6 Confiança calibrada      | patch review (regra nesta seção #6)                                                                                                                                                  | "com certeza" sem número é flag em review                                                                                                    |
 | #7 Hindsight bias           | `docs/postmortems/TEMPLATE.md` (separa `## Análise de processo` de outcome)                                                                                                       | postmortem sem essa separação é incompleto                                                                                                   |
 | #8 Planning fallacy         | Roadmap/ADR cita inside view + adjusted (multiplier reference class explícito)                                                                                                    | sprint sem multiplier é Sistema 1                                                                                                            |
@@ -238,8 +238,7 @@ abaixo é o mapa para citar em patch review ou ADR.
 | #13 Ilusão de validade      | Teste de integração `CONFIG_KASAN=y ou KVM tests` por ferramenta privilegiada (ex.: `tools/testing/selftests/ramshared/vram_test.c`); deploy valida função, não só `--check` | patch de ferramenta destrutiva sem teste de integração do modo de falha real é bloqueado; teste de recusa sem par "input legítimo passa" é flag |
 
 Artefatos comuns confirmados: `CLAUDE.md`, `AGENTS.md`,
-`.claude/rules/{coding,documentation,backend,frontend,testing,security,
-infra,civm}.md`, `docs/decisions/`, `docs/postmortems/`,
+`.claude/rules/{coding,kernel,ssdv3,governance}.md`, `docs/decisions/`, `docs/postmortems/`,
 `docs/reliability/DEGRADATION-MATRIX.md`,
 `docs/SSDV3-PROMPTS.md`.
 
@@ -331,7 +330,7 @@ fallacy) trazem o contra-exemplo na própria seção detalhada:
 skin-in-the-game viram ritual: ADR commita rollback trigger numérico
 mas trigger nunca é executado quando condição dispara — disciplina
 existe só no template, não na mente. Mitigação: revisão periódica
-(futuro: formalizar em `docs/runbooks/REVIEW-ADR.md` a criar) percorre
+(em [`docs/runbooks/REVIEW-ADR.md`](../runbooks/REVIEW-ADR.md)) percorre
 rollback triggers ativos em `docs/decisions/` e documenta acionamentos.
 Hoje, postmortems em `docs/postmortems/` capturam acionamentos quando
 ocorrem (ou justificam não-acionamento).
@@ -401,8 +400,7 @@ falhar — e tem condição de morte declarada:
   de 30% dos patches não-triviais citarem alguma disciplina, simplificar
   para Top-5 + 1-pager via ADR superseding. Sinal de cargo cult em
   escala.
-- **Auditoria:** revisão trimestral (futuro: `docs/runbooks/REVIEW-ADR.md`
-  a criar) cruza commits de patches não-triviais × disciplinas citadas.
+- **Auditoria:** revisão trimestral ([`docs/runbooks/REVIEW-ADR.md`](../runbooks/REVIEW-ADR.md)) cruza commits de patches não-triviais × disciplinas citadas.
   Hoje, métrica é manual via grep periódico em commits e patch review
   notes. Resultado documenta na próxima entrada de `docs/postmortems/`
   se houver desvio.

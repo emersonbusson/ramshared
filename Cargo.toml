@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ramshared-cli"]
+members = ["crates/ramshared-cli", "crates/ramshared-tier", "crates/ramshared-cuda", "crates/ramshared-block", "crates/ramshared-wsl2d", "crates/ramshared-integrity"]
 
 [workspace.package]
 edition = "2024"

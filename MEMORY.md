@@ -1,0 +1,51 @@
+# MEMORY — RamShared
+
+Memória compartilhada da sessão (regra: [`.claude/rules/coding.md`](.claude/rules/coding.md) §Session Memory).
+Ler de **baixo para cima** (entrada mais recente no fim). **Append-only**: nunca
+apagar/reescrever entradas antigas. Nunca gravar secrets nem endereços que vazem KASLR.
+
+---
+
+## 2026-06-05 — vram-as-ram: SPECv3 + scaffold Rust + import de método
+
+- **`docs/vram-as-ram/`** convergiu para **SPECv3-WSL2** (cascata
+  `zram(200) → VRAM(100) → VHDX`; VRAM é tier **frio**, não swap quente; DEMOTE
+  por latência §9). v1/v2 preservados como superseded. Esteira aplicada:
+  SPEC → Passo 2.5 → SPECv2 → Passo 2.5 → SPECv3.
+- **Fase 0** medida em GPU real (RTX 2060, WSL2/GPU-PV): eviction WDDM é
+  **data-safe mas latency-unsafe** (4K → 1,18 s sob pressão); tiering **provado**
+  (zram 1 GiB cheio + VRAM absorveu 983 MiB de spill, VHDX intocado).
+  Ver [`docs/vram-as-ram/FASE0-FINAL.md`](docs/vram-as-ram/FASE0-FINAL.md).
+- **Passo 3 (Rust):** `crates/ramshared-tier` (cascata + invariante A1) e
+  `crates/ramshared-cuda` (wrapper `libcuda`, **roundtrip validado em GPU real**)
+  — `fmt`/`clippy -D warnings`/testes verdes. Próximo: `ramshared-block` (NBD §8),
+  depois daemon `ramshared-wsl2d`.
+- **Método importado do advoq** (fechou cargo-cult de disciplinas que citavam
+  arquivos inexistentes): `docs/postmortems/TEMPLATE.md` (#7),
+  `docs/reliability/DEGRADATION-MATRIX.md` (#5), `docs/methodology/SUPERPROMPT.md`
+  (#14). `SSDV3-PROMPTS.md` em de-web (era port superficial; **regra: o que não
+  existe em kernel — SQL/DDL/migrations/endpoints/SDK — sai, não se traduz**).
+- **Pendente:** terminar de-web do `SSDV3-PROMPTS.md`; #9 (gatilhos web→kernel no
+  `ssdv3.md`, exige sync `CLAUDE.md`/`AGENTS.md`); `docs/decisions/` + ADRs
+  (ainda não existem, citados pelas disciplinas); `docs/LIBRARIES.md`.
+
+---
+
+## 2026-06-05 — vram-as-ram: cascata Rust fim-a-fim VALIDADA
+
+- **Passo 3 completo** (`faca tudo na ordem correta`): daemon com `mlockall`+
+  `oom_score_adj=-1000` (Disciplina 3); **canário §9 inline** no serve loop (mede
+  latência, arma `Canary` pós-baseline, dispara `swapoff <nbd>` numa thread no
+  DEMOTE mantendo o read-back); `check`+zram (linha "Tiers"); 6 crates verdes
+  (`fmt`/`clippy -D warnings`/testes).
+- **Aceitação §14 provada no sistema vivo** (RTX 2060, WSL2), pressão confinada
+  por cgroup v2 — ver [`docs/vram-as-ram/VALIDATION-CASCADE.md`](docs/vram-as-ram/VALIDATION-CASCADE.md):
+  - **§14.3 spill:** `up` montou `zram(200)>nbd0(100)>sdc(-2)`; hog 1300M/cgroup
+    768M → **511 MiB** na VRAM, **332.800 páginas íntegras**, canário sem
+    falso-positivo sob carga.
+  - **§14.4 DEMOTE:** **481 MiB vivos** migraram VRAM→VHDX via `swapoff` em 6 s,
+    **384.000 páginas íntegras, 0 corrupção**, daemon serviu o read-back.
+- **Harness** (fora do repo, em `/home/emdev/fase0/`): `cascade-validate.sh`,
+  `cascade-demote.sh`, `cascade-hog.c` (bug corrigido: `mmap` exigia `offset=0`).
+- **Pendente:** refinamentos não-bloqueantes (canário §9.4 dedicado p/
+  conteúdo/free-floor; daemon multi-conexão). **PR ainda NÃO** (revisar tudo antes).
