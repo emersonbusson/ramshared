@@ -64,12 +64,14 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
      páginas íntegras**, 0 falso-positivo do canário.
    - §14.4 DEMOTE: **481 MiB vivos** migraram da VRAM p/ VHDX via `swapoff` em 6 s,
      **384.000 páginas íntegras, 0 corrupção**, daemon serviu o read-back.
+6. ✅ **Canário §9.4 dedicado** (issue #8, 2026-06-05): região-canário separada +
+   `ResidencySampler` com histerese — corrupção demove imediato; free-floor/erro
+   transiente exigem `consecutive` amostras; latência por-request intacta. 4 testes
+   novos + 5 de `Canary` intactos; `clippy -D warnings` limpo. Detalhe em
+   [`docs/008-vram-residency-canary/IMPL.md`](../008-vram-residency-canary/IMPL.md).
 
 ### Refinamentos futuros (não bloqueiam Day-0)
 
-- Canário §9.4 **dedicado** (região-canário + checagem de conteúdo/free-floor): hoje
-  o wiring inline cobre o gatilho de latência (o dominante na Fase 0); conteúdo e
-  free-floor têm a lógica testada (`residency.rs`) mas exigem o sampler dedicado.
 - Multi-conexão no daemon (hoje serve 1 conexão = exatamente a vida do swap).
 
 ### Fase 0 (evidência que fundou o SPECv3)
