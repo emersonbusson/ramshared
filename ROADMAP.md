@@ -18,12 +18,11 @@ O caminho executável hoje é o **WSL2**; o destino é o **ring 0 bare-metal**
 
 ## Agora — issue #3 (Fase A, WSL2)
 
-- **C1 — canário dedicado (§9.4):** região-canário com checagem de **conteúdo**
-  (sentinela write/read) e **free-floor** (`cuMemGetInfo` periódico), ativando
-  `Demote(Corruption)`/`Demote(FreeFloor)` além da latência. _Em esteira SSDV3
-  (PRD → SPEC)._
-- **H1 — daemon multi-thread / leitor dedicado:** servir o NBD sem
-  head-of-line-blocking, encurtando a janela do DEMOTE sob eviction.
+- **C1 — canário dedicado (§9.4):** ✅ **feito** — `ResidencySampler` com histerese
+  (conteúdo imediato; free-floor/erro transiente com streak). Ver `docs/008-vram-residency-canary/`.
+- **H1 — daemon multi-conexão / leitor dedicado:** ✅ **feito** — worker CUDA único +
+  leitor/escritor por conexão (`nbd-client -C N`, `CAN_MULTI_CONN`); sem head-of-line
+  blocking. Ver `docs/daemon-multiconn/`.
 - **LOW:** erros tipados (enum) no daemon/cascade; `clap` no parse de args.
 
 ## Fase B — kernel custom (WSL2 + kernel próprio)

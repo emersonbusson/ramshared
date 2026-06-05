@@ -21,6 +21,11 @@ e das poucas deps userspace. Inclui "deliberadamente NÃO usado".
 - **zram-writeback** — exige `CONFIG_ZRAM_WRITEBACK` (kernel custom); cascata por prioridade resolve Day-0.
 - **MTD/phram (MMIO direto)** — descartado por performance (CPU memcpy).
 - **OpenCL** (proposta original do PRD-2) — CUDA escolhido para o caminho WSL2/GPU-PV.
+- **`clap` (arg parsing)** — descartado p/ preservar **zero-dep externa** num projeto
+  Ring-0/Day-0 (#11). Para ~4-9 flags o parser hand-rolled (`std::env::args`) atende; clap
+  traria ~10 crates transitivas + custo de build. A qualidade do "polish" (issue #3 LOW) veio
+  de **erros tipados** (`CascadeError`, sem dep), não de clap. Revisitar se o CLI crescer
+  muito (muitos subcommands/validações com `--help` rico).
 
 ## Forward (bare-metal — decisões a registrar quando aplicável)
 

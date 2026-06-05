@@ -186,7 +186,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn to_exit(r: Result<(), String>) -> ExitCode {
+fn to_exit<E: fmt::Display>(r: Result<(), E>) -> ExitCode {
     match r {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
