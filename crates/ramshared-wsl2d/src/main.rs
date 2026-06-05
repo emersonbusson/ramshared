@@ -255,6 +255,18 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Caminho absoluto do `swapoff` (#2c: um daemon root NAO deve depender do `$PATH`;
+/// evita shim malicioso no ambiente). Fallback p/ `$PATH` so' como ultimo recurso.
+fn swapoff_bin() -> &'static str {
+    const CANDIDATES: &[&str] = &["/usr/sbin/swapoff", "/sbin/swapoff"];
+    for c in CANDIDATES {
+        if std::path::Path::new(c).exists() {
+            return c;
+        }
+    }
+    "swapoff"
+}
+
 /// Dispara `swapoff <dev>` numa thread separada (nao bloqueia o worker) e devolve o
 /// canal que confirma o resultado. Caminho unico de DEMOTE (DT-8): usado pela latencia
 /// por-request e pela sonda em cadencia.
@@ -262,7 +274,7 @@ fn spawn_swapoff(dev: &str) -> std::sync::mpsc::Receiver<bool> {
     let (tx, rx) = std::sync::mpsc::channel();
     let dev = dev.to_string();
     std::thread::spawn(move || {
-        let ok = std::process::Command::new("swapoff")
+        let ok = std::process::Command::new(swapoff_bin())
             .arg(&dev)
             .status()
             .map(|s| s.success())
