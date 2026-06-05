@@ -32,7 +32,7 @@ cd WSL2-Linux-Kernel
 # Base = config oficial do WSL2 (já vem no repo em Microsoft/config-wsl).
 cp Microsoft/config-wsl .config
 # Habilita os gatekeepers da Fase B:
-./scripts/config --file .config --module  CONFIG_ZRAM_WRITEBACK   # writeback do zram (item 4)
+./scripts/config --file .config --enable  CONFIG_ZRAM_WRITEBACK   # BOOL (depende de CONFIG_ZRAM=m), item 4
 ./scripts/config --file .config --module  CONFIG_BLK_DEV_UBLK      # ublk_drv (item 5)
 ./scripts/config --file .config --enable  CONFIG_IO_URING          # já =y; garante
 make olddefconfig
