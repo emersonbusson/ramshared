@@ -4,21 +4,21 @@
 //! faz a fiação do kernel (os ioctls). Assim o daemon fica **sem `unsafe`** — o
 //! único `unsafe` do projeto vive isolado no `ramshared-cuda`.
 //!
-//! MVP/smoke: aloca a VRAM, serve **uma** conexão e sai com `mlockall` +
-//! `oom_score_adj` (Disciplina 3) e o canário de residência §9 (latência
-//! por-request) + §9.4 (sonda dedicada de conteúdo/free em cadência). Multi-conexão
-//! e backoff seguem como trabalho futuro.
+//! Aloca a VRAM e serve **N conexões** NBD (`nbd-client -C N`) por um leitor/escritor
+//! dedicados por conexão + um **worker CUDA único** (afinidade de thread, §9.4/H1), com
+//! `mlockall`+`oom_score_adj` (Disciplina 3) e o canário de residência §9 (latência
+//! por-request, agora incluindo a espera na fila) + §9.4 (sonda de conteúdo/free).
+//! Backoff segue como trabalho futuro.
 
-use std::io::{BufReader, Read, Write};
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 
-use ramshared_block::protocol::{NBD_FLAG_HAS_FLAGS, NBD_FLAG_SEND_FLUSH, REQUEST_LEN};
-use ramshared_block::{BlockBackend, Command, parse_request, serve, server_handshake};
+use ramshared_block::protocol::{NBD_FLAG_CAN_MULTI_CONN, NBD_FLAG_HAS_FLAGS, NBD_FLAG_SEND_FLUSH};
+use ramshared_block::{BlockBackend, Command, serve};
 use ramshared_cuda::Cuda;
 use ramshared_wsl2d::{
-    CANARY_BYTES, CANARY_EVERY, Cadence, Canary, CanaryProbe, ResidencyConfig, ResidencySampler,
-    Verdict, VramBackend,
+    CANARY_BYTES, CANARY_EVERY, CHAN_CAP, Cadence, Canary, CanaryProbe, LiveCount, Reply,
+    ResidencyConfig, ResidencySampler, Verdict, VramBackend, WMsg, spawn_acceptor,
 };
 
 // Disciplina 3 (anti-deadlock): o daemon serve o swap, logo nao pode ser swapado.
@@ -127,66 +127,61 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _ = std::fs::remove_file(path);
     let listener = UnixListener::bind(path)?;
     eprintln!("[wsl2d] escutando em {sock}");
-    eprintln!("[wsl2d] conecte: sudo nbd-client -unix {sock} /dev/nbd0");
+    eprintln!("[wsl2d] conecte: sudo nbd-client -C <N> -unix {sock} {nbd_dev}");
 
-    // --- serve UMA conexão (MVP) ---
-    let (stream, _) = listener.accept()?;
-    eprintln!("[wsl2d] cliente conectado");
-    let mut writer = stream.try_clone()?;
-    let mut reader = BufReader::new(stream);
+    // --- multi-conexão (H1): acceptor + leitor/escritor por conexão alimentam o worker
+    // CUDA único (esta thread). O canal WMsg é o ÚNICO ponto de backpressure (réplica por
+    // conexão é ilimitada, DT-7). SPEC: docs/daemon-multiconn/SPECv3.md ---
+    let tx_flags = NBD_FLAG_HAS_FLAGS | NBD_FLAG_SEND_FLUSH | NBD_FLAG_CAN_MULTI_CONN; // DT-10
+    let device_size = backend.size_bytes();
+    let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel::<WMsg>(CHAN_CAP);
+    let _acceptor = spawn_acceptor(listener, device_size, tx_flags, jobs_tx); // move o único sender
+    eprintln!("[wsl2d] em transmissão (worker CUDA único; multi-conexão)");
 
-    let tx_flags = NBD_FLAG_HAS_FLAGS | NBD_FLAG_SEND_FLUSH;
-    server_handshake(&mut reader, &mut writer, backend.size_bytes(), tx_flags)?;
-    eprintln!("[wsl2d] handshake ok; em transmissão");
-
+    // Estado do worker (esta thread é dona de backend/probe/ctx — afinidade CUDA).
     let mut canary: Option<Canary> = None;
     let mut baseline: Vec<u64> = Vec::new();
     let mut demoted = false;
     let mut demote_rx: Option<std::sync::mpsc::Receiver<bool>> = None;
-    let mut hdr = [0u8; REQUEST_LEN];
-    loop {
-        match reader.read_exact(&mut hdr) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => return Err(e.into()),
-        }
-        let req = parse_request(&hdr)?;
-        // Defesa anti-DoS: um WRITE nunca pode exceder o device; len absurdo => request
-        // malformado => desconecta em vez de alocar (evita alloc de ate ~4 GiB).
-        if req.cmd == Command::Write && req.len as u64 > backend.size_bytes() {
-            eprintln!(
-                "[wsl2d] WRITE len {} excede o device; desconectando",
-                req.len
-            );
-            break;
-        }
-        let payload = if req.cmd == Command::Write {
-            let mut p = vec![0u8; req.len as usize];
-            reader.read_exact(&mut p)?;
-            p
-        } else {
-            Vec::new()
+    let mut live = LiveCount::new();
+
+    while let Ok(msg) = jobs_rx.recv() {
+        let job = match msg {
+            WMsg::Opened => {
+                live.on_open();
+                continue;
+            }
+            WMsg::Closed => {
+                if live.on_close() {
+                    break; // todas as conexões abertas fecharam (DT-15)
+                }
+                continue;
+            }
+            WMsg::Job(job) => job,
         };
-        let touches_vram = matches!(req.cmd, Command::Read | Command::Write);
+
+        let touches_vram = matches!(job.req.cmd, Command::Read | Command::Write);
+        // DT-16 (revisado): latência SERVE-ONLY (tempo da op de VRAM). Medir a espera na
+        // fila dava falso-positivo de DEMOTE sob carga normal (§14.3 ao vivo: baseline
+        // 85us idle vs 1.1ms sob fila = 13x → demote indevido). A falha REAL (eviction
+        // WDDM) spike o serve ~330x (Fase 0) → o canário dispara nela, não na fila.
         let t0 = std::time::Instant::now();
-        let out = serve(&req, &payload, &mut backend);
+        let out = serve(&job.req, &job.payload, &mut backend);
         let lat_us = t0.elapsed().as_micros() as u64;
-        writer.write_all(&out.reply)?;
-        if !out.read_data.is_empty() {
-            writer.write_all(&out.read_data)?;
-        }
-        writer.flush()?;
-        // Poll nao-bloqueante do swapoff de DEMOTE em curso: o serve loop PRECISA
-        // continuar atendendo o read-back do swapoff (senao paginas sujas se perdem).
+        let _ = job.reply.send(Reply {
+            reply: out.reply,
+            data: out.read_data,
+            disconnect: out.disconnect,
+        });
+
+        // Poll nao-bloqueante do swapoff de DEMOTE em curso (re-arma se falhar).
         if let Some(rx) = demote_rx.take() {
             match rx.try_recv() {
                 Ok(true) => {
-                    demoted = true; // confirmado: desarma o canario de vez
+                    demoted = true;
                     eprintln!("[wsl2d] DEMOTE: swapoff {nbd_dev} OK (canario desarmado)");
                 }
                 Ok(false) => {
-                    // swapoff falhou: device ainda e' swap vivo e degradado. NAO engole —
-                    // deixa demote_rx=None p/ re-armar e tentar de novo no proximo spike.
                     eprintln!("[wsl2d] DEMOTE: swapoff {nbd_dev} FALHOU; canario re-armado");
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -197,11 +192,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        // Canario de latencia por-request (§9, gatilho PRIMARIO): mede a latencia do
-        // I/O da VRAM e dispara DEMOTE sob spike. content_ok=true e free=u64::MAX sao DE
-        // PROPOSITO aqui: a eviction WDDM e' data-safe mas latency-unsafe (Fase 0), entao
-        // a latencia e' o sinal vivo. Conteudo e free-floor sao cobertos pela sonda
-        // dedicada §9.4 logo abaixo (cadencia), nao por este bloco.
+
+        // Canário de latência por-request (§9, gatilho PRIMÁRIO): inclui a espera na fila
+        // (DT-16). content_ok=true/free=u64::MAX DE PROPÓSITO aqui: o sinal é a latência;
+        // conteúdo e free-floor vêm da sonda dedicada §9.4 logo abaixo.
         if touches_vram && !demoted && demote_rx.is_none() {
             match canary.as_mut() {
                 None => {
@@ -218,20 +212,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!(
                             "[wsl2d] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}"
                         );
-                        // Thread separada (nao bloqueia o serve); o resultado volta pelo
-                        // canal e so' entao decidimos desarmar (ver poll acima).
                         demote_rx = Some(spawn_swapoff(&nbd_dev));
                     }
                 }
             }
         }
-        // Canario dedicado §9.4 (SPECv3): sonda de conteudo/free em cadencia.
-        // Conteudo corrompido demove imediato; free-floor e erros transientes exigem
-        // `consecutive` amostras (histerese, DT-9/DT-11). E' independente do streak de
-        // latencia por-request acima e so' roda quando nao ha DEMOTE em curso.
+
+        // Canário dedicado §9.4 (SPECv3): sonda de conteúdo/free em cadência. Conteúdo
+        // corrompido demove imediato; free-floor/erro transiente exigem streak (histerese).
         if touches_vram && !demoted && demote_rx.is_none() && cadence.tick() {
-            // DT-11: erro de sonda/`mem_info` vira amostra degradada (None), nao DEMOTE
-            // imediato — entra no streak como free baixo.
             let content = probe.check_content().ok();
             let free = ctx.mem_info().ok().map(|(f, _)| f as u64);
             if let Verdict::Demote(reason) = sampler.sample(content, free) {
@@ -243,26 +232,32 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 demote_rx = Some(spawn_swapoff(&nbd_dev));
             }
         }
-        if out.disconnect {
-            eprintln!("[wsl2d] disconnect");
-            break;
-        }
     }
 
-    // --- teardown: zera a VRAM (§11) e remove o socket ---
-    // DT-12/§11: zera as DUAS regioes (swap + canario) incondicionalmente. Um erro no
-    // zero do backend NAO pode pular o scrub do canario; tenta ambos e so' entao propaga.
-    let backend_zero = backend.zero();
-    let _ = probe.zero();
-    backend_zero?;
+    // --- teardown (DT-17): espera (bounded) o swapoff em voo, loga honesto, zera ambos.
+    // Aqui todas as conexões NBD já caíram → ninguém lê a VRAM por NBD → zerar é safe.
+    if let Some(rx) = demote_rx.take() {
+        match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+            Ok(true) => eprintln!("[wsl2d] teardown: swapoff {nbd_dev} confirmado (DEMOTE limpo)"),
+            Ok(false) => eprintln!(
+                "[wsl2d] teardown: AVISO swapoff {nbd_dev} NAO confirmou (swap pode estar inconsistente)"
+            ),
+            Err(_) => eprintln!(
+                "[wsl2d] teardown: AVISO swapoff {nbd_dev} sem confirmacao em 5s (timeout/thread sumiu)"
+            ),
+        }
+    }
+    let zeroed = backend.zero();
+    let _ = probe.zero(); // DT-12/DT-17: zera tambem a regiao-canario (§11)
     let _ = std::fs::remove_file(path);
+    zeroed?;
     eprintln!("[wsl2d] encerrado (VRAM zerada)");
     Ok(())
 }
 
-/// Dispara `swapoff <dev>` numa thread separada (nao bloqueia o serve loop) e
-/// devolve o canal que confirma o resultado. Caminho unico de DEMOTE (DT-8):
-/// usado tanto pela latencia por-request quanto pela sonda em cadencia.
+/// Dispara `swapoff <dev>` numa thread separada (nao bloqueia o worker) e devolve o
+/// canal que confirma o resultado. Caminho unico de DEMOTE (DT-8): usado pela latencia
+/// por-request e pela sonda em cadencia.
 fn spawn_swapoff(dev: &str) -> std::sync::mpsc::Receiver<bool> {
     let (tx, rx) = std::sync::mpsc::channel();
     let dev = dev.to_string();
