@@ -20,6 +20,7 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
 | `ramshared-tier` — cascata: prioridades + invariante A1 | `crates/ramshared-tier/{Cargo.toml, src/lib.rs, src/priority.rs, src/cascade.rs}` | §1, §6.2, §9.2 | revisa **RF-3** | `cargo fmt --check` ok · `clippy -D warnings` limpo · **8 testes** verdes · `cargo check --workspace` ok |
 | (pré-existente) `ramshared check`/`doctor` | `crates/ramshared-cli/src/main.rs` | §6.1 | RF-1 (parcial) | testes verdes |
 | `ramshared-cuda` — wrapper seguro CUDA (FFI dlopen, RAII, Cuda/Context/DeviceMem) | `crates/ramshared-cuda/{Cargo.toml, src/lib.rs, src/ffi.rs, src/driver.rs}` | §4, §8 | RF-1 | fmt ok · `clippy -D warnings` limpo · 2 unit + doctest verdes · **roundtrip GPU real (RTX 2060) verde** (`--ignored`, 256 MiB write/read/OOB) |
+| `ramshared-block` — protocolo NBD fixed-newstyle + I/O (BlockBackend, inflight) | `crates/ramshared-block/{Cargo.toml, src/lib.rs, src/protocol.rs, src/request.rs, src/inflight.rs}` | §8, §10.1 | RF-2 (revisado: nbd) | fmt ok · `clippy -D warnings` limpo · **13 testes** (parse/encode, serve/validação, inflight), sem root |
 
 ### Decisões pequenas (não pediram ADR nova)
 
@@ -34,6 +35,7 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
   → **sem `build.rs`** (o §5 listava `build.rs`; desvio justificado: o WSL2 usa a
   stub `libcuda` do host, sem toolkit). FFI cru isolado em `ffi.rs`; wrappers RAII
   em `driver.rs`. Roundtrip validado em GPU real, não em mock (disciplina #13).
+- `ramshared-block` separa **protocolo/I/O** (lib pura, `#![forbid(unsafe_code)]`, 13 testes sem root) da **fiação do device** (`/dev/nbdX` via ioctl, `unsafe`+root) — esta fica para o módulo de integração, testada via `--ignored`/kselftest.
 
 ### Pendente (próximos incrementos, na ordem do SPECv3)
 
@@ -41,8 +43,8 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
 2. Comandos `up` / `status` / `down` (§6.2–6.4) usando `ramshared-tier`.
 3. `ramshared-wsl2d`: máquina de estados (§7, com `Demoted`) + canário de
    residência com **DEMOTE** por latência (§9).
-4. `ramshared-block` (NBD fixed-newstyle §10.1) + `ramshared-integrity` (§8.1).
-   [`ramshared-cuda` ✅ feito]
+4. `ramshared-integrity` (§8.1) + **device-wiring NBD** (ioctl `NBD_SET_SOCK`/`NBD_DO_IT`, precisa root) + daemon `ramshared-wsl2d` (§7).
+   [`ramshared-cuda` ✅, `ramshared-block` ✅ — protocolo+I/O testados sem root]
 5. Testes de aceitação §14: cascata sob pressão **confinada em cgroup** (§14.3) e
    **DEMOTE sob latência** (§14.4).
 
