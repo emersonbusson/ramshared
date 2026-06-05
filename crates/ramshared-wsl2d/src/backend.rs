@@ -2,7 +2,7 @@
 //! `ramshared_block`. É o ponto onde "VRAM CUDA" vira "block device NBD" (SPEC §8).
 
 use ramshared_block::{BlockBackend, IoError};
-use ramshared_cuda::DeviceMem;
+use ramshared_cuda::{CudaError, DeviceMem};
 
 /// Block device respaldado por uma região de VRAM CUDA.
 pub struct VramBackend<'c, 'a> {
@@ -13,6 +13,11 @@ pub struct VramBackend<'c, 'a> {
 impl<'c, 'a> VramBackend<'c, 'a> {
     pub fn new(mem: DeviceMem<'c, 'a>, block_size: u32) -> Self {
         Self { mem, block_size }
+    }
+
+    /// Zera toda a VRAM (SPEC §11 — zerar ao liberar/parar).
+    pub fn zero(&mut self) -> Result<(), CudaError> {
+        self.mem.zero()
     }
 }
 
