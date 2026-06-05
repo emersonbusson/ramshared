@@ -22,6 +22,10 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
 | `ramshared-cuda` — wrapper seguro CUDA (FFI dlopen, RAII, Cuda/Context/DeviceMem) | `crates/ramshared-cuda/{Cargo.toml, src/lib.rs, src/ffi.rs, src/driver.rs}` | §4, §8 | RF-1 | fmt ok · `clippy -D warnings` limpo · 2 unit + doctest verdes · **roundtrip GPU real (RTX 2060) verde** (`--ignored`, 256 MiB write/read/OOB) |
 | `ramshared-block` — protocolo NBD fixed-newstyle + I/O (BlockBackend, inflight) | `crates/ramshared-block/{Cargo.toml, src/lib.rs, src/protocol.rs, src/request.rs, src/inflight.rs}` | §8, §10.1 | RF-2 (revisado: nbd) | fmt ok · `clippy -D warnings` limpo · **13 testes** (parse/encode, serve/validação, inflight), sem root |
 | `ramshared-wsl2d` (lib) — máquina de estados (§7) + `VramBackend` (CUDA→NBD) | `crates/ramshared-wsl2d/{Cargo.toml, src/lib.rs, src/state.rs, src/backend.rs, src/main.rs}` | §7, §8 | — | fmt ok · `clippy -D warnings` limpo · 4 unit + **composição GPU real verde** (`--ignored`: WRITE/READ NBD na VRAM) |
+| `ramshared-integrity` — checksum por bloco (FNV-1a) + padrões + tabela pré-alocada | `crates/ramshared-integrity/{Cargo.toml, src/lib.rs, src/hash.rs, src/pattern.rs}` | §8.1, §14.2 | — | fmt ok · `clippy -D warnings` limpo · **7 testes** (hash/tabela/padrões), sem root |
+
+> **Marco:** os 6 crates do §5 existem (cli, tier, cuda, block, wsl2d, integrity);
+> o core CUDA↔NBD validado em GPU real. Falta a camada de integração (root).
 
 ### Decisões pequenas (não pediram ADR nova)
 
@@ -46,7 +50,7 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
 3. `ramshared-wsl2d`: canário de residência + **DEMOTE** por latência (§9) e a
    sequência `start` (mlockall/oom_score_adj/alloc backoff §6.2). [máquina de
    estados §7 ✅, `VramBackend` CUDA→NBD ✅]
-4. `ramshared-integrity` (§8.1) + **device-wiring NBD** (ioctl `NBD_SET_SOCK`/`NBD_DO_IT`, precisa root).
+4. **device-wiring NBD** (ioctl `NBD_SET_SOCK`/`NBD_DO_IT`, `socketpair`, loop `NBD_DO_IT` em thread) — precisa root + `unsafe`. [`ramshared-integrity` ✅]
 5. Testes de aceitação §14: cascata sob pressão **confinada em cgroup** (§14.3) e
    **DEMOTE sob latência** (§14.4).
 
