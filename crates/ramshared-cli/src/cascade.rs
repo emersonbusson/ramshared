@@ -3,6 +3,7 @@
 //! `swapoff` **antes** de desconectar o NBD (anti-panic).
 
 use ramshared_tier::{TierPriorities, validate_order, vram_safety_net};
+use std::fmt;
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -13,19 +14,49 @@ const SOCK: &str = "/run/ramshared/wsl2d.sock";
 const NBD: &str = "/dev/nbd0";
 const ZRAM_DEV_FILE: &str = "/run/ramshared/zram-dev";
 
-fn sh(cmd: &str, args: &[&str]) -> Result<String, String> {
+/// Erro tipado da orquestração da cascata (sem dep externa — segue o padrão do
+/// `CudaError`: enum + `Display` + `Error`). Zero-criatividade: variantes mapeiam os
+/// modos de falha reais (comando externo, argumento, I/O, pré-condição).
+#[derive(Debug)]
+pub enum CascadeError {
+    /// Comando externo falhou (spawn ou status != 0).
+    Shell { cmd: String, msg: String },
+    /// Argumento de CLI inválido.
+    Arg(String),
+    /// Erro de I/O (fs / `/proc`).
+    Io(String),
+    /// Pré-condição da cascata violada (ordem de tiers, rede A1, device, daemon).
+    Precondition(String),
+}
+
+impl fmt::Display for CascadeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CascadeError::Shell { cmd, msg } => write!(f, "comando `{cmd}` falhou: {msg}"),
+            CascadeError::Arg(m) => write!(f, "argumento inválido: {m}"),
+            CascadeError::Io(m) => write!(f, "I/O: {m}"),
+            CascadeError::Precondition(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+impl std::error::Error for CascadeError {}
+
+fn sh(cmd: &str, args: &[&str]) -> Result<String, CascadeError> {
     let out = Command::new(cmd)
         .args(args)
         .output()
-        .map_err(|e| format!("{cmd}: {e}"))?;
+        .map_err(|e| CascadeError::Shell {
+            cmd: cmd.to_string(),
+            msg: e.to_string(),
+        })?;
     if out.status.success() {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     } else {
-        Err(format!(
-            "`{cmd} {}` falhou: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&out.stderr).trim()
-        ))
+        Err(CascadeError::Shell {
+            cmd: format!("{cmd} {}", args.join(" ")),
+            msg: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        })
     }
 }
 
@@ -76,14 +107,16 @@ struct UpArgs {
     zram_mb: u64,
     daemon: String,
     force: bool,
+    connections: u32,
 }
 
-fn parse_up_args() -> Result<UpArgs, String> {
+fn parse_up_args() -> Result<UpArgs, CascadeError> {
     let mut a = UpArgs {
         vram_mb: 1024,
         zram_mb: 1024,
         daemon: default_daemon(),
         force: false,
+        connections: 1,
     };
     let args: Vec<String> = std::env::args().skip(2).collect(); // pula "ramshared up"
     let mut i = 0;
@@ -93,50 +126,64 @@ fn parse_up_args() -> Result<UpArgs, String> {
                 i += 1;
                 a.vram_mb = args
                     .get(i)
-                    .ok_or("--vram requer MiB")?
+                    .ok_or_else(|| CascadeError::Arg("--vram requer MiB".into()))?
                     .parse()
-                    .map_err(|_| "vram invalido")?;
+                    .map_err(|_| CascadeError::Arg("vram invalido".into()))?;
             }
             "--zram" => {
                 i += 1;
                 a.zram_mb = args
                     .get(i)
-                    .ok_or("--zram requer MiB")?
+                    .ok_or_else(|| CascadeError::Arg("--zram requer MiB".into()))?
                     .parse()
-                    .map_err(|_| "zram invalido")?;
+                    .map_err(|_| CascadeError::Arg("zram invalido".into()))?;
             }
             "--daemon" => {
                 i += 1;
-                a.daemon = args.get(i).ok_or("--daemon requer caminho")?.clone();
+                a.daemon = args
+                    .get(i)
+                    .ok_or_else(|| CascadeError::Arg("--daemon requer caminho".into()))?
+                    .clone();
+            }
+            "--connections" => {
+                i += 1;
+                a.connections = args
+                    .get(i)
+                    .ok_or_else(|| CascadeError::Arg("--connections requer N".into()))?
+                    .parse()
+                    .map_err(|_| CascadeError::Arg("connections invalido".into()))?;
+                if a.connections == 0 {
+                    return Err(CascadeError::Arg("--connections deve ser >= 1".into()));
+                }
             }
             "--force-no-safety-net" => a.force = true,
-            other => return Err(format!("arg desconhecido: {other}")),
+            other => return Err(CascadeError::Arg(format!("arg desconhecido: {other}"))),
         }
         i += 1;
     }
     Ok(a)
 }
 
-pub fn up() -> Result<(), String> {
+pub fn up() -> Result<(), CascadeError> {
     let a = parse_up_args()?;
     let prios = TierPriorities::default();
-    validate_order(prios).map_err(|e| e.to_string())?;
+    validate_order(prios).map_err(|e| CascadeError::Precondition(e.to_string()))?;
 
     // A1 — rede de segurança do DEMOTE (precisa de um tier abaixo da VRAM).
     let vram_bytes = a
         .vram_mb
         .checked_mul(1024 * 1024)
-        .ok_or("--vram: overflow (MiB grande demais)")?;
+        .ok_or_else(|| CascadeError::Arg("--vram: overflow (MiB grande demais)".into()))?;
     let net = vram_safety_net(lower_tier_present(), mem_available_bytes(), vram_bytes);
     if !net.is_safe() && !a.force {
-        return Err(
+        return Err(CascadeError::Precondition(
             "sem rede de seguranca p/ DEMOTE (sem VHDX e RAM insuficiente); \
              use --force-no-safety-net se intencional"
                 .into(),
-        );
+        ));
     }
     eprintln!("[up] rede de seguranca A1: {net:?}");
-    fs::create_dir_all("/run/ramshared").map_err(|e| e.to_string())?;
+    fs::create_dir_all("/run/ramshared").map_err(|e| CascadeError::Io(e.to_string()))?;
 
     // Tier zram (HOT, prio alta).
     sh("modprobe", &["zram", "num_devices=1"])?;
@@ -153,11 +200,13 @@ pub fn up() -> Result<(), String> {
     // M5: zramctl deveria devolver /dev/zramN; valida antes de passar a cmds privilegiados.
     if !matches!(zdev.strip_prefix("/dev/zram"), Some(s) if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
     {
-        return Err(format!("zramctl retornou device inesperado: {zdev}"));
+        return Err(CascadeError::Precondition(format!(
+            "zramctl retornou device inesperado: {zdev}"
+        )));
     }
     sh("mkswap", &[&zdev])?;
     sh("swapon", &["-p", &prios.zram.to_string(), &zdev])?;
-    fs::write(ZRAM_DEV_FILE, &zdev).map_err(|e| e.to_string())?;
+    fs::write(ZRAM_DEV_FILE, &zdev).map_err(|e| CascadeError::Io(e.to_string()))?;
     eprintln!("[up] zram {zdev} (prio {})", prios.zram);
 
     // Tier VRAM (COLD, prio média): daemon + nbd.
@@ -175,7 +224,10 @@ pub fn up() -> Result<(), String> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("spawn daemon ({}): {e}", a.daemon))?;
+        .map_err(|e| CascadeError::Shell {
+            cmd: a.daemon.clone(),
+            msg: e.to_string(),
+        })?;
     let mut ok = false;
     for _ in 0..120 {
         if Path::new(SOCK).exists() {
@@ -185,12 +237,24 @@ pub fn up() -> Result<(), String> {
         sleep(Duration::from_millis(50));
     }
     if !ok {
-        return Err("daemon nao subiu (socket ausente)".into());
+        return Err(CascadeError::Precondition(
+            "daemon nao subiu (socket ausente)".into(),
+        ));
     }
-    sh("nbd-client", &["-unix", SOCK, NBD])?;
+    // H1: multi-conexão (-C N) só quando N>1; o daemon é N-agnóstico (aceita o que vier).
+    let conns = a.connections.to_string();
+    let mut nbd_args: Vec<&str> = Vec::new();
+    if a.connections > 1 {
+        nbd_args.extend(["-C", conns.as_str()]);
+    }
+    nbd_args.extend(["-unix", SOCK, NBD]);
+    sh("nbd-client", &nbd_args)?;
     sh("mkswap", &["-L", "RAMSHARED", NBD])?;
     sh("swapon", &["-p", &prios.vram.to_string(), NBD])?;
-    eprintln!("[up] VRAM {NBD} (prio {}, {} MiB)", prios.vram, a.vram_mb);
+    eprintln!(
+        "[up] VRAM {NBD} (prio {}, {} MiB, {} conexão(ões))",
+        prios.vram, a.vram_mb, a.connections
+    );
     eprintln!(
         "[up] cascata ativa: zram({}) > VRAM({}) > VHDX",
         prios.zram, prios.vram
@@ -198,14 +262,16 @@ pub fn up() -> Result<(), String> {
     status()
 }
 
-pub fn down() -> Result<(), String> {
+pub fn down() -> Result<(), CascadeError> {
     // Anti-panic: se a VRAM estiver em swap, swapoff DEVE concluir antes do disconnect.
     let nbd_in_swap = fs::read_to_string("/proc/swaps")
         .map(|s| s.contains(NBD))
         .unwrap_or(false);
     if nbd_in_swap {
         sh("swapoff", &[NBD]).map_err(|e| {
-            format!("swapoff {NBD} falhou ({e}); NAO desconectando (risco de panic) — intervir")
+            CascadeError::Precondition(format!(
+                "swapoff {NBD} falhou ({e}); NAO desconectando (risco de panic) — intervir"
+            ))
         })?;
     }
     // zram tier
@@ -238,7 +304,7 @@ pub fn down() -> Result<(), String> {
     status()
 }
 
-pub fn status() -> Result<(), String> {
+pub fn status() -> Result<(), CascadeError> {
     println!("{}", sh("swapon", &["--show"])?);
     Ok(())
 }
