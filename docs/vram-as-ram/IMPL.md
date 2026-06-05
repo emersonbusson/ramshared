@@ -50,9 +50,10 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
 1. `check`: adicionar tiers **zram + cgroup** (§6.1).
 2. ✅ **`up`/`down`/`status` validado** (2026-06-05): monta `zram(200)>VRAM(100)>
    VHDX(-2)` (swapon confirmado) e desmonta limpo (anti-panic).
-3. `ramshared-wsl2d`: canário de residência + **DEMOTE** por latência (§9) e a
-   sequência `start` (mlockall/oom_score_adj/alloc backoff §6.2). [máquina de
-   estados §7 ✅, `VramBackend` CUDA→NBD ✅]
+3. `ramshared-wsl2d`: **wiring** do canário (thread sampler CUDA + `swapoff` do
+   DEMOTE no daemon) + sequência `start` (mlockall/oom_score_adj §6.2). [estados
+   §7 ✅, VramBackend ✅, **decisão §9.3 do canário ✅** (5 testes; o spike 1,18 s
+   da Fase 0 dispara Demote(Latency))]
 4. ✅ **device-wiring NBD validado** (2026-06-05, smoke em `/home/emdev/fase0/`):
    daemon serve `/dev/nbd0` real via `nbd-client -unix` (handshake interop OK,
    **sem ioctl/`unsafe` no daemon**); write/readback de 1 MiB pelo block layer →

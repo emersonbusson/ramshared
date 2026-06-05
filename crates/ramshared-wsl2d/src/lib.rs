@@ -4,7 +4,9 @@
 #![forbid(unsafe_code)]
 
 pub mod backend;
+pub mod residency;
 pub mod state;
 
 pub use backend::VramBackend;
+pub use residency::{Canary, DemoteReason, ResidencyConfig, Verdict};
 pub use state::State;
