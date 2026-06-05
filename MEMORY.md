@@ -49,3 +49,23 @@ apagar/reescrever entradas antigas. Nunca gravar secrets nem endereços que vaze
   `cascade-demote.sh`, `cascade-hog.c` (bug corrigido: `mmap` exigia `offset=0`).
 - **Pendente:** refinamentos não-bloqueantes (canário §9.4 dedicado p/
   conteúdo/free-floor; daemon multi-conexão). **PR ainda NÃO** (revisar tudo antes).
+
+---
+
+## 2026-06-05 — vram-as-ram: PR #2 MERGED (revisao adversarial + CI)
+
+- **Repo remoto privado:** github.com/emersonbusson/ramshared. CI (GitHub Actions:
+  `fmt` + `clippy -D warnings` + `test`) verde. Template de PR (7 secoes da governanca)
+  na main. Proxy A1 da cascata validado de novo apos fixes.
+- **PR #2 MERGED** (issue #1 fechada), 30 commits: cascata VRAM-as-swap + revisao.
+- **Revisao adversarial pre-merge** (disciplina #13) achou bugs reais, corrigidos:
+  - C2: DEMOTE engolia falha de `swapoff` + desarmava o canario incondicional → agora
+    confirma por canal (mpsc) e **re-arma se falhar** (serve loop segue atendendo o read-back).
+  - H3: rede A1 fraca (contava linhas) → `lower_tier_present()` checa prioridade < VRAM.
+  - H4: `pkill` apos 300ms podia matar o daemon no meio do `zero()` da VRAM → poll ate 5s.
+  - C4/H2/H5: `checked_mul` (overflow), log honesto de mlockall/oom sob `--force`, cap de
+    WRITE antes de alocar (anti-DoS).
+  - Re-validacao §14 ao vivo apos os fixes: **sem regressao** (511 MiB spill / 480 MiB DEMOTE).
+- **Adiado (issue #3, follow-up):** C3 (FFI CUDA duplicada na CLI, fora do crate auditado —
+  Day-0), C1-full (canario dedicado §9.4 conteudo/free), H1 (daemon multi-thread), lints
+  uniformes, comentarios PT vs regra-EN.
