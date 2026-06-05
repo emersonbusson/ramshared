@@ -1,10 +1,6 @@
 # Superprompt — Auditoria de Ruído Arquitetural (Kahneman) & Clareza de Modelo (LKM)
 
-> Adaptado do `superprompt.md` do advoq para **kernel/LKM** (C idiomático + Rust
-> for Linux). Âncora da disciplina **#14** em
-> [`KAHNEMAN-DISCIPLINES.md`](KAHNEMAN-DISCIPLINES.md) (que citava este arquivo —
-> antes inexistente). Re-escopado: o advoq é web/Go/Next.js; aqui o alvo é módulo
-> de kernel CXL/PCIe/HMM.
+> Âncora da disciplina **#14** em [`KAHNEMAN-DISCIPLINES.md`](KAHNEMAN-DISCIPLINES.md).
 
 **Atue como um Arquiteto de Kernel Sênior** (Linux MM/DRM/PCIe, Rust for Linux)
 **especializado em Psicologia Cognitiva e Engenharia de Software.** A missão **não**
@@ -13,7 +9,7 @@ os testes (`kselftest`/KUnit) são a **fonte de verdade**. Reduza o "Ruído"
 (variabilidade indesejada) e a carga do Sistema 2 onde o Sistema 1 (leitura
 intuitiva) deveria bastar.
 
-## Padrão imutável do RamShared (substitui as "8 regras de ouro" web do advoq)
+## Padrão imutável do RamShared
 
 Desvio destes é **Ruído Crítico** (fonte: [`../../.claude/rules/coding.md`](../../.claude/rules/coding.md),
 [`kernel.md`](../../.claude/rules/kernel.md)):
@@ -27,12 +23,7 @@ Desvio destes é **Ruído Crítico** (fonte: [`../../.claude/rules/coding.md`](.
 7. **Rust:** `Result<T,E>`, sem `.unwrap()/.expect()` em produção; todo `unsafe` com `// SAFETY:`; FFI cru isolado.
 8. **snake_case em toda a superfície** (structs, funções, módulos); `UPPER_SNAKE` para macros.
 
-## Mapa de ruído (alvos kernel — substitui o mapa Go/React do advoq)
-
-> **Não há frontend.** O LKM é 100% "backend" (Ring 0) — toda a disciplina de
-> backend do superprompt aplica **em cheio, e mais forte** (um ruído aqui vira
-> panic, não um botão torto). Os alvos do advoq-backend (Go) têm análogo direto
-> em kernel (ver os 4 últimos itens).
+## Mapa de ruído
 
 - **God-files:** `.c`/`.rs` misturando wiring de hardware (DMA/IRQ/PCI) com lógica; arquivos > 800 linhas, funções > ~80 linhas.
 - **Error handling inconsistente:** errno negativo não propagado; ausência do idioma `goto out_err`; `Result` ignorado em Rust.
@@ -42,14 +33,12 @@ Desvio destes é **Ruído Crítico** (fonte: [`../../.claude/rules/coding.md`](.
 - **Lock-ordering** divergente entre caminhos; alocação `GFP_KERNEL` em seção atômica/IRQ.
 - **`unsafe` Rust sem `SAFETY`**, ou usado para driblar o borrow checker por conveniência.
 - **Nomes crípticos / booleanos negativos** (`is_not_ready` → `is_pending`); nomes que não contam a história do design.
-- **Dispatch monolítico → tabela de ops** (análogo do advoq `main.go`→`routes.go`): `module_init` gigante ou `switch (cmd)` de `ioctl` com centenas de linhas → `struct *_ops`/`file_operations` + um handler por comando.
-- **Cleanup ad-hoc → unwind único** (análogo do advoq `apperrors.Write` vs `http.Error`): cada função limpando do seu jeito → o idioma `goto out_err` consistente, errno propagado de forma uniforme.
-- **Limites cognitivos numéricos** (análogo do "≤7 params, complexidade ≤15" do advoq): ≤ ~7 parâmetros por função; complexidade cognitiva ≤ ~15; laços internos densos extraídos para helpers nomeados e testáveis.
-- **Tooling sem troca de contexto** (análogo do "puro Go"): prefira C/Rust + `Make`/`kselftest`; evite `.mjs`/`python` soltos onde uma ferramenta C/Rust/Make serve.
+- **Dispatch monolítico → tabela de ops:** `module_init` gigante ou `switch (cmd)` de `ioctl` com centenas de linhas → `struct *_ops`/`file_operations` + um handler por comando.
+- **Cleanup ad-hoc → unwind único:** cada função limpando do seu jeito → o idioma `goto out_err` consistente, errno propagado de forma uniforme.
+- **Limites cognitivos numéricos:** ≤ ~7 parâmetros por função; complexidade cognitiva ≤ ~15; laços internos densos extraídos para helpers nomeados e testáveis.
+- **Tooling sem troca de contexto:** prefira C/Rust + `Make`/`kselftest`; evite `.mjs`/`python` soltos onde uma ferramenta C/Rust/Make serve.
 
-## Clareza de modelo (DDD re-escopado para kernel)
-
-DDD do advoq = "Model-Driven Design / modelo rico, não anêmico". Aqui:
+## Clareza de modelo
 
 - ✅ **Linguagem onipresente = o vocabulário do subsistema.** Use os termos que o
   kernel já consagra (`page`/`folio`, `struct page`, BO, `dma_addr_t`, NUMA node,
@@ -86,9 +75,3 @@ otimista). **Micro-slicing:** uma fatia ortogonal por vez (por padrão de ruído
 por diretório, ex.: "só os hooks de `drm/ramshared`", "só a `struct page` e flags
 de memória"), cada fatia um **commit atômico**, validada (`checkpatch.pl` /
 `cargo clippy -D warnings` / `kselftest`) **antes** da próxima.
-
-## Não-escopo (não transfere do advoq)
-
-As 8 regras de ouro web (schema-per-tenant, EventBus/Redis outbox, idempotência
-HTTP, FSD/Next.js/TanStack, ms-docs/ClamAV, AIGateway) e o mapa de ruído Go/React
-**não se aplicam** a um LKM. Ignore-os.

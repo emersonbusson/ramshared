@@ -1,9 +1,7 @@
 # Postmortem — <título curto do incidente>
 
-> Template blameless. Avalia **processo, não outcome** (Kahneman #7). Importado/
-> adaptado do advoq para o contexto kernel/LKM. Disciplinas:
-> [`docs/methodology/KAHNEMAN-DISCIPLINES.md`](../methodology/KAHNEMAN-DISCIPLINES.md).
-> Copie este arquivo para `docs/postmortems/AAAA-MM-DD-<slug>.md`.
+> Postmortem blameless: avalia **processo, não outcome** (Kahneman #7). Copie
+> para `docs/postmortems/AAAA-MM-DD-<slug>.md`.
 
 ## Metadados
 

@@ -1,9 +1,7 @@
 # Degradation Matrix — RamShared
 
-> Catálogo de modos de falha **raros mas caros** (Kahneman #5 — availability
-> heuristic: projetar para o pior caso, não o happy path). Importado/adaptado do
-> advoq para kernel/LKM. Âncora operacional da disciplina #5 em
-> [`docs/methodology/KAHNEMAN-DISCIPLINES.md`](../methodology/KAHNEMAN-DISCIPLINES.md).
+> Modos de falha **raros mas caros** (Kahneman #5 — projetar pro pior caso).
+> Âncora da disciplina #5 em [`KAHNEMAN-DISCIPLINES.md`](../methodology/KAHNEMAN-DISCIPLINES.md).
 >
 > Prioridade = **probabilidade × impacto**. Cenário cosmético fica
 > "monitorado, não desenhado" (contra a paranoia — contra-exemplo #5 do doc).
