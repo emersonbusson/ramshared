@@ -24,9 +24,10 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
 | `ramshared-wsl2d` (lib) — máquina de estados (§7) + `VramBackend` (CUDA→NBD) | `crates/ramshared-wsl2d/{Cargo.toml, src/lib.rs, src/state.rs, src/backend.rs, src/main.rs}` | §7, §8 | — | fmt ok · `clippy -D warnings` limpo · 4 unit + **composição GPU real verde** (`--ignored`: WRITE/READ NBD na VRAM) |
 | `ramshared-integrity` — checksum por bloco (FNV-1a) + padrões + tabela pré-alocada | `crates/ramshared-integrity/{Cargo.toml, src/lib.rs, src/hash.rs, src/pattern.rs}` | §8.1, §14.2 | — | fmt ok · `clippy -D warnings` limpo · **7 testes** (hash/tabela/padrões), sem root |
 
-> **Marco:** os 6 crates do §5 existem; o core CUDA↔NBD validado em GPU **e no
-> device real**: o daemon serve `/dev/nbd0` (write/readback 1 MiB OK). Falta a
-> orquestração: canário/DEMOTE (§9), CLI `up`/`down`/`status`, `check`+zram.
+> **Marco:** os 6 crates do §5 existem; CUDA↔NBD validado em GPU, o daemon serve
+> `/dev/nbd0` real (write/readback 1 MiB OK) **e a cascata `up`/`down` sobe/desce
+> como swap real** (`zram 200 > VRAM 100 > VHDX -2`). Falta: canário/DEMOTE (§9),
+> `check`+zram, sequência `start` (mlockall/oom_score_adj).
 
 ### Decisões pequenas (não pediram ADR nova)
 
@@ -47,7 +48,8 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
 ### Pendente (próximos incrementos, na ordem do SPECv3)
 
 1. `check`: adicionar tiers **zram + cgroup** (§6.1).
-2. Comandos `up` / `status` / `down` (§6.2–6.4) usando `ramshared-tier`.
+2. ✅ **`up`/`down`/`status` validado** (2026-06-05): monta `zram(200)>VRAM(100)>
+   VHDX(-2)` (swapon confirmado) e desmonta limpo (anti-panic).
 3. `ramshared-wsl2d`: canário de residência + **DEMOTE** por latência (§9) e a
    sequência `start` (mlockall/oom_score_adj/alloc backoff §6.2). [máquina de
    estados §7 ✅, `VramBackend` CUDA→NBD ✅]
