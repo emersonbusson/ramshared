@@ -22,3 +22,4 @@ arquitetura/lock/DMA/memória vira um ADR.
 | --- | --- | --- |
 | [0001](ADR-0001-vram-cascade-tiering.md) | Cascata de swap zram→VRAM→VHDX (VRAM como tier frio) | Accepted |
 | [0002](ADR-0002-rust-userspace-port.md) | Daemon/CLI userspace em Rust (port do design nbd-vram) | Accepted |
+| [0003](ADR-0003-page-state-swap-safety.md) | Estados de página: herdar swap do Linux; daemon garante durabilidade/DEMOTE/atomicidade | Accepted |
