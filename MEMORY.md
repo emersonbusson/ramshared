@@ -69,3 +69,19 @@ apagar/reescrever entradas antigas. Nunca gravar secrets nem endereços que vaze
 - **Adiado (issue #3, follow-up):** C3 (FFI CUDA duplicada na CLI, fora do crate auditado —
   Day-0), C1-full (canario dedicado §9.4 conteudo/free), H1 (daemon multi-thread), lints
   uniformes, comentarios PT vs regra-EN.
+
+---
+
+## 2026-06-05 — vram-as-ram: issue #3 (debito da revisao) — 5/9 itens
+
+Atacando a issue #3 (follow-up da revisao adversarial) via PRs gated (CI + governanca):
+- **PR #4 (C3 + M1):** elimina a FFI CUDA duplicada na CLI (−161 linhas); `probe_cuda`
+  reusa o crate auditado `ramshared-cuda`; `find_libcuda` so-filesystem; CLI ganha
+  `#![forbid(unsafe_code)]` + lint gate unwrap/expect=deny. Verificado por **diff
+  comportamental** do `check --json` em GPU real (gpu name/total/status identicos).
+- **PR #5 (M2/M4/M5 + name-buffer):** `const{}` assert do fn-pointer (cuda), NUL final
+  no name-buffer (cuda), cap de 4096 no len de opcao do handshake NBD + teste (block),
+  validacao de `/dev/zramN` do zramctl (cli).
+- **Issue #3: 5/9.** Pendentes (features/decisao, nao mecanicos): **C1-full** (canario
+  dedicado §9.4 conteudo/free), **H1** (daemon multi-thread), **M3** (doc de context CUDA
+  por-thread), **LOW** (decisao: comentarios PT vs regra-EN; erros tipados; clap).
