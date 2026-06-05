@@ -111,3 +111,16 @@ Atacando a issue #3 (follow-up da revisao adversarial) via PRs gated (CI + gover
     via `ResidencyConfig::check_residency` (DT-7) + `spawn_swapoff` unificado (DT-8).
     SPEC.md preservado. **Candidato ativo: SPECv2.md; re-auditoria = go.**
   - **Pendente: Passo 3 (IMPL)** do SPECv2. #8 segue aberta.
+
+---
+
+## 2026-06-05 — vram-as-ram: canario #8 — Passo 2.5 (2a) -> SPECv3
+
+- **Passo 2.5 sobre o SPECv2 -> no-go** (free-floor/erro transiente demoviam no
+  single-sample, sem histerese; semantica do free-floor no GPU-PV nao declarada).
+- **SPECv3** (PR #11): `ResidencySampler` puro com **streak (consecutive)** para
+  free-floor e amostras degradadas (erros transientes); **corrupcao de conteudo
+  (Some(false)) imediata**; latencia por-request intacta; DT-10 declara que o free-floor
+  detecta pressao GPU-wide (indicador antecedente), nao a evicção da nossa regiao; DT-12
+  zera a regiao-canario no teardown. SPEC.md/SPECv2.md preservados.
+- **Candidato ativo: SPECv3.md; re-auditoria = go.** Pendente: Passo 3 (IMPL). #8 aberta.
