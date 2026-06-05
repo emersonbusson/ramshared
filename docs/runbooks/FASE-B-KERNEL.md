@@ -47,6 +47,9 @@ grep -E "CONFIG_ZRAM_WRITEBACK|CONFIG_BLK_DEV_UBLK|CONFIG_IO_URING" .config
 make -j"$(($(nproc)/2))" 2>&1 | tee /tmp/kbuild.log
 # Saída: ./arch/x86/boot/bzImage
 ls -la arch/x86/boot/bzImage
+# Instala os módulos (ublk_drv.ko, zram.ko c/ writeback) em /lib/modules/<release>/
+# — o kernel bootado procura os .ko aí. OBRIGATÓRIO p/ ublk/zram carregarem.
+sudo make modules_install
 ```
 
 ## 4. Install (Windows-side)
