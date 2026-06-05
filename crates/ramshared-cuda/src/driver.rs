@@ -174,6 +174,11 @@ impl Device {
 }
 
 /// Contexto CUDA. `Drop` faz `cuCtxDestroy`.
+///
+/// **Afinidade de thread:** a corrente do contexto CUDA é *thread-local*. Use este
+/// `Context` (e os `DeviceMem` derivados) **na mesma thread** que o criou — por isso
+/// o daemon roda todo o I/O de VRAM numa única thread. Chamar de outra thread exigiria
+/// `cuCtxSetCurrent` (não feito aqui). A thread de DEMOTE só roda `swapoff`, não CUDA.
 pub struct Context<'a> {
     cuda: &'a Cuda,
     raw: CuContext,
