@@ -29,8 +29,8 @@ O source of truth para regras de arquitetura e código está em:
 
 ### Linguagem
 
-- **Inglês** em: código fonte (`.c`, `.rs`, `.h`), headers, makefiles, comments, commit titles, Kconfig.
-- **Português (BR)** em: `README.md`, `AGENTS.md`, `CLAUDE.md`, `MEMORY.md`, PR descriptions, Issue titles+bodies, e documentação de arquitetura.
+- **Inglês** em: código fonte (`.c`, `.rs`, `.h`), headers, makefiles, commit titles, Kconfig.
+- **Português (BR)** em: comentários de código, `README.md`, `AGENTS.md`, `CLAUDE.md`, `MEMORY.md`, PR descriptions, Issue titles+bodies, e documentação de arquitetura.
 
 ## Commits e Patches
 
