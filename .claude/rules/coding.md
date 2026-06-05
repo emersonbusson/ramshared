@@ -14,7 +14,7 @@ Rules:
 ## Language
 
 - All code, variable names, function names, macros, and filenames: **English**
-- Code comments (inline, block, doc): **English**
+- Code comments (inline, block, doc): **Portuguese (BR)** — alinhado ao projeto (autor, docs e PRs em PT-BR). Identificadores (nomes, funções, macros, arquivos) seguem em **inglês**, convenção do kernel.
 - Root documentation files (`README.md`, `ARCHITECTURE.md`): **Portuguese (BR)**
 - Commit messages and PR titles: **English** (Conventional Commits format)
 - PR descriptions (body) and Issues: **Portuguese (BR)**
