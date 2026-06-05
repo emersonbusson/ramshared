@@ -204,7 +204,7 @@ todo teste de recusa carrega o par "legítimo passa".
 
 **Viés.** _WYSIATI_ e _Planning Fallacy_ combinados. A crença de que o Sistema 1 consegue antecipar todas as dependências ocultas de uma reescrita global.
 
-**Regra.** Toda eliminação de "Ruído" arquitetural (usando o `superprompt.md` ou IA autônoma) deve ser **fatiada ortogonalmente**. Nunca peça para a IA reescrever o repositório inteiro. O escopo deve ser fechado por padrão de ruído ou por diretório (ex: "aplique o superprompt apenas nos hooks do drm/ramshared" ou "padronize apenas a struct page e flags de memória nas patches"). Cada fatia vira um commit atômico.
+**Regra.** Toda eliminação de "Ruído" arquitetural (usando o [`SUPERPROMPT.md`](SUPERPROMPT.md) ou IA autônoma) deve ser **fatiada ortogonalmente**. Nunca peça para a IA reescrever o repositório inteiro. O escopo deve ser fechado por padrão de ruído ou por diretório (ex: "aplique o superprompt apenas nos hooks do drm/ramshared" ou "padronize apenas a struct page e flags de memória nas patches"). Cada fatia vira um commit atômico.
 
 **Sinal.** patches de auditoria de ruído contêm commits atômicos isolados por serviço ou componente, em vez de um gigantesco `refactor: clean codebase`.
 
