@@ -20,6 +20,7 @@ const NBD_REP_INFO: u32 = 3;
 const NBD_REP_ERR_UNSUP: u32 = 0x8000_0001;
 const NBD_INFO_EXPORT: u16 = 0;
 const NBD_FLAG_C_NO_ZEROES: u32 = 1 << 1;
+const MAX_OPT_LEN: usize = 4096; // opções NBD são pequenas; teto anti-alloc.
 
 #[derive(Debug)]
 pub enum HandshakeError {
@@ -93,6 +94,12 @@ pub fn server_handshake<R: Read, W: Write>(
         let _opt_magic = read_u64(r)?; // IHAVEOPT (ignorado: confiamos no fluxo)
         let opt = read_u32(r)?;
         let len = read_u32(r)? as usize;
+        if len > MAX_OPT_LEN {
+            return Err(HandshakeError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "opção NBD com len excessivo",
+            )));
+        }
         let mut data = vec![0u8; len];
         r.read_exact(&mut data)?;
 
@@ -194,5 +201,19 @@ mod tests {
         let mut out = Vec::new();
         let res = server_handshake(&mut r, &mut out, 4096, 1);
         assert!(matches!(res, Err(HandshakeError::Aborted)));
+    }
+
+    #[test]
+    fn rejects_oversized_option_len() {
+        // opção com len gigante deve falhar ANTES de alocar (M4 anti-DoS).
+        let mut v = Vec::new();
+        v.extend_from_slice(&0u32.to_be_bytes()); // client_flags
+        v.extend_from_slice(&IHAVEOPT.to_be_bytes()); // opt magic
+        v.extend_from_slice(&NBD_OPT_INFO.to_be_bytes()); // opt
+        v.extend_from_slice(&u32::MAX.to_be_bytes()); // len absurdo
+        let mut r = Cursor::new(v);
+        let mut out = Vec::new();
+        let res = server_handshake(&mut r, &mut out, 4096, 1);
+        assert!(matches!(res, Err(HandshakeError::Io(_))));
     }
 }

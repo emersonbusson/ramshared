@@ -141,7 +141,8 @@ impl Cuda {
             (self.syms.device_get_name)(buf.as_mut_ptr() as *mut c_char, buf.len() as i32, raw)
         };
         check(&self.syms, r, "cuDeviceGetName")?;
-        // SAFETY: buf foi preenchido com C-string válida pela API.
+        buf[buf.len() - 1] = 0; // garante terminação mesmo se a API preencher os 128 bytes
+        // SAFETY: buf preenchido pela API e com NUL final garantido acima.
         let name = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
             .to_string_lossy()
             .into_owned();
@@ -299,10 +300,9 @@ unsafe fn load_sym<T: Copy>(handle: *mut c_void, name: &CStr) -> Result<T, CudaE
     if sym.is_null() {
         return Err(CudaError::Symbol(name.to_string_lossy().into_owned()));
     }
-    debug_assert_eq!(
-        core::mem::size_of::<T>(),
-        core::mem::size_of::<*mut c_void>()
-    );
+    const {
+        assert!(core::mem::size_of::<T>() == core::mem::size_of::<*mut c_void>());
+    }
     // SAFETY: T é fn-pointer C do mesmo tamanho de um data pointer; materializa o endereço.
     Ok(unsafe { core::mem::transmute_copy::<*mut c_void, T>(&sym) })
 }
