@@ -11,3 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 ramshared-tier = { path = "../ramshared-tier" }
+ramshared-cuda = { path = "../ramshared-cuda" }
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

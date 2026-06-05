@@ -1,33 +1,16 @@
+//! ramshared CLI — preflight (check/doctor) e orquestracao da cascata (up/down).
+//! Sem `unsafe`: o probe CUDA usa o crate auditado `ramshared-cuda` (Day-0).
+#![forbid(unsafe_code)]
+
 use std::env;
-use std::ffi::{CStr, CString};
+use std::fmt;
 use std::fs;
-use std::os::raw::{c_char, c_int, c_uint, c_void};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
-use std::{fmt, ptr};
+
+use ramshared_cuda::Cuda;
 
 mod cascade;
-
-#[link(name = "dl")]
-unsafe extern "C" {
-    fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
-    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
-    fn dlclose(handle: *mut c_void) -> c_int;
-    fn dlerror() -> *const c_char;
-}
-
-const RTLD_NOW: c_int = 2;
-
-type CuResult = c_int;
-type CuDevice = c_int;
-type CuContext = *mut c_void;
-type CuInit = unsafe extern "C" fn(c_uint) -> CuResult;
-type CuDeviceGetCount = unsafe extern "C" fn(*mut c_int) -> CuResult;
-type CuDeviceGet = unsafe extern "C" fn(*mut CuDevice, c_int) -> CuResult;
-type CuDeviceGetName = unsafe extern "C" fn(*mut c_char, c_int, CuDevice) -> CuResult;
-type CuCtxCreate = unsafe extern "C" fn(*mut CuContext, c_uint, CuDevice) -> CuResult;
-type CuCtxDestroy = unsafe extern "C" fn(CuContext) -> CuResult;
-type CuMemGetInfo = unsafe extern "C" fn(*mut usize, *mut usize) -> CuResult;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Status {
@@ -478,7 +461,7 @@ fn probe_cuda() -> CudaProbe {
         };
     }
 
-    match unsafe { cuda_driver_probe(&libcuda_path) } {
+    match cuda_probe_via_lib() {
         Ok(gpu) => CudaProbe {
             status: Status::Ok,
             libcuda_path: Some(path_to_string(libcuda_path)),
@@ -502,43 +485,18 @@ fn probe_cuda() -> CudaProbe {
     }
 }
 
+/// Caminho informativo da libcuda (best-effort, so filesystem). A verificacao real
+/// de uso do CUDA e feita por `ramshared_cuda::Cuda::load()` (FFI auditada, isolada).
 fn find_libcuda() -> Option<PathBuf> {
-    let candidates = [
+    [
         "/usr/lib/wsl/lib/libcuda.so.1",
         "/usr/lib/wsl/lib/libcuda.so",
         "/usr/lib/x86_64-linux-gnu/libcuda.so.1",
         "/usr/lib/x86_64-linux-gnu/libcuda.so",
-        "libcuda.so.1",
-        "libcuda.so",
-    ];
-
-    for candidate in candidates {
-        let path = PathBuf::from(candidate);
-        if path.is_absolute() {
-            if path.exists() {
-                return Some(path);
-            }
-        } else if can_dlopen(candidate) {
-            return Some(path);
-        }
-    }
-
-    None
-}
-
-fn can_dlopen(name: &str) -> bool {
-    let Ok(c_name) = CString::new(name) else {
-        return false;
-    };
-    unsafe {
-        let handle = dlopen(c_name.as_ptr(), RTLD_NOW);
-        if handle.is_null() {
-            false
-        } else {
-            dlclose(handle);
-            true
-        }
-    }
+    ]
+    .into_iter()
+    .map(PathBuf::from)
+    .find(|p| p.exists())
 }
 
 fn run_nvidia_smi() -> (Option<PathBuf>, Option<i32>, Option<String>) {
@@ -568,116 +526,21 @@ fn run_nvidia_smi() -> (Option<PathBuf>, Option<i32>, Option<String>) {
     (None, None, None)
 }
 
-unsafe fn cuda_driver_probe(path: &Path) -> Result<GpuInfo, String> {
-    let c_path = CString::new(path.as_os_str().to_string_lossy().as_bytes())
-        .map_err(|_| "caminho libcuda invalido".to_string())?;
-    let handle = unsafe { dlopen(c_path.as_ptr(), RTLD_NOW) };
-    if handle.is_null() {
-        return Err(format!("dlopen libcuda falhou: {}", dl_error()));
-    }
-
-    let result = unsafe { cuda_driver_probe_open(handle) };
-    unsafe {
-        dlclose(handle);
-    }
-    result
-}
-
-unsafe fn cuda_driver_probe_open(handle: *mut c_void) -> Result<GpuInfo, String> {
-    let cu_init: CuInit = unsafe { load_symbol(handle, "cuInit")? };
-    let cu_device_get_count: CuDeviceGetCount = unsafe { load_symbol(handle, "cuDeviceGetCount")? };
-    let cu_device_get: CuDeviceGet = unsafe { load_symbol(handle, "cuDeviceGet")? };
-    let cu_device_get_name: CuDeviceGetName = unsafe { load_symbol(handle, "cuDeviceGetName")? };
-    let cu_ctx_create: CuCtxCreate = unsafe { load_symbol(handle, "cuCtxCreate_v2")? };
-    let cu_ctx_destroy: CuCtxDestroy = unsafe { load_symbol(handle, "cuCtxDestroy_v2")? };
-    let cu_mem_get_info: CuMemGetInfo = unsafe { load_symbol(handle, "cuMemGetInfo_v2")? };
-
-    check_cu(unsafe { cu_init(0) }, "cuInit")?;
-
-    let mut count = 0;
-    check_cu(
-        unsafe { cu_device_get_count(&mut count) },
-        "cuDeviceGetCount",
-    )?;
-    if count < 1 {
+/// Probe real do CUDA via o crate auditado `ramshared-cuda` (FFI isolada, RAII).
+/// Substitui a FFI duplicada que vivia aqui (Day-0: unico `unsafe` em ramshared-cuda).
+fn cuda_probe_via_lib() -> Result<GpuInfo, String> {
+    let cuda = Cuda::load().map_err(|e| e.to_string())?;
+    if cuda.device_count().map_err(|e| e.to_string())? < 1 {
         return Err("CUDA nao encontrou devices".to_string());
     }
-
-    let mut device = 0;
-    check_cu(unsafe { cu_device_get(&mut device, 0) }, "cuDeviceGet")?;
-
-    let mut name_buf = [0i8; 128];
-    check_cu(
-        unsafe { cu_device_get_name(name_buf.as_mut_ptr(), name_buf.len() as c_int, device) },
-        "cuDeviceGetName",
-    )?;
-    let name = unsafe { CStr::from_ptr(name_buf.as_ptr()) }
-        .to_string_lossy()
-        .into_owned();
-
-    let mut context: CuContext = ptr::null_mut();
-    check_cu(
-        unsafe { cu_ctx_create(&mut context, 0, device) },
-        "cuCtxCreate_v2",
-    )?;
-
-    let mut free = 0usize;
-    let mut total = 0usize;
-    let mem_result = check_cu(
-        unsafe { cu_mem_get_info(&mut free, &mut total) },
-        "cuMemGetInfo_v2",
-    );
-    let destroy_result = check_cu(unsafe { cu_ctx_destroy(context) }, "cuCtxDestroy_v2");
-
-    mem_result?;
-    destroy_result?;
-
+    let dev = cuda.device(0).map_err(|e| e.to_string())?;
+    let ctx = cuda.create_context(&dev).map_err(|e| e.to_string())?;
+    let (free, total) = ctx.mem_info().map_err(|e| e.to_string())?;
     Ok(GpuInfo {
-        name,
+        name: dev.name().to_string(),
         total_bytes: total as u64,
         free_bytes: free as u64,
     })
-}
-
-unsafe fn load_symbol<T>(handle: *mut c_void, name: &str) -> Result<T, String>
-where
-    T: Copy,
-{
-    let c_name = CString::new(name).map_err(|_| format!("simbolo invalido: {name}"))?;
-    let symbol = unsafe { dlsym(handle, c_name.as_ptr()) };
-    if symbol.is_null() {
-        return Err(format!("simbolo CUDA ausente {name}: {}", dl_error()));
-    }
-
-    debug_assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<*mut c_void>());
-    let mut value = std::mem::MaybeUninit::<T>::uninit();
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            &symbol as *const *mut c_void as *const u8,
-            value.as_mut_ptr() as *mut u8,
-            std::mem::size_of::<T>(),
-        );
-        Ok(value.assume_init())
-    }
-}
-
-fn check_cu(result: CuResult, op: &str) -> Result<(), String> {
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(format!("{op} falhou com CUresult={result}"))
-    }
-}
-
-fn dl_error() -> String {
-    unsafe {
-        let err = dlerror();
-        if err.is_null() {
-            "erro desconhecido".to_string()
-        } else {
-            CStr::from_ptr(err).to_string_lossy().into_owned()
-        }
-    }
 }
 
 fn print_text_report(report: &CheckReport) {
