@@ -48,7 +48,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             "--size" => {
                 i += 1;
                 let mb: u64 = args.get(i).ok_or("--size requer valor (MiB)")?.parse()?;
-                size = mb * 1024 * 1024;
+                size = mb
+                    .checked_mul(1024 * 1024)
+                    .ok_or("--size: overflow (MiB grande demais)")?;
             }
             "--sock" => {
                 i += 1;
@@ -81,14 +83,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // Disciplina 3: trava memoria + protege do OOM killer ANTES de servir swap.
     // SAFETY: mlockall e' uma syscall sem efeitos de memoria inseguros.
-    let rc = unsafe { mlockall(MCL_CURRENT | MCL_FUTURE) };
-    if rc != 0 && !force {
-        return Err(format!("mlockall falhou (rc={rc}); rode como root ou use --force").into());
+    let locked = unsafe { mlockall(MCL_CURRENT | MCL_FUTURE) } == 0;
+    if !locked && !force {
+        return Err("mlockall falhou; rode como root ou use --force".into());
     }
-    if std::fs::write("/proc/self/oom_score_adj", "-1000").is_err() && !force {
+    let oom_ok = std::fs::write("/proc/self/oom_score_adj", "-1000").is_ok();
+    if !oom_ok && !force {
         return Err("nao consegui setar oom_score_adj=-1000; rode como root ou use --force".into());
     }
-    eprintln!("[wsl2d] memoria travada (mlockall) + oom_score_adj=-1000");
+    if locked && oom_ok {
+        eprintln!("[wsl2d] memoria travada (mlockall) + oom_score_adj=-1000");
+    } else {
+        // --force: seguimos sem a protecao anti-deadlock. Avisa explicitamente: o daemon
+        // serve swap e pode ser swapado/morto pelo OOM (Disciplina 3 NAO garantida).
+        eprintln!(
+            "[wsl2d] AVISO --force: mlockall={} oom_score_adj={} (anti-deadlock NAO garantido)",
+            if locked { "ok" } else { "FALHOU" },
+            if oom_ok { "ok" } else { "FALHOU" }
+        );
+    }
     let mut backend = VramBackend::new(mem, BLOCK_SIZE);
     eprintln!(
         "[wsl2d] VRAM alocada: {} MiB, block_size={}",
@@ -116,6 +129,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut canary: Option<Canary> = None;
     let mut baseline: Vec<u64> = Vec::new();
     let mut demoted = false;
+    let mut demote_rx: Option<std::sync::mpsc::Receiver<bool>> = None;
     let mut hdr = [0u8; REQUEST_LEN];
     loop {
         match reader.read_exact(&mut hdr) {
@@ -124,6 +138,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => return Err(e.into()),
         }
         let req = parse_request(&hdr)?;
+        // Defesa anti-DoS: um WRITE nunca pode exceder o device; len absurdo => request
+        // malformado => desconecta em vez de alocar (evita alloc de ate ~4 GiB).
+        if req.cmd == Command::Write && req.len as u64 > backend.size_bytes() {
+            eprintln!(
+                "[wsl2d] WRITE len {} excede o device; desconectando",
+                req.len
+            );
+            break;
+        }
         let payload = if req.cmd == Command::Write {
             let mut p = vec![0u8; req.len as usize];
             reader.read_exact(&mut p)?;
@@ -140,8 +163,32 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             writer.write_all(&out.read_data)?;
         }
         writer.flush()?;
-        // Canario inline (§9): mede latencia do I/O da VRAM; DEMOTE sob spike.
-        if touches_vram && !demoted {
+        // Poll nao-bloqueante do swapoff de DEMOTE em curso: o serve loop PRECISA
+        // continuar atendendo o read-back do swapoff (senao paginas sujas se perdem).
+        if let Some(rx) = demote_rx.take() {
+            match rx.try_recv() {
+                Ok(true) => {
+                    demoted = true; // confirmado: desarma o canario de vez
+                    eprintln!("[wsl2d] DEMOTE: swapoff {nbd_dev} OK (canario desarmado)");
+                }
+                Ok(false) => {
+                    // swapoff falhou: device ainda e' swap vivo e degradado. NAO engole —
+                    // deixa demote_rx=None p/ re-armar e tentar de novo no proximo spike.
+                    eprintln!("[wsl2d] DEMOTE: swapoff {nbd_dev} FALHOU; canario re-armado");
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    demote_rx = Some(rx); // ainda em curso; devolve
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    eprintln!("[wsl2d] DEMOTE: thread de swapoff sumiu; canario re-armado");
+                }
+            }
+        }
+        // Canario inline (§9): mede a latencia do I/O da VRAM e dispara DEMOTE sob spike.
+        // content_ok=true e free=u64::MAX sao DE PROPOSITO: a eviction WDDM e' data-safe
+        // (Fase 0), entao a latencia e' o gatilho vivo aqui. O canario dedicado de
+        // conteudo/free-floor (§9.4) exige uma regiao-canario propria (trabalho futuro).
+        if touches_vram && !demoted && demote_rx.is_none() {
             match canary.as_mut() {
                 None => {
                     baseline.push(lat_us);
@@ -157,11 +204,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!(
                             "[wsl2d] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}"
                         );
+                        // Thread separada (nao bloqueia o serve); o resultado volta pelo
+                        // canal e so' entao decidimos desarmar (ver poll acima).
                         let dev = nbd_dev.clone();
+                        let (tx, rx) = std::sync::mpsc::channel();
                         std::thread::spawn(move || {
-                            let _ = std::process::Command::new("swapoff").arg(&dev).status();
+                            let ok = std::process::Command::new("swapoff")
+                                .arg(&dev)
+                                .status()
+                                .map(|s| s.success())
+                                .unwrap_or(false);
+                            let _ = tx.send(ok);
                         });
-                        demoted = true;
+                        demote_rx = Some(rx);
                     }
                 }
             }
