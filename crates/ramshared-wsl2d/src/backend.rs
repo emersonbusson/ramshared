@@ -44,6 +44,9 @@ impl BlockBackend for VramBackend<'_, '_> {
 
     fn flush(&mut self) -> Result<(), IoError> {
         // cuMemcpy*_v2 são síncronas (a referência usa o mesmo modelo); nada a drenar.
+        // A coerência multi-conexão (NBD_FLAG_CAN_MULTI_CONN, H1/DT-10) depende desta
+        // sincronicidade: WRITE durável no ack ⇒ FLUSH no-op ⇒ um FLUSH cobre todas as
+        // WRITEs ackadas. NÃO trocar `write_at` para cópia assíncrona sem revisar isto.
         Ok(())
     }
 }

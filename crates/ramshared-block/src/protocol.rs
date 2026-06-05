@@ -12,6 +12,11 @@ pub const NBD_FLAG_NO_ZEROES: u16 = 1 << 1;
 // Flags de transmissão (export).
 pub const NBD_FLAG_HAS_FLAGS: u16 = 1 << 0;
 pub const NBD_FLAG_SEND_FLUSH: u16 = 1 << 2;
+/// Multi-conexão segura (H1). Só é seguro anunciar porque a WRITE é durável no ack
+/// (`cuMemcpyHtoD` síncrono) + o worker CUDA único serializa: um FLUSH em qualquer
+/// conexão cobre todas as WRITEs já ackadas. NÃO trocar para cópia assíncrona sem
+/// revisar este contrato. SPEC: docs/daemon-multiconn/SPECv3.md DT-10.
+pub const NBD_FLAG_CAN_MULTI_CONN: u16 = 1 << 8;
 
 // Transmissão.
 pub const NBD_REQUEST_MAGIC: u32 = 0x2560_9513;

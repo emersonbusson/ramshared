@@ -76,6 +76,7 @@ struct UpArgs {
     zram_mb: u64,
     daemon: String,
     force: bool,
+    connections: u32,
 }
 
 fn parse_up_args() -> Result<UpArgs, String> {
@@ -84,6 +85,7 @@ fn parse_up_args() -> Result<UpArgs, String> {
         zram_mb: 1024,
         daemon: default_daemon(),
         force: false,
+        connections: 1,
     };
     let args: Vec<String> = std::env::args().skip(2).collect(); // pula "ramshared up"
     let mut i = 0;
@@ -108,6 +110,17 @@ fn parse_up_args() -> Result<UpArgs, String> {
             "--daemon" => {
                 i += 1;
                 a.daemon = args.get(i).ok_or("--daemon requer caminho")?.clone();
+            }
+            "--connections" => {
+                i += 1;
+                a.connections = args
+                    .get(i)
+                    .ok_or("--connections requer N")?
+                    .parse()
+                    .map_err(|_| "connections invalido")?;
+                if a.connections == 0 {
+                    return Err("--connections deve ser >= 1".into());
+                }
             }
             "--force-no-safety-net" => a.force = true,
             other => return Err(format!("arg desconhecido: {other}")),
@@ -187,10 +200,20 @@ pub fn up() -> Result<(), String> {
     if !ok {
         return Err("daemon nao subiu (socket ausente)".into());
     }
-    sh("nbd-client", &["-unix", SOCK, NBD])?;
+    // H1: multi-conexão (-C N) só quando N>1; o daemon é N-agnóstico (aceita o que vier).
+    let conns = a.connections.to_string();
+    let mut nbd_args: Vec<&str> = Vec::new();
+    if a.connections > 1 {
+        nbd_args.extend(["-C", conns.as_str()]);
+    }
+    nbd_args.extend(["-unix", SOCK, NBD]);
+    sh("nbd-client", &nbd_args)?;
     sh("mkswap", &["-L", "RAMSHARED", NBD])?;
     sh("swapon", &["-p", &prios.vram.to_string(), NBD])?;
-    eprintln!("[up] VRAM {NBD} (prio {}, {} MiB)", prios.vram, a.vram_mb);
+    eprintln!(
+        "[up] VRAM {NBD} (prio {}, {} MiB, {} conexão(ões))",
+        prios.vram, a.vram_mb, a.connections
+    );
     eprintln!(
         "[up] cascata ativa: zram({}) > VRAM({}) > VHDX",
         prios.zram, prios.vram

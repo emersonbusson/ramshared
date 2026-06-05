@@ -91,5 +91,6 @@ Aceitação §14 no sistema vivo (cgroup-confined): spill de **511 MiB** para a 
 - **Canário §9.4 dedicado** (conteúdo + free-floor com histerese, `ResidencySampler`):
   **implementado** — issue #8 (C1 resolvido). Latência por-request segue como gatilho
   primário; conteúdo demove imediato, free-floor/erro transiente exigem streak.
-- Serve loop **serial** (1 conexão = a vida do swap); o read-back do DEMOTE não tem
-  leitor dedicado — issue #3 (H1).
+- **H1 resolvido (multi-conexão):** worker CUDA único + leitor/escritor por conexão
+  (`nbd-client -C N`, `NBD_FLAG_CAN_MULTI_CONN`); sem head-of-line blocking. Ver
+  `docs/daemon-multiconn/`.

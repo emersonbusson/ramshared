@@ -5,10 +5,12 @@
 
 pub mod backend;
 pub mod canary_probe;
+pub mod conn;
 pub mod residency;
 pub mod state;
 
 pub use backend::VramBackend;
 pub use canary_probe::{CANARY_BYTES, CANARY_EVERY, Cadence, CanaryProbe};
+pub use conn::{CHAN_CAP, Job, LiveCount, Reply, WMsg, spawn_acceptor, spawn_reader, spawn_writer};
 pub use residency::{Canary, DemoteReason, ResidencyConfig, ResidencySampler, Verdict};
 pub use state::State;
