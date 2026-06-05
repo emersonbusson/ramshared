@@ -124,3 +124,25 @@ Atacando a issue #3 (follow-up da revisao adversarial) via PRs gated (CI + gover
   detecta pressao GPU-wide (indicador antecedente), nao a evicção da nossa regiao; DT-12
   zera a regiao-canario no teardown. SPEC.md/SPECv2.md preservados.
 - **Candidato ativo: SPECv3.md; re-auditoria = go.** Pendente: Passo 3 (IMPL). #8 aberta.
+
+---
+
+## 2026-06-05 — vram-as-ram: canario #8 — Passo 3 (IMPL do SPECv3)
+
+- **Passo 3 do SPECv3 implementado** (canário §9.4 dedicado). `ResidencySampler` puro
+  com histerese: corrupção de conteúdo (`Some(false)`) demove **imediato**; free-floor
+  e amostras degradadas (erro de sonda/`mem_info` = `None`) entram no `bad_streak`, só
+  demovem em `>= consecutive` (default 3). `free_floor_bytes` default 0 → 64 MiB (DT-3).
+- **Arquivos:** novo `crates/ramshared-wsl2d/src/canary_probe.rs` (`Cadence` +
+  `CanaryProbe::check_content` + `zero`); `residency.rs` (+`ResidencySampler`, 4 testes);
+  `main.rs` (aloca região-canário separada, bloco de cadência, `spawn_swapoff` unificado
+  DT-8, `probe.zero()` no teardown DT-12); `lib.rs`/`Cargo.toml`. Latência por-request
+  **intacta** (RF-3 não regrediu).
+- **Validação:** `fmt`/`clippy --workspace -D warnings` limpos; `cargo test --workspace`
+  verde (wsl2d lib 15 ok + 1 GPU ignorado: 2 cadência + 4 `ResidencySampler` novos + 5
+  `Canary` intactos). **Pendente no rig (GPU+root):** `cascade-validate.sh`/
+  `cascade-demote.sh` em `/home/emdev/fase0/` (§14 sem regressão).
+- **Desvio do SPEC (não-ADR):** `.ok()`/`.ok().map()` no lugar do `match Ok/Err`
+  (`clippy::manual_ok_err` sob `-D warnings`); semântica idêntica, DT-11 preservada.
+- **C1 resolvido** (ARCHITECTURE). Docs: `docs/008-vram-residency-canary/IMPL.md`,
+  SPECv3-WSL2 §9.4, `docs/vram-as-ram/IMPL.md`. **Commit/PR pendente** (não commitado).
