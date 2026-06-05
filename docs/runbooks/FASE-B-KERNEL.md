@@ -7,6 +7,39 @@ not set`, `# CONFIG_BLK_DEV_UBLK is not set`). `CONFIG_IO_URING=y` **já existe*
 > **Atenção:** o passo de **boot** exige `wsl --shutdown` (no Windows) — encerra TODAS as sessões
 > WSL, inclusive a do agente. Por isso o build/install é runbook (o dono controla o restart).
 
+## Fluxo seguro e reutilizável (toolkit `scripts/kernel/`)
+
+Use o toolkit — é seguro (valida isolado antes de armar) e **auto-curável** (reverte sozinho
+se não bootar). As seções manuais abaixo são a referência do que os scripts fazem.
+
+```sh
+# 1. BUILD (base oficial MS + configs; verifica que pegaram; modules_install)
+bash scripts/kernel/build-wsl-kernel.sh CONFIG_BLK_DEV_UBLK=m CONFIG_ZRAM_WRITEBACK=y CONFIG_IO_URING=y
+#    → imprime o bzImage e a <release> (use abaixo).
+
+# 2. VALIDAÇÃO ISOLADA (QEMU, NÃO toca o WSL) — prova que o kernel boota
+sudo bash scripts/kernel/qemu-validate.sh ~/WSL2-Linux-Kernel/arch/x86/boot/bzImage "<release>" \
+  ~/WSL2-Linux-Kernel/drivers/block/ublk_drv.ko ~/WSL2-Linux-Kernel/mm/zsmalloc.ko \
+  ~/WSL2-Linux-Kernel/drivers/block/zram/zram.ko
+#    → "QEMU-VALIDATE: PASS" = bootou ao userspace. Só prossiga se PASS.
+
+# 3. copia o bzImage p/ o Windows
+mkdir -p /mnt/c/wsl && cp ~/WSL2-Linux-Kernel/arch/x86/boot/bzImage /mnt/c/wsl/kernel-ramshared
+cp scripts/kernel/boot-kernel-safe.ps1 /mnt/c/wsl/   # launcher auto-curável
+```
+
+```powershell
+# 4. TROCA SEGURA + AUTO-REVERT (no PowerShell do Windows):
+powershell -ExecutionPolicy Bypass -File C:\wsl\boot-kernel-safe.ps1 `
+  -KernelPath C:\wsl\kernel-ramshared -ExpectedVersion "<release>"
+#    → faz backup do .wslconfig, arma, wsl --shutdown, verifica o boot (timeout).
+#    Se NÃO bootar: RESTAURA o .wslconfig e reinicia → volta sozinho ao kernel da Microsoft.
+#    Teste a lógica de arm sem tocar o WSL:  ... -DryRunConfig C:\wsl\test.txt
+```
+
+Pré-requisito do auto-revert: um `.wslconfig` **limpo** (sem `kernel=`) em `C:\wsl\wslconfig-original.txt`
+(o launcher cria na 1ª vez se o atual ainda não tiver `kernel=`).
+
 ## 0. Pré-requisitos (no WSL2)
 
 ```sh
