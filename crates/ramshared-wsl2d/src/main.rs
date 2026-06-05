@@ -250,8 +250,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // --- teardown: zera a VRAM (§11) e remove o socket ---
-    backend.zero()?;
-    let _ = probe.zero(); // DT-12: zera tambem a regiao-canario (§11)
+    // DT-12/§11: zera as DUAS regioes (swap + canario) incondicionalmente. Um erro no
+    // zero do backend NAO pode pular o scrub do canario; tenta ambos e so' entao propaga.
+    let backend_zero = backend.zero();
+    let _ = probe.zero();
+    backend_zero?;
     let _ = std::fs::remove_file(path);
     eprintln!("[wsl2d] encerrado (VRAM zerada)");
     Ok(())

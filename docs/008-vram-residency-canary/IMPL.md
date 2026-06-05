@@ -54,6 +54,26 @@ detecção por **latência por-request** (§9, gatilho primário) fica **intacta
 - Corrigidos 2 comentários em `main.rs` que descreviam o §9.4 como "trabalho futuro"
   (agora falsos): Day-0 não deixa texto enganoso adjacente à mudança.
 
+## Revisão adversarial pré-merge (3 lentes)
+
+Revisão em 3 lentes paralelas (correção · concorrência/recursos · conformidade-SPEC/Day-0),
+framing adversarial (#12). Conformidade **GO**, correção **GO**; a lente de concorrência
+apontou findings, triados:
+
+- **#6a (HIGH, CORRIGIDO):** o teardown fazia `backend.zero()?` e pulava o `probe.zero()`
+  em erro → região-canário não-zerada (viola §11/DT-12). **Fix:** zera as duas regiões
+  incondicionalmente e só então propaga o erro do backend.
+- **#5 (alloc do canário após `mlockall`) — watch-item, NÃO corrigido:** daemon é root e o
+  `cuMemcpy` do canário usa o mesmo staging já validado sob `MCL_FUTURE` no §14; reordenar
+  desviaria do SPEC ("Após backend"). A abort trigger do ITEM-6 ("DEMOTE em operação
+  normal → reverter") já cobre o risco; o rig (`cascade-validate`) é o árbitro.
+- **Pré-existentes (fora do escopo → follow-up):** thread de `swapoff` detached + teardown
+  sob disconnect (#2a); `swapoff` via `$PATH` (#2c); teardown pulado em erro de I/O no loop
+  (#6c). Não introduzidos aqui (só extraí `spawn_swapoff`); o §14 já validou o DEMOTE.
+- **Por design / spec-matching (NÃO corrigido):** `bad_streak`/`over_count` não resetam após
+  swapoff falho (retry rápido sob pressão persistente é aceitável); cadência pausa durante
+  DEMOTE in-flight; `streak=` no log de Corruption — todos batem com o texto do SPEC.
+
 ## Validação
 
 - `cargo fmt --all -- --check` — limpo.
