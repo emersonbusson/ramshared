@@ -24,8 +24,9 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
 | `ramshared-wsl2d` (lib) — máquina de estados (§7) + `VramBackend` (CUDA→NBD) | `crates/ramshared-wsl2d/{Cargo.toml, src/lib.rs, src/state.rs, src/backend.rs, src/main.rs}` | §7, §8 | — | fmt ok · `clippy -D warnings` limpo · 4 unit + **composição GPU real verde** (`--ignored`: WRITE/READ NBD na VRAM) |
 | `ramshared-integrity` — checksum por bloco (FNV-1a) + padrões + tabela pré-alocada | `crates/ramshared-integrity/{Cargo.toml, src/lib.rs, src/hash.rs, src/pattern.rs}` | §8.1, §14.2 | — | fmt ok · `clippy -D warnings` limpo · **7 testes** (hash/tabela/padrões), sem root |
 
-> **Marco:** os 6 crates do §5 existem (cli, tier, cuda, block, wsl2d, integrity);
-> o core CUDA↔NBD validado em GPU real. Falta a camada de integração (root).
+> **Marco:** os 6 crates do §5 existem; o core CUDA↔NBD validado em GPU **e no
+> device real**: o daemon serve `/dev/nbd0` (write/readback 1 MiB OK). Falta a
+> orquestração: canário/DEMOTE (§9), CLI `up`/`down`/`status`, `check`+zram.
 
 ### Decisões pequenas (não pediram ADR nova)
 
@@ -50,7 +51,10 @@ Implementa **estritamente** o `SPECv3-WSL2.md`. Zero criatividade fora do escopo
 3. `ramshared-wsl2d`: canário de residência + **DEMOTE** por latência (§9) e a
    sequência `start` (mlockall/oom_score_adj/alloc backoff §6.2). [máquina de
    estados §7 ✅, `VramBackend` CUDA→NBD ✅]
-4. **device-wiring NBD** (ioctl `NBD_SET_SOCK`/`NBD_DO_IT`, `socketpair`, loop `NBD_DO_IT` em thread) — precisa root + `unsafe`. [`ramshared-integrity` ✅]
+4. ✅ **device-wiring NBD validado** (2026-06-05, smoke em `/home/emdev/fase0/`):
+   daemon serve `/dev/nbd0` real via `nbd-client -unix` (handshake interop OK,
+   **sem ioctl/`unsafe` no daemon**); write/readback de 1 MiB pelo block layer →
+   **VRAM round-trip OK**. Falta: canário/DEMOTE (§9), CLI `up`/`down`, zram.
 5. Testes de aceitação §14: cascata sob pressão **confinada em cgroup** (§14.3) e
    **DEMOTE sob latência** (§14.4).
 
