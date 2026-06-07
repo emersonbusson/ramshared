@@ -14,6 +14,11 @@ Status: **prep em andamento** (2026-06-07). Kernel custom ativo:
   `IoDesc -> Request`, `IoWork` e `IoCompletion`. Tudo sem `unsafe`, sem FD, sem `io_uring`.
 - `crates/ramshared-uring` encapsula a crate externa `io-uring`; o daemon continua
   `#![forbid(unsafe_code)]`.
+- `ublk_control::get_features` consulta `/dev/ublk-control` via `UringCmd80`/SQE 128 sem criar
+  device. O smoke root confirmou `UBLK_F_CMD_IOCTL_ENCODE` presente e zero-copy ausente.
+- `ublk_control::add_device` + `delete_device` cobrem `ADD_DEV`/`DEL_DEV` com `dev_id` automático.
+  O smoke root cria e remove somente `/dev/ublkcN`; `START_DEV` ainda não foi chamado e
+  `/dev/ublkbN` não aparece.
 
 ## Decisão de dependência
 
@@ -26,12 +31,17 @@ hand-roll de barreiras acquire/release no caminho de swap. A dependência entrou
 
 1. **Feito:** adicionar `ramshared-uring` + `io-uring 0.7.12` e rodar smoke mínimo de ring sem
    ublk device e sem swap (`io_uring_setup` + `io_uring_enter` sem SQEs).
-2. Abrir `/dev/ublk-control`/`/dev/ublkcN` só em smoke ublk explícito, ainda sem `swapon`.
-3. Integrar loop ublk com `IoWork`/worker H1; worker CUDA continua único.
+2. **Feito:** consultar `/dev/ublk-control` (`GET_FEATURES`) e exercitar `ADD_DEV` + `DEL_DEV`
+   em smoke explícito. Limite validado: `/dev/ublkcN` temporário, sem `/dev/ublkbN`, sem
+   `START_DEV`, sem `swapon`.
+3. Integrar loop ublk com `IoWork`/worker H1 antes de qualquer `START_DEV`; worker CUDA continua
+   único e a thread io_uring continua dona do ring.
 4. Bench ublk vs NBD com número p50/p99. Sem ganho medível: manter NBD e remover a dependência.
 
 ## Rollback trigger
 
 - `io_uring_setup` retorna `EPERM`/`ENOSYS` no smoke mesmo com `check` ready.
 - `grep unsafe` encontra `unsafe` novo em `ramshared-wsl2d`.
+- Smoke `ADD_DEV`/`DEL_DEV` deixa `/dev/ublkcN` persistente ou cria `/dev/ublkbN` antes de
+  `START_DEV`.
 - Bench ublk não melhora a latência p99 contra NBD por margem definida no bench.
