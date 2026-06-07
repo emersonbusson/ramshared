@@ -352,3 +352,24 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   refletir que a excecao entrou no smoke e continua gated por bench ublk vs NBD.
 - **Proximo recorte seguro:** smoke ublk-control/char device sem `swapon` ou integrar o loop
   ublk real apenas ate criar `/dev/ublkbN` e removê-lo, mantendo `--transport ublk` gated.
+
+---
+
+## 2026-06-07 — Fase B prep: io_uring isolado em ramshared-uring
+
+- **Descoberta ao preparar `URING_CMD`:** a crate `io-uring 0.7.12` expõe
+  `SubmissionQueue::push` como `unsafe` (invariante de validade/lifetime do SQE/buffers). Logo,
+  manter `ramshared-wsl2d` com `#![forbid(unsafe_code)]` exige uma fronteira propria para
+  operações reais de SQE.
+- **Refactor:** commit `d15aa32 refactor(wsl2d): isolate io_uring behind wrapper crate (#3)`.
+  Novo crate `ramshared-uring` depende de `io-uring 0.7.12` e concentra o futuro `unsafe` de ring;
+  `ramshared-wsl2d` depende de `ramshared-uring` e continua sem `unsafe`.
+- **Docs:** README agora lista 7 crates; ADR-0004/LIBRARIES/PRD/SPECv2/IMPL foram ajustados para
+  "wrapper `ramshared-uring` + crate externa `io-uring`", nao FFI hand-rolled e nao `unsafe` no
+  daemon. O `SPEC.md` antigo continua marcado superseded/no-go historico.
+- **Evidencia:** `cargo test -p ramshared-uring -p ramshared-wsl2d` passou
+  (wsl2d: 21 ok, 1 GPU ignorado, 11 ublk ok, 1 uring ok; ramshared-uring doctest/unit sem testes);
+  `cargo clippy -p ramshared-uring -p ramshared-wsl2d -- -D warnings` passou.
+- **Proximo recorte seguro:** implementar no `ramshared-uring` um wrapper de `UringCmd80` para
+  `UBLK_U_CMD_GET_FEATURES` contra `/dev/ublk-control`, com `// SAFETY:` restrito e teste/smoke
+  root, ainda sem `ADD_DEV`, sem `/dev/ublkbN` e sem `swapon`.
