@@ -3,7 +3,8 @@
 Registro anti-halo (Kahneman #11): nenhuma API/subsistema/dependência entra sem
 **critério mensurável**, **alternativas** e um **"quando revisitar"**. Um LKM
 ideal tem zero deps externas — aqui o registro é de **escolhas de API de kernel**
-e das poucas deps userspace. Inclui "deliberadamente NÃO usado".
+e das poucas deps userspace. Inclui "deliberadamente NÃO usado". O caminho NBD atual segue
+zero-dep externa; a Fase B/ublk tem uma exceção userspace explicitamente gated.
 
 ## Escolhas ativas
 
@@ -11,6 +12,7 @@ e das poucas deps userspace. Inclui "deliberadamente NÃO usado".
 | --- | --- | --- |
 | **Block backend: NBD** (Fase A) | único que funciona em GeForce consumer (`nvidia_p2p_*` → `EINVAL`); `nbd.ko` presente, só `modprobe` | quando o kernel WSL2 tiver `CONFIG_BLK_DEV_UBLK` |
 | **Block backend: ublk** (Fase B) | latência menor (io_uring), sem round-trip socket | exige kernel custom; só após Fase B |
+| **Userspace ring: `io-uring` crate** (Fase B, gated) | `io-uring 0.7.12` (MIT/Apache-2.0) evita hand-roll de barreiras acquire/release no caminho de swap; ADR-0004 aceita a exceção | remover se bench ublk não superar NBD ou se auditoria de supply chain falhar |
 | **Tier quente: zram (lzo-rle)** | RAM comprimida, baixa latência; presente (`CONFIG_ZRAM=m`) | se `CONFIG_ZRAM_WRITEBACK` for habilitado → writeback p/ VRAM |
 | **VRAM: CUDA Driver API via `dlopen`** | funciona sem toolkit sobre a stub `libcuda` do WSL2; `cuMemcpyHtoD/DtoH` em qualquer GPU | se surgir caminho coerente (CXL bare-metal) |
 | **Userspace lang: Rust (std)** | safety + RAII de recursos GPU (ver [ADR-0002](decisions/ADR-0002-rust-userspace-port.md)) | se FFI provar instável (rollback do ADR-0002) |

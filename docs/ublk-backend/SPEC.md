@@ -1,7 +1,12 @@
 # SPEC — Fase B — ublk no lugar do NBD para o tier VRAM
 
-Fonte: [`PRD.md`](PRD.md). **DESIGN-ONLY / kernel-gated** (sem `CONFIG_BLK_DEV_UBLK` no WSL2 —
-verificado). Fecha o desenho + a **decisão de política** (io_uring vs zero-dep/`forbid(unsafe)`).
+> **Superseded/no-go histórico.** Este arquivo preserva a primeira proposta auditada. O design
+> ativo é [`SPECv2.md`](SPECv2.md); a decisão de dependência ativa é ADR-0004 Accepted
+> (`io-uring 0.7.12`, não `ramshared-uring` hand-rolled).
+
+Fonte: [`PRD.md`](PRD.md). **DESIGN-ONLY / kernel-gated em 2026-06-05** (naquele kernel WSL2,
+sem `CONFIG_BLK_DEV_UBLK`). Fecha o desenho inicial + a **decisão de política** proposta
+(io_uring vs zero-dep/`forbid(unsafe)`), depois revisada pelo SPECv2.
 Passo 3 fica para kernel custom. Itens não-testáveis = **(kernel-gated)**.
 
 ## Escopo fechado
