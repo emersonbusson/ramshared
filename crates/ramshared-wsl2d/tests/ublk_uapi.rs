@@ -1,5 +1,6 @@
 use std::mem::{align_of, size_of};
 
+use ramshared_block::Command;
 use ramshared_wsl2d::ublk;
 
 #[test]
@@ -85,4 +86,78 @@ fn repr_c_layouts_match_local_kernel_header() {
 
     assert_eq!(size_of::<ublk::Params>(), 112);
     assert_eq!(align_of::<ublk::Params>(), 8);
+}
+
+#[test]
+fn io_desc_read_maps_to_block_request_with_512b_sector_units() {
+    let desc = ublk::IoDesc {
+        op_flags: ublk::UBLK_IO_OP_READ as u32,
+        nr_sectors_or_zones: 8,
+        start_sector: 16,
+        addr: 0x1000,
+    };
+
+    let req = desc.to_block_request(44).expect("READ deve mapear");
+
+    assert_eq!(req.cmd, Command::Read);
+    assert_eq!(req.handle, 44);
+    assert_eq!(req.offset, 8192);
+    assert_eq!(req.len, 4096);
+    assert_eq!(req.flags, 0);
+}
+
+#[test]
+fn io_desc_discard_maps_to_trim_and_flush_ignores_sector_range() {
+    let discard = ublk::IoDesc {
+        op_flags: ublk::UBLK_IO_OP_DISCARD as u32,
+        nr_sectors_or_zones: 16,
+        start_sector: 32,
+        addr: 0,
+    }
+    .to_block_request(7)
+    .expect("DISCARD deve mapear para TRIM");
+
+    assert_eq!(discard.cmd, Command::Trim);
+    assert_eq!(discard.offset, 16_384);
+    assert_eq!(discard.len, 8192);
+
+    let flush = ublk::IoDesc {
+        op_flags: ublk::UBLK_IO_OP_FLUSH as u32,
+        nr_sectors_or_zones: 16,
+        start_sector: 32,
+        addr: 0,
+    }
+    .to_block_request(8)
+    .expect("FLUSH deve mapear");
+
+    assert_eq!(flush.cmd, Command::Flush);
+    assert_eq!(flush.offset, 0);
+    assert_eq!(flush.len, 0);
+}
+
+#[test]
+fn io_desc_rejects_unsupported_ops_and_byte_length_overflow() {
+    let unsupported = ublk::IoDesc {
+        op_flags: ublk::UBLK_IO_OP_WRITE_ZEROES as u32,
+        nr_sectors_or_zones: 8,
+        start_sector: 0,
+        addr: 0,
+    };
+    assert_eq!(
+        unsupported.to_block_request(1),
+        Err(ublk::IoRequestError::UnsupportedOp(
+            ublk::UBLK_IO_OP_WRITE_ZEROES
+        ))
+    );
+
+    let overflow = ublk::IoDesc {
+        op_flags: ublk::UBLK_IO_OP_WRITE as u32,
+        nr_sectors_or_zones: 8_388_608,
+        start_sector: 0,
+        addr: 0,
+    };
+    assert_eq!(
+        overflow.to_block_request(1),
+        Err(ublk::IoRequestError::LengthOverflow)
+    );
 }
