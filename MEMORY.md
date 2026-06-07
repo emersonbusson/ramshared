@@ -395,3 +395,27 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   `cargo clippy -p ramshared-uring -p ramshared-wsl2d -- -D warnings` passou.
 - **Proximo recorte seguro:** decidir entre smoke `ADD_DEV`+`DEL_DEV` controlado (criando e removendo
   `/dev/ublkbN` sem `swapon`) ou preparar o loop ublk thread/worker ainda gated por `--transport ublk`.
+
+---
+
+## 2026-06-07 — Fase B prep: ADD_DEV/DEL_DEV sem START_DEV
+
+- **TDD lifecycle ublk-control:** commits `e875705 test(wsl2d): add ublk add delete RED (#3)` e
+  `1bae47f fix(wsl2d): add ublk add delete smoke (#3)`.
+- **Mudanca:** `ramshared-uring` ganhou wrappers fixos `ublk_add_dev(fd, dev_id, &mut [u8; 64])`
+  e `ublk_del_dev(fd, dev_id)`, ainda com `UringCmd80`/SQE 128 e `unsafe` confinado ao `push`.
+  `ramshared-wsl2d` ganhou `DeviceSpec::smoke_auto()`, `DeviceReport`, encoding/decoding manual
+  de `CtrlDevInfo` sem `unsafe`, e constantes UAPI `UBLK_U_CMD_ADD_DEV`/`DEL_DEV`/`DEV_ID_AUTO`.
+- **Limites mantidos:** o smoke root cria somente `/dev/ublkcN` via `ADD_DEV`, confirma ausencia
+  de `/dev/ublkbN`, chama `DEL_DEV`, espera cleanup e compara `/dev` antes/depois. Nao chama
+  `START_DEV`, nao executa `swapon` e nao toca swap.
+- **Evidencia:** RED falhou por `DeviceSpec`, `add_device`, `delete_device` e constantes ausentes;
+  GREEN: `cargo test -p ramshared-wsl2d --test ublk_control_smoke --test ublk_uapi --no-run`,
+  `sudo -n target/debug/deps/ublk_control_smoke-41db707307e662ad --ignored --nocapture` (2/2),
+  `/dev` antes/depois: apenas `ublk-control 600 root root`,
+  `cargo test -p ramshared-uring -p ramshared-wsl2d` passou
+  (wsl2d: 21 ok, 1 GPU ignorado, 11 ublk ok, 1 uring ok, 2 ublk_control ignorados no modo normal),
+  `cargo clippy -p ramshared-uring -p ramshared-wsl2d -- -D warnings` passou.
+- **Proximo recorte seguro:** antes de `START_DEV`, implementar a preparacao da fila ublk
+  (abrir `/dev/ublkcN`, ring de IO, mmap/descritores e `FETCH_REQ`) para evitar deadlock no
+  `wait_for_completion_interruptible` do driver; continuar sem `swapon`.
