@@ -170,3 +170,28 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Validação:** fmt/clippy --workspace -D warnings limpos; `cargo test --workspace` 61/0/2-GPU;
   §14.3 511 MiB/332.800 páginas; §14.4 480 MiB/384.000 páginas/0 corrupção; `-C 2` 2 conns íntegro.
 - **C1+H1 = feito** (ROADMAP/ARCHITECTURE). PR único pendente.
+
+---
+
+## 2026-06-07 — Fase B prep: retomada pos-restart WSL2 e log do launcher
+
+- **Sessao Claude2 retomada:** `/home/emdev/.claude2/projects/-home-emdev-codespace-ramshared/7698a3d5-9884-4368-85e9-390a6d062ec8.jsonl`.
+- **Plano da sessao anterior:** ativar kernel WSL2 custom `6.6.123.2-microsoft-standard-WSL2+`
+  com auto-revert; so depois iniciar Passo 3 da Fase B (`ublk`). `zram-writeback` ingenuo segue
+  rejeitado/design-only; o caminho implementavel e `ublk` se o kernel custom estiver ativo.
+- **Estado verificado pos-restart:** `uname -r = 6.6.114.1-microsoft-standard-WSL2`; kernel ativo
+  da Microsoft nao tem `CONFIG_BLK_DEV_UBLK` nem `CONFIG_ZRAM_WRITEBACK`. Build custom em
+  `/home/emdev/WSL2-Linux-Kernel` tem `CONFIG_BLK_DEV_UBLK=m`, `CONFIG_ZRAM_WRITEBACK=y`,
+  `CONFIG_IO_URING=y`; release esperada `6.6.123.2-microsoft-standard-WSL2+`.
+- **Sem evidencia anterior:** nao existia `C:\wsl\boot-ramshared.log`; logo nao da para saber se o
+  comando nao foi executado ou se o launcher auto-reverteu. `.wslconfig` e backup limpos, sem
+  `kernel=`.
+- **Checkpoint local:** branch `feat/fase-b-prep`, commit `f5691f1 fix(scripts): persist WSL kernel boot logs (#3)`.
+  Novo wrapper `scripts/kernel/boot-kernel-logged.ps1` copiado para `C:\wsl\boot-kernel-logged.ps1`.
+  Dry-run do wrapper passou (`-DryRunConfig`), arm/desarm idempotente OK; log agora fica em
+  `C:\wsl\boot-ramshared.log`.
+- **Proximo passo seguro:** executar no PowerShell do Windows:
+  `powershell -ExecutionPolicy Bypass -File C:\wsl\boot-kernel-logged.ps1`.
+  Isso chama `wsl --shutdown` e encerra esta sessao. Na volta, rodar `uname -r` e
+  `cat /mnt/c/wsl/boot-ramshared.log`. Se o kernel custom estiver ativo, seguir Passo 3 da Fase B
+  (`docs/ublk-backend/SPECv2.md`); caso contrario, diagnosticar pelo log.
