@@ -1,7 +1,8 @@
 # ADR-0004 — ublk (Fase B): usar a crate `io-uring` auditada, não FFI io_uring hand-rolled
 
-**Status:** Proposed (2026-06-05). Requer ratificação do dono (reverte a política zero-dep
-**só para io_uring**; ver Consequences). Roteado pelo `docs/ublk-backend/SPECv2.md` DT-1.
+**Status:** Accepted (2026-06-07). Exceção userspace à política zero-dep **só para
+`io-uring`** e **só no caminho Fase B/ublk**; ver Consequences. Roteado pelo
+`docs/ublk-backend/SPECv2.md` DT-1.
 
 ## Context
 
@@ -31,9 +32,13 @@ Para o servidor ublk **userspace**, usar a **crate `io-uring` auditada** (madura
 usada, barreiras corretas) em vez de hand-rollar a FFI num crate `ramshared-uring`. Encapsular o
 uso num módulo fino do daemon; o resto do daemon e a lib seguem `#![forbid(unsafe_code)]`.
 
+Versão candidata no momento da ratificação: **`io-uring 0.7.12`**, licença MIT OR Apache-2.0,
+repo `tokio-rs/io-uring`, `rust-version = 1.63` (`cargo info io-uring`, 2026-06-07).
+Adicionar ao `Cargo.toml` apenas no primeiro recorte que realmente fizer smoke de ring.
+
 Critério mensurável (anti-halo #11) para a **adoção do ublk em si** permanece gated em bench:
-**latência ublk < NBD por ≥ X%** num kernel custom; sem ganho → **manter NBD** (a crate só entra
-se o ublk entrar). Registrar a exceção em `LIBRARIES.md` quando o ublk for adotado.
+**latência ublk < NBD por ≥ X%** num kernel custom; sem ganho → **manter NBD** e remover a
+dependência se ela já tiver entrado no smoke. A exceção está registrada em `LIBRARIES.md`.
 
 ## Consequences
 
@@ -43,9 +48,9 @@ caminho de swap). Menos superfície de `unsafe` própria. Time foca no que é co
 preservado no destino).
 **−** Quebra o zero-dep **userspace** (1 crate + suas transitivas) — **exceção explícita** à
 política, restrita ao io_uring, e **só se** o ublk for adotado (gated em bench).
-**−** Acopla a uma crate externa (supply chain): mitigado por `cargo audit`/`cargo deny` na CI e
-fixar versão; a crate `io-uring` tem histórico de manutenção e auditoria a verificar no momento da
-adoção.
+**−** Acopla a uma crate externa (supply chain): mitigado por versão fixa no lockfile, revisão de
+diff de `Cargo.lock`, `cargo audit`/`cargo deny` quando disponíveis, e rollback automático se o
+bench não justificar ublk.
 
 ## Alternatives considered
 
