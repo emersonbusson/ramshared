@@ -373,3 +373,25 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Proximo recorte seguro:** implementar no `ramshared-uring` um wrapper de `UringCmd80` para
   `UBLK_U_CMD_GET_FEATURES` contra `/dev/ublk-control`, com `// SAFETY:` restrito e teste/smoke
   root, ainda sem `ADD_DEV`, sem `/dev/ublkbN` e sem `swapon`.
+
+---
+
+## 2026-06-07 — Fase B prep: smoke ublk GET_FEATURES sem criar device
+
+- **TDD smoke ublk-control:** commits `6cdc14f test(wsl2d): add ublk control features RED (#3)` e
+  `8680bac fix(wsl2d): add ublk control features smoke (#3)`.
+- **Mudanca:** `ramshared-uring` ganhou `ublk_get_features(fd)` usando `UringCmd80`/SQE 128 e
+  `IORING_OP_URING_CMD` fixo para `UBLK_U_CMD_GET_FEATURES` (`0x80207513`). O unico `unsafe`
+  continua no wrapper e documenta a vida do ponteiro de stack ate o CQE. `ramshared-wsl2d`
+  ganhou `ublk_control::get_features(path)` e segue com `#![forbid(unsafe_code)]`.
+- **Limites mantidos:** o smoke abre somente `/dev/ublk-control`, consulta 8 bytes de features,
+  nao chama `ADD_DEV`, nao cria `/dev/ublkcN`/`/dev/ublkbN`, nao executa `swapon` e nao toca swap.
+- **Evidencia:** RED falhou por `no ublk_control in the root`; GREEN:
+  `cargo test -p ramshared-wsl2d --test ublk_control_smoke --no-run`,
+  `sudo -n target/debug/deps/ublk_control_smoke-41db707307e662ad --ignored --nocapture` (1/1),
+  `/dev` antes/depois: apenas `ublk-control 600 root root`,
+  `cargo test -p ramshared-uring -p ramshared-wsl2d` passou
+  (wsl2d: 21 ok, 1 GPU ignorado, 11 ublk ok, 1 uring ok, 1 ublk_control ignorado no modo normal),
+  `cargo clippy -p ramshared-uring -p ramshared-wsl2d -- -D warnings` passou.
+- **Proximo recorte seguro:** decidir entre smoke `ADD_DEV`+`DEL_DEV` controlado (criando e removendo
+  `/dev/ublkbN` sem `swapon`) ou preparar o loop ublk thread/worker ainda gated por `--transport ublk`.
