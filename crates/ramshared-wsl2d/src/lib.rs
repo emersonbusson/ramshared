@@ -9,6 +9,7 @@ pub mod conn;
 pub mod residency;
 pub mod state;
 pub mod ublk;
+pub mod uring_smoke;
 
 pub use backend::VramBackend;
 pub use canary_probe::{CANARY_BYTES, CANARY_EVERY, Cadence, CanaryProbe};

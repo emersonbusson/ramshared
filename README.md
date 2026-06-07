@@ -44,7 +44,7 @@ swapon --show                              # zram(200) > nbd0(100) > vhdx(-2)
 sudo ./target/debug/ramshared down         # swapoff antes do disconnect (anti-panic)
 ```
 
-## Estrutura (6 crates; caminho atual zero deps externas)
+## Estrutura (6 crates; exceção userspace gated)
 
 | Crate | Papel |
 |---|---|
@@ -56,7 +56,7 @@ sudo ./target/debug/ramshared down         # swapoff antes do disconnect (anti-p
 | `ramshared-cli` | `check`/`doctor`/`up`/`down`/`status` |
 
 Nota Fase B: o backend `ublk` aprovou uma exceção userspace gated para a crate
-`io-uring` (ADR-0004). Ela só deve entrar no `Cargo.toml` no recorte de smoke do ring
+`io-uring` (ADR-0004). Ela entrou no `ramshared-wsl2d` apenas para o smoke mínimo do ring
 e só permanece se o bench ublk vs NBD provar ganho.
 
 ## Documentação
