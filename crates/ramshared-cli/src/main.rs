@@ -4,7 +4,7 @@
 
 use std::env;
 use std::fmt;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -124,6 +124,7 @@ struct BackendEnv {
     nbd_device_present: bool,
     nbd_module_loaded: bool,
     ublk_control_present: bool,
+    ublk_control_openable: bool,
 }
 
 #[derive(Debug)]
@@ -403,12 +404,16 @@ fn parse_swaps(text: &str) -> Vec<SwapEntry> {
 }
 
 fn probe_backends(kernel: &KernelFeatures) -> BackendProbe {
+    let (ublk_control_present, ublk_control_openable) =
+        probe_ublk_control(Path::new("/dev/ublk-control"));
+
     probe_backends_with_env(
         kernel,
         BackendEnv {
             nbd_device_present: has_dev_prefix("nbd"),
             nbd_module_loaded: Path::new("/sys/module/nbd").exists(),
-            ublk_control_present: Path::new("/dev/ublk-control").exists(),
+            ublk_control_present,
+            ublk_control_openable,
         },
     )
 }
@@ -437,6 +442,7 @@ fn probe_backends_with_env(kernel: &KernelFeatures, env: BackendEnv) -> BackendP
         .is_some_and(IoUringRuntime::enabled_for_ublk);
     let ublk_status = if ublk_enabled
         && env.ublk_control_present
+        && env.ublk_control_openable
         && io_uring_enabled
         && io_uring_runtime_enabled
     {
@@ -448,6 +454,8 @@ fn probe_backends_with_env(kernel: &KernelFeatures, env: BackendEnv) -> BackendP
         "CONFIG_BLK_DEV_UBLK disabled or unknown".to_string()
     } else if !env.ublk_control_present {
         "/dev/ublk-control missing".to_string()
+    } else if !env.ublk_control_openable {
+        "/dev/ublk-control not openable; run check as root".to_string()
     } else if !io_uring_enabled {
         "CONFIG_IO_URING disabled or unknown".to_string()
     } else if !io_uring_runtime_enabled {
@@ -469,6 +477,15 @@ fn io_uring_runtime_detail(value: Option<IoUringRuntime>) -> String {
         || "kernel.io_uring_disabled unknown".to_string(),
         |value| format!("kernel.io_uring_disabled={}", value.as_sysctl_value()),
     )
+}
+
+fn probe_ublk_control(path: &Path) -> (bool, bool) {
+    if !path.exists() {
+        return (false, false);
+    }
+
+    let openable = OpenOptions::new().read(true).write(true).open(path).is_ok();
+    (true, openable)
 }
 
 fn has_dev_prefix(prefix: &str) -> bool {
