@@ -931,6 +931,48 @@ CONFIG_BLK_DEV_NBD=m\n\
     }
 
     #[test]
+    fn parses_io_uring_disabled_runtime_values() {
+        assert_eq!(
+            parse_io_uring_runtime("0\n"),
+            Some(IoUringRuntime::Enabled)
+        );
+        assert_eq!(
+            parse_io_uring_runtime("1\n"),
+            Some(IoUringRuntime::Restricted)
+        );
+        assert_eq!(
+            parse_io_uring_runtime("2\n"),
+            Some(IoUringRuntime::Disabled)
+        );
+        assert_eq!(parse_io_uring_runtime("bad\n"), None);
+    }
+
+    #[test]
+    fn ublk_backend_requires_runtime_io_uring_enabled() {
+        let kernel = KernelFeatures {
+            config_source: Some("/proc/config.gz".to_string()),
+            swap: Some(KernelConfig::BuiltIn),
+            io_uring: Some(KernelConfig::BuiltIn),
+            io_uring_runtime: Some(IoUringRuntime::Disabled),
+            nbd: Some(KernelConfig::Module),
+            ublk: Some(KernelConfig::Module),
+            zram: Some(KernelConfig::Module),
+        };
+
+        let backends = probe_backends_with_env(
+            &kernel,
+            BackendEnv {
+                nbd_device_present: false,
+                nbd_module_loaded: false,
+                ublk_control_present: true,
+            },
+        );
+
+        assert_eq!(backends.ublk_status, Status::Fail);
+        assert_eq!(backends.ublk_detail, "kernel.io_uring_disabled=2");
+    }
+
+    #[test]
     fn escapes_json_strings() {
         assert_eq!(
             json_escape("a \"quoted\" path\\name\n"),
@@ -951,6 +993,7 @@ CONFIG_BLK_DEV_NBD=m\n\
                 config_source: Some("/proc/config.gz".to_string()),
                 swap: Some(KernelConfig::BuiltIn),
                 io_uring: Some(KernelConfig::BuiltIn),
+                io_uring_runtime: Some(IoUringRuntime::Enabled),
                 nbd: Some(KernelConfig::Module),
                 ublk: Some(KernelConfig::Disabled),
                 zram: Some(KernelConfig::Module),
