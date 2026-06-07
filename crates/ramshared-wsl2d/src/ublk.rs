@@ -16,6 +16,8 @@ pub const UBLK_CMD_STOP_DEV: u32 = 0x07;
 pub const UBLK_CMD_SET_PARAMS: u32 = 0x08;
 pub const UBLK_CMD_GET_PARAMS: u32 = 0x09;
 pub const UBLK_CMD_GET_DEV_INFO2: u32 = 0x12;
+pub const UBLK_U_CMD_ADD_DEV: u32 = 0xc020_7504;
+pub const UBLK_U_CMD_DEL_DEV: u32 = 0xc020_7505;
 pub const UBLK_U_CMD_GET_FEATURES: u32 = 0x8020_7513;
 
 pub const UBLK_IO_FETCH_REQ: u32 = 0x20;
@@ -32,6 +34,7 @@ pub const UBLKSRV_IO_BUF_OFFSET: u64 = 0x8000_0000;
 
 pub const UBLK_FEATURES_LEN: u16 = 8;
 pub const UBLK_QUEUE_ID_NONE: u16 = u16::MAX;
+pub const UBLK_DEV_ID_AUTO: u32 = u32::MAX;
 pub const UBLK_MAX_QUEUE_DEPTH: u64 = 4096;
 
 pub const UBLK_IO_BUF_OFF: u32 = 0;
