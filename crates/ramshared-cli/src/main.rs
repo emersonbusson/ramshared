@@ -63,6 +63,27 @@ impl KernelConfig {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum IoUringRuntime {
+    Enabled,
+    Restricted,
+    Disabled,
+}
+
+impl IoUringRuntime {
+    fn as_sysctl_value(self) -> u8 {
+        match self {
+            IoUringRuntime::Enabled => 0,
+            IoUringRuntime::Restricted => 1,
+            IoUringRuntime::Disabled => 2,
+        }
+    }
+
+    fn enabled_for_ublk(self) -> bool {
+        self == IoUringRuntime::Enabled
+    }
+}
+
 #[derive(Debug)]
 struct WslProbe {
     status: Status,
@@ -84,6 +105,7 @@ struct KernelFeatures {
     config_source: Option<String>,
     swap: Option<KernelConfig>,
     io_uring: Option<KernelConfig>,
+    io_uring_runtime: Option<IoUringRuntime>,
     nbd: Option<KernelConfig>,
     ublk: Option<KernelConfig>,
     zram: Option<KernelConfig>,
@@ -95,6 +117,13 @@ struct BackendProbe {
     nbd_detail: String,
     ublk_status: Status,
     ublk_detail: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BackendEnv {
+    nbd_device_present: bool,
+    nbd_module_loaded: bool,
+    ublk_control_present: bool,
 }
 
 #[derive(Debug)]
@@ -286,6 +315,9 @@ fn probe_kernel_features(release: &str) -> KernelFeatures {
         io_uring: config_text
             .as_deref()
             .and_then(|text| parse_kernel_config(text, "CONFIG_IO_URING")),
+        io_uring_runtime: read_to_string("/proc/sys/kernel/io_uring_disabled")
+            .as_deref()
+            .and_then(parse_io_uring_runtime),
         nbd: config_text
             .as_deref()
             .and_then(|text| parse_kernel_config(text, "CONFIG_BLK_DEV_NBD")),
@@ -339,6 +371,15 @@ fn parse_kernel_config(text: &str, name: &str) -> Option<KernelConfig> {
     None
 }
 
+fn parse_io_uring_runtime(text: &str) -> Option<IoUringRuntime> {
+    match text.trim() {
+        "0" => Some(IoUringRuntime::Enabled),
+        "1" => Some(IoUringRuntime::Restricted),
+        "2" => Some(IoUringRuntime::Disabled),
+        _ => None,
+    }
+}
+
 fn parse_swaps(text: &str) -> Vec<SwapEntry> {
     text.lines()
         .skip(1)
@@ -362,17 +403,26 @@ fn parse_swaps(text: &str) -> Vec<SwapEntry> {
 }
 
 fn probe_backends(kernel: &KernelFeatures) -> BackendProbe {
-    let nbd_device_present = has_dev_prefix("nbd");
-    let nbd_module_loaded = Path::new("/sys/module/nbd").exists();
+    probe_backends_with_env(
+        kernel,
+        BackendEnv {
+            nbd_device_present: has_dev_prefix("nbd"),
+            nbd_module_loaded: Path::new("/sys/module/nbd").exists(),
+            ublk_control_present: Path::new("/dev/ublk-control").exists(),
+        },
+    )
+}
+
+fn probe_backends_with_env(kernel: &KernelFeatures, env: BackendEnv) -> BackendProbe {
     let nbd_enabled = kernel.nbd.is_some_and(KernelConfig::enabled);
     let nbd_status = if nbd_enabled {
         Status::Ok
     } else {
         Status::Fail
     };
-    let nbd_detail = if nbd_device_present {
+    let nbd_detail = if env.nbd_device_present {
         "device-present".to_string()
-    } else if nbd_module_loaded {
+    } else if env.nbd_module_loaded {
         "module-loaded-no-device".to_string()
     } else if nbd_enabled {
         "module-not-loaded".to_string()
@@ -380,19 +430,30 @@ fn probe_backends(kernel: &KernelFeatures) -> BackendProbe {
         "CONFIG_BLK_DEV_NBD disabled or unknown".to_string()
     };
 
-    let ublk_control = Path::new("/dev/ublk-control").exists();
     let ublk_enabled = kernel.ublk.is_some_and(KernelConfig::enabled);
     let io_uring_enabled = kernel.io_uring.is_some_and(KernelConfig::enabled);
-    let ublk_status = if ublk_enabled && ublk_control && io_uring_enabled {
+    let io_uring_runtime_enabled = kernel
+        .io_uring_runtime
+        .is_some_and(IoUringRuntime::enabled_for_ublk);
+    let ublk_status = if ublk_enabled
+        && env.ublk_control_present
+        && io_uring_enabled
+        && io_uring_runtime_enabled
+    {
         Status::Ok
     } else {
         Status::Fail
     };
-    let ublk_detail = match (ublk_enabled, ublk_control, io_uring_enabled) {
-        (true, true, true) => "ready".to_string(),
-        (false, _, _) => "CONFIG_BLK_DEV_UBLK disabled or unknown".to_string(),
-        (_, false, _) => "/dev/ublk-control missing".to_string(),
-        (_, _, false) => "CONFIG_IO_URING disabled or unknown".to_string(),
+    let ublk_detail = if !ublk_enabled {
+        "CONFIG_BLK_DEV_UBLK disabled or unknown".to_string()
+    } else if !env.ublk_control_present {
+        "/dev/ublk-control missing".to_string()
+    } else if !io_uring_enabled {
+        "CONFIG_IO_URING disabled or unknown".to_string()
+    } else if !io_uring_runtime_enabled {
+        io_uring_runtime_detail(kernel.io_uring_runtime)
+    } else {
+        "ready".to_string()
     };
 
     BackendProbe {
@@ -401,6 +462,13 @@ fn probe_backends(kernel: &KernelFeatures) -> BackendProbe {
         ublk_status,
         ublk_detail,
     }
+}
+
+fn io_uring_runtime_detail(value: Option<IoUringRuntime>) -> String {
+    value.map_or_else(
+        || "kernel.io_uring_disabled unknown".to_string(),
+        |value| format!("kernel.io_uring_disabled={}", value.as_sysctl_value()),
+    )
 }
 
 fn has_dev_prefix(prefix: &str) -> bool {
@@ -604,6 +672,10 @@ fn print_text_report(report: &CheckReport) {
     );
     println!("  CONFIG_SWAP: {}", config_text(report.kernel.swap));
     println!("  CONFIG_IO_URING: {}", config_text(report.kernel.io_uring));
+    println!(
+        "  kernel.io_uring_disabled: {}",
+        io_uring_runtime_text(report.kernel.io_uring_runtime)
+    );
     println!("  CONFIG_BLK_DEV_NBD: {}", config_text(report.kernel.nbd));
     println!("  CONFIG_BLK_DEV_UBLK: {}", config_text(report.kernel.ublk));
     println!("  CONFIG_ZRAM: {}", config_text(report.kernel.zram));
@@ -773,7 +845,7 @@ fn render_json(report: &CheckReport) -> String {
             "\"nvidia_smi_status\":{},\"nvidia_smi_output\":{},\"gpu\":{}}},",
             "\"swap\":[{}],",
             "\"kernel\":{{\"config_source\":{},\"CONFIG_SWAP\":{},",
-            "\"CONFIG_IO_URING\":{},\"CONFIG_BLK_DEV_NBD\":{},",
+            "\"CONFIG_IO_URING\":{},\"io_uring_disabled\":{},\"CONFIG_BLK_DEV_NBD\":{},",
             "\"CONFIG_BLK_DEV_UBLK\":{},\"CONFIG_ZRAM\":{}}},",
             "\"backends\":{{\"nbd\":\"{}\",\"nbd_detail\":\"{}\",",
             "\"ublk\":\"{}\",\"ublk_detail\":\"{}\"}},",
@@ -800,6 +872,7 @@ fn render_json(report: &CheckReport) -> String {
         json_opt(report.kernel.config_source.as_deref()),
         json_config(report.kernel.swap),
         json_config(report.kernel.io_uring),
+        json_io_uring_runtime(report.kernel.io_uring_runtime),
         json_config(report.kernel.nbd),
         json_config(report.kernel.ublk),
         json_config(report.kernel.zram),
@@ -876,6 +949,20 @@ fn kib_to_mib(value: u64) -> u64 {
 
 fn config_text(value: Option<KernelConfig>) -> &'static str {
     value.map_or("unknown", KernelConfig::as_str)
+}
+
+fn io_uring_runtime_text(value: Option<IoUringRuntime>) -> String {
+    value.map_or_else(
+        || "unknown".to_string(),
+        |value| value.as_sysctl_value().to_string(),
+    )
+}
+
+fn json_io_uring_runtime(value: Option<IoUringRuntime>) -> String {
+    value.map_or_else(
+        || "null".to_string(),
+        |value| value.as_sysctl_value().to_string(),
+    )
 }
 
 fn one_line(value: &str) -> String {
