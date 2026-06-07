@@ -24,6 +24,7 @@ pub const UBLK_IO_NEED_GET_DATA: u32 = 0x22;
 pub const UBLK_IO_RES_OK: i32 = 0;
 pub const UBLK_IO_RES_NEED_GET_DATA: i32 = 1;
 pub const UBLK_IO_RES_ABORT: i32 = -19; // -ENODEV
+pub const UBLK_IO_RES_EINVAL: i32 = -22;
 
 pub const UBLKSRV_CMD_BUF_OFFSET: u64 = 0;
 pub const UBLKSRV_IO_BUF_OFFSET: u64 = 0x8000_0000;
@@ -138,6 +139,76 @@ pub enum IoRequestError {
     UnsupportedOp(u8),
     LengthOverflow,
     OffsetOverflow,
+}
+
+impl IoRequestError {
+    pub fn ublk_result(self) -> i32 {
+        match self {
+            IoRequestError::UnsupportedOp(_)
+            | IoRequestError::LengthOverflow
+            | IoRequestError::OffsetOverflow => UBLK_IO_RES_EINVAL,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct IoWork {
+    pub qid: u16,
+    pub tag: u16,
+    pub buffer_addr: u64,
+    pub req: Request,
+    pub payload: Vec<u8>,
+}
+
+impl IoWork {
+    pub fn from_desc(
+        qid: u16,
+        tag: u16,
+        desc: IoDesc,
+        payload: Vec<u8>,
+    ) -> Result<Self, IoRequestError> {
+        Ok(Self {
+            qid,
+            tag,
+            buffer_addr: desc.addr,
+            req: desc.to_block_request(tag)?,
+            payload,
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IoCompletion {
+    pub qid: u16,
+    pub tag: u16,
+    pub result: i32,
+}
+
+impl IoCompletion {
+    pub fn ok(qid: u16, tag: u16) -> Self {
+        Self {
+            qid,
+            tag,
+            result: UBLK_IO_RES_OK,
+        }
+    }
+
+    pub fn from_request_error(qid: u16, tag: u16, err: IoRequestError) -> Self {
+        Self {
+            qid,
+            tag,
+            result: err.ublk_result(),
+        }
+    }
+
+    pub fn to_io_cmd(self) -> IoCmd {
+        IoCmd {
+            q_id: self.qid,
+            tag: self.tag,
+            result: self.result,
+            addr_or_zone_append_lba: 0,
+        }
+    }
 }
 
 impl IoDesc {
