@@ -211,3 +211,34 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   `current-wslconfig=disarmed`, `arm-disarm=ok`, `active-uname=6.6.114.1-microsoft-standard-WSL2`,
   `exit=0`.
 - **Gate ainda bloqueado:** kernel custom ainda nao ativo; Fase B/ublk continua pendente ate boot real.
+
+---
+
+## 2026-06-07 — Fase B prep: kernel custom ativo + helpers ublk seguros
+
+- **Kernel custom ativo (humano executou o boot real):** PowerShell reportou
+  `OK: kernel custom bootou (6.6.123.2-microsoft-standard-WSL2+)` e `ublk_drv carregou`.
+  Validado no WSL: `uname -r = 6.6.123.2-microsoft-standard-WSL2+`,
+  `CONFIG_IO_URING=y`, `CONFIG_ZRAM_WRITEBACK=y`, `CONFIG_BLK_DEV_UBLK=m`,
+  `lsmod` com `ublk_drv`, `/proc/misc` com `ublk-control`, `/proc/devices` com
+  `ublk-char`. `/dev/ublk-control` existe fora do sandbox como `crw------- root root 10,261`.
+- **TDD DT-6 (CLI):** commits `25235a8 test(cli): add ublk transport parser RED (#3)` e
+  `4fd0ad7 fix(cli): add generic swap device and ublk transport gate (#3)`.
+  `ramshared-cli cascade up` agora aceita `--transport {nbd,ublk}`, `--swap-dev PATH` e
+  preserva `--nbd` como alias legado. Default segue `nbd` + `/dev/nbd0`.
+  `--transport ublk --connections >1` e o modo ublk real ainda sao rejeitados antes de efeitos
+  colaterais (`servidor io_uring pendente`). Validados:
+  `cargo test -p ramshared-cli cascade::tests`, `cargo test -p ramshared-cli`,
+  `cargo clippy -p ramshared-cli -- -D warnings`.
+- **TDD ublk uAPI/helpers:** commits `0e82031 test(wsl2d): add ublk uapi helper RED (#3)` e
+  `782d3da fix(wsl2d): add safe ublk uapi helpers (#3)`.
+  Novo `crates/ramshared-wsl2d/src/ublk.rs` espelha constantes/layouts `repr(C)` de
+  `include/uapi/linux/ublk_cmd.h` e helpers puros (`IoDesc::operation/flags`,
+  `io_buffer_position`, `decode_io_buffer_position`). Sem `unsafe`, sem `io_uring`, sem dep nova.
+  Unions C foram representadas como campos `*_or_*` para preservar layout sem leitura unsafe.
+- **Evidencia:** RED falhou por `no ublk in the root`; GREEN:
+  `cargo test -p ramshared-wsl2d --test ublk_uapi` (5/5),
+  `cargo test -p ramshared-wsl2d` (21 ok, 1 GPU ignorado, 5 ublk ok),
+  `cargo clippy -p ramshared-wsl2d -- -D warnings`.
+- **Proximo recorte seguro:** implementar/validar gate runtime DT-5 no `check` (Kconfig ublk +
+  io_uring funcional + `/dev/ublk-control`) antes de adicionar crate `io-uring` ou servidor ublk.
