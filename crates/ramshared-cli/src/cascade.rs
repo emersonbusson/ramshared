@@ -308,3 +308,45 @@ pub fn status() -> Result<(), CascadeError> {
     println!("{}", sh("swapon", &["--show"])?);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<UpArgs, CascadeError> {
+        let args = args.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+        parse_up_args_from(&args, "ramshared-wsl2d".to_string())
+    }
+
+    #[test]
+    fn defaults_to_nbd_transport_and_nbd0_swap_dev() {
+        let args = parse(&[]).unwrap();
+
+        assert_eq!(args.transport, Transport::Nbd);
+        assert_eq!(args.swap_dev, "/dev/nbd0");
+        assert_eq!(args.connections, 1);
+    }
+
+    #[test]
+    fn parses_ublk_transport_and_generic_swap_dev() {
+        let args = parse(&["--transport", "ublk", "--swap-dev", "/dev/ublkb0"]).unwrap();
+
+        assert_eq!(args.transport, Transport::Ublk);
+        assert_eq!(args.swap_dev, "/dev/ublkb0");
+    }
+
+    #[test]
+    fn keeps_legacy_nbd_arg_as_swap_dev_alias() {
+        let args = parse(&["--nbd", "/dev/nbd3"]).unwrap();
+
+        assert_eq!(args.transport, Transport::Nbd);
+        assert_eq!(args.swap_dev, "/dev/nbd3");
+    }
+
+    #[test]
+    fn rejects_multi_connection_ublk_for_single_ring_design() {
+        let err = parse(&["--transport", "ublk", "--connections", "2"]).unwrap_err();
+
+        assert!(err.to_string().contains("--connections"));
+    }
+}
