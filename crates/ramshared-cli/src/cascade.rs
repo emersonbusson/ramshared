@@ -13,6 +13,7 @@ use std::time::Duration;
 const SOCK: &str = "/run/ramshared/wsl2d.sock";
 const NBD: &str = "/dev/nbd0";
 const ZRAM_DEV_FILE: &str = "/run/ramshared/zram-dev";
+const SWAP_DEV_FILE: &str = "/run/ramshared/swap-dev";
 
 /// Erro tipado da orquestração da cascata (sem dep externa — segue o padrão do
 /// `CudaError`: enum + `Display` + `Error`). Zero-criatividade: variantes mapeiam os
@@ -102,23 +103,38 @@ fn default_daemon() -> String {
         .unwrap_or_else(|| "ramshared-wsl2d".to_string())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Transport {
+    Nbd,
+    Ublk,
+}
+
+#[derive(Debug)]
 struct UpArgs {
     vram_mb: u64,
     zram_mb: u64,
     daemon: String,
     force: bool,
     connections: u32,
+    transport: Transport,
+    swap_dev: String,
 }
 
 fn parse_up_args() -> Result<UpArgs, CascadeError> {
+    let args: Vec<String> = std::env::args().skip(2).collect(); // pula "ramshared up"
+    parse_up_args_from(&args, default_daemon())
+}
+
+fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, CascadeError> {
     let mut a = UpArgs {
         vram_mb: 1024,
         zram_mb: 1024,
-        daemon: default_daemon(),
+        daemon,
         force: false,
         connections: 1,
+        transport: Transport::Nbd,
+        swap_dev: NBD.to_string(),
     };
-    let args: Vec<String> = std::env::args().skip(2).collect(); // pula "ramshared up"
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -156,10 +172,46 @@ fn parse_up_args() -> Result<UpArgs, CascadeError> {
                     return Err(CascadeError::Arg("--connections deve ser >= 1".into()));
                 }
             }
+            "--transport" => {
+                i += 1;
+                a.transport = match args
+                    .get(i)
+                    .ok_or_else(|| CascadeError::Arg("--transport requer valor".into()))?
+                    .as_str()
+                {
+                    "nbd" => Transport::Nbd,
+                    "ublk" => Transport::Ublk,
+                    other => {
+                        return Err(CascadeError::Arg(format!(
+                            "--transport invalido: {other} (use nbd|ublk)"
+                        )));
+                    }
+                };
+            }
+            "--swap-dev" => {
+                i += 1;
+                a.swap_dev = args
+                    .get(i)
+                    .ok_or_else(|| CascadeError::Arg("--swap-dev requer caminho".into()))?
+                    .clone();
+            }
+            "--nbd" => {
+                i += 1;
+                a.swap_dev = args
+                    .get(i)
+                    .ok_or_else(|| CascadeError::Arg("--nbd requer caminho".into()))?
+                    .clone();
+                a.transport = Transport::Nbd;
+            }
             "--force-no-safety-net" => a.force = true,
             other => return Err(CascadeError::Arg(format!("arg desconhecido: {other}"))),
         }
         i += 1;
+    }
+    if a.transport == Transport::Ublk && a.connections != 1 {
+        return Err(CascadeError::Arg(
+            "--connections > 1 e invalido com --transport ublk (ring unico)".into(),
+        ));
     }
     Ok(a)
 }
@@ -184,6 +236,12 @@ pub fn up() -> Result<(), CascadeError> {
     }
     eprintln!("[up] rede de seguranca A1: {net:?}");
     fs::create_dir_all("/run/ramshared").map_err(|e| CascadeError::Io(e.to_string()))?;
+
+    if a.transport == Transport::Ublk {
+        return Err(CascadeError::Precondition(
+            "transport ublk ainda nao implementado; servidor io_uring pendente".into(),
+        ));
+    }
 
     // Tier zram (HOT, prio alta).
     sh("modprobe", &["zram", "num_devices=1"])?;
@@ -219,7 +277,7 @@ pub fn up() -> Result<(), CascadeError> {
             "--sock",
             SOCK,
             "--nbd",
-            NBD,
+            &a.swap_dev,
         ])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -247,13 +305,14 @@ pub fn up() -> Result<(), CascadeError> {
     if a.connections > 1 {
         nbd_args.extend(["-C", conns.as_str()]);
     }
-    nbd_args.extend(["-unix", SOCK, NBD]);
+    nbd_args.extend(["-unix", SOCK, &a.swap_dev]);
     sh("nbd-client", &nbd_args)?;
-    sh("mkswap", &["-L", "RAMSHARED", NBD])?;
-    sh("swapon", &["-p", &prios.vram.to_string(), NBD])?;
+    sh("mkswap", &["-L", "RAMSHARED", &a.swap_dev])?;
+    sh("swapon", &["-p", &prios.vram.to_string(), &a.swap_dev])?;
+    fs::write(SWAP_DEV_FILE, &a.swap_dev).map_err(|e| CascadeError::Io(e.to_string()))?;
     eprintln!(
-        "[up] VRAM {NBD} (prio {}, {} MiB, {} conexão(ões))",
-        prios.vram, a.vram_mb, a.connections
+        "[up] VRAM {} (prio {}, {} MiB, {} conexão(ões))",
+        a.swap_dev, prios.vram, a.vram_mb, a.connections
     );
     eprintln!(
         "[up] cascata ativa: zram({}) > VRAM({}) > VHDX",
@@ -263,14 +322,17 @@ pub fn up() -> Result<(), CascadeError> {
 }
 
 pub fn down() -> Result<(), CascadeError> {
+    let swap_dev = fs::read_to_string(SWAP_DEV_FILE)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| NBD.to_string());
     // Anti-panic: se a VRAM estiver em swap, swapoff DEVE concluir antes do disconnect.
     let nbd_in_swap = fs::read_to_string("/proc/swaps")
-        .map(|s| s.contains(NBD))
+        .map(|s| s.contains(&swap_dev))
         .unwrap_or(false);
     if nbd_in_swap {
-        sh("swapoff", &[NBD]).map_err(|e| {
+        sh("swapoff", &[&swap_dev]).map_err(|e| {
             CascadeError::Precondition(format!(
-                "swapoff {NBD} falhou ({e}); NAO desconectando (risco de panic) — intervir"
+                "swapoff {swap_dev} falhou ({e}); NAO desconectando (risco de panic) — intervir"
             ))
         })?;
     }
@@ -283,7 +345,7 @@ pub fn down() -> Result<(), CascadeError> {
         }
     }
     // nbd-client -d → daemon recebe EOF, zera a VRAM (§11) e sai sozinho.
-    let _ = sh("nbd-client", &["-d", NBD]);
+    let _ = sh("nbd-client", &["-d", &swap_dev]);
     // Espera ele sair por conta propria (ate ~5s) p/ NAO matar no meio do zero() da
     // VRAM (senao sobra dado residual na GPU). pkill so' como ultimo recurso.
     let mut exited = false;
@@ -300,6 +362,7 @@ pub fn down() -> Result<(), CascadeError> {
     }
     let _ = fs::remove_file(SOCK);
     let _ = fs::remove_file(ZRAM_DEV_FILE);
+    let _ = fs::remove_file(SWAP_DEV_FILE);
     eprintln!("[down] cascata desmontada");
     status()
 }
