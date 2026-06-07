@@ -297,3 +297,21 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Proximo recorte seguro:** introduzir uma fila/ponte ublk-thread -> worker usando tipos puros
   (sem crate `io-uring`) OU fechar a entrada da crate `io-uring 0.7.12` em ADR/LIBRARIES antes do
   primeiro smoke de ring.
+
+---
+
+## 2026-06-07 — Fase B prep: ponte ublk-thread -> worker sem io_uring
+
+- **TDD ponte pura:** commits `01d1a3b test(wsl2d): add pure ublk bridge RED (#3)` e
+  `8a473aa fix(wsl2d): add pure ublk work bridge (#3)`.
+- **Mudanca:** `IoWork` carrega `qid`, `tag`, `buffer_addr`, `Request` e payload para a futura
+  ponte ublk-thread -> worker. `IoCompletion` gera `IoCmd` de commit (`OK=0`) e traduz erros de
+  request para errno negativo (`UBLK_IO_RES_EINVAL=-22`). Tudo segue sem `unsafe`, sem crate
+  `io-uring`, sem abrir FDs, sem criar `/dev/ublkbN` e sem tocar swap.
+- **Evidencia:** RED falhou por `IoWork`/`IoCompletion`/`UBLK_IO_RES_EINVAL` ausentes; GREEN:
+  `cargo test -p ramshared-wsl2d --test ublk_uapi` (11/11),
+  `cargo test -p ramshared-wsl2d` (21 ok, 1 GPU ignorado, 11 ublk ok),
+  `cargo clippy -p ramshared-wsl2d -- -D warnings`.
+- **Proximo recorte seguro:** agora a fronteira pura acabou. Para o primeiro smoke de ring,
+  fechar antes a excecao `io-uring 0.7.12` em ADR/LIBRARIES/Cargo.lock e manter `--transport ublk`
+  gated ate bench ublk vs NBD provar ganho.
