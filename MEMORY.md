@@ -278,3 +278,22 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Descoberta local:** nenhuma ferramenta `ublk`/`ublksrv` instalada no PATH; existe somente
   `/dev/ublk-control` (`crw------- root root 10,261`), sem devices `ublkc*`/`ublkb*` criados.
   Crate candidata atual: `io-uring 0.7.12` (MIT/Apache-2.0, repo tokio-rs/io-uring).
+
+---
+
+## 2026-06-07 — Fase B prep: mapper puro IoDesc ublk -> Request
+
+- **TDD mapper ublk:** commits `4787d63 test(wsl2d): add ublk io desc mapper RED (#3)` e
+  `0ff3a24 fix(wsl2d): map ublk io descriptors to block requests (#3)`.
+- **Mudanca:** `IoDesc::to_block_request(tag)` converte descritores ublk para
+  `ramshared_block::Request` sem `io_uring`/FDs: setores ublk de 512 B viram offset/len em bytes,
+  `READ`/`WRITE`/`DISCARD` viram `Read`/`Write`/`Trim`, `FLUSH` vira request sem faixa,
+  `tag` vira `handle` interno. Overflows de offset/len e ops sem equivalencia segura
+  (ex.: `WRITE_ZEROES`) retornam `IoRequestError`.
+- **Evidencia:** RED falhou por `to_block_request`/`IoRequestError` ausentes; GREEN:
+  `cargo test -p ramshared-wsl2d --test ublk_uapi` (8/8),
+  `cargo test -p ramshared-wsl2d` (21 ok, 1 GPU ignorado, 8 ublk ok),
+  `cargo clippy -p ramshared-wsl2d -- -D warnings`.
+- **Proximo recorte seguro:** introduzir uma fila/ponte ublk-thread -> worker usando tipos puros
+  (sem crate `io-uring`) OU fechar a entrada da crate `io-uring 0.7.12` em ADR/LIBRARIES antes do
+  primeiro smoke de ring.
