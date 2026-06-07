@@ -56,12 +56,19 @@ name = "ramshared-tier"
 version = "0.1.0"
 
 [[package]]
-name = "ramshared-wsl2d"
+name = "ramshared-uring"
 version = "0.1.0"
 dependencies = [
  "io-uring",
+]
+
+[[package]]
+name = "ramshared-wsl2d"
+version = "0.1.0"
+dependencies = [
  "ramshared-block",
  "ramshared-cuda",
  "ramshared-integrity",
  "ramshared-tier",
+ "ramshared-uring",
 ]

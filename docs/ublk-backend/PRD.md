@@ -40,13 +40,14 @@ latência menor (io_uring), sem round-trip socket").
 ## Opção recomendada
 
 **Servidor ublk reusando o worker CUDA único do H1; transporte NBD→io_uring; crate `io-uring`
-auditada encapsulada num módulo fino do daemon.**
+auditada encapsulada pelo wrapper `ramshared-uring`.**
 
 - O daemon ganha um modo ublk: loop io_uring (submit/complete) alimenta o **mesmo** canal
   `WMsg`/worker do H1; o worker serve a VRAM e completa via io_uring.
 - **Tensão de política resolvida:** io_uring hand-rolled foi rejeitado no SPECv2/ADR-0004 porque
   barreiras erradas no ring compartilhado são risco de corrupção no caminho de swap. A exceção
-  userspace é a crate externa `io-uring 0.7.12`; o daemon e a lib continuam sem `unsafe` próprio.
+  userspace é a crate externa `io-uring 0.7.12`, isolada em `ramshared-uring`; o daemon e a lib
+  continuam sem `unsafe` próprio.
 - **Alternativas descartadas:**
   - **`ramshared-uring` hand-rolled** — preserva zero-dep, mas põe barreiras acquire/release sob
     `unsafe` próprio no caminho de swap.
@@ -70,7 +71,8 @@ auditada encapsulada num módulo fino do daemon.**
 ## Requisitos não-funcionais
 
 - **Performance:** latência < NBD (Inferência — medir p50/p99 no kernel).
-- **Segurança:** sem `unsafe` novo no daemon; `unsafe` de ring fica na crate `io-uring`.
+- **Segurança:** sem `unsafe` novo no daemon; `unsafe` de ring fica em `ramshared-uring` e na
+  crate externa `io-uring`.
 - **Resiliência:** falha de io_uring → DEMOTE (como hoje); worst-case #5 no SPEC.
 
 ## Fluxos
@@ -81,8 +83,8 @@ DEMOTE; device removal → teardown zera a VRAM.
 
 ## Modelo de dados
 
-- Módulo ublk do daemon: wrappers finos sobre `io-uring` + uAPI ublk; structs uAPI ficam
-  espelhadas em `crates/ramshared-wsl2d/src/ublk.rs`.
+- `ramshared-uring`: wrappers finos sobre `io-uring`; qualquer `unsafe` de SQE/lifetime fica aqui.
+- Módulo ublk do daemon: uAPI ublk espelhada em `crates/ramshared-wsl2d/src/ublk.rs`.
 
 ## API / Interfaces
 
@@ -101,7 +103,7 @@ DEMOTE; device removal → teardown zera a VRAM.
 
 ## Estratégia de implementação (quando houver kernel)
 
-1. ADR-0004 + LIBRARIES.md: aceitos para `io-uring 0.7.12`. 2. Smoke mínimo de ring sem swap.
+1. ADR-0004 + LIBRARIES.md: aceitos para `ramshared-uring` + `io-uring 0.7.12`. 2. Smoke mínimo de ring sem swap.
 3. Daemon modo ublk reusando worker H1. 4. `--transport ublk` remove o gate só após paridade.
 5. §14 adaptado + bench de latência vs NBD.
 
