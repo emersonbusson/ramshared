@@ -1052,11 +1052,41 @@ CONFIG_BLK_DEV_NBD=m\n\
                 nbd_device_present: false,
                 nbd_module_loaded: false,
                 ublk_control_present: true,
+                ublk_control_openable: true,
             },
         );
 
         assert_eq!(backends.ublk_status, Status::Fail);
         assert_eq!(backends.ublk_detail, "kernel.io_uring_disabled=2");
+    }
+
+    #[test]
+    fn ublk_backend_requires_openable_control_node() {
+        let kernel = KernelFeatures {
+            config_source: Some("/proc/config.gz".to_string()),
+            swap: Some(KernelConfig::BuiltIn),
+            io_uring: Some(KernelConfig::BuiltIn),
+            io_uring_runtime: Some(IoUringRuntime::Enabled),
+            nbd: Some(KernelConfig::Module),
+            ublk: Some(KernelConfig::Module),
+            zram: Some(KernelConfig::Module),
+        };
+
+        let backends = probe_backends_with_env(
+            &kernel,
+            BackendEnv {
+                nbd_device_present: false,
+                nbd_module_loaded: false,
+                ublk_control_present: true,
+                ublk_control_openable: false,
+            },
+        );
+
+        assert_eq!(backends.ublk_status, Status::Fail);
+        assert_eq!(
+            backends.ublk_detail,
+            "/dev/ublk-control not openable; run check as root"
+        );
     }
 
     #[test]
