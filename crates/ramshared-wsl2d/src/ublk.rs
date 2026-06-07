@@ -5,6 +5,10 @@
 //! layouts e helpers puros; abertura de `/dev/ublk-control` e `io_uring` ficam
 //! para recortes posteriores.
 
+use ramshared_block::{Command, Request};
+
+pub const UBLK_SECTOR_SIZE: u64 = 512;
+
 pub const UBLK_CMD_ADD_DEV: u32 = 0x04;
 pub const UBLK_CMD_DEL_DEV: u32 = 0x05;
 pub const UBLK_CMD_START_DEV: u32 = 0x06;
@@ -129,6 +133,13 @@ pub struct IoDesc {
     pub addr: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IoRequestError {
+    UnsupportedOp(u8),
+    LengthOverflow,
+    OffsetOverflow,
+}
+
 impl IoDesc {
     pub fn operation(&self) -> u8 {
         (self.op_flags & 0xff) as u8
@@ -136,6 +147,47 @@ impl IoDesc {
 
     pub fn flags(&self) -> u32 {
         self.op_flags >> 8
+    }
+
+    pub fn to_block_request(&self, tag: u16) -> Result<Request, IoRequestError> {
+        let op = self.operation();
+        let (cmd, offset, len) = match op {
+            UBLK_IO_OP_READ => {
+                let (offset, len) = self.byte_range()?;
+                (Command::Read, offset, len)
+            }
+            UBLK_IO_OP_WRITE => {
+                let (offset, len) = self.byte_range()?;
+                (Command::Write, offset, len)
+            }
+            UBLK_IO_OP_DISCARD => {
+                let (offset, len) = self.byte_range()?;
+                (Command::Trim, offset, len)
+            }
+            UBLK_IO_OP_FLUSH => (Command::Flush, 0, 0),
+            other => return Err(IoRequestError::UnsupportedOp(other)),
+        };
+
+        Ok(Request {
+            flags: 0,
+            cmd,
+            handle: u64::from(tag),
+            offset,
+            len,
+        })
+    }
+
+    fn byte_range(&self) -> Result<(u64, u32), IoRequestError> {
+        let offset = self
+            .start_sector
+            .checked_mul(UBLK_SECTOR_SIZE)
+            .ok_or(IoRequestError::OffsetOverflow)?;
+        let len_bytes = u64::from(self.nr_sectors_or_zones)
+            .checked_mul(UBLK_SECTOR_SIZE)
+            .ok_or(IoRequestError::LengthOverflow)?;
+        let len = u32::try_from(len_bytes).map_err(|_| IoRequestError::LengthOverflow)?;
+
+        Ok((offset, len))
     }
 }
 
