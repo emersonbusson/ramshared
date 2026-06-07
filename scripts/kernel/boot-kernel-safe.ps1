@@ -18,6 +18,7 @@
 .PARAMETER TimeoutSec     Timeout do boot-check (default 60)
 .PARAMETER CheckModules   Módulos a testar pós-boot via modprobe (default "ublk_drv")
 .PARAMETER DryRunConfig   Se setado: só exercita a lógica de Arm/Revert nesse arquivo e sai (teste, não toca o WSL)
+.PARAMETER PreflightOnly  Valida pré-requisitos e arm/desarm em arquivo temporário. Não chama wsl --shutdown.
 #>
 param(
   [string]$KernelPath      = "C:\wsl\kernel-ramshared",
@@ -26,7 +27,8 @@ param(
   [string]$CleanConfig     = "C:\wsl\wslconfig-original.txt",
   [int]   $TimeoutSec      = 60,
   [string]$CheckModules    = "ublk_drv",
-  [string]$DryRunConfig    = ""
+  [string]$DryRunConfig    = "",
+  [switch]$PreflightOnly
 )
 $ErrorActionPreference = "Stop"
 
@@ -82,6 +84,51 @@ if ($DryRunConfig -ne "") {
   $ok = Disarm-Config $DryRunConfig
   $d = @(Select-String -Path $DryRunConfig -Pattern '^\s*kernel=').Count
   Write-Host "DISARM: ok=$ok ; linhas kernel= = $d (esperado 0)"
+  exit 0
+}
+
+# --- Modo PREFLIGHT (não toca no WSL real): valida inputs + dry-run isolado ---
+if ($PreflightOnly) {
+  Write-Host "PREFLIGHT: launcher=$PSCommandPath"
+  Write-Host "PREFLIGHT: kernel=$KernelPath"
+  Write-Host "PREFLIGHT: expected=$ExpectedVersion"
+  if (-not (Test-Path $KernelPath)) { Write-Error "kernel inexistente: $KernelPath" }
+  $kernelSize = (Get-Item $KernelPath).Length
+  if ($kernelSize -le 0) { Write-Error "kernel vazio: $KernelPath" }
+  Write-Host "PREFLIGHT: kernel-size=$kernelSize"
+
+  if (Test-Path $CleanConfig) {
+    if (Select-String -Path $CleanConfig -Pattern '^\s*kernel=' -Quiet) {
+      Write-Error "backup '$CleanConfig' contém kernel=; não é limpo"
+    }
+    Write-Host "PREFLIGHT: clean-config=ok"
+  } else {
+    Write-Warning "PREFLIGHT: CleanConfig ausente; launcher criará se o .wslconfig atual estiver limpo"
+  }
+
+  if ((Test-Path $WslConfig) -and (Select-String -Path $WslConfig -Pattern '^\s*kernel=' -Quiet)) {
+    Write-Warning "PREFLIGHT: .wslconfig atual já contém kernel=; boot real pode já estar armado"
+  } else {
+    Write-Host "PREFLIGHT: current-wslconfig=disarmed"
+  }
+
+  $tmp = Join-Path $env:TEMP ("ramshared-wslconfig-preflight-" + [guid]::NewGuid() + ".txt")
+  if (Test-Path $WslConfig) { Copy-Item $WslConfig $tmp -Force } else { Set-Content $tmp "[wsl2]" -Encoding ASCII }
+  try {
+    Arm-Config $tmp $KernelPath
+    $n = @(Select-String -Path $tmp -Pattern '^\s*kernel=').Count
+    if ($n -ne 1) { Write-Error "dry-run arm gerou $n linhas kernel= (esperado 1)" }
+    if (-not (Disarm-Config $tmp)) { Write-Error "dry-run disarm falhou" }
+    $d = @(Select-String -Path $tmp -Pattern '^\s*kernel=').Count
+    if ($d -ne 0) { Write-Error "dry-run disarm deixou $d linhas kernel= (esperado 0)" }
+    Write-Host "PREFLIGHT: arm-disarm=ok"
+  } finally {
+    Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+  }
+
+  $active = (wsl.exe -e sh -c "uname -r" 2>&1) -join "`n"
+  Write-Host "PREFLIGHT: active-uname=$($active.Trim())"
+  Write-Host "PREFLIGHT: OK (nenhum shutdown executado)"
   exit 0
 }
 

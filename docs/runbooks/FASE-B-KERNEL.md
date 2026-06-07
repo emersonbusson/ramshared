@@ -30,7 +30,12 @@ cp scripts/kernel/boot-kernel-logged.ps1 /mnt/c/wsl/ # wrapper com log persisten
 ```
 
 ```powershell
-# 4. TROCA SEGURA + AUTO-REVERT (no PowerShell do Windows):
+# 4a. PREFLIGHT SEGURO (no PowerShell do Windows; NÃO encerra o WSL):
+powershell -ExecutionPolicy Bypass -File C:\wsl\boot-kernel-logged.ps1 -PreflightOnly
+#    → valida kernel, backup limpo, .wslconfig e arm/desarm em arquivo temporário.
+#    O log fica em C:\wsl\boot-ramshared.log.
+
+# 4b. TROCA SEGURA + AUTO-REVERT (encerra o WSL):
 powershell -ExecutionPolicy Bypass -File C:\wsl\boot-kernel-logged.ps1
 #    → faz backup do .wslconfig, arma, wsl --shutdown, verifica o boot (timeout).
 #    Se NÃO bootar: RESTAURA o .wslconfig e reinicia → volta sozinho ao kernel da Microsoft.
