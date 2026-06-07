@@ -12,18 +12,20 @@ Status: **prep em andamento** (2026-06-07). Kernel custom ativo:
   colaterais.
 - `crates/ramshared-wsl2d/src/ublk.rs` espelha UAPI, layouts `repr(C)`, helpers de posição,
   `IoDesc -> Request`, `IoWork` e `IoCompletion`. Tudo sem `unsafe`, sem FD, sem `io_uring`.
+- `crates/ramshared-uring` encapsula a crate externa `io-uring`; o daemon continua
+  `#![forbid(unsafe_code)]`.
 
 ## Decisão de dependência
 
 ADR-0004 está **Accepted**: usar `io-uring 0.7.12` (MIT/Apache-2.0) no userspace para evitar
 hand-roll de barreiras acquire/release no caminho de swap. A dependência entrou em
-`crates/ramshared-wsl2d/Cargo.toml` no recorte de smoke mínimo do ring; `Cargo.lock` registra
+`crates/ramshared-uring/Cargo.toml` no recorte de smoke mínimo do ring; `Cargo.lock` registra
 `io-uring 0.7.12`, `libc 0.2.186`, `bitflags 2.13.0` e `cfg-if 1.0.4`.
 
 ## Sequência segura
 
-1. **Feito:** adicionar `io-uring 0.7.12` ao daemon e rodar smoke mínimo de ring sem ublk device
-   e sem swap (`io_uring_setup` + `io_uring_enter` sem SQEs).
+1. **Feito:** adicionar `ramshared-uring` + `io-uring 0.7.12` e rodar smoke mínimo de ring sem
+   ublk device e sem swap (`io_uring_setup` + `io_uring_enter` sem SQEs).
 2. Abrir `/dev/ublk-control`/`/dev/ublkcN` só em smoke ublk explícito, ainda sem `swapon`.
 3. Integrar loop ublk com `IoWork`/worker H1; worker CUDA continua único.
 4. Bench ublk vs NBD com número p50/p99. Sem ganho medível: manter NBD e remover a dependência.

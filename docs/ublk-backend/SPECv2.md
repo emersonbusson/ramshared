@@ -18,7 +18,7 @@
 | # | Decisão | Corrige |
 | --- | --- | --- |
 | DT-3 | **A thread io_uring é a ÚNICA dona do ring** (submit + complete). Fluxo: thread io_uring colhe `UBLK_IO_FETCH_REQ` → enfileira `Job` no canal `WMsg` (worker H1) → worker CUDA processa → devolve `Reply` (com o handle do request) por um canal **de volta à thread io_uring** → a thread io_uring submete o `UBLK_IO_COMMIT_AND_FETCH_REQ`. O worker **nunca** toca o ring (espelha exatamente o writer do H1: o worker manda `Reply`, outra thread faz o I/O de saída). Resolve a submissão cross-thread. | H5-1 |
-| DT-1 | **Calibração honesta do `unsafe` (M5-1):** io_uring hand-rolled exige `mmap` das filas SQ/CQ + **barreiras de memória** (`acquire`/`release` nos índices) + protocolo de ring — `unsafe` **qualitativamente mais perigoso** que o `dlopen`+chamadas síncronas do `ramshared-cuda`. ADR-0004 foi aceita em 2026-06-07: usar crate **`io-uring` auditada** (`0.7.12`, MIT/Apache-2.0) em vez de `ramshared-uring` hand-rolled. A exceção quebra zero-dep só no userspace/Fase B e continua gated em bench. | M5-1 |
+| DT-1 | **Calibração honesta do `unsafe` (M5-1):** io_uring hand-rolled exige `mmap` das filas SQ/CQ + **barreiras de memória** (`acquire`/`release` nos índices) + protocolo de ring — `unsafe` **qualitativamente mais perigoso** que o `dlopen`+chamadas síncronas do `ramshared-cuda`. ADR-0004 foi aceita em 2026-06-07: usar crate **`io-uring` auditada** (`0.7.12`, MIT/Apache-2.0) via wrapper `ramshared-uring`, em vez de FFI hand-rolled. A exceção quebra zero-dep só no userspace/Fase B e continua gated em bench. | M5-1 |
 | DT-5 | **Gate completo (M5-2):** exigir `CONFIG_BLK_DEV_UBLK` **e** `io_uring` funcional + `/dev/ublk-control` (o `check` do projeto já sabe checar io_uring). Nota factual: `CONFIG_IO_URING=y` **já existe** no WSL2 atual — falta só o `ublk_drv`. | M5-2 |
 | DT-6 | **Generalizar o device de swap (M5-3):** o DEMOTE/`spawn_swapoff` e o arg `--nbd` viram **`--swap-dev`/`swap_dev`** genérico (`/dev/nbd0` ou `/dev/ublkbN`). Sob ublk a VRAM **continua em swap** (só muda o transporte), então o `swapoff <swap_dev>` do DEMOTE permanece seguro (kernel drena) — diferente do item 4. | M5-3 |
 | DT-2 | **Mantida:** daemon modo ublk reusa o worker H1; `--transport {nbd,ublk}` default `nbd`; ublk substitui NBD na paridade (sem dual-path permanente). | — |
@@ -40,11 +40,13 @@
 
 Desenho **sólido e pronto como spec de design** (kernel-gated). Diferente do item 4, o ublk
 **mantém o DEMOTE seguro** (VRAM segue swap) e o furo de threading foi fechado (DT-3). A decisão
-hand-rolled vs crate foi fechada pela **ADR-0004 Accepted**: usar `io-uring 0.7.12` no primeiro
-smoke de ring. A adoção do ublk em produção continua dependente de bench ublk vs NBD.
+hand-rolled vs crate foi fechada pela **ADR-0004 Accepted**: usar `ramshared-uring` +
+`io-uring 0.7.12` no primeiro smoke de ring. A adoção do ublk em produção continua dependente de
+bench ublk vs NBD.
 
 ## Validação
 
 - **Hoje:** N/A (design-only). Entregue: desenho de threading correto + decisão de política roteada.
 - **Futuro (kernel):** §14 sobre ublk + bench latência ublk vs NBD (justificativa) + `grep unsafe`
-  confinado a `ramshared-cuda` e à crate externa `io-uring` (sem `unsafe` novo no daemon).
+  confinado a `ramshared-cuda`, `ramshared-uring` e à crate externa `io-uring` (sem `unsafe` novo
+  no daemon).

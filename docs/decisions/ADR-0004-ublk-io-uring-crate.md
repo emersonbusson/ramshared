@@ -29,12 +29,13 @@ Forças (fatos):
 ## Decision
 
 Para o servidor ublk **userspace**, usar a **crate `io-uring` auditada** (madura, amplamente
-usada, barreiras corretas) em vez de hand-rollar a FFI num crate `ramshared-uring`. Encapsular o
-uso num módulo fino do daemon; o resto do daemon e a lib seguem `#![forbid(unsafe_code)]`.
+usada, barreiras corretas) em vez de hand-rollar a FFI. Encapsular o uso num crate wrapper
+`ramshared-uring`: ele depende de `io-uring` e isola qualquer `unsafe` exigido por SQE/lifetimes;
+o daemon `ramshared-wsl2d` e a lib principal seguem `#![forbid(unsafe_code)]`.
 
-Versão candidata no momento da ratificação: **`io-uring 0.7.12`**, licença MIT OR Apache-2.0,
+Versão usada no primeiro smoke: **`io-uring 0.7.12`**, licença MIT OR Apache-2.0,
 repo `tokio-rs/io-uring`, `rust-version = 1.63` (`cargo info io-uring`, 2026-06-07).
-Adicionar ao `Cargo.toml` apenas no primeiro recorte que realmente fizer smoke de ring.
+`Cargo.lock` também registra `libc`, `bitflags` e `cfg-if`.
 
 Critério mensurável (anti-halo #11) para a **adoção do ublk em si** permanece gated em bench:
 **latência ublk < NBD por ≥ X%** num kernel custom; sem ganho → **manter NBD** e remover a
@@ -42,8 +43,9 @@ dependência se ela já tiver entrado no smoke. A exceção está registrada em 
 
 ## Consequences
 
-**+** Correção das barreiras de io_uring fica numa lib auditada (não em `unsafe` hand-rolled no
-caminho de swap). Menos superfície de `unsafe` própria. Time foca no que é core (VRAM/CUDA).
+**+** Correção das barreiras de io_uring fica numa lib auditada (não em FFI hand-rolled no
+caminho de swap). A superfície de `unsafe` própria fica restrita ao wrapper `ramshared-uring`
+quando operações reais exigirem `SubmissionQueue::push`.
 **+** ublk é userspace → o módulo de kernel Ring-0 futuro **não herda** essa dep (zero-dep do LKM
 preservado no destino).
 **−** Quebra o zero-dep **userspace** (1 crate + suas transitivas) — **exceção explícita** à

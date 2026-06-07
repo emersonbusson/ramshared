@@ -4,17 +4,8 @@
 //! abrir `/dev/ublk-control` e sem tocar swap. O objetivo é testar o gate de
 //! runtime antes do primeiro loop ublk real.
 
-use std::io;
+pub use ramshared_uring::SmokeReport;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SmokeReport {
-    pub entries: u32,
-    pub submitted: usize,
-}
-
-pub fn run(entries: u32) -> io::Result<SmokeReport> {
-    let ring = io_uring::IoUring::new(entries)?;
-    let submitted = ring.submit()?;
-
-    Ok(SmokeReport { entries, submitted })
+pub fn run(entries: u32) -> std::io::Result<SmokeReport> {
+    ramshared_uring::smoke(entries)
 }
