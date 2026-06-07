@@ -331,3 +331,24 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Sem codigo novo neste checkpoint:** nenhum `Cargo.toml` alterado, nenhum `Cargo.lock` alterado,
   nenhum FD/device/swap tocado. Proximo recorte tecnico: adicionar `io-uring 0.7.12` em smoke
   minimo de ring sem ublk device e sem swap.
+
+---
+
+## 2026-06-07 — Fase B prep: smoke minimo io_uring
+
+- **TDD smoke ring:** commits `f08f4d8 test(wsl2d): add io_uring smoke RED (#3)` e
+  `a52a2bb fix(wsl2d): add io_uring smoke gate (#3)`.
+- **Mudanca:** `ramshared-wsl2d` agora depende de `io-uring 0.7.12`; `Cargo.lock` adicionou
+  `io-uring 0.7.12`, `libc 0.2.186`, `bitflags 2.13.0`, `cfg-if 1.0.4`.
+  Novo `uring_smoke::run(entries)` cria um ring e chama `submit()` sem SQEs, validando
+  `io_uring_setup` + `io_uring_enter` sem `/dev/ublk-control`, sem `/dev/ublkcN`, sem
+  `/dev/ublkbN`, sem `swapon` e sem swap.
+- **Evidencia:** RED falhou por `no uring_smoke in the root`; GREEN:
+  `cargo test -p ramshared-wsl2d --test uring_smoke` (1/1),
+  `cargo test -p ramshared-wsl2d` (21 ok, 1 GPU ignorado, 11 ublk ok, 1 uring ok),
+  `cargo clippy -p ramshared-wsl2d -- -D warnings`,
+  `cargo tree -p ramshared-wsl2d` confirmou apenas as 3 transitivas citadas.
+- **Docs:** `README.md`, `docs/LIBRARIES.md` e `docs/ublk-backend/IMPL.md` atualizados para
+  refletir que a excecao entrou no smoke e continua gated por bench ublk vs NBD.
+- **Proximo recorte seguro:** smoke ublk-control/char device sem `swapon` ou integrar o loop
+  ublk real apenas ate criar `/dev/ublkbN` e removê-lo, mantendo `--transport ublk` gated.
