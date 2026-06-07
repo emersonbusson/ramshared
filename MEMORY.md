@@ -195,3 +195,19 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   Isso chama `wsl --shutdown` e encerra esta sessao. Na volta, rodar `uname -r` e
   `cat /mnt/c/wsl/boot-ramshared.log`. Se o kernel custom estiver ativo, seguir Passo 3 da Fase B
   (`docs/ublk-backend/SPECv2.md`); caso contrario, diagnosticar pelo log.
+
+---
+
+## 2026-06-07 — Fase B prep: preflight PowerShell sem shutdown
+
+- **Restricao do usuario:** PowerShell liberado, mas nao executar comandos que encerrem esta sessao
+  (`wsl --shutdown`/boot real) sem controle humano.
+- **Novo checkpoint:** `d3a99e0 fix(scripts): add WSL kernel preflight mode (#3)` adiciona
+  `-PreflightOnly` ao launcher seguro. Ele valida `kernel-ramshared`, backup limpo, `.wslconfig`
+  desarmado e arm/desarm em arquivo temporario; nao chama `wsl --shutdown`.
+- **Preflight executado via wrapper logado:**
+  `powershell -NoProfile -ExecutionPolicy Bypass -File C:\wsl\boot-kernel-logged.ps1 -PreflightOnly`.
+  Resultado em `C:\wsl\boot-ramshared.log`: `kernel-size=16027648`, `clean-config=ok`,
+  `current-wslconfig=disarmed`, `arm-disarm=ok`, `active-uname=6.6.114.1-microsoft-standard-WSL2`,
+  `exit=0`.
+- **Gate ainda bloqueado:** kernel custom ainda nao ativo; Fase B/ublk continua pendente ate boot real.
