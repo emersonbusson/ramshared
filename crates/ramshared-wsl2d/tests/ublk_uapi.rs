@@ -12,6 +12,7 @@ fn ublk_uapi_constants_match_kernel_header() {
     assert_eq!(ublk::UBLK_CMD_SET_PARAMS, 0x08);
     assert_eq!(ublk::UBLK_CMD_GET_PARAMS, 0x09);
     assert_eq!(ublk::UBLK_CMD_GET_DEV_INFO2, 0x12);
+    assert_eq!(ublk::UBLK_U_CMD_GET_FEATURES, 0x8020_7513);
 
     assert_eq!(ublk::UBLK_IO_FETCH_REQ, 0x20);
     assert_eq!(ublk::UBLK_IO_COMMIT_AND_FETCH_REQ, 0x21);
@@ -20,6 +21,8 @@ fn ublk_uapi_constants_match_kernel_header() {
     assert_eq!(ublk::UBLK_IO_RES_NEED_GET_DATA, 1);
 
     assert_eq!(ublk::UBLKSRV_IO_BUF_OFFSET, 0x8000_0000);
+    assert_eq!(ublk::UBLK_FEATURES_LEN, 8);
+    assert_eq!(ublk::UBLK_QUEUE_ID_NONE, u16::MAX);
     assert_eq!(ublk::UBLK_MAX_QUEUE_DEPTH, 4096);
     assert_eq!(ublk::UBLK_IO_BUF_BITS, 25);
     assert_eq!(ublk::UBLK_TAG_BITS, 16);
@@ -32,9 +35,7 @@ fn ublk_uapi_constants_match_kernel_header() {
 #[test]
 fn io_desc_extracts_operation_and_flags_like_kernel_inline_helpers() {
     let desc = ublk::IoDesc {
-        op_flags: ublk::UBLK_IO_OP_WRITE as u32
-            | ublk::UBLK_IO_F_FUA
-            | ublk::UBLK_IO_F_SWAP,
+        op_flags: ublk::UBLK_IO_OP_WRITE as u32 | ublk::UBLK_IO_F_FUA | ublk::UBLK_IO_F_SWAP,
         nr_sectors_or_zones: 8,
         start_sector: 16,
         addr: 0x1000,
