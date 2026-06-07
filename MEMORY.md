@@ -261,3 +261,20 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Proximo recorte seguro:** antes de servidor ublk completo, decidir entre (a) smoke/gate de
   permissao de `/dev/ublk-control` sem criar device ou (b) fechar ADR/dep `io-uring` com numero
   de crate/lockfile e bench plan. Nao iniciar `swapon`/pressao de memoria nesse recorte.
+
+---
+
+## 2026-06-07 — Fase B prep: gate de permissao do ublk-control
+
+- **TDD DT-5/permissao:** commits `0278e09 test(cli): add ublk control access RED (#3)` e
+  `78738c1 fix(cli): require ublk control access in check (#3)`.
+- **Mudanca:** `ramshared check` agora exige abrir `/dev/ublk-control` com `O_RDWR` para marcar
+  `ublk=ok`. O probe nao executa ioctl, nao cria `/dev/ublkcN`/`/dev/ublkbN`, e nao toca swap.
+  Sem permissao, detalhe: `/dev/ublk-control not openable; run check as root`.
+- **Evidencia:** `cargo test -p ramshared-cli` (11/11), `cargo clippy -p ramshared-cli -- -D warnings`.
+  `cargo run -p ramshared-cli -- check --json` como usuario normal: `ublk=fail` por permissao,
+  `decision=ready` via NBD. `sudo -n target/debug/ramshared check --json`: `ublk=ok`,
+  `io_uring_disabled=0`, `decision=ready`.
+- **Descoberta local:** nenhuma ferramenta `ublk`/`ublksrv` instalada no PATH; existe somente
+  `/dev/ublk-control` (`crw------- root root 10,261`), sem devices `ublkc*`/`ublkb*` criados.
+  Crate candidata atual: `io-uring 0.7.12` (MIT/Apache-2.0, repo tokio-rs/io-uring).
