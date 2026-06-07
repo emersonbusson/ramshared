@@ -26,14 +26,15 @@ sudo bash scripts/kernel/qemu-validate.sh ~/WSL2-Linux-Kernel/arch/x86/boot/bzIm
 # 3. copia o bzImage p/ o Windows
 mkdir -p /mnt/c/wsl && cp ~/WSL2-Linux-Kernel/arch/x86/boot/bzImage /mnt/c/wsl/kernel-ramshared
 cp scripts/kernel/boot-kernel-safe.ps1 /mnt/c/wsl/   # launcher auto-curável
+cp scripts/kernel/boot-kernel-logged.ps1 /mnt/c/wsl/ # wrapper com log persistente
 ```
 
 ```powershell
 # 4. TROCA SEGURA + AUTO-REVERT (no PowerShell do Windows):
-powershell -ExecutionPolicy Bypass -File C:\wsl\boot-kernel-safe.ps1 `
-  -KernelPath C:\wsl\kernel-ramshared -ExpectedVersion "<release>"
+powershell -ExecutionPolicy Bypass -File C:\wsl\boot-kernel-logged.ps1
 #    → faz backup do .wslconfig, arma, wsl --shutdown, verifica o boot (timeout).
 #    Se NÃO bootar: RESTAURA o .wslconfig e reinicia → volta sozinho ao kernel da Microsoft.
+#    O log fica em C:\wsl\boot-ramshared.log.
 #    Teste a lógica de arm sem tocar o WSL:  ... -DryRunConfig C:\wsl\test.txt
 ```
 
