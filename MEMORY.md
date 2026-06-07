@@ -315,3 +315,19 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Proximo recorte seguro:** agora a fronteira pura acabou. Para o primeiro smoke de ring,
   fechar antes a excecao `io-uring 0.7.12` em ADR/LIBRARIES/Cargo.lock e manter `--transport ublk`
   gated ate bench ublk vs NBD provar ganho.
+
+---
+
+## 2026-06-07 — Fase B prep: ADR io-uring aceita e IMPL criado
+
+- **Checkpoint documental:** commit `8255d6b docs: accept gated io-uring dependency for ublk (#3)`.
+- **Mudanca:** ADR-0004 saiu de `Proposed` para `Accepted`: usar `io-uring 0.7.12`
+  (MIT/Apache-2.0, repo tokio-rs/io-uring) no userspace/Fase B, em vez de FFI hand-rolled.
+  A excecao quebra zero-dep apenas no caminho ublk e permanece gated por bench ublk vs NBD.
+- **Docs sincronizados no escopo:** `docs/LIBRARIES.md` registra a excecao gated; `README.md`
+  troca "zero deps externas" absoluto por "caminho atual zero deps externas"; `SPECv2.md` e
+  `PRD.md` deixam a decisao como fechada; `SPEC.md` antigo fica marcado como superseded/no-go;
+  novo `docs/ublk-backend/IMPL.md` fixa a sequencia segura.
+- **Sem codigo novo neste checkpoint:** nenhum `Cargo.toml` alterado, nenhum `Cargo.lock` alterado,
+  nenhum FD/device/swap tocado. Proximo recorte tecnico: adicionar `io-uring 0.7.12` em smoke
+  minimo de ring sem ublk device e sem swap.
