@@ -161,3 +161,57 @@ fn io_desc_rejects_unsupported_ops_and_byte_length_overflow() {
         Err(ublk::IoRequestError::LengthOverflow)
     );
 }
+
+#[test]
+fn io_work_carries_worker_request_and_ublk_identity() {
+    let desc = ublk::IoDesc {
+        op_flags: ublk::UBLK_IO_OP_WRITE as u32,
+        nr_sectors_or_zones: 8,
+        start_sector: 4,
+        addr: 0x5000,
+    };
+    let payload = vec![0xA5; 4096];
+
+    let work = ublk::IoWork::from_desc(3, 9, desc, payload.clone()).expect("work");
+
+    assert_eq!(work.qid, 3);
+    assert_eq!(work.tag, 9);
+    assert_eq!(work.buffer_addr, 0x5000);
+    assert_eq!(work.req.cmd, Command::Write);
+    assert_eq!(work.req.handle, 9);
+    assert_eq!(work.req.offset, 2048);
+    assert_eq!(work.req.len, 4096);
+    assert_eq!(work.payload, payload);
+}
+
+#[test]
+fn io_completion_encodes_ok_commit_command() {
+    let cmd = ublk::IoCompletion::ok(2, 11).to_io_cmd();
+
+    assert_eq!(cmd.q_id, 2);
+    assert_eq!(cmd.tag, 11);
+    assert_eq!(cmd.result, ublk::UBLK_IO_RES_OK);
+    assert_eq!(cmd.addr_or_zone_append_lba, 0);
+}
+
+#[test]
+fn io_completion_maps_translation_error_to_negative_errno() {
+    let err = ublk::IoWork::from_desc(
+        2,
+        11,
+        ublk::IoDesc {
+            op_flags: ublk::UBLK_IO_OP_WRITE_ZEROES as u32,
+            nr_sectors_or_zones: 8,
+            start_sector: 0,
+            addr: 0,
+        },
+        Vec::new(),
+    )
+    .unwrap_err();
+
+    let cmd = ublk::IoCompletion::from_request_error(2, 11, err).to_io_cmd();
+
+    assert_eq!(cmd.q_id, 2);
+    assert_eq!(cmd.tag, 11);
+    assert_eq!(cmd.result, ublk::UBLK_IO_RES_EINVAL);
+}
