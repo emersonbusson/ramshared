@@ -242,3 +242,22 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   `cargo clippy -p ramshared-wsl2d -- -D warnings`.
 - **Proximo recorte seguro:** implementar/validar gate runtime DT-5 no `check` (Kconfig ublk +
   io_uring funcional + `/dev/ublk-control`) antes de adicionar crate `io-uring` ou servidor ublk.
+
+---
+
+## 2026-06-07 — Fase B prep: gate runtime ublk/io_uring no check
+
+- **TDD DT-5 (`check`):** commits `4626e78 test(cli): add io_uring runtime gate RED (#3)` e
+  `d530959 fix(cli): require io_uring runtime for ublk check (#3)`.
+- **Mudanca:** `ramshared check` agora le `/proc/sys/kernel/io_uring_disabled` e so marca
+  `ublk=ok` quando `CONFIG_BLK_DEV_UBLK` esta habilitado, `/dev/ublk-control` existe,
+  `CONFIG_IO_URING` esta habilitado **e** `kernel.io_uring_disabled=0`.
+  Valores `1`, `2` ou desconhecido rebaixam `ublk` para `fail` com detalhe explicito
+  (`kernel.io_uring_disabled=<n>` ou `unknown`). JSON ganhou `kernel.io_uring_disabled`.
+- **Evidencia:** RED falhou por simbolos/campo ausentes; GREEN:
+  `cargo test -p ramshared-cli` (10/10), `cargo clippy -p ramshared-cli -- -D warnings`.
+  Execucao real via `cargo run -p ramshared-cli -- check --json` no kernel custom:
+  `CONFIG_BLK_DEV_UBLK=m`, `io_uring_disabled=0`, `ublk=ok`, `decision=ready`.
+- **Proximo recorte seguro:** antes de servidor ublk completo, decidir entre (a) smoke/gate de
+  permissao de `/dev/ublk-control` sem criar device ou (b) fechar ADR/dep `io-uring` com numero
+  de crate/lockfile e bench plan. Nao iniciar `swapon`/pressao de memoria nesse recorte.
