@@ -380,6 +380,14 @@ impl UblkServer {
             .collect()
     }
 
+    /// Bloqueia até chegar ao menos um CQE (próximo request servido ou abort do
+    /// teardown) e então drena. Não submete SQEs novos (FETCH/COMMIT já foram
+    /// submetidos por `submit_initial_fetch`/`commit_and_fetch`).
+    pub fn wait_and_drain(&mut self) -> io::Result<Vec<UblkCompletion>> {
+        self.ring.submit_and_wait(1)?;
+        Ok(self.drain())
+    }
+
     /// Bytes do `ublksrv_io_desc` da `tag` (somente leitura, do `mmap`).
     pub fn io_desc_bytes(&self, tag: u16) -> &[u8] {
         let start = usize::from(tag) * Self::IO_DESC_SIZE;
