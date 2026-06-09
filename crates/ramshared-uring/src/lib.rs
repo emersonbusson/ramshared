@@ -190,3 +190,24 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
         Ok(result)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fetch_cmd80_packs_ublksrv_io_cmd_in_first_16_bytes() {
+        let cmd = fetch_cmd80(0, 7, 0xdead_beef);
+
+        assert_eq!(u16::from_ne_bytes([cmd[0], cmd[1]]), 0);
+        assert_eq!(u16::from_ne_bytes([cmd[2], cmd[3]]), 7);
+        assert_eq!(i32::from_ne_bytes([cmd[4], cmd[5], cmd[6], cmd[7]]), 0);
+        assert_eq!(
+            u64::from_ne_bytes([
+                cmd[8], cmd[9], cmd[10], cmd[11], cmd[12], cmd[13], cmd[14], cmd[15],
+            ]),
+            0xdead_beef
+        );
+        assert!(cmd[16..].iter().all(|&b| b == 0));
+    }
+}
