@@ -2,6 +2,7 @@ use ramshared_block::BlockBackend;
 use ramshared_wsl2d::{ublk, ublk_control, ublk_server};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -323,6 +324,107 @@ fn vram_ublk_round_trips_as_swap_device() {
     guard.disarm();
     wait_until_missing(&char_path);
     assert_eq!(ublk_nodes(), before);
+}
+
+#[test]
+#[ignore = "requires root + CUDA GPU; mede latencia de leitura 4KB do ublk-VRAM, no swap"]
+fn bench_vram_ublk_read_latency() {
+    let report = ublk_control::add_device(UBLK_CONTROL, ublk_control::DeviceSpec::smoke_auto())
+        .expect("ublk ADD_DEV");
+    let mut guard = DeviceGuard::new(report.dev_id);
+
+    let block_size = 4096u32;
+    let dev_sectors = 16 * 1024 * 1024 / SECTOR; // 16 MiB
+    ublk_control::set_params(
+        UBLK_CONTROL,
+        report.dev_id,
+        ublk::Params::basic_disk(dev_sectors, 12, 12),
+    )
+    .expect("ublk SET_PARAMS");
+
+    let char_path = format!("/dev/ublkc{}", report.dev_id);
+    let block_path = format!("/dev/ublkb{}", report.dev_id);
+    let vram_bytes = (dev_sectors * SECTOR) as usize;
+    let server = ublk_server::spawn_server_dt3_vram(
+        &char_path,
+        report.queue_depth,
+        64 * 1024,
+        vram_bytes,
+        block_size,
+    )
+    .expect("spawn DT-3 VRAM server");
+    ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())
+        .expect("ublk START_DEV");
+
+    let n_blocks = vram_bytes / block_size as usize;
+    let (p50, p90, p99, p999, max) = bench_read_latency(&block_path, block_size, n_blocks);
+    println!(
+        "ublk-VRAM 4KB READ O_DIRECT (n=4000): p50={p50:?} p90={p90:?} p99={p99:?} p99.9={p999:?} max={max:?}"
+    );
+    // Sanidade: latencia plausivel (microssegundos a poucos ms), nao travada.
+    assert!(p50 < Duration::from_millis(50), "p50 implausivel: {p50:?}");
+
+    ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
+    server.join().expect("DT-3 VRAM server terminou ok");
+    ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
+    guard.disarm();
+    wait_until_missing(&char_path);
+}
+
+/// Mede a latencia de leituras 4KB `O_DIRECT` (cada uma bate no device, sem cache)
+/// em offsets pseudo-aleatorios. Retorna (p50, p90, p99, p99.9, max).
+fn bench_read_latency(
+    path: &str,
+    block_size: u32,
+    n_blocks: usize,
+) -> (Duration, Duration, Duration, Duration, Duration) {
+    const O_DIRECT: i32 = 0o40000; // x86_64 Linux
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_DIRECT)
+        .open(path)
+        .expect("open O_DIRECT");
+
+    let bs = block_size as usize;
+    // Buffer alinhado ao block size (exigencia do O_DIRECT).
+    let mut raw = vec![0u8; bs * 2];
+    let pad = (bs - (raw.as_ptr() as usize % bs)) % bs;
+    let n = n_blocks as u64;
+
+    // xorshift64 para offsets pseudo-aleatorios alinhados.
+    let mut x = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next_off = || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        (x % n) * bs as u64
+    };
+
+    for _ in 0..128 {
+        let off = next_off();
+        file.read_exact_at(&mut raw[pad..pad + bs], off)
+            .expect("warmup");
+    }
+
+    let iters = 4000usize;
+    let mut lat = Vec::with_capacity(iters);
+    for _ in 0..iters {
+        let off = next_off();
+        let t = Instant::now();
+        file.read_exact_at(&mut raw[pad..pad + bs], off)
+            .expect("read");
+        lat.push(t.elapsed());
+    }
+    lat.sort_unstable();
+    let last = lat.len() - 1;
+    let pct = |q: usize| lat[last * q / 100];
+    (
+        pct(50),
+        pct(90),
+        pct(99),
+        lat[lat.len() * 999 / 1000],
+        lat[last],
+    )
 }
 
 fn run_ok(cmd: &str, args: &[&str]) {
