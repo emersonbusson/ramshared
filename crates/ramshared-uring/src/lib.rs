@@ -191,6 +191,85 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
     }
 }
 
+/// Conclusão de um comando ublk no ring (CQE): `tag` (do `user_data`) e `result`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UblkCompletion {
+    pub tag: u16,
+    pub result: i32,
+}
+
+/// Ring io_uring persistente que submete `UBLK_U_IO_FETCH_REQ` para as tags de uma
+/// fila ublk **sem esperar CQE** (o driver estaciona cada comando em `-EIOCBQUEUED`
+/// até haver I/O ou abort). É dono dos buffers de dados enquanto os FETCH pendem.
+pub struct UblkFetchRing {
+    ring: IoUring<squeue::Entry128>,
+    /// Buffers de dados por tag: o `addr` de cada FETCH aponta para o respectivo
+    /// buffer, que precisa permanecer vivo enquanto o comando está estacionado.
+    /// Não é lido diretamente; existe só para garantir o lifetime (drop guard).
+    #[allow(dead_code)]
+    buffers: Vec<Vec<u8>>,
+}
+
+impl UblkFetchRing {
+    /// Submete `FETCH_REQ` para as tags `[0, queue_depth)` da fila 0 do `fd`, cada
+    /// uma com um buffer de `buf_size` bytes. Não espera CQE (`submit()`/want=0). O
+    /// `fd` deve permanecer aberto pelo chamador enquanto este ring existir.
+    pub fn submit_fetch_all(fd: RawFd, queue_depth: u16, buf_size: usize) -> io::Result<Self> {
+        const UBLK_U_IO_FETCH_REQ: u32 = 0xc010_7520;
+        const QUEUE_ID_ZERO: u16 = 0;
+
+        let entries = u32::from(queue_depth).max(1).next_power_of_two();
+        let mut ring = IoUring::<squeue::Entry128>::builder().build(entries)?;
+        let mut buffers: Vec<Vec<u8>> = (0..queue_depth).map(|_| vec![0u8; buf_size]).collect();
+
+        for tag in 0..queue_depth {
+            let addr = buffers[usize::from(tag)].as_mut_ptr() as u64;
+            let cmd = fetch_cmd80(QUEUE_ID_ZERO, tag, addr);
+            let entry = opcode::UringCmd80::new(types::Fd(fd), UBLK_U_IO_FETCH_REQ)
+                .cmd(cmd)
+                .build()
+                .user_data(u64::from(tag));
+
+            // SAFETY: `cmd` (incluindo `addr`) é copiado para a SQE no `push`. O
+            // `addr` aponta para `buffers[tag]`, que vive dentro deste struct
+            // enquanto os FETCH estão estacionados; o kernel só tocaria o buffer ao
+            // servir I/O, que exige `START_DEV` (não chamado neste caminho).
+            unsafe {
+                ring.submission()
+                    .push(&entry)
+                    .map_err(|_| io::Error::other("io_uring submission queue is full"))?;
+            }
+        }
+
+        // Não bloqueia (want=0); os FETCH ficam pendentes no driver.
+        ring.submit()?;
+
+        Ok(Self { ring, buffers })
+    }
+
+    /// Drena os CQEs disponíveis no momento, sem bloquear.
+    pub fn drain(&mut self) -> Vec<UblkCompletion> {
+        self.ring
+            .completion()
+            .map(|cqe| UblkCompletion {
+                tag: cqe.user_data() as u16,
+                result: cqe.result(),
+            })
+            .collect()
+    }
+}
+
+/// Empacota um `struct ublksrv_io_cmd` (16 B: q_id, tag, result=0, addr) nos
+/// primeiros bytes do buffer de 80 B da SQE `UringCmd80`; o restante fica zerado.
+fn fetch_cmd80(q_id: u16, tag: u16, addr: u64) -> [u8; 80] {
+    let mut cmd = [0u8; 80];
+    cmd[0..2].copy_from_slice(&q_id.to_ne_bytes());
+    cmd[2..4].copy_from_slice(&tag.to_ne_bytes());
+    // result (bytes 4..8) = 0 no envio.
+    cmd[8..16].copy_from_slice(&addr.to_ne_bytes());
+    cmd
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

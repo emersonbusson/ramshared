@@ -77,6 +77,8 @@ fn fetch_req_parks_until_delete_aborts_without_starting_device() {
     let mut guard = DeviceGuard::new(report.dev_id);
 
     let char_path = format!("/dev/ublkc{}", report.dev_id);
+    let want = usize::from(report.queue_depth);
+
     let mut session = ublk_queue::FetchSession::open(&char_path, report.queue_depth, 4096)
         .expect("abrir char device + submeter FETCH_REQ");
 
@@ -86,20 +88,24 @@ fn fetch_req_parks_until_delete_aborts_without_starting_device() {
         "FETCH nao deveria completar sem I/O nem START_DEV"
     );
 
-    // DEL_DEV faz o driver abortar os FETCH estacionados (UBLK_IO_RES_ABORT = -ENODEV).
+    // O DEL_DEV posta os aborts (ublk_cancel_dev) e entao espera o char device fechar
+    // (wait_event idr_freed, ublk_drv.c:2523). Esta thread e a dona unica do ring
+    // (DT-3): drena os aborts e, ao terminar, dropa o `session` (fecha o char),
+    // desbloqueando o DEL_DEV. Sem o drain concorrente o controle trava.
+    let drainer = thread::spawn(move || {
+        let mut aborts = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while aborts.len() < want && Instant::now() < deadline {
+            aborts.extend(session.drain());
+            thread::sleep(Duration::from_millis(5));
+        }
+        aborts
+    });
+
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
     guard.disarm();
 
-    let want = usize::from(report.queue_depth);
-    let mut aborts = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while aborts.len() < want && Instant::now() < deadline {
-        aborts.extend(session.drain());
-        if aborts.len() < want {
-            thread::sleep(Duration::from_millis(10));
-        }
-    }
-
+    let aborts = drainer.join().expect("drainer thread");
     assert_eq!(
         aborts.len(),
         want,
@@ -113,7 +119,6 @@ fn fetch_req_parks_until_delete_aborts_without_starting_device() {
         );
     }
 
-    drop(session);
     wait_until_missing(&char_path);
     assert_eq!(ublk_nodes(), before);
 }
