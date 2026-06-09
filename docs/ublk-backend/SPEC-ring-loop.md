@@ -225,3 +225,13 @@ Rollback: sem ganho no bench → manter NBD e remover a dependência `io-uring`/
 - **Entry point:** o worker H1 está inlined em `main.rs::run()` (NBD). Criar um
   `spawn_ublk_worker` dedicado (loop `Receiver<IoWork>` → `serve_request` → `Sender<WorkerReply>`)
   — `serve_request`/`VramBackend` reusados verbatim; só o wrapper de loop é novo.
+
+### Status DT-3 (IMPL com RAM — falta só VRAM)
+
+- **Feito (sem GPU):** `spawn_ublk_worker` (worker) + `spawn_server_dt3` (ring owner) +
+  `WorkerReply` em `ublk_server.rs`; `serve_request` unificado em `Request`. Smoke DT-3 root passa
+  (READ via block device, teardown sem deadlock) + worker testado puro. A **arquitetura alvo está
+  validada com RamBackend** — ring owner e worker em threads separadas, do jeito que o VRAM exige.
+- **Falta (VRAM, gated/GPU):** variante **factory** de `spawn_server_dt3`/`spawn_ublk_worker` que
+  cria o stack `Cuda`/`Context`/`DeviceMem` **na thread do worker** (o `VramBackend` é
+  `!Send`/`!'static` — `DeviceMem<'c,'a>` borrows `Context`); smoke GPU; bench p50/p99; `swapon`.
