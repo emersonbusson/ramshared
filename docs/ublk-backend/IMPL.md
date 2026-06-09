@@ -22,6 +22,10 @@ Status: **prep em andamento** (2026-06-07). Kernel custom ativo:
 - `ublk.rs` modela as ops de IO **codificadas** (`UBLK_U_IO_FETCH_REQ`/`COMMIT_AND_FETCH_REQ`/
   `NEED_GET_DATA`) e `IoCmd::fetch`/`IoCmd::to_bytes` (layout `ublksrv_io_cmd` de 16 B). Encoding
   puro, pronto para a SQE; sem ring, sem `mmap`, sem `unsafe`.
+- **M1:** `ublk_queue::read_io_desc` mapeia o buffer de io-desc de `/dev/ublkcN` **read-only**
+  (`MmapRo` RAII + `page_size`/`round_up_to_page` em `ramshared-uring`) e decodifica por tag
+  (`IoDesc::from_ne_bytes`). Smoke root: `mmap` da fila 0 sem `START_DEV`, io-desc zerado, `/dev`
+  intacto. Todo `unsafe` novo fica em `ramshared-uring`; o daemon-lib segue `#![forbid(unsafe_code)]`.
 
 ## Decisão de dependência
 
@@ -41,8 +45,9 @@ hand-roll de barreiras acquire/release no caminho de swap. A dependência entrou
    `unsafe` em `ramshared-uring`) e ring que submete `FETCH_REQ` **sem** esperar CQE (driver para
    em `-EIOCBQUEUED` até I/O ou abort). Desenho verificado em
    [`SPEC-ring-loop.md`](SPEC-ring-loop.md): threading DT-3, layout de `mmap`, barreiras na crate
-   `io-uring`, teardown/abort (`UBLK_IO_RES_ABORT = -ENODEV`). Próximos recortes TDD: **M1**
-   (`mmap` read-only) e **M2** (`FETCH` no-wait), ambos sem `START_DEV` nem `swapon`.
+   `io-uring`, teardown/abort (`UBLK_IO_RES_ABORT = -ENODEV`). **M1** (`mmap` read-only) **feito**
+   (`ublk_queue::read_io_desc` + `MmapRo`); próximo **M2** (`FETCH` no-wait), ambos sem `START_DEV`
+   nem `swapon`.
 4. Bench ublk vs NBD com número p50/p99. Sem ganho medível: manter NBD e remover a dependência.
 
 ## Rollback trigger
