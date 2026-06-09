@@ -26,6 +26,11 @@ Status: **prep em andamento** (2026-06-07). Kernel custom ativo:
   (`MmapRo` RAII + `page_size`/`round_up_to_page` em `ramshared-uring`) e decodifica por tag
   (`IoDesc::from_ne_bytes`). Smoke root: `mmap` da fila 0 sem `START_DEV`, io-desc zerado, `/dev`
   intacto. Todo `unsafe` novo fica em `ramshared-uring`; o daemon-lib segue `#![forbid(unsafe_code)]`.
+- **M2:** `UblkFetchRing` (em `ramshared-uring`) submete `FETCH_REQ` para as tags da fila 0 sem
+  esperar CQE (`submit()`/want=0; `unsafe push` isolado; `fetch_cmd80` monta o `ublksrv_io_cmd`).
+  `ublk_queue::FetchSession` segura char device + ring. Smoke root: FETCH estacionado (drain
+  vazio); `DEL_DEV` aborta (`-ENODEV`) com o ring drenado numa **thread dona do ring** (DT-3) —
+  necessário porque o `DEL_DEV` bloqueia esperando o char fechar. `/dev` intacto, sem `START_DEV`.
 
 ## Decisão de dependência
 
@@ -45,9 +50,9 @@ hand-roll de barreiras acquire/release no caminho de swap. A dependência entrou
    `unsafe` em `ramshared-uring`) e ring que submete `FETCH_REQ` **sem** esperar CQE (driver para
    em `-EIOCBQUEUED` até I/O ou abort). Desenho verificado em
    [`SPEC-ring-loop.md`](SPEC-ring-loop.md): threading DT-3, layout de `mmap`, barreiras na crate
-   `io-uring`, teardown/abort (`UBLK_IO_RES_ABORT = -ENODEV`). **M1** (`mmap` read-only) **feito**
-   (`ublk_queue::read_io_desc` + `MmapRo`); próximo **M2** (`FETCH` no-wait), ambos sem `START_DEV`
-   nem `swapon`.
+   `io-uring`, teardown/abort (`UBLK_IO_RES_ABORT = -ENODEV`). **M1** (`mmap`) e **M2** (`FETCH`
+   no-wait + teardown via thread dona do ring) **feitos**; próximo **M3** (`START_DEV` + loop
+   ring↔worker H1), **gated** por bench e fora deste prep.
 4. Bench ublk vs NBD com número p50/p99. Sem ganho medível: manter NBD e remover a dependência.
 
 ## Rollback trigger
