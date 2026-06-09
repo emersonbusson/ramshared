@@ -85,8 +85,10 @@ lógica do daemon.**
 3. STOP_DEV/join travando (improvável — F1 valida a sequência em-processo).
 
 **Recipe de validação em qemu (host-safe: uma VM não trava o host):**
-1. **Modo RAM-backed no daemon** (`--backend ram` → `spawn_server_dt3` com `RamBackend`, sem GPU). O
-   bug de teardown é **independente do backend** (RAM exercita o mesmo ciclo ublk + sinal).
+1. **Modo RAM-backed no daemon — FEITO** (`--backend ram` → `spawn_server_dt3` com `RamBackend`, sem
+   GPU, sem residência; `run_ublk` faz branch via `BackendKind`/`UblkHandle`). O bug de teardown é
+   **independente do backend** (RAM exercita o mesmo ciclo ublk + sinal). Compila + clippy OK; não
+   rodado no WSL2 (gated). `--transport ublk --backend ram --size 8`.
 2. **Rootfs qemu** com: kernel WSL2 (`CONFIG_BLK_DEV_UBLK=m`), `ublk_drv.ko`, o binário
    `ramshared-wsl2d`, busybox, e um `/init` que: `insmod ublk_drv` → sobe o daemon
    `--transport ublk --backend ram --size 8` → espera `/dev/ublkbN` → `dd` write+read → `kill -TERM`
@@ -98,7 +100,8 @@ lógica do daemon.**
 
 **Endurecimento do harness (pra quando rodar):** nunca `child.kill()` (SIGKILL) com device vivo —
 preferir SIGTERM repetido + cleanup via control-plane; e **jamais `drop_caches`** no smoke do daemon
-(já removido). Pré-req: `--backend ram` no daemon (não implementado — primeira tarefa da validação).
+(já removido). **Falta:** o rootfs/harness qemu (estender `qemu-validate.sh` com o daemon RAM-backed
++ ublk_drv + script de ciclo). O pré-req `--backend ram` já está feito.
 
 ## F3 (depois do F2 em qemu)
 

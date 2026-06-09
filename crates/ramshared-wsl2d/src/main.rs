@@ -49,6 +49,40 @@ enum Transport {
     Ublk,
 }
 
+/// Backend do tier ublk: VRAM (GPU, com residência §9/§9.4) ou RAM (sem GPU). O RAM
+/// existe para validar o **ciclo de vida/teardown** do daemon ublk em **qemu** (onde
+/// não há GPU); o bug de teardown que travou o WSL2 é independente do backend.
+#[derive(Clone, Copy)]
+enum BackendKind {
+    Vram,
+    Ram,
+}
+
+impl BackendKind {
+    fn label(self) -> &'static str {
+        match self {
+            BackendKind::Vram => "vram",
+            BackendKind::Ram => "ram",
+        }
+    }
+}
+
+/// Une os dois tipos de handle do servidor DT-3 (VRAM-com-residência ou RAM puro) para
+/// um teardown único no `run_ublk`.
+enum UblkHandle {
+    Vram(ublk_server::ServerHandleDt3VramResidency),
+    Ram(ublk_server::ServerHandleDt3<ublk_server::RamBackend>),
+}
+
+impl UblkHandle {
+    fn join(self) -> std::io::Result<()> {
+        match self {
+            UblkHandle::Vram(h) => h.join(),
+            UblkHandle::Ram(h) => h.join().map(|_| ()),
+        }
+    }
+}
+
 /// Pedido de encerramento (SIGINT/SIGTERM). O handler só faz um store atômico
 /// (async-signal-safe); o laço do daemon ublk faz poll desta flag.
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
@@ -74,6 +108,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut nbd_dev = "/dev/nbd0".to_string();
     let mut transport = Transport::Nbd;
     let mut queue_depth = 1u16;
+    let mut backend = BackendKind::Vram;
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
     while i < args.len() {
@@ -110,6 +145,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .parse()
                     .map_err(|_| "--queue-depth invalido")?;
             }
+            "--backend" => {
+                i += 1;
+                backend = match args.get(i).map(String::as_str) {
+                    Some("vram") => BackendKind::Vram,
+                    Some("ram") => BackendKind::Ram,
+                    _ => return Err("--backend requer 'vram' ou 'ram'".into()),
+                };
+            }
             other => return Err(format!("argumento desconhecido: {other}").into()),
         }
         i += 1;
@@ -118,7 +161,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     match transport {
         Transport::Nbd => run_nbd(size, sock, force, nbd_dev),
-        Transport::Ublk => run_ublk(size, force, queue_depth),
+        Transport::Ublk => run_ublk(size, force, queue_depth, backend),
     }
 }
 
@@ -297,7 +340,12 @@ fn run_nbd(
 /// dono da VRAM/contexto CUDA e roda a residencia (canario §9/§9.4); o DEMOTE faz
 /// swapoff do proprio device servido. O ciclo de vida vai ate SIGINT/SIGTERM.
 /// SPEC: docs/ublk-daemon-integration/SPEC.md F2.
-fn run_ublk(size: u64, force: bool, queue_depth: u16) -> Result<(), Box<dyn std::error::Error>> {
+fn run_ublk(
+    size: u64,
+    force: bool,
+    queue_depth: u16,
+    backend: BackendKind,
+) -> Result<(), Box<dyn std::error::Error>> {
     // TRAVA DE SEGURANCA: recusa servir ublk no WSL2. Um teardown malsucedido do
     // daemon orfana o /dev/ublkbN -> I/O em D-state -> CONGELA o WSL2 (2026-06-09).
     guard_not_wsl2()?;
@@ -325,22 +373,33 @@ fn run_ublk(size: u64, force: bool, queue_depth: u16) -> Result<(), Box<dyn std:
     let char_path = format!("/dev/ublkc{}", report.dev_id);
     let block_path = format!("/dev/ublkb{}", report.dev_id);
 
-    // O worker constroi o stack CUDA + canario na propria thread (afinidade do ctx).
-    // swap_dev = o proprio device servido (o DEMOTE o tira do swap).
-    let server = ublk_server::spawn_server_dt3_vram_with_residency(
-        &char_path,
-        report.queue_depth,
-        BLOCK_SIZE as usize, // buf_size por tag: requests do device sao <= 4KB (smoke_auto)
-        size as usize,
-        BLOCK_SIZE,
-        block_path.clone(),
-        ResidencyConfig::default(),
-    )?;
+    // Backend: VRAM (worker dono do contexto CUDA + residencia §9/§9.4; swap_dev = o
+    // proprio device, que o DEMOTE tira do swap) ou RAM (sem GPU; reusa o
+    // spawn_server_dt3 ja validado em-processo, sem residencia — para validar o ciclo
+    // de vida/teardown em qemu).
+    let server = match backend {
+        BackendKind::Vram => UblkHandle::Vram(ublk_server::spawn_server_dt3_vram_with_residency(
+            &char_path,
+            report.queue_depth,
+            BLOCK_SIZE as usize, // buf_size por tag: requests do device sao <= 4KB (smoke_auto)
+            size as usize,
+            BLOCK_SIZE,
+            block_path.clone(),
+            ResidencyConfig::default(),
+        )?),
+        BackendKind::Ram => UblkHandle::Ram(ublk_server::spawn_server_dt3(
+            &char_path,
+            report.queue_depth,
+            BLOCK_SIZE as usize,
+            ublk_server::RamBackend::new(size as usize),
+        )?),
+    };
     ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())?;
     eprintln!(
-        "[wsl2d] ublk device: {block_path} ({} MiB, qd={})",
+        "[wsl2d] ublk device: {block_path} ({} MiB, qd={}, backend={})",
         size >> 20,
-        report.queue_depth
+        report.queue_depth,
+        backend.label()
     );
     eprintln!("[wsl2d] swapon: sudo swapon {block_path}");
     eprintln!("[wsl2d] Ctrl-C / SIGTERM para encerrar");
@@ -351,13 +410,13 @@ fn run_ublk(size: u64, force: bool, queue_depth: u16) -> Result<(), Box<dyn std:
     }
     eprintln!("[wsl2d] sinal recebido — encerrando");
 
-    // Teardown ordenado: STOP_DEV aborta os FETCH -> o worker sai do loop e zera a
-    // VRAM no fim -> join -> DEL_DEV. (Quem fez swapon deve swapoff antes: del_gendisk
-    // espera os openers do block device.)
+    // Teardown ordenado: STOP_DEV aborta os FETCH -> o worker sai do loop (e zera a
+    // VRAM no fim, no caminho VRAM) -> join -> DEL_DEV. (Quem fez swapon deve swapoff
+    // antes: del_gendisk espera os openers do block device.)
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id)?;
     server.join()?;
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id)?;
-    eprintln!("[wsl2d] ublk device removido (VRAM zerada)");
+    eprintln!("[wsl2d] ublk device removido");
     Ok(())
 }
 
