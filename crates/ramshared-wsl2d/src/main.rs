@@ -10,8 +10,11 @@
 //! por-request, **serve-only**) + §9.4 (sonda de conteúdo/free).
 //! Backoff segue como trabalho futuro.
 
+use core::ffi::c_int;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use ramshared_block::protocol::{NBD_FLAG_CAN_MULTI_CONN, NBD_FLAG_HAS_FLAGS, NBD_FLAG_SEND_FLUSH};
 use ramshared_block::{BlockBackend, Command, serve};
@@ -21,16 +24,38 @@ use ramshared_wsl2d::{
     CANARY_BYTES, CANARY_EVERY, CHAN_CAP, Cadence, Canary, CanaryProbe, LiveCount, Reply,
     ResidencyConfig, ResidencySampler, Verdict, VramBackend, WMsg, spawn_acceptor,
 };
+use ramshared_wsl2d::{ublk, ublk_control, ublk_server};
 
 // Disciplina 3 (anti-deadlock): o daemon serve o swap, logo nao pode ser swapado.
 unsafe extern "C" {
-    fn mlockall(flags: core::ffi::c_int) -> core::ffi::c_int;
+    fn mlockall(flags: c_int) -> c_int;
+    // Registro de handler de sinal (sighandler_t é um ponteiro de função; o retorno
+    // anterior é ignorado). Usado só para SIGINT/SIGTERM no modo ublk.
+    fn signal(signum: c_int, handler: extern "C" fn(c_int)) -> usize;
 }
-const MCL_CURRENT: core::ffi::c_int = 1;
-const MCL_FUTURE: core::ffi::c_int = 2;
+const MCL_CURRENT: c_int = 1;
+const MCL_FUTURE: c_int = 2;
+const SIGINT: c_int = 2;
+const SIGTERM: c_int = 15;
 
 const DEFAULT_SIZE: u64 = 256 * 1024 * 1024;
 const BLOCK_SIZE: u32 = 4096;
+const UBLK_CONTROL: &str = "/dev/ublk-control";
+const SECTOR: u64 = 512;
+
+/// Transporte do tier VRAM: NBD (socket Unix) ou ublk (block device direto).
+enum Transport {
+    Nbd,
+    Ublk,
+}
+
+/// Pedido de encerramento (SIGINT/SIGTERM). O handler só faz um store atômico
+/// (async-signal-safe); o laço do daemon ublk faz poll desta flag.
+static SHUTDOWN: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn handle_shutdown(_sig: c_int) {
+    SHUTDOWN.store(true, Ordering::SeqCst);
+}
 
 fn main() -> std::process::ExitCode {
     match run() {
@@ -47,6 +72,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut sock = "/run/ramshared/wsl2d.sock".to_string();
     let mut force = false;
     let mut nbd_dev = "/dev/nbd0".to_string();
+    let mut transport = Transport::Nbd;
+    let mut queue_depth = 1u16;
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
     while i < args.len() {
@@ -67,12 +94,41 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 i += 1;
                 nbd_dev = args.get(i).ok_or("--nbd requer caminho")?.clone();
             }
+            "--transport" => {
+                i += 1;
+                transport = match args.get(i).map(String::as_str) {
+                    Some("nbd") => Transport::Nbd,
+                    Some("ublk") => Transport::Ublk,
+                    _ => return Err("--transport requer 'nbd' ou 'ublk'".into()),
+                };
+            }
+            "--queue-depth" => {
+                i += 1;
+                queue_depth = args
+                    .get(i)
+                    .ok_or("--queue-depth requer valor")?
+                    .parse()
+                    .map_err(|_| "--queue-depth invalido")?;
+            }
             other => return Err(format!("argumento desconhecido: {other}").into()),
         }
         i += 1;
     }
     size -= size % BLOCK_SIZE as u64; // alinhar ao block size
 
+    match transport {
+        Transport::Nbd => run_nbd(size, sock, force, nbd_dev),
+        Transport::Ublk => run_ublk(size, force, queue_depth),
+    }
+}
+
+/// Caminho NBD (fixed-newstyle em socket Unix). Worker CUDA unico na thread atual.
+fn run_nbd(
+    size: u64,
+    sock: String,
+    force: bool,
+    nbd_dev: String,
+) -> Result<(), Box<dyn std::error::Error>> {
     // --- CUDA: aloca e zera a VRAM ---
     let cuda = Cuda::load()?;
     let dev = cuda.device(0)?;
@@ -88,26 +144,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     mem.zero()?;
 
     // Disciplina 3: trava memoria + protege do OOM killer ANTES de servir swap.
-    // SAFETY: mlockall e' uma syscall sem efeitos de memoria inseguros.
-    let locked = unsafe { mlockall(MCL_CURRENT | MCL_FUTURE) } == 0;
-    if !locked && !force {
-        return Err("mlockall falhou; rode como root ou use --force".into());
-    }
-    let oom_ok = std::fs::write("/proc/self/oom_score_adj", "-1000").is_ok();
-    if !oom_ok && !force {
-        return Err("nao consegui setar oom_score_adj=-1000; rode como root ou use --force".into());
-    }
-    if locked && oom_ok {
-        eprintln!("[wsl2d] memoria travada (mlockall) + oom_score_adj=-1000");
-    } else {
-        // --force: seguimos sem a protecao anti-deadlock. Avisa explicitamente: o daemon
-        // serve swap e pode ser swapado/morto pelo OOM (Disciplina 3 NAO garantida).
-        eprintln!(
-            "[wsl2d] AVISO --force: mlockall={} oom_score_adj={} (anti-deadlock NAO garantido)",
-            if locked { "ok" } else { "FALHOU" },
-            if oom_ok { "ok" } else { "FALHOU" }
-        );
-    }
+    lock_memory(force)?;
     let mut backend = VramBackend::new(mem, BLOCK_SIZE);
     eprintln!(
         "[wsl2d] VRAM alocada: {} MiB, block_size={}",
@@ -253,5 +290,128 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let _ = std::fs::remove_file(path);
     zeroed?;
     eprintln!("[wsl2d] encerrado (VRAM zerada)");
+    Ok(())
+}
+
+/// Caminho ublk: serve `/dev/ublkbN` direto (io_uring), sem socket. O worker DT-3 e
+/// dono da VRAM/contexto CUDA e roda a residencia (canario §9/§9.4); o DEMOTE faz
+/// swapoff do proprio device servido. O ciclo de vida vai ate SIGINT/SIGTERM.
+/// SPEC: docs/ublk-daemon-integration/SPEC.md F2.
+fn run_ublk(size: u64, force: bool, queue_depth: u16) -> Result<(), Box<dyn std::error::Error>> {
+    // TRAVA DE SEGURANCA: recusa servir ublk no WSL2. Um teardown malsucedido do
+    // daemon orfana o /dev/ublkbN -> I/O em D-state -> CONGELA o WSL2 (2026-06-09).
+    guard_not_wsl2()?;
+    // Disciplina 3: trava memoria + protege do OOM (processo todo; o worker e dono
+    // da CUDA, mas mlockall/oom_score_adj sao process-wide).
+    lock_memory(force)?;
+
+    // SAFETY: registra handler async-signal-safe (so um store atomico) para encerrar
+    // de forma ordenada. signal() so guarda o ponteiro; o retorno antigo e ignorado.
+    unsafe {
+        signal(SIGINT, handle_shutdown);
+        signal(SIGTERM, handle_shutdown);
+    }
+
+    let dev_sectors = size / SECTOR;
+    let mut spec = ublk_control::DeviceSpec::smoke_auto();
+    spec.queue_depth = queue_depth;
+    let report = ublk_control::add_device(UBLK_CONTROL, spec)?;
+    ublk_control::set_params(
+        UBLK_CONTROL,
+        report.dev_id,
+        ublk::Params::basic_disk(dev_sectors, 12, 12),
+    )?;
+
+    let char_path = format!("/dev/ublkc{}", report.dev_id);
+    let block_path = format!("/dev/ublkb{}", report.dev_id);
+
+    // O worker constroi o stack CUDA + canario na propria thread (afinidade do ctx).
+    // swap_dev = o proprio device servido (o DEMOTE o tira do swap).
+    let server = ublk_server::spawn_server_dt3_vram_with_residency(
+        &char_path,
+        report.queue_depth,
+        BLOCK_SIZE as usize, // buf_size por tag: requests do device sao <= 4KB (smoke_auto)
+        size as usize,
+        BLOCK_SIZE,
+        block_path.clone(),
+        ResidencyConfig::default(),
+    )?;
+    ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())?;
+    eprintln!(
+        "[wsl2d] ublk device: {block_path} ({} MiB, qd={})",
+        size >> 20,
+        report.queue_depth
+    );
+    eprintln!("[wsl2d] swapon: sudo swapon {block_path}");
+    eprintln!("[wsl2d] Ctrl-C / SIGTERM para encerrar");
+
+    // Aguarda o sinal de encerramento (poll da flag; sleep ignora EINTR).
+    while !SHUTDOWN.load(Ordering::SeqCst) {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    eprintln!("[wsl2d] sinal recebido — encerrando");
+
+    // Teardown ordenado: STOP_DEV aborta os FETCH -> o worker sai do loop e zera a
+    // VRAM no fim -> join -> DEL_DEV. (Quem fez swapon deve swapoff antes: del_gendisk
+    // espera os openers do block device.)
+    ublk_control::stop_dev(UBLK_CONTROL, report.dev_id)?;
+    server.join()?;
+    ublk_control::delete_device(UBLK_CONTROL, report.dev_id)?;
+    eprintln!("[wsl2d] ublk device removido (VRAM zerada)");
+    Ok(())
+}
+
+/// Recusa servir ublk no WSL2 (a menos do override consciente
+/// `RAMSHARED_ALLOW_UBLK_ON_WSL2=1`). Motivo: o teardown do daemon ublk standalone,
+/// se falhar (corrida SIGTERM-tarde -> SIGKILL, ou bug em STOP_DEV/join), deixa o
+/// `/dev/ublkbN` SEM servidor com I/O em voo -> processos em D-state no caminho de
+/// writeback/memoria -> com `mlockall(MCL_FUTURE)` + `drop_caches` o kernel nao
+/// progride -> stall global -> WSL2 CONGELA (incidente 2026-06-09). Validar o daemon
+/// completo so em VM/qemu (`scripts/kernel/qemu-validate.sh`), onde um stall e
+/// recuperavel sem derrubar o host.
+fn guard_not_wsl2() -> Result<(), Box<dyn std::error::Error>> {
+    if std::env::var("RAMSHARED_ALLOW_UBLK_ON_WSL2")
+        .ok()
+        .as_deref()
+        == Some("1")
+    {
+        eprintln!("[wsl2d] AVISO: RAMSHARED_ALLOW_UBLK_ON_WSL2=1 — trava do WSL2 ignorada");
+        return Ok(());
+    }
+    let osrelease = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    let lower = osrelease.to_ascii_lowercase();
+    if lower.contains("microsoft") || lower.contains("wsl") {
+        return Err(format!(
+            "RECUSADO: --transport ublk no WSL2 ({}) pode CONGELAR o sistema se o teardown \
+             do daemon falhar (device orfao -> I/O em D-state). Valide o daemon em VM/qemu. \
+             Override consciente: RAMSHARED_ALLOW_UBLK_ON_WSL2=1.",
+            osrelease.trim()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Trava a memoria (mlockall) + protege do OOM killer (oom_score_adj=-1000) ANTES de
+/// servir swap (Disciplina 3, anti-deadlock). `--force` segue sem a protecao, avisando.
+fn lock_memory(force: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // SAFETY: mlockall e' uma syscall sem efeitos de memoria inseguros.
+    let locked = unsafe { mlockall(MCL_CURRENT | MCL_FUTURE) } == 0;
+    if !locked && !force {
+        return Err("mlockall falhou; rode como root ou use --force".into());
+    }
+    let oom_ok = std::fs::write("/proc/self/oom_score_adj", "-1000").is_ok();
+    if !oom_ok && !force {
+        return Err("nao consegui setar oom_score_adj=-1000; rode como root ou use --force".into());
+    }
+    if locked && oom_ok {
+        eprintln!("[wsl2d] memoria travada (mlockall) + oom_score_adj=-1000");
+    } else {
+        eprintln!(
+            "[wsl2d] AVISO --force: mlockall={} oom_score_adj={} (anti-deadlock NAO garantido)",
+            if locked { "ok" } else { "FALHOU" },
+            if oom_ok { "ok" } else { "FALHOU" }
+        );
+    }
     Ok(())
 }

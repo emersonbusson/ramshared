@@ -877,3 +877,26 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   espera openers). Depois F3 (swap e2e pelo daemon + bench). Nao comecado: melhor em sessao focada
   (signal handling + smoke a nivel de processo).
 - **Estado Fase B:** A(multipagina)+B-F1 feitos/validados; B-F2/F3 desenhados. ~93 commits.
+
+---
+
+## 2026-06-09 — Frente B F2: daemon ublk CONGELOU o WSL2; travado por 2 gates
+
+- **F2 (`--transport ublk` no main.rs) escrito mas NAO validado.** Rodar o smoke de processo
+  (`daemon_ublk_serves_and_terminates_on_signal`, sobe o daemon + SIGTERM) **CONGELOU o WSL2** (~8min
+  hang -> reboot forcado). Mecanismo: teardown nao fechou limpo -> `kill` deixou `/dev/ublkbN` SEM
+  servidor com I/O em voo -> D-state no caminho de writeback + `mlockall(MCL_FUTURE)` + `drop_caches`
+  -> stall global. Causa-raiz (bug STOP_DEV/join vs corrida SIGTERM-tarde->SIGKILL) so depuravel em
+  qemu.
+- **Pos-incidente:** WSL2 reiniciou limpo (sem device/daemon/D-state, swap zerado). O reboot tambem
+  corrompeu artefatos de `target/` (E0786 "invalid metadata") -> `cargo clean -p ramshared-wsl2d -p
+  ramshared-uring` + rebuild `-j2` (5.5s) resolveu. **Build nunca travou; so a EXECUCAO do daemon.**
+- **DUAS TRAVAS independentes (default = trancado):** (1) teste pula sem
+  `RAMSHARED_DANGEROUS_DAEMON_SMOKE=1`; (2) `run_ublk` chama `guard_not_wsl2()` que RECUSA servir se
+  osrelease tem `microsoft`/`wsl`, a menos de `RAMSHARED_ALLOW_UBLK_ON_WSL2=1`. Smoke perdeu o
+  `drop_page_cache()`. Memoria auto: [[feedback-no-standalone-daemon-smoke-wsl2]].
+- **Tambem:** `wait_and_drain` agora faz retry em EINTR (sinal na thread do ring owner). NBD
+  inalterado; `spawn_swapoff` ja extraido pra `swap.rs` (F1).
+- **REGRA DURA:** nunca rodar o daemon ublk standalone / smoke de processo no WSL2. Validar F2/F3 so
+  em qemu. Smokes in-process (DeviceGuard, <1s) seguem seguros.
+- **Estado:** A(multipagina)+B-F1 validados em hw; B-F2 codigo escrito+travado, valida em qemu.

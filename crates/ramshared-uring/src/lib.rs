@@ -383,8 +383,18 @@ impl UblkServer {
     /// Bloqueia até chegar ao menos um CQE (próximo request servido ou abort do
     /// teardown) e então drena. Não submete SQEs novos (FETCH/COMMIT já foram
     /// submetidos por `submit_initial_fetch`/`commit_and_fetch`).
+    ///
+    /// Re-espera em `EINTR` (`io_uring_enter` interrompido por sinal): um daemon que
+    /// trata SIGINT/SIGTERM pode receber o sinal nesta thread; o EINTR não é erro, só
+    /// re-bloqueia. Os SQEs já submetidos seguem armados.
     pub fn wait_and_drain(&mut self) -> io::Result<Vec<UblkCompletion>> {
-        self.ring.submit_and_wait(1)?;
+        loop {
+            match self.ring.submit_and_wait(1) {
+                Ok(_) => break,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            }
+        }
         Ok(self.drain())
     }
 
