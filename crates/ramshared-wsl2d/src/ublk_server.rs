@@ -91,13 +91,13 @@ pub fn serve_request(backend: &mut RamBackend, iod: &ublk::IoDesc, buf: &mut [u8
 }
 
 /// Handle da thread servidora ublk; `join` aguarda o loop terminar (ao receber o
-/// abort do STOP/DEL_DEV).
+/// abort do STOP/DEL_DEV) e devolve o `RamBackend` para inspeção.
 pub struct ServerHandle {
-    thread: JoinHandle<io::Result<()>>,
+    thread: JoinHandle<io::Result<RamBackend>>,
 }
 
 impl ServerHandle {
-    pub fn join(self) -> io::Result<()> {
+    pub fn join(self) -> io::Result<RamBackend> {
         match self.thread.join() {
             Ok(result) => result,
             Err(_) => Err(io::Error::other("server thread panicked")),
@@ -130,7 +130,7 @@ pub fn spawn_server(
 fn run_server_loop(
     mut server: ramshared_uring::UblkServer,
     mut backend: RamBackend,
-) -> io::Result<()> {
+) -> io::Result<RamBackend> {
     server.submit_initial_fetch()?;
 
     loop {
@@ -142,7 +142,7 @@ fn run_server_loop(
 
         for completion in completions {
             if completion.result == ublk::UBLK_IO_RES_ABORT {
-                return Ok(()); // teardown: STOP/DEL_DEV abortou os FETCH
+                return Ok(backend); // teardown: STOP/DEL_DEV abortou os FETCH
             }
             if completion.result < 0 {
                 return Err(io::Error::other(format!(
