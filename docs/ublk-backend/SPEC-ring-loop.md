@@ -242,6 +242,9 @@ Rollback: sem ganho no bench → manter NBD e remover a dependência `io-uring`/
 - **Bench (gate anti-halo #11) — passado:** `fio` 4KB randread `O_DIRECT` iodepth=1 nos dois
   transportes servindo VRAM: ublk p50=241µs/IOPS=3911 vs NBD p50=326µs/IOPS=2900 → **ublk ~26%
   mais rápido**. Adoção do ublk justificada por bench.
-- **Resta só (produção, não-funcional):** no-alloc no `worker_loop` (swap sob pressão; não
-  validável sem gerar pressão que pode travar WSL2). `mlockall` é do daemon integrador (`main.rs`
-  já faz). Funcionalmente: **tudo works** (VRAM + swap + bench).
+- **No-alloc DT-8 — feito:** ring owner mantém pool de buffers pré-aquecido (`queue_depth` ×
+  `buf_size`), ciclado ring owner↔worker (`dispatch` pega/dimensiona → worker serve in-place →
+  `commit` copia READ e recicla). Zero malloc/free no hot path em regime (`pool.len()+in_flight
+  ==queue_depth`, pool nunca esvazia). Remove o hazard de alocar no caminho de I/O sob pressão de
+  swap. `WorkerReply`: `read_data` → `buf`+`is_read`. `mlockall` é do daemon (`main.rs`).
+- **Fase B completa:** VRAM + swap + bench (ublk vence NBD) + no-alloc, tudo validado em hardware.
