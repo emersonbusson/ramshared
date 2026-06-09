@@ -197,3 +197,31 @@ despacha; o backend faz o storage). Passos:
    gated. DEMOTE segue `swapoff <swap_dev>` (a VRAM continua em swap; SPECv2 DT-6).
 
 Rollback: sem ganho no bench → manter NBD e remover a dependência `io-uring`/`ramshared-uring`.
+
+### Design DT-3 (decisões verificadas, fechado para IMPL)
+
+*Base: leitura de `backend.rs`/`conn.rs`/`request.rs`/`driver.rs` (2026-06-07).*
+
+- **Reuso fechado:** o trait `ramshared_block::BlockBackend` (`size_bytes`/`block_size`/`read_at`/
+  `write_at`/`flush`) já existe e o `VramBackend` o implementa (`backend.rs:24`). `serve_request`
+  já é genérico sobre ele — o loop ublk serve VRAM sem mudança. **Não** criar backend novo.
+- **Quem toca CUDA:** `DeviceMem::read_at`/`write_at` fazem `cuMemcpyDtoH/HtoD` **síncronos**
+  (`driver.rs:248`/`263`) na thread que chama. O `DeviceMem<'c,'a>` **borrows** `Context` e **não é
+  `Send`**. Logo o **worker** deve **criar e possuir** o stack `Cuda`+`Context`+`DeviceMem`+
+  `VramBackend` **dentro da própria thread** — `spawn_ublk_worker` recebe parâmetros (tamanho,
+  block size), não o backend pronto. (Espelha `main.rs::run()`, que é o próprio worker H1.)
+- **Canais (mpsc):** ring→worker `SyncSender<IoWork>` (bounded `CHAN_CAP`, backpressure); worker→
+  ring `Sender<WorkerReply>` (unbounded, DT-7, o worker nunca bloqueia). Canais **únicos** (um ring
+  owner), diferente do NBD (um reply channel por conexão).
+- **Gap do READ resolvido:** `IoCompletion` só tem `result` (`ublk.rs:204`); os dados do READ
+  precisam chegar ao buffer da tag. **Decisão:** novo `WorkerReply { qid, tag, result,
+  read_data: Vec<u8> }` no canal worker→ring; o **ring owner** copia `read_data` no
+  `server.buffer_mut(tag)` antes do `commit_and_fetch`. Mantém o worker como única thread CUDA.
+- **Buffers cross-thread:** nunca passar o ponteiro cru de `UblkServer.buffers` ao worker; o WRITE
+  vai como `IoWork.payload: Vec<u8>` (owned, já é a forma de `from_desc`). O ring owner copia o
+  payload do buffer da tag para o `IoWork` no envio.
+- **Loop atual (M3b) ≠ alvo:** `run_server_loop` single-thread (serve inline) valida a **mecânica
+  do ring** sem CUDA; é correto para RAM mas **não** é DT-3. O M3c separa ring owner / worker.
+- **Entry point:** o worker H1 está inlined em `main.rs::run()` (NBD). Criar um
+  `spawn_ublk_worker` dedicado (loop `Receiver<IoWork>` → `serve_request` → `Sender<WorkerReply>`)
+  — `serve_request`/`VramBackend` reusados verbatim; só o wrapper de loop é novo.

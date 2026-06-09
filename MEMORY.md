@@ -591,3 +591,27 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   vs NBD, (5) `swapon` so com ganho provado.
 - **Proximo (M3c, gated/decisao):** comecar pela (1) trait `BlockBackend` (refactor seguro) e (2)
   investigar a API do `VramBackend` antes de qualquer CUDA/VRAM real.
+
+---
+
+## 2026-06-07 — Fase B M3c prep: reuso BlockBackend + design DT-3 fechado
+
+- **Disciplina (reuso, SSDV3 #1):** investigacao (agente) revelou que o trait
+  `ramshared_block::BlockBackend` JA existe e o `VramBackend` JA o implementa (`backend.rs:24`).
+  Meu `RamBackend`/`serve_request` duplicavam. **Corrigido:** commit
+  `baf2203 refactor(wsl2d): reuse BlockBackend trait in ublk serve (#3)` — `RamBackend` implementa
+  `BlockBackend`, `serve_request` generico sobre o trait → o loop ublk serve qualquer backend,
+  incl. `VramBackend`, sem mudanca. Mantido o serve in-place (sem alloc, DT-8). 2/2 smokes I/O
+  root + unit verdes apos o refactor.
+- **Design DT-3 fechado no `SPEC-ring-loop.md` §12** (verificado no driver/cuda): worker e a unica
+  thread CUDA (`DeviceMem` !Send, copias sincronas `cuMemcpy*`); `spawn_ublk_worker` cria o stack
+  Cuda/Context/DeviceMem/VramBackend NA propria thread (nao recebe pronto). Canais mpsc:
+  ring→worker `SyncSender<IoWork>` (bounded CHAN_CAP), worker→ring `Sender<WorkerReply>`
+  (unbounded, DT-7). **Gap do READ resolvido:** novo `WorkerReply { qid, tag, result, read_data }`;
+  o ring owner copia `read_data` no buffer da tag antes do COMMIT. WRITE vai como `IoWork.payload`
+  owned (nunca ponteiro cru cross-thread).
+- **Estado:** loop single-thread (M3b) valida a mecanica do ring com RAM; o M3c separa
+  ring owner/worker (DT-3) para CUDA. `serve_request`/`VramBackend` reusados verbatim; so o wrapper
+  de worker e novo. O worker H1 NBD esta inlined em `main.rs::run()` — criar `spawn_ublk_worker`.
+- **Proximo (M3c IMPL, gated/decisao):** `spawn_ublk_worker` + canais + ring owner DT-3, validar
+  com RamBackend (sem CUDA), depois plugar `VramBackend` (smoke GPU). Bench e `swapon` depois.
