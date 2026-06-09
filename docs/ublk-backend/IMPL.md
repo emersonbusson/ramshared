@@ -1,10 +1,12 @@
 # IMPL — Fase B ublk (prep seguro)
 
-Status: **ublk servindo VRAM (DT-3)** (2026-06-07). Kernel custom ativo:
+Status: **VRAM-as-RAM via swap por ublk — validado** (2026-06-07). Kernel custom ativo:
 `6.6.123.2-microsoft-standard-WSL2+`, `CONFIG_BLK_DEV_UBLK=m`,
 `CONFIG_IO_URING=y`, `kernel.io_uring_disabled=0`, `/dev/ublk-control` presente.
 `/dev/ublkbN` serve READ/WRITE/FLUSH a partir da **VRAM** (RTX 2060, `cuMemcpy`) via loop DT-3
-(ring owner + worker dono do ctx CUDA). Falta só **bench** ublk vs NBD e **`swapon`** (sem swap ainda).
+(ring owner + worker dono do ctx CUDA), e foi **validado como área de swap** (`mkswap`/`swapon`/
+`swapoff`, `/proc/swaps`). **Falta só** o **bench** ublk vs NBD (justificativa de adoção — gate
+anti-halo #11), não funcionalidade.
 
 ## Fechado sem tocar swap
 
@@ -42,8 +44,12 @@ Status: **ublk servindo VRAM (DT-3)** (2026-06-07). Kernel custom ativo:
 - **M3c VRAM — feito (GPU):** `spawn_server_dt3_vram` — o worker cria o stack
   `Cuda`/`Context`/`DeviceMem`/`VramBackend` **na própria thread** (resolve o `!Send`/`!'static`
   do `DeviceMem<'c,'a>`) e roda o loop ali. Smoke root+GPU (RTX 2060): WRITE→`cuMemcpyHtoD`,
-  `drop_caches`, READ→`cuMemcpyDtoH` confere o bloco. 4/4 smokes I/O. **Falta só:** bench ublk vs
-  NBD e `swapon`.
+  `drop_caches`, READ→`cuMemcpyDtoH` confere o bloco. 4/4 smokes I/O.
+- **Swap — validado (capstone):** `vram_ublk_round_trips_as_swap_device` faz `mkswap`→`swapon`→
+  confere `/proc/swaps`→`swapoff` sobre o `/dev/ublkbN` servido pela VRAM (ciclo limitado, sem
+  pressão; 9.6 GiB RAM livre; `SwapGuard` com `swapoff` no teardown). A **VRAM funciona como swap
+  via ublk** — o objetivo central da Fase B. 5/5 smokes I/O, `/proc/swaps` antes==depois.
+  **Falta só:** bench ublk vs NBD.
 - **SET_PARAMS** (pré-requisito do `START_DEV`): `ublk_control::set_params`/`get_params`
   (control-only) aplicam/leem `ublk_params` (112 B); `Params::basic_disk`/`to_bytes`/`from_bytes`
   espelham o layout (offsets via `cc`). Smoke root: round-trip de `dev_sectors`/bs-shifts sem

@@ -676,3 +676,24 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Falta SO:** (1) **bench** ublk vs NBD (p50/p99, mesma carga). (2) **`swapon`** `/dev/ublkbN` —
   o passo final, com pressao de memoria; cuidado (pode travar WSL2 — ver
   [[feedback-wsl2-cargo-build-caution]]). DEMOTE segue `swapoff` (SPECv2 DT-6).
+
+---
+
+## 2026-06-07 — Fase B M3c: VRAM-as-RAM via swap por ublk (CAPSTONE)
+
+- **Validacao swap:** commit `2561c9b test(wsl2d): validate vram-ublk as swap device (#3)`.
+- **O que prova:** `vram_ublk_round_trips_as_swap_device` (root+GPU) faz `mkswap` → `swapon`
+  (sem `-p`) → confere `/proc/swaps` → `swapoff` sobre o `/dev/ublkbN` servido pela VRAM (DT-3).
+  `mkswap` escreve o header na VRAM (`cuMemcpyHtoD` via ublk); `swapon` le o header (ublk READ); o
+  kernel registra a area de swap. **A VRAM serve como swap (RAM) atraves do ublk** — o objetivo
+  central da Fase B (ublk no lugar do NBD).
+- **Seguranca:** ciclo limitado e reversivel; device 128 MiB; SEM pressao de memoria (9.6 GiB RAM
+  livre → kernel nao pagina na janela de ms); `swapon` sem `-p` (prioridade auto baixa);
+  `SwapGuard` faz `swapoff` antes de stop/del. Evidencia: 0.62s, `/proc/swaps` antes==depois (sem
+  residuo), `/dev` limpo. `mkswap`/`swapon`/`swapoff` rodam como root no WSL2.
+- **Estado:** **5/5 smokes I/O** (RAM READ/WRITE + DT-3 RAM + DT-3 VRAM + swap) verdes
+  single-thread, `/proc/swaps` e `/dev` limpos antes==depois.
+- **Falta SO (nao-funcional):** **bench** ublk vs NBD (p50/p99) — justificativa de adocao
+  (anti-halo #11). A funcionalidade esta provada end-to-end. **Para producao sob pressao real:**
+  `mlockall` no daemon + caminho do worker sem alloc (`worker_loop` aloca um `Vec` por READ — ok
+  no smoke sem pressao, mas hazard sob swap real).
