@@ -163,12 +163,91 @@ fn dt3_serves_read_from_ram_backend_over_block_device() {
     assert_eq!(ublk_nodes(), before);
 }
 
+#[test]
+#[ignore = "requires root + CUDA GPU; serves /dev/ublkbN from VRAM (cuMemcpy), no swap"]
+fn dt3_serves_io_from_vram_over_block_device() {
+    let before = ublk_nodes();
+    let report = ublk_control::add_device(UBLK_CONTROL, ublk_control::DeviceSpec::smoke_auto())
+        .expect("ublk ADD_DEV");
+    let mut guard = DeviceGuard::new(report.dev_id);
+
+    let block_size = 4096u32;
+    let dev_sectors = 256u64; // 128 KiB
+    ublk_control::set_params(
+        UBLK_CONTROL,
+        report.dev_id,
+        ublk::Params::basic_disk(dev_sectors, 12, 12),
+    )
+    .expect("ublk SET_PARAMS");
+
+    let char_path = format!("/dev/ublkc{}", report.dev_id);
+    let block_path = format!("/dev/ublkb{}", report.dev_id);
+    let vram_bytes = (dev_sectors * SECTOR) as usize;
+
+    // Worker DT-3 dono da VRAM (cria o stack CUDA na própria thread).
+    let server = ublk_server::spawn_server_dt3_vram(
+        &char_path,
+        report.queue_depth,
+        vram_bytes, // buffer por tag = disco inteiro
+        vram_bytes,
+        block_size,
+    )
+    .expect("spawn DT-3 VRAM server");
+
+    ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())
+        .expect("ublk START_DEV");
+    assert!(
+        fs::metadata(&block_path).is_ok(),
+        "{block_path} deveria existir"
+    );
+
+    // WRITE bloco alinhado -> fsync -> drop cache -> READ deve vir da VRAM.
+    let off = 8192u64; // alinhado ao block size 4096
+    let pattern: Vec<u8> = (0..block_size).map(|i| ((i * 7 + 3) % 251) as u8).collect();
+    write_block(&block_path, off, &pattern);
+    drop_page_cache();
+    let got = read_block(&block_path, off, block_size as usize);
+    assert_eq!(got, pattern, "READ deve devolver da VRAM o bloco escrito");
+
+    ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
+    server.join().expect("DT-3 VRAM server terminou ok");
+
+    ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
+    guard.disarm();
+    wait_until_missing(&char_path);
+    assert_eq!(ublk_nodes(), before);
+}
+
 fn read_sector(path: &str, sector: u64) -> Vec<u8> {
+    read_block(path, sector * SECTOR, SECTOR as usize)
+}
+
+fn read_block(path: &str, off: u64, len: usize) -> Vec<u8> {
     let mut file = File::open(path).expect("abrir block device");
-    file.seek(SeekFrom::Start(sector * SECTOR)).expect("seek");
-    let mut buf = vec![0u8; SECTOR as usize];
+    file.seek(SeekFrom::Start(off)).expect("seek");
+    let mut buf = vec![0u8; len];
     file.read_exact(&mut buf).expect("read_exact");
     buf
+}
+
+fn write_block(path: &str, off: u64, data: &[u8]) {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .open(path)
+        .expect("abrir block device para escrita");
+    file.seek(SeekFrom::Start(off)).expect("seek");
+    file.write_all(data).expect("write_all");
+    file.sync_all().expect("sync_all");
+}
+
+fn drop_page_cache() {
+    let _ = std::process::Command::new("sync").status();
+    if let Ok(mut f) = OpenOptions::new()
+        .write(true)
+        .open("/proc/sys/vm/drop_caches")
+    {
+        let _ = f.write_all(b"1\n");
+    }
 }
 
 fn write_sector(path: &str, sector: u64, data: &[u8]) {
