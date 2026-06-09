@@ -308,73 +308,95 @@ fn run_ring_owner(
 ) -> io::Result<()> {
     server.submit_initial_fetch()?;
 
+    let mut in_flight = 0u32;
     loop {
-        let mut did_work = false;
-
-        // 1. Completa as tags cujo worker já respondeu (copia READ + COMMIT).
-        while let Ok(reply) = reply_rx.try_recv() {
-            if !reply.read_data.is_empty() {
-                let buf = server.buffer_mut(reply.tag);
-                let n = reply.read_data.len().min(buf.len());
-                buf[..n].copy_from_slice(&reply.read_data[..n]);
-            }
-            server.commit_and_fetch(reply.tag, reply.result)?;
-            did_work = true;
-        }
-
-        // 2. Drena os CQEs do ublk ring e despacha cada request ao worker.
-        for completion in server.drain() {
-            did_work = true;
-            if completion.result == ublk::UBLK_IO_RES_ABORT {
-                return Ok(()); // teardown: STOP/DEL_DEV abortou os FETCH
-            }
-            if completion.result < 0 {
-                return Err(io::Error::other(format!(
-                    "FETCH falhou: {}",
-                    completion.result
-                )));
-            }
-
-            let iod = ublk::IoDesc::from_ne_bytes(server.io_desc_bytes(completion.tag))
-                .ok_or_else(|| io::Error::other("io-desc invalido no mmap"))?;
-            let req = match iod.to_block_request(completion.tag) {
-                Ok(req) => req,
-                Err(_) => {
-                    server.commit_and_fetch(completion.tag, -22)?; // EINVAL
-                    continue;
+        if in_flight > 0 {
+            // Ha request em voo: bloqueia na resposta do worker (sem poll/spin).
+            match reply_rx.recv() {
+                Ok(reply) => {
+                    in_flight -= 1;
+                    commit_reply(&mut server, reply)?;
                 }
-            };
-
-            // WRITE: o kernel já copiou bio->buffer da tag; leva no payload.
-            let payload = if req.cmd == Command::Write {
-                let len = req.len as usize;
-                let buf = server.buffer_mut(completion.tag);
-                if len <= buf.len() {
-                    buf[..len].to_vec()
-                } else {
-                    server.commit_and_fetch(completion.tag, -22)?; // EINVAL
-                    continue;
-                }
-            } else {
-                Vec::new()
-            };
-
-            let work = ublk::IoWork {
-                qid: 0,
-                tag: completion.tag,
-                buffer_addr: 0,
-                req,
-                payload,
-            };
-            if work_tx.send(work).is_err() {
-                return Err(io::Error::other("worker encerrou inesperadamente"));
+                Err(_) => return Err(io::Error::other("worker encerrou inesperadamente")),
             }
-        }
-
-        if !did_work {
-            thread::sleep(Duration::from_micros(200));
+            // Drena respostas adicionais ja prontas, sem bloquear.
+            while let Ok(reply) = reply_rx.try_recv() {
+                in_flight -= 1;
+                commit_reply(&mut server, reply)?;
+            }
+        } else {
+            // Ocioso: bloqueia ate o proximo CQE (request servido ou abort).
+            for completion in server.wait_and_drain()? {
+                if completion.result == ublk::UBLK_IO_RES_ABORT {
+                    return Ok(()); // teardown: STOP/DEL_DEV abortou os FETCH
+                }
+                if completion.result < 0 {
+                    return Err(io::Error::other(format!(
+                        "FETCH falhou: {}",
+                        completion.result
+                    )));
+                }
+                if dispatch_request(&mut server, completion.tag, &work_tx)? {
+                    in_flight += 1;
+                }
+            }
         }
     }
+}
+
+/// Copia os dados de READ (se houver) no buffer da tag e completa via COMMIT.
+fn commit_reply(server: &mut ramshared_uring::UblkServer, reply: WorkerReply) -> io::Result<()> {
+    if !reply.read_data.is_empty() {
+        let buf = server.buffer_mut(reply.tag);
+        let n = reply.read_data.len().min(buf.len());
+        buf[..n].copy_from_slice(&reply.read_data[..n]);
+    }
+    server.commit_and_fetch(reply.tag, reply.result)
+}
+
+/// Le o io-desc da `tag`, monta o `IoWork` (copiando o payload do WRITE do buffer da
+/// tag) e envia ao worker. Retorna `true` se enviou trabalho, `false` se rejeitou o
+/// request (ja completado com erro).
+fn dispatch_request(
+    server: &mut ramshared_uring::UblkServer,
+    tag: u16,
+    work_tx: &SyncSender<ublk::IoWork>,
+) -> io::Result<bool> {
+    let iod = ublk::IoDesc::from_ne_bytes(server.io_desc_bytes(tag))
+        .ok_or_else(|| io::Error::other("io-desc invalido no mmap"))?;
+    let req = match iod.to_block_request(tag) {
+        Ok(req) => req,
+        Err(_) => {
+            server.commit_and_fetch(tag, -22)?; // EINVAL
+            return Ok(false);
+        }
+    };
+
+    // WRITE: o kernel já copiou bio->buffer da tag; leva no payload.
+    let payload = if req.cmd == Command::Write {
+        let len = req.len as usize;
+        let buf = server.buffer_mut(tag);
+        if len <= buf.len() {
+            buf[..len].to_vec()
+        } else {
+            server.commit_and_fetch(tag, -22)?; // EINVAL
+            return Ok(false);
+        }
+    } else {
+        Vec::new()
+    };
+
+    let work = ublk::IoWork {
+        qid: 0,
+        tag,
+        buffer_addr: 0,
+        req,
+        payload,
+    };
+    work_tx
+        .send(work)
+        .map_err(|_| io::Error::other("worker encerrou inesperadamente"))?;
+    Ok(true)
 }
 
 /// Converte erro CUDA em `io::Error` para o `Result` da thread worker.
