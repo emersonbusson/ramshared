@@ -314,9 +314,107 @@ fn dt3_vram_serves_concurrent_io_with_queue_depth_gt1() {
 /// Padrao deterministico e distinto por bloco (idx desloca a sequencia ~+5/byte mod
 /// 251, garantindo blocos diferentes detectarem troca de conteudo entre tags).
 fn block_pattern(idx: usize, bs: usize) -> Vec<u8> {
+    keyed_pattern(idx as u64 * 1009 + 7, bs)
+}
+
+/// Padrao deterministico parametrizado por uma seed (permite variar por rodada de
+/// escrita, forcando o READ a enxergar a ultima escrita — nao um valor velho).
+fn keyed_pattern(seed: u64, bs: usize) -> Vec<u8> {
     (0..bs)
-        .map(|j| ((j as u64 * 31 + idx as u64 * 1009 + 7) % 251) as u8)
+        .map(|j| ((j as u64 * 31 + seed) % 251) as u8)
         .collect()
+}
+
+#[test]
+#[ignore = "requires root + CUDA GPU; concurrent O_DIRECT writes+reads with queue_depth>1, no swap"]
+fn dt3_vram_serves_concurrent_writes_with_queue_depth_gt1() {
+    let before = ublk_nodes();
+    let mut spec = ublk_control::DeviceSpec::smoke_auto();
+    spec.queue_depth = 4;
+    let report = ublk_control::add_device(UBLK_CONTROL, spec).expect("ublk ADD_DEV");
+    let mut guard = DeviceGuard::new(report.dev_id);
+    assert!(
+        report.queue_depth >= 2,
+        "kernel deu queue_depth={}; o teste de concorrencia precisa de >=2",
+        report.queue_depth
+    );
+
+    let block_size = 4096u32;
+    let dev_sectors = 256u64; // 128 KiB -> 32 blocos de 4KB
+    ublk_control::set_params(
+        UBLK_CONTROL,
+        report.dev_id,
+        ublk::Params::basic_disk(dev_sectors, 12, 12),
+    )
+    .expect("ublk SET_PARAMS");
+
+    let char_path = format!("/dev/ublkc{}", report.dev_id);
+    let block_path = format!("/dev/ublkb{}", report.dev_id);
+    let vram_bytes = (dev_sectors * SECTOR) as usize;
+    let server = ublk_server::spawn_server_dt3_vram(
+        &char_path,
+        report.queue_depth,
+        vram_bytes,
+        vram_bytes,
+        block_size,
+    )
+    .expect("spawn DT-3 VRAM server");
+    ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())
+        .expect("ublk START_DEV");
+
+    // 4 threads, cada uma dona exclusiva de 4 blocos (round-robin, sem corrida entre
+    // threads no mesmo bloco). Cada rodada: WRITE com padrao novo via O_DIRECT, depois
+    // READ de volta conferindo. Escritas concorrentes mantem multiplos tags WRITE em
+    // voo -> exercita o caminho de WRITE do pool no-alloc (dispatch copia tag_buf->pool
+    // buffer; troca entre tags corromperia o bloco lido de volta).
+    const O_DIRECT: i32 = 0o40000;
+    let bs = block_size as usize;
+    let n_blocks = 16usize;
+    let workers: Vec<_> = (0..4u64)
+        .map(|t| {
+            let path = block_path.clone();
+            thread::spawn(move || {
+                let file = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .custom_flags(O_DIRECT)
+                    .open(&path)
+                    .expect("open O_DIRECT rw");
+                let mut raw = vec![0u8; bs * 2];
+                let pad = (bs - (raw.as_ptr() as usize % bs)) % bs;
+                for round in 0..32u64 {
+                    let mut i = t as usize;
+                    while i < n_blocks {
+                        let seed = i as u64 * 1009 + round * 13 + 1;
+                        let want = keyed_pattern(seed, bs);
+                        raw[pad..pad + bs].copy_from_slice(&want);
+                        file.write_all_at(&raw[pad..pad + bs], (i * bs) as u64)
+                            .expect("write O_DIRECT");
+                        // Re-le do device (O_DIRECT, sem cache) -> deve vir da VRAM.
+                        file.read_exact_at(&mut raw[pad..pad + bs], (i * bs) as u64)
+                            .expect("read O_DIRECT");
+                        assert_eq!(
+                            &raw[pad..pad + bs],
+                            want.as_slice(),
+                            "bloco {i} rodada {round} corrompido sob WRITE concorrente qd>1"
+                        );
+                        i += 4;
+                    }
+                }
+            })
+        })
+        .collect();
+    for w in workers {
+        w.join()
+            .expect("escritor concorrente falhou (corrupcao/deadlock qd>1)");
+    }
+
+    ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
+    server.join().expect("DT-3 VRAM server terminou ok");
+    ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
+    guard.disarm();
+    wait_until_missing(&char_path);
+    assert_eq!(ublk_nodes(), before);
 }
 
 fn read_sector(path: &str, sector: u64) -> Vec<u8> {
