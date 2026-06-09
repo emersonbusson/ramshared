@@ -32,6 +32,11 @@ Status: **ublk funcional com backend de RAM** (2026-06-07). Kernel custom ativo:
   `ublk_queue::FetchSession` segura char device + ring. Smoke root: FETCH estacionado (drain
   vazio); `DEL_DEV` aborta (`-ENODEV`) com o ring drenado numa **thread dona do ring** (DT-3) —
   necessário porque o `DEL_DEV` bloqueia esperando o char fechar. `/dev` intacto, sem `START_DEV`.
+- **M3c worker (DT-3, sem GPU):** `spawn_ublk_worker` — thread dona do backend (a única a tocar
+  VRAM/CUDA) que recebe `IoWork` por canal, serve via `serve_request` (unificado em `Request`,
+  reusando `BlockBackend`) e devolve `WorkerReply{result, read_data}`. Validado com `RamBackend`
+  por teste puro (READ/WRITE/roundtrip via canais). **Falta:** o ring owner (integra worker ↔
+  device) e plugar o `VramBackend` (factory + CUDA, smoke GPU).
 - **SET_PARAMS** (pré-requisito do `START_DEV`): `ublk_control::set_params`/`get_params`
   (control-only) aplicam/leem `ublk_params` (112 B); `Params::basic_disk`/`to_bytes`/`from_bytes`
   espelham o layout (offsets via `cc`). Smoke root: round-trip de `dev_sectors`/bs-shifts sem

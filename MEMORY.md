@@ -615,3 +615,24 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   de worker e novo. O worker H1 NBD esta inlined em `main.rs::run()` — criar `spawn_ublk_worker`.
 - **Proximo (M3c IMPL, gated/decisao):** `spawn_ublk_worker` + canais + ring owner DT-3, validar
   com RamBackend (sem CUDA), depois plugar `VramBackend` (smoke GPU). Bench e `swapon` depois.
+
+---
+
+## 2026-06-07 — Fase B M3c: worker DT-3 (metade da arquitetura, sem GPU)
+
+- **TDD worker DT-3:** commits `4ba0a76 test(wsl2d): add ublk dt-3 worker RED (#3)` e
+  `9575d8f fix(wsl2d): add ublk dt-3 worker over channels (#3)`.
+- **Mudanca:** `serve_request` **unificado** em torno de `Request` (era `IoDesc`) — reusa o trait
+  `BlockBackend` tanto no loop single-thread (M3b) quanto no worker; `run_server_loop` converte
+  `IoDesc`→`Request` via `to_block_request`. Novo `spawn_ublk_worker<B: BlockBackend + Send +
+  'static>(backend, work_rx, reply_tx)`: thread dona do backend (unica a tocar VRAM/CUDA, DT-3),
+  loopa `IoWork`→`serve_request`→`WorkerReply{qid,tag,result,read_data}`; encerra quando o canal
+  fecha e devolve o backend. READ aloca buffer no worker; WRITE/FLUSH usam o `payload`.
+- **Evidencia:** teste puro `ublk_worker` (1/1, sem root): READ devolve dados, WRITE persiste,
+  roundtrip ok, backend devolvido no join. `ublk_server` unit 2/2 (Request). Smokes I/O root 2/2
+  preservados (run_server_loop refatorado). clippy/fmt limpos.
+- **Falta para o ublk-VRAM (M3c, gated):** (1) **ring owner DT-3** — drena CQE ublk → envia IoWork
+  → recebe WorkerReply → copia read_data no buffer da tag → COMMIT; multiplexa CQE+reply, teardown
+  cuidadoso (risco de deadlock como M2/M3b). (2) **VramBackend nao e `'static`** (`DeviceMem<'c,'a>`
+  borrows Context) → `spawn_ublk_worker` precisa de uma variante **factory** (cria o stack CUDA NA
+  thread) em vez de receber o backend pronto. (3) smoke GPU. (4) bench. (5) `swapon`.
