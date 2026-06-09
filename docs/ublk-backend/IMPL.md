@@ -1,8 +1,9 @@
 # IMPL — Fase B ublk (prep seguro)
 
-Status: **prep em andamento** (2026-06-07). Kernel custom ativo:
+Status: **ublk funcional com backend de RAM** (2026-06-07). Kernel custom ativo:
 `6.6.123.2-microsoft-standard-WSL2+`, `CONFIG_BLK_DEV_UBLK=m`,
 `CONFIG_IO_URING=y`, `kernel.io_uring_disabled=0`, `/dev/ublk-control` presente.
+`/dev/ublkbN` cria e serve READ/WRITE/FLUSH via loop io_uring + backend de RAM (sem swap).
 
 ## Fechado sem tocar swap
 
@@ -35,6 +36,11 @@ Status: **prep em andamento** (2026-06-07). Kernel custom ativo:
   (control-only) aplicam/leem `ublk_params` (112 B); `Params::basic_disk`/`to_bytes`/`from_bytes`
   espelham o layout (offsets via `cc`). Smoke root: round-trip de `dev_sectors`/bs-shifts sem
   `START_DEV`.
+- **M3b — ublk funcional:** `UblkServer` (ring + mmap io-desc + buffers por tag) + `spawn_server`
+  rodam o loop numa **thread dona do ring** (DT-3); `RamBackend`/`serve_request` servem
+  READ/WRITE/FLUSH; `start_dev`/`stop_dev` no control. Smoke root: `START_DEV` cria `/dev/ublkbN`,
+  um READ devolve o padrão gravado no backend de RAM, `STOP`+`DEL_DEV` limpam. **Sem swap.** A
+  thread servidora é obrigatória durante START/STOP_DEV (servem o partition scan / os aborts).
 
 ## Decisão de dependência
 
@@ -54,9 +60,10 @@ hand-roll de barreiras acquire/release no caminho de swap. A dependência entrou
    `unsafe` em `ramshared-uring`) e ring que submete `FETCH_REQ` **sem** esperar CQE (driver para
    em `-EIOCBQUEUED` até I/O ou abort). Desenho verificado em
    [`SPEC-ring-loop.md`](SPEC-ring-loop.md): threading DT-3, layout de `mmap`, barreiras na crate
-   `io-uring`, teardown/abort (`UBLK_IO_RES_ABORT = -ENODEV`). **M1** (`mmap`) e **M2** (`FETCH`
-   no-wait + teardown via thread dona do ring) **feitos**; próximo **M3** (`START_DEV` + loop
-   ring↔worker H1), **gated** por bench e fora deste prep.
+   `io-uring`, teardown/abort (`UBLK_IO_RES_ABORT = -ENODEV`). **M1** (`mmap`), **M2** (`FETCH`
+   no-wait), **M3a** (SET_PARAMS) e **M3b** (`START_DEV` + loop servidor + I/O com backend de RAM)
+   **feitos** — `/dev/ublkbN` serve READ/WRITE end-to-end. Próximo **M3c**: ligar ao
+   `VramBackend`/worker H1 + bench ublk vs NBD; só então `swapon`.
 4. Bench ublk vs NBD com número p50/p99. Sem ganho medível: manter NBD e remover a dependência.
 
 ## Rollback trigger
