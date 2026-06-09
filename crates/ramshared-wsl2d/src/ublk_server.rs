@@ -9,15 +9,21 @@ use std::fs::OpenOptions;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ramshared_block::{BlockBackend, Command, IoError, Request};
 use ramshared_cuda::Cuda;
 
-use crate::VramBackend;
+use crate::swap::spawn_swapoff;
 use crate::ublk;
+use crate::{
+    CANARY_BYTES, CANARY_EVERY, Cadence, Canary, CanaryProbe, ResidencyConfig, ResidencySampler,
+    Verdict, VramBackend,
+};
 
 const EIO: i32 = -5;
 const EINVAL: i32 = -22;
@@ -475,4 +481,155 @@ pub fn spawn_server_dt3_vram(
     });
 
     Ok(ServerHandleDt3Vram { ring, worker })
+}
+
+/// Handle do servidor DT-3 VRAM **com residência** (canário §9 + sonda §9.4 dentro do
+/// worker). Além de `join`, expõe `demote_count` — quantos vereditos de DEMOTE o
+/// canário emitiu (observável sem swap real).
+pub struct ServerHandleDt3VramResidency {
+    ring: JoinHandle<io::Result<()>>,
+    worker: JoinHandle<io::Result<()>>,
+    demotes: Arc<AtomicU32>,
+}
+
+impl ServerHandleDt3VramResidency {
+    /// Número de DEMOTEs emitidos pelo canário até agora (latência §9 + sonda §9.4).
+    pub fn demote_count(&self) -> u32 {
+        self.demotes.load(Ordering::Relaxed)
+    }
+
+    pub fn join(self) -> io::Result<()> {
+        self.ring
+            .join()
+            .map_err(|_| io::Error::other("ring owner panicked"))??;
+        self.worker
+            .join()
+            .map_err(|_| io::Error::other("vram residency worker panicked"))?
+    }
+}
+
+/// Como [`spawn_server_dt3_vram`], mas o worker (dono do contexto CUDA) **também roda
+/// a máquina de residência** (Opção 1 do PRD `ublk-daemon-integration`): mede a
+/// latência serve-only (canário §9), sonda conteúdo/free em cadência (§9.4) e, no
+/// veredito DEMOTE, dispara `swapoff(swap_dev)` numa thread separada (Disciplina 3).
+/// Tudo na thread worker — nenhuma chamada CUDA cross-thread (afinidade do contexto).
+pub fn spawn_server_dt3_vram_with_residency(
+    char_path: impl AsRef<Path>,
+    queue_depth: u16,
+    buf_size: usize,
+    vram_bytes: usize,
+    block_size: u32,
+    swap_dev: String,
+    residency: ResidencyConfig,
+) -> io::Result<ServerHandleDt3VramResidency> {
+    let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
+    let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(RING_CHAN_CAP);
+    let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>();
+
+    let demotes = Arc::new(AtomicU32::new(0));
+    let demotes_worker = Arc::clone(&demotes);
+
+    let worker = thread::spawn(move || -> io::Result<()> {
+        // Todo o stack CUDA + a região-canário vivem nesta thread (afinidade do ctx).
+        let cuda = Cuda::load().map_err(cuda_to_io)?;
+        let device = cuda.device(0).map_err(cuda_to_io)?;
+        let ctx = cuda.create_context(&device).map_err(cuda_to_io)?;
+        let mut mem = ctx.alloc(vram_bytes).map_err(cuda_to_io)?;
+        mem.zero().map_err(cuda_to_io)?;
+        let mut backend = VramBackend::new(mem, block_size);
+        // Região-canário dedicada (§9.4): separada da swap, não endereçável por I/O.
+        let canary_region = ctx.alloc(CANARY_BYTES).map_err(cuda_to_io)?;
+        let mut probe = CanaryProbe::new(canary_region);
+
+        // Estado da residência (espelha o worker NBD do main.rs).
+        let mut canary: Option<Canary> = None;
+        let mut baseline: Vec<u64> = Vec::new();
+        let mut sampler = ResidencySampler::new(residency);
+        let mut cadence = Cadence::new(CANARY_EVERY);
+        let mut demoted = false;
+        let mut demote_rx: Option<Receiver<bool>> = None;
+
+        while let Ok(mut work) = work_rx.recv() {
+            let touches_vram = matches!(work.req.cmd, Command::Read | Command::Write);
+
+            // serve-only (DT-16): cronometra só a op de VRAM, não a espera na fila.
+            let t0 = Instant::now();
+            let result = serve_request(&work.req, &mut backend, &mut work.payload);
+            let lat_us = u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX);
+            let is_read = work.req.cmd == Command::Read;
+            let reply = WorkerReply {
+                qid: work.qid,
+                tag: work.tag,
+                result,
+                buf: work.payload,
+                is_read,
+            };
+            if reply_tx.send(reply).is_err() {
+                break; // ring owner caiu
+            }
+
+            // Poll não-bloqueante do swapoff de DEMOTE em curso (re-arma se falhar).
+            if let Some(rx) = demote_rx.take() {
+                match rx.try_recv() {
+                    Ok(true) => demoted = true,
+                    Ok(false) => {} // falhou: canário re-arma (demote_rx fica None)
+                    Err(std::sync::mpsc::TryRecvError::Empty) => demote_rx = Some(rx),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+                }
+            }
+
+            // Canário §9 (latência serve-only) — gatilho primário.
+            if touches_vram && !demoted && demote_rx.is_none() {
+                match canary.as_mut() {
+                    None => {
+                        baseline.push(lat_us);
+                        if baseline.len() >= 16 {
+                            baseline.sort_unstable();
+                            let med = baseline[baseline.len() / 2].max(1);
+                            canary = Some(Canary::new(residency, med));
+                        }
+                    }
+                    Some(c) => {
+                        // free=u64::MAX de propósito: o sinal aqui é a latência; free/
+                        // conteúdo vêm da sonda §9.4 abaixo.
+                        if let Verdict::Demote(_) = c.sample(lat_us, true, u64::MAX) {
+                            demotes_worker.fetch_add(1, Ordering::Relaxed);
+                            demote_rx = Some(spawn_swapoff(&swap_dev));
+                        }
+                    }
+                }
+            }
+
+            // Sonda dedicada §9.4 (conteúdo/free em cadência) com histerese.
+            if touches_vram && !demoted && demote_rx.is_none() && cadence.tick() {
+                let content = probe.check_content().ok();
+                let free = ctx.mem_info().ok().map(|(f, _)| f as u64);
+                if let Verdict::Demote(_) = sampler.sample(content, free) {
+                    demotes_worker.fetch_add(1, Ordering::Relaxed);
+                    demote_rx = Some(spawn_swapoff(&swap_dev));
+                }
+            }
+        }
+
+        // Teardown DT-17: espera (bounded) o swapoff em voo, zera VRAM + canário.
+        if let Some(rx) = demote_rx.take() {
+            let _ = rx.recv_timeout(Duration::from_secs(5));
+        }
+        let _ = backend.zero();
+        let _ = probe.zero();
+        Ok(())
+    });
+
+    let ring = thread::spawn(move || {
+        let _char_dev = char_dev;
+        run_ring_owner(server, queue_depth, buf_size, work_tx, reply_rx)
+    });
+
+    Ok(ServerHandleDt3VramResidency {
+        ring,
+        worker,
+        demotes,
+    })
 }

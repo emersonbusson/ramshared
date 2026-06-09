@@ -8,6 +8,7 @@ pub mod canary_probe;
 pub mod conn;
 pub mod residency;
 pub mod state;
+pub mod swap;
 pub mod ublk;
 pub mod ublk_control;
 pub mod ublk_queue;
