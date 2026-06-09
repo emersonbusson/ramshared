@@ -86,6 +86,11 @@ impl Drop for MmapRo {
     }
 }
 
+// SAFETY: `MmapRo` e dono exclusivo de um mapeamento `mmap` valido em todo o
+// processo; mover a posse entre threads e seguro. Nao implementa `Sync` (sem
+// acesso compartilhado concorrente).
+unsafe impl Send for MmapRo {}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SmokeReport {
     pub entries: u32,
@@ -156,6 +161,30 @@ pub fn ublk_get_params(fd: RawFd, dev_id: u32, params: &mut [u8; 112]) -> io::Re
     expect_zero(
         submit_uring_cmd80(fd, UBLK_U_CMD_GET_PARAMS, cmd)?,
         "ublk GET_PARAMS",
+    )
+}
+
+/// `START_DEV`: cria `/dev/ublkbN` (bloqueia até as filas ready e o `add_disk`). O
+/// `ublksrv_pid` vai em `data[0]` do `ublksrv_ctrl_cmd` (offset 16).
+pub fn ublk_start_dev(fd: RawFd, dev_id: u32, ublksrv_pid: u32) -> io::Result<()> {
+    const UBLK_U_CMD_START_DEV: u32 = 0xc020_7506;
+
+    let mut cmd = ctrl_cmd(dev_id, 0, 0);
+    cmd[16..24].copy_from_slice(&u64::from(ublksrv_pid).to_ne_bytes());
+    expect_zero(
+        submit_uring_cmd80(fd, UBLK_U_CMD_START_DEV, cmd)?,
+        "ublk START_DEV",
+    )
+}
+
+/// `STOP_DEV`: remove `/dev/ublkbN` e aborta os FETCH pendentes.
+pub fn ublk_stop_dev(fd: RawFd, dev_id: u32) -> io::Result<()> {
+    const UBLK_U_CMD_STOP_DEV: u32 = 0xc020_7507;
+
+    let cmd = ctrl_cmd(dev_id, 0, 0);
+    expect_zero(
+        submit_uring_cmd80(fd, UBLK_U_CMD_STOP_DEV, cmd)?,
+        "ublk STOP_DEV",
     )
 }
 
@@ -281,15 +310,114 @@ impl UblkFetchRing {
     }
 }
 
-/// Empacota um `struct ublksrv_io_cmd` (16 B: q_id, tag, result=0, addr) nos
+/// Empacota um `struct ublksrv_io_cmd` (16 B: q_id, tag, result, addr) nos
 /// primeiros bytes do buffer de 80 B da SQE `UringCmd80`; o restante fica zerado.
-fn fetch_cmd80(q_id: u16, tag: u16, addr: u64) -> [u8; 80] {
+fn io_cmd80(q_id: u16, tag: u16, result: i32, addr: u64) -> [u8; 80] {
     let mut cmd = [0u8; 80];
     cmd[0..2].copy_from_slice(&q_id.to_ne_bytes());
     cmd[2..4].copy_from_slice(&tag.to_ne_bytes());
-    // result (bytes 4..8) = 0 no envio.
+    cmd[4..8].copy_from_slice(&result.to_ne_bytes());
     cmd[8..16].copy_from_slice(&addr.to_ne_bytes());
     cmd
+}
+
+/// `ublksrv_io_cmd` de `FETCH_REQ` (result zerado no envio).
+fn fetch_cmd80(q_id: u16, tag: u16, addr: u64) -> [u8; 80] {
+    io_cmd80(q_id, tag, 0, addr)
+}
+
+/// Servidor de uma fila ublk: ring `Entry128` persistente + `mmap` read-only do
+/// buffer de io-desc + buffers de dados por tag. Submete `FETCH_REQ`, expõe os
+/// descritores de request e completa via `COMMIT_AND_FETCH_REQ`. O `fd` do char
+/// device deve permanecer aberto pelo dono enquanto o servidor vive.
+pub struct UblkServer {
+    fd: RawFd,
+    ring: IoUring<squeue::Entry128>,
+    iodesc: MmapRo,
+    buffers: Vec<Vec<u8>>,
+    queue_depth: u16,
+}
+
+impl UblkServer {
+    /// Tamanho de `struct ublksrv_io_desc` (espelha `ublk::UBLK_IO_DESC_SIZE`).
+    const IO_DESC_SIZE: usize = 24;
+
+    /// Cria o ring e mapeia o io-desc da fila 0; NÃO submete FETCH ainda.
+    pub fn new(fd: RawFd, queue_depth: u16, buf_size: usize) -> io::Result<Self> {
+        let entries = u32::from(queue_depth).max(1).next_power_of_two();
+        let ring = IoUring::<squeue::Entry128>::builder().build(entries)?;
+        let iodesc_len = round_up_to_page(usize::from(queue_depth) * Self::IO_DESC_SIZE);
+        let iodesc = MmapRo::map_readonly(fd, iodesc_len, 0)?;
+        let buffers = (0..queue_depth).map(|_| vec![0u8; buf_size]).collect();
+        Ok(Self {
+            fd,
+            ring,
+            iodesc,
+            buffers,
+            queue_depth,
+        })
+    }
+
+    /// Submete `FETCH_REQ` para todas as tags (marca a fila ready). Não espera CQE.
+    pub fn submit_initial_fetch(&mut self) -> io::Result<()> {
+        const UBLK_U_IO_FETCH_REQ: u32 = 0xc010_7520;
+        for tag in 0..self.queue_depth {
+            let addr = self.buffers[usize::from(tag)].as_mut_ptr() as u64;
+            self.push(UBLK_U_IO_FETCH_REQ, tag, 0, addr)?;
+        }
+        self.ring.submit()?;
+        Ok(())
+    }
+
+    /// Drena os CQEs disponíveis (não bloqueia).
+    pub fn drain(&mut self) -> Vec<UblkCompletion> {
+        self.ring
+            .completion()
+            .map(|cqe| UblkCompletion {
+                tag: cqe.user_data() as u16,
+                result: cqe.result(),
+            })
+            .collect()
+    }
+
+    /// Bytes do `ublksrv_io_desc` da `tag` (somente leitura, do `mmap`).
+    pub fn io_desc_bytes(&self, tag: u16) -> &[u8] {
+        let start = usize::from(tag) * Self::IO_DESC_SIZE;
+        &self.iodesc.as_bytes()[start..start + Self::IO_DESC_SIZE]
+    }
+
+    /// Buffer de dados mutável da `tag` (READ preenche; WRITE já vem preenchido).
+    pub fn buffer_mut(&mut self, tag: u16) -> &mut [u8] {
+        &mut self.buffers[usize::from(tag)]
+    }
+
+    /// Completa a `tag` com `result` e re-arma o FETCH (re-fornecendo o buffer).
+    pub fn commit_and_fetch(&mut self, tag: u16, result: i32) -> io::Result<()> {
+        const UBLK_U_IO_COMMIT_AND_FETCH_REQ: u32 = 0xc010_7521;
+        let addr = self.buffers[usize::from(tag)].as_mut_ptr() as u64;
+        self.push(UBLK_U_IO_COMMIT_AND_FETCH_REQ, tag, result, addr)?;
+        self.ring.submit()?;
+        Ok(())
+    }
+
+    fn push(&mut self, cmd_op: u32, tag: u16, result: i32, addr: u64) -> io::Result<()> {
+        let cmd = io_cmd80(0, tag, result, addr);
+        let entry = opcode::UringCmd80::new(types::Fd(self.fd), cmd_op)
+            .cmd(cmd)
+            .build()
+            .user_data(u64::from(tag));
+
+        // SAFETY: `cmd` (com `addr`) é copiado para a SQE no `push`. `addr` aponta
+        // para `self.buffers[tag]`, vivo enquanto o servidor existe; o `fd` segue
+        // aberto pelo dono. O kernel só acessa o buffer ao servir I/O nesta thread.
+        unsafe {
+            self.ring
+                .submission()
+                .push(&entry)
+                .map_err(|_| io::Error::other("io_uring submission queue is full"))?;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
