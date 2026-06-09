@@ -137,6 +137,28 @@ pub fn ublk_del_dev(fd: RawFd, dev_id: u32) -> io::Result<()> {
     )
 }
 
+/// `SET_PARAMS`: envia `struct ublk_params` (112 B) para o device `dev_id`.
+pub fn ublk_set_params(fd: RawFd, dev_id: u32, params: &mut [u8; 112]) -> io::Result<()> {
+    const UBLK_U_CMD_SET_PARAMS: u32 = 0xc020_7508;
+
+    let cmd = ctrl_cmd(dev_id, 112, params.as_mut_ptr() as u64);
+    expect_zero(
+        submit_uring_cmd80(fd, UBLK_U_CMD_SET_PARAMS, cmd)?,
+        "ublk SET_PARAMS",
+    )
+}
+
+/// `GET_PARAMS`: o kernel preenche `struct ublk_params` (112 B) do device `dev_id`.
+pub fn ublk_get_params(fd: RawFd, dev_id: u32, params: &mut [u8; 112]) -> io::Result<()> {
+    const UBLK_U_CMD_GET_PARAMS: u32 = 0x8020_7509;
+
+    let cmd = ctrl_cmd(dev_id, 112, params.as_mut_ptr() as u64);
+    expect_zero(
+        submit_uring_cmd80(fd, UBLK_U_CMD_GET_PARAMS, cmd)?,
+        "ublk GET_PARAMS",
+    )
+}
+
 fn ctrl_cmd(dev_id: u32, len: u16, addr: u64) -> [u8; 80] {
     const UBLK_QUEUE_ID_NONE: u16 = u16::MAX;
 
