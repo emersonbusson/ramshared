@@ -247,9 +247,16 @@ Rollback: sem ganho no bench → manter NBD e remover a dependência `io-uring`/
   `commit` copia READ e recicla). Zero malloc/free no hot path em regime (`pool.len()+in_flight
   ==queue_depth`, pool nunca esvazia). Remove o hazard de alocar no caminho de I/O sob pressão de
   swap. `WorkerReply`: `read_data` → `buf`+`is_read`. `mlockall` é do daemon (`main.rs`).
-- **queue_depth > 1 — validado:** device com `queue_depth=4` (fila única) + 4 leitores `O_DIRECT`
-  concorrentes mantêm múltiplos tags em voo; integridade por bloco confere o pool no-alloc com
-  `in_flight > 1` e o endereçamento por-tag (`self.buffers[tag]` no FETCH/COMMIT). Sem corrupção
-  nem deadlock (RTX 2060). Só servimos a fila 0; multi-`nr_hw_queues` fica fora de escopo (exigiria
-  um ring/char-region por fila — novo SPEC).
+- **queue_depth > 1 — validado:** device com `queue_depth=4` (fila única) servindo VRAM com **READ
+  e WRITE concorrentes** (`O_DIRECT`, 4 threads) mantém múltiplos tags em voo; integridade por bloco
+  confere o pool no-alloc com `in_flight > 1` (read e write paths) e o endereçamento por-tag
+  (`self.buffers[tag]` no FETCH/COMMIT). Sem corrupção nem deadlock (RTX 2060). Só servimos a fila
+  0; multi-`nr_hw_queues` fica fora de escopo (exigiria um ring/char-region por fila — novo SPEC).
+- **Cap de request = 4KB (max_io_buf_bytes):** `DeviceSpec::smoke_auto` seta `max_io_buf_bytes=4096`,
+  então o kernel limita **todo request a 4KB** (`ublk_drv.c:307` `min(bufsize, max_hw_sectors<<9)`).
+  Isso é **seguro** (nenhum request excede o `buf_size` do servidor, que é >= 4096) e casa com o
+  swap-in (page fault = 1 página). **Custo:** swap clustering / writeback batching é fatiado em 4KB
+  (mais round-trips). **Futuro (throughput, não-bug):** acoplar `max_io_buf_bytes` ↔ `max_sectors`
+  (`params.basic`) ↔ `buf_size` para permitir requests multi-página; exige tuning de params com
+  teste de I/O grande. Não feito no MVP — o ganho em WSL2 é incerto e o atual é correto.
 - **Fase B completa:** VRAM + swap + bench (ublk vence NBD) + no-alloc + qd>1, validado em hardware.

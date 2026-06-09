@@ -70,6 +70,13 @@ e pronta para PR.**
   voo. Confere integridade por bloco — aliasing/troca de buffer entre tags ou underflow do pool
   corromperia os dados ou travaria. ~4096 leituras concorrentes OK (RTX 2060), sem deadlock, `/dev`
   limpo. Prova o pool no-alloc com `in_flight > 1` e o endereçamento por-tag (`self.buffers[tag]`).
+  `dt3_vram_serves_concurrent_writes_with_queue_depth_gt1` cobre o **caminho de WRITE** sob qd>1: 4
+  threads donas de blocos disjuntos fazem 32 rodadas WRITE(padrão novo)+READ-verify via `O_DIRECT`
+  — exercita `dispatch_request` (copia tag_buf→pool) e o worker write com `in_flight>1`.
+- **Cap de request = 4KB:** `max_io_buf_bytes=4096` faz o kernel fatiar todo request em 4KB
+  (`ublk_drv.c:307`). Seguro (≤ `buf_size`) e casa com swap-in; custo é throughput de clustering.
+  Requests multi-página (acoplar `max_io_buf_bytes`↔`max_sectors`↔`buf_size`) ficam como futuro de
+  throughput (não-bug) — ver SPEC §12.
 - **SET_PARAMS** (pré-requisito do `START_DEV`): `ublk_control::set_params`/`get_params`
   (control-only) aplicam/leem `ublk_params` (112 B); `Params::basic_disk`/`to_bytes`/`from_bytes`
   espelham o layout (offsets via `cc`). Smoke root: round-trip de `dev_sectors`/bs-shifts sem
