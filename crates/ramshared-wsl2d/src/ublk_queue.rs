@@ -4,7 +4,7 @@
 //! descritores por tag. Não chama `START_DEV`, não cria `/dev/ublkbN` e não toca
 //! swap. O `unsafe` do `mmap` fica isolado em `ramshared-uring`.
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io;
 use std::os::fd::AsRawFd;
 use std::path::Path;
@@ -43,4 +43,39 @@ pub fn read_io_desc(
 
     ublk::IoDesc::from_ne_bytes(&bytes[start..end])
         .ok_or_else(|| io::Error::other("io-desc menor que 24 bytes"))
+}
+
+/// Sessão de FETCH em uma fila ublk: segura o `File` do char device `/dev/ublkcN` e
+/// o ring `ramshared-uring` que submeteu os `FETCH_REQ`. Não chama `START_DEV`, não
+/// cria `/dev/ublkbN` e não toca swap. O ring é dropado antes do `File` (o fd
+/// precisa seguir aberto enquanto o ring existe).
+pub struct FetchSession {
+    ring: ramshared_uring::UblkFetchRing,
+    /// `File` do char device, mantido aberto enquanto o ring vive (drop guard).
+    #[allow(dead_code)]
+    char_dev: File,
+}
+
+impl FetchSession {
+    /// Abre `char_path`, submete `FETCH_REQ` para as `queue_depth` tags da fila 0
+    /// (buffer de `buf_size` por tag) e retorna sem esperar CQE.
+    pub fn open(
+        char_path: impl AsRef<Path>,
+        queue_depth: u16,
+        buf_size: usize,
+    ) -> io::Result<Self> {
+        let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
+        let ring = ramshared_uring::UblkFetchRing::submit_fetch_all(
+            char_dev.as_raw_fd(),
+            queue_depth,
+            buf_size,
+        )?;
+
+        Ok(Self { ring, char_dev })
+    }
+
+    /// Drena os CQEs disponíveis (não bloqueia).
+    pub fn drain(&mut self) -> Vec<ramshared_uring::UblkCompletion> {
+        self.ring.drain()
+    }
 }
