@@ -427,6 +427,71 @@ fn bench_read_latency(
     )
 }
 
+#[test]
+#[ignore = "requires root + CUDA GPU + fio; latencia fio do ublk-VRAM (compara com NBD), no swap"]
+fn fio_bench_vram_ublk() {
+    let report = ublk_control::add_device(UBLK_CONTROL, ublk_control::DeviceSpec::smoke_auto())
+        .expect("ublk ADD_DEV");
+    let mut guard = DeviceGuard::new(report.dev_id);
+
+    let block_size = 4096u32;
+    let dev_sectors = 64 * 1024 * 1024 / SECTOR; // 64 MiB
+    ublk_control::set_params(
+        UBLK_CONTROL,
+        report.dev_id,
+        ublk::Params::basic_disk(dev_sectors, 12, 12),
+    )
+    .expect("ublk SET_PARAMS");
+
+    let char_path = format!("/dev/ublkc{}", report.dev_id);
+    let block_path = format!("/dev/ublkb{}", report.dev_id);
+    let vram_bytes = (dev_sectors * SECTOR) as usize;
+    let server = ublk_server::spawn_server_dt3_vram(
+        &char_path,
+        report.queue_depth,
+        64 * 1024,
+        vram_bytes,
+        block_size,
+    )
+    .expect("spawn DT-3 VRAM server");
+    ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())
+        .expect("ublk START_DEV");
+
+    let out = fio_randread(&block_path, "ublk-vram");
+    print!("{out}");
+
+    ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
+    server.join().expect("DT-3 VRAM server terminou ok");
+    ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
+    guard.disarm();
+    wait_until_missing(&char_path);
+}
+
+/// Roda `fio` randread 4KB O_DIRECT iodepth=1 num block device e devolve o stdout.
+fn fio_randread(dev: &str, name: &str) -> String {
+    let out = std::process::Command::new("fio")
+        .args([
+            &format!("--name={name}"),
+            &format!("--filename={dev}"),
+            "--rw=randread",
+            "--bs=4k",
+            "--direct=1",
+            "--ioengine=psync",
+            "--iodepth=1",
+            "--runtime=4",
+            "--time_based",
+            "--norandommap",
+        ])
+        .output()
+        .unwrap_or_else(|e| panic!("nao executou fio: {e}"));
+    assert!(
+        out.status.success(),
+        "fio falhou: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
 fn run_ok(cmd: &str, args: &[&str]) {
     let out = std::process::Command::new(cmd)
         .args(args)
