@@ -1,6 +1,6 @@
 use ramshared_wsl2d::{ublk, ublk_control, ublk_server};
-use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -61,12 +61,74 @@ fn serves_read_from_ram_backend_over_block_device() {
     assert_eq!(ublk_nodes(), before);
 }
 
+#[test]
+#[ignore = "requires root; writes through /dev/ublkbN into the RAM backend, no swap"]
+fn serves_write_into_ram_backend_over_block_device() {
+    let before = ublk_nodes();
+    let report = ublk_control::add_device(UBLK_CONTROL, ublk_control::DeviceSpec::smoke_auto())
+        .expect("ublk ADD_DEV");
+    let mut guard = DeviceGuard::new(report.dev_id);
+
+    let dev_sectors = 256u64;
+    ublk_control::set_params(
+        UBLK_CONTROL,
+        report.dev_id,
+        ublk::Params::basic_disk(dev_sectors, 9, 9),
+    )
+    .expect("ublk SET_PARAMS");
+
+    let disk_size = (dev_sectors * SECTOR) as usize;
+    let backend = ublk_server::RamBackend::new(disk_size);
+    let char_path = format!("/dev/ublkc{}", report.dev_id);
+    let block_path = format!("/dev/ublkb{}", report.dev_id);
+    // Buffer por tag cobre o disco inteiro: qualquer request de writeback cabe.
+    let server = ublk_server::spawn_server(&char_path, report.queue_depth, disk_size, backend)
+        .expect("spawn server");
+
+    ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())
+        .expect("ublk START_DEV");
+    assert!(
+        fs::metadata(&block_path).is_ok(),
+        "{block_path} deveria existir"
+    );
+
+    // WRITE de um padrao no setor de teste via block device + fsync (forca writeback).
+    let pattern: Vec<u8> = (0..SECTOR).map(|i| ((i * 7 + 1) % 251) as u8).collect();
+    write_sector(&block_path, TEST_SECTOR, &pattern);
+
+    // Teardown: a thread devolve o backend para inspecao direta (sem page cache).
+    ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
+    let backend = server.join().expect("server loop terminou ok");
+
+    let mut got = vec![0u8; SECTOR as usize];
+    assert_eq!(
+        backend.read_into(TEST_SECTOR * SECTOR, &mut got),
+        SECTOR as i32
+    );
+    assert_eq!(got, pattern, "o WRITE deve ter chegado ao backend");
+
+    ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
+    guard.disarm();
+    wait_until_missing(&char_path);
+    assert_eq!(ublk_nodes(), before);
+}
+
 fn read_sector(path: &str, sector: u64) -> Vec<u8> {
     let mut file = File::open(path).expect("abrir block device");
     file.seek(SeekFrom::Start(sector * SECTOR)).expect("seek");
     let mut buf = vec![0u8; SECTOR as usize];
     file.read_exact(&mut buf).expect("read_exact");
     buf
+}
+
+fn write_sector(path: &str, sector: u64, data: &[u8]) {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .open(path)
+        .expect("abrir block device para escrita");
+    file.seek(SeekFrom::Start(sector * SECTOR)).expect("seek");
+    file.write_all(data).expect("write_all");
+    file.sync_all().expect("sync_all");
 }
 
 struct DeviceGuard {
