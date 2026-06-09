@@ -123,6 +123,30 @@ fn fetch_req_parks_until_delete_aborts_without_starting_device() {
     assert_eq!(ublk_nodes(), before);
 }
 
+#[test]
+#[ignore = "requires root and /dev/ublk-control; sets/gets params, no START_DEV"]
+fn set_params_roundtrips_without_starting_device() {
+    let before = ublk_nodes();
+    let report = ublk_control::add_device(UBLK_CONTROL, ublk_control::DeviceSpec::smoke_auto())
+        .expect("ublk ADD_DEV");
+    let mut guard = DeviceGuard::new(report.dev_id);
+
+    // 2048 setores de 512 B = 1 MiB; bs logico 512 (shift 9), fisico 4 KiB (shift 12).
+    let params = ublk::Params::basic_disk(2048, 9, 12);
+    ublk_control::set_params(UBLK_CONTROL, report.dev_id, params).expect("ublk SET_PARAMS");
+
+    let got = ublk_control::get_params(UBLK_CONTROL, report.dev_id).expect("ublk GET_PARAMS");
+    assert_eq!(got.basic.dev_sectors, 2048);
+    assert_eq!(got.basic.logical_bs_shift, 9);
+    assert_eq!(got.basic.physical_bs_shift, 12);
+    assert_ne!(got.types & ublk::UBLK_PARAM_TYPE_BASIC, 0);
+
+    ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
+    guard.disarm();
+    wait_until_missing(&format!("/dev/ublkc{}", report.dev_id));
+    assert_eq!(ublk_nodes(), before);
+}
+
 struct DeviceGuard {
     dev_id: Option<u32>,
 }
