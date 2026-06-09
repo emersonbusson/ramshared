@@ -826,3 +826,28 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Frente B (integracao no daemon):** PROXIMA, via SSDV3 PRD (impl direto e proibido pela
   disciplina; ha conflito de contexto CUDA worker DT-3 vs canario/residencia do main.rs).
 - **Estado:** Fase B = VRAM+swap+bench(>NBD)+no-alloc+qd>1(r/w)+multipagina. ~88 commits.
+
+---
+
+## 2026-06-09 — Fase B Frente B: PRD+SPEC da integracao no daemon (gate SSDV3)
+
+- **Frente B = integrar o ublk no daemon `main.rs`** (hoje NBD-only; ublk so roda em teste). Mudanca
+  ESTRUTURAL -> a disciplina SSDV3 PROIBE impl direto; entreguei PRD+SPEC e PAREI no gate de
+  aprovacao (IMPL sem SPEC aprovado e Don't).
+- **Decisao central (PRD, commit `f3a5f7a`):** conflito de afinidade CUDA. No NBD a thread que serve
+  E dona do contexto (canario/residencia trivial). No ublk DT-3 a dona do contexto e a thread
+  WORKER, mas o loop de canario/demote vive na thread principal do main.rs. **Opcao 1 (recomendada):
+  mover a maquina de residencia para DENTRO do worker DT-3** (a thread dona do ctx serve E se
+  auto-monitora). Rejeitadas: Opcao 2 (refazer lifetimes do ramshared-cuda, grande/arriscado),
+  Opcao 3 (2o contexto so p/ canario, incoerente com o sinal de latencia que nasce no serve).
+- **SPEC (commit a seguir):** docs/ublk-daemon-integration/{PRD,SPEC}.md. F1: novo
+  `spawn_server_dt3_vram_with_residency` + `worker_loop_with_residency` (reusa Canary/
+  ResidencySampler/CanaryProbe/Cadence/spawn_swapoff; refactor: extrair `spawn_swapoff` do main.rs
+  p/ `src/swap.rs`). F2: `--transport ublk` no main.rs. F3: swap e2e pelo daemon + bench. Parte
+  sensivel: gatilho DETERMINISTICO de DEMOTE no smoke (preferir ResidencyConfig com limiar explicito
+  a depender de eviction WDDM real).
+- **PROXIMO PASSO (quando retomar):** implementar F1 via TDD (RED: smoke que forca DEMOTE sintetico;
+  GREEN: worker-com-residencia). So depois F2/F3. Nao comecar F1 sem o gate, e melhor numa sessao
+  focada (contexto ja longo).
+- **Estado Fase B:** VRAM+swap+bench(>NBD)+no-alloc+qd>1(r/w)+multipagina TODOS feitos/validados em
+  hardware; integracao no daemon DESENHADA (PRD+SPEC). ~90 commits. Usuario: "nada de PR agora".
