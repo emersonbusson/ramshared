@@ -419,3 +419,28 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Proximo recorte seguro:** antes de `START_DEV`, implementar a preparacao da fila ublk
   (abrir `/dev/ublkcN`, ring de IO, mmap/descritores e `FETCH_REQ`) para evitar deadlock no
   `wait_for_completion_interruptible` do driver; continuar sem `swapon`.
+
+---
+
+## 2026-06-07 — Fase B prep: encoding puro do FETCH io_cmd
+
+- **TDD io_cmd FETCH:** commits `5a2f32a test(wsl2d): add ublk fetch io cmd RED (#3)` e
+  `237aff9 fix(wsl2d): encode ublk fetch io cmd (#3)`.
+- **Mudanca:** `ublk.rs` ganhou as ops de IO **codificadas** `UBLK_U_IO_FETCH_REQ=0xc0107520`,
+  `UBLK_U_IO_COMMIT_AND_FETCH_REQ=0xc0107521`, `UBLK_U_IO_NEED_GET_DATA=0xc0107522` (exigidas
+  porque o device usa `UBLK_F_CMD_IOCTL_ENCODE`; o ring so tinha as ops de controle codificadas).
+  Novos `IoCmd::fetch(q_id, tag, buffer_addr)` e `IoCmd::to_bytes() -> [u8; 16]` (layout
+  `ublksrv_io_cmd`), prontos para copia direta no `cmd` da SQE. Tudo puro: sem `unsafe`, sem
+  device, sem ring, sem mmap, sem swap.
+- **Provenance:** valores conferidos via `cc` contra
+  `/home/emdev/WSL2-Linux-Kernel/include/uapi/linux/ublk_cmd.h` (macro `UBLK_U_IO_*` e
+  `_IOWR('u', nr, struct ublksrv_io_cmd)` batem; `sizeof(ublksrv_io_cmd)=16`).
+- **Evidencia:** RED falhou por constantes ausentes + `IoCmd::fetch`/`to_bytes` inexistentes;
+  GREEN: `cargo test -p ramshared-wsl2d --test ublk_uapi` (13/13), `cargo test -p ramshared-wsl2d`
+  (lib 21 ok, 1 GPU ignorado, 13 ublk_uapi ok, 2 ublk_control ignorados, 1 uring ok),
+  `cargo fmt --check` e `cargo clippy -p ramshared-wsl2d -- -D warnings` limpos.
+- **Fronteira pura esgotada:** o proximo passo sai da faixa segura puramente testavel. O smoke
+  `FETCH_REQ` no char device exige `mmap` de `/dev/ublkcN` (nova superficie `unsafe` em
+  `ramshared-uring`) + ring persistente com submissao **sem** esperar CQE (o driver deixa o
+  FETCH pendente em `-EIOCBQUEUED`). Decisao pendente do dono: (a) seguir para esse smoke, (b)
+  fechar SPEC/IMPL SSDV3 do loop de ring antes, ou (c) abrir o PR da Fase B prep ja acumulada.
