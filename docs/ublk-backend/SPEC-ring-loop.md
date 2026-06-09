@@ -81,13 +81,19 @@
 ## 5. Teardown/abort (ordem inversa, idiom `goto out_err`)
 
 1. Parar de submeter novos `FETCH`/`COMMIT`.
-2. `DEL_DEV` (control) → driver chama `io_uring_cmd_done(ABORT = -ENODEV)` em cada `FETCH`
-   estacionado.
-3. Ring owner **drena** CQEs (`res == UBLK_IO_RES_ABORT`) e encerra o loop.
+2. `DEL_DEV` (control) → `ublk_cancel_dev` chama `io_uring_cmd_done(ABORT = -ENODEV)` em cada
+   `FETCH` estacionado, e então o `DEL_DEV` **bloqueia** em `wait_event(idr_freed)`
+   (ublk_drv.c:2523) até o char device ser liberado.
+3. Ring owner **drena** os CQEs (`res == UBLK_IO_RES_ABORT`); ao soltar o ring e fechar o char,
+   a referência do device zera e o `DEL_DEV` retorna.
 4. `munmap` → fechar fds (`ublkc`, ring) → liberar buffers de dados. Ordem inversa da alocação.
-- **Invariante anti-deadlock**: o ring owner **nunca** usa `submit_and_wait` esperando um CQE
-  de `FETCH` (que só chega com I/O **ou** abort). Usa `submit()` + drain não-bloqueante. No
-  smoke, é o `DEL_DEV` que gera os CQEs.
+- **Invariante anti-deadlock (1):** o ring owner **nunca** usa `submit_and_wait` esperando um
+  CQE de `FETCH` (que só chega com I/O **ou** abort). Usa `submit()` + drain não-bloqueante.
+- **Invariante de concorrência (2) — verificado no M2:** o `DEL_DEV` é **bloqueante** e espera o
+  char fechar; o char só fecha quando os `FETCH` (que seguram `fget` do char via io_uring) são
+  completados. Logo o `DEL_DEV` **não pode** rodar na mesma thread que ainda precisa drenar o
+  ring: exige a thread dona do ring (DT-3) drenando **em paralelo**. Teardown single-thread
+  (DEL_DEV bloqueante + drain depois) **deadlocka**.
 
 ## 6. Decisões pequenas (sem nova ADR; ADR-0004 cobre a exceção userspace)
 
@@ -112,10 +118,11 @@
   ler `io-desc[0]` (zerado, sem I/O) → `munmap` → `DEL_DEV`. Sem `START_DEV`, sem `/dev/ublkbN`,
   sem `swapon`. Introduz o wrapper `mmap`/`munmap` RAII em `ramshared-uring`. *(RNF: `grep
   unsafe` confinado a `ramshared-uring`.)*
-- **M2 — `FETCH_REQ` sem esperar CQE** (smoke root): `ADD_DEV` → `mmap` → submeter `FETCH_REQ`
-  para todas as tags (`q_depth`) com `addr` = buffer de dados alocado → `submit()` (não
-  bloqueia) → confirmar que **nenhum CQE imediato** chega → `DEL_DEV` → drenar CQEs com
-  `res == UBLK_IO_RES_ABORT (-ENODEV)` → `munmap` → cleanup. Sem `START_DEV`, sem `swapon`.
+- **M2 — `FETCH_REQ` sem esperar CQE** (smoke root) — **feito**: `ADD_DEV` → submeter
+  `FETCH_REQ` para todas as tags (`q_depth`) com `addr` = buffer alocado → `submit()` (não
+  bloqueia) → confirmar **nenhum CQE imediato** → drenar os aborts numa **thread dona do ring**
+  enquanto o `DEL_DEV` roda → cada CQE `res == UBLK_IO_RES_ABORT (-ENODEV)` → cleanup. Sem
+  `START_DEV`, sem `swapon`. (`mmap` do io-desc não é exigido para o FETCH — fica no M1.)
 - **M3 — `START_DEV` + loop ring↔worker H1** *(gated)*: só após M1/M2, com PRD/bench de
   latência ublk vs NBD provando ganho. **Fora deste SPEC de prep.**
 

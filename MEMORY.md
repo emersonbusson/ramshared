@@ -494,3 +494,31 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Proximo recorte (SPEC §8 M2):** submeter `FETCH_REQ` para todas as tags (push de SQE
   `UringCmd80` com `IoCmd::fetch`) sem esperar CQE; `DEL_DEV` gera CQEs `UBLK_IO_RES_ABORT(-ENODEV)`.
   Ainda sem `START_DEV`/`swapon`.
+
+---
+
+## 2026-06-07 — Fase B prep: M2 FETCH_REQ no-wait + teardown
+
+- **TDD M2 (SPEC-ring-loop §8):** commits `29d0479 test(wsl2d): add ublk fetch submit RED (#3)` e
+  `8a325a3 fix(wsl2d): submit ublk FETCH_REQ without waiting (#3)`.
+- **Mudanca:** `ramshared-uring` ganhou `UblkFetchRing` (ring io_uring persistente: push de
+  `UringCmd80` FETCH por tag, `submit()` want=0, `drain()` nao-bloqueante via `completion()`),
+  `UblkCompletion {tag, result}` e `fetch_cmd80` (empacota `ublksrv_io_cmd`). `unsafe push`
+  isolado; dono dos buffers de dados. `ublk_queue::FetchSession` segura char device + ring;
+  `ramshared-wsl2d` segue `#![forbid(unsafe_code)]`.
+- **DEADLOCK descoberto e resolvido (lido no driver):** `ublk_ctrl_del_dev` chama
+  `ublk_cancel_dev` (posta `io_uring_cmd_done(ABORT=-ENODEV)`) e depois **bloqueia** em
+  `wait_event(idr_freed)` (ublk_drv.c:2523) ate o char fechar; o char so fecha quando os FETCH
+  (que seguram `fget` via io_uring) sao cancelados. Teardown single-thread (DEL_DEV bloqueante +
+  drain depois) **trava** (confirmado: timeout exit 124). Correto: drenar o ring numa **thread
+  propria** (DT-3) em paralelo ao DEL_DEV — ela coleta os aborts e fecha o char, desbloqueando.
+- **Evidencia:** RED falhou por `fetch_cmd80`/`FetchSession` ausentes; GREEN:
+  `cargo test -p ramshared-uring --lib` (1/1 fetch_cmd80),
+  `sudo -n timeout 60 .../ublk_control_smoke --ignored --test-threads=1` (4/4, inclui FETCH),
+  `/dev` antes==depois (so `ublk-control`), `cargo test -p ramshared-uring -p ramshared-wsl2d`
+  verde, `cargo fmt --check` + `cargo clippy -p ramshared-uring -p ramshared-wsl2d -- -D warnings`.
+- **Operacional:** os smokes root checam `/dev` global → rodar com **`--test-threads=1`** (em
+  paralelo um teste ve o device do outro). Sempre usar `sudo -n timeout <n>` para nao pendurar.
+- **Limites mantidos:** FETCH estacionado sem I/O; sem `START_DEV`, sem `/dev/ublkbN`, sem `swapon`.
+- **Proximo: M3 (gated por bench).** `START_DEV` + loop ring↔worker H1 (thread dona do ring drena
+  FETCH→IoWork→worker→COMMIT_AND_FETCH). Fora do prep; exige PRD/bench ublk vs NBD.
