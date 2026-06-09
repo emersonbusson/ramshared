@@ -60,7 +60,47 @@ corrida SIGTERM-tarde→SIGKILL) **só é depurável em qemu**, nunca no WSL2.
 **Validar o F2 só em VM/qemu** (`scripts/kernel/qemu-validate.sh`), onde um stall é recuperável sem
 derrubar o host. Lá: abrir os dois gates, rodar o smoke, depurar o teardown se ainda travar.
 
-## F3 (próximo)
+## F2 — análise do teardown (por inspeção) + recipe de validação em qemu
+
+**Já validado (F1, em-processo):** `dt3_vram_residency_triggers_demote_synthetic` (passa) faz
+`spawn_server_dt3_vram_with_residency` → serve → `stop_dev` → `server.join()` → `delete_device`. O
+`run_ublk` faz a **mesma** sequência. Logo o núcleo do teardown já está provado.
+
+**Teardown por inspeção — sound:**
+- No shutdown o device está **ocioso** (a I/O do teste acaba antes do SIGTERM) → `in_flight==0` → o
+  ring owner está em `wait_and_drain` → STOP_DEV posta `UBLK_IO_RES_ABORT` → ring retorna `Ok`.
+- ring retorna → `work_tx` (movido pro closure do ring) dropa → `work_rx.recv()` do worker retorna
+  `Err` → worker sai do loop → zera VRAM/canário → retorna. `server.join()` junta ring depois worker.
+- Caso `in_flight>0`: o branch bloqueia em `reply_rx.recv()` (não checa ABORT direto), mas o worker
+  **sempre responde** (op de memória) → `in_flight` cai a 0 → a volta seguinte pega o ABORT. Não trava.
+
+**Resíduo NÃO validado (precisa de qemu):** (1) o plumbing do sinal → `SHUTDOWN` → sair do loop;
+(2) **processo separado** — se o teardown demora mais que o timeout do harness, o `kill`/SIGKILL
+orfana o device → freeze. **Esta (2) é a causa provável do freeze, e é do HARNESS de teste, não da
+lógica do daemon.**
+
+**Candidatos de causa-raiz a checar em qemu (ordem de probabilidade):**
+1. `write_block`/`fsync` do teste pendurando (serving hang) ANTES do kill.
+2. SIGTERM tarde → `wait_child(15s)` estoura → `child.kill()` (SIGKILL) → órfão (corrida do harness).
+3. STOP_DEV/join travando (improvável — F1 valida a sequência em-processo).
+
+**Recipe de validação em qemu (host-safe: uma VM não trava o host):**
+1. **Modo RAM-backed no daemon** (`--backend ram` → `spawn_server_dt3` com `RamBackend`, sem GPU). O
+   bug de teardown é **independente do backend** (RAM exercita o mesmo ciclo ublk + sinal).
+2. **Rootfs qemu** com: kernel WSL2 (`CONFIG_BLK_DEV_UBLK=m`), `ublk_drv.ko`, o binário
+   `ramshared-wsl2d`, busybox, e um `/init` que: `insmod ublk_drv` → sobe o daemon
+   `--transport ublk --backend ram --size 8` → espera `/dev/ublkbN` → `dd` write+read → `kill -TERM`
+   → confere exit 0 + device removido. (Estende o `qemu-validate.sh`, hoje só boot-de-kernel.)
+3. Rodar com `RAMSHARED_ALLOW_UBLK_ON_WSL2=1` (o kernel WSL2 ainda reporta "microsoft" no osrelease).
+4. **Se travar a VM:** reproduzido → depurar (provavelmente endurecer o harness pra nunca SIGKILL com
+   device vivo + bound no teardown). **Se passar:** o teardown do daemon é sólido; o freeze foi a
+   corrida SIGKILL específica do WSL2.
+
+**Endurecimento do harness (pra quando rodar):** nunca `child.kill()` (SIGKILL) com device vivo —
+preferir SIGTERM repetido + cleanup via control-plane; e **jamais `drop_caches`** no smoke do daemon
+(já removido). Pré-req: `--backend ram` no daemon (não implementado — primeira tarefa da validação).
+
+## F3 (depois do F2 em qemu)
 
 `mkswap`/`swapon`/`swapoff` pelo daemon ublk (ciclo limitado) + bench p50/p99 vs o de teste (~241µs).
-`/dev` + `/proc/swaps` antes==depois; `dmesg` sem OOPs.
+`/dev` + `/proc/swaps` antes==depois; `dmesg` sem OOPs. Só após o F2 validado em VM.
