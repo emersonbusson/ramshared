@@ -851,3 +851,29 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   focada (contexto ja longo).
 - **Estado Fase B:** VRAM+swap+bench(>NBD)+no-alloc+qd>1(r/w)+multipagina TODOS feitos/validados em
   hardware; integracao no daemon DESENHADA (PRD+SPEC). ~90 commits. Usuario: "nada de PR agora".
+
+---
+
+## 2026-06-09 — Frente B F1: worker DT-3 com residencia (feito, TDD)
+
+- **F1 da integracao no daemon FEITO** (commit `31f8395`, RF-3). Opcao 1 do PRD: a maquina de
+  residencia (canario §9 latencia + sonda §9.4 conteudo/free + DEMOTE/swapoff) roda DENTRO do worker
+  DT-3, que ja e a thread dona do contexto CUDA (DeviceMem !Send) -> resolve afinidade, zero CUDA
+  cross-thread.
+- **Refactor de reuso:** `src/swap.rs` (novo) extrai `spawn_swapoff`/`swapoff_bin` do `main.rs`;
+  ambos transportes usam `crate::swap`. Caminho NBD intocado.
+- **API nova (`ublk_server.rs`):** `spawn_server_dt3_vram_with_residency(char_path, qd, buf_size,
+  vram_bytes, block_size, swap_dev:String, residency:ResidencyConfig) -> ServerHandleDt3VramResidency`.
+  O worker constroi canary_region+CanaryProbe e roda o loop inline (espelha o worker NBD do main.rs).
+  `ServerHandleDt3VramResidency::demote_count()` (Arc<AtomicU32>) torna o DEMOTE observavel SEM swap
+  real.
+- **Gatilho sintetico determinISTICO de DEMOTE** (reusavel): `ResidencyConfig{latency_mult:0,
+  consecutive:1, free_floor_bytes:0}` -> limiar=baseline*0=0, todo serve real (lat>0) dispara apos a
+  baseline (16 amostras). Smoke `dt3_vram_residency_triggers_demote_synthetic` (root+GPU): swapoff de
+  swap_dev inexistente falha (esperado) mas demote_count>=1. /dev limpo.
+- **PROXIMO: F2** = `--transport ublk` no main.rs (mlockall+oom reuso -> ADD/SET_PARAMS ->
+  spawn_..._with_residency -> START -> aguarda SINAL (SIGINT/SIGTERM via flag) -> fecha fds -> STOP
+  -> join -> DEL). Ponto sensivel: ciclo de vida do daemon (sinal) + teardown ordenado (del_gendisk
+  espera openers). Depois F3 (swap e2e pelo daemon + bench). Nao comecado: melhor em sessao focada
+  (signal handling + smoke a nivel de processo).
+- **Estado Fase B:** A(multipagina)+B-F1 feitos/validados; B-F2/F3 desenhados. ~93 commits.
