@@ -19,6 +19,9 @@ Status: **prep em andamento** (2026-06-07). Kernel custom ativo:
 - `ublk_control::add_device` + `delete_device` cobrem `ADD_DEV`/`DEL_DEV` com `dev_id` automático.
   O smoke root cria e remove somente `/dev/ublkcN`; `START_DEV` ainda não foi chamado e
   `/dev/ublkbN` não aparece.
+- `ublk.rs` modela as ops de IO **codificadas** (`UBLK_U_IO_FETCH_REQ`/`COMMIT_AND_FETCH_REQ`/
+  `NEED_GET_DATA`) e `IoCmd::fetch`/`IoCmd::to_bytes` (layout `ublksrv_io_cmd` de 16 B). Encoding
+  puro, pronto para a SQE; sem ring, sem `mmap`, sem `unsafe`.
 
 ## Decisão de dependência
 
@@ -34,8 +37,11 @@ hand-roll de barreiras acquire/release no caminho de swap. A dependência entrou
 2. **Feito:** consultar `/dev/ublk-control` (`GET_FEATURES`) e exercitar `ADD_DEV` + `DEL_DEV`
    em smoke explícito. Limite validado: `/dev/ublkcN` temporário, sem `/dev/ublkbN`, sem
    `START_DEV`, sem `swapon`.
-3. Integrar loop ublk com `IoWork`/worker H1 antes de qualquer `START_DEV`; worker CUDA continua
-   único e a thread io_uring continua dona do ring.
+3. **SSDV3-gated:** o loop ublk exige `mmap` de `/dev/ublkcN` (nova superfície `unsafe` em
+   `ramshared-uring`) e ring persistente que submete `FETCH_REQ` **sem** esperar CQE (o driver
+   deixa o comando pendente em `-EIOCBQUEUED` até I/O ou abort). Por tocar `mmap`/MMIO +
+   barreiras/threading do ring, fechar SPECv2/IMPL antes do código. Thread io_uring continua dona
+   única do ring (DT-3); worker CUDA único; integrar com `IoWork`/worker H1 antes de `START_DEV`.
 4. Bench ublk vs NBD com número p50/p99. Sem ganho medível: manter NBD e remover a dependência.
 
 ## Rollback trigger
