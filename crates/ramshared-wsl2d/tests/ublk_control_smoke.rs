@@ -1,4 +1,4 @@
-use ramshared_wsl2d::{ublk, ublk_control};
+use ramshared_wsl2d::{ublk, ublk_control, ublk_queue};
 use std::fs;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -44,6 +44,27 @@ fn add_then_delete_char_device_without_starting_block_device() {
         fs::metadata(&block_path).is_err(),
         "{block_path} nao deveria existir apos DEL_DEV"
     );
+    assert_eq!(ublk_nodes(), before);
+}
+
+#[test]
+#[ignore = "requires root and /dev/ublk-control; maps /dev/ublkcN read-only, no START_DEV"]
+fn mmap_io_desc_buffer_read_only_without_starting_device() {
+    let before = ublk_nodes();
+    let report = ublk_control::add_device(UBLK_CONTROL, ublk_control::DeviceSpec::smoke_auto())
+        .expect("ublk ADD_DEV");
+    let mut guard = DeviceGuard::new(report.dev_id);
+
+    let char_path = format!("/dev/ublkc{}", report.dev_id);
+    // Sem I/O submetido, o io-desc da tag 0 deve estar zerado. O sucesso prova que o
+    // mmap PROT_READ da fila 0 funciona no kernel custom; nenhum START_DEV e chamado.
+    let desc0 = ublk_queue::read_io_desc(&char_path, report.queue_depth, 0)
+        .expect("mmap + leitura do io-desc");
+    assert_eq!(desc0, ublk::IoDesc::default());
+
+    ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
+    guard.disarm();
+    wait_until_missing(&char_path);
     assert_eq!(ublk_nodes(), before);
 }
 
