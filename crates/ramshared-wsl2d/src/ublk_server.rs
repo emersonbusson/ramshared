@@ -1,18 +1,19 @@
 //! Backend de RAM e lógica de serviço de I/O para o loop ublk.
 //!
-//! `serve_request` é puro: dado o `IoDesc` do request e o buffer da tag, serve
-//! contra o backend e devolve o `result` (bytes `>= 0`, ou `-errno`) que o COMMIT
-//! deve carregar. `RamBackend` é um disco volátil em memória para validar o loop
-//! end-to-end antes de ligar VRAM/swap.
+//! `serve_request` é puro: dado um `Request` e o buffer de dados, serve contra um
+//! `BlockBackend` e devolve o `result` (bytes `>= 0`, ou `-errno`) que o COMMIT
+//! deve carregar. `RamBackend` valida o loop sem CUDA; `spawn_ublk_worker` é o
+//! worker DT-3 (thread dona do backend) que será usado com o `VramBackend`.
 
 use std::fs::OpenOptions;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::path::Path;
+use std::sync::mpsc::{Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use ramshared_block::{BlockBackend, IoError};
+use ramshared_block::{BlockBackend, Command, IoError, Request};
 
 use crate::ublk;
 
@@ -72,37 +73,30 @@ impl BlockBackend for RamBackend {
     }
 }
 
-/// Serve um request ublk contra qualquer [`BlockBackend`] usando `buf` (o buffer da
-/// tag) e devolve o `result` do COMMIT: bytes transferidos (`>= 0`) ou `-errno`.
-/// Serve **in-place** no buffer (sem alloc no hot path — DT-8), diferente do
-/// `serve()` NBD que aloca um `Vec`.
+/// Serve um `Request` ublk contra qualquer [`BlockBackend`] usando `buf` (onde os
+/// dados vivem) e devolve o `result` do COMMIT: bytes transferidos (`>= 0`) ou
+/// `-errno`. Serve **in-place** no buffer (sem alloc no hot path — DT-8). `buf` é o
+/// buffer da tag no loop single-thread, ou um buffer do worker no DT-3.
 ///
-/// Em WRITE o kernel já copiou os dados do bio para `buf`; em READ o backend
+/// Em WRITE `buf` já traz os dados (o kernel copiou do bio); em READ o backend
 /// preenche `buf` e o kernel copia `result` bytes de volta no COMMIT — por isso
 /// `result` precisa ser exatamente os bytes servidos.
 pub fn serve_request<B: BlockBackend + ?Sized>(
+    req: &Request,
     backend: &mut B,
-    iod: &ublk::IoDesc,
     buf: &mut [u8],
 ) -> i32 {
-    let sector = ublk::UBLK_SECTOR_SIZE as usize;
-    let len = match usize::try_from(iod.nr_sectors_or_zones)
-        .ok()
-        .and_then(|n| n.checked_mul(sector))
-    {
-        Some(len) if len <= buf.len() => len,
-        _ => return EINVAL, // request ausente, overflow ou maior que o buffer da tag
-    };
-    let offset = match iod.start_sector.checked_mul(ublk::UBLK_SECTOR_SIZE) {
-        Some(off) => off,
-        None => return EINVAL,
-    };
+    let len = req.len as usize;
+    if len > buf.len() {
+        return EINVAL; // request maior que o buffer disponível
+    }
 
-    let served = match iod.operation() {
-        ublk::UBLK_IO_OP_READ => backend.read_at(offset, &mut buf[..len]).map(|()| len),
-        ublk::UBLK_IO_OP_WRITE => backend.write_at(offset, &buf[..len]).map(|()| len),
-        ublk::UBLK_IO_OP_FLUSH => backend.flush().map(|()| 0),
-        _ => return EINVAL,
+    let served = match req.cmd {
+        Command::Read => backend.read_at(req.offset, &mut buf[..len]).map(|()| len),
+        Command::Write => backend.write_at(req.offset, &buf[..len]).map(|()| len),
+        Command::Flush => backend.flush().map(|()| 0),
+        Command::Trim => return 0, // descarte: no-op seguro no MVP
+        Command::Disc | Command::Unknown(_) => return EINVAL,
     };
 
     match served {
@@ -175,8 +169,85 @@ fn run_server_loop(
             // result == UBLK_IO_RES_OK (0): ha um request pronto na tag.
             let iod = ublk::IoDesc::from_ne_bytes(server.io_desc_bytes(completion.tag))
                 .ok_or_else(|| io::Error::other("io-desc invalido no mmap"))?;
-            let result = serve_request(&mut backend, &iod, server.buffer_mut(completion.tag));
+            let result = match iod.to_block_request(completion.tag) {
+                Ok(req) => serve_request(&req, &mut backend, server.buffer_mut(completion.tag)),
+                Err(_) => EINVAL, // op ublk sem equivalencia segura
+            };
             server.commit_and_fetch(completion.tag, result)?;
         }
     }
+}
+
+/// Resposta do worker DT-3 para o ring owner: `result` do COMMIT e os dados de um
+/// READ (que o ring owner copia no buffer da tag antes de `commit_and_fetch`).
+#[derive(Clone, Debug)]
+pub struct WorkerReply {
+    pub qid: u16,
+    pub tag: u16,
+    pub result: i32,
+    pub read_data: Vec<u8>,
+}
+
+/// Handle da thread worker DT-3; `join` aguarda o worker encerrar (quando o canal de
+/// `IoWork` fecha) e devolve o backend.
+pub struct WorkerHandle<B> {
+    thread: JoinHandle<B>,
+}
+
+impl<B> WorkerHandle<B> {
+    pub fn join(self) -> io::Result<B> {
+        self.thread
+            .join()
+            .map_err(|_| io::Error::other("ublk worker panicked"))
+    }
+}
+
+/// Sobe o worker DT-3: a thread dona do `backend` (a única a tocar a VRAM/CUDA).
+/// Recebe `IoWork` pelo canal, serve contra o `backend` e devolve `WorkerReply`.
+/// Encerra quando `work_rx` fecha (o ring owner caiu) ou `reply_tx` quebra.
+pub fn spawn_ublk_worker<B: BlockBackend + Send + 'static>(
+    backend: B,
+    work_rx: Receiver<ublk::IoWork>,
+    reply_tx: Sender<WorkerReply>,
+) -> WorkerHandle<B> {
+    let thread = thread::spawn(move || worker_loop(backend, work_rx, reply_tx));
+    WorkerHandle { thread }
+}
+
+fn worker_loop<B: BlockBackend>(
+    mut backend: B,
+    work_rx: Receiver<ublk::IoWork>,
+    reply_tx: Sender<WorkerReply>,
+) -> B {
+    while let Ok(mut work) = work_rx.recv() {
+        let (result, read_data) = match work.req.cmd {
+            Command::Read => {
+                // O worker possui o buffer de leitura; o ring owner copia para a tag.
+                let mut buf = vec![0u8; work.req.len as usize];
+                let result = serve_request(&work.req, &mut backend, &mut buf);
+                if result >= 0 {
+                    (result, buf)
+                } else {
+                    (result, Vec::new())
+                }
+            }
+            // WRITE/FLUSH/TRIM: os dados (se houver) já vêm no payload.
+            _ => {
+                let result = serve_request(&work.req, &mut backend, &mut work.payload);
+                (result, Vec::new())
+            }
+        };
+
+        let reply = WorkerReply {
+            qid: work.qid,
+            tag: work.tag,
+            result,
+            read_data,
+        };
+        if reply_tx.send(reply).is_err() {
+            break; // ring owner caiu
+        }
+    }
+
+    backend
 }
