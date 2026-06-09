@@ -180,14 +180,17 @@ fn run_server_loop(
     }
 }
 
-/// Resposta do worker DT-3 para o ring owner: `result` do COMMIT e os dados de um
-/// READ (que o ring owner copia no buffer da tag antes de `commit_and_fetch`).
+/// Resposta do worker DT-3 para o ring owner. `buf` é o buffer cedido pelo ring
+/// owner, devolvido para reciclagem (pool sem alloc no hot path — DT-8). Quando
+/// `is_read` e `result >= 0`, `buf` carrega os `result` bytes lidos que o ring owner
+/// copia no buffer da tag antes de `commit_and_fetch`.
 #[derive(Clone, Debug)]
 pub struct WorkerReply {
     pub qid: u16,
     pub tag: u16,
     pub result: i32,
-    pub read_data: Vec<u8>,
+    pub buf: Vec<u8>,
+    pub is_read: bool,
 }
 
 /// Handle da thread worker DT-3; `join` aguarda o worker encerrar (quando o canal de
@@ -225,29 +228,18 @@ fn worker_loop<B: BlockBackend>(
     reply_tx: Sender<WorkerReply>,
 ) {
     while let Ok(mut work) = work_rx.recv() {
-        let (result, read_data) = match work.req.cmd {
-            Command::Read => {
-                // O worker possui o buffer de leitura; o ring owner copia para a tag.
-                let mut buf = vec![0u8; work.req.len as usize];
-                let result = serve_request(&work.req, backend, &mut buf);
-                if result >= 0 {
-                    (result, buf)
-                } else {
-                    (result, Vec::new())
-                }
-            }
-            // WRITE/FLUSH/TRIM: os dados (se houver) já vêm no payload.
-            _ => {
-                let result = serve_request(&work.req, backend, &mut work.payload);
-                (result, Vec::new())
-            }
-        };
+        // `payload` é o buffer cedido pelo ring owner, já dimensionado a `req.len`:
+        // em WRITE traz os dados do bio; em READ o backend o preenche. O worker
+        // serve in-place e devolve o mesmo buffer — nenhuma alloc aqui (DT-8).
+        let result = serve_request(&work.req, backend, &mut work.payload);
+        let is_read = work.req.cmd == Command::Read;
 
         let reply = WorkerReply {
             qid: work.qid,
             tag: work.tag,
             result,
-            read_data,
+            buf: work.payload,
+            is_read,
         };
         if reply_tx.send(reply).is_err() {
             break; // ring owner caiu
@@ -295,7 +287,7 @@ pub fn spawn_server_dt3<B: BlockBackend + Send + 'static>(
         // O char device fica aberto enquanto o ring vive; `work_tx` cai ao retornar
         // (encerra o worker).
         let _char_dev = char_dev;
-        run_ring_owner(server, work_tx, reply_rx)
+        run_ring_owner(server, queue_depth, buf_size, work_tx, reply_rx)
     });
 
     Ok(ServerHandleDt3 { ring, worker })
@@ -303,10 +295,18 @@ pub fn spawn_server_dt3<B: BlockBackend + Send + 'static>(
 
 fn run_ring_owner(
     mut server: ramshared_uring::UblkServer,
+    queue_depth: u16,
+    buf_size: usize,
     work_tx: SyncSender<ublk::IoWork>,
     reply_rx: Receiver<WorkerReply>,
 ) -> io::Result<()> {
     server.submit_initial_fetch()?;
+
+    // Pool de buffers reciclados (DT-8): pré-aquece `queue_depth` buffers de
+    // `buf_size`. Cada request pega um do pool no dispatch e o devolve no COMMIT —
+    // zero malloc/free no hot path em regime. O pool nunca esvazia porque o número
+    // de requests em voo é limitado a `queue_depth` (pool.len() + in_flight == qd).
+    let mut buf_pool: Vec<Vec<u8>> = (0..queue_depth).map(|_| vec![0u8; buf_size]).collect();
 
     let mut in_flight = 0u32;
     loop {
@@ -315,14 +315,14 @@ fn run_ring_owner(
             match reply_rx.recv() {
                 Ok(reply) => {
                     in_flight -= 1;
-                    commit_reply(&mut server, reply)?;
+                    commit_reply(&mut server, reply, &mut buf_pool)?;
                 }
                 Err(_) => return Err(io::Error::other("worker encerrou inesperadamente")),
             }
             // Drena respostas adicionais ja prontas, sem bloquear.
             while let Ok(reply) = reply_rx.try_recv() {
                 in_flight -= 1;
-                commit_reply(&mut server, reply)?;
+                commit_reply(&mut server, reply, &mut buf_pool)?;
             }
         } else {
             // Ocioso: bloqueia ate o proximo CQE (request servido ou abort).
@@ -336,7 +336,7 @@ fn run_ring_owner(
                         completion.result
                     )));
                 }
-                if dispatch_request(&mut server, completion.tag, &work_tx)? {
+                if dispatch_request(&mut server, completion.tag, &work_tx, &mut buf_pool)? {
                     in_flight += 1;
                 }
             }
@@ -344,54 +344,72 @@ fn run_ring_owner(
     }
 }
 
-/// Copia os dados de READ (se houver) no buffer da tag e completa via COMMIT.
-fn commit_reply(server: &mut ramshared_uring::UblkServer, reply: WorkerReply) -> io::Result<()> {
-    if !reply.read_data.is_empty() {
-        let buf = server.buffer_mut(reply.tag);
-        let n = reply.read_data.len().min(buf.len());
-        buf[..n].copy_from_slice(&reply.read_data[..n]);
+/// Copia os dados de READ (se houver) no buffer da tag, completa via COMMIT e
+/// devolve o buffer ao pool (sem dealloc — mantém a capacidade).
+fn commit_reply(
+    server: &mut ramshared_uring::UblkServer,
+    reply: WorkerReply,
+    buf_pool: &mut Vec<Vec<u8>>,
+) -> io::Result<()> {
+    if reply.is_read && reply.result >= 0 {
+        let n = usize::try_from(reply.result).unwrap_or(0);
+        let tag_buf = server.buffer_mut(reply.tag);
+        let n = n.min(reply.buf.len()).min(tag_buf.len());
+        tag_buf[..n].copy_from_slice(&reply.buf[..n]);
     }
-    server.commit_and_fetch(reply.tag, reply.result)
+    server.commit_and_fetch(reply.tag, reply.result)?;
+    // Recicla o buffer: limpa o len mas preserva a capacidade (sem free).
+    let mut buf = reply.buf;
+    buf.clear();
+    buf_pool.push(buf);
+    Ok(())
 }
 
-/// Le o io-desc da `tag`, monta o `IoWork` (copiando o payload do WRITE do buffer da
-/// tag) e envia ao worker. Retorna `true` se enviou trabalho, `false` se rejeitou o
-/// request (ja completado com erro).
+/// Le o io-desc da `tag`, pega um buffer reciclado do pool dimensionado a `len`
+/// (copiando o payload do WRITE do buffer da tag) e envia ao worker. Retorna `true`
+/// se enviou trabalho, `false` se rejeitou o request (ja completado com erro; o
+/// buffer, se foi tirado do pool, volta para ele).
 fn dispatch_request(
     server: &mut ramshared_uring::UblkServer,
     tag: u16,
     work_tx: &SyncSender<ublk::IoWork>,
+    buf_pool: &mut Vec<Vec<u8>>,
 ) -> io::Result<bool> {
     let iod = ublk::IoDesc::from_ne_bytes(server.io_desc_bytes(tag))
         .ok_or_else(|| io::Error::other("io-desc invalido no mmap"))?;
     let req = match iod.to_block_request(tag) {
         Ok(req) => req,
         Err(_) => {
-            server.commit_and_fetch(tag, -22)?; // EINVAL
+            server.commit_and_fetch(tag, -22)?; // EINVAL (nenhum buffer tirado do pool)
             return Ok(false);
         }
     };
 
-    // WRITE: o kernel já copiou bio->buffer da tag; leva no payload.
-    let payload = if req.cmd == Command::Write {
-        let len = req.len as usize;
-        let buf = server.buffer_mut(tag);
-        if len <= buf.len() {
-            buf[..len].to_vec()
+    // Pega um buffer reciclado e dimensiona a `len`. `unwrap_or_default` só aloca no
+    // aquecimento (pool vazio); em regime o pré-aquecimento garante um disponível.
+    let len = req.len as usize;
+    let mut buf = buf_pool.pop().unwrap_or_default();
+    buf.clear();
+    buf.resize(len, 0);
+
+    // WRITE: o kernel já copiou bio->buffer da tag; leva no buffer cedido.
+    if req.cmd == Command::Write {
+        let tag_buf = server.buffer_mut(tag);
+        if len <= tag_buf.len() {
+            buf.copy_from_slice(&tag_buf[..len]);
         } else {
+            buf_pool.push(buf); // devolve ao pool antes de rejeitar
             server.commit_and_fetch(tag, -22)?; // EINVAL
             return Ok(false);
         }
-    } else {
-        Vec::new()
-    };
+    }
 
     let work = ublk::IoWork {
         qid: 0,
         tag,
         buffer_addr: 0,
         req,
-        payload,
+        payload: buf,
     };
     work_tx
         .send(work)
@@ -453,7 +471,7 @@ pub fn spawn_server_dt3_vram(
 
     let ring = thread::spawn(move || {
         let _char_dev = char_dev;
-        run_ring_owner(server, work_tx, reply_rx)
+        run_ring_owner(server, queue_depth, buf_size, work_tx, reply_rx)
     });
 
     Ok(ServerHandleDt3Vram { ring, worker })
