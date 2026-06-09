@@ -522,3 +522,26 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Limites mantidos:** FETCH estacionado sem I/O; sem `START_DEV`, sem `/dev/ublkbN`, sem `swapon`.
 - **Proximo: M3 (gated por bench).** `START_DEV` + loop ring↔worker H1 (thread dona do ring drena
   FETCH→IoWork→worker→COMMIT_AND_FETCH). Fora do prep; exige PRD/bench ublk vs NBD.
+
+---
+
+## 2026-06-07 — Fase B M3 inicio: SET_PARAMS (pre-START_DEV)
+
+- **Decisao do dono:** continuar a implementacao ate o ublk **funcionar**; PR so no fim (nao agora).
+  Ver [[feedback-batch-local-single-pr]].
+- **TDD SET_PARAMS:** commits `f2eddca test(wsl2d): add ublk set_params RED (#3)` e
+  `883de60 fix(wsl2d): add ublk set/get params control (#3)`.
+- **Mudanca:** constantes `UBLK_U_CMD_{START_DEV,STOP_DEV,SET_PARAMS,GET_PARAMS}` (cc:
+  `0xc0207506/07/08`; `GET_PARAMS=0x80207509`, e `_IOR`). `Params::basic_disk(dev_sectors,
+  logical_bs_shift, physical_bs_shift)` + `Params::to_bytes`/`from_bytes` (layout 112 B; offsets
+  via cc: basic@8, dev_sectors@24, discard@40, devt@60, zoned@76, padding@108). Wrappers
+  `ublk_set_params`/`ublk_get_params` (control) em ramshared-uring; `ublk_control::set_params`/
+  `get_params`. Tudo control-only (sem char/FETCH/START → DEL_DEV nao deadlocka).
+- **Evidencia:** RED falhou por constantes/`basic_disk`/`to_bytes`/`set_params` ausentes; GREEN:
+  `cargo test -p ramshared-wsl2d --test ublk_uapi` (15/15, +round-trip puro), smoke root
+  `set_params_roundtrips` ok (GET confirma `dev_sectors=2048`, bs 9/12, types BASIC), **5/5 smokes
+  root** single-thread, `/dev` so `ublk-control`, clippy/fmt limpos.
+- **Proximo (M3 nucleo, maior risco):** `START_DEV` cria `/dev/ublkbN` (block device) e exige as
+  filas ready (FETCH submetido) + **thread dona do ring servindo I/O** (drena FETCH → io-desc via
+  mmap → backend → COMMIT_AND_FETCH). Validar com **backend de RAM (Vec)** + I/O de teste (dd) no
+  block device ANTES de VRAM/swap. `swapon` continua sendo o passo final separado.
