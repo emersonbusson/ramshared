@@ -715,3 +715,21 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   (sobe o daemon `main.rs` + `nbd-client`; o lado ublk ja esta medido em 231us p50). (2) **no-alloc
   no worker** — `worker_loop` aloca um `Vec` por READ; hazard sob swap pesado (mitigacao: pool de
   buffers ciclado ring owner ↔ worker). NAO validavel sem gerar pressao (que pode travar WSL2).
+
+---
+
+## 2026-06-07 — Fase B M3c: GATE passado — ublk vence o NBD (bench fio)
+
+- **Comparacao fio (RTX 2060, 4KB randread `O_DIRECT` iodepth=1):**
+  - **ublk-VRAM:** p50=**241us** p99=461us IOPS=3911 (commit `15d1090`, teste `fio_bench_vram_ublk`).
+  - **NBD-VRAM** (daemon `main.rs` + `nbd-client`, medido a parte): p50=**326us** p99=635us IOPS=2900.
+  - → **ublk ~26% mais rapido em p50, ~27% em p99, ~35% mais IOPS** (io_uring vs round-trip de
+    socket NBD).
+- **Gate anti-halo #11 SATISFEITO:** ublk < NBD por ~26% → adocao do ublk justificada por bench.
+- **Harness NBD (one-off, nao commitado):** `cargo build -p ramshared-wsl2d --bin ramshared-wsl2d`;
+  `sudo modprobe nbd nbds_max=2`; daemon `--size 64 --sock <s> --nbd /dev/nbd0` (bg);
+  `nbd-client -unix <s> /dev/nbd0`; `fio`; `nbd-client -d /dev/nbd0`; `pkill -f 'ramshared-wsl2d
+  --size'`. Cleanup confirmado: nbd0 livre, sem daemon, `/dev` so `ublk-control`.
+- **Estado: funcionalmente TUDO works** (ublk serve VRAM, swap validado, bench vence NBD). **Falta
+  so (producao):** no-alloc no `worker_loop` — hardening para swap sob pressao, NAO validavel aqui
+  (pressao pode travar WSL2); `mlockall` e do daemon integrador (`main.rs` ja faz).

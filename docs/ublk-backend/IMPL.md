@@ -4,9 +4,10 @@ Status: **VRAM-as-RAM via swap por ublk — validado** (2026-06-07). Kernel cust
 `6.6.123.2-microsoft-standard-WSL2+`, `CONFIG_BLK_DEV_UBLK=m`,
 `CONFIG_IO_URING=y`, `kernel.io_uring_disabled=0`, `/dev/ublk-control` presente.
 `/dev/ublkbN` serve READ/WRITE/FLUSH a partir da **VRAM** (RTX 2060, `cuMemcpy`) via loop DT-3
-(ring owner + worker dono do ctx CUDA), e foi **validado como área de swap** (`mkswap`/`swapon`/
-`swapoff`, `/proc/swaps`). **Falta só** o **bench** ublk vs NBD (justificativa de adoção — gate
-anti-halo #11), não funcionalidade.
+(ring owner + worker dono do ctx CUDA), foi **validado como área de swap** (`mkswap`/`swapon`/
+`swapoff`, `/proc/swaps`), e o **bench fio mostra ublk ~26% mais rápido que NBD** (p50 241µs vs
+326µs; gate anti-halo #11 satisfeito). **Funcionalmente completo.** Resta só o **no-alloc do
+worker** (hardening de produção sob pressão de swap, não validável aqui).
 
 ## Fechado sem tocar swap
 
@@ -51,8 +52,11 @@ anti-halo #11), não funcionalidade.
   via ublk** — o objetivo central da Fase B. 5/5 smokes I/O, `/proc/swaps` antes==depois.
 - **Bench + perf:** `bench_vram_ublk_read_latency` mede 4KB `O_DIRECT` no ublk-VRAM. O ring owner
   passou a **bloquear** (CQE/reply) em vez de poll de 200µs → p50 **628µs → 231µs** (2.7×, RTX
-  2060); o residual é o custo do DT-3 (2 saltos de thread) + WSL2. **Falta só:** comparar com NBD
-  (lado ublk já medido) e endurecer o worker (no-alloc) para swap sob pressão.
+  2060); o residual é o custo do DT-3 (2 saltos de thread) + WSL2.
+- **Bench fio ublk vs NBD (gate anti-halo #11):** mesmo `fio` (4KB randread `O_DIRECT` iodepth=1)
+  nos dois transportes servindo VRAM. **ublk** p50=241µs p99=461µs IOPS=3911 vs **NBD** p50=326µs
+  p99=635µs IOPS=2900 → **ublk ~26% mais rápido, ~35% mais IOPS**. Gate satisfeito. **Resta só:**
+  no-alloc do `worker_loop` (hardening de produção sob pressão; não validável aqui).
 - **SET_PARAMS** (pré-requisito do `START_DEV`): `ublk_control::set_params`/`get_params`
   (control-only) aplicam/leem `ublk_params` (112 B); `Params::basic_disk`/`to_bytes`/`from_bytes`
   espelham o layout (offsets via `cc`). Smoke root: round-trip de `dev_sectors`/bs-shifts sem
