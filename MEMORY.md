@@ -636,3 +636,23 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   cuidadoso (risco de deadlock como M2/M3b). (2) **VramBackend nao e `'static`** (`DeviceMem<'c,'a>`
   borrows Context) → `spawn_ublk_worker` precisa de uma variante **factory** (cria o stack CUDA NA
   thread) em vez de receber o backend pronto. (3) smoke GPU. (4) bench. (5) `swapon`.
+
+---
+
+## 2026-06-07 — Fase B M3c: ring owner DT-3 (arquitetura ALVO completa, sem GPU)
+
+- **TDD ring owner DT-3:** commits `90a9c21 test(wsl2d): add ublk dt-3 ring owner RED (#3)` e
+  `ffc542f fix(wsl2d): add ublk dt-3 ring owner loop (#3)`.
+- **Mudanca:** `spawn_server_dt3` sobe 2 threads: ring owner (dona do `UblkServer`) + worker (dona
+  do backend). Ring owner: drena CQE → `IoWork` (copia payload do WRITE do buffer da tag) →
+  `work_tx` → recebe `WorkerReply` → copia `read_data` na tag → `commit_and_fetch`. Teardown: no
+  abort retorna, dropa `work_tx`, worker encerra (devolve backend). `ServerHandleDt3::join` une os dois.
+- **Evidencia:** smoke DT-3 root `dt3_serves_read_from_ram_backend_over_block_device` ok (0.07s,
+  **SEM deadlock** — o teardown coordenado funcionou de primeira); **3/3 smokes I/O** (single-thread
+  READ/WRITE + DT-3) verdes; `/dev` antes==depois; clippy/fmt limpos.
+- **Marco:** a **arquitetura ALVO DT-3 esta funcionando** com RamBackend (ring owner + worker
+  separados, do jeito que o VRAM exige). O VramBackend pluga pela MESMA via.
+- **Falta SO para o ublk-VRAM:** (1) `VramBackend` e `!Send`/`!'static` (`DeviceMem<'c,'a>` borrows
+  `Context`) → `spawn_server_dt3`/`spawn_ublk_worker` precisam de variante **factory** que cria o
+  stack Cuda/Context/DeviceMem NA thread do worker (investigar `ramshared-cuda/src/driver.rs`).
+  (2) smoke GPU. (3) bench p50/p99 ublk vs NBD. (4) `swapon`.
