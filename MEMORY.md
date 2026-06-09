@@ -656,3 +656,23 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   `Context`) → `spawn_server_dt3`/`spawn_ublk_worker` precisam de variante **factory** que cria o
   stack Cuda/Context/DeviceMem NA thread do worker (investigar `ramshared-cuda/src/driver.rs`).
   (2) smoke GPU. (3) bench p50/p99 ublk vs NBD. (4) `swapon`.
+
+---
+
+## 2026-06-07 — Fase B M3c: ublk SERVINDO VRAM (objetivo central da Fase B)
+
+- **TDD VRAM:** commits `d5a5a71 test(wsl2d): add ublk dt-3 vram smoke RED (#3)` e
+  `ac915f7 fix(wsl2d): serve ublk from vram via dt-3 worker (#3)`.
+- **Lifetime resolvido:** `spawn_server_dt3_vram` — o worker cria `Cuda::load()` → `device(0)` →
+  `create_context` (vira corrente na thread) → `alloc` → `VramBackend::new` NA propria thread e
+  roda `worker_loop(&mut backend, ...)` ali. Assim o `VramBackend<'c,'a>` (!Send/!'static por causa
+  do borrow `DeviceMem`/`Context`) nunca cruza thread. `worker_loop` passou a receber `&mut B`.
+- **Evidencia (GPU real, RTX 2060):** smoke root `dt3_serves_io_from_vram_over_block_device` ok:
+  bs 4096, WRITE bloco → `cuMemcpyHtoD`, `sync`+`/proc/sys/vm/drop_caches`, READ → `cuMemcpyDtoH`
+  confere o bloco. **4/4 smokes I/O** (RAM READ/WRITE + DT-3 RAM + DT-3 VRAM) single-thread, `/dev`
+  antes==depois, clippy/fmt limpos. `Cuda::load` funciona como root no WSL2.
+- **MARCO:** o ublk serve a **VRAM** end-to-end como block device `/dev/ublkbN` — o objetivo
+  central da Fase B (ublk no lugar do NBD para o transporte de swap da VRAM).
+- **Falta SO:** (1) **bench** ublk vs NBD (p50/p99, mesma carga). (2) **`swapon`** `/dev/ublkbN` —
+  o passo final, com pressao de memoria; cuidado (pode travar WSL2 — ver
+  [[feedback-wsl2-cargo-build-caution]]). DEMOTE segue `swapoff` (SPECv2 DT-6).
