@@ -782,3 +782,25 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   novo SPEC. A fila unica com qd>4..N ja da paralelismo suficiente pro swap no MVP.
 - **Estado:** Fase B = VRAM + swap + bench(>NBD) + no-alloc + qd>1, tudo em hardware. PR seguro
   ainda (usuario: "nada de PR agora, continue"). Branch `feat/fase-b-prep`, ~84 commits.
+
+---
+
+## 2026-06-09 — Fase B: WRITE concorrente qd>1 + achado do cap de 4KB
+
+- **Cobertura de WRITE sob qd>1** (commit `736f5a5`): o smoke qd>1 anterior era so leitura. Novo
+  `dt3_vram_serves_concurrent_writes_with_queue_depth_gt1`: 4 threads donas de blocos disjuntos, 32
+  rodadas WRITE(padrao novo por rodada)+READ-verify via O_DIRECT. Exercita o caminho de WRITE do
+  pool no-alloc (`dispatch_request` copia tag_buf->buffer do pool; worker `write_at` na VRAM) com
+  `in_flight>1`. ~512 ciclos concorrentes, integridade OK, sem deadlock (RTX 2060). Helper
+  `keyed_pattern(seed,bs)` parametriza padrao por (bloco,rodada); `block_pattern` delega a ele.
+- **ACHADO (kernel): o device so faz requests de 4KB.** `DeviceSpec::smoke_auto` seta
+  `max_io_buf_bytes=4096`; `ublk_drv.c:307` faz `min(bufsize, max_hw_sectors<<9)` -> kernel limita
+  TODO request a 4KB. Linha 546 `blk_queue_max_hw_sectors(q, p->max_sectors)` e validacao
+  `max_sectors <= max_io_buf_bytes>>9` (581) -> `max_sectors` (em `params.basic`, hoje 0 via
+  `..default()`) acopla com `max_io_buf_bytes`. **NAO e bug**: e seguro (request <= buf_size sempre)
+  e casa com swap-in (1 pagina). **Custo:** swap clustering/writeback fatiado em 4KB.
+- **Futuro (throughput, nao-bug):** pra requests multi-pagina, acoplar `max_io_buf_bytes`(ADD_DEV)
+  ↔ `max_sectors`(SET_PARAMS) ↔ `buf_size`(servidor) e testar I/O grande. Nao feito no MVP (ganho
+  incerto no WSL2; atual correto). Documentado em SPEC §12 / IMPL.
+- **Estado:** Fase B = VRAM+swap+bench(>NBD)+no-alloc+qd>1(read&write). Branch `feat/fase-b-prep`,
+  ~86 commits. Usuario: "nada de PR agora, continue" — seguir endurecendo, sem propor PR.
