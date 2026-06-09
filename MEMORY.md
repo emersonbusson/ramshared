@@ -761,3 +761,24 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Estado: Fase B funcionalmente completa + ultimo item de producao feito -> PRONTA PARA O PR.**
   Branch `feat/fase-b-prep`, ~82 commits. PR consolida tudo (corpo PT-BR, tabela de commits por
   governance.md). `mlockall` ja e do daemon integrador (`main.rs`).
+
+---
+
+## 2026-06-09 — Fase B: queue_depth>1 validado (paralelismo de swap)
+
+- **qd>1 era estruturalmente suportado mas nao-validado** (todos os smokes usavam queue_depth=1).
+  O `UblkServer` ja dimensiona o mmap de io-desc a `queue_depth*24`, aloca um buffer por tag e
+  submete FETCH por tag com o **endereco proprio de cada tag** (`self.buffers[tag]` em
+  submit_initial_fetch:365 e commit_and_fetch:405); o pool no-alloc pre-aquece `queue_depth`
+  buffers. Faltava so provar end-to-end sob concorrencia.
+- **Teste novo** (commit `444354a`): `dt3_vram_serves_concurrent_io_with_queue_depth_gt1`. Device
+  `queue_depth=4` (fila unica — so servimos a fila 0), escreve 16 blocos com padrao distinto por
+  indice (`block_pattern`: ~+5/byte mod 251 entre blocos), dropa page cache, dispara 4 threads
+  lendo round-robin via `O_DIRECT` (64 rodadas cada) conferindo integridade por bloco. Aliasing/
+  troca de buffer entre tags ou underflow do pool -> corrupcao (assert) ou deadlock.
+- **Resultado (RTX 2060):** ~4096 leituras concorrentes, integridade OK, sem deadlock, `/dev` limpo
+  (3.11s). **Pool no-alloc correto com `in_flight>1`** (invariante `pool.len()+in_flight==qd`).
+- **Fora de escopo:** `nr_hw_queues > 1` (multi-fila) exigiria um ring + char-region por fila ->
+  novo SPEC. A fila unica com qd>4..N ja da paralelismo suficiente pro swap no MVP.
+- **Estado:** Fase B = VRAM + swap + bench(>NBD) + no-alloc + qd>1, tudo em hardware. PR seguro
+  ainda (usuario: "nada de PR agora, continue"). Branch `feat/fase-b-prep`, ~84 commits.

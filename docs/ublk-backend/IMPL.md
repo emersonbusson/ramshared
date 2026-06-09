@@ -64,6 +64,12 @@ e pronta para PR.**
   pool nunca esvazia). Remove o hazard de deadlock de alocar no caminho de I/O sob pressão de swap.
   `WorkerReply` passou de `read_data` para `buf`+`is_read`. Latência inalterada (p50 ~250µs);
   validado pelos smokes DT-3 RAM/VRAM/swap + worker unit. `mlockall` é do daemon (`main.rs`).
+- **queue_depth > 1 (validado):** `dt3_vram_serves_concurrent_io_with_queue_depth_gt1` cria o device
+  com `queue_depth=4` (fila única — só servimos a fila 0) e dispara 4 leitores `O_DIRECT`
+  concorrentes (64 rodadas × 16 blocos com padrão distinto por índice), mantendo múltiplos tags em
+  voo. Confere integridade por bloco — aliasing/troca de buffer entre tags ou underflow do pool
+  corromperia os dados ou travaria. ~4096 leituras concorrentes OK (RTX 2060), sem deadlock, `/dev`
+  limpo. Prova o pool no-alloc com `in_flight > 1` e o endereçamento por-tag (`self.buffers[tag]`).
 - **SET_PARAMS** (pré-requisito do `START_DEV`): `ublk_control::set_params`/`get_params`
   (control-only) aplicam/leem `ublk_params` (112 B); `Params::basic_disk`/`to_bytes`/`from_bytes`
   espelham o layout (offsets via `cc`). Smoke root: round-trip de `dev_sectors`/bs-shifts sem
