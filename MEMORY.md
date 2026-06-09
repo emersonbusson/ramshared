@@ -804,3 +804,25 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   incerto no WSL2; atual correto). Documentado em SPEC §12 / IMPL.
 - **Estado:** Fase B = VRAM+swap+bench(>NBD)+no-alloc+qd>1(read&write). Branch `feat/fase-b-prep`,
   ~86 commits. Usuario: "nada de PR agora, continue" — seguir endurecendo, sem propor PR.
+
+---
+
+## 2026-06-09 — Fase B Frente A: requests multi-pagina (feito, TDD)
+
+- **Frente A do "continue todas as frentes": requests >4KB.** `Params::with_max_sectors(n)` (builder
+  imutavel, commit `3cf690e`) seta `basic.max_sectors` -> kernel usa como `max_hw_sectors`
+  (`ublk_drv.c:546`), validado `<= max_io_buf_bytes>>9` (581). Acopla os 3 knobs:
+  `max_io_buf_bytes`(ADD_DEV) ↔ `max_sectors`(SET_PARAMS) ↔ `buf_size`(servidor por-tag). Invariante
+  dura: `buf_size >= max_sectors*512`. `smoke_auto` mantem 4KB como default seguro.
+- **TDD RED->GREEN:** teste `dt3_vram_serves_multipage_request` usava `.with_max_sectors` (nao
+  existia -> compile fail RED), depois GREEN. Device 128KB -> `max_hw_sectors_kb=128`; WRITE+READ
+  O_DIRECT de **64KB real** (len=65536 > 4096) servido da VRAM num request, integridade OK (RTX
+  2060). Pool no-alloc ja dimensiona o buffer por tag a buf_size -> request grande passa sem alloc.
+- **GOTCHA real (custou 1 timeout 124):** o teste travou no TEARDOWN, nao na feature (markers
+  provaram que write/read 64KB passaram). Causa: `del_gendisk` (no STOP_DEV) **bloqueia ate todos
+  os openers do block device fecharem**; o teste mantinha o fd O_DIRECT aberto. Fix: `drop(file)`
+  antes do `stop_dev`. Os outros smokes fecham o File dentro do helper (read_block/write_block), por
+  isso nunca bateram nisso. **Regra:** fechar fd de /dev/ublkbN antes do STOP_DEV.
+- **Frente B (integracao no daemon):** PROXIMA, via SSDV3 PRD (impl direto e proibido pela
+  disciplina; ha conflito de contexto CUDA worker DT-3 vs canario/residencia do main.rs).
+- **Estado:** Fase B = VRAM+swap+bench(>NBD)+no-alloc+qd>1(r/w)+multipagina. ~88 commits.
