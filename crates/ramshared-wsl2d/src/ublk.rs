@@ -9,6 +9,9 @@ use ramshared_block::{Command, Request};
 
 pub const UBLK_SECTOR_SIZE: u64 = 512;
 
+/// Tamanho de `struct ublksrv_io_desc` (4+4+8+8). Espelha `size_of::<IoDesc>()`.
+pub const UBLK_IO_DESC_SIZE: usize = 24;
+
 pub const UBLK_CMD_ADD_DEV: u32 = 0x04;
 pub const UBLK_CMD_DEL_DEV: u32 = 0x05;
 pub const UBLK_CMD_START_DEV: u32 = 0x06;
@@ -225,6 +228,26 @@ impl IoCompletion {
 }
 
 impl IoDesc {
+    /// Decodifica um `ublksrv_io_desc` a partir dos bytes mapeados do char device
+    /// (layout `repr(C)` nativo). Retorna `None` se o buffer tiver menos de 24 bytes.
+    pub fn from_ne_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < UBLK_IO_DESC_SIZE {
+            return None;
+        }
+        Some(Self {
+            op_flags: u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            nr_sectors_or_zones: u32::from_ne_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+            start_sector: u64::from_ne_bytes([
+                bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14],
+                bytes[15],
+            ]),
+            addr: u64::from_ne_bytes([
+                bytes[16], bytes[17], bytes[18], bytes[19], bytes[20], bytes[21], bytes[22],
+                bytes[23],
+            ]),
+        })
+    }
+
     pub fn operation(&self) -> u8 {
         (self.op_flags & 0xff) as u8
     }

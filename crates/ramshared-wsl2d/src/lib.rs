@@ -10,6 +10,7 @@ pub mod residency;
 pub mod state;
 pub mod ublk;
 pub mod ublk_control;
+pub mod ublk_queue;
 pub mod uring_smoke;
 
 pub use backend::VramBackend;
