@@ -141,3 +141,38 @@
   `submit()` + drain.
 - `grep unsafe` acha `unsafe` fora de `ramshared-uring`.
 - Teardown não entrega CQEs `ABORT` (loop travaria) → revisar ordem (`DEL_DEV` antes do drain).
+
+## 11. Fluxo de serviço de I/O (M3) — fatos verificados
+
+*Confirmado lendo `ublk_drv.c` (2026-06-07).* Modo plano (sem `USER_COPY`/`NEED_GET_DATA`).
+
+- **START_DEV** (`ublk_ctrl_start_dev`, 2207): exige `ublksrv_pid>0` (`data[0]`); **exige
+  SET_PARAMS** (`ublk_apply_params` → `-EINVAL` sem BASIC; `set_capacity(dev_sectors)` em 553);
+  espera `ub->completion` (todas as filas ready = FETCH submetido); então `add_disk` cria
+  `/dev/ublkbN` (state `LIVE` em 2250).
+- **Partition scan obrigatório com daemon privilegiado:** se `nr_privileged_daemon ==
+  nr_queues_ready` (todos com `CAP_SYS_ADMIN` — root, nosso caso), `GD_SUPPRESS_PART_SCAN` **não**
+  é setado (2246-2247) e `add_disk` lê o **setor 0**. Logo a **thread servidora deve estar
+  drenando/servindo durante o START_DEV**: `add_disk` bloqueia até esse read ser servido.
+  Single-thread deadlocka (mesmo padrão do teardown M2).
+- **Notificação:** ao chegar um request, `ublk_setup_iod` (1000) preenche `io-desc[tag]`
+  (op_flags/nr_sectors/start_sector/addr) e o FETCH completa com `res = UBLK_IO_RES_OK (0)`
+  (1244); o **tag vai no `user_data`** da SQE (responsabilidade do servidor).
+- **WRITE (host→device):** kernel copia bio→`addr` **antes** do CQE (`ublk_map_io`, dispatch). O
+  servidor lê o próprio buffer e grava no backend.
+- **READ (host←device):** o servidor preenche `addr`; no COMMIT o kernel copia `addr`→bio
+  **exatamente `result` bytes** (`ublk_unmap_io` copia `io->res`, 965). **`result` load-bearing:**
+  READ com `result=0` é forçado a `-EIO` (1068). Sucesso ⇒ `result = nr_sectors*512`.
+- **`result` no COMMIT:** `>=0` = bytes transferidos (sucesso), `<0` = `-errno`. FLUSH/DISCARD não
+  copiam; `result>=0` basta.
+- **COMMIT_AND_FETCH_REQ:** um ioctl **completa o tag e re-arma o FETCH**; re-fornecer `addr`
+  não-NULL a cada round é obrigatório (1792-1799). É a op de regime do loop.
+- **Teardown de device LIVE:** `STOP_DEV` (`del_gendisk`→DEAD→cancel) e depois `DEL_DEV`; ou
+  `DEL_DEV` direto (`ublk_remove` chama `ublk_stop_dev`, 2183). Como no M2, exige a thread
+  servidora ativa durante o controle.
+
+### Sub-marcos do M3 (gated por bench)
+- **M3a — feito:** SET_PARAMS/GET_PARAMS.
+- **M3b:** `UblkServer` (ring + mmap io-desc + buffers) + thread servidora; backend de **RAM
+  (`Vec<u8>`)**; `START_DEV` + I/O de teste no `/dev/ublkbN` + `STOP`/`DEL_DEV`. Sem `swapon`.
+- **M3c:** ligar ao `VramBackend`/worker H1; bench ublk vs NBD; só então `swapon`.
