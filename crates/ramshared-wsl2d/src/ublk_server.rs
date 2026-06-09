@@ -14,7 +14,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use ramshared_block::{BlockBackend, Command, IoError, Request};
+use ramshared_cuda::Cuda;
 
+use crate::VramBackend;
 use crate::ublk;
 
 const EIO: i32 = -5;
@@ -206,25 +208,28 @@ impl<B> WorkerHandle<B> {
 /// Recebe `IoWork` pelo canal, serve contra o `backend` e devolve `WorkerReply`.
 /// Encerra quando `work_rx` fecha (o ring owner caiu) ou `reply_tx` quebra.
 pub fn spawn_ublk_worker<B: BlockBackend + Send + 'static>(
-    backend: B,
+    mut backend: B,
     work_rx: Receiver<ublk::IoWork>,
     reply_tx: Sender<WorkerReply>,
 ) -> WorkerHandle<B> {
-    let thread = thread::spawn(move || worker_loop(backend, work_rx, reply_tx));
+    let thread = thread::spawn(move || {
+        worker_loop(&mut backend, work_rx, reply_tx);
+        backend
+    });
     WorkerHandle { thread }
 }
 
 fn worker_loop<B: BlockBackend>(
-    mut backend: B,
+    backend: &mut B,
     work_rx: Receiver<ublk::IoWork>,
     reply_tx: Sender<WorkerReply>,
-) -> B {
+) {
     while let Ok(mut work) = work_rx.recv() {
         let (result, read_data) = match work.req.cmd {
             Command::Read => {
                 // O worker possui o buffer de leitura; o ring owner copia para a tag.
                 let mut buf = vec![0u8; work.req.len as usize];
-                let result = serve_request(&work.req, &mut backend, &mut buf);
+                let result = serve_request(&work.req, backend, &mut buf);
                 if result >= 0 {
                     (result, buf)
                 } else {
@@ -233,7 +238,7 @@ fn worker_loop<B: BlockBackend>(
             }
             // WRITE/FLUSH/TRIM: os dados (se houver) já vêm no payload.
             _ => {
-                let result = serve_request(&work.req, &mut backend, &mut work.payload);
+                let result = serve_request(&work.req, backend, &mut work.payload);
                 (result, Vec::new())
             }
         };
@@ -248,8 +253,6 @@ fn worker_loop<B: BlockBackend>(
             break; // ring owner caiu
         }
     }
-
-    backend
 }
 
 const RING_CHAN_CAP: usize = 64;
@@ -372,4 +375,64 @@ fn run_ring_owner(
             thread::sleep(Duration::from_micros(200));
         }
     }
+}
+
+/// Converte erro CUDA em `io::Error` para o `Result` da thread worker.
+fn cuda_to_io(e: ramshared_cuda::CudaError) -> io::Error {
+    io::Error::other(format!("CUDA: {e}"))
+}
+
+/// Handle do servidor DT-3 servido por VRAM (ring owner + worker dono do stack CUDA).
+pub struct ServerHandleDt3Vram {
+    ring: JoinHandle<io::Result<()>>,
+    worker: JoinHandle<io::Result<()>>,
+}
+
+impl ServerHandleDt3Vram {
+    pub fn join(self) -> io::Result<()> {
+        self.ring
+            .join()
+            .map_err(|_| io::Error::other("ring owner panicked"))??;
+        self.worker
+            .join()
+            .map_err(|_| io::Error::other("vram worker panicked"))?
+    }
+}
+
+/// Como [`spawn_server_dt3`], mas o worker serve a partir da **VRAM**: ele cria o
+/// stack `Cuda`/`Context`/`DeviceMem`/`VramBackend` **na própria thread** (o
+/// contexto CUDA tem afinidade de thread e o `VramBackend` não é `Send`/`'static`)
+/// e roda o loop ali. `vram_bytes` é o tamanho da alocação na GPU; `block_size` o
+/// block size lógico.
+pub fn spawn_server_dt3_vram(
+    char_path: impl AsRef<Path>,
+    queue_depth: u16,
+    buf_size: usize,
+    vram_bytes: usize,
+    block_size: u32,
+) -> io::Result<ServerHandleDt3Vram> {
+    let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
+    let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(RING_CHAN_CAP);
+    let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>();
+
+    let worker = thread::spawn(move || -> io::Result<()> {
+        // Todo o stack CUDA vive nesta thread (afinidade do contexto).
+        let cuda = Cuda::load().map_err(cuda_to_io)?;
+        let device = cuda.device(0).map_err(cuda_to_io)?;
+        let ctx = cuda.create_context(&device).map_err(cuda_to_io)?;
+        let mut mem = ctx.alloc(vram_bytes).map_err(cuda_to_io)?;
+        mem.zero().map_err(cuda_to_io)?;
+        let mut backend = VramBackend::new(mem, block_size);
+        worker_loop(&mut backend, work_rx, reply_tx);
+        Ok(())
+    });
+
+    let ring = thread::spawn(move || {
+        let _char_dev = char_dev;
+        run_ring_owner(server, work_tx, reply_rx)
+    });
+
+    Ok(ServerHandleDt3Vram { ring, worker })
 }
