@@ -219,6 +219,106 @@ fn dt3_serves_io_from_vram_over_block_device() {
     assert_eq!(ublk_nodes(), before);
 }
 
+#[test]
+#[ignore = "requires root + CUDA GPU; serves /dev/ublkbN from VRAM with queue_depth>1 + concurrent O_DIRECT readers, no swap"]
+fn dt3_vram_serves_concurrent_io_with_queue_depth_gt1() {
+    let before = ublk_nodes();
+    // Fila unica (so servimos a fila 0), mas queue_depth>1: ate N tags em voo.
+    let mut spec = ublk_control::DeviceSpec::smoke_auto();
+    spec.queue_depth = 4;
+    let report = ublk_control::add_device(UBLK_CONTROL, spec).expect("ublk ADD_DEV");
+    let mut guard = DeviceGuard::new(report.dev_id);
+    assert!(
+        report.queue_depth >= 2,
+        "kernel deu queue_depth={}; o teste de concorrencia precisa de >=2",
+        report.queue_depth
+    );
+
+    let block_size = 4096u32;
+    let dev_sectors = 256u64; // 128 KiB -> 32 blocos de 4KB
+    ublk_control::set_params(
+        UBLK_CONTROL,
+        report.dev_id,
+        ublk::Params::basic_disk(dev_sectors, 12, 12),
+    )
+    .expect("ublk SET_PARAMS");
+
+    let char_path = format!("/dev/ublkc{}", report.dev_id);
+    let block_path = format!("/dev/ublkb{}", report.dev_id);
+    let vram_bytes = (dev_sectors * SECTOR) as usize;
+
+    let server = ublk_server::spawn_server_dt3_vram(
+        &char_path,
+        report.queue_depth, // pool no-alloc pre-aquece `queue_depth` buffers
+        vram_bytes,         // buffer por tag (>= maior request possivel)
+        vram_bytes,
+        block_size,
+    )
+    .expect("spawn DT-3 VRAM server");
+    ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())
+        .expect("ublk START_DEV");
+
+    // Escreve 16 blocos com padrao distinto por indice e tira do page cache.
+    let bs = block_size as usize;
+    let n_blocks = 16usize;
+    for i in 0..n_blocks {
+        write_block(&block_path, (i * bs) as u64, &block_pattern(i, bs));
+    }
+    drop_page_cache();
+
+    // 4 threads leem em round-robin via O_DIRECT, em varias rodadas, conferindo cada
+    // bloco. Com queue_depth>=2 isso mantem multiplos tags em voo simultaneamente —
+    // exercita o pool de buffers no-alloc com in_flight>1 (aliasing/troca de buffer
+    // entre tags corromperia os dados ou causaria deadlock).
+    const O_DIRECT: i32 = 0o40000;
+    let workers: Vec<_> = (0..4u64)
+        .map(|t| {
+            let path = block_path.clone();
+            thread::spawn(move || {
+                let file = OpenOptions::new()
+                    .read(true)
+                    .custom_flags(O_DIRECT)
+                    .open(&path)
+                    .expect("open O_DIRECT");
+                let mut raw = vec![0u8; bs * 2];
+                let pad = (bs - (raw.as_ptr() as usize % bs)) % bs;
+                for _round in 0..64 {
+                    let mut i = t as usize;
+                    while i < n_blocks {
+                        file.read_exact_at(&mut raw[pad..pad + bs], (i * bs) as u64)
+                            .expect("read O_DIRECT");
+                        assert_eq!(
+                            &raw[pad..pad + bs],
+                            block_pattern(i, bs).as_slice(),
+                            "bloco {i} corrompido sob concorrencia qd>1"
+                        );
+                        i += 4;
+                    }
+                }
+            })
+        })
+        .collect();
+    for w in workers {
+        w.join()
+            .expect("leitor concorrente falhou (corrupcao/deadlock qd>1)");
+    }
+
+    ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
+    server.join().expect("DT-3 VRAM server terminou ok");
+    ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
+    guard.disarm();
+    wait_until_missing(&char_path);
+    assert_eq!(ublk_nodes(), before);
+}
+
+/// Padrao deterministico e distinto por bloco (idx desloca a sequencia ~+5/byte mod
+/// 251, garantindo blocos diferentes detectarem troca de conteudo entre tags).
+fn block_pattern(idx: usize, bs: usize) -> Vec<u8> {
+    (0..bs)
+        .map(|j| ((j as u64 * 31 + idx as u64 * 1009 + 7) % 251) as u8)
+        .collect()
+}
+
 fn read_sector(path: &str, sector: u64) -> Vec<u8> {
     read_block(path, sector * SECTOR, SECTOR as usize)
 }
