@@ -102,6 +102,21 @@ pub fn get_params(path: impl AsRef<Path>, dev_id: u32) -> io::Result<ublk::Param
     Ok(ublk::Params::from_bytes(&bytes))
 }
 
+/// Sobe o device (`START_DEV`): cria `/dev/ublkbN`. Bloqueia até as filas ready e o
+/// `add_disk`; a thread servidora deve estar ativa para servir o partition scan.
+pub fn start_dev(path: impl AsRef<Path>, dev_id: u32, ublksrv_pid: u32) -> io::Result<()> {
+    let control = OpenOptions::new().read(true).write(true).open(path)?;
+
+    ramshared_uring::ublk_start_dev(control.as_raw_fd(), dev_id, ublksrv_pid)
+}
+
+/// Para o device (`STOP_DEV`): remove `/dev/ublkbN` e aborta os FETCH pendentes.
+pub fn stop_dev(path: impl AsRef<Path>, dev_id: u32) -> io::Result<()> {
+    let control = OpenOptions::new().read(true).write(true).open(path)?;
+
+    ramshared_uring::ublk_stop_dev(control.as_raw_fd(), dev_id)
+}
+
 impl From<ublk::CtrlDevInfo> for DeviceReport {
     fn from(info: ublk::CtrlDevInfo) -> Self {
         Self {

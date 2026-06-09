@@ -5,6 +5,13 @@
 //! deve carregar. `RamBackend` é um disco volátil em memória para validar o loop
 //! end-to-end antes de ligar VRAM/swap.
 
+use std::fs::OpenOptions;
+use std::io;
+use std::os::fd::AsRawFd;
+use std::path::Path;
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
 use crate::ublk;
 
 const EIO: i32 = -5;
@@ -80,5 +87,75 @@ pub fn serve_request(backend: &mut RamBackend, iod: &ublk::IoDesc, buf: &mut [u8
         ublk::UBLK_IO_OP_WRITE => backend.write_from(offset, &buf[..len]),
         ublk::UBLK_IO_OP_FLUSH => 0,
         _ => EINVAL,
+    }
+}
+
+/// Handle da thread servidora ublk; `join` aguarda o loop terminar (ao receber o
+/// abort do STOP/DEL_DEV).
+pub struct ServerHandle {
+    thread: JoinHandle<io::Result<()>>,
+}
+
+impl ServerHandle {
+    pub fn join(self) -> io::Result<()> {
+        match self.thread.join() {
+            Ok(result) => result,
+            Err(_) => Err(io::Error::other("server thread panicked")),
+        }
+    }
+}
+
+/// Abre `char_path`, cria o `UblkServer` e roda o loop de serviço numa thread
+/// própria (dona única do ring, DT-3). A thread submete FETCH, serve cada request
+/// contra `backend` e re-arma via COMMIT_AND_FETCH; encerra ao receber o abort
+/// (`UBLK_IO_RES_ABORT`) que o STOP/DEL_DEV dispara.
+pub fn spawn_server(
+    char_path: impl AsRef<Path>,
+    queue_depth: u16,
+    buf_size: usize,
+    backend: RamBackend,
+) -> io::Result<ServerHandle> {
+    let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
+    let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
+
+    let thread = thread::spawn(move || {
+        // Mantém o char device aberto enquanto o loop usa o ring (dropado depois).
+        let _char_dev = char_dev;
+        run_server_loop(server, backend)
+    });
+
+    Ok(ServerHandle { thread })
+}
+
+fn run_server_loop(
+    mut server: ramshared_uring::UblkServer,
+    mut backend: RamBackend,
+) -> io::Result<()> {
+    server.submit_initial_fetch()?;
+
+    loop {
+        let completions = server.drain();
+        if completions.is_empty() {
+            thread::sleep(Duration::from_micros(200));
+            continue;
+        }
+
+        for completion in completions {
+            if completion.result == ublk::UBLK_IO_RES_ABORT {
+                return Ok(()); // teardown: STOP/DEL_DEV abortou os FETCH
+            }
+            if completion.result < 0 {
+                return Err(io::Error::other(format!(
+                    "FETCH falhou: {}",
+                    completion.result
+                )));
+            }
+
+            // result == UBLK_IO_RES_OK (0): ha um request pronto na tag.
+            let iod = ublk::IoDesc::from_ne_bytes(server.io_desc_bytes(completion.tag))
+                .ok_or_else(|| io::Error::other("io-desc invalido no mmap"))?;
+            let result = serve_request(&mut backend, &iod, server.buffer_mut(completion.tag));
+            server.commit_and_fetch(completion.tag, result)?;
+        }
     }
 }
