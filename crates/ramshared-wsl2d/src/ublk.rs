@@ -411,6 +411,21 @@ impl Params {
         }
     }
 
+    /// Define `basic.max_sectors` (maior request, em setores de 512 B) e devolve um
+    /// novo `Params` — habilita requests multi-página. O kernel valida
+    /// `max_sectors <= dev_info.max_io_buf_bytes >> 9` no `SET_PARAMS` e usa o valor
+    /// como `max_hw_sectors` do block device; o `buf_size` por-tag do servidor deve
+    /// ser `>= max_sectors * 512`. Imutável (não muta `self`).
+    pub fn with_max_sectors(self, max_sectors: u32) -> Self {
+        Self {
+            basic: ParamBasic {
+                max_sectors,
+                ..self.basic
+            },
+            ..self
+        }
+    }
+
     /// Serializa no layout `repr(C)` de 112 B de `struct ublk_params` (offsets
     /// verificados via `cc`). Sem `unsafe`.
     pub fn to_bytes(&self) -> [u8; UBLK_PARAMS_LEN] {
