@@ -468,3 +468,29 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   DEL_DEV); M2 = submeter FETCH para todas as tags sem esperar CQE, DEL_DEV gera CQEs ABORT. Ambos
   smoke root, sem `START_DEV`, sem `/dev/ublkbN`, sem `swapon`. M3 (START_DEV + loop) fica gated por
   bench.
+
+---
+
+## 2026-06-07 — Fase B prep: M1 mmap read-only do io-desc
+
+- **TDD M1 (SPEC-ring-loop §8):** commits `db896f1 test(wsl2d): add ublk io-desc mmap RED (#3)` e
+  `c6e2890 fix(wsl2d): mmap ublk io-desc buffer read-only (#3)`.
+- **Mudanca:** `ramshared-uring` ganhou `MmapRo` (RAII: `mmap` `PROT_READ`/`MAP_SHARED` + `munmap`
+  no Drop), `page_size()` e `round_up_to_page()`; todo `unsafe` novo (sysconf, mmap, munmap,
+  `from_raw_parts`) com `// SAFETY:`. Dep direta `libc = "0.2"` (ja transitiva; `Cargo.lock` so
+  marcou `libc` como dep de `ramshared-uring`). `ublk.rs` ganhou `UBLK_IO_DESC_SIZE=24` e
+  `IoDesc::from_ne_bytes`. Novo modulo `ublk_queue::read_io_desc(path, q_depth, tag)` mapeia a
+  fila 0 (offset 0) read-only e decodifica o io-desc.
+- **Invariante unsafe:** unsafe novo 100% em `ramshared-uring`. O unico unsafe no wsl2d e o
+  `mlockall` **PRE-EXISTENTE** em `main.rs` (binario, fora do `forbid` da lib) — nao deste recorte;
+  a lib (incl. `ublk_queue`) compila sob `#![forbid(unsafe_code)]`.
+- **Evidencia:** RED falhou por `UBLK_IO_DESC_SIZE`/`from_ne_bytes`/`ublk_queue` ausentes; GREEN:
+  `cargo test -p ramshared-wsl2d --test ublk_uapi` (14/14), `sudo -n .../ublk_control_smoke
+  --ignored --nocapture` (3/3, inclui `mmap`), `/dev` antes==depois (so `ublk-control`),
+  `cargo test -p ramshared-uring -p ramshared-wsl2d` verde, `cargo fmt --check` +
+  `cargo clippy -p ramshared-uring -p ramshared-wsl2d -- -D warnings` limpos.
+- **Limites mantidos:** mmap read-only (kernel proibe `VM_WRITE`); sem `START_DEV`, sem
+  `/dev/ublkbN`, sem `swapon`. io-desc[0] lido == `IoDesc::default()` (zerado, sem I/O).
+- **Proximo recorte (SPEC §8 M2):** submeter `FETCH_REQ` para todas as tags (push de SQE
+  `UringCmd80` com `IoCmd::fetch`) sem esperar CQE; `DEL_DEV` gera CQEs `UBLK_IO_RES_ABORT(-ENODEV)`.
+  Ainda sem `START_DEV`/`swapon`.
