@@ -34,16 +34,19 @@ fn ublk_worker_serves_read_and_write_over_channels() {
     let (reply_tx, reply_rx) = mpsc::channel::<ublk_server::WorkerReply>();
     let worker = ublk_server::spawn_ublk_worker(backend, work_rx, reply_tx);
 
-    // READ do setor 2: o worker devolve os dados no WorkerReply.
+    // READ do setor 2: o ring owner cede um buffer dimensionado a `len`; o worker
+    // o preenche in-place e o devolve em `buf` (sem alloc no worker — DT-8).
     work_tx
-        .send(work(3, Command::Read, 1024, 512, Vec::new()))
+        .send(work(3, Command::Read, 1024, 512, vec![0u8; 512]))
         .expect("envia READ");
     let reply = reply_rx.recv().expect("reply READ");
     assert_eq!(reply.tag, 3);
     assert_eq!(reply.result, 512);
-    assert_eq!(reply.read_data, pattern);
+    assert!(reply.is_read);
+    assert_eq!(reply.buf, pattern);
 
-    // WRITE de um padrão no setor 4: o payload vai para o backend.
+    // WRITE: o payload (buffer cedido) já traz os dados; vão para o backend e o
+    // mesmo buffer volta em `buf` para o ring owner reciclar.
     let pattern2: Vec<u8> = (0..512u32).map(|i| ((i * 3 + 1) % 251) as u8).collect();
     work_tx
         .send(work(4, Command::Write, 2048, 512, pattern2.clone()))
@@ -51,13 +54,16 @@ fn ublk_worker_serves_read_and_write_over_channels() {
     let reply = reply_rx.recv().expect("reply WRITE");
     assert_eq!(reply.tag, 4);
     assert_eq!(reply.result, 512);
-    assert!(reply.read_data.is_empty());
+    assert!(!reply.is_read);
+    assert_eq!(reply.buf.len(), 512); // buffer devolvido para reciclagem
 
     // READ de volta o setor 4 confirma o WRITE.
     work_tx
-        .send(work(5, Command::Read, 2048, 512, Vec::new()))
+        .send(work(5, Command::Read, 2048, 512, vec![0u8; 512]))
         .expect("envia READ 2");
-    assert_eq!(reply_rx.recv().expect("reply READ 2").read_data, pattern2);
+    let r2 = reply_rx.recv().expect("reply READ 2");
+    assert!(r2.is_read);
+    assert_eq!(r2.buf, pattern2);
 
     // Fechar o canal de work encerra o worker, que devolve o backend.
     drop(work_tx);
