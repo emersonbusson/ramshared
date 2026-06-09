@@ -252,11 +252,16 @@ Rollback: sem ganho no bench → manter NBD e remover a dependência `io-uring`/
   confere o pool no-alloc com `in_flight > 1` (read e write paths) e o endereçamento por-tag
   (`self.buffers[tag]` no FETCH/COMMIT). Sem corrupção nem deadlock (RTX 2060). Só servimos a fila
   0; multi-`nr_hw_queues` fica fora de escopo (exigiria um ring/char-region por fila — novo SPEC).
-- **Cap de request = 4KB (max_io_buf_bytes):** `DeviceSpec::smoke_auto` seta `max_io_buf_bytes=4096`,
-  então o kernel limita **todo request a 4KB** (`ublk_drv.c:307` `min(bufsize, max_hw_sectors<<9)`).
-  Isso é **seguro** (nenhum request excede o `buf_size` do servidor, que é >= 4096) e casa com o
-  swap-in (page fault = 1 página). **Custo:** swap clustering / writeback batching é fatiado em 4KB
-  (mais round-trips). **Futuro (throughput, não-bug):** acoplar `max_io_buf_bytes` ↔ `max_sectors`
-  (`params.basic`) ↔ `buf_size` para permitir requests multi-página; exige tuning de params com
-  teste de I/O grande. Não feito no MVP — o ganho em WSL2 é incerto e o atual é correto.
+- **Requests multi-página — feito.** O default `DeviceSpec::smoke_auto` (`max_io_buf_bytes=4096`)
+  limita requests a 4KB (`ublk_drv.c:307` `min(bufsize, max_hw_sectors<<9)`) — seguro e casa com
+  swap-in (1 página), mas fatia clustering/writeback. `Params::with_max_sectors` acopla os três
+  knobs: `max_io_buf_bytes` (ADD_DEV) ↔ `max_sectors` (SET_PARAMS, vira `max_hw_sectors` em
+  `ublk_drv.c:546`, validado `<= max_io_buf_bytes>>9`) ↔ `buf_size` por-tag do servidor. Validado:
+  device 128KB → `max_hw_sectors_kb=128`, WRITE+READ `O_DIRECT` de 64KB (len=65536) servido da VRAM
+  num request, integridade OK. O pool no-alloc já dimensiona o buffer por tag a `buf_size`, então o
+  request grande atravessa `serve_request` sem alloc. **Invariante dura:** `buf_size >= max_sectors
+  * 512`; o integrador deve setar os três coerentes (`smoke_auto` mantém 4KB como default seguro).
+- **Teardown gotcha:** `del_gendisk` (no STOP_DEV) bloqueia até **todos os openers do block device
+  fecharem**. Quem mantém um fd de `/dev/ublkbN` aberto (ex.: handle O_DIRECT) deve fechá-lo antes
+  do STOP_DEV, senão o teardown trava.
 - **Fase B completa:** VRAM + swap + bench (ublk vence NBD) + no-alloc + qd>1, validado em hardware.
