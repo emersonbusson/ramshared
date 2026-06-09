@@ -24,6 +24,13 @@ pub const UBLK_IO_FETCH_REQ: u32 = 0x20;
 pub const UBLK_IO_COMMIT_AND_FETCH_REQ: u32 = 0x21;
 pub const UBLK_IO_NEED_GET_DATA: u32 = 0x22;
 
+// Ops de IO codificadas (`_IOWR('u', nr, struct ublksrv_io_cmd)`), exigidas quando
+// o device e criado com `UBLK_F_CMD_IOCTL_ENCODE`. Valores verificados via `cc`
+// contra `include/uapi/linux/ublk_cmd.h` do kernel custom 6.6.123.2.
+pub const UBLK_U_IO_FETCH_REQ: u32 = 0xc010_7520;
+pub const UBLK_U_IO_COMMIT_AND_FETCH_REQ: u32 = 0xc010_7521;
+pub const UBLK_U_IO_NEED_GET_DATA: u32 = 0xc010_7522;
+
 pub const UBLK_IO_RES_OK: i32 = 0;
 pub const UBLK_IO_RES_NEED_GET_DATA: i32 = 1;
 pub const UBLK_IO_RES_ABORT: i32 = -19; // -ENODEV
@@ -275,6 +282,30 @@ pub struct IoCmd {
     pub tag: u16,
     pub result: i32,
     pub addr_or_zone_append_lba: u64,
+}
+
+impl IoCmd {
+    /// Monta o `ublksrv_io_cmd` de `FETCH_REQ`: aponta o `addr` para o buffer da
+    /// tag e deixa `result` zerado (ignorado pelo driver no fetch inicial).
+    pub fn fetch(q_id: u16, tag: u16, buffer_addr: u64) -> Self {
+        Self {
+            q_id,
+            tag,
+            result: 0,
+            addr_or_zone_append_lba: buffer_addr,
+        }
+    }
+
+    /// Serializa o comando no layout `repr(C)` de 16 bytes esperado pelo driver,
+    /// para copia direta no campo `cmd` da SQE de `UringCmd80`.
+    pub fn to_bytes(self) -> [u8; 16] {
+        let mut bytes = [0u8; 16];
+        bytes[0..2].copy_from_slice(&self.q_id.to_ne_bytes());
+        bytes[2..4].copy_from_slice(&self.tag.to_ne_bytes());
+        bytes[4..8].copy_from_slice(&self.result.to_ne_bytes());
+        bytes[8..16].copy_from_slice(&self.addr_or_zone_append_lba.to_ne_bytes());
+        bytes
+    }
 }
 
 #[repr(C)]
