@@ -37,11 +37,12 @@ hand-roll de barreiras acquire/release no caminho de swap. A dependência entrou
 2. **Feito:** consultar `/dev/ublk-control` (`GET_FEATURES`) e exercitar `ADD_DEV` + `DEL_DEV`
    em smoke explícito. Limite validado: `/dev/ublkcN` temporário, sem `/dev/ublkbN`, sem
    `START_DEV`, sem `swapon`.
-3. **SSDV3-gated:** o loop ublk exige `mmap` de `/dev/ublkcN` (nova superfície `unsafe` em
-   `ramshared-uring`) e ring persistente que submete `FETCH_REQ` **sem** esperar CQE (o driver
-   deixa o comando pendente em `-EIOCBQUEUED` até I/O ou abort). Por tocar `mmap`/MMIO +
-   barreiras/threading do ring, fechar SPECv2/IMPL antes do código. Thread io_uring continua dona
-   única do ring (DT-3); worker CUDA único; integrar com `IoWork`/worker H1 antes de `START_DEV`.
+3. **SSDV3 — SPEC fechado:** o loop ublk exige `mmap` read-only de `/dev/ublkcN` (nova superfície
+   `unsafe` em `ramshared-uring`) e ring que submete `FETCH_REQ` **sem** esperar CQE (driver para
+   em `-EIOCBQUEUED` até I/O ou abort). Desenho verificado em
+   [`SPEC-ring-loop.md`](SPEC-ring-loop.md): threading DT-3, layout de `mmap`, barreiras na crate
+   `io-uring`, teardown/abort (`UBLK_IO_RES_ABORT = -ENODEV`). Próximos recortes TDD: **M1**
+   (`mmap` read-only) e **M2** (`FETCH` no-wait), ambos sem `START_DEV` nem `swapon`.
 4. Bench ublk vs NBD com número p50/p99. Sem ganho medível: manter NBD e remover a dependência.
 
 ## Rollback trigger

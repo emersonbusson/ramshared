@@ -23,6 +23,13 @@
 | DT-6 | **Generalizar o device de swap (M5-3):** o DEMOTE/`spawn_swapoff` e o arg `--nbd` viram **`--swap-dev`/`swap_dev`** genérico (`/dev/nbd0` ou `/dev/ublkbN`). Sob ublk a VRAM **continua em swap** (só muda o transporte), então o `swapoff <swap_dev>` do DEMOTE permanece seguro (kernel drena) — diferente do item 4. | M5-3 |
 | DT-2 | **Mantida:** daemon modo ublk reusa o worker H1; `--transport {nbd,ublk}` default `nbd`; ublk substitui NBD na paridade (sem dual-path permanente). | — |
 
+## Detalhamento do ring loop
+
+O loop de ring io_uring que concretiza o DT-3 (threading, layout de `mmap` read-only,
+`FETCH_REQ` sem espera de CQE e teardown/abort) está especificado em
+[`SPEC-ring-loop.md`](SPEC-ring-loop.md), com fatos do driver verificados (`file:line`) e
+marcos de IMPL **M1** (`mmap`) e **M2** (`FETCH` no-wait), ambos sem `START_DEV` nem `swapon`.
+
 ## Fronteira de atomicidade e rollback
 
 - Atomicidade: worker único serializa a VRAM (H1); ring possuído por 1 thread (DT-3). DEMOTE =

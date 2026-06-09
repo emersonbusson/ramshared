@@ -444,3 +444,27 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   `ramshared-uring`) + ring persistente com submissao **sem** esperar CQE (o driver deixa o
   FETCH pendente em `-EIOCBQUEUED`). Decisao pendente do dono: (a) seguir para esse smoke, (b)
   fechar SPEC/IMPL SSDV3 do loop de ring antes, ou (c) abrir o PR da Fase B prep ja acumulada.
+
+---
+
+## 2026-06-07 — Fase B prep: SPEC SSDV3 do ring loop fechado
+
+- **Decisao do dono:** "SSDV3 SPEC first". Criado `docs/ublk-backend/SPEC-ring-loop.md` (PASSO 2),
+  linkado do `SPECv2.md` (DT-3) e do `IMPL.md`. So docs, sem codigo novo.
+- **Fatos verificados lendo `ublk_drv.c` (6.6.123.2):** o mmap de io-desc por fila e **READ-ONLY**
+  (`VM_WRITE` -> `-EPERM`, 1413-1414) — invariante novo pro IMPL; `offset = q_id *
+  ublk_max_cmd_buf_size()`, `len = round_up(q_depth*24, PAGE)`; `sizeof(ublksrv_io_desc)=24`,
+  indexado por `tag` (`&buf[tag*24]`, 704-709). `FETCH_REQ` retorna `-EIOCBQUEUED` (estacionado).
+  Teardown: `ublk_cancel_queue` (1523-1545) entrega
+  `io_uring_cmd_done(cmd, UBLK_IO_RES_ABORT=-ENODEV)` aos FETCH estacionados -> a thread de ring
+  NAO trava.
+- **Crate `io-uring 0.7.12`:** `submit()`==`submit_and_wait(0)` nao bloqueia; `completion().next()`
+  drena sem bloquear; `submission().push` e unsafe. Ring owner usa `submit()`+drain, nunca
+  `submit_and_wait` sobre FETCH (anti-deadlock, DT-R2).
+- **Fronteira unsafe:** `mmap` do io-desc = `PROT_READ`; todo `unsafe` (push do SQE + mmap/munmap
+  RAII) fica em `ramshared-uring`; daemon segue `#![forbid(unsafe_code)]`. mmap via `libc`
+  (ja transitiva), nao `memmap2` (DT-R1).
+- **Proximos recortes TDD (SPEC §8):** M1 = `mmap` read-only (ADD_DEV->mmap->ler io-desc->munmap->
+  DEL_DEV); M2 = submeter FETCH para todas as tags sem esperar CQE, DEL_DEV gera CQEs ABORT. Ambos
+  smoke root, sem `START_DEV`, sem `/dev/ublkbN`, sem `swapon`. M3 (START_DEV + loop) fica gated por
+  bench.
