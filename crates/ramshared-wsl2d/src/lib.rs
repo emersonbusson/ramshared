@@ -11,6 +11,7 @@ pub mod state;
 pub mod ublk;
 pub mod ublk_control;
 pub mod ublk_queue;
+pub mod ublk_server;
 pub mod uring_smoke;
 
 pub use backend::VramBackend;
