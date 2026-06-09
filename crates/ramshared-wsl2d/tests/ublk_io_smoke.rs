@@ -115,6 +115,54 @@ fn serves_write_into_ram_backend_over_block_device() {
     assert_eq!(ublk_nodes(), before);
 }
 
+#[test]
+#[ignore = "requires root; DT-3 ring owner + worker thread serve I/O, no swap"]
+fn dt3_serves_read_from_ram_backend_over_block_device() {
+    let before = ublk_nodes();
+    let report = ublk_control::add_device(UBLK_CONTROL, ublk_control::DeviceSpec::smoke_auto())
+        .expect("ublk ADD_DEV");
+    let mut guard = DeviceGuard::new(report.dev_id);
+
+    let dev_sectors = 256u64;
+    ublk_control::set_params(
+        UBLK_CONTROL,
+        report.dev_id,
+        ublk::Params::basic_disk(dev_sectors, 9, 9),
+    )
+    .expect("ublk SET_PARAMS");
+
+    let mut backend = ublk_server::RamBackend::new((dev_sectors * SECTOR) as usize);
+    let pattern: Vec<u8> = (0..SECTOR).map(|i| (i % 251) as u8).collect();
+    backend
+        .write_at(TEST_SECTOR * SECTOR, &pattern)
+        .expect("pre-carrega o backend");
+
+    let char_path = format!("/dev/ublkc{}", report.dev_id);
+    let block_path = format!("/dev/ublkb{}", report.dev_id);
+
+    // Arquitetura DT-3: thread ring owner + thread worker (dona do backend).
+    let server = ublk_server::spawn_server_dt3(&char_path, report.queue_depth, 4096, backend)
+        .expect("spawn DT-3 server");
+
+    ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())
+        .expect("ublk START_DEV");
+    assert!(
+        fs::metadata(&block_path).is_ok(),
+        "{block_path} deveria existir"
+    );
+
+    let got = read_sector(&block_path, TEST_SECTOR);
+    assert_eq!(got, pattern, "DT-3 READ deve devolver o padrao do backend");
+
+    ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
+    let _backend = server.join().expect("DT-3 server terminou ok");
+
+    ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
+    guard.disarm();
+    wait_until_missing(&char_path);
+    assert_eq!(ublk_nodes(), before);
+}
+
 fn read_sector(path: &str, sector: u64) -> Vec<u8> {
     let mut file = File::open(path).expect("abrir block device");
     file.seek(SeekFrom::Start(sector * SECTOR)).expect("seek");
