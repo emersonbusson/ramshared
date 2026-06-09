@@ -260,6 +260,115 @@ fn write_sector(path: &str, sector: u64, data: &[u8]) {
     file.sync_all().expect("sync_all");
 }
 
+#[test]
+#[ignore = "requires root + CUDA GPU; bounded mkswap/swapon/swapoff on VRAM-ublk (no memory pressure)"]
+fn vram_ublk_round_trips_as_swap_device() {
+    let before = ublk_nodes();
+    let report = ublk_control::add_device(UBLK_CONTROL, ublk_control::DeviceSpec::smoke_auto())
+        .expect("ublk ADD_DEV");
+    let block_path = format!("/dev/ublkb{}", report.dev_id);
+    let char_path = format!("/dev/ublkc{}", report.dev_id);
+    // Guard: garante swapoff ANTES de stop/del mesmo se o teste falhar.
+    let mut guard = SwapGuard::new(report.dev_id, block_path.clone());
+
+    let block_size = 4096u32;
+    let dev_sectors = 128 * 1024 * 1024 / SECTOR; // 128 MiB de swap na VRAM
+    ublk_control::set_params(
+        UBLK_CONTROL,
+        report.dev_id,
+        ublk::Params::basic_disk(dev_sectors, 12, 12),
+    )
+    .expect("ublk SET_PARAMS");
+
+    let vram_bytes = (dev_sectors * SECTOR) as usize;
+    let server = ublk_server::spawn_server_dt3_vram(
+        &char_path,
+        report.queue_depth,
+        2 * 1024 * 1024, // buffer por tag cobre clusters de swap
+        vram_bytes,
+        block_size,
+    )
+    .expect("spawn DT-3 VRAM server");
+
+    ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())
+        .expect("ublk START_DEV");
+    assert!(
+        fs::metadata(&block_path).is_ok(),
+        "{block_path} deveria existir"
+    );
+
+    // mkswap escreve o header de swap -> ublk WRITE -> cuMemcpyHtoD na VRAM.
+    run_ok("mkswap", &[&block_path]);
+    // swapon (sem -p: prioridade auto baixa) -> kernel le o header (ublk READ) e
+    // registra a VRAM-ublk como area de swap.
+    run_ok("swapon", &[&block_path]);
+
+    let swaps = fs::read_to_string("/proc/swaps").expect("/proc/swaps");
+    assert!(
+        swaps.contains(&block_path),
+        "VRAM-ublk nao foi registrada como swap:\n{swaps}"
+    );
+
+    // swapoff imediato (sem gerar pressao) -> desativa e drena.
+    run_ok("swapoff", &[&block_path]);
+    let swaps = fs::read_to_string("/proc/swaps").expect("/proc/swaps");
+    assert!(
+        !swaps.contains(&block_path),
+        "swap deveria estar desativado"
+    );
+
+    ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
+    server.join().expect("DT-3 VRAM server terminou ok");
+    ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
+    guard.disarm();
+    wait_until_missing(&char_path);
+    assert_eq!(ublk_nodes(), before);
+}
+
+fn run_ok(cmd: &str, args: &[&str]) {
+    let out = std::process::Command::new(cmd)
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("nao executou {cmd}: {e}"));
+    assert!(
+        out.status.success(),
+        "{cmd} {args:?} falhou: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Guard de teardown para o teste de swap: `swapoff` (best-effort) antes de
+/// `stop_dev`/`delete_device`, já que um device com swap ativo não pode ser deletado.
+struct SwapGuard {
+    dev_id: Option<u32>,
+    block_path: String,
+}
+
+impl SwapGuard {
+    fn new(dev_id: u32, block_path: String) -> Self {
+        Self {
+            dev_id: Some(dev_id),
+            block_path,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.dev_id = None;
+    }
+}
+
+impl Drop for SwapGuard {
+    fn drop(&mut self) {
+        if let Some(dev_id) = self.dev_id.take() {
+            let _ = std::process::Command::new("swapoff")
+                .arg(&self.block_path)
+                .status();
+            let _ = ublk_control::stop_dev(UBLK_CONTROL, dev_id);
+            let _ = ublk_control::delete_device(UBLK_CONTROL, dev_id);
+        }
+    }
+}
+
 struct DeviceGuard {
     dev_id: Option<u32>,
 }
