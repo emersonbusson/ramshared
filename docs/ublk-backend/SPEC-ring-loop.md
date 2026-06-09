@@ -173,6 +173,27 @@
 
 ### Sub-marcos do M3 (gated por bench)
 - **M3a — feito:** SET_PARAMS/GET_PARAMS.
-- **M3b:** `UblkServer` (ring + mmap io-desc + buffers) + thread servidora; backend de **RAM
-  (`Vec<u8>`)**; `START_DEV` + I/O de teste no `/dev/ublkbN` + `STOP`/`DEL_DEV`. Sem `swapon`.
+- **M3b — feito:** `UblkServer` (ring + mmap io-desc + buffers) + thread servidora; backend de
+  **RAM (`Vec<u8>`)**; `START_DEV` + I/O READ/WRITE no `/dev/ublkbN` + `STOP`/`DEL_DEV`. Sem `swapon`.
 - **M3c:** ligar ao `VramBackend`/worker H1; bench ublk vs NBD; só então `swapon`.
+
+## 12. Plano do M3c (ligar VRAM + bench + swap) — gated
+
+Pré-requisito fechado: o loop serve READ/WRITE/FLUSH com um backend trocável (`serve_request`
+despacha; o backend faz o storage). Passos:
+
+1. **Trait de backend:** extrair `BlockBackend { read_into, write_from }` de `RamBackend` e tornar
+   o loop/`spawn_server` genéricos. `RamBackend` e o futuro adapter de VRAM o implementam.
+   Refactor seguro e testável (sem device).
+2. **Adapter VRAM:** investigar a API do `VramBackend`/worker H1 (`ramshared-cuda`/`ramshared-block`)
+   e adaptá-la a `BlockBackend` (offset/len ↔ `Request`). O worker CUDA continua a **única** thread
+   a tocar o ctx (DT-3): o loop ublk **não** chama CUDA direto — envia `IoWork` ao worker e recebe
+   `IoCompletion` (canais já modelados em `ublk.rs`). A thread do ring drena; o worker serve.
+3. **Smoke I/O contra VRAM (sem swap):** read/write no `/dev/ublkbN` servido pela VRAM, conferindo
+   dados — antes de qualquer `swapon`.
+4. **Bench ublk vs NBD:** p50/p99 de latência sob a mesma carga, nos dois transportes, no kernel
+   custom. Critério (anti-halo #11): ublk só é adotado se latência < NBD por ≥ X%.
+5. **`swapon` (passo final, separado):** só com ganho provado; `--transport ublk` deixa de ser
+   gated. DEMOTE segue `swapoff <swap_dev>` (a VRAM continua em swap; SPECv2 DT-6).
+
+Rollback: sem ganho no bench → manter NBD e remover a dependência `io-uring`/`ramshared-uring`.

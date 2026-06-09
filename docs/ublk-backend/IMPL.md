@@ -38,9 +38,11 @@ Status: **ublk funcional com backend de RAM** (2026-06-07). Kernel custom ativo:
   `START_DEV`.
 - **M3b — ublk funcional:** `UblkServer` (ring + mmap io-desc + buffers por tag) + `spawn_server`
   rodam o loop numa **thread dona do ring** (DT-3); `RamBackend`/`serve_request` servem
-  READ/WRITE/FLUSH; `start_dev`/`stop_dev` no control. Smoke root: `START_DEV` cria `/dev/ublkbN`,
-  um READ devolve o padrão gravado no backend de RAM, `STOP`+`DEL_DEV` limpam. **Sem swap.** A
-  thread servidora é obrigatória durante START/STOP_DEV (servem o partition scan / os aborts).
+  READ/WRITE/FLUSH; `start_dev`/`stop_dev` no control. Smokes root: `START_DEV` cria `/dev/ublkbN`;
+  **READ** (setor pré-gravado no backend volta correto) e **WRITE** (escrita via block device +
+  `fsync` chega ao backend, conferido pelo backend devolvido no `join`) end-to-end; `STOP`+`DEL_DEV`
+  limpam. **Sem swap.** A thread servidora é obrigatória durante START/STOP_DEV (servem o partition
+  scan / os aborts).
 
 ## Decisão de dependência
 
