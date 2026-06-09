@@ -12,63 +12,79 @@ use std::path::Path;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use ramshared_block::{BlockBackend, IoError};
+
 use crate::ublk;
 
 const EIO: i32 = -5;
 const EINVAL: i32 = -22;
 
-/// Disco volátil em memória (`Vec<u8>`), endereçado por byte.
+/// Disco volátil em memória que implementa [`BlockBackend`] — valida o loop ublk
+/// sem CUDA. O backend de produção é o `VramBackend` (mesmo trait), então o loop
+/// serve qualquer um dos dois sem mudança.
 pub struct RamBackend {
     data: Vec<u8>,
+    block_size: u32,
 }
 
 impl RamBackend {
     pub fn new(size: usize) -> Self {
         Self {
             data: vec![0u8; size],
+            block_size: ublk::UBLK_SECTOR_SIZE as u32,
         }
     }
 
-    pub fn capacity(&self) -> usize {
-        self.data.len()
-    }
-
-    /// READ: copia `data[offset..offset+buf.len()]` para `buf`. `-EIO` fora do range.
-    pub fn read_into(&self, offset: u64, buf: &mut [u8]) -> i32 {
-        match self.range(offset, buf.len()) {
-            Some((start, end)) => {
-                buf.copy_from_slice(&self.data[start..end]);
-                buf.len() as i32
-            }
-            None => EIO,
-        }
-    }
-
-    /// WRITE: copia `buf` para `data[offset..]`. `-EIO` fora do range.
-    pub fn write_from(&mut self, offset: u64, buf: &[u8]) -> i32 {
-        match self.range(offset, buf.len()) {
-            Some((start, end)) => {
-                self.data[start..end].copy_from_slice(buf);
-                buf.len() as i32
-            }
-            None => EIO,
-        }
-    }
-
-    fn range(&self, offset: u64, len: usize) -> Option<(usize, usize)> {
-        let start = usize::try_from(offset).ok()?;
+    fn range(&self, off: u64, len: usize) -> Option<(usize, usize)> {
+        let start = usize::try_from(off).ok()?;
         let end = start.checked_add(len)?;
         (end <= self.data.len()).then_some((start, end))
     }
 }
 
-/// Serve um request ublk contra `backend` usando `buf` (o buffer da tag) e devolve
-/// o `result` do COMMIT: bytes transferidos (`>= 0`) ou `-errno`.
+impl BlockBackend for RamBackend {
+    fn size_bytes(&self) -> u64 {
+        self.data.len() as u64
+    }
+
+    fn block_size(&self) -> u32 {
+        self.block_size
+    }
+
+    fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
+        let (start, end) = self
+            .range(off, buf.len())
+            .ok_or_else(|| IoError("RamBackend read out of range".into()))?;
+        buf.copy_from_slice(&self.data[start..end]);
+        Ok(())
+    }
+
+    fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
+        let (start, end) = self
+            .range(off, data.len())
+            .ok_or_else(|| IoError("RamBackend write out of range".into()))?;
+        self.data[start..end].copy_from_slice(data);
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), IoError> {
+        Ok(())
+    }
+}
+
+/// Serve um request ublk contra qualquer [`BlockBackend`] usando `buf` (o buffer da
+/// tag) e devolve o `result` do COMMIT: bytes transferidos (`>= 0`) ou `-errno`.
+/// Serve **in-place** no buffer (sem alloc no hot path — DT-8), diferente do
+/// `serve()` NBD que aloca um `Vec`.
 ///
 /// Em WRITE o kernel já copiou os dados do bio para `buf`; em READ o backend
 /// preenche `buf` e o kernel copia `result` bytes de volta no COMMIT — por isso
 /// `result` precisa ser exatamente os bytes servidos.
-pub fn serve_request(backend: &mut RamBackend, iod: &ublk::IoDesc, buf: &mut [u8]) -> i32 {
+pub fn serve_request<B: BlockBackend + ?Sized>(
+    backend: &mut B,
+    iod: &ublk::IoDesc,
+    buf: &mut [u8],
+) -> i32 {
     let sector = ublk::UBLK_SECTOR_SIZE as usize;
     let len = match usize::try_from(iod.nr_sectors_or_zones)
         .ok()
@@ -82,11 +98,16 @@ pub fn serve_request(backend: &mut RamBackend, iod: &ublk::IoDesc, buf: &mut [u8
         None => return EINVAL,
     };
 
-    match iod.operation() {
-        ublk::UBLK_IO_OP_READ => backend.read_into(offset, &mut buf[..len]),
-        ublk::UBLK_IO_OP_WRITE => backend.write_from(offset, &buf[..len]),
-        ublk::UBLK_IO_OP_FLUSH => 0,
-        _ => EINVAL,
+    let served = match iod.operation() {
+        ublk::UBLK_IO_OP_READ => backend.read_at(offset, &mut buf[..len]).map(|()| len),
+        ublk::UBLK_IO_OP_WRITE => backend.write_at(offset, &buf[..len]).map(|()| len),
+        ublk::UBLK_IO_OP_FLUSH => backend.flush().map(|()| 0),
+        _ => return EINVAL,
+    };
+
+    match served {
+        Ok(bytes) => i32::try_from(bytes).unwrap_or(EIO),
+        Err(_) => EIO,
     }
 }
 

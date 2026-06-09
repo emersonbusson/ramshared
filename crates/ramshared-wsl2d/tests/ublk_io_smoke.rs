@@ -1,3 +1,4 @@
+use ramshared_block::BlockBackend;
 use ramshared_wsl2d::{ublk, ublk_control, ublk_server};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -27,7 +28,9 @@ fn serves_read_from_ram_backend_over_block_device() {
     // Backend de RAM com um padrao conhecido no setor de teste (fora do partition scan).
     let mut backend = ublk_server::RamBackend::new((dev_sectors * SECTOR) as usize);
     let pattern: Vec<u8> = (0..SECTOR).map(|i| (i % 251) as u8).collect();
-    assert!(backend.write_from(TEST_SECTOR * SECTOR, &pattern) >= 0);
+    backend
+        .write_at(TEST_SECTOR * SECTOR, &pattern)
+        .expect("pre-carrega o backend");
 
     let char_path = format!("/dev/ublkc{}", report.dev_id);
     let block_path = format!("/dev/ublkb{}", report.dev_id);
@@ -101,10 +104,9 @@ fn serves_write_into_ram_backend_over_block_device() {
     let backend = server.join().expect("server loop terminou ok");
 
     let mut got = vec![0u8; SECTOR as usize];
-    assert_eq!(
-        backend.read_into(TEST_SECTOR * SECTOR, &mut got),
-        SECTOR as i32
-    );
+    backend
+        .read_at(TEST_SECTOR * SECTOR, &mut got)
+        .expect("le o backend devolvido");
     assert_eq!(got, pattern, "o WRITE deve ter chegado ao backend");
 
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
