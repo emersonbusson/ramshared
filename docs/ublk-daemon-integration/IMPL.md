@@ -5,10 +5,13 @@
 ## Status
 
 - **F1 — worker DT-3 com residência: FEITO e validado** (2026-06-09, commit `31f8395`, RF-3).
-- **F2 — `--transport ublk` no `main.rs`: CÓDIGO ESCRITO, _NÃO_ VALIDADO.** Compila/clippy OK, mas
-  rodar o daemon standalone **CONGELOU o WSL2** (2026-06-09 — device órfão no teardown → I/O em
-  D-state). **Bloqueado por duas travas** (ver abaixo); validação só em VM/qemu.
-- **F3 — swap e2e pelo daemon + bench: pendente** (depois da validação do F2 em qemu).
+- **F2 — `--transport ublk` no `main.rs`: ciclo de vida VALIDADO em qemu** (2026-06-09,
+  `scripts/kernel/qemu-ublk-daemon.sh` → **PASS**): insmod ublk_drv → daemon sobe → cria
+  `/dev/ublkb0` → serve I/O (dd 4KB) → **SIGTERM → teardown limpo** → device removido → daemon sai 0.
+  **O freeze do WSL2 era a corrida SIGKILL do _harness de teste_, NÃO o daemon** (com SIGTERM limpo
+  o teardown fecha certo). VRAM serving já validado em-processo. Continua **gated no WSL2** (rodar o
+  daemon standalone no host segue arriscado: um SIGKILL/crash ainda orfanaria o device).
+- **F3 — swap e2e + bench: pendente** (próximo; validável no mesmo harness qemu, estendido).
 
 ## F1 (feito)
 
@@ -83,6 +86,12 @@ lógica do daemon.**
 1. `write_block`/`fsync` do teste pendurando (serving hang) ANTES do kill.
 2. SIGTERM tarde → `wait_child(15s)` estoura → `child.kill()` (SIGKILL) → órfão (corrida do harness).
 3. STOP_DEV/join travando (improvável — F1 valida a sequência em-processo).
+
+**RESULTADO (2026-06-09):** `scripts/kernel/qemu-ublk-daemon.sh` rodou e **PASSOU** — daemon
+RAM-backed serviu I/O e fez teardown limpo no SIGTERM, device removido, host intacto (VM efêmera,
+RAM-only, sem disco; bzImage/`ublk_drv.ko` só lidos). **Conclusão: o teardown do daemon é sólido; o
+freeze do WSL2 foi a corrida SIGKILL específica do harness de teste**, como a análise por inspeção
+previu. O harness é não-destrutivo (mesmo padrão do `qemu-validate.sh`).
 
 **Recipe de validação em qemu (host-safe: uma VM não trava o host):**
 1. **Modo RAM-backed no daemon — FEITO** (`--backend ram` → `spawn_server_dt3` com `RamBackend`, sem

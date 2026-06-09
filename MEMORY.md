@@ -916,3 +916,24 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   RAM-backed + insmod ublk_drv + script de ciclo dd+SIGTERM dentro da VM). Recipe no IMPL.md.
 - **Estado:** A+F1 validados em hw; F2 codigo-completo (+ RAM mode) e travado/analisado; falta qemu.
   ~95 commits. Regra dura: nada de daemon standalone no WSL2 [[feedback-no-standalone-daemon-smoke-wsl2]].
+
+---
+
+## 2026-06-09 — Frente B F2: VALIDADO em qemu (teardown limpo; freeze era do harness)
+
+- **`scripts/kernel/qemu-ublk-daemon.sh` rodou e PASSOU.** Boota uma VM efemera (RAM-only, sem disco)
+  com o kernel WSL2 + initramfs throwaway: insmod ublk_drv -> daemon `--backend ram` sobe -> cria
+  /dev/ublkb0 -> serve dd 4KB (KTEST-SERVED=ok) -> **SIGTERM -> teardown limpo** (KTEST-TERMINATED=ok)
+  -> device removido (KTEST-DEVICE-REMOVED=ok). Host intacto (uptime sem reboot, /dev limpo).
+- **ACHADO PRINCIPAL: o teardown do daemon F2 e SOLIDO.** O freeze do WSL2 NAO foi bug do daemon —
+  foi a **corrida SIGKILL do harness de teste** (`wait_child(15s)` -> `child.kill()`). Com SIGTERM
+  limpo na VM, STOP_DEV->join->DEL_DEV fecha certo. Confirma a analise por inspecao.
+- **Viabilidade qemu (confirmada):** `ramshared-cuda` carrega o driver via **dlopen** (ffi.rs); `ldd`
+  do daemon = so libc/libgcc/ld-linux (ZERO CUDA no load). Logo `--backend ram` roda em VM sem GPU.
+  Pre-reqs presentes: qemu-system-x86_64, busybox, /dev/kvm, bzImage, ublk_drv.ko.
+- **Harness e NAO-DESTRUTIVO** (mesmo padrao do qemu-validate.sh): so `-kernel`+`-initrd` (sem -hda),
+  bzImage/ublk_drv.ko so lidos, mktemp+trap limpa, kernel tree git-limpo. **Nao toca a VM real, o
+  kernel armado no .wslconfig, nem CI.** Rodar via `sudo bash scripts/kernel/qemu-ublk-daemon.sh`.
+- **Estado:** Fase B — VRAM/swap/bench/no-alloc/qd>1/multipagina (host) + F1 + **F2 ciclo validado
+  em qemu**. Resta F3 (swap e2e + bench, no mesmo harness estendido). ~96 commits. Daemon segue gated
+  no WSL2 (SIGKILL/crash ainda orfanaria) [[feedback-no-standalone-daemon-smoke-wsl2]].
