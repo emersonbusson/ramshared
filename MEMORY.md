@@ -900,3 +900,19 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **REGRA DURA:** nunca rodar o daemon ublk standalone / smoke de processo no WSL2. Validar F2/F3 so
   em qemu. Smokes in-process (DeviceGuard, <1s) seguem seguros.
 - **Estado:** A(multipagina)+B-F1 validados em hw; B-F2 codigo escrito+travado, valida em qemu.
+
+---
+
+## 2026-06-09 — Frente B F2: modo --backend ram (pre-req pra validar em qemu)
+
+- **`--backend {vram,ram}` no daemon ublk** (commit a seguir). VRAM = caminho atual (worker dono do
+  ctx CUDA + residencia). RAM = `spawn_server_dt3` com `RamBackend` (sem GPU, sem residencia) —
+  existe so pra validar o **ciclo de vida/teardown** do daemon em **qemu** (sem GPU; o bug de
+  teardown e independente do backend). `run_ublk` faz branch via `BackendKind`/`UblkHandle` (une os
+  dois tipos de handle pro teardown unico stop_dev->join->del). `--transport ublk --backend ram`.
+- **Seguro:** so codigo, compila+clippy -j2 OK, 40 nao-root verdes, NAO rodado no WSL2 (gated por
+  guard_not_wsl2 + a trava do smoke). Build nunca trava; so a execucao do daemon.
+- **Falta pra fechar F2:** so o rootfs/harness qemu (estender qemu-validate.sh com o daemon
+  RAM-backed + insmod ublk_drv + script de ciclo dd+SIGTERM dentro da VM). Recipe no IMPL.md.
+- **Estado:** A+F1 validados em hw; F2 codigo-completo (+ RAM mode) e travado/analisado; falta qemu.
+  ~95 commits. Regra dura: nada de daemon standalone no WSL2 [[feedback-no-standalone-daemon-smoke-wsl2]].
