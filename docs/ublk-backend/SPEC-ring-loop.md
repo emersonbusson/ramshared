@@ -236,4 +236,8 @@ Rollback: sem ganho no bench → manter NBD e remover a dependência `io-uring`/
   `VramBackend` **na própria thread** (resolve o `!Send`/`!'static` do `DeviceMem<'c,'a>`) e roda o
   loop ali. Smoke root+GPU (RTX 2060): WRITE→`cuMemcpyHtoD`, `drop_caches`, READ→`cuMemcpyDtoH`
   confere. **O ublk serve a VRAM end-to-end.**
-- **Falta só:** bench p50/p99 ublk vs NBD; `swapon` (passo final, pressão de memória, separado).
+- **Swap validado (capstone):** `mkswap`/`swapon`/`/proc/swaps`/`swapoff` sobre o `/dev/ublkbN`
+  VRAM — a VRAM funciona como **área de swap via ublk** (ciclo limitado, sem pressão; 9.6 GiB RAM
+  livre; `swapon` sem `-p`; `SwapGuard`). É o objetivo central da Fase B.
+- **Falta só:** bench p50/p99 ublk vs NBD (justificativa de adoção, não funcionalidade). Para
+  produção sob pressão: `mlockall` no daemon + caminho do worker sem alloc no hot path.
