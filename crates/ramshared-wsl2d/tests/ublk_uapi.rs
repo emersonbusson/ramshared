@@ -22,6 +22,10 @@ fn ublk_uapi_constants_match_kernel_header() {
     assert_eq!(ublk::UBLK_U_IO_FETCH_REQ, 0xc010_7520);
     assert_eq!(ublk::UBLK_U_IO_COMMIT_AND_FETCH_REQ, 0xc010_7521);
     assert_eq!(ublk::UBLK_U_IO_NEED_GET_DATA, 0xc010_7522);
+    assert_eq!(ublk::UBLK_U_CMD_START_DEV, 0xc020_7506);
+    assert_eq!(ublk::UBLK_U_CMD_STOP_DEV, 0xc020_7507);
+    assert_eq!(ublk::UBLK_U_CMD_SET_PARAMS, 0xc020_7508);
+    assert_eq!(ublk::UBLK_U_CMD_GET_PARAMS, 0x8020_7509);
     assert_eq!(ublk::UBLK_IO_RES_OK, 0);
     assert_eq!(ublk::UBLK_IO_RES_NEED_GET_DATA, 1);
 
@@ -278,4 +282,23 @@ fn io_desc_decodes_from_kernel_byte_layout() {
 
     // Buffer menor que um io-desc nao decodifica.
     assert!(ublk::IoDesc::from_ne_bytes(&bytes[..23]).is_none());
+}
+
+#[test]
+fn params_round_trips_through_kernel_byte_layout() {
+    let params = ublk::Params::basic_disk(2048, 9, 12);
+    assert_eq!(params.len, 112);
+    assert_eq!(params.types, ublk::UBLK_PARAM_TYPE_BASIC);
+    assert_eq!(params.basic.dev_sectors, 2048);
+
+    let bytes = params.to_bytes();
+    assert_eq!(ublk::Params::from_bytes(&bytes), params);
+
+    // dev_sectors em offset absoluto 24 (basic@8 + dev_sectors@16); verificado via cc.
+    assert_eq!(
+        u64::from_ne_bytes([
+            bytes[24], bytes[25], bytes[26], bytes[27], bytes[28], bytes[29], bytes[30], bytes[31],
+        ]),
+        2048
+    );
 }
