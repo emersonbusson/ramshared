@@ -930,6 +930,99 @@ impl Drop for DeviceGuard {
     }
 }
 
+#[test]
+#[ignore = "PERIGOSO no WSL2: sobe o daemon ublk standalone; teardown malsucedido orfana o device e CONGELA o WSL2. Gated por RAMSHARED_DANGEROUS_DAEMON_SMOKE=1. Prefira validar em VM/qemu."]
+fn daemon_ublk_serves_and_terminates_on_signal() {
+    // GUARDA DE SEGURANCA: este smoke sobe o daemon ublk como processo separado e
+    // depende de SIGTERM para o teardown. Se o teardown falhar, o /dev/ublkbN fica sem
+    // servidor -> I/O em D-state -> WSL2 CONGELA (ja aconteceu, 2026-06-09). Por isso
+    // ele NAO roda nem com `--ignored`, a menos que o opt-in explicito esteja setado.
+    if std::env::var("RAMSHARED_DANGEROUS_DAEMON_SMOKE").as_deref() != Ok("1") {
+        eprintln!(
+            "[skip] daemon_ublk_serves_and_terminates_on_signal: gated. \
+             Set RAMSHARED_DANGEROUS_DAEMON_SMOKE=1 para rodar (PODE TRAVAR O WSL2)."
+        );
+        return;
+    }
+
+    let before = ublk_nodes();
+    // Sobe o daemon em modo ublk como subprocesso (herda root do teste). Quem abriu o
+    // gate deste smoke aceitou o risco, entao passa o override da trava de WSL2 do
+    // daemon (senao `run_ublk` recusaria via guard_not_wsl2 e o device nao surgiria).
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_ramshared-wsl2d"))
+        .args(["--transport", "ublk", "--size", "8", "--queue-depth", "1"])
+        .env("RAMSHARED_ALLOW_UBLK_ON_WSL2", "1")
+        .spawn()
+        .expect("spawn daemon ublk");
+
+    // Espera o device aparecer (a inicializacao do CUDA leva ~1s).
+    let block_path = match wait_new_ublkb(&before, Duration::from_secs(30)) {
+        Some(p) => p,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("daemon nao criou /dev/ublkbN em 30s");
+        }
+    };
+
+    // Serve: WRITE + READ de um bloco de 4KB via block device (fecha os fds nos
+    // helpers). NAO usa drop_page_cache(): ele amplifica o stall se o device travar
+    // (foi um dos gatilhos do freeze de 2026-06-09). O WRITE+fsync ja prova o serve.
+    let off = 8192u64;
+    let pattern: Vec<u8> = (0..4096u32).map(|i| ((i * 7 + 13) % 251) as u8).collect();
+    write_block(&block_path, off, &pattern);
+    let got = read_block(&block_path, off, 4096);
+    assert_eq!(got, pattern, "daemon ublk deve servir o bloco escrito");
+
+    // SIGTERM -> teardown ordenado no daemon (STOP_DEV -> join -> DEL_DEV).
+    run_ok("kill", &["-TERM", &child.id().to_string()]);
+
+    let status =
+        wait_child(&mut child, Duration::from_secs(15)).expect("daemon nao encerrou em 15s");
+    assert!(status.success(), "daemon ublk saiu com erro: {status:?}");
+
+    // /dev volta ao estado inicial (device removido pelo teardown).
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while ublk_nodes() != before && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        ublk_nodes(),
+        before,
+        "daemon ublk deve remover o device no teardown"
+    );
+}
+
+/// Espera surgir um `/dev/ublkbN` que nao estava em `before`; devolve o caminho.
+fn wait_new_ublkb(before: &[String], timeout: Duration) -> Option<String> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        for name in ublk_nodes() {
+            if name.starts_with("ublkb") && !before.iter().any(|b| b == &name) {
+                return Some(format!("/dev/{name}"));
+            }
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    None
+}
+
+/// Aguarda (bounded) o processo encerrar; devolve o status ou `None` no timeout.
+fn wait_child(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Option<std::process::ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) => thread::sleep(Duration::from_millis(100)),
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
 fn ublk_nodes() -> Vec<String> {
     let mut nodes = fs::read_dir("/dev")
         .expect("/dev read_dir")
