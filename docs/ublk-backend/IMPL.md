@@ -1,9 +1,10 @@
 # IMPL — Fase B ublk (prep seguro)
 
-Status: **ublk funcional com backend de RAM** (2026-06-07). Kernel custom ativo:
+Status: **ublk servindo VRAM (DT-3)** (2026-06-07). Kernel custom ativo:
 `6.6.123.2-microsoft-standard-WSL2+`, `CONFIG_BLK_DEV_UBLK=m`,
 `CONFIG_IO_URING=y`, `kernel.io_uring_disabled=0`, `/dev/ublk-control` presente.
-`/dev/ublkbN` cria e serve READ/WRITE/FLUSH via loop io_uring + backend de RAM (sem swap).
+`/dev/ublkbN` serve READ/WRITE/FLUSH a partir da **VRAM** (RTX 2060, `cuMemcpy`) via loop DT-3
+(ring owner + worker dono do ctx CUDA). Falta só **bench** ublk vs NBD e **`swapon`** (sem swap ainda).
 
 ## Fechado sem tocar swap
 
@@ -37,8 +38,12 @@ Status: **ublk funcional com backend de RAM** (2026-06-07). Kernel custom ativo:
   `BlockBackend`; devolve `WorkerReply{result, read_data}`) + `spawn_server_dt3` (ring owner:
   drena CQE → `IoWork` → worker → `WorkerReply` → copia `read_data` na tag → `COMMIT_AND_FETCH`).
   Validado com `RamBackend`: worker puro (sem root) + smoke DT-3 root (READ via block device,
-  teardown **sem deadlock**); 3/3 smokes I/O. **Falta só:** plugar o `VramBackend` (variante
-  factory pelo lifetime `!Send`/`!'static` + smoke GPU), bench e `swapon`.
+  teardown **sem deadlock**); 3/3 smokes I/O.
+- **M3c VRAM — feito (GPU):** `spawn_server_dt3_vram` — o worker cria o stack
+  `Cuda`/`Context`/`DeviceMem`/`VramBackend` **na própria thread** (resolve o `!Send`/`!'static`
+  do `DeviceMem<'c,'a>`) e roda o loop ali. Smoke root+GPU (RTX 2060): WRITE→`cuMemcpyHtoD`,
+  `drop_caches`, READ→`cuMemcpyDtoH` confere o bloco. 4/4 smokes I/O. **Falta só:** bench ublk vs
+  NBD e `swapon`.
 - **SET_PARAMS** (pré-requisito do `START_DEV`): `ublk_control::set_params`/`get_params`
   (control-only) aplicam/leem `ublk_params` (112 B); `Params::basic_disk`/`to_bytes`/`from_bytes`
   espelham o layout (offsets via `cc`). Smoke root: round-trip de `dev_sectors`/bs-shifts sem

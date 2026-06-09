@@ -232,6 +232,8 @@ Rollback: sem ganho no bench → manter NBD e remover a dependência `io-uring`/
   `WorkerReply` em `ublk_server.rs`; `serve_request` unificado em `Request`. Smoke DT-3 root passa
   (READ via block device, teardown sem deadlock) + worker testado puro. A **arquitetura alvo está
   validada com RamBackend** — ring owner e worker em threads separadas, do jeito que o VRAM exige.
-- **Falta (VRAM, gated/GPU):** variante **factory** de `spawn_server_dt3`/`spawn_ublk_worker` que
-  cria o stack `Cuda`/`Context`/`DeviceMem` **na thread do worker** (o `VramBackend` é
-  `!Send`/`!'static` — `DeviceMem<'c,'a>` borrows `Context`); smoke GPU; bench p50/p99; `swapon`.
+- **Feito (GPU):** `spawn_server_dt3_vram` — o worker cria o stack `Cuda`/`Context`/`DeviceMem`/
+  `VramBackend` **na própria thread** (resolve o `!Send`/`!'static` do `DeviceMem<'c,'a>`) e roda o
+  loop ali. Smoke root+GPU (RTX 2060): WRITE→`cuMemcpyHtoD`, `drop_caches`, READ→`cuMemcpyDtoH`
+  confere. **O ublk serve a VRAM end-to-end.**
+- **Falta só:** bench p50/p99 ublk vs NBD; `swapon` (passo final, pressão de memória, separado).
