@@ -1,13 +1,14 @@
 # IMPL — Fase B ublk (prep seguro)
 
-Status: **VRAM-as-RAM via swap por ublk — validado** (2026-06-07). Kernel custom ativo:
+Status: **VRAM-as-RAM via swap por ublk — completo e validado** (2026-06-09). Kernel custom ativo:
 `6.6.123.2-microsoft-standard-WSL2+`, `CONFIG_BLK_DEV_UBLK=m`,
 `CONFIG_IO_URING=y`, `kernel.io_uring_disabled=0`, `/dev/ublk-control` presente.
 `/dev/ublkbN` serve READ/WRITE/FLUSH a partir da **VRAM** (RTX 2060, `cuMemcpy`) via loop DT-3
 (ring owner + worker dono do ctx CUDA), foi **validado como área de swap** (`mkswap`/`swapon`/
 `swapoff`, `/proc/swaps`), e o **bench fio mostra ublk ~26% mais rápido que NBD** (p50 241µs vs
-326µs; gate anti-halo #11 satisfeito). **Funcionalmente completo.** Resta só o **no-alloc do
-worker** (hardening de produção sob pressão de swap, não validável aqui).
+326µs; gate anti-halo #11 satisfeito). O **no-alloc do worker** (DT-8) foi implementado — pool de
+buffers ciclado ring owner↔worker, zero malloc/free no hot path. **Fase B funcionalmente completa
+e pronta para PR.**
 
 ## Fechado sem tocar swap
 
@@ -55,8 +56,14 @@ worker** (hardening de produção sob pressão de swap, não validável aqui).
   2060); o residual é o custo do DT-3 (2 saltos de thread) + WSL2.
 - **Bench fio ublk vs NBD (gate anti-halo #11):** mesmo `fio` (4KB randread `O_DIRECT` iodepth=1)
   nos dois transportes servindo VRAM. **ublk** p50=241µs p99=461µs IOPS=3911 vs **NBD** p50=326µs
-  p99=635µs IOPS=2900 → **ublk ~26% mais rápido, ~35% mais IOPS**. Gate satisfeito. **Resta só:**
-  no-alloc do `worker_loop` (hardening de produção sob pressão; não validável aqui).
+  p99=635µs IOPS=2900 → **ublk ~26% mais rápido, ~35% mais IOPS**. Gate satisfeito.
+- **No-alloc DT-8 (feito):** o ring owner mantém um **pool de buffers pré-aquecido** (`queue_depth`
+  buffers de `buf_size`); `dispatch_request` pega um e dimensiona a `len`, o worker serve in-place
+  e o devolve em `WorkerReply.buf`, `commit_reply` copia (READ) e recicla (clear preserva
+  capacidade). Em regime: zero malloc/free no hot path (invariante `pool.len()+in_flight==qd`,
+  pool nunca esvazia). Remove o hazard de deadlock de alocar no caminho de I/O sob pressão de swap.
+  `WorkerReply` passou de `read_data` para `buf`+`is_read`. Latência inalterada (p50 ~250µs);
+  validado pelos smokes DT-3 RAM/VRAM/swap + worker unit. `mlockall` é do daemon (`main.rs`).
 - **SET_PARAMS** (pré-requisito do `START_DEV`): `ublk_control::set_params`/`get_params`
   (control-only) aplicam/leem `ublk_params` (112 B); `Params::basic_disk`/`to_bytes`/`from_bytes`
   espelham o layout (offsets via `cc`). Smoke root: round-trip de `dev_sectors`/bs-shifts sem

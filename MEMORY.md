@@ -733,3 +733,31 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Estado: funcionalmente TUDO works** (ublk serve VRAM, swap validado, bench vence NBD). **Falta
   so (producao):** no-alloc no `worker_loop` — hardening para swap sob pressao, NAO validavel aqui
   (pressao pode travar WSL2); `mlockall` e do daemon integrador (`main.rs` ja faz).
+
+---
+
+## 2026-06-09 — Fase B: no-alloc DT-8 feito — ultimo item antes do PR
+
+- **No-alloc do worker (DT-8) implementado** (commit `aa2f060`, `perf(wsl2d)`). Antes: READ alocava
+  `vec![0u8; len]` no worker e WRITE `.to_vec()` no ring owner; `read_data`/`payload` dropados (free)
+  por request. Alocar no caminho de I/O = hazard de deadlock sob pressao de swap (alloc -> reclaim ->
+  swap -> precisa do worker).
+- **Desenho:** ring owner mantem um **pool de buffers pre-aquecido** (`queue_depth` buffers de
+  `buf_size`, montado em `run_ring_owner`). `dispatch_request` da `pop()` no pool e `resize(len)`;
+  worker serve **in-place** no buffer cedido (READ inclusive) e o devolve em `WorkerReply.buf`;
+  `commit_reply` copia (READ) para a tag e **recicla** (`clear()` preserva capacidade, push no pool).
+  Em regime: **zero malloc/free no hot path**. Invariante `pool.len() + in_flight == queue_depth`
+  -> pool nunca esvazia (pop sempre serve). `unwrap_or_default` no pop e so defensivo (aquecimento).
+- **Contrato mudou:** `WorkerReply` trocou `read_data: Vec<u8>` por `buf: Vec<u8>` + `is_read: bool`.
+  Unico consumidor era `tests/ublk_worker.rs` (o RamShared `ServeOutcome.read_data` do caminho NBD e
+  outro struct, intocado). `worker_loop` agora serve sempre in-place no `work.payload`.
+- **TDD:** `tests/ublk_worker.rs` reescrito como RED (campos `buf`/`is_read` inexistentes -> compile
+  fail), depois GREEN. `run_ring_owner` ganhou params `queue_depth`/`buf_size` (2 call sites: DT-3
+  RAM e DT-3 VRAM).
+- **Validado (RTX 2060, root):** worker unit GREEN; smokes DT-3 RAM, DT-3 VRAM e VRAM-as-swap todos
+  verdes; clippy lib `-D warnings` limpo; 40 testes nao-root verdes; `/dev` e `/proc/swaps` limpos
+  (so o swap do sistema `/dev/sdb`). Latencia inalterada dentro do ruido (p50 ~250us vs 231-241us
+  anteriores) — o no-alloc e sobre seguranca contra deadlock, nao velocidade.
+- **Estado: Fase B funcionalmente completa + ultimo item de producao feito -> PRONTA PARA O PR.**
+  Branch `feat/fase-b-prep`, ~82 commits. PR consolida tudo (corpo PT-BR, tabela de commits por
+  governance.md). `mlockall` ja e do daemon integrador (`main.rs`).
