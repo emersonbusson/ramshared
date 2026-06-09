@@ -68,6 +68,56 @@ fn mmap_io_desc_buffer_read_only_without_starting_device() {
     assert_eq!(ublk_nodes(), before);
 }
 
+#[test]
+#[ignore = "requires root and /dev/ublk-control; submits FETCH then aborts via DEL_DEV, no START_DEV"]
+fn fetch_req_parks_until_delete_aborts_without_starting_device() {
+    let before = ublk_nodes();
+    let report = ublk_control::add_device(UBLK_CONTROL, ublk_control::DeviceSpec::smoke_auto())
+        .expect("ublk ADD_DEV");
+    let mut guard = DeviceGuard::new(report.dev_id);
+
+    let char_path = format!("/dev/ublkc{}", report.dev_id);
+    let mut session = ublk_queue::FetchSession::open(&char_path, report.queue_depth, 4096)
+        .expect("abrir char device + submeter FETCH_REQ");
+
+    // FETCH fica estacionado (-EIOCBQUEUED): nenhum CQE antes de I/O ou abort.
+    assert!(
+        session.drain().is_empty(),
+        "FETCH nao deveria completar sem I/O nem START_DEV"
+    );
+
+    // DEL_DEV faz o driver abortar os FETCH estacionados (UBLK_IO_RES_ABORT = -ENODEV).
+    ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
+    guard.disarm();
+
+    let want = usize::from(report.queue_depth);
+    let mut aborts = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while aborts.len() < want && Instant::now() < deadline {
+        aborts.extend(session.drain());
+        if aborts.len() < want {
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    assert_eq!(
+        aborts.len(),
+        want,
+        "todos os FETCH devem abortar no DEL_DEV"
+    );
+    for completion in &aborts {
+        assert_eq!(
+            completion.result,
+            ublk::UBLK_IO_RES_ABORT,
+            "FETCH estacionado deve completar com -ENODEV"
+        );
+    }
+
+    drop(session);
+    wait_until_missing(&char_path);
+    assert_eq!(ublk_nodes(), before);
+}
+
 struct DeviceGuard {
     dev_id: Option<u32>,
 }
