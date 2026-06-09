@@ -417,6 +417,99 @@ fn dt3_vram_serves_concurrent_writes_with_queue_depth_gt1() {
     assert_eq!(ublk_nodes(), before);
 }
 
+#[test]
+#[ignore = "requires root + CUDA GPU; serves a real >4KB (multi-page) O_DIRECT request from VRAM, no swap"]
+fn dt3_vram_serves_multipage_request() {
+    let before = ublk_nodes();
+    let max_req = 128 * 1024usize; // request maximo de 128 KiB (32 paginas)
+    // ADD_DEV: o buffer por-IO do kernel limita o maior request (ublk_drv.c:307).
+    let mut spec = ublk_control::DeviceSpec::smoke_auto();
+    spec.max_io_buf_bytes = max_req as u32;
+    let report = ublk_control::add_device(UBLK_CONTROL, spec).expect("ublk ADD_DEV");
+    let mut guard = DeviceGuard::new(report.dev_id);
+
+    let block_size = 4096u32;
+    let dev_sectors = (max_req as u64 / SECTOR) * 4; // 512 KiB de disco
+    // max_sectors acopla com max_io_buf_bytes (kernel valida <= max_io_buf_bytes>>9)
+    // e vira o max_hw_sectors do block device (ublk_drv.c:546).
+    ublk_control::set_params(
+        UBLK_CONTROL,
+        report.dev_id,
+        ublk::Params::basic_disk(dev_sectors, 12, 12)
+            .with_max_sectors((max_req / SECTOR as usize) as u32),
+    )
+    .expect("ublk SET_PARAMS");
+
+    let char_path = format!("/dev/ublkc{}", report.dev_id);
+    let block_path = format!("/dev/ublkb{}", report.dev_id);
+    let vram_bytes = (dev_sectors * SECTOR) as usize;
+    let server = ublk_server::spawn_server_dt3_vram(
+        &char_path,
+        report.queue_depth,
+        max_req, // buf_size por tag >= maior request possivel (acopla com os knobs)
+        vram_bytes,
+        block_size,
+    )
+    .expect("spawn DT-3 VRAM server");
+    ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())
+        .expect("ublk START_DEV");
+
+    // O device deve anunciar capacidade multi-pagina (nao mais o cap de 4KB).
+    let hw_kb = read_queue_attr_u64(report.dev_id, "max_hw_sectors_kb");
+    assert!(
+        hw_kb >= 64,
+        "max_hw_sectors_kb={hw_kb}; esperado >=64 (request multi-pagina habilitado)"
+    );
+
+    // WRITE + READ de um bloco de 64KB (16 paginas) via O_DIRECT: um unico request
+    // de len=65536 > 4096 atravessa serve_request -> pool -> worker -> cuMemcpy. Se o
+    // buf_size nao acompanhasse, serve_request devolveria EINVAL.
+    const O_DIRECT: i32 = 0o40000;
+    let big = 64 * 1024usize;
+    let bs = block_size as usize;
+    let pattern = keyed_pattern(0x5151, big);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(O_DIRECT)
+        .open(&block_path)
+        .expect("open O_DIRECT rw");
+    let mut raw = vec![0u8; big + bs];
+    let pad = (bs - (raw.as_ptr() as usize % bs)) % bs;
+    raw[pad..pad + big].copy_from_slice(&pattern);
+    file.write_all_at(&raw[pad..pad + big], 0)
+        .expect("write O_DIRECT 64KB");
+    // Zera o buffer e re-le do device (sem cache) -> deve vir da VRAM.
+    raw[pad..pad + big].fill(0);
+    file.read_exact_at(&mut raw[pad..pad + big], 0)
+        .expect("read O_DIRECT 64KB");
+    assert_eq!(
+        &raw[pad..pad + big],
+        pattern.as_slice(),
+        "READ multi-pagina (64KB) deve casar com o WRITE"
+    );
+
+    // Fecha o handle do block device ANTES do STOP_DEV: o `del_gendisk` bloqueia ate
+    // todos os openers fecharem, entao manter o fd aberto travaria o teardown.
+    drop(file);
+
+    ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
+    server.join().expect("DT-3 VRAM server terminou ok");
+    ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
+    guard.disarm();
+    wait_until_missing(&char_path);
+    assert_eq!(ublk_nodes(), before);
+}
+
+/// Le um atributo numerico de `/sys/block/ublkb<id>/queue/<attr>`.
+fn read_queue_attr_u64(dev_id: u32, attr: &str) -> u64 {
+    let path = format!("/sys/block/ublkb{dev_id}/queue/{attr}");
+    let s = fs::read_to_string(&path).unwrap_or_else(|e| panic!("le {path}: {e}"));
+    s.trim()
+        .parse()
+        .unwrap_or_else(|e| panic!("parse {path}={s:?}: {e}"))
+}
+
 fn read_sector(path: &str, sector: u64) -> Vec<u8> {
     read_block(path, sector * SECTOR, SECTOR as usize)
 }
