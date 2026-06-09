@@ -9,7 +9,7 @@ use std::fs::OpenOptions;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -250,4 +250,126 @@ fn worker_loop<B: BlockBackend>(
     }
 
     backend
+}
+
+const RING_CHAN_CAP: usize = 64;
+
+/// Handle do servidor DT-3 (ring owner + worker). `join` aguarda o ring owner
+/// encerrar (no abort do STOP/DEL_DEV), o que fecha o canal e encerra o worker,
+/// e devolve o backend.
+pub struct ServerHandleDt3<B> {
+    ring: JoinHandle<io::Result<()>>,
+    worker: WorkerHandle<B>,
+}
+
+impl<B> ServerHandleDt3<B> {
+    pub fn join(self) -> io::Result<B> {
+        self.ring
+            .join()
+            .map_err(|_| io::Error::other("ring owner panicked"))??;
+        self.worker.join()
+    }
+}
+
+/// Sobe o servidor ublk na arquitetura DT-3: uma thread **ring owner** (dona do
+/// `UblkServer`) que drena CQE, envia `IoWork` ao **worker** (thread dona do
+/// `backend`, a única a tocar VRAM/CUDA) e completa via `COMMIT_AND_FETCH` com os
+/// dados devolvidos. Funciona com qualquer `BlockBackend` (RAM ou VRAM).
+pub fn spawn_server_dt3<B: BlockBackend + Send + 'static>(
+    char_path: impl AsRef<Path>,
+    queue_depth: u16,
+    buf_size: usize,
+    backend: B,
+) -> io::Result<ServerHandleDt3<B>> {
+    let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
+    let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(RING_CHAN_CAP);
+    let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>();
+    let worker = spawn_ublk_worker(backend, work_rx, reply_tx);
+
+    let ring = thread::spawn(move || {
+        // O char device fica aberto enquanto o ring vive; `work_tx` cai ao retornar
+        // (encerra o worker).
+        let _char_dev = char_dev;
+        run_ring_owner(server, work_tx, reply_rx)
+    });
+
+    Ok(ServerHandleDt3 { ring, worker })
+}
+
+fn run_ring_owner(
+    mut server: ramshared_uring::UblkServer,
+    work_tx: SyncSender<ublk::IoWork>,
+    reply_rx: Receiver<WorkerReply>,
+) -> io::Result<()> {
+    server.submit_initial_fetch()?;
+
+    loop {
+        let mut did_work = false;
+
+        // 1. Completa as tags cujo worker já respondeu (copia READ + COMMIT).
+        while let Ok(reply) = reply_rx.try_recv() {
+            if !reply.read_data.is_empty() {
+                let buf = server.buffer_mut(reply.tag);
+                let n = reply.read_data.len().min(buf.len());
+                buf[..n].copy_from_slice(&reply.read_data[..n]);
+            }
+            server.commit_and_fetch(reply.tag, reply.result)?;
+            did_work = true;
+        }
+
+        // 2. Drena os CQEs do ublk ring e despacha cada request ao worker.
+        for completion in server.drain() {
+            did_work = true;
+            if completion.result == ublk::UBLK_IO_RES_ABORT {
+                return Ok(()); // teardown: STOP/DEL_DEV abortou os FETCH
+            }
+            if completion.result < 0 {
+                return Err(io::Error::other(format!(
+                    "FETCH falhou: {}",
+                    completion.result
+                )));
+            }
+
+            let iod = ublk::IoDesc::from_ne_bytes(server.io_desc_bytes(completion.tag))
+                .ok_or_else(|| io::Error::other("io-desc invalido no mmap"))?;
+            let req = match iod.to_block_request(completion.tag) {
+                Ok(req) => req,
+                Err(_) => {
+                    server.commit_and_fetch(completion.tag, -22)?; // EINVAL
+                    continue;
+                }
+            };
+
+            // WRITE: o kernel já copiou bio->buffer da tag; leva no payload.
+            let payload = if req.cmd == Command::Write {
+                let len = req.len as usize;
+                let buf = server.buffer_mut(completion.tag);
+                if len <= buf.len() {
+                    buf[..len].to_vec()
+                } else {
+                    server.commit_and_fetch(completion.tag, -22)?; // EINVAL
+                    continue;
+                }
+            } else {
+                Vec::new()
+            };
+
+            let work = ublk::IoWork {
+                qid: 0,
+                tag: completion.tag,
+                buffer_addr: 0,
+                req,
+                payload,
+            };
+            if work_tx.send(work).is_err() {
+                return Err(io::Error::other("worker encerrou inesperadamente"));
+            }
+        }
+
+        if !did_work {
+            thread::sleep(Duration::from_micros(200));
+        }
+    }
 }
