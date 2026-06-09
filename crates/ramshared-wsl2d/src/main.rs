@@ -16,6 +16,7 @@ use std::path::Path;
 use ramshared_block::protocol::{NBD_FLAG_CAN_MULTI_CONN, NBD_FLAG_HAS_FLAGS, NBD_FLAG_SEND_FLUSH};
 use ramshared_block::{BlockBackend, Command, serve};
 use ramshared_cuda::Cuda;
+use ramshared_wsl2d::swap::spawn_swapoff;
 use ramshared_wsl2d::{
     CANARY_BYTES, CANARY_EVERY, CHAN_CAP, Cadence, Canary, CanaryProbe, LiveCount, Reply,
     ResidencyConfig, ResidencySampler, Verdict, VramBackend, WMsg, spawn_acceptor,
@@ -253,33 +254,4 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     zeroed?;
     eprintln!("[wsl2d] encerrado (VRAM zerada)");
     Ok(())
-}
-
-/// Caminho absoluto do `swapoff` (#2c: um daemon root NAO deve depender do `$PATH`;
-/// evita shim malicioso no ambiente). Fallback p/ `$PATH` so' como ultimo recurso.
-fn swapoff_bin() -> &'static str {
-    const CANDIDATES: &[&str] = &["/usr/sbin/swapoff", "/sbin/swapoff"];
-    for c in CANDIDATES {
-        if std::path::Path::new(c).exists() {
-            return c;
-        }
-    }
-    "swapoff"
-}
-
-/// Dispara `swapoff <dev>` numa thread separada (nao bloqueia o worker) e devolve o
-/// canal que confirma o resultado. Caminho unico de DEMOTE (DT-8): usado pela latencia
-/// por-request e pela sonda em cadencia.
-fn spawn_swapoff(dev: &str) -> std::sync::mpsc::Receiver<bool> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let dev = dev.to_string();
-    std::thread::spawn(move || {
-        let ok = std::process::Command::new(swapoff_bin())
-            .arg(&dev)
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        let _ = tx.send(ok);
-    });
-    rx
 }

@@ -1,5 +1,5 @@
 use ramshared_block::BlockBackend;
-use ramshared_wsl2d::{ublk, ublk_control, ublk_server};
+use ramshared_wsl2d::{ResidencyConfig, ublk, ublk_control, ublk_server};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
@@ -499,6 +499,84 @@ fn dt3_vram_serves_multipage_request() {
     guard.disarm();
     wait_until_missing(&char_path);
     assert_eq!(ublk_nodes(), before);
+}
+
+#[test]
+#[ignore = "requires root + CUDA GPU; DT-3 worker residency canary fires a synthetic DEMOTE (no real swap)"]
+fn dt3_vram_residency_triggers_demote_synthetic() {
+    let before = ublk_nodes();
+    let report = ublk_control::add_device(UBLK_CONTROL, ublk_control::DeviceSpec::smoke_auto())
+        .expect("ublk ADD_DEV");
+    let mut guard = DeviceGuard::new(report.dev_id);
+
+    let block_size = 4096u32;
+    let dev_sectors = 256u64;
+    ublk_control::set_params(
+        UBLK_CONTROL,
+        report.dev_id,
+        ublk::Params::basic_disk(dev_sectors, 12, 12),
+    )
+    .expect("ublk SET_PARAMS");
+
+    let char_path = format!("/dev/ublkc{}", report.dev_id);
+    let block_path = format!("/dev/ublkb{}", report.dev_id);
+    let vram_bytes = (dev_sectors * SECTOR) as usize;
+
+    // Config SINTETICA e deterministica: latency_mult=0 -> limiar = baseline*0 = 0,
+    // entao qualquer serve real (lat_us > 0) conta como acima; consecutive=1 dispara
+    // logo apos a baseline armar (16 amostras). free_floor=0 evita demote por free.
+    let cfg = ResidencyConfig {
+        latency_mult: 0,
+        consecutive: 1,
+        free_floor_bytes: 0,
+    };
+    // swap_dev inexistente: o swapoff falha (sem efeito colateral), mas o veredito de
+    // DEMOTE e contado pelo handle -> observavel sem swap real.
+    let server = ublk_server::spawn_server_dt3_vram_with_residency(
+        &char_path,
+        report.queue_depth,
+        vram_bytes,
+        vram_bytes,
+        block_size,
+        "/dev/ramshared-no-such-swap".to_string(),
+        cfg,
+    )
+    .expect("spawn DT-3 VRAM residency server");
+    ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())
+        .expect("ublk START_DEV");
+
+    // Dirige I/O O_DIRECT 4KB ate o canario disparar o DEMOTE (ou timeout).
+    const O_DIRECT: i32 = 0o40000;
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_DIRECT)
+        .open(&block_path)
+        .expect("open O_DIRECT");
+    let bs = block_size as usize;
+    let mut raw = vec![0u8; bs * 2];
+    let pad = (bs - (raw.as_ptr() as usize % bs)) % bs;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let mut off = 0u64;
+    while server.demote_count() == 0 && Instant::now() < deadline {
+        file.read_exact_at(&mut raw[pad..pad + bs], off)
+            .expect("read O_DIRECT");
+        off = (off + bs as u64) % vram_bytes as u64;
+    }
+    let demotes = server.demote_count();
+
+    // Fecha o fd antes do STOP_DEV (del_gendisk espera os openers).
+    drop(file);
+    ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
+    server.join().expect("DT-3 residency server terminou ok");
+    ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
+    guard.disarm();
+    wait_until_missing(&char_path);
+    assert_eq!(ublk_nodes(), before);
+
+    assert!(
+        demotes >= 1,
+        "esperava >=1 DEMOTE sintetico do canario, obteve {demotes}"
+    );
 }
 
 /// Le um atributo numerico de `/sys/block/ublkb<id>/queue/<attr>`.
