@@ -545,3 +545,30 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   filas ready (FETCH submetido) + **thread dona do ring servindo I/O** (drena FETCH → io-desc via
   mmap → backend → COMMIT_AND_FETCH). Validar com **backend de RAM (Vec)** + I/O de teste (dd) no
   block device ANTES de VRAM/swap. `swapon` continua sendo o passo final separado.
+
+---
+
+## 2026-06-07 — Fase B M3b: ublk FUNCIONAL (block device + I/O via backend RAM)
+
+- **TDD M3b (2 recortes):** RamBackend `dd58baa` (RED `fe4c076`); loop servidor + I/O
+  `79065f6 fix(wsl2d): serve ublk block io with ram backend (#3)` (RED `bb1df01`).
+- **Investigacao do driver (agentes):** START_DEV exige SET_PARAMS + filas ready; com daemon
+  privilegiado (root) o `add_disk` faz **partition scan** (le setor 0) → thread servidora
+  obrigatoria durante START_DEV. WRITE: kernel copia bio→buffer ANTES do CQE. READ: servidor
+  preenche buffer, COMMIT copia **exatamente `result` bytes** (READ `result=0` vira -EIO).
+  `result>=0` = bytes, `<0` = -errno. COMMIT_AND_FETCH = 1 ioctl completa+re-arma (re-fornecer addr).
+- **Mudanca:** `ramshared-uring` ganhou `UblkServer` (ring + mmap io-desc + buffers; submit FETCH,
+  `io_desc_bytes`, `buffer_mut`, `commit_and_fetch`; `unsafe` isolado + `unsafe impl Send for
+  MmapRo`), `io_cmd80`, `ublk_start_dev`/`ublk_stop_dev`. `ramshared-wsl2d` ganhou
+  `ublk_server::{RamBackend, serve_request, spawn_server}` e `ublk_control::start_dev`/`stop_dev`.
+  Daemon-lib segue `#![forbid(unsafe_code)]`.
+- **Padrao do loop (DT-3):** `spawn_server` roda o loop numa thread propria; START_DEV/STOP_DEV
+  (control, bloqueantes) na thread principal. A servidora drena FETCH→serve→COMMIT e os aborts;
+  sem ela em paralelo, START/STOP travam (mesmo deadlock do M2).
+- **Evidencia:** `cargo test ublk_server` (2/2 puro: round-trip WRITE/READ); smoke root
+  `serves_read_from_ram_backend_over_block_device` ok (0.07s): cria `/dev/ublkbN`, READ setor 100
+  devolve o padrao do backend, STOP+DEL limpam. **6/6 smokes root** (2 binarios, `--test-threads=1`),
+  `/dev` antes==depois, clippy/fmt limpos.
+- **Proximo: M3c (gated por bench).** Ligar `serve_request`/loop ao `VramBackend`/worker H1 (em vez
+  do RamBackend); bench latencia ublk vs NBD (p50/p99). `swapon`/pressao de memoria SO depois do
+  ganho provado. So ha smoke de READ (WRITE end-to-end via block device e candidato).
