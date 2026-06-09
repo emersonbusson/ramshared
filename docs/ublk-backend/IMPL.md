@@ -49,7 +49,10 @@ anti-halo #11), não funcionalidade.
   confere `/proc/swaps`→`swapoff` sobre o `/dev/ublkbN` servido pela VRAM (ciclo limitado, sem
   pressão; 9.6 GiB RAM livre; `SwapGuard` com `swapoff` no teardown). A **VRAM funciona como swap
   via ublk** — o objetivo central da Fase B. 5/5 smokes I/O, `/proc/swaps` antes==depois.
-  **Falta só:** bench ublk vs NBD.
+- **Bench + perf:** `bench_vram_ublk_read_latency` mede 4KB `O_DIRECT` no ublk-VRAM. O ring owner
+  passou a **bloquear** (CQE/reply) em vez de poll de 200µs → p50 **628µs → 231µs** (2.7×, RTX
+  2060); o residual é o custo do DT-3 (2 saltos de thread) + WSL2. **Falta só:** comparar com NBD
+  (lado ublk já medido) e endurecer o worker (no-alloc) para swap sob pressão.
 - **SET_PARAMS** (pré-requisito do `START_DEV`): `ublk_control::set_params`/`get_params`
   (control-only) aplicam/leem `ublk_params` (112 B); `Params::basic_disk`/`to_bytes`/`from_bytes`
   espelham o layout (offsets via `cc`). Smoke root: round-trip de `dev_sectors`/bs-shifts sem

@@ -697,3 +697,21 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   (anti-halo #11). A funcionalidade esta provada end-to-end. **Para producao sob pressao real:**
   `mlockall` no daemon + caminho do worker sem alloc (`worker_loop` aloca um `Vec` por READ — ok
   no smoke sem pressao, mas hazard sob swap real).
+
+---
+
+## 2026-06-07 — Fase B M3c: bench de latencia + ring owner bloqueante
+
+- **Bench:** commit `5196466 test(wsl2d): add ublk-vram read latency bench (#3)`. Leitura 4KB
+  `O_DIRECT` (offsets pseudo-aleatorios, p50/p90/p99) no `/dev/ublkbN` servido pela VRAM.
+- **Perf (guiado pelo bench):** commit `b5032aa perf(wsl2d): block instead of poll in ublk dt-3
+  ring owner (#3)`. O ring owner trocou o poll (sleep 200us) por espera bloqueante: ocioso bloqueia
+  no proximo CQE (`UblkServer::wait_and_drain` = `submit_and_wait(1)`); com request em voo bloqueia
+  no `recv` da resposta do worker. Helpers `commit_reply`/`dispatch_request`.
+- **Resultado (RTX 2060, 4KB READ O_DIRECT):** p50 **628us → 231us** (2.7x), p99 820us → 400us,
+  max ~1.3ms. O residual (~231us) e o custo do DT-3 (2 saltos de thread por I/O) + escalonamento do
+  WSL2 — nao mais o poll nem o `cuMemcpy` (us). 6/6 smokes I/O verdes apos a mudanca, swap limpo.
+- **Falta para 'tudo' (antes do PR):** (1) **bench ublk vs NBD** — comparacao com o transporte NBD
+  (sobe o daemon `main.rs` + `nbd-client`; o lado ublk ja esta medido em 231us p50). (2) **no-alloc
+  no worker** — `worker_loop` aloca um `Vec` por READ; hazard sob swap pesado (mitigacao: pool de
+  buffers ciclado ring owner ↔ worker). NAO validavel sem gerar pressao (que pode travar WSL2).
