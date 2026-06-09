@@ -247,4 +247,9 @@ Rollback: sem ganho no bench → manter NBD e remover a dependência `io-uring`/
   `commit` copia READ e recicla). Zero malloc/free no hot path em regime (`pool.len()+in_flight
   ==queue_depth`, pool nunca esvazia). Remove o hazard de alocar no caminho de I/O sob pressão de
   swap. `WorkerReply`: `read_data` → `buf`+`is_read`. `mlockall` é do daemon (`main.rs`).
-- **Fase B completa:** VRAM + swap + bench (ublk vence NBD) + no-alloc, tudo validado em hardware.
+- **queue_depth > 1 — validado:** device com `queue_depth=4` (fila única) + 4 leitores `O_DIRECT`
+  concorrentes mantêm múltiplos tags em voo; integridade por bloco confere o pool no-alloc com
+  `in_flight > 1` e o endereçamento por-tag (`self.buffers[tag]` no FETCH/COMMIT). Sem corrupção
+  nem deadlock (RTX 2060). Só servimos a fila 0; multi-`nr_hw_queues` fica fora de escopo (exigiria
+  um ring/char-region por fila — novo SPEC).
+- **Fase B completa:** VRAM + swap + bench (ublk vence NBD) + no-alloc + qd>1, validado em hardware.
