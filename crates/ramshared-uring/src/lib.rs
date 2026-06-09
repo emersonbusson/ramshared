@@ -6,10 +6,85 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use std::ffi::c_void;
 use std::io;
 use std::os::fd::RawFd;
+use std::ptr;
+use std::slice;
 
 use io_uring::{IoUring, opcode, squeue, types};
+
+/// Tamanho de página do sistema (`sysconf(_SC_PAGESIZE)`), com fallback 4096.
+pub fn page_size() -> usize {
+    // SAFETY: `sysconf` com `_SC_PAGESIZE` nao tem efeito colateral e e sempre
+    // seguro de chamar; em Linux retorna um valor > 0.
+    let value = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if value > 0 { value as usize } else { 4096 }
+}
+
+/// Arredonda `n` para cima ao múltiplo de página, como o `round_up(.., PAGE_SIZE)`
+/// que o driver ublk usa para dimensionar o buffer de comandos por fila.
+pub fn round_up_to_page(n: usize) -> usize {
+    let page = page_size();
+    n.div_ceil(page) * page
+}
+
+/// Mapa `mmap` somente leitura com `munmap` automático (RAII). Usado para o buffer
+/// de io-desc de `/dev/ublkcN`, que o kernel expõe read-only (`VM_WRITE` -> `-EPERM`).
+pub struct MmapRo {
+    ptr: *mut c_void,
+    len: usize,
+}
+
+impl MmapRo {
+    /// Mapeia `len` bytes do `fd` em `offset`, com `PROT_READ`/`MAP_SHARED`.
+    pub fn map_readonly(fd: RawFd, len: usize, offset: i64) -> io::Result<Self> {
+        if len == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "mmap len must be > 0",
+            ));
+        }
+
+        // SAFETY: `addr` nulo deixa o kernel escolher o endereco; mapeamos apenas
+        // `PROT_READ` sobre o `fd` do char device ublk. O retorno e validado contra
+        // `MAP_FAILED` logo abaixo; em sucesso o ponteiro cobre `len` bytes legiveis
+        // ate o `munmap` no `Drop`.
+        let ptr = unsafe {
+            libc::mmap(
+                ptr::null_mut(),
+                len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                fd,
+                offset,
+            )
+        };
+
+        if ptr == libc::MAP_FAILED {
+            return Err(io::Error::last_os_error());
+        }
+
+        Ok(Self { ptr, len })
+    }
+
+    /// Bytes mapeados (somente leitura).
+    pub fn as_bytes(&self) -> &[u8] {
+        // SAFETY: `ptr` veio de um `mmap` bem-sucedido de `len` bytes legiveis
+        // (`PROT_READ`) e segue mapeado enquanto `self` vive (`munmap` so no `Drop`).
+        unsafe { slice::from_raw_parts(self.ptr.cast::<u8>(), self.len) }
+    }
+}
+
+impl Drop for MmapRo {
+    fn drop(&mut self) {
+        // SAFETY: `ptr`/`len` vieram de um `mmap` bem-sucedido e ainda nao foram
+        // desmapeados; `munmap` e chamado exatamente uma vez nesta queda.
+        unsafe {
+            libc::munmap(self.ptr, self.len);
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SmokeReport {

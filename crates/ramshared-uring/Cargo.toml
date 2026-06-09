@@ -11,6 +11,7 @@ path = "src/lib.rs"
 
 [dependencies]
 io-uring = "0.7.12"
+libc = "0.2"
 
 [lints.clippy]
 unwrap_used = "deny"
