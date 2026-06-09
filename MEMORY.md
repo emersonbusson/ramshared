@@ -572,3 +572,22 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Proximo: M3c (gated por bench).** Ligar `serve_request`/loop ao `VramBackend`/worker H1 (em vez
   do RamBackend); bench latencia ublk vs NBD (p50/p99). `swapon`/pressao de memoria SO depois do
   ganho provado. So ha smoke de READ (WRITE end-to-end via block device e candidato).
+
+---
+
+## 2026-06-07 — Fase B: WRITE end-to-end + plano M3c
+
+- **TDD WRITE smoke:** commits `ccb1994 test(wsl2d): add ublk write io smoke RED (#3)` e
+  `698604b fix(wsl2d): return backend from ublk server loop (#3)`.
+- **Mudanca:** `run_server_loop`/`ServerHandle::join` devolvem o `RamBackend` ao terminar (no
+  abort), permitindo inspecao direta sem page cache. Smoke
+  `serves_write_into_ram_backend_over_block_device`: escreve via `/dev/ublkbN` + `fsync` (forca
+  writeback → WRITE request → loop → backend), STOP, confere o backend devolvido. buf por tag =
+  disco inteiro (qualquer writeback cabe no buffer).
+- **Evidencia:** 2/2 smokes I/O root (READ + WRITE) ok (0.14s), `/dev` antes==depois, clippy/fmt limpos.
+- **Estado:** ublk FUNCIONAL com READ+WRITE via backend RAM. Plano M3c fechado em
+  `SPEC-ring-loop.md` §12: (1) trait `BlockBackend`, (2) adapter VramBackend/worker H1 (DT-3: loop
+  NAO toca CUDA, manda `IoWork` ao worker), (3) smoke I/O vs VRAM sem swap, (4) bench p50/p99 ublk
+  vs NBD, (5) `swapon` so com ganho provado.
+- **Proximo (M3c, gated/decisao):** comecar pela (1) trait `BlockBackend` (refactor seguro) e (2)
+  investigar a API do `VramBackend` antes de qualquer CUDA/VRAM real.
