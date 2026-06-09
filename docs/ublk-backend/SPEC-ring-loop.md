@@ -239,5 +239,9 @@ Rollback: sem ganho no bench → manter NBD e remover a dependência `io-uring`/
 - **Swap validado (capstone):** `mkswap`/`swapon`/`/proc/swaps`/`swapoff` sobre o `/dev/ublkbN`
   VRAM — a VRAM funciona como **área de swap via ublk** (ciclo limitado, sem pressão; 9.6 GiB RAM
   livre; `swapon` sem `-p`; `SwapGuard`). É o objetivo central da Fase B.
-- **Falta só:** bench p50/p99 ublk vs NBD (justificativa de adoção, não funcionalidade). Para
-  produção sob pressão: `mlockall` no daemon + caminho do worker sem alloc no hot path.
+- **Bench (gate anti-halo #11) — passado:** `fio` 4KB randread `O_DIRECT` iodepth=1 nos dois
+  transportes servindo VRAM: ublk p50=241µs/IOPS=3911 vs NBD p50=326µs/IOPS=2900 → **ublk ~26%
+  mais rápido**. Adoção do ublk justificada por bench.
+- **Resta só (produção, não-funcional):** no-alloc no `worker_loop` (swap sob pressão; não
+  validável sem gerar pressão que pode travar WSL2). `mlockall` é do daemon integrador (`main.rs`
+  já faz). Funcionalmente: **tudo works** (VRAM + swap + bench).
