@@ -19,6 +19,9 @@ fn ublk_uapi_constants_match_kernel_header() {
     assert_eq!(ublk::UBLK_IO_FETCH_REQ, 0x20);
     assert_eq!(ublk::UBLK_IO_COMMIT_AND_FETCH_REQ, 0x21);
     assert_eq!(ublk::UBLK_IO_NEED_GET_DATA, 0x22);
+    assert_eq!(ublk::UBLK_U_IO_FETCH_REQ, 0xc010_7520);
+    assert_eq!(ublk::UBLK_U_IO_COMMIT_AND_FETCH_REQ, 0xc010_7521);
+    assert_eq!(ublk::UBLK_U_IO_NEED_GET_DATA, 0xc010_7522);
     assert_eq!(ublk::UBLK_IO_RES_OK, 0);
     assert_eq!(ublk::UBLK_IO_RES_NEED_GET_DATA, 1);
 
@@ -218,4 +221,41 @@ fn io_completion_maps_translation_error_to_negative_errno() {
     assert_eq!(cmd.q_id, 2);
     assert_eq!(cmd.tag, 11);
     assert_eq!(cmd.result, ublk::UBLK_IO_RES_EINVAL);
+}
+
+#[test]
+fn io_cmd_fetch_builds_request_with_buffer_and_zero_result() {
+    let fetch = ublk::IoCmd::fetch(2, 7, 0xdead_beef);
+
+    assert_eq!(fetch.q_id, 2);
+    assert_eq!(fetch.tag, 7);
+    assert_eq!(fetch.result, 0);
+    assert_eq!(fetch.addr_or_zone_append_lba, 0xdead_beef);
+}
+
+#[test]
+fn io_cmd_serializes_to_16_byte_kernel_layout() {
+    let bytes = ublk::IoCmd::fetch(2, 7, 0xdead_beef).to_bytes();
+
+    assert_eq!(u16::from_ne_bytes([bytes[0], bytes[1]]), 2);
+    assert_eq!(u16::from_ne_bytes([bytes[2], bytes[3]]), 7);
+    assert_eq!(
+        i32::from_ne_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]),
+        0
+    );
+    assert_eq!(
+        u64::from_ne_bytes([
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        ]),
+        0xdead_beef
+    );
+
+    // Resultado negativo (ex.: EINVAL) deve serializar como i32 em complemento de dois.
+    let abort = ublk::IoCompletion::from_request_error(1, 2, ublk::IoRequestError::LengthOverflow)
+        .to_io_cmd()
+        .to_bytes();
+    assert_eq!(
+        i32::from_ne_bytes([abort[4], abort[5], abort[6], abort[7]]),
+        ublk::UBLK_IO_RES_EINVAL
+    );
 }
