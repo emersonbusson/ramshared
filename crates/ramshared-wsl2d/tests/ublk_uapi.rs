@@ -259,3 +259,23 @@ fn io_cmd_serializes_to_16_byte_kernel_layout() {
         ublk::UBLK_IO_RES_EINVAL
     );
 }
+
+#[test]
+fn io_desc_decodes_from_kernel_byte_layout() {
+    assert_eq!(ublk::UBLK_IO_DESC_SIZE, size_of::<ublk::IoDesc>());
+
+    let mut bytes = [0u8; ublk::UBLK_IO_DESC_SIZE];
+    bytes[0..4].copy_from_slice(&(ublk::UBLK_IO_OP_WRITE as u32).to_ne_bytes());
+    bytes[4..8].copy_from_slice(&8u32.to_ne_bytes());
+    bytes[8..16].copy_from_slice(&16u64.to_ne_bytes());
+    bytes[16..24].copy_from_slice(&0x1000u64.to_ne_bytes());
+
+    let desc = ublk::IoDesc::from_ne_bytes(&bytes).expect("24 bytes decodificam");
+    assert_eq!(desc.operation(), ublk::UBLK_IO_OP_WRITE);
+    assert_eq!(desc.nr_sectors_or_zones, 8);
+    assert_eq!(desc.start_sector, 16);
+    assert_eq!(desc.addr, 0x1000);
+
+    // Buffer menor que um io-desc nao decodifica.
+    assert!(ublk::IoDesc::from_ne_bytes(&bytes[..23]).is_none());
+}
