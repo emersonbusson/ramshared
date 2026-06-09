@@ -82,6 +82,26 @@ pub fn delete_device(path: impl AsRef<Path>, dev_id: u32) -> io::Result<()> {
     ramshared_uring::ublk_del_dev(control.as_raw_fd(), dev_id)
 }
 
+/// Aplica `params` ao device `dev_id` via `SET_PARAMS` (necessário antes de `START_DEV`).
+pub fn set_params(path: impl AsRef<Path>, dev_id: u32, params: ublk::Params) -> io::Result<()> {
+    let control = OpenOptions::new().read(true).write(true).open(path)?;
+    let mut bytes = params.to_bytes();
+
+    ramshared_uring::ublk_set_params(control.as_raw_fd(), dev_id, &mut bytes)
+}
+
+/// Lê os parâmetros atuais do device `dev_id` via `GET_PARAMS`.
+pub fn get_params(path: impl AsRef<Path>, dev_id: u32) -> io::Result<ublk::Params> {
+    let control = OpenOptions::new().read(true).write(true).open(path)?;
+    let mut bytes = [0u8; ublk::UBLK_PARAMS_LEN];
+    // O kernel valida o buffer pelo campo `len` da struct; preencher antes do GET.
+    bytes[0..4].copy_from_slice(&(ublk::UBLK_PARAMS_LEN as u32).to_ne_bytes());
+
+    ramshared_uring::ublk_get_params(control.as_raw_fd(), dev_id, &mut bytes)?;
+
+    Ok(ublk::Params::from_bytes(&bytes))
+}
+
 impl From<ublk::CtrlDevInfo> for DeviceReport {
     fn from(info: ublk::CtrlDevInfo) -> Self {
         Self {

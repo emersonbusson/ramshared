@@ -12,6 +12,9 @@ pub const UBLK_SECTOR_SIZE: u64 = 512;
 /// Tamanho de `struct ublksrv_io_desc` (4+4+8+8). Espelha `size_of::<IoDesc>()`.
 pub const UBLK_IO_DESC_SIZE: usize = 24;
 
+/// Tamanho de `struct ublk_params` (verificado via cc). Espelha `size_of::<Params>()`.
+pub const UBLK_PARAMS_LEN: usize = 112;
+
 pub const UBLK_CMD_ADD_DEV: u32 = 0x04;
 pub const UBLK_CMD_DEL_DEV: u32 = 0x05;
 pub const UBLK_CMD_START_DEV: u32 = 0x06;
@@ -21,6 +24,10 @@ pub const UBLK_CMD_GET_PARAMS: u32 = 0x09;
 pub const UBLK_CMD_GET_DEV_INFO2: u32 = 0x12;
 pub const UBLK_U_CMD_ADD_DEV: u32 = 0xc020_7504;
 pub const UBLK_U_CMD_DEL_DEV: u32 = 0xc020_7505;
+pub const UBLK_U_CMD_START_DEV: u32 = 0xc020_7506;
+pub const UBLK_U_CMD_STOP_DEV: u32 = 0xc020_7507;
+pub const UBLK_U_CMD_SET_PARAMS: u32 = 0xc020_7508;
+pub const UBLK_U_CMD_GET_PARAMS: u32 = 0x8020_7509;
 pub const UBLK_U_CMD_GET_FEATURES: u32 = 0x8020_7513;
 
 pub const UBLK_IO_FETCH_REQ: u32 = 0x20;
@@ -383,6 +390,108 @@ pub struct Params {
     pub discard: ParamDiscard,
     pub devt: ParamDevt,
     pub zoned: ParamZoned,
+}
+
+impl Params {
+    /// Monta `ublk_params` só com o tipo BASIC: tamanho do disco em setores de 512 B
+    /// e os shifts de block size lógico/físico. Demais tipos ficam zerados.
+    pub fn basic_disk(dev_sectors: u64, logical_bs_shift: u8, physical_bs_shift: u8) -> Self {
+        Self {
+            len: UBLK_PARAMS_LEN as u32,
+            types: UBLK_PARAM_TYPE_BASIC,
+            basic: ParamBasic {
+                logical_bs_shift,
+                physical_bs_shift,
+                io_opt_shift: physical_bs_shift,
+                io_min_shift: logical_bs_shift,
+                dev_sectors,
+                ..ParamBasic::default()
+            },
+            ..Self::default()
+        }
+    }
+
+    /// Serializa no layout `repr(C)` de 112 B de `struct ublk_params` (offsets
+    /// verificados via `cc`). Sem `unsafe`.
+    pub fn to_bytes(&self) -> [u8; UBLK_PARAMS_LEN] {
+        let mut b = [0u8; UBLK_PARAMS_LEN];
+        b[0..4].copy_from_slice(&self.len.to_ne_bytes());
+        b[4..8].copy_from_slice(&self.types.to_ne_bytes());
+        // basic @ 8
+        b[8..12].copy_from_slice(&self.basic.attrs.to_ne_bytes());
+        b[12] = self.basic.logical_bs_shift;
+        b[13] = self.basic.physical_bs_shift;
+        b[14] = self.basic.io_opt_shift;
+        b[15] = self.basic.io_min_shift;
+        b[16..20].copy_from_slice(&self.basic.max_sectors.to_ne_bytes());
+        b[20..24].copy_from_slice(&self.basic.chunk_sectors.to_ne_bytes());
+        b[24..32].copy_from_slice(&self.basic.dev_sectors.to_ne_bytes());
+        b[32..40].copy_from_slice(&self.basic.virt_boundary_mask.to_ne_bytes());
+        // discard @ 40
+        b[40..44].copy_from_slice(&self.discard.discard_alignment.to_ne_bytes());
+        b[44..48].copy_from_slice(&self.discard.discard_granularity.to_ne_bytes());
+        b[48..52].copy_from_slice(&self.discard.max_discard_sectors.to_ne_bytes());
+        b[52..56].copy_from_slice(&self.discard.max_write_zeroes_sectors.to_ne_bytes());
+        b[56..58].copy_from_slice(&self.discard.max_discard_segments.to_ne_bytes());
+        b[58..60].copy_from_slice(&self.discard.reserved0.to_ne_bytes());
+        // devt @ 60
+        b[60..64].copy_from_slice(&self.devt.char_major.to_ne_bytes());
+        b[64..68].copy_from_slice(&self.devt.char_minor.to_ne_bytes());
+        b[68..72].copy_from_slice(&self.devt.disk_major.to_ne_bytes());
+        b[72..76].copy_from_slice(&self.devt.disk_minor.to_ne_bytes());
+        // zoned @ 76
+        b[76..80].copy_from_slice(&self.zoned.max_open_zones.to_ne_bytes());
+        b[80..84].copy_from_slice(&self.zoned.max_active_zones.to_ne_bytes());
+        b[84..88].copy_from_slice(&self.zoned.max_zone_append_sectors.to_ne_bytes());
+        b[88..108].copy_from_slice(&self.zoned.reserved);
+        // 108..112: padding de alinhamento (zerado).
+        b
+    }
+
+    /// Decodifica `struct ublk_params` (inverso de [`Params::to_bytes`]).
+    pub fn from_bytes(b: &[u8; UBLK_PARAMS_LEN]) -> Self {
+        let mut reserved = [0u8; 20];
+        reserved.copy_from_slice(&b[88..108]);
+        Self {
+            len: u32::from_ne_bytes([b[0], b[1], b[2], b[3]]),
+            types: u32::from_ne_bytes([b[4], b[5], b[6], b[7]]),
+            basic: ParamBasic {
+                attrs: u32::from_ne_bytes([b[8], b[9], b[10], b[11]]),
+                logical_bs_shift: b[12],
+                physical_bs_shift: b[13],
+                io_opt_shift: b[14],
+                io_min_shift: b[15],
+                max_sectors: u32::from_ne_bytes([b[16], b[17], b[18], b[19]]),
+                chunk_sectors: u32::from_ne_bytes([b[20], b[21], b[22], b[23]]),
+                dev_sectors: u64::from_ne_bytes([
+                    b[24], b[25], b[26], b[27], b[28], b[29], b[30], b[31],
+                ]),
+                virt_boundary_mask: u64::from_ne_bytes([
+                    b[32], b[33], b[34], b[35], b[36], b[37], b[38], b[39],
+                ]),
+            },
+            discard: ParamDiscard {
+                discard_alignment: u32::from_ne_bytes([b[40], b[41], b[42], b[43]]),
+                discard_granularity: u32::from_ne_bytes([b[44], b[45], b[46], b[47]]),
+                max_discard_sectors: u32::from_ne_bytes([b[48], b[49], b[50], b[51]]),
+                max_write_zeroes_sectors: u32::from_ne_bytes([b[52], b[53], b[54], b[55]]),
+                max_discard_segments: u16::from_ne_bytes([b[56], b[57]]),
+                reserved0: u16::from_ne_bytes([b[58], b[59]]),
+            },
+            devt: ParamDevt {
+                char_major: u32::from_ne_bytes([b[60], b[61], b[62], b[63]]),
+                char_minor: u32::from_ne_bytes([b[64], b[65], b[66], b[67]]),
+                disk_major: u32::from_ne_bytes([b[68], b[69], b[70], b[71]]),
+                disk_minor: u32::from_ne_bytes([b[72], b[73], b[74], b[75]]),
+            },
+            zoned: ParamZoned {
+                max_open_zones: u32::from_ne_bytes([b[76], b[77], b[78], b[79]]),
+                max_active_zones: u32::from_ne_bytes([b[80], b[81], b[82], b[83]]),
+                max_zone_append_sectors: u32::from_ne_bytes([b[84], b[85], b[86], b[87]]),
+                reserved,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
