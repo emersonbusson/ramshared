@@ -1,5 +1,8 @@
 # PRD — Tier VRAM multi-tenant: arbitragem WSL2 ↔ civm por pressão de memória
 
+> **ABSORVIDO pelo PRD unificado [`docs/memory-broker/PRD.md`](../memory-broker/PRD.md)
+> (2026-06-09).** Mantido como documento de origem; a SPEC sai do unificado.
+
 > SSDV3 PASSO 1. Slug: `vram-arbiter`. Pedido do usuário (2026-06-09): "que o ramshared funcionasse
 > na vm como vai funcionar no wsl2 e cada um saber exatamente quem tá precisando mais — por exemplo
 > quando as actions estiverem rodando na vm e tiver compilando no wsl2".
