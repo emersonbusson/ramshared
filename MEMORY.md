@@ -937,3 +937,29 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **Estado:** Fase B — VRAM/swap/bench/no-alloc/qd>1/multipagina (host) + F1 + **F2 ciclo validado
   em qemu**. Resta F3 (swap e2e + bench, no mesmo harness estendido). ~96 commits. Daemon segue gated
   no WSL2 (SIGKILL/crash ainda orfanaria) [[feedback-no-standalone-daemon-smoke-wsl2]].
+
+---
+
+## 2026-06-09 — Memory Broker: PRD unificado final (consolida arbiter + Fase C + visao)
+
+- **Contexto novo (conversa Emerson↔Alex Santos):** Fase C = RAM-as-VRAM pro DCC (Blender/Cycles).
+  Dor real do tester (Alex, artista 3D, Windows): cena > VRAM -> dias otimizando a mao com RAM
+  ociosa. Mercado: addon Blender (SuperHive). Alex confirmado como tester ("eu testo de boa").
+- **Pedidos do usuario na sequencia:** (1) ramshared na civm como no wsl2 + "quem precisa mais"
+  -> PRD vram-arbiter (`439b461`); (2) "leve tudo em consideracao pro PRD e vamos discutir" ->
+  PRD dcc-out-of-core; (3) "uma coisa so que resolva tudo (windows, vm, wsl2)" + "instalavel/exe"
+  + "qualquer placa de video" -> VISION; (4) **"avalie tudo gerado e crie um unico final de onde
+  sai a SPEC"** -> `docs/memory-broker/PRD.md` (PRD UNIFICADO FINAL).
+- **Decisoes do PRD unificado:** plataforma protocol-first (um broker/arbitro por host, agentes por
+  ambiente); primitivo = **lease de VRAM revogavel** (revogacao = DEMOTE ja construido — e o que
+  une swap-tier e DCC); mecanismos nativos por consumidor (Linux=block device pronto; DCC=out-of-
+  core; sem driver Windows de swap por ora); **qualquer GPU** via trait `VramProvider` (CUDA pronto
+  -> Vulkan -> D3D12/dxg pesquisa); produto instalavel (exe/winget + deb/systemd + addon).
+  Personas: dev (EMEDEV: wsl2+civm, cerebro no WSL2) e artista (Alex: Windows puro, cerebro =
+  servico Windows). Fases P0(medicao)->P1(broker linux<->linux)->P2(ponte windows+MVP addon)->
+  P3(vulkan)->P4(gated: interposer v2 etc), com gates anti-halo numericos.
+- **Riscos top:** R2 D-state em tenant remoto com broker morto (ja nos mordeu; RNF-1 watchdog +
+  prioridade + drill obrigatorio no P1 em qemu); R1 NAT do WSL2 (P0 mede; Tailscale).
+- **PROXIMO PASSO: SPEC** (`docs/memory-broker/SPEC.md`) a partir do PRD unificado, apos discussao/
+  aprovacao do usuario. F3 do ublk-daemon (swap no harness qemu) segue na fila tambem.
+- Avaliacao critica dos docs de origem: Anexo A do PRD unificado. PRDs de origem marcados ABSORVIDOS.
