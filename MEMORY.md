@@ -1467,3 +1467,30 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   render do Alex). **Não iniciar ITEM-3+ (código P1) até o gate abrir.**
 - **PSI sob carga:** precisa de pressão de MEMÓRIA (cgroup-confined hog, técnica da Fase B), não
   `cargo build` (que é CPU); fazer com cuidado p/ não congelar WSL2 [[feedback-wsl2-cargo-build-caution]].
+
+---
+
+## 2026-06-14 — Memory Broker P1: ITEM-8/9/11/12 + drill qemu PASS (+8 commits)
+
+- **ITEM-9 agente** (`cd15ba4`): crate novo `ramshared-agent` (psi/swap/watchdog puros + testados;
+  main DT-27 = 3 threads, escritor único). 25 testes. `#![forbid(unsafe_code)]`.
+- **ITEM-8 capstone** (`b0bae97`): fiação do broker no daemon — `run_broker` (remove o gate WIP);
+  `--slices/--slice-mb/--arbiter-listen/--listen-nbd`; geom+exports do SliceMap; spawn_broker +
+  acceptors Unix/TCP no MESMO canal jobs; worker serve via SliceView; DT-28 (não quebra por
+  LiveCount); demote → broker DemoteAll. Helper `residency_check` compartilhado com run_nbd single.
+- **`--backend ram` p/ broker** (`4b14070`): refactor `broker_setup` (control-plane agnóstico) +
+  `serve_broker_jobs<B>` (worker genérico) + `run_broker`/`run_broker_ram`. Habilita o drill GPU-free.
+- **ITEM-11 drill qemu** (`18f5cbf`): `scripts/kernel/qemu-broker-drill.sh` — broker RAM + agente
+  reais numa VM isolada. **RODADO = PASS**: KTEST-SWAP-ACTIVE=ok (broker assina slice → agente
+  nbd-client+mkswap+swapon → swap ativo via NBD), KTEST-SWAPOFF=ok, KTEST-DAEMON-TERMINATED=ok.
+  Disciplina 13: pegou 2 bugs reais antes do PASS (loopback DOWN→ENETUNREACH; `grep -c||echo`).
+  **qemu é seguro** (daemon roda DENTRO da VM; sem órfão no host) — diferente de rodar no WSL2.
+- **ITEM-12 prep** (`02faf6b` + `129c177`): `--advertise-nbd HOST:PORT` (endpoint TCP anunciado ≠
+  bind, p/ civm via port-forward, DT-25) + runbook `docs/memory-broker/CIVM-TENANT.md` (topologia
+  R1, Fase A RAM/Fase B VRAM, netsh, ordem de teardown). Execução civm = gate operacional.
+- **Docs** (`8863a8c`): SPECv2 ganhou bloco "Estado de implementação"; `IMPL.md` criado (Passo 3
+  SSDV3, rastreabilidade ITEM→commit + validação).
+- **Validação:** workspace verde (~210 testes, 0 falhas); clippy -D warnings limpo (broker/agent/
+  wsl2d lib+bin); fmt. Drill PASS é a evidência de runtime do P1 Linux↔Linux.
+- **Estado:** P1 broker **Linux↔Linux completo e runtime-validado** (drill). Resta: ITEM-12 ao vivo
+  no civm (operador), DT-5 rename `ramsharedd` (mecânico, deferido), P0 §4 render (tester).
