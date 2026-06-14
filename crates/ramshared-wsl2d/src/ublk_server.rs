@@ -15,9 +15,10 @@ use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use ramshared_block::{BlockBackend, Command, IoError, Request};
+use ramshared_block::{BlockBackend, Command, Request};
 use ramshared_cuda::Cuda;
 
+use crate::backend::RamBackend;
 use crate::swap::spawn_swapoff;
 use crate::ublk;
 use crate::{
@@ -27,59 +28,6 @@ use crate::{
 
 const EIO: i32 = -5;
 const EINVAL: i32 = -22;
-
-/// Disco volátil em memória que implementa [`BlockBackend`] — valida o loop ublk
-/// sem CUDA. O backend de produção é o `VramBackend` (mesmo trait), então o loop
-/// serve qualquer um dos dois sem mudança.
-pub struct RamBackend {
-    data: Vec<u8>,
-    block_size: u32,
-}
-
-impl RamBackend {
-    pub fn new(size: usize) -> Self {
-        Self {
-            data: vec![0u8; size],
-            block_size: ublk::UBLK_SECTOR_SIZE as u32,
-        }
-    }
-
-    fn range(&self, off: u64, len: usize) -> Option<(usize, usize)> {
-        let start = usize::try_from(off).ok()?;
-        let end = start.checked_add(len)?;
-        (end <= self.data.len()).then_some((start, end))
-    }
-}
-
-impl BlockBackend for RamBackend {
-    fn size_bytes(&self) -> u64 {
-        self.data.len() as u64
-    }
-
-    fn block_size(&self) -> u32 {
-        self.block_size
-    }
-
-    fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
-        let (start, end) = self
-            .range(off, buf.len())
-            .ok_or_else(|| IoError("RamBackend read out of range".into()))?;
-        buf.copy_from_slice(&self.data[start..end]);
-        Ok(())
-    }
-
-    fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
-        let (start, end) = self
-            .range(off, data.len())
-            .ok_or_else(|| IoError("RamBackend write out of range".into()))?;
-        self.data[start..end].copy_from_slice(data);
-        Ok(())
-    }
-
-    fn flush(&mut self) -> Result<(), IoError> {
-        Ok(())
-    }
-}
 
 /// Serve um `Request` ublk contra qualquer [`BlockBackend`] usando `buf` (onde os
 /// dados vivem) e devolve o `result` do COMMIT: bytes transferidos (`>= 0`) ou

@@ -1,5 +1,5 @@
 use ramshared_block::BlockBackend;
-use ramshared_wsl2d::{ResidencyConfig, ublk, ublk_control, ublk_server};
+use ramshared_wsl2d::{RamBackend, ResidencyConfig, ublk, ublk_control, ublk_server};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
@@ -27,7 +27,7 @@ fn serves_read_from_ram_backend_over_block_device() {
     .expect("ublk SET_PARAMS");
 
     // Backend de RAM com um padrao conhecido no setor de teste (fora do partition scan).
-    let mut backend = ublk_server::RamBackend::new((dev_sectors * SECTOR) as usize);
+    let mut backend = RamBackend::new((dev_sectors * SECTOR) as usize);
     let pattern: Vec<u8> = (0..SECTOR).map(|i| (i % 251) as u8).collect();
     backend
         .write_at(TEST_SECTOR * SECTOR, &pattern)
@@ -82,7 +82,7 @@ fn serves_write_into_ram_backend_over_block_device() {
     .expect("ublk SET_PARAMS");
 
     let disk_size = (dev_sectors * SECTOR) as usize;
-    let backend = ublk_server::RamBackend::new(disk_size);
+    let backend = RamBackend::new(disk_size);
     let char_path = format!("/dev/ublkc{}", report.dev_id);
     let block_path = format!("/dev/ublkb{}", report.dev_id);
     // Buffer por tag cobre o disco inteiro: qualquer request de writeback cabe.
@@ -132,7 +132,7 @@ fn dt3_serves_read_from_ram_backend_over_block_device() {
     )
     .expect("ublk SET_PARAMS");
 
-    let mut backend = ublk_server::RamBackend::new((dev_sectors * SECTOR) as usize);
+    let mut backend = RamBackend::new((dev_sectors * SECTOR) as usize);
     let pattern: Vec<u8> = (0..SECTOR).map(|i| (i % 251) as u8).collect();
     backend
         .write_at(TEST_SECTOR * SECTOR, &pattern)
