@@ -256,6 +256,28 @@ findings do Passo 2.5.
 - [x] Erros internos não vazam detalhe: `Msg::Error{reason}` carrega frase curta; detalhe
       (errno, stderr do swapon) fica no log local do lado que falhou
 
+## Estado de implementação (P1) — atualizado 2026-06-14
+
+Detalhe e rastreabilidade em [`IMPL.md`](IMPL.md).
+
+| ITEM | Estado | Evidência |
+| --- | --- | --- |
+| 1 — P0 (gate) | ✅ fechado | `P0-RESULTS.md` (§4 render pendente do tester, vira input P2) |
+| 2 — ADR-0005 | ✅ | `docs/decisions/ADR-0005-broker-protocol-jsonl.md` |
+| 3 — `protocol.rs` | ✅ | crate `ramshared-broker` (roundtrip por variante) |
+| 4 — `slices.rs` + árbitro | ✅ | `ramshared-broker` (30+ testes; lease com revogação) |
+| 5 — handshake por export | ✅ | `ramshared-block::handshake` (23 testes) |
+| 6 — `SliceView` | ✅ | `ramshared-wsl2d::backend` |
+| 7 — streams genéricos + TCP | ✅ | `conn.rs` (`spawn_acceptor_tcp`, `ZeroExport`) |
+| 8 — `broker_srv` + fiação `run_broker` | ✅ | commits da fiação + `--backend ram`; drill PASS |
+| 9 — agente | ✅ | crate `ramshared-agent` (25 testes; DT-27) |
+| 10 — e2e in-process | ✅ | `tests/broker_e2e.rs` (3 testes) |
+| 11 — drill qemu | ✅ **PASS** | `scripts/kernel/qemu-broker-drill.sh` (rodado: swap ativo via NBD + teardown limpo) |
+| 12 — e2e civm | 🟡 código pronto (`--advertise-nbd`), runbook escrito | [`CIVM-TENANT.md`](CIVM-TENANT.md); execução = gate operacional (civm + netsh) |
+
+**Pendências:** ITEM-12 execução ao vivo no civm (operador); DT-5 rename `ramsharedd` (polimento
+mecânico, deferido); gap registrado: endpoint TCP anunciado resolvido por `--advertise-nbd`.
+
 ## Arquivos a CRIAR
 
 ### ITEM-1 — P0 (gate; sem código de produto)
