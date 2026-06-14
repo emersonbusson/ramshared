@@ -305,22 +305,28 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .transpose()?;
     let arbiter_addr = arbiter.as_deref().map(parse_private_listen).transpose()?;
 
-    // Modo broker (ITEM-8): --slices > 0 fatia a VRAM e sobe o árbitro. Exige --arbiter-listen
+    // Modo broker (ITEM-8): --slices > 0 fatia a memória e sobe o árbitro. Exige --arbiter-listen
     // (o ponto de controle do broker). --listen-nbd é opcional (tenants TCP/civm além do Unix).
+    // --backend ram serve sem GPU (validação em qemu, ITEM-11); vram é o caminho de produção.
     if slices > 0 {
         let arbiter_addr =
             arbiter_addr.ok_or("--slices exige --arbiter-listen IP:PORT (ponto de controle)")?;
         let slice_bytes = slice_mb
             .checked_mul(1024 * 1024)
             .ok_or("--slice-mb: overflow (MiB grande demais)")?;
-        return run_broker(
-            slice_bytes,
-            slices,
-            sock,
-            force,
-            listen_nbd_addr,
-            arbiter_addr,
-        );
+        return match backend {
+            BackendKind::Vram => run_broker(
+                slice_bytes,
+                slices,
+                sock,
+                force,
+                listen_nbd_addr,
+                arbiter_addr,
+            ),
+            BackendKind::Ram => {
+                run_broker_ram(slice_bytes, slices, sock, listen_nbd_addr, arbiter_addr)
+            }
+        };
     }
     // Sem slices não há o que arbitrar nem exportar por TCP.
     if arbiter_addr.is_some() || listen_nbd_addr.is_some() {
@@ -495,54 +501,30 @@ fn run_nbd(
     Ok(())
 }
 
-/// Caminho broker (ITEM-8): VRAM fatiada em `slices` exports NBD (`s0..sN`), servidos por
-/// Unix + (opcional) TCP, com o árbitro (`spawn_broker`) decidindo quem usa cada slice. O
-/// worker CUDA único serve cada `Job` via [`SliceView`] da geometria; o DEMOTE de residência
-/// vai para o broker (`DemoteAll` a todos os tenants), não swapoff local. DT-28: o worker
-/// roda até `SHUTDOWN` (SIGINT/SIGTERM), NÃO encerra quando as conexões NBD caem (o broker
-/// persiste). Execução ao vivo é o gate qemu (ITEM-11) / civm (ITEM-12) — não roda no WSL2.
-#[allow(clippy::too_many_lines)]
-fn run_broker(
-    slice_bytes: u64,
+/// Peças do control-plane do broker que o worker (data-plane) consome. Backend-agnóstico
+/// (vale p/ VRAM e RAM) — só o backend e a residência diferem entre os modos.
+struct BrokerRuntime {
+    geom: Vec<(u64, u64)>,
+    jobs_rx: std::sync::mpsc::Receiver<WMsg>,
+    demote_tx: std::sync::mpsc::Sender<DemoteReason>,
+    shutdown: std::sync::Arc<AtomicBool>,
+    broker: std::thread::JoinHandle<()>,
+}
+
+/// Sobe o control-plane do broker (independente do backend): mapa de slices + geometria +
+/// exports NBD ("s0".."sN"), acceptors (Unix sempre; TCP se `--listen-nbd`) alimentando o
+/// MESMO canal `jobs` do worker, o árbitro (`spawn_broker`, que compartilha `jobs` p/ os
+/// `ZeroExport` de higiene DT-17 e consome o canal de DEMOTE) e a ponte de `SHUTDOWN`
+/// (handler de sinal só toca o estático async-signal-safe → espelhado no `Arc`).
+fn broker_setup(
     slices: u16,
-    sock: String,
-    force: bool,
+    slice_bytes: u64,
+    sock: &str,
     listen_nbd_addr: Option<std::net::SocketAddr>,
     arbiter_addr: std::net::SocketAddr,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let total = (slices as u64)
-        .checked_mul(slice_bytes)
-        .ok_or("--slices * --slice-mb: overflow")?;
-
-    // --- CUDA: aloca e zera a VRAM total (todas as slices) ---
-    let cuda = Cuda::load()?;
-    let dev = cuda.device(0)?;
-    eprintln!("[wsl2d] GPU: {}", dev.name());
-    let ctx = cuda.create_context(&dev)?;
-    let (free, total_vram) = ctx.mem_info()?;
-    eprintln!(
-        "[wsl2d] VRAM livre={} MiB total={} MiB",
-        free >> 20,
-        total_vram >> 20
-    );
-    let mut mem = ctx.alloc(total as usize)?;
-    mem.zero()?;
-    lock_memory(force)?; // Disciplina 3: trava memória ANTES de servir swap
-    let mut backend = VramBackend::new(mem, BLOCK_SIZE);
-    eprintln!(
-        "[wsl2d] broker: {slices} slices x {} MiB = {} MiB VRAM, block_size={BLOCK_SIZE}",
-        slice_bytes >> 20,
-        total >> 20
-    );
-
-    // --- canário de residência (§9.4): região separada, não endereçável por NBD ---
-    let canary_region = ctx.alloc(CANARY_BYTES)?;
-    let mut probe = CanaryProbe::new(canary_region);
-    let mut cadence = Cadence::new(CANARY_EVERY);
-    let mut sampler = ResidencySampler::new(ResidencyConfig::default());
-
-    // --- mapa de slices: geometria (base,len) por export + tabela de exports NBD ("s0".."sN").
-    // O índice do export (resolvido pelo handshake) == índice na geom == índice em exports. ---
+) -> Result<BrokerRuntime, Box<dyn std::error::Error>> {
+    // Mapa de slices: o índice do export (resolvido pelo handshake) == índice na geom == índice
+    // em exports (nomes "s{id}" idênticos aos que o broker emite no SwapOn).
     let slice_map = SliceMap::new(slices, slice_bytes);
     let geom: Vec<(u64, u64)> = slice_map
         .slices()
@@ -557,8 +539,6 @@ fn run_broker(
             .collect::<Vec<_>>(),
     );
 
-    // --- shutdown: handler de sinal seta o `SHUTDOWN` estático; uma ponte espelha no Arc que o
-    // broker consome (o handler em C só pode tocar o estático async-signal-safe). ---
     unsafe {
         signal(SIGINT, handle_shutdown);
         signal(SIGTERM, handle_shutdown);
@@ -574,18 +554,15 @@ fn run_broker(
         });
     }
 
-    // --- canais: jobs (worker) compartilhado pelos acceptors NBD E pelo broker (ZeroExport de
-    // higiene DT-17); demote (canário → broker). ---
     let tx_flags = NBD_FLAG_HAS_FLAGS | NBD_FLAG_SEND_FLUSH | NBD_FLAG_CAN_MULTI_CONN;
     let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel::<WMsg>(CHAN_CAP);
     let (demote_tx, demote_rx) = std::sync::mpsc::channel::<DemoteReason>();
 
-    // --- acceptors NBD (Unix sempre; TCP se --listen-nbd) → MESMO canal jobs ---
-    let path = Path::new(&sock);
+    let path = Path::new(sock);
     let _ = std::fs::remove_file(path);
     let unix = UnixListener::bind(path)?;
     eprintln!("[wsl2d] NBD unix em {sock}");
-    let _acc_unix = spawn_acceptor(
+    let _ = spawn_acceptor(
         unix,
         std::sync::Arc::clone(&exports),
         tx_flags,
@@ -594,7 +571,7 @@ fn run_broker(
     if let Some(addr) = listen_nbd_addr {
         let tcp = std::net::TcpListener::bind(addr)?;
         eprintln!("[wsl2d] NBD tcp em {addr}");
-        let _acc_tcp = ramshared_wsl2d::conn::spawn_acceptor_tcp(
+        let _ = ramshared_wsl2d::conn::spawn_acceptor_tcp(
             tcp,
             std::sync::Arc::clone(&exports),
             tx_flags,
@@ -602,12 +579,10 @@ fn run_broker(
         );
     }
 
-    // --- broker (árbitro): consome demote_rx, compartilha jobs_tx (ZeroExport), encerra no
-    // shutdown (DemoteAll + saída). Endpoints por transporte (DT-25). ---
     let bcfg = BrokerConfig {
         listen: arbiter_addr,
         endpoints: EndpointCfg {
-            nbd_unix: Some(sock.clone()),
+            nbd_unix: Some(sock.to_string()),
             nbd_tcp: listen_nbd_addr.map(|a| (a.ip().to_string(), a.port())),
         },
         swap_prio: None,
@@ -624,17 +599,33 @@ fn run_broker(
     eprintln!("[wsl2d] broker (árbitro) em {broker_addr}");
     drop(jobs_tx); // os clones (acceptors + broker) mantêm o canal; o worker é dono do rx
 
-    // --- worker CUDA único (DT-28): serve cada Job via SliceView; roda até shutdown ---
-    let mut canary: Option<Canary> = None;
-    let mut baseline: Vec<u64> = Vec::new();
-    let mut demoted = false;
-    eprintln!("[wsl2d] em transmissão (worker CUDA único; multi-slice/broker)");
+    Ok(BrokerRuntime {
+        geom,
+        jobs_rx,
+        demote_tx,
+        shutdown,
+        broker,
+    })
+}
 
+/// Worker do broker (data-plane), genérico sobre o backend (VRAM ou RAM): serve cada `Job`
+/// via [`SliceView`] da geometria do export. DT-28: roda até `shutdown`, NÃO encerra quando as
+/// conexões NBD caem (o broker persiste). A residência é injetada por closure — VRAM passa o
+/// canário §9/§9.4; RAM passa `|_| None` (RAM não sofre eviction WDDM). Em DEMOTE, notifica o
+/// broker (`DemoteAll` a todos os tenants; a VRAM compartilhada compromete TODAS as slices) e
+/// para de amostrar. Devolve o backend p/ o teardown (wipe seguro é responsabilidade do dono).
+fn serve_broker_jobs<B: BlockBackend>(
+    mut backend: B,
+    rt: &BrokerRuntime,
+    mut residency: impl FnMut(u64) -> Option<DemoteReason>,
+) -> B {
+    let mut demoted = false;
+    eprintln!("[wsl2d] em transmissão (worker único; multi-slice/broker)");
     loop {
-        let msg = match jobs_rx.recv_timeout(Duration::from_millis(500)) {
+        let msg = match rt.jobs_rx.recv_timeout(Duration::from_millis(500)) {
             Ok(m) => m,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                if shutdown.load(Ordering::SeqCst) {
+                if rt.shutdown.load(Ordering::SeqCst) {
                     break; // DT-28: encerra só no SIGINT/SIGTERM
                 }
                 continue;
@@ -652,10 +643,11 @@ fn run_broker(
             }
         };
 
-        let touches_vram = matches!(job.req.cmd, Command::Read | Command::Write);
+        let touches = matches!(job.req.cmd, Command::Read | Command::Write);
         // Geometria do export (handshake já resolveu nome→índice). Fallback defensivo: backend
         // inteiro (não deve ocorrer — todo Job carrega um export válido).
-        let (base, len) = geom
+        let (base, len) = rt
+            .geom
             .get(job.export)
             .copied()
             .unwrap_or((0, backend.size_bytes()));
@@ -671,33 +663,110 @@ fn run_broker(
             disconnect: out.disconnect,
         });
 
-        // Residência: a AÇÃO no broker é DemoteAll (a VRAM é compartilhada; perda de residência
-        // compromete TODAS as slices). Uma vez demovido, para de amostrar (não spamma o broker).
-        if touches_vram
+        if touches
             && !demoted
-            && let Some(reason) = residency_check(
-                lat_us,
-                &mut canary,
-                &mut baseline,
-                &mut sampler,
-                &mut cadence,
-                &mut probe,
-                || ctx.mem_info().ok().map(|(f, _)| f as u64),
-            )
+            && let Some(reason) = residency(lat_us)
         {
             eprintln!("[wsl2d] DEMOTE ({reason:?}) lat={lat_us}us -> broker DemoteAll");
-            let _ = demote_tx.send(reason);
+            let _ = rt.demote_tx.send(reason);
             demoted = true;
         }
     }
+    backend
+}
 
-    // --- teardown: shutdown já disparou DemoteAll no broker; espera o core sair e zera a VRAM.
-    let _ = broker.join();
+/// Caminho broker VRAM (ITEM-8): fatia a VRAM em `slices` exports NBD servidos por Unix +
+/// (opcional) TCP, com o árbitro decidindo quem usa cada slice. O worker único é dono da
+/// VRAM/contexto CUDA e roda a residência §9/§9.4. Execução ao vivo é o gate qemu (`--backend
+/// ram`, ITEM-11) / civm (ITEM-12) — VRAM real não roda em qemu (sem GPU).
+fn run_broker(
+    slice_bytes: u64,
+    slices: u16,
+    sock: String,
+    force: bool,
+    listen_nbd_addr: Option<std::net::SocketAddr>,
+    arbiter_addr: std::net::SocketAddr,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let total = (slices as u64)
+        .checked_mul(slice_bytes)
+        .ok_or("--slices * --slice-mb: overflow")?;
+
+    let cuda = Cuda::load()?;
+    let dev = cuda.device(0)?;
+    eprintln!("[wsl2d] GPU: {}", dev.name());
+    let ctx = cuda.create_context(&dev)?;
+    let (free, total_vram) = ctx.mem_info()?;
+    eprintln!(
+        "[wsl2d] VRAM livre={} MiB total={} MiB",
+        free >> 20,
+        total_vram >> 20
+    );
+    let mut mem = ctx.alloc(total as usize)?;
+    mem.zero()?;
+    lock_memory(force)?; // Disciplina 3: trava memória ANTES de servir swap
+    let backend = VramBackend::new(mem, BLOCK_SIZE);
+    eprintln!(
+        "[wsl2d] broker VRAM: {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE}",
+        slice_bytes >> 20,
+        total >> 20
+    );
+
+    // Canário de residência (§9.4): região separada, não endereçável por NBD.
+    let canary_region = ctx.alloc(CANARY_BYTES)?;
+    let mut probe = CanaryProbe::new(canary_region);
+    let mut cadence = Cadence::new(CANARY_EVERY);
+    let mut sampler = ResidencySampler::new(ResidencyConfig::default());
+    let mut canary: Option<Canary> = None;
+    let mut baseline: Vec<u64> = Vec::new();
+
+    let rt = broker_setup(slices, slice_bytes, &sock, listen_nbd_addr, arbiter_addr)?;
+    let mut backend = serve_broker_jobs(backend, &rt, |lat_us| {
+        residency_check(
+            lat_us,
+            &mut canary,
+            &mut baseline,
+            &mut sampler,
+            &mut cadence,
+            &mut probe,
+            || ctx.mem_info().ok().map(|(f, _)| f as u64),
+        )
+    });
+
+    let _ = rt.broker.join();
     let zeroed = backend.zero();
-    let _ = probe.zero();
-    let _ = std::fs::remove_file(path);
+    let _ = probe.zero(); // DT-12/DT-17: zera também a região-canário
+    let _ = std::fs::remove_file(Path::new(&sock));
     zeroed?;
-    eprintln!("[wsl2d] broker encerrado (VRAM zerada)");
+    eprintln!("[wsl2d] broker VRAM encerrado (VRAM zerada)");
+    Ok(())
+}
+
+/// Caminho broker RAM (sem GPU): mesmo control-plane, backend em heap. Existe para validar a
+/// arbitragem + ciclo de vida do swap em **qemu** (ITEM-11), onde não há GPU. Sem residência
+/// (RAM não sofre eviction). `Cuda::load()` nunca é chamado → roda sem libcuda.
+fn run_broker_ram(
+    slice_bytes: u64,
+    slices: u16,
+    sock: String,
+    listen_nbd_addr: Option<std::net::SocketAddr>,
+    arbiter_addr: std::net::SocketAddr,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let total = (slices as u64)
+        .checked_mul(slice_bytes)
+        .ok_or("--slices * --slice-mb: overflow")?;
+    let backend = RamBackend::new(total as usize);
+    eprintln!(
+        "[wsl2d] broker RAM (sem GPU): {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE}",
+        slice_bytes >> 20,
+        total >> 20
+    );
+
+    let rt = broker_setup(slices, slice_bytes, &sock, listen_nbd_addr, arbiter_addr)?;
+    let _ = serve_broker_jobs(backend, &rt, |_| None); // RAM: sem residência
+
+    let _ = rt.broker.join();
+    let _ = std::fs::remove_file(Path::new(&sock));
+    eprintln!("[wsl2d] broker RAM encerrado");
     Ok(())
 }
 
