@@ -1438,6 +1438,30 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   (hoje há o gate WIP); (2) rename `ramsharedd`; (3) scripts/docs. Depois ITEM-9 (agent), 11
   (drill qemu), 12 (runbook). O **broker (core+IO) está completo e validado**; resta plugá-lo no
   daemon + o agente + os gates de ambiente. Nada commitado. Branch feat/fase-b-prep.
+
+---
+
+## 2026-06-14 — Memory Broker P1: auditoria + validação + COMMITS (5)
+
+- **Auditoria (disciplina):** limpa — 0 TODO/FIXME/`todo!`/`unimplemented!`, 0 secrets,
+  `#![forbid(unsafe_code)]` nos crates novos (0 unsafe), unwrap só em `#[cfg(test)]`. Único
+  marcador: o **gate WIP honesto** em main.rs (flags `--slices/--arbiter-listen` → erro claro
+  "ainda não conectado ao runtime") — estado incremental documentado do `run_nbd`, não stub
+  silencioso; aceitável em branch de feature, a resolver quando o run_nbd for plugado.
+- **Validação:** `cargo clippy --workspace -D warnings` limpo; `cargo test --workspace` **0
+  falhas** (broker 30, broker_e2e 3, wsl2d-lib 41, block 23, cli 11, bin 5, demais intactos;
+  root/GPU ignorados); fmt dos crates novos ok.
+- **5 commits atômicos** (branch feat/fase-b-prep; sem Co-Authored-By por CLAUDE.md): `09fb1ea`
+  docs SPECv2+P0+ADR-0005; `54fc596` scripts P0; `49d37fc` crate ramshared-broker; `e3518b4`
+  wsl2d P1 (handshake nomeado + SliceView + conn TCP + broker_srv core+IO + e2e + flags);
+  MEMORY. Árvore limpa, HEAD verde.
+- **NÃO commitado / não feito ainda (precisa de qemu/civm p/ validar — por isso não foi commitado
+  sem validação):** (1) fiação do broker no `run_nbd` (remover o gate WIP; --slices → SliceMap +
+  spawn_broker + spawn_acceptor_tcp + SliceView por Job + demote routing) — o daemon vivo só
+  valida em qemu (smoke standalone proibido no WSL2); (2) rename `ramsharedd`; (3) ITEM-9 agente
+  (crate novo); (4) ITEM-11 drill qemu; (5) ITEM-12 e2e real WSL2↔civm + runbook.
+- **Estado:** broker completo como componente (lógica+IO, e2e-validado) e **commitado**; resta a
+  integração no binário + agente + gates de ambiente. Branch feat/fase-b-prep.
 - **P0-RESULTS.md** atualizado: §2 rede completa + decisão; civm PSI/pagesize; §1 WSL2 idle r1;
   §5 delta_psi. **Gate segue FECHADO** (faltam: PSI sob carga WSL2+civm, NBD/TCP cross-host,
   render do Alex). **Não iniciar ITEM-3+ (código P1) até o gate abrir.**
