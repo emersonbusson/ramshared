@@ -1,5 +1,5 @@
 use ramshared_block::{Command, Request};
-use ramshared_wsl2d::ublk_server;
+use ramshared_wsl2d::{RamBackend, ublk_server};
 
 fn req(cmd: Command, offset: u64, len: u32) -> Request {
     Request {
@@ -13,7 +13,7 @@ fn req(cmd: Command, offset: u64, len: u32) -> Request {
 
 #[test]
 fn ram_backend_serves_write_then_read_roundtrip() {
-    let mut backend = ublk_server::RamBackend::new(8192);
+    let mut backend = RamBackend::new(8192);
     let mut buf = vec![0u8; 512];
     for (i, b) in buf.iter_mut().enumerate() {
         *b = (i % 251) as u8;
@@ -33,7 +33,7 @@ fn ram_backend_serves_write_then_read_roundtrip() {
 
 #[test]
 fn serve_request_handles_flush_and_rejects_oversized_or_oob() {
-    let mut backend = ublk_server::RamBackend::new(1024);
+    let mut backend = RamBackend::new(1024);
     let mut buf = vec![0u8; 512];
 
     // FLUSH: sucesso com result 0.

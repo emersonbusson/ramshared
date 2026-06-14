@@ -3,7 +3,7 @@
 //! sem device ublk e sem GPU.
 
 use ramshared_block::{BlockBackend, Command, Request};
-use ramshared_wsl2d::{ublk, ublk_server};
+use ramshared_wsl2d::{RamBackend, ublk, ublk_server};
 use std::sync::mpsc;
 
 fn work(tag: u16, cmd: Command, offset: u64, len: u32, payload: Vec<u8>) -> ublk::IoWork {
@@ -24,7 +24,7 @@ fn work(tag: u16, cmd: Command, offset: u64, len: u32, payload: Vec<u8>) -> ublk
 
 #[test]
 fn ublk_worker_serves_read_and_write_over_channels() {
-    let mut backend = ublk_server::RamBackend::new(8192);
+    let mut backend = RamBackend::new(8192);
     let pattern: Vec<u8> = (0..512u32).map(|i| (i % 251) as u8).collect();
     backend
         .write_at(1024, &pattern)
