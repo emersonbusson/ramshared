@@ -213,6 +213,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut slice_mb = 0u64;
     let mut listen_nbd: Option<String> = None;
     let mut arbiter: Option<String> = None;
+    let mut advertise_nbd: Option<String> = None;
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
     while i < args.len() {
@@ -289,6 +290,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .clone(),
                 );
             }
+            "--advertise-nbd" => {
+                i += 1;
+                advertise_nbd = Some(
+                    args.get(i)
+                        .ok_or("--advertise-nbd requer HOST:PORT")?
+                        .clone(),
+                );
+            }
             other => return Err(format!("argumento desconhecido: {other}").into()),
         }
         i += 1;
@@ -304,6 +313,21 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .map(parse_private_listen)
         .transpose()?;
     let arbiter_addr = arbiter.as_deref().map(parse_private_listen).transpose()?;
+    let advertise_nbd_addr = advertise_nbd
+        .as_deref()
+        .map(parse_private_listen)
+        .transpose()?;
+    // --advertise-nbd só faz sentido com --listen-nbd (anunciar um endpoint TCP que se serve).
+    if advertise_nbd_addr.is_some() && listen_nbd_addr.is_none() {
+        return Err(
+            "--advertise-nbd exige --listen-nbd (anunciar um endpoint que se serve)".into(),
+        );
+    }
+    // Endpoint TCP anunciado aos agentes no SwapOn (DT-25): por padrão = addr de bind; com
+    // --advertise-nbd, o addr forwarded do host (caso civm via port-forward, ITEM-12).
+    let advertise_tcp = advertise_nbd_addr
+        .or(listen_nbd_addr)
+        .map(|a| (a.ip().to_string(), a.port()));
 
     // Modo broker (ITEM-8): --slices > 0 fatia a memória e sobe o árbitro. Exige --arbiter-listen
     // (o ponto de controle do broker). --listen-nbd é opcional (tenants TCP/civm além do Unix).
@@ -321,11 +345,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 sock,
                 force,
                 listen_nbd_addr,
+                advertise_tcp,
                 arbiter_addr,
             ),
-            BackendKind::Ram => {
-                run_broker_ram(slice_bytes, slices, sock, listen_nbd_addr, arbiter_addr)
-            }
+            BackendKind::Ram => run_broker_ram(
+                slice_bytes,
+                slices,
+                sock,
+                listen_nbd_addr,
+                advertise_tcp,
+                arbiter_addr,
+            ),
         };
     }
     // Sem slices não há o que arbitrar nem exportar por TCP.
@@ -521,6 +551,7 @@ fn broker_setup(
     slice_bytes: u64,
     sock: &str,
     listen_nbd_addr: Option<std::net::SocketAddr>,
+    advertise_tcp: Option<(String, u16)>,
     arbiter_addr: std::net::SocketAddr,
 ) -> Result<BrokerRuntime, Box<dyn std::error::Error>> {
     // Mapa de slices: o índice do export (resolvido pelo handshake) == índice na geom == índice
@@ -583,7 +614,7 @@ fn broker_setup(
         listen: arbiter_addr,
         endpoints: EndpointCfg {
             nbd_unix: Some(sock.to_string()),
-            nbd_tcp: listen_nbd_addr.map(|a| (a.ip().to_string(), a.port())),
+            nbd_tcp: advertise_tcp,
         },
         swap_prio: None,
         arbiter: ArbiterConfig::default(),
@@ -685,6 +716,7 @@ fn run_broker(
     sock: String,
     force: bool,
     listen_nbd_addr: Option<std::net::SocketAddr>,
+    advertise_tcp: Option<(String, u16)>,
     arbiter_addr: std::net::SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let total = (slices as u64)
@@ -719,7 +751,14 @@ fn run_broker(
     let mut canary: Option<Canary> = None;
     let mut baseline: Vec<u64> = Vec::new();
 
-    let rt = broker_setup(slices, slice_bytes, &sock, listen_nbd_addr, arbiter_addr)?;
+    let rt = broker_setup(
+        slices,
+        slice_bytes,
+        &sock,
+        listen_nbd_addr,
+        advertise_tcp,
+        arbiter_addr,
+    )?;
     let mut backend = serve_broker_jobs(backend, &rt, |lat_us| {
         residency_check(
             lat_us,
@@ -749,6 +788,7 @@ fn run_broker_ram(
     slices: u16,
     sock: String,
     listen_nbd_addr: Option<std::net::SocketAddr>,
+    advertise_tcp: Option<(String, u16)>,
     arbiter_addr: std::net::SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let total = (slices as u64)
@@ -761,7 +801,14 @@ fn run_broker_ram(
         total >> 20
     );
 
-    let rt = broker_setup(slices, slice_bytes, &sock, listen_nbd_addr, arbiter_addr)?;
+    let rt = broker_setup(
+        slices,
+        slice_bytes,
+        &sock,
+        listen_nbd_addr,
+        advertise_tcp,
+        arbiter_addr,
+    )?;
     let _ = serve_broker_jobs(backend, &rt, |_| None); // RAM: sem residência
 
     let _ = rt.broker.join();
