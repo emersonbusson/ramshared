@@ -963,3 +963,483 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **PROXIMO PASSO: SPEC** (`docs/memory-broker/SPEC.md`) a partir do PRD unificado, apos discussao/
   aprovacao do usuario. F3 do ublk-daemon (swap no harness qemu) segue na fila tambem.
 - Avaliacao critica dos docs de origem: Anexo A do PRD unificado. PRDs de origem marcados ABSORVIDOS.
+
+---
+
+## 2026-06-09 — Memory Broker: SPEC (SSDV3 Passo 2) gerado de docs/memory-broker/PRD.md
+
+- **Artefato:** `docs/memory-broker/SPEC.md` (primeira execucao do Passo 2 — nao havia SPEC
+  anterior, sem SPECv2). Escopo fechado: **P0 (medicao, gate) + P1 (broker core linux<->linux)**;
+  P2/P3/P4 explicitamente fora (RF-W*, RF-G*, RF-P1, RF-P3/TOML adiado — DT-11).
+- **Decisoes tecnicas chave (DT-1..15):** protocolo agente<->broker = **JSON-lines/TCP**
+  (serde/serde_json; exige ADR-0005 + LIBRARIES.md, disciplina #11); broker **in-process** no
+  daemon via `--arbiter-listen`; **slices = exports NBD nomeados** s0..sK-1 (ublk fica
+  single-device — guard_not_wsl2/incidente 2026-06-09); worker CUDA unico permanece, slice
+  resolvida via `SliceView` novo em backend.rs (DeviceMem ja aceita offset — RF-L1 respondido);
+  binario renomeado **ramsharedd** ([[bin]], crate dir fica); atribuicao inicial round-robin
+  (kernel gateia uso via prioridade de swap); swapon remoto **sem -p** (prioridade negativa
+  abaixo do swap local — RNF-1); nbd-client sempre `-timeout 30`, nunca `-persist`; estado do
+  broker em memoria, reconciliado no Register; agente exige euid==0.
+- **Crates novos:** `ramshared-broker` (protocol/model/slices/arbiter puro, forbid unsafe) e
+  `ramshared-agent` (psi/swap/watchdog, forbid unsafe). Modifica: handshake.rs (exports
+  nomeados, assinatura `&[Export]` -> indice), conn.rs (streams genericos + acceptor TCP +
+  Job.export), main.rs (flags --slices/--slice-mb/--listen-nbd/--arbiter-listen; recusa
+  0.0.0.0; --backend ram no caminho NBD p/ drill sem GPU).
+- **Gates:** P0-RESULTS.md preenchido (n>=3 rodadas) antes de qualquer codigo P1; drill
+  D-state em qemu (`scripts/kernel/qemu-broker-drill.sh`, watchdog <5s) e e2e real WSL2<->civm
+  fecham P1. Defaults do arbitro sao provisorios (delta_psi=15, streak=5, cooldown=60s) e
+  **P0 calibra** (recalibracao = update do SPEC).
+- **PROXIMO PASSO:** revisao/aprovacao do SPEC pelo usuario (ou Passo 2.5 auditoria) -> IMPL
+  comeca pelo ITEM-1 (scripts p0). F3 do ublk-daemon segue na fila.
+
+---
+
+## 2026-06-09 — Memory Broker: Passo 2.5 sobre SPEC.md → NO-GO → SPECv2
+
+- **Auditoria pre-implementacao do `docs/memory-broker/SPEC.md` = no-go.** 17 findings
+  (2 CRITICAL, 5 HIGH, 4 MEDIUM, 6 LOW), verificados contra o codebase (nao so leitura do doc):
+  - **F1 CRITICAL: agente sem `mkswap`** — `swapon` exige assinatura; todo caminho validado do
+    repo roda mkswap antes (`cascade.rs:310`, `ublk_io_smoke.rs:671`); o fluxo SwapOn do SPEC
+    nunca funcionaria e o drill (gate P1) nunca passaria.
+  - **F2 CRITICAL: slice re-atribuida sem zerar** vaza paginas swapped (memoria anonima) entre
+    tenants; `DeviceMem::zero()` e whole-buffer (`driver.rs:237`) → zero por slice via write_at.
+  - HIGH: heartbeat do watchdog nao obrigatorio (Ack por Psi indefinido → watchdog expiraria
+    sempre); drill validava happy path #13 (slice "ativa" com used_kb=0; initramfs sem
+    nbd.ko/nbd-client/`lo up`); lease sem estado (round-robin re-atribuiria slices arrendadas);
+    tenant ausente → slice presa em Draining; shutdown ordenado sem teste algum.
+- **`docs/memory-broker/SPECv2.md` criado no mesmo turno** (regra do Passo 2.5), SPEC.md
+  preservado. Novos DT-16..DT-26: mkswap obrigatorio; higiene de slice (WMsg::ZeroExport no
+  worker, Draining→zero→Free); Ack por Psi (1 Hz, deadline 3s = 3 perdidos); SliceState::Leased;
+  tenant ausente = slices congeladas fora da view do arbitro; endpoints Unix+TCP por transport;
+  counterfactual com piso psi_floor; writer thread por sessao (core nunca faz IO de socket);
+  contrato `{base}{N}` da reconciliacao; euid via /proc/self/status (zero-dep). Drill virou
+  3 fases (graceful SIGTERM / kill swap-vazio <5s / kill swap-USADO: attempt<5s + sem D-state
+  >10s + echo<2s — swapoff PODE falhar com EIO, objetivo e bounded sem D-state). e2e ganhou
+  shutdown/heartbeat/higiene/ausencia.
+- **Verificado nesta sessao:** CONFIG_PSI=y default-enabled no kernel custom + /proc/pressure
+  legivel no WSL2; CONFIG_BLK_DEV_NBD=m com nbd.ko ja compilado; host tem nbd-client+fio,
+  NAO tem nbdkit/nbd-server (preflight no measure-nbd-tcp.sh).
+- **Candidato ativo: SPECv2.md → re-auditoria (Passo 2.5) antes do IMPL.** Nada commitado.
+
+---
+
+## 2026-06-13 — Memory Broker: re-auditoria do SPECv2 (Opus 4.8) → NO-GO → update in-place
+
+- **Passo 2.5 sobre `docs/memory-broker/SPECv2.md` (candidato ativo) = no-go.** 6 findings novos
+  (R1..R6), aterrados no codigo (conn.rs/main.rs/driver.rs), nao so no texto:
+  - **R1 HIGH: agente executava comando (nbd_connect/mkswap/swapon) SINCRONO no loop de
+    heartbeat** → um SwapOn >3s (latencia de mkswap/nbd_connect sobre TCP e NAO medida) starva
+    o Psi/Ack e dispara o watchdog → swapoff espurio da slice recem-montada (anti-RNF-1/RNF-3).
+    Fix DT-27: exec em thread propria (espelha spawn_swapoff); watchdog mede liveness do broker,
+    nao duracao de comando. ITEM-9 reescrito com 2 threads.
+  - **R2 MEDIUM: corrida de reserva do lease** — durante revogacao multi-tick, slice liberada
+    (Free) podia ser pega pelo round-robin (passo 5) antes do GrantLease → lease nunca acumula.
+    Fix DT-19 emendado: reserva incremental (Free→Leased na hora) + passo (5) suprimido sob
+    pending_lease; ITEM-4/ITEM-10 exigem teste de lease QUE PRECISA REVOGAR (nao so de Free).
+  - **R3 MEDIUM: worker sem geometria** — Export{name,size} nao carrega base; worker precisa de
+    base p/ SliceView (Job E ZeroExport). Fix: worker mantem geom: Vec<(base,len)> de SliceMap;
+    block::Export fica so name+size.
+  - **R4 MEDIUM: ZeroExport via try_send (jobs bound 64) sem retry se cheio** → slice presa em
+    Draining. Fix DT-17 emendado: try_send falho = Draining + retry no proximo tick.
+  - **R5/R6 LOW: drill/runbook** (socket Unix default /run/ramshared inexistente no initramfs →
+    bind falha; nbds_max p/ /dev/nbdN; parse estado-D apos ultimo `)` de /proc/stat) + worker
+    bloqueado no zero de slice grande (aceitavel).
+- **SPECv2.md atualizado IN-PLACE no mesmo turno** (regra de saida do Passo 2.5 p/ SPECv2 no-go):
+  registro das 2 auditorias no topo (F1..F17 + R1..R6), +DT-27, emendas DT-17/DT-19 e
+  ITEM-4/7/8/9/11/12. 27 DTs no total. SPEC.md original intacto.
+- **Aterramento desta sessao:** WMsg = {Opened, Job(Job), Closed} (conn.rs:42); worker NBD =
+  `while let Ok(msg)=jobs_rx.recv()` (main.rs:229) + try_recv no demote (260) → valida o idiom
+  pending_zeros; --sock tem default /run/ramshared/wsl2d.sock (main.rs:106); DeviceMem::zero e
+  whole-buffer (driver.rs:237) → zero por slice via write_at.
+- **Candidato ativo: SPECv2.md (atualizado) → nova re-auditoria antes do IMPL.** Nada commitado.
+
+---
+
+## 2026-06-13 — Memory Broker: 3ª auditoria do SPECv2 → NO-GO → update in-place (R7 grave)
+
+- **3ª passada (Passo 2.5) sobre SPECv2 atualizado = no-go.** 3 findings novos (R7..R9), foco no
+  ciclo de vida do worker — aterrado lendo conn.rs/main.rs:
+  - **R7 HIGH (grave): worker do broker morreria após um DemoteAll/idle.** O worker reusa o
+    pipeline H1 e encerra via `LiveCount::on_close` quando `live==0 && opened`
+    (conn.rs:70-73, main.rs:235-238 — DT-15 determinismo do modo single). Em modo broker o
+    daemon e PERSISTENTE: as conexoes NBD caem a zero a cada `DemoteAll` (canario/GPU) ou quando
+    todas as slices ficam Free (idle) → o worker encerraria e o daemon pararia de servir qualquer
+    SwapOn futuro = **falha permanente apos um demote normal**. Nenhuma das 2 auditorias anteriores
+    pegou (e um reuso de lifecycle num contexto novo). Fix DT-28: em modo broker o worker ignora o
+    break do LiveCount, usa recv_timeout (tick) p/ checar shutdown, e so encerra no fechamento do
+    canal `jobs` (shutdown ordenado: acceptors param + broker dropa o SyncSender). ITEM-8(e) +
+    ITEM-10 cenario (j) (injeta DemoteAll, prova worker vivo).
+  - **R8 MEDIUM:** agente com 2 threads (DT-27) sem escritor unico do socket → SwapOnDone (exec)
+    e Psi (main) intercalariam bytes → JSON-lines corrompido. Fix: exec devolve resultado por
+    canal; loop principal e o unico escritor.
+  - **R9 LOW:** rebalanco (passos 2/4 do tick) nao suprimido sob lease pendente → churn. Fix:
+    suprimir 2/4 enquanto ha pending_lease.
+- **SPECv2.md atualizado IN-PLACE de novo** (regra de saida, sem pedido de SPECv3): topo com as 3
+  auditorias (F1..F17, R1..R6, R7..R9), +DT-28, emendas DT-27/ITEM-4/8/10. **28 DTs no total.**
+- **Padrao observado:** 3 no-go consecutivos, mas cada um com achados reais e distintos so
+  visiveis com grounding no codigo (1ª: mkswap/zero/heartbeat/drill; 2ª: command-starvation/
+  lease-race/geom; 3ª: worker-lifecycle/socket-writer). Convergencia esperada na proxima passada.
+- **Candidato ativo: SPECv2.md → 4ª re-auditoria antes do IMPL.** Nada commitado.
+
+---
+
+## 2026-06-13 — Memory Broker: 4ª auditoria = GO + Passo 3 ITEM-1 (P0) iniciado
+
+- **4ª passada (Passo 2.5) sobre SPECv2 = GO.** Só 2 findings LOW (clarificações, sem decisão
+  arquitetural nova), dobrados in-place:
+  - **R10 LOW:** shutdown ambíguo (ZeroExport por slice vs zero whole-buffer do teardown). Fix
+    DT-17: shutdown usa o zero whole-buffer do teardown (F2), sem ZeroExport por slice → worker
+    encerra limpo (DT-28); 10s = backstop.
+  - **R11 LOW:** reconciliação (DT-21) assumia `--nbd-dev-base` que o Register não carrega
+    (default /dev/nbd já funcionava; override quebraria → risco de re-atribuir slice montada).
+    Fix DT-21: broker reconcilia pelo **inteiro final** de SwapEntry.dev (= id da slice),
+    agnóstico ao prefixo, sem novo campo no protocolo.
+- **Convergência real:** severidade caiu a cada passada (2 CRIT+5 HIGH → 1 HIGH+3 MED → 1 HIGH+1
+  MED+1 LOW → 2 LOW). SPECv2 final: **28 DTs**, 11 findings (R1..R11) endereçados, 4 tabelas de
+  auditoria no topo. SPEC.md original intacto.
+- **Passo 3 INICIADO — ITEM-1 (gate P0), o único item liberado antes de fechar o gate:**
+  criados `scripts/p0/{measure-psi.sh,measure-net.sh,measure-nbd-tcp.sh,measure-render-vram.ps1}`
+  (set -euo pipefail, log prefix, preflights F17/R5) + `docs/memory-broker/P0-RESULTS.md`
+  (template do gate). measure-psi.sh **rodado no WSL2 (6s)**: idle some.avg10=0.00 → confirma
+  psi_floor=5.0 com folga + valida o harness. Gate **FECHADO** (preliminar só; faltam ≥3×300s,
+  civm, rede, NBD/TCP, render).
+- **Gate anti-halo:** ITEM-3+ (código P1, crate ramshared-broker etc.) **não** começa até
+  P0-RESULTS fechar. ITEM-2 (ADR-0005 serde) pode andar em paralelo (é doc). Execução de P0:
+  WSL2 carga (cargo build -j4, escopado), civm (SSH/Tailscale — confirmar PSI + PAGE_SIZE),
+  NBD/TCP (precisa `apt install nbdkit`), render (host EMEDEV → tester Alex).
+- **Nada commitado** (batch local, [[feedback-batch-local-single-pr]]). Branch feat/fase-b-prep.
+
+---
+
+## 2026-06-13 — Memory Broker P0: execução (R1 medido, civm confirmada) + ITEM-2 (ADR-0005)
+
+- **R1 (conectividade WSL2↔civm) MEDIDO e decidido** — números reais (scripts/p0/measure-net.sh +
+  ssh read-only na civm `gha-ubuntu-2404`):
+  - WSL2→civm **LAN** (192.168.0.50): RTT p50=0.375ms p99=0.849ms (apertado), TCP ok.
+  - WSL2→civm **Tailscale** (100.123.103.106): p50=1.02ms **p99=430ms** (cauda péssima).
+  - civm→WSL2 **NAT (172.31.230.209): 100% perda** (confirmado por ping; `ip route get` na civm
+    manda 172.31.x pro gateway LAN). **WSL2 NÃO é nó Tailscale** (nenhum IP TS por nenhum método).
+  - **DECISÃO R1 = port-forward no host Windows** (`netsh portproxy` LAN:porta→172.31.230.209:porta
+    p/ --arbiter-listen e --listen-nbd). Tailscale-no-host inviável p/ data-plane (430ms vs swap
+    241-326µs Fase B). WSL2 gw/host vNIC = 172.31.224.1. Alimenta DT-25 + ITEM-12.
+- **civm confirmada (read-only via ssh):** kernel 6.8.0-124, **PSI habilitado** (some/full
+  legíveis; some.avg10 0.5–7.8 conforme carga de CI; full.avg10 chegou a 7.75 = stall real),
+  **PAGE_SIZE=4096** (= WSL2). civm acessível por ssh sem senha (BatchMode ok).
+- **Calibração (achado #3):** civm sob CI ~7.8 vs WSL2 idle ~0 ⇒ Δ≈7.8 < `delta_psi=15` default
+  → árbitro **nunca moveria** sob carga típica de CI. **delta_psi=15 suspeito de ALTO**; confirmar
+  com PSI-sob-carga antes de fixar (registrado em P0-RESULTS §5).
+- **ITEM-2 FEITO** (doc, paralelo ao gate): `docs/decisions/ADR-0005-broker-protocol-jsonl.md`
+  (JSON-lines via serde/serde_json; rollback trigger: >64KiB/msg ou >100msg/s/tenant → bincode) +
+  linha em LIBRARIES.md. Versões reais do registry: **serde 1.0.228 / serde_json 1.0.150**
+  (MIT OR Apache-2.0). Pin exato + transitivas entram no Cargo.lock no ITEM-3.
+- **Coletas concluídas (números no P0-RESULTS):** PSI idle **WSL2 ~0.00–0.05** (3×300s, max 0.55);
+  PSI **civm idle/CI méd 1.4–2.1, burst 19.4** (full.avg10 7.75 = stall CI real); **NBD/TCP
+  loopback** randread p50≈174µs/p99 285–578µs, randwrite p50≈202µs (3 rodadas) — já bate NBD-Unix
+  326µs da Fase B, mas é loopback. **Cross-host civm↔WSL2 sobre port-forward = o R4 de verdade,
+  ainda falta.**
+
+---
+
+## 2026-06-13 — Memory Broker P0: PSI sob carga (cgroup hog seguro) + calibração delta_psi
+
+- **PSI-sob-carga do WSL2 medido com segurança** via novo `scripts/p0/measure-psi-load.sh` (hog
+  anônimo confinado em cgroup v2: `memory.high=64M`/`memory.max=512M` teto/`swap.max=0`). Rodou
+  40s, **0 OOM, cgroup limpo, host vivo** (8.6 GB livres depois). Resultado: **WSL2 sob carga
+  system some.avg10 média=14.25 max=22.54** (full 10.2/18.3). cgroup ficou throttled em ~72 MB
+  (3029 throttles) — pressão real e contida. NADA de swap/daemon/block-device (longe do freeze
+  de 2026-06-09). **Achado de metodologia:** o "cargo build -j4" do SPEC é CPU-bound, NÃO gera
+  PSI de memória → substituído pelo hog confinado (documentado no P0-RESULTS §1).
+- **Idle final (3 rodadas):** WSL2 some.avg10 **0.011** (831 am.); civm **1.237** (806 am., max
+  19.44 = burst de CI).
+- **Calibração delta_psi (P0-RESULTS §5):** WSL2 carga 14.25 vs civm idle 1.2 ⇒ Δ≈13 → o default
+  **delta_psi=15 NÃO moveria** sob pressão clara. **Proposta: delta_psi=10** (+ streak=5 filtra
+  os bursts transientes de CI da civm; psi_floor=5 separa idle<5 de carga≥14). Validar no e2e P1
+  (ITEM-12). Caveat #1: carga confinada é lower bound do PSI real do host (real ≥14). A troca do
+  default no SPEC acontece no ITEM-4 (quando o árbitro for codado), citando este P0-RESULTS.
+- **Gate P0 quase fechado:** §1 (PSI idle+carga), §2 (rede+port-forward), §3 loopback, §5
+  calibração = FEITOS. **Faltam só §3 NBD/TCP cross-host (precisa netsh portproxy no host Windows)
+  e §4 render (tester Alex).** ITEM-3+ (código P1) segue bloqueado até esses dois.
+- Novo script P0: `scripts/p0/measure-psi-load.sh` (reusável; serve p/ civm também se preciso).
+
+---
+
+## 2026-06-13 — Memory Broker P0: §3 cross-host (R4) medido via port-forward + §4 script validado
+
+- **Usuário liberou PowerShell admin do host** (UAC off; `sudo.exe` em modo Embutido/inline eleva
+  sem prompt — nível S-1-16-12288). Host LAN = **192.168.0.250**; WSL2 NAT = 172.31.230.209.
+- **§3 NBD/TCP cross-host MEDIDO (o R4 real, antes só Inferência):** montei nbdkit no WSL2
+  (userspace) + `netsh portproxy 0.0.0.0:10810→172.31.230.209:10810` + regra de firewall no host,
+  e rodei nbd-client+fio **na civm** (3 rodadas, `-timeout 30`). **randread 4k p50=644µs p99~1.0–1.5ms;
+  randwrite p50=644µs; IOPS ~1400.** = loopback (~174µs) + ~470µs do virt-switch (≈1 RTT LAN/op).
+  644µs << swap em disco saturado (ms+) → **civm lucra usando VRAM remota como swap** (confirmado).
+  Loopback NBD/TCP: randread p50~174µs (bate NBD-Unix 326µs da Fase B).
+- **SEGURANÇA (não travou o WSL2):** as partes que podem dar D-state (nbd-client, /dev/nbd0, fio)
+  rodaram **na civm**, não no WSL2; no WSL2 só nbdkit (userspace). **Tudo limpo após:** nbdkit morto,
+  portproxy+firewall removidos, civm nbd0 size=0, sem nbd em /proc/swaps. (1 exit-144 no meio = só
+  artefato de comando bash+powershell+ssh aninhado; estado verificado limpo, refeito passo-a-passo.)
+- **§4 render: script validado no host + BUG corrigido** (regra "rodar no host primeiro", #13):
+  `Get-Counter '\Memory\Available MBytes'` é localizado e **quebra em Windows pt-BR** → troquei por
+  CIM `Win32_OperatingSystem.FreePhysicalMemory` (neutro). Agora captura VRAM/RAM ok. Falta só a
+  cena real do Alex (gate §4 depende do tester).
+- **Gate P0: falta SÓ §4 render** (precisa da cena do tester). §1/§2/§3/§5 fechados. Calibração:
+  delta_psi=10 proposto. **ITEM-3+ (código P1) ainda bloqueado** até §4 (ou decisão de abrir o gate
+  com §4 parcial, já que é da Fase C/P2 e o P1 é Linux↔Linux). civm tem nbd-client+fio instalados agora.
+
+---
+
+## 2026-06-13 — Memory Broker P1: gate P1 ABERTO + ITEM-3 e ITEM-4a (slices) implementados (TDD)
+
+- **Gate P1 ABERTO** (decisão, autorizada por "continue todas as frentes"): os números que o P1
+  precisa (§1/§2/§3/§5) estão completos; **§4 render é insumo da P2** (DCC/out-of-core), rastreado
+  p/ quando o Alex mandar a cena — não bloqueia o P1 (Linux↔Linux). Marcado no P0-RESULTS.
+- **Crate novo `ramshared-broker`** (workspace member; serde/serde_json 1.x via ADR-0005),
+  `#![forbid(unsafe_code)]`, lints unwrap/expect=deny (testes com `#![allow(...)]`):
+  - **ITEM-3 — `model.rs` + `protocol.rs`:** tipos do PRD §7 (SliceState c/ `Leased`, Slice,
+    PsiSample, TransportKind, Lease) + JSON-lines (Msg internamente-etiquetado por `type`/snake_case,
+    NbdEndpoint, SwapEntry, TenantStatus c/ `present`, `write_msg`/`read_msg` c/ teto 64 KiB
+    anti-DoS via `take`). **Correção forçada:** `Slice` precisou de `PartialEq, Eq` (Msg deriva
+    PartialEq e embute `Vec<Slice>`) — SPEC inconsistente, corrigido no código E no SPECv2.
+  - **ITEM-4a — `slices.rs`:** `SliceMap` máquina de estados (new/total_bytes/get/assign/drain/
+    release/lease/unlease/exports); transições ilegais rejeitadas (assign em Active **e em Leased**;
+    DT-17 release só de Draining; DT-19 lease/unlease).
+  - **Validado:** clippy `-D warnings` limpo, **20 testes** verdes (12 protocol/model + 8 slices),
+    fmt ok. Build escopado `-p ramshared-broker -j4` (sem --release; não travou WSL2).
+- **delta_psi recalibrado 15→10 no SPECv2** (citando P0-RESULTS §5; era a regra "recalibração =
+  update do SPEC no ITEM-4").
+- **PAREI antes do `arbiter.rs` de propósito** (cuidado, contexto longo): achei uma questão de
+  design real — o `tick` é **puro** e recebe `TenantView{psi}`, **sem `used_kb` por slice**, então
+  o "mais ociosas primeiro" do DT-19 não é implementável como escrito. Decisão registrada no SPECv2:
+  P1 usa **`psi.avg10` do dono ascendente** como proxy; o critério por `used_kb` fica adiado
+  (precisaria o core passar used_kb ao tick; DT-10: sem holder real de lease em P1). A reserva R2
+  é do core (GrantLease→lease()) + supressão do passo 5 no árbitro.
+- **PRÓXIMO:** `arbiter.rs` (ITEM-4b) — núcleo do RF-B2/B3 + counterfactual #2 (clock injetado,
+  testes adversariais: histerese, cooldown, nunca-zero, RevertMove c/ piso DT-23, lease drena além
+  do nunca-zero, round-robin só entre presentes). Merece sessão focada. Depois ITEM-5..12.
+- **Nada commitado** (working tree; batch local, harness "commit só quando pedir"). Crate compila/testa.
+
+---
+
+## 2026-06-13 — Memory Broker P1: ITEM-4b arbiter.rs FEITO (crate ramshared-broker completo)
+
+- **`arbiter.rs` implementado** (a questão de design foi resolvida, então segui no mesmo "continue"):
+  `tick` puro (clock `Instant` injetado) com a ordem da SPECv2 — (1) lease (prioridade, suprime
+  2/4/5), (2) counterfactual c/ **piso** (DT-23: só reverte se psi do drenado >2× E >psi_floor),
+  (3) cooldown, (4) diferencial c/ histerese (streak) + **nunca-zero** (não drena donor pressionado
+  a 0), (5) round-robin de Free (DT-6). `last_move` zera após revert (sem oscilação); `cooldown_until`
+  separado (move→60s, revert→300s). **delta_psi=10** default (P0). Revogação de lease por **psi do
+  dono ascendente** (proxy; sem used_kb no tick puro).
+- **30 testes verdes** no crate (12 protocol/model + 8 slices + **10 arbiter**): histerese, cooldown,
+  nunca-zero, counterfactual reverte E o caso ruído-abaixo-do-piso NÃO reverte (DT-23), lease drena
+  além do nunca-zero (DT-8), lease concede de Free sem round-robin + segura Free durante revogação
+  (R2), round-robin distribui Free, sem-diferencial-não-move. clippy `-D warnings` limpo, fmt ok.
+- **1 refactor clippy** (let-chains, rustc 1.93) — sem mudança de lógica. **Correção SPEC** já
+  registrada: Slice PartialEq/Eq; delta_psi 15→10.
+- **Crate `ramshared-broker` COMPLETO** (ITEM-3 + ITEM-4): protocol/model/slices/arbiter, lib pura
+  `#![forbid(unsafe_code)]`, **zero código existente tocado** (sem risco de regressão até aqui).
+- **PRÓXIMO: ITEM-5** (`ramshared-block/handshake.rs`: exports nomeados, assinatura `export_size`→
+  `&[Export]`→índice). É **mudança de contrato em código Fase-B existente** com risco de regressão
+  (RNF-4: wire byte-idêntico p/ cliente sem `-N`; abort trigger = teste existente quebrar). Merece
+  passo focado (não no fim de um contexto já enorme). Depois ITEM-6 (SliceView) → 7 (conn) → 8
+  (broker_srv+main) → 9 (agent) → 10 (e2e) → 11 (drill qemu) → 12 (runbook).
+
+---
+
+## 2026-06-13 — Memory Broker P1: ITEM-5 (handshake exports nomeados) FEITO, workspace verde
+
+- **ITEM-5 — `ramshared-block/src/handshake.rs`:** `server_handshake` agora resolve o export
+  **pelo nome** e devolve o índice. Assinatura `(.., export_size: u64, ..) -> Result<()>` →
+  `(.., exports: &[Export], ..) -> Result<usize>`. Novo `pub struct Export { name, size }`,
+  const `NBD_REP_ERR_UNKNOWN=0x8000_0006`, helpers `go_export_name`/`name_utf8`/`find_export`.
+  Resolução: **nome vazio → exports[0]** (wire byte-idêntico Fase B, RNF-4); GO/INFO nome
+  desconhecido → `ERR_UNKNOWN` e **segue** negociando; EXPORT_NAME desconhecido → fecha (Io);
+  nome não-UTF-8 → Io. GO+INFO unificados num braço (GO transiciona, INFO não).
+- **Caller `conn.rs` (patch mínimo, ITEM-7 fará a tabela real):** passa
+  `[Export{name:"default", size:device_size}]` e ignora o índice — mantém o crate compilando.
+- **TDD da regressão (RNF-4):** os 5 testes existentes do handshake adaptados **só na assinatura**,
+  asserts de bytes **intactos** (greeting/export-name/GO byte-idênticos). +5 testes novos: GO
+  nomeado devolve índice+size, GO desconhecido → ERR_UNKNOWN+continua, EXPORT_NAME desconhecido
+  fecha, nome não-UTF-8 erra, nome vazio → primeiro export.
+- **TESTE TUDO (pedido do usuário) — `cargo test --workspace -j4` (debug): 0 falhas em todo o
+  workspace.** block 23, broker 30, cli 11, wsl2d-lib 21 (+1 GPU ign), cuda 2 (+1 ign), tier 7,
+  integrity 8, uring/ublk smokes root corretamente ignorados (5+12). clippy `-D warnings` limpo
+  (block + wsl2d-lib), fmt ok. **Zero regressão** — o caminho NBD da Fase B intacto.
+- **Progresso P1: ITEM-1(gate)/2/3/4/5 FEITOS.** Falta ITEM-6 (SliceView em backend.rs + mover
+  RamBackend de ublk_server.rs) → 7 (conn genérico+TCP+ZeroExport) → 8 (broker_srv+main) → 9
+  (agent) → 10 (e2e) → 11 (drill qemu) → 12 (runbook). ITEM-6 mexe em código existente (mover
+  RamBackend) — risco de regressão moderado, melhor em passo focado. Nada commitado (working tree).
+
+---
+
+## 2026-06-13 — Memory Broker P1: ITEM-6 (SliceView + move RamBackend) FEITO, workspace verde
+
+- **ITEM-6 — `ramshared-wsl2d/src/backend.rs`:**
+  - **`SliceView<'b, B: BlockBackend>`** (RF-L1/DT-4): janela `[base,base+len)` sobre um backend;
+    `size_bytes()=len` (o bounds-check de `serve()` passa a valer por slice de graça); read/write
+    somam `base` com `checked_add` (overflow→IoError). O worker constrói uma `SliceView` por `Job`
+    sobre o backend único, sem tocar CUDA.
+  - **`RamBackend` MOVIDO** de `ublk_server.rs` para `backend.rs` (compartilhado NBD+ublk). Day-0
+    sem alias de compat: os **8 usos** atualizados p/ o caminho canônico (`pub use
+    backend::{RamBackend, SliceView, VramBackend}` no lib.rs → `ramshared_wsl2d::RamBackend`):
+    main.rs ×2, tests/ublk_{worker,server,io_smoke}.rs ×6. `ublk_server.rs` importa de
+    `crate::backend` e perdeu `IoError` do import (só o RamBackend usava).
+- **3 testes novos de SliceView** (backend.rs): isolamento entre slices vizinhas (escrita na s1
+  não vaza p/ s0), `serve` rejeita fora da janela (EINVAL), `new` panica em debug se a janela
+  excede o backend.
+- **TESTE TUDO: `cargo test --workspace` 0 falhas.** wsl2d-lib 21→**24** (3 SliceView), demais
+  intactos (block 23, broker 30, cli 11, ...); ublk integration tests compilam com o novo caminho
+  do RamBackend e os não-root passam; root/GPU ignorados. clippy lib+bin limpo, meus crates fmt ok.
+- **Achados PRÉ-EXISTENTES (não meus, não corrigidos — fora do escopo do ITEM-6):** (1)
+  `tests/ublk_control_smoke.rs` tem 15 `clippy::expect_used` que só aparecem sob
+  `clippy --all-targets` (o gate do projeto sempre foi lib+bin, então nunca pegou); (2)
+  `ramshared-cli/src/main.rs:1036` tem um diff de `cargo fmt` pré-existente. Ambos são gaps
+  latentes a tratar separadamente.
+- **Progresso P1: ITEM-1/2/3/4/5/6 FEITOS.** Falta ITEM-7 (conn.rs genérico sobre stream + acceptor
+  TCP + `Job.export` + `WMsg::ZeroExport`) → 8 (broker_srv+main) → 9 (agent) → 10 (e2e) → 11 (drill)
+  → 12 (runbook). ITEM-7 mexe no pipeline multi-conn H1 (worker/backpressure/LiveCount) — alto risco
+  de regressão, passo focado. Nada commitado.
+
+---
+
+## 2026-06-13 — Memory Broker P1: ITEM-7 (conn.rs genérico Unix+TCP) FEITO, workspace verde
+
+- **ITEM-7 — `ramshared-wsl2d/src/conn.rs`:** reader/writer/acceptor agora **genéricos sobre o
+  stream** (Unix **e** TCP, RF-L2). Mudanças:
+  - `spawn_writer<S: Write+Send+'static>`, `spawn_reader<S: Read+..., W2: Write+...>` (o `hs_writer`
+    do handshake agora é passado pelo acceptor — Unix/TCP não têm trait comum de `try_clone`).
+  - `spawn_reader` recebe `Arc<Vec<Export>>`, negocia o export, guarda o **índice** e o anti-DoS de
+    WRITE passa a usar `exports[idx].size` (não mais `device_size`). `Job` ganhou `export: usize`.
+  - Helper `wire_conn<RS,WS>` (Opened+canais+writer+reader) compartilhado pelos 2 acceptors.
+  - **`spawn_acceptor`** (Unix) agora recebe `exports: Arc<Vec<Export>>`; **`spawn_acceptor_tcp`**
+    novo (TcpListener, `TCP_NODELAY` por conexão, MESMO canal `jobs` — worker único).
+  - `main.rs run_nbd`: passa `Arc::new(vec![Export{"default", device_size}])` ao `spawn_acceptor`
+    (1 export; o broker passará a tabela do SliceMap no ITEM-8).
+- **`WMsg::ZeroExport` DEFERIDO para o ITEM-8** (desvio do SPEC, registrado): é produzido pelo
+  broker_srv e consumido pelo worker com SliceView — adicioná-lo agora exigiria um stub no worker
+  single-mode que mente (diz "zerado" sem zerar). Vai junto no ITEM-8, onde produtor+consumidor
+  existem. WMsg segue {Opened, Job, Closed}.
+- **TESTE TUDO: `cargo test --workspace` 0 falhas.** Os testes do H1 (`LiveCount` término
+  determinístico, `chan_cap` backpressure, `slow_writer_does_not_deadlock`, `job_reply_roundtrip`)
+  **preservados** com os genéricos + `Job.export=0`. wsl2d-lib 24, demais intactos. clippy lib+bin
+  limpo, meus crates fmt ok. Zero regressão no pipeline multi-conn.
+- **Progresso P1: ITEM-1..7 FEITOS** (gate + protocol/model + slices/arbiter + handshake + SliceView/
+  RamBackend + conn genérico). Falta **ITEM-8** (broker_srv.rs + run_nbd rework + WMsg::ZeroExport +
+  --slices/--slice-mb/--listen-nbd/--arbiter-listen + SliceView por Job + rename `ramsharedd` +
+  scripts/docs) — o capstone de integração, GRANDE, multi-passo, sessão focada. Depois 9 (agent) →
+  10 (e2e) → 11 (drill) → 12 (runbook). Nada commitado (working tree; tudo compila/testa verde).
+
+---
+
+## 2026-06-13 — Memory Broker P1: ITEM-8 sub-peça 1 (validação de flags do broker) FEITA
+
+- **ITEM-8 é o capstone (multi-arquivo, ~300+ linhas de concorrência)** — fatiado. **Sub-peça 1
+  (a parte pura/testável + crítica de segurança):** `main.rs` ganhou as flags `--slices`,
+  `--slice-mb`, `--listen-nbd`, `--arbiter-listen` (parsing manual) + 2 funções puras:
+  - `parse_private_listen(&str) -> Result<SocketAddr,String>`: aceita `tcp://IP:PORT`, **recusa
+    unspecified (0.0.0.0/::) ANTES de qualquer bind()** — RNF-2 / abort trigger #5.
+  - `validate_slice_flags(slices, slice_mb, is_ublk)`: ublk+slices → Err (DT-3); slices>0 sem
+    slice-mb → Err.
+- **Gate WIP honesto:** se `--slices>0` ou `--arbiter-listen`/`--listen-nbd` forem dados, retorna
+  erro claro "modo broker ainda não conectado ao runtime (ITEM-8 em progresso)" — sem stub que
+  finge funcionar. O caminho single-mode (sem essas flags) segue **inalterado**.
+- **5 testes novos** no binário (`mod tests` em main.rs, allow unwrap): loopback/LAN ok,
+  0.0.0.0/`[::]`/`tcp://0.0.0.0` recusados, garbage/sem-porta recusados, ublk+slices recusado,
+  slice-mb obrigatório. clippy lib+bin limpo, `cargo test --workspace` 0 falhas, fmt ok.
+- **Falta do ITEM-8 (próximos recortes focados, precisam de mais contexto):** (1) `broker_srv.rs`
+  — o core single-thread (CoreEvent loop, writer-thread por sessão/DT-24, forwarder de demote,
+  heartbeat Ack, lease, reconciliação) — só validável de verdade com o e2e (ITEM-10), então fazer
+  os dois juntos; (2) `WMsg::ZeroExport` em conn.rs + handling no worker do run_nbd (com SliceView
+  por Job + geometria); (3) rework do run_nbd (spawn_broker, demote routing, BackendKind::Ram no
+  NBD); (4) rename binário→`ramsharedd` ([[bin]] + log + qemu-ublk-daemon.sh + IMPL.md); (5)
+  README/ARCHITECTURE/DEGRADATION-MATRIX.
+- **Estado:** ITEM-1..7 + ITEM-8(parcial: flags) feitos/validados; broker lib completa; data-plane
+  do daemon completo; CLI do broker validada. Nada commitado. Branch feat/fase-b-prep.
+
+---
+
+## 2026-06-13 — Memory Broker P1: ITEM-8 — BrokerCore (núcleo puro do broker) FEITO + testado
+
+- **Decisão de design (disciplina #13):** separei o broker em **core PURO** (`BrokerCore`,
+  testável sem threads/sockets/GPU, igual ao árbitro) + futura fina camada de IO (`spawn_broker`).
+  Assim valido a LÓGICA de decisão com testes determinísticos — não só "compila".
+- **`crates/ramshared-wsl2d/src/broker_srv.rs` (novo)** + dep `ramshared-broker` no wsl2d.
+  `BrokerCore::handle(CoreEvent, now) -> Vec<Outbound>`:
+  - `CoreEvent` = {Msg(sid,Msg), Disconnected(sid), ZeroDone(slice,ok), Demote(reason), Tick};
+    `Outbound` = {ToSession(sid,Msg), CloseSession(sid), ZeroSlice{slice,base,len}, Log}.
+  - Sessões: Register (id estável por nome/DT-22, duplicado→Error+Close, proto≠→Close); Psi→**Ack**
+    (DT-18) + reconciliação no 1º Psi (DT-9/21, `dev_to_slice` pega inteiro final, agnóstico ao
+    prefixo); Status→StatusReply; Disconnected→present=false (DT-20, slices congeladas).
+  - Rebalanço: `Tick` chama `arbiter.tick` (só presentes + slices visíveis/DT-20) → AssignFree→
+    SwapOn (round-robin), MoveSlice/RevertMove→drain+SwapOff+pending_dest. **Higiene DT-17:**
+    SwapOffDone{ok}→ZeroSlice; ZeroDone{ok}→release→Free→(se pending_dest) assign+SwapOn ao destino.
+  - Demote→DemoteAll a todos presentes. Endpoint por transporte (DT-25). `BTreeMap` p/ round-robin
+    determinístico.
+  - **Lease (RF-B3) DEFERIDO** p/ próximo recorte: `LeaseRequest`→`LeaseDenied` honesto.
+- **11 testes puros** (register/dup/proto/psi-ack/round-robin-assign/swapoff→zero→release/
+  move→swapon-no-destino/disconnect-congela/demote-broadcast/status/dev-parse). 1 refactor clippy
+  (let-chains). clippy lib+bin limpo, **workspace 0 falhas**, wsl2d-lib 35 (24+11), fmt ok.
+- **Falta do ITEM-8 (próximos recortes):** (1) camada IO `spawn_broker` (acceptor TCP + reader/
+  writer por sessão + loop chamando BrokerCore + forwarder de demote + shutdown) — validável pelo
+  e2e ITEM-10; (2) lease no BrokerCore; (3) `WMsg::ZeroExport` em conn.rs + worker do run_nbd
+  executando o zero via SliceView + run_nbd com slices/spawn_broker/demote-routing; (4) rename
+  `ramsharedd`; (5) scripts/docs. Depois ITEM-9 (agent), 10 (e2e), 11 (drill), 12 (runbook).
+- **Estado:** broker lib + **núcleo de decisão do daemon** completos e testados; falta a fiação de
+  IO/runtime + lease + agent + drill + runbook. Nada commitado. Branch feat/fase-b-prep.
+
+---
+
+## 2026-06-13 — Memory Broker P1: ITEM-8 — lease (RF-B3) no BrokerCore; decisão completa
+
+- **Lease revogável (RF-B3/DT-19) no `BrokerCore`** (puro, testável): `LeaseRequest` → pending
+  (negado se já há lease em andamento → `lease_em_andamento`, ou bytes > capacidade →
+  `acima_da_capacidade`); `on_tick` passa `pending_lease` ao árbitro → `RevokeForLease` (drena+
+  SwapOff; no ZeroDone vira Free **sem** pending_dest, e o árbitro o conta p/ o lease — R2) e
+  `GrantLease` (Free→`lease()`→Leased + `LeaseGranted` ao holder); `LeaseRelease` → unlease todas
+  (Free, round-robin re-arrenda); holder/requester desconecta → release automático (DT-19). O id
+  do lease vem do árbitro (removi um campo `next_lease_id` que ficaria morto no core).
+- **+6 testes de lease:** concede de Free; negado em-andamento; negado capacidade; release devolve;
+  **revoga Active→zero→grant** (R2, o fluxo completo); release no disconnect do holder.
+- **`BrokerCore` agora cobre TODA a decisão do broker (RF-B1/B2/B3/B4)** — **17 testes** puros
+  determinísticos. clippy lib+bin limpo, `cargo test --workspace` 0 falhas, wsl2d-lib 41, fmt ok.
+- **Decisão de disciplina:** fiz o lease (puro, 100% validável) em vez da camada de IO
+  (`spawn_broker`, threading) porque no fim de um contexto enorme o certo é a peça determinística;
+  a fiação de IO/threads merece contexto fresco.
+- **Falta do ITEM-8:** (1) camada IO `spawn_broker` (acceptor TCP + reader/writer por sessão +
+  loop chamando BrokerCore + forwarder demote/zero-done + shutdown) — validável pelo e2e (ITEM-10);
+  (2) `WMsg::ZeroExport{base,len,done}` em conn.rs + worker do run_nbd zerando a janela via
+  write_at (DT-17, sem stub) + run_nbd com slices/spawn_broker/demote-routing; (3) rename
+  `ramsharedd`; (4) scripts/docs. Depois ITEM-9 (agent), 10 (e2e), 11 (drill), 12 (runbook).
+- **Estado:** decisão do broker 100% feita+testada; resta fiação IO/runtime + agent + drill +
+  runbook. Nada commitado. Branch feat/fase-b-prep.
+
+---
+
+## 2026-06-14 — Memory Broker P1: ITEM-8 spawn_broker (IO) + ITEM-10 (e2e) FEITOS
+
+- **Camada de IO `spawn_broker`** (em broker_srv.rs): a casca de threads que roda o `BrokerCore`
+  puro. `BrokerConfig{listen, endpoints, swap_prio, arbiter, tick}` + `spawn_broker(cfg, slice_map,
+  demote_rx, jobs, shutdown: Arc<AtomicBool>) -> (JoinHandle, SocketAddr)` (devolve o addr ligado,
+  útil c/ porta 0 em teste). Threads: acceptor TCP (nonblocking+poll, para no shutdown), reader/
+  writer por sessão (writer = canal bounded 64/DT-24; ao fechar o canal, dá `shutdown(Both)` no
+  socket → reader vê EOF), forwarder de DEMOTE→CoreEvent, e o core-loop (`recv_timeout(tick)`=Tick;
+  dispatch: ToSession via try_send/derruba sessão se cheio, CloseSession, ZeroSlice→WMsg::ZeroExport
+  no canal jobs + forwarder de zero-done→CoreEvent::ZeroDone, Log→eprintln). io_tx do core mantém o
+  canal vivo → core só sai no shutdown.
+- **`WMsg::ZeroExport{base,len,done}`** em conn.rs + **worker do run_nbd** (main.rs) zera a janela
+  via novo `zero_window` (write_at em chunks de 1 MiB) — higiene DT-17 **real, sem stub** (vale
+  single e broker mode; em single nunca é enviado).
+- **ITEM-10 e2e** (`tests/broker_e2e.rs`): broker real + agentes falsos por TCP loopback + worker
+  drenador; **3 testes verdes** (register→Ack/DT-18; tick→AssignFree→SwapOn pelo socket — fiação IO
+  completa; registro duplicado→Error+CloseSession). In-process (threads+loopback), seguro no WSL2;
+  rodado com `timeout` (0.04s). Gotcha do teste: agente NbdTcp exige `nbd_tcp` configurado no
+  EndpointCfg (DT-25 — o broker corretamente recusa SwapOn sem endpoint do transporte).
+- **Validação:** clippy lib+bin limpo, `cargo test --workspace` 0 falhas (23 bins de teste), fmt ok.
+- **Falta do ITEM-8:** só (1) rework do `run_nbd` no main.rs — `--slices` constrói SliceMap +
+  `spawn_broker` + `spawn_acceptor_tcp` + SliceView por Job + roteamento de DEMOTE pro broker
+  (hoje há o gate WIP); (2) rename `ramsharedd`; (3) scripts/docs. Depois ITEM-9 (agent), 11
+  (drill qemu), 12 (runbook). O **broker (core+IO) está completo e validado**; resta plugá-lo no
+  daemon + o agente + os gates de ambiente. Nada commitado. Branch feat/fase-b-prep.
+- **P0-RESULTS.md** atualizado: §2 rede completa + decisão; civm PSI/pagesize; §1 WSL2 idle r1;
+  §5 delta_psi. **Gate segue FECHADO** (faltam: PSI sob carga WSL2+civm, NBD/TCP cross-host,
+  render do Alex). **Não iniciar ITEM-3+ (código P1) até o gate abrir.**
+- **PSI sob carga:** precisa de pressão de MEMÓRIA (cgroup-confined hog, técnica da Fase B), não
+  `cargo build` (que é CPU); fazer com cuidado p/ não congelar WSL2 [[feedback-wsl2-cargo-build-caution]].
