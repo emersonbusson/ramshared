@@ -20,11 +20,22 @@
   `run()` (provider por valor; mem/canário/closure emprestam shared; afinidade de thread preservada).
   **`VramProvider` agora é consumido genericamente** → broker + NBD single são Vulkan-ready. Validado:
   clippy --all-targets, test --workspace 28 ok, drill qemu PASS, **smoke VRAM server-only no GPU real**.
-- **Falta (Fase B, secundário/deferido):** o caminho **ublk-vram** (`ublk_server::spawn_server_dt3_vram*`)
-  ainda cria o contexto CUDA na **própria thread do worker** → genericizá-lo exige `VramProvider::open()`
-  (que cai na auto-referência Cuda+Context) **ou** o restruct Arc do DT-V1, OU replicar o padrão
-  "cuda+ctx locais na thread". É caminho gated (não roda no WSL2) e secundário ao broker — fica como
-  próximo increment. **Backend Vulkan (RF-G2)**: subsistema novo, PRD próprio.
+- **ublk-vram FEITO** (2026-06-15): o loop do worker de `spawn_server_dt3_vram_with_residency` foi
+  extraído na fn genérica `serve_ublk_residency<M: VramMemory, F: Fn()->Option<u64>>` (`ublk_server.rs`).
+  A spawn mantém o **shell CUDA na thread** (`Cuda::load`+`create_context`+`alloc`) e chama o loop
+  genérico passando `|| ctx.mem_info()` como `mem_free`. **Não precisou de `open()`/Arc:** o padrão
+  "shell concreto + serve genérico" (igual ao `run_broker`) resolve a auto-referência — o loop é
+  monomorfizado com `M = DeviceMem<'c,'a>` e o `ctx` thread-afim vive no chamador. `spawn_server_dt3_vram`
+  (sem residência) já era genérico via `worker_loop<B>`. Um provider Vulkan futuro vira um sibling-spawn
+  que cria o contexto Vulkan e chama o **mesmo** `serve_ublk_residency`.
+  - **Validação (composição):** clippy `--all-targets`, `cargo test --workspace` (wsl2d lib 45 ok),
+    **drill qemu ublk-RAM PASS** (ring/teardown), **smoke VRAM GPU** (`vram_backend_serves_nbd_write_then_read`
+    + `gpu_roundtrip_256mib`). **Teste novo não-gated** `residency_tests` (backend `FakeVram` em RAM) roda
+    `serve_ublk_residency` de verdade aqui (serve+§9.4+DEMOTE+teardown) **sem GPU/ublk/root** — seguro no WSL2.
+  - **Gap deferido (ambiente):** o e2e ublk+VRAM combinado (`#[ignore]` `dt3_vram_residency_triggers_demote_synthetic`)
+    só roda em host **não-WSL2** com root+CUDA+ublk — a GPU está presa no WSL2 (GPU-PV, sem passthrough p/ VM)
+    e o WSL2 proíbe ublk (freeze 2026-06-09); qemu não tem GPU. A lógica do loop, porém, já tem teste executável aqui.
+- **Backend Vulkan (RF-G2)**: subsistema novo, PRD próprio.
 
 ## 1. Objetivo e escopo
 Extrair um trait `VramProvider` (+ `VramMemory`) que abstraia o **plano de controle** de VRAM hoje

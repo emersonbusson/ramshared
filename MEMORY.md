@@ -1648,3 +1648,32 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   replicar "cuda+ctx locais na thread". Gated/secundário ao broker. **Vulkan (RF-G2) = PRD próprio.**
 - Branch `feat/p1-hardening`: F1 + SPEC + F4 (crate + cuda impl + consumidores genéricos + daemon
   genérico). Tudo verde, sem PR (regra do usuário).
+
+---
+
+## 2026-06-15 — Frente 4: ublk-vram genericizado (RF-G1 fecha no que é validável)
+
+- **`serve_ublk_residency<M: VramMemory, F: Fn()->Option<u64>>` extraído** do loop de
+  `spawn_server_dt3_vram_with_residency` (`ublk_server.rs`). A spawn vira **shell CUDA na thread**
+  (`Cuda::load`+`create_context`+`alloc`) e chama o loop genérico com `|| ctx.mem_info()` como
+  `mem_free`. **Não precisou de `open()`/Arc** (corrige a hipótese das sessões anteriores): o padrão
+  "shell concreto + serve genérico" (igual ao `run_broker`) basta — o loop monomorfiza com
+  `M = DeviceMem<'c,'a>` e o `ctx` thread-afim vive no chamador (borrows shared compatíveis).
+  `spawn_server_dt3_vram` (sem residência) já era genérico via `worker_loop<B>`.
+- **Por que parts-validated, não e2e:** o e2e ublk+VRAM (`#[ignore]` `dt3_vram_residency_triggers_demote_synthetic`)
+  precisa de host **não-WSL2** com root+CUDA+ublk. A GPU está **presa no WSL2** (GPU-PV, sem passthrough
+  p/ VM aninhada) e o WSL2 **proíbe ublk** (freeze 2026-06-09); qemu tem ublk mas **não tem GPU**.
+  Então não há onde rodar ublk+VRAM junto aqui — fica deferido p/ RF-G2/Vulkan (host com GPU).
+- **Teste novo NÃO-gated** `residency_tests` (`FakeVram(Vec<u8>)` impl `VramMemory`): dirige
+  `serve_ublk_residency` pelos canais (IoWork campos `pub`, sem o ring) e **roda o loop de verdade**
+  (serve+§9.4+DEMOTE+teardown) sem GPU/ublk/root — seguro no WSL2. 2 casos: DEMOTE por `free<floor`
+  (≥64 reads, `mem_free=||Some(0)`) e saudável (0 demotes). `swapoff` em dev inexistente falha sem efeito
+  (non-root) → contador já incrementou. Tira o ublk-vram de "compile-only" p/ "loop rodado com fake".
+- **Validado:** clippy `--workspace --all-targets -D warnings` limpo; `cargo test --workspace` (wsl2d
+  lib 43→45 ok, 0 falhas); **drill qemu ublk-RAM PASS** (insmod/device/serve/teardown limpo); **smokes
+  VRAM GPU PASS** (`vram_backend_serves_nbd_write_then_read` + `gpu_roundtrip_256mib` na RTX 2060).
+  SPEC `docs/vram-provider/SPEC.md` Estado da IMPL atualizado.
+- **RF-G1 (VramProvider) completo no que é validável**: traits + impl CUDA + `VramBackend`/`CanaryProbe`/
+  `residency_check` genéricos + daemon (run_nbd/run_broker) genérico + ublk-vram genérico. Vulkan (RF-G2)
+  = PRD próprio (destrava o e2e ublk+VRAM). Branch `feat/p1-hardening`, tudo verde, **sem PR** (regra do
+  usuário: só no fim de tudo implementado+validado e quando ele pedir).

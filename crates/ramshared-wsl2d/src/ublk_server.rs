@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use ramshared_block::{BlockBackend, Command, Request};
 use ramshared_cuda::Cuda;
+use ramshared_vram::VramMemory;
 
 use crate::backend::RamBackend;
 use crate::swap::spawn_swapoff;
@@ -456,6 +457,106 @@ impl ServerHandleDt3VramResidency {
     }
 }
 
+/// Loop do worker DT-3 VRAM **com residência**, genérico sobre o backend de VRAM
+/// (`M: VramMemory`): serve cada request medindo a latência serve-only (canário §9),
+/// sonda conteúdo/free em cadência (§9.4) e, no veredito DEMOTE, dispara `swapoff`
+/// numa thread separada (Disciplina 3). O free-floor entra por `mem_free` — decoplado
+/// do backend: CUDA passa `|| ctx.mem_info()`, um provider Vulkan futuro passa o seu.
+/// No teardown (DT-17) espera (bounded) o swapoff em voo e zera VRAM + canário.
+///
+/// Roda **inteiramente na thread chamadora** (afinidade do contexto): `backend`,
+/// `probe` e o closure `mem_free` emprestam o contexto thread-afim, que vive no
+/// chamador até esta função retornar.
+#[allow(clippy::too_many_arguments)] // 8 args coesos (worker DT-3); idem run_broker
+fn serve_ublk_residency<M: VramMemory, F: Fn() -> Option<u64>>(
+    mut backend: VramBackend<M>,
+    mut probe: CanaryProbe<M>,
+    mem_free: F,
+    work_rx: Receiver<ublk::IoWork>,
+    reply_tx: Sender<WorkerReply>,
+    swap_dev: &str,
+    residency: ResidencyConfig,
+    demotes: Arc<AtomicU32>,
+) -> io::Result<()> {
+    // Estado da residência (espelha o worker NBD do main.rs).
+    let mut canary: Option<Canary> = None;
+    let mut baseline: Vec<u64> = Vec::new();
+    let mut sampler = ResidencySampler::new(residency);
+    let mut cadence = Cadence::new(CANARY_EVERY);
+    let mut demoted = false;
+    let mut demote_rx: Option<Receiver<bool>> = None;
+
+    while let Ok(mut work) = work_rx.recv() {
+        let touches_vram = matches!(work.req.cmd, Command::Read | Command::Write);
+
+        // serve-only (DT-16): cronometra só a op de VRAM, não a espera na fila.
+        let t0 = Instant::now();
+        let result = serve_request(&work.req, &mut backend, &mut work.payload);
+        let lat_us = u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let is_read = work.req.cmd == Command::Read;
+        let reply = WorkerReply {
+            qid: work.qid,
+            tag: work.tag,
+            result,
+            buf: work.payload,
+            is_read,
+        };
+        if reply_tx.send(reply).is_err() {
+            break; // ring owner caiu
+        }
+
+        // Poll não-bloqueante do swapoff de DEMOTE em curso (re-arma se falhar).
+        if let Some(rx) = demote_rx.take() {
+            match rx.try_recv() {
+                Ok(true) => demoted = true,
+                Ok(false) => {} // falhou: canário re-arma (demote_rx fica None)
+                Err(std::sync::mpsc::TryRecvError::Empty) => demote_rx = Some(rx),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            }
+        }
+
+        // Canário §9 (latência serve-only) — gatilho primário.
+        if touches_vram && !demoted && demote_rx.is_none() {
+            match canary.as_mut() {
+                None => {
+                    baseline.push(lat_us);
+                    if baseline.len() >= 16 {
+                        baseline.sort_unstable();
+                        let med = baseline[baseline.len() / 2].max(1);
+                        canary = Some(Canary::new(residency, med));
+                    }
+                }
+                Some(c) => {
+                    // free=u64::MAX de propósito: o sinal aqui é a latência; free/
+                    // conteúdo vêm da sonda §9.4 abaixo.
+                    if let Verdict::Demote(_) = c.sample(lat_us, true, u64::MAX) {
+                        demotes.fetch_add(1, Ordering::Relaxed);
+                        demote_rx = Some(spawn_swapoff(swap_dev));
+                    }
+                }
+            }
+        }
+
+        // Sonda dedicada §9.4 (conteúdo/free em cadência) com histerese.
+        if touches_vram && !demoted && demote_rx.is_none() && cadence.tick() {
+            let content = probe.check_content().ok();
+            let free = mem_free();
+            if let Verdict::Demote(_) = sampler.sample(content, free) {
+                demotes.fetch_add(1, Ordering::Relaxed);
+                demote_rx = Some(spawn_swapoff(swap_dev));
+            }
+        }
+    }
+
+    // Teardown DT-17: espera (bounded) o swapoff em voo, zera VRAM + canário.
+    if let Some(rx) = demote_rx.take() {
+        let _ = rx.recv_timeout(Duration::from_secs(5));
+    }
+    let _ = backend.zero();
+    let _ = probe.zero();
+    Ok(())
+}
+
 /// Como [`spawn_server_dt3_vram`], mas o worker (dono do contexto CUDA) **também roda
 /// a máquina de residência** (Opção 1 do PRD `ublk-daemon-integration`): mede a
 /// latência serve-only (canário §9), sonda conteúdo/free em cadência (§9.4) e, no
@@ -486,88 +587,23 @@ pub fn spawn_server_dt3_vram_with_residency(
         let ctx = cuda.create_context(&device).map_err(cuda_to_io)?;
         let mut mem = ctx.alloc(vram_bytes).map_err(cuda_to_io)?;
         mem.zero().map_err(cuda_to_io)?;
-        let mut backend = VramBackend::new(mem, block_size);
+        let backend = VramBackend::new(mem, block_size);
         // Região-canário dedicada (§9.4): separada da swap, não endereçável por I/O.
         let canary_region = ctx.alloc(CANARY_BYTES).map_err(cuda_to_io)?;
-        let mut probe = CanaryProbe::new(canary_region);
-
-        // Estado da residência (espelha o worker NBD do main.rs).
-        let mut canary: Option<Canary> = None;
-        let mut baseline: Vec<u64> = Vec::new();
-        let mut sampler = ResidencySampler::new(residency);
-        let mut cadence = Cadence::new(CANARY_EVERY);
-        let mut demoted = false;
-        let mut demote_rx: Option<Receiver<bool>> = None;
-
-        while let Ok(mut work) = work_rx.recv() {
-            let touches_vram = matches!(work.req.cmd, Command::Read | Command::Write);
-
-            // serve-only (DT-16): cronometra só a op de VRAM, não a espera na fila.
-            let t0 = Instant::now();
-            let result = serve_request(&work.req, &mut backend, &mut work.payload);
-            let lat_us = u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX);
-            let is_read = work.req.cmd == Command::Read;
-            let reply = WorkerReply {
-                qid: work.qid,
-                tag: work.tag,
-                result,
-                buf: work.payload,
-                is_read,
-            };
-            if reply_tx.send(reply).is_err() {
-                break; // ring owner caiu
-            }
-
-            // Poll não-bloqueante do swapoff de DEMOTE em curso (re-arma se falhar).
-            if let Some(rx) = demote_rx.take() {
-                match rx.try_recv() {
-                    Ok(true) => demoted = true,
-                    Ok(false) => {} // falhou: canário re-arma (demote_rx fica None)
-                    Err(std::sync::mpsc::TryRecvError::Empty) => demote_rx = Some(rx),
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
-                }
-            }
-
-            // Canário §9 (latência serve-only) — gatilho primário.
-            if touches_vram && !demoted && demote_rx.is_none() {
-                match canary.as_mut() {
-                    None => {
-                        baseline.push(lat_us);
-                        if baseline.len() >= 16 {
-                            baseline.sort_unstable();
-                            let med = baseline[baseline.len() / 2].max(1);
-                            canary = Some(Canary::new(residency, med));
-                        }
-                    }
-                    Some(c) => {
-                        // free=u64::MAX de propósito: o sinal aqui é a latência; free/
-                        // conteúdo vêm da sonda §9.4 abaixo.
-                        if let Verdict::Demote(_) = c.sample(lat_us, true, u64::MAX) {
-                            demotes_worker.fetch_add(1, Ordering::Relaxed);
-                            demote_rx = Some(spawn_swapoff(&swap_dev));
-                        }
-                    }
-                }
-            }
-
-            // Sonda dedicada §9.4 (conteúdo/free em cadência) com histerese.
-            if touches_vram && !demoted && demote_rx.is_none() && cadence.tick() {
-                let content = probe.check_content().ok();
-                let free = ctx.mem_info().ok().map(|(f, _)| f as u64);
-                if let Verdict::Demote(_) = sampler.sample(content, free) {
-                    demotes_worker.fetch_add(1, Ordering::Relaxed);
-                    demote_rx = Some(spawn_swapoff(&swap_dev));
-                }
-            }
-        }
-
-        // Teardown DT-17: espera (bounded) o swapoff em voo, zera VRAM + canário.
-        if let Some(rx) = demote_rx.take() {
-            let _ = rx.recv_timeout(Duration::from_secs(5));
-        }
-        let _ = backend.zero();
-        let _ = probe.zero();
-        Ok(())
+        let probe = CanaryProbe::new(canary_region);
+        // O free-floor vem do contexto CUDA (`mem_info`); o loop de residência é
+        // genérico sobre o backend de VRAM (RF-G1) — um provider Vulkan futuro reusa
+        // `serve_ublk_residency` com o seu próprio `mem_free`.
+        serve_ublk_residency(
+            backend,
+            probe,
+            || ctx.mem_info().ok().map(|(f, _)| f as u64),
+            work_rx,
+            reply_tx,
+            &swap_dev,
+            residency,
+            demotes_worker,
+        )
     });
 
     let ring = thread::spawn(move || {
@@ -580,4 +616,141 @@ pub fn spawn_server_dt3_vram_with_residency(
         worker,
         demotes,
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod residency_tests {
+    use super::*;
+    use ramshared_vram::VramError;
+
+    /// Backend de VRAM **fake** em RAM (`Vec<u8>`): exercita o loop genérico
+    /// [`serve_ublk_residency`] (serve + §9.4 + teardown) **sem GPU/ublk/root** — seguro
+    /// no WSL2. O e2e com CUDA+ublk real é o `#[ignore]` `dt3_vram_residency_*` (gated).
+    struct FakeVram(Vec<u8>);
+
+    impl FakeVram {
+        fn new(len: usize) -> Self {
+            Self(vec![0u8; len])
+        }
+    }
+
+    impl VramMemory for FakeVram {
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+
+        fn zero(&mut self) -> Result<(), VramError> {
+            self.0.iter_mut().for_each(|b| *b = 0);
+            Ok(())
+        }
+
+        fn read_at(&self, off: u64, dst: &mut [u8]) -> Result<(), VramError> {
+            let off = off as usize;
+            let end = off
+                .checked_add(dst.len())
+                .filter(|&e| e <= self.0.len())
+                .ok_or(VramError::OutOfRange {
+                    off: off as u64,
+                    len: dst.len() as u64,
+                    size: self.0.len() as u64,
+                })?;
+            dst.copy_from_slice(&self.0[off..end]);
+            Ok(())
+        }
+
+        fn write_at(&mut self, off: u64, src: &[u8]) -> Result<(), VramError> {
+            let off = off as usize;
+            let end = off
+                .checked_add(src.len())
+                .filter(|&e| e <= self.0.len())
+                .ok_or(VramError::OutOfRange {
+                    off: off as u64,
+                    len: src.len() as u64,
+                    size: self.0.len() as u64,
+                })?;
+            self.0[off..end].copy_from_slice(src);
+            Ok(())
+        }
+    }
+
+    const BS: u32 = 4096;
+
+    fn read_work(tag: u16) -> ublk::IoWork {
+        ublk::IoWork {
+            qid: 0,
+            tag,
+            buffer_addr: 0,
+            req: Request {
+                flags: 0,
+                cmd: Command::Read,
+                handle: tag as u64,
+                offset: 0,
+                len: BS,
+            },
+            payload: vec![0u8; BS as usize],
+        }
+    }
+
+    /// Dirige `n` Reads pelo loop genérico com o `mem_free` dado e devolve o nº de
+    /// DEMOTEs. `_reply_rx` fica vivo até o join (senão `reply_tx.send` falha e o loop
+    /// quebra cedo); `work_tx` é dropado para encerrar o loop. Sem swap real: o
+    /// `swap_dev` inexistente faz o `swapoff` falhar sem efeito colateral.
+    fn run_loop(cfg: ResidencyConfig, mem_free: fn() -> Option<u64>, n: u16) -> u32 {
+        let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(4);
+        let (reply_tx, _reply_rx) = mpsc::channel::<WorkerReply>();
+        let demotes = Arc::new(AtomicU32::new(0));
+        let backend = VramBackend::new(FakeVram::new((BS as usize) * 8), BS);
+        let probe = CanaryProbe::new(FakeVram::new(CANARY_BYTES));
+        let demotes_t = Arc::clone(&demotes);
+
+        let worker = thread::spawn(move || {
+            serve_ublk_residency(
+                backend,
+                probe,
+                mem_free,
+                work_rx,
+                reply_tx,
+                "/dev/ramshared-no-such-swap",
+                cfg,
+                demotes_t,
+            )
+        });
+
+        for tag in 0..n {
+            work_tx.send(read_work(tag)).expect("enfileira work");
+        }
+        drop(work_tx); // encerra o loop
+        worker.join().expect("worker join").expect("serve ok");
+        demotes.load(Ordering::Relaxed)
+    }
+
+    #[test]
+    fn demote_fires_when_free_below_floor() {
+        // latency_mult alto -> o canário §9 nunca dispara (serve fake é ~0us); o DEMOTE
+        // vem da sonda §9.4 (free=0 < free_floor). consecutive=1 -> 1 amostra degradada.
+        let cfg = ResidencyConfig {
+            latency_mult: 4096,
+            consecutive: 1,
+            free_floor_bytes: 1 << 30, // 1 GiB; free=0 fica abaixo
+        };
+        // >=64 reads para a cadência §9.4 (CANARY_EVERY) disparar ao menos uma vez.
+        let demotes = run_loop(cfg, || Some(0), 80);
+        assert!(
+            demotes >= 1,
+            "esperava >=1 DEMOTE por free<floor, obteve {demotes}"
+        );
+    }
+
+    #[test]
+    fn no_demote_when_healthy() {
+        // free abundante + serve rápido -> nenhum gatilho (§9 nem §9.4).
+        let cfg = ResidencyConfig {
+            latency_mult: 4096,
+            consecutive: 1,
+            free_floor_bytes: 0,
+        };
+        let demotes = run_loop(cfg, || Some(u64::MAX), 80);
+        assert_eq!(demotes, 0, "não deveria haver DEMOTE com VRAM saudável");
+    }
 }
