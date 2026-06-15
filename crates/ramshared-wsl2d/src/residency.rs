@@ -3,9 +3,11 @@
 //! §9.3. A amostragem CUDA real e o `swapoff` do tier vivem no laço do daemon —
 //! aqui fica só a lógica (testável sem GPU/root), como o `ramshared-tier`.
 
-/// Parâmetros dos gatilhos (§9.3). Defaults calibrados pela Fase 0: o spike medido
-/// foi ~330× o baseline, então `8×` por `3` amostras tem folga enorme e evita
-/// falso-positivo por jitter.
+/// Parâmetros dos gatilhos (§9.3). Calibração (DT-31): a eviction WDDM spike ~330× o baseline
+/// (Fase 0), MAS a latência de serve sob CARGA pesada chega a ~17× (medido no e2e cross-host
+/// civm). `8×` dava falso-positivo e derrubava o swap sob a própria carga que deveria suportar.
+/// `64×` tem folga dos dois lados (>>17× de carga, <<330× de eviction); a **sonda de conteúdo
+/// §9.4** é o detector AUTORITATIVO de eviction (a latência é só um hint rápido e grosseiro).
 #[derive(Clone, Copy, Debug)]
 pub struct ResidencyConfig {
     /// (a) latência > `latency_mult` × baseline.
@@ -19,7 +21,7 @@ pub struct ResidencyConfig {
 impl Default for ResidencyConfig {
     fn default() -> Self {
         Self {
-            latency_mult: 8,
+            latency_mult: 64, // DT-31: 8× falso-positivava sob carga (~17×); 64× < eviction (330×)
             consecutive: 3,
             // DT-3: piso de "GPU criticamente cheia". Conservador e tunável; com a
             // histerese do `ResidencySampler` (DT-9) o risco de falso-positivo cai.
@@ -138,7 +140,7 @@ mod tests {
     use super::*;
 
     fn canary() -> Canary {
-        Canary::new(ResidencyConfig::default(), 4000) // baseline 4 ms → limiar 32 ms
+        Canary::new(ResidencyConfig::default(), 4000) // baseline 4 ms → limiar 256 ms (64×, DT-31)
     }
 
     #[test]
@@ -156,11 +158,21 @@ mod tests {
     #[test]
     fn good_sample_resets_streak() {
         let mut c = canary();
-        c.sample(100_000, true, u64::MAX); // over (1)
-        c.sample(100_000, true, u64::MAX); // over (2)
+        c.sample(500_000, true, u64::MAX); // over o limiar de 256 ms (1)
+        c.sample(500_000, true, u64::MAX); // over (2)
         assert_eq!(c.sample(3000, true, u64::MAX), Verdict::Ok); // boa → reseta
         assert_eq!(c.over_count(), 0);
-        assert_eq!(c.sample(100_000, true, u64::MAX), Verdict::Ok); // recomeça do 1
+        assert_eq!(c.sample(500_000, true, u64::MAX), Verdict::Ok); // recomeça do 1
+    }
+
+    #[test]
+    fn load_spike_below_threshold_stays_ok() {
+        // Regressão DT-31: spike de CARGA ~17× o baseline (não eviction) NÃO pode demover.
+        // Com 8× isto disparava e derrubava o swap sob carga (bug do e2e civm); com 64×, fica Ok.
+        let mut c = canary(); // baseline 4 ms → limiar 256 ms
+        for _ in 0..10 {
+            assert_eq!(c.sample(4000 * 17, true, u64::MAX), Verdict::Ok); // 68 ms = 17× < 256 ms
+        }
     }
 
     #[test]
