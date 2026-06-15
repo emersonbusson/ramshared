@@ -99,7 +99,8 @@ previu. O harness é não-destrutivo (mesmo padrão do `qemu-validate.sh`).
    **independente do backend** (RAM exercita o mesmo ciclo ublk + sinal). Compila + clippy OK; não
    rodado no WSL2 (gated). `--transport ublk --backend ram --size 8`.
 2. **Rootfs qemu** com: kernel WSL2 (`CONFIG_BLK_DEV_UBLK=m`), `ublk_drv.ko`, o binário
-   `ramshared-wsl2d`, busybox, e um `/init` que: `insmod ublk_drv` → sobe o daemon
+   `ramsharedd` (antigo `ramshared-wsl2d`; renomeado em DT-5), busybox, e um `/init` que:
+   `insmod ublk_drv` → sobe o daemon
    `--transport ublk --backend ram --size 8` → espera `/dev/ublkbN` → `dd` write+read → `kill -TERM`
    → confere exit 0 + device removido. (Estende o `qemu-validate.sh`, hoje só boot-de-kernel.)
 3. Rodar com `RAMSHARED_ALLOW_UBLK_ON_WSL2=1` (o kernel WSL2 ainda reporta "microsoft" no osrelease).

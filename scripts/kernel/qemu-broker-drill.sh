@@ -18,7 +18,7 @@
 set -euo pipefail
 
 BZ="${1:-/home/emdev/WSL2-Linux-Kernel/arch/x86/boot/bzImage}"
-DAEMON="${2:-$(dirname "$0")/../../target/debug/ramshared-wsl2d}"
+DAEMON="${2:-$(dirname "$0")/../../target/debug/ramsharedd}"
 AGENT="${3:-$(dirname "$0")/../../target/debug/ramshared-agent}"
 NBD_KO="${4:-/home/emdev/WSL2-Linux-Kernel/drivers/block/nbd.ko}"
 
@@ -37,7 +37,7 @@ command -v nbd-client >/dev/null || { echo "nbd-client ausente (instale nbd-clie
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 IRD="$WORK/irfs"; mkdir -p "$IRD/bin" "$IRD/modules"
 cp /bin/busybox "$IRD/bin/busybox"
-cp "$DAEMON" "$IRD/ramshared-wsl2d"
+cp "$DAEMON" "$IRD/ramsharedd"
 cp "$AGENT" "$IRD/ramshared-agent"
 cp "$(command -v nbd-client)" "$IRD/bin/nbd-client"
 cp "$NBD_KO" "$IRD/modules/nbd.ko"
@@ -75,7 +75,7 @@ else
 fi
 
 # daemon em modo broker RAM (sem GPU): N slices, socket Unix + árbitro TCP.
-/ramshared-wsl2d --transport nbd --backend ram \\
+/ramsharedd --transport nbd --backend ram \\
   --slices $SLICES --slice-mb $SLICE_MB --sock $SOCK --arbiter-listen $ARBITER \\
   >/tmp/daemon.log 2>&1 &
 DPID=\$!

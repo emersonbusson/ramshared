@@ -131,7 +131,7 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
         let idx = match server_handshake(&mut reader, &mut hs_writer, &exports, tx_flags) {
             Ok(i) => i,
             Err(e) => {
-                eprintln!("[wsl2d] conn: handshake falhou: {e}");
+                eprintln!("[ramsharedd] conn: handshake falhou: {e}");
                 let _ = jobs.send(WMsg::Closed);
                 return;
             }
@@ -147,14 +147,14 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
             let req = match parse_request(&hdr) {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("[wsl2d] conn: request malformado: {e}; desconectando");
+                    eprintln!("[ramsharedd] conn: request malformado: {e}; desconectando");
                     break;
                 }
             };
             // Anti-DoS: um WRITE nunca pode exceder o export negociado (evita alocar gigabytes).
             if req.cmd == Command::Write && req.len as u64 > export_size {
                 eprintln!(
-                    "[wsl2d] conn: WRITE len {} excede o export; desconectando",
+                    "[ramsharedd] conn: WRITE len {} excede o export; desconectando",
                     req.len
                 );
                 break;
@@ -227,14 +227,14 @@ pub fn spawn_acceptor(
             let stream = match listener.accept() {
                 Ok((s, _)) => s,
                 Err(e) => {
-                    eprintln!("[wsl2d] accept falhou: {e}");
+                    eprintln!("[ramsharedd] accept falhou: {e}");
                     break;
                 }
             };
             let (wstream, hs_writer) = match (stream.try_clone(), stream.try_clone()) {
                 (Ok(w), Ok(h)) => (w, h),
                 _ => {
-                    eprintln!("[wsl2d] try_clone (unix) falhou; pulando conexão");
+                    eprintln!("[ramsharedd] try_clone (unix) falhou; pulando conexão");
                     continue;
                 }
             };
@@ -258,7 +258,7 @@ pub fn spawn_acceptor_tcp(
             let stream = match listener.accept() {
                 Ok((s, _)) => s,
                 Err(e) => {
-                    eprintln!("[wsl2d] accept tcp falhou: {e}");
+                    eprintln!("[ramsharedd] accept tcp falhou: {e}");
                     break;
                 }
             };
@@ -266,7 +266,7 @@ pub fn spawn_acceptor_tcp(
             let (wstream, hs_writer) = match (stream.try_clone(), stream.try_clone()) {
                 (Ok(w), Ok(h)) => (w, h),
                 _ => {
-                    eprintln!("[wsl2d] try_clone (tcp) falhou; pulando conexão");
+                    eprintln!("[ramsharedd] try_clone (tcp) falhou; pulando conexão");
                     continue;
                 }
             };

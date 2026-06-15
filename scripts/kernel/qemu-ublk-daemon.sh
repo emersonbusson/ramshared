@@ -14,7 +14,7 @@
 set -euo pipefail
 
 BZ="${1:-/home/emdev/WSL2-Linux-Kernel/arch/x86/boot/bzImage}"
-DAEMON="${2:-$(dirname "$0")/../../target/debug/ramshared-wsl2d}"
+DAEMON="${2:-$(dirname "$0")/../../target/debug/ramsharedd}"
 UBLK_KO="${3:-/home/emdev/WSL2-Linux-Kernel/drivers/block/ublk_drv.ko}"
 
 for f in "$BZ" "$DAEMON" "$UBLK_KO"; do
@@ -26,7 +26,7 @@ command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 ausente" 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 IRD="$WORK/irfs"; mkdir -p "$IRD/bin" "$IRD/modules"
 cp /bin/busybox "$IRD/bin/busybox"
-cp "$DAEMON" "$IRD/ramshared-wsl2d"
+cp "$DAEMON" "$IRD/ramsharedd"
 cp "$UBLK_KO" "$IRD/modules/ublk_drv.ko"
 
 # Copia as libs dinamicas do daemon preservando os caminhos absolutos (o binario e
@@ -55,7 +55,7 @@ fi
 [ -e /dev/ublk-control ] && echo "KTEST-UBLK-CONTROL=present" || echo "KTEST-UBLK-CONTROL=absent"
 
 # 2) sobe o daemon (backend RAM, override da trava de WSL2, --force p/ mlockall best-effort)
-RAMSHARED_ALLOW_UBLK_ON_WSL2=1 /ramshared-wsl2d --transport ublk --backend ram \
+RAMSHARED_ALLOW_UBLK_ON_WSL2=1 /ramsharedd --transport ublk --backend ram \
   --size 8 --queue-depth 1 --force >/tmp/daemon.log 2>&1 &
 DPID=$!
 echo "KTEST-DAEMON-PID=$DPID"

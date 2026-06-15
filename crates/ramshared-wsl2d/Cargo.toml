@@ -10,7 +10,7 @@ name = "ramshared_wsl2d"
 path = "src/lib.rs"
 
 [[bin]]
-name = "ramshared-wsl2d"
+name = "ramsharedd"
 path = "src/main.rs"
 
 [dependencies]
