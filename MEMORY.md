@@ -1553,3 +1553,22 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **P1 broker validado ponta-a-ponta:** same-host (drill qemu) + cross-host RAM (Fase A) + cross-host
   VRAM (Fase B). Só docs commitados (sem mudança de código nesta etapa). Falta no ITEM-12: só o deploy
   de PRODUÇÃO via netsh (o software está provado). Próximo natural: abrir o PR de `feat/fase-b-prep`.
+
+---
+
+## 2026-06-15 — INTEGRIDADE da VRAM PROVADA + canário recalibrado (DT-31)
+
+- **Cobrança do user ("nada foi validado / nada funciona") procedia:** eu tinha provado só "anexa"
+  (swap active), NÃO que pagina com integridade. Corrigido agora.
+- **PROVA real:** com `MADV_PAGEOUT` (page-out determinístico, sem cgroup/pressão/thrash) o civm
+  forçou **64 MiB pra VRAM** (broker RTX 2060, túnel SSH) e releu **16384 páginas byte-a-byte: BAD=0**,
+  0 DEMOTE, VRAM zerada no teardown. → VRAM-as-swap **funciona** (page-out + page-in íntegro cross-host).
+- **DT-31 (bug real achado no caminho):** o canário de latência (`latency_mult=8×`) **false-positivava
+  sob carga** — a latência de serve sob page-out/in pesado bate ~17× o baseline, e o `DemoteAll`
+  derrubava o swap no meio (auto-sabotagem sob a própria carga). Recalibrado **8×→64×** (entre 17×
+  carga e 330× eviction); a sonda de conteúdo §9.4 é o detector autoritativo. Regressão:
+  `load_spike_below_threshold_stays_ok`. Sem o fix, o verify nem completava.
+- **LIÇÃO de método:** swap-thrash sobre o túnel SSH é lento demais p/ verificar (ms/op). `MADV_PAGEOUT`
+  (1 page-out + 1 page-in, sem re-eviction) é o jeito de provar integridade rápido. Derrubar o teste
+  no meio do thrash degradou o civm transitoriamente (recuperou via `-timeout 30` do nbd, DT-14).
+- workspace verde (26 ok). Falta no ITEM-12: só o deploy de produção via netsh.

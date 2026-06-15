@@ -66,6 +66,12 @@ em N exports NBD (Unix + TCP) e o árbitro decidindo quem usa cada slice por pre
   (`DEMOTE-count=0` → integridade VRAM OK), e o teardown zerou a VRAM ("VRAM zerada"). Teardown limpo
   (verificação independente: 0 swaps, 0 agentes, VRAM liberada). Disciplina 13: o e2e pegou **DT-30**
   (tick starvation — o árbitro nunca emitia SwapOn sob Psi normal; o drill qemu mascarava por timing).
+- **Integridade da VRAM PROVADA (não só "anexa"):** com `MADV_PAGEOUT` (page-out determinístico, sem
+  thrash/pressão), o civm forçou **64 MiB pra VRAM** e releu **16384 páginas byte-a-byte: 0 ruins**,
+  0 DEMOTE, VRAM zerada no teardown. Disciplina 13: a 1ª tentativa pegou **DT-31** — o canário de
+  latência (8×) **false-positivava sob carga** (serve a ~17×) e o `DemoteAll` derrubava o swap no
+  meio; recalibrado p/ 64× (entre 17× de carga e 330× de eviction). Antes disso o verify nem
+  completava (thrash sobre o túnel SSH é lento; `MADV_PAGEOUT` resolveu — 1 page-out + 1 page-in).
 
 ## Pendências
 
