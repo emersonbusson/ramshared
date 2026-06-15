@@ -59,17 +59,20 @@ em N exports NBD (Unix + TCP) e o árbitro decidindo quem usa cada slice por pre
   → swap ativo via NBD servido pelo broker), `KTEST-SWAPOFF=ok`, `KTEST-DAEMON-TERMINATED=ok`.
   Disciplina 13: o drill pegou 2 bugs reais antes do PASS (loopback DOWN no initramfs → ENETUNREACH;
   contagem `grep -c || echo` duplicada).
-- **ITEM-12 Fase A (RAM, cross-host) = PASS** (rodado aqui): broker RAM no WSL2 servindo swap ao
-  civm (`gha-ubuntu-2404`) via **túnel reverso SSH** (substitui o `netsh` na automação; o runbook usa
-  `netsh` no deploy). O civm ativou `/dev/nbd0`+`nbd1` (broker: `swapon ok s0+s1`), teardown limpo
-  (verificação independente: 0 swaps, 0 agentes). Disciplina 13: o e2e pegou **DT-30** (tick
-  starvation — o árbitro nunca emitia SwapOn sob Psi normal; o drill qemu mascarava por timing).
+- **ITEM-12 Fase A (RAM) + Fase B (VRAM) cross-host = PASS** (rodado aqui): broker no WSL2 servindo
+  swap ao civm (`gha-ubuntu-2404`) via **túnel reverso SSH** (substitui o `netsh` na automação; o
+  runbook usa `netsh` no deploy). civm ativou `/dev/nbd0`+`nbd1` (broker: `swapon ok s0+s1`). **Fase
+  B**: backend VRAM na RTX 2060 — o canário §9/§9.4 armou (baseline 125µs) e ficou quieto
+  (`DEMOTE-count=0` → integridade VRAM OK), e o teardown zerou a VRAM ("VRAM zerada"). Teardown limpo
+  (verificação independente: 0 swaps, 0 agentes, VRAM liberada). Disciplina 13: o e2e pegou **DT-30**
+  (tick starvation — o árbitro nunca emitia SwapOn sob Psi normal; o drill qemu mascarava por timing).
 
 ## Pendências
 
-- **ITEM-12 Fase B (VRAM cross-host) + deploy produção (`netsh`):** Fase A (RAM) já valida o caminho
-  de controle/dados cross-host; falta a VRAM real ponta-a-ponta e o port-forward de produção
-  ([`CIVM-TENANT.md`](CIVM-TENANT.md)). Anexar números (RTT, p50 de page-out) ao P0-RESULTS.
+- **ITEM-12 deploy de produção (`netsh`):** o caminho de software está validado ponta-a-ponta
+  (Fase A RAM + Fase B VRAM, cross-host). Falta só o port-forward de produção no host
+  ([`CIVM-TENANT.md`](CIVM-TENANT.md)) e anexar números (RTT, p50 de page-out sob pressão real) ao
+  P0-RESULTS.
 - **P0 §4 (render):** input do tester (Alex); vira input do P2.
 - **DT-30 (tick por deadline):** ✅ fix + regressão (`e2e_psi_flood_does_not_starve_arbiter_tick`).
 - **DT-5 rename `ramsharedd`:** ✅ feito (commit `chore(core)`): bin name + prefixos de log + 2
