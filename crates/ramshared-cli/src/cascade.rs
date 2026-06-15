@@ -98,9 +98,9 @@ fn lower_tier_present() -> bool {
 fn default_daemon() -> String {
     std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|d| d.join("ramshared-wsl2d")))
+        .and_then(|p| p.parent().map(|d| d.join("ramsharedd")))
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "ramshared-wsl2d".to_string())
+        .unwrap_or_else(|| "ramsharedd".to_string())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -350,7 +350,7 @@ pub fn down() -> Result<(), CascadeError> {
     // VRAM (senao sobra dado residual na GPU). pkill so' como ultimo recurso.
     let mut exited = false;
     for _ in 0..50 {
-        if sh("pgrep", &["-x", "ramshared-wsl2d"]).is_err() {
+        if sh("pgrep", &["-x", "ramsharedd"]).is_err() {
             exited = true;
             break;
         }
@@ -358,7 +358,7 @@ pub fn down() -> Result<(), CascadeError> {
     }
     if !exited {
         eprintln!("[down] daemon nao saiu em 5s; pkill (VRAM pode nao ter sido zerada)");
-        let _ = sh("pkill", &["-x", "ramshared-wsl2d"]);
+        let _ = sh("pkill", &["-x", "ramsharedd"]);
     }
     let _ = fs::remove_file(SOCK);
     let _ = fs::remove_file(ZRAM_DEV_FILE);
@@ -378,7 +378,7 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<UpArgs, CascadeError> {
         let args = args.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
-        parse_up_args_from(&args, "ramshared-wsl2d".to_string())
+        parse_up_args_from(&args, "ramsharedd".to_string())
     }
 
     #[test]

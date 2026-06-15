@@ -949,7 +949,7 @@ fn daemon_ublk_serves_and_terminates_on_signal() {
     // Sobe o daemon em modo ublk como subprocesso (herda root do teste). Quem abriu o
     // gate deste smoke aceitou o risco, entao passa o override da trava de WSL2 do
     // daemon (senao `run_ublk` recusaria via guard_not_wsl2 e o device nao surgiria).
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_ramshared-wsl2d"))
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_ramsharedd"))
         .args(["--transport", "ublk", "--size", "8", "--queue-depth", "1"])
         .env("RAMSHARED_ALLOW_UBLK_ON_WSL2", "1")
         .spawn()

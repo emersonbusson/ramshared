@@ -1,6 +1,6 @@
 //! Wrappers seguros sobre a crate `io-uring` para a Fase B.
 //!
-//! O daemon `ramshared-wsl2d` fica com `#![forbid(unsafe_code)]`. Operações reais de
+//! O daemon `ramsharedd` (crate `ramshared-wsl2d`) fica com `#![forbid(unsafe_code)]`. Operações reais de
 //! SQE que exigirem `unsafe` entram neste crate, com invariantes documentadas no
 //! menor escopo possível.
 
