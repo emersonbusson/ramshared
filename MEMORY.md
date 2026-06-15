@@ -1494,3 +1494,23 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   wsl2d lib+bin); fmt. Drill PASS é a evidência de runtime do P1 Linux↔Linux.
 - **Estado:** P1 broker **Linux↔Linux completo e runtime-validado** (drill). Resta: ITEM-12 ao vivo
   no civm (operador), DT-5 rename `ramsharedd` (mecânico, deferido), P0 §4 render (tester).
+
+---
+
+## 2026-06-15 — rename `ramsharedd` (DT-5) + DT-29 (fronteira servidor-only) + lição de validação
+
+- **DT-5 rename** feito (`3650008` + `f3a6dff`): binário `ramshared-wsl2d` → `ramsharedd`
+  (pacote/lib/dir seguem `ramshared-wsl2d`). Superfície viva: `[[bin]] name`, prefixos `[wsl2d]`→
+  `[ramsharedd]` (main.rs/conn.rs), 2 scripts qemu, doc F12, **CLI `cascade.rs`** (gerencia o daemon
+  por nome: path + `pgrep`/`pkill -x` + default) e **`CARGO_BIN_EXE_ramsharedd`** no teste de
+  integração. Drill re-rodado = PASS.
+- **DT-29** (`651360b`): fronteira de **segurança servidor-only**. O freeze de 2026-06-09 foi
+  WSL2-**consumidor** (swapon em device morto → D-state). No e2e civm o WSL2 é **só broker/servidor**
+  (`run_broker` nunca faz swapon) → o vetor de D-state cai no **civm** (VM isolada), não no host;
+  exposição do WSL2 = userspace (matável). Invariante: **nada de agente local no WSL2** nessa
+  topologia (isso é qemu-only). Registrado em SPECv2 + `CIVM-TENANT.md`. Corrige ênfase exagerada.
+- **LIÇÃO (validação):** `cargo clippy -p X` (lib+bin) e o drill **NÃO** compilam os testes de
+  integração nem exercitam o CLI. O rename passou nesses checks mas quebrou `cargo test --workspace`
+  (CARGO_BIN_EXE) e o `ramshared up/down` (cascade.rs spawnava binário inexistente). **Só o
+  `cargo test --workspace` pegou.** Para mudança que toca nome de binário/processo: rodar o workspace
+  inteiro + grep em `*.rs` (não só scripts/docs). [[feedback-batch-local-single-pr]]
