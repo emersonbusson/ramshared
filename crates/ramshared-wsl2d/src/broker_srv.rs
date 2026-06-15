@@ -696,13 +696,21 @@ fn core_loop(
     shutdown: &AtomicBool,
 ) {
     let mut sessions: HashMap<usize, SyncSender<Msg>> = HashMap::new();
+    // Deadline de wall-clock do próximo Tick. CRÍTICO: o Tick do árbitro NÃO pode ser starvado
+    // pelas mensagens. `recv_timeout(tick)` puro nunca expira sob o fluxo normal de `Psi`
+    // (~1/s por tenant) → o árbitro nunca rodaria `AssignFree`/rebalanço. Aqui o wait encolhe
+    // conforme as mensagens chegam, e o Tick dispara quando o deadline passa, qualquer que seja
+    // a taxa de mensagens. (Bug pego no e2e cross-host civm; o drill qemu passava por sorte de
+    // timing.)
+    let mut next_tick = Instant::now() + tick;
     loop {
         if shutdown.load(Ordering::SeqCst) {
             let outs = core.handle(CoreEvent::Demote("shutdown".into()), Instant::now());
             dispatch(outs, &mut sessions, jobs, io_tx);
             break;
         }
-        match io_rx.recv_timeout(tick) {
+        let wait = next_tick.saturating_duration_since(Instant::now());
+        match io_rx.recv_timeout(wait) {
             Ok(IoEvent::NewSession(sid, wtx)) => {
                 sessions.insert(sid, wtx);
             }
@@ -710,11 +718,13 @@ fn core_loop(
                 let outs = core.handle(ev, Instant::now());
                 dispatch(outs, &mut sessions, jobs, io_tx);
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                let outs = core.handle(CoreEvent::Tick, Instant::now());
-                dispatch(outs, &mut sessions, jobs, io_tx);
-            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        if Instant::now() >= next_tick {
+            let outs = core.handle(CoreEvent::Tick, Instant::now());
+            dispatch(outs, &mut sessions, jobs, io_tx);
+            next_tick = Instant::now() + tick;
         }
     }
 }

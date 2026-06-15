@@ -168,3 +168,40 @@ fn e2e_duplicate_register_closes_second() {
         "registro duplicado deve receber Error e a sessão fecha (CloseSession)"
     );
 }
+
+#[test]
+fn e2e_psi_flood_does_not_starve_arbiter_tick() {
+    // Regressão (bug pego no e2e cross-host civm): sob `Psi` em taxa alta (>> tick), o Tick do
+    // árbitro NÃO pode ser starvado — senão `AssignFree` nunca roda e o tenant nunca recebe
+    // `SwapOn`. O `core_loop` dispara o Tick por deadline de wall-clock, não só no timeout do
+    // recv. Aqui o agente floda `Psi` a cada ~5ms (tick=50ms) e ainda assim deve receber SwapOn.
+    let h = setup(1, 50);
+    let (mut s, mut r) = connect(h.addr);
+    register(&mut s, "flood");
+    let stop = Arc::new(AtomicBool::new(false));
+    let mut writer = s.try_clone().unwrap();
+    let stop_w = Arc::clone(&stop);
+    let flood = std::thread::spawn(move || {
+        while !stop_w.load(Ordering::SeqCst) {
+            if write_msg(
+                &mut writer,
+                &Msg::Psi {
+                    sample: Default::default(),
+                    swaps: vec![],
+                },
+            )
+            .is_err()
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    });
+    let got = read_until(&mut r, |m| matches!(m, Msg::SwapOn { .. }));
+    stop.store(true, Ordering::SeqCst);
+    let _ = flood.join();
+    assert!(
+        matches!(got, Some(Msg::SwapOn { slice: 0, .. })),
+        "árbitro deve assinar s0 mesmo sob flood de Psi (Tick não pode ser starvado)"
+    );
+}
