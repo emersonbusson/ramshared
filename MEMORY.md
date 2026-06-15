@@ -1590,3 +1590,25 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   DTs únicos.
 - **Lição de harness:** o `/tmp/ramshared-agent` do civm some entre rodadas (limpeza de /tmp da VM de
   CI); o script de teste deve **re-copiar o binário** (auto-contido) — senão dá falso "swap não ativou".
+
+---
+
+## 2026-06-15 — Frentes pós-P1 (plano 1→4 aprovado): F1 feito, F4 SPEC; branch `feat/p1-hardening`
+
+- **Frente 1 (hardening) FEITA + validada** (branch `feat/p1-hardening`):
+  - `7787fc2` feat: backoff exponencial de reconexão no agente (era fixo 2s → 2→4→…→60s, reseta
+    pós-sessão produtiva; `next_backoff` puro + teste `backoff_doubles_up_to_cap`).
+  - `79f9ce6` fix: retry R4 do zero de slice presa em Draining (try_send cheio → sem ZeroDone →
+    presa). `pending_zero` + retry no tick (carência 1 + ERROR após 5); só re-zera slices já
+    swapped-off (não corrompe). Teste `stuck_draining_zero_is_retried_on_tick`.
+  - Validado: workspace 26 ok, clippy --all-targets, fmt, drill qemu PASS.
+- **Frente 2 (PRD P2): ACHADO — PRD já existe.** O `docs/memory-broker/PRD.md` unificado já cobre a
+  P2 (RF-W1..W3, RF-P1/P3, Anexo B com perguntas do Alex). Escrever PRD novo = duplicar (SSDV3 reuso).
+  O que falta é o **SPEC** da P2, mas ele é design-heavy + **gated no input do Alex** (cenas .blend)
+  → adiado. Usuário escolheu **pular pra Frente 4**.
+- **Frente 4 (VramProvider): SPEC FEITO** (`c3ae8d5`, `docs/vram-provider/SPEC.md`). Design resolve a
+  cadeia de lifetimes `Cuda→Context<'a>→DeviceMem<'c,'a>` (auto-ref): **Arc no Context (DT-V1) + Mem
+  como GAT (DT-V2)**. **IMPL DIFERIDA p/ sessão fresca** (refactor invasivo multi-arquivo; performance.md
+  proíbe refactor grande fundo no contexto). Mapa de acoplamento no SPEC §5.
+- **Pendente:** abrir PR de `feat/p1-hardening` (F1 + SPEC); F4 IMPL (sessão fresca); F2 SPEC + F3
+  deploy gated no Alex/ops. Vulkan (RF-G2) = subsistema novo, PRD próprio.
