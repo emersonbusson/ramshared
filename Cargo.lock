@@ -125,6 +125,7 @@ dependencies = [
  "ramshared-integrity",
  "ramshared-tier",
  "ramshared-uring",
+ "ramshared-vram",
 ]
 
 [[package]]

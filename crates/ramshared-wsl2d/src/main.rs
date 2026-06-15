@@ -21,6 +21,7 @@ use ramshared_block::{BlockBackend, Command, serve};
 use ramshared_broker::arbiter::ArbiterConfig;
 use ramshared_broker::slices::SliceMap;
 use ramshared_cuda::Cuda;
+use ramshared_vram::VramMemory;
 use ramshared_wsl2d::broker_srv::{BrokerConfig, EndpointCfg, spawn_broker};
 use ramshared_wsl2d::swap::spawn_swapoff;
 use ramshared_wsl2d::{
@@ -156,13 +157,13 @@ fn zero_window<B: BlockBackend>(
 /// de latência (§9, baseline→Canary; serve-only, DT-16) e roda a sonda §9.4 (conteúdo/free em
 /// cadência, com histerese via streak). Devolve `Some(reason)` se algum sinal pede DEMOTE; o
 /// chamador decide a AÇÃO (swapoff local no single, `DemoteAll` via broker no multi-slice).
-fn residency_check<F: Fn() -> Option<u64>>(
+fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
     lat_us: u64,
     canary: &mut Option<Canary>,
     baseline: &mut Vec<u64>,
     sampler: &mut ResidencySampler,
     cadence: &mut Cadence,
-    probe: &mut CanaryProbe,
+    probe: &mut CanaryProbe<M>,
     mem_free: F,
 ) -> Option<DemoteReason> {
     // §9: canário de latência por-request. content_ok=true/free=u64::MAX DE PROPÓSITO — o sinal

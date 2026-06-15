@@ -7,8 +7,8 @@
 //! A `Cadence` é testável sem GPU; o round-trip real de [`CanaryProbe`] exige
 //! VRAM (coberto por teste `--ignored` na composição do daemon).
 
-use ramshared_cuda::{CudaError, DeviceMem};
 use ramshared_integrity::{Pattern, fill_block, verify_block};
+use ramshared_vram::{VramError, VramMemory};
 
 /// Tamanho do round-trip da sonda: 1 página (alinhado ao `BLOCK_SIZE`). DT-1.
 pub const CANARY_BYTES: usize = 4096;
@@ -38,18 +38,18 @@ impl Cadence {
     }
 }
 
-/// Sonda da região-canário. Empresta o [`DeviceMem`] da região dedicada
+/// Sonda da região-canário. Possui a região de VRAM (`M: VramMemory`) dedicada
 /// (separada da swap, **não endereçável** por NBD). Reusa as sentinelas
 /// reprodutíveis do `ramshared-integrity` (DT-4).
-pub struct CanaryProbe<'c, 'a> {
-    region: DeviceMem<'c, 'a>,
+pub struct CanaryProbe<M> {
+    region: M,
     wbuf: Vec<u8>,
     rbuf: Vec<u8>,
     seq: u64,
 }
 
-impl<'c, 'a> CanaryProbe<'c, 'a> {
-    pub fn new(region: DeviceMem<'c, 'a>) -> Self {
+impl<M: VramMemory> CanaryProbe<M> {
+    pub fn new(region: M) -> Self {
         Self {
             region,
             wbuf: vec![0u8; CANARY_BYTES],
@@ -60,10 +60,10 @@ impl<'c, 'a> CanaryProbe<'c, 'a> {
 
     /// Um ciclo de conteúdo: `fill(seq)` → `write_at(0)` → `read_at(0)` →
     /// `verify(seq)`. O `seq` por ciclo também pega leitura stale. Retorna
-    /// `content_ok`; erro de CUDA é propagado (tratado como amostra degradada
+    /// `content_ok`; erro de VRAM é propagado (tratado como amostra degradada
     /// pelo sampler, DT-11). A latência da sonda **não** é exportada (a detecção
     /// por latência segue por-request no daemon).
-    pub fn check_content(&mut self) -> Result<bool, CudaError> {
+    pub fn check_content(&mut self) -> Result<bool, VramError> {
         self.seq += 1;
         fill_block(&mut self.wbuf, self.seq, Pattern::Random);
         self.region.write_at(0, &self.wbuf)?;
@@ -73,7 +73,7 @@ impl<'c, 'a> CanaryProbe<'c, 'a> {
 
     /// Zera a região-canário (teardown §11, DT-12). A região fica encapsulada
     /// aqui, então o daemon delega o zero por este método.
-    pub fn zero(&mut self) -> Result<(), CudaError> {
+    pub fn zero(&mut self) -> Result<(), VramError> {
         self.region.zero()
     }
 }
