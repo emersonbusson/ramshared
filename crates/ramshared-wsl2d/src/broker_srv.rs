@@ -781,8 +781,10 @@ mod tests {
     use ramshared_broker::model::SliceState;
 
     fn core(k: u16) -> BrokerCore {
-        let mut cfg = ArbiterConfig::default();
-        cfg.streak = 1; // move já no 1º tick acima do delta (testes)
+        let cfg = ArbiterConfig {
+            streak: 1, // move já no 1º tick acima do delta (testes)
+            ..ArbiterConfig::default()
+        };
         BrokerCore::new(
             SliceMap::new(k, 64 * 1024 * 1024),
             cfg,

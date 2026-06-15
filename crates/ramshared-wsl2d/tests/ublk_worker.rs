@@ -1,6 +1,7 @@
 //! Teste do worker DT-3 (`spawn_ublk_worker`) — valida a metade "worker" da
 //! arquitetura (canais `IoWork`/`WorkerReply` + serviço contra um `BlockBackend`)
 //! sem device ublk e sem GPU.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // teste: unwrap/expect é idiomático
 
 use ramshared_block::{BlockBackend, Command, Request};
 use ramshared_wsl2d::{RamBackend, ublk, ublk_server};
