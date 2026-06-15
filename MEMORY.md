@@ -1572,3 +1572,21 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   (1 page-out + 1 page-in, sem re-eviction) é o jeito de provar integridade rápido. Derrubar o teste
   no meio do thrash degradou o civm transitoriamente (recuperou via `-timeout 30` do nbd, DT-14).
 - workspace verde (26 ok). Falta no ITEM-12: só o deploy de produção via netsh.
+
+---
+
+## 2026-06-15 — Auditoria dos commits do P1 + fix de consistência (pré-merge)
+
+- **Achado #1 (MÉDIA, corrigido):** o broker usava `tick=1s` (`main.rs`), mas o SPEC especifica
+  **2s** em 5 lugares (DT-24, tabela de config, comentários) e o `ArbiterConfig` comenta "5 ticks →
+  10s". Eu introduzi 1s no `run_broker` sem DT (viola "zero criatividade no IMPL"). Fix: `tick=2s`
+  (alinha código↔SPEC; streak=5 → janela de 10s). Re-validado: drill qemu PASS + e2e VRAM cross-host
+  PASS (0/16384 páginas ruins) com 2s.
+- **Achado #2 (BAIXA, histórico):** o commit `f134dfa` afirma "validado ponta-a-ponta / integridade
+  da VRAM ok", mas ali a integridade era inferida de `0 DEMOTE` — a prova byte-a-byte só veio em
+  `bbf76ec`. Docs atuais já corrigem; mensagem do commit fica no histórico (não reescrever c/ force-push).
+- **#3 (resolvido):** rename levou 2 commits (`3650008` deixou refs vivas → `f3a6dff`); CI verde agora.
+- **Limpo:** 0 WIP/stub, 0 `[wsl2d]`, `latency_mult=64` e `delta_psi=10` consistentes código↔docs,
+  DTs únicos.
+- **Lição de harness:** o `/tmp/ramshared-agent` do civm some entre rodadas (limpeza de /tmp da VM de
+  CI); o script de teste deve **re-copiar o binário** (auto-contido) — senão dá falso "swap não ativou".

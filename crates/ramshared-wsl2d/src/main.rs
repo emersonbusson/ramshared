@@ -620,7 +620,7 @@ fn broker_setup(
         },
         swap_prio: None,
         arbiter: ArbiterConfig::default(),
-        tick: Duration::from_secs(1),
+        tick: Duration::from_secs(2), // SPEC §/DT-24: tick=2s (streak=5 → janela de 10s)
     };
     let (broker, broker_addr) = spawn_broker(
         bcfg,
