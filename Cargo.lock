@@ -91,6 +91,9 @@ dependencies = [
 [[package]]
 name = "ramshared-cuda"
 version = "0.1.0"
+dependencies = [
+ "ramshared-vram",
+]
 
 [[package]]
 name = "ramshared-integrity"

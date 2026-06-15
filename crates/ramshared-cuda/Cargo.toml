@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+ramshared-vram = { path = "../ramshared-vram" }
+
 [lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"

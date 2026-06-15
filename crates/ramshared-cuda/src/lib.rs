@@ -22,6 +22,7 @@
 
 mod driver;
 mod ffi;
+mod vram_impl; // impl VramProvider/VramMemory p/ os tipos CUDA (RF-G1)
 
 pub use driver::{Context, Cuda, CudaError, Device, DeviceMem};
 
