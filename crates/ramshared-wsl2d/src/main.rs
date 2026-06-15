@@ -21,7 +21,7 @@ use ramshared_block::{BlockBackend, Command, serve};
 use ramshared_broker::arbiter::ArbiterConfig;
 use ramshared_broker::slices::SliceMap;
 use ramshared_cuda::Cuda;
-use ramshared_vram::VramMemory;
+use ramshared_vram::{VramMemory, VramProvider};
 use ramshared_wsl2d::broker_srv::{BrokerConfig, EndpointCfg, spawn_broker};
 use ramshared_wsl2d::swap::spawn_swapoff;
 use ramshared_wsl2d::{
@@ -340,15 +340,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .checked_mul(1024 * 1024)
             .ok_or("--slice-mb: overflow (MiB grande demais)")?;
         return match backend {
-            BackendKind::Vram => run_broker(
-                slice_bytes,
-                slices,
-                sock,
-                force,
-                listen_nbd_addr,
-                advertise_tcp,
-                arbiter_addr,
-            ),
+            BackendKind::Vram => {
+                // Shell CUDA: cria o provider (Context impl VramProvider) e entra no caminho
+                // genérico. Um backend Vulkan futuro teria seu próprio shell aqui.
+                let cuda = Cuda::load()?;
+                let dev = cuda.device(0)?;
+                eprintln!("[ramsharedd] GPU: {}", dev.name());
+                let ctx = cuda.create_context(&dev)?;
+                run_broker(
+                    ctx,
+                    slice_bytes,
+                    slices,
+                    sock,
+                    force,
+                    listen_nbd_addr,
+                    advertise_tcp,
+                    arbiter_addr,
+                )
+            }
             BackendKind::Ram => run_broker_ram(
                 slice_bytes,
                 slices,
@@ -365,30 +374,35 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     match transport {
-        Transport::Nbd => run_nbd(size, sock, force, nbd_dev),
+        Transport::Nbd => {
+            // Shell CUDA: cria o provider e entra no caminho genérico (Vulkan teria o seu).
+            let cuda = Cuda::load()?;
+            let dev = cuda.device(0)?;
+            eprintln!("[ramsharedd] GPU: {}", dev.name());
+            let ctx = cuda.create_context(&dev)?;
+            run_nbd(ctx, size, sock, force, nbd_dev)
+        }
         Transport::Ublk => run_ublk(size, force, queue_depth, backend),
     }
 }
 
-/// Caminho NBD (fixed-newstyle em socket Unix). Worker CUDA unico na thread atual.
-fn run_nbd(
+/// Caminho NBD (fixed-newstyle em socket Unix). Worker único na thread atual, genérico sobre o
+/// provider de VRAM (RF-G1): o `provider` (CUDA hoje) já vem pronto do shell em `run()`.
+fn run_nbd<P: VramProvider>(
+    provider: P,
     size: u64,
     sock: String,
     force: bool,
     nbd_dev: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // --- CUDA: aloca e zera a VRAM ---
-    let cuda = Cuda::load()?;
-    let dev = cuda.device(0)?;
-    eprintln!("[ramsharedd] GPU: {}", dev.name());
-    let ctx = cuda.create_context(&dev)?;
-    let (free, total) = ctx.mem_info()?;
+    // --- aloca e zera a VRAM (via VramProvider) ---
+    let (free, total) = provider.mem_info()?;
     eprintln!(
         "[ramsharedd] VRAM livre={} MiB total={} MiB",
         free >> 20,
         total >> 20
     );
-    let mut mem = ctx.alloc(size as usize)?;
+    let mut mem = provider.alloc(size as usize)?;
     mem.zero()?;
 
     // Disciplina 3: trava memoria + protege do OOM killer ANTES de servir swap.
@@ -403,7 +417,7 @@ fn run_nbd(
     // --- canário dedicado de residência (§9.4): região separada da swap, NÃO
     // endereçável por NBD (o device anunciado segue = região de swap). Alimenta a
     // sonda de conteúdo/free em cadência (SPECv3 DT-1/DT-9). ---
-    let canary_region = ctx.alloc(CANARY_BYTES)?;
+    let canary_region = provider.alloc(CANARY_BYTES)?;
     let mut probe = CanaryProbe::new(canary_region);
     let mut cadence = Cadence::new(CANARY_EVERY);
     let mut sampler = ResidencySampler::new(ResidencyConfig::default());
@@ -503,7 +517,7 @@ fn run_nbd(
                 &mut sampler,
                 &mut cadence,
                 &mut probe,
-                || ctx.mem_info().ok().map(|(f, _)| f as u64),
+                || provider.mem_info().ok().map(|(f, _)| f),
             )
         {
             eprintln!("[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}");
@@ -713,7 +727,9 @@ fn serve_broker_jobs<B: BlockBackend>(
 /// (opcional) TCP, com o árbitro decidindo quem usa cada slice. O worker único é dono da
 /// VRAM/contexto CUDA e roda a residência §9/§9.4. Execução ao vivo é o gate qemu (`--backend
 /// ram`, ITEM-11) / civm (ITEM-12) — VRAM real não roda em qemu (sem GPU).
-fn run_broker(
+#[allow(clippy::too_many_arguments)] // entry-point do daemon: config de geometria + rede + provider
+fn run_broker<P: VramProvider>(
+    provider: P,
     slice_bytes: u64,
     slices: u16,
     sock: String,
@@ -726,17 +742,15 @@ fn run_broker(
         .checked_mul(slice_bytes)
         .ok_or("--slices * --slice-mb: overflow")?;
 
-    let cuda = Cuda::load()?;
-    let dev = cuda.device(0)?;
-    eprintln!("[ramsharedd] GPU: {}", dev.name());
-    let ctx = cuda.create_context(&dev)?;
-    let (free, total_vram) = ctx.mem_info()?;
+    // O `provider` (CUDA hoje; Vulkan amanhã) já vem pronto do shell em `run()`. Daqui pra baixo o
+    // caminho é genérico sobre `VramProvider`/`VramMemory` (RF-G1).
+    let (free, total_vram) = provider.mem_info()?;
     eprintln!(
         "[ramsharedd] VRAM livre={} MiB total={} MiB",
         free >> 20,
         total_vram >> 20
     );
-    let mut mem = ctx.alloc(total as usize)?;
+    let mut mem = provider.alloc(total as usize)?;
     mem.zero()?;
     lock_memory(force)?; // Disciplina 3: trava memória ANTES de servir swap
     let backend = VramBackend::new(mem, BLOCK_SIZE);
@@ -747,7 +761,7 @@ fn run_broker(
     );
 
     // Canário de residência (§9.4): região separada, não endereçável por NBD.
-    let canary_region = ctx.alloc(CANARY_BYTES)?;
+    let canary_region = provider.alloc(CANARY_BYTES)?;
     let mut probe = CanaryProbe::new(canary_region);
     let mut cadence = Cadence::new(CANARY_EVERY);
     let mut sampler = ResidencySampler::new(ResidencyConfig::default());
@@ -770,7 +784,7 @@ fn run_broker(
             &mut sampler,
             &mut cadence,
             &mut probe,
-            || ctx.mem_info().ok().map(|(f, _)| f as u64),
+            || provider.mem_info().ok().map(|(f, _)| f),
         )
     });
 
