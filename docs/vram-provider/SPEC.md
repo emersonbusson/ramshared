@@ -6,9 +6,21 @@
 > de design real (lifetimes). O **backend Vulkan** (RF-G2) é um subsistema novo e ganhará seu
 > próprio PRD quando for feito — **fora do escopo deste SPEC**.
 >
-> **IMPL DIFERIDA:** o refactor é invasivo (multi-arquivo, tornar consumidores genéricos) — exatamente
-> o que `.claude/rules/.../performance.md` diz para **não** iniciar fundo no contexto. Este SPEC é o
-> artefato de design; a IMPL deve rodar em sessão fresca.
+## Estado da IMPL (2026-06-15)
+- **DT-V1 revisado:** o `Arc` no `Context` **não** foi necessário. Caminho mais limpo: impl dos
+  traits nos tipos CUDA existentes com **GAT** (`type Mem<'p> = DeviceMem<'p,'a>`). Sem reestruturar
+  o `ramshared-cuda`, sem ripple de tipos. (Anula o ponto §2 sobre auto-referência.)
+- **Feito + validado** (branch `feat/p1-hardening`): (1) crate `ramshared-vram` com os traits
+  (`d898488`); (2) impl CUDA `VramProvider for Context`/`VramMemory for DeviceMem` (`74f4052`);
+  (3) `VramBackend<M>`/`CanaryProbe<M>`/`residency_check<M>` genéricos (`ca5194d`). Tudo verde
+  (clippy --all-targets, test --workspace, drill qemu PASS). **`VramMemory` está extraído E
+  consumido**; `VramProvider` está definido + CUDA-impl'd.
+- **Falta (próximo increment, sessão fresca):** o daemon ainda aloca via `cuda::Context` direto
+  (`ctx.alloc`/`ctx.mem_info`), não via o trait `VramProvider`. Genericizar `run_nbd`/`run_broker`/
+  `ublk_server` sobre `P: VramProvider` (provider criado no shell CUDA do `run()`, passado por valor)
+  é a parte invasiva (assinaturas das fns grandes do daemon) — **deferida** (performance.md: refactor
+  grande no fim do contexto; valida só em host/qemu). Só então o `VramProvider` é consumido
+  genericamente e o daemon fica Vulkan-ready.
 
 ## 1. Objetivo e escopo
 Extrair um trait `VramProvider` (+ `VramMemory`) que abstraia o **plano de controle** de VRAM hoje

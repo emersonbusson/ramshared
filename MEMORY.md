@@ -1612,3 +1612,22 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   proíbe refactor grande fundo no contexto). Mapa de acoplamento no SPEC §5.
 - **Pendente:** abrir PR de `feat/p1-hardening` (F1 + SPEC); F4 IMPL (sessão fresca); F2 SPEC + F3
   deploy gated no Alex/ops. Vulkan (RF-G2) = subsistema novo, PRD próprio.
+
+---
+
+## 2026-06-15 — Frente 4 IMPL: VramProvider extraído (passos 1-3), daemon-genericização diferida
+
+- **"continue" → executei a IMPL da F4** incrementalmente + verde a cada passo (branch `feat/p1-hardening`):
+  - `d898488` crate `ramshared-vram` (traits `VramProvider`/`VramMemory`, GAT).
+  - `74f4052` impl CUDA (`VramProvider for Context` via GAT `Mem<'p>=DeviceMem<'p,'a>` + `VramMemory
+    for DeviceMem` + `From<CudaError> for VramError`).
+  - `ca5194d` `VramBackend<M>`/`CanaryProbe<M>`/`residency_check<M>` genéricos; call sites inferem
+    M=DeviceMem (comportamento idêntico). clippy --all-targets + test 28 ok + drill PASS.
+- **DT-V1 do SPEC revisado:** o `Arc` no Context **não** foi preciso — GAT nos tipos existentes é
+  mais limpo (sem ripple no cuda crate). SPEC `docs/vram-provider/SPEC.md` atualizado com o estado.
+- **Falta (próxima sessão, fresca):** o daemon ainda aloca via `cuda::Context` direto; genericizar
+  `run_nbd`/`run_broker`/`ublk_server` sobre `P: VramProvider` (provider criado no shell CUDA do
+  `run()`) é a parte INVASIVA (assinaturas das fns grandes) → **diferida** por performance.md (refactor
+  grande no fim do contexto; valida só em host/qemu). Só então `VramProvider` é consumido genericamente.
+- **PR:** nenhum (regra do usuário: PR só no fim de TUDO implementado+validado, e só quando ele pedir).
+  Branch `feat/p1-hardening` acumula: F1 (backoff+R4) + SPEC + F4 passos 1-3.
