@@ -178,6 +178,7 @@ findings do Passo 2.5.
 | DT-26 | Checagem de euid sem `unsafe` e sem dep nova: parse da linha `Uid:` de **`/proc/self/status`** | `geteuid()` é FFI (violaria `forbid(unsafe_code)`) e `libc`/`nix` seriam dep nova sem ADR (#11). Leitura de `/proc` é zero-dep e já é padrão do agente (PSI/swaps). Corrige F15 |
 | DT-27 | **Execução de comando do agente fora do loop de heartbeat**: `nbd_connect`/`mk_swap`/`swap_on`/`swap_off` rodam numa **thread de exec** dedicada (fila serial 1 comando por vez); o loop principal só envia `Psi` (1 Hz), lê `Ack`/comandos (`touch` no watchdog) e despacha. `SwapOnDone`/`SwapOffDone` voltam ao loop principal por canal — o **loop principal é o único escritor** do socket (R8) | Mesmo desenho anti-bloqueio do `spawn_swapoff` (daemon): um `SwapOn` lento (mkswap/nbd_connect sobre TCP, latência **não medida**) não pode starvar o heartbeat e disparar o watchdog (swapoff espúrio = anti-RNF-3). O watchdog passa a medir **liveness do broker**, não a duração do comando local. Escritor único evita intercalar JSON-lines de `Psi` e dos resultados (R8). Corrige R1 (emendado R8) |
 | DT-28 | **Ciclo de vida do worker depende do modo**: no modo single (Fase B) o worker encerra por `LiveCount` quando a conexão fecha (DT-15, RNF-4 intacto); no **modo broker** o worker **ignora o break por `LiveCount`** e roda enquanto o daemon vive, encerrando só no **fechamento do canal `jobs`** (shutdown ordenado: acceptors param + broker dropa seu `SyncSender`) | Em modo broker as conexões NBD caem a zero a cada `DemoteAll` ou idle (todas as slices `Free`); manter o break do single mataria o daemon após um demote normal (R7). O worker passa a `recv_timeout` (tick) para checar a flag de shutdown e poder encerrar mesmo ocioso. Corrige R7 |
+| DT-29 | **Fronteira de segurança servidor-only (WSL2)**: no e2e cross-host (ITEM-12) o WSL2 roda **só o broker/servidor** — `run_broker`/`run_broker_ram` **nunca** fazem `swapon`; quem consome o swap é o tenant (civm). Invariante: **nenhum agente local no WSL2** nessa topologia. O isolamento por qemu é exigido apenas para **WSL2-como-consumidor** (smoke ublk/swap local, regra `[[no-standalone-daemon-smoke-wsl2]]`); WSL2-como-servidor pode rodar no host real | O freeze que travou o WSL2 (2026-06-09) foi **WSL2-consumidor**: `swapon` num device cujo backend morreu → I/O do kernel em **D-state** ininterruptível. Esse vetor mora no **consumidor**; com WSL2 servidor-only ele cai no civm (VM Hyper-V isolada, recuperável por reboot), e a exposição do WSL2 fica em **userspace** (processo matável + fechamento de socket + free da VRAM no exit), não em D-state de kernel. Mitigações: DT-14 (`-timeout 30`, sem `-persist` → o nbd do tenant **erra** em vez de pendurar), ordem de teardown do runbook (swapoff no tenant **antes** de derrubar o broker), Fase A (`--backend ram`) primeiro. Corrige a ênfase exagerada de risco do WSL2 no e2e cross-host (#5 availability/ #11 halo do incidente ublk) |
 
 ## Fronteira de atomicidade e política de rollback
 
@@ -275,8 +276,9 @@ Detalhe e rastreabilidade em [`IMPL.md`](IMPL.md).
 | 11 — drill qemu | ✅ **PASS** | `scripts/kernel/qemu-broker-drill.sh` (rodado: swap ativo via NBD + teardown limpo) |
 | 12 — e2e civm | 🟡 código pronto (`--advertise-nbd`), runbook escrito | [`CIVM-TENANT.md`](CIVM-TENANT.md); execução = gate operacional (civm + netsh) |
 
-**Pendências:** ITEM-12 execução ao vivo no civm (operador); DT-5 rename `ramsharedd` (polimento
-mecânico, deferido); gap registrado: endpoint TCP anunciado resolvido por `--advertise-nbd`.
+**Pendências:** ITEM-12 execução ao vivo no civm (operador). **Feito desde então:** DT-5 rename
+`ramsharedd`; DT-29 (fronteira de segurança servidor-only); gap do endpoint TCP anunciado resolvido
+por `--advertise-nbd`.
 
 ## Arquivos a CRIAR
 

@@ -29,6 +29,24 @@ e o transporte TCP do agente (DT-25).
 
 Portas: **7000** = árbitro (control-plane); **10809** = NBD/TCP (data-plane, default NBD).
 
+## Segurança: por que o WSL2 não trava aqui (servidor-only, DT-29)
+
+O freeze que travou o WSL2 (2026-06-09) foi **WSL2-como-consumidor**: um `swapon` num device cujo
+backend morreu → I/O do **kernel** em **D-state** ininterruptível. Esse vetor mora no **consumidor
+do swap**, não no servidor.
+
+Nesta topologia o WSL2 roda **só o broker** (`run_broker`/`run_broker_ram` **nunca** fazem `swapon`);
+quem consome o swap é o **civm**. Então:
+
+- Se algo morrer, o D-state cai no **civm** (VM Hyper-V isolada, recuperável por reboot) — não no host.
+- A exposição do WSL2 é só **userspace**: processo matável + fechamento de socket + free da VRAM no
+  exit. Não é o D-state de kernel que queimou antes.
+- **DT-14** (`-timeout 30`, sem `-persist`) faz o nbd do civm **errar** em vez de pendurar pra sempre.
+
+**Invariante (não viole):** nada de **agente local no WSL2** apontando pro broker local — isso
+reintroduz WSL2-como-consumidor e o vetor de freeze. Esse caso fica **qemu-only** (já coberto pelo
+drill ITEM-11). Comece pela **Fase A (`--backend ram`)** para validar conectividade sem nem tocar GPU.
+
 ## 0. Pré-requisitos
 
 - **WSL2:** binários `target/debug/{ramshared-wsl2d,ramshared-agent}`; `nbd-client`; módulo `nbd`.
