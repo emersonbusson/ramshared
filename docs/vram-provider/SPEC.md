@@ -15,12 +15,16 @@
   (3) `VramBackend<M>`/`CanaryProbe<M>`/`residency_check<M>` genéricos (`ca5194d`). Tudo verde
   (clippy --all-targets, test --workspace, drill qemu PASS). **`VramMemory` está extraído E
   consumido**; `VramProvider` está definido + CUDA-impl'd.
-- **Falta (próximo increment, sessão fresca):** o daemon ainda aloca via `cuda::Context` direto
-  (`ctx.alloc`/`ctx.mem_info`), não via o trait `VramProvider`. Genericizar `run_nbd`/`run_broker`/
-  `ublk_server` sobre `P: VramProvider` (provider criado no shell CUDA do `run()`, passado por valor)
-  é a parte invasiva (assinaturas das fns grandes do daemon) — **deferida** (performance.md: refactor
-  grande no fim do contexto; valida só em host/qemu). Só então o `VramProvider` é consumido
-  genericamente e o daemon fica Vulkan-ready.
+- **Daemon genérico FEITO** (`c65e0de`): `run_nbd` e `run_broker` allocam via `VramProvider`
+  (`provider.alloc`/`provider.mem_info`); o `Cuda::load`+`create_context` foi pra shells finos no
+  `run()` (provider por valor; mem/canário/closure emprestam shared; afinidade de thread preservada).
+  **`VramProvider` agora é consumido genericamente** → broker + NBD single são Vulkan-ready. Validado:
+  clippy --all-targets, test --workspace 28 ok, drill qemu PASS, **smoke VRAM server-only no GPU real**.
+- **Falta (Fase B, secundário/deferido):** o caminho **ublk-vram** (`ublk_server::spawn_server_dt3_vram*`)
+  ainda cria o contexto CUDA na **própria thread do worker** → genericizá-lo exige `VramProvider::open()`
+  (que cai na auto-referência Cuda+Context) **ou** o restruct Arc do DT-V1, OU replicar o padrão
+  "cuda+ctx locais na thread". É caminho gated (não roda no WSL2) e secundário ao broker — fica como
+  próximo increment. **Backend Vulkan (RF-G2)**: subsistema novo, PRD próprio.
 
 ## 1. Objetivo e escopo
 Extrair um trait `VramProvider` (+ `VramMemory`) que abstraia o **plano de controle** de VRAM hoje
