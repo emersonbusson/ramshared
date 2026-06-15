@@ -1,4 +1,4 @@
-//! ramshared-wsl2d — daemon do tier VRAM (SPEC §4, §8).
+//! ramsharedd (crate `ramshared-wsl2d`) — daemon do tier VRAM + Memory Broker (SPEC §4, §8).
 //!
 //! Serve NBD fixed-newstyle num socket Unix; `nbd-client -unix <sock> /dev/nbdX`
 //! faz a fiação do kernel (os ioctls). Assim o daemon fica **sem `unsafe`** — o
@@ -99,7 +99,7 @@ fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("[wsl2d] erro: {e}");
+            eprintln!("[ramsharedd] erro: {e}");
             std::process::ExitCode::from(1)
         }
     }
@@ -174,7 +174,7 @@ fn residency_check<F: Fn() -> Option<u64>>(
                 baseline.sort_unstable();
                 let med = baseline[baseline.len() / 2].max(1);
                 *canary = Some(Canary::new(ResidencyConfig::default(), med));
-                eprintln!("[wsl2d] canario armado (baseline={med} us)");
+                eprintln!("[ramsharedd] canario armado (baseline={med} us)");
             }
         }
         Some(c) => {
@@ -190,7 +190,7 @@ fn residency_check<F: Fn() -> Option<u64>>(
         let free = mem_free();
         if let Verdict::Demote(reason) = sampler.sample(content, free) {
             eprintln!(
-                "[wsl2d] sonda §9.4: content={content:?} free={free:?} streak={}",
+                "[ramsharedd] sonda §9.4: content={content:?} free={free:?} streak={}",
                 sampler.bad_streak()
             );
             return Some(reason);
@@ -379,11 +379,11 @@ fn run_nbd(
     // --- CUDA: aloca e zera a VRAM ---
     let cuda = Cuda::load()?;
     let dev = cuda.device(0)?;
-    eprintln!("[wsl2d] GPU: {}", dev.name());
+    eprintln!("[ramsharedd] GPU: {}", dev.name());
     let ctx = cuda.create_context(&dev)?;
     let (free, total) = ctx.mem_info()?;
     eprintln!(
-        "[wsl2d] VRAM livre={} MiB total={} MiB",
+        "[ramsharedd] VRAM livre={} MiB total={} MiB",
         free >> 20,
         total >> 20
     );
@@ -394,7 +394,7 @@ fn run_nbd(
     lock_memory(force)?;
     let mut backend = VramBackend::new(mem, BLOCK_SIZE);
     eprintln!(
-        "[wsl2d] VRAM alocada: {} MiB, block_size={}",
+        "[ramsharedd] VRAM alocada: {} MiB, block_size={}",
         size >> 20,
         BLOCK_SIZE
     );
@@ -411,8 +411,8 @@ fn run_nbd(
     let path = Path::new(&sock);
     let _ = std::fs::remove_file(path);
     let listener = UnixListener::bind(path)?;
-    eprintln!("[wsl2d] escutando em {sock}");
-    eprintln!("[wsl2d] conecte: sudo nbd-client -C <N> -unix {sock} {nbd_dev}");
+    eprintln!("[ramsharedd] escutando em {sock}");
+    eprintln!("[ramsharedd] conecte: sudo nbd-client -C <N> -unix {sock} {nbd_dev}");
 
     // --- multi-conexão (H1): acceptor + leitor/escritor por conexão alimentam o worker
     // CUDA único (esta thread). O canal WMsg é o ÚNICO ponto de backpressure (réplica por
@@ -427,7 +427,7 @@ fn run_nbd(
     }]);
     let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel::<WMsg>(CHAN_CAP);
     let _acceptor = spawn_acceptor(listener, exports, tx_flags, jobs_tx); // move o único sender
-    eprintln!("[wsl2d] em transmissão (worker CUDA único; multi-conexão)");
+    eprintln!("[ramsharedd] em transmissão (worker CUDA único; multi-conexão)");
 
     // Estado do worker (esta thread é dona de backend/probe/ctx — afinidade CUDA).
     let mut canary: Option<Canary> = None;
@@ -476,16 +476,16 @@ fn run_nbd(
             match rx.try_recv() {
                 Ok(true) => {
                     demoted = true;
-                    eprintln!("[wsl2d] DEMOTE: swapoff {nbd_dev} OK (canario desarmado)");
+                    eprintln!("[ramsharedd] DEMOTE: swapoff {nbd_dev} OK (canario desarmado)");
                 }
                 Ok(false) => {
-                    eprintln!("[wsl2d] DEMOTE: swapoff {nbd_dev} FALHOU; canario re-armado");
+                    eprintln!("[ramsharedd] DEMOTE: swapoff {nbd_dev} FALHOU; canario re-armado");
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     demote_rx = Some(rx); // ainda em curso; devolve
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    eprintln!("[wsl2d] DEMOTE: thread de swapoff sumiu; canario re-armado");
+                    eprintln!("[ramsharedd] DEMOTE: thread de swapoff sumiu; canario re-armado");
                 }
             }
         }
@@ -505,7 +505,7 @@ fn run_nbd(
                 || ctx.mem_info().ok().map(|(f, _)| f as u64),
             )
         {
-            eprintln!("[wsl2d] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}");
+            eprintln!("[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}");
             demote_rx = Some(spawn_swapoff(&nbd_dev));
         }
     }
@@ -514,12 +514,14 @@ fn run_nbd(
     // Aqui todas as conexões NBD já caíram → ninguém lê a VRAM por NBD → zerar é safe.
     if let Some(rx) = demote_rx.take() {
         match rx.recv_timeout(std::time::Duration::from_secs(5)) {
-            Ok(true) => eprintln!("[wsl2d] teardown: swapoff {nbd_dev} confirmado (DEMOTE limpo)"),
+            Ok(true) => {
+                eprintln!("[ramsharedd] teardown: swapoff {nbd_dev} confirmado (DEMOTE limpo)")
+            }
             Ok(false) => eprintln!(
-                "[wsl2d] teardown: AVISO swapoff {nbd_dev} NAO confirmou (swap pode estar inconsistente)"
+                "[ramsharedd] teardown: AVISO swapoff {nbd_dev} NAO confirmou (swap pode estar inconsistente)"
             ),
             Err(_) => eprintln!(
-                "[wsl2d] teardown: AVISO swapoff {nbd_dev} sem confirmacao em 5s (timeout/thread sumiu)"
+                "[ramsharedd] teardown: AVISO swapoff {nbd_dev} sem confirmacao em 5s (timeout/thread sumiu)"
             ),
         }
     }
@@ -527,7 +529,7 @@ fn run_nbd(
     let _ = probe.zero(); // DT-12/DT-17: zera tambem a regiao-canario (§11)
     let _ = std::fs::remove_file(path);
     zeroed?;
-    eprintln!("[wsl2d] encerrado (VRAM zerada)");
+    eprintln!("[ramsharedd] encerrado (VRAM zerada)");
     Ok(())
 }
 
@@ -592,7 +594,7 @@ fn broker_setup(
     let path = Path::new(sock);
     let _ = std::fs::remove_file(path);
     let unix = UnixListener::bind(path)?;
-    eprintln!("[wsl2d] NBD unix em {sock}");
+    eprintln!("[ramsharedd] NBD unix em {sock}");
     let _ = spawn_acceptor(
         unix,
         std::sync::Arc::clone(&exports),
@@ -601,7 +603,7 @@ fn broker_setup(
     );
     if let Some(addr) = listen_nbd_addr {
         let tcp = std::net::TcpListener::bind(addr)?;
-        eprintln!("[wsl2d] NBD tcp em {addr}");
+        eprintln!("[ramsharedd] NBD tcp em {addr}");
         let _ = ramshared_wsl2d::conn::spawn_acceptor_tcp(
             tcp,
             std::sync::Arc::clone(&exports),
@@ -627,7 +629,7 @@ fn broker_setup(
         jobs_tx.clone(),
         std::sync::Arc::clone(&shutdown),
     )?;
-    eprintln!("[wsl2d] broker (árbitro) em {broker_addr}");
+    eprintln!("[ramsharedd] broker (árbitro) em {broker_addr}");
     drop(jobs_tx); // os clones (acceptors + broker) mantêm o canal; o worker é dono do rx
 
     Ok(BrokerRuntime {
@@ -651,7 +653,7 @@ fn serve_broker_jobs<B: BlockBackend>(
     mut residency: impl FnMut(u64) -> Option<DemoteReason>,
 ) -> B {
     let mut demoted = false;
-    eprintln!("[wsl2d] em transmissão (worker único; multi-slice/broker)");
+    eprintln!("[ramsharedd] em transmissão (worker único; multi-slice/broker)");
     loop {
         let msg = match rt.jobs_rx.recv_timeout(Duration::from_millis(500)) {
             Ok(m) => m,
@@ -698,7 +700,7 @@ fn serve_broker_jobs<B: BlockBackend>(
             && !demoted
             && let Some(reason) = residency(lat_us)
         {
-            eprintln!("[wsl2d] DEMOTE ({reason:?}) lat={lat_us}us -> broker DemoteAll");
+            eprintln!("[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> broker DemoteAll");
             let _ = rt.demote_tx.send(reason);
             demoted = true;
         }
@@ -725,11 +727,11 @@ fn run_broker(
 
     let cuda = Cuda::load()?;
     let dev = cuda.device(0)?;
-    eprintln!("[wsl2d] GPU: {}", dev.name());
+    eprintln!("[ramsharedd] GPU: {}", dev.name());
     let ctx = cuda.create_context(&dev)?;
     let (free, total_vram) = ctx.mem_info()?;
     eprintln!(
-        "[wsl2d] VRAM livre={} MiB total={} MiB",
+        "[ramsharedd] VRAM livre={} MiB total={} MiB",
         free >> 20,
         total_vram >> 20
     );
@@ -738,7 +740,7 @@ fn run_broker(
     lock_memory(force)?; // Disciplina 3: trava memória ANTES de servir swap
     let backend = VramBackend::new(mem, BLOCK_SIZE);
     eprintln!(
-        "[wsl2d] broker VRAM: {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE}",
+        "[ramsharedd] broker VRAM: {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE}",
         slice_bytes >> 20,
         total >> 20
     );
@@ -776,7 +778,7 @@ fn run_broker(
     let _ = probe.zero(); // DT-12/DT-17: zera também a região-canário
     let _ = std::fs::remove_file(Path::new(&sock));
     zeroed?;
-    eprintln!("[wsl2d] broker VRAM encerrado (VRAM zerada)");
+    eprintln!("[ramsharedd] broker VRAM encerrado (VRAM zerada)");
     Ok(())
 }
 
@@ -796,7 +798,7 @@ fn run_broker_ram(
         .ok_or("--slices * --slice-mb: overflow")?;
     let backend = RamBackend::new(total as usize);
     eprintln!(
-        "[wsl2d] broker RAM (sem GPU): {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE}",
+        "[ramsharedd] broker RAM (sem GPU): {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE}",
         slice_bytes >> 20,
         total >> 20
     );
@@ -813,7 +815,7 @@ fn run_broker_ram(
 
     let _ = rt.broker.join();
     let _ = std::fs::remove_file(Path::new(&sock));
-    eprintln!("[wsl2d] broker RAM encerrado");
+    eprintln!("[ramsharedd] broker RAM encerrado");
     Ok(())
 }
 
@@ -877,19 +879,19 @@ fn run_ublk(
     };
     ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())?;
     eprintln!(
-        "[wsl2d] ublk device: {block_path} ({} MiB, qd={}, backend={})",
+        "[ramsharedd] ublk device: {block_path} ({} MiB, qd={}, backend={})",
         size >> 20,
         report.queue_depth,
         backend.label()
     );
-    eprintln!("[wsl2d] swapon: sudo swapon {block_path}");
-    eprintln!("[wsl2d] Ctrl-C / SIGTERM para encerrar");
+    eprintln!("[ramsharedd] swapon: sudo swapon {block_path}");
+    eprintln!("[ramsharedd] Ctrl-C / SIGTERM para encerrar");
 
     // Aguarda o sinal de encerramento (poll da flag; sleep ignora EINTR).
     while !SHUTDOWN.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(200));
     }
-    eprintln!("[wsl2d] sinal recebido — encerrando");
+    eprintln!("[ramsharedd] sinal recebido — encerrando");
 
     // Teardown ordenado: STOP_DEV aborta os FETCH -> o worker sai do loop (e zera a
     // VRAM no fim, no caminho VRAM) -> join -> DEL_DEV. (Quem fez swapon deve swapoff
@@ -897,7 +899,7 @@ fn run_ublk(
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id)?;
     server.join()?;
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id)?;
-    eprintln!("[wsl2d] ublk device removido");
+    eprintln!("[ramsharedd] ublk device removido");
     Ok(())
 }
 
@@ -915,7 +917,7 @@ fn guard_not_wsl2() -> Result<(), Box<dyn std::error::Error>> {
         .as_deref()
         == Some("1")
     {
-        eprintln!("[wsl2d] AVISO: RAMSHARED_ALLOW_UBLK_ON_WSL2=1 — trava do WSL2 ignorada");
+        eprintln!("[ramsharedd] AVISO: RAMSHARED_ALLOW_UBLK_ON_WSL2=1 — trava do WSL2 ignorada");
         return Ok(());
     }
     let osrelease = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
@@ -945,10 +947,10 @@ fn lock_memory(force: bool) -> Result<(), Box<dyn std::error::Error>> {
         return Err("nao consegui setar oom_score_adj=-1000; rode como root ou use --force".into());
     }
     if locked && oom_ok {
-        eprintln!("[wsl2d] memoria travada (mlockall) + oom_score_adj=-1000");
+        eprintln!("[ramsharedd] memoria travada (mlockall) + oom_score_adj=-1000");
     } else {
         eprintln!(
-            "[wsl2d] AVISO --force: mlockall={} oom_score_adj={} (anti-deadlock NAO garantido)",
+            "[ramsharedd] AVISO --force: mlockall={} oom_score_adj={} (anti-deadlock NAO garantido)",
             if locked { "ok" } else { "FALHOU" },
             if oom_ok { "ok" } else { "FALHOU" }
         );
