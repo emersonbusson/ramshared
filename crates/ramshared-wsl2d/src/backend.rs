@@ -1,29 +1,30 @@
-//! `VramBackend` — liga `ramshared_cuda::DeviceMem` à trait `BlockBackend` do
-//! `ramshared_block`. É o ponto onde "VRAM CUDA" vira "block device NBD" (SPEC §8).
+//! `VramBackend` — liga uma região de VRAM (`ramshared_vram::VramMemory`) à trait `BlockBackend`
+//! do `ramshared_block`. É o ponto onde "VRAM" vira "block device NBD" (SPEC §8). Genérico sobre o
+//! backend de VRAM (CUDA hoje via `ramshared-cuda`; Vulkan amanhã pelo mesmo trait — RF-G1).
 
 use ramshared_block::{BlockBackend, IoError};
-use ramshared_cuda::{CudaError, DeviceMem};
+use ramshared_vram::{VramError, VramMemory};
 
 use crate::ublk;
 
-/// Block device respaldado por uma região de VRAM CUDA.
-pub struct VramBackend<'c, 'a> {
-    mem: DeviceMem<'c, 'a>,
+/// Block device respaldado por uma região de VRAM (`M: VramMemory`).
+pub struct VramBackend<M> {
+    mem: M,
     block_size: u32,
 }
 
-impl<'c, 'a> VramBackend<'c, 'a> {
-    pub fn new(mem: DeviceMem<'c, 'a>, block_size: u32) -> Self {
+impl<M: VramMemory> VramBackend<M> {
+    pub fn new(mem: M, block_size: u32) -> Self {
         Self { mem, block_size }
     }
 
     /// Zera toda a VRAM (SPEC §11 — zerar ao liberar/parar).
-    pub fn zero(&mut self) -> Result<(), CudaError> {
+    pub fn zero(&mut self) -> Result<(), VramError> {
         self.mem.zero()
     }
 }
 
-impl BlockBackend for VramBackend<'_, '_> {
+impl<M: VramMemory> BlockBackend for VramBackend<M> {
     fn size_bytes(&self) -> u64 {
         self.mem.len() as u64
     }
@@ -34,13 +35,13 @@ impl BlockBackend for VramBackend<'_, '_> {
 
     fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
         self.mem
-            .read_at(off as usize, buf)
+            .read_at(off, buf)
             .map_err(|e| IoError(e.to_string()))
     }
 
     fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
         self.mem
-            .write_at(off as usize, data)
+            .write_at(off, data)
             .map_err(|e| IoError(e.to_string()))
     }
 
