@@ -44,7 +44,7 @@ swapon --show                              # zram(200) > nbd0(100) > vhdx(-2)
 sudo ./target/debug/ramshared down         # swapoff antes do disconnect (anti-panic)
 ```
 
-## Estrutura (6 crates, zero deps externas)
+## Estrutura (7 crates; exceção userspace gated)
 
 | Crate | Papel |
 |---|---|
@@ -52,8 +52,13 @@ sudo ./target/debug/ramshared down         # swapoff antes do disconnect (anti-p
 | `ramshared-cuda` | CUDA Driver API via `dlopen` (**único `unsafe` do projeto**) |
 | `ramshared-block` | protocolo NBD fixed-newstyle + I/O (lib pura) |
 | `ramshared-integrity` | checksum + padrões de teste |
+| `ramshared-uring` | wrapper seguro sobre `io-uring` para a Fase B |
 | `ramshared-wsl2d` | daemon: máquina de estados, `VramBackend`, canário/DEMOTE |
 | `ramshared-cli` | `check`/`doctor`/`up`/`down`/`status` |
+
+Nota Fase B: o backend `ublk` aprovou uma exceção userspace gated para a crate
+`io-uring` (ADR-0004). Ela entrou via `ramshared-uring` apenas para o smoke mínimo do ring
+e só permanece se o bench ublk vs NBD provar ganho.
 
 ## Documentação
 

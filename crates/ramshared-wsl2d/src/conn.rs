@@ -8,10 +8,13 @@
 //! o worker conta `live` e encerra quando todas as conexões abertas fecham.
 
 use std::io::{BufReader, Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::net::TcpListener;
+use std::os::unix::net::UnixListener;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, SyncSender, channel};
 use std::thread::JoinHandle;
 
+use ramshared_block::handshake::Export;
 use ramshared_block::protocol::SIMPLE_REPLY_LEN;
 use ramshared_block::{Command, Request, parse_request, protocol::REQUEST_LEN, server_handshake};
 
@@ -24,6 +27,8 @@ pub const CHAN_CAP: usize = 64;
 /// A latência do canário é medida no worker em volta do `serve()` (serve-only, DT-16
 /// revisado): medir a espera na fila causava falso-positivo de DEMOTE sob carga normal.
 pub struct Job {
+    /// Índice do export (slice) negociado no handshake — qual janela o worker serve (RF-L1).
+    pub export: usize,
     pub req: Request,
     pub payload: Vec<u8>,
     pub reply: Sender<Reply>,
@@ -38,11 +43,17 @@ pub struct Reply {
 }
 
 /// Mensagem do canal do worker (DT-15). `Opened`/`Closed` controlam o término
-/// determinístico; `Job` é trabalho.
+/// determinístico; `Job` é trabalho; `ZeroExport` é a higiene de slice do broker (DT-17): o
+/// worker (única thread dona do backend) zera a janela `[base, base+len)` e confirma por `done`.
 pub enum WMsg {
     Opened,
     Job(Job),
     Closed,
+    ZeroExport {
+        base: u64,
+        len: u64,
+        done: Sender<bool>,
+    },
 }
 
 /// Contagem de conexões vivas no worker (DT-15). `Opened` (do acceptor) sempre precede
@@ -80,7 +91,10 @@ impl LiveCount {
 /// Thread escritora: drena `Reply`s e escreve no socket. Réplicas podem sair fora de
 /// ordem (cada uma carrega o `handle` NBD). Encerra em erro de socket, em `disconnect`,
 /// ou quando o canal fecha (leitor saiu e todas as réplicas foram drenadas).
-pub fn spawn_writer(stream: UnixStream, replies: Receiver<Reply>) -> JoinHandle<()> {
+pub fn spawn_writer<S: Write + Send + 'static>(
+    stream: S,
+    replies: Receiver<Reply>,
+) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut w = stream;
         for r in replies.iter() {
@@ -100,33 +114,30 @@ pub fn spawn_writer(stream: UnixStream, replies: Receiver<Reply>) -> JoinHandle<
     })
 }
 
-/// Thread leitora: faz o **handshake na própria thread** (DT-15 — erro de handshake fica
-/// confinado a esta conexão, não derruba o acceptor), depois lê requests e enfileira `Job`s.
-/// Ao sair (EOF/erro/handshake falho), envia `WMsg::Closed` para balancear o `Opened`.
-pub fn spawn_reader(
-    stream: UnixStream,
-    device_size: u64,
+/// Thread leitora (genérica sobre o stream — Unix ou TCP, RF-L2): handshake na própria thread
+/// (DT-15 — erro confinado à conexão), negocia o export pelo nome (RF-L1) e enfileira `Job`s com
+/// o índice do export. `hs_writer` é o handle de escrita (clone feito pelo acceptor) usado só no
+/// handshake. Ao sair (EOF/erro/handshake falho) envia `WMsg::Closed` para balancear o `Opened`.
+pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
+    stream: S,
+    mut hs_writer: W2,
+    exports: Arc<Vec<Export>>,
     tx_flags: u16,
     jobs: SyncSender<WMsg>,
     reply_tx: Sender<Reply>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
-        // Handshake precisa de um handle de escrita separado do reader (full-duplex).
-        let mut hs_writer = match stream.try_clone() {
-            Ok(w) => w,
+        let mut reader = BufReader::new(stream);
+        let idx = match server_handshake(&mut reader, &mut hs_writer, &exports, tx_flags) {
+            Ok(i) => i,
             Err(e) => {
-                eprintln!("[wsl2d] conn: try_clone (handshake) falhou: {e}");
+                eprintln!("[ramsharedd] conn: handshake falhou: {e}");
                 let _ = jobs.send(WMsg::Closed);
                 return;
             }
         };
-        let mut reader = BufReader::new(stream);
-        if let Err(e) = server_handshake(&mut reader, &mut hs_writer, device_size, tx_flags) {
-            eprintln!("[wsl2d] conn: handshake falhou: {e}");
-            let _ = jobs.send(WMsg::Closed);
-            return;
-        }
         drop(hs_writer); // handshake concluído; daqui só o writer thread escreve réplicas.
+        let export_size = exports[idx].size; // anti-DoS pelo export negociado (RF-L1)
 
         let mut hdr = [0u8; REQUEST_LEN];
         loop {
@@ -136,14 +147,14 @@ pub fn spawn_reader(
             let req = match parse_request(&hdr) {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("[wsl2d] conn: request malformado: {e}; desconectando");
+                    eprintln!("[ramsharedd] conn: request malformado: {e}; desconectando");
                     break;
                 }
             };
-            // Anti-DoS: um WRITE nunca pode exceder o device (evita alocar gigabytes).
-            if req.cmd == Command::Write && req.len as u64 > device_size {
+            // Anti-DoS: um WRITE nunca pode exceder o export negociado (evita alocar gigabytes).
+            if req.cmd == Command::Write && req.len as u64 > export_size {
                 eprintln!(
-                    "[wsl2d] conn: WRITE len {} excede o device; desconectando",
+                    "[ramsharedd] conn: WRITE len {} excede o export; desconectando",
                     req.len
                 );
                 break;
@@ -158,6 +169,7 @@ pub fn spawn_reader(
                 Vec::new()
             };
             let job = Job {
+                export: idx,
                 req,
                 payload,
                 reply: reply_tx.clone(),
@@ -170,12 +182,43 @@ pub fn spawn_reader(
     })
 }
 
-/// Thread acceptor: aceita conexões em laço infinito (N-agnóstico — `N` é só do
-/// `nbd-client -C N`). Por conexão: envia `WMsg::Opened` **antes** de spawnar o reader
-/// (balanço do `live`), cria o canal de réplica **ilimitado** (DT-7) e spawna writer + reader.
+/// Fia uma conexão aceita ao worker: `WMsg::Opened` **antes** de spawnar o reader (balanço do
+/// `live`, DT-15), canal de réplica **ilimitado** (DT-7), writer + reader. Genérico sobre os
+/// handles (Unix/TCP). Retorna `false` se o worker encerrou (o acceptor deve parar).
+fn wire_conn<RS, WS>(
+    rstream: RS,
+    wstream: WS,
+    hs_writer: WS,
+    exports: &Arc<Vec<Export>>,
+    tx_flags: u16,
+    jobs: &SyncSender<WMsg>,
+) -> bool
+where
+    RS: Read + Send + 'static,
+    WS: Write + Send + 'static,
+{
+    if jobs.send(WMsg::Opened).is_err() {
+        return false; // worker encerrou
+    }
+    let (reply_tx, reply_rx) = channel::<Reply>(); // ilimitado (DT-7)
+    spawn_writer(wstream, reply_rx);
+    spawn_reader(
+        rstream,
+        hs_writer,
+        Arc::clone(exports),
+        tx_flags,
+        jobs.clone(),
+        reply_tx,
+    );
+    true
+}
+
+/// Acceptor **Unix**: aceita conexões em laço (N-agnóstico) e fia cada uma ao worker, negociando
+/// o export por nome via `exports` (RF-L1). Cada conexão precisa de 2 clones do stream (writer +
+/// handshake) além do handle de leitura.
 pub fn spawn_acceptor(
     listener: UnixListener,
-    device_size: u64,
+    exports: Arc<Vec<Export>>,
     tx_flags: u16,
     jobs: SyncSender<WMsg>,
 ) -> JoinHandle<()> {
@@ -184,24 +227,52 @@ pub fn spawn_acceptor(
             let stream = match listener.accept() {
                 Ok((s, _)) => s,
                 Err(e) => {
-                    eprintln!("[wsl2d] accept falhou: {e}");
+                    eprintln!("[ramsharedd] accept falhou: {e}");
                     break;
                 }
             };
-            let wstream = match stream.try_clone() {
-                Ok(w) => w,
-                Err(e) => {
-                    eprintln!("[wsl2d] try_clone (writer) falhou: {e}");
+            let (wstream, hs_writer) = match (stream.try_clone(), stream.try_clone()) {
+                (Ok(w), Ok(h)) => (w, h),
+                _ => {
+                    eprintln!("[ramsharedd] try_clone (unix) falhou; pulando conexão");
                     continue;
                 }
             };
-            // DT-15: Opened ANTES de spawnar o reader garante o balanço de `live`.
-            if jobs.send(WMsg::Opened).is_err() {
-                break; // worker encerrou
+            if !wire_conn(stream, wstream, hs_writer, &exports, tx_flags, &jobs) {
+                break;
             }
-            let (reply_tx, reply_rx) = channel::<Reply>(); // ilimitado (DT-7)
-            spawn_writer(wstream, reply_rx);
-            spawn_reader(stream, device_size, tx_flags, jobs.clone(), reply_tx);
+        }
+    })
+}
+
+/// Acceptor **TCP** (RF-L2): mesmo desenho do Unix sobre `TcpListener`, alimentando o MESMO
+/// canal `jobs` (o worker é único). `TCP_NODELAY` por conexão (latência de swap).
+pub fn spawn_acceptor_tcp(
+    listener: TcpListener,
+    exports: Arc<Vec<Export>>,
+    tx_flags: u16,
+    jobs: SyncSender<WMsg>,
+) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        loop {
+            let stream = match listener.accept() {
+                Ok((s, _)) => s,
+                Err(e) => {
+                    eprintln!("[ramsharedd] accept tcp falhou: {e}");
+                    break;
+                }
+            };
+            let _ = stream.set_nodelay(true); // TCP_NODELAY: latência de swap
+            let (wstream, hs_writer) = match (stream.try_clone(), stream.try_clone()) {
+                (Ok(w), Ok(h)) => (w, h),
+                _ => {
+                    eprintln!("[ramsharedd] try_clone (tcp) falhou; pulando conexão");
+                    continue;
+                }
+            };
+            if !wire_conn(stream, wstream, hs_writer, &exports, tx_flags, &jobs) {
+                break;
+            }
         }
     })
 }
@@ -226,6 +297,7 @@ mod tests {
     fn job_reply_roundtrip() {
         let (tx, _rx) = channel::<Reply>();
         let job = Job {
+            export: 0,
             req: dummy_req(),
             payload: vec![1, 2, 3],
             reply: tx,
@@ -308,6 +380,7 @@ mod tests {
         for _ in 0..10 {
             jobs_tx
                 .send(WMsg::Job(Job {
+                    export: 0,
                     req: dummy_req(),
                     payload: Vec::new(),
                     reply: reply_tx.clone(),
