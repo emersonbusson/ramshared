@@ -80,7 +80,17 @@ pub struct BrokerCore {
     pending_lease: Option<(TenantId, u64)>,   // lease pedido, ainda não concedido (RF-B3)
     lease: Option<(u32, TenantId)>,           // lease ativo (id, holder); o id vem do árbitro
     last_rebalance: Option<Instant>,
+    // R4: slices pós-`SwapOffDone` aguardando confirmação de zero (`ZeroDone`), com nº de ticks
+    // sem confirmar. Se o `try_send(ZeroExport)` falhou (canal cheio), não vem `ZeroDone` → o tick
+    // re-emite o zero (retry) até confirmar; escala a ERROR após N. Só slices AQUI já foram
+    // swapped-off pelo tenant (seguro re-zerar); slices em Draining aguardando SwapOffDone NÃO entram.
+    pending_zero: HashMap<SliceId, u32>,
 }
+
+/// Carência (em ticks) antes do 1º retry de zero — dá tempo ao `ZeroDone` em voo. Acima disso o
+/// tick re-emite o `ZeroExport`; em [`ZERO_RETRY_ERROR`] ticks sem confirmar, loga ERROR (R4).
+const ZERO_RETRY_GRACE: u32 = 1;
+const ZERO_RETRY_ERROR: u32 = 5;
 
 /// Extrai o inteiro final de um device (`/dev/nbd5` → 5), agnóstico ao prefixo (DT-21).
 fn dev_to_slice(dev: &str) -> Option<SliceId> {
@@ -111,6 +121,7 @@ impl BrokerCore {
             pending_lease: None,
             lease: None,
             last_rebalance: None,
+            pending_zero: HashMap::new(),
         }
     }
 
@@ -187,13 +198,12 @@ impl BrokerCore {
             }
             Msg::SwapOffDone { slice, ok, detail } => {
                 if ok {
-                    // higiene (DT-17): zera antes de liberar. ZeroDone → release.
+                    // higiene (DT-17): zera antes de liberar. ZeroDone → release. O tenant já fez
+                    // swapoff → seguro zerar; entra em pending_zero p/ o retry do tick (R4).
                     if let Some(s) = self.slice_map.get(slice) {
-                        out.push(Outbound::ZeroSlice {
-                            slice,
-                            base: s.offset,
-                            len: s.len,
-                        });
+                        let (base, len) = (s.offset, s.len);
+                        self.pending_zero.entry(slice).or_insert(0);
+                        out.push(Outbound::ZeroSlice { slice, base, len });
                     }
                 } else {
                     out.push(Outbound::Log(format!(
@@ -410,6 +420,7 @@ impl BrokerCore {
             }
             return;
         }
+        self.pending_zero.remove(&slice); // zero confirmado → encerra o retry (R4)
         if self.slice_map.release(slice).is_err() {
             return; // não estava Draining; ignora
         }
@@ -570,6 +581,31 @@ impl BrokerCore {
                         out,
                     );
                 }
+            }
+        }
+
+        // R4: re-tenta o zero de slices presas (se o `try_send(ZeroExport)` falhou, não vem
+        // `ZeroDone`). Carência de 1 tick p/ o zero em voo; acima disso re-emite; ERROR após N
+        // ticks sem confirmar. Só toca slices em `pending_zero` (já swapped-off; seguro re-zerar).
+        let stuck: Vec<SliceId> = self.pending_zero.keys().copied().collect();
+        for slice in stuck {
+            let count = match self.pending_zero.get_mut(&slice) {
+                Some(n) => {
+                    *n += 1;
+                    *n
+                }
+                None => continue,
+            };
+            if count == ZERO_RETRY_ERROR {
+                out.push(Outbound::Log(format!(
+                    "[ramsharedd] ERRO: zero de s{slice} sem confirmar em {ZERO_RETRY_ERROR} ticks (slice presa em Draining, R4); re-tentando"
+                )));
+            }
+            if count > ZERO_RETRY_GRACE
+                && let Some(s) = self.slice_map.get(slice)
+            {
+                let (base, len) = (s.offset, s.len);
+                out.push(Outbound::ZeroSlice { slice, base, len });
             }
         }
     }
@@ -914,6 +950,66 @@ mod tests {
         // ZeroDone → release → Free
         c.handle(CoreEvent::ZeroDone(0, true), Instant::now());
         assert_eq!(c.slice_map.get(0).unwrap().state, SliceState::Free);
+    }
+
+    #[test]
+    fn stuck_draining_zero_is_retried_on_tick() {
+        // R4: se o zero não confirma (canal cheio → sem ZeroDone), o tick re-emite o ZeroExport
+        // após a carência e escala a ERROR; ao confirmar, para de re-tentar.
+        let mut c = core(1);
+        reg(&mut c, 10, "a");
+        psi(&mut c, 10, 0.0);
+        c.handle(CoreEvent::Tick, Instant::now()); // assign s0 (Active)
+        c.slice_map.drain(0).unwrap(); // Draining
+        c.handle(
+            CoreEvent::Msg(
+                10,
+                Msg::SwapOffDone {
+                    slice: 0,
+                    ok: true,
+                    detail: String::new(),
+                },
+            ),
+            Instant::now(),
+        );
+        // SEM ZeroDone (simula canal cheio). Tick 1 = carência → não re-emite.
+        let t1 = c.handle(CoreEvent::Tick, Instant::now());
+        assert!(
+            !t1.iter()
+                .any(|x| matches!(x, Outbound::ZeroSlice { slice: 0, .. })),
+            "carência: sem retry no 1º tick"
+        );
+        // Tick 2 → re-emite o zero.
+        let t2 = c.handle(CoreEvent::Tick, Instant::now());
+        assert!(
+            t2.iter()
+                .any(|x| matches!(x, Outbound::ZeroSlice { slice: 0, .. })),
+            "retry do zero no 2º tick"
+        );
+        // Mais ticks → escala a ERROR (R4).
+        let mut saw_error = false;
+        for _ in 0..ZERO_RETRY_ERROR {
+            let o = c.handle(CoreEvent::Tick, Instant::now());
+            if o.iter()
+                .any(|x| matches!(x, Outbound::Log(s) if s.contains("R4")))
+            {
+                saw_error = true;
+            }
+        }
+        assert!(
+            saw_error,
+            "deve escalar a ERROR (R4) após N ticks sem confirmar"
+        );
+        // Zero confirma → Free + para de re-tentar.
+        c.handle(CoreEvent::ZeroDone(0, true), Instant::now());
+        assert_eq!(c.slice_map.get(0).unwrap().state, SliceState::Free);
+        let after = c.handle(CoreEvent::Tick, Instant::now());
+        assert!(
+            !after
+                .iter()
+                .any(|x| matches!(x, Outbound::ZeroSlice { slice: 0, .. })),
+            "pós-confirmação: sem mais retry"
+        );
     }
 
     #[test]
