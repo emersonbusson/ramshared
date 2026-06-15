@@ -1514,3 +1514,26 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   (CARGO_BIN_EXE) e o `ramshared up/down` (cascade.rs spawnava binário inexistente). **Só o
   `cargo test --workspace` pegou.** Para mudança que toca nome de binário/processo: rodar o workspace
   inteiro + grep em `*.rs` (não só scripts/docs). [[feedback-batch-local-single-pr]]
+
+---
+
+## 2026-06-15 — ITEM-12 Fase A (cross-host civm) = PASS + fix de tick starvation (DT-30)
+
+- **Smoke broker VRAM no WSL2 (server-only) = OK** (RTX 2060): sobe, aloca VRAM, escuta, SIGTERM
+  zera a VRAM e sai limpo — sem travar. Confirma DT-29 empírico (servidor-only no WSL2 real é seguro).
+- **ITEM-12 Fase A (RAM, cross-host) = PASS:** broker RAM no WSL2 servindo swap ao civm
+  (`gha-ubuntu-2404`). civm ativou `/dev/nbd0`+`nbd1` (broker: `swapon ok s0+s1`), teardown limpo
+  (verificação independente: 0 swaps, 0 agentes). commit `32d2911`.
+- **TÉCNICA de orquestração (sem netsh/admin):** WSL2→civm SSH funciona (o NAT só bloqueia
+  civm→WSL2). Usei **túnel reverso** `ssh -R 127.0.0.1:7000/10809` → o civm acessa o broker do WSL2
+  pelo próprio loopback. Broker bind loopback + `--advertise-nbd 127.0.0.1:10809`. Zero admin, zero
+  host. (netsh é o caminho de PRODUÇÃO do runbook; o túnel é p/ validação autônoma.) Script em
+  `/tmp/civm-drill.sh` (trap de teardown; `pkill -x` não `-f`; swapoff sem var no ssh aninhado).
+- **BUG DE PRODUTO (DT-30) — tick starvation:** `core_loop` só emitia `Tick` no `Err(Timeout)` do
+  `recv_timeout(tick)`; sob `Psi` normal (~1/s/tenant) as msgs resetavam o timeout → `AssignFree`
+  nunca rodava → **nenhum SwapOn**. Travaria a arbitragem sob carga real. Fix: Tick por **deadline de
+  wall-clock**. O drill qemu (loopback) mascarava por timing; só o cross-host (jitter) expôs.
+  Regressão: `e2e_psi_flood_does_not_starve_arbiter_tick`.
+- **civm:** sudo nopass, glibc 2.39 (== WSL2, binário portável), PSI on, já tem `/swap.img` (nbd entra
+  em prio menor, aditivo). SSH via `~/.ssh/config` (Host gha-ubuntu-2404). Falta: Fase B (VRAM
+  cross-host) + deploy de produção via netsh.
