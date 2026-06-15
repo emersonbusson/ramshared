@@ -1631,3 +1631,20 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   grande no fim do contexto; valida só em host/qemu). Só então `VramProvider` é consumido genericamente.
 - **PR:** nenhum (regra do usuário: PR só no fim de TUDO implementado+validado, e só quando ele pedir).
   Branch `feat/p1-hardening` acumula: F1 (backoff+R4) + SPEC + F4 passos 1-3.
+
+---
+
+## 2026-06-15 — Frente 4: daemon genérico sobre VramProvider FEITO (run_nbd+run_broker)
+
+- **"continue" → genericizei o daemon** (`c65e0de`): `run_nbd`/`run_broker` allocam via `VramProvider`
+  (`provider.alloc`/`provider.mem_info`); `Cuda::load`+`create_context` em shells finos no `run()`
+  (um por backend). **`VramProvider` agora é CONSUMIDO genericamente** → broker + NBD single Vulkan-ready.
+- Lifetime OK sem Arc: provider por valor; mem/canário/closure emprestam (shared); afinidade na thread
+  do worker via GAT. Clippy `too_many_arguments` (8/7 no run_broker) → `#[allow]`.
+- Validado: clippy --all-targets, test --workspace 28 ok, drill qemu PASS, **smoke VRAM server-only na
+  RTX 2060** (run_broker genérico aloca/serve/zera no GPU real).
+- **Resta no RF-G1 (Fase B, secundário):** `ublk_server::spawn_server_dt3_vram*` cria o ctx CUDA na
+  thread do worker → genericizar precisa de `VramProvider::open()` (auto-ref Cuda+Context) ou Arc, ou
+  replicar "cuda+ctx locais na thread". Gated/secundário ao broker. **Vulkan (RF-G2) = PRD próprio.**
+- Branch `feat/p1-hardening`: F1 + SPEC + F4 (crate + cuda impl + consumidores genéricos + daemon
+  genérico). Tudo verde, sem PR (regra do usuário).
