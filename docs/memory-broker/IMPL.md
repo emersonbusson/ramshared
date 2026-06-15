@@ -65,5 +65,7 @@ em N exports NBD (Unix + TCP) e o árbitro decidindo quem usa cada slice por pre
 - **ITEM-12 ao vivo (civm):** seguir [`CIVM-TENANT.md`](CIVM-TENANT.md) (precisa civm + netsh no host).
   Anexar números (RTT, p50 de page-out) ao P0-RESULTS quando rodado.
 - **P0 §4 (render):** input do tester (Alex); vira input do P2.
-- **DT-5 rename `ramsharedd`:** polimento mecânico (bin + prefixos de log + `qemu-ublk-daemon.sh` +
-  `docs/ublk-daemon-integration/IMPL.md`); deferido — não bloqueia o MVP.
+- **DT-5 rename `ramsharedd`:** ✅ feito (commit `chore(core)`): bin name + prefixos de log + 2
+  scripts qemu + doc vivo F12. Pacote/lib/dir seguem `ramshared-wsl2d`. Drill re-rodado = PASS.
+- **DT-29 (fronteira servidor-only):** ✅ registrado na SPECv2 + `CIVM-TENANT.md` — o e2e civm tem o
+  WSL2 só como servidor; o vetor de D-state cai no consumidor (civm), não no host.
