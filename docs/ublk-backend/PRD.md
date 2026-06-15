@@ -6,11 +6,10 @@ issues: [3]
 ---
 # PRD — Fase B — ublk no lugar do NBD para o tier VRAM
 
-> **Status: DESIGN-ONLY (Fase B, kernel-gated).** Verificado: este kernel WSL2 **não tem**
-> `CONFIG_BLK_DEV_UBLK` e o módulo `ublk_drv` não existe. IMPL/validação exigem **kernel
-> custom**. Este PRD fecha o desenho e — importante — registra uma **tensão de política**
-> (io_uring vs zero-dep/`forbid(unsafe_code)`) que precisa de decisão antes do Passo 3.
-> Itens **Inferência** não puderam ser testados.
+> **Status: IMPL prep (Fase B, kernel custom ativo em 2026-06-07).** O kernel WSL2 custom
+> `6.6.123.2-microsoft-standard-WSL2+` tem `CONFIG_BLK_DEV_UBLK=m`, `io_uring_disabled=0` e
+> `/dev/ublk-control`. A tensão de política foi fechada pela ADR-0004: usar `io-uring 0.7.12`
+> no userspace, gated em bench ublk vs NBD.
 
 ## Resumo
 
@@ -40,19 +39,18 @@ latência menor (io_uring), sem round-trip socket").
 
 ## Opção recomendada
 
-**Servidor ublk reusando o worker CUDA único do H1; transporte NBD→io_uring; FFI mínima para
-io_uring isolada (como `ramshared-cuda`).**
+**Servidor ublk reusando o worker CUDA único do H1; transporte NBD→io_uring; crate `io-uring`
+auditada encapsulada pelo wrapper `ramshared-uring`.**
 
 - O daemon ganha um modo ublk: loop io_uring (submit/complete) alimenta o **mesmo** canal
   `WMsg`/worker do H1; o worker serve a VRAM e completa via io_uring.
-- **Tensão de política (decisão obrigatória antes do Passo 3):** io_uring em Rust exige **ou**
-  (a) uma **crate externa** (`io-uring`) — quebra o zero-dep (LIBRARIES.md #11), **ou** (b)
-  **FFI/`unsafe` hand-rolled** sobre `liburing`/syscalls — quebra o `forbid(unsafe_code)` do
-  daemon. **Recomendação:** isolar a FFI io_uring num **crate novo `ramshared-uring`** com
-  `unsafe` contido + `// SAFETY:` (espelhando o modelo do `ramshared-cuda`), mantendo o daemon
-  e a lib `forbid(unsafe_code)`. Decisão a registrar em `LIBRARIES.md` + ADR.
+- **Tensão de política resolvida:** io_uring hand-rolled foi rejeitado no SPECv2/ADR-0004 porque
+  barreiras erradas no ring compartilhado são risco de corrupção no caminho de swap. A exceção
+  userspace é a crate externa `io-uring 0.7.12`, isolada em `ramshared-uring`; o daemon e a lib
+  continuam sem `unsafe` próprio.
 - **Alternativas descartadas:**
-  - **crate `io-uring` externa** — viola o zero-dep num projeto Ring-0/Day-0; supply chain.
+  - **`ramshared-uring` hand-rolled** — preserva zero-dep, mas põe barreiras acquire/release sob
+    `unsafe` próprio no caminho de swap.
   - **manter NBD (Day-0)** — funciona (validado §14/H1); ublk é otimização Fase B, não correção.
   - **NBD + ublk dual-path permanente** — viola Day-0 (dois transportes); ublk **substitui** o
     NBD quando maduro (ou fica atrás de feature-flag de build até a paridade).
@@ -73,8 +71,8 @@ io_uring isolada (como `ramshared-cuda`).**
 ## Requisitos não-funcionais
 
 - **Performance:** latência < NBD (Inferência — medir p50/p99 no kernel).
-- **Segurança:** `unsafe` só no crate io_uring, com `// SAFETY:` por bloco (regra rust/security);
-  sem dep externa nova.
+- **Segurança:** sem `unsafe` novo no daemon; `unsafe` de ring fica em `ramshared-uring` e na
+  crate externa `io-uring`.
 - **Resiliência:** falha de io_uring → DEMOTE (como hoje); worst-case #5 no SPEC.
 
 ## Fluxos
@@ -85,8 +83,8 @@ DEMOTE; device removal → teardown zera a VRAM.
 
 ## Modelo de dados
 
-- `ramshared-uring` (novo crate): wrappers RAII sobre io_uring (`unsafe` isolado), espelhando o
-  `ramshared-cuda`. Sem struct uAPI exposta a userspace (ublk uAPI é do kernel).
+- `ramshared-uring`: wrappers finos sobre `io-uring`; qualquer `unsafe` de SQE/lifetime fica aqui.
+- Módulo ublk do daemon: uAPI ublk espelhada em `crates/ramshared-wsl2d/src/ublk.rs`.
 
 ## API / Interfaces
 
@@ -95,18 +93,19 @@ DEMOTE; device removal → teardown zera a VRAM.
 
 ## Dependências e riscos
 
-- **Pré-requisito duro:** kernel com `CONFIG_BLK_DEV_UBLK` + `ublk_drv` (ausente — verificado).
+- **Pré-requisito duro:** kernel com `CONFIG_BLK_DEV_UBLK` + `ublk_drv`; atendido no kernel custom
+  `6.6.123.2-microsoft-standard-WSL2+`, mas o caminho ublk real ainda depende de smoke/bench.
 - **Riscos:** (a) **io_uring + afinidade CUDA** — o thread que faz `io_uring_enter` vs o worker
   CUDA: a completion não pode rodar CUDA fora da thread do ctx (worst-case #5, fechar no SPEC);
-  (b) **`unsafe` novo** (io_uring FFI) — mitigado por crate isolado; (c) complexidade da uAPI
-  ublk (FETCH/COMMIT) — Inferência, validar contra `ublk.rst`/`ubdsrv`.
+  (b) **supply chain** da crate externa — mitigado por lockfile/audit/rollback; (c) complexidade
+  da uAPI ublk (FETCH/COMMIT) — validar contra `ublk.rst`/driver.
 - **Rollout/rollback:** app-only + `--transport` (default nbd). ublk substitui NBD só na paridade.
 
 ## Estratégia de implementação (quando houver kernel)
 
-1. ADR + LIBRARIES.md: decidir crate `ramshared-uring` (unsafe isolado) vs crate externa. 2.
-`ramshared-uring` (FFI io_uring RAII). 3. Daemon modo ublk reusando worker H1. 4. `--transport`
-no CLI. 5. §14 adaptado + bench de latência vs NBD.
+1. ADR-0004 + LIBRARIES.md: aceitos para `ramshared-uring` + `io-uring 0.7.12`. 2. Smoke mínimo de ring sem swap.
+3. Daemon modo ublk reusando worker H1. 4. `--transport ublk` remove o gate só após paridade.
+5. §14 adaptado + bench de latência vs NBD.
 
 ## Fora de escopo
 
