@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // teste: unwrap/expect é idiomático
+
 use ramshared_wsl2d::{ublk, ublk_control, ublk_queue};
 use std::fs;
 use std::thread;

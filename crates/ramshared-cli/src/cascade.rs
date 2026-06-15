@@ -374,6 +374,7 @@ pub fn status() -> Result<(), CascadeError> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)] // teste: unwrap/expect é idiomático
     use super::*;
 
     fn parse(args: &[&str]) -> Result<UpArgs, CascadeError> {

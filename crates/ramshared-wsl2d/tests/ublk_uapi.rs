@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)] // teste: unwrap/expect é idiomático
+
 use std::mem::{align_of, size_of};
 
 use ramshared_block::Command;
