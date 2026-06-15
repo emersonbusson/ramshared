@@ -275,11 +275,11 @@ Detalhe e rastreabilidade em [`IMPL.md`](IMPL.md).
 | 9 — agente | ✅ | crate `ramshared-agent` (25 testes; DT-27) |
 | 10 — e2e in-process | ✅ | `tests/broker_e2e.rs` (3 testes) |
 | 11 — drill qemu | ✅ **PASS** | `scripts/kernel/qemu-broker-drill.sh` (rodado: swap ativo via NBD + teardown limpo) |
-| 12 — e2e civm | 🟢 **Fase A (RAM, cross-host) PASS** | broker RAM no WSL2 servindo swap ao civm (via túnel reverso SSH); civm ativou `/dev/nbd0`+`nbd1` (swapon ok s0+s1), teardown limpo. Falta: Fase B (VRAM cross-host) + deploy de produção via `netsh` ([`CIVM-TENANT.md`](CIVM-TENANT.md)) |
+| 12 — e2e civm | 🟢 **Fase A (RAM) + Fase B (VRAM) cross-host PASS** | broker no WSL2 servindo swap ao civm (túnel reverso SSH); civm ativou `/dev/nbd0`+`nbd1`. Fase B: backend VRAM na RTX 2060, canário armou (125µs) **sem DEMOTE**, VRAM zerada no teardown. Falta só: deploy de produção via `netsh` ([`CIVM-TENANT.md`](CIVM-TENANT.md)) |
 
-**Pendências:** ITEM-12 Fase B (VRAM cross-host) + deploy de produção via `netsh`. **Feito desde
-então:** DT-5 rename `ramsharedd`; DT-29 (fronteira servidor-only); DT-30 (tick por deadline, fix de
-starvation); `--advertise-nbd`; **ITEM-12 Fase A (RAM cross-host) = PASS**.
+**Pendências:** só o **deploy de produção via `netsh`** (o caminho de software está validado
+ponta-a-ponta). **Feito:** DT-5 rename `ramsharedd`; DT-29 (fronteira servidor-only); DT-30 (tick por
+deadline); `--advertise-nbd`; **ITEM-12 Fase A (RAM) + Fase B (VRAM) cross-host = PASS**.
 
 ## Arquivos a CRIAR
 

@@ -1537,3 +1537,19 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **civm:** sudo nopass, glibc 2.39 (== WSL2, binário portável), PSI on, já tem `/swap.img` (nbd entra
   em prio menor, aditivo). SSH via `~/.ssh/config` (Host gha-ubuntu-2404). Falta: Fase B (VRAM
   cross-host) + deploy de produção via netsh.
+
+---
+
+## 2026-06-15 — ITEM-12 Fase B (VRAM real cross-host) = PASS
+
+- **Fase B PASS:** broker `--backend vram` na RTX 2060 no WSL2 servindo swap ao civm pelo túnel
+  reverso SSH. civm ativou `/dev/nbd0`+`nbd1` **backed por GPU VRAM real sobre a rede**. O **canário
+  de residência §9/§9.4 armou (baseline=125µs) e ficou quieto** (`DEMOTE-count=0` → integridade da
+  VRAM ok sob o I/O do swap), e o teardown **zerou a VRAM** ("broker VRAM encerrado (VRAM zerada)").
+  Verificação independente: civm 0 swaps/0 agentes, WSL2 0 daemon, VRAM liberada. Script:
+  `/tmp/civm-drill-vram.sh` (broker com sudo p/ mlockall; teardown `sudo pkill -TERM -x ramsharedd`
+  espera o zero da VRAM). NÃO forcei page-out (exigiria pressão real no civm = risco OOM; o header
+  do swap já trafega write+read pela VRAM, provando o data path).
+- **P1 broker validado ponta-a-ponta:** same-host (drill qemu) + cross-host RAM (Fase A) + cross-host
+  VRAM (Fase B). Só docs commitados (sem mudança de código nesta etapa). Falta no ITEM-12: só o deploy
+  de PRODUÇÃO via netsh (o software está provado). Próximo natural: abrir o PR de `feat/fase-b-prep`.
