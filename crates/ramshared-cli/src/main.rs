@@ -1036,10 +1036,7 @@ CONFIG_BLK_DEV_NBD=m\n\
 
     #[test]
     fn parses_io_uring_disabled_runtime_values() {
-        assert_eq!(
-            parse_io_uring_runtime("0\n"),
-            Some(IoUringRuntime::Enabled)
-        );
+        assert_eq!(parse_io_uring_runtime("0\n"), Some(IoUringRuntime::Enabled));
         assert_eq!(
             parse_io_uring_runtime("1\n"),
             Some(IoUringRuntime::Restricted)

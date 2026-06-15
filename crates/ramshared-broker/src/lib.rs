@@ -4,7 +4,7 @@
 //!
 //! Lib **pura, testável sem rede/root/GPU**: tipos do modelo ([`model`]), codec JSON-lines
 //! ([`protocol`], DT-1), e — nos ITEM-4 — o mapa de slices e o árbitro (clock injetado). A
-//! fiação (sockets, worker, IO) vive no daemon `ramshared-wsl2d` (ITEM-8).
+//! fiação (sockets, worker, IO) vive no daemon `ramsharedd` (crate `ramshared-wsl2d`, ITEM-8).
 #![forbid(unsafe_code)]
 
 pub mod arbiter;
