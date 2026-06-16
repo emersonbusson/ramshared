@@ -123,6 +123,11 @@ fn parse_private_listen(s: &str) -> Result<std::net::SocketAddr, String> {
 }
 
 /// Valida o combo de flags de slice (DT-3: ublk é single-device no WSL2; `--slice-mb` obrigatório).
+/// Teto de slices: o `StatusReply` embute `Vec<Slice>+Vec<SliceIo>+Vec<TenantStatus>` numa única
+/// linha JSON; acima de ~430 slices ele passa do `MAX_LINE_BYTES` (64 KiB) do protocolo e a outra
+/// ponta rejeita a linha (ADR-0005). 256 dá folga (~38 KiB) e cobre qualquer uso real.
+const MAX_SLICES: u16 = 256;
+
 fn validate_slice_flags(slices: u16, slice_mb: u64, is_ublk: bool) -> Result<(), String> {
     if slices > 0 && is_ublk {
         return Err(
@@ -131,6 +136,12 @@ fn validate_slice_flags(slices: u16, slice_mb: u64, is_ublk: bool) -> Result<(),
     }
     if slices > 0 && slice_mb == 0 {
         return Err("--slices > 0 exige --slice-mb N".into());
+    }
+    if slices > MAX_SLICES {
+        return Err(format!(
+            "--slices {slices} > {MAX_SLICES}: o StatusReply excederia o teto de linha do protocolo \
+             (MAX_LINE_BYTES 64 KiB, ADR-0005)"
+        ));
     }
     Ok(())
 }
@@ -1063,5 +1074,12 @@ mod tests {
         assert!(validate_slice_flags(2, 0, false).is_err());
         assert!(validate_slice_flags(2, 64, false).is_ok());
         assert!(validate_slice_flags(0, 0, false).is_ok()); // single-mode ok
+    }
+
+    #[test]
+    fn slice_flags_cap_protects_status_line() {
+        // MED-1: --slices acima de MAX_SLICES estouraria o StatusReply (MAX_LINE_BYTES 64 KiB).
+        assert!(validate_slice_flags(MAX_SLICES, 64, false).is_ok());
+        assert!(validate_slice_flags(MAX_SLICES + 1, 64, false).is_err());
     }
 }

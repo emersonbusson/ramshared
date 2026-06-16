@@ -69,6 +69,27 @@
   composição: canário (P1, latência→`Verdict::Demote`) + `reconcile_eviction_when_demotes` +
   `eviction_flag_after_demote` (DEMOTE→flag). Observação ao vivo = host GPU não-WSL2 (RF-G2) ou civm.
 
+## Pente-fino (revisão multi-agente Opus 4.8) — bugs achados e corrigidos
+
+4 agents adversariais (concorrência / lógica-de-reconciliação / protocolo / hot-path-regressão)
+varreram o código. Achados reais + correção:
+
+- **C1 (CRITICAL) — flag `Eviction` nunca confirmava em produção.** `demotes_delta` é per-tick (dura
+  1 tick); a histerese (`recon_streak=3`) exigia 3 ticks consecutivos → a evicção transitória era
+  engolida e o sinal **nunca aparecia**. O teste `eviction_flag_after_demote` mascarava (helper com
+  `streak=1`). **Fix:** `Eviction` é evento → confirma imediato (bypassa a histerese); sustentados
+  (Unaccounted/StuckSlice/Partial) mantêm o streak. Novos testes `eviction_confirmed_immediately_despite_streak`
+  (streak=3) + `unaccounted_respects_streak` (`broker_srv.rs`).
+- **MED-1 — `--slices` sem teto** (u16) → `StatusReply` > `MAX_LINE_BYTES` (64 KiB) em ~430 slices.
+  **Fix:** `MAX_SLICES=256` em `validate_slice_flags` + teste `slice_flags_cap_protects_status_line`.
+- **M1 — `reconcile` com `alloc=0`** reportava `delta=occupied` (gigante). **Fix:** `alloc=0` →
+  `delta` definido (0.0/1.0) + teste `reconcile_alloc_zero_no_giant_delta`.
+- **Sem CRITICAL/HIGH de race/deadlock/regressão** (Agent 1 e 4): índices via `.get()`, RAM ok,
+  ublk intacto, teardown inalterado, sem `unwrap` em produção. Gauge `free/total` lidos separados =
+  skew cosmético de 1 tick (benigno, `saturating_sub` protege) — documentado.
+
+Pós-fix: wsl2d lib **61** testes, clippy/fmt limpos, drill qemu broker **PASS** (sem regressão).
+
 ## Rastreabilidade
 
 RF-1 ✓ (ITEM-1/2/5 + `status_reply_includes_slice_io`) · RF-2 ✓ (ITEM-1/6 + parsers) · RF-3 ✓

@@ -731,18 +731,21 @@ impl BrokerCore {
             any_source_missing: !has_vram || !any_present,
         };
         let (delta, candidate) = reconcile(&inp, self.tol_frac);
-        // Histerese (DT-12): confirma o flag após `recon_streak` ticks consecutivos iguais.
+        // Histerese (DT-12) para flags SUSTENTADOS (Unaccounted/StuckSlice/Partial): confirma após
+        // `recon_streak` ticks consecutivos iguais. `Eviction` é EVENTO do canário (DT-6;
+        // `demotes_delta` é per-tick, dura 1 tick) → confirma IMEDIATO; senão a histerese engoliria
+        // uma evicção transitória (1-2 DEMOTEs) e o sinal de eviction nunca apareceria (bug C1).
         if candidate == self.recon_flag {
             self.recon_count = self.recon_count.saturating_add(1);
         } else {
             self.recon_flag = candidate;
             self.recon_count = 1;
         }
-        let confirmed = if candidate != ReconcileFlag::None && self.recon_count >= self.recon_streak
-        {
-            candidate
-        } else {
-            ReconcileFlag::None
+        let confirmed = match candidate {
+            ReconcileFlag::Eviction => ReconcileFlag::Eviction, // evento: sem histerese
+            ReconcileFlag::None => ReconcileFlag::None,
+            sustained if self.recon_count >= self.recon_streak => sustained,
+            _ => ReconcileFlag::None,
         };
         if confirmed != ReconcileFlag::None {
             out.push(Outbound::Log(format!(
@@ -1041,6 +1044,11 @@ mod tests {
     use ramshared_broker::model::SliceState;
 
     fn core(k: u16) -> BrokerCore {
+        core_streak(k, 1)
+    }
+
+    /// Como `core`, mas com `recon_streak` configurável (testa a histerese real de produção).
+    fn core_streak(k: u16, recon_streak: u32) -> BrokerCore {
         let cfg = ArbiterConfig {
             streak: 1, // move já no 1º tick acima do delta (testes)
             ..ArbiterConfig::default()
@@ -1056,7 +1064,7 @@ mod tests {
             Arc::new((0..k).map(|_| SliceIoCounters::default()).collect()),
             Arc::new(VramGauge::default()),
             0.10,
-            1,
+            recon_streak,
         )
     }
 
@@ -1385,6 +1393,49 @@ mod tests {
             })
             .expect("telemetria no tick");
         assert_eq!(flag, ReconcileFlag::Unaccounted);
+    }
+
+    fn tick_flag(c: &mut BrokerCore) -> ReconcileFlag {
+        c.handle(CoreEvent::Tick, Instant::now())
+            .iter()
+            .find_map(|x| match x {
+                Outbound::Telemetry(t) => Some(t.flag),
+                _ => None,
+            })
+            .expect("telemetria no tick")
+    }
+
+    #[test]
+    fn eviction_confirmed_immediately_despite_streak() {
+        // C1: Eviction é EVENTO (canário) → confirma em 1 tick mesmo com recon_streak=3 (produção).
+        // Sem o fix, a histerese engoliria a evicção transitória.
+        let mut c = core_streak(1, 3);
+        reg(&mut c, 10, "a");
+        c.vram.total.store(1 << 30, Ordering::Relaxed); // has_vram (senão Partial)
+        c.vram.free.store(1 << 29, Ordering::Relaxed);
+        c.handle(CoreEvent::Demote("latency".into()), Instant::now());
+        assert_eq!(tick_flag(&mut c), ReconcileFlag::Eviction);
+    }
+
+    #[test]
+    fn unaccounted_respects_streak() {
+        // RF-4/DT-12: flag SUSTENTADO (Unaccounted) só confirma após `recon_streak` ticks.
+        let mut c = core_streak(1, 2);
+        reg(&mut c, 10, "a");
+        let id = *c.tenants.keys().next().expect("tenant");
+        c.slice_map.assign(0, id).expect("assign");
+        c.tenants.get_mut(&id).expect("tenant").occupied_bytes = 200 * 1024 * 1024;
+        c.vram.total.store(1 << 30, Ordering::Relaxed);
+        assert_eq!(
+            tick_flag(&mut c),
+            ReconcileFlag::None,
+            "1º tick: streak ainda não atingido"
+        );
+        assert_eq!(
+            tick_flag(&mut c),
+            ReconcileFlag::Unaccounted,
+            "2º tick: confirma"
+        );
     }
 
     #[test]
