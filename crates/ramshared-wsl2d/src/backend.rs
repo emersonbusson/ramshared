@@ -213,6 +213,45 @@ mod tests {
         assert_eq!(r.read_data, payload, "READ deve devolver o que foi escrito");
     }
 
+    /// Gauge de VRAM com `mem_info` REAL (RF-3): `vram_outros` (subtração) capta o uso de
+    /// gráficos/Windows. `cargo test -p ramshared-wsl2d -- --ignored` num host com GPU.
+    #[test]
+    #[ignore = "requer GPU CUDA funcional (WSL2/GPU-PV)"]
+    fn vram_gauge_outros_captures_real_graphics_usage() {
+        use crate::telemetry::{VramGauge, vram_outros};
+        use std::sync::atomic::Ordering;
+        let cuda = Cuda::load().expect("libcuda");
+        let dev = cuda.device(0).unwrap();
+        let ctx = cuda.create_context(&dev).unwrap();
+        let chunk = 64 * 1024 * 1024usize; // o "daemon" aloca 64 MiB
+        let _mem = ctx.alloc(chunk).unwrap();
+        let (free, total) = ctx.mem_info().unwrap();
+        let gauge = VramGauge::default();
+        gauge.free.store(free as u64, Ordering::Relaxed);
+        gauge.total.store(total as u64, Ordering::Relaxed);
+        assert!(total > 0 && free <= total, "mem_info coerente");
+        let used = (total - free) as u64;
+        let alloc_daemon = chunk as u64;
+        let outros = vram_outros(used, alloc_daemon);
+        // Num desktop em uso, o uso total > o que o daemon alocou (há gráficos) → outros > 0.
+        assert!(
+            used > alloc_daemon,
+            "uso total ({used}) > daemon ({alloc_daemon})"
+        );
+        assert!(
+            outros > 0,
+            "vram_outros capta gráficos/Windows: {outros} bytes"
+        );
+        eprintln!(
+            "VRAM real (MiB): total={} free={} used={} daemon={} outros={}",
+            total >> 20,
+            free >> 20,
+            used >> 20,
+            alloc_daemon >> 20,
+            outros >> 20
+        );
+    }
+
     #[test]
     fn slice_view_isolates_neighbors() {
         // RamBackend de 128B = 2 slices de 64B; escrever na slice 1 não vaza para a slice 0.

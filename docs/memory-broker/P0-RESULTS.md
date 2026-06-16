@@ -102,6 +102,28 @@ SPECv2 + commit citando este arquivo).
 | `psi_floor` | 5.0 | **OK** | idle WSL2 ~0.01 e civm ~1.2 (ambos <5); carga ≥14 (>5) → separa idle de pressão real |
 | `cf_window`/`cf_factor`/`cf_cooldown` | 60 s / 2.0 / 300 s | fixos (trigger PRD §14) | — |
 
+## 6. Telemetria & reconciliação (feature `broker-telemetry-reconciliation`)
+
+Números da sessão 2026-06-16 (`docs/broker-telemetry-reconciliation/`). Disciplina #3 (número) + #1
+(estado).
+
+| Item | Valor | Unidade | Ambiente | Data |
+| --- | --- | --- | --- | --- |
+| VRAM `total` / `free` / `used` | 6143 / 5040 / 1103 | MiB | RTX 2060, WSL2, desktop em uso | 2026-06-16 |
+| `vram_alloc_daemon` (teste) | 64 | MiB | idem (alloc do teste) | 2026-06-16 |
+| **`vram_outros`** (gráficos por subtração) | **1039** | MiB | idem | 2026-06-16 |
+| `reconcile_delta` sob swap normal | **≈ -1.0** (ocupado≈0 ≤ emprestado) | frac | drill qemu broker RAM | 2026-06-16 |
+
+- **Gauge real (RF-3):** `vram_gauge_outros_captures_real_graphics_usage` (`backend.rs`, `--ignored`) —
+  `mem_info` real → `vram_outros=1039 MiB` capta o uso de gráficos do desktop (sinal de consumidor externo).
+- **Calibração `tol_frac`/`streak` (DT-7):** `tol_frac=0.10`, `streak=3` **provisórios e seguros** —
+  `Unaccounted` só dispara se `ocupado > emprestado·(1+tol)`; sob operação normal `ocupado ≤ emprestado`
+  (`delta ≤ 0`; ~-1.0 no drill), então **sem falso-positivo**. Fronteira unit-testada. Distribuição
+  exata sob carga real = refinamento no e2e civm (não bloqueia).
+- **JSONL e2e:** drill qemu broker com `--telemetry-jsonl` → `KTEST-TELEMETRY=ok` (daemon vivo escreve
+  a linha na VM isolada).
+- **Pendente (civm/GPU):** flag `eviction` sob carga WDDM real (canário disparando) — env-bound (GPU+daemon).
+
 ## Checklist de fechamento do gate
 
 - [x] §1 PSI WSL2: idle (0.011) + **carga (14.25)** ✓
