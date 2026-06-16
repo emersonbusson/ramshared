@@ -66,7 +66,8 @@ NVIDIA-Vulkan nativo (a RTX 2060 não tem ICD Vulkan no WSL2 — `vulkaninfo` s�
 
 ## Gaps genuinamente env-bound (gated, `#[ignore]` / host NVIDIA-Vulkan nativo)
 
-Mesma natureza do trap do ublk+VRAM — **não dá pra validar neste WSL2** (sem ICD NVIDIA p/ Vulkan):
+Mesma natureza do trap do ublk+VRAM — **não dá pra validar neste WSL2** (sem ICD NVIDIA Vulkan
+**carregável pelo loader Linux** — ver detalhe abaixo):
 
 - **Perf vs CUDA** (Kahneman ITEM-3 #5: staging copy < 2× o `cuMemcpy` no mesmo HW) — medir no real-GPU.
 - **VRAM real** (`alloc` numa GPU física + `mem_info` via `VK_EXT_memory_budget` exato).
@@ -76,9 +77,15 @@ Mesma natureza do trap do ublk+VRAM — **não dá pra validar neste WSL2** (sem
 
 ### Rota futura conhecida p/ real-GPU **dentro do WSL2** — Dozen (`dzn`), investigada e não-trivial
 
-Investigado em 2026-06-16 (pra não re-investigar do zero): a RTX 2060 **não** tem ICD Vulkan no WSL2
-(`vulkaninfo --summary` só lista `llvmpipe`; o NVIDIA-WSL provê CUDA/NVML/encode, não Vulkan; o
-`nouveau`/NVK está instalado mas não acha a GPU — precisa de DRM nativo, não `/dev/dxg`). **MAS** as
+Investigado em 2026-06-16 (pra não re-investigar do zero): a RTX 2060 **não** é alcançável por Vulkan
+**pelo lado Linux** deste WSL2 (`vulkaninfo --summary` só lista `llvmpipe`). Precisão importante (a NVIDIA
+**tem** Vulkan Linux nativo de primeira — `nvidia_icd.json`→`libGLX_nvidia.so` num Linux normal): no WSL2
+existem ICDs Vulkan da NVIDIA (`/usr/lib/wsl/drivers/.../nv-vk64.json`), mas eles apontam pra **DLL do
+Windows** (`nvoglv64.dll`) — o loader Vulkan do **Linux** (`libvulkan.so.1`) só carrega `.so` (ELF), não
+`.dll` (PE). As libs NVIDIA **Linux** projetadas no WSL (`/usr/lib/wsl/lib`) são só CUDA/NVENC/OptiX/NGX
+(`ldconfig` confirma: **nenhuma `.so` Vulkan/GLX**). O `nouveau`/NVK está instalado mas não acha a GPU
+(precisa de DRM nativo, não `/dev/dxg`). Ou seja: o Vulkan→2060 no WSL2 existe **só pelo lado Windows**
+(DLL), não pelo Linux. **MAS** as
 libs D3D12 do WSL estão presentes (`/usr/lib/wsl/lib/libd3d12core.so`, `libdxcore.so`, no linker path) —
 o substrato do **Dozen (`dzn`)** da Mesa (Vulkan→D3D12→`/dev/dxg`→GPU). Viabilidade:
 
