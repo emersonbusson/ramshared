@@ -15,6 +15,7 @@ O source of truth para regras de arquitetura e código está em:
 - [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md)
 - [`.claude/rules/coding.md`](.claude/rules/coding.md)
 - [`.claude/rules/governance.md`](.claude/rules/governance.md)
+- [`.claude/rules/benchmarks.md`](.claude/rules/benchmarks.md)
 
 ### Antes de planejar, editar ou abrir patch/PR
 

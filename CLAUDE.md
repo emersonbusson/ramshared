@@ -13,6 +13,7 @@ Antes de alterar código:
 3. Se envolver mudança estrutural, manipulação de locks, alocação crônica ou novo hardware, siga a metodologia **SSDV3** ([`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md) e [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md)).
 4. Siga sempre [`.claude/rules/coding.md`](.claude/rules/coding.md) para formatação, checkpatch e testes.
 5. Em Pull Requests, siga o formato de tabela de commits de [`.claude/rules/governance.md`](.claude/rules/governance.md).
+6. Para benchmarks/medições que embasam decisão, siga [`.claude/rules/benchmarks.md`](.claude/rules/benchmarks.md) (contexto auto + ≥3 rodadas + log append-only em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)).
 
 ## Metodologias Core
 
