@@ -1704,3 +1704,15 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   PASS** (sem regressão). Princípio sênior: testar cada camada no nível mais seguro (in-process > qemu
   > nunca daemon-consumidor no host). **Resta** (civm/GPU): eviction sob carga, números VRAM reais,
   calibração `tol_frac`/`streak`.
+- **Gaps fechados depois (frente b):** números VRAM reais via teste in-process `#[ignore]` na RTX 2060
+  (`vram_outros=1039 MiB` capta gráficos); calibração `tol_frac=0.10` segura por estrutura
+  (ocupado≤emprestado→delta≤0) + fronteira unit. Commits `ef792b1`/`5462ce5`.
+- **Pente-fino multi-agente (Opus 4.8, 4 agents) achou BUG CRÍTICO C1:** o flag `Eviction` nunca
+  confirmava em produção — `demotes_delta` per-tick × histerese `recon_streak=3` engolia a evicção
+  transitória; o teste mascarava (helper `streak=1`). **Fix (`e12efcf`):** Eviction confirma imediato
+  (evento, bypassa histerese); sustentados mantêm streak. + MED-1 (teto `--slices=256` vs MAX_LINE_BYTES)
+  + M1 (reconcile alloc=0). wsl2d lib **61**, drill PASS. **Lição:** histerese de streak só serve p/
+  sinais SUSTENTADOS, não p/ eventos per-tick.
+- **RF-G2 (Vulkan) PRD escrito** (`docs/vulkan-backend/PRD.md`): 2ª impl do `VramProvider` via `ash`
+  (DEVICE_LOCAL + VK_EXT_memory_budget + staging/transfer queue); destrava "qualquer GPU" + um host
+  Linux nativo onde o ublk+VRAM e o eviction-sob-carga finalmente rodam e2e. Aguarda revisão → SPEC.
