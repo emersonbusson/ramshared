@@ -1716,3 +1716,24 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
 - **RF-G2 (Vulkan) PRD escrito** (`docs/vulkan-backend/PRD.md`): 2ª impl do `VramProvider` via `ash`
   (DEVICE_LOCAL + VK_EXT_memory_budget + staging/transfer queue); destrava "qualquer GPU" + um host
   Linux nativo onde o ublk+VRAM e o eviction-sob-carga finalmente rodam e2e. Aguarda revisão → SPEC.
+- **RF-G2 (backend Vulkan) — SSDV3 COMPLETO (PRD→SPEC→IMPL) + validado em lavapipe.** 2ª impl do
+  `VramProvider`/`VramMemory` via `ash 0.38` no crate novo `ramshared-vulkan` (a CUDA fica intacta).
+  `open` monta device lógico + transfer queue + cmd pool/buffer + fence + staging
+  `HOST_VISIBLE|HOST_COHERENT` (cleanup RAII estilo `goto out_err` via `ResGuard`). `alloc` reserva
+  buffer `DEVICE_LOCAL`; `read_at`/`write_at` via staging + `vkCmdCopyBuffer` + `VkFence` (chunks ≤ 1
+  MiB, 1 staging reusado); `zero` via `vkCmdFillBuffer(WHOLE_SIZE)` (buffer arredondado p/ múltiplo de
+  4); bounds-check → `OutOfRange`. Todo `unsafe` isolado c/ `// SAFETY:`; fronteira do trait sem unsafe.
+- **2 decisões de IMPL viraram DT no SPEC ANTES do código (disciplina #3):** **DT-10** —
+  `VK_EXT_memory_budget` é OPCIONAL; ausente (lavapipe) → `total`=maior heap `DEVICE_LOCAL`,
+  `free`=`total−Σ alocado` (contador `AtomicU64`). **DT-11** — ublk+Vulkan DEFERIDO: o
+  `spawn_server_dt3_vram_with_residency` é CUDA-fixo (`Cuda::load()` dentro da thread), não genérico;
+  `run_ublk` c/ `--backend vulkan` retorna `Err` claro. Shell `--backend vulkan` ligado só nos caminhos
+  genéricos (broker + NBD single, `P: VramProvider`).
+- **Validação:** round-trip no **lavapipe** (`cargo test -p ramshared-vulkan -- --ignored`, sandbox off)
+  bytes-iguais (1 MiB+4 KiB, 2 chunks, offset≠0), `zero` zera, `OutOfRange`, `mem_info` free cai 2 MiB;
+  workspace **205 passed/0 failed/22 ignored**, clippy `--all-targets -D warnings` + fmt limpos; drills
+  qemu **broker PASS** + **ublk-daemon PASS** (sem regressão). Commits `b19d8a3`(RF-V1) `36f3586`(DT-10)
+  `d15bd82`(RF-V2/V3) `d4617e7`(DT-11) `afad4d5`(RF-V4) `b6ebdee`(IMPL+LIBRARIES). Branch
+  `feat/p1-hardening` (sem PR — aguarda pedido explícito). **Lição reforçada:** verificar o ambiente
+  antes de dizer "não dá" — o lavapipe (Vulkan em CPU) valida a LÓGICA aqui, igual ao `FakeVram` do ublk;
+  só perf/VRAM-real/eviction precisam de host NVIDIA-Vulkan nativo (a RTX 2060 não tem ICD Vulkan no WSL2).
