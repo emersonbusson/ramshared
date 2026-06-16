@@ -36,6 +36,7 @@ genérico (`run_nbd`/`run_broker`/`serve_ublk_residency` sobre `P: VramProvider`
 | DT-8 (revisto) | **A LÓGICA valida no lavapipe (Vulkan em CPU) AQUI** (round-trip `#[ignore]`, rodado com `--ignored`); só **perf / VRAM-real / eviction** precisam de host NVIDIA-Vulkan nativo (a RTX 2060 **não** tem ICD Vulkan no WSL2 — verificado por `vulkaninfo`). | Testar no nível mais seguro que ainda prova (igual ao `FakeVram` do ublk); não deferir o que dá pra validar por software. |
 | DT-9 | Mapeamento de erro: `From<vk::Result>`/erros do `ash` → `VramError::Provider(String)`; OOB → `VramError::OutOfRange` (espelha `From<CudaError>` do `ramshared-cuda`). | Contrato do trait (sem `unwrap`/panic; tudo vira `VramError`). |
 | DT-10 (IMPL) | **`VK_EXT_memory_budget` é OPCIONAL** (revisa DT-4). Presente → `mem_info` exato (`budget-usage`, `budget`). Ausente (ex.: lavapipe) → `total` = maior heap `DEVICE_LOCAL`; `free` = `total − Σ alocado pelo provider` (contador `AtomicU64`). | Sem o fallback a lógica não roda no lavapipe; o contador dá um `free` correto p/ o próprio daemon (o ajuste p/ VRAM de outros processos vem do budget, só no real-GPU). |
+| DT-11 (IMPL) | `--backend vulkan` é ligado nos caminhos **genéricos** (`run_broker` + `run_nbd` single, ambos `P: VramProvider`). O **ublk** com Vulkan fica **deferido**: o `spawn_server_dt3_vram_with_residency` (`ublk_server.rs`) é **CUDA-fixo** (faz `Cuda::load()`/`create_context` dentro da thread do worker), não genérico — generificá-lo sobre `VramProvider` é um refactor à parte. `run_ublk` com `BackendKind::Vulkan` retorna `Err` claro (não panica). | Revisa o RF-V4/ITEM-4 ("`run_ublk` não muda"): o arm VRAM do ublk não é genérico. Day-0 honesto: nada de caminho Vulkan-com-forma-de-CUDA meia-feito; ublk só roda em host nativo (gated), onde a generificação será validada. |
 
 ## Fronteira de atomicidade e política de rollback
 
@@ -126,10 +127,11 @@ genérico (`run_nbd`/`run_broker`/`serve_ublk_residency` sobre `P: VramProvider`
   do modo broker/single/ublk cria o shell Vulkan (espelha o shell CUDA: hoje `Cuda::load()` →
   `create_context` → `run_broker(ctx, …)`; novo: `VulkanProvider::open(0)? → run_broker(provider, …)`).
 - **Função/bloco:** `enum BackendKind` (+`Vulkan`), `BackendKind::label`, o `match args "--backend"`,
-  e os `match backend { Vram => {shell CUDA}, Ram => …, Vulkan => {shell Vulkan} }` em `run()` (broker)
-  e em `run_ublk` (single/ublk).
-- **Impacto:** aditivo; CUDA/RAM intactos. `run_broker`/`run_nbd`/`run_ublk` **não mudam** (genéricos).
-  `run_ublk` no WSL2 segue barrado por `guard_not_wsl2` (Vulkan-ublk só faz sentido em host nativo).
+  e os `match backend { Vram => {shell CUDA}, Ram => …, Vulkan => {shell Vulkan} }` no modo broker e no
+  `Transport::Nbd` single de `run()`. **ublk:** `run_ublk` ganha um arm `Vulkan => Err(claro)` (DT-11:
+  o servidor de residência ublk é CUDA-fixo; generificá-lo é refactor à parte, só validável em host).
+- **Impacto:** aditivo; CUDA/RAM intactos. `run_broker`/`run_nbd` **não mudam** (já genéricos). `run_ublk`
+  ganha só o arm de erro (DT-11). `run_ublk` no WSL2 segue barrado por `guard_not_wsl2` de qualquer forma.
 - **Testes:** `--backend vulkan` parseia; e2e = smoke round-trip (host Vulkan).
 
 ## Arquivos a DELETAR
