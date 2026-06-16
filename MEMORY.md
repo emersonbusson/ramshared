@@ -1677,3 +1677,30 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   `residency_check` genéricos + daemon (run_nbd/run_broker) genérico + ublk-vram genérico. Vulkan (RF-G2)
   = PRD próprio (destrava o e2e ublk+VRAM). Branch `feat/p1-hardening`, tudo verde, **sem PR** (regra do
   usuário: só no fim de tudo implementado+validado e quando ele pedir).
+
+---
+
+## 2026-06-16 — Regra de benchmarks + coletor de telemetria/reconciliação do broker (SSDV3 completo)
+
+- **Análise de valor (sênior):** o usuário questionou se o RamShared vale a pena. Aterrado nos
+  próprios números (P0 §3): VRAM-swap (241 µs ublk / 644 µs cross-host) **não bate NVMe saudável**
+  (~80 µs) — mas o "NVMe" real deste host (ext4-VHDX-WSL2 contido) deu **randread QD1 p50 ~2114 µs**,
+  então **vs o disco real do ambiente o VRAM-swap GANHA** no swap-in. NVIDIA (Sysmem Fallback/UVM),
+  WDDM (VidMm+DXGI budget) e AMD (HIP/HMM) já resolvem o "GPU derrama pra RAM" no driver → o **fosso**
+  do RamShared é a **arbitragem revogável cross-tenant de VRAM ociosa** (não-validada ainda).
+- **Regra de benchmarks:** `.claude/rules/benchmarks.md` (contexto auto + ≥3 rodadas + lado-a-lado +
+  saída dupla JSONL+MD + append-only); ponteiros em CLAUDE/AGENTS/ssdv3 (sync rule). Log único em
+  `docs/BENCHMARKS.md`; harness `scripts/p0/measure-{vram-headroom,swap-compare}.sh`. Snapshot do host
+  carregado (OBS/Edge/qBittorrent…) vira dado (Kahneman #1).
+- **Feature `broker-telemetry-reconciliation` (PRD→SPEC→SPECv2→IMPL, SSDV3 completo):** coletor que
+  reconcilia ledger do broker × swap dos tenants × VRAM do host; flag de divergência
+  (eviction=canário, stuck_slice, unaccounted=ocupado>emprestado). 2 rodadas de auditoria 2.5
+  (no-go→SPECv2 in-place). **DT-1:** contadores em `Arc<Vec<SliceIoCounters>>` (não no `Slice` —
+  data-plane × control-plane). **DT-6:** eviction pelo canário, não por subtração de VRAM. Novo
+  `crates/ramshared-wsl2d/src/telemetry.rs` (`reconcile` puro) + `Outbound::Telemetry` + `TelemetrySink`
+  JSONL (`--telemetry-jsonl`) + `Msg::Psi.mem`/`StatusReply.slice_io` (aditivos serde-default).
+- **Validado:** workspace **201 testes** (wsl2d lib 45→58: telemetry+wiring+sink), clippy/fmt limpos;
+  **drill qemu broker PASS + KTEST-TELEMETRY=ok** (daemon vivo escreve JSONL na VM); **drill ublk-RAM
+  PASS** (sem regressão). Princípio sênior: testar cada camada no nível mais seguro (in-process > qemu
+  > nunca daemon-consumidor no host). **Resta** (civm/GPU): eviction sob carga, números VRAM reais,
+  calibração `tol_frac`/`streak`.

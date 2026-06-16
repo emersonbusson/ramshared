@@ -21,6 +21,8 @@ ramshared-broker = { path = "../ramshared-broker" }
 ramshared-tier = { path = "../ramshared-tier" }
 ramshared-integrity = { path = "../ramshared-integrity" }
 ramshared-uring = { path = "../ramshared-uring" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [lints.clippy]
 unwrap_used = "deny"
