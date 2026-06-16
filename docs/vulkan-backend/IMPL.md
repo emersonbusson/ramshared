@@ -74,6 +74,23 @@ Mesma natureza do trap do ublk+VRAM — **não dá pra validar neste WSL2** (sem
   de residência ublk é CUDA-fixo; generificá-lo sobre `VramProvider` é o próximo passo, validável só em
   host nativo onde o ublk roda).
 
+### Rota futura conhecida p/ real-GPU **dentro do WSL2** — Dozen (`dzn`), investigada e não-trivial
+
+Investigado em 2026-06-16 (pra não re-investigar do zero): a RTX 2060 **não** tem ICD Vulkan no WSL2
+(`vulkaninfo --summary` só lista `llvmpipe`; o NVIDIA-WSL provê CUDA/NVML/encode, não Vulkan; o
+`nouveau`/NVK está instalado mas não acha a GPU — precisa de DRM nativo, não `/dev/dxg`). **MAS** as
+libs D3D12 do WSL estão presentes (`/usr/lib/wsl/lib/libd3d12core.so`, `libdxcore.so`, no linker path) —
+o substrato do **Dozen (`dzn`)** da Mesa (Vulkan→D3D12→`/dev/dxg`→GPU). Viabilidade:
+
+- **Sem pacote pronto:** `mesa-vulkan-drivers` (25.2.8 e 24.0.5) **não** entregam `libvulkan_dzn.so`
+  (Ubuntu/Debian excluem o `microsoft-experimental`; PPAs seguem a mesma regra). Única rota = **build de
+  fonte** com `-Dvulkan-drivers=microsoft-experimental` (instalar `meson`/`ninja`/`glslang` + `apt
+  build-dep mesa` — modifica o sistema; clone + ~10–30 min de compile CPU-bound).
+- **Cobre só o funcional:** mesmo dando certo, valida `alloc`/`mem_info`/round-trip na **VRAM física
+  real** — mas a **perf** seria Vulkan-traduzido-pra-D3D12, **não** NVIDIA nativo, então o gate de
+  perf-vs-CUDA (#5) **continua** precisando de host nativo. Decisão (2026-06-16): **não buildar agora**
+  (custo/benefício marginal; a lógica já está provada no lavapipe).
+
 ## Rastreabilidade
 
 `b19d8a3` (RF-V1) · `36f3586` (DT-10) · `d15bd82` (RF-V2/RF-V3) · `d4617e7` (DT-11) · `afad4d5` (RF-V4).
