@@ -77,6 +77,8 @@ Implementa estritamente conforme SPEC. **Zero criatividade fora do escopo.** Se 
 
 Output: `docs/<feature-slug>/IMPL.md` documentando o que foi feito (commits, arquivos, decisões pequenas que não pediram nova ADR, métricas de validação).
 
+> **Benchmarks que embasam o gate numérico P0 e as métricas de validação** seguem [`.claude/rules/benchmarks.md`](benchmarks.md): contexto capturado automaticamente, ≥3 rodadas (mediana + p99 + desvio), tag de carga (`idle`/`loaded`) e registro íntegro em `docs/BENCHMARKS.md` + `docs/benchmarks/results.jsonl`.
+
 ## Regras duras
 
 1. **Reuso antes de criação.** Antes de propor código novo, prove que uma API do kernel ou helper existente não atende. Reference: subsistemas (`mm/`, `drm/`, `lib/`), helpers do módulo, crates do workspace.
