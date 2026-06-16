@@ -48,18 +48,26 @@
   `--telemetry-jsonl`): `QEMU-BROKER-DRILL: PASS` + `KTEST-TELEMETRY=ok` — **o daemon vivo escreve o
   JSONL** (RF-5 e2e, em VM isolada); swap ativo via NBD; teardown limpo.
 
-## Gaps deferidos (genuinamente precisam de GPU+carga ou rede — civm/Q1d)
+## Gaps — fechados na sessão (b) com disciplina + segurança
 
-- **Flag `eviction` e2e sob carga real:** o canário só dispara com pressão gráfica WDDM evictando a
-  VRAM — não dá pra forçar com segurança aqui. A LÓGICA está testada (`eviction_flag_after_demote` +
-  `reconcile_eviction_when_demotes`); falta a observação ao vivo (civm/host com carga).
-- **Números de VRAM reais no JSONL:** `vram_alloc_daemon`/`vram_total_used`/`vram_outros` com a RTX
-  2060 (gauge real). Coberto por composição aqui (`mem_info` em `gpu_roundtrip` + gauge→`reconcile` em
-  `on_tick_emits_telemetry` + `vram_outros` unit); o valor real sai na sessão GPU. `--backend ram` deixa
-  `vram_*=null` (sentinela), como esperado.
-- **Calibração `tol_frac`/`streak`** (DT-7): defaults 0.10/3 **estruturalmente seguros** (`Unaccounted`
-  só dispara se `ocupado > emprestado`, que não acontece sem bug); calibrar a distribuição do `delta`
-  no e2e civm e anexar ao P0.
+- **Números de VRAM reais (RF-3) — FECHADO.** Teste in-process `#[ignore]`
+  `vram_gauge_outros_captures_real_graphics_usage` (`backend.rs`): `mem_info` real na **RTX 2060** →
+  gauge → `vram_outros`. Medido: **total=6143, free=5040, used=1103, daemon=64, outros=1039 MiB** — o
+  `vram_outros` por subtração capta corretamente **~1 GB de VRAM de gráficos** (desktop/OBS), que é o
+  sinal de "consumidor externo". Seguro (CUDA-only, sem daemon).
+- **Calibração `tol_frac`/`streak` (DT-7) — resolvida por estrutura + unit.** `Unaccounted` só dispara
+  se `ocupado > emprestado·(1+tol)`; sob operação normal `ocupado ≤ emprestado` ⇒ `delta ≤ 0` (no drill,
+  swap vazio ⇒ `ocupado≈0` ⇒ `delta≈-1.0`, longe de +0.10). Fronteira unit-testada
+  (`unaccounted_when_occupied_exceeds_alloc` dispara só acima; `reconcile_idle_none` fica em `none`).
+  → `tol_frac=0.10` **não dá falso-positivo**; a distribuição exata ao vivo fica como refinamento no civm.
+
+## Gap genuinamente env-bound (mesmo trap do ublk+VRAM)
+
+- **Flag `eviction` e2e sob carga WDDM real:** o canário só dispara com a VRAM do daemon sendo evictada
+  por pressão gráfica — precisa do **daemon + GPU + carga juntos**, e a GPU só é alcançável no WSL2 (onde
+  daemon é arriscado) e o qemu não tem GPU (mesmo trap do ublk+VRAM). A LÓGICA está coberta por
+  composição: canário (P1, latência→`Verdict::Demote`) + `reconcile_eviction_when_demotes` +
+  `eviction_flag_after_demote` (DEMOTE→flag). Observação ao vivo = host GPU não-WSL2 (RF-G2) ou civm.
 
 ## Rastreabilidade
 

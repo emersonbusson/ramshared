@@ -110,7 +110,8 @@ fi
 TLINES=\$(\$BB grep -c '"flag"' /tmp/telem.jsonl 2>/dev/null); [ -z "\$TLINES" ] && TLINES=0
 echo "KTEST-TELEMETRY-LINES=\$TLINES"
 [ "\$TLINES" -ge 1 ] && echo "KTEST-TELEMETRY=ok" || echo "KTEST-TELEMETRY=fail"
-echo "KTEST-TELEMETRY-SAMPLE:"; \$BB head -1 /tmp/telem.jsonl 2>/dev/null
+\$BB sleep 2.5  # deixa >=1 tick (2s) emitir uma amostra completa
+echo "KTEST-TELEMETRY-SAMPLE:"; \$BB cat /tmp/telem.jsonl 2>/dev/null
 
 # --- FASE 3: teardown limpo. swapoff + desconecta NBD ENQUANTO o daemon ainda serve, depois
 # SIGTERM no daemon (DT-28: o worker encerra no shutdown). Ordem evita swapoff sobre NBD morto.
