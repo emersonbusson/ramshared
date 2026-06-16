@@ -96,8 +96,18 @@ pub fn vram_outros(total_used: u64, alloc_daemon: u64) -> u64 {
 /// (positivo = ocupou mais do que foi emprestado). O `streak` (histerese, DT-12) é aplicado **fora**,
 /// no `on_tick`. F-v2-1: `delta` é computado **antes** de qualquer retorno.
 pub fn reconcile(inp: &ReconcileInput, tol_frac: f64) -> (f64, ReconcileFlag) {
-    let delta = (inp.occupied_swap_bytes as f64 - inp.alloc_active_bytes as f64)
-        / inp.alloc_active_bytes.max(1) as f64;
+    // alloc=0 (nada emprestado): a fração é indefinida → 0.0 se nada ocupado, senão 1.0 (drift
+    // total). Evita reportar `occupied` cru (número gigante) no `reconcile_delta` do JSONL (M1).
+    let delta = if inp.alloc_active_bytes == 0 {
+        if inp.occupied_swap_bytes == 0 {
+            0.0
+        } else {
+            1.0
+        }
+    } else {
+        (inp.occupied_swap_bytes as f64 - inp.alloc_active_bytes as f64)
+            / inp.alloc_active_bytes as f64
+    };
     if inp.any_source_missing {
         return (delta, ReconcileFlag::Partial);
     }
@@ -175,6 +185,22 @@ mod tests {
         inp.any_source_missing = true;
         let (delta, _) = reconcile(&inp, 0.10);
         assert!((delta - (-0.5)).abs() < 0.01, "512MiB/1GiB - 1 = -0.5");
+    }
+
+    #[test]
+    fn reconcile_alloc_zero_no_giant_delta() {
+        // M1: nada emprestado → delta definido (não o `occupied` cru). Vazio=None, com swap=Unaccounted.
+        let mut inp = base();
+        inp.alloc_active_bytes = 0;
+        inp.occupied_swap_bytes = 0;
+        assert_eq!(reconcile(&inp, 0.10), (0.0, ReconcileFlag::None));
+        inp.occupied_swap_bytes = 999 << 20;
+        let (delta, flag) = reconcile(&inp, 0.10);
+        assert_eq!(flag, ReconcileFlag::Unaccounted);
+        assert!(
+            (delta - 1.0).abs() < 1e-9,
+            "delta = 1.0 (drift total), não occupied cru"
+        );
     }
 
     #[test]
