@@ -22,6 +22,7 @@ use ramshared_broker::arbiter::ArbiterConfig;
 use ramshared_broker::slices::SliceMap;
 use ramshared_cuda::Cuda;
 use ramshared_vram::{VramMemory, VramProvider};
+use ramshared_vulkan::VulkanProvider;
 use ramshared_wsl2d::broker_srv::{BrokerConfig, EndpointCfg, spawn_broker};
 use ramshared_wsl2d::swap::spawn_swapoff;
 use ramshared_wsl2d::{
@@ -54,12 +55,15 @@ enum Transport {
     Ublk,
 }
 
-/// Backend do tier ublk: VRAM (GPU, com residência §9/§9.4) ou RAM (sem GPU). O RAM
-/// existe para validar o **ciclo de vida/teardown** do daemon ublk em **qemu** (onde
-/// não há GPU); o bug de teardown que travou o WSL2 é independente do backend.
+/// Backend de VRAM/tier: `Vram` (CUDA, com residência §9/§9.4), `Vulkan` (qualquer GPU via
+/// `ramshared-vulkan`, RF-G2) ou `Ram` (sem GPU). O `Ram` existe para validar o **ciclo de
+/// vida/teardown** do daemon ublk em **qemu** (onde não há GPU); o bug de teardown que travou o
+/// WSL2 é independente do backend. `Vulkan` cobre broker + NBD single (caminhos genéricos); ublk
+/// com Vulkan fica deferido (DT-11: o servidor de residência ublk é CUDA-fixo).
 #[derive(Clone, Copy)]
 enum BackendKind {
     Vram,
+    Vulkan,
     Ram,
 }
 
@@ -67,6 +71,7 @@ impl BackendKind {
     fn label(self) -> &'static str {
         match self {
             BackendKind::Vram => "vram",
+            BackendKind::Vulkan => "vulkan",
             BackendKind::Ram => "ram",
         }
     }
@@ -267,8 +272,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 i += 1;
                 backend = match args.get(i).map(String::as_str) {
                     Some("vram") => BackendKind::Vram,
+                    Some("vulkan") => BackendKind::Vulkan,
                     Some("ram") => BackendKind::Ram,
-                    _ => return Err("--backend requer 'vram' ou 'ram'".into()),
+                    _ => return Err("--backend requer 'vram', 'vulkan' ou 'ram'".into()),
                 };
             }
             "--slices" => {
@@ -363,13 +369,29 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return match backend {
             BackendKind::Vram => {
                 // Shell CUDA: cria o provider (Context impl VramProvider) e entra no caminho
-                // genérico. Um backend Vulkan futuro teria seu próprio shell aqui.
+                // genérico.
                 let cuda = Cuda::load()?;
                 let dev = cuda.device(0)?;
                 eprintln!("[ramsharedd] GPU: {}", dev.name());
                 let ctx = cuda.create_context(&dev)?;
                 run_broker(
                     ctx,
+                    slice_bytes,
+                    slices,
+                    sock,
+                    force,
+                    listen_nbd_addr,
+                    advertise_tcp,
+                    arbiter_addr,
+                    telemetry_jsonl,
+                )
+            }
+            BackendKind::Vulkan => {
+                // Shell Vulkan (RF-V4/DT-11): provider Vulkan no MESMO run_broker genérico.
+                let provider = VulkanProvider::open(0)?;
+                eprintln!("[ramsharedd] GPU (vulkan): {}", provider.device_name());
+                run_broker(
+                    provider,
                     slice_bytes,
                     slices,
                     sock,
@@ -397,14 +419,25 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     match transport {
-        Transport::Nbd => {
-            // Shell CUDA: cria o provider e entra no caminho genérico (Vulkan teria o seu).
-            let cuda = Cuda::load()?;
-            let dev = cuda.device(0)?;
-            eprintln!("[ramsharedd] GPU: {}", dev.name());
-            let ctx = cuda.create_context(&dev)?;
-            run_nbd(ctx, size, sock, force, nbd_dev)
-        }
+        Transport::Nbd => match backend {
+            BackendKind::Vram => {
+                // Shell CUDA: cria o provider e entra no caminho genérico.
+                let cuda = Cuda::load()?;
+                let dev = cuda.device(0)?;
+                eprintln!("[ramsharedd] GPU: {}", dev.name());
+                let ctx = cuda.create_context(&dev)?;
+                run_nbd(ctx, size, sock, force, nbd_dev)
+            }
+            BackendKind::Vulkan => {
+                // Shell Vulkan (RF-V4/DT-11): provider Vulkan no MESMO run_nbd genérico.
+                let provider = VulkanProvider::open(0)?;
+                eprintln!("[ramsharedd] GPU (vulkan): {}", provider.device_name());
+                run_nbd(provider, size, sock, force, nbd_dev)
+            }
+            BackendKind::Ram => Err(
+                "--backend ram não tem caminho NBD single; use --slices (broker) ou ublk".into(),
+            ),
+        },
         Transport::Ublk => run_ublk(size, force, queue_depth, backend),
     }
 }
@@ -909,6 +942,18 @@ fn run_ublk(
     queue_depth: u16,
     backend: BackendKind,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // DT-11: ublk+Vulkan ainda nao implementado. O servidor de residencia ublk
+    // (spawn_server_dt3_vram_with_residency) e CUDA-fixo, nao generico sobre
+    // VramProvider; generifica-lo e refactor a parte (so validavel em host nativo).
+    // Falha cedo, antes de qualquer side-effect (add_device/mlockall).
+    if let BackendKind::Vulkan = backend {
+        return Err(
+            "ublk com --backend vulkan ainda nao suportado (DT-11: servidor de \
+             residencia ublk e CUDA-fixo). Use --backend vram (CUDA), ou Vulkan \
+             via --slices (broker) / --transport nbd."
+                .into(),
+        );
+    }
     // TRAVA DE SEGURANCA: recusa servir ublk no WSL2. Um teardown malsucedido do
     // daemon orfana o /dev/ublkbN -> I/O em D-state -> CONGELA o WSL2 (2026-06-09).
     guard_not_wsl2()?;
@@ -956,6 +1001,10 @@ fn run_ublk(
             BLOCK_SIZE as usize,
             RamBackend::new(size as usize),
         )?),
+        // Inalcancavel: barrado no inicio de run_ublk (DT-11). Defensivo, sem panic.
+        BackendKind::Vulkan => {
+            return Err("ublk com --backend vulkan nao suportado (DT-11)".into());
+        }
     };
     ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())?;
     eprintln!(

@@ -153,6 +153,7 @@ dependencies = [
  "ramshared-tier",
  "ramshared-uring",
  "ramshared-vram",
+ "ramshared-vulkan",
  "serde",
  "serde_json",
 ]
