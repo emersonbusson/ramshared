@@ -26,8 +26,8 @@ use ramshared_wsl2d::broker_srv::{BrokerConfig, EndpointCfg, spawn_broker};
 use ramshared_wsl2d::swap::spawn_swapoff;
 use ramshared_wsl2d::{
     CANARY_BYTES, CANARY_EVERY, CHAN_CAP, Cadence, Canary, CanaryProbe, DemoteReason, LiveCount,
-    RamBackend, Reply, ResidencyConfig, ResidencySampler, SliceView, Verdict, VramBackend, WMsg,
-    spawn_acceptor,
+    RamBackend, Reply, ResidencyConfig, ResidencySampler, SliceIoCounters, SliceView, Verdict,
+    VramBackend, VramGauge, WMsg, spawn_acceptor,
 };
 use ramshared_wsl2d::{ublk, ublk_control, ublk_server};
 
@@ -215,6 +215,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut listen_nbd: Option<String> = None;
     let mut arbiter: Option<String> = None;
     let mut advertise_nbd: Option<String> = None;
+    let mut telemetry_jsonl: Option<String> = None;
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
     while i < args.len() {
@@ -299,6 +300,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .clone(),
                 );
             }
+            "--telemetry-jsonl" => {
+                i += 1;
+                telemetry_jsonl = Some(
+                    args.get(i)
+                        .ok_or("--telemetry-jsonl requer caminho")?
+                        .clone(),
+                );
+            }
             other => return Err(format!("argumento desconhecido: {other}").into()),
         }
         i += 1;
@@ -329,6 +338,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let advertise_tcp = advertise_nbd_addr
         .or(listen_nbd_addr)
         .map(|a| (a.ip().to_string(), a.port()));
+    let telemetry_jsonl = telemetry_jsonl.map(std::path::PathBuf::from);
 
     // Modo broker (ITEM-8): --slices > 0 fatia a memória e sobe o árbitro. Exige --arbiter-listen
     // (o ponto de controle do broker). --listen-nbd é opcional (tenants TCP/civm além do Unix).
@@ -356,6 +366,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     listen_nbd_addr,
                     advertise_tcp,
                     arbiter_addr,
+                    telemetry_jsonl,
                 )
             }
             BackendKind::Ram => run_broker_ram(
@@ -365,6 +376,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 listen_nbd_addr,
                 advertise_tcp,
                 arbiter_addr,
+                telemetry_jsonl,
             ),
         };
     }
@@ -556,13 +568,23 @@ struct BrokerRuntime {
     demote_tx: std::sync::mpsc::Sender<DemoteReason>,
     shutdown: std::sync::Arc<AtomicBool>,
     broker: std::thread::JoinHandle<()>,
+    /// Contadores de IO por slice (telemetria RF-1): o worker incrementa, o broker lê no `Status`.
+    slice_io: std::sync::Arc<Vec<SliceIoCounters>>,
+    /// Gauge de VRAM (RF-3): a closure de residência publica free/total; o broker lê no tick.
+    vram: std::sync::Arc<VramGauge>,
 }
+
+/// Tolerância da reconciliação (DT-7, provisória — calibrar no P0).
+const RECON_TOL_FRAC: f64 = 0.10;
+/// Ticks consecutivos p/ confirmar um flag de reconciliação (histerese DT-12).
+const RECON_STREAK: u32 = 3;
 
 /// Sobe o control-plane do broker (independente do backend): mapa de slices + geometria +
 /// exports NBD ("s0".."sN"), acceptors (Unix sempre; TCP se `--listen-nbd`) alimentando o
 /// MESMO canal `jobs` do worker, o árbitro (`spawn_broker`, que compartilha `jobs` p/ os
 /// `ZeroExport` de higiene DT-17 e consome o canal de DEMOTE) e a ponte de `SHUTDOWN`
 /// (handler de sinal só toca o estático async-signal-safe → espelhado no `Arc`).
+#[allow(clippy::too_many_arguments)] // setup do control-plane: geometria + rede + telemetria
 fn broker_setup(
     slices: u16,
     slice_bytes: u64,
@@ -570,6 +592,7 @@ fn broker_setup(
     listen_nbd_addr: Option<std::net::SocketAddr>,
     advertise_tcp: Option<(String, u16)>,
     arbiter_addr: std::net::SocketAddr,
+    telemetry_jsonl: Option<std::path::PathBuf>,
 ) -> Result<BrokerRuntime, Box<dyn std::error::Error>> {
     // Mapa de slices: o índice do export (resolvido pelo handshake) == índice na geom == índice
     // em exports (nomes "s{id}" idênticos aos que o broker emite no SwapOn).
@@ -627,6 +650,12 @@ fn broker_setup(
         );
     }
 
+    let slice_io = std::sync::Arc::new(
+        (0..slices)
+            .map(|_| SliceIoCounters::default())
+            .collect::<Vec<_>>(),
+    );
+    let vram = std::sync::Arc::new(VramGauge::default());
     let bcfg = BrokerConfig {
         listen: arbiter_addr,
         endpoints: EndpointCfg {
@@ -636,6 +665,11 @@ fn broker_setup(
         swap_prio: None,
         arbiter: ArbiterConfig::default(),
         tick: Duration::from_secs(2), // SPEC §/DT-24: tick=2s (streak=5 → janela de 10s)
+        slice_io: std::sync::Arc::clone(&slice_io),
+        vram: std::sync::Arc::clone(&vram),
+        tol_frac: RECON_TOL_FRAC,
+        recon_streak: RECON_STREAK,
+        telemetry_jsonl,
     };
     let (broker, broker_addr) = spawn_broker(
         bcfg,
@@ -653,6 +687,8 @@ fn broker_setup(
         demote_tx,
         shutdown,
         broker,
+        slice_io,
+        vram,
     })
 }
 
@@ -711,6 +747,13 @@ fn serve_broker_jobs<B: BlockBackend>(
             disconnect: out.disconnect,
         });
 
+        // Telemetria RF-1: bytes/IO servidos nesta slice (atômico, hot path barato — gate ITEM-2).
+        if touches && let Some(c) = rt.slice_io.get(job.export) {
+            c.bytes_served
+                .fetch_add(u64::from(job.req.len), Ordering::Relaxed);
+            c.io_count.fetch_add(1, Ordering::Relaxed);
+        }
+
         if touches
             && !demoted
             && let Some(reason) = residency(lat_us)
@@ -737,6 +780,7 @@ fn run_broker<P: VramProvider>(
     listen_nbd_addr: Option<std::net::SocketAddr>,
     advertise_tcp: Option<(String, u16)>,
     arbiter_addr: std::net::SocketAddr,
+    telemetry_jsonl: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let total = (slices as u64)
         .checked_mul(slice_bytes)
@@ -775,7 +819,9 @@ fn run_broker<P: VramProvider>(
         listen_nbd_addr,
         advertise_tcp,
         arbiter_addr,
+        telemetry_jsonl,
     )?;
+    let vram = std::sync::Arc::clone(&rt.vram);
     let mut backend = serve_broker_jobs(backend, &rt, |lat_us| {
         residency_check(
             lat_us,
@@ -784,7 +830,13 @@ fn run_broker<P: VramProvider>(
             &mut sampler,
             &mut cadence,
             &mut probe,
-            || provider.mem_info().ok().map(|(f, _)| f),
+            || {
+                let (f, t) = provider.mem_info().ok()?;
+                // RF-3/DT-5: publica o gauge p/ a reconciliação (free/total em bytes).
+                vram.free.store(f, Ordering::Relaxed);
+                vram.total.store(t, Ordering::Relaxed);
+                Some(f)
+            },
         )
     });
 
@@ -807,6 +859,7 @@ fn run_broker_ram(
     listen_nbd_addr: Option<std::net::SocketAddr>,
     advertise_tcp: Option<(String, u16)>,
     arbiter_addr: std::net::SocketAddr,
+    telemetry_jsonl: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let total = (slices as u64)
         .checked_mul(slice_bytes)
@@ -825,6 +878,7 @@ fn run_broker_ram(
         listen_nbd_addr,
         advertise_tcp,
         arbiter_addr,
+        telemetry_jsonl,
     )?;
     let _ = serve_broker_jobs(backend, &rt, |_| None); // RAM: sem residência
 

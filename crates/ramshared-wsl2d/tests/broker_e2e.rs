@@ -20,6 +20,7 @@ use ramshared_broker::slices::SliceMap;
 use ramshared_wsl2d::DemoteReason;
 use ramshared_wsl2d::WMsg;
 use ramshared_wsl2d::broker_srv::{BrokerConfig, EndpointCfg, spawn_broker};
+use ramshared_wsl2d::{SliceIoCounters, VramGauge};
 
 const SLICE: u64 = 64 * 1024 * 1024;
 
@@ -53,6 +54,11 @@ fn setup(k: u16, tick_ms: u64) -> Harness {
         swap_prio: None,
         arbiter: ArbiterConfig::default(),
         tick: Duration::from_millis(tick_ms),
+        slice_io: Arc::new((0..k).map(|_| SliceIoCounters::default()).collect()),
+        vram: Arc::new(VramGauge::default()),
+        tol_frac: 0.10,
+        recon_streak: 1,
+        telemetry_jsonl: None,
     };
     let (core, addr) = spawn_broker(
         cfg,
@@ -129,6 +135,7 @@ fn e2e_register_and_ack() {
         &Msg::Psi {
             sample: Default::default(),
             swaps: vec![],
+            mem: None,
         },
     )
     .unwrap();
@@ -188,6 +195,7 @@ fn e2e_psi_flood_does_not_starve_arbiter_tick() {
                 &Msg::Psi {
                     sample: Default::default(),
                     swaps: vec![],
+                    mem: None,
                 },
             )
             .is_err()

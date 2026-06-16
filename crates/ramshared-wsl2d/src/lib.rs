@@ -10,6 +10,7 @@ pub mod conn;
 pub mod residency;
 pub mod state;
 pub mod swap;
+pub mod telemetry;
 pub mod ublk;
 pub mod ublk_control;
 pub mod ublk_queue;
@@ -21,3 +22,7 @@ pub use canary_probe::{CANARY_BYTES, CANARY_EVERY, Cadence, CanaryProbe};
 pub use conn::{CHAN_CAP, Job, LiveCount, Reply, WMsg, spawn_acceptor, spawn_reader, spawn_writer};
 pub use residency::{Canary, DemoteReason, ResidencyConfig, ResidencySampler, Verdict};
 pub use state::State;
+pub use telemetry::{
+    ReconcileFlag, ReconcileInput, SliceIoCounters, TelemetryCore, TelemetrySample, VramGauge,
+    reconcile, vram_outros,
+};

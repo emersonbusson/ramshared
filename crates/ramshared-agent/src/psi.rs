@@ -66,6 +66,48 @@ pub fn parse_swaps(content: &str) -> Vec<SwapEntry> {
         .collect()
 }
 
+/// Parseia `memory.swap.current` (cgroup v2): inteiro em bytes. `"max"` (forma de `.max`,
+/// defensivo) ou conteúdo inválido → `None`. RF-2/DT-10.
+pub fn parse_memcg_swap(content: &str) -> Option<u64> {
+    let t = content.trim();
+    if t == "max" {
+        return None;
+    }
+    t.parse().ok()
+}
+
+/// Lê `memory.swap.current` do cgroup v2 do processo (via `/proc/self/cgroup` → mount unificado em
+/// `/sys/fs/cgroup`). `None` se não for cgroup v2 / arquivo ausente (degrade, DT-9). RF-2/DT-10.
+pub fn read_memcg_swap() -> Option<u64> {
+    let cg = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    let path = cg.lines().find_map(|l| l.strip_prefix("0::"))?; // cgroup v2: linha única `0::/<path>`
+    let file = format!(
+        "/sys/fs/cgroup{}/memory.swap.current",
+        path.trim().trim_end_matches('/')
+    );
+    parse_memcg_swap(&std::fs::read_to_string(file).ok()?)
+}
+
+/// Soma `sectors_read + sectors_written` (×512 = bytes) do device `dev` em `/proc/diskstats`.
+/// `dev` pode ser caminho (`/dev/nbd0`) ou nome (`nbd0`). `None` se o device não aparece. RF-2/DT-11.
+pub fn parse_diskstats(content: &str, dev: &str) -> Option<u64> {
+    let name = dev.rsplit('/').next().unwrap_or(dev);
+    content.lines().find_map(|line| {
+        let f: Vec<&str> = line.split_whitespace().collect();
+        if f.len() < 10 || f[2] != name {
+            return None;
+        }
+        let rd: u64 = f[5].parse().ok()?;
+        let wr: u64 = f[9].parse().ok()?;
+        Some(rd.saturating_add(wr).saturating_mul(512))
+    })
+}
+
+/// Lê `/proc/diskstats` e soma os sectors (×512) do device `dev`. `None` se ausente.
+pub fn read_diskstats(dev: &str) -> Option<u64> {
+    parse_diskstats(&std::fs::read_to_string("/proc/diskstats").ok()?, dev)
+}
+
 /// Lê o euid do processo via `/proc/self/status` (DT-26: sem libc, só `/proc`).
 pub fn read_euid() -> Result<u32> {
     let raw = std::fs::read_to_string("/proc/self/status")?;
@@ -140,6 +182,31 @@ mod tests {
         let v = parse_swaps(s);
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].dev, "/dev/nbd1");
+    }
+
+    #[test]
+    fn parse_memcg_swap_reads_integer() {
+        assert_eq!(parse_memcg_swap("4194304\n"), Some(4194304));
+    }
+
+    #[test]
+    fn parse_memcg_swap_max_or_garbage_is_none() {
+        assert_eq!(parse_memcg_swap("max\n"), None);
+        assert_eq!(parse_memcg_swap("lixo"), None);
+    }
+
+    #[test]
+    fn parse_diskstats_sums_rw_times_512() {
+        // major minor name reads rd_merged sectors_read ms_rd writes wr_merged sectors_written ...
+        let s = "  43       0 nbd0 100 0 200 5 50 0 80 3 0 0\n";
+        assert_eq!(parse_diskstats(s, "/dev/nbd0"), Some((200 + 80) * 512));
+        assert_eq!(parse_diskstats(s, "nbd0"), Some((200 + 80) * 512));
+    }
+
+    #[test]
+    fn parse_diskstats_unknown_dev_is_none() {
+        let s = "  43 0 nbd0 1 2 3 4 5 6 7 8 9 10\n";
+        assert!(parse_diskstats(s, "nbd9").is_none());
     }
 
     #[test]

@@ -126,6 +126,8 @@ dependencies = [
  "ramshared-tier",
  "ramshared-uring",
  "ramshared-vram",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

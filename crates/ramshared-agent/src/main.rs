@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use ramshared_agent::watchdog::Watchdog;
 use ramshared_agent::{psi, swap};
 use ramshared_broker::model::{SliceId, TransportKind};
-use ramshared_broker::protocol::{Msg, NbdEndpoint, PROTO_VERSION, read_msg, write_msg};
+use ramshared_broker::protocol::{Msg, NbdEndpoint, PROTO_VERSION, TenantMem, read_msg, write_msg};
 
 /// Cadência de envio do `Psi` (control-plane de baixa taxa, ~1 msg/s).
 const PSI_PERIOD: Duration = Duration::from_secs(1);
@@ -177,6 +177,7 @@ fn run_status(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
             Some(Msg::StatusReply {
                 tenants,
                 slices,
+                slice_io,
                 last_rebalance_secs,
             }) => {
                 println!("tenants ({}):", tenants.len());
@@ -192,6 +193,13 @@ fn run_status(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
                     println!(
                         "  s{} off={} len={} tenant={:?} state={:?}",
                         s.id, s.offset, s.len, s.tenant, s.state
+                    );
+                }
+                println!("slice_io ({}):", slice_io.len());
+                for io in &slice_io {
+                    println!(
+                        "  s{} bytes_served={} io_count={}",
+                        io.id, io.bytes_served, io.io_count
                     );
                 }
                 println!("last_rebalance_secs={last_rebalance_secs:?}");
@@ -274,7 +282,12 @@ fn session(
         if now >= next_psi {
             match (psi::read_psi(), psi::read_swaps()) {
                 (Ok(sample), Ok(swaps)) => {
-                    if let Err(e) = write_msg(&mut w, &Msg::Psi { sample, swaps }) {
+                    // RF-2: telemetria de memória (cgroup swap + diskstats dos nbd montados, DT-10/11).
+                    let mem = Some(TenantMem {
+                        swap_current: psi::read_memcg_swap(),
+                        diskstats_io: active.values().filter_map(|d| psi::read_diskstats(d)).sum(),
+                    });
+                    if let Err(e) = write_msg(&mut w, &Msg::Psi { sample, swaps, mem }) {
                         session_err = Some(e.into());
                         break;
                     }

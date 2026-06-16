@@ -77,6 +77,7 @@ fi
 # daemon em modo broker RAM (sem GPU): N slices, socket Unix + árbitro TCP.
 /ramsharedd --transport nbd --backend ram \\
   --slices $SLICES --slice-mb $SLICE_MB --sock $SOCK --arbiter-listen $ARBITER \\
+  --telemetry-jsonl /tmp/telem.jsonl \\
   >/tmp/daemon.log 2>&1 &
 DPID=\$!
 echo "KTEST-DAEMON-PID=\$DPID"
@@ -103,6 +104,13 @@ if [ "\$N" -ge 1 ]; then
 else
   echo "KTEST-SWAP-ACTIVE=fail"
 fi
+
+# --- Telemetria (RF-5): o broker emite 1 linha JSONL por tick em /tmp/telem.jsonl. Prova o
+# write-no-arquivo do daemon vivo (in qemu, isolado). RAM → vram_*=null (sentinela esperada).
+TLINES=\$(\$BB grep -c '"flag"' /tmp/telem.jsonl 2>/dev/null); [ -z "\$TLINES" ] && TLINES=0
+echo "KTEST-TELEMETRY-LINES=\$TLINES"
+[ "\$TLINES" -ge 1 ] && echo "KTEST-TELEMETRY=ok" || echo "KTEST-TELEMETRY=fail"
+echo "KTEST-TELEMETRY-SAMPLE:"; \$BB head -1 /tmp/telem.jsonl 2>/dev/null
 
 # --- FASE 3: teardown limpo. swapoff + desconecta NBD ENQUANTO o daemon ainda serve, depois
 # SIGTERM no daemon (DT-28: o worker encerra no shutdown). Ordem evita swapoff sobre NBD morto.
@@ -146,8 +154,9 @@ grep -E "KTEST-" "$WORK/serial.log" || echo "sem output KTEST — kernel pode na
 echo "================================="
 if grep -q "KTEST-SWAP-ACTIVE=ok" "$WORK/serial.log" \
    && grep -q "KTEST-SWAPOFF=ok" "$WORK/serial.log" \
-   && grep -q "KTEST-DAEMON-TERMINATED=ok" "$WORK/serial.log"; then
-  echo "QEMU-BROKER-DRILL: PASS — broker assinou slices, swap ativo via NBD, teardown limpo."
+   && grep -q "KTEST-DAEMON-TERMINATED=ok" "$WORK/serial.log" \
+   && grep -q "KTEST-TELEMETRY=ok" "$WORK/serial.log"; then
+  echo "QEMU-BROKER-DRILL: PASS — broker assinou slices, swap ativo via NBD, telemetria JSONL, teardown limpo."
   exit 0
 else
   echo "QEMU-BROKER-DRILL: FAIL/INCONCLUSIVO — veja os KTEST acima e o serial."
