@@ -1737,3 +1737,32 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   `feat/p1-hardening` (sem PR — aguarda pedido explícito). **Lição reforçada:** verificar o ambiente
   antes de dizer "não dá" — o lavapipe (Vulkan em CPU) valida a LÓGICA aqui, igual ao `FakeVram` do ublk;
   só perf/VRAM-real/eviction precisam de host NVIDIA-Vulkan nativo (a RTX 2060 não tem ICD Vulkan no WSL2).
+
+---
+
+## 2026-07-01 — Fechamento do branch `feat/p1-hardening`: gate de supply-chain + PR
+
+- **Retomada + correção de rota.** O usuário pediu p/ "fazer tudo, inclusive fechar o branch, da
+  forma correta". O plano inicial tinha 2 itens LOW (clap + erros tipados no daemon) — **ambos já
+  resolvidos** (descoberto lendo `LIBRARIES.md` "NÃO usado" + MEMORY 2026-06-05): **clap foi
+  REJEITADO por decisão Day-0/zero-dep** e **erros tipados já entregues como `CascadeError`**. Não
+  re-litiguei: dropei clap (violaria a decisão), mantive o `Box<dyn Error>` do daemon (idiom de
+  fronteira de binário) e corrigi a linha stale do ROADMAP (`39ad8db`). **Lição:** ler
+  `LIBRARIES.md`/MEMORY ANTES de planejar dep nova — o ROADMAP tinha um LOW desatualizado.
+- **Gate de supply-chain do Vulkan (RNF fechada, `eae37e8`):** `deny.toml` (schema v2) na raiz —
+  advisories sem `ignore`, allow-list de licenças **estrita** (MIT/Apache-2.0/ISC/Unicode-3.0, só as
+  presentes → nova licença barra), `sources` só crates.io, `wildcards=deny`. As 11 crates internas
+  viraram **`publish = false`** (via `workspace.package` + `publish.workspace=true`): repo=example.invalid,
+  nunca vão ao crates.io — previne publish acidental E faz o cargo-deny tratá-las como privadas (deps
+  de path intra-workspace deixam de contar como wildcard externa). **`cargo audit` → 0 advisories (29
+  deps); `cargo deny check` → advisories/bans/licenses/sources ok.** IMPL.md §Segurança atualizada.
+- **Validação de fechamento (branch inteiro):** `cargo fmt`/`clippy --workspace --all-targets -D
+  warnings` limpos; `cargo test --workspace` **205/0/22** (== baseline); drills qemu **broker PASS**
+  (swap via NBD + telemetria JSONL + teardown) + **ublk PASS** (serve + teardown); audit/deny verdes.
+- **Fechamento:** `main` não se moveu (behind 0, ahead 31) → sem rebase. **Issue #15** criada
+  (governance: issue antes do PR); branch pushado (`-u`); **PR aberto contra `main`** com tabela dos
+  31 commits (formato governance), `Closes #15`, `Rollback trigger` numérico.
+- **Deferido (branch próprio, não neste PR):** **SPEC do P2 Windows** (SSDV3 passo 2 do PRD
+  `docs/memory-broker-p2-windows/PRD.md`) — mantém o PR de hardening limpo de escopo. IMPL do P2 segue
+  gated nos inputs do Alex (Anexo B). Gaps env-bound do Vulkan (perf/VRAM-real/ublk+VRAM/eviction)
+  seguem gated em host NVIDIA nativo.
