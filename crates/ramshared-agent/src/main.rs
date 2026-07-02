@@ -21,14 +21,23 @@ use std::time::{Duration, Instant};
 use ramshared_agent::watchdog::Watchdog;
 use ramshared_agent::{psi, swap};
 use ramshared_broker::model::{SliceId, TransportKind};
-use ramshared_broker::protocol::{Msg, NbdEndpoint, PROTO_VERSION, read_msg, write_msg};
+use ramshared_broker::protocol::{Msg, NbdEndpoint, PROTO_VERSION, TenantMem, read_msg, write_msg};
 
 /// Cadência de envio do `Psi` (control-plane de baixa taxa, ~1 msg/s).
 const PSI_PERIOD: Duration = Duration::from_secs(1);
 /// Fatia de espera do loop principal (responsividade do timer/exec sem busy-loop).
 const POLL_SLICE: Duration = Duration::from_millis(200);
-/// Backoff entre tentativas de reconexão ao broker.
-const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
+/// Backoff de reconexão ao broker: começa em [`INITIAL_BACKOFF`] e dobra até [`MAX_BACKOFF`]
+/// enquanto a conexão falha (broker down) — evita thrash de reconexão; reseta após uma sessão
+/// produtiva (≥ [`PRODUCTIVE_SESSION`], i.e. que de fato conectou e rodou).
+const INITIAL_BACKOFF: Duration = Duration::from_secs(2);
+const MAX_BACKOFF: Duration = Duration::from_secs(60);
+const PRODUCTIVE_SESSION: Duration = Duration::from_secs(10);
+
+/// Próximo backoff (dobra com teto). Pura/testável.
+fn next_backoff(cur: Duration) -> Duration {
+    (cur * 2).min(MAX_BACKOFF)
+}
 
 struct Config {
     broker: String,
@@ -168,6 +177,7 @@ fn run_status(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
             Some(Msg::StatusReply {
                 tenants,
                 slices,
+                slice_io,
                 last_rebalance_secs,
             }) => {
                 println!("tenants ({}):", tenants.len());
@@ -183,6 +193,13 @@ fn run_status(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
                     println!(
                         "  s{} off={} len={} tenant={:?} state={:?}",
                         s.id, s.offset, s.len, s.tenant, s.state
+                    );
+                }
+                println!("slice_io ({}):", slice_io.len());
+                for io in &slice_io {
+                    println!(
+                        "  s{} bytes_served={} io_count={}",
+                        io.id, io.bytes_served, io.io_count
                     );
                 }
                 println!("last_rebalance_secs={last_rebalance_secs:?}");
@@ -210,12 +227,22 @@ fn run_agent(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
         cfg.watchdog.as_secs()
     );
 
+    let mut backoff = INITIAL_BACKOFF;
     loop {
-        match session(cfg, &cmd_tx, &res_rx) {
-            Ok(()) => eprintln!("[agent] sessão encerrada (EOF); reconectando…"),
-            Err(e) => eprintln!("[agent] sessão caiu: {e}; reconectando em {RECONNECT_BACKOFF:?}"),
+        let t0 = Instant::now();
+        let result = session(cfg, &cmd_tx, &res_rx);
+        let ran = t0.elapsed();
+        match result {
+            Ok(()) => eprintln!("[agent] sessão encerrada (EOF); reconectando em {backoff:?}…"),
+            Err(e) => eprintln!("[agent] sessão caiu: {e}; reconectando em {backoff:?}"),
         }
-        thread::sleep(RECONNECT_BACKOFF);
+        thread::sleep(backoff);
+        // Sessão produtiva (conectou + rodou) → volta ao mínimo; falha rápida (broker down) → cresce.
+        backoff = if ran >= PRODUCTIVE_SESSION {
+            INITIAL_BACKOFF
+        } else {
+            next_backoff(backoff)
+        };
     }
 }
 
@@ -255,7 +282,12 @@ fn session(
         if now >= next_psi {
             match (psi::read_psi(), psi::read_swaps()) {
                 (Ok(sample), Ok(swaps)) => {
-                    if let Err(e) = write_msg(&mut w, &Msg::Psi { sample, swaps }) {
+                    // RF-2: telemetria de memória (cgroup swap + diskstats dos nbd montados, DT-10/11).
+                    let mem = Some(TenantMem {
+                        swap_current: psi::read_memcg_swap(),
+                        diskstats_io: active.values().filter_map(|d| psi::read_diskstats(d)).sum(),
+                    });
+                    if let Err(e) = write_msg(&mut w, &Msg::Psi { sample, swaps, mem }) {
                         session_err = Some(e.into());
                         break;
                     }
@@ -451,6 +483,20 @@ mod tests {
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn backoff_doubles_up_to_cap() {
+        // dobra: 2→4→8→16→32→60(teto)→60
+        assert_eq!(next_backoff(INITIAL_BACKOFF), Duration::from_secs(4));
+        assert_eq!(next_backoff(Duration::from_secs(4)), Duration::from_secs(8));
+        assert_eq!(
+            next_backoff(Duration::from_secs(16)),
+            Duration::from_secs(32)
+        );
+        // 32*2=64 → satura no teto de 60
+        assert_eq!(next_backoff(Duration::from_secs(32)), MAX_BACKOFF);
+        assert_eq!(next_backoff(MAX_BACKOFF), MAX_BACKOFF);
     }
 
     #[test]

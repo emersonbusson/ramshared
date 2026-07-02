@@ -10,23 +10,31 @@
 //! falta apenas a fiação no `run_nbd` do daemon (`--slices`/`--arbiter-listen`).
 
 use std::collections::{BTreeMap, HashMap};
-use std::io::{self, BufReader};
+use std::fs::File;
+use std::io::{self, BufReader, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ramshared_broker::arbiter::{Action, Arbiter, ArbiterConfig, TenantView};
 use ramshared_broker::model::{PsiSample, Slice, SliceId, SliceState, TenantId, TransportKind};
 use ramshared_broker::protocol::{
-    Msg, NbdEndpoint, PROTO_VERSION, SwapEntry, TenantStatus, read_msg, write_msg,
+    Msg, NbdEndpoint, PROTO_VERSION, SliceIo, SwapEntry, TenantMem, TenantStatus, read_msg,
+    write_msg,
 };
 use ramshared_broker::slices::SliceMap;
 
+use crate::canary_probe::CANARY_BYTES;
 use crate::conn::WMsg;
 use crate::residency::DemoteReason;
+use crate::telemetry::{
+    ReconcileFlag, ReconcileInput, SliceIoCounters, TelemetryCore, VramGauge, reconcile,
+    vram_outros,
+};
 
 /// Endpoints NBD que os agentes recebem no `SwapOn`, escolhidos pelo transporte (DT-25).
 #[derive(Clone, Debug, Default)]
@@ -50,8 +58,14 @@ pub enum CoreEvent {
 pub enum Outbound {
     ToSession(usize, Msg),
     CloseSession(usize),
-    ZeroSlice { slice: SliceId, base: u64, len: u64 },
+    ZeroSlice {
+        slice: SliceId,
+        base: u64,
+        len: u64,
+    },
     Log(String),
+    /// Amostra de telemetria reconciliada (RF-5); a camada de IO carimba `t`/`branch`/`commit`.
+    Telemetry(TelemetryCore),
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +76,10 @@ struct TenantState {
     sid: Option<usize>,
     psi: PsiSample,
     reconciled: bool,
+    /// Última telemetria de memória do tenant (RF-2); `None` se o agente não reporta cgroup/diskstats.
+    mem: Option<TenantMem>,
+    /// Swap ocupado (bytes) nas slices `Active` deste tenant, derivado no `Psi` (DT-10/F-v2-2).
+    occupied_bytes: u64,
 }
 
 /// Núcleo do broker: dono único de `SliceMap` + `Arbiter` + tabela de sessões (sem locks; a
@@ -80,7 +98,27 @@ pub struct BrokerCore {
     pending_lease: Option<(TenantId, u64)>,   // lease pedido, ainda não concedido (RF-B3)
     lease: Option<(u32, TenantId)>,           // lease ativo (id, holder); o id vem do árbitro
     last_rebalance: Option<Instant>,
+    // Telemetria/reconciliação (SPECv2 broker-telemetry-reconciliation).
+    slice_io: Arc<Vec<SliceIoCounters>>, // contadores por slice (data-plane escreve, RF-1/DT-1)
+    vram: Arc<VramGauge>,                // gauge de VRAM publicado pelo worker (RF-3/DT-5)
+    demotes_total: u64,                  // DEMOTEs do canário acumulados (RF-4)
+    last_demote_reason: Option<String>,
+    demotes_at_last_sample: u64, // base p/ o `demotes_delta` por tick
+    recon_flag: ReconcileFlag,   // flag candidato (histerese DT-12)
+    recon_count: u32,            // ticks consecutivos com o mesmo flag candidato
+    tol_frac: f64,               // tolerância da reconciliação (DT-7)
+    recon_streak: u32,           // ticks p/ confirmar o flag (DT-12)
+    // R4: slices pós-`SwapOffDone` aguardando confirmação de zero (`ZeroDone`), com nº de ticks
+    // sem confirmar. Se o `try_send(ZeroExport)` falhou (canal cheio), não vem `ZeroDone` → o tick
+    // re-emite o zero (retry) até confirmar; escala a ERROR após N. Só slices AQUI já foram
+    // swapped-off pelo tenant (seguro re-zerar); slices em Draining aguardando SwapOffDone NÃO entram.
+    pending_zero: HashMap<SliceId, u32>,
 }
+
+/// Carência (em ticks) antes do 1º retry de zero — dá tempo ao `ZeroDone` em voo. Acima disso o
+/// tick re-emite o `ZeroExport`; em [`ZERO_RETRY_ERROR`] ticks sem confirmar, loga ERROR (R4).
+const ZERO_RETRY_GRACE: u32 = 1;
+const ZERO_RETRY_ERROR: u32 = 5;
 
 /// Extrai o inteiro final de um device (`/dev/nbd5` → 5), agnóstico ao prefixo (DT-21).
 fn dev_to_slice(dev: &str) -> Option<SliceId> {
@@ -92,11 +130,16 @@ fn dev_to_slice(dev: &str) -> Option<SliceId> {
 }
 
 impl BrokerCore {
+    #[allow(clippy::too_many_arguments)] // construtor do core: config + Arcs de telemetria
     pub fn new(
         slice_map: SliceMap,
         arbiter_cfg: ArbiterConfig,
         endpoints: EndpointCfg,
         swap_prio: Option<i32>,
+        slice_io: Arc<Vec<SliceIoCounters>>,
+        vram: Arc<VramGauge>,
+        tol_frac: f64,
+        recon_streak: u32,
     ) -> Self {
         Self {
             slice_map,
@@ -111,6 +154,16 @@ impl BrokerCore {
             pending_lease: None,
             lease: None,
             last_rebalance: None,
+            slice_io,
+            vram,
+            demotes_total: 0,
+            last_demote_reason: None,
+            demotes_at_last_sample: 0,
+            recon_flag: ReconcileFlag::None,
+            recon_count: 0,
+            tol_frac,
+            recon_streak,
+            pending_zero: HashMap::new(),
         }
     }
 
@@ -167,7 +220,7 @@ impl BrokerCore {
                 tenant,
                 transport,
             } => self.on_register(sid, proto, tenant, transport, out),
-            Msg::Psi { sample, swaps } => self.on_psi(sid, sample, swaps, out),
+            Msg::Psi { sample, swaps, mem } => self.on_psi(sid, sample, swaps, mem, out),
             Msg::SwapOnDone { slice, ok, detail } => {
                 if ok {
                     out.push(Outbound::Log(format!(
@@ -187,13 +240,12 @@ impl BrokerCore {
             }
             Msg::SwapOffDone { slice, ok, detail } => {
                 if ok {
-                    // higiene (DT-17): zera antes de liberar. ZeroDone → release.
+                    // higiene (DT-17): zera antes de liberar. ZeroDone → release. O tenant já fez
+                    // swapoff → seguro zerar; entra em pending_zero p/ o retry do tick (R4).
                     if let Some(s) = self.slice_map.get(slice) {
-                        out.push(Outbound::ZeroSlice {
-                            slice,
-                            base: s.offset,
-                            len: s.len,
-                        });
+                        let (base, len) = (s.offset, s.len);
+                        self.pending_zero.entry(slice).or_insert(0);
+                        out.push(Outbound::ZeroSlice { slice, base, len });
                     }
                 } else {
                     out.push(Outbound::Log(format!(
@@ -269,6 +321,8 @@ impl BrokerCore {
                     .get(&id)
                     .map_or(PsiSample::default(), |t| t.psi),
                 reconciled: false,
+                mem: None,
+                occupied_bytes: 0,
             },
         );
         self.sessions.insert(sid, id);
@@ -283,6 +337,7 @@ impl BrokerCore {
         sid: usize,
         sample: PsiSample,
         swaps: Vec<SwapEntry>,
+        mem: Option<TenantMem>,
         out: &mut Vec<Outbound>,
     ) {
         let Some(&id) = self.sessions.get(&sid) else {
@@ -297,6 +352,7 @@ impl BrokerCore {
         };
         if let Some(t) = self.tenants.get_mut(&id) {
             t.psi = sample;
+            t.mem = mem;
             // Reconciliação (DT-9/21): no 1º Psi, re-adota slices que o agente já tem montadas.
             if !t.reconciled {
                 t.reconciled = true;
@@ -314,6 +370,20 @@ impl BrokerCore {
                     }
                 }
             }
+        }
+        // occupied (DT-10/F-v2-2): Σ used_kb*1024 das swaps que casam slices Active deste tenant.
+        let occupied: u64 = swaps
+            .iter()
+            .filter_map(|e| dev_to_slice(&e.dev).map(|sl| (sl, e.used_kb)))
+            .filter(|(sl, _)| {
+                self.slice_map
+                    .get(*sl)
+                    .is_some_and(|s| s.state == SliceState::Active && s.tenant == Some(id))
+            })
+            .map(|(_, kb)| kb.saturating_mul(1024))
+            .sum();
+        if let Some(t) = self.tenants.get_mut(&id) {
+            t.occupied_bytes = occupied;
         }
         out.push(Outbound::ToSession(sid, Msg::Ack)); // DT-18: heartbeat
     }
@@ -410,6 +480,7 @@ impl BrokerCore {
             }
             return;
         }
+        self.pending_zero.remove(&slice); // zero confirmado → encerra o retry (R4)
         if self.slice_map.release(slice).is_err() {
             return; // não estava Draining; ignora
         }
@@ -422,6 +493,8 @@ impl BrokerCore {
     }
 
     fn on_demote(&mut self, reason: &str, out: &mut Vec<Outbound>) {
+        self.demotes_total += 1;
+        self.last_demote_reason = Some(reason.to_string());
         out.push(Outbound::Log(format!(
             "[ramsharedd] DemoteAll reason={reason}"
         )));
@@ -469,11 +542,30 @@ impl BrokerCore {
                 psi: t.psi,
                 slices: self.slices_of(*id),
                 present: t.present,
+                bytes_served: self
+                    .slices_of(*id)
+                    .iter()
+                    .filter_map(|s| self.slice_io.get(*s as usize))
+                    .map(|c| c.bytes_served.load(Ordering::Relaxed))
+                    .sum(),
+            })
+            .collect();
+        let slice_io = self
+            .slice_map
+            .slices()
+            .iter()
+            .filter_map(|s| {
+                self.slice_io.get(s.id as usize).map(|c| SliceIo {
+                    id: s.id,
+                    bytes_served: c.bytes_served.load(Ordering::Relaxed),
+                    io_count: c.io_count.load(Ordering::Relaxed),
+                })
             })
             .collect();
         Msg::StatusReply {
             tenants,
             slices: self.slice_map.slices().to_vec(),
+            slice_io,
             last_rebalance_secs: None,
         }
     }
@@ -572,6 +664,109 @@ impl BrokerCore {
                 }
             }
         }
+
+        // R4: re-tenta o zero de slices presas (se o `try_send(ZeroExport)` falhou, não vem
+        // `ZeroDone`). Carência de 1 tick p/ o zero em voo; acima disso re-emite; ERROR após N
+        // ticks sem confirmar. Só toca slices em `pending_zero` (já swapped-off; seguro re-zerar).
+        let stuck: Vec<SliceId> = self.pending_zero.keys().copied().collect();
+        for slice in stuck {
+            let count = match self.pending_zero.get_mut(&slice) {
+                Some(n) => {
+                    *n += 1;
+                    *n
+                }
+                None => continue,
+            };
+            if count == ZERO_RETRY_ERROR {
+                out.push(Outbound::Log(format!(
+                    "[ramsharedd] ERRO: zero de s{slice} sem confirmar em {ZERO_RETRY_ERROR} ticks (slice presa em Draining, R4); re-tentando"
+                )));
+            }
+            if count > ZERO_RETRY_GRACE
+                && let Some(s) = self.slice_map.get(slice)
+            {
+                let (base, len) = (s.offset, s.len);
+                out.push(Outbound::ZeroSlice { slice, base, len });
+            }
+        }
+
+        self.emit_telemetry(out);
+    }
+
+    /// Reconciliação por tick (RF-4/RF-5): invariante de **ocupação** + histerese (DT-12) → emite
+    /// `Outbound::Telemetry`. Observador: não toca o árbitro/SliceMap.
+    fn emit_telemetry(&mut self, out: &mut Vec<Outbound>) {
+        let alloc_active: u64 = self
+            .slice_map
+            .slices()
+            .iter()
+            .filter(|s| matches!(s.state, SliceState::Active | SliceState::Draining))
+            .map(|s| s.len)
+            .sum();
+        let occupied: u64 = self.tenants.values().map(|t| t.occupied_bytes).sum();
+        // Σ diskstats (cumulativo em bytes) dos tenants que reportam `mem` (RF-2); `None` se ninguém
+        // reporta. O consumidor deriva a taxa pela diferença entre amostras (campo `t` da linha).
+        let page_io: Option<u64> = self.tenants.values().any(|t| t.mem.is_some()).then(|| {
+            self.tenants
+                .values()
+                .filter_map(|t| t.mem.as_ref())
+                .map(|m| m.diskstats_io)
+                .sum()
+        });
+        let free = self.vram.free.load(Ordering::Relaxed);
+        let total = self.vram.total.load(Ordering::Relaxed);
+        let has_vram = total > 0; // F-v2-6: sentinela RAM (sem GPU) → vram_* = None
+        let vram_alloc_daemon = alloc_active + CANARY_BYTES as u64;
+        let vram_total_used = has_vram.then(|| total.saturating_sub(free));
+        let vram_others = vram_total_used.map(|u| vram_outros(u, vram_alloc_daemon));
+        let demotes_delta = self.demotes_total - self.demotes_at_last_sample;
+        self.demotes_at_last_sample = self.demotes_total;
+        let stuck_draining = self.pending_zero.values().any(|n| *n >= ZERO_RETRY_ERROR);
+        let any_present = self.tenants.values().any(|t| t.present);
+        let inp = ReconcileInput {
+            alloc_active_bytes: alloc_active,
+            occupied_swap_bytes: occupied,
+            stuck_draining,
+            demotes_delta,
+            any_source_missing: !has_vram || !any_present,
+        };
+        let (delta, candidate) = reconcile(&inp, self.tol_frac);
+        // Histerese (DT-12) para flags SUSTENTADOS (Unaccounted/StuckSlice/Partial): confirma após
+        // `recon_streak` ticks consecutivos iguais. `Eviction` é EVENTO do canário (DT-6;
+        // `demotes_delta` é per-tick, dura 1 tick) → confirma IMEDIATO; senão a histerese engoliria
+        // uma evicção transitória (1-2 DEMOTEs) e o sinal de eviction nunca apareceria (bug C1).
+        if candidate == self.recon_flag {
+            self.recon_count = self.recon_count.saturating_add(1);
+        } else {
+            self.recon_flag = candidate;
+            self.recon_count = 1;
+        }
+        let confirmed = match candidate {
+            ReconcileFlag::Eviction => ReconcileFlag::Eviction, // evento: sem histerese
+            ReconcileFlag::None => ReconcileFlag::None,
+            sustained if self.recon_count >= self.recon_streak => sustained,
+            _ => ReconcileFlag::None,
+        };
+        if confirmed != ReconcileFlag::None {
+            out.push(Outbound::Log(format!(
+                "[ramsharedd] reconcile flag={confirmed:?} delta={delta:.3} reason={:?}",
+                self.last_demote_reason
+            )));
+        }
+        out.push(Outbound::Telemetry(TelemetryCore {
+            tenant: None,
+            slice: None,
+            swap_used: occupied,
+            alloc_active,
+            page_io_s: page_io,
+            vram_alloc_daemon,
+            vram_total_used,
+            vram_outros: vram_others,
+            canario_demotes: self.demotes_total,
+            demote_reason: self.last_demote_reason.clone(),
+            reconcile_delta: delta,
+            flag: confirmed,
+        }));
     }
 }
 
@@ -588,6 +783,13 @@ pub struct BrokerConfig {
     pub swap_prio: Option<i32>,
     pub arbiter: ArbiterConfig,
     pub tick: Duration,
+    /// Telemetria (SPECv2): contadores por slice + gauge de VRAM (compartilhados com o worker).
+    pub slice_io: Arc<Vec<SliceIoCounters>>,
+    pub vram: Arc<VramGauge>,
+    pub tol_frac: f64,
+    pub recon_streak: u32,
+    /// Destino do JSONL de telemetria (RF-5); `None` = telemetria silenciosa.
+    pub telemetry_jsonl: Option<PathBuf>,
 }
 
 /// Evento interno do IO (multiplexa registro de sessão e eventos do core).
@@ -631,9 +833,20 @@ pub fn spawn_broker(
         });
     }
     // Core (thread única dona do BrokerCore). Mantém um `io_tx` p/ os forwarders de zero-done.
-    let core = BrokerCore::new(slice_map, cfg.arbiter, cfg.endpoints, cfg.swap_prio);
+    let core = BrokerCore::new(
+        slice_map,
+        cfg.arbiter,
+        cfg.endpoints,
+        cfg.swap_prio,
+        cfg.slice_io,
+        cfg.vram,
+        cfg.tol_frac,
+        cfg.recon_streak,
+    );
     let tick = cfg.tick;
-    let handle = thread::spawn(move || core_loop(core, &io_rx, &io_tx, &jobs, tick, &shutdown));
+    let sink = cfg.telemetry_jsonl.and_then(TelemetrySink::open);
+    let handle =
+        thread::spawn(move || core_loop(core, &io_rx, &io_tx, &jobs, tick, &shutdown, sink));
     Ok((handle, addr))
 }
 
@@ -687,6 +900,7 @@ fn session_reader(sock: TcpStream, sid: usize, io_tx: &Sender<IoEvent>) {
     let _ = io_tx.send(IoEvent::Core(CoreEvent::Disconnected(sid)));
 }
 
+#[allow(clippy::too_many_arguments)] // casca de IO do core: canais + tick + shutdown + sink
 fn core_loop(
     mut core: BrokerCore,
     io_rx: &Receiver<IoEvent>,
@@ -694,6 +908,7 @@ fn core_loop(
     jobs: &SyncSender<WMsg>,
     tick: Duration,
     shutdown: &AtomicBool,
+    mut sink: Option<TelemetrySink>,
 ) {
     let mut sessions: HashMap<usize, SyncSender<Msg>> = HashMap::new();
     // Deadline de wall-clock do próximo Tick. CRÍTICO: o Tick do árbitro NÃO pode ser starvado
@@ -706,7 +921,7 @@ fn core_loop(
     loop {
         if shutdown.load(Ordering::SeqCst) {
             let outs = core.handle(CoreEvent::Demote("shutdown".into()), Instant::now());
-            dispatch(outs, &mut sessions, jobs, io_tx);
+            dispatch(outs, &mut sessions, jobs, io_tx, &mut sink);
             break;
         }
         let wait = next_tick.saturating_duration_since(Instant::now());
@@ -716,14 +931,14 @@ fn core_loop(
             }
             Ok(IoEvent::Core(ev)) => {
                 let outs = core.handle(ev, Instant::now());
-                dispatch(outs, &mut sessions, jobs, io_tx);
+                dispatch(outs, &mut sessions, jobs, io_tx, &mut sink);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
         if Instant::now() >= next_tick {
             let outs = core.handle(CoreEvent::Tick, Instant::now());
-            dispatch(outs, &mut sessions, jobs, io_tx);
+            dispatch(outs, &mut sessions, jobs, io_tx, &mut sink);
             next_tick = Instant::now() + tick;
         }
     }
@@ -734,6 +949,7 @@ fn dispatch(
     sessions: &mut HashMap<usize, SyncSender<Msg>>,
     jobs: &SyncSender<WMsg>,
     io_tx: &Sender<IoEvent>,
+    sink: &mut Option<TelemetrySink>,
 ) {
     for o in outs {
         match o {
@@ -770,6 +986,53 @@ fn dispatch(
                 }
             }
             Outbound::Log(s) => eprintln!("{s}"),
+            Outbound::Telemetry(core) => {
+                if let Some(s) = sink.as_mut() {
+                    s.emit(&core);
+                }
+            }
+        }
+    }
+}
+
+/// Sink de telemetria JSONL (RF-5/DT-8): carimba `t`/`branch`/`commit` no `TelemetryCore` do core e
+/// faz append de 1 objeto JSON por linha. `branch`/`commit` vêm de env
+/// (`RAMSHARED_BUILD_BRANCH`/`RAMSHARED_BUILD_COMMIT`; `None` se ausentes — F-v2-4).
+struct TelemetrySink {
+    file: File,
+    branch: Option<String>,
+    commit: Option<String>,
+}
+
+impl TelemetrySink {
+    fn open(path: PathBuf) -> Option<Self> {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| eprintln!("[ramsharedd] WARN telemetria off: {path:?}: {e}"))
+            .ok()?;
+        Some(Self {
+            file,
+            branch: std::env::var("RAMSHARED_BUILD_BRANCH").ok(),
+            commit: std::env::var("RAMSHARED_BUILD_COMMIT").ok(),
+        })
+    }
+
+    fn emit(&mut self, core: &TelemetryCore) {
+        let t = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let sample = crate::telemetry::TelemetrySample {
+            t,
+            branch: self.branch.clone(),
+            commit: self.commit.clone(),
+            core: core.clone(),
+        };
+        if let Ok(mut line) = serde_json::to_string(&sample) {
+            line.push('\n');
+            let _ = self.file.write_all(line.as_bytes());
         }
     }
 }
@@ -781,6 +1044,11 @@ mod tests {
     use ramshared_broker::model::SliceState;
 
     fn core(k: u16) -> BrokerCore {
+        core_streak(k, 1)
+    }
+
+    /// Como `core`, mas com `recon_streak` configurável (testa a histerese real de produção).
+    fn core_streak(k: u16, recon_streak: u32) -> BrokerCore {
         let cfg = ArbiterConfig {
             streak: 1, // move já no 1º tick acima do delta (testes)
             ..ArbiterConfig::default()
@@ -793,6 +1061,10 @@ mod tests {
                 nbd_tcp: None,
             },
             None,
+            Arc::new((0..k).map(|_| SliceIoCounters::default()).collect()),
+            Arc::new(VramGauge::default()),
+            0.10,
+            recon_streak,
         )
     }
 
@@ -821,6 +1093,7 @@ mod tests {
                         stall_us: 0,
                     },
                     swaps: vec![],
+                    mem: None,
                 },
             ),
             Instant::now(),
@@ -917,6 +1190,66 @@ mod tests {
     }
 
     #[test]
+    fn stuck_draining_zero_is_retried_on_tick() {
+        // R4: se o zero não confirma (canal cheio → sem ZeroDone), o tick re-emite o ZeroExport
+        // após a carência e escala a ERROR; ao confirmar, para de re-tentar.
+        let mut c = core(1);
+        reg(&mut c, 10, "a");
+        psi(&mut c, 10, 0.0);
+        c.handle(CoreEvent::Tick, Instant::now()); // assign s0 (Active)
+        c.slice_map.drain(0).unwrap(); // Draining
+        c.handle(
+            CoreEvent::Msg(
+                10,
+                Msg::SwapOffDone {
+                    slice: 0,
+                    ok: true,
+                    detail: String::new(),
+                },
+            ),
+            Instant::now(),
+        );
+        // SEM ZeroDone (simula canal cheio). Tick 1 = carência → não re-emite.
+        let t1 = c.handle(CoreEvent::Tick, Instant::now());
+        assert!(
+            !t1.iter()
+                .any(|x| matches!(x, Outbound::ZeroSlice { slice: 0, .. })),
+            "carência: sem retry no 1º tick"
+        );
+        // Tick 2 → re-emite o zero.
+        let t2 = c.handle(CoreEvent::Tick, Instant::now());
+        assert!(
+            t2.iter()
+                .any(|x| matches!(x, Outbound::ZeroSlice { slice: 0, .. })),
+            "retry do zero no 2º tick"
+        );
+        // Mais ticks → escala a ERROR (R4).
+        let mut saw_error = false;
+        for _ in 0..ZERO_RETRY_ERROR {
+            let o = c.handle(CoreEvent::Tick, Instant::now());
+            if o.iter()
+                .any(|x| matches!(x, Outbound::Log(s) if s.contains("R4")))
+            {
+                saw_error = true;
+            }
+        }
+        assert!(
+            saw_error,
+            "deve escalar a ERROR (R4) após N ticks sem confirmar"
+        );
+        // Zero confirma → Free + para de re-tentar.
+        c.handle(CoreEvent::ZeroDone(0, true), Instant::now());
+        assert_eq!(c.slice_map.get(0).unwrap().state, SliceState::Free);
+        let after = c.handle(CoreEvent::Tick, Instant::now());
+        assert!(
+            !after
+                .iter()
+                .any(|x| matches!(x, Outbound::ZeroSlice { slice: 0, .. })),
+            "pós-confirmação: sem mais retry"
+        );
+    }
+
+    #[test]
     fn move_drains_donor_then_swapon_dest_after_zero() {
         let mut c = core(2);
         reg(&mut c, 10, "donor");
@@ -996,6 +1329,147 @@ mod tests {
             Outbound::ToSession(10, Msg::StatusReply { tenants, slices, .. })
                 if tenants.len() == 1 && slices.len() == 2
         )));
+    }
+
+    #[test]
+    fn status_reply_includes_slice_io() {
+        // RF-1: o StatusReply expõe os contadores por slice (lidos do Arc compartilhado).
+        let c = core(2);
+        c.slice_io[0].bytes_served.store(4096, Ordering::Relaxed);
+        c.slice_io[0].io_count.store(1, Ordering::Relaxed);
+        match c.status_reply() {
+            Msg::StatusReply { slice_io, .. } => {
+                assert_eq!(slice_io.len(), 2);
+                let s0 = slice_io.iter().find(|s| s.id == 0).expect("slice 0");
+                assert_eq!(s0.bytes_served, 4096);
+                assert_eq!(s0.io_count, 1);
+            }
+            other => panic!("esperava StatusReply, veio {other:?}"),
+        }
+    }
+
+    #[test]
+    fn on_tick_emits_telemetry() {
+        // RF-5: todo tick emite uma amostra de telemetria.
+        let mut c = core(1);
+        let o = c.handle(CoreEvent::Tick, Instant::now());
+        assert!(o.iter().any(|x| matches!(x, Outbound::Telemetry(_))));
+    }
+
+    #[test]
+    fn eviction_flag_after_demote() {
+        // RF-4/DT-6: um DEMOTE do canário → flag Eviction no tick seguinte (streak=1 no helper).
+        let mut c = core(1);
+        reg(&mut c, 10, "a");
+        c.vram.total.store(1 << 30, Ordering::Relaxed); // has_vram (senão Partial)
+        c.vram.free.store(1 << 29, Ordering::Relaxed);
+        c.handle(CoreEvent::Demote("latency".into()), Instant::now());
+        let o = c.handle(CoreEvent::Tick, Instant::now());
+        let flag = o
+            .iter()
+            .find_map(|x| match x {
+                Outbound::Telemetry(t) => Some(t.flag),
+                _ => None,
+            })
+            .expect("telemetria no tick");
+        assert_eq!(flag, ReconcileFlag::Eviction);
+    }
+
+    #[test]
+    fn unaccounted_when_occupied_exceeds_alloc() {
+        // RF-4: ocupado > emprestado + tol → Unaccounted (sem demote, com VRAM).
+        let mut c = core(1); // 1 slice de 64 MiB
+        reg(&mut c, 10, "a");
+        let id = *c.tenants.keys().next().expect("tenant");
+        c.slice_map.assign(0, id).expect("assign slice 0"); // Free→Active (64 MiB emprestado)
+        c.tenants.get_mut(&id).expect("tenant").occupied_bytes = 200 * 1024 * 1024; // 200 MiB > 64
+        c.vram.total.store(1 << 30, Ordering::Relaxed); // has_vram
+        let o = c.handle(CoreEvent::Tick, Instant::now());
+        let flag = o
+            .iter()
+            .find_map(|x| match x {
+                Outbound::Telemetry(t) => Some(t.flag),
+                _ => None,
+            })
+            .expect("telemetria no tick");
+        assert_eq!(flag, ReconcileFlag::Unaccounted);
+    }
+
+    fn tick_flag(c: &mut BrokerCore) -> ReconcileFlag {
+        c.handle(CoreEvent::Tick, Instant::now())
+            .iter()
+            .find_map(|x| match x {
+                Outbound::Telemetry(t) => Some(t.flag),
+                _ => None,
+            })
+            .expect("telemetria no tick")
+    }
+
+    #[test]
+    fn eviction_confirmed_immediately_despite_streak() {
+        // C1: Eviction é EVENTO (canário) → confirma em 1 tick mesmo com recon_streak=3 (produção).
+        // Sem o fix, a histerese engoliria a evicção transitória.
+        let mut c = core_streak(1, 3);
+        reg(&mut c, 10, "a");
+        c.vram.total.store(1 << 30, Ordering::Relaxed); // has_vram (senão Partial)
+        c.vram.free.store(1 << 29, Ordering::Relaxed);
+        c.handle(CoreEvent::Demote("latency".into()), Instant::now());
+        assert_eq!(tick_flag(&mut c), ReconcileFlag::Eviction);
+    }
+
+    #[test]
+    fn unaccounted_respects_streak() {
+        // RF-4/DT-12: flag SUSTENTADO (Unaccounted) só confirma após `recon_streak` ticks.
+        let mut c = core_streak(1, 2);
+        reg(&mut c, 10, "a");
+        let id = *c.tenants.keys().next().expect("tenant");
+        c.slice_map.assign(0, id).expect("assign");
+        c.tenants.get_mut(&id).expect("tenant").occupied_bytes = 200 * 1024 * 1024;
+        c.vram.total.store(1 << 30, Ordering::Relaxed);
+        assert_eq!(
+            tick_flag(&mut c),
+            ReconcileFlag::None,
+            "1º tick: streak ainda não atingido"
+        );
+        assert_eq!(
+            tick_flag(&mut c),
+            ReconcileFlag::Unaccounted,
+            "2º tick: confirma"
+        );
+    }
+
+    #[test]
+    fn telemetry_sink_writes_jsonl_line() {
+        // RF-5/DT-8: o sink escreve 1 objeto JSON por linha (write-no-arquivo, in-process).
+        let path =
+            std::env::temp_dir().join(format!("ramshared-telem-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let mut sink = TelemetrySink::open(path.clone()).expect("abre sink");
+            let tc = TelemetryCore {
+                tenant: None,
+                slice: None,
+                swap_used: 7,
+                alloc_active: 8,
+                page_io_s: None,
+                vram_alloc_daemon: 9,
+                vram_total_used: None,
+                vram_outros: None,
+                canario_demotes: 0,
+                demote_reason: None,
+                reconcile_delta: 0.0,
+                flag: ReconcileFlag::None,
+            };
+            sink.emit(&tc);
+            sink.emit(&tc);
+        }
+        let content = std::fs::read_to_string(&path).expect("lê o jsonl");
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 2, "uma linha por emit");
+        let v: serde_json::Value = serde_json::from_str(lines[0]).expect("json válido");
+        assert_eq!(v["swap_used"], 7);
+        assert!(v.get("t").is_some(), "carimbo de tempo presente");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

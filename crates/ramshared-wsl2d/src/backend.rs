@@ -1,29 +1,30 @@
-//! `VramBackend` — liga `ramshared_cuda::DeviceMem` à trait `BlockBackend` do
-//! `ramshared_block`. É o ponto onde "VRAM CUDA" vira "block device NBD" (SPEC §8).
+//! `VramBackend` — liga uma região de VRAM (`ramshared_vram::VramMemory`) à trait `BlockBackend`
+//! do `ramshared_block`. É o ponto onde "VRAM" vira "block device NBD" (SPEC §8). Genérico sobre o
+//! backend de VRAM (CUDA hoje via `ramshared-cuda`; Vulkan amanhã pelo mesmo trait — RF-G1).
 
 use ramshared_block::{BlockBackend, IoError};
-use ramshared_cuda::{CudaError, DeviceMem};
+use ramshared_vram::{VramError, VramMemory};
 
 use crate::ublk;
 
-/// Block device respaldado por uma região de VRAM CUDA.
-pub struct VramBackend<'c, 'a> {
-    mem: DeviceMem<'c, 'a>,
+/// Block device respaldado por uma região de VRAM (`M: VramMemory`).
+pub struct VramBackend<M> {
+    mem: M,
     block_size: u32,
 }
 
-impl<'c, 'a> VramBackend<'c, 'a> {
-    pub fn new(mem: DeviceMem<'c, 'a>, block_size: u32) -> Self {
+impl<M: VramMemory> VramBackend<M> {
+    pub fn new(mem: M, block_size: u32) -> Self {
         Self { mem, block_size }
     }
 
     /// Zera toda a VRAM (SPEC §11 — zerar ao liberar/parar).
-    pub fn zero(&mut self) -> Result<(), CudaError> {
+    pub fn zero(&mut self) -> Result<(), VramError> {
         self.mem.zero()
     }
 }
 
-impl BlockBackend for VramBackend<'_, '_> {
+impl<M: VramMemory> BlockBackend for VramBackend<M> {
     fn size_bytes(&self) -> u64 {
         self.mem.len() as u64
     }
@@ -34,13 +35,13 @@ impl BlockBackend for VramBackend<'_, '_> {
 
     fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
         self.mem
-            .read_at(off as usize, buf)
+            .read_at(off, buf)
             .map_err(|e| IoError(e.to_string()))
     }
 
     fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
         self.mem
-            .write_at(off as usize, data)
+            .write_at(off, data)
             .map_err(|e| IoError(e.to_string()))
     }
 
@@ -210,6 +211,45 @@ mod tests {
             &mut be,
         );
         assert_eq!(r.read_data, payload, "READ deve devolver o que foi escrito");
+    }
+
+    /// Gauge de VRAM com `mem_info` REAL (RF-3): `vram_outros` (subtração) capta o uso de
+    /// gráficos/Windows. `cargo test -p ramshared-wsl2d -- --ignored` num host com GPU.
+    #[test]
+    #[ignore = "requer GPU CUDA funcional (WSL2/GPU-PV)"]
+    fn vram_gauge_outros_captures_real_graphics_usage() {
+        use crate::telemetry::{VramGauge, vram_outros};
+        use std::sync::atomic::Ordering;
+        let cuda = Cuda::load().expect("libcuda");
+        let dev = cuda.device(0).unwrap();
+        let ctx = cuda.create_context(&dev).unwrap();
+        let chunk = 64 * 1024 * 1024usize; // o "daemon" aloca 64 MiB
+        let _mem = ctx.alloc(chunk).unwrap();
+        let (free, total) = ctx.mem_info().unwrap();
+        let gauge = VramGauge::default();
+        gauge.free.store(free as u64, Ordering::Relaxed);
+        gauge.total.store(total as u64, Ordering::Relaxed);
+        assert!(total > 0 && free <= total, "mem_info coerente");
+        let used = (total - free) as u64;
+        let alloc_daemon = chunk as u64;
+        let outros = vram_outros(used, alloc_daemon);
+        // Num desktop em uso, o uso total > o que o daemon alocou (há gráficos) → outros > 0.
+        assert!(
+            used > alloc_daemon,
+            "uso total ({used}) > daemon ({alloc_daemon})"
+        );
+        assert!(
+            outros > 0,
+            "vram_outros capta gráficos/Windows: {outros} bytes"
+        );
+        eprintln!(
+            "VRAM real (MiB): total={} free={} used={} daemon={} outros={}",
+            total >> 20,
+            free >> 20,
+            used >> 20,
+            alloc_daemon >> 20,
+            outros >> 20
+        );
     }
 
     #[test]

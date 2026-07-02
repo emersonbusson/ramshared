@@ -1,0 +1,45 @@
+# cargo-deny — gate de supply-chain do workspace RamShared.
+#
+# Motivo (RNF Day-0, LIBRARIES.md #11): toda dep externa userspace passa por auditoria de
+# CVE (advisories), licença e proveniência antes de entrar no caminho de produção. O trigger
+# de revisão do `ash` (backend Vulkan RF-G2) e do `io-uring` (Fase B) é explicitamente "se
+# cargo audit/deny falhar" — este arquivo é esse gate.
+#
+# Rodar:  cargo audit  &&  cargo deny check
+# Schema: cargo-deny 0.19 (version = 2).
+
+[graph]
+# Checa todas as features (o `ash` só puxa `VK_EXT_memory_budget` etc. sob features).
+all-features = true
+
+[advisories]
+version = 2
+# RustSec: yanked = deny por padrão (v2). Sem ignores — qualquer CVE aberto barra o gate.
+ignore = []
+
+[licenses]
+version = 2
+# Estrito (Day-0): só as licenças EFETIVAMENTE presentes na árvore atual. Uma dep nova que
+# traga outra licença barra o gate até revisão consciente (fail-closed). Todas permissivas.
+allow = [
+    "MIT",         # serde/serde_json, ash, io-uring, libc, bitflags, cfg-if, ...
+    "Apache-2.0",  # dual-license MIT/Apache-2.0 da maioria
+    "ISC",         # transitiva
+    "Unicode-3.0", # unicode-ident (via serde_derive → syn)
+]
+confidence-threshold = 0.8
+
+[bans]
+# Day-0: superfície de dep mínima. Wildcards ("*") barrados; múltiplas versões só avisam
+# (transitivas do ash/io-uring podem divergir — não é bloqueio, mas fica visível).
+multiple-versions = "warn"
+wildcards = "deny"
+# Deps de path intra-workspace (ramshared-*) não têm versão → "wildcard" p/ o cargo-deny.
+# São crates privadas do próprio workspace, não deps externas: liberadas explicitamente.
+allow-wildcard-paths = true
+
+[sources]
+# Só crates.io; nada de git/registry desconhecido (proveniência).
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

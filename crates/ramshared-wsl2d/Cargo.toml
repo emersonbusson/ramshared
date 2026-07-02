@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+publish.workspace = true
 
 [lib]
 name = "ramshared_wsl2d"
@@ -15,11 +16,15 @@ path = "src/main.rs"
 
 [dependencies]
 ramshared-cuda = { path = "../ramshared-cuda" }
+ramshared-vulkan = { path = "../ramshared-vulkan" }
+ramshared-vram = { path = "../ramshared-vram" }
 ramshared-block = { path = "../ramshared-block" }
 ramshared-broker = { path = "../ramshared-broker" }
 ramshared-tier = { path = "../ramshared-tier" }
 ramshared-integrity = { path = "../ramshared-integrity" }
 ramshared-uring = { path = "../ramshared-uring" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [lints.clippy]
 unwrap_used = "deny"
