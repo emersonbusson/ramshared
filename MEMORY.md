@@ -1766,3 +1766,23 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   `docs/memory-broker-p2-windows/PRD.md`) — mantém o PR de hardening limpo de escopo. IMPL do P2 segue
   gated nos inputs do Alex (Anexo B). Gaps env-bound do Vulkan (perf/VRAM-real/ublk+VRAM/eviction)
   seguem gated em host NVIDIA nativo.
+
+---
+
+## 2026-07-01 (cont.) — SPEC do P2 Windows escrito + auditoria 2.5 (no-go→SPECv2)
+
+- **Branch `docs/p2-windows-spec`** (empilhado sobre `feat/p1-hardening`, que tem o PRD). SSDV3 passo 2:
+  ponte Windows nativa + addon Blender consumindo o Memory Broker. **Achado-chave:** o **lease revogável
+  JÁ EXISTE end-to-end** no P1 (protocolo `protocol.rs:42-68` + árbitro `RevokeForLease`/`GrantLease` +
+  servidor `on_lease_request/release` + `SliceMap::lease/unlease`, testado) — a P2 cria só o *consumidor*
+  (agente DccAgent Windows + addon) + **NVML** (crate novo, não existe) + **config TOML** (não existe).
+- **Auditoria 2.5 (adversarial, subagente) deu no-go** e pegou 3 bloqueantes ESTRUTURAIS que teriam
+  explodido na IMPL: **C1** exclusão de DccAgent estava em `arbiter.rs` (transport-agnóstico —
+  `TenantView` não tem `transport`) → correto é `broker_srv::on_tick` (`TenantState` tem `transport`);
+  **C2** `TransportKind` está em `model.rs:48` e `endpoint_for` é `match` exaustivo → nova variante
+  QUEBRA compilação (não era "só aditivo"); **C3** "mover o loop do agente inalterado" era falso
+  (`Outbound` é do crate `wsl2d`; `session()` acoplado a swap) → vira refactor com preservação de
+  comportamento (trait `AgentRole`→`Vec<Msg>` + `poll_outbound`/`on_teardown`). + H1/H2/H3. **SPECv2.md**
+  = candidato ativo (corrige tudo), `SPEC.md` preservado. **Lição:** o 2.5 paga — findings verificados
+  contra o código real, não teóricos. **PR #18** (base `feat/p1-hardening`), issue #17. IMPL do P2
+  segue gated no Anexo B (Alex).
