@@ -1590,3 +1590,179 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   DTs únicos.
 - **Lição de harness:** o `/tmp/ramshared-agent` do civm some entre rodadas (limpeza de /tmp da VM de
   CI); o script de teste deve **re-copiar o binário** (auto-contido) — senão dá falso "swap não ativou".
+
+---
+
+## 2026-06-15 — Frentes pós-P1 (plano 1→4 aprovado): F1 feito, F4 SPEC; branch `feat/p1-hardening`
+
+- **Frente 1 (hardening) FEITA + validada** (branch `feat/p1-hardening`):
+  - `7787fc2` feat: backoff exponencial de reconexão no agente (era fixo 2s → 2→4→…→60s, reseta
+    pós-sessão produtiva; `next_backoff` puro + teste `backoff_doubles_up_to_cap`).
+  - `79f9ce6` fix: retry R4 do zero de slice presa em Draining (try_send cheio → sem ZeroDone →
+    presa). `pending_zero` + retry no tick (carência 1 + ERROR após 5); só re-zera slices já
+    swapped-off (não corrompe). Teste `stuck_draining_zero_is_retried_on_tick`.
+  - Validado: workspace 26 ok, clippy --all-targets, fmt, drill qemu PASS.
+- **Frente 2 (PRD P2): ACHADO — PRD já existe.** O `docs/memory-broker/PRD.md` unificado já cobre a
+  P2 (RF-W1..W3, RF-P1/P3, Anexo B com perguntas do Alex). Escrever PRD novo = duplicar (SSDV3 reuso).
+  O que falta é o **SPEC** da P2, mas ele é design-heavy + **gated no input do Alex** (cenas .blend)
+  → adiado. Usuário escolheu **pular pra Frente 4**.
+- **Frente 4 (VramProvider): SPEC FEITO** (`c3ae8d5`, `docs/vram-provider/SPEC.md`). Design resolve a
+  cadeia de lifetimes `Cuda→Context<'a>→DeviceMem<'c,'a>` (auto-ref): **Arc no Context (DT-V1) + Mem
+  como GAT (DT-V2)**. **IMPL DIFERIDA p/ sessão fresca** (refactor invasivo multi-arquivo; performance.md
+  proíbe refactor grande fundo no contexto). Mapa de acoplamento no SPEC §5.
+- **Pendente:** abrir PR de `feat/p1-hardening` (F1 + SPEC); F4 IMPL (sessão fresca); F2 SPEC + F3
+  deploy gated no Alex/ops. Vulkan (RF-G2) = subsistema novo, PRD próprio.
+
+---
+
+## 2026-06-15 — Frente 4 IMPL: VramProvider extraído (passos 1-3), daemon-genericização diferida
+
+- **"continue" → executei a IMPL da F4** incrementalmente + verde a cada passo (branch `feat/p1-hardening`):
+  - `d898488` crate `ramshared-vram` (traits `VramProvider`/`VramMemory`, GAT).
+  - `74f4052` impl CUDA (`VramProvider for Context` via GAT `Mem<'p>=DeviceMem<'p,'a>` + `VramMemory
+    for DeviceMem` + `From<CudaError> for VramError`).
+  - `ca5194d` `VramBackend<M>`/`CanaryProbe<M>`/`residency_check<M>` genéricos; call sites inferem
+    M=DeviceMem (comportamento idêntico). clippy --all-targets + test 28 ok + drill PASS.
+- **DT-V1 do SPEC revisado:** o `Arc` no Context **não** foi preciso — GAT nos tipos existentes é
+  mais limpo (sem ripple no cuda crate). SPEC `docs/vram-provider/SPEC.md` atualizado com o estado.
+- **Falta (próxima sessão, fresca):** o daemon ainda aloca via `cuda::Context` direto; genericizar
+  `run_nbd`/`run_broker`/`ublk_server` sobre `P: VramProvider` (provider criado no shell CUDA do
+  `run()`) é a parte INVASIVA (assinaturas das fns grandes) → **diferida** por performance.md (refactor
+  grande no fim do contexto; valida só em host/qemu). Só então `VramProvider` é consumido genericamente.
+- **PR:** nenhum (regra do usuário: PR só no fim de TUDO implementado+validado, e só quando ele pedir).
+  Branch `feat/p1-hardening` acumula: F1 (backoff+R4) + SPEC + F4 passos 1-3.
+
+---
+
+## 2026-06-15 — Frente 4: daemon genérico sobre VramProvider FEITO (run_nbd+run_broker)
+
+- **"continue" → genericizei o daemon** (`c65e0de`): `run_nbd`/`run_broker` allocam via `VramProvider`
+  (`provider.alloc`/`provider.mem_info`); `Cuda::load`+`create_context` em shells finos no `run()`
+  (um por backend). **`VramProvider` agora é CONSUMIDO genericamente** → broker + NBD single Vulkan-ready.
+- Lifetime OK sem Arc: provider por valor; mem/canário/closure emprestam (shared); afinidade na thread
+  do worker via GAT. Clippy `too_many_arguments` (8/7 no run_broker) → `#[allow]`.
+- Validado: clippy --all-targets, test --workspace 28 ok, drill qemu PASS, **smoke VRAM server-only na
+  RTX 2060** (run_broker genérico aloca/serve/zera no GPU real).
+- **Resta no RF-G1 (Fase B, secundário):** `ublk_server::spawn_server_dt3_vram*` cria o ctx CUDA na
+  thread do worker → genericizar precisa de `VramProvider::open()` (auto-ref Cuda+Context) ou Arc, ou
+  replicar "cuda+ctx locais na thread". Gated/secundário ao broker. **Vulkan (RF-G2) = PRD próprio.**
+- Branch `feat/p1-hardening`: F1 + SPEC + F4 (crate + cuda impl + consumidores genéricos + daemon
+  genérico). Tudo verde, sem PR (regra do usuário).
+
+---
+
+## 2026-06-15 — Frente 4: ublk-vram genericizado (RF-G1 fecha no que é validável)
+
+- **`serve_ublk_residency<M: VramMemory, F: Fn()->Option<u64>>` extraído** do loop de
+  `spawn_server_dt3_vram_with_residency` (`ublk_server.rs`). A spawn vira **shell CUDA na thread**
+  (`Cuda::load`+`create_context`+`alloc`) e chama o loop genérico com `|| ctx.mem_info()` como
+  `mem_free`. **Não precisou de `open()`/Arc** (corrige a hipótese das sessões anteriores): o padrão
+  "shell concreto + serve genérico" (igual ao `run_broker`) basta — o loop monomorfiza com
+  `M = DeviceMem<'c,'a>` e o `ctx` thread-afim vive no chamador (borrows shared compatíveis).
+  `spawn_server_dt3_vram` (sem residência) já era genérico via `worker_loop<B>`.
+- **Por que parts-validated, não e2e:** o e2e ublk+VRAM (`#[ignore]` `dt3_vram_residency_triggers_demote_synthetic`)
+  precisa de host **não-WSL2** com root+CUDA+ublk. A GPU está **presa no WSL2** (GPU-PV, sem passthrough
+  p/ VM aninhada) e o WSL2 **proíbe ublk** (freeze 2026-06-09); qemu tem ublk mas **não tem GPU**.
+  Então não há onde rodar ublk+VRAM junto aqui — fica deferido p/ RF-G2/Vulkan (host com GPU).
+- **Teste novo NÃO-gated** `residency_tests` (`FakeVram(Vec<u8>)` impl `VramMemory`): dirige
+  `serve_ublk_residency` pelos canais (IoWork campos `pub`, sem o ring) e **roda o loop de verdade**
+  (serve+§9.4+DEMOTE+teardown) sem GPU/ublk/root — seguro no WSL2. 2 casos: DEMOTE por `free<floor`
+  (≥64 reads, `mem_free=||Some(0)`) e saudável (0 demotes). `swapoff` em dev inexistente falha sem efeito
+  (non-root) → contador já incrementou. Tira o ublk-vram de "compile-only" p/ "loop rodado com fake".
+- **Validado:** clippy `--workspace --all-targets -D warnings` limpo; `cargo test --workspace` (wsl2d
+  lib 43→45 ok, 0 falhas); **drill qemu ublk-RAM PASS** (insmod/device/serve/teardown limpo); **smokes
+  VRAM GPU PASS** (`vram_backend_serves_nbd_write_then_read` + `gpu_roundtrip_256mib` na RTX 2060).
+  SPEC `docs/vram-provider/SPEC.md` Estado da IMPL atualizado.
+- **RF-G1 (VramProvider) completo no que é validável**: traits + impl CUDA + `VramBackend`/`CanaryProbe`/
+  `residency_check` genéricos + daemon (run_nbd/run_broker) genérico + ublk-vram genérico. Vulkan (RF-G2)
+  = PRD próprio (destrava o e2e ublk+VRAM). Branch `feat/p1-hardening`, tudo verde, **sem PR** (regra do
+  usuário: só no fim de tudo implementado+validado e quando ele pedir).
+
+---
+
+## 2026-06-16 — Regra de benchmarks + coletor de telemetria/reconciliação do broker (SSDV3 completo)
+
+- **Análise de valor (sênior):** o usuário questionou se o RamShared vale a pena. Aterrado nos
+  próprios números (P0 §3): VRAM-swap (241 µs ublk / 644 µs cross-host) **não bate NVMe saudável**
+  (~80 µs) — mas o "NVMe" real deste host (ext4-VHDX-WSL2 contido) deu **randread QD1 p50 ~2114 µs**,
+  então **vs o disco real do ambiente o VRAM-swap GANHA** no swap-in. NVIDIA (Sysmem Fallback/UVM),
+  WDDM (VidMm+DXGI budget) e AMD (HIP/HMM) já resolvem o "GPU derrama pra RAM" no driver → o **fosso**
+  do RamShared é a **arbitragem revogável cross-tenant de VRAM ociosa** (não-validada ainda).
+- **Regra de benchmarks:** `.claude/rules/benchmarks.md` (contexto auto + ≥3 rodadas + lado-a-lado +
+  saída dupla JSONL+MD + append-only); ponteiros em CLAUDE/AGENTS/ssdv3 (sync rule). Log único em
+  `docs/BENCHMARKS.md`; harness `scripts/p0/measure-{vram-headroom,swap-compare}.sh`. Snapshot do host
+  carregado (OBS/Edge/qBittorrent…) vira dado (Kahneman #1).
+- **Feature `broker-telemetry-reconciliation` (PRD→SPEC→SPECv2→IMPL, SSDV3 completo):** coletor que
+  reconcilia ledger do broker × swap dos tenants × VRAM do host; flag de divergência
+  (eviction=canário, stuck_slice, unaccounted=ocupado>emprestado). 2 rodadas de auditoria 2.5
+  (no-go→SPECv2 in-place). **DT-1:** contadores em `Arc<Vec<SliceIoCounters>>` (não no `Slice` —
+  data-plane × control-plane). **DT-6:** eviction pelo canário, não por subtração de VRAM. Novo
+  `crates/ramshared-wsl2d/src/telemetry.rs` (`reconcile` puro) + `Outbound::Telemetry` + `TelemetrySink`
+  JSONL (`--telemetry-jsonl`) + `Msg::Psi.mem`/`StatusReply.slice_io` (aditivos serde-default).
+- **Validado:** workspace **201 testes** (wsl2d lib 45→58: telemetry+wiring+sink), clippy/fmt limpos;
+  **drill qemu broker PASS + KTEST-TELEMETRY=ok** (daemon vivo escreve JSONL na VM); **drill ublk-RAM
+  PASS** (sem regressão). Princípio sênior: testar cada camada no nível mais seguro (in-process > qemu
+  > nunca daemon-consumidor no host). **Resta** (civm/GPU): eviction sob carga, números VRAM reais,
+  calibração `tol_frac`/`streak`.
+- **Gaps fechados depois (frente b):** números VRAM reais via teste in-process `#[ignore]` na RTX 2060
+  (`vram_outros=1039 MiB` capta gráficos); calibração `tol_frac=0.10` segura por estrutura
+  (ocupado≤emprestado→delta≤0) + fronteira unit. Commits `ef792b1`/`5462ce5`.
+- **Pente-fino multi-agente (Opus 4.8, 4 agents) achou BUG CRÍTICO C1:** o flag `Eviction` nunca
+  confirmava em produção — `demotes_delta` per-tick × histerese `recon_streak=3` engolia a evicção
+  transitória; o teste mascarava (helper `streak=1`). **Fix (`e12efcf`):** Eviction confirma imediato
+  (evento, bypassa histerese); sustentados mantêm streak. + MED-1 (teto `--slices=256` vs MAX_LINE_BYTES)
+  + M1 (reconcile alloc=0). wsl2d lib **61**, drill PASS. **Lição:** histerese de streak só serve p/
+  sinais SUSTENTADOS, não p/ eventos per-tick.
+- **RF-G2 (Vulkan) PRD escrito** (`docs/vulkan-backend/PRD.md`): 2ª impl do `VramProvider` via `ash`
+  (DEVICE_LOCAL + VK_EXT_memory_budget + staging/transfer queue); destrava "qualquer GPU" + um host
+  Linux nativo onde o ublk+VRAM e o eviction-sob-carga finalmente rodam e2e. Aguarda revisão → SPEC.
+- **RF-G2 (backend Vulkan) — SSDV3 COMPLETO (PRD→SPEC→IMPL) + validado em lavapipe.** 2ª impl do
+  `VramProvider`/`VramMemory` via `ash 0.38` no crate novo `ramshared-vulkan` (a CUDA fica intacta).
+  `open` monta device lógico + transfer queue + cmd pool/buffer + fence + staging
+  `HOST_VISIBLE|HOST_COHERENT` (cleanup RAII estilo `goto out_err` via `ResGuard`). `alloc` reserva
+  buffer `DEVICE_LOCAL`; `read_at`/`write_at` via staging + `vkCmdCopyBuffer` + `VkFence` (chunks ≤ 1
+  MiB, 1 staging reusado); `zero` via `vkCmdFillBuffer(WHOLE_SIZE)` (buffer arredondado p/ múltiplo de
+  4); bounds-check → `OutOfRange`. Todo `unsafe` isolado c/ `// SAFETY:`; fronteira do trait sem unsafe.
+- **2 decisões de IMPL viraram DT no SPEC ANTES do código (disciplina #3):** **DT-10** —
+  `VK_EXT_memory_budget` é OPCIONAL; ausente (lavapipe) → `total`=maior heap `DEVICE_LOCAL`,
+  `free`=`total−Σ alocado` (contador `AtomicU64`). **DT-11** — ublk+Vulkan DEFERIDO: o
+  `spawn_server_dt3_vram_with_residency` é CUDA-fixo (`Cuda::load()` dentro da thread), não genérico;
+  `run_ublk` c/ `--backend vulkan` retorna `Err` claro. Shell `--backend vulkan` ligado só nos caminhos
+  genéricos (broker + NBD single, `P: VramProvider`).
+- **Validação:** round-trip no **lavapipe** (`cargo test -p ramshared-vulkan -- --ignored`, sandbox off)
+  bytes-iguais (1 MiB+4 KiB, 2 chunks, offset≠0), `zero` zera, `OutOfRange`, `mem_info` free cai 2 MiB;
+  workspace **205 passed/0 failed/22 ignored**, clippy `--all-targets -D warnings` + fmt limpos; drills
+  qemu **broker PASS** + **ublk-daemon PASS** (sem regressão). Commits `b19d8a3`(RF-V1) `36f3586`(DT-10)
+  `d15bd82`(RF-V2/V3) `d4617e7`(DT-11) `afad4d5`(RF-V4) `b6ebdee`(IMPL+LIBRARIES). Branch
+  `feat/p1-hardening` (sem PR — aguarda pedido explícito). **Lição reforçada:** verificar o ambiente
+  antes de dizer "não dá" — o lavapipe (Vulkan em CPU) valida a LÓGICA aqui, igual ao `FakeVram` do ublk;
+  só perf/VRAM-real/eviction precisam de host NVIDIA-Vulkan nativo (a RTX 2060 não tem ICD Vulkan no WSL2).
+
+---
+
+## 2026-07-01 — Fechamento do branch `feat/p1-hardening`: gate de supply-chain + PR
+
+- **Retomada + correção de rota.** O usuário pediu p/ "fazer tudo, inclusive fechar o branch, da
+  forma correta". O plano inicial tinha 2 itens LOW (clap + erros tipados no daemon) — **ambos já
+  resolvidos** (descoberto lendo `LIBRARIES.md` "NÃO usado" + MEMORY 2026-06-05): **clap foi
+  REJEITADO por decisão Day-0/zero-dep** e **erros tipados já entregues como `CascadeError`**. Não
+  re-litiguei: dropei clap (violaria a decisão), mantive o `Box<dyn Error>` do daemon (idiom de
+  fronteira de binário) e corrigi a linha stale do ROADMAP (`39ad8db`). **Lição:** ler
+  `LIBRARIES.md`/MEMORY ANTES de planejar dep nova — o ROADMAP tinha um LOW desatualizado.
+- **Gate de supply-chain do Vulkan (RNF fechada, `eae37e8`):** `deny.toml` (schema v2) na raiz —
+  advisories sem `ignore`, allow-list de licenças **estrita** (MIT/Apache-2.0/ISC/Unicode-3.0, só as
+  presentes → nova licença barra), `sources` só crates.io, `wildcards=deny`. As 11 crates internas
+  viraram **`publish = false`** (via `workspace.package` + `publish.workspace=true`): repo=example.invalid,
+  nunca vão ao crates.io — previne publish acidental E faz o cargo-deny tratá-las como privadas (deps
+  de path intra-workspace deixam de contar como wildcard externa). **`cargo audit` → 0 advisories (29
+  deps); `cargo deny check` → advisories/bans/licenses/sources ok.** IMPL.md §Segurança atualizada.
+- **Validação de fechamento (branch inteiro):** `cargo fmt`/`clippy --workspace --all-targets -D
+  warnings` limpos; `cargo test --workspace` **205/0/22** (== baseline); drills qemu **broker PASS**
+  (swap via NBD + telemetria JSONL + teardown) + **ublk PASS** (serve + teardown); audit/deny verdes.
+- **Fechamento:** `main` não se moveu (behind 0, ahead 31) → sem rebase. **Issue #15** criada
+  (governance: issue antes do PR); branch pushado (`-u`); **PR aberto contra `main`** com tabela dos
+  31 commits (formato governance), `Closes #15`, `Rollback trigger` numérico.
+- **Deferido (branch próprio, não neste PR):** **SPEC do P2 Windows** (SSDV3 passo 2 do PRD
+  `docs/memory-broker-p2-windows/PRD.md`) — mantém o PR de hardening limpo de escopo. IMPL do P2 segue
+  gated nos inputs do Alex (Anexo B). Gaps env-bound do Vulkan (perf/VRAM-real/ublk+VRAM/eviction)
+  seguem gated em host NVIDIA nativo.

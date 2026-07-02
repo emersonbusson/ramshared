@@ -21,12 +21,14 @@ use ramshared_block::{BlockBackend, Command, serve};
 use ramshared_broker::arbiter::ArbiterConfig;
 use ramshared_broker::slices::SliceMap;
 use ramshared_cuda::Cuda;
+use ramshared_vram::{VramMemory, VramProvider};
+use ramshared_vulkan::VulkanProvider;
 use ramshared_wsl2d::broker_srv::{BrokerConfig, EndpointCfg, spawn_broker};
 use ramshared_wsl2d::swap::spawn_swapoff;
 use ramshared_wsl2d::{
     CANARY_BYTES, CANARY_EVERY, CHAN_CAP, Cadence, Canary, CanaryProbe, DemoteReason, LiveCount,
-    RamBackend, Reply, ResidencyConfig, ResidencySampler, SliceView, Verdict, VramBackend, WMsg,
-    spawn_acceptor,
+    RamBackend, Reply, ResidencyConfig, ResidencySampler, SliceIoCounters, SliceView, Verdict,
+    VramBackend, VramGauge, WMsg, spawn_acceptor,
 };
 use ramshared_wsl2d::{ublk, ublk_control, ublk_server};
 
@@ -53,12 +55,15 @@ enum Transport {
     Ublk,
 }
 
-/// Backend do tier ublk: VRAM (GPU, com residência §9/§9.4) ou RAM (sem GPU). O RAM
-/// existe para validar o **ciclo de vida/teardown** do daemon ublk em **qemu** (onde
-/// não há GPU); o bug de teardown que travou o WSL2 é independente do backend.
+/// Backend de VRAM/tier: `Vram` (CUDA, com residência §9/§9.4), `Vulkan` (qualquer GPU via
+/// `ramshared-vulkan`, RF-G2) ou `Ram` (sem GPU). O `Ram` existe para validar o **ciclo de
+/// vida/teardown** do daemon ublk em **qemu** (onde não há GPU); o bug de teardown que travou o
+/// WSL2 é independente do backend. `Vulkan` cobre broker + NBD single (caminhos genéricos); ublk
+/// com Vulkan fica deferido (DT-11: o servidor de residência ublk é CUDA-fixo).
 #[derive(Clone, Copy)]
 enum BackendKind {
     Vram,
+    Vulkan,
     Ram,
 }
 
@@ -66,6 +71,7 @@ impl BackendKind {
     fn label(self) -> &'static str {
         match self {
             BackendKind::Vram => "vram",
+            BackendKind::Vulkan => "vulkan",
             BackendKind::Ram => "ram",
         }
     }
@@ -122,6 +128,11 @@ fn parse_private_listen(s: &str) -> Result<std::net::SocketAddr, String> {
 }
 
 /// Valida o combo de flags de slice (DT-3: ublk é single-device no WSL2; `--slice-mb` obrigatório).
+/// Teto de slices: o `StatusReply` embute `Vec<Slice>+Vec<SliceIo>+Vec<TenantStatus>` numa única
+/// linha JSON; acima de ~430 slices ele passa do `MAX_LINE_BYTES` (64 KiB) do protocolo e a outra
+/// ponta rejeita a linha (ADR-0005). 256 dá folga (~38 KiB) e cobre qualquer uso real.
+const MAX_SLICES: u16 = 256;
+
 fn validate_slice_flags(slices: u16, slice_mb: u64, is_ublk: bool) -> Result<(), String> {
     if slices > 0 && is_ublk {
         return Err(
@@ -130,6 +141,12 @@ fn validate_slice_flags(slices: u16, slice_mb: u64, is_ublk: bool) -> Result<(),
     }
     if slices > 0 && slice_mb == 0 {
         return Err("--slices > 0 exige --slice-mb N".into());
+    }
+    if slices > MAX_SLICES {
+        return Err(format!(
+            "--slices {slices} > {MAX_SLICES}: o StatusReply excederia o teto de linha do protocolo \
+             (MAX_LINE_BYTES 64 KiB, ADR-0005)"
+        ));
     }
     Ok(())
 }
@@ -156,13 +173,13 @@ fn zero_window<B: BlockBackend>(
 /// de latência (§9, baseline→Canary; serve-only, DT-16) e roda a sonda §9.4 (conteúdo/free em
 /// cadência, com histerese via streak). Devolve `Some(reason)` se algum sinal pede DEMOTE; o
 /// chamador decide a AÇÃO (swapoff local no single, `DemoteAll` via broker no multi-slice).
-fn residency_check<F: Fn() -> Option<u64>>(
+fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
     lat_us: u64,
     canary: &mut Option<Canary>,
     baseline: &mut Vec<u64>,
     sampler: &mut ResidencySampler,
     cadence: &mut Cadence,
-    probe: &mut CanaryProbe,
+    probe: &mut CanaryProbe<M>,
     mem_free: F,
 ) -> Option<DemoteReason> {
     // §9: canário de latência por-request. content_ok=true/free=u64::MAX DE PROPÓSITO — o sinal
@@ -214,6 +231,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut listen_nbd: Option<String> = None;
     let mut arbiter: Option<String> = None;
     let mut advertise_nbd: Option<String> = None;
+    let mut telemetry_jsonl: Option<String> = None;
     let args: Vec<String> = std::env::args().collect();
     let mut i = 1;
     while i < args.len() {
@@ -254,8 +272,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 i += 1;
                 backend = match args.get(i).map(String::as_str) {
                     Some("vram") => BackendKind::Vram,
+                    Some("vulkan") => BackendKind::Vulkan,
                     Some("ram") => BackendKind::Ram,
-                    _ => return Err("--backend requer 'vram' ou 'ram'".into()),
+                    _ => return Err("--backend requer 'vram', 'vulkan' ou 'ram'".into()),
                 };
             }
             "--slices" => {
@@ -298,6 +317,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .clone(),
                 );
             }
+            "--telemetry-jsonl" => {
+                i += 1;
+                telemetry_jsonl = Some(
+                    args.get(i)
+                        .ok_or("--telemetry-jsonl requer caminho")?
+                        .clone(),
+                );
+            }
             other => return Err(format!("argumento desconhecido: {other}").into()),
         }
         i += 1;
@@ -328,6 +355,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let advertise_tcp = advertise_nbd_addr
         .or(listen_nbd_addr)
         .map(|a| (a.ip().to_string(), a.port()));
+    let telemetry_jsonl = telemetry_jsonl.map(std::path::PathBuf::from);
 
     // Modo broker (ITEM-8): --slices > 0 fatia a memória e sobe o árbitro. Exige --arbiter-listen
     // (o ponto de controle do broker). --listen-nbd é opcional (tenants TCP/civm além do Unix).
@@ -339,15 +367,41 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .checked_mul(1024 * 1024)
             .ok_or("--slice-mb: overflow (MiB grande demais)")?;
         return match backend {
-            BackendKind::Vram => run_broker(
-                slice_bytes,
-                slices,
-                sock,
-                force,
-                listen_nbd_addr,
-                advertise_tcp,
-                arbiter_addr,
-            ),
+            BackendKind::Vram => {
+                // Shell CUDA: cria o provider (Context impl VramProvider) e entra no caminho
+                // genérico.
+                let cuda = Cuda::load()?;
+                let dev = cuda.device(0)?;
+                eprintln!("[ramsharedd] GPU: {}", dev.name());
+                let ctx = cuda.create_context(&dev)?;
+                run_broker(
+                    ctx,
+                    slice_bytes,
+                    slices,
+                    sock,
+                    force,
+                    listen_nbd_addr,
+                    advertise_tcp,
+                    arbiter_addr,
+                    telemetry_jsonl,
+                )
+            }
+            BackendKind::Vulkan => {
+                // Shell Vulkan (RF-V4/DT-11): provider Vulkan no MESMO run_broker genérico.
+                let provider = VulkanProvider::open(0)?;
+                eprintln!("[ramsharedd] GPU (vulkan): {}", provider.device_name());
+                run_broker(
+                    provider,
+                    slice_bytes,
+                    slices,
+                    sock,
+                    force,
+                    listen_nbd_addr,
+                    advertise_tcp,
+                    arbiter_addr,
+                    telemetry_jsonl,
+                )
+            }
             BackendKind::Ram => run_broker_ram(
                 slice_bytes,
                 slices,
@@ -355,6 +409,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 listen_nbd_addr,
                 advertise_tcp,
                 arbiter_addr,
+                telemetry_jsonl,
             ),
         };
     }
@@ -364,30 +419,46 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     match transport {
-        Transport::Nbd => run_nbd(size, sock, force, nbd_dev),
+        Transport::Nbd => match backend {
+            BackendKind::Vram => {
+                // Shell CUDA: cria o provider e entra no caminho genérico.
+                let cuda = Cuda::load()?;
+                let dev = cuda.device(0)?;
+                eprintln!("[ramsharedd] GPU: {}", dev.name());
+                let ctx = cuda.create_context(&dev)?;
+                run_nbd(ctx, size, sock, force, nbd_dev)
+            }
+            BackendKind::Vulkan => {
+                // Shell Vulkan (RF-V4/DT-11): provider Vulkan no MESMO run_nbd genérico.
+                let provider = VulkanProvider::open(0)?;
+                eprintln!("[ramsharedd] GPU (vulkan): {}", provider.device_name());
+                run_nbd(provider, size, sock, force, nbd_dev)
+            }
+            BackendKind::Ram => Err(
+                "--backend ram não tem caminho NBD single; use --slices (broker) ou ublk".into(),
+            ),
+        },
         Transport::Ublk => run_ublk(size, force, queue_depth, backend),
     }
 }
 
-/// Caminho NBD (fixed-newstyle em socket Unix). Worker CUDA unico na thread atual.
-fn run_nbd(
+/// Caminho NBD (fixed-newstyle em socket Unix). Worker único na thread atual, genérico sobre o
+/// provider de VRAM (RF-G1): o `provider` (CUDA hoje) já vem pronto do shell em `run()`.
+fn run_nbd<P: VramProvider>(
+    provider: P,
     size: u64,
     sock: String,
     force: bool,
     nbd_dev: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // --- CUDA: aloca e zera a VRAM ---
-    let cuda = Cuda::load()?;
-    let dev = cuda.device(0)?;
-    eprintln!("[ramsharedd] GPU: {}", dev.name());
-    let ctx = cuda.create_context(&dev)?;
-    let (free, total) = ctx.mem_info()?;
+    // --- aloca e zera a VRAM (via VramProvider) ---
+    let (free, total) = provider.mem_info()?;
     eprintln!(
         "[ramsharedd] VRAM livre={} MiB total={} MiB",
         free >> 20,
         total >> 20
     );
-    let mut mem = ctx.alloc(size as usize)?;
+    let mut mem = provider.alloc(size as usize)?;
     mem.zero()?;
 
     // Disciplina 3: trava memoria + protege do OOM killer ANTES de servir swap.
@@ -402,7 +473,7 @@ fn run_nbd(
     // --- canário dedicado de residência (§9.4): região separada da swap, NÃO
     // endereçável por NBD (o device anunciado segue = região de swap). Alimenta a
     // sonda de conteúdo/free em cadência (SPECv3 DT-1/DT-9). ---
-    let canary_region = ctx.alloc(CANARY_BYTES)?;
+    let canary_region = provider.alloc(CANARY_BYTES)?;
     let mut probe = CanaryProbe::new(canary_region);
     let mut cadence = Cadence::new(CANARY_EVERY);
     let mut sampler = ResidencySampler::new(ResidencyConfig::default());
@@ -502,7 +573,7 @@ fn run_nbd(
                 &mut sampler,
                 &mut cadence,
                 &mut probe,
-                || ctx.mem_info().ok().map(|(f, _)| f as u64),
+                || provider.mem_info().ok().map(|(f, _)| f),
             )
         {
             eprintln!("[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}");
@@ -541,13 +612,23 @@ struct BrokerRuntime {
     demote_tx: std::sync::mpsc::Sender<DemoteReason>,
     shutdown: std::sync::Arc<AtomicBool>,
     broker: std::thread::JoinHandle<()>,
+    /// Contadores de IO por slice (telemetria RF-1): o worker incrementa, o broker lê no `Status`.
+    slice_io: std::sync::Arc<Vec<SliceIoCounters>>,
+    /// Gauge de VRAM (RF-3): a closure de residência publica free/total; o broker lê no tick.
+    vram: std::sync::Arc<VramGauge>,
 }
+
+/// Tolerância da reconciliação (DT-7, provisória — calibrar no P0).
+const RECON_TOL_FRAC: f64 = 0.10;
+/// Ticks consecutivos p/ confirmar um flag de reconciliação (histerese DT-12).
+const RECON_STREAK: u32 = 3;
 
 /// Sobe o control-plane do broker (independente do backend): mapa de slices + geometria +
 /// exports NBD ("s0".."sN"), acceptors (Unix sempre; TCP se `--listen-nbd`) alimentando o
 /// MESMO canal `jobs` do worker, o árbitro (`spawn_broker`, que compartilha `jobs` p/ os
 /// `ZeroExport` de higiene DT-17 e consome o canal de DEMOTE) e a ponte de `SHUTDOWN`
 /// (handler de sinal só toca o estático async-signal-safe → espelhado no `Arc`).
+#[allow(clippy::too_many_arguments)] // setup do control-plane: geometria + rede + telemetria
 fn broker_setup(
     slices: u16,
     slice_bytes: u64,
@@ -555,6 +636,7 @@ fn broker_setup(
     listen_nbd_addr: Option<std::net::SocketAddr>,
     advertise_tcp: Option<(String, u16)>,
     arbiter_addr: std::net::SocketAddr,
+    telemetry_jsonl: Option<std::path::PathBuf>,
 ) -> Result<BrokerRuntime, Box<dyn std::error::Error>> {
     // Mapa de slices: o índice do export (resolvido pelo handshake) == índice na geom == índice
     // em exports (nomes "s{id}" idênticos aos que o broker emite no SwapOn).
@@ -612,6 +694,12 @@ fn broker_setup(
         );
     }
 
+    let slice_io = std::sync::Arc::new(
+        (0..slices)
+            .map(|_| SliceIoCounters::default())
+            .collect::<Vec<_>>(),
+    );
+    let vram = std::sync::Arc::new(VramGauge::default());
     let bcfg = BrokerConfig {
         listen: arbiter_addr,
         endpoints: EndpointCfg {
@@ -621,6 +709,11 @@ fn broker_setup(
         swap_prio: None,
         arbiter: ArbiterConfig::default(),
         tick: Duration::from_secs(2), // SPEC §/DT-24: tick=2s (streak=5 → janela de 10s)
+        slice_io: std::sync::Arc::clone(&slice_io),
+        vram: std::sync::Arc::clone(&vram),
+        tol_frac: RECON_TOL_FRAC,
+        recon_streak: RECON_STREAK,
+        telemetry_jsonl,
     };
     let (broker, broker_addr) = spawn_broker(
         bcfg,
@@ -638,6 +731,8 @@ fn broker_setup(
         demote_tx,
         shutdown,
         broker,
+        slice_io,
+        vram,
     })
 }
 
@@ -696,6 +791,13 @@ fn serve_broker_jobs<B: BlockBackend>(
             disconnect: out.disconnect,
         });
 
+        // Telemetria RF-1: bytes/IO servidos nesta slice (atômico, hot path barato — gate ITEM-2).
+        if touches && let Some(c) = rt.slice_io.get(job.export) {
+            c.bytes_served
+                .fetch_add(u64::from(job.req.len), Ordering::Relaxed);
+            c.io_count.fetch_add(1, Ordering::Relaxed);
+        }
+
         if touches
             && !demoted
             && let Some(reason) = residency(lat_us)
@@ -712,7 +814,9 @@ fn serve_broker_jobs<B: BlockBackend>(
 /// (opcional) TCP, com o árbitro decidindo quem usa cada slice. O worker único é dono da
 /// VRAM/contexto CUDA e roda a residência §9/§9.4. Execução ao vivo é o gate qemu (`--backend
 /// ram`, ITEM-11) / civm (ITEM-12) — VRAM real não roda em qemu (sem GPU).
-fn run_broker(
+#[allow(clippy::too_many_arguments)] // entry-point do daemon: config de geometria + rede + provider
+fn run_broker<P: VramProvider>(
+    provider: P,
     slice_bytes: u64,
     slices: u16,
     sock: String,
@@ -720,22 +824,21 @@ fn run_broker(
     listen_nbd_addr: Option<std::net::SocketAddr>,
     advertise_tcp: Option<(String, u16)>,
     arbiter_addr: std::net::SocketAddr,
+    telemetry_jsonl: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let total = (slices as u64)
         .checked_mul(slice_bytes)
         .ok_or("--slices * --slice-mb: overflow")?;
 
-    let cuda = Cuda::load()?;
-    let dev = cuda.device(0)?;
-    eprintln!("[ramsharedd] GPU: {}", dev.name());
-    let ctx = cuda.create_context(&dev)?;
-    let (free, total_vram) = ctx.mem_info()?;
+    // O `provider` (CUDA hoje; Vulkan amanhã) já vem pronto do shell em `run()`. Daqui pra baixo o
+    // caminho é genérico sobre `VramProvider`/`VramMemory` (RF-G1).
+    let (free, total_vram) = provider.mem_info()?;
     eprintln!(
         "[ramsharedd] VRAM livre={} MiB total={} MiB",
         free >> 20,
         total_vram >> 20
     );
-    let mut mem = ctx.alloc(total as usize)?;
+    let mut mem = provider.alloc(total as usize)?;
     mem.zero()?;
     lock_memory(force)?; // Disciplina 3: trava memória ANTES de servir swap
     let backend = VramBackend::new(mem, BLOCK_SIZE);
@@ -746,7 +849,7 @@ fn run_broker(
     );
 
     // Canário de residência (§9.4): região separada, não endereçável por NBD.
-    let canary_region = ctx.alloc(CANARY_BYTES)?;
+    let canary_region = provider.alloc(CANARY_BYTES)?;
     let mut probe = CanaryProbe::new(canary_region);
     let mut cadence = Cadence::new(CANARY_EVERY);
     let mut sampler = ResidencySampler::new(ResidencyConfig::default());
@@ -760,7 +863,9 @@ fn run_broker(
         listen_nbd_addr,
         advertise_tcp,
         arbiter_addr,
+        telemetry_jsonl,
     )?;
+    let vram = std::sync::Arc::clone(&rt.vram);
     let mut backend = serve_broker_jobs(backend, &rt, |lat_us| {
         residency_check(
             lat_us,
@@ -769,7 +874,13 @@ fn run_broker(
             &mut sampler,
             &mut cadence,
             &mut probe,
-            || ctx.mem_info().ok().map(|(f, _)| f as u64),
+            || {
+                let (f, t) = provider.mem_info().ok()?;
+                // RF-3/DT-5: publica o gauge p/ a reconciliação (free/total em bytes).
+                vram.free.store(f, Ordering::Relaxed);
+                vram.total.store(t, Ordering::Relaxed);
+                Some(f)
+            },
         )
     });
 
@@ -792,6 +903,7 @@ fn run_broker_ram(
     listen_nbd_addr: Option<std::net::SocketAddr>,
     advertise_tcp: Option<(String, u16)>,
     arbiter_addr: std::net::SocketAddr,
+    telemetry_jsonl: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let total = (slices as u64)
         .checked_mul(slice_bytes)
@@ -810,6 +922,7 @@ fn run_broker_ram(
         listen_nbd_addr,
         advertise_tcp,
         arbiter_addr,
+        telemetry_jsonl,
     )?;
     let _ = serve_broker_jobs(backend, &rt, |_| None); // RAM: sem residência
 
@@ -829,6 +942,18 @@ fn run_ublk(
     queue_depth: u16,
     backend: BackendKind,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // DT-11: ublk+Vulkan ainda nao implementado. O servidor de residencia ublk
+    // (spawn_server_dt3_vram_with_residency) e CUDA-fixo, nao generico sobre
+    // VramProvider; generifica-lo e refactor a parte (so validavel em host nativo).
+    // Falha cedo, antes de qualquer side-effect (add_device/mlockall).
+    if let BackendKind::Vulkan = backend {
+        return Err(
+            "ublk com --backend vulkan ainda nao suportado (DT-11: servidor de \
+             residencia ublk e CUDA-fixo). Use --backend vram (CUDA), ou Vulkan \
+             via --slices (broker) / --transport nbd."
+                .into(),
+        );
+    }
     // TRAVA DE SEGURANCA: recusa servir ublk no WSL2. Um teardown malsucedido do
     // daemon orfana o /dev/ublkbN -> I/O em D-state -> CONGELA o WSL2 (2026-06-09).
     guard_not_wsl2()?;
@@ -876,6 +1001,10 @@ fn run_ublk(
             BLOCK_SIZE as usize,
             RamBackend::new(size as usize),
         )?),
+        // Inalcancavel: barrado no inicio de run_ublk (DT-11). Defensivo, sem panic.
+        BackendKind::Vulkan => {
+            return Err("ublk com --backend vulkan nao suportado (DT-11)".into());
+        }
     };
     ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())?;
     eprintln!(
@@ -994,5 +1123,12 @@ mod tests {
         assert!(validate_slice_flags(2, 0, false).is_err());
         assert!(validate_slice_flags(2, 64, false).is_ok());
         assert!(validate_slice_flags(0, 0, false).is_ok()); // single-mode ok
+    }
+
+    #[test]
+    fn slice_flags_cap_protects_status_line() {
+        // MED-1: --slices acima de MAX_SLICES estouraria o StatusReply (MAX_LINE_BYTES 64 KiB).
+        assert!(validate_slice_flags(MAX_SLICES, 64, false).is_ok());
+        assert!(validate_slice_flags(MAX_SLICES + 1, 64, false).is_err());
     }
 }

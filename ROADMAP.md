@@ -23,7 +23,10 @@ O caminho executável hoje é o **WSL2**; o destino é o **ring 0 bare-metal**
 - **H1 — daemon multi-conexão / leitor dedicado:** ✅ **feito** — worker CUDA único +
   leitor/escritor por conexão (`nbd-client -C N`, `CAN_MULTI_CONN`); sem head-of-line
   blocking. Ver `docs/daemon-multiconn/`.
-- **LOW:** erros tipados (enum) no daemon/cascade; `clap` no parse de args.
+- **LOW — resolvido:** erros tipados via `CascadeError` (zero-dep, padrão `CudaError`, em
+  `ramshared-cli`/`ramshared-tier`). **`clap` rejeitado** (seria a 1ª dep externa num projeto
+  zero-dep/Ring-0 — decisão registrada em [`docs/LIBRARIES.md`](docs/LIBRARIES.md)); o daemon
+  (`ramshared-wsl2d`) mantém `Box<dyn Error>` na fronteira do binário (idiom de aplicação).
 
 ## Fase B — kernel custom (WSL2 + kernel próprio)
 

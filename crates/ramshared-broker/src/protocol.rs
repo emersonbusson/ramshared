@@ -26,6 +26,8 @@ pub enum Msg {
     Psi {
         sample: PsiSample,
         swaps: Vec<SwapEntry>,
+        #[serde(default)]
+        mem: Option<TenantMem>,
     },
     SwapOnDone {
         slice: SliceId,
@@ -69,6 +71,8 @@ pub enum Msg {
     StatusReply {
         tenants: Vec<TenantStatus>,
         slices: Vec<Slice>,
+        #[serde(default)]
+        slice_io: Vec<SliceIo>,
         last_rebalance_secs: Option<u64>,
     },
     Error {
@@ -101,6 +105,27 @@ pub struct TenantStatus {
     pub psi: PsiSample,
     pub slices: Vec<SliceId>,
     pub present: bool,
+    /// Bytes servidos (acumulado) das slices `Active` deste tenant (telemetria RF-1).
+    #[serde(default)]
+    pub bytes_served: u64,
+}
+
+/// Telemetria de memória do tenant reportada no `Psi` (RF-2). `swap_current` vem do cgroup v2
+/// (DT-10, opcional); `diskstats_io` = sectors lidos+escritos (×512) dos nbd devices que o tenant
+/// fez `swapon` (DT-11).
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TenantMem {
+    pub swap_current: Option<u64>,
+    pub diskstats_io: u64,
+}
+
+/// Contadores de IO por slice no `StatusReply` (telemetria RF-1; paralelo ao [`Slice`] p/ não tocar
+/// a máquina de estados — DT-2). `id` = índice do export `s{id}`.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SliceIo {
+    pub id: SliceId,
+    pub bytes_served: u64,
+    pub io_count: u64,
 }
 
 /// Serializa `msg` + `'\n'` e dá flush (uma mensagem por linha).
@@ -173,6 +198,10 @@ mod tests {
                     size_kb: 100,
                     used_kb: 10,
                 }],
+                mem: Some(TenantMem {
+                    swap_current: Some(2048),
+                    diskstats_io: 100,
+                }),
             },
             Msg::SwapOnDone {
                 slice: 1,
@@ -214,6 +243,7 @@ mod tests {
                     psi: PsiSample::default(),
                     slices: vec![0, 1],
                     present: true,
+                    bytes_served: 4096,
                 }],
                 slices: vec![Slice {
                     id: 0,
@@ -221,6 +251,11 @@ mod tests {
                     len: 64,
                     tenant: Some(1),
                     state: SliceState::Active,
+                }],
+                slice_io: vec![SliceIo {
+                    id: 0,
+                    bytes_served: 4096,
+                    io_count: 1,
                 }],
                 last_rebalance_secs: Some(42),
             },
@@ -260,6 +295,29 @@ mod tests {
     fn missing_type_tag_is_err() {
         let mut cur = Cursor::new(b"{\"foo\":1}\n".to_vec());
         assert!(read_msg(&mut cur).is_err());
+    }
+
+    #[test]
+    fn psi_mem_defaults_to_none() {
+        // Psi sem `mem` (forma anterior) → desserializa com mem=None (aditivo, DT-9).
+        let line =
+            b"{\"type\":\"psi\",\"sample\":{\"avg10\":0.0,\"avg60\":0.0,\"stall_us\":0},\"swaps\":[]}\n";
+        let mut cur = Cursor::new(line.to_vec());
+        match read_msg(&mut cur).unwrap().unwrap() {
+            Msg::Psi { mem, .. } => assert_eq!(mem, None),
+            other => panic!("esperava Psi, veio {other:?}"),
+        }
+    }
+
+    #[test]
+    fn status_reply_slice_io_defaults_empty() {
+        // StatusReply sem `slice_io` → vetor vazio (aditivo).
+        let line = b"{\"type\":\"status_reply\",\"tenants\":[],\"slices\":[],\"last_rebalance_secs\":null}\n";
+        let mut cur = Cursor::new(line.to_vec());
+        match read_msg(&mut cur).unwrap().unwrap() {
+            Msg::StatusReply { slice_io, .. } => assert!(slice_io.is_empty()),
+            other => panic!("esperava StatusReply, veio {other:?}"),
+        }
     }
 
     #[test]
