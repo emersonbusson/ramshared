@@ -15,6 +15,10 @@ Antes de alterar código:
 5. Em Pull Requests, siga o formato de tabela de commits de [`.claude/rules/governance.md`](.claude/rules/governance.md).
 6. Para benchmarks/medições que embasam decisão, siga [`.claude/rules/benchmarks.md`](.claude/rules/benchmarks.md) (contexto auto + ≥3 rodadas + log append-only em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)).
 
+## Acesso
+
+Root (Linux) e admin (Windows, UAC sem-prompt) já autorizados nesta workspace para todas as tarefas do RamShared — mesmo padrão liberado em [`docs/memory-broker/CIVM-TENANT.md`](docs/memory-broker/CIVM-TENANT.md). Permissões de tool em `~/.claude/settings.json`.
+
 ## Metodologias Core
 
 - **Kahneman Disciplines**: Toda decisão arquitetural ou de lock/DMA deve seguir as 14 disciplinas de Kahneman ([`docs/methodology/KAHNEMAN-DISCIPLINES.md`](docs/methodology/KAHNEMAN-DISCIPLINES.md)). Evite decisões rápidas de "Sistema 1"; registre counterfactuals e triggers de reversão de patch explícitos.
