@@ -1,0 +1,19 @@
+[Unit]
+# Espelha o console do kernel pra /mnt/c/wsl-forensics/kernel-console.log em tempo
+# real (caixa-preta duravel host-side). Ver kmsg-recorder.sh.
+Description=RamShared kernel console recorder (durable, host-side)
+After=local-fs.target
+RequiresMountsFor=/mnt/c
+
+[Service]
+Type=simple
+User=root
+ExecStart=/home/emdev/codespace/ramshared/scripts/safety/kmsg-recorder.sh
+Restart=on-failure
+RestartSec=5
+# Best-effort: se /mnt/c cair, nao derruba o boot.
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

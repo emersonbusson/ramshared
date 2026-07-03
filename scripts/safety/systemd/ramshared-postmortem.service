@@ -1,0 +1,19 @@
+[Unit]
+# Coletor forense automatico: em TODO boot, checa se o boot anterior travou
+# (kernel BUG/Oops OU marcador 'armed' de um start arriscado) e, se sim, gera o
+# relatorio completo em /mnt/c/wsl-forensics/. Idempotente (nao recoleta o mesmo boot).
+Description=RamShared postmortem forensic collector (auto, on boot)
+After=local-fs.target systemd-journald.service ramshared-kmsg-recorder.service
+Wants=systemd-journald.service
+# Precisa do /mnt/c montado pra escrita duravel.
+RequiresMountsFor=/mnt/c
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/home/emdev/codespace/ramshared/scripts/safety/postmortem.sh --auto
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
