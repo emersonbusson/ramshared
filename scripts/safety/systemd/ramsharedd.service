@@ -1,0 +1,25 @@
+[Unit]
+Description=RamShared VRAM-as-swap daemon (ublk, tier VRAM)
+Documentation=file:///home/emdev/codespace/ramshared/ARCHITECTURE.md
+After=local-fs.target ramshared-kmsg-recorder.service
+# NAO habilitado para boot automatico (rollout supervisionado). Primeiro start manual:
+# `sudo systemctl start ramsharedd` observando `journalctl -u ramsharedd -f` + nvidia-smi.
+
+[Service]
+Type=simple
+User=root
+# Override consciente do guard_not_wsl2() — validado (fix do mlockall + Camadas A/B,
+# 2026-07-03). O ExecStartPre abaixo (preflight, falha-seguro) so deixa o daemon subir
+# se o binario tiver o fix, a GPU estiver sadia e nao houver device ublk orfao — senao
+# RECUSA (o daemon nem inicia) em vez de arriscar travar o host.
+Environment=RAMSHARED_ALLOW_UBLK_ON_WSL2=1
+ExecStartPre=/home/emdev/codespace/ramshared/scripts/safety/preflight.sh
+ExecStart=/home/emdev/codespace/ramshared/target/debug/ramsharedd --transport ublk --backend vram --size 512 --queue-depth 4
+# Sem restart automatico nesta fase supervisionada — um crash deve ficar visivel
+# (journalctl + coletor postmortem no proximo boot), nao ser mascarado.
+Restart=no
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
