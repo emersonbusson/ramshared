@@ -462,7 +462,9 @@ fn run_nbd<P: VramProvider>(
     mem.zero()?;
 
     // Disciplina 3: trava memoria + protege do OOM killer ANTES de servir swap.
-    lock_memory(force)?;
+    // CUDA/VRAM ja foram alocados acima (provider.alloc/mem.zero) -> seguro travar
+    // MCL_FUTURE de uma vez so (sem a colisao de dxgkrnl do incidente 2026-07-03).
+    lock_memory(force, true)?;
     let mut backend = VramBackend::new(mem, BLOCK_SIZE);
     eprintln!(
         "[ramsharedd] VRAM alocada: {} MiB, block_size={}",
@@ -840,7 +842,8 @@ fn run_broker<P: VramProvider>(
     );
     let mut mem = provider.alloc(total as usize)?;
     mem.zero()?;
-    lock_memory(force)?; // Disciplina 3: trava memória ANTES de servir swap
+    // CUDA/VRAM ja foram alocados acima -> seguro travar MCL_FUTURE de uma vez so.
+    lock_memory(force, true)?; // Disciplina 3: trava memória ANTES de servir swap
     let backend = VramBackend::new(mem, BLOCK_SIZE);
     eprintln!(
         "[ramsharedd] broker VRAM: {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE}",
@@ -958,8 +961,9 @@ fn run_ublk(
     // daemon orfana o /dev/ublkbN -> I/O em D-state -> CONGELA o WSL2 (2026-06-09).
     guard_not_wsl2()?;
     // Disciplina 3: trava memoria + protege do OOM (processo todo; o worker e dono
-    // da CUDA, mas mlockall/oom_score_adj sao process-wide).
-    lock_memory(force)?;
+    // da CUDA, mas mlockall/oom_score_adj sao process-wide). So MCL_CURRENT aqui —
+    // MCL_FUTURE e' armado depois, em arm_future_lock, ver comentario la.
+    lock_memory(force, false)?;
 
     // SAFETY: registra handler async-signal-safe (so um store atomico) para encerrar
     // de forma ordenada. signal() so guarda o ponteiro; o retorno antigo e ignorado.
@@ -1006,6 +1010,27 @@ fn run_ublk(
             return Err("ublk com --backend vulkan nao suportado (DT-11)".into());
         }
     };
+    // ANTI-BUG dxgkrnl (incidente 2026-07-03): NAO armamos MCL_FUTURE no caminho
+    // ublk+vram. O `dxg_map_iospace` do dxgkrnl mapeia VRAM em 2 passos (vm_mmap
+    // anonimo -> io_remap_pfn_range por cima); com MCL_FUTURE ativo, o passo 1
+    // pre-popula a VMA e o passo 2 bate em BUG_ON(!pte_none) -> kernel BUG com lock
+    // preso -> host trava. E o `spawn_server_dt3_vram_with_residency` roda o
+    // Cuda::load()/create_context() (= os dxg_map_iospace) numa THREAD que corre
+    // ASSINCRONA a este ponto — nao da pra "armar MCL_FUTURE depois do CUDA" com
+    // seguranca (haveria race: o MCL_FUTURE do main poderia cair no meio do
+    // create_context do worker). Por isso ficamos so em MCL_CURRENT (lock_memory
+    // acima, lock_future=false), que NAO afeta mmaps futuros -> zero colisao com o
+    // dxgkrnl. Confirmado por leitura de mm/memory.c + Camadas A/B.
+    //
+    // TRADE-OFF (Disciplina 3 / anti-deadlock RNF-1): buffers de I/O alocados DEPOIS
+    // deste ponto nao ficam travados por MCL_FUTURE. Sob pressao extrema de memoria
+    // isso reabre (em tese) o vetor de D-state. Mitigacao correta futura: mlock()
+    // explicito so nos buffers de residencia/staging (uring/canario), em vez do
+    // MCL_FUTURE cego. Ate la: rodar so supervisionado / prioridade de swap baixa.
+    // SPEC: docs/reliability/BLACK-BOX-FORENSICS.md.
+    eprintln!(
+        "[ramsharedd] mlockall: MCL_CURRENT-only no caminho ublk+vram (anti-dxgkrnl-BUG; MCL_FUTURE desarmado de proposito)"
+    );
     ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())?;
     eprintln!(
         "[ramsharedd] ublk device: {block_path} ({} MiB, qd={}, backend={})",
@@ -1065,9 +1090,22 @@ fn guard_not_wsl2() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Trava a memoria (mlockall) + protege do OOM killer (oom_score_adj=-1000) ANTES de
 /// servir swap (Disciplina 3, anti-deadlock). `--force` segue sem a protecao, avisando.
-fn lock_memory(force: bool) -> Result<(), Box<dyn std::error::Error>> {
+///
+/// `lock_future`: inclui `MCL_FUTURE` (trava tambem mmaps futuros) ou so `MCL_CURRENT`
+/// (so o que ja esta mapeado agora). Os caminhos NBD/broker (`run_nbd`/`run_broker`)
+/// chamam isto DEPOIS de `provider.alloc()` — o contexto CUDA e a VRAM em si ja foram
+/// alocados, entao `MCL_FUTURE` de uma vez e seguro. O caminho `run_ublk` com backend
+/// VRAM e diferente: precisa chamar com `lock_future=false` ANTES do backend
+/// inicializar CUDA, e so armar `MCL_FUTURE` depois via `arm_future_lock` — ver o
+/// comentario la (incidente 2026-07-03: kernel BUG por colisao com o dxgkrnl).
+fn lock_memory(force: bool, lock_future: bool) -> Result<(), Box<dyn std::error::Error>> {
     // SAFETY: mlockall e' uma syscall sem efeitos de memoria inseguros.
-    let locked = unsafe { mlockall(MCL_CURRENT | MCL_FUTURE) } == 0;
+    let flags = if lock_future {
+        MCL_CURRENT | MCL_FUTURE
+    } else {
+        MCL_CURRENT
+    };
+    let locked = unsafe { mlockall(flags) } == 0;
     if !locked && !force {
         return Err("mlockall falhou; rode como root ou use --force".into());
     }
@@ -1086,6 +1124,11 @@ fn lock_memory(force: bool) -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
+
+// NOTA: `arm_future_lock` (armar MCL_FUTURE pos-init) foi REMOVIDO — tinha race com a
+// init CUDA assincrona do worker (spawn_server_dt3_vram_with_residency), que teria
+// re-disparado o kernel BUG do dxgkrnl. O caminho ublk+vram fica so em MCL_CURRENT.
+// Ver o comentario "ANTI-BUG dxgkrnl" em run_ublk.
 
 #[cfg(test)]
 mod tests {
