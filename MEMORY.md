@@ -1786,3 +1786,393 @@ Branch `feat/next-fronts-ssdv3` — 5 itens via esteira SSDV3, **um PR só**. Va
   = candidato ativo (corrige tudo), `SPEC.md` preservado. **Lição:** o 2.5 paga — findings verificados
   contra o código real, não teóricos. **PR #18** (base `feat/p1-hardening`), issue #17. IMPL do P2
   segue gated no Anexo B (Alex).
+
+---
+
+## 2026-07-03 — Crash-safety do ublk resolvida (SIGBUS contido) + auditoria "swap pra tudo" (Windows/WSL2) + rollout preparado
+
+- **Crash-safety do teardown do ublk sob SIGKILL/swap ativo — RESOLVIDA.** Sequência: Opus leu
+  `ublk_drv.c` real e achou `ublk_daemon_monitor_work` (poll 5s, `ublk_drv.c:1486-1516`) já existe no
+  kernel — a alegação antiga "SIGKILL orfanaria" (linha ~939 desta entrada de 2026-06-09) era
+  inferência nunca testada (WYSIATI). Rodei E1 (`scripts/kernel/qemu-ublk-crash-e1.sh`, swap real +
+  pressão + SIGKILL, 3 rodadas): **2/3 kernel panic** — mas a vítima era o próprio PID 1 da VM de
+  teste (artefato: "PID 1 morre → panic" é padrão universal do Linux, não do ublk). Opus investigou a
+  fundo (leu `mm/memory.c do_swap_page`, `mm/page_io.c`, `arch/x86/mm/fault.c do_sigbus`) e refez o
+  experimento isolando a vítima via cgroup v2 (`scripts/kernel/qemu-ublk-crash-e1b.sh`): **5/5
+  determinístico, SIGBUS contido** (`exit=42`), PID 1 e bystander sempre vivos. **Veredito final:** o
+  kernel já falha-seguro; reaper/watchdog não agrega nada (`DEL_DEV` = mesmo `del_gendisk` do monitor).
+  Recomendação: prioridade de swap BAIXA (só overflow frio) + documentar o contrato
+  ("crash do daemon → SIGBUS pros tenants com páginas lá, aceitável pra scratch/overflow, não pra
+  estado insubstituível") + guarda opcional de `dmesg`. **Nenhuma mudança de kernel necessária.**
+  Scripts novos (`qemu-ublk-crash-e1.sh`, `qemu-ublk-crash-e1b.sh`) não tocam o smoke original PASS.
+- **Auditoria "pente fino" (usuário pediu root Linux+Windows, mesmo padrão do civm — já liberado em
+  `~/.claude/settings.json`, sudo/powershell/cmd/ssh sem prompt):**
+  - **WSL2 não atualizou** (`6.6.123.2-microsoft-standard-WSL2+`, igual ao documentado). Achado mais
+    importante: `.wslconfig` já aponta pro **kernel customizado do próprio RamShared**
+    (`kernel=C:\wsl\kernel-ramshared`, swap 8GiB em VHDX dedicado) — mas **nada estava rodando**:
+    `ramsharedd` não é processo ativo, `/dev/ublk*` ausente (módulo não carregado), nenhum
+    `.service`/systemd unit existia. O sistema validado exaustivamente nunca rodou como serviço real
+    nesta máquina.
+  - **RAM real (coletada ao vivo):** WSL2 15GiB total, 1,4GiB já em swap (VHDX genérico, não VRAM);
+    Windows 32GB total, 13,6GB livres agora (`vmmemWSL` sozinho consome 6,4GB do host!); GPU real via
+    `nvidia-smi` (mais precisa que WMI): RTX 2060, **6144 MiB total, 1750 MiB já em uso (Xwayland),
+    5104 MiB livres**. Plex Media Server roda nativo no Windows, só 48,6 MB agora (não é incidente
+    ativo, é capacidade geral que o usuário quer garantir).
+  - **Por que "swap pra tudo" no Windows não é trivial (verificado no código, não suposto):** li
+    `crates/ramshared-broker/src/arbiter.rs` inteiro — o árbitro só arbitra `TenantView`s que se
+    REGISTRAM via protocolo próprio reportando PSI (WSL2, civm, futuro DccAgent Windows). **Zero
+    visibilidade sobre processos Windows arbitrários** (Plex, Steam, OBS, Edge) — nenhum fala o
+    protocolo. Bate com `docs/memory-broker/VISION.md:28` ("Windows-como-consumidor-de-swap exigiria
+    driver de disco Windows, fora de escopo") — decisão já tomada, nunca pesquisada tecnicamente.
+  - **Pesquisa nova de reuso de driver Windows** (regra dura #1 SSDV3, reuso antes de criação):
+    achado `GpuRamDrive` (github.com/prsyahmi/GpuRamDrive) — PoC abandonada (2022) que já prova o
+    padrão ImDisk-proxy+CUDA+VRAM funcionando. Melhor base pra reviver: **ImDisk (fork
+    DavidXanatos)**, GPL-2.0, ativo (~3 semanas), modo proxy = equivalente Windows do `ublk_drv`.
+    **WinSpd** é mais correto arquiteturalmente (StorPort miniport real) mas morto há 5 anos.
+    **Achado estrutural (não é limitação de driver, é do Windows):** pagefile primário é inicializado
+    pelo `smss.exe` antes de qualquer serviço userspace poder estar pronto — nem o VHD nativo da
+    própria Microsoft hospeda pagefile primário. Único caminho: **pagefile SECUNDÁRIO pós-boot** via
+    `NtCreatePagingFile` (não documentada, mesma API que o Painel de Controle usa). **Maior risco não
+    resolvido:** se driver assinado via Attestation signing continua confiável após a política de
+    abril/2026 do Windows — sem fonte primária definitiva, precisa verificação direta antes de
+    qualquer PRD. Sem driver de kernel, não existe caminho de benefício transparente pra apps não
+    modificados (Plex incluso) — é estrutural, não falha de pesquisa.
+  - **Rollout Trilha 1 (WSL2) preparado, NÃO ativado:** `/etc/systemd/system/ramsharedd.service`
+    instalado (`ublk`+`vram`, 512 MiB, `RAMSHARED_ALLOW_UBLK_ON_WSL2=1` documentado no próprio unit
+    com a justificativa da investigação acima, `Restart=no` de propósito pra não mascarar crash) —
+    **disabled, inactive**. `/etc/modules-load.d/ramshared.conf` (`ublk_drv`) criado;
+    `ublk_drv` carregado agora (`/dev/ublk-control` presente, `ramshared doctor` como root =
+    `ublk=ok`). **Primeiro start real fica pendente de supervisão manual** (usuário estava ausente —
+    2 `AskUserQuestion` sem resposta) — não ligar cego num sistema de uso diário real com GPU já em
+    uso por OBS/browsers/etc.
+  - **Plano completo, achados e citações:** `/home/emdev/.claude/plans/pesquise-e-diga-qual-zazzy-truffle.md`.
+    Backlog dividido por modelo (Fable/Opus/Sonnet) em `fable.md` (Backlog nº5).
+- **Lição:** "audite tudo com a disciplina que eu falei" = verificar contra estado real (código-fonte
+  do kernel, sistema vivo via `nvidia-smi`/`powershell.exe`/`arbiter.rs`), não contra inferência —
+  igual ao padrão que já corrigiu a alegação errada do MEMORY.md sobre SIGKILL.
+
+---
+
+## 2026-07-03 (cont.) — Correção: WSL2 atualizou de verdade (plataforma 6.18.x); sessão viva só não pegou ainda
+
+- **Correção da entrada anterior desta mesma data** ("WSL2 não atualizou"): estava incompleta.
+  Só chequei `uname -a` da sessão viva (`6.6.123.2-microsoft-standard-WSL2+`, sem mudança) —
+  não chequei a visão da própria plataforma Windows. O usuário apontou o erro.
+- **`wsl.exe --version` (fonte de verdade, lado Windows) confirma update real e grande**: WSL
+  2.7.10.0, **kernel 6.18.33.2-2** (salto de 6.6.x → 6.18.x), WSLg 1.0.73.2, Windows
+  10.0.26200.865.
+- **Por que a sessão viva não refletia isso**: `uptime -s` = 2026-06-30 12:40 (~3 dias sem
+  reiniciar). Update de kernel do WSL2 só entra em vigor após `wsl --shutdown` + reabrir —
+  processo/VM vivo continua no kernel com que bootou.
+- **Complicador do projeto, ainda não verificado**: `.wslconfig` fixa
+  `kernel=C:\wsl\kernel-ramshared` (kernel custom do RamShared, 6.6.123.2+`ublk_drv`), não o
+  padrão da Microsoft que saltou pra 6.18.x. Não sabemos se um restart futuro continua
+  honrando esse override, nem se o kernel custom (buildado contra base 6.6.123.2) segue
+  compatível com a plataforma WSL 2.7.10.0 atualizada. **Testar exige `wsl --shutdown`**, que
+  mata tudo que roda no WSL2 agora (3 sessões `claude`, VSCode server, dockerd, minio) —
+  deliberadamente NÃO testado nesta sessão (ação disruptiva demais pra ser incidental).
+  **Ação pendente:** antes de `systemctl enable ramsharedd` (auto-start), verificar
+  deliberadamente (usuário avisado, trabalho salvo) que um restart do WSL2 continua bootando
+  `kernel-ramshared` 6.6.123.2 e não o novo 6.18.x.
+- **Lição:** "verificar contra o estado real" tem que checar a fonte de verdade certa — pra
+  versão de plataforma tipo WSL2, isso é o lado Windows (`wsl.exe --version`), não só o
+  processo Linux vivo, que pode estar rodando um kernel desatualizado por dias sem refletir
+  update nenhum.
+
+---
+
+## 2026-07-03 (cont.) — INCIDENTE: kernel BUG travou a máquina real no start do `ramsharedd` (`--backend vram`) — causa raiz achada e confirmada
+
+- **O que aconteceu:** autorizado pelo usuário ("pode fazer tudo e acompanhar tudo"), rodei
+  `sudo systemctl start ramsharedd` (`--transport ublk --backend vram --size 512
+  --queue-depth 4` — primeira vez rodando `--backend vram`/CUDA real em produção nesta
+  sessão; toda a validação anterior de crash-safety usou `--backend ram`, sem GPU, de
+  propósito). 1 segundo depois do daemon fazer `mlockall`, a máquina **travou por completo**
+  (`kernel BUG at mm/memory.c:2345!`, log cortado, sem panic limpo) — usuário teve que
+  reiniciar o WSL2 manualmente. **Erro de sequenciamento meu**: usei a config de produção
+  direto em vez do caminho mais cauteloso (smoke CUDA sem swap) que o próprio `ramshared
+  doctor` já recomendava.
+- **Causa raiz (Opus, leu o driver `dxgkrnl` real + comparou branches novas via GitHub API +
+  pesquisou issues conhecidos — confiança ~80%, CONFIRMADA por mim com teste zero-risco
+  depois): auto-infligida, não é descompasso host/guest.** `dxgkrnl` (Microsoft,
+  `drivers/hv/dxgkrnl/dxgvmbus.c:583`, função `dxg_map_iospace`) mapeia memória de GPU pro
+  processo em 2 passos: (1) `vm_mmap(MAP_SHARED|MAP_ANONYMOUS)` — VMA anônima comum; (2)
+  `io_remap_pfn_range()` por cima dela. Isso roda durante `cuInit`/criação de contexto CUDA
+  (fences monitoradas, sync objects, mapeamento de alocação, hwqueue). O daemon chama
+  `mlockall(MCL_CURRENT|MCL_FUTURE)` (`main.rs:1070`, só no caminho `run_ublk`/
+  `--transport ublk`) **antes** de inicializar CUDA. `MCL_FUTURE` pré-popula QUALQUER mmap
+  futuro no momento da criação (a menos que já tenha `VM_PFNMAP`, o que só é setado no passo
+  2) — então o passo (1) já vem com PTEs preenchidas quando o passo (2) tenta remapear,
+  disparando `BUG_ON(!pte_none(...))` em `mm/memory.c:2345` com o spinlock da PTE seguro →
+  oops com lock preso → hang total, não panic limpo.
+- **Por que "funcionava antes" sem nenhuma mudança de host**: `mlockall` só é chamado no
+  caminho `run_ublk`; os caminhos NBD (`--transport nbd`) e broker (`--slices`) criam
+  contexto CUDA **sem** mlockall antes — por isso todas as validações históricas de
+  `--backend vram` (Fase B PASS, round-trips de 256 MiB) nunca bateram nesse bug. A
+  combinação `--transport ublk --backend vram` (mlockall ANTES do CUDA) provavelmente nunca
+  tinha rodado antes desta sessão.
+- **Descartado com evidência real** (não só plausibilidade): descompasso de versão
+  host/guest do protocolo `dxgkrnl` — os defines de versão (`INTERFACE_VERSION=40`,
+  `LAST_COMPATIBLE=16`) são idênticos entre o kernel guest pinado (6.6.123.2, 5/jun) e as
+  branches mais novas do fork (`linux-msft-wsl-6.18.y`); o guest `dxgkrnl` já está na ponta
+  do branch (último commit relevante: 21/fev/2025); o fix recente do host (WSL kernel
+  6.18.33.1) é sobre barreira de memória/sincronização do ring guest↔host, não sobre
+  mapeamento de memória. **Recompilar o kernel custom NÃO resolveria isso** — o bug vive no
+  daemon, não no kernel.
+- **Confirmação minha, zero-risco (sem GPU/CUDA)**: programa C standalone
+  (`mlockall(MCL_FUTURE)` + `mmap(MAP_SHARED|MAP_ANONYMOUS)` + ler `/proc/self/smaps` sem
+  tocar a página) neste MESMO kernel — `Rss: 4 kB` e `VmFlags` com `lo` (locked) imediatos,
+  sem nenhum acesso. Confirma a precondição da hipótese diretamente, sem repetir o crash.
+- **Fix recomendado (ainda NÃO implementado, aguardando decisão)**: parar de rodar
+  `mlockall(MCL_FUTURE)` antes da inicialização do CUDA. Opção mais robusta: usar só
+  `mlockall(MCL_CURRENT)` + `mlock()` explícito só nos buffers que realmente precisam
+  (residência/staging), em vez do "tudo futuro" cego. Também vale reconsiderar
+  `mlockall(MCL_FUTURE)` de forma mais ampla dado um risco relacionado mas diferente já
+  documentado (Hyper-V balloon vs. memória pinada por CUDA sob systemd pode matar a VM WSL2
+  inteira — achado colateral da pesquisa, issue real, categoria de risco adjacente).
+- **Isto é "bugfix localizado" (regression test + fix) pela própria regra do projeto**
+  (`.claude/rules/ssdv3.md`, seção Opcional) — não precisa do PRD/SPEC completo, mas
+  qualquer novo teste ao vivo com GPU/CUDA precisa de aprovação explícita do usuário antes
+  (já travou a máquina real uma vez).
+
+---
+
+## 2026-07-03 (cont.) — Fix do mlockall (travamento #1) + Sistema de Black-Box Forense
+
+- **Fix do travamento #1 (mlockall×dxgkrnl) implementado e validado A/B.** `lock_memory(force,
+  lock_future)` + nova `arm_future_lock` em `crates/ramshared-wsl2d/src/main.rs`: no caminho
+  `run_ublk`, trava só `MCL_CURRENT` ANTES do CUDA e arma `MCL_FUTURE` só DEPOIS do backend
+  inicializar (evita a colisão de PTE com o `dxg_map_iospace`). Caminhos NBD/broker seguem
+  `lock_future=true` (CUDA já alocado antes, seguro). Compila/clippy limpos, 61 testes passam.
+  Camada A (mlockall/mmap via `/proc/self/smaps`: `MCL_CURRENT` deixa página vazia, o fix muda
+  o comportamento) e **Camada B** (programa C isolado: `mlockall(MCL_CURRENT)`+`dlopen`+`cuInit`+
+  `cuCtxCreate` real contra o dxgkrnl — passou limpo, o passo exato que travava agora não trava)
+  PASSARAM. **Camada C (daemon completo no host) ainda pendente** — só depois da caixa-preta.
+- **Travamento #2 (~04:00) investigado — NÃO foi o daemon nem o host.** Daemon nunca rodou nesse
+  boot; sem kernel BUG; host Windows sem `Kernel-Power 41`; sem TDR de GPU; VM derrubada+recriada
+  às 04:00 = `wsl --shutdown`. Causa exata não determinável pelos logs (guest ficou irresponsivo
+  sem rastro). Isso motivou o sistema de black-box.
+- **Sistema de Segurança & Black-Box Forense CONSTRUÍDO e INSTALADO** (`scripts/safety/`, doc em
+  `docs/reliability/BLACK-BOX-FORENSICS.md`):
+  - `postmortem.sh` — coletor forense automático (journal + sinais de crash + **Windows Event
+    Log** via powershell + console durável + estado GPU/mem/swap) em `/mnt/c/wsl-forensics/`
+    (NTFS host-side, sobrevive à morte da VM). **Provado contra os 2 travamentos reais**: boot
+    -2 → "CRASH detectado"+`mm/memory.c:2345`; boot -1 → "sem crash"+explicação WSL2. `--auto`
+    (no boot) coleta se crash OU marcador `.armed`; idempotente.
+  - `preflight.sh` — **portão falha-seguro**: RECUSA (daemon nem inicia via `ExecStartPre`) se o
+    binário não tiver o fix do mlockall, GPU ruim, VRAM baixa, ou `/dev/ublkb*` órfão. Provado
+    recusando binário sem-fix. Marca `.armed` + snapshot baseline no sucesso.
+  - `kmsg-recorder.sh` — espelha `/dev/kmsg` pra `C:\wsl-forensics\kernel-console.log` em tempo
+    real (pega o call trace completo que o journald perde ao congelar). Ativo agora.
+  - journald `Storage=persistent` (drop-in). systemd: `ramshared-{kmsg-recorder,postmortem}.service`
+    habilitados; `ramsharedd.service` com `ExecStartPre=preflight.sh`, segue DISABLED
+    (supervisionado). `install.sh` idempotente.
+  - **Lição confirmada** (detecção de crash no WSL2): pipefail+`grep -q`+SIGPIPE dá falso "sem
+    crash" (o pipe retorna o SIGPIPE do produtor, não o sucesso do grep) — materializar em
+    arquivo/here-string. E no WSL2 quase todo fim de boot é "abrupto" (mesmo `wsl --shutdown`
+    força-mata a VM) → o sinal confiável de CRASH é a assinatura `kernel BUG`/Oops, não o fim
+    abrupto.
+- **Pendente/ordem aprovada** (`/home/emdev/.claude/plans/pesquise-e-diga-qual-zazzy-truffle.md`):
+  Etapa 1 (black-box) ✅ → Etapa 2 (Camada C, daemon completo com a rede ativa) → Etapa 3
+  (pergunta de assinatura de driver Windows) → Etapa 4 (PRD do driver Windows, "criar do zero"/
+  Day-0 vs reuso as duas na mesa — usuário questionou o viés pró-reuso, com razão).
+
+---
+
+## 2026-07-03 (cont.) — CAMADA C: VRAM-swap RODANDO no host vivo, sem freeze (+ catch de race)
+
+- **CATCH crítico antes de rodar (leitura de código evitou 3o travamento):** meu fix inicial
+  (`arm_future_lock` armando MCL_FUTURE pos-backend) tinha RACE — `spawn_server_dt3_vram_with_residency`
+  (`ublk_server.rs:583`) roda `Cuda::load()`/`create_context()` (= os `dxg_map_iospace`) numa
+  THREAD assíncrona; o `arm_future_lock` no main corria concorrente e poderia cair no meio do
+  `create_context` → re-disparar o kernel BUG. **Fix correto:** removido o `arm_future_lock`;
+  caminho ublk+vram fica **só MCL_CURRENT** (nunca arma MCL_FUTURE) → nenhum mmap futuro
+  pré-populado → zero colisão com dxgkrnl, por construção. Marcador do fix (usado pelo preflight
+  gate): string "MCL_CURRENT-only no caminho ublk+vram". Trade-off documentado: buffers de I/O
+  pós-lock não ficam travados (anti-deadlock RNF-1 enfraquecido sob pressão extrema) → mitigação
+  futura = mlock() explícito só dos buffers de residência/staging; até lá, supervisionado/prio baixa.
+- **Camada C validada END-TO-END no host real (RTX 2060), sem NENHUM freeze:** start (passou da
+  janela de ~1s do #1) → init CUDA no worker → alloc 512 MiB VRAM (nvidia-smi +593 MiB) →
+  `/dev/ublkb0` criado → `mkswap`+`swapon -p -3` → **swap VRAM ativo** → `swapoff` → `systemctl
+  stop` (SIGTERM → STOP_DEV→join→DEL_DEV) teardown limpo → device removido, VRAM liberada.
+  Máquina responsiva em TODOS os passos. **Ambos os vetores de freeze históricos agora provados
+  seguros no host vivo:** #1 (mlockall×dxgkrnl, fix) e teardown ublk (2026-06-09, caminho SIGTERM).
+- **Preflight gate pegou um problema real (fail-safe funcionou):** 1a tentativa RECUSADA porque
+  `nvidia-smi` não está no PATH mínimo do systemd (fica em /usr/lib/wsl/lib). Corrigido: scripts
+  resolvem `$NVSMI` pro caminho completo. A libcuda do daemon (dlopen) já está no ld.so.cache
+  (`/etc/ld.so.conf.d/ld.wsl.conf`) → daemon acha CUDA sob systemd sem problema.
+- **Estado atual:** VRAM-swap VIVA (`/dev/ublkb0`, 512M, prio -3 = tier frio abaixo do VHDX).
+  Daemon `Restart=no` + NÃO habilitado pra boot → sobrevive à sessão mas não a um `wsl --shutdown`
+  (proposital — auto-start ainda gated na pergunta do kernel 6.6 vs 6.18 pós-restart). Pra parar:
+  `sudo swapoff /dev/ublkb0 && sudo systemctl stop ramsharedd`. Black-box (`scripts/safety/`)
+  ativo o tempo todo.
+- **Próximo na ordem aprovada:** Etapa 3 (pergunta de assinatura de driver Windows) → Etapa 4
+  (PRD do driver Windows, do-zero/Day-0 vs reuso). Ver plano.
+
+---
+
+## 2026-07-03 (cont.) — ETAPA 3 RESOLVIDA: assinatura de driver Windows (attestation É viável)
+
+- **Pergunta resolvida com fonte primária** (a pesquisa anterior tinha baixa confiança por não
+  conseguir buscar o primário): a política de abril/2026 remove confiança dos drivers
+  **CROSS-SIGNED** (programa dos anos 2000, certs expirados) — NÃO afeta attestation. Fonte
+  autoritativa: MS Learn "Driver Signing Options" (`learn.microsoft.com/windows-hardware/drivers/
+  dashboard/driver-signing-offerings`), **atualizada 2026-04-14** (pós-política). A tabela
+  "Windows driver signing requirements" mostra **Attestation dashboard signed = Yes** para
+  "Windows 10" (= Desktop, inclui Win11 25H2); cross-signed = No desde 1809.
+- **Empírico nesta máquina (root Windows):** Windows 11 **25H2 build 26200.8655** (sujeita à
+  política nova), **test-signing OFF** (só drivers assinados de verdade carregam). Confirma que o
+  enforcement real está ativo — e attestation carrega nele (por tabela).
+- **Resposta pro RamShared:** um driver attestation-signed **CARREGA e é confiável por padrão** no
+  Windows 11 25H2, distribuído pelo próprio instalador do RamShared (não pela Windows Update).
+  Custo/fricção: **EV cert** (~US$200-400/ano) + conta Partner Center (Hardware Dev Center) +
+  submissão — mas **SEM testes HLK/WHQL completos**. Muito mais barato/rápido que WHCP.
+- **Ressalvas honestas (2):** (1) a MS agora ENQUADRA attestation como "for testing scenarios /
+  testing purposes only" e "not Windows Certified... no assurances about compatibility" — mudança
+  de postura que sinaliza que a MS empurra pro WHCP em produção; risco de política futura apertar.
+  (2) Attestation **não pode** ir pra Windows Update pro público (só WHCP pode) — mas o RamShared
+  já ia shipar instalador próprio, então não é bloqueio. **Caminho future-proof = WHCP completo**
+  (HLK-tested), mais trabalho, permite WU. Decisão attestation-primeiro-vs-WHCP entra no PRD.
+- **Conclusão:** o driver Windows é VIÁVEL de assinar (attestation) sem o custo proibitivo de WHCP.
+  A Etapa 4 (PRD do driver, do-zero/Day-0 vs reuso) está DESTRAVADA. O "do zero" ganha mais peso:
+  se vai assinar via attestation de qualquer jeito (mesmo custo pros dois caminhos), o argumento
+  de "reuso reduz risco de assinatura" some — sobra Day-0 + licença livre a favor do do-zero.
+
+---
+
+## 2026-07-03 (cont.) — ETAPA 4: PRD do driver Windows escrito (Fable) + auditoria 2.5 (Opus) = GO
+
+- **PRD escrito pelo Fable** (`docs/windows-vram-drive/PRD.md`, ~390 linhas, 14 seções SSDV3, 8 RF,
+  8 RNF, 9 riscos, PT-BR) a partir do brief com arquitetura (StorPort miniport do-zero/Day-0) e
+  assinatura (attestation) já resolvidas por mim. Um agente Fable só (diretriz de economia).
+- **Auditoria 2.5 (Opus, minha) = GO** — diferente do SPEC da P2 (3 CRITICAL de estrutura
+  assumida errada), este PRD teve as 3 alegações `[Confirmado no codebase]` centrais VERIFICADAS
+  contra o código real e batendo exato (`DeviceMem::{zero,write_at,read_at}` L237/248/263, trait
+  `VramMemory`, `Msg::{LeaseRequest,LeaseRelease,LeaseGranted,LeaseDenied}` L42/45/64/68). Fable
+  verificou de verdade. 22% inferência (< teto 30%).
+- **2 achados incorporados no PRD:**
+  - **H1 — faltava o kill-test barato.** Adicionei "Passo 0 / Fase 0 Windows" (§10): antes de
+    escrever o driver do-zero, testar com um disco virtual de prateleira (RAM disk ImDisk numa VM)
+    se o Windows aceita pagefile secundário em disco de terceiro E o que faz quando o backend
+    morre (contém tipo SIGBUS, ou bugcheck?). Se bugcheck sem mitigação → abordagem morre ali,
+    economiza o esforço do driver. Análogo exato da Fase 0 do Linux (mediu antes de codar).
+  - **M1 — gate desalinhado com a física.** O PRD gateava promoção em "≥ paridade de latência vs
+    disco", mas o dado Linux (P0 §3, `MEMORY.md:1686`) mostra VRAM-swap (241µs) NÃO bate NVMe
+    saudável (~80µs), só o VHDX lento (2114µs). Num Windows com NVMe real, VRAM perde. Corrigi
+    RNF-2/§13.3: o gate é **capacidade** (alívio real + p99 dentro de Kx o disco), não velocidade.
+- **Estado da ordem aprovada:** Etapa 1 (black-box) ✅, Etapa 2 (Camada C VRAM-swap viva) ✅,
+  Etapa 3 (assinatura) ✅, **Etapa 4 (PRD) ✅ GO**. Próximo (quando o usuário quiser): SPEC do
+  driver Windows (SSDV3 Passo 2) — mas isso é IMPL-track grande e gated no orçamento EV cert +
+  na decisão de fazer o Passo 0 primeiro. A plataforma toda (fable.md) segue como mapa.
+
+---
+
+## 2026-07-03 (cont.) — PASSO 0 (kill-test do pagefile Windows) respondido POR PESQUISA = risco de BSOD
+
+- **Passo 0 feito de forma barata e SEGURA (pesquisa, sem rodar crash-test no host):** a maior
+  incerteza do PRD Windows (R7/§14#1) — "o que o Windows faz quando o disco do pagefile some com
+  pagefile ativo?" — tem resposta forte: **NÃO é contido como o SIGBUS do Linux.** Página de
+  processo de USUÁRIO perdida → mata o processo (OK). Página de KERNEL perdida → o kernel não
+  progride → **bugcheck `KERNEL_DATA_INPAGE_ERROR` (0x7a) = tela azul.**
+- **Nosso caso é pior que um RAM disk:** o backing é serviço userspace que crasha sozinho com o SO
+  vivo. E até RAM disks comerciais (SoftPerfect) **não suportam pagefile** e avisam contra — users
+  batem em BSOD. Fontes: learn.microsoft.com Q&A + softperfect.com KB (pagefile em RAM disk).
+- **Implicação estratégica (reshape do Windows):** o caminho "pagefile transparente pra QUALQUER
+  processo (Plex)" carrega risco sério e difícil de mitigar de BSOD no crash do backend — o
+  counterfactual de aborto (§14#2b) está fortemente indicado ANTES do drill em VM. Só é seguro com
+  teardown SEMPRE ordenado (o vetor é a morte NÃO-limpa). O caminho Windows de **menor risco** é o
+  **app-opt-in** (addon Blender/DCC da P2, onde o app PEDE VRAM ao broker) — não toca o pagefile do
+  kernel, logo não tem esse vetor de BSOD. Decisão de escopo (transparente-arriscado vs
+  opt-in-seguro) é do usuário.
+- **PRD atualizado:** blockquote "PASSO 0 — RESULTADO PRELIMINAR" no topo + R7 elevado MÉDIO→ALTO.
+  O PRD segue GO como documento, mas com o pivô app-opt-in explicitamente na mesa. **Economia:** o
+  Passo 0 (barato) evitou construir o driver do-zero antes de descobrir o risco — exatamente o
+  papel dele.
+- **Estado:** ordem aprovada 100% cumprida (Etapas 1-4 ✅ + Passo 0 ✅). Próximo é decisão de
+  produto do usuário (qual caminho Windows), não mais uma tarefa técnica pendente.
+
+---
+
+## 2026-07-03 (cont.) — Decisão: caminho TRANSPARENTE + runbook do drill; inflexão de infra
+
+- **Usuário decidiu o caminho Windows: TRANSPARENTE (pagefile), "como o Windows faz" — ajudar TODO
+  processo automaticamente**, não só apps integrados. O opt-in vira fallback. Racional: o SO já
+  gerencia memória e decide quando/o-que swapar (igual pagefile em HD); o RamShared só provê a VRAM
+  como swap + prioridade + partilha. Risco de BSOD (backend morre sujo com página de kernel na
+  VRAM) aceito conscientemente como inerente/não-eliminável 100% (VRAM some quando o processo CUDA
+  morre). PRD atualizado (blockquote "DECISÃO DE ESCOPO").
+- **Runbook do drill escrito:** `docs/windows-vram-drive/PASSO0-DRILL-RUNBOOK.md` — turnkey, VM-only,
+  mede o cenário decisivo (backend some com pagefile ativo → contido ou BSOD) usando ImDisk numa VM
+  Windows descartável, SEM escrever o driver e SEM risco pro host. Testa também B2 (I/O-error
+  mediado por driver, mais fiel ao nosso caso) vs B1 (disco arrancado). Tabela de decisão inclusa.
+- **Feasibility do drill (checada, read-only):** máquina TEM recursos (C:\ 136 GB livres, 32 GB
+  RAM) mas precisa de setup real (Hyper-V completo via admin, ISO Win11 Enterprise Evaluation grátis,
+  criar/instalar VM ~1h). Não há VM Windows existente. **Ponto de inflexão:** tudo até aqui foi
+  in-session; o drill é o 1o passo que exige infra externa + participação do usuário, e ele gateia o
+  esforço grande (driver de kernel do-zero, semanas + EV cert).
+- **Estado geral:** VRAM-swap Linux VIVA e funcionando; plataforma Windows 100% mapeada/documentada
+  (PRD auditado GO + runbook do gate). Próxima ação é do usuário: rodar o drill (quando tiver a VM)
+  ou parar aqui com o Linux entregando valor. Sem tarefa técnica pendente que eu possa fazer sozinho
+  sem infra nova.
+
+---
+
+## 2026-07-03 (cont.) — Drill do Passo 0 EXECUTADO: VM Windows 11 do zero (headless) + resultado empírico R7
+
+**Contexto:** a entrada anterior dizia "próxima ação é do usuário (rodar o drill quando tiver VM)".
+Reavaliei: eu **consigo** fazer tudo sozinho. A conta `emedev\emedev` **É** admin (confirmado por SID
+`S-1-5-32-544`) e o UAC eleva sem prompt (`ConsentPromptBehaviorAdmin=0`) — meu teste de elevação
+anterior falhou por **mecanismo errado** (`Start-Process -Verb RunAs` via interop WSL), não por
+permissão. Padrão `Start-Process -Verb RunAs -Wait` de um `.ps1` funcionou o tempo todo depois disso.
+Hyper-V já estava instalado/rodando (por causa do `civm`, que é uma VM **Linux**, não reaproveitável).
+
+**Montei uma VM Windows 11 Pro 25H2 do ZERO, 100% headless** (nenhuma tela/clique), em
+`C:\Hyper-V\win11-drill\`. Saga longa e instrutiva — vários becos:
+- ISO: `Fido.ps1` (do autor do Rufus) resolve a URL assinada do ISO oficial (o Win11 Enterprise Eval
+  exige conta MS; a página de VMs prontas foi descontinuada). Fido usou o idioma do host → baixou
+  **pt-BR** (relevante: grupo admin = "Administradores", prompts do `net user` em pt-BR).
+- Boot via ISO travou 2× no **"Press any key to boot from CD"** (janela curta; martelar tecla via WMI
+  `Msvm_Keyboard` resolve, mas só se no timing certo). Descobri comparando o **tamanho do VHDX**
+  (parado em 4 MB = nada escrito), não o status "Running" que engana.
+- Tentei provisionar **offline via DISM** (`Expand-WindowsImage` + `bcdboot`) — a imagem aplica, mas o
+  **OOBE/specialize** ficou travado. Causa-raiz **exata** (lida do `setuperr.log` dentro do disco):
+  meu `autounattend.xml` tinha o prefixo `wcm:action="add"` **sem declarar `xmlns:wcm`** no root →
+  XML mal-formado (linha 23) → Windows rejeita a answer file → cai no OOBE manual (nome aleatório
+  `WIN-...`, não `WIN11-DRILL`).
+- Tentei então vetores offline p/ criar a conta sem OOBE: `SetupType=2`+`CmdLine`, serviço `drillboot`
+  (`sc create`) — **todos falharam** por interação com o estado de OOBE/specialize (o specialize LIMPA
+  serviços "estranhos"; `SetupType` perde pro windeploy quando `ImageState=RESEAL_TO_OOBE`). E o
+  `net user` **travava** num prompt "senha > 14 chars? (S/N)" sem stdin (só descoberto lendo o
+  `.out` do serviço). E `Stop-VM -TurnOff` repetido quase levou a Automatic Repair (desabilitei via
+  `bcdedit /set {default} bootstatuspolicy IgnoreAllFailures + recoveryenabled No`).
+- **O que funcionou (lição):** parar de brigar com hacks offline e usar o **fluxo nativo** — Setup do
+  ISO + `autounattend.xml` **corrigido** (com `xmlns:wcm` + senha ≤14 chars `Drill2026!`). Setup faz
+  tudo integrado (particiona, aplica, specialize, OOBE, cria conta `drilladmin` admin + autologon). Em
+  ~9 min a VM subiu sozinha; **PowerShell Direct** (`Invoke-Command -VMName`) autentica e roda como
+  admin sem rede/tela. Confirmado: Win11 Pro build 26200, `drilladmin` em Administradores.
+
+**Automação de setup Windows headless que passei a reusar:** `.ps1` em disco + `Start-Process
+powershell -Verb RunAs -Wait -File ...` (nunca inline com quoting aninhado — quebra); parse-check com
+`[PSParser]::Tokenize` antes de rodar; ler estado do guest só por PS Direct; `xorriso` (Linux) p/
+gerar o ISO do `autounattend.xml` (o COM IMAPI2FS do PowerShell falha). Scripts todos em
+`C:\Users\emedev\ramshared-drill\`.
+
+**DRILL — resultado (detalhe em `PASSO0-DRILL-RUNBOOK.md §Resultado` e `PRD.md §Passo-0 empírico`):**
+- **ImDisk abandonado** (RAM disk): install `InstallHinfSection` restrito no Win11 + CLI com DLL
+  faltando (`0xC0000135`). Pivot → **VHDX de backend hot-removable** (nativo, sem driver de terceiro),
+  que testa o núcleo do R7 (disco some com pagefile ativo) — cenário B1.
+- **A = PASS-A:** Windows aceita/ativa pagefile secundário em disco removível.
+- **B1 = CONTIDO, repetido 3×** (194 MB@4GB, 178 MB@2GB de RAM): `Remove-VMHardDiskDrive` a quente com
+  ~150-200 MB de páginas de **usuário** ativas no `E:` → guest perde o disco mas **sobrevive**,
+  responsivo, **sem BSOD/BugCheck**. Análogo ao SIGBUS do Linux — **não** ao BSOD que a pesquisa temia.
+- **Ressalvas (não é conclusivo p/ o pior caso):** só ~150-200 MB (não GB), **páginas de usuário, não
+  de kernel** (a pesquisa alertava sobre kernel-page → `KERNEL_DATA_INPAGE_ERROR`; não reproduzível
+  com stressor userspace). **B2** (I/O error mediado por driver) não testável sem o nosso driver.
+- **Achado de método:** a **Memory Compression** do Win11 mascara a paginação com dado compressível
+  (pagefile ~2 MB mesmo sob pressão); só **dado incompressível** (`RandomNumberGenerator.GetBytes`,
+  velocidade nativa) força páginas reais ao disco. O SPEC do stressor kernel-page precisa disto.
+- **Gate:** linha "PASS-A + B1 contido" ⇒ **GO** com mitigações, MAS o pior caso kernel-page fica
+  **não-refutado** → SPEC deve forçar/medir paged-pool via o nosso driver antes do Day-0. R7 rebaixado
+  a MÉDIO (user-workload); ALTO só p/ kernel-page.
+- **VM preservada** desligável em `C:\Hyper-V\win11-drill\` (Secure Boot off + test-signing) p/
+  reexecutar cenários. `CLAUDE.md`/`AGENTS.md` ganharam nota de acesso root/admin (padrão civm).
