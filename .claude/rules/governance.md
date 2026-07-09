@@ -1,6 +1,6 @@
 ---
 name: governance
-description: PR template, sync rule, e regra de visibilidade de commits.
+description: PR template, sync rule, and commit visibility rule.
 paths:
   - .github/**
   - CLAUDE.md
@@ -10,41 +10,41 @@ paths:
 
 # Governance rules — RamShared
 
-Estas regras existem para que toda PR (Patch/Pull Request) carregue contexto revisável e para que mudanças em regras de agente vivam sincronizadas entre `CLAUDE.md`, `AGENTS.md` e `.claude/rules/*`.
+These rules exist so that every PR (Patch/Pull Request) carries reviewable context and so that changes in agent rules live synchronized between `CLAUDE.md`, `AGENTS.md`, and `.claude/rules/*`.
 
-## Template de PR (formato canônico)
+## PR Template (canonical format)
 
-Todo PR usa `.github/pull_request_template.md`. Seções **obrigatórias**:
+Every PR uses `.github/pull_request_template.md`. Mandatory sections:
 
-1. `## Resumo` — PT-BR, suficiente para alguém fora da conversa.
-2. `## Commits` — tabela com `Commit | O que fez | Por que fez | Detalhes`. Cada linha tem hash + `<details>` clicável com contexto, impacto, arquivos, validação e risco/rollback. **Toda linha de commit é visível na tabela**, mesmo em PRs com 20+ commits — proibido envolver múltiplas linhas dentro de um `<details>` agrupador que esconda commits do preview inicial. Per-row `<details>` no campo `Detalhes` continua obrigatório e cumpre o papel de esconder o contexto profundo. Agrupamento por categoria editorial vai no `summary` da linha ou em texto curto no `Detalhes`, nunca em `<details>` que oculte commits.
-3. `## Issue` — `Closes #NNN`, `Fixes #NNN` ou `Resolves #NNN`.
-4. `## Responsavel` — `@usuario`. PR e issue linkada compartilham assignee.
-5. `## Labels` — pelo menos uma `type:*` e uma `area:*` (ex: `area:mm`, `area:drm`).
-6. `## Validacao` — checklist com gates relevantes (`checkpatch.pl`, `make modules`, `dmesg` limpo de OOPs, `kselftest`).
-7. `## Rollback trigger` — condição numérica/observável que justifica reverter o patch do kernel (ex: stall > 1ms, kernel panic).
+1. `## Summary` — PT-BR, sufficient for someone outside the conversation.
+2. `## Commits` — table with `Commit | What was done | Why it was done | Details`. Each line has hash + clickable `<details>` with context, impact, files, validation, and risk/rollback. **Every commit line is visible in the table**, even in PRs with 20+ commits — forbidden to wrap multiple lines inside a grouping `<details>` that hides commits from the initial preview. Per-row `<details>` in the `Details` field remains mandatory and serves the role of hiding deep context. Grouping by editorial category goes in the line's `summary` or in short text in `Details`, never in a `<details>` that hides commits.
+3. `## Issue` — `Closes #NNN`, `Fixes #NNN`, or `Resolves #NNN`.
+4. `## Assignee` — `@user`. PR and linked issue share assignee.
+5. `## Labels` — at least one `type:*` and one `area:*` (e.g.: `area:mm`, `area:drm`).
+6. `## Validation` — checklist with relevant gates (`checkpatch.pl`, `make modules`, `dmesg` clean of OOPs, `kselftest`).
+7. `## Rollback trigger` — numerical/observable condition that justifies reverting the kernel patch (e.g.: stall > 1ms, kernel panic).
 
-## Regra de visibilidade dos commits
+## Commit visibility rule
 
-**Por que existe:** um PR com 16 commits dobrados num `<details>` agrupador mostrava só 5 linhas no preview; o reviewer humano não viu os outros e perguntou onde estavam. A regra garante que isso não aconteça.
+**Why it exists:** a PR with 16 commits collapsed into a grouping `<details>` showed only 5 lines in the preview; the human reviewer did not see the others and asked where they were. The rule guarantees that this does not happen.
 
 ## Sync rule
 
-Toda regra que muda aqui deve mudar em pelo menos 2 destes lugares no mesmo commit:
+Every rule that changes here must change in at least 2 of these places in the same commit:
 
 - `CLAUDE.md`
 - `AGENTS.md`
 - `.claude/rules/<topic>.md`
 - `.github/pull_request_template.md`
 
-Skip via `[sync-skip-justified]` no commit body com explicação.
+Skip via `[sync-skip-justified]` in the commit body with explanation.
 
 ## Don't
 
-- ❌ Abrir PR sem preencher as 7 seções.
-- ❌ Tabela de commits sem `<details>` per-row e sem hash.
-- ❌ `<details>` agrupador escondendo múltiplas linhas de commits do preview do PR.
-- ❌ Labels sem `type:*` e `area:*`.
-- ❌ PR sem assignee compartilhado com a issue.
-- ❌ Rollback trigger em forma de "se der errado, reverter" — precisa de número/janela observável no Kernel.
-- ❌ Mudar `CLAUDE.md` sem sincronizar `AGENTS.md` no mesmo commit.
+- ❌ Opening a PR without filling out the 7 sections.
+- ❌ Commit table without per-row `<details>` and without hash.
+- ❌ Grouping `<details>` hiding multiple commit lines from the PR preview.
+- ❌ Labels without `type:*` and `area:*`.
+- ❌ PR without assignee shared with the issue.
+- ❌ Rollback trigger in the form of "if it goes wrong, revert" — needs a numerical/observable window in the Kernel.
+- ❌ Changing `CLAUDE.md` without synchronizing `AGENTS.md` in the same commit.
