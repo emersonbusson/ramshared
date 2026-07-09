@@ -1,46 +1,46 @@
-//! Wrappers seguros (RAII) sobre a CUDA Driver API. SPEC §4, §8.
+//! Safe wrappers (RAII) over the CUDA Driver API. SPEC §4, §8.
 //!
-//! Modelo de posse:
-//! - [`Cuda`] possui o handle `dlopen` + a tabela de símbolos (vive mais que tudo).
-//! - [`Context`] empresta `&Cuda`; faz `cuCtxDestroy` no `Drop`.
-//! - [`DeviceMem`] empresta `&Context`; faz `cuMemFree` no `Drop`.
+//! Ownership Model:
+//! - [`Cuda`] owns the dynamic library handle + the resolved symbol table (longest-lived).
+//! - [`Context`] borrows `&Cuda` and calls `cuCtxDestroy` in its `Drop` implementation.
+//! - [`DeviceMem`] borrows `&Context` and calls `cuMemFree` in its `Drop` implementation.
 //!
-//! A ordem de `Drop` garante a ordem inversa de alocação exigida pelo CUDA
-//! (liberar memória → destruir contexto → `dlclose`), o idioma `goto out_err` do
-//! kernel traduzido para o borrow checker.
+//! The `Drop` order guarantees the reverse order of allocation required by CUDA
+//! (freeing memory -> destroying context -> closing library), translating the kernel's
+//! `goto out_err` pattern into Rust's borrow checker invariants.
 
 use core::ffi::{CStr, c_char, c_void};
 use core::fmt;
 
 use crate::ffi::{CUDA_SUCCESS, CuContext, CuDevice, CuDevicePtr, CuResult, Syms};
 
-/// Erros da camada CUDA. Sem `panic`/`unwrap` em produção (regra `coding.md`).
+/// CUDA layer error representation. No `panic`/`unwrap` in production paths (coding.md rules).
 #[derive(Debug)]
 pub enum CudaError {
-    /// `dlopen` não encontrou nenhuma `libcuda`.
+    /// Dynamic library loading failed to find a candidate library.
     Load(String),
-    /// `dlsym` falhou para um símbolo obrigatório.
+    /// Symbol resolution failed for a required symbol.
     Symbol(String),
-    /// Uma chamada da Driver API retornou erro.
+    /// A CUDA Driver API call returned an error code.
     Driver {
         op: &'static str,
         code: i32,
         msg: String,
     },
-    /// Acesso fora da faixa da região de VRAM (offset+len > tamanho).
+    /// VRAM memory region access out of bounds (offset + len > size).
     OutOfRange { off: usize, len: usize, size: usize },
 }
 
 impl fmt::Display for CudaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CudaError::Load(s) => write!(f, "falha ao carregar libcuda: {s}"),
-            CudaError::Symbol(s) => write!(f, "símbolo CUDA ausente: {s}"),
+            CudaError::Load(s) => write!(f, "failed to load CUDA library: {s}"),
+            CudaError::Symbol(s) => write!(f, "required CUDA symbol missing: {s}"),
             CudaError::Driver { op, code, msg } => {
-                write!(f, "{op} falhou (CUresult={code}): {msg}")
+                write!(f, "{op} failed (CUresult={code}): {msg}")
             }
             CudaError::OutOfRange { off, len, size } => {
-                write!(f, "acesso fora da faixa: off={off} len={len} > size={size}")
+                write!(f, "out of bounds access: off={off} len={len} > size={size}")
             }
         }
     }
@@ -48,19 +48,19 @@ impl fmt::Display for CudaError {
 
 impl core::error::Error for CudaError {}
 
-/// Handle RAII do `dlopen`: faz `dlclose` no `Drop`.
+/// RAII wrapper for the loaded dynamic library handle: calls close on `Drop`.
 struct Lib(*mut c_void);
 
 impl Drop for Lib {
     fn drop(&mut self) {
         if !self.0.is_null() {
-            // SAFETY: self.0 veio de um open bem-sucedido e não foi fechado antes.
+            // SAFETY: self.0 was returned by a successful open call and has not been closed.
             unsafe { crate::loader::close(self.0) };
         }
     }
 }
 
-/// CUDA carregada e inicializada (`cuInit(0)`).
+/// CUDA library loaded and initialized successfully (`cuInit(0)`).
 pub struct Cuda {
     _lib: Lib,
     syms: Syms,
@@ -81,11 +81,11 @@ const CANDIDATES: &[&CStr] = &[
 ];
 
 impl Cuda {
-    /// Carrega a `libcuda` (candidatos WSL2 + padrão) e roda `cuInit(0)`.
+    /// Loads the CUDA driver library (using OS-specific candidates) and runs `cuInit(0)`.
     pub fn load() -> Result<Self, CudaError> {
         let mut handle: *mut c_void = core::ptr::null_mut();
         for cand in CANDIDATES {
-            // SAFETY: cand é um &CStr válido (null-terminated).
+            // SAFETY: cand is a valid null-terminated CStr.
             let h = unsafe { crate::loader::open(cand.as_ptr()) };
             if !h.is_null() {
                 handle = h;
@@ -97,8 +97,8 @@ impl Cuda {
         }
         let lib = Lib(handle);
 
-        // SAFETY: handle é uma libcuda aberta; cada símbolo é uma fn da Driver API
-        // com a assinatura declarada em ffi.rs.
+        // SAFETY: handle is an active library context; each resolved symbol is a valid
+        // Driver API function pointer conforming to the signatures in ffi.rs.
         let syms = unsafe {
             Syms {
                 init: load_sym(handle, c"cuInit")?,
@@ -118,37 +118,37 @@ impl Cuda {
             }
         };
 
-        // SAFETY: símbolo init resolvido acima.
+        // SAFETY: init symbol resolved successfully.
         let r = unsafe { (syms.init)(0) };
         check(&syms, r, "cuInit")?;
 
         Ok(Cuda { _lib: lib, syms })
     }
 
-    /// Número de devices CUDA visíveis.
+    /// Returns the number of CUDA-capable devices visible to the system.
     pub fn device_count(&self) -> Result<i32, CudaError> {
         let mut count: i32 = 0;
-        // SAFETY: count é out-param válido.
+        // SAFETY: count points to a valid local memory location.
         let r = unsafe { (self.syms.device_get_count)(&mut count) };
         check(&self.syms, r, "cuDeviceGetCount")?;
         Ok(count)
     }
 
-    /// Obtém o device de índice `ordinal` (0 = primeiro), com nome.
+    /// Gets the device handle for the specified `ordinal` index, resolving its name.
     pub fn device(&self, ordinal: i32) -> Result<Device, CudaError> {
         let mut raw: CuDevice = 0;
-        // SAFETY: raw é out-param válido.
+        // SAFETY: raw points to a valid local memory location.
         let r = unsafe { (self.syms.device_get)(&mut raw, ordinal) };
         check(&self.syms, r, "cuDeviceGet")?;
 
         let mut buf = [0_i8; 128];
-        // SAFETY: buf comporta `len` bytes; a API escreve C-string terminada.
+        // SAFETY: buf has space for `len` bytes; the API writes a null-terminated string.
         let r = unsafe {
             (self.syms.device_get_name)(buf.as_mut_ptr() as *mut c_char, buf.len() as i32, raw)
         };
         check(&self.syms, r, "cuDeviceGetName")?;
-        buf[buf.len() - 1] = 0; // garante terminação mesmo se a API preencher os 128 bytes
-        // SAFETY: buf preenchido pela API e com NUL final garantido acima.
+        buf[buf.len() - 1] = 0; // guarantees null-termination even if the API filled the entire buffer
+        // SAFETY: buf was initialized by the driver call and has a guaranteed terminating null byte.
         let name = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) }
             .to_string_lossy()
             .into_owned();
@@ -156,17 +156,17 @@ impl Cuda {
         Ok(Device { raw, name })
     }
 
-    /// Cria um contexto CUDA no device (vira corrente na thread atual).
+    /// Creates a CUDA context on the specified device (becomes current on the calling thread).
     pub fn create_context<'a>(&'a self, device: &Device) -> Result<Context<'a>, CudaError> {
         let mut raw: CuContext = core::ptr::null_mut();
-        // SAFETY: raw é out-param; device.raw é um CUdevice válido.
+        // SAFETY: raw points to a valid local; device.raw is a valid CUdevice handle.
         let r = unsafe { (self.syms.ctx_create)(&mut raw, 0, device.raw) };
         check(&self.syms, r, "cuCtxCreate")?;
         Ok(Context { cuda: self, raw })
     }
 }
 
-/// Um device CUDA (ordinal + nome).
+/// A CUDA device (ordinal index + name).
 #[derive(Clone, Debug)]
 pub struct Device {
     raw: CuDevice,
@@ -179,31 +179,31 @@ impl Device {
     }
 }
 
-/// Contexto CUDA. `Drop` faz `cuCtxDestroy`.
+/// CUDA context representation. `Drop` implementation calls `cuCtxDestroy`.
 ///
-/// **Afinidade de thread:** a corrente do contexto CUDA é *thread-local*. Use este
-/// `Context` (e os `DeviceMem` derivados) **na mesma thread** que o criou — por isso
-/// o daemon roda todo o I/O de VRAM numa única thread. Chamar de outra thread exigiria
-/// `cuCtxSetCurrent` (não feito aqui). A thread de DEMOTE só roda `swapoff`, não CUDA.
+/// **Thread Affinity:** The active CUDA context is *thread-local*. This `Context` (and
+/// derived `DeviceMem` allocations) must be used on the **same thread** that created them.
+/// This is why the daemon executes all VRAM I/O on a single thread. Accessing from another thread
+/// would require calling `cuCtxSetCurrent` (not implemented here). The DEMOTE thread only calls `swapoff`.
 pub struct Context<'a> {
     cuda: &'a Cuda,
     raw: CuContext,
 }
 
 impl<'a> Context<'a> {
-    /// VRAM livre/total em bytes (`cuMemGetInfo`).
+    /// Returns the free and total VRAM capacities in bytes (`cuMemGetInfo`).
     pub fn mem_info(&self) -> Result<(usize, usize), CudaError> {
         let (mut free, mut total) = (0_usize, 0_usize);
-        // SAFETY: ambos out-params válidos; contexto corrente.
+        // SAFETY: out-parameters are valid local pointers; CUDA context is current on the calling thread.
         let r = unsafe { (self.cuda.syms.mem_get_info)(&mut free, &mut total) };
         check(&self.cuda.syms, r, "cuMemGetInfo")?;
         Ok((free, total))
     }
 
-    /// Reserva `bytes` de VRAM. A região é liberada quando o `DeviceMem` cai.
+    /// Allocates `bytes` of VRAM. The allocation is released when the returned `DeviceMem` is dropped.
     pub fn alloc(&self, bytes: usize) -> Result<DeviceMem<'_, 'a>, CudaError> {
         let mut ptr: CuDevicePtr = 0;
-        // SAFETY: ptr é out-param; contexto corrente.
+        // SAFETY: ptr points to a valid local; CUDA context is current.
         let r = unsafe { (self.cuda.syms.mem_alloc)(&mut ptr, bytes) };
         check(&self.cuda.syms, r, "cuMemAlloc")?;
         Ok(DeviceMem {
@@ -216,14 +216,14 @@ impl<'a> Context<'a> {
 
 impl Drop for Context<'_> {
     fn drop(&mut self) {
-        // SAFETY: raw veio de cuCtxCreate e não foi destruído antes. Best-effort.
+        // SAFETY: raw handle was returned by cuCtxCreate and has not been destroyed yet. Best-effort drop.
         unsafe {
             let _ = (self.cuda.syms.ctx_destroy)(self.raw);
         }
     }
 }
 
-/// Região de VRAM. `Drop` faz `cuMemFree`. Empresta o [`Context`] (libera antes).
+/// Allocated VRAM memory region. `Drop` implementation calls `cuMemFree`. Borrows the [`Context`].
 pub struct DeviceMem<'c, 'a> {
     ctx: &'c Context<'a>,
     ptr: CuDevicePtr,
@@ -239,22 +239,22 @@ impl DeviceMem<'_, '_> {
         self.len == 0
     }
 
-    /// Zera toda a região (`cuMemsetD8` + sincroniza). SPEC §6.2/§11 (zerar VRAM).
+    /// Fills the entire region with zeroes (`cuMemsetD8` + synchronize). SPEC §6.2/§11.
     pub fn zero(&mut self) -> Result<(), CudaError> {
         let syms = &self.ctx.cuda.syms;
-        // SAFETY: ptr/len descrevem a região alocada por este DeviceMem.
+        // SAFETY: ptr and len accurately describe the region allocated for this memory object.
         let r = unsafe { (syms.memset_d8)(self.ptr, 0, self.len) };
         check(syms, r, "cuMemsetD8")?;
-        // SAFETY: sem args.
+        // SAFETY: cuCtxSynchronize takes no arguments.
         let r = unsafe { (syms.ctx_synchronize)() };
         check(syms, r, "cuCtxSynchronize")
     }
 
-    /// Copia `src` para a VRAM em `off` (Host→Device, síncrono).
+    /// Copies `src` bytes into VRAM at the specified `off` offset (Host->Device, synchronous).
     pub fn write_at(&mut self, off: usize, src: &[u8]) -> Result<(), CudaError> {
         self.bounds(off, src.len())?;
         let syms = &self.ctx.cuda.syms;
-        // SAFETY: faixa validada por bounds(); src é um slice válido de src.len() bytes.
+        // SAFETY: offset and length validated by bounds(); src is a valid memory slice.
         let r = unsafe {
             (syms.memcpy_htod)(
                 self.ptr + off as u64,
@@ -265,11 +265,11 @@ impl DeviceMem<'_, '_> {
         check(syms, r, "cuMemcpyHtoD")
     }
 
-    /// Copia da VRAM em `off` para `dst` (Device→Host, síncrono).
+    /// Copies bytes from VRAM at `off` into the `dst` buffer (Device->Host, synchronous).
     pub fn read_at(&self, off: usize, dst: &mut [u8]) -> Result<(), CudaError> {
         self.bounds(off, dst.len())?;
         let syms = &self.ctx.cuda.syms;
-        // SAFETY: faixa validada; dst é um slice mutável válido de dst.len() bytes.
+        // SAFETY: offset and length validated by bounds(); dst is a valid mutable slice.
         let r = unsafe {
             (syms.memcpy_dtoh)(
                 dst.as_mut_ptr() as *mut c_void,
@@ -294,19 +294,19 @@ impl DeviceMem<'_, '_> {
 
 impl Drop for DeviceMem<'_, '_> {
     fn drop(&mut self) {
-        // SAFETY: ptr veio de cuMemAlloc deste DeviceMem e não foi liberado antes.
+        // SAFETY: ptr was returned by a successful cuMemAlloc call and has not been freed.
         unsafe {
             let _ = (self.ctx.cuda.syms.mem_free)(self.ptr);
         }
     }
 }
 
-// --- helpers internos ---
+// --- internal helpers ---
 
-/// SAFETY: `handle` é uma libcuda aberta; `name` é um símbolo cujo tipo `T` é um
-/// ponteiro de função C de tamanho de ponteiro.
+/// SAFETY: `handle` must refer to a valid open library; `name` must be a valid C-string;
+/// type `T` must be a C function pointer of pointer size.
 unsafe fn load_sym<T: Copy>(handle: *mut c_void, name: &CStr) -> Result<T, CudaError> {
-    // SAFETY: contrato da função (handle válido, name null-terminated).
+    // SAFETY: caller contract (valid handle, null-terminated symbol name).
     let sym = unsafe { crate::loader::sym(handle, name.as_ptr()) };
     if sym.is_null() {
         return Err(CudaError::Symbol(name.to_string_lossy().into_owned()));
@@ -314,13 +314,13 @@ unsafe fn load_sym<T: Copy>(handle: *mut c_void, name: &CStr) -> Result<T, CudaE
     const {
         assert!(core::mem::size_of::<T>() == core::mem::size_of::<*mut c_void>());
     }
-    // SAFETY: T é fn-pointer C do mesmo tamanho de um data pointer; materializa o endereço.
+    // SAFETY: T is a C function pointer of the same size as a raw pointer.
     Ok(unsafe { core::mem::transmute_copy::<*mut c_void, T>(&sym) })
 }
 
-/// Versão opcional (símbolo pode faltar em stubs antigas).
+/// Optional symbol resolution (symbol may be missing in legacy stubs).
 fn load_sym_opt<T: Copy>(handle: *mut c_void, name: &CStr) -> Option<T> {
-    // SAFETY: mesmas pré-condições de load_sym.
+    // SAFETY: same preconditions as load_sym.
     unsafe { load_sym(handle, name).ok() }
 }
 
@@ -339,14 +339,12 @@ fn check(syms: &Syms, r: CuResult, op: &'static str) -> Result<(), CudaError> {
 fn err_string(syms: &Syms, r: CuResult) -> String {
     if let Some(f) = syms.get_error_string {
         let mut p: *const c_char = core::ptr::null();
-        // SAFETY: f é cuGetErrorString resolvida; p é out-param válido.
+        // SAFETY: f is a resolved cuGetErrorString pointer; p is a valid out-pointer.
         unsafe { f(r, &mut p) };
         if !p.is_null() {
-            // SAFETY: p aponta para uma string estática da CUDA terminada em nul.
+            // SAFETY: p points to a static null-terminated CUDA error message string.
             return unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned();
         }
     }
     format!("CUresult={r}")
 }
-
-// dl_error foi removida pois o erro agora vem de crate::loader::error().

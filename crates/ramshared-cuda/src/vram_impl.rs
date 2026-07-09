@@ -1,6 +1,6 @@
-//! Impl dos traits de `ramshared_vram` para os tipos CUDA (RF-G1): CUDA é o **1º backend** de
-//! VRAM atrás de `VramProvider`/`VramMemory`. Um futuro `ramshared-vulkan` faria o mesmo, sem
-//! tocar no daemon. Regra do órfão OK: os tipos (`Context`/`DeviceMem`) são locais deste crate.
+//! Implementation of `ramshared_vram` traits for CUDA types (RF-G1): CUDA is the first VRAM
+//! backend behind `VramProvider`/`VramMemory`. A future `ramshared-vulkan` would do the same,
+//! without modifying the daemon. Orphan rule OK: the types (`Context`/`DeviceMem`) are local to this crate.
 
 use ramshared_vram::{VramError, VramMemory, VramProvider};
 
@@ -38,8 +38,8 @@ impl VramMemory for DeviceMem<'_, '_> {
 }
 
 impl<'a> VramProvider for Context<'a> {
-    // GAT: a memória empresta &self (mesma semântica do `DeviceMem` atual) → afinidade de thread
-    // preservada sem `Arc`.
+    // GAT: memory borrows &self (same semantics as current `DeviceMem`) -> thread affinity
+    // preserved without `Arc`.
     type Mem<'p>
         = DeviceMem<'p, 'a>
     where
