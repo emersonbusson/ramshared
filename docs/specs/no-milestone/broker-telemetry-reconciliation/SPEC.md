@@ -1,8 +1,7 @@
-# SPECv2 — Coletor de Telemetria & Reconciliação do Memory Broker
+# SPEC — Coletor de Telemetria & Reconciliação do Memory Broker
 
-> Versão melhorada após auditoria do Passo 2.5.
-> Baseline preservado: `SPEC.md`.
-> Motivo: corrige os blockers F1 (ponto de incremento exato), F2/F12 (invariante conflacionava
+> **Arquivo único** `SPEC.md` (modelo Advoq). Passo 2.5 revisa in-place; histórico = `git log` — sem `SPECvN.md`.
+> **Revisado após auditoria do Passo 2.5:** corrige os blockers F1 (ponto de incremento exato), F2/F12 (invariante conflacionava
 > capacidade × ocupação × throughput; `reconcile()` referenciava sinais fora do `ReconcileInput`),
 > F3 (timestamp/`PartialEq` da amostra), F8 (`swap_dev` do diskstats), F9 (fonte do `swap_used`),
 > além de F4/F5/F6/F7.
@@ -14,7 +13,7 @@
 > **Esta versão é o candidato ativo** para nova auditoria (Passo 2.5) / implementação (Passo 3).
 >
 > SSDV3 PASSO 2. Userspace (`ramshared-broker`, `ramshared-wsl2d`, `ramshared-agent`). Sem uAPI de
-> kernel/IRQ/DMA/lock de kernel. Liga-se a [`.claude/rules/benchmarks.md`](../../.claude/rules/benchmarks.md).
+> kernel/IRQ/DMA/lock de kernel. Liga-se a [`.claude/rules/benchmarks.md`](../../../../.claude/rules/benchmarks.md).
 
 ## Escopo fechado desta implementação
 
@@ -37,7 +36,7 @@ agente `read_psi`/`read_swaps` (`agent/psi.rs:15,44`), envio `Msg::Psi` 1 Hz (`a
 
 ## Matriz de rastreabilidade PRD → SPEC
 
-| PRD  | Implementação no SPECv2 |
+| PRD  | Implementação no SPEC |
 | ---- | ----------------------- |
 | RF-1 | ITEM-1, ITEM-2, ITEM-5 |
 | RF-2 | ITEM-1, ITEM-6 |
@@ -81,10 +80,10 @@ de leitura conjunta atômica — skew de um tick é **aceito** (telemetria, não
 
 | Etapa / ITEM | Disciplina | Link | Pergunta obrigatória | Evidência mínima | Abort trigger |
 | --- | --- | --- | --- | --- | --- |
-| ITEM-2 (contadores no hot path de `serve_broker_jobs`) | #5 Availability + #3 Número | [`KAHNEMAN-DISCIPLINES.md#5-availability-heuristic`](../methodology/KAHNEMAN-DISCIPLINES.md) | 2 `fetch_add(Relaxed)`/op degradam p50/p99 do serve? | smoke VRAM: p50 de serve com vs sem contadores, ≥3 rodadas | p50 > **2×** baseline (P0 §3, 241 µs) → `git revert` ITEM-2 |
-| ITEM-3 / RF-3 (gauge + subtração) | #1 WYSIATI + #3 | [`#1-wysiati--what-you-see-is-all-there-is`](../methodology/KAHNEMAN-DISCIPLINES.md) | `vram_alloc_daemon` casa com `Σ len + canário`? "outros" é estado contingente (registrar)? | smoke VRAM: `vram_alloc_daemon ≈ Σ len ± 1 página`; `vram_outros ≥ 0` | `vram_outros<0` sistemático → cálculo errado, não avançar |
-| ITEM-4/7 (invariante de ocupação + flag) | #13 Ilusão de validade + #1 | [`#13-ilusão-de-validade`](../methodology/KAHNEMAN-DISCIPLINES.md) | A divergência é sinal real ou ruído? O flag dispara pelo motivo certo (eviction=canário, não subtração)? | testes `reconcile()` fixtures: `occupied>alloc → Unaccounted`; `demotes>0 → Eviction`; idle → `None`; sem falso-positivo na janela idle do P0 | falso-positivo na janela idle (P0) → recalibrar `tol_frac`/`streak` (DT-7) antes de avançar |
-| ITEM-8 (rollout via flag) | #6 Confiança calibrada | [`#6-overconfidence--confiança-calibrada`](../methodology/KAHNEMAN-DISCIPLINES.md) | Flag default-off não muda o comportamento atual? | drill qemu + smoke **sem** a flag = idêntico | qualquer regressão sem a flag → bloquear |
+| ITEM-2 (contadores no hot path de `serve_broker_jobs`) | #5 Availability + #3 Número | [`kahneman-disciplines.md#5-availability-heuristic`](../../../methodology/kahneman-disciplines.md#disc-5) | 2 `fetch_add(Relaxed)`/op degradam p50/p99 do serve? | smoke VRAM: p50 de serve com vs sem contadores, ≥3 rodadas | p50 > **2×** baseline (P0 §3, 241 µs) → `git revert` ITEM-2 |
+| ITEM-3 / RF-3 (gauge + subtração) | #1 WYSIATI + #3 | [`#1`](../../../methodology/kahneman-disciplines.md#disc-1) | `vram_alloc_daemon` casa com `Σ len + canário`? "outros" é estado contingente (registrar)? | smoke VRAM: `vram_alloc_daemon ≈ Σ len ± 1 página`; `vram_outros ≥ 0` | `vram_outros<0` sistemático → cálculo errado, não avançar |
+| ITEM-4/7 (invariante de ocupação + flag) | #13 Ilusão de validade + #1 | [`#13`](../../../methodology/kahneman-disciplines.md#disc-13) | A divergência é sinal real ou ruído? O flag dispara pelo motivo certo (eviction=canário, não subtração)? | testes `reconcile()` fixtures: `occupied>alloc → Unaccounted`; `demotes>0 → Eviction`; idle → `None`; sem falso-positivo na janela idle do P0 | falso-positivo na janela idle (P0) → recalibrar `tol_frac`/`streak` (DT-7) antes de avançar |
+| ITEM-8 (rollout via flag) | #6 Confiança calibrada | [`#6`](../../../methodology/kahneman-disciplines.md#disc-6) | Flag default-off não muda o comportamento atual? | drill qemu + smoke **sem** a flag = idêntico | qualquer regressão sem a flag → bloquear |
 
 ## Checklist de segurança (pré-implementação)
 
@@ -263,9 +262,9 @@ de leitura conjunta atômica — skew de um tick é **aceito** (telemetria, não
 | Documento | Atualização | Motivo |
 | --- | --- | --- |
 | `Documentation/`, `Kconfig`, `CLAUDE.md`, `.claude/rules/*` | N/A | userspace; sem uAPI/CONFIG; convenção já coberta por `benchmarks.md` |
-| `docs/broker-telemetry-reconciliation/IMPL.md` | **Criar** (PASSO 3) | commits/decisões/métricas |
-| `docs/memory-broker/P0-RESULTS.md` | **Alterar** | calibração `tol_frac`/`streak` (DT-7) |
-| `docs/methodology/KAHNEMAN-DISCIPLINES.md` | N/A | usa disciplinas existentes (#1/#3/#5/#6/#13) |
+| `docs/specs/no-milestone/broker-telemetry-reconciliation/IMPL.md` | **Feito** (IMPL.md presente) | commits/decisões/métricas |
+| `docs/reliability/memory-broker-p0-results.md` | **Alterar** | calibração `tol_frac`/`streak` (DT-7) |
+| `docs/methodology/kahneman-disciplines.md` | N/A | usa disciplinas existentes (#1/#3/#5/#6/#13) |
 
 ## Ordem de implementação
 

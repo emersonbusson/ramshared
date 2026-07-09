@@ -6,7 +6,7 @@ The active implementation target is **WSL2**; the ultimate destination is **Ring
 
 *   **Evaluation of the 6 PRDs** + real environment (WSL2/GPU-PV): Only PRD-2 (block device + CUDA) is viable in the guest; the others require hardware features (DRM/BAR/DAMON) that are missing.
 *   **Phase 0 (Real GPU Validation):** WDDM eviction is *data-safe, latency-unsafe* (4K reads can take up to 1.18 s under load); cascade order proved successful (zram saturation + VRAM absorbing 983 MiB of overflow).
-*   **SPECv3-WSL2:** Convergence reached via Passo 2.5 (SPEC → SPECv2 → SPECv3): VRAM configured as a cold tier + DEMOTE logic.
+*   **SPECv3-WSL2:** Convergence reached via Passo 2.5 (historical SPEC → SPECv2 → SPECv3 filenames; new work uses a single in-place `SPEC.md`): VRAM as cold tier + DEMOTE logic.
 *   **Rust Port:** 6 crates developed, and **validation of acceptance §14** successfully run on live system (spilling 511 MiB intact; DEMOTE migrating 481 MiB back, 0 corruption).
 *   **Adversarial Hardening (Issue #3):** C3 (duplicate CUDA FFI removed, CLI `forbid(unsafe_code)`), M1/M2/M3/M4/M5 + name-buffer.
 
@@ -23,15 +23,19 @@ The active implementation target is **WSL2**; the ultimate destination is **Ring
 
 ## Long-term Vision — Bare-metal (Gated on leaving WSL2)
 
-Exploratory paths; require DRM/BAR/DAMON/CXL layers unavailable in the guest GPU-PV. Each has a dedicated PRD:
+Exploratory paths; require DRM/BAR/DAMON/CXL layers unavailable in the guest GPU-PV. **No active SSDV3 folder yet** — when work starts, create `docs/specs/no-milestone/{slug}/` via [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md) (see [`docs/INDEX.md`](docs/INDEX.md)).
 
-*   **NUMA node** mapping for VRAM ([`PRD`](docs/vram-as-ram/PRD.md), [`PRD-4`](docs/vram-as-ram/PRD-4.md) with DAMON/proactive tiering).
-*   **zswap/zpool backend** inside VRAM via BAR access ([`PRD-3`](docs/vram-as-ram/PRD-3.md)).
-*   **HMM `DEVICE_PRIVATE` + SDMA + eBPF** ([`PRD-6`](docs/vram-as-ram/PRD-6.md)).
+Validated cascade (WSL2, not bare-metal) lives at [`docs/specs/no-milestone/wsl2-cascade-swap/`](docs/specs/no-milestone/wsl2-cascade-swap/) and evidence at [`docs/reliability/wsl2-fase0-final.md`](docs/reliability/wsl2-fase0-final.md).
+
+Planned themes (PRDs to be written when gated off WSL2):
+
+*   **NUMA node** mapping for VRAM (DAMON / proactive tiering).
+*   **zswap/zpool backend** inside VRAM via BAR access.
+*   **HMM `DEVICE_PRIVATE` + SDMA + eBPF**.
 *   **CXL / PCIe Gen5** — Coherent device memory as a native storage tier.
 
 ## Principles of Progress
 
-*   Every structural feature goes through the **SSDV3** pipeline (PRD → SPEC → IMPL) and respects **Kahneman disciplines** (counterfactuals + numerical rollback triggers).
+*   Every structural feature goes through the **SSDV3** pipeline (PRD → SPEC → IMPL under `docs/specs/…`; SPEC revised in-place) and respects **Kahneman disciplines** (counterfactuals + numerical rollback triggers). See `docs/SSDV3-PROMPTS.md`.
 *   No memory block enters VRAM without latency evidence; **measure before coding** (Phase 0).
 *   **Day-0 Policy:** Zero tolerance for shims; leaving WSL2 requires rewriting paths rather than stacking wrappers.

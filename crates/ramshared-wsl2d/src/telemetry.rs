@@ -1,4 +1,4 @@
-//! Telemetry & reconciliation of the broker (SPECv2 `docs/broker-telemetry-reconciliation/`).
+//! Telemetry & reconciliation of the broker (SPEC `docs/specs/no-milestone/broker-telemetry-reconciliation/`).
 //!
 //! Types shared between the data-plane (writes counters) and the control-plane (reads + reconciles) +
 //! the **pure** reconciliation logic. The invariant is **occupancy** (DT-4): compares the borrowed

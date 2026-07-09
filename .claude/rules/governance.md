@@ -39,6 +39,19 @@ Every rule that changes here must change in at least 2 of these places in the sa
 
 Skip via `[sync-skip-justified]` in the commit body with explanation.
 
+## Resource guards & fail-safe frontiers (cross-cutting)
+
+Universal principle (not only kernel): any PR that adds/changes a **guard, watchdog, demote/reclaim path, retry loop, or host-safety script** must apply Kahneman:
+
+- **#15** — retry only with proven transient signature
+- **#16** — safe default + curator independent of the resource; test from exhaustion
+- **#17** — replayable effects are idempotent (2× = 1×)
+- **#18** — fix in the owning layer; sunset workarounds only with proof for **this** class
+
+Source: [`docs/methodology/kahneman-disciplines.md`](../../docs/methodology/kahneman-disciplines.md). Domain rules (`kernel.md`, `benchmarks.md`) **reference** these numbers; they do not re-scope them.
+
+CI / scripts / lab harnesses are **not** SSDV3 by default (see `ssdv3.md` § Out of scope); they still obey #15–#18 and host-safety in `benchmarks.md`.
+
 ## Don't
 
 - ❌ Opening a PR without filling out the 7 sections.

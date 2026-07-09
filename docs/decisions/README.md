@@ -12,7 +12,7 @@ arquitetura/lock/DMA/memória vira um ADR.
 - **Decision** — o que foi decidido (imperativo).
 - **Consequences** — trade-offs (+ e −), incl. o que fica pior.
 - **Alternatives considered** — o que foi descartado e por quê.
-- **Kahneman** — disciplina(s) aplicada(s) ([`../methodology/KAHNEMAN-DISCIPLINES.md`](../methodology/KAHNEMAN-DISCIPLINES.md)).
+- **Kahneman** — disciplina(s) aplicada(s) ([`../methodology/kahneman-disciplines.md`](../methodology/kahneman-disciplines.md)).
 - **Rollback trigger** — condição **numérica/observável** que reverte a decisão
   (governance.md exige isto em mudança estrutural).
 

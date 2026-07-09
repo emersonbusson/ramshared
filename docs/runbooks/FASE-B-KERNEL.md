@@ -1,6 +1,6 @@
 # Runbook — Kernel WSL2 custom para a Fase B (zram-writeback + ublk)
 
-Destrava o **Passo 3 (IMPL) dos itens 4-5** (`docs/zram-writeback-vram/`, `docs/ublk-backend/`).
+Destrava o **Passo 3 (IMPL) dos itens 4-5** (zram-writeback theme + ublk; see ADR-0004 and `docs/specs/no-milestone/wsl2-cascade-swap/`).
 O kernel prebuilt da Microsoft **não** tem os configs (verificado: `# CONFIG_ZRAM_WRITEBACK is
 not set`, `# CONFIG_BLK_DEV_UBLK is not set`). `CONFIG_IO_URING=y` **já existe**.
 
@@ -125,11 +125,11 @@ sudo modprobe ublk_drv && ls /dev/ublk-control   # item 5 disponível
 
 ## 7. Então: Passo 3 da Fase B (SSDV3)
 
-- **Item 4** (`docs/zram-writeback-vram/SPECv2.md`): a recomendação ativa é **NÃO** implementar o
+- **Item 4** (zram-writeback-VRAM theme; cascade SPEC: [`wsl2-cascade-swap`](../specs/no-milestone/wsl2-cascade-swap/SPEC.md)): a recomendação ativa é **NÃO** implementar o
   backing userspace (reentrância sob reclaim + DEMOTE sem drenagem) — preferir block device de
   VRAM **kernel-side** OU manter a cascata de 2 tiers. Reabrir SPEC se o caminho kernel-side for
   perseguido. **Não** basta o kernel ter o config; o desenho seguro exige o driver kernel-side.
-- **Item 5** (`docs/ublk-backend/SPECv2.md` + [`ADR-0004`](../decisions/ADR-0004-ublk-io-uring-crate.md)):
+- **Item 5** ([`ADR-0004`](../decisions/ADR-0004-ublk-io-uring-crate.md)):
   IMPL do servidor ublk reusando o worker H1; `io-uring` crate (ADR-0004); `--swap-dev` genérico;
   **bench latência ublk vs NBD** (gate de adoção — sem ganho, manter NBD).
 

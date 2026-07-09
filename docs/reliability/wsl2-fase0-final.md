@@ -1,7 +1,7 @@
 ---
 slug: vram-wsl2-cuda-swap
 title: Phase 0 — Consolidated Verdict (A baseline + B eviction + C tiering)
-spec: SPECv2-WSL2.md
+spec: docs/specs/no-milestone/wsl2-cascade-swap/SPEC.md
 date: 2026-06-04
 status: go-with-architectural-pivot
 ---

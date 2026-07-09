@@ -8,9 +8,11 @@ Kahneman makes it explicit: biases and noise are properties of the system, not r
 
 ---
 
-## The 14 Operational Disciplines
+## The 18 Operational Disciplines
 
 Each entry starts with the bias it combats, details the operational rule, and specifies the measurable signal indicating compliance.
+
+Disciplines **#15–#18** were imported from the Advoq methodology stack (runtime/infra hygiene) and rewritten with **kernel / broker / WSL2** examples.
 
 ### Master Table (Consolidated View)
 
@@ -30,9 +32,14 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 | 12  | Prompt Priming           | Frame prompts neutrally or adversarially.                                                             | "What bugs do you find in this code?" instead of "Does this look correct?".                                                               | Pull request reviews use adversarial framing templates.                                                                      |
 | 13  | Illusion of Validity     | Test boundaries must validate failures and refusal paths, not just existence or happy paths.          | Paging refusal test paired with "does a legitimate input still pass?" to prevent false-positives under privileged boundaries.               | Destructive tools have integration tests executing the actual failure mode.                                                   |
 | 14  | Mass-Refactoring Fallacy | Deconstruct codebase cleanup into orthogonal atomic slices. Never rewrite a repository all at once.    | "Apply formatting rules only to the CUDA wrapper" instead of a repository-wide `refactor: clean codebase`.                                | Refactoring patches contain atomic commits segmented by crate/service.                                                       |
+| 15  | Calibrated Retry         | Retry only with a **proven transient** signature; deterministic failures fail-fast on attempt 1.       | NBD reconnect / DMA map retry only on `EAGAIN`/`ETIMEDOUT`; never retry `-EINVAL` ioctl or compile/checkpatch red.                        | Retry loops classify outcome before re-attempt; first deterministic fail logs the real cause.                                 |
+| 16  | Fail-safe + Independent Curator | Safe failure mode is the **default**; the cure mechanism must not die with the resource it cures. | Demote/reclaim path must work when VRAM is already exhausted; host-safety scripts must not thrash WSL2 live to "heal" pressure.             | Guards have tests from the **exhausted** state; abort-threshold ≠ trigger-threshold; live measurement at decision time.       |
+| 17  | Replay Idempotency       | Every effect behind retry/replay/command re-delivery is idempotent (2× = 1×).                        | Broker `SwapOn`/`DemoteAll`/`LeaseRelease` re-issued after timeout produces one state transition, not double slice.                      | Replayable ops have a 2× apply test asserting **unique** effect (not just "ran twice without panic").                        |
+| 18  | Right-Layer Root Cause + Proven Sunset | Fix in the layer that owns the root; remove workarounds only with proof the source covers **this** class. | WDDM eviction fixed in demote engine, not a userspace sleep-loop; dual-path shim removed only with Day-0 proof + multi-lens audit.         | Fix path cites owning layer; every shim sunset carries commit/test proof for **this** failure class.                          |
 
 ---
 
+<a id="disc-1"></a>
 ### 1. WYSIATI — What You See Is All There Is
 
 **Bias:** AI models respond with high confidence based only on immediately visible context, hallucinating by omission.
@@ -41,6 +48,7 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 
 **Signal:** Responses begin with: *"Without having inspected X, I estimate Y with Z% confidence."*
 
+<a id="disc-2"></a>
 ### 2. Mandatory Counterfactuals
 
 **Bias:** Architectural opinions without rollback criteria are System 1 intuitions disguised as reasoning.
@@ -49,6 +57,7 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 
 **Signal:** Non-trivial commits contain a `Rollback trigger:` line in the commit body.
 
+<a id="disc-3"></a>
 ### 3. Number, Not Adjective
 
 **Bias:** Question substitution: "Is this system fast?" (hard) becomes "Does it feel fast?" (easy).
@@ -57,6 +66,7 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 
 **Signal:** Avoid terms like "obviously", "definitely", or "elegant" unless paired with a qualifying metric.
 
+<a id="disc-4"></a>
 ### 4. Estimating via Anchoring
 
 **Bias:** The first number introduced anchors all subsequent estimates.
@@ -65,6 +75,7 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 
 **Signal:** Roadmap logs state reference classes explicitly.
 
+<a id="disc-5"></a>
 ### 5. Availability Heuristic
 
 **Bias:** AI models recall frequent events, omitting rare but catastrophic hardware failures.
@@ -73,6 +84,7 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 
 **Signal:** The [DEGRADATION-MATRIX.md](../reliability/DEGRADATION-MATRIX.md) is updated alongside critical features.
 
+<a id="disc-6"></a>
 ### 6. Calibrated Confidence
 
 **Bias:** Stating exact values triggers overconfidence. Ranges represent reality.
@@ -81,6 +93,7 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 
 **Signal:** Technical claims lead with ranges rather than point values.
 
+<a id="disc-7"></a>
 ### 7. Hindsight Bias
 
 **Bias:** A good outcome implies a good decision process. A bad outcome implies a bad process. Both are false.
@@ -89,6 +102,7 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 
 **Signal:** Postmortems in `/docs/postmortems/` separate process evaluations from final outcomes.
 
+<a id="disc-8"></a>
 ### 8. Planning Fallacy
 
 **Bias:** Inside view estimates (bottom-up task tracking) are systematically optimistic.
@@ -97,6 +111,7 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 
 **Signal:** Roadmaps cite both inside-view and reference-class-adjusted timelines.
 
+<a id="disc-9"></a>
 ### 9. Substitution of Question
 
 **Bias:** Complex questions are substituted for simpler ones without conscious realization.
@@ -105,6 +120,7 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 
 **Signal:** Qualitative claims are followed by measurable verification criteria.
 
+<a id="disc-10"></a>
 ### 10. Technical Debt Hyperbolic Discounting
 
 **Bias:** "I will refactor this later" heavily discounts future maintenance costs.
@@ -113,6 +129,7 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 
 **Signal:** `grep -r "TODO.*later\|FIXME"` returns no matches in active code paths.
 
+<a id="disc-11"></a>
 ### 11. Tooling Halo Effect
 
 **Bias:** "This tool worked on project A, so it must be the default for project B."
@@ -121,6 +138,7 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 
 **Signal:** Dependency additions reference a written ADR.
 
+<a id="disc-12"></a>
 ### 12. Prompt Priming
 
 **Bias:** Prompt framing alters output. "What bugs are in this code?" yield different results than "Is this code correct?".
@@ -129,6 +147,7 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 
 **Signal:** Pull request reviews follow adversarial templates.
 
+<a id="disc-13"></a>
 ### 13. Illusion of Validity
 
 **Bias:** Happy path tests provide false confidence if they encode the same assumptions as the implementation.
@@ -137,6 +156,7 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 
 **Signal:** Integration tests validate real failure scenarios, not just mocks.
 
+<a id="disc-14"></a>
 ### 14. Mass-Refactoring Fallacy
 
 **Bias:** The assumption that System 1 can predict all cascading side-effects of a global codebase rewrite.
@@ -144,6 +164,82 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 **Rule:** Restructuring must be fatiated (sliced) orthogonally. Do not request global codebase cleanups; restrict changes to specific crates or modules. Each slice must map to an atomic commit.
 
 **Signal:** Cleanups contain atomic commits segmented by crate.
+
+<a id="disc-15"></a>
+### 15. Calibrated Retry (transient ≠ deterministic)
+
+**Bias:** Availability heuristic (#5) + Illusion of validity (#13). System 1 reaches for the familiar story — "flake, retry" — without classifying the failure. A retry that "sometimes passes" becomes false proof of health and buries the real bug.
+
+**Rule:** A retry loop may re-attempt only with a **proven transient signature**. Deterministic failures fail-fast on attempt 1:
+
+| Transient (retry OK) | Deterministic (fail-fast) |
+| --- | --- |
+| `EAGAIN`, `ETIMEDOUT`, brief NBD disconnect | `-EINVAL` ioctl, bad uAPI size, compile error |
+| temporary DMA map busy under pressure | checkpatch/sparse red, lockdep splat design bug |
+| host GPU busy → short backoff before re-probe | wrong GFP in IRQ, capability denied |
+
+Never mask a config/logic bug behind N reconnects of the broker or ublk client.
+
+**Signal:** Retry paths log the classification before re-attempt; deterministic failures appear on attempt 1 with the real cause (dmesg/`dev_err`/test output), not under N retries.
+
+**Pairs with:** #13 (exists ≠ works), #17 (retry is only safe if the effect is idempotent).
+
+<a id="disc-16"></a>
+### 16. Fail-safe Default + Independent Curator
+
+**Bias:** Illusion of validity (#13) + Availability (#5). System 1 assumes "the mechanism exists, therefore it protects" and that the error path is too rare to design. Three failures are the same family: the curator that dies with the resource it should heal; blind retry that masks exhaustion; a guard that, when forgotten, leaks silently instead of failing loud.
+
+**Rule — two coupled invariants:**
+
+1. **Safe failure is the default.** Forgetting a protection fails loud, never silent leak. Example: privileged ioctl without `capable()` must refuse; device gone mid-I/O must return `-ENODEV`, not UAF.
+2. **The cure must not depend on the resource being healthy.** Reclaim/demote must still run when VRAM is already full; host-safety automation must not thrash the live WSL2 host to "prove" pressure (use qemu/civm). Abort-threshold ≠ trigger-threshold; the measurement at the gate is **live**, not a stale cache.
+
+PR checklist for every resource guard / watchdog / demote path:
+
+1. Test starts from the **exhausted** state (not only happy path).
+2. Abort-threshold ≠ trigger-threshold.
+3. Decision measurement is live at gate time.
+4. "Code exists" ≠ "protection active" on the target under test (`validation.md` / drill).
+
+**Signal:** Guards have exhaustion-path tests; demote/reclaim works under pressure; host-safety scripts refuse live thrash.
+
+**Pairs with:** #5 (DEGRADATION-MATRIX), `validation.md` tag `fail-safe`, `.claude/rules/benchmarks.md` host-safety.
+
+<a id="disc-17"></a>
+### 17. Idempotency of Replayable Effects
+
+**Bias:** Availability (#5) + happy-path optimism. System 1 assumes "the op runs once" and ignores that retry (#15), command re-delivery, agent reconnect, and operator double-click are the **common** case.
+
+**Rule:** Every effect behind retry/replay/redelivery must be idempotent: apply twice = apply once. Mechanisms:
+
+- Command id / generation counter on broker ops (`SwapOn`, `DemoteAll`, `LeaseRelease`)
+- State machine transitions that are no-ops when already in the target state
+- DMA map/unmap balanced so a second cleanup is safe
+- `ioctl` that returns success (or stable errno) when the resource is already configured as requested
+
+A non-idempotent side effect behind a "correct" retry is a latent double-slice / double-free / double-swapon bug.
+
+**Signal:** Replayable ops have a test that applies the effect **twice** and asserts a **unique** outcome (not merely "no panic twice").
+
+**Pairs with:** #15 (retry only transient) and #16 (fail-safe).
+
+<a id="disc-18"></a>
+### 18. Right-Layer Root Cause + Proven Workaround Sunset
+
+**Bias:** Attribute substitution (#9) in both directions. Under pressure, System 1 swaps "where does the root live?" for "how do I make it pass now?" and glues a band-aid in the wrong layer. The inverse is also System 1: Day-0 cleanup swaps "is it **proven** redundant?" for "it **looks** like a shim" and deletes the only defense of an uncovered class.
+
+**Rule:**
+
+1. **Fix in the layer that owns the root.** Examples:
+   - WDDM eviction latency → demote/canary engine (not a userspace `sleep` loop)
+   - uAPI layout bug → header + kernel handler together (not a client-only cast)
+   - Host thrash risk → safety script / civm policy (not a product dual-path)
+2. **Never reconstruct authoritative identity downstream** of a lossy transform (handle/offset must be validated at the boundary that owns the object).
+3. **Sunset workarounds only with proof** that the source fix covers **this** failure class. Two distinct failures need two proofs. Multi-lens audit (≥2 perspectives) before deleting "redundant" paths.
+
+**Signal:** Fix PRs cite the owning layer; every shim removal cites test/drill proof for this class; Day-0 exceptions in SPEC list reason + removal deadline + rollback.
+
+**Pairs with:** Day-0 policy in `docs/SSDV3-PROMPTS.md`, #13, #16.
 
 ---
 
@@ -155,9 +251,25 @@ Each entry starts with the bias it combats, details the operational rule, and sp
 
 | System | Rubric |
 | --- | --- |
-| Spec-driven development | [docs/specs/](file:///home/emdev/codespace/ramshared/docs/specs/) templates |
+| Spec-driven development | [`docs/SSDV3-PROMPTS.md`](../SSDV3-PROMPTS.md), [`docs/specs/`](../specs/), [`docs/INDEX.md`](../INDEX.md) |
 | Code quality | `.claude/rules/coding.md` |
 | Driver development | `.claude/rules/kernel.md` |
-| Security | `.claude/rules/security.md` |
+| Documentation | `.claude/rules/documentation.md` |
+| Benchmarks / host safety | `.claude/rules/benchmarks.md` |
+| Empirical validation log | [`validation.md`](../../validation.md) |
 
 **Signal of Noise Reduction:** Successive implementations of similar patterns yield uniform structures.
+
+### How agents should use this doc
+
+1. **Before opining:** declare what was not inspected (#1).
+2. **With the opinion:** number, not adjective (#3); calibrated range (#6).
+3. **After the opinion:** numerical counterfactual / rollback trigger (#2).
+4. **On retry/reconnect/command paths:** #15 + #17.
+5. **On reclaim/demote/watchdog/host safety:** #16.
+6. **On shims and "quick" dual-path:** #18 + Day-0.
+
+### Auto-application (rollback of this doc)
+
+- **Adoption signal:** non-trivial PRs cite a discipline (#1–#18) in body, review, ADR, or SPEC Kahneman map.
+- **Doc rollback trigger:** if after 6 months <30% of non-trivial structural PRs cite any discipline, simplify to Top-5 + 1-pager via superseding ADR (cargo-cult detection).

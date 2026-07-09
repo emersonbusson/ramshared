@@ -15,7 +15,7 @@ pub const NBD_FLAG_SEND_FLUSH: u16 = 1 << 2;
 /// Safe multi-connection (H1). It is only safe to announce because WRITE is durable upon ack
 /// (synchronous `cuMemcpyHtoD`) + the single CUDA worker serializes: a FLUSH on any
 /// connection covers all already acked WRITEs. Do NOT change to asynchronous copy without
-/// reviewing this contract. SPEC: docs/daemon-multiconn/SPECv3.md DT-10.
+/// reviewing this contract. SPEC: docs/specs/no-milestone/wsl2-cascade-swap/SPEC.md DT-10.
 pub const NBD_FLAG_CAN_MULTI_CONN: u16 = 1 << 8;
 
 // Transmission.

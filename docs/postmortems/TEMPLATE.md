@@ -68,5 +68,5 @@ O critério numérico que, em retrospecto, deveria ter revertido:
 
 ## Referências
 
-- [`KAHNEMAN-DISCIPLINES.md`](../methodology/KAHNEMAN-DISCIPLINES.md) §7 (hindsight), §2 (counterfactual), §13 (ilusão de validade)
+- [`kahneman-disciplines.md`](../methodology/kahneman-disciplines.md) §7 (hindsight), §2 (counterfactual), §13 (ilusão de validade)
 - [`reliability/DEGRADATION-MATRIX.md`](../reliability/DEGRADATION-MATRIX.md) — atualizar se o cenário não estava previsto

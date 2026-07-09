@@ -38,8 +38,12 @@ Closes #
 Gates relevantes ao que mudou:
 - Codigo C de LKM: ./scripts/checkpatch.pl -f, make modules, dmesg sem OOPs, kselftest.
 - Rust userspace: cargo fmt --all --check, cargo clippy --workspace -D warnings, cargo test.
+- Docs: ./scripts/docs-check.sh se tocou docs/specs ou INDEX.
+- SSDV3: se mudança estrutural, path em docs/specs/… e IDs RF/NFR no body.
 -->
-- [ ] 
+- [ ] Gates de build/test do escopo tocado
+- [ ] `./scripts/docs-check.sh` (se tocou docs/specs ou gerou PRD/SPEC/IMPL)
+- [ ] SSDV3: SPEC/IMPL atualizados e citados (ou N/A — mudança não estrutural / só scripts)
 
 ## Rollback trigger
 

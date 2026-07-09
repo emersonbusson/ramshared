@@ -5,7 +5,7 @@
 > está ociosa ou em uso (Kahneman #3 número-não-adjetivo + #1 WYSIATI registrar o estado).
 >
 > **Append-only:** cada run é uma entrada nova ao fim; não reescrever entradas antigas. Decisões
-> consolidadas (go/no-go) vão para [`memory-broker/P0-RESULTS.md`](memory-broker/P0-RESULTS.md).
+> consolidadas (go/no-go) vão para [`memory-broker/P0-RESULTS.md`](reliability/memory-broker-p0-results.md).
 
 ## Template de entrada
 

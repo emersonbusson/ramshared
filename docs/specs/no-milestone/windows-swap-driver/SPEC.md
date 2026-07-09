@@ -1,37 +1,34 @@
 # SPEC — RamShared P4 / Trilha 2: swap-para-VRAM no Windows nativo (StorPort virtual miniport)
 
-> **Versão melhorada após auditoria do Passo 2.5 (2026-07-08) no baseline `SPEC.md`.**
-> Baseline preservado: `docs/windows-vram-drive/SPEC.md`.
+> **Arquivo único:** `SPEC.md` (modelo Advoq/RamShared). Histórico de revisões = `git log` deste path — **sem** `SPECvN.md`.
 >
-> **Re-auditoria Passo 2.5 sobre este SPECv2 (2026-07-08) = GO.**
-> Achados novos: só **LOW** (clarificações, sem decisão estrutural nova) — incorporados in-place
-> abaixo (L1–L4). C1–H4 da 1ª auditoria re-verificados contra o código e **permanecem fechados**.
+> **Revisado após auditoria do Passo 2.5 (2026-07-08):** no-go na 1ª rodada → correções in-place; re-auditoria = **GO**.
+> Achados da re-auditoria: só **LOW** (L1–L4, sem decisão estrutural nova). C1–H4 da 1ª rodada re-verificados e **fechados** neste mesmo arquivo.
 >
-> **SPEC ativo para IMPL (Passo 3):** este arquivo. Gate residual de produto: trâmite EV/Partner
+> **Candidato ativo para IMPL (Passo 3):** este arquivo. Gate residual de produto: trâmite EV/Partner
 > Center (R9) em curso antes de carga no host real / ITEM-11; zero driver no host real antes do
 > ITEM-8 (kernel-page) em VM.
 >
-> Motivo do no-go no baseline: 2 CRITICAL + 4 HIGH estruturais (mesmo tipo que derrubou o SPEC da
-> P2 — paths inventados vs código real). Achados bloqueantes endereçados aqui:
+> Motivo do no-go na 1ª rodada: 2 CRITICAL + 4 HIGH estruturais (paths inventados vs código real). Achados bloqueantes endereçados **in-place**:
 >
 > - **C1** (RNF-5 / ITEM-8 Map / `Invoke-RevokeDrill`): o SPEC alegava "broker sinaliza revoke" ao
 >   holder do lease. **Falso no código:** não existe `Msg` broker→holder de force-revoke; o lease só
 >   termina por `LeaseRelease` do holder (`broker_srv.rs:427`) ou **disconnect** auto-release
 >   (`:456-464`). `RevokeForLease` revoga **swap de outros tenants** para *conceder* o lease, não o
->   lease em si. SPECv2 redefine RNF-5 no mecanismo real (holder-cooperative + disconnect forçado
+>   lease em si. Este SPEC redefine RNF-5 no mecanismo real (holder-cooperative + disconnect forçado
 >   como último recurso admin) — DT-19.
 > - **C2** (provision / RF-5): lease `Free→Leased` **não libera** `DeviceMem` no daemon (só muda
 >   estado em `slices.rs:89-95`); WinDrive faz `cuMemAlloc` **local**. Sem DT, IMPL double-claim
->   silencioso na mesma GPU. SPECv2 fecha co-residência: orçamento lógico no broker + gate físico
+>   silencioso na mesma GPU. Fecha co-residência: orçamento lógico no broker + gate físico
 >   `cuMemGetInfo.free` no Windows + free-floor operacional — DT-20.
-> - **H1** (R8): "encolher" era vago. SPECv2 fecha a sequência observável de revogação com pagefile
+> - **H1** (R8): "encolher" era vago. Fecha a sequência observável de revogação com pagefile
 >   ativo (sem API mágica de shrink) — DT-19.
 > - **H2** (ITEM-8): enviesar paged-pool pro pagefile-VRAM via "C: mínimo" é heurística, não
 >   garantia. Gate exige `% Usage` do pagefile-VRAM > 0 **antes** de matar o serviço; senão ABORT
 >   do drill (não "pass" silencioso) — DT-21.
 > - **H3** (ITEM-3): heartbeat do WinDrive era "mínimo" sem shape. Fecha como `Msg::Psi` default
 >   (padrão P2 DT-13); `Lib` Drop do CUDA vira `loader::close` (não `dlclose` incondicional).
-> - **H4** (ITEM-5): superfície de build WDK ausente. SPECv2 lista `.vcxproj`/INF/package sob
+> - **H4** (ITEM-5): superfície de build WDK ausente. Lista `.vcxproj`/INF/package sob
 >   Arquivos a CRIAR.
 >
 > **Re-auditoria GO — LOWs incorporados (sem decisão nova):**
@@ -112,7 +109,7 @@
   3× para **página de usuário**; **página de kernel não-refutada** (é o que ITEM-8 fecha). Achado de
   método: **dado incompressível** (`RandomNumberGenerator`) é obrigatório para forçar paginação real
   (a Memory Compression do Win11 mascara dado compressível).
-- Precedente de padrão P2 (`docs/memory-broker-p2-windows/SPECv2.md`): `windows-service`+`windows-sys`
+- Precedente de padrão P2 (`docs/specs/no-milestone/memory-broker/SPEC.md`): `windows-service`+`windows-sys`
   sob `[target.'cfg(windows)']`, bin com `main` real + stub `not(windows)` (workspace verde no Linux),
   novo `TransportKind` quebra `match` exaustivo em `endpoint_for` e exige filtro em `on_tick`.
 
@@ -149,7 +146,7 @@ Decisões fechadas aqui que o PRD deixou como "Inferência: a fixar na SPEC".
 | DT-4 | **Bounce-buffer** (driver copia buffer do SRB ↔ slot da data area: WRITE antes de postar o SQE, READ após o CQE OK), **não zero-copy**. Sob SRBEX (DT-23) o ponteiro do buffer vem de **`StorPortGetSystemAddress` / helpers StorPort** — não assumir `Srb->DataBuffer` classic como único path. | O memcpy extra é desprezível vs PCIe em µs (RNF-2/R6). Zero-copy = otimização futura gated por medição (ITEM-9), não dual-path Day-0. |
 | DT-5 | **RF-4 = tornar `ramshared-cuda` cross-platform**, não crate novo: extrair a fronteira de loader (`dlopen`/`dlsym`/`dlclose` vs `LoadLibraryW`/`GetProcAddress`/`FreeLibrary`) para `loader_unix.rs`/`loader_win.rs` selecionados por `#[cfg]`; `Syms` (`ffi.rs:47`) e `driver.rs` (wrappers seguros) ficam **idênticos** e compartilhados; a lista de candidatos vira `nvcuda.dll` no Windows. **Não é dual-path:** é **uma** tabela de símbolos (os nomes `_v2` existem iguais na `nvcuda.dll`), dois loaders de SO. | RF-4 pede explicitamente "a **mesma** tabela de símbolos" (PRD §2/§8). Crate paralelo duplicaria `Syms`+`driver.rs` (viola DRY/Day-0). Custo: toca o crate CUDA validado → RNF-8 (gate = testes CUDA + roundtrip GPU Linux verdes; #14). |
 | DT-6 | **Promover o adaptador genérico `VramBackend<M>` para `ramshared-block`** (crate ganha dep em `ramshared-vram`); `ramshared-wsl2d` passa a `pub use ramshared_block::VramBackend` (deleta a def local, comportamento preservado). Ambos os SOs reusam o **mesmo** adaptador testado. | Regra dura #1 (reuso) + imutabilidade/DRY: o serviço Windows precisa de `VramMemory→BlockBackend`; duplicar 45 linhas divergiria Linux/Windows. `ramshared-block` é o lar natural ("onde VRAM vira block device"). As linhas 11-55 não usam `ublk` (verificado). Gate: drills `qemu-ublk-*` verdes (RNF-8, #14). |
-| DT-7 | **RF-5 = novo `TransportKind::WinDrive`** (aditivo em `crates/ramshared-broker/src/model.rs:48`, hoje só `NbdUnix`/`NbdTcp` — **`DccAgent` ainda NÃO existe no código**). Adicionar a variante **quebra o `match` exaustivo** em `endpoint_for` (`crates/ramshared-wsl2d/src/broker_srv.rs:182-195`) → braço `WinDrive => None` obrigatório; e o tenant é **excluído do round-robin/rebalance de swap** filtrando por transport em `on_tick` (`:573-584`) ao construir `present` a partir de `TenantState.transport` (`:74`). Se o P2 `DccAgent` aterrissar depois, o filtro generaliza para "transports lease-only". **`arbiter.rs` sem diff** (`TenantView` não tem transport — L50). | Reuso do padrão P2 SPECv2 C1/C2/DT-5, verificado no código atual. O `WinDrive` só faz lease, nunca recebe `SwapOn`. |
+| DT-7 | **RF-5 = novo `TransportKind::WinDrive`** (aditivo em `crates/ramshared-broker/src/model.rs:48`, hoje só `NbdUnix`/`NbdTcp` — **`DccAgent` ainda NÃO existe no código**). Adicionar a variante **quebra o `match` exaustivo** em `endpoint_for` (`crates/ramshared-wsl2d/src/broker_srv.rs:182-195`) → braço `WinDrive => None` obrigatório; e o tenant é **excluído do round-robin/rebalance de swap** filtrando por transport em `on_tick` (`:573-584`) ao construir `present` a partir de `TenantState.transport` (`:74`). Se o P2 `DccAgent` aterrissar depois, o filtro generaliza para "transports lease-only". **`arbiter.rs` sem diff** (`TenantView` não tem transport — L50). | Reuso do padrão P2 (C1/C2/DT-5 do memory-broker SPEC), verificado no código atual. O `WinDrive` só faz lease, nunca recebe `SwapOn`. |
 | DT-8 | **`NtCreatePagingFile`** isolada em `ntpagefile.rs`: allow-list **DT-24** (`26200.*`), falha-graciosa, pagefile mínimo em `C:`. Remoção: `NtSetSystemInformation` remove; se SO não liberar a quente → **reboot** (é o "shrink" real — H1/DT-19). | API não-documentada (R5); allow-list vazia era gap M3. |
 | DT-9 | **Teardown NUNCA remove o disco com pagefile ativo** (é exatamente o vetor B1 de BSOD). Ordem obrigatória (RF-7a): desativar pagefile → (reboot se o SO não liberar a quente) → drenar I/O em voo → destruir o disco virtual → `VramBackend::zero()` (wipe — reuso DT-17 do Linux) → `LeaseRelease`. | O drill (`PASSO0-DRILL-RUNBOOK.md`) mostrou que arrancar o disco com pagefile ativo é o cenário perigoso; o teardown seguro é o oposto disso. Wipe antes de devolver porque o pagefile conteve memória de processos (PRD fluxo 5). |
 | DT-10 | **Contenção de crash (RF-7b) = comportamento determinístico no driver.** Quando o serviço morre (fecho do handle do control device → `IRP_MJ_CLEANUP`/`CLOSE`), o driver **completa TODOS os SRBs em voo com `SRB_STATUS_ERROR`/`STATUS_DEVICE_NOT_CONNECTED`** — nunca deixa SRB pendente (isso travaria o storage stack) e nunca completa como sucesso parcial. É o análogo do SIGBUS-contido do Linux, e é o que torna o cenário **B2 (erro mediado por driver)** finalmente testável (o disco NÃO some; o I/O falha de forma limpa). | Este é o **lever** de mitigação do R7: o driver pode **errar** o I/O de paging em vez de fazer o disco sumir — a hipótese (PRD fluxo 4) de que o erro mediado é mais recuperável que "disco arrancado". Provado/refutado em ITEM-8. |
@@ -214,16 +211,16 @@ Decisões fechadas aqui que o PRD deixou como "Inferência: a fixar na SPEC".
 
 | Etapa / ITEM | Disciplina Kahneman | Link | Pergunta obrigatória | Evidência mínima | Abort trigger |
 | --- | --- | --- | --- | --- | --- |
-| ITEM-1 (RF-4 loader cross-platform) | #14 Mass-Refactoring + #1 WYSIATI | [`#14`](../methodology/KAHNEMAN-DISCIPLINES.md#14-falácia-do-refatoramento-em-massa-mass-refactoring-fallacy) · [`#1`](../methodology/KAHNEMAN-DISCIPLINES.md#1-wysiati--what-you-see-is-all-there-is) | A `nvcuda.dll` exporta os **mesmos** símbolos `_v2` do `ffi.rs`? A refação muda o caminho Linux? | Windows: `Cuda::load()` resolve os 13 símbolos + `mem_info()` retorna `free/total` plausível na RTX 2060. Linux: `cargo test -p ramshared-cuda` + `gpu_roundtrip_256mib` (`--ignored`) verdes. | Qualquer símbolo `_v2` ausente na `nvcuda.dll`, **ou** qualquer regressão nos testes/roundtrip Linux. |
-| ITEM-2 (promover `VramBackend`) | #14 Mass-Refactoring | [`#14`](../methodology/KAHNEMAN-DISCIPLINES.md#14-falácia-do-refatoramento-em-massa-mass-refactoring-fallacy) | A promoção muda o comportamento do daemon Linux? | Drills `qemu-ublk-daemon.sh` + `qemu-ublk-crash-e1b.sh` (SIGBUS 5/5) verdes; `cargo test -p ramshared-wsl2d` sem regressão. | Qualquer regressão de drill/teste do daemon Linux → reverter a promoção. |
-| ITEM-4 (RF-2 ABI `protocol.h`+mirror) | #9 Substituição de pergunta | [`#9`](../methodology/KAHNEMAN-DISCIPLINES.md#9-substituição-de-pergunta) | "O protocolo está certo?" → o layout C bate byte-a-byte com o mirror Rust? | `const { assert!(...) }` de tamanho compila nos dois lados; teste golden-bytes (bytes fixos ↔ struct) passa; `sizeof` C == `size_of` Rust em CI. | Drift de tamanho/offset entre `protocol.h` e o mirror Rust. |
-| ITEM-5 (driver: IOCTL surface + rings) | #13 Ilusão de validade + #5 Availability | [`#13`](../methodology/KAHNEMAN-DISCIPLINES.md#13-ilusão-de-validade) · [`#5`](../methodology/KAHNEMAN-DISCIPLINES.md#5-availability-heuristic) | REGISTER/doorbell **malformados** (buffer curto, `queue_depth` não-potência-de-2, VA nula, offset desalinhado, tag desconhecido/duplicado) são **rejeitados antes** de `MmProbeAndLockPages`/de tocar VRAM/de completar SRB? | SDV report limpo; teste sob Driver Verifier: cada entrada malformada → IOCTL falha com `STATUS_INVALID_PARAMETER`, **zero BugCheck**; teste **pareado** "entrada legítima ainda funciona". | Qualquer BugCheck a partir de entrada malformada; defeito SDV sem waiver; double-complete de SRB observável. |
-| ITEM-6 + ITEM-8 (crash c/ pagefile ativo — vetor R7) | #5 Availability + #2 Counterfactual | [`#5`](../methodology/KAHNEMAN-DISCIPLINES.md#5-availability-heuristic) · [`#2`](../methodology/KAHNEMAN-DISCIPLINES.md#2-counterfactual-obrigatório) | Matar o serviço com **página de kernel** (paged pool, dado incompressível) **confirmada no pagefile-VRAM** → contido **ou** `KERNEL_DATA_INPAGE_ERROR` 0x7a? B2 (DT-10) vs B1? | `Invoke-KernelPageDrill.ps1`: (DT-21) `% Usage` pagefile-VRAM > 0 **antes** do kill; senão INCONCLUSIVO. ≥3 execuções com residência; B1 vs B2; captura BSOD/`MEMORY.DMP`. | **B2 produz BugCheck 0x7a sem mitigação especificável** → aborto PRD §14 #2b. Drill sem residência confirmada **não** conta como PASS. |
-| ITEM-7 (`NtCreatePagingFile`, não-documentada) | #1 WYSIATI + #2 Counterfactual | [`#1`](../methodology/KAHNEMAN-DISCIPLINES.md#1-wysiati--what-you-see-is-all-there-is) · [`#2`](../methodology/KAHNEMAN-DISCIPLINES.md#2-counterfactual-obrigatório) | O Windows **ativa** um pagefile secundário no volume do **nosso** miniport (não testado — WYSIATI PRD §14 #1)? Build fora da allow-list degrada gracioso? | `Win32_PageFileUsage` mostra `<vram>:\pagefile.sys` ativo pós-`NtCreatePagingFile`; teste de fallback (build não suportado → sem pagefile, disco formatável/utilizável). | Ativação dá BugCheck/corrupção, **ou** não há caminho de falha-graciosa (disco quebra junto com o pagefile). |
-| ITEM-9 (RNF-2 gate numérico) | #3 Número não adjetivo + #11 Halo | [`#3`](../methodology/KAHNEMAN-DISCIPLINES.md#3-sistema-1--sistema-2-via-número) · [`#11`](../methodology/KAHNEMAN-DISCIPLINES.md#11-halo-effect-em-ferramentas) | O pagefile-VRAM **alivia capacidade** (uso > 0 sob pressão) e não é **catastroficamente** mais lento que o disco? | `results.jsonl`+`BENCHMARKS.md`: p50/p99 lado-a-lado, mesma janela, ≥3 rodadas, tags `idle`/`loaded`; contador de uso do pagefile-VRAM > 0. | Alívio de capacidade == 0 (nunca usado sob pressão) **ou** p99 > K× o do disco (K da 1ª medição) → não promove (PRD §14 #2c). |
-| ITEM-10 (RNF-1 soak) | #5 Availability + #6 Confiança calibrada | [`#5`](../methodology/KAHNEMAN-DISCIPLINES.md#5-availability-heuristic) · [`#6`](../methodology/KAHNEMAN-DISCIPLINES.md#6-overconfidence--confiança-calibrada) | 72 h (3×24 h) sob Driver Verifier + fuzz sem BugCheck? | Logs do Driver Verifier + harness de soak; 3 rodadas registradas com `run-id`. | Qualquer BugCheck em qualquer rodada. |
-| ITEM-11 (RF-8 attestation) | #2 Counterfactual | [`#2`](../methodology/KAHNEMAN-DISCIPLINES.md#2-counterfactual-obrigatório) | O driver attestation-signed **carrega** em build estável com test-signing OFF? | Carga em Windows 11 25H2 **26200.8655**, test-signing OFF, driver confiável por padrão (RNF-7). | Não carrega em build estável (política apertou) **e** custo WHCP não se justifica → abortar/park (PRD §14 #2a). |
-| RNF-5 (revogação c/ pagefile ativo, R8) | #5 Availability + #2 Counterfactual | [`#5`](../methodology/KAHNEMAN-DISCIPLINES.md#5-availability-heuristic) · [`#2`](../methodology/KAHNEMAN-DISCIPLINES.md#2-counterfactual-obrigatório) | Serviço executa DT-9 e só então `LeaseRelease`, sem pagefile ativo no disconnect? | `Invoke-RevokeDrill.ps1`: SCM stop/admin → pagefile off (ou reboot path) → destroy → wipe → `LeaseRelease` observado no log do broker; tempo pior caso medido. **Não** existe frame broker de revoke (C1/DT-19). | Pagefile ainda ativo após "release"; deadlock no teardown; broker ainda mostra lease após disconnect limpo. |
+| ITEM-1 (RF-4 loader cross-platform) | #14 Mass-Refactoring + #1 WYSIATI | [`#14`](../../../methodology/kahneman-disciplines.md#disc-14) · [`#1`](../../../methodology/kahneman-disciplines.md#disc-1) | A `nvcuda.dll` exporta os **mesmos** símbolos `_v2` do `ffi.rs`? A refação muda o caminho Linux? | Windows: `Cuda::load()` resolve os 13 símbolos + `mem_info()` retorna `free/total` plausível na RTX 2060. Linux: `cargo test -p ramshared-cuda` + `gpu_roundtrip_256mib` (`--ignored`) verdes. | Qualquer símbolo `_v2` ausente na `nvcuda.dll`, **ou** qualquer regressão nos testes/roundtrip Linux. |
+| ITEM-2 (promover `VramBackend`) | #14 Mass-Refactoring | [`#14`](../../../methodology/kahneman-disciplines.md#disc-14) | A promoção muda o comportamento do daemon Linux? | Drills `qemu-ublk-daemon.sh` + `qemu-ublk-crash-e1b.sh` (SIGBUS 5/5) verdes; `cargo test -p ramshared-wsl2d` sem regressão. | Qualquer regressão de drill/teste do daemon Linux → reverter a promoção. |
+| ITEM-4 (RF-2 ABI `protocol.h`+mirror) | #9 Substituição de pergunta | [`#9`](../../../methodology/kahneman-disciplines.md#disc-9) | "O protocolo está certo?" → o layout C bate byte-a-byte com o mirror Rust? | `const { assert!(...) }` de tamanho compila nos dois lados; teste golden-bytes (bytes fixos ↔ struct) passa; `sizeof` C == `size_of` Rust em CI. | Drift de tamanho/offset entre `protocol.h` e o mirror Rust. |
+| ITEM-5 (driver: IOCTL surface + rings) | #13 Ilusão de validade + #5 Availability | [`#13`](../../../methodology/kahneman-disciplines.md#disc-13) · [`#5`](../../../methodology/kahneman-disciplines.md#disc-5) | REGISTER/doorbell **malformados** (buffer curto, `queue_depth` não-potência-de-2, VA nula, offset desalinhado, tag desconhecido/duplicado) são **rejeitados antes** de `MmProbeAndLockPages`/de tocar VRAM/de completar SRB? | SDV report limpo; teste sob Driver Verifier: cada entrada malformada → IOCTL falha com `STATUS_INVALID_PARAMETER`, **zero BugCheck**; teste **pareado** "entrada legítima ainda funciona". | Qualquer BugCheck a partir de entrada malformada; defeito SDV sem waiver; double-complete de SRB observável. |
+| ITEM-6 + ITEM-8 (crash c/ pagefile ativo — vetor R7) | #5 Availability + #2 Counterfactual | [`#5`](../../../methodology/kahneman-disciplines.md#disc-5) · [`#2`](../../../methodology/kahneman-disciplines.md#disc-2) | Matar o serviço com **página de kernel** (paged pool, dado incompressível) **confirmada no pagefile-VRAM** → contido **ou** `KERNEL_DATA_INPAGE_ERROR` 0x7a? B2 (DT-10) vs B1? | `Invoke-KernelPageDrill.ps1`: (DT-21) `% Usage` pagefile-VRAM > 0 **antes** do kill; senão INCONCLUSIVO. ≥3 execuções com residência; B1 vs B2; captura BSOD/`MEMORY.DMP`. | **B2 produz BugCheck 0x7a sem mitigação especificável** → aborto PRD §14 #2b. Drill sem residência confirmada **não** conta como PASS. |
+| ITEM-7 (`NtCreatePagingFile`, não-documentada) | #1 WYSIATI + #2 Counterfactual | [`#1`](../../../methodology/kahneman-disciplines.md#disc-1) · [`#2`](../../../methodology/kahneman-disciplines.md#disc-2) | O Windows **ativa** um pagefile secundário no volume do **nosso** miniport (não testado — WYSIATI PRD §14 #1)? Build fora da allow-list degrada gracioso? | `Win32_PageFileUsage` mostra `<vram>:\pagefile.sys` ativo pós-`NtCreatePagingFile`; teste de fallback (build não suportado → sem pagefile, disco formatável/utilizável). | Ativação dá BugCheck/corrupção, **ou** não há caminho de falha-graciosa (disco quebra junto com o pagefile). |
+| ITEM-9 (RNF-2 gate numérico) | #3 Número não adjetivo + #11 Halo | [`#3`](../../../methodology/kahneman-disciplines.md#disc-3) · [`#11`](../../../methodology/kahneman-disciplines.md#disc-11) | O pagefile-VRAM **alivia capacidade** (uso > 0 sob pressão) e não é **catastroficamente** mais lento que o disco? | `results.jsonl`+`BENCHMARKS.md`: p50/p99 lado-a-lado, mesma janela, ≥3 rodadas, tags `idle`/`loaded`; contador de uso do pagefile-VRAM > 0. | Alívio de capacidade == 0 (nunca usado sob pressão) **ou** p99 > K× o do disco (K da 1ª medição) → não promove (PRD §14 #2c). |
+| ITEM-10 (RNF-1 soak) | #5 Availability + #6 Confiança calibrada | [`#5`](../../../methodology/kahneman-disciplines.md#disc-5) · [`#6`](../../../methodology/kahneman-disciplines.md#disc-6) | 72 h (3×24 h) sob Driver Verifier + fuzz sem BugCheck? | Logs do Driver Verifier + harness de soak; 3 rodadas registradas com `run-id`. | Qualquer BugCheck em qualquer rodada. |
+| ITEM-11 (RF-8 attestation) | #2 Counterfactual | [`#2`](../../../methodology/kahneman-disciplines.md#disc-2) | O driver attestation-signed **carrega** em build estável com test-signing OFF? | Carga em Windows 11 25H2 **26200.8655**, test-signing OFF, driver confiável por padrão (RNF-7). | Não carrega em build estável (política apertou) **e** custo WHCP não se justifica → abortar/park (PRD §14 #2a). |
+| RNF-5 (revogação c/ pagefile ativo, R8) | #5 Availability + #2 Counterfactual | [`#5`](../../../methodology/kahneman-disciplines.md#disc-5) · [`#2`](../../../methodology/kahneman-disciplines.md#disc-2) | Serviço executa DT-9 e só então `LeaseRelease`, sem pagefile ativo no disconnect? | `Invoke-RevokeDrill.ps1`: SCM stop/admin → pagefile off (ou reboot path) → destroy → wipe → `LeaseRelease` observado no log do broker; tempo pior caso medido. **Não** existe frame broker de revoke (C1/DT-19). | Pagefile ainda ativo após "release"; deadlock no teardown; broker ainda mostra lease após disconnect limpo. |
 
 ## Checklist de segurança (pré-implementação)
 
@@ -397,7 +394,7 @@ Decisões fechadas aqui que o PRD deixou como "Inferência: a fixar na SPEC".
   - `main.rs`: `#[cfg(windows)] fn main()` (SCM via `windows-service`) + `#[cfg(not(windows))] fn main(){ eprintln!("ramshared-winsvc: Windows-only"); std::process::exit(2); }` (DT-16).
 - **Dependências internas:** `ramshared-cuda` (RF-4), `ramshared-vram`, `ramshared-block` (`BlockBackend`+`VramBackend`), `ramshared-broker`.
 - **Dependências externas (só `[target.'cfg(windows)']`):** `windows`/`windows-sys` (IOCTL, `MmXxx` via handles, `Win32_PageFileUsage`), `windows-service` (SCM), `ntapi` ou FFI própria p/ `NtCreatePagingFile`/`RtlGetVersion`, `serde`+`toml`.
-- **Padrão de referência:** `ramshared-agent` (cliente do broker) + `ramshared-wsl2d/main.rs` (loop de I/O de VRAM em thread única, `run_nbd`); SPECv2 P2 (cross-compile gating).
+- **Padrão de referência:** `ramshared-agent` (cliente do broker) + `ramshared-wsl2d/main.rs` (loop de I/O de VRAM em thread única, `run_nbd`); memory-broker SPEC P2 (cross-compile gating).
 - **Testes requeridos:** `driver_link` roundtrip contra um **fake driver** (mock de `DeviceIoControl` em memória) — SQE READ/WRITE/FLUSH → backend em RAM → CQE; `broker_tenant` `LeaseRequest`→`Granted` contra fake broker; `ntpagefile` fallback (build não suportado → `Err` graciosa); `config` parse. (Puros, rodam no Linux; o bin é stub — DT-16.)
 - **Disciplina Kahneman:** ITEM-6/ITEM-7 no Mapa.
 
@@ -536,7 +533,7 @@ append-only, contexto automático (`benchmarks.md`).
 | `deny.toml` | Alterar | licenças `windows*`/`ntapi`/`toml` (MIT/Apache-2.0 — allow-list atual) |
 | `CLAUDE.md` | Alterar | novo tree `drivers/windows/` (padrão estrutural) |
 | `.claude/rules/*.md` | N/A | nenhuma convenção nova (kernel.md já cobre "mapear/desmapear explicitamente" — vale p/ MDL) |
-| `docs/methodology/KAHNEMAN-DISCIPLINES.md` | N/A | nenhuma disciplina/âncora nova |
+| `docs/methodology/kahneman-disciplines.md` | N/A | nenhuma disciplina/âncora nova |
 | `README.md`/`ARCHITECTURE.md` | Alterar | novo componente (Trilha 2); `MEMORY.md` entrada por ITEM |
 | `docs/INDEX.md` | Alterar | status da feature vira `SPEC` |
 
@@ -635,7 +632,7 @@ fail-closed (DT-20); drill kernel-page com residência confirmada (DT-21).
 
 **Gates cognitivos:**
 
-- [ ] Cada ITEM crítico aponta para `docs/methodology/KAHNEMAN-DISCIPLINES.md` (Mapa) com âncora exata
+- [ ] Cada ITEM crítico aponta para `docs/methodology/kahneman-disciplines.md` (Mapa) com âncora exata
 - [ ] Cada etapa crítica registra pergunta obrigatória, evidência mínima e abort trigger
 - [ ] Nenhuma linguagem vaga em ponto crítico sem critério observável
 - [ ] **Gate do R7 (ITEM-8):** o drill de página-de-kernel rodou e a `DEGRADATION-MATRIX` foi atualizada

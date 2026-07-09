@@ -2,17 +2,19 @@
 
 > SSDV3 STEP 2, generated from `docs/specs/no-milestone/memory-broker/PRD.md`. Slug: `memory-broker`.
 > Scope: **P0 (Measurement) + P1 (Linux-to-Linux Broker Core) + P2 (Windows Bridge + DCC Blender MVP)**.
-> Disciplines: Mandatory links to `docs/methodology/KAHNEMAN-DISCIPLINES.md` in every critical step.
+> Disciplines: Mandatory links to `docs/methodology/kahneman-disciplines.md` in every critical step.
 
 ## Audit Logs
 
-### Phase 0 & Phase 1 Audit (Step 2.5)
-- **1st Audit (on SPEC.md, 2026-06-09):** Result: no-go. Findings F1–F17 addressed in SPECv2.
-- **2nd Audit (on SPECv2, 2026-06-13):** Result: no-go. Findings R1–R6 addressed.
-- **3rd Audit (on SPECv2, 2026-06-13):** Result: no-go. Findings R7–R9 addressed.
-- **4th Audit (on SPECv2, 2026-06-13):** Result: go. Findings R10–R11 addressed.
+> **Modelo Advoq/RamShared:** um único `SPEC.md` por feature. Cada rodada do Passo 2.5 **revisa este arquivo in-place**; o histórico de texto antigo vive no `git log` — **não** há `SPECv2.md` / `SPECvN.md`.
 
-| Finding | Severity | Resolution in SPECv2 / SPEC.md |
+### Phase 0 & Phase 1 Audit (Step 2.5) — changelog deste `SPEC.md`
+- **1st Audit (2026-06-09):** Result: no-go. Findings F1–F17 → incorporados in-place.
+- **2nd Audit (2026-06-13):** Result: no-go. Findings R1–R6 → incorporados in-place.
+- **3rd Audit (2026-06-13):** Result: no-go. Findings R7–R9 → incorporados in-place.
+- **4th Audit (2026-06-13):** Result: go. Findings R10–R11 → incorporados in-place. **Candidato ativo = este arquivo.**
+
+| Finding | Severity | Resolution (this SPEC.md) |
 | --- | --- | --- |
 | F1 — Agent without `mkswap`: SwapOn flow unexecutable | CRITICAL | DT-16; ITEM-9 (`swap.rs::mk_swap`, loop order); drills updated |
 | F2 — Slice reassigned without zeroing leaks pages between tenants | CRITICAL | DT-17; `WMsg::ZeroExport` (ITEM-7), core wiring (ITEM-8); atomic boundary includes zero step |

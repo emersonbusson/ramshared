@@ -5,7 +5,7 @@
 //! movement per tick (at most 1 `MoveSlice` **or** `RevertMove`); under `pending_lease` the rebalancing
 //! steps (2/4) and round-robin (5) are suppressed (R9) — reservation is the core applying
 //! `GrantLease`→`lease()`. Revocation order by **owner's psi** (proxy; the pure `tick` does not have
-//! `used_kb` per slice — see SPECv2 ITEM-4).
+//! `used_kb` per slice — see SPEC ITEM-4).
 
 use std::cmp::Ordering;
 use std::time::{Duration, Instant};

@@ -38,3 +38,20 @@ jobs:
 
       - name: Testes (workspace; --ignored exigem GPU/root)
         run: cargo test --workspace
+
+  docs:
+    name: docs index + links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Specs index in sync
+        run: node tools/generate-docs-index.mjs --check
+
+      - name: Broken markdown links
+        run: node tools/check-broken-links.mjs --all

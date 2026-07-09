@@ -1,7 +1,7 @@
 # Degradation Matrix — RamShared
 
 > Modos de falha **raros mas caros** (Kahneman #5 — projetar pro pior caso).
-> Âncora da disciplina #5 em [`KAHNEMAN-DISCIPLINES.md`](../methodology/KAHNEMAN-DISCIPLINES.md).
+> Âncora da disciplina #5 em [`kahneman-disciplines.md`](../methodology/kahneman-disciplines.md).
 >
 > Prioridade = **probabilidade × impacto**. Cenário cosmético fica
 > "monitorado, não desenhado" (contra a paranoia — contra-exemplo #5 do doc).
@@ -30,6 +30,6 @@
 
 ## Referências
 
-- [`KAHNEMAN-DISCIPLINES.md`](../methodology/KAHNEMAN-DISCIPLINES.md) §5
-- [`vram-as-ram/SPECv3-WSL2.md`](../vram-as-ram/SPECv3-WSL2.md) §8 (erros), §9 (eviction/DEMOTE), §13 (recovery)
-- [`vram-as-ram/FASE0-FINAL.md`](../vram-as-ram/FASE0-FINAL.md) — a medida de 1,18 s que fundou a linha de eviction
+- [`kahneman-disciplines.md`](../methodology/kahneman-disciplines.md) §5
+- [`wsl2-cascade-swap/SPEC.md`](../specs/no-milestone/wsl2-cascade-swap/SPEC.md) §8 (erros), §9 (eviction/DEMOTE), §13 (recovery)
+- [`wsl2-fase0-final.md`](wsl2-fase0-final.md) — a medida de 1,18 s que fundou a linha de eviction

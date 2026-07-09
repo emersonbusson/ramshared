@@ -8,7 +8,7 @@
 
 Antes de alterar código:
 
-1. Leia este arquivo e `MEMORY.md`.
+1. Leia este arquivo e `MEMORY.md` (local-only / gitignored; se não existir, continue).
 2. Para módulos de kernel (LKM), HMM, Rust for Linux e CXL, leia [`.claude/rules/kernel.md`](.claude/rules/kernel.md).
 3. Se envolver mudança estrutural, manipulação de locks, alocação crônica ou novo hardware, siga a metodologia **SSDV3** ([`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md) e [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md)).
 4. Siga sempre [`.claude/rules/coding.md`](.claude/rules/coding.md) para formatação, checkpatch e testes.
@@ -19,8 +19,8 @@ Antes de alterar código:
 
 ## Metodologias Core
 
-- **Kahneman Disciplines**: Toda decisão arquitetural ou de lock/DMA deve seguir as 14 disciplinas de Kahneman ([`docs/methodology/KAHNEMAN-DISCIPLINES.md`](docs/methodology/KAHNEMAN-DISCIPLINES.md)). Evite decisões rápidas de "Sistema 1"; registre counterfactuals e triggers de reversão de patch explícitos.
-- **SSDV3**: Spec-Driven Development. Pipeline: PRD → SPEC → IMPL. Veja [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md).
+- **Kahneman Disciplines**: Toda decisão arquitetural ou de lock/DMA deve seguir as 18 disciplinas de Kahneman ([`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md)). Evite Sistema 1; counterfactuals e rollback numérico; #15–#18 para retry, fail-safe, idempotência e sunset de shim.
+- **SSDV3**: Spec-Driven Development. Pipeline: PRD → SPEC → (2.5 + `AUDIT-2.5.md`) → IMPL em `docs/specs/…`. Índice: [`docs/INDEX.md`](docs/INDEX.md). Veja [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md) e [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md). Docs: [`.claude/rules/documentation.md`](.claude/rules/documentation.md).
 
 ## Day-0 Policy
 

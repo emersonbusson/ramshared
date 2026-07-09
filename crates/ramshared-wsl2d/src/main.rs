@@ -489,7 +489,7 @@ fn run_nbd<P: VramProvider>(
 
     // --- multi-connection (H1): acceptor + reader/writer per connection feed the single
     // CUDA worker (this thread). The WMsg channel is the ONLY backpressure point (replica per
-    // connection is unbounded, DT-7). SPEC: docs/daemon-multiconn/SPECv3.md ---
+    // connection is unbounded, DT-7). SPEC: docs/specs/no-milestone/wsl2-cascade-swap/SPEC.md ---
     let tx_flags = NBD_FLAG_HAS_FLAGS | NBD_FLAG_SEND_FLUSH | NBD_FLAG_CAN_MULTI_CONN; // DT-10
     let device_size = backend.size_bytes();
     // ITEM-7: exports table. Single mode = 1 "default" export (empty name → index 0,

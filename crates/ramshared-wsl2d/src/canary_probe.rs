@@ -3,7 +3,7 @@
 //! to DEMOTE (streak/hysteresis) lives in [`crate::residency::ResidencySampler`];
 //! DEMOTE timing by latency is tracked per-request in the daemon.
 //!
-//! SPEC: `docs/008-vram-residency-canary/SPECv3.md` (DT-1, DT-2, DT-4, DT-12).
+//! SPEC: `docs/specs/no-milestone/wsl2-cascade-swap/SPEC.md` (DT-1, DT-2, DT-4, DT-12).
 //! `Cadence` is testable without GPU; the real round-trip of [`CanaryProbe`] requires
 //! VRAM (covered by `--ignored` test in the daemon composition).
 

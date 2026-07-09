@@ -6,7 +6,7 @@ prioridade" (SPEC-WSL2 v1).
 ## Context
 
 Objetivo: usar VRAM ociosa como memória do sistema no WSL2/GPU-PV (RTX 2060). A
-Fase 0 ([`../vram-as-ram/FASE0-FINAL.md`](../vram-as-ram/FASE0-FINAL.md)) mediu em
+Fase 0 ([`../reliability/wsl2-fase0-final.md`](../reliability/wsl2-fase0-final.md)) mediu em
 GPU real:
 
 - Eviction WDDM: dado **sobrevive** (hash íntegro), mas uma leitura 4K sob VRAM
@@ -47,5 +47,5 @@ Reverter para swap VHDX-only se, num re-teste de 3 rodadas, o p99 de leitura do
 tier VRAM sob pressão real exceder o p99 do VHDX **e** o canário (§9) falhar em
 detectar a eviction antes de qualquer divergência de hash.
 
-Links: [`../vram-as-ram/SPECv3-WSL2.md`](../vram-as-ram/SPECv3-WSL2.md) §1, §9 ·
+Links: [`../specs/no-milestone/wsl2-cascade-swap/SPEC.md`](../specs/no-milestone/wsl2-cascade-swap/SPEC.md) §1, §9 ·
 [`../reliability/DEGRADATION-MATRIX.md`](../reliability/DEGRADATION-MATRIX.md).

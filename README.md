@@ -38,6 +38,8 @@ Se você deseja colaborar com o projeto, exigimos adesão estrita ao rigor cient
 *   **Decisões com Counterfactuals:** Cada alteração na gerência de locks, DMA ou concorrência deve vir acompanhada da justificativa de qual cenário alternativo pior seria gerado se a lógica não existisse.
 *   **Rollback Triggers Numéricos:** Todo commit estrutural deve conter um gatilho de reversão baseado em métrica numérica (ex: *"Rollback se a latência exceder 50us sob concorrência de 8 threads"*).
 *   **Verificação Adversarial:** Desenvolvemos focados em testar o pior cenário possível (estresse térmico de barramento, resets de GPU, concorrência assimétrica). Nosso objetivo é manter 0 falhas em testes de soak contínuos de 72 horas.
+*   **SSDV3** para mudança estrutural: PRD → SPEC → IMPL em [`docs/specs/`](docs/specs/) — índice [`docs/INDEX.md`](docs/INDEX.md); prompts em [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md).
+*   **Higiene de docs:** após criar/alterar specs, `./scripts/docs-check.sh`.
 
 Se você está disposto a trabalhar sob esta disciplina de engenharia de alta confiabilidade, leia o guia de contribuição e envie seu PR.
 
@@ -85,6 +87,8 @@ To maintain this codebase for production-grade reliability, contributors must ad
 1.  **Counterfactual Decision-Making:** Every PR modifying concurrency, locks, or hardware interaction must document its counterfactual case (why this logic is the only path that prevents worst-case failure).
 2.  **Measurable Commit Triggers:** All non-trivial commits must include a `Rollback trigger:` line specifying a measurable performance degradation metric that warrants a reversion.
 3.  **Adversarial Quality Gating:** We build for the worst-case scenario. We target 0 regressions, 100% test coverage for critical lock paths, and 0 BugChecks during 72-hour soak tests.
+4.  **SSDV3 for structural work:** locks/DMA/uAPI/mm/new driver surfaces use PRD → SPEC → IMPL under [`docs/specs/…`](docs/specs/) — index at [`docs/INDEX.md`](docs/INDEX.md). Process: [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md).
+5.  **Docs hygiene:** after adding/changing specs, run `./scripts/docs-check.sh` (or `node tools/generate-docs-index.mjs`).
 
 If you are committed to this high-reliability engineering discipline, please review our [CONTRIBUTING.md](CONTRIBUTING.md) and join the development.
 

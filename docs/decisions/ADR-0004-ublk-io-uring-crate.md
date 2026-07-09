@@ -2,7 +2,7 @@
 
 **Status:** Accepted (2026-06-07). Exceção userspace à política zero-dep **só para
 `io-uring`** e **só no caminho Fase B/ublk**; ver Consequences. Roteado pelo
-`docs/ublk-backend/SPECv2.md` DT-1.
+DT-1 of this ADR (former path `docs/ublk-backend/SPECv2.md` retired).
 
 ## Context
 

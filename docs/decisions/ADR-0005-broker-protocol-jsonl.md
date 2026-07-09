@@ -2,7 +2,7 @@
 
 **Status:** Accepted (2026-06-13). Exceção userspace à política zero-dep **só para
 `serde`/`serde_json`** e **só no control-plane do broker** (crate `ramshared-broker`, Fase P1);
-ver Consequences. Roteado pelo [`docs/memory-broker/SPECv2.md`](../memory-broker/SPECv2.md) DT-1.
+ver Consequences. Roteado pelo [`docs/specs/no-milestone/memory-broker/SPEC.md`](../specs/no-milestone/memory-broker/SPEC.md) DT-1.
 
 ## Context
 

@@ -64,7 +64,7 @@ Honest baseline (no custom code). Compare with Phase B: **p50 241 µs (ublk) / 3
 
 ## 5. Arbiter Defaults Calibration (ITEM-4)
 
-Provisional defaults become final when these cells close (recalibration = update of SPECv2 + commit citing this file).
+Provisional defaults become final when these cells close (recalibration = update of SPEC + commit citing this file).
 
 | Parameter | Provisional Default | Calibrated Value | Base (cell) |
 | --- | --- | --- | --- |
@@ -76,7 +76,7 @@ Provisional defaults become final when these cells close (recalibration = update
 
 ## 6. Telemetry & Reconciliation (feature `broker-telemetry-reconciliation`)
 
-Numbers from session 2026-06-16 (`docs/broker-telemetry-reconciliation/`). Discipline #3 (number) + #1 (state).
+Numbers from session 2026-06-16 (`docs/specs/no-milestone/broker-telemetry-reconciliation/`). Discipline #3 (number) + #1 (state).
 
 | Item | Value | Unit | Environment | Date |
 | --- | --- | --- | --- | --- |

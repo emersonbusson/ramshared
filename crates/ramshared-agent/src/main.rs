@@ -8,7 +8,7 @@
 //! - **main**: owner of the write socket — sends `Psi`, dispatches commands to exec, drains the
 //!   results back as `SwapOnDone`/`SwapOffDone` and arms the watchdog (DT-18).
 //!
-//! SPEC: docs/memory-broker/SPECv2.md (ITEM-9). Without `unsafe`.
+//! SPEC: docs/specs/no-milestone/memory-broker/SPEC.md (ITEM-9). Without `unsafe`.
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;

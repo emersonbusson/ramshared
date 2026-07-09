@@ -2,7 +2,7 @@
 
 Revisão **trimestral** (ou ao fechar milestone) que checa se as disciplinas
 Kahneman e os ADRs estão vivos, não viraram ritual. É o mecanismo de
-auto-aplicação de [`../methodology/KAHNEMAN-DISCIPLINES.md`](../methodology/KAHNEMAN-DISCIPLINES.md).
+auto-aplicação de [`../methodology/kahneman-disciplines.md`](../methodology/kahneman-disciplines.md).
 
 ## Checklist
 

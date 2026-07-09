@@ -1,10 +1,10 @@
 //! ramshared-tier — Orchestration of the RamShared swap cascade in WSL2.
 //!
-//! SPEC: `docs/vram-as-ram/SPECv3-WSL2.md` §1 (architecture), §6.2 (`up`),
+//! SPEC: `docs/specs/no-milestone/wsl2-cascade-swap/SPEC.md` §1 (architecture), §6.2 (`up`),
 //! §9 (DEMOTE/residency).
 //!
 //! The cascade is priority-ordered using `swapon` settings, validated empirically in Phase 0
-//! (`docs/vram-as-ram/FASE0-FINAL.md`):
+//! (`docs/reliability/wsl2-fase0-final.md`):
 //!
 //! ```text
 //! memory pressure → zram (HOT, prio 200) → VRAM (COLD, prio 100) → VHDX (prio < 100)

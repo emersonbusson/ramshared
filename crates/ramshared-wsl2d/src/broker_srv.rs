@@ -4,7 +4,7 @@
 //! that the IO layer ([`spawn_broker`]) executes — send `Msg` to the session, close session, request
 //! the worker to zero a slice (DT-17), or log (RF-B4).
 //!
-//! SPEC: docs/memory-broker/SPECv2.md ITEM-8. Covers: sessions + Register/Psi/Ack/Status/Disconnect
+//! SPEC: docs/specs/no-milestone/memory-broker/SPEC.md ITEM-8. Covers: sessions + Register/Psi/Ack/Status/Disconnect
 //! (DT-18/20/22), reconciliation (DT-9/21), rebalancing with hygiene (DT-17), DemoteAll and **revocable
 //! lease (RF-B3/DT-19)**. The IO layer ([`spawn_broker`]) runs the core over TCP (DT-2/24);
 //! only the wiring in the daemon's `run_nbd` is missing (`--slices`/`--arbiter-listen`).
@@ -98,7 +98,7 @@ pub struct BrokerCore {
     pending_lease: Option<(TenantId, u64)>,   // requested lease, not yet granted (RF-B3)
     lease: Option<(u32, TenantId)>,           // active lease (id, holder); the id comes from the arbiter
     last_rebalance: Option<Instant>,
-    // Telemetria/reconciliação (SPECv2 broker-telemetry-reconciliation).
+    // Telemetria/reconciliação (SPEC broker-telemetry-reconciliation).
     slice_io: Arc<Vec<SliceIoCounters>>, // counters per slice (data-plane writes, RF-1/DT-1)
     vram: Arc<VramGauge>,                // VRAM gauge published by the worker (RF-3/DT-5)
     demotes_total: u64,                  // accumulated canary DEMOTEs (RF-4)
@@ -783,7 +783,7 @@ pub struct BrokerConfig {
     pub swap_prio: Option<i32>,
     pub arbiter: ArbiterConfig,
     pub tick: Duration,
-    /// Telemetry (SPECv2): counters per slice + VRAM gauge (shared with the worker).
+    /// Telemetry (SPEC): counters per slice + VRAM gauge (shared with the worker).
     pub slice_io: Arc<Vec<SliceIoCounters>>,
     pub vram: Arc<VramGauge>,
     pub tol_frac: f64,
