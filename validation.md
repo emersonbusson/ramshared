@@ -85,3 +85,31 @@
 - Workspace compilation exit code = 0.
 **Verdict:** ✅ works
 **Next action:** Push branch main to public origin repository.
+
+## 2026-07-09 — DEMOTE e2e (live cascade, action path)
+
+**What:** `scripts/p0/measure-cascade-demote.sh` on live WSL2 cascade (zram 1G p200 / nbd0 3G p100 / sdb 8G p-2).
+
+**Method:**
+- Hog 2200 MiB hold in cgroup `memory.max=512M` (pages spill zram→VRAM).
+- DEMOTE **action** = `swapoff /dev/nbd0` while `ramsharedd` serves read-back (same path as `spawn_swapoff`).
+- Canary **trigger** path covered by unit tests (`cargo test -p ramshared-wsl2d residency` → 12/12).
+- RESTORE: `swapon -p 100 /dev/nbd0` after verify.
+
+**Numbers:**
+| Metric | Value |
+| --- | --- |
+| nbd used before demote | **648 MiB** |
+| zram used before | **1023 MiB** |
+| swapoff duration | **14768 ms** (~14.8 s) |
+| nbd after demote | **absent** from `/proc/swaps` |
+| vhdx used after demote | **648 MiB** (was 5) |
+| hog integrity | **563200 pages OK, 0 corruption** |
+| restore | **swapon -p 100 /dev/nbd0 OK** |
+
+**RAW:** `/home/emdev/fase0/CASCADE-DEMOTE-20260709-163527.txt`
+
+**Verdict:** DEMOTE action path **PASS** on live host with active VRAM pages; A1 sink (VHDX) absorbed; cascade restored.
+
+**Not proven here:** real WDDM latency trigger on this run (unit-tested; free-floor would need GPU contention from host).
+

@@ -41,9 +41,27 @@ Verdict: with active pages in VRAM, DEMOTE **migrates to the lower tier (VHDX) w
 loss or corruption** while the daemon serves the read-back — validating the central mitigation for
 *latency-unsafe* (§9) at runtime.
 
+### Re-run 2026-07-09 (live 3 GiB cascade)
+
+In-repo harness: [`scripts/p0/measure-cascade-demote.sh`](../../scripts/p0/measure-cascade-demote.sh)
+on the live cushion (`zram 1G p200` / `nbd0 3G p100` / `sdb 8G p-2`), hog 2200 MiB /
+cgroup `memory.max=512M`, then RESTORE `swapon -p 100 /dev/nbd0`.
+
+| Metric | Measured |
+|---|---|
+| Active VRAM pages before | **648 MiB** |
+| `swapoff /dev/nbd0` (DEMOTE) | **OK in 14768 ms** |
+| `nbd0` after | **absent** from `/proc/swaps` |
+| VHDX absorbed | **5 → 648 MiB** |
+| Post-migration integrity | **563,200 pages intact, 0 corruption** |
+| Canary trigger unit tests | **12/12** (`residency` + ublk residency) |
+| Restore | **swapon -p 100 OK** (cascade back) |
+
+RAW: `/home/emdev/fase0/CASCADE-DEMOTE-20260709-163527.txt` · also [`validation.md`](../../validation.md).
+
 ## Coverage §14
 
 - §14.1 device round-trip — `wiring-smoke.sh` (write/readback 1 MiB in VRAM) ✔
 - §14.2 cascade mounting/unmounting — `up`/`down` (above) ✔
 - §14.3 confined spill — ✔ (above)
-- §14.4 DEMOTE — ✔ (above)
+- §14.4 DEMOTE — ✔ (above + 2026-07-09 re-run)
