@@ -202,3 +202,32 @@ Interpretation: with `D:\pagefile.sys` **in use**, killing the backend makes pag
 - Storage-stack B2 (no pagefile): **PASS** (no hang, no BSOD) on VM.
 - Pagefile-hot B2: **FAIL by Windows design (0x7A)** until DT-9 product path.
 - Host-real: still **forbidden**.
+
+## 2026-07-09 — All fronts (win11-drill VM)
+
+### Front A — winsvc pure DT-9
+- `teardown(..., pagefile_remove)` **fail-closed**: no callback / remove Err => no destroy.
+- Unit tests: **25/25** `ramshared-winsvc` including refuse paths.
+
+### Front B — DT-9 ordered kill lab
+| Step | Result |
+| --- | --- |
+| Pagefile D | a=32 u=7 (hot) |
+| CIM remove setting | OK |
+| REG drop D: | OK |
+| Pending delete file | True |
+| Usage still hot | **a=32 u=7** (Windows keeps PF until reboot) |
+| Kill backend | **REFUSED** |
+| Verdict | **PASS_DT9_REFUSE_KILL** |
+| New dump | none |
+
+### Front C — B2 pagefile-hot
+Previously: **BugCheck 0x7A / c0000185** (documented). Do not kill while hot.
+
+### Front D — B2 storage-only
+Earlier run PASS (no dump); one later run TIMEOUT (backend/disk lifecycle flaky without re-REGISTER). Not blocking DT-9 refuse proof.
+
+### Host-real
+Still **forbidden**.
+
+Artifacts: `C:\Users\emedev\ramshared-drill\artifacts-all-fronts\`

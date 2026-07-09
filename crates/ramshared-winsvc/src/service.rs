@@ -91,16 +91,34 @@ pub fn provision_after_lease(
 }
 
 /// Ordered teardown (DT-9). Never destroy disk while pagefile active.
+///
+/// `pagefile_remove`: when the secondary pagefile is still marked active, this
+/// callback **must** attempt OS removal. If it returns `Err`, teardown aborts
+/// **before** unregister/destroy (fail-closed). Returning `Ok` means the caller
+/// has evidence the pagefile is gone (or never was hot) — e.g. lab CIM remove +
+/// Usage check, or reboot-complete path.
 pub fn teardown(
     state: &mut ServiceState,
     disk: &mut dyn DiskControl,
     wipe: &mut dyn WipeVram,
     phases: &mut Vec<TeardownPhase>,
+    pagefile_remove: Option<&dyn Fn() -> Result<(), PagefileError>>,
 ) -> Result<(), ProvisionError> {
     if state.pagefile_active {
         phases.push(TeardownPhase::PagefileOff);
-        // Caller must have called ntpagefile::remove_secondary (or rebooted).
-        state.pagefile_active = false;
+        match pagefile_remove {
+            Some(rm) => {
+                rm().map_err(ProvisionError::Pagefile)?;
+                state.pagefile_active = false;
+            }
+            None => {
+                // No remover injected → refuse to clear the flag and stop.
+                return Err(ProvisionError::Disk(
+                    "DT-9: pagefile_active but no pagefile_remove callback (refuse destroy)"
+                        .into(),
+                ));
+            }
+        }
     }
     phases.push(TeardownPhase::Drain);
     if state.registered_queue {
@@ -264,7 +282,15 @@ mod tests {
         };
         let mut wipe = NopWipe;
         let mut phases = Vec::new();
-        teardown(&mut state, &mut disk, &mut wipe, &mut phases).unwrap();
+        let rm = || Ok(());
+        teardown(
+            &mut state,
+            &mut disk,
+            &mut wipe,
+            &mut phases,
+            Some(&rm),
+        )
+        .unwrap();
         assert_eq!(
             phases,
             [
@@ -277,5 +303,54 @@ mod tests {
         );
         assert!(!state.disk_created);
         assert!(!state.pagefile_active);
+    }
+
+    #[test]
+    fn teardown_refuses_destroy_without_pagefile_remover() {
+        let mut state = ServiceState {
+            lease: None,
+            disk_created: true,
+            pagefile_active: true,
+            registered_queue: true,
+        };
+        let mut disk = MemDisk {
+            created: true,
+            registered: true,
+        };
+        let mut wipe = NopWipe;
+        let mut phases = Vec::new();
+        let e = teardown(&mut state, &mut disk, &mut wipe, &mut phases, None).unwrap_err();
+        assert!(matches!(e, ProvisionError::Disk(_)));
+        assert!(disk.created); // destroy not called
+        assert!(state.pagefile_active);
+        assert_eq!(phases, [TeardownPhase::PagefileOff]);
+    }
+
+    #[test]
+    fn teardown_refuses_when_pagefile_remove_fails() {
+        let mut state = ServiceState {
+            lease: None,
+            disk_created: true,
+            pagefile_active: true,
+            registered_queue: true,
+        };
+        let mut disk = MemDisk {
+            created: true,
+            registered: true,
+        };
+        let mut wipe = NopWipe;
+        let mut phases = Vec::new();
+        let rm = || Err(PagefileError::Api("still hot".into()));
+        let e = teardown(
+            &mut state,
+            &mut disk,
+            &mut wipe,
+            &mut phases,
+            Some(&rm),
+        )
+        .unwrap_err();
+        assert!(matches!(e, ProvisionError::Pagefile(_)));
+        assert!(disk.created);
+        assert!(state.pagefile_active);
     }
 }
