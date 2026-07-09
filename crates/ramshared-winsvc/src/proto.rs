@@ -95,6 +95,7 @@ mod tests {
     #[test]
     fn golden_sqe_layout_little_endian() {
         // Fixed field order must match protocol.h packing (LE host).
+        // Serialize field-by-field (no transmute) so the crate stays `forbid(unsafe_code)`.
         let sqe = Sqe {
             tag: 0x0123_4567_89ab_cdef,
             op: OP_WRITE,
@@ -103,13 +104,13 @@ mod tests {
             len: 512,
             buf_slot: 3,
         };
-        let bytes = unsafe {
-            core::slice::from_raw_parts(
-                (&sqe as *const Sqe).cast::<u8>(),
-                core::mem::size_of::<Sqe>(),
-            )
-        };
-        assert_eq!(bytes.len(), 32);
+        let mut bytes = [0u8; 32];
+        bytes[0..8].copy_from_slice(&sqe.tag.to_le_bytes());
+        bytes[8..12].copy_from_slice(&sqe.op.to_le_bytes());
+        bytes[12..16].copy_from_slice(&sqe.flags.to_le_bytes());
+        bytes[16..24].copy_from_slice(&sqe.offset.to_le_bytes());
+        bytes[24..28].copy_from_slice(&sqe.len.to_le_bytes());
+        bytes[28..32].copy_from_slice(&sqe.buf_slot.to_le_bytes());
         // tag LE
         assert_eq!(&bytes[0..8], &0x0123_4567_89ab_cdefu64.to_le_bytes());
         // op = WRITE = 1
