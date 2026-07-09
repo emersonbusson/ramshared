@@ -92,6 +92,13 @@ To maintain this codebase for production-grade reliability, contributors must ad
 
 If you are committed to this high-reliability engineering discipline, please review our [CONTRIBUTING.md](CONTRIBUTING.md) and join the development.
 
+## Launch kit (social / Show & Tell)
+
+Ready-to-post copy (EN + PT-BR), channel pattern, registered metrics, and cascade diagram:
+
+*   [`docs/marketing/LAUNCH-KIT.md`](docs/marketing/LAUNCH-KIT.md)
+*   Diagram: [`docs/marketing/cascade-diagram.png`](docs/marketing/cascade-diagram.png)
+
 ## Getting Started
 
 ```bash
