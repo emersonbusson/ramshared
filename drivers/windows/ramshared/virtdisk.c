@@ -4,6 +4,9 @@
  */
 #include "virtdisk.h"
 
+static VIRTUAL_DISK g_ActiveDisk;
+static BOOLEAN g_Active;
+
 NTSTATUS
 VdCreate(_Out_ PVIRTUAL_DISK Disk, _In_ const RAMSHARED_DISK_PARAMS *Params)
 {
@@ -26,17 +29,67 @@ VdCreate(_Out_ PVIRTUAL_DISK Disk, _In_ const RAMSHARED_DISK_PARAMS *Params)
 	return STATUS_SUCCESS;
 }
 
+VOID
+VdDestroy(_Inout_ PVIRTUAL_DISK Disk)
+{
+	if (Disk == NULL) {
+		return;
+	}
+	InterlockedExchange(&Disk->state, VdStateNone);
+	RtlZeroMemory(Disk, sizeof(*Disk));
+}
+
+NTSTATUS
+VdActivate(_In_ const RAMSHARED_DISK_PARAMS *Params)
+{
+	NTSTATUS st;
+
+	if (g_Active) {
+		return STATUS_DEVICE_BUSY;
+	}
+	st = VdCreate(&g_ActiveDisk, Params);
+	if (!NT_SUCCESS(st)) {
+		return st;
+	}
+	g_Active = TRUE;
+	return STATUS_SUCCESS;
+}
+
+VOID
+VdDeactivate(VOID)
+{
+	if (!g_Active) {
+		return;
+	}
+	QUnregister(&g_ActiveDisk.queue);
+	VdDestroy(&g_ActiveDisk);
+	g_Active = FALSE;
+}
+
+PVIRTUAL_DISK
+VdGetActive(VOID)
+{
+	return g_Active ? &g_ActiveDisk : NULL;
+}
+
+BOOLEAN
+VdIsActive(VOID)
+{
+	return g_Active;
+}
+
 static VOID
 VdComplete(_In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb, UCHAR Status)
 {
 	Srb->SrbStatus = Status;
-	StorPortNotification(RequestComplete, DevExt, Srb);
+	if (DevExt != NULL) {
+		StorPortNotification(RequestComplete, DevExt, Srb);
+	}
 }
 
 static BOOLEAN
 VdHandleInquiry(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
-	/* Minimal INQUIRY: vendor RAMSHARED product VRAMDISK. */
 	UCHAR *buf;
 	ULONG len;
 
@@ -81,7 +134,6 @@ VdHandleReadCapacity(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 		return TRUE;
 	}
 	last_lba = (Disk->size_bytes / bs) - 1;
-	/* READ CAPACITY(10) layout when CDB is 0x25; 16-byte path for 0x9E. */
 	if (Srb->Cdb[0] == SCSIOP_READ_CAPACITY) {
 		if (Srb->DataTransferLength < 8) {
 			Srb->SrbStatus = SRB_STATUS_DATA_OVERRUN;
@@ -102,7 +154,10 @@ VdHandleReadCapacity(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 }
 
 VOID
-VdTranslateSrb(_Inout_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
+VdTranslateSrb(
+	_Inout_ PVIRTUAL_DISK Disk,
+	_In_ PVOID DevExt,
+	_Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
 	UCHAR op = Srb->Cdb[0];
 	NTSTATUS st;
@@ -139,7 +194,6 @@ VdTranslateSrb(_Inout_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 			len = 0;
 		} else if (op == SCSIOP_READ || op == SCSIOP_READ16) {
 			rop = RAMSHARED_OP_READ;
-			/* LBA/length decoded by QSubmit from CDB — simplified path: */
 			offset = 0;
 			len = Srb->DataTransferLength;
 		} else {
@@ -149,10 +203,13 @@ VdTranslateSrb(_Inout_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 		}
 		st = QSubmit(&Disk->queue, Srb, rop, offset, len);
 		if (st == STATUS_PENDING) {
+			Srb->SrbStatus = SRB_STATUS_PENDING;
 			return; /* completion via CQE path */
 		}
 		if (!NT_SUCCESS(st)) {
 			Srb->SrbStatus = SRB_STATUS_ERROR;
+		} else {
+			Srb->SrbStatus = SRB_STATUS_SUCCESS;
 		}
 		break;
 
@@ -161,13 +218,8 @@ VdTranslateSrb(_Inout_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 		break;
 	}
 
-	/*
-	 * Non-pending completions: StartIo path completes here.
-	 * QSubmit that returns PENDING leaves SRB inflight (DT-10).
-	 */
+	/* Sync path: complete SRB now (DT-10: never leave pending without queue). */
 	if (Srb->SrbStatus != SRB_STATUS_PENDING) {
-		/* Caller (HwStorStartIo) uses StorPortNotification after return
-		 * only when not pending — complete here for sync path.
-		 */
+		VdComplete(DevExt, Srb, Srb->SrbStatus);
 	}
 }

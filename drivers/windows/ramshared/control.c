@@ -31,9 +31,6 @@
 static PDEVICE_OBJECT g_ControlDevice = NULL;
 static UNICODE_STRING g_ControlName;
 static UNICODE_STRING g_ControlLink;
-static VIRTUAL_DISK g_Disk;
-static RAMSHARED_QUEUE g_Queue;
-static BOOLEAN g_DiskCreated = FALSE;
 
 NTSTATUS
 CtlCreateControlDevice(
@@ -107,7 +104,9 @@ CtlCleanup(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 {
 	UNREFERENCED_PARAMETER(DeviceObject);
 	/* Service handle closed → deterministic crash containment (DT-10). */
-	QTeardownOnCrash(&g_Queue);
+	if (VdIsActive()) {
+		QTeardownOnCrash(&VdGetActive()->queue);
+	}
 	Irp->IoStatus.Status = STATUS_SUCCESS;
 	Irp->IoStatus.Information = 0;
 	IoCompleteRequest(Irp, IO_NO_INCREMENT);
@@ -136,16 +135,28 @@ CtlDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 			status = STATUS_INVALID_PARAMETER;
 			break;
 		}
-		status = QRegister(&g_Queue, (const RAMSHARED_REGISTER *)buf, Irp->RequestorMode);
+		if (!VdIsActive()) {
+			status = STATUS_DEVICE_NOT_READY;
+			break;
+		}
+		status = QRegister(&VdGetActive()->queue,
+				   (const RAMSHARED_REGISTER *)buf,
+				   Irp->RequestorMode);
 		break;
 
 	case IOCTL_RAMSHARED_UNREGISTER_QUEUE:
-		QUnregister(&g_Queue);
+		if (VdIsActive()) {
+			QUnregister(&VdGetActive()->queue);
+		}
 		status = STATUS_SUCCESS;
 		break;
 
 	case IOCTL_RAMSHARED_COMMIT_AND_FETCH:
-		status = QCommitAndFetch(&g_Queue, Irp);
+		if (!VdIsActive()) {
+			status = STATUS_DEVICE_NOT_READY;
+			break;
+		}
+		status = QCommitAndFetch(&VdGetActive()->queue, Irp);
 		if (status == STATUS_PENDING) {
 			return STATUS_PENDING;
 		}
@@ -157,22 +168,12 @@ CtlDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 			status = STATUS_INVALID_PARAMETER;
 			break;
 		}
-		if (g_DiskCreated) {
-			status = STATUS_DEVICE_BUSY;
-			break;
-		}
-		status = VdCreate(&g_Disk, (const RAMSHARED_DISK_PARAMS *)buf);
-		if (NT_SUCCESS(status)) {
-			g_Disk.queue = g_Queue;
-			g_DiskCreated = TRUE;
-		}
+		status = VdActivate((const RAMSHARED_DISK_PARAMS *)buf);
 		break;
 
 	case IOCTL_RAMSHARED_DESTROY_DISK:
 		/* Must not destroy while pagefile active — enforced in service (DT-9). */
-		QUnregister(&g_Queue);
-		g_DiskCreated = FALSE;
-		RtlZeroMemory(&g_Disk, sizeof(g_Disk));
+		VdDeactivate();
 		status = STATUS_SUCCESS;
 		break;
 

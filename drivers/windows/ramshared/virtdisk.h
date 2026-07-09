@@ -22,4 +22,11 @@ typedef struct _VIRTUAL_DISK {
 } VIRTUAL_DISK, *PVIRTUAL_DISK;
 
 NTSTATUS VdCreate(_Out_ PVIRTUAL_DISK Disk, _In_ const RAMSHARED_DISK_PARAMS *Params);
-VOID VdTranslateSrb(_Inout_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb);
+VOID VdDestroy(_Inout_ PVIRTUAL_DISK Disk);
+VOID VdTranslateSrb(_Inout_ PVIRTUAL_DISK Disk, _In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb);
+
+/* Global active disk for control-device CREATE_DISK (single LUN MVP). */
+NTSTATUS VdActivate(_In_ const RAMSHARED_DISK_PARAMS *Params);
+VOID VdDeactivate(VOID);
+PVIRTUAL_DISK VdGetActive(VOID);
+BOOLEAN VdIsActive(VOID);
