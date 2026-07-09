@@ -174,7 +174,8 @@ Por desenho, não: o colchão de GPU é o **segundo** recurso (não o primeiro),
 | If you want… | Open |
 | --- | --- |
 | Simple Q&A | [`docs/FAQ.md`](docs/FAQ.md) |
-| Post on Reddit / X | [`docs/marketing/LAUNCH-KIT.md`](docs/marketing/LAUNCH-KIT.md) |
+| Post today (r/rust only) | [`docs/marketing/posts/01-reddit-rust-en.md`](docs/marketing/posts/01-reddit-rust-en.md) |
+| All social posts (1 file each) | [`docs/marketing/posts/`](docs/marketing/posts/) |
 | Record a 40s demo | [`docs/marketing/DEMO.md`](docs/marketing/DEMO.md) |
 | Full architecture | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | Specs / process | [`docs/INDEX.md`](docs/INDEX.md) |
