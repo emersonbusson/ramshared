@@ -255,3 +255,41 @@ Artifacts: `C:\Users\emedev\ramshared-drill\artifacts-all-fronts\`
 
 ### Verdict
 **PASS_DT9_REBOOT_KILL** on VM. Complements earlier **PASS_DT9_REFUSE_KILL** (hot refuse).
+
+## 2026-07-09 — SCM lab + ITEM-8 gate reassess (win11-drill)
+
+### 1) SCM `RamSharedWinSvc` (C# lab, Framework csc)
+- Binary: `C:\ramshared\bin\RamSharedWinSvc.exe` (orchestrates Start/Stop-RamSharedLab).
+- `sc create ... start= delayed-auto` → **StartType=Automatic**.
+- After reboot: **BE=True**, **DISK N=1 64MiB** (backend auto-started via service OnStart).
+- Stop path: DT-9 via `Stop-RamSharedLab` (refuse if PF hot).
+
+### 2) Autostart
+| Metric | Value |
+| --- | --- |
+| Boot | 2026-07-09 22:11:57 |
+| Service StartType | **Automatic** (delayed) |
+| Backend after boot | **True** |
+| Disk after boot | **N=1 67108864** |
+| New dump on stop | **False** |
+
+### 3) ITEM-8 scorecard
+| Gate | Result |
+| --- | --- |
+| Format + smoke | PASS |
+| DT-21 residency Usage>0 | PASS |
+| KPD 3/3 | PASS |
+| DT-9 refuse hot kill | PASS |
+| DT-9 reboot unload + kill | PASS |
+| B2 pagefile-hot | FAIL 0x7A (by design; DT-9 mitigates) |
+| Lab SCM + delayed auto-start | **PASS_LAB_SCM** |
+| Product CUDA winsvc on host | NOT DONE |
+| B1 surprise-remove drill | NOT DONE |
+| **Host-real driver load** | **STILL FORBIDDEN** |
+
+### Gate decision (honest)
+ITEM-8 **lab evidence is sufficient for VM operations**. Host-real remains blocked until:
+- product `ramshared-winsvc` CUDA path on a Windows box with GPU (or signed policy R9), and
+- B1 checkpoint drill executed.
+
+Artifacts: guest `C:\ramshared\bin\winsvc.log`, service `RamSharedWinSvc`.
