@@ -137,3 +137,36 @@
 - Do not promote host-real until B1/B2 product path is empirical.
 
 RAW: `C:\Users\emedev\ramshared-drill\agent-item8-pagefile-kpd.log`, artifacts-item8/
+
+## 2026-07-09 — ITEM-8 B2 lab on win11-drill (honest)
+
+**Target:** Hyper-V VM `win11-drill` only (not physical host).
+
+### Precondition
+- Pagefile `D:\pagefile.sys` **a=32 u=8 (25%)** with backend alive
+- Checkpoint `pre-b2-lab-20260709-175150`
+
+### Run A (driver before QTeardown RequestComplete fix)
+| Metric | Value |
+| --- | --- |
+| Kill backend | OK |
+| I/O post-kill | **READ_TIMEOUT_15s** (hang) |
+| New minidump | **false** |
+| Guest alive | **true** |
+| Verdict | **FAIL** reason=`io_hang` |
+
+### Run B (after fix: RequestComplete with real AdapterExt + Registered=FALSE early)
+| Metric | Value |
+| --- | --- |
+| Setup | NTPF OK, HOG, PF u=8 |
+| Kill | PSD session died mid-drill |
+| Boot after | **21:07:49** |
+| New minidump | **070926-27437-01.dmp** @ 21:08:12 |
+| Verdict | **FAIL / BSOD** under B2 with usage>0 |
+
+### Kahneman
+- #13: do **not** mark B2 PASS. Residency DT-21 remains PASS; B2 containment **not** proven.
+- #2: checkpoint available for restore if needed.
+- Host-real still **forbidden**.
+
+Artifacts: `C:\Users\emedev\ramshared-drill\artifacts-b2\`, guest minidump 27437.

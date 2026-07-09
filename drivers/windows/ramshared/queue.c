@@ -462,18 +462,29 @@ QTeardownOnCrash(_Inout_ PRAMSHARED_QUEUE Q)
 	KIRQL old;
 	UINT32 i;
 	PIRP pending;
+	PVOID adext;
+
+	/*
+	 * DT-10 / B2: complete inflight SRBs with error so the storage stack does
+	 * not hang waiting for a dead userspace backend. DeviceExtension must be
+	 * the real adapter ext (NULL was a bug — RequestComplete ignored → hang).
+	 */
+	adext = VdGetAdapterExt();
 
 	KeAcquireSpinLock(&Q->Lock, &old);
 	pending = Q->PendedFetch;
 	Q->PendedFetch = NULL;
+	/* Fail new QSubmit immediately even before QUnlockAll. */
+	Q->Registered = FALSE;
 
 	for (i = 0; i < RAMSHARED_MAX_QD; i++) {
 		if (Q->Inflight[i].InUse && Q->Inflight[i].Srb) {
 			PSCSI_REQUEST_BLOCK srb = Q->Inflight[i].Srb;
 
 			srb->SrbStatus = SRB_STATUS_ERROR;
-			/* STATUS_DEVICE_NOT_CONNECTED analog for storage stack. */
-			StorPortNotification(RequestComplete, NULL, srb);
+			if (adext != NULL) {
+				StorPortNotification(RequestComplete, adext, srb);
+			}
 			Q->Inflight[i].InUse = FALSE;
 			Q->Inflight[i].Srb = NULL;
 		}
