@@ -170,3 +170,35 @@ RAW: `C:\Users\emedev\ramshared-drill\agent-item8-pagefile-kpd.log`, artifacts-i
 - Host-real still **forbidden**.
 
 Artifacts: `C:\Users\emedev\ramshared-drill\artifacts-b2\`, guest minidump 27437.
+
+## 2026-07-09 — B2 analysis + storage-only retest (win11-drill)
+
+### Root cause of BSOD (pagefile-hot kill)
+Minidump `070926-27437-01.dmp`:
+- **BugCheck 0x7A** `KERNEL_DATA_INPAGE_ERROR`
+- Parameter2 = **`0xC0000185`** (`STATUS_IO_DEVICE_ERROR`)
+
+Interpretation: with `D:\pagefile.sys` **in use**, killing the backend makes page-in I/O fail; if the faulting page is **kernel** (or non-recoverable), Windows bugchecks. This matches DEGRADATION-MATRIX B1/B2 risk and SPEC **DT-9** (pagefile must be off before destroy).
+
+### Code harden (teardown)
+- `QTeardownOnCrash`: snapshot SRBs under lock; `RequestComplete` **outside** spinlock with real `VdGetAdapterExt()`; `Registered=FALSE` first.
+- CLEANUP: `VdStateFailed` before teardown.
+- StartIo R/W: fail-fast if `VdStateFailed`.
+
+### Path S retest (storage-only, **no** pagefile on D)
+| Metric | Value |
+| --- | --- |
+| PF on D | **absent** |
+| Kill backend | OK |
+| I/O post-kill | READ_OK (cache) in ~9s — **no hang** |
+| New minidump | **false** |
+| Guest | alive |
+| PATH_S_PASS | **True** |
+
+### Path P (pagefile-hot)
+**Not re-run** after 0x7A proof. Mitigation = DT-9 ordered pagefile-off, not “fail I/O and hope”.
+
+### Verdict
+- Storage-stack B2 (no pagefile): **PASS** (no hang, no BSOD) on VM.
+- Pagefile-hot B2: **FAIL by Windows design (0x7A)** until DT-9 product path.
+- Host-real: still **forbidden**.
