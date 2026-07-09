@@ -12,7 +12,7 @@
   1) Snapshot PF_USE / disks / minidump timestamp
   2) Abort INCONCLUSIVO if D: (or target) pagefile usage <= 0
   3) Kill WinDriveBackend (lab stand-in for ramshared-winsvc crash)
-  4) Attempt I/O on the volume — expect failure, not hang
+  4) Attempt I/O on the volume - expect failure, not hang
   5) Wait bounded window; refuse if new minidump appears
   6) Optional restart backend (recovery probe)
 
@@ -102,7 +102,7 @@ Start-Sleep 2
 $still = Get-Process -Name WinDriveBackend -EA SilentlyContinue
 L "BACKEND_AFTER_KILL=$([bool]$still)"
 
-# I/O must fail or complete with error — must not hang forever
+# I/O must fail or complete with error - must not hang forever
 $ioOutcome = "UNKNOWN"
 $sw = [Diagnostics.Stopwatch]::StartNew()
 $job = Start-Job -ScriptBlock {
