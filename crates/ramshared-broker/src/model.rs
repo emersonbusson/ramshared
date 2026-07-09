@@ -44,10 +44,15 @@ pub struct PsiSample {
 }
 
 /// Tenant transport (chooses the NBD endpoint in `SwapOn`, DT-25).
+///
+/// `WinDrive` is lease-only (windows-swap-driver ITEM-3 / DT-7): no NBD endpoint,
+/// excluded from swap round-robin in `on_tick`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum TransportKind {
     NbdUnix,
     NbdTcp,
+    /// Windows StorPort path: lease budget only, never receives `SwapOn`.
+    WinDrive,
 }
 
 /// Revocable VRAM lease (RF-B3) — internal state of the broker, not serialized.
@@ -126,7 +131,11 @@ mod tests {
 
     #[test]
     fn transport_kind_roundtrips() {
-        for tk in [TransportKind::NbdUnix, TransportKind::NbdTcp] {
+        for tk in [
+            TransportKind::NbdUnix,
+            TransportKind::NbdTcp,
+            TransportKind::WinDrive,
+        ] {
             let back: TransportKind =
                 serde_json::from_str(&serde_json::to_string(&tk).unwrap()).unwrap();
             assert_eq!(tk, back);

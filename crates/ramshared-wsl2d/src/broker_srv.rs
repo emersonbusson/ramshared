@@ -191,6 +191,8 @@ impl BrokerCore {
                 .nbd_tcp
                 .clone()
                 .map(|(host, port)| NbdEndpoint::Tcp { host, port }),
+            // WinDrive is lease-only (SPEC windows-swap-driver DT-7); no NBD endpoint.
+            TransportKind::WinDrive => None,
         }
     }
 
@@ -572,10 +574,11 @@ impl BrokerCore {
 
     fn on_tick(&mut self, now: Instant, out: &mut Vec<Outbound>) {
         // DT-20: only present tenants; only Free slices or slices with a present owner.
+        // WinDrive / lease-only transports are excluded from swap round-robin (DT-7).
         let present: Vec<TenantView> = self
             .tenants
             .iter()
-            .filter(|(_, t)| t.present)
+            .filter(|(_, t)| t.present && t.transport != TransportKind::WinDrive)
             .map(|(id, t)| TenantView {
                 id: *id,
                 psi: t.psi,
@@ -1607,5 +1610,88 @@ mod tests {
         assert_eq!(n_leased(&c), 1);
         c.handle(CoreEvent::Disconnected(10), Instant::now()); // holder cai
         assert_eq!(n_leased(&c), 0); // lease released (DT-19)
+    }
+
+    fn reg_transport(
+        c: &mut BrokerCore,
+        sid: usize,
+        name: &str,
+        transport: TransportKind,
+    ) -> Vec<Outbound> {
+        c.handle(
+            CoreEvent::Msg(
+                sid,
+                Msg::Register {
+                    proto: PROTO_VERSION,
+                    tenant: name.into(),
+                    transport,
+                },
+            ),
+            Instant::now(),
+        )
+    }
+
+    /// SPEC windows-swap-driver DT-7: WinDrive never receives SwapOn (lease-only).
+    #[test]
+    fn windrive_nao_recebe_swap() {
+        let mut c = core(2);
+        reg_transport(&mut c, 10, "swap", TransportKind::NbdUnix);
+        reg_transport(&mut c, 20, "windrive", TransportKind::WinDrive);
+        psi(&mut c, 10, 0.0);
+        psi(&mut c, 20, 0.0);
+        let o = c.handle(CoreEvent::Tick, Instant::now());
+        let swapons: Vec<_> = o
+            .iter()
+            .filter_map(|x| match x {
+                Outbound::ToSession(sid, Msg::SwapOn { .. }) => Some(*sid),
+                _ => None,
+            })
+            .collect();
+        // Only the NbdUnix tenant is in the swap round-robin; both slices go to sid 10.
+        assert!(
+            swapons.iter().all(|&sid| sid == 10),
+            "WinDrive must not receive SwapOn; got {swapons:?}"
+        );
+        assert!(
+            !swapons.contains(&20),
+            "WinDrive tenant must be excluded from present"
+        );
+    }
+
+    /// SPEC windows-swap-driver DT-7: WinDrive can acquire a lease (revokes swap if needed).
+    #[test]
+    fn windrive_pode_lease() {
+        let mut c = core(1);
+        reg_transport(&mut c, 10, "swap", TransportKind::NbdUnix);
+        reg_transport(&mut c, 20, "windrive", TransportKind::WinDrive);
+        psi(&mut c, 10, 0.0);
+        psi(&mut c, 20, 0.0);
+        c.handle(CoreEvent::Tick, Instant::now()); // s0 → swap Active
+        assert_eq!(c.slice_map.get(0).unwrap().tenant, Some(1));
+        lease_req(&mut c, 20, SLICE);
+        let o = c.handle(CoreEvent::Tick, Instant::now());
+        assert!(
+            o.iter()
+                .any(|x| matches!(x, Outbound::ToSession(10, Msg::SwapOff { slice: 0 })))
+        );
+        c.handle(
+            CoreEvent::Msg(
+                10,
+                Msg::SwapOffDone {
+                    slice: 0,
+                    ok: true,
+                    detail: String::new(),
+                },
+            ),
+            Instant::now(),
+        );
+        c.handle(CoreEvent::ZeroDone(0, true), Instant::now());
+        let o = c.handle(CoreEvent::Tick, Instant::now());
+        assert!(
+            o.iter()
+                .any(|x| matches!(x, Outbound::ToSession(20, Msg::LeaseGranted { .. }))),
+            "WinDrive must receive LeaseGranted"
+        );
+        assert_eq!(c.slice_map.get(0).unwrap().state, SliceState::Leased);
     }
 }
