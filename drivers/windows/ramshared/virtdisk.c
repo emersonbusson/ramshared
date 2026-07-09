@@ -255,6 +255,12 @@ VdTranslateSrb(
 	case SCSIOP_WRITE16:
 	case SCSIOP_SYNCHRONIZE_CACHE:
 	case 0x91: /* SYNCHRONIZE CACHE(16) */
+		/* B2: backend gone / queue torn down — fail fast, do not hang. */
+		if (InterlockedCompareExchange(&Disk->state, 0, 0) ==
+		    (LONG)VdStateFailed) {
+			Srb->SrbStatus = SRB_STATUS_ERROR;
+			break;
+		}
 		if (op == SCSIOP_SYNCHRONIZE_CACHE || op == 0x91) {
 			rop = RAMSHARED_OP_FLUSH;
 			offset = 0;

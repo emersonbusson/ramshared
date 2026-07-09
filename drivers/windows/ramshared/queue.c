@@ -461,35 +461,49 @@ QTeardownOnCrash(_Inout_ PRAMSHARED_QUEUE Q)
 {
 	KIRQL old;
 	UINT32 i;
+	UINT32 nfail;
 	PIRP pending;
 	PVOID adext;
+	PSCSI_REQUEST_BLOCK failed[RAMSHARED_MAX_QD];
 
 	/*
 	 * DT-10 / B2: complete inflight SRBs with error so the storage stack does
-	 * not hang waiting for a dead userspace backend. DeviceExtension must be
-	 * the real adapter ext (NULL was a bug — RequestComplete ignored → hang).
+	 * not hang waiting for a dead userspace backend.
+	 *
+	 * Discipline:
+	 * - Registered=FALSE first so new QSubmit fails fast (STATUS_DEVICE_NOT_CONNECTED).
+	 * - Snapshot SRB pointers under the lock; RequestComplete **outside** the lock
+	 *   (StorPort may re-enter StartIo — deadlock if we hold Q->Lock).
+	 * - Never pass NULL DeviceExtension (ignored → hang). Use VdGetAdapterExt().
+	 * - Do not complete the same SRB twice (clear InUse before RequestComplete).
 	 */
 	adext = VdGetAdapterExt();
+	nfail = 0;
+	RtlZeroMemory(failed, sizeof(failed));
 
 	KeAcquireSpinLock(&Q->Lock, &old);
 	pending = Q->PendedFetch;
 	Q->PendedFetch = NULL;
-	/* Fail new QSubmit immediately even before QUnlockAll. */
 	Q->Registered = FALSE;
 
 	for (i = 0; i < RAMSHARED_MAX_QD; i++) {
 		if (Q->Inflight[i].InUse && Q->Inflight[i].Srb) {
-			PSCSI_REQUEST_BLOCK srb = Q->Inflight[i].Srb;
-
-			srb->SrbStatus = SRB_STATUS_ERROR;
-			if (adext != NULL) {
-				StorPortNotification(RequestComplete, adext, srb);
-			}
+			failed[nfail++] = Q->Inflight[i].Srb;
 			Q->Inflight[i].InUse = FALSE;
 			Q->Inflight[i].Srb = NULL;
 		}
 	}
 	KeReleaseSpinLock(&Q->Lock, old);
+
+	for (i = 0; i < nfail; i++) {
+		if (failed[i] == NULL) {
+			continue;
+		}
+		failed[i]->SrbStatus = SRB_STATUS_ERROR;
+		if (adext != NULL) {
+			StorPortNotification(RequestComplete, adext, failed[i]);
+		}
+	}
 
 	if (pending) {
 		if (IoSetCancelRoutine(pending, NULL) != NULL) {

@@ -76,9 +76,16 @@ CtlDispatchCleanup(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	if (DeviceObject != g_ControlDevice) {
 		return CtlForward(g_OrigCleanup, DeviceObject, Irp);
 	}
-	/* Service handle closed → deterministic crash containment (DT-10). */
+	/* Service handle closed → deterministic crash containment (DT-10 / B2). */
 	if (VdIsActive()) {
-		QTeardownOnCrash(&VdGetActive()->queue);
+		PVIRTUAL_DISK disk = VdGetActive();
+
+		/*
+		 * Mark disk failed before teardown so concurrent StartIo paths
+		 * prefer fail-closed over submitting into a dying queue.
+		 */
+		InterlockedExchange(&disk->state, (LONG)VdStateFailed);
+		QTeardownOnCrash(&disk->queue);
 	}
 	Irp->IoStatus.Status = STATUS_SUCCESS;
 	Irp->IoStatus.Information = 0;

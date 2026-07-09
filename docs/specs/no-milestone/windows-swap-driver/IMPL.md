@@ -24,7 +24,7 @@
 | Get-Disk LUN product | ✓ **N=1 RAMSHARE VRAMDISK 64 MiB** (2026-07-09 clean PnP) |
 | poolstress IOCTL ALLOC/FREE 1 GiB | ✓ ok=True (rodada anterior) |
 | Format NTFS + smoke file | ✓ **PASS** (2026-07-09): LUN 64 MiB, `format /fs:NTFS` OK, smoke file; backend `maxIo=1MiB` |
-| ITEM-8 residency DT-21 (pagefile-VRAM) | ✓ **residency PASS** (Usage 25%, KPD 3/3). **B2 lab FAIL**: kill backend with u>0 → I/O hang 15s (run A); after RequestComplete fix → **BSOD minidump 070926-27437** (run B). Host-real **forbidden**. |
+| ITEM-8 residency DT-21 (pagefile-VRAM) | ✓ residency PASS (Usage 25%). **B2 split:** storage-only kill **PASS** (no hang/BSOD); pagefile-hot kill **0x7A/c0000185** (documented). Fix: teardown outside lock + VdStateFailed. Host-real **forbidden** until DT-9 product path. |
 | ITEM-9 K (p99 VRAM vs disk) | ✗ harness OK; **K não inventado** (DT-13) |
 | ITEM-10 soak 72 h | ✗ script only |
 | ITEM-11 attestation | ✗ R9 org + no `.sys` |
