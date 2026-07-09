@@ -9,6 +9,13 @@ publish.workspace = true
 [dependencies]
 ramshared-vram = { path = "../ramshared-vram" }
 
+[target.'cfg(windows)'.dependencies.windows-sys]
+version = "0.59.0"
+features = [
+    "Win32_System_LibraryLoader",
+    "Win32_Foundation",
+]
+
 [lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"

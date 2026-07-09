@@ -20,6 +20,16 @@
 //! # Ok::<(), ramshared_cuda::CudaError>(())
 //! ```
 
+#[cfg(unix)]
+mod loader_unix;
+#[cfg(unix)]
+use loader_unix as loader;
+
+#[cfg(windows)]
+mod loader_win;
+#[cfg(windows)]
+use loader_win as loader;
+
 mod driver;
 mod ffi;
 mod vram_impl; // impl VramProvider/VramMemory p/ os tipos CUDA (RF-G1)

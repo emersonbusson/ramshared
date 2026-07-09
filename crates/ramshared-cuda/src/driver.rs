@@ -12,7 +12,7 @@
 use core::ffi::{CStr, c_char, c_void};
 use core::fmt;
 
-use crate::ffi::{self, CUDA_SUCCESS, CuContext, CuDevice, CuDevicePtr, CuResult, RTLD_NOW, Syms};
+use crate::ffi::{CUDA_SUCCESS, CuContext, CuDevice, CuDevicePtr, CuResult, Syms};
 
 /// Erros da camada CUDA. Sem `panic`/`unwrap` em produção (regra `coding.md`).
 #[derive(Debug)]
@@ -54,8 +54,8 @@ struct Lib(*mut c_void);
 impl Drop for Lib {
     fn drop(&mut self) {
         if !self.0.is_null() {
-            // SAFETY: self.0 veio de um dlopen bem-sucedido e não foi fechado antes.
-            unsafe { ffi::dlclose(self.0) };
+            // SAFETY: self.0 veio de um open bem-sucedido e não foi fechado antes.
+            unsafe { crate::loader::close(self.0) };
         }
     }
 }
@@ -66,6 +66,7 @@ pub struct Cuda {
     syms: Syms,
 }
 
+#[cfg(unix)]
 const CANDIDATES: &[&CStr] = &[
     c"libcuda.so.1",
     c"/usr/lib/wsl/lib/libcuda.so.1",
@@ -74,20 +75,25 @@ const CANDIDATES: &[&CStr] = &[
     c"/usr/lib/x86_64-linux-gnu/libcuda.so.1",
 ];
 
+#[cfg(windows)]
+const CANDIDATES: &[&CStr] = &[
+    c"nvcuda.dll",
+];
+
 impl Cuda {
     /// Carrega a `libcuda` (candidatos WSL2 + padrão) e roda `cuInit(0)`.
     pub fn load() -> Result<Self, CudaError> {
         let mut handle: *mut c_void = core::ptr::null_mut();
         for cand in CANDIDATES {
             // SAFETY: cand é um &CStr válido (null-terminated).
-            let h = unsafe { ffi::dlopen(cand.as_ptr(), RTLD_NOW) };
+            let h = unsafe { crate::loader::open(cand.as_ptr()) };
             if !h.is_null() {
                 handle = h;
                 break;
             }
         }
         if handle.is_null() {
-            return Err(CudaError::Load(dl_error()));
+            return Err(CudaError::Load(crate::loader::error()));
         }
         let lib = Lib(handle);
 
@@ -301,7 +307,7 @@ impl Drop for DeviceMem<'_, '_> {
 /// ponteiro de função C de tamanho de ponteiro.
 unsafe fn load_sym<T: Copy>(handle: *mut c_void, name: &CStr) -> Result<T, CudaError> {
     // SAFETY: contrato da função (handle válido, name null-terminated).
-    let sym = unsafe { ffi::dlsym(handle, name.as_ptr()) };
+    let sym = unsafe { crate::loader::sym(handle, name.as_ptr()) };
     if sym.is_null() {
         return Err(CudaError::Symbol(name.to_string_lossy().into_owned()));
     }
@@ -343,15 +349,4 @@ fn err_string(syms: &Syms, r: CuResult) -> String {
     format!("CUresult={r}")
 }
 
-fn dl_error() -> String {
-    // SAFETY: dlerror não recebe args; retorna ptr nul ou C-string estática.
-    let err = unsafe { ffi::dlerror() };
-    if err.is_null() {
-        "nenhuma libcuda encontrada".to_string()
-    } else {
-        // SAFETY: err é C-string válida do loader.
-        unsafe { CStr::from_ptr(err) }
-            .to_string_lossy()
-            .into_owned()
-    }
-}
+// dl_error foi removida pois o erro agora vem de crate::loader::error().
