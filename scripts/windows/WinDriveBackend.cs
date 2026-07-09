@@ -142,8 +142,10 @@ static class WinDriveBackend
     {
         ulong sizeBytes = args.Length > 0 ? ulong.Parse(args[0]) : 64UL * 1024 * 1024;
         int seconds = args.Length > 1 ? int.Parse(args[1]) : 30;
-        const uint qd = 8;
-        const uint maxIo = 65536; // 64 KiB; data area 8*64K=512K < 4MiB MDL cap
+        // Format/NTFS issues transfers up to ~1 MiB. Driver MTL = RAMSHARED_MAX_IO (1 MiB).
+        // Data area must stay <= 4 MiB MDL cap (DT-23): qd * maxIo <= 4 MiB.
+        const uint qd = 4;
+        const uint maxIo = 1048576; // 1 MiB; data area 4*1MiB = 4 MiB
         const uint bs = 4096;
         const uint magic = 0x52535244;
         const int hdr = 16, sqe = 32, cqe = 16;
