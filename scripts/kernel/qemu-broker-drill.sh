@@ -17,10 +17,10 @@
 # SPEC: docs/memory-broker/SPECv2.md ITEM-11.
 set -euo pipefail
 
-BZ="${1:-/home/emdev/WSL2-Linux-Kernel/arch/x86/boot/bzImage}"
+BZ="${1:-$HOME/WSL2-Linux-Kernel/arch/x86/boot/bzImage}"
 DAEMON="${2:-$(dirname "$0")/../../target/debug/ramsharedd}"
 AGENT="${3:-$(dirname "$0")/../../target/debug/ramshared-agent}"
-NBD_KO="${4:-/home/emdev/WSL2-Linux-Kernel/drivers/block/nbd.ko}"
+NBD_KO="${4:-$HOME/WSL2-Linux-Kernel/drivers/block/nbd.ko}"
 
 SLICES=2
 SLICE_MB=32

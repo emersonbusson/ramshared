@@ -36,9 +36,9 @@
 # saida 0 = experimento produziu veredito; 1 = inconclusivo (setup nao completou).
 set -euo pipefail
 
-BZ="${1:-/home/emdev/WSL2-Linux-Kernel/arch/x86/boot/bzImage}"
+BZ="${1:-$HOME/WSL2-Linux-Kernel/arch/x86/boot/bzImage}"
 DAEMON="${2:-$(dirname "$0")/../../target/debug/ramsharedd}"
-UBLK_KO="${3:-/home/emdev/WSL2-Linux-Kernel/drivers/block/ublk_drv.ko}"
+UBLK_KO="${3:-$HOME/WSL2-Linux-Kernel/drivers/block/ublk_drv.ko}"
 # A vitima roda dentro de um cgroup v2 com memory.max baixo. Isso forca o reclaim a
 # DESCARTAR o swapcache limpo de A (senao a releitura e servida da RAM, nunca tocando o
 # device morto). O reclaim de memcg e cirurgico: espreme SO a vitima, o PID 1 fica intacto

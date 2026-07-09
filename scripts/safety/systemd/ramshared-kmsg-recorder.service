@@ -8,7 +8,7 @@ RequiresMountsFor=/mnt/c
 [Service]
 Type=simple
 User=root
-ExecStart=/home/emdev/codespace/ramshared/scripts/safety/kmsg-recorder.sh
+ExecStart=@SCRIPTS_PATH@/kmsg-recorder.sh
 Restart=on-failure
 RestartSec=5
 # Best-effort: se /mnt/c cair, nao derruba o boot.

@@ -16,6 +16,8 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 SD="$REPO/scripts/safety/systemd"
+BIN_PATH="${RAMSHARED_BIN:-$REPO/target/debug/ramsharedd}"
+SCRIPTS_PATH="$REPO/scripts/safety"
 
 [ "$(id -u)" -eq 0 ] || { echo "rode com sudo" >&2; exit 1; }
 
@@ -26,8 +28,13 @@ install -m 0644 "$SD/10-ramshared-persistent.conf" \
 echo "  [ok] journald drop-in (persistencia)"
 
 for unit in ramshared-kmsg-recorder.service ramshared-postmortem.service ramsharedd.service; do
-  install -m 0644 "$SD/$unit" "/etc/systemd/system/$unit"
-  echo "  [ok] $unit"
+  # Substitui os marcadores de caminhos absolutos dinamicamente
+  sed -e "s|@REPO_PATH@|$REPO|g" \
+      -e "s|@SCRIPTS_PATH@|$SCRIPTS_PATH|g" \
+      -e "s|@BINARY_PATH@|$BIN_PATH|g" \
+      "$SD/$unit" > "/etc/systemd/system/$unit"
+  chmod 0644 "/etc/systemd/system/$unit"
+  echo "  [ok] $unit (gerado dinamicamente em /etc/systemd/system/)"
 done
 
 # ublk_drv no boot (o daemon precisa; carregar o modulo e' inofensivo).
