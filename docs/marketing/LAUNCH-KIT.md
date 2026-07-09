@@ -4,6 +4,39 @@
 > **Rule (Kahneman #3):** every number below must already live in `docs/reliability/*` or `docs/BENCHMARKS.md`. If you change a number, update the source first, then this kit.
 > **Repo:** https://github.com/emersonbusson/ramshared
 
+---
+
+## START HERE — Today’s post only (r/rust)
+
+Do **only** this checklist. Do not open X/LinkedIn today.
+
+| Step ID | Action | Copy ID (what to paste) |
+| --- | --- | --- |
+| **S0** | Open this file on GitHub or locally | — |
+| **S1** | Go to https://www.reddit.com/r/rust → **Create Post** → type **Text** | — |
+| **S2** | Subreddit must be **r/rust** | — |
+| **S3** | Paste **title** → use **`T-EN-1`** below | **T-EN-1** |
+| **S4** | Paste **body** → use **`B-EN-1`** below | **B-EN-1** |
+| **S5** | Attach image → file **`IMG-1`** = `docs/marketing/cascade-diagram.png` | **IMG-1** |
+| **S6** | Flair (if list shows it) → **Show & Tell** | **FLAIR-1** |
+| **S7** | Click **Post** | — |
+| **S8** | **Stop.** Close the tab. Nothing else today. | — |
+
+### Quick paste map (r/rust today)
+
+| Copy ID | What it is | Where in this file |
+| --- | --- | --- |
+| **T-EN-1** | Title (English) | § English → Reddit — r/rust → **Title** |
+| **B-EN-1** | Body (English) | § English → Reddit — r/rust → **Body** |
+| **IMG-1** | Cascade diagram PNG | `docs/marketing/cascade-diagram.png` |
+| **FLAIR-1** | Reddit flair name | `Show & Tell` (skip if r/rust has no flair) |
+
+Download **IMG-1**:  
+https://github.com/emersonbusson/ramshared/blob/main/docs/marketing/cascade-diagram.png  
+(→ raw/download, then upload on Reddit)
+
+---
+
 ## Assets
 
 | File | Use |
@@ -92,13 +125,15 @@ Avoid same-day spam across many subreddits (r/rust: no low-effort content).
 
 ## Reddit — r/rust
 
-**Title**
+### T-EN-1 — Title (paste into Reddit “Title” field)
 
 ```text
 [Show & Tell] RamShared — idle GPU VRAM as a cold swap tier on Linux/WSL2 (zram → VRAM → disk), with measured DEMOTE under WDDM pressure
 ```
 
-**Body** (attach `cascade-diagram.png`)
+### B-EN-1 — Body (paste into Reddit “Text” / markdown field)
+
+Attach **IMG-1** (`cascade-diagram.png`) when Reddit asks for image / media.
 
 ```markdown
 I built **RamShared**: a Rust userspace stack that puts **idle GPU VRAM** into the Linux swap hierarchy on **WSL2/Linux**, without pretending VRAM is as safe as RAM.
