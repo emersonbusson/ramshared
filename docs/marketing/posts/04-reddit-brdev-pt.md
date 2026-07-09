@@ -35,7 +35,7 @@ Há **3 coisas** — não um bloco só.
 
 >>> COPY TITLE START
 
-[Show] RamShared — quando a RAM acaba, usa memória ociosa da GPU como colchão (Linux/WSL2) e devolve se a placa precisar
+[Show] RamShared — quando a RAM aperta, usa memória ociosa da GPU (Linux/WSL2) e devolve se a placa precisar
 
 >>> COPY TITLE END
 
@@ -48,7 +48,7 @@ Tudo entre START e END (números, comandos, limites, feedback, link) é **um ún
 
 >>> COPY BODY START
 
-**Quando a RAM acaba, usa a memória ociosa da placa de vídeo como colchão — e devolve se a GPU precisar.**
+**Quando a RAM aperta, o RamShared usa memória ociosa da placa de vídeo — e devolve se a GPU precisar.**
 
 Montei o **RamShared** (Rust, Linux/WSL2, NVIDIA): emprestar **memória ociosa da GPU** quando a RAM do sistema aperta, sem fingir que a memória da placa é tão segura/rápida quanto a RAM principal.
 
@@ -58,7 +58,7 @@ Compile, containers, mil abas. A RAM acaba. O PC engasga no **SSD**. Enquanto is
 
 ## Por que não “jogar todo o swap na GPU”?
 
-Quando o Windows recupera memória da GPU sob pressão, essa memória pode ficar **muito lenta** (medimos cerca de **1,2 s** numa leitura pequena no pior caso). Se isso for o *primeiro* recurso de emergência, a máquina trava. Por isso a GPU é só o **segundo** colchão — e dá para **devolver**.
+Quando o Windows recupera memória da GPU sob pressão, essa memória pode ficar **muito lenta** (medimos cerca de **1,2 s** numa leitura pequena no pior caso). Se isso for o *primeiro* recurso de emergência, a máquina trava. Por isso a GPU entra só como **segunda opção** — e dá para **devolver**.
 
 ## Design (curto)
 
@@ -68,13 +68,13 @@ Precisa de memória?  →  1) RAM comprimida     — primeiro, rápido
                      →  3) disco (SSD/VHDX)   — último
 ```
 
-Se a latência disparar: **paramos de usar o colchão da GPU**, os dados vão pro disco, **os apps continuam**.
+Se a latência disparar: **paramos de usar a memória da GPU**, os dados vão pro disco, **os apps continuam**.
 
 ## Números (medidos)
 
 - Pior caso sob pressão da GPU no host: até **~1,2 s** numa leitura pequena.
 - Caminho mais rápido ~**241 µs** vs caminho antigo ~**326 µs**.
-- Stress: ~**500 MB** no colchão da GPU, ~**480 MB** de volta, **0 corrupção**.
+- Stress: ~**500 MB** na GPU, ~**480 MB** de volta, **0 corrupção**.
 
 ## Experimentar
 
@@ -93,7 +93,7 @@ swapon --show   # sucesso ≈ três linhas
 
 ## Feedback
 
-1. Colchão secundário + devolver vs outras abordagens.
+1. GPU como segunda opção + devolver vs outras abordagens.
 2. O que falta para “só funciona”.
 3. Onde a segurança ainda parece frágil.
 

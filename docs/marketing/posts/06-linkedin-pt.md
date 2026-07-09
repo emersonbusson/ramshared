@@ -26,13 +26,13 @@
 
 >>> COPY BODY START
 
-Quando a RAM acaba, usa a memória ociosa da placa de vídeo como colchão — e devolve se a GPU precisar.
+Quando a RAM aperta, usa memória ociosa da placa de vídeo — e devolve se a GPU precisar.
 
 Open source: RamShared (Rust, Linux/WSL2, NVIDIA).
 
 Problema: o PC engasga no SSD quando a RAM acaba, enquanto a memória da GPU muitas vezes está quase vazia.
 
-Por que não jogar tudo na GPU? Sob pressão medimos ~1,2s de stall em leitura pequena — péssimo como *primeiro* colchão. Por isso a GPU é o segundo; dá para devolver sem matar os apps.
+Por que não jogar tudo na GPU? Sob pressão medimos ~1,2s de stall em leitura pequena — péssimo como *primeira* opção. Por isso a GPU fica como segunda opção; dá para devolver sem matar os apps.
 
 Ordem: RAM comprimida → GPU ociosa → disco.
 

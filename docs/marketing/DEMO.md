@@ -22,10 +22,10 @@
 | Tempo | Tela | Fala |
 | --- | --- | --- |
 | 0–5s | Diagrama | “Sua GPU fica parada enquanto o PC engasga no SSD.” |
-| 5–12s | Terminal | “O RamShared empresta memória ociosa da placa como *colchão* quando a RAM aperta.” |
+| 5–12s | Terminal | “O RamShared usa memória ociosa da placa quando a RAM aperta.” |
 | 12–22s | `up` | “Um comando liga: memória comprimida primeiro, depois GPU, disco por último.” |
 | 22–32s | `swapon --show` | “Sucesso: três linhas — rápido, meio, lento.” |
-| 32–40s | Caixa de devolver | “Se o PC precisar da GPU, devolvemos o colchão. Os apps continuam.” |
+| 32–40s | Caixa de devolver | “Se o PC precisar da GPU, devolvemos essa memória. Os apps continuam.” |
 | 40–45s | URL | “Código aberto — github.com/emersonbusson/ramshared” |
 
 ---
@@ -68,6 +68,6 @@ https://github.com/emersonbusson/ramshared
 ```
 
 ```text
-GPU ociosa → colchão de memória quando a RAM aperta. Devolve se a placa precisar.
+GPU ociosa → ajuda quando a RAM aperta. Devolve se a placa precisar.
 https://github.com/emersonbusson/ramshared
 ```
