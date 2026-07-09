@@ -1,23 +1,23 @@
-//! Wire format JSON-lines do protocolo agente↔broker (RF-B1 / DT-1).
+//! JSON-lines wire format of the agent↔broker protocol (RF-B1 / DT-1).
 //!
-//! Um objeto JSON por linha (`\n`, UTF-8). Control-plane de baixa taxa (~1 msg/s/tenant),
-//! debugável com `nc`/`jq` (ADR-0005). O codec impõe teto de linha [`MAX_LINE_BYTES`] **antes**
-//! de alocar (anti-DoS, espelha `MAX_OPT_LEN` do handshake NBD).
+//! One JSON object per line (`\n`, UTF-8). Low-rate control-plane (~1 msg/s/tenant),
+//! debuggable with `nc`/`jq` (ADR-0005). The codec enforces line cap [`MAX_LINE_BYTES`] **before**
+//! allocating (anti-DoS, mirrors NBD handshake `MAX_OPT_LEN`).
 
 use std::io::{BufRead, Read, Write};
 
 use crate::model::{PsiSample, Slice, SliceId, TenantId, TransportKind};
 
-/// Versão do protocolo; `Register` com `proto != PROTO_VERSION` é recusado pelo broker (ITEM-8).
+/// Protocol version; `Register` with `proto != PROTO_VERSION` is rejected by the broker (ITEM-8).
 pub const PROTO_VERSION: u32 = 1;
-/// Teto anti-DoS por linha (64 KiB) — `read_msg` nunca aloca além disso.
+/// Anti-DoS line cap (64 KiB) — `read_msg` never allocates beyond this.
 pub const MAX_LINE_BYTES: usize = 64 * 1024;
 
-/// Mensagem do protocolo (internamente etiquetada por `type`, em snake_case).
+/// Protocol message (internally tagged by `type`, in snake_case).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Msg {
-    // agente/cliente → broker
+    // agent/client → broker
     Register {
         proto: u32,
         tenant: String,
@@ -46,7 +46,7 @@ pub enum Msg {
         lease: u32,
     },
     Status,
-    // broker → agente/cliente
+    // broker → agent/client
     Registered {
         tenant_id: TenantId,
     },
@@ -80,7 +80,7 @@ pub enum Msg {
     },
 }
 
-/// Endpoint NBD que o agente recebe no `SwapOn` (DT-25: Unix p/ tenant local, TCP p/ civm).
+/// NBD endpoint that the agent receives in `SwapOn` (DT-25: Unix for local tenant, TCP for civm).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NbdEndpoint {
@@ -88,7 +88,7 @@ pub enum NbdEndpoint {
     Tcp { host: String, port: u16 },
 }
 
-/// Entrada de `/proc/swaps` reportada pelo agente (reconciliação DT-9/DT-21; "mais ociosas" DT-19).
+/// Entry of `/proc/swaps` reported by the agent (reconciliation DT-9/DT-21; "most idle" DT-19).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SwapEntry {
     pub dev: String,
@@ -97,7 +97,7 @@ pub struct SwapEntry {
     pub used_kb: u64,
 }
 
-/// Estado de um tenant no `StatusReply` (RF-B4). `present=false` = sessão caída (DT-20).
+/// State of a tenant in `StatusReply` (RF-B4). `present=false` = session dropped (DT-20).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct TenantStatus {
     pub id: TenantId,
@@ -105,22 +105,22 @@ pub struct TenantStatus {
     pub psi: PsiSample,
     pub slices: Vec<SliceId>,
     pub present: bool,
-    /// Bytes servidos (acumulado) das slices `Active` deste tenant (telemetria RF-1).
+    /// Served bytes (accumulated) of the `Active` slices of this tenant (telemetria RF-1).
     #[serde(default)]
     pub bytes_served: u64,
 }
 
-/// Telemetria de memória do tenant reportada no `Psi` (RF-2). `swap_current` vem do cgroup v2
-/// (DT-10, opcional); `diskstats_io` = sectors lidos+escritos (×512) dos nbd devices que o tenant
-/// fez `swapon` (DT-11).
+/// Tenant memory telemetry reported in `Psi` (RF-2). `swap_current` comes from cgroup v2
+/// (DT-10, optional); `diskstats_io` = read+written sectors (×512) of the nbd devices that the tenant
+/// performed `swapon` on (DT-11).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TenantMem {
     pub swap_current: Option<u64>,
     pub diskstats_io: u64,
 }
 
-/// Contadores de IO por slice no `StatusReply` (telemetria RF-1; paralelo ao [`Slice`] p/ não tocar
-/// a máquina de estados — DT-2). `id` = índice do export `s{id}`.
+/// IO counters per slice in `StatusReply` (RF-1 telemetry; parallel to [`Slice`] to avoid touching
+/// the state machine — DT-2). `id` = index of export `s{id}`.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SliceIo {
     pub id: SliceId,
@@ -128,7 +128,7 @@ pub struct SliceIo {
     pub io_count: u64,
 }
 
-/// Serializa `msg` + `'\n'` e dá flush (uma mensagem por linha).
+/// Serializes `msg` + `'\n'` and flushes (one message per line).
 pub fn write_msg<W: Write>(w: &mut W, msg: &Msg) -> std::io::Result<()> {
     let mut line = serde_json::to_vec(msg)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -137,10 +137,10 @@ pub fn write_msg<W: Write>(w: &mut W, msg: &Msg) -> std::io::Result<()> {
     w.flush()
 }
 
-/// Lê uma linha (teto [`MAX_LINE_BYTES`]) e desserializa.
+/// Reads a line (up to [`MAX_LINE_BYTES`]) and deserializes it.
 ///
-/// `Ok(None)` em EOF limpo; `Err` em linha gigante, JSON inválido ou shape desconhecido.
-/// O `take(MAX_LINE_BYTES + 1)` garante que nunca lemos/alocamos além do teto (anti-DoS).
+/// `Ok(None)` on clean EOF; `Err` on giant line, invalid JSON or unknown shape.
+/// `take(MAX_LINE_BYTES + 1)` ensures we never read/allocate beyond the cap (anti-DoS).
 pub fn read_msg<R: BufRead>(r: &mut R) -> std::io::Result<Option<Msg>> {
     let mut buf = Vec::new();
     let n = r
@@ -148,7 +148,7 @@ pub fn read_msg<R: BufRead>(r: &mut R) -> std::io::Result<Option<Msg>> {
         .take(MAX_LINE_BYTES as u64 + 1)
         .read_until(b'\n', &mut buf)?;
     if n == 0 {
-        return Ok(None); // EOF limpo
+        return Ok(None); // clean EOF
     }
     let had_newline = buf.last() == Some(&b'\n');
     if !had_newline && buf.len() > MAX_LINE_BYTES {
@@ -173,7 +173,7 @@ mod tests {
     fn rt(msg: &Msg) -> Msg {
         let mut buf = Vec::new();
         write_msg(&mut buf, msg).unwrap();
-        assert_eq!(buf.last(), Some(&b'\n'), "deve terminar em uma única linha");
+        assert_eq!(buf.last(), Some(&b'\n'), "must end in a single line");
         let mut cur = Cursor::new(buf);
         read_msg(&mut cur).unwrap().unwrap()
     }
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn psi_mem_defaults_to_none() {
-        // Psi sem `mem` (forma anterior) → desserializa com mem=None (aditivo, DT-9).
+        // Psi without `mem` (previous format) → deserializes with mem=None (additive, DT-9).
         let line =
             b"{\"type\":\"psi\",\"sample\":{\"avg10\":0.0,\"avg60\":0.0,\"stall_us\":0},\"swaps\":[]}\n";
         let mut cur = Cursor::new(line.to_vec());
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn status_reply_slice_io_defaults_empty() {
-        // StatusReply sem `slice_io` → vetor vazio (aditivo).
+        // StatusReply without `slice_io` → empty vector (additive).
         let line = b"{\"type\":\"status_reply\",\"tenants\":[],\"slices\":[],\"last_rebalance_secs\":null}\n";
         let mut cur = Cursor::new(line.to_vec());
         match read_msg(&mut cur).unwrap().unwrap() {
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn oversize_line_is_err() {
-        // Linha > MAX_LINE_BYTES sem '\n' dentro do teto → Err (não tenta parsear gigante).
+        // Line > MAX_LINE_BYTES without '\n' within the cap → Err (does not try to parse giant).
         let mut data = vec![b'x'; MAX_LINE_BYTES + 100];
         data.push(b'\n');
         let mut cur = Cursor::new(data);

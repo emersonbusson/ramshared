@@ -1,12 +1,12 @@
-//! Watchdog de sessão do agente: se o broker para de responder (sem `Ack`/comando por
-//! `deadline`), a sessão é considerada morta e o agente faz cleanup + reconecta (DT-18/DT-27).
+//! Session watchdog of the agent: if the broker stops responding (no `Ack`/command for
+//! `deadline`), the session is considered dead and the agent performs cleanup + reconnects (DT-18/DT-27).
 //!
-//! Puro e com relógio injetado (`Instant`) para ser testável de forma determinística — o
-//! `main.rs` passa `Instant::now()`. Nada de I/O aqui.
+//! Pure and with injected clock (`Instant`) to be testable deterministically —
+//! `main.rs` passes `Instant::now()`. No I/O here.
 
 use std::time::{Duration, Instant};
 
-/// Acompanha o último sinal vindo do broker. `expired(now)` indica sessão morta.
+/// Tracks the last signal coming from the broker. `expired(now)` indicates the session is dead.
 #[derive(Debug, Clone, Copy)]
 pub struct Watchdog {
     deadline: Duration,
@@ -14,7 +14,7 @@ pub struct Watchdog {
 }
 
 impl Watchdog {
-    /// Cria o watchdog "tocado" em `now` (início da sessão conta como sinal fresco).
+    /// Creates the watchdog "touched" at `now` (session start counts as a fresh signal).
     pub fn new(deadline: Duration, now: Instant) -> Self {
         Self {
             deadline,
@@ -22,12 +22,12 @@ impl Watchdog {
         }
     }
 
-    /// Registra um sinal do broker (qualquer mensagem, inclusive `Ack`).
+    /// Registers a signal from the broker (any message, including `Ack`).
     pub fn touch(&mut self, now: Instant) {
         self.last = now;
     }
 
-    /// `true` se passou `deadline` desde o último sinal.
+    /// `true` if `deadline` has passed since the last signal.
     pub fn expired(&self, now: Instant) -> bool {
         now.duration_since(self.last) >= self.deadline
     }
@@ -60,7 +60,7 @@ mod tests {
         let mut wd = Watchdog::new(Duration::from_secs(90), t0);
         let t1 = t0 + Duration::from_secs(80);
         wd.touch(t1);
-        // 80s + 89s = 169s do início, mas só 89s do último toque → ainda vivo.
+        // 80s + 89s = 169s from start, but only 89s since last touch → still alive.
         assert!(!wd.expired(t1 + Duration::from_secs(89)));
         assert!(wd.expired(t1 + Duration::from_secs(90)));
     }

@@ -1,11 +1,11 @@
-//! ramshared-block — protocolo NBD fixed-newstyle + modelo de I/O do tier VRAM.
+//! ramshared-block — NBD fixed-newstyle protocol + I/O model of the VRAM tier.
 //!
-//! SPEC: `SPECv3-WSL2.md` §8 (atomicidade de I/O) e §10.1 (backend NBD).
+//! SPEC: `SPECv3-WSL2.md` §8 (I/O atomicity) and §10.1 (NBD backend).
 //!
-//! Núcleo **testável sem root**: parse/encode do wire NBD, a trait
-//! [`BlockBackend`] e o mapa de blocos em voo ([`Inflight`], §8.1). A fiação do
-//! `/dev/nbdX` (ioctl `NBD_SET_SOCK`/`NBD_DO_IT`) é um módulo separado (precisa de
-//! root + device) — esta lib é só o protocolo e a lógica.
+//! Core **testable without root**: parse/encode of the NBD wire, the trait
+//! [`BlockBackend`] and the map of inflight blocks ([`Inflight`], §8.1). The wiring of
+//! `/dev/nbdX` (ioctl `NBD_SET_SOCK`/`NBD_DO_IT`) is a separate module (requires
+//! root + device) — this lib is only the protocol and logic.
 #![forbid(unsafe_code)]
 
 pub mod handshake;

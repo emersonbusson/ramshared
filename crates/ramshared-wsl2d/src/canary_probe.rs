@@ -1,21 +1,21 @@
-//! Canário de residência dedicado (§9.4): região-canário separada da swap +
-//! sonda de conteúdo em cadência. **Lógica de I/O pura sobre a VRAM**: a decisão
-//! de DEMOTE (streak/histerese) vive no [`crate::residency::ResidencySampler`];
-//! a cronometragem de DEMOTE por latência segue por-request no daemon.
+//! Dedicated residency canary (§9.4): canary-region separated from swap +
+//! cadence content probe. **Pure I/O logic over VRAM**: the decision
+//! to DEMOTE (streak/hysteresis) lives in [`crate::residency::ResidencySampler`];
+//! DEMOTE timing by latency is tracked per-request in the daemon.
 //!
 //! SPEC: `docs/008-vram-residency-canary/SPECv3.md` (DT-1, DT-2, DT-4, DT-12).
-//! A `Cadence` é testável sem GPU; o round-trip real de [`CanaryProbe`] exige
-//! VRAM (coberto por teste `--ignored` na composição do daemon).
+//! `Cadence` is testable without GPU; the real round-trip of [`CanaryProbe`] requires
+//! VRAM (covered by `--ignored` test in the daemon composition).
 
 use ramshared_integrity::{Pattern, fill_block, verify_block};
 use ramshared_vram::{VramError, VramMemory};
 
-/// Tamanho do round-trip da sonda: 1 página (alinhado ao `BLOCK_SIZE`). DT-1.
+/// Size of the probe round-trip: 1 page (aligned to `BLOCK_SIZE`). DT-1.
 pub const CANARY_BYTES: usize = 4096;
-/// Cadência da sonda de conteúdo/free: 1 a cada `CANARY_EVERY` requests. DT-2.
+/// Cadence of content/free probe: 1 every `CANARY_EVERY` requests. DT-2.
 pub const CANARY_EVERY: u32 = 64;
 
-/// Cadência pura: dispara a cada `every` ticks e recomeça do zero.
+/// Pure cadence: fires every `every` ticks and restarts from zero.
 pub struct Cadence {
     every: u32,
     counter: u32,
@@ -26,7 +26,7 @@ impl Cadence {
         Self { every, counter: 0 }
     }
 
-    /// Conta um tick; retorna `true` (e zera) quando completa `every`.
+    /// Counts a tick; returns `true` (and resets) when it completes `every`.
     pub fn tick(&mut self) -> bool {
         self.counter += 1;
         if self.counter >= self.every {
@@ -38,9 +38,9 @@ impl Cadence {
     }
 }
 
-/// Sonda da região-canário. Possui a região de VRAM (`M: VramMemory`) dedicada
-/// (separada da swap, **não endereçável** por NBD). Reusa as sentinelas
-/// reprodutíveis do `ramshared-integrity` (DT-4).
+/// Canary-region probe. Has the dedicated VRAM region (`M: VramMemory`)
+/// (separated from swap, **not addressable** by NBD). Reuses the reproducible
+/// sentinels from `ramshared-integrity` (DT-4).
 pub struct CanaryProbe<M> {
     region: M,
     wbuf: Vec<u8>,
@@ -58,11 +58,11 @@ impl<M: VramMemory> CanaryProbe<M> {
         }
     }
 
-    /// Um ciclo de conteúdo: `fill(seq)` → `write_at(0)` → `read_at(0)` →
-    /// `verify(seq)`. O `seq` por ciclo também pega leitura stale. Retorna
-    /// `content_ok`; erro de VRAM é propagado (tratado como amostra degradada
-    /// pelo sampler, DT-11). A latência da sonda **não** é exportada (a detecção
-    /// por latência segue por-request no daemon).
+    /// A content cycle: `fill(seq)` → `write_at(0)` → `read_at(0)` →
+    /// `verify(seq)`. The per-cycle `seq` also catches stale reads. Returns
+    /// `content_ok`; VRAM error is propagated (treated as degraded sample
+    /// by the sampler, DT-11). Probe latency is **not** exported (latency-based
+    /// detection is done per-request in the daemon).
     pub fn check_content(&mut self) -> Result<bool, VramError> {
         self.seq += 1;
         fill_block(&mut self.wbuf, self.seq, Pattern::Random);
@@ -71,8 +71,8 @@ impl<M: VramMemory> CanaryProbe<M> {
         Ok(verify_block(&self.rbuf, self.seq, Pattern::Random))
     }
 
-    /// Zera a região-canário (teardown §11, DT-12). A região fica encapsulada
-    /// aqui, então o daemon delega o zero por este método.
+    /// Zeroes the canary-region (teardown §11, DT-12). The region is encapsulated
+    /// here, so the daemon delegates zeroing via this method.
     pub fn zero(&mut self) -> Result<(), VramError> {
         self.region.zero()
     }
@@ -97,8 +97,8 @@ mod tests {
         for _ in 0..3 {
             assert!(!cad.tick());
         }
-        assert!(cad.tick()); // 4º → dispara e reseta
-        // recomeça do zero: mais 3 falsos antes do próximo disparo
+        assert!(cad.tick()); // 4th → fires and resets
+        // restarts from zero: 3 more false before the next fire
         for _ in 0..3 {
             assert!(!cad.tick());
         }

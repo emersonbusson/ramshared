@@ -1,17 +1,17 @@
-//! Partição estática da VRAM em K slices + mapa dinâmico slice→tenant (RF-L1, RF-B3).
+//! Static partition of VRAM into K slices + dynamic slice→tenant map (RF-L1, RF-B3).
 //!
-//! Máquina de estados com transições ilegais rejeitadas (espelha `state.rs` do wsl2d). A
-//! sequência de movimento com higiene é `Active → drain → Draining → (SwapOffDone+ZeroDone) →
-//! release → Free` (DT-17); o lease usa `Free → lease → Leased → unlease → Free` (DT-19).
+//! State machine with illegal transitions rejected (mirrors `state.rs` of wsl2d). The
+//! sequence of movement with hygiene is `Active → drain → Draining → (SwapOffDone+ZeroDone) →
+//! release → Free` (DT-17); lease uses `Free → lease → Leased → unlease → Free` (DT-19).
 
 use crate::model::{Slice, SliceId, SliceState, TenantId};
 
-/// Mapa das slices da VRAM (dono único da verdade sobre o estado; sem locks — ITEM-8 é single-thread).
+/// Map of VRAM slices (sole owner of truth about the state; no locks — ITEM-8 is single-threaded).
 pub struct SliceMap {
     slices: Vec<Slice>,
 }
 
-/// Erro de transição/lookup de slice.
+/// Slice transition/lookup error.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SliceError {
     UnknownSlice,
@@ -19,7 +19,7 @@ pub enum SliceError {
 }
 
 impl SliceMap {
-    /// K slices de `slice_bytes`, offsets `i * slice_bytes`, todas `Free`.
+    /// K slices of `slice_bytes`, offsets `i * slice_bytes`, all `Free`.
     pub fn new(k: u16, slice_bytes: u64) -> Self {
         let slices = (0..k)
             .map(|i| Slice {
@@ -33,7 +33,7 @@ impl SliceMap {
         Self { slices }
     }
 
-    /// Soma dos tamanhos (capacidade total exportável).
+    /// Sum of sizes (total exportable capacity).
     pub fn total_bytes(&self) -> u64 {
         self.slices.iter().map(|s| s.len).sum()
     }
@@ -53,7 +53,7 @@ impl SliceMap {
             .ok_or(SliceError::UnknownSlice)
     }
 
-    /// `Free → Active(tenant)`. Err se não-`Free` (invariante de atomicidade; `Leased` recusa).
+    /// `Free → Active(tenant)`. Err if non-`Free` (atomicity invariant; `Leased` rejects).
     pub fn assign(&mut self, id: SliceId, tenant: TenantId) -> Result<(), SliceError> {
         let s = self.get_mut(id)?;
         if s.state != SliceState::Free {
@@ -64,7 +64,7 @@ impl SliceMap {
         Ok(())
     }
 
-    /// `Active → Draining`. Err se não-`Active`.
+    /// `Active → Draining`. Err if non-`Active`.
     pub fn drain(&mut self, id: SliceId) -> Result<(), SliceError> {
         let s = self.get_mut(id)?;
         if s.state != SliceState::Active {
@@ -74,7 +74,7 @@ impl SliceMap {
         Ok(())
     }
 
-    /// `Draining → Free` (só após `SwapOffDone{ok}` **e** `ZeroDone{ok}`, DT-17). Limpa o tenant.
+    /// `Draining → Free` (only after `SwapOffDone{ok}` **and** `ZeroDone{ok}`, DT-17). Cleans the tenant.
     pub fn release(&mut self, id: SliceId) -> Result<(), SliceError> {
         let s = self.get_mut(id)?;
         if s.state != SliceState::Draining {
@@ -85,7 +85,7 @@ impl SliceMap {
         Ok(())
     }
 
-    /// `Free → Leased` (reserva p/ lease, DT-19). Err se não-`Free`.
+    /// `Free → Leased` (reservation for lease, DT-19). Err if non-`Free`.
     pub fn lease(&mut self, id: SliceId) -> Result<(), SliceError> {
         let s = self.get_mut(id)?;
         if s.state != SliceState::Free {
@@ -95,7 +95,7 @@ impl SliceMap {
         Ok(())
     }
 
-    /// `Leased → Free` (release de lease). Err se não-`Leased`.
+    /// `Leased → Free` (lease release). Err if non-`Leased`.
     pub fn unlease(&mut self, id: SliceId) -> Result<(), SliceError> {
         let s = self.get_mut(id)?;
         if s.state != SliceState::Leased {
@@ -105,7 +105,7 @@ impl SliceMap {
         Ok(())
     }
 
-    /// Nomes de export NBD por slice: `("s0", len), ("s1", len), ...` (DT-3/DT-21).
+    /// NBD export names per slice: `("s0", len), ("s1", len), ...` (DT-3/DT-21).
     pub fn exports(&self) -> Vec<(String, u64)> {
         self.slices
             .iter()
@@ -126,7 +126,7 @@ mod tests {
         assert_eq!(m.total_bytes(), 192);
         for (i, s) in m.slices().iter().enumerate() {
             assert_eq!(s.id as usize, i);
-            assert_eq!(s.offset, i as u64 * 64); // offsets disjuntos, sem gap
+            assert_eq!(s.offset, i as u64 * 64); // disjoint offsets, no gap
             assert_eq!(s.len, 64);
             assert_eq!(s.state, SliceState::Free);
             assert_eq!(s.tenant, None);
@@ -152,12 +152,12 @@ mod tests {
         assert_eq!(m.get(0).unwrap().state, SliceState::Draining);
         m.release(0).unwrap();
         assert_eq!(m.get(0).unwrap().state, SliceState::Free);
-        assert_eq!(m.get(0).unwrap().tenant, None); // tenant limpo no release
+        assert_eq!(m.get(0).unwrap().tenant, None); // tenant cleaned on release
     }
 
     #[test]
     fn assign_on_active_is_rejected() {
-        // Fronteira de atomicidade: uma slice Active não pode ser re-atribuída.
+        // Atomicity boundary: an Active slice cannot be re-assigned.
         let mut m = SliceMap::new(1, 64);
         m.assign(0, 1).unwrap();
         assert_eq!(
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn assign_on_leased_is_rejected() {
-        // DT-19: slice reservada a lease não volta ao round-robin via assign.
+        // DT-19: slice reserved for lease does not return to round-robin via assign.
         let mut m = SliceMap::new(1, 64);
         m.lease(0).unwrap();
         assert_eq!(
@@ -193,11 +193,11 @@ mod tests {
     #[test]
     fn illegal_jumps_rejected() {
         let mut m = SliceMap::new(1, 64);
-        // Free não pode drenar nem liberar nem unlease.
+        // Free cannot drain, release, or unlease.
         assert!(matches!(m.drain(0), Err(SliceError::BadState { .. })));
         assert!(matches!(m.release(0), Err(SliceError::BadState { .. })));
         assert!(matches!(m.unlease(0), Err(SliceError::BadState { .. })));
-        // lease não pode ser drenada (não é Active).
+        // lease cannot be drained (not Active).
         m.lease(0).unwrap();
         assert!(matches!(m.drain(0), Err(SliceError::BadState { .. })));
     }

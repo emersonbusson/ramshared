@@ -1,5 +1,5 @@
-//! ramshared CLI — preflight (check/doctor) e orquestracao da cascata (up/down).
-//! Sem `unsafe`: o probe CUDA usa o crate auditado `ramshared-cuda` (Day-0).
+//! ramshared CLI — preflight (check/doctor) and cascade orchestration (up/down).
+//! No `unsafe`: the CUDA probe uses the audited `ramshared-cuda` crate (Day-0).
 #![forbid(unsafe_code)]
 
 use std::env;
@@ -570,8 +570,8 @@ fn probe_cuda() -> CudaProbe {
     }
 }
 
-/// Caminho informativo da libcuda (best-effort, so filesystem). A verificacao real
-/// de uso do CUDA e feita por `ramshared_cuda::Cuda::load()` (FFI auditada, isolada).
+/// Informative path of libcuda (best-effort, filesystem only). The actual verification
+/// of CUDA usage is done by `ramshared_cuda::Cuda::load()` (audited FFI, isolated).
 fn find_libcuda() -> Option<PathBuf> {
     [
         "/usr/lib/wsl/lib/libcuda.so.1",
@@ -611,8 +611,8 @@ fn run_nvidia_smi() -> (Option<PathBuf>, Option<i32>, Option<String>) {
     (None, None, None)
 }
 
-/// Probe real do CUDA via o crate auditado `ramshared-cuda` (FFI isolada, RAII).
-/// Substitui a FFI duplicada que vivia aqui (Day-0: unico `unsafe` em ramshared-cuda).
+/// Real probe of CUDA via the audited `ramshared-cuda` crate (isolated FFI, RAII).
+/// Replaces the duplicated FFI that lived here (Day-0: only `unsafe` in ramshared-cuda).
 fn cuda_probe_via_lib() -> Result<GpuInfo, String> {
     let cuda = Cuda::load().map_err(|e| e.to_string())?;
     if cuda.device_count().map_err(|e| e.to_string())? < 1 {

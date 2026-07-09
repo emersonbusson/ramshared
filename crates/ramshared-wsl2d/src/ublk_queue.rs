@@ -1,8 +1,8 @@
-//! Preparação da fila ublk no char device `/dev/ublkcN`.
+//! Preparation of the ublk queue in the char device `/dev/ublkcN`.
 //!
-//! Mapeia o buffer de io-desc (somente leitura) que o kernel expõe e decodifica
-//! descritores por tag. Não chama `START_DEV`, não cria `/dev/ublkbN` e não toca
-//! swap. O `unsafe` do `mmap` fica isolado em `ramshared-uring`.
+//! Maps the io-desc buffer (read-only) exposed by the kernel and decodes
+//! descriptors by tag. Does not call `START_DEV`, does not create `/dev/ublkbN`, and does not touch
+//! swap. The `unsafe` of `mmap` is isolated in `ramshared-uring`.
 
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -11,9 +11,9 @@ use std::path::Path;
 
 use crate::ublk;
 
-/// Mapeia a fila 0 do char device `char_path` (read-only) e decodifica o
-/// `ublksrv_io_desc` da `tag`. O tamanho do mapa é `round_up(queue_depth * 24, page)`
-/// e o offset é 0 (fila 0); filas adicionais exigem `ublk_max_cmd_buf_size` — ver
+/// Maps queue 0 of the char device `char_path` (read-only) and decodes the
+/// `ublksrv_io_desc` of the `tag`. The map size is `round_up(queue_depth * 24, page)`
+/// and the offset is 0 (queue 0); additional queues require `ublk_max_cmd_buf_size` — see
 /// `docs/ublk-backend/SPEC-ring-loop.md` §3.
 pub fn read_io_desc(
     char_path: impl AsRef<Path>,
@@ -45,20 +45,20 @@ pub fn read_io_desc(
         .ok_or_else(|| io::Error::other("io-desc menor que 24 bytes"))
 }
 
-/// Sessão de FETCH em uma fila ublk: segura o `File` do char device `/dev/ublkcN` e
-/// o ring `ramshared-uring` que submeteu os `FETCH_REQ`. Não chama `START_DEV`, não
-/// cria `/dev/ublkbN` e não toca swap. O ring é dropado antes do `File` (o fd
-/// precisa seguir aberto enquanto o ring existe).
+/// FETCH session in a ublk queue: holds the `/dev/ublkcN` char device `File` and
+/// the `ramshared-uring` ring that submitted the `FETCH_REQ`. Does not call `START_DEV`, does not
+/// create `/dev/ublkbN`, and does not touch swap. The ring is dropped before the `File` (the fd
+/// must remain open while the ring exists).
 pub struct FetchSession {
     ring: ramshared_uring::UblkFetchRing,
-    /// `File` do char device, mantido aberto enquanto o ring vive (drop guard).
+    /// Char device `File`, kept open while the ring lives (drop guard).
     #[allow(dead_code)]
     char_dev: File,
 }
 
 impl FetchSession {
-    /// Abre `char_path`, submete `FETCH_REQ` para as `queue_depth` tags da fila 0
-    /// (buffer de `buf_size` por tag) e retorna sem esperar CQE.
+    /// Opens `char_path`, submits `FETCH_REQ` for the `queue_depth` tags of queue 0
+    /// (buffer of `buf_size` per tag) and returns without waiting for CQE.
     pub fn open(
         char_path: impl AsRef<Path>,
         queue_depth: u16,
@@ -74,7 +74,7 @@ impl FetchSession {
         Ok(Self { ring, char_dev })
     }
 
-    /// Drena os CQEs disponíveis (não bloqueia).
+    /// Drains available CQEs (does not block).
     pub fn drain(&mut self) -> Vec<ramshared_uring::UblkCompletion> {
         self.ring.drain()
     }

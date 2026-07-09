@@ -1,13 +1,13 @@
-//! `VramBackend` — liga uma região de VRAM (`ramshared_vram::VramMemory`) à trait `BlockBackend`
-//! do `ramshared_block`. É o ponto onde "VRAM" vira "block device NBD" (SPEC §8). Genérico sobre o
-//! backend de VRAM (CUDA hoje via `ramshared-cuda`; Vulkan amanhã pelo mesmo trait — RF-G1).
+//! `VramBackend` — binds a region of VRAM (`ramshared_vram::VramMemory`) to the `BlockBackend` trait
+//! of `ramshared_block`. It is the point where "VRAM" becomes an "NBD block device" (SPEC §8). Generic over the
+//! VRAM backend (CUDA today via `ramshared-cuda`; Vulkan tomorrow via the same trait — RF-G1).
 
 use ramshared_block::{BlockBackend, IoError};
 use ramshared_vram::{VramError, VramMemory};
 
 use crate::ublk;
 
-/// Block device respaldado por uma região de VRAM (`M: VramMemory`).
+/// Block device backed by a region of VRAM (`M: VramMemory`).
 pub struct VramBackend<M> {
     mem: M,
     block_size: u32,
@@ -18,7 +18,7 @@ impl<M: VramMemory> VramBackend<M> {
         Self { mem, block_size }
     }
 
-    /// Zera toda a VRAM (SPEC §11 — zerar ao liberar/parar).
+    /// Zeroes all VRAM (SPEC §11 — zero on release/stop).
     pub fn zero(&mut self) -> Result<(), VramError> {
         self.mem.zero()
     }
@@ -46,19 +46,19 @@ impl<M: VramMemory> BlockBackend for VramBackend<M> {
     }
 
     fn flush(&mut self) -> Result<(), IoError> {
-        // cuMemcpy*_v2 são síncronas (a referência usa o mesmo modelo); nada a drenar.
-        // A coerência multi-conexão (NBD_FLAG_CAN_MULTI_CONN, H1/DT-10) depende desta
-        // sincronicidade: WRITE durável no ack ⇒ FLUSH no-op ⇒ um FLUSH cobre todas as
-        // WRITEs ackadas. NÃO trocar `write_at` para cópia assíncrona sem revisar isto.
+        // cuMemcpy*_v2 are synchronous (the reference uses the same model); nothing to drain.
+        // Multi-connection coherence (NBD_FLAG_CAN_MULTI_CONN, H1/DT-10) depends on this
+        // synchronicity: WRITE is durable upon ack ⇒ FLUSH is a no-op ⇒ a FLUSH covers all
+        // acked WRITEs. Do NOT change `write_at` to asynchronous copy without reviewing this.
         Ok(())
     }
 }
 
-/// Janela `[base, base+len)` sobre um [`BlockBackend`] — uma slice da VRAM (RF-L1, DT-4).
+/// Window `[base, base+len)` over a [`BlockBackend`] — a slice of VRAM (RF-L1, DT-4).
 ///
-/// `serve()` valida contra `size_bytes()` = `len` (o bounds-check da slice sai de graça); os
-/// acessos somam `base` ao offset. Empacota um `&mut B`, então o worker (única thread CUDA)
-/// constrói uma `SliceView` por `Job` sobre o backend único, sem tocar CUDA.
+/// `serve()` validates against `size_bytes()` = `len` (bounds-check of the slice is free);
+/// accesses add `base` to the offset. Wraps a `&mut B`, so the worker (single CUDA thread)
+/// builds a `SliceView` per `Job` over the single backend, without touching CUDA.
 pub struct SliceView<'b, B: BlockBackend> {
     inner: &'b mut B,
     base: u64,
@@ -66,8 +66,8 @@ pub struct SliceView<'b, B: BlockBackend> {
 }
 
 impl<'b, B: BlockBackend> SliceView<'b, B> {
-    /// Constrói a janela. Em debug, garante que `[base, base+len)` cabe em `inner` (a construção
-    /// é interna ao worker, que deriva `base`/`len` do `SliceMap`).
+    /// Constructs the window. In debug, ensures that `[base, base+len)` fits in `inner` (construction
+    /// is internal to the worker, which derives `base`/`len` from `SliceMap`).
     pub fn new(inner: &'b mut B, base: u64, len: u64) -> Self {
         debug_assert!(
             base.checked_add(len)
@@ -109,9 +109,9 @@ impl<B: BlockBackend> BlockBackend for SliceView<'_, B> {
     }
 }
 
-/// Disco volátil em memória que implementa [`BlockBackend`] — valida os loops (NBD/ublk) sem
-/// CUDA (drill em qemu, e2e sem GPU). O backend de produção é o [`VramBackend`] (mesmo trait),
-/// então os caminhos servem qualquer um dos dois sem mudança.
+/// Volatile memory disk implementing [`BlockBackend`] — validates the loops (NBD/ublk) without
+/// CUDA (drill in QEMU, E2E without GPU). The production backend is [`VramBackend`] (same trait),
+/// so the paths serve either one without changes.
 pub struct RamBackend {
     data: Vec<u8>,
     block_size: u32,
@@ -169,8 +169,8 @@ mod tests {
     use ramshared_block::{Command, Request, serve};
     use ramshared_cuda::Cuda;
 
-    /// Composição cuda + block em VRAM real: serve um WRITE e um READ NBD.
-    /// `cargo test -p ramshared-wsl2d -- --ignored` num host com GPU.
+    /// Composition of cuda + block in real VRAM: serves an NBD WRITE and READ.
+    /// `cargo test -p ramshared-wsl2d -- --ignored` on a host with a GPU.
     #[test]
     #[ignore = "requer GPU CUDA funcional (WSL2/GPU-PV)"]
     fn vram_backend_serves_nbd_write_then_read() {
@@ -213,8 +213,8 @@ mod tests {
         assert_eq!(r.read_data, payload, "READ deve devolver o que foi escrito");
     }
 
-    /// Gauge de VRAM com `mem_info` REAL (RF-3): `vram_outros` (subtração) capta o uso de
-    /// gráficos/Windows. `cargo test -p ramshared-wsl2d -- --ignored` num host com GPU.
+    /// VRAM gauge with REAL `mem_info` (RF-3): `vram_outros` (subtração) captures graphics/Windows
+    /// usage. `cargo test -p ramshared-wsl2d -- --ignored` on a host with a GPU.
     #[test]
     #[ignore = "requer GPU CUDA funcional (WSL2/GPU-PV)"]
     fn vram_gauge_outros_captures_real_graphics_usage() {
@@ -223,7 +223,7 @@ mod tests {
         let cuda = Cuda::load().expect("libcuda");
         let dev = cuda.device(0).unwrap();
         let ctx = cuda.create_context(&dev).unwrap();
-        let chunk = 64 * 1024 * 1024usize; // o "daemon" aloca 64 MiB
+        let chunk = 64 * 1024 * 1024usize; // the "daemon" allocates 64 MiB
         let _mem = ctx.alloc(chunk).unwrap();
         let (free, total) = ctx.mem_info().unwrap();
         let gauge = VramGauge::default();
@@ -233,7 +233,7 @@ mod tests {
         let used = (total - free) as u64;
         let alloc_daemon = chunk as u64;
         let outros = vram_outros(used, alloc_daemon);
-        // Num desktop em uso, o uso total > o que o daemon alocou (há gráficos) → outros > 0.
+        // On a desktop in use, total usage > what the daemon allocated (due to graphics) → outros > 0.
         assert!(
             used > alloc_daemon,
             "uso total ({used}) > daemon ({alloc_daemon})"
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn slice_view_isolates_neighbors() {
-        // RamBackend de 128B = 2 slices de 64B; escrever na slice 1 não vaza para a slice 0.
+        // RamBackend of 128B = 2 slices de 64B; writing to slice 1 does not leak to slice 0.
         let mut be = RamBackend::new(128);
         {
             let mut s1 = SliceView::new(&mut be, 64, 64);
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn slice_view_serve_rejects_out_of_range() {
-        // Acesso além do len da slice → EINVAL via serve (bounds da slice de graça).
+        // Access beyond the slice's len → EINVAL via serve (bounds-check of slice is free).
         let mut be = RamBackend::new(128);
         let mut view = SliceView::new(&mut be, 64, 64);
         let out = serve(
@@ -282,7 +282,7 @@ mod tests {
                 flags: 0,
                 cmd: Command::Read,
                 handle: 1,
-                offset: 64, // 64 + 64 = 128 > len(64) da slice
+                offset: 64, // 64 + 64 = 128 > len(64) of the slice
                 len: 64,
             },
             &[],

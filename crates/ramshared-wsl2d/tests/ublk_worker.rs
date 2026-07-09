@@ -1,7 +1,7 @@
-//! Teste do worker DT-3 (`spawn_ublk_worker`) — valida a metade "worker" da
-//! arquitetura (canais `IoWork`/`WorkerReply` + serviço contra um `BlockBackend`)
-//! sem device ublk e sem GPU.
-#![allow(clippy::unwrap_used, clippy::expect_used)] // teste: unwrap/expect é idiomático
+//! Test of worker DT-3 (`spawn_ublk_worker`) — validates the "worker" half of the
+//! architecture (`IoWork`/`WorkerReply` channels + service against a `BlockBackend`)
+//! without ublk device and without GPU.
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test: unwrap/expect is idiomatic
 
 use ramshared_block::{BlockBackend, Command, Request};
 use ramshared_wsl2d::{RamBackend, ublk, ublk_server};
@@ -29,14 +29,14 @@ fn ublk_worker_serves_read_and_write_over_channels() {
     let pattern: Vec<u8> = (0..512u32).map(|i| (i % 251) as u8).collect();
     backend
         .write_at(1024, &pattern)
-        .expect("pre-carrega setor 2");
+        .expect("pre-load sector 2");
 
     let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(8);
     let (reply_tx, reply_rx) = mpsc::channel::<ublk_server::WorkerReply>();
     let worker = ublk_server::spawn_ublk_worker(backend, work_rx, reply_tx);
 
-    // READ do setor 2: o ring owner cede um buffer dimensionado a `len`; o worker
-    // o preenche in-place e o devolve em `buf` (sem alloc no worker — DT-8).
+    // READ of sector 2: the ring owner yields a buffer sized to `len`; the worker
+    // fills it in-place and returns it in `buf` (no alloc in worker — DT-8).
     work_tx
         .send(work(3, Command::Read, 1024, 512, vec![0u8; 512]))
         .expect("envia READ");
@@ -46,8 +46,8 @@ fn ublk_worker_serves_read_and_write_over_channels() {
     assert!(reply.is_read);
     assert_eq!(reply.buf, pattern);
 
-    // WRITE: o payload (buffer cedido) já traz os dados; vão para o backend e o
-    // mesmo buffer volta em `buf` para o ring owner reciclar.
+    // WRITE: the payload (yielded buffer) already brings the data; they go to the backend and the
+    // same buffer returns in `buf` for the ring owner to recycle.
     let pattern2: Vec<u8> = (0..512u32).map(|i| ((i * 3 + 1) % 251) as u8).collect();
     work_tx
         .send(work(4, Command::Write, 2048, 512, pattern2.clone()))
@@ -56,9 +56,9 @@ fn ublk_worker_serves_read_and_write_over_channels() {
     assert_eq!(reply.tag, 4);
     assert_eq!(reply.result, 512);
     assert!(!reply.is_read);
-    assert_eq!(reply.buf.len(), 512); // buffer devolvido para reciclagem
+    assert_eq!(reply.buf.len(), 512); // buffer returned for recycling
 
-    // READ de volta o setor 4 confirma o WRITE.
+    // READ back from sector 4 confirms the WRITE.
     work_tx
         .send(work(5, Command::Read, 2048, 512, vec![0u8; 512]))
         .expect("envia READ 2");
@@ -66,12 +66,12 @@ fn ublk_worker_serves_read_and_write_over_channels() {
     assert!(r2.is_read);
     assert_eq!(r2.buf, pattern2);
 
-    // Fechar o canal de work encerra o worker, que devolve o backend.
+    // Closing the work channel terminates the worker, which returns the backend.
     drop(work_tx);
-    let backend = worker.join().expect("worker terminou ok");
+    let backend = worker.join().expect("worker terminated ok");
     let mut got = vec![0u8; 512];
     backend
         .read_at(2048, &mut got)
-        .expect("le o backend devolvido");
+        .expect("reads the returned backend");
     assert_eq!(got, pattern2);
 }

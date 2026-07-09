@@ -1,63 +1,63 @@
-//! Telemetria & reconciliação do broker (SPECv2 `docs/broker-telemetry-reconciliation/`).
+//! Telemetry & reconciliation of the broker (SPECv2 `docs/broker-telemetry-reconciliation/`).
 //!
-//! Tipos compartilhados entre data-plane (escreve contadores) e control-plane (lê + reconcilia) +
-//! a lógica **pura** de reconciliação. O invariante é de **ocupação** (DT-4): compara a capacidade
-//! emprestada (`Σ slice.len` Active|Draining) com o swap realmente ocupado nas nossas slices; o
-//! throughput (`bytes_served`/`io_count`) é telemetria separada, fora do invariante. Eviction é
-//! detectada pelo **canário** (`demotes_delta`), não por subtração de VRAM (DT-6).
+//! Types shared between the data-plane (writes counters) and the control-plane (reads + reconciles) +
+//! the **pure** reconciliation logic. The invariant is **occupancy** (DT-4): compares the borrowed
+//! capacity (`Σ slice.len` Active|Draining) with the swap actually occupied in our slices;
+//! throughput (`bytes_served`/`io_count`) is separate telemetry, outside of the invariant. Eviction is
+//! detected by the **canary** (`demotes_delta`), not by VRAM subtraction (DT-6).
 
 use std::sync::atomic::AtomicU64;
 
-/// Contadores de IO por slice: o worker (data-plane) escreve, o `BrokerCore` lê (DT-1). `Relaxed`
-/// é suficiente — cada contador é independente; o par `(bytes, io)` não é lido atomicamente junto
-/// (skew de um tick é aceito, telemetria, não contabilidade).
+/// IO counters per slice: the worker (data-plane) writes, the `BrokerCore` reads (DT-1). `Relaxed`
+/// is sufficient — each counter is independent; the `(bytes, io)` pair is not read atomically together
+/// (a one-tick skew is accepted, telemetry, not accounting).
 #[derive(Default)]
 pub struct SliceIoCounters {
     pub bytes_served: AtomicU64,
     pub io_count: AtomicU64,
 }
 
-/// Gauge de VRAM publicado pela closure de residência do worker (DT-5). `total == 0` é a sentinela
-/// de "sem dado de VRAM" (ex.: `--backend ram`, sem GPU) → os campos `vram_*` saem `None`.
+/// VRAM gauge published by the worker's residency closure (DT-5). `total == 0` is the sentinel
+/// for "no VRAM data" (e.g., `--backend ram`, without GPU) → `vram_*` fields output `None`.
 #[derive(Default)]
 pub struct VramGauge {
     pub free: AtomicU64,
     pub total: AtomicU64,
 }
 
-/// Veredito da reconciliação (RF-4).
+/// Reconciliation verdict (RF-4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReconcileFlag {
-    /// Convergente (ocupado ≤ emprestado + tolerância).
+    /// Convergent (occupied ≤ borrowed + tolerance).
     None,
-    /// Alguma fonte ausente (degrade) — amostra parcial.
+    /// Some source missing (degrade) — partial sample.
     Partial,
-    /// Canário disparou DEMOTE desde a última amostra (WDDM espremeu a VRAM).
+    /// Canary triggered DEMOTE since the last sample (WDDM squeezed VRAM).
     Eviction,
-    /// Slice presa em `Draining` (zero não confirmou) além do limiar.
+    /// Slice stuck in `Draining` (zero not confirmed) beyond threshold.
     StuckSlice,
-    /// Ocupado > emprestado + tolerância (tenant swapando fora das nossas slices / drift).
+    /// Occupied > borrowed + tolerance (tenant swapping outside our slices / drift).
     Unaccounted,
 }
 
-/// Entrada pura da reconciliação — já coletada do core/gauge (DT-4/DT-6).
+/// Pure input for reconciliation — already collected from core/gauge (DT-4/DT-6).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReconcileInput {
-    /// `Σ slice.len` das slices `Active|Draining` (capacidade emprestada).
+    /// `Σ slice.len` of `Active|Draining` slices (borrowed capacity).
     pub alloc_active_bytes: u64,
-    /// `Σ used` (bytes) das nossas nbd devices (DT-10), já filtrado/convertido pelo `Psi` handler.
+    /// `Σ used` (bytes) of our NBD devices (DT-10), already filtered/converted by the `Psi` handler.
     pub occupied_swap_bytes: u64,
-    /// Alguma slice em `pending_zero` ≥ `ZERO_RETRY_ERROR` ticks.
+    /// Some slice in `pending_zero` ≥ `ZERO_RETRY_ERROR` ticks.
     pub stuck_draining: bool,
-    /// DEMOTEs do canário desde a última amostra (DT-6).
+    /// Canary DEMOTEs since the last sample (DT-6).
     pub demotes_delta: u64,
-    /// Alguma fonte ausente (sem VRAM gauge, sem `mem`) → `Partial`.
+    /// Some source missing (no VRAM gauge, no `mem`) → `Partial`.
     pub any_source_missing: bool,
 }
 
-/// Amostra emitida pelo **core** (sem `t`/`branch`/`commit` — DT-8). `PartialEq` p/ entrar em
-/// `Outbound`; `f64` impede `Eq` (e `Outbound` não exige `Eq`).
+/// Sample emitted by the **core** (without `t`/`branch`/`commit` — DT-8). `PartialEq` to enter
+/// `Outbound`; `f64` prevents `Eq` (and `Outbound` does not require `Eq`).
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct TelemetryCore {
     pub tenant: Option<String>,
@@ -74,11 +74,11 @@ pub struct TelemetryCore {
     pub flag: ReconcileFlag,
 }
 
-/// Linha final (a camada de IO embrulha o [`TelemetryCore`], adicionando `t`/`branch`/`commit` —
-/// DT-8). 1 objeto JSON por linha (`docs/benchmarks/results.jsonl`, RF-5).
+/// Final line (the IO layer wraps [`TelemetryCore`], adding `t`/`branch`/`commit` —
+/// DT-8). 1 JSON object per line (`docs/benchmarks/results.jsonl`, RF-5).
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct TelemetrySample {
-    /// Epoch em segundos (carimbado pela camada de IO; o core não lê relógio).
+    /// Epoch in seconds (timestamped by the IO layer; the core does not read the clock).
     pub t: u64,
     pub branch: Option<String>,
     pub commit: Option<String>,
@@ -86,18 +86,18 @@ pub struct TelemetrySample {
     pub core: TelemetryCore,
 }
 
-/// VRAM de "outros" (gráficos/Windows) por subtração, com clamp em 0 (DT-4/DT-5). Chamar só quando
-/// há dado de VRAM (`total > 0`).
+/// VRAM of "others" (graphics/Windows) by subtraction, clamped at 0 (DT-4/DT-5). Call only when
+/// VRAM data exists (`total > 0`).
 pub fn vram_outros(total_used: u64, alloc_daemon: u64) -> u64 {
     total_used.saturating_sub(alloc_daemon)
 }
 
-/// Reconciliação pura (RF-4). Devolve `(delta, flag)` onde `delta = (ocupado − emprestado)/emprestado`
-/// (positivo = ocupou mais do que foi emprestado). O `streak` (histerese, DT-12) é aplicado **fora**,
-/// no `on_tick`. F-v2-1: `delta` é computado **antes** de qualquer retorno.
+/// Pure reconciliation (RF-4). Returns `(delta, flag)` where `delta = (occupied − borrowed)/borrowed`
+/// (positive = occupied more than borrowed). The `streak` (hysteresis, DT-12) is applied **externally**,
+/// in `on_tick`. F-v2-1: `delta` is computed **before** any return.
 pub fn reconcile(inp: &ReconcileInput, tol_frac: f64) -> (f64, ReconcileFlag) {
-    // alloc=0 (nada emprestado): a fração é indefinida → 0.0 se nada ocupado, senão 1.0 (drift
-    // total). Evita reportar `occupied` cru (número gigante) no `reconcile_delta` do JSONL (M1).
+    // alloc=0 (nothing borrowed): fraction is undefined → 0.0 if nothing is occupied, else 1.0 (total
+    // drift). Avoids reporting raw `occupied` (giant number) in the `reconcile_delta` of the JSONL (M1).
     let delta = if inp.alloc_active_bytes == 0 {
         if inp.occupied_swap_bytes == 0 {
             0.0
@@ -112,7 +112,7 @@ pub fn reconcile(inp: &ReconcileInput, tol_frac: f64) -> (f64, ReconcileFlag) {
         return (delta, ReconcileFlag::Partial);
     }
     if inp.demotes_delta > 0 {
-        // Canário é a autoridade de eviction (DT-6); subtração de VRAM não detecta evicção WDDM.
+        // Canary is the authority on eviction (DT-6); VRAM subtraction does not detect WDDM eviction.
         return (delta, ReconcileFlag::Eviction);
     }
     if inp.stuck_draining {
@@ -131,8 +131,8 @@ mod tests {
 
     fn base() -> ReconcileInput {
         ReconcileInput {
-            alloc_active_bytes: 1 << 30,    // 1 GiB emprestado
-            occupied_swap_bytes: 512 << 20, // 512 MiB ocupado (metade)
+            alloc_active_bytes: 1 << 30,    // 1 GiB borrowed
+            occupied_swap_bytes: 512 << 20, // 512 MiB occupied (half)
             stuck_draining: false,
             demotes_delta: 0,
             any_source_missing: false,
@@ -149,7 +149,7 @@ mod tests {
     #[test]
     fn reconcile_unaccounted_when_occupied_gt_alloc() {
         let mut inp = base();
-        inp.occupied_swap_bytes = inp.alloc_active_bytes + (200 << 20); // ocupa mais que emprestou
+        inp.occupied_swap_bytes = inp.alloc_active_bytes + (200 << 20); // occupies more than borrowed
         let (delta, flag) = reconcile(&inp, 0.10);
         assert_eq!(flag, ReconcileFlag::Unaccounted);
         assert!(delta > 0.10);
@@ -158,8 +158,8 @@ mod tests {
     #[test]
     fn reconcile_eviction_when_demotes() {
         let mut inp = base();
-        inp.demotes_delta = 1; // canário disparou -> eviction tem prioridade
-        inp.occupied_swap_bytes = inp.alloc_active_bytes + (200 << 20); // mesmo "over", eviction ganha
+        inp.demotes_delta = 1; // canary triggered -> eviction has priority
+        inp.occupied_swap_bytes = inp.alloc_active_bytes + (200 << 20); // even with "over", eviction wins
         assert_eq!(reconcile(&inp, 0.10).1, ReconcileFlag::Eviction);
     }
 
@@ -174,13 +174,13 @@ mod tests {
     fn reconcile_partial_when_missing() {
         let mut inp = base();
         inp.any_source_missing = true;
-        inp.demotes_delta = 1; // partial tem prioridade sobre tudo (não dá pra confiar)
+        inp.demotes_delta = 1; // partial has priority over everything (cannot be trusted)
         assert_eq!(reconcile(&inp, 0.10).1, ReconcileFlag::Partial);
     }
 
     #[test]
     fn reconcile_delta_computed_before_partial_branch() {
-        // F-v2-1: mesmo no caminho Partial, o delta sai computado (não 0/garbage).
+        // F-v2-1: even in the Partial path, the delta is computed (not 0/garbage).
         let mut inp = base();
         inp.any_source_missing = true;
         let (delta, _) = reconcile(&inp, 0.10);
@@ -189,7 +189,7 @@ mod tests {
 
     #[test]
     fn reconcile_alloc_zero_no_giant_delta() {
-        // M1: nada emprestado → delta definido (não o `occupied` cru). Vazio=None, com swap=Unaccounted.
+        // M1: nothing borrowed → delta defined (not raw `occupied`). Empty=None, with swap=Unaccounted.
         let mut inp = base();
         inp.alloc_active_bytes = 0;
         inp.occupied_swap_bytes = 0;
@@ -206,12 +206,12 @@ mod tests {
     #[test]
     fn vram_outros_clamps_at_zero() {
         assert_eq!(vram_outros(2000, 500), 1500);
-        assert_eq!(vram_outros(500, 2000), 0); // clamp (skew de amostragem)
+        assert_eq!(vram_outros(500, 2000), 0); // clamp (sampling skew)
     }
 
     #[test]
     fn telemetry_sample_serializes_flat_jsonl() {
-        // RF-5/DT-8: o `core` é achatado no nível raiz (uma linha JSON) + flag em snake_case.
+        // RF-5/DT-8: `core` is flattened at the root level (one JSON line) + flag in snake_case.
         let core = TelemetryCore {
             tenant: Some("civm".into()),
             slice: None,

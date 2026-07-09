@@ -1,29 +1,29 @@
-//! Despacho de requisição NBD → [`BlockBackend`], com validação da §8
-//! (alinhamento ao block size, faixa) e mapeamento de erro → errno NBD.
+//! NBD request dispatch → [`BlockBackend`], with §8 validation
+//! (block size alignment, range check) and error mapping → NBD errno.
 
 use crate::protocol::{Command, Request, SIMPLE_REPLY_LEN, encode_simple_reply};
 
-// errno na simple reply (campo error).
+// errno in simple reply (error field).
 pub const NBD_OK: u32 = 0;
 pub const NBD_EIO: u32 = 5;
 pub const NBD_EINVAL: u32 = 22;
 
-/// Erro do backend de armazenamento (ex.: falha CUDA no hot path).
+/// Storage backend error (e.g., CUDA failure in the hot path).
 #[derive(Debug)]
 pub struct IoError(pub String);
 
-/// Armazenamento por trás do device NBD (a VRAM, no nosso caso).
+/// Storage behind the NBD device (VRAM, in our case).
 pub trait BlockBackend {
     fn size_bytes(&self) -> u64;
-    /// Block size lógico (múltiplo de 512; 4096 no MVP — SPEC §8).
+    /// Logical block size (multiple of 512; 4096 in the MVP — SPEC §8).
     fn block_size(&self) -> u32;
     fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<(), IoError>;
     fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError>;
     fn flush(&mut self) -> Result<(), IoError>;
 }
 
-/// Resultado do despacho: bytes da reply, dados de leitura (se READ) e se o
-/// cliente pediu desconexão (`NBD_CMD_DISC`).
+/// Outcome of the dispatch: reply bytes, read data (if READ) and whether the
+/// client requested disconnect (`NBD_CMD_DISC`).
 pub struct ServeOutcome {
     pub reply: [u8; SIMPLE_REPLY_LEN],
     pub read_data: Vec<u8>,
@@ -37,8 +37,8 @@ fn errno_of(r: Result<(), IoError>) -> u32 {
     }
 }
 
-/// Valida alinhamento e faixa (SPEC §8): desalinhado ou fora de faixa = EINVAL,
-/// **antes** de tocar o backend.
+/// Validates alignment and range (SPEC §8): unaligned or out of range = EINVAL,
+/// **before** touching the backend.
 fn validate<B: BlockBackend + ?Sized>(req: &Request, backend: &B) -> Result<(), u32> {
     let bs = backend.block_size() as u64;
     if bs == 0 || !req.offset.is_multiple_of(bs) || !(req.len as u64).is_multiple_of(bs) {
@@ -50,8 +50,8 @@ fn validate<B: BlockBackend + ?Sized>(req: &Request, backend: &B) -> Result<(), 
     }
 }
 
-/// Despacha uma requisição já parseada. `payload` é o dado de WRITE (vazio nos
-/// demais). Não faz I/O de socket — só lógica (testável sem root).
+/// Dispatches an already parsed request. `payload` is the WRITE data (empty for
+/// others). Does no socket I/O — only logic (testable without root).
 pub fn serve<B: BlockBackend + ?Sized>(
     req: &Request,
     payload: &[u8],
@@ -71,7 +71,7 @@ pub fn serve<B: BlockBackend + ?Sized>(
             disconnect: true,
         },
         Command::Flush => plain(errno_of(backend.flush())),
-        Command::Trim => plain(NBD_OK), // no-op seguro no MVP
+        Command::Trim => plain(NBD_OK), // safe no-op in the MVP
         Command::Unknown(_) => plain(NBD_EINVAL),
         Command::Read => {
             if let Err(e) = validate(req, backend) {
@@ -191,7 +191,7 @@ mod tests {
             data: vec![0u8; 1 << 16],
             bs: 4096,
         };
-        // len diz 4096 mas payload tem 8 bytes
+        // len says 4096 but payload has 8 bytes
         let r = serve(&req(Command::Write, 0, 4096), &[0u8; 8], &mut b);
         assert_eq!(
             u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),

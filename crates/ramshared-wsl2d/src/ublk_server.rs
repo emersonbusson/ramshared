@@ -1,9 +1,9 @@
-//! Backend de RAM e lógica de serviço de I/O para o loop ublk.
+//! RAM backend and I/O service logic for the ublk loop.
 //!
-//! `serve_request` é puro: dado um `Request` e o buffer de dados, serve contra um
-//! `BlockBackend` e devolve o `result` (bytes `>= 0`, ou `-errno`) que o COMMIT
-//! deve carregar. `RamBackend` valida o loop sem CUDA; `spawn_ublk_worker` é o
-//! worker DT-3 (thread dona do backend) que será usado com o `VramBackend`.
+//! `serve_request` is pure: given a `Request` and the data buffer, serves against a
+//! `BlockBackend` and returns the `result` (bytes `>= 0`, or `-errno`) that the COMMIT
+//! must load. `RamBackend` validates the loop without CUDA; `spawn_ublk_worker` is the
+//! worker DT-3 (thread owning the backend) that will be used with `VramBackend`.
 
 use std::fs::OpenOptions;
 use std::io;
@@ -30,14 +30,14 @@ use crate::{
 const EIO: i32 = -5;
 const EINVAL: i32 = -22;
 
-/// Serve um `Request` ublk contra qualquer [`BlockBackend`] usando `buf` (onde os
-/// dados vivem) e devolve o `result` do COMMIT: bytes transferidos (`>= 0`) ou
-/// `-errno`. Serve **in-place** no buffer (sem alloc no hot path — DT-8). `buf` é o
-/// buffer da tag no loop single-thread, ou um buffer do worker no DT-3.
+/// Serves a ublk `Request` against any [`BlockBackend`] using `buf` (where data
+/// lives) and returns the COMMIT `result`: transferred bytes (`>= 0`) or
+/// `-errno`. Serves **in-place** in the buffer (no alloc in the hot path — DT-8). `buf` is the
+/// tag buffer in the single-threaded loop, or a worker buffer in DT-3.
 ///
-/// Em WRITE `buf` já traz os dados (o kernel copiou do bio); em READ o backend
-/// preenche `buf` e o kernel copia `result` bytes de volta no COMMIT — por isso
-/// `result` precisa ser exatamente os bytes servidos.
+/// In WRITE, `buf` already contains the data (kernel copied from the bio); in READ, the backend
+/// populates `buf` and the kernel copies `result` bytes back on COMMIT — which is why
+/// `result` must be exactly the bytes served.
 pub fn serve_request<B: BlockBackend + ?Sized>(
     req: &Request,
     backend: &mut B,
@@ -45,14 +45,14 @@ pub fn serve_request<B: BlockBackend + ?Sized>(
 ) -> i32 {
     let len = req.len as usize;
     if len > buf.len() {
-        return EINVAL; // request maior que o buffer disponível
+        return EINVAL; // request larger than the available buffer
     }
 
     let served = match req.cmd {
         Command::Read => backend.read_at(req.offset, &mut buf[..len]).map(|()| len),
         Command::Write => backend.write_at(req.offset, &buf[..len]).map(|()| len),
         Command::Flush => backend.flush().map(|()| 0),
-        Command::Trim => return 0, // descarte: no-op seguro no MVP
+        Command::Trim => return 0, // discard: safe no-op in the MVP
         Command::Disc | Command::Unknown(_) => return EINVAL,
     };
 
@@ -62,8 +62,8 @@ pub fn serve_request<B: BlockBackend + ?Sized>(
     }
 }
 
-/// Handle da thread servidora ublk; `join` aguarda o loop terminar (ao receber o
-/// abort do STOP/DEL_DEV) e devolve o `RamBackend` para inspeção.
+/// Handle of the ublk server thread; `join` waits for the loop to terminate (upon receiving the
+/// abort from STOP/DEL_DEV) and returns the `RamBackend` for inspection.
 pub struct ServerHandle {
     thread: JoinHandle<io::Result<RamBackend>>,
 }
@@ -77,10 +77,10 @@ impl ServerHandle {
     }
 }
 
-/// Abre `char_path`, cria o `UblkServer` e roda o loop de serviço numa thread
-/// própria (dona única do ring, DT-3). A thread submete FETCH, serve cada request
-/// contra `backend` e re-arma via COMMIT_AND_FETCH; encerra ao receber o abort
-/// (`UBLK_IO_RES_ABORT`) que o STOP/DEL_DEV dispara.
+/// Opens `char_path`, creates the `UblkServer` and runs the service loop in its own
+/// thread (sole owner of the ring, DT-3). The thread submits FETCH, serves each request
+/// against `backend` and re-arms via COMMIT_AND_FETCH; terminates upon receiving the abort
+/// (`UBLK_IO_RES_ABORT`) triggered by STOP/DEL_DEV.
 pub fn spawn_server(
     char_path: impl AsRef<Path>,
     queue_depth: u16,
@@ -91,7 +91,7 @@ pub fn spawn_server(
     let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
 
     let thread = thread::spawn(move || {
-        // Mantém o char device aberto enquanto o loop usa o ring (dropado depois).
+        // Keeps the char device open while the loop uses the ring (dropped after).
         let _char_dev = char_dev;
         run_server_loop(server, backend)
     });
@@ -114,7 +114,7 @@ fn run_server_loop(
 
         for completion in completions {
             if completion.result == ublk::UBLK_IO_RES_ABORT {
-                return Ok(backend); // teardown: STOP/DEL_DEV abortou os FETCH
+                return Ok(backend); // teardown: STOP/DEL_DEV aborted the FETCH
             }
             if completion.result < 0 {
                 return Err(io::Error::other(format!(
@@ -123,22 +123,22 @@ fn run_server_loop(
                 )));
             }
 
-            // result == UBLK_IO_RES_OK (0): ha um request pronto na tag.
+            // result == UBLK_IO_RES_OK (0): there is a request ready at the tag.
             let iod = ublk::IoDesc::from_ne_bytes(server.io_desc_bytes(completion.tag))
                 .ok_or_else(|| io::Error::other("io-desc invalido no mmap"))?;
             let result = match iod.to_block_request(completion.tag) {
                 Ok(req) => serve_request(&req, &mut backend, server.buffer_mut(completion.tag)),
-                Err(_) => EINVAL, // op ublk sem equivalencia segura
+                Err(_) => EINVAL, // ublk op without safe equivalence
             };
             server.commit_and_fetch(completion.tag, result)?;
         }
     }
 }
 
-/// Resposta do worker DT-3 para o ring owner. `buf` é o buffer cedido pelo ring
-/// owner, devolvido para reciclagem (pool sem alloc no hot path — DT-8). Quando
-/// `is_read` e `result >= 0`, `buf` carrega os `result` bytes lidos que o ring owner
-/// copia no buffer da tag antes de `commit_and_fetch`.
+/// Reply from worker DT-3 to the ring owner. `buf` is the buffer yielded by the ring
+/// owner, returned for recycling (pool without alloc in the hot path — DT-8). When
+/// `is_read` and `result >= 0`, `buf` carries the `result` read bytes that the ring owner
+/// copies to the tag buffer before `commit_and_fetch`.
 #[derive(Clone, Debug)]
 pub struct WorkerReply {
     pub qid: u16,
@@ -148,8 +148,8 @@ pub struct WorkerReply {
     pub is_read: bool,
 }
 
-/// Handle da thread worker DT-3; `join` aguarda o worker encerrar (quando o canal de
-/// `IoWork` fecha) e devolve o backend.
+/// Handle of the worker thread DT-3; `join` waits for the worker to terminate (when the `IoWork`
+/// channel closes) and returns the backend.
 pub struct WorkerHandle<B> {
     thread: JoinHandle<B>,
 }
@@ -162,9 +162,9 @@ impl<B> WorkerHandle<B> {
     }
 }
 
-/// Sobe o worker DT-3: a thread dona do `backend` (a única a tocar a VRAM/CUDA).
-/// Recebe `IoWork` pelo canal, serve contra o `backend` e devolve `WorkerReply`.
-/// Encerra quando `work_rx` fecha (o ring owner caiu) ou `reply_tx` quebra.
+/// Starts worker DT-3: the thread owning `backend` (the only one touching VRAM/CUDA).
+/// Receives `IoWork` through the channel, serves against the `backend` and returns `WorkerReply`.
+/// Terminates when `work_rx` closes (the ring owner dropped) or `reply_tx` breaks.
 pub fn spawn_ublk_worker<B: BlockBackend + Send + 'static>(
     mut backend: B,
     work_rx: Receiver<ublk::IoWork>,
@@ -183,9 +183,9 @@ fn worker_loop<B: BlockBackend>(
     reply_tx: Sender<WorkerReply>,
 ) {
     while let Ok(mut work) = work_rx.recv() {
-        // `payload` é o buffer cedido pelo ring owner, já dimensionado a `req.len`:
-        // em WRITE traz os dados do bio; em READ o backend o preenche. O worker
-        // serve in-place e devolve o mesmo buffer — nenhuma alloc aqui (DT-8).
+        // `payload` is the buffer yielded by the ring owner, already sized to `req.len`:
+        // in WRITE it carries data from the bio; in READ the backend populates it. The worker
+        // serves in-place and returns the same buffer — no alloc here (DT-8).
         let result = serve_request(&work.req, backend, &mut work.payload);
         let is_read = work.req.cmd == Command::Read;
 
@@ -197,16 +197,16 @@ fn worker_loop<B: BlockBackend>(
             is_read,
         };
         if reply_tx.send(reply).is_err() {
-            break; // ring owner caiu
+            break; // ring owner dropped
         }
     }
 }
 
 const RING_CHAN_CAP: usize = 64;
 
-/// Handle do servidor DT-3 (ring owner + worker). `join` aguarda o ring owner
-/// encerrar (no abort do STOP/DEL_DEV), o que fecha o canal e encerra o worker,
-/// e devolve o backend.
+/// Handle of the DT-3 server (ring owner + worker). `join` waits for the ring owner
+/// to terminate (on abort of STOP/DEL_DEV), which closes the channel and terminates the worker,
+/// and returns the backend.
 pub struct ServerHandleDt3<B> {
     ring: JoinHandle<io::Result<()>>,
     worker: WorkerHandle<B>,
@@ -221,10 +221,10 @@ impl<B> ServerHandleDt3<B> {
     }
 }
 
-/// Sobe o servidor ublk na arquitetura DT-3: uma thread **ring owner** (dona do
-/// `UblkServer`) que drena CQE, envia `IoWork` ao **worker** (thread dona do
-/// `backend`, a única a tocar VRAM/CUDA) e completa via `COMMIT_AND_FETCH` com os
-/// dados devolvidos. Funciona com qualquer `BlockBackend` (RAM ou VRAM).
+/// Starts the ublk server in the DT-3 architecture: a **ring owner** thread (owner of the
+/// `UblkServer`) that drains CQEs, sends `IoWork` to the **worker** (thread owning the
+/// `backend`, the only one touching VRAM/CUDA), and completes via `COMMIT_AND_FETCH` with the
+/// returned data. Works with any `BlockBackend` (RAM or VRAM).
 pub fn spawn_server_dt3<B: BlockBackend + Send + 'static>(
     char_path: impl AsRef<Path>,
     queue_depth: u16,
@@ -239,8 +239,8 @@ pub fn spawn_server_dt3<B: BlockBackend + Send + 'static>(
     let worker = spawn_ublk_worker(backend, work_rx, reply_tx);
 
     let ring = thread::spawn(move || {
-        // O char device fica aberto enquanto o ring vive; `work_tx` cai ao retornar
-        // (encerra o worker).
+        // The char device remains open while the ring lives; `work_tx` drops upon returning
+        // (terminates the worker).
         let _char_dev = char_dev;
         run_ring_owner(server, queue_depth, buf_size, work_tx, reply_rx)
     });
@@ -257,16 +257,16 @@ fn run_ring_owner(
 ) -> io::Result<()> {
     server.submit_initial_fetch()?;
 
-    // Pool de buffers reciclados (DT-8): pré-aquece `queue_depth` buffers de
-    // `buf_size`. Cada request pega um do pool no dispatch e o devolve no COMMIT —
-    // zero malloc/free no hot path em regime. O pool nunca esvazia porque o número
-    // de requests em voo é limitado a `queue_depth` (pool.len() + in_flight == qd).
+    // Pool of recycled buffers (DT-8): pre-warms `queue_depth` buffers of
+    // `buf_size`. Each request takes one from the pool on dispatch and returns it on COMMIT —
+    // zero malloc/free in the hot path under steady state. The pool never empties because the number
+    // of requests inflight is limited to `queue_depth` (pool.len() + in_flight == qd).
     let mut buf_pool: Vec<Vec<u8>> = (0..queue_depth).map(|_| vec![0u8; buf_size]).collect();
 
     let mut in_flight = 0u32;
     loop {
         if in_flight > 0 {
-            // Ha request em voo: bloqueia na resposta do worker (sem poll/spin).
+            // There is a request inflight: blocks on the worker's reply (no poll/spin).
             match reply_rx.recv() {
                 Ok(reply) => {
                     in_flight -= 1;
@@ -274,16 +274,16 @@ fn run_ring_owner(
                 }
                 Err(_) => return Err(io::Error::other("worker encerrou inesperadamente")),
             }
-            // Drena respostas adicionais ja prontas, sem bloquear.
+            // Drains additional replies already ready, without blocking.
             while let Ok(reply) = reply_rx.try_recv() {
                 in_flight -= 1;
                 commit_reply(&mut server, reply, &mut buf_pool)?;
             }
         } else {
-            // Ocioso: bloqueia ate o proximo CQE (request servido ou abort).
+            // Idle: blocks until the next CQE (request served or abort).
             for completion in server.wait_and_drain()? {
                 if completion.result == ublk::UBLK_IO_RES_ABORT {
-                    return Ok(()); // teardown: STOP/DEL_DEV abortou os FETCH
+                    return Ok(()); // teardown: STOP/DEL_DEV aborted the FETCH
                 }
                 if completion.result < 0 {
                     return Err(io::Error::other(format!(
@@ -299,8 +299,8 @@ fn run_ring_owner(
     }
 }
 
-/// Copia os dados de READ (se houver) no buffer da tag, completa via COMMIT e
-/// devolve o buffer ao pool (sem dealloc — mantém a capacidade).
+/// Copies READ data (if any) to the tag buffer, completes via COMMIT, and
+/// returns the buffer to the pool (without dealloc — preserves capacity).
 fn commit_reply(
     server: &mut ramshared_uring::UblkServer,
     reply: WorkerReply,
@@ -313,17 +313,17 @@ fn commit_reply(
         tag_buf[..n].copy_from_slice(&reply.buf[..n]);
     }
     server.commit_and_fetch(reply.tag, reply.result)?;
-    // Recicla o buffer: limpa o len mas preserva a capacidade (sem free).
+    // Recycles the buffer: clears the len but preserves capacity (no free).
     let mut buf = reply.buf;
     buf.clear();
     buf_pool.push(buf);
     Ok(())
 }
 
-/// Le o io-desc da `tag`, pega um buffer reciclado do pool dimensionado a `len`
-/// (copiando o payload do WRITE do buffer da tag) e envia ao worker. Retorna `true`
-/// se enviou trabalho, `false` se rejeitou o request (ja completado com erro; o
-/// buffer, se foi tirado do pool, volta para ele).
+/// Reads the io-desc of `tag`, takes a recycled buffer from the pool sized to `len`
+/// (copying the WRITE payload from the tag buffer), and sends it to the worker. Returns `true`
+/// if work was sent, `false` if it rejected the request (already completed with error; the
+/// buffer, if it was taken from the pool, goes back to it).
 fn dispatch_request(
     server: &mut ramshared_uring::UblkServer,
     tag: u16,
@@ -335,25 +335,25 @@ fn dispatch_request(
     let req = match iod.to_block_request(tag) {
         Ok(req) => req,
         Err(_) => {
-            server.commit_and_fetch(tag, -22)?; // EINVAL (nenhum buffer tirado do pool)
+            server.commit_and_fetch(tag, -22)?; // EINVAL (no buffer taken from the pool)
             return Ok(false);
         }
     };
 
-    // Pega um buffer reciclado e dimensiona a `len`. `unwrap_or_default` só aloca no
-    // aquecimento (pool vazio); em regime o pré-aquecimento garante um disponível.
+    // Takes a recycled buffer and sizes it to `len`. `unwrap_or_default` only allocates during
+    // warming (empty pool); in steady state, the pre-warming guarantees one is available.
     let len = req.len as usize;
     let mut buf = buf_pool.pop().unwrap_or_default();
     buf.clear();
     buf.resize(len, 0);
 
-    // WRITE: o kernel já copiou bio->buffer da tag; leva no buffer cedido.
+    // WRITE: kernel already copied bio->tag buffer; passes it in the yielded buffer.
     if req.cmd == Command::Write {
         let tag_buf = server.buffer_mut(tag);
         if len <= tag_buf.len() {
             buf.copy_from_slice(&tag_buf[..len]);
         } else {
-            buf_pool.push(buf); // devolve ao pool antes de rejeitar
+            buf_pool.push(buf); // returns to pool before rejecting
             server.commit_and_fetch(tag, -22)?; // EINVAL
             return Ok(false);
         }
@@ -372,12 +372,12 @@ fn dispatch_request(
     Ok(true)
 }
 
-/// Converte erro CUDA em `io::Error` para o `Result` da thread worker.
+/// Converts CUDA error to `io::Error` for the worker thread `Result`.
 fn cuda_to_io(e: ramshared_cuda::CudaError) -> io::Error {
     io::Error::other(format!("CUDA: {e}"))
 }
 
-/// Handle do servidor DT-3 servido por VRAM (ring owner + worker dono do stack CUDA).
+/// Handle of the DT-3 server served by VRAM (ring owner + worker owning the CUDA stack).
 pub struct ServerHandleDt3Vram {
     ring: JoinHandle<io::Result<()>>,
     worker: JoinHandle<io::Result<()>>,
@@ -394,11 +394,11 @@ impl ServerHandleDt3Vram {
     }
 }
 
-/// Como [`spawn_server_dt3`], mas o worker serve a partir da **VRAM**: ele cria o
-/// stack `Cuda`/`Context`/`DeviceMem`/`VramBackend` **na própria thread** (o
-/// contexto CUDA tem afinidade de thread e o `VramBackend` não é `Send`/`'static`)
-/// e roda o loop ali. `vram_bytes` é o tamanho da alocação na GPU; `block_size` o
-/// block size lógico.
+/// Like [`spawn_server_dt3`], but the worker serves from **VRAM**: it creates the
+/// stack `Cuda`/`Context`/`DeviceMem`/`VramBackend` **on its own thread** (the
+/// CUDA context has thread affinity and `VramBackend` is not `Send`/`'static`)
+/// and runs the loop there. `vram_bytes` is the GPU allocation size; `block_size` the
+/// logical block size.
 pub fn spawn_server_dt3_vram(
     char_path: impl AsRef<Path>,
     queue_depth: u16,
@@ -413,7 +413,7 @@ pub fn spawn_server_dt3_vram(
     let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>();
 
     let worker = thread::spawn(move || -> io::Result<()> {
-        // Todo o stack CUDA vive nesta thread (afinidade do contexto).
+        // The entire CUDA stack lives in this thread (context affinity).
         let cuda = Cuda::load().map_err(cuda_to_io)?;
         let device = cuda.device(0).map_err(cuda_to_io)?;
         let ctx = cuda.create_context(&device).map_err(cuda_to_io)?;
@@ -432,9 +432,9 @@ pub fn spawn_server_dt3_vram(
     Ok(ServerHandleDt3Vram { ring, worker })
 }
 
-/// Handle do servidor DT-3 VRAM **com residência** (canário §9 + sonda §9.4 dentro do
-/// worker). Além de `join`, expõe `demote_count` — quantos vereditos de DEMOTE o
-/// canário emitiu (observável sem swap real).
+/// Handle of the DT-3 VRAM server **with residency** (canary §9 + probe §9.4 inside the
+/// worker). Besides `join`, exposes `demote_count` — how many DEMOTE verdicts the
+/// canary emitted (observable without real swap).
 pub struct ServerHandleDt3VramResidency {
     ring: JoinHandle<io::Result<()>>,
     worker: JoinHandle<io::Result<()>>,
@@ -442,7 +442,7 @@ pub struct ServerHandleDt3VramResidency {
 }
 
 impl ServerHandleDt3VramResidency {
-    /// Número de DEMOTEs emitidos pelo canário até agora (latência §9 + sonda §9.4).
+    /// Number of DEMOTEs emitted by the canary so far (latency §9 + probe §9.4).
     pub fn demote_count(&self) -> u32 {
         self.demotes.load(Ordering::Relaxed)
     }
@@ -457,17 +457,17 @@ impl ServerHandleDt3VramResidency {
     }
 }
 
-/// Loop do worker DT-3 VRAM **com residência**, genérico sobre o backend de VRAM
-/// (`M: VramMemory`): serve cada request medindo a latência serve-only (canário §9),
-/// sonda conteúdo/free em cadência (§9.4) e, no veredito DEMOTE, dispara `swapoff`
-/// numa thread separada (Disciplina 3). O free-floor entra por `mem_free` — decoplado
-/// do backend: CUDA passa `|| ctx.mem_info()`, um provider Vulkan futuro passa o seu.
-/// No teardown (DT-17) espera (bounded) o swapoff em voo e zera VRAM + canário.
+/// Loop of the worker DT-3 VRAM **with residency**, generic over the VRAM backend
+/// (`M: VramMemory`): serves each request measuring serve-only latency (canary §9),
+/// probes content/free in cadence (§9.4) and, upon a DEMOTE verdict, triggers `swapoff`
+/// in a separate thread (Discipline 3). The free-floor is supplied via `mem_free` — decoupled
+/// from the backend: CUDA passes `|| ctx.mem_info()`, a future Vulkan provider will pass its own.
+/// In teardown (DT-17) waits (bounded) for the swapoff in flight and zeroes VRAM + canary.
 ///
-/// Roda **inteiramente na thread chamadora** (afinidade do contexto): `backend`,
-/// `probe` e o closure `mem_free` emprestam o contexto thread-afim, que vive no
-/// chamador até esta função retornar.
-#[allow(clippy::too_many_arguments)] // 8 args coesos (worker DT-3); idem run_broker
+/// Runs **entirely on the calling thread** (context affinity): `backend`,
+/// `probe` and the `mem_free` closure borrow the thread-affine context, which lives in the
+/// caller until this function returns.
+#[allow(clippy::too_many_arguments)] // 8 cohesive args (worker DT-3); same as run_broker
 fn serve_ublk_residency<M: VramMemory, F: Fn() -> Option<u64>>(
     mut backend: VramBackend<M>,
     mut probe: CanaryProbe<M>,
@@ -478,7 +478,7 @@ fn serve_ublk_residency<M: VramMemory, F: Fn() -> Option<u64>>(
     residency: ResidencyConfig,
     demotes: Arc<AtomicU32>,
 ) -> io::Result<()> {
-    // Estado da residência (espelha o worker NBD do main.rs).
+    // Residency state (mirrors the NBD worker of main.rs).
     let mut canary: Option<Canary> = None;
     let mut baseline: Vec<u64> = Vec::new();
     let mut sampler = ResidencySampler::new(residency);
@@ -489,7 +489,7 @@ fn serve_ublk_residency<M: VramMemory, F: Fn() -> Option<u64>>(
     while let Ok(mut work) = work_rx.recv() {
         let touches_vram = matches!(work.req.cmd, Command::Read | Command::Write);
 
-        // serve-only (DT-16): cronometra só a op de VRAM, não a espera na fila.
+        // serve-only (DT-16): times only the VRAM op, not the queue wait.
         let t0 = Instant::now();
         let result = serve_request(&work.req, &mut backend, &mut work.payload);
         let lat_us = u64::try_from(t0.elapsed().as_micros()).unwrap_or(u64::MAX);
@@ -502,20 +502,20 @@ fn serve_ublk_residency<M: VramMemory, F: Fn() -> Option<u64>>(
             is_read,
         };
         if reply_tx.send(reply).is_err() {
-            break; // ring owner caiu
+            break; // ring owner dropped
         }
 
-        // Poll não-bloqueante do swapoff de DEMOTE em curso (re-arma se falhar).
+        // Non-blocking poll of the ongoing DEMOTE swapoff (re-arms if it fails).
         if let Some(rx) = demote_rx.take() {
             match rx.try_recv() {
                 Ok(true) => demoted = true,
-                Ok(false) => {} // falhou: canário re-arma (demote_rx fica None)
+                Ok(false) => {} // failed: canary re-arms (demote_rx becomes None)
                 Err(std::sync::mpsc::TryRecvError::Empty) => demote_rx = Some(rx),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
             }
         }
 
-        // Canário §9 (latência serve-only) — gatilho primário.
+        // Canary §9 (serve-only latency) — primary trigger.
         if touches_vram && !demoted && demote_rx.is_none() {
             match canary.as_mut() {
                 None => {
@@ -527,8 +527,8 @@ fn serve_ublk_residency<M: VramMemory, F: Fn() -> Option<u64>>(
                     }
                 }
                 Some(c) => {
-                    // free=u64::MAX de propósito: o sinal aqui é a latência; free/
-                    // conteúdo vêm da sonda §9.4 abaixo.
+                    // free=u64::MAX on purpose: the signal here is latency; free/
+                    // content come from the probe §9.4 below.
                     if let Verdict::Demote(_) = c.sample(lat_us, true, u64::MAX) {
                         demotes.fetch_add(1, Ordering::Relaxed);
                         demote_rx = Some(spawn_swapoff(swap_dev));
@@ -537,7 +537,7 @@ fn serve_ublk_residency<M: VramMemory, F: Fn() -> Option<u64>>(
             }
         }
 
-        // Sonda dedicada §9.4 (conteúdo/free em cadência) com histerese.
+        // Dedicated probe §9.4 (content/free in cadence) with hysteresis.
         if touches_vram && !demoted && demote_rx.is_none() && cadence.tick() {
             let content = probe.check_content().ok();
             let free = mem_free();
@@ -548,7 +548,7 @@ fn serve_ublk_residency<M: VramMemory, F: Fn() -> Option<u64>>(
         }
     }
 
-    // Teardown DT-17: espera (bounded) o swapoff em voo, zera VRAM + canário.
+    // Teardown DT-17: waits (bounded) for the swapoff in flight, zeroes VRAM + canary.
     if let Some(rx) = demote_rx.take() {
         let _ = rx.recv_timeout(Duration::from_secs(5));
     }
@@ -557,11 +557,11 @@ fn serve_ublk_residency<M: VramMemory, F: Fn() -> Option<u64>>(
     Ok(())
 }
 
-/// Como [`spawn_server_dt3_vram`], mas o worker (dono do contexto CUDA) **também roda
-/// a máquina de residência** (Opção 1 do PRD `ublk-daemon-integration`): mede a
-/// latência serve-only (canário §9), sonda conteúdo/free em cadência (§9.4) e, no
-/// veredito DEMOTE, dispara `swapoff(swap_dev)` numa thread separada (Disciplina 3).
-/// Tudo na thread worker — nenhuma chamada CUDA cross-thread (afinidade do contexto).
+/// Like [`spawn_server_dt3_vram`], but the worker (owner of the CUDA context) **also runs
+/// the residency machine** (Option 1 of PRD `ublk-daemon-integration`): measures
+/// serve-only latency (canary §9), probes content/free in cadence (§9.4) and, upon
+/// DEMOTE verdict, triggers `swapoff(swap_dev)` in a separate thread (Discipline 3).
+/// Everything on the worker thread — no cross-thread CUDA calls (context affinity).
 pub fn spawn_server_dt3_vram_with_residency(
     char_path: impl AsRef<Path>,
     queue_depth: u16,
@@ -581,19 +581,19 @@ pub fn spawn_server_dt3_vram_with_residency(
     let demotes_worker = Arc::clone(&demotes);
 
     let worker = thread::spawn(move || -> io::Result<()> {
-        // Todo o stack CUDA + a região-canário vivem nesta thread (afinidade do ctx).
+        // The entire CUDA stack + the canary region live in this thread (context affinity).
         let cuda = Cuda::load().map_err(cuda_to_io)?;
         let device = cuda.device(0).map_err(cuda_to_io)?;
         let ctx = cuda.create_context(&device).map_err(cuda_to_io)?;
         let mut mem = ctx.alloc(vram_bytes).map_err(cuda_to_io)?;
         mem.zero().map_err(cuda_to_io)?;
         let backend = VramBackend::new(mem, block_size);
-        // Região-canário dedicada (§9.4): separada da swap, não endereçável por I/O.
+        // Dedicated canary region (§9.4): separated from swap, not addressable by I/O.
         let canary_region = ctx.alloc(CANARY_BYTES).map_err(cuda_to_io)?;
         let probe = CanaryProbe::new(canary_region);
-        // O free-floor vem do contexto CUDA (`mem_info`); o loop de residência é
-        // genérico sobre o backend de VRAM (RF-G1) — um provider Vulkan futuro reusa
-        // `serve_ublk_residency` com o seu próprio `mem_free`.
+        // The free-floor comes from the CUDA context (`mem_info`); the residency loop is
+        // generic over the VRAM backend (RF-G1) — a future Vulkan provider reuses
+        // `serve_ublk_residency` with its own `mem_free`.
         serve_ublk_residency(
             backend,
             probe,
@@ -624,9 +624,9 @@ mod residency_tests {
     use super::*;
     use ramshared_vram::VramError;
 
-    /// Backend de VRAM **fake** em RAM (`Vec<u8>`): exercita o loop genérico
-    /// [`serve_ublk_residency`] (serve + §9.4 + teardown) **sem GPU/ublk/root** — seguro
-    /// no WSL2. O e2e com CUDA+ublk real é o `#[ignore]` `dt3_vram_residency_*` (gated).
+    /// **Fake VRAM backend in RAM (`Vec<u8>`): exercises the generic loop
+    /// [`serve_ublk_residency`] (serve + §9.4 + teardown) **without GPU/ublk/root** — safe
+    /// on WSL2. The real e2e with CUDA+ublk is the `#[ignore]` `dt3_vram_residency_*` (gated).
     struct FakeVram(Vec<u8>);
 
     impl FakeVram {
@@ -692,10 +692,10 @@ mod residency_tests {
         }
     }
 
-    /// Dirige `n` Reads pelo loop genérico com o `mem_free` dado e devolve o nº de
-    /// DEMOTEs. `_reply_rx` fica vivo até o join (senão `reply_tx.send` falha e o loop
-    /// quebra cedo); `work_tx` é dropado para encerrar o loop. Sem swap real: o
-    /// `swap_dev` inexistente faz o `swapoff` falhar sem efeito colateral.
+    /// Directs `n` Reads through the generic loop with the given `mem_free` and returns the number of
+    /// DEMOTEs. `_reply_rx` remains alive until join (otherwise `reply_tx.send` fails and the loop
+    /// breaks early); `work_tx` is dropped to terminate the loop. Without real swap: the
+    /// non-existent `swap_dev` makes `swapoff` fail without side effects.
     fn run_loop(cfg: ResidencyConfig, mem_free: fn() -> Option<u64>, n: u16) -> u32 {
         let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(4);
         let (reply_tx, _reply_rx) = mpsc::channel::<WorkerReply>();
@@ -720,21 +720,21 @@ mod residency_tests {
         for tag in 0..n {
             work_tx.send(read_work(tag)).expect("enfileira work");
         }
-        drop(work_tx); // encerra o loop
+        drop(work_tx); // terminates the loop
         worker.join().expect("worker join").expect("serve ok");
         demotes.load(Ordering::Relaxed)
     }
 
     #[test]
     fn demote_fires_when_free_below_floor() {
-        // latency_mult alto -> o canário §9 nunca dispara (serve fake é ~0us); o DEMOTE
-        // vem da sonda §9.4 (free=0 < free_floor). consecutive=1 -> 1 amostra degradada.
+        // high latency_mult -> the canary §9 never fires (fake serve is ~0us); the DEMOTE
+        // comes from the probe §9.4 (free=0 < free_floor). consecutive=1 -> 1 degraded sample.
         let cfg = ResidencyConfig {
             latency_mult: 4096,
             consecutive: 1,
             free_floor_bytes: 1 << 30, // 1 GiB; free=0 fica abaixo
         };
-        // >=64 reads para a cadência §9.4 (CANARY_EVERY) disparar ao menos uma vez.
+        // >=64 reads for the cadence §9.4 (CANARY_EVERY) to fire at least once.
         let demotes = run_loop(cfg, || Some(0), 80);
         assert!(
             demotes >= 1,
@@ -744,13 +744,13 @@ mod residency_tests {
 
     #[test]
     fn no_demote_when_healthy() {
-        // free abundante + serve rápido -> nenhum gatilho (§9 nem §9.4).
+        // abundant free + fast serve -> no trigger (§9 nor §9.4).
         let cfg = ResidencyConfig {
             latency_mult: 4096,
             consecutive: 1,
             free_floor_bytes: 0,
         };
         let demotes = run_loop(cfg, || Some(u64::MAX), 80);
-        assert_eq!(demotes, 0, "não deveria haver DEMOTE com VRAM saudável");
+        assert_eq!(demotes, 0, "should not have DEMOTE with healthy VRAM");
     }
 }

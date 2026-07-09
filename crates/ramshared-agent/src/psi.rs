@@ -1,26 +1,26 @@
-//! Leitura e parsing de `/proc` para o control-plane do agente:
-//! - `/proc/pressure/memory` → [`PsiSample`] (sinal "quem precisa mais", RF-B2).
-//! - `/proc/swaps` → `Vec<SwapEntry>` (reconciliação DT-9/DT-21, "mais ociosas" DT-19).
-//! - `/proc/self/status` → euid (guarda de privilégio DT-13/DT-26).
+//! Reading and parsing of `/proc` for the agent's control-plane:
+//! - `/proc/pressure/memory` → [`PsiSample`] (signal "who needs more", RF-B2).
+//! - `/proc/swaps` → `Vec<SwapEntry>` (reconciliation DT-9/DT-21, "most idle" DT-19).
+//! - `/proc/self/status` → euid (privilege guard DT-13/DT-26).
 //!
-//! O parsing é separado da leitura de arquivo para ser testável com fixtures (Disciplina 13:
-//! o teste exercita o parser, não o `/proc` da máquina).
+//! Parsing is separated from file reading to be testable with fixtures (Discipline 13:
+//! the test exercises the parser, not the machine's `/proc`).
 
 use std::io::{Error, ErrorKind, Result};
 
 use ramshared_broker::model::PsiSample;
 use ramshared_broker::protocol::SwapEntry;
 
-/// Lê e parseia `/proc/pressure/memory`.
+/// Reads and parses `/proc/pressure/memory`.
 pub fn read_psi() -> Result<PsiSample> {
     let raw = std::fs::read_to_string("/proc/pressure/memory")?;
     parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))
 }
 
-/// Parseia o conteúdo de `/proc/pressure/memory`. Usa a linha `some` (stall parcial), que é
-/// o sinal de pressão relevante para swap. `None` se a linha/campos não baterem.
+/// Parses the content of `/proc/pressure/memory`. Uses the `some` line (partial stall), which is
+/// the relevant pressure signal for swap. `None` if the line/fields do not match.
 ///
-/// Formato: `some avg10=0.00 avg60=0.00 avg300=0.00 total=12345`.
+/// Format: `some avg10=0.00 avg60=0.00 avg300=0.00 total=12345`.
 pub fn parse_psi(content: &str) -> Option<PsiSample> {
     let line = content.lines().find(|l| l.starts_with("some "))?;
     let (mut avg10, mut avg60, mut total) = (None, None, None);
@@ -40,13 +40,13 @@ pub fn parse_psi(content: &str) -> Option<PsiSample> {
     })
 }
 
-/// Lê e parseia `/proc/swaps`.
+/// Reads and parses `/proc/swaps`.
 pub fn read_swaps() -> Result<Vec<SwapEntry>> {
     Ok(parse_swaps(&std::fs::read_to_string("/proc/swaps")?))
 }
 
-/// Parseia `/proc/swaps`. A primeira linha é cabeçalho; cada linha seguinte é
-/// `Filename Type Size Used Priority`. Linhas malformadas são puladas (robustez de boundary).
+/// Parses `/proc/swaps`. The first line is the header; each subsequent line is
+/// `Filename Type Size Used Priority`. Malformed lines are skipped (boundary robustness).
 pub fn parse_swaps(content: &str) -> Vec<SwapEntry> {
     content
         .lines()
@@ -66,8 +66,8 @@ pub fn parse_swaps(content: &str) -> Vec<SwapEntry> {
         .collect()
 }
 
-/// Parseia `memory.swap.current` (cgroup v2): inteiro em bytes. `"max"` (forma de `.max`,
-/// defensivo) ou conteúdo inválido → `None`. RF-2/DT-10.
+/// Parses `memory.swap.current` (cgroup v2): integer in bytes. `"max"` (defensive form of `.max`)
+/// or invalid content → `None`. RF-2/DT-10.
 pub fn parse_memcg_swap(content: &str) -> Option<u64> {
     let t = content.trim();
     if t == "max" {
@@ -76,11 +76,11 @@ pub fn parse_memcg_swap(content: &str) -> Option<u64> {
     t.parse().ok()
 }
 
-/// Lê `memory.swap.current` do cgroup v2 do processo (via `/proc/self/cgroup` → mount unificado em
-/// `/sys/fs/cgroup`). `None` se não for cgroup v2 / arquivo ausente (degrade, DT-9). RF-2/DT-10.
+/// Reads `memory.swap.current` from the process's cgroup v2 (via `/proc/self/cgroup` → unified mount in
+/// `/sys/fs/cgroup`). `None` if not cgroup v2 / missing file (degrade, DT-9). RF-2/DT-10.
 pub fn read_memcg_swap() -> Option<u64> {
     let cg = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-    let path = cg.lines().find_map(|l| l.strip_prefix("0::"))?; // cgroup v2: linha única `0::/<path>`
+    let path = cg.lines().find_map(|l| l.strip_prefix("0::"))?; // cgroup v2: single line `0::/<path>`
     let file = format!(
         "/sys/fs/cgroup{}/memory.swap.current",
         path.trim().trim_end_matches('/')
@@ -88,8 +88,8 @@ pub fn read_memcg_swap() -> Option<u64> {
     parse_memcg_swap(&std::fs::read_to_string(file).ok()?)
 }
 
-/// Soma `sectors_read + sectors_written` (×512 = bytes) do device `dev` em `/proc/diskstats`.
-/// `dev` pode ser caminho (`/dev/nbd0`) ou nome (`nbd0`). `None` se o device não aparece. RF-2/DT-11.
+/// Sums `sectors_read + sectors_written` (×512 = bytes) of device `dev` in `/proc/diskstats`.
+/// `dev` can be path (`/dev/nbd0`) or name (`nbd0`). `None` if device is not found. RF-2/DT-11.
 pub fn parse_diskstats(content: &str, dev: &str) -> Option<u64> {
     let name = dev.rsplit('/').next().unwrap_or(dev);
     content.lines().find_map(|line| {
@@ -103,18 +103,18 @@ pub fn parse_diskstats(content: &str, dev: &str) -> Option<u64> {
     })
 }
 
-/// Lê `/proc/diskstats` e soma os sectors (×512) do device `dev`. `None` se ausente.
+/// Reads `/proc/diskstats` and sums sectors (×512) of device `dev`. `None` if missing.
 pub fn read_diskstats(dev: &str) -> Option<u64> {
     parse_diskstats(&std::fs::read_to_string("/proc/diskstats").ok()?, dev)
 }
 
-/// Lê o euid do processo via `/proc/self/status` (DT-26: sem libc, só `/proc`).
+/// Reads the euid of the process via `/proc/self/status` (DT-26: no libc, only `/proc`).
 pub fn read_euid() -> Result<u32> {
     let raw = std::fs::read_to_string("/proc/self/status")?;
     parse_euid(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "campo Uid ausente"))
 }
 
-/// Parseia a linha `Uid:\t<real>\t<effective>\t<saved>\t<fs>` e devolve o euid (3º campo).
+/// Parses the line `Uid:\t<real>\t<effective>\t<saved>\t<fs>` and returns the euid (3rd field).
 pub fn parse_euid(status: &str) -> Option<u32> {
     let line = status.lines().find(|l| l.starts_with("Uid:"))?;
     line.split_whitespace().nth(2)?.parse().ok()
@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn parse_psi_missing_field_is_none() {
-        // Sem total= → não dá para montar a amostra.
+        // Without total= → cannot assemble the sample.
         assert!(parse_psi("some avg10=1.0 avg60=2.0 avg300=3.0\n").is_none());
     }
 
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn parse_euid_setuid_differs_from_real() {
-        // real=1000, effective=0 (setuid root) → guarda DT-26 deve ver o effective (0).
+        // real=1000, effective=0 (setuid root) → guard DT-26 must see the effective (0).
         assert_eq!(parse_euid("Uid:\t1000\t0\t0\t1000\n"), Some(0));
     }
 

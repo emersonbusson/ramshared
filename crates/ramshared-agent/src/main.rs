@@ -1,14 +1,14 @@
-//! `ramshared-agent` — agente (tenant) do Memory Broker. Conecta ao broker por TCP, reporta
-//! PSI/swaps 1×/s e executa os comandos `SwapOn`/`SwapOff`/`DemoteAll` sobre NBD (DT-27).
+//! `ramshared-agent` — agent (tenant) of the Memory Broker. Connects to the broker via TCP, reports
+//! PSI/swaps 1×/s and executes `SwapOn`/`SwapOff`/`DemoteAll` commands over NBD (DT-27).
 //!
-//! Arquitetura de 3 threads com **escritor único** (DT-27/R8):
-//! - **reader**: bloqueia em `read_msg(socket)` e encaminha cada `Msg` ao loop principal;
-//! - **exec**: executa `attach`/`detach` (bloqueante) fora do caminho do socket e devolve o
-//!   resultado por canal — assim um `swapon` lento nunca trava o heartbeat;
-//! - **main**: dono do socket de escrita — manda `Psi`, despacha comandos ao exec, drena os
-//!   resultados de volta como `SwapOnDone`/`SwapOffDone` e arma o watchdog (DT-18).
+//! 3-thread architecture with **single writer** (DT-27/R8):
+//! - **reader**: blocks on `read_msg(socket)` and forwards each `Msg` to the main loop;
+//! - **exec**: executes `attach`/`detach` (blocking) out of the socket path and returns the
+//!   result via channel — this way a slow `swapon` never blocks the heartbeat;
+//! - **main**: owner of the write socket — sends `Psi`, dispatches commands to exec, drains the
+//!   results back as `SwapOnDone`/`SwapOffDone` and arms the watchdog (DT-18).
 //!
-//! SPEC: docs/memory-broker/SPECv2.md (ITEM-9). Sem `unsafe`.
+//! SPEC: docs/memory-broker/SPECv2.md (ITEM-9). Without `unsafe`.
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;
@@ -23,18 +23,18 @@ use ramshared_agent::{psi, swap};
 use ramshared_broker::model::{SliceId, TransportKind};
 use ramshared_broker::protocol::{Msg, NbdEndpoint, PROTO_VERSION, TenantMem, read_msg, write_msg};
 
-/// Cadência de envio do `Psi` (control-plane de baixa taxa, ~1 msg/s).
+/// Transmission rate of `Psi` (low-rate control-plane, ~1 msg/s).
 const PSI_PERIOD: Duration = Duration::from_secs(1);
-/// Fatia de espera do loop principal (responsividade do timer/exec sem busy-loop).
+/// Poll slice of the main loop (responsiveness of the timer/exec without busy-loop).
 const POLL_SLICE: Duration = Duration::from_millis(200);
-/// Backoff de reconexão ao broker: começa em [`INITIAL_BACKOFF`] e dobra até [`MAX_BACKOFF`]
-/// enquanto a conexão falha (broker down) — evita thrash de reconexão; reseta após uma sessão
-/// produtiva (≥ [`PRODUCTIVE_SESSION`], i.e. que de fato conectou e rodou).
+/// Reconnection backoff to the broker: starts at [`INITIAL_BACKOFF`] and doubles up to [`MAX_BACKOFF`]
+/// while connection fails (broker down) — avoids reconnection thrashing; resets after a
+/// productive session (≥ [`PRODUCTIVE_SESSION`], i.e., actually connected and ran).
 const INITIAL_BACKOFF: Duration = Duration::from_secs(2);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const PRODUCTIVE_SESSION: Duration = Duration::from_secs(10);
 
-/// Próximo backoff (dobra com teto). Pura/testável.
+/// Next backoff (doubles with cap). Pure/testable.
 fn next_backoff(cur: Duration) -> Duration {
     (cur * 2).min(MAX_BACKOFF)
 }
@@ -49,7 +49,7 @@ struct Config {
     status_only: bool,
 }
 
-/// Comando do loop principal para a thread de execução.
+/// Command from the main loop to the execution thread.
 enum ExecCmd {
     On {
         slice: SliceId,
@@ -64,7 +64,7 @@ enum ExecCmd {
     },
 }
 
-/// Resultado devolvido pela thread de execução ao loop principal.
+/// Result returned by the execution thread to the main loop.
 enum ExecResult {
     On {
         slice: SliceId,
@@ -155,7 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("--tenant é obrigatório no modo agente\n{}", usage()).into());
     }
 
-    // DT-26: swap exige privilégio. Lê o euid via /proc (sem libc) e recusa cedo, com número.
+    // DT-26: swap requires privilege. Reads euid via /proc (no libc) and refuses early, with number.
     let euid = psi::read_euid()?;
     if euid != 0 {
         return Err(format!("precisa de root para swap (euid atual={euid}, esperado 0)").into());
@@ -164,8 +164,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     run_agent(&cfg)
 }
 
-/// Modo `--status`: consulta one-shot (não registra; o broker responde `StatusReply` a qualquer
-/// sessão) e imprime o estado.
+/// `--status` mode: one-shot query (does not register; the broker responds with `StatusReply` to any
+/// session) and prints the status.
 fn run_status(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let stream = TcpStream::connect(&cfg.broker)?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
@@ -213,7 +213,7 @@ fn run_status(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
     Err("broker não respondeu StatusReply".into())
 }
 
-/// Sobe a thread de execução (vive por todo o processo) e roda o loop de sessão com reconexão.
+/// Spawns the execution thread (lives for the entire process duration) and runs the session loop with reconnection.
 fn run_agent(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<ExecCmd>();
     let (res_tx, res_rx) = mpsc::channel::<ExecResult>();
@@ -237,7 +237,7 @@ fn run_agent(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => eprintln!("[agent] sessão caiu: {e}; reconectando em {backoff:?}"),
         }
         thread::sleep(backoff);
-        // Sessão produtiva (conectou + rodou) → volta ao mínimo; falha rápida (broker down) → cresce.
+        // Productive session (connected + ran) → goes back to minimum; quick failure (broker down) → grows.
         backoff = if ran >= PRODUCTIVE_SESSION {
             INITIAL_BACKOFF
         } else {
@@ -246,8 +246,8 @@ fn run_agent(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-/// Uma sessão TCP: conecta, registra, e roda o loop até EOF/erro/watchdog. Ao sair, faz
-/// `swapoff` best-effort das slices ainda ativas (broker morto ⇒ NBD morto).
+/// A TCP session: connects, registers, and runs the loop until EOF/error/watchdog. On exit, performs
+/// best-effort `swapoff` of still active slices (dead broker ⇒ dead NBD).
 fn session(
     cfg: &Config,
     cmd_tx: &Sender<ExecCmd>,
@@ -257,7 +257,7 @@ fn session(
     let mut w = stream.try_clone()?;
     let reader = BufReader::new(stream);
 
-    // reader thread: socket → canal de Msg; sai (dropa o sender) em EOF/erro.
+    // reader thread: socket → Msg channel; exits (drops sender) on EOF/error.
     let (msg_tx, msg_rx) = mpsc::channel::<Msg>();
     let reader_handle = thread::spawn(move || reader_loop(reader, msg_tx));
 
@@ -278,11 +278,11 @@ fn session(
     loop {
         let now = Instant::now();
 
-        // (1) heartbeat de PSI na cadência. Erro de leitura de /proc é transiente: loga e segue.
+        // (1) PSI heartbeat at cadence. Error reading /proc is transient: log and continue.
         if now >= next_psi {
             match (psi::read_psi(), psi::read_swaps()) {
                 (Ok(sample), Ok(swaps)) => {
-                    // RF-2: telemetria de memória (cgroup swap + diskstats dos nbd montados, DT-10/11).
+                    // RF-2: memory telemetry (cgroup swap + diskstats of mounted nbds, DT-10/11).
                     let mem = Some(TenantMem {
                         swap_current: psi::read_memcg_swap(),
                         diskstats_io: active.values().filter_map(|d| psi::read_diskstats(d)).sum(),
@@ -301,7 +301,7 @@ fn session(
             next_psi = now + PSI_PERIOD;
         }
 
-        // (2) drena resultados do exec → Done de volta ao broker (escritor único = esta thread).
+        // (2) drains results from exec → Done back to the broker (single writer = this thread).
         while let Ok(res) = res_rx.try_recv() {
             let done = match res {
                 ExecResult::On { slice, ok, detail } => {
@@ -324,19 +324,19 @@ fn session(
             break;
         }
 
-        // (3) espera por uma mensagem do broker (com fatia curta p/ manter timer/exec vivos).
+        // (3) waits for a message from the broker (with a short slice to keep timer/exec alive).
         match msg_rx.recv_timeout(POLL_SLICE) {
             Ok(msg) => {
                 wd.touch(Instant::now());
                 if !handle_msg(cfg, msg, &mut active, cmd_tx) {
-                    break; // broker mandou Error / pediu para encerrar
+                    break; // broker sent Error / requested shutdown
                 }
             }
             Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => break, // reader saiu (EOF/erro de socket)
+            Err(RecvTimeoutError::Disconnected) => break, // reader exited (EOF/socket error)
         }
 
-        // (4) watchdog: broker silencioso além do deadline ⇒ sessão morta.
+        // (4) watchdog: silent broker beyond the deadline ⇒ dead session.
         if wd.expired(Instant::now()) {
             eprintln!(
                 "[agent] watchdog: broker silencioso por {}s; encerrando sessão",
@@ -346,7 +346,7 @@ fn session(
         }
     }
 
-    // Cleanup: solta as slices ativas (best-effort; broker reconcilia no re-register).
+    // Cleanup: releases active slices (best-effort; broker reconciles on re-register).
     for (slice, dev) in active.drain() {
         if let Err(e) = swap::detach_swap(&dev) {
             eprintln!("[agent] cleanup swapoff s{slice} ({dev}) falhou: {e}");
@@ -361,7 +361,7 @@ fn session(
     }
 }
 
-/// Trata uma mensagem do broker. Retorna `false` se a sessão deve encerrar.
+/// Handles a message from the broker. Returns `false` if the session should terminate.
 fn handle_msg(
     cfg: &Config,
     msg: Msg,
@@ -373,7 +373,7 @@ fn handle_msg(
             eprintln!("[agent] registrado: tenant_id={tenant_id}");
             true
         }
-        Msg::Ack => true, // heartbeat (já tocou o watchdog)
+        Msg::Ack => true, // heartbeat (already touched the watchdog)
         Msg::SwapOn {
             slice,
             export,
@@ -382,7 +382,7 @@ fn handle_msg(
         } => {
             let dev = format!("{}{}", cfg.nbd_base, slice);
             active.insert(slice, dev.clone());
-            let prio = swap_prio.or(cfg.swap_prio); // DT-7: broker é autoritativo; CLI é fallback
+            let prio = swap_prio.or(cfg.swap_prio); // DT-7: broker is authoritative; CLI is fallback
             cmd_tx
                 .send(ExecCmd::On {
                     slice,
@@ -426,7 +426,7 @@ fn handle_msg(
     }
 }
 
-/// Loop da thread de execução: roda attach/detach (bloqueante) e devolve o resultado.
+/// Execution thread loop: runs attach/detach (blocking) and returns the result.
 fn exec_loop(cmd_rx: Receiver<ExecCmd>, res_tx: Sender<ExecResult>) {
     for cmd in cmd_rx.iter() {
         let res = match cmd {
@@ -452,13 +452,13 @@ fn exec_loop(cmd_rx: Receiver<ExecCmd>, res_tx: Sender<ExecResult>) {
             }
         };
         if res_tx.send(res).is_err() {
-            break; // loop principal sumiu; nada a fazer
+            break; // main loop is gone; nothing to do
         }
     }
 }
 
-/// Loop da thread leitora: encaminha cada `Msg` ao loop principal; sai em EOF/erro (dropando o
-/// sender, o que o loop principal detecta como `Disconnected`).
+/// Reader thread loop: forwards each `Msg` to the main loop; exits on EOF/error (dropping the
+/// sender, which the main loop detects as `Disconnected`).
 fn reader_loop(mut reader: BufReader<TcpStream>, msg_tx: Sender<Msg>) {
     loop {
         match read_msg(&mut reader) {
@@ -467,7 +467,7 @@ fn reader_loop(mut reader: BufReader<TcpStream>, msg_tx: Sender<Msg>) {
                     break;
                 }
             }
-            Ok(None) => break, // EOF limpo
+            Ok(None) => break, // clean EOF
             Err(e) => {
                 eprintln!("[agent] erro de leitura do socket: {e}");
                 break;
@@ -487,14 +487,14 @@ mod tests {
 
     #[test]
     fn backoff_doubles_up_to_cap() {
-        // dobra: 2→4→8→16→32→60(teto)→60
+        // doubles: 2→4→8→16→32→60(cap)→60
         assert_eq!(next_backoff(INITIAL_BACKOFF), Duration::from_secs(4));
         assert_eq!(next_backoff(Duration::from_secs(4)), Duration::from_secs(8));
         assert_eq!(
             next_backoff(Duration::from_secs(16)),
             Duration::from_secs(32)
         );
-        // 32*2=64 → satura no teto de 60
+        // 32*2=64 → saturates at the cap of 60
         assert_eq!(next_backoff(Duration::from_secs(32)), MAX_BACKOFF);
         assert_eq!(next_backoff(MAX_BACKOFF), MAX_BACKOFF);
     }

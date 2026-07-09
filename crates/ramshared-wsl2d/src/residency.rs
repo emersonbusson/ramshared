@@ -1,30 +1,30 @@
-//! Detecção de eviction WDDM por canário (SPEC §9). **Decisão pura**: alimentada
-//! com amostras (latência / integridade / free), decide DEMOTE pelos gatilhos da
-//! §9.3. A amostragem CUDA real e o `swapoff` do tier vivem no laço do daemon —
-//! aqui fica só a lógica (testável sem GPU/root), como o `ramshared-tier`.
+//! Canary-based detection of WDDM eviction (SPEC §9). **Pure decision**: fed
+//! with samples (latency / integrity / free), decides DEMOTE based on triggers from
+//! §9.3. Real CUDA sampling and tier `swapoff` live in the daemon loop —
+//! here lies only the logic (testable without GPU/root), similar to `ramshared-tier`.
 
-/// Parâmetros dos gatilhos (§9.3). Calibração (DT-31): a eviction WDDM spike ~330× o baseline
-/// (Fase 0), MAS a latência de serve sob CARGA pesada chega a ~17× (medido no e2e cross-host
-/// civm). `8×` dava falso-positivo e derrubava o swap sob a própria carga que deveria suportar.
-/// `64×` tem folga dos dois lados (>>17× de carga, <<330× de eviction); a **sonda de conteúdo
-/// §9.4** é o detector AUTORITATIVO de eviction (a latência é só um hint rápido e grosseiro).
+/// Trigger parameters (§9.3). Calibration (DT-31): WDDM eviction spikes ~330× baseline
+/// (Phase 0), BUT serve latency under heavy LOAD reaches ~17× (measured on e2e cross-host
+/// civm). `8×` gave false positives and dropped the swap under the very load it was supposed to support.
+/// `64×` has margins on both sides (>>17× load, <<330× eviction); the **content probe
+/// §9.4** is the AUTHORITATIVE eviction detector (latency is just a fast, coarse hint).
 #[derive(Clone, Copy, Debug)]
 pub struct ResidencyConfig {
-    /// (a) latência > `latency_mult` × baseline.
+    /// (a) latency > `latency_mult` × baseline.
     pub latency_mult: u64,
-    /// ...por `consecutive` amostras consecutivas.
+    /// ...for `consecutive` consecutive samples.
     pub consecutive: u32,
-    /// (c) `cuMemGetInfo` free abaixo deste piso → host reavendo VRAM.
+    /// (c) `cuMemGetInfo` free below this floor → host reclaiming VRAM.
     pub free_floor_bytes: u64,
 }
 
 impl Default for ResidencyConfig {
     fn default() -> Self {
         Self {
-            latency_mult: 64, // DT-31: 8× falso-positivava sob carga (~17×); 64× < eviction (330×)
+            latency_mult: 64, // DT-31: 8× gave false positives under load (~17×); 64× < eviction (330×)
             consecutive: 3,
-            // DT-3: piso de "GPU criticamente cheia". Conservador e tunável; com a
-            // histerese do `ResidencySampler` (DT-9) o risco de falso-positivo cai.
+            // DT-3: "GPU critically full" floor. Conservative and tunable; with the
+            // hysteresis of `ResidencySampler` (DT-9) the risk of false positives drops.
             free_floor_bytes: 64 * 1024 * 1024,
         }
     }
@@ -43,8 +43,8 @@ pub enum Verdict {
     Demote(DemoteReason),
 }
 
-/// Estado do canário: baseline (mediana logo após `VramAllocated`) + streak de
-/// amostras consecutivas acima do limiar de latência.
+/// Canary state: baseline (median right after `VramAllocated`) + streak of
+/// consecutive samples above the latency threshold.
 pub struct Canary {
     cfg: ResidencyConfig,
     baseline_us: u64,
@@ -60,9 +60,9 @@ impl Canary {
         }
     }
 
-    /// Alimenta uma amostra. `content_ok=false` = canário corrompido (b);
-    /// `free_bytes` = `cuMemGetInfo` livre (c); `latency_us` = round-trip do
-    /// canário (a). SPEC §9.3.
+    /// Feeds a sample. `content_ok=false` = corrupted canary (b);
+    /// `free_bytes` = free `cuMemGetInfo` (c); `latency_us` = round-trip of
+    /// the canary (a). SPEC §9.3.
     pub fn sample(&mut self, latency_us: u64, content_ok: bool, free_bytes: u64) -> Verdict {
         if !content_ok {
             return Verdict::Demote(DemoteReason::Corruption);
@@ -77,7 +77,7 @@ impl Canary {
                 return Verdict::Demote(DemoteReason::Latency);
             }
         } else {
-            self.over_count = 0; // uma amostra boa zera o streak (anti falso-positivo)
+            self.over_count = 0; // a good sample resets the streak (anti-false-positive)
         }
         Verdict::Ok
     }
@@ -87,13 +87,13 @@ impl Canary {
     }
 }
 
-/// Amostrador da sonda dedicada (§9.4) com histerese. Diferente do [`Canary`]
-/// (latência por-request), este recebe conteúdo + free e decide:
-/// - corrupção confirmada (`content = Some(false)`) ⇒ DEMOTE **imediato** (raro,
-///   inequívoco; DT-9);
-/// - free abaixo do piso **OU** amostra degradada (erro de sonda/`mem_info`) ⇒
-///   incrementa `bad_streak`; só demove em `bad_streak >= consecutive` (DT-9/DT-11);
-/// - amostra boa zera o streak.
+/// Sampler of the dedicated probe (§9.4) with hysteresis. Different from [`Canary`]
+/// (per-request latency), this receives content + free and decides:
+/// - confirmed corruption (`content = Some(false)`) ⇒ **immediate** DEMOTE (rare,
+///   unequivocal; DT-9);
+/// - free below floor **OR** degraded sample (probe/`mem_info` error) ⇒
+///   increments `bad_streak`; only demotes on `bad_streak >= consecutive` (DT-9/DT-11);
+/// - good sample resets the streak.
 ///
 /// SPEC: `docs/008-vram-residency-canary/SPECv3.md` DT-9/DT-10/DT-11.
 pub struct ResidencySampler {
@@ -106,16 +106,16 @@ impl ResidencySampler {
         Self { cfg, bad_streak: 0 }
     }
 
-    /// Alimenta uma amostra da sonda em cadência.
-    /// - `content`: `Some(true)` = ok, `Some(false)` = corrupção (imediato),
-    ///   `None` = erro de sonda (degradada, DT-11).
-    /// - `free`: `Some(bytes)` ou `None` (erro de `mem_info`, degradada, DT-11).
+    /// Feeds a probe sample in cadence.
+    /// - `content`: `Some(true)` = ok, `Some(false)` = corruption (immediate),
+    ///   `None` = probe error (degraded, DT-11).
+    /// - `free`: `Some(bytes)` or `None` (mem_info error, degraded, DT-11).
     pub fn sample(&mut self, content: Option<bool>, free: Option<u64>) -> Verdict {
-        // Corrupção é o único gatilho imediato: raro e inequívoco.
+        // Corruption is the only immediate trigger: rare and unambiguous.
         if content == Some(false) {
             return Verdict::Demote(DemoteReason::Corruption);
         }
-        // Sinal fraco/transiente: free baixo, erro de sonda ou erro de mem_info.
+        // Weak/transient signal: low free, probe error, or mem_info error.
         let degraded = content.is_none()
             || free.is_none()
             || free.is_some_and(|f| f < self.cfg.free_floor_bytes);
@@ -125,7 +125,7 @@ impl ResidencySampler {
                 return Verdict::Demote(DemoteReason::FreeFloor);
             }
         } else {
-            self.bad_streak = 0; // amostra boa zera o streak (anti falso-positivo)
+            self.bad_streak = 0; // good sample resets the streak (anti-false-positive)
         }
         Verdict::Ok
     }
@@ -140,35 +140,35 @@ mod tests {
     use super::*;
 
     fn canary() -> Canary {
-        Canary::new(ResidencyConfig::default(), 4000) // baseline 4 ms → limiar 256 ms (64×, DT-31)
+        Canary::new(ResidencyConfig::default(), 4000) // baseline 4 ms → threshold 256 ms (64×, DT-31)
     }
 
     #[test]
     fn latency_demote_needs_consecutive() {
         let mut c = canary();
-        // o spike medido na Fase 0 (1,18 s) está muito acima do limiar
+        // the spike measured in Phase 0 (1.18 s) is far above the threshold
         assert_eq!(c.sample(1_183_094, true, u64::MAX), Verdict::Ok); // 1
         assert_eq!(c.sample(1_183_094, true, u64::MAX), Verdict::Ok); // 2
         assert_eq!(
             c.sample(1_183_094, true, u64::MAX),
             Verdict::Demote(DemoteReason::Latency)
-        ); // 3 consecutivas
+        ); // 3 consecutive
     }
 
     #[test]
     fn good_sample_resets_streak() {
         let mut c = canary();
-        c.sample(500_000, true, u64::MAX); // over o limiar de 256 ms (1)
+        c.sample(500_000, true, u64::MAX); // over the 256 ms threshold (1)
         c.sample(500_000, true, u64::MAX); // over (2)
-        assert_eq!(c.sample(3000, true, u64::MAX), Verdict::Ok); // boa → reseta
+        assert_eq!(c.sample(3000, true, u64::MAX), Verdict::Ok); // good → resets
         assert_eq!(c.over_count(), 0);
-        assert_eq!(c.sample(500_000, true, u64::MAX), Verdict::Ok); // recomeça do 1
+        assert_eq!(c.sample(500_000, true, u64::MAX), Verdict::Ok); // restarts from 1
     }
 
     #[test]
     fn load_spike_below_threshold_stays_ok() {
-        // Regressão DT-31: spike de CARGA ~17× o baseline (não eviction) NÃO pode demover.
-        // Com 8× isto disparava e derrubava o swap sob carga (bug do e2e civm); com 64×, fica Ok.
+        // Regression DT-31: LOAD spike ~17× baseline (not eviction) must NOT demote.
+        // With 8× this triggered and dropped the swap under load (e2e civm bug); with 64×, it remains Ok.
         let mut c = canary(); // baseline 4 ms → limiar 256 ms
         for _ in 0..10 {
             assert_eq!(c.sample(4000 * 17, true, u64::MAX), Verdict::Ok); // 68 ms = 17× < 256 ms
@@ -215,8 +215,8 @@ mod sampler_tests {
         ResidencySampler::new(ResidencyConfig::default())
     }
 
-    // Kahneman ITEM-5 (#13 ilusão de validade): corrupção devolve dado errado
-    // apesar de "data-safe" → guarda que demove na hora, sem streak.
+    // Kahneman ITEM-5 (#13 validity illusion): corruption returns wrong data
+    // despite "data-safe" → guard that demotes immediately, without streak.
     #[test]
     fn corruption_is_immediate() {
         let mut s = sampler();
@@ -224,46 +224,46 @@ mod sampler_tests {
             s.sample(Some(false), Some(u64::MAX)),
             Verdict::Demote(DemoteReason::Corruption)
         );
-        assert_eq!(s.bad_streak(), 0); // corrupção não passa pelo streak
+        assert_eq!(s.bad_streak(), 0); // corruption does not pass through streak
     }
 
-    // Kahneman ITEM-6 (#5 worst-case): 1 leitura de free baixa é ruído; só
-    // `consecutive` baixas configuram pressão GPU-wide (DT-10).
+    // Kahneman ITEM-6 (#5 worst-case): 1 low free reading is noise; only
+    // `consecutive` low readings configure GPU-wide pressure (DT-10).
     #[test]
     fn free_floor_needs_consecutive() {
         let mut s = sampler();
-        let low = Some(8 * 1024 * 1024); // abaixo do piso de 64 MiB
+        let low = Some(8 * 1024 * 1024); // below the 64 MiB floor
         assert_eq!(s.sample(Some(true), low), Verdict::Ok); // 1
         assert_eq!(s.sample(Some(true), low), Verdict::Ok); // 2
         assert_eq!(
             s.sample(Some(true), low),
             Verdict::Demote(DemoteReason::FreeFloor)
-        ); // 3 consecutivas
+        ); // 3 consecutive
     }
 
-    // Kahneman ITEM-6 (#5 worst-case): um erro CUDA/`mem_info` isolado não é
-    // perda de residência (DT-11) — conta para o streak, não demove sozinho.
+    // Kahneman ITEM-6 (#5 worst-case): an isolated CUDA/`mem_info` error is not
+    // loss of residency (DT-11) — counts towards the streak, does not demote alone.
     #[test]
     fn transient_error_needs_consecutive() {
         let mut s = sampler();
-        assert_eq!(s.sample(None, Some(u64::MAX)), Verdict::Ok); // 1 (erro de sonda)
-        assert_eq!(s.sample(Some(true), None), Verdict::Ok); // 2 (erro de mem_info)
+        assert_eq!(s.sample(None, Some(u64::MAX)), Verdict::Ok); // 1 (probe error)
+        assert_eq!(s.sample(Some(true), None), Verdict::Ok); // 2 (mem_info error)
         assert_eq!(
             s.sample(None, None),
             Verdict::Demote(DemoteReason::FreeFloor)
-        ); // 3 degradadas
+        ); // 3 degraded
     }
 
     #[test]
     fn good_sample_resets_streak() {
         let mut s = sampler();
         let low = Some(8 * 1024 * 1024);
-        s.sample(Some(true), low); // degradada (1)
-        s.sample(Some(true), low); // degradada (2)
+        s.sample(Some(true), low); // degraded (1)
+        s.sample(Some(true), low); // degraded (2)
         assert_eq!(s.bad_streak(), 2);
-        assert_eq!(s.sample(Some(true), Some(u64::MAX)), Verdict::Ok); // boa → reseta
+        assert_eq!(s.sample(Some(true), Some(u64::MAX)), Verdict::Ok); // good → resets
         assert_eq!(s.bad_streak(), 0);
-        // recomeça do 1: 2 degradadas não bastam para demover
+        // restarts from 1: 2 degraded are not enough to demote
         assert_eq!(s.sample(Some(true), low), Verdict::Ok); // 1
         assert_eq!(s.sample(Some(true), low), Verdict::Ok); // 2
         assert_eq!(s.bad_streak(), 2);

@@ -1,10 +1,10 @@
-//! Hash por bloco (FNV-1a 64) + tabela de checksum pré-alocada (SPEC §8.1).
-//! **Não é cripto** — é detecção de corrupção/leitura torn, não segurança.
+//! Block hashing (FNV-1a 64) + pre-allocated checksum table (SPEC §8.1).
+//! **Not cryptographic** — meant for detecting memory corruption and torn reads, not security.
 
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-/// FNV-1a 64-bit sobre os bytes do bloco.
+/// FNV-1a 64-bit hash over block bytes.
 pub fn block_hash(data: &[u8]) -> u64 {
     let mut h = FNV_OFFSET;
     for &b in data {
@@ -14,8 +14,8 @@ pub fn block_hash(data: &[u8]) -> u64 {
     h
 }
 
-/// Tabela de checksum por índice de bloco, **pré-alocada** (sem alloc no hot path,
-/// SPEC §8). `None` = bloco ainda não escrito.
+/// Checksum table indexed by block number, **pre-allocated** (prevents allocations in the hot path,
+/// SPEC §8). `None` indicates the block has not been written yet.
 pub struct ChecksumTable {
     sums: Vec<Option<u64>>,
 }
@@ -27,7 +27,7 @@ impl ChecksumTable {
         }
     }
 
-    /// Grava o hash do bloco escrito. `false` se `idx` fora de faixa.
+    /// Records the hash of a written block. Returns `false` if `idx` is out of bounds.
     pub fn record(&mut self, idx: usize, data: &[u8]) -> bool {
         match self.sums.get_mut(idx) {
             Some(slot) => {
@@ -38,14 +38,14 @@ impl ChecksumTable {
         }
     }
 
-    /// Verifica o bloco lido contra o gravado.
-    /// `None` = nunca escrito (ok); `Some(true)` = casa; `Some(false)` =
-    /// divergência (corrupção/torn) → o chamador retorna I/O error.
+    /// Verifies the read block against the recorded hash.
+    /// `None` = never written (ok); `Some(true)` = matches; `Some(false)` =
+    /// mismatch (corruption/torn read) -> the caller returns an I/O error.
     pub fn verify(&self, idx: usize, data: &[u8]) -> Option<bool> {
         match self.sums.get(idx) {
             Some(Some(expected)) => Some(*expected == block_hash(data)),
             Some(None) => None,
-            None => Some(false), // fora de faixa = inválido
+            None => Some(false), // out of bounds = invalid
         }
     }
 }
@@ -84,8 +84,8 @@ mod tests {
     #[test]
     fn unwritten_block_is_none_oob_is_invalid() {
         let mut t = ChecksumTable::new(2);
-        assert_eq!(t.verify(0, &[0u8; 4096]), None); // nunca escrito
-        assert_eq!(t.verify(99, &[0u8; 4096]), Some(false)); // fora de faixa
+        assert_eq!(t.verify(0, &[0u8; 4096]), None); // never written
+        assert_eq!(t.verify(99, &[0u8; 4096]), Some(false)); // out of bounds
         assert!(!t.record(99, &[0u8; 4096]));
     }
 }

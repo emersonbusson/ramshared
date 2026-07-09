@@ -1,6 +1,6 @@
-//! Máquina de estados do daemon (SPEC §7). Transições inválidas são rejeitadas;
-//! `Failed` é alcançável de qualquer estado; `Demoted` (§9) tira a VRAM do pool
-//! sem matar o processo.
+//! Daemon state machine (SPEC §7). Invalid transitions are rejected;
+//! `Failed` is reachable from any state; `Demoted` (§9) removes VRAM from the pool
+//! without killing the process.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum State {
@@ -18,11 +18,11 @@ pub enum State {
 }
 
 impl State {
-    /// `true` se a transição `self → to` é permitida.
+    /// `true` if the transition `self → to` is allowed.
     pub fn can_transition(self, to: State) -> bool {
         use State::*;
         if to == Failed {
-            return true; // erro duro de qualquer estado
+            return true; // hard error from any state
         }
         matches!(
             (self, to),
@@ -42,7 +42,7 @@ impl State {
         )
     }
 
-    /// Tenta transicionar; retorna o novo estado ou `Err(self)` se inválida.
+    /// Tries to transition; returns the new state or `Err(self)` if invalid.
     pub fn step(self, to: State) -> Result<State, State> {
         if self.can_transition(to) {
             Ok(to)

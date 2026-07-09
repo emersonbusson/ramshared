@@ -1,8 +1,8 @@
-//! Smoke mínimo de io_uring para a Fase B.
+//! Minimal io_uring smoke test for Phase B.
 //!
-//! Este módulo valida `io_uring_setup` + `io_uring_enter` sem ublk device, sem
-//! abrir `/dev/ublk-control` e sem tocar swap. O objetivo é testar o gate de
-//! runtime antes do primeiro loop ublk real.
+//! This module validates `io_uring_setup` + `io_uring_enter` without a ublk device, without
+//! opening `/dev/ublk-control`, and without touching swap. The goal is to test the runtime
+//! gate before the first real ublk loop.
 
 pub use ramshared_uring::SmokeReport;
 
