@@ -1,96 +1,63 @@
-# Arquitetura — RamShared
+# Architecture — RamShared
 
-Foco: a implementação **WSL2** (SPECv3), única viável no guest GPU-PV. O destino
-bare-metal (NUMA/HMM/CXL) está no [ROADMAP.md](ROADMAP.md).
+Focus: The **WSL2** implementation (SPECv3), which is the only viable path on GPU-PV guest systems. Bare-metal targets (NUMA/HMM/CXL) are detailed in the [ROADMAP.md](ROADMAP.md).
 
-## Visão geral
+## Overview
 
-O RamShared **orquestra** uma cascata de swap por prioridade e **gerencia o tier
-VRAM**; `zram` e `VHDX` são mecanismos do kernel que ele apenas configura.
+RamShared **orchestrates** a priority-ordered swap cascade and **manages the VRAM tier**; `zram` and `VHDX` are kernel-level mechanisms that RamShared configures rather than implements directly.
 
 ```text
-pressão de memória ─► zram  (RAM comprimida)  prio 200  HOT
-                   ─► VRAM  (daemon CUDA+NBD)  prio 100  COLD
-                   ─► VHDX  (swap do WSL2)     prio  -2  LAST
+Memory Pressure ─► zram  (Compressed RAM)  prio 200  HOT
+                ─► VRAM  (CUDA + NBD daemon)  prio 100  COLD
+                ─► VHDX  (WSL2 default swap)  prio  -2  LAST
 ```
 
-## Modelo de segurança (o pivô)
+## Safety Model (The Pivot)
 
-A Fase 0 mediu, em GPU real, que a eviction WDDM é:
+Validation on real GPU hardware demonstrated that WDDM eviction is:
 
-- **data-safe** — o hash da página continua íntegro após a eviction;
-- **latency-unsafe** — uma leitura 4K com a VRAM cheia custou **1,18 s**.
+*   **data-safe** — the page checksum remains intact after eviction;
+*   **latency-unsafe** — a 4KB read with VRAM fully occupied resulted in a **1.18 s** delay.
 
-Como swap quente, a VRAM congelaria o sistema. Como tier **frio** atrás do zram, só
-recebe o spill de acesso raro — escondendo a latência. Quando o sinal de latência
-dispara (host reavendo VRAM), o **DEMOTE** faz `swapoff` do tier VRAM e o kernel
-migra as páginas vivas para o VHDX, **sem derrubar processos**.
+If configured as hot swap space, VRAM eviction would lock up the system. Operating as a **cold** tier behind `zram`, it only receives rarely accessed pages — hiding the latency. When a latency spike is detected (indicating the host OS is reclaiming VRAM), the **DEMOTE** thread runs `swapoff` on the VRAM tier, causing the kernel to migrate active pages back to `VHDX` **without interrupting running processes**.
 
-Invariante **A1**: o DEMOTE só é seguro se existe um tier *estritamente abaixo* da
-VRAM para drenar (checado em `up` e na rede de segurança do `ramshared-tier`).
+**Invariant A1:** The demotion is only safe if there is a lower-priority tier active and ready to absorb the pages (verified at startup and checked in the `ramshared-tier` safety net).
 
-## Componentes
+## Components
 
-| Crate | Responsabilidade | `unsafe` |
+| Crate | Responsibility | `unsafe` |
 |---|---|---|
-| `ramshared-tier` | prioridades (`zram 200 > vram 100 > vhdx -2`), `validate_order`, rede A1 | `forbid` |
-| `ramshared-cuda` | `libcuda` via `dlopen` (runtime, sem toolkit/`build.rs`); RAII (`Cuda`→`Context`→`DeviceMem`) | **isolado aqui** |
-| `ramshared-block` | NBD fixed-newstyle: parse/encode, validação §8, handshake | `forbid` |
-| `ramshared-integrity` | checksum (FNV-1a) + padrões de teste | `forbid` |
-| `ramshared-wsl2d` | daemon: máquina de estados §7, `VramBackend` (liga CUDA↔NBD), `mlockall`/`oom_score_adj`, canário/DEMOTE | só `mlockall` |
-| `ramshared-cli` | `check`/`doctor` (preflight) + `up`/`down`/`status` (orquestração) | `forbid` |
+| `ramshared-tier` | Priority management (`zram 200 > vram 100 > vhdx -2`), `validate_order`, A1 safety net | `forbid` |
+| `ramshared-cuda` | `libcuda` loading via `dlopen`/`LoadLibrary` (runtime, no toolkit/`build.rs`); RAII bindings (`Cuda`→`Context`→`DeviceMem`) | **Isolated here** |
+| `ramshared-block` | NBD fixed-newstyle protocol: parsing/encoding, handshake state machine | `forbid` |
+| `ramshared-integrity` | Checksum calculations (FNV-1a) + validation testing patterns | `forbid` |
+| `ramshared-wsl2d` | Daemon: state machine, `VramBackend` (connects CUDA↔NBD), `mlockall`/`oom_score_adj`, canary/DEMOTE triggers | `mlockall` only |
+| `ramshared-cli` | Command-line management: `check`/`doctor` (preflight) + `up`/`down`/`status` (orchestration) | `forbid` |
 
-Todo o `unsafe` do projeto vive no `ramshared-cuda` (FFI), com `// SAFETY:` por bloco;
-a exceção é o `mlockall` do daemon, justificado e isolado. Zero dependências externas
-(`std` + FFI).
+All `unsafe` blocks are isolated within `ramshared-cuda` (FFI) with `// SAFETY:` markers, except for the daemon's `mlockall` call which is documented and isolated. Minimal external dependencies (`std` + FFI/libc).
 
-## Fluxo de execução
+## Execution Flow
 
-1. **`up`** valida a ordem de prioridade e a rede A1, sobe o `zram`, sobe o daemon e
-   conecta `/dev/nbd0` via `nbd-client -unix` — **o daemon não faz ioctl nem `unsafe`**
-   (o `nbd-client` faz a fiação do kernel). `mkswap` + `swapon -p` montam os tiers.
-2. **Daemon** aloca e zera a VRAM, trava memória (`mlockall`) e se protege do OOM
-   (`oom_score_adj=-1000`, Disciplina 3), e serve NBD: cada READ/WRITE vira
-   `cuMemcpyDtoH/HtoD` na VRAM.
-3. **Canário §9 (inline):** o daemon cronometra a latência do I/O; após a baseline,
-   arma o `Canary`; sob spike (latência > N× baseline por M amostras) dispara o
-   **DEMOTE** numa thread (`swapoff <nbd>`) e segue servindo o read-back. Só desarma
-   se o `swapoff` confirmar; senão re-arma.
-4. **`down`** faz `swapoff` do NBD **antes** de desconectar (senão: kernel panic),
-   depois desmonta o zram; espera o daemon zerar a VRAM (§11) antes de qualquer
-   `pkill`.
+1.  **`up`:** Validates priority configuration and invariant A1, starts `zram`, spins up the daemon, and attaches `/dev/nbd0` using `nbd-client -unix`. The daemon does not call ioctl or use unsafe memory mapping for the device attachment — this is handled by `nbd-client`. Finally, `mkswap` and `swapon -p` mount the swap tiers.
+2.  **Daemon:** Allocates and zeroes VRAM, locks userspace memory (`mlockall`), protects itself from the out-of-memory killer (`oom_score_adj=-1000`), and serves NBD requests: every READ/WRITE maps to a `cuMemcpyDtoH`/`HtoD` call on the VRAM memory range.
+3.  **Inline Canary:** The daemon monitors I/O latency. Under a latency spike (latency > N× baseline across M samples), it spawns a thread to run `swapoff <nbd>` (**DEMOTE**), while continuing to serve read-backs. The demote trigger is only disarmed once `swapoff` completes successfully.
+4.  **`down`:** Runs `swapoff` on the NBD device **before** disconnecting (avoiding kernel panics), tears down `zram`, and waits for the daemon to wipe VRAM clean before sending termination signals (`pkill`).
 
-## Decisões-chave
+## Key Decisions
 
-- **NBD, não ublk** (Fase A): `CONFIG_BLK_DEV_NBD=m` existe; `ublk` exigiria kernel
-  custom. Mantém o daemon sem `unsafe`.
-- **`dlopen` em runtime**, não link-time: o WSL2 só tem a stub `libcuda` do host, sem
-  toolkit → sem `build.rs`.
-- **Cascata por `swapon -p`**, não writeback: `CONFIG_ZRAM_WRITEBACK` não está setado
-  neste kernel; o writeback direto (zram grava frio na VRAM) fica para a Fase B.
-- **Decisão pura vs. efeito:** a lógica do canário (`residency.rs`) e da cascata
-  (`tier`) é pura e testável sem GPU/root; só o daemon executa CUDA e `swapoff`.
+*   **NBD instead of ublk (Phase A):** `CONFIG_BLK_DEV_NBD=m` is standard on WSL2, whereas `ublk` would require compiling a custom kernel. This keeps the daemon free of custom kernel module requirements.
+*   **Runtime Loader:** Loading `libcuda` (or `nvcuda.dll` on Windows) dynamically at runtime rather than link-time avoids build-time dependencies on the CUDA Toolkit.
+*   **Priority Cascade via `swapon -p`:** Used instead of writebacks. Since `CONFIG_ZRAM_WRITEBACK` is not compiled in the baseline kernel, direct writebacks (zram evicting cold data directly to VRAM) are reserved for Phase B.
+*   **Separation of Concerns:** Canary logic (`residency.rs`) and cascade logic (`tier`) are pure Rust and unit-tested without root or GPU access; only the daemon runner invokes CUDA and system `swapoff` commands.
 
-## Metodologia
+## Methodology
 
-- **SSDV3** — Spec-Driven Development: PRD → SPEC → IMPL, com auditoria Passo 2.5
-  (go/no-go) entre versões. Ver [`docs/methodology/`](docs/methodology/) e
-  [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md).
-- **Disciplinas Kahneman** — toda decisão de lock/DMA/arquitetura registra
-  counterfactual e *rollback trigger* numérico ([`docs/methodology/KAHNEMAN-DISCIPLINES.md`](docs/methodology/KAHNEMAN-DISCIPLINES.md)).
-- **Day-0** e **governança** (template de PR, sync rule) em [`.claude/rules/`](.claude/rules/).
+*   **SSDV3:** Spec-Driven Development. PRD → SPEC → IMPL, with Passo 2.5 adversarial code audits (go/no-go) between phases. Reference: [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md).
+*   **Kahneman Disciplines:** All synchronization, DMA, and architectural decisions record counterfactuals and numerical rollback triggers. Reference: [`docs/methodology/KAHNEMAN-DISCIPLINES.md`](docs/methodology/KAHNEMAN-DISCIPLINES.md).
+*   **Day-0 Policy:** Zero-tolerance for shims, temporary workarounds, or warning bypasses.
 
-## Validação
+## Validation
 
-Aceitação §14 no sistema vivo (cgroup-confined): spill de **511 MiB** para a VRAM
-(332.800 páginas íntegras) e DEMOTE de **481 MiB** vivos migrados sem corrupção. Ver
-[`docs/vram-as-ram/VALIDATION-CASCADE.md`](docs/vram-as-ram/VALIDATION-CASCADE.md).
+System validation within cgroup-confined workloads: **511 MiB** spilled to VRAM (**332,800 intact pages**) and a **481 MiB** demotion path migrated VRAM -> VHDX under active pressure with **zero corruption**.
 
-## Limitações conhecidas (rastreadas)
-
-- **Canário §9.4 dedicado** (conteúdo + free-floor com histerese, `ResidencySampler`):
-  **implementado** — issue #8 (C1 resolvido). Latência por-request segue como gatilho
-  primário; conteúdo demove imediato, free-floor/erro transiente exigem streak.
-- **H1 resolvido (multi-conexão):** worker CUDA único + leitor/escritor por conexão
-  (`nbd-client -C N`, `NBD_FLAG_CAN_MULTI_CONN`); sem head-of-line blocking. Ver
-  `docs/daemon-multiconn/`.
+Log evidence: [`docs/vram-as-ram/VALIDATION-CASCADE.md`](docs/vram-as-ram/VALIDATION-CASCADE.md).
