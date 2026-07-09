@@ -1,0 +1,47 @@
+; poolstress — VM-only test driver INF (test-signing). SPEC ITEM-8 / RNF-6.
+; Do NOT submit for attestation. Do NOT install on daily host.
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4d36e97d-e325-11ce-bfc1-08002be10318}
+Provider    = %ManufacturerName%
+DriverVer   = 07/09/2026,10.0.26200.1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+poolstress.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64
+
+[Standard.NTamd64]
+%PoolStress.DeviceDesc% = PoolStress_Device, Root\RamSharedPoolStress
+
+[PoolStress_Device.NT]
+CopyFiles = PoolStress_CopyFiles
+
+[PoolStress_CopyFiles]
+poolstress.sys
+
+[PoolStress_Device.NT.Services]
+AddService = poolstress,%SPSVCINST_ASSOCSERVICE%, PoolStress_Service_Inst
+
+[PoolStress_Service_Inst]
+DisplayName    = %PoolStress.SVCDESC%
+ServiceType    = 1
+StartType      = 3
+ErrorControl   = 1
+ServiceBinary  = %12%\poolstress.sys
+
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+ManufacturerName = "RamShared Lab"
+DiskName = "PoolStress Lab Disk"
+PoolStress.DeviceDesc = "RamShared PoolStress (VM-only)"
+PoolStress.SVCDESC = "RamShared kernel-page stress (test)"
