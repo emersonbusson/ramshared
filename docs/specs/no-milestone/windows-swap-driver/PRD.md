@@ -28,15 +28,15 @@ On top of this virtual disk, the service activates a **secondary pagefile post-b
 *   **Global / System-wide:** The virtual disk is presented as a physical drive to the OS. The Windows Memory Manager handles paging globally across all running processes.
 
 ### Current State (Confirmed in Codebase)
-*   **WSL2/Linux Validation:** E2E validation complete. Crash safety is proven via [qemu-ublk-crash-e1b.sh](file:///home/emdev/codespace/ramshared/scripts/kernel/qemu-ublk-crash-e1b.sh). A daemon crash with swap active produces a deterministic `SIGBUS` contained within the target memory cgroup, keeping PID 1 alive.
-*   **CUDA Driver Wrapper:** [crates/ramshared-cuda/src/driver.rs](file:///home/emdev/codespace/ramshared/crates/ramshared-cuda/src/driver.rs) dynamically loads CUDA symbols (`cuInit`, `cuCtxCreate_v2`, `cuMemAlloc_v2`, `cuMemcpyHtoD_v2`, `cuMemcpyDtoH_v2`, `cuMemGetInfo_v2`) via `dlopen`. The trait `VramMemory` provides safe `zero()`, `read_at()`, and `write_at()` abstractions.
+*   **WSL2/Linux Validation:** E2E validation complete. Crash safety is proven via [qemu-ublk-crash-e1b.sh](../../../../scripts/kernel/qemu-ublk-crash-e1b.sh). A daemon crash with swap active produces a deterministic `SIGBUS` contained within the target memory cgroup, keeping PID 1 alive.
+*   **CUDA Driver Wrapper:** [crates/ramshared-cuda/src/driver.rs](../../../../crates/ramshared-cuda/src/driver.rs) dynamically loads CUDA symbols (`cuInit`, `cuCtxCreate_v2`, `cuMemAlloc_v2`, `cuMemcpyHtoD_v2`, `cuMemcpyDtoH_v2`, `cuMemGetInfo_v2`) via `dlopen`. The trait `VramMemory` provides safe `zero()`, `read_at()`, and `write_at()` abstractions.
 *   **Broker Protocol:** Crate `ramshared-broker` specifies `Msg::LeaseRequest`, `Msg::LeaseRelease`, `Msg::LeaseGranted`, and `Msg::LeaseDenied` as newline-delimited JSON streams.
-*   **VramProvider Trait:** [crates/ramshared-vram/src/lib.rs](file:///home/emdev/codespace/ramshared/crates/ramshared-vram/src/lib.rs#L61) defines the hardware-agnostic allocation interfaces.
+*   **VramProvider Trait:** [crates/ramshared-vram/src/lib.rs](../../../../crates/ramshared-vram/src/lib.rs#L61) defines the hardware-agnostic allocation interfaces.
 
 ### Confirmed in Official Documentation & Testing
 *   **Attestation Signing Viability:** MS Learn "Driver Signing Options" (updated 2026-04-14) confirms that Attestation dashboard signing remains valid for Windows Desktop (Windows 10/11), bypasses the WHQL test suite, and loads on Windows 11 25H2 (build 26200) with `test-signing OFF`.
 *   **StorPort Architecture:** The virtual miniport model is the modern, recommended framework for software-defined storage devices on Windows.
-*   **Pass 0 Drill Results:** Hyper-V VM Windows 11 Pro drill [PASSO0-DRILL-RUNBOOK.md](file:///home/emdev/codespace/ramshared/docs/windows-vram-drive/PASSO0-DRILL-RUNBOOK.md) proved that:
+*   **Pass 0 Drill Results:** Hyper-V VM Windows 11 Pro drill [windows-vram-drive-drill.md](../../../runbooks/windows-vram-drive-drill.md) proved that:
     1.  Windows successfully mounts a secondary pagefile on a removable virtual disk.
     2.  Surprise removal of the backing storage under active user paging (~150-200 MB) does **not** trigger a BSOD. The affected user processes crash gracefully, analogous to `SIGBUS` on Linux.
     3.  A risk remains if kernel-paged pool allocations are paged out to the virtual disk and the backing service crashes (expected `KERNEL_DATA_INPAGE_ERROR` 0x7a bugcheck).
@@ -219,7 +219,7 @@ sequenceDiagram
 
 ## Implementation Strategy
 
-*   **Phase 0 (Drill Validation):** Run the surprise-removal drill in a VM [PASSO0-DRILL-RUNBOOK.md](file:///home/emdev/codespace/ramshared/docs/windows-vram-drive/PASSO0-DRILL-RUNBOOK.md) to log kernel stability metrics (Completed).
+*   **Phase 0 (Drill Validation):** Run the surprise-removal drill in a VM [windows-vram-drive-drill.md](../../../runbooks/windows-vram-drive-drill.md) to log kernel stability metrics (Completed).
 *   **Phase 1 (CUDA Loader Port):** Build the Windows userspace wrapper around `nvcuda.dll` and verify memory transfer limits on the Windows host.
 *   **Phase 2 (Driver Skeleton):** Implement the StorPort virtual miniport skeleton. Load in a VM under test-signing mode.
 *   **Phase 3 (I/O Loop):** Integrate the shared-memory queue between the driver and the Rust service. Verify raw block read/write rates.
