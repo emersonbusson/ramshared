@@ -69,11 +69,10 @@
 
 | PRD | SPEC ITEM | Commit(s) |
 | --- | --- | --- |
-| RF-4 / RNF-8 | ITEM-1 | (pré-existente loaders; verificado nesta IMPL) |
-| RF-3 / RNF-8 | ITEM-2 | `feat(mm): promote VramBackend into ramshared-block` |
-| RF-5 / DT-7 | ITEM-3 | `feat(mm): WinDrive transport + winsvc lease client` |
-| RF-2 / DT-17 | ITEM-4 | (protocol.h preflight + winsvc proto tests) |
-| RF-1 / RF-2 / RNF-4 | ITEM-5 | `feat(mm): StorPort virtual miniport source skeleton` |
-| RF-3 | ITEM-6 | winsvc `driver_link` no commit winsvc |
-| RF-6 / RF-7 | ITEM-7 | winsvc `ntpagefile`/`smoke`/`service` |
-| RF-7 / RNF-1/2/5/7 | ITEM-8..11 | `feat(scripts): Windows drill/measure/soak/sign harnesses` |
+| RF-4 / RNF-8 | ITEM-1 | pré-existente (`loader_unix`/`loader_win`); verificado nesta IMPL |
+| RF-3 / RNF-8 | ITEM-2 | `28a7960` |
+| RF-5 / DT-7 | ITEM-3 (broker) | `ae9cc44` |
+| RF-3/RF-5/RF-6 | ITEM-3/4/6/7 (winsvc) | `2145401` |
+| RF-1 / RF-2 / RNF-4 | ITEM-5 | `f149541` |
+| RF-7 / RNF-1/2/5/7 | ITEM-8..11 | `d2f87f5` |
+| — | IMPL.md | `6d3fb4a` (+ este amend de SHAs se aplicável) |
