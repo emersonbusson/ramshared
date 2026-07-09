@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  ITEM-10 / RNF-1 / DT-12 — Driver Verifier soak 3x24h (aggregate 72h).
+  ITEM-10 / RNF-1 / DT-12 - Driver Verifier soak 3x24h (aggregate 72h).
 
 .DESCRIPTION
   Enables Driver Verifier Standard flags for ramshared.sys, runs fuzz/load harness

@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  ITEM-11 / RF-8 / RNF-7 — build, attestation-sign, install package.
+  ITEM-11 / RF-8 / RNF-7 - build, attestation-sign, install package.
 
 .DESCRIPTION
   Builds ramshared.sys via MSBuild, runs InfVerif, packages for Partner Center
@@ -42,7 +42,7 @@ if (Get-Command InfVerif.exe -ErrorAction SilentlyContinue) {
     InfVerif.exe /w $inf
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 } else {
-    Write-Warning "InfVerif.exe not on PATH — skip (install WDK)"
+    Write-Warning "InfVerif.exe not on PATH - skip (install WDK)"
 }
 
 if ($SkipSign) {
@@ -51,7 +51,7 @@ if ($SkipSign) {
 }
 
 Write-Host @"
-Attestation path (R9 — Partner Center, organizational):
+Attestation path (R9 - Partner Center, organizational):
   1. signtool sign /v /fd sha256 /tr http://timestamp.digicert.com /td sha256 ramshared.sys
   2. Submit package via Partner Center hardware dashboard (attestation).
   3. Install on 26200.8655 with test-signing OFF; confirm load (RNF-7).
