@@ -8,7 +8,7 @@
 
 ## Status
 
-**parcial** · gates:
+**lab-complete / host-real blocked** · gates:
 
 | Gate | Resultado |
 | --- | --- |
@@ -24,9 +24,10 @@
 | Get-Disk LUN product | ✓ **N=1 RAMSHARE VRAMDISK 64 MiB** (2026-07-09 clean PnP) |
 | poolstress IOCTL ALLOC/FREE 1 GiB | ✓ ok=True (rodada anterior) |
 | Format NTFS + smoke file | ✓ **PASS** (2026-07-09): LUN 64 MiB, `format /fs:NTFS` OK, smoke file; backend `maxIo=1MiB` |
-| ITEM-8 residency DT-21 (pagefile-VRAM) | ✓ residency PASS (Usage 25%). **B2 split:** storage-only kill **PASS** (no hang/BSOD); pagefile-hot kill **0x7A/c0000185** (documented). Fix: teardown outside lock + VdStateFailed. Host-real **forbidden** until DT-9 product path. |
+| ITEM-8 residency DT-21 (pagefile-VRAM) | ✓ **PASS** (Usage 25%, KPD 3/3). B1 safe **PASS**; pagefile-hot → 0x7A (DT-9). Lab SCM **PASS**. Host-real **FORBIDDEN**. |
 | DT-9 ordered teardown | ✓ pure tests; lab **PASS_DT9_REFUSE_KILL** + **PASS_DT9_REBOOT_KILL** |
-| Lab SCM autostart | ✓ **PASS_LAB_SCM** `RamSharedWinSvc` delayed-auto; BE+disk after reboot |
+| Lab SCM autostart | ✓ **PASS_LAB_SCM** `RamSharedWinSvc` delayed-auto |
+| B1 safe surprise-remove | ✓ **PASS_B1_SAFE_ARM** (no secondary PF; kill backend; no new dump) |
 | ITEM-9 K (p99 VRAM vs disk) | ✗ harness OK; **K não inventado** (DT-13) |
 | ITEM-10 soak 72 h | ✗ script only |
 | ITEM-11 attestation | ✗ R9 org + no `.sys` |
