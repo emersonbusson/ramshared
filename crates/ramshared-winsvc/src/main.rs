@@ -1,14 +1,16 @@
 //! ramshared-winsvc — Windows service that backs the StorPort virtual disk with VRAM.
 //!
-//! SPEC: `docs/specs/no-milestone/windows-swap-driver/SPEC.md` (ITEM-3/6/7).
-//! Preflight scaffold: Linux builds a **stub** so the workspace stays green (DT-16).
-
-mod proto;
+//! SPEC: `docs/specs/no-milestone/windows-swap-driver/SPEC.md` (ITEM-3/6/7, DT-16).
+//!
+//! Linux / non-Windows builds a **stub** so `cargo test --workspace` stays green.
+//! Library logic: `ramshared_winsvc` crate.
 
 #[cfg(windows)]
 fn main() {
-    // ITEM-3+: SCM entry via windows-service. Not implemented yet.
-    eprintln!("ramshared-winsvc: Windows service not yet implemented (ITEM-3)");
+    // SCM entry via windows-service lands with full Windows host wiring.
+    // Until then, print and exit so accidental start is visible.
+    eprintln!("ramshared-winsvc: Windows service entry (ITEM-3+) — use lib APIs for provision");
+    // Keep process exit non-zero until SCM registration is complete.
     std::process::exit(2);
 }
 

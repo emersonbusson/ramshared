@@ -11,11 +11,27 @@ description = "Windows userspace service for StorPort VRAM disk (SPEC windows-sw
 name = "ramshared-winsvc"
 path = "src/main.rs"
 
+[lib]
+name = "ramshared_winsvc"
+path = "src/lib.rs"
+
 [dependencies]
-# Shared block/broker crates land in ITEM-2/ITEM-3. Proto-only for preflight.
+ramshared-block = { path = "../ramshared-block" }
+ramshared-broker = { path = "../ramshared-broker" }
+ramshared-vram = { path = "../ramshared-vram" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 
 [target.'cfg(windows)'.dependencies]
-# Filled in ITEM-3/6/7 per SPEC (windows-service, windows-sys, ntapi/serde/toml).
+windows-service = "0.7"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_SystemInformation",
+] }
+# CUDA loader is pulled transitively when Windows path uses ramshared-cuda.
+ramshared-cuda = { path = "../ramshared-cuda" }
 
 [lints.clippy]
 unwrap_used = "deny"
