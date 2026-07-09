@@ -27,9 +27,7 @@ fn work(tag: u16, cmd: Command, offset: u64, len: u32, payload: Vec<u8>) -> ublk
 fn ublk_worker_serves_read_and_write_over_channels() {
     let mut backend = RamBackend::new(8192);
     let pattern: Vec<u8> = (0..512u32).map(|i| (i % 251) as u8).collect();
-    backend
-        .write_at(1024, &pattern)
-        .expect("pre-load sector 2");
+    backend.write_at(1024, &pattern).expect("pre-load sector 2");
 
     let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(8);
     let (reply_tx, reply_rx) = mpsc::channel::<ublk_server::WorkerReply>();

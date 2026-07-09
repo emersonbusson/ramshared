@@ -91,12 +91,12 @@ pub struct BrokerCore {
     endpoints: EndpointCfg,
     swap_prio: Option<i32>,
     tenants: BTreeMap<TenantId, TenantState>,
-    sessions: HashMap<usize, TenantId>,    // live connection → tenant
+    sessions: HashMap<usize, TenantId>, // live connection → tenant
     name_to_id: HashMap<String, TenantId>, // stable ID by name (DT-22)
     next_tenant: TenantId,
     pending_dest: HashMap<SliceId, TenantId>, // destination of a MoveSlice in flight (post-zero)
     pending_lease: Option<(TenantId, u64)>,   // requested lease, not yet granted (RF-B3)
-    lease: Option<(u32, TenantId)>,           // active lease (id, holder); the id comes from the arbiter
+    lease: Option<(u32, TenantId)>, // active lease (id, holder); the id comes from the arbiter
     last_rebalance: Option<Instant>,
     // Telemetria/reconciliação (SPEC broker-telemetry-reconciliation).
     slice_io: Arc<Vec<SliceIoCounters>>, // counters per slice (data-plane writes, RF-1/DT-1)
@@ -981,7 +981,9 @@ fn dispatch(
                         let _ = io2.send(IoEvent::Core(CoreEvent::ZeroDone(slice, ok)));
                     });
                 } else {
-                    eprintln!("[ramsharedd] WARN jobs channel full; zeroing of s{slice} postponed (R4)");
+                    eprintln!(
+                        "[ramsharedd] WARN jobs channel full; zeroing of s{slice} postponed (R4)"
+                    );
                 }
             }
             Outbound::Log(s) => eprintln!("{s}"),

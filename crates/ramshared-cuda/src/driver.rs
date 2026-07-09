@@ -76,9 +76,7 @@ const CANDIDATES: &[&CStr] = &[
 ];
 
 #[cfg(windows)]
-const CANDIDATES: &[&CStr] = &[
-    c"nvcuda.dll",
-];
+const CANDIDATES: &[&CStr] = &[c"nvcuda.dll"];
 
 impl Cuda {
     /// Loads the CUDA driver library (using OS-specific candidates) and runs `cuInit(0)`.

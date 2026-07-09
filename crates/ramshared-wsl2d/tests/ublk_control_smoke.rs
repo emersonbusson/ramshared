@@ -108,11 +108,7 @@ fn fetch_req_parks_until_delete_aborts_without_starting_device() {
     guard.disarm();
 
     let aborts = drainer.join().expect("drainer thread");
-    assert_eq!(
-        aborts.len(),
-        want,
-        "all FETCHes must abort on DEL_DEV"
-    );
+    assert_eq!(aborts.len(), want, "all FETCHes must abort on DEL_DEV");
     for completion in &aborts {
         assert_eq!(
             completion.result,
