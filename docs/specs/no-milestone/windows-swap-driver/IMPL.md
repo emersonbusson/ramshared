@@ -2,6 +2,9 @@
 
 > SSDV3 PASSO 3. Implementa `SPEC.md` em `docs/specs/no-milestone/windows-swap-driver/`.
 > Branch: `main`. PR: ainda não.
+>
+> **Disciplina Kahneman (campanha 2026-07-09):** #1 WYSIATI, #2 checkpoint, #3 números, #5/#13 fail paths,
+> #15 sem retry em gap determinístico, #16 sem thrash no host, RNF-6 VM-only.
 
 ## Status
 
@@ -9,77 +12,122 @@
 
 | Gate | Resultado |
 | --- | --- |
-| `cargo test --workspace` | ✓ verde (Linux host) |
-| `cargo fmt --all -- --check` | ✓ |
-| `cargo clippy --workspace --all-targets -- -D warnings` | ✓ (pós-fmt) |
-| RNF-8 drills `qemu-ublk-*` | env-bound (não rodados nesta sessão) |
-| WDK MSBuild / SDV / InfVerif | env-bound (sem EWDK neste host) |
-| ITEM-8 kernel-page drill (DT-21) | ✗ script pronto; prova empírica pendente em VM |
-| ITEM-9 K numérico | ✗ harness pronto; K fixado na 1ª medição real |
-| ITEM-10 soak 72 h | ✗ script pronto; 3×24 h pendente |
-| ITEM-11 attestation load | ✗ script + R9 org pendente |
-| Host-real driver load | **proibido** até ITEM-8 PASS |
+| `cargo test --workspace` (Linux) | ✓ **233** lib/bin tests pass, **22** ignored (GPU/Vulkan/etc.), **0** fail |
+| `cargo fmt --check` / `clippy -D warnings` | ✓ limpo |
+| RNF-8 `qemu-ublk-daemon.sh` | ✓ **PASS** (serve + teardown limpo) |
+| RNF-8 `qemu-ublk-crash-e1b.sh` | ✓ **PASS** `KTEST-E1B-VERDICT=CONTAINED-SIGBUS` (exit 42 SIGBUS contido; bystander vivo) |
+| Hyper-V elevated path (`sudo.exe` from WSL) | ✓ `IsAdmin=True`, `Get-VM` + PSD |
+| VM `win11-drill` campaign | ✓ **PASS_WITH_SKIPS** (fail paths honestos) |
+| WDK MSBuild / SDV / InfVerif | ✗ SKIP — sem EWDK/`link.exe` no guest |
+| ITEM-8 residency DT-21 (real) | ✗ INCONCLUSIVO honesto (sem pagefile-VRAM / sem `.sys`) |
+| ITEM-9 K (p99 VRAM vs disk) | ✗ harness OK; **K não inventado** (DT-13) |
+| ITEM-10 soak 72 h | ✗ script only |
+| ITEM-11 attestation | ✗ R9 org + no `.sys` |
+| Host-real driver load | **proibido** até ITEM-8 PASS com residência |
+
+## WYSIATI (#1) — o que **não** foi visto
+
+- Build EWDK de `ramshared.sys` / `poolstress.sys` (sem WDK no guest; sem `link.exe` MSVC).
+- `Cuda::load` / `nvcuda.dll` no Windows (guest sem GPU).
+- Pagefile secundário em volume StorPort RamShared (disco produto ainda não carrega).
+- Soak Driver Verifier 3×24 h; attestation Partner Center.
+- SDV report; InfVerif limpo em build real.
+
+Sem isso, **não** se afirma “driver Windows pronto” nem ITEM-8 PASS.
 
 ## Arquivos (RF/ITEM → mudança)
 
 | Arquivo | ITEM / RF | O que foi feito |
 | --- | --- | --- |
-| `crates/ramshared-cuda/src/loader_*.rs` + `driver.rs` | ITEM-1 (RF-4) | Já existia (preflight); loader unix/win + `loader::close` no Drop — verificado |
-| `crates/ramshared-block/src/vram_backend.rs` | ITEM-2 (RF-3, DT-6) | `VramBackend<M>` promovido; testes FakeVram write/read/OOB/zero |
-| `crates/ramshared-block/Cargo.toml` | ITEM-2 | dep `ramshared-vram` |
-| `crates/ramshared-wsl2d/src/backend.rs` | ITEM-2 | re-export `ramshared_block::VramBackend`; SliceView/RamBackend locais |
-| `crates/ramshared-broker/src/model.rs` | ITEM-3 (RF-5, DT-7) | `TransportKind::WinDrive` |
-| `crates/ramshared-wsl2d/src/broker_srv.rs` | ITEM-3 | `endpoint_for(WinDrive)=>None`; `on_tick` exclui WinDrive; testes `windrive_*` |
-| `crates/ramshared-winsvc/` | ITEM-3/4/6/7 | lib: config, broker_tenant, driver_link+FakeDriver, ntpagefile, smoke, service, proto |
-| `drivers/windows/ramshared/protocol.h` | ITEM-4 (RF-2, DT-17) | ABI congelada (preflight + mantida) |
-| `drivers/windows/ramshared/{driver,virtdisk,queue,control}.{c,h}` | ITEM-5 (RF-1/RF-2) | StorPort virtual miniport + control device + rings/DT-10 |
-| `drivers/windows/ramshared/ramshared.{inf,vcxproj,sln}` | ITEM-5 (H4) | superfície de build WDK |
-| `drivers/windows/tools/poolstress/*` | ITEM-8 (DT-11) | test driver VM-only |
-| `scripts/windows/*.ps1` | ITEM-8..11 | harness KernelPage/Measure/Soak/Revoke/Build-Sign |
+| `crates/ramshared-cuda` loaders | ITEM-1 (RF-4) | Cross-platform loaders; residual Windows `mem_info` |
+| `crates/ramshared-block/src/vram_backend.rs` | ITEM-2 (RF-3) | `VramBackend` promovido |
+| `crates/ramshared-broker` + `wsl2d` | ITEM-3 (RF-5) | `TransportKind::WinDrive` + `on_tick` filter |
+| `crates/ramshared-winsvc/` | ITEM-3/4/6/7 | lib pure + stub bin |
+| `drivers/windows/ramshared/*` | ITEM-5 | StorPort fontes + INF/vcxproj |
+| `drivers/windows/tools/poolstress/*` | ITEM-8 | test driver VM-only |
+| `scripts/windows/*` | ITEM-8..11 | harnesses + `wsl-elevated-ps.sh` + `Invoke-DisciplinedCampaign.ps1` |
 
 ## Decisões pequenas (sem nova ADR)
 
-- Golden SQE test serializa campo-a-campo (sem `unsafe`) para manter `#![forbid(unsafe_code)]` no winsvc.
-- `NtCreatePagingFile` / `RtlGetVersion` no Windows: API bound falha-fechada com `PagefileError::Api` até FFI real no host Windows (allow-list + fallback já testáveis no Linux).
-- `StorPortNotification(RequestComplete, …)` no esqueleto C usa placeholder de DeviceExtension onde o WDK exige o adapter extension real — a ser amarrado no 1º build EWDK (sem mudança de contrato).
-- `service.rs` isola provision/teardown com traits injetáveis (`FreeVram`, `DiskControl`, `WipeVram`) para DT-20/DT-9 no Linux.
+- Golden SQE sem `unsafe` no winsvc.
+- `NtCreatePagingFile` FFI fail-closed até host Windows com allow-list 26200.
+- `StorPortNotification` DeviceExtension real amarra no 1º build EWDK.
+- Campanha classifica `link.exe`/WDK ausente como **SKIP** (#15 determinístico), não FAIL de produto.
+- Senha PSD só via env `RAMSHARED_DRILL_PASSWORD` (não no git).
 
 ## Validação (números)
 
-- testes Linux: **workspace PASS** — winsvc 23 pass; block +3 VramBackend; wsl2d +2 WinDrive; zero fail (ignored GPU/Vulkan inalterados)
-- checkpatch: N/A (Windows C; DT-14 checklist WDK)
-- clippy: limpo com `-D warnings` (após `cargo fmt`)
-- **VM Hyper-V `win11-drill` (2026-07-09):** build **26200.8037**, test-signing **Yes**, PSD via `drilladmin`
-  - `Get-WinDrivePreflight` exit **0**
-  - `ps1-parse` **PARSE_OK** (todos `scripts/windows/*.ps1`)
-  - `Invoke-KernelPageDrill` exit **3 INCONCLUSIVO** (esperado: sem pagefile-VRAM / sem `.sys` — DT-21 gate honesto)
-  - `Measure-PagefileVram` n=3 idle: median_ms≈**91.7** (run-id `pfvram-20260709-141707`; pagefile counter −1 no guest — só `C:\pagefile.sys` 1408 MB alloc / ~340 MB used)
-  - `Invoke-RevokeDrill` exit **2** sem serviço (script OK)
-  - `Build-Sign-Install -SkipSign` **SKIP** (sem msbuild/WDK no guest)
-  - Overall harness: **PASS_WITH_SKIPS fails=0** (`C:\Users\emedev\ramshared-drill\agent-vm-e2e-results.json`)
-- benchmark: K (RNF-2) **ainda não** — falta pagefile-VRAM real vs disco
+### Linux (host WSL2)
+
+| Métrica | Valor |
+| --- | --- |
+| Unit/lib tests pass | **233** (soma `test result: ok. N passed` do workspace) |
+| Ignored | **22** |
+| Failed | **0** |
+| fmt / clippy -D warnings | limpo |
+| `qemu-ublk-daemon` | **PASS** |
+| `qemu-ublk-crash-e1b` | **PASS** CONTAINED-SIGBUS; victim exit **42**; bystander HB 73→89; elapsed kill→device-gone **2500 ms** |
+
+### Hyper-V `win11-drill` (elevated `sudo.exe`)
+
+| Métrica | Valor |
+| --- | --- |
+| Guest build | **26200.8037** |
+| test-signing | **Yes** |
+| Free C: | **~14 GB** |
+| Checkpoint | `disciplined-20260709-112351` (#2 rollback surface) |
+| Preflight | exit **0** |
+| ps1-parse | **6/6** files |
+| ITEM-8 DT-21 fail-path | exit **3** INCONCLUSIVO (#13 honesto) |
+| Measure n=3 idle | PASS; median_ms ≈ **125** (campanha) / **92** (rodada anterior) |
+| Revoke missing service | exit **2** fail-closed |
+| rustup | cargo/rustc **1.97.0** instalados no guest |
+| `cargo test` no guest | **SKIP** — `link.exe` ausente (precisa VS Build Tools); lógica pure já verde no Linux |
+| WDK / nvcuda | **SKIP** |
+
+Artefatos: `C:\Users\emedev\ramshared-drill\agent-disciplined-results.json`, `artifacts-disciplined\`.
+
+### Como reproduzir (disciplina operacional)
+
+```bash
+# 1) Linux gates
+cargo test --workspace && cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+./scripts/kernel/qemu-ublk-daemon.sh
+./scripts/kernel/qemu-ublk-crash-e1b.sh
+
+# 2) Espelhar + Hyper-V elevado
+rsync -a --delete --exclude target --exclude .git \
+  ./ /mnt/c/Users/emedev/ramshared-src/
+export RAMSHARED_DRILL_PASSWORD='…'  # lab only
+./scripts/windows/wsl-elevated-ps.sh -File \
+  'C:\Users\emedev\ramshared-src\scripts\windows\Invoke-DisciplinedCampaign.ps1'
+```
 
 ## Gaps
 
-- **fechados nesta sessão:** ITEM-1 (verificado), ITEM-2, ITEM-3 (broker+winsvc pure), ITEM-4 (ABI+tests), ITEM-5 (código fonte driver), ITEM-6 (driver_link pure), ITEM-7 (ntpagefile/smoke pure + allow-list), ITEM-8..11 (scripts executáveis + smoke na VM)
-- **env-bound (precisa hardware/civm/GPU/WDK):** MSBuild+SDV+InfVerif no guest ou host build; `Cuda::load` em `nvcuda.dll` (VM sem GPU/nvcuda); drills `qemu-ublk-*`; kernel-page drill com residência DT-21 **após** `.sys`+pagefile-VRAM; soak 72 h; attestation Partner Center (R9)
-- **abertos:** amarrar DeviceExtension real no `StorPortNotification`; FFI `NtCreatePagingFile` no Windows; SCM `windows-service` main path; e2e NTFS format em VM; instalar EWDK/WDK na pipeline de build
+| Classe | Itens |
+| --- | --- |
+| **Fechados** | ITEM-1..7 código pure/Linux; ABI; fontes driver; harnesses; Hyper-V control path; RNF-8 ublk drills; fail-path DT-21 |
+| **Env-bound** | EWDK build `.sys`; VS `link.exe` no guest; CUDA Windows; pagefile-VRAM real; soak 72h; attestation R9 |
+| **Abertos de código** | DeviceExtension real no StorPort complete; FFI `NtCreatePagingFile` Windows; SCM `windows-service` main |
 
 ## Rollback trigger
 
-- Qualquer BugCheck em host não-VM → parar loads no host; só reexecutar ITEM-8 em VM.
-- Regressão de teste/drill Linux após ITEM-1/2 → `git revert` do commit do ITEM (RNF-8).
-- Double-complete de SRB / SDV defect sem waiver → não promover driver.
-- Pagefile ativo + destroy de disco → proibido (DT-9); tratar como incidente B1.
+- BugCheck em host não-VM → parar qualquer load no host; só VM.
+- Regressão `cargo test` Linux ou `qemu-ublk-*` FAIL → `git revert` do ITEM tocado (RNF-8).
+- ITEM-8 “PASS” sem `% Usage` pagefile-VRAM > 0 → **inválido** (teatro #13); reclassificar INCONCLUSIVO.
+- Pagefile ativo + destroy disco → incidente B1 (DT-9).
+- Checkpoint Hyper-V `disciplined-*` disponível para Apply se campanha corromper guest.
 
 ## Traceability
 
 | PRD | SPEC ITEM | Commit(s) |
 | --- | --- | --- |
-| RF-4 / RNF-8 | ITEM-1 | pré-existente (`loader_unix`/`loader_win`); verificado nesta IMPL |
 | RF-3 / RNF-8 | ITEM-2 | `28a7960` |
-| RF-5 / DT-7 | ITEM-3 (broker) | `ae9cc44` |
-| RF-3/RF-5/RF-6 | ITEM-3/4/6/7 (winsvc) | `2145401` |
-| RF-1 / RF-2 / RNF-4 | ITEM-5 | `f149541` |
-| RF-7 / RNF-1/2/5/7 | ITEM-8..11 | `d2f87f5` |
-| — | IMPL.md | `6d3fb4a` (+ este amend de SHAs se aplicável) |
+| RF-5 | ITEM-3 broker | `ae9cc44` |
+| RF-3/5/6 | ITEM-3/4/6/7 winsvc | `2145401` |
+| RF-1/2 | ITEM-5 | `f149541` |
+| RF-7 / RNF-* | ITEM-8..11 scripts | `d2f87f5`, `58c6986` |
+| ops | elevated Hyper-V | `cc2ec0d` |
+| ops | disciplined campaign | (este commit) |
