@@ -1,58 +1,12 @@
-//! `VramBackend` — binds a region of VRAM (`ramshared_vram::VramMemory`) to the `BlockBackend` trait
-//! of `ramshared_block`. It is the point where "VRAM" becomes an "NBD block device" (SPEC §8). Generic over the
-//! VRAM backend (CUDA today via `ramshared-cuda`; Vulkan tomorrow via the same trait — RF-G1).
+//! Block backends for the daemon: re-exports shared [`VramBackend`] (ITEM-2 / DT-6)
+//! plus daemon-local [`SliceView`] and [`RamBackend`].
 
 use ramshared_block::{BlockBackend, IoError};
-use ramshared_vram::{VramError, VramMemory};
 
 use crate::ublk;
 
-/// Block device backed by a region of VRAM (`M: VramMemory`).
-pub struct VramBackend<M> {
-    mem: M,
-    block_size: u32,
-}
-
-impl<M: VramMemory> VramBackend<M> {
-    pub fn new(mem: M, block_size: u32) -> Self {
-        Self { mem, block_size }
-    }
-
-    /// Zeroes all VRAM (SPEC §11 — zero on release/stop).
-    pub fn zero(&mut self) -> Result<(), VramError> {
-        self.mem.zero()
-    }
-}
-
-impl<M: VramMemory> BlockBackend for VramBackend<M> {
-    fn size_bytes(&self) -> u64 {
-        self.mem.len() as u64
-    }
-
-    fn block_size(&self) -> u32 {
-        self.block_size
-    }
-
-    fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
-        self.mem
-            .read_at(off, buf)
-            .map_err(|e| IoError(e.to_string()))
-    }
-
-    fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
-        self.mem
-            .write_at(off, data)
-            .map_err(|e| IoError(e.to_string()))
-    }
-
-    fn flush(&mut self) -> Result<(), IoError> {
-        // cuMemcpy*_v2 are synchronous (the reference uses the same model); nothing to drain.
-        // Multi-connection coherence (NBD_FLAG_CAN_MULTI_CONN, H1/DT-10) depends on this
-        // synchronicity: WRITE is durable upon ack ⇒ FLUSH is a no-op ⇒ a FLUSH covers all
-        // acked WRITEs. Do NOT change `write_at` to asynchronous copy without reviewing this.
-        Ok(())
-    }
-}
+// SPEC windows-swap-driver ITEM-2 / DT-6: single adapter in ramshared-block.
+pub use ramshared_block::VramBackend;
 
 /// Window `[base, base+len)` over a [`BlockBackend`] — a slice of VRAM (RF-L1, DT-4).
 ///

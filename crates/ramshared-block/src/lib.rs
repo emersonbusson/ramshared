@@ -1,6 +1,7 @@
 //! ramshared-block — NBD fixed-newstyle protocol + I/O model of the VRAM tier.
 //!
 //! SPEC: `SPECv3-WSL2.md` §8 (I/O atomicity) and §10.1 (NBD backend).
+//! Also hosts [`VramBackend`] (windows-swap-driver ITEM-2 / DT-6).
 //!
 //! Core **testable without root**: parse/encode of the NBD wire, the trait
 //! [`BlockBackend`] and the map of inflight blocks ([`Inflight`], §8.1). The wiring of
@@ -12,8 +13,10 @@ pub mod handshake;
 pub mod inflight;
 pub mod protocol;
 pub mod request;
+pub mod vram_backend;
 
 pub use handshake::{HandshakeError, server_handshake};
 pub use inflight::Inflight;
 pub use protocol::{Command, ProtocolError, Request, encode_simple_reply, parse_request};
 pub use request::{BlockBackend, IoError, ServeOutcome, serve};
+pub use vram_backend::VramBackend;
