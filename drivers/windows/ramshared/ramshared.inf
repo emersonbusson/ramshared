@@ -1,0 +1,56 @@
+; SPDX-License-Identifier: MIT
+; RamShared StorPort virtual miniport — universal INF (attestation-signable).
+; SPEC ITEM-5 / ITEM-11 / RF-1 / RF-8. Validate: InfVerif.exe /w ramshared.inf
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = SCSIAdapter
+ClassGuid   = {4d36e97b-e325-11ce-bfc1-08002be10318}
+Provider    = %ManufacturerName%
+CatalogFile = ramshared.cat
+DriverVer   = 07/09/2026,10.0.26200.1
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12
+RamShared_Device_CoInstaller_CopyFiles = 11
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+ramshared.sys = 1,,
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64
+
+[Standard.NTamd64]
+%RamShared.DeviceDesc% = RamShared_Device, Root\RamShared
+
+[RamShared_Device.NT]
+CopyFiles = RamShared_Device_CopyFiles
+
+[RamShared_Device_CopyFiles]
+ramshared.sys
+
+[RamShared_Device.NT.Services]
+AddService = ramshared,%SPSVCINST_ASSOCSERVICE%, RamShared_Service_Inst
+
+[RamShared_Service_Inst]
+DisplayName    = %RamShared.SVCDESC%
+ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
+StartType      = 3               ; SERVICE_DEMAND_START
+ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\ramshared.sys
+LoadOrderGroup = SCSI Miniport
+AddReg         = RamShared_AddReg
+
+[RamShared_AddReg]
+HKR, "Parameters\PnpInterface", "5", 0x00010001, 0x00000001
+
+[Strings]
+SPSVCINST_ASSOCSERVICE = 0x00000002
+ManufacturerName = "RamShared"
+DiskName = "RamShared Installation Disk"
+RamShared.DeviceDesc = "RamShared VRAM Virtual Disk (StorPort)"
+RamShared.SVCDESC = "RamShared StorPort Virtual Miniport"
