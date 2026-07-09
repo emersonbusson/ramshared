@@ -27,6 +27,16 @@ Each file is **self-contained**: steps + title/body IDs + paste blocks.
 | **L-EN-1** | When your PC runs out of RAM, use idle GPU memory as a safety cushion — and give it back if the GPU gets busy. |
 | **L-PT-1** | Quando a RAM acaba, usa a memória ociosa da placa de vídeo como colchão — e devolve se a GPU precisar. |
 
+## How pasting works
+
+Each post file has blocks marked:
+
+- `>>> COPY TITLE START` … `END` → paste into the **title** field (when the site has one)
+- `>>> COPY BODY START` … `END` → paste into the **text/body** field (the long part, including numbers and “try it”)
+- **IMG-1** → download PNG and **attach** (not paste as text)
+
+Do **not** paste the `>>>` marker lines.
+
 ## Right now
 
 Open **only**:
