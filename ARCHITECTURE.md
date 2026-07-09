@@ -33,6 +33,10 @@ If configured as hot swap space, VRAM eviction would lock up the system. Operati
 | `ramshared-integrity` | Checksum calculations (FNV-1a) + validation testing patterns | `forbid` |
 | `ramshared-wsl2d` | Daemon: state machine, `VramBackend` (connects CUDA↔NBD), `mlockall`/`oom_score_adj`, canary/DEMOTE triggers | `mlockall` only |
 | `ramshared-cli` | Command-line management: `check`/`doctor` (preflight) + `up`/`down`/`status` (orchestration) | `forbid` |
+| `ramshared-winsvc` | **Windows-only** (P4): userspace side of StorPort VRAM disk + pagefile; Linux builds a stub | planned `unsafe` for IOCTL/FFI only |
+| `drivers/windows/ramshared` | StorPort virtual miniport (C/WDK); ABI `protocol.h` | kernel-mode |
+
+**Native Windows track (P4):** secondary pagefile on a StorPort virtual disk backed by VRAM — SPEC [`docs/specs/no-milestone/windows-swap-driver/`](docs/specs/no-milestone/windows-swap-driver/), ADR-0006. Not the day-1 public install path (that remains WSL2 cascade).
 
 All `unsafe` blocks are isolated within `ramshared-cuda` (FFI) with `// SAFETY:` markers, except for the daemon's `mlockall` call which is documented and isolated. Minimal external dependencies (`std` + FFI/libc).
 

@@ -16,6 +16,14 @@ The active implementation target is **WSL2**; the ultimate destination is **Ring
 *   **H1 — Multi-Connection Daemon / Dedicated Reader:** ✅ **Completed** — Single CUDA worker thread + independent read/write handlers per connection (`nbd-client -C N`, `CAN_MULTI_CONN`); avoids head-of-line blocking. Reference: `docs/daemon-multiconn/`.
 *   **LOW — Fixed:** Typed errors via `CascadeError` (zero-dependency, matching the `CudaError` pattern in `ramshared-cli`/`ramshared-tier`). **`clap` rejected** (violates the zero-dependency policy for Ring-0 adjacent binaries — decision recorded in [`docs/LIBRARIES.md`](docs/LIBRARIES.md)); the daemon (`ramshared-wsl2d`) keeps `Box<dyn Error>` at the binary boundary.
 
+## Active — P4 Track 2 (Native Windows swap-to-VRAM)
+
+*   **SPEC GO** (re-audit): [`docs/specs/no-milestone/windows-swap-driver/SPEC.md`](docs/specs/no-milestone/windows-swap-driver/SPEC.md)
+*   **Preflight / IMPL scaffold:** [`PREFLIGHT.md`](docs/specs/no-milestone/windows-swap-driver/PREFLIGHT.md) · [`IMPL.md`](docs/specs/no-milestone/windows-swap-driver/IMPL.md)
+*   **Next code slices:** ITEM-2 (`VramBackend` → `ramshared-block`) → ITEM-3 (`TransportKind::WinDrive` + `ramshared-winsvc` lease) → ITEM-5 driver in **VM only**
+*   **Hard gate before host-real driver:** ITEM-8 kernel-page drill (DT-21 residency) + `DEGRADATION-MATRIX` update
+*   **Not day-1 public install:** Linux/WSL2 cascade remains the shippable product path in `README.md`
+
 ## Phase B — Custom Kernel (WSL2 + Custom WSL2 Kernel)
 
 *   `CONFIG_ZRAM_WRITEBACK`: Writeback cold zram pages directly to VRAM (eliminates the userspace hop in the cold path).
