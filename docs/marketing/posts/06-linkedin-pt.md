@@ -14,11 +14,11 @@
 | --- | --- |
 | **S1** | LinkedIn → **Começar publicação** |
 | **S2** | Colar **LI-PT-1** (corpo abaixo) |
-| **S3** | Opcional: anexar **IMG-1** |
+| **S3** | Opcional: anexar **IMG-PT-1** (diagrama PT-BR) |
 | **S4** | Publicar |
 | **S5** | Parar |
 
-**IMG-1:** https://github.com/emersonbusson/ramshared/blob/main/docs/marketing/cascade-diagram.png
+**IMG-PT-1:** https://github.com/emersonbusson/ramshared/blob/main/docs/marketing/cascade-diagram-pt.png
 
 ---
 

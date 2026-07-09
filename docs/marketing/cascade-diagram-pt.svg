@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-label="RamShared — ordem de uso da memória">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1220"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="hot" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#ef4444"/>
+    </linearGradient>
+    <linearGradient id="cold" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="last" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#64748b"/>
+      <stop offset="100%" stop-color="#475569"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="675" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <text x="60" y="68" fill="#f8fafc" font-family="ui-sans-serif, system-ui, Segoe UI, sans-serif" font-size="34" font-weight="700">RamShared — quando a RAM aperta</text>
+  <text x="60" y="102" fill="#94a3b8" font-family="ui-sans-serif, system-ui, Segoe UI, sans-serif" font-size="17">Usa memória ociosa da placa de vídeo · devolve se a GPU precisar</text>
+
+  <!-- Pressure label -->
+  <text x="48" y="175" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">Memória</text>
+  <text x="48" y="195" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">apertou</text>
+  <path d="M55 210 L180 230" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)"/>
+
+  <!-- 1) zram -->
+  <g filter="url(#shadow)">
+    <rect x="200" y="150" width="290" height="160" rx="16" fill="#1e293b" stroke="url(#hot)" stroke-width="3"/>
+    <rect x="200" y="150" width="12" height="160" rx="6" fill="url(#hot)"/>
+    <text x="230" y="195" fill="#fbbf24" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700">1º · rápido</text>
+    <text x="230" y="235" fill="#f8fafc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="28" font-weight="700">RAM compactada</text>
+    <text x="230" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">zram — memória do PC</text>
+    <text x="230" y="292" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">o que você está usando agora</text>
+  </g>
+
+  <path d="M510 230 L550 230" stroke="#64748b" stroke-width="4"/>
+  <polygon points="550,222 570,230 550,238" fill="#64748b"/>
+
+  <!-- 2) GPU -->
+  <g filter="url(#shadow)">
+    <rect x="590" y="150" width="290" height="160" rx="16" fill="#1e293b" stroke="url(#cold)" stroke-width="3"/>
+    <rect x="590" y="150" width="12" height="160" rx="6" fill="url(#cold)"/>
+    <text x="620" y="195" fill="#22d3ee" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700">2º · placa de vídeo</text>
+    <text x="620" y="235" fill="#f8fafc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="28" font-weight="700">GPU ociosa</text>
+    <text x="620" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">memória da placa parada</text>
+    <text x="620" y="292" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">só quando a RAM aperta</text>
+  </g>
+
+  <path d="M900 230 L940 230" stroke="#64748b" stroke-width="4"/>
+  <polygon points="940,222 960,230 940,238" fill="#64748b"/>
+
+  <!-- 3) disk -->
+  <g filter="url(#shadow)">
+    <rect x="980" y="150" width="170" height="160" rx="16" fill="#1e293b" stroke="url(#last)" stroke-width="3"/>
+    <rect x="980" y="150" width="12" height="160" rx="6" fill="url(#last)"/>
+    <text x="1005" y="195" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700">3º · último</text>
+    <text x="1005" y="235" fill="#f8fafc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="26" font-weight="700">disco</text>
+    <text x="1005" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">SSD / VHDX</text>
+    <text x="1005" y="292" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">sempre tem</text>
+  </g>
+
+  <!-- Give back -->
+  <g filter="url(#shadow)">
+    <rect x="200" y="360" width="680" height="120" rx="16" fill="#0f172a" stroke="#334155" stroke-width="2"/>
+    <text x="230" y="405" fill="#f472b6" font-family="ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="700">Devolve se a GPU precisar</text>
+    <text x="230" y="438" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Se o PC cobrar a placa → para de usar memória da GPU → dados vão pro disco</text>
+    <text x="230" y="462" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14">Os programas continuam · a gente não mata app pra liberar a placa</text>
+  </g>
+
+  <!-- Numbers -->
+  <g filter="url(#shadow)">
+    <rect x="920" y="360" width="230" height="120" rx="16" fill="#0f172a" stroke="#334155" stroke-width="2"/>
+    <text x="945" y="400" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700">MEDIDO</text>
+    <text x="945" y="428" fill="#f8fafc" font-family="ui-monospace, Menlo, monospace" font-size="13">caminho rápido ~241 µs</text>
+    <text x="945" y="450" fill="#f8fafc" font-family="ui-monospace, Menlo, monospace" font-size="13">caminho antigo ~326 µs</text>
+    <text x="945" y="472" fill="#94a3b8" font-family="ui-monospace, Menlo, monospace" font-size="12">GPU sob pressão ~1,2 s</text>
+  </g>
+
+  <!-- Footer -->
+  <text x="60" y="555" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">Por que a GPU não é a primeira opção? Sob pressão ela pode ficar bem lenta.</text>
+  <text x="60" y="590" fill="#94a3b8" font-family="ui-monospace, Menlo, monospace" font-size="16">github.com/emersonbusson/ramshared</text>
+  <text x="60" y="635" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">Números em docs/reliability · Linux / WSL2 · NVIDIA no dia 1</text>
+</svg>
