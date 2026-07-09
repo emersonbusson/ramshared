@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-label="RamShared swap cascade">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1220"/>
+      <stop offset="100%" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="hot" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#ef4444"/>
+    </linearGradient>
+    <linearGradient id="cold" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="last" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#64748b"/>
+      <stop offset="100%" stop-color="#475569"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect width="1200" height="675" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <text x="60" y="72" fill="#f8fafc" font-family="ui-sans-serif, system-ui, Segoe UI, sans-serif" font-size="36" font-weight="700">RamShared — swap cascade</text>
+  <text x="60" y="108" fill="#94a3b8" font-family="ui-sans-serif, system-ui, Segoe UI, sans-serif" font-size="18">Idle GPU VRAM as a cold tier · Linux / WSL2</text>
+
+  <!-- Pressure arrow label -->
+  <text x="60" y="175" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">Memory pressure</text>
+  <path d="M60 195 L180 195" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)"/>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <!-- Tier cards -->
+  <!-- zram HOT -->
+  <g filter="url(#shadow)">
+    <rect x="220" y="150" width="280" height="160" rx="16" fill="#1e293b" stroke="url(#hot)" stroke-width="3"/>
+    <rect x="220" y="150" width="12" height="160" rx="6" fill="url(#hot)"/>
+    <text x="250" y="195" fill="#fbbf24" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700" letter-spacing="1">HOT · prio 200</text>
+    <text x="250" y="235" fill="#f8fafc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="28" font-weight="700">zram</text>
+    <text x="250" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Compressed RAM</text>
+    <text x="250" y="292" fill="#64748b" font-family="ui-monospace, Menlo, monospace" font-size="13">active working set</text>
+  </g>
+
+  <!-- arrow 1 -->
+  <path d="M520 230 L560 230" stroke="#64748b" stroke-width="4"/>
+  <polygon points="560,222 580,230 560,238" fill="#64748b"/>
+
+  <!-- VRAM COLD -->
+  <g filter="url(#shadow)">
+    <rect x="600" y="150" width="280" height="160" rx="16" fill="#1e293b" stroke="url(#cold)" stroke-width="3"/>
+    <rect x="600" y="150" width="12" height="160" rx="6" fill="url(#cold)"/>
+    <text x="630" y="195" fill="#22d3ee" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700" letter-spacing="1">COLD · prio 100</text>
+    <text x="630" y="235" fill="#f8fafc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="28" font-weight="700">VRAM</text>
+    <text x="630" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">CUDA + NBD / ublk</text>
+    <text x="630" y="292" fill="#64748b" font-family="ui-monospace, Menlo, monospace" font-size="13">idle GPU memory</text>
+  </g>
+
+  <!-- arrow 2 -->
+  <path d="M900 230 L940 230" stroke="#64748b" stroke-width="4"/>
+  <polygon points="940,222 960,230 940,238" fill="#64748b"/>
+
+  <!-- Disk LAST -->
+  <g filter="url(#shadow)">
+    <rect x="980" y="150" width="160" height="160" rx="16" fill="#1e293b" stroke="url(#last)" stroke-width="3"/>
+    <rect x="980" y="150" width="12" height="160" rx="6" fill="url(#last)"/>
+    <text x="1005" y="195" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" letter-spacing="1">LAST · −2</text>
+    <text x="1005" y="235" fill="#f8fafc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="24" font-weight="700">disk</text>
+    <text x="1005" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">VHDX / SSD</text>
+    <text x="1005" y="292" fill="#64748b" font-family="ui-monospace, Menlo, monospace" font-size="12">safety net</text>
+  </g>
+
+  <!-- DEMOTE callout -->
+  <g filter="url(#shadow)">
+    <rect x="220" y="360" width="660" height="120" rx="16" fill="#0f172a" stroke="#334155" stroke-width="2"/>
+    <text x="250" y="405" fill="#f472b6" font-family="ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="700">DEMOTE safety net</text>
+    <text x="250" y="438" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Latency canary / WDDM pressure → swapoff VRAM only → pages drain to disk</text>
+    <text x="250" y="462" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14">Processes keep running · data-safe path under host GPU eviction</text>
+  </g>
+
+  <!-- Measured numbers -->
+  <g filter="url(#shadow)">
+    <rect x="920" y="360" width="220" height="120" rx="16" fill="#0f172a" stroke="#334155" stroke-width="2"/>
+    <text x="945" y="400" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" letter-spacing="1">MEASURED</text>
+    <text x="945" y="428" fill="#f8fafc" font-family="ui-monospace, Menlo, monospace" font-size="14">ublk p50 ~241 µs</text>
+    <text x="945" y="450" fill="#f8fafc" font-family="ui-monospace, Menlo, monospace" font-size="14">NBD p50 ~326 µs</text>
+    <text x="945" y="472" fill="#94a3b8" font-family="ui-monospace, Menlo, monospace" font-size="12">WDDM stall ~1.18 s</text>
+  </g>
+
+  <!-- Footer -->
+  <text x="60" y="560" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">Why cold tier? Under host GPU pressure VRAM is data-safe but latency-unsafe.</text>
+  <text x="60" y="590" fill="#94a3b8" font-family="ui-monospace, Menlo, monospace" font-size="16">github.com/emersonbusson/ramshared</text>
+  <text x="60" y="640" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">Sources: docs/reliability/* · numbers from registered benchmarks (median / multi-run)</text>
+</svg>
