@@ -11,13 +11,15 @@
 | **L-EN-1** | EN | When your PC runs out of RAM, use idle GPU memory as a safety cushion — automatically, and pull back if the GPU gets busy. |
 | **L-PT-1** | PT | Quando a RAM acaba, usa a memória ociosa da placa de vídeo como colchão — e devolve se a GPU precisar. |
 
-**Three bullets (any channel):**
+**Three bullets (any channel — human first):**
 
-1. More headroom under pressure (compile, containers, browser).  
-2. GPU stays usable (cold tier + DEMOTE).  
-3. Open source and measured, with honest limits.
+1. More breathing room when RAM is under pressure (compile, containers, browser).  
+2. The GPU can still work — we **give the cushion back** if the system needs graphics memory.  
+3. Open source and measured, with honest limits (not “free RAM for maxed-out games”).
 
-User-facing FAQ: [`docs/FAQ.md`](../FAQ.md) · Demo script: [`DEMO.md`](DEMO.md) · Install: `./scripts/quickstart.sh`
+Prefer “give the cushion back” over “DEMOTE” in social posts; define DEMOTE only if someone asks.
+
+User-facing: [`docs/FAQ.md`](../FAQ.md) · Demo: [`DEMO.md`](DEMO.md) · Install: `./scripts/quickstart.sh` · Public README leads with plain language.
 
 ---
 
@@ -151,49 +153,51 @@ Avoid same-day spam across many subreddits (r/rust: no low-effort content).
 Attach **IMG-1** (`cascade-diagram.png`) when Reddit asks for image / media.
 
 ```markdown
-I built **RamShared**: a Rust userspace stack that puts **idle GPU VRAM** into the Linux swap hierarchy on **WSL2/Linux**, without pretending VRAM is as safe as RAM.
+**When your PC runs out of RAM, use idle GPU memory as a safety cushion — and give it back if the GPU gets busy.**
 
-## Problem
-On a workstation with a GPU, VRAM is often **~90% idle** during compile/containers, while system RAM is exhausted and the machine swaps to **SSD** (orders of magnitude slower than GDDR). Buying more DDR is expensive; the silicon is already paid for.
+I built **RamShared** (Rust, Linux/WSL2, NVIDIA): a practical way to borrow **idle graphics memory** when system RAM is tight, without pretending GPU memory is as safe/fast as main RAM.
 
-## Constraint (why not “just swap to VRAM”)
-Under host GPU pressure (WDDM / GPU-PV), VRAM is **data-safe but latency-unsafe**. We measured **~1.18 s** stalls on 4K reads during host eviction. If VRAM were the *hot* swap tier, that freezes the system.
+## Problem (human)
+You’re compiling / running containers / drowning in tabs. RAM is gone. The machine starts thrashing the **SSD**. Meanwhile the **GPU memory** is often almost empty. You already paid for that silicon.
 
-## Design
-Priority cascade (kernel swap priorities):
+## Why not “just put all swap on the GPU”?
+When Windows reclaims graphics memory under pressure, that memory can get **very slow**. We measured about **1.2 seconds** for a tiny read in the bad case. If that were your *first* emergency store, the whole machine freezes. So GPU memory is only a **second** cushion — and we can **give it back**.
 
+## Design (still short)
 ```text
-pressure → zram   (compressed RAM)   HOT   prio 200
-        → VRAM  (CUDA + NBD/ublk)    COLD  prio 100
-        → VHDX/SSD                   LAST  prio  -2
+Need memory?  →  1) compressed RAM (zram)     — first, fast
+              →  2) idle GPU memory           — second, colder
+              →  3) disk (SSD / VHDX)         — last resort
 ```
 
-- **zram** absorbs the hot working set.
-- **VRAM** is a *cold* overflow tier.
-- A residency/canary path watches latency; on spike it **DEMOTE**s VRAM via `swapoff` so pages fall to disk **without killing processes**.
+If latency spikes / host pressure: **stop using the GPU cushion**, data slides to disk, **apps keep running** (we call that path DEMOTE in the code).
 
-## Numbers (measured, not vibes)
-- Phase 0: WDDM eviction → **up to ~1.18 s** 4K read under pressure (reason for cold-tier + DEMOTE).
-- Block path: **ublk p50 ~241 µs** vs **NBD-Unix p50 ~326 µs** (same load window, ≥3 runs).
-- Validation: **~511 MiB** spilled to VRAM tier; **~481 MiB** demoted VRAM→disk; **0 corruption** in the logged cascade drill.
+## Numbers (measured)
+- Bad case under host GPU reclaim: up to **~1.2 s** for a small read (why GPU is second, not first).
+- Faster plumbing path **~241 µs** median vs older path **~326 µs** (same window, multi-run).
+- Stress drill: **~500 MB** on GPU tier, **~480 MB** moved back, **0 corruption**.
 
-## Stack
-- Rust 2024 workspace (CLI + daemon + CUDA via `dlopen` FFI boundary).
-- Swap cascade + DEMOTE safety net in userspace; Phase B work toward ublk / custom WSL2 kernel.
+## Try it
+```bash
+./scripts/quickstart.sh
+sudo ./target/release/ramshared check
+sudo ./target/release/ramshared up --vram 1024 --zram 1024
+swapon --show   # success ≈ three lines: zram + GPU + disk
+```
 
 ## Honest limits
-- WSL2/GPU-PV is not bare-metal coherent CXL/HMM. This is a **practical** path for developer machines today.
-- Thrashing swap/ublk on a live WSL2 host is intentionally forbidden in our harnesses (host freeze risk); real pressure in **isolated** VMs.
-- Not a magic free-RAM button for games under full GPU load — VRAM under WDDM pressure is the hard case we design around.
+- Day-1 path is **Linux/WSL2 + NVIDIA**, not “every GPU / every OS.”
+- Not free RAM for maxed-out games.
+- We don’t thrash live WSL2 on purpose; heavy tests use isolated VMs.
+- Not bare-metal CXL magic — practical workstation tool.
 
-## Looking for
-Feedback from people who have done **swap / block / CUDA / WSL2** work:
-1. Cold-tier + demote vs trying UVM / other APIs on consumer NVIDIA under WDDM.
-2. ublk vs NBD trade-offs you’ve hit in production-ish setups.
-3. Anything underspecified in the safety story.
+## Looking for feedback
+Especially from people who’ve fought **swap, block devices, CUDA, or WSL2**:
+1. Second-cushion + give-back vs other APIs under Windows GPU reclaim.
+2. What you’d want in a “it just works” install.
+3. Where the safety story still feels thin.
 
-Repo: https://github.com/emersonbusson/ramshared  
-Build: `cargo build -p ramshared-cli -p ramshared-wsl2d` (see README).
+Repo + plain FAQ: https://github.com/emersonbusson/ramshared  
 ```
 
 ## X / Twitter — EN thread
@@ -298,47 +302,50 @@ Use the Reddit EN body, but move **Honest limits** above Numbers and drop flair 
 Anexar **IMG-1**.
 
 ```markdown
-Montei o **RamShared**: stack em **Rust** que coloca **VRAM ociosa da GPU** na hierarquia de swap do Linux (**WSL2/Linux**), sem fingir que VRAM é tão segura quanto RAM.
+**Quando a RAM acaba, usa a memória ociosa da placa de vídeo como colchão — e devolve se a GPU precisar.**
 
-## Problema
-Em workstation com GPU, a VRAM fica **~90% ociosa** em compile/containers, enquanto a RAM acaba e o sistema troca em **SSD** (ordens de magnitude mais lento que GDDR). Comprar mais DDR é caro; o silício já está pago.
+Montei o **RamShared** (Rust, Linux/WSL2, NVIDIA): emprestar **memória ociosa da GPU** quando a RAM do sistema aperta, sem fingir que a memória da placa é tão segura/rápida quanto a RAM principal.
 
-## Constraint (por que não “só swap pra VRAM”)
-Sob pressão da GPU no host (WDDM / GPU-PV), VRAM é **data-safe mas latency-unsafe**. Medimos **~1,18 s** de stall em leitura 4K durante eviction do host. Se VRAM fosse o tier *quente* de swap, o sistema trava.
+## Problema (humano)
+Compile, containers, mil abas. A RAM acaba. O PC engasga no **SSD**. Enquanto isso a **memória da placa de vídeo** está quase vazia — e você já pagou por ela.
 
-## Design
-Cascata de prioridade (prioridades de swap do kernel):
+## Por que não “jogar todo o swap na GPU”?
+Quando o Windows recupera memória da GPU sob pressão, essa memória pode ficar **muito lenta** (medimos cerca de **1,2 s** numa leitura pequena no pior caso). Se isso for o *primeiro* recurso de emergência, a máquina trava. Por isso a GPU é só o **segundo** colchão — e dá para **devolver**.
 
+## Design (curto)
 ```text
-pressão → zram   (RAM comprimida)     QUENTE  prio 200
-       → VRAM  (CUDA + NBD/ublk)      FRIO    prio 100
-       → VHDX/SSD                     ÚLTIMO  prio  -2
+Precisa de memória?  →  1) RAM comprimida     — primeiro, rápido
+                     →  2) GPU ociosa         — segundo, mais “frio”
+                     →  3) disco (SSD/VHDX)   — último
 ```
 
-- **zram** segura o working set quente.
-- **VRAM** é overflow *frio*.
-- Canário de latência: em spike, **DEMOTE** via `swapoff` da VRAM — páginas caem pro disco **sem matar processos**.
+Se a latência disparar: **paramos de usar o colchão da GPU**, os dados vão pro disco, **os apps continuam**.
 
 ## Números (medidos)
-- Fase 0: eviction WDDM → até **~1,18 s** em 4K sob pressão (motivo do tier frio + DEMOTE).
-- Path de bloco: **ublk p50 ~241 µs** vs **NBD-Unix p50 ~326 µs** (mesma janela, ≥3 runs).
-- Validação: **~511 MiB** no tier VRAM; **~481 MiB** no caminho demote; **0 corrupção** no drill logado.
+- Pior caso sob pressão da GPU no host: até **~1,2 s** numa leitura pequena.
+- Caminho mais rápido ~**241 µs** vs caminho antigo ~**326 µs** (várias rodadas).
+- Stress: ~**500 MB** no colchão da GPU, ~**480 MB** de volta, **0 corrupção**.
 
-## Stack
-- Workspace Rust 2024 (CLI + daemon + CUDA via `dlopen`).
-- Cascata de swap + rede de segurança DEMOTE em userspace; Fase B em ublk / kernel WSL2 custom.
+## Experimentar
+```bash
+./scripts/quickstart.sh
+sudo ./target/release/ramshared check
+sudo ./target/release/ramshared up --vram 1024 --zram 1024
+swapon --show   # sucesso ≈ três linhas
+```
 
 ## Limites honestos
-- WSL2/GPU-PV ≠ bare-metal CXL/HMM. É o caminho **prático** para máquina de dev hoje.
-- Não thrashamos swap/ublk no WSL2 live (congela o host); pressão real só em **VM isolada**.
-- Não é “RAM grátis” com GPU a 100% em jogo — WDDM sob carga é o caso difícil.
+- Dia 1: **Linux/WSL2 + NVIDIA**, não “qualquer GPU / qualquer SO”.
+- Não é RAM grátis para jogo no talo.
+- Não thrashamos WSL2 do dia a dia de propósito.
+- Não é mágica bare-metal / CXL — ferramenta de workstation.
 
-## Quero feedback
-1. Tier frio + demote vs UVM/outras APIs em NVIDIA consumer + WDDM.
-2. Trade-offs ublk vs NBD que vocês já apanharam.
-3. Furos na história de safety.
+## Feedback
+1. Colchão secundário + devolver vs outras abordagens.
+2. O que falta para “só funciona”.
+3. Onde a história de segurança ainda parece frágil.
 
-Repo: https://github.com/emersonbusson/ramshared
+Repo + FAQ simples: https://github.com/emersonbusson/ramshared
 ```
 
 **Nota:** no **r/rust**, preferir a versão **EN**. PT para r/brdev, LinkedIn BR, X PT.
