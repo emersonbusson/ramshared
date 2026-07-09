@@ -1,9 +1,9 @@
-//! ramshared-cuda — wrapper seguro sobre a CUDA Driver API (`libcuda`) carregada
-//! em runtime, para o tier VRAM da cascata (SPECv3-WSL2.md §4, §8).
+//! ramshared-cuda — Safe wrapper over the CUDA Driver API (`libcuda`) loaded at runtime
+//! for the VRAM cascade tier (SPECv3-WSL2.md §4, §8).
 //!
-//! Lib reutilizável: `Cuda::load()` → `device()` → `create_context()` → `alloc()`
-//! com cópias Host↔Device síncronas e liberação por RAII. Portado do design da
-//! referência `c0deJedi/nbd-vram` (C, MIT), não copiado — ver SPECv3 §0.2.
+//! Reusable library: `Cuda::load()` -> `device()` -> `create_context()` -> `alloc()`
+//! with synchronous Host<->Device copies and RAII-based resource deallocation. Ported from the design of
+//! reference `c0deJedi/nbd-vram` (C, MIT), not copied — see SPECv3 §0.2.
 //!
 //! ```no_run
 //! use ramshared_cuda::Cuda;
@@ -38,7 +38,7 @@ pub use driver::{Context, Cuda, CudaError, Device, DeviceMem};
 
 #[cfg(test)]
 mod tests {
-    // unwrap/expect liberados só em teste (regra coding.md), apesar do deny no crate.
+    // unwrap/expect allowed in tests only (coding.md rules), despite the crate-level deny.
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;

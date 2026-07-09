@@ -24,18 +24,10 @@ O source of truth para regras de arquitetura e código está em:
 3. Ler `MEMORY.md` de baixo para cima (contexto temporal append-only).
 4. Ler `conversa.md` se presente (contexto ativo).
 
-### Acesso
-
-Root (Linux) e admin (Windows, UAC sem-prompt) já autorizados nesta workspace — mesmo padrão liberado em [`docs/memory-broker/CIVM-TENANT.md`](docs/memory-broker/CIVM-TENANT.md). Permissões de tool em `~/.claude/settings.json`.
-
-### Sync rule (invariante #5)
-
-`README.md`, `AGENTS.md`, `CLAUDE.md` e [`.claude/rules/*.md`](.claude/rules/*.md) são documentos autoritativos. Mudança em um requer mudança nos outros se a regra for de escopo geral.
-
 ### Linguagem
 
-- **Inglês** em: código fonte (`.c`, `.rs`, `.h`), headers, makefiles, commit titles, Kconfig.
-- **Português (BR)** em: comentários de código, `README.md`, `AGENTS.md`, `CLAUDE.md`, `MEMORY.md`, PR descriptions, Issue titles+bodies, e documentação de arquitetura.
+- **Inglês** em todo o projeto: código fonte (`.rs`, `.h`, `.c`), comentários, documentação principal (`README.md`, `ARCHITECTURE.md`, etc.), títulos de commit, e Pull Requests.
+
 
 ## Commits e Patches
 
