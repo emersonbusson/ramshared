@@ -45,7 +45,9 @@ RamShared interacts with live hardware, GPU paging drivers, and operating system
 *   `/scripts/`: Provisioning, testing harnesses, and QEMU virtualization drills.
 *   `/docs/specs/no-milestone/{slug}/`: SSDV3 artifacts (`PRD.md`, `SPEC.md`, `IMPL.md`, optional `AUDIT-2.5.md`). Index: [`docs/INDEX.md`](docs/INDEX.md).
 *   `/docs/`: Methodology (Kahneman), ADRs, runbooks, reliability, benchmarks.
-*   `/docs/marketing/`: Launch kit (EN/PT social copy) + cascade diagram for Show & Tell posts.
+*   `/docs/marketing/`: Launch kit (EN/PT social copy) + cascade diagram + demo script.
+*   `/docs/FAQ.md`: Public FAQ (fear / DEMOTE / success criteria).
+*   `/scripts/quickstart.sh`: Build day-1 binaries (`ramshared` + `ramsharedd`).
 *   `/tools/`: Docs hygiene (`generate-docs-index.mjs`, `check-broken-links.mjs`).
 
 ### Specs & docs checks
