@@ -4,6 +4,21 @@
 > **Rule (Kahneman #3):** every number below must already live in `docs/reliability/*` or `docs/BENCHMARKS.md`. If you change a number, update the source first, then this kit.
 > **Repo:** https://github.com/emersonbusson/ramshared
 
+### Public one-liners (always lead with these)
+
+| ID | Lang | Text |
+| --- | --- | --- |
+| **L-EN-1** | EN | When your PC runs out of RAM, use idle GPU memory as a safety cushion — automatically, and pull back if the GPU gets busy. |
+| **L-PT-1** | PT | Quando a RAM acaba, usa a memória ociosa da placa de vídeo como colchão — e devolve se a GPU precisar. |
+
+**Three bullets (any channel):**
+
+1. More headroom under pressure (compile, containers, browser).  
+2. GPU stays usable (cold tier + DEMOTE).  
+3. Open source and measured, with honest limits.
+
+User-facing FAQ: [`docs/FAQ.md`](../FAQ.md) · Demo script: [`DEMO.md`](DEMO.md) · Install: `./scripts/quickstart.sh`
+
 ---
 
 ## START HERE — Today’s post only (r/rust)
@@ -183,7 +198,10 @@ Build: `cargo build -p ramshared-cli -p ramshared-wsl2d` (see README).
 
 ## X / Twitter — EN thread
 
-**1 — hook**
+> Do **not** post today. Only after S1–S8 (r/rust) are done.  
+> Thread IDs: **X-EN-1** … **X-EN-5** (one tweet each). Attach **IMG-1** on **X-EN-1** or **X-EN-3**.
+
+### X-EN-1 — hook
 
 ```text
 Your GPU sits ~90% idle while your laptop swaps compile jobs to SSD.
@@ -193,7 +211,7 @@ I open-sourced RamShared: idle VRAM as a *cold* Linux/WSL2 swap tier (zram → V
 https://github.com/emersonbusson/ramshared
 ```
 
-**2 — constraint**
+### X-EN-2 — constraint
 
 ```text
 Why not “just swapon VRAM”?
@@ -201,7 +219,7 @@ Why not “just swapon VRAM”?
 Under host GPU pressure (WDDM/GPU-PV) we measured ~1.18s stalls on 4K reads. Data-safe ≠ latency-safe. Hot swap on that freezes the machine.
 ```
 
-**3 — design**
+### X-EN-3 — design
 
 ```text
 Cascade:
@@ -213,7 +231,7 @@ disk  prio  -2  LAST
 Canary latency spike → DEMOTE (swapoff VRAM only) → pages drain to disk, processes keep running.
 ```
 
-**4 — numbers**
+### X-EN-4 — numbers
 
 ```text
 Measured:
@@ -223,15 +241,13 @@ Measured:
 Rust 2024 workspace. Feedback welcome from swap/block/CUDA folks.
 ```
 
-**5 — limits + ask**
+### X-EN-5 — limits + ask
 
 ```text
 Honest limits: WSL2 ≠ bare-metal CXL. No thrash on live WSL2 host (freeze risk). Not free RAM under full GPU load.
 
 What would you challenge first—cold-tier design or the demote path?
 ```
-
-Attach `cascade-diagram.png` on tweet 1 or 3.
 
 ## LinkedIn — EN (short)
 
@@ -269,13 +285,17 @@ Use the Reddit EN body, but move **Honest limits** above Numbers and drop flair 
 
 ## Reddit — r/brdev (ou similar)
 
-**Título**
+> Só **depois** de S1–S8. IDs: **T-PT-1** (título), **B-PT-1** (corpo), **IMG-1** (mesma imagem).
+
+### T-PT-1 — Título
 
 ```text
 [Show] RamShared — VRAM ociosa da GPU como tier frio de swap no Linux/WSL2 (zram → VRAM → disco) com DEMOTE medido sob pressão WDDM
 ```
 
-**Corpo** (anexar `cascade-diagram.png`)
+### B-PT-1 — Corpo
+
+Anexar **IMG-1**.
 
 ```markdown
 Montei o **RamShared**: stack em **Rust** que coloca **VRAM ociosa da GPU** na hierarquia de swap do Linux (**WSL2/Linux**), sem fingir que VRAM é tão segura quanto RAM.
