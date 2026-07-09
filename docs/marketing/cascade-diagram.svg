@@ -25,8 +25,8 @@
   <rect width="1200" height="675" fill="url(#bg)"/>
 
   <!-- Title -->
-  <text x="60" y="72" fill="#f8fafc" font-family="ui-sans-serif, system-ui, Segoe UI, sans-serif" font-size="36" font-weight="700">RamShared — swap cascade</text>
-  <text x="60" y="108" fill="#94a3b8" font-family="ui-sans-serif, system-ui, Segoe UI, sans-serif" font-size="18">Idle GPU VRAM as a cold tier · Linux / WSL2</text>
+  <text x="60" y="72" fill="#f8fafc" font-family="ui-sans-serif, system-ui, Segoe UI, sans-serif" font-size="36" font-weight="700">RamShared — memory cushion</text>
+  <text x="60" y="108" fill="#94a3b8" font-family="ui-sans-serif, system-ui, Segoe UI, sans-serif" font-size="18">When RAM is tight: use idle GPU memory · give it back if the GPU needs it</text>
 
   <!-- Pressure arrow label -->
   <text x="60" y="175" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">Memory pressure</text>
@@ -42,10 +42,10 @@
   <g filter="url(#shadow)">
     <rect x="220" y="150" width="280" height="160" rx="16" fill="#1e293b" stroke="url(#hot)" stroke-width="3"/>
     <rect x="220" y="150" width="12" height="160" rx="6" fill="url(#hot)"/>
-    <text x="250" y="195" fill="#fbbf24" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700" letter-spacing="1">HOT · prio 200</text>
+    <text x="250" y="195" fill="#fbbf24" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700" letter-spacing="1">1st · fast cushion</text>
     <text x="250" y="235" fill="#f8fafc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="28" font-weight="700">zram</text>
-    <text x="250" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Compressed RAM</text>
-    <text x="250" y="292" fill="#64748b" font-family="ui-monospace, Menlo, monospace" font-size="13">active working set</text>
+    <text x="250" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Compressed system RAM</text>
+    <text x="250" y="292" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">what you’re using right now</text>
   </g>
 
   <!-- arrow 1 -->
@@ -56,10 +56,10 @@
   <g filter="url(#shadow)">
     <rect x="600" y="150" width="280" height="160" rx="16" fill="#1e293b" stroke="url(#cold)" stroke-width="3"/>
     <rect x="600" y="150" width="12" height="160" rx="6" fill="url(#cold)"/>
-    <text x="630" y="195" fill="#22d3ee" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700" letter-spacing="1">COLD · prio 100</text>
-    <text x="630" y="235" fill="#f8fafc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="28" font-weight="700">VRAM</text>
-    <text x="630" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">CUDA + NBD / ublk</text>
-    <text x="630" y="292" fill="#64748b" font-family="ui-monospace, Menlo, monospace" font-size="13">idle GPU memory</text>
+    <text x="630" y="195" fill="#22d3ee" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700" letter-spacing="1">2nd · GPU cushion</text>
+    <text x="630" y="235" fill="#f8fafc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="28" font-weight="700">GPU mem</text>
+    <text x="630" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Idle graphics memory</text>
+    <text x="630" y="292" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">only when RAM is tight</text>
   </g>
 
   <!-- arrow 2 -->
@@ -70,31 +70,31 @@
   <g filter="url(#shadow)">
     <rect x="980" y="150" width="160" height="160" rx="16" fill="#1e293b" stroke="url(#last)" stroke-width="3"/>
     <rect x="980" y="150" width="12" height="160" rx="6" fill="url(#last)"/>
-    <text x="1005" y="195" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" letter-spacing="1">LAST · −2</text>
+    <text x="1005" y="195" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" letter-spacing="1">3rd · last</text>
     <text x="1005" y="235" fill="#f8fafc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="24" font-weight="700">disk</text>
-    <text x="1005" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">VHDX / SSD</text>
-    <text x="1005" y="292" fill="#64748b" font-family="ui-monospace, Menlo, monospace" font-size="12">safety net</text>
+    <text x="1005" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">SSD / VHDX</text>
+    <text x="1005" y="292" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">always there</text>
   </g>
 
   <!-- DEMOTE callout -->
   <g filter="url(#shadow)">
     <rect x="220" y="360" width="660" height="120" rx="16" fill="#0f172a" stroke="#334155" stroke-width="2"/>
-    <text x="250" y="405" fill="#f472b6" font-family="ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="700">DEMOTE safety net</text>
-    <text x="250" y="438" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Latency canary / WDDM pressure → swapoff VRAM only → pages drain to disk</text>
-    <text x="250" y="462" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14">Processes keep running · data-safe path under host GPU eviction</text>
+    <text x="250" y="405" fill="#f472b6" font-family="ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="700">Give the GPU cushion back</text>
+    <text x="250" y="438" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">If the PC needs the GPU → stop using GPU memory → data moves to disk</text>
+    <text x="250" y="462" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14">Your apps keep running · we don’t kill them to free the GPU</text>
   </g>
 
   <!-- Measured numbers -->
   <g filter="url(#shadow)">
     <rect x="920" y="360" width="220" height="120" rx="16" fill="#0f172a" stroke="#334155" stroke-width="2"/>
     <text x="945" y="400" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" letter-spacing="1">MEASURED</text>
-    <text x="945" y="428" fill="#f8fafc" font-family="ui-monospace, Menlo, monospace" font-size="14">ublk p50 ~241 µs</text>
-    <text x="945" y="450" fill="#f8fafc" font-family="ui-monospace, Menlo, monospace" font-size="14">NBD p50 ~326 µs</text>
-    <text x="945" y="472" fill="#94a3b8" font-family="ui-monospace, Menlo, monospace" font-size="12">WDDM stall ~1.18 s</text>
+    <text x="945" y="428" fill="#f8fafc" font-family="ui-monospace, Menlo, monospace" font-size="13">fast path ~241 µs</text>
+    <text x="945" y="450" fill="#f8fafc" font-family="ui-monospace, Menlo, monospace" font-size="13">older path ~326 µs</text>
+    <text x="945" y="472" fill="#94a3b8" font-family="ui-monospace, Menlo, monospace" font-size="12">GPU reclaim ~1.2 s</text>
   </g>
 
   <!-- Footer -->
-  <text x="60" y="560" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">Why cold tier? Under host GPU pressure VRAM is data-safe but latency-unsafe.</text>
+  <text x="60" y="560" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">Why second cushion? Under pressure, GPU memory can get very slow — so it’s not first.</text>
   <text x="60" y="590" fill="#94a3b8" font-family="ui-monospace, Menlo, monospace" font-size="16">github.com/emersonbusson/ramshared</text>
-  <text x="60" y="640" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">Sources: docs/reliability/* · numbers from registered benchmarks (median / multi-run)</text>
+  <text x="60" y="640" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">Measured numbers in docs/reliability · Linux / WSL2 · NVIDIA day one</text>
 </svg>

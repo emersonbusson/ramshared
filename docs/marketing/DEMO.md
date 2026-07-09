@@ -1,60 +1,73 @@
-# Demo script — 30–45 seconds (record as GIF / Short / clip)
+# Demo — 40 seconds anyone can follow
 
-**Goal:** A stranger understands RamShared without reading the SPEC.
+**Goal:** a stranger gets the idea **without** reading architecture docs.
 
-**Asset:** attach [`cascade-diagram.png`](cascade-diagram.png) as the first frame or thumbnail.
+**Thumbnail / first frame:** [`cascade-diagram.png`](cascade-diagram.png)
 
-## Spoken / subtitle script (EN, ~40s)
+---
 
-| t | Visual | Line |
+## What you say (EN)
+
+| Time | Show on screen | Say |
 | --- | --- | --- |
-| 0–5s | Diagram PNG | “Your GPU often sits idle while your laptop swaps to disk.” |
-| 5–12s | Terminal: before or empty | “RamShared adds idle VRAM as a *cold* swap cushion.” |
-| 12–22s | `sudo ramshared up …` | “One command starts zram, then VRAM, then keeps disk as last resort.” |
-| 22–32s | `swapon --show` | “Success: three lines — hot, cold, last.” |
-| 32–40s | Diagram DEMOTE box | “If the host steals GPU memory, we DEMOTE — pages go to disk, apps keep running.” |
-| 40–45s | Repo URL | “Open source. github.com/emersonbusson/ramshared” |
+| 0–5s | Diagram | “Your GPU often sits idle while your laptop crawls on disk swap.” |
+| 5–12s | Terminal | “RamShared borrows idle GPU memory as a *backup cushion* when RAM is tight.” |
+| 12–22s | `up` command | “One command turns it on: compressed RAM first, then GPU, disk last.” |
+| 22–32s | `swapon --show` | “Success looks like three lines — fast, middle, slow.” |
+| 32–40s | Diagram “give back” box | “If the PC needs the GPU, we give that cushion back. Apps keep running.” |
+| 40–45s | Repo URL | “Open source — github.com/emersonbusson/ramshared” |
 
-## Spoken / subtitle script (PT, ~40s)
+## O que você fala (PT)
 
-| t | Visual | Line |
+| Tempo | Tela | Fala |
 | --- | --- | --- |
-| 0–5s | Diagrama | “Sua GPU fica ociosa enquanto o PC troca memória no SSD.” |
-| 5–12s | Terminal | “RamShared usa VRAM ociosa como colchão *frio* de swap.” |
-| 12–22s | `up` | “Um comando sobe zram, depois VRAM, disco por último.” |
-| 22–32s | `swapon --show` | “Sucesso: três linhas — quente, frio, último.” |
-| 32–40s | DEMOTE | “Se o host cobrir a GPU, fazemos DEMOTE — páginas vão pro disco, apps seguem.” |
-| 40–45s | URL | “Open source. github.com/emersonbusson/ramshared” |
+| 0–5s | Diagrama | “Sua GPU fica parada enquanto o PC engasga no SSD.” |
+| 5–12s | Terminal | “O RamShared empresta memória ociosa da placa como *colchão* quando a RAM aperta.” |
+| 12–22s | `up` | “Um comando liga: memória comprimida primeiro, depois GPU, disco por último.” |
+| 22–32s | `swapon --show` | “Sucesso: três linhas — rápido, meio, lento.” |
+| 32–40s | Caixa de devolver | “Se o PC precisar da GPU, devolvemos o colchão. Os apps continuam.” |
+| 40–45s | URL | “Código aberto — github.com/emersonbusson/ramshared” |
 
-## Terminal sequence (record this)
+---
+
+## Terminal (grave isto)
 
 ```bash
-# After ./scripts/quickstart.sh
+./scripts/quickstart.sh
 sudo ./target/release/ramshared check
 sudo ./target/release/ramshared up --vram 1024 --zram 1024
 swapon --show
-# leave up 5s, then:
+# pause 5 seconds
 sudo ./target/release/ramshared down
 swapon --show
 ```
 
-**Success on camera:** first `swapon --show` shows zram + VRAM device + disk; after `down`, VRAM tier is gone.
+**On camera, success =** first `swapon --show` has ~3 emergency-memory lines; after `down`, the GPU line is gone.
 
-## Tools (pick one)
+---
 
-- **GIF:** [asciinema](https://asciinema.org/) + `agg`, or Peek / Kap  
-- **Short video:** OBS 720p, terminal font large, no secrets on screen  
-- **Static only:** post `cascade-diagram.png` alone (better than nothing)
+## How to record
 
-## Do not show on camera
+| Format | Tool idea |
+| --- | --- |
+| GIF | Peek, Kap, or asciinema + agg |
+| Short video | OBS, large terminal font, 720p is fine |
+| No recording | Post the diagram alone + one sentence |
 
-- Full `doctor` walls of text (cut to 2s max)  
-- Kernel addresses / tokens  
-- Thrash / stress that freezes the host  
+## Don’t show
 
-## Optional caption (X / LinkedIn)
+- Endless error walls  
+- Passwords or tokens  
+- Anything that freezes the host on purpose  
+
+## Caption (X / LinkedIn)
 
 ```text
-Idle GPU → cold swap cushion. DEMOTE under WDDM pressure.
+Idle GPU → backup memory cushion when RAM is tight. We give it back if the GPU needs it.
+https://github.com/emersonbusson/ramshared
+```
+
+```text
+GPU ociosa → colchão de memória quando a RAM aperta. Devolve se a placa precisar.
 https://github.com/emersonbusson/ramshared
 ```
