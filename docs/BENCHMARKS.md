@@ -27,7 +27,7 @@
 
 **Contexto**
 - Branch/commit: `feat/p1-hardening` @ `1fba443` (PRD da P2).
-- Máquina: **EMEDEV** — Windows + **RTX 2060 (6144 MiB)**, WSL2 `6.6.123.2-microsoft-standard-WSL2+`,
+- Máquina: **dev-workstation** — Windows + **RTX 2060 (6144 MiB)**, WSL2 `6.6.123.2-microsoft-standard-WSL2+`,
   RAM vista pelo WSL2 = 15 GiB.
 - **Carga (snapshot, 30 s):** VRAM **1319–1392 MiB usados → ~4603 livres** (volatilidade 1.4% nesta
   janela — desktop sem app de GPU pesado no momento); RAM WSL2 avail ~8.4 GiB, free ~3.7 GiB, **swap
