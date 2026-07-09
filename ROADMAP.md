@@ -1,52 +1,37 @@
 # Roadmap — RamShared
 
-O caminho executável hoje é o **WSL2**; o destino é o **ring 0 bare-metal**
-(ver [MANIFESTO.md](MANIFESTO.md)). Datas são omitidas de propósito — P&D.
+The active implementation target is **WSL2**; the ultimate destination is **Ring 0 bare-metal** (refer to [MANIFESTO.md](MANIFESTO.md)). Dates are omitted intentionally — this is an R&D project.
 
-## Feito
+## Completed
 
-- **Avaliação dos 6 PRDs** + ambiente real (WSL2/GPU-PV): só o PRD-2 (block device +
-  CUDA) é viável no guest; os demais exigem DRM/BAR/DAMON ausentes.
-- **Fase 0** (GPU real): eviction WDDM é *data-safe, latency-unsafe* (4K → 1,18 s);
-  cascata provada (zram cheio + VRAM absorveu 983 MiB de overflow).
-- **SPECv3-WSL2** — convergência via Passo 2.5 (SPEC → SPECv2 → SPECv3): VRAM como
-  tier frio + DEMOTE.
-- **Port Rust** (6 crates) e **validação de aceitação §14** no sistema vivo (spill
-  511 MiB íntegro; DEMOTE 481 MiB migrado, 0 corrupção).
-- **Hardening pós-revisão adversarial** (issue #3): C3 (FFI CUDA duplicada removida,
-  CLI `forbid(unsafe_code)`), M1/M2/M3/M4/M5 + name-buffer.
+*   **Evaluation of the 6 PRDs** + real environment (WSL2/GPU-PV): Only PRD-2 (block device + CUDA) is viable in the guest; the others require hardware features (DRM/BAR/DAMON) that are missing.
+*   **Phase 0 (Real GPU Validation):** WDDM eviction is *data-safe, latency-unsafe* (4K reads can take up to 1.18 s under load); cascade order proved successful (zram saturation + VRAM absorbing 983 MiB of overflow).
+*   **SPECv3-WSL2:** Convergence reached via Passo 2.5 (SPEC → SPECv2 → SPECv3): VRAM configured as a cold tier + DEMOTE logic.
+*   **Rust Port:** 6 crates developed, and **validation of acceptance §14** successfully run on live system (spilling 511 MiB intact; DEMOTE migrating 481 MiB back, 0 corruption).
+*   **Adversarial Hardening (Issue #3):** C3 (duplicate CUDA FFI removed, CLI `forbid(unsafe_code)`), M1/M2/M3/M4/M5 + name-buffer.
 
-## Agora — issue #3 (Fase A, WSL2)
+## Active — Issue #3 (Phase A, WSL2)
 
-- **C1 — canário dedicado (§9.4):** ✅ **feito** — `ResidencySampler` com histerese
-  (conteúdo imediato; free-floor/erro transiente com streak). Ver `docs/008-vram-residency-canary/`.
-- **H1 — daemon multi-conexão / leitor dedicado:** ✅ **feito** — worker CUDA único +
-  leitor/escritor por conexão (`nbd-client -C N`, `CAN_MULTI_CONN`); sem head-of-line
-  blocking. Ver `docs/daemon-multiconn/`.
-- **LOW — resolvido:** erros tipados via `CascadeError` (zero-dep, padrão `CudaError`, em
-  `ramshared-cli`/`ramshared-tier`). **`clap` rejeitado** (seria a 1ª dep externa num projeto
-  zero-dep/Ring-0 — decisão registrada em [`docs/LIBRARIES.md`](docs/LIBRARIES.md)); o daemon
-  (`ramshared-wsl2d`) mantém `Box<dyn Error>` na fronteira do binário (idiom de aplicação).
+*   **C1 — Dedicated Canary (§9.4):** ✅ **Completed** — `ResidencySampler` with hysteresis (immediate on content-check; free-floor/transient errors require a streak). Reference: `docs/008-vram-residency-canary/`.
+*   **H1 — Multi-Connection Daemon / Dedicated Reader:** ✅ **Completed** — Single CUDA worker thread + independent read/write handlers per connection (`nbd-client -C N`, `CAN_MULTI_CONN`); avoids head-of-line blocking. Reference: `docs/daemon-multiconn/`.
+*   **LOW — Fixed:** Typed errors via `CascadeError` (zero-dependency, matching the `CudaError` pattern in `ramshared-cli`/`ramshared-tier`). **`clap` rejected** (violates the zero-dependency policy for Ring-0 adjacent binaries — decision recorded in [`docs/LIBRARIES.md`](docs/LIBRARIES.md)); the daemon (`ramshared-wsl2d`) keeps `Box<dyn Error>` at the binary boundary.
 
-## Fase B — kernel custom (WSL2 + kernel próprio)
+## Phase B — Custom Kernel (WSL2 + Custom WSL2 Kernel)
 
-- `CONFIG_ZRAM_WRITEBACK`: writeback do zram frio direto na VRAM (elimina o salto por
-  userspace no caminho frio).
-- `ublk` no lugar do NBD (menos cópias, menos context-switch).
+*   `CONFIG_ZRAM_WRITEBACK`: Writeback cold zram pages directly to VRAM (eliminates the userspace hop in the cold path).
+*   `ublk` replacing NBD (reduces memory copies and context-switch overhead).
 
-## Visão maior — bare-metal (gated em sair do WSL2)
+## Long-term Vision — Bare-metal (Gated on leaving WSL2)
 
-Exploratórios; precisam de DRM/BAR/DAMON/CXL indisponíveis no guest GPU-PV. Cada um
-tem PRD:
+Exploratory paths; require DRM/BAR/DAMON/CXL layers unavailable in the guest GPU-PV. Each has a dedicated PRD:
 
-- **NUMA node** para a VRAM ([`PRD`](docs/vram-as-ram/PRD.md), [`PRD-4`](docs/vram-as-ram/PRD-4.md) com DAMON/tiering proativo).
-- **zswap/zpool backend** na VRAM via BAR ([`PRD-3`](docs/vram-as-ram/PRD-3.md)).
-- **HMM `DEVICE_PRIVATE` + SDMA + eBPF** ([`PRD-6`](docs/vram-as-ram/PRD-6.md)).
-- **CXL / PCIe Gen5** — memória coerente como tier nativo.
+*   **NUMA node** mapping for VRAM ([`PRD`](docs/vram-as-ram/PRD.md), [`PRD-4`](docs/vram-as-ram/PRD-4.md) with DAMON/proactive tiering).
+*   **zswap/zpool backend** inside VRAM via BAR access ([`PRD-3`](docs/vram-as-ram/PRD-3.md)).
+*   **HMM `DEVICE_PRIVATE` + SDMA + eBPF** ([`PRD-6`](docs/vram-as-ram/PRD-6.md)).
+*   **CXL / PCIe Gen5** — Coherent device memory as a native storage tier.
 
-## Princípios de avanço
+## Principles of Progress
 
-- Cada item estrutural passa pela esteira **SSDV3** (PRD → SPEC → IMPL) e pelas
-  **disciplinas Kahneman** (counterfactual + rollback trigger numérico).
-- Nada vira swap quente sem evidência de latência; **medir antes de codar** (Fase 0).
-- **Day-0:** sem shims; a saída do WSL2 reescreve os caminhos, não os empilha.
+*   Every structural feature goes through the **SSDV3** pipeline (PRD → SPEC → IMPL) and respects **Kahneman disciplines** (counterfactuals + numerical rollback triggers).
+*   No memory block enters VRAM without latency evidence; **measure before coding** (Phase 0).
+*   **Day-0 Policy:** Zero tolerance for shims; leaving WSL2 requires rewriting paths rather than stacking wrappers.
