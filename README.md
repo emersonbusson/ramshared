@@ -2,7 +2,7 @@
 
 **When your PC runs out of RAM, use idle GPU memory as a safety cushion — automatically, and give it back if the GPU gets busy.**
 
-> **PT:** Quando a RAM acaba, usa a memória ociosa da placa de vídeo como colchão — e devolve se a GPU precisar.
+> **PT:** Quando a RAM aperta, usa memória ociosa da placa de vídeo — e devolve se a GPU precisar.
 
 <p align="center">
   <img alt="RamShared: memory pressure goes to zram, then idle GPU memory, then disk" src="docs/marketing/cascade-diagram.png" width="900">
@@ -146,11 +146,11 @@ Day one = **one machine, Linux or WSL2, three commands, `swapon --show`**.
 <summary><strong>PT-BR</strong> — o essencial em português</summary>
 
 ### Em uma frase
-Quando a RAM acaba, usa a memória ociosa da placa de vídeo como colchão — e devolve se a GPU precisar.
+Quando a RAM aperta, usa memória ociosa da placa de vídeo — e devolve se a GPU precisar.
 
 ### Em três pontos
 1. Mais fôlego quando a memória aperta (compile, containers, abas).  
-2. A placa de vídeo continua utilizável — o colchão é **devolvido** se o sistema precisar da GPU.  
+2. A placa de vídeo continua utilizável — essa memória **volta** se o sistema precisar da GPU.  
 3. Código aberto e **medido**, com limites claros (não é “RAM grátis para jogo no talo”).
 
 ### Começar
@@ -163,7 +163,7 @@ sudo ./target/release/ramshared down
 ```
 
 ### Vai quebrar o PC?
-Por desenho, não: o colchão de GPU é o **segundo** recurso (não o primeiro), e um comando (`down`) desliga tudo. Sob pressão da GPU no Windows, a memória da placa pode ficar lenta — por isso devolvemos o colchão em vez de travar o sistema. FAQ: [`docs/FAQ.md`](docs/FAQ.md).
+Por desenho, não: a GPU é o **segundo** recurso (não o primeiro), e um comando (`down`) desliga tudo. Sob pressão no Windows a memória da placa pode ficar lenta — por isso devolvemos essa memória em vez de travar o sistema. FAQ: [`docs/FAQ.md`](docs/FAQ.md).
 
 </details>
 

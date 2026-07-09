@@ -31,7 +31,7 @@
 
 Sua GPU fica ~90% ociosa enquanto o notebook engasga no swap de SSD.
 
-Open source: RamShared — quando a RAM aperta, empresta memória ociosa da placa como colchão — e devolve se a GPU precisar.
+Open source: RamShared — quando a RAM aperta, empresta memória ociosa da placa — e devolve se a GPU precisar.
 
 https://github.com/emersonbusson/ramshared
 
@@ -45,7 +45,7 @@ https://github.com/emersonbusson/ramshared
 
 Por que não “só swapon na GPU”?
 
-Sob pressão medimos ~1,2s de stall em leitura pequena. Memória de emergência lenta como *primeiro* recurso trava a máquina. GPU = segundo colchão só.
+Sob pressão medimos ~1,2s de stall em leitura pequena. Memória de emergência lenta como *primeiro* recurso trava a máquina. GPU só como segunda opção.
 
 >>> COPY TWEET END
 
@@ -55,13 +55,13 @@ Sob pressão medimos ~1,2s de stall em leitura pequena. Memória de emergência 
 
 >>> COPY TWEET START
 
-Ordem dos colchões:
+Ordem de uso:
 
 1) RAM comprimida  — primeiro, rápido
 2) GPU ociosa      — segundo
 3) disco           — último
 
-Se o PC precisar da GPU → devolvemos o colchão → dados vão pro disco → apps seguem.
+Se o PC precisar da GPU → devolvemos essa memória → dados vão pro disco → apps seguem.
 
 >>> COPY TWEET END
 
@@ -73,7 +73,7 @@ Se o PC precisar da GPU → devolvemos o colchão → dados vão pro disco → a
 
 Medido:
 • ~241µs vs ~326µs (medianas, várias rodadas)
-• ~500 MB no colchão da GPU · ~480 MB de volta · 0 corrupção
+• ~500 MB na GPU · ~480 MB de volta · 0 corrupção
 
 Rust. Linux/WSL2. NVIDIA no dia 1.
 
@@ -87,7 +87,7 @@ Rust. Linux/WSL2. NVIDIA no dia 1.
 
 Limites: não é RAM grátis para jogo no talo. Sem thrash no WSL2 do dia a dia.
 
-O que você atacaria primeiro: a ideia do segundo colchão ou o “devolver”?
+O que você atacaria primeiro: a ideia da segunda opção ou o “devolver”?
 
 >>> COPY TWEET END
 

@@ -7,7 +7,7 @@ No essay required. Technical sources are at the bottom if you care.
 | | |
 | --- | --- |
 | **EN** | When your PC runs out of RAM, use idle GPU memory as a safety cushion — and give it back if the GPU gets busy. |
-| **PT** | Quando a RAM acaba, usa a memória ociosa da placa de vídeo como colchão — e devolve se a GPU precisar. |
+| **PT** | Quando a RAM aperta, usa memória ociosa da placa de vídeo — e devolve se a GPU precisar. |
 
 ---
 
