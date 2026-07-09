@@ -1,29 +1,31 @@
 # Post 06 — LinkedIn (português)
 
-**Post ID:** `POST-06`  
-**When:** Depois de **POST-01** (+2 dias), ou no mesmo dia do **POST-05** se a rede for BR  
-**Where:** LinkedIn  
-**Language:** Português  
+**O bloco abaixo é para COLAR** no LinkedIn (um post; não tem campo “título” separado).  
+**Quando:** depois do Post 01 (+2 dias).  
+**Onde:** LinkedIn  
+
+**Não cole** as linhas que começam com `>>>`.
 
 ---
 
 ## Passos
 
-| Passo | ID | Ação |
-| --- | --- | --- |
-| 1 | **S1** | LinkedIn → **Começar publicação** |
-| 2 | **S2** | Colar → **LI-PT-1** |
-| 3 | **S3** | Opcional: anexar **IMG-1** |
-| 4 | **S4** | Publicar |
-| 5 | **S5** | Parar |
+| Passo | O que fazer |
+| --- | --- |
+| **S1** | LinkedIn → **Começar publicação** |
+| **S2** | Colar **LI-PT-1** (corpo abaixo) |
+| **S3** | Opcional: anexar **IMG-1** |
+| **S4** | Publicar |
+| **S5** | Parar |
 
 **IMG-1:** https://github.com/emersonbusson/ramshared/blob/main/docs/marketing/cascade-diagram.png
 
 ---
 
-## LI-PT-1 — Texto completo (sem campo “título”)
+## LI-PT-1 — cola na caixa do LinkedIn
 
-```text
+>>> COPY BODY START
+
 Quando a RAM acaba, usa a memória ociosa da placa de vídeo como colchão — e devolve se a GPU precisar.
 
 Open source: RamShared (Rust, Linux/WSL2, NVIDIA).
@@ -39,10 +41,9 @@ Medido: ~241µs vs ~326µs; ~500MB / ~480MB no stress com 0 corrupção logada.
 https://github.com/emersonbusson/ramshared
 
 Curioso como outras equipes lidam com pressão de memória + GPU em WSL2 / hosts híbridos.
-```
+
+>>> COPY BODY END
 
 ---
 
-## Próximo (opcional)
-
-[`07-hackernews-en.md`](07-hackernews-en.md)
+Próximo (opcional): [`07-hackernews-en.md`](07-hackernews-en.md)
