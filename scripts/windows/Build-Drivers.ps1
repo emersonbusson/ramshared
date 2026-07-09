@@ -13,6 +13,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+Set-Location $RepoRoot
 $log = Join-Path $RepoRoot "artifacts\build-drivers.log"
 New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
 Start-Transcript -Path $log -Force

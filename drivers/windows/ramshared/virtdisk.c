@@ -1,11 +1,24 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Virtual disk state + SCSI command translation (SPEC ITEM-5 / RF-1).
+ * Virtual disk state + SCSI command translation (SPEC ITEM-5 / RF-1 / DT-25).
  */
 #include "virtdisk.h"
 
 static VIRTUAL_DISK g_ActiveDisk;
 static BOOLEAN g_Active;
+static PVOID g_AdapterExt;
+
+VOID
+VdSetAdapterExt(_In_opt_ PVOID DeviceExtension)
+{
+	g_AdapterExt = DeviceExtension;
+}
+
+PVOID
+VdGetAdapterExt(VOID)
+{
+	return g_AdapterExt;
+}
 
 NTSTATUS
 VdCreate(_Out_ PVIRTUAL_DISK Disk, _In_ const RAMSHARED_DISK_PARAMS *Params)
@@ -52,6 +65,10 @@ VdActivate(_In_ const RAMSHARED_DISK_PARAMS *Params)
 		return st;
 	}
 	g_Active = TRUE;
+	/* Re-enumerate so capacity/media-ready is visible (DT-25, INF path). */
+	if (g_AdapterExt != NULL) {
+		StorPortNotification(BusChangeDetected, g_AdapterExt, (UCHAR)0);
+	}
 	return STATUS_SUCCESS;
 }
 
@@ -64,6 +81,9 @@ VdDeactivate(VOID)
 	QUnregister(&g_ActiveDisk.queue);
 	VdDestroy(&g_ActiveDisk);
 	g_Active = FALSE;
+	if (g_AdapterExt != NULL) {
+		StorPortNotification(BusChangeDetected, g_AdapterExt, (UCHAR)0);
+	}
 }
 
 PVIRTUAL_DISK
@@ -88,12 +108,11 @@ VdComplete(_In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb, UCHAR Status)
 }
 
 static BOOLEAN
-VdHandleInquiry(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
+VdHandleInquiry(_Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
 	UCHAR *buf;
 	ULONG len;
 
-	UNREFERENCED_PARAMETER(Disk);
 	buf = (UCHAR *)Srb->DataBuffer;
 	if (buf == NULL) {
 		Srb->SrbStatus = SRB_STATUS_ERROR;
@@ -128,11 +147,18 @@ VdHandleReadCapacity(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 		Srb->SrbStatus = SRB_STATUS_ERROR;
 		return TRUE;
 	}
-	bs = Disk->block_size;
-	if (bs == 0) {
-		Srb->SrbStatus = SRB_STATUS_ERROR;
+	if (Disk == NULL || Disk->block_size == 0 || Disk->size_bytes == 0) {
+		/* Not ready / no media: report 0 capacity. */
+		if (Srb->DataTransferLength < 8) {
+			Srb->SrbStatus = SRB_STATUS_DATA_OVERRUN;
+			return TRUE;
+		}
+		RtlZeroMemory(buf, 8);
+		Srb->DataTransferLength = 8;
+		Srb->SrbStatus = SRB_STATUS_SUCCESS;
 		return TRUE;
 	}
+	bs = Disk->block_size;
 	last_lba = (Disk->size_bytes / bs) - 1;
 	if (Srb->Cdb[0] == SCSIOP_READ_CAPACITY) {
 		if (Srb->DataTransferLength < 8) {
@@ -154,6 +180,39 @@ VdHandleReadCapacity(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 }
 
 VOID
+VdTranslateSrbNoDisk(_In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb)
+{
+	UCHAR op = Srb->Cdb[0];
+
+	switch (op) {
+	case SCSIOP_INQUIRY:
+		(void)VdHandleInquiry(Srb);
+		break;
+	case SCSIOP_TEST_UNIT_READY:
+		/* Not ready until CREATE_DISK. */
+		Srb->SrbStatus = SRB_STATUS_BUSY;
+		break;
+	case SCSIOP_READ_CAPACITY:
+	case 0x9E:
+		(void)VdHandleReadCapacity(NULL, Srb);
+		break;
+	case SCSIOP_MODE_SENSE:
+	case SCSIOP_MODE_SENSE10:
+		Srb->SrbStatus = SRB_STATUS_SUCCESS;
+		if (Srb->DataBuffer && Srb->DataTransferLength >= 4) {
+			RtlZeroMemory(Srb->DataBuffer, Srb->DataTransferLength);
+		}
+		break;
+	default:
+		Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+		break;
+	}
+	if (Srb->SrbStatus != SRB_STATUS_PENDING) {
+		VdComplete(DevExt, Srb, Srb->SrbStatus);
+	}
+}
+
+VOID
 VdTranslateSrb(
 	_Inout_ PVIRTUAL_DISK Disk,
 	_In_ PVOID DevExt,
@@ -170,16 +229,24 @@ VdTranslateSrb(
 		Srb->SrbStatus = (InterlockedCompareExchange(&Disk->state, 0, 0) >=
 				  VdStateCreated)
 					 ? SRB_STATUS_SUCCESS
-					 : SRB_STATUS_NO_DEVICE;
+					 : SRB_STATUS_BUSY;
 		break;
 
 	case SCSIOP_INQUIRY:
-		(void)VdHandleInquiry(Disk, Srb);
+		(void)VdHandleInquiry(Srb);
 		break;
 
 	case SCSIOP_READ_CAPACITY:
 	case 0x9E: /* READ CAPACITY(16) */
 		(void)VdHandleReadCapacity(Disk, Srb);
+		break;
+
+	case SCSIOP_MODE_SENSE:
+	case SCSIOP_MODE_SENSE10:
+		Srb->SrbStatus = SRB_STATUS_SUCCESS;
+		if (Srb->DataBuffer && Srb->DataTransferLength >= 4) {
+			RtlZeroMemory(Srb->DataBuffer, Srb->DataTransferLength);
+		}
 		break;
 
 	case SCSIOP_READ:
@@ -192,19 +259,35 @@ VdTranslateSrb(
 			rop = RAMSHARED_OP_FLUSH;
 			offset = 0;
 			len = 0;
-		} else if (op == SCSIOP_READ || op == SCSIOP_READ16) {
-			rop = RAMSHARED_OP_READ;
-			offset = 0;
-			len = Srb->DataTransferLength;
 		} else {
-			rop = RAMSHARED_OP_WRITE;
-			offset = 0;
+			/* Parse LBA from CDB (10-byte and 16-byte forms). */
+			if (op == SCSIOP_READ16 || op == SCSIOP_WRITE16) {
+				offset = ((UINT64)Srb->Cdb[2] << 56) |
+					 ((UINT64)Srb->Cdb[3] << 48) |
+					 ((UINT64)Srb->Cdb[4] << 40) |
+					 ((UINT64)Srb->Cdb[5] << 32) |
+					 ((UINT64)Srb->Cdb[6] << 24) |
+					 ((UINT64)Srb->Cdb[7] << 16) |
+					 ((UINT64)Srb->Cdb[8] << 8) |
+					 ((UINT64)Srb->Cdb[9]);
+			} else {
+				offset = ((UINT64)Srb->Cdb[2] << 24) |
+					 ((UINT64)Srb->Cdb[3] << 16) |
+					 ((UINT64)Srb->Cdb[4] << 8) |
+					 ((UINT64)Srb->Cdb[5]);
+			}
+			offset *= Disk->block_size;
 			len = Srb->DataTransferLength;
+			if (op == SCSIOP_READ || op == SCSIOP_READ16) {
+				rop = RAMSHARED_OP_READ;
+			} else {
+				rop = RAMSHARED_OP_WRITE;
+			}
 		}
-		st = QSubmit(&Disk->queue, Srb, rop, offset, len);
+		st = QSubmit(&Disk->queue, DevExt, Srb, rop, offset, len);
 		if (st == STATUS_PENDING) {
 			Srb->SrbStatus = SRB_STATUS_PENDING;
-			return; /* completion via CQE path */
+			return;
 		}
 		if (!NT_SUCCESS(st)) {
 			Srb->SrbStatus = SRB_STATUS_ERROR;
@@ -218,7 +301,6 @@ VdTranslateSrb(
 		break;
 	}
 
-	/* Sync path: complete SRB now (DT-10: never leave pending without queue). */
 	if (Srb->SrbStatus != SRB_STATUS_PENDING) {
 		VdComplete(DevExt, Srb, Srb->SrbStatus);
 	}

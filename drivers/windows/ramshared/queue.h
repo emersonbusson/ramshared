@@ -44,6 +44,7 @@ VOID QUnregister(_Inout_ PRAMSHARED_QUEUE Q);
 NTSTATUS
 QSubmit(
 	_Inout_ PRAMSHARED_QUEUE Q,
+	_In_ PVOID DevExt,
 	_In_ PSCSI_REQUEST_BLOCK Srb,
 	_In_ enum ramshared_op Op,
 	_In_ UINT64 Offset,

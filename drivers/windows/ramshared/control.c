@@ -1,13 +1,12 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * Control device IOCTL dispatch + security (SPEC ITEM-5 / RNF-4 / DT-1).
+ * Control device IOCTL dispatch + security (SPEC ITEM-5 / RNF-4 / DT-1 / DT-25).
  */
 #include "control.h"
 #include "queue.h"
 #include "virtdisk.h"
 #include <wdmsec.h>
 
-/* CTL_CODE helpers — FILE_DEVICE_MASS_STORAGE = 0x0000002d */
 #ifndef FILE_DEVICE_MASS_STORAGE
 #define FILE_DEVICE_MASS_STORAGE 0x0000002d
 #endif
@@ -32,77 +31,51 @@ static PDEVICE_OBJECT g_ControlDevice = NULL;
 static UNICODE_STRING g_ControlName;
 static UNICODE_STRING g_ControlLink;
 
-NTSTATUS
-CtlCreateControlDevice(
-	_In_ PDRIVER_OBJECT DriverObject,
-	_In_ PCWSTR Sddl,
-	_In_ const GUID *InterfaceGuid)
+/* StorPort originals — never drop (DT-25). */
+static PDRIVER_DISPATCH g_OrigCreate;
+static PDRIVER_DISPATCH g_OrigClose;
+static PDRIVER_DISPATCH g_OrigCleanup;
+static PDRIVER_DISPATCH g_OrigDeviceControl;
+
+PDEVICE_OBJECT
+CtlGetControlDevice(VOID)
 {
-	NTSTATUS status;
-	UNICODE_STRING sddl;
-	PSECURITY_DESCRIPTOR sd = NULL;
-
-	UNREFERENCED_PARAMETER(InterfaceGuid);
-
-	RtlInitUnicodeString(&g_ControlName, L"\\Device\\RamSharedCtl");
-	RtlInitUnicodeString(&g_ControlLink, L"\\DosDevices\\RamSharedCtl");
-	RtlInitUnicodeString(&sddl, (PWSTR)Sddl);
-
-	status = IoCreateDeviceSecure(
-		DriverObject,
-		0,
-		&g_ControlName,
-		FILE_DEVICE_UNKNOWN,
-		FILE_DEVICE_SECURE_OPEN,
-		FALSE,
-		&sddl,
-		NULL,
-		&g_ControlDevice);
-	if (!NT_SUCCESS(status)) {
-		return status;
-	}
-
-	status = IoCreateSymbolicLink(&g_ControlLink, &g_ControlName);
-	if (!NT_SUCCESS(status)) {
-		IoDeleteDevice(g_ControlDevice);
-		g_ControlDevice = NULL;
-		return status;
-	}
-
-	DriverObject->MajorFunction[IRP_MJ_CREATE] = CtlCreateClose;
-	DriverObject->MajorFunction[IRP_MJ_CLOSE] = CtlCreateClose;
-	DriverObject->MajorFunction[IRP_MJ_CLEANUP] = CtlCleanup;
-	DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = CtlDeviceControl;
-
-	g_ControlDevice->Flags |= DO_BUFFERED_IO;
-	g_ControlDevice->Flags &= ~DO_DEVICE_INITIALIZING;
-	return STATUS_SUCCESS;
+	return g_ControlDevice;
 }
 
-VOID
-CtlDeleteControlDevice(VOID)
+static NTSTATUS
+CtlForward(
+	_In_ PDRIVER_DISPATCH Orig,
+	_In_ PDEVICE_OBJECT DeviceObject,
+	_Inout_ PIRP Irp)
 {
-	if (g_ControlDevice) {
-		IoDeleteSymbolicLink(&g_ControlLink);
-		IoDeleteDevice(g_ControlDevice);
-		g_ControlDevice = NULL;
+	if (Orig != NULL) {
+		return Orig(DeviceObject, Irp);
 	}
+	Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST;
+	Irp->IoStatus.Information = 0;
+	IoCompleteRequest(Irp, IO_NO_INCREMENT);
+	return STATUS_INVALID_DEVICE_REQUEST;
 }
 
-NTSTATUS
-CtlCreateClose(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
+static NTSTATUS
+CtlDispatchCreateClose(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 {
-	UNREFERENCED_PARAMETER(DeviceObject);
+	if (DeviceObject != g_ControlDevice) {
+		return CtlForward(g_OrigCreate, DeviceObject, Irp);
+	}
 	Irp->IoStatus.Status = STATUS_SUCCESS;
 	Irp->IoStatus.Information = 0;
 	IoCompleteRequest(Irp, IO_NO_INCREMENT);
 	return STATUS_SUCCESS;
 }
 
-NTSTATUS
-CtlCleanup(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
+static NTSTATUS
+CtlDispatchCleanup(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 {
-	UNREFERENCED_PARAMETER(DeviceObject);
+	if (DeviceObject != g_ControlDevice) {
+		return CtlForward(g_OrigCleanup, DeviceObject, Irp);
+	}
 	/* Service handle closed → deterministic crash containment (DT-10). */
 	if (VdIsActive()) {
 		QTeardownOnCrash(&VdGetActive()->queue);
@@ -113,8 +86,8 @@ CtlCleanup(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	return STATUS_SUCCESS;
 }
 
-NTSTATUS
-CtlDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
+static NTSTATUS
+CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 {
 	PIO_STACK_LOCATION irpSp;
 	ULONG code;
@@ -123,7 +96,10 @@ CtlDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
 	ULONG_PTR info = 0;
 
-	UNREFERENCED_PARAMETER(DeviceObject);
+	if (DeviceObject != g_ControlDevice) {
+		return CtlForward(g_OrigDeviceControl, DeviceObject, Irp);
+	}
+
 	irpSp = IoGetCurrentIrpStackLocation(Irp);
 	code = irpSp->Parameters.DeviceIoControl.IoControlCode;
 	inLen = irpSp->Parameters.DeviceIoControl.InputBufferLength;
@@ -172,7 +148,6 @@ CtlDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 		break;
 
 	case IOCTL_RAMSHARED_DESTROY_DISK:
-		/* Must not destroy while pagefile active — enforced in service (DT-9). */
 		VdDeactivate();
 		status = STATUS_SUCCESS;
 		break;
@@ -186,4 +161,89 @@ CtlDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	Irp->IoStatus.Information = info;
 	IoCompleteRequest(Irp, IO_NO_INCREMENT);
 	return status;
+}
+
+NTSTATUS
+CtlInstallDispatchHooks(_In_ PDRIVER_OBJECT DriverObject)
+{
+	g_OrigCreate = DriverObject->MajorFunction[IRP_MJ_CREATE];
+	g_OrigClose = DriverObject->MajorFunction[IRP_MJ_CLOSE];
+	g_OrigCleanup = DriverObject->MajorFunction[IRP_MJ_CLEANUP];
+	g_OrigDeviceControl = DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL];
+
+	DriverObject->MajorFunction[IRP_MJ_CREATE] = CtlDispatchCreateClose;
+	DriverObject->MajorFunction[IRP_MJ_CLOSE] = CtlDispatchCreateClose;
+	DriverObject->MajorFunction[IRP_MJ_CLEANUP] = CtlDispatchCleanup;
+	DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL] = CtlDispatchDeviceControl;
+	return STATUS_SUCCESS;
+}
+
+NTSTATUS
+CtlCreateControlDevice(
+	_In_ PDRIVER_OBJECT DriverObject,
+	_In_ PCWSTR Sddl,
+	_In_ const GUID *InterfaceGuid)
+{
+	NTSTATUS status;
+	UNICODE_STRING sddl;
+
+	UNREFERENCED_PARAMETER(InterfaceGuid);
+
+	RtlInitUnicodeString(&g_ControlName, L"\\Device\\RamSharedCtl");
+	RtlInitUnicodeString(&g_ControlLink, L"\\DosDevices\\RamSharedCtl");
+	RtlInitUnicodeString(&sddl, (PWSTR)Sddl);
+
+	status = IoCreateDeviceSecure(
+		DriverObject,
+		0,
+		&g_ControlName,
+		FILE_DEVICE_UNKNOWN,
+		FILE_DEVICE_SECURE_OPEN,
+		FALSE,
+		&sddl,
+		NULL,
+		&g_ControlDevice);
+	if (!NT_SUCCESS(status)) {
+		return status;
+	}
+
+	status = IoCreateSymbolicLink(&g_ControlLink, &g_ControlName);
+	if (!NT_SUCCESS(status)) {
+		IoDeleteDevice(g_ControlDevice);
+		g_ControlDevice = NULL;
+		return status;
+	}
+
+	g_ControlDevice->Flags |= DO_BUFFERED_IO;
+	g_ControlDevice->Flags &= ~DO_DEVICE_INITIALIZING;
+	return STATUS_SUCCESS;
+}
+
+VOID
+CtlDeleteControlDevice(VOID)
+{
+	if (g_ControlDevice) {
+		IoDeleteSymbolicLink(&g_ControlLink);
+		IoDeleteDevice(g_ControlDevice);
+		g_ControlDevice = NULL;
+	}
+}
+
+/* Legacy names for any external refs — map to wrappers. */
+NTSTATUS
+CtlCreateClose(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
+{
+	return CtlDispatchCreateClose(DeviceObject, Irp);
+}
+
+NTSTATUS
+CtlCleanup(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
+{
+	return CtlDispatchCleanup(DeviceObject, Irp);
+}
+
+NTSTATUS
+CtlDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
+{
+	return CtlDispatchDeviceControl(DeviceObject, Irp);
 }

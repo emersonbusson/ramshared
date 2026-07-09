@@ -35,4 +35,33 @@ foreach ($f in $files) {
     if ($LASTEXITCODE -ne 0) { throw "signtool failed $LASTEXITCODE" }
     & $signtool verify /pa $f
 }
-Write-Host "SIGN_OK"
+
+# DT-25: Inf2Cat + sign catalog so pnputil accepts the package under testsigning
+$pkg = Join-Path $RepoRoot "drivers\windows\ramshared\x64\Release\package"
+New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+Copy-Item (Join-Path $RepoRoot "drivers\windows\ramshared\x64\Release\ramshared.sys") (Join-Path $pkg "ramshared.sys") -Force
+Copy-Item (Join-Path $RepoRoot "drivers\windows\ramshared\ramshared.inf") (Join-Path $pkg "ramshared.inf") -Force
+
+$inf2cat = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x86\Inf2Cat.exe"
+if (-not (Test-Path $inf2cat)) {
+    $inf2cat = Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" -Recurse -Filter Inf2Cat.exe -EA SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty FullName
+}
+if (-not $inf2cat -or -not (Test-Path $inf2cat)) {
+    Write-Warning "Inf2Cat.exe not found - package will lack .cat (pnputil may reject)"
+} else {
+    Write-Host "INF2CAT $inf2cat"
+    Push-Location $pkg
+    & $inf2cat /driver:. /os:10_X64 /verbose
+    $cat = Join-Path $pkg "ramshared.cat"
+    if (Test-Path $cat) {
+        & $signtool sign /fd SHA256 /f $PfxPath /p $PfxPassword $cat
+        & $signtool verify /pa $cat
+        Write-Host "CAT_OK $cat"
+    } else {
+        Write-Warning "ramshared.cat not produced"
+        Get-ChildItem $pkg | Format-Table Name, Length
+    }
+    Pop-Location
+}
+Write-Host "SIGN_OK package=$pkg"

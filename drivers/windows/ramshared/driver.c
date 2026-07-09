@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * RamShared StorPort virtual miniport — DriverEntry + HW callbacks.
- * SPEC ITEM-5 / RF-1 / DT-1 / DT-23.
+ * SPEC ITEM-5 / RF-1 / DT-1 / DT-23 / DT-25.
  *
- * Day-0: virtual miniport (no real HBA I/O) + separate control device
- * (IoCreateDeviceSecure) for service IOCTLs.
+ * Day-0: virtual miniport + control device (IoCreateDeviceSecure).
+ * Dispatch hooks forward non-control IRPs to StorPort (DT-25).
  */
 #include "driver.h"
 #include "control.h"
@@ -43,11 +43,17 @@ HwStorFindAdapter(
 	ConfigInfo->MaximumNumberOfTargets = 1;
 	ConfigInfo->MaximumNumberOfLogicalUnits = 1;
 	ConfigInfo->MaximumTransferLength = RAMSHARED_MAX_IO;
-	ConfigInfo->AlignmentMask = 0x1; /* word-aligned */
+	ConfigInfo->NumberOfPhysicalBreaks = SP_UNINITIALIZED_VALUE;
+	ConfigInfo->AlignmentMask = 0x1;
 	ConfigInfo->CachesData = FALSE;
 	ConfigInfo->MapBuffers = STOR_MAP_NON_READ_WRITE_BUFFERS;
 	ConfigInfo->SynchronizationModel = StorSynchronizeFullDuplex;
 	ConfigInfo->HwMSInterruptRoutine = NULL;
+	ConfigInfo->AdapterInterfaceType = Internal;
+	ConfigInfo->Dma64BitAddresses = SCSI_DMA64_MINIPORT_SUPPORTED;
+	ConfigInfo->ResetTargetSupported = TRUE;
+	ConfigInfo->VirtualDevice = TRUE;
+	ConfigInfo->WmiDataProvider = FALSE;
 
 	return SP_RETURN_FOUND;
 }
@@ -61,6 +67,7 @@ HwStorInitialize(_In_ PVOID DeviceExtension)
 	ext->Queue = NULL;
 	ext->ControlDevice = NULL;
 	ext->QueueRegistered = FALSE;
+	VdSetAdapterExt(DeviceExtension);
 	return TRUE;
 }
 
@@ -69,27 +76,24 @@ HwStorResetBus(_In_ PVOID DeviceExtension, _In_ ULONG PathId)
 {
 	UNREFERENCED_PARAMETER(DeviceExtension);
 	UNREFERENCED_PARAMETER(PathId);
-	/* Virtual bus: always succeed reset. */
 	return TRUE;
 }
 
 BOOLEAN
 HwStorStartIo(_In_ PVOID DeviceExtension, _In_ PSCSI_REQUEST_BLOCK Srb)
 {
-	PRAMSHARED_ADAPTER_EXT ext = (PRAMSHARED_ADAPTER_EXT)DeviceExtension;
+	PVIRTUAL_DISK disk = VdGetActive();
 
-	/* Active disk from CREATE_DISK (global LUN MVP). */
-	{
-		PVIRTUAL_DISK disk = VdGetActive();
-
-		if (disk == NULL) {
-			Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
-			StorPortNotification(RequestComplete, DeviceExtension, Srb);
-			return TRUE;
-		}
-		VdTranslateSrb(disk, DeviceExtension, Srb);
+	/*
+	 * LUN always present (DT-25). Without CREATE: INQUIRY/capacity handled
+	 * with not-ready semantics inside VdTranslateSrb when disk is NULL —
+	 * use a zero-size pseudo path via VdTranslateSrbNull.
+	 */
+	if (disk == NULL) {
+		VdTranslateSrbNoDisk(DeviceExtension, Srb);
+		return TRUE;
 	}
-	UNREFERENCED_PARAMETER(ext);
+	VdTranslateSrb(disk, DeviceExtension, Srb);
 	return TRUE;
 }
 
@@ -112,12 +116,19 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 	hw.AutoRequestSense = TRUE;
 	hw.MultipleRequestPerLu = TRUE;
 
-	status = StorPortInitialize(DriverObject, RegistryPath, (PHW_INITIALIZATION_DATA)&hw, NULL);
+	status = StorPortInitialize(DriverObject, RegistryPath,
+				    (PHW_INITIALIZATION_DATA)&hw, NULL);
 	if (!NT_SUCCESS(status)) {
 		return status;
 	}
 
-	/* Control device for service IOCTLs (separate from SCSI path — DT-1). */
-	status = CtlCreateControlDevice(DriverObject, RamsharedSddl, &GUID_DEVINTERFACE_RAMSHARED_CTL);
+	/* Hook dispatch AFTER StorPort owns MajorFunction (DT-25). */
+	status = CtlInstallDispatchHooks(DriverObject);
+	if (!NT_SUCCESS(status)) {
+		return status;
+	}
+
+	status = CtlCreateControlDevice(DriverObject, RamsharedSddl,
+					&GUID_DEVINTERFACE_RAMSHARED_CTL);
 	return status;
 }

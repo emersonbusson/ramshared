@@ -4,6 +4,7 @@
  * SPEC ITEM-5 / DT-2 / DT-4 / DT-10 / DT-18 / DT-22.
  */
 #include "queue.h"
+#include "virtdisk.h"
 
 static BOOLEAN
 IsPowerOfTwo(UINT32 v)
@@ -43,6 +44,79 @@ QUnlockAll(_Inout_ PRAMSHARED_QUEUE Q)
 	Q->Registered = FALSE;
 }
 
+/* Cap single MDL map: 4 MiB avoids system-PTE pressure on small lab VMs. */
+#define RAMSHARED_MAX_DATA_MDL (4u * 1024u * 1024u)
+
+static BOOLEAN
+QIsUserVa(_In_ ULONG_PTR Va, _In_ SIZE_T Len)
+{
+	ULONG_PTR end;
+
+	if (Va == 0 || Len == 0) {
+		return FALSE;
+	}
+	if (Va > (ULONG_PTR)MmHighestUserAddress) {
+		return FALSE;
+	}
+	end = Va + Len - 1;
+	if (end < Va) {
+		return FALSE; /* overflow */
+	}
+	if (end > (ULONG_PTR)MmHighestUserAddress) {
+		return FALSE;
+	}
+	return TRUE;
+}
+
+static NTSTATUS
+QMapUserRegion(
+	_Out_ PMDL *OutMdl,
+	_Out_ PVOID *OutVa,
+	_In_ ULONG_PTR UserVa,
+	_In_ SIZE_T Len,
+	_In_ KPROCESSOR_MODE AccessMode)
+{
+	PMDL mdl;
+	PVOID mapped;
+
+	*OutMdl = NULL;
+	*OutVa = NULL;
+
+	if (Len == 0 || Len > (SIZE_T)MAXULONG) {
+		return STATUS_INVALID_PARAMETER;
+	}
+	if (!QIsUserVa(UserVa, Len)) {
+		return STATUS_INVALID_PARAMETER;
+	}
+
+	mdl = IoAllocateMdl((PVOID)UserVa, (ULONG)Len, FALSE, FALSE, NULL);
+	if (!mdl) {
+		return STATUS_INSUFFICIENT_RESOURCES;
+	}
+
+	__try {
+		/* Always probe as UserMode: ring/data VAs are process user addresses. */
+		MmProbeAndLockPages(mdl,
+				    AccessMode == KernelMode ? UserMode : AccessMode,
+				    IoModifyAccess);
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		IoFreeMdl(mdl);
+		return STATUS_INVALID_PARAMETER;
+	}
+
+	mapped = MmGetSystemAddressForMdlSafe(
+		mdl, (NormalPagePriority | MdlMappingNoExecute));
+	if (!mapped) {
+		MmUnlockPages(mdl);
+		IoFreeMdl(mdl);
+		return STATUS_INSUFFICIENT_RESOURCES;
+	}
+
+	*OutMdl = mdl;
+	*OutVa = mapped;
+	return STATUS_SUCCESS;
+}
+
 NTSTATUS
 QRegister(
 	_Inout_ PRAMSHARED_QUEUE Q,
@@ -50,7 +124,8 @@ QRegister(
 	_In_ KPROCESSOR_MODE AccessMode)
 {
 	NTSTATUS status;
-	SIZE_T sq_bytes, cq_bytes;
+	SIZE_T sq_bytes, cq_bytes, data_len;
+	PVOID mapped;
 
 	/* DT-18: validate everything BEFORE MmProbeAndLockPages. */
 	if (Reg == NULL) {
@@ -74,6 +149,10 @@ QRegister(
 	if (Reg->data_area_len < (UINT64)Reg->queue_depth * Reg->max_io_bytes) {
 		return STATUS_INVALID_PARAMETER;
 	}
+	/* Hard cap for lab safety (BSOD 0x3B AV_ramshared!QRegister on 32MiB map). */
+	if (Reg->data_area_len > RAMSHARED_MAX_DATA_MDL) {
+		return STATUS_INVALID_PARAMETER;
+	}
 	if (Q->Registered) {
 		return STATUS_DEVICE_BUSY;
 	}
@@ -89,67 +168,34 @@ QRegister(
 		   (SIZE_T)Reg->queue_depth * sizeof(RAMSHARED_SQE);
 	cq_bytes = sizeof(RAMSHARED_RING_HDR) +
 		   (SIZE_T)Reg->queue_depth * sizeof(RAMSHARED_CQE);
+	data_len = (SIZE_T)Reg->data_area_len;
 
-	/* Map SQ */
-	Q->SqMdl = IoAllocateMdl((PVOID)(ULONG_PTR)Reg->sq_ring_va, (ULONG)sq_bytes, FALSE, FALSE, NULL);
-	if (!Q->SqMdl) {
-		return STATUS_INSUFFICIENT_RESOURCES;
-	}
-	__try {
-		MmProbeAndLockPages(Q->SqMdl, AccessMode, IoModifyAccess);
-	} __except (EXCEPTION_EXECUTE_HANDLER) {
-		IoFreeMdl(Q->SqMdl);
-		Q->SqMdl = NULL;
-		return STATUS_INVALID_PARAMETER;
-	}
-	Q->Sq = (PRAMSHARED_RING_HDR)MmGetSystemAddressForMdlSafe(Q->SqMdl, NormalPagePriority);
-	if (!Q->Sq) {
-		status = STATUS_INSUFFICIENT_RESOURCES;
+	status = QMapUserRegion(&Q->SqMdl, &mapped,
+				(ULONG_PTR)Reg->sq_ring_va, sq_bytes, AccessMode);
+	if (!NT_SUCCESS(status)) {
 		goto out_err;
 	}
+	Q->Sq = (PRAMSHARED_RING_HDR)mapped;
 
-	/* Map CQ */
-	Q->CqMdl = IoAllocateMdl((PVOID)(ULONG_PTR)Reg->cq_ring_va, (ULONG)cq_bytes, FALSE, FALSE, NULL);
-	if (!Q->CqMdl) {
-		status = STATUS_INSUFFICIENT_RESOURCES;
+	status = QMapUserRegion(&Q->CqMdl, &mapped,
+				(ULONG_PTR)Reg->cq_ring_va, cq_bytes, AccessMode);
+	if (!NT_SUCCESS(status)) {
 		goto out_err;
 	}
-	__try {
-		MmProbeAndLockPages(Q->CqMdl, AccessMode, IoModifyAccess);
-	} __except (EXCEPTION_EXECUTE_HANDLER) {
-		status = STATUS_INVALID_PARAMETER;
-		goto out_err;
-	}
-	Q->Cq = (PRAMSHARED_RING_HDR)MmGetSystemAddressForMdlSafe(Q->CqMdl, NormalPagePriority);
-	if (!Q->Cq) {
-		status = STATUS_INSUFFICIENT_RESOURCES;
-		goto out_err;
-	}
+	Q->Cq = (PRAMSHARED_RING_HDR)mapped;
 
-	/* Map data area */
-	Q->DataMdl = IoAllocateMdl((PVOID)(ULONG_PTR)Reg->data_area_va,
-				   (ULONG)Reg->data_area_len, FALSE, FALSE, NULL);
-	if (!Q->DataMdl) {
-		status = STATUS_INSUFFICIENT_RESOURCES;
+	status = QMapUserRegion(&Q->DataMdl, &mapped,
+				(ULONG_PTR)Reg->data_area_va, data_len, AccessMode);
+	if (!NT_SUCCESS(status)) {
 		goto out_err;
 	}
-	__try {
-		MmProbeAndLockPages(Q->DataMdl, AccessMode, IoModifyAccess);
-	} __except (EXCEPTION_EXECUTE_HANDLER) {
-		status = STATUS_INVALID_PARAMETER;
-		goto out_err;
-	}
-	Q->Data = (PUCHAR)MmGetSystemAddressForMdlSafe(Q->DataMdl, NormalPagePriority);
-	if (!Q->Data) {
-		status = STATUS_INSUFFICIENT_RESOURCES;
-		goto out_err;
-	}
+	Q->Data = (PUCHAR)mapped;
 
 	/* Auxiliary events (DT-22) — optional handles. */
 	if (Reg->sq_event_handle) {
 		status = ObReferenceObjectByHandle(
 			(HANDLE)(ULONG_PTR)Reg->sq_event_handle,
-			EVENT_MODIFY_STATE, *ExEventObjectType, AccessMode,
+			EVENT_MODIFY_STATE, *ExEventObjectType, UserMode,
 			(PVOID *)&Q->SqEvent, NULL);
 		if (!NT_SUCCESS(status)) {
 			goto out_err;
@@ -158,7 +204,7 @@ QRegister(
 	if (Reg->cq_event_handle) {
 		status = ObReferenceObjectByHandle(
 			(HANDLE)(ULONG_PTR)Reg->cq_event_handle,
-			EVENT_MODIFY_STATE, *ExEventObjectType, AccessMode,
+			EVENT_MODIFY_STATE, *ExEventObjectType, UserMode,
 			(PVOID *)&Q->CqEvent, NULL);
 		if (!NT_SUCCESS(status)) {
 			goto out_err;
@@ -182,6 +228,7 @@ QUnregister(_Inout_ PRAMSHARED_QUEUE Q)
 NTSTATUS
 QSubmit(
 	_Inout_ PRAMSHARED_QUEUE Q,
+	_In_ PVOID DevExt,
 	_In_ PSCSI_REQUEST_BLOCK Srb,
 	_In_ enum ramshared_op Op,
 	_In_ UINT64 Offset,
@@ -193,9 +240,25 @@ QSubmit(
 	PRAMSHARED_SQE sqe;
 	UINT32 idx;
 	PVOID sys_addr;
+	ULONG st;
 
 	if (!Q->Registered || Q->Sq == NULL) {
 		return STATUS_DEVICE_NOT_CONNECTED;
+	}
+	if (Len > Q->MaxIoBytes) {
+		return STATUS_INVALID_PARAMETER;
+	}
+
+	/*
+	 * DT-23: MapBuffers is NON_READ_WRITE — DataBuffer is invalid for R/W.
+	 * StorPortGetSystemAddress before spinlock (may be heavy).
+	 */
+	sys_addr = NULL;
+	if ((Op == RAMSHARED_OP_WRITE || Op == RAMSHARED_OP_READ) && Len > 0) {
+		st = StorPortGetSystemAddress(DevExt, Srb, &sys_addr);
+		if (st != STOR_STATUS_SUCCESS || sys_addr == NULL) {
+			return STATUS_INVALID_PARAMETER;
+		}
 	}
 
 	KeAcquireSpinLock(&Q->Lock, &old);
@@ -213,17 +276,8 @@ QSubmit(
 		return STATUS_INSUFFICIENT_RESOURCES;
 	}
 
-	/* Bounce WRITE into data slot (DT-4 / DT-23). */
-	if (Op == RAMSHARED_OP_WRITE && Len > 0) {
-		sys_addr = Srb->DataBuffer;
-		if (sys_addr == NULL) {
-			KeReleaseSpinLock(&Q->Lock, old);
-			return STATUS_INVALID_PARAMETER;
-		}
-		if (Len > Q->MaxIoBytes) {
-			KeReleaseSpinLock(&Q->Lock, old);
-			return STATUS_INVALID_PARAMETER;
-		}
+	/* Bounce WRITE into data slot (DT-4). */
+	if (Op == RAMSHARED_OP_WRITE && Len > 0 && sys_addr != NULL) {
 		RtlCopyMemory(Q->Data + (SIZE_T)tag * Q->MaxIoBytes, sys_addr, Len);
 	}
 
@@ -250,12 +304,16 @@ QSubmit(
 	/* Wake primary: complete pended COMMIT_AND_FETCH IRP if any. */
 	if (Q->PendedFetch) {
 		PIRP irp = Q->PendedFetch;
+		PDRIVER_CANCEL oldc;
 
 		Q->PendedFetch = NULL;
 		KeReleaseSpinLock(&Q->Lock, old);
-		irp->IoStatus.Status = STATUS_SUCCESS;
-		irp->IoStatus.Information = 0;
-		IoCompleteRequest(irp, IO_NO_INCREMENT);
+		oldc = IoSetCancelRoutine(irp, NULL);
+		if (oldc != NULL) {
+			irp->IoStatus.Status = STATUS_SUCCESS;
+			irp->IoStatus.Information = 0;
+			IoCompleteRequest(irp, IO_NO_INCREMENT);
+		}
 		return STATUS_PENDING;
 	}
 
@@ -263,19 +321,49 @@ QSubmit(
 	return STATUS_PENDING;
 }
 
+/*
+ * Cancel pended COMMIT_AND_FETCH so userspace CancelIo / handle close
+ * does not leave the next IOCTL stuck (lab hang after empty-SQ poll).
+ */
+static VOID
+QCommitCancel(_Inout_ PDEVICE_OBJECT DeviceObject, _Inout_ _IRQL_uses_cancel_ PIRP Irp)
+{
+	PRAMSHARED_QUEUE q;
+	KIRQL old;
+	BOOLEAN ours = FALSE;
+
+	UNREFERENCED_PARAMETER(DeviceObject);
+
+	/* Irp->Tail.Overlay.DriverContext[0] holds queue ptr (set on pend). */
+	q = (PRAMSHARED_QUEUE)Irp->Tail.Overlay.DriverContext[0];
+	if (q != NULL) {
+		KeAcquireSpinLock(&q->Lock, &old);
+		if (q->PendedFetch == Irp) {
+			q->PendedFetch = NULL;
+			ours = TRUE;
+		}
+		KeReleaseSpinLock(&q->Lock, old);
+	}
+
+	IoReleaseCancelSpinLock(Irp->CancelIrql);
+
+	if (ours) {
+		Irp->IoStatus.Status = STATUS_CANCELLED;
+		Irp->IoStatus.Information = 0;
+		IoCompleteRequest(Irp, IO_NO_INCREMENT);
+	}
+}
+
 NTSTATUS
 QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 {
 	KIRQL old;
 	UINT32 completed = 0;
-	PIO_STACK_LOCATION irpSp;
+	PDRIVER_CANCEL oldCancel;
 
 	if (!Q->Registered || Q->Cq == NULL) {
 		return STATUS_DEVICE_NOT_CONNECTED;
 	}
-
-	irpSp = IoGetCurrentIrpStackLocation(Irp);
-	UNREFERENCED_PARAMETER(irpSp);
 
 	KeAcquireSpinLock(&Q->Lock, &old);
 
@@ -296,11 +384,18 @@ QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 
 		srb = Q->Inflight[tag].Srb;
 		if (Q->Inflight[tag].Op == RAMSHARED_OP_READ && cqe->status == RAMSHARED_ST_OK) {
-			sys_addr = srb->DataBuffer;
-			if (sys_addr) {
-				RtlCopyMemory(sys_addr,
-					      Q->Data + (SIZE_T)Q->Inflight[tag].BufSlot * Q->MaxIoBytes,
-					      srb->DataTransferLength);
+			PVOID adext = VdGetAdapterExt();
+			ULONG gst;
+
+			sys_addr = NULL;
+			if (adext != NULL) {
+				gst = StorPortGetSystemAddress(adext, srb, &sys_addr);
+				if (gst == STOR_STATUS_SUCCESS && sys_addr != NULL) {
+					RtlCopyMemory(sys_addr,
+						      Q->Data + (SIZE_T)Q->Inflight[tag].BufSlot *
+								  Q->MaxIoBytes,
+						      srb->DataTransferLength);
+				}
 			}
 		}
 
@@ -314,15 +409,44 @@ QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 		Q->Cq->head = Q->Cq->head + 1;
 		completed++;
 
-		/* Complete SRB outside lock ideally; StorPort allows at DISPATCH. */
-		StorPortNotification(RequestComplete, srb->OriginalRequest /* placeholder */, srb);
+		/* Adapter extension from HwStorInitialize (DT-25). */
+		{
+			PVOID adext = VdGetAdapterExt();
+
+			if (adext != NULL) {
+				StorPortNotification(RequestComplete, adext, srb);
+			}
+		}
 	}
 
 	if (completed == 0 && Q->Sq && Q->Sq->head == Q->Sq->tail) {
 		/* No work and empty SQ — pend IRP (primary wake, DT-22). */
+		if (Q->PendedFetch != NULL) {
+			/* Only one pended fetch at a time. */
+			KeReleaseSpinLock(&Q->Lock, old);
+			return STATUS_DEVICE_BUSY;
+		}
 		IoMarkIrpPending(Irp);
+		Irp->Tail.Overlay.DriverContext[0] = Q;
 		Q->PendedFetch = Irp;
 		KeReleaseSpinLock(&Q->Lock, old);
+
+		oldCancel = IoSetCancelRoutine(Irp, QCommitCancel);
+		if (Irp->Cancel) {
+			oldCancel = IoSetCancelRoutine(Irp, NULL);
+			if (oldCancel != NULL) {
+				/* We still own completion. */
+				KeAcquireSpinLock(&Q->Lock, &old);
+				if (Q->PendedFetch == Irp) {
+					Q->PendedFetch = NULL;
+				}
+				KeReleaseSpinLock(&Q->Lock, old);
+				Irp->IoStatus.Status = STATUS_CANCELLED;
+				Irp->IoStatus.Information = 0;
+				IoCompleteRequest(Irp, IO_NO_INCREMENT);
+			}
+			return STATUS_PENDING;
+		}
 		return STATUS_PENDING;
 	}
 
@@ -357,9 +481,11 @@ QTeardownOnCrash(_Inout_ PRAMSHARED_QUEUE Q)
 	KeReleaseSpinLock(&Q->Lock, old);
 
 	if (pending) {
-		pending->IoStatus.Status = STATUS_DEVICE_NOT_CONNECTED;
-		pending->IoStatus.Information = 0;
-		IoCompleteRequest(pending, IO_NO_INCREMENT);
+		if (IoSetCancelRoutine(pending, NULL) != NULL) {
+			pending->IoStatus.Status = STATUS_DEVICE_NOT_CONNECTED;
+			pending->IoStatus.Information = 0;
+			IoCompleteRequest(pending, IO_NO_INCREMENT);
+		}
 	}
 
 	QUnlockAll(Q);
