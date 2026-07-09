@@ -2,7 +2,9 @@
 
 **Goal:** a stranger gets the idea **without** reading architecture docs.
 
-**Thumbnail / first frame:** [`cascade-diagram.png`](cascade-diagram.png)
+**Thumbnail / first frame:**  
+- EN: [`cascade-diagram.png`](cascade-diagram.png)  
+- PT: [`cascade-diagram-pt.png`](cascade-diagram-pt.png)
 
 ---
 

@@ -13,7 +13,7 @@
 | Passo | O que fazer |
 | --- | --- |
 | **S1** | X → Nova postagem → **thread** |
-| **S2** | Tweet 1 = **X-PT-1** + anexar **IMG-1** |
+| **S2** | Tweet 1 = **X-PT-1** + anexar **IMG-PT-1** |
 | **S3** | + Tweet 2 = **X-PT-2** |
 | **S4** | + Tweet 3 = **X-PT-3** |
 | **S5** | + Tweet 4 = **X-PT-4** |
@@ -21,7 +21,8 @@
 | **S7** | Publicar |
 | **S8** | Parar |
 
-**IMG-1:** https://github.com/emersonbusson/ramshared/blob/main/docs/marketing/cascade-diagram.png
+**IMG-PT-1 (diagrama em português):**  
+https://github.com/emersonbusson/ramshared/blob/main/docs/marketing/cascade-diagram-pt.png
 
 ---
 

@@ -7,7 +7,7 @@ Há **3 coisas** — não um bloco só.
 | --- | --- | --- | --- |
 | **Título** | **T-PT-1** | campo **Title** / **Título** | Copia entre `>>> COPY TITLE START` e `>>> COPY TITLE END` |
 | **Corpo** | **B-PT-1** | campo **Text** / **Texto** | Copia entre `>>> COPY BODY START` e `>>> COPY BODY END` |
-| **Imagem** | **IMG-1** | botão de imagem | Baixa o PNG e anexa (não é texto) |
+| **Imagem** | **IMG-PT-1** | botão de imagem | Baixa o PNG **em português** e anexa (não é texto) |
 
 **Não cole** as linhas que começam com `>>>` — são só marcadores.
 
@@ -24,7 +24,7 @@ Há **3 coisas** — não um bloco só.
 | **S2** | Comunidade = **r/brdev** |
 | **S3** | No campo **Título**, cola **T-PT-1** (bloco abaixo) |
 | **S4** | No campo **Texto**, cola **B-PT-1** (bloco grande abaixo) |
-| **S5** | Anexa a imagem **IMG-1** |
+| **S5** | Anexa a imagem **IMG-PT-1** (diagrama em PT-BR) |
 | **S6** | Flair se existir (projeto / show) |
 | **S7** | Clica **Postar** |
 | **S8** | **Para.** |
@@ -103,11 +103,13 @@ Repo + FAQ: https://github.com/emersonbusson/ramshared
 
 ---
 
-## IMG-1 — NÃO é texto (anexar arquivo)
+## IMG-PT-1 — NÃO é texto (anexar arquivo em português)
 
-1. Abre: https://github.com/emersonbusson/ramshared/blob/main/docs/marketing/cascade-diagram.png  
+1. Abre: https://github.com/emersonbusson/ramshared/blob/main/docs/marketing/cascade-diagram-pt.png  
 2. Baixa o PNG.  
 3. No post do Reddit, anexa essa imagem.
+
+(Versão em inglês: `cascade-diagram.png` — use **só** a PT neste post.)
 
 ---
 

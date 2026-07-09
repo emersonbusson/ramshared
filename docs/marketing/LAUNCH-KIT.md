@@ -11,9 +11,10 @@ Everything you need to post is **one file per channel**.
 
 ## Assets
 
-| ID | File |
-| --- | --- |
-| **IMG-1** | [`cascade-diagram.png`](cascade-diagram.png) · [`cascade-diagram.svg`](cascade-diagram.svg) |
+| ID | File | Language |
+| --- | --- | --- |
+| **IMG-1** | [`cascade-diagram.png`](cascade-diagram.png) · [`.svg`](cascade-diagram.svg) | English |
+| **IMG-PT-1** | [`cascade-diagram-pt.png`](cascade-diagram-pt.png) · [`.svg`](cascade-diagram-pt.svg) | Português (humano) |
 
 ## Other docs
 
