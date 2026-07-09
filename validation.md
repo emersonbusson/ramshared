@@ -231,3 +231,27 @@ Earlier run PASS (no dump); one later run TIMEOUT (backend/disk lifecycle flaky 
 Still **forbidden**.
 
 Artifacts: `C:\Users\emedev\ramshared-drill\artifacts-all-fronts\`
+
+## 2026-07-09 — DT-9 + reboot kill (win11-drill)
+
+### Sequence
+1. Remove secondary PF settings (CIM+REG) while D: still **hot**
+2. Reboot guest
+3. After boot: **only C: pagefile** (D: unloaded)
+4. `Stop-RamSharedLab.ps1` → **STOP_OK** exit 0, backend dead
+5. Wait 10s: **same** minidump name (`070926-25640-01.dmp`) — **no new BSOD**
+
+### Numbers
+| Metric | Value |
+| --- | --- |
+| PF after reboot | `C: a=1408 u=174` only |
+| STOP_EXIT | **0** |
+| BE after stop | **False** |
+| New dump | **false** |
+
+### Lab service stand-in
+- `Start-RamSharedLab.ps1` / `Stop-RamSharedLab.ps1` = ordered start/stop until SCM winsvc lands
+- Stop refuses kill if secondary PF still allocated (DT-9 fail-closed)
+
+### Verdict
+**PASS_DT9_REBOOT_KILL** on VM. Complements earlier **PASS_DT9_REFUSE_KILL** (hot refuse).
