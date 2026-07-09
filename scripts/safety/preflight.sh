@@ -13,7 +13,7 @@
 # So LE estado; nao toca GPU/ublk/swap. O unico efeito e escrever o snapshot.
 set -uo pipefail
 
-REPO="${RAMSHARED_REPO:-/home/emdev/codespace/ramshared}"
+REPO="${RAMSHARED_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 BIN="${1:-$REPO/target/debug/ramsharedd}"
 FIX_MARKER='MCL_CURRENT-only no caminho ublk+vram'   # string do fix anti-dxgkrnl-BUG (#1)
 MIN_VRAM_FREE_MIB="${RAMSHARED_MIN_VRAM_FREE_MIB:-256}"

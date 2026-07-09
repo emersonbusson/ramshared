@@ -11,7 +11,7 @@ RequiresMountsFor=/mnt/c
 [Service]
 Type=oneshot
 User=root
-ExecStart=/home/emdev/codespace/ramshared/scripts/safety/postmortem.sh --auto
+ExecStart=@SCRIPTS_PATH@/postmortem.sh --auto
 StandardOutput=journal
 StandardError=journal
 

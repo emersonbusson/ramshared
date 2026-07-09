@@ -12,7 +12,7 @@ set -uo pipefail
 NVSMI="$(command -v nvidia-smi 2>/dev/null || true)"; [ -x "$NVSMI" ] || NVSMI="/usr/lib/wsl/lib/nvidia-smi"
 
 FORENSICS_DIR="${RAMSHARED_FORENSICS_DIR:-/mnt/c/wsl-forensics}"
-REPO="${RAMSHARED_REPO:-/home/emdev/codespace/ramshared}"
+REPO="${RAMSHARED_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 CMDLINE_ABOUT_TO_RUN="${1:-<nao informado>}"
 
 mkdir -p "$FORENSICS_DIR" 2>/dev/null || { FORENSICS_DIR="$HOME/wsl-forensics"; mkdir -p "$FORENSICS_DIR"; }

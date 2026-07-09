@@ -13,9 +13,9 @@
 # saida 0 = PASS (serve + teardown limpo). SPEC: docs/ublk-daemon-integration/IMPL.md F2.
 set -euo pipefail
 
-BZ="${1:-/home/emdev/WSL2-Linux-Kernel/arch/x86/boot/bzImage}"
+BZ="${1:-$HOME/WSL2-Linux-Kernel/arch/x86/boot/bzImage}"
 DAEMON="${2:-$(dirname "$0")/../../target/debug/ramsharedd}"
-UBLK_KO="${3:-/home/emdev/WSL2-Linux-Kernel/drivers/block/ublk_drv.ko}"
+UBLK_KO="${3:-$HOME/WSL2-Linux-Kernel/drivers/block/ublk_drv.ko}"
 
 for f in "$BZ" "$DAEMON" "$UBLK_KO"; do
   [ -f "$f" ] || { echo "arquivo inexistente: $f" >&2; exit 2; }

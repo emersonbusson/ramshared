@@ -1,1 +1,17 @@
 /target/
+
+# Cache e logs do sistema de forense
+/mnt/c/wsl-forensics/
+*.log
+*.prev.log
+.armed
+
+# Configurações e Logs de Agentes de IA
+.claude/plans/
+.agents/
+.codex/
+fable.md
+
+# IDEs e Editores
+.vscode/
+.idea/
