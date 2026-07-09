@@ -2,12 +2,12 @@
 
 ## Session Memory
 
-`MEMORY.md` at the repository root is the single shared memory file for the whole repository.
+`MEMORY.md` at the repository root is the single shared **local** memory file for agent sessions. It is listed in `.gitignore` (not shipped in clones). Create it on first write if missing.
 
 Rules:
-- Read `MEMORY.md` from bottom to top at the start of every session.
+- Read `MEMORY.md` from bottom to top at the start of every session **when the file exists**.
 - Start from the most recent entry at the end of the file.
-- Before ending a session, append a new entry to the end of `MEMORY.md`.
+- Before ending a session, append a new entry to the end of `MEMORY.md` (create the file if needed).
 - `MEMORY.md` is append-only by default: never delete or rewrite older entries.
 - Never store secrets or addresses that leak KASLR in `MEMORY.md`.
 

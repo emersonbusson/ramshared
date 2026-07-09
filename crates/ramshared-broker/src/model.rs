@@ -1,4 +1,4 @@
-//! Broker model types (PRD §7 / SPECv2 ITEM-3) — exactly one place.
+//! Broker model types (PRD §7 / SPEC ITEM-3) — exactly one place.
 //!
 //! `SliceState` includes `Leased` (DT-19: slice reservation for lease, outside round-robin).
 //! `Lease` is internal state of the broker (does not travel over the wire), hence does not derive `serde`.
@@ -25,7 +25,7 @@ pub enum SliceState {
 ///
 /// Derived `PartialEq`/`Eq`: `protocol::Msg` (which derives `PartialEq` for roundtrip tests)
 /// embeds `Vec<Slice>` in `StatusReply` — all fields of `Slice` are `Eq` (forced correction
-/// by the type system; updated SPECv2).
+/// by the type system; updated SPEC).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Slice {
     pub id: SliceId,

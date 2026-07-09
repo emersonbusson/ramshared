@@ -1,41 +1,34 @@
 ---
-slug: vram-wsl2-cuda-swap
-title: VRAM as a Cold Tier in a WSL2 Swap Cascade (v3)
+slug: wsl2-cascade-swap
+title: VRAM as a Cold Tier in a WSL2 Swap Cascade
 source_prd: PRD.md
-supersedes: SPECv2-WSL2.md
-preserves: [SPEC-WSL2.md, SPECv2-WSL2.md]
 variant: WSL2/GPU-PV/CUDA
 milestone: M01
-status: draft-executable
-audited_spec: SPECv2-WSL2.md
-audit_step: SSDV3 STEP 2.5
-audit_verdict_of_v2: no-go
+status: go
 phase0: completed (docs/reliability/wsl2-fase0-final.md)
-active_candidate: true
 impl_language: rust
 reference_impl: c0deJedi/nbd-vram (MIT) — blueprint/benchmark only, NOT included in the product
 ---
 
-# SPECv3-WSL2 — VRAM as a Cold Tier in a Swap Cascade (zram → VRAM → VHDX)
+# SPEC — VRAM as a Cold Tier in a Swap Cascade (zram → VRAM → VHDX)
 
-## 0. Audit Provenance (SSDV3 Step 2.5 Exit Rule)
+## 0. Audit Provenance (SSDV3 Step 2.5 — single-file model)
 
-- **Audited SPEC:** `docs/vram-as-ram/SPECv2-WSL2.md` (preserved).
-- **Verdict of v2:** `no-go` (MVP architecture contradicted by Phase 0 findings).
-- **Explicit request for `SPECv3`** (SSDV3 Step 2.5 exception clause).
-- **Blocking findings addressed:**
-  - **V3-F1** (VRAM as hot swap contradicts Phase 0) → **§1** rewritten: VRAM is a **COLD** tier, never the highest priority swap.
-  - **V3-F2** (tiering was an optional appendix) → **§1/§4** promote the `zram` → `VRAM` → `VHDX` cascade to the **MVP architecture**, backed by Part C evidence.
-  - **V3-F3** (canary aborted instead of demoting) → **§9** redefines the action as a **graceful DEMOTE** (swapoff of only the VRAM tier; pages drain to VHDX) without killing processes.
-  - **V3-F4** (zram missing from contract) → **§5/§6/§10** include zram setup, verification of `CONFIG_ZRAM`, and the `up` command that mounts the cascade.
-  - **V3-F5** (inconsistent priority) → **§6.2** fixes the scheme to `zram=200 > VRAM=100 > VHDX=−2`.
-  - **V3-F6** (gate anchored on unfair baseline) → **§3** redefines acceptance by **real swap activity** (`pswpin/out` per tier, stall), not `fio` vs VHDX.
-  - **V3-F7/F8** → §3 registers Phase 0 as completed; §14 uses pressure **confined to a cgroup** (not global `stress-ng`).
-- **Carried over from v2 without material change:** §0.2 Research & Reuse, CUDA I/O model (v2 §8), NBD/ublk backend (v2 §10), recovery (v2 §13), disciplines per step (v2 §12). Cited here in condensed form; deep details remain valid in `SPECv2-WSL2.md`.
-- **Active candidate** for a new audit. If rejected, update **in-place** (do not create v4 unless explicitly requested).
-- **Self-audit (Step 2.5, 2026-06-04):** v3 failed due to A1 (DEMOTE safety without lower-tier invariant). Fixed in-place: **A1** (safety net precondition in §6.2/§9.2), **A2** (`T_demote=30s` + math in §9.2), **A3** (zram size formula in §11), **A4** (OQ-demote resolved). Post-fix outcome: **`go`** → Step 3 (Rust scaffold).
+> **Arquivo único:** este `SPEC.md`. Revisões do Passo 2.5 são **in-place**; arqueologia = `git log` — **não** criar `SPECvN.md` (política alinhada ao Advoq).
 
-## 0.2 Research & Reuse (Summary; Full version in v2 §0.2)
+- **Rodada 1 (pré-Phase-0 architecture):** `no-go` — MVP “VRAM as hot swap” contradizia Phase 0.
+- **Rodada 2 (pivot cascade, 2026-06):** blockers V3-F1…F8 incorporados **in-place** neste arquivo:
+  - **V3-F1** → **§1**: VRAM is a **COLD** tier, never the highest priority swap.
+  - **V3-F2** → **§1/§4**: cascade `zram` → `VRAM` → `VHDX` is the **MVP architecture**.
+  - **V3-F3** → **§9**: graceful **DEMOTE** (swapoff only VRAM tier).
+  - **V3-F4** → **§5/§6/§10**: zram setup + `CONFIG_ZRAM` + `up` mounts cascade.
+  - **V3-F5** → **§6.2**: priorities `zram=200 > VRAM=100 > VHDX=−2`.
+  - **V3-F6** → **§3**: acceptance by real swap activity, not unfair fio baseline.
+  - **V3-F7/F8** → Phase 0 complete; §14 cgroup-confined pressure.
+- **Self-audit (2026-06-04):** A1–A4 fixed in-place → **`go`** → Step 3.
+- **Candidato ativo:** este arquivo. Nova rejeição → revisar in-place de novo.
+
+## 0.2 Research & Reuse (Summary)
 
 `c0deJedi/nbd-vram` (MIT) is the reference CUDA+NBD daemon and **confirms** that on consumer GeForce GPUs only the NBD path works (`nvidia_p2p_*` → `EINVAL`, BAR1 only maps ~16 MiB). The reference itself uses the cascade `RAM` → `VRAM` → `zram` → `SSD` (prioritized); we invert this to `zram` → `VRAM` because §9.5 proved VRAM is latency-unsafe (zram, being compressed RAM, must be the hot tier). NVIDIA docs (limited pinned, absent UVM, WDDM) support §9. `.wslconfig` allows custom kernel (ublk Phase B).
 
@@ -76,9 +69,9 @@ Everything required by the cascade exists **today** without a custom kernel.
 
 ## 3. Phase 0 — COMPLETED (resolves V3-F6, V3-F7)
 
-Original gate (perf vs VHDX) **bypassed**: Phase 0 ran (3 experiments, see `wsl2-fase0-final.md`, `FASE0-RESULTS.md`, `FASE0[B,C]-RAW.txt`). Results establishing SPECv3:
+Original gate (perf vs VHDX) **bypassed**: Phase 0 ran (3 experiments, see `wsl2-fase0-final.md`, `FASE0-RESULTS.md`, `FASE0[B,C]-RAW.txt`). Results establishing this SPEC:
 
-| Experiment | Result | Consequence in SPECv3 |
+| Experiment | Result | Consequence in this SPEC |
 |---|---|---|
 | A) Fair baseline | Inconclusive (host-cache not bypassable from inside) | Acceptance moves to real swap, not fio vs VHDX |
 | B) WDDM eviction | Data-safe; 4K latency → **1.18 s** under pressure | §9 DEMOTE by latency; VRAM = cold tier |
@@ -177,7 +170,7 @@ Init → PreflightOk → MemoryLocked → CudaReady → VramAllocated
 
 ## 8. CUDA I/O and Atomicity — unchanged from v2 §8
 
-Ordered stream, in-flight blocks map (no torn reads), VRAM-durability before completion via `cuEvent`, CUDA errors → I/O error (never partial success). Complete details in `SPECv2-WSL2.md §8`.
+Ordered stream, in-flight blocks map (no torn reads), VRAM-durability before completion via `cuEvent`, CUDA errors → I/O error (never partial success). Complete details in this SPEC §8 (and git history of earlier revisions).
 
 ## 9. Residency with Graceful DEMOTE (resolves V3-F1, V3-F3) — evidence in §9.5
 
@@ -286,17 +279,17 @@ Future Options (Phase B, require custom kernel — only with documented Day-0 ex
 
 ## 17. Open Questions
 
-- **OQ-pivot** — ✅ accepted (request for SPECv3 = acceptance of the pivot for the cascade).
+- **OQ-pivot** — ✅ accepted (request for cascade pivot = acceptance of the pivot for the cascade).
 - **OQ-zram** — default size of zram (proposed 25% of RAM); confirm policy.
 - **OQ-demote** — ✅ DECIDIDO: MVP = demote-and-stay-down (VRAM exits and stays down until `down`/`up`). Automatic re-promotion after cooldown = future option (§16).
 - **OQ2** — fair baseline: resolved conceptually by migrating acceptance to real swap (§3/§14.3); fio-vs-VHDX abandoned.
 - **OQ3** — VRAM limit with shared GPU (~4.2 GiB free): backoff §6.2 covers this; confirm `--vram-size` default of 1G.
 
-## 18. Traceability PRD-2 → SPECv3 (SSDV3 strict rule #4/#5)
+## 18. Traceability PRD-2 → SPEC (SSDV3 strict rule #4/#5)
 
 PRD-2 is a historical record (describing VRAM as hot swap via ublk); Phase 0 (`wsl2-fase0-final.md`) revised part of its requirements. Map:
 
-| PRD-2 | Original Text | Status in SPECv3 | Section |
+| PRD-2 | Original Text | Status in this SPEC | Section |
 |---|---|---|---|
 | **RF-1** | allocate 1–N GB of VRAM without freezing the GUI | **maintained** (backoff, limit, mlock) | §6.2, §11 |
 | **RF-2** | ublk workers via io_uring | **REVISED** → nbd in Phase A; ublk = Phase B (custom kernel) | §2, §10 |
@@ -304,4 +297,4 @@ PRD-2 is a historical record (describing VRAM as hot swap via ublk); Phase 0 (`w
 | **RNF-perf** | saturate PCIe 10-15 GB/s | **REVISED** → bare-metal claim; GPU-PV is latency-bound | §3.2.1 |
 | **RNF-estab** | mlockall anti-deadlock | **maintained** | §6.2, §11 |
 
-Revised requirements do not go back to PRD-2 (preserving history) — they are reconciled here. Step 3 commits cite the SPECv3 section + RF covered (e.g., `feat(core): cascade priority — SPECv3 §1 / revises RF-3`).
+Revised requirements do not go back to PRD-2 (preserving history) — they are reconciled here. Step 3 commits cite the SPEC section + RF covered (e.g., `feat(core): cascade priority — SPEC §1 / revises RF-3`).

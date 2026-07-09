@@ -1,6 +1,6 @@
 # IMPL — Coletor de Telemetria & Reconciliação do Memory Broker
 
-> SSDV3 PASSO 3. Implementa o **`SPECv2.md`** (candidato ativo, pós-auditoria 2.5). Branch
+> SSDV3 PASSO 3. Implementa o **`SPEC.md`** (candidato ativo, pós-auditoria 2.5). Branch
 > `feat/p1-hardening`. **Sem PR** até o usuário pedir.
 
 ## Status: implementado + verde (no que é validável aqui)

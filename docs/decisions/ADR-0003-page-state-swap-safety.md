@@ -58,6 +58,6 @@ ACKado que não sobrevive a um swap-in posterior (perda de página suja), **ou**
 **(b)** leitura torn sob QD>1 no mesmo bloco.
 
 Links: [ADR-0001](ADR-0001-vram-cascade-tiering.md) ·
-[`../vram-as-ram/SPECv3-WSL2.md`](../vram-as-ram/SPECv3-WSL2.md) §8, §9 ·
-[`../vram-as-ram/FASE0-FINAL.md`](../vram-as-ram/FASE0-FINAL.md) ·
+[`../specs/no-milestone/wsl2-cascade-swap/SPEC.md`](../specs/no-milestone/wsl2-cascade-swap/SPEC.md) §8, §9 ·
+[`../reliability/wsl2-fase0-final.md`](../reliability/wsl2-fase0-final.md) ·
 [`../reliability/DEGRADATION-MATRIX.md`](../reliability/DEGRADATION-MATRIX.md).

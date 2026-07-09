@@ -37,5 +37,5 @@ garantindo a ordem de teardown (`free → ctx destroy → dlclose`).
 Reavaliar fork em C se o FFI Rust↔`libcuda` no WSL2/GPU-PV apresentar falhas de
 `cuInit`/`cuMemcpy` que a referência C não tem, em ≥ 2 ambientes distintos.
 
-Links: [`../vram-as-ram/SPECv3-WSL2.md`](../vram-as-ram/SPECv3-WSL2.md) §4 ·
+Links: [`../specs/no-milestone/wsl2-cascade-swap/SPEC.md`](../specs/no-milestone/wsl2-cascade-swap/SPEC.md) §4 ·
 `crates/ramshared-cuda`.

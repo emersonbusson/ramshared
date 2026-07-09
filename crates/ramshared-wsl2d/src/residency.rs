@@ -95,7 +95,7 @@ impl Canary {
 ///   increments `bad_streak`; only demotes on `bad_streak >= consecutive` (DT-9/DT-11);
 /// - good sample resets the streak.
 ///
-/// SPEC: `docs/008-vram-residency-canary/SPECv3.md` DT-9/DT-10/DT-11.
+/// SPEC: `docs/specs/no-milestone/wsl2-cascade-swap/SPEC.md` DT-9/DT-10/DT-11.
 pub struct ResidencySampler {
     cfg: ResidencyConfig,
     bad_streak: u32,

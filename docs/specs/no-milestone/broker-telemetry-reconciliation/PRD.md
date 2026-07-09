@@ -1,9 +1,16 @@
+---
+slug: broker-telemetry-reconciliation
+title: Coletor de Telemetria & Reconciliação do Memory Broker
+milestone: —
+issues: []
+---
+
 # PRD — Coletor de Telemetria & Reconciliação do Memory Broker
 
 > **Feature-slug:** `broker-telemetry-reconciliation`. SSDV3 PASSO 1.
 > **Camada:** Userspace (daemon Rust `ramsharedd` + agente `ramshared-agent`) + protocolo do broker.
 > Não toca kernel-core, uAPI de kernel, IRQ nem DMA (a VRAM já é servida pelo data-plane existente).
-> **Liga-se a** [`.claude/rules/benchmarks.md`](../../.claude/rules/benchmarks.md) (saída em
+> **Liga-se a** [`.claude/rules/benchmarks.md`](../../../../.claude/rules/benchmarks.md) (saída em
 > `docs/benchmarks/results.jsonl`) e ao gate P0 do SSDV3.
 
 ## Resumo
@@ -56,7 +63,7 @@ afirmar que a arbitragem funciona.
 
 **Confirmado na documentação oficial:**
 - VRAM per-PID confiável e o lado **DXGI** exigem rodar **no host Windows**; dentro do WSL2 o GPU-PV
-  não expõe isso (ver [`docs/BENCHMARKS.md`](../BENCHMARKS.md) e a análise de fornecedores: DXGI
+  não expõe isso (ver [`docs/BENCHMARKS.md`](../../../BENCHMARKS.md) e a análise de fornecedores: DXGI
   `QueryVideoMemoryInfo` LOCAL/NON_LOCAL é a API nativa de orçamento no host).
 - `cuMemGetInfo` dá apenas free/total do *device* (não atribui por processo).
 

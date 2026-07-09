@@ -43,4 +43,15 @@ RamShared interacts with live hardware, GPU paging drivers, and operating system
 
 *   `/crates/`: Userspace Rust crates (CLI, broker daemon, CUDA wrappers, etc.).
 *   `/scripts/`: Provisioning, testing harnesses, and QEMU virtualization drills.
-*   `/docs/`: Architecture specifications (SSDV3 specs) and design records.
+*   `/docs/specs/no-milestone/{slug}/`: SSDV3 artifacts (`PRD.md`, `SPEC.md`, `IMPL.md`, optional `AUDIT-2.5.md`). Index: [`docs/INDEX.md`](docs/INDEX.md).
+*   `/docs/`: Methodology (Kahneman), ADRs, runbooks, reliability, benchmarks.
+*   `/tools/`: Docs hygiene (`generate-docs-index.mjs`, `check-broken-links.mjs`).
+
+### Specs & docs checks
+
+```bash
+node tools/generate-docs-index.mjs          # regenerate docs/INDEX.md
+./scripts/docs-check.sh                    # index --check + broken links under docs/
+```
+
+Structural work (locks, DMA, uAPI, mm, new driver surface) follows [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md) and [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md).

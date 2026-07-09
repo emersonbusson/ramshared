@@ -3,7 +3,7 @@
 //! watchdog window) lives here and is covered by unit tests; `main.rs` only
 //! wires these pieces together with sockets/threads (DT-27).
 //!
-//! SPEC: docs/memory-broker/SPECv2.md (ITEM-9). Without `unsafe`.
+//! SPEC: docs/specs/no-milestone/memory-broker/SPEC.md (ITEM-9). Without `unsafe`.
 #![forbid(unsafe_code)]
 
 pub mod psi;

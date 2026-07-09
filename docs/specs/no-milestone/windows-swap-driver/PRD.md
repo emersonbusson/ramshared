@@ -1,5 +1,5 @@
 ---
-slug: windows-vram-swap-drive
+slug: windows-swap-driver
 title: Swap-to-VRAM on Native Windows (StorPort virtual miniport)
 milestone: P4
 issues: []

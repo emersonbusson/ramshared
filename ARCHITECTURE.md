@@ -52,12 +52,12 @@ All `unsafe` blocks are isolated within `ramshared-cuda` (FFI) with `// SAFETY:`
 
 ## Methodology
 
-*   **SSDV3:** Spec-Driven Development. PRD → SPEC → IMPL, with Passo 2.5 adversarial code audits (go/no-go) between phases. Reference: [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md).
-*   **Kahneman Disciplines:** All synchronization, DMA, and architectural decisions record counterfactuals and numerical rollback triggers. Reference: [`docs/methodology/KAHNEMAN-DISCIPLINES.md`](docs/methodology/KAHNEMAN-DISCIPLINES.md).
+*   **SSDV3:** Spec-Driven Development. PRD → SPEC → IMPL under `docs/specs/…`, with Passo 2.5 adversarial audits (go/no-go); SPEC revised in-place (git is history). Reference: [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md), [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md).
+*   **Kahneman Disciplines (18):** Counterfactuals and numerical rollback (#2); calibrated retry (#15), fail-safe/independent curator (#16), replay idempotency (#17), right-layer root cause + proven sunset (#18). Reference: [`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md).
 *   **Day-0 Policy:** Zero-tolerance for shims, temporary workarounds, or warning bypasses.
 
 ## Validation
 
 System validation within cgroup-confined workloads: **511 MiB** spilled to VRAM (**332,800 intact pages**) and a **481 MiB** demotion path migrated VRAM -> VHDX under active pressure with **zero corruption**.
 
-Log evidence: [`docs/vram-as-ram/VALIDATION-CASCADE.md`](docs/vram-as-ram/VALIDATION-CASCADE.md).
+Log evidence: [`docs/reliability/wsl2-cascade-validation.md`](docs/reliability/wsl2-cascade-validation.md) · phase-0 summary: [`docs/reliability/wsl2-fase0-final.md`](docs/reliability/wsl2-fase0-final.md).

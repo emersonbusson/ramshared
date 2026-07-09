@@ -1,5 +1,5 @@
 ---
-slug: wsl2-cascade-swap-prd
+slug: wsl2-cascade-swap
 title: Product Requirements Document — VRAM as a Cold Tier in WSL2 Swap Cascade (zram → VRAM → VHDX)
 milestone: M01
 issues: []

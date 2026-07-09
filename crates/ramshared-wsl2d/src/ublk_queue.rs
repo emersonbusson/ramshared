@@ -14,7 +14,7 @@ use crate::ublk;
 /// Maps queue 0 of the char device `char_path` (read-only) and decodes the
 /// `ublksrv_io_desc` of the `tag`. The map size is `round_up(queue_depth * 24, page)`
 /// and the offset is 0 (queue 0); additional queues require `ublk_max_cmd_buf_size` — see
-/// `docs/ublk-backend/SPEC-ring-loop.md` §3.
+/// `docs/decisions/ADR-0004-ublk-io-uring-crate.md` §3.
 pub fn read_io_desc(
     char_path: impl AsRef<Path>,
     queue_depth: u16,

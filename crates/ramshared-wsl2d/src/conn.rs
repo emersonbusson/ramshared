@@ -3,7 +3,7 @@
 //! and enqueues `Job`s; the worker processes them (CUDA affinity) and returns `Reply`s via
 //! the connection's **unbounded** replica channel; the writer writes to the socket.
 //!
-//! SPEC: `docs/daemon-multiconn/SPECv3.md` (DT-7/DT-8/DT-15/DT-16). Deterministic design:
+//! SPEC: `docs/specs/no-milestone/wsl2-cascade-swap/SPEC.md` (DT-7/DT-8/DT-15/DT-16). Deterministic design:
 //! `Opened` comes from the acceptor (before spawning the reader), `Closed` comes from the reader (upon exit) —
 //! the worker counts `live` connections and terminates when all open connections close.
 

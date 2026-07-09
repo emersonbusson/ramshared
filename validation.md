@@ -1,6 +1,6 @@
 # validation.md — RamShared
 
-> Live log of **empirical** validations for RamShared — the single source of truth for "is this actually working right now?". Covers all manual, integration, and E2E validations; taxonomy is detailed in the **Categories** table below. Anchored on **Kahneman #13** (medir, não asseverar — existence ≠ execution, green-in-last-run ≠ green-now). Each entry registers raw, measured data, not qualitative impressions.
+> Live log of **empirical** validations for RamShared — the single source of truth for "is this actually working right now?". Covers all manual, integration, and E2E validations; taxonomy is detailed in the **Categories** table below. Anchored on **Kahneman #13** (existence ≠ execution; green-in-last-run ≠ green-now), plus **#15** (calibrated retry), **#16** (fail-safe / independent curator), and **#17** (replay idempotency) when the entry is about reconnect, demote/reclaim, or command re-delivery. Source: [`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md).
 
 ## Conventions
 
@@ -15,7 +15,9 @@
 | `invariant`   | Low-level static invariants (ABI structural layout, struct offsets, symbol binding)                 | 0 warnings / matches        |
 | `ci-gate`     | PR blocking gates (commit lint, clippy check, build validation)                                     | exit 0 / rollup green       |
 | `integration` | Proves execution effects against real hardware/kernel (ublk creation, CUDA allocations, socket connections) | effect observed             |
-| `fail-safe`   | Resiliency/demotion logic under load (eviction thresholds, automatic teardowns, watchdog timeouts)  | recovery active             |
+| `fail-safe`   | Resiliency/demotion under load (eviction, teardown, watchdog) — Kahneman **#16**                      | recovery active             |
+| `retry`       | Reconnect/retry only on proven transient signatures — Kahneman **#15**                               | fail-fast on deterministic  |
+| `idempotent`  | Command/effect applied 2× yields one outcome — Kahneman **#17**                                      | unique effect               |
 | `local-check` | Local verification tools (cargo test, cargo clippy, checkpatch outputs)                            | exit 0, test count passes   |
 | `perf`        | Latency metrics, IOPS throughput, swap-in latency under pressure                                  | quantitative SLO compliance  |
 | `boot`        | System startup validity (daemon initialization, device node creation, driver loading)              | boot ok / fail-closed       |

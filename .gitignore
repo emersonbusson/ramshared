@@ -11,7 +11,7 @@
 .agents/
 .codex/
 MEMORY.md
-docs/SSDV3-PROMPTS.md
+# docs/SSDV3-PROMPTS.md is tracked (canonical methodology for agents)
 
 # IDEs e Editores
 .vscode/

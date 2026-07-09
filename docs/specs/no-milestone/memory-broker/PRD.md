@@ -1,3 +1,10 @@
+---
+slug: memory-broker
+title: RamShared Memory Broker (Unified Final)
+milestone: —
+issues: []
+---
+
 # PRD — RamShared Memory Broker (Unified Final)
 
 > SSDV3 STEP 1 **consolidated**. Slug: `memory-broker`. This is the **single PRD** from which the SPEC will be generated. It absorbs and replaces the following as sources: `docs/vram-arbiter/PRD.md`, `docs/dcc-out-of-core/PRD.md`, and `docs/memory-broker/VISION.md`. Critical evaluation of source documents is in Annex A.

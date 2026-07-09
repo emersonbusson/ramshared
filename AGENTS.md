@@ -21,7 +21,7 @@ O source of truth para regras de arquitetura e código está em:
 
 1. Ler `README.md`.
 2. Ler [`.claude/rules/*.md`](.claude/rules/*.md) pertinentes à área.
-3. Ler `MEMORY.md` de baixo para cima (contexto temporal append-only).
+3. Ler `MEMORY.md` de baixo para cima (contexto temporal append-only). **`MEMORY.md` é local-only** (listado em `.gitignore`) — não existe no clone limpo; se ausente, siga sem ele.
 4. Ler `conversa.md` se presente (contexto ativo).
 
 ### Linguagem
@@ -36,8 +36,9 @@ Commits **não-triviais** (que toquem em locks, DMA ou alocação atômica) DEVE
 
 ## Metodologias (SSDV3 e Kahneman)
 
-- **SSDV3**: Spec-Driven Development. Ver [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md) e [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md). Obrigatório para mudanças estruturais: locks/concorrência, DMA/IOMMU/MMIO, mm (HMM/NUMA/hotplug), uAPI/ABI, novo hardware/subsistema, MMU/DRM.
-- **Kahneman Disciplines**: 14 disciplinas operacionais. Fonte: [`docs/methodology/KAHNEMAN-DISCIPLINES.md`](docs/methodology/KAHNEMAN-DISCIPLINES.md). Toda mudança no ring 0 e todo PR deve respeitar as disciplinas. Counterfactual obrigatório e número antes de adjetivo.
+- **SSDV3**: Spec-Driven Development. Ver [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md) e [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md). Artefatos em `docs/specs/no-milestone/{slug}/{PRD,SPEC,IMPL,AUDIT-2.5}.md` (SPEC único, revisão in-place; sem `SPECv2` em features novas). Índice: [`docs/INDEX.md`](docs/INDEX.md) (`node tools/generate-docs-index.mjs`). Obrigatório para locks/DMA/mm/uAPI/hardware/MMU/DRM — **não** para scripts CI/host-safety sozinhos (#15–#18 + `benchmarks.md`).
+- **Kahneman Disciplines**: 18 disciplinas operacionais. Fonte: [`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md). Ring 0 e PRs estruturais: counterfactual (#2), número antes de adjetivo (#3); retry/reconnect (#15), demote/reclaim (#16), comandos replayáveis (#17), shim sunset (#18).
+- **Docs hygiene**: `.claude/rules/documentation.md`, `.claude/rules/security.md` · `./scripts/docs-check.sh` (index + broken links).
 
 ## Perfis Cognitivos
 
