@@ -11,4 +11,19 @@ residency can be measured before killing `ramshared-winsvc`.
 | Signing | Test-signing **inside disposable VM only** |
 | Host | **Forbidden** on the daily development host (RNF-6) |
 
-Implementation files (`poolstress.c`, `poolstress.inf`) land with ITEM-8; this directory is reserved.
+## Files
+
+| File | Role |
+| --- | --- |
+| `poolstress.c` | ALLOC / READBACK / FREE IOCTLs |
+| `poolstress.inf` | Root-enumerated test INF (lab only) |
+
+## IOCTLs
+
+1. `ALLOC(n_gb)` — `ExAllocatePool2(POOL_FLAG_PAGED)` + `BCryptGenRandom` + touch every page
+2. `READBACK` — walk pages (force page-in after service kill)
+3. `FREE` — release pool
+
+## Drill
+
+Use `scripts/windows/Invoke-KernelPageDrill.ps1` (DT-21: `% Usage` pagefile-VRAM > 0 before kill).
