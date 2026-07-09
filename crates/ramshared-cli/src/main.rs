@@ -231,8 +231,9 @@ fn print_usage() {
     eprintln!("  ramshared check [--json]");
     eprintln!("  ramshared doctor [--json]");
     eprintln!("  ramshared up [--vram MiB] [--zram MiB] [--daemon PATH]");
+    eprintln!("      --zram 0  pula zram (so VRAM/NBD); util se zramctl falhar no kernel");
     eprintln!("  ramshared status");
-    eprintln!("  ramshared down");
+    eprintln!("  ramshared down   # SEMPRE swapoff antes de parar o daemon (anti hang WSL)");
 }
 
 fn run_check() -> CheckReport {

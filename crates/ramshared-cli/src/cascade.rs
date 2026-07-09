@@ -1,11 +1,18 @@
 //! Orchestration of the zram→VRAM→VHDX cascade (SPEC §6.2–6.4). Runs as root.
-//! Mounts tiers by `swapon` priority and unmounts in reverse order, with
-//! `swapoff` **before** disconnecting the NBD (anti-panic).
+//!
+//! **Anti-hang contract (Kahneman #5 / #15 / #16, 2026-07-09 WSL freeze):**
+//! 1. **Never** kill `ramsharedd` while any managed swap (nbd/ublk/zram) is still
+//!    listed in `/proc/swaps` — that creates ghost `(deleted)` swap entries and freezes WSL.
+//! 2. **Always** `swapoff` managed devices **before** NBD disconnect / daemon stop.
+//! 3. **Refuse** `up` if ghost/deleted swap or orphaned ublk/nbd swap is present.
+//! 4. **zram** algorithm is best-effort with fallbacks (WSL kernels disagree on `lzo-rle`).
+//!
+//! Mounts tiers by `swapon` priority and unmounts in reverse order.
 
 use ramshared_tier::{TierPriorities, validate_order, vram_safety_net};
 use std::fmt;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time::Duration;
@@ -14,19 +21,19 @@ const SOCK: &str = "/run/ramshared/wsl2d.sock";
 const NBD: &str = "/dev/nbd0";
 const ZRAM_DEV_FILE: &str = "/run/ramshared/zram-dev";
 const SWAP_DEV_FILE: &str = "/run/ramshared/swap-dev";
+const PID_FILE: &str = "/run/ramshared/ramsharedd.pid";
+/// Forensic "armed" marker (survives WSL death if under /mnt/c).
+const ARMED_MARKER_CANDIDATES: &[&str] = &["/mnt/c/wsl-forensics/.armed", "/run/ramshared/.armed"];
 
-/// Typed error for the cascade orchestration (no external dependency — follows the
-/// `CudaError` pattern: enum + `Display` + `Error`). Zero-creativity: variants map to the
-/// real failure modes (external command, argument, I/O, precondition).
+/// Algorithms tried in order for zram (kernel WSL 6.6 may reject some).
+const ZRAM_ALGOS: &[&str] = &["lzo-rle", "lzo", "zstd", "lz4", "deflate"];
+
+/// Typed error for the cascade orchestration.
 #[derive(Debug)]
 pub enum CascadeError {
-    /// External command failed (spawn or status != 0).
     Shell { cmd: String, msg: String },
-    /// Invalid CLI argument.
     Arg(String),
-    /// I/O error (fs / `/proc`).
     Io(String),
-    /// Cascade precondition violated (tier order, A1 safety net, device, daemon).
     Precondition(String),
 }
 
@@ -74,25 +81,107 @@ fn mem_available_bytes() -> u64 {
         .unwrap_or(0)
 }
 
-/// Is there a swap tier STRICTLY below VRAM (priority < VRAM) for DEMOTE
-/// to drain into? (A1 safety net). Ignores zram/nbd (the tiers managed by this tool) and
-/// checks the actual priority in /proc/swaps — not just "does any swap exist".
+// --- /proc/swaps parsing (pure, unit-tested) ---------------------------------
+
+/// One line from `/proc/swaps` after the header.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SwapEntry {
+    /// Path as shown by the kernel (may contain ` (deleted)` or `\040(deleted)`).
+    pub filename: String,
+    pub size_kb: u64,
+    pub used_kb: u64,
+    pub priority: i32,
+}
+
+impl SwapEntry {
+    /// True if the kernel already lost the block device (ghost swap).
+    pub fn is_ghost(&self) -> bool {
+        self.filename.contains("(deleted)") || self.filename.contains("\\040(deleted)")
+    }
+
+    /// True if this looks like a RamShared-managed or dangerous orphan tier.
+    pub fn is_managed_or_orphan_vram_tier(&self) -> bool {
+        let f = self.filename.to_ascii_lowercase();
+        f.contains("nbd") || f.contains("ublk") || f.contains("zram") || f.contains("ramshared")
+    }
+
+    /// Basename-ish key for matching recorded paths.
+    pub fn bare_path(&self) -> String {
+        self.filename
+            .replace("\\040(deleted)", " (deleted)")
+            .split_whitespace()
+            .next()
+            .unwrap_or(&self.filename)
+            .to_string()
+    }
+}
+
+/// Parse full `/proc/swaps` text into entries (skips header).
+pub fn parse_proc_swaps(text: &str) -> Vec<SwapEntry> {
+    text.lines()
+        .skip(1)
+        .filter_map(|line| {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            // Filename can contain spaces when deleted: "/dev/ublkb0 (deleted)"
+            // Kernel usually writes: `/dev/ublkb0\040(deleted)` as one field, OR
+            // with a real space then Type is shifted — handle both.
+            if cols.len() < 5 {
+                return None;
+            }
+            // Heuristic: last 3 numeric fields are Size Used Priority
+            let n = cols.len();
+            let priority = cols[n - 1].parse::<i32>().ok()?;
+            let used_kb = cols[n - 2].parse::<u64>().ok()?;
+            let size_kb = cols[n - 3].parse::<u64>().ok()?;
+            // Type is cols[n-4] (partition|file)
+            let filename = cols[..n - 4].join(" ");
+            if filename.is_empty() {
+                return None;
+            }
+            Some(SwapEntry {
+                filename,
+                size_kb,
+                used_kb,
+                priority,
+            })
+        })
+        .collect()
+}
+
+fn read_swaps() -> Vec<SwapEntry> {
+    fs::read_to_string("/proc/swaps")
+        .map(|s| parse_proc_swaps(&s))
+        .unwrap_or_default()
+}
+
+/// Ghost VRAM/zram entries that will hang `swapoff` / page-in if left alone.
+pub fn ghost_vram_swaps(entries: &[SwapEntry]) -> Vec<&SwapEntry> {
+    entries
+        .iter()
+        .filter(|e| e.is_ghost() && e.is_managed_or_orphan_vram_tier())
+        .collect()
+}
+
+/// Whether any nbd/ublk (non-ghost) swap is still active — daemon kill is forbidden.
+pub fn active_vram_block_swap(entries: &[SwapEntry]) -> bool {
+    entries.iter().any(|e| {
+        !e.is_ghost()
+            && (e.filename.contains("nbd")
+                || e.filename.contains("ublk")
+                || e.filename.contains("\\040ublk"))
+    })
+}
+
 fn lower_tier_present() -> bool {
     let vram_prio = TierPriorities::default().vram;
-    fs::read_to_string("/proc/swaps")
-        .map(|s| {
-            s.lines()
-                .skip(1)
-                .filter_map(|l| {
-                    let c: Vec<&str> = l.split_whitespace().collect();
-                    if c.len() < 5 || c[0].contains("zram") || c[0].contains("nbd") {
-                        return None;
-                    }
-                    c[4].parse::<i32>().ok()
-                })
-                .any(|p| p < vram_prio)
-        })
-        .unwrap_or(false)
+    read_swaps().iter().any(|e| {
+        // Ignore our managed tiers when looking for DEMOTE sink.
+        if e.filename.contains("zram") || e.filename.contains("nbd") || e.filename.contains("ublk")
+        {
+            return false;
+        }
+        e.priority < vram_prio
+    })
 }
 
 fn default_daemon() -> String {
@@ -101,6 +190,247 @@ fn default_daemon() -> String {
         .and_then(|p| p.parent().map(|d| d.join("ramsharedd")))
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "ramsharedd".to_string())
+}
+
+fn arm_forensics() {
+    let payload = format!(
+        "armed_at={}\npid={}\nreason=ramshared-up\n",
+        chrono_like_now(),
+        std::process::id()
+    );
+    for path in ARMED_MARKER_CANDIDATES {
+        if let Some(parent) = Path::new(path).parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if fs::write(path, &payload).is_ok() {
+            eprintln!("[up] forensics armed: {path}");
+            return;
+        }
+    }
+}
+
+fn disarm_forensics() {
+    for path in ARMED_MARKER_CANDIDATES {
+        let _ = fs::remove_file(path);
+    }
+}
+
+fn chrono_like_now() -> String {
+    // Avoid chrono dep: unix seconds is enough for the marker.
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs().to_string())
+        .unwrap_or_else(|_| "0".into())
+}
+
+/// Paths we will try to `swapoff` during down (recorded + live scan).
+fn swapoff_candidates(recorded_swap: Option<&str>, recorded_zram: Option<&str>) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(s) = recorded_swap
+        && !s.is_empty()
+    {
+        out.push(s.to_string());
+    }
+    if let Some(z) = recorded_zram
+        && !z.is_empty()
+    {
+        out.push(z.to_string());
+    }
+    for e in read_swaps() {
+        if e.is_managed_or_orphan_vram_tier() {
+            // Prefer bare path for live devices; keep full string for ghosts.
+            let p = if e.is_ghost() {
+                e.filename.replace("\\040(deleted)", " (deleted)")
+            } else {
+                e.bare_path()
+            };
+            if !out.iter().any(|x| x == &p) {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// Swapoff every candidate. Returns list of failures.
+/// **Never** kills the daemon from here.
+fn swapoff_all(paths: &[String]) -> Vec<(String, String)> {
+    let mut fails = Vec::new();
+    for p in paths {
+        // Ghost with used>0 cannot be recovered without reboot — report loudly.
+        let entries = read_swaps();
+        if let Some(e) = entries
+            .iter()
+            .find(|e| e.filename.contains(p.trim()) || e.bare_path() == *p)
+            && e.is_ghost()
+            && e.used_kb > 0
+        {
+            fails.push((
+                p.clone(),
+                format!(
+                    "ghost swap used_kb={} — NAO e recuperavel com swapoff; \
+                     rode `wsl --shutdown` no Windows e suba de novo. \
+                     NUNCA kill -9 ramsharedd com ublk/nbd em /proc/swaps.",
+                    e.used_kb
+                ),
+            ));
+            continue;
+        }
+        match sh("swapoff", &[p.as_str()]) {
+            Ok(_) => eprintln!("[down] swapoff ok: {p}"),
+            Err(e) => {
+                // Already gone is fine if used is 0
+                let msg = e.to_string();
+                if msg.contains("No such file") || msg.contains("Invalid argument") {
+                    // Re-check: if still listed with used>0, real failure
+                    let still = read_swaps()
+                        .iter()
+                        .any(|e| (e.filename.contains(p) || e.bare_path() == *p) && e.used_kb > 0);
+                    if still {
+                        fails.push((p.clone(), msg));
+                    } else {
+                        eprintln!("[down] swapoff skip (ausente): {p}");
+                    }
+                } else {
+                    fails.push((p.clone(), msg));
+                }
+            }
+        }
+    }
+    fails
+}
+
+/// True if daemon process may be stopped (no active block VRAM swap).
+pub fn daemon_kill_allowed(entries: &[SwapEntry]) -> bool {
+    !active_vram_block_swap(entries) && ghost_vram_swaps(entries).is_empty()
+}
+
+fn stop_daemon_gracefully() {
+    // Prefer PID file if we wrote one
+    if let Ok(pid_s) = fs::read_to_string(PID_FILE)
+        && let Ok(pid) = pid_s.trim().parse::<i32>()
+    {
+        let _ = Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .status();
+    }
+    // Wait up to 10s for voluntary exit (allows VRAM zero()).
+    for _ in 0..100 {
+        if sh("pgrep", &["-x", "ramsharedd"]).is_err() {
+            let _ = fs::remove_file(PID_FILE);
+            return;
+        }
+        sleep(Duration::from_millis(100));
+    }
+    // Only SIGTERM via pkill -x; never -9 from this tool.
+    if !daemon_kill_allowed(&read_swaps()) {
+        eprintln!(
+            "[down] ABORT pkill: ainda ha nbd/ublk em /proc/swaps — \
+             risco de ghost swap / hang WSL. Corrija swapoff manualmente."
+        );
+        return;
+    }
+    eprintln!("[down] daemon nao saiu em 10s; pkill -TERM (sem -9)");
+    let _ = sh("pkill", &["-x", "ramsharedd"]);
+    sleep(Duration::from_millis(500));
+    let _ = fs::remove_file(PID_FILE);
+}
+
+fn setup_zram(mb: u64, prio: i32) -> Result<String, CascadeError> {
+    if mb == 0 {
+        eprintln!("[up] zram skipped (--zram 0)");
+        return Ok(String::new());
+    }
+    let _ = sh("modprobe", &["zram"]);
+    // Prefer free device via zramctl with algorithm fallbacks.
+    let size = format!("{mb}M");
+    let mut last_err = String::new();
+    for algo in ZRAM_ALGOS {
+        match sh("zramctl", &["--find", "--size", &size, "--algorithm", algo]) {
+            Ok(zdev) => {
+                if !matches!(zdev.strip_prefix("/dev/zram"), Some(s) if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                {
+                    last_err = format!("zramctl retornou device inesperado: {zdev}");
+                    continue;
+                }
+                sh("mkswap", &[&zdev])?;
+                sh("swapon", &["-p", &prio.to_string(), &zdev])?;
+                fs::write(ZRAM_DEV_FILE, &zdev).map_err(|e| CascadeError::Io(e.to_string()))?;
+                eprintln!("[up] zram {zdev} algo={algo} prio={prio}");
+                return Ok(zdev);
+            }
+            Err(e) => {
+                last_err = e.to_string();
+                eprintln!("[up] zram algo {algo} falhou: {last_err}");
+            }
+        }
+    }
+    // Sysfs fallback on zram0
+    if let Err(e) = setup_zram_sysfs(mb, prio) {
+        return Err(CascadeError::Precondition(format!(
+            "zram indisponivel (zramctl: {last_err}; sysfs: {e}). \
+             Tente --zram 0 para so VRAM, ou `modprobe zram`."
+        )));
+    }
+    Ok("/dev/zram0".into())
+}
+
+fn setup_zram_sysfs(mb: u64, prio: i32) -> Result<(), CascadeError> {
+    let path = PathBuf::from("/sys/block/zram0");
+    if !path.exists() {
+        return Err(CascadeError::Precondition(
+            "/sys/block/zram0 ausente".into(),
+        ));
+    }
+    let _ = fs::write(path.join("reset"), "1");
+    for algo in ZRAM_ALGOS {
+        if fs::write(path.join("comp_algorithm"), algo.as_bytes()).is_ok() {
+            break;
+        }
+    }
+    let bytes = mb
+        .checked_mul(1024 * 1024)
+        .ok_or_else(|| CascadeError::Arg("zram size overflow".into()))?;
+    fs::write(path.join("disksize"), bytes.to_string())
+        .map_err(|e| CascadeError::Io(format!("disksize: {e}")))?;
+    sh("mkswap", &["/dev/zram0"])?;
+    sh("swapon", &["-p", &prio.to_string(), "/dev/zram0"])?;
+    fs::write(ZRAM_DEV_FILE, "/dev/zram0").map_err(|e| CascadeError::Io(e.to_string()))?;
+    eprintln!("[up] zram /dev/zram0 via sysfs prio={prio}");
+    Ok(())
+}
+
+fn refuse_dirty_swap_state() -> Result<(), CascadeError> {
+    let entries = read_swaps();
+    let ghosts = ghost_vram_swaps(&entries);
+    if !ghosts.is_empty() {
+        let detail: Vec<String> = ghosts
+            .iter()
+            .map(|e| format!("{} used_kb={}", e.filename, e.used_kb))
+            .collect();
+        return Err(CascadeError::Precondition(format!(
+            "estado sujo: swap fantasma (device deleted) em /proc/swaps: {}. \
+             NAO e seguro continuar. No Windows: `wsl --shutdown`, reabra a distro, \
+             depois `sudo ramshared down` e `sudo ramshared up ...`. \
+             Nunca mate o daemon com ublk/nbd ativo.",
+            detail.join("; ")
+        )));
+    }
+    // Orphan live ublk/nbd without our run files — refuse to stack another cascade.
+    let has_record = Path::new(SWAP_DEV_FILE).exists() || Path::new(ZRAM_DEV_FILE).exists();
+    let orphan = entries.iter().any(|e| {
+        !e.is_ghost() && (e.filename.contains("ublk") || e.filename.contains("nbd")) && !has_record
+    });
+    if orphan {
+        return Err(CascadeError::Precondition(
+            "ha swap nbd/ublk ativo sem estado /run/ramshared (orfao). \
+             Rode `sudo ramshared down` ou swapoff manual no device, \
+             depois up de novo."
+                .into(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -221,6 +551,9 @@ pub fn up() -> Result<(), CascadeError> {
     let prios = TierPriorities::default();
     validate_order(prios).map_err(|e| CascadeError::Precondition(e.to_string()))?;
 
+    // Refuse dirty state before touching anything (#16 fail-safe).
+    refuse_dirty_swap_state()?;
+
     // A1 — DEMOTE safety net (requires a tier below VRAM).
     let vram_bytes = a
         .vram_mb
@@ -239,38 +572,22 @@ pub fn up() -> Result<(), CascadeError> {
 
     if a.transport == Transport::Ublk {
         return Err(CascadeError::Precondition(
-            "transport ublk ainda nao implementado; servidor io_uring pendente".into(),
+            "transport ublk ainda nao implementado no `ramshared up` (use nbd). \
+             Daemon ublk manual e lab-only; se ja usou ublk, `sudo ramshared down` \
+             e limpe ghost swaps antes."
+                .into(),
         ));
     }
 
-    // zram tier (HOT, high priority).
-    sh("modprobe", &["zram", "num_devices=1"])?;
-    let zdev = sh(
-        "zramctl",
-        &[
-            "--find",
-            "--size",
-            &format!("{}M", a.zram_mb),
-            "--algorithm",
-            "lzo-rle",
-        ],
-    )?;
-    // M5: zramctl should return /dev/zramN; validate before passing to privileged commands.
-    if !matches!(zdev.strip_prefix("/dev/zram"), Some(s) if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
-    {
-        return Err(CascadeError::Precondition(format!(
-            "zramctl retornou device inesperado: {zdev}"
-        )));
-    }
-    sh("mkswap", &[&zdev])?;
-    sh("swapon", &["-p", &prios.zram.to_string(), &zdev])?;
-    fs::write(ZRAM_DEV_FILE, &zdev).map_err(|e| CascadeError::Io(e.to_string()))?;
-    eprintln!("[up] zram {zdev} (prio {})", prios.zram);
+    arm_forensics();
 
-    // VRAM tier (COLD, medium priority): daemon + nbd.
+    // zram tier (HOT). --zram 0 skips.
+    setup_zram(a.zram_mb, prios.zram)?;
+
+    // VRAM tier (COLD): daemon + nbd.
     sh("modprobe", &["nbd", "nbds_max=1", "max_part=0"])?;
     let _ = fs::remove_file(SOCK);
-    Command::new(&a.daemon)
+    let child = Command::new(&a.daemon)
         .args([
             "--size",
             &a.vram_mb.to_string(),
@@ -286,6 +603,7 @@ pub fn up() -> Result<(), CascadeError> {
             cmd: a.daemon.clone(),
             msg: e.to_string(),
         })?;
+    let _ = fs::write(PID_FILE, child.id().to_string());
     let mut ok = false;
     for _ in 0..120 {
         if Path::new(SOCK).exists() {
@@ -295,86 +613,147 @@ pub fn up() -> Result<(), CascadeError> {
         sleep(Duration::from_millis(50));
     }
     if !ok {
+        // Best-effort cleanup of failed spawn; no swap yet so kill is allowed.
+        let _ = sh("pkill", &["-x", "ramsharedd"]);
+        disarm_forensics();
         return Err(CascadeError::Precondition(
             "daemon nao subiu (socket ausente)".into(),
         ));
     }
-    // H1: multi-connection (-C N) only when N>1; the daemon is N-agnostic (accepts whatever comes).
     let conns = a.connections.to_string();
     let mut nbd_args: Vec<&str> = Vec::new();
     if a.connections > 1 {
         nbd_args.extend(["-C", conns.as_str()]);
     }
     nbd_args.extend(["-unix", SOCK, &a.swap_dev]);
-    sh("nbd-client", &nbd_args)?;
-    sh("mkswap", &["-L", "RAMSHARED", &a.swap_dev])?;
-    sh("swapon", &["-p", &prios.vram.to_string(), &a.swap_dev])?;
+    if let Err(e) = sh("nbd-client", &nbd_args) {
+        let _ = sh("pkill", &["-x", "ramsharedd"]);
+        disarm_forensics();
+        return Err(e);
+    }
+    if let Err(e) = sh("mkswap", &["-L", "RAMSHARED", &a.swap_dev]) {
+        let _ = sh("nbd-client", &["-d", &a.swap_dev]);
+        let _ = sh("pkill", &["-x", "ramsharedd"]);
+        disarm_forensics();
+        return Err(e);
+    }
+    if let Err(e) = sh("swapon", &["-p", &prios.vram.to_string(), &a.swap_dev]) {
+        let _ = sh("nbd-client", &["-d", &a.swap_dev]);
+        let _ = sh("pkill", &["-x", "ramsharedd"]);
+        disarm_forensics();
+        return Err(e);
+    }
     fs::write(SWAP_DEV_FILE, &a.swap_dev).map_err(|e| CascadeError::Io(e.to_string()))?;
     eprintln!(
         "[up] VRAM {} (prio {}, {} MiB, {} conexão(ões))",
         a.swap_dev, prios.vram, a.vram_mb, a.connections
     );
     eprintln!(
-        "[up] cascata ativa: zram({}) > VRAM({}) > VHDX",
+        "[up] cascata ativa: zram({}) > VRAM({}) > VHDX | anti-hang: down sempre swapoff antes de stop daemon",
         prios.zram, prios.vram
     );
     status()
 }
 
 pub fn down() -> Result<(), CascadeError> {
-    let swap_dev = fs::read_to_string(SWAP_DEV_FILE)
+    let recorded_swap = fs::read_to_string(SWAP_DEV_FILE)
+        .ok()
         .map(|s| s.trim().to_string())
-        .unwrap_or_else(|_| NBD.to_string());
-    // Anti-panic: if VRAM is in swap, swapoff MUST complete before disconnect.
-    let nbd_in_swap = fs::read_to_string("/proc/swaps")
-        .map(|s| s.contains(&swap_dev))
-        .unwrap_or(false);
-    if nbd_in_swap {
-        sh("swapoff", &[&swap_dev]).map_err(|e| {
-            CascadeError::Precondition(format!(
-                "swapoff {swap_dev} falhou ({e}); NAO desconectando (risco de panic) — intervir"
-            ))
-        })?;
-    }
-    // zram tier
-    if let Ok(z) = fs::read_to_string(ZRAM_DEV_FILE) {
-        let z = z.trim().to_string();
-        if !z.is_empty() {
-            let _ = sh("swapoff", &[&z]);
-            let _ = sh("zramctl", &["-r", &z]);
+        .filter(|s| !s.is_empty());
+    let recorded_zram = fs::read_to_string(ZRAM_DEV_FILE)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let candidates = swapoff_candidates(recorded_swap.as_deref(), recorded_zram.as_deref());
+    eprintln!("[down] swapoff candidatos: {candidates:?}");
+
+    // 1) ALWAYS swapoff first — never disconnect/kill with pages on the device.
+    let fails = swapoff_all(&candidates);
+    if !fails.is_empty() {
+        for (p, msg) in &fails {
+            eprintln!("[down] FALHA swapoff {p}: {msg}");
+        }
+        // If ghost with used>0, hard fail and do not kill daemon / nbd-disconnect.
+        let swaps_now = read_swaps();
+        let ghosts = ghost_vram_swaps(&swaps_now);
+        if ghosts.iter().any(|e| e.used_kb > 0) {
+            return Err(CascadeError::Precondition(
+                "swap fantasma com paginas em uso — WSL pode hang se forcar. \
+                 No Windows: `wsl --shutdown`. Depois `sudo ramshared down` e `up`."
+                    .into(),
+            ));
+        }
+        // Non-ghost failures: still refuse kill if block swap remains
+        if active_vram_block_swap(&read_swaps()) {
+            return Err(CascadeError::Precondition(
+                "swapoff incompleto e nbd/ublk ainda em /proc/swaps; \
+                 NAO mate o daemon. Intervenha com swapoff manual."
+                    .into(),
+            ));
         }
     }
-    // nbd-client -d → daemon receives EOF, zeroes VRAM (§11) and exits on its own.
-    let _ = sh("nbd-client", &["-d", &swap_dev]);
-    // Wait for it to exit on its own (up to ~5s) to NOT kill it in the middle of zero()
-    // VRAM (otherwise residual data remains on GPU). pkill only as a last resort.
-    let mut exited = false;
-    for _ in 0..50 {
-        if sh("pgrep", &["-x", "ramsharedd"]).is_err() {
-            exited = true;
-            break;
+
+    // 2) Reset zram devices we know about
+    if let Some(ref z) = recorded_zram {
+        let _ = sh("zramctl", &["-r", z]);
+    }
+    // Also try reset any leftover zram still listed
+    for e in read_swaps() {
+        if e.filename.contains("zram") && !e.is_ghost() {
+            let _ = sh("swapoff", &[&e.bare_path()]);
+            let _ = sh("zramctl", &["-r", &e.bare_path()]);
         }
-        sleep(Duration::from_millis(100));
     }
-    if !exited {
-        eprintln!("[down] daemon nao saiu em 5s; pkill (VRAM pode nao ter sido zerada)");
-        let _ = sh("pkill", &["-x", "ramsharedd"]);
+
+    // 3) Disconnect NBD only after swapoff (EOF → daemon zero() VRAM)
+    let nbd_targets: Vec<String> = recorded_swap
+        .into_iter()
+        .chain(
+            read_swaps()
+                .into_iter()
+                .filter(|e| e.filename.contains("nbd"))
+                .map(|e| e.bare_path()),
+        )
+        .collect();
+    for dev in &nbd_targets {
+        if dev.contains("nbd") {
+            let _ = sh("nbd-client", &["-d", dev]);
+        }
     }
+
+    // 4) Daemon stop — only if no block VRAM swap remains
+    stop_daemon_gracefully();
+
     let _ = fs::remove_file(SOCK);
     let _ = fs::remove_file(ZRAM_DEV_FILE);
     let _ = fs::remove_file(SWAP_DEV_FILE);
-    eprintln!("[down] cascata desmontada");
+    let _ = fs::remove_file(PID_FILE);
+    disarm_forensics();
+    eprintln!("[down] cascata desmontada (swapoff-first, sem kill -9)");
     status()
 }
 
 pub fn status() -> Result<(), CascadeError> {
     println!("{}", sh("swapon", &["--show"])?);
+    let entries = read_swaps();
+    let ghosts = ghost_vram_swaps(&entries);
+    if !ghosts.is_empty() {
+        eprintln!("[status] AVISO: swap fantasma detectado:");
+        for g in ghosts {
+            eprintln!(
+                "  {} size_kb={} used_kb={} prio={}",
+                g.filename, g.size_kb, g.used_kb, g.priority
+            );
+        }
+        eprintln!("  acao: wsl --shutdown no Windows, depois ramshared down/up");
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)] // test: unwrap/expect is idiomatic
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
     fn parse(args: &[&str]) -> Result<UpArgs, CascadeError> {
@@ -385,7 +764,6 @@ mod tests {
     #[test]
     fn defaults_to_nbd_transport_and_nbd0_swap_dev() {
         let args = parse(&[]).unwrap();
-
         assert_eq!(args.transport, Transport::Nbd);
         assert_eq!(args.swap_dev, "/dev/nbd0");
         assert_eq!(args.connections, 1);
@@ -394,7 +772,6 @@ mod tests {
     #[test]
     fn parses_ublk_transport_and_generic_swap_dev() {
         let args = parse(&["--transport", "ublk", "--swap-dev", "/dev/ublkb0"]).unwrap();
-
         assert_eq!(args.transport, Transport::Ublk);
         assert_eq!(args.swap_dev, "/dev/ublkb0");
     }
@@ -402,7 +779,6 @@ mod tests {
     #[test]
     fn keeps_legacy_nbd_arg_as_swap_dev_alias() {
         let args = parse(&["--nbd", "/dev/nbd3"]).unwrap();
-
         assert_eq!(args.transport, Transport::Nbd);
         assert_eq!(args.swap_dev, "/dev/nbd3");
     }
@@ -410,7 +786,65 @@ mod tests {
     #[test]
     fn rejects_multi_connection_ublk_for_single_ring_design() {
         let err = parse(&["--transport", "ublk", "--connections", "2"]).unwrap_err();
-
         assert!(err.to_string().contains("--connections"));
+    }
+
+    #[test]
+    fn parse_swaps_normal_and_ghost_backslash() {
+        let text = "\
+Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority
+/dev/sdb                                partition\t8388608\t\t100\t\t-2
+/dev/ublkb0\\040(deleted)                partition\t524284\t\t117504\t\t-3
+/dev/zram0                              partition\t1048576\t\t0\t\t200
+";
+        let e = parse_proc_swaps(text);
+        assert_eq!(e.len(), 3);
+        assert!(e[1].is_ghost());
+        assert!(e[1].is_managed_or_orphan_vram_tier());
+        assert_eq!(e[1].used_kb, 117504);
+        assert!(!e[0].is_managed_or_orphan_vram_tier());
+        assert!(e[2].is_managed_or_orphan_vram_tier());
+    }
+
+    #[test]
+    fn parse_swaps_ghost_with_real_space() {
+        let text = "\
+Filename Type Size Used Priority
+/dev/ublkb0 (deleted) partition 524284 10 -3
+";
+        let e = parse_proc_swaps(text);
+        assert_eq!(e.len(), 1);
+        assert!(e[0].is_ghost());
+        assert!(e[0].filename.contains("ublkb0"));
+    }
+
+    #[test]
+    fn daemon_kill_forbidden_with_active_ublk_or_ghost() {
+        let live = parse_proc_swaps(
+            "Filename Type Size Used Priority\n\
+             /dev/ublkb0 partition 524284 0 -3\n",
+        );
+        assert!(active_vram_block_swap(&live));
+        assert!(!daemon_kill_allowed(&live));
+
+        let ghost = parse_proc_swaps(
+            "Filename Type Size Used Priority\n\
+             /dev/ublkb0\\040(deleted) partition 524284 100 -3\n",
+        );
+        assert!(!ghost_vram_swaps(&ghost).is_empty());
+        assert!(!daemon_kill_allowed(&ghost));
+
+        let clean = parse_proc_swaps(
+            "Filename Type Size Used Priority\n\
+             /dev/sdb partition 8388608 0 -2\n",
+        );
+        assert!(daemon_kill_allowed(&clean));
+    }
+
+    #[test]
+    fn zram_zero_is_parsed() {
+        let a = parse(&["--zram", "0", "--vram", "2048"]).unwrap();
+        assert_eq!(a.zram_mb, 0);
+        assert_eq!(a.vram_mb, 2048);
     }
 }
