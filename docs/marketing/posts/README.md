@@ -10,9 +10,15 @@ In every post file look for markers:
 | `>>> COPY BODY START` … `>>> COPY BODY END` | Paste into the **text/body** field (long text — numbers, try-it, limits, link) |
 | `>>> COPY TWEET START` … `>>> COPY TWEET END` | Paste as **one tweet** |
 | `>>> COPY URL START` … `>>> COPY URL END` | Paste into the **URL** field |
-| **IMG-1** | Download PNG and **attach** (not paste as text) |
+| **IMG-1** | English diagram PNG — attach (not paste as text) |
+| **IMG-PT-1** | **Portuguese** diagram PNG — use on PT posts (03, 04, 06) |
 
 **Do not paste** the `>>>` lines themselves.
+
+Diagrams:
+
+- EN: [`../cascade-diagram.png`](../cascade-diagram.png)  
+- PT: [`../cascade-diagram-pt.png`](../cascade-diagram-pt.png)
 
 ---
 
