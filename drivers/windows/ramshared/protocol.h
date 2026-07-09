@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * RamShared Windows driver ↔ service ABI (frozen for IMPL ITEM-4).
+ * RamShared Windows driver <-> service ABI (frozen for IMPL ITEM-4).
  * SPEC: docs/specs/no-milestone/windows-swap-driver/SPEC.md (DT-17, DT-18, DT-22).
  *
  * Layout is the single source of truth. The Rust mirror lives in
@@ -11,14 +11,26 @@
  */
 #pragma once
 
+/* Fixed-width types: kernel uses WDK basetsd; userspace uses stdint. */
+#if defined(_KERNEL_MODE) || defined(_NTDDK_) || defined(_STORPORT_)
+typedef unsigned __int64 ramshared_u64;
+typedef unsigned __int32 ramshared_u32;
+typedef signed __int32 ramshared_i32;
+typedef unsigned char ramshared_u8;
+#else
 #include <stdint.h>
+typedef uint64_t ramshared_u64;
+typedef uint32_t ramshared_u32;
+typedef int32_t ramshared_i32;
+typedef uint8_t ramshared_u8;
+#endif
 
 #ifdef _MSC_VER
 #pragma pack(push, 8)
 #endif
 
 #define RAMSHARED_ABI_VERSION 1u
-#define RAMSHARED_MAX_QD 256u      /* queue_depth max; power of two */
+#define RAMSHARED_MAX_QD 256u	/* queue_depth max; power of two */
 #define RAMSHARED_MAX_IO (1u << 20) /* 1 MiB per bounce slot */
 #define RAMSHARED_RING_MAGIC 0x52535244u /* 'RSRD' */
 
@@ -35,53 +47,53 @@ enum ramshared_op {
 
 /* driver -> service, 32 bytes */
 typedef struct _RAMSHARED_SQE {
-	uint64_t tag;
-	uint32_t op;
-	uint32_t flags;
-	uint64_t offset;
-	uint32_t len;
-	uint32_t buf_slot;
-} RAMSHARED_SQE;
+	ramshared_u64 tag;
+	ramshared_u32 op;
+	ramshared_u32 flags;
+	ramshared_u64 offset;
+	ramshared_u32 len;
+	ramshared_u32 buf_slot;
+} RAMSHARED_SQE, *PRAMSHARED_SQE;
 
 /* service -> driver, 16 bytes */
 typedef struct _RAMSHARED_CQE {
-	uint64_t tag;
-	int32_t status;
-	uint32_t reserved;
-} RAMSHARED_CQE;
+	ramshared_u64 tag;
+	ramshared_i32 status;
+	ramshared_u32 reserved;
+} RAMSHARED_CQE, *PRAMSHARED_CQE;
 
 /* precedes entries[]; SPSC */
 typedef struct _RAMSHARED_RING_HDR {
-	uint32_t magic;
-	uint32_t entries; /* = queue_depth (power of two) */
-	volatile uint32_t head;
-	volatile uint32_t tail;
-} RAMSHARED_RING_HDR;
+	ramshared_u32 magic;
+	ramshared_u32 entries; /* = queue_depth (power of two) */
+	volatile ramshared_u32 head;
+	volatile ramshared_u32 tail;
+} RAMSHARED_RING_HDR, *PRAMSHARED_RING_HDR;
 
 /* payload of IOCTL_RAMSHARED_REGISTER_QUEUE */
 typedef struct _RAMSHARED_REGISTER {
-	uint32_t abi_version;
-	uint32_t disk_id;
-	uint32_t queue_depth;
-	uint32_t block_size;
-	uint32_t max_io_bytes;
-	uint32_t reserved;
-	uint64_t sq_ring_va;
-	uint64_t cq_ring_va;
-	uint64_t data_area_va;
-	uint64_t data_area_len;
+	ramshared_u32 abi_version;
+	ramshared_u32 disk_id;
+	ramshared_u32 queue_depth;
+	ramshared_u32 block_size;
+	ramshared_u32 max_io_bytes;
+	ramshared_u32 reserved;
+	ramshared_u64 sq_ring_va;
+	ramshared_u64 cq_ring_va;
+	ramshared_u64 data_area_va;
+	ramshared_u64 data_area_len;
 	/* auxiliary (DT-22); primary wake path = COMMIT_AND_FETCH IRP */
-	uint64_t sq_event_handle;
-	uint64_t cq_event_handle;
-} RAMSHARED_REGISTER;
+	ramshared_u64 sq_event_handle;
+	ramshared_u64 cq_event_handle;
+} RAMSHARED_REGISTER, *PRAMSHARED_REGISTER;
 
 /* IOCTL_RAMSHARED_CREATE_DISK */
 typedef struct _RAMSHARED_DISK_PARAMS {
-	uint64_t size_bytes; /* multiple of block_size */
-	uint32_t block_size; /* 512 or 4096 */
-	uint32_t reserved;
-	unsigned char serial[16]; /* INQUIRY VPD / stable id */
-} RAMSHARED_DISK_PARAMS;
+	ramshared_u64 size_bytes; /* multiple of block_size */
+	ramshared_u32 block_size; /* 512 or 4096 */
+	ramshared_u32 reserved;
+	ramshared_u8 serial[16]; /* INQUIRY VPD / stable id */
+} RAMSHARED_DISK_PARAMS, *PRAMSHARED_DISK_PARAMS;
 
 /*
  * IOCTL function codes (N). Full CTL_CODE expansion is MSVC/WDK-only:
@@ -97,7 +109,6 @@ typedef struct _RAMSHARED_DISK_PARAMS {
 #define RAMSHARED_IOCTL_FN_DESTROY_DISK 4u
 
 #ifdef __cplusplus
-/* C++ compile-time size checks when available outside WDK */
 static_assert(sizeof(RAMSHARED_SQE) == 32, "RAMSHARED_SQE size");
 static_assert(sizeof(RAMSHARED_CQE) == 16, "RAMSHARED_CQE size");
 static_assert(sizeof(RAMSHARED_RING_HDR) == 16, "RAMSHARED_RING_HDR size");

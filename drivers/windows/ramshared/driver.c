@@ -11,7 +11,8 @@
 #include "virtdisk.h"
 #include "queue.h"
 
-/* {A5B3C1D0-8E4F-4A2B-9C7D-1E2F3A4B5C6D} — control device interface GUID */
+#include <initguid.h>
+/* {A5B3C1D0-8E4F-4A2B-9C7D-1E2F3A4B5C6D} - control device interface GUID */
 DEFINE_GUID(GUID_DEVINTERFACE_RAMSHARED_CTL,
 	0xa5b3c1d0, 0x8e4f, 0x4a2b, 0x9c, 0x7d, 0x1e, 0x2f, 0x3a, 0x4b, 0x5c, 0x6d);
 
@@ -24,12 +25,14 @@ HwStorFindAdapter(
 	_In_ PVOID DeviceExtension,
 	_In_ PVOID HwContext,
 	_In_ PVOID BusInformation,
+	_In_ PVOID LowerDevice,
 	_In_ PCHAR ArgumentString,
 	_Inout_ PPORT_CONFIGURATION_INFORMATION ConfigInfo,
 	_In_ PBOOLEAN Again)
 {
 	UNREFERENCED_PARAMETER(HwContext);
 	UNREFERENCED_PARAMETER(BusInformation);
+	UNREFERENCED_PARAMETER(LowerDevice);
 	UNREFERENCED_PARAMETER(ArgumentString);
 	UNREFERENCED_PARAMETER(DeviceExtension);
 
@@ -45,7 +48,6 @@ HwStorFindAdapter(
 	ConfigInfo->MapBuffers = STOR_MAP_NON_READ_WRITE_BUFFERS;
 	ConfigInfo->SynchronizationModel = StorSynchronizeFullDuplex;
 	ConfigInfo->HwMSInterruptRoutine = NULL;
-	ConfigInfo->InterruptSynchronized = FALSE;
 
 	return SP_RETURN_FOUND;
 }
@@ -100,7 +102,7 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 	hw.HwStartIo = HwStorStartIo;
 	hw.HwFindAdapter = HwStorFindAdapter;
 	hw.HwResetBus = HwStorResetBus;
-	hw.HwDeviceExtensionSize = sizeof(RAMSHARED_ADAPTER_EXT);
+	hw.DeviceExtensionSize = sizeof(RAMSHARED_ADAPTER_EXT);
 	hw.MapBuffers = STOR_MAP_NON_READ_WRITE_BUFFERS;
 	hw.TaggedQueuing = TRUE;
 	hw.AutoRequestSense = TRUE;

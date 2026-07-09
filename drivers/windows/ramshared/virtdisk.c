@@ -41,7 +41,8 @@ VdHandleInquiry(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 	ULONG len;
 
 	UNREFERENCED_PARAMETER(Disk);
-	if (!StorPortGetSystemAddress(Srb, (PVOID *)&buf)) {
+	buf = (UCHAR *)Srb->DataBuffer;
+	if (buf == NULL) {
 		Srb->SrbStatus = SRB_STATUS_ERROR;
 		return TRUE;
 	}
@@ -69,7 +70,8 @@ VdHandleReadCapacity(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 	ULONG64 last_lba;
 	ULONG bs;
 
-	if (!StorPortGetSystemAddress(Srb, (PVOID *)&buf)) {
+	buf = (UCHAR *)Srb->DataBuffer;
+	if (buf == NULL) {
 		Srb->SrbStatus = SRB_STATUS_ERROR;
 		return TRUE;
 	}

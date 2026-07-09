@@ -215,7 +215,8 @@ QSubmit(
 
 	/* Bounce WRITE into data slot (DT-4 / DT-23). */
 	if (Op == RAMSHARED_OP_WRITE && Len > 0) {
-		if (!StorPortGetSystemAddress(Srb, &sys_addr) || sys_addr == NULL) {
+		sys_addr = Srb->DataBuffer;
+		if (sys_addr == NULL) {
 			KeReleaseSpinLock(&Q->Lock, old);
 			return STATUS_INVALID_PARAMETER;
 		}
@@ -295,7 +296,8 @@ QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 
 		srb = Q->Inflight[tag].Srb;
 		if (Q->Inflight[tag].Op == RAMSHARED_OP_READ && cqe->status == RAMSHARED_ST_OK) {
-			if (StorPortGetSystemAddress(srb, &sys_addr) && sys_addr) {
+			sys_addr = srb->DataBuffer;
+			if (sys_addr) {
 				RtlCopyMemory(sys_addr,
 					      Q->Data + (SIZE_T)Q->Inflight[tag].BufSlot * Q->MaxIoBytes,
 					      srb->DataTransferLength);
