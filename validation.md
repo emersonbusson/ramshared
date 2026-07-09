@@ -293,3 +293,42 @@ ITEM-8 **lab evidence is sufficient for VM operations**. Host-real remains block
 - B1 checkpoint drill executed.
 
 Artifacts: guest `C:\ramshared\bin\winsvc.log`, service `RamSharedWinSvc`.
+
+## 2026-07-09 — All fronts closeout (B1 + SCM + ITEM-8 gate)
+
+**Discipline:** #1 WYSIATI, #3 numbers, #13 no theater, RNF-6 VM-only, checkpoint `pre-b1-20260709-191802`.
+
+### B1 safe arm (surprise backend kill, no secondary PF)
+| Metric | Value |
+| --- | --- |
+| PF secondary | **absent** (only C:) |
+| Backend before | True |
+| Surprise | kill WinDriveBackend |
+| New minidump | **False** |
+| Guest alive | True |
+| Verdict | **PASS_B1_SAFE_ARM** |
+
+Hot arm (PF Usage>0) not re-run: already proven **0x7A/c0000185** (dump 27437); DT-9 is the mitigation.
+
+### Rust winsvc MSVC
+- Host: VS Build Tools present; **no cargo.exe** on elevated host session.
+- Guest: cargo 1.97 but **no link.exe** MSVC.
+- **SKIP env-bound**: C# `RamSharedWinSvc` remains lab SCM; Rust `main.rs` install/run scaffold ready when MSVC+cargo available.
+
+### SCM / autostart
+- `RamSharedWinSvc` StartType Automatic; delayed-auto.
+- Post-reboot path previously: BE+disk present.
+
+### ITEM-8 final gate (lab)
+| Gate | Status |
+| --- | --- |
+| Format/smoke | PASS |
+| DT-21 residency | PASS |
+| KPD 3/3 | PASS |
+| DT-9 refuse + reboot kill | PASS |
+| B1 safe (no PF) | PASS |
+| B1/B2 hot pagefile | FAIL 0x7A → DT-9 required |
+| Lab SCM | PASS_LAB_SCM |
+| **Host-real** | **FORBIDDEN** |
+
+**Decision:** ITEM-8 **lab complete for VM operations**. Host-real still blocked until product CUDA path + optional B1 hot with only user pages / partner signing.
