@@ -1,14 +1,14 @@
-//! ramsharedd (crate `ramshared-wsl2d`) — daemon do tier VRAM + Memory Broker (SPEC §4, §8).
+//! ramsharedd (crate `ramshared-wsl2d`) — VRAM tier daemon + Memory Broker (SPEC §4, §8).
 //!
-//! Serve NBD fixed-newstyle num socket Unix; `nbd-client -unix <sock> /dev/nbdX`
-//! faz a fiação do kernel (os ioctls). Assim o daemon fica **sem `unsafe`** — o
-//! único `unsafe` do projeto vive isolado no `ramshared-cuda`.
+//! Serves fixed-newstyle NBD on a Unix socket; `nbd-client -unix <sock> /dev/nbdX`
+//! wires up the kernel (the ioctls). This keeps the daemon **without `unsafe`** — the
+//! only `unsafe` in the project lives isolated in `ramshared-cuda`.
 //!
-//! Aloca a VRAM e serve **N conexões** NBD (`nbd-client -C N`) por um leitor/escritor
-//! dedicados por conexão + um **worker CUDA único** (afinidade de thread, §9.4/H1), com
-//! `mlockall`+`oom_score_adj` (Disciplina 3) e o canário de residência §9 (latência
-//! por-request, **serve-only**) + §9.4 (sonda de conteúdo/free).
-//! Backoff segue como trabalho futuro.
+//! Allocates VRAM and serves **N NBD connections** (`nbd-client -C N`) via a dedicated
+//! reader/writer per connection + a **single CUDA worker** (thread affinity, §9.4/H1), with
+//! `mlockall`+`oom_score_adj` (Discipline 3) and the residency canary §9 (latency
+//! per-request, **serve-only**) + §9.4 (content/free probe).
+//! Backoff remains as future work.
 
 use core::ffi::c_int;
 use std::os::unix::net::UnixListener;
@@ -32,11 +32,11 @@ use ramshared_wsl2d::{
 };
 use ramshared_wsl2d::{ublk, ublk_control, ublk_server};
 
-// Disciplina 3 (anti-deadlock): o daemon serve o swap, logo nao pode ser swapado.
+// Discipline 3 (anti-deadlock): the daemon serves swap, so it cannot be swapped out.
 unsafe extern "C" {
     fn mlockall(flags: c_int) -> c_int;
-    // Registro de handler de sinal (sighandler_t é um ponteiro de função; o retorno
-    // anterior é ignorado). Usado só para SIGINT/SIGTERM no modo ublk.
+    // Signal handler registration (sighandler_t is a function pointer; the previous
+    // return is ignored). Used only for SIGINT/SIGTERM in ublk mode.
     fn signal(signum: c_int, handler: extern "C" fn(c_int)) -> usize;
 }
 const MCL_CURRENT: c_int = 1;
@@ -49,17 +49,17 @@ const BLOCK_SIZE: u32 = 4096;
 const UBLK_CONTROL: &str = "/dev/ublk-control";
 const SECTOR: u64 = 512;
 
-/// Transporte do tier VRAM: NBD (socket Unix) ou ublk (block device direto).
+/// VRAM tier transport: NBD (Unix socket) or ublk (direct block device).
 enum Transport {
     Nbd,
     Ublk,
 }
 
-/// Backend de VRAM/tier: `Vram` (CUDA, com residência §9/§9.4), `Vulkan` (qualquer GPU via
-/// `ramshared-vulkan`, RF-G2) ou `Ram` (sem GPU). O `Ram` existe para validar o **ciclo de
-/// vida/teardown** do daemon ublk em **qemu** (onde não há GPU); o bug de teardown que travou o
-/// WSL2 é independente do backend. `Vulkan` cobre broker + NBD single (caminhos genéricos); ublk
-/// com Vulkan fica deferido (DT-11: o servidor de residência ublk é CUDA-fixo).
+/// VRAM/tier backend: `Vram` (CUDA, with residency §9/§9.4), `Vulkan` (any GPU via
+/// `ramshared-vulkan`, RF-G2) or `Ram` (without GPU). `Ram` exists to validate the **lifecycle/teardown**
+/// of the ublk daemon in **QEMU** (where there is no GPU); the teardown bug that hung
+/// WSL2 is independent of the backend. `Vulkan` covers broker + NBD single (generic paths); ublk
+/// with Vulkan is deferred (DT-11: the ublk residency server is CUDA-fixed).
 #[derive(Clone, Copy)]
 enum BackendKind {
     Vram,
@@ -77,8 +77,8 @@ impl BackendKind {
     }
 }
 
-/// Une os dois tipos de handle do servidor DT-3 (VRAM-com-residência ou RAM puro) para
-/// um teardown único no `run_ublk`.
+/// Unifies the two types of DT-3 server handles (VRAM-with-residency or pure RAM) for
+/// a unified teardown in `run_ublk`.
 enum UblkHandle {
     Vram(ublk_server::ServerHandleDt3VramResidency),
     Ram(ublk_server::ServerHandleDt3<RamBackend>),
@@ -93,8 +93,8 @@ impl UblkHandle {
     }
 }
 
-/// Pedido de encerramento (SIGINT/SIGTERM). O handler só faz um store atômico
-/// (async-signal-safe); o laço do daemon ublk faz poll desta flag.
+/// Shutdown request (SIGINT/SIGTERM). The handler only does an atomic store
+/// (async-signal-safe); the ublk daemon loop polls this flag.
 static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn handle_shutdown(_sig: c_int) {
@@ -111,8 +111,8 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-/// Parseia `IP:PORT` (aceita o prefixo `tcp://`) e **recusa endereços unspecified** (0.0.0.0/::)
-/// — RNF-2: bind só em rede privada/loopback, nunca público. Falha ANTES de qualquer `bind()`.
+/// Parses `IP:PORT` (accepts `tcp://` prefix) and **rejects unspecified addresses** (0.0.0.0/::)
+/// — RNF-2: bind only on private network/loopback, never public. Fails BEFORE any `bind()`.
 fn parse_private_listen(s: &str) -> Result<std::net::SocketAddr, String> {
     let raw = s.strip_prefix("tcp://").unwrap_or(s);
     let addr: std::net::SocketAddr = raw
@@ -127,32 +127,32 @@ fn parse_private_listen(s: &str) -> Result<std::net::SocketAddr, String> {
     Ok(addr)
 }
 
-/// Valida o combo de flags de slice (DT-3: ublk é single-device no WSL2; `--slice-mb` obrigatório).
-/// Teto de slices: o `StatusReply` embute `Vec<Slice>+Vec<SliceIo>+Vec<TenantStatus>` numa única
-/// linha JSON; acima de ~430 slices ele passa do `MAX_LINE_BYTES` (64 KiB) do protocolo e a outra
-/// ponta rejeita a linha (ADR-0005). 256 dá folga (~38 KiB) e cobre qualquer uso real.
+/// Validates the combo of slice flags (DT-3: ublk is single-device in WSL2; `--slice-mb` mandatory).
+/// Slices ceiling: `StatusReply` embeds `Vec<Slice>+Vec<SliceIo>+Vec<TenantStatus>` in a single
+/// JSON line; above ~430 slices it exceeds the protocol's `MAX_LINE_BYTES` (64 KiB) and the other
+/// end rejects the line (ADR-0005). 256 gives margins (~38 KiB) and covers any real use case.
 const MAX_SLICES: u16 = 256;
 
 fn validate_slice_flags(slices: u16, slice_mb: u64, is_ublk: bool) -> Result<(), String> {
     if slices > 0 && is_ublk {
         return Err(
-            "--slices não combina com --transport ublk (DT-3: ublk single-device no WSL2)".into(),
+            "--slices does not combine with --transport ublk (DT-3: ublk single-device on WSL2)".into(),
         );
     }
     if slices > 0 && slice_mb == 0 {
-        return Err("--slices > 0 exige --slice-mb N".into());
+        return Err("--slices > 0 requires --slice-mb N".into());
     }
     if slices > MAX_SLICES {
         return Err(format!(
-            "--slices {slices} > {MAX_SLICES}: o StatusReply excederia o teto de linha do protocolo \
+            "--slices {slices} > {MAX_SLICES}: StatusReply would exceed the protocol line ceiling \
              (MAX_LINE_BYTES 64 KiB, ADR-0005)"
         ));
     }
     Ok(())
 }
 
-/// Zera a janela `[base, base+len)` do backend em chunks de 1 MiB (higiene de slice, DT-17).
-/// Roda na thread dona do backend (worker CUDA único) — `WMsg::ZeroExport`.
+/// Zeroes the `[base, base+len)` window of the backend in 1 MiB chunks (slice hygiene, DT-17).
+/// Runs on the thread owning the backend (single CUDA worker) — `WMsg::ZeroExport`.
 fn zero_window<B: BlockBackend>(
     backend: &mut B,
     base: u64,
@@ -169,10 +169,10 @@ fn zero_window<B: BlockBackend>(
     Ok(())
 }
 
-/// Residência por-request compartilhada pelos workers NBD (single e broker): arma o canário
-/// de latência (§9, baseline→Canary; serve-only, DT-16) e roda a sonda §9.4 (conteúdo/free em
-/// cadência, com histerese via streak). Devolve `Some(reason)` se algum sinal pede DEMOTE; o
-/// chamador decide a AÇÃO (swapoff local no single, `DemoteAll` via broker no multi-slice).
+/// Per-request residency shared by NBD workers (single and broker): arms the latency
+/// canary (§9, baseline→Canary; serve-only, DT-16) and runs the §9.4 probe (content/free in
+/// cadence, with hysteresis via streak). Returns `Some(reason)` if any signal requests DEMOTE;
+/// the caller decides the ACTION (local swapoff in single, `DemoteAll` via broker in multi-slice).
 fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
     lat_us: u64,
     canary: &mut Option<Canary>,
@@ -182,8 +182,8 @@ fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
     probe: &mut CanaryProbe<M>,
     mem_free: F,
 ) -> Option<DemoteReason> {
-    // §9: canário de latência por-request. content_ok=true/free=u64::MAX DE PROPÓSITO — o sinal
-    // aqui é a latência; conteúdo e free-floor vêm da sonda §9.4 abaixo.
+    // §9: per-request latency canary. content_ok=true/free=u64::MAX ON PURPOSE — the signal
+    // here is latency; content and free-floor come from the probe §9.4 below.
     match canary.as_mut() {
         None => {
             baseline.push(lat_us);
@@ -200,8 +200,8 @@ fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
             }
         }
     }
-    // §9.4: sonda dedicada de conteúdo/free em cadência (conteúdo corrompido demove imediato;
-    // free-floor/erro transiente exigem streak).
+    // §9.4: dedicated content/free probe in cadence (corrupted content demotes immediately;
+    // free-floor/transient error require streak).
     if cadence.tick() {
         let content = probe.check_content().ok();
         let free = mem_free();
@@ -224,8 +224,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut transport = Transport::Nbd;
     let mut queue_depth = 1u16;
     let mut backend = BackendKind::Vram;
-    // ITEM-8 (broker): flags do modo multi-slice. Parsing+validação aqui (puro/testável); o
-    // runtime do broker (broker_srv + rework do run_nbd) vem nos próximos recortes do ITEM-8.
+    // ITEM-8 (broker): multi-slice mode flags. Parsing + validation here (pure/testable); the
+    // broker runtime (broker_srv + rework of run_nbd) comes in subsequent segments of ITEM-8.
     let mut slices = 0u16;
     let mut slice_mb = 0u64;
     let mut listen_nbd: Option<String> = None;
@@ -331,7 +331,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     size -= size % BLOCK_SIZE as u64; // alinhar ao block size
 
-    // ITEM-8: validação das flags do broker (pura/testável). RNF-2: bind nunca em 0.0.0.0/::.
+    // ITEM-8: validation of broker flags (pure/testable). RNF-2: bind never on 0.0.0.0/::.
     if let Err(e) = validate_slice_flags(slices, slice_mb, matches!(transport, Transport::Ublk)) {
         return Err(e.into());
     }
@@ -344,22 +344,22 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .as_deref()
         .map(parse_private_listen)
         .transpose()?;
-    // --advertise-nbd só faz sentido com --listen-nbd (anunciar um endpoint TCP que se serve).
+    // --advertise-nbd only makes sense with --listen-nbd (advertise a TCP endpoint being served).
     if advertise_nbd_addr.is_some() && listen_nbd_addr.is_none() {
         return Err(
             "--advertise-nbd exige --listen-nbd (anunciar um endpoint que se serve)".into(),
         );
     }
-    // Endpoint TCP anunciado aos agentes no SwapOn (DT-25): por padrão = addr de bind; com
-    // --advertise-nbd, o addr forwarded do host (caso civm via port-forward, ITEM-12).
+    // TCP endpoint advertised to agents in SwapOn (DT-25): by default = bind addr; with
+    // --advertise-nbd, the forwarded host addr (civm case via port-forward, ITEM-12).
     let advertise_tcp = advertise_nbd_addr
         .or(listen_nbd_addr)
         .map(|a| (a.ip().to_string(), a.port()));
     let telemetry_jsonl = telemetry_jsonl.map(std::path::PathBuf::from);
 
-    // Modo broker (ITEM-8): --slices > 0 fatia a memória e sobe o árbitro. Exige --arbiter-listen
-    // (o ponto de controle do broker). --listen-nbd é opcional (tenants TCP/civm além do Unix).
-    // --backend ram serve sem GPU (validação em qemu, ITEM-11); vram é o caminho de produção.
+    // Broker mode (ITEM-8): --slices > 0 slices the memory and starts the arbiter. Requires --arbiter-listen
+    // (the broker control point). --listen-nbd is optional (TCP/civm tenants besides Unix).
+    // --backend ram serves without GPU (validation in QEMU, ITEM-11); vram is the production path.
     if slices > 0 {
         let arbiter_addr =
             arbiter_addr.ok_or("--slices exige --arbiter-listen IP:PORT (ponto de controle)")?;
@@ -368,8 +368,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .ok_or("--slice-mb: overflow (MiB grande demais)")?;
         return match backend {
             BackendKind::Vram => {
-                // Shell CUDA: cria o provider (Context impl VramProvider) e entra no caminho
-                // genérico.
+                // CUDA Shell: creates the provider (Context impl VramProvider) and enters the
+                // generic path.
                 let cuda = Cuda::load()?;
                 let dev = cuda.device(0)?;
                 eprintln!("[ramsharedd] GPU: {}", dev.name());
@@ -387,7 +387,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 )
             }
             BackendKind::Vulkan => {
-                // Shell Vulkan (RF-V4/DT-11): provider Vulkan no MESMO run_broker genérico.
+                // Vulkan Shell (RF-V4/DT-11): Vulkan provider in the SAME generic run_broker.
                 let provider = VulkanProvider::open(0)?;
                 eprintln!("[ramsharedd] GPU (vulkan): {}", provider.device_name());
                 run_broker(
@@ -421,7 +421,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     match transport {
         Transport::Nbd => match backend {
             BackendKind::Vram => {
-                // Shell CUDA: cria o provider e entra no caminho genérico.
+                // CUDA Shell: creates the provider and enters the generic path.
                 let cuda = Cuda::load()?;
                 let dev = cuda.device(0)?;
                 eprintln!("[ramsharedd] GPU: {}", dev.name());
@@ -429,7 +429,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 run_nbd(ctx, size, sock, force, nbd_dev)
             }
             BackendKind::Vulkan => {
-                // Shell Vulkan (RF-V4/DT-11): provider Vulkan no MESMO run_nbd genérico.
+                // Vulkan Shell (RF-V4/DT-11): Vulkan provider in the SAME generic run_nbd.
                 let provider = VulkanProvider::open(0)?;
                 eprintln!("[ramsharedd] GPU (vulkan): {}", provider.device_name());
                 run_nbd(provider, size, sock, force, nbd_dev)
@@ -442,8 +442,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-/// Caminho NBD (fixed-newstyle em socket Unix). Worker único na thread atual, genérico sobre o
-/// provider de VRAM (RF-G1): o `provider` (CUDA hoje) já vem pronto do shell em `run()`.
+/// NBD path (fixed-newstyle in Unix socket). Single worker on current thread, generic over the
+/// VRAM provider (RF-G1): the `provider` (CUDA today) comes ready from the shell in `run()`.
 fn run_nbd<P: VramProvider>(
     provider: P,
     size: u64,
@@ -451,7 +451,7 @@ fn run_nbd<P: VramProvider>(
     force: bool,
     nbd_dev: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // --- aloca e zera a VRAM (via VramProvider) ---
+    // --- allocates and zeroes VRAM (via VramProvider) ---
     let (free, total) = provider.mem_info()?;
     eprintln!(
         "[ramsharedd] VRAM livre={} MiB total={} MiB",
@@ -461,9 +461,9 @@ fn run_nbd<P: VramProvider>(
     let mut mem = provider.alloc(size as usize)?;
     mem.zero()?;
 
-    // Disciplina 3: trava memoria + protege do OOM killer ANTES de servir swap.
-    // CUDA/VRAM ja foram alocados acima (provider.alloc/mem.zero) -> seguro travar
-    // MCL_FUTURE de uma vez so (sem a colisao de dxgkrnl do incidente 2026-07-03).
+    // Discipline 3: locks memory + protects from OOM killer BEFORE serving swap.
+    // CUDA/VRAM have already been allocated above (provider.alloc/mem.zero) -> safe to lock
+    // MCL_FUTURE all at once (without the dxgkrnl collision from the 2026-07-03 incident).
     lock_memory(force, true)?;
     let mut backend = VramBackend::new(mem, BLOCK_SIZE);
     eprintln!(
@@ -472,37 +472,37 @@ fn run_nbd<P: VramProvider>(
         BLOCK_SIZE
     );
 
-    // --- canário dedicado de residência (§9.4): região separada da swap, NÃO
-    // endereçável por NBD (o device anunciado segue = região de swap). Alimenta a
-    // sonda de conteúdo/free em cadência (SPECv3 DT-1/DT-9). ---
+    // --- dedicated residency canary (§9.4): region separated from swap, NOT
+    // addressable by NBD (the advertised device remains = swap region). Feeds the
+    // content/free probe in cadence (SPECv3 DT-1/DT-9). ---
     let canary_region = provider.alloc(CANARY_BYTES)?;
     let mut probe = CanaryProbe::new(canary_region);
     let mut cadence = Cadence::new(CANARY_EVERY);
     let mut sampler = ResidencySampler::new(ResidencyConfig::default());
 
-    // --- socket Unix ---
+    // --- Unix socket ---
     let path = Path::new(&sock);
     let _ = std::fs::remove_file(path);
     let listener = UnixListener::bind(path)?;
     eprintln!("[ramsharedd] escutando em {sock}");
     eprintln!("[ramsharedd] conecte: sudo nbd-client -C <N> -unix {sock} {nbd_dev}");
 
-    // --- multi-conexão (H1): acceptor + leitor/escritor por conexão alimentam o worker
-    // CUDA único (esta thread). O canal WMsg é o ÚNICO ponto de backpressure (réplica por
-    // conexão é ilimitada, DT-7). SPEC: docs/daemon-multiconn/SPECv3.md ---
+    // --- multi-connection (H1): acceptor + reader/writer per connection feed the single
+    // CUDA worker (this thread). The WMsg channel is the ONLY backpressure point (replica per
+    // connection is unbounded, DT-7). SPEC: docs/daemon-multiconn/SPECv3.md ---
     let tx_flags = NBD_FLAG_HAS_FLAGS | NBD_FLAG_SEND_FLUSH | NBD_FLAG_CAN_MULTI_CONN; // DT-10
     let device_size = backend.size_bytes();
-    // ITEM-7: tabela de exports. Modo single = 1 export "default" (nome vazio → índice 0,
-    // byte-compat Fase B). O broker (ITEM-8) passará a tabela de slices do `SliceMap`.
+    // ITEM-7: exports table. Single mode = 1 "default" export (empty name → index 0,
+    // byte-compatible with Phase B). The broker (ITEM-8) will pass the slices table of `SliceMap`.
     let exports = std::sync::Arc::new(vec![ramshared_block::handshake::Export {
         name: "default".to_string(),
         size: device_size,
     }]);
     let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel::<WMsg>(CHAN_CAP);
-    let _acceptor = spawn_acceptor(listener, exports, tx_flags, jobs_tx); // move o único sender
-    eprintln!("[ramsharedd] em transmissão (worker CUDA único; multi-conexão)");
+    let _acceptor = spawn_acceptor(listener, exports, tx_flags, jobs_tx); // moves the only sender
+    eprintln!("[ramsharedd] transmitting (single CUDA worker; multi-connection)");
 
-    // Estado do worker (esta thread é dona de backend/probe/ctx — afinidade CUDA).
+    // Worker state (this thread owns backend/probe/ctx — CUDA affinity).
     let mut canary: Option<Canary> = None;
     let mut baseline: Vec<u64> = Vec::new();
     let mut demoted = false;
@@ -517,13 +517,13 @@ fn run_nbd<P: VramProvider>(
             }
             WMsg::Closed => {
                 if live.on_close() {
-                    break; // todas as conexões abertas fecharam (DT-15)
+                    break; // all open connections closed (DT-15)
                 }
                 continue;
             }
             WMsg::Job(job) => job,
             WMsg::ZeroExport { base, len, done } => {
-                // Higiene de slice (DT-17): zera a janela [base,len) na thread dona do backend.
+                // Slice hygiene (DT-17): zeroes the window [base,len) on the thread owning the backend.
                 let ok = zero_window(&mut backend, base, len).is_ok();
                 let _ = done.send(ok);
                 continue;
@@ -531,10 +531,10 @@ fn run_nbd<P: VramProvider>(
         };
 
         let touches_vram = matches!(job.req.cmd, Command::Read | Command::Write);
-        // DT-16 (revisado): latência SERVE-ONLY (tempo da op de VRAM). Medir a espera na
-        // fila dava falso-positivo de DEMOTE sob carga normal (§14.3 ao vivo: baseline
-        // 85us idle vs 1.1ms sob fila = 13x → demote indevido). A falha REAL (eviction
-        // WDDM) spike o serve ~330x (Fase 0) → o canário dispara nela, não na fila.
+        // DT-16 (revised): SERVE-ONLY latency (VRAM op duration). Measuring queue wait
+        // caused false positive DEMOTEs under normal load (§14.3 live: baseline
+        // 85us idle vs 1.1ms under queue = 13x → improper demote). The REAL failure (WDDM
+        // eviction) spikes serve time ~330x (Phase 0) → canary triggers on it, not on queue.
         let t0 = std::time::Instant::now();
         let out = serve(&job.req, &job.payload, &mut backend);
         let lat_us = t0.elapsed().as_micros() as u64;
@@ -544,7 +544,7 @@ fn run_nbd<P: VramProvider>(
             disconnect: out.disconnect,
         });
 
-        // Poll nao-bloqueante do swapoff de DEMOTE em curso (re-arma se falhar).
+        // Non-blocking poll of the ongoing DEMOTE swapoff (re-arms if it fails).
         if let Some(rx) = demote_rx.take() {
             match rx.try_recv() {
                 Ok(true) => {
@@ -555,7 +555,7 @@ fn run_nbd<P: VramProvider>(
                     eprintln!("[ramsharedd] DEMOTE: swapoff {nbd_dev} FALHOU; canario re-armado");
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    demote_rx = Some(rx); // ainda em curso; devolve
+                    demote_rx = Some(rx); // still in progress; returns it
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     eprintln!("[ramsharedd] DEMOTE: thread de swapoff sumiu; canario re-armado");
@@ -563,8 +563,8 @@ fn run_nbd<P: VramProvider>(
             }
         }
 
-        // Residência (§9 latência + §9.4 conteúdo/free): lógica compartilhada com o worker do
-        // broker. A AÇÃO aqui é o swapoff local do device servido (single-device).
+        // Residency (§9 latency + §9.4 content/free): logic shared with the broker's worker.
+        // The ACTION here is the local swapoff of the served device (single-device).
         if touches_vram
             && !demoted
             && demote_rx.is_none()
@@ -583,8 +583,8 @@ fn run_nbd<P: VramProvider>(
         }
     }
 
-    // --- teardown (DT-17): espera (bounded) o swapoff em voo, loga honesto, zera ambos.
-    // Aqui todas as conexões NBD já caíram → ninguém lê a VRAM por NBD → zerar é safe.
+    // --- teardown (DT-17): waits (bounded) for the swapoff in flight, logs honestly, zeroes both.
+    // Here all NBD connections have already dropped → no one reads VRAM via NBD → zeroing is safe.
     if let Some(rx) = demote_rx.take() {
         match rx.recv_timeout(std::time::Duration::from_secs(5)) {
             Ok(true) => {
@@ -599,37 +599,37 @@ fn run_nbd<P: VramProvider>(
         }
     }
     let zeroed = backend.zero();
-    let _ = probe.zero(); // DT-12/DT-17: zera tambem a regiao-canario (§11)
+    let _ = probe.zero(); // DT-12/DT-17: zeroes the canary-region as well (§11)
     let _ = std::fs::remove_file(path);
     zeroed?;
     eprintln!("[ramsharedd] encerrado (VRAM zerada)");
     Ok(())
 }
 
-/// Peças do control-plane do broker que o worker (data-plane) consome. Backend-agnóstico
-/// (vale p/ VRAM e RAM) — só o backend e a residência diferem entre os modos.
+/// Broker control-plane parts consumed by the worker (data-plane). Backend-agnostic
+/// (applies to VRAM and RAM) — only backend and residency differ between modes.
 struct BrokerRuntime {
     geom: Vec<(u64, u64)>,
     jobs_rx: std::sync::mpsc::Receiver<WMsg>,
     demote_tx: std::sync::mpsc::Sender<DemoteReason>,
     shutdown: std::sync::Arc<AtomicBool>,
     broker: std::thread::JoinHandle<()>,
-    /// Contadores de IO por slice (telemetria RF-1): o worker incrementa, o broker lê no `Status`.
-    slice_io: std::sync::Arc<Vec<SliceIoCounters>>,
-    /// Gauge de VRAM (RF-3): a closure de residência publica free/total; o broker lê no tick.
-    vram: std::sync::Arc<VramGauge>,
+    /// IO counters per slice (telemetry RF-1): worker increments, broker reads in `Status`.
+    pub slice_io: std::sync::Arc<Vec<SliceIoCounters>>,
+    /// VRAM Gauge (RF-3): the residency closure publishes free/total; broker reads on tick.
+    pub vram: std::sync::Arc<VramGauge>,
 }
 
-/// Tolerância da reconciliação (DT-7, provisória — calibrar no P0).
+/// Reconciliation tolerance (DT-7, provisional — calibrate at P0).
 const RECON_TOL_FRAC: f64 = 0.10;
-/// Ticks consecutivos p/ confirmar um flag de reconciliação (histerese DT-12).
+/// Consecutive ticks to confirm a reconciliation flag (hysteresis DT-12).
 const RECON_STREAK: u32 = 3;
 
-/// Sobe o control-plane do broker (independente do backend): mapa de slices + geometria +
-/// exports NBD ("s0".."sN"), acceptors (Unix sempre; TCP se `--listen-nbd`) alimentando o
-/// MESMO canal `jobs` do worker, o árbitro (`spawn_broker`, que compartilha `jobs` p/ os
-/// `ZeroExport` de higiene DT-17 e consome o canal de DEMOTE) e a ponte de `SHUTDOWN`
-/// (handler de sinal só toca o estático async-signal-safe → espelhado no `Arc`).
+/// Starts the broker control-plane (independent of backend): slices map + geometry +
+/// NBD exports ("s0".."sN"), acceptors (always Unix; TCP if `--listen-nbd`) feeding the
+/// SAME `jobs` worker channel, the arbiter (`spawn_broker`, sharing `jobs` for the
+/// hygiene `ZeroExport` DT-17 and consuming the DEMOTE channel) and the `SHUTDOWN` bridge
+/// (signal handler only touches the async-signal-safe static variable → mirrored in `Arc`).
 #[allow(clippy::too_many_arguments)] // setup do control-plane: geometria + rede + telemetria
 fn broker_setup(
     slices: u16,
@@ -640,8 +640,8 @@ fn broker_setup(
     arbiter_addr: std::net::SocketAddr,
     telemetry_jsonl: Option<std::path::PathBuf>,
 ) -> Result<BrokerRuntime, Box<dyn std::error::Error>> {
-    // Mapa de slices: o índice do export (resolvido pelo handshake) == índice na geom == índice
-    // em exports (nomes "s{id}" idênticos aos que o broker emite no SwapOn).
+    // Slices map: export index (resolved by handshake) == geometry index == exports index
+    // ("s{id}" names identical to those emitted by the broker in SwapOn).
     let slice_map = SliceMap::new(slices, slice_bytes);
     let geom: Vec<(u64, u64)> = slice_map
         .slices()
@@ -710,7 +710,7 @@ fn broker_setup(
         },
         swap_prio: None,
         arbiter: ArbiterConfig::default(),
-        tick: Duration::from_secs(2), // SPEC §/DT-24: tick=2s (streak=5 → janela de 10s)
+        tick: Duration::from_secs(2), // SPEC §/DT-24: tick=2s (streak=5 → 10s window)
         slice_io: std::sync::Arc::clone(&slice_io),
         vram: std::sync::Arc::clone(&vram),
         tol_frac: RECON_TOL_FRAC,
@@ -725,7 +725,7 @@ fn broker_setup(
         std::sync::Arc::clone(&shutdown),
     )?;
     eprintln!("[ramsharedd] broker (árbitro) em {broker_addr}");
-    drop(jobs_tx); // os clones (acceptors + broker) mantêm o canal; o worker é dono do rx
+    drop(jobs_tx); // clones (acceptors + broker) keep the channel; worker owns the rx
 
     Ok(BrokerRuntime {
         geom,
@@ -738,12 +738,12 @@ fn broker_setup(
     })
 }
 
-/// Worker do broker (data-plane), genérico sobre o backend (VRAM ou RAM): serve cada `Job`
-/// via [`SliceView`] da geometria do export. DT-28: roda até `shutdown`, NÃO encerra quando as
-/// conexões NBD caem (o broker persiste). A residência é injetada por closure — VRAM passa o
-/// canário §9/§9.4; RAM passa `|_| None` (RAM não sofre eviction WDDM). Em DEMOTE, notifica o
-/// broker (`DemoteAll` a todos os tenants; a VRAM compartilhada compromete TODAS as slices) e
-/// para de amostrar. Devolve o backend p/ o teardown (wipe seguro é responsabilidade do dono).
+/// Broker worker (data-plane), generic over the backend (VRAM or RAM): serves each `Job`
+/// via [`SliceView`] of the export's geometry. DT-28: runs until `shutdown`, does NOT terminate when
+/// NBD connections drop (the broker persists). Residency is injected via closure — VRAM passes the
+/// canary §9/§9.4; RAM passes `|_| None` (RAM does not suffer WDDM eviction). On DEMOTE, notifies the
+/// broker (`DemoteAll` to all tenants; the shared VRAM compromises ALL slices) and
+/// stops sampling. Returns backend for teardown (safe wipe is the owner's responsibility).
 fn serve_broker_jobs<B: BlockBackend>(
     mut backend: B,
     rt: &BrokerRuntime,
@@ -763,7 +763,7 @@ fn serve_broker_jobs<B: BlockBackend>(
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         };
         let job = match msg {
-            // DT-28: conexões NBD indo e vindo NÃO encerram o daemon (o broker persiste).
+            // DT-28: NBD connections coming and going do NOT terminate the daemon (the broker persists).
             WMsg::Opened | WMsg::Closed => continue,
             WMsg::Job(job) => job,
             WMsg::ZeroExport { base, len, done } => {
@@ -774,8 +774,8 @@ fn serve_broker_jobs<B: BlockBackend>(
         };
 
         let touches = matches!(job.req.cmd, Command::Read | Command::Write);
-        // Geometria do export (handshake já resolveu nome→índice). Fallback defensivo: backend
-        // inteiro (não deve ocorrer — todo Job carrega um export válido).
+        // Export geometry (handshake already resolved name→index). Defensive fallback: entire
+        // backend (should not happen — every Job carries a valid export).
         let (base, len) = rt
             .geom
             .get(job.export)
@@ -793,7 +793,7 @@ fn serve_broker_jobs<B: BlockBackend>(
             disconnect: out.disconnect,
         });
 
-        // Telemetria RF-1: bytes/IO servidos nesta slice (atômico, hot path barato — gate ITEM-2).
+        // Telemetry RF-1: bytes/IO served on this slice (atomic, cheap hot path — gate ITEM-2).
         if touches && let Some(c) = rt.slice_io.get(job.export) {
             c.bytes_served
                 .fetch_add(u64::from(job.req.len), Ordering::Relaxed);
@@ -812,10 +812,10 @@ fn serve_broker_jobs<B: BlockBackend>(
     backend
 }
 
-/// Caminho broker VRAM (ITEM-8): fatia a VRAM em `slices` exports NBD servidos por Unix +
-/// (opcional) TCP, com o árbitro decidindo quem usa cada slice. O worker único é dono da
-/// VRAM/contexto CUDA e roda a residência §9/§9.4. Execução ao vivo é o gate qemu (`--backend
-/// ram`, ITEM-11) / civm (ITEM-12) — VRAM real não roda em qemu (sem GPU).
+/// VRAM broker path (ITEM-8): slices VRAM into `slices` NBD exports served by Unix +
+/// (optional) TCP, with the arbiter deciding who uses each slice. The single worker owns the
+/// VRAM/CUDA context and runs residency §9/§9.4. Live execution is the QEMU gate (`--backend
+/// ram`, ITEM-11) / civm (ITEM-12) — real VRAM does not run in QEMU (no GPU).
 #[allow(clippy::too_many_arguments)] // entry-point do daemon: config de geometria + rede + provider
 fn run_broker<P: VramProvider>(
     provider: P,
@@ -842,8 +842,8 @@ fn run_broker<P: VramProvider>(
     );
     let mut mem = provider.alloc(total as usize)?;
     mem.zero()?;
-    // CUDA/VRAM ja foram alocados acima -> seguro travar MCL_FUTURE de uma vez so.
-    lock_memory(force, true)?; // Disciplina 3: trava memória ANTES de servir swap
+    // CUDA/VRAM have already been allocated above -> safe to lock MCL_FUTURE all at once.
+    lock_memory(force, true)?; // Discipline 3: locks memory BEFORE serving swap
     let backend = VramBackend::new(mem, BLOCK_SIZE);
     eprintln!(
         "[ramsharedd] broker VRAM: {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE}",
@@ -851,7 +851,7 @@ fn run_broker<P: VramProvider>(
         total >> 20
     );
 
-    // Canário de residência (§9.4): região separada, não endereçável por NBD.
+    // Residency canary (§9.4): separated region, not addressable by NBD.
     let canary_region = provider.alloc(CANARY_BYTES)?;
     let mut probe = CanaryProbe::new(canary_region);
     let mut cadence = Cadence::new(CANARY_EVERY);
@@ -879,7 +879,7 @@ fn run_broker<P: VramProvider>(
             &mut probe,
             || {
                 let (f, t) = provider.mem_info().ok()?;
-                // RF-3/DT-5: publica o gauge p/ a reconciliação (free/total em bytes).
+                // RF-3/DT-5: publishes the gauge for reconciliation (free/total in bytes).
                 vram.free.store(f, Ordering::Relaxed);
                 vram.total.store(t, Ordering::Relaxed);
                 Some(f)
@@ -889,16 +889,16 @@ fn run_broker<P: VramProvider>(
 
     let _ = rt.broker.join();
     let zeroed = backend.zero();
-    let _ = probe.zero(); // DT-12/DT-17: zera também a região-canário
+    let _ = probe.zero(); // DT-12/DT-17: zeroes the canary-region as well
     let _ = std::fs::remove_file(Path::new(&sock));
     zeroed?;
     eprintln!("[ramsharedd] broker VRAM encerrado (VRAM zerada)");
     Ok(())
 }
 
-/// Caminho broker RAM (sem GPU): mesmo control-plane, backend em heap. Existe para validar a
-/// arbitragem + ciclo de vida do swap em **qemu** (ITEM-11), onde não há GPU. Sem residência
-/// (RAM não sofre eviction). `Cuda::load()` nunca é chamado → roda sem libcuda.
+/// RAM broker path (without GPU): same control-plane, backend in heap. Exists to validate the
+/// arbitration + swap lifecycle in **QEMU** (ITEM-11), where there is no GPU. Without residency
+/// (RAM does not suffer eviction). `Cuda::load()` is never called → runs without libcuda.
 fn run_broker_ram(
     slice_bytes: u64,
     slices: u16,
@@ -927,7 +927,7 @@ fn run_broker_ram(
         arbiter_addr,
         telemetry_jsonl,
     )?;
-    let _ = serve_broker_jobs(backend, &rt, |_| None); // RAM: sem residência
+    let _ = serve_broker_jobs(backend, &rt, |_| None); // RAM: without residency
 
     let _ = rt.broker.join();
     let _ = std::fs::remove_file(Path::new(&sock));
@@ -935,9 +935,9 @@ fn run_broker_ram(
     Ok(())
 }
 
-/// Caminho ublk: serve `/dev/ublkbN` direto (io_uring), sem socket. O worker DT-3 e
-/// dono da VRAM/contexto CUDA e roda a residencia (canario §9/§9.4); o DEMOTE faz
-/// swapoff do proprio device servido. O ciclo de vida vai ate SIGINT/SIGTERM.
+/// ublk path: serves `/dev/ublkbN` directly (io_uring), without socket. The DT-3 worker is the
+/// owner of the VRAM/CUDA context and runs the residency (canary §9/§9.4); DEMOTE performs
+/// swapoff of the served device itself. The lifecycle goes until SIGINT/SIGTERM.
 /// SPEC: docs/ublk-daemon-integration/SPEC.md F2.
 fn run_ublk(
     size: u64,
@@ -945,28 +945,28 @@ fn run_ublk(
     queue_depth: u16,
     backend: BackendKind,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // DT-11: ublk+Vulkan ainda nao implementado. O servidor de residencia ublk
-    // (spawn_server_dt3_vram_with_residency) e CUDA-fixo, nao generico sobre
-    // VramProvider; generifica-lo e refactor a parte (so validavel em host nativo).
-    // Falha cedo, antes de qualquer side-effect (add_device/mlockall).
+    // DT-11: ublk+Vulkan not yet implemented. The ublk residency server
+    // (spawn_server_dt3_vram_with_residency) is CUDA-fixed, not generic over
+    // VramProvider; generifying it and refactoring is a separate task (only validatable on native host).
+    // Fails early, before any side-effects (add_device/mlockall).
     if let BackendKind::Vulkan = backend {
         return Err(
-            "ublk com --backend vulkan ainda nao suportado (DT-11: servidor de \
-             residencia ublk e CUDA-fixo). Use --backend vram (CUDA), ou Vulkan \
+            "ublk with --backend vulkan not yet supported (DT-11: ublk \
+             residency server is CUDA-fixed). Use --backend vram (CUDA), or Vulkan \
              via --slices (broker) / --transport nbd."
                 .into(),
         );
     }
-    // TRAVA DE SEGURANCA: recusa servir ublk no WSL2. Um teardown malsucedido do
-    // daemon orfana o /dev/ublkbN -> I/O em D-state -> CONGELA o WSL2 (2026-06-09).
+    // SAFETY LOCK: refuses to serve ublk on WSL2. An unsuccessful daemon teardown
+    // orphans `/dev/ublkbN` -> I/O in D-state -> FREEZES WSL2 (2026-06-09).
     guard_not_wsl2()?;
-    // Disciplina 3: trava memoria + protege do OOM (processo todo; o worker e dono
-    // da CUDA, mas mlockall/oom_score_adj sao process-wide). So MCL_CURRENT aqui —
-    // MCL_FUTURE e' armado depois, em arm_future_lock, ver comentario la.
+    // Discipline 3: locks memory + protects from OOM (entire process; worker owns
+    // CUDA, but mlockall/oom_score_adj are process-wide). Only MCL_CURRENT here —
+    // MCL_FUTURE is armed later, in arm_future_lock, see comment there.
     lock_memory(force, false)?;
 
-    // SAFETY: registra handler async-signal-safe (so um store atomico) para encerrar
-    // de forma ordenada. signal() so guarda o ponteiro; o retorno antigo e ignorado.
+    // SAFETY: registers async-signal-safe handler (just an atomic store) to exit
+    // in an orderly fashion. signal() only stores the pointer; the old return is ignored.
     unsafe {
         signal(SIGINT, handle_shutdown);
         signal(SIGTERM, handle_shutdown);
@@ -985,15 +985,15 @@ fn run_ublk(
     let char_path = format!("/dev/ublkc{}", report.dev_id);
     let block_path = format!("/dev/ublkb{}", report.dev_id);
 
-    // Backend: VRAM (worker dono do contexto CUDA + residencia §9/§9.4; swap_dev = o
-    // proprio device, que o DEMOTE tira do swap) ou RAM (sem GPU; reusa o
-    // spawn_server_dt3 ja validado em-processo, sem residencia — para validar o ciclo
-    // de vida/teardown em qemu).
+    // Backend: VRAM (worker owning the CUDA context + residency §9/§9.4; swap_dev = the
+    // device itself, which DEMOTE removes from swap) or RAM (without GPU; reuses the
+    // spawn_server_dt3 already validated in-process, without residency — to validate the lifecycle/teardown
+    // in QEMU).
     let server = match backend {
         BackendKind::Vram => UblkHandle::Vram(ublk_server::spawn_server_dt3_vram_with_residency(
             &char_path,
             report.queue_depth,
-            BLOCK_SIZE as usize, // buf_size por tag: requests do device sao <= 4KB (smoke_auto)
+            BLOCK_SIZE as usize, // buf_size per tag: device requests are <= 4KB (smoke_auto)
             size as usize,
             BLOCK_SIZE,
             block_path.clone(),
@@ -1005,28 +1005,28 @@ fn run_ublk(
             BLOCK_SIZE as usize,
             RamBackend::new(size as usize),
         )?),
-        // Inalcancavel: barrado no inicio de run_ublk (DT-11). Defensivo, sem panic.
+        // Unreachable: barred at the beginning of run_ublk (DT-11). Defensive, without panic.
         BackendKind::Vulkan => {
-            return Err("ublk com --backend vulkan nao suportado (DT-11)".into());
+            return Err("ublk with --backend vulkan not supported (DT-11)".into());
         }
     };
-    // ANTI-BUG dxgkrnl (incidente 2026-07-03): NAO armamos MCL_FUTURE no caminho
-    // ublk+vram. O `dxg_map_iospace` do dxgkrnl mapeia VRAM em 2 passos (vm_mmap
-    // anonimo -> io_remap_pfn_range por cima); com MCL_FUTURE ativo, o passo 1
-    // pre-popula a VMA e o passo 2 bate em BUG_ON(!pte_none) -> kernel BUG com lock
-    // preso -> host trava. E o `spawn_server_dt3_vram_with_residency` roda o
-    // Cuda::load()/create_context() (= os dxg_map_iospace) numa THREAD que corre
-    // ASSINCRONA a este ponto — nao da pra "armar MCL_FUTURE depois do CUDA" com
-    // seguranca (haveria race: o MCL_FUTURE do main poderia cair no meio do
-    // create_context do worker). Por isso ficamos so em MCL_CURRENT (lock_memory
-    // acima, lock_future=false), que NAO afeta mmaps futuros -> zero colisao com o
-    // dxgkrnl. Confirmado por leitura de mm/memory.c + Camadas A/B.
+    // dxgkrnl ANTI-BUG (incident 2026-07-03): We do NOT arm MCL_FUTURE in the
+    // ublk+vram path. dxgkrnl's `dxg_map_iospace` maps VRAM in 2 steps (anonymous vm_mmap
+    // -> io_remap_pfn_range over it); with MCL_FUTURE active, step 1
+    // pre-populates the VMA and step 2 hits BUG_ON(!pte_none) -> kernel BUG with lock
+    // held -> host hangs. And `spawn_server_dt3_vram_with_residency` runs
+    // Cuda::load()/create_context() (= the dxg_map_iospace calls) in a THREAD that runs
+    // ASYNCHRONOUS to this point — it is not possible to "arm MCL_FUTURE after CUDA" with
+    // safety (there would be a race: main's MCL_FUTURE could fall in the middle of
+    // the worker's create_context). Therefore we stick only to MCL_CURRENT (lock_memory
+    // above, lock_future=false), which does NOT affect future mmaps -> zero collision with
+    // dxgkrnl. Confirmed by reading mm/memory.c + Layers A/B.
     //
-    // TRADE-OFF (Disciplina 3 / anti-deadlock RNF-1): buffers de I/O alocados DEPOIS
-    // deste ponto nao ficam travados por MCL_FUTURE. Sob pressao extrema de memoria
-    // isso reabre (em tese) o vetor de D-state. Mitigacao correta futura: mlock()
-    // explicito so nos buffers de residencia/staging (uring/canario), em vez do
-    // MCL_FUTURE cego. Ate la: rodar so supervisionado / prioridade de swap baixa.
+    // TRADE-OFF (Discipline 3 / anti-deadlock RNF-1): I/O buffers allocated AFTER
+    // this point are not locked by MCL_FUTURE. Under extreme memory pressure,
+    // this theoretically reopens the D-state vector. Correct future mitigation: explicit
+    // mlock() only on the residency/staging buffers (uring/canary), instead of the
+    // blind MCL_FUTURE. Until then: run only supervised / low swap priority.
     // SPEC: docs/reliability/BLACK-BOX-FORENSICS.md.
     eprintln!(
         "[ramsharedd] mlockall: MCL_CURRENT-only no caminho ublk+vram (anti-dxgkrnl-BUG; MCL_FUTURE desarmado de proposito)"
@@ -1039,17 +1039,17 @@ fn run_ublk(
         backend.label()
     );
     eprintln!("[ramsharedd] swapon: sudo swapon {block_path}");
-    eprintln!("[ramsharedd] Ctrl-C / SIGTERM para encerrar");
+    eprintln!("[ramsharedd] Ctrl-C / SIGTERM to exit");
 
-    // Aguarda o sinal de encerramento (poll da flag; sleep ignora EINTR).
+    // Waits for the shutdown signal (polling the flag; sleep ignores EINTR).
     while !SHUTDOWN.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(200));
     }
-    eprintln!("[ramsharedd] sinal recebido — encerrando");
+    eprintln!("[ramsharedd] signal received — exiting");
 
-    // Teardown ordenado: STOP_DEV aborta os FETCH -> o worker sai do loop (e zera a
-    // VRAM no fim, no caminho VRAM) -> join -> DEL_DEV. (Quem fez swapon deve swapoff
-    // antes: del_gendisk espera os openers do block device.)
+    // Orderly teardown: STOP_DEV aborts FETCHes -> worker exits loop (and zeroes
+    // VRAM at the end, in VRAM path) -> join -> DEL_DEV. (Whoever did swapon must swapoff
+    // before: del_gendisk waits for the openers of the block device.)
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id)?;
     server.join()?;
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id)?;
@@ -1057,21 +1057,21 @@ fn run_ublk(
     Ok(())
 }
 
-/// Recusa servir ublk no WSL2 (a menos do override consciente
-/// `RAMSHARED_ALLOW_UBLK_ON_WSL2=1`). Motivo: o teardown do daemon ublk standalone,
-/// se falhar (corrida SIGTERM-tarde -> SIGKILL, ou bug em STOP_DEV/join), deixa o
-/// `/dev/ublkbN` SEM servidor com I/O em voo -> processos em D-state no caminho de
-/// writeback/memoria -> com `mlockall(MCL_FUTURE)` + `drop_caches` o kernel nao
-/// progride -> stall global -> WSL2 CONGELA (incidente 2026-06-09). Validar o daemon
-/// completo so em VM/qemu (`scripts/kernel/qemu-validate.sh`), onde um stall e
-/// recuperavel sem derrubar o host.
+/// Refuses to serve ublk on WSL2 (unless conscious override
+/// `RAMSHARED_ALLOW_UBLK_ON_WSL2=1`). Reason: teardown of the standalone ublk daemon,
+/// if it fails (late SIGTERM -> SIGKILL race, or bug in STOP_DEV/join), leaves
+/// `/dev/ublkbN` WITHOUT a server with I/O in flight -> processes in D-state in the
+/// writeback/memory path -> with `mlockall(MCL_FUTURE)` + `drop_caches` the kernel does not
+/// progress -> global stall -> WSL2 FREEZES (incident 2026-06-09). Validate the complete
+/// daemon only in VM/QEMU (`scripts/kernel/qemu-validate.sh`), where a stall is
+/// recoverable without dropping the host.
 fn guard_not_wsl2() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::var("RAMSHARED_ALLOW_UBLK_ON_WSL2")
         .ok()
         .as_deref()
         == Some("1")
     {
-        eprintln!("[ramsharedd] AVISO: RAMSHARED_ALLOW_UBLK_ON_WSL2=1 — trava do WSL2 ignorada");
+        eprintln!("[ramsharedd] WARNING: RAMSHARED_ALLOW_UBLK_ON_WSL2=1 — WSL2 lock ignored");
         return Ok(());
     }
     let osrelease = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
@@ -1088,16 +1088,16 @@ fn guard_not_wsl2() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Trava a memoria (mlockall) + protege do OOM killer (oom_score_adj=-1000) ANTES de
-/// servir swap (Disciplina 3, anti-deadlock). `--force` segue sem a protecao, avisando.
+/// Locks memory (mlockall) + protects from OOM killer (oom_score_adj=-1000) BEFORE
+/// serving swap (Discipline 3, anti-deadlock). `--force` continues without protection, warning.
 ///
-/// `lock_future`: inclui `MCL_FUTURE` (trava tambem mmaps futuros) ou so `MCL_CURRENT`
-/// (so o que ja esta mapeado agora). Os caminhos NBD/broker (`run_nbd`/`run_broker`)
-/// chamam isto DEPOIS de `provider.alloc()` — o contexto CUDA e a VRAM em si ja foram
-/// alocados, entao `MCL_FUTURE` de uma vez e seguro. O caminho `run_ublk` com backend
-/// VRAM e diferente: precisa chamar com `lock_future=false` ANTES do backend
-/// inicializar CUDA, e so armar `MCL_FUTURE` depois via `arm_future_lock` — ver o
-/// comentario la (incidente 2026-07-03: kernel BUG por colisao com o dxgkrnl).
+/// `lock_future`: includes `MCL_FUTURE` (locks future mmaps too) or only `MCL_CURRENT`
+/// (only what is already mapped now). NBD/broker paths (`run_nbd`/`run_broker`)
+/// call this AFTER `provider.alloc()` — the CUDA context and VRAM itself have already been
+/// allocated, so `MCL_FUTURE` at once is safe. The `run_ublk` path with VRAM backend
+/// is different: needs to be called with `lock_future=false` BEFORE the backend
+/// initializes CUDA, and only arm `MCL_FUTURE` later via `arm_future_lock` — see the
+/// comment there (incident 2026-07-03: kernel BUG due to collision with dxgkrnl).
 fn lock_memory(force: bool, lock_future: bool) -> Result<(), Box<dyn std::error::Error>> {
     // SAFETY: mlockall e' uma syscall sem efeitos de memoria inseguros.
     let flags = if lock_future {
@@ -1107,28 +1107,28 @@ fn lock_memory(force: bool, lock_future: bool) -> Result<(), Box<dyn std::error:
     };
     let locked = unsafe { mlockall(flags) } == 0;
     if !locked && !force {
-        return Err("mlockall falhou; rode como root ou use --force".into());
+        return Err("mlockall failed; run as root or use --force".into());
     }
     let oom_ok = std::fs::write("/proc/self/oom_score_adj", "-1000").is_ok();
     if !oom_ok && !force {
-        return Err("nao consegui setar oom_score_adj=-1000; rode como root ou use --force".into());
+        return Err("could not set oom_score_adj=-1000; run as root or use --force".into());
     }
     if locked && oom_ok {
-        eprintln!("[ramsharedd] memoria travada (mlockall) + oom_score_adj=-1000");
+        eprintln!("[ramsharedd] memory locked (mlockall) + oom_score_adj=-1000");
     } else {
         eprintln!(
-            "[ramsharedd] AVISO --force: mlockall={} oom_score_adj={} (anti-deadlock NAO garantido)",
-            if locked { "ok" } else { "FALHOU" },
-            if oom_ok { "ok" } else { "FALHOU" }
+            "[ramsharedd] WARNING --force: mlockall={} oom_score_adj={} (anti-deadlock NOT guaranteed)",
+            if locked { "ok" } else { "FAILED" },
+            if oom_ok { "ok" } else { "FAILED" }
         );
     }
     Ok(())
 }
 
-// NOTA: `arm_future_lock` (armar MCL_FUTURE pos-init) foi REMOVIDO — tinha race com a
-// init CUDA assincrona do worker (spawn_server_dt3_vram_with_residency), que teria
-// re-disparado o kernel BUG do dxgkrnl. O caminho ublk+vram fica so em MCL_CURRENT.
-// Ver o comentario "ANTI-BUG dxgkrnl" em run_ublk.
+// NOTE: `arm_future_lock` (arm future lock post-init) was REMOVED — had a race with the
+// asynchronous CUDA init of the worker (spawn_server_dt3_vram_with_residency), which would have
+// re-triggered the dxgkrnl kernel BUG. The ublk+vram path remains in MCL_CURRENT only.
+// See the "dxgkrnl ANTI-BUG" comment in run_ublk.
 
 #[cfg(test)]
 mod tests {
@@ -1143,7 +1143,7 @@ mod tests {
 
     #[test]
     fn private_listen_rejects_unspecified() {
-        // RNF-2 / #5 abort trigger: bind público recusado ANTES de qualquer bind().
+        // RNF-2 / #5 abort trigger: public bind rejected BEFORE any bind().
         assert!(parse_private_listen("0.0.0.0:10809").is_err());
         assert!(parse_private_listen("tcp://0.0.0.0:7777").is_err());
         assert!(parse_private_listen("[::]:7777").is_err());
@@ -1170,7 +1170,7 @@ mod tests {
 
     #[test]
     fn slice_flags_cap_protects_status_line() {
-        // MED-1: --slices acima de MAX_SLICES estouraria o StatusReply (MAX_LINE_BYTES 64 KiB).
+        // MED-1: --slices above MAX_SLICES would blow the StatusReply (MAX_LINE_BYTES 64 KiB).
         assert!(validate_slice_flags(MAX_SLICES, 64, false).is_ok());
         assert!(validate_slice_flags(MAX_SLICES + 1, 64, false).is_err());
     }

@@ -1,8 +1,8 @@
-//! e2e in-process do broker (ITEM-10): `spawn_broker` real + agentes falsos por TCP (loopback) +
-//! um worker drenador do canal `jobs`. Valida a **fiação de IO** (acceptor → reader → core → tick
-//! → dispatch → writer → socket); a lógica de decisão já é coberta pelos testes puros do
-//! `BrokerCore`. **Tudo in-process** (threads + loopback), nenhum daemon standalone — seguro no
-//! WSL2 (regra de sessão). Rodar com `timeout` (deadlock vira teste-que-estoura, não freeze).
+//! e2e in-process broker (ITEM-10): real `spawn_broker` + fake agents over TCP (loopback) +
+//! a worker draining the `jobs` channel. Validates **IO wiring** (acceptor → reader → core → tick
+//! → dispatch → writer → socket); decision logic is already covered by pure tests of
+//! `BrokerCore`. **Everything in-process** (threads + loopback), no standalone daemon — safe on
+//! WSL2 (session rule). Run with `timeout` (deadlock becomes a test-that-blows-up, not a freeze).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::io::BufReader;
@@ -24,7 +24,7 @@ use ramshared_wsl2d::{SliceIoCounters, VramGauge};
 
 const SLICE: u64 = 64 * 1024 * 1024;
 
-/// Sobe o broker + worker drenador; derruba tudo no `Drop`.
+/// Starts the broker + draining worker; drops everything on `Drop`.
 struct Harness {
     addr: SocketAddr,
     shutdown: Arc<AtomicBool>,
@@ -68,7 +68,7 @@ fn setup(k: u16, tick_ms: u64) -> Harness {
         Arc::clone(&shutdown),
     )
     .unwrap();
-    // Worker: drena o canal jobs; confirma os ZeroExport (higiene) com done(true).
+    // Worker: drains the jobs channel; confirms ZeroExport (hygiene) with done(true).
     std::thread::spawn(move || {
         for m in jobs_rx.iter() {
             if let WMsg::ZeroExport { done, .. } = m {
@@ -103,7 +103,7 @@ fn register(s: &mut TcpStream, name: &str) {
     .unwrap();
 }
 
-/// Lê mensagens até `pred` casar (ou timeout/EOF → None).
+/// Reads messages until `pred` matches (or timeout/EOF → None).
 fn read_until(r: &mut BufReader<TcpStream>, pred: impl Fn(&Msg) -> bool) -> Option<Msg> {
     for _ in 0..30 {
         match read_msg(r) {
@@ -128,7 +128,7 @@ fn e2e_register_and_ack() {
             read_until(&mut r, |m| matches!(m, Msg::Registered { .. })),
             Some(Msg::Registered { .. })
         ),
-        "deve receber Registered"
+        "should receive Registered"
     );
     write_msg(
         &mut s,
@@ -144,20 +144,20 @@ fn e2e_register_and_ack() {
             read_until(&mut r, |m| matches!(m, Msg::Ack)),
             Some(Msg::Ack)
         ),
-        "Psi deve receber Ack (heartbeat DT-18)"
+        "Psi must receive Ack (heartbeat DT-18)"
     );
 }
 
 #[test]
 fn e2e_tick_assigns_swapon_over_socket() {
-    // 1 slice, 1 agente → o tick (round-robin) assina s0 e envia SwapOn pelo socket.
+    // 1 slice, 1 agent → tick (round-robin) assigns s0 and sends SwapOn via socket.
     let h = setup(1, 30);
     let (mut s, mut r) = connect(h.addr);
     register(&mut s, "solo");
     let m = read_until(&mut r, |m| matches!(m, Msg::SwapOn { .. }));
     assert!(
         matches!(m, Some(Msg::SwapOn { slice: 0, .. })),
-        "tick deve assinar s0 e enviar SwapOn (fiação IO completa)"
+        "tick must assign s0 and send SwapOn (complete IO wiring)"
     );
 }
 
@@ -168,20 +168,20 @@ fn e2e_duplicate_register_closes_second() {
     register(&mut a, "dup");
     read_until(&mut ar, |m| matches!(m, Msg::Registered { .. }));
     let (mut b, mut br) = connect(h.addr);
-    register(&mut b, "dup"); // mesmo nome, outra conexão → duplicado
+    register(&mut b, "dup"); // same name, another connection → duplicate
     let m = read_until(&mut br, |m| matches!(m, Msg::Error { .. }));
     assert!(
         matches!(m, Some(Msg::Error { .. })),
-        "registro duplicado deve receber Error e a sessão fecha (CloseSession)"
+        "duplicate registration must receive Error and the session closes (CloseSession)"
     );
 }
 
 #[test]
 fn e2e_psi_flood_does_not_starve_arbiter_tick() {
-    // Regressão (bug pego no e2e cross-host civm): sob `Psi` em taxa alta (>> tick), o Tick do
-    // árbitro NÃO pode ser starvado — senão `AssignFree` nunca roda e o tenant nunca recebe
-    // `SwapOn`. O `core_loop` dispara o Tick por deadline de wall-clock, não só no timeout do
-    // recv. Aqui o agente floda `Psi` a cada ~5ms (tick=50ms) e ainda assim deve receber SwapOn.
+    // Regression (bug caught in cross-host civm e2e): under high-rate `Psi` (>> tick), the Arbiter's
+    // Tick MUST NOT be starved — otherwise `AssignFree` never runs and the tenant never receives
+    // `SwapOn`. The `core_loop` fires the Tick by wall-clock deadline, not just on recv
+    // timeout. Here the agent floods `Psi` every ~5ms (tick=50ms) and should still receive SwapOn.
     let h = setup(1, 50);
     let (mut s, mut r) = connect(h.addr);
     register(&mut s, "flood");
@@ -210,6 +210,6 @@ fn e2e_psi_flood_does_not_starve_arbiter_tick() {
     let _ = flood.join();
     assert!(
         matches!(got, Some(Msg::SwapOn { slice: 0, .. })),
-        "árbitro deve assinar s0 mesmo sob flood de Psi (Tick não pode ser starvado)"
+        "arbiter must assign s0 even under Psi flood (Tick cannot be starved)"
     );
 }

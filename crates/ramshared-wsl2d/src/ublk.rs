@@ -1,18 +1,18 @@
-//! UAPI mínima do ublk usada pela Fase B.
+//! Minimal ublk UAPI used by Phase B.
 //!
-//! Fonte primária: `include/uapi/linux/ublk_cmd.h` do kernel WSL2 custom
-//! `6.6.123.2-microsoft-standard-WSL2+`. Este módulo só espelha constantes,
-//! layouts e helpers puros; abertura de `/dev/ublk-control` e `io_uring` ficam
-//! para recortes posteriores.
+//! Primary source: `include/uapi/linux/ublk_cmd.h` of the custom WSL2 kernel
+//! `6.6.123.2-microsoft-standard-WSL2+`. This module only mirrors constants,
+//! layouts, and pure helpers; opening `/dev/ublk-control` and `io_uring` are left
+//! for subsequent segments.
 
 use ramshared_block::{Command, Request};
 
 pub const UBLK_SECTOR_SIZE: u64 = 512;
 
-/// Tamanho de `struct ublksrv_io_desc` (4+4+8+8). Espelha `size_of::<IoDesc>()`.
+/// Size of `struct ublksrv_io_desc` (4+4+8+8). Mirrors `size_of::<IoDesc>()`.
 pub const UBLK_IO_DESC_SIZE: usize = 24;
 
-/// Tamanho de `struct ublk_params` (verificado via cc). Espelha `size_of::<Params>()`.
+/// Size of `struct ublk_params` (verified via cc). Mirrors `size_of::<Params>()`.
 pub const UBLK_PARAMS_LEN: usize = 112;
 
 pub const UBLK_CMD_ADD_DEV: u32 = 0x04;
@@ -34,9 +34,9 @@ pub const UBLK_IO_FETCH_REQ: u32 = 0x20;
 pub const UBLK_IO_COMMIT_AND_FETCH_REQ: u32 = 0x21;
 pub const UBLK_IO_NEED_GET_DATA: u32 = 0x22;
 
-// Ops de IO codificadas (`_IOWR('u', nr, struct ublksrv_io_cmd)`), exigidas quando
-// o device e criado com `UBLK_F_CMD_IOCTL_ENCODE`. Valores verificados via `cc`
-// contra `include/uapi/linux/ublk_cmd.h` do kernel custom 6.6.123.2.
+// Encoded IO ops (`_IOWR('u', nr, struct ublksrv_io_cmd)`), required when
+// the device is created with `UBLK_F_CMD_IOCTL_ENCODE`. Values verified via `cc`
+// against `include/uapi/linux/ublk_cmd.h` of the custom kernel 6.6.123.2.
 pub const UBLK_U_IO_FETCH_REQ: u32 = 0xc010_7520;
 pub const UBLK_U_IO_COMMIT_AND_FETCH_REQ: u32 = 0xc010_7521;
 pub const UBLK_U_IO_NEED_GET_DATA: u32 = 0xc010_7522;
@@ -235,8 +235,8 @@ impl IoCompletion {
 }
 
 impl IoDesc {
-    /// Decodifica um `ublksrv_io_desc` a partir dos bytes mapeados do char device
-    /// (layout `repr(C)` nativo). Retorna `None` se o buffer tiver menos de 24 bytes.
+    /// Decodes a `ublksrv_io_desc` from the mapped bytes of the char device
+    /// (native `repr(C)` layout). Returns `None` if the buffer has less than 24 bytes.
     pub fn from_ne_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() < UBLK_IO_DESC_SIZE {
             return None;
@@ -315,8 +315,8 @@ pub struct IoCmd {
 }
 
 impl IoCmd {
-    /// Monta o `ublksrv_io_cmd` de `FETCH_REQ`: aponta o `addr` para o buffer da
-    /// tag e deixa `result` zerado (ignorado pelo driver no fetch inicial).
+    /// Assembles the `ublksrv_io_cmd` of `FETCH_REQ`: points the `addr` to the tag
+    /// buffer and leaves `result` zeroed (ignored by the driver on initial fetch).
     pub fn fetch(q_id: u16, tag: u16, buffer_addr: u64) -> Self {
         Self {
             q_id,
@@ -326,8 +326,8 @@ impl IoCmd {
         }
     }
 
-    /// Serializa o comando no layout `repr(C)` de 16 bytes esperado pelo driver,
-    /// para copia direta no campo `cmd` da SQE de `UringCmd80`.
+    /// Serializes the command in the 16-byte `repr(C)` layout expected by the driver,
+    /// for direct copy into the `cmd` field of the SQE of `UringCmd80`.
     pub fn to_bytes(self) -> [u8; 16] {
         let mut bytes = [0u8; 16];
         bytes[0..2].copy_from_slice(&self.q_id.to_ne_bytes());
@@ -393,8 +393,8 @@ pub struct Params {
 }
 
 impl Params {
-    /// Monta `ublk_params` só com o tipo BASIC: tamanho do disco em setores de 512 B
-    /// e os shifts de block size lógico/físico. Demais tipos ficam zerados.
+    /// Assembles `ublk_params` only with type BASIC: disk size in 512 B sectors
+    /// and logical/physical block size shifts. Other types remain zeroed.
     pub fn basic_disk(dev_sectors: u64, logical_bs_shift: u8, physical_bs_shift: u8) -> Self {
         Self {
             len: UBLK_PARAMS_LEN as u32,
@@ -411,11 +411,11 @@ impl Params {
         }
     }
 
-    /// Define `basic.max_sectors` (maior request, em setores de 512 B) e devolve um
-    /// novo `Params` — habilita requests multi-página. O kernel valida
-    /// `max_sectors <= dev_info.max_io_buf_bytes >> 9` no `SET_PARAMS` e usa o valor
-    /// como `max_hw_sectors` do block device; o `buf_size` por-tag do servidor deve
-    /// ser `>= max_sectors * 512`. Imutável (não muta `self`).
+    /// Defines `basic.max_sectors` (largest request, in 512 B sectors) and returns a
+    /// new `Params` — enables multi-page requests. The kernel validates
+    /// `max_sectors <= dev_info.max_io_buf_bytes >> 9` in `SET_PARAMS` and uses the value
+    /// as `max_hw_sectors` of the block device; the per-tag `buf_size` of the server must
+    /// be `>= max_sectors * 512`. Immutable (does not mutate `self`).
     pub fn with_max_sectors(self, max_sectors: u32) -> Self {
         Self {
             basic: ParamBasic {
@@ -426,8 +426,8 @@ impl Params {
         }
     }
 
-    /// Serializa no layout `repr(C)` de 112 B de `struct ublk_params` (offsets
-    /// verificados via `cc`). Sem `unsafe`.
+    /// Serializes to the 112 B `repr(C)` layout of `struct ublk_params` (offsets
+    /// verified via `cc`). Safe (no `unsafe`).
     pub fn to_bytes(&self) -> [u8; UBLK_PARAMS_LEN] {
         let mut b = [0u8; UBLK_PARAMS_LEN];
         b[0..4].copy_from_slice(&self.len.to_ne_bytes());
@@ -463,7 +463,7 @@ impl Params {
         b
     }
 
-    /// Decodifica `struct ublk_params` (inverso de [`Params::to_bytes`]).
+    /// Decodes `struct ublk_params` (inverse of [`Params::to_bytes`]).
     pub fn from_bytes(b: &[u8; UBLK_PARAMS_LEN]) -> Self {
         let mut reserved = [0u8; 20];
         reserved.copy_from_slice(&b[88..108]);

@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)] // teste: unwrap/expect é idiomático
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test: unwrap/expect is idiomatic
 
 use ramshared_block::BlockBackend;
 use ramshared_wsl2d::{RamBackend, ResidencyConfig, ublk, ublk_control, ublk_server};
@@ -28,18 +28,18 @@ fn serves_read_from_ram_backend_over_block_device() {
     )
     .expect("ublk SET_PARAMS");
 
-    // Backend de RAM com um padrao conhecido no setor de teste (fora do partition scan).
+    // RAM backend with a known pattern in the test sector (outside the partition scan).
     let mut backend = RamBackend::new((dev_sectors * SECTOR) as usize);
     let pattern: Vec<u8> = (0..SECTOR).map(|i| (i % 251) as u8).collect();
     backend
         .write_at(TEST_SECTOR * SECTOR, &pattern)
-        .expect("pre-carrega o backend");
+        .expect("pre-load the backend");
 
     let char_path = format!("/dev/ublkc{}", report.dev_id);
     let block_path = format!("/dev/ublkb{}", report.dev_id);
 
-    // Sobe a thread servidora (submete FETCH + loop). Ela serve o partition scan que
-    // o START_DEV dispara, por isso precisa estar viva antes/durante o START_DEV.
+    // Starts the server thread (submits FETCH + loop). It serves the partition scan that
+    // START_DEV triggers, so it needs to be alive before/during START_DEV.
     let server = ublk_server::spawn_server(&char_path, report.queue_depth, 4096, backend)
         .expect("spawn server");
 
@@ -47,19 +47,19 @@ fn serves_read_from_ram_backend_over_block_device() {
         .expect("ublk START_DEV");
     assert!(
         fs::metadata(&block_path).is_ok(),
-        "{block_path} deveria existir apos START_DEV"
+        "{block_path} should exist after START_DEV"
     );
 
-    // READ do setor de teste via block device -> loop serve do backend -> padrao.
+    // READ of the test sector via block device -> loop serves from the backend -> pattern.
     let got = read_sector(&block_path, TEST_SECTOR);
     assert_eq!(
         got, pattern,
-        "READ deve devolver o padrao gravado no backend"
+        "READ must return the pattern written to the backend"
     );
 
-    // Teardown: STOP_DEV remove o gendisk e aborta os FETCH -> a thread sai do loop.
+    // Teardown: STOP_DEV removes the gendisk and aborts the FETCHes -> the thread exits the loop.
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
-    server.join().expect("server loop terminou ok");
+    server.join().expect("server loop terminated ok");
 
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
     guard.disarm();
@@ -87,7 +87,7 @@ fn serves_write_into_ram_backend_over_block_device() {
     let backend = RamBackend::new(disk_size);
     let char_path = format!("/dev/ublkc{}", report.dev_id);
     let block_path = format!("/dev/ublkb{}", report.dev_id);
-    // Buffer por tag cobre o disco inteiro: qualquer request de writeback cabe.
+    // Buffer per tag covers the entire disk: any writeback request fits.
     let server = ublk_server::spawn_server(&char_path, report.queue_depth, disk_size, backend)
         .expect("spawn server");
 
@@ -95,22 +95,22 @@ fn serves_write_into_ram_backend_over_block_device() {
         .expect("ublk START_DEV");
     assert!(
         fs::metadata(&block_path).is_ok(),
-        "{block_path} deveria existir"
+        "{block_path} should exist"
     );
 
-    // WRITE de um padrao no setor de teste via block device + fsync (forca writeback).
+    // WRITE of a pattern in the test sector via block device + fsync (forces writeback).
     let pattern: Vec<u8> = (0..SECTOR).map(|i| ((i * 7 + 1) % 251) as u8).collect();
     write_sector(&block_path, TEST_SECTOR, &pattern);
 
-    // Teardown: a thread devolve o backend para inspecao direta (sem page cache).
+    // Teardown: the thread returns the backend for direct inspection (without page cache).
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
-    let backend = server.join().expect("server loop terminou ok");
+    let backend = server.join().expect("server loop terminated ok");
 
     let mut got = vec![0u8; SECTOR as usize];
     backend
         .read_at(TEST_SECTOR * SECTOR, &mut got)
-        .expect("le o backend devolvido");
-    assert_eq!(got, pattern, "o WRITE deve ter chegado ao backend");
+        .expect("read the returned backend");
+    assert_eq!(got, pattern, "the WRITE must have reached the backend");
 
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
     guard.disarm();
@@ -138,12 +138,12 @@ fn dt3_serves_read_from_ram_backend_over_block_device() {
     let pattern: Vec<u8> = (0..SECTOR).map(|i| (i % 251) as u8).collect();
     backend
         .write_at(TEST_SECTOR * SECTOR, &pattern)
-        .expect("pre-carrega o backend");
+        .expect("pre-load the backend");
 
     let char_path = format!("/dev/ublkc{}", report.dev_id);
     let block_path = format!("/dev/ublkb{}", report.dev_id);
 
-    // Arquitetura DT-3: thread ring owner + thread worker (dona do backend).
+    // DT-3 Architecture: ring owner thread + worker thread (owning the backend).
     let server = ublk_server::spawn_server_dt3(&char_path, report.queue_depth, 4096, backend)
         .expect("spawn DT-3 server");
 
@@ -151,14 +151,14 @@ fn dt3_serves_read_from_ram_backend_over_block_device() {
         .expect("ublk START_DEV");
     assert!(
         fs::metadata(&block_path).is_ok(),
-        "{block_path} deveria existir"
+        "{block_path} should exist"
     );
 
     let got = read_sector(&block_path, TEST_SECTOR);
-    assert_eq!(got, pattern, "DT-3 READ deve devolver o padrao do backend");
+    assert_eq!(got, pattern, "DT-3 READ must return the backend pattern");
 
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
-    let _backend = server.join().expect("DT-3 server terminou ok");
+    let _backend = server.join().expect("DT-3 server terminated ok");
 
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
     guard.disarm();
@@ -187,7 +187,7 @@ fn dt3_serves_io_from_vram_over_block_device() {
     let block_path = format!("/dev/ublkb{}", report.dev_id);
     let vram_bytes = (dev_sectors * SECTOR) as usize;
 
-    // Worker DT-3 dono da VRAM (cria o stack CUDA na própria thread).
+    // Worker DT-3 owner of VRAM (creates the CUDA stack on its own thread).
     let server = ublk_server::spawn_server_dt3_vram(
         &char_path,
         report.queue_depth,
@@ -201,19 +201,19 @@ fn dt3_serves_io_from_vram_over_block_device() {
         .expect("ublk START_DEV");
     assert!(
         fs::metadata(&block_path).is_ok(),
-        "{block_path} deveria existir"
+        "{block_path} should exist"
     );
 
-    // WRITE bloco alinhado -> fsync -> drop cache -> READ deve vir da VRAM.
+    // WRITE aligned block -> fsync -> drop cache -> READ must come from VRAM.
     let off = 8192u64; // alinhado ao block size 4096
     let pattern: Vec<u8> = (0..block_size).map(|i| ((i * 7 + 3) % 251) as u8).collect();
     write_block(&block_path, off, &pattern);
     drop_page_cache();
     let got = read_block(&block_path, off, block_size as usize);
-    assert_eq!(got, pattern, "READ deve devolver da VRAM o bloco escrito");
+    assert_eq!(got, pattern, "READ must return from VRAM the block written");
 
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
-    server.join().expect("DT-3 VRAM server terminou ok");
+    server.join().expect("DT-3 VRAM server terminated ok");
 
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
     guard.disarm();
@@ -225,14 +225,14 @@ fn dt3_serves_io_from_vram_over_block_device() {
 #[ignore = "requires root + CUDA GPU; serves /dev/ublkbN from VRAM with queue_depth>1 + concurrent O_DIRECT readers, no swap"]
 fn dt3_vram_serves_concurrent_io_with_queue_depth_gt1() {
     let before = ublk_nodes();
-    // Fila unica (so servimos a fila 0), mas queue_depth>1: ate N tags em voo.
+    // Single queue (only serve queue 0), but queue_depth>1: up to N tags in flight.
     let mut spec = ublk_control::DeviceSpec::smoke_auto();
     spec.queue_depth = 4;
     let report = ublk_control::add_device(UBLK_CONTROL, spec).expect("ublk ADD_DEV");
     let mut guard = DeviceGuard::new(report.dev_id);
     assert!(
         report.queue_depth >= 2,
-        "kernel deu queue_depth={}; o teste de concorrencia precisa de >=2",
+        "kernel gave queue_depth={}; concurrency test needs >=2",
         report.queue_depth
     );
 
@@ -251,8 +251,8 @@ fn dt3_vram_serves_concurrent_io_with_queue_depth_gt1() {
 
     let server = ublk_server::spawn_server_dt3_vram(
         &char_path,
-        report.queue_depth, // pool no-alloc pre-aquece `queue_depth` buffers
-        vram_bytes,         // buffer por tag (>= maior request possivel)
+        report.queue_depth, // no-alloc pool pre-warms `queue_depth` buffers
+        vram_bytes,         // buffer per tag (>= largest request possible)
         vram_bytes,
         block_size,
     )
@@ -260,7 +260,7 @@ fn dt3_vram_serves_concurrent_io_with_queue_depth_gt1() {
     ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())
         .expect("ublk START_DEV");
 
-    // Escreve 16 blocos com padrao distinto por indice e tira do page cache.
+    // Writes 16 blocks with distinct pattern per index and removes from page cache.
     let bs = block_size as usize;
     let n_blocks = 16usize;
     for i in 0..n_blocks {
@@ -268,10 +268,10 @@ fn dt3_vram_serves_concurrent_io_with_queue_depth_gt1() {
     }
     drop_page_cache();
 
-    // 4 threads leem em round-robin via O_DIRECT, em varias rodadas, conferindo cada
-    // bloco. Com queue_depth>=2 isso mantem multiplos tags em voo simultaneamente —
-    // exercita o pool de buffers no-alloc com in_flight>1 (aliasing/troca de buffer
-    // entre tags corromperia os dados ou causaria deadlock).
+    // 4 threads read in round-robin via O_DIRECT, in several rounds, checking each
+    // block. With queue_depth>=2 this keeps multiple tags in flight simultaneously —
+    // exercises the no-alloc buffer pool with in_flight>1 (aliasing/buffer swap
+    // between tags would corrupt data or cause deadlock).
     const O_DIRECT: i32 = 0o40000;
     let workers: Vec<_> = (0..4u64)
         .map(|t| {
@@ -292,7 +292,7 @@ fn dt3_vram_serves_concurrent_io_with_queue_depth_gt1() {
                         assert_eq!(
                             &raw[pad..pad + bs],
                             block_pattern(i, bs).as_slice(),
-                            "bloco {i} corrompido sob concorrencia qd>1"
+                            "block {i} corrupted under concurrency qd>1"
                         );
                         i += 4;
                     }
@@ -302,25 +302,25 @@ fn dt3_vram_serves_concurrent_io_with_queue_depth_gt1() {
         .collect();
     for w in workers {
         w.join()
-            .expect("leitor concorrente falhou (corrupcao/deadlock qd>1)");
+            .expect("concurrent reader failed (corruption/deadlock qd>1)");
     }
 
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
-    server.join().expect("DT-3 VRAM server terminou ok");
+    server.join().expect("DT-3 VRAM server terminated ok");
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
     guard.disarm();
     wait_until_missing(&char_path);
     assert_eq!(ublk_nodes(), before);
 }
 
-/// Padrao deterministico e distinto por bloco (idx desloca a sequencia ~+5/byte mod
-/// 251, garantindo blocos diferentes detectarem troca de conteudo entre tags).
+/// Deterministic and distinct pattern per block (idx shifts the sequence ~+5/byte mod
+/// 251, ensuring different blocks detect content swapping between tags).
 fn block_pattern(idx: usize, bs: usize) -> Vec<u8> {
     keyed_pattern(idx as u64 * 1009 + 7, bs)
 }
 
-/// Padrao deterministico parametrizado por uma seed (permite variar por rodada de
-/// escrita, forcando o READ a enxergar a ultima escrita — nao um valor velho).
+/// Deterministic pattern parameterized by a seed (allows varying per write round,
+/// forcing the READ to see the latest write — not an old value).
 fn keyed_pattern(seed: u64, bs: usize) -> Vec<u8> {
     (0..bs)
         .map(|j| ((j as u64 * 31 + seed) % 251) as u8)
@@ -337,7 +337,7 @@ fn dt3_vram_serves_concurrent_writes_with_queue_depth_gt1() {
     let mut guard = DeviceGuard::new(report.dev_id);
     assert!(
         report.queue_depth >= 2,
-        "kernel deu queue_depth={}; o teste de concorrencia precisa de >=2",
+        "kernel gave queue_depth={}; concurrency test needs >=2",
         report.queue_depth
     );
 
@@ -364,11 +364,11 @@ fn dt3_vram_serves_concurrent_writes_with_queue_depth_gt1() {
     ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())
         .expect("ublk START_DEV");
 
-    // 4 threads, cada uma dona exclusiva de 4 blocos (round-robin, sem corrida entre
-    // threads no mesmo bloco). Cada rodada: WRITE com padrao novo via O_DIRECT, depois
-    // READ de volta conferindo. Escritas concorrentes mantem multiplos tags WRITE em
-    // voo -> exercita o caminho de WRITE do pool no-alloc (dispatch copia tag_buf->pool
-    // buffer; troca entre tags corromperia o bloco lido de volta).
+    // 4 threads, each exclusive owner of 4 blocks (round-robin, no race between
+    // threads on the same block). Each round: WRITE with new pattern via O_DIRECT, then
+    // READ back checking. Concurrent writes keep multiple WRITE tags in
+    // flight -> exercises the WRITE path of the no-alloc pool (dispatch copies tag_buf->pool
+    // buffer; swap between tags would corrupt the block read back).
     const O_DIRECT: i32 = 0o40000;
     let bs = block_size as usize;
     let n_blocks = 16usize;
@@ -392,13 +392,13 @@ fn dt3_vram_serves_concurrent_writes_with_queue_depth_gt1() {
                         raw[pad..pad + bs].copy_from_slice(&want);
                         file.write_all_at(&raw[pad..pad + bs], (i * bs) as u64)
                             .expect("write O_DIRECT");
-                        // Re-le do device (O_DIRECT, sem cache) -> deve vir da VRAM.
+                        // Re-reads from the device (O_DIRECT, no cache) -> must come from VRAM.
                         file.read_exact_at(&mut raw[pad..pad + bs], (i * bs) as u64)
                             .expect("read O_DIRECT");
                         assert_eq!(
                             &raw[pad..pad + bs],
                             want.as_slice(),
-                            "bloco {i} rodada {round} corrompido sob WRITE concorrente qd>1"
+                            "block {i} round {round} corrupted under concurrent WRITE qd>1"
                         );
                         i += 4;
                     }
@@ -408,11 +408,11 @@ fn dt3_vram_serves_concurrent_writes_with_queue_depth_gt1() {
         .collect();
     for w in workers {
         w.join()
-            .expect("escritor concorrente falhou (corrupcao/deadlock qd>1)");
+            .expect("concurrent writer failed (corruption/deadlock qd>1)");
     }
 
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
-    server.join().expect("DT-3 VRAM server terminou ok");
+    server.join().expect("DT-3 VRAM server terminated ok");
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
     guard.disarm();
     wait_until_missing(&char_path);
@@ -423,8 +423,8 @@ fn dt3_vram_serves_concurrent_writes_with_queue_depth_gt1() {
 #[ignore = "requires root + CUDA GPU; serves a real >4KB (multi-page) O_DIRECT request from VRAM, no swap"]
 fn dt3_vram_serves_multipage_request() {
     let before = ublk_nodes();
-    let max_req = 128 * 1024usize; // request maximo de 128 KiB (32 paginas)
-    // ADD_DEV: o buffer por-IO do kernel limita o maior request (ublk_drv.c:307).
+    let max_req = 128 * 1024usize; // maximum request of 128 KiB (32 pages)
+    // ADD_DEV: the kernel's per-IO buffer limits the largest request (ublk_drv.c:307).
     let mut spec = ublk_control::DeviceSpec::smoke_auto();
     spec.max_io_buf_bytes = max_req as u32;
     let report = ublk_control::add_device(UBLK_CONTROL, spec).expect("ublk ADD_DEV");
@@ -432,8 +432,8 @@ fn dt3_vram_serves_multipage_request() {
 
     let block_size = 4096u32;
     let dev_sectors = (max_req as u64 / SECTOR) * 4; // 512 KiB de disco
-    // max_sectors acopla com max_io_buf_bytes (kernel valida <= max_io_buf_bytes>>9)
-    // e vira o max_hw_sectors do block device (ublk_drv.c:546).
+    // max_sectors couples with max_io_buf_bytes (kernel validates <= max_io_buf_bytes>>9)
+    // and becomes the max_hw_sectors of the block device (ublk_drv.c:546).
     ublk_control::set_params(
         UBLK_CONTROL,
         report.dev_id,
@@ -448,7 +448,7 @@ fn dt3_vram_serves_multipage_request() {
     let server = ublk_server::spawn_server_dt3_vram(
         &char_path,
         report.queue_depth,
-        max_req, // buf_size por tag >= maior request possivel (acopla com os knobs)
+        max_req, // buf_size per tag >= largest request possible (couples with the knobs)
         vram_bytes,
         block_size,
     )
@@ -456,16 +456,16 @@ fn dt3_vram_serves_multipage_request() {
     ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())
         .expect("ublk START_DEV");
 
-    // O device deve anunciar capacidade multi-pagina (nao mais o cap de 4KB).
+    // The device must advertise multi-page capacity (no longer capped at 4KB).
     let hw_kb = read_queue_attr_u64(report.dev_id, "max_hw_sectors_kb");
     assert!(
         hw_kb >= 64,
-        "max_hw_sectors_kb={hw_kb}; esperado >=64 (request multi-pagina habilitado)"
+        "max_hw_sectors_kb={hw_kb}; expected >=64 (multi-page request enabled)"
     );
 
-    // WRITE + READ de um bloco de 64KB (16 paginas) via O_DIRECT: um unico request
-    // de len=65536 > 4096 atravessa serve_request -> pool -> worker -> cuMemcpy. Se o
-    // buf_size nao acompanhasse, serve_request devolveria EINVAL.
+    // WRITE + READ of a 64KB block (16 pages) via O_DIRECT: a single request
+    // of len=65536 > 4096 goes through serve_request -> pool -> worker -> cuMemcpy. If
+    // buf_size did not match, serve_request would return EINVAL.
     const O_DIRECT: i32 = 0o40000;
     let big = 64 * 1024usize;
     let bs = block_size as usize;
@@ -481,22 +481,22 @@ fn dt3_vram_serves_multipage_request() {
     raw[pad..pad + big].copy_from_slice(&pattern);
     file.write_all_at(&raw[pad..pad + big], 0)
         .expect("write O_DIRECT 64KB");
-    // Zera o buffer e re-le do device (sem cache) -> deve vir da VRAM.
+    // Zeroes the buffer and re-reads from the device (no cache) -> must come from VRAM.
     raw[pad..pad + big].fill(0);
     file.read_exact_at(&mut raw[pad..pad + big], 0)
         .expect("read O_DIRECT 64KB");
     assert_eq!(
         &raw[pad..pad + big],
         pattern.as_slice(),
-        "READ multi-pagina (64KB) deve casar com o WRITE"
+        "READ multi-page (64KB) must match WRITE"
     );
 
-    // Fecha o handle do block device ANTES do STOP_DEV: o `del_gendisk` bloqueia ate
-    // todos os openers fecharem, entao manter o fd aberto travaria o teardown.
+    // Closes the block device handle BEFORE STOP_DEV: `del_gendisk` blocks until
+    // all openers close, so keeping the fd open would hang the teardown.
     drop(file);
 
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
-    server.join().expect("DT-3 VRAM server terminou ok");
+    server.join().expect("DT-3 VRAM server terminated ok");
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
     guard.disarm();
     wait_until_missing(&char_path);
@@ -524,16 +524,16 @@ fn dt3_vram_residency_triggers_demote_synthetic() {
     let block_path = format!("/dev/ublkb{}", report.dev_id);
     let vram_bytes = (dev_sectors * SECTOR) as usize;
 
-    // Config SINTETICA e deterministica: latency_mult=0 -> limiar = baseline*0 = 0,
-    // entao qualquer serve real (lat_us > 0) conta como acima; consecutive=1 dispara
-    // logo apos a baseline armar (16 amostras). free_floor=0 evita demote por free.
+    // SYNTHETIC and deterministic config: latency_mult=0 -> threshold = baseline*0 = 0,
+    // so any real serve (lat_us > 0) counts as above; consecutive=1 triggers
+    // right after baseline arms (16 samples). free_floor=0 prevents free demote.
     let cfg = ResidencyConfig {
         latency_mult: 0,
         consecutive: 1,
         free_floor_bytes: 0,
     };
-    // swap_dev inexistente: o swapoff falha (sem efeito colateral), mas o veredito de
-    // DEMOTE e contado pelo handle -> observavel sem swap real.
+    // non-existent swap_dev: swapoff fails (no side effects), but the DEMOTE verdict
+    // is counted by the handle -> observable without real swap.
     let server = ublk_server::spawn_server_dt3_vram_with_residency(
         &char_path,
         report.queue_depth,
@@ -547,7 +547,7 @@ fn dt3_vram_residency_triggers_demote_synthetic() {
     ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())
         .expect("ublk START_DEV");
 
-    // Dirige I/O O_DIRECT 4KB ate o canario disparar o DEMOTE (ou timeout).
+    // Directs O_DIRECT 4KB I/O until the canary triggers DEMOTE (or timeout).
     const O_DIRECT: i32 = 0o40000;
     let file = OpenOptions::new()
         .read(true)
@@ -566,10 +566,10 @@ fn dt3_vram_residency_triggers_demote_synthetic() {
     }
     let demotes = server.demote_count();
 
-    // Fecha o fd antes do STOP_DEV (del_gendisk espera os openers).
+    // Closes the fd before STOP_DEV (del_gendisk waits for openers).
     drop(file);
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
-    server.join().expect("DT-3 residency server terminou ok");
+    server.join().expect("DT-3 residency server terminated ok");
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
     guard.disarm();
     wait_until_missing(&char_path);
@@ -577,14 +577,14 @@ fn dt3_vram_residency_triggers_demote_synthetic() {
 
     assert!(
         demotes >= 1,
-        "esperava >=1 DEMOTE sintetico do canario, obteve {demotes}"
+        "expected >=1 synthetic DEMOTE from canary, got {demotes}"
     );
 }
 
-/// Le um atributo numerico de `/sys/block/ublkb<id>/queue/<attr>`.
+/// Reads a numeric attribute from `/sys/block/ublkb<id>/queue/<attr>`.
 fn read_queue_attr_u64(dev_id: u32, attr: &str) -> u64 {
     let path = format!("/sys/block/ublkb{dev_id}/queue/{attr}");
-    let s = fs::read_to_string(&path).unwrap_or_else(|e| panic!("le {path}: {e}"));
+    let s = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     s.trim()
         .parse()
         .unwrap_or_else(|e| panic!("parse {path}={s:?}: {e}"))
@@ -595,7 +595,7 @@ fn read_sector(path: &str, sector: u64) -> Vec<u8> {
 }
 
 fn read_block(path: &str, off: u64, len: usize) -> Vec<u8> {
-    let mut file = File::open(path).expect("abrir block device");
+    let mut file = File::open(path).expect("open block device");
     file.seek(SeekFrom::Start(off)).expect("seek");
     let mut buf = vec![0u8; len];
     file.read_exact(&mut buf).expect("read_exact");
@@ -606,7 +606,7 @@ fn write_block(path: &str, off: u64, data: &[u8]) {
     let mut file = OpenOptions::new()
         .write(true)
         .open(path)
-        .expect("abrir block device para escrita");
+        .expect("open block device for writing");
     file.seek(SeekFrom::Start(off)).expect("seek");
     file.write_all(data).expect("write_all");
     file.sync_all().expect("sync_all");
@@ -626,7 +626,7 @@ fn write_sector(path: &str, sector: u64, data: &[u8]) {
     let mut file = OpenOptions::new()
         .write(true)
         .open(path)
-        .expect("abrir block device para escrita");
+        .expect("open block device for writing");
     file.seek(SeekFrom::Start(sector * SECTOR)).expect("seek");
     file.write_all(data).expect("write_all");
     file.sync_all().expect("sync_all");
@@ -640,11 +640,11 @@ fn vram_ublk_round_trips_as_swap_device() {
         .expect("ublk ADD_DEV");
     let block_path = format!("/dev/ublkb{}", report.dev_id);
     let char_path = format!("/dev/ublkc{}", report.dev_id);
-    // Guard: garante swapoff ANTES de stop/del mesmo se o teste falhar.
+    // Guard: ensures swapoff BEFORE stop/del even if the test fails.
     let mut guard = SwapGuard::new(report.dev_id, block_path.clone());
 
     let block_size = 4096u32;
-    let dev_sectors = 128 * 1024 * 1024 / SECTOR; // 128 MiB de swap na VRAM
+    let dev_sectors = 128 * 1024 * 1024 / SECTOR; // 128 MiB of swap on VRAM
     ublk_control::set_params(
         UBLK_CONTROL,
         report.dev_id,
@@ -656,7 +656,7 @@ fn vram_ublk_round_trips_as_swap_device() {
     let server = ublk_server::spawn_server_dt3_vram(
         &char_path,
         report.queue_depth,
-        2 * 1024 * 1024, // buffer por tag cobre clusters de swap
+        2 * 1024 * 1024, // buffer per tag covers swap clusters
         vram_bytes,
         block_size,
     )
@@ -666,31 +666,31 @@ fn vram_ublk_round_trips_as_swap_device() {
         .expect("ublk START_DEV");
     assert!(
         fs::metadata(&block_path).is_ok(),
-        "{block_path} deveria existir"
+        "{block_path} should exist"
     );
 
-    // mkswap escreve o header de swap -> ublk WRITE -> cuMemcpyHtoD na VRAM.
+    // mkswap writes swap header -> ublk WRITE -> cuMemcpyHtoD in VRAM.
     run_ok("mkswap", &[&block_path]);
-    // swapon (sem -p: prioridade auto baixa) -> kernel le o header (ublk READ) e
-    // registra a VRAM-ublk como area de swap.
+    // swapon (without -p: auto low priority) -> kernel reads the header (ublk READ) and
+    // registers the VRAM-ublk as swap area.
     run_ok("swapon", &[&block_path]);
 
     let swaps = fs::read_to_string("/proc/swaps").expect("/proc/swaps");
     assert!(
         swaps.contains(&block_path),
-        "VRAM-ublk nao foi registrada como swap:\n{swaps}"
+        "VRAM-ublk was not registered as swap:\n{swaps}"
     );
 
-    // swapoff imediato (sem gerar pressao) -> desativa e drena.
+    // immediate swapoff (without generating pressure) -> deactivates and drains.
     run_ok("swapoff", &[&block_path]);
     let swaps = fs::read_to_string("/proc/swaps").expect("/proc/swaps");
     assert!(
         !swaps.contains(&block_path),
-        "swap deveria estar desativado"
+        "swap should be deactivated"
     );
 
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
-    server.join().expect("DT-3 VRAM server terminou ok");
+    server.join().expect("DT-3 VRAM server terminated ok");
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
     guard.disarm();
     wait_until_missing(&char_path);
@@ -698,7 +698,7 @@ fn vram_ublk_round_trips_as_swap_device() {
 }
 
 #[test]
-#[ignore = "requires root + CUDA GPU; mede latencia de leitura 4KB do ublk-VRAM, no swap"]
+#[ignore = "requires root + CUDA GPU; measures 4KB read latency of ublk-VRAM, no swap"]
 fn bench_vram_ublk_read_latency() {
     let report = ublk_control::add_device(UBLK_CONTROL, ublk_control::DeviceSpec::smoke_auto())
         .expect("ublk ADD_DEV");
@@ -732,18 +732,18 @@ fn bench_vram_ublk_read_latency() {
     println!(
         "ublk-VRAM 4KB READ O_DIRECT (n=4000): p50={p50:?} p90={p90:?} p99={p99:?} p99.9={p999:?} max={max:?}"
     );
-    // Sanidade: latencia plausivel (microssegundos a poucos ms), nao travada.
-    assert!(p50 < Duration::from_millis(50), "p50 implausivel: {p50:?}");
+    // Sanity: plausible latency (microseconds to a few ms), not hung.
+    assert!(p50 < Duration::from_millis(50), "p50 implausible: {p50:?}");
 
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
-    server.join().expect("DT-3 VRAM server terminou ok");
+    server.join().expect("DT-3 VRAM server terminated ok");
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
     guard.disarm();
     wait_until_missing(&char_path);
 }
 
-/// Mede a latencia de leituras 4KB `O_DIRECT` (cada uma bate no device, sem cache)
-/// em offsets pseudo-aleatorios. Retorna (p50, p90, p99, p99.9, max).
+/// Measures the latency of 4KB `O_DIRECT` reads (each hits the device, no cache)
+/// at pseudo-random offsets. Returns (p50, p90, p99, p99.9, max).
 fn bench_read_latency(
     path: &str,
     block_size: u32,
@@ -757,12 +757,12 @@ fn bench_read_latency(
         .expect("open O_DIRECT");
 
     let bs = block_size as usize;
-    // Buffer alinhado ao block size (exigencia do O_DIRECT).
+    // Buffer aligned to block size (O_DIRECT requirement).
     let mut raw = vec![0u8; bs * 2];
     let pad = (bs - (raw.as_ptr() as usize % bs)) % bs;
     let n = n_blocks as u64;
 
-    // xorshift64 para offsets pseudo-aleatorios alinhados.
+    // xorshift64 for aligned pseudo-random offsets.
     let mut x = 0x9e37_79b9_7f4a_7c15u64;
     let mut next_off = || {
         x ^= x << 13;
@@ -799,7 +799,7 @@ fn bench_read_latency(
 }
 
 #[test]
-#[ignore = "requires root + CUDA GPU + fio; latencia fio do ublk-VRAM (compara com NBD), no swap"]
+#[ignore = "requires root + CUDA GPU + fio; fio latency of ublk-VRAM (compares with NBD), no swap"]
 fn fio_bench_vram_ublk() {
     let report = ublk_control::add_device(UBLK_CONTROL, ublk_control::DeviceSpec::smoke_auto())
         .expect("ublk ADD_DEV");
@@ -832,13 +832,13 @@ fn fio_bench_vram_ublk() {
     print!("{out}");
 
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
-    server.join().expect("DT-3 VRAM server terminou ok");
+    server.join().expect("DT-3 VRAM server terminated ok");
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
     guard.disarm();
     wait_until_missing(&char_path);
 }
 
-/// Roda `fio` randread 4KB O_DIRECT iodepth=1 num block device e devolve o stdout.
+/// Runs `fio` randread 4KB O_DIRECT iodepth=1 on block device and returns stdout.
 fn fio_randread(dev: &str, name: &str) -> String {
     let out = std::process::Command::new("fio")
         .args([
@@ -854,10 +854,10 @@ fn fio_randread(dev: &str, name: &str) -> String {
             "--norandommap",
         ])
         .output()
-        .unwrap_or_else(|e| panic!("nao executou fio: {e}"));
+        .unwrap_or_else(|e| panic!("failed to execute fio: {e}"));
     assert!(
         out.status.success(),
-        "fio falhou: {}",
+        "fio failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8_lossy(&out.stdout).into_owned()
@@ -867,16 +867,16 @@ fn run_ok(cmd: &str, args: &[&str]) {
     let out = std::process::Command::new(cmd)
         .args(args)
         .output()
-        .unwrap_or_else(|e| panic!("nao executou {cmd}: {e}"));
+        .unwrap_or_else(|e| panic!("failed to execute {cmd}: {e}"));
     assert!(
         out.status.success(),
-        "{cmd} {args:?} falhou: {}",
+        "{cmd} {args:?} failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
 }
 
-/// Guard de teardown para o teste de swap: `swapoff` (best-effort) antes de
-/// `stop_dev`/`delete_device`, já que um device com swap ativo não pode ser deletado.
+/// Teardown guard for the swap test: `swapoff` (best-effort) before
+/// `stop_dev`/`delete_device`, since a device with active swap cannot be deleted.
 struct SwapGuard {
     dev_id: Option<u32>,
     block_path: String,
@@ -933,57 +933,57 @@ impl Drop for DeviceGuard {
 }
 
 #[test]
-#[ignore = "PERIGOSO no WSL2: sobe o daemon ublk standalone; teardown malsucedido orfana o device e CONGELA o WSL2. Gated por RAMSHARED_DANGEROUS_DAEMON_SMOKE=1. Prefira validar em VM/qemu."]
+#[ignore = "DANGEROUS on WSL2: starts standalone ublk daemon; unsuccessful teardown orphans device and FREEZES WSL2. Gated by RAMSHARED_DANGEROUS_DAEMON_SMOKE=1. Prefer validating in VM/QEMU."]
 fn daemon_ublk_serves_and_terminates_on_signal() {
-    // GUARDA DE SEGURANCA: este smoke sobe o daemon ublk como processo separado e
-    // depende de SIGTERM para o teardown. Se o teardown falhar, o /dev/ublkbN fica sem
-    // servidor -> I/O em D-state -> WSL2 CONGELA (ja aconteceu, 2026-06-09). Por isso
-    // ele NAO roda nem com `--ignored`, a menos que o opt-in explicito esteja setado.
+    // SAFETY GUARD: this smoke starts the ublk daemon as a separate process and
+    // depends on SIGTERM for teardown. If teardown fails, `/dev/ublkbN` is left without
+    // server -> I/O in D-state -> WSL2 FREEZES (already happened, 2026-06-09). Therefore
+    // it does NOT run even with `--ignored`, unless explicit opt-in is set.
     if std::env::var("RAMSHARED_DANGEROUS_DAEMON_SMOKE").as_deref() != Ok("1") {
         eprintln!(
             "[skip] daemon_ublk_serves_and_terminates_on_signal: gated. \
-             Set RAMSHARED_DANGEROUS_DAEMON_SMOKE=1 para rodar (PODE TRAVAR O WSL2)."
+             Set RAMSHARED_DANGEROUS_DAEMON_SMOKE=1 to run (CAN FREEZE WSL2)."
         );
         return;
     }
 
     let before = ublk_nodes();
-    // Sobe o daemon em modo ublk como subprocesso (herda root do teste). Quem abriu o
-    // gate deste smoke aceitou o risco, entao passa o override da trava de WSL2 do
-    // daemon (senao `run_ublk` recusaria via guard_not_wsl2 e o device nao surgiria).
+    // Starts the daemon in ublk mode as a subprocess (inherits test root). Whoever opened the
+    // gate of this smoke accepted the risk, so passes the daemon's WSL2 lock override
+    // (otherwise `run_ublk` would refuse via guard_not_wsl2 and the device would not appear).
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_ramsharedd"))
         .args(["--transport", "ublk", "--size", "8", "--queue-depth", "1"])
         .env("RAMSHARED_ALLOW_UBLK_ON_WSL2", "1")
         .spawn()
         .expect("spawn daemon ublk");
 
-    // Espera o device aparecer (a inicializacao do CUDA leva ~1s).
+    // Waits for the device to appear (CUDA initialization takes ~1s).
     let block_path = match wait_new_ublkb(&before, Duration::from_secs(30)) {
         Some(p) => p,
         None => {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("daemon nao criou /dev/ublkbN em 30s");
+            panic!("daemon did not create /dev/ublkbN in 30s");
         }
     };
 
-    // Serve: WRITE + READ de um bloco de 4KB via block device (fecha os fds nos
-    // helpers). NAO usa drop_page_cache(): ele amplifica o stall se o device travar
-    // (foi um dos gatilhos do freeze de 2026-06-09). O WRITE+fsync ja prova o serve.
+    // Serves: WRITE + READ of a 4KB block via block device (closes the fds in
+    // helpers). Does NOT use drop_page_cache(): it amplifies the stall if the device hangs
+    // (was one of the triggers of the 2026-06-09 freeze). WRITE+fsync already proves the serve.
     let off = 8192u64;
     let pattern: Vec<u8> = (0..4096u32).map(|i| ((i * 7 + 13) % 251) as u8).collect();
     write_block(&block_path, off, &pattern);
     let got = read_block(&block_path, off, 4096);
-    assert_eq!(got, pattern, "daemon ublk deve servir o bloco escrito");
+    assert_eq!(got, pattern, "ublk daemon must serve the block written");
 
-    // SIGTERM -> teardown ordenado no daemon (STOP_DEV -> join -> DEL_DEV).
+    // SIGTERM -> orderly teardown in daemon (STOP_DEV -> join -> DEL_DEV).
     run_ok("kill", &["-TERM", &child.id().to_string()]);
 
     let status =
-        wait_child(&mut child, Duration::from_secs(15)).expect("daemon nao encerrou em 15s");
-    assert!(status.success(), "daemon ublk saiu com erro: {status:?}");
+        wait_child(&mut child, Duration::from_secs(15)).expect("daemon did not exit in 15s");
+    assert!(status.success(), "ublk daemon exited with error: {status:?}");
 
-    // /dev volta ao estado inicial (device removido pelo teardown).
+    // /dev returns to initial state (device removed by teardown).
     let deadline = Instant::now() + Duration::from_secs(5);
     while ublk_nodes() != before && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(50));
@@ -991,11 +991,11 @@ fn daemon_ublk_serves_and_terminates_on_signal() {
     assert_eq!(
         ublk_nodes(),
         before,
-        "daemon ublk deve remover o device no teardown"
+        "ublk daemon must remove the device on teardown"
     );
 }
 
-/// Espera surgir um `/dev/ublkbN` que nao estava em `before`; devolve o caminho.
+/// Waits for a `/dev/ublkbN` to appear that was not in `before`; returns the path.
 fn wait_new_ublkb(before: &[String], timeout: Duration) -> Option<String> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -1009,7 +1009,7 @@ fn wait_new_ublkb(before: &[String], timeout: Duration) -> Option<String> {
     None
 }
 
-/// Aguarda (bounded) o processo encerrar; devolve o status ou `None` no timeout.
+/// Waits (bounded) for the process to exit; returns the status or `None` on timeout.
 fn wait_child(
     child: &mut std::process::Child,
     timeout: Duration,

@@ -1,22 +1,22 @@
-//! Esquema fixo de prioridades da cascata. SPEC §1, §6.2 (passo 4), §11.
+//! Fixed priority layout for the swap cascade. SPEC §1, §6.2 (step 4), §11.
 //!
-//! A ordem `zram > VRAM > VHDX` é o que faz a VRAM ser tier **frio** (não swap
-//! quente): o achado da Fase 0 (§9.5) mostrou a VRAM latency-unsafe sob pressão,
-//! então o zram (RAM comprimida) absorve o working set quente e a VRAM só pega o
-//! spill frio.
+//! The configuration `zram > VRAM > VHDX` forces VRAM to behave as a cold tier (avoiding
+//! hot swap regressions). Phase 0 findings (§9.5) showed that VRAM is latency-unsafe under
+//! memory pressure. zram (compressed RAM) absorbs the hot working set, while VRAM only
+//! absorbs cold overflows.
 
 use core::fmt;
 
-/// Prioridade do tier zram (HOT, RAM comprimida). Maior = usado primeiro.
+/// Priority of the zram tier (HOT, compressed RAM). Higher = used first by kernel.
 pub const ZRAM_PRIO: i32 = 200;
 
-/// Prioridade do tier VRAM (COLD, `nbd-vram`). Sempre `< ZRAM_PRIO` e `> VHDX`.
+/// Priority of the VRAM tier (COLD, `nbd-vram`). Must always satisfy `< ZRAM_PRIO` and `> VHDX`.
 pub const VRAM_PRIO: i32 = 100;
 
-/// Prioridades efetivas dos três tiers da cascata.
+/// Effective priority metrics of the three active swap tiers.
 ///
-/// `vhdx` é a prioridade **observada** do swap VHDX existente do WSL2
-/// (tipicamente `-2`); o RamShared não a altera, só a valida.
+/// `vhdx` is the **observed** priority of the default WSL2 swap VHDX
+/// (typically `-2`). RamShared only validates it, leaving its configuration unchanged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TierPriorities {
     pub zram: i32,
@@ -34,12 +34,12 @@ impl Default for TierPriorities {
     }
 }
 
-/// Violações da ordem estrita da cascata.
+/// Violations of the strict cascade priority hierarchy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OrderError {
-    /// zram precisa ter prioridade estritamente maior que a VRAM.
+    /// zram priority must be strictly greater than VRAM priority.
     ZramNotAboveVram,
-    /// VRAM precisa ter prioridade estritamente maior que o VHDX.
+    /// VRAM priority must be strictly greater than VHDX priority.
     VramNotAboveVhdx,
 }
 
@@ -47,10 +47,10 @@ impl fmt::Display for OrderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             OrderError::ZramNotAboveVram => {
-                f.write_str("ordem da cascata invalida: zram deve ter prioridade > VRAM")
+                f.write_str("invalid swap cascade: zram priority must be greater than VRAM")
             }
             OrderError::VramNotAboveVhdx => {
-                f.write_str("ordem da cascata invalida: VRAM deve ter prioridade > VHDX")
+                f.write_str("invalid swap cascade: VRAM priority must be greater than VHDX")
             }
         }
     }
@@ -58,10 +58,10 @@ impl fmt::Display for OrderError {
 
 impl core::error::Error for OrderError {}
 
-/// Valida a ordem estrita `zram > VRAM > VHDX` exigida pela arquitetura (§6.2).
+/// Validates the strict priority hierarchy `zram > VRAM > VHDX` required by the architecture (§6.2).
 ///
-/// Rejeitar aqui evita o anti-padrão do v2 (VRAM como swap de prioridade máxima),
-/// que a Fase 0 provou inseguro.
+/// Rejects configurations violating this order, preventing v2 anti-patterns
+/// (VRAM configured as max-priority hot swap) which Phase 0 proved to be latency-unsafe.
 pub fn validate_order(p: TierPriorities) -> Result<(), OrderError> {
     if p.zram <= p.vram {
         return Err(OrderError::ZramNotAboveVram);
@@ -106,8 +106,7 @@ mod tests {
 
     #[test]
     fn rejects_v2_antipattern_max_priority_vram() {
-        // v2 fixava a VRAM em 32767 (swap quente). Tem que falhar se o zram não
-        // estiver acima.
+        // v2 pinned VRAM priority to 32767 (hot swap). This must fail if zram priority is lower.
         let p = TierPriorities {
             zram: ZRAM_PRIO,
             vram: 32767,

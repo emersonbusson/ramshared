@@ -1,6 +1,6 @@
-//! Orquestração da cascata zram→VRAM→VHDX (SPEC §6.2–6.4). Roda como root.
-//! Monta tiers por prioridade de `swapon` e desmonta na ordem inversa, com
-//! `swapoff` **antes** de desconectar o NBD (anti-panic).
+//! Orchestration of the zram→VRAM→VHDX cascade (SPEC §6.2–6.4). Runs as root.
+//! Mounts tiers by `swapon` priority and unmounts in reverse order, with
+//! `swapoff` **before** disconnecting the NBD (anti-panic).
 
 use ramshared_tier::{TierPriorities, validate_order, vram_safety_net};
 use std::fmt;
@@ -15,18 +15,18 @@ const NBD: &str = "/dev/nbd0";
 const ZRAM_DEV_FILE: &str = "/run/ramshared/zram-dev";
 const SWAP_DEV_FILE: &str = "/run/ramshared/swap-dev";
 
-/// Erro tipado da orquestração da cascata (sem dep externa — segue o padrão do
-/// `CudaError`: enum + `Display` + `Error`). Zero-criatividade: variantes mapeiam os
-/// modos de falha reais (comando externo, argumento, I/O, pré-condição).
+/// Typed error for the cascade orchestration (no external dependency — follows the
+/// `CudaError` pattern: enum + `Display` + `Error`). Zero-creativity: variants map to the
+/// real failure modes (external command, argument, I/O, precondition).
 #[derive(Debug)]
 pub enum CascadeError {
-    /// Comando externo falhou (spawn ou status != 0).
+    /// External command failed (spawn or status != 0).
     Shell { cmd: String, msg: String },
-    /// Argumento de CLI inválido.
+    /// Invalid CLI argument.
     Arg(String),
-    /// Erro de I/O (fs / `/proc`).
+    /// I/O error (fs / `/proc`).
     Io(String),
-    /// Pré-condição da cascata violada (ordem de tiers, rede A1, device, daemon).
+    /// Cascade precondition violated (tier order, A1 safety net, device, daemon).
     Precondition(String),
 }
 
@@ -74,9 +74,9 @@ fn mem_available_bytes() -> u64 {
         .unwrap_or(0)
 }
 
-/// Existe um tier de swap ESTRITAMENTE abaixo da VRAM (prio < VRAM) p/ o DEMOTE
-/// drenar? (rede A1). Ignora zram/nbd (os tiers que este tool gere) e checa a
-/// prioridade real em /proc/swaps — nao apenas "existe algum swap".
+/// Is there a swap tier STRICTLY below VRAM (priority < VRAM) for DEMOTE
+/// to drain into? (A1 safety net). Ignores zram/nbd (the tiers managed by this tool) and
+/// checks the actual priority in /proc/swaps — not just "does any swap exist".
 fn lower_tier_present() -> bool {
     let vram_prio = TierPriorities::default().vram;
     fs::read_to_string("/proc/swaps")
@@ -121,7 +121,7 @@ struct UpArgs {
 }
 
 fn parse_up_args() -> Result<UpArgs, CascadeError> {
-    let args: Vec<String> = std::env::args().skip(2).collect(); // pula "ramshared up"
+    let args: Vec<String> = std::env::args().skip(2).collect(); // skip "ramshared up"
     parse_up_args_from(&args, default_daemon())
 }
 
@@ -221,7 +221,7 @@ pub fn up() -> Result<(), CascadeError> {
     let prios = TierPriorities::default();
     validate_order(prios).map_err(|e| CascadeError::Precondition(e.to_string()))?;
 
-    // A1 — rede de segurança do DEMOTE (precisa de um tier abaixo da VRAM).
+    // A1 — DEMOTE safety net (requires a tier below VRAM).
     let vram_bytes = a
         .vram_mb
         .checked_mul(1024 * 1024)
@@ -243,7 +243,7 @@ pub fn up() -> Result<(), CascadeError> {
         ));
     }
 
-    // Tier zram (HOT, prio alta).
+    // zram tier (HOT, high priority).
     sh("modprobe", &["zram", "num_devices=1"])?;
     let zdev = sh(
         "zramctl",
@@ -255,7 +255,7 @@ pub fn up() -> Result<(), CascadeError> {
             "lzo-rle",
         ],
     )?;
-    // M5: zramctl deveria devolver /dev/zramN; valida antes de passar a cmds privilegiados.
+    // M5: zramctl should return /dev/zramN; validate before passing to privileged commands.
     if !matches!(zdev.strip_prefix("/dev/zram"), Some(s) if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
     {
         return Err(CascadeError::Precondition(format!(
@@ -267,7 +267,7 @@ pub fn up() -> Result<(), CascadeError> {
     fs::write(ZRAM_DEV_FILE, &zdev).map_err(|e| CascadeError::Io(e.to_string()))?;
     eprintln!("[up] zram {zdev} (prio {})", prios.zram);
 
-    // Tier VRAM (COLD, prio média): daemon + nbd.
+    // VRAM tier (COLD, medium priority): daemon + nbd.
     sh("modprobe", &["nbd", "nbds_max=1", "max_part=0"])?;
     let _ = fs::remove_file(SOCK);
     Command::new(&a.daemon)
@@ -299,7 +299,7 @@ pub fn up() -> Result<(), CascadeError> {
             "daemon nao subiu (socket ausente)".into(),
         ));
     }
-    // H1: multi-conexão (-C N) só quando N>1; o daemon é N-agnóstico (aceita o que vier).
+    // H1: multi-connection (-C N) only when N>1; the daemon is N-agnostic (accepts whatever comes).
     let conns = a.connections.to_string();
     let mut nbd_args: Vec<&str> = Vec::new();
     if a.connections > 1 {
@@ -325,7 +325,7 @@ pub fn down() -> Result<(), CascadeError> {
     let swap_dev = fs::read_to_string(SWAP_DEV_FILE)
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| NBD.to_string());
-    // Anti-panic: se a VRAM estiver em swap, swapoff DEVE concluir antes do disconnect.
+    // Anti-panic: if VRAM is in swap, swapoff MUST complete before disconnect.
     let nbd_in_swap = fs::read_to_string("/proc/swaps")
         .map(|s| s.contains(&swap_dev))
         .unwrap_or(false);
@@ -344,10 +344,10 @@ pub fn down() -> Result<(), CascadeError> {
             let _ = sh("zramctl", &["-r", &z]);
         }
     }
-    // nbd-client -d → daemon recebe EOF, zera a VRAM (§11) e sai sozinho.
+    // nbd-client -d → daemon receives EOF, zeroes VRAM (§11) and exits on its own.
     let _ = sh("nbd-client", &["-d", &swap_dev]);
-    // Espera ele sair por conta propria (ate ~5s) p/ NAO matar no meio do zero() da
-    // VRAM (senao sobra dado residual na GPU). pkill so' como ultimo recurso.
+    // Wait for it to exit on its own (up to ~5s) to NOT kill it in the middle of zero()
+    // VRAM (otherwise residual data remains on GPU). pkill only as a last resort.
     let mut exited = false;
     for _ in 0..50 {
         if sh("pgrep", &["-x", "ramsharedd"]).is_err() {
@@ -374,7 +374,7 @@ pub fn status() -> Result<(), CascadeError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)] // teste: unwrap/expect é idiomático
+    #![allow(clippy::unwrap_used, clippy::expect_used)] // test: unwrap/expect is idiomatic
     use super::*;
 
     fn parse(args: &[&str]) -> Result<UpArgs, CascadeError> {

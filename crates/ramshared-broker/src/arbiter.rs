@@ -1,43 +1,43 @@
-//! Política do árbitro **pura** (sem IO; clock injetado) — RF-B2, RF-B3, RNF-3 e o
-//! counterfactual do PRD §14 com piso (DT-23).
+//! **Pure** arbiter policy (no IO; injected clock) — RF-B2, RF-B3, RNF-3 and the
+//! counterfactual of PRD §14 with floor (DT-23).
 //!
-//! `tick` não muta `SliceMap`: devolve [`Action`]s que o core (ITEM-8) aplica. Uma decisão de
-//! movimento por tick (no máx. 1 `MoveSlice` **ou** `RevertMove`); sob `pending_lease` os passos
-//! de rebalanço (2/4) e o round-robin (5) ficam suprimidos (R9) — a reserva é o core aplicando
-//! `GrantLease`→`lease()`. Ordem de revogação por **psi do dono** (proxy; o `tick` puro não tem
-//! `used_kb` por slice — ver SPECv2 ITEM-4).
+//! `tick` does not mutate `SliceMap`: returns [`Action`]s that the core (ITEM-8) applies. One decision of
+//! movement per tick (at most 1 `MoveSlice` **or** `RevertMove`); under `pending_lease` the rebalancing
+//! steps (2/4) and round-robin (5) are suppressed (R9) — reservation is the core applying
+//! `GrantLease`→`lease()`. Revocation order by **owner's psi** (proxy; the pure `tick` does not have
+//! `used_kb` per slice — see SPECv2 ITEM-4).
 
 use std::cmp::Ordering;
 use std::time::{Duration, Instant};
 
 use crate::model::{PsiSample, Slice, SliceId, SliceState, TenantId};
 
-/// Parâmetros do árbitro. Defaults calibrados pelo P0 (P0-RESULTS §5).
+/// Arbiter parameters. Defaults calibrated by P0 (P0-RESULTS §5).
 #[derive(Clone, Copy, Debug)]
 pub struct ArbiterConfig {
-    /// Diferencial de `some.avg10` para mover.
+    /// Differential of `some.avg10` to move.
     pub delta_psi: f32,
-    /// Ticks consecutivos acima do delta antes de mover (histerese).
+    /// Consecutive ticks above delta before moving (hysteresis).
     pub streak: u32,
-    /// Cooldown pós-movimento normal.
+    /// Cooldown after normal movement.
     pub cooldown: Duration,
-    /// "Sob pressão" (nunca-zero) e piso do counterfactual (DT-23).
+    /// "Under pressure" (never-zero) and floor of counterfactual (DT-23).
     pub psi_floor: f32,
-    /// Janela do counterfactual.
+    /// Counterfactual window.
     pub cf_window: Duration,
-    /// Fator de piora do drenado que dispara o revert.
+    /// Worsening factor of the drained one that triggers the revert.
     pub cf_factor: f32,
-    /// Cooldown longo pós-revert.
+    /// Long cooldown post-revert.
     pub cf_cooldown: Duration,
 }
 
 impl Default for ArbiterConfig {
     fn default() -> Self {
         Self {
-            delta_psi: 10.0,                       // P0: era 15; civm idle ~1.2 vs WSL2 carga 14
+            delta_psi: 10.0,                       // P0: was 15; civm idle ~1.2 vs WSL2 load 14
             streak: 5,                             // 5 ticks (tick=2s → 10s)
             cooldown: Duration::from_secs(60),     // PRD §14
-            psi_floor: 5.0,                        // idle <5, carga ≥14
+            psi_floor: 5.0,                        // idle <5, load ≥14
             cf_window: Duration::from_secs(60),    // PRD §14
             cf_factor: 2.0,                        // PRD §14 (>2× em 60s)
             cf_cooldown: Duration::from_secs(300), // PRD §14
@@ -45,7 +45,7 @@ impl Default for ArbiterConfig {
     }
 }
 
-/// Visão de um tenant **presente** (o core filtra ausentes, DT-20).
+/// View of a **present** tenant (the core filters out absent ones, DT-20).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TenantView {
     pub id: TenantId,
@@ -53,30 +53,30 @@ pub struct TenantView {
     pub slices: u16,
 }
 
-/// Ação que o core (ITEM-8) aplica ao `SliceMap` e aos agentes.
+/// Action that the core (ITEM-8) applies to the `SliceMap` and the agents.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     /// Slice `Free` → `Active(to)` (round-robin, DT-6).
     AssignFree { slice: SliceId, to: TenantId },
-    /// Rebalanço: move a slice de `from` para `to` (RF-B2).
+    /// Rebalance: moves the slice from `from` to `to` (RF-B2).
     MoveSlice {
         slice: SliceId,
         from: TenantId,
         to: TenantId,
     },
-    /// Counterfactual §14 (DT-23): devolve a slice de `from` (atual) para `to` (dono original).
+    /// Counterfactual §14 (DT-23): returns the slice from `from` (current) to `to` (original owner).
     RevertMove {
         slice: SliceId,
         from: TenantId,
         to: TenantId,
     },
-    /// Revoga uma slice `Active` de `from` para atender um lease (RF-B3).
+    /// Revokes an `Active` slice from `from` to satisfy a lease (RF-B3).
     RevokeForLease {
         slice: SliceId,
         from: TenantId,
         lease: u32,
     },
-    /// Concede o lease quando há slices suficientes (uma única vez).
+    /// Grants the lease when there are enough slices (only once).
     GrantLease {
         lease: u32,
         holder: TenantId,
@@ -93,7 +93,7 @@ struct MoveRecord {
     from_psi_at_move: f32,
 }
 
-/// Árbitro com estado mínimo (histerese, último movimento, cursor de round-robin, próximo lease).
+/// Arbiter with minimal state (hysteresis, last move, round-robin cursor, next lease).
 pub struct Arbiter {
     cfg: ArbiterConfig,
     streak: u32,
@@ -134,7 +134,7 @@ impl Arbiter {
         self.cooldown_until.is_some_and(|u| now < u)
     }
 
-    /// (receiver mais pressionado, donor menos pressionado com ≥1 slice, diferencial).
+    /// (most pressured receiver, least pressured donor with ≥1 slice, differential).
     fn pressure_pair<'a>(
         &self,
         tenants: &'a [TenantView],
@@ -149,8 +149,8 @@ impl Arbiter {
         Some((receiver, donor, receiver.psi.avg10 - donor.psi.avg10))
     }
 
-    /// Uma decisão por tick. `now` injetado (testável). Contrato (DT-20): `tenants` só os
-    /// presentes; `slices` só Free/Leased ou de dono presente — nenhuma Action terá alvo ausente.
+    /// One decision per tick. `now` injected (testable). Contract (DT-20): `tenants` only the
+    /// present ones; `slices` only Free/Leased or of present owner — no Action will target an absent one.
     pub fn tick(
         &mut self,
         now: Instant,
@@ -161,7 +161,7 @@ impl Arbiter {
         let mut actions = Vec::new();
         let slice_len = slices.first().map_or(0, |s| s.len);
 
-        // (1) LEASE pendente tem prioridade; suprime rebalanço (2/4) e round-robin (5) — R9.
+        // (1) Pending LEASE has priority; suppresses rebalancing (2/4) and round-robin (5) — R9.
         if let Some((holder, bytes)) = pending_lease {
             let need = if slice_len == 0 {
                 0
@@ -196,8 +196,8 @@ impl Arbiter {
                     slices: grant,
                 });
             } else {
-                // Revoga Active das menos pressionadas primeiro (proxy por psi do dono; DT-8: o
-                // lease drena além do nunca-zero). `lease` id estável até o grant (não incrementa).
+                // Revokes Active from the least pressured first (proxy by owner's psi; DT-8: the
+                // lease drains beyond never-zero). `lease` id stable until grant (does not increment).
                 let deficit = need - (leased.len() + free.len());
                 let mut active: Vec<(SliceId, TenantId, f32)> = slices
                     .iter()
@@ -216,11 +216,11 @@ impl Arbiter {
             return actions;
         }
 
-        // (2) COUNTERFACTUAL (segurança; antes do cooldown). Não há counterfactual de um revert.
+        // (2) COUNTERFACTUAL (safety; before cooldown). There is no counterfactual of a revert.
         let mut moved = false;
         if let Some(rec) = self.last_move {
             if now.duration_since(rec.at) > self.cfg.cf_window {
-                self.last_move = None; // janela expirou
+                self.last_move = None; // window expired
             } else if let Some(from_now) = owner_psi(tenants, rec.from)
                 && from_now > self.cfg.cf_factor * rec.from_psi_at_move
                 && from_now > self.cfg.psi_floor
@@ -237,7 +237,7 @@ impl Arbiter {
             }
         }
 
-        // Histerese: o streak conta diferencial > delta independentemente do gate de movimento.
+        // Hysteresis: streak counts differential > delta regardless of the movement gate.
         let pair = self.pressure_pair(tenants);
         let over = pair.is_some_and(|(_, _, d)| d > self.cfg.delta_psi);
         if over {
@@ -246,8 +246,8 @@ impl Arbiter {
             self.streak = 0;
         }
 
-        // (3)+(4) DIFERENCIAL: só se não houve revert, streak batido, sem cooldown e sem Free
-        // (slices Free vão para o round-robin no passo 5; mover é p/ o caso tudo-atribuído).
+        // (3)+(4) DIFFERENTIAL: only if no revert, streak met, no cooldown, and no Free
+        // (Free slices go to round-robin in step 5; moving is for the all-assigned case).
         let has_free = slices.iter().any(|s| s.state == SliceState::Free);
         if !moved
             && self.streak >= self.cfg.streak
@@ -256,7 +256,7 @@ impl Arbiter {
             && let Some((receiver, donor, _)) = pair
         {
             let donor_pressured = donor.psi.avg10 > self.cfg.psi_floor;
-            // nunca-zero (RF-B2/DT-8): não drena um donor SOB PRESSÃO até zero slices.
+            // never-zero (RF-B2/DT-8): does not drain a donor UNDER PRESSURE to zero slices.
             if !(donor_pressured && donor.slices <= 1)
                 && let Some(slice) = first_active_of(slices, donor.id)
             {
@@ -277,7 +277,7 @@ impl Arbiter {
             }
         }
 
-        // (5) ROUND-ROBIN das slices Free entre os presentes (DT-6).
+        // (5) ROUND-ROBIN of Free slices among the present ones (DT-6).
         if !tenants.is_empty() {
             for s in slices.iter().filter(|s| s.state == SliceState::Free) {
                 let to = tenants[self.rr_cursor % tenants.len()].id;
@@ -333,7 +333,7 @@ mod tests {
         c.streak = 3;
         let mut arb = Arbiter::new(c);
         let t0 = Instant::now();
-        // sem Free: s0 do donor(1, psi 0), s1 do receiver(2, psi 20)
+        // no Free: s0 of donor(1, psi 0), s1 of receiver(2, psi 20)
         let tenants = [tv(1, 0.0, 1), tv(2, 20.0, 1)];
         let slices = [
             slice(0, Some(1), SliceState::Active),
@@ -367,12 +367,12 @@ mod tests {
             slice(1, Some(2), SliceState::Active),
         ];
         assert_eq!(count_moves(&arb.tick(t0, &tenants, &slices, None)), 1); // move
-        // dentro do cooldown: não move
+        // within cooldown: does not move
         assert_eq!(
             count_moves(&arb.tick(t0 + Duration::from_secs(2), &tenants, &slices, None)),
             0
         );
-        // após o cooldown: move de novo
+        // after cooldown: moves again
         assert_eq!(
             count_moves(&arb.tick(t0 + Duration::from_secs(61), &tenants, &slices, None)),
             1
@@ -385,7 +385,7 @@ mod tests {
         c.streak = 1;
         let mut arb = Arbiter::new(c);
         let t0 = Instant::now();
-        // donor(1) SOB PRESSÃO (8 > floor 5) com 1 slice; receiver(2) psi 20.
+        // donor(1) UNDER PRESSURE (8 > floor 5) with 1 slice; receiver(2) psi 20.
         let tenants = [tv(1, 8.0, 1), tv(2, 20.0, 1)];
         let slices = [
             slice(0, Some(1), SliceState::Active),
@@ -400,14 +400,14 @@ mod tests {
         c.streak = 1;
         let mut arb = Arbiter::new(c);
         let t0 = Instant::now();
-        // move s0 de A(1, psi 2) p/ B(2, psi 20)
+        // move s0 from A(1, psi 2) to B(2, psi 20)
         let t_move = [tv(1, 2.0, 1), tv(2, 20.0, 1)];
         let slices = [
             slice(0, Some(1), SliceState::Active),
             slice(1, Some(2), SliceState::Active),
         ];
         assert_eq!(count_moves(&arb.tick(t0, &t_move, &slices, None)), 1);
-        // 10s depois: A piora p/ 6 (>2×2=4 E >floor 5) → revert
+        // 10s later: A worsens to 6 (>2×2=4 AND >floor 5) → revert
         let t_after = [tv(1, 6.0, 0), tv(2, 5.0, 2)];
         let a = arb.tick(t0 + Duration::from_secs(10), &t_after, &slices, None);
         assert_eq!(
@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn counterfactual_nao_reverte_por_ruido_abaixo_do_piso() {
-        // DT-23: piora 2× mas abaixo do psi_floor não é pressão real → não reverte.
+        // DT-23: worsens 2× but below psi_floor is not real pressure → does not revert.
         let mut c = cfg();
         c.streak = 1;
         let mut arb = Arbiter::new(c);
@@ -435,7 +435,7 @@ mod tests {
             slice(1, Some(2), SliceState::Active),
         ];
         assert_eq!(count_moves(&arb.tick(t0, &t_move, &slices, None)), 1);
-        // A vai p/ 4.5: >2×2=4, mas <floor 5 → NÃO reverte
+        // A goes to 4.5: >2×2=4, but <floor 5 → does NOT revert
         let t_after = [tv(1, 4.5, 0), tv(2, 5.0, 2)];
         let a = arb.tick(t0 + Duration::from_secs(10), &t_after, &slices, None);
         assert_eq!(count_moves(&a), 0);
@@ -443,10 +443,10 @@ mod tests {
 
     #[test]
     fn lease_revoga_alem_do_nunca_zero() {
-        // DT-8: pedido de lease drena Active mesmo deixando tenant a zero.
+        // DT-8: lease request drains Active even leaving tenant at zero.
         let mut arb = Arbiter::new(cfg());
         let t0 = Instant::now();
-        // ambos pressionados (nunca-zero protegeria no rebalanço, mas o lease ignora).
+        // both pressured (never-zero would protect in rebalancing, but lease ignores it).
         let tenants = [tv(1, 9.0, 1), tv(2, 9.0, 1)];
         let slices = [
             slice(0, Some(1), SliceState::Active),
@@ -459,12 +459,12 @@ mod tests {
                 .count(),
             1
         );
-        assert!(!a.iter().any(|x| matches!(x, Action::AssignFree { .. }))); // round-robin suprimido
+        assert!(!a.iter().any(|x| matches!(x, Action::AssignFree { .. }))); // round-robin suppressed
     }
 
     #[test]
     fn lease_concede_de_free_sem_round_robin() {
-        // R2: a slice Free é concedida ao lease, não round-robinada.
+        // R2: Free slice is granted to the lease, not round-robinned.
         let mut arb = Arbiter::new(cfg());
         let t0 = Instant::now();
         let tenants = [tv(1, 0.0, 0), tv(2, 0.0, 0)];
@@ -485,7 +485,7 @@ mod tests {
 
     #[test]
     fn lease_segura_free_enquanto_revoga_para_completar() {
-        // need=2, 1 Free + 1 Active → revoga 1, NÃO concede ainda, NÃO round-robina o Free (R2).
+        // need=2, 1 Free + 1 Active → revokes 1, does NOT grant yet, does NOT round-robin the Free (R2).
         let mut arb = Arbiter::new(cfg());
         let t0 = Instant::now();
         let tenants = [tv(1, 1.0, 1), tv(2, 0.0, 0)];
@@ -519,7 +519,7 @@ mod tests {
             .filter(|x| matches!(x, Action::AssignFree { .. }))
             .collect();
         assert_eq!(assigns.len(), 2);
-        // round-robin: s0→t1, s1→t2 (cursor avança)
+        // round-robin: s0→t1, s1→t2 (cursor advances)
         assert_eq!(assigns[0], &Action::AssignFree { slice: 0, to: 1 });
         assert_eq!(assigns[1], &Action::AssignFree { slice: 1, to: 2 });
     }
@@ -530,7 +530,7 @@ mod tests {
         c.streak = 1;
         let mut arb = Arbiter::new(c);
         let t0 = Instant::now();
-        // diferencial 2 < delta 10
+        // differential 2 < delta 10
         let tenants = [tv(1, 1.0, 1), tv(2, 3.0, 1)];
         let slices = [
             slice(0, Some(1), SliceState::Active),

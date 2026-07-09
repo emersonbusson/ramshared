@@ -1,5 +1,5 @@
-//! NBD fixed-newstyle: constantes + parse/encode da fase de transmissão.
-//! Wire é big-endian. SPEC §10.1.
+//! NBD fixed-newstyle: constants + parse/encode of the transmission phase.
+//! Wire is big-endian. SPEC §10.1.
 
 use core::fmt;
 
@@ -9,22 +9,22 @@ pub const IHAVEOPT: u64 = 0x4948_4156_454f_5054; // "IHAVEOPT"
 pub const NBD_FLAG_FIXED_NEWSTYLE: u16 = 1 << 0;
 pub const NBD_FLAG_NO_ZEROES: u16 = 1 << 1;
 
-// Flags de transmissão (export).
+// Transmission flags (export).
 pub const NBD_FLAG_HAS_FLAGS: u16 = 1 << 0;
 pub const NBD_FLAG_SEND_FLUSH: u16 = 1 << 2;
-/// Multi-conexão segura (H1). Só é seguro anunciar porque a WRITE é durável no ack
-/// (`cuMemcpyHtoD` síncrono) + o worker CUDA único serializa: um FLUSH em qualquer
-/// conexão cobre todas as WRITEs já ackadas. NÃO trocar para cópia assíncrona sem
-/// revisar este contrato. SPEC: docs/daemon-multiconn/SPECv3.md DT-10.
+/// Safe multi-connection (H1). It is only safe to announce because WRITE is durable upon ack
+/// (synchronous `cuMemcpyHtoD`) + the single CUDA worker serializes: a FLUSH on any
+/// connection covers all already acked WRITEs. Do NOT change to asynchronous copy without
+/// reviewing this contract. SPEC: docs/daemon-multiconn/SPECv3.md DT-10.
 pub const NBD_FLAG_CAN_MULTI_CONN: u16 = 1 << 8;
 
-// Transmissão.
+// Transmission.
 pub const NBD_REQUEST_MAGIC: u32 = 0x2560_9513;
 pub const NBD_SIMPLE_REPLY_MAGIC: u32 = 0x6744_6698;
 pub const REQUEST_LEN: usize = 28;
 pub const SIMPLE_REPLY_LEN: usize = 16;
 
-/// Comandos NBD (campo `type`).
+/// NBD commands (`type` field).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Command {
     Read,
@@ -48,7 +48,7 @@ impl Command {
     }
 }
 
-/// Requisição NBD (cabeçalho de 28 bytes; payload de WRITE vem depois no socket).
+/// NBD request (28-byte header; WRITE payload comes after on the socket).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Request {
     pub flags: u16,
@@ -87,7 +87,7 @@ fn be64(b: &[u8]) -> u64 {
     u64::from_be_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]])
 }
 
-/// Faz o parse do cabeçalho de 28 bytes. Valida tamanho e magic.
+/// Parses the 28-byte header. Validates size and magic.
 pub fn parse_request(buf: &[u8]) -> Result<Request, ProtocolError> {
     if buf.len() < REQUEST_LEN {
         return Err(ProtocolError::ShortBuffer {
@@ -108,7 +108,7 @@ pub fn parse_request(buf: &[u8]) -> Result<Request, ProtocolError> {
     })
 }
 
-/// Codifica a simple reply de 16 bytes (magic + error + handle ecoado).
+/// Encodes the 16-byte simple reply (magic + error + echoed handle).
 pub fn encode_simple_reply(error: u32, handle: u64) -> [u8; SIMPLE_REPLY_LEN] {
     let mut out = [0u8; SIMPLE_REPLY_LEN];
     out[0..4].copy_from_slice(&NBD_SIMPLE_REPLY_MAGIC.to_be_bytes());

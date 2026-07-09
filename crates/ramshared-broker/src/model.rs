@@ -1,31 +1,31 @@
-//! Tipos do modelo do broker (PRD §7 / SPECv2 ITEM-3) — exatamente um lugar.
+//! Broker model types (PRD §7 / SPECv2 ITEM-3) — exactly one place.
 //!
-//! `SliceState` inclui `Leased` (DT-19: reserva de slice para lease, fora do round-robin).
-//! `Lease` é estado interno do broker (não trafega no fio), por isso não deriva `serde`.
+//! `SliceState` includes `Leased` (DT-19: slice reservation for lease, outside round-robin).
+//! `Lease` is internal state of the broker (does not travel over the wire), hence does not derive `serde`.
 
-/// Identificador de tenant (host consumidor: WSL2, civm, ...).
+/// Tenant identifier (consumer host: WSL2, civm, ...).
 pub type TenantId = u32;
-/// Identificador de slice (`s0..s{K-1}`); o número é o sufixo do device NBD (DT-21).
+/// Slice identifier (`s0..s{K-1}`); the number is the suffix of the NBD device (DT-21).
 pub type SliceId = u16;
 
-/// Estado de uma slice na máquina do broker. Transições legais em [`crate`] `slices` (ITEM-4).
+/// State of a slice on the broker machine. Legal transitions in [`crate`] `slices` (ITEM-4).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum SliceState {
-    /// Livre para atribuição.
+    /// Free for assignment.
     Free,
-    /// Em uso por um tenant (swap montado).
+    /// In use by a tenant (swap mounted).
     Active,
-    /// Swapoff em voo (aguardando `SwapOffDone` + zero, DT-17) antes de voltar a `Free`.
+    /// Swapoff in flight (waiting for `SwapOffDone` + zero, DT-17) before returning to `Free`.
     Draining,
-    /// Reservada a um lease pendente/ativo (DT-19; não volta ao round-robin).
+    /// Reserved for a pending/active lease (DT-19; does not return to round-robin).
     Leased,
 }
 
-/// Uma fatia da VRAM exportada como device NBD. Offsets disjuntos no mesmo `DeviceMem`.
+/// A slice of VRAM exported as an NBD device. Disjoint offsets on the same `DeviceMem`.
 ///
-/// `PartialEq`/`Eq` derivados: `protocol::Msg` (que deriva `PartialEq` p/ os testes de roundtrip)
-/// embute `Vec<Slice>` em `StatusReply` — todos os campos da `Slice` são `Eq` (correção forçada
-/// pelo type system; SPECv2 atualizado).
+/// Derived `PartialEq`/`Eq`: `protocol::Msg` (which derives `PartialEq` for roundtrip tests)
+/// embeds `Vec<Slice>` in `StatusReply` — all fields of `Slice` are `Eq` (forced correction
+/// by the type system; updated SPECv2).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Slice {
     pub id: SliceId,
@@ -35,7 +35,7 @@ pub struct Slice {
     pub state: SliceState,
 }
 
-/// Amostra de pressão de memória (`/proc/pressure/memory`, linha `some` — DT-15).
+/// Memory pressure sample (`/proc/pressure/memory`, `some` line — DT-15).
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PsiSample {
     pub avg10: f32,
@@ -43,14 +43,14 @@ pub struct PsiSample {
     pub stall_us: u64,
 }
 
-/// Transporte do tenant (escolhe o endpoint NBD no `SwapOn`, DT-25).
+/// Tenant transport (chooses the NBD endpoint in `SwapOn`, DT-25).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum TransportKind {
     NbdUnix,
     NbdTcp,
 }
 
-/// Lease de VRAM revogável (RF-B3) — estado interno do broker, não serializado.
+/// Revocable VRAM lease (RF-B3) — internal state of the broker, not serialized.
 #[derive(Clone, Debug)]
 pub struct Lease {
     pub id: u32,
@@ -81,7 +81,7 @@ mod tests {
 
     #[test]
     fn slice_roundtrips_fields() {
-        // Slice não deriva PartialEq (SPEC): confere campo a campo.
+        // Slice does not derive PartialEq (SPEC): check field by field.
         let sl = Slice {
             id: 3,
             offset: 192,

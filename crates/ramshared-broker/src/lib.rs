@@ -1,10 +1,10 @@
-//! ramshared-broker — protocolo (JSON-lines) + modelo + política do árbitro do Memory Broker.
+//! ramshared-broker — protocol (JSON-lines) + model + policy of the Memory Broker arbiter.
 //!
 //! SPEC: `docs/memory-broker/SPECv2.md` ITEM-3/ITEM-4 (RF-B1, RF-B2, RF-B3, RF-L1; DT-1).
 //!
-//! Lib **pura, testável sem rede/root/GPU**: tipos do modelo ([`model`]), codec JSON-lines
-//! ([`protocol`], DT-1), e — nos ITEM-4 — o mapa de slices e o árbitro (clock injetado). A
-//! fiação (sockets, worker, IO) vive no daemon `ramsharedd` (crate `ramshared-wsl2d`, ITEM-8).
+//! **Pure library, testable without network/root/GPU**: model types ([`model`]), JSON-lines codec
+//! ([`protocol`], DT-1), and — in ITEM-4 — the slice map and the arbiter (injected clock). The
+//! plumbing (sockets, worker, IO) lives in the `ramsharedd` daemon (crate `ramshared-wsl2d`, ITEM-8).
 #![forbid(unsafe_code)]
 
 pub mod arbiter;

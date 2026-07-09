@@ -1,7 +1,7 @@
-//! Smoke seguro do `/dev/ublk-control`.
+//! Safe smoke test of `/dev/ublk-control`.
 //!
-//! Este módulo só consulta `GET_FEATURES`. Ele não chama `ADD_DEV`, não cria
-//! `/dev/ublkcN`/`/dev/ublkbN` e não toca em swap.
+//! This module only queries `GET_FEATURES`. It does not call `ADD_DEV`, does not create
+//! `/dev/ublkcN`/`/dev/ublkbN`, and does not touch swap.
 
 use std::fs::OpenOptions;
 use std::io;
@@ -82,7 +82,7 @@ pub fn delete_device(path: impl AsRef<Path>, dev_id: u32) -> io::Result<()> {
     ramshared_uring::ublk_del_dev(control.as_raw_fd(), dev_id)
 }
 
-/// Aplica `params` ao device `dev_id` via `SET_PARAMS` (necessário antes de `START_DEV`).
+/// Applies `params` to the device `dev_id` via `SET_PARAMS` (required before `START_DEV`).
 pub fn set_params(path: impl AsRef<Path>, dev_id: u32, params: ublk::Params) -> io::Result<()> {
     let control = OpenOptions::new().read(true).write(true).open(path)?;
     let mut bytes = params.to_bytes();
@@ -90,11 +90,11 @@ pub fn set_params(path: impl AsRef<Path>, dev_id: u32, params: ublk::Params) -> 
     ramshared_uring::ublk_set_params(control.as_raw_fd(), dev_id, &mut bytes)
 }
 
-/// Lê os parâmetros atuais do device `dev_id` via `GET_PARAMS`.
+/// Reads current parameters of device `dev_id` via `GET_PARAMS`.
 pub fn get_params(path: impl AsRef<Path>, dev_id: u32) -> io::Result<ublk::Params> {
     let control = OpenOptions::new().read(true).write(true).open(path)?;
     let mut bytes = [0u8; ublk::UBLK_PARAMS_LEN];
-    // O kernel valida o buffer pelo campo `len` da struct; preencher antes do GET.
+    // The kernel validates the buffer via the `len` field of the struct; populate before GET.
     bytes[0..4].copy_from_slice(&(ublk::UBLK_PARAMS_LEN as u32).to_ne_bytes());
 
     ramshared_uring::ublk_get_params(control.as_raw_fd(), dev_id, &mut bytes)?;
@@ -102,15 +102,15 @@ pub fn get_params(path: impl AsRef<Path>, dev_id: u32) -> io::Result<ublk::Param
     Ok(ublk::Params::from_bytes(&bytes))
 }
 
-/// Sobe o device (`START_DEV`): cria `/dev/ublkbN`. Bloqueia até as filas ready e o
-/// `add_disk`; a thread servidora deve estar ativa para servir o partition scan.
+/// Starts the device (`START_DEV`): creates `/dev/ublkbN`. Blocks until queues are ready and
+/// `add_disk`; the server thread must be active to serve the partition scan.
 pub fn start_dev(path: impl AsRef<Path>, dev_id: u32, ublksrv_pid: u32) -> io::Result<()> {
     let control = OpenOptions::new().read(true).write(true).open(path)?;
 
     ramshared_uring::ublk_start_dev(control.as_raw_fd(), dev_id, ublksrv_pid)
 }
 
-/// Para o device (`STOP_DEV`): remove `/dev/ublkbN` e aborta os FETCH pendentes.
+/// Stops the device (`STOP_DEV`): removes `/dev/ublkbN` and aborts pending FETCH requests.
 pub fn stop_dev(path: impl AsRef<Path>, dev_id: u32) -> io::Result<()> {
     let control = OpenOptions::new().read(true).write(true).open(path)?;
 

@@ -1,8 +1,8 @@
-//! ramshared-integrity — verificação de integridade por bloco (SPEC §8.1, §14.2).
+//! ramshared-integrity — Block integrity verification (SPEC §8.1, §14.2).
 //!
-//! Para o modo `--debug-checksum`: hash não-cripto rápido + tabela de checksum
-//! pré-alocada por índice de bloco (detecta corrupção/leitura torn na VRAM) e
-//! padrões reprodutíveis para o `test-integrity`. Lógica pura, sem root.
+//! For `--debug-checksum` mode: Fast non-cryptographic hashing + pre-allocated
+//! checksum table indexed by block number (detects corruption/torn reads in VRAM)
+//! and reproducible patterns for `test-integrity`. Pure logic, no root required.
 #![forbid(unsafe_code)]
 
 pub mod hash;

@@ -128,7 +128,7 @@ fn io_desc_discard_maps_to_trim_and_flush_ignores_sector_range() {
         addr: 0,
     }
     .to_block_request(7)
-    .expect("DISCARD deve mapear para TRIM");
+    .expect("DISCARD must map to TRIM");
 
     assert_eq!(discard.cmd, Command::Trim);
     assert_eq!(discard.offset, 16_384);
@@ -256,7 +256,7 @@ fn io_cmd_serializes_to_16_byte_kernel_layout() {
         0xdead_beef
     );
 
-    // Resultado negativo (ex.: EINVAL) deve serializar como i32 em complemento de dois.
+    // Negative result (e.g. EINVAL) must serialize as two's complement i32.
     let abort = ublk::IoCompletion::from_request_error(1, 2, ublk::IoRequestError::LengthOverflow)
         .to_io_cmd()
         .to_bytes();

@@ -1,5 +1,5 @@
-//! Padrões de teste reprodutíveis por índice de bloco (SPEC §14.2 `test-integrity`).
-//! Determinísticos: `verify_block` regenera o esperado sem precisar guardar dados.
+//! Reproducible test patterns indexed by block number (SPEC §14.2 `test-integrity`).
+//! Deterministic: `verify_block` regenerates the expected pattern without keeping state.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Pattern {
@@ -8,7 +8,7 @@ pub enum Pattern {
     Random,
 }
 
-/// Preenche `buf` com o padrão do bloco `idx`.
+/// Fills `buf` with the deterministic pattern matching block index `idx`.
 pub fn fill_block(buf: &mut [u8], idx: u64, kind: Pattern) {
     match kind {
         Pattern::Zero => buf.iter_mut().for_each(|b| *b = 0),
@@ -18,7 +18,7 @@ pub fn fill_block(buf: &mut [u8], idx: u64, kind: Pattern) {
             }
         }
         Pattern::Random => {
-            // xorshift64 semeado pelo índice do bloco (reprodutível, ≠ por bloco).
+            // xorshift64 seeded by block index (reproducible, but unique per block).
             let mut s = idx.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
             for b in buf.iter_mut() {
                 s ^= s << 13;
@@ -30,7 +30,7 @@ pub fn fill_block(buf: &mut [u8], idx: u64, kind: Pattern) {
     }
 }
 
-/// `true` se `buf` casa com o padrão esperado do bloco `idx`.
+/// Returns `true` if `buf` matches the expected pattern for block index `idx`.
 pub fn verify_block(buf: &[u8], idx: u64, kind: Pattern) -> bool {
     let mut expected = vec![0u8; buf.len()];
     fill_block(&mut expected, idx, kind);
@@ -64,7 +64,7 @@ mod tests {
         let mut b = vec![0u8; 4096];
         fill_block(&mut a, 1, Pattern::Random);
         fill_block(&mut b, 2, Pattern::Random);
-        assert_ne!(a, b); // padrão muda por bloco
-        assert!(!verify_block(&a, 2, Pattern::Random)); // índice errado = falha
+        assert_ne!(a, b); // pattern differs by block index
+        assert!(!verify_block(&a, 2, Pattern::Random)); // wrong index verification fails
     }
 }

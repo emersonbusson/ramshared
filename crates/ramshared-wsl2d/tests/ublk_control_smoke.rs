@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)] // teste: unwrap/expect é idiomático
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test: unwrap/expect is idiomatic
 
 use ramshared_wsl2d::{ublk, ublk_control, ublk_queue};
 use std::fs;
@@ -33,10 +33,10 @@ fn add_then_delete_char_device_without_starting_block_device() {
 
     let char_path = format!("/dev/ublkc{}", report.dev_id);
     let block_path = format!("/dev/ublkb{}", report.dev_id);
-    assert!(fs::metadata(&char_path).is_ok(), "{char_path} ausente");
+    assert!(fs::metadata(&char_path).is_ok(), "{char_path} absent");
     assert!(
         fs::metadata(&block_path).is_err(),
-        "{block_path} nao deveria existir sem START_DEV"
+        "{block_path} should not exist without START_DEV"
     );
 
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
@@ -44,7 +44,7 @@ fn add_then_delete_char_device_without_starting_block_device() {
     wait_until_missing(&char_path);
     assert!(
         fs::metadata(&block_path).is_err(),
-        "{block_path} nao deveria existir apos DEL_DEV"
+        "{block_path} should not exist after DEL_DEV"
     );
     assert_eq!(ublk_nodes(), before);
 }
@@ -58,10 +58,10 @@ fn mmap_io_desc_buffer_read_only_without_starting_device() {
     let mut guard = DeviceGuard::new(report.dev_id);
 
     let char_path = format!("/dev/ublkc{}", report.dev_id);
-    // Sem I/O submetido, o io-desc da tag 0 deve estar zerado. O sucesso prova que o
-    // mmap PROT_READ da fila 0 funciona no kernel custom; nenhum START_DEV e chamado.
+    // Without I/O submitted, the io-desc of tag 0 must be zeroed. Success proves that the
+    // mmap PROT_READ of queue 0 works in the custom kernel; no START_DEV is called.
     let desc0 = ublk_queue::read_io_desc(&char_path, report.queue_depth, 0)
-        .expect("mmap + leitura do io-desc");
+        .expect("mmap + reading of io-desc");
     assert_eq!(desc0, ublk::IoDesc::default());
 
     ublk_control::delete_device(UBLK_CONTROL, report.dev_id).expect("ublk DEL_DEV");
@@ -84,16 +84,16 @@ fn fetch_req_parks_until_delete_aborts_without_starting_device() {
     let mut session = ublk_queue::FetchSession::open(&char_path, report.queue_depth, 4096)
         .expect("abrir char device + submeter FETCH_REQ");
 
-    // FETCH fica estacionado (-EIOCBQUEUED): nenhum CQE antes de I/O ou abort.
+    // FETCH remains parked (-EIOCBQUEUED): no CQE before I/O or abort.
     assert!(
         session.drain().is_empty(),
-        "FETCH nao deveria completar sem I/O nem START_DEV"
+        "FETCH should not complete without I/O or START_DEV"
     );
 
-    // O DEL_DEV posta os aborts (ublk_cancel_dev) e entao espera o char device fechar
-    // (wait_event idr_freed, ublk_drv.c:2523). Esta thread e a dona unica do ring
-    // (DT-3): drena os aborts e, ao terminar, dropa o `session` (fecha o char),
-    // desbloqueando o DEL_DEV. Sem o drain concorrente o controle trava.
+    // DEL_DEV posts the aborts (ublk_cancel_dev) and then waits for the char device to close
+    // (wait_event idr_freed, ublk_drv.c:2523). This thread is the sole owner of the ring
+    // (DT-3): drains the aborts and, upon completion, drops `session` (closes the char),
+    // unlocking DEL_DEV. Without concurrent draining, control hangs.
     let drainer = thread::spawn(move || {
         let mut aborts = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -111,13 +111,13 @@ fn fetch_req_parks_until_delete_aborts_without_starting_device() {
     assert_eq!(
         aborts.len(),
         want,
-        "todos os FETCH devem abortar no DEL_DEV"
+        "all FETCHes must abort on DEL_DEV"
     );
     for completion in &aborts {
         assert_eq!(
             completion.result,
             ublk::UBLK_IO_RES_ABORT,
-            "FETCH estacionado deve completar com -ENODEV"
+            "parked FETCH must complete with -ENODEV"
         );
     }
 
@@ -133,7 +133,7 @@ fn set_params_roundtrips_without_starting_device() {
         .expect("ublk ADD_DEV");
     let mut guard = DeviceGuard::new(report.dev_id);
 
-    // 2048 setores de 512 B = 1 MiB; bs logico 512 (shift 9), fisico 4 KiB (shift 12).
+    // 2048 sectors of 512 B = 1 MiB; logical bs 512 (shift 9), physical 4 KiB (shift 12).
     let params = ublk::Params::basic_disk(2048, 9, 12);
     ublk_control::set_params(UBLK_CONTROL, report.dev_id, params).expect("ublk SET_PARAMS");
 

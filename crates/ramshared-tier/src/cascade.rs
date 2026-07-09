@@ -1,43 +1,45 @@
-//! Invariante de rede de segurança do DEMOTE (finding A1). SPEC §6.2 (passo 4), §9.2.
+//! Invariant safety net for DEMOTE (finding A1). SPEC §6.2 (step 4), §9.2.
 //!
-//! O DEMOTE (§9.2) faz `swapoff` só do tier VRAM quando o canário detecta
-//! latência de eviction; as páginas VRAM-residentes migram para o tier de baixo.
-//! Isso só é **seguro** se existir um destino abaixo da VRAM — senão o `swapoff`
-//! não tem para onde escoar e pode levar a OOM. Logo: não armar a VRAM sem rede.
+//! DEMOTE (§9.2) runs `swapoff` only on the VRAM tier when the canary detects eviction latency.
+//! Resident VRAM pages are migrated to the lower-priority active tier.
+//! This migration is only **safe** if there is a lower destination below VRAM — otherwise,
+//! `swapoff` cannot drain pages and may trigger out-of-memory (OOM) conditions.
+//! Thus: VRAM must not be armed without a safety net tier active.
 
-/// Tiers da cascata, do mais quente ao mais frio.
+/// Tiers of the swap cascade, ordered from hottest to coldest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tier {
-    /// zram — RAM comprimida, baixa latência (HOT).
+    /// zram — Compressed RAM, low latency (HOT).
     Zram,
-    /// VRAM via `nbd-vram` — alto bandwidth, latência instável sob pressão (COLD).
+    /// VRAM via `nbd-vram` — High bandwidth, volatile latency under pressure (COLD).
     Vram,
-    /// swap VHDX do WSL2 — último recurso.
+    /// WSL2 default swap VHDX — Last resort.
     Vhdx,
 }
 
-/// Resultado da checagem A1: existe rede para o DEMOTE da VRAM escoar?
+/// Safety net status for the VRAM demotion path (Invariant A1).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SafetyNet {
-    /// Há swap VHDX de prioridade menor: o DEMOTE escoa para ele.
+    /// Active VHDX swap exists at a lower priority: DEMOTE will spill into it.
     VhdxBelow,
-    /// Sem VHDX, mas `MemAvailable >= vram_size`: o DEMOTE escoa para a RAM.
+    /// No VHDX active, but `MemAvailable >= vram_size`: DEMOTE can safely spill to RAM.
     RamHeadroom,
-    /// Sem rede. Armar a VRAM exige `--force-no-safety-net` (§6.2 passo 4).
+    /// No safety net active. Arming VRAM requires `--force-no-safety-net` (§6.2 step 4).
     None,
 }
 
 impl SafetyNet {
-    /// `true` quando é seguro armar o tier VRAM sem `--force`.
+    /// Returns `true` if it is safe to mount VRAM swap without the `--force` override.
     pub fn is_safe(self) -> bool {
         !matches!(self, SafetyNet::None)
     }
 }
 
-/// Decide a rede de segurança para o tier VRAM (A1).
+/// Determines the safety net availability for the VRAM tier (A1).
 ///
-/// Seguro se: existe swap VHDX abaixo (`vhdx_present`), **ou** a RAM disponível
-/// comporta uma migração do tamanho da VRAM (`mem_available >= vram_size`).
+/// Returns safe if: A lower-priority VHDX swap is active (`vhdx_present` is true),
+/// **or** free system RAM headroom is large enough to absorb a total VRAM evacuation
+/// (`mem_available >= vram_size`).
 pub fn vram_safety_net(vhdx_present: bool, mem_available: u64, vram_size: u64) -> SafetyNet {
     if vhdx_present {
         SafetyNet::VhdxBelow
@@ -63,7 +65,7 @@ mod tests {
 
     #[test]
     fn ram_headroom_covers_when_no_vhdx() {
-        // swap=0 no .wslconfig, mas 4 GiB livres cobrem 1 GiB de VRAM.
+        // swap=0 in .wslconfig, but 4 GiB of free RAM covers 1 GiB of VRAM capacity.
         let net = vram_safety_net(false, 4 * GIB, GIB);
         assert_eq!(net, SafetyNet::RamHeadroom);
         assert!(net.is_safe());
@@ -71,7 +73,7 @@ mod tests {
 
     #[test]
     fn no_vhdx_and_no_ram_is_unsafe() {
-        // swap desligado e RAM insuficiente: armar a VRAM levaria a OOM no DEMOTE.
+        // swap disabled and insufficient RAM: arming VRAM would trigger OOM during DEMOTE.
         let net = vram_safety_net(false, 256 * 1024 * 1024, GIB);
         assert_eq!(net, SafetyNet::None);
         assert!(!net.is_safe());

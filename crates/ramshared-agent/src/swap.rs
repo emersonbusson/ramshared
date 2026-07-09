@@ -1,18 +1,18 @@
-//! Execução de swap sobre NBD: conecta `nbd-client`, formata com `mkswap` (DT-16) e ativa
-//! com `swapon` (prioridade DT-7); o caminho inverso desliga e desconecta. A montagem de
-//! argv é pura/testável; as funções que disparam processos são finas (`Command`) e validadas
-//! ao vivo no drill qemu / civm (não no WSL2 — regra de sessão).
+//! Swap execution over NBD: connects `nbd-client`, formats with `mkswap` (DT-16), and activates
+//! with `swapon` (priority DT-7); the reverse path deactivates and disconnects. The argv construction
+//! is pure/testable; functions that spawn processes are thin wrappers (`Command`) and validated
+//! live in qemu / civm drills (not on WSL2 — session rule).
 //!
-//! DT-14: `nbd-client` SEMPRE com `-timeout 30` e NUNCA `-persist` (sem auto-reconnect; o
-//! broker reassina). DT-16: `mkswap` é obrigatório a cada attach (a VRAM volta zerada/suja).
+//! DT-14: `nbd-client` ALWAYS with `-timeout 30` and NEVER `-persist` (no auto-reconnect; the
+//! broker re-subscribes). DT-16: `mkswap` is mandatory at each attach (VRAM returns zeroed/dirty).
 
 use std::io::{Error, Result};
 use std::process::Command;
 
 use ramshared_broker::protocol::NbdEndpoint;
 
-/// Monta o argv do `nbd-client` para anexar `export` em `dev` (DT-14: `-timeout 30`, sem
-/// `-persist`). Unix usa `-unix <path>`; TCP usa `<host> <port>` posicionais.
+/// Assembles `nbd-client` argv to attach `export` to `dev` (DT-14: `-timeout 30`, no
+/// `-persist`). Unix uses `-unix <path>`; TCP uses positional `<host> <port>`.
 pub fn nbd_args(endpoint: &NbdEndpoint, export: &str, dev: &str) -> Vec<String> {
     let mut a: Vec<String> = vec!["-N".into(), export.into()];
     match endpoint {
@@ -32,7 +32,7 @@ pub fn nbd_args(endpoint: &NbdEndpoint, export: &str, dev: &str) -> Vec<String> 
     a
 }
 
-/// Monta o argv do `swapon` (DT-7: só emite `-p <prio>` quando a prioridade é definida).
+/// Assembles `swapon` argv (DT-7: only emits `-p <prio>` when priority is defined).
 pub fn swapon_args(dev: &str, prio: Option<i32>) -> Vec<String> {
     let mut a = Vec::new();
     if let Some(p) = prio {
@@ -43,7 +43,7 @@ pub fn swapon_args(dev: &str, prio: Option<i32>) -> Vec<String> {
     a
 }
 
-/// Roda um comando e converte saída não-zero em `Err` com detalhe (nunca engole o erro).
+/// Runs a command and converts non-zero exit into `Err` with details (never swallows the error).
 fn run(cmd: &str, args: &[String]) -> Result<()> {
     let status = Command::new(cmd).args(args).status()?;
     if status.success() {
@@ -56,8 +56,8 @@ fn run(cmd: &str, args: &[String]) -> Result<()> {
     }
 }
 
-/// Sequência completa de attach (DT-16): `nbd-client` → `mkswap` → `swapon`. Em falha,
-/// devolve a mensagem para o agente reportar via `SwapOnDone{ok:false,detail}`.
+/// Full attach sequence (DT-16): `nbd-client` → `mkswap` → `swapon`. On failure,
+/// returns the message for the agent to report via `SwapOnDone{ok:false,detail}`.
 pub fn attach_swap(
     endpoint: &NbdEndpoint,
     export: &str,
@@ -65,14 +65,14 @@ pub fn attach_swap(
     prio: Option<i32>,
 ) -> std::result::Result<(), String> {
     run("nbd-client", &nbd_args(endpoint, export, dev)).map_err(|e| format!("nbd-client: {e}"))?;
-    // DT-16: a VRAM exportada volta suja/zerada; o cabeçalho de swap precisa ser reescrito.
+    // DT-16: exported VRAM returns dirty/zeroed; the swap header needs to be rewritten.
     run("mkswap", &[dev.to_string()]).map_err(|e| format!("mkswap: {e}"))?;
     run("swapon", &swapon_args(dev, prio)).map_err(|e| format!("swapon: {e}"))?;
     Ok(())
 }
 
-/// Sequência de detach: `swapoff` → `nbd-client -d`. Best-effort no desconnect (o device pode
-/// já ter caído); o que importa para a integridade é o `swapoff` ter saído.
+/// Detach sequence: `swapoff` → `nbd-client -d`. Best-effort on disconnect (the device might
+/// have already fallen); what matters for integrity is that `swapoff` exited successfully.
 pub fn detach_swap(dev: &str) -> std::result::Result<(), String> {
     run("swapoff", &[dev.to_string()]).map_err(|e| format!("swapoff: {e}"))?;
     let _ = run("nbd-client", &["-d".to_string(), dev.to_string()]);
@@ -103,7 +103,7 @@ mod tests {
                 "30"
             ]
         );
-        assert!(!a.iter().any(|x| x == "-persist"), "DT-14: nunca -persist");
+        assert!(!a.iter().any(|x| x == "-persist"), "DT-14: never -persist");
     }
 
     #[test]
