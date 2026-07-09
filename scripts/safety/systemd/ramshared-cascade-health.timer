@@ -1,0 +1,16 @@
+[Unit]
+Description=Optional timer wrapper — prefer the .service long-running loop
+Documentation=file://@REPO_PATH@/scripts/safety/cascade-health.sh
+
+# Prefer: systemctl enable --now ramshared-cascade-health.service
+# This timer is an alternative if you want oneshot+wake instead of a loop process:
+#   change service Type=oneshot and ExecStart to --once, then enable this timer.
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=ramshared-cascade-health.service
+
+[Install]
+WantedBy=timers.target
