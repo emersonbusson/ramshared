@@ -78,14 +78,18 @@ HwStorStartIo(_In_ PVOID DeviceExtension, _In_ PSCSI_REQUEST_BLOCK Srb)
 {
 	PRAMSHARED_ADAPTER_EXT ext = (PRAMSHARED_ADAPTER_EXT)DeviceExtension;
 
-	/* DT-23: prefer SRBEX; StorPort may deliver classic SRB on older paths. */
-	if (ext->Disk == NULL) {
-		Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
-		StorPortNotification(RequestComplete, DeviceExtension, Srb);
-		return TRUE;
-	}
+	/* Active disk from CREATE_DISK (global LUN MVP). */
+	{
+		PVIRTUAL_DISK disk = VdGetActive();
 
-	VdTranslateSrb(ext->Disk, Srb);
+		if (disk == NULL) {
+			Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+			StorPortNotification(RequestComplete, DeviceExtension, Srb);
+			return TRUE;
+		}
+		VdTranslateSrb(disk, DeviceExtension, Srb);
+	}
+	UNREFERENCED_PARAMETER(ext);
 	return TRUE;
 }
 

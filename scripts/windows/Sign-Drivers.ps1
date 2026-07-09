@@ -29,7 +29,7 @@ $files = @(
     (Join-Path $RepoRoot "drivers\windows\tools\poolstress\x64\Release\poolstress.sys")
 )
 foreach ($f in $files) {
-    if (-not (Test-Path $f)) { throw "missing $f — run Build-Drivers.ps1 first" }
+    if (-not (Test-Path $f)) { throw "missing $f - run Build-Drivers.ps1 first" }
     Write-Host "SIGN $f"
     & $signtool sign /fd SHA256 /f $PfxPath /p $PfxPassword $f
     if ($LASTEXITCODE -ne 0) { throw "signtool failed $LASTEXITCODE" }

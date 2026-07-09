@@ -7,13 +7,12 @@ Signature   = "$WINDOWS NT$"
 Class       = SCSIAdapter
 ClassGuid   = {4d36e97b-e325-11ce-bfc1-08002be10318}
 Provider    = %ManufacturerName%
-CatalogFile = ramshared.cat
+; CatalogFile omitted for test-signing lab install (ITEM-11 adds cat later)
 DriverVer   = 07/09/2026,10.0.26200.1
 PnpLockdown = 1
 
 [DestinationDirs]
 DefaultDestDir = 12
-RamShared_Device_CoInstaller_CopyFiles = 11
 
 [SourceDisksNames]
 1 = %DiskName%,,,""
@@ -47,6 +46,8 @@ AddReg         = RamShared_AddReg
 
 [RamShared_AddReg]
 HKR, "Parameters\PnpInterface", "5", 0x00010001, 0x00000001
+; Virtual StorPort: no real bus resources
+HKR,, "BusType", 0x00010001, 0x0000000A
 
 [Strings]
 SPSVCINST_ASSOCSERVICE = 0x00000002
