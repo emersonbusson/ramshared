@@ -14,7 +14,7 @@ Rules:
 ## Language
 
 - All code, variable names, function names, macros, and filenames: **English**
-- Code comments (inline, block, doc): **Portuguese (BR)** — alinhado ao projeto (autor, docs e PRs em PT-BR). Identificadores (nomes, funções, macros, arquivos) seguem em **inglês**, convenção do kernel.
+- Code comments (inline, block, doc): **Portuguese (BR)** — aligned with the project (author, docs, and PRs in PT-BR). Identifiers (names, functions, macros, files) follow in **English**, kernel convention.
 - Root documentation files (`README.md`, `ARCHITECTURE.md`): **Portuguese (BR)**
 - Commit messages and PR titles: **English** (Conventional Commits format)
 - PR descriptions (body) and Issues: **Portuguese (BR)**
@@ -73,13 +73,13 @@ RamShared is an R&D and hardware acceleration project. Every modification and ev
 **Every task that touches C/Rust files MUST pass validation before being considered done:**
 
 ```bash
-# Formatação e linting C
+# C formatting and linting
 ./scripts/checkpatch.pl -f path/to/file.c
 
-# Static Analysis (se Sparse estiver habilitado)
+# Static Analysis (if Sparse is enabled)
 make C=1 M=drivers/ramshared
 
-# Validação Rust (se aplicável)
+# Rust Validation (if applicable)
 cargo clippy
 rustfmt
 

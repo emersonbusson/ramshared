@@ -1,116 +1,116 @@
 ---
 name: ssdv3
-description: Quando SSDV3 (Spec-Driven Development) é obrigatório vs opcional.
+description: When SSDV3 (Spec-Driven Development) is mandatory vs optional.
 paths:
   - docs/**
 ---
 
 # SSDV3 rules
 
-SSDV3 (Spec-Driven Development V3) é a metodologia de spec do `ramshared` (cf. `docs/`). Pipeline em 3 passos: **PRD → SPEC → IMPL**.
+SSDV3 (Spec-Driven Development V3) is the spec methodology of `ramshared` (cf. `docs/`). Pipeline in 3 steps: **PRD → SPEC → IMPL**.
 
-## Obrigatório
+## Mandatory
 
-SSDV3 é **mandatório** para mudanças em:
+SSDV3 is **mandatory** for changes in:
 
-1. **Locks / concorrência** — nova ordem de lock, troca spinlock↔mutex, RCU, ou barreiras de memória em hot path / contexto de IRQ.
-2. **DMA / IOMMU / MMIO** — novo mapeamento DMA, `ioremap`, ReBAR ou coerência de cache PCIe.
-3. **Memória (mm)** — semântica de NUMA node, HMM/`DEVICE_PRIVATE`, memory hotplug, ou alocação crônica em hot path.
-4. **uAPI / ABI** — nova ioctl/sysfs/debugfs ou mudança de layout de struct exposta a user-space (irreversível após release).
-5. **Novo hardware / subsistema** — suporte a novo device, integração DRM/TTM, CXL.
-6. **MMU / DRM** — qualquer mudança estrutural que toque a MMU ou o driver DRM.
+1. **Locks / concurrency** — new lock order, spinlock↔mutex exchange, RCU, or memory barriers in hot path / IRQ context.
+2. **DMA / IOMMU / MMIO** — new DMA mapping, `ioremap`, ReBAR, or PCIe cache coherence.
+3. **Memory (mm)** — NUMA node semantics, HMM/`DEVICE_PRIVATE`, memory hotplug, or chronic allocation in hot path.
+4. **uAPI / ABI** — new ioctl/sysfs/debugfs or layout change of struct exposed to user-space (irreversible after release).
+5. **New hardware / subsystem** — support for new device, DRM/TTM integration, CXL.
+6. **MMU / DRM** — any structural change touching the MMU or the DRM driver.
 
-## Opcional
+## Optional
 
-Tudo o mais é opcional. Exemplos onde SSDV3 é **overhead**:
+Everything else is optional. Examples where SSDV3 is **overhead**:
 
-- UI tweaks (ajuste de spacing, troca de cor, refactor de component sem mudar contrato).
-- Refactors internos sem mudança de contrato público.
-- Bugfixes localizados (regression test + fix).
-- Atualização de docs.
-- Atualização de deps (com entrada em `docs/LIBRARIES.md`).
+- UI tweaks (spacing adjustment, color changes, component refactoring without changing contract).
+- Internal refactors without public contract changes.
+- Localized bugfixes (regression test + fix).
+- Doc updates.
+- Dependency updates (with entry in `docs/LIBRARIES.md`).
 
 ## Pipeline
 
-### PASSO 1 — PRD
+### STEP 1 — PRD
 
-Copie o prompt de `docs/SSDV3-PROMPTS.md` (PASSO 1 PRD), substitua placeholders, cole no chat.
+Copy the prompt from `docs/SSDV3-PROMPTS.md` (STEP 1 PRD), replace placeholders, paste into chat.
 
-Output: `docs/<feature-slug>/PRD.md`. 14 seções fixas:
+Output: `docs/<feature-slug>/PRD.md`. 14 fixed sections:
 
-1. Resumo
-2. Contexto técnico
-3. Opção recomendada
-4. Requisitos funcionais (RF)
-5. Requisitos não-funcionais (RNF)
-6. Fluxos
-7. Modelo de dados
+1. Summary
+2. Technical context
+3. Recommended option
+4. Functional requirements (FR)
+5. Non-functional requirements (NFR)
+6. Flows
+7. Data model
 8. API / Interfaces
-9. Dependências e riscos
-10. Estratégia de implementação
-11. Documentos a atualizar
-12. Fora de escopo
-13. Critérios de aceitação
-14. Validação
+9. Dependencies and risks
+10. Implementation strategy
+11. Documents to update
+12. Out of scope
+13. Acceptance criteria
+14. Validation
 
-Cada item marcado como:
+Each item marked as:
 
-- **Confirmado no codebase** — código existente foi lido
-- **Confirmado em docs** — ADR/runbook lido
-- **Inferência** — proposta sem confirmação direta (deve ser escassa)
+- **Confirmed in codebase** — existing code was read
+- **Confirmed in docs** — ADR/runbook read
+- **Inference** — proposal without direct confirmation (should be scarce)
 
-### PASSO 2 — SPEC
+### STEP 2 — SPEC
 
-Copie o prompt PASSO 2 SPEC, cole o PRD aprovado, gere `docs/<feature-slug>/SPEC.md`.
+Copy the STEP 2 SPEC prompt, paste the approved PRD, generate `docs/<feature-slug>/SPEC.md`.
 
-SPEC traduz PRD em:
+SPEC translates PRD into:
 
-- Arquivos a criar/modificar (paths absolutos)
-- Arquivos/patches com paths absolutos
-- Validações em handlers (ioctl/sysfs: `copy_{from,to}_user`, bounds, alinhamento)
-- Ordem de locks e seções críticas
-- Links para `docs/methodology/KAHNEMAN-DISCIPLINES.md` para os passos críticos
+- Files to create/modify (absolute paths)
+- Files/patches with absolute paths
+- Validations in handlers (ioctl/sysfs: `copy_{from,to}_user`, bounds, alignment)
+- Lock order and critical sections
+- Links to `docs/methodology/KAHNEMAN-DISCIPLINES.md` for critical steps
 
-### PASSO 3 — IMPL
+### STEP 3 — IMPL
 
-Implementa estritamente conforme SPEC. **Zero criatividade fora do escopo.** Se nova decisão arise → volta para SPEC, atualiza, depois implementa.
+Implement strictly according to SPEC. **Zero creativity out of scope.** If a new decision arises → go back to SPEC, update, then implement.
 
-Output: `docs/<feature-slug>/IMPL.md` documentando o que foi feito (commits, arquivos, decisões pequenas que não pediram nova ADR, métricas de validação).
+Output: `docs/<feature-slug>/IMPL.md` documenting what was done (commits, files, small decisions that did not require a new ADR, validation metrics).
 
-> **Benchmarks que embasam o gate numérico P0 e as métricas de validação** seguem [`.claude/rules/benchmarks.md`](benchmarks.md): contexto capturado automaticamente, ≥3 rodadas (mediana + p99 + desvio), tag de carga (`idle`/`loaded`) e registro íntegro em `docs/BENCHMARKS.md` + `docs/benchmarks/results.jsonl`.
+> **Benchmarks supporting the P0 numerical gate and validation metrics** follow [`.claude/rules/benchmarks.md`](benchmarks.md): context captured automatically, ≥3 runs (median + p99 + deviation), load tag (`idle`/`loaded`), and complete record in `docs/BENCHMARKS.md` + `docs/benchmarks/results.jsonl`.
 
-## Regras duras
+## Hard Rules
 
-1. **Reuso antes de criação.** Antes de propor código novo, prove que uma API do kernel ou helper existente não atende. Reference: subsistemas (`mm/`, `drm/`, `lib/`), helpers do módulo, crates do workspace.
-2. **Separação fato vs proposta.** Cada item do PRD é "Confirmado em codebase / Confirmado em docs / Inferência". Inferências precisam de validação em SPEC.
-3. **Zero criatividade no IMPL.** Code segue SPEC. Nova decisão → SPEC update → re-aprovação.
-4. **Rastreabilidade por requirement ID.** Cada commit cita `RF-3`, `RNF-2`, etc. PR de IMPL liga aos IDs cobertos.
-5. **Kahneman discipline link.** Passos críticos no SPEC referenciam `docs/methodology/KAHNEMAN-DISCIPLINES.md` (ex.: para mudança de lock/DMA, link disciplina #2 counterfactual).
+1. **Reuse before creation.** Before proposing new code, prove that an existing kernel API or helper does not suffice. Reference: subsystems (`mm/`, `drm/`, `lib/`), module helpers, workspace crates.
+2. **Fact vs proposal separation.** Each item of the PRD is "Confirmed in codebase / Confirmed in docs / Inference". Inferences need validation in SPEC.
+3. **Zero creativity in IMPL.** Code follows SPEC. New decision → SPEC update → re-approval.
+4. **Traceability by requirement ID.** Each commit references `FR-3`, `NFR-2`, etc. IMPL PR links to covered IDs.
+5. **Kahneman discipline link.** Critical steps in SPEC reference `docs/methodology/KAHNEMAN-DISCIPLINES.md` (e.g., for lock/DMA changes, link discipline #2 counterfactual).
 
-## Localização
+## Location
 
-- Prompts copiáveis: `docs/SSDV3-PROMPTS.md`.
-- Artifacts: `docs/<feature-slug>/{PRD,SPEC,IMPL}.md`. Slug em kebab-case inglês.
-- Disciplinas Kahneman: `docs/methodology/KAHNEMAN-DISCIPLINES.md`.
+- Copiable prompts: `docs/SSDV3-PROMPTS.md`.
+- Artifacts: `docs/<feature-slug>/{PRD,SPEC,IMPL}.md`. Slug in English kebab-case.
+- Kahneman Disciplines: `docs/methodology/KAHNEMAN-DISCIPLINES.md`.
 
-## Como linkar SPEC ao código
+## How to link SPEC to code
 
-Comentários C/Rust quando o código implementa requisito específico:
+C/Rust comments when the code implements a specific requirement:
 
 ```rust
-// SPEC: docs/vram-as-ram/SPECv3-WSL2.md §9 — DEMOTE da VRAM por latência
+// SPEC: docs/vram-as-ram/SPECv3-WSL2.md §9 — DEMOTE of VRAM due to latency
 fn demote(&mut self) -> Result<(), Error> {
     // ...
 }
 ```
 
-PR description cita SPEC + requirement IDs cobertos.
+PR description cites SPEC + covered requirement IDs.
 
 ## Don't
 
-- ❌ Pular PRD/SPEC para mudança estrutural em locks/DMA/uAPI/mm.
-- ❌ "Vou só fazer um SPEC pequeno" — se a mudança cabe em SPEC sem PRD, ela provavelmente é opcional, não obrigatória; e se é obrigatória, PRD é passo 1.
-- ❌ IMPL sem SPEC aprovado.
-- ❌ "Inferência" no PRD em >30% dos itens — sinal de que a investigação foi rasa.
-- ❌ Criar utilitário novo sem checar APIs do kernel (`lib/`, helpers do subsistema) ou os crates do workspace.
-- ❌ Commit no IMPL que não rastreia para requirement ID.
+- ❌ Skip PRD/SPEC for structural changes in locks/DMA/uAPI/mm.
+- ❌ "I'll just do a small SPEC" — if the change fits in a SPEC without a PRD, it is likely optional, not mandatory; and if it is mandatory, PRD is step 1.
+- ❌ IMPL without approved SPEC.
+- ❌ "Inference" in the PRD on >30% of items — a sign that the investigation was shallow.
+- ❌ Create a new utility without checking kernel APIs (`lib/`, subsystem helpers) or workspace crates.
+- ❌ Commit in IMPL that does not trace to a requirement ID.

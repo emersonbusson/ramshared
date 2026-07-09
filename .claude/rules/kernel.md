@@ -1,17 +1,17 @@
-# Regras Globais para LLMs no RamShared
+# Global Rules for LLMs in RamShared
 
-Este documento define como IAs e Assistentes devem gerar código C/Rust para o projeto RamShared.
+This document defines how AIs and Assistants must generate C/Rust code for the RamShared project.
 
-## Linguagem e Formatação
-- **C Kernel Style:** Use rigorosamente o estilo padrão do Linux Kernel (indentação com TABs de 8 espaços, linhas de 80 caracteres máximo, brackets abertos na mesma linha de `if`/`for`).
-- **Rust for Linux:** Se utilizar Rust, siga estritamente os padrões da `alloc` e `core`, evitando a `std`. Use o `rustfmt` com as configurações do mainline.
-- Todo output de IA para arquivos `.c` ou `.rs` deve estar pronto para passar no script `checkpatch.pl` do kernel Linux.
+## Language and Formatting
+- **C Kernel Style:** Rigorously use the standard Linux Kernel style (indentation with 8-space TABs, 80-character line limit, open brackets on the same line for `if`/`for`).
+- **Rust for Linux:** If using Rust, strictly follow `alloc` and `core` standards, avoiding `std`. Use `rustfmt` with mainline configurations.
+- All AI output for `.c` or `.rs` files must be ready to pass the Linux kernel's `checkpatch.pl` script.
 
-## Semântica e Memória
-- Nunca assuma que ponteiros virtuais podem ser passados diretamente para hardware. Mapeie e desmapeie (ex: `dma_map_single`, `pci_iomap`) explicitamente.
-- Todo lock (spinlock, mutex) deve ter um escopo claro e justificado. Atenção extrema à inversão de prioridade e deadlocks em contexto de interrupção.
-- Não deixe vazamentos de memória e libere recursos na exata ordem inversa da alocação nas rotinas de erro (`goto out_err;` idiom).
+## Semantics and Memory
+- Never assume virtual pointers can be passed directly to hardware. Explicitly map and unmap (e.g., `dma_map_single`, `pci_iomap`).
+- Every lock (spinlock, mutex) must have a clear and justified scope. Give extreme attention to priority inversion and deadlocks in interrupt contexts.
+- Do not leave memory leaks and free resources in the exact reverse order of allocation in error routines (using the `goto out_err;` idiom).
 
-## Documentação e SPEC
-- Nunca escreva implementação direta baseada no PRD. Use a metodologia SSDV3 (PRD -> SPEC -> IMPL).
-- Os PRDs e SPECs devem ter disciplinas de mitigação de Kernel Panic documentadas usando o framework Kahneman.
+## Documentation and SPEC
+- Never write direct implementations based on the PRD. Use the SSDV3 methodology (PRD -> SPEC -> IMPL).
+- PRDs and SPECs must have documented Kernel Panic mitigation disciplines using the Kahneman framework.
