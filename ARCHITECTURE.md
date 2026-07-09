@@ -1,67 +1,123 @@
 # Architecture — RamShared
 
-Focus: The **WSL2** implementation (SPECv3), which is the only viable path on GPU-PV guest systems. Bare-metal targets (NUMA/HMM/CXL) are detailed in the [ROADMAP.md](ROADMAP.md).
+RamShared turns **idle GPU memory** into a **cold emergency-memory tier** with an explicit **give-back** path when the GPU or host reclaims that memory.
 
-## Overview
+Two implementation tracks share the same idea and much of the Rust core (`ramshared-cuda`, `ramshared-block`, integrity, tier rules). They differ in **who owns the block device** and **where evidence is allowed**.
 
-RamShared **orchestrates** a priority-ordered swap cascade and **manages the VRAM tier**; `zram` and `VHDX` are kernel-level mechanisms that RamShared configures rather than implements directly.
+| Track | Status | Evidence env |
+| --- | --- | --- |
+| **Linux / WSL2 cascade** | Day-1 product | Live WSL2 + qemu drills |
+| **Native Windows StorPort** | Lab-complete (VM) | Hyper-V `win11-drill` only — **host-real blocked** |
+
+Bare-metal NUMA/HMM/CXL is roadmap-only ([ROADMAP.md](ROADMAP.md)).
+
+---
+
+## Track 1 — Linux / WSL2 cascade
+
+RamShared **orchestrates** a priority-ordered swap cascade and **manages the VRAM tier**. `zram` and `VHDX`/disk swap are kernel mechanisms RamShared configures, not reimplements.
 
 ```text
-Memory Pressure ─► zram  (Compressed RAM)  prio 200  HOT
-                ─► VRAM  (CUDA + NBD daemon)  prio 100  COLD
-                ─► VHDX  (WSL2 default swap)  prio  -2  LAST
+Memory pressure ─► zram   (compressed RAM)   prio 200  HOT
+                ─► VRAM   (CUDA + NBD daemon) prio 100  COLD
+                ─► VHDX   (WSL2 default swap) prio  -2  LAST
 ```
 
-## Safety Model (The Pivot)
+### Safety model (the pivot)
 
-Validation on real GPU hardware demonstrated that WDDM eviction is:
+Validation on real GPU hardware showed WDDM eviction is:
 
-*   **data-safe** — the page checksum remains intact after eviction;
-*   **latency-unsafe** — a 4KB read with VRAM fully occupied resulted in a **1.18 s** delay.
+* **data-safe** — page checksums remain intact after eviction;
+* **latency-unsafe** — a 4 KB read with VRAM under host reclaim measured **~1.18 s**.
 
-If configured as hot swap space, VRAM eviction would lock up the system. Operating as a **cold** tier behind `zram`, it only receives rarely accessed pages — hiding the latency. When a latency spike is detected (indicating the host OS is reclaiming VRAM), the **DEMOTE** thread runs `swapoff` on the VRAM tier, causing the kernel to migrate active pages back to `VHDX` **without interrupting running processes**.
+If VRAM were hot swap, eviction would stall the system. As a **cold** tier behind `zram`, it only receives cooler pages. When latency or free-floor canaries fire (host reclaiming VRAM), the **DEMOTE** path runs `swapoff` on the VRAM tier so the kernel migrates pages to VHDX **without killing processes**.
 
-**Invariant A1:** The demotion is only safe if there is a lower-priority tier active and ready to absorb the pages (verified at startup and checked in the `ramshared-tier` safety net).
+**Invariant A1:** Demotion is only safe if a lower-priority tier is active and ready to absorb pages (checked at startup and in `ramshared-tier`).
 
-## Components
+### Components (Linux/WSL2)
 
 | Crate | Responsibility | `unsafe` |
-|---|---|---|
-| `ramshared-tier` | Priority management (`zram 200 > vram 100 > vhdx -2`), `validate_order`, A1 safety net | `forbid` |
-| `ramshared-cuda` | `libcuda` loading via `dlopen`/`LoadLibrary` (runtime, no toolkit/`build.rs`); RAII bindings (`Cuda`→`Context`→`DeviceMem`) | **Isolated here** |
-| `ramshared-block` | NBD fixed-newstyle protocol: parsing/encoding, handshake state machine | `forbid` |
-| `ramshared-integrity` | Checksum calculations (FNV-1a) + validation testing patterns | `forbid` |
-| `ramshared-wsl2d` | Daemon: state machine, `VramBackend` (connects CUDA↔NBD), `mlockall`/`oom_score_adj`, canary/DEMOTE triggers | `mlockall` only |
-| `ramshared-cli` | Command-line management: `check`/`doctor` (preflight) + `up`/`down`/`status` (orchestration) | `forbid` |
-| `ramshared-winsvc` | **Windows-only** (P4): userspace side of StorPort VRAM disk + pagefile; Linux builds a stub | planned `unsafe` for IOCTL/FFI only |
-| `drivers/windows/ramshared` | StorPort virtual miniport (C/WDK); ABI `protocol.h` | kernel-mode |
+| --- | --- | --- |
+| `ramshared-tier` | Priorities (`zram 200 > vram 100 > vhdx -2`), `validate_order`, A1 | `forbid` |
+| `ramshared-cuda` | Runtime load of `libcuda` / `nvcuda.dll` (no toolkit link); RAII | **Isolated here** |
+| `ramshared-block` | NBD protocol + shared `VramBackend` | `forbid` (backend uses CUDA) |
+| `ramshared-integrity` | Checksums (FNV-1a) + validation patterns | `forbid` |
+| `ramshared-wsl2d` | Daemon: state machine, NBD serve, canary/DEMOTE, `mlockall` | `mlockall` only (+ CUDA via crate) |
+| `ramshared-cli` | `check` / `doctor` / `up` / `down` / `status` | `forbid` |
 
-**Native Windows track (P4):** secondary pagefile on a StorPort virtual disk backed by VRAM — SPEC [`docs/specs/no-milestone/windows-swap-driver/`](docs/specs/no-milestone/windows-swap-driver/), ADR-0006. Not the day-1 public install path (that remains WSL2 cascade).
+### Execution flow
 
-All `unsafe` blocks are isolated within `ramshared-cuda` (FFI) with `// SAFETY:` markers, except for the daemon's `mlockall` call which is documented and isolated. Minimal external dependencies (`std` + FFI/libc).
+1. **`up`:** Validate order + A1 → start zram → start daemon → attach NBD (`nbd-client`) → `mkswap` / `swapon -p`.
+2. **Daemon:** Allocate and zero VRAM, `mlockall`, `oom_score_adj=-1000`, serve READ/WRITE via `cuMemcpy*`.
+3. **Canary:** Latency / free-floor / corruption streaks → spawn `swapoff` on VRAM device (**DEMOTE**) while serving read-back.
+4. **`down`:** `swapoff` NBD **before** disconnect (avoids panic) → tear zram → wipe VRAM → stop daemon.
 
-## Execution Flow
+### Key decisions
 
-1.  **`up`:** Validates priority configuration and invariant A1, starts `zram`, spins up the daemon, and attaches `/dev/nbd0` using `nbd-client -unix`. The daemon does not call ioctl or use unsafe memory mapping for the device attachment — this is handled by `nbd-client`. Finally, `mkswap` and `swapon -p` mount the swap tiers.
-2.  **Daemon:** Allocates and zeroes VRAM, locks userspace memory (`mlockall`), protects itself from the out-of-memory killer (`oom_score_adj=-1000`), and serves NBD requests: every READ/WRITE maps to a `cuMemcpyDtoH`/`HtoD` call on the VRAM memory range.
-3.  **Inline Canary:** The daemon monitors I/O latency. Under a latency spike (latency > N× baseline across M samples), it spawns a thread to run `swapoff <nbd>` (**DEMOTE**), while continuing to serve read-backs. The demote trigger is only disarmed once `swapoff` completes successfully.
-4.  **`down`:** Runs `swapoff` on the NBD device **before** disconnecting (avoiding kernel panics), tears down `zram`, and waits for the daemon to wipe VRAM clean before sending termination signals (`pkill`).
+* **NBD over ublk (Phase A):** `CONFIG_BLK_DEV_NBD` is common on WSL2; ublk often needs a custom kernel.
+* **Runtime CUDA loader:** no build-time CUDA Toolkit dependency.
+* **Priority via `swapon -p`:** not zram writeback (not in baseline WSL2 kernel) — writeback is Phase B.
+* **Canary vs cascade separation:** pure unit tests without root/GPU; runner owns CUDA and `swapoff`.
 
-## Key Decisions
+Evidence: [`docs/reliability/wsl2-cascade-validation.md`](docs/reliability/wsl2-cascade-validation.md) · [`docs/reliability/wsl2-fase0-final.md`](docs/reliability/wsl2-fase0-final.md) · live DEMOTE: [`validation.md`](validation.md).
 
-*   **NBD instead of ublk (Phase A):** `CONFIG_BLK_DEV_NBD=m` is standard on WSL2, whereas `ublk` would require compiling a custom kernel. This keeps the daemon free of custom kernel module requirements.
-*   **Runtime Loader:** Loading `libcuda` (or `nvcuda.dll` on Windows) dynamically at runtime rather than link-time avoids build-time dependencies on the CUDA Toolkit.
-*   **Priority Cascade via `swapon -p`:** Used instead of writebacks. Since `CONFIG_ZRAM_WRITEBACK` is not compiled in the baseline kernel, direct writebacks (zram evicting cold data directly to VRAM) are reserved for Phase B.
-*   **Separation of Concerns:** Canary logic (`residency.rs`) and cascade logic (`tier`) are pure Rust and unit-tested without root or GPU access; only the daemon runner invokes CUDA and system `swapoff` commands.
+---
 
-## Methodology
+## Track 2 — Native Windows (StorPort virtual miniport)
 
-*   **SSDV3:** Spec-Driven Development. PRD → SPEC → IMPL under `docs/specs/…`, with Passo 2.5 adversarial audits (go/no-go); SPEC revised in-place (git is history). Reference: [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md), [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md).
-*   **Kahneman Disciplines (18):** Counterfactuals and numerical rollback (#2); calibrated retry (#15), fail-safe/independent curator (#16), replay idempotency (#17), right-layer root cause + proven sunset (#18). Reference: [`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md).
-*   **Day-0 Policy:** Zero-tolerance for shims, temporary workarounds, or warning bypasses.
+**Product idea:** a secondary **pagefile** on a **virtual disk** whose blocks are served from VRAM (or a lab file backend), with **fail-closed teardown** so the disk is never yanked while the pagefile is hot.
 
-## Validation
+```text
+Windows memory manager
+        │
+        ▼
+ pagefile on volume D:  (secondary)
+        │
+        ▼
+ StorPort virtual miniport (ramshared.sys)
+        │  SQ/CQ rings + COMMIT_AND_FETCH
+        ▼
+ Userspace backend (lab: WinDriveBackend file; product: CUDA VramBackend)
+```
 
-System validation within cgroup-confined workloads: **511 MiB** spilled to VRAM (**332,800 intact pages**) and a **481 MiB** demotion path migrated VRAM -> VHDX under active pressure with **zero corruption**.
+### Safety model (Windows)
 
-Log evidence: [`docs/reliability/wsl2-cascade-validation.md`](docs/reliability/wsl2-cascade-validation.md) · phase-0 summary: [`docs/reliability/wsl2-fase0-final.md`](docs/reliability/wsl2-fase0-final.md).
+| Scenario | Empirical outcome | Product rule |
+| --- | --- | --- |
+| **B1** surprise remove with **no** secondary pagefile | Contained (PASS_B1_SAFE_ARM) | Lab OK |
+| **B2** kill backend with pagefile **Usage > 0** | **BugCheck 0x7A** / `STATUS_IO_DEVICE_ERROR` | **Never** — DT-9 |
+| **DT-9** ordered teardown | Refuse kill while PF hot; after reboot unload, kill clean | Mandatory |
+| Lab SCM delayed-auto | Backend + disk after boot | Lab path only |
+
+**Invariant (DT-9):** teardown never removes the disk with an active pagefile. Order: disable pagefile → (reboot if OS will not release hot) → drain I/O → destroy disk → wipe → release lease.
+
+### Components (Windows)
+
+| Piece | Role |
+| --- | --- |
+| `drivers/windows/ramshared` | StorPort miniport + `\\.\RamSharedCtl`; bounce-buffer I/O; `StorPortGetSystemAddress` |
+| `crates/ramshared-winsvc` | Protocol, pagefile helpers, teardown policy; product bin needs MSVC |
+| Lab `RamSharedWinSvc` (C#) | Delayed-auto SCM orchestrating Start/Stop lab scripts (stand-in until Rust service builds on Windows) |
+| `scripts/windows/*` | Preflight, build, install, B1/B2/DT-9/ITEM-8 drills, disciplined campaign |
+
+**Not day-1 public install.** Do not load on a physical host you care about. Full SPEC: [`docs/specs/no-milestone/windows-swap-driver/SPEC.md`](docs/specs/no-milestone/windows-swap-driver/SPEC.md) · gates: [`IMPL.md`](docs/specs/no-milestone/windows-swap-driver/IMPL.md) · ADR-0006.
+
+### Lab vs product (Day-0 honesty)
+
+| Layer | Lab (proven) | Product (blocked until evidence) |
+| --- | --- | --- |
+| Disk backend | File-backed `WinDriveBackend` | CUDA `VramBackend` + free-floor |
+| SCM | C# `RamSharedWinSvc` delayed-auto | Rust `ramshared-winsvc` + installers |
+| Signing | Test-sign in VM | Attestation / R9 |
+| Host | `win11-drill` only | Host-real **forbidden** until gates |
+
+---
+
+## Cross-cutting methodology
+
+* **SSDV3:** PRD → SPEC → IMPL under `docs/specs/…`; Passo 2.5 adversarial go/no-go; SPEC revised in-place. [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md) · [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md).
+* **Kahneman (18):** counterfactual + numerical rollback (#2); calibrated retry (#15); fail-safe / independent curator (#16); replay idempotency (#17); right-layer root cause + proven sunset (#18); **#13 no theater** (green script ≠ green host-real).
+* **Day-0:** no permanent shims or dual-path “ImDisk forever” as product.
+* **Host safety:** real pressure and crash drills only in isolated VM/qemu — never thrash the daily WSL2/Windows desktop host ([`.claude/rules/benchmarks.md`](.claude/rules/benchmarks.md)).
+
+Failure modes: [`docs/reliability/DEGRADATION-MATRIX.md`](docs/reliability/DEGRADATION-MATRIX.md).

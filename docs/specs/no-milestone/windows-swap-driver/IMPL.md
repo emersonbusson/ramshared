@@ -116,8 +116,13 @@ export RAMSHARED_DRILL_PASSWORD='…'  # lab only
 
 | Classe | Itens |
 | --- | --- |
-| **Fechados** | ITEM-1..7 código pure/Linux; ABI; fontes driver; harnesses; Hyper-V control path; RNF-8 ublk drills; fail-path DT-21 |
-| **Env-bound** | EWDK build `.sys`; VS `link.exe` no guest; CUDA Windows; pagefile-VRAM real; soak 72h; attestation R9 |
+| **Fechados (lab VM)** | ITEM-1..7 pure/Linux; ABI; `.sys` load; LUN/format; pagefile DT-21; KPD 3/3; DT-9; B1 safe; lab SCM; DEGRADATION-MATRIX; RNF-8 ublk drills |
+| **Env-bound / open** | Product CUDA `nvcuda` no Windows; MSVC+cargo para `ramshared-winsvc` nativo; ITEM-9 K medido; soak 72h; attestation R9; **host-real load** |
+| **By design fail** | B2 pagefile-hot kill → **0x7A** — mitigação = DT-9, não “PASS inventado” |
+
+## Doc surface (maturidade 2026-07-09)
+
+Root docs alinhados ao status acima: `README.md`, `ROADMAP.md`, `ARCHITECTURE.md`, `drivers/windows/README.md`, `PREFLIGHT.md`, `docs/FAQ.md`, `validation.md`.
 | **Abertos de código** | DeviceExtension real no StorPort complete; FFI `NtCreatePagingFile` Windows; SCM `windows-service` main |
 
 ## Rollback trigger

@@ -41,14 +41,18 @@ RamShared interacts with live hardware, GPU paging drivers, and operating system
 
 ## Project Structure
 
-*   `/crates/`: Userspace Rust crates (CLI, broker daemon, CUDA wrappers, etc.).
-*   `/scripts/`: Provisioning, testing harnesses, and QEMU virtualization drills.
+*   `/crates/`: Userspace Rust crates (CLI, WSL2 daemon, CUDA wrappers, Windows service scaffold, etc.).
+*   `/drivers/windows/`: StorPort miniport (**lab VM only** until host-real gates in IMPL — never load casually on a daily host).
+*   `/scripts/`: Provisioning, P0 benches, QEMU drills, `scripts/windows/*` lab harnesses.
 *   `/docs/specs/no-milestone/{slug}/`: SSDV3 artifacts (`PRD.md`, `SPEC.md`, `IMPL.md`, optional `AUDIT-2.5.md`). Index: [`docs/INDEX.md`](docs/INDEX.md).
 *   `/docs/`: Methodology (Kahneman), ADRs, runbooks, reliability, benchmarks.
 *   `/docs/marketing/`: Launch kit (EN/PT social copy) + cascade diagram + demo script.
-*   `/docs/FAQ.md`: Public FAQ (fear / DEMOTE / success criteria).
+*   `/docs/FAQ.md`: Public FAQ (fear / DEMOTE / success criteria / Windows lab honesty).
+*   `/validation.md`: Append-only empirical log (“does it work **now**?”).
 *   `/scripts/quickstart.sh`: Build day-1 binaries (`ramshared` + `ramsharedd`).
 *   `/tools/`: Docs hygiene (`generate-docs-index.mjs`, `check-broken-links.mjs`).
+
+**Day-1 public path:** Linux/WSL2 cascade (`README.md`). Windows StorPort is a second track — lab-complete on Hyper-V only; host-real remains blocked until IMPL + `validation.md` say otherwise.
 
 ### Specs & docs checks
 

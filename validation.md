@@ -332,3 +332,16 @@ Hot arm (PF Usage>0) not re-run: already proven **0x7A/c0000185** (dump 27437); 
 | **Host-real** | **FORBIDDEN** |
 
 **Decision:** ITEM-8 **lab complete for VM operations**. Host-real still blocked until product CUDA path + optional B1 hot with only user pages / partner signing.
+
+## 2026-07-09 — Documentation maturity sync (A–D combo, no host-real claim)
+
+**What:** Align root and track docs with empirical status after Windows lab closeout + WSL2 cascade DEMOTE evidence.
+**Category:** local-check
+**How to measure:** Read `README.md` status table; `ROADMAP.md` completed Windows gates; `ARCHITECTURE.md` dual track; `PREFLIGHT.md` snapshot; FAQ Windows section; `drivers/windows/README.md`.
+**Measured data:**
+- Day-1 product path documented as **Linux/WSL2 only**.
+- Windows track documented as **lab-complete / host-real FORBIDDEN** with gates (DT-21, DT-9, B1 safe, SCM, 0x7A hot).
+- PREFLIGHT no longer claims “scaffold only / no .sys”.
+- Numbers cited only from existing validation/reliability/IMPL evidence (no new host-real PASS).
+**Verdict:** ✅ works (docs honesty)
+**Next action:** Product CUDA Windows path + MSVC winsvc when env available; keep host-real blocked.

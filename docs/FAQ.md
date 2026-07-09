@@ -78,6 +78,21 @@ If a game already fills the GPU, there is little **idle** memory to borrow. RamS
 
 ---
 
+## Is there a Windows installer / kernel driver I can run on my PC?
+
+**Not for day-to-day use.**
+
+| Path | Status |
+| --- | --- |
+| **Linux / WSL2** (`ramshared up`) | Public day-1 product |
+| **Windows StorPort driver** | Proven only inside a **disposable Hyper-V lab VM** |
+
+On Windows, yanking storage under an **active pagefile** can blue-screen (**0x7A**). The lab product **refuses** that teardown (DT-9). Until a measured product CUDA path, signing, and an explicit host-real gate land in the repo, **do not load the driver on a physical host you care about.**
+
+Detail: [`ROADMAP.md`](../ROADMAP.md) · [`docs/specs/no-milestone/windows-swap-driver/IMPL.md`](specs/no-milestone/windows-swap-driver/IMPL.md).
+
+---
+
 ## Why not only use compressed RAM (zram)?
 
 Compressed RAM helps a lot, but it still uses **system RAM**.  
