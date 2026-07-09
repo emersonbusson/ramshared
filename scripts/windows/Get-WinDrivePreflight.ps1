@@ -36,7 +36,7 @@ try {
     if ($build -like '26200*') {
         Ok "Build series 26200.* (SPEC DT-24 allow-list for NtCreatePagingFile MVP)"
     } else {
-        Warn "Build $build not in DT-24 allow-list 26200.* — pagefile activation degrades gracefully (SPEC DT-24)"
+        Warn "Build $build not in DT-24 allow-list 26200.* - pagefile activation degrades gracefully (SPEC DT-24)"
     }
     if (-not [Environment]::Is64BitOperatingSystem) { Bad "x64 OS required" } else { Ok "x64 OS" }
 } catch {
@@ -70,20 +70,20 @@ foreach ($p in $dllCandidates) {
     }
 }
 if (-not $foundDll) {
-    Warn "nvcuda.dll not found under System32 — ITEM-1 Windows CUDA load will fail here"
+    Warn "nvcuda.dll not found under System32 - ITEM-1 Windows CUDA load will fail here"
 }
 
 # Admin (informational)
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 if ($isAdmin) { Ok "Running elevated (needed for service/driver later)" }
-else { Warn "Not elevated — fine for preflight; ITEM-5+ needs admin in VM" }
+else { Warn "Not elevated - fine for preflight; ITEM-5+ needs admin in VM" }
 
 # Hyper-V host capability (best-effort)
 try {
     $hv = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -ErrorAction SilentlyContinue
     if ($hv -and $hv.State -eq 'Enabled') { Ok "Hyper-V feature Enabled (good for disposable VMs)" }
-    else { Warn "Hyper-V not enabled or not queryable — required for RNF-6 VM drills" }
+    else { Warn "Hyper-V not enabled or not queryable - required for RNF-6 VM drills" }
 } catch {
     Warn "Could not query Hyper-V feature (normal inside guest VM)"
 }

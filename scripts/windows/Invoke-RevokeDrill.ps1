@@ -1,11 +1,11 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  RNF-5 / R8 / DT-19 — holder-cooperative lease revoke with pagefile active.
+  RNF-5 / R8 / DT-19 - holder-cooperative lease revoke with pagefile active.
 
 .DESCRIPTION
   Does NOT send a fake broker Msg (C1). Stops the service via SCM so it runs DT-9:
-  pagefile off → (reboot if needed) → drain → destroy → wipe → LeaseRelease.
+  pagefile off -> (reboot if needed) -> drain -> destroy -> wipe -> LeaseRelease.
   Verifies lease gone on broker log/status.
 
 .NOTES

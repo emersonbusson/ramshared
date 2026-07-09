@@ -46,17 +46,24 @@
 
 ## Validação (números)
 
-- testes: **workspace PASS** — winsvc 23 pass; block +3 VramBackend; wsl2d +2 WinDrive; zero fail (ignored GPU/Vulkan inalterados)
+- testes Linux: **workspace PASS** — winsvc 23 pass; block +3 VramBackend; wsl2d +2 WinDrive; zero fail (ignored GPU/Vulkan inalterados)
 - checkpatch: N/A (Windows C; DT-14 checklist WDK)
 - clippy: limpo com `-D warnings` (após `cargo fmt`)
-- drill: scripts em `scripts/windows/`; execução real = VM
-- benchmark: harness ITEM-9 grava `results.jsonl` quando `-RepoRoot` passado; K ainda não medido
+- **VM Hyper-V `win11-drill` (2026-07-09):** build **26200.8037**, test-signing **Yes**, PSD via `drilladmin`
+  - `Get-WinDrivePreflight` exit **0**
+  - `ps1-parse` **PARSE_OK** (todos `scripts/windows/*.ps1`)
+  - `Invoke-KernelPageDrill` exit **3 INCONCLUSIVO** (esperado: sem pagefile-VRAM / sem `.sys` — DT-21 gate honesto)
+  - `Measure-PagefileVram` n=3 idle: median_ms≈**91.7** (run-id `pfvram-20260709-141707`; pagefile counter −1 no guest — só `C:\pagefile.sys` 1408 MB alloc / ~340 MB used)
+  - `Invoke-RevokeDrill` exit **2** sem serviço (script OK)
+  - `Build-Sign-Install -SkipSign` **SKIP** (sem msbuild/WDK no guest)
+  - Overall harness: **PASS_WITH_SKIPS fails=0** (`C:\Users\emedev\ramshared-drill\agent-vm-e2e-results.json`)
+- benchmark: K (RNF-2) **ainda não** — falta pagefile-VRAM real vs disco
 
 ## Gaps
 
-- **fechados nesta sessão:** ITEM-1 (verificado), ITEM-2, ITEM-3 (broker+winsvc pure), ITEM-4 (ABI+tests), ITEM-5 (código fonte driver), ITEM-6 (driver_link pure), ITEM-7 (ntpagefile/smoke pure + allow-list), ITEM-8..11 (scripts executáveis além de stub exit-2)
-- **env-bound (precisa hardware/civm/GPU/WDK):** MSBuild+SDV+InfVerif; `Cuda::load` em `nvcuda.dll`; drills `qemu-ublk-*`; kernel-page drill com residência DT-21; soak 72 h; attestation Partner Center (R9)
-- **abertos:** amarrar DeviceExtension real no `StorPortNotification`; FFI `NtCreatePagingFile` no Windows; SCM `windows-service` main path; e2e NTFS format em VM
+- **fechados nesta sessão:** ITEM-1 (verificado), ITEM-2, ITEM-3 (broker+winsvc pure), ITEM-4 (ABI+tests), ITEM-5 (código fonte driver), ITEM-6 (driver_link pure), ITEM-7 (ntpagefile/smoke pure + allow-list), ITEM-8..11 (scripts executáveis + smoke na VM)
+- **env-bound (precisa hardware/civm/GPU/WDK):** MSBuild+SDV+InfVerif no guest ou host build; `Cuda::load` em `nvcuda.dll` (VM sem GPU/nvcuda); drills `qemu-ublk-*`; kernel-page drill com residência DT-21 **após** `.sys`+pagefile-VRAM; soak 72 h; attestation Partner Center (R9)
+- **abertos:** amarrar DeviceExtension real no `StorPortNotification`; FFI `NtCreatePagingFile` no Windows; SCM `windows-service` main path; e2e NTFS format em VM; instalar EWDK/WDK na pipeline de build
 
 ## Rollback trigger
 

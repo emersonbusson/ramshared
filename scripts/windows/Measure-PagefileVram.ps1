@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  ITEM-9 / RNF-2 / DT-13 — side-by-side pagefile-VRAM vs disk latency/capacity.
+  ITEM-9 / RNF-2 / DT-13 - side-by-side pagefile-VRAM vs disk latency/capacity.
 
 .DESCRIPTION
   Same window, >=3 runs, tags idle|loaded. Appends docs/benchmarks/results.jsonl
@@ -83,7 +83,7 @@ if ($RepoRoot -ne "") {
     $bench = Join-Path $RepoRoot "docs/BENCHMARKS.md"
     $block = @"
 
-## $runId — Measure-PagefileVram ($LoadTag)
+## $runId - Measure-PagefileVram ($LoadTag)
 
 - n=$Runs median_ms=$median p50=$p50 p99=$p99
 - K deferred to first side-by-side VRAM vs disk (DT-13).

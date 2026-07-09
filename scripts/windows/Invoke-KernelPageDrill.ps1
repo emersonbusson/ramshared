@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  ITEM-8 / DT-11 / DT-21 — kernel page residency drill (VM ONLY).
+  ITEM-8 / DT-11 / DT-21 - kernel page residency drill (VM ONLY).
 
 .DESCRIPTION
   SPEC windows-swap-driver. Loads poolstress (when built), confirms pagefile-VRAM
@@ -39,7 +39,7 @@ function Assert-DisposableVm {
         if ($model -like "*$h*") { $isVm = $true; break }
     }
     if (-not $isVm) {
-        throw "REFUSE: host model '$model' does not look like a VM. RNF-6 — abort (use -WhatIfHostCheck only for dry-run docs)."
+        throw "REFUSE: host model '$model' does not look like a VM. RNF-6 - abort (use -WhatIfHostCheck only for dry-run docs)."
     }
 }
 
@@ -69,7 +69,7 @@ function Write-Artifact {
     return $path
 }
 
-Write-Host "Invoke-KernelPageDrill.ps1 — ITEM-8 (DT-11/DT-21)"
+Write-Host "Invoke-KernelPageDrill.ps1 - ITEM-8 (DT-11/DT-21)"
 Assert-DisposableVm
 New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
 
@@ -88,7 +88,7 @@ for ($i = 1; $i -le $Runs; $i++) {
     Write-Host "pagefile-VRAM % Usage = $usage"
 
     if ($null -eq $usage -or $usage -le 0) {
-        $msg = "INCONCLUSIVO run=$i: pagefile-VRAM usage not > 0 (DT-21). Does not count as PASS or BSOD."
+        $msg = "INCONCLUSIVO run=${i}: pagefile-VRAM usage not > 0 (DT-21). Does not count as PASS or BSOD."
         Write-Warning $msg
         $results += [pscustomobject]@{ Run = $i; Outcome = "INCONCLUSIVO"; Usage = $usage }
         Write-Artifact -Name "run-$i-inconclusive.txt" -Content $msg | Out-Null
@@ -105,7 +105,7 @@ for ($i = 1; $i -le $Runs; $i++) {
         $outcome = "B2_SERVICE_STOP_FAILED: $($_.Exception.Message)"
     }
 
-    # Optional READBACK via poolstress to force page-in after kill — operator / next automation.
+    # Optional READBACK via poolstress to force page-in after kill - operator / next automation.
     $results += [pscustomobject]@{ Run = $i; Outcome = $outcome; Usage = $usage }
     Write-Artifact -Name "run-$i.json" -Content ($results[-1] | ConvertTo-Json) | Out-Null
 }
@@ -123,7 +123,7 @@ Write-Host $summary
 Write-Artifact -Name "summary.txt" -Content $summary | Out-Null
 
 if ($confirmed -lt $Runs) {
-    Write-Warning "Fewer confirmed runs than requested — do not promote."
+    Write-Warning "Fewer confirmed runs than requested - do not promote."
     exit 3
 }
 exit 0
