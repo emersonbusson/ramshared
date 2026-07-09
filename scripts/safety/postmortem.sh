@@ -39,7 +39,8 @@ TMPDIR_PM="$(mktemp -d)"; trap 'rm -rf "$TMPDIR_PM"' EXIT
 
 # --- sinais de crash que valem coleta (deterministicos) ---
 # \b evita falso-positivo: "kernelOOPSie"/"wh-OOPS-ie" nao casam \bOops:, "deBUG:" nao casa \bBUG.
-CRASH_RE='kernel BUG|\bBUG:|\[ cut here \]|\bOops[:# ]|Call Trace:|hung_task|blocked for more than [0-9]|Out of memory|oom-kill|general protection fault|kernel panic|stack segment|kernel NULL pointer'
+# Inclui hung_task / blocked (swap ghost ublk) e panics — sem falso positivo solto em "debug".
+CRASH_RE='kernel BUG|\bBUG:|\[ cut here \]|\bOops[:# ]|Call Trace:|hung_task|blocked for more than [0-9]|Out of memory|oom-kill|general protection fault|kernel panic|stack segment|kernel NULL pointer|task .* blocked for more than'
 
 # Materializa o journal do boot uma vez (evita chamar journalctl N vezes E o gotcha
 # pipefail+grep-q+SIGPIPE que dava falso "sem crash").
