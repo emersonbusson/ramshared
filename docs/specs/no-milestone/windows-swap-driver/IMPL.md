@@ -18,8 +18,11 @@
 | RNF-8 `qemu-ublk-crash-e1b.sh` | ✓ **PASS** `KTEST-E1B-VERDICT=CONTAINED-SIGBUS` (exit 42 SIGBUS contido; bystander vivo) |
 | Hyper-V elevated path (`sudo.exe` from WSL) | ✓ `IsAdmin=True`, `Get-VM` + PSD |
 | VM `win11-drill` campaign | ✓ **PASS_WITH_SKIPS** (fail paths honestos) |
-| WDK MSBuild / SDV / InfVerif | ✗ SKIP — sem EWDK/`link.exe` no guest |
-| ITEM-8 residency DT-21 (real) | ✗ INCONCLUSIVO honesto (sem pagefile-VRAM / sem `.sys`) |
+| WDK + VS Build Tools (host) | ✓ instalados; `Build-Drivers.ps1` produz `.sys` |
+| `ramshared.sys` / `poolstress.sys` build | ✓ 26624 / 7680 bytes (x64 Release) |
+| Load on `win11-drill` (test-sign) | ✓ ambos **RUNNING**; devices `\\.\RamSharedCtl` + `PoolStress` open |
+| poolstress IOCTL ALLOC/FREE 1 GiB | ✓ ok=True, zero BugCheck |
+| ITEM-8 residency DT-21 (pagefile-VRAM) | ✗ ainda INCONCLUSIVO (sem volume VRAM/pagefile no miniport) |
 | ITEM-9 K (p99 VRAM vs disk) | ✗ harness OK; **K não inventado** (DT-13) |
 | ITEM-10 soak 72 h | ✗ script only |
 | ITEM-11 attestation | ✗ R9 org + no `.sys` |
@@ -131,3 +134,19 @@ export RAMSHARED_DRILL_PASSWORD='…'  # lab only
 | RF-7 / RNF-* | ITEM-8..11 scripts | `d2f87f5`, `58c6986` |
 | ops | elevated Hyper-V | `cc2ec0d` |
 | ops | disciplined campaign | (este commit) |
+
+
+## Load evidence (2026-07-09, win11-drill)
+
+| Step | Result |
+| --- | --- |
+| Host toolchain | VS 2022 BuildTools 17.14 + WDK 10.0.26100 + `storport.h`/`storport.lib` |
+| Build | `scripts/windows/Build-Drivers.ps1` → `ramshared.sys` (26624 B), `poolstress.sys` (7680 B) |
+| Sign | self-signed CodeSigning SHA256 (`signtool`); guest testsigning Yes |
+| First start unsigned | **EC 577** (ERROR_INVALID_IMAGE_HASH) — expected |
+| After sign + start | **poolstress RUNNING**, **ramshared RUNNING** |
+| Device open | `\\.\RamSharedPoolStress` ok; `\\.\RamSharedCtl` ok |
+| poolstress IOCTL | ALLOC 1 GiB ok; FREE ok; no BugCheck event |
+| Guest | ALIVE freeGB≈7.2; checkpoint `pre-driver-load-*` available |
+
+**Still blocked for ITEM-8 PASS:** pagefile-VRAM on product disk + DT-21 `% Usage` > 0 + kill service B1/B2 with residency. StorPort virtual disk still needs INF/PnP path for full SCSI volume (service load proves DriverEntry + control device).

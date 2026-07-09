@@ -5,6 +5,7 @@
 #include "control.h"
 #include "queue.h"
 #include "virtdisk.h"
+#include <wdmsec.h>
 
 /* CTL_CODE helpers — FILE_DEVICE_MASS_STORAGE = 0x0000002d */
 #ifndef FILE_DEVICE_MASS_STORAGE

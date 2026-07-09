@@ -9,6 +9,7 @@
 
 #include <ntddk.h>
 #include <storport.h>
+#include <wdmsec.h>
 #include "protocol.h"
 
 /* Device extension for the StorPort adapter (virtual). */
@@ -23,11 +24,13 @@ typedef struct _RAMSHARED_ADAPTER_EXT {
 
 DRIVER_INITIALIZE DriverEntry;
 
+/* Virtual miniport FindAdapter has LowerDevice (WDK 26100). */
 ULONG
 HwStorFindAdapter(
 	_In_ PVOID DeviceExtension,
 	_In_ PVOID HwContext,
 	_In_ PVOID BusInformation,
+	_In_ PVOID LowerDevice,
 	_In_ PCHAR ArgumentString,
 	_Inout_ PPORT_CONFIGURATION_INFORMATION ConfigInfo,
 	_In_ PBOOLEAN Again);
