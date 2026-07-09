@@ -113,3 +113,27 @@
 
 **Not proven here:** real WDDM latency trigger on this run (unit-tested; free-floor would need GPU contention from host).
 
+## 2026-07-09 — ITEM-8 DT-21 residency (win11-drill)
+
+**Discipline:** Kahneman #1 WYSIATI, #3 numbers, #13 no fake PASS, RNF-6 VM-only.
+
+### Numbers
+| Metric | Value |
+| --- | --- |
+| Guest | win11-drill, model Virtual Machine, build ~26200 |
+| LUN | RAMSHARE VRAMDISK **64 MiB**, NTFS on D: |
+| Backend | WinDriveBackend `maxIo=1MiB` qd=4, CREATE+REGISTER OK |
+| `NtCreatePagingFile` | **NTSTATUS=0** after `SeCreatePagefilePrivilege` (was 0xC0000061) |
+| Pagefile-D | **alloc=32 MiB**, after pressure **use=8 MiB (25%)** |
+| Pagefile-C under pressure | alloc=1408 use=418 |
+| KernelPageDrill | **exit 0**, residency confirmed **3/3**, Usage=**25** each run |
+| B2 product service | **not installed** (`ramshared-winsvc` missing); lab path only |
+| New BSOD on this path | **none** (last minidump older) |
+| Host-real | **still forbidden** |
+
+### Verdict
+- **DT-21 residency gate: PASS** (Usage>0 proven on product volume pagefile).
+- Full ITEM-8 product B1/B2 (kill winsvc + page-in after teardown): **open** until `ramshared-winsvc` SCM path exists.
+- Do not promote host-real until B1/B2 product path is empirical.
+
+RAW: `C:\Users\emedev\ramshared-drill\agent-item8-pagefile-kpd.log`, artifacts-item8/

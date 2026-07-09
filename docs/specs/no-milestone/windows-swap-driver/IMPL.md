@@ -23,8 +23,8 @@
 | Load on `win11-drill` (test-sign) | ✓ **RUNNING**; `\\.\RamSharedCtl` OK; INF+devcon Root\RamShared |
 | Get-Disk LUN product | ✓ **N=1 RAMSHARE VRAMDISK 64 MiB** (2026-07-09 clean PnP) |
 | poolstress IOCTL ALLOC/FREE 1 GiB | ✓ ok=True (rodada anterior) |
-| Format NTFS + smoke file | ✓ **PASS** (2026-07-09): LUN 64 MiB, `format /fs:NTFS` OK, smoke file; backend `maxIo=1MiB` (antes 64 KiB rejeitava format) |
-| ITEM-8 residency DT-21 (pagefile-VRAM) | ⚠ parcial: `D:\pagefile.sys` 32–48 MiB **configurado**; `% Usage` ativo ainda requer disco no boot (backend/service) + pressão; KPD pendente |
+| Format NTFS + smoke file | ✓ **PASS** (2026-07-09): LUN 64 MiB, `format /fs:NTFS` OK, smoke file; backend `maxIo=1MiB` |
+| ITEM-8 residency DT-21 (pagefile-VRAM) | ✓ **residency PASS** (2026-07-09): `NtCreatePagingFile` → `D:\pagefile.sys` **alloc=32 MiB**, pressure → **use=8 MiB (25%)**; KPD **3/3 confirmed** Usage=25. B2 product `ramshared-winsvc` still absent (lab backend path). Host-real still gated on full B1/B2 product service. |
 | ITEM-9 K (p99 VRAM vs disk) | ✗ harness OK; **K não inventado** (DT-13) |
 | ITEM-10 soak 72 h | ✗ script only |
 | ITEM-11 attestation | ✗ R9 org + no `.sys` |

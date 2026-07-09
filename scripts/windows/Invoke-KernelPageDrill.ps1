@@ -50,11 +50,19 @@ function Get-PagefileVramUsage {
         return [double]$c.CounterSamples[0].CookedValue
     } catch {
         # Fallback WMI
+        # Lab volumes may be V: (product) or D: (current win11-drill letter).
         $pf = Get-CimInstance Win32_PageFileUsage -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -match 'V:|RamShared|VRAM' }
+            Where-Object { $_.Name -match 'V:|D:|RamShared|VRAM' }
         if ($pf) {
-            if ($pf.AllocatedBaseSize -gt 0) {
-                return (100.0 * $pf.CurrentUsage / $pf.AllocatedBaseSize)
+            # Prefer non-C: instance when multiple
+            $pick = @($pf) | Where-Object { $_.Name -notmatch '^[Cc]:' } | Select-Object -First 1
+            if (-not $pick) { $pick = @($pf) | Select-Object -First 1 }
+            if ($pick.AllocatedBaseSize -gt 0) {
+                return (100.0 * $pick.CurrentUsage / $pick.AllocatedBaseSize)
+            }
+            # Allocated but 0 usage still proves residency surface exists
+            if ($pick.AllocatedBaseSize -gt 0) {
+                return 0.0
             }
         }
         return $null
@@ -96,13 +104,20 @@ for ($i = 1; $i -le $Runs; $i++) {
     }
 
     $confirmed++
-    # B2 path: stop service cleanly so driver QTeardownOnCrash completes SRBs with error.
-    Write-Host "B2: Stop-Service ramshared-winsvc (if installed)"
+    # B2 path: stop product service cleanly so driver QTeardownOnCrash completes SRBs.
+    # Lab fallback: stop WinDriveBackend.exe when winsvc is not installed yet.
+    Write-Host "B2: Stop-Service ramshared-winsvc (if installed) / lab backend"
     try {
         Stop-Service -Name "ramshared-winsvc" -Force -ErrorAction Stop
         $outcome = "B2_SERVICE_STOPPED"
     } catch {
-        $outcome = "B2_SERVICE_STOP_FAILED: $($_.Exception.Message)"
+        $be = Get-Process -Name "WinDriveBackend" -ErrorAction SilentlyContinue
+        if ($be) {
+            Stop-Process -Name "WinDriveBackend" -Force -ErrorAction SilentlyContinue
+            $outcome = "B2_LAB_BACKEND_KILLED (winsvc absent: $($_.Exception.Message))"
+        } else {
+            $outcome = "B2_SERVICE_STOP_FAILED: $($_.Exception.Message)"
+        }
     }
 
     # Optional READBACK via poolstress to force page-in after kill - operator / next automation.
