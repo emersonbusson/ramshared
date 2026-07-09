@@ -136,7 +136,8 @@ const MAX_SLICES: u16 = 256;
 fn validate_slice_flags(slices: u16, slice_mb: u64, is_ublk: bool) -> Result<(), String> {
     if slices > 0 && is_ublk {
         return Err(
-            "--slices does not combine with --transport ublk (DT-3: ublk single-device on WSL2)".into(),
+            "--slices does not combine with --transport ublk (DT-3: ublk single-device on WSL2)"
+                .into(),
         );
     }
     if slices > 0 && slice_mb == 0 {
@@ -950,12 +951,10 @@ fn run_ublk(
     // VramProvider; generifying it and refactoring is a separate task (only validatable on native host).
     // Fails early, before any side-effects (add_device/mlockall).
     if let BackendKind::Vulkan = backend {
-        return Err(
-            "ublk with --backend vulkan not yet supported (DT-11: ublk \
+        return Err("ublk with --backend vulkan not yet supported (DT-11: ublk \
              residency server is CUDA-fixed). Use --backend vram (CUDA), or Vulkan \
              via --slices (broker) / --transport nbd."
-                .into(),
-        );
+            .into());
     }
     // SAFETY LOCK: refuses to serve ublk on WSL2. An unsuccessful daemon teardown
     // orphans `/dev/ublkbN` -> I/O in D-state -> FREEZES WSL2 (2026-06-09).

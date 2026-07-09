@@ -684,10 +684,7 @@ fn vram_ublk_round_trips_as_swap_device() {
     // immediate swapoff (without generating pressure) -> deactivates and drains.
     run_ok("swapoff", &[&block_path]);
     let swaps = fs::read_to_string("/proc/swaps").expect("/proc/swaps");
-    assert!(
-        !swaps.contains(&block_path),
-        "swap should be deactivated"
-    );
+    assert!(!swaps.contains(&block_path), "swap should be deactivated");
 
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
     server.join().expect("DT-3 VRAM server terminated ok");
@@ -981,7 +978,10 @@ fn daemon_ublk_serves_and_terminates_on_signal() {
 
     let status =
         wait_child(&mut child, Duration::from_secs(15)).expect("daemon did not exit in 15s");
-    assert!(status.success(), "ublk daemon exited with error: {status:?}");
+    assert!(
+        status.success(),
+        "ublk daemon exited with error: {status:?}"
+    );
 
     // /dev returns to initial state (device removed by teardown).
     let deadline = Instant::now() + Duration::from_secs(5);
