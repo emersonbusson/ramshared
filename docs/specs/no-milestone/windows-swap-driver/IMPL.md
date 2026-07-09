@@ -25,7 +25,7 @@
 | poolstress IOCTL ALLOC/FREE 1 GiB | ✓ ok=True (rodada anterior) |
 | Format NTFS + smoke file | ✓ **PASS** (2026-07-09): LUN 64 MiB, `format /fs:NTFS` OK, smoke file; backend `maxIo=1MiB` |
 | ITEM-8 residency DT-21 (pagefile-VRAM) | ✓ residency PASS (Usage 25%). **B2 split:** storage-only kill **PASS** (no hang/BSOD); pagefile-hot kill **0x7A/c0000185** (documented). Fix: teardown outside lock + VdStateFailed. Host-real **forbidden** until DT-9 product path. |
-| DT-9 ordered teardown | ✓ pure refuse tests + lab **PASS_DT9_REFUSE_KILL** (hot PF => no kill); hot unload needs reboot |
+| DT-9 ordered teardown | ✓ pure tests; lab **PASS_DT9_REFUSE_KILL** (hot) + **PASS_DT9_REBOOT_KILL** (post-reboot unload, STOP_OK, no new dump) |
 | ITEM-9 K (p99 VRAM vs disk) | ✗ harness OK; **K não inventado** (DT-13) |
 | ITEM-10 soak 72 h | ✗ script only |
 | ITEM-11 attestation | ✗ R9 org + no `.sys` |
