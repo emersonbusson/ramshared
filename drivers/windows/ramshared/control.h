@@ -12,6 +12,11 @@ CtlCreateControlDevice(
 
 VOID CtlDeleteControlDevice(VOID);
 
-DRIVER_DISPATCH CtlDeviceControl;
-DRIVER_DISPATCH CtlCreateClose;
-DRIVER_DISPATCH CtlCleanup;
+/*
+ * Install dispatch hooks: save StorPort originals, wrap for control device
+ * only (DT-25). Call AFTER StorPortInitialize.
+ */
+NTSTATUS
+CtlInstallDispatchHooks(_In_ PDRIVER_OBJECT DriverObject);
+
+PDEVICE_OBJECT CtlGetControlDevice(VOID);
