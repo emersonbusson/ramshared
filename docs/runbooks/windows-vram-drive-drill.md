@@ -1,5 +1,9 @@
 # Runbook — Step 0 / Virtual Disk Pagefile Drill (Windows VM)
 
+> **Also known as:** Passo 0 / `PASSO0-DRILL` (referenced by the windows-swap-driver SPEC).  
+> **Product SPEC (IMPL track):** [`docs/specs/no-milestone/windows-swap-driver/`](../specs/no-milestone/windows-swap-driver/) — preflight [`PREFLIGHT.md`](../specs/no-milestone/windows-swap-driver/PREFLIGHT.md).  
+> **Kernel-page follow-up (ITEM-8):** `scripts/windows/Invoke-KernelPageDrill.ps1` (stub until implemented).
+>
 > **Objective:** Empirically measure how Windows behaves when the **backend of a virtual disk hosting an active secondary pagefile disappears** — verifying if it is gracefully contained (only the affected user processes die, analogous to Linux's `SIGBUS`) or triggers a BSOD `KERNEL_DATA_INPAGE_ERROR` (0x7a). This evaluates risk R7 from `PRD.md` (the largest risk of this feature) **without writing a driver from scratch** and **without risking the physical host machine** — by using an off-the-shelf virtual disk (ImDisk/VHDX) inside a **disposable Windows VM**.
 >
 > **Context:** Research dated 2026-07-03 indicated a high risk of BSOD. This drill **confirms or refutes** it empirically, and — crucially — tests if a **driver-mediated I/O error** (where the backend returns I/O errors but the disk is NOT physically unplugged) is more recoverable than the raw "disk unplugged" scenario covered by legacy research.

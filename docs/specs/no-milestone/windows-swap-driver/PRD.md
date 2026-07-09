@@ -7,6 +7,10 @@ issues: []
 
 # PRD — RamShared P4 / Track 2: Swap-to-VRAM on Native Windows (StorPort virtual miniport)
 
+> **Authority:** After SSDV3 Pass 2.5, **[`SPEC.md`](SPEC.md) is authoritative** for IOCTL names,
+> revoke semantics, soak duration, and gates. See [`PREFLIGHT.md`](PREFLIGHT.md) § PRD errata for
+> residual wording here that was superseded (e.g. invent broker revoke Msg, 48h vs 72h, old IOCTL names).
+
 ## Summary
 
 In **native Windows**, RamShared provides an equivalent mechanism to the path already validated in Linux/WSL2 (the `ramsharedd` daemon serving a `ublk` block device backed by VRAM via CUDA, used as swap — validated end-to-end). A **StorPort virtual miniport driver** written **from scratch (Day-0)** exposes a **virtual disk** to the Windows storage stack. Block I/O requests are delegated to a **userspace service (Rust)** that backs reads and writes in **VRAM** using `nvcuda.dll` (porting the existing CUDA logic). 

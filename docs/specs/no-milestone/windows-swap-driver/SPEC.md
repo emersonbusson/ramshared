@@ -523,7 +523,7 @@ append-only, contexto automático (`benchmarks.md`).
 
 | Documento | Atualização necessária | Motivo |
 | --- | --- | --- |
-| `docs/windows-vram-drive/IMPL.md` | Criar (por ITEM) | rastreabilidade SSDV3 (após GO do Passo 2.5) |
+| `docs/specs/no-milestone/windows-swap-driver/IMPL.md` | Criar (por ITEM) | rastreabilidade SSDV3 (após GO do Passo 2.5); preflight em `PREFLIGHT.md` |
 | `Documentation/` (uAPI/ABI) → `drivers/windows/ramshared/protocol.h` | Criar | nova ABI Ring-0↔Ring-3 (DT-17) |
 | `docs/decisions/ADR-0006-storport-virtual-miniport.md` | Criar | decisão do-zero StorPort + protocolo RF-2 (ring SPSC) — arquitetural (anti-halo #11) |
 | `docs/memory-broker/PRD.md` §10/§12 | Alterar | marcar "driver de swap Windows" (P4/Trilha 2) detalhado aqui; tirar do fora-de-escopo global |

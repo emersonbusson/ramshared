@@ -15,12 +15,15 @@ zero-dep externa; a Fase B/ublk tem uma exceção userspace explicitamente gated
 | **Userspace ring: `ramshared-uring` + `io-uring` crate** (Fase B, gated) | `ramshared-uring` isola qualquer `unsafe` de SQE; `io-uring 0.7.12` (MIT/Apache-2.0) evita hand-roll de barreiras acquire/release; lockfile traz também `libc`, `bitflags`, `cfg-if`; ADR-0004 aceita a exceção | remover se bench ublk não superar NBD ou se auditoria de supply chain falhar |
 | **Broker protocol: `serde`/`serde_json` (JSON-lines)** (P1, broker) | control-plane ~1 msg/s/tenant, debugável com `nc`/`jq`; `serde 1.0.228` + `serde_json 1.0.150` (MIT/Apache-2.0) dão validação de shape de graça e evitam parser hand-rolled frágil; confinado ao crate `ramshared-broker` (daemon/lib seguem `#![forbid(unsafe_code)]`); [ADR-0005](decisions/ADR-0005-broker-protocol-jsonl.md) | migrar p/ length-prefixed (`bincode`) se payload >64 KiB/msg ou >100 msg/s/tenant |
 | **Tier quente: zram (lzo-rle)** | RAM comprimida, baixa latência; presente (`CONFIG_ZRAM=m`) | se `CONFIG_ZRAM_WRITEBACK` for habilitado → writeback p/ VRAM |
-| **VRAM: CUDA Driver API via `dlopen`** | funciona sem toolkit sobre a stub `libcuda` do WSL2; `cuMemcpyHtoD/DtoH` em qualquer GPU | se surgir caminho coerente (CXL bare-metal) |
+| **VRAM: CUDA Driver API via `dlopen` / `LoadLibraryW`** | mesma tabela `_v2` em `libcuda.so` (Linux/WSL2) e `nvcuda.dll` (Windows); loader split `loader_unix`/`loader_win` (SPEC windows-swap-driver ITEM-1) | se a Microsoft/NVIDIA quebrar símbolos estáveis `_v2` ou surgir path coerente (CXL bare-metal) |
+| **Windows block path: StorPort virtual miniport + SPSC rings** (P4) | Day-0 do-zero; userspace `ramshared-winsvc` + CUDA; pagefile secundário; [ADR-0006](decisions/ADR-0006-storport-virtual-miniport.md) | se ITEM-8 provar B2 inviável (BugCheck 0x7a sem mitigação) → park PRD abort #2b |
+| **Windows deps (`windows-sys` / futuro `windows-service`)** | `windows-sys` já em `ramshared-cuda` (loader); winsvc preencherá sob `cfg(windows)` só | se `cargo deny`/audit falhar ou licença sair de MIT/Apache |
 | **VRAM backend Vulkan: `ash` 0.38** (RF-G2) | binding Vulkan padrão (battle-tested, mantido); reuso > hand-roll do loader/FFI (regra dura #1); `DEVICE_LOCAL` + staging + transfer queue cobre "qualquer GPU" (AMD/Intel/NVIDIA); **validado no lavapipe** (Vulkan em CPU): round-trip bytes-iguais. `unsafe` isolado no crate `ramshared-vulkan` (`// SAFETY:` por bloco), fronteira do trait sem `unsafe`. MIT/Apache-2.0 | se `cargo audit`/`deny` sobre `ash` falhar, ou se D3D12/`/dev/dxg` (RF-G3) cobrir não-NVIDIA dentro do WSL2 |
 | **Userspace lang: Rust (std)** | safety + RAII de recursos GPU (ver [ADR-0002](decisions/ADR-0002-rust-userspace-port.md)) | se FFI provar instável (rollback do ADR-0002) |
 
 ## Deliberadamente NÃO usado
 
+- **ImDisk / WinSpd as product** — only historical instruments for Passo 0; product is StorPort Day-0 (ADR-0006).
 - **`nvidia_p2p_get_pages_persistent` / BAR1 `ioremap_wc`** — `EINVAL` em GeForce consumer; BAR1 mapeia só ~16 MiB (framebuffer).
 - **zram-writeback** — exige `CONFIG_ZRAM_WRITEBACK` (kernel custom); cascata por prioridade resolve Day-0.
 - **MTD/phram (MMIO direto)** — descartado por performance (CPU memcpy).

@@ -144,6 +144,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ramshared-winsvc"
+version = "0.1.0"
+
+[[package]]
 name = "ramshared-wsl2d"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,22 @@
+[package]
+name = "ramshared-winsvc"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Windows userspace service for StorPort VRAM disk (SPEC windows-swap-driver)"
+
+[[bin]]
+name = "ramshared-winsvc"
+path = "src/main.rs"
+
+[dependencies]
+# Shared block/broker crates land in ITEM-2/ITEM-3. Proto-only for preflight.
+
+[target.'cfg(windows)'.dependencies]
+# Filled in ITEM-3/6/7 per SPEC (windows-service, windows-sys, ntapi/serde/toml).
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
