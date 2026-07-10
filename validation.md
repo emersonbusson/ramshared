@@ -363,3 +363,11 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 - Full reboot e2e on this agent host: **not claimed** (user opt-in)
 **Verdict:** ✅ code path ready / 🟡 boot e2e deferred to operator enable
 **Next action:** User with systemd: `--enable` once and log `swapon --show` after reboot.
+
+## 2026-07-09 — PRD kernel-vram-as-memory (SSDV3 decision)
+
+**What:** Decision PRD: is kernel-true VRAM-as-process-memory the best approach vs cascade?
+**Category:** local-check
+**Measured data:** PRD written under docs/specs/no-milestone/kernel-vram-as-memory/; verdict WSL=NO-GO for LKM Day-0; bare-metal=research GO / implement NO-GO until gates; cascade remains product.
+**Verdict:** ✅ PRD decision recorded (no SPEC/IMPL — correct for gated track)
+**Next action:** bare-metal lab inventory or explicit "blocked on hardware" if no lab.
