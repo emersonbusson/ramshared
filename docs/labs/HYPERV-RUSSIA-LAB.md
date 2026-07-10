@@ -1,7 +1,25 @@
 # Lab on R: (RUSSIA) — three paths
 
-> Host: Windows + Hyper-V. Disk **R:** label **RUSSIA** (~466 GB, ~140 GB free).  
+> Host: Windows + Hyper-V. Disk **R:** label **RUSSIA** (~466 GB).  
 > Mechanical HDD (Hitachi) — installs work; expect slower I/O than SSD.
+
+## CRITICAL: keep C: free (Windows system disk)
+
+**Never put lab VMs / ISOs / VHDX on `C:`.** When `C:` drops below ~20 GB free, Windows can stall, fail updates, and freeze under memory pressure (pagefile + temp).
+
+| Disk | Role |
+| --- | --- |
+| **C:** | Windows only — keep **≥40 GB free** if possible |
+| **R: RUSSIA** | Default Hyper-V lab (`R:\Hyper-V\…`) |
+| **V: VM** | Other VMs (e.g. gha-ubuntu) |
+
+**2026-07-10 incident:** `win11-drill` lived on `C:\Hyper-V` with many checkpoints (~80–90 GB). Free C: fell to ~15–30 GB. **Fix:** `Move-VMStorage` → `R:\Hyper-V\win11-drill`; deleted leftover `C:\Hyper-V`; set host defaults:
+
+```powershell
+Set-VMHost -VirtualMachinePath "R:\Hyper-V\VMs" -VirtualHardDiskPath "R:\Hyper-V\VHDs"
+```
+
+After cleanup: **C: free ≈ 136 GB**. Measure: `scripts/windows/Measure-CDrivePressure.ps1`.
 
 ## Honest map
 

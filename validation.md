@@ -397,3 +397,18 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 - PRD: docs/specs/no-milestone/mainline-vram-tiering/PRD.md
 **Verdict:** ✅ path1 ready for Ubuntu install via vmconnect; 🟡 path2 inventory-only; 🔴 path3 blocked until data layout allows shrink
 **Next action:** Finish Ubuntu install in VM; free/move files on R: for dual-boot; DDA only with spare display.
+
+## 2026-07-10 — C: disk pressure emergency (win11-drill on C:)
+
+**What:** User reported C: ~15 GB free (Windows risk). Measured and relocated lab storage off C:.
+**Category:** fail-safe / host-safety
+**Measured data:**
+- Before: C free ~30.9 GB at measure time (user saw ~15 GB earlier)
+- Culprit: C:\Hyper-V\win11-drill — base vhdx 20.75G + multiple avhdx checkpoints (17+15+14+…) + win11.iso 7.61G + backend.vhdx 5G + VMRS
+- Action: Stop-VM win11-drill; Move-VMStorage -> R:\Hyper-V\win11-drill; moved iso+backend; removed C:\Hyper-V tree
+- Set-VMHost VirtualMachinePath/VHDPath -> R:\Hyper-V\VMs and R:\Hyper-V\VHDs
+- Temp cleanup
+- After: **C free 136.3 GB**
+- VMs: linux-kernel-lab R:; win11-drill R:; gha-ubuntu V:
+**Verdict:** ✅ C: recovered; lab no longer on system disk
+**Next action:** Keep new VMs on R:/V: only; prune win11-drill checkpoints on R: when convenient (saves R: space, not C:).
