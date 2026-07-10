@@ -23,3 +23,7 @@ arquitetura/lock/DMA/memória vira um ADR.
 | [0001](ADR-0001-vram-cascade-tiering.md) | Cascata de swap zram→VRAM→VHDX (VRAM como tier frio) | Accepted |
 | [0002](ADR-0002-rust-userspace-port.md) | Daemon/CLI userspace em Rust (port do design nbd-vram) | Accepted |
 | [0003](ADR-0003-page-state-swap-safety.md) | Estados de página: herdar swap do Linux; daemon garante durabilidade/DEMOTE/atomicidade | Accepted |
+| [0004](ADR-0004-ublk-io-uring-crate.md) | Crate ublk/io_uring | Accepted |
+| [0005](ADR-0005-broker-protocol-jsonl.md) | Broker protocol JSONL | Accepted |
+| [0006](ADR-0006-storport-virtual-miniport.md) | StorPort virtual miniport (Windows) | Accepted |
+| [0007](ADR-0007-kernel-native-language-c.md) | Kernel-native work in **C**, not app Rust | Accepted |
