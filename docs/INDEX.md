@@ -11,6 +11,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | Slug | Title | Milestone | Issues | Status |
 | --- | --- | --- | --- | --- |
 | [`broker-telemetry-reconciliation`](specs/no-milestone/broker-telemetry-reconciliation/) | Coletor de Telemetria & Reconciliação do Memory Broker | — | — | DONE |
+| [`cascade-desktop-app`](specs/no-milestone/cascade-desktop-app/) | Desktop control app for WSL2/Linux cascade (zenity + CLI) | — | — | DONE |
 | [`kernel-vram-as-memory`](specs/no-milestone/kernel-vram-as-memory/) | Kernel-true VRAM as process memory (HMM / NUMA / DEVICE_PRIVATE) — decision PRD | — | — | PRD |
 | [`memory-broker`](specs/no-milestone/memory-broker/) | RamShared Memory Broker (Unified Final) | — | — | SPEC |
 | [`windows-swap-driver`](specs/no-milestone/windows-swap-driver/) | Swap-to-VRAM on Native Windows (StorPort virtual miniport) | P4 | — | DONE |

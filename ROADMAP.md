@@ -27,6 +27,17 @@ Phase 0 on real GPU-PV: eviction keeps data intact but can make a tiny read take
 - Fail-closed preflight; stop = ordered `down`  
 - SPEC: [docs/specs/no-milestone/wsl2-cascade-boot/](docs/specs/no-milestone/wsl2-cascade-boot/)
 
+### Control app (2026-07-10)
+
+- `scripts/safety/cascade-app.sh` (zenity GUI + CLI) + desktop launcher  
+- SPEC: [docs/specs/no-milestone/cascade-desktop-app/](docs/specs/no-milestone/cascade-desktop-app/)
+
+### Kernel-true track inventory (2026-07-10)
+
+- This lab is **WSL2 GPU-PV only** (PCI vendor `0x1414`, no `/dev/dri`) → Gate A1 **FAIL**  
+- Record: [docs/specs/no-milestone/kernel-vram-as-memory/PASSO0-INVENTORY.md](docs/specs/no-milestone/kernel-vram-as-memory/PASSO0-INVENTORY.md)  
+- LKM/HMM/NUMA **blocked here**; product path remains cascade + app
+
 ### Windows lab (Hyper-V only)
 
 Format, pagefile residency, kernel-page drill, ordered teardown (DT-9), lab SCM — on **`win11-drill`**.  
