@@ -449,3 +449,15 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 - Languages: Rust userspace P0; C for Linux kernel work; RfL optional later; not Python/Node as LKM
 **Verdict:** ✅ PRD recorded; dual-boot not required for WSL product
 **Next action:** P0 use on WSL; P1 SPEC only if custom WSL kernel decided
+
+## 2026-07-10 — ADR-0007 + AUDIT: kernel-native language = C
+
+**What:** Policy audit for "native for real in the kernel" implementation language.
+**Category:** local-check
+**Measured data:**
+- ADR-0007 Accepted: kernel context → C11 mainline style; userspace P0 → Rust; RfL exception-only
+- AUDIT-2.5 go: docs/specs/no-milestone/kernel-native-language/AUDIT-2.5.md
+- PRD policy: docs/specs/no-milestone/kernel-native-language/PRD.md
+- Cross-link wsl2-native-vram-tier §8
+**Verdict:** ✅ go — not a feature IMPL; language/architecture lock
+**Next action:** Future P1/P2 kernel SPECs must cite ADR-0007

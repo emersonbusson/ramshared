@@ -178,22 +178,25 @@ Sem congelar ABI neste PRD.
 
 ## 8. Implementation languages (resposta à pergunta “qual linguagem?”)
 
+> **Canonical decision (audited):** [ADR-0007](../../../decisions/ADR-0007-kernel-native-language-c.md) ·  
+> [kernel-native-language PRD + AUDIT-2.5](../kernel-native-language/) → **go**.
+
 | Camada | Linguagem **adequada** | Por quê |
 | --- | --- | --- |
 | **Kernel Linux** (LKM, mm, ublk glue, sysfs) | **C11 estilo mainline** (TAB 8, checkpatch) | ABI, reviewers, lockdep, ecossistema |
-| **Kernel novo código “verde”** (opcional) | **Rust for Linux** só em subsistemas que o projeto já aceite e sem hot path opaco | Segurança de tipos; ainda menos familiar em mm crítico |
-| **Daemon / CLI / broker / cascade (P0)** | **Rust** (já é o stack) | `forbid(unsafe)` fora de `ramshared-cuda`; performance e segurança |
+| **Kernel novo código “verde”** (opcional) | **Rust for Linux** só com SPEC + exception audit | Não é default (ADR-0007) |
+| **Daemon / CLI / broker / cascade (P0)** | **Rust** (já é o stack) | ADR-0002 |
 | **FFI CUDA** | **Rust + `unsafe` isolado** em `ramshared-cuda` | Única fronteira unsafe userspace |
 | **Windows StorPort lab** | **C (WDK)** + userspace Rust/C# lab | Kernel Windows |
 | **Scripts lab / Hyper-V** | **PowerShell** (host) + **bash** (WSL) | Automação, não produto hot path |
-| **Inadequado** para “nativo no kernel” | Python/Node/Go como LKM | Não é o modelo do kernel Linux |
+| **Inadequado** para “nativo no kernel” | Python/Node/Go como LKM; **app Rust fingindo LKM** | Não roda em kernel context |
 
 ### Recomendação prática do projeto
 
 1. **Continuar P0 em Rust** (userspace).  
-2. Qualquer **P1/P2 no kernel Linux → C primeiro** (patches/módulo estilo mainline).  
-3. Avaliar **Rust for Linux** só se o SPEC P2 for código *novo* isolado e a toolchain WSL/custom kernel suportar — **não** reescrever mm inteiro em Rust.  
-4. **Não** misturar “app zenity” com lógica de swap no mesmo processo privilegiado sem bounds.
+2. **“Nativo de verdade no kernel” → C** (mainline/custom WSL kernel) — **ADR-0007**.  
+3. **Rust for Linux** só exceção auditada — não reescrever mm em Rust.  
+4. Escolher C **não** prova device memory no GPU-PV (#13).
 
 ---
 
