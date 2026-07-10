@@ -437,3 +437,15 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 - Ubuntu ISO present on R:\Hyper-V\iso\
 **Verdict:** ✅ dual-boot **space** ready on E:; 🟡 OS install still needs one USB boot (cannot finish from WSL alone)
 **Next action:** USB install into unallocated only; then bare-metal nvidia/`/dev/dri` for Gate B
+
+## 2026-07-10 — PRD wsl2-native-vram-tier (languages + test matrix)
+
+**What:** SSDV3 PRD for “native” VRAM tier on WSL2/Ubuntu kernels; where to test; implementation languages.
+**Category:** local-check
+**Measured data:**
+- PRD path: docs/specs/no-milestone/wsl2-native-vram-tier/PRD.md
+- Phases P0 cascade (product) / P1 kernel-closer / P2 device-memory research / P3 mainline
+- Test matrix: P0 on WSL; kernel builds on linux-kernel-lab VM; P2 needs bare-metal/DDA not GPU-less VM
+- Languages: Rust userspace P0; C for Linux kernel work; RfL optional later; not Python/Node as LKM
+**Verdict:** ✅ PRD recorded; dual-boot not required for WSL product
+**Next action:** P0 use on WSL; P1 SPEC only if custom WSL kernel decided

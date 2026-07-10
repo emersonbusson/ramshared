@@ -92,4 +92,7 @@ Actually installing Ubuntu still needs **one** boot from USB (BIOS/UEFI interact
 
 - Inventory (WSL-only GPU): `docs/specs/no-milestone/kernel-vram-as-memory/PASSO0-INVENTORY.md`  
 - Mainline strategy: `docs/specs/no-milestone/mainline-vram-tiering/PRD.md`  
-- Hyper-V lab (not dual-boot): `docs/labs/HYPERV-RUSSIA-LAB.md`
+- **WSL2 “native” phases + test matrix + languages:** `docs/specs/no-milestone/wsl2-native-vram-tier/PRD.md`  
+- Hyper-V lab (not dual-boot): `docs/labs/HYPERV-RUSSIA-LAB.md`  
+
+**Remember:** dual-boot is optional. Day-to-day RamShared = **WSL cascade**. Hyper-V Linux VM = kernel **build/crash lab**, not the proof of native GPU memory on WSL.
