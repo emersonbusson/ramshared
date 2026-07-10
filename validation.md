@@ -461,3 +461,15 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 - Cross-link wsl2-native-vram-tier §8
 **Verdict:** ✅ go — not a feature IMPL; language/architecture lock
 **Next action:** Future P1/P2 kernel SPECs must cite ADR-0007
+
+## 2026-07-10 — Parallel: win11 recreate + custom MS 6.18 kernel build
+
+**What:** Recreate win11-drill install surface; start official WSL2-Linux-Kernel 6.18.y build with swap/VRAM-path configs.
+**Category:** integration
+**Measured data:**
+- Win11 ISO Fido Latest Pro EN x64 → R:\Hyper-V\iso\Win11_25H2_English_x64_v2.iso **7.89 GB**
+- win11-drill: VHD 80G dynamic + DVD ISO; State Running for setup
+- Kernel: branch linux-msft-wsl-6.18.y tag linux-msft-wsl-6.18.35.2 on lab VM; configs UBLK=m ZRAM_WRITEBACK=y IO_URING=y NBD=m ZRAM=m SWAP=y; make -j2 started (log ~/kernel-build.log)
+- Parallel doc: docs/labs/PARALLEL-WINDOWS-AND-CUSTOM-KERNEL.md
+**Verdict:** 🟡 both tracks started; Win11 needs human OOBE; kernel build not finished
+**Next action:** complete Win11 in vmconnect; wait bzImage; then qemu-validate / boot-kernel-safe
