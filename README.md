@@ -176,6 +176,7 @@ Uso normal: desenhado para **não**. Demote pode deixar lento por alguns segundo
 | Live “did it work?” log | [validation.md](validation.md) |
 | Boot feature (SSDV3) | [docs/specs/no-milestone/wsl2-cascade-boot/](docs/specs/no-milestone/wsl2-cascade-boot/) |
 | Windows lab | [docs/specs/no-milestone/windows-swap-driver/](docs/specs/no-milestone/windows-swap-driver/) |
+| Native kernel research (WSL/Ubuntu phases) | [docs/specs/no-milestone/wsl2-native-vram-tier/PRD.md](docs/specs/no-milestone/wsl2-native-vram-tier/PRD.md) |
 | Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 | Crate / tree | Role |
@@ -186,4 +187,5 @@ Uso normal: desenhado para **não**. Demote pode deixar lento por alguns segundo
 | `ramshared-cuda` | NVIDIA driver (only `unsafe` boundary) |
 | `drivers/windows/` | StorPort lab only |
 
-Patches that touch locks, DMA, or kernel contracts go through SSDV3 under `docs/specs/…`.
+Patches that touch locks, DMA, or kernel contracts go through SSDV3 under `docs/specs/…`.  
+**Languages:** **Rust** for the WSL product (daemon/CLI); **C** (kernel style) for any real Linux kernel work; dual-boot is optional research, not required to use the cascade.
