@@ -74,29 +74,38 @@ What *can* still happen:
 
 ---
 
+## Control app (easier than raw commands)
+
+If you have a desktop in WSL (WSLg) or Linux:
+
+```bash
+bash scripts/safety/install-cascade-app.sh
+./scripts/safety/cascade-app.sh --gui
+```
+
+Buttons: **start / stop / status / check / enable boot / disable boot**.  
+Start and stop still need root (`pkexec` or `sudo`) — that is the swap boundary, not busywork.
+
+CLI without GUI:
+
+```bash
+./scripts/safety/cascade-app.sh status
+sudo ./scripts/safety/cascade-app.sh start
+sudo ./scripts/safety/cascade-app.sh stop
+```
+
 ## Auto-start when WSL boots (opt-in)
 
 Needs **systemd** in the distro (`/etc/wsl.conf` → `[boot]` → `systemd=true`, then `wsl --shutdown` once).
 
 ```bash
-# Install files only (safe):
-sudo bash scripts/safety/install-cascade-boot.sh
-
-# When you’re happy, turn it on for real:
+# From the app: “Enable boot”, or:
 sudo bash scripts/safety/install-cascade-boot.sh --enable
 ```
 
-That unit:
+That unit checks first (refuses dirty state), runs `up`, and on stop runs `down` (swap off first).
 
-1. **Checks** the machine first (refuses dirty/ghost swap, weak GPU free memory, missing tools).  
-2. Runs `ramshared up` with sizes from `/etc/ramshared/cascade.conf`.  
-3. On stop/shutdown, runs `ramshared down` (swap off first — the anti-hang path).
-
-Undo:
-
-```bash
-sudo bash scripts/safety/uninstall-cascade-boot.sh
-```
+Undo: app **Disable boot**, or `sudo bash scripts/safety/uninstall-cascade-boot.sh`.
 
 ---
 

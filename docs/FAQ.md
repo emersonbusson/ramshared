@@ -43,16 +43,28 @@ swapon --show
 
 Aim for three lines: **zram** (first), **GPU-backed** device (second), **disk** (last). Names vary; **order** matters.
 
+## Is there a simple app / menu?
+
+Yes — a small control panel (not a fancy store app):
+
+```bash
+bash scripts/safety/install-cascade-app.sh
+./scripts/safety/cascade-app.sh --gui
+```
+
+Same actions as the CLI: start, stop, status, check, boot on/off.  
+Under the hood it still calls the safe `ramshared up` / `down` paths.
+
 ## Turn on at WSL boot?
 
-Yes, if you want:
+Yes, if you want — from the control app (**Enable boot**) or:
 
 ```bash
 sudo bash scripts/safety/install-cascade-boot.sh --enable
 ```
 
 Needs systemd in the distro. Config: `/etc/ramshared/cascade.conf`.  
-Undo: `sudo bash scripts/safety/uninstall-cascade-boot.sh`.
+Undo: **Disable boot** in the app, or `sudo bash scripts/safety/uninstall-cascade-boot.sh`.
 
 ## What happens when I open a game?
 

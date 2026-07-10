@@ -371,3 +371,16 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 **Measured data:** PRD written under docs/specs/no-milestone/kernel-vram-as-memory/; verdict WSL=NO-GO for LKM Day-0; bare-metal=research GO / implement NO-GO until gates; cascade remains product.
 **Verdict:** ✅ PRD decision recorded (no SPEC/IMPL — correct for gated track)
 **Next action:** bare-metal lab inventory or explicit "blocked on hardware" if no lab.
+
+## 2026-07-10 — Passo 0 inventory + cascade desktop app
+
+**What:** (1) Kernel track lab inventory on emedev WSL2. (2) Desktop control app (zenity/CLI) for cascade.
+**Category:** local-check + integration
+**Measured data:**
+- WSL_YES; GPU RTX 2060 via GPU-PV (PCI vendor 0x1414); no /dev/dri; kernel-true Gate A1 **FAIL**
+- PASSO0: docs/specs/no-milestone/kernel-vram-as-memory/PASSO0-INVENTORY.md
+- cascade-app status: shows disk-only swap (cushion off)
+- zenity+DISPLAY present; install-cascade-app.sh writes .desktop
+- bash -n cascade-app OK
+**Verdict:** ✅ inventory blocks LKM on this lab; ✅ control app MVP ready
+**Next action:** user may `sudo cascade-app.sh start` or --gui; trilha K waits bare-metal.
