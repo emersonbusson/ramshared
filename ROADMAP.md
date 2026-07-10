@@ -45,9 +45,20 @@ Pagefile-hot kill → **0x7A** (expected); product refuses that.
 
 ---
 
-## Later (gated)
+## Later (gated) — kernel-true VRAM as memory
 
-NUMA / HMM / CXL style ideas need hardware and paths WSL GPU-PV doesn’t give you. No active bare-metal SPEC folder yet; when there is one, it goes under `docs/specs/…`.
+**Question:** should process pages map VRAM as real memory (HMM / NUMA / DEVICE_PRIVATE) instead of swap-over-NBD?
+
+**Answer (by environment):** see decision PRD  
+[`docs/specs/no-milestone/kernel-vram-as-memory/PRD.md`](docs/specs/no-milestone/kernel-vram-as-memory/PRD.md)
+
+| Environment | Verdict |
+| --- | --- |
+| WSL2 GPU-PV | **No** for Day-0 — cascade stays (ADR-0001, ~1.18 s reclaim) |
+| Bare-metal Linux + BAR/HMM | **Research GO / implement NO-GO** until measurement gates pass |
+| Next SSD step | Lab inventory + Passo 0 numbers → only then `SPEC.md` |
+
+Cascade remains the shippable product while that track is gated.
 
 ---
 
