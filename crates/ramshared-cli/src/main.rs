@@ -231,9 +231,14 @@ fn print_usage() {
     eprintln!("  ramshared check [--json]");
     eprintln!("  ramshared doctor [--json]");
     eprintln!("  ramshared up [--vram MiB] [--zram MiB] [--daemon PATH]");
-    eprintln!("      --zram 0  pula zram (so VRAM/NBD); util se zramctl falhar no kernel");
+    eprintln!("      defaults: 1024 MiB each, or RAMSHARED_VRAM_MIB / RAMSHARED_ZRAM_MIB");
+    eprintln!("      --zram 0  skip zram (VRAM/NBD only)");
     eprintln!("  ramshared status");
-    eprintln!("  ramshared down   # SEMPRE swapoff antes de parar o daemon (anti hang WSL)");
+    eprintln!("  ramshared down   # always swapoff before stopping the daemon (anti hang)");
+    eprintln!();
+    eprintln!("boot on WSL2 (opt-in, fail-closed):");
+    eprintln!("  sudo bash scripts/safety/install-cascade-boot.sh --enable");
+    eprintln!("  sudo bash scripts/safety/uninstall-cascade-boot.sh");
 }
 
 fn run_check() -> CheckReport {

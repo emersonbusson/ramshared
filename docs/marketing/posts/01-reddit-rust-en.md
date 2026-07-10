@@ -45,59 +45,33 @@ Sim: os números, o `quickstart.sh` e o “Looking for feedback” **também sã
 
 >>> COPY BODY START
 
-**When your PC runs out of RAM, use idle GPU memory as a safety cushion — and give it back if the GPU gets busy.**
+I got tired of the machine thrashing the SSD while the GPU sat there with empty memory.
 
-I built **RamShared** (Rust, Linux/WSL2, NVIDIA): a practical way to borrow **idle graphics memory** when system RAM is tight, without pretending GPU memory is as safe/fast as main RAM.
+So I wrote **RamShared** (Rust, Linux/WSL2, NVIDIA). When RAM is tight it borrows **idle** GPU memory as a second cushion. If Windows needs the card for a game or render, it **gives that memory back**. Apps keep running.
 
-## Problem (human)
-
-You’re compiling / running containers / drowning in tabs. RAM is gone. The machine starts thrashing the **SSD**. Meanwhile the **GPU memory** is often almost empty. You already paid for that silicon.
-
-## Why not “just put all swap on the GPU”?
-
-When Windows reclaims graphics memory under pressure, that memory can get **very slow**. We measured about **1.2 seconds** for a tiny read in the bad case. If that were your *first* emergency store, the whole machine freezes. So GPU memory is only a **second** cushion — and we can **give it back**.
-
-## Design (still short)
+Important: GPU memory is **not** as safe/fast as main RAM. Under reclaim we saw a tiny read take about **1.2 seconds**. Put that first and the box freezes. So the order is:
 
 ```
-Need memory?  →  1) compressed RAM (zram)     — first, fast
-              →  2) idle GPU memory           — second, colder
-              →  3) disk (SSD / VHDX)         — last resort
+zram (compressed RAM)  →  idle GPU  →  disk
 ```
 
-If latency spikes / host pressure: **stop using the GPU cushion**, data slides to disk, **apps keep running**.
+Measured, not vibes:
 
-## Numbers (measured)
-
-- Bad case under host GPU reclaim: up to **~1.2 s** for a small read (why GPU is second, not first).
-- Faster path **~241 µs** median vs older path **~326 µs** (same window, multi-run).
-- Stress drill: **~500 MB** on GPU tier, **~480 MB** moved back, **0 corruption**.
-
-## Try it
+- ~1.2 s tiny read in the bad reclaim case (why GPU is second)
+- ~500 MB on the GPU tier, ~480 MB moved back, **0** corruption in the logged drill
 
 ```
 ./scripts/quickstart.sh
 sudo ./target/release/ramshared check
 sudo ./target/release/ramshared up --vram 1024 --zram 1024
-swapon --show   # success ≈ three lines: zram + GPU + disk
+swapon --show
 ```
 
-## Honest limits
+Optional boot on WSL (opt-in, refuses dirty state): `scripts/safety/install-cascade-boot.sh --enable`
 
-- Day-1 path is **Linux/WSL2 + NVIDIA**, not “every GPU / every OS.”
-- Not free RAM for maxed-out games.
-- We don’t thrash live WSL2 on purpose; heavy tests use isolated VMs.
-- Not bare-metal CXL magic — practical workstation tool.
+Not free RAM for maxed-out games. Not a Windows kernel driver for your daily laptop. Looking for people who’ve fought swap / CUDA / WSL2 and will tell me where this still feels thin.
 
-## Looking for feedback
-
-Especially from people who’ve fought **swap, block devices, CUDA, or WSL2**:
-
-1. Second-cushion + give-back vs other APIs under Windows GPU reclaim.
-2. What you’d want in a “it just works” install.
-3. Where the safety story still feels thin.
-
-Repo + plain FAQ: https://github.com/emersonbusson/ramshared
+https://github.com/emersonbusson/ramshared
 
 >>> COPY BODY END
 

@@ -1,0 +1,25 @@
+[Unit]
+Description=RamShared memory cushion (zram + idle GPU + disk)
+Documentation=file://@REPO_PATH@/docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md
+After=local-fs.target
+# Do not hard-require network; GPU/NBD are local.
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+# Prefer refuse over hang (Restart=no).
+Environment=RAMSHARED_REPO=@REPO_PATH@
+Environment=RAMSHARED_BIN_DIR=@BIN_DIR@
+EnvironmentFile=-/etc/ramshared/cascade.conf
+ExecStartPre=@SCRIPTS_PATH@/cascade-preflight.sh
+ExecStart=@SCRIPTS_PATH@/cascade-up.sh
+ExecStop=@SCRIPTS_PATH@/cascade-down.sh
+TimeoutStartSec=120
+TimeoutStopSec=600
+Restart=no
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

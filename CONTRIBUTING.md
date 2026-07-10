@@ -52,7 +52,11 @@ RamShared interacts with live hardware, GPU paging drivers, and operating system
 *   `/scripts/quickstart.sh`: Build day-1 binaries (`ramshared` + `ramsharedd`).
 *   `/tools/`: Docs hygiene (`generate-docs-index.mjs`, `check-broken-links.mjs`).
 
-**Day-1 public path:** Linux/WSL2 cascade (`README.md`). Windows StorPort is a second track — lab-complete on Hyper-V only; host-real remains blocked until IMPL + `validation.md` say otherwise.
+**Day-1 public path:** Linux/WSL2 cascade (`README.md`). Optional boot: `scripts/safety/install-cascade-boot.sh` (fail-closed; not enabled until you pass `--enable`).
+
+**Windows StorPort:** lab Hyper-V only. Host-real stays blocked until IMPL + `validation.md` say otherwise.
+
+**Docs voice:** write like a person who ships drivers — short sentences, real numbers, no corporate filler. If a claim isn’t in `validation.md` or reliability logs, don’t put it in the README.
 
 ### Specs & docs checks
 

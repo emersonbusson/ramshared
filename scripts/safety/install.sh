@@ -8,8 +8,9 @@
 #   - ramshared-postmortem.service (coletor forense automatico no boot)
 #   - ramsharedd.service (com preflight gate falha-seguro no ExecStartPre)
 #
-# NAO habilita o ramsharedd (rollout supervisionado). Habilita SO os servicos de
-# seguranca (recorder + postmortem), que sao read-only/inofensivos.
+# NAO habilita o ramsharedd ublk (lab path). Habilita SO servicos de
+# seguranca (recorder + postmortem). Produto Day-1 no boot:
+#   sudo bash scripts/safety/install-cascade-boot.sh --enable
 #
 # Uso: sudo bash scripts/safety/install.sh
 set -euo pipefail

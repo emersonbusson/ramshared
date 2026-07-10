@@ -27,9 +27,9 @@ Everything you need to post is **one file per channel**.
 ## Rules
 
 1. **One channel at a time** — finish 01 before 02.  
-2. **Numbers** only from `docs/reliability/*`, root [`validation.md`](../../validation.md), or cited IMPL tables — never invent host-real Windows PASS.  
-3. Prefer **“give the cushion back”** over raw jargon in social posts.  
-4. Day-1 pitch = **Linux/WSL2**. Windows driver = “lab research track”, not “download and install”.  
+2. **Numbers** only from reliability docs or [`validation.md`](../../validation.md). No invented host-real Windows PASS.  
+3. Sound like a human: short, concrete, slightly rough. Kill “revolutionize”, “seamless”, “leverage”, “empower”.  
+4. Day-1 pitch = **Linux/WSL2**. Windows driver = lab only.  
 
 ## Publish order (summary)
 

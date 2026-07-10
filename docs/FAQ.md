@@ -1,56 +1,39 @@
-# FAQ — plain answers
+# FAQ — short answers
 
-No essay required. Technical sources are at the bottom if you care.
+## What is this?
 
-## In one sentence
+When RAM is full, Linux starts using the **disk**. That feels bad.  
+RamShared adds a **middle cushion**: idle **GPU** memory. If the GPU gets busy, that cushion is **given back** and data goes to disk again. Apps keep running.
 
-| | |
-| --- | --- |
-| **EN** | When your PC runs out of RAM, use idle GPU memory as a safety cushion — and give it back if the GPU gets busy. |
-| **PT** | Quando a RAM aperta, usa memória ociosa da placa de vídeo — e devolve se a GPU precisar. |
+## Will it break / freeze my PC?
 
----
+**Designed so normal use shouldn’t freeze WSL2.**
 
-## Will this break my PC?
+Past freezes came from turning things off the wrong way (killing the GPU swap daemon while pages were still on that device). Today `ramshared down` always turns swap off **first**.
 
-**We designed it so it shouldn’t.**
+What you *might* notice:
 
-Linux already uses the **disk** as emergency memory when RAM is full. RamShared only:
+- A **short slowdown** when a game on Windows reclaims VRAM (we measured up to ~1.2 s for a tiny read under hard reclaim; a full demote of hundreds of MB can take on the order of **tens of seconds**).
+- That is **not** the same as “WSL dead forever.”
 
-1. Adds a **middle cushion** (idle GPU memory), and  
-2. Adds a **way out** if the GPU is needed again.
+Heavy thrash tests: we don’t run those on the WSL you work in every day.
 
-| You might fear… | Plain answer |
-| --- | --- |
-| Freeze / blue screen | When Windows is reclaiming graphics memory, that memory can get **very slow** (we measured about **1.2 seconds** for a tiny read). So we never treat GPU memory as the *first* place for “hot” data. If pressure rises, we **stop using the GPU cushion** and data goes to disk. Your apps keep running. |
-| Corruption | In a logged stress run we put about **500 MB** on the GPU cushion and moved about **480 MB** back to disk with **no corruption**. |
-| Can’t undo | `sudo ./target/release/ramshared down` turns everything off. |
-| WSL2 freezes forever | We **don’t** run “thrash until it dies” tests on your daily WSL2. Heavy tests use a **separate VM**. |
+## Is it free RAM for games?
 
-### “Give it back” in four lines (engineers call this DEMOTE)
-
-1. We watch whether emergency memory is getting **too slow**.  
-2. If the host is reclaiming GPU memory (or latency spikes), we **stop using the GPU as swap**.  
-3. Linux moves that data to the **next place** (usually disk).  
-4. Your processes **keep running** — we don’t kill them to free the GPU.
-
----
+**No.** If a game already fills the GPU, there’s little idle memory to borrow. This is for **workstation pressure** (builds, containers, browsers) while the GPU is often idle.
 
 ## What do I need?
 
-- **Linux** or **WSL2** (Windows Subsystem for Linux)  
-- An **NVIDIA** graphics card  
-- Drivers that make `nvidia-smi` work  
-- **Rust** to build ([rustup.rs](https://rustup.rs/))  
-- **sudo** (admin) to change swap  
+- Linux or **WSL2**
+- NVIDIA GPU + working `nvidia-smi`
+- Rust to build
+- sudo
 
 ```bash
 ./scripts/quickstart.sh
-sudo ./target/release/ramshared check     # is this machine ready?
-sudo ./target/release/ramshared doctor    # if not: fix list
+sudo ./target/release/ramshared check
+sudo ./target/release/ramshared doctor   # if check fails
 ```
-
----
 
 ## How do I know it worked?
 
@@ -58,102 +41,29 @@ sudo ./target/release/ramshared doctor    # if not: fix list
 swapon --show
 ```
 
-You should see about **three** lines of emergency memory:
+Aim for three lines: **zram** (first), **GPU-backed** device (second), **disk** (last). Names vary; **order** matters.
 
-| Priority | Everyday name | What it is |
-| --- | --- | --- |
-| First (high) | Compressed RAM | Often shows as **zram** |
-| Second | GPU cushion | A device backed by **idle graphics memory** |
-| Last (low) | Disk | Normal swap file / VHDX |
+## Turn on at WSL boot?
 
-Names differ by machine. **Order** (fast → slow) matters more than the exact labels.
+Yes, if you want:
 
----
+```bash
+sudo bash scripts/safety/install-cascade-boot.sh --enable
+```
 
-## Is this free RAM for games?
+Needs systemd in the distro. Config: `/etc/ramshared/cascade.conf`.  
+Undo: `sudo bash scripts/safety/uninstall-cascade-boot.sh`.
 
-**No.**
+## What happens when I open a game?
 
-If a game already fills the GPU, there is little **idle** memory to borrow. RamShared is for **workstation pressure** — compiling, containers, too many browser tabs — when the GPU is often sitting around.
+The daemon watches free GPU memory and latency. If the card is under pressure, it **stops using GPU as swap** (DEMOTE). Pages move to disk. Processes in WSL are **not** killed on purpose.
 
----
+You may feel WSL get sluggish for a while. If it’s stuck for a long time, check `swapon --show` and logs (`journalctl -u ramshared-cascade -b` if you used boot). As a last resort on Windows: `wsl --shutdown` (only after you’ve tried `ramshared down` when you can).
 
-## Is there a Windows installer / kernel driver I can run on my PC?
+## Can I install the Windows kernel driver on my laptop?
 
-**Not for day-to-day use.**
+**Not for daily use.** That path is proven only in a disposable Hyper-V lab VM. Pulling storage out from under an active pagefile can blue-screen (**0x7A**). We treat that as a hard “don’t” on a real host.
 
-| Path | Status |
-| --- | --- |
-| **Linux / WSL2** (`ramshared up`) | Public day-1 product |
-| **Windows StorPort driver** | Proven only inside a **disposable Hyper-V lab VM** |
+## Where are the real numbers?
 
-On Windows, yanking storage under an **active pagefile** can blue-screen (**0x7A**). The lab product **refuses** that teardown (DT-9). Until a measured product CUDA path, signing, and an explicit host-real gate land in the repo, **do not load the driver on a physical host you care about.**
-
-Detail: [`ROADMAP.md`](../ROADMAP.md) · [`docs/specs/no-milestone/windows-swap-driver/IMPL.md`](specs/no-milestone/windows-swap-driver/IMPL.md).
-
----
-
-## Why not only use compressed RAM (zram)?
-
-Compressed RAM helps a lot, but it still uses **system RAM**.  
-RamShared adds **idle graphics memory** as an **extra** cushion when system RAM + compression are not enough.
-
-We don’t claim to replace every other tool. We claim a **useful middle layer**.
-
----
-
-## Does it work on AMD or Intel GPUs?
-
-**Day one: NVIDIA only** (CUDA path).  
-Other brands are future work. We won’t pretend multi-vendor support exists today.
-
----
-
-## What about “real servers” / fancy hardware (CXL, etc.)?
-
-Interesting long-term. **Today’s shippable path** is a normal developer machine: Linux or WSL2 + NVIDIA GPU. See `ROADMAP.md` if you like roadmaps.
-
----
-
-## Is the multi-machine broker / Windows driver included?
-
-**Not in the first install path.**  
-
-Day one is: **one PC**, three commands (`check` / `up` / `down`).  
-Other tracks live in design docs for later.
-
----
-
-## Where do the numbers come from?
-
-| Claim in plain words | Rough number | Written up in |
-| --- | --- | --- |
-| Tiny read while host steals GPU memory | up to **~1.2 s** | `docs/reliability/wsl2-fase0-final.md` |
-| Faster GPU swap path | **~241 µs** median | `docs/reliability/memory-broker-p0-results.md` |
-| Older GPU swap path | **~326 µs** median | same |
-| Stress: put data on GPU tier / move it back | **~500 / ~480 MB**, **0 corruption** | `docs/reliability/wsl2-cascade-validation.md` |
-
-If we publish a new public number, it has to be written down there first.
-
----
-
-## Something went wrong
-
-1. `sudo ./target/release/ramshared down`  
-2. `swapon --show` — GPU cushion should be gone  
-3. `sudo ./target/release/ramshared doctor`  
-4. Open a GitHub issue with the **doctor** text (no passwords, no secrets)
-
----
-
-## Glossary (only if you want it)
-
-| Word you may see | Plain meaning |
-| --- | --- |
-| **Swap** | Disk (or other store) used as emergency RAM |
-| **VRAM** | Memory on the graphics card |
-| **zram** | Compressed system RAM used as a fast cushion |
-| **WSL2** | Linux inside Windows |
-| **WDDM** | Windows graphics driver model (can reclaim GPU memory) |
-| **DEMOTE** | Our “give the GPU cushion back” action |
-| **NBD / ublk** | Ways Linux talks to a block device in userspace (plumbing) |
+[validation.md](../validation.md) and [docs/reliability/](reliability/). If a number isn’t written there, treat marketing claims as suspect.
