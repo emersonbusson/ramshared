@@ -473,3 +473,16 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 - Parallel doc: docs/labs/PARALLEL-WINDOWS-AND-CUSTOM-KERNEL.md
 **Verdict:** 🟡 both tracks started; Win11 needs human OOBE; kernel build not finished
 **Next action:** complete Win11 in vmconnect; wait bzImage; then qemu-validate / boot-kernel-safe
+
+## 2026-07-10 — Lab disk guard (checkpoints off, no destructive cleanup)
+
+**What:** Prevent lab VMs from filling disks / breaking host; safe harden only.
+**Category:** fail-safe
+**Measured data:**
+- win11-drill on E:; linux-kernel-lab on R:; C:\Hyper-V absent
+- Set CheckpointType=Disabled, AutomaticCheckpointsEnabled=False on both labs
+- Snapshots count=0 both; VHD max win11=80G linux=40G dynamic
+- VMHost defaults VMs/VHDs -> R:\Hyper-V\...
+- No VHD delete/Convert-VHD; free C=136.1 R=167.6 E=288.8
+**Verdict:** ✅ guards applied
+**Next action:** after Win11 OOBE, eject ISO; re-run Harden-LabVms.ps1 if needed
