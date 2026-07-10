@@ -412,3 +412,28 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 - VMs: linux-kernel-lab R:; win11-drill R:; gha-ubuntu V:
 **Verdict:** ✅ C: recovered; lab no longer on system disk
 **Next action:** Keep new VMs on R:/V: only; prune win11-drill checkpoints on R: when convenient (saves R: space, not C:).
+
+## 2026-07-10 — linux-kernel-lab boot fixed (cloud image)
+
+**What:** Screenshot showed UEFI "no OS" on empty VHD. Replaced with Ubuntu 24.04 cloudimg VHDX + cloud-init CIDATA seed.
+**Category:** boot / integration
+**Measured data:**
+- VM Running, heartbeat OK
+- SSH OK from Windows host: hostname linux-kernel-lab, kernel 6.8.0-134-generic
+- cloud-init status: done
+- Mem ~2.8Gi (3GB startup), root /dev/sda1 38G 2.5G used
+- Disk on R: only; C free still ~136G
+**Verdict:** ✅ lab Linux usable via SSH from Windows (not via WSL NAT)
+**Next action:** none for user; optional detach CIDATA ISO after first boot
+
+## 2026-07-10 — Dual-boot unblocked on E: (ESPANHA), not R:
+
+**What:** Explain and fix dual-boot/kernel-true blocker (NTFS shrink).
+**Category:** integration / host-safety
+**Measured data:**
+- R: free ~170 GB but ShrinkableGB ≈ **2.68** (SizeMin≈463 GB) — blocked
+- E: ShrinkableGB ≈ **33.25**; Resize-Partition applied → **LargestFreeExtent ≈ 32.00 GB** on disk 0 SAMSUNG HD154UI
+- E: partition size after: ~1365 GB; free inside NTFS ~297 GB
+- Ubuntu ISO present on R:\Hyper-V\iso\
+**Verdict:** ✅ dual-boot **space** ready on E:; 🟡 OS install still needs one USB boot (cannot finish from WSL alone)
+**Next action:** USB install into unallocated only; then bare-metal nvidia/`/dev/dri` for Gate B
