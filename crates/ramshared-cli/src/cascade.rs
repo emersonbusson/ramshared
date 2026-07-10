@@ -455,10 +455,68 @@ fn parse_up_args() -> Result<UpArgs, CascadeError> {
     parse_up_args_from(&args, default_daemon())
 }
 
+/// Default MiB from env (`RAMSHARED_VRAM_MIB` / `RAMSHARED_ZRAM_MIB`) or 1024.
+/// SPEC: docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md ITEM-4
+fn default_mb_from_env(var: &str, fallback: u64) -> u64 {
+    std::env::var(var)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(fallback)
+}
+
+/// True when a healthy Day-1 cascade is already mounted (idempotent `up`).
+/// SPEC ITEM-5 — pure over `/proc/swaps` + run files + optional pid/socket.
+pub fn cascade_already_healthy(entries: &[SwapEntry]) -> bool {
+    if !ghost_vram_swaps(entries).is_empty() {
+        return false;
+    }
+    let has_vram_swap = entries.iter().any(|e| {
+        !e.is_ghost()
+            && (e.filename.contains("nbd") || e.filename.contains("ublk"))
+            && e.is_managed_or_orphan_vram_tier()
+    });
+    if !has_vram_swap {
+        return false;
+    }
+    let has_record = Path::new(SWAP_DEV_FILE).exists() || Path::new(PID_FILE).exists();
+    if !has_record {
+        return false;
+    }
+    // Daemon must still be serving, or we have a half-state (caller must down).
+    let pid_alive = fs::read_to_string(PID_FILE)
+        .ok()
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .is_some_and(|pid| Path::new(&format!("/proc/{pid}")).exists());
+    let sock_ok = Path::new(SOCK).exists();
+    pid_alive || sock_ok
+}
+
+/// Half-state: records or nbd without a complete healthy cascade → refuse second `up`.
+fn refuse_half_cascade(entries: &[SwapEntry]) -> Result<(), CascadeError> {
+    if cascade_already_healthy(entries) {
+        return Ok(());
+    }
+    let has_record = Path::new(SWAP_DEV_FILE).exists()
+        || Path::new(ZRAM_DEV_FILE).exists()
+        || Path::new(PID_FILE).exists();
+    let has_vram = entries
+        .iter()
+        .any(|e| !e.is_ghost() && (e.filename.contains("nbd") || e.filename.contains("ublk")));
+    if has_record || has_vram {
+        return Err(CascadeError::Precondition(
+            "cascata pela metade (estado em /run/ramshared ou nbd/ublk sem daemon saudavel). \
+             Rode `sudo ramshared down` e tente `up` de novo. \
+             Nao empurre um segundo up em cima."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, CascadeError> {
     let mut a = UpArgs {
-        vram_mb: 1024,
-        zram_mb: 1024,
+        vram_mb: default_mb_from_env("RAMSHARED_VRAM_MIB", 1024),
+        zram_mb: default_mb_from_env("RAMSHARED_ZRAM_MIB", 1024),
         daemon,
         force: false,
         connections: 1,
@@ -553,6 +611,14 @@ pub fn up() -> Result<(), CascadeError> {
 
     // Refuse dirty state before touching anything (#16 fail-safe).
     refuse_dirty_swap_state()?;
+
+    // SPEC ITEM-5: idempotent if already healthy; refuse half-state.
+    let entries_now = read_swaps();
+    if cascade_already_healthy(&entries_now) {
+        eprintln!("[up] cascata ja ativa — nada a fazer (idempotente)");
+        return status();
+    }
+    refuse_half_cascade(&entries_now)?;
 
     // A1 — DEMOTE safety net (requires a tier below VRAM).
     let vram_bytes = a
@@ -846,5 +912,31 @@ Filename Type Size Used Priority
         let a = parse(&["--zram", "0", "--vram", "2048"]).unwrap();
         assert_eq!(a.zram_mb, 0);
         assert_eq!(a.vram_mb, 2048);
+    }
+
+    #[test]
+    fn cascade_healthy_requires_vram_swap_record_and_live_daemon_signal() {
+        let clean = parse_proc_swaps(
+            "Filename Type Size Used Priority\n\
+             /dev/sdb partition 8388608 0 -2\n",
+        );
+        assert!(!cascade_already_healthy(&clean));
+
+        let with_nbd = parse_proc_swaps(
+            "Filename Type Size Used Priority\n\
+             /dev/nbd0 partition 1048576 0 100\n\
+             /dev/sdb partition 8388608 0 -2\n",
+        );
+        // Without /run/ramshared records this process has no pid/socket → not healthy.
+        assert!(!cascade_already_healthy(&with_nbd));
+    }
+
+    #[test]
+    fn ghost_blocks_healthy() {
+        let ghost = parse_proc_swaps(
+            "Filename Type Size Used Priority\n\
+             /dev/nbd0\\040(deleted) partition 1048576 10 100\n",
+        );
+        assert!(!cascade_already_healthy(&ghost));
     }
 }

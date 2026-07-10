@@ -1,0 +1,11 @@
+# RamShared cascade sizes (MiB). Copied to /etc/ramshared/cascade.conf on install
+# if that file does not exist yet. Edit the copy under /etc — not this example.
+#
+# Keep VRAM modest if you also play games on the same GPU.
+# The daemon gives VRAM back when free memory on the card drops (DEMOTE).
+
+VRAM_MIB=1024
+ZRAM_MIB=1024
+
+# Extra free VRAM required above VRAM_MIB before boot will start (MiB).
+MIN_VRAM_HEADROOM_MIB=256

@@ -48,56 +48,31 @@ Tudo entre START e END (números, comandos, limites, feedback, link) é **um ún
 
 >>> COPY BODY START
 
-**Quando a RAM aperta, o RamShared usa memória ociosa da placa de vídeo — e devolve se a GPU precisar.**
+Cansei do PC engasgando no SSD enquanto a placa de vídeo fica com memória sobrando.
 
-Montei o **RamShared** (Rust, Linux/WSL2, NVIDIA): emprestar **memória ociosa da GPU** quando a RAM do sistema aperta, sem fingir que a memória da placa é tão segura/rápida quanto a RAM principal.
+Escrevi o **RamShared** (Rust, Linux/WSL2, NVIDIA). Quando a RAM aperta, ele **empresta** VRAM ociosa. Se você abre um jogo ou render no Windows e a placa precisa da memória, ele **devolve**. Os programas no WSL continuam vivos.
 
-## Problema (humano)
-
-Compile, containers, mil abas. A RAM acaba. O PC engasga no **SSD**. Enquanto isso a **memória da placa de vídeo** está quase vazia — e você já pagou por ela.
-
-## Por que não “jogar todo o swap na GPU”?
-
-Quando o Windows recupera memória da GPU sob pressão, essa memória pode ficar **muito lenta** (medimos cerca de **1,2 s** numa leitura pequena no pior caso). Se isso for o *primeiro* recurso de emergência, a máquina trava. Por isso a GPU entra só como **segunda opção** — e dá para **devolver**.
-
-## Design (curto)
+Não é mágica: sob pressão o Windows pode deixar a VRAM **lenta** (medimos ~**1,2 s** numa leitura pequena). Por isso a ordem é:
 
 ```
-Precisa de memória?  →  1) RAM comprimida     — primeiro, rápido
-                     →  2) GPU ociosa         — segundo
-                     →  3) disco (SSD/VHDX)   — último
+RAM comprimida (zram)  →  GPU ociosa  →  disco
 ```
 
-Se a latência disparar: **paramos de usar a memória da GPU**, os dados vão pro disco, **os apps continuam**.
-
-## Números (medidos)
-
-- Pior caso sob pressão da GPU no host: até **~1,2 s** numa leitura pequena.
-- Caminho mais rápido ~**241 µs** vs caminho antigo ~**326 µs**.
-- Stress: ~**500 MB** na GPU, ~**480 MB** de volta, **0 corrupção**.
-
-## Experimentar
+Números reais do drill: ~500 MB na GPU, ~480 MB de volta, **0** corrupção.
 
 ```
 ./scripts/quickstart.sh
 sudo ./target/release/ramshared check
 sudo ./target/release/ramshared up --vram 1024 --zram 1024
-swapon --show   # sucesso ≈ três linhas
+swapon --show
 ```
 
-## Limites honestos
+Boot no WSL (opcional, se recusa se o estado estiver sujo):  
+`sudo bash scripts/safety/install-cascade-boot.sh --enable`
 
-- Dia 1: **Linux/WSL2 + NVIDIA**.
-- Não é RAM grátis para jogo no talo.
-- Não thrashamos WSL2 do dia a dia de propósito.
+Não é RAM grátis para jogo no talo. Não é driver Windows pro notebook do dia a dia. Quero quem já sofreu com swap/CUDA/WSL e diga onde ainda parece frágil.
 
-## Feedback
-
-1. GPU como segunda opção + devolver vs outras abordagens.
-2. O que falta para “só funciona”.
-3. Onde a segurança ainda parece frágil.
-
-Repo + FAQ: https://github.com/emersonbusson/ramshared
+https://github.com/emersonbusson/ramshared
 
 >>> COPY BODY END
 

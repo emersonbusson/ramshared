@@ -345,3 +345,21 @@ Hot arm (PF Usage>0) not re-run: already proven **0x7A/c0000185** (dump 27437); 
 - Numbers cited only from existing validation/reliability/IMPL evidence (no new host-real PASS).
 **Verdict:** ✅ works (docs honesty)
 **Next action:** Product CUDA Windows path + MSVC winsvc when env available; keep host-real blocked.
+
+## 2026-07-09 — wsl2-cascade-boot (SSDV3) + human docs
+
+**What:** Opt-in systemd cascade boot (fail-closed preflight, stop=`down`), idempotent `up`, env size defaults; rewrite root docs to plain language.
+**Category:** local-check + integration (scripts)
+**How to measure:**
+```bash
+cargo test -p ramshared-cli
+# on a ready GPU WSL with systemd:
+sudo bash scripts/safety/cascade-preflight.sh
+sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentional
+```
+**Measured data:**
+- `cargo test -p ramshared-cli`: **17** passed, 0 failed
+- docs-check: OK; INDEX includes `wsl2-cascade-boot` DONE
+- Full reboot e2e on this agent host: **not claimed** (user opt-in)
+**Verdict:** ✅ code path ready / 🟡 boot e2e deferred to operator enable
+**Next action:** User with systemd: `--enable` once and log `swapon --show` after reboot.
