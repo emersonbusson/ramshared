@@ -384,3 +384,16 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 - bash -n cascade-app OK
 **Verdict:** ✅ inventory blocks LKM on this lab; ✅ control app MVP ready
 **Next action:** user may `sudo cascade-app.sh start` or --gui; trilha K waits bare-metal.
+
+## 2026-07-10 — Hyper-V lab on R: RUSSIA (3 paths)
+
+**What:** Path1 VM+ISO; Path2 DDA inventory; Path3 dual-boot shrink attempt; mainline PRD.
+**Category:** integration / local-check
+**Measured data:**
+- ISO ubuntu-24.04.2-live-server ~2.99 GB at R:\Hyper-V\iso\
+- VM linux-kernel-lab Gen2 created; start needed DynamicMemory 4GB (8GB failed 0x800705AA with other VMs)
+- DDA inventory: RTX 2060 LocationPath PCIROOT(0)#PCI(0301)#PCI(0000); Apply not executed
+- Dual-boot shrink: SizeMin leaves only ~2.68 GB shrinkable after defrag; immovable files block 100GB carve
+- PRD: docs/specs/no-milestone/mainline-vram-tiering/PRD.md
+**Verdict:** ✅ path1 ready for Ubuntu install via vmconnect; 🟡 path2 inventory-only; 🔴 path3 blocked until data layout allows shrink
+**Next action:** Finish Ubuntu install in VM; free/move files on R: for dual-boot; DDA only with spare display.
