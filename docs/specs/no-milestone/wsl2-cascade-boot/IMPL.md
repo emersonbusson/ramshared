@@ -41,7 +41,7 @@ cargo test -p ramshared-cli
 
 ## Gaps
 
-- Full e2e “reboot WSL → three swap lines”: **partial** — unit enabled + live three lines (zram/nbd/sdc) logged 2026-07-10 in `validation.md` (cascade-transport-policy entry). Double `wsl --shutdown` soak still optional hygiene.  
+- Full e2e “reboot WSL → three swap lines”: **partial** — unit enabled + live three lines (zram/nbd/sdc) logged 2026-07-10. Orphan-after-`terminate` heal: **GREEN** via `wsl2-cascade-orphan-recover`.  
 - Zero-stall under WDDM reclaim: **not claimed**.
 
 ## Rollback trigger

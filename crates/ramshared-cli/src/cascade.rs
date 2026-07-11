@@ -4,7 +4,10 @@
 //! 1. **Never** kill `ramsharedd` while any managed swap (nbd/ublk/zram) is still
 //!    listed in `/proc/swaps` — that creates ghost `(deleted)` swap entries and freezes WSL.
 //! 2. **Always** `swapoff` managed devices **before** NBD disconnect / daemon stop.
-//! 3. **Refuse** `up` if ghost/deleted swap or orphaned ublk/nbd swap is present.
+//! 3. **Refuse** `up` if ghost/deleted swap is present. Zero-used managed orphans
+//!    (typical after `wsl --terminate`) are **auto-recovered** once (swapoff → disconnect)
+//!    before setup; nbd/ublk with `used_kb > 0` still refuse (dead-backend hang class).
+//!    Kill-switch: `RAMSHARED_NO_ORPHAN_RECOVER=1`.
 //! 4. **zram** algorithm is best-effort with fallbacks (WSL kernels disagree on `lzo-rle`).
 //!
 //! Mounts tiers by `swapon` priority and unmounts in reverse order.
@@ -114,6 +117,43 @@ impl SwapEntry {
             .unwrap_or(&self.filename)
             .to_string()
     }
+
+    /// Canonical `/dev/...` path for swapoff (kernel may list `/nbd0` without `/dev`).
+    /// SPEC: docs/specs/no-milestone/wsl2-cascade-orphan-recover/SPEC.md ITEM-1
+    pub fn canonical_path(&self) -> String {
+        canonicalize_swap_path(&self.bare_path())
+    }
+}
+
+/// `/nbd0` → `/dev/nbd0`; `/dev/nbd0` unchanged; `nbd0` → `/dev/nbd0`.
+/// SPEC: wsl2-cascade-orphan-recover ITEM-1
+pub fn canonicalize_swap_path(p: &str) -> String {
+    let p = p.trim();
+    if p.is_empty() {
+        return String::new();
+    }
+    if p.starts_with("/dev/") {
+        return p.to_string();
+    }
+    if let Some(rest) = p.strip_prefix('/') {
+        return format!("/dev/{rest}");
+    }
+    format!("/dev/{p}")
+}
+
+/// Allowlist for auto swapoff: only nbd / ublk / zram (never disk VHDX).
+fn is_allowlisted_managed_path(path: &str) -> bool {
+    let base = path
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .to_ascii_lowercase();
+    let base = base.split_whitespace().next().unwrap_or(&base);
+    base.starts_with("nbd")
+        || base.starts_with("ublk")
+        || base.starts_with("ublkb")
+        || base.starts_with("zram")
+        || base.contains("ramshared")
 }
 
 /// Parse full `/proc/swaps` text into entries (skips header).
@@ -227,30 +267,61 @@ fn chrono_like_now() -> String {
 /// Paths we will try to `swapoff` during down (recorded + live scan).
 fn swapoff_candidates(recorded_swap: Option<&str>, recorded_zram: Option<&str>) -> Vec<String> {
     let mut out = Vec::new();
+    let push_unique = |out: &mut Vec<String>, p: String| {
+        if p.is_empty() || !is_allowlisted_managed_path(&p) {
+            return;
+        }
+        let canon = canonicalize_swap_path(&p);
+        if !out.iter().any(|x| x == &canon || x == &p) {
+            out.push(canon);
+        }
+    };
     if let Some(s) = recorded_swap
         && !s.is_empty()
     {
-        out.push(s.to_string());
+        push_unique(&mut out, s.to_string());
     }
     if let Some(z) = recorded_zram
         && !z.is_empty()
     {
-        out.push(z.to_string());
+        push_unique(&mut out, z.to_string());
     }
     for e in read_swaps() {
         if e.is_managed_or_orphan_vram_tier() {
-            // Prefer bare path for live devices; keep full string for ghosts.
+            // Prefer canonical live path; keep ghost string for messaging.
             let p = if e.is_ghost() {
                 e.filename.replace("\\040(deleted)", " (deleted)")
             } else {
-                e.bare_path()
+                e.canonical_path()
             };
-            if !out.iter().any(|x| x == &p) {
-                out.push(p);
-            }
+            push_unique(&mut out, p);
         }
     }
     out
+}
+
+/// Try swapoff on canonical path, then bare (kernel may list either form).
+fn swapoff_try(path: &str) -> Result<(), CascadeError> {
+    let canon = canonicalize_swap_path(path);
+    let tries: &[&str] = if canon == path {
+        &[path]
+    } else {
+        &[canon.as_str(), path]
+    };
+    let mut last = CascadeError::Shell {
+        cmd: "swapoff".into(),
+        msg: "no path tried".into(),
+    };
+    for p in tries {
+        if p.is_empty() {
+            continue;
+        }
+        match sh("swapoff", &[p]) {
+            Ok(_) => return Ok(()),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
 }
 
 /// Swapoff every candidate. Returns list of failures.
@@ -258,12 +329,19 @@ fn swapoff_candidates(recorded_swap: Option<&str>, recorded_zram: Option<&str>) 
 fn swapoff_all(paths: &[String]) -> Vec<(String, String)> {
     let mut fails = Vec::new();
     for p in paths {
+        if !is_allowlisted_managed_path(p) {
+            eprintln!("[down] swapoff skip (nao allowlist): {p}");
+            continue;
+        }
         // Ghost with used>0 cannot be recovered without reboot — report loudly.
         let entries = read_swaps();
-        if let Some(e) = entries
-            .iter()
-            .find(|e| e.filename.contains(p.trim()) || e.bare_path() == *p)
-            && e.is_ghost()
+        let p_canon = canonicalize_swap_path(p);
+        if let Some(e) = entries.iter().find(|e| {
+            e.filename.contains(p.trim())
+                || e.bare_path() == *p
+                || e.canonical_path() == p_canon
+                || e.filename.contains(p_canon.trim_start_matches("/dev/"))
+        }) && e.is_ghost()
             && e.used_kb > 0
         {
             fails.push((
@@ -277,20 +355,21 @@ fn swapoff_all(paths: &[String]) -> Vec<(String, String)> {
             ));
             continue;
         }
-        match sh("swapoff", &[p.as_str()]) {
-            Ok(_) => eprintln!("[down] swapoff ok: {p}"),
+        match swapoff_try(p) {
+            Ok(_) => eprintln!("[down] swapoff ok: {p_canon}"),
             Err(e) => {
-                // Already gone is fine if used is 0
                 let msg = e.to_string();
                 if msg.contains("No such file") || msg.contains("Invalid argument") {
-                    // Re-check: if still listed with used>0, real failure
-                    let still = read_swaps()
-                        .iter()
-                        .any(|e| (e.filename.contains(p) || e.bare_path() == *p) && e.used_kb > 0);
+                    let still = read_swaps().iter().any(|e| {
+                        (e.filename.contains(p)
+                            || e.bare_path() == *p
+                            || e.canonical_path() == p_canon)
+                            && e.used_kb > 0
+                    });
                     if still {
                         fails.push((p.clone(), msg));
                     } else {
-                        eprintln!("[down] swapoff skip (ausente): {p}");
+                        eprintln!("[down] swapoff skip (ausente): {p_canon}");
                     }
                 } else {
                     fails.push((p.clone(), msg));
@@ -401,36 +480,155 @@ fn setup_zram_sysfs(mb: u64, prio: i32) -> Result<(), CascadeError> {
     Ok(())
 }
 
-fn refuse_dirty_swap_state() -> Result<(), CascadeError> {
+fn refuse_ghost_swap_state() -> Result<(), CascadeError> {
     let entries = read_swaps();
     let ghosts = ghost_vram_swaps(&entries);
-    if !ghosts.is_empty() {
-        let detail: Vec<String> = ghosts
-            .iter()
-            .map(|e| format!("{} used_kb={}", e.filename, e.used_kb))
-            .collect();
-        return Err(CascadeError::Precondition(format!(
-            "estado sujo: swap fantasma (device deleted) em /proc/swaps: {}. \
-             NAO e seguro continuar. No Windows: `wsl --shutdown`, reabra a distro, \
-             depois `sudo ramshared down` e `sudo ramshared up ...`. \
-             Nunca mate o daemon com ublk/nbd ativo.",
-            detail.join("; ")
-        )));
+    if ghosts.is_empty() {
+        return Ok(());
     }
-    // Orphan live ublk/nbd without our run files — refuse to stack another cascade.
-    let has_record = Path::new(SWAP_DEV_FILE).exists() || Path::new(ZRAM_DEV_FILE).exists();
-    let orphan = entries.iter().any(|e| {
-        !e.is_ghost() && (e.filename.contains("ublk") || e.filename.contains("nbd")) && !has_record
+    let detail: Vec<String> = ghosts
+        .iter()
+        .map(|e| format!("{} used_kb={}", e.filename, e.used_kb))
+        .collect();
+    Err(CascadeError::Precondition(format!(
+        "estado sujo: swap fantasma (device deleted) em /proc/swaps: {}. \
+         NAO e seguro continuar. No Windows: `wsl --shutdown`, reabra a distro, \
+         depois `sudo ramshared down` e `sudo ramshared up ...`. \
+         Nunca mate o daemon com ublk/nbd ativo.",
+        detail.join("; ")
+    )))
+}
+
+fn orphan_recover_disabled() -> bool {
+    matches!(
+        std::env::var("RAMSHARED_NO_ORPHAN_RECOVER")
+            .map(|s| s.to_ascii_lowercase())
+            .as_deref(),
+        Ok("1") | Ok("true") | Ok("yes") | Ok("on")
+    )
+}
+
+/// Pure plan for orphan handling (unit-tested).
+/// SPEC: wsl2-cascade-orphan-recover ITEM-2
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum OrphanPlan {
+    /// No managed orphan context.
+    None,
+    /// Safe: all managed orphans have used_kb == 0 (or only zram dirty is separate).
+    RecoverZeroUsed,
+    /// Dangerous: nbd/ublk with pages — no auto swapoff.
+    RefuseDirtyBackend,
+}
+
+fn plan_orphan_action(entries: &[SwapEntry], cascade_healthy: bool) -> OrphanPlan {
+    if cascade_healthy {
+        return OrphanPlan::None;
+    }
+    let live_managed: Vec<&SwapEntry> = entries
+        .iter()
+        .filter(|e| !e.is_ghost() && e.is_managed_or_orphan_vram_tier())
+        .collect();
+    if live_managed.is_empty() {
+        return OrphanPlan::None;
+    }
+    let dirty_block = live_managed.iter().any(|e| {
+        e.used_kb > 0
+            && (e.filename.contains("nbd")
+                || e.filename.contains("ublk")
+                || e.filename.contains("\\040ublk"))
     });
-    if orphan {
-        return Err(CascadeError::Precondition(
-            "ha swap nbd/ublk ativo sem estado /run/ramshared (orfao). \
-             Rode `sudo ramshared down` ou swapoff manual no device, \
-             depois up de novo."
-                .into(),
-        ));
+    if dirty_block {
+        return OrphanPlan::RefuseDirtyBackend;
     }
-    Ok(())
+    OrphanPlan::RecoverZeroUsed
+}
+
+fn clear_run_ramshared_state() {
+    let _ = fs::remove_file(SOCK);
+    let _ = fs::remove_file(ZRAM_DEV_FILE);
+    let _ = fs::remove_file(SWAP_DEV_FILE);
+    let _ = fs::remove_file(PID_FILE);
+    let _ = fs::remove_file("/run/ramshared/.armed");
+}
+
+/// Auto-heal zero-used managed orphans (WSL terminate class). Single pass.
+/// SPEC: docs/specs/no-milestone/wsl2-cascade-orphan-recover/SPEC.md ITEM-2
+fn try_recover_zero_used_orphans() -> Result<(), CascadeError> {
+    let entries = read_swaps();
+    if cascade_already_healthy(&entries) {
+        return Ok(());
+    }
+
+    let plan = plan_orphan_action(&entries, false);
+    match plan {
+        OrphanPlan::None => {
+            // Legacy: nbd orphan without records still needs message if recover disabled path
+            // handled below only for Refuse / Recover.
+            Ok(())
+        }
+        OrphanPlan::RefuseDirtyBackend => Err(CascadeError::Precondition(
+            "orphan nbd/ublk com used_kb>0 — recusa auto-recover (risco hang em backend morto). \
+             No Windows: `wsl --shutdown`, reabra a distro; ou swapoff manual se souber o que faz. \
+             Nunca kill -9 ramsharedd com nbd/ublk em /proc/swaps."
+                .into(),
+        )),
+        OrphanPlan::RecoverZeroUsed => {
+            if orphan_recover_disabled() {
+                return Err(CascadeError::Precondition(
+                    "ha swap nbd/ublk/zram gerido orfao e RAMSHARED_NO_ORPHAN_RECOVER=1. \
+                     Rode `sudo ramshared down` ou remova o kill-switch, depois up."
+                        .into(),
+                ));
+            }
+            eprintln!(
+                "[up] orphan recover: managed swap zero-used (pos-terminate WSL?) — \
+                 swapoff allowlist + nbd disconnect (single pass)"
+            );
+            let candidates = swapoff_candidates(None, None);
+            eprintln!("[up] orphan recover candidatos: {candidates:?}");
+            let fails = swapoff_all(&candidates);
+            for (p, msg) in &fails {
+                eprintln!("[up] orphan recover swapoff fail {p}: {msg}");
+            }
+            // Disconnect any nbd still visible or known allowlist devices.
+            for e in read_swaps() {
+                if e.filename.contains("nbd") && !e.is_ghost() {
+                    let dev = e.canonical_path();
+                    let _ = sh("nbd-client", &["-d", &dev]);
+                }
+            }
+            // Also disconnect default product nbd even if already off swaps.
+            let _ = sh("nbd-client", &["-d", NBD]);
+
+            if daemon_kill_allowed(&read_swaps()) {
+                stop_daemon_gracefully();
+            } else {
+                return Err(CascadeError::Precondition(
+                    "orphan recover: ainda ha nbd/ublk em /proc/swaps apos swapoff — \
+                     NAO mate o daemon. Intervenha manualmente ou `wsl --shutdown`."
+                        .into(),
+                ));
+            }
+            clear_run_ramshared_state();
+
+            let after = read_swaps();
+            if active_vram_block_swap(&after) {
+                return Err(CascadeError::Precondition(
+                    "orphan recover incompleto: nbd/ublk ainda em /proc/swaps. \
+                     `wsl --shutdown` no Windows e tente de novo."
+                        .into(),
+                ));
+            }
+            // Leftover zero-used zram: swapoff again
+            for e in &after {
+                if e.filename.contains("zram") && !e.is_ghost() {
+                    let _ = swapoff_try(&e.canonical_path());
+                }
+            }
+            eprintln!("[up] orphan recover: limpo — a seguir setup normal");
+            Ok(())
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -669,16 +867,25 @@ pub fn up() -> Result<(), CascadeError> {
         return Err(CascadeError::Precondition(msg.into()));
     }
 
-    // Refuse dirty state before touching anything (#16 fail-safe).
-    refuse_dirty_swap_state()?;
+    // Ghosts: never auto-recover (#16).
+    refuse_ghost_swap_state()?;
 
-    // SPEC ITEM-5: idempotent if already healthy; refuse half-state.
+    // SPEC wsl2-cascade-boot ITEM-5: idempotent if already healthy.
     let entries_now = read_swaps();
     if cascade_already_healthy(&entries_now) {
         eprintln!("[up] cascata ja ativa — nada a fazer (idempotente)");
         return status();
     }
-    refuse_half_cascade(&entries_now)?;
+
+    // SPEC wsl2-cascade-orphan-recover ITEM-2: zero-used orphans → heal once.
+    try_recover_zero_used_orphans()?;
+
+    let entries_after = read_swaps();
+    if cascade_already_healthy(&entries_after) {
+        eprintln!("[up] cascata ja ativa apos recover — noop");
+        return status();
+    }
+    refuse_half_cascade(&entries_after)?;
 
     // A1 — DEMOTE safety net (requires a tier below VRAM).
     let vram_bytes = a
@@ -823,23 +1030,25 @@ pub fn down() -> Result<(), CascadeError> {
     // Also try reset any leftover zram still listed
     for e in read_swaps() {
         if e.filename.contains("zram") && !e.is_ghost() {
-            let _ = sh("swapoff", &[&e.bare_path()]);
-            let _ = sh("zramctl", &["-r", &e.bare_path()]);
+            let z = e.canonical_path();
+            let _ = swapoff_try(&z);
+            let _ = sh("zramctl", &["-r", &z]);
         }
     }
 
     // 3) Disconnect NBD only after swapoff (EOF → daemon zero() VRAM)
     let nbd_targets: Vec<String> = recorded_swap
         .into_iter()
+        .map(|s| canonicalize_swap_path(&s))
         .chain(
             read_swaps()
                 .into_iter()
                 .filter(|e| e.filename.contains("nbd"))
-                .map(|e| e.bare_path()),
+                .map(|e| e.canonical_path()),
         )
         .collect();
     for dev in &nbd_targets {
-        if dev.contains("nbd") {
+        if is_allowlisted_managed_path(dev) && dev.contains("nbd") {
             let _ = sh("nbd-client", &["-d", dev]);
         }
     }
@@ -881,6 +1090,56 @@ mod tests {
     fn parse(args: &[&str]) -> Result<UpArgs, CascadeError> {
         let args = args.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
         parse_up_args_from(&args, "ramsharedd".to_string())
+    }
+
+    #[test]
+    fn canonicalize_swap_path_table() {
+        assert_eq!(canonicalize_swap_path("/nbd0"), "/dev/nbd0");
+        assert_eq!(canonicalize_swap_path("/dev/nbd0"), "/dev/nbd0");
+        assert_eq!(canonicalize_swap_path("nbd0"), "/dev/nbd0");
+        assert_eq!(canonicalize_swap_path("/zram0"), "/dev/zram0");
+        assert_eq!(canonicalize_swap_path("  /ublkb0  "), "/dev/ublkb0");
+        assert_eq!(canonicalize_swap_path(""), "");
+    }
+
+    #[test]
+    fn allowlist_rejects_disk_paths() {
+        assert!(is_allowlisted_managed_path("/dev/nbd0"));
+        assert!(is_allowlisted_managed_path("/zram0"));
+        assert!(is_allowlisted_managed_path("/dev/ublkb0"));
+        assert!(!is_allowlisted_managed_path("/dev/sdc"));
+        assert!(!is_allowlisted_managed_path("/dev/sdb"));
+    }
+
+    #[test]
+    fn orphan_plan_zero_used_is_recover() {
+        let e = parse_proc_swaps(
+            "Filename Type Size Used Priority\n\
+             /dev/sdc partition 8388608 100 -2\n\
+             /zram0 partition 1048576 0 200\n\
+             /nbd0 partition 1048576 0 100\n",
+        );
+        assert_eq!(plan_orphan_action(&e, false), OrphanPlan::RecoverZeroUsed);
+        assert_eq!(plan_orphan_action(&e, true), OrphanPlan::None);
+    }
+
+    #[test]
+    fn orphan_plan_dirty_nbd_is_refuse() {
+        let e = parse_proc_swaps(
+            "Filename Type Size Used Priority\n\
+             /dev/nbd0 partition 1048576 4096 100\n\
+             /dev/sdc partition 8388608 0 -2\n",
+        );
+        assert_eq!(plan_orphan_action(&e, false), OrphanPlan::RefuseDirtyBackend);
+    }
+
+    #[test]
+    fn orphan_plan_clean_disk_only_is_none() {
+        let e = parse_proc_swaps(
+            "Filename Type Size Used Priority\n\
+             /dev/sdc partition 8388608 0 -2\n",
+        );
+        assert_eq!(plan_orphan_action(&e, false), OrphanPlan::None);
     }
 
     #[test]

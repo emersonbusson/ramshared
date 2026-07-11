@@ -579,3 +579,43 @@ cargo test -p ramshared-cli
 **Verdict:** ✅ works (user goal: open WSL → cascade on; VRAM before SSD)
 **Soak reboot 2×:** not run in-agent (kills session). Hygiene only — no new PRD/SPEC/2.5. After human `wsl --shutdown` twice, re-check unit + `swapon --show` order.
 **Next action:** optional human soak reboot 2×; full ublk product path remains future + dedicated AUDIT-2.5
+
+
+## 2026-07-10 — cascade boot soak 2× (REAL RESULT)
+
+**What:** Windows orchestrator `C:\wsl\cascade-boot-soak.ps1` ran `wsl --terminate Ubuntu-24.04` twice.
+**Category:** boot soak hygiene + **bug found**
+**Measured data:**
+- Script verdict file wrote **PASS** — **FALSE PASS**: only checked zram/nbd priority lines in `/proc/swaps`.
+- After each terminate, kernel VM kept swap (`/zram0` prio 200, `/nbd0` prio 100) but **wiped `/run/ramshared`** and killed `ramsharedd`.
+- Boot unit then **FAILED**: `ha swap nbd/ublk ativo sem estado /run/ramshared (orfao)`.
+- `UNIT_ACTIVE=failed`, `DAEMON=none` on both rounds — product path not healthy.
+- Agent chat/WSL session dropped (expected on terminate) — user perceived freeze.
+- Post-incident recovery (manual): deep clean nbd/zram + `ramshared up` → healthy again:
+  - zram0 prio 200, nbd0 prio 100, sdc -2, daemon alive under `/run/ramshared`.
+**Verdict:** ❌ soak failed for **daemon+unit**; swap *devices* reappeared but were **orphans** (unsafe).
+**Root cause:** `wsl --terminate` ≠ full VM teardown when restart is immediate; swap survives in shared kernel; `/run` does not; `up` fail-closes on orphan (correct safety, bad boot UX without auto-recover).
+**Next action:** boot recover path (swapoff orphan managed → re-up) in cascade-up/preflight; tighten soak success criteria to require daemon + unit active.
+
+## 2026-07-10 — wsl2-cascade-orphan-recover GREEN
+
+**What:** Auto-recover zero-used managed swap orphans after WSL terminate class (SSDV3 + security AUDIT-2.5 GO).
+**Category:** fail-safe + boot UX
+**SSDV3:** `docs/specs/no-milestone/wsl2-cascade-orphan-recover/{PRD,SPEC,AUDIT-2.5,IMPL}.md`
+**How to measure:**
+```bash
+# manufacture orphan (used=0):
+sudo rm -rf /run/ramshared; sudo pkill -TERM -x ramsharedd; sleep 1
+swapon --show   # zram+nbd still listed, no daemon
+sudo ./target/release/ramshared up
+swapon --show; pgrep -a ramsharedd
+cargo test -p ramshared-cli
+```
+**Measured data:**
+- AUDIT-2.5: GO for used=0 only; NO-GO used>0 nbd auto; allowlist nbd/ublk/zram; kill-switch `RAMSHARED_NO_ORPHAN_RECOVER=1`
+- cargo test -p ramshared-cli: **23 passed**
+- Live: orphan manufactured (run wiped, daemon killed, nbd+zram used=0) → `up` logged `orphan recover` → swapoff zram0+nbd0 → setup → **exit 0**
+- After: zram1 prio **200**, nbd0 prio **100**, sdc prio **−2**; daemon alive; unit **active**
+- Disk sdc never swapoff'd
+**Verdict:** ✅ works
+**Next action:** optional re-run soak terminate 2× with daemon+unit criteria (not just swapon lines)
