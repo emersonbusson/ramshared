@@ -730,26 +730,24 @@ fn run_nbd<P: VramProvider>(
                         eprintln!(
                             "[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}"
                         );
-                            demote_rx = Some(spawn_swapoff(&nbd_dev));
-                            swapoff_attempted = true;
-                        }
-                    }
-                }
-
-                let budget_refuses = match &backend {
-                    Be::Sparse(sparse) => sparse.budget_refuses,
-                    Be::Pre(_) => 0,
-                };
-                if budget_refuses > observed_budget_refuses {
-                    observed_budget_refuses = budget_refuses;
-                    if !demoted && demote_rx.is_none() {
-                        eprintln!(
-                            "[ramsharedd] WDDM constrained -> bounded swapoff {nbd_dev}"
-                        );
                         demote_rx = Some(spawn_swapoff(&nbd_dev));
                         swapoff_attempted = true;
                     }
                 }
+            }
+
+            let budget_refuses = match &backend {
+                Be::Sparse(sparse) => sparse.budget_refuses,
+                Be::Pre(_) => 0,
+            };
+            if budget_refuses > observed_budget_refuses {
+                observed_budget_refuses = budget_refuses;
+                if !demoted && demote_rx.is_none() {
+                    eprintln!("[ramsharedd] WDDM constrained -> bounded swapoff {nbd_dev}");
+                    demote_rx = Some(spawn_swapoff(&nbd_dev));
+                    swapoff_attempted = true;
+                }
+            }
         }
 
         // SPEC ITEM-2: reclaim on worker thread (I/O or idle tick).

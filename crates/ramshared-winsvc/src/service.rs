@@ -114,8 +114,7 @@ pub fn teardown(
             None => {
                 // No remover injected → refuse to clear the flag and stop.
                 return Err(ProvisionError::Disk(
-                    "DT-9: pagefile_active but no pagefile_remove callback (refuse destroy)"
-                        .into(),
+                    "DT-9: pagefile_active but no pagefile_remove callback (refuse destroy)".into(),
                 ));
             }
         }
@@ -283,14 +282,7 @@ mod tests {
         let mut wipe = NopWipe;
         let mut phases = Vec::new();
         let rm = || Ok(());
-        teardown(
-            &mut state,
-            &mut disk,
-            &mut wipe,
-            &mut phases,
-            Some(&rm),
-        )
-        .unwrap();
+        teardown(&mut state, &mut disk, &mut wipe, &mut phases, Some(&rm)).unwrap();
         assert_eq!(
             phases,
             [
@@ -341,14 +333,7 @@ mod tests {
         let mut wipe = NopWipe;
         let mut phases = Vec::new();
         let rm = || Err(PagefileError::Api("still hot".into()));
-        let e = teardown(
-            &mut state,
-            &mut disk,
-            &mut wipe,
-            &mut phases,
-            Some(&rm),
-        )
-        .unwrap_err();
+        let e = teardown(&mut state, &mut disk, &mut wipe, &mut phases, Some(&rm)).unwrap_err();
         assert!(matches!(e, ProvisionError::Pagefile(_)));
         assert!(disk.created);
         assert!(state.pagefile_active);

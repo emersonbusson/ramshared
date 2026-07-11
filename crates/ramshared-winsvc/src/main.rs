@@ -15,9 +15,8 @@ mod windows_svc {
 
     use windows_service::define_windows_service;
     use windows_service::service::{
-        ServiceAccess, ServiceControl, ServiceControlAccept, ServiceErrorControl,
-        ServiceExitCode, ServiceInfo, ServiceStartType, ServiceState, ServiceStatus,
-        ServiceType,
+        ServiceAccess, ServiceControl, ServiceControlAccept, ServiceErrorControl, ServiceExitCode,
+        ServiceInfo, ServiceStartType, ServiceState, ServiceStatus, ServiceType,
     };
     use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
     use windows_service::service_dispatcher;
@@ -94,16 +93,15 @@ mod windows_svc {
     fn run_service() -> Result<(), Box<dyn std::error::Error>> {
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
 
-        let status_handle = service_control_handler::register(SERVICE_NAME, move |control| {
-            match control {
+        let status_handle =
+            service_control_handler::register(SERVICE_NAME, move |control| match control {
                 ServiceControl::Stop | ServiceControl::Shutdown => {
                     let _ = shutdown_tx.send(());
                     ServiceControlHandlerResult::NoError
                 }
                 ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
                 _ => ServiceControlHandlerResult::NotImplemented,
-            }
-        })?;
+            })?;
 
         status_handle.set_service_status(ServiceStatus {
             service_type: ServiceType::OWN_PROCESS,
@@ -206,8 +204,7 @@ mod windows_svc {
 
     fn install() -> Result<(), Box<dyn std::error::Error>> {
         let exe = std::env::current_exe()?;
-        let manager =
-            ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
+        let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
         // CREATE already may fail if exists — try open+change or create.
         let service_info = ServiceInfo {
             name: OsString::from(SERVICE_NAME),
@@ -240,8 +237,7 @@ mod windows_svc {
     }
 
     fn uninstall() -> Result<(), Box<dyn std::error::Error>> {
-        let manager =
-            ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
+        let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
         let service =
             manager.open_service(SERVICE_NAME, ServiceAccess::STOP | ServiceAccess::DELETE)?;
         let _ = service.stop();
@@ -260,6 +256,8 @@ fn main() {
 #[cfg(not(windows))]
 fn main() {
     eprintln!("ramshared-winsvc: Windows-only binary (stub on this host)");
-    eprintln!("lib APIs (provision/teardown/DT-9) are testable via `cargo test -p ramshared-winsvc`");
+    eprintln!(
+        "lib APIs (provision/teardown/DT-9) are testable via `cargo test -p ramshared-winsvc`"
+    );
     std::process::exit(2);
 }
