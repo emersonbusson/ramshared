@@ -17,7 +17,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use ramshared_block::protocol::{NBD_FLAG_CAN_MULTI_CONN, NBD_FLAG_HAS_FLAGS, NBD_FLAG_SEND_FLUSH};
-use ramshared_block::{BlockBackend, Command, serve};
+use ramshared_block::{
+    BlockBackend, Command, SparseVramBackend, chunk_bytes_from_env, idle_free_secs_from_env,
+    prealloc_enabled, serve,
+};
 use ramshared_broker::arbiter::ArbiterConfig;
 use ramshared_broker::slices::SliceMap;
 use ramshared_cuda::Cuda;
@@ -444,7 +447,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// NBD path (fixed-newstyle in Unix socket). Single worker on current thread, generic over the
-/// VRAM provider (RF-G1): the `provider` (CUDA today) comes ready from the shell in `run()`.
+/// VRAM provider (RF-G1). SPEC cascade-vram-ondemand: sparse default; full prealloc via env.
 fn run_nbd<P: VramProvider>(
     provider: P,
     size: u64,
@@ -452,34 +455,81 @@ fn run_nbd<P: VramProvider>(
     force: bool,
     nbd_dev: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // --- allocates and zeroes VRAM (via VramProvider) ---
     let (free, total) = provider.mem_info()?;
     eprintln!(
         "[ramsharedd] VRAM livre={} MiB total={} MiB",
         free >> 20,
         total >> 20
     );
-    let mut mem = provider.alloc(size as usize)?;
-    mem.zero()?;
 
-    // Discipline 3: locks memory + protects from OOM killer BEFORE serving swap.
-    // CUDA/VRAM have already been allocated above (provider.alloc/mem.zero) -> safe to lock
-    // MCL_FUTURE all at once (without the dxgkrnl collision from the 2026-07-03 incident).
+    let use_prealloc = prealloc_enabled();
+    // Discipline 3: mlock host pages; for sparse, CUDA commit is on-demand (SPEC).
     lock_memory(force, true)?;
-    let mut backend = VramBackend::new(mem, BLOCK_SIZE);
-    eprintln!(
-        "[ramsharedd] VRAM alocada: {} MiB, block_size={}",
-        size >> 20,
-        BLOCK_SIZE
-    );
 
-    // --- dedicated residency canary (§9.4): region separated from swap, NOT
-    // addressable by NBD (the advertised device remains = swap region). Feeds the
-    // content/free probe in cadence (SPECv3 DT-1/DT-9). ---
+    // --- dedicated residency canary (§9.4) — always a small separate alloc ---
     let canary_region = provider.alloc(CANARY_BYTES)?;
     let mut probe = CanaryProbe::new(canary_region);
     let mut cadence = Cadence::new(CANARY_EVERY);
     let mut sampler = ResidencySampler::new(ResidencyConfig::default());
+    let free_floor = ResidencyConfig::default().free_floor_bytes;
+    let idle_free = Duration::from_secs(idle_free_secs_from_env());
+
+    enum Be<'a, Pr: VramProvider + 'a> {
+        Pre(VramBackend<Pr::Mem<'a>>),
+        Sparse(SparseVramBackend<'a, Pr>),
+    }
+    impl<'a, Pr: VramProvider + 'a> BlockBackend for Be<'a, Pr> {
+        fn size_bytes(&self) -> u64 {
+            match self {
+                Be::Pre(b) => b.size_bytes(),
+                Be::Sparse(b) => b.size_bytes(),
+            }
+        }
+        fn block_size(&self) -> u32 {
+            match self {
+                Be::Pre(b) => b.block_size(),
+                Be::Sparse(b) => b.block_size(),
+            }
+        }
+        fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<(), ramshared_block::IoError> {
+            match self {
+                Be::Pre(b) => b.read_at(off, buf),
+                Be::Sparse(b) => b.read_at(off, buf),
+            }
+        }
+        fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), ramshared_block::IoError> {
+            match self {
+                Be::Pre(b) => b.write_at(off, data),
+                Be::Sparse(b) => b.write_at(off, data),
+            }
+        }
+        fn flush(&mut self) -> Result<(), ramshared_block::IoError> {
+            match self {
+                Be::Pre(b) => b.flush(),
+                Be::Sparse(b) => b.flush(),
+            }
+        }
+    }
+
+    let mut backend: Be<'_, P> = if use_prealloc {
+        let mut mem = provider.alloc(size as usize)?;
+        mem.zero()?;
+        eprintln!(
+            "[ramsharedd] VRAM mode=prealloc capacity={} MiB (RAMSHARED_VRAM_PREALLOC)",
+            size >> 20
+        );
+        Be::Pre(VramBackend::new(mem, BLOCK_SIZE))
+    } else {
+        let chunk = chunk_bytes_from_env();
+        let sparse = SparseVramBackend::new(&provider, size, chunk, BLOCK_SIZE)
+            .map_err(|e| e.0)?;
+        eprintln!(
+            "[ramsharedd] VRAM mode=sparse capacity={} MiB chunk={} MiB committed=0 (ondemand)",
+            size >> 20,
+            chunk >> 20
+        );
+        Be::Sparse(sparse)
+    };
 
     // --- Unix socket ---
     let path = Path::new(&sock);
@@ -488,104 +538,137 @@ fn run_nbd<P: VramProvider>(
     eprintln!("[ramsharedd] escutando em {sock}");
     eprintln!("[ramsharedd] conecte: sudo nbd-client -C <N> -unix {sock} {nbd_dev}");
 
-    // --- multi-connection (H1): acceptor + reader/writer per connection feed the single
-    // CUDA worker (this thread). The WMsg channel is the ONLY backpressure point (replica per
-    // connection is unbounded, DT-7). SPEC: docs/specs/no-milestone/wsl2-cascade-swap/SPEC.md ---
-    let tx_flags = NBD_FLAG_HAS_FLAGS | NBD_FLAG_SEND_FLUSH | NBD_FLAG_CAN_MULTI_CONN; // DT-10
+    let tx_flags = NBD_FLAG_HAS_FLAGS | NBD_FLAG_SEND_FLUSH | NBD_FLAG_CAN_MULTI_CONN;
     let device_size = backend.size_bytes();
-    // ITEM-7: exports table. Single mode = 1 "default" export (empty name → index 0,
-    // byte-compatible with Phase B). The broker (ITEM-8) will pass the slices table of `SliceMap`.
     let exports = std::sync::Arc::new(vec![ramshared_block::handshake::Export {
         name: "default".to_string(),
         size: device_size,
     }]);
     let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel::<WMsg>(CHAN_CAP);
-    let _acceptor = spawn_acceptor(listener, exports, tx_flags, jobs_tx); // moves the only sender
+    let _acceptor = spawn_acceptor(listener, exports, tx_flags, jobs_tx);
     eprintln!("[ramsharedd] transmitting (single CUDA worker; multi-connection)");
 
-    // Worker state (this thread owns backend/probe/ctx — CUDA affinity).
     let mut canary: Option<Canary> = None;
     let mut baseline: Vec<u64> = Vec::new();
     let mut demoted = false;
     let mut demote_rx: Option<std::sync::mpsc::Receiver<bool>> = None;
     let mut live = LiveCount::new();
 
-    while let Ok(msg) = jobs_rx.recv() {
-        let job = match msg {
-            WMsg::Opened => {
-                live.on_open();
-                continue;
-            }
-            WMsg::Closed => {
-                if live.on_close() {
-                    break; // all open connections closed (DT-15)
-                }
-                continue;
-            }
-            WMsg::Job(job) => job,
-            WMsg::ZeroExport { base, len, done } => {
-                // Slice hygiene (DT-17): zeroes the window [base,len) on the thread owning the backend.
-                let ok = zero_window(&mut backend, base, len).is_ok();
-                let _ = done.send(ok);
-                continue;
-            }
+    // recv_timeout so sparse reclaim runs even with no NBD I/O (idle free).
+    const RECV_TICK: Duration = Duration::from_secs(5);
+
+    loop {
+        let msg = match jobs_rx.recv_timeout(RECV_TICK) {
+            Ok(m) => Some(m),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
         };
 
-        let touches_vram = matches!(job.req.cmd, Command::Read | Command::Write);
-        // DT-16 (revised): SERVE-ONLY latency (VRAM op duration). Measuring queue wait
-        // caused false positive DEMOTEs under normal load (§14.3 live: baseline
-        // 85us idle vs 1.1ms under queue = 13x → improper demote). The REAL failure (WDDM
-        // eviction) spikes serve time ~330x (Phase 0) → canary triggers on it, not on queue.
-        let t0 = std::time::Instant::now();
-        let out = serve(&job.req, &job.payload, &mut backend);
-        let lat_us = t0.elapsed().as_micros() as u64;
-        let _ = job.reply.send(Reply {
-            reply: out.reply,
-            data: out.read_data,
-            disconnect: out.disconnect,
-        });
+        if let Some(msg) = msg {
+            let job = match msg {
+                WMsg::Opened => {
+                    live.on_open();
+                    // fall through to reclaim tick
+                    None
+                }
+                WMsg::Closed => {
+                    if live.on_close() {
+                        break;
+                    }
+                    None
+                }
+                WMsg::Job(job) => Some(job),
+                WMsg::ZeroExport { base, len, done } => {
+                    let ok = zero_window(&mut backend, base, len).is_ok();
+                    let _ = done.send(ok);
+                    None
+                }
+            };
 
-        // Non-blocking poll of the ongoing DEMOTE swapoff (re-arms if it fails).
-        if let Some(rx) = demote_rx.take() {
-            match rx.try_recv() {
-                Ok(true) => {
-                    demoted = true;
-                    eprintln!("[ramsharedd] DEMOTE: swapoff {nbd_dev} OK (canario desarmado)");
+            if let Some(job) = job {
+                let touches_vram = matches!(job.req.cmd, Command::Read | Command::Write);
+                let t0 = std::time::Instant::now();
+                let out = serve(&job.req, &job.payload, &mut backend);
+                let lat_us = t0.elapsed().as_micros() as u64;
+                let _ = job.reply.send(Reply {
+                    reply: out.reply,
+                    data: out.read_data,
+                    disconnect: out.disconnect,
+                });
+
+                if let Some(rx) = demote_rx.take() {
+                    match rx.try_recv() {
+                        Ok(true) => {
+                            demoted = true;
+                            eprintln!(
+                                "[ramsharedd] DEMOTE: swapoff {nbd_dev} OK (canario desarmado)"
+                            );
+                        }
+                        Ok(false) => {
+                            eprintln!(
+                                "[ramsharedd] DEMOTE: swapoff {nbd_dev} FALHOU; canario re-armado"
+                            );
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            demote_rx = Some(rx);
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            eprintln!(
+                                "[ramsharedd] DEMOTE: thread de swapoff sumiu; canario re-armado"
+                            );
+                        }
+                    }
                 }
-                Ok(false) => {
-                    eprintln!("[ramsharedd] DEMOTE: swapoff {nbd_dev} FALHOU; canario re-armado");
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    demote_rx = Some(rx); // still in progress; returns it
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    eprintln!("[ramsharedd] DEMOTE: thread de swapoff sumiu; canario re-armado");
+
+                if touches_vram && !demoted && demote_rx.is_none() {
+                    if let Some(reason) = residency_check(
+                        lat_us,
+                        &mut canary,
+                        &mut baseline,
+                        &mut sampler,
+                        &mut cadence,
+                        &mut probe,
+                        || provider.mem_info().ok().map(|(f, _)| f),
+                    ) {
+                        let sparse = matches!(backend, Be::Sparse(_));
+                        // Sparse: chunk-alloc latency ≠ WDDM eviction. FreeFloor → reclaim only.
+                        // Only Corruption forces swapoff on sparse.
+                        let skip = match (sparse, reason) {
+                            (true, DemoteReason::FreeFloor) | (true, DemoteReason::Latency) => {
+                                eprintln!(
+                                    "[ramsharedd] sparse skip swapoff for {reason:?} lat={lat_us}us"
+                                );
+                                true
+                            }
+                            _ => false,
+                        };
+                        if !skip {
+                            eprintln!(
+                                "[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}"
+                            );
+                            demote_rx = Some(spawn_swapoff(&nbd_dev));
+                        }
+                    }
                 }
             }
         }
 
-        // Residency (§9 latency + §9.4 content/free): logic shared with the broker's worker.
-        // The ACTION here is the local swapoff of the served device (single-device).
-        if touches_vram
-            && !demoted
-            && demote_rx.is_none()
-            && let Some(reason) = residency_check(
-                lat_us,
-                &mut canary,
-                &mut baseline,
-                &mut sampler,
-                &mut cadence,
-                &mut probe,
-                || provider.mem_info().ok().map(|(f, _)| f),
-            )
-        {
-            eprintln!("[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}");
-            demote_rx = Some(spawn_swapoff(&nbd_dev));
+        // SPEC ITEM-2: reclaim on worker thread (I/O or idle tick).
+        if let Be::Sparse(ref mut sp) = backend {
+            let used_kb = nbd_used_kb_from_proc(&nbd_dev);
+            let free_b = provider.mem_info().ok().map(|(f, _)| f);
+            match sp.try_reclaim(used_kb, free_b, free_floor, idle_free) {
+                Ok(0) => {}
+                Ok(n) => eprintln!(
+                    "[ramsharedd] sparse reclaim freed {} MiB (used_kb={used_kb} live={})",
+                    n >> 20,
+                    sp.chunks_live()
+                ),
+                Err(e) => eprintln!("[ramsharedd] sparse reclaim err: {}", e.0),
+            }
         }
     }
 
-    // --- teardown (DT-17): waits (bounded) for the swapoff in flight, logs honestly, zeroes both.
-    // Here all NBD connections have already dropped → no one reads VRAM via NBD → zeroing is safe.
     if let Some(rx) = demote_rx.take() {
         match rx.recv_timeout(std::time::Duration::from_secs(5)) {
             Ok(true) => {
@@ -599,12 +682,42 @@ fn run_nbd<P: VramProvider>(
             ),
         }
     }
-    let zeroed = backend.zero();
-    let _ = probe.zero(); // DT-12/DT-17: zeroes the canary-region as well (§11)
+    match &mut backend {
+        Be::Pre(b) => {
+            b.zero()?;
+            eprintln!("[ramsharedd] encerrado (VRAM zerada prealloc)");
+        }
+        Be::Sparse(b) => {
+            let n = b.free_all_live();
+            eprintln!(
+                "[ramsharedd] encerrado (sparse free {} MiB + canary)",
+                n >> 20
+            );
+        }
+    }
+    let _ = probe.zero();
     let _ = std::fs::remove_file(path);
-    zeroed?;
-    eprintln!("[ramsharedd] encerrado (VRAM zerada)");
     Ok(())
+}
+
+/// `used_kb` for the given nbd device path from `/proc/swaps` (0 if absent).
+fn nbd_used_kb_from_proc(nbd_dev: &str) -> u64 {
+    let text = std::fs::read_to_string("/proc/swaps").unwrap_or_default();
+    let key = nbd_dev.trim();
+    let bare = key.rsplit('/').next().unwrap_or(key);
+    for line in text.lines().skip(1) {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 5 {
+            continue;
+        }
+        let name = cols[0];
+        if name.contains(bare) || name == key {
+            if let Ok(u) = cols[3].parse::<u64>() {
+                return u;
+            }
+        }
+    }
+    0
 }
 
 /// Broker control-plane parts consumed by the worker (data-plane). Backend-agnostic
