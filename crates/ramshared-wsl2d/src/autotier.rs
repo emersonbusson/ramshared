@@ -63,6 +63,33 @@ pub fn backend_release_allowed(
     used_kb == 0 && (!swapoff_attempted || swapoff_confirmed)
 }
 
+pub struct RecoveryTracker {
+    required: u32,
+    streak: u32,
+}
+
+impl RecoveryTracker {
+    pub fn new(required: u32) -> Self {
+        Self {
+            required: required.max(1),
+            streak: 0,
+        }
+    }
+
+    pub fn observe(&mut self, budget_healthy: bool, tier_empty: bool) -> bool {
+        if !budget_healthy || !tier_empty {
+            self.reset();
+            return false;
+        }
+        self.streak = self.streak.saturating_add(1);
+        self.streak >= self.required
+    }
+
+    pub fn reset(&mut self) {
+        self.streak = 0;
+    }
+}
+
 pub fn usable_budget(input: BudgetInput, config: &AutotierConfig) -> u64 {
     let external_usage = input.current_usage.saturating_sub(input.cuda_committed);
     input

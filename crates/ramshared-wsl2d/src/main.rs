@@ -29,10 +29,10 @@ use ramshared_dxg::{DxgBudgetProvider, GpuBudgetProvider};
 use ramshared_vram::{VramMemory, VramProvider};
 use ramshared_vulkan::VulkanProvider;
 use ramshared_wsl2d::autotier::{
-    AutotierConfig, BudgetInput, backend_release_allowed, commit_allowed,
+    AutotierConfig, BudgetInput, RecoveryTracker, backend_release_allowed, commit_allowed,
 };
 use ramshared_wsl2d::broker_srv::{BrokerConfig, EndpointCfg, spawn_broker};
-use ramshared_wsl2d::swap::spawn_swapoff;
+use ramshared_wsl2d::swap::{activate_swap, spawn_swapoff};
 use ramshared_wsl2d::{
     CANARY_BYTES, CANARY_EVERY, CHAN_CAP, Cadence, Canary, CanaryProbe, DemoteReason, LiveCount,
     RamBackend, Reply, ResidencyConfig, ResidencySampler, SliceIoCounters, SliceView, Verdict,
@@ -632,6 +632,7 @@ fn run_nbd<P: VramProvider>(
     let mut swapoff_attempted = false;
     let mut swapoff_confirmed = false;
     let mut observed_budget_refuses = 0;
+    let mut recovery = RecoveryTracker::new(3);
     let mut live = LiveCount::new();
 
     // recv_timeout so sparse reclaim runs even with no NBD I/O (idle free).
@@ -750,6 +751,27 @@ fn run_nbd<P: VramProvider>(
             }
         }
 
+        // Poll DEMOTE even when no further NBD request arrives after swapoff.
+        if let Some(rx) = demote_rx.take() {
+            match rx.try_recv() {
+                Ok(true) => {
+                    demoted = true;
+                    swapoff_confirmed = true;
+                    recovery.reset();
+                    eprintln!("[ramsharedd] DEMOTE: swapoff {nbd_dev} OK (parked)");
+                }
+                Ok(false) => {
+                    recovery.reset();
+                    eprintln!("[ramsharedd] DEMOTE: swapoff {nbd_dev} FALHOU");
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => demote_rx = Some(rx),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    recovery.reset();
+                    eprintln!("[ramsharedd] DEMOTE: thread de swapoff sumiu");
+                }
+            }
+        }
+
         // SPEC ITEM-2: reclaim on worker thread (I/O or idle tick).
         if let Be::Sparse(ref mut sp) = backend {
             let used_kb = nbd_used_kb_from_proc(&nbd_dev);
@@ -762,6 +784,44 @@ fn run_nbd<P: VramProvider>(
                     sp.chunks_live()
                 ),
                 Err(e) => eprintln!("[ramsharedd] sparse reclaim err: {}", e.0),
+            }
+        }
+
+        if let (Some(dxg_provider), Be::Sparse(sparse)) = (&dxg, &backend) {
+            let budget_healthy = dxg_provider
+                .snapshot()
+                .ok()
+                .and_then(|snapshot| {
+                    commit_allowed(
+                        BudgetInput {
+                            budget: snapshot.budget,
+                            current_usage: snapshot.current_usage,
+                            cuda_committed: sparse.committed_bytes(),
+                            sampled_at: snapshot.sampled_at,
+                        },
+                        sparse.committed_bytes(),
+                        sparse.chunk_bytes(),
+                        &AutotierConfig::default(),
+                    )
+                    .ok()
+                })
+                .is_some();
+
+            if !demoted && demote_rx.is_none() && !budget_healthy {
+                eprintln!("[ramsharedd] WDDM poll constrained -> swapoff {nbd_dev}");
+                demote_rx = Some(spawn_swapoff(&nbd_dev));
+                swapoff_attempted = true;
+            } else if demoted && recovery.observe(budget_healthy, sparse.chunks_live() == 0) {
+                if activate_swap(&nbd_dev, 100) {
+                    demoted = false;
+                    swapoff_attempted = false;
+                    swapoff_confirmed = false;
+                    recovery.reset();
+                    eprintln!("[ramsharedd] RECOVERING -> available: swapon {nbd_dev} prio=100");
+                } else {
+                    recovery.reset();
+                    eprintln!("[ramsharedd] RECOVERING: swapon {nbd_dev} falhou; parked");
+                }
             }
         }
     }
