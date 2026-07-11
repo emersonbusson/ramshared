@@ -619,3 +619,29 @@ cargo test -p ramshared-cli
 - Disk sdc never swapoff'd
 **Verdict:** ✅ works
 **Next action:** optional re-run soak terminate 2× with daemon+unit criteria (not just swapon lines)
+
+## 2026-07-10 — end-to-end product proof (boot + order + soak + reopen)
+
+**What:** Full validation that opening WSL2 arms cascade; under pressure zram→VRAM→SSD; survive terminate×2.
+**Category:** product path + pressure + boot
+**Measured data:**
+1. **User reopen WSL2 (22:41)** — natural soak after session drop:
+   - unit enabled/active; journal Finished SUCCESS
+   - zram0 **2G prio 200**, nbd0 **2G prio 100**, sdc **8G prio −2**
+   - ramsharedd `--size 2048 --nbd`; `/run/ramshared` present
+   - conf: VRAM_MIB=2048 ZRAM_MIB=2048
+2. **Soak v2** `C:\wsl\cascade-boot-soak-v2` — **VERDICT=PASS pass=2 fail=0**
+   - criteria: OK_ORDER + OK_DAEMON + OK_RUN (not swap lines alone)
+3. **Pressure probe** (cgroup MemoryMax=1200M, host-safe):
+   - FIRST zram t=2s → nbd t=7s → disk t=13s → **PASS order**
+   - daemon survived; host free restored after release
+4. **Priorities (kernel law):** higher prio used first → when 16G WSL RAM pressures, **VRAM/nbd before SSD**
+5. **Sizes:** 2G zram + 2G VRAM cushion before 8G VHDX (not full GPU; headroom for desktop)
+**Audit notes (hardcode / spaghetti):**
+- Defaults 1024 in CLI are fallbacks; live sizes from `/etc/ramshared/cascade.conf` (OK)
+- Prio 200/100/−2 constants in `ramshared-tier` — intentional SPEC, not magic
+- `/dev/nbd0` Day-1 product path intentional; ublk fail-closed
+- `cascade.rs` large but single module; no kill-9; allowlist swapoff
+- No thrash on full host — pressure uses cgroup only
+**Verdict:** ✅ works for product open-WSL + VRAM-before-SSD path
+**Push gate:** green — ready
