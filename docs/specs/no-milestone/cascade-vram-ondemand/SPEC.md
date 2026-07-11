@@ -77,30 +77,40 @@ struct Chunk {
 
 ## ITEM-2 — Reclaim / demote free
 
+### Threading (mandatory)
+
+- Reclaim runs **only on the CUDA I/O worker thread** (same thread that owns `SparseVramBackend` and processes `WMsg::Job`).
+- Algorithm before free:
+  1. Drain is natural: reclaim is scheduled between jobs (after a canary sample or timer msg), never from a side thread.
+  2. Read `/proc/swaps` nbd `used_kb`.
+  3. If `used_kb > 0` → log `reclaim_blocked_used`; **return** (no free).
+  4. If free-floor or idle hysteresis matches → `drop` all Live chunk `mem` (Empty).
+  5. Re-read `used_kb`; if now `> 0`, log `reclaim_race_used_after` (should be rare: new I/O only via this thread; kernel cannot dirt without write path). Do **not** re-alloc.
+
 ### Triggers
 
 | Trigger | Action |
 | --- | --- |
-| Existing residency `Verdict::Demote` | Existing demote path for pages **plus** `reclaim_empty_chunks()` |
-| Periodic tick (same canary cadence) | If free &lt; floor: demote content if any; then free Live chunks with **no** outstanding guest-dirty tracking |
+| Canary cadence (`CANARY_EVERY` = 64 I/Os) or idle timer | Sample free; maybe reclaim |
+| Residency `Verdict::Demote` (latency/corruption) | Existing demote telemetry; **MVP does not** free chunks if `used_kb > 0` |
+| Worker sees free &lt; floor **and** `used_kb == 0` | Free all Live chunks |
+| Worker sees idle ≥ `IDLE_FREE_SEC` **and** `used_kb == 0` | Free all Live chunks |
 
-### MVP reclaim (shippable — **GO**)
+### MVP reclaim table
 
-No per-PTE reverse map in MVP. Track `written: bool` + `last_write_ts` per chunk.
+No per-PTE reverse map. Track `written: bool` + `last_write_ts` per chunk.
 
 | Case | Action |
 | --- | --- |
-| `up` idle | no full prealloc (RF-L1); committed ≈ canary only |
+| `up` idle | no full prealloc (RF-L1); committed ≈ **canary only** (`CANARY_BYTES` = 4096) |
 | writes under pressure | chunk alloc on first write |
-| `nbd used_kb == 0` and (free &lt; floor **or** idle ≥ `IDLE_FREE_SEC`) | free **all** Live chunks (safe: no swap pages on device) |
-| `nbd used_kb > 0` and free &lt; floor | **Do not** free Live chunks (would corrupt). Log `reclaim_blocked_used`. New pressure uses disk tier via kernel priorities. |
+| `used_kb == 0` + (free &lt; floor **or** idle ≥ `IDLE_FREE_SEC`) | free **all** Live chunks |
+| `used_kb > 0` + free &lt; floor | **no free**; log `reclaim_blocked_used`; kernel may use disk tier for **new** pages |
 | `down` | free all chunks + canary |
-
-This hits the primary pain: **do not hold 3 GiB on the GPU when idle / after pressure drained**.
 
 ### ITEM-2b (phase 2 — not in MVP IMPL)
 
-Mid-flight spill while `used_kb > 0`: mirror Live chunks to RAM/file, free CUDA, serve I/O from mirror. Separate SPEC revision when needed.
+Mid-flight spill while `used_kb > 0`: mirror Live chunks to RAM/file, free CUDA, serve I/O from mirror. Separate SPEC revision + new AUDIT-2.5.
 
 ## ITEM-3 — Telemetry
 
@@ -122,14 +132,19 @@ vram_mode=sparse|prealloc
 | --- | --- | --- |
 | `RAMSHARED_VRAM_PREALLOC` | unset/0 | sparse (new default) |
 | `=1` / `true` | — | full `alloc(size)` Day-1 path |
-| `RAMSHARED_VRAM_CHUNK_MIB` | 128 | chunk size |
+| `RAMSHARED_VRAM_CHUNK_MIB` | 128 | chunk size (16..512) |
 | `RAMSHARED_VRAM_IDLE_FREE_SEC` | 30 | idle free when used_kb==0 |
 
-Preflight:
+### Preflight (sparse default) — **revised AUDIT-2.5**
 
-- Keep `free >= VRAM_MIB + headroom` as **capacity feasibility** (user still needs headroom to **ever** fill the tier).  
-- Add note in log: `capacity check (not commit)`.  
-- Optional later: `VRAM_COMMIT_CAP_MIB` to refuse writes beyond commit cap (phase 2).
+| Mode | Gate |
+| --- | --- |
+| **sparse** (default) | `free_vram >= MIN_VRAM_HEADROOM_MIB + ceil(CANARY_BYTES) + CHUNK_MIB` — enough to **start** and take first write. Log: `preflight sparse: capacity=VRAM_MIB MiB commit_gate=… (not full prealloc)`. |
+| **prealloc** (`RAMSHARED_VRAM_PREALLOC=1`) | keep legacy: `free >= VRAM_MIB + MIN_VRAM_HEADROOM_MIB` |
+
+- `VRAM_MIB` remains **max advertised capacity** (NBD size), not “must be free at boot”.  
+- Filling the full tier under pressure still needs free VRAM at write time; alloc fail → I/O error (ITEM-1).  
+- Optional phase 2: `VRAM_COMMIT_CAP_MIB` soft cap on simultaneous commit.
 
 ## ITEM-5 — Safety + tests
 
@@ -139,7 +154,8 @@ Preflight:
 | Unit: write then read | data roundtrip; alloc count 1 |
 | Unit: cross-chunk write | 2 allocs |
 | Unit: prealloc flag path still compiles | feature flag |
-| Live: `up` VRAM_MIB=3072, used_kb=0 | `Δ free_GPU` ≤ canary + 1 chunk (+ slack 64 MiB) **not** ≈3072 |
+| Live: `up` VRAM_MIB=3072, used_kb=0 | `Δ free_GPU` ≤ canary (4 KiB) + slack **≤ 64 MiB** (driver overhead) — **not** ≈3072 |
+| Live: sparse preflight | boot OK with free_vram &lt; VRAM_MIB+headroom if free ≥ sparse gate |
 | Live: pressure order | `sudo bash scripts/safety/cascade-pressure-probe.sh --prove-disk` → zram → nbd → disk |
 | Live: after pressure release used_kb→0 + idle | committed falls; free_GPU rises |
 | Kill-switch | PREALLOC=1 → Δ free ≈ size |
