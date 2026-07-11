@@ -351,7 +351,10 @@ mod tests {
 
     #[test]
     fn all_error_messages_and_luid_are_stable() {
-        let luid = AdapterLuid { low: 0x12, high: 0x34 };
+        let luid = AdapterLuid {
+            low: 0x12,
+            high: 0x34,
+        };
         assert_eq!(luid.to_string(), "00000034:00000012");
         let cases = [
             super::DxgError::Unavailable("gone".into()),
@@ -422,7 +425,10 @@ mod tests {
         );
         request.reserved = 0;
         request.num_adapters = 0;
-        assert_eq!(super::validate_enum(&request, None), Err(super::DxgError::NoAdapters));
+        assert_eq!(
+            super::validate_enum(&request, None),
+            Err(super::DxgError::NoAdapters)
+        );
         request.num_adapters = 65;
         assert_eq!(
             super::validate_enum(&request, None),

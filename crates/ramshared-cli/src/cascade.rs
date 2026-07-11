@@ -143,11 +143,7 @@ pub fn canonicalize_swap_path(p: &str) -> String {
 
 /// Allowlist for auto swapoff: only nbd / ublk / zram (never disk VHDX).
 fn is_allowlisted_managed_path(path: &str) -> bool {
-    let base = path
-        .rsplit('/')
-        .next()
-        .unwrap_or(path)
-        .to_ascii_lowercase();
+    let base = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
     let base = base.split_whitespace().next().unwrap_or(&base);
     base.starts_with("nbd")
         || base.starts_with("ublk")
@@ -1130,7 +1126,10 @@ mod tests {
              /dev/nbd0 partition 1048576 4096 100\n\
              /dev/sdc partition 8388608 0 -2\n",
         );
-        assert_eq!(plan_orphan_action(&e, false), OrphanPlan::RefuseDirtyBackend);
+        assert_eq!(
+            plan_orphan_action(&e, false),
+            OrphanPlan::RefuseDirtyBackend
+        );
     }
 
     #[test]
@@ -1259,8 +1258,7 @@ Filename Type Size Used Priority
         );
         // Pure over swaps + /run/ramshared: without live records → not healthy.
         // If cascade is mounted on this host, records may exist → skip env-coupled assert.
-        let has_live_record =
-            Path::new(SWAP_DEV_FILE).exists() || Path::new(PID_FILE).exists();
+        let has_live_record = Path::new(SWAP_DEV_FILE).exists() || Path::new(PID_FILE).exists();
         if !has_live_record {
             assert!(!cascade_already_healthy(&with_nbd));
         }

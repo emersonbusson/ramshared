@@ -266,14 +266,22 @@ mod tests {
         assert!(policy.observe(healthy, 0, 1).allow_commit);
         assert!(policy.mark_parked(0).is_err());
         assert!(policy.mark_available(true).is_ok());
-        assert_eq!(policy.observe(input(0, 0, 0), 0, 1).state, AutotierState::Constrained);
+        assert_eq!(
+            policy.observe(input(0, 0, 0), 0, 1).state,
+            AutotierState::Constrained
+        );
         assert!(policy.mark_available(true).is_err());
         assert_eq!(policy.mark_demoting(), AutotierState::Demoting);
         assert_eq!(policy.mark_parked(0), Ok(AutotierState::Parked));
-        assert_eq!(policy.observe(input(0, 0, 0), 0, 1).state, AutotierState::Parked);
+        assert_eq!(
+            policy.observe(input(0, 0, 0), 0, 1).state,
+            AutotierState::Parked
+        );
         assert!(policy.mark_available(false).is_err());
-        let error = super::commit_allowed(input(0, 0, 0), 0, 1, &cfg)
-            .unwrap_err();
+        let error = match super::commit_allowed(input(0, 0, 0), 0, 1, &cfg) {
+            Ok(_) => panic!("zero budget unexpectedly allowed a commit"),
+            Err(error) => error,
+        };
         assert!(!error.to_string().is_empty());
     }
 }
