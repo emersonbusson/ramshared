@@ -671,3 +671,28 @@ sudo bash scripts/safety/cascade-pressure-probe.sh --max-sec 50
 - cargo test ramshared-block: **32** passed; ramshared-cli: **23** passed
 **Verdict:** ✅ works
 **Next action:** optional PREALLOC A/B doc; ITEM-2b mid-flight spill deferred
+
+## 2026-07-11 — hard multi-round validation GREEN (21/21 product gates)
+
+**What:** Battery of real tests for sparse cascade safety/confidence (not a single smoke).
+**Category:** product path + pressure + reclaim + fail-safe
+**How:** multi-round shell suite (unit + 3× idle + 3× pressure + reclaim + idempotent + ublk + 2× orphan + prealloc path + final restore)
+
+| Gate | Rounds | Result |
+| --- | --- | --- |
+| cargo ramshared-block | 1 | 32 passed |
+| cargo ramshared-cli | 1 | 23 passed |
+| cargo ramshared-wsl2d lib | 1 | 62 pass / **1 pre-existing fail** (`slice_view_new_panics_when_window_exceeds_backend` — unrelated to sparse) |
+| sparse idle Δ free | 3 | 217 / 201 / 215 MiB (all ≪ 3072) |
+| nbd stable 10s after up | 3 | all OK |
+| pressure zram→nbd | 3 | (2,6) (1,5) (1,6) PASS; nbd+daemon after each |
+| reclaim idle | 1 | free **3388 → 4421** (+1033 MiB) |
+| idempotent up | 1 | “cascata ja ativa” |
+| ublk fail-closed | 1 | exit 1 + clear message |
+| orphan recover | 2 | both heal + healthy cascade |
+| sparse vs prealloc modes | 1 | mode=sparse / mode=prealloc logs |
+| final state | 1 | z=200 n=100 d=-2 ORDER_OK; unit enabled/active |
+
+**Verdict:** ✅ product suite **PASS=21 FAIL=0 OVERALL=GREEN**
+**Note:** wsl2d `slice_view` panic test is pre-existing, not introduced by sparse IMPL.
+**Final live:** nbd 3G prio 100, zram 2G prio 200, sdc -2; ramsharedd --size 3072
