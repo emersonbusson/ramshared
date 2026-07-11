@@ -19,11 +19,11 @@
 | Hyper-V elevated path (`sudo.exe` from WSL) | ✓ `IsAdmin=True`, `Get-VM` + PSD |
 | VM `win11-drill` campaign | ✓ **PASS_WITH_SKIPS** (fail paths honestos) |
 | WDK + VS Build Tools (host) | ✓ instalados; `Build-Drivers.ps1` produz `.sys` |
-| `ramshared.sys` / `poolstress.sys` build | ✓ 26624 / 7680 bytes (x64 Release) |
-| Load on `win11-drill` (test-sign) | ✓ **RUNNING**; `\\.\RamSharedCtl` OK; INF+devcon Root\RamShared |
-| Get-Disk LUN product | ✓ **N=1 RAMSHARE VRAMDISK 64 MiB** (2026-07-09 clean PnP) |
+| `ramshared.sys` / `poolstress.sys` build | ✓ 29696 / 7680 bytes (x64 Release) |
+| Load on `win11-drill` (test-sign) | ✓ **RUNNING**; `\\.\RamSharedCtl` OK; testsigning + nointegritychecks |
+| Get-Disk LUN product | ✓ **N=1 RAMSHARE VRAMDISK 64 MiB** (2026-07-11 clean PnP) |
 | poolstress IOCTL ALLOC/FREE 1 GiB | ✓ ok=True (rodada anterior) |
-| Format NTFS + smoke file | ✓ **PASS** (2026-07-09): LUN 64 MiB, `format /fs:NTFS` OK, smoke file; backend `maxIo=1MiB` |
+| Format NTFS + smoke file | ✓ **PASS** (2026-07-11): LUN 64 MiB, formatted NTFS, write/read smoke.txt ok |
 | ITEM-8 residency DT-21 (pagefile-VRAM) | ✓ **PASS** (Usage 25%, KPD 3/3). B1 safe **PASS**; pagefile-hot → 0x7A (DT-9). Lab SCM **PASS**. Host-real **FORBIDDEN**. |
 | DT-9 ordered teardown | ✓ pure tests; lab **PASS_DT9_REFUSE_KILL** + **PASS_DT9_REBOOT_KILL** |
 | Lab SCM autostart | ✓ **PASS_LAB_SCM** `RamSharedWinSvc` delayed-auto |
@@ -81,11 +81,12 @@ Sem isso, **não** se afirma “driver Windows pronto” nem ITEM-8 PASS.
 | Métrica | Valor |
 | --- | --- |
 | Guest build | **26200.8037** |
-| test-signing | **Yes** |
+| test-signing | **Yes** (Test Mode active) |
+| nointegritychecks | **Yes** |
 | Free C: | **~14 GB** |
-| Checkpoint | `disciplined-20260709-112351` (#2 rollback surface) |
+| Checkpoint | `disabled` (#2 checkpoints disabled in Hyper-V host config) |
 | Preflight | exit **0** |
-| ps1-parse | **6/6** files |
+| ps1-parse | **27/27** files |
 | ITEM-8 DT-21 fail-path | exit **3** INCONCLUSIVO (#13 honesto) |
 | Measure n=3 idle | PASS; median_ms ≈ **125** (campanha) / **92** (rodada anterior) |
 | Revoke missing service | exit **2** fail-closed |
