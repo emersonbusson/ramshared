@@ -9,6 +9,10 @@ use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::time::Instant;
 
+unsafe extern "C" {
+    fn ioctl(fd: i32, request: u64, ...) -> i32;
+}
+
 pub mod uapi {
     pub const ENUM_ADAPTERS2_IOCTL: u64 = 0xc010_4714;
     pub const QUERY_VIDEO_MEMORY_INFO_IOCTL: u64 = 0xc038_470a;
@@ -147,6 +151,14 @@ impl DxgBudgetProvider {
             .open(path)
             .map_err(|error| DxgError::Unavailable(error.to_string()))?;
         let infos = enumerate(&file)?;
+        Self::from_infos(file, infos, requested)
+    }
+
+    fn from_infos(
+        file: File,
+        infos: Vec<uapi::AdapterInfo>,
+        requested: Option<AdapterLuid>,
+    ) -> Result<Self, DxgError> {
         let luids: Vec<_> = infos
             .iter()
             .map(|info| AdapterLuid {
@@ -185,9 +197,7 @@ impl GpuBudgetProvider for DxgBudgetProvider {
             ..Default::default()
         };
         ioctl_mut(&self.file, uapi::QUERY_VIDEO_MEMORY_INFO_IOCTL, &mut query)?;
-        if query.process != 0 {
-            return Err(DxgError::Malformed("process"));
-        }
+        validate_query(&query)?;
         Ok(BudgetSnapshot {
             adapter: self.adapter_luid,
             budget: query.budget,
@@ -208,23 +218,35 @@ impl Drop for DxgBudgetProvider {
 fn enumerate(file: &File) -> Result<Vec<uapi::AdapterInfo>, DxgError> {
     let mut request = uapi::EnumAdapters2::default();
     ioctl_mut(file, uapi::ENUM_ADAPTERS2_IOCTL, &mut request)?;
+    validate_enum(&request, None)?;
+    let mut infos = vec![uapi::AdapterInfo::default(); request.num_adapters as usize];
+    request.adapters = infos.as_mut_ptr() as u64;
+    ioctl_mut(file, uapi::ENUM_ADAPTERS2_IOCTL, &mut request)?;
+    validate_enum(&request, Some(infos.len()))?;
+    infos.truncate(request.num_adapters as usize);
+    Ok(infos)
+}
+
+fn validate_enum(request: &uapi::EnumAdapters2, capacity: Option<usize>) -> Result<(), DxgError> {
     if request.reserved != 0 {
         return Err(DxgError::Malformed("enum.reserved"));
     }
     if request.num_adapters == 0 {
         return Err(DxgError::NoAdapters);
     }
-    if request.num_adapters as usize > uapi::MAX_ADAPTERS {
+    let limit = capacity.unwrap_or(uapi::MAX_ADAPTERS);
+    if request.num_adapters as usize > limit {
         return Err(DxgError::TooManyAdapters(request.num_adapters));
     }
-    let mut infos = vec![uapi::AdapterInfo::default(); request.num_adapters as usize];
-    request.adapters = infos.as_mut_ptr() as u64;
-    ioctl_mut(file, uapi::ENUM_ADAPTERS2_IOCTL, &mut request)?;
-    if request.num_adapters as usize > infos.len() {
-        return Err(DxgError::TooManyAdapters(request.num_adapters));
+    Ok(())
+}
+
+fn validate_query(query: &uapi::QueryVideoMemoryInfo) -> Result<(), DxgError> {
+    if query.process != 0 {
+        Err(DxgError::Malformed("process"))
+    } else {
+        Ok(())
     }
-    infos.truncate(request.num_adapters as usize);
-    Ok(infos)
 }
 
 fn close_adapter(file: &File, handle: u32) {
@@ -233,9 +255,6 @@ fn close_adapter(file: &File, handle: u32) {
 }
 
 fn ioctl_mut<T>(file: &File, request: u64, value: &mut T) -> Result<(), DxgError> {
-    unsafe extern "C" {
-        fn ioctl(fd: i32, request: u64, ...) -> i32;
-    }
     // SAFETY: `value` points to the exact repr(C) layout for `request` and stays
     // alive for the synchronous ioctl. The kernel validates nested pointers.
     let result = unsafe { ioctl(file.as_raw_fd(), request, value as *mut T) };
@@ -328,5 +347,104 @@ mod tests {
             .err()
             .unwrap_or_else(|| panic!("/dev/null unexpectedly behaved like dxg"));
         assert!(!invalid.permits_startup_fallback());
+    }
+
+    #[test]
+    fn all_error_messages_and_luid_are_stable() {
+        let luid = AdapterLuid { low: 0x12, high: 0x34 };
+        assert_eq!(luid.to_string(), "00000034:00000012");
+        let cases = [
+            super::DxgError::Unavailable("gone".into()),
+            super::DxgError::Io("bad".into()),
+            super::DxgError::NoAdapters,
+            super::DxgError::AmbiguousAdapters(2),
+            super::DxgError::AdapterNotFound(luid),
+            super::DxgError::TooManyAdapters(65),
+            super::DxgError::Malformed("field"),
+        ];
+        for error in cases {
+            assert!(!error.to_string().is_empty());
+        }
+    }
+
+    #[test]
+    fn live_provider_rejects_unknown_requested_luid() {
+        if !std::path::Path::new("/dev/dxg").exists() {
+            return;
+        }
+        let missing = AdapterLuid {
+            low: u32::MAX,
+            high: u32::MAX,
+        };
+        assert!(matches!(
+            DxgBudgetProvider::open(Some(missing)),
+            Err(super::DxgError::AdapterNotFound(value)) if value == missing
+        ));
+    }
+
+    #[test]
+    fn injected_multi_adapter_closes_unselected_and_builds_selected() {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+            .unwrap_or_else(|error| panic!("open /dev/null: {error}"));
+        let infos = vec![
+            super::uapi::AdapterInfo {
+                adapter_handle: 1,
+                luid_low: 10,
+                luid_high: 11,
+                ..Default::default()
+            },
+            super::uapi::AdapterInfo {
+                adapter_handle: 2,
+                luid_low: 20,
+                luid_high: 21,
+                ..Default::default()
+            },
+        ];
+        let selected = AdapterLuid { low: 20, high: 21 };
+        let provider = DxgBudgetProvider::from_infos(file, infos, Some(selected))
+            .unwrap_or_else(|error| panic!("from_infos: {error}"));
+        assert_eq!(provider.adapter_luid(), selected);
+    }
+
+    #[test]
+    fn malformed_enum_and_query_variants_are_rejected() {
+        let mut request = super::uapi::EnumAdapters2 {
+            num_adapters: 1,
+            reserved: 1,
+            adapters: 0,
+        };
+        assert_eq!(
+            super::validate_enum(&request, None),
+            Err(super::DxgError::Malformed("enum.reserved"))
+        );
+        request.reserved = 0;
+        request.num_adapters = 0;
+        assert_eq!(super::validate_enum(&request, None), Err(super::DxgError::NoAdapters));
+        request.num_adapters = 65;
+        assert_eq!(
+            super::validate_enum(&request, None),
+            Err(super::DxgError::TooManyAdapters(65))
+        );
+        request.num_adapters = 2;
+        assert_eq!(
+            super::validate_enum(&request, Some(1)),
+            Err(super::DxgError::TooManyAdapters(2))
+        );
+        request.num_adapters = 1;
+        assert_eq!(super::validate_enum(&request, Some(1)), Ok(()));
+
+        let mut query = super::uapi::QueryVideoMemoryInfo {
+            process: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            super::validate_query(&query),
+            Err(super::DxgError::Malformed("process"))
+        );
+        query.process = 0;
+        assert_eq!(super::validate_query(&query), Ok(()));
     }
 }
