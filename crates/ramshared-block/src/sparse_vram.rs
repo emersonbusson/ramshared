@@ -563,6 +563,31 @@ mod tests {
     }
 
     #[test]
+    fn host_budget_gate_blocks_before_cuda_allocation() {
+        struct Deny;
+        impl CommitBudgetGate for Deny {
+            fn allow_commit(&self, _committed: u64, _next_chunk: u64) -> Result<(), String> {
+                Err("WDDM constrained".into())
+            }
+        }
+        let p = FakeProvider::new();
+        let mut be = SparseVramBackend::new_with_limits_and_gate(
+            &p,
+            1024 * 1024,
+            256 * 1024,
+            4096,
+            0,
+            None,
+            Some(&Deny),
+        )
+        .unwrap();
+        let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
+        assert!(err.0.contains("WDDM constrained"));
+        assert_eq!(p.allocs.get(), 0);
+        assert_eq!(be.budget_refuses, 1);
+    }
+
+    #[test]
     fn safe_commit_cap_leaves_reserve() {
         let cap = safe_commit_cap(6 << 30, 6 << 30, 512 << 20);
         assert_eq!(cap, (6 << 30) - (512 << 20));
