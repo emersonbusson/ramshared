@@ -8,12 +8,14 @@
 
 ## Where labs live
 
-| VM | Disk | Role |
+| VM / surface | Disk | Role |
 | --- | --- | --- |
 | `win11-drill` | **E:\Hyper-V\…** (ESPANHA) | Windows lab only |
-| `linux-kernel-lab` | **R:\Hyper-V\…** (RUSSIA) | Linux lab / kernel build |
+| `linux-kernel-lab` | **R:\Hyper-V\…** (RUSSIA) | Linux lab / kernel build (Hyper-V) |
+| `RamShared-Kernel` (WSL2) | **R:\WSL\RamShared-Kernel\** | Throwaway host WSL lab (break kernel) |
+| WSL lab backup | **E:\WSL-backup\RamShared-Kernel\** | `wsl --export` base tar (not C:) |
 | `gha-ubuntu-2404` | **V:\Hyper-V\…** | CI (optional) |
-| Host OS | **C:** | Never store lab VHD/ISO here |
+| Host OS | **C:** | Never store lab VHD/ISO/export here |
 
 New VMs default: `R:\Hyper-V\VMs` + `R:\Hyper-V\VHDs` (`Set-VMHost`).
 
@@ -64,6 +66,13 @@ Optional lab UAC (inside guest only): `E:\Hyper-V\scripts\` or copy `R:\Hyper-V\
 - Checkpoints disabled (same script).  
 - Kernel build grows **inside** the 40 GB VHD — watch `df -h` in the guest.  
 - Do not enable checkpoints “for safety” without pruning — that was the old 100 GB pile.
+
+## WSL kernel lab distro (`RamShared-Kernel`)
+
+- Live: `R:\WSL\RamShared-Kernel\ext4.vhdx` (dynamic, import cap ~40 GB).  
+- Backup: `E:\WSL-backup\RamShared-Kernel\RamShared-Kernel-base.tar`.  
+- Product default stays **`Ubuntu-24.04`** — never make the lab distro default.  
+- Details: [`WSL-KERNEL-LAB.md`](WSL-KERNEL-LAB.md).
 
 ## Host C: health
 

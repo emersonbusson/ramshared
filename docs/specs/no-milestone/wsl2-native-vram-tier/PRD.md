@@ -218,7 +218,7 @@ Sem congelar ABI neste PRD.
 | --- | --- | --- |
 | Now | Este PRD | — |
 | P0 polish | IMPL cascade/app já em andamento | WSL |
-| P1 SPEC (se go) | `SPEC.md` ublk/writeback/sysfs | WSL custom kernel; **build** na VM ok |
+| P1 SPEC (se go) | **Delivery PRD (authoritative):** [`../wsl2-custom-kernel-p1/PRD.md`](../wsl2-custom-kernel-p1/PRD.md) → then `SPEC.md` in that folder | WSL custom kernel; build on `RamShared-Kernel` lab |
 | P2 | Só após bare-metal/DDA evidence | Fora do escopo “só WSL” |
 | P3 | `mainline-vram-tiering` | upstream |
 
