@@ -252,4 +252,28 @@ mod tests {
         assert!(!super::backend_release_allowed(true, true, 1));
         assert!(!super::backend_release_allowed(false, false, 1));
     }
+
+    #[test]
+    fn all_policy_error_and_reset_branches_are_covered() {
+        let cfg = AutotierConfig {
+            constrained_samples: 1,
+            recovery_samples: 2,
+            safety_margin_bytes: 0,
+            ..Default::default()
+        };
+        let mut policy = AutotierPolicy::new(cfg);
+        let healthy = input(100, 0, 0);
+        assert!(policy.observe(healthy, 0, 1).allow_commit);
+        assert!(policy.mark_parked(0).is_err());
+        assert!(policy.mark_available(true).is_ok());
+        assert_eq!(policy.observe(input(0, 0, 0), 0, 1).state, AutotierState::Constrained);
+        assert!(policy.mark_available(true).is_err());
+        assert_eq!(policy.mark_demoting(), AutotierState::Demoting);
+        assert_eq!(policy.mark_parked(0), Ok(AutotierState::Parked));
+        assert_eq!(policy.observe(input(0, 0, 0), 0, 1).state, AutotierState::Parked);
+        assert!(policy.mark_available(false).is_err());
+        let error = super::commit_allowed(input(0, 0, 0), 0, 1, &cfg)
+            .unwrap_err();
+        assert!(!error.to_string().is_empty());
+    }
 }
