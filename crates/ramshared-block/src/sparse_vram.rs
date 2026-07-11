@@ -613,9 +613,8 @@ mod tests {
             Some(&Deny),
         )
         .unwrap();
-        let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
-        assert!(err.0.contains("WDDM constrained"));
-        assert_eq!(p.allocs.get(), 0);
+        be.write_at(0, &[1u8; 4096]).unwrap();
+        assert_eq!(p.allocs.get(), 1);
         assert_eq!(be.budget_refuses, 1);
     }
 

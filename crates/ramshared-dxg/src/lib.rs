@@ -286,4 +286,39 @@ mod tests {
         assert_eq!(snap.budget, 100);
         let _type_check: Option<DxgBudgetProvider> = None;
     }
+
+    #[test]
+    fn only_unavailable_device_permits_cuda_fallback() {
+        assert!(super::DxgError::Unavailable("missing".into()).permits_startup_fallback());
+        assert!(!super::DxgError::Io("ioctl".into()).permits_startup_fallback());
+        assert!(!super::DxgError::Malformed("process").permits_startup_fallback());
+        assert!(!super::DxgError::NoAdapters.permits_startup_fallback());
+        assert!(!super::DxgError::TooManyAdapters(65).permits_startup_fallback());
+    }
+
+    #[test]
+    fn live_provider_queries_budget_when_dxg_exists() {
+        if !std::path::Path::new("/dev/dxg").exists() {
+            return;
+        }
+        let provider = DxgBudgetProvider::open(None)
+            .unwrap_or_else(|error| panic!("live dxg open failed: {error}"));
+        let snapshot = provider
+            .snapshot()
+            .unwrap_or_else(|error| panic!("live dxg query failed: {error}"));
+        assert_eq!(snapshot.adapter, provider.adapter_luid());
+        assert!(snapshot.budget > 0);
+    }
+
+    #[test]
+    fn missing_path_is_unavailable_but_non_dxg_ioctl_is_not() {
+        let missing = DxgBudgetProvider::open_path("/definitely/missing/dxg", None)
+            .err()
+            .unwrap_or_else(|| panic!("missing path unexpectedly opened"));
+        assert!(missing.permits_startup_fallback());
+        let invalid = DxgBudgetProvider::open_path("/dev/null", None)
+            .err()
+            .unwrap_or_else(|| panic!("/dev/null unexpectedly behaved like dxg"));
+        assert!(!invalid.permits_startup_fallback());
+    }
 }
