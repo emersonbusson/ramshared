@@ -13,6 +13,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`broker-telemetry-reconciliation`](specs/no-milestone/broker-telemetry-reconciliation/) | Coletor de Telemetria & Reconciliação do Memory Broker | — | — | DONE |
 | [`cascade-desktop-app`](specs/no-milestone/cascade-desktop-app/) | Desktop control app for WSL2/Linux cascade (zenity + CLI) | — | — | DONE |
 | [`cascade-transport-policy`](specs/no-milestone/cascade-transport-policy/) | Cascade transport policy — NBD Day-1 on WSL2; ublk prefer off-WSL2 only | — | — | DONE |
+| [`cascade-vram-ondemand`](specs/no-milestone/cascade-vram-ondemand/) | Cascade VRAM on-demand — capacity without full CUDA pre-alloc; return under reclaim | — | — | SPEC |
 | [`kernel-native-language`](specs/no-milestone/kernel-native-language/) | Language policy for kernel-native VRAM work (C vs Rust) | — | — | PRD |
 | [`kernel-vram-as-memory`](specs/no-milestone/kernel-vram-as-memory/) | Kernel-true VRAM as process memory (HMM / NUMA / DEVICE_PRIVATE) — decision PRD | — | — | PRD |
 | [`mainline-vram-tiering`](specs/no-milestone/mainline-vram-tiering/) | Path to native mainline Linux — VRAM as a memory tier (long-term) | — | — | PRD |
