@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 ramshared-cuda = { path = "../ramshared-cuda" }
+ramshared-dxg = { path = "../ramshared-dxg" }
 ramshared-vulkan = { path = "../ramshared-vulkan" }
 ramshared-vram = { path = "../ramshared-vram" }
 ramshared-block = { path = "../ramshared-block" }

@@ -107,8 +107,7 @@ impl AutotierPolicy {
         match self.state {
             AutotierState::Available if !allowed => {
                 self.constrained_streak = self.constrained_streak.saturating_add(1);
-                if committed.saturating_add(next_chunk) > usable
-                    && committed > usable
+                if committed.saturating_add(next_chunk) > usable && committed > usable
                     || self.constrained_streak >= self.config.constrained_samples
                 {
                     self.state = AutotierState::Constrained;
@@ -140,7 +139,9 @@ impl AutotierPolicy {
 
     pub fn mark_parked(&mut self, used_kb: u64) -> Result<AutotierState, PolicyError> {
         if used_kb != 0 {
-            return Err(PolicyError("cannot park VRAM tier while swap is referenced"));
+            return Err(PolicyError(
+                "cannot park VRAM tier while swap is referenced",
+            ));
         }
         if matches!(self.state, AutotierState::Demoting | AutotierState::Parked) {
             self.state = AutotierState::Parked;
@@ -155,12 +156,17 @@ impl AutotierPolicy {
         if !tier_empty {
             return Err(PolicyError("recovery requires an empty VRAM tier"));
         }
-        if matches!(self.state, AutotierState::Recovering | AutotierState::Available) {
+        if matches!(
+            self.state,
+            AutotierState::Recovering | AutotierState::Available
+        ) {
             self.state = AutotierState::Available;
             self.constrained_streak = 0;
             Ok(self.state)
         } else {
-            Err(PolicyError("available transition requires recovering state"))
+            Err(PolicyError(
+                "available transition requires recovering state",
+            ))
         }
     }
 }

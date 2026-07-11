@@ -193,6 +193,7 @@ dependencies = [
  "ramshared-block",
  "ramshared-broker",
  "ramshared-cuda",
+ "ramshared-dxg",
  "ramshared-integrity",
  "ramshared-tier",
  "ramshared-uring",

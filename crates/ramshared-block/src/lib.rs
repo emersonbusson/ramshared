@@ -21,7 +21,8 @@ pub use inflight::Inflight;
 pub use protocol::{Command, ProtocolError, Request, encode_simple_reply, parse_request};
 pub use request::{BlockBackend, IoError, ServeOutcome, serve};
 pub use sparse_vram::{
-    DEFAULT_CHUNK_MIB, SparseVramBackend, chunk_bytes_from_env, commit_cap_bytes_from_env,
-    idle_free_secs_from_env, prealloc_enabled, reserve_floor_bytes_from_env, safe_commit_cap,
+    CommitBudgetGate, DEFAULT_CHUNK_MIB, SparseVramBackend, chunk_bytes_from_env,
+    commit_cap_bytes_from_env, idle_free_secs_from_env, prealloc_enabled,
+    reserve_floor_bytes_from_env, safe_commit_cap,
 };
 pub use vram_backend::VramBackend;
