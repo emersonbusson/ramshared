@@ -435,6 +435,8 @@ fn refuse_dirty_swap_state() -> Result<(), CascadeError> {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Transport {
+    /// Prefer ublk when safe; on WSL2 always NBD (daemon refuses ublk — freeze risk).
+    Auto,
     Nbd,
     Ublk,
 }
@@ -448,6 +450,40 @@ struct UpArgs {
     connections: u32,
     transport: Transport,
     swap_dev: String,
+}
+
+/// True when running under Microsoft WSL2 (shared kernel VM).
+fn is_wsl2() -> bool {
+    std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|s| s.contains("microsoft") || s.contains("WSL"))
+        .unwrap_or(false)
+        || std::path::Path::new("/proc/sys/fs/binfmt_misc/WSLInterop").exists()
+        || std::env::var_os("WSL_INTEROP").is_some()
+}
+
+/// Resolve Auto → Nbd|Ublk. Product Day-1 on WSL2 is always NBD (Kahneman #16).
+fn resolve_transport(t: Transport) -> Result<Transport, CascadeError> {
+    match t {
+        Transport::Nbd => Ok(Transport::Nbd),
+        Transport::Ublk => Ok(Transport::Ublk),
+        Transport::Auto => {
+            if is_wsl2() {
+                eprintln!(
+                    "[up] transport=auto → nbd \
+                     (ublk disponivel no kernel mas recusado no WSL2: teardown pode congelar — 2026-06-09; \
+                     override so no daemon com RAMSHARED_ALLOW_UBLK_ON_WSL2=1, lab-only)"
+                );
+                return Ok(Transport::Nbd);
+            }
+            if Path::new("/dev/ublk-control").exists() {
+                eprintln!("[up] transport=auto → ublk (/dev/ublk-control presente, host nao-WSL2)");
+                Ok(Transport::Ublk)
+            } else {
+                eprintln!("[up] transport=auto → nbd (sem /dev/ublk-control)");
+                Ok(Transport::Nbd)
+            }
+        }
+    }
 }
 
 fn parse_up_args() -> Result<UpArgs, CascadeError> {
@@ -520,7 +556,8 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
         daemon,
         force: false,
         connections: 1,
-        transport: Transport::Nbd,
+        // Default auto: on WSL2 resolves to NBD (Day-1); ublk only off-WSL2 when control node exists.
+        transport: Transport::Auto,
         swap_dev: NBD.to_string(),
     };
     let mut i = 0;
@@ -567,11 +604,12 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
                     .ok_or_else(|| CascadeError::Arg("--transport requer valor".into()))?
                     .as_str()
                 {
+                    "auto" => Transport::Auto,
                     "nbd" => Transport::Nbd,
                     "ublk" => Transport::Ublk,
                     other => {
                         return Err(CascadeError::Arg(format!(
-                            "--transport invalido: {other} (use nbd|ublk)"
+                            "--transport invalido: {other} (use auto|nbd|ublk)"
                         )));
                     }
                 };
@@ -601,6 +639,13 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
             "--connections > 1 e invalido com --transport ublk (ring unico)".into(),
         ));
     }
+    // Resolve Auto after parse so env/flag still work.
+    a.transport = resolve_transport(a.transport)?;
+    if a.transport == Transport::Ublk && a.connections != 1 {
+        return Err(CascadeError::Arg(
+            "--connections > 1 e invalido com --transport ublk (ring unico)".into(),
+        ));
+    }
     Ok(a)
 }
 
@@ -608,6 +653,21 @@ pub fn up() -> Result<(), CascadeError> {
     let a = parse_up_args()?;
     let prios = TierPriorities::default();
     validate_order(prios).map_err(|e| CascadeError::Precondition(e.to_string()))?;
+
+    // cascade-transport-policy ITEM-3: ublk fail-closed before idempotent return (#16).
+    // Auto already resolved to Nbd on WSL2; explicit ublk or Auto→Ublk (non-WSL2) still blocked
+    // until full up wire-up exists (SPEC future + dedicated AUDIT-2.5 for teardown).
+    if a.transport == Transport::Ublk {
+        let msg = if is_wsl2() {
+            "transport ublk recusado no WSL2 (freeze risk 2026-06-09; Day-1 = nbd). \
+             Lab-only: daemon manual + RAMSHARED_ALLOW_UBLK_ON_WSL2=1 — nao e Day-0. \
+             Kernel pode ter ublk_drv; produto cascade nao usa."
+        } else {
+            "transport ublk no `ramshared up` ainda nao implementado (SPEC futuro). \
+             Use --transport nbd ou auto. Daemon ublk manual e lab-only."
+        };
+        return Err(CascadeError::Precondition(msg.into()));
+    }
 
     // Refuse dirty state before touching anything (#16 fail-safe).
     refuse_dirty_swap_state()?;
@@ -634,16 +694,12 @@ pub fn up() -> Result<(), CascadeError> {
         ));
     }
     eprintln!("[up] rede de seguranca A1: {net:?}");
+    // Product order (always): zram (hot) > VRAM tier (cold, fast vs SSD) > disk VHDX (last).
+    eprintln!(
+        "[up] prioridade: zram({}) > VRAM/nbd({}) > VHDX(disk) — SSD so depois de VRAM",
+        prios.zram, prios.vram
+    );
     fs::create_dir_all("/run/ramshared").map_err(|e| CascadeError::Io(e.to_string()))?;
-
-    if a.transport == Transport::Ublk {
-        return Err(CascadeError::Precondition(
-            "transport ublk ainda nao implementado no `ramshared up` (use nbd). \
-             Daemon ublk manual e lab-only; se ja usou ublk, `sudo ramshared down` \
-             e limpe ghost swaps antes."
-                .into(),
-        ));
-    }
 
     arm_forensics();
 
@@ -828,11 +884,26 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_nbd_transport_and_nbd0_swap_dev() {
+    fn defaults_to_auto_resolved_nbd_on_wsl2_or_nbd_swap_dev() {
         let args = parse(&[]).unwrap();
-        assert_eq!(args.transport, Transport::Nbd);
+        // Default is Auto; on WSL2 resolve_transport → Nbd (product Day-1).
+        // Off-WSL2 without /dev/ublk-control also → Nbd; with control → Ublk.
+        assert!(matches!(args.transport, Transport::Nbd | Transport::Ublk));
+        if is_wsl2() {
+            assert_eq!(args.transport, Transport::Nbd);
+        }
         assert_eq!(args.swap_dev, "/dev/nbd0");
         assert_eq!(args.connections, 1);
+    }
+
+    #[test]
+    fn auto_transport_flag_resolves_like_default() {
+        let args = parse(&["--transport", "auto"]).unwrap();
+        if is_wsl2() {
+            assert_eq!(args.transport, Transport::Nbd);
+        } else {
+            assert!(matches!(args.transport, Transport::Nbd | Transport::Ublk));
+        }
     }
 
     #[test]
@@ -927,8 +998,13 @@ Filename Type Size Used Priority
              /dev/nbd0 partition 1048576 0 100\n\
              /dev/sdb partition 8388608 0 -2\n",
         );
-        // Without /run/ramshared records this process has no pid/socket → not healthy.
-        assert!(!cascade_already_healthy(&with_nbd));
+        // Pure over swaps + /run/ramshared: without live records → not healthy.
+        // If cascade is mounted on this host, records may exist → skip env-coupled assert.
+        let has_live_record =
+            Path::new(SWAP_DEV_FILE).exists() || Path::new(PID_FILE).exists();
+        if !has_live_record {
+            assert!(!cascade_already_healthy(&with_nbd));
+        }
     }
 
     #[test]

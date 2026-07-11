@@ -486,3 +486,96 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 - No VHD delete/Convert-VHD; free C=136.1 R=167.6 E=288.8
 **Verdict:** ✅ guards applied
 **Next action:** after Win11 OOBE, eject ISO; re-run Harden-LabVms.ps1 if needed
+
+## 2026-07-10 — wsl2-custom-kernel-p1 partial green (build + qemu + arm)
+
+**What:** Custom WSL2 kernel from MS `linux-msft-wsl-6.18.y` @ `1bd4ed3d4` with UBLK=m + ZRAM_WRITEBACK=y; qemu boot PASS; CLI + arm for next start.
+
+| Metric | Value |
+| --- | --- |
+| REL | 6.18.35.2-microsoft-standard-WSL2+ |
+| bzImage | R:\WSL\kernels\bzImage-ramshared-latest (17330688 B) |
+| QEMU | PASS (KTEST-UNAME match); modules busybox insmod best-effort fail |
+| stamp | qemu-pass.stamp sha256 d278b032… |
+| CLI | status/enable/arm/disarm/apply; enable never shutdown |
+| arm | .wslconfig kernel=R:\\WSL\\kernels\\bzImage-ramshared-latest → NEED_REBOOT |
+| apply | not run (human); AUDIT-2.5 go for human apply |
+| stock uname still | 6.6.123.2-microsoft-standard-WSL2+ until restart |
+
+**Next human:** restart WSL or `wsl-kernel.sh apply --i-know-this-stops-all-wsl`, then `enable`.
+
+## 2026-07-10 — wsl2-custom-kernel-p1 live green (kernel + modules.vhdx + ublk)
+
+**What:** Custom kernel live on product WSL with MS-style `kernelModules` VHDX; `ublk_drv` loads and `/dev/ublk-control` exists.
+**Category:** boot + integration
+**How to measure:**
+```bash
+uname -r
+ls /lib/modules/$(uname -r)/kernel/drivers/block/ublk_drv.ko
+sudo modprobe ublk_drv && lsmod | grep ublk && ls -la /dev/ublk-control
+grep -E 'kernel=|kernelModules=' /mnt/c/Users/*/ .wslconfig 2>/dev/null | head
+```
+**Measured data:**
+- uname: **6.18.35.2-microsoft-standard-WSL2+**
+- .wslconfig: `kernel=C:\\wsl\\kernel-ramshared` + `kernelModules=C:\\wsl\\modules-ramshared.vhdx` (~2.8G)
+- modules tree mounted under `/lib/modules/6.18.35.2-microsoft-standard-WSL2+/`
+- modprobe ublk_drv → **OK**; `/dev/ublk-control` present; `lsmod` shows ublk_drv
+- modules-apply.log: **RESULT=OK**
+- QEMU stamp retained (boot gate earlier PASS)
+- Cascade Day-1 (NBD `ramshared up`) **not** re-gated in this entry
+**Verdict:** ✅ works (P1 kernel+ublk path live)
+**Next action:** (1) re-validate cascade on custom kernel; (2) optional SPEC for cascade prefer ublk; (3) close IMPL RF-K8 as GREEN; (4) commit docs/scripts if not committed
+
+## 2026-07-10 — wsl2-custom-kernel-p1 full green (cascade smoke)
+
+**What:** On live custom kernel 6.18.35.2, re-validated RamShared Day-1 cascade (NBD) and CLI enable path with modules.vhdx.
+**Category:** integration + boot + fail-safe
+**How to measure:**
+```bash
+uname -r
+sudo ./target/release/ramshared check
+sudo modprobe nbd; sudo ./target/release/ramshared up --vram 512 --zram 512 --daemon ./target/release/ramsharedd
+cat /proc/swaps
+sudo ./target/release/ramshared down
+bash scripts/kernel/wsl-kernel.sh enable
+```
+**Measured data:**
+- uname: 6.18.35.2-microsoft-standard-WSL2+
+- check: Decisao=ready; CONFIG_BLK_DEV_UBLK=m; ublk=ready; nbd=ok (after modprobe)
+- free VRAM ~4.5–5.1 GiB; RTX 2060
+- up: zram0 prio=200 512MiB; nbd0 prio=100 512MiB; disk /dev/sdc prio=-2; exit 0
+- down: swapoff-first nbd+zram; managed swap gone; exit 0
+- SWAPS_CLEAN_OF_MANAGED after down
+- modules.vhdx C:\wsl\modules-ramshared.vhdx (~2.8G); /dev/ublk-control present
+- wsl-kernel enable: READY no-op path (after CLI path fix for C:\wsl kernel=)
+**Verdict:** ✅ works
+**Next action:** optional SPEC cascade-prefer-ublk; commit feature branch if desired
+
+## 2026-07-10 — cascade-transport-policy + boot unit GREEN
+
+**What:** Product cascade policy: VRAM (NBD) before SSD; boot unit enabled; `transport=auto` → NBD on WSL2; ublk fail-closed (no product ublk).
+**Category:** product path + fail-safe + boot
+**SSDV3:** `docs/specs/no-milestone/cascade-transport-policy/{PRD,SPEC,AUDIT-2.5,IMPL}.md`
+**How to measure:**
+```bash
+uname -r
+systemctl is-enabled ramshared-cascade.service
+swapon --show
+sudo ./target/release/ramshared up          # idempotent when healthy
+sudo ./target/release/ramshared up --transport ublk   # must fail closed
+cargo test -p ramshared-cli
+```
+**Measured data:**
+- uname: **6.18.35.2-microsoft-standard-WSL2+**
+- unit: **enabled** + **active (exited)**; preflight+cascade-up SUCCESS
+- swaps: `/dev/zram0` prio **200** 1024M; `/dev/nbd0` prio **100** 1024M; `/dev/sdc` prio **−2** 8G
+- daemon: `ramsharedd --nbd /dev/nbd0` under unit cgroup
+- auto log: `transport=auto → nbd (ublk … recusado no WSL2 …)`
+- priority log: `zram(200) > VRAM/nbd(100) > VHDX(disk) — SSD so depois de VRAM`
+- idempotent up: exit 0, no re-setup
+- explicit ublk: fail-closed error (Day-1=nbd); no half-state
+- kernel ublk_drv loaded + `/dev/ublk-control` present (capability only)
+- cargo test -p ramshared-cli: **18 passed**
+**Verdict:** ✅ works (user goal: open WSL → cascade on; VRAM before SSD)
+**Soak reboot 2×:** not run in-agent (kills session). Hygiene only — no new PRD/SPEC/2.5. After human `wsl --shutdown` twice, re-check unit + `swapon --show` order.
+**Next action:** optional human soak reboot 2×; full ublk product path remains future + dedicated AUDIT-2.5
