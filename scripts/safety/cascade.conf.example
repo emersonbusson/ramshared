@@ -9,15 +9,19 @@
 # Keep VRAM below free GPU memory − headroom (games / desktop need headroom).
 # The daemon gives VRAM back when free memory on the card drops (DEMOTE).
 
-VRAM_MIB=3072
+# Capacity advertised as NBD size (MiB). Sparse: not fully committed at up.
+# On a 6 GiB GPU, 4096 is the recommended product default; 6144 is max "up to 6G"
+# but commit is auto-capped to (GPU total − reserve) so the card never runs dry.
+VRAM_MIB=4096
 ZRAM_MIB=2048
 
-# Extra free VRAM headroom (MiB). Sparse mode (default): boot needs
-# headroom + ~1 MiB canary + RAMSHARED_VRAM_CHUNK_MIB free — not full VRAM_MIB.
-# Prealloc mode (RAMSHARED_VRAM_PREALLOC=1): needs VRAM_MIB + headroom free.
-MIN_VRAM_HEADROOM_MIB=256
+# Reserve floor (MiB): never allocate another CUDA chunk if free would fall below this.
+# Also used as sparse preflight headroom. Keep ≥512 on shared desktop/game GPUs.
+MIN_VRAM_HEADROOM_MIB=512
 
-# Optional env (export before up / in unit):
-#   RAMSHARED_VRAM_PREALLOC=1   # old full cuMemAlloc(size) at start
+# Optional env (export before up / in systemd unit Environment=):
+#   RAMSHARED_VRAM_PREALLOC=1        # old full cuMemAlloc(size) at start
 #   RAMSHARED_VRAM_CHUNK_MIB=128
 #   RAMSHARED_VRAM_IDLE_FREE_SEC=30
+#   RAMSHARED_VRAM_COMMIT_CAP_MIB=5120  # optional hard cap; default = min(VRAM_MIB, total−reserve)
+#   RAMSHARED_MIN_VRAM_FREE_MIB=512     # same as MIN_VRAM_HEADROOM for daemon free-floor
