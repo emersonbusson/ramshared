@@ -1,5 +1,8 @@
 # Runbook — Kernel WSL2 custom para a Fase B (zram-writeback + ublk)
 
+> **Canonical SSDV3 (P1):** [`docs/specs/no-milestone/wsl2-custom-kernel-p1/`](../specs/no-milestone/wsl2-custom-kernel-p1/)  
+> (PRD · SPEC · IMPL · AUDIT-2.5). Day-to-day CLI: `bash scripts/kernel/wsl-kernel.sh status|enable|arm|apply`.
+
 Destrava o **Passo 3 (IMPL) dos itens 4-5** (zram-writeback theme + ublk; see ADR-0004 and `docs/specs/no-milestone/wsl2-cascade-swap/`).
 O kernel prebuilt da Microsoft **não** tem os configs (verificado: `# CONFIG_ZRAM_WRITEBACK is
 not set`, `# CONFIG_BLK_DEV_UBLK is not set`). `CONFIG_IO_URING=y` **já existe**.

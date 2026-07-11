@@ -68,9 +68,20 @@ KTAG=linux-msft-wsl-6.18.y bash scripts/kernel/build-wsl-kernel.sh
 
 “Native C in kernel for full page↔VRAM mm” = later research (P2), not this build.
 
+## Host WSL lab distro (throwaway)
+
+| Item | Status |
+| --- | --- |
+| Name | `RamShared-Kernel` (Ubuntu 24.04) |
+| Live | `R:\WSL\RamShared-Kernel\ext4.vhdx` (not C:) |
+| Backup | `E:\WSL-backup\RamShared-Kernel\RamShared-Kernel-base.tar` |
+| Auth | passwordless `emedev` + sudo NOPASSWD |
+| Default product | still `Ubuntu-24.04` |
+| Doc | [`WSL-KERNEL-LAB.md`](WSL-KERNEL-LAB.md) |
+
 ## Host safety
 
-- Lab disks/ISOs on **R:**  
+- Lab disks/ISOs on **R:**; WSL lab VHDX on **R:**; export on **E:**  
 - C: free remains large  
 - `gha-ubuntu` may be Off to free RAM for builds  
 - Do not thrash swap on live WSL while both VMs are heavy  
@@ -84,3 +95,5 @@ KTAG=linux-msft-wsl-6.18.y bash scripts/kernel/build-wsl-kernel.sh
 - [ ] Kernel build finished (`bzImage`)  
 - [ ] Validate (`qemu-validate` / boot-kernel-safe)  
 - [ ] Optional: WSL `.wslconfig` → custom kernel + `ramshared up`  
+- [x] WSL lab distro `RamShared-Kernel` on R: + base export on E:  
+

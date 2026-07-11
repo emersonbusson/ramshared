@@ -12,9 +12,10 @@
 # Saída: imprime o bzImage + a kernelrelease (passe ao qemu-validate.sh / boot-kernel-safe.ps1).
 set -euo pipefail
 
-KTAG="${KTAG:-linux-msft-wsl-6.6.y}"
-KSRC="${KSRC:-$HOME/WSL2-Linux-Kernel}"
-JOBS="${JOBS:-$(( $(nproc) / 2 ))}"; [ "$JOBS" -lt 1 ] && JOBS=1
+# SPEC wsl2-custom-kernel-p1: default 6.18.y; override with KTAG=
+KTAG="${KTAG:-linux-msft-wsl-6.18.y}"
+KSRC="${KSRC:-$HOME/src/WSL2-Linux-Kernel}"
+JOBS="${JOBS:-2}"; [ "$JOBS" -lt 1 ] && JOBS=1
 CONFIGS=("$@"); [ ${#CONFIGS[@]} -eq 0 ] && CONFIGS=(CONFIG_BLK_DEV_UBLK=m CONFIG_ZRAM_WRITEBACK=y CONFIG_IO_URING=y)
 
 echo "[build] deps..."
