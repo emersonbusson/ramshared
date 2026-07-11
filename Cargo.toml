@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/ramshared-dxg",
     "crates/ramshared-cli",
     "crates/ramshared-tier",
     "crates/ramshared-cuda",

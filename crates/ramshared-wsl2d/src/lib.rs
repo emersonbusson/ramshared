@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod backend;
+pub mod autotier;
 pub mod broker_srv;
 pub mod canary_probe;
 pub mod conn;
