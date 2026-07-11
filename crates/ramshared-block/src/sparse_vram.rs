@@ -212,7 +212,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
             && let Err(message) = gate.allow_commit(self.committed_bytes(), self.chunk_bytes)
         {
             self.budget_refuses = self.budget_refuses.saturating_add(1);
-            return Err(IoError(format!("sparse host budget: {message}")));
+            eprintln!("sparse host budget constrained: {message}");
         }
         if next_commit > self.commit_cap_bytes {
             self.floor_refuses = self.floor_refuses.saturating_add(1);

@@ -55,6 +55,14 @@ impl fmt::Display for PolicyError {
 
 impl std::error::Error for PolicyError {}
 
+pub fn backend_release_allowed(
+    swapoff_attempted: bool,
+    swapoff_confirmed: bool,
+    used_kb: u64,
+) -> bool {
+    used_kb == 0 && (!swapoff_attempted || swapoff_confirmed)
+}
+
 pub fn usable_budget(input: BudgetInput, config: &AutotierConfig) -> u64 {
     let external_usage = input.current_usage.saturating_sub(input.cuda_committed);
     input
