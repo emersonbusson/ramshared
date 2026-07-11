@@ -15,7 +15,7 @@ Two tracks share CUDA/block pieces. Only one is the daily product.
 
 ```text
 Pressure  →  zram    (compressed RAM)   priority 200   hot
-          →  VRAM    (CUDA + NBD)       priority 100   cold
+          →  VRAM    (WDDM budget + CUDA + NBD) priority 100 cold
           →  disk    (VHDX / swap)      priority  -2   last resort
 ```
 
@@ -25,6 +25,13 @@ Pressure  →  zram    (compressed RAM)   priority 200   hot
 
 **Invariant A1:** demote only if something lower can absorb pages (disk swap or enough free RAM). Checked at `up`.
 
+On WSL2, Windows WDDM/VidMm remains the memory authority. `ramsharedd` queries the
+local-segment process budget through `/dev/dxg` before each sparse CUDA chunk commit.
+CUDA free memory is a second fail-closed check, not the policy authority. If dxg is
+unavailable at startup, the daemon reports `budget_source=cuda-fallback`; a later dxg
+failure blocks new commits. More than one dxg adapter is rejected until CUDA↔LUID
+identity is proven.
+
 ### Main pieces
 
 | Piece | Job |
@@ -33,6 +40,7 @@ Pressure  →  zram    (compressed RAM)   priority 200   hot
 | `ramsharedd` | holds VRAM, serves NBD |
 | `ramshared-tier` | priority order + safety net |
 | `ramshared-cuda` | load NVIDIA driver at runtime |
+| `ramshared-dxg` | query the host-authoritative WDDM budget |
 | `ramshared-cascade.service` | optional boot: preflight → up; stop → down |
 
 ### Anti-hang rules (learned the hard way)
