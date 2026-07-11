@@ -284,4 +284,16 @@ mod tests {
         };
         assert!(!error.to_string().is_empty());
     }
+
+    #[test]
+    fn recovery_tracker_requires_empty_tier_and_three_good_samples() {
+        let mut tracker = super::RecoveryTracker::new(3);
+        assert!(!tracker.observe(true, false));
+        assert!(!tracker.observe(false, true));
+        assert!(!tracker.observe(true, true));
+        assert!(!tracker.observe(true, true));
+        assert!(tracker.observe(true, true));
+        tracker.reset();
+        assert!(!tracker.observe(true, true));
+    }
 }
