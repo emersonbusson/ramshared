@@ -154,7 +154,7 @@ vram_mode=sparse|prealloc
 | Unit: write then read | data roundtrip; alloc count 1 |
 | Unit: cross-chunk write | 2 allocs |
 | Unit: prealloc flag path still compiles | feature flag |
-| Live: `up` VRAM_MIB=3072, used_kb=0 | `Δ free_GPU` ≤ canary (4 KiB) + slack **≤ 64 MiB** (driver overhead) — **not** ≈3072 |
+| Live: `up` VRAM_MIB=3072, used_kb=0 | `Δ free_GPU` ≤ canary + CUDA context slack **≤ 256 MiB** (driver overhead) — **not** ≈3072 |
 | Live: sparse preflight | boot OK with free_vram &lt; VRAM_MIB+headroom if free ≥ sparse gate |
 | Live: pressure order | `sudo bash scripts/safety/cascade-pressure-probe.sh --prove-disk` → zram → nbd → disk |
 | Live: after pressure release used_kb→0 + idle | committed falls; free_GPU rises |

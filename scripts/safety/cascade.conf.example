@@ -9,8 +9,15 @@
 # Keep VRAM below free GPU memory − headroom (games / desktop need headroom).
 # The daemon gives VRAM back when free memory on the card drops (DEMOTE).
 
-VRAM_MIB=2048
+VRAM_MIB=3072
 ZRAM_MIB=2048
 
-# Extra free VRAM required above VRAM_MIB before boot will start (MiB).
+# Extra free VRAM headroom (MiB). Sparse mode (default): boot needs
+# headroom + ~1 MiB canary + RAMSHARED_VRAM_CHUNK_MIB free — not full VRAM_MIB.
+# Prealloc mode (RAMSHARED_VRAM_PREALLOC=1): needs VRAM_MIB + headroom free.
 MIN_VRAM_HEADROOM_MIB=256
+
+# Optional env (export before up / in unit):
+#   RAMSHARED_VRAM_PREALLOC=1   # old full cuMemAlloc(size) at start
+#   RAMSHARED_VRAM_CHUNK_MIB=128
+#   RAMSHARED_VRAM_IDLE_FREE_SEC=30

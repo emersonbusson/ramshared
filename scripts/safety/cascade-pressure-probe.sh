@@ -73,14 +73,15 @@ with open("/proc/swaps") as f:
             n = prio if n is None else max(n, prio)
         else:
             d = prio if d is None else min(d, prio)
-print(f"{z} {n} {d}")
+# Always integers (-1 if missing) so bash set -u arithmetic is safe.
+print(f"{z if z is not None else -1} {n if n is not None else -1} {d if d is not None else -1}")
 PY
 }
 
 need_root
 read -r PZ PN PD <<<"$(read_prios)"
-if [[ -z "$PZ" || -z "$PN" || -z "$PD" || "$PZ" == "None" ]]; then
-  log "FAIL: need live zram + nbd + disk (sudo ramshared up first)"
+if [[ -z "${PZ:-}" || -z "${PN:-}" || -z "${PD:-}" || "$PZ" -lt 0 || "$PN" -lt 0 || "$PD" -eq -1 ]]; then
+  log "FAIL: need live zram + nbd + disk (sudo ramshared up first) prios=z:$PZ n:$PN d:$PD"
   swapon --show || true
   exit 1
 fi

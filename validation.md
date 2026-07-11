@@ -645,3 +645,29 @@ cargo test -p ramshared-cli
 - No thrash on full host — pressure uses cgroup only
 **Verdict:** ✅ works for product open-WSL + VRAM-before-SSD path
 **Push gate:** green — ready
+
+## 2026-07-11 — cascade-vram-ondemand IMPL GREEN (sparse live)
+
+**What:** Sparse CUDA commit for NBD VRAM tier (alloc on write; free when idle).
+**Category:** product path + fail-safe
+**SSDV3:** `docs/specs/no-milestone/cascade-vram-ondemand/{PRD,SPEC,AUDIT-2.5,IMPL}.md`
+**How to measure:**
+```bash
+sudo ramshared down
+F0=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | tr -dc 0-9)
+sudo env RAMSHARED_VRAM_PREALLOC=0 bash scripts/safety/cascade-up.sh
+F1=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | tr -dc 0-9)
+echo delta=$((F0-F1))   # expect << 3072
+sudo bash scripts/safety/cascade-pressure-probe.sh --max-sec 50
+# wait ~40s idle; free should rise if chunks reclaimed
+```
+**Measured data:**
+- mode log: `VRAM mode=sparse capacity=3072 MiB chunk=128 MiB committed=0`
+- idle Δ free: **212 MiB** (not ~3072 prealloc)
+- preflight sparse gate: need ≥ 385 MiB free (headroom+chunk)
+- nbd stable 15s after up
+- pressure: **zram t=1s → nbd t=6s PASS** (exit 0); nbd remains
+- reclaim: free **4067 → 4408** after idle (~+341 MiB)
+- cargo test ramshared-block: **32** passed; ramshared-cli: **23** passed
+**Verdict:** ✅ works
+**Next action:** optional PREALLOC A/B doc; ITEM-2b mid-flight spill deferred

@@ -24,6 +24,9 @@ VRAM_MIB="${VRAM_MIB:-${RAMSHARED_VRAM_MIB:-1024}}"
 ZRAM_MIB="${ZRAM_MIB:-${RAMSHARED_ZRAM_MIB:-1024}}"
 MIN_HEADROOM="${MIN_VRAM_HEADROOM_MIB:-${RAMSHARED_MIN_VRAM_FREE_MIB:-256}}"
 FORCE="${RAMSHARED_FORCE:-0}"
+# SPEC cascade-vram-ondemand: sparse default needs only headroom+canary+1 chunk free.
+CHUNK_MIB="${RAMSHARED_VRAM_CHUNK_MIB:-128}"
+PREALLOC="${RAMSHARED_VRAM_PREALLOC:-0}"
 
 NVSMI="$(command -v nvidia-smi 2>/dev/null || true)"
 [[ -x "$NVSMI" ]] || NVSMI="/usr/lib/wsl/lib/nvidia-smi"
@@ -62,11 +65,21 @@ SMI_OUT="$("$NVSMI" --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev
 [[ -n "$SMI_OUT" ]] || fail "nvidia-smi did not return free memory"
 VRAM_FREE="$(echo "$SMI_OUT" | head -1 | tr -dc '0-9')"
 [[ -n "$VRAM_FREE" ]] || fail "could not parse free VRAM"
-NEED=$((VRAM_MIB + MIN_HEADROOM))
+# canary is 4 KiB (~0 MiB); round up to 1 MiB for gate simplicity
+case "${PREALLOC}" in
+  1|true|yes|on|TRUE|YES|ON)
+    NEED=$((VRAM_MIB + MIN_HEADROOM))
+    MODE_NOTE="prealloc: VRAM_MIB+headroom"
+    ;;
+  *)
+    NEED=$((MIN_HEADROOM + 1 + CHUNK_MIB))
+    MODE_NOTE="sparse: headroom+canary+chunk (capacity VRAM_MIB=${VRAM_MIB} not fully committed)"
+    ;;
+esac
 if [[ "$VRAM_FREE" -lt "$NEED" ]]; then
-  fail "free VRAM ${VRAM_FREE} MiB < need ${NEED} (VRAM_MIB=${VRAM_MIB} + headroom ${MIN_HEADROOM}) — close a game/render or lower VRAM_MIB"
+  fail "free VRAM ${VRAM_FREE} MiB < need ${NEED} (${MODE_NOTE}) — close a game/render or lower sizes"
 fi
-echo "  [ok] free VRAM=${VRAM_FREE} MiB (need >= ${NEED})"
+echo "  [ok] free VRAM=${VRAM_FREE} MiB (need >= ${NEED}; ${MODE_NOTE})"
 
 # Soft A1: prefer a lower swap tier (disk). If none and RAM is tight, refuse unless FORCE.
 HAS_DISK_SWAP=0
