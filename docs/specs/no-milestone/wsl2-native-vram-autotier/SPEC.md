@@ -25,11 +25,11 @@ Selection is automatic only for exactly 1 adapter. With more adapters, an explic
 
 ## ITEM-3 — allocation gate
 
-Before every sparse first-write allocation, query policy. Require `committed + chunk <= usable_budget`; then apply the existing CUDA free-floor. Dxg unavailable at startup selects `cuda-fallback` and preserves the existing gate. Dxg that fails after selection fails closed rather than silently changing authority.
+Before every sparse first-write allocation, query policy. If `committed + chunk > usable_budget`, mark the tier constrained but **do not return an I/O error for a write already accepted from Linux swap**. Complete at most that in-flight chunk using the safety margin, then trigger bounded swapoff immediately. No subsequent new commit is admitted while demote is pending. Dxg unavailable at startup selects `cuda-fallback`; malformed output, ambiguous topology, or an ioctl failure after open fails closed rather than silently changing authority.
 
 ## ITEM-4 — lifecycle
 
-`available → constrained → demoting → parked → recovering → available`. Demote first stops commits, verifies lower-tier absorption, performs bounded swapoff, checks `used_kb == 0`, then frees chunks. Any failure remains constrained with backend alive. Recovery waits for sustained headroom, re-enables empty swap, and performs no eager reads.
+`available → constrained → demoting → parked → recovering → available`. Demote first stops commits, verifies lower-tier absorption, performs bounded swapoff, checks `used_kb == 0`, then frees chunks. A failed/timed-out swapoff or `used_kb > 0` keeps the backend and CUDA chunks alive. Recovery waits for sustained headroom, re-enables empty swap, and performs no eager reads.
 
 ## Lock/context matrix
 
@@ -59,6 +59,8 @@ All uAPI arrays are bounded to 64, layouts are fixed-width, pointers reference o
 - DT-5: state hysteresis and idempotency.
 - DT-6: no free with `used_kb > 0`.
 - DT-7: zram 200 > VRAM 100 > disk remains green.
+- DT-8: constrained commit completes without NBD EIO and schedules demote.
+- DT-9: only device-unavailable open errors permit startup CUDA fallback.
 
 ## Rollback trigger
 

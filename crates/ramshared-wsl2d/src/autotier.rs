@@ -235,4 +235,13 @@ mod tests {
         assert_eq!(policy.mark_available(true), Ok(AutotierState::Available));
         assert!(policy.mark_available(false).is_err());
     }
+
+    #[test]
+    fn backend_release_requires_zero_used_and_confirmed_swapoff() {
+        assert!(super::backend_release_allowed(false, false, 0));
+        assert!(super::backend_release_allowed(true, true, 0));
+        assert!(!super::backend_release_allowed(true, false, 0));
+        assert!(!super::backend_release_allowed(true, true, 1));
+        assert!(!super::backend_release_allowed(false, false, 1));
+    }
 }
