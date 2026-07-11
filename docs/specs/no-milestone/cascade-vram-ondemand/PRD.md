@@ -115,7 +115,7 @@ This feature is **L0→L1 bridge polish**: make userspace cascade **behave more 
 | RF-L7 | `down` still frees **all** chunks + canary (existing anti-hang order) |
 | RF-L8 | Telemetry: `vram_committed_bytes`, `vram_capacity_bytes`, `chunks_live`, demote/free counters |
 | RF-L9 | Kill-switch: `RAMSHARED_VRAM_PREALLOC=1` restores Day-1 full alloc (rollback behaviour) |
-| RF-L10 | Preflight still uses `VRAM_MIB + headroom` against **current free** as **soft** capacity check; optional `VRAM_COMMIT_CAP_MIB` for max simultaneous commit |
+| RF-L10 | Preflight **sparse**: free ≥ headroom + canary + one chunk (start gate). Preflight **prealloc**: free ≥ VRAM_MIB + headroom. Optional later: `VRAM_COMMIT_CAP_MIB` |
 
 ## 5. Non-functional
 
