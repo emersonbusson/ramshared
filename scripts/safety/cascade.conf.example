@@ -1,11 +1,16 @@
 # RamShared cascade sizes (MiB). Copied to /etc/ramshared/cascade.conf on install
 # if that file does not exist yet. Edit the copy under /etc — not this example.
 #
-# Keep VRAM modest if you also play games on the same GPU.
+# Kernel order is FIXED (not configured here):
+#   zram prio 200  →  VRAM/nbd prio 100  →  SSD/VHDX prio ≈ -2
+# When WSL RAM (e.g. memory=16G in .wslconfig) is under pressure, pages go to
+# VRAM tier BEFORE the disk swap. These numbers only set HOW MUCH of each tier.
+#
+# Keep VRAM below free GPU memory − headroom (games / desktop need headroom).
 # The daemon gives VRAM back when free memory on the card drops (DEMOTE).
 
-VRAM_MIB=1024
-ZRAM_MIB=1024
+VRAM_MIB=2048
+ZRAM_MIB=2048
 
 # Extra free VRAM required above VRAM_MIB before boot will start (MiB).
 MIN_VRAM_HEADROOM_MIB=256
