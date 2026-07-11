@@ -17,6 +17,24 @@ pub fn swapoff_bin() -> &'static str {
     "swapoff"
 }
 
+pub fn swapon_bin() -> &'static str {
+    const CANDIDATES: &[&str] = &["/usr/sbin/swapon", "/sbin/swapon"];
+    for candidate in CANDIDATES {
+        if std::path::Path::new(candidate).exists() {
+            return candidate;
+        }
+    }
+    "swapon"
+}
+
+pub fn activate_swap(dev: &str, priority: i16) -> bool {
+    std::process::Command::new(swapon_bin())
+        .args(["-p", &priority.to_string(), dev])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 /// Spawns `swapoff <dev>` in a separate thread (does not block the server) and returns the
 /// channel confirming the outcome (`true` = success). Unified DEMOTE path (DT-8):
 /// used by per-request latency and cadence probe.
