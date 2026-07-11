@@ -696,3 +696,14 @@ sudo bash scripts/safety/cascade-pressure-probe.sh --max-sec 50
 **Verdict:** ✅ product suite **PASS=21 FAIL=0 OVERALL=GREEN**
 **Note:** wsl2d `slice_view` panic test is pre-existing, not introduced by sparse IMPL.
 **Final live:** nbd 3G prio 100, zram 2G prio 200, sdc -2; ramsharedd --size 3072
+
+## 2026-07-11 — VRAM 4GiB capacity + free-floor/commit_cap safety
+
+**What:** Raise product capacity to 4 GiB; safety refuse chunk alloc below reserve floor; auto commit_cap for 6 GiB capacity option.
+**Measured:**
+- conf: VRAM_MIB=4096, MIN_VRAM_HEADROOM_MIB=512
+- sparse log 4G: `commit_cap=4096 MiB reserve_floor=512 MiB`
+- sparse log 6G: `capacity=6144 MiB commit_cap=5631 MiB reserve_floor=512` (total−reserve on 6143 MiB GPU)
+- pressure with 4G nbd: zram→nbd PASS; nbd remains
+- unit tests sparse: 8 passed (floor refuse + safe_commit_cap)
+**Verdict:** ✅ 4G live; 6G capacity safe via commit_cap; free-floor on alloc

@@ -18,8 +18,9 @@ use std::time::Duration;
 
 use ramshared_block::protocol::{NBD_FLAG_CAN_MULTI_CONN, NBD_FLAG_HAS_FLAGS, NBD_FLAG_SEND_FLUSH};
 use ramshared_block::{
-    BlockBackend, Command, SparseVramBackend, chunk_bytes_from_env, idle_free_secs_from_env,
-    prealloc_enabled, serve,
+    BlockBackend, Command, SparseVramBackend, chunk_bytes_from_env, commit_cap_bytes_from_env,
+    idle_free_secs_from_env, prealloc_enabled, reserve_floor_bytes_from_env, safe_commit_cap,
+    serve,
 };
 use ramshared_broker::arbiter::ArbiterConfig;
 use ramshared_broker::slices::SliceMap;
@@ -521,12 +522,26 @@ fn run_nbd<P: VramProvider>(
         Be::Pre(VramBackend::new(mem, BLOCK_SIZE))
     } else {
         let chunk = chunk_bytes_from_env();
-        let sparse = SparseVramBackend::new(&provider, size, chunk, BLOCK_SIZE)
-            .map_err(|e| e.0)?;
+        let reserve = reserve_floor_bytes_from_env();
+        let env_cap = commit_cap_bytes_from_env();
+        let auto_cap = safe_commit_cap(size, total, reserve);
+        let commit_cap = env_cap.min(auto_cap);
+        let sparse = SparseVramBackend::new_with_limits(
+            &provider,
+            size,
+            chunk,
+            BLOCK_SIZE,
+            reserve,
+            Some(commit_cap),
+        )
+        .map_err(|e| e.0)?;
         eprintln!(
-            "[ramsharedd] VRAM mode=sparse capacity={} MiB chunk={} MiB committed=0 (ondemand)",
+            "[ramsharedd] VRAM mode=sparse capacity={} MiB chunk={} MiB \
+             commit_cap={} MiB reserve_floor={} MiB committed=0 (ondemand+safety)",
             size >> 20,
-            chunk >> 20
+            chunk >> 20,
+            commit_cap >> 20,
+            reserve >> 20
         );
         Be::Sparse(sparse)
     };
