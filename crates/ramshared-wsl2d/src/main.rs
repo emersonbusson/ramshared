@@ -18,15 +18,17 @@ use std::time::Duration;
 
 use ramshared_block::protocol::{NBD_FLAG_CAN_MULTI_CONN, NBD_FLAG_HAS_FLAGS, NBD_FLAG_SEND_FLUSH};
 use ramshared_block::{
-    BlockBackend, Command, SparseVramBackend, chunk_bytes_from_env, commit_cap_bytes_from_env,
-    idle_free_secs_from_env, prealloc_enabled, reserve_floor_bytes_from_env, safe_commit_cap,
-    serve,
+    BlockBackend, Command, CommitBudgetGate, SparseVramBackend, chunk_bytes_from_env,
+    commit_cap_bytes_from_env, idle_free_secs_from_env, prealloc_enabled,
+    reserve_floor_bytes_from_env, safe_commit_cap, serve,
 };
 use ramshared_broker::arbiter::ArbiterConfig;
 use ramshared_broker::slices::SliceMap;
 use ramshared_cuda::Cuda;
+use ramshared_dxg::{DxgBudgetProvider, DxgError, GpuBudgetProvider};
 use ramshared_vram::{VramMemory, VramProvider};
 use ramshared_vulkan::VulkanProvider;
+use ramshared_wsl2d::autotier::{AutotierConfig, BudgetInput, commit_allowed};
 use ramshared_wsl2d::broker_srv::{BrokerConfig, EndpointCfg, spawn_broker};
 use ramshared_wsl2d::swap::spawn_swapoff;
 use ramshared_wsl2d::{
@@ -431,13 +433,13 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let dev = cuda.device(0)?;
                 eprintln!("[ramsharedd] GPU: {}", dev.name());
                 let ctx = cuda.create_context(&dev)?;
-                run_nbd(ctx, size, sock, force, nbd_dev)
+                run_nbd(ctx, size, sock, force, nbd_dev, true)
             }
             BackendKind::Vulkan => {
                 // Vulkan Shell (RF-V4/DT-11): Vulkan provider in the SAME generic run_nbd.
                 let provider = VulkanProvider::open(0)?;
                 eprintln!("[ramsharedd] GPU (vulkan): {}", provider.device_name());
-                run_nbd(provider, size, sock, force, nbd_dev)
+                run_nbd(provider, size, sock, force, nbd_dev, false)
             }
             BackendKind::Ram => Err(
                 "--backend ram não tem caminho NBD single; use --slices (broker) ou ublk".into(),
@@ -455,6 +457,7 @@ fn run_nbd<P: VramProvider>(
     sock: String,
     force: bool,
     nbd_dev: String,
+    use_dxg_budget: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (free, total) = provider.mem_info()?;
     eprintln!(
@@ -464,6 +467,60 @@ fn run_nbd<P: VramProvider>(
     );
 
     let use_prealloc = prealloc_enabled();
+
+    let dxg = if use_dxg_budget {
+        match DxgBudgetProvider::open(None) {
+            Ok(provider) => {
+                eprintln!(
+                    "[ramsharedd] budget_source=dxg adapter={} (WDDM authority)",
+                    provider.adapter_luid()
+                );
+                Some(provider)
+            }
+            Err(error @ (DxgError::AmbiguousAdapters(_) | DxgError::AdapterNotFound(_))) => {
+                return Err(error.into());
+            }
+            Err(error) => {
+                eprintln!(
+                    "[ramsharedd] budget_source=cuda-fallback reason={error}; \
+                     CUDA free-floor is secondary compatibility mode"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    struct DxgGate<'a> {
+        provider: &'a DxgBudgetProvider,
+        config: AutotierConfig,
+    }
+    impl CommitBudgetGate for DxgGate<'_> {
+        fn allow_commit(&self, committed: u64, next_chunk: u64) -> Result<(), String> {
+            let snapshot = self
+                .provider
+                .snapshot()
+                .map_err(|error| error.to_string())?;
+            commit_allowed(
+                BudgetInput {
+                    budget: snapshot.budget,
+                    current_usage: snapshot.current_usage,
+                    cuda_committed: committed,
+                    sampled_at: snapshot.sampled_at,
+                },
+                committed,
+                next_chunk,
+                &self.config,
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+        }
+    }
+    let dxg_gate = dxg.as_ref().map(|provider| DxgGate {
+        provider,
+        config: AutotierConfig::default(),
+    });
+    let budget_gate = dxg_gate.as_ref().map(|gate| gate as &dyn CommitBudgetGate);
     // Discipline 3: mlock host pages; for sparse, CUDA commit is on-demand (SPEC).
     lock_memory(force, true)?;
 
@@ -513,6 +570,10 @@ fn run_nbd<P: VramProvider>(
     }
 
     let mut backend: Be<'_, P> = if use_prealloc {
+        if let Some(gate) = budget_gate {
+            gate.allow_commit(0, size)
+                .map_err(|message| format!("WDDM prealloc refused: {message}"))?;
+        }
         let mut mem = provider.alloc(size as usize)?;
         mem.zero()?;
         eprintln!(
@@ -526,13 +587,14 @@ fn run_nbd<P: VramProvider>(
         let env_cap = commit_cap_bytes_from_env();
         let auto_cap = safe_commit_cap(size, total, reserve);
         let commit_cap = env_cap.min(auto_cap);
-        let sparse = SparseVramBackend::new_with_limits(
+        let sparse = SparseVramBackend::new_with_limits_and_gate(
             &provider,
             size,
             chunk,
             BLOCK_SIZE,
             reserve,
             Some(commit_cap),
+            budget_gate,
         )
         .map_err(|e| e.0)?;
         eprintln!(
@@ -635,8 +697,10 @@ fn run_nbd<P: VramProvider>(
                     }
                 }
 
-                if touches_vram && !demoted && demote_rx.is_none() {
-                    if let Some(reason) = residency_check(
+                if touches_vram
+                    && !demoted
+                    && demote_rx.is_none()
+                    && let Some(reason) = residency_check(
                         lat_us,
                         &mut canary,
                         &mut baseline,
@@ -644,25 +708,25 @@ fn run_nbd<P: VramProvider>(
                         &mut cadence,
                         &mut probe,
                         || provider.mem_info().ok().map(|(f, _)| f),
-                    ) {
-                        let sparse = matches!(backend, Be::Sparse(_));
-                        // Sparse: chunk-alloc latency ≠ WDDM eviction. FreeFloor → reclaim only.
-                        // Only Corruption forces swapoff on sparse.
-                        let skip = match (sparse, reason) {
-                            (true, DemoteReason::FreeFloor) | (true, DemoteReason::Latency) => {
-                                eprintln!(
-                                    "[ramsharedd] sparse skip swapoff for {reason:?} lat={lat_us}us"
-                                );
-                                true
-                            }
-                            _ => false,
-                        };
-                        if !skip {
+                    )
+                {
+                    let sparse = matches!(backend, Be::Sparse(_));
+                    // Sparse: chunk-alloc latency ≠ WDDM eviction. FreeFloor → reclaim only.
+                    // Only Corruption forces swapoff on sparse.
+                    let skip = match (sparse, reason) {
+                        (true, DemoteReason::FreeFloor) | (true, DemoteReason::Latency) => {
                             eprintln!(
-                                "[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}"
+                                "[ramsharedd] sparse skip swapoff for {reason:?} lat={lat_us}us"
                             );
-                            demote_rx = Some(spawn_swapoff(&nbd_dev));
+                            true
                         }
+                        _ => false,
+                    };
+                    if !skip {
+                        eprintln!(
+                            "[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}"
+                        );
+                        demote_rx = Some(spawn_swapoff(&nbd_dev));
                     }
                 }
             }
@@ -726,10 +790,10 @@ fn nbd_used_kb_from_proc(nbd_dev: &str) -> u64 {
             continue;
         }
         let name = cols[0];
-        if name.contains(bare) || name == key {
-            if let Ok(u) = cols[3].parse::<u64>() {
-                return u;
-            }
+        if (name.contains(bare) || name == key)
+            && let Ok(u) = cols[3].parse::<u64>()
+        {
+            return u;
         }
     }
     0

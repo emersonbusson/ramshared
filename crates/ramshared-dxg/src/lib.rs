@@ -176,11 +176,7 @@ impl GpuBudgetProvider for DxgBudgetProvider {
             memory_segment_group: 0,
             ..Default::default()
         };
-        ioctl_mut(
-            &self.file,
-            uapi::QUERY_VIDEO_MEMORY_INFO_IOCTL,
-            &mut query,
-        )?;
+        ioctl_mut(&self.file, uapi::QUERY_VIDEO_MEMORY_INFO_IOCTL, &mut query)?;
         if query.process != 0 {
             return Err(DxgError::Malformed("process"));
         }

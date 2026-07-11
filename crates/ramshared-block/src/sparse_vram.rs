@@ -13,6 +13,11 @@ use crate::{BlockBackend, IoError};
 /// Default chunk size (MiB) — SPEC `RAMSHARED_VRAM_CHUNK_MIB` default 128.
 pub const DEFAULT_CHUNK_MIB: u64 = 128;
 
+/// Host-authoritative admission check invoked before a physical VRAM commit.
+pub trait CommitBudgetGate {
+    fn allow_commit(&self, committed: u64, next_chunk: u64) -> Result<(), String>;
+}
+
 /// One sparse slot.
 struct Chunk<'p, P: VramProvider + 'p> {
     mem: Option<P::Mem<'p>>,
@@ -30,11 +35,13 @@ pub struct SparseVramBackend<'p, P: VramProvider + 'p> {
     reserve_floor_bytes: u64,
     /// Hard cap on sum of Live chunks (≤ capacity). Protects 6 GiB cards from full fill.
     commit_cap_bytes: u64,
+    budget_gate: Option<&'p dyn CommitBudgetGate>,
     chunks: Vec<Chunk<'p, P>>,
     /// Telemetry counters.
     pub alloc_fails: u64,
     pub reclaim_frees: u64,
     pub floor_refuses: u64,
+    pub budget_refuses: u64,
 }
 
 impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
@@ -45,12 +52,13 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         chunk_bytes: u64,
         block_size: u32,
     ) -> Result<Self, IoError> {
-        Self::new_with_limits(
+        Self::new_with_limits_and_gate(
             provider,
             capacity,
             chunk_bytes,
             block_size,
             reserve_floor_bytes_from_env(),
+            None,
             None,
         )
     }
@@ -64,10 +72,30 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         reserve_floor_bytes: u64,
         commit_cap_bytes: Option<u64>,
     ) -> Result<Self, IoError> {
+        Self::new_with_limits_and_gate(
+            provider,
+            capacity,
+            chunk_bytes,
+            block_size,
+            reserve_floor_bytes,
+            commit_cap_bytes,
+            None,
+        )
+    }
+
+    pub fn new_with_limits_and_gate(
+        provider: &'p P,
+        capacity: u64,
+        chunk_bytes: u64,
+        block_size: u32,
+        reserve_floor_bytes: u64,
+        commit_cap_bytes: Option<u64>,
+        budget_gate: Option<&'p dyn CommitBudgetGate>,
+    ) -> Result<Self, IoError> {
         if capacity == 0 {
             return Err(IoError("sparse: capacity 0".into()));
         }
-        if chunk_bytes == 0 || chunk_bytes % u64::from(block_size) != 0 {
+        if chunk_bytes == 0 || !chunk_bytes.is_multiple_of(u64::from(block_size)) {
             return Err(IoError(format!(
                 "sparse: chunk_bytes={chunk_bytes} must be >0 and multiple of block_size={block_size}"
             )));
@@ -96,10 +124,12 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
             block_size,
             reserve_floor_bytes,
             commit_cap_bytes: commit_cap,
+            budget_gate,
             chunks,
             alloc_fails: 0,
             reclaim_frees: 0,
             floor_refuses: 0,
+            budget_refuses: 0,
         })
     }
 
@@ -177,9 +207,13 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
             return Ok(());
         }
         // Commit cap: do not fill past safe physical budget (capacity may be 6G on 6G GPU).
-        let next_commit = self
-            .committed_bytes()
-            .saturating_add(self.chunk_bytes);
+        let next_commit = self.committed_bytes().saturating_add(self.chunk_bytes);
+        if let Some(gate) = self.budget_gate
+            && let Err(message) = gate.allow_commit(self.committed_bytes(), self.chunk_bytes)
+        {
+            self.budget_refuses = self.budget_refuses.saturating_add(1);
+            return Err(IoError(format!("sparse host budget: {message}")));
+        }
         if next_commit > self.commit_cap_bytes {
             self.floor_refuses = self.floor_refuses.saturating_add(1);
             return Err(IoError(format!(
@@ -193,9 +227,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         // Free-floor: never take the last reserve of GPU (desktop/game headroom).
         match self.provider.mem_info() {
             Ok((free, _total)) => {
-                let need = self
-                    .reserve_floor_bytes
-                    .saturating_add(self.chunk_bytes);
+                let need = self.reserve_floor_bytes.saturating_add(self.chunk_bytes);
                 if free < need {
                     self.floor_refuses = self.floor_refuses.saturating_add(1);
                     return Err(IoError(format!(
@@ -367,10 +399,10 @@ pub fn reserve_floor_bytes_from_env() -> u64 {
 
 /// Optional hard commit cap (MiB). Unset → no extra cap beyond capacity (still free-floor).
 pub fn commit_cap_bytes_from_env() -> u64 {
-    if let Ok(s) = std::env::var("RAMSHARED_VRAM_COMMIT_CAP_MIB") {
-        if let Ok(mib) = s.trim().parse::<u64>() {
-            return mib.clamp(256, 64 * 1024).saturating_mul(1024 * 1024);
-        }
+    if let Ok(s) = std::env::var("RAMSHARED_VRAM_COMMIT_CAP_MIB")
+        && let Ok(mib) = s.trim().parse::<u64>()
+    {
+        return mib.clamp(256, 64 * 1024).saturating_mul(1024 * 1024);
     }
     // Default: huge (effectively capacity.min later)
     u64::MAX / 4
@@ -551,8 +583,8 @@ mod tests {
             2 * chunk,
             chunk,
             4096,
-            0,              // no free-floor (fake has lots of free)
-            Some(chunk),    // only one chunk allowed
+            0,           // no free-floor (fake has lots of free)
+            Some(chunk), // only one chunk allowed
         )
         .unwrap();
         be.write_at(0, &[1u8; 4096]).unwrap();

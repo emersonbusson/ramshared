@@ -3,8 +3,8 @@
 //! residency canary (§9) are integrated in subsequent increments.
 #![forbid(unsafe_code)]
 
-pub mod backend;
 pub mod autotier;
+pub mod backend;
 pub mod broker_srv;
 pub mod canary_probe;
 pub mod conn;
