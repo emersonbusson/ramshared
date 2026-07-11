@@ -707,3 +707,26 @@ sudo bash scripts/safety/cascade-pressure-probe.sh --max-sec 50
 - pressure with 4G nbd: zram→nbd PASS; nbd remains
 - unit tests sparse: 8 passed (floor refuse + safe_commit_cap)
 **Verdict:** ✅ 4G live; 6G capacity safe via commit_cap; free-floor on alloc
+
+## 2026-07-11 — WDDM autotier safety audit and deployment
+
+**What:** Close the Phase 1 audit findings without live memory pressure.
+
+**Code evidence:**
+- constrained WDDM admission completes the already accepted NBD write and schedules demote;
+- startup CUDA fallback is limited to `/dev/dxg` unavailable;
+- teardown retries and refuses CUDA release without confirmed swapoff plus `used_kb == 0`;
+- controller polls WDDM/swapoff every 5 seconds and recovers only an empty tier after 3 healthy samples.
+
+**Validation:**
+- workspace default tests: 273 passed; 22 environment-gated;
+- safe GPU ignored tests: 5 passed;
+- `ramshared-dxg`: 92/92 lines covered (100%);
+- `autotier.rs`: 68/68 lines covered (100%);
+- fmt, clippy `-D warnings`, RustSec, cargo-deny, and docs-check: GREEN;
+- final daemon release inode matches the running process and `/dev/dxg` is open;
+- final swap order: zram 200 → nbd0 100 → sdc -2; nbd0 used=0; no ghost swap.
+
+**Not claimed:** live host-budget pressure with resident swap pages. That benchmark remains isolated-lab only.
+
+**Verdict:** ✅ Phase 1 code/deployment GREEN; isolated pressure gate remains open.

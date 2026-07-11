@@ -2,7 +2,7 @@
 
 ## Status
 
-**PARTIAL GREEN.** The Phase 1 WDDM provider, pure state policy, and physical commit gate are implemented. Automatic live demote/re-enable (ITEM-4) remains blocked by the audit's isolated absorption/timeout gate. Phase 2 and Phase 3 are intentionally unresolved.
+**PHASE 1 CODE GREEN; HARDWARE PRESSURE GATE OPEN.** The WDDM provider, lossless constrained-write handling, bounded demote polling, fail-safe teardown, and empty-tier recovery are implemented and deployed. A real host-budget reduction with live swap pages still requires an isolated GPU-PV lab. Phase 2 and Phase 3 remain unresolved.
 
 ## Traceability
 
@@ -11,7 +11,7 @@
 | RF-1..RF-3 / ITEM-1 | `ramshared-dxg`: bounded enum/query/close and ambiguity refusal | GREEN |
 | RF-4..RF-8 / ITEM-2 | `autotier.rs`: saturating arithmetic, stale gate, five states | GREEN (pure policy) |
 | RF-5..RF-7 / ITEM-3 | `CommitBudgetGate` before CUDA allocation; startup-only fallback | GREEN |
-| RF-8..RF-10 / ITEM-4 | live demote/recovery | environment-bound |
+| RF-8..RF-10 / ITEM-4 | idle polling, bounded swapoff, parked state, 3-sample empty-tier recovery | CODE GREEN; pressure drill environment-bound |
 | RF-11 / ITEM-5 | existing priority and NBD paths preserved | GREEN (regression) |
 
 ## Validation
@@ -25,6 +25,13 @@ No new performance numbers are claimed.
 - Final scoped suite: 157 tests passed; 19 GPU/root/ublk tests remained explicitly ignored.
 - `cargo clippy -p ramshared-block -p ramshared-dxg -p ramshared-wsl2d --all-targets -- -D warnings`: GREEN, 0 warnings.
 - Live `/dev/dxg`, CUDA allocation, swapoff, reset, and pressure tests: **not run in this agent environment**.
+- Safety audit RED/GREEN: constrained NBD writes no longer return EIO; malformed dxg never falls back; teardown requires confirmed swapoff plus `used_kb == 0`.
+- Workspace default suite: 273 tests passed after the final changes; 22 privileged/GPU tests remained gated.
+- Safe GPU suite: 5 additional tests passed (CUDA 256 MiB, Vulkan 2, VRAM backend 2).
+- Coverage: `ramshared-dxg` 92/92 lines and `autotier.rs` 68/68 lines (**100% each**, no exclusions).
+- Workspace aggregate coverage remains below 100% because legacy Windows/ublk binaries require other environments; no 100% workspace claim is made.
+- `cargo fmt --check`, workspace clippy `-D warnings`, `cargo audit`, `cargo deny`, and docs-check: GREEN (duplicate `windows-sys` warning only).
+- Live deployment: active daemon inode matches the final release binary, holds `/dev/dxg`, and serves NBD priority 100 with `used=0` at deployment.
 
 ## External gaps
 
