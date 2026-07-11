@@ -25,10 +25,12 @@ use ramshared_block::{
 use ramshared_broker::arbiter::ArbiterConfig;
 use ramshared_broker::slices::SliceMap;
 use ramshared_cuda::Cuda;
-use ramshared_dxg::{DxgBudgetProvider, DxgError, GpuBudgetProvider};
+use ramshared_dxg::{DxgBudgetProvider, GpuBudgetProvider};
 use ramshared_vram::{VramMemory, VramProvider};
 use ramshared_vulkan::VulkanProvider;
-use ramshared_wsl2d::autotier::{AutotierConfig, BudgetInput, commit_allowed};
+use ramshared_wsl2d::autotier::{
+    AutotierConfig, BudgetInput, backend_release_allowed, commit_allowed,
+};
 use ramshared_wsl2d::broker_srv::{BrokerConfig, EndpointCfg, spawn_broker};
 use ramshared_wsl2d::swap::spawn_swapoff;
 use ramshared_wsl2d::{
@@ -477,16 +479,14 @@ fn run_nbd<P: VramProvider>(
                 );
                 Some(provider)
             }
-            Err(error @ (DxgError::AmbiguousAdapters(_) | DxgError::AdapterNotFound(_))) => {
-                return Err(error.into());
-            }
-            Err(error) => {
+            Err(error) if error.permits_startup_fallback() => {
                 eprintln!(
                     "[ramsharedd] budget_source=cuda-fallback reason={error}; \
                      CUDA free-floor is secondary compatibility mode"
                 );
                 None
             }
+            Err(error) => return Err(error.into()),
         }
     } else {
         None
@@ -629,6 +629,9 @@ fn run_nbd<P: VramProvider>(
     let mut baseline: Vec<u64> = Vec::new();
     let mut demoted = false;
     let mut demote_rx: Option<std::sync::mpsc::Receiver<bool>> = None;
+    let mut swapoff_attempted = false;
+    let mut swapoff_confirmed = false;
+    let mut observed_budget_refuses = 0;
     let mut live = LiveCount::new();
 
     // recv_timeout so sparse reclaim runs even with no NBD I/O (idle free).
@@ -677,6 +680,7 @@ fn run_nbd<P: VramProvider>(
                     match rx.try_recv() {
                         Ok(true) => {
                             demoted = true;
+                            swapoff_confirmed = true;
                             eprintln!(
                                 "[ramsharedd] DEMOTE: swapoff {nbd_dev} OK (canario desarmado)"
                             );
@@ -726,10 +730,26 @@ fn run_nbd<P: VramProvider>(
                         eprintln!(
                             "[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}"
                         );
-                        demote_rx = Some(spawn_swapoff(&nbd_dev));
+                            demote_rx = Some(spawn_swapoff(&nbd_dev));
+                            swapoff_attempted = true;
+                        }
                     }
                 }
-            }
+
+                let budget_refuses = match &backend {
+                    Be::Sparse(sparse) => sparse.budget_refuses,
+                    Be::Pre(_) => 0,
+                };
+                if budget_refuses > observed_budget_refuses {
+                    observed_budget_refuses = budget_refuses;
+                    if !demoted && demote_rx.is_none() {
+                        eprintln!(
+                            "[ramsharedd] WDDM constrained -> bounded swapoff {nbd_dev}"
+                        );
+                        demote_rx = Some(spawn_swapoff(&nbd_dev));
+                        swapoff_attempted = true;
+                    }
+                }
         }
 
         // SPEC ITEM-2: reclaim on worker thread (I/O or idle tick).
@@ -751,6 +771,7 @@ fn run_nbd<P: VramProvider>(
     if let Some(rx) = demote_rx.take() {
         match rx.recv_timeout(std::time::Duration::from_secs(5)) {
             Ok(true) => {
+                swapoff_confirmed = true;
                 eprintln!("[ramsharedd] teardown: swapoff {nbd_dev} confirmado (DEMOTE limpo)")
             }
             Ok(false) => eprintln!(
@@ -760,6 +781,24 @@ fn run_nbd<P: VramProvider>(
                 "[ramsharedd] teardown: AVISO swapoff {nbd_dev} sem confirmacao em 5s (timeout/thread sumiu)"
             ),
         }
+    }
+    let mut used_kb = nbd_used_kb_from_proc(&nbd_dev);
+    while !backend_release_allowed(swapoff_attempted, swapoff_confirmed, used_kb) {
+        eprintln!(
+            "[ramsharedd] REFUSE teardown: swapoff_confirmed={swapoff_confirmed} \
+             used_kb={used_kb}; keeping CUDA backend alive"
+        );
+        if !swapoff_attempted {
+            swapoff_attempted = true;
+        }
+        if swapoff_attempted
+            && !swapoff_confirmed
+            && let Ok(true) = spawn_swapoff(&nbd_dev).recv_timeout(Duration::from_secs(30))
+        {
+            swapoff_confirmed = true;
+        }
+        std::thread::sleep(Duration::from_secs(5));
+        used_kb = nbd_used_kb_from_proc(&nbd_dev);
     }
     match &mut backend {
         Be::Pre(b) => {

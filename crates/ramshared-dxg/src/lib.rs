@@ -75,6 +75,7 @@ pub trait GpuBudgetProvider {
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum DxgError {
+    Unavailable(String),
     Io(String),
     NoAdapters,
     AmbiguousAdapters(usize),
@@ -86,6 +87,7 @@ pub enum DxgError {
 impl fmt::Display for DxgError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Unavailable(message) => write!(f, "dxg unavailable: {message}"),
             Self::Io(message) => write!(f, "dxg ioctl failed: {message}"),
             Self::NoAdapters => write!(f, "dxg returned no adapters"),
             Self::AmbiguousAdapters(count) => {
@@ -99,6 +101,12 @@ impl fmt::Display for DxgError {
 }
 
 impl std::error::Error for DxgError {}
+
+impl DxgError {
+    pub fn permits_startup_fallback(&self) -> bool {
+        matches!(self, Self::Unavailable(_))
+    }
+}
 
 pub fn select_adapter(
     adapters: &[AdapterLuid],
@@ -137,7 +145,7 @@ impl DxgBudgetProvider {
             .read(true)
             .write(true)
             .open(path)
-            .map_err(|error| DxgError::Io(error.to_string()))?;
+            .map_err(|error| DxgError::Unavailable(error.to_string()))?;
         let infos = enumerate(&file)?;
         let luids: Vec<_> = infos
             .iter()
