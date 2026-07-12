@@ -1,17 +1,17 @@
-//! `ramshared-vulkan` — backend Vulkan do `VramProvider` (RF-G2).
+//! `ramshared-vulkan` — Vulkan backend of `VramProvider` (RF-G2).
 //!
-//! 2ª implementação do trait `ramshared_vram::VramProvider` (a 1ª, CUDA, fica intacta), destravando
-//! "qualquer GPU" + um host Linux nativo onde o ublk+VRAM e o eviction-sob-carga rodam e2e.
+//! Second implementation of the `ramshared_vram::VramProvider` trait (the first one, CUDA, remains intact),
+//! unlocking "any GPU" support + a native Linux host where ublk+VRAM and eviction-under-load run e2e.
 //!
-//! **IMPL completa (RF-V1..V3):** `open` faz loader, instância, physical device, device lógico,
-//! transfer queue e staging `HOST_VISIBLE|HOST_COHERENT`. `impl VramProvider` cobre `alloc`
-//! (`DEVICE_LOCAL`) e `mem_info`. `impl VramMemory` cobre `read_at`/`write_at` (staging +
-//! `vkCmdCopyBuffer` + `VkFence`) e `zero` (`vkCmdFillBuffer`). Conforme
+//! **Complete IMPL (RF-V1..V3):** `open` initializes the loader, instance, physical device, logical device,
+//! transfer queue, and staging buffer (`HOST_VISIBLE|HOST_COHERENT`). `impl VramProvider` covers `alloc`
+//! (`DEVICE_LOCAL`) and `mem_info`. `impl VramMemory` covers `read_at`/`write_at` (staging +
+//! `vkCmdCopyBuffer` + `VkFence`) and `zero` (`vkCmdFillBuffer`). According to
 //! `docs/vulkan-backend/SPEC.md` (DT-1..DT-10).
 //!
-//! Validável por **software** (lavapipe/llvmpipe) sem GPU — todo `unsafe` (FFI `ash`) é isolado aqui
-//! com `// SAFETY:` por bloco; a fronteira do trait é segura. `mem_info` usa `VK_EXT_memory_budget`
-//! quando presente; senão o fallback DT-10 (maior heap `DEVICE_LOCAL` − Σ alocado).
+//! Validated via software rendering (lavapipe/llvmpipe) without a GPU — all unsafe blocks (FFI `ash`) are isolated here
+//! with `// SAFETY:` for each block; the trait boundary is safe. `mem_info` uses `VK_EXT_memory_budget`
+//! when present; otherwise, it falls back to DT-10 (largest `DEVICE_LOCAL` heap − sum allocated).
 
 use std::ffi::CStr;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,15 +19,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ash::vk;
 use ramshared_vram::{VramError, VramMemory, VramProvider};
 
-/// Staging buffer único por provider (sem alloc no hot path, DT-8): 1 MiB. I/O maior é fatiado.
+/// Single staging buffer per provider (no alloc on hot path, DT-8): 1 MiB. Larger I/O is sliced.
 const STAGING_BYTES: u64 = 1 << 20;
 
 fn vk_err(ctx: &str, e: impl std::fmt::Debug) -> VramError {
     VramError::Provider(format!("vulkan {ctx}: {e:?}"))
 }
 
-/// Escolhe uma queue family de transfer (prefere `TRANSFER` explícito; aceita `GRAPHICS`/`COMPUTE`,
-/// que implicam transfer pela spec). Retorna o índice da família.
+/// Selects a transfer queue family (prefers explicit `TRANSFER`; falls back to `GRAPHICS`/`COMPUTE`, which imply transfer per spec). Returns the family index.
 fn pick_transfer_family(instance: &ash::Instance, phys: vk::PhysicalDevice) -> Option<u32> {
     // SAFETY: `phys` foi enumerado de `instance`; a query só lê propriedades.
     let fams = unsafe { instance.get_physical_device_queue_family_properties(phys) };
@@ -98,9 +97,9 @@ impl Drop for ResGuard {
         if !self.armed {
             return;
         }
-        // SAFETY: todos os handles `Some` foram criados de `self.device` neste fluxo e são destruídos
-        // exatamente uma vez (ordem inversa da alocação). `device_wait_idle` garante que nada está em
-        // voo antes de liberar.
+        // SAFETY: all Some handles were created from self.device in this flow and are destroyed
+        // exactly once (in reverse order of allocation). device_wait_idle guarantees nothing is
+        // in-flight before freeing.
         unsafe {
             let _ = self.device.device_wait_idle();
             if let Some(m) = self.staging_memory {
@@ -123,11 +122,11 @@ impl Drop for ResGuard {
     }
 }
 
-/// Provedor Vulkan (thread-afim — criar/usar na mesma thread, igual ao contexto CUDA; a fila é
-/// externamente sincronizada, DT-7). Mantém 1 staging buffer + 1 cmd buffer + 1 fence reusados.
+/// Vulkan Provider (thread-affine — create/use in the same thread, same as CUDA context;
+/// the queue is externally synchronized, DT-7). Reuses 1 staging buffer + 1 cmd buffer + 1 fence.
 pub struct VulkanProvider {
     instance: ash::Instance,
-    _entry: ash::Entry, // mantém o loader vivo enquanto a instância existir
+    _entry: ash::Entry, // keeps the loader alive as long as the instance exists
     phys: vk::PhysicalDevice,
     device: ash::Device,
     queue: vk::Queue,
@@ -137,23 +136,23 @@ pub struct VulkanProvider {
     staging_buffer: vk::Buffer,
     staging_memory: vk::DeviceMemory,
     staging_mapped: *mut u8,
-    allocated: AtomicU64, // Σ bytes alocados via `alloc` (fallback do `mem_info`, DT-10)
+    allocated: AtomicU64, // Σ bytes allocated via `alloc` (fallback of `mem_info`, DT-10)
     name: String,
 }
 
 impl VulkanProvider {
-    /// Carrega o loader Vulkan, cria instância, seleciona o physical device (prefere `DISCRETE_GPU`;
-    /// senão o `ordinal`) e monta o device lógico + transfer queue + staging. RF-V1.
+    /// Loads the Vulkan loader, creates an instance, selects the physical device (prefers `DISCRETE_GPU`;
+    /// otherwise the ordinal), and sets up logical device + transfer queue + staging. RF-V1.
     pub fn open(ordinal: u32) -> Result<Self, VramError> {
-        // SAFETY: carrega libvulkan.so.1 via libloading; os símbolos vivem enquanto `entry` viver.
+        // SAFETY: loads libvulkan.so.1 via libloading; symbols remain valid as long as `entry` lives.
         let entry = unsafe { ash::Entry::load() }.map_err(|e| vk_err("load", e))?;
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
         let ci = vk::InstanceCreateInfo::default().application_info(&app);
-        // SAFETY: `ci`/`app` válidos durante a chamada; `None` = allocator padrão.
+        // SAFETY: `ci`/`app` valid during call; `None` = default allocator.
         let instance = unsafe { entry.create_instance(&ci, None) }
             .map_err(|e| vk_err("create_instance", e))?;
 
-        // A partir daqui, qualquer erro precisa destruir a instância (idiom goto out_err).
+        // From this point on, any error must destroy the instance (goto out_err idiom).
         match Self::after_instance(&instance, ordinal) {
             Ok((phys, name, bits)) => Ok(Self {
                 instance,
@@ -171,19 +170,19 @@ impl VulkanProvider {
                 name,
             }),
             Err(e) => {
-                // SAFETY: `instance` criada acima e destruída exatamente uma vez aqui.
+                // SAFETY: `instance` created above and destroyed exactly once here.
                 unsafe { instance.destroy_instance(None) };
                 Err(e)
             }
         }
     }
 
-    /// Seleção de device + nome + montagem dos recursos do device (já com cleanup próprio em erro).
+    /// Device selection + name + creation of device resources (with its own cleanup on error).
     fn after_instance(
         instance: &ash::Instance,
         ordinal: u32,
     ) -> Result<(vk::PhysicalDevice, String, DeviceBits), VramError> {
-        // SAFETY: `instance` válida.
+        // SAFETY: `instance` valid.
         let pdevs = unsafe { instance.enumerate_physical_devices() }
             .map_err(|e| vk_err("enumerate_physical_devices", e))?;
         if pdevs.is_empty() {
@@ -230,17 +229,17 @@ impl VulkanProvider {
             .unwrap_or(0)
     }
 
-    /// Grava + submete + espera 1 comando na transfer queue (síncrono, DT-5). O `record` grava no
-    /// `cmd_buf` reusado; após o `wait`, a fence é resetada. Single-thread (DT-7): sem corrida no
-    /// cmd_buf/fence/staging compartilhados.
+    /// Records + submits + waits for 1 command on the transfer queue (synchronous, DT-5).
+    /// `record` writes to the reused `cmd_buf`; after `wait`, the fence is reset.
+    /// Single-threaded (DT-7): no races on shared cmd_buf/fence/staging.
     fn submit_wait<F>(&self, record: F) -> Result<(), VramError>
     where
         F: FnOnce(&ash::Device, vk::CommandBuffer),
     {
         let dev = &self.device;
         let cmd = self.cmd_buf;
-        // SAFETY: `cmd` veio do `cmd_pool` deste provider; resetado antes de regravar; uso
-        // single-thread. As chamadas de gravação dentro de `record` têm seu próprio `// SAFETY:`.
+        // SAFETY: `cmd` came from the `cmd_pool` of this provider; reset before rewriting;
+        // single-threaded usage. The recording calls inside `record` have their own `// SAFETY:`.
         unsafe {
             dev.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty())
                 .map_err(|e| vk_err("reset_command_buffer", e))?;
@@ -265,7 +264,7 @@ impl VulkanProvider {
     }
 }
 
-/// Cria device lógico + queue + cmd pool/buffer + fence + staging mapeado, com cleanup RAII em erro.
+/// Creates logical device + queue + cmd pool/buffer + fence + mapped staging buffer, with RAII cleanup on error.
 fn create_device_resources(
     instance: &ash::Instance,
     phys: vk::PhysicalDevice,
@@ -276,8 +275,8 @@ fn create_device_resources(
         .queue_family_index(qf)
         .queue_priorities(&prio)];
     let dci = vk::DeviceCreateInfo::default().queue_create_infos(&qci);
-    // SAFETY: `dci`/`qci`/`prio` válidos durante a chamada; `phys` enumerado de `instance`. Antes do
-    // device não há recurso a limpar (se falhar, retorna direto).
+    // SAFETY: `dci`/`qci`/`prio` valid during call; `phys` enumerated from `instance`. Before
+    // device creation, there are no resources to clean up (returns directly on failure).
     let device = unsafe { instance.create_device(phys, &dci, None) }
         .map_err(|e| vk_err("create_device", e))?;
 
@@ -366,8 +365,8 @@ fn create_device_resources(
     guard.mapped = true;
     let staging_mapped = raw.cast::<u8>();
 
-    // Sucesso: desarma o guard e leva os handles (o device é clonado — handle leve do `ash`; o
-    // destroy real fica no `Drop` do `VulkanProvider`).
+    // Success: disarms the guard and extracts the handles (the device is cloned — lightweight handle from ash;
+    // the actual destroy is done in Drop of VulkanProvider).
     guard.armed = false;
     Ok(DeviceBits {
         device: guard.device.clone(),
@@ -382,27 +381,27 @@ fn create_device_resources(
 }
 
 impl VramProvider for VulkanProvider {
-    // GAT: a memória empresta `&self` (igual ao `DeviceMem` do CUDA) → afinidade de thread sem `Arc`.
+    // GAT: memory borrows &self (same as CUDA's DeviceMem) -> thread affinity without Arc.
     type Mem<'p>
         = VulkanMem<'p>
     where
         Self: 'p;
 
     fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
-        // Arredonda o buffer p/ múltiplo de 4 (requisito do `vkCmdFillBuffer` com WHOLE_SIZE no
-        // `zero`); o `len` lógico continua sendo `bytes`.
+        // Rounds buffer size to a multiple of 4 (requirement for vkCmdFillBuffer with WHOLE_SIZE
+        // in zero); the logical len remains `bytes`.
         let buf_size = ((bytes as u64).max(1) + 3) & !3;
         let buf_ci = vk::BufferCreateInfo::default()
             .size(buf_size)
             .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        // SAFETY: device + buf_ci válidos.
+        // SAFETY: device + buf_ci valid.
         let buffer = unsafe { self.device.create_buffer(&buf_ci, None) }
             .map_err(|e| vk_err("create_buffer", e))?;
 
-        // SAFETY: buffer válido.
+        // SAFETY: buffer valid.
         let req = unsafe { self.device.get_buffer_memory_requirements(buffer) };
-        // SAFETY: phys válido.
+        // SAFETY: phys valid.
         let mprops = unsafe {
             self.instance
                 .get_physical_device_memory_properties(self.phys)
@@ -414,28 +413,28 @@ impl VramProvider for VulkanProvider {
         ) {
             Some(i) => i,
             None => {
-                // SAFETY: buffer criado acima; destruído antes de retornar (sem leak).
+                // SAFETY: buffer created above; destroyed before returning (no leak).
                 unsafe { self.device.destroy_buffer(buffer, None) };
                 return Err(VramError::Provider(
-                    "sem memory type DEVICE_LOCAL p/ o buffer".into(),
+                    "no DEVICE_LOCAL memory type for the buffer".into(),
                 ));
             }
         };
         let mai = vk::MemoryAllocateInfo::default()
             .allocation_size(req.size)
             .memory_type_index(mt);
-        // SAFETY: device + mai válidos.
+        // SAFETY: device + mai valid.
         let memory = match unsafe { self.device.allocate_memory(&mai, None) } {
             Ok(m) => m,
             Err(e) => {
-                // SAFETY: buffer criado acima; destruído no erro.
+                // SAFETY: buffer created above; destroyed on error.
                 unsafe { self.device.destroy_buffer(buffer, None) };
                 return Err(vk_err("allocate_memory", e));
             }
         };
-        // SAFETY: buffer + memory válidos; offset 0.
+        // SAFETY: buffer + memory valid; offset 0.
         if let Err(e) = unsafe { self.device.bind_buffer_memory(buffer, memory, 0) } {
-            // SAFETY: buffer + memory criados acima; liberados na ordem inversa no erro.
+            // SAFETY: buffer + memory created above; freed in reverse order on error.
             unsafe {
                 self.device.free_memory(memory, None);
                 self.device.destroy_buffer(buffer, None);
@@ -452,8 +451,8 @@ impl VramProvider for VulkanProvider {
     }
 
     fn mem_info(&self) -> Result<(u64, u64), VramError> {
-        // DT-10 (fallback sem VK_EXT_memory_budget): total = maior heap DEVICE_LOCAL; free = total −
-        // Σ alocado por este provider. (Budget exato p/ VRAM de outros processos: só no real-GPU.)
+        // DT-10 (fallback without VK_EXT_memory_budget): total = largest DEVICE_LOCAL heap; free = total −
+        // Σ allocated by this provider. (Exact budget for VRAM of other processes: only on physical GPU.)
         let total = self.device_local_total();
         let used = self.allocated.load(Ordering::Relaxed);
         Ok((total.saturating_sub(used), total))
@@ -462,9 +461,9 @@ impl VramProvider for VulkanProvider {
 
 impl Drop for VulkanProvider {
     fn drop(&mut self) {
-        // SAFETY: recursos criados em `open`, destruídos uma vez na ordem inversa da alocação. Todos
-        // os `VulkanMem` já caíram (emprestam `&self`), então o staging/fila estão ociosos; ainda
-        // assim `device_wait_idle` garante quiesce. `_entry`/`instance` caem depois (campos).
+        // SAFETY: resources created in open, destroyed once in reverse order of allocation. All
+        // VulkanMem have already dropped (borrowing &self), so staging/queue are idle;
+        // device_wait_idle still guarantees quiescence. _entry/instance drop later (fields).
         unsafe {
             let _ = self.device.device_wait_idle();
             self.device.unmap_memory(self.staging_memory);
@@ -478,7 +477,7 @@ impl Drop for VulkanProvider {
     }
 }
 
-/// Região de VRAM Vulkan (GAT: empresta `&'p VulkanProvider`). RAII: `Drop` libera buffer+memory.
+/// Vulkan VRAM region (GAT: borrows `&'p VulkanProvider`). RAII: `Drop` frees buffer+memory.
 pub struct VulkanMem<'p> {
     provider: &'p VulkanProvider,
     buffer: vk::Buffer,
@@ -487,7 +486,7 @@ pub struct VulkanMem<'p> {
 }
 
 impl VulkanMem<'_> {
-    /// `off + len ≤ self.len`, senão `OutOfRange` (espelha o bounds-check do CUDA).
+    /// `off + len <= self.len`, otherwise `OutOfRange` (mirrors CUDA's bounds check).
     fn check_bounds(&self, off: u64, len: usize) -> Result<(), VramError> {
         match off.checked_add(len as u64) {
             Some(end) if end <= self.len as u64 => Ok(()),
@@ -508,8 +507,8 @@ impl VramMemory for VulkanMem<'_> {
     fn zero(&mut self) -> Result<(), VramError> {
         let buffer = self.buffer;
         self.provider.submit_wait(|dev, cmd| {
-            // SAFETY: `cmd` em recording; `buffer` deste provider; WHOLE_SIZE zera todo o buffer
-            // (alocado múltiplo de 4 p/ satisfazer o `vkCmdFillBuffer`).
+            // SAFETY: `cmd` in recording; `buffer` of this provider; `WHOLE_SIZE` zeroes the
+            // entire buffer (allocated as a multiple of 4 to satisfy `vkCmdFillBuffer`).
             unsafe { dev.cmd_fill_buffer(cmd, buffer, 0, vk::WHOLE_SIZE, 0) };
         })
     }
@@ -522,18 +521,18 @@ impl VramMemory for VulkanMem<'_> {
         while done < dst.len() {
             let chunk = (dst.len() - done).min(STAGING_BYTES as usize);
             let src_off = off + done as u64;
-            // GPU: copia [src_off, +chunk) do buffer DEVICE_LOCAL → staging.
+            // GPU: copies `[src_off, src_off + chunk)` from the `DEVICE_LOCAL` buffer -> staging.
             p.submit_wait(|dev, cmd| {
                 let region = [vk::BufferCopy::default()
                     .src_offset(src_off)
                     .dst_offset(0)
                     .size(chunk as u64)];
-                // SAFETY: buffers do provider; `chunk ≤ STAGING_BYTES` e bounds-checked no buffer.
+                // SAFETY: buffers belong to the provider; `chunk <= STAGING_BYTES` and bounds-checked on the buffer.
                 unsafe { dev.cmd_copy_buffer(cmd, buffer, p.staging_buffer, &region) };
             })?;
-            // Host: staging.mapped → dst[done..].
-            // SAFETY: `staging_mapped` tem STAGING_BYTES bytes (HOST_VISIBLE|COHERENT, sem flush);
-            // `chunk ≤ STAGING_BYTES`; `dst[done..done+chunk]` é válido (bounds do slice).
+            // Host: staging.mapped -> dst[done..].
+            // SAFETY: `staging_mapped` has `STAGING_BYTES` bytes (`HOST_VISIBLE|HOST_COHERENT`, no flush);
+            // `chunk <= STAGING_BYTES`; `dst[done..done+chunk]` is valid (slice bounds).
             unsafe {
                 std::ptr::copy_nonoverlapping(p.staging_mapped, dst.as_mut_ptr().add(done), chunk)
             };
@@ -549,20 +548,20 @@ impl VramMemory for VulkanMem<'_> {
         let mut done = 0usize;
         while done < src.len() {
             let chunk = (src.len() - done).min(STAGING_BYTES as usize);
-            // Host: src[done..] → staging.mapped.
-            // SAFETY: `staging_mapped` tem STAGING_BYTES bytes; `chunk ≤ STAGING_BYTES`;
-            // `src[done..done+chunk]` é válido (bounds do slice). HOST_COHERENT: sem flush.
+            // Host: src[done..] -> staging.mapped.
+            // SAFETY: `staging_mapped` has `STAGING_BYTES` bytes; `chunk <= STAGING_BYTES`;
+            // `src[done..done+chunk]` is valid (slice bounds). `HOST_COHERENT`: no flush.
             unsafe {
                 std::ptr::copy_nonoverlapping(src.as_ptr().add(done), p.staging_mapped, chunk)
             };
             let dst_off = off + done as u64;
-            // GPU: copia staging → [dst_off, +chunk) do buffer DEVICE_LOCAL.
+            // GPU: copies staging -> `[dst_off, dst_off + chunk)` on the `DEVICE_LOCAL` buffer.
             p.submit_wait(|dev, cmd| {
                 let region = [vk::BufferCopy::default()
                     .src_offset(0)
                     .dst_offset(dst_off)
                     .size(chunk as u64)];
-                // SAFETY: buffers do provider; `chunk ≤ STAGING_BYTES` e bounds-checked no buffer.
+                // SAFETY: buffers belong to the provider; `chunk <= STAGING_BYTES` and bounds-checked on the buffer.
                 unsafe { dev.cmd_copy_buffer(cmd, p.staging_buffer, buffer, &region) };
             })?;
             done += chunk;
@@ -573,8 +572,8 @@ impl VramMemory for VulkanMem<'_> {
 
 impl Drop for VulkanMem<'_> {
     fn drop(&mut self) {
-        // SAFETY: buffer+memory criados em `alloc` deste provider; destruídos uma vez na ordem
-        // inversa. O device segue vivo (emprestamos `&'p provider`).
+        // SAFETY: buffer+memory created in `alloc` of this provider; destroyed once in reverse
+        // order. The device remains alive (borrowing `&'p provider`).
         unsafe {
             self.provider.device.destroy_buffer(self.buffer, None);
             self.provider.device.free_memory(self.memory, None);
@@ -591,10 +590,10 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "requer loader Vulkan + ICD (lavapipe/llvmpipe basta; rodar com --ignored)"]
+    #[ignore = "requires Vulkan loader + ICD (lavapipe/llvmpipe is enough; run with --ignored)"]
     fn open_enumerates_device_and_heap() {
-        let p = VulkanProvider::open(0).expect("abre Vulkan");
-        assert!(!p.device_name().is_empty(), "device tem nome");
+        let p = VulkanProvider::open(0).expect("opens Vulkan");
+        assert!(!p.device_name().is_empty(), "device has a name");
         let total = p.device_local_total();
         eprintln!(
             "Vulkan device='{}' heap_total={} MiB",
@@ -605,29 +604,29 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requer loader Vulkan + ICD (lavapipe basta; rodar com --ignored)"]
+    #[ignore = "requires Vulkan loader + ICD (lavapipe is enough; run with --ignored)"]
     fn vulkan_roundtrip_write_then_read() {
-        let p = VulkanProvider::open(0).expect("abre Vulkan");
+        let p = VulkanProvider::open(0).expect("opens Vulkan");
         let (free0, total) = p.mem_info().expect("mem_info");
         assert!(total > 0, "total > 0");
 
-        // 2 MiB de região; payload > staging (1 MiB) e offset != 0 → exercita o loop de chunks.
+        // 2 MiB region; payload > staging (1 MiB) and offset != 0 -> exercises the chunk loop.
         let size = 2 * 1024 * 1024;
         let mut m = p.alloc(size).expect("alloc 2 MiB");
-        assert_eq!(m.len(), size, "len reportado = bytes pedidos");
+        assert_eq!(m.len(), size, "reported len = requested bytes");
 
-        let n = (STAGING_BYTES as usize) + 4096; // 1 MiB + 4 KiB → 2 chunks
+        let n = (STAGING_BYTES as usize) + 4096; // 1 MiB + 4 KiB -> 2 chunks
         let off = 4096u64;
         let pattern: Vec<u8> = (0..n).map(|i| (i % 251) as u8).collect();
         m.write_at(off, &pattern).expect("write");
         let mut back = vec![0u8; n];
         m.read_at(off, &mut back).expect("read");
-        assert_eq!(back, pattern, "round-trip bytes iguais");
+        assert_eq!(back, pattern, "round-trip identical bytes");
 
-        // zero zera a região.
+        // zero zeroes the region.
         m.zero().expect("zero");
-        m.read_at(off, &mut back).expect("read pós-zero");
-        assert!(back.iter().all(|&b| b == 0), "zero deixou tudo 0");
+        m.read_at(off, &mut back).expect("read post-zero");
+        assert!(back.iter().all(|&b| b == 0), "zero left everything as 0");
 
         // bounds-check.
         let mut one = [0u8; 1];
@@ -636,12 +635,12 @@ mod tests {
                 m.read_at(size as u64, &mut one),
                 Err(VramError::OutOfRange { .. })
             ),
-            "read além do fim → OutOfRange"
+            "read beyond the end -> OutOfRange"
         );
 
-        // free caiu após alloc (fallback DT-10).
+        // free decreased after alloc (fallback DT-10).
         let (free1, _) = p.mem_info().expect("mem_info 2");
-        assert!(free1 <= free0, "free não aumentou após alloc");
+        assert!(free1 <= free0, "free did not increase after alloc");
         eprintln!(
             "Vulkan round-trip OK device='{}' total={} MiB free0={} MiB free1={} MiB",
             p.device_name(),

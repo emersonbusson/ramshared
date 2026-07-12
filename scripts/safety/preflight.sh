@@ -3,9 +3,9 @@
 # VRAM/ublk no host WSL2 vivo. RECUSA (exit != 0) em vez de deixar um start perigoso
 # travar a maquina. Roda o snapshot baseline no sucesso.
 #
-# Motivado pelo incidente 2026-07-03: um `--backend vram` com binario sem o fix do
-# mlockall travou o host (kernel BUG). Este portao garante que so um binario COM o
-# fix, com GPU saudavel e sem device orfao, chegue a rodar.
+# Motivated by the 2026-07-03 incident: a `--backend vram` run with a binary missing the
+# mlockall fix froze the host (kernel BUG). This gate guarantees that only a binary WITH the
+# fix, with a healthy GPU, and without orphaned devices, gets to run.
 #
 # Uso: preflight.sh [caminho_do_binario]
 #   exit 0 = seguro prosseguir (snapshot escrito, coletor armado)
@@ -18,8 +18,8 @@ BIN="${1:-$REPO/target/debug/ramsharedd}"
 FIX_MARKER='MCL_CURRENT-only no caminho ublk+vram'   # string do fix anti-dxgkrnl-BUG (#1)
 MIN_VRAM_FREE_MIB="${RAMSHARED_MIN_VRAM_FREE_MIB:-256}"
 
-# nvidia-smi no WSL2 fica em /usr/lib/wsl/lib, que NAO esta no PATH minimo do systemd.
-# Resolve o caminho completo pra o gate funcionar tanto no shell quanto via ExecStartPre.
+# nvidia-smi in WSL2 is located in /usr/lib/wsl/lib, which is NOT in systemd's minimal PATH.
+# Resolves the full path so the gate works both in the shell and via ExecStartPre.
 NVSMI="$(command -v nvidia-smi 2>/dev/null || true)"
 [ -x "$NVSMI" ] || NVSMI="/usr/lib/wsl/lib/nvidia-smi"
 

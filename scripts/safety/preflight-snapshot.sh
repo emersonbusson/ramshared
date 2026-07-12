@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# preflight-snapshot.sh — Baseline "estado bom conhecido" ANTES de um start arriscado
-# do daemon (VRAM/ublk no host vivo). Grava em armazenamento duravel do Windows pra que,
-# se a maquina travar, dê pra diff contra o ultimo estado bom — e ARMA o coletor
-# postmortem (cria o marcador .armed) pra que o proximo boot saiba que fizemos algo
-# arriscado e colete forense mesmo que nao haja kernel BUG capturado (o caso do
-# travamento #2, que quase nao deixou rastro).
+# preflight-snapshot.sh — Baseline "known good state" BEFORE a risky daemon start
+# (VRAM/ublk on live host). Saves to durable Windows storage so that,
+# if the machine freezes, we can diff against the last good state — and ARMS the
+# postmortem collector (creates the .armed marker) so that the next boot knows we did
+# something risky and collects forensics even if no kernel BUG is captured (the case of
+# crash #2, which left almost no trace).
 #
 # Uso: preflight-snapshot.sh ["cmdline exata que vai rodar"]
 # So LE estado + escreve arquivo. Nao toca GPU/ublk/swap. Seguro.
@@ -60,8 +60,8 @@ SNAP="$FORENSICS_DIR/snapshot-${TS}.md"
   echo '```'
 } > "$SNAP" 2>&1
 
-# ARMA o coletor postmortem: se o boot terminar depois disto sem um teardown limpo,
-# o postmortem --auto vai coletar mesmo sem kernel BUG (cobre o caso do travamento #2).
+# ARMS the postmortem collector: if the boot ends after this without a clean teardown,
+# postmortem --auto will collect even without a kernel BUG (covers crash #2 case).
 touch "$FORENSICS_DIR/.armed" 2>/dev/null
 
 echo "preflight-snapshot: baseline em $SNAP"

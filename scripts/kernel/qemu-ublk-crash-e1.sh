@@ -1,29 +1,29 @@
 #!/usr/bin/env bash
-# qemu-ublk-crash-e1.sh — Experimento E1 (decisao de arquitetura crash-safety do ublk,
-# docs/ublk-teardown-crash-safety/). Testa o cenario que o smoke original
-# (qemu-ublk-daemon.sh) NAO cobre: device armado como SWAP sob pressao real de memoria,
-# daemon morto por SIGKILL (nao SIGTERM) com I/O possivelmente em voo.
+# qemu-ublk-crash-e1.sh — Experiment E1 (ublk crash-safety architecture decision,
+# docs/ublk-teardown-crash-safety/). Tests the scenario that the original smoke test
+# (qemu-ublk-daemon.sh) does NOT cover: device set up as SWAP under real memory pressure,
+# daemon killed by SIGKILL (not SIGTERM) with I/O potentially in flight.
 #
-# Pergunta que decide o ramo (ver docs/ublk-teardown-crash-safety/PRD.md):
-#   Ramo A: /dev/ublkbN some em <=~10s, VM responsiva -> o `ublk_daemon_monitor_work`
-#           do kernel (poll 5s, ublk_drv.c:1486-1516) e suficiente; risco residual e so
-#           a janela + perda das paginas em voo (SIGBUS nos processos donos).
-#   Ramo B: device persiste / VM trava >60s / hung_task no dmesg -> reproduz isolado o
-#           freeze historico do WSL2 (MEMORY.md:883-901); reaper userspace NAO ajudaria
-#           (DEL_DEV passa pelo mesmo del_gendisk que o monitor ja aciona sozinho).
+# Question that decides the branch (see docs/ublk-teardown-crash-safety/PRD.md):
+#   Branch A: /dev/ublkbN disappears in <=~10s, VM remains responsive -> kernel's
+#             `ublk_daemon_monitor_work` (5s poll, ublk_drv.c:1486-1516) is sufficient;
+#             residual risk is only the window + loss of in-flight pages (SIGBUS in owner processes).
+#   Branch B: device persists / VM freezes >60s / hung_task in dmesg -> reproduces the isolated
+#             historical WSL2 freeze (MEMORY.md:883-901); userspace reaper would NOT help
+#             (DEL_DEV goes through the same del_gendisk that the monitor already triggers on its own).
 #
-# v2: corrige 2 problemas da 1a rodada (n=1, inconclusiva por regra propria do projeto,
-# .claude/rules/benchmarks.md "1 amostra mente"): (a) `dmesg` do busybox voltou vazio —
-# trocado por imprimir o serial.log CRU e completo (kernel manda printk pro ttyS0
-# diretamente, entao ja esta la sem depender do applet); (b) o gatilho "Used>0" pegava
-# um blip transitorio (1 pagina) — agora exige um piso mais alto (KB_THRESHOLD) e
-# reamostra antes de decidir, alem de logar se o `dd` de pressao ainda esta vivo no
-# instante do kill (evidencia de I/O em voo).
+# v2: fixes 2 issues from the 1st run (n=1, inconclusive by project's own rule,
+# .claude/rules/benchmarks.md "1 sample lies"): (a) busybox `dmesg` was empty —
+# replaced by printing the raw, complete serial.log (kernel sends printk to ttyS0
+# directly, so it is already there without depending on the applet); (b) "Used>0" trigger caught
+# a transient blip (1 page) — now requires a higher floor (KB_THRESHOLD) and
+# resamples before deciding, in addition to logging if the pressure `dd` is still alive at the
+# moment of the kill (evidence of I/O in flight).
 #
-# Nao roda no host (WSL2 real) de jeito nenhum — so dentro do qemu efemero, RAM-only,
-# sem -hda, mesmo padrao nao-destrutivo do qemu-ublk-daemon.sh (DT-29,
-# .claude/rules/benchmarks.md:23). Sem sudo: qemu roda como usuario normal (TCG se
-# /dev/kvm nao for gravavel).
+# Does not run on host (real WSL2) under any circumstances — only inside transient qemu, RAM-only,
+# without -hda, same non-destructive pattern as qemu-ublk-daemon.sh (DT-29,
+# .claude/rules/benchmarks.md:23). No sudo: qemu runs as a normal user (TCG if
+# /dev/kvm is not writable).
 #
 # uso: qemu-ublk-crash-e1.sh [bzImage] [daemon_bin] [ublk_drv.ko]
 # saida 0 = experimento rodou e produziu um veredito; saida 1 = inconclusivo (setup nao
@@ -95,10 +95,10 @@ else
   echo "=====KTEST-E1-END====="; $BB poweroff -f; exit 0
 fi
 
-# 5) pressao real de memoria via tmpfs (RAM da VM e pequena de proposito: -m 256).
-#    tmpfs e swappable; sob pressao o kernel empurra paginas p/ o /dev/ublkbN. Escreve
-#    em pedacos de 1 MiB, MEDINDO /proc/swaps a cada pedaco (sem depender so de um
-#    watcher externo) p/ garantir que a pressao e continua, nao um blip.
+# 5) real memory pressure via tmpfs (VM RAM is intentionally small: -m 256).
+#    tmpfs is swappable; under pressure the kernel pushes pages to /dev/ublkbN. Writes
+#    in 1 MiB chunks, measuring /proc/swaps at each chunk (without relying only on an
+#    external watcher) to guarantee that pressure is continuous, not a blip.
 $BB mount -t tmpfs -o size=300m tmpfs /mnt/hog
 $BB cat /proc/mounts | $BB grep hog | while read -r l; do echo "KTEST-HOG-MOUNT: $l"; done
 (
@@ -112,8 +112,8 @@ $BB cat /proc/mounts | $BB grep hog | while read -r l; do echo "KTEST-HOG-MOUNT:
 ) &
 DDPID=$!
 
-# 6) espera o swap ATIVAR de forma NAO-trivial (Used >= 4096 KB, nao so >0 -- evita
-#    contar 1 pagina isolada como "ativado"), bounded ~40s. So entao matamos o daemon.
+# 6) waits for swap to ACTIVATE non-trivially (Used >= 4096 KB, not just >0 — avoids
+#    counting a single isolated page as "activated"), bounded ~40s. Only then we kill the daemon.
 KB_THRESHOLD=4096
 SWAPPED=0
 k=0
@@ -131,8 +131,8 @@ echo "KTEST-DD-ALIVE-AT-DECISION=$($BB kill -0 "$DDPID" 2>/dev/null && echo 1 ||
 $BB cat /proc/swaps | while read -r l; do echo "KTEST-PROC-SWAPS: $l"; done
 $BB cat /proc/meminfo | $BB grep -E "^(MemFree|MemAvailable|SwapFree|SwapTotal):" | while read -r l; do echo "KTEST-MEMINFO: $l"; done
 
-# 7) O MOMENTO DECISIVO: SIGKILL (nao SIGTERM) no daemon, com o `dd` de pressao ainda
-#    rodando (checado acima) -- maior chance real de I/O de swap em voo no ublk.
+# 7) DECISIVE MOMENT: SIGKILL (not SIGTERM) to the daemon, with the pressure `dd` still
+#    running (checked above) — higher real chance of swap I/O in flight in ublk.
 T0_MS=$($BB awk '{print int($1*1000)}' /proc/uptime)
 echo "KTEST-KILL-T0-MS=$T0_MS"
 $BB kill -KILL "$DPID"
@@ -150,9 +150,9 @@ ELAPSED_MS=$((T1_MS - T0_MS))
 echo "KTEST-DEVICE-GONE=$GONE"
 echo "KTEST-ELAPSED-MS=$ELAPSED_MS"
 
-# 9) prova de vida: se este shell chegou ate aqui e roda mais comandos, a VM nao esta
-#    travada em D-state global (um freeze real pararia o script tambem, e o `timeout`
-#    externo do host e quem detectaria isso).
+# 9) proof of life: if this shell reached this point and runs more commands, the VM is not
+#    stuck in a global D-state (a real freeze would also stop the script, and the host's
+#    external `timeout` would detect it).
 echo "KTEST-VM-RESPONSIVE-AFTER-KILL=1"
 $BB cat /proc/swaps | while read -r l; do echo "KTEST-PROC-SWAPS-POST: $l"; done
 $BB cat /tmp/dd.log 2>/dev/null | $BB tail -10 | while read -r l; do echo "KTEST-DD-LOG: $l"; done

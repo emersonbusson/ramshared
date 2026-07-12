@@ -1,44 +1,42 @@
 # CLAUDE.md — RamShared
 
-> **ATENÇÃO:** Mantenha este arquivo minúsculo. Todas as regras específicas do projeto foram movidas para [`.claude/rules/*.md`](.claude/rules/*.md). Não copie longos dossiers aqui.
+> **ATTENTION:** Keep this filename lowercase. All project-specific rules are located in [`.claude/rules/*.md`](.claude/rules/*.md). Do not copy long dossiers here.
 
 ## Agent Source Of Truth
 
-[`.claude/rules/*.md`](.claude/rules/*.md) são os documentos autoritativos de regras de código. `AGENTS.md` (e `.cursor/rules/*`, `.windsurf/rules/*` se houver) espelham essas diretrizes.
+[`.claude/rules/*.md`](.claude/rules/*.md) are the authoritative code rules. `AGENTS.md` mirrors these guidelines.
 
-Antes de alterar código:
+Before changing code:
 
-1. Leia este arquivo e `MEMORY.md` (local-only / gitignored; se não existir, continue).
-2. Para módulos de kernel (LKM), HMM, Rust for Linux e CXL, leia [`.claude/rules/kernel.md`](.claude/rules/kernel.md).
-3. Se envolver mudança estrutural, manipulação de locks, alocação crônica ou novo hardware, siga a metodologia **SSDV3** ([`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md) e [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md)).
-4. Siga sempre [`.claude/rules/coding.md`](.claude/rules/coding.md) para formatação, checkpatch e testes.
-5. Em Pull Requests, siga o formato de tabela de commits de [`.claude/rules/governance.md`](.claude/rules/governance.md).
-6. Para benchmarks/medições que embasam decisão, siga [`.claude/rules/benchmarks.md`](.claude/rules/benchmarks.md) (contexto auto + ≥3 rodadas + log append-only em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)).
+1. Read this file and `MEMORY.md` (local-only / gitignored; if missing, proceed).
+2. For kernel modules (LKM), HMM, Rust for Linux, and CXL, read [`.claude/rules/kernel.md`](.claude/rules/kernel.md).
+3. If structural changes, lock manipulation, chronic allocation, or new hardware is involved, follow the **SSDV3** methodology ([`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md) and [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md)).
+4. Follow [`.claude/rules/coding.md`](.claude/rules/coding.md) for formatting, checkpatch, and tests.
+5. In Pull Requests, follow the commit table format defined in [`.claude/rules/governance.md`](.claude/rules/governance.md).
+6. For benchmarks/measurements backing decisions, follow [`.claude/rules/benchmarks.md`](.claude/rules/benchmarks.md) (auto context + ≥3 rounds + append-only log in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)).
 
+## Core Methodologies
 
-
-## Metodologias Core
-
-- **Kahneman Disciplines**: Toda decisão arquitetural ou de lock/DMA deve seguir as 18 disciplinas de Kahneman ([`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md)). Evite Sistema 1; counterfactuals e rollback numérico; #15–#18 para retry, fail-safe, idempotência e sunset de shim.
-- **SSDV3**: Spec-Driven Development. Pipeline: PRD → SPEC → (2.5 + `AUDIT-2.5.md`) → IMPL em `docs/specs/…`. Índice: [`docs/INDEX.md`](docs/INDEX.md). Veja [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md) e [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md). Docs: [`.claude/rules/documentation.md`](.claude/rules/documentation.md).
+- **Kahneman Disciplines**: Every architectural or lock/DMA decision must follow the 18 Kahneman disciplines ([`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md)). Avoid System 1; use counterfactuals and numerical rollbacks; follow #15–#18 for retry, fail-safe, idempotency, and shim sunsetting.
+- **SSDV3**: Spec-Driven Development. Pipeline: PRD → SPEC → (2.5 + `AUDIT-2.5.md`) → IMPL in `docs/specs/…`. Index: [`docs/INDEX.md`](docs/INDEX.md). See [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md) and [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md). Documentation guidelines are in [`.claude/rules/documentation.md`](.claude/rules/documentation.md).
 
 ## Day-0 Policy
 
-O RamShared exige que todo código enviado para o Ring 0 seja a versão definitiva para o Day-0. É proibido:
-- Shims de compatibilidade que introduzam latência.
-- Workarounds provisórios para contornar falhas de hardware ou coerência de cache.
-- Módulos que ignoram os avisos do `checkpatch.pl`.
+RamShared requires that all code sent to Ring 0 is the definitive version for Day-0. The following are forbidden:
+- Compatibility shims that introduce latency.
+- Temporary workarounds to bypass hardware flaws or cache coherence issues.
+- Modules that ignore warnings from `checkpatch.pl`.
 
 ## Commits & Patches
 
-- **Inglês** em todo o projeto: código fonte, comentários, commits, PRs, issues e documentos da raiz e `/docs/`.
-- Commits estruturais ou que afetem a MMU/DRM requerem um `Rollback trigger:` no body.
+- **English** is mandatory across the entire project: source code, comments, commits, PRs, issues, and root/`/docs/` documents.
+- Structural commits or those affecting the MMU/DRM require a `Rollback trigger:` in the body.
 
 ## Tech Stack Overview
 
-- **Kernel Linux**: Desenvolvimento de LKM (Loadable Kernel Modules) focados em CXL, PCIe Gen5.
-- **Linguagens**: C11 (Padrões do Kernel) e Rust for Linux.
-- **Subsistemas**: HMM (Heterogeneous Memory Management), DRM (Direct Rendering Manager), MMU.
-- **Validação**: kselftest, checkpatch.pl, sparse, lockdep, kmemleak.
+- **Linux Kernel**: Development of LKM (Loadable Kernel Modules) focusing on CXL, PCIe Gen5.
+- **Languages**: C11 (Kernel standards) and Rust for Linux.
+- **Subsystems**: HMM (Heterogeneous Memory Management), DRM (Direct Rendering Manager), MMU.
+- **Validation**: kselftest, checkpatch.pl, sparse, lockdep, kmemleak.
 
-Consulte os arquivos em `.claude/rules/` para as diretrizes profundas sobre cada tópico.
+Refer to files in `.claude/rules/` for deep guidelines on each topic.

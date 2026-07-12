@@ -14,10 +14,10 @@ Rules:
 ## Language
 
 - All code, variable names, function names, macros, and filenames: **English**
-- Code comments (inline, block, doc): **Portuguese (BR)** — aligned with the project (author, docs, and PRs in PT-BR). Identifiers (names, functions, macros, files) follow in **English**, kernel convention.
-- Root documentation files (`README.md`, `ARCHITECTURE.md`): **Portuguese (BR)**
+- Code comments (inline, block, doc): **English** — strictly enforced. No Portuguese comments are allowed in new code.
+- Root documentation files (`README.md`, `ROADMAP.md`, `CLAUDE.md`, etc.) and docs: **English** (optionally with localized summaries in `<details>` blocks).
 - Commit messages and PR titles: **English** (Conventional Commits format)
-- PR descriptions (body) and Issues: **Portuguese (BR)**
+- PR descriptions (body) and Issues: **English** or **Portuguese** (as long as it meets PR template guidelines)
 
 ## Commit Conventions
 
