@@ -10,7 +10,7 @@ publish.workspace = true
 ramshared-vram = { path = "../ramshared-vram" }
 
 [target.'cfg(windows)'.dependencies.windows-sys]
-version = "0.59.0"
+version = "0.61.2"
 features = [
     "Win32_System_LibraryLoader",
     "Win32_Foundation",
