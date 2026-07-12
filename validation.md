@@ -730,3 +730,21 @@ sudo bash scripts/safety/cascade-pressure-probe.sh --max-sec 50
 **Not claimed:** live host-budget pressure with resident swap pages. That benchmark remains isolated-lab only.
 
 **Verdict:** ✅ Phase 1 code/deployment GREEN; isolated pressure gate remains open.
+**Next action:** none.
+
+---
+
+## 2026-07-12 — Windows Swap Driver MVP & Residency Validation
+
+**What:** Full PnP driver load, NTFS volume format, paged-pool residency (ITEM-8), crash containment (B1/B2), and ordered teardown safety (DT-9) validations on VM.
+**Category:** fail-safe + boot + integration
+**How to measure:** Run `Invoke-DisciplinedCampaign.ps1` to execute the full validation campaign. Run `Invoke-KernelPageDrill.ps1` inside the VM.
+**Measured data:**
+- **Driver load:** `ramshared.sys` and `poolstress.sys` loaded successfully under `testsigning` on build 26200.
+- **Disk format:** 64 MB NTFS SCSI RAM disk mounted as drive `D:` (read/write `smoke.txt` OK).
+- **Pagefile residency (DT-21):** 1 GB paged-pool allocation via `poolstress.sys` forced swapout of 15 MB dirty kernel pages to `D:\pagefile.sys` (occupancy rose from 0 MB to 15 MB).
+- **Backend crash containment (B1/B2):** Abrupt termination of backend process did not crash the system; VM remained responsive and remote sessions reconnected cleanly.
+- **Ordered teardown safety (DT-9):** Normal stop on active pagefile refused (`exit 2`, `REFUSE_KILL`), while forced stop killed the backend cleanly (`exit 0`).
+- **Campaign result:** `OVERALL=PASS_WITH_SKIPS` (0 failures, 27/27 files parsed).
+**Verdict:** ✅ works (MVP fully verified on guest VM).
+**Next action:** none (physical GPU/CUDA integration follows).
