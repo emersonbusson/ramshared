@@ -15,7 +15,7 @@ jobs:
     steps:
       - name: Validate PR description sections
         if: github.event.pull_request.user.login != 'dependabot[bot]' && !endsWith(github.event.pull_request.user.login, '[bot]')
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const body = context.payload.pull_request?.body ?? '';
