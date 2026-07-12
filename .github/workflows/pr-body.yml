@@ -1,0 +1,40 @@
+name: PR Body Check
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  pr-body:
+    name: pr-body
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR description sections
+        if: github.actor != 'dependabot[bot]' && !endsWith(github.actor, '[bot]')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request?.body ?? '';
+            const requiredSections = [
+              { name: 'Resumo', pattern: /^##\s+Resumo\s*$/im },
+              { name: 'Commits', pattern: /^##\s+Commits\s*$/im },
+              { name: 'Issue', pattern: /^##\s+Issue\s*$/im },
+              { name: 'Responsavel', pattern: /^##\s+Responsavel\s*$/im },
+              { name: 'Labels', pattern: /^##\s+Labels\s*$/im },
+              { name: 'Validacao', pattern: /^##\s+Validacao\s*$/im },
+              { name: 'Rollback trigger', pattern: /^##\s+Rollback trigger\s*$/im }
+            ];
+
+            const missing = requiredSections
+              .filter(section => !section.pattern.test(body))
+              .map(section => section.name);
+
+            if (missing.length > 0) {
+              core.setFailed(`PR description is missing required sections: ${missing.join(', ')}. Please check .github/pull_request_template.md.`);
+            } else {
+              core.info('All required PR description sections are present.');
+            }

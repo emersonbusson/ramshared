@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # measure-cascade-demote.sh — prova a ACAO do DEMOTE (SPEC §9 / §14.4).
 #
-# Com paginas vivas no tier VRAM (/dev/nbd0), roda `swapoff /dev/nbd0` enquanto o
-# daemon continua servindo read-back; confere integridade do hog apos migracao
-# para o tier de baixo (VHDX/zram). O GATILHO do canario (latencia/free/content)
-# e unit-testado em crates/ramshared-wsl2d/src/residency.rs — este script valida
-# a migracao segura em runtime (mesma chamada que spawn_swapoff no daemon).
+# With active pages in the VRAM tier (/dev/nbd0), runs `swapoff /dev/nbd0` while the
+# daemon continues to serve read-back; checks the integrity of the hog after migration
+# to the lower tier (VHDX/zram). The canary TRIGGER (latency/free/content)
+# is unit-tested in crates/ramshared-wsl2d/src/residency.rs — this script validates
+# safe migration in runtime (the same call as spawn_swapoff in the daemon).
 #
 # Host-safety (benchmarks.md / Kahneman #16):
 #   - hog isolado em cgroup v2 (memory.max limitado)
@@ -18,7 +18,7 @@
 #   docker run --rm --privileged --pid=host --cgroupns=host alpine:3.20 \
 #     nsenter -t 1 -m -u -i -n -p -- \
 #     /bin/bash ./scripts/p0/measure-cascade-demote.sh
-# (--cgroupns=host e obrigatorio: sem isso, write em cgroup.procs retorna ENOENT)
+# (--cgroupns=host is mandatory: without it, writing to cgroup.procs returns ENOENT)
 # env opcional:
 #   HOG_MB=2200 CAP_MB=512 MIN_NBD_MIB=150 RESTORE=1 RAW=/tmp/cascade-demote.txt
 set -u

@@ -55,7 +55,7 @@ chmod +x "$IRD/init"
 
 ( cd "$IRD" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/initramfs.gz"
 
-# KVM acelera; sem permissão em /dev/kvm cai p/ TCG (mais lento, mas válido).
+# KVM accelerates; without write permissions on /dev/kvm, falls back to TCG (slower but valid).
 ACCEL=(-machine accel=tcg)
 [ -w /dev/kvm ] && ACCEL=(-enable-kvm -cpu host)
 
@@ -67,11 +67,11 @@ timeout 180 qemu-system-x86_64 "${ACCEL[@]}" -m 1024 -nographic -no-reboot \
 echo "=========== resultado ==========="
 grep -E "KTEST-" "$WORK/serial.log" || { echo "sem output KTEST — kernel pode não ter bootado"; }
 echo "================================="
-# GATE = boot ao userspace (uname confere). É o risco catastrófico ("não boota").
-# O insmod via busybox no initramfs mínimo é BEST-EFFORT (a applet do busybox é
-# limitada — falha sem chegar ao kernel; dmesg vazio confirma). A validação
-# AUTORITATIVA de módulos é PÓS-BOOT, no kernel real, via kmod (boot-kernel-safe.ps1
-# faz `modprobe` + auto-revert). Por isso o veredito NÃO gateia em módulos.
+# GATE = boot to userspace (uname matches). This is the catastrophic risk ("fails to boot").
+# The insmod via busybox in the minimal initramfs is BEST-EFFORT (the busybox applet is
+# limited — fails before reaching the kernel; empty dmesg confirms this). The
+# AUTHORITATIVE module validation is POST-BOOT, in the real kernel, via kmod (boot-kernel-safe.ps1
+# does `modprobe` + auto-revert). Therefore, the verdict does NOT gate on modules.
 if grep -q "KTEST-UNAME=$REL" "$WORK/serial.log" && grep -q "KTEST-END" "$WORK/serial.log"; then
   echo "QEMU-VALIDATE: PASS — kernel bootou ao userspace, release confere."
   echo "(módulos: best-effort no initramfs; validação real = pós-boot via kmod no launcher)"

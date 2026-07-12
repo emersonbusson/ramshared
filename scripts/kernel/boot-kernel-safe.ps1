@@ -60,9 +60,9 @@ function Set-CfgRetry([string]$path, [string[]]$lines) {
   return $false
 }
 
-# Desarme DETERMINÍSTICO: remove TODA linha kernel= (volta ao kernel da Microsoft).
-# NÃO depende de o backup conseguir ser copiado. Retorna $true se desarmou (ou se não há config).
-# Nunca lança (captura tudo) — é chamado do finally, onde uma exceção deixaria armado-quebrado.
+# DETERMINISTIC disarm: removes all kernel= lines (reverts to Microsoft kernel).
+# Does NOT rely on backup copy succeeding. Returns $true if disarmed (or if config doesn't exist).
+# Never throws (catches everything) — called from finally block to avoid leaving config in a broken/armed state.
 function Disarm-Config([string]$cfgPath) {
   try {
     if (-not (Test-Path $cfgPath)) { return $true }

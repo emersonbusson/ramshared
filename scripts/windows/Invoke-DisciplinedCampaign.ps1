@@ -18,7 +18,7 @@ param(
     [string]$VMName = "win11-drill",
     [string]$SrcHost = "C:\Users\emedev\ramshared-src",
     [string]$DstGuest = "C:\ramshared",
-    [string]$User = ".\drilladmin",
+    [string]$User = "WIN11-DRILL\drilladmin",
     [string]$Password = $env:RAMSHARED_DRILL_PASSWORD,
     [string]$ResultsJson = "C:\Users\emedev\ramshared-drill\agent-disciplined-results.json"
 )
@@ -71,6 +71,7 @@ Rec "psd" "PASS" "session" 1
 
 Invoke-Command -Session $sess -ScriptBlock {
     param($d)
+    Remove-Item -Path $d -Recurse -Force -ErrorAction SilentlyContinue | Out-Null
     New-Item -ItemType Directory -Force -Path $d, (Join-Path $d "artifacts") | Out-Null
 } -ArgumentList $DstGuest
 

@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # GitHub Actions
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 3
+    labels: ['deps', 'ci']
+    commit-message:
+      prefix: 'ci(deps):'
+    groups:
+      all-actions:
+        patterns: ['*']
+
+  # Rust dependencies (Cargo workspace)
+  - package-ecosystem: 'cargo'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 3
+    labels: ['deps', 'rust']
+    commit-message:
+      prefix: 'chore(deps):'
+    groups:
+      all-cargo:
+        patterns: ['*']

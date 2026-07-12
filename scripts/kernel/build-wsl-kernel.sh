@@ -40,7 +40,7 @@ for kv in "${CONFIGS[@]}"; do
 done
 make olddefconfig >/dev/null
 
-# VERIFICA que cada config pegou (olddefconfig reverte os inválidos — ex.: bool pedido como --module).
+# VERIFY that each config took effect (olddefconfig reverts invalid ones — e.g. bool requested as --module).
 fail=0
 for kv in "${CONFIGS[@]}"; do
   name="${kv%%=*}"; val="${kv##*=}"

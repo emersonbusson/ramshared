@@ -1,4 +1,4 @@
-# Manage-WslKernelLab.ps1 — backup / restore / status for RamShared-Kernel WSL lab
+# Manage-WslKernelLab.ps1 - backup / restore / status for RamShared-Kernel WSL lab
 #
 # Live:   R:\WSL\RamShared-Kernel\ext4.vhdx   (not C:)
 # Backup: E:\WSL-backup\RamShared-Kernel\
@@ -80,7 +80,7 @@ if ($Smoke) {
 
 if ($Restore) {
     if (-not (Test-Path -LiteralPath $tarPath)) {
-        throw "Backup missing: $tarPath — run -Export first or copy base tar"
+        throw "Backup missing: $tarPath - run -Export first or copy base tar"
     }
     Write-Host "DESTRUCTIVE: unregister + re-import $Distro from $tarPath"
     Write-Host "Live dir: $LiveDir"

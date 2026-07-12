@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # postmortem.sh — Coletor forense "caixa-preta" do RamShared no WSL2.
 #
-# Junta, num relatorio unico e datado em armazenamento DURAVEL do Windows
-# (/mnt/c/wsl-forensics/, sobrevive a morte da VM), toda a evidencia que
-# precisamos pra debugar um travamento — exatamente a investigacao que foi feita
-# a mao nos travamentos de 2026-07-03, agora automatica:
+# Gathers into a single dated report in DURABLE Windows storage
+# (/mnt/c/wsl-forensics/, survives VM death) all the evidence
+# we need to debug a freeze — exactly the manual investigation that was done
+# for the 2026-07-03 hangs, now automated:
 #   - journalctl do boot alvo (default: boot anterior, -1) + sinais de crash
 #     (kernel BUG / Oops / hung_task / OOM / D-state)
 #   - deteccao de morte-abrupta (no WSL2 quase todo fim e' abrupto; o sinal
@@ -42,8 +42,8 @@ TMPDIR_PM="$(mktemp -d)"; trap 'rm -rf "$TMPDIR_PM"' EXIT
 # Inclui hung_task / blocked (swap ghost ublk) e panics — sem falso positivo solto em "debug".
 CRASH_RE='kernel BUG|\bBUG:|\[ cut here \]|\bOops[:# ]|Call Trace:|hung_task|blocked for more than [0-9]|Out of memory|oom-kill|general protection fault|kernel panic|stack segment|kernel NULL pointer|task .* blocked for more than'
 
-# Materializa o journal do boot uma vez (evita chamar journalctl N vezes E o gotcha
-# pipefail+grep-q+SIGPIPE que dava falso "sem crash").
+# Materializes the boot journal once (prevents calling journalctl N times AND avoids
+# the pipefail+grep-q+SIGPIPE gotcha that caused false "no crash" reports).
 dump_boot() { # $1 = boot index -> arquivo em $TMPDIR_PM
   local idx="$1" f="$TMPDIR_PM/boot${1}.log"
   [ -f "$f" ] || journalctl -b "$idx" --no-pager >"$f" 2>/dev/null

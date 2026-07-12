@@ -10,7 +10,7 @@ param(
     [string]$PfxPath = "C:\Users\emedev\ramshared-drill\certs\ramshared-test.pfx",
     [string]$PfxPassword = "TestSign!2026",
     [string]$VmName = "win11-drill",
-    [string]$GuestUser = ".\drilladmin",
+    [string]$GuestUser = "WIN11-DRILL\drilladmin",
     [string]$GuestPassword = "Drill2026!"
 )
 
@@ -50,8 +50,8 @@ $result = Invoke-Command -Session $sess -ScriptBlock {
     $ErrorActionPreference = "Continue"
     $o = @()
     if (Test-Path C:\ramshared\package\ramshared-test.cer) {
-        Import-Certificate -FilePath C:\ramshared\package\ramshared-test.cer -CertStoreLocation Cert:\LocalMachine\Root -EA SilentlyContinue | Out-Null
-        Import-Certificate -FilePath C:\ramshared\package\ramshared-test.cer -CertStoreLocation Cert:\LocalMachine\TrustedPublisher -EA SilentlyContinue | Out-Null
+        certutil.exe -f -addstore Root C:\ramshared\package\ramshared-test.cer | Out-Null
+        certutil.exe -f -addstore TrustedPublisher C:\ramshared\package\ramshared-test.cer | Out-Null
     }
 
     # Tear down legacy sc services if present
@@ -94,7 +94,7 @@ Write-Output $result
 
 # Start backend loop in background on guest (30s smoke)
 $job = Invoke-Command -Session $sess -AsJob -ScriptBlock {
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ramshared\scripts\windows\Invoke-WinDriveBackend.ps1 -SizeBytes 268435456 -Seconds 45 2>&1 | Out-String
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\ramshared\scripts\windows\Invoke-WinDriveBackend.ps1 -SizeBytes 268435456 -QueueDepth 4 -Seconds 45 2>&1 | Out-String
 }
 Write-Output "BACKEND_JOB=$($job.Id)"
 Wait-Job $job -Timeout 90 | Out-Null
