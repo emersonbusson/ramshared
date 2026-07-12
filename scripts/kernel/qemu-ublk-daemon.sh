@@ -4,10 +4,10 @@
 # cria /dev/ublkbN; (3) serve I/O (dd write+read); (4) SIGTERM -> teardown ordenado
 # (STOP_DEV -> join -> DEL_DEV) -> device removido + daemon sai 0.
 #
-# POR QUE QEMU: rodar esse daemon no WSL2 CONGELOU o host (device orfao no teardown ->
-# I/O em D-state). Numa VM, um stall e contido pelo `timeout` — o host fica intacto.
-# Backend RAM (sem GPU): `Cuda::load()` so e chamado no caminho VRAM, entao o binario
-# (CUDA via dlopen) roda sem libcuda. O bug de teardown e independente do backend.
+# WHY QEMU: running this daemon in WSL2 FROZE the host (orphaned device on teardown ->
+# I/O in D-state). In a VM, any stall is contained by `timeout` — the host remains intact.
+# RAM backend (no GPU): `Cuda::load()` is only called in the VRAM path, so the binary
+# (CUDA via dlopen) runs without libcuda. The teardown bug is independent of the backend.
 #
 # uso: qemu-ublk-daemon.sh [bzImage] [daemon_bin] [ublk_drv.ko]
 # saida 0 = PASS (serve + teardown limpo). SPEC: docs/ublk-daemon-integration/IMPL.md F2.

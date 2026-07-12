@@ -1,14 +1,14 @@
 # P0 ITEM-1 — medição de VRAM/RAM num render do Blender (script para o tester, Windows/PowerShell).
-# Alimenta o GATE de P2 (out-of-core nativo): prova, com NÚMERO, a cena que falhava por VRAM.
-# NÃO altera a cena (Anexo B.5 do PRD) — só observa nvidia-smi + RAM disponível e lê o log do render.
+# Feeds the P2 GATE (native out-of-core): proves, with NUMBERS, the scene that failed due to VRAM.
+# Does NOT modify the scene (Annex B.5 of PRD) — only monitors nvidia-smi + available RAM and reads the render log.
 # SPEC: docs/memory-broker/SPECv2.md ITEM-1. Regra de medição: .claude/rules/benchmarks.md.
 #
 # DOIS MODOS:
 #   Full   (recomendado): passa -Blend <cena.blend> → o script LANÇA o Blender headless, amostra a
 #          VRAM/RAM durante o render, captura o exit code + a MENSAGEM DE ERRO exata do log, e roda
 #          -Runs vezes (mediana + p99 + desvio, como manda o benchmarks.md).
-#   Passivo (legado): sem -Blend → só amostra por -DurationSec enquanto VOCÊ dá render à mão; nesse
-#          modo, mande também um print da mensagem de erro (o script não vê o log do Blender).
+#   Passive (legacy): without -Blend -> only samples for -DurationSec while YOU render manually; in this
+#          mode, also provide a screenshot of the error message (the script cannot see the Blender log).
 #
 # Uso (full):    .\measure-render-vram.ps1 -Blend C:\cenas\quebra.blend -Runs 3 -Tag idle
 # Uso (passivo): .\measure-render-vram.ps1 -DurationSec 600

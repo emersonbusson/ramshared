@@ -8,9 +8,9 @@
 #   FASE 3 (teardown): swapoff + nbd-client -d (ordem limpa, daemon ainda servindo) → SIGTERM no
 #                      daemon → o worker encerra (DT-28) e sai 0; nenhum swap órfão.
 #
-# POR QUE QEMU (regra de sessão): rodar o daemon de swap + nbd-client + swapon no WSL2 pode
-# congelar o host (swapoff sobre NBD morto → I/O em D-state). Na VM, um stall é contido pelo
-# `timeout` — o host fica intacto. Backend RAM: Cuda::load() não é chamado (sem libcuda).
+# WHY QEMU (session rule): running the swap daemon + nbd-client + swapon directly in WSL2 can
+# freeze the host (swapoff over a dead NBD -> I/O in D-state). In a VM, any stall is contained
+# by `timeout` — the host remains unaffected. RAM backend: Cuda::load() is not called (no libcuda).
 #
 # uso: qemu-broker-drill.sh [bzImage] [daemon_bin] [agent_bin] [nbd.ko]
 # saída 0 = PASS (swap ativo via broker + teardown limpo).
@@ -42,8 +42,8 @@ cp "$AGENT" "$IRD/ramshared-agent"
 cp "$(command -v nbd-client)" "$IRD/bin/nbd-client"
 cp "$NBD_KO" "$IRD/modules/nbd.ko"
 
-# Libs dinâmicas dos 3 binários (glibc-dinâmicos; sem CUDA no caminho RAM). Preserva caminhos
-# absolutos (o /lib64/ld-linux entra junto).
+# Dynamic libraries for the 3 binaries (dynamic glibc; no CUDA in the RAM path). Preserves absolute
+# paths (including /lib64/ld-linux).
 for bin in "$DAEMON" "$AGENT" "$(command -v nbd-client)"; do
   for lib in $(ldd "$bin" 2>/dev/null | grep -oE '/[^ ]+\.so[^ ]*'); do
     mkdir -p "$IRD$(dirname "$lib")"
@@ -59,10 +59,10 @@ export PATH=/bin
 \$BB mount -t proc proc /proc
 \$BB mount -t sysfs sysfs /sys
 \$BB mount -t devtmpfs devtmpfs /dev 2>/dev/null
-# loopback UP: o agente fala com o árbitro em $ARBITER (127.0.0.1). Sem isto, connect()
-# devolve ENETUNREACH ("Network is unreachable").
+# loopback UP: the agent communicates with the arbiter on $ARBITER (127.0.0.1). Without this,
+# connect() returns ENETUNREACH ("Network is unreachable").
 \$BB ip link set lo up 2>/dev/null || \$BB ifconfig lo 127.0.0.1 up 2>/dev/null || true
-# applets de swap do busybox que o agente invoca por nome (mkswap/swapon/swapoff)
+# busybox swap applets that the agent invokes by name (mkswap/swapon/swapoff)
 for a in mkswap swapon swapoff sleep cat kill; do \$BB ln -sf /bin/busybox /bin/\$a; done
 echo "=====KTEST-BEGIN====="
 echo "KTEST-UNAME=\$(\$BB uname -r)"
@@ -113,8 +113,8 @@ echo "KTEST-TELEMETRY-LINES=\$TLINES"
 \$BB sleep 2.5  # deixa >=1 tick (2s) emitir uma amostra completa
 echo "KTEST-TELEMETRY-SAMPLE:"; \$BB cat /tmp/telem.jsonl 2>/dev/null
 
-# --- FASE 3: teardown limpo. swapoff + desconecta NBD ENQUANTO o daemon ainda serve, depois
-# SIGTERM no daemon (DT-28: o worker encerra no shutdown). Ordem evita swapoff sobre NBD morto.
+# --- PHASE 3: clean teardown. swapoff + disconnect NBD WHILE the daemon is still serving, then
+# SIGTERM to the daemon (DT-28: worker terminates during shutdown). This order prevents swapoff over a dead NBD.
 for dev in /dev/nbd0 /dev/nbd1 /dev/nbd2 /dev/nbd3; do
   if \$BB grep -q "\$dev " /proc/swaps 2>/dev/null; then
     \$BB swapoff "\$dev" 2>/dev/null && nbd-client -d "\$dev" 2>/dev/null || true

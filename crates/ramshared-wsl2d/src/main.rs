@@ -422,9 +422,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             ),
         };
     }
-    // Sem slices não há o que arbitrar nem exportar por TCP.
+    // Without slices, there is nothing to arbitrate or export via TCP.
     if arbiter_addr.is_some() || listen_nbd_addr.is_some() {
-        return Err("--arbiter-listen/--listen-nbd exigem --slices N (N > 0)".into());
+        return Err("--arbiter-listen/--listen-nbd require --slices N (N > 0)".into());
     }
 
     match transport {
@@ -1387,7 +1387,7 @@ fn guard_not_wsl2() -> Result<(), Box<dyn std::error::Error>> {
 /// initializes CUDA, and only arm `MCL_FUTURE` later via `arm_future_lock` — see the
 /// comment there (incident 2026-07-03: kernel BUG due to collision with dxgkrnl).
 fn lock_memory(force: bool, lock_future: bool) -> Result<(), Box<dyn std::error::Error>> {
-    // SAFETY: mlockall e' uma syscall sem efeitos de memoria inseguros.
+    // SAFETY: mlockall is a syscall with no unsafe memory side effects.
     let flags = if lock_future {
         MCL_CURRENT | MCL_FUTURE
     } else {

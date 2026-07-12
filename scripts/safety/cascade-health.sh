@@ -10,9 +10,9 @@
 # Host-safety: so le /proc, nvidia-smi e pgrep. Nao aloca, nao thrash, nao swapoff.
 # Kahneman #3: numero + unidade + timestamp. #1: estado completo da cascata, nao so "ok".
 #
-# Auto-melhoria (dev): o JSONL alimenta comparacao entre commits e deteccao de
-# regressao (ghost, order, daemon down, used por tier). NAO altera thresholds
-# sozinho — mudanca de politica de demote/re-promote exige SPEC/PRD.
+# Developer self-improvement: JSONL feeds commit comparison and regression detection
+# (ghost, order, daemon down, usage per tier). Does NOT modify thresholds on its
+# own — changing demote/re-promote policy requires SPEC/PRD.
 set -u
 
 INTERVAL_S="${INTERVAL_S:-30}"
