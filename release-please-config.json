@@ -1,0 +1,31 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "simple",
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "separate-pull-requests": false,
+  "bump-minor-pre-major": false,
+  "bump-patch-for-minor-pre-major": false,
+  "draft": false,
+  "prerelease": false,
+  "pull-request-title-pattern": "chore${scope}: release ramshared v${version}",
+  "group-pull-request-title-pattern": "chore: release ramshared v${version}",
+  "pull-request-header": ":robot: Release PR gerado por release-please. Mergear cria a tag, publica o release e fecha este PR.",
+  "changelog-sections": [
+    { "type": "feat",     "section": "Features",      "hidden": false },
+    { "type": "fix",      "section": "Bug Fixes",     "hidden": false },
+    { "type": "perf",     "section": "Performance",   "hidden": false },
+    { "type": "refactor", "section": "Refactor",      "hidden": false },
+    { "type": "docs",     "section": "Documentation", "hidden": false },
+    { "type": "ci",       "section": "CI",            "hidden": false },
+    { "type": "build",    "section": "Build",         "hidden": true  },
+    { "type": "test",     "section": "Tests",         "hidden": true  },
+    { "type": "chore",    "section": "Chores",        "hidden": true  },
+    { "type": "style",    "section": "Style",         "hidden": true  }
+  ],
+  "packages": {
+    ".": {
+      "changelog-path": "CHANGELOG.md"
+    }
+  }
+}

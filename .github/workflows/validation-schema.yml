@@ -1,0 +1,20 @@
+name: Validation Schema Gate
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  validation-schema:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate new entries in validation.md
+        run: node tools/ci/check-validation-schema.mjs --diff "origin/${{ github.base_ref }}"

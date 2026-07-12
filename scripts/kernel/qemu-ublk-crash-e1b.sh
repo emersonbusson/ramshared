@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # qemu-ublk-crash-e1b.sh — Experimento E1b (controle de isolamento do E1).
 #
-# CONTEXTO: o E1 (qemu-ublk-crash-e1.sh) achou 2/3 kernel panics quando o daemon ublk
-# leva SIGKILL com o device armado como swap sob pressao. MAS a VM do E1 e minimalista:
-# o PID 1 (o proprio /init busybox) disputa a MESMA memoria pressionada, entao QUALQUER
-# pagina anonima do shell que caia no swap e se perca vira "Attempted to kill init!" —
-# comportamento PADRAO do Linux p/ morte do PID 1, NAO um efeito especial do ublk.
+# CONTEXT: E1 (qemu-ublk-crash-e1.sh) found 2/3 kernel panics when the ublk daemon
+# receives SIGKILL with the device set up as swap under pressure. BUT the E1 VM is minimalist:
+# PID 1 (the busybox /init itself) competes for the SAME pressurized memory, so ANY
+# anonymous shell page that falls into swap and gets lost triggers "Attempted to kill init!" —
+# standard Linux behavior when PID 1 dies, NOT a special effect of ublk.
 #
-# PERGUNTA QUE ISOLA: quando um processo COMUM (nao-PID-1, descartavel) rele uma pagina
-# cujo device de swap morreu, o que acontece com ELE? SIGBUS limpo e contido (so ele
-# morre, resto do sistema segue) ou ha efeito sistemico (cascata / freeze)?
+# ISOLATING QUESTION: when a COMMON process (non-PID-1, disposable) rereads a page
+# whose swap device died, what happens to IT? Clean and contained SIGBUS (only it
+# dies, rest of system continues) or is there a systemic effect (cascade / freeze)?
 #
 # DESENHO (isola a vitima do PID 1):
 #   - Vitima em C estatico: mmapeia regiao A ANONIMA PRIVADA propria, preenche, e chama
 #     madvise(MADV_PAGEOUT) — empurra ESSAS paginas p/ o /dev/ublkbN. Alvo cirurgico.
-#   - EXPULSA o swapcache de A: sem isso a releitura seria servida da RAM (swap_cache_get_
-#     folio, do_swap_page:3807) e nunca tocaria o device. A vitima cria pressao PROPRIA
-#     (regiao B) ate MemAvailable cair abaixo de um alvo → o swapcache limpo de A (o alvo
-#     de reclaim mais barato) e descartado → A fica SO no device. Pressao moderada e
-#     auto-limitada (para no alvo, nao no OOM), ao contrario do E1 (300 MiB num VM de 256).
+#   - EVICT swapcache of A: without this, rereading would be served from RAM (swap_cache_get_
+#     folio, do_swap_page:3807) and would never touch the device. The victim creates its OWN pressure
+#     (region B) until MemAvailable drops below a target -> the clean swapcache of A (the cheapest
+#     reclaim target) is discarded -> A remains ONLY on the device. Moderate and
+#     self-limiting pressure (stops at the target, not OOM), unlike E1 (300 MiB on a 256 VM).
 #   - PID 1 (/init) NAO aloca nada arriscado; fica quente em loop (paginas nao esfriam →
 #     nao viram alvo de reclaim) e protegido de OOM (oom_score_adj=-1000). Rootfs e ramfs
 #     (unevictable). A vitima recebe oom_score_adj=+1000: se houver OOM, ela morre (nao o
@@ -29,8 +29,8 @@
 #     Read-error on swap-device → SIGBUS na VITIMA. Observa exit status dela (42 = handler
 #     pegou SIGBUS; 0 = releu ok/NO-FAULT; 137 = OOM) e se init+bystander sobreviveram.
 #
-# NAO roda no host (WSL2 real) — so no qemu efemero, RAM-only, sem -hda, mesmo padrao
-# nao-destrutivo do qemu-ublk-daemon.sh (DT-29, .claude/rules/benchmarks.md:23). Sem sudo.
+# Does NOT run on host (real WSL2) — only in transient qemu, RAM-only, without -hda, same
+# non-destructive pattern as qemu-ublk-daemon.sh (DT-29, .claude/rules/benchmarks.md:23). No sudo.
 #
 # uso: qemu-ublk-crash-e1b.sh [bzImage] [daemon_bin] [ublk_drv.ko]
 # saida 0 = experimento produziu veredito; 1 = inconclusivo (setup nao completou).
@@ -39,10 +39,10 @@ set -euo pipefail
 BZ="${1:-$HOME/WSL2-Linux-Kernel/arch/x86/boot/bzImage}"
 DAEMON="${2:-$(dirname "$0")/../../target/debug/ramsharedd}"
 UBLK_KO="${3:-$HOME/WSL2-Linux-Kernel/drivers/block/ublk_drv.ko}"
-# A vitima roda dentro de um cgroup v2 com memory.max baixo. Isso forca o reclaim a
-# DESCARTAR o swapcache limpo de A (senao a releitura e servida da RAM, nunca tocando o
-# device morto). O reclaim de memcg e cirurgico: espreme SO a vitima, o PID 1 fica intacto
-# por construcao. (Pressao global do E1 vazava p/ o PID 1 -> panic; aqui nao.)
+# The victim runs inside a cgroup v2 with low memory.max. This forces reclaim to
+# DISCARD the clean swapcache of A (otherwise the reread is served from RAM, never touching the
+# dead device). The memcg reclaim is surgical: it squeezes ONLY the victim, while PID 1 remains untouched
+# by design. (Global pressure in E1 leaked to PID 1 -> panic; here it does not.)
 VICTIM_A_MB="${VICTIM_A_MB:-24}"          # canary anon (cabe nos 64 MiB do swap)
 MEMCG_MAX_MB="${MEMCG_MAX_MB:-32}"        # limite do cgroup da vitima (< A + B -> reclaim)
 PRESS_CAP_MB="${PRESS_CAP_MB:-48}"        # regiao B: excede memory.max -> expulsa swapcache
@@ -312,7 +312,7 @@ VPID=$!
 echo "KTEST-VICTIM-PID=$VPID"
 echo 1000 > /proc/$VPID/oom_score_adj 2>/dev/null
 
-# 7) espera a vitima sinalizar que A esta no swap e o swapcache foi expulso (bounded ~60s)
+# 7) waits for the victim to signal that A is in swap and swapcache has been evicted (bounded ~60s)
 READY=0
 r=0
 while [ $r -lt 600 ]; do
@@ -363,7 +363,7 @@ done
 wait "$VPID"; VST=$?
 echo "KTEST-VICTIM-EXIT=$VST"
 
-# 13) PROVA DE VIDA / CONTAINMENT: o PID 1 chegou aqui = nao esta em D-state global.
+# 13) PROOF OF LIFE / CONTAINMENT: PID 1 reached this point = not in global D-state.
 echo "KTEST-VM-RESPONSIVE-AFTER-KILL=1"
 echo "KTEST-PID1-ALIVE=1"
 $BB sleep 0.5

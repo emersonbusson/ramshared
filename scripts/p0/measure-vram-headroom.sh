@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # measure-vram-headroom.sh — Q1a do benchmark decisivo (gate de valor do RamShared).
-# Amostra, sob a CARGA ATUAL (máquina em uso), quanto de VRAM/RAM é realmente ocioso e
-# quão ESTÁVEL — porque "colher VRAM ociosa" só vale se houver VRAM ociosa e estável.
+# Samples, under the CURRENT LOAD (machine in use), how much VRAM/RAM is actually idle and
+# how STABLE it is — because "harvesting idle VRAM" is only useful if there is stable, idle VRAM.
 # READ-ONLY: só lê telemetria (nvidia-smi / free / /proc/diskstats). Não aloca nada.
 #
 # uso: measure-vram-headroom.sh [segundos] [intervalo]

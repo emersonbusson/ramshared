@@ -129,10 +129,21 @@ Numbers we’ve actually seen (not slogans):
 
 ---
 
-## Two tracks (don’t mix them up)
+## Windows Host Driver (Open Beta / MVP)
 
-**Linux/WSL2** — what you install and use.  
-**Windows StorPort driver** — research in a disposable Hyper-V VM. Lab is green for format/pagefile/teardown rules; **physical host load is still blocked.** Killing storage under a hot pagefile bluescreens (**0x7A**). We refuse that teardown on purpose.
+The Windows swap driver (**ramshared.sys** / StorPort virtual miniport) is now ready for testing on both the Hyper-V guest VM and physical Windows hosts. 
+
+To build, sign, and load the driver on your physical machine:
+1. **Disable Secure Boot** in your motherboard UEFI/BIOS settings.
+2. Enable Windows Test Mode by running these commands in an Administrator PowerShell:
+   ```powershell
+   bcdedit.exe /set "{current}" testsigning yes
+   bcdedit.exe /set "{current}" nointegritychecks yes
+   ```
+3. Reboot your PC.
+4. Run `.\scripts\windows\Build-Drivers.ps1` and `Sign-Drivers.ps1` to compile and sign.
+
+*Warning:* Surprisal-removing the virtual storage back-end while a pagefile on it is actively in use will cause a bugcheck (**0x7A**). Avoid stopping the backend while the pagefile is active.
 
 ---
 
@@ -159,8 +170,8 @@ sudo bash scripts/safety/install-cascade-boot.sh --enable
 ### Trava o WSL?
 Uso normal: desenhado para **não**. Demote pode deixar lento por alguns segundos. Não mate o daemon na mão com swap ainda ativo.
 
-### Windows driver no PC do dia a dia?
-**Não.**
+### Driver de vRAM no Windows Físico?
+**Sim (Fase Beta / MVP).** Exige desativar o **Secure Boot** na BIOS e ativar o **Modo de Testes** (`bcdedit /set testsigning yes`) para compilar e carregar o driver localmente.
 
 </details>
 

@@ -282,7 +282,7 @@ fn io_desc_decodes_from_kernel_byte_layout() {
     assert_eq!(desc.start_sector, 16);
     assert_eq!(desc.addr, 0x1000);
 
-    // Buffer menor que um io-desc nao decodifica.
+    // Buffer smaller than an io-desc fails to decode.
     assert!(ublk::IoDesc::from_ne_bytes(&bytes[..23]).is_none());
 }
 
