@@ -20,11 +20,11 @@ ramshared-block = { path = "../ramshared-block" }
 ramshared-broker = { path = "../ramshared-broker" }
 ramshared-vram = { path = "../ramshared-vram" }
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1.1"
 
 [target.'cfg(windows)'.dependencies]
-windows-service = "0.7"
-windows-sys = { version = "0.59", features = [
+windows-service = "0.8"
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
