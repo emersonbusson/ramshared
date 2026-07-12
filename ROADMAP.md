@@ -38,11 +38,9 @@ Phase 0 on real GPU-PV: eviction keeps data intact but can make a tiny read take
 - Record: [docs/specs/no-milestone/kernel-vram-as-memory/PASSO0-INVENTORY.md](docs/specs/no-milestone/kernel-vram-as-memory/PASSO0-INVENTORY.md)  
 - LKM/HMM/NUMA **blocked here**; product path remains cascade + app
 
-### Windows lab (Hyper-V only)
+### Windows Host Driver (MVP)
 
-Format, pagefile residency, kernel-page drill, ordered teardown (DT-9), lab SCM — on **`win11-drill`**.  
-Pagefile-hot kill → **0x7A** (expected); product refuses that.  
-**Physical host driver: still no.**
+Format, pagefile residency, kernel-page drill, ordered teardown (DT-9), and SCM service are validated on the guest VM. The driver is now in open beta / MVP for physical host integration (requires Secure Boot disabled and testsigning).
 
 ---
 
@@ -51,7 +49,7 @@ Pagefile-hot kill → **0x7A** (expected); product refuses that.
 | Priority | Work |
 | --- | --- |
 | Product polish | Keep cascade boot + demote healthy on real daily WSL |
-| Windows | Product CUDA path + MSVC service; measured K; soak; signing — then revisit host-real |
+| Windows | Product CUDA path + MSVC service on physical host, telemetry collection under budget pressure |
 | Phase B (optional) | Custom WSL kernel: zram writeback, ublk — only if it earns its keep |
 
 ---

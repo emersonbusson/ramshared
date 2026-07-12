@@ -72,9 +72,24 @@ The daemon watches free GPU memory and latency. If the card is under pressure, i
 
 You may feel WSL get sluggish for a while. If it’s stuck for a long time, check `swapon --show` and logs (`journalctl -u ramshared-cascade -b` if you used boot). As a last resort on Windows: `wsl --shutdown` (only after you’ve tried `ramshared down` when you can).
 
-## Can I install the Windows kernel driver on my laptop?
+## Can I install the Windows kernel driver on my physical host?
 
-**Not for daily use.** That path is proven only in a disposable Hyper-V lab VM. Pulling storage out from under an active pagefile can blue-screen (**0x7A**). We treat that as a hard “don’t” on a real host.
+**Yes, for development and testing (MVP/Beta).** You can compile and load the driver on a physical machine, but it requires two prerequisites:
+1. **Disable Secure Boot** in your motherboard UEFI/BIOS settings.
+2. Enable Windows Test Mode by running:
+   ```powershell
+   bcdedit.exe /set "{current}" testsigning yes
+   bcdedit.exe /set "{current}" nointegritychecks yes
+   ```
+3. Reboot your PC and compile/sign the drivers using the provided scripts.
+
+*Note:* Force-killing the backend while the virtual disk contains active pagefile pages will cause a bluescreen (**0x7A**). Ensure you stop the pagefile usage before stopping the backend.
+
+## Does mixing GDDR6 and DDR4 memory cause compatibility or latency issues?
+
+No. GDDR6 (on the GPU) and DDR4 (on the motherboard) never communicate directly; each is managed by its own physical memory controller. All data transfers between them go through the PCI-Express (PCIe) bus, which standardizes the communication.
+
+While the GPU's internal GDDR6 bandwidth is massive (e.g., 336 GB/s), the transfer speed is bounded by the PCIe bus bandwidth (e.g., PCIe Gen3 x16 is limited to ~15.8 GB/s). However, even at ~15.8 GB/s, this is **several times faster** than high-end NVMe SSD write speeds, and the access latency is in the microsecond range (µs) compared to milliseconds (ms) for SSDs and HDDs. Data integrity is fully protected by hardware-level PCIe CRC and parity checks.
 
 ## Where are the real numbers?
 
