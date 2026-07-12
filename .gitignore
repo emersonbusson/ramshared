@@ -16,3 +16,12 @@ MEMORY.md
 # IDEs e Editores
 .vscode/
 .idea/
+
+# Temporary directories
+/tmp/
+/temp/
+
+# Temporary validation media
+/vm_screen.png
+/vm_screen.jpg
+/vm_screen.jpeg
