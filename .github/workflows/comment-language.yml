@@ -1,0 +1,20 @@
+name: Comment Language Gate
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  comment-language:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check added comment lines are English only
+        run: node tools/ci/check-comment-language.mjs --diff "origin/${{ github.base_ref }}"
