@@ -822,3 +822,30 @@ sudo ./scripts/safety/cascade-health.sh
 - Gap: boot SPEC conf example sizes (4096/2048) vs CLI fallback 1024 — documented in SPEC ITEM-4 note
 **Verdict:** ✅ both SPECs implemented in code with unit/live proof for policy paths; 🟡 SPEC hygiene was behind code (fixed test tables)
 **Next action:** optional lab-only wsl --terminate orphan E2E; not on daily host
+
+## 2026-07-13 15:00 -03 — SPEC↔code confrontation cascade multi-SPEC
+
+**What:** Extend confrontation beyond boot/orphan to cascade-vram-ondemand, cascade-transport-policy, wsl2-cascade-swap (umbrella), wsl2-native-vram-autotier, plus sample memory-broker and windows-swap-driver. Document in `docs/reliability/SPEC-CODE-CONFRONT-cascade-2026-07-13.md` §§D–I. Hygiene: transport IMPL paths; sparse SPEC ITEM-3 telemetry wording.
+**Category:** integration + fail-safe
+**How to measure:**
+```bash
+cargo test -p ramshared-block sparse
+cargo test -p ramshared-dxg
+cargo test -p ramshared-tier
+cargo test -p ramshared-wsl2d --lib autotier
+cargo test -p ramshared-cli cascade
+cargo test -p ramshared-broker
+cargo test -p ramshared-winsvc --lib
+test -f crates/ramshared-block/src/sparse_vram.rs
+test -f crates/ramshared-wsl2d/src/autotier.rs
+test -f drivers/windows/ramshared/protocol.h
+```
+**Measured data:**
+- sparse: **15** pass; dxg **10**; tier **8**; autotier **7**; cascade filter **41**; broker **32**; winsvc **25**
+- Sparse backend + try_reclaim + preflight sparse gate present
+- Transport Auto→Nbd on WSL2 + ublk refuse + priority log present
+- Autotier Phase 1 code green; live WDDM pressure demote still OPEN (IMPL)
+- Winsvc userspace green; StorPort sources present; **no** host kernel load claimed
+- No destructive demote/pressure on daily host this session
+**Verdict:** ✅ product cascade SPECs go (or go with documented lab gate); sample broker P1 library + winsvc userspace go; umbrella swap SPEC historical go
+**Next action:** optional lab autotier pressure drill; optional sparse JSON line if operators need machine-parseable reclaim; do not load unsigned StorPort on daily host
