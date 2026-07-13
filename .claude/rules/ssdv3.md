@@ -37,12 +37,12 @@ Optional: pure refactors without contract change, localized bugfixes, doc-only, 
 
 ## Step 3 hard gates (summary)
 
-1. Cover ≥80% on slice business-logic crates/files (`cargo llvm-cov -p …`); workspace average does not count.
-2. Live E2E + evidence before closing `validation.md`: deployed binary (`BINARY_MATCH=OK`), `ramshared status` / `cascade-health`, legitimate path + SPEC refusals.
+1. Cover ≥80% on slice **business-logic** crates/files (`cargo llvm-cov -p …`); workspace average does not count. Shell-only orchestration may be E2E-only if SPEC marks it and live proof is recorded.
+2. Live E2E before closing `validation.md`: `BINARY_MATCH`, `./target/release/ramshared status`, `scripts/safety/cascade-health.sh`, legitimate path + SPEC refusals.
 3. Kahneman test types #9/#13/#15/#16/#17 — table in `docs/SSDV3-PROMPTS.md`.
-4. Hang-class audit posture: root `superprompt.md`.
+4. Hang-class review: root `superprompt.md` (audit only; not a second SSDV3).
 
-Detail, PRD/SPEC templates, and IMPL shape: **only** `docs/SSDV3-PROMPTS.md`.
+Copy-paste prompts + IMPL skeleton: **only** `docs/SSDV3-PROMPTS.md` (do not duplicate here).
 
 ## Don't
 
