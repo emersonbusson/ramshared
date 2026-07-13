@@ -108,32 +108,32 @@ REPORT="$FORENSICS_DIR/postmortem-${TS}-boot${BOOT_INDEX}.md"
 
   echo "## 1. Veredito rapido"
   if boot_has_kernel_crash "$BOOT_INDEX"; then
-    echo "- **KERNEL CRASH / hang-class** no boot ${BOOT_INDEX} (BUG/Oops/panic/hung_task/blocked)."
+    echo "- **KERNEL CRASH / hang-class** on boot ${BOOT_INDEX} (BUG/Oops/panic/hung_task/blocked)."
   elif boot_has_oom "$BOOT_INDEX"; then
-    echo "- **OOM / pressão de memória** no boot ${BOOT_INDEX} (processo ou memcg) — **não** rotulado como kernel CRASH."
-    echo "  (ex.: OOM memcg de container Docker ≠ BUG do cascade RamShared; ver seção 2b.)"
+    echo "- **OOM / memory pressure** on boot ${BOOT_INDEX} (process or memcg) — **not** labeled kernel CRASH."
+    echo "  (e.g. Docker container memcg OOM ≠ RamShared cascade BUG; see section 2b.)"
   else
-    echo "- Sem assinatura de kernel crash nem OOM no boot ${BOOT_INDEX}."
+    echo "- No kernel-crash or OOM signature on boot ${BOOT_INDEX}."
     echo "  (No WSL2 um fim abrupto sem esta assinatura geralmente = \`wsl --shutdown\` ou VM"
     echo "   morta pelo host, NAO um kernel BUG do guest. Ver Event Log do Windows abaixo.)"
   fi
-  # Ruído operacional comum (unit fantasma, restart loop) — nao e crash
+  # Common operational noise (ghost unit, restart loop) — not a crash
   BOOT_LOG_PREVIEW="$(dump_boot "$BOOT_INDEX")"
   if grep -qE 'status=203/EXEC|Restarting|Scheduled restart job' "$BOOT_LOG_PREVIEW" 2>/dev/null; then
-    echo "- **Nota de ruído:** journal contém loops 203/EXEC ou restart de unit (ex. binário ausente)."
-    echo "  Isso polui o fim do boot mas **não** prova hang de swap/ghost ublk."
+    echo "- **Noise note:** journal contains 203/EXEC loops or unit restarts (e.g. missing binary)."
+    echo "  That pollutes end-of-boot but does **not** prove swap/ghost-ublk hang."
   fi
   echo
 
   BOOT_LOG="$(dump_boot "$BOOT_INDEX")"
 
-  echo "## 2a. Assinaturas KERNEL (BUG/Oops/hung_task) — boot ${BOOT_INDEX}"
+  echo "## 2a. KERNEL signatures (BUG/Oops/hung_task) — boot ${BOOT_INDEX}"
   echo '```'
   grep -iE "$CRASH_RE_KERNEL" "$BOOT_LOG" | tail -40 || echo "(nenhuma)"
   echo '```'
   echo
 
-  echo "## 2b. Assinaturas OOM / memcg — boot ${BOOT_INDEX}"
+  echo "## 2b. OOM / memcg signatures — boot ${BOOT_INDEX}"
   echo '```'
   grep -iE "$CRASH_RE_OOM" "$BOOT_LOG" | tail -40 || echo "(nenhuma)"
   echo '```'

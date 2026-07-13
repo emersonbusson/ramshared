@@ -109,7 +109,7 @@ Minimum content: findings by severity, open questions, `go`/`no-go`, blockers fi
 
 Implement strictly according to SPEC. **Zero creativity out of scope.** New decision → update SPEC first, then implement.
 
-**Hard gates before close (aligned with Advoq Passo 3 / Kahneman #13):**
+**Hard gates before close (aligned with Step 3 / Kahneman #13):**
 
 1. **Cover ≥80%** on business-logic files/crates of the slice (`cargo llvm-cov -p …`). Workspace average does **not** count. Boilerplate wiring may be `N/A — boilerplate` in IMPL.
 2. **E2E live + evidence** before `validation.md` close: deployed binary (`BINARY_MATCH=OK`), `ramshared status` / `cascade-health`, at least one legitimate path + SPEC refusals (ghost / used_kb / preflight). Order: unit/cover → E2E → validation/IMPL → commit.
@@ -126,7 +126,7 @@ Output: `docs/specs/no-milestone/{slug}/IMPL.md` (same folder) documenting:
 - rollback trigger
 - commit traceability
 
-Template: `docs/SSDV3-PROMPTS.md` Passo 3.
+Template: `docs/SSDV3-PROMPTS.md` Step 3. All SSDV3 prose is **English**.
 
 > **Benchmarks supporting a P0 numerical gate** follow [`.claude/rules/benchmarks.md`](benchmarks.md): automatic context, ≥3 runs (median + p99 + deviation), load tag (`idle`/`loaded`), record in `docs/BENCHMARKS.md` + `docs/benchmarks/results.jsonl`. Never thrash swap/ublk on the live WSL2 host.
 
