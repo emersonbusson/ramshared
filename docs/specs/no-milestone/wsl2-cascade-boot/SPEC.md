@@ -83,16 +83,16 @@ Note: systemd EnvironmentFile does not expand `${VRAM_MIB}` in ExecStart for all
 
 ## ITEM-4 — conf + CLI env
 
-<!-- Conf example sizes may exceed CLI fallback 1024; live sizes come from /etc/ramshared/cascade.conf or env. -->
+Product sizes come from `/etc/ramshared/cascade.conf` (seeded from `cascade.conf.example` on install) or env. Live host (2026-07-13): nbd **4096** MiB / zram **2048** MiB.
 
-`cascade.conf.example`:
+`cascade.conf.example` (product defaults):
 
 ```
-VRAM_MIB=1024
-ZRAM_MIB=1024
+VRAM_MIB=4096
+ZRAM_MIB=2048
 ```
 
-CLI `parse_up_args_from`: if `--vram`/`--zram` not on argv, read `RAMSHARED_VRAM_MIB` / `RAMSHARED_ZRAM_MIB` (and defaults 1024).
+CLI `parse_up_args_from`: if `--vram`/`--zram` not on argv, read `RAMSHARED_VRAM_MIB` / `RAMSHARED_ZRAM_MIB`; hard fallback when neither conf nor env is present remains **1024/1024** (safe CLI-only path, not the installed product default).
 
 ## ITEM-5 — idempotent up
 
