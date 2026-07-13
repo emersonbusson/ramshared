@@ -17,7 +17,7 @@ Perceived freezes on daily WSL2 (Docker builds, guest “freeze”) vs RamShared
 | Daemon | new PID, `BINARY_MATCH=OK` → `target/release/ramsharedd` |
 | cascade-health | `ok:true`, `ghost:false`, `order_ok:true` |
 | Ollama | residual 203/EXEC **removed** (ghost unit) |
-| Docker images/cache | cleaned; Advoq stack down until rebuild |
+| Docker images/cache | pruned on host (images rebuilt on next stack up) |
 | Go/Rust caches | cleaned; toolchains go1.26.5 / rustc 1.97.0 |
 
 ## Hang classes — status
@@ -38,8 +38,8 @@ Perceived freezes on daily WSL2 (Docker builds, guest “freeze”) vs RamShared
 1. **`cascade_io` unit cover** remains low by design — closed via live E2E (health + BINARY_MATCH), not thrash mocks on the daily host.
 2. **ITEM-8 / StorPort INF** — LUN in Get-Disk still env-bound lab.
 3. **Destructive demote/pressure drill** — isolated VM only; do not re-run on daily Ubuntu.
-4. **Named Docker volumes** (~6G) and Advoq data — not deleted when images were pruned.
-5. **I:\\** still high utilization — watch swap VHDX; not a cascade logic bug.
+4. **Named Docker volumes** may remain after image prune — data path, not cascade logic.
+5. **Host data volume (I:)** utilization — watch swap VHDX; not a cascade logic bug.
 
 ## SSDV3 gate to claim hang-class safe
 

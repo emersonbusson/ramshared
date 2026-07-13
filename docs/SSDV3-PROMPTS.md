@@ -11,7 +11,6 @@ Goals of this version:
 - produce executable PRD and SPEC in the kernel domain (locks, DMA, uAPI, IRQ)
 - improve the handoff PRD → SPEC → code → `IMPL.md`
 - add cognitive guardrails (System 2) on critical steps
-- remove SaaS/web residue (HTTP/JSON API, tenant, Prometheus-as-primary)
 
 ## How to use
 
@@ -44,17 +43,9 @@ docs/specs/
 ```
 
 - `{slug}`: kebab-case, short and descriptive (`<issue>-<description>` when there is an issue, else only `<description>`)
-- **`SPEC.md` is unique.** Step 2.5 no-go → Step 2 revises `SPEC.md` in place and commits. **Do not** create `SPECv2.md` / `SPECvN.md` for new features. History = `git log` / `git show`
-- If the feature already has a folder under `docs/specs/`, reuse it
-- Incremental evolution: reuse the folder or create a semantic subfolder under the same tree
-
-### Legacy (do not copy)
-
-| Path | Status |
-| --- | --- |
-| `docs/{feature-slug}/` flat | Legacy (README stub only allowed). Do not create new folders in this format |
-| `SPECv2.md` / `SPECvN.md` | **Forbidden.** Advoq/RamShared policy: only `SPEC.md`; no-go revises in-place; history = git |
-| H1 titles `SPECvN — …` | Legacy cosmetic; the **file** must be named `SPEC.md` and H1 should prefer `# SPEC — …` |
+- **One `SPEC.md` only.** Step 2.5 no-go revises it in place (`git` is history). Never `SPECvN.md`.
+- Reuse an existing `docs/specs/…/{slug}/` folder when the feature already has one.
+- Do not create flat legacy trees `docs/{feature-slug}/` for new work.
 
 ## Required frontmatter in PRD.md
 
@@ -75,7 +66,7 @@ issues: []
 - `milestone`: `M14`… or `—` if not associated yet
 - `issues`: array of GitHub issue numbers (`[]` if none)
 
-Status derived from files: `PRD` → only PRD.md; `SPEC` → **only** `SPEC.md` present; `DONE` → IMPL.md present. Never index `SPECvN.md`.
+Status derived from files: `PRD` → only PRD.md; `SPEC` → SPEC.md present; `DONE` → IMPL.md present.
 
 Regenerate / validate the index:
 
@@ -222,7 +213,6 @@ The SPEC translates the PRD into:
 
 ### Hard rules for SPEC
 
-- One `SPEC.md` only; never `SPECv2.md`
 - Day-0 clean by default
 - Critical steps must link Kahneman disciplines
 - Test matrix must be specific (not “add unit tests”)
@@ -233,19 +223,9 @@ The SPEC translates the PRD into:
 
 Use when locks, DMA, uAPI, privilege, Ring 0/3 isolation, or high oops/deadlock risk apply.
 
-Output: `go` / `no-go`. On `no-go`, fix `SPEC.md` **in the same turn** (in-place).
+Output: `go` / `no-go`. On `no-go`, fix `SPEC.md` **in the same turn** (in-place). Persist as `AUDIT-2.5.md` in the same folder (or `docs/reviews/YYYY-MM-DD-{slug}.md`): severity findings, open questions, verdict, blockers fixed.
 
-Persist the audit as `AUDIT-2.5.md` in the same folder (or `docs/reviews/YYYY-MM-DD-{slug}.md`).
-
-Minimum content: findings by severity, open questions, `go`/`no-go`, blockers fixed in SPEC if no-go.
-
-### Exit rule
-
-- Finding that requires a new decision → back to **Step 2**
-- `no-go` → same turn, revise `SPEC.md` in-place; never create `SPECv2.md`
-- Critical step without Kahneman / evidence / abort → `no-go`
-- Day-0 violation without exception → `no-go`
-- `go` → **Step 3** (with `AUDIT-2.5.md` recorded)
+Exit: new decision → Step 2; missing Kahneman/evidence/abort or Day-0 violation → `no-go`; `go` → Step 3.
 
 ---
 
@@ -481,8 +461,7 @@ Only advance if:
 - If Step 2 finds insoluble ambiguity, return to Step 1
 - Never resolve a structural gap only in code
 - Never create `PRD.md` / `SPEC.md` / `IMPL.md` outside `docs/specs/…`
-- Never introduce `SPECv2.md` for a new feature
 
 ## Language
 
-All SSDV3 artifacts, agent rules, and structural docs under `docs/**` are written in **English** (project policy: `CLAUDE.md`). Code comments are English. Marketing posts under `docs/marketing/` may be locale-specific by design.
+Structural docs and agent rules: **English** (`CLAUDE.md`). Marketing under `docs/marketing/` may be locale-specific.
