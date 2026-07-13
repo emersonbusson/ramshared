@@ -123,12 +123,19 @@ Implementation: if `RAMSHARED_NO_ORPHAN_RECOVER=1`, skip recover and keep old or
 
 ## Tests
 
-| Test | Expect |
-| --- | --- |
-| `canonicalize_swap_path` table | `/nbd0`→`/dev/nbd0`, etc. |
-| orphan used>0 detection pure helper | returns Refuse |
-| orphan used=0 detection pure helper | returns Recover |
-| cargo test -p ramshared-cli | all pass |
+| Test | Expect | Type |
+| --- | --- | --- |
+| `cascade::tests::canonicalize_swap_path_table` | `/nbd0`→`/dev/nbd0`, etc. | #9 |
+| `cascade::tests::orphan_plan_dirty_nbd_is_refuse` | used>0 → Refuse | #13/#16 |
+| `cascade::tests::orphan_plan_zero_used_is_recover` | used=0 → Recover | #13 |
+| `cascade::tests::allowlist_rejects_disk_paths` | no swapoff of `/dev/sdc` | #13 |
+| `cascade::tests::daemon_kill_forbidden_with_active_ublk_or_ghost` | no kill with live/ghost block swap | #16 |
+| `cascade::tests::try_recover_refuses_dirty_backend` | recover path refuse used>0 | #13 |
+| `cascade::tests::try_recover_kill_switch_on_zero_used` | `RAMSHARED_NO_ORPHAN_RECOVER` | #16 |
+| `cascade::tests::swapoff_try_prefers_canonical_then_bare` | path normalize on swapoff | #9 |
+| `cargo test -p ramshared-cli` | all pass | package |
+
+Confronted 2026-07-13: symbols + tests present; full `wsl --terminate` E2E still out of unit scope.
 
 ## Out of SPEC
 
