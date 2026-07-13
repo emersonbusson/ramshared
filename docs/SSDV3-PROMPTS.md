@@ -219,6 +219,19 @@ Kernel LKM (when in scope): use checkpatch/sparse from the **kernel source tree*
 
 `docs/INDEX.md` `DONE` is file presence only — not a substitute for cover/E2E.
 
+### SPEC ↔ code confrontation (before claiming DONE on long-lived SPECs)
+
+Re-check each ITEM still maps to a path + named test (example: cascade boot/orphan):
+
+```bash
+rg "fn (canonicalize_swap_path|plan_orphan_action|cascade_already_healthy)" crates/ramshared-cli
+cargo test -p ramshared-cli -- --test-threads=1
+sudo ./scripts/safety/cascade-preflight.sh
+sudo ./scripts/safety/cascade-health.sh
+```
+
+If code has tests the SPEC does not name, **update SPEC in place**. Example matrix: `docs/reliability/SPEC-CODE-CONFRONT-cascade-2026-07-13.md`.
+
 ---
 
 ## Principles (once)
