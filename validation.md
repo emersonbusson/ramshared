@@ -800,3 +800,25 @@ sudo systemctl restart ramshared-cascade.service
 - E2E: BINARY_MATCH=OK; health ok:true; priorities 200>100>-2; used=0; ghost=false
 **Verdict:** ✅ Step 3 cover gate for hang business-logic slice (policy + sparse + dxg + tier + block); cascade_io closed by live cascade E2E not unit %
 **Next action:** optional more unit cover on cascade_io via temp run-dir seam (non-blocking)
+
+## 2026-07-13 14:55 -03 — SPEC↔code confrontation cascade boot + orphan
+
+**What:** Confront SPECs `wsl2-cascade-boot` and `wsl2-cascade-orphan-recover` against tree: ITEM files/symbols, unit tests, live preflight/health/BINARY_MATCH. Update SPEC test matrices in place; document matrix in `docs/reliability/SPEC-CODE-CONFRONT-cascade-2026-07-13.md`.
+**Category:** integration + fail-safe
+**How to measure:**
+```bash
+test -f scripts/safety/cascade-preflight.sh
+rg "fn (canonicalize_swap_path|plan_orphan_action|cascade_already_healthy|try_recover)" crates/ramshared-cli
+cargo test -p ramshared-cli -- --test-threads=1
+sudo ./scripts/safety/cascade-preflight.sh
+sudo ./scripts/safety/cascade-health.sh
+```
+**Measured data:**
+- Boot ITEM-1..5 files present; live unit TimeoutStop=10min, ExecStartPre=preflight, ExecStop=down
+- Preflight: CASCADE-PREFLIGHT: OK (free VRAM=4723 MiB reported)
+- Orphan ITEM-1..5 symbols all present in cascade/
+- `cargo test -p ramshared-cli`: **48 passed**, 0 failed
+- Live: ghost=false, order_ok, prios 200>100>-2, BINARY_MATCH=OK
+- Gap: boot SPEC conf example sizes (4096/2048) vs CLI fallback 1024 — documented in SPEC ITEM-4 note
+**Verdict:** ✅ both SPECs implemented in code with unit/live proof for policy paths; 🟡 SPEC hygiene was behind code (fixed test tables)
+**Next action:** optional lab-only wsl --terminate orphan E2E; not on daily host
