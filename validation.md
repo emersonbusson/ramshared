@@ -751,10 +751,9 @@ sudo bash scripts/safety/cascade-pressure-probe.sh --max-sec 50
 
 ## 2026-07-13 14:27 -03 — A+B cascade redeploy + SSDV3 Passo3 + hang audit + cover gate
 
-**What:** Rebuild/redeploy ramsharedd (BINARY_MATCH), port Advoq-style Passo 3 (E2E+cover≥80%) into SSDV3, add superprompt, classify postmortem kernel vs OOM, hang/freeze audit, llvm-cov on hang-critical crates.
-**Category:** fail-safe + product path + methodology
-**Discipline:** #9 #13 #16 #18
-**How to measure:**
+**O que:** Rebuild/redeploy ramsharedd (BINARY_MATCH), port Advoq-style Passo 3 (E2E+cover≥80%) into SSDV3, add superprompt, classify postmortem kernel vs OOM, hang/freeze audit, llvm-cov on hang-critical crates.
+**Categoria:** fail-safe + product path + methodology
+**Como medir:**
 ```bash
 cargo build --release -p ramshared-wsl2d -p ramshared-cli
 sudo systemctl restart ramshared-cascade.service
@@ -762,13 +761,13 @@ sudo systemctl restart ramshared-cascade.service
 sudo ./scripts/safety/cascade-health.sh
 cargo llvm-cov -p ramshared-cli -p ramshared-tier -p ramshared-dxg -p ramshared-block --summary-only
 ```
-**Measured data:**
+**Dados medidos:**
 - Daemon PID 87514; `readlink /proc/87514/exe` = `…/target/release/ramsharedd`; **BINARY_MATCH=OK**
 - Swaps: zram0 prio 200 used 0; nbd0 prio 100 used 0; sdc prio -2 used 0
 - cascade-health: `ok:true`, `ghost:false`, `order_ok:true`
 - MemAvailable ~13.0 GiB / 15.6 GiB total; swap free = total
 - Unit tests hang-critical: cli 23, dxg 10, tier 8 — **all pass**
-- llvm-cov line cover (fatia hang):
+- llvm-cov line cover (hang slice):
   - ramshared-tier cascade **100%**, priority **90.20%**
   - ramshared-dxg **96.94%**
   - ramshared-block handshake **94.14%**, inflight **100%**, protocol **91.01%**, request **93.80%**, vram_backend **91.06%**, sparse_vram **79.55%**
@@ -776,29 +775,28 @@ cargo llvm-cov -p ramshared-cli -p ramshared-tier -p ramshared-dxg -p ramshared-
   - TOTAL selected packages **59.25% lines** (not a Passo 3 close for cli cascade)
 - Docs: `docs/SSDV3-PROMPTS.md` rules 9–10 + 13–16 + E2E section; `superprompt.md`; `docs/reliability/HANG-FREEZE-AUDIT-2026-07-13.md`; postmortem.sh kernel vs OOM split
 - Host noise removed earlier: ollama unit ghost, docker images/build cache, go/rust caches
-**Verdict:** ✅ cascade operational + methodology ported; 🟡 cover gate **not** green for `ramshared-cli` cascade (33.97% < 80%) — residual tracked, hang *logic* unit tests exist for ghost/orphan/kill-forbidden
-**Next action:** fatia cover: expand unit/integration tests for `ramshared-cli/src/cascade.rs` up/down I/O branches and sparse_vram to ≥80% lines; optional demote drill only on isolated VM
+**Veredito:** 🟡 cascade operational + methodology ported; cover gate not green for `ramshared-cli` cascade (33.97% < 80%) — residual tracked; hang logic unit tests exist for ghost/orphan/kill-forbidden
+**Proxima acao:** fatia cover: expand unit/integration tests for cascade policy + sparse_vram to ≥80% lines; optional demote drill only on isolated VM
 
 ## 2026-07-13 14:35 -03 — Cover gate hang fatia ≥80% (policy) + cascade_io E2E
 
-**What:** Expanded cascade hang-policy unit tests (TLS seams, mock sh); sparse_vram tests; split `cascade_io` (up/down shell) from policy `cascade/mod.rs`; llvm-cov re-measure; release redeploy.
-**Category:** fail-safe + product path
-**Discipline:** #9 #13 #16
-**How to measure:**
+**O que:** Expanded cascade hang-policy unit tests (TLS seams, mock sh); sparse_vram tests; split `cascade_io` (up/down shell) from policy `cascade/mod.rs`; llvm-cov re-measure; release redeploy.
+**Categoria:** fail-safe + product path
+**Como medir:**
 ```bash
 cargo test -p ramshared-cli -p ramshared-block -- --test-threads=1
 cargo llvm-cov -p ramshared-cli -p ramshared-tier -p ramshared-dxg -p ramshared-block --summary-only
 sudo systemctl restart ramshared-cascade.service
 ./target/release/ramshared status && sudo ./scripts/safety/cascade-health.sh
 ```
-**Measured data:**
+**Dados medidos:**
 - Unit tests: cli 48 pass, block 41 pass
 - llvm-cov lines:
-  - `cascade/mod.rs` (hang policy) **88.97%** (≥80% ✅)
-  - `sparse_vram.rs` **92.25%** (≥80% ✅)
+  - `cascade/mod.rs` (hang policy) **88.97%** (≥80%)
+  - `sparse_vram.rs` **92.25%** (≥80%)
   - `ramshared-dxg` **96.94%**, tier cascade **100%**, priority **90.20%**, block handshake/request/protocol/inflight **≥91%**
-  - `cascade_io.rs` **1.77%** unit — **E2E only** (shell up/down; not thrash-mocked on live host)
+  - `cascade_io.rs` **1.77%** unit — E2E only (shell up/down; not thrash-mocked on live host)
   - `main.rs` **35.29%** — N/A wiring CLI dispatch
 - E2E: BINARY_MATCH=OK; health ok:true; prios 200>100>-2; used=0; ghost=false
-**Verdict:** ✅ Passo 3 cover gate for hang **business logic** fatia (policy + sparse + dxg + tier + block); cascade_io closed by live cascade E2E not unit %
-**Next action:** optional more unit cover on cascade_io via temp run-dir seam (non-blocking)
+**Veredito:** ✅ Passo 3 cover gate for hang business-logic fatia (policy + sparse + dxg + tier + block); cascade_io closed by live cascade E2E not unit %
+**Proxima acao:** optional more unit cover on cascade_io via temp run-dir seam (non-blocking)

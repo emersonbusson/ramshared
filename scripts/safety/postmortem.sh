@@ -37,14 +37,14 @@ fi
 
 TMPDIR_PM="$(mktemp -d)"; trap 'rm -rf "$TMPDIR_PM"' EXIT
 
-# --- sinais de crash que valem coleta (deterministicos) ---
-# Kahneman #13: "Call Trace:" sozinho e OOM de memcg Docker NAO sao kernel BUG.
-# \b evita falso-positivo: "kernelOOPSie"/"wh-OOPS-ie" nao casam \bOops:, "deBUG:" nao casa \bBUG.
-# hung_task / blocked (swap ghost ublk) e panics continuam como kernel-class.
+# --- Crash signatures worth collecting (deterministic) ---
+# Kahneman #13: bare "Call Trace:" and Docker memcg OOM are NOT kernel BUG.
+# \b avoids false positives: "kernelOOPSie"/"wh-OOPS-ie" miss \bOops:, "deBUG:" misses \bBUG.
+# hung_task / blocked (ghost ublk swap) and panics stay kernel-class.
 CRASH_RE_KERNEL='kernel BUG|\bBUG:|\[ cut here \]|\bOops[:# ]|hung_task|blocked for more than [0-9]|general protection fault|kernel panic|stack segment|kernel NULL pointer|task .* blocked for more than'
-# OOM e pressão: reportar em seção própria; nao rotular como "CRASH de kernel" sozinhos.
+# OOM / pressure: report in a separate section; do not label as kernel CRASH alone.
 CRASH_RE_OOM='Out of memory:|oom-kill:|Memory cgroup out of memory'
-# União para grep de evidências (kernel + OOM); veredito usa classificação.
+# Union for evidence grep (kernel + OOM); verdict uses classification.
 CRASH_RE="${CRASH_RE_KERNEL}|${CRASH_RE_OOM}"
 
 # Materializes the boot journal once (prevents calling journalctl N times AND avoids
