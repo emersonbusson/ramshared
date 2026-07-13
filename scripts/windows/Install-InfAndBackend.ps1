@@ -31,6 +31,7 @@ if (-not (Test-Path $sys)) { throw "missing $sys - build+sign first" }
 Copy-Item $sys "$PackageDir\ramshared.sys" -Force
 Copy-Item $psys "$PackageDir\poolstress.sys" -Force
 Copy-Item $inf "$PackageDir\ramshared.inf" -Force
+Copy-Item (Join-Path $RepoRoot "drivers\windows\ramshared\x64\Release\package\ramshared.cat") "$PackageDir\ramshared.cat" -Force
 
 # Stop any sc-legacy instances
 sc.exe stop ramshared 2>$null | Out-Null
