@@ -10,7 +10,6 @@ use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time::Duration;
 
-
 pub(crate) fn arm_forensics() {
     let payload = format!(
         "armed_at={}\npid={}\nreason=ramshared-up\n",
@@ -28,13 +27,11 @@ pub(crate) fn arm_forensics() {
     }
 }
 
-
 pub(crate) fn disarm_forensics() {
     for path in ARMED_MARKER_CANDIDATES {
         let _ = fs::remove_file(path);
     }
 }
-
 
 pub(crate) fn stop_daemon_gracefully() {
     // Prefer PID file if we wrote one
@@ -66,7 +63,6 @@ pub(crate) fn stop_daemon_gracefully() {
     sleep(Duration::from_millis(500));
     let _ = fs::remove_file(PID_FILE);
 }
-
 
 pub(crate) fn setup_zram(mb: u64, prio: i32) -> Result<String, CascadeError> {
     if mb == 0 {
@@ -107,7 +103,6 @@ pub(crate) fn setup_zram(mb: u64, prio: i32) -> Result<String, CascadeError> {
     Ok("/dev/zram0".into())
 }
 
-
 pub(crate) fn setup_zram_sysfs(mb: u64, prio: i32) -> Result<(), CascadeError> {
     let path = PathBuf::from("/sys/block/zram0");
     if !path.exists() {
@@ -132,7 +127,6 @@ pub(crate) fn setup_zram_sysfs(mb: u64, prio: i32) -> Result<(), CascadeError> {
     eprintln!("[up] zram /dev/zram0 via sysfs prio={prio}");
     Ok(())
 }
-
 
 pub fn up() -> Result<(), CascadeError> {
     let a = parse_up_args()?;
@@ -271,7 +265,6 @@ pub fn up() -> Result<(), CascadeError> {
     status()
 }
 
-
 pub fn down() -> Result<(), CascadeError> {
     let recorded_swap = fs::read_to_string(SWAP_DEV_FILE)
         .ok()
@@ -352,4 +345,3 @@ pub fn down() -> Result<(), CascadeError> {
     eprintln!("[down] cascata desmontada (swapoff-first, sem kill -9)");
     status()
 }
-

@@ -691,7 +691,10 @@ mod tests {
         )
         .unwrap();
         let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
-        assert!(err.0.contains("free-floor") || err.0.contains("floor"), "{err:?}");
+        assert!(
+            err.0.contains("free-floor") || err.0.contains("floor"),
+            "{err:?}"
+        );
     }
 
     #[test]
@@ -710,10 +713,13 @@ mod tests {
             }
         }
         let p = BadInfo;
-        let mut be = SparseVramBackend::new_with_limits(&p, 1024 * 1024, 256 * 1024, 4096, 0, None)
-            .unwrap();
+        let mut be =
+            SparseVramBackend::new_with_limits(&p, 1024 * 1024, 256 * 1024, 4096, 0, None).unwrap();
         let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
-        assert!(err.0.contains("mem_info") || err.0.contains("no gpu"), "{err:?}");
+        assert!(
+            err.0.contains("mem_info") || err.0.contains("no gpu"),
+            "{err:?}"
+        );
         assert_eq!(be.alloc_fails, 1);
     }
 

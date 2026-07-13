@@ -74,10 +74,9 @@ fn sh(cmd: &str, args: &[&str]) -> Result<String, CascadeError> {
             let mut q = q.borrow_mut();
             // Match by command name, then by full "cmd arg0", then wildcard "*"
             let full = format!("{cmd} {}", args.join(" "));
-            if let Some(i) = q
-                .iter()
-                .position(|(p, _)| p == cmd || p == &full || p == "*" || full.starts_with(p.as_str()))
-            {
+            if let Some(i) = q.iter().position(|(p, _)| {
+                p == cmd || p == &full || p == "*" || full.starts_with(p.as_str())
+            }) {
                 return q.remove(i);
             }
             None
@@ -815,7 +814,6 @@ pub fn status() -> Result<(), CascadeError> {
     Ok(())
 }
 
-
 mod cascade_io;
 pub use cascade_io::{down, up};
 
@@ -1014,7 +1012,6 @@ Filename Type Size Used Priority
         );
         assert!(!cascade_already_healthy(&ghost));
     }
-
 
     fn clear_sh_script() {
         SH_SCRIPT.with(|q| q.borrow_mut().clear());
