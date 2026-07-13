@@ -83,14 +83,16 @@ Note: systemd EnvironmentFile does not expand `${VRAM_MIB}` in ExecStart for all
 
 ## ITEM-4 — conf + CLI env
 
-`cascade.conf.example`:
+Product sizes come from `/etc/ramshared/cascade.conf` (seeded from `cascade.conf.example` on install) or env. Live host (2026-07-13): nbd **4096** MiB / zram **2048** MiB.
+
+`cascade.conf.example` (product defaults):
 
 ```
-VRAM_MIB=1024
-ZRAM_MIB=1024
+VRAM_MIB=4096
+ZRAM_MIB=2048
 ```
 
-CLI `parse_up_args_from`: if `--vram`/`--zram` not on argv, read `RAMSHARED_VRAM_MIB` / `RAMSHARED_ZRAM_MIB` (and defaults 1024).
+CLI `parse_up_args_from`: if `--vram`/`--zram` not on argv, read `RAMSHARED_VRAM_MIB` / `RAMSHARED_ZRAM_MIB`; hard fallback when neither conf nor env is present remains **1024/1024** (safe CLI-only path, not the installed product default).
 
 ## ITEM-5 — idempotent up
 
@@ -128,5 +130,15 @@ If after enable, any session shows ghost swap or WSL hard-freeze attributable to
 
 ## Tests
 
-- Unit: env defaults for vram/zram; idempotent predicate pure helpers if extracted.  
-- Manual: preflight dry-run; install without --enable.
+| Test | Expect | Cover / type |
+| --- | --- | --- |
+| `cascade::tests::default_mb_from_env_and_orphan_kill_switch` | env MiB + orphan kill-switch | #9 |
+| `cascade::tests::zram_zero_is_parsed` | `--zram 0` | #9 |
+| `cascade::tests::cascade_healthy_requires_vram_swap_record_and_live_daemon_signal` | not healthy without record/daemon | #13 |
+| `cascade::tests::ghost_blocks_healthy` | ghost → not healthy | #13 |
+| `cascade::tests::refuse_half_cascade_when_vram_live_without_health` | half-state refuse | #13/#16 |
+| `cargo test -p ramshared-cli` | all pass | package |
+| Manual: `scripts/safety/cascade-preflight.sh` | CASCADE-PREFLIGHT: OK when ready | E2E |
+| Manual: install without `--enable` | unit not enabled | E2E |
+
+**Conf vs CLI defaults (2026-07-13 confront):** `cascade.conf.example` may use larger VRAM/ZRAM (e.g. 4096/2048) than CLI hard-fallback 1024/1024 when env/flags absent. Product path = conf/env; CLI 1024 is fallback only — not a dual default to reintroduce.

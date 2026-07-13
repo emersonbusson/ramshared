@@ -114,7 +114,15 @@ Mid-flight spill while `used_kb > 0`: mirror Live chunks to RAM/file, free CUDA,
 
 ## ITEM-3 — Telemetry
 
-Log / JSONL at least once per canary tick:
+**Product path (Day-0, confirmed in code):**
+
+- Startup stderr: `VRAM mode=sparse|prealloc` with capacity / chunk / commit_cap / reserve / committed.
+- On reclaim: stderr with freed MiB + `live=` chunk count.
+- In-process counters on `SparseVramBackend`: `alloc_fails`, `reclaim_frees`, `chunks_live()`, committed bytes via live×chunk.
+
+Optional daemon `--telemetry-jsonl` is the **residency/canary** stream (broader than sparse-only). It is **not** required to emit the exact field names below as a separate sparse schema.
+
+**Logical fields** (map to counters/logs above; may appear in future sparse JSON line):
 
 ```text
 vram_capacity_mib

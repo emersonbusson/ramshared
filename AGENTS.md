@@ -1,15 +1,15 @@
 # AGENTS.md — RamShared
 
-Resumo terso para CLIs estilo Codex/aider/Jules. Para visão completa, ler `CLAUDE.md` e `README.md`.
+Terse summary for Codex/aider/Jules-style CLIs. For full guidance, read `CLAUDE.md` and `README.md`.
 
-## Propósito do repo
+## Repo purpose
 
-`ramshared` é o repositório principal de pesquisa e desenvolvimento de aceleração de hardware, vRAM como RAM (NUMA), e drivers de kernel de baixo nível.
+`ramshared` is the main R&D repository for hardware acceleration, vRAM-as-RAM (NUMA), and low-level kernel drivers.
 
-## Para agentes externos (Jules, Codex, aider)
+## For external agents (Jules, Codex, aider)
 
-**AGENTS.md e CLAUDE.md na raiz devem ser mantidos minúsculos.**
-O source of truth para regras de arquitetura e código está em:
+**Keep root `AGENTS.md` and `CLAUDE.md` small.**
+The source of truth for architecture and coding rules is:
 
 - [`.claude/rules/kernel.md`](.claude/rules/kernel.md)
 - [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md)
@@ -17,59 +17,50 @@ O source of truth para regras de arquitetura e código está em:
 - [`.claude/rules/governance.md`](.claude/rules/governance.md)
 - [`.claude/rules/benchmarks.md`](.claude/rules/benchmarks.md)
 
-### Antes de planejar, editar ou abrir patch/PR
+### Before planning, editing, or opening a patch/PR
 
-1. Ler `README.md`.
-2. Ler [`.claude/rules/*.md`](.claude/rules/*.md) pertinentes à área.
-3. Ler `MEMORY.md` de baixo para cima (contexto temporal append-only). **`MEMORY.md` é local-only** (listado em `.gitignore`) — não existe no clone limpo; se ausente, siga sem ele.
-4. Ler `conversa.md` se presente (contexto ativo).
+1. Read `README.md`.
+2. Read relevant [`.claude/rules/*.md`](.claude/rules/*.md).
+3. Read `MEMORY.md` bottom-up (append-only temporal context). **`MEMORY.md` is local-only** (listed in `.gitignore`) — absent on a clean clone; proceed without it if missing.
+4. Read `conversa.md` if present (active context).
 
-### Linguagem
+### Language
 
-- **Inglês** em todo o projeto: código fonte (`.rs`, `.h`, `.c`), comentários, documentação principal (`README.md`, `ARCHITECTURE.md`, etc.), títulos de commit, e Pull Requests.
+- **English** across the project: source (`.rs`, `.h`, `.c`), comments, structural docs (`README.md`, `ARCHITECTURE.md`, `docs/**` except locale-specific marketing posts), commit titles, and pull requests.
 
+### Scope
 
-## Commits e Patches
+- Docs and agent rules describe **RamShared only**. No foreign product narratives, service names, or imported process templates from other codebases.
 
-Conventional Commits em **inglês**, título imperativo, ≤72 chars. Body em PT-BR.
-Commits **não-triviais** (que toquem em locks, DMA ou alocação atômica) DEVEM ter `Rollback trigger: ...` no body.
+## Commits and patches
 
-## Metodologias (SSDV3 e Kahneman)
+Conventional Commits in **English**, imperative title, ≤72 chars. Body in **English**.
+Non-trivial commits (locks, DMA, or atomic allocation) **MUST** include `Rollback trigger: ...` in the body.
 
-- **SSDV3**: Spec-Driven Development. Ver [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md) e [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md). Artefatos em `docs/specs/no-milestone/{slug}/{PRD,SPEC,IMPL,AUDIT-2.5}.md` (SPEC único, revisão in-place; sem `SPECv2` em features novas). Índice: [`docs/INDEX.md`](docs/INDEX.md) (`node tools/generate-docs-index.mjs`). Obrigatório para locks/DMA/mm/uAPI/hardware/MMU/DRM — **não** para scripts CI/host-safety sozinhos (#15–#18 + `benchmarks.md`).
-- **Kahneman Disciplines**: 18 disciplinas operacionais. Fonte: [`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md). Ring 0 e PRs estruturais: counterfactual (#2), número antes de adjetivo (#3); retry/reconnect (#15), demote/reclaim (#16), comandos replayáveis (#17), shim sunset (#18).
-- **Docs hygiene**: `.claude/rules/documentation.md`, `.claude/rules/security.md` · `./scripts/docs-check.sh` (index + broken links).
+## Methodologies (SSDV3 and Kahneman)
 
-## Perfis Cognitivos
+- **SSDV3**: [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md) + thin rules [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md). Specs: `docs/specs/no-milestone/{slug}/`. Step 3: cover ≥80% per slice + live E2E before `validation.md`.
+- **Kahneman**: [`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md) (#2/#3/#15–#18 for structural/hang work).
+- **Hang audit**: [`superprompt.md`](superprompt.md).
+- **Docs check**: `./scripts/docs-check.sh`.
+
+## Cognitive profiles
 
 ### 1. Kernel Hacker (`kernel-coder`)
-**Propósito:** Escrever código `C` ou `Rust for Linux` que manipule o gerenciamento de memória, PCIe, e drivers DRM.
-**Rules:** Leia [`.claude/rules/kernel.md`](.claude/rules/kernel.md).
+**Purpose:** Write `C` or `Rust for Linux` that manipulates memory management, PCIe, and DRM drivers.
+**Rules:** Read [`.claude/rules/kernel.md`](.claude/rules/kernel.md).
 
 ### 2. Hardware Architect (`hardware-researcher`)
-**Propósito:** Ler e interpretar manuais técnicos de hardware (Datasheets, PCIe Gen5, CXL 3.0).
+**Purpose:** Research CXL, NUMA, and VRAM-as-memory topology decisions.
+**Rules:** Prefer evidence, ADRs, and SSDV3 when structural.
 
-### 3. Userspace Integrator (`userspace-coder`)
-**Propósito:** Escrever daemons C/Rust (Ring 3) lidando com `io_uring`, epoll, e gerenciamento fino de memória.
+### 3. Reliability / hang auditor
+**Purpose:** Ghost swap, swapoff-first, BINARY_MATCH, postmortem validity.
+**Rules:** Use [`superprompt.md`](superprompt.md) and Kahneman #13/#16.
 
 ## Anti-skynet
 
-- Sem ignorar alertas do `checkpatch.pl` ou `sparse`.
-- Sem bypassar locks atômicos deliberadamente.
-- Sem criar leaks de memória (kmemleak deve estar verde).
-
-<!-- COMMUNICATION-STYLE:BEGIN -->
-## Communication style
-
-Estilo Tech Lead Kernel nas respostas:
-
-- **TL;DR** primeiro (1-3 frases): o que é, status, próximo passo se houver.
-- **Impact** (opcional): o que muda na prática (latência, memória).
-- **Topics**: bullets curtos, no máximo 1 nível de aninhamento.
-- **Next Steps**: ação requisitada do humano.
-
-Honestidade técnica:
-- Distinguir explícito o que está testado via kselftest/dmesg do que é inferência.
-- Números antes de adjetivos. "TLB shootdown stall = 50us" > "Ficou rápido".
-- Sem floreio. Sem emoji a menos que o usuário use primeiro.
-<!-- COMMUNICATION-STYLE:END -->
+- No auto-commit/auto-merge without supervision/approval.
+- No persisting secrets.
+- No undocumented dependencies.
+- No thrash pressure on the live WSL2 daily host.

@@ -6,6 +6,8 @@
 
 [`.claude/rules/*.md`](.claude/rules/*.md) are the authoritative code rules. `AGENTS.md` mirrors these guidelines.
 
+**Documentation scope:** only this repository. Do not load or invent requirements from other products/monorepos when working here.
+
 Before changing code:
 
 1. Read this file and `MEMORY.md` (local-only / gitignored; if missing, proceed).
@@ -18,7 +20,7 @@ Before changing code:
 ## Core Methodologies
 
 - **Kahneman Disciplines**: Every architectural or lock/DMA decision must follow the 18 Kahneman disciplines ([`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md)). Avoid System 1; use counterfactuals and numerical rollbacks; follow #15–#18 for retry, fail-safe, idempotency, and shim sunsetting.
-- **SSDV3**: Spec-Driven Development. Pipeline: PRD → SPEC → (2.5 + `AUDIT-2.5.md`) → IMPL in `docs/specs/…`. Index: [`docs/INDEX.md`](docs/INDEX.md). See [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md) and [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md). Documentation guidelines are in [`.claude/rules/documentation.md`](.claude/rules/documentation.md).
+- **SSDV3**: Spec-Driven Development. Pipeline: PRD → SPEC → (2.5 + `AUDIT-2.5.md`) → IMPL in `docs/specs/…`. Index: [`docs/INDEX.md`](docs/INDEX.md). See [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md) and [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md). **Step 3 hard gates:** cover ≥80% per slice crate/file + live E2E with deployed binary before closing `validation.md`. Documentation guidelines are in [`.claude/rules/documentation.md`](.claude/rules/documentation.md). Hang/freeze adversarial: [`superprompt.md`](superprompt.md). All structural docs in **English**.
 
 ## Day-0 Policy
 

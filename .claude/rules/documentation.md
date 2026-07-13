@@ -13,6 +13,15 @@ paths:
 
 Structural, architectural, or pattern-changing work is **incomplete** without the matching documentation in the **same commit or PR**. `CLAUDE.md` / `AGENTS.md` stay short entrypoints — deep detail lives in ADRs, SPECs, runbooks, and `.claude/rules/*`.
 
+## Scope (this repo only)
+
+Documentation under this tree describes **RamShared only**: cascade, kernel/userspace crates, Windows lab drivers, safety/lab scripts, and local methodology.
+
+- Do **not** narrate other products, services, or monorepos as if they were part of this codebase
+- Do **not** paste foreign SSDV3/API/tenant/web conventions “because another project has them”
+- Cross-links stay inside this repo (`docs/`, `.claude/rules/`, root entrypoints) unless citing an external standard (kernel docs, RFCs, vendor manuals)
+- Agent prompts and rules must be readable without context from any other repository
+
 ## Day-0 documentation
 
 PRDs, SPECs, ADRs, and agent rules describe the **final** primary path, not compatibility scaffolding for a production that does not exist.
