@@ -20,9 +20,9 @@
 
 | ID | Files |
 | --- | --- |
-| ITEM-1 priorities | `crates/ramshared-cli/src/cascade.rs` (`up` log); `ramshared-tier` defaults |
+| ITEM-1 priorities | `crates/ramshared-cli/src/cascade/cascade_io.rs` (`up` priority log); `ramshared-tier` defaults |
 | ITEM-2 boot | `scripts/safety/install-cascade-boot.sh --enable`; unit already in wsl2-cascade-boot |
-| ITEM-3 transport auto | `cascade.rs`: `Transport::Auto`, `is_wsl2`, `resolve_transport` |
+| ITEM-3 transport auto | `cascade/mod.rs`: `Transport::Auto`, `is_wsl2`, `resolve_transport`; ublk refuse in `cascade_io.rs` |
 | ITEM-4 idempotent | existing `cascade_already_healthy` (unchanged contract) |
 
 ## Small decisions
