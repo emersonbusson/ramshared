@@ -871,3 +871,15 @@ swapon --show
 - push branch: **accepted** `origin/docs/cascade-spec-code-confront-2026-07-13`
 **Verdict:** ✅ live cascade healthy; docs land via PR not direct main
 **Next action:** open/merge PR after CI green; never pressure/`wsl --terminate` on daily host without lab
+
+## 2026-07-13 15:03 -03 — PR #33 merged; main green post-merge
+
+**What:** Merged https://github.com/emersonbusson/ramshared/pull/33 after 6/6 checks green (pr-body fixed; fmt+clippy+test 1m8s). Local main = origin/main. Post-merge health recheck.
+**Category:** product path
+**How to measure:** `gh pr view 33 --json state,mergedAt`; `sudo ./scripts/safety/cascade-health.sh`; BINARY_MATCH
+**Measured data:**
+- PR state MERGED @ 2026-07-13T18:02:46Z merge `c30f2ca`
+- health ok=true ghost=false order_ok=true prios 200>100>-2 used=0
+- BINARY_MATCH=OK
+**Verdict:** ✅ closed loop confront → PR → CI → main → live still healthy
+**Next action:** lab-only for pressure/`wsl --terminate`; no daily-host destructive drills
