@@ -38,9 +38,14 @@ fi
 TMPDIR_PM="$(mktemp -d)"; trap 'rm -rf "$TMPDIR_PM"' EXIT
 
 # --- sinais de crash que valem coleta (deterministicos) ---
+# Kahneman #13: "Call Trace:" sozinho e OOM de memcg Docker NAO sao kernel BUG.
 # \b evita falso-positivo: "kernelOOPSie"/"wh-OOPS-ie" nao casam \bOops:, "deBUG:" nao casa \bBUG.
-# Inclui hung_task / blocked (swap ghost ublk) e panics — sem falso positivo solto em "debug".
-CRASH_RE='kernel BUG|\bBUG:|\[ cut here \]|\bOops[:# ]|Call Trace:|hung_task|blocked for more than [0-9]|Out of memory|oom-kill|general protection fault|kernel panic|stack segment|kernel NULL pointer|task .* blocked for more than'
+# hung_task / blocked (swap ghost ublk) e panics continuam como kernel-class.
+CRASH_RE_KERNEL='kernel BUG|\bBUG:|\[ cut here \]|\bOops[:# ]|hung_task|blocked for more than [0-9]|general protection fault|kernel panic|stack segment|kernel NULL pointer|task .* blocked for more than'
+# OOM e pressão: reportar em seção própria; nao rotular como "CRASH de kernel" sozinhos.
+CRASH_RE_OOM='Out of memory:|oom-kill:|Memory cgroup out of memory'
+# União para grep de evidências (kernel + OOM); veredito usa classificação.
+CRASH_RE="${CRASH_RE_KERNEL}|${CRASH_RE_OOM}"
 
 # Materializes the boot journal once (prevents calling journalctl N times AND avoids
 # the pipefail+grep-q+SIGPIPE gotcha that caused false "no crash" reports).
@@ -50,8 +55,17 @@ dump_boot() { # $1 = boot index -> arquivo em $TMPDIR_PM
   echo "$f"
 }
 
-boot_has_crash() { # $1 = boot index
-  grep -qiE "$CRASH_RE" "$(dump_boot "$1")"
+boot_has_kernel_crash() { # $1 = boot index
+  grep -qiE "$CRASH_RE_KERNEL" "$(dump_boot "$1")"
+}
+
+boot_has_oom() { # $1 = boot index
+  grep -qiE "$CRASH_RE_OOM" "$(dump_boot "$1")"
+}
+
+# --auto: coleta se kernel crash OU OOM (ainda relevante forense) OU armed
+boot_has_crash() { # $1 = boot index — legado: qualquer sinal forense
+  boot_has_kernel_crash "$1" || boot_has_oom "$1"
 }
 
 # --- modo --auto: decide se coleta (crash em -1 OU marcador armed) e nao duplica ---
@@ -93,25 +107,41 @@ REPORT="$FORENSICS_DIR/postmortem-${TS}-boot${BOOT_INDEX}.md"
   echo
 
   echo "## 1. Veredito rapido"
-  if boot_has_crash "$BOOT_INDEX"; then
-    echo "- **CRASH detectado** no boot ${BOOT_INDEX} (assinatura de kernel BUG/Oops/hung_task/OOM)."
+  if boot_has_kernel_crash "$BOOT_INDEX"; then
+    echo "- **KERNEL CRASH / hang-class** no boot ${BOOT_INDEX} (BUG/Oops/panic/hung_task/blocked)."
+  elif boot_has_oom "$BOOT_INDEX"; then
+    echo "- **OOM / pressão de memória** no boot ${BOOT_INDEX} (processo ou memcg) — **não** rotulado como kernel CRASH."
+    echo "  (ex.: OOM memcg de container Docker ≠ BUG do cascade RamShared; ver seção 2b.)"
   else
-    echo "- Sem assinatura de crash de kernel no boot ${BOOT_INDEX}."
+    echo "- Sem assinatura de kernel crash nem OOM no boot ${BOOT_INDEX}."
     echo "  (No WSL2 um fim abrupto sem esta assinatura geralmente = \`wsl --shutdown\` ou VM"
     echo "   morta pelo host, NAO um kernel BUG do guest. Ver Event Log do Windows abaixo.)"
+  fi
+  # Ruído operacional comum (unit fantasma, restart loop) — nao e crash
+  BOOT_LOG_PREVIEW="$(dump_boot "$BOOT_INDEX")"
+  if grep -qE 'status=203/EXEC|Restarting|Scheduled restart job' "$BOOT_LOG_PREVIEW" 2>/dev/null; then
+    echo "- **Nota de ruído:** journal contém loops 203/EXEC ou restart de unit (ex. binário ausente)."
+    echo "  Isso polui o fim do boot mas **não** prova hang de swap/ghost ublk."
   fi
   echo
 
   BOOT_LOG="$(dump_boot "$BOOT_INDEX")"
 
-  echo "## 2. Assinaturas de crash (grep no journal do boot ${BOOT_INDEX})"
+  echo "## 2a. Assinaturas KERNEL (BUG/Oops/hung_task) — boot ${BOOT_INDEX}"
   echo '```'
-  grep -iE "$CRASH_RE" "$BOOT_LOG" | tail -40 || echo "(nenhuma)"
+  grep -iE "$CRASH_RE_KERNEL" "$BOOT_LOG" | tail -40 || echo "(nenhuma)"
+  echo '```'
+  echo
+
+  echo "## 2b. Assinaturas OOM / memcg — boot ${BOOT_INDEX}"
+  echo '```'
+  grep -iE "$CRASH_RE_OOM" "$BOOT_LOG" | tail -40 || echo "(nenhuma)"
   echo '```'
   echo
 
   echo "## 3. Fim do boot ${BOOT_INDEX} (ultimas 40 linhas antes do termino)"
   echo '```'
+  # Preferir fim sem spam puro de restart se houver linhas uteis; still tail-40 for forensics
   tail -40 "$BOOT_LOG"
   echo '```'
   echo

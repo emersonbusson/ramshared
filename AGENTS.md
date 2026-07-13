@@ -36,8 +36,9 @@ Commits **não-triviais** (que toquem em locks, DMA ou alocação atômica) DEVE
 
 ## Metodologias (SSDV3 e Kahneman)
 
-- **SSDV3**: Spec-Driven Development. Ver [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md) e [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md). Artefatos em `docs/specs/no-milestone/{slug}/{PRD,SPEC,IMPL,AUDIT-2.5}.md` (SPEC único, revisão in-place; sem `SPECv2` em features novas). Índice: [`docs/INDEX.md`](docs/INDEX.md) (`node tools/generate-docs-index.mjs`). Obrigatório para locks/DMA/mm/uAPI/hardware/MMU/DRM — **não** para scripts CI/host-safety sozinhos (#15–#18 + `benchmarks.md`).
+- **SSDV3**: Spec-Driven Development. Ver [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md) e [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md). Artefatos em `docs/specs/no-milestone/{slug}/{PRD,SPEC,IMPL,AUDIT-2.5}.md` (SPEC único, revisão in-place; sem `SPECv2` em features novas). Índice: [`docs/INDEX.md`](docs/INDEX.md) (`node tools/generate-docs-index.mjs`). Obrigatório para locks/DMA/mm/uAPI/hardware/MMU/DRM — **não** para scripts CI/host-safety sozinhos (#15–#18 + `benchmarks.md`). **Passo 3:** cover ≥80% por crate/arquivo da fatia + E2E ao vivo com binário deployado antes de fechar `validation.md` (unit sozinho não fecha).
 - **Kahneman Disciplines**: 18 disciplinas operacionais. Fonte: [`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md). Ring 0 e PRs estruturais: counterfactual (#2), número antes de adjetivo (#3); retry/reconnect (#15), demote/reclaim (#16), comandos replayáveis (#17), shim sunset (#18).
+- **Superprompt adversarial (hang/freeze):** [`superprompt.md`](superprompt.md) — ghost swap, free com used_kb≠0, BINARY_MATCH, postmortem sem teatro.
 - **Docs hygiene**: `.claude/rules/documentation.md`, `.claude/rules/security.md` · `./scripts/docs-check.sh` (index + broken links).
 
 ## Perfis Cognitivos

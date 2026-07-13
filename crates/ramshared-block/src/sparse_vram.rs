@@ -625,4 +625,118 @@ mod tests {
         let cap2 = safe_commit_cap(4 << 30, 6 << 30, 512 << 20);
         assert_eq!(cap2, 4 << 30);
     }
+
+    #[test]
+    fn rejects_zero_capacity_and_bad_chunk() {
+        let p = FakeProvider::new();
+        assert!(SparseVramBackend::new(&p, 0, 256 * 1024, 4096).is_err());
+        assert!(SparseVramBackend::new(&p, 1024 * 1024, 0, 4096).is_err());
+        assert!(SparseVramBackend::new(&p, 1024 * 1024, 1000, 4096).is_err());
+    }
+
+    #[test]
+    fn empty_read_write_and_flush_and_accessors() {
+        let p = FakeProvider::new();
+        let mut be = SparseVramBackend::new(&p, 1024 * 1024, 256 * 1024, 4096).unwrap();
+        be.read_at(0, &mut []).unwrap();
+        be.write_at(0, &[]).unwrap();
+        be.flush().unwrap();
+        assert_eq!(be.size_bytes(), 1024 * 1024);
+        assert_eq!(be.block_size(), 4096);
+        assert_eq!(be.capacity_bytes(), 1024 * 1024);
+        assert_eq!(be.chunk_bytes(), 256 * 1024);
+        assert!(be.chunks_total() >= 1);
+        assert_eq!(be.committed_bytes(), 0);
+        assert!(be.commit_cap_bytes() > 0);
+        assert!(be.reserve_floor_bytes() > 0);
+    }
+
+    #[test]
+    fn free_all_live_and_oob_read() {
+        let p = FakeProvider::new();
+        let mut be = SparseVramBackend::new(&p, 1024 * 1024, 256 * 1024, 4096).unwrap();
+        be.write_at(0, &[9u8; 4096]).unwrap();
+        assert_eq!(be.chunks_live(), 1);
+        let freed = be.free_all_live();
+        assert!(freed > 0);
+        assert_eq!(be.chunks_live(), 0);
+        let mut buf = [0u8; 16];
+        assert!(be.read_at(2 * 1024 * 1024, &mut buf).is_err());
+        assert!(be.write_at(2 * 1024 * 1024, &[1u8; 16]).is_err());
+    }
+
+    #[test]
+    fn free_floor_refuses_when_provider_free_is_low() {
+        struct TightProvider;
+        impl VramProvider for TightProvider {
+            type Mem<'a>
+                = FakeMem
+            where
+                Self: 'a;
+            fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
+                Ok(FakeMem(vec![0u8; bytes]))
+            }
+            fn mem_info(&self) -> Result<(u64, u64), VramError> {
+                Ok((64 * 1024, 8 << 30)) // free tiny
+            }
+        }
+        let p = TightProvider;
+        let mut be = SparseVramBackend::new_with_limits(
+            &p,
+            1024 * 1024,
+            256 * 1024,
+            4096,
+            512 * 1024, // reserve 512KiB
+            None,
+        )
+        .unwrap();
+        let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
+        assert!(err.0.contains("free-floor") || err.0.contains("floor"), "{err:?}");
+    }
+
+    #[test]
+    fn mem_info_error_surfaces() {
+        struct BadInfo;
+        impl VramProvider for BadInfo {
+            type Mem<'a>
+                = FakeMem
+            where
+                Self: 'a;
+            fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
+                Ok(FakeMem(vec![0u8; bytes]))
+            }
+            fn mem_info(&self) -> Result<(u64, u64), VramError> {
+                Err(VramError::Provider("no gpu".into()))
+            }
+        }
+        let p = BadInfo;
+        let mut be = SparseVramBackend::new_with_limits(&p, 1024 * 1024, 256 * 1024, 4096, 0, None)
+            .unwrap();
+        let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
+        assert!(err.0.contains("mem_info") || err.0.contains("no gpu"), "{err:?}");
+        assert_eq!(be.alloc_fails, 1);
+    }
+
+    #[test]
+    fn env_helpers_have_sane_defaults() {
+        // Do not clobber user env permanently — only assert defaults when unset
+        if std::env::var("RAMSHARED_VRAM_CHUNK_MIB").is_err() {
+            let b = chunk_bytes_from_env();
+            assert!(b >= 16 * 1024 * 1024);
+        }
+        if std::env::var("RAMSHARED_VRAM_PREALLOC").is_err() {
+            assert!(!prealloc_enabled());
+        }
+        if std::env::var("RAMSHARED_VRAM_IDLE_FREE_SEC").is_err() {
+            assert_eq!(idle_free_secs_from_env(), 30);
+        }
+        if std::env::var("RAMSHARED_MIN_VRAM_FREE_MIB").is_err()
+            && std::env::var("MIN_VRAM_HEADROOM_MIB").is_err()
+        {
+            assert_eq!(reserve_floor_bytes_from_env(), 512 * 1024 * 1024);
+        }
+        if std::env::var("RAMSHARED_VRAM_COMMIT_CAP_MIB").is_err() {
+            assert!(commit_cap_bytes_from_env() > 1 << 30);
+        }
+    }
 }
