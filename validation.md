@@ -849,3 +849,25 @@ test -f drivers/windows/ramshared/protocol.h
 - No destructive demote/pressure on daily host this session
 **Verdict:** ✅ product cascade SPECs go (or go with documented lab gate); sample broker P1 library + winsvc userspace go; umbrella swap SPEC historical go
 **Next action:** optional lab autotier pressure drill; optional sparse JSON line if operators need machine-parseable reclaim; do not load unsigned StorPort on daily host
+
+## 2026-07-13 15:05 -03 — push path + live hang checklist after multi-SPEC confront
+
+**What:** main is protected (6 required checks); pushed branch `docs/cascade-spec-code-confront-2026-07-13` and re-ran superprompt-safe live hang checklist. Skipped pressure demote and `wsl --terminate` on daily host.
+**Category:** product path + fail-safe
+**How to measure:**
+```bash
+pid=$(pgrep -n -x ramsharedd); sudo readlink -f /proc/$pid/exe; readlink -f target/release/ramsharedd
+sudo ./target/release/ramshared status
+sudo ./scripts/safety/cascade-preflight.sh
+sudo ./scripts/safety/cascade-health.sh
+swapon --show
+```
+**Measured data:**
+- BINARY_MATCH=OK (pid 112906 → `target/release/ramsharedd`)
+- swaps: zram0 2G prio **200**, nbd0 4G prio **100**, sdc 8G prio **−2**; all used=0
+- preflight: CASCADE-PREFLIGHT: OK; free VRAM=**4693** MiB; sparse gate need ≥641; capacity VRAM_MIB=4096
+- health JSON: ok=true, ghost=false, order_ok=true, has_zram/vram/vhdx=true
+- push main: **rejected** GH006 protected branch (6/6 status checks expected)
+- push branch: **accepted** `origin/docs/cascade-spec-code-confront-2026-07-13`
+**Verdict:** ✅ live cascade healthy; docs land via PR not direct main
+**Next action:** open/merge PR after CI green; never pressure/`wsl --terminate` on daily host without lab
