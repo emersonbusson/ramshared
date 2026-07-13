@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/emersonbusson/ramshared/compare/v0.3.0...v0.3.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* **win-driver:** secure partition formatting in install script ([dbf064d](https://github.com/emersonbusson/ramshared/commit/dbf064dc62132ff18e231ad9bc75e8d2541f870d))
+* **win-driver:** secure partition formatting in install script ([f4c88cb](https://github.com/emersonbusson/ramshared/commit/f4c88cb09a2c7db96203a4e29382994c016a7e15))
+
 ## [0.3.0](https://github.com/emersonbusson/ramshared/compare/v0.2.0...v0.3.0) (2026-07-13)
 
 
