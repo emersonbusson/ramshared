@@ -7,7 +7,7 @@ paths:
 
 # SSDV3 rules
 
-SSDV3 (Spec-Driven Development V3) is the spec methodology of `ramshared` (cf. `docs/`). Pipeline: **PRD → SPEC → IMPL** (with optional Passo 2.5 audit).
+SSDV3 (Spec-Driven Development V3) is the spec methodology of `ramshared` (cf. `docs/`). Pipeline: **PRD → SPEC → IMPL** (with optional Step 2.5 audit).
 
 Copy-paste prompts and full templates: [`docs/SSDV3-PROMPTS.md`](../../docs/SSDV3-PROMPTS.md).
 
@@ -48,7 +48,7 @@ If a script change **also** invents a new kernel contract or lock/DMA path, that
 
 ### STEP 1 — PRD
 
-Copy the prompt from `docs/SSDV3-PROMPTS.md` (Passo 1), replace placeholders, paste into chat.
+Copy the prompt from `docs/SSDV3-PROMPTS.md` (Step 1), replace placeholders, paste into chat.
 
 Output: `docs/specs/no-milestone/{slug}/PRD.md` (or under `docs/specs/M{NN}-…/{slug}/` if a formal milestone exists).
 
@@ -79,7 +79,7 @@ Discovery must include **abuse cases** (ioctl size/TOCTOU, race open/close×DMA,
 
 ### STEP 2 — SPEC
 
-Copy the Passo 2 prompt; generate `SPEC.md` in the **same** folder as the PRD.
+Copy the Step 2 prompt; generate `SPEC.md` in the **same** folder as the PRD.
 
 SPEC translates PRD into:
 
@@ -90,9 +90,9 @@ SPEC translates PRD into:
 - Numerical rollback trigger for non-trivial mm/DMA/lock work
 - Traceability: `RF-N` / `NFR-N` → `ITEM-N` / `DT-N`
 
-**One `SPEC.md` only.** Passo 2.5 no-go → revise `SPEC.md` **in-place**; git is history. Do **not** create `SPECv2.md` / `SPECvN.md` for new work.
+**One `SPEC.md` only.** Step 2.5 no-go → revise `SPEC.md` **in-place**; git is history. Do **not** create `SPECv2.md` / `SPECvN.md` for new work.
 
-**Unique SPEC (Advoq model):** only `SPEC.md` per feature. Passo 2.5 revises it in-place; history is `git log`. **Never** create `SPECv2.md`/`SPECvN.md`. Flat `docs/{feature}/` trees are README stubs only.
+**Unique SPEC (Advoq model):** only `SPEC.md` per feature. Step 2.5 revises it in-place; history is `git log`. **Never** create `SPECv2.md`/`SPECvN.md`. Flat `docs/{feature}/` trees are README stubs only.
 
 ### STEP 2.5 — Audit (risk-gated)
 
