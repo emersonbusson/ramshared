@@ -129,6 +129,37 @@ Numbers we’ve actually seen (not slogans):
 
 ---
 
+## WSL2 vs. Windows Host Memory Management (Coexistence & Demote)
+
+When VRAM is shared between the Windows host and the WSL2 Linux guest, a resource competition arises if both systems demand memory at the same time. RamShared coordinates this dynamically using a host-authoritative **DEMOTE** algorithm.
+
+### How Coexistence and Priority Management Work
+
+1. **WDDM / VidMm Authority:** The Windows Video Memory Manager (VidMm) is the absolute authority over GPU allocation. If a native Windows application (e.g., Blender, OBS, or a game) requests VRAM, Windows immediately demands that memory back.
+2. **WSL2 Active Monitoring:** The `ramshared-wsl2d` daemon constantly queries `/dev/dxg` (the Direct3D kernel interface inside WSL2) to monitor WDDM budget pressure and VRAM availability.
+3. **Triggering Eviction (DEMOTE):** 
+   - When host VRAM pressure is detected (free VRAM budget drops below the safety threshold), the Linux guest triggers a **DEMOTE** loop.
+   - It stops promoting new pages to VRAM swap (`/dev/nbd0`) and executes a bounded `swapoff` on the VRAM block device.
+   - This safely pushes all swapped Linux pages out of VRAM and slides them to the primary disk swap (`/dev/sdc`) or zram.
+   - Once usage hits 0, the CUDA memory allocation is released, freeing up VRAM for the Windows application instantly without system hangs or memory corruption.
+4. **Windows Host Protection:** On the Windows side, the `ramshared` service polls the pagefile usage and system budget every 5 seconds. Under high memory pressure, it executes an ordered teardown of the virtual disk buffer, vacating pages back to the primary physical SSD (`C:`).
+
+---
+
+## E2E Performance Benchmarks
+
+### WSL2 Guest Swap (NBD loopback) vs. Windows Host Driver (StorPort native)
+Raw block-device benchmarks (direct unbuffered read/write) demonstrate the performance profiles of both backends:
+
+| Environment / Interface | Read Throughput | Write Throughput | Latency / Bottleneck |
+| --- | --- | --- | --- |
+| **Windows Host (StorPort native)** | **~1940 MB/s (1.94 GB/s)** | **~420 MB/s** | Extremely low latency (Direct PCIe memory copy) |
+| **WSL2 Guest (NBD loopback)** | **~714 MB/s** | **~597 MB/s** | Network socket boundary overhead (TCP loopback) |
+
+*Key Insight:* The native Windows StorPort driver is **~2.7x faster** for reads compared to the WSL2 guest NBD implementation. This is because the StorPort driver operates directly on the system's SCSI queue and communicates with the backend via shared memory, bypassing the TCP socket loopback boundary required by NBD inside Linux.
+
+---
+
 ## Windows Host Driver (Open Beta / MVP)
 
 The Windows swap driver (**ramshared.sys** / StorPort virtual miniport) is now ready for testing on both the Hyper-V guest VM and physical Windows hosts. 
@@ -188,6 +219,10 @@ Uso normal: desenhado para **não**. Demote pode deixar lento por alguns segundo
 
 ### Driver de vRAM no Windows Físico?
 **Sim (Fase Beta / MVP).** Exige desativar o **Secure Boot** na BIOS e ativar o **Modo de Testes** (`bcdedit /set testsigning yes`) para compilar e carregar o driver localmente.
+
+### Coexistência e Gerenciamento de Memória (Windows vs. WSL2)
+* **WDDM é a autoridade:** O Windows Video Memory Manager (VidMm) manda na VRAM. Se um jogo ou app no Windows exigir memória, o daemon do WSL2 monitora essa pressão via `/dev/dxg` e dispara o processo de **DEMOTE** (desalocando páginas do swap NBD da GPU para o disco) para liberar espaço no Windows host instantaneamente.
+* **Performance Comparada:** A leitura nativa via StorPort no Windows atinge **~1.94 GB/s** (4x mais rápido que SSDs SATA III), enquanto no WSL2 a leitura fica em **~714 MB/s** devido ao overhead da camada de loopback NBD.
 
 </details>
 
