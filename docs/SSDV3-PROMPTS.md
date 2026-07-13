@@ -2,7 +2,9 @@
 
 Methodology in 3 steps: **PRD → SPEC → IMPL**
 
-Revised for the RamShared stack: Linux Kernel (C/Rust for Linux) · LKM · HMM · NUMA · DRM · MMU · PCIe Gen5 · CXL 3.0 · userspace (sysfs/ioctl/mmap, Rust daemons)
+**Scope:** this document applies only to **this repository** (`ramshared`) — WSL2/Linux cascade, kernel/userspace crates, Windows lab drivers, safety scripts, and specs under `docs/specs/`. Do not import product narratives, service names, or API shapes from other codebases.
+
+Stack: Linux Kernel (C/Rust for Linux) · LKM · HMM · NUMA · DRM · MMU · PCIe Gen5 · CXL 3.0 · userspace (sysfs/ioctl/mmap, Rust daemons)
 
 Goals of this version:
 
@@ -14,7 +16,7 @@ Goals of this version:
 
 ## How to use
 
-1. Use **Step 1** to generate `docs/specs/no-milestone/{slug}/PRD.md` (or a milestone folder if a formal process exists)
+1. Use **Step 1** to generate `docs/specs/no-milestone/{slug}/PRD.md`
 2. Use **Step 2** to turn the PRD into `SPEC.md` **in the same folder**
 3. Use **Step 2.5** when there is structural, operational, or security risk — no-go **revises `SPEC.md` in place**; git versions history
 4. Use **Step 3** to implement strictly from `SPEC.md` and write `IMPL.md`
@@ -29,22 +31,17 @@ If a step finds ambiguity that belongs to the previous step, go back one step.
 
 ```text
 docs/specs/
-├── no-milestone/
-│   └── {slug}/
-│       ├── PRD.md
-│       ├── SPEC.md    # single SPEC; no-go revises in-place — git is history
-│       └── IMPL.md    # Step 3 output
-└── M{NN}-{name}/      # optional, only if the project adopts formal milestones
-    ├── milestone.md
+└── no-milestone/
     └── {slug}/
         ├── PRD.md
-        ├── SPEC.md
-        └── IMPL.md
+        ├── SPEC.md    # single SPEC; no-go revises in-place — git is history
+        ├── IMPL.md    # Step 3 output
+        └── AUDIT-2.5.md  # optional, risk-gated
 ```
 
-- `{slug}`: kebab-case, short and descriptive (`<issue>-<description>` when there is an issue, else only `<description>`)
-- **One `SPEC.md` only.** Step 2.5 no-go revises it in place (`git` is history). Never `SPECvN.md`.
-- Reuse an existing `docs/specs/…/{slug}/` folder when the feature already has one.
+- `{slug}`: English kebab-case (`<issue>-<description>` or `<description>`)
+- **One `SPEC.md` only.** Step 2.5 no-go revises it in place (`git` is history). Never versioned sibling files (`SPECvN.md`).
+- Reuse an existing `docs/specs/no-milestone/{slug}/` when the feature already has one.
 - Do not create flat legacy trees `docs/{feature-slug}/` for new work.
 
 ## Required frontmatter in PRD.md
@@ -63,8 +60,8 @@ issues: []
 
 - `slug`: same as the folder name
 - `title`: human-readable
-- `milestone`: `M14`… or `—` if not associated yet
-- `issues`: array of GitHub issue numbers (`[]` if none)
+- `milestone`: `—` unless this repo adopts a numbered milestone folder later
+- `issues`: array of GitHub issue numbers for **this** repo (`[]` if none)
 
 Status derived from files: `PRD` → only PRD.md; `SPEC` → SPEC.md present; `DONE` → IMPL.md present.
 
@@ -237,7 +234,7 @@ Exit: new decision → Step 2; missing Kahneman/evidence/abort or Day-0 violatio
 
 ### Prompt
 
-Implement the feature described in `SPEC.md` under `docs/specs/no-milestone/{slug}/` (or milestone path).
+Implement the feature described in `SPEC.md` under `docs/specs/no-milestone/{slug}/`.
 
 At the end, write `IMPL.md` with what was done, numeric validation, and remaining gaps.
 
