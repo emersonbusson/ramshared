@@ -12,7 +12,7 @@ Kahneman makes it explicit: biases and noise are properties of the system, not r
 
 Each entry starts with the bias it combats, details the operational rule, and specifies the measurable signal indicating compliance.
 
-Disciplines **#15–#18** were imported from the Advoq methodology stack (runtime/infra hygiene) and rewritten with **kernel / broker / WSL2** examples.
+Disciplines **#15–#18** cover runtime/infra hygiene and are written with **kernel / broker / WSL2** examples.
 
 ### Master Table (Consolidated View)
 
