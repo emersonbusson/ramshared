@@ -1,56 +1,56 @@
 # Hang / freeze audit — 2026-07-13
 
-**Disciplina:** Kahneman #13 (existe ≠ funciona), #16 (fail-safe), #18 (camada certa).  
+**Discipline:** Kahneman #13 (exists ≠ works), #16 (fail-safe), #18 (right layer).  
 **Superprompt:** [`superprompt.md`](../../superprompt.md).  
-**SSDV3 Passo 3:** E2E + cover ≥80% obrigatórios — [`docs/SSDV3-PROMPTS.md`](../SSDV3-PROMPTS.md).
+**SSDV3 Step 3:** live E2E + cover ≥80% required — [`docs/SSDV3-PROMPTS.md`](../SSDV3-PROMPTS.md).
 
-## Escopo
+## Scope
 
-Travamentos percebidos no WSL2 diário (build Docker, “freeze” guest) vs. bugs de classe hang do RamShared (ghost swap, teardown, daemon deleted).
+Perceived freezes on daily WSL2 (Docker builds, guest “freeze”) vs RamShared hang-class bugs (ghost swap, teardown, deleted daemon inode).
 
-## Fatos medidos (sessão)
+## Measured facts (session)
 
-| Item | Valor |
+| Item | Value |
 | --- | --- |
 | Guest mem cap | 16 GiB (`.wslconfig`) |
-| Cascata pós-redeploy | zram 2G prio 200, nbd0 4G prio 100, sdc 8G prio -2; used=0 |
-| Daemon | PID novo, `BINARY_MATCH=OK` → `target/release/ramsharedd` |
+| Cascade after redeploy | zram 2G prio 200, nbd0 4G prio 100, sdc 8G prio -2; used=0 |
+| Daemon | new PID, `BINARY_MATCH=OK` → `target/release/ramsharedd` |
 | cascade-health | `ok:true`, `ghost:false`, `order_ok:true` |
-| Ollama | residual 203/EXEC **removido** (unit fantasma) |
-| Docker images/cache | limpos; stack Advoq down até rebuild |
-| Go/Rust caches | limpos; toolchains go1.26.5 / rustc 1.97.0 |
+| Ollama | residual 203/EXEC **removed** (ghost unit) |
+| Docker images/cache | cleaned; Advoq stack down until rebuild |
+| Go/Rust caches | cleaned; toolchains go1.26.5 / rustc 1.97.0 |
 
-## Classes de hang — status
+## Hang classes — status
 
-| Classe | Severidade | Estado | Evidência / mitigação |
+| Class | Severity | State | Evidence / mitigation |
 | --- | --- | --- | --- |
-| Ghost ublk/nbd após kill daemon | CRITICAL | **Mitigado em código** (`cascade.rs` refuse/recover) | Postmortem 2026-07-09; testes parse_proc_swaps |
-| Free sparse com used_kb≠0 | HIGH | **Mitigado** (WDDM Phase 1 MEMORY 2026-07-11) | Teardown retries até used_kb==0 |
-| WDDM commit refuse sem fallback no write | HIGH | **Mitigado** (EIO → swapoff bounded) | MEMORY 2026-07-11 |
-| Daemon inode deleted vs disk binary | HIGH | **Fechado nesta sessão** | Rebuild + restart; BINARY_MATCH=OK |
-| Postmortem “CRASH” por Call Trace / OOM memcg / ollama spam | MEDIUM | **Mitigado** (postmortem.sh classifica kernel vs OOM; remove Call Trace) | #13 |
-| OOM memcg postgres Docker | MEDIUM | **Ambiental** (não cascade) | OOM em container; não é ghost swap |
-| BuildKit hang build web | MEDIUM | **Ambiental / path Docker** | Não OOM guest limpo; rebuild full sem cache |
-| Pressure probe no WSL diário | HIGH se repetido | **Política** — proibido no host live | MEMORY 2026-07-11 audit |
+| Ghost ublk/nbd after daemon kill | CRITICAL | **Mitigated in code** (`cascade` refuse/recover) | Postmortem 2026-07-09; parse_proc_swaps tests |
+| Free sparse with used_kb≠0 | HIGH | **Mitigated** (WDDM Phase 1 MEMORY 2026-07-11) | Teardown retries until used_kb==0 |
+| WDDM commit refuse without write fallback | HIGH | **Mitigated** (EIO → bounded swapoff) | MEMORY 2026-07-11 |
+| Daemon deleted inode vs disk binary | HIGH | **Closed this session** | Rebuild + restart; BINARY_MATCH=OK |
+| Postmortem “CRASH” from Call Trace / memcg OOM / unit spam | MEDIUM | **Mitigated** (postmortem.sh classifies kernel vs OOM; no bare Call Trace) | #13 |
+| Docker postgres memcg OOM | MEDIUM | **Environmental** (not cascade) | Container OOM; not ghost swap |
+| BuildKit hang (web image build) | MEDIUM | **Environmental / Docker path** | Not clean guest OOM; full rebuild without cache |
+| Pressure probe on daily WSL | HIGH if repeated | **Policy** — forbidden on live host | MEMORY 2026-07-11 audit |
 
-## Gaps abertos (não fingir verde)
+## Open gaps (do not fake green)
 
-1. **Cover workspace monólito &lt;80%** historicamente (36% agregado em 2026-07-11). Crates dxg/autotier já 100% naquela fatia; **re-medir** após rustc 1.97 (ver validation.md desta data).
-2. **ITEM-8 / StorPort INF** — LUN no Get-Disk ainda env-bound lab.
-3. **Drill de pressão / demote destrutivo** — só VM isolada; não re-rodar no Ubuntu diário.
-4. **Volumes Docker nomeados** (~6G) e dados Advoq — não apagados na limpeza de imagens.
-5. **I:\** ainda ~70%+ — monitorar swap vhdx; não é bug de cascade.
+1. **`cascade_io` unit cover** remains low by design — closed via live E2E (health + BINARY_MATCH), not thrash mocks on the daily host.
+2. **ITEM-8 / StorPort INF** — LUN in Get-Disk still env-bound lab.
+3. **Destructive demote/pressure drill** — isolated VM only; do not re-run on daily Ubuntu.
+4. **Named Docker volumes** (~6G) and Advoq data — not deleted when images were pruned.
+5. **I:\\** still high utilization — watch swap VHDX; not a cascade logic bug.
 
-## Gate SSDV3 para fechar hang-class
+## SSDV3 gate to claim hang-class safe
 
-Antes de declarar “cascade safe” em qualquer PR:
+Before declaring “cascade safe” on any PR:
 
-- [ ] `cargo test` nos crates tocados
-- [ ] cover ≥80% nos arquivos/crates da fatia (não monólito)
+- [ ] `cargo test` on touched crates
+- [ ] cover ≥80% on slice business-logic files/crates (not monorepo average)
 - [ ] `BINARY_MATCH=OK` + `cascade-health ok:true`
-- [ ] ≥1 recusa (#13): ghost ou used_kb>0 se o path tocar teardown/up
-- [ ] entrada em `validation.md` com números
+- [ ] ≥1 refusal (#13): ghost or used_kb>0 if the path touches teardown/up
+- [ ] `validation.md` entry with numbers
 
-## Rollback trigger (desta auditoria)
+## Rollback trigger (this audit)
 
-Se `cascade-health` `ok:false` ou `ghost:true` ou BINARY_MATCH falhar após boot → parar workloads pesados, `systemctl stop ramshared-cascade` (swapoff-first), reavaliar before `up`.
+If `cascade-health` is `ok:false` or `ghost:true` or BINARY_MATCH fails after boot → stop heavy workloads, `systemctl stop ramshared-cascade` (swapoff-first), reassess before `up`.

@@ -109,8 +109,21 @@ function categoryTokens(rawValue) {
 const REEXEC_HINT_RE =
   /\b(go (test|build|vet)|cargo (test|build)|golangci-lint|docker( compose)?|make |yarn |npm |pnpm |node |curl |psql |gh run|rg |\.\/scripts\/)|\S+\.(go|mjs|ts|sh|sql|rs|ps1)\b/
 
+function hasLabel(body, ...labels) {
+  return labels.some((l) => getLabelBlock(body, l).present)
+}
+
+function firstLabel(body, ...labels) {
+  for (const l of labels) {
+    const b = getLabelBlock(body, l)
+    if (b.present) return b
+  }
+  return { present: false, blockText: '' }
+}
+
 function hasReexecPointer(body) {
-  if (getLabelBlock(body, 'Como medir').present) return true
+  // English canonical + Portuguese legacy aliases
+  if (hasLabel(body, 'How to measure', 'Como medir')) return true
   return REEXEC_HINT_RE.test(body.join('\n'))
 }
 
@@ -126,30 +139,31 @@ export function validateEntry(entry) {
     )
   }
 
-  if (!getLabelBlock(entry.body, 'O que').present) {
-    add('schema', 'missing `**O que:**`')
+  // Canonical English labels (validation.md schema). PT aliases accepted for legacy.
+  if (!hasLabel(entry.body, 'What', 'O que')) {
+    add('schema', 'missing `**What:**` (or legacy `**O que:**`)')
   }
 
-  const verd = getLabelBlock(entry.body, 'Veredito')
+  const verd = firstLabel(entry.body, 'Verdict', 'Veredito')
   if (!verd.present) {
-    add('schema', 'missing `**Veredito:**`')
+    add('schema', 'missing `**Verdict:**` (or legacy `**Veredito:**`)')
   } else if (!VERDICT_RE.test(verd.blockText)) {
-    add('schema', '`**Veredito:**` missing a valid emoji (use ✅/🔴/🟡)')
+    add('schema', '`**Verdict:**` missing a valid emoji (use ✅/🔴/🟡)')
   }
 
-  const cat = getLabelBlock(entry.body, 'Categoria')
+  const cat = firstLabel(entry.body, 'Category', 'Categoria')
   if (cat.present) {
     const tokens = categoryTokens(cat.blockText)
     const isEffect = [...tokens].some((t) => EFFECT_CATEGORIES.has(t))
     if (isEffect && !hasReexecPointer(entry.body)) {
       add(
         'missing-pointer',
-        'Effect category (integration/isolation/e2e/ci-gate) requires a re-executable pointer (`**Como medir:**` or a command/script path in the body)'
+        'Effect category (integration/isolation/e2e/ci-gate) requires a re-executable pointer (`**How to measure:**` or a command/script path in the body)'
       )
     }
   }
 
-  const dados = getLabelBlock(entry.body, 'Dados medidos')
+  const dados = firstLabel(entry.body, 'Measured data', 'Dados medidos')
   if (
     dados.present &&
     !DIGIT_RE.test(dados.blockText) &&
@@ -159,7 +173,7 @@ export function validateEntry(entry) {
   ) {
     add(
       'adjective-before-number',
-      '`**Dados medidos:**` missing raw numbers or measurable state'
+      '`**Measured data:**` missing raw numbers or measurable state'
     )
   }
 
