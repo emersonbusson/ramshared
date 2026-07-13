@@ -114,8 +114,8 @@ if ($FormatNtfs) {
     Write-Host "FORMAT disk $($found.Number) -> ${DriveLetter}:"
     if ($found.PartitionStyle -eq 'RAW' -or $found.NumberOfPartitions -eq 0) {
         Initialize-Disk -Number $found.Number -PartitionStyle GPT -Confirm:$false -EA SilentlyContinue
-        $part = New-Partition -DiskNumber $found.Number -UseMaximumSize -DriveLetter $DriveLetter[0]
-        Format-Volume -DriveLetter $DriveLetter[0] -FileSystem NTFS -NewFileSystemLabel "RAMSHARED" -Confirm:$false
+        $part = New-Partition -DiskNumber $found.Number -UseMaximumSize -DriveLetter $DriveLetter[0] -ErrorAction Stop
+        $part | Format-Volume -FileSystem NTFS -NewFileSystemLabel "RAMSHARED" -Confirm:$false
         Write-Host "FORMAT_OK ${DriveLetter}:"
     } else {
         Write-Host "disk already partitioned"
