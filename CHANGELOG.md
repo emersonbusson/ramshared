@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.3.0](https://github.com/emersonbusson/ramshared/compare/v0.2.0...v0.3.0) (2026-07-13)
+
+
+### Features
+
+* **cascade:** hang cover gate, SSDV3 Passo3, superprompt, postmortem ([d89f481](https://github.com/emersonbusson/ramshared/commit/d89f4817916dede1f0ae759d672ceb391caa68c3))
+
+
+### Bug Fixes
+
+* **ci:** green pre-push gates (fmt, validation schema, comments) ([a866c0b](https://github.com/emersonbusson/ramshared/commit/a866c0bb7704a7ead3b7d45f87155dc964c9e76d))
+
+
+### Performance
+
+* **win-driver:** add E2E StorPort performance benchmark comparison ([4813cff](https://github.com/emersonbusson/ramshared/commit/4813cff31e7c2c44bc3e129c5e840ef69b54d19f))
+* **win-driver:** add E2E StorPort performance benchmark comparison ([fd6c1c4](https://github.com/emersonbusson/ramshared/commit/fd6c1c42ca012816b050bfe06854345e65c0b9ce))
+
+
+### Documentation
+
+* align boot SPEC conf defaults and record live health ([16160bb](https://github.com/emersonbusson/ramshared/commit/16160bbcb12cc5053cacefab3da7b0d7e824f81a))
+* cascade SPEC↔code confrontation + SSDV3 hang gates ([c30f2ca](https://github.com/emersonbusson/ramshared/commit/c30f2caa2997e55e7251b90a6463c46cffb4ab93))
+* confront cascade SPECs with code and named tests ([271ebf1](https://github.com/emersonbusson/ramshared/commit/271ebf1509f0989f48609abb8eedccb00fcdd7c3))
+* confront remaining cascade SPECs with unit evidence ([66f4983](https://github.com/emersonbusson/ramshared/commit/66f4983b8a3f7924ec898b4083fb73eb9e5ddcdb))
+* English SSDV3, superprompt, hang audit, validation schema ([1be585e](https://github.com/emersonbusson/ramshared/commit/1be585ed700dccc6ece825e25ccc48b1650099c4))
+* **readme:** add WSL2 guest benchmarks and coexistence policy ([d26f297](https://github.com/emersonbusson/ramshared/commit/d26f297e1130ef29e7bbcd83a63e874a5d3875fc))
+* **readme:** add WSL2 guest benchmarks and coexistence policy ([0f242a3](https://github.com/emersonbusson/ramshared/commit/0f242a3456ce60efd5e5734a57b77c327d980202))
+* record PR 33 merge and post-merge cascade health ([30d842e](https://github.com/emersonbusson/ramshared/commit/30d842e37ded83146adf790e1812a1cd58e63cf0))
+* scope agent docs to ramshared only ([0fe4d7b](https://github.com/emersonbusson/ramshared/commit/0fe4d7b63a824db1f58f39cbae60a401d20cf7df))
+* **ssdv3:** require SPEC↔code confrontation for long-lived SPECs ([faf6b59](https://github.com/emersonbusson/ramshared/commit/faf6b59334ce966f05e6ae8aad87ee25c7056f8f))
+* **ssdv3:** use Step N wording in English rules ([102d469](https://github.com/emersonbusson/ramshared/commit/102d4691133cc1b3cf63bccc21db822e494bbaf4))
+* strip foreign-project residue and dedupe SSDV3 agent docs ([e6751a0](https://github.com/emersonbusson/ramshared/commit/e6751a0fcaeaaabf87dfeba04897b471e5f971d8))
+* tighten SSDV3 prompts and hang superprompt for agents ([a4ab2ac](https://github.com/emersonbusson/ramshared/commit/a4ab2ac27d84c25e5a98c89796680a5b2f3f0ff1))
+* validation entry after PR 33 merge ([5d14d81](https://github.com/emersonbusson/ramshared/commit/5d14d81bd45468fdda2285554601bb812899cae4))
+
 ## [0.2.0](https://github.com/emersonbusson/ramshared/compare/v0.1.0...v0.2.0) (2026-07-12)
 
 
