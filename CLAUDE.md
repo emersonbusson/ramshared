@@ -6,6 +6,8 @@
 
 [`.claude/rules/*.md`](.claude/rules/*.md) are the authoritative code rules. `AGENTS.md` mirrors these guidelines.
 
+**Documentation scope:** only this repository. Do not load or invent requirements from other products/monorepos when working here.
+
 Before changing code:
 
 1. Read this file and `MEMORY.md` (local-only / gitignored; if missing, proceed).

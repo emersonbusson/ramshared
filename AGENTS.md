@@ -28,6 +28,10 @@ The source of truth for architecture and coding rules is:
 
 - **English** across the project: source (`.rs`, `.h`, `.c`), comments, structural docs (`README.md`, `ARCHITECTURE.md`, `docs/**` except locale-specific marketing posts), commit titles, and pull requests.
 
+### Scope
+
+- Docs and agent rules describe **RamShared only**. No foreign product narratives, service names, or imported process templates from other codebases.
+
 ## Commits and patches
 
 Conventional Commits in **English**, imperative title, ≤72 chars. Body in **English**.

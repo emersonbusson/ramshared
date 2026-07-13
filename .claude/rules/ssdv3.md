@@ -29,7 +29,7 @@ Optional: pure refactors without contract change, localized bugfixes, doc-only, 
 | Artifact | Path |
 | --- | --- |
 | Prompts | `docs/SSDV3-PROMPTS.md` |
-| Specs | `docs/specs/no-milestone/{slug}/{PRD,SPEC,IMPL}.md` (+ optional `AUDIT-2.5.md`) |
+| Specs | `docs/specs/no-milestone/{slug}/{PRD,SPEC,IMPL}.md` (+ optional `AUDIT-2.5.md`) only |
 | Kahneman | `docs/methodology/kahneman-disciplines.md` |
 
 - One `SPEC.md` per feature; revise in-place (no `SPECvN.md`).
@@ -50,5 +50,5 @@ Detail, PRD/SPEC templates, and IMPL shape: **only** `docs/SSDV3-PROMPTS.md`.
 - IMPL without SPEC (or without 2.5 `go` when risk-gated)
 - Inference on >30% of PRD items
 - New helper without checking kernel/`lib/`/workspace crates
-- Web/SaaS-shaped validation for LKM work (HTTP-only, JSON REST as primary proof)
+- Prove LKM/cascade correctness only with kernel/userspace evidence (cargo test, drills, dmesg, `/proc/swaps`) — not app-layer HTTP smoke as primary proof
 - Thrash swap/ublk on the live WSL2 host
