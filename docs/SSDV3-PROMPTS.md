@@ -115,6 +115,20 @@ Exceções só com requisito explícito e documentado (integração externa real
 6. **Sistema 2 nas etapas críticas** — disciplina Kahneman + evidência mínima + abort trigger.
 7. **Número antes de adjetivo** — latência, throughput, cobertura e drills com unidade, n e ambiente (ver [`.claude/rules/benchmarks.md`](../.claude/rules/benchmarks.md)).
 8. **Host safety** — pressão de swap/ublk thrashing **nunca** no WSL2 live do host de dev; carga real só em VM isolada (qemu/civm).
+9. **Cover da fatia ≥80% por arquivo/crate de business logic** — média monólito do workspace **não** fecha o Passo 3.
+10. **E2E ao vivo + evidências fecham o Passo 3** — unit/cover sozinho **não** autoriza `validation.md` de fechamento nem `DONE` real.
+
+### Disciplinas → tipo de teste (gate Kahneman no Passo 3)
+
+| # | Tipo de prova exigida | Exemplo RamShared |
+| --- | --- | --- |
+| **#9** | Critério numérico (status, used_kb, prio, cover%) | `ramshared status` com prios 200>100>-2 |
+| **#13** | Efeito real + recusa pareada com legítimo | ghost swap recusa `up`; `up` limpo passa |
+| **#15** | Retry só em assinatura transitória | NBD reconnect em `EAGAIN`; `-EINVAL` fail-fast |
+| **#16** | Teste a partir da **exaustão** | demote/reclaim com VRAM já cheia / WDDM commit cap |
+| **#17** | Replay 2× = efeito 1× | `down`/`up` ou `swapoff` re-emitido sem double free |
+
+Referência: [`docs/methodology/kahneman-disciplines.md`](methodology/kahneman-disciplines.md). Auditoria adversarial: [`superprompt.md`](../superprompt.md).
 
 ### IDs de requisito
 
@@ -790,26 +804,33 @@ Ao final, escreva `IMPL.md` com o que foi feito, validação numérica e gaps re
 10. Se parecer necessário manter duas versões → pare e volte ao SPEC para exceção Day-0
 11. Quando o SPEC consolidar estrutura Day-0, reescreva/remova o antigo em vez de preservar caminho morto
 12. Commits citam `RF-N` / `NFR-N` / `ITEM-N` quando não-triviais; body com `Rollback trigger:` se tocar locks/DMA/mm
+13. **Gate de cobertura da fatia ≥80%** em business logic **por arquivo** (ou por crate quando a fatia é crate-scoped): `cargo llvm-cov -p <crate> --summary-only` / report line-level. Média do workspace monólito **não** conta. Boilerplate de wiring puro pode ser `N/A — boilerplate` no IMPL.
+14. Todo “Testes requeridos” do SPEC deve existir como `#[test]` / `#[tokio::test]` nomeado; path de hang/swapoff/ghost sem teste de recusa+legítimo = fatia incompleta
+15. Evidência Kahneman #13/#15/#16/#17 exige o _tipo_ da tabela acima (efeito, recusa+legítimo, exaustão, replay 2×) — smoke sem assert não fecha
+16. **E2E ao vivo + evidências fecham o Passo 3** (não é follow-up opcional). Ordem fixa: (a) unit/cover/docs verdes; (b) binário da fatia **deployado** (cascade/daemon com inode do `target/release` atual — `BINARY_MATCH=OK`, sem exe deleted); (c) jornada real: `ramshared status` / cascade-health / drill do SPEC com ≥1 cenário legítimo + recusas (ghost swap, used_kb>0, preflight fail); (d) artefactos em `docs/specs/.../evidence/` ou paths no `validation.md` (JSON health, `cat /proc/swaps`, screenshot de drill UI se houver); (e) só então `validation.md` + `IMPL.md` com números e veredito. Unit/cover sozinho **não** fecha Passo 3.
 
 ### Ritual de execução por fatia
 
 1. Implementar só o item atual
 2. Validar compilação
-3. Validar testes relacionados
-4. Validar pergunta / evidência / abort Kahneman se houver
-5. Comparar com o SPEC
-6. Só então avançar
+3. Validar testes relacionados (**escrever se o SPEC listar** — TDD)
+4. Rodar gate de cover nos crates/arquivos da fatia (`--min 80` / line ≥80%)
+5. Validar pergunta / evidência / abort Kahneman se houver
+6. Comparar com o SPEC (matriz de testes)
+7. Só então avançar
 
 ### Checklist durante a implementação
 
 - [ ] Código compila sem erros
-- [ ] checkpatch / lint do escopo passa
+- [ ] checkpatch / lint / clippy do escopo passa
 - [ ] Testes existentes continuam passando
-- [ ] Novos testes da fatia adicionados
+- [ ] Novos testes da fatia adicionados (todos os “Testes requeridos” do SPEC)
+- [ ] Gate de cobertura da fatia ≥80% nos arquivos/crates de business logic tocados
 - [ ] Isolamento (address space / capabilities) mantido
 - [ ] uAPI/ABI atualizada quando necessário
 - [ ] Docs atualizadas quando o item exige
 - [ ] Etapas críticas coerentes com Kahneman
+- [ ] Provas #13/#15/#16/#17 presentes quando a disciplina se aplica
 
 ### Quando voltar ao SPEC
 
@@ -839,10 +860,35 @@ make modules
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
+# Cover da fatia (exemplo; liste crates do SPEC):
+cargo llvm-cov -p ramshared-cli -p ramshared-tier -p ramshared-dxg --summary-only
+# ou por arquivo: cargo llvm-cov report --json | jq ...
 
 # Drill isolado (nunca thrash no WSL2 live)
 # scripts/kernel/qemu-*.sh  ou  civm job documentado no SPEC
 ```
+
+**IMPL.md (fechamento)** — registre com números (Kahneman #3/#9):
+
+- comando(s) de cover e exit code
+- tabela crate/arquivo → % (ou output do gate)
+- lista “Testes requeridos do SPEC → `test_name` implementado”
+- residual &lt;80% só com `N/A — boilerplate` ou gap env-bound explícito
+
+### Validação ponta a ponta e evidências (bloqueante do Passo 3)
+
+> **Ordem obrigatória:** unit/cover/docs → **E2E ao vivo + artefactos** → `validation.md`
+> / `IMPL.md` → commits. Entrada parcial “unit verde; E2E pendente” **não** fecha o Passo 3.
+
+Com o código da fatia **no binário em execução** (não só no git):
+
+1. estado inicial: `ramshared status`, `/proc/swaps`, `cascade-health.sh`, PID + `readlink /proc/$pid/exe` (= `BINARY_MATCH`);
+2. ação real do SPEC (`up`/`down`/`demote`/drill de lab — **não** thrash no WSL diário se for pressão destrutiva);
+3. resultado: prios, used_kb, flags.ghost/order_ok, exit codes;
+4. ≥1 legítimo + recusas do SPEC (ghost, used_kb>0, preflight sem binário, WDDM fail-closed);
+5. paths dos artefactos no `validation.md` (JSON, swaps dump, log de drill).
+
+Classe **hang/freeze** (ghost ublk, free com used_kb≠0, kill -9 do daemon com swap ativo, postmortem falso CRASH) exige prova #13/#16 no E2E ou integration — “código existe” ≠ “proteção ativa”.
 
 ### Saída obrigatória — `IMPL.md`
 
@@ -926,9 +972,13 @@ Só avance se:
 
 - código, testes e docs consistentes com o SPEC
 - validações finais executadas (ou gaps env-bound explícitos no IMPL)
+- **cover da fatia ≥80%** nos arquivos/crates de business logic tocados
+- **E2E ao vivo** com binário deployado e evidências no `validation.md` / `evidence/`
 - sem drift entre uAPI/headers, implementação e testes
-- `IMPL.md` gravado/atualizado
+- `IMPL.md` gravado/atualizado (com cover + E2E, não só narrativa)
 - commits non-triviais com rollback trigger quando exigido
+
+> **Nota sobre o índice (`DONE`):** presença de `IMPL.md` no `docs/INDEX.md` é artefato, **não** qualidade. Fechar SSDV3 sem cover/E2E/Kahneman de teste é violação do Passo 3 mesmo com DONE no índice.
 
 ---
 

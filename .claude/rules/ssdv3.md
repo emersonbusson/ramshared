@@ -109,9 +109,16 @@ Minimum content: findings by severity, open questions, `go`/`no-go`, blockers fi
 
 Implement strictly according to SPEC. **Zero creativity out of scope.** New decision → update SPEC first, then implement.
 
+**Hard gates before close (aligned with Advoq Passo 3 / Kahneman #13):**
+
+1. **Cover ≥80%** on business-logic files/crates of the slice (`cargo llvm-cov -p …`). Workspace average does **not** count. Boilerplate wiring may be `N/A — boilerplate` in IMPL.
+2. **E2E live + evidence** before `validation.md` close: deployed binary (`BINARY_MATCH=OK`), `ramshared status` / `cascade-health`, at least one legitimate path + SPEC refusals (ghost / used_kb / preflight). Order: unit/cover → E2E → validation/IMPL → commit.
+3. Kahneman test types: #13 effect + paired refusal, #15 retry only transient, #16 exhaustion, #17 replay 2×=1× — see table in `docs/SSDV3-PROMPTS.md`.
+4. Adversarial hang audit posture: root `superprompt.md`.
+
 Output: `docs/specs/no-milestone/{slug}/IMPL.md` (same folder) documenting:
 
-- status and green/red gates
+- status and green/red gates (include cover % + E2E commands)
 - RF/ITEM → files table
 - small decisions (no new ADR)
 - validation with **numbers**
