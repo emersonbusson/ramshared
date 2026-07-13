@@ -751,7 +751,7 @@ sudo bash scripts/safety/cascade-pressure-probe.sh --max-sec 50
 
 ## 2026-07-13 14:27 -03 — A+B cascade redeploy + SSDV3 Step 3 + hang audit + cover gate
 
-**What:** Rebuild/redeploy ramsharedd (BINARY_MATCH), port Advoq-style Step 3 (E2E+cover≥80%) into SSDV3, add superprompt, classify postmortem kernel vs OOM, hang/freeze audit, llvm-cov on hang-critical crates.
+**What:** Rebuild/redeploy ramsharedd (BINARY_MATCH), add Step 3 gates (E2E+cover≥80%) into SSDV3, add superprompt, classify postmortem kernel vs OOM, hang/freeze audit, llvm-cov on hang-critical crates.
 **Category:** fail-safe + product path + methodology
 **How to measure:**
 ```bash

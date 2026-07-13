@@ -35,10 +35,10 @@ Non-trivial commits (locks, DMA, or atomic allocation) **MUST** include `Rollbac
 
 ## Methodologies (SSDV3 and Kahneman)
 
-- **SSDV3**: Spec-Driven Development. See [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md) and [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md). Artifacts under `docs/specs/no-milestone/{slug}/{PRD,SPEC,IMPL,AUDIT-2.5}.md` (single SPEC, in-place revision; no `SPECv2` for new features). Index: [`docs/INDEX.md`](docs/INDEX.md) (`node tools/generate-docs-index.mjs`). Mandatory for locks/DMA/mm/uAPI/hardware/MMU/DRM — **not** for CI/host-safety scripts alone (#15–#18 + `benchmarks.md`). **Step 3:** cover ≥80% per slice crate/file + live E2E with deployed binary before closing `validation.md` (unit alone does not close).
-- **Kahneman Disciplines**: 18 operational disciplines. Source: [`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md). Ring 0 and structural PRs: counterfactual (#2), number before adjective (#3); retry/reconnect (#15), demote/reclaim (#16), replayable commands (#17), shim sunset (#18).
-- **Adversarial superprompt (hang/freeze):** [`superprompt.md`](superprompt.md) — ghost swap, free with used_kb≠0, BINARY_MATCH, honest postmortem.
-- **Docs hygiene**: `.claude/rules/documentation.md`, `.claude/rules/security.md` · `./scripts/docs-check.sh` (index + broken links).
+- **SSDV3**: [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md) + thin rules [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md). Specs: `docs/specs/no-milestone/{slug}/`. Step 3: cover ≥80% per slice + live E2E before `validation.md`.
+- **Kahneman**: [`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md) (#2/#3/#15–#18 for structural/hang work).
+- **Hang audit**: [`superprompt.md`](superprompt.md).
+- **Docs check**: `./scripts/docs-check.sh`.
 
 ## Cognitive profiles
 
