@@ -797,9 +797,138 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
     Ok(a)
 }
 
-pub fn status() -> Result<(), CascadeError> {
-    println!("{}", sh("swapon", &["--show"])?);
+mod lifecycle;
+use lifecycle::{
+    active_threshold_kib_from_env, derive_lifecycle, render_status_json, CascadeSnapshot,
+    DemoteSnapshot, TierSample,
+};
+
+/// Build lifecycle snapshot from live swaps + daemon (read-only).
+pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
+    let pairs: Vec<(String, u64, u64, i32)> = entries
+        .iter()
+        .filter(|e| !e.is_ghost())
+        .map(|e| {
+            (
+                e.filename.clone(),
+                e.size_kb,
+                e.used_kb,
+                e.priority,
+            )
+        })
+        .collect();
+    let (zram, vram, disk, order_ok) = lifecycle::tiers_from_swap_names(&pairs);
+    let ghosts = ghost_vram_swaps(entries);
+    let (daemon_alive, daemon_pid) = daemon_alive_pid();
+    CascadeSnapshot {
+        zram,
+        vram,
+        disk,
+        ghost: !ghosts.is_empty(),
+        order_ok,
+        daemon_alive,
+        daemon_pid,
+        demote: DemoteSnapshot::default(),
+        active_kib: active_threshold_kib_from_env(),
+    }
+}
+
+fn daemon_alive_pid() -> (bool, Option<u32>) {
+    // Match cascade-health: newest ramsharedd process.
+    let out = Command::new("pgrep")
+        .args(["-n", "-x", "ramsharedd"])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => {
+            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if let Ok(pid) = s.parse::<u32>() {
+                return (true, Some(pid));
+            }
+            // Some systems: pgrep -f
+            (true, None)
+        }
+        _ => {
+            // Fallback: pid file
+            if let Ok(s) = fs::read_to_string(PID_FILE)
+                && let Ok(pid) = s.trim().parse::<u32>()
+                && Path::new(&format!("/proc/{pid}")).exists()
+            {
+                return (true, Some(pid));
+            }
+            (false, None)
+        }
+    }
+}
+
+fn status_timestamp() -> String {
+    // Prefer local ISO via `date -Is` when available; else unix epoch.
+    sh("date", &["-Is"]).unwrap_or_else(|_| {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        format!("{secs}")
+    })
+}
+
+/// `ramshared status` / `status --json`. Read-only. SPEC cascade-lifecycle-observability.
+pub fn status(as_json: bool) -> Result<(), CascadeError> {
+    if std::env::var("RAMSHARED_STATUS_LEGACY").ok().as_deref() == Some("1") {
+        println!("{}", sh("swapon", &["--show"])?);
+        return Ok(());
+    }
+
     let entries = read_swaps();
+    let snap = build_cascade_snapshot(&entries);
+    let view = derive_lifecycle(&snap);
+    let ts = status_timestamp();
+
+    if as_json {
+        println!("{}", render_status_json(&view, &snap, &ts));
+        return Ok(());
+    }
+
+    // Human text (SPEC ITEM-2)
+    println!("phase: {} ({})", view.phase.as_str(), view.phase_reason);
+    println!("ok: {}", view.ok);
+    if !view.reasons.is_empty() {
+        println!("reasons: {}", view.reasons.join(", "));
+    }
+    print_tier("zram", &snap.zram);
+    print_tier("vram", &snap.vram);
+    print_tier("disk", &snap.disk);
+    println!(
+        "daemon: {} pid={}",
+        if snap.daemon_alive { "alive" } else { "dead" },
+        snap.daemon_pid
+            .map(|p| p.to_string())
+            .unwrap_or_else(|| "null".into())
+    );
+    println!(
+        "demote: total={} last_reason={} in_progress={}",
+        snap.demote
+            .total
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "?".into()),
+        snap.demote
+            .last_reason
+            .as_deref()
+            .unwrap_or("?"),
+        snap.demote.in_progress
+    );
+    println!(
+        "ghost: {} order_ok: {} active_kib: {}",
+        snap.ghost, snap.order_ok, snap.active_kib
+    );
+    // Keep legacy table for operators
+    if let Ok(table) = sh("swapon", &["--show"])
+        && !table.is_empty()
+    {
+        println!();
+        println!("{table}");
+    }
+
     let ghosts = ghost_vram_swaps(&entries);
     if !ghosts.is_empty() {
         eprintln!("[status] AVISO: swap fantasma detectado:");
@@ -812,6 +941,17 @@ pub fn status() -> Result<(), CascadeError> {
         eprintln!("  acao: wsl --shutdown no Windows, depois ramshared down/up");
     }
     Ok(())
+}
+
+fn print_tier(name: &str, t: &TierSample) {
+    let prio = t
+        .prio
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "null".into());
+    println!(
+        "{name}: present={} prio={prio} size_kib={} used_kib={}",
+        t.present, t.size_kib, t.used_kib
+    );
 }
 
 mod cascade_io;
@@ -1309,7 +1449,7 @@ Filename Type Size Used Priority
             "Filename Type Size Used Priority\n\
              /dev/nbd0\\040(deleted) partition 1 2 100\n",
         ));
-        let r = status();
+        let r = status(false);
         clear_test_seams();
         assert!(r.is_ok());
     }

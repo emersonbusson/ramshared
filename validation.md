@@ -1011,3 +1011,23 @@ cat /mnt/c/Users/emedev/ramshared-drill/agent-guest-lab-20260714-results.json
 - SUMMARY **pass=11 warn=0 fail=0**
 **Verdict:** ✅ Guest lab path green end-to-end (same operational model as agy)
 **Next action:** Optional INF/PnP Root\RamShared polish for FriendlyName branding; pagefile-on-LUN ITEM-8 only with free RAM headroom (guest was ~2.5–2.7 GiB free)
+
+## 2026-07-14 — cascade lifecycle observability IMPL (status phase)
+
+**What:** SSDV3 Step 3 for cascade-lifecycle-observability: pure phase machine, `ramshared status [--json]`, health merge.
+**Category:** observability / userspace
+**How to measure:**
+```bash
+cargo test -p ramshared-cli
+cargo llvm-cov -p ramshared-cli --summary-only   # lifecycle.rs lines ≥80%
+./target/release/ramshared status
+./target/release/ramshared status --json | python3 -m json.tool
+./scripts/safety/cascade-health.sh | python3 -c "import sys,json;print(json.load(sys.stdin).get('phase'))"
+```
+**Measured data:**
+- 63 tests pass (15 lifecycle); clippy -D warnings clean
+- lifecycle.rs llvm-cov **94.65%** lines
+- Live: phase **UsingZram** (zram used ~41 MiB, vram 176 KiB residual); health phase matches
+- demote counters null (ITEM-3 deferred)
+**Verdict:** ✅ IMPL closed for observability slice; daemon demote export still optional gap
+**Next action:** optional wire demote counters from ramsharedd when status socket is cheap

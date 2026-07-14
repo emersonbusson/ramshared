@@ -49,6 +49,8 @@ You want **about three** emergency-memory lines:
 3. **Disk / VHDX** — last resort  
 
 ```bash
+./target/release/ramshared status          # phase: Armed / UsingVram / …
+./target/release/ramshared status --json  # machine-readable lifecycle
 sudo ./target/release/ramshared down
 ```
 

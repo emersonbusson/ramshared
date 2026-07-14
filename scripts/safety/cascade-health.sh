@@ -146,7 +146,47 @@ sample() {
       "${vram_total:-0}" "${vram_used:-0}" "${vram_free:-0}")
   fi
 
-  printf '{"ts":%s,"epoch":%s,"ok":%s,"reasons":%s,"daemon":{"alive":%s,"pid":%s,"cmd":%s},"swaps":%s,"flags":{"ghost":%s,"order_ok":%s,"has_zram":%s,"has_vram":%s,"has_vhdx":%s},"used_kib":{"zram":%s,"vram":%s,"vhdx":%s},"mem":{"total_kib":%s,"available_kib":%s,"swap_total_kib":%s,"swap_free_kib":%s},"gpu":%s}\n' \
+  # SPEC cascade-lifecycle-observability: phase from CLI only (no shell heuristics).
+  local phase_json="null" phase_reason_json="null" demote_json="null" thr_json="null"
+  local status_bin="" status_out=""
+  if [ -n "${RAMSHARED_STATUS_JSON_CMD:-}" ]; then
+    status_out=$(eval "$RAMSHARED_STATUS_JSON_CMD" 2>/dev/null) || status_out=""
+  else
+    if [ -n "${RAMSHARED_BIN:-}" ] && [ -x "${RAMSHARED_BIN}" ]; then
+      status_bin="${RAMSHARED_BIN}"
+    elif [ -x "./target/release/ramshared" ]; then
+      status_bin="./target/release/ramshared"
+    elif command -v ramshared >/dev/null 2>&1; then
+      status_bin="$(command -v ramshared)"
+    fi
+    if [ -n "$status_bin" ]; then
+      status_out=$("$status_bin" status --json 2>/dev/null) || status_out=""
+    fi
+  fi
+  if [ -n "$status_out" ]; then
+    phase_json=$(printf '%s' "$status_out" | python3 -c 'import json,sys
+try:
+ o=json.load(sys.stdin); print(json.dumps(o.get("phase")))
+except Exception:
+ print("null")' 2>/dev/null) || phase_json="null"
+    phase_reason_json=$(printf '%s' "$status_out" | python3 -c 'import json,sys
+try:
+ o=json.load(sys.stdin); print(json.dumps(o.get("phase_reason")))
+except Exception:
+ print("null")' 2>/dev/null) || phase_reason_json="null"
+    demote_json=$(printf '%s' "$status_out" | python3 -c 'import json,sys
+try:
+ o=json.load(sys.stdin); print(json.dumps(o.get("demote")))
+except Exception:
+ print("null")' 2>/dev/null) || demote_json="null"
+    thr_json=$(printf '%s' "$status_out" | python3 -c 'import json,sys
+try:
+ o=json.load(sys.stdin); print(json.dumps(o.get("thresholds_kib")))
+except Exception:
+ print("null")' 2>/dev/null) || thr_json="null"
+  fi
+
+  printf '{"ts":%s,"epoch":%s,"ok":%s,"reasons":%s,"daemon":{"alive":%s,"pid":%s,"cmd":%s},"swaps":%s,"flags":{"ghost":%s,"order_ok":%s,"has_zram":%s,"has_vram":%s,"has_vhdx":%s},"used_kib":{"zram":%s,"vram":%s,"vhdx":%s},"mem":{"total_kib":%s,"available_kib":%s,"swap_total_kib":%s,"swap_free_kib":%s},"gpu":%s,"phase":%s,"phase_reason":%s,"demote":%s,"thresholds_kib":%s}\n' \
     "$(json_escape "$ts")" \
     "$now_epoch" \
     "$([ "$ok" = 1 ] && echo true || echo false)" \
@@ -167,7 +207,11 @@ sample() {
     "${mem_avail:-0}" \
     "${swap_total:-0}" \
     "${swap_free:-0}" \
-    "$vram_json"
+    "$vram_json" \
+    "${phase_json:-null}" \
+    "${phase_reason_json:-null}" \
+    "${demote_json:-null}" \
+    "${thr_json:-null}"
 }
 
 maybe_rotate() {

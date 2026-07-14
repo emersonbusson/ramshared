@@ -35,6 +35,28 @@ sudo ./target/release/ramshared check
 sudo ./target/release/ramshared doctor   # if check fails
 ```
 
+## Is RamShared using my VRAM right now?
+
+Run:
+
+```bash
+./target/release/ramshared status
+# or machine-readable:
+./target/release/ramshared status --json
+```
+
+| Phase | Meaning |
+| --- | --- |
+| **Armed** | VRAM tier is on as swap (`nbd`), daemon is up, but **almost no pages** there yet (idle cushion). |
+| **UsingZram** | Guest pressure is mostly on compressed RAM. |
+| **UsingVram** | Real use of the GPU-backed tier (used ≥ ~1 MiB). |
+| **UsingDisk** | Spilled past VRAM to disk/VHDX. |
+| **Demoting** | Giving VRAM back (host GPU pressure / canary) — only when the daemon reports it. |
+| **Degraded** | Ghost swap, bad priority order, or VRAM swap without daemon — fix before relying on the cushion. |
+| **Off** | Product cascade not present. |
+
+`cascade-health.sh` includes the same `phase` when the CLI binary is available.
+
 ## How do I know it worked?
 
 ```bash
