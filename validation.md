@@ -1120,3 +1120,28 @@ sudo env HOG_MB=4500 CAP_MB=256 MIN_NBD_MIB=150 DEMOTE_CAP_MB=5500 RESTORE=1 \
 - Prior same-day host path (EMEDEV): Disk5 RAMSHARE RAW→S: NTFS; probe 8 MiB write≈1224 / read≈146 match=True (validation 11:52 entry)
 **Verdict:** ✅ Guest signed reload + CREATE/FORMAT/MEASURE **PASS** (pass=9 fail=0)
 **Next action:** optional Bypass execution policy on guest for CIM measure script; optional INF/PnP FriendlyName branding (RAMSHARE vs Msft Virtual Disk)
+
+## 2026-07-14 13:27 -03 — host memory policy: WSL 16G RAM + 4G VRAM cascade (no wsl --shutdown)
+
+**What:** Apply shared-host policy so WSL2 does not starve Windows/Hyper-V (civm, win11-drill): system RAM cap 16 GiB in `.wslconfig`; cascade VRAM tier 4 GiB; GPU free floor 1 GiB. Applied cascade-down/up live without `wsl --shutdown` (user mid-work).
+**Category:** config / e2e
+**How to measure:**
+```bash
+cat /mnt/c/Users/emedev/.wslconfig
+cat /etc/ramshared/cascade.conf
+swapon --show
+./target/release/ramshared status
+./scripts/safety/cascade-health.sh
+nvidia-smi --query-gpu=memory.total,memory.free --format=csv
+```
+**Measured data:**
+- `.wslconfig`: memory=16 GiB, swap=4 GiB, swapFile=I:\\wsl_swap\\swap.vhdx (backup .wslconfig.bak.*)
+- `/etc/ramshared/cascade.conf`: VRAM_MIB=4096, ZRAM_MIB=2048, MIN_VRAM_HEADROOM_MIB=1024
+- preflight OK free VRAM=4661 MiB (need >=1153 sparse)
+- after cascade-up: nbd **4G** prio 100; zram 2G prio 200; sdc 8G prio -2; order_ok
+- daemon: `ramsharedd --size 4096` alive pid live; health **ok:true**
+- residual: disk used ~650 MiB after swapoff-first down (pages from prior zram) → phase UsingDisk expected until reclaimed
+- GPU free ~4.5 GiB (>= 1 GiB headroom policy)
+- **WSL MemTotal still ~15–16 GiB this session** — `.wslconfig` already 16G; full re-read of limits only needs later `wsl --shutdown` if Windows still held old 28G attempt (current session already ~16G)
+**Verdict:** ✅ Cascade 4G VRAM path LIVE without killing WSL session; host residual RAM policy documented for Windows+civm
+**Next action:** when idle, optional `wsl --shutdown` once to ensure Windows fully reloads `.wslconfig`; avoid demote/pressure thrash on daily host

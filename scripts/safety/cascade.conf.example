@@ -10,15 +10,15 @@
 # The daemon gives VRAM back when free memory on the card drops (DEMOTE).
 
 # Capacity advertised as NBD size (MiB). Sparse: not fully committed at up.
-# On a 6 GiB GPU, 4096 is the recommended product default; 6144 is max "up to 6G"
-# but commit is auto-capped to (GPU total − reserve) so the card never runs dry.
-# Operators may lower this in /etc/ramshared/cascade.conf (e.g. 2048 on shared desktop GPUs).
+# On a 6 GiB GPU, 4096 is the recommended product default (4 GiB for WSL2 cascade);
+# 6144 is max "up to 6G" but commit is auto-capped to (GPU total − reserve).
+# Shared desktop: keep MIN_VRAM_HEADROOM so Windows/Hyper-V/civm still have GPU free.
 VRAM_MIB=4096
 ZRAM_MIB=2048
 
 # Reserve floor (MiB): never allocate another CUDA chunk if free would fall below this.
-# Also used as sparse preflight headroom. Keep ≥512 on shared desktop/game GPUs.
-MIN_VRAM_HEADROOM_MIB=512
+# Also used as sparse preflight headroom. Prefer 1024 when Windows + other VMs share the GPU.
+MIN_VRAM_HEADROOM_MIB=1024
 
 # Optional env (export before up / in systemd unit Environment=):
 #   RAMSHARED_VRAM_PREALLOC=1        # old full cuMemAlloc(size) at start
