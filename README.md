@@ -156,6 +156,8 @@ Raw block-device benchmarks (direct unbuffered read/write) demonstrate the perfo
 | **Windows Host (StorPort native)** | **~1940 MB/s (1.94 GB/s)** | **~420 MB/s** | Extremely low latency (Direct PCIe memory copy) |
 | **WSL2 Guest (NBD loopback)** | **~714 MB/s** | **~597 MB/s** | Network socket boundary overhead (TCP loopback) |
 
+![WSL2 NBD vs Windows StorPort — direct block I/O](docs/marketing/benchmark-wsl2-vs-storport.jpg)
+
 *Key Insight:* The native Windows StorPort driver is **~2.7x faster** for reads compared to the WSL2 guest NBD implementation. This is because the StorPort driver operates directly on the system's SCSI queue and communicates with the backend via shared memory, bypassing the TCP socket loopback boundary required by NBD inside Linux.
 
 ---
@@ -174,6 +176,8 @@ Continuous, exhaustive stress tests (10 rounds of 50MB random read/write, coveri
 | **Samsung 850 EVO 500GB (SATA III)** | ~540 MB/s | ~520 MB/s | 100% |
 | **Kingston A400 240GB (SATA III)** | ~500 MB/s | ~350 MB/s | 100% |
 
+![StorPort virtual disk vs SATA SSDs — sequential read/write](docs/marketing/benchmark-comparison.jpg)
+
 *Note:* RAMShared read throughput is **~4x faster** than physical SATA III SSDs, matching PCIe Gen3 NVMe speeds by bypassing disk controller physics and copying directly to VRAM.
 
 ### How to Build and Run on a Physical Host
@@ -187,10 +191,19 @@ Continuous, exhaustive stress tests (10 rounds of 50MB random read/write, coveri
 4. Run `.\scripts\windows\Build-Drivers.ps1` and `Sign-Drivers.ps1` to compile and sign.
 5. Launch the installer and start the backend:
    ```powershell
+   # Prefer an unused letter. Script aborts if the letter is already in use
+   # or the disk is not a RamShared LUN (anti data-loss guards).
    .\scripts\windows\Install-InfAndBackend.ps1 -FormatNtfs -DriveLetter S
    ```
+6. **Optional — boot service (lab SCM):** register `RamSharedWinSvc` so start/stop is ordered on boot:
+   ```powershell
+   .\scripts\windows\Install-RamSharedService.ps1 -RepoRoot $PWD -StartNow
+   ```
+   Stop refuses to kill the backend while a secondary pagefile on the volume is still allocated (DT-9 / BugCheck **0x7A**).
 
-*Warning:* Surprisal-removing the virtual storage back-end while a pagefile on it is actively in use will cause a bugcheck (**0x7A**). Avoid stopping the backend while the pagefile is active.
+**Partition / format safety:** `Install-InfAndBackend.ps1` and `Start-RamSharedLab.ps1` only format disks that match the RamShared virtual LUN identity. They refuse if the target drive letter is already mounted on another volume, unless you pass `-Force` after an interactive confirmation path. Never point these scripts at a physical OS disk.
+
+*Warning:* Surprise-removing the virtual storage back-end while a pagefile on it is actively in use will cause a bugcheck (**0x7A**). Avoid stopping the backend while the pagefile is active.
 
 ---
 
@@ -222,7 +235,7 @@ Uso normal: desenhado para **não**. Demote pode deixar lento por alguns segundo
 
 ### Coexistência e Gerenciamento de Memória (Windows vs. WSL2)
 * **WDDM é a autoridade:** O Windows Video Memory Manager (VidMm) manda na VRAM. Se um jogo ou app no Windows exigir memória, o daemon do WSL2 monitora essa pressão via `/dev/dxg` e dispara o processo de **DEMOTE** (desalocando páginas do swap NBD da GPU para o disco) para liberar espaço no Windows host instantaneamente.
-* **Performance Comparada:** A leitura nativa via StorPort no Windows atinge **~1.94 GB/s** (4x mais rápido que SSDs SATA III), enquanto no WSL2 a leitura fica em **~714 MB/s** devido ao overhead da camada de loopback NBD.
+* **Performance Comparada:** A leitura nativa via StorPort no Windows atinge **~1.94 GB/s** (4x mais rápido que SSDs SATA III), enquanto no WSL2 a leitura fica em **~714 MB/s** devido ao overhead da camada de loopback NBD. Gráficos: [WSL2 vs StorPort](docs/marketing/benchmark-wsl2-vs-storport.jpg) e [StorPort vs SATA](docs/marketing/benchmark-comparison.jpg).
 
 </details>
 
