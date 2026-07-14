@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.1](https://github.com/emersonbusson/ramshared/compare/v0.4.0...v0.4.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* **drm:** StorPort TUR sense + format/measure for TM 100% ([6f99614](https://github.com/emersonbusson/ramshared/commit/6f996141d5ecb907a2781877a961b0ac580f8e21))
+* **drm:** StorPort TUR sense + format/measure for TM 100% ([b40e83d](https://github.com/emersonbusson/ramshared/commit/b40e83d5a441f1fe02bdd579ed8521a46d24eb84))
+
+
+### Documentation
+
+* **validation:** guest signed sys reload + CREATE/FORMAT/MEASURE ([2451a33](https://github.com/emersonbusson/ramshared/commit/2451a33163cda5478f61924775314910bc81beaf))
+* **validation:** guest signed sys reload CREATE/FORMAT/MEASURE PASS ([4bd6c12](https://github.com/emersonbusson/ramshared/commit/4bd6c1274dfbaf31be637be89597be42bf697c15))
+
+
+### CI
+
+* re-trigger PR body check after template fix ([70fe511](https://github.com/emersonbusson/ramshared/commit/70fe511b2edc63b2728cabc832779ae57ab37679))
+
 ## [0.4.0](https://github.com/emersonbusson/ramshared/compare/v0.3.1...v0.4.0) (2026-07-14)
 
 
