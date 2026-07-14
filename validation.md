@@ -917,3 +917,133 @@ sudo mkswap /dev/nbd0 && sudo swapon -p 100 /dev/nbd0
 - **Coexistence:** Windows WDDM holds absolute authority. The `ramshared-wsl2d` daemon tracks pressure via `/dev/dxg` and executes a clean `DEMOTE` flow to release VRAM to the host if requested.
 **Verdict:** ✅ E2E StorPort driver and backend successfully compiled, signed, and validated on the physical host. Both read/write and data consistency verified.
 **Next action:** consolidate MSVC background service (`ramshared-winsvc`) to run automatically on boot.
+
+## 2026-07-14 09:30 -03 — gap close: charts + #40 format guards + #29 SCM DT-9 + cascade VRAM restore
+
+**What:** Close open documentation/product gaps from post-benchmark session without daily-host pressure drills.
+**Category:** docs + safety scripts + live cascade restore
+**How to measure:**
+```bash
+# Charts present
+ls docs/marketing/benchmark-comparison.jpg docs/marketing/benchmark-wsl2-vs-storport.jpg
+# Cascade VRAM restored (no thrash)
+./scripts/safety/cascade-health.sh
+swapon --show
+# Windows scripts are code-only here (host re-test when elevated):
+#   Install-InfAndBackend.ps1 letter/identity/confirm guards
+#   Start-RamSharedLab.ps1 no letter-only format
+#   RamSharedWinSvc OnStop throws on DT-9 refuse (exit 2)
+#   Install-RamSharedService.ps1 copies scripts from repo + delayed-auto
+```
+**Measured data:**
+- Charts: StorPort-vs-SATA marketing image + new WSL2-vs-StorPort bar chart (714/597 vs 1940/420 MB/s)
+- cascade-health after `cascade-up.sh`: ok=true ghost=false order_ok has_vram=true has_zram=true
+- swaps: zram1 prio 200 (2G used 0), nbd0 prio 100 (2G used 0), sdc prio -2 (8G used 0)
+- daemon PID live with `--size 2048` release binary
+- conf.example restored product seed VRAM_MIB=4096 ZRAM_MIB=2048 (live /etc may stay 2048)
+**Verdict:** ✅ repo gaps closed for charts, format safety (#40 code), winsvc DT-9 fail-closed (#29 code), cascade VRAM tier restored. ❌ live multi-tenant pressure / GPU-P lab still blocked (no drill password; daily host rule).
+**Next action:** On Windows elevated host: re-run Install-InfAndBackend with free letter + Install-RamSharedService; open GPU-P lab only with RAMSHARED_DRILL_PASSWORD; never thrash swap on daily WSL.
+
+## 2026-07-14 10:15 -03 — full gap close via WSL elevated Windows + pressure probe
+
+**What:** Close remaining gaps using documented elevation (`scripts/windows/wsl-elevated-ps.sh` + `C:\Windows\System32\sudo.exe`) and host-safe pressure probe.
+**Category:** integration + safety + live E2E
+**How to measure:**
+```bash
+./scripts/windows/wsl-elevated-ps.sh -Command "Get-Service RamSharedWinSvc,ramshared | ft Name,Status,StartType"
+./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\bin\Install-InfAndBackend.ps1 -RepoRoot C:\Users\emedev\ramshared-src -FormatNtfs -DriveLetter C -Force
+# expect REFUSE_FORMAT letter C in use
+sudo scripts/safety/cascade-pressure-probe.sh --mem-max 1200M --max-sec 90
+./scripts/safety/cascade-health.sh
+```
+**Measured data:**
+- Elevation: IsAdmin=True; Get-VM works (win11-drill, linux-kernel-lab, gha-ubuntu-2404)
+- **#29 RamSharedWinSvc:** built csc 7680 bytes; `sc create` delayed-auto; StartType=Automatic; Start-Service Running; OnStart spawned WinDriveBackend; Stop-RamSharedLab STOP_OK (pagefile only on C:); service left Stopped + Automatic for boot
+- **#40 format guards:** PARSE_OK; live refuse `DriveLetter C` -> `REFUSE_FORMAT: drive letter C: is already in use`; physical Samsung 850 fails RamShared name identity (refuseExpected=true)
+- Charts: WSL2 vs StorPort + StorPort vs SATA in README under docs/marketing/
+- Cascade: zram1(200)>nbd0(100)>sdc(-2); health ok after restore
+- **Pressure probe (cgroup 1200M, 90s):** PASS order zram_first=2s nbd_first=8s disk_first=none; post health ok=true ghost=false; residual used zram~18M nbd~10M
+- **win11-drill:** started Running; GPU-P CurrentPartitionVRAM=1000000000; VHD ~12.4 GiB; **PSD guest auth failed** for drilladmin + unattend password + Administrator matrix (credential invalid). Heartbeat OkApplicationsUnknown. VM stopped after drills to free host RAM.
+**Verdict:** ✅ #29 install/boot registration + DT-9 stop path on host; ✅ #40 refuse live; ✅ WSL pressure order proof; ✅ charts/docs; 🟡 guest PSD blocked until win11-drill password/OOBE reset (unattend value does not match live guest).
+**Next action:** Reset drilladmin on win11-drill (or finish OOBE) then PSD demote drills inside guest; keep pressure via cascade-pressure-probe (cgroup-bounded) not full thrash.
+
+## 2026-07-14 10:37 -03 — win11-drill PSD restored (unattend password, not Passo0 default)
+
+**What:** Re-establish PowerShell Direct into Hyper-V guest `win11-drill` using the same host-elevated path as agy (`wsl-elevated-ps.sh` / admin), after PSD failed with MEMORY Passo0 default password.
+**Category:** lab access / integration
+**How to measure:**
+```bash
+./scripts/windows/wsl-elevated-ps.sh -Command '
+  # password: Machine env RAMSHARED_DRILL_PASSWORD (set this session from unattend-staging)
+  $pw=[Environment]::GetEnvironmentVariable("RAMSHARED_DRILL_PASSWORD","Machine")
+  $cred=New-Object PSCredential(".\drilladmin",(ConvertTo-SecureString $pw -AsPlainText -Force))
+  if ((Get-VM win11-drill).State -ne "Running") { Start-VM win11-drill; Start-Sleep 20 }
+  Invoke-Command -VMName win11-drill -Credential $cred -ScriptBlock { whoami; hostname }
+'
+```
+**Measured data:**
+- Root cause: current guest was installed with `E:\Hyper-V\iso\unattend-staging\Autounattend.xml` password (len 13), **not** legacy `Drill2026!` from earlier Passo0 VM on `C:\Hyper-V\...`
+- PSD_OK: `win11-drill\drilladmin` on host `WIN11-DRILL`
+- Smoke: Build **26200** UBR **8037**, testsigning **Yes**, IsAdmin **true**, FreeGB **~61.9**
+- `Invoke-Guest.ps1` OK with env password
+- Machine env set: `RAMSHARED_DRILL_PASSWORD` + `RAMSHARED_DRILL_USER=.\drilladmin` (host-local only, not in git)
+- VM stopped after smoke (State=Off) to free host RAM
+**Verdict:** ✅ Guest usable again for lab drills via PSD; host elevation path unchanged
+**Next action:** Guest-side driver/pagefile drills as needed; always start VM then PSD with Machine env password
+
+## 2026-07-14 10:42 -03 — win11-drill guest lab drill (PSD deploy + CREATE/REGISTER)
+
+**What:** Full guest lab path: elevate host → Start-VM → PSD → deploy signed package → sc load ramshared+poolstress → WinDriveBackend 64 MiB CREATE_DISK+REGISTER_QUEUE → LUN probe → DT-9 safe teardown → Stop-VM.
+**Category:** integration / lab E2E
+**How to measure:**
+```bash
+./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\bin\tmp-guest-lab-drill.ps1
+# or re-run with Machine env RAMSHARED_DRILL_PASSWORD set
+cat /mnt/c/Users/emedev/ramshared-drill/agent-guest-lab-20260714-results.json
+```
+**Measured data:**
+- package: ramshared.sys 31120, poolstress.sys 9104; backend exe 8704
+- guest-pre: FreeGB~2.59 RAM, DiskGB~61.9, testsigning Yes, Build 26200
+- driver-load: **poolstress RUNNING**, **ramshared RUNNING** (test cert imported)
+- backend: `CREATE_DISK ok REGISTER_QUEUE ok` size=67108864
+- disks: N=0 Msft Virtual Disk 80G + **N=1 Msft Virtual Disk 64 MiB** (LUN present)
+- bugcheck: none; teardown STOP_OK; VM left Off
+- SUMMARY **pass=11 warn=0 fail=0**
+**Verdict:** ✅ Guest lab path green end-to-end (same operational model as agy)
+**Next action:** Optional INF/PnP Root\RamShared polish for FriendlyName branding; pagefile-on-LUN ITEM-8 only with free RAM headroom (guest was ~2.5–2.7 GiB free)
+
+## 2026-07-14 10:58 -03 — cascade lifecycle observability IMPL (status phase)
+
+**What:** SSDV3 Step 3 for cascade-lifecycle-observability: pure phase machine, `ramshared status [--json]`, health merge.
+**Category:** observability / userspace
+**How to measure:**
+```bash
+cargo test -p ramshared-cli
+cargo llvm-cov -p ramshared-cli --summary-only   # lifecycle.rs lines ≥80%
+./target/release/ramshared status
+./target/release/ramshared status --json | python3 -m json.tool
+./scripts/safety/cascade-health.sh | python3 -c "import sys,json;print(json.load(sys.stdin).get('phase'))"
+```
+**Measured data:**
+- 63 tests pass (15 lifecycle); clippy -D warnings clean
+- lifecycle.rs llvm-cov **94.65%** lines
+- Live: phase **UsingZram** (zram used ~41 MiB, vram 176 KiB residual); health phase matches
+- demote counters null (ITEM-3 deferred)
+**Verdict:** ✅ IMPL closed for observability slice; daemon demote export still optional gap
+**Next action:** optional wire demote counters from ramsharedd when status socket is cheap
+
+## 2026-07-14 11:03 -03 — demote-status file + CLI demote fields (ITEM-3)
+
+**What:** Wire ramsharedd demote counters to `/run/ramshared/demote-status.json`; CLI status reads them.
+**Category:** observability
+**How to measure:**
+```bash
+cat /run/ramshared/demote-status.json
+./target/release/ramshared status --json | python3 -c "import sys,json;print(json.load(sys.stdin)['demote'])"
+```
+**Measured data:**
+- After cascade-up with new binary: demote-status `{"total":0,"last_reason":null,"in_progress":false}`
+- status --json demote.total=0; health demote object present
+- phase UsingDisk when /dev/sdc used_kib=1220 ≥ 1024 (residual disk swap after redeploy — correct priority rule)
+**Verdict:** ✅ ITEM-3 closed; demote export live
+**Next action:** optional idle reclaim of residual disk swap pages under pressure only

@@ -55,3 +55,12 @@ jobs:
 
       - name: Broken markdown links
         run: node tools/check-broken-links.mjs --all
+
+      # Align with Advoq Docs CI: optional hygiene scan when the tool exists.
+      - name: Docs hygiene (if scanner present)
+        run: |
+          if [ -f tools/scan-docs.mjs ]; then
+            node tools/scan-docs.mjs
+          else
+            echo "tools/scan-docs.mjs not present — skip (index+links already gated)"
+          fi
