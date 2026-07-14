@@ -918,7 +918,7 @@ sudo mkswap /dev/nbd0 && sudo swapon -p 100 /dev/nbd0
 **Verdict:** ✅ E2E StorPort driver and backend successfully compiled, signed, and validated on the physical host. Both read/write and data consistency verified.
 **Next action:** consolidate MSVC background service (`ramshared-winsvc`) to run automatically on boot.
 
-## 2026-07-14 — gap close: charts + #40 format guards + #29 SCM DT-9 + cascade VRAM restore
+## 2026-07-14 09:30 -03 — gap close: charts + #40 format guards + #29 SCM DT-9 + cascade VRAM restore
 
 **What:** Close open documentation/product gaps from post-benchmark session without daily-host pressure drills.
 **Category:** docs + safety scripts + live cascade restore
@@ -944,7 +944,7 @@ swapon --show
 **Verdict:** ✅ repo gaps closed for charts, format safety (#40 code), winsvc DT-9 fail-closed (#29 code), cascade VRAM tier restored. ❌ live multi-tenant pressure / GPU-P lab still blocked (no drill password; daily host rule).
 **Next action:** On Windows elevated host: re-run Install-InfAndBackend with free letter + Install-RamSharedService; open GPU-P lab only with RAMSHARED_DRILL_PASSWORD; never thrash swap on daily WSL.
 
-## 2026-07-14 — full gap close via WSL elevated Windows + pressure probe
+## 2026-07-14 10:15 -03 — full gap close via WSL elevated Windows + pressure probe
 
 **What:** Close remaining gaps using documented elevation (`scripts/windows/wsl-elevated-ps.sh` + `C:\Windows\System32\sudo.exe`) and host-safe pressure probe.
 **Category:** integration + safety + live E2E
@@ -967,7 +967,7 @@ sudo scripts/safety/cascade-pressure-probe.sh --mem-max 1200M --max-sec 90
 **Verdict:** ✅ #29 install/boot registration + DT-9 stop path on host; ✅ #40 refuse live; ✅ WSL pressure order proof; ✅ charts/docs; 🟡 guest PSD blocked until win11-drill password/OOBE reset (unattend value does not match live guest).
 **Next action:** Reset drilladmin on win11-drill (or finish OOBE) then PSD demote drills inside guest; keep pressure via cascade-pressure-probe (cgroup-bounded) not full thrash.
 
-## 2026-07-14 — win11-drill PSD restored (unattend password, not Passo0 default)
+## 2026-07-14 10:37 -03 — win11-drill PSD restored (unattend password, not Passo0 default)
 
 **What:** Re-establish PowerShell Direct into Hyper-V guest `win11-drill` using the same host-elevated path as agy (`wsl-elevated-ps.sh` / admin), after PSD failed with MEMORY Passo0 default password.
 **Category:** lab access / integration
@@ -991,7 +991,7 @@ sudo scripts/safety/cascade-pressure-probe.sh --mem-max 1200M --max-sec 90
 **Verdict:** ✅ Guest usable again for lab drills via PSD; host elevation path unchanged
 **Next action:** Guest-side driver/pagefile drills as needed; always start VM then PSD with Machine env password
 
-## 2026-07-14 — win11-drill guest lab drill (PSD deploy + CREATE/REGISTER)
+## 2026-07-14 10:42 -03 — win11-drill guest lab drill (PSD deploy + CREATE/REGISTER)
 
 **What:** Full guest lab path: elevate host → Start-VM → PSD → deploy signed package → sc load ramshared+poolstress → WinDriveBackend 64 MiB CREATE_DISK+REGISTER_QUEUE → LUN probe → DT-9 safe teardown → Stop-VM.
 **Category:** integration / lab E2E
@@ -1012,7 +1012,7 @@ cat /mnt/c/Users/emedev/ramshared-drill/agent-guest-lab-20260714-results.json
 **Verdict:** ✅ Guest lab path green end-to-end (same operational model as agy)
 **Next action:** Optional INF/PnP Root\RamShared polish for FriendlyName branding; pagefile-on-LUN ITEM-8 only with free RAM headroom (guest was ~2.5–2.7 GiB free)
 
-## 2026-07-14 — cascade lifecycle observability IMPL (status phase)
+## 2026-07-14 10:58 -03 — cascade lifecycle observability IMPL (status phase)
 
 **What:** SSDV3 Step 3 for cascade-lifecycle-observability: pure phase machine, `ramshared status [--json]`, health merge.
 **Category:** observability / userspace
@@ -1032,7 +1032,7 @@ cargo llvm-cov -p ramshared-cli --summary-only   # lifecycle.rs lines ≥80%
 **Verdict:** ✅ IMPL closed for observability slice; daemon demote export still optional gap
 **Next action:** optional wire demote counters from ramsharedd when status socket is cheap
 
-## 2026-07-14 — demote-status file + CLI demote fields (ITEM-3)
+## 2026-07-14 11:03 -03 — demote-status file + CLI demote fields (ITEM-3)
 
 **What:** Wire ramsharedd demote counters to `/run/ramshared/demote-status.json`; CLI status reads them.
 **Category:** observability

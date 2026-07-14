@@ -801,8 +801,8 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
 
 mod lifecycle;
 use lifecycle::{
-    active_threshold_kib_from_env, derive_lifecycle, render_status_json, CascadeSnapshot,
-    DemoteSnapshot, TierSample,
+    CascadeSnapshot, DemoteSnapshot, TierSample, active_threshold_kib_from_env, derive_lifecycle,
+    render_status_json,
 };
 
 /// Build lifecycle snapshot from live swaps + daemon (read-only).
@@ -810,14 +810,7 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
     let pairs: Vec<(String, u64, u64, i32)> = entries
         .iter()
         .filter(|e| !e.is_ghost())
-        .map(|e| {
-            (
-                e.filename.clone(),
-                e.size_kb,
-                e.used_kb,
-                e.priority,
-            )
-        })
+        .map(|e| (e.filename.clone(), e.size_kb, e.used_kb, e.priority))
         .collect();
     let (zram, vram, disk, order_ok) = lifecycle::tiers_from_swap_names(&pairs);
     let ghosts = ghost_vram_swaps(entries);
@@ -976,10 +969,7 @@ pub fn status(as_json: bool) -> Result<(), CascadeError> {
             .total
             .map(|n| n.to_string())
             .unwrap_or_else(|| "?".into()),
-        snap.demote
-            .last_reason
-            .as_deref()
-            .unwrap_or("?"),
+        snap.demote.last_reason.as_deref().unwrap_or("?"),
         snap.demote.in_progress
     );
     println!(
