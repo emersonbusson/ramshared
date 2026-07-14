@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.2](https://github.com/emersonbusson/ramshared/compare/v0.4.1...v0.4.2) (2026-07-14)
+
+
+### Bug Fixes
+
+* **scripts:** escape-safe .wslconfig (no invalid \w) ([caebbe9](https://github.com/emersonbusson/ramshared/commit/caebbe9299fcaef260a2207d91f0e84199d6d5a2))
+* **scripts:** escape-safe .wslconfig encode/validate/apply ([0b94417](https://github.com/emersonbusson/ramshared/commit/0b944171fb338806da51585cee2edb4b9748527b))
+
+
+### Documentation
+
+* **faq:** .wslconfig invalid escape + wslconfig-ctl ([0b577c5](https://github.com/emersonbusson/ramshared/commit/0b577c5985cc8358b29c5d78706ad7d8b51bc905))
+* WSL 16G host residual + 4G VRAM cascade policy ([b0bd0ff](https://github.com/emersonbusson/ramshared/commit/b0bd0ff1847e2b8ad67368743a0c600685b3244f))
+* WSL 16G residual + 4G VRAM cascade host policy ([d182e53](https://github.com/emersonbusson/ramshared/commit/d182e538e6abcbfc6dc5e1d3163c40b9f25b322c))
+
 ## [0.4.1](https://github.com/emersonbusson/ramshared/compare/v0.4.0...v0.4.1) (2026-07-14)
 
 
