@@ -35,6 +35,19 @@ fail() { echo "CASCADE-PREFLIGHT: refuse — $1" >&2; exit 1; }
 
 echo "== RamShared cascade preflight (fail-closed) =="
 
+# Soft gate: .wslconfig path escapes (does not refuse cascade — config is Windows-side).
+# Hard fix: bash scripts/safety/wslconfig-ctl.sh apply
+_wslcfg_ctl="$REPO/scripts/safety/wslconfig-ctl.sh"
+if [[ -f "$_wslcfg_ctl" ]]; then
+  if bash "$_wslcfg_ctl" check >/tmp/ramshared-wslconfig-check.out 2>&1; then
+    echo "  [ok] .wslconfig path escapes clean"
+  else
+    echo "  [warn] .wslconfig has unsafe path escapes (WSL prints invalid escape on start)"
+    echo "         fix: bash scripts/safety/wslconfig-ctl.sh apply"
+    head -5 /tmp/ramshared-wslconfig-check.out 2>/dev/null | sed 's/^/         /' || true
+  fi
+fi
+
 [[ -x "$CLI" ]] || fail "ramshared binary missing: $CLI (cargo build -p ramshared-cli --release)"
 [[ -x "$DAEMON" ]] || fail "ramsharedd binary missing: $DAEMON (cargo build -p ramshared-wsl2d --release)"
 echo "  [ok] binaries present"

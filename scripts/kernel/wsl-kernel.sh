@@ -92,9 +92,11 @@ atomic_write_file() {
 
 arm_config_file() {
 	local cfg="$1"
-	# Prefer C:\wsl copies (stable for WSL boot + modules VHDX)
-	local kline="kernel=C:\\\\wsl\\\\kernel-ramshared"
-	local mline="kernelModules=C:\\\\wsl\\\\modules-ramshared.vhdx"
+	# Prefer C:/wsl copies (stable for WSL boot + modules VHDX).
+	# Day-0 path encoding: forward slashes only — single "\" is an escape in .wslconfig
+	# ("I:\wsl" → invalid escape "w"). See scripts/safety/wslconfig-lib.sh.
+	local kline="kernel=C:/wsl/kernel-ramshared"
+	local mline="kernelModules=C:/wsl/modules-ramshared.vhdx"
 	local -a lines=()
 	local line in_wsl2=0 has_wsl2=0 added_k=0 added_m=0
 	if [[ -f "$cfg" ]]; then

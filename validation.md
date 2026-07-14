@@ -1145,3 +1145,17 @@ nvidia-smi --query-gpu=memory.total,memory.free --format=csv
 - **WSL MemTotal still ~15–16 GiB this session** — `.wslconfig` already 16G; full re-read of limits only needs later `wsl --shutdown` if Windows still held old 28G attempt (current session already ~16G)
 **Verdict:** ✅ Cascade 4G VRAM path LIVE without killing WSL session; host residual RAM policy documented for Windows+civm
 **Next action:** when idle, optional `wsl --shutdown` once to ensure Windows fully reloads `.wslconfig`; avoid demote/pressure thrash on daily host
+
+## 2026-07-14 16:41 -03 — .wslconfig escape-safe manage (platform guard)
+
+**What:** Prevent WSL "invalid escape character" on boot: path values must not use single backslash. Added wslconfig-lib/ctl (encode=forward slash only, validate, apply, selftest), fixed wsl-kernel.sh arm + boot-kernel-safe.ps1 To-WslPath, cascade-preflight soft check.
+**Category:** reliability / host config
+**How to measure:**
+```bash
+bash scripts/safety/wslconfig-ctl.sh selftest
+bash scripts/safety/wslconfig-ctl.sh check
+bash scripts/safety/wslconfig-ctl.sh apply   # idempotent rewrite
+```
+**Measured data:** SELFTEST PASS; check OK on live profile; apply rewrote forward-slash paths; preflight shows "[ok] .wslconfig path escapes clean"
+**Verdict:** ✅ regression class sealed (encode at write, validate before/after, PS/bash writers fixed)
+**Next action:** none (optional CI job for selftest later)

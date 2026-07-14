@@ -1,0 +1,22 @@
+# Canonical RamShared host .wslconfig (Windows user profile).
+# Managed by: scripts/safety/wslconfig-ctl.sh
+#
+# RULE (same class as Microsoft WSL docs + escape parsing):
+#   Path values MUST use forward slashes (C:/wsl/...) OR doubled backslashes (C:\\wsl\\...).
+#   A single backslash starts an escape sequence: I:\wsl → error "invalid escape: w".
+#   Never hand-edit paths with raw Windows backslashes.
+#
+# Sizing policy (shared desktop + Hyper-V/civm):
+#   WSL2 system RAM hard cap 16 GiB; remainder of host RAM stays with Windows/other VMs.
+#   Product cascade VRAM tier is NOT set here — see /etc/ramshared/cascade.conf (VRAM_MIB=4096).
+
+[wsl2]
+memory=17179869184
+swap=4294967296
+swapFile=I:/wsl_swap/swap.vhdx
+kernel=C:/wsl/kernel-ramshared
+kernelModules=C:/wsl/modules-ramshared.vhdx
+
+[experimental]
+autoMemoryReclaim=Gradual
+sparseVhd=true
