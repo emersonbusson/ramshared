@@ -120,6 +120,22 @@ sudo bash scripts/safety/install-cascade-boot.sh --enable
 Needs systemd in the distro. Config: `/etc/ramshared/cascade.conf`.  
 Undo: **Disable boot** in the app, or `sudo bash scripts/safety/uninstall-cascade-boot.sh`.
 
+## WSL says “invalid escape character” in `.wslconfig`?
+
+`.wslconfig` is **not** a dumb ini: `\` starts an escape. A Windows path like `I:\wsl_swap\...` becomes invalid (`\w`).
+
+**Rule:** path values use **forward slashes** only (`I:/wsl_swap/swap.vhdx`, `C:/wsl/kernel-ramshared`).
+
+```bash
+# diagnose + rewrite (safe, keeps backup)
+bash scripts/safety/wslconfig-ctl.sh check
+bash scripts/safety/wslconfig-ctl.sh apply
+# unit tests for this failure class:
+bash scripts/safety/wslconfig-ctl.sh selftest
+```
+
+Do **not** hand-edit paths with raw backslashes. `scripts/kernel/wsl-kernel.sh arm` and the safe boot scripts emit the same encoding.
+
 ## What happens when I open a game?
 
 The daemon watches free GPU memory and latency. If the card is under pressure, it **stops using GPU as swap** (DEMOTE). Pages move to disk. Processes in WSL are **not** killed on purpose.
