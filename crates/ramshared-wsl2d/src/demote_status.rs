@@ -75,10 +75,7 @@ fn extract_u64(json: &str, key: &str) -> Option<u64> {
     let pat = format!("\"{key}\":");
     let i = json.find(&pat)?;
     let rest = json[i + pat.len()..].trim_start();
-    let num: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
+    let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     num.parse().ok()
 }
 

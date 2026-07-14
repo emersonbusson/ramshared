@@ -23,7 +23,7 @@ Pressure  →  zram    (compressed RAM)   priority 200   hot
 
 **Give-back (DEMOTE):** canaries on latency, free GPU memory, and corruption → `swapoff` on the VRAM device → pages fall to disk → processes stay alive.
 
-**Lifecycle observability:** pure phase derivation in `crates/ramshared-cli/src/cascade/lifecycle.rs` (Armed / Using* / Demoting / Degraded). See [`docs/specs/no-milestone/cascade-lifecycle-observability/SPEC.md`](specs/no-milestone/cascade-lifecycle-observability/SPEC.md).
+**Lifecycle observability:** pure phase derivation in `crates/ramshared-cli/src/cascade/lifecycle.rs` (Armed / Using* / Demoting / Degraded). See [`docs/specs/no-milestone/cascade-lifecycle-observability/SPEC.md`](docs/specs/no-milestone/cascade-lifecycle-observability/SPEC.md).
 
 **Invariant A1:** demote only if something lower can absorb pages (disk swap or enough free RAM). Checked at `up`.
 

@@ -92,8 +92,7 @@ pub fn derive_lifecycle(s: &CascadeSnapshot) -> LifecycleView {
     if !s.order_ok {
         reasons.push("priority_order_bad".into());
     }
-    let hot_vram_no_daemon =
-        s.vram.present && !s.daemon_alive && s.vram.used_kib >= thr;
+    let hot_vram_no_daemon = s.vram.present && !s.daemon_alive && s.vram.used_kib >= thr;
     if hot_vram_no_daemon {
         reasons.push("daemon_dead_hot_vram".into());
     }
@@ -254,11 +253,7 @@ fn tier_json(t: &TierSample) -> String {
 }
 
 /// Serialize lifecycle + snapshot to one JSON object (SPEC schema).
-pub fn render_status_json(
-    view: &LifecycleView,
-    snap: &CascadeSnapshot,
-    ts: &str,
-) -> String {
+pub fn render_status_json(view: &LifecycleView, snap: &CascadeSnapshot, ts: &str) -> String {
     let reasons = if view.reasons.is_empty() {
         "[]".into()
     } else {
