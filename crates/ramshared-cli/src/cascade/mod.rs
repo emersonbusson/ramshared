@@ -39,6 +39,8 @@ const NBD: &str = "/dev/nbd0";
 const ZRAM_DEV_FILE: &str = "/run/ramshared/zram-dev";
 const SWAP_DEV_FILE: &str = "/run/ramshared/swap-dev";
 const PID_FILE: &str = "/run/ramshared/ramsharedd.pid";
+/// Daemon demote counters for status --json (written by ramsharedd).
+const DEMOTE_STATUS_FILE: &str = "/run/ramshared/demote-status.json";
 /// Forensic "armed" marker (survives WSL death if under /mnt/c).
 const ARMED_MARKER_CANDIDATES: &[&str] = &["/mnt/c/wsl-forensics/.armed", "/run/ramshared/.armed"];
 
@@ -828,9 +830,72 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
         order_ok,
         daemon_alive,
         daemon_pid,
-        demote: DemoteSnapshot::default(),
+        demote: read_demote_snapshot(),
         active_kib: active_threshold_kib_from_env(),
     }
+}
+
+/// Read `/run/ramshared/demote-status.json` if present (daemon ITEM-3).
+fn read_demote_snapshot() -> DemoteSnapshot {
+    let Ok(text) = fs::read_to_string(DEMOTE_STATUS_FILE) else {
+        return DemoteSnapshot::default();
+    };
+    parse_demote_status_file(&text).unwrap_or_default()
+}
+
+/// Minimal parse of daemon demote-status.json (mirrors wsl2d demote_status).
+fn parse_demote_status_file(text: &str) -> Option<DemoteSnapshot> {
+    let t = text.trim();
+    if !t.starts_with('{') {
+        return None;
+    }
+    let total = {
+        let pat = "\"total\":";
+        let i = t.find(pat)?;
+        let rest = t[i + pat.len()..].trim_start();
+        let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        num.parse().ok()?
+    };
+    let in_progress = {
+        let pat = "\"in_progress\":";
+        t.find(pat)
+            .map(|i| {
+                let rest = t[i + pat.len()..].trim_start();
+                rest.starts_with("true")
+            })
+            .unwrap_or(false)
+    };
+    let last_reason = {
+        let pat = "\"last_reason\":";
+        t.find(pat).and_then(|i| {
+            let rest = t[i + pat.len()..].trim_start();
+            if rest.starts_with("null") {
+                return None;
+            }
+            if !rest.starts_with('"') {
+                return None;
+            }
+            let mut out = String::new();
+            let mut chars = rest[1..].chars();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' => {
+                        if let Some(n) = chars.next() {
+                            out.push(n);
+                        }
+                    }
+                    '"' => break,
+                    c => out.push(c),
+                }
+            }
+            Some(out)
+        })
+    };
+    Some(DemoteSnapshot {
+        total: Some(total),
+        last_reason,
+        in_progress,
+    })
 }
 
 fn daemon_alive_pid() -> (bool, Option<u32>) {
@@ -1439,6 +1504,20 @@ Filename Type Size Used Priority
         let r = try_recover_zero_used_orphans();
         clear_test_seams();
         let _ = r;
+    }
+
+    #[test]
+    fn parse_demote_status_file_roundtrip_shape() {
+        let j = r#"{"total":2,"last_reason":"Latency","in_progress":true}"#;
+        let d = parse_demote_status_file(j).expect("parse");
+        assert_eq!(d.total, Some(2));
+        assert_eq!(d.last_reason.as_deref(), Some("Latency"));
+        assert!(d.in_progress);
+        let j2 = r#"{"total":0,"last_reason":null,"in_progress":false}"#;
+        let d2 = parse_demote_status_file(j2).unwrap();
+        assert_eq!(d2.total, Some(0));
+        assert!(d2.last_reason.is_none());
+        assert!(!d2.in_progress);
     }
 
     #[test]

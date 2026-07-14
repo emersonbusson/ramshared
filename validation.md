@@ -1031,3 +1031,19 @@ cargo llvm-cov -p ramshared-cli --summary-only   # lifecycle.rs lines ≥80%
 - demote counters null (ITEM-3 deferred)
 **Verdict:** ✅ IMPL closed for observability slice; daemon demote export still optional gap
 **Next action:** optional wire demote counters from ramsharedd when status socket is cheap
+
+## 2026-07-14 — demote-status file + CLI demote fields (ITEM-3)
+
+**What:** Wire ramsharedd demote counters to `/run/ramshared/demote-status.json`; CLI status reads them.
+**Category:** observability
+**How to measure:**
+```bash
+cat /run/ramshared/demote-status.json
+./target/release/ramshared status --json | python3 -c "import sys,json;print(json.load(sys.stdin)['demote'])"
+```
+**Measured data:**
+- After cascade-up with new binary: demote-status `{"total":0,"last_reason":null,"in_progress":false}`
+- status --json demote.total=0; health demote object present
+- phase UsingDisk when /dev/sdc used_kib=1220 ≥ 1024 (residual disk swap after redeploy — correct priority rule)
+**Verdict:** ✅ ITEM-3 closed; demote export live
+**Next action:** optional idle reclaim of residual disk swap pages under pressure only

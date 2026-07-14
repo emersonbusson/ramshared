@@ -16,11 +16,13 @@
 | `crates/ramshared-cli/src/main.rs` | ITEM-2 | `status --json` usage |
 | `scripts/safety/cascade-health.sh` | ITEM-4 | `phase` / `demote` / `thresholds_kib` from CLI |
 | `docs/FAQ.md`, `README.md`, `ARCHITECTURE.md` | ITEM-5 | human docs |
+| `crates/ramshared-wsl2d/src/demote_status.rs` | ITEM-3 | demote status file IO |
+| `crates/ramshared-wsl2d/src/main.rs` | ITEM-3 | publish demote status |
 | `validation.md` | ITEM-6 | live sample |
 
 ## ITEM-3
 
-Demote counters: **skipped** — `demote.total` / `last_reason` null; `in_progress` only via injectable snapshot in unit tests.
+Demote counters: **implemented** via `/run/ramshared/demote-status.json` written by `ramsharedd` on start and demote state changes. CLI reads into `status --json` demote fields.
 
 ## Validation (numbers)
 
@@ -36,7 +38,7 @@ Demote counters: **skipped** — `demote.total` / `last_reason` null; `in_progre
 
 ## Gaps
 
-- Daemon demote export still future (SPEC optional ITEM-3).
+- Daemon demote export: file path live; total starts at 0 until first demote event.
 - Health parses status JSON four times with python (acceptable at 30s loop).
 
 ## Rollback trigger
