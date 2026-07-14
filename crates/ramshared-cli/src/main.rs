@@ -203,7 +203,7 @@ fn main() -> ExitCode {
         }
         Some("up") => to_exit(cascade::up()),
         Some("down") => to_exit(cascade::down()),
-        Some("status") => to_exit(cascade::status()),
+        Some("status") => to_exit(cascade::status(json)),
         Some("-h") | Some("--help") | None => {
             print_usage();
             ExitCode::SUCCESS
@@ -233,7 +233,7 @@ fn print_usage() {
     eprintln!("  ramshared up [--vram MiB] [--zram MiB] [--daemon PATH]");
     eprintln!("      defaults: 1024 MiB each, or RAMSHARED_VRAM_MIB / RAMSHARED_ZRAM_MIB");
     eprintln!("      --zram 0  skip zram (VRAM/NBD only)");
-    eprintln!("  ramshared status");
+    eprintln!("  ramshared status [--json]   # phase Armed/UsingVram/… + tiers");
     eprintln!("  ramshared down   # always swapoff before stopping the daemon (anti hang)");
     eprintln!();
     eprintln!("boot on WSL2 (opt-in, fail-closed):");
