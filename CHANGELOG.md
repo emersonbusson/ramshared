@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.0](https://github.com/emersonbusson/ramshared/compare/v0.3.1...v0.4.0) (2026-07-14)
+
+
+### Features
+
+* **cascade:** export demote status for lifecycle JSON ([7821d46](https://github.com/emersonbusson/ramshared/commit/7821d460f9007e04ef75f1d8829429f3d0f248e9))
+* **cascade:** lifecycle status phase + demote export ([c33c95a](https://github.com/emersonbusson/ramshared/commit/c33c95a2488597991a9d6e4b4b2f913f1e1faeaf))
+* **cascade:** lifecycle status phase and status --json ([39a9665](https://github.com/emersonbusson/ramshared/commit/39a9665afeca7474cb2142bb36fd963cd146168d))
+* **win-driver:** close [#29](https://github.com/emersonbusson/ramshared/issues/29)/[#40](https://github.com/emersonbusson/ramshared/issues/40) gaps, charts, and live pressure proof ([39dfe72](https://github.com/emersonbusson/ramshared/commit/39dfe7280c0d083a539b23919191337ae9a841a0))
+
+
+### Bug Fixes
+
+* **ci:** green gates + port security scans from advoq pattern ([7242b2b](https://github.com/emersonbusson/ramshared/commit/7242b2bd674f638912448667876c965873f48042))
+
+
+### Documentation
+
+* record win11-drill PSD guest lab drill PASS ([2d07fd4](https://github.com/emersonbusson/ramshared/commit/2d07fd4c716a2ae9a56c1ed2a181b3343cab3164))
+* **ssdv3:** PRD cascade lifecycle observability (Step 1) ([9a88e7e](https://github.com/emersonbusson/ramshared/commit/9a88e7ed85bc423c7229579fb513815ff2989c55))
+* **ssdv3:** SPEC cascade lifecycle observability (Step 2) ([015196f](https://github.com/emersonbusson/ramshared/commit/015196f7c5c6f30e2943aa03d0129c0887af92b1))
+
 ## [0.3.1](https://github.com/emersonbusson/ramshared/compare/v0.3.0...v0.3.1) (2026-07-13)
 
 
