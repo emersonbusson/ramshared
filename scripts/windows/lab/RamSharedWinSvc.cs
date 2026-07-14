@@ -3,8 +3,10 @@
 //   csc /nologo /target:exe /platform:x64 /r:System.ServiceProcess.dll ^
 //       /out:C:\ramshared\bin\RamSharedWinSvc.exe RamSharedWinSvc.cs
 // Install:
-//   sc create RamSharedWinSvc binPath= "C:\ramshared\bin\RamSharedWinSvc.exe" start= delayed-auto
-//   sc start RamSharedWinSvc
+//   .\scripts\windows\Install-RamSharedService.ps1 -RepoRoot <repo> -StartNow
+//
+// DT-9: OnStop throws if Stop-RamSharedLab exits 2 (pagefile still hot) so SCM
+// does not mark the service Stopped while the backend must stay alive.
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -31,7 +33,7 @@ public class RamSharedWinSvc : ServiceBase
             string a = args[0].ToLowerInvariant();
             if (a == "console" || a == "run")
             {
-                StartPsAsync(StartPs1, "-FormatIfNeeded");
+                StartPsAsync(StartPs1, BuildStartArgs());
                 Console.WriteLine("console start spawned; use stop-console for DT-9 stop");
                 return;
             }
@@ -51,7 +53,7 @@ public class RamSharedWinSvc : ServiceBase
         try
         {
             Log("OnStart async");
-            StartPsAsync(StartPs1, "-FormatIfNeeded");
+            StartPsAsync(StartPs1, BuildStartArgs());
             Log("OnStart spawned");
         }
         catch (Exception ex)
@@ -66,21 +68,50 @@ public class RamSharedWinSvc : ServiceBase
         try
         {
             Log("OnStop DT-9");
-            int code = RunPsWait(StopPs1, "-Drive D", 60000);
+            int code = RunPsWait(StopPs1, "-Drive D", 120000);
             Log("OnStop exit=" + code);
-            // exit 2 = refuse kill (pagefile hot)
+            // exit 2 = refuse kill (pagefile hot) - fail closed for SCM (#29).
             if (code == 2)
-                Log("DT9_REFUSE pagefile still hot - backend not killed");
+            {
+                Log("DT9_REFUSE pagefile still hot - backend not killed; abort service stop");
+                throw new InvalidOperationException(
+                    "DT-9: secondary pagefile still allocated; refuse service stop (BugCheck 0x7A risk)");
+            }
+            if (code != 0)
+            {
+                Log("OnStop non-zero " + code);
+                throw new InvalidOperationException("Stop-RamSharedLab failed exit=" + code);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             Log("OnStop FAIL " + ex);
+            throw;
         }
     }
 
     protected override void OnShutdown()
     {
+        // Best-effort ordered stop; do not swallow DT-9 refuse.
         OnStop();
+    }
+
+    static string BuildStartArgs()
+    {
+        // Machine env set by Install-RamSharedService.ps1 -ForceFormat
+        string force = Environment.GetEnvironmentVariable(
+            "RAMSHARED_WINSVC_FORCE_FORMAT", EnvironmentVariableTarget.Machine);
+        if (string.IsNullOrEmpty(force))
+            force = Environment.GetEnvironmentVariable("RAMSHARED_WINSVC_FORCE_FORMAT");
+        if (!string.IsNullOrEmpty(force) &&
+            (force == "1" || force.Equals("true", StringComparison.OrdinalIgnoreCase)))
+            return "-FormatIfNeeded -Force";
+        // Safe default under SCM: start backend, do not Clear-Disk without Force.
+        return "";
     }
 
     static void StartPsAsync(string script, string extraArgs)

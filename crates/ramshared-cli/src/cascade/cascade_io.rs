@@ -155,7 +155,7 @@ pub fn up() -> Result<(), CascadeError> {
     let entries_now = read_swaps();
     if cascade_already_healthy(&entries_now) {
         eprintln!("[up] cascata ja ativa — nada a fazer (idempotente)");
-        return status();
+        return status(false);
     }
 
     // SPEC wsl2-cascade-orphan-recover ITEM-2: zero-used orphans → heal once.
@@ -164,7 +164,7 @@ pub fn up() -> Result<(), CascadeError> {
     let entries_after = read_swaps();
     if cascade_already_healthy(&entries_after) {
         eprintln!("[up] cascata ja ativa apos recover — noop");
-        return status();
+        return status(false);
     }
     refuse_half_cascade(&entries_after)?;
 
@@ -262,7 +262,7 @@ pub fn up() -> Result<(), CascadeError> {
         "[up] cascata ativa: zram({}) > VRAM({}) > VHDX | anti-hang: down sempre swapoff antes de stop daemon",
         prios.zram, prios.vram
     );
-    status()
+    status(false)
 }
 
 pub fn down() -> Result<(), CascadeError> {
@@ -343,5 +343,5 @@ pub fn down() -> Result<(), CascadeError> {
     let _ = fs::remove_file(PID_FILE);
     disarm_forensics();
     eprintln!("[down] cascata desmontada (swapoff-first, sem kill -9)");
-    status()
+    status(false)
 }
