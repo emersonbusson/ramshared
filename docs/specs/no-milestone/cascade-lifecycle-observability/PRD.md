@@ -13,7 +13,7 @@ parents:
 
 # PRD — Cascade lifecycle observability (state + counters)
 
-> **Status:** PRD only (SSDV3 Step 1). SPEC / IMPL not started.  
+> **Status:** PRD + SPEC written (SSDV3 Step 1–2). IMPL not started.  
 > **Does not change** swap priority policy (200 > 100 > -2) or DEMOTE safety rules.  
 > **Adds** explicit lifecycle state, fill/demote counters, and human-readable status so “is VRAM in use?” is answerable without re-running pressure probes.  
 > Kahneman **#1** (WYSIATI — full state, not “ok” alone), **#3** (number + unit + time), **#9** (test types with numbers).
