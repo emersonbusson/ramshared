@@ -32,8 +32,12 @@ param(
 )
 $ErrorActionPreference = "Stop"
 
-# Caminho do kernel no formato .wslconfig (backslash duplo, estilo do arquivo existente).
-function To-WslPath([string]$p) { return ($p -replace '\\','\\') }
+# .wslconfig treats "\" as escape (I:\wsl → invalid escape "w").
+# Day-0: always emit forward-slash Windows paths (Microsoft + WSL parser safe).
+function To-WslPath([string]$p) {
+  if ([string]::IsNullOrWhiteSpace($p)) { return $p }
+  return ($p -replace '\\', '/')
+}
 
 # Arma kernel= sob [wsl2] de forma idempotente (substitui se já existir; cria [wsl2] se faltar).
 function Arm-Config([string]$cfgPath, [string]$kernelWin) {
