@@ -2,6 +2,16 @@
 
 Day-0 StorPort path for **native Windows** VRAM / lab-backed pagefile (P4 / Track 2).
 
+### Task Manager shows 100% / 0 KB/s on RAMSHARE VRAMDISK
+
+Three layered causes (fix in order):
+
+1. **RAW LUN** — no NTFS → Task Manager "Formatado: 0 MB". Format with `Format-RamSharedLun.ps1` only while **WinDriveBackend is alive** (else StorageWMI 40004).
+2. **SRB_STATUS_BUSY on TUR** (old builds) — StorPort requeues forever → stuck 100%. Current `virtdisk.c` returns SCSI **NOT READY** autosense; rebuild/reload `ramshared.sys`.
+3. **Wrong volume** — letter `V: RAMSHARED` may be a physical SSD, not the 64 MiB virtual LUN.
+
+For real MB/s use locale-safe `scripts/windows/Measure-RamSharedDiskIo.ps1` (CIM PerfDisk + optional file probe), not Task Manager alone.
+
 ## Status (2026-07-09)
 
 | Item | State |
