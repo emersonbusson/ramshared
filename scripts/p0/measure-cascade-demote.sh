@@ -26,13 +26,21 @@ set -u
 HOG_BIN="${HOG_BIN:-/home/emdev/fase0/cascade-hog}"
 RAW="${RAW:-/home/emdev/fase0/CASCADE-DEMOTE-$(date +%Y%m%d-%H%M%S).txt}"
 CG="${CG:-/sys/fs/cgroup/ramshared-demote-drill}"
-HOG_MB="${HOG_MB:-2200}"
-CAP_MB="${CAP_MB:-512}"
-MIN_NBD_MIB="${MIN_NBD_MIB:-150}"
+# Defaults tuned for product cascade sizes ~2G zram + 2G nbd (2026-07):
+# need hog >> zram free so pages spill to nbd under cgroup cap.
+HOG_MB="${HOG_MB:-2800}"
+CAP_MB="${CAP_MB:-256}"
+MIN_NBD_MIB="${MIN_NBD_MIB:-100}"
 RESTORE="${RESTORE:-1}"   # 1 = swapon -p 100 /dev/nbd0 apos prova
 NBD_DEV="${NBD_DEV:-/dev/nbd0}"
 SWAPOFF_BIN="${SWAPOFF_BIN:-/usr/sbin/swapoff}"
 SWAPON_BIN="${SWAPON_BIN:-/usr/sbin/swapon}"
+STATUS_BIN="${STATUS_BIN:-}"
+if [ -z "$STATUS_BIN" ]; then
+  if [ -x ./target/release/ramshared ]; then STATUS_BIN=./target/release/ramshared
+  elif command -v ramshared >/dev/null 2>&1; then STATUS_BIN=$(command -v ramshared)
+  fi
+fi
 
 HOG_PID=""
 DEMOTE_DONE=0
@@ -92,8 +100,24 @@ teardown() {
 trap teardown EXIT
 trap 'exit 143' INT TERM
 
+log_status() {
+  local tag="$1"
+  log "--- status ($tag) ---"
+  if [ -n "$STATUS_BIN" ] && [ -x "$STATUS_BIN" ]; then
+    "$STATUS_BIN" status --json 2>/dev/null | tee -a "$RAW" || log "status --json failed"
+  else
+    log "status bin missing"
+  fi
+  if [ -f /run/ramshared/demote-status.json ]; then
+    log "demote-status: $(cat /run/ramshared/demote-status.json)"
+  else
+    log "demote-status: (absent)"
+  fi
+}
+
 log "### CASCADE DEMOTE DRILL — $(date -Is) ###"
 log "params: HOG_MB=$HOG_MB CAP_MB=$CAP_MB MIN_NBD_MIB=$MIN_NBD_MIB RESTORE=$RESTORE NBD=$NBD_DEV"
+log "issue: #31 demote under pressure + integrity (action path = spawn_swapoff)"
 [ "$(id -u)" = 0 ] || { log "precisa root"; exit 2; }
 [ -x "$HOG_BIN" ] || { log "hog ausente: $HOG_BIN"; exit 2; }
 [ -b "$NBD_DEV" ] || { log "block device ausente: $NBD_DEV"; exit 2; }
@@ -101,6 +125,7 @@ log "params: HOG_MB=$HOG_MB CAP_MB=$CAP_MB MIN_NBD_MIB=$MIN_NBD_MIB RESTORE=$RES
 log ""
 log "=== 0. preflight cascade ==="
 snapshot_swaps
+log_status preflight
 tier_present "$NBD_DEV" || { log "FALHA: $NBD_DEV nao esta em /proc/swaps (suba a cascata antes)"; exit 1; }
 tier_present /dev/zram0 || tier_present /dev/zram1 || log "WARN: sem zram (A1 ainda ok se VHDX existir)"
 # A1: precisa sink abaixo da VRAM
@@ -108,7 +133,7 @@ if ! awk '$1 ~ /\/dev\/sd/ && $5+0 < 100 {ok=1} END{exit !ok}' /proc/swaps; then
   log "FALHA: invariante A1 — sem VHDX (prio < 100) para absorver DEMOTE"
   exit 1
 fi
-if ! pgrep -f 'ramsharedd' >/dev/null 2>&1; then
+if ! pgrep -x ramsharedd >/dev/null 2>&1 && ! pgrep -f 'ramsharedd ' >/dev/null 2>&1; then
   log "FALHA: ramsharedd nao esta vivo (swapoff sem servidor = hang)"
   exit 1
 fi
@@ -165,6 +190,7 @@ NBD_BEFORE=$(nbd_used_mib); NBD_BEFORE=${NBD_BEFORE:-0}
 VHDX_BEFORE=$(vhdx_used_mib); VHDX_BEFORE=${VHDX_BEFORE:-0}
 ZRAM_BEFORE=$(zram_used_mib); ZRAM_BEFORE=${ZRAM_BEFORE:-0}
 log "antes DEMOTE: nbd=${NBD_BEFORE} MiB zram=${ZRAM_BEFORE} MiB vhdx=${VHDX_BEFORE} MiB"
+log_status before-demote
 if [ "$NBD_BEFORE" -lt "$MIN_NBD_MIB" ]; then
   log "FALHA: poucas paginas na VRAM ($NBD_BEFORE < $MIN_NBD_MIB). Aumente HOG_MB ou reduza CAP_MB/zram."
   exit 1
@@ -172,14 +198,28 @@ fi
 
 log ""
 log "=== 2. DEMOTE action: swapoff $NBD_DEV (daemon serve read-back) ==="
+log "NOTE: sparse product path skips FreeFloor/Latency auto-swapoff; this drills the same"
+log "      spawn_swapoff action the daemon uses for Corruption/WDDM-constrained demote."
+# Raise cgroup cap so page-in during swapoff does not OOM-kill the hog (integrity).
+if [ -n "${HOG_PID:-}" ] && [ -d "$CG" ]; then
+  DEMOTE_CAP_MB="${DEMOTE_CAP_MB:-$((HOG_MB + 512))}"
+  log "raising cgroup memory.max to ${DEMOTE_CAP_MB}M for demote page-in"
+  echo "${DEMOTE_CAP_MB}M" >"$CG/memory.max" 2>>"$RAW" || log "WARN: could not raise memory.max"
+fi
 T0=$(date +%s%N)
-if timeout 120 "$SWAPOFF_BIN" "$NBD_DEV" >>"$RAW" 2>&1; then
+if timeout 300 "$SWAPOFF_BIN" "$NBD_DEV" >>"$RAW" 2>&1; then
   T1=$(date +%s%N)
   MS=$(( (T1 - T0) / 1000000 ))
   log "swapoff $NBD_DEV OK em ${MS} ms"
   DEMOTE_DONE=1
 else
   log "FALHA: swapoff $NBD_DEV (timeout ou erro) — risco de paginas presas"
+  # show hog still alive?
+  if [ -n "${HOG_PID:-}" ]; then
+    if kill -0 "$HOG_PID" 2>/dev/null; then log "hog still alive pid=$HOG_PID"
+    else log "hog dead during swapoff (likely OOM in cgroup)"
+    fi
+  fi
   exit 1
 fi
 
@@ -190,6 +230,7 @@ fi
 VHDX_AFTER=$(vhdx_used_mib); VHDX_AFTER=${VHDX_AFTER:-0}
 ZRAM_AFTER=$(zram_used_mib); ZRAM_AFTER=${ZRAM_AFTER:-0}
 log "apos DEMOTE: nbd=AUSENTE zram=${ZRAM_AFTER} MiB vhdx=${VHDX_AFTER} MiB"
+log_status after-demote
 # zram e/ou vhdx devem continuar
 if ! awk 'NR>1{n++} END{exit !(n>=1)}' /proc/swaps; then
   log "FALHA: nenhum swap restante apos demote"
