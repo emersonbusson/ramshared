@@ -170,3 +170,16 @@ Root docs alinhados ao status acima: `README.md`, `ROADMAP.md`, `ARCHITECTURE.md
 - **Codigo:** dispatch forward (control vs StorPort); Inf2Cat; MDL cap 4 MiB; cancel COMMIT; StorPortGetSystemAddress + LBA CDB.
 - **Nao visto ainda:** pagefile-V com `% Usage`>0; KPD PASS; format verde pos-fix 0xD1 (re-test limpo 1 adapter).
 - **Proibido:** host-real load; dual-path ImDisk.
+
+## 2026-07-14 — ITEM-1 (RF-4) code status on main
+
+| Check | Result |
+| --- | --- |
+| `loader_unix.rs` / `loader_win.rs` | **Present** on `main` (cfg split) |
+| `driver.rs` candidates | `nvcuda.dll` under `#[cfg(windows)]` |
+| `cargo test -p ramshared-cuda --lib` (Linux) | **2 pass**, 1 ignored (GPU roundtrip) |
+| Host `C:\Windows\System32\nvcuda.dll` | **Present** (~4.7 MiB) |
+| Guest win11-drill CUDA smoke | **N/A** (no GPU in guest) |
+| Wire StorPort backend I/O → CUDA alloc on **physical host** | **Still open** (host-real still gated; lab used RAM buffers) |
+
+**Issue #28 split:** (A) dynamic load API — **DONE in tree**; (B) host product path format/read/write on CUDA-backed LUN — **remaining**, host-real gates.
