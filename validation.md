@@ -1075,3 +1075,27 @@ cat /run/ramshared/demote-status.json
 - Host reload of new .sys left for guest/lab path (physical host pagefile still FORBIDDEN on this LUN)
 **Verdict:** ✅ Format + real I/O path PASS; measure script locale-safe PASS; driver source Day-0 TUR fix + rebuild PASS
 **Next action:** sign+reload new sys on win11-drill guest for full TUR-not-ready path; optional host package update when not using LUN for pagefile
+
+## 2026-07-14 12:28 -03 — guest win11-drill: signed TUR-sense sys reload + CREATE/FORMAT/MEASURE
+
+**What:** Close the open follow-up after PR #45: rebuild+test-sign `ramshared.sys` (VdSetSenseNotReady / no TUR BUSY), deploy to Hyper-V **win11-drill**, `sc` load RUNNING, WinDriveBackend CREATE/REGISTER, NTFS volume + sequential probe. Record empirical proof (Kahneman #13).
+**Category:** e2e / windows lab / driver
+**How to measure (elevated host, PSD):**
+```powershell
+# Machine env RAMSHARED_DRILL_PASSWORD set; PFX lab cert under ramshared-drill\certs
+# Orchestrator used: C:\ramshared\bin\Run-GuestTmReload3.ps1 (and prior rebuild/sign via Build-Drivers + Sign-Drivers)
+# From WSL: ./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\bin\Run-GuestTmReload3.ps1
+```
+**Measured data:**
+- Host: rebuild **BUILD_DRIVERS_OK** + **SIGN_OK** (sys SHA256 + Inf2Cat `ramshared.cat` signed); package sys size **31120** on guest after deploy
+- PSD: `win11-drill\drilladmin`, Build **26200**, **testsigning Yes**, FreeMB **~2622**
+- Driver: `sc query` **poolstress RUNNING** + **ramshared RUNNING** (sys_len=31120, mtime deploy 12:25)
+- Backend: **CREATE_DISK ok REGISTER_QUEUE ok** (alive pid, size=67108864)
+- LUN: Disk **N=1** Size **67108864** Bus=SAS (FriendlyName `Msft Virtual Disk` under sc path — expected; host path used RAMSHARE branding)
+- Volume: letter **D:** **NTFS** label path already_ntfs / probe OK
+- Direct probe (guest): **write ≈ 101.9 MB/s**, **read ≈ 64.9 MB/s**, **match=True** (4 MiB fallback; full `Measure-RamSharedDiskIo.ps1` hit guest ExecutionPolicy block — numbers from inline probe)
+- Teardown: backend STOP_OK; VM **Off** (no host pagefile on LUN; no thrash)
+- Artifacts: `C:\Users\emedev\ramshared-drill\agent-guest-tm-reload-20260714-122717.json` (also earlier attempts 121725 pnputil-only FAIL, 122425 Trim parse FAIL — fixed)
+- Prior same-day host path (EMEDEV): Disk5 RAMSHARE RAW→S: NTFS; probe 8 MiB write≈1224 / read≈146 match=True (validation 11:52 entry)
+**Verdict:** ✅ Guest signed reload + CREATE/FORMAT/MEASURE **PASS** (pass=9 fail=0)
+**Next action:** optional Bypass execution policy on guest for CIM measure script; optional INF/PnP FriendlyName branding (RAMSHARE vs Msft Virtual Disk)
