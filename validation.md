@@ -1047,3 +1047,31 @@ cat /run/ramshared/demote-status.json
 - phase UsingDisk when /dev/sdc used_kib=1220 ≥ 1024 (residual disk swap after redeploy — correct priority rule)
 **Verdict:** ✅ ITEM-3 closed; demote export live
 **Next action:** optional idle reclaim of residual disk swap pages under pressure only
+
+## 2026-07-14 11:52 -03 — Task Manager 100%/0KB: root-cause fix (StorPort + format + measure)
+
+**What:** Senior fix for screenshot "RAMSHARE VRAMDISK 100% active / 0 KB/s / 0 ms / Formatado 0 MB".
+**Category:** e2e / windows lab / driver
+**Root causes (layered):**
+1. LUN **RAW** (no NTFS) → TM shows Formatado 0 MB
+2. **WinDriveBackend dead** while disk still enumerated → Initialize-Disk StorageWMI **40004** (writes fail)
+3. Old **TUR = SRB_STATUS_BUSY** → StorPort requeue thrash (TM stuck 100%) — fixed in `virtdisk.c` via CHECK CONDITION NOT READY + autosense
+4. **V: RAMSHARED** can be a physical SSD, not the 64 MiB virtual LUN
+5. PT-BR host: English `Get-Counter \PhysicalDisk\...` paths fail — measure uses **CIM** `Win32_PerfFormattedData_PerfDisk_PhysicalDisk`
+
+**How to measure:**
+```powershell
+# elevated
+.\scripts\windows\Start-RamSharedLab.ps1 -SizeBytes 67108864 -HoldSeconds 3600
+.\scripts\windows\Format-RamSharedLun.ps1 -ExpectedSizeBytes 67108864 -DriveLetter S -Force
+.\scripts\windows\Measure-RamSharedDiskIo.ps1 -Seconds 6 -DriveLetter S
+```
+**Measured data (host EMEDEV, elevated, 2026-07-14):**
+- Backend: CREATE_DISK ok REGISTER_QUEUE ok (pid alive)
+- Disk5: RAMSHARE VRAMDISK 67108864 RAW → **GPT + NTFS** letter **S:** label RAMSHARED Size~64 MiB
+- Direct 8 MiB probe: **write ≈ 1224 MB/s**, **read ≈ 146 MB/s**, **match=True**
+- PerfDisk instance: `5 S:` (CIM)
+- `ramshared.sys` rebuilt with TUR sense fix (BUILD_DRIVERS_OK, size 29696, 11:52) under `C:\Users\emedev\ramshared-src\...\x64\Release\`
+- Host reload of new .sys left for guest/lab path (physical host pagefile still FORBIDDEN on this LUN)
+**Verdict:** ✅ Format + real I/O path PASS; measure script locale-safe PASS; driver source Day-0 TUR fix + rebuild PASS
+**Next action:** sign+reload new sys on win11-drill guest for full TUR-not-ready path; optional host package update when not using LUN for pagefile

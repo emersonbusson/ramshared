@@ -35,6 +35,38 @@ sudo ./target/release/ramshared check
 sudo ./target/release/ramshared doctor   # if check fails
 ```
 
+## Why does Task Manager show RamShared disk at 100% with 0 KB/s and 0 ms?
+
+That is a **Windows UI limitation + common virtual miniport footgun**, not “infinite speed”.
+
+What you usually see on **Disco N — RAMSHARE VRAMDISK**:
+
+| Field | Meaning |
+| --- | --- |
+| **Tempo de atividade 100%** | Class driver is polling / queue looks “busy” |
+| **0 KB/s read/write** | No (or few) completed transfers counted as user data |
+| **0 ms** | Latency counters not meaningful for that path |
+| **Formatado: 0 MB** | LUN is still **RAW** (no NTFS partition) — Task Manager has no volume |
+
+Important:
+
+1. **Letter `V: RAMSHARED` may be a physical SSD** that was labeled earlier — **not** the 64 MiB virtual LUN. Always check `Get-Disk` name + size (lab LUN is usually 64 MiB / Fibre Channel / `RAMSHARE VRAMDISK`).
+2. **Backend must be alive** (`WinDriveBackend` / winsvc). A ghost RAW disk after backend exit makes `Initialize-Disk` fail with StorageWMI **40004** (writes never complete).
+3. Prefer real metrics (do **not** trust Task Manager alone):
+
+```powershell
+# Elevated from WSL: ./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\bin\...
+# Start backend if needed, then format only the RamShared LUN (free letter, not V: if V: is physical):
+.\scripts\windows\Start-RamSharedLab.ps1 -SizeBytes 67108864 -HoldSeconds 3600
+.\scripts\windows\Format-RamSharedLun.ps1 -ExpectedSizeBytes 67108864 -DriveLetter S -Force
+# Locale-safe PerfDisk (CIM) + optional sequential probe:
+.\scripts\windows\Measure-RamSharedDiskIo.ps1 -Seconds 10 -DriveLetter S
+```
+
+4. Day-0 driver fix: **TEST UNIT READY no longer returns `SRB_STATUS_BUSY`** when the LUN is not ready (that made StorPort requeue forever → stuck 100%). It returns CHECK CONDITION **NOT READY** with autosense instead. Rebuild/reload `ramshared.sys` to pick that up.
+
+**Live lab (host 2026-07-14):** Disk5 `RAMSHARE VRAMDISK` 64 MiB RAW → GPT+NTFS `S:` label `RAMSHARED` with backend alive; direct probe **8 MiB write ≈ 1224 MB/s, read ≈ 146 MB/s, match=True**. Task Manager can still show odd % busy on StorPort; use the measure script.
+
 ## Is RamShared using my VRAM right now?
 
 Run:
