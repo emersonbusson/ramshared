@@ -966,3 +966,48 @@ sudo scripts/safety/cascade-pressure-probe.sh --mem-max 1200M --max-sec 90
 - **win11-drill:** started Running; GPU-P CurrentPartitionVRAM=1000000000; VHD ~12.4 GiB; **PSD guest auth failed** for drilladmin + unattend password + Administrator matrix (credential invalid). Heartbeat OkApplicationsUnknown. VM stopped after drills to free host RAM.
 **Verdict:** ✅ #29 install/boot registration + DT-9 stop path on host; ✅ #40 refuse live; ✅ WSL pressure order proof; ✅ charts/docs; 🟡 guest PSD blocked until win11-drill password/OOBE reset (unattend value does not match live guest).
 **Next action:** Reset drilladmin on win11-drill (or finish OOBE) then PSD demote drills inside guest; keep pressure via cascade-pressure-probe (cgroup-bounded) not full thrash.
+
+## 2026-07-14 — win11-drill PSD restored (unattend password, not Passo0 default)
+
+**What:** Re-establish PowerShell Direct into Hyper-V guest `win11-drill` using the same host-elevated path as agy (`wsl-elevated-ps.sh` / admin), after PSD failed with MEMORY Passo0 default password.
+**Category:** lab access / integration
+**How to measure:**
+```bash
+./scripts/windows/wsl-elevated-ps.sh -Command '
+  # password: Machine env RAMSHARED_DRILL_PASSWORD (set this session from unattend-staging)
+  $pw=[Environment]::GetEnvironmentVariable("RAMSHARED_DRILL_PASSWORD","Machine")
+  $cred=New-Object PSCredential(".\drilladmin",(ConvertTo-SecureString $pw -AsPlainText -Force))
+  if ((Get-VM win11-drill).State -ne "Running") { Start-VM win11-drill; Start-Sleep 20 }
+  Invoke-Command -VMName win11-drill -Credential $cred -ScriptBlock { whoami; hostname }
+'
+```
+**Measured data:**
+- Root cause: current guest was installed with `E:\Hyper-V\iso\unattend-staging\Autounattend.xml` password (len 13), **not** legacy `Drill2026!` from earlier Passo0 VM on `C:\Hyper-V\...`
+- PSD_OK: `win11-drill\drilladmin` on host `WIN11-DRILL`
+- Smoke: Build **26200** UBR **8037**, testsigning **Yes**, IsAdmin **true**, FreeGB **~61.9**
+- `Invoke-Guest.ps1` OK with env password
+- Machine env set: `RAMSHARED_DRILL_PASSWORD` + `RAMSHARED_DRILL_USER=.\drilladmin` (host-local only, not in git)
+- VM stopped after smoke (State=Off) to free host RAM
+**Verdict:** ✅ Guest usable again for lab drills via PSD; host elevation path unchanged
+**Next action:** Guest-side driver/pagefile drills as needed; always start VM then PSD with Machine env password
+
+## 2026-07-14 — win11-drill guest lab drill (PSD deploy + CREATE/REGISTER)
+
+**What:** Full guest lab path: elevate host → Start-VM → PSD → deploy signed package → sc load ramshared+poolstress → WinDriveBackend 64 MiB CREATE_DISK+REGISTER_QUEUE → LUN probe → DT-9 safe teardown → Stop-VM.
+**Category:** integration / lab E2E
+**How to measure:**
+```bash
+./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\bin\tmp-guest-lab-drill.ps1
+# or re-run with Machine env RAMSHARED_DRILL_PASSWORD set
+cat /mnt/c/Users/emedev/ramshared-drill/agent-guest-lab-20260714-results.json
+```
+**Measured data:**
+- package: ramshared.sys 31120, poolstress.sys 9104; backend exe 8704
+- guest-pre: FreeGB~2.59 RAM, DiskGB~61.9, testsigning Yes, Build 26200
+- driver-load: **poolstress RUNNING**, **ramshared RUNNING** (test cert imported)
+- backend: `CREATE_DISK ok REGISTER_QUEUE ok` size=67108864
+- disks: N=0 Msft Virtual Disk 80G + **N=1 Msft Virtual Disk 64 MiB** (LUN present)
+- bugcheck: none; teardown STOP_OK; VM left Off
+- SUMMARY **pass=11 warn=0 fail=0**
+**Verdict:** ✅ Guest lab path green end-to-end (same operational model as agy)
+**Next action:** Optional INF/PnP Root\RamShared polish for FriendlyName branding; pagefile-on-LUN ITEM-8 only with free RAM headroom (guest was ~2.5–2.7 GiB free)
