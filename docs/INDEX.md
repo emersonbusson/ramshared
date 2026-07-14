@@ -12,7 +12,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | --- | --- | --- | --- | --- |
 | [`broker-telemetry-reconciliation`](specs/no-milestone/broker-telemetry-reconciliation/) | Coletor de Telemetria & Reconciliação do Memory Broker | — | — | DONE |
 | [`cascade-desktop-app`](specs/no-milestone/cascade-desktop-app/) | Desktop control app for WSL2/Linux cascade (zenity + CLI) | — | — | DONE |
-| [`cascade-lifecycle-observability`](specs/no-milestone/cascade-lifecycle-observability/) | Cascade lifecycle observability — state machine + fill/demote counters | — | — | PRD |
+| [`cascade-lifecycle-observability`](specs/no-milestone/cascade-lifecycle-observability/) | Cascade lifecycle observability — state machine + fill/demote counters | — | — | SPEC |
 | [`cascade-transport-policy`](specs/no-milestone/cascade-transport-policy/) | Cascade transport policy — NBD Day-1 on WSL2; ublk prefer off-WSL2 only | — | — | DONE |
 | [`cascade-vram-ondemand`](specs/no-milestone/cascade-vram-ondemand/) | Cascade VRAM on-demand — capacity without full CUDA pre-alloc; return under reclaim | — | — | DONE |
 | [`kernel-native-language`](specs/no-milestone/kernel-native-language/) | Language policy for kernel-native VRAM work (C vs Rust) | — | — | PRD |
