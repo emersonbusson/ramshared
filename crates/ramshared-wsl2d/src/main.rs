@@ -634,6 +634,23 @@ fn run_nbd<P: VramProvider>(
     let mut observed_budget_refuses = 0;
     let mut recovery = RecoveryTracker::new(3);
     let mut live = LiveCount::new();
+    // CLI status --json demote fields (cascade-lifecycle-observability ITEM-3)
+    let mut demotes_total: u64 = 0;
+    let mut last_demote_reason: Option<String> = None;
+    let publish_demote = |total: u64, reason: &Option<String>, in_progress: bool| {
+        let st = ramshared_wsl2d::DemoteStatusFile {
+            total,
+            last_reason: reason.clone(),
+            in_progress,
+        };
+        if let Err(e) = ramshared_wsl2d::write_demote_status(
+            std::path::Path::new(ramshared_wsl2d::DEMOTE_STATUS_PATH),
+            &st,
+        ) {
+            eprintln!("[ramsharedd] demote-status write: {e}");
+        }
+    };
+    publish_demote(0, &None, false);
 
     // recv_timeout so sparse reclaim runs even with no NBD I/O (idle free).
     const RECV_TICK: Duration = Duration::from_secs(5);
@@ -682,11 +699,14 @@ fn run_nbd<P: VramProvider>(
                         Ok(true) => {
                             demoted = true;
                             swapoff_confirmed = true;
+                            demotes_total = demotes_total.saturating_add(1);
+                            publish_demote(demotes_total, &last_demote_reason, false);
                             eprintln!(
                                 "[ramsharedd] DEMOTE: swapoff {nbd_dev} OK (canario desarmado)"
                             );
                         }
                         Ok(false) => {
+                            publish_demote(demotes_total, &last_demote_reason, false);
                             eprintln!(
                                 "[ramsharedd] DEMOTE: swapoff {nbd_dev} FALHOU; canario re-armado"
                             );
@@ -695,6 +715,7 @@ fn run_nbd<P: VramProvider>(
                             demote_rx = Some(rx);
                         }
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            publish_demote(demotes_total, &last_demote_reason, false);
                             eprintln!(
                                 "[ramsharedd] DEMOTE: thread de swapoff sumiu; canario re-armado"
                             );
@@ -731,8 +752,10 @@ fn run_nbd<P: VramProvider>(
                         eprintln!(
                             "[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}"
                         );
+                        last_demote_reason = Some(format!("{reason:?}"));
                         demote_rx = Some(spawn_swapoff(&nbd_dev));
                         swapoff_attempted = true;
+                        publish_demote(demotes_total, &last_demote_reason, true);
                     }
                 }
             }
@@ -745,8 +768,10 @@ fn run_nbd<P: VramProvider>(
                 observed_budget_refuses = budget_refuses;
                 if !demoted && demote_rx.is_none() {
                     eprintln!("[ramsharedd] WDDM constrained -> bounded swapoff {nbd_dev}");
+                    last_demote_reason = Some("WddmBudget".into());
                     demote_rx = Some(spawn_swapoff(&nbd_dev));
                     swapoff_attempted = true;
+                    publish_demote(demotes_total, &last_demote_reason, true);
                 }
             }
         }
@@ -758,15 +783,19 @@ fn run_nbd<P: VramProvider>(
                     demoted = true;
                     swapoff_confirmed = true;
                     recovery.reset();
+                    demotes_total = demotes_total.saturating_add(1);
+                    publish_demote(demotes_total, &last_demote_reason, false);
                     eprintln!("[ramsharedd] DEMOTE: swapoff {nbd_dev} OK (parked)");
                 }
                 Ok(false) => {
                     recovery.reset();
+                    publish_demote(demotes_total, &last_demote_reason, false);
                     eprintln!("[ramsharedd] DEMOTE: swapoff {nbd_dev} FALHOU");
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => demote_rx = Some(rx),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     recovery.reset();
+                    publish_demote(demotes_total, &last_demote_reason, false);
                     eprintln!("[ramsharedd] DEMOTE: thread de swapoff sumiu");
                 }
             }
@@ -809,8 +838,10 @@ fn run_nbd<P: VramProvider>(
 
             if !demoted && demote_rx.is_none() && !budget_healthy {
                 eprintln!("[ramsharedd] WDDM poll constrained -> swapoff {nbd_dev}");
+                last_demote_reason = Some("WddmBudgetPoll".into());
                 demote_rx = Some(spawn_swapoff(&nbd_dev));
                 swapoff_attempted = true;
+                publish_demote(demotes_total, &last_demote_reason, true);
             } else if demoted && recovery.observe(budget_healthy, sparse.chunks_live() == 0) {
                 if activate_swap(&nbd_dev, 100) {
                     demoted = false;
