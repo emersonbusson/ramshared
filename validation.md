@@ -1048,6 +1048,27 @@ cat /run/ramshared/demote-status.json
 **Verdict:** ✅ ITEM-3 closed; demote export live
 **Next action:** optional idle reclaim of residual disk swap pages under pressure only
 
+## 2026-07-14 11:30 -03 — issue #31 demote under pressure + integrity (action path)
+
+**What:** Re-run `scripts/p0/measure-cascade-demote.sh` for issue #31: cgroup-isolated hog fills VRAM tier, swapoff demote while daemon serves, hog verify checksum pages.
+**Category:** e2e / integration
+**How to measure:**
+```bash
+sudo env HOG_MB=4500 CAP_MB=256 MIN_NBD_MIB=150 DEMOTE_CAP_MB=5500 RESTORE=1 \
+  STATUS_BIN=./target/release/ramshared \
+  bash scripts/p0/measure-cascade-demote.sh
+```
+**Measured data:**
+- before demote: nbd **2047 MiB**, zram 2047 MiB, vhdx 1040 MiB; phase UsingDisk (disk residual) + UsingVram path for vram used
+- demote action: `swapoff /dev/nbd0` **OK in 143973 ms** (~144 s)
+- after: nbd **absent**; zram 137 MiB; vhdx 1130 MiB; daemon still alive
+- integrity: hog **VERIFY OK 1152000 pages**, **0 corruption** (rc=0)
+- cgroup: fill under memory.max=256M; raised to 5500M for demote page-in (avoids OOM kill)
+- observability: `status --json` + demote-status captured before/after (manual swapoff does not increment daemon demote.total — expected; total still 0)
+- host-safety: hog in cgroup only; no global thrash; RESTORE swapon failed once → `cascade-up` restored cushion after
+**Verdict:** ✅ DEMOTE action path PASS under severe multi-tier pressure + integrity; sparse FreeFloor/Latency auto-swapoff still skipped by design (WDDM/Corruption path uses same spawn_swapoff)
+**Next action:** optional separate drill for WDDM-budget demote (host GPU load) to increment demote-status total; close #31 acceptance for action+integrity
+
 ## 2026-07-14 11:52 -03 — Task Manager 100%/0KB: root-cause fix (StorPort + format + measure)
 
 **What:** Senior fix for screenshot "RAMSHARE VRAMDISK 100% active / 0 KB/s / 0 ms / Formatado 0 MB".
