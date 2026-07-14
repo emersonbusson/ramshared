@@ -135,3 +135,21 @@ Non-trivial commits should cite: `RF-K1`…`RF-K20` as applicable; `SPEC ITEM-1`
 | `C:\wsl\modules-ramshared.vhdx` | ~2.8 GiB |
 | `.wslconfig kernelModules=` | set |
 
+
+## 2026-07-14 — NBD vs ublk product decision (issue #30)
+
+**Context:** Daily host runs stock/inbox WSL kernel (`6.18.33.2-microsoft-standard-WSL2`); `/dev/ublk-control` **absent**. Product cascade policy already fails closed on ublk for WSL2 (freeze risk on teardown; transport=auto → nbd).
+
+| Criterion | NBD (Day-1) | ublk (lab/custom kernel) |
+| --- | --- | --- |
+| Available now on daily WSL | **YES** | **NO** without custom kernel + modules VHDX |
+| Host safety | Proven cascade path | Historical freeze class on WSL teardown |
+| 15% latency win claim | Not re-measured this session | **Blocked** until custom kernel READY + non-daily lab |
+| Product ship | **Ship NBD** | Optional Phase B if kernel earns keep |
+
+**Acceptance re-scope (honest):**
+1. ~~Compile custom kernel with CONFIG_BLK_DEV_UBLK~~ — capability existed on armed custom kernel earlier; **not** the running product kernel today.
+2. Latency suite under pressure on daily host — **refuse** (benchmarks.md / thrash policy).
+3. ublk ≥15% better than NBD — **OPEN** only in isolated lab (qemu already has ublk smoke PASS; not apples-to-apples swap latency).
+
+**Recommendation:** keep product on **NBD**; close #30 as **wontfix on daily WSL / deferred to dedicated kernel lab** unless custom kernel is re-armed and measured off the daily host.

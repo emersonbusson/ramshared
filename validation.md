@@ -1159,3 +1159,15 @@ bash scripts/safety/wslconfig-ctl.sh apply   # idempotent rewrite
 **Measured data:** SELFTEST PASS; check OK on live profile; apply rewrote forward-slash paths; preflight shows "[ok] .wslconfig path escapes clean"
 **Verdict:** ✅ regression class sealed (encode at write, validate before/after, PS/bash writers fixed)
 **Next action:** none (optional CI job for selftest later)
+
+## 2026-07-14 16:55 -03 — backlog close-out: issues #28/#30/#32 honest status
+
+**What:** Execute remaining open product issues to the extent the environment allows without thrash.
+**Category:** governance / research / docs
+**Measured:**
+- **#32:** PASSO0 re-check — WSL GPU-PV Gate A1 still FAIL for kernel-true; inventory complete; WSL NO-GO recommendation
+- **#30:** stock kernel has no `/dev/ublk-control`; product remains NBD; ublk latency ≥15% claim blocked until custom-kernel lab (not daily host)
+- **#28:** `ramshared-cuda` Windows loader (`loader_win.rs` + `nvcuda.dll` candidate) is in tree; host has `nvcuda.dll`; full StorPort↔CUDA host path still host-real gated
+- Live cascade: nbd 4G, ramsharedd --size 4096, ok:true
+**Verdict:** ✅ research/decision closed where evidence exists; no fake “host-real PASS”
+**Next action:** optional bare-metal USB install (kernel-true); optional custom-kernel lab for ublk vs nbd; host Windows CUDA I/O only with gates

@@ -40,3 +40,25 @@
 Windows shrink requires free **extents at the end of the partition**.  
 R: free space was large but **not shrinkable** past ~2.7 GB (media layout + immovable).  
 E: allowed ~33 GB shrink → used ~32 GB. See `docs/labs/DUALBOOT-KERNEL-TRUE.md`.
+
+
+## Re-check 2026-07-14 (post host policy + power cycle)
+
+| Check | Result |
+| --- | --- |
+| `uname -r` | `6.18.33.2-microsoft-standard-WSL2` (inbox; custom kernel path armed in `.wslconfig` with forward-slash encoding) |
+| `/dev/dri` | absent (expected GPU-PV) |
+| `lspci` NVIDIA native | GPU-PV path only (product cascade NBD+CUDA) |
+| `/dev/ublk-control` | **absent** on this boot (ublk not product Day-1) |
+| Gate A1 | still **FAIL for kernel-true** on this WSL guest |
+| Product cascade | **GO** — zram 2G + nbd/VRAM 4G + disk (see validation host policy entries) |
+
+### Go / no-go (issue #32 acceptance)
+
+| Question | Answer |
+| --- | --- |
+| Inventory recorded? | **YES** (this file) |
+| SPEC-level HMM/NUMA on **this** WSL2 GPU-PV host? | **NO-GO** (ADR-0001 / Gate A1) |
+| Bare-metal dual-boot path? | Space on E: prepared; OS install + Gate B still **OPEN** (USB install) — out of scope for daily WSL product |
+
+**Recommendation:** close research issue #32 as **inventory complete / WSL NO-GO**; keep bare-metal dual-boot as a separate future issue when USB install is scheduled.
