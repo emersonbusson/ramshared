@@ -107,6 +107,39 @@ VdComplete(_In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb, UCHAR Status)
 	}
 }
 
+/*
+ * Task Manager / class driver poll TEST UNIT READY aggressively. Returning
+ * SRB_STATUS_BUSY makes StorPort requeue forever -> "% Disk Time" stuck at
+ * 100% with 0 B/s and 0 ms (no real transfer counters). Use CHECK CONDITION
+ * NOT READY with autosense so the stack backs off cleanly.
+ *
+ * Sense: SK=NOT_READY (0x02), ASC=LOGICAL UNIT NOT READY (0x04),
+ * ASCQ=INITIALIZING COMMAND REQUIRED (0x02).
+ */
+static VOID
+VdSetSenseNotReady(_Inout_ PSCSI_REQUEST_BLOCK Srb)
+{
+	UCHAR *sense;
+	ULONG senseLen;
+
+	Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
+	sense = (UCHAR *)Srb->SenseInfoBuffer;
+	senseLen = Srb->SenseInfoBufferLength;
+	if (sense != NULL && senseLen >= 18) {
+		RtlZeroMemory(sense, senseLen);
+		/* Fixed format sense data (response code 0x70). */
+		sense[0] = 0x70;
+		sense[2] = 0x02 /* NOT READY */; /* 0x02 */
+		sense[7] = 10; /* additional sense length */
+		sense[12] = 0x04 /* LUN NOT READY */; /* 0x04 */
+		sense[13] = 0x02; /* INITIALIZING COMMAND REQUIRED */
+		Srb->SrbStatus = (UCHAR)(SRB_STATUS_ERROR | SRB_STATUS_AUTOSENSE_VALID);
+	} else {
+		/* No sense buffer: still fail closed without BUSY thrash. */
+		Srb->SrbStatus = SRB_STATUS_ERROR;
+	}
+}
+
 static BOOLEAN
 VdHandleInquiry(_Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
@@ -189,12 +222,13 @@ VdTranslateSrbNoDisk(_In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 		(void)VdHandleInquiry(Srb);
 		break;
 	case SCSIOP_TEST_UNIT_READY:
-		/* Not ready until CREATE_DISK. */
-		Srb->SrbStatus = SRB_STATUS_BUSY;
+		/* Not ready until CREATE_DISK - never SRB_STATUS_BUSY (TM 100%). */
+		VdSetSenseNotReady(Srb);
 		break;
 	case SCSIOP_READ_CAPACITY:
 	case 0x9E:
-		(void)VdHandleReadCapacity(NULL, Srb);
+		/* Prefer not-ready over zero-capacity (avoids endless probe). */
+		VdSetSenseNotReady(Srb);
 		break;
 	case SCSIOP_MODE_SENSE:
 	case SCSIOP_MODE_SENSE10:
@@ -226,10 +260,12 @@ VdTranslateSrb(
 
 	switch (op) {
 	case SCSIOP_TEST_UNIT_READY:
-		Srb->SrbStatus = (InterlockedCompareExchange(&Disk->state, 0, 0) >=
-				  VdStateCreated)
-					 ? SRB_STATUS_SUCCESS
-					 : SRB_STATUS_BUSY;
+		if (InterlockedCompareExchange(&Disk->state, 0, 0) >=
+		    VdStateCreated) {
+			Srb->SrbStatus = SRB_STATUS_SUCCESS;
+		} else {
+			VdSetSenseNotReady(Srb);
+		}
 		break;
 
 	case SCSIOP_INQUIRY:
@@ -255,7 +291,7 @@ VdTranslateSrb(
 	case SCSIOP_WRITE16:
 	case SCSIOP_SYNCHRONIZE_CACHE:
 	case 0x91: /* SYNCHRONIZE CACHE(16) */
-		/* B2: backend gone / queue torn down — fail fast, do not hang. */
+		/* B2: backend gone / queue torn down - fail fast, do not hang. */
 		if (InterlockedCompareExchange(&Disk->state, 0, 0) ==
 		    (LONG)VdStateFailed) {
 			Srb->SrbStatus = SRB_STATUS_ERROR;
