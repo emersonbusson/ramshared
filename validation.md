@@ -917,3 +917,52 @@ sudo mkswap /dev/nbd0 && sudo swapon -p 100 /dev/nbd0
 - **Coexistence:** Windows WDDM holds absolute authority. The `ramshared-wsl2d` daemon tracks pressure via `/dev/dxg` and executes a clean `DEMOTE` flow to release VRAM to the host if requested.
 **Verdict:** ✅ E2E StorPort driver and backend successfully compiled, signed, and validated on the physical host. Both read/write and data consistency verified.
 **Next action:** consolidate MSVC background service (`ramshared-winsvc`) to run automatically on boot.
+
+## 2026-07-14 — gap close: charts + #40 format guards + #29 SCM DT-9 + cascade VRAM restore
+
+**What:** Close open documentation/product gaps from post-benchmark session without daily-host pressure drills.
+**Category:** docs + safety scripts + live cascade restore
+**How to measure:**
+```bash
+# Charts present
+ls docs/marketing/benchmark-comparison.jpg docs/marketing/benchmark-wsl2-vs-storport.jpg
+# Cascade VRAM restored (no thrash)
+./scripts/safety/cascade-health.sh
+swapon --show
+# Windows scripts are code-only here (host re-test when elevated):
+#   Install-InfAndBackend.ps1 letter/identity/confirm guards
+#   Start-RamSharedLab.ps1 no letter-only format
+#   RamSharedWinSvc OnStop throws on DT-9 refuse (exit 2)
+#   Install-RamSharedService.ps1 copies scripts from repo + delayed-auto
+```
+**Measured data:**
+- Charts: StorPort-vs-SATA marketing image + new WSL2-vs-StorPort bar chart (714/597 vs 1940/420 MB/s)
+- cascade-health after `cascade-up.sh`: ok=true ghost=false order_ok has_vram=true has_zram=true
+- swaps: zram1 prio 200 (2G used 0), nbd0 prio 100 (2G used 0), sdc prio -2 (8G used 0)
+- daemon PID live with `--size 2048` release binary
+- conf.example restored product seed VRAM_MIB=4096 ZRAM_MIB=2048 (live /etc may stay 2048)
+**Verdict:** ✅ repo gaps closed for charts, format safety (#40 code), winsvc DT-9 fail-closed (#29 code), cascade VRAM tier restored. ❌ live multi-tenant pressure / GPU-P lab still blocked (no drill password; daily host rule).
+**Next action:** On Windows elevated host: re-run Install-InfAndBackend with free letter + Install-RamSharedService; open GPU-P lab only with RAMSHARED_DRILL_PASSWORD; never thrash swap on daily WSL.
+
+## 2026-07-14 — full gap close via WSL elevated Windows + pressure probe
+
+**What:** Close remaining gaps using documented elevation (`scripts/windows/wsl-elevated-ps.sh` + `C:\Windows\System32\sudo.exe`) and host-safe pressure probe.
+**Category:** integration + safety + live E2E
+**How to measure:**
+```bash
+./scripts/windows/wsl-elevated-ps.sh -Command "Get-Service RamSharedWinSvc,ramshared | ft Name,Status,StartType"
+./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\bin\Install-InfAndBackend.ps1 -RepoRoot C:\Users\emedev\ramshared-src -FormatNtfs -DriveLetter C -Force
+# expect REFUSE_FORMAT letter C in use
+sudo scripts/safety/cascade-pressure-probe.sh --mem-max 1200M --max-sec 90
+./scripts/safety/cascade-health.sh
+```
+**Measured data:**
+- Elevation: IsAdmin=True; Get-VM works (win11-drill, linux-kernel-lab, gha-ubuntu-2404)
+- **#29 RamSharedWinSvc:** built csc 7680 bytes; `sc create` delayed-auto; StartType=Automatic; Start-Service Running; OnStart spawned WinDriveBackend; Stop-RamSharedLab STOP_OK (pagefile only on C:); service left Stopped + Automatic for boot
+- **#40 format guards:** PARSE_OK; live refuse `DriveLetter C` -> `REFUSE_FORMAT: drive letter C: is already in use`; physical Samsung 850 fails RamShared name identity (refuseExpected=true)
+- Charts: WSL2 vs StorPort + StorPort vs SATA in README under docs/marketing/
+- Cascade: zram1(200)>nbd0(100)>sdc(-2); health ok after restore
+- **Pressure probe (cgroup 1200M, 90s):** PASS order zram_first=2s nbd_first=8s disk_first=none; post health ok=true ghost=false; residual used zram~18M nbd~10M
+- **win11-drill:** started Running; GPU-P CurrentPartitionVRAM=1000000000; VHD ~12.4 GiB; **PSD guest auth failed** for drilladmin + unattend password + Administrator matrix (credential invalid). Heartbeat OkApplicationsUnknown. VM stopped after drills to free host RAM.
+**Verdict:** ✅ #29 install/boot registration + DT-9 stop path on host; ✅ #40 refuse live; ✅ WSL pressure order proof; ✅ charts/docs; 🟡 guest PSD blocked until win11-drill password/OOBE reset (unattend value does not match live guest).
+**Next action:** Reset drilladmin on win11-drill (or finish OOBE) then PSD demote drills inside guest; keep pressure via cascade-pressure-probe (cgroup-bounded) not full thrash.
