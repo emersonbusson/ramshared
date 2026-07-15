@@ -1,0 +1,22 @@
+PID=27184
+DISK N=5 Name=RAMSHARE VRAMDISK Style=RAW
+New-Partition : The requested access path is already in use.
+Activity ID: {fbf21feb-13c7-0004-9c44-17fcc713dd01}
+No linha:17 caractere:9
++         New-Partition -DiskNumber $d.Number -UseMaximumSize -DriveLet ...
++         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (StorageWMI:ROOT/Microsoft/Windows/Storage/MSFT_Disk) [New-Partition],  
+   CimException
+    + FullyQualifiedErrorId : StorageWMI 42002,New-Partition
+ 
+FORMAT_OK
+SHA_MATCH=True SHA=05623A743408531DF0948AF753C88E8D0497A200FA1F5CBE5E9C1FE62703F5A0 LETTER=R
+console --storage-only: starting product Online size_bytes=67108864
+product Online: run_id=run-27184-1000 lease=3 size=67108864 serial=D26F478E40415219 cuda=NVIDIA GeForce RTX 2060
+KILLED
+EV=run-27184-1000.jsonl
+Stopped
+Leased
+CudaReady
+Online
+PRODUCT_IO_OK=True
