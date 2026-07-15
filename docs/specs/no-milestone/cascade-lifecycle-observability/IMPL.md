@@ -28,9 +28,16 @@ Demote counters: **implemented** via `/run/ramshared/demote-status.json` written
 
 - tests: `cargo test -p ramshared-cli` → **63 passed** (15 lifecycle)
 - clippy: `cargo clippy -p ramshared-cli --all-targets -- -D warnings` → exit 0
-- cover: `cargo llvm-cov -p ramshared-cli --summary-only`  
-  - `lifecycle.rs` **94.65%** lines (SPEC ≥80%)  
-  - package total ~63% (CLI main not in cover gate)
+- cover (canonical gate, re-run 2026-07-15):
+  ```bash
+  node tools/ci/check-rust-slice-coverage.mjs \
+    -p ramshared-cli \
+    --files crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs \
+    --min 80 \
+    --report-json tmp/cascade-lifecycle-cov.json
+  ```
+  - **PASS** — `lifecycle.rs` **94.6%** lines (331/350); `mod.rs` **88.8%** (1090/1228)
+  - package average does **not** count (CLI main wiring excluded from gate)
 - E2E live 2026-07-14:
   - `ramshared status` → `phase: UsingZram` (zram used_kib≈42080 ≥ 1024; vram 176)
   - `status --json` parses; `ok:true`, `order_ok:true`, daemon pid set
