@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/emersonbusson/ramshared/compare/v0.4.2...v0.4.3) (2026-07-14)
+
+
+### Documentation
+
+* backlog close-out issues [#28](https://github.com/emersonbusson/ramshared/issues/28) [#30](https://github.com/emersonbusson/ramshared/issues/30) [#32](https://github.com/emersonbusson/ramshared/issues/32) (honest gates) ([3a20cff](https://github.com/emersonbusson/ramshared/commit/3a20cffe313b204e4c2e9a6fa47aaf26fb70d201))
+
 ## [0.4.2](https://github.com/emersonbusson/ramshared/compare/v0.4.1...v0.4.2) (2026-07-14)
 
 
