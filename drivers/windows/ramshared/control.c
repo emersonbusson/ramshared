@@ -76,8 +76,8 @@ CtlDispatchCleanup(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	if (DeviceObject != g_ControlDevice) {
 		return CtlForward(g_OrigCleanup, DeviceObject, Irp);
 	}
-	/* Service handle closed → deterministic crash containment (DT-10 / B2). */
-	if (VdIsActive()) {
+	/* Only the owning process can tear down on CLEANUP (DT-5). */
+	if (VdIsActive() && VdOwnerMatches(IoGetCurrentProcess())) {
 		PVIRTUAL_DISK disk = VdGetActive();
 
 		/*
@@ -122,21 +122,46 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 			status = STATUS_DEVICE_NOT_READY;
 			break;
 		}
+		/* DT-5: REGISTER owner must match CREATE owner. */
+		if (!VdOwnerMatches(IoGetCurrentProcess())) {
+			status = STATUS_ACCESS_DENIED; /* REFUSE_FOREIGN_OWNER */
+			break;
+		}
 		status = QRegister(&VdGetActive()->queue,
 				   (const RAMSHARED_REGISTER *)buf,
-				   Irp->RequestorMode);
+				   Irp->RequestorMode,
+				   IoGetCurrentProcess());
 		break;
 
 	case IOCTL_RAMSHARED_UNREGISTER_QUEUE:
+		/* Zero-input IOCTL: reject non-zero input length (DT-5). */
+		if (inLen != 0) {
+			status = STATUS_INVALID_PARAMETER;
+			break;
+		}
 		if (VdIsActive()) {
+			if (!QOwnerMatches(&VdGetActive()->queue,
+					   IoGetCurrentProcess()) &&
+			    !VdOwnerMatches(IoGetCurrentProcess())) {
+				status = STATUS_ACCESS_DENIED;
+				break;
+			}
 			QUnregister(&VdGetActive()->queue);
 		}
 		status = STATUS_SUCCESS;
 		break;
 
 	case IOCTL_RAMSHARED_COMMIT_AND_FETCH:
+		if (inLen != 0) {
+			status = STATUS_INVALID_PARAMETER;
+			break;
+		}
 		if (!VdIsActive()) {
 			status = STATUS_DEVICE_NOT_READY;
+			break;
+		}
+		if (!QOwnerMatches(&VdGetActive()->queue, IoGetCurrentProcess())) {
+			status = STATUS_ACCESS_DENIED;
 			break;
 		}
 		status = QCommitAndFetch(&VdGetActive()->queue, Irp);
@@ -155,12 +180,20 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 		break;
 
 	case IOCTL_RAMSHARED_DESTROY_DISK:
+		if (inLen != 0) {
+			status = STATUS_INVALID_PARAMETER;
+			break;
+		}
+		if (VdIsActive() && !VdOwnerMatches(IoGetCurrentProcess())) {
+			status = STATUS_ACCESS_DENIED;
+			break;
+		}
 		VdDeactivate();
 		status = STATUS_SUCCESS;
 		break;
 
 	default:
-		status = STATUS_INVALID_DEVICE_REQUEST;
+		status = STATUS_INVALID_DEVICE_REQUEST; /* REFUSE_UNKNOWN_IOCTL */
 		break;
 	}
 

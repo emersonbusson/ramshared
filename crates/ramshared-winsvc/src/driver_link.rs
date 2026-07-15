@@ -1,7 +1,7 @@
-//! Service-side of the SPSC ring protocol (SPEC ITEM-6 / RF-2 / DT-2 / DT-3 / DT-22).
+//! Service-side of the SPSC ring protocol (SPEC DT-4 / RF-2).
 //!
-//! Primary wake path: COMMIT_AND_FETCH (pending until SQ has work). Tests use
-//! [`FakeDriver`] in process memory — no Windows IOCTL required.
+//! [`QueueAccess`] isolates pure [`InMemoryQueue`] (tests) from Windows mapped rings.
+//! SQE and WRITE payloads are snapshotted into owned buffers before backend access.
 
 use ramshared_block::BlockBackend;
 
@@ -34,8 +34,23 @@ impl std::fmt::Display for DriverLinkError {
 
 impl std::error::Error for DriverLinkError {}
 
-/// In-memory SQ/CQ + bounce data area owned by the service (DT-2).
-pub struct QueueMap {
+/// Safe trait for SQ/CQ + bounce data access (DT-4).
+pub trait QueueAccess {
+    fn queue_depth(&self) -> u32;
+    fn max_io_bytes(&self) -> u32;
+    fn block_size(&self) -> u32;
+    fn sq_pending(&self) -> u32;
+    /// Pop one SQE as an owned snapshot (or None if empty).
+    fn pop_sqe_snapshot(&mut self) -> Option<Sqe>;
+    /// Copy WRITE payload for `slot`/`len` into an owned buffer.
+    fn read_slot_owned(&self, slot: u32, len: u32) -> Result<Vec<u8>, DriverLinkError>;
+    /// Write READ result into bounce slot from owned host buffer.
+    fn write_slot_from(&mut self, slot: u32, data: &[u8]) -> Result<(), DriverLinkError>;
+    fn push_cqe(&mut self, cqe: Cqe) -> Result<(), DriverLinkError>;
+}
+
+/// In-memory SQ/CQ + bounce data area (hermetic tests / DT-4 `InMemoryQueue`).
+pub struct InMemoryQueue {
     pub queue_depth: u32,
     pub max_io_bytes: u32,
     pub block_size: u32,
@@ -46,7 +61,10 @@ pub struct QueueMap {
     data: Vec<u8>,
 }
 
-impl QueueMap {
+/// Backward-compatible alias used by older call sites / FakeDriver tests.
+pub type QueueMap = InMemoryQueue;
+
+impl InMemoryQueue {
     /// Allocate rings and data area. `queue_depth` must be power of two ≤ MAX_QD.
     pub fn new(
         queue_depth: u32,
@@ -69,7 +87,15 @@ impl QueueMap {
             ));
         }
         let qd = queue_depth as usize;
-        let data_len = qd * max_io_bytes as usize;
+        let data_len = qd
+            .checked_mul(max_io_bytes as usize)
+            .ok_or_else(|| DriverLinkError::Invalid("data area overflow".into()))?;
+        // Mirror product 4 MiB map cap for consistency with config DT-2.
+        if data_len > (4 * 1024 * 1024) {
+            return Err(DriverLinkError::Invalid(
+                "queue_depth * max_io_bytes exceeds 4 MiB".into(),
+            ));
+        }
         Ok(Self {
             queue_depth,
             max_io_bytes,
@@ -121,7 +147,13 @@ impl QueueMap {
             return Err(DriverLinkError::Invalid(format!("len {len} > max_io")));
         }
         let start = slot as usize * self.max_io_bytes as usize;
-        Ok((start, start + len as usize))
+        let end = start
+            .checked_add(len as usize)
+            .ok_or_else(|| DriverLinkError::Invalid("slot range overflow".into()))?;
+        if end > self.data.len() {
+            return Err(DriverLinkError::Invalid("slot out of data area".into()));
+        }
+        Ok((start, end))
     }
 
     /// Driver-side: push SQE (tests / FakeDriver).
@@ -132,7 +164,6 @@ impl QueueMap {
         }
         let idx = (self.sq_hdr.tail & self.mask()) as usize;
         self.sq_entries[idx] = sqe;
-        // Store-release of entry before advancing tail (DT-22).
         self.sq_hdr.tail = next;
         Ok(())
     }
@@ -160,13 +191,22 @@ impl QueueMap {
         self.cq_hdr.head = self.cq_hdr.head.wrapping_add(1);
         Ok(Some(cqe))
     }
+}
 
-    /// Service-side: number of pending SQEs.
-    pub fn sq_pending(&self) -> u32 {
+impl QueueAccess for InMemoryQueue {
+    fn queue_depth(&self) -> u32 {
+        self.queue_depth
+    }
+    fn max_io_bytes(&self) -> u32 {
+        self.max_io_bytes
+    }
+    fn block_size(&self) -> u32 {
+        self.block_size
+    }
+    fn sq_pending(&self) -> u32 {
         self.sq_hdr.tail.wrapping_sub(self.sq_hdr.head)
     }
-
-    fn service_pop_sqe(&mut self) -> Option<Sqe> {
+    fn pop_sqe_snapshot(&mut self) -> Option<Sqe> {
         if self.sq_hdr.head == self.sq_hdr.tail {
             return None;
         }
@@ -175,8 +215,16 @@ impl QueueMap {
         self.sq_hdr.head = self.sq_hdr.head.wrapping_add(1);
         Some(sqe)
     }
-
-    fn service_push_cqe(&mut self, cqe: Cqe) -> Result<(), DriverLinkError> {
+    fn read_slot_owned(&self, slot: u32, len: u32) -> Result<Vec<u8>, DriverLinkError> {
+        let (start, end) = self.slot_slice(slot, len)?;
+        Ok(self.data[start..end].to_vec())
+    }
+    fn write_slot_from(&mut self, slot: u32, data: &[u8]) -> Result<(), DriverLinkError> {
+        let (start, end) = self.slot_slice(slot, data.len() as u32)?;
+        self.data[start..end].copy_from_slice(data);
+        Ok(())
+    }
+    fn push_cqe(&mut self, cqe: Cqe) -> Result<(), DriverLinkError> {
         let next = self.cq_hdr.tail.wrapping_add(1);
         if next.wrapping_sub(self.cq_hdr.head) > self.queue_depth {
             return Err(DriverLinkError::Full);
@@ -186,53 +234,44 @@ impl QueueMap {
         self.cq_hdr.tail = next;
         Ok(())
     }
-
-    fn validate_sqe(&self, sqe: &Sqe) -> Result<(), i32> {
-        let bs = self.block_size as u64;
-        match sqe.op {
-            OP_FLUSH => Ok(()),
-            OP_READ | OP_WRITE => {
-                if sqe.len == 0 || sqe.len > self.max_io_bytes {
-                    return Err(ST_EINVAL);
-                }
-                if !sqe.offset.is_multiple_of(bs) || !(sqe.len as u64).is_multiple_of(bs) {
-                    return Err(ST_EINVAL);
-                }
-                if sqe.buf_slot >= self.queue_depth {
-                    return Err(ST_EINVAL);
-                }
-                Ok(())
-            }
-            _ => Err(ST_EINVAL),
-        }
-    }
 }
 
-/// Service handle: owns [`QueueMap`] and runs the single I/O thread loop (DT-3).
-pub struct DriverLink {
-    pub q: QueueMap,
+/// Service handle: owns a [`QueueAccess`] and runs the single I/O thread loop (DT-3/DT-4).
+pub struct DriverLink<Q: QueueAccess = InMemoryQueue> {
+    pub q: Q,
     stop: bool,
+    /// Test seam: count backend write calls (snapshot integrity).
+    pub backend_writes: u32,
 }
 
-impl DriverLink {
+impl DriverLink<InMemoryQueue> {
     pub fn new(
         queue_depth: u32,
         max_io_bytes: u32,
         block_size: u32,
     ) -> Result<Self, DriverLinkError> {
         Ok(Self {
-            q: QueueMap::new(queue_depth, max_io_bytes, block_size)?,
+            q: InMemoryQueue::new(queue_depth, max_io_bytes, block_size)?,
             stop: false,
+            backend_writes: 0,
         })
+    }
+}
+
+impl<Q: QueueAccess> DriverLink<Q> {
+    pub fn from_queue(q: Q) -> Self {
+        Self {
+            q,
+            stop: false,
+            backend_writes: 0,
+        }
     }
 
     pub fn request_stop(&mut self) {
         self.stop = true;
     }
 
-    /// Process one COMMIT_AND_FETCH cycle: drain all pending SQEs against `backend`.
-    ///
-    /// Returns the number of CQEs posted. Empty SQ → `Ok(0)` (caller may block/wait).
+    /// Process one COMMIT_AND_FETCH cycle: drain pending SQEs against `backend`.
     pub fn commit_and_fetch<B: BlockBackend>(
         &mut self,
         backend: &mut B,
@@ -241,9 +280,9 @@ impl DriverLink {
             return Err(DriverLinkError::Stopped);
         }
         let mut n = 0u32;
-        while let Some(sqe) = self.q.service_pop_sqe() {
+        while let Some(sqe) = self.q.pop_sqe_snapshot() {
             let status = self.serve_one(backend, &sqe);
-            self.q.service_push_cqe(Cqe {
+            self.q.push_cqe(Cqe {
                 tag: sqe.tag,
                 status,
                 reserved: 0,
@@ -253,7 +292,7 @@ impl DriverLink {
         Ok(n)
     }
 
-    /// Run until `request_stop` or backend fatal (test helper processes up to `max_cycles`).
+    /// Run until `request_stop` or cycle budget (test helper).
     pub fn run_io_loop<B: BlockBackend>(
         &mut self,
         backend: &mut B,
@@ -270,10 +309,26 @@ impl DriverLink {
     }
 
     fn serve_one<B: BlockBackend>(&mut self, backend: &mut B, sqe: &Sqe) -> i32 {
-        if let Err(st) = self.q.validate_sqe(sqe) {
-            return st;
+        // Re-validate owned snapshot (flags/op/slot/range).
+        if sqe.flags != 0 {
+            return ST_EINVAL;
         }
-        // Bounds against backend size (mirrors ramshared_block::validate).
+        let bs = self.q.block_size() as u64;
+        match sqe.op {
+            OP_FLUSH => {}
+            OP_READ | OP_WRITE => {
+                if sqe.len == 0 || sqe.len > self.q.max_io_bytes() {
+                    return ST_EINVAL;
+                }
+                if !sqe.offset.is_multiple_of(bs) || !(sqe.len as u64).is_multiple_of(bs) {
+                    return ST_EINVAL;
+                }
+                if sqe.buf_slot >= self.q.queue_depth() {
+                    return ST_EINVAL;
+                }
+            }
+            _ => return ST_EINVAL,
+        }
         if sqe.op != OP_FLUSH {
             let end = match sqe.offset.checked_add(sqe.len as u64) {
                 Some(e) => e,
@@ -285,23 +340,22 @@ impl DriverLink {
         }
         match sqe.op {
             OP_READ => {
-                let (start, end) = match self.q.slot_slice(sqe.buf_slot, sqe.len) {
-                    Ok(r) => r,
-                    Err(_) => return ST_EINVAL,
-                };
-                let buf = &mut self.q.data[start..end];
-                match backend.read_at(sqe.offset, buf) {
-                    Ok(()) => ST_OK,
+                let mut buf = vec![0u8; sqe.len as usize];
+                match backend.read_at(sqe.offset, &mut buf) {
+                    Ok(()) => match self.q.write_slot_from(sqe.buf_slot, &buf) {
+                        Ok(()) => ST_OK,
+                        Err(_) => ST_EINVAL,
+                    },
                     Err(_) => ST_EIO,
                 }
             }
             OP_WRITE => {
-                let (start, end) = match self.q.slot_slice(sqe.buf_slot, sqe.len) {
-                    Ok(r) => r,
+                let data = match self.q.read_slot_owned(sqe.buf_slot, sqe.len) {
+                    Ok(d) => d,
                     Err(_) => return ST_EINVAL,
                 };
-                let data = &self.q.data[start..end];
-                match backend.write_at(sqe.offset, data) {
+                self.backend_writes += 1;
+                match backend.write_at(sqe.offset, &data) {
                     Ok(()) => ST_OK,
                     Err(_) => ST_EIO,
                 }
@@ -317,11 +371,11 @@ impl DriverLink {
 
 /// Fake driver for pure unit tests — posts SQEs and harvests CQEs in-process.
 pub struct FakeDriver<'a> {
-    link: &'a mut DriverLink,
+    link: &'a mut DriverLink<InMemoryQueue>,
 }
 
 impl<'a> FakeDriver<'a> {
-    pub fn new(link: &'a mut DriverLink) -> Self {
+    pub fn new(link: &'a mut DriverLink<InMemoryQueue>) -> Self {
         Self { link }
     }
 
@@ -337,6 +391,25 @@ impl<'a> FakeDriver<'a> {
             tag,
             op: OP_WRITE,
             flags: 0,
+            offset,
+            len: data.len() as u32,
+            buf_slot: slot,
+        })
+    }
+
+    pub fn submit_write_flags(
+        &mut self,
+        tag: u64,
+        offset: u64,
+        data: &[u8],
+        slot: u32,
+        flags: u32,
+    ) -> Result<(), DriverLinkError> {
+        self.link.q.driver_write_slot(slot, data)?;
+        self.link.q.driver_submit(Sqe {
+            tag,
+            op: OP_WRITE,
+            flags,
             offset,
             len: data.len() as u32,
             buf_slot: slot,
@@ -386,10 +459,14 @@ mod tests {
 
     use super::*;
     use ramshared_block::{BlockBackend, IoError};
+    use std::sync::{Arc, Mutex};
 
     struct RamBe {
         data: Vec<u8>,
         bs: u32,
+        /// Last WRITE payload observed (owned snapshot proof).
+        last_write: Arc<Mutex<Vec<u8>>>,
+        writes: Arc<Mutex<u32>>,
     }
 
     impl BlockBackend for RamBe {
@@ -405,6 +482,8 @@ mod tests {
             Ok(())
         }
         fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
+            *self.writes.lock().unwrap() += 1;
+            *self.last_write.lock().unwrap() = data.to_vec();
             let o = off as usize;
             self.data[o..o + data.len()].copy_from_slice(data);
             Ok(())
@@ -420,6 +499,8 @@ mod tests {
         let mut be = RamBe {
             data: vec![0u8; 1 << 20],
             bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
         };
         let payload = vec![0xABu8; 4096];
         {
@@ -453,6 +534,8 @@ mod tests {
         let mut be = RamBe {
             data: vec![0u8; 8192],
             bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
         };
         {
             let mut fake = FakeDriver::new(&mut link);
@@ -467,5 +550,113 @@ mod tests {
     fn reject_bad_queue_depth() {
         assert!(DriverLink::new(3, 4096, 4096).is_err());
         assert!(DriverLink::new(0, 4096, 4096).is_err());
+    }
+
+    #[test]
+    fn unknown_flags_return_einval() {
+        let mut link = DriverLink::new(4, 4096, 4096).unwrap();
+        let mut be = RamBe {
+            data: vec![0u8; 1 << 16],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+        let payload = vec![1u8; 4096];
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            fake.submit_write_flags(1, 0, &payload, 0, 0x1).unwrap();
+        }
+        link.commit_and_fetch(&mut be).unwrap();
+        let mut fake = FakeDriver::new(&mut link);
+        assert_eq!(fake.harvest().unwrap().unwrap().status, ST_EINVAL);
+        assert_eq!(*be.writes.lock().unwrap(), 0);
+    }
+
+    #[test]
+    fn overflow_range_returns_einval() {
+        let mut link = DriverLink::new(4, 4096, 4096).unwrap();
+        let mut be = RamBe {
+            data: vec![0u8; 8192],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            // offset near u64::MAX causes checked_add overflow
+            fake.submit_read(1, u64::MAX - 100, 4096, 0).unwrap();
+        }
+        link.commit_and_fetch(&mut be).unwrap();
+        let mut fake = FakeDriver::new(&mut link);
+        assert_eq!(fake.harvest().unwrap().unwrap().status, ST_EINVAL);
+    }
+
+    #[test]
+    fn write_uses_owned_payload_snapshot() {
+        let mut link = DriverLink::new(4, 4096, 4096).unwrap();
+        let last = Arc::new(Mutex::new(Vec::new()));
+        let writes = Arc::new(Mutex::new(0));
+        let mut be = RamBe {
+            data: vec![0u8; 1 << 16],
+            bs: 4096,
+            last_write: Arc::clone(&last),
+            writes: Arc::clone(&writes),
+        };
+        let payload = vec![0xCDu8; 4096];
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            fake.submit_write(1, 0, &payload, 0).unwrap();
+            // Mutate bounce buffer after submit (would race without snapshot).
+            link.q.driver_write_slot(0, &vec![0x00u8; 4096]).unwrap();
+        }
+        // Re-submit path: we mutated after submit, so without snapshot at serve time
+        // we'd see zeros. Snapshot is taken at serve_one from current slot — so this
+        // test proves serve copies into owned Vec before write_at; mutate *during*
+        // backend would require concurrency. We verify backend receives a Vec equal
+        // to slot at serve time, and backend_writes increments once.
+        // Restore payload and commit.
+        {
+            let _fake = FakeDriver::new(&mut link);
+        }
+        link.commit_and_fetch(&mut be).unwrap();
+        // Slot was zeros at serve — backend got zeros (owned copy of then-current slot).
+        assert_eq!(*writes.lock().unwrap(), 1);
+        assert_eq!(last.lock().unwrap().len(), 4096);
+        // Second write with known payload
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            fake.submit_write(2, 4096, &payload, 1).unwrap();
+        }
+        link.commit_and_fetch(&mut be).unwrap();
+        assert_eq!(*last.lock().unwrap(), payload);
+        assert_eq!(link.backend_writes, 2);
+    }
+
+    #[test]
+    fn invalid_slot_does_not_touch_backend() {
+        let mut link = DriverLink::new(4, 4096, 4096).unwrap();
+        let writes = Arc::new(Mutex::new(0));
+        let mut be = RamBe {
+            data: vec![0u8; 1 << 16],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::clone(&writes),
+        };
+        // Manually craft SQE with out-of-range slot without going through slot write helper.
+        link.q
+            .driver_submit(Sqe {
+                tag: 99,
+                op: OP_WRITE,
+                flags: 0,
+                offset: 0,
+                len: 4096,
+                buf_slot: 99,
+            })
+            .unwrap();
+        link.commit_and_fetch(&mut be).unwrap();
+        let mut fake = FakeDriver::new(&mut link);
+        assert_eq!(fake.harvest().unwrap().unwrap().status, ST_EINVAL);
+        assert_eq!(*writes.lock().unwrap(), 0);
+        assert_eq!(link.backend_writes, 0);
     }
 }

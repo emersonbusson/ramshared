@@ -1,88 +1,96 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Build C# lab SCM service, install delayed-auto, optional start (VM / lab host).
+  Install the Rust product ramshared-winsvc.exe (CUDA storage-only). Never compiles C#.
 
 .DESCRIPTION
-  Closes issue #29 install path:
-  - Copies Start/Stop lab scripts + RamSharedWinSvc.cs from the repo into C:\ramshared\bin
-  - Builds RamSharedWinSvc.exe with csc (ServiceBase)
-  - Registers delayed-auto LocalSystem service
-  - OnStop is DT-9 fail-closed (pagefile-hot refuse)
+  SPEC windows-storport-cuda-vram DT-1 / RF-6:
+  - Verifies supplied MSVC-built ramshared-winsvc.exe (SHA-256)
+  - Copies winsvc.toml to C:\ProgramData\RamShared\ with restrictive ACL
+  - Registers SCM ImagePath to that executable only
+  - Never copies Start/Stop lab scripts into the product ImagePath
 
-  Product CUDA path remains crates/ramshared-winsvc (MSVC). This is the lab SCM that boots today.
+.EXAMPLE
+  .\Install-RamSharedService.ps1 -ExePath C:\ramshared\bin\ramshared-winsvc.exe -ConfigPath .\crates\ramshared-winsvc\winsvc.example.toml
 #>
 [CmdletBinding()]
 param(
-    [string]$RepoRoot = "",
-    [string]$SourceCs = "",
-    [string]$OutExe = "C:\ramshared\bin\RamSharedWinSvc.exe",
-    [string]$BinDir = "C:\ramshared\bin",
-    [switch]$StartNow,
-    # Pass -Force through to Start-RamSharedLab format path under SCM.
-    [switch]$ForceFormat
+    [Parameter(Mandatory = $true)]
+    [string]$ExePath,
+    [string]$ConfigPath = "",
+    [string]$ProgramData = "C:\ProgramData\RamShared",
+    [string]$ServiceName = "RamSharedWinSvc",
+    [switch]$StartNow
 )
 
 $ErrorActionPreference = "Stop"
+function L($m) { Write-Host ("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m) }
 
-if (-not $RepoRoot) {
-    # Prefer repo relative to this script: scripts/windows -> repo root
+if (-not (Test-Path -LiteralPath $ExePath)) {
+    throw "missing product exe: $ExePath"
+}
+$exeItem = Get-Item -LiteralPath $ExePath
+if ($exeItem.Name -notmatch 'ramshared-winsvc') {
+    Write-Warning "Exe name does not contain ramshared-winsvc — verify product binary"
+}
+$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ExePath).Hash
+L "PRODUCT_EXE=$($exeItem.FullName) SHA256=$hash"
+
+New-Item -Force -ItemType Directory $ProgramData, (Join-Path $ProgramData "evidence") | Out-Null
+
+if (-not $ConfigPath) {
     $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-    $guess = Resolve-Path (Join-Path $here "..\..") -ErrorAction SilentlyContinue
-    if ($guess) { $RepoRoot = $guess.Path }
+    $guess = Join-Path $here "..\..\crates\ramshared-winsvc\winsvc.example.toml"
+    if (Test-Path $guess) { $ConfigPath = (Resolve-Path $guess).Path }
 }
-if (-not $RepoRoot -or -not (Test-Path $RepoRoot)) {
-    throw "RepoRoot required (folder containing scripts\windows and crates)"
+if (-not $ConfigPath -or -not (Test-Path -LiteralPath $ConfigPath)) {
+    throw "ConfigPath required (winsvc.toml product shape)"
 }
+$destToml = Join-Path $ProgramData "winsvc.toml"
+Copy-Item -LiteralPath $ConfigPath -Destination $destToml -Force
+L "CONFIG=$destToml"
 
-New-Item -Force -ItemType Directory $BinDir, C:\ramshared\package | Out-Null
+# ACL: SYSTEM + Builtin Administrators write; Users read (DT-1).
+$acl = Get-Acl $ProgramData
+$acl.SetAccessRuleProtection($true, $false)
+$rules = @(
+    (New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")),
+    (New-Object System.Security.AccessControl.FileSystemAccessRule("BUILTIN\Administrators", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")),
+    (New-Object System.Security.AccessControl.FileSystemAccessRule("BUILTIN\Users", "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow"))
+)
+foreach ($r in $rules) { $acl.AddAccessRule($r) | Out-Null }
+Set-Acl -Path $ProgramData -AclObject $acl
 
-$labCs = Join-Path $RepoRoot "scripts\windows\lab\RamSharedWinSvc.cs"
-if (-not $SourceCs) { $SourceCs = $labCs }
-if (-not (Test-Path $SourceCs)) { throw "missing $SourceCs" }
-
-# Deploy scripts the service will call on start/stop.
-$startSrc = Join-Path $RepoRoot "scripts\windows\Start-RamSharedLab.ps1"
-$stopSrc = Join-Path $RepoRoot "scripts\windows\Stop-RamSharedLab.ps1"
-if (-not (Test-Path $startSrc)) { throw "missing $startSrc" }
-if (-not (Test-Path $stopSrc)) { throw "missing $stopSrc" }
-Copy-Item $startSrc (Join-Path $BinDir "Start-RamSharedLab.ps1") -Force
-Copy-Item $stopSrc (Join-Path $BinDir "Stop-RamSharedLab.ps1") -Force
-Copy-Item $SourceCs (Join-Path $BinDir "RamSharedWinSvc.cs") -Force
-
-$csc = (Get-ChildItem "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe" -EA Stop).FullName
-& $csc /nologo /target:exe /platform:x64 `
-    /r:System.ServiceProcess.dll `
-    /out:$OutExe `
-    (Join-Path $BinDir "RamSharedWinSvc.cs")
-if ($LASTEXITCODE -ne 0) { throw "csc failed $LASTEXITCODE" }
-Write-Host "BUILT $OutExe size=$((Get-Item $OutExe).Length)"
-
-$svc = Get-Service -Name RamSharedWinSvc -EA SilentlyContinue
+$svc = Get-Service -Name $ServiceName -EA SilentlyContinue
 if ($svc) {
-    Stop-Service RamSharedWinSvc -Force -EA SilentlyContinue
+    Stop-Service $ServiceName -Force -EA SilentlyContinue
     Start-Sleep 2
-    sc.exe delete RamSharedWinSvc | Out-Null
+    sc.exe delete $ServiceName | Out-Null
     Start-Sleep 2
 }
 
-# LocalSystem, delayed auto-start (after storage stack)
-$binPath = "`"$OutExe`""
-if ($ForceFormat) {
-    # Service reads RAMSHARED_WINSVC_FORCE_FORMAT=1
-    [Environment]::SetEnvironmentVariable("RAMSHARED_WINSVC_FORCE_FORMAT", "1", "Machine")
-}
-sc.exe create RamSharedWinSvc binPath= $binPath start= delayed-auto DisplayName= "RamShared VRAM Disk Service"
+$binPath = "`"$($exeItem.FullName)`""
+sc.exe create $ServiceName binPath= $binPath start= demand DisplayName= "RamShared CUDA VRAM Disk Service" | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "sc create failed $LASTEXITCODE" }
-sc.exe description RamSharedWinSvc "Lab SCM: Start/Stop-RamSharedLab (DT-9). OnStop refuses pagefile-hot kill."
-sc.exe failure RamSharedWinSvc reset= 86400 actions= //////
-# no auto-restart on failure during lab (make crashes visible)
+sc.exe description $ServiceName "Product storage-only CUDA path (no lab RAM backend)." | Out-Null
+# Disable failure auto-restart (SPEC).
+sc.exe failure $ServiceName reset= 0 actions= = | Out-Null
+
+# Query ImagePath after install
+$img = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\$ServiceName" -Name ImagePath).ImagePath
+L "ImagePath=$img"
+if ($img -notmatch [regex]::Escape($exeItem.Name)) {
+    throw "PRODUCT_IMAGEPATH_MATCH=0"
+}
+if ($img -match 'Start-RamSharedLab|Stop-RamSharedLab|WinDriveBackend|RamSharedWinSvc\.cs') {
+    throw "NO_LAB_SCRIPT_REFERENCE=0 (lab path leaked into ImagePath)"
+}
+Write-Host "PRODUCT_IMAGEPATH_MATCH=1"
+Write-Host "NO_LAB_SCRIPT_REFERENCE=1"
+Write-Host "PRODUCT_SHA256=$hash"
 
 if ($StartNow) {
-    Start-Service RamSharedWinSvc
-    Start-Sleep 10
+    Start-Service $ServiceName
+    L "service started"
 }
-
-Get-Service RamSharedWinSvc | Format-List Name, Status, StartType
-Write-Host "INSTALL_OK RepoRoot=$RepoRoot"
 exit 0

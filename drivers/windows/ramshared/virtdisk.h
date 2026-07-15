@@ -19,6 +19,8 @@ typedef struct _VIRTUAL_DISK {
 	UCHAR serial[16];
 	RAMSHARED_QUEUE queue;
 	volatile LONG state;
+	/* DT-5: CREATE requestor; balanced ObReference/Dereference. */
+	PEPROCESS OwnerProcess;
 } VIRTUAL_DISK, *PVIRTUAL_DISK;
 
 NTSTATUS VdCreate(_Out_ PVIRTUAL_DISK Disk, _In_ const RAMSHARED_DISK_PARAMS *Params);
@@ -34,3 +36,4 @@ NTSTATUS VdActivate(_In_ const RAMSHARED_DISK_PARAMS *Params);
 VOID VdDeactivate(VOID);
 PVIRTUAL_DISK VdGetActive(VOID);
 BOOLEAN VdIsActive(VOID);
+BOOLEAN VdOwnerMatches(_In_ PEPROCESS Process);
