@@ -1255,3 +1255,14 @@ C:\ramshared\bin\ramshared-winsvc.exe probe-cuda --config C:\ProgramData\RamShar
 **Verdict:** 🟡 PARTIAL — product Online + 3-round + graceful stop + guest single-process REFUSE closed; Verifier + multi-process injectors env-bound
 **Artifacts:** evidence/graceful-stop-*.txt|jsonl; evidence/ioctl-guest-verdict-pass.json; evidence/ioctl-guest-console.txt
 **Next action:** start win11-drill; enable Verifier; reload new sys on guest; foreign-owner PE + concurrent re-entry/rundown injectors
+
+## 2026-07-15 — teardown letter/dismount fix + host hang observation
+
+**What:** Graceful stop hung because config letter (R) or free-letter (D) did not match live mount; UNREGISTER/DESTROY waited 30s each on mounted NTFS. Fixed: FSCTL dismount (no PowerShell) before Gate A/B; cancel COMMIT; careful HostExhaustive uses letters S/R/T only (never auto-D). Host exhaustive re-proof still GRACEFUL=false once with letter=D (old script); process pid 9148 became unkillable (kernel wait) after force-kill path.
+**Category:** windows / storport / reliability
+**Measured data:**
+- 3-round SHA match=true with letter=D (bug in test script free-letter picker) then stop hung 60s
+- taskkill /F elevated cannot kill pid 9148 ("no running instance" / zombie kernel wait)
+- Popup "D:\ não está acessível" = Explorer on orphan letter from that test
+**Verdict:** 🟡 PARTIAL — code path fixed; host needs reboot to clear hung winsvc + orphan LUN before re-proof; guest Verifier still open
+**Next action:** reboot Windows host (or logoff+driver reset if possible); rebuild winsvc; Run-HostExhaustive.ps1; then guest IOCTL+Verifier

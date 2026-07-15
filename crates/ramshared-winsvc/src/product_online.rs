@@ -7,8 +7,8 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -24,8 +24,8 @@ use crate::runtime::{
     RunMode, RuntimeError, RuntimeErrorClass, RuntimePhase, RuntimeState, RuntimeSummary,
 };
 use crate::service::{
-    pagefile_refusal_to_runtime, teardown_storage_only, DiskControl, PagefileGates, ServiceState,
-    WipeVram,
+    DiskControl, PagefileGates, ServiceState, WipeVram, pagefile_refusal_to_runtime,
+    teardown_storage_only,
 };
 use crate::windows_driver::{WindowsDriverLink, WindowsMappedQueue};
 use crate::windows_host::WindowsHostState;
@@ -82,17 +82,12 @@ pub fn run_product_online(
         .broker_addr()
         .map_err(|e| RuntimeError::new(RuntimeErrorClass::Config, 2, e.to_string()))?;
     let raw = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|e| {
-        RuntimeError::new(
-            RuntimeErrorClass::Broker,
-            3,
-            format!("connect {addr}: {e}"),
-        )
+        RuntimeError::new(RuntimeErrorClass::Broker, 3, format!("connect {addr}: {e}"))
     })?;
     raw.set_read_timeout(Some(Duration::from_secs(10))).ok();
     raw.set_write_timeout(Some(Duration::from_secs(10))).ok();
-    let mut stream = BrokStream::new(raw).map_err(|e| {
-        RuntimeError::new(RuntimeErrorClass::Broker, 3, format!("stream: {e}"))
-    })?;
+    let mut stream = BrokStream::new(raw)
+        .map_err(|e| RuntimeError::new(RuntimeErrorClass::Broker, 3, format!("stream: {e}")))?;
     let mut tenant = BrokerTenant::new(cfg.tenant.clone(), Duration::from_secs(cfg.heartbeat_secs));
     tenant
         .register(&mut stream)
@@ -110,7 +105,8 @@ pub fn run_product_online(
     let _ = evidence.append(&row);
 
     // --- CUDA on this thread (affinity) ---
-    let cuda = Cuda::load().map_err(|e| RuntimeError::new(RuntimeErrorClass::Cuda, 4, e.to_string()))?;
+    let cuda =
+        Cuda::load().map_err(|e| RuntimeError::new(RuntimeErrorClass::Cuda, 4, e.to_string()))?;
     let count = cuda
         .device_count()
         .map_err(|e| RuntimeError::new(RuntimeErrorClass::Cuda, 4, e.to_string()))?;
@@ -262,6 +258,18 @@ pub fn run_product_online(
     row.phase = "Stopping".into();
     let _ = evidence.append(&row);
 
+    // Cancel any outstanding COMMIT so UNREGISTER/DESTROY are not blocked by fetch.
+    let _ = link.cancel_fetch();
+
+    // Config letter may be wrong (e.g. R vs live S:). Resolve then force-dismount
+    // so Gate B + DESTROY do not hang 30s+ on a mounted NTFS volume (TM 100%/0KB/s).
+    let teardown_letter =
+        WindowsHostState::resolve_teardown_letter(cfg.volume_letter, cfg.size_bytes);
+    eprintln!("teardown: volume_letter={teardown_letter} (FSCTL dismount, no PowerShell)");
+    // Dismount product letter only (+ S/R lab candidates). Never spawn PowerShell here.
+    WindowsHostState::force_dismount_product_candidates(teardown_letter);
+    eprintln!("teardown: dismount candidates done");
+
     let mut svc = ServiceState {
         lease: Some(crate::broker_tenant::LeaseState {
             lease: lease.lease,
@@ -279,9 +287,19 @@ pub fn run_product_online(
     let mut wipe = BackendWipe {
         backend: &mut backend,
     };
-    let mut gates = HostGates::new(cfg.volume_letter);
+    let mut gates = HostGates::new(teardown_letter);
     let mut phases = Vec::new();
-    match teardown_storage_only(cfg, &mut svc, &mut disk_ctl, &mut wipe, &mut gates, &mut phases) {
+    // Pass a cfg clone with corrected volume letter for Gate A/B lock path.
+    let mut cfg_teardown = cfg.clone();
+    cfg_teardown.volume_letter = teardown_letter;
+    match teardown_storage_only(
+        &cfg_teardown,
+        &mut svc,
+        &mut disk_ctl,
+        &mut wipe,
+        &mut gates,
+        &mut phases,
+    ) {
         Ok(()) => {
             let _ = tenant.release(&mut stream);
             state.effects.lease_release += 1;
@@ -433,22 +451,31 @@ impl PagefileGates for HostGates {
             .map_err(|e| e.to_string())
     }
     fn lock_volume(&mut self, letter: char) -> Result<(), String> {
-        self.volume_letter = letter;
+        self.volume_letter = letter.to_ascii_uppercase();
         if self.locked.is_some() {
             return Ok(());
         }
-        // Gate A runs before lock: only volume-local pagefiles matter.
-        // If the volume letter has no filesystem yet, lock may fail — map to
-        // unlock path that still allows destructive teardown of unmounted LUN.
-        match WindowsHostState::lock_volume(letter) {
+        // Prefer exclusive lock after any prior force_dismount in product_online.
+        match WindowsHostState::lock_volume(self.volume_letter) {
             Ok(vol) => {
                 self.locked = Some(vol);
                 Ok(())
             }
             Err(e) => {
-                // Unmounted LUN / missing letter: Gate B lock optional if Gate A clear.
-                eprintln!("volume lock soft-fail (unmounted LUN?): {e}");
-                Ok(())
+                // Retry once: force dismount then lock (handles Explorer open handles).
+                let _ = WindowsHostState::force_dismount_letter(self.volume_letter);
+                match WindowsHostState::lock_volume(self.volume_letter) {
+                    Ok(vol) => {
+                        self.locked = Some(vol);
+                        Ok(())
+                    }
+                    Err(e2) => {
+                        // Unmounted / letter gone: Gate B lock optional if Gate A clear.
+                        // Still allow UNREGISTER/DESTROY (no mounted FS left).
+                        eprintln!("volume lock soft-fail after dismount: {e} / {e2}");
+                        Ok(())
+                    }
+                }
             }
         }
     }

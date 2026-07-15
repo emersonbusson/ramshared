@@ -263,6 +263,65 @@ impl WindowsHostState {
         Ok(())
     }
 
+    /// Prefer config letter; no PowerShell (avoids multi-second hangs in teardown).
+    pub fn resolve_teardown_letter(config_letter: char, _size_bytes: u64) -> char {
+        config_letter.to_ascii_uppercase()
+    }
+
+    /// FSCTL_DISMOUNT without exclusive lock (shared open). No PowerShell.
+    /// Call on the product letter (and lab candidates) before UNREGISTER/DESTROY.
+    pub fn force_dismount_letter(letter: char) -> Result<(), HostError> {
+        let letter = letter.to_ascii_uppercase();
+        if !('D'..='Z').contains(&letter) {
+            return Err(HostError::Volume("letter must be D..=Z".into()));
+        }
+        let path = format!("\\\\.\\{letter}:");
+        let wide = to_wide(&path);
+        let handle = unsafe {
+            CreateFileW(
+                wide.as_ptr(),
+                0xC000_0000, // GENERIC_READ|GENERIC_WRITE
+                FILE_SHARE_READ | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
+                ptr::null(),
+                OPEN_EXISTING,
+                0,
+                ptr::null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            // Letter not present — fine for teardown.
+            return Ok(());
+        }
+        // Best-effort flush; ignore failure (volume may be dirty / no FS).
+        let _ = unsafe { windows_sys::Win32::Storage::FileSystem::FlushFileBuffers(handle) };
+        let ok = fsctl(handle, FSCTL_DISMOUNT_VOLUME);
+        unsafe {
+            CloseHandle(handle);
+        }
+        if ok {
+            Ok(())
+        } else {
+            // Still Ok for teardown: DESTROY may proceed on raw LUN.
+            Err(HostError::Volume(last_err("FSCTL_DISMOUNT_VOLUME")))
+        }
+    }
+
+    /// Dismount config letter plus known lab letters used in this product path.
+    /// Never touches A/B/C system letters.
+    pub fn force_dismount_product_candidates(primary: char) {
+        let primary = primary.to_ascii_uppercase();
+        let mut letters = vec![primary, 'S', 'R'];
+        // Only include D if it was the primary (host exhaustive once assigned D by mistake).
+        if primary == 'D' {
+            letters.push('D');
+        }
+        letters.sort_unstable();
+        letters.dedup();
+        for c in letters {
+            let _ = Self::force_dismount_letter(c);
+        }
+    }
+
     pub fn find_lun(serial: &str, size_bytes: u64) -> Result<Option<LunIdentity>, HostError> {
         // Storage module via PowerShell (VPD serial when exposed).
         let script = format!(
