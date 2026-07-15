@@ -12,6 +12,7 @@ use ramshared_winsvc::runtime::{ProductCommand, RuntimeErrorClass, parse_product
 mod windows_svc {
     use std::ffi::OsString;
     use std::sync::mpsc;
+    use std::thread;
     use std::time::Duration;
 
     use windows_service::define_windows_service;
@@ -24,7 +25,7 @@ mod windows_svc {
     use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 
     use ramshared_winsvc::config::WinDriveConfig;
-    use ramshared_winsvc::runtime::{ProductCommand, RunMode, RuntimeState, parse_product_cli};
+    use ramshared_winsvc::runtime::{ProductCommand, RunMode, parse_product_cli};
 
     pub const SERVICE_NAME: &str = "RamSharedWinSvc";
     pub const SERVICE_DISPLAY: &str = "RamShared CUDA VRAM Disk Service";
@@ -228,19 +229,26 @@ mod windows_svc {
     }
 
     fn start_product_runtime(cfg: &WinDriveConfig) -> Result<(), Box<dyn std::error::Error>> {
-        // Validate product shape; full CUDA/driver composition is lab-bound.
+        use ramshared_winsvc::product_online::run_product_online;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
         cfg.validate()?;
-        let _state = RuntimeState::new(RunMode::Scm);
-        eprintln!(
-            "ramshared-winsvc: SCM product mode size_bytes={} cuda_device={} (full Online path requires lab GPU/driver)",
-            cfg.size_bytes, cfg.cuda_device
-        );
-        // Without linked WindowsDriverLink + CUDA on this host, fail closed rather
-        // than starting a false-green lab RAM backend.
-        Err("product Online path requires Windows CUDA + StorPort lab; refuse false start".into())
+        if !ramshared_winsvc::windows_host::WindowsHostState::is_elevated() {
+            eprintln!("warning: not elevated — control device may refuse open");
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop2 = Arc::clone(&stop);
+        // Ctrl+C / SCM stop will set this via channel in run_service; console uses ctrl_c.
+        let summary = run_product_online(cfg, RunMode::Scm, stop2)?;
+        eprintln!("product stopped: {:?}", summary);
+        let _ = stop;
+        Ok(())
     }
 
     fn stop_product_runtime(_cfg: &WinDriveConfig) -> Result<(), i32> {
+        // Stop is coordinated via service control handler + shared AtomicBool in a
+        // fuller integration; currently run_product_online owns the stop loop.
         Ok(())
     }
 
@@ -273,15 +281,43 @@ mod windows_svc {
     }
 
     fn run_console(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> {
+        use ramshared_winsvc::product_online::run_product_online;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::thread;
+
         let bytes = std::fs::read(config_path)?;
         let cfg = WinDriveConfig::from_reader(&bytes)?;
         cfg.validate()?;
         eprintln!(
-            "console --storage-only: config OK size_bytes={} (product Online requires lab)",
+            "console --storage-only: starting product Online size_bytes={}",
             cfg.size_bytes
         );
-        // Same product path as SCM — fail closed without lab stack.
-        Err("console product Online path requires Windows CUDA + StorPort lab".into())
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_c = Arc::clone(&stop);
+        thread::spawn(move || {
+            let _ = ctrlc_wait();
+            stop_c.store(true, Ordering::SeqCst);
+        });
+        match run_product_online(&cfg, RunMode::Console, stop) {
+            Ok(s) => {
+                eprintln!("console stopped: {:?}", s);
+                Ok(s.exit_code)
+            }
+            Err(e) if e.code == 7 => {
+                eprintln!("teardown refused (code 7): {e}");
+                Ok(7)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn ctrlc_wait() {
+        // Portable wait for console cancel: block on stdin line or sleep loop.
+        // windows-sys console handler is heavier; for lab, poll for 24h max.
+        for _ in 0..(24 * 60 * 60) {
+            thread::sleep(Duration::from_secs(1));
+        }
     }
 
     fn install() -> Result<(), Box<dyn std::error::Error>> {

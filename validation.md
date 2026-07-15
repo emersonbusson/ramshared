@@ -1231,3 +1231,14 @@ C:\ramshared\bin\ramshared-winsvc.exe probe-cuda --config C:\ProgramData\RamShar
 **Verdict:** 🟡 PARTIAL — product CUDA probe + StorPort lab I/O proven; full product Online (CUDA backend+3 rounds+Verifier) still env-bound (guest no GPU; host no testsigning)
 **Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/*
 **Next action:** enable host testsigning OR GPU lab VM; wire broker; run Invoke-CudaStorageDrill -ApprovePhysicalHost 3 rounds; Verifier IOCTL refusals
+
+## 2026-07-15 — product Online CUDA + 3-round SHA-256 (PARTIAL remaining Verifier)
+
+**What:** Implemented `product_online.rs` (lease→CUDA→CREATE/REGISTER→I/O). Live host: ramshared RUNNING, broker on WSL :19876, console --storage-only reached Online backend=cuda LUN "RAMSHARE VRAMDISK" 64MiB; 3×4MiB SHA-256 all match.
+**Category:** windows / cuda / storport / ssdv3
+**Measured data:**
+- Online: cuda=RTX 2060 size=67108864
+- R1 match=true 232ms EFF6FD0B…; R2 true 157ms; R3 true 153ms; all_match=true letter=S
+**Verdict:** 🟡 PARTIAL — product I/O proven; Verifier/REFUSE matrix + graceful stop still open (not index DONE)
+**Artifacts:** evidence/product-cuda-3rounds.json; C:\ProgramData\RamShared\evidence\run-*.jsonl
+**Next action:** Invoke-WinDriveIoctlValidation -Verifier on guest; graceful stop flag wiring
