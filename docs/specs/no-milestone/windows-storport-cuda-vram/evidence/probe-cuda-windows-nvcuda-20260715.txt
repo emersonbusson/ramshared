@@ -1,0 +1,5 @@
+'\\wsl.localhost\Ubuntu-24.04\home\emdev\codespace\ramshared'
+CMD.EXE foi iniciado tendo o caminho acima como pasta atual.
+NÆo h  suporte para caminhos UNC. Padronizando para pasta do Windows.
+probe-cuda: device=0 name=NVIDIA GeForce RTX 2060 size=536870912 free_before=5360320512 free_after=5360320512 offsets=[0, 268435456, 536866816]
+probe-cuda: PASS

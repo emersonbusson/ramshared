@@ -1,0 +1,18 @@
+=== RamShared WinDrive preflight ===
+MODE=storage-only (no pagefile campaign)
+OS build: 26200.8655 (ProductName=Windows 10 Pro)
+[OK]  x64 OS
+[OK]  nvidia-smi: NVIDIA GeForce RTX 2060, 6144 MiB, 4427 MiB, 610.74
+[OK]  Found C:\Windows\System32\nvcuda.dll
+[WARN] Not elevated - product install/SCM needs admin
+[WARN] testsigning not Yes (signed package or lab policy required)
+[OK]  No RamShared disk currently enumerated
+[OK]  Product exe C:\ramshared\bin\ramshared-winsvc.exe SHA256=F3453587C0AF7D432B566AA6F42C0C4370445B16E8803D12C5E3477BAD71CDDC
+[OK]  Config C:\ProgramData\RamShared\winsvc.toml SHA256=E3388862FE3859092A5F31BDCA0D51F64DBDDD9375D1D1A5F1B91A7DA933011B
+[OK]  Config has no backend selector
+[OK]  Driver package candidate: C:\Windows\System32\drivers\ramshared.sys
+[OK]  Driver package candidate: C:\ramshared\package\ramshared.sys
+[OK]  Minidump directory absent
+PREFLIGHT_ELAPSED_SEC=0,4
+PREFLIGHT_STORAGE_ONLY=PASS
+Preflight finished with no hard failures.

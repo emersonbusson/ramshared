@@ -1213,3 +1213,21 @@ cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc   # typechecks; 
 **Verdict:** 🟡 still PARTIAL (StorPort LUN E2E env-bound) but ITEM-2 live CUDA proof closed on this host
 **Artifacts:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/probe-cuda-wsl-20260715.txt`
 **Next action:** MSVC Build Tools + win11-drill Verifier IOCTL + approved physical StorPort 3-round
+
+## 2026-07-15 — windows-storport-cuda-vram full campaign (PARTIAL close-out)
+
+**What:** MSVC build product winsvc; Windows nvcuda probe; WDK rebuild+sign; win11-drill load driver CREATE/REGISTER + 4MiB SHA-256 I/O (lab backend); host preflight -StorageOnly PASS.
+**Category:** windows / storport / cuda / ssdv3
+**How to measure:**
+```text
+C:\ramshared\bin\ramshared-winsvc.exe probe-cuda --config C:\ProgramData\RamShared\winsvc.toml
+# guest (elevated PSD): CREATE_DISK ok REGISTER_QUEUE ok; sha_match=true 4MiB
+```
+**Measured data:**
+- winsvc.exe SHA256=F3453587C0AF7D432B566AA6F42C0C4370445B16E8803D12C5E3477BAD71CDDC size=647168
+- probe-cuda Windows: free_before=free_after=5360320512 size=512MiB PASS
+- guest: ramshared RUNNING; CREATE/REGISTER ok; sha=053EDE97406A271DBF208248B2070CCF79B9517431D994A2E79D146FFA760AA1 match=true bytes=4194304
+- VM memory reduced to 2GiB static to start under host free~9.7GiB; VM left Off
+**Verdict:** 🟡 PARTIAL — product CUDA probe + StorPort lab I/O proven; full product Online (CUDA backend+3 rounds+Verifier) still env-bound (guest no GPU; host no testsigning)
+**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/*
+**Next action:** enable host testsigning OR GPU lab VM; wire broker; run Invoke-CudaStorageDrill -ApprovePhysicalHost 3 rounds; Verifier IOCTL refusals
