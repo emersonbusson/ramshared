@@ -100,8 +100,8 @@ mod windows_svc {
 
     fn run_service() -> Result<(), Box<dyn std::error::Error>> {
         use ramshared_winsvc::product_online::run_product_online;
-        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
 
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_handler = Arc::clone(&stop);
@@ -248,8 +248,8 @@ mod windows_svc {
 
     fn run_console(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> {
         use ramshared_winsvc::product_online::run_product_online;
-        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
 
         let bytes = std::fs::read(config_path)?;
         let cfg = WinDriveConfig::from_reader(&bytes)?;

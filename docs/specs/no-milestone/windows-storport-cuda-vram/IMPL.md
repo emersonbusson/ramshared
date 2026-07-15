@@ -99,11 +99,11 @@ Windows tenant `127.0.0.1:19876` (mirrored localhost).
 
 | Kind | Detail |
 | --- | --- |
-| **env-bound / open** | Driver Verifier on checkpointed VM (guest currently Off; not on daily host) |
-| **env-bound / open** | Multi-process `REFUSE_FOREIGN_OWNER` + re-entry/rundown on **new** sys (host PE DESTROY still succeeds on old binary) |
-| **closed** | Product Online CUDA path + 3-round checksum |
-| **closed** | Graceful stop + volume-local Gate A + LockedVolume hold |
-| **closed** | Guest single-process IOCTL refuse matrix PASS |
+| **env-bound / open** | Host: reboot needed to clear hung `ramshared-winsvc` (pid stuck in kernel after force-kill) before graceful re-proof |
+| **env-bound / open** | Driver Verifier + multi-process REFUSE_* on win11-drill |
+| **closed (code)** | Teardown: cancel COMMIT + FSCTL dismount (no PowerShell) + letter candidates S/R |
+| **closed (code)** | HostExhaustive uses fixed lab letters (never auto-D) |
+| **closed (live prior)** | Product Online CUDA + 3-round SHA; guest single-process IOCTL PASS |
 
 ## Rollback trigger
 
