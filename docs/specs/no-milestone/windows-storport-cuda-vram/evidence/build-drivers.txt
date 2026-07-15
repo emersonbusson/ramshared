@@ -1,0 +1,70 @@
+Transcri‡Æo iniciada, o arquivo de sa¡da ‚ C:\ramshared\src\artifacts\build-drivers.log
+CMD> cl /nologo /c /kernel /GS- /W3 /O2 /Zi /D_WIN64 /D_AMD64_ /DAMD64 /DDEPRECATE_DDK_FUNCTIONS=1 /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /DNTDDI_VERSION=0xA000010 /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared" /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\km" /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\km\crt" /Fo"C:\ramshared\src\drivers\windows\ramshared\x64\Release\driver.obj" "C:\ramshared\src\drivers\windows\ramshared\driver.c"
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.35
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+driver.c
+CMD> cl /nologo /c /kernel /GS- /W3 /O2 /Zi /D_WIN64 /D_AMD64_ /DAMD64 /DDEPRECATE_DDK_FUNCTIONS=1 /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /DNTDDI_VERSION=0xA000010 /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared" /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\km" /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\km\crt" /Fo"C:\ramshared\src\drivers\windows\ramshared\x64\Release\virtdisk.obj" "C:\ramshared\src\drivers\windows\ramshared\virtdisk.c"
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.35
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+virtdisk.c
+CMD> cl /nologo /c /kernel /GS- /W3 /O2 /Zi /D_WIN64 /D_AMD64_ /DAMD64 /DDEPRECATE_DDK_FUNCTIONS=1 /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /DNTDDI_VERSION=0xA000010 /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared" /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\km" /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\km\crt" /Fo"C:\ramshared\src\drivers\windows\ramshared\x64\Release\queue.obj" "C:\ramshared\src\drivers\windows\ramshared\queue.c"
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.35
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+queue.c
+CMD> cl /nologo /c /kernel /GS- /W3 /O2 /Zi /D_WIN64 /D_AMD64_ /DAMD64 /DDEPRECATE_DDK_FUNCTIONS=1 /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /DNTDDI_VERSION=0xA000010 /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared" /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\km" /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\km\crt" /Fo"C:\ramshared\src\drivers\windows\ramshared\x64\Release\control.obj" "C:\ramshared\src\drivers\windows\ramshared\control.c"
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.35
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+control.c
+CMD> link /nologo /driver /entry:GsDriverEntry /subsystem:NATIVE /nodefaultlib /incremental:no /debug /libpath:"C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\km\x64" ntoskrnl.lib hal.lib wmilib.lib BufferOverflowFastFailK.lib ntstrsafe.lib /out:"C:\ramshared\src\drivers\windows\ramshared\x64\Release\ramshared.sys" "C:\ramshared\src\drivers\windows\ramshared\x64\Release\driver.obj" "C:\ramshared\src\drivers\windows\ramshared\x64\Release\virtdisk.obj" "C:\ramshared\src\drivers\windows\ramshared\x64\Release\queue.obj" "C:\ramshared\src\drivers\windows\ramshared\x64\Release\control.obj" storport.lib wdmsec.lib
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.35
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+BUILT C:\ramshared\src\drivers\windows\ramshared\x64\Release\ramshared.sys
+
+
+FullName      : C:\ramshared\src\drivers\windows\ramshared\x64\Release\ramshared.sys
+Length        : 31232
+LastWriteTime : 15/07/2026 11:25:35
+
+
+
+
+CMD> cl /nologo /c /kernel /GS- /W3 /O2 /Zi /D_WIN64 /D_AMD64_ /DAMD64 /DDEPRECATE_DDK_FUNCTIONS=1 /D_WIN32_WINNT=0x0A00 /DWINVER=0x0A00 /DNTDDI_VERSION=0xA000010 /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared" /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\km" /I"C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\km\crt" /Fo"C:\ramshared\src\drivers\windows\tools\poolstress\x64\Release\poolstress.obj" "C:\ramshared\src\drivers\windows\tools\poolstress\poolstress.c"
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.35
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+poolstress.c
+CMD> link /nologo /driver /entry:GsDriverEntry /subsystem:NATIVE /nodefaultlib /incremental:no /debug /libpath:"C:\Program Files (x86)\Windows Kits\10\Lib\10.0.26100.0\km\x64" ntoskrnl.lib hal.lib wmilib.lib BufferOverflowFastFailK.lib ntstrsafe.lib /out:"C:\ramshared\src\drivers\windows\tools\poolstress\x64\Release\poolstress.sys" "C:\ramshared\src\drivers\windows\tools\poolstress\x64\Release\poolstress.obj" cng.lib
+**********************************************************************
+** Visual Studio 2022 Developer Command Prompt v17.14.35
+** Copyright (c) 2025 Microsoft Corporation
+**********************************************************************
+[vcvarsall.bat] Environment initialized for: 'x64'
+BUILT C:\ramshared\src\drivers\windows\tools\poolstress\x64\Release\poolstress.sys
+
+
+FullName      : C:\ramshared\src\drivers\windows\tools\poolstress\x64\Release\poolstress.sys
+Length        : 7680
+LastWriteTime : 15/07/2026 11:25:40
+
+
+
+
+BUILD_DRIVERS_OK
+Transcri‡Æo interrompida, o arquivo de sa¡da ‚ C:\ramshared\src\artifacts\build-drivers.log

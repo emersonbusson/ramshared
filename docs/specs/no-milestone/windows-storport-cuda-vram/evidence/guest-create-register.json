@@ -1,0 +1,10 @@
+﻿{
+    "ram_state":  "        STATE              : 4  RUNNING ",
+    "ctl":  "Exception calling \"Open\" with \"4\" argument(s): \"FileStream was asked to open a device that was not a file. For support for devices like \u0027com1:\u0027 or \u0027lpt1:\u0027, call CreateFile, then use the FileStream constructors that take an OS handle as an IntPtr.\"",
+    "events":  "[{\"TimeCreated\":\"\\/Date(1784125912828)\\/\",\"Id\":7045,\"Message\":\"A service was installed in the system.\\r\\n\\r\\nService Name:  ramshared\\r\\nService File Name:  C:\\\\ramshared\\\\package\\\\ramshared.sys\\r\\nService Type:  kernel mode driver\\r\\nService Start Type:  demand start\\r\\nService Account:  \"},{\"TimeCreated\":\"\\/Date(1784125912814)\\/\",\"Id\":7045,\"Message\":\"A service was installed in the system.\\r\\n\\r\\nService Name:  poolstress\\r\\nService File Name:  C:\\\\ramshared\\\\package\\\\poolstress.sys\\r\\nService Type:  kernel mode driver\\r\\nService Start Type:  demand start\\r\\nService Account:  \"},{\"TimeCreated\":\"\\/Date(1784125713125)\\/\",\"Id\":7045,\"Message\":\"A service was installed in the system.\\r\\n\\r\\nService Name:  ramshared\\r\\nService File Name:  C:\\\\ramshared\\\\package\\\\ramshared.sys\\r\\nService Type:  kernel mode driver\\r\\nService Start Type:  demand start\\r\\nService Account:  \"},{\"TimeCreated\":\"\\/Date(1784125713109)\\/\",\"Id\":7045,\"Message\":\"A service was installed in the system.\\r\\n\\r\\nService Name:  poolstress\\r\\nService File Name:  C:\\\\ramshared\\\\package\\\\poolstress.sys\\r\\nService Type:  kernel mode driver\\r\\nService Start Type:  demand start\\r\\nService Account:  \"}]",
+    "backend_running":  true,
+    "be_out":  "WinDriveBackend size=67108864 seconds=25\r\nCREATE_DISK ok\r\nREGISTER_QUEUE ok\r\n",
+    "be_err":  "",
+    "disks":  "[{\"Number\":0,\"FriendlyName\":\"Msft Virtual Disk\",\"Size\":85899345920,\"PartitionStyle\":\"GPT\"},{\"Number\":1,\"FriendlyName\":\"Msft Virtual Disk\",\"Size\":67108864,\"PartitionStyle\":\"MBR\"}]",
+    "disk":  "none"
+}
