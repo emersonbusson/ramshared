@@ -1,21 +1,27 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Preflight checks for windows-swap-driver IMPL (no driver load).
+  Preflight checks for windows-storport-cuda-vram storage-only product path.
 
 .DESCRIPTION
-  SPEC: docs/specs/no-milestone/windows-swap-driver/
-  Safe to run on host or VM. Does not install drivers or create pagefiles.
+  Read-only queries. Does not install drivers, create pagefiles, or thrash the host.
+  With -StorageOnly: requires no RamShared pagefile/disk, product binary/config hash
+  fields, test-signing/driver package state, CUDA probe prereqs, latest dump identity.
 
-.NOTES
-  Exit 0 = environment looks ready for ITEM-1/3 userspace work.
-  Exit 1 = blockers listed on stderr/stdout.
+.EXAMPLE
+  .\Get-WinDrivePreflight.ps1 -StorageOnly
 #>
 [CmdletBinding()]
-param()
+param(
+    [switch]$StorageOnly,
+    [string]$ProductExe = "C:\ramshared\bin\ramshared-winsvc.exe",
+    [string]$ConfigPath = "C:\ProgramData\RamShared\winsvc.toml",
+    [int]$TimeoutSec = 30
+)
 
 $ErrorActionPreference = 'Continue'
 $fail = 0
+$start = Get-Date
 
 function Ok([string]$msg) { Write-Host "[OK]  $msg" -ForegroundColor Green }
 function Warn([string]$msg) { Write-Host "[WARN] $msg" -ForegroundColor Yellow }
@@ -25,38 +31,35 @@ function Bad([string]$msg) {
 }
 
 Write-Host "=== RamShared WinDrive preflight ===" -ForegroundColor Cyan
+if ($StorageOnly) {
+    Write-Host "MODE=storage-only (no pagefile campaign)" -ForegroundColor Cyan
+}
 
 # OS
 try {
-    $v = [System.Environment]::OSVersion.Version
     $cv = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop)
     $build = $cv.CurrentBuildNumber
     $ubr = $cv.UBR
     Write-Host "OS build: $build.$ubr (ProductName=$($cv.ProductName))"
-    if ($build -like '26200*') {
-        Ok "Build series 26200.* (SPEC DT-24 allow-list for NtCreatePagingFile MVP)"
-    } else {
-        Warn "Build $build not in DT-24 allow-list 26200.* - pagefile activation degrades gracefully (SPEC DT-24)"
-    }
     if (-not [Environment]::Is64BitOperatingSystem) { Bad "x64 OS required" } else { Ok "x64 OS" }
 } catch {
     Bad "Could not read OS version: $_"
 }
 
-# NVIDIA
+# NVIDIA / nvcuda
 $nvsmi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
 if ($nvsmi) {
     try {
-        $gpu = & nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader 2>$null
+        $gpu = & nvidia-smi --query-gpu=name,memory.total,memory.free,driver_version --format=csv,noheader 2>$null
         Ok "nvidia-smi: $gpu"
     } catch {
         Warn "nvidia-smi present but query failed: $_"
     }
 } else {
-    Warn "nvidia-smi not in PATH (required for ITEM-1 CUDA on this machine; VM may not need GPU until ITEM-6)"
+    if ($StorageOnly) { Bad "nvidia-smi required for storage-only CUDA product" }
+    else { Warn "nvidia-smi not in PATH" }
 }
 
-# nvcuda.dll
 $dllCandidates = @(
     "$env:SystemRoot\System32\nvcuda.dll",
     "$env:SystemRoot\SysWOW64\nvcuda.dll"
@@ -70,30 +73,131 @@ foreach ($p in $dllCandidates) {
     }
 }
 if (-not $foundDll) {
-    Warn "nvcuda.dll not found under System32 - ITEM-1 Windows CUDA load will fail here"
+    if ($StorageOnly) { Bad "nvcuda.dll missing (product probe-cuda will fail)" }
+    else { Warn "nvcuda.dll not found" }
 }
 
-# Admin (informational)
+# Admin
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
-if ($isAdmin) { Ok "Running elevated (needed for service/driver later)" }
-else { Warn "Not elevated - fine for preflight; ITEM-5+ needs admin in VM" }
-
-# Hyper-V host capability (best-effort)
-try {
-    $hv = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -ErrorAction SilentlyContinue
-    if ($hv -and $hv.State -eq 'Enabled') { Ok "Hyper-V feature Enabled (good for disposable VMs)" }
-    else { Warn "Hyper-V not enabled or not queryable - required for RNF-6 VM drills" }
-} catch {
-    Warn "Could not query Hyper-V feature (normal inside guest VM)"
+if ($isAdmin) { Ok "Running elevated" }
+else {
+    if ($StorageOnly) { Warn "Not elevated - product install/SCM needs admin" }
+    else { Warn "Not elevated" }
 }
 
-Write-Host ""
-Write-Host "SPEC gates before host-real driver load:" -ForegroundColor Cyan
-Write-Host "  - ITEM-8 kernel-page drill PASS with residency (DT-21) in VM"
-Write-Host "  - DEGRADATION-MATRIX updated for B1/B2"
-Write-Host "  - ITEM-11 attestation policy (R9) decided"
-Write-Host "Docs: docs/specs/no-milestone/windows-swap-driver/PREFLIGHT.md"
+# Test-signing
+try {
+    $bcd = bcdedit /enum '{current}' 2>$null | Out-String
+    if ($bcd -match 'testsigning\s+Yes') { Ok "testsigning Yes (lab driver load)" }
+    else { Warn "testsigning not Yes (signed package or lab policy required)" }
+} catch {
+    Warn "bcdedit not queryable"
+}
+
+# Active pagefiles
+try {
+    $pf = @(Get-CimInstance Win32_PageFileUsage -EA Stop)
+    $rs = @($pf | Where-Object { $_.Name -match 'RamShared|VRAM' })
+    if ($rs.Count -gt 0) {
+        if ($StorageOnly) {
+            Bad "RamShared/VRAM pagefile active: $($rs.Name -join ', ') — PREFLIGHT_STORAGE_ONLY refuse"
+        } else {
+            Warn "pagefile on VRAM volume present"
+        }
+    } else {
+        Ok "No RamShared pagefile in Win32_PageFileUsage"
+    }
+} catch {
+    if ($StorageOnly) { Bad "pagefile WMI query failed (fail-closed): $_" }
+    else { Warn "pagefile WMI query failed: $_" }
+}
+
+# Existing RamShared disks
+try {
+    $disks = @(Get-Disk -EA SilentlyContinue | Where-Object {
+            $_.FriendlyName -match 'RAMSHARE|VRAMDISK|RamShared'
+        })
+    if ($disks.Count -gt 0) {
+        if ($StorageOnly) {
+            Warn "Existing RamShared disk(s): $($disks.Number -join ',') — clear before campaign"
+        } else {
+            Ok "RamShared disk present: N=$($disks.Number -join ',')"
+        }
+    } else {
+        Ok "No RamShared disk currently enumerated"
+    }
+} catch {
+    Warn "Get-Disk failed: $_"
+}
+
+# Product binary / config
+if ($StorageOnly) {
+    if (Test-Path -LiteralPath $ProductExe) {
+        $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $ProductExe).Hash
+        Ok "Product exe $ProductExe SHA256=$h"
+        if ($ProductExe -match 'WinDriveBackend|RamSharedWinSvc\.cs|Start-RamSharedLab') {
+            Bad "Product path looks like lab backend (false RAM green risk)"
+        }
+    } else {
+        Bad "Product exe missing: $ProductExe"
+    }
+    if (Test-Path -LiteralPath $ConfigPath) {
+        $ch = (Get-FileHash -Algorithm SHA256 -LiteralPath $ConfigPath).Hash
+        Ok "Config $ConfigPath SHA256=$ch"
+        $raw = Get-Content -LiteralPath $ConfigPath -Raw
+        if ($raw -match 'backend\s*=') {
+            Bad "Config contains backend= (product forbid)"
+        } else {
+            Ok "Config has no backend selector"
+        }
+    } else {
+        Warn "Config missing: $ConfigPath (install will copy example)"
+    }
+}
+
+# Driver package presence (optional)
+$sys = @(
+    "C:\Windows\System32\drivers\ramshared.sys",
+    "C:\ramshared\package\ramshared.sys"
+)
+$drv = $false
+foreach ($s in $sys) {
+    if (Test-Path $s) {
+        Ok "Driver package candidate: $s"
+        $drv = $true
+    }
+}
+if (-not $drv) {
+    Warn "ramshared.sys not found in default paths (build/sign/deploy first)"
+}
+
+# Latest dump identity (no contents)
+$dumpDir = "C:\Windows\Minidump"
+if (Test-Path $dumpDir) {
+    $latest = Get-ChildItem $dumpDir -Filter *.dmp -EA SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($latest) {
+        Ok "Latest dump: $($latest.Name) @ $($latest.LastWriteTimeUtc.ToString('u')) size=$($latest.Length)"
+    } else {
+        Ok "No minidumps present"
+    }
+} else {
+    Ok "Minidump directory absent"
+}
+
+$elapsed = ((Get-Date) - $start).TotalSeconds
+if ($elapsed -gt $TimeoutSec) {
+    Warn "Preflight exceeded TimeoutSec=$TimeoutSec (elapsed=$([int]$elapsed)s)"
+}
+Write-Host ("PREFLIGHT_ELAPSED_SEC={0:n1}" -f $elapsed)
+
+if ($StorageOnly) {
+    if ($fail -eq 0) {
+        Write-Host "PREFLIGHT_STORAGE_ONLY=PASS" -ForegroundColor Green
+    } else {
+        Write-Host "PREFLIGHT_STORAGE_ONLY=FAIL" -ForegroundColor Red
+    }
+}
 
 if ($fail -gt 0) {
     Write-Host "Preflight finished with $fail failure(s)." -ForegroundColor Red

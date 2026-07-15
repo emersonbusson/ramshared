@@ -4,10 +4,12 @@
 
 ## Status
 
-**partial** · cover ✓ · E2E env-bound · BINARY_MATCH N/A (Windows-only; no `ramsharedd`)
+**partial** · cover ✓ · E2E partial (CUDA probe live) · BINARY_MATCH N/A (Windows-only; no `ramsharedd`)
 
-Linux unit/cover gates for pure product policy are green. Live Windows WDK/GPU/SCM/Verifier
-proof remains **environment-bound** and does **not** close DONE.
+Linux unit/cover gates green. **ITEM-2 live CUDA probe** proven on host GPU (WSL libcuda /
+RTX 2060): allocate 512 MiB, three-offset patterns, free restore within 64 MiB.
+Full Windows StorPort product path (WDK/SCM/Verifier/physical nvcuda product bind) remains
+**environment-bound** and does **not** close DONE.
 
 ## Files
 
@@ -19,9 +21,10 @@ proof remains **environment-bound** and does **not** close DONE.
 | `crates/ramshared-winsvc/src/driver_link.rs` | ITEM-3 / DT-4 | `QueueAccess` + `InMemoryQueue` + owned SQE/WRITE snapshots |
 | `crates/ramshared-winsvc/src/broker_tenant.rs` | RF-3 / DT-8–9 | Granted-bytes equality; release flush; release 2× once |
 | `crates/ramshared-winsvc/src/service.rs` | ITEM-5 / DT-8 | Gate A → lock → Gate B → flush/dismount → destroy |
-| `crates/ramshared-winsvc/src/windows_driver.rs` | ITEM-3 | Windows control-link surface (lab-linked open) |
-| `crates/ramshared-winsvc/src/windows_host.rs` | ITEM-5 | Host helpers (WMI/lock stubs; pure identity tests on Windows) |
-| `crates/ramshared-winsvc/src/main.rs` | ITEM-5 / DT-1 | Product CLI; lab PS1 removed from product binary |
+| `crates/ramshared-winsvc/src/windows_driver.rs` | ITEM-3 | VirtualAlloc mapped queue + OVERLAPPED IOCTL `WindowsDriverLink` |
+| `crates/ramshared-winsvc/src/windows_host.rs` | ITEM-5 | Elevation, reparse-safe config open, pagefile CIM, volume lock, CNG SHA-256 |
+| `crates/ramshared-winsvc/src/cuda_probe.rs` | ITEM-2 / DT-3 | Shared probe-cuda path (libcuda/nvcuda) |
+| `crates/ramshared-winsvc/src/main.rs` | ITEM-5 / DT-1 | Product CLI; probe-cuda wired; lab PS1 removed |
 | `crates/ramshared-winsvc/winsvc.example.toml` | ITEM-1 | Storage-only example config |
 | `crates/ramshared-cuda/src/probe.rs` | ITEM-2 / DT-3 | Three-offset probe planning + patterns |
 | `crates/ramshared-cuda/src/driver.rs` | ITEM-2 | `Device::ordinal()` retained |
@@ -84,7 +87,7 @@ N/A cover (SPEC): `windows_driver.rs`, `windows_host.rs` (E2E Windows), driver C
 | `granted_bytes_must_equal_requested`, `release_flushes_before_session_close`, `release_twice_writes_once`, `lease_denied` | yes |
 | `no_fallback_after_cuda_failure`, `failure_after_register_unwinds_reverse`, `deterministic_failure_is_not_retried`, `stop_twice_has_one_effect`, `ambiguous_crash_state_is_not_replayed`, `cuda_watchdog_does_not_destroy_stuck_context` | yes |
 | `pagefile_active_refuses_before_mutation`, `pagefile_query_error_refuses_before_mutation`, `gate_b_failure_resumes_online_before_destroy`, `pagefile_absent_tears_down_cleanly`, `stop_refusal_preserves_online_state` | yes |
-| `probe_cuda_allocates_roundtrips_and_restores` | env-bound (needs `nvcuda.dll` + GPU on Windows) |
+| `probe_cuda_allocates_roundtrips_and_restores` | **live PASS** on WSL GPU (libcuda); Windows nvcuda product bind still lab |
 | IOCTL / Verifier / VPD live verdicts | env-bound (WDK lab VM) |
 | `storage_only_cuda_three_rounds_sha256` + drill refusals | env-bound (physical Windows GPU + approved drill) |
 
@@ -92,24 +95,30 @@ N/A cover (SPEC): `windows_driver.rs`, `windows_host.rs` (E2E Windows), driver C
 
 | Gate | Status |
 | --- | --- |
-| Linux pure path | unit/cover only (this host) |
-| `cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc` | not run (MSVC toolchain env-bound) |
+| Linux pure path | unit/cover green |
+| Live CUDA probe (DT-3) | **PASS** — see evidence log (512 MiB, 3 offsets, free restore 0 delta) |
+| `cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc` | **compiles** (lib+bin typecheck); **link fails** — no `link.exe` (MSVC Build Tools env-bound) |
 | WDK Release / InfVerif / SDV / Verifier | env-bound |
-| Checkpointed VM IOCTL drill | scaffold only → PARTIAL |
-| Physical CUDA probe + 3-round SHA-256 | env-bound; requires `-ApprovePhysicalHost` |
-| BINARY_MATCH `ramsharedd` | **N/A** (Windows-only slice; SPEC forbids claiming Linux cascade BINARY_MATCH) |
+| Checkpointed VM IOCTL drill | scaffold + full `WindowsDriverLink` code; live verdicts env-bound |
+| Physical Windows StorPort 3-round SHA-256 | env-bound; requires `-ApprovePhysicalHost` |
+| BINARY_MATCH `ramsharedd` | **N/A** (Windows-only slice) |
 
-**before → action → after:** not recorded live on this Linux agent host (no Windows lab session in this Step 3 turn). Drill/scripts ready under `scripts/windows/`.
+**before → action → after (ITEM-2 probe):**
+
+1. **Before:** free VRAM ≈ 5351931904 B (RTX 2060)  
+2. **Action:** `cargo test -p ramshared-winsvc probe_cuda_allocates_roundtrips_and_restores -- --ignored` and `./target/release/ramshared-winsvc probe-cuda --config /tmp/.../winsvc.toml`  
+3. **After:** free restored 5351931904 B; zero pattern mismatches; evidence: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/probe-cuda-wsl-20260715.log`
 
 ## Gaps
 
 | Kind | Detail |
 | --- | --- |
-| **env-bound** | Physical Windows GPU, WDK build, Driver Verifier, SCM install, broker release log correlation |
-| **env-bound** | Full `WindowsDriverLink` VirtualAlloc/IOCTL mapping (safe surface + fail-closed open) |
-| **env-bound** | Full `WindowsHostState` WMI/FSCTL/CNG linkage |
-| **closed** | Pure policy: config, evidence, runtime unwind, Gate A/B sequencing, queue snapshots, broker release once |
-| **open** | Pagefile product path remains intentionally out of this slice; windows-swap-driver pagefile/soak/attestation still open |
+| **env-bound** | MSVC `link.exe` / WDK build / Driver Verifier / SCM / broker release log |
+| **env-bound** | Physical Windows StorPort CREATE/REGISTER + 3-round NTFS SHA-256 |
+| **closed** | Pure policy + Gate A/B + queue snapshots + broker release once |
+| **closed** | `WindowsDriverLink` VirtualAlloc/IOCTL + `WindowsHostState` elevation/lock/SHA-256 (source; link env-bound) |
+| **closed** | Live CUDA three-offset probe on host GPU (WSL libcuda) |
+| **open** | Pagefile product path remains out of this slice |
 
 ## Rollback trigger
 

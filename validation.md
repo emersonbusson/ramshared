@@ -1194,3 +1194,22 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ram
 **Verdict:** 🟡 partial — pure policy green; live StorPort+CUDA proof deferred to supervised Windows lab
 **Next action:** MSVC cross-build + win11-drill Verifier IOCTL drill + approved physical probe/3-round SHA-256
 **Artifacts:** `tmp/windows-storport-cuda-vram-cov.json`, `docs/specs/no-milestone/windows-storport-cuda-vram/IMPL.md`
+
+## 2026-07-15 — windows-storport-cuda-vram continue: Windows adapters + live CUDA probe
+
+**What:** Implement full `WindowsDriverLink` (VirtualAlloc + OVERLAPPED IOCTL) and `WindowsHostState` (elevation, reparse config, pagefile CIM, volume lock, CNG SHA-256); shared `cuda_probe` module; preflight `-StorageOnly`; fix windows-sys 0.61 CUDA loader (`FreeLibrary`/`GetProcAddress`); live DT-3 probe on RTX 2060 via WSL libcuda.
+**Category:** windows / cuda / ssdv3
+**How to measure:**
+```bash
+cargo test -p ramshared-winsvc --lib
+cargo test -p ramshared-winsvc probe_cuda_allocates_roundtrips_and_restores -- --ignored --nocapture
+./target/release/ramshared-winsvc probe-cuda --config /tmp/ramshared-probe/winsvc.toml
+cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc   # typechecks; link needs MSVC
+```
+**Measured data:**
+- probe-cuda PASS: ordinal=0 name=NVIDIA GeForce RTX 2060 size=536870912 free_before=5351931904 free_after=5351931904
+- cover gate still PASS (business files ≥80%)
+- MSVC: rustc compiles; link.exe absent (env-bound)
+**Verdict:** 🟡 still PARTIAL (StorPort LUN E2E env-bound) but ITEM-2 live CUDA proof closed on this host
+**Artifacts:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/probe-cuda-wsl-20260715.log`
+**Next action:** MSVC Build Tools + win11-drill Verifier IOCTL + approved physical StorPort 3-round
