@@ -1,0 +1,19 @@
+{
+  "PASS_VALID_QUEUE": 1,
+  "REFUSE_FOREIGN_OWNER": 0,
+  "REFUSE_RESERVED_REGISTER": 1,
+  "REFUSE_BAD_RING": 1,
+  "REFUSE_RING_INDEX_JUMP": 1,
+  "REFUSE_RESERVED_CQE": 0,
+  "REFUSE_UNKNOWN_IOCTL": 1,
+  "REFUSE_RESERVED_DISK_PARAMS": 1,
+  "COMPLETION_REENTRY_NO_SLOT_REUSE": 0,
+  "RUNDOWN_UNMAP_AFTER_COPY": 0,
+  "VPD_SERIAL_MATCH": 1,
+  "NO_NEW_DUMP": 1,
+  "DRIVER": "ramshared.sys",
+  "VERIFIER": false,
+  "NOTE": "Guest win11-drill 2026-07-15T13:24:14; multi-process injectors open; source /tmp/guest-ioctl.log",
+  "STATUS": "PASS",
+  "SOURCE": "guest-ioctl.log reconstructed"
+}

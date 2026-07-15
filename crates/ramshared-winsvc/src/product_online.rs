@@ -279,7 +279,7 @@ pub fn run_product_online(
     let mut wipe = BackendWipe {
         backend: &mut backend,
     };
-    let mut gates = HostGates;
+    let mut gates = HostGates::new(cfg.volume_letter);
     let mut phases = Vec::new();
     match teardown_storage_only(cfg, &mut svc, &mut disk_ctl, &mut wipe, &mut gates, &mut phases) {
         Ok(()) => {
@@ -399,33 +399,72 @@ impl<M: ramshared_vram::VramMemory> WipeVram for BackendWipe<'_, M> {
     }
 }
 
-struct HostGates;
+struct HostGates {
+    locked: Option<crate::windows_host::LockedVolume>,
+    volume_letter: char,
+}
+
+impl HostGates {
+    fn new(volume_letter: char) -> Self {
+        Self {
+            locked: None,
+            volume_letter,
+        }
+    }
+}
 
 impl PagefileGates for HostGates {
     fn active_pagefiles(&self) -> Result<Vec<String>, String> {
+        // Storage-only DT-8: refuse only pagefiles on the product volume letter,
+        // not the system C: pagefile (which is expected on a normal host).
+        let letter = self
+            .locked
+            .as_ref()
+            .map(|v| v.letter)
+            .unwrap_or(self.volume_letter);
+        let prefix = format!("{}:", letter.to_ascii_uppercase());
         WindowsHostState::active_pagefiles()
-            .map(|v| v.into_iter().map(|p| p.name).collect())
+            .map(|v| {
+                v.into_iter()
+                    .map(|p| p.name)
+                    .filter(|n| n.to_ascii_uppercase().starts_with(&prefix))
+                    .collect()
+            })
             .map_err(|e| e.to_string())
     }
     fn lock_volume(&mut self, letter: char) -> Result<(), String> {
-        // Hold lock only for duration of teardown steps via stack local in a
-        // fuller design; here we lock then unlock after flush sequence via Drop.
-        // Gate B uses second query while locked — approximate with lock+query+flush.
-        let vol = WindowsHostState::lock_volume(letter).map_err(|e| e.to_string())?;
-        // Keep locked by leaking into thread-local for unlock path — simplified:
-        // store letter only; unlock best-effort after.
-        std::mem::forget(vol);
-        Ok(())
+        self.volume_letter = letter;
+        if self.locked.is_some() {
+            return Ok(());
+        }
+        // Gate A runs before lock: only volume-local pagefiles matter.
+        // If the volume letter has no filesystem yet, lock may fail — map to
+        // unlock path that still allows destructive teardown of unmounted LUN.
+        match WindowsHostState::lock_volume(letter) {
+            Ok(vol) => {
+                self.locked = Some(vol);
+                Ok(())
+            }
+            Err(e) => {
+                // Unmounted LUN / missing letter: Gate B lock optional if Gate A clear.
+                eprintln!("volume lock soft-fail (unmounted LUN?): {e}");
+                Ok(())
+            }
+        }
     }
     fn unlock_volume(&mut self) -> Result<(), String> {
-        // LockedVolume was forgotten; FSCTL_UNLOCK via re-open best-effort.
+        // Drop LockedVolume → FSCTL_UNLOCK + CloseHandle (DT-8).
+        self.locked = None;
         Ok(())
     }
     fn flush_and_dismount(&mut self) -> Result<(), String> {
+        if let Some(ref vol) = self.locked {
+            WindowsHostState::flush_and_dismount(vol).map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
     fn volume_locked(&self) -> bool {
-        true
+        self.locked.is_some()
     }
 }
 

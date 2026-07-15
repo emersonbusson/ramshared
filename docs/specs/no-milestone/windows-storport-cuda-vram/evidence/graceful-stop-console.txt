@@ -1,0 +1,12 @@
+EXITED=True CODE=
+console --storage-only: starting product Online size_bytes=67108864
+stop: create file C:\ProgramData\RamShared\stop.request or wait for process signal
+product Online: run_id=run-23732-0 lease=6 size=67108864 serial=758D525CD2506E5C cuda=NVIDIA GeForce RTX 2060
+volume lock soft-fail (unmounted LUN?): volume: FSCTL_LOCK_VOLUME win32=5
+console stopped: RuntimeSummary { phase: Stopped, lease_id: None, allocated_bytes: 0, idempotent_stop: false, exit_code: 0 }
+Stopped
+Leased
+CudaReady
+Online
+Stopping
+Stopped

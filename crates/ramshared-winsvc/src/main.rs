@@ -99,11 +99,18 @@ mod windows_svc {
     }
 
     fn run_service() -> Result<(), Box<dyn std::error::Error>> {
+        use ramshared_winsvc::product_online::run_product_online;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_for_handler = Arc::clone(&stop);
         let (shutdown_tx, shutdown_rx) = mpsc::channel();
 
         let status_handle =
             service_control_handler::register(SERVICE_NAME, move |control| match control {
                 ServiceControl::Stop | ServiceControl::Shutdown => {
+                    stop_for_handler.store(true, Ordering::SeqCst);
                     let _ = shutdown_tx.send(());
                     ServiceControlHandlerResult::NoError
                 }
@@ -133,22 +140,9 @@ mod windows_svc {
             });
             e
         })?;
+        cfg.validate()?;
 
-        // Product runtime start (storage-only). Full Windows product wiring is
-        // environment-bound; fail closed if CUDA/driver path is unavailable.
-        if let Err(e) = start_product_runtime(&cfg) {
-            status_handle.set_service_status(ServiceStatus {
-                service_type: ServiceType::OWN_PROCESS,
-                current_state: ServiceState::Stopped,
-                controls_accepted: ServiceControlAccept::empty(),
-                exit_code: ServiceExitCode::ServiceSpecific(1),
-                checkpoint: 0,
-                wait_hint: Duration::default(),
-                process_id: None,
-            })?;
-            return Err(e);
-        }
-
+        // Accept STOP while Online so the shared AtomicBool is honoured.
         status_handle.set_service_status(ServiceStatus {
             service_type: ServiceType::OWN_PROCESS,
             current_state: ServiceState::Running,
@@ -159,21 +153,15 @@ mod windows_svc {
             process_id: None,
         })?;
 
-        let _ = shutdown_rx.recv();
+        // Blocks until stop is set (SCM Stop) then runs Gate A/B teardown inside.
+        let result = run_product_online(&cfg, RunMode::Scm, Arc::clone(&stop));
 
-        status_handle.set_service_status(ServiceStatus {
-            service_type: ServiceType::OWN_PROCESS,
-            current_state: ServiceState::StopPending,
-            controls_accepted: ServiceControlAccept::empty(),
-            exit_code: ServiceExitCode::Win32(0),
-            checkpoint: 1,
-            wait_hint: Duration::from_secs(30),
-            process_id: None,
-        })?;
+        // Drain any leftover stop signal.
+        let _ = shutdown_rx.try_recv();
 
-        // DT-8 code 7: pagefile refusal returns to Running (SPEC main.rs).
-        match stop_product_runtime(&cfg) {
-            Ok(()) => {
+        match result {
+            Ok(summary) => {
+                eprintln!("product stopped: {summary:?}");
                 status_handle.set_service_status(ServiceStatus {
                     service_type: ServiceType::OWN_PROCESS,
                     current_state: ServiceState::Stopped,
@@ -183,9 +171,11 @@ mod windows_svc {
                     wait_hint: Duration::default(),
                     process_id: None,
                 })?;
+                Ok(())
             }
-            Err(code) if code == 7 => {
-                // Refuse stop: remain Running, checkpoint 0, STOP still accepted.
+            Err(e) if e.code == 7 => {
+                // DT-8: pagefile refusal — stay Running, STOP still accepted.
+                eprintln!("teardown refused code 7: {e}");
                 status_handle.set_service_status(ServiceStatus {
                     service_type: ServiceType::OWN_PROCESS,
                     current_state: ServiceState::Running,
@@ -195,7 +185,7 @@ mod windows_svc {
                     wait_hint: Duration::default(),
                     process_id: None,
                 })?;
-                // Block until process is terminated by operator after safety clear.
+                // Wait for another stop after operator clears pagefile, then exit.
                 let _ = shutdown_rx.recv();
                 status_handle.set_service_status(ServiceStatus {
                     service_type: ServiceType::OWN_PROCESS,
@@ -206,50 +196,26 @@ mod windows_svc {
                     wait_hint: Duration::default(),
                     process_id: None,
                 })?;
+                Ok(())
             }
-            Err(code) => {
+            Err(e) => {
                 status_handle.set_service_status(ServiceStatus {
                     service_type: ServiceType::OWN_PROCESS,
                     current_state: ServiceState::Stopped,
                     controls_accepted: ServiceControlAccept::empty(),
-                    exit_code: ServiceExitCode::ServiceSpecific(code as u32),
+                    exit_code: ServiceExitCode::ServiceSpecific(e.code as u32),
                     checkpoint: 0,
                     wait_hint: Duration::default(),
                     process_id: None,
                 })?;
+                Err(e.into())
             }
         }
-
-        Ok(())
     }
 
     fn load_scm_config() -> Result<WinDriveConfig, Box<dyn std::error::Error>> {
         let bytes = std::fs::read(SCM_CONFIG)?;
         Ok(WinDriveConfig::from_reader(&bytes)?)
-    }
-
-    fn start_product_runtime(cfg: &WinDriveConfig) -> Result<(), Box<dyn std::error::Error>> {
-        use ramshared_winsvc::product_online::run_product_online;
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-
-        cfg.validate()?;
-        if !ramshared_winsvc::windows_host::WindowsHostState::is_elevated() {
-            eprintln!("warning: not elevated — control device may refuse open");
-        }
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop2 = Arc::clone(&stop);
-        // Ctrl+C / SCM stop will set this via channel in run_service; console uses ctrl_c.
-        let summary = run_product_online(cfg, RunMode::Scm, stop2)?;
-        eprintln!("product stopped: {:?}", summary);
-        let _ = stop;
-        Ok(())
-    }
-
-    fn stop_product_runtime(_cfg: &WinDriveConfig) -> Result<(), i32> {
-        // Stop is coordinated via service control handler + shared AtomicBool in a
-        // fuller integration; currently run_product_online owns the stop loop.
-        Ok(())
     }
 
     fn run_probe_cuda(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -284,7 +250,6 @@ mod windows_svc {
         use ramshared_winsvc::product_online::run_product_online;
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
-        use std::thread;
 
         let bytes = std::fs::read(config_path)?;
         let cfg = WinDriveConfig::from_reader(&bytes)?;
@@ -293,11 +258,23 @@ mod windows_svc {
             "console --storage-only: starting product Online size_bytes={}",
             cfg.size_bytes
         );
+        eprintln!(
+            "stop: create file {} or wait for process signal",
+            stop_request_path().display()
+        );
         let stop = Arc::new(AtomicBool::new(false));
         let stop_c = Arc::clone(&stop);
+        // Lab stop path: poll stop.request file (no force-kill required).
         thread::spawn(move || {
-            let _ = ctrlc_wait();
-            stop_c.store(true, Ordering::SeqCst);
+            let path = stop_request_path();
+            loop {
+                if path.exists() {
+                    let _ = std::fs::remove_file(&path);
+                    stop_c.store(true, Ordering::SeqCst);
+                    break;
+                }
+                thread::sleep(Duration::from_millis(200));
+            }
         });
         match run_product_online(&cfg, RunMode::Console, stop) {
             Ok(s) => {
@@ -312,12 +289,8 @@ mod windows_svc {
         }
     }
 
-    fn ctrlc_wait() {
-        // Portable wait for console cancel: block on stdin line or sleep loop.
-        // windows-sys console handler is heavier; for lab, poll for 24h max.
-        for _ in 0..(24 * 60 * 60) {
-            thread::sleep(Duration::from_secs(1));
-        }
+    fn stop_request_path() -> std::path::PathBuf {
+        std::path::PathBuf::from(r"C:\ProgramData\RamShared\stop.request")
     }
 
     fn install() -> Result<(), Box<dyn std::error::Error>> {
