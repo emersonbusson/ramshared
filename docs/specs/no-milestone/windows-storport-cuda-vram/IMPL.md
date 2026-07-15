@@ -107,7 +107,7 @@ N/A cover (SPEC): `windows_driver.rs`, `windows_host.rs` (E2E Windows), driver C
 
 1. **Before:** free VRAM ≈ 5351931904 B (RTX 2060)  
 2. **Action:** `cargo test -p ramshared-winsvc probe_cuda_allocates_roundtrips_and_restores -- --ignored` and `./target/release/ramshared-winsvc probe-cuda --config /tmp/.../winsvc.toml`  
-3. **After:** free restored 5351931904 B; zero pattern mismatches; evidence: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/probe-cuda-wsl-20260715.log`
+3. **After:** free restored 5351931904 B; zero pattern mismatches; evidence: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/probe-cuda-wsl-20260715.txt`
 
 ## Gaps
 

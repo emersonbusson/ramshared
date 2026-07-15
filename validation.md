@@ -1211,5 +1211,5 @@ cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc   # typechecks; 
 - cover gate still PASS (business files ≥80%)
 - MSVC: rustc compiles; link.exe absent (env-bound)
 **Verdict:** 🟡 still PARTIAL (StorPort LUN E2E env-bound) but ITEM-2 live CUDA proof closed on this host
-**Artifacts:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/probe-cuda-wsl-20260715.log`
+**Artifacts:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/probe-cuda-wsl-20260715.txt`
 **Next action:** MSVC Build Tools + win11-drill Verifier IOCTL + approved physical StorPort 3-round
