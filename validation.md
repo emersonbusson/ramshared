@@ -1242,3 +1242,16 @@ C:\ramshared\bin\ramshared-winsvc.exe probe-cuda --config C:\ProgramData\RamShar
 **Verdict:** 🟡 PARTIAL — product I/O proven; Verifier/REFUSE matrix + graceful stop still open (not index DONE)
 **Artifacts:** evidence/product-cuda-3rounds.json; C:\ProgramData\RamShared\evidence\run-*.jsonl
 **Next action:** Invoke-WinDriveIoctlValidation -Verifier on guest; graceful stop flag wiring
+
+## 2026-07-15 — graceful stop + guest IOCTL refuse PASS (PARTIAL: Verifier open)
+
+**What:** Wired SCM/console stop via `AtomicBool` + `C:\ProgramData\RamShared\stop.request`; Gate A filters pagefiles to product volume letter; Gate B holds `LockedVolume` (soft-fail if unmounted). Live host product Online RTX 2060 64MiB then graceful stop exit 0. Guest win11-drill `Invoke-WinDriveIoctlValidation` STATUS=PASS for single-process REFUSE_* after signed miniport reload.
+**Category:** windows / storport / cuda / ssdv3
+**Measured data:**
+- Graceful phases: Stopped→Leased→CudaReady→Online→Stopping→Stopped; exit_code=0
+- Gate A: system C:\pagefile no longer refuses teardown; volume lock soft-fail win32=5 when LUN unmounted
+- Guest verdict: PASS_VALID_QUEUE=1, REFUSE_UNKNOWN/RESERVED_DISK/REGISTER/BAD_RING/RING_INDEX_JUMP=1, VPD=1, NO_NEW_DUMP=1; FOREIGN_OWNER/REENTRY/RUNDOWN/RESERVED_CQE=0
+- Host old sys: reserved/owner refuse still 0 (testsigning No — cannot reload new package)
+**Verdict:** 🟡 PARTIAL — product Online + 3-round + graceful stop + guest single-process REFUSE closed; Verifier + multi-process injectors env-bound
+**Artifacts:** evidence/graceful-stop-*.txt|jsonl; evidence/ioctl-guest-verdict-pass.json; evidence/ioctl-guest-console.txt
+**Next action:** start win11-drill; enable Verifier; reload new sys on guest; foreign-owner PE + concurrent re-entry/rundown injectors
