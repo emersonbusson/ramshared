@@ -151,7 +151,7 @@ impl Cuda {
             .to_string_lossy()
             .into_owned();
 
-        Ok(Device { raw, name })
+        Ok(Device { raw, name, ordinal })
     }
 
     /// Creates a CUDA context on the specified device (becomes current on the calling thread).
@@ -169,11 +169,17 @@ impl Cuda {
 pub struct Device {
     raw: CuDevice,
     name: String,
+    ordinal: i32,
 }
 
 impl Device {
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Device ordinal passed to [`Cuda::device`].
+    pub fn ordinal(&self) -> i32 {
+        self.ordinal
     }
 }
 

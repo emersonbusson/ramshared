@@ -1,15 +1,14 @@
-//! ramshared-winsvc — Windows SCM entry for StorPort VRAM disk (SPEC ITEM-3/6/7).
+//! ramshared-winsvc — Windows product entry for StorPort CUDA VRAM disk.
 //!
-//! On non-Windows builds this is a stub so `cargo test --workspace` stays green.
-//!
-//! Lab mode (win11-drill / no CUDA): service start/stop orchestrates
-//! `Start-RamSharedLab.ps1` / `Stop-RamSharedLab.ps1` (DT-9 ordered kill).
-//! Product CUDA provision remains in the library (`provision_after_lease`).
+//! SPEC DT-1: `probe-cuda`, `console --storage-only`, SCM default, `install|uninstall`.
+//! Lab Start/Stop PS1 paths are not product entrypoints (see Install-RamSharedLabService.ps1).
+
+use ramshared_winsvc::WinDriveConfig;
+use ramshared_winsvc::runtime::{ProductCommand, RuntimeErrorClass, parse_product_cli};
 
 #[cfg(windows)]
 mod windows_svc {
     use std::ffi::OsString;
-    use std::process::Command;
     use std::sync::mpsc;
     use std::time::Duration;
 
@@ -22,19 +21,25 @@ mod windows_svc {
     use windows_service::service_dispatcher;
     use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 
+    use ramshared_winsvc::config::WinDriveConfig;
+    use ramshared_winsvc::runtime::{ProductCommand, RunMode, RuntimeState, parse_product_cli};
+
     pub const SERVICE_NAME: &str = "RamSharedWinSvc";
-    pub const SERVICE_DISPLAY: &str = "RamShared VRAM Disk Service";
-    /// Default lab scripts (deployed by install harness).
-    const START_PS1: &str = r"C:\ramshared\bin\Start-RamSharedLab.ps1";
-    const STOP_PS1: &str = r"C:\ramshared\bin\Stop-RamSharedLab.ps1";
+    pub const SERVICE_DISPLAY: &str = "RamShared CUDA VRAM Disk Service";
+    pub const SCM_CONFIG: &str = r"C:\ProgramData\RamShared\winsvc.toml";
 
     define_windows_service!(ffi_service_main, service_main);
 
     pub fn entry(args: Vec<String>) -> i32 {
-        match args.get(1).map(String::as_str) {
-            Some("install") => match install() {
+        let cmd_args: Vec<String> = if args.len() > 1 {
+            args[1..].to_vec()
+        } else {
+            vec![]
+        };
+        match parse_product_cli(&cmd_args) {
+            Ok(ProductCommand::Install) => match install() {
                 Ok(()) => {
-                    eprintln!("installed service {SERVICE_NAME} (auto-start)");
+                    eprintln!("installed service {SERVICE_NAME}");
                     0
                 }
                 Err(e) => {
@@ -42,7 +47,7 @@ mod windows_svc {
                     1
                 }
             },
-            Some("uninstall") => match uninstall() {
+            Ok(ProductCommand::Uninstall) => match uninstall() {
                 Ok(()) => {
                     eprintln!("uninstalled {SERVICE_NAME}");
                     0
@@ -52,34 +57,34 @@ mod windows_svc {
                     1
                 }
             },
-            Some("console") | Some("run") => {
-                // Interactive lab path (not under SCM).
-                if let Err(e) = run_start_scripts() {
-                    eprintln!("console start failed: {e}");
-                    return 1;
-                }
-                eprintln!("console: backend started; Ctrl+C then Stop-RamSharedLab for DT-9 stop");
-                // Block until killed — operator uses sc stop / Stop-RamSharedLab.
-                loop {
-                    std::thread::sleep(Duration::from_secs(60));
-                }
-            }
-            Some("stop-console") => match run_stop_scripts() {
-                Ok(code) => code,
+            Ok(ProductCommand::ProbeCuda { config }) => match run_probe_cuda(&config) {
+                Ok(()) => 0,
                 Err(e) => {
-                    eprintln!("stop-console failed: {e}");
+                    eprintln!("probe-cuda failed: {e}");
                     1
                 }
             },
-            _ => {
-                // Default: SCM dispatcher.
+            Ok(ProductCommand::Console { config, .. }) => match run_console(&config) {
+                Ok(code) => code,
+                Err(e) => {
+                    eprintln!("console failed: {e}");
+                    1
+                }
+            },
+            Ok(ProductCommand::ScmDefault) => {
                 if let Err(e) = service_dispatcher::start(SERVICE_NAME, ffi_service_main) {
                     eprintln!("service_dispatcher failed: {e:?}");
-                    eprintln!("usage: ramshared-winsvc [install|uninstall|console|stop-console]");
+                    eprintln!(
+                        "usage: ramshared-winsvc [install|uninstall|probe-cuda --config <abs>|console --config <abs> --storage-only]"
+                    );
                     1
                 } else {
                     0
                 }
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                2
             }
         }
     }
@@ -113,8 +118,22 @@ mod windows_svc {
             process_id: None,
         })?;
 
-        // Lab provision: start backend (StorPort path). Fail-closed if scripts missing.
-        if let Err(e) = run_start_scripts() {
+        let cfg = load_scm_config().map_err(|e| {
+            let _ = status_handle.set_service_status(ServiceStatus {
+                service_type: ServiceType::OWN_PROCESS,
+                current_state: ServiceState::Stopped,
+                controls_accepted: ServiceControlAccept::empty(),
+                exit_code: ServiceExitCode::ServiceSpecific(2),
+                checkpoint: 0,
+                wait_hint: Duration::default(),
+                process_id: None,
+            });
+            e
+        })?;
+
+        // Product runtime start (storage-only). Full Windows product wiring is
+        // environment-bound; fail closed if CUDA/driver path is unavailable.
+        if let Err(e) = start_product_runtime(&cfg) {
             status_handle.set_service_status(ServiceStatus {
                 service_type: ServiceType::OWN_PROCESS,
                 current_state: ServiceState::Stopped,
@@ -137,7 +156,6 @@ mod windows_svc {
             process_id: None,
         })?;
 
-        // Wait for stop.
         let _ = shutdown_rx.recv();
 
         status_handle.set_service_status(ServiceStatus {
@@ -150,62 +168,176 @@ mod windows_svc {
             process_id: None,
         })?;
 
-        // DT-9 ordered stop — if pagefile still hot, Stop-RamSharedLab exits 2 (refuse).
-        let stop_code = run_stop_scripts().unwrap_or(1);
-
-        status_handle.set_service_status(ServiceStatus {
-            service_type: ServiceType::OWN_PROCESS,
-            current_state: ServiceState::Stopped,
-            controls_accepted: ServiceControlAccept::empty(),
-            exit_code: if stop_code == 0 {
-                ServiceExitCode::Win32(0)
-            } else {
-                ServiceExitCode::ServiceSpecific(stop_code as u32)
-            },
-            checkpoint: 0,
-            wait_hint: Duration::default(),
-            process_id: None,
-        })?;
-
-        Ok(())
-    }
-
-    fn run_start_scripts() -> Result<(), Box<dyn std::error::Error>> {
-        let status = Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                START_PS1,
-                "-FormatIfNeeded",
-            ])
-            .status()?;
-        if !status.success() {
-            return Err(format!("Start-RamSharedLab exit {status:?}").into());
+        // DT-8 code 7: pagefile refusal returns to Running (SPEC main.rs).
+        match stop_product_runtime(&cfg) {
+            Ok(()) => {
+                status_handle.set_service_status(ServiceStatus {
+                    service_type: ServiceType::OWN_PROCESS,
+                    current_state: ServiceState::Stopped,
+                    controls_accepted: ServiceControlAccept::empty(),
+                    exit_code: ServiceExitCode::Win32(0),
+                    checkpoint: 0,
+                    wait_hint: Duration::default(),
+                    process_id: None,
+                })?;
+            }
+            Err(code) if code == 7 => {
+                // Refuse stop: remain Running, checkpoint 0, STOP still accepted.
+                status_handle.set_service_status(ServiceStatus {
+                    service_type: ServiceType::OWN_PROCESS,
+                    current_state: ServiceState::Running,
+                    controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
+                    exit_code: ServiceExitCode::ServiceSpecific(7),
+                    checkpoint: 0,
+                    wait_hint: Duration::default(),
+                    process_id: None,
+                })?;
+                // Block until process is terminated by operator after safety clear.
+                let _ = shutdown_rx.recv();
+                status_handle.set_service_status(ServiceStatus {
+                    service_type: ServiceType::OWN_PROCESS,
+                    current_state: ServiceState::Stopped,
+                    controls_accepted: ServiceControlAccept::empty(),
+                    exit_code: ServiceExitCode::ServiceSpecific(7),
+                    checkpoint: 0,
+                    wait_hint: Duration::default(),
+                    process_id: None,
+                })?;
+            }
+            Err(code) => {
+                status_handle.set_service_status(ServiceStatus {
+                    service_type: ServiceType::OWN_PROCESS,
+                    current_state: ServiceState::Stopped,
+                    controls_accepted: ServiceControlAccept::empty(),
+                    exit_code: ServiceExitCode::ServiceSpecific(code as u32),
+                    checkpoint: 0,
+                    wait_hint: Duration::default(),
+                    process_id: None,
+                })?;
+            }
         }
+
         Ok(())
     }
 
-    fn run_stop_scripts() -> Result<i32, Box<dyn std::error::Error>> {
-        let status = Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                STOP_PS1,
-                "-Drive",
-                "D",
-            ])
-            .status()?;
-        Ok(status.code().unwrap_or(1))
+    fn load_scm_config() -> Result<WinDriveConfig, Box<dyn std::error::Error>> {
+        let bytes = std::fs::read(SCM_CONFIG)?;
+        Ok(WinDriveConfig::from_reader(&bytes)?)
+    }
+
+    fn start_product_runtime(cfg: &WinDriveConfig) -> Result<(), Box<dyn std::error::Error>> {
+        // Validate product shape; full CUDA/driver composition is lab-bound.
+        cfg.validate()?;
+        let _state = RuntimeState::new(RunMode::Scm);
+        eprintln!(
+            "ramshared-winsvc: SCM product mode size_bytes={} cuda_device={} (full Online path requires lab GPU/driver)",
+            cfg.size_bytes, cfg.cuda_device
+        );
+        // Without linked WindowsDriverLink + CUDA on this host, fail closed rather
+        // than starting a false-green lab RAM backend.
+        Err("product Online path requires Windows CUDA + StorPort lab; refuse false start".into())
+    }
+
+    fn stop_product_runtime(_cfg: &WinDriveConfig) -> Result<(), i32> {
+        Ok(())
+    }
+
+    fn run_probe_cuda(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let bytes = std::fs::read(config_path)?;
+        let cfg = WinDriveConfig::from_reader(&bytes)?;
+        cfg.validate()?;
+        match try_probe_cuda(&cfg) {
+            Ok(()) => {
+                eprintln!("probe-cuda: PASS");
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn try_probe_cuda(cfg: &WinDriveConfig) -> Result<(), Box<dyn std::error::Error>> {
+        use ramshared_cuda::Cuda;
+        use ramshared_cuda::probe::{pattern_for_offset, plan_probe_offsets};
+
+        let cuda = Cuda::load().map_err(|e| format!("Cuda::load: {e}"))?;
+        let count = cuda
+            .device_count()
+            .map_err(|e| format!("device_count: {e}"))?;
+        if cfg.cuda_device as i32 >= count {
+            return Err(format!("cuda_device {} >= count {count}", cfg.cuda_device).into());
+        }
+        let dev = cuda
+            .device(cfg.cuda_device as i32)
+            .map_err(|e| format!("device: {e}"))?;
+        let ctx = cuda
+            .create_context(&dev)
+            .map_err(|e| format!("context: {e}"))?;
+        let (free, total) = ctx.mem_info().map_err(|e| format!("mem_info: {e}"))?;
+        let reserve = cfg.effective_reserve_bytes(total as u64) as usize;
+        let need = (cfg.size_bytes as usize)
+            .checked_add(reserve)
+            .ok_or("size+reserve overflow")?;
+        if free < need {
+            return Err(format!("free {free} < size+reserve {need}").into());
+        }
+        let size = cfg.size_bytes as usize;
+        let mut mem = ctx.alloc(size).map_err(|e| format!("alloc: {e}"))?;
+        mem.zero().map_err(|e| format!("zero: {e}"))?;
+        let offsets = plan_probe_offsets(size).map_err(|e| e.to_string())?;
+        for &off in &offsets {
+            let pat = pattern_for_offset(off);
+            mem.write_at(off, &pat)
+                .map_err(|e| format!("write {off}: {e}"))?;
+            let mut got = vec![0u8; 4096];
+            mem.read_at(off, &mut got)
+                .map_err(|e| format!("read {off}: {e}"))?;
+            if got != pat {
+                return Err(format!("mismatch at offset {off}").into());
+            }
+        }
+        mem.zero().map_err(|e| format!("re-zero: {e}"))?;
+        drop(mem);
+        let (free_after, _) = ctx.mem_info().map_err(|e| format!("mem_info after: {e}"))?;
+        let restored = free_after as i64 - free as i64;
+        // free may be slightly different; require within 64 MiB of pre-alloc free.
+        if (free_after as i64 - free as i64).abs() > 64 * 1024 * 1024 {
+            // After free, free_after should be near free (pre-alloc). Delta free_after-free ≈ 0.
+            let _ = restored;
+        }
+        let delta = if free_after >= free {
+            free_after - free
+        } else {
+            free - free_after
+        };
+        if delta > 64 * 1024 * 1024 {
+            return Err(format!("free restoration outside 64 MiB: delta={delta}").into());
+        }
+        eprintln!(
+            "probe-cuda: device={} name={} size={} free_before={} free_after={}",
+            dev.ordinal(),
+            dev.name(),
+            size,
+            free,
+            free_after
+        );
+        Ok(())
+    }
+
+    fn run_console(config_path: &str) -> Result<i32, Box<dyn std::error::Error>> {
+        let bytes = std::fs::read(config_path)?;
+        let cfg = WinDriveConfig::from_reader(&bytes)?;
+        cfg.validate()?;
+        eprintln!(
+            "console --storage-only: config OK size_bytes={} (product Online requires lab)",
+            cfg.size_bytes
+        );
+        // Same product path as SCM — fail closed without lab stack.
+        Err("console product Online path requires Windows CUDA + StorPort lab".into())
     }
 
     fn install() -> Result<(), Box<dyn std::error::Error>> {
         let exe = std::env::current_exe()?;
         let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
-        // CREATE already may fail if exists — try open+change or create.
         let service_info = ServiceInfo {
             name: OsString::from(SERVICE_NAME),
             display_name: OsString::from(SERVICE_DISPLAY),
@@ -223,26 +355,31 @@ mod windows_svc {
             ServiceAccess::CHANGE_CONFIG | ServiceAccess::START,
         ) {
             Ok(_svc) => {
-                // Prefer delayed auto-start so StorPort/PnP can settle (sc config).
-                let _ = Command::new("sc.exe")
-                    .args(["config", SERVICE_NAME, "start=", "delayed-auto"])
+                // Disable failure auto-restart (SPEC).
+                let _ = std::process::Command::new("sc.exe")
+                    .args(["failure", SERVICE_NAME, "reset=", "0", "actions=", "="])
                     .status();
                 Ok(())
             }
-            Err(e) => {
-                // Already exists: update binary path via delete+create is heavy; report.
-                Err(format!("create_service: {e:?} (try uninstall first)").into())
-            }
+            Err(e) => Err(format!("create_service: {e:?} (try uninstall first)").into()),
         }
     }
 
     fn uninstall() -> Result<(), Box<dyn std::error::Error>> {
+        // Safe stop first (SPEC): attempt stop; if code 7 refusal, do not delete.
         let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
         let service =
             manager.open_service(SERVICE_NAME, ServiceAccess::STOP | ServiceAccess::DELETE)?;
-        let _ = service.stop();
-        service.delete()?;
-        Ok(())
+        match service.stop() {
+            Ok(_) => {
+                service.delete()?;
+                Ok(())
+            }
+            Err(e) => {
+                // If still running after safety refusal, refuse uninstall.
+                Err(format!("safe stop failed, refuse uninstall: {e:?}").into())
+            }
+        }
     }
 }
 
@@ -255,9 +392,41 @@ fn main() {
 
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("ramshared-winsvc: Windows-only binary (stub on this host)");
-    eprintln!(
-        "lib APIs (provision/teardown/DT-9) are testable via `cargo test -p ramshared-winsvc`"
-    );
-    std::process::exit(2);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match parse_product_cli(&args) {
+        Ok(ProductCommand::ProbeCuda { config }) => match std::fs::read(&config) {
+            Ok(bytes) => match WinDriveConfig::from_reader(&bytes) {
+                Ok(cfg) => {
+                    eprintln!(
+                        "probe-cuda: config OK (Linux host cannot load nvcuda.dll product path); size_bytes={}",
+                        cfg.size_bytes
+                    );
+                    std::process::exit(2);
+                }
+                Err(e) => {
+                    eprintln!("config error: {e}");
+                    std::process::exit(2);
+                }
+            },
+            Err(e) => {
+                eprintln!("read config: {e}");
+                std::process::exit(2);
+            }
+        },
+        Ok(cmd) => {
+            eprintln!("ramshared-winsvc: Windows-only binary (stub on this host)");
+            eprintln!("parsed command: {cmd:?}");
+            eprintln!("lib APIs are testable via `cargo test -p ramshared-winsvc`");
+            std::process::exit(2);
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            let code = if e.class == RuntimeErrorClass::Config {
+                2
+            } else {
+                1
+            };
+            std::process::exit(code);
+        }
+    }
 }

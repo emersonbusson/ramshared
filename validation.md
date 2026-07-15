@@ -1171,3 +1171,26 @@ bash scripts/safety/wslconfig-ctl.sh apply   # idempotent rewrite
 - Live cascade: nbd 4G, ramsharedd --size 4096, ok:true
 **Verdict:** ✅ research/decision closed where evidence exists; no fake “host-real PASS”
 **Next action:** optional bare-metal USB install (kernel-true); optional custom-kernel lab for ublk vs nbd; host Windows CUDA I/O only with gates
+
+## 2026-07-15 — windows-storport-cuda-vram Step 3 IMPL partial
+
+**What:** Implement SPEC storage-only product path: winsvc config/evidence/runtime/queue/broker/service, CUDA probe planning, miniport owner/rundown/VPD, product vs lab installers and drill scaffolds.
+**Category:** windows / storport / cuda / ssdv3
+**How to measure:**
+```bash
+cargo fmt -p ramshared-winsvc -p ramshared-cuda -- --check
+cargo clippy -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets -- -D warnings
+cargo test -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc \
+  --files crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs \
+  --min 80 --report-json tmp/windows-storport-cuda-vram-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/probe.rs --min 80
+```
+**Measured data:**
+- winsvc lib tests: 72 passed
+- cover: config 95.5%, evidence 94.4%, driver_link 86.9%, broker_tenant 85.9%, runtime 86.8%, service 84.1%; cuda probe 80.0%
+- E2E Windows WDK/GPU/SCM: not run (env-bound) → IMPL partial
+- BINARY_MATCH: N/A (Windows-only slice)
+**Verdict:** 🟡 partial — pure policy green; live StorPort+CUDA proof deferred to supervised Windows lab
+**Next action:** MSVC cross-build + win11-drill Verifier IOCTL drill + approved physical probe/3-round SHA-256
+**Artifacts:** `tmp/windows-storport-cuda-vram-cov.json`, `docs/specs/no-milestone/windows-storport-cuda-vram/IMPL.md`

@@ -26,6 +26,9 @@ VdCreate(_Out_ PVIRTUAL_DISK Disk, _In_ const RAMSHARED_DISK_PARAMS *Params)
 	if (Disk == NULL || Params == NULL) {
 		return STATUS_INVALID_PARAMETER;
 	}
+	if (Params->reserved != 0) {
+		return STATUS_INVALID_PARAMETER; /* REFUSE_RESERVED_DISK_PARAMS */
+	}
 	if (Params->block_size != 512 && Params->block_size != 4096) {
 		return STATUS_INVALID_PARAMETER;
 	}
@@ -38,6 +41,8 @@ VdCreate(_Out_ PVIRTUAL_DISK Disk, _In_ const RAMSHARED_DISK_PARAMS *Params)
 	Disk->size_bytes = Params->size_bytes;
 	Disk->block_size = Params->block_size;
 	RtlCopyMemory(Disk->serial, Params->serial, sizeof(Disk->serial));
+	ObReferenceObject(IoGetCurrentProcess());
+	Disk->OwnerProcess = IoGetCurrentProcess();
 	InterlockedExchange(&Disk->state, VdStateCreated);
 	return STATUS_SUCCESS;
 }
@@ -47,6 +52,10 @@ VdDestroy(_Inout_ PVIRTUAL_DISK Disk)
 {
 	if (Disk == NULL) {
 		return;
+	}
+	if (Disk->OwnerProcess) {
+		ObDereferenceObject(Disk->OwnerProcess);
+		Disk->OwnerProcess = NULL;
 	}
 	InterlockedExchange(&Disk->state, VdStateNone);
 	RtlZeroMemory(Disk, sizeof(*Disk));
@@ -84,6 +93,15 @@ VdDeactivate(VOID)
 	if (g_AdapterExt != NULL) {
 		StorPortNotification(BusChangeDetected, g_AdapterExt, (UCHAR)0);
 	}
+}
+
+BOOLEAN
+VdOwnerMatches(_In_ PEPROCESS Process)
+{
+	if (!g_Active || Process == NULL) {
+		return FALSE;
+	}
+	return g_ActiveDisk.OwnerProcess == Process;
 }
 
 PVIRTUAL_DISK
@@ -140,11 +158,18 @@ VdSetSenseNotReady(_Inout_ PSCSI_REQUEST_BLOCK Srb)
 	}
 }
 
+/*
+ * Standard INQUIRY + VPD 0x00 / 0x80 (unit serial from 16-byte disk serial).
+ * CDB[1] EVPD bit, CDB[2] page code (DT-5 / RF-4 / VPD_SERIAL_MATCH).
+ */
 static BOOLEAN
-VdHandleInquiry(_Inout_ PSCSI_REQUEST_BLOCK Srb)
+VdHandleInquiry(_In_opt_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
 	UCHAR *buf;
 	ULONG len;
+	UCHAR evpd;
+	UCHAR page;
+	UCHAR i;
 
 	buf = (UCHAR *)Srb->DataBuffer;
 	if (buf == NULL) {
@@ -152,19 +177,75 @@ VdHandleInquiry(_Inout_ PSCSI_REQUEST_BLOCK Srb)
 		return TRUE;
 	}
 	len = Srb->DataTransferLength;
-	if (len < 36) {
-		Srb->SrbStatus = SRB_STATUS_DATA_OVERRUN;
+	evpd = Srb->Cdb[1] & 0x01;
+	page = Srb->Cdb[2];
+
+	if (evpd == 0) {
+		if (len < 36) {
+			Srb->SrbStatus = SRB_STATUS_DATA_OVERRUN;
+			return TRUE;
+		}
+		RtlZeroMemory(buf, len);
+		buf[0] = 0x00; /* direct-access */
+		buf[2] = 0x05; /* SPC-3 */
+		buf[4] = 31;   /* additional length */
+		RtlCopyMemory(&buf[8], "RAMSHARE", 8);
+		RtlCopyMemory(&buf[16], "VRAMDISK        ", 16);
+		RtlCopyMemory(&buf[32], "0001", 4);
+		Srb->DataTransferLength = 36;
+		Srb->SrbStatus = SRB_STATUS_SUCCESS;
 		return TRUE;
 	}
-	RtlZeroMemory(buf, len);
-	buf[0] = 0x00; /* direct-access */
-	buf[2] = 0x05; /* SPC-3 */
-	buf[4] = 31;   /* additional length */
-	RtlCopyMemory(&buf[8], "RAMSHARE", 8);
-	RtlCopyMemory(&buf[16], "VRAMDISK        ", 16);
-	RtlCopyMemory(&buf[32], "0001", 4);
-	Srb->DataTransferLength = 36;
-	Srb->SrbStatus = SRB_STATUS_SUCCESS;
+
+	/* VPD pages */
+	if (page == 0x00) {
+		/* Supported VPD pages: 0x00, 0x80 */
+		if (len < 6) {
+			Srb->SrbStatus = SRB_STATUS_DATA_OVERRUN;
+			return TRUE;
+		}
+		RtlZeroMemory(buf, len);
+		buf[0] = 0x00;
+		buf[1] = 0x00;
+		buf[3] = 2;
+		buf[4] = 0x00;
+		buf[5] = 0x80;
+		Srb->DataTransferLength = 6;
+		Srb->SrbStatus = SRB_STATUS_SUCCESS;
+		return TRUE;
+	}
+	if (page == 0x80) {
+		/* Unit serial number: 16 ASCII hex digits from disk serial. */
+		if (len < 4 + 16) {
+			Srb->SrbStatus = SRB_STATUS_DATA_OVERRUN;
+			return TRUE;
+		}
+		RtlZeroMemory(buf, len);
+		buf[0] = 0x00;
+		buf[1] = 0x80;
+		buf[3] = 16;
+		if (Disk != NULL) {
+			for (i = 0; i < 16; i++) {
+				UCHAR c = Disk->serial[i];
+
+				/* Prefer printable ASCII; else nibble hex. */
+				if (c >= 0x20 && c <= 0x7e) {
+					buf[4 + i] = c;
+				} else {
+					static const char hex[] = "0123456789ABCDEF";
+
+					buf[4 + i] = (UCHAR)hex[c & 0x0F];
+				}
+			}
+		} else {
+			RtlFillMemory(&buf[4], 16, '0');
+		}
+		Srb->DataTransferLength = 20;
+		Srb->SrbStatus = SRB_STATUS_SUCCESS;
+		return TRUE;
+	}
+
+	Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
 	return TRUE;
 }
 
@@ -219,7 +300,7 @@ VdTranslateSrbNoDisk(_In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 
 	switch (op) {
 	case SCSIOP_INQUIRY:
-		(void)VdHandleInquiry(Srb);
+		(void)VdHandleInquiry(NULL, Srb);
 		break;
 	case SCSIOP_TEST_UNIT_READY:
 		/* Not ready until CREATE_DISK - never SRB_STATUS_BUSY (TM 100%). */
@@ -269,7 +350,7 @@ VdTranslateSrb(
 		break;
 
 	case SCSIOP_INQUIRY:
-		(void)VdHandleInquiry(Srb);
+		(void)VdHandleInquiry(Disk, Srb);
 		break;
 
 	case SCSIOP_READ_CAPACITY:
