@@ -1,4 +1,4 @@
-# Spec audits (Passo 2.5)
+# Spec audits (Step 2.5)
 
 Preferred location for audit artifacts is **next to the SPEC**:
 
@@ -8,4 +8,4 @@ Use this directory only for cross-cutting or multi-spec reviews:
 
 `docs/reviews/YYYY-MM-DD-{slug}.md`
 
-See [`docs/SSDV3-PROMPTS.md`](../SSDV3-PROMPTS.md) Passo 2.5.
+See [`docs/SSDV3-PROMPTS.md`](../SSDV3-PROMPTS.md) § STEP 2.5.

@@ -7,14 +7,16 @@ paths:
 
 # SSDV3 rules
 
-Pipeline: **PRD → SPEC → IMPL** (optional Step 2.5 audit). Full prompts/templates: [`docs/SSDV3-PROMPTS.md`](../../docs/SSDV3-PROMPTS.md). Do not restate that file here.
+**RamShared only.** Pipeline: **PRD → SPEC → (2.5 when risk) → IMPL**. Canonical prompts, fixed section skeletons, test matrix, E2E evidence protocol: [`docs/SSDV3-PROMPTS.md`](../../docs/SSDV3-PROMPTS.md). Do **not** restate those sections here. Do **not** import foreign-repo process, service names, or API shapes.
+
+Cognitive disciplines (RamShared examples): [`docs/methodology/kahneman-disciplines.md`](../../docs/methodology/kahneman-disciplines.md) (test *types* #9/#13/#15–#17 live there).
 
 ## Mandatory
 
-1. Locks / concurrency (order, spinlock↔mutex, RCU, barriers in hot path / IRQ)
+1. Locks / concurrency (order, spinlock↔mutex, RCU, barriers, IRQ)
 2. DMA / IOMMU / MMIO
 3. Memory (mm): NUMA, HMM/`DEVICE_PRIVATE`, hotplug, hot-path allocation
-4. uAPI / ABI (ioctl/sysfs/debugfs or exported struct layout)
+4. uAPI / ABI (ioctl/sysfs/debugfs or exported layout)
 5. New hardware / subsystem (device, DRM/TTM, CXL)
 6. Structural MMU / DRM changes
 
@@ -22,33 +24,34 @@ Pipeline: **PRD → SPEC → IMPL** (optional Step 2.5 audit). Full prompts/temp
 
 Optional: pure refactors without contract change, localized bugfixes, doc-only, dependency bumps (log in `docs/LIBRARIES.md`).
 
-**Not SSDV3:** CI, host-safety scripts (`scripts/safety/*`, `scripts/p0/*`), qemu/lab harness, disk reclaim. Use Kahneman #15/#16/#18 + [`.claude/rules/benchmarks.md`](benchmarks.md) + append [`validation.md`](../../validation.md). If a script also invents a kernel/uAPI contract, that product side still needs SSDV3.
+**Not SSDV3:** CI, host-safety script tweaks (`scripts/safety/*`, `scripts/p0/*`), qemu/lab harness, disk reclaim. Use Kahneman #15/#16/#18 + [benchmarks.md](benchmarks.md) + append [`validation.md`](../../validation.md). If a script invents a kernel/uAPI contract, that product side still needs SSDV3.
 
 ## Artifacts
 
 | Artifact | Path |
 | --- | --- |
-| Prompts | `docs/SSDV3-PROMPTS.md` |
-| Specs | `docs/specs/no-milestone/{slug}/{PRD,SPEC,IMPL}.md` (+ optional `AUDIT-2.5.md`) only |
+| Prompts + skeletons | `docs/SSDV3-PROMPTS.md` |
+| Specs | `docs/specs/no-milestone/{slug}/{PRD,SPEC,IMPL}.md` (+ optional `AUDIT-2.5.md`, `evidence/`) |
 | Kahneman | `docs/methodology/kahneman-disciplines.md` |
 
-- One `SPEC.md` per feature; revise in-place (no `SPECvN.md`).
-- After add/remove under `docs/specs/`, run `node tools/generate-docs-index.mjs`.
+- One `SPEC.md` per feature; revise in-place (no `SPECvN.md`). After 2.5 `no-go`, fix SPEC same turn.
+- After add/remove under `docs/specs/`: `node tools/generate-docs-index.mjs`.
 
 ## Step 3 hard gates (summary)
 
-1. Cover ≥80% on slice **business-logic** crates/files (`cargo llvm-cov -p …`); workspace average does not count. Shell-only orchestration may be E2E-only if SPEC marks it and live proof is recorded.
-2. Live E2E before closing `validation.md`: `BINARY_MATCH`, `./target/release/ramshared status`, `scripts/safety/cascade-health.sh`, legitimate path + SPEC refusals.
-3. Kahneman test types #9/#13/#15/#16/#17 — table in `docs/SSDV3-PROMPTS.md`.
-4. Hang-class review: root `superprompt.md` (audit only; not a second SSDV3).
-
-Copy-paste prompts + IMPL skeleton: **only** `docs/SSDV3-PROMPTS.md` (do not duplicate here).
+1. Cover ≥80% on slice **business-logic** files via `node tools/ci/check-rust-slice-coverage.mjs -p … --files … --min 80` (paths from SPEC matrix). Workspace average does not count. Shell-only may be E2E-only if SPEC marks it + live proof recorded.
+2. Live E2E on **this** surface before DONE: **before → action → after**; platform-correct tools (cascade-health / kernel drill / WDK lab — as SPEC); `BINARY_MATCH` when `ramsharedd`; ≥1 legitimate + SPEC refusals. Env-bound → **partial**, not DONE.
+3. Every SPEC matrix row has a real test name; Kahneman critical evidence is executable (not “code exists”).
+4. Hang-class: [`superprompt.md`](../../superprompt.md) (audit only).
 
 ## Don't
 
 - Skip PRD/SPEC for mandatory-scope changes
 - IMPL without SPEC (or without 2.5 `go` when risk-gated)
-- Inference on >30% of PRD items
-- New helper without checking kernel/`lib/`/workspace crates
-- Prove LKM/cascade correctness only with kernel/userspace evidence (cargo test, drills, dmesg, `/proc/swaps`) — not app-layer HTTP smoke as primary proof
+- Inference on >30% of PRD facts
+- New helper without checking kernel / `crates/` / existing SPECs
+- Prove LKM/cascade with foreign-app HTTP smoke — need cargo test, drills, dmesg, `/proc/swaps` as appropriate
+- Close Step 3 on index `DONE` / `IMPL.md` presence alone
 - Thrash swap/ublk on the live WSL2 host
+- Create `SPECvN.md`
+- Paste SSDV3/Kahneman process from other monorepos (tenant, OpenAPI, web e2e) into this tree

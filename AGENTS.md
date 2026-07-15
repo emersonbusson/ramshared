@@ -39,8 +39,8 @@ Non-trivial commits (locks, DMA, or atomic allocation) **MUST** include `Rollbac
 
 ## Methodologies (SSDV3 and Kahneman)
 
-- **SSDV3**: [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md) + thin rules [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md). Specs: `docs/specs/no-milestone/{slug}/`. Step 3: cover ≥80% per slice + live E2E before `validation.md`.
-- **Kahneman**: [`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md) (#2/#3/#15–#18 for structural/hang work).
+- **SSDV3**: [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md) (RamShared-only skeletons, matrix, platform gates) + thin [`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md). Specs: `docs/specs/no-milestone/{slug}/`. Step 3: named SPEC tests + cover gate `node tools/ci/check-rust-slice-coverage.mjs -p … --files … --min 80` + live E2E on **this** surface (`before→action→after`; cascade/LKM/Windows as SPEC; `BINARY_MATCH` when daemon). Env-bound → partial, not DONE.
+- **Kahneman**: [`docs/methodology/kahneman-disciplines.md`](docs/methodology/kahneman-disciplines.md) — #2/#3/#15–#18 structural/hang; test *types* #9/#13/#15–#17 for SPEC evidence.
 - **Hang audit**: [`superprompt.md`](superprompt.md).
 - **Docs check**: `./scripts/docs-check.sh`.
 
