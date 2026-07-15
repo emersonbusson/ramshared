@@ -38,6 +38,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_EventLog",
     "Win32_System_Services",
     "Win32_Security_Cryptography",
+    "Win32_System_WindowsProgramming",
 ] }
 
 [lints.clippy]

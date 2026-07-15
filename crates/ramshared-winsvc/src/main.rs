@@ -3,7 +3,9 @@
 //! SPEC DT-1: `probe-cuda`, `console --storage-only`, SCM default, `install|uninstall`.
 //! Lab Start/Stop PS1 paths are not product entrypoints (see Install-RamSharedLabService.ps1).
 
+#[cfg(not(windows))]
 use ramshared_winsvc::WinDriveConfig;
+#[cfg(not(windows))]
 use ramshared_winsvc::runtime::{ProductCommand, RuntimeErrorClass, parse_product_cli};
 
 #[cfg(windows)]
@@ -256,69 +258,16 @@ mod windows_svc {
     }
 
     fn try_probe_cuda(cfg: &WinDriveConfig) -> Result<(), Box<dyn std::error::Error>> {
-        use ramshared_cuda::Cuda;
-        use ramshared_cuda::probe::{pattern_for_offset, plan_probe_offsets};
-
-        let cuda = Cuda::load().map_err(|e| format!("Cuda::load: {e}"))?;
-        let count = cuda
-            .device_count()
-            .map_err(|e| format!("device_count: {e}"))?;
-        if cfg.cuda_device as i32 >= count {
-            return Err(format!("cuda_device {} >= count {count}", cfg.cuda_device).into());
-        }
-        let dev = cuda
-            .device(cfg.cuda_device as i32)
-            .map_err(|e| format!("device: {e}"))?;
-        let ctx = cuda
-            .create_context(&dev)
-            .map_err(|e| format!("context: {e}"))?;
-        let (free, total) = ctx.mem_info().map_err(|e| format!("mem_info: {e}"))?;
-        let reserve = cfg.effective_reserve_bytes(total as u64) as usize;
-        let need = (cfg.size_bytes as usize)
-            .checked_add(reserve)
-            .ok_or("size+reserve overflow")?;
-        if free < need {
-            return Err(format!("free {free} < size+reserve {need}").into());
-        }
-        let size = cfg.size_bytes as usize;
-        let mut mem = ctx.alloc(size).map_err(|e| format!("alloc: {e}"))?;
-        mem.zero().map_err(|e| format!("zero: {e}"))?;
-        let offsets = plan_probe_offsets(size).map_err(|e| e.to_string())?;
-        for &off in &offsets {
-            let pat = pattern_for_offset(off);
-            mem.write_at(off, &pat)
-                .map_err(|e| format!("write {off}: {e}"))?;
-            let mut got = vec![0u8; 4096];
-            mem.read_at(off, &mut got)
-                .map_err(|e| format!("read {off}: {e}"))?;
-            if got != pat {
-                return Err(format!("mismatch at offset {off}").into());
-            }
-        }
-        mem.zero().map_err(|e| format!("re-zero: {e}"))?;
-        drop(mem);
-        let (free_after, _) = ctx.mem_info().map_err(|e| format!("mem_info after: {e}"))?;
-        let restored = free_after as i64 - free as i64;
-        // free may be slightly different; require within 64 MiB of pre-alloc free.
-        if (free_after as i64 - free as i64).abs() > 64 * 1024 * 1024 {
-            // After free, free_after should be near free (pre-alloc). Delta free_after-free ≈ 0.
-            let _ = restored;
-        }
-        let delta = if free_after >= free {
-            free_after - free
-        } else {
-            free - free_after
-        };
-        if delta > 64 * 1024 * 1024 {
-            return Err(format!("free restoration outside 64 MiB: delta={delta}").into());
-        }
+        use ramshared_winsvc::probe_cuda_allocates_roundtrips_and_restores;
+        let report = probe_cuda_allocates_roundtrips_and_restores(cfg)?;
         eprintln!(
-            "probe-cuda: device={} name={} size={} free_before={} free_after={}",
-            dev.ordinal(),
-            dev.name(),
-            size,
-            free,
-            free_after
+            "probe-cuda: device={} name={} size={} free_before={} free_after={} offsets={:?}",
+            report.ordinal,
+            report.device_name,
+            report.size_bytes,
+            report.free_before,
+            report.free_after,
+            report.offsets
         );
         Ok(())
     }
@@ -342,7 +291,7 @@ mod windows_svc {
             name: OsString::from(SERVICE_NAME),
             display_name: OsString::from(SERVICE_DISPLAY),
             service_type: ServiceType::OWN_PROCESS,
-            start_type: ServiceStartType::Auto,
+            start_type: ServiceStartType::OnDemand,
             error_control: ServiceErrorControl::Normal,
             executable_path: exe,
             launch_arguments: vec![],
@@ -392,17 +341,32 @@ fn main() {
 
 #[cfg(not(windows))]
 fn main() {
+    use ramshared_winsvc::probe_cuda_allocates_roundtrips_and_restores;
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     match parse_product_cli(&args) {
         Ok(ProductCommand::ProbeCuda { config }) => match std::fs::read(&config) {
             Ok(bytes) => match WinDriveConfig::from_reader(&bytes) {
-                Ok(cfg) => {
-                    eprintln!(
-                        "probe-cuda: config OK (Linux host cannot load nvcuda.dll product path); size_bytes={}",
-                        cfg.size_bytes
-                    );
-                    std::process::exit(2);
-                }
+                Ok(cfg) => match probe_cuda_allocates_roundtrips_and_restores(&cfg) {
+                    Ok(report) => {
+                        eprintln!(
+                            "probe-cuda: PASS (WSL/Linux libcuda evidence) ordinal={} name={} size={} free_before={} free_after={}",
+                            report.ordinal,
+                            report.device_name,
+                            report.size_bytes,
+                            report.free_before,
+                            report.free_after
+                        );
+                        eprintln!(
+                            "note: product path is Windows nvcuda.dll + StorPort; this run proves DT-3 allocate/pattern/free on available CUDA"
+                        );
+                        std::process::exit(0);
+                    }
+                    Err(e) => {
+                        eprintln!("probe-cuda failed: {e}");
+                        std::process::exit(1);
+                    }
+                },
                 Err(e) => {
                     eprintln!("config error: {e}");
                     std::process::exit(2);
@@ -414,7 +378,7 @@ fn main() {
             }
         },
         Ok(cmd) => {
-            eprintln!("ramshared-winsvc: Windows-only binary (stub on this host)");
+            eprintln!("ramshared-winsvc: Windows product binary (Linux stub for non-probe cmds)");
             eprintln!("parsed command: {cmd:?}");
             eprintln!("lib APIs are testable via `cargo test -p ramshared-winsvc`");
             std::process::exit(2);
