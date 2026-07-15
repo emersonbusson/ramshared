@@ -4,126 +4,84 @@
 
 ## Status
 
-**partial** · cover ✓ · E2E partial · BINARY_MATCH N/A (Windows-only; no `ramsharedd`)
+**partial** · cover ✓ · E2E product Online ✓ (3-round SHA) · Verifier ✗ · BINARY_MATCH N/A
 
-| Surface | Status |
+Product path **proven live** on physical Windows host:
+
+`broker lease → CUDA DeviceMem → CREATE/REGISTER → NTFS I/O (backend=cuda)`  
+with **3× SHA-256 match** on 4 MiB probes.
+
+Still **not DONE**: Driver Verifier + full `REFUSE_*` IOCTL matrix not executed; clean SCM stop (code-7 path) under kill was force-stopped.
+
+## Files (this turn)
+
+| Path | Change |
 | --- | --- |
-| Unit + cover ≥80% (Linux) | ✓ |
-| MSVC `ramshared-winsvc.exe` | ✓ built + deployed `C:\ramshared\bin\` |
-| Windows `probe-cuda` (nvcuda.dll, RTX 2060) | ✓ PASS 512 MiB, free delta 0 |
-| WDK `ramshared.sys` rebuild + test-sign | ✓ package under `C:\ramshared\package\` |
-| win11-drill: driver RUNNING, CREATE/REGISTER | ✓ |
-| win11-drill: NTFS + SHA-256 4 MiB match | ✓ (lab `WinDriveBackend` RAM backend) |
-| Product `ramshared-winsvc` Online as I/O backend | ✗ env-bound (needs broker + CUDA on same host as StorPort) |
-| 3-round product campaign + Verifier | ✗ env-bound |
-| Host testsigning | ✗ not enabled (guest only) |
-
-Index status remains **PARTIAL** (not DONE).
-
-## Files
-
-| Path | ITEM/RF | Change |
-| --- | --- | --- |
-| `crates/ramshared-winsvc/**` | ITEM-1…5 | Product config/evidence/runtime/queue/broker/service/CUDA probe/Windows adapters |
-| `crates/ramshared-cuda/**` | ITEM-2 | probe planning; windows-sys 0.61 loader fix |
-| `drivers/windows/ramshared/**` | ITEM-3 | owner, rundown, slot states, reserved/ring, VPD |
-| `scripts/windows/**` | ITEM-5/6 | product install, lab install, drills, preflight -StorageOnly |
-| `docs/specs/…/evidence/*` | ITEM-6/7 | live numbers (this turn) |
+| `crates/ramshared-winsvc/src/product_online.rs` | **NEW** full Online composition |
+| `crates/ramshared-winsvc/src/main.rs` | console/SCM call product Online |
+| prior winsvc/cuda/driver/scripts | as previous IMPL |
 
 ## Validation (numbers)
 
-### Unit / fmt / clippy (Linux)
-
-| Cmd | Exit |
-| --- | --- |
-| `cargo test -p ramshared-winsvc --lib` | 0 (72 + ignored probe) |
-| cover gate business files | PASS (≥80%) |
-
-### MSVC product binary
+### Product Online (physical host, elevated)
 
 ```text
-C:\ramshared\bin\build-winsvc.bat  → BUILD_OK
-C:\ramshared\bin\ramshared-winsvc.exe  647168 bytes
-SHA256=F3453587C0AF7D432B566AA6F42C0C4370445B16E8803D12C5E3477BAD71CDDC
+console --storage-only --config C:\ProgramData\RamShared\winsvc-product.toml
+product Online: lease=… size=67108864 serial=… cuda=NVIDIA GeForce RTX 2060
+Disk: RAMSHARE VRAMDISK 64 MiB
 ```
 
-Evidence: `evidence/msvc-build-winsvc.txt`, `evidence/ramshared-winsvc-sha256.txt`.
+Evidence JSONL phases: `Stopped → Leased → CudaReady → Online` (`backend=cuda`).
 
-### Live CUDA probe (DT-3) — Windows nvcuda
+### Three-round SHA-256 (product CUDA LUN)
 
-```text
-probe-cuda --config C:\ProgramData\RamShared\winsvc.toml
-device=0 name=NVIDIA GeForce RTX 2060 size=536870912
-free_before=5360320512 free_after=5360320512 offsets=[0, 268435456, 536866816]
-PASS
-```
+| Round | match | ms | sha (prefix) |
+| --- | --- | --- | --- |
+| 1 | true | 232 | EFF6FD0B… |
+| 2 | true | 157 | 0FA5BB03… |
+| 3 | true | 153 | 17318809… |
 
-Evidence: `evidence/probe-cuda-windows-nvcuda-20260715.txt` (+ WSL twin `probe-cuda-wsl-20260715.txt`).
+`all_match=true` letter=`S`  
+Artifact: `evidence/product-cuda-3rounds.json`
 
-### Driver build + sign
+### Broker
 
-```text
-BUILD_DRIVERS_OK ramshared.sys 31232 (unsigned build) → signed package 32656
-SIGN_OK + Inf2Cat ramshared.cat
-```
+WSL `ramsharedd --slices 2 --slice-mb 64 --arbiter-listen 127.0.0.1:19876`  
+Windows tenant `127.0.0.1:19876` (mirrored localhost).
 
-Evidence: `evidence/build-drivers.txt`, `evidence/ramshared-sys-sha256.txt`.
+### Prior gates (still valid)
 
-### win11-drill (2 GiB static; elevated PSD)
-
-| Step | Result |
+| Gate | Status |
 | --- | --- |
-| Start VM | OK after reducing Startup from 4G→2G (host free ~9.7 GiB) |
-| sc create/start poolstress+ramshared | RUNNING |
-| WinDriveBackend 64 MiB | `CREATE_DISK ok` `REGISTER_QUEUE ok` |
-| Disk N=1 64 MiB | present (FriendlyName `Msft Virtual Disk`) |
-| Write/flush/read 4 MiB | `sha_match=true` SHA256=`053EDE97…0AA1` |
-| Teardown | sc stop; VM Off |
-
-Evidence: `evidence/guest-driver-load.json`, `guest-create-register.json`, `guest-sha256-io.json`.
-
-### Preflight host
-
-`Get-WinDrivePreflight.ps1 -StorageOnly` → `PREFLIGHT_STORAGE_ONLY=PASS`  
-(warn: not elevated, testsigning not Yes on host).
-
-Evidence: `evidence/preflight-storage-only-host.txt`.
-
-### SPEC matrix (executable)
-
-| TestName | Evidence |
-| --- | --- |
-| Named cargo unit tests (config/evidence/driver_link/broker/runtime/service) | ✓ Linux |
-| `probe_cuda_allocates_roundtrips_and_restores` | ✓ live Windows + WSL |
-| IOCTL CREATE/REGISTER legitimate | ✓ guest via WinDriveBackend |
-| SHA-256 filesystem I/O | ✓ guest 1 round 4 MiB (not 3-round product campaign) |
-| Verifier / REFUSE_* verdicts | ✗ not run |
-| `storage_only_cuda_three_rounds_sha256` product | ✗ not run (no CUDA in guest; host no testsigning) |
+| Unit + cover ≥80% | ✓ |
+| MSVC winsvc.exe | ✓ |
+| probe-cuda nvcuda 512 MiB | ✓ free delta 0 |
+| WDK rebuild + test-sign | ✓ |
+| win11-drill lab backend CREATE/REGISTER + SHA | ✓ |
 
 ## Gaps
 
 | Kind | Detail |
 | --- | --- |
-| **env-bound** | Product Online path: broker + CUDA + StorPort same process (`ramshared-winsvc` as backend) |
-| **env-bound** | Host testsigning / EV signing for daily-host driver load |
-| **env-bound** | Driver Verifier + full `Invoke-WinDriveIoctlValidation` refusal matrix |
-| **env-bound** | Three-round product campaign with `backend=cuda` + exact VPD serial format script |
-| **closed** | MSVC winsvc, nvcuda probe, WDK rebuild/sign, guest CREATE/REGISTER + checksum |
-| **open** | Pagefile path intentionally out of slice |
+| **env-bound / open** | Driver Verifier + `Invoke-WinDriveIoctlValidation` full refusal matrix |
+| **open** | Graceful stop under AtomicBool (force-kill used in lab); volume lock Gate B polish |
+| **closed** | Product Online CUDA path + 3-round checksum |
+| **closed** | MSVC binary, probe-cuda, guest StorPort load |
 
 ## Rollback trigger
 
-- BugCheck / new dump under Verifier or guest load.
-- Checksum mismatch or free not restored within 64 MiB after probe.
-- I/O >5 s or teardown >30 s on physical product campaign.
-- Pagefile on target volume at stop → code 7 refuse.
+- BugCheck / new dump during Verifier or Online.
+- Any SHA mismatch on product LUN.
+- Free not restored within 64 MiB after probe/teardown.
+- Pagefile-hot destroy (code 7 refuse).
 
 ## Traceability
 
-| RF | ITEM | This turn |
-| --- | --- | --- |
-| RF-1 | 1–2 | CUDA probe live Windows |
-| RF-2 | 3 | Guest CREATE/REGISTER on new miniport |
-| RF-4 | 6 | Guest SHA-256 match |
-| RF-6 | 5 | Product installer binary ImagePath path built |
-| NFR | — | partial: live numbers without full product 3-round |
+| RF | Evidence |
+| --- | --- |
+| RF-1 | CUDA Online allocation + probe |
+| RF-2 | CREATE/REGISTER via WindowsDriverLink |
+| RF-3 | Broker lease grant (WinDrive) |
+| RF-4 | 3-round SHA-256 + evidence JSONL |
+| RF-5 | Gate A/B code present; force-kill in lab |
+| RF-6 | Product binary ImagePath / console --storage-only |
