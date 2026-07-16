@@ -370,7 +370,48 @@ try { $listener.Stop() } catch {}
             Where-Object { -not $_.PSIsContainer } |
             Remove-Item -Force -EA SilentlyContinue
     } catch {}
-    Start-Sleep 2
+    # Pre-stop exclusive lock probe only (classify volume_lock vs free).
+    # Do NOT FSCTL_DISMOUNT here: a forced dismount makes Get-Partition|Get-Disk
+    # hang in product Identity, which blocked graceful stop for 180s.
+    $o.preStopDismount = "skipped_avoids_identity_hang"
+    $o.preStopLockProbe = "skip"
+    try {
+        $fsctlType = Add-Type -PassThru -Namespace RamSharedLab -Name ("VolCtl" + [guid]::NewGuid().ToString("N").Substring(0, 8)) -MemberDefinition @"
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true, CharSet=System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern System.IntPtr CreateFile(string lpFileName, uint dwDesiredAccess, uint dwShareMode, System.IntPtr lpSecurityAttributes, uint dwCreationDisposition, uint dwFlagsAndAttributes, System.IntPtr hTemplateFile);
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+public static extern bool DeviceIoControl(System.IntPtr hDevice, uint dwIoControlCode, System.IntPtr lpInBuffer, uint nInBufferSize, System.IntPtr lpOutBuffer, uint nOutBufferSize, ref uint lpBytesReturned, System.IntPtr lpOverlapped);
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)]
+public static extern bool CloseHandle(System.IntPtr hObject);
+"@ | Select-Object -First 1
+        $invalid = [IntPtr](-1)
+        $zero = [IntPtr]::Zero
+        # PS 5.1 cannot cast 0xC0000000 via [uint32]0xC0000000 (signed overflow).
+        $access = [Convert]::ToUInt32("C0000000", 16) # GENERIC_READ|GENERIC_WRITE
+        $share = [uint32]3                            # FILE_SHARE_READ|WRITE
+        $openExisting = [uint32]3
+        $FSCTL_LOCK_VOLUME = [uint32]0x00090018
+        $FSCTL_UNLOCK_VOLUME = [uint32]0x0009001C
+        $path = "\\.\" + $letter + ":"
+        $h2 = $fsctlType::CreateFile($path, $access, $share, $zero, $openExisting, 0, $zero)
+        if ($h2 -eq $invalid) {
+            $o.preStopLockProbe = ("CreateFile_fail win32=" + [Runtime.InteropServices.Marshal]::GetLastWin32Error())
+        } else {
+            $br2 = [uint32]0
+            $ok2 = $fsctlType::DeviceIoControl($h2, $FSCTL_LOCK_VOLUME, $zero, 0, $zero, 0, [ref]$br2, $zero)
+            $err2 = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+            if ($ok2) {
+                [void]$fsctlType::DeviceIoControl($h2, $FSCTL_UNLOCK_VOLUME, $zero, 0, $zero, 0, [ref]$br2, $zero)
+            }
+            [void]$fsctlType::CloseHandle($h2)
+            $o.preStopLockProbe = if ($ok2) { "lock_ok" } else { ("FSCTL_LOCK_fail win32=" + $err2) }
+        }
+    } catch {
+        $o.preStopLockProbe = ("exception " + $_.Exception.Message)
+    }
+    Start-Sleep 1
+    Remove-Item C:\ProgramData\RamShared\teardown-diag.log -Force -EA SilentlyContinue
+    Remove-Item C:\ProgramData\RamShared\stop.request -Force -EA SilentlyContinue
 
     # Graceful stop. On Gate A/B/lock refusal the runtime resumes Online and
     # clears the stop flag after the poller already deleted stop.request — so we
@@ -386,6 +427,17 @@ try { $listener.Stop() } catch {}
     $o.stopOk = $stopOk
     $o.consoleExit = if ($p.HasExited) { $p.ExitCode } else { "still_running" }
     $o.stopErrSnap = if (Test-Path $err) { (Get-Content $err -Tail 60) -join "`n" } else { "" }
+    $o.teardownDiag = if (Test-Path C:\ProgramData\RamShared\teardown-diag.log) {
+        [string](Get-Content C:\ProgramData\RamShared\teardown-diag.log -Raw -EA SilentlyContinue)
+    } else { "" }
+    $o.evidenceTail = ""
+    try {
+        $ev = Get-ChildItem C:\ProgramData\RamShared\evidence -File -EA SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($ev) {
+            $o.evidenceTail = [string]((Get-Content $ev.FullName -Tail 5 -EA SilentlyContinue) -join "`n")
+        }
+    } catch {}
     if (-not $p.HasExited) {
         Stop-Process -Id $p.Id -Force -EA SilentlyContinue
         $o.forceKilledConsole = $true
@@ -399,9 +451,12 @@ try { $listener.Stop() } catch {}
     if (-not $bp.HasExited) { Stop-Process -Id $bp.Id -Force -EA SilentlyContinue }
 
     $o.brokerLog = if (Test-Path C:\ProgramData\RamShared\broker-lab.log) {
-        [string](Get-Content C:\ProgramData\RamShared\broker-lab.log -Raw -EA SilentlyContinue)
+        # Keep last ~4KB only — full psi stream blew prior JSON artifacts.
+        $bl = [string](Get-Content C:\ProgramData\RamShared\broker-lab.log -Raw -EA SilentlyContinue)
+        if ($bl.Length -gt 4000) { $bl.Substring($bl.Length - 4000) } else { $bl }
     } else { "" }
     $o.consoleErrEnd = if (Test-Path $err) { (Get-Content $err -Tail 40) -join "`n" } else { "" }
+    $o.leaseLiberado = ($o.brokerLog -match "liberado")
     $o.nvidiaAfter = [string]((& nvidia-smi --query-gpu=name,memory.used,memory.total --format=csv,noheader 2>$null) -join "; ")
     # Compact JSON only — avoid serializing PSObject graphs.
     $o | ConvertTo-Json -Depth 4 -Compress

@@ -245,9 +245,12 @@ mod windows_svc {
                 if path.exists() {
                     let _ = std::fs::remove_file(&path);
                     stop_c.store(true, Ordering::SeqCst);
+                    // Unbuffered diagnostic: redirected stderr can lose last lines on kill.
+                    diag_line("stop.request observed; AtomicBool=true");
                     while stop_c.load(Ordering::Acquire) {
                         thread::sleep(Duration::from_millis(50));
                     }
+                    diag_line("stop flag cleared (resume Online or process exit)");
                 }
                 thread::sleep(Duration::from_millis(200));
             }
@@ -255,10 +258,13 @@ mod windows_svc {
         match run_product_online(&cfg, RunMode::Console, stop) {
             Ok(s) => {
                 eprintln!("console stopped: {:?}", s);
+                let _ = std::io::Write::flush(&mut std::io::stderr());
                 Ok(s.exit_code)
             }
             Err(e) if e.code == 7 => {
                 eprintln!("teardown refused (code 7): {e}");
+                diag_line(&format!("teardown refused (code 7): {e}"));
+                let _ = std::io::Write::flush(&mut std::io::stderr());
                 Ok(7)
             }
             Err(e) => Err(e.into()),
@@ -267,6 +273,30 @@ mod windows_svc {
 
     fn stop_request_path() -> std::path::PathBuf {
         std::path::PathBuf::from(r"C:\ProgramData\RamShared\stop.request")
+    }
+
+    /// Append one line to ProgramData diag log (create parents; best-effort).
+    /// Survives force-kill better than redirected stderr buffers.
+    fn diag_line(msg: &str) {
+        use std::io::Write;
+        let path = std::path::Path::new(r"C:\ProgramData\RamShared\teardown-diag.log");
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let _ = writeln!(f, "{ts} {msg}");
+            let _ = f.flush();
+        }
+        eprintln!("{msg}");
+        let _ = std::io::Write::flush(&mut std::io::stderr());
     }
 
     fn install() -> Result<(), Box<dyn std::error::Error>> {

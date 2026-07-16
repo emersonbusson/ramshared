@@ -10,7 +10,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::ptr;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{CloseHandle, FALSE, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Security::Cryptography::{
@@ -91,6 +91,10 @@ pub struct LockedVolume {
     pub letter: char,
     handle: HANDLE,
 }
+
+// HANDLE is an OS resource token; exclusive ownership may move across threads
+// (e.g. bounded lock helper) as long as only one owner uses the handle.
+unsafe impl Send for LockedVolume {}
 
 impl Drop for LockedVolume {
     fn drop(&mut self) {
@@ -198,31 +202,100 @@ impl WindowsHostState {
 
     /// Gate A/B pagefile query. Fail-closed on any error (DT-8).
     ///
-    /// Uses PowerShell CIM for Win32_PageFileUsage (no full WMI COM stack in windows-sys).
+    /// Prefer registry `PagingFiles` (configured pagefiles) — no PowerShell. CIM
+    /// `Win32_PageFileUsage` hangs under GPU-PV guest load and blocked teardown.
+    /// Configured paths are a strict super-set for "is a pagefile on this letter?"
+    /// (DT-8 refuse if product letter hosts a pagefile).
     pub fn active_pagefiles() -> Result<Vec<PagefileIdentity>, HostError> {
-        let output = run_powershell_bounded(
-            "Get-CimInstance Win32_PageFileUsage | ForEach-Object { $_.Name }",
-            Duration::from_secs(5),
-        )
-        .map_err(HostError::Pagefile)?;
-        if !output.status.success() {
+        Self::configured_pagefiles_registry()
+    }
+
+    /// Read `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PagingFiles`.
+    fn configured_pagefiles_registry() -> Result<Vec<PagefileIdentity>, HostError> {
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::System::Registry::{
+            HKEY_LOCAL_MACHINE, KEY_READ, REG_MULTI_SZ, RegCloseKey, RegOpenKeyExW,
+            RegQueryValueExW,
+        };
+
+        let subkey = to_wide(r"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management");
+        let mut hkey = std::ptr::null_mut();
+        let open =
+            unsafe { RegOpenKeyExW(HKEY_LOCAL_MACHINE, subkey.as_ptr(), 0, KEY_READ, &mut hkey) };
+        if open != 0 {
             return Err(HostError::Pagefile(format!(
-                "WMI/CIM query failed status={:?}",
-                output.status
+                "RegOpenKeyExW Memory Management failed status={open}"
             )));
         }
-        let text = String::from_utf8_lossy(&output.stdout);
-        let mut out = Vec::new();
-        for line in text.lines() {
-            let name = line.trim();
-            if name.is_empty() {
-                continue;
+        let name = to_wide("PagingFiles");
+        let mut ty = 0u32;
+        let mut size = 0u32;
+        let q1 = unsafe {
+            RegQueryValueExW(
+                hkey,
+                name.as_ptr(),
+                std::ptr::null_mut(),
+                &mut ty,
+                std::ptr::null_mut(),
+                &mut size,
+            )
+        };
+        if q1 != 0 || size == 0 {
+            unsafe {
+                RegCloseKey(hkey);
             }
-            let volume = name.get(..3).unwrap_or("").to_string();
-            out.push(PagefileIdentity {
-                name: name.to_string(),
-                volume,
-            });
+            // Empty / missing = no configured pagefiles.
+            return Ok(Vec::new());
+        }
+        if ty != REG_MULTI_SZ {
+            unsafe {
+                RegCloseKey(hkey);
+            }
+            return Err(HostError::Pagefile(format!(
+                "PagingFiles unexpected type {ty}"
+            )));
+        }
+        let mut buf = vec![0u8; size as usize];
+        let q2 = unsafe {
+            RegQueryValueExW(
+                hkey,
+                name.as_ptr(),
+                std::ptr::null_mut(),
+                &mut ty,
+                buf.as_mut_ptr(),
+                &mut size,
+            )
+        };
+        unsafe {
+            RegCloseKey(hkey);
+        }
+        if q2 != 0 {
+            return Err(HostError::Pagefile(format!(
+                "RegQueryValueExW PagingFiles failed status={q2}"
+            )));
+        }
+        // MULTI_SZ is UTF-16LE double-null terminated.
+        let wide: Vec<u16> = buf
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        let mut out = Vec::new();
+        let mut start = 0usize;
+        for i in 0..wide.len() {
+            if wide[i] == 0 {
+                if i == start {
+                    break; // double-null terminator
+                }
+                let s = std::ffi::OsString::from_wide(&wide[start..i]);
+                let name = s.to_string_lossy().to_string();
+                // Entries look like "C:\pagefile.sys 0 0" — take path token.
+                let path = name.split_whitespace().next().unwrap_or("").to_string();
+                if !path.is_empty() {
+                    let volume = path.get(..3).unwrap_or("").to_string();
+                    out.push(PagefileIdentity { name: path, volume });
+                }
+                start = i + 1;
+            }
         }
         Ok(out)
     }
@@ -270,27 +343,86 @@ impl WindowsHostState {
         Ok(())
     }
 
-    /// Observe exactly one disk behind the configured volume letter.
+    /// Observe exactly one product disk and confirm the configured volume letter.
+    ///
+    /// Prefer `Get-Disk` by serial+size (stable under GPU-PV). Avoid
+    /// `Get-Partition -DriveLetter X | Get-Disk`, which hangs for minutes after
+    /// volume churn and blocked graceful stop.
     pub fn observe_volume_identity(letter: char) -> Result<ObservedVolumeIdentity, HostError> {
         let letter = letter.to_ascii_uppercase();
         if !('D'..='Z').contains(&letter) {
             return Err(HostError::Volume("letter must be D..=Z".into()));
         }
+        // Letter-only discovery is a fallback; callers that know serial should use
+        // observe_product_volume.
         let script = format!(
             concat!(
-                "$d=@(Get-Partition -DriveLetter {letter} -ErrorAction Stop | Get-Disk); ",
-                "if($d.Count -ne 1){{ exit 42 }}; ",
-                "$n=($d[0].FriendlyName -replace '\\s+',' ').Trim(); ",
-                "Write-Output ($n+'|'+$d[0].Size+'|'+$d[0].SerialNumber)"
+                "$letter='{letter}'; ",
+                "$parts=@(Get-Partition -ErrorAction SilentlyContinue | ",
+                "Where-Object {{ $_.DriveLetter -eq $letter }}); ",
+                "if($parts.Count -ne 1){{ exit 42 }}; ",
+                "$d=Get-Disk -Number $parts[0].DiskNumber -ErrorAction Stop; ",
+                "$n=($d.FriendlyName -replace '\\s+',' ').Trim(); ",
+                "Write-Output ($n+'|'+$d.Size+'|'+$d.SerialNumber)"
             ),
             letter = letter
         );
-        let output =
-            run_powershell_bounded(&script, Duration::from_secs(5)).map_err(HostError::Identity)?;
+        Self::parse_identity_output(
+            letter,
+            &run_powershell_bounded(&script, Duration::from_secs(8))
+                .map_err(HostError::Identity)?,
+        )
+    }
+
+    /// Observe product volume by exact serial+size (unique VPD identity).
+    ///
+    /// Letter is taken from config (Day-0 controlled), not from `Get-Partition`,
+    /// which hangs under GPU-PV volume churn and burned the graceful-stop budget.
+    pub fn observe_product_volume(
+        letter: char,
+        serial: &str,
+        size_bytes: u64,
+    ) -> Result<ObservedVolumeIdentity, HostError> {
+        let letter = letter.to_ascii_uppercase();
+        if !('D'..='Z').contains(&letter) {
+            return Err(HostError::Volume("letter must be D..=Z".into()));
+        }
+        if serial.len() != 16 {
+            return Err(HostError::Identity("serial must be 16 hex chars".into()));
+        }
+        // Get-Disk only — no Get-Partition. Unique serial+size is the hard identity.
+        let script = format!(
+            concat!(
+                "$wantSerial='{serial}'; $wantSize=[uint64]{size}; ",
+                "$d=@(Get-Disk -ErrorAction SilentlyContinue | Where-Object {{ ",
+                "  ($_.Size -eq $wantSize) -and ",
+                "  ((([string]$_.SerialNumber).Trim()) -ieq $wantSerial) -and ",
+                "  ($_.FriendlyName -match 'RAMSHARE') ",
+                "}}); ",
+                "if($d.Count -ne 1){{ Write-Error ('disk_count='+$d.Count); exit 42 }}; ",
+                "$n=($d[0].FriendlyName -replace '\\s+',' ').Trim(); ",
+                "Write-Output ($n+'|'+$d[0].Size+'|'+$d[0].SerialNumber.Trim())"
+            ),
+            serial = serial,
+            size = size_bytes
+        );
+        Self::parse_identity_output(
+            letter,
+            &run_powershell_bounded(&script, Duration::from_secs(2))
+                .map_err(HostError::Identity)?,
+        )
+    }
+
+    fn parse_identity_output(
+        letter: char,
+        output: &Output,
+    ) -> Result<ObservedVolumeIdentity, HostError> {
         if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(HostError::Identity(format!(
-                "volume identity query failed status={:?}",
-                output.status
+                "volume identity query failed status={:?} stderr={}",
+                output.status,
+                stderr.chars().take(200).collect::<String>()
             )));
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -375,27 +507,68 @@ impl WindowsHostState {
 }
 
 fn run_powershell_bounded(script: &str, timeout: Duration) -> Result<Output, String> {
-    let mut child = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", script])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn: {e}"))?;
-    let started = Instant::now();
-    loop {
-        match child.try_wait().map_err(|e| format!("wait: {e}"))? {
-            Some(_) => return child.wait_with_output().map_err(|e| format!("output: {e}")),
-            None if started.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "PowerShell timeout after {} ms",
-                    timeout.as_millis()
-                ));
+    // Channel + helper thread so a hung Get-Partition/WMI cannot block teardown
+    // forever even if kill/wait races on Windows.
+    use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+    let script = script.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let done = std::sync::Arc::new(AtomicBool::new(false));
+    let done_w = std::sync::Arc::clone(&done);
+    let worker = std::thread::spawn(move || {
+        let child = match Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                done_w.store(true, AtomicOrdering::Release);
+                let _ = tx.send(Err(format!("spawn: {e}")));
+                return;
             }
-            None => std::thread::sleep(Duration::from_millis(25)),
+        };
+        let pid = child.id();
+        let done_k = std::sync::Arc::clone(&done_w);
+        // Watchdog: force-kill tree only if still running after timeout.
+        std::thread::spawn(move || {
+            let slice = Duration::from_millis(50);
+            let mut waited = Duration::ZERO;
+            while waited < timeout {
+                if done_k.load(AtomicOrdering::Acquire) {
+                    return;
+                }
+                std::thread::sleep(slice);
+                waited += slice;
+            }
+            if !done_k.load(AtomicOrdering::Acquire) {
+                let _ = Command::new("taskkill")
+                    .args(["/PID", &pid.to_string(), "/T", "/F"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+        });
+        let out = child.wait_with_output().map_err(|e| format!("output: {e}"));
+        done_w.store(true, AtomicOrdering::Release);
+        let _ = tx.send(out);
+    });
+    let result = match rx.recv_timeout(timeout + Duration::from_millis(750)) {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(e)) => Err(e),
+        Err(_) => {
+            done.store(true, AtomicOrdering::Release);
+            Err(format!(
+                "PowerShell timeout after {} ms",
+                timeout.as_millis()
+            ))
         }
+    };
+    // Join only on success path; on timeout the worker may still be reaping.
+    if result.is_ok() {
+        let _ = worker.join();
     }
+    result
 }
 
 /// Reject relative and empty config paths.
