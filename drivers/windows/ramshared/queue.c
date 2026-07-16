@@ -283,11 +283,20 @@ QSubmit(
 	UINT32 idx;
 	PVOID sys_addr;
 	ULONG st;
+	LONG qs;
 
-	if (!Q->Registered || Q->Sq == NULL) {
+	/* DT-6: hold IoRundown for every mapped ring/data touch in this path. */
+	if (!ExAcquireRundownProtection(&Q->IoRundown))
+		return STATUS_DEVICE_NOT_CONNECTED;
+
+	qs = InterlockedOr(&Q->QState, 0);
+	if (!Q->Registered || Q->Sq == NULL ||
+	    qs == (LONG)RamQFailed || qs == (LONG)RamQClosing) {
+		ExReleaseRundownProtection(&Q->IoRundown);
 		return STATUS_DEVICE_NOT_CONNECTED;
 	}
 	if (Len > Q->MaxIoBytes) {
+		ExReleaseRundownProtection(&Q->IoRundown);
 		return STATUS_INVALID_PARAMETER;
 	}
 
@@ -299,6 +308,7 @@ QSubmit(
 	if ((Op == RAMSHARED_OP_WRITE || Op == RAMSHARED_OP_READ) && Len > 0) {
 		st = StorPortGetSystemAddress(DevExt, Srb, &sys_addr);
 		if (st != STOR_STATUS_SUCCESS || sys_addr == NULL) {
+			ExReleaseRundownProtection(&Q->IoRundown);
 			return STATUS_INVALID_PARAMETER;
 		}
 	}
@@ -315,6 +325,7 @@ QSubmit(
 	}
 	if (tag == RAMSHARED_MAX_QD) {
 		KeReleaseSpinLock(&Q->Lock, old);
+		ExReleaseRundownProtection(&Q->IoRundown);
 		return STATUS_INSUFFICIENT_RESOURCES;
 	}
 
@@ -326,6 +337,7 @@ QSubmit(
 	/* Free -> Reserved -> Submitted (DT-6). Completing only on CQ path. */
 	if (Q->Inflight[tag].State != RamSlotFree) {
 		KeReleaseSpinLock(&Q->Lock, old);
+		ExReleaseRundownProtection(&Q->IoRundown);
 		return STATUS_DEVICE_BUSY; /* COMPLETION_REENTRY_NO_SLOT_REUSE */
 	}
 	Q->Inflight[tag].Srb = Srb;
@@ -362,10 +374,12 @@ QSubmit(
 			irp->IoStatus.Information = 0;
 			IoCompleteRequest(irp, IO_NO_INCREMENT);
 		}
+		ExReleaseRundownProtection(&Q->IoRundown);
 		return STATUS_PENDING;
 	}
 
 	KeReleaseSpinLock(&Q->Lock, old);
+	ExReleaseRundownProtection(&Q->IoRundown);
 	return STATUS_PENDING;
 }
 
@@ -408,8 +422,17 @@ QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 	KIRQL old;
 	UINT32 completed = 0;
 	PDRIVER_CANCEL oldCancel;
+	LONG qs;
+	BOOLEAN saw_failed = FALSE;
 
-	if (!Q->Registered || Q->Cq == NULL) {
+	/* DT-6: hold IoRundown across mapped CQ/data access; release before pend. */
+	if (!ExAcquireRundownProtection(&Q->IoRundown))
+		return STATUS_DEVICE_NOT_CONNECTED;
+
+	qs = InterlockedOr(&Q->QState, 0);
+	if (!Q->Registered || Q->Cq == NULL ||
+	    qs == (LONG)RamQFailed || qs == (LONG)RamQClosing) {
+		ExReleaseRundownProtection(&Q->IoRundown);
 		return STATUS_DEVICE_NOT_CONNECTED;
 	}
 
@@ -430,12 +453,14 @@ QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 			Q->Cq->head = Q->Cq->head + 1;
 			if (cqe->reserved != 0) {
 				InterlockedExchange(&Q->QState, (LONG)RamQFailed);
+				saw_failed = TRUE;
 			}
 			continue;
 		}
 		/* Reject non-zero CQE reserved (REFUSE_RESERVED_CQE). */
 		if (cqe->reserved != 0) {
 			InterlockedExchange(&Q->QState, (LONG)RamQFailed);
+			saw_failed = TRUE;
 			Q->Inflight[tag].State = RamSlotCompleting;
 			srb = Q->Inflight[tag].Srb;
 			Q->Inflight[tag].Srb = NULL;
@@ -476,15 +501,17 @@ QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 					gst = StorPortGetSystemAddress(adext, srb, &sys_addr);
 					if (gst == STOR_STATUS_SUCCESS && sys_addr != NULL &&
 					    Q->Data != NULL) {
-						/* Rundown protects data during copy. */
-						if (ExAcquireRundownProtection(&Q->IoRundown)) {
-							RtlCopyMemory(
-								sys_addr,
-								Q->Data + (SIZE_T)buf_slot *
-										  Q->MaxIoBytes,
-								srb->DataTransferLength);
-							ExReleaseRundownProtection(&Q->IoRundown);
-						}
+						/*
+						 * Outer QCommit rundown already covers this
+						 * out-of-lock copy (RUNDOWN_UNMAP_AFTER_COPY).
+						 * Nested acquire was removed — it masked failed
+						 * outer holds and double-counted static sites.
+						 */
+						RtlCopyMemory(
+							sys_addr,
+							Q->Data + (SIZE_T)buf_slot *
+									  Q->MaxIoBytes,
+							srb->DataTransferLength);
 					}
 				}
 			}
@@ -507,17 +534,27 @@ QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 		}
 	}
 
+	/* Never pend after corruption — fail closed (REFUSE_RESERVED_CQE). */
+	if (saw_failed || InterlockedOr(&Q->QState, 0) == (LONG)RamQFailed) {
+		KeReleaseSpinLock(&Q->Lock, old);
+		ExReleaseRundownProtection(&Q->IoRundown);
+		return STATUS_INVALID_PARAMETER;
+	}
+
 	if (completed == 0 && Q->Sq && Q->Sq->head == Q->Sq->tail) {
 		/* No work and empty SQ — pend IRP (primary wake, DT-22). */
 		if (Q->PendedFetch != NULL) {
 			/* Only one pended fetch at a time. */
 			KeReleaseSpinLock(&Q->Lock, old);
+			ExReleaseRundownProtection(&Q->IoRundown);
 			return STATUS_DEVICE_BUSY;
 		}
 		IoMarkIrpPending(Irp);
 		Irp->Tail.Overlay.DriverContext[0] = Q;
 		Q->PendedFetch = Irp;
 		KeReleaseSpinLock(&Q->Lock, old);
+		/* Release before long-lived pend so teardown can wait rundown. */
+		ExReleaseRundownProtection(&Q->IoRundown);
 
 		oldCancel = IoSetCancelRoutine(Irp, QCommitCancel);
 		if (Irp->Cancel) {
@@ -539,6 +576,7 @@ QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 	}
 
 	KeReleaseSpinLock(&Q->Lock, old);
+	ExReleaseRundownProtection(&Q->IoRundown);
 	Irp->IoStatus.Status = STATUS_SUCCESS;
 	Irp->IoStatus.Information = completed;
 	return STATUS_SUCCESS;

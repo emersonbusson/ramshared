@@ -27,7 +27,7 @@ NTSTATUS VdCreate(_Out_ PVIRTUAL_DISK Disk, _In_ const RAMSHARED_DISK_PARAMS *Pa
 VOID VdDestroy(_Inout_ PVIRTUAL_DISK Disk);
 VOID VdTranslateSrb(_Inout_ PVIRTUAL_DISK Disk, _In_ PVOID DevExt,
 		    _Inout_ PSCSI_REQUEST_BLOCK Srb);
-/* LUN present but no CREATE_DISK yet (DT-25). */
+/* Control path present, but no LUN/PDO until CREATE_DISK (DT-25). */
 VOID VdTranslateSrbNoDisk(_In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb);
 
 VOID VdSetAdapterExt(_In_opt_ PVOID DeviceExtension);
