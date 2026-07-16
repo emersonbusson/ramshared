@@ -112,6 +112,29 @@ impl RuntimeEvidence {
             duration_ms: 0,
         }
     }
+
+    /// Start a distinct append-only event for a new runtime phase.
+    pub fn begin_event(&mut self, phase: impl Into<String>, ts_utc_ms: u64) {
+        self.event_id = format!("evt-{}", next_event_nonce());
+        self.ts_utc_ms = ts_utc_ms;
+        self.phase = phase.into();
+    }
+}
+
+/// Collision-resistant process-local run identity.
+///
+/// The monotonic nonce is required because Windows can reuse PIDs and multiple
+/// runs can begin in the same system-clock tick.
+pub fn new_run_id(pid: u32, ts_utc_ns: u128) -> String {
+    format!("run-{pid}-{ts_utc_ns}-{}", next_run_nonce())
+}
+
+pub fn new_process_run_id() -> String {
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    new_run_id(std::process::id(), ts)
 }
 
 /// Append-only JSONL writer.
@@ -222,7 +245,7 @@ fn looks_like_pointer(token: &str) -> bool {
     false
 }
 
-fn utc_ms() -> u64 {
+pub fn utc_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -230,6 +253,12 @@ fn utc_ms() -> u64 {
 }
 
 fn next_event_nonce() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(1);
+    N.fetch_add(1, Ordering::Relaxed)
+}
+
+fn next_run_nonce() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(1);
     N.fetch_add(1, Ordering::Relaxed)
@@ -333,5 +362,23 @@ mod tests {
         assert!(
             !detail.contains("ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789XX")
         );
+    }
+
+    #[test]
+    fn run_ids_do_not_collide_for_same_process_and_clock_tick() {
+        let a = new_run_id(77, 1_234_567);
+        let b = new_run_id(77, 1_234_567);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn each_phase_transition_gets_a_fresh_event_identity_and_timestamp() {
+        let mut row = RuntimeEvidence::base("run-1", "Stopped");
+        let first_event = row.event_id.clone();
+        let first_ts = row.ts_utc_ms;
+        row.begin_event("Leased", first_ts + 1);
+        assert_eq!(row.phase, "Leased");
+        assert_ne!(row.event_id, first_event);
+        assert_eq!(row.ts_utc_ms, first_ts + 1);
     }
 }

@@ -8,9 +8,86 @@ use crate::broker_tenant::{BrokerTenant, BrokerTenantError, LeaseState};
 use crate::config::WinDriveConfig;
 use crate::runtime::{RuntimeError, RuntimeErrorClass};
 
+/// Read-only identity observed for a mounted volume before teardown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObservedVolumeIdentity {
+    pub letter: char,
+    pub vendor: String,
+    pub product: String,
+    pub serial: String,
+    pub size_bytes: u64,
+}
+
+/// Parse the exact product prefix emitted by Windows storage surfaces.
+///
+/// `Get-Disk` may append the standard `SCSI Disk Device` class suffix to the
+/// INQUIRY vendor/product pair. No other suffix is accepted.
+pub fn parse_product_friendly_name(name: &str) -> Result<(String, String), String> {
+    let fields: Vec<&str> = name.split_whitespace().collect();
+    let prefix_matches = fields.len() >= 2
+        && fields[0].eq_ignore_ascii_case("RAMSHARE")
+        && fields[1].eq_ignore_ascii_case("VRAMDISK");
+    let suffix_matches = fields.len() == 2
+        || (fields.len() == 5
+            && fields[2].eq_ignore_ascii_case("SCSI")
+            && fields[3].eq_ignore_ascii_case("Disk")
+            && fields[4].eq_ignore_ascii_case("Device"));
+    if !prefix_matches || !suffix_matches {
+        return Err("unexpected product friendly name".into());
+    }
+    Ok(("RAMSHARE".into(), "VRAMDISK".into()))
+}
+
+/// Exact product identity required to select a teardown volume.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TeardownTarget {
+    letter: char,
+    serial: String,
+    size_bytes: u64,
+}
+
+impl TeardownTarget {
+    pub fn new(letter: char, serial: impl Into<String>, size_bytes: u64) -> Result<Self, String> {
+        let letter = letter.to_ascii_uppercase();
+        let serial = serial.into();
+        if !('D'..='Z').contains(&letter) {
+            return Err("teardown letter must be D..=Z".into());
+        }
+        if serial.len() != 16 || !serial.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("teardown serial must be 16 hexadecimal characters".into());
+        }
+        if size_bytes == 0 {
+            return Err("teardown size must be non-zero".into());
+        }
+        Ok(Self {
+            letter,
+            serial,
+            size_bytes,
+        })
+    }
+
+    pub fn verify_unique(&self, observed: &[ObservedVolumeIdentity]) -> Result<char, String> {
+        let mut matches = observed.iter().filter(|identity| {
+            identity.letter.to_ascii_uppercase() == self.letter
+                && identity.vendor.trim() == "RAMSHARE"
+                && identity.product.trim() == "VRAMDISK"
+                && identity.serial.eq_ignore_ascii_case(&self.serial)
+                && identity.size_bytes == self.size_bytes
+        });
+        let Some(first) = matches.next() else {
+            return Err("product volume identity missing or mismatched".into());
+        };
+        if matches.next().is_some() {
+            return Err("product volume identity is ambiguous".into());
+        }
+        Ok(first.letter.to_ascii_uppercase())
+    }
+}
+
 /// Teardown sub-phases for structured logging (SPEC observability).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TeardownPhase {
+    Identity,
     GateA,
     Drain,
     VolumeLock,
@@ -78,6 +155,8 @@ pub trait WipeVram {
 
 /// Authoritative OS pagefile / volume queries (DT-8).
 pub trait PagefileGates {
+    /// Read-only exact identity check. Any mismatch or ambiguity is unsafe.
+    fn verify_volume_identity(&self, letter: char) -> Result<(), String>;
     /// Gate A/B: list active pagefile identities. Err = query unsafe (fail-closed).
     fn active_pagefiles(&self) -> Result<Vec<String>, String>;
     /// Exclusive volume lock. Err = lock failure.
@@ -111,7 +190,7 @@ pub fn provision_after_lease(
     Ok(())
 }
 
-/// Gate A → drain → lock → Gate B → flush/dismount → unregister → destroy → unlock → wipe.
+/// Exact identity → Gate A → drain → lock → Gate B → flush/dismount → unregister → destroy → unlock → wipe.
 ///
 /// On Gate A failure / Gate B failure / lock failure: resume Online, no destructive effects (code 7).
 pub fn teardown_storage_only(
@@ -125,6 +204,11 @@ pub fn teardown_storage_only(
     if !state.online && !state.disk_created && !state.registered_queue {
         return Ok(());
     }
+
+    phases.push(TeardownPhase::Identity);
+    gates
+        .verify_volume_identity(cfg.volume_letter)
+        .map_err(|e| ProvisionError::PagefileSafety(format!("volume_identity: {e}")))?;
 
     // Gate A — before any runtime mutation past Online stop intent.
     phases.push(TeardownPhase::GateA);
@@ -251,6 +335,10 @@ struct SimpleGates {
 }
 
 impl PagefileGates for SimpleGates {
+    fn verify_volume_identity(&self, _: char) -> Result<(), String> {
+        Ok(())
+    }
+
     fn active_pagefiles(&self) -> Result<Vec<String>, String> {
         if self.clear {
             Ok(vec![])
@@ -335,6 +423,10 @@ mod tests {
         locked: bool,
     }
     impl PagefileGates for CountingGates {
+        fn verify_volume_identity(&self, _: char) -> Result<(), String> {
+            Ok(())
+        }
+
         fn active_pagefiles(&self) -> Result<Vec<String>, String> {
             let i = self.n.get();
             self.n.set(i + 1);
@@ -360,6 +452,34 @@ mod tests {
         }
         fn volume_locked(&self) -> bool {
             self.locked
+        }
+    }
+
+    struct IdentityFailGates;
+
+    impl PagefileGates for IdentityFailGates {
+        fn verify_volume_identity(&self, _: char) -> Result<(), String> {
+            Err("serial mismatch".into())
+        }
+
+        fn active_pagefiles(&self) -> Result<Vec<String>, String> {
+            panic!("Gate A must not run after identity refusal")
+        }
+
+        fn lock_volume(&mut self, _: char) -> Result<(), String> {
+            panic!("volume lock must not run after identity refusal")
+        }
+
+        fn unlock_volume(&mut self) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn flush_and_dismount(&mut self) -> Result<(), String> {
+            panic!("dismount must not run after identity refusal")
+        }
+
+        fn volume_locked(&self) -> bool {
+            false
         }
     }
 
@@ -473,6 +593,36 @@ mod tests {
         assert!(state.online);
         assert!(state.disk_created);
         assert!(phases.contains(&TeardownPhase::ResumeOnline));
+    }
+
+    #[test]
+    fn identity_mismatch_refuses_before_gate_a_or_mutation() {
+        let c = cfg();
+        let mut state = online_state();
+        let mut disk = MemDisk {
+            created: true,
+            registered: true,
+            ..Default::default()
+        };
+        let mut wipe = NopWipe;
+        let mut gates = IdentityFailGates;
+        let mut phases = Vec::new();
+        let error = teardown_storage_only(
+            &c,
+            &mut state,
+            &mut disk,
+            &mut wipe,
+            &mut gates,
+            &mut phases,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, ProvisionError::PagefileSafety(message) if message.contains("volume_identity"))
+        );
+        assert_eq!(phases, [TeardownPhase::Identity]);
+        assert_eq!(disk.destroy_calls, 0);
+        assert_eq!(disk.unreg_calls, 0);
+        assert!(state.online);
     }
 
     #[test]
@@ -642,6 +792,7 @@ mod tests {
         assert_eq!(
             phases,
             [
+                TeardownPhase::Identity,
                 TeardownPhase::GateA,
                 TeardownPhase::Drain,
                 TeardownPhase::VolumeLock,
@@ -653,6 +804,61 @@ mod tests {
                 TeardownPhase::Wipe,
                 TeardownPhase::Release,
             ]
+        );
+    }
+
+    #[test]
+    fn teardown_target_requires_exact_unique_product_identity() {
+        let expected = TeardownTarget::new('S', "A1B2C3D4E5F60708", 64 * 1024 * 1024).unwrap();
+        let observed = ObservedVolumeIdentity {
+            letter: 'S',
+            vendor: "RAMSHARE".into(),
+            product: "VRAMDISK".into(),
+            serial: "A1B2C3D4E5F60708".into(),
+            size_bytes: 64 * 1024 * 1024,
+        };
+        assert_eq!(expected.verify_unique(&[observed]).unwrap(), 'S');
+    }
+
+    #[test]
+    fn product_friendly_name_accepts_only_exact_identity_and_standard_suffix() {
+        assert_eq!(
+            parse_product_friendly_name("RAMSHARE VRAMDISK SCSI Disk Device").unwrap(),
+            ("RAMSHARE".into(), "VRAMDISK".into())
+        );
+        assert_eq!(
+            parse_product_friendly_name("RAMSHARE VRAMDISK").unwrap(),
+            ("RAMSHARE".into(), "VRAMDISK".into())
+        );
+        assert!(parse_product_friendly_name("RAMSHARE OTHER SCSI Disk Device").is_err());
+        assert!(parse_product_friendly_name("RAMSHARE VRAMDISK USB Device").is_err());
+    }
+
+    #[test]
+    fn teardown_target_fails_closed_on_missing_mismatch_or_ambiguity() {
+        let expected = TeardownTarget::new('S', "A1B2C3D4E5F60708", 64 * 1024 * 1024).unwrap();
+        assert!(expected.verify_unique(&[]).is_err());
+
+        let wrong = ObservedVolumeIdentity {
+            letter: 'S',
+            vendor: "KINGSTON".into(),
+            product: "SSD".into(),
+            serial: "OTHER".into(),
+            size_bytes: 64 * 1024 * 1024,
+        };
+        assert!(expected.verify_unique(&[wrong]).is_err());
+
+        let matching = ObservedVolumeIdentity {
+            letter: 'S',
+            vendor: "RAMSHARE".into(),
+            product: "VRAMDISK".into(),
+            serial: "A1B2C3D4E5F60708".into(),
+            size_bytes: 64 * 1024 * 1024,
+        };
+        assert!(
+            expected
+                .verify_unique(&[matching.clone(), matching])
+                .is_err()
         );
     }
 }

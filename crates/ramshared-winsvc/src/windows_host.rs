@@ -8,7 +8,9 @@
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
 use std::ptr;
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{CloseHandle, FALSE, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Security::Cryptography::{
@@ -21,11 +23,12 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_SHARE_READ, GetFileAttributesW, OPEN_EXISTING,
+    FILE_SHARE_READ, GetFileAttributesW, OPEN_EXISTING, ReadFile,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 use crate::config::{ConfigError, MAX_CONFIG_BYTES, WinDriveConfig};
+use crate::service::{ObservedVolumeIdentity, parse_product_friendly_name};
 
 /// Host-side errors (no kernel addresses).
 #[derive(Debug)]
@@ -154,35 +157,42 @@ impl WindowsHostState {
             )
         };
         if handle == INVALID_HANDLE_VALUE {
-            // Fallback to std::fs if CreateFile fails on some paths.
-            let mut f = File::open(path).map_err(|e| HostError::Io(e.to_string()))?;
-            let mut buf = Vec::new();
-            f.read_to_end(&mut buf)
-                .map_err(|e| HostError::Io(e.to_string()))?;
-            if buf.len() > MAX_CONFIG_BYTES {
-                return Err(HostError::Config(ConfigError::Invalid {
-                    field: "config",
-                    detail: format!("exceeds {MAX_CONFIG_BYTES}"),
-                }));
-            }
-            return WinDriveConfig::from_reader(&buf).map_err(HostError::Config);
+            return Err(HostError::Io(last_err("CreateFile config")));
         }
-        // Read via std after validating handle open succeeded (owned buffer).
+        let mut buf = vec![0u8; MAX_CONFIG_BYTES + 1];
+        let mut total = 0usize;
+        while total < buf.len() {
+            let mut read = 0u32;
+            let ok = unsafe {
+                ReadFile(
+                    handle,
+                    buf[total..].as_mut_ptr(),
+                    (buf.len() - total) as u32,
+                    &mut read,
+                    ptr::null_mut(),
+                )
+            };
+            if ok == FALSE {
+                unsafe {
+                    CloseHandle(handle);
+                }
+                return Err(HostError::Io(last_err("ReadFile config")));
+            }
+            if read == 0 {
+                break;
+            }
+            total += read as usize;
+        }
         unsafe {
             CloseHandle(handle);
         }
-        let mut f = File::open(path).map_err(|e| HostError::Io(e.to_string()))?;
-        let mut buf = Vec::new();
-        f.by_ref()
-            .take(MAX_CONFIG_BYTES as u64 + 1)
-            .read_to_end(&mut buf)
-            .map_err(|e| HostError::Io(e.to_string()))?;
-        if buf.len() > MAX_CONFIG_BYTES {
+        if total > MAX_CONFIG_BYTES {
             return Err(HostError::Config(ConfigError::Invalid {
                 field: "config",
                 detail: format!("exceeds {MAX_CONFIG_BYTES}"),
             }));
         }
+        buf.truncate(total);
         WinDriveConfig::from_reader(&buf).map_err(HostError::Config)
     }
 
@@ -190,14 +200,11 @@ impl WindowsHostState {
     ///
     /// Uses PowerShell CIM for Win32_PageFileUsage (no full WMI COM stack in windows-sys).
     pub fn active_pagefiles() -> Result<Vec<PagefileIdentity>, HostError> {
-        let output = std::process::Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-Command",
-                "Get-CimInstance Win32_PageFileUsage | ForEach-Object { $_.Name }",
-            ])
-            .output()
-            .map_err(|e| HostError::Pagefile(format!("spawn: {e}")))?;
+        let output = run_powershell_bounded(
+            "Get-CimInstance Win32_PageFileUsage | ForEach-Object { $_.Name }",
+            Duration::from_secs(5),
+        )
+        .map_err(HostError::Pagefile)?;
         if !output.status.success() {
             return Err(HostError::Pagefile(format!(
                 "WMI/CIM query failed status={:?}",
@@ -263,63 +270,48 @@ impl WindowsHostState {
         Ok(())
     }
 
-    /// Prefer config letter; no PowerShell (avoids multi-second hangs in teardown).
-    pub fn resolve_teardown_letter(config_letter: char, _size_bytes: u64) -> char {
-        config_letter.to_ascii_uppercase()
-    }
-
-    /// FSCTL_DISMOUNT without exclusive lock (shared open). No PowerShell.
-    /// Call on the product letter (and lab candidates) before UNREGISTER/DESTROY.
-    pub fn force_dismount_letter(letter: char) -> Result<(), HostError> {
+    /// Observe exactly one disk behind the configured volume letter.
+    pub fn observe_volume_identity(letter: char) -> Result<ObservedVolumeIdentity, HostError> {
         let letter = letter.to_ascii_uppercase();
         if !('D'..='Z').contains(&letter) {
             return Err(HostError::Volume("letter must be D..=Z".into()));
         }
-        let path = format!("\\\\.\\{letter}:");
-        let wide = to_wide(&path);
-        let handle = unsafe {
-            CreateFileW(
-                wide.as_ptr(),
-                0xC000_0000, // GENERIC_READ|GENERIC_WRITE
-                FILE_SHARE_READ | windows_sys::Win32::Storage::FileSystem::FILE_SHARE_WRITE,
-                ptr::null(),
-                OPEN_EXISTING,
-                0,
-                ptr::null_mut(),
-            )
-        };
-        if handle == INVALID_HANDLE_VALUE {
-            // Letter not present — fine for teardown.
-            return Ok(());
+        let script = format!(
+            concat!(
+                "$d=@(Get-Partition -DriveLetter {letter} -ErrorAction Stop | Get-Disk); ",
+                "if($d.Count -ne 1){{ exit 42 }}; ",
+                "$n=($d[0].FriendlyName -replace '\\s+',' ').Trim(); ",
+                "Write-Output ($n+'|'+$d[0].Size+'|'+$d[0].SerialNumber)"
+            ),
+            letter = letter
+        );
+        let output =
+            run_powershell_bounded(&script, Duration::from_secs(5)).map_err(HostError::Identity)?;
+        if !output.status.success() {
+            return Err(HostError::Identity(format!(
+                "volume identity query failed status={:?}",
+                output.status
+            )));
         }
-        // Best-effort flush; ignore failure (volume may be dirty / no FS).
-        let _ = unsafe { windows_sys::Win32::Storage::FileSystem::FlushFileBuffers(handle) };
-        let ok = fsctl(handle, FSCTL_DISMOUNT_VOLUME);
-        unsafe {
-            CloseHandle(handle);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut parts = stdout.trim().split('|');
+        let name = parts.next().unwrap_or_default();
+        let size_bytes = parts
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(|| HostError::Identity("missing disk size".into()))?;
+        let serial = parts.next().unwrap_or_default().trim().to_string();
+        if parts.next().is_some() {
+            return Err(HostError::Identity("ambiguous identity output".into()));
         }
-        if ok {
-            Ok(())
-        } else {
-            // Still Ok for teardown: DESTROY may proceed on raw LUN.
-            Err(HostError::Volume(last_err("FSCTL_DISMOUNT_VOLUME")))
-        }
-    }
-
-    /// Dismount config letter plus known lab letters used in this product path.
-    /// Never touches A/B/C system letters.
-    pub fn force_dismount_product_candidates(primary: char) {
-        let primary = primary.to_ascii_uppercase();
-        let mut letters = vec![primary, 'S', 'R'];
-        // Only include D if it was the primary (host exhaustive once assigned D by mistake).
-        if primary == 'D' {
-            letters.push('D');
-        }
-        letters.sort_unstable();
-        letters.dedup();
-        for c in letters {
-            let _ = Self::force_dismount_letter(c);
-        }
+        let (vendor, product) = parse_product_friendly_name(name).map_err(HostError::Identity)?;
+        Ok(ObservedVolumeIdentity {
+            letter,
+            vendor,
+            product,
+            serial,
+            size_bytes,
+        })
     }
 
     pub fn find_lun(serial: &str, size_bytes: u64) -> Result<Option<LunIdentity>, HostError> {
@@ -327,10 +319,8 @@ impl WindowsHostState {
         let script = format!(
             "Get-Disk | Where-Object {{ $_.Size -eq {size_bytes} -and $_.FriendlyName -match 'RAMSHARE|VRAMDISK' }} | Select-Object -First 1 Number,FriendlyName,Size,SerialNumber | ConvertTo-Json -Compress"
         );
-        let output = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-Command", &script])
-            .output()
-            .map_err(|e| HostError::Identity(e.to_string()))?;
+        let output =
+            run_powershell_bounded(&script, Duration::from_secs(5)).map_err(HostError::Identity)?;
         if !output.status.success() {
             return Err(HostError::Identity("Get-Disk failed".into()));
         }
@@ -345,15 +335,11 @@ impl WindowsHostState {
         let lun = LunIdentity {
             vendor: LunIdentity::VENDOR.into(),
             product: LunIdentity::PRODUCT.into(),
-            serial: if sn.is_empty() {
-                serial.to_string()
-            } else {
-                sn
-            },
+            serial: sn,
             size_bytes: size,
             disk_number: number,
         };
-        if lun.matches_expected(serial, size_bytes) || lun.size_bytes == size_bytes {
+        if lun.matches_expected(serial, size_bytes) {
             Ok(Some(lun))
         } else {
             Ok(None)
@@ -385,6 +371,30 @@ impl WindowsHostState {
             ])
             .status();
         Ok(())
+    }
+}
+
+fn run_powershell_bounded(script: &str, timeout: Duration) -> Result<Output, String> {
+    let mut child = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn: {e}"))?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait().map_err(|e| format!("wait: {e}"))? {
+            Some(_) => return child.wait_with_output().map_err(|e| format!("output: {e}")),
+            None if started.elapsed() >= timeout => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "PowerShell timeout after {} ms",
+                    timeout.as_millis()
+                ));
+            }
+            None => std::thread::sleep(Duration::from_millis(25)),
+        }
     }
 }
 

@@ -4,6 +4,7 @@
 //! SQE and WRITE payloads are snapshotted into owned buffers before backend access.
 
 use ramshared_block::BlockBackend;
+use std::time::Instant;
 
 use crate::proto::{
     Cqe, MAX_IO, MAX_QD, OP_FLUSH, OP_READ, OP_WRITE, RING_MAGIC, RingHdr, ST_EINVAL, ST_EIO,
@@ -18,6 +19,67 @@ pub enum DriverLinkError {
     Invalid(String),
     Backend(String),
     Stopped,
+}
+
+const LATENCY_WINDOW: usize = 1024;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IoStats {
+    pub reads: u64,
+    pub writes: u64,
+    pub flushes: u64,
+    pub bytes_read: u64,
+    pub bytes_written: u64,
+    pub errors: u64,
+    pub latencies_us: Vec<u64>,
+}
+
+struct LinkStats {
+    public: IoStats,
+    latency_window: [u64; LATENCY_WINDOW],
+    latency_len: usize,
+    latency_next: usize,
+}
+
+impl Default for LinkStats {
+    fn default() -> Self {
+        Self {
+            public: IoStats::default(),
+            latency_window: [0; LATENCY_WINDOW],
+            latency_len: 0,
+            latency_next: 0,
+        }
+    }
+}
+
+impl LinkStats {
+    fn record(&mut self, sqe: &Sqe, status: i32, latency_us: u64) {
+        if status == ST_OK {
+            match sqe.op {
+                OP_READ => {
+                    self.public.reads += 1;
+                    self.public.bytes_read += u64::from(sqe.len);
+                }
+                OP_WRITE => {
+                    self.public.writes += 1;
+                    self.public.bytes_written += u64::from(sqe.len);
+                }
+                OP_FLUSH => self.public.flushes += 1,
+                _ => self.public.errors += 1,
+            }
+        } else {
+            self.public.errors += 1;
+        }
+        self.latency_window[self.latency_next] = latency_us;
+        self.latency_next = (self.latency_next + 1) % LATENCY_WINDOW;
+        self.latency_len = self.latency_len.saturating_add(1).min(LATENCY_WINDOW);
+    }
+
+    fn snapshot(&self) -> IoStats {
+        let mut result = self.public.clone();
+        result.latencies_us = self.latency_window[..self.latency_len].to_vec();
+        result
+    }
 }
 
 impl std::fmt::Display for DriverLinkError {
@@ -242,6 +304,7 @@ pub struct DriverLink<Q: QueueAccess = InMemoryQueue> {
     stop: bool,
     /// Test seam: count backend write calls (snapshot integrity).
     pub backend_writes: u32,
+    stats: LinkStats,
 }
 
 impl DriverLink<InMemoryQueue> {
@@ -254,6 +317,7 @@ impl DriverLink<InMemoryQueue> {
             q: InMemoryQueue::new(queue_depth, max_io_bytes, block_size)?,
             stop: false,
             backend_writes: 0,
+            stats: LinkStats::default(),
         })
     }
 }
@@ -264,11 +328,16 @@ impl<Q: QueueAccess> DriverLink<Q> {
             q,
             stop: false,
             backend_writes: 0,
+            stats: LinkStats::default(),
         }
     }
 
     pub fn request_stop(&mut self) {
         self.stop = true;
+    }
+
+    pub fn stats(&self) -> IoStats {
+        self.stats.snapshot()
     }
 
     /// Process one COMMIT_AND_FETCH cycle: drain pending SQEs against `backend`.
@@ -281,7 +350,10 @@ impl<Q: QueueAccess> DriverLink<Q> {
         }
         let mut n = 0u32;
         while let Some(sqe) = self.q.pop_sqe_snapshot() {
+            let started = Instant::now();
             let status = self.serve_one(backend, &sqe);
+            let latency_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+            self.stats.record(&sqe, status, latency_us);
             self.q.push_cqe(Cqe {
                 tag: sqe.tag,
                 status,
@@ -524,8 +596,18 @@ mod tests {
             fake.submit_flush(3).unwrap();
         }
         assert_eq!(link.commit_and_fetch(&mut be).unwrap(), 1);
-        let mut fake = FakeDriver::new(&mut link);
-        assert_eq!(fake.harvest().unwrap().unwrap().status, ST_OK);
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            assert_eq!(fake.harvest().unwrap().unwrap().status, ST_OK);
+        }
+        let stats = link.stats();
+        assert_eq!(stats.reads, 1);
+        assert_eq!(stats.writes, 1);
+        assert_eq!(stats.flushes, 1);
+        assert_eq!(stats.bytes_read, 4096);
+        assert_eq!(stats.bytes_written, 4096);
+        assert_eq!(stats.errors, 0);
+        assert_eq!(stats.latencies_us.len(), 3);
     }
 
     #[test]

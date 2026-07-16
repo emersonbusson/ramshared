@@ -25,7 +25,7 @@ pub unsafe fn open(filename: *const c_char) -> *mut c_void {
     if handle.is_null() {
         return core::ptr::null_mut();
     }
-    handle as *mut c_void
+    handle
 }
 
 /// Loads the specified symbol from the library.
