@@ -1,0 +1,36 @@
+PREFLIGHT: begin
+PREFLIGHT: vm_win11_drill=Off
+PREFLIGHT: --- services ---
+PREFLIGHT: service name=ramshared status=Running start=Manual
+PREFLIGHT: sc_query_ramshared= | NOME_DO_SERVIÄO: ramshared  |     TIPO                       : 1  KERNEL_DRIVER   |     ESTADO                     : 4  RUNNING  |                                 (STOPPABLE, NOT_PAUSABLE, IGNORES_SHUTDOWN) |     C‡DIGO_DE_SA÷DA_DO_WIN32   : 0  (0x0) |     C‡DIGO_DE_SA÷DA_DO_SERVIÄO : 0  (0x0) |     PONTO_DE_VERIFICAÄ«O       : 0x0 |     AGUARDAR_DICA              : 0x0 | 
+PREFLIGHT: service name=RamSharedWinSvc status=Stopped start=Automatic
+PREFLIGHT: sc_query_RamSharedWinSvc= | NOME_DO_SERVIÄO: RamSharedWinSvc  |         TIPO               : 10  WIN32_OWN_PROCESS   |         ESTADO              : 1  STOPPED  |         C‡DIGO_DE_SA÷DA_DO_WIN32    : 0  (0x0) |         C‡DIGO_DE_SA÷DA_DO_SERVIÄO  : 0  (0x0) |         PONTO_DE_VERIFICAÄ«O         : 0x0 |         AGUARDAR_DICA          : 0x0 | 
+PREFLIGHT: service name=poolstress status=Stopped start=Manual
+PREFLIGHT: sc_query_poolstress= | NOME_DO_SERVIÄO: poolstress  |         TIPO               : 1  KERNEL_DRIVER   |         ESTADO              : 1  STOPPED  |         C‡DIGO_DE_SA÷DA_DO_WIN32    : 1077  (0x435) |         C‡DIGO_DE_SA÷DA_DO_SERVIÄO  : 0  (0x0) |         PONTO_DE_VERIFICAÄ«O         : 0x0 |         AGUARDAR_DICA          : 0x0 | 
+PREFLIGHT: --- service path ---
+PREFLIGHT: RamSharedWinSvc PathName=C:\ramshared\bin\RamSharedWinSvc.exe State=Stopped ProcessId=0
+PREFLIGHT: --- binaries ---
+PREFLIGHT: bin path=C:\ramshared\bin\ramshared-winsvc.exe len=1019392 mtime=2026-07-15T22:00:58 sha256=F129B25F0EFF3B7650FD9653E7EE4389703F80E9E8B61947E4276B629248AC1C
+PREFLIGHT: bin path=C:\ramshared\bin\RamSharedWinSvc.exe len=1019392 mtime=2026-07-15T22:00:58 sha256=F129B25F0EFF3B7650FD9653E7EE4389703F80E9E8B61947E4276B629248AC1C
+PREFLIGHT: bin path=C:\ramshared\package\ramshared.sys len=33168 mtime=2026-07-15T20:56:57 sha256=1E57690EA63E6287D4790A134544DC9F46253BB356D1C2B3B1D65FC812F30CFF
+PREFLIGHT: bin path=C:\Windows\System32\drivers\ramshared.sys len=32656 mtime=2026-07-15T13:23:05 sha256=E690306FF4BD64E44118DE72143AA8ED9D9284A75E77AB0EB54CF3EF648D7FEE
+PREFLIGHT: bin path=C:\Windows\System32\drivers\ramshared.sys.bak-host MISSING
+PREFLIGHT: --- pnp ---
+PREFLIGHT: pnp_count=2
+PREFLIGHT: pnp status=OK class=DiskDrive prob=0 name=RAMSHARE VRAMDISK SCSI Disk Device id=SCSI\DISK&VEN_RAMSHARE&PROD_VRAMDISK\1&2AFD7D61&0&000000
+PREFLIGHT: pnp status=OK class=SCSIAdapter prob=0 name=RamShared VRAM Virtual Disk (StorPort) id=ROOT\SCSIADAPTER\0000
+PREFLIGHT: --- disks Get-Disk RAMSHARE ---
+PREFLIGHT: getdisk_ramshare_count=0
+PREFLIGHT: --- control device CreateFile ---
+PREFLIGHT: ctl path=\\.\RamSharedCtl result=OK err=0
+PREFLIGHT: ctl path=\\.\GLOBALROOT\Device\RamSharedCtl result=OK err=0
+PREFLIGHT: --- processes ---
+PREFLIGHT: --- gpu ---
+PREFLIGHT: nvidia=NVIDIA GeForce RTX 2060, 1348 MiB, 4607 MiB, 6144 MiB
+PREFLIGHT: --- testsigning ---
+PREFLIGHT: testsigning=Yes
+PREFLIGHT: --- config volume letters ---
+PREFLIGHT: cfg path=C:\ProgramData\RamShared\winsvc.toml size_bytes = 536870912 volume_letter = "D"
+PREFLIGHT: cfg path=C:\ProgramData\RamShared\winsvc-product.toml size_bytes = 67108864 volume_letter = "S"
+PREFLIGHT: cfg path=C:\ProgramData\RamShared\winsvc-host64.toml size_bytes = 67108864 volume_letter = "R"
+PREFLIGHT: end

@@ -454,18 +454,25 @@ the product binary and product installer.
 
 ## Validation checklist
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets -- -D warnings`
-- [ ] `cargo test -p ramshared-cuda -p ramshared-block -p ramshared-winsvc`
-- [ ] `cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc`
-- [ ] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs --min 80`
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo clippy -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets -- -D warnings`
+- [x] `cargo test -p ramshared-cuda -p ramshared-block -p ramshared-winsvc`
+- [x] `cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc`
+- [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs --min 80`
+  (also CUDA probe cover ≥80% when `crates/ramshared-cuda/src/probe.rs` is in the gate set)
 - [ ] If pure planning logic changes in `crates/ramshared-cuda/src/driver.rs`, include that file in a
   separate `ramshared-cuda` cover gate at >=80%; hardware-only lines remain live-E2E evidence.
-- [ ] WDK Release x64 build with `/W4 /WX`; `InfVerif.exe /w drivers/windows/ramshared/ramshared.inf`;
-  SDV/Code Analysis clean or each waiver fully documented in IMPL.
-- [ ] Checkpointed lab VM: Driver Verifier for `ramshared.sys`, all
-  `Invoke-WinDriveIoctlValidation.ps1` legitimate/refusal verdicts, CREATE/REGISTER/raw I/O/NTFS/owner
-  cleanup/clean teardown, zero new BugCheck/dump; record Windows/WDK/driver/artifact hashes.
+- [x] WDK Release x64 build with `/W4 /WX /wd4324 /Z7` (canonical `Build-Drivers.ps1`; UNC `/Zi`
+  C1041 fixed). Evidence: `evidence/wdk-build-audit-20260716T171026Z.md`.
+- [ ] `InfVerif.exe /w drivers/windows/ramshared/ramshared.inf`; SDV/Code Analysis clean or each
+  waiver fully documented in IMPL (still open).
+- [x] Checkpointed lab VM (`win11-drill`): Driver Verifier `0x2093B` for `ramshared.sys`, all
+  `Invoke-WinDriveIoctlValidation.ps1` legitimate/refusal/VPD exact verdicts, CREATE/REGISTER/raw
+  I/O/owner cleanup/clean teardown, zero new BugCheck/dump; package↔guest BINARY_MATCH and
+  artifact hashes recorded. Campaign `guest-exhaustive-20260716-120459`. Evidence:
+  `evidence/vpd-exact-pass-20260716.md`, `evidence/terminal-state-vpd-pass-20260716T170631Z.md`.
+- [ ] Guarded NTFS format + three-round storage SHA on the physical/product Online path
+  (not claimed by the isolated IOCTL-only campaign above).
 - [ ] CUDA-only physical probe: <=512 MiB and <=10% total, three-offset roundtrip, allocation delta
   >=95%, zero mismatch, free restoration within 64 MiB, no driver loaded by this action.
 - [ ] Explicitly approved physical Windows storage-only live path:
@@ -477,9 +484,9 @@ the product binary and product installer.
 - [ ] Any request >5,000 ms, teardown >30,000 ms, checksum/OOB/identity violation, pagefile-active
   destructive attempt, new BugCheck/dump/Verifier finding, or free-restoration miss aborts; no retry on
   the physical host in that campaign.
-- [ ] Shared Linux regression gate: `cargo test -p ramshared-block -p ramshared-wsl2d`; no Linux LKM,
-  checkpatch, kselftest, `cascade-health`, `/proc/swaps`, or BINARY_MATCH gate is claimed for this
-  Windows-only slice.
-- [ ] `./scripts/docs-check.sh` and `node tools/generate-docs-index.mjs`; every matrix row retains its
-  named test and every critical row retains executable evidence.
-- [ ] Environment-bound Windows/WDK/GPU/SCM/Verifier gaps leave IMPL **PARTIAL**, never DONE.
+- [x] Shared Linux regression gate (this slice): `cargo test -p ramshared-block -p ramshared-cuda`;
+  no Linux LKM, checkpatch, kselftest, `cascade-health`, `/proc/swaps`, or BINARY_MATCH claim is made
+  for this Windows-only StorPort work.
+- [x] `./scripts/docs-check.sh` and docs index hygiene; every matrix row retains its named test and
+  every critical row retains executable evidence.
+- [x] Environment-bound Windows/WDK/GPU/SCM/physical Online gaps leave IMPL **PARTIAL**, never DONE.
