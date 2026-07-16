@@ -364,15 +364,28 @@ try { $listener.Stop() } catch {}
     $o.rounds = $rounds
     $o.roundsPass = (($rounds | Where-Object { -not $_.match }).Count -eq 0) -and ($rounds.Count -eq 3)
 
-    # Graceful stop (Gate A/B + FSCTL dismount can take >60s under load).
-    New-Item -ItemType File -Path C:\ProgramData\RamShared\stop.request -Force | Out-Null
+    # Free handles on the product volume before teardown (lab).
+    try {
+        Get-ChildItem ($letter + ":\") -Force -EA SilentlyContinue |
+            Where-Object { -not $_.PSIsContainer } |
+            Remove-Item -Force -EA SilentlyContinue
+    } catch {}
+    Start-Sleep 2
+
+    # Graceful stop. On Gate A/B/lock refusal the runtime resumes Online and
+    # clears the stop flag after the poller already deleted stop.request — so we
+    # re-assert the file every 2s until exit (up to 180s).
     $stopOk = $false
-    for ($i = 0; $i -lt 120; $i++) {
+    for ($i = 0; $i -lt 180; $i++) {
+        if (($i % 2) -eq 0) {
+            New-Item -ItemType File -Path C:\ProgramData\RamShared\stop.request -Force | Out-Null
+        }
         Start-Sleep 1
         if ($p.HasExited) { $stopOk = $true; break }
     }
     $o.stopOk = $stopOk
     $o.consoleExit = if ($p.HasExited) { $p.ExitCode } else { "still_running" }
+    $o.stopErrSnap = if (Test-Path $err) { (Get-Content $err -Tail 60) -join "`n" } else { "" }
     if (-not $p.HasExited) {
         Stop-Process -Id $p.Id -Force -EA SilentlyContinue
         $o.forceKilledConsole = $true

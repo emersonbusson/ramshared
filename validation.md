@@ -1732,3 +1732,11 @@ Campaign `guest-product-online-20260716-145248` on win11-drill:
 
 Evidence: `evidence/guest-product-online-20260716-145248.md`.
 Harness fixes pending re-run: longer stop wait, no FileInfo JSON explosion.
+
+## 2026-07-16 — guest product Online re-run 151304 PARTIAL
+
+- Online+CUDA+64MiB LUN serial A0B4FCE26201BD5D + 3 SHA PASS; BINARY_MATCH CD7E315D
+- Graceful stop still FAIL after 180s re-assert stop.request (force kill; no lease liberado)
+- Root cause: teardown refuse/resume Online loop or stop not effective; no Stopping line in stderr
+- Evidence: evidence/guest-product-online-20260716-151304.md
+- Terminal: VM Off, host GPU OK. No push.
