@@ -46,8 +46,9 @@ AddReg         = RamShared_AddReg
 
 [RamShared_AddReg]
 HKR, "Parameters\PnpInterface", "5", 0x00010001, 0x00000001
-; Virtual StorPort: no real bus resources
-HKR,, "BusType", 0x00010001, 0x0000000A
+; Virtual StorPort: no real bus resources. BusType must live under Parameters
+; (InfVerif ERROR 1323 rejects HKR,, BusType at the service key root).
+HKR, "Parameters", "BusType", 0x00010001, 0x0000000A
 
 [Strings]
 SPSVCINST_ASSOCSERVICE = 0x00000002

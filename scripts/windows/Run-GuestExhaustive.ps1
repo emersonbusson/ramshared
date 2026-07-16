@@ -236,7 +236,8 @@ public static class RamSharedRootEnum {
     if (Test-Path $svc) {
         New-Item -Path "$svc\Parameters\PnpInterface" -Force | Out-Null
         New-ItemProperty -Path "$svc\Parameters\PnpInterface" -Name "5" -PropertyType DWord -Value 1 -Force | Out-Null
-        New-ItemProperty -Path $svc -Name "BusType" -PropertyType DWord -Value 0xA -Force | Out-Null
+        # InfVerif ERROR 1323: BusType under Parameters, not the service key root.
+        New-ItemProperty -Path "$svc\Parameters" -Name "BusType" -PropertyType DWord -Value 0xA -Force | Out-Null
     }
     $o.start_ram = (sc.exe start ramshared 2>&1 | Out-String)
     Get-PnpDevice -EA SilentlyContinue |

@@ -29,17 +29,15 @@ CREATE size (capacity via `IOCTL_DISK_GET_LENGTH_INFO`, not CHS `Win32_DiskDrive
 Promotion still blocked by: host miniport not guest-proven image without reboot; physical Online
 with corrected stack not run; concurrent probes remain ring/IOCTL-level not StartIo READ-copy.
 
-**Lab Online attempt (win11-drill, 2026-07-16):** GPU-PV present but **not functional** — NVIDIA
-device `Error` (VEN_1414 synthetic), `nvidia-smi` missing, `nvcuda.dll` absent. Product Online
-(CUDA DeviceMem path) **SKIPPED** (not simulated). Evidence: `evidence/lab-gpu-probe-20260716T0109Z.txt`.
+**Physical Online (2026-07-16 read-only recapture):** still **RED/SKIPPED** — package
+`CD7E315D…` ≠ installed `E690306F…`, and README forbids loading the Windows miniport on the daily
+host. Evidence: `evidence/physical-preflight-readonly-20260716T172150Z.txt`.
 
-**GPU-PV closeout (2026-07-16): PARTIAL/TIMEOUT.** Setting an explicit partition exposed
-`nvcuda.dll` and `nvidia-smi.exe` in the guest, but the NVIDIA device still reported
-`CM_PROB_FAILED_POST_START`; therefore this is not real CUDA proof. The bounded driver-package copy
-exceeded ten minutes and was terminated without retry. A short PowerShell Direct cleanup succeeded,
-the VM reached `Off`, host and guest staging were removed, and the host RTX 2060 remained `OK` before
-and after cleanup. Evidence: `evidence/gpupv-safe-close-20260716T025812Z.txt` and
-`evidence/verification-closeout-20260716.md`.
+**GPU-PV lab (win11-drill, later 2026-07-16):** after offline UMD copy, guest `nvidia-smi` and
+bounded `probe-cuda` are **PASS** on real RTX 2060 (UUID match host; free restored). Product Online
++ 3-round storage SHA on the guest remain open. Protocol mismatch events (`0x10006`/`0x10005`) still
+appear but did not block this smoke. Evidence: `evidence/gpupv-probe-cuda-pass-20260716T173812Z.md`.
+Earlier partial/timeout closeout remains historical: `evidence/gpupv-safe-close-20260716T025812Z.txt`.
 
 ## Senior audit correction
 
