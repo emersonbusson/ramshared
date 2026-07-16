@@ -1,0 +1,18 @@
+{
+    "PASS_VALID_QUEUE":  1,
+    "REFUSE_FOREIGN_OWNER":  1,
+    "REFUSE_RESERVED_REGISTER":  1,
+    "REFUSE_BAD_RING":  1,
+    "REFUSE_RING_INDEX_JUMP":  1,
+    "REFUSE_RESERVED_CQE":  1,
+    "REFUSE_UNKNOWN_IOCTL":  1,
+    "REFUSE_RESERVED_DISK_PARAMS":  1,
+    "COMPLETION_REENTRY_NO_SLOT_REUSE":  1,
+    "RUNDOWN_UNMAP_AFTER_COPY":  1,
+    "VPD_SERIAL_MATCH":  1,
+    "NO_NEW_DUMP":  1,
+    "DRIVER":  "ramshared.sys",
+    "VERIFIER":  true,
+    "NOTE":  "Verifier switch requested; "
+}
+

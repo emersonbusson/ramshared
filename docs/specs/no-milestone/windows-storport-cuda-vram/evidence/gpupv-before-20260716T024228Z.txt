@@ -1,0 +1,12 @@
+﻿=== BEFORE 2026-07-16T02:42:29.3351025-03:00 ===
+VM State=Off NestedVirt=True GuestControlledCache=True LowMMIO=1073741824 HighMMIO=34359738368
+AdapterCount=1
+Id=Microsoft:A84C3775-EEC5-4FAE-8B2E-6ECBCA1CFE41\4D4EFE15-DF49-42AE-BB45-2A820E914257
+InstancePath=[]
+Min/Max/Opt/Cur VRAM=///
+Min/Max/Opt/Cur Encode=///
+Min/Max/Opt/Cur Decode=///
+Min/Max/Opt/Cur Compute=///
+AssignableDeviceCount=0
+HostPartitionable Name=\\?\PCI#VEN_10DE&DEV_1F08&SUBSYS_12FD10DE&REV_A1#4&1fc990d7&0&0019#{064092b3-625e-43bf-9eb5-dc845897dd59}\GPUPARAV
+Host Total/Avail VRAM=1000000000/1000000000 Optimal=1000000000

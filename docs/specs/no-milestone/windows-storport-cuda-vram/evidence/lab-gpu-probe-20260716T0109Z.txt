@@ -1,0 +1,24 @@
+=== win11-drill GPU/CUDA probe 2026-07-16 ===
+Host inventory:
+  GpuPartitionAdapter count=1 (Name present, InstancePath empty / MinPartitionVRAM empty)
+  AssignableDevice count=0 (no DDA)
+Guest (PSD after boot ~54s):
+  hostname=WIN11-DRILL
+  pnp_display:
+    OK|Microsoft Hyper-V Video|VMBUS\{DA0A7802-...}
+    Error|NVIDIA GeForce RTX 2060|PCI\VEN_1414&DEV_008E&...  (GPU-PV synthetic; Error)
+  nvidia_smi_path=MISSING
+  nvidia_smi=no_nvidia_smi
+  nvcuda.dll=false
+  CUDA_PATH=null
+  Win32_VideoController lists Hyper-V Video + NVIDIA name with host driver string only
+
+DECISION:
+  Guest product Online (broker lease → CUDA DeviceMem → CREATE/REGISTER → 3-round SHA)
+  is NOT runnable: no functional CUDA in guest.
+  Guest StorPort ITEM-3 + Driver Verifier already PASS on package sys 1E57690E…
+  Daily-host physical Online remains RED (preflight 20260716T010502Z): installed miniport
+  E690306F… ≠ package; README lab-VM-only for Windows driver on daily host; no reboot/unload.
+
+ONLINE_LAB=SKIPPED
+PRODUCT_STATUS=PARTIAL

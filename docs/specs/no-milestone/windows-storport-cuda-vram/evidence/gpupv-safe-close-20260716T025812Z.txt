@@ -1,0 +1,23 @@
+﻿=== SAFE CLOSE 2026-07-16T02:58:12.5389140-03:00 stamp=20260716T025812Z ===
+=== IsAdmin ===
+IsAdmin=True
+HOST_NVIDIA_STATUS=OK
+HOST_nvidia_smi_L=GPU 0: NVIDIA GeForce RTX 2060 (UUID: GPU-1d3109d8-6193-e206-f283-3f99e0346db6)
+VM_BEFORE State=Running Heartbeat=OkApplicationsUnknown
+GpuPartition Min/Max/Opt/CurVRAM=1/1000000000/1000000000/1000000000
+GpuPartition InstancePath-set=True
+AssignableDeviceCount=0
+PSD_SHORT_OK={"stage_existed":true,"stage_removed":true,"nvcuda":true,"smi":true,"Status":"Error","Err":"CM_PROB_FAILED_POST_START","hostname":"WIN11-DRILL"}
+ACTION=Stop-VM -Force (graceful first)
+VM_AFTER State=Off
+HOST_STAGE_REMOVED=True
+HOST_NVIDIA_AFTER=OK
+HOST_nvidia_smi_AFTER=GPU 0: NVIDIA GeForce RTX 2060 (UUID: GPU-1d3109d8-6193-e206-f283-3f99e0346db6)
+FINAL_PARTITION Min/Max/Opt/CurVRAM=1/1000000000/1000000000/
+FINAL_PARTITION Encode=1/1000000000/1000000000
+FINAL_PARTITION Compute=1/1000000000/1000000000
+FINAL_InstancePath_empty=True
+FINAL_AssignableDeviceCount=0
+GUEST_STAGE_REMOVED=yes
+NOTE: pnputil completion NOT proven — no guest driver uninstall performed
+PRODUCT=PARTIAL GPU_PV=TIMEOUT Online=SKIPPED
