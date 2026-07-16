@@ -11,7 +11,6 @@ use ramshared_winsvc::runtime::{ProductCommand, RuntimeErrorClass, parse_product
 #[cfg(windows)]
 mod windows_svc {
     use std::ffi::OsString;
-    use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
 
@@ -26,6 +25,7 @@ mod windows_svc {
 
     use ramshared_winsvc::config::WinDriveConfig;
     use ramshared_winsvc::runtime::{ProductCommand, RunMode, parse_product_cli};
+    use ramshared_winsvc::windows_host::WindowsHostState;
 
     pub const SERVICE_NAME: &str = "RamSharedWinSvc";
     pub const SERVICE_DISPLAY: &str = "RamShared CUDA VRAM Disk Service";
@@ -105,13 +105,10 @@ mod windows_svc {
 
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_handler = Arc::clone(&stop);
-        let (shutdown_tx, shutdown_rx) = mpsc::channel();
-
         let status_handle =
             service_control_handler::register(SERVICE_NAME, move |control| match control {
                 ServiceControl::Stop | ServiceControl::Shutdown => {
                     stop_for_handler.store(true, Ordering::SeqCst);
-                    let _ = shutdown_tx.send(());
                     ServiceControlHandlerResult::NoError
                 }
                 ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
@@ -128,7 +125,7 @@ mod windows_svc {
             process_id: None,
         })?;
 
-        let cfg = load_scm_config().map_err(|e| {
+        let cfg = load_scm_config().inspect_err(|_| {
             let _ = status_handle.set_service_status(ServiceStatus {
                 service_type: ServiceType::OWN_PROCESS,
                 current_state: ServiceState::Stopped,
@@ -138,7 +135,6 @@ mod windows_svc {
                 wait_hint: Duration::default(),
                 process_id: None,
             });
-            e
         })?;
         cfg.validate()?;
 
@@ -156,9 +152,6 @@ mod windows_svc {
         // Blocks until stop is set (SCM Stop) then runs Gate A/B teardown inside.
         let result = run_product_online(&cfg, RunMode::Scm, Arc::clone(&stop));
 
-        // Drain any leftover stop signal.
-        let _ = shutdown_rx.try_recv();
-
         match result {
             Ok(summary) => {
                 eprintln!("product stopped: {summary:?}");
@@ -167,31 +160,6 @@ mod windows_svc {
                     current_state: ServiceState::Stopped,
                     controls_accepted: ServiceControlAccept::empty(),
                     exit_code: ServiceExitCode::Win32(0),
-                    checkpoint: 0,
-                    wait_hint: Duration::default(),
-                    process_id: None,
-                })?;
-                Ok(())
-            }
-            Err(e) if e.code == 7 => {
-                // DT-8: pagefile refusal — stay Running, STOP still accepted.
-                eprintln!("teardown refused code 7: {e}");
-                status_handle.set_service_status(ServiceStatus {
-                    service_type: ServiceType::OWN_PROCESS,
-                    current_state: ServiceState::Running,
-                    controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
-                    exit_code: ServiceExitCode::ServiceSpecific(7),
-                    checkpoint: 0,
-                    wait_hint: Duration::default(),
-                    process_id: None,
-                })?;
-                // Wait for another stop after operator clears pagefile, then exit.
-                let _ = shutdown_rx.recv();
-                status_handle.set_service_status(ServiceStatus {
-                    service_type: ServiceType::OWN_PROCESS,
-                    current_state: ServiceState::Stopped,
-                    controls_accepted: ServiceControlAccept::empty(),
-                    exit_code: ServiceExitCode::ServiceSpecific(7),
                     checkpoint: 0,
                     wait_hint: Duration::default(),
                     process_id: None,
@@ -214,13 +182,20 @@ mod windows_svc {
     }
 
     fn load_scm_config() -> Result<WinDriveConfig, Box<dyn std::error::Error>> {
-        let bytes = std::fs::read(SCM_CONFIG)?;
-        Ok(WinDriveConfig::from_reader(&bytes)?)
+        load_product_config(SCM_CONFIG)
+    }
+
+    fn load_product_config(path: &str) -> Result<WinDriveConfig, Box<dyn std::error::Error>> {
+        if !WindowsHostState::is_elevated() {
+            return Err("elevated token required".into());
+        }
+        Ok(WindowsHostState::read_owned_config(std::path::Path::new(
+            path,
+        ))?)
     }
 
     fn run_probe_cuda(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let bytes = std::fs::read(config_path)?;
-        let cfg = WinDriveConfig::from_reader(&bytes)?;
+        let cfg = load_product_config(config_path)?;
         cfg.validate()?;
         match try_probe_cuda(&cfg) {
             Ok(()) => {
@@ -251,8 +226,7 @@ mod windows_svc {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        let bytes = std::fs::read(config_path)?;
-        let cfg = WinDriveConfig::from_reader(&bytes)?;
+        let cfg = load_product_config(config_path)?;
         cfg.validate()?;
         eprintln!(
             "console --storage-only: starting product Online size_bytes={}",
@@ -271,7 +245,9 @@ mod windows_svc {
                 if path.exists() {
                     let _ = std::fs::remove_file(&path);
                     stop_c.store(true, Ordering::SeqCst);
-                    break;
+                    while stop_c.load(Ordering::Acquire) {
+                        thread::sleep(Duration::from_millis(50));
+                    }
                 }
                 thread::sleep(Duration::from_millis(200));
             }

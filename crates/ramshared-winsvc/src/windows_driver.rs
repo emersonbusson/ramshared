@@ -127,8 +127,21 @@ impl WindowsMappedQueue {
         let cq_bytes = size_of::<RingHdr>() + (queue_depth as usize) * size_of::<Cqe>();
 
         let sq = alloc_region(sq_bytes)?;
-        let cq = alloc_region(cq_bytes)?;
-        let data = alloc_region(data_bytes)?;
+        let cq = match alloc_region(cq_bytes) {
+            Ok(region) => region,
+            Err(error) => {
+                free_region(sq, sq_bytes);
+                return Err(error);
+            }
+        };
+        let data = match alloc_region(data_bytes) {
+            Ok(region) => region,
+            Err(error) => {
+                free_region(cq, cq_bytes);
+                free_region(sq, sq_bytes);
+                return Err(error);
+            }
+        };
 
         // Zero + init ring headers (magic, entries, head=0, tail=0).
         unsafe {
@@ -420,11 +433,11 @@ impl WindowsDriverLink {
             let wr =
                 unsafe { WaitForSingleObject(self.event, if ms == 0 { INFINITE } else { ms }) };
             if wr == WAIT_TIMEOUT {
-                let _ = self.cancel_fetch();
+                self.cancel_and_drain(&ov);
                 return Err(IoctlError::Timeout);
             }
             if wr != WAIT_OBJECT_0 {
-                let _ = self.cancel_fetch();
+                self.cancel_and_drain(&ov);
                 return Err(IoctlError::Ioctl(format!("WaitForSingleObject={wr}")));
             }
             let mut xfer = 0u32;
@@ -445,14 +458,11 @@ impl WindowsDriverLink {
         if !self.pending {
             return Ok(());
         }
-        // SAFETY: cancel only the outstanding OVERLAPPED on this handle.
-        let ok = unsafe { CancelIoEx(self.handle, ptr::null_mut()) };
-        self.pending = false;
-        if ok == FALSE {
-            // Already completed is fine.
-            return Ok(());
-        }
-        Err(IoctlError::Cancelled)
+        // A pending operation must only be cancelled by its owner while its
+        // OVERLAPPED remains in scope. commit_and_fetch drains before return.
+        Err(IoctlError::Invalid(
+            "pending fetch cannot be cancelled without its OVERLAPPED owner".into(),
+        ))
     }
 
     pub fn unregister_queue(&mut self) -> Result<(), IoctlError> {
@@ -500,9 +510,7 @@ impl WindowsDriverLink {
         }
         let wr = unsafe { WaitForSingleObject(self.event, 30_000) };
         if wr != WAIT_OBJECT_0 {
-            unsafe {
-                let _ = CancelIoEx(self.handle, &mut ov);
-            }
+            self.cancel_and_drain(&ov);
             return Err(IoctlError::Timeout);
         }
         let mut xfer = 0u32;
@@ -511,6 +519,17 @@ impl WindowsDriverLink {
             return Err(IoctlError::Ioctl(last_error_string("GetOverlappedResult")));
         }
         Ok(())
+    }
+
+    fn cancel_and_drain(&mut self, ov: &OVERLAPPED) {
+        unsafe {
+            let _ = CancelIoEx(self.handle, ov);
+            let mut transferred = 0u32;
+            // The OVERLAPPED is stack-owned by the caller and must not leave
+            // scope until cancellation/completion has been observed.
+            let _ = GetOverlappedResult(self.handle, ov, &mut transferred, 1);
+        }
+        self.pending = false;
     }
 }
 
