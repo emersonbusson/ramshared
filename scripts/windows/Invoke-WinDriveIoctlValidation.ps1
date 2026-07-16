@@ -16,7 +16,8 @@ param(
     [string]$Driver = "ramshared.sys",
     [switch]$Verifier,
     [string]$ArtifactDir = "C:\ramshared\artifacts\ioctl-validation",
-    [UInt64]$SizeBytes = 67108864
+    # 128 MiB — must not collide with win11-drill answer-disk.vhdx (64 MiB).
+    [UInt64]$SizeBytes = 134217728
 )
 
 $ErrorActionPreference = "Stop"
@@ -120,15 +121,34 @@ public static class IoctlVal {
     bool ok = DeviceIoControl(h, code, input, input == null ? 0u : (uint)input.Length, null, 0, out ret, IntPtr.Zero);
     return ok;
   }
+
+  /* Sync COMMIT for same-process concurrent teardown probe (returns Win32 err; 0=ok). */
+  public static int BlockingIoctl(SafeFileHandle h, uint code) {
+    uint ret;
+    bool ok = DeviceIoControl(h, code, null, 0, null, 0, out ret, IntPtr.Zero);
+    if (ok) return 0;
+    int err = Marshal.GetLastWin32Error();
+    return err == 0 ? -1 : err;
+  }
+
+  public static System.Threading.Thread StartBlockingIoctl(SafeFileHandle h, uint code, int[] slot) {
+    var t = new System.Threading.Thread(() => { slot[0] = BlockingIoctl(h, code); });
+    t.IsBackground = true;
+    t.Start();
+    return t;
+  }
 }
 '@
 
 Add-Type -TypeDefinition $cs -ErrorAction Stop
 
 function Open-Ctl {
+    # FILE_SHARE_READ|WRITE: concurrent probes need a second handle while COMMIT is pended.
+    # Non-overlapped I/O serializes per handle; two handles avoid UNREGISTER/COMMIT deadlock.
+    $share = [uint32]3
     $h = [IoctlVal]::CreateFile("\\.\RamSharedCtl",
         [IoctlVal]::GENERIC_READ -bor [IoctlVal]::GENERIC_WRITE,
-        0, [IntPtr]::Zero, [IoctlVal]::OPEN_EXISTING, 0, [IntPtr]::Zero)
+        $share, [IntPtr]::Zero, [IoctlVal]::OPEN_EXISTING, 0, [IntPtr]::Zero)
     if ($h.IsInvalid) { throw "open RamSharedCtl failed err=$([IoctlVal]::LastErr())" }
     return $h
 }
@@ -160,6 +180,117 @@ function Free-Rings($r) {
     if ($r.sq -ne [IntPtr]::Zero) { [void][IoctlVal]::VirtualFree($r.sq, $zero, [IoctlVal]::MEM_RELEASE) }
     if ($r.cq -ne [IntPtr]::Zero) { [void][IoctlVal]::VirtualFree($r.cq, $zero, [IoctlVal]::MEM_RELEASE) }
     if ($r.data -ne [IntPtr]::Zero) { [void][IoctlVal]::VirtualFree($r.data, $zero, [IoctlVal]::MEM_RELEASE) }
+}
+
+function Reset-RingHeaders($rings, [uint32]$qd) {
+    [Runtime.InteropServices.Marshal]::WriteInt32($rings.sq, 0, [int][IoctlVal]::MAGIC)
+    [Runtime.InteropServices.Marshal]::WriteInt32($rings.sq, 4, [int]$qd)
+    [Runtime.InteropServices.Marshal]::WriteInt32($rings.sq, 8, 0)
+    [Runtime.InteropServices.Marshal]::WriteInt32($rings.sq, 12, 0)
+    [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 0, [int][IoctlVal]::MAGIC)
+    [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 4, [int]$qd)
+    [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 8, 0)
+    [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 12, 0)
+}
+
+function New-RegisterBytes($rings, [uint32]$qd, [uint32]$maxIo) {
+    $reg = New-Object IoctlVal+Register
+    $reg.abi_version = 1
+    $reg.disk_id = 0
+    $reg.queue_depth = $qd
+    $reg.block_size = 4096
+    $reg.max_io_bytes = $maxIo
+    $reg.reserved = 0
+    $reg.sq_ring_va = [uint64]$rings.sq.ToInt64()
+    $reg.cq_ring_va = [uint64]$rings.cq.ToInt64()
+    $reg.data_area_va = [uint64]$rings.data.ToInt64()
+    $reg.data_area_len = [uint64]$rings.dataBytes
+    return [IoctlVal]::ToBytes($reg)
+}
+
+# CQE layout: tag u64 @0, status i32 @8, reserved u32 @12 (16 bytes).
+function Write-Cqe($rings, [uint32]$idx, [uint64]$tag, [int]$status, [uint32]$reserved) {
+    $hdr = 16
+    $cqeSize = 16
+    $base = [IntPtr]::Add($rings.cq, $hdr + ([int]$idx * $cqeSize))
+    [Runtime.InteropServices.Marshal]::WriteInt64($base, 0, [int64]$tag)
+    [Runtime.InteropServices.Marshal]::WriteInt32($base, 8, $status)
+    [Runtime.InteropServices.Marshal]::WriteInt32($base, 12, [int]$reserved)
+}
+
+function Ensure-RegisteredQueue($h, $rings, [uint32]$qd, [uint32]$maxIo) {
+    [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
+    Reset-RingHeaders $rings $qd
+    $rin = New-RegisterBytes $rings $qd $maxIo
+    if (-not [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_REGISTER, $rin)) {
+        throw "REGISTER for concurrent probe failed err=$([IoctlVal]::LastErr())"
+    }
+}
+
+function Invoke-ReservedCqeInjection($h, $rings, [uint32]$qd, [uint32]$maxIo) {
+    Ensure-RegisteredQueue $h $rings $qd $maxIo
+    # Keep SQ non-empty so COMMIT drains CQ without long-lived pend.
+    [Runtime.InteropServices.Marshal]::WriteInt32($rings.sq, 12, 1)
+    Write-Cqe $rings 0 0 0 1
+    [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 8, 0)   # head
+    [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 12, 1)  # tail
+    $ok = [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_COMMIT, $null)
+    $err1 = [IoctlVal]::LastErr()
+    # Failed queue must refuse further COMMIT (fail-closed).
+    $ok2 = [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_COMMIT, $null)
+    $err2 = [IoctlVal]::LastErr()
+    [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
+    if ((-not $ok -and $err1 -ne 0) -or (-not $ok2)) {
+        return $true
+    }
+    L "REFUSE_RESERVED_CQE probe: first ok=$ok err=$err1 second ok=$ok2 err=$err2"
+    return $false
+}
+
+function Invoke-CompletionReentryInjection($h, $rings, [uint32]$qd, [uint32]$maxIo) {
+    Ensure-RegisteredQueue $h $rings $qd $maxIo
+    [Runtime.InteropServices.Marshal]::WriteInt32($rings.sq, 12, 1)
+    # Two CQEs, same tag, no Submitted slot — must drain without double-complete/BSOD.
+    Write-Cqe $rings 0 0 0 0
+    Write-Cqe $rings 1 0 0 0
+    [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 8, 0)
+    [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 12, 2)
+    $ok = [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_COMMIT, $null)
+    $err = [IoctlVal]::LastErr()
+    $head = [Runtime.InteropServices.Marshal]::ReadInt32($rings.cq, 8)
+    [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
+    # Driver advanced head past both entries; process still alive; no new dump checked later.
+    if ($head -ge 2) {
+        return $true
+    }
+    L "COMPLETION_REENTRY probe: ok=$ok err=$err head=$head"
+    return $false
+}
+
+function Invoke-RundownDuringCopyInjection($h, $rings, [uint32]$qd, [uint32]$maxIo) {
+    Ensure-RegisteredQueue $h $rings $qd $maxIo
+    # COMMIT on $h (may pend); UNREGISTER on a second shared handle so non-overlapped
+    # serialization cannot deadlock the cancel/teardown path.
+    $h2 = $null
+    try {
+        $h2 = Open-Ctl
+        $slot = New-Object 'int[]' 1
+        $slot[0] = -3
+        $thread = [IoctlVal]::StartBlockingIoctl($h, [IoctlVal]::IOCTL_COMMIT, $slot)
+        Start-Sleep -Milliseconds 500
+        $unregOk = [IoctlVal]::IoctlBool($h2, [IoctlVal]::IOCTL_UNREGISTER, $null)
+        $unregErr = [IoctlVal]::LastErr()
+        $joined = $thread.Join(8000)
+        $commitErr = $slot[0]
+        if ($unregOk -and $joined) {
+            L "RUNDOWN_UNMAP_AFTER_COPY probe: unregOk=1 commitErr=$commitErr"
+            return $true
+        }
+        L "RUNDOWN_UNMAP_AFTER_COPY probe FAIL: unregOk=$unregOk err=$unregErr joined=$joined commitErr=$commitErr"
+        return $false
+    } finally {
+        if ($h2 -and -not $h2.IsInvalid) { $h2.Dispose() }
+    }
 }
 
 $h = $null
@@ -259,21 +390,169 @@ try {
         L "PASS_VALID_QUEUE=0 err=$([IoctlVal]::LastErr())"
     }
 
-    # --- VPD_SERIAL_MATCH (disk identity after CREATE) ---
-    $disk = Get-Disk | Where-Object { $_.Size -eq $SizeBytes -and $_.Number -ne 0 } |
-        Select-Object -First 1
-    if ($disk -and ($disk.FriendlyName -match 'RAMSHARE|VRAMDISK')) {
-        $verdict.VPD_SERIAL_MATCH = 1
-        L "VPD_SERIAL_MATCH=1 Name=$($disk.FriendlyName)"
-    } else {
-        # CREATE without queue may still show LUN; soft check
-        if ($disk) {
-            L "VPD soft: disk N=$($disk.Number) Name=$($disk.FriendlyName)"
-            $verdict.VPD_SERIAL_MATCH = 1
-            $verdict.NOTE += "VPD via friendly/size; "
-        } else {
-            L "VPD_SERIAL_MATCH=0 (no disk enumerated)"
+    # --- VPD_SERIAL_MATCH (INQUIRY vendor/product + VPD serial after CREATE) ---
+    # Get-Disk often lags or omits zero/Unknown LUNs; PnP DiskDrive exposes
+    # VEN_RAMSHARE&PROD_VRAMDISK from standard INQUIRY when the miniport works.
+    $expectedSerial = "ABCDEF0123456789"
+    try { "rescan" | diskpart 2>$null | Out-Null } catch {}
+    try { Update-HostStorageCache -ErrorAction SilentlyContinue } catch {}
+    $match = $null
+    $lastHits = @()
+    $lastExact = @()
+    $lastWin32Exact = @()
+    $lastGetDiskExact = @()
+    $deadline = (Get-Date).AddSeconds(25)
+    while ((Get-Date) -lt $deadline -and $null -eq $match) {
+        $cands = @()
+        # 1) Storage stack
+        try {
+            # Offline disks still expose identity; Online improves Get-Disk visibility.
+            Get-Disk -EA SilentlyContinue |
+                Where-Object {
+                    ($_.FriendlyName -match 'RAMSHARE' -and $_.FriendlyName -match 'VRAMDISK') -or
+                    ($_.SerialNumber -ieq $expectedSerial)
+                } |
+                ForEach-Object {
+                    if ($_.OperationalStatus -ne 'Online') {
+                        try { Set-Disk -Number $_.Number -IsOffline $false -EA SilentlyContinue } catch {}
+                    }
+                }
+        } catch {}
+        try {
+            $cands += @(Get-Disk -EA SilentlyContinue | ForEach-Object {
+                [pscustomobject]@{
+                    Source = "Get-Disk"; Status = "OK"
+                    Name = ([string]$_.FriendlyName).Trim()
+                    Serial = ([string]$_.SerialNumber).Trim()
+                    Size = [uint64]$_.Size
+                    Id = "disk-$($_.Number)"
+                }
+            })
+        } catch {}
+        try {
+            $cands += @(Get-CimInstance Win32_DiskDrive -EA SilentlyContinue | ForEach-Object {
+                # Win32_DiskDrive.Size is CHS-derived and under-reports real
+                # capacity on this stack (observed 131604480 vs 134217728).
+                # Prefer IOCTL_DISK_GET_LENGTH_INFO on \\.\PhysicalDriveN.
+                $sz = [uint64]$_.Size
+                $raw = [uint64]$_.Size
+                $idx = -1
+                try { $idx = [int]$_.Index } catch {}
+                $lenSrc = "WmiSize"
+                if ($idx -ge 0 -and -not ("DiskLenQuery" -as [type])) {
+                    try {
+                        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class DiskLenQuery {
+  [DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Unicode)]
+  static extern IntPtr CreateFile(string n, uint a, uint s, IntPtr sec, uint c, uint f, IntPtr t);
+  [DllImport("kernel32.dll", SetLastError=true)]
+  static extern bool DeviceIoControl(IntPtr h, uint c, IntPtr i, uint il, byte[] o, uint ol, out uint r, IntPtr ov);
+  [DllImport("kernel32.dll", SetLastError=true)]
+  static extern bool CloseHandle(IntPtr h);
+  const uint GENERIC_READ = 0x80000000;
+  const uint FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2;
+  const uint OPEN_EXISTING = 3;
+  const uint IOCTL_DISK_GET_LENGTH_INFO = 0x0007405C;
+  public static long GetLength(int index) {
+    IntPtr h = CreateFile(@"\\.\PhysicalDrive" + index, GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+    if (h == IntPtr.Zero || h == new IntPtr(-1)) return -1;
+    try {
+      byte[] buf = new byte[8];
+      uint ret;
+      if (!DeviceIoControl(h, IOCTL_DISK_GET_LENGTH_INFO, IntPtr.Zero, 0, buf, 8, out ret, IntPtr.Zero) || ret < 8)
+        return -1;
+      return BitConverter.ToInt64(buf, 0);
+    } finally { CloseHandle(h); }
+  }
+}
+'@ -ErrorAction Stop
+                    } catch {}
+                }
+                if ($idx -ge 0 -and ("DiskLenQuery" -as [type])) {
+                    try {
+                        $got = [DiskLenQuery]::GetLength($idx)
+                        if ($got -gt 0) { $sz = [uint64]$got; $lenSrc = "IoctlLength" }
+                    } catch {}
+                }
+                [pscustomobject]@{
+                    Source = "Win32_DiskDrive"; Status = "OK"
+                    Name = ([string]$_.Model).Trim()
+                    Serial = ([string]$_.SerialNumber).Trim()
+                    Size = $sz
+                    RawWmiSize = $raw
+                    LengthSource = $lenSrc
+                    DriveIndex = $idx
+                    Id = ([string]$_.PNPDeviceID)
+                }
+            })
+        } catch {}
+        $hits = @($cands | Where-Object {
+            ($_.Name -match 'RAMSHARE' -and $_.Name -match 'VRAMDISK') -or
+            ($_.Id -match 'VEN_RAMSHARE' -and $_.Id -match 'PROD_VRAMDISK')
+        })
+        # An ITEM-3 pass requires all identity fields on one authoritative
+        # storage surface. Friendly-name, size-only, and PnP-presence fallbacks
+        # are diagnostics only and must never satisfy VPD_SERIAL_MATCH.
+        $exactHits = @($hits | Where-Object {
+            $_.Status -eq 'OK' -and
+            $_.Serial -ieq $expectedSerial -and
+            $_.Size -eq [uint64]$SizeBytes
+        })
+        $win32Hits = @($exactHits | Where-Object { $_.Source -eq 'Win32_DiskDrive' })
+        $getDiskHits = @($exactHits | Where-Object { $_.Source -eq 'Get-Disk' })
+        $lastHits = $hits
+        $lastExact = $exactHits
+        $lastWin32Exact = $win32Hits
+        $lastGetDiskExact = $getDiskHits
+        if ($win32Hits.Count -eq 1) {
+            $match = $win32Hits[0]
+            break
         }
+        if ($win32Hits.Count -eq 0 -and $getDiskHits.Count -eq 1) {
+            $match = $getDiskHits[0]
+            break
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    if ($null -ne $match) {
+        $verdict.VPD_SERIAL_MATCH = 1
+        L ("VPD_SERIAL_MATCH=1 src=$($match.Source) Status=$($match.Status) Name=$($match.Name) Serial=$($match.Serial) Size=$($match.Size) Id=$($match.Id)")
+    } else {
+        # Diagnostic only: never green-lights VPD_SERIAL_MATCH. Surfaces why
+        # Win32/Get-Disk missed exact vendor+product+serial+size uniqueness.
+        try {
+            $diag = @()
+            try {
+                $diag += @(Get-Disk -EA SilentlyContinue | ForEach-Object {
+                    "Get-Disk|N=$($_.Number)|Name=$($_.FriendlyName)|Ser=[$($_.SerialNumber)]|Size=$($_.Size)|Bus=$($_.BusType)|OpStatus=$($_.OperationalStatus)"
+                })
+            } catch {}
+            try {
+                $diag += @(Get-CimInstance Win32_DiskDrive -EA SilentlyContinue | ForEach-Object {
+                    "Win32|Model=$($_.Model)|Ser=[$($_.SerialNumber)]|Size=$($_.Size)|PNP=$($_.PNPDeviceID)|Status=$($_.Status)"
+                })
+            } catch {}
+            L ("VPD_SERIAL_MATCH=0 expectedSer=[$expectedSerial] expectedSize=$SizeBytes candidates=" +
+                ($(if ($diag.Count) { $diag -join " || " } else { "(none)" })))
+            $pnp = @(Get-PnpDevice -Class DiskDrive -EA SilentlyContinue |
+                ForEach-Object { "$($_.Status)|$($_.FriendlyName)|$($_.InstanceId)" })
+            L ("VPD_SERIAL_MATCH=0 pnp_disks=" + ($(if ($pnp.Count) { $pnp -join " || " } else { "(none)" })))
+            $ramHits = @($lastHits | ForEach-Object {
+                $extra = ""
+                if ($_.PSObject.Properties.Name -contains 'RawWmiSize') {
+                    $extra = "|RawWmiSize=$($_.RawWmiSize)|LenSrc=$($_.LengthSource)|Idx=$($_.DriveIndex)"
+                }
+                "$($_.Source)|Status=$($_.Status)|Name=$($_.Name)|Ser=[$($_.Serial)]|Size=$($_.Size)$extra|Id=$($_.Id)"
+            })
+            L ("VPD_SERIAL_MATCH=0 ramshare_hits=" + ($(if ($ramHits.Count) { $ramHits -join " || " } else { "(none)" })))
+            L ("VPD_SERIAL_MATCH=0 exact_hit_count=$($lastExact.Count) win32_exact=$($lastWin32Exact.Count) getdisk_exact=$($lastGetDiskExact.Count)")
+        } catch {
+            L "VPD_SERIAL_MATCH=0 (no enum) err=$($_.Exception.Message)"
+        }
+        $verdict.NOTE += "VPD identity must be unique vendor/product/serial/size; "
     }
 
     # --- REFUSE_RING_INDEX_JUMP: re-register with non-zero head/tail after good rings ---
@@ -349,9 +628,30 @@ class P {
         $verdict.NOTE += "FOREIGN_OWNER exception; "
     }
 
-    # RESERVED_CQE / COMPLETION_REENTRY / RUNDOWN need concurrent I/O injectors (open).
-    $verdict.NOTE += "REFUSE_RESERVED_CQE/REENTRY/RUNDOWN require concurrent I/O injectors; "
-    L "Structural reserved-CQE/re-entry/rundown verdicts left 0 unless concurrent injector present"
+    # --- Concurrent Ring-0/3 probes (same process; bounded; no host thrash) ---
+    if (Invoke-ReservedCqeInjection $h $rings $qd $maxIo) {
+        $verdict.REFUSE_RESERVED_CQE = 1
+        L "REFUSE_RESERVED_CQE=1"
+    } else {
+        L "REFUSE_RESERVED_CQE=0"
+        $verdict.NOTE += "REFUSE_RESERVED_CQE probe failed; "
+    }
+
+    if (Invoke-CompletionReentryInjection $h $rings $qd $maxIo) {
+        $verdict.COMPLETION_REENTRY_NO_SLOT_REUSE = 1
+        L "COMPLETION_REENTRY_NO_SLOT_REUSE=1"
+    } else {
+        L "COMPLETION_REENTRY_NO_SLOT_REUSE=0"
+        $verdict.NOTE += "COMPLETION_REENTRY probe failed; "
+    }
+
+    if (Invoke-RundownDuringCopyInjection $h $rings $qd $maxIo) {
+        $verdict.RUNDOWN_UNMAP_AFTER_COPY = 1
+        L "RUNDOWN_UNMAP_AFTER_COPY=1"
+    } else {
+        L "RUNDOWN_UNMAP_AFTER_COPY=0"
+        $verdict.NOTE += "RUNDOWN_UNMAP_AFTER_COPY probe failed; "
+    }
 
     [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_DESTROY, $null)
     L "DESTROY ok"
@@ -384,8 +684,18 @@ $verdict | ConvertTo-Json | Set-Content -Path $out -Encoding utf8
 Write-Host "ARTIFACT=$out"
 
 $required = @(
-    'PASS_VALID_QUEUE','REFUSE_RESERVED_REGISTER','REFUSE_BAD_RING',
-    'REFUSE_UNKNOWN_IOCTL','REFUSE_RESERVED_DISK_PARAMS','NO_NEW_DUMP'
+    'PASS_VALID_QUEUE',
+    'REFUSE_FOREIGN_OWNER',
+    'REFUSE_RESERVED_REGISTER',
+    'REFUSE_BAD_RING',
+    'REFUSE_RING_INDEX_JUMP',
+    'REFUSE_RESERVED_CQE',
+    'REFUSE_UNKNOWN_IOCTL',
+    'REFUSE_RESERVED_DISK_PARAMS',
+    'COMPLETION_REENTRY_NO_SLOT_REUSE',
+    'RUNDOWN_UNMAP_AFTER_COPY',
+    'VPD_SERIAL_MATCH',
+    'NO_NEW_DUMP'
 )
 $fail = @($required | Where-Object { [int]$verdict[$_] -ne 1 })
 if ($fail.Count -gt 0) {

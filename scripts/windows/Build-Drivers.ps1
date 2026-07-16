@@ -44,7 +44,7 @@ if (-not (Test-Path "$incKm\storport.h")) { throw "storport.h missing under $inc
 if (-not (Test-Path "$libKm\storport.lib")) { throw "storport.lib missing under $libKm" }
 
 $cflags = @(
-    "/nologo", "/c", "/kernel", "/GS-", "/W3", "/O2", "/Zi",
+    "/nologo", "/c", "/kernel", "/GS-", "/W4", "/WX", "/wd4324", "/O2", "/Z7",
     "/D_WIN64", "/D_AMD64_", "/DAMD64", "/DDEPRECATE_DDK_FUNCTIONS=1",
     "/D_WIN32_WINNT=0x0A00", "/DWINVER=0x0A00", "/DNTDDI_VERSION=0xA000010",
     "/I`"$incShared`"", "/I`"$incKm`"", "/I`"$incKmCrt`""
