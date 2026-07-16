@@ -1719,3 +1719,16 @@ attestation package work. Evidence: `evidence/infverif-20260716.md`.
 3. StartIo READ concurrent race under Verifier (beyond ring/IOCTL injectors).
 4. InfVerif DIRID 13 package migration or documented waiver.
 5. Isolated WSL2 freeze campaign (never daily thrash).
+
+## 2026-07-16 — guest product Online PARTIAL (64 MiB)
+
+Campaign `guest-product-online-20260716-145248` on win11-drill:
+
+- BINARY_MATCH package/guest `CD7E315D…`
+- Product Online true with CUDA RTX 2060; serial `B7A9E1BD0E71541A`; disk 64 MiB letter S
+- Three write/read SHA rounds **PASS**
+- Graceful stop **FAIL** within 60s (`forceKilledConsole`); VM later Off; host GPU OK
+- Lab JSONL lease broker used for Register/LeaseGrant (not full ramsharedd)
+
+Evidence: `evidence/guest-product-online-20260716-145248.md`.
+Harness fixes pending re-run: longer stop wait, no FileInfo JSON explosion.
