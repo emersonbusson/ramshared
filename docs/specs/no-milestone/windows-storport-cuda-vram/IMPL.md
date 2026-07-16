@@ -39,6 +39,11 @@ bounded `probe-cuda` are **PASS** on real RTX 2060 (UUID match host; free restor
 appear but did not block this smoke. Evidence: `evidence/gpupv-probe-cuda-pass-20260716T173812Z.md`.
 Earlier partial/timeout closeout remains historical: `evidence/gpupv-safe-close-20260716T025812Z.txt`.
 
+**Guest product Online (2026-07-16, campaign 145248):** **PARTIAL** — Online + exact 64 MiB
+RAMSHARE LUN + 3-round SHA **PASS**; graceful stop force-killed after 60s. BINARY_MATCH guest
+package `CD7E315D…`. Evidence: `evidence/guest-product-online-20260716-145248.md`.
+
+
 ## Senior audit correction
 
 The previous implementation and report contained unsafe or unsupported conclusions:
