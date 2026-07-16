@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: MIT */
 /*
  * RamShared StorPort virtual miniport — driver entry surface.
- * SPEC: docs/specs/no-milestone/windows-swap-driver/SPEC.md ITEM-5 / DT-1 / DT-23.
+ * SPEC: docs/specs/no-milestone/windows-storport-cuda-vram/SPEC.md ITEM-5 / DT-1 / DT-23 / DT-25.
  *
  * Build: WDK/EWDK MSBuild (ramshared.vcxproj). Not buildable on Linux hosts.
  */
@@ -20,11 +20,12 @@ typedef struct _RAMSHARED_ADAPTER_EXT {
 	PDEVICE_OBJECT ControlDevice;
 	UNICODE_STRING ControlLink;
 	BOOLEAN QueueRegistered;
+	BOOLEAN AdapterStopped;
 } RAMSHARED_ADAPTER_EXT, *PRAMSHARED_ADAPTER_EXT;
 
 DRIVER_INITIALIZE DriverEntry;
 
-/* Virtual miniport FindAdapter has LowerDevice (WDK 26100). */
+/* Virtual miniport FindAdapter has LowerDevice (PVIRTUAL_HW_FIND_ADAPTER). */
 ULONG
 HwStorFindAdapter(
 	_In_ PVOID DeviceExtension,
@@ -38,3 +39,11 @@ HwStorFindAdapter(
 BOOLEAN HwStorInitialize(_In_ PVOID DeviceExtension);
 BOOLEAN HwStorResetBus(_In_ PVOID DeviceExtension, _In_ ULONG PathId);
 BOOLEAN HwStorStartIo(_In_ PVOID DeviceExtension, _In_ PSCSI_REQUEST_BLOCK Srb);
+
+SCSI_ADAPTER_CONTROL_STATUS
+HwStorAdapterControl(
+	_In_ PVOID DeviceExtension,
+	_In_ SCSI_ADAPTER_CONTROL_TYPE ControlType,
+	_In_ PVOID Parameters);
+
+VOID HwStorFreeAdapterResources(_In_ PVOID DeviceExtension);
