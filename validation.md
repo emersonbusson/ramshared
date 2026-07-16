@@ -1687,3 +1687,35 @@ Build audit: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/wdk-bu
 **Verdict:** guest StorPort ITEM-3 + exact VPD + Verifier **PASS**. Product remains 🟡 **PARTIAL**:
 physical BINARY_MATCH/Online, GPU-PV protocol alignment for real CUDA, live StartIo READ-race
 strengthening, and the isolated WSL2 freeze-elimination campaign remain open.
+
+## 2026-07-16 — sequential fronts: physical RED; GPU-PV probe-cuda PASS
+
+### Physical host (read-only)
+
+`BINARY_MATCH=false`: package `CD7E315D…` ≠ installed `E690306F…`; no `.bak-host`.
+README policy: Windows kernel driver on daily host = **NO** (lab VM only). Product Online on the
+physical host **SKIPPED** (not attempted). Evidence:
+`docs/specs/no-milestone/windows-storport-cuda-vram/evidence/physical-preflight-readonly-20260716T172150Z.txt`.
+
+### GPU-PV lab (win11-drill)
+
+Host build `26200.8655`; guest `26200.8037`. Virtual PCI events still show request `0x10006` vs
+negotiated `0x10005`, but guest `nvidia-smi` lists the real RTX 2060 UUID and driver `610.74`.
+
+Bounded `probe-cuda` with lab side-by-side VC runtime: **PASS** (exit 0), 64 MiB DeviceMem,
+three offsets, free_before == free_after. No Online/format. Terminal: VM Off, host GPU OK.
+
+Evidence: `evidence/gpupv-probe-cuda-pass-20260716T173812Z.md`.
+
+### InfVerif
+
+BusType moved under Parameters (ERROR 1323 cleared). ERROR 1322 DIRID 13 remains open for
+attestation package work. Evidence: `evidence/infverif-20260716.md`.
+
+### Next
+
+1. Guest product Online + 3-round storage SHA (lab only, 64 MiB, exact VPD).
+2. Optional guest Windows Update to UBR ≥ host to silence protocol mismatch.
+3. StartIo READ concurrent race under Verifier (beyond ring/IOCTL injectors).
+4. InfVerif DIRID 13 package migration or documented waiver.
+5. Isolated WSL2 freeze campaign (never daily thrash).
