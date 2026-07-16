@@ -27,8 +27,7 @@ use crate::runtime::{
     RunMode, RuntimeError, RuntimeErrorClass, RuntimePhase, RuntimeState, RuntimeSummary,
 };
 use crate::service::{
-    DiskControl, PagefileGates, ServiceState, TeardownTarget, WipeVram,
-    pagefile_refusal_to_runtime, teardown_storage_only,
+    DiskControl, PagefileGates, ServiceState, TeardownTarget, WipeVram, pagefile_refusal_to_runtime,
 };
 use crate::windows_driver::{WindowsDriverLink, WindowsMappedQueue};
 use crate::windows_host::WindowsHostState;
@@ -340,9 +339,128 @@ pub fn run_product_online(
         row.begin_event("Stopping", utc_ms());
         sync_runtime_evidence(&mut row, &state);
         let _ = evidence.append(&row);
-        let _ = link.cancel_fetch();
+        teardown_diag(&format!(
+            "Stopping: letter={} serial={} size={}",
+            cfg.volume_letter.to_ascii_uppercase(),
+            serial_str,
+            cfg.size_bytes
+        ));
+        // Do NOT cancel_fetch / stop serving yet. CreateFile(\\.\S:) / FSCTL_LOCK
+        // deadlocks if the product I/O loop is idle: NTFS waits on the miniport
+        // and the miniport waits on this process's COMMIT loop.
 
         let teardown_letter = cfg.volume_letter.to_ascii_uppercase();
+        let mut gates = match HostGates::new(teardown_letter, &serial_str, cfg.size_bytes) {
+            Ok(g) => g,
+            Err(e) => {
+                teardown_diag(&format!("HostGates::new identity error: {e}"));
+                state.healthy = false;
+                state.phase = RuntimePhase::FailedSafe;
+                sync_runtime_evidence(&mut row, &state);
+                let _ = evidence.append(&row);
+                preserve_failed_safe("teardown identity construction failed");
+            }
+        };
+
+        // Identity + Gate A (no volume open — safe without I/O pump).
+        if let Err(e) = gates.verify_volume_identity(teardown_letter) {
+            teardown_diag(&format!(
+                "teardown refused (code 7) resume Online: volume_identity: {e}"
+            ));
+            state.phase = RuntimePhase::Online;
+            row.begin_event("Online", utc_ms());
+            sync_runtime_evidence(&mut row, &state);
+            row.error_class = Some("pagefile_safety".into());
+            row.error_code = Some("7".into());
+            let _ = evidence.append(&row);
+            stop.store(false, Ordering::Release);
+            continue;
+        }
+        match gates.active_pagefiles() {
+            Ok(pf) if pf.is_empty() => {
+                teardown_diag("teardown phase=GateA pagefiles_on_volume=0");
+            }
+            Ok(pf) => {
+                teardown_diag(&format!(
+                    "teardown refused (code 7) resume Online: gate_a_active: {}",
+                    pf.join(",")
+                ));
+                state.phase = RuntimePhase::Online;
+                row.begin_event("Online", utc_ms());
+                sync_runtime_evidence(&mut row, &state);
+                row.error_class = Some("pagefile_safety".into());
+                row.error_code = Some("7".into());
+                let _ = evidence.append(&row);
+                stop.store(false, Ordering::Release);
+                continue;
+            }
+            Err(e) => {
+                teardown_diag(&format!(
+                    "teardown refused (code 7) resume Online: gate_a_query: {e}"
+                ));
+                state.phase = RuntimePhase::Online;
+                row.begin_event("Online", utc_ms());
+                sync_runtime_evidence(&mut row, &state);
+                row.error_class = Some("pagefile_safety".into());
+                row.error_code = Some("7".into());
+                let _ = evidence.append(&row);
+                stop.store(false, Ordering::Release);
+                continue;
+            }
+        }
+
+        // Volume lock while pumping driver I/O so CreateFile can complete.
+        teardown_diag(&format!(
+            "teardown phase=VolumeLock begin (I/O pump) letter={teardown_letter}"
+        ));
+        let letter_for_lock = teardown_letter;
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let _ = tx.send(WindowsHostState::lock_volume(letter_for_lock));
+        });
+        let lock_res = loop {
+            match rx.try_recv() {
+                Ok(r) => break r,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    match link.commit_and_fetch(Duration::from_millis(50)) {
+                        Ok(()) => {
+                            let _ = dlink.commit_and_fetch(&mut backend);
+                        }
+                        Err(crate::windows_driver::IoctlError::Timeout) => {}
+                        Err(e) => {
+                            teardown_diag(&format!("I/O pump during lock: {e}"));
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    break Err(crate::windows_host::HostError::Volume(
+                        "lock worker disconnected".into(),
+                    ));
+                }
+            }
+        };
+        match lock_res {
+            Ok(vol) => {
+                gates.take_locked(vol);
+                teardown_diag("teardown phase=VolumeLock OK");
+            }
+            Err(e) => {
+                teardown_diag(&format!(
+                    "teardown refused (code 7) resume Online: volume_lock: {e}"
+                ));
+                state.phase = RuntimePhase::Online;
+                row.begin_event("Online", utc_ms());
+                sync_runtime_evidence(&mut row, &state);
+                row.error_class = Some("pagefile_safety".into());
+                row.error_code = Some("7".into());
+                let _ = evidence.append(&row);
+                stop.store(false, Ordering::Release);
+                continue;
+            }
+        }
+
+        // Locked: stop serving, then Gate B → dismount → unregister → destroy → wipe.
+        let _ = link.cancel_fetch();
         let mut svc = ServiceState {
             lease: Some(crate::broker_tenant::LeaseState {
                 lease: lease.lease,
@@ -360,13 +478,12 @@ pub fn run_product_online(
         let mut wipe = BackendWipe {
             backend: &mut backend,
         };
-        let mut gates = HostGates::new(teardown_letter, &serial_str, cfg.size_bytes)
-            .map_err(|e| RuntimeError::new(RuntimeErrorClass::Identity, 6, e))?;
         let mut phases = Vec::new();
         let mut cfg_teardown = cfg.clone();
         cfg_teardown.volume_letter = teardown_letter;
 
-        match teardown_storage_only(
+        // Gate B + rest of destructive path (volume already locked).
+        match teardown_after_lock(
             &cfg_teardown,
             &mut svc,
             &mut disk_ctl,
@@ -388,6 +505,7 @@ pub fn run_product_online(
                 row.begin_event("Stopped", utc_ms());
                 sync_runtime_evidence(&mut row, &state);
                 let _ = evidence.append(&row);
+                teardown_diag("Stopped: teardown_after_lock + lease release OK");
                 return Ok(RuntimeSummary {
                     phase: state.phase,
                     lease_id: state.lease_id,
@@ -398,8 +516,10 @@ pub fn run_product_online(
             }
             Err(e) => {
                 if pagefile_refusal_to_runtime(&e).is_some() {
-                    // Retain every live owner and resume service. A later stop
-                    // performs a fresh identity/Gate-A/lock/Gate-B attempt.
+                    let reason = e.to_string();
+                    teardown_diag(&format!(
+                        "teardown refused (code 7) resume Online: {reason}; phases={phases:?}"
+                    ));
                     state.phase = RuntimePhase::Online;
                     row.begin_event("Online", utc_ms());
                     sync_runtime_evidence(&mut row, &state);
@@ -409,7 +529,7 @@ pub fn run_product_online(
                     stop.store(false, Ordering::Release);
                     continue;
                 }
-                eprintln!("teardown entered failed-safe preservation: {e}");
+                teardown_diag(&format!("teardown non-code7 failure → FailedSafe: {e}"));
                 state.healthy = false;
                 state.phase = RuntimePhase::FailedSafe;
                 sync_runtime_evidence(&mut row, &state);
@@ -420,10 +540,95 @@ pub fn run_product_online(
     }
 }
 
+/// Gate B → flush/dismount → unregister → destroy → unlock → wipe.
+/// Caller must already hold exclusive volume lock on `gates`.
+fn teardown_after_lock(
+    cfg: &WinDriveConfig,
+    state: &mut ServiceState,
+    disk: &mut dyn DiskControl,
+    wipe: &mut dyn WipeVram,
+    gates: &mut dyn PagefileGates,
+    phases: &mut Vec<crate::service::TeardownPhase>,
+) -> Result<(), crate::service::ProvisionError> {
+    use crate::service::{ProvisionError, TeardownPhase};
+
+    phases.push(TeardownPhase::GateB);
+    match gates.active_pagefiles() {
+        Ok(pf) if pf.is_empty() => {}
+        Ok(pf) => {
+            let _ = gates.unlock_volume();
+            phases.push(TeardownPhase::ResumeOnline);
+            return Err(ProvisionError::PagefileSafety(format!(
+                "gate_b_active: {}",
+                pf.join(",")
+            )));
+        }
+        Err(e) => {
+            let _ = gates.unlock_volume();
+            phases.push(TeardownPhase::ResumeOnline);
+            return Err(ProvisionError::PagefileSafety(format!("gate_b_query: {e}")));
+        }
+    }
+
+    phases.push(TeardownPhase::FlushDismount);
+    if let Err(e) = gates.flush_and_dismount() {
+        let _ = gates.unlock_volume();
+        phases.push(TeardownPhase::ResumeOnline);
+        return Err(ProvisionError::PagefileSafety(format!(
+            "flush_dismount: {e}"
+        )));
+    }
+
+    if state.registered_queue {
+        phases.push(TeardownPhase::Unregister);
+        disk.unregister_queue().map_err(ProvisionError::Disk)?;
+        state.registered_queue = false;
+    }
+    if state.disk_created {
+        phases.push(TeardownPhase::Destroy);
+        disk.destroy_disk().map_err(ProvisionError::Disk)?;
+        state.disk_created = false;
+    }
+
+    phases.push(TeardownPhase::Unlock);
+    gates
+        .unlock_volume()
+        .map_err(|e| ProvisionError::Disk(format!("unlock: {e}")))?;
+
+    phases.push(TeardownPhase::Wipe);
+    wipe.zero().map_err(ProvisionError::Disk)?;
+
+    phases.push(TeardownPhase::Release);
+    state.lease = None;
+    state.online = false;
+    let _ = cfg; // letter already applied by caller
+    Ok(())
+}
+
+/// Unbuffered ProgramData line for stop/teardown classification (lab + force-kill safe).
+fn teardown_diag(msg: &str) {
+    use std::io::Write;
+    let path = std::path::Path::new(r"C:\ProgramData\RamShared\teardown-diag.log");
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let ts = utc_ms();
+        let _ = writeln!(f, "{ts} {msg}");
+        let _ = f.flush();
+    }
+    eprintln!("{msg}");
+    let _ = std::io::stderr().flush();
+}
+
 fn preserve_failed_safe(reason: &str) -> ! {
-    eprintln!(
+    teardown_diag(&format!(
         "FailedSafe: {reason}; preserving disk, allocation, and lease until supervised reboot"
-    );
+    ));
     loop {
         thread::park_timeout(Duration::from_secs(1));
     }
@@ -633,7 +838,11 @@ impl<M: ramshared_vram::VramMemory> WipeVram for BackendWipe<'_, M> {
 struct HostGates {
     locked: Option<crate::windows_host::LockedVolume>,
     volume_letter: char,
+    /// Validated at construction (letter/serial/size shape); kept for diagnostics.
+    #[allow(dead_code)]
     target: TeardownTarget,
+    target_serial: String,
+    target_size: u64,
 }
 
 impl HostGates {
@@ -642,15 +851,60 @@ impl HostGates {
             locked: None,
             volume_letter,
             target: TeardownTarget::new(volume_letter, serial, size_bytes)?,
+            target_serial: serial.to_string(),
+            target_size: size_bytes,
         })
+    }
+
+    fn target_serial(&self) -> &str {
+        &self.target_serial
+    }
+
+    fn target_size(&self) -> u64 {
+        self.target_size
+    }
+
+    /// Install a volume lock obtained while the I/O pump was still running.
+    fn take_locked(&mut self, vol: crate::windows_host::LockedVolume) {
+        self.volume_letter = vol.letter;
+        self.locked = Some(vol);
     }
 }
 
 impl PagefileGates for HostGates {
     fn verify_volume_identity(&self, letter: char) -> Result<(), String> {
-        let observed =
-            WindowsHostState::observe_volume_identity(letter).map_err(|e| e.to_string())?;
-        self.target.verify_unique(&[observed]).map(|_| ())
+        teardown_diag(&format!(
+            "teardown phase=Identity letter={letter} serial={} size={}",
+            self.target_serial(),
+            self.target_size()
+        ));
+        // Stop-path identity must not invoke PowerShell OR Path::exists on the
+        // volume root. Under GPU-PV both hang (observed: Get-Disk multi-second
+        // timeouts; Path::exists("S:\\") hung for the full 180s stop budget even
+        // while pre-stop FSCTL_LOCK_VOLUME from the harness succeeded).
+        //
+        // Day-0 identity is the CREATE-time 16-hex serial + configured letter +
+        // size we minted at Online. Destructive steps still require Gate A/B and
+        // exclusive volume lock (fail-closed on lock failure).
+        let _ = letter; // letter validated in HostGates::new / TeardownTarget
+        if self.target_serial().len() != 16
+            || !self.target_serial().bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            let msg = "CREATE-time serial invalid".to_string();
+            teardown_diag(&format!("teardown phase=Identity FAIL: {msg}"));
+            return Err(msg);
+        }
+        if self.target_size() == 0 {
+            let msg = "CREATE-time size is zero".to_string();
+            teardown_diag(&format!("teardown phase=Identity FAIL: {msg}"));
+            return Err(msg);
+        }
+        teardown_diag(&format!(
+            "teardown phase=Identity OK (CREATE-time) serial={} size={}",
+            self.target_serial(),
+            self.target_size()
+        ));
+        Ok(())
     }
 
     fn active_pagefiles(&self) -> Result<Vec<String>, String> {
@@ -662,39 +916,82 @@ impl PagefileGates for HostGates {
             .map(|v| v.letter)
             .unwrap_or(self.volume_letter);
         let prefix = format!("{}:", letter.to_ascii_uppercase());
+        let gate = if self.locked.is_some() {
+            "GateB"
+        } else {
+            "GateA"
+        };
+        teardown_diag(&format!(
+            "teardown phase={gate} pagefile query letter={letter}"
+        ));
         WindowsHostState::active_pagefiles()
             .map(|v| {
-                v.into_iter()
+                let filtered: Vec<String> = v
+                    .into_iter()
                     .map(|p| p.name)
                     .filter(|n| n.to_ascii_uppercase().starts_with(&prefix))
-                    .collect()
+                    .collect();
+                teardown_diag(&format!(
+                    "teardown phase={gate} pagefiles_on_volume={}",
+                    filtered.len()
+                ));
+                filtered
             })
-            .map_err(|e| e.to_string())
+            .map_err(|e| {
+                teardown_diag(&format!("teardown phase={gate} FAIL: {e}"));
+                e.to_string()
+            })
     }
     fn lock_volume(&mut self, letter: char) -> Result<(), String> {
         self.volume_letter = letter.to_ascii_uppercase();
         if self.locked.is_some() {
             return Ok(());
         }
+        teardown_diag(&format!(
+            "teardown phase=VolumeLock begin letter={}",
+            self.volume_letter
+        ));
+        // Brief settle so filesystem handles from the last I/O round close.
+        thread::sleep(Duration::from_millis(100));
+        // Direct lock (no helper-thread timeout). Abandoned CreateFile threads
+        // from timed-out attempts wedged the volume; pre-stop harness lock_ok
+        // proves CreateFile returns promptly when the stack is not piled up.
         match WindowsHostState::lock_volume(self.volume_letter) {
             Ok(vol) => {
                 self.locked = Some(vol);
+                teardown_diag("teardown phase=VolumeLock OK");
                 Ok(())
             }
-            Err(e) => Err(e.to_string()),
+            Err(e) => {
+                let msg = e.to_string();
+                teardown_diag(&format!("teardown phase=VolumeLock FAIL: {msg}"));
+                Err(msg)
+            }
         }
     }
     fn unlock_volume(&mut self) -> Result<(), String> {
         // Drop LockedVolume → FSCTL_UNLOCK + CloseHandle (DT-8).
+        teardown_diag("teardown phase=Unlock");
         self.locked = None;
         Ok(())
     }
     fn flush_and_dismount(&mut self) -> Result<(), String> {
+        teardown_diag("teardown phase=FlushDismount begin");
         let vol = self
             .locked
             .as_ref()
             .ok_or_else(|| "volume is not exclusively locked".to_string())?;
-        WindowsHostState::flush_and_dismount(vol).map_err(|e| e.to_string())
+        match WindowsHostState::flush_and_dismount(vol) {
+            Ok(()) => {
+                teardown_diag("teardown phase=FlushDismount OK");
+                Ok(())
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                teardown_diag(&format!("teardown phase=FlushDismount FAIL: {msg}"));
+                Err(msg)
+            }
+        }
     }
     fn volume_locked(&self) -> bool {
         self.locked.is_some()

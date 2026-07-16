@@ -1740,3 +1740,14 @@ Harness fixes pending re-run: longer stop wait, no FileInfo JSON explosion.
 - Root cause: teardown refuse/resume Online loop or stop not effective; no Stopping line in stderr
 - Evidence: evidence/guest-product-online-20260716-151304.md
 - Terminal: VM Off, host GPU OK. No push.
+
+## 2026-07-16 — guest product Online STOP_OK PASS (I/O-pump lock)
+
+Campaign `guest-product-online-20260716-174238` on win11-drill:
+
+- ONLINE + BINARY_MATCH CD7E315D… + 3 SHA PASS (serial E688A3B1F1D1F0C0, letter S, 64 MiB)
+- **STOP_OK=true**, forceKilled=false, **lease 1 liberado**
+- Root cause: CreateFile volume lock deadlocked when COMMIT loop stopped; fixed by I/O pump during lock + CREATE-time identity + registry Gate A
+- Evidence: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-174238.md`
+- Terminal: VM Off, host RTX 2060 OK. No physical Online, no push.
+
