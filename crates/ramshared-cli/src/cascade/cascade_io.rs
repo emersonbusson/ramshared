@@ -278,8 +278,11 @@ pub fn down() -> Result<(), CascadeError> {
     let candidates = swapoff_candidates(recorded_swap.as_deref(), recorded_zram.as_deref());
     eprintln!("[down] swapoff candidatos: {candidates:?}");
 
+    // Fetch entries once to use in swapoff_all
+    let current_entries = read_swaps();
+
     // 1) ALWAYS swapoff first — never disconnect/kill with pages on the device.
-    let fails = swapoff_all(&candidates);
+    let fails = swapoff_all(&candidates, &current_entries);
     if !fails.is_empty() {
         for (p, msg) in &fails {
             eprintln!("[down] FALHA swapoff {p}: {msg}");

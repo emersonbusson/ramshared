@@ -373,7 +373,7 @@ fn swapoff_try(path: &str) -> Result<(), CascadeError> {
 
 /// Swapoff every candidate. Returns list of failures.
 /// **Never** kills the daemon from here.
-fn swapoff_all(paths: &[String]) -> Vec<(String, String)> {
+fn swapoff_all(paths: &[String], entries: &[SwapEntry]) -> Vec<(String, String)> {
     let mut fails = Vec::new();
     for p in paths {
         if !is_allowlisted_managed_path(p) {
@@ -381,9 +381,8 @@ fn swapoff_all(paths: &[String]) -> Vec<(String, String)> {
             continue;
         }
         // Ghost with used>0 cannot be recovered without reboot — report loudly.
-        let entries = read_swaps();
         let p_canon = canonicalize_swap_path(p);
-        if let Some(msg) = ghost_used_blocks_swapoff(&entries, p) {
+        if let Some(msg) = ghost_used_blocks_swapoff(entries, p) {
             fails.push((p.clone(), msg));
             continue;
         }
@@ -392,7 +391,7 @@ fn swapoff_all(paths: &[String]) -> Vec<(String, String)> {
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("No such file") || msg.contains("Invalid argument") {
-                    let still = read_swaps().iter().any(|e| {
+                    let still = entries.iter().any(|e| {
                         (e.filename.contains(p)
                             || e.bare_path() == *p
                             || e.canonical_path() == p_canon)
@@ -527,7 +526,8 @@ fn try_recover_zero_used_orphans() -> Result<(), CascadeError> {
             );
             let candidates = swapoff_candidates(None, None);
             eprintln!("[up] orphan recover candidatos: {candidates:?}");
-            let fails = swapoff_all(&candidates);
+            // Use the already fetched `entries` for `swapoff_all`
+            let fails = swapoff_all(&candidates, &entries);
             for (p, msg) in &fails {
                 eprintln!("[up] orphan recover swapoff fail {p}: {msg}");
             }
@@ -1331,7 +1331,8 @@ Filename Type Size Used Priority
             "Filename Type Size Used Priority\n\
              /dev/nbd0\\040(deleted) partition 1024 50 100\n",
         ));
-        let fails = swapoff_all(&["/dev/nbd0".to_string()]);
+        let e = read_swaps();
+        let fails = swapoff_all(&["/dev/nbd0".to_string()], &e);
         clear_test_seams();
         assert_eq!(fails.len(), 1);
         assert!(fails[0].1.contains("ghost"));
@@ -1345,7 +1346,8 @@ Filename Type Size Used Priority
             "Filename Type Size Used Priority\n\
              /dev/sdc partition 999 0 -2\n",
         ));
-        let fails = swapoff_all(&["/dev/sdc".to_string(), "/dev/nbd0".to_string()]);
+        let e = read_swaps();
+        let fails = swapoff_all(&["/dev/sdc".to_string(), "/dev/nbd0".to_string()], &e);
         clear_test_seams();
         assert!(fails.is_empty(), "{fails:?}");
     }
@@ -1358,7 +1360,8 @@ Filename Type Size Used Priority
             "Filename Type Size Used Priority\n\
              /dev/sdc partition 999 0 -2\n",
         ));
-        let fails = swapoff_all(&["/dev/nbd0".to_string()]);
+        let e = read_swaps();
+        let fails = swapoff_all(&["/dev/nbd0".to_string()], &e);
         clear_test_seams();
         assert!(fails.is_empty(), "{fails:?}");
     }
