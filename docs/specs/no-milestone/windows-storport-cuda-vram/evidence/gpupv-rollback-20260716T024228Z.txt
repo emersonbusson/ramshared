@@ -1,0 +1,32 @@
+﻿GPU-PV ROLLBACK RECORD — win11-drill only
+Created: 2026-07-16T02:42:28.6080128-03:00
+Scope: Hyper-V VMGpuPartitionAdapter settings on win11-drill; guest GPU driver stack only if later needed.
+NOT in scope: host ramshared.sys, host Online, host reboot, DDA (would steal host GPU), external downloads.
+
+PRE-STATE (captured):
+=== PRE 2026-07-16T02:42:28.6180202-03:00 ===
+VM State=Off NestedVirt=True GuestControlledCache=True LowMMIO=1073741824 HighMMIO=34359738368
+AdapterCount=1
+Id=Microsoft:A84C3775-EEC5-4FAE-8B2E-6ECBCA1CFE41\4D4EFE15-DF49-42AE-BB45-2A820E914257
+InstancePath=[]
+Min/Max/Opt/Cur VRAM=///
+Min/Max/Opt/Cur Encode=///
+Min/Max/Opt/Cur Decode=///
+Min/Max/Opt/Cur Compute=///
+AssignableDeviceCount=0
+HostPartitionable Name=\\?\PCI#VEN_10DE&DEV_1F08&SUBSYS_12FD10DE&REV_A1#4&1fc990d7&0&0019#{064092b3-625e-43bf-9eb5-dc845897dd59}\GPUPARAV
+Host Total/Avail VRAM=1000000000/1000000000 Optimal=1000000000
+
+ROLLBACK PROCEDURE (reversible):
+1. Ensure VM Off: Stop-VM -Name win11-drill -Force (or TurnOff if hung)
+2. Clear partition values OR remove adapter and re-add bare:
+   Remove-VMGpuPartitionAdapter -VMName win11-drill
+   Add-VMGpuPartitionAdapter -VMName win11-drill
+   # restores pre-session empty Min/Max/Optimal fields (prior lab state)
+3. Do NOT leave DDA assigned (AssignableDevice must stay 0).
+4. Guest: if driver files copied, uninstall via pnputil /delete-driver for guest-only packages; leave Hyper-V Video OK.
+5. Host NVIDIA must remain OK (Status OK, nvidia-smi works) — never Dismount-VMHostAssignableDevice.
+
+SUCCESS CRITERIA for continuing to guest Online:
+  Guest PnP NVIDIA Status=OK + nvidia-smi works + nvcuda.dll present + real CUDA probe
+STOP CRITERIA: one grounded approach fails → stabilize VM Off, document PARTIAL, no thrash.

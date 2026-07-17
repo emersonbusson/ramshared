@@ -8,6 +8,24 @@ static VIRTUAL_DISK g_ActiveDisk;
 static BOOLEAN g_Active;
 static PVOID g_AdapterExt;
 
+static BOOLEAN
+VdIsAsciiHexSerial(_In_reads_(16) PCUCHAR serial)
+{
+	UCHAR i;
+
+	if (serial == NULL)
+		return FALSE;
+	for (i = 0; i < 16; i++) {
+		UCHAR c = serial[i];
+
+		if (!((c >= '0' && c <= '9') ||
+		      (c >= 'A' && c <= 'F'))) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
 VOID
 VdSetAdapterExt(_In_opt_ PVOID DeviceExtension)
 {
@@ -26,6 +44,9 @@ VdCreate(_Out_ PVIRTUAL_DISK Disk, _In_ const RAMSHARED_DISK_PARAMS *Params)
 	if (Disk == NULL || Params == NULL) {
 		return STATUS_INVALID_PARAMETER;
 	}
+	if (Params->reserved != 0) {
+		return STATUS_INVALID_PARAMETER; /* REFUSE_RESERVED_DISK_PARAMS */
+	}
 	if (Params->block_size != 512 && Params->block_size != 4096) {
 		return STATUS_INVALID_PARAMETER;
 	}
@@ -33,11 +54,15 @@ VdCreate(_Out_ PVIRTUAL_DISK Disk, _In_ const RAMSHARED_DISK_PARAMS *Params)
 	    (Params->size_bytes % Params->block_size) != 0) {
 		return STATUS_INVALID_PARAMETER;
 	}
+	if (!VdIsAsciiHexSerial(Params->serial))
+		return STATUS_INVALID_PARAMETER;
 
 	RtlZeroMemory(Disk, sizeof(*Disk));
 	Disk->size_bytes = Params->size_bytes;
 	Disk->block_size = Params->block_size;
 	RtlCopyMemory(Disk->serial, Params->serial, sizeof(Disk->serial));
+	ObReferenceObject(IoGetCurrentProcess());
+	Disk->OwnerProcess = IoGetCurrentProcess();
 	InterlockedExchange(&Disk->state, VdStateCreated);
 	return STATUS_SUCCESS;
 }
@@ -48,6 +73,10 @@ VdDestroy(_Inout_ PVIRTUAL_DISK Disk)
 	if (Disk == NULL) {
 		return;
 	}
+	if (Disk->OwnerProcess) {
+		ObDereferenceObject(Disk->OwnerProcess);
+		Disk->OwnerProcess = NULL;
+	}
 	InterlockedExchange(&Disk->state, VdStateNone);
 	RtlZeroMemory(Disk, sizeof(*Disk));
 }
@@ -57,6 +86,9 @@ VdActivate(_In_ const RAMSHARED_DISK_PARAMS *Params)
 {
 	NTSTATUS st;
 
+	if (g_AdapterExt == NULL) {
+		return STATUS_DEVICE_NOT_READY;
+	}
 	if (g_Active) {
 		return STATUS_DEVICE_BUSY;
 	}
@@ -66,9 +98,7 @@ VdActivate(_In_ const RAMSHARED_DISK_PARAMS *Params)
 	}
 	g_Active = TRUE;
 	/* Re-enumerate so capacity/media-ready is visible (DT-25, INF path). */
-	if (g_AdapterExt != NULL) {
-		StorPortNotification(BusChangeDetected, g_AdapterExt, (UCHAR)0);
-	}
+	StorPortNotification(BusChangeDetected, g_AdapterExt, (UCHAR)0);
 	return STATUS_SUCCESS;
 }
 
@@ -84,6 +114,15 @@ VdDeactivate(VOID)
 	if (g_AdapterExt != NULL) {
 		StorPortNotification(BusChangeDetected, g_AdapterExt, (UCHAR)0);
 	}
+}
+
+BOOLEAN
+VdOwnerMatches(_In_ PEPROCESS Process)
+{
+	if (!g_Active || Process == NULL) {
+		return FALSE;
+	}
+	return g_ActiveDisk.OwnerProcess == Process;
 }
 
 PVIRTUAL_DISK
@@ -140,74 +179,158 @@ VdSetSenseNotReady(_Inout_ PSCSI_REQUEST_BLOCK Srb)
 	}
 }
 
+/*
+ * Standard INQUIRY + VPD 0x00 / 0x80 (unit serial from 16-byte disk serial).
+ * CDB[1] EVPD bit, CDB[2] page code (DT-5 / RF-4 / VPD_SERIAL_MATCH).
+ */
 static BOOLEAN
-VdHandleInquiry(_Inout_ PSCSI_REQUEST_BLOCK Srb)
+VdHandleInquiry(_In_opt_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
-	UCHAR *buf;
-	ULONG len;
+	UCHAR response[36];
+	ULONG responseLen;
+	ULONG transferLen;
+	ULONG allocationLen;
+	UCHAR evpd;
+	UCHAR page;
 
-	buf = (UCHAR *)Srb->DataBuffer;
-	if (buf == NULL) {
+	evpd = Srb->Cdb[1] & 0x01;
+	page = Srb->Cdb[2];
+	allocationLen = Srb->Cdb[4];
+	RtlZeroMemory(response, sizeof(response));
+
+	if (evpd == 0) {
+		response[0] = 0x00; /* direct-access */
+		response[2] = 0x05; /* SPC-3 */
+		response[4] = 31;   /* additional length */
+		RtlCopyMemory(&response[8], "RAMSHARE", 8);
+		RtlCopyMemory(&response[16], "VRAMDISK        ", 16);
+		RtlCopyMemory(&response[32], "0001", 4);
+		responseLen = 36;
+		goto copy_response;
+	}
+
+	/* VPD pages */
+	if (page == 0x00) {
+		/* Supported VPD pages: 0x00, 0x80 */
+		response[0] = 0x00;
+		response[1] = 0x00;
+		response[3] = 2;
+		response[4] = 0x00;
+		response[5] = 0x80;
+		responseLen = 6;
+		goto copy_response;
+	}
+	if (page == 0x80) {
+		/* Unit serial number: 16 ASCII hex digits from disk serial. */
+		if (Disk == NULL) {
+			Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+			return TRUE;
+		}
+		response[0] = 0x00;
+		response[1] = 0x80;
+		response[3] = 16;
+		RtlCopyMemory(&response[4], Disk->serial, 16);
+		responseLen = 20;
+		goto copy_response;
+	}
+
+	Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+	return TRUE;
+
+copy_response:
+	transferLen = min(Srb->DataTransferLength, allocationLen);
+	transferLen = min(transferLen, responseLen);
+	if (transferLen != 0 && Srb->DataBuffer == NULL) {
 		Srb->SrbStatus = SRB_STATUS_ERROR;
 		return TRUE;
 	}
-	len = Srb->DataTransferLength;
-	if (len < 36) {
-		Srb->SrbStatus = SRB_STATUS_DATA_OVERRUN;
-		return TRUE;
-	}
-	RtlZeroMemory(buf, len);
-	buf[0] = 0x00; /* direct-access */
-	buf[2] = 0x05; /* SPC-3 */
-	buf[4] = 31;   /* additional length */
-	RtlCopyMemory(&buf[8], "RAMSHARE", 8);
-	RtlCopyMemory(&buf[16], "VRAMDISK        ", 16);
-	RtlCopyMemory(&buf[32], "0001", 4);
-	Srb->DataTransferLength = 36;
+	if (transferLen != 0)
+		RtlCopyMemory(Srb->DataBuffer, response, transferLen);
+	Srb->DataTransferLength = transferLen;
 	Srb->SrbStatus = SRB_STATUS_SUCCESS;
 	return TRUE;
+}
+
+static VOID
+VdHandleReportLuns(_Inout_ PSCSI_REQUEST_BLOCK Srb, _In_ BOOLEAN Present)
+{
+	ULONG required = Present ? 16 : 8;
+	UCHAR *buf;
+
+	if (Srb->DataBuffer == NULL || Srb->DataTransferLength < required) {
+		Srb->SrbStatus = SRB_STATUS_DATA_OVERRUN;
+		return;
+	}
+	buf = (UCHAR *)Srb->DataBuffer;
+	RtlZeroMemory(buf, Srb->DataTransferLength);
+	if (Present) {
+		/* LUN list length = 8 (one 8-byte LUN entry for LUN 0). */
+		buf[3] = 8;
+	}
+	Srb->DataTransferLength = required;
+	Srb->SrbStatus = SRB_STATUS_SUCCESS;
 }
 
 static BOOLEAN
 VdHandleReadCapacity(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
-	UCHAR *buf;
+	UCHAR response[32];
 	ULONG64 last_lba;
+	ULONG allocationLen;
+	ULONG transferLen;
 	ULONG bs;
+	UCHAR i;
 
-	buf = (UCHAR *)Srb->DataBuffer;
-	if (buf == NULL) {
-		Srb->SrbStatus = SRB_STATUS_ERROR;
-		return TRUE;
-	}
 	if (Disk == NULL || Disk->block_size == 0 || Disk->size_bytes == 0) {
-		/* Not ready / no media: report 0 capacity. */
-		if (Srb->DataTransferLength < 8) {
-			Srb->SrbStatus = SRB_STATUS_DATA_OVERRUN;
-			return TRUE;
-		}
-		RtlZeroMemory(buf, 8);
-		Srb->DataTransferLength = 8;
-		Srb->SrbStatus = SRB_STATUS_SUCCESS;
+		Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
 		return TRUE;
 	}
 	bs = Disk->block_size;
 	last_lba = (Disk->size_bytes / bs) - 1;
+	RtlZeroMemory(response, sizeof(response));
 	if (Srb->Cdb[0] == SCSIOP_READ_CAPACITY) {
-		if (Srb->DataTransferLength < 8) {
+		if (Srb->DataBuffer == NULL || Srb->DataTransferLength < 8) {
 			Srb->SrbStatus = SRB_STATUS_DATA_OVERRUN;
 			return TRUE;
 		}
-		buf[0] = (UCHAR)((last_lba >> 24) & 0xFF);
-		buf[1] = (UCHAR)((last_lba >> 16) & 0xFF);
-		buf[2] = (UCHAR)((last_lba >> 8) & 0xFF);
-		buf[3] = (UCHAR)(last_lba & 0xFF);
-		buf[4] = (UCHAR)((bs >> 24) & 0xFF);
-		buf[5] = (UCHAR)((bs >> 16) & 0xFF);
-		buf[6] = (UCHAR)((bs >> 8) & 0xFF);
-		buf[7] = (UCHAR)(bs & 0xFF);
+		if (last_lba > MAXULONG)
+			last_lba = MAXULONG;
+		response[0] = (UCHAR)((last_lba >> 24) & 0xFF);
+		response[1] = (UCHAR)((last_lba >> 16) & 0xFF);
+		response[2] = (UCHAR)((last_lba >> 8) & 0xFF);
+		response[3] = (UCHAR)(last_lba & 0xFF);
+		response[4] = (UCHAR)((bs >> 24) & 0xFF);
+		response[5] = (UCHAR)((bs >> 16) & 0xFF);
+		response[6] = (UCHAR)((bs >> 8) & 0xFF);
+		response[7] = (UCHAR)(bs & 0xFF);
+		RtlCopyMemory(Srb->DataBuffer, response, 8);
 		Srb->DataTransferLength = 8;
+		Srb->SrbStatus = SRB_STATUS_SUCCESS;
+		return TRUE;
 	}
+	if ((Srb->Cdb[1] & 0x1F) != 0x10) {
+		Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+		return TRUE;
+	}
+	for (i = 0; i < 8; i++)
+		response[i] = (UCHAR)((last_lba >> ((7 - i) * 8)) & 0xFF);
+	response[8] = (UCHAR)((bs >> 24) & 0xFF);
+	response[9] = (UCHAR)((bs >> 16) & 0xFF);
+	response[10] = (UCHAR)((bs >> 8) & 0xFF);
+	response[11] = (UCHAR)(bs & 0xFF);
+	allocationLen = ((ULONG)Srb->Cdb[10] << 24) |
+			((ULONG)Srb->Cdb[11] << 16) |
+			((ULONG)Srb->Cdb[12] << 8) |
+			(ULONG)Srb->Cdb[13];
+	transferLen = min(Srb->DataTransferLength, allocationLen);
+	transferLen = min(transferLen, (ULONG)sizeof(response));
+	if (transferLen != 0 && Srb->DataBuffer == NULL) {
+		Srb->SrbStatus = SRB_STATUS_ERROR;
+		return TRUE;
+	}
+	if (transferLen != 0)
+		RtlCopyMemory(Srb->DataBuffer, response, transferLen);
+	Srb->DataTransferLength = transferLen;
 	Srb->SrbStatus = SRB_STATUS_SUCCESS;
 	return TRUE;
 }
@@ -219,16 +342,20 @@ VdTranslateSrbNoDisk(_In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 
 	switch (op) {
 	case SCSIOP_INQUIRY:
-		(void)VdHandleInquiry(Srb);
+		/* No child PDO before CREATE: avoid caching placeholder VPD identity. */
+		Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
 		break;
 	case SCSIOP_TEST_UNIT_READY:
-		/* Not ready until CREATE_DISK - never SRB_STATUS_BUSY (TM 100%). */
+		/*
+		 * Not ready until CREATE_DISK — never SRB_STATUS_BUSY (TM 100%).
+		 * Sense NOT_READY lets the stack back off without thrashing.
+		 */
 		VdSetSenseNotReady(Srb);
 		break;
 	case SCSIOP_READ_CAPACITY:
 	case 0x9E:
-		/* Prefer not-ready over zero-capacity (avoids endless probe). */
-		VdSetSenseNotReady(Srb);
+		/* Stale no-media request: remain not-present, never synthesize size. */
+		Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
 		break;
 	case SCSIOP_MODE_SENSE:
 	case SCSIOP_MODE_SENSE10:
@@ -237,8 +364,11 @@ VdTranslateSrbNoDisk(_In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 			RtlZeroMemory(Srb->DataBuffer, Srb->DataTransferLength);
 		}
 		break;
+	case 0xA0: /* REPORT LUNS — no LUN until CREATE_DISK */
+		VdHandleReportLuns(Srb, FALSE);
+		break;
 	default:
-		Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+		Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
 		break;
 	}
 	if (Srb->SrbStatus != SRB_STATUS_PENDING) {
@@ -269,7 +399,7 @@ VdTranslateSrb(
 		break;
 
 	case SCSIOP_INQUIRY:
-		(void)VdHandleInquiry(Srb);
+		(void)VdHandleInquiry(Disk, Srb);
 		break;
 
 	case SCSIOP_READ_CAPACITY:
@@ -336,6 +466,10 @@ VdTranslateSrb(
 		} else {
 			Srb->SrbStatus = SRB_STATUS_SUCCESS;
 		}
+		break;
+
+	case 0xA0: /* REPORT LUNS */
+		VdHandleReportLuns(Srb, TRUE);
 		break;
 
 	default:

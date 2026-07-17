@@ -1,9 +1,31 @@
 # SPEC — cascade-lifecycle-observability
 
-> Implements [`PRD.md`](PRD.md). Single SPEC file (no SPECvN).  
-> **Does not** change swap priorities (200 > 100 > −2), DEMOTE algorithms, or pressure-probe host policy.  
-> **Does** add pure phase derivation, richer `ramshared status`, health JSON fields, unit tests ≥80% on phase module.  
-> Parents: `wsl2-cascade-swap`, `cascade-vram-ondemand`, `wsl2-cascade-boot`, `broker-telemetry-reconciliation`, `cascade-desktop-app`.
+> Implements [`PRD.md`](PRD.md). Single `SPEC.md` (no SPECvN).  
+> Parents: `wsl2-cascade-swap`, `cascade-vram-ondemand`, `wsl2-cascade-boot`, `broker-telemetry-reconciliation`, `cascade-desktop-app`.  
+> Aligned to [`docs/SSDV3-PROMPTS.md`](../../../SSDV3-PROMPTS.md) section order (2026-07-15).
+
+## Closed scope
+
+**In now**
+
+- Pure phase derivation (`CascadePhase` + `derive_lifecycle`) in CLI crate.  
+- Richer `ramshared status` / `status --json`.  
+- `cascade-health.sh` consumes CLI JSON for `phase` / `demote` / thresholds (no shell dual heuristic).  
+- Unit tests + cover ≥80% on `lifecycle.rs` (and wired `mod.rs` status path).  
+- Docs: FAQ, README, ARCHITECTURE pointers.  
+
+**Out now**
+
+- Swap priority changes (200 > 100 > −2).  
+- DEMOTE algorithm / free-floor / pressure-probe policy.  
+- Forcing fill into VRAM; Prometheus; Windows guest lifecycle.  
+- Desktop GUI beyond optional CLI phase read.  
+- New broker wire protocol for demote (file-based status only if implemented).  
+
+**Assumed ready**
+
+- Existing cascade swap parsing / ghost helpers in `crates/ramshared-cli/src/cascade/mod.rs`.  
+- Product cascade shape from parent SPECs (`wsl2-cascade-swap`, boot, ondemand).  
 
 ## Traceability
 
@@ -18,87 +40,57 @@
 | NFR-2 | cover gate ITEM-1 module |
 | NFR-3..NFR-5 | ITEM-2 constraints + validation |
 
-## Day-0
+## Technical decisions
 
-One primary path: **pure function in CLI crate** is the source of truth for phase.  
-`cascade-health.sh` **must** either:
-
-1. Prefer `ramshared status --json` when `RAMSHARED_BIN` / `target/release/ramshared` exists and exits 0, then merge/pass through `phase` + `demote`, **or**  
-2. Call the same rules only via that binary (no independent shell reimplementation of the phase table).
-
-No dual-path heuristics in shell. No kernel uAPI.
-
-## Files
-
-| Path | Action |
-| --- | --- |
-| `crates/ramshared-cli/src/cascade/lifecycle.rs` | **create** — pure types + `derive_phase` + tests |
-| `crates/ramshared-cli/src/cascade/mod.rs` | **modify** — `mod lifecycle`; replace thin `status()`; parse `--json` |
-| `crates/ramshared-cli/src/main.rs` | **modify** — pass argv for `status` (`status` / `status --json`) |
-| `scripts/safety/cascade-health.sh` | **modify** — emit `phase`, `phase_reason`, `demote`, `thresholds_kib` from CLI JSON when available; keep existing fields |
-| `docs/FAQ.md` | **modify** — Armed vs Using VRAM |
-| `README.md` | **modify** — one status line pointer |
-| `docs/ARCHITECTURE.md` | **modify** — short pointer to lifecycle module |
-| `validation.md` | **append** — live sample after IMPL |
-| `docs/specs/no-milestone/cascade-lifecycle-observability/IMPL.md` | **create** at Step 3 |
-| `docs/INDEX.md` | regenerate (SPEC status when this file present) |
-
-**Out of files:** `ramshared-wsl2d` demote algorithm; optional ITEM-3 only if a zero-risk status field already exists on a local socket — otherwise demote stays `unknown` in Day-0.
-
-## DT-1 — Phase enum
+### DT-1 — Phase enum
 
 Stable string tags (JSON + logs):
 
 | Tag | Meaning |
 | --- | --- |
-| `Off` | No product cascade: daemon dead **and** no zram+vram product shape (see inputs) |
-| `Armed` | Healthy cushion: VRAM tier present (nbd/ublk product path), daemon alive, VRAM used &lt; active threshold, not degraded |
+| `Off` | No product cascade: daemon dead **and** no zram+vram product shape |
+| `Armed` | Healthy cushion: VRAM tier present, daemon alive, VRAM used &lt; active threshold, not degraded |
 | `UsingZram` | zram used ≥ threshold, VRAM used &lt; threshold, not degraded |
 | `UsingVram` | VRAM used ≥ threshold |
 | `UsingDisk` | disk/vhdx used ≥ threshold |
 | `Demoting` | Daemon reports demote in progress (`demote.in_progress == true`) only |
-| `Degraded` | ghost **or** `order_ok == false` **or** (VRAM tier in swaps with used ≥ threshold **and** daemon not alive) **or** half-state reasons listed in DT-2 |
+| `Degraded` | ghost **or** `order_ok == false` **or** (VRAM tier hot **and** daemon not alive) **or** half-state rules in DT-2 |
 
 Rust: `#[derive(Clone, Copy, Debug, Eq, PartialEq)] pub enum CascadePhase` with `as_str()` matching tags exactly.
 
-## DT-2 — Phase selection priority
+### DT-2 — Phase selection priority
 
-Evaluate in order; first match wins:
+First match wins:
 
-1. **Degraded** if any of:  
-   - `ghost == true`  
-   - `order_ok == false` (zram prio must be &gt; vram prio &gt; disk prio when those tiers present)  
-   - VRAM-class device in swaps (`*nbd*`, `*ublk*`, `*ublkb*`) **and** daemon not alive **and** (used_vram ≥ threshold **or** half-state: run records require daemon — if CLI can detect `/run/ramshared` without pid, count as degraded; else only used_vram≥threshold without daemon)  
-2. **Demoting** if `demote.in_progress == true`  
-3. **UsingDisk** if disk/vhdx used ≥ threshold  
-4. **UsingVram** if vram used ≥ threshold  
-5. **UsingZram** if zram used ≥ threshold  
-6. **Armed** if daemon alive **and** vram tier present **and** order_ok **and** !ghost  
-7. **Off** otherwise  
+1. **Degraded** if: `ghost`; `order_ok == false`; VRAM-class device in swaps (`*nbd*`, `*ublk*`, `*ublkb*`) **and** daemon not alive **and** (used_vram ≥ threshold **or** half-state run records require daemon).  
+2. **Demoting** if `demote.in_progress == true`.  
+3. **UsingDisk** if disk/vhdx used ≥ threshold.  
+4. **UsingVram** if vram used ≥ threshold.  
+5. **UsingZram** if zram used ≥ threshold.  
+6. **Armed** if daemon alive **and** vram tier present **and** order_ok **and** !ghost.  
+7. **Off** otherwise.
 
-`phase_reason`: short snake_case string for the winning rule (e.g. `vram_used_ge_threshold`, `ghost`, `daemon_dead_hot_vram`, `armed_low_vram_used`).
+`phase_reason`: short snake_case for the winning rule (e.g. `vram_used_ge_threshold`, `ghost`, `armed_low_vram_used`).
 
-### Tier classification (match health.sh)
+#### Tier classification (match health.sh)
 
 | Class | Path name match |
 | --- | --- |
 | zram | `*zram*` |
 | vram | `*nbd*` or `*ublk*` or `*ublkb*` |
-| disk | remaining swap entries that are not zram/vram (typically VHDX/`sd*`) |
+| disk | remaining swap entries (typically VHDX/`sd*`) |
 
-Priorities: for `order_ok`, when both zram and vram present: `p_zram > p_vram`; when vram and disk present: `p_vram > p_disk` (same spirit as health).
+`order_ok`: when both zram and vram present → `p_zram > p_vram`; when vram and disk present → `p_vram > p_disk`.
 
-## DT-3 — Thresholds
+### DT-3 — Thresholds
 
 | Name | Default | Env override |
 | --- | --- | --- |
-| `active_kib` | **1024** (1 MiB) | `RAMSHARED_STATUS_ACTIVE_KIB` (parse u64; invalid → default) |
+| `active_kib` | **1024** (1 MiB) | `RAMSHARED_STATUS_ACTIVE_KIB` (invalid → default) |
 
-Used for: residual nbd after pressure stays **Armed** when used &lt; 1024 KiB (matches live residual ~176 KiB).
+Residual nbd after pressure stays **Armed** when used &lt; 1024 KiB (live residual ~176 KiB is intentional).
 
-Document: residual below threshold is intentional, not a bug.
-
-## DT-4 — Demote snapshot (optional input)
+### DT-4 — Demote snapshot (optional input)
 
 ```rust
 pub struct DemoteSnapshot {
@@ -108,191 +100,106 @@ pub struct DemoteSnapshot {
 }
 ```
 
-Day-0 default when daemon does not expose status:  
-`DemoteSnapshot { total: None, last_reason: None, in_progress: false }`.
+Default when daemon does not expose status: `{ None, None, false }`.  
+**Never invent Demoting** without `in_progress == true` from injectable source.
 
-**Never invent Demoting** without `in_progress == true` from an injectable source (test double or future daemon field).
+ITEM-3: if cheap demote counters exist without new protocol, wire them; else leave null and document gap in IMPL.
 
-ITEM-3 (optional): if a cheap read of demote counters exists without new protocol, wire it; else leave None and document gap in IMPL.
+### DT-5 — Read-only status path
 
-## DT-5 — Read-only status path
+`status` / phase derivation **must not** call `swapoff`/`swapon`/`nbd-client -d`/`pkill`/CUDA alloc or start pressure probe.  
+May read `/proc/swaps`, `pgrep`/`/proc/*/cmdline`, optional env, optional existing status socket/file.
 
-`status` / phase derivation **must not**:
+## Atomicity and rollback
 
-- call `swapoff`, `swapon`, `nbd-client -d`, `pkill`, CUDA alloc  
-- start pressure probe  
+**Atomicity frontier:** phase derivation is a pure function of a snapshot — no multi-step host mutation in this SPEC. Health script either embeds CLI JSON fields or emits nulls (no partial shell recompute of the phase table).
 
-May: read `/proc/swaps`, `pgrep`/`/proc/*/cmdline`, optional env, optional existing status socket.
+**Rollback**
 
-## Pure API (ITEM-1)
-
-```rust
-// crates/ramshared-cli/src/cascade/lifecycle.rs
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct TierSample {
-    pub present: bool,
-    pub prio: Option<i32>,
-    pub size_kib: u64,
-    pub used_kib: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CascadeSnapshot {
-    pub zram: TierSample,
-    pub vram: TierSample,
-    pub disk: TierSample,
-    pub ghost: bool,
-    pub order_ok: bool,
-    pub daemon_alive: bool,
-    pub daemon_pid: Option<u32>,
-    pub demote: DemoteSnapshot,
-    pub active_kib: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LifecycleView {
-    pub phase: CascadePhase,
-    pub phase_reason: &'static str, // or String if dynamic; prefer &'static for table reasons
-    pub ok: bool,                   // !matches Degraded and basic health
-    pub reasons: Vec<String>,     // degraded reasons
-}
-
-pub fn derive_lifecycle(s: &CascadeSnapshot) -> LifecycleView;
-```
-
-Build `CascadeSnapshot` from existing `read_swaps()` / ghost helpers in `mod.rs` (reuse `SwapEntry`, `is_ghost`, tier name match). Do **not** duplicate swap parsing.
-
-`ok` for view: `false` iff phase is `Degraded` **or** (optional) daemon dead while Armed was expected — align with health `ok` where practical: at least ghost/order_ok/hot-vram-no-daemon map to reasons[].
-
-## ITEM-2 — CLI `status`
-
-### Args
-
-```text
-ramshared status           # human text
-ramshared status --json    # one JSON object, stdout only (no swapon table unless also useful on stderr — prefer JSON-only on stdout)
-```
-
-Invalid flags → usage exit non-zero.
-
-### Human text (minimum)
-
-```text
-phase: Armed (armed_low_vram_used)
-ok: true
-zram: present prio=200 size_kib=… used_kib=…
-vram: present prio=100 size_kib=… used_kib=…
-disk: present prio=-2 size_kib=… used_kib=…
-daemon: alive pid=…
-demote: total=? last_reason=? in_progress=false
-ghost: false order_ok: true
-```
-
-Plus existing ghost warning block if ghosts present.
-
-### JSON schema (frozen)
-
-Required keys:
-
-| Key | Type |
+| Layer | Policy |
 | --- | --- |
-| `phase` | string (DT-1 tags) |
-| `phase_reason` | string |
-| `ok` | bool |
-| `reasons` | array of string |
-| `tiers.zram` / `vram` / `disk` | object `{present, prio|null, size_kib, used_kib}` |
-| `order_ok` | bool |
-| `ghost` | bool |
-| `daemon` | `{alive, pid|null}` |
-| `demote` | `{total|null, last_reason|null, in_progress}` |
-| `thresholds_kib` | `{active: u64}` |
-| `ts` | string ISO-8601 local or RFC3339 |
+| Userspace CLI | Revert phase logic commit; optional env `RAMSHARED_STATUS_LEGACY=1` restores old `swapon --show` status (Day-0 exception: document removal after validation) |
+| Kernel/module | N/A — no LKM surface |
+| Host/persistent | No swap table changes from status path |
 
-`prio` may be JSON `null` if tier absent.
+**Numeric rollback triggers (IMPL commits)**
 
-Serialize with `serde_json` if already a dependency of CLI; else minimal hand-rolled JSON **must** match golden fixtures (prefer serde if available in workspace).
+- Healthy live cascade (`health ok=true`, prios 200&gt;100&gt;−2, daemon alive, vram used &lt; 1 MiB) reports phase other than `Armed` or `UsingZram` for ≥3 consecutive status samples → revert phase logic.  
+- `status --json` p99 &gt; 5 s idle → revert expensive work.
 
-### main.rs
+## Kahneman map (critical)
 
-```text
-Some("status") => {
-  let json = args.iter().any(|a| a == "--json");
-  to_exit(cascade::status(json))
-}
-```
+| ITEM / stage | # | Question | Min evidence | Abort |
+| --- | --- | --- | --- | --- |
+| DT-2 residual used | #9 | False Degraded spam on residual VRAM? | threshold 1024 KiB; unit residual 176 | Raise threshold only via SPEC revise |
+| Demoting | #13 | Lie about demote without daemon flag? | only `in_progress == true` | Never guess Demoting |
+| Health dual path | #13/#18 | Shell vs CLI heuristics diverge? | health uses CLI JSON only | No shell phase table |
+| Status IO | #16 | Could status thrash host? | DT-5 read-only checklist | No swapoff/probe in status |
+| Cover | #9 | “CLI package green” without lifecycle proof? | cover gate on matrix paths | Workspace avg does not count |
 
-## ITEM-3 — Daemon demote counters (optional)
+## Security checklist (pre-impl)
 
-| If | Then |
-| --- | --- |
-| Existing local status already exposes demote total / in_progress without new protocol | Wire into `DemoteSnapshot` |
-| Else | Leave null/false; IMPL notes gap; do not block Done on RF-4 partial |
+- [x] Privilege: no new privileged ioctl / device node — N/A elevated surface  
+- [x] User/host copy: N/A (reads `/proc`, optional status file)  
+- [x] Flags: invalid `status` flags → non-zero exit  
+- [x] Info-leak: no kernel pointers in JSON  
+- [x] IRQ/atomic: N/A userspace  
+- [x] Lifetime: N/A  
+- [x] Hot-unplug: degraded/off when daemon/tier missing (stable fields)  
+- [x] Host safety: read-only status; no live thrash  
+- [x] Replayable ops: `status` idempotent read (#17)
 
-No new wire protocol in this SPEC.
+## Files to CREATE
 
-## ITEM-4 — cascade-health.sh
+**`crates/ramshared-cli/src/cascade/lifecycle.rs`**
 
-After building existing sample fields:
+- Purpose: pure types + `derive_lifecycle` + unit tests  
+- RF / DT: RF-1, RF-5..RF-8, DT-1..DT-4, NFR-2  
+- Types/fns: `CascadePhase`, `TierSample`, `CascadeSnapshot`, `DemoteSnapshot`, `LifecycleView`, `derive_lifecycle`  
+- Reference: existing `SwapEntry` / ghost helpers in `mod.rs`  
+- Required tests: see matrix (named `phase_*` / threshold / JSON)  
+- Cover target: ≥80%  
+- Kahneman: #9/#13 rows above  
 
-1. If `RAMSHARED_STATUS_JSON_CMD` set, use it; else try in order:  
-   `$RAMSHARED_BIN status --json`,  
-   `./target/release/ramshared status --json` (from repo root if present),  
-   `command -v ramshared`  
-2. On success, parse with `python3 -c` to extract `phase`, `phase_reason`, `demote`, `thresholds_kib` and **embed** into health JSON.  
-3. On failure, emit `"phase":null,"phase_reason":null,"demote":null` and do not invent phase in shell.  
-4. Keep all existing keys for backward compatibility.
+## Files to MODIFY
 
-## ITEM-5 — Docs
-
-- `docs/FAQ.md`: short Q “Is RamShared using my VRAM?” → Armed vs UsingVram vs Demoting.  
-- `README.md`: under control/status, mention `ramshared status` phases.  
-- `ARCHITECTURE.md`: one paragraph + link to this SPEC.
-
-## Kahneman (critical steps)
-
-| Step | Question | Min evidence | Abort |
+| Path | What | RF/DT | Tests / cover |
 | --- | --- | --- | --- |
-| DT-2 Degraded rules | Can false Degraded spam users on residual used? | threshold 1024 KiB; unit residual 176 | Raise threshold only via SPEC revise |
-| Demoting without daemon | Would we lie about demote? | only `in_progress` true | Never guess Demoting |
-| Health dual path | Two heuristics diverge? | health uses CLI JSON only | No shell phase table |
-| Status IO | Could status thrash host? | read-only checklist DT-5 | No swapoff/probe in status |
+| `crates/ramshared-cli/src/cascade/mod.rs` | `mod lifecycle`; replace thin `status()`; build snapshot from swaps | ITEM-2 | `status_json_flag_smoke` if injectable; cover ≥80% if treated as business logic |
+| `crates/ramshared-cli/src/main.rs` | `status` / `status --json` argv | ITEM-2 | dispatch only — N/A boilerplate if pure wiring |
+| `scripts/safety/cascade-health.sh` | emit `phase`, `phase_reason`, `demote`, `thresholds_kib` from CLI JSON | ITEM-4 | E2E only |
+| `docs/FAQ.md`, `README.md`, `docs/ARCHITECTURE.md` | Armed vs Using VRAM; status pointer | ITEM-5 | N/A |
+| `validation.md` | append live sample | ITEM-6 | append-only |
+| `docs/specs/.../IMPL.md` | Step 3 close | ITEM-6 | numbers + cover gate cmd |
 
-## Rollback trigger (IMPL commits)
+**Out of files:** demote algorithm in `ramshared-wsl2d` (ITEM-3 may only publish counters via existing file/socket).
 
-- If healthy live cascade (`health ok=true`, prios 200&gt;100&gt;−2, daemon alive, vram used &lt; 1 MiB) reports phase other than `Armed` or `UsingZram` for ≥3 consecutive status samples → revert phase logic.  
-- If `status --json` p99 &gt; 5 s idle → revert expensive work.  
-- Env kill-switch: `RAMSHARED_STATUS_LEGACY=1` restores old `swapon --show` only status (Day-0 exception with removal after validation).
+## Files to DELETE
 
-## Required tests matrix
+None.
 
-| Production | Named test | Type | Cover |
-| --- | --- | --- | --- |
-| `lifecycle.rs` | `phase_off_when_no_tiers_no_daemon` | #9 | ≥80% file |
-| `lifecycle.rs` | `phase_armed_low_vram_used` | #9 | |
-| `lifecycle.rs` | `phase_using_zram` | #9 | |
-| `lifecycle.rs` | `phase_using_vram` | #9 | |
-| `lifecycle.rs` | `phase_using_disk` | #9 | |
-| `lifecycle.rs` | `phase_degraded_ghost` | #13 | |
-| `lifecycle.rs` | `phase_degraded_order` | #13 | |
-| `lifecycle.rs` | `phase_degraded_hot_vram_no_daemon` | #13/#16 | |
-| `lifecycle.rs` | `phase_demoting_only_when_flag` | #13 | |
-| `lifecycle.rs` | `priority_degraded_beats_using_vram` | #9 | |
-| `lifecycle.rs` | `active_threshold_from_env_invalid_defaults` | #9 | |
-| `lifecycle.rs` | `json_shape_golden_or_roundtrip` | #9 | |
-| `mod.rs` / status | `status_json_flag_smoke` (if mock swaps injectable) | #9 | |
-| package | `cargo test -p ramshared-cli` | all pass | |
-| cover | `cargo llvm-cov -p ramshared-cli --summary-only` focus lifecycle.rs ≥80% | NFR-2 | |
+## Observability
 
-E2E (IMPL, not unit):
+| Signal | Where | Type |
+| --- | --- | --- |
+| `phase`, `phase_reason` | `ramshared status --json`, health JSON | string |
+| `demote.{total,last_reason,in_progress}` | status JSON | optional |
+| `thresholds_kib.active` | status JSON | u64 |
+| `ok`, `reasons` | status JSON | bool / string[] |
 
-| Check | Expect |
+## Living docs
+
+| Document | Action |
 | --- | --- |
-| Live `ramshared status --json` after healthy up | `phase` ∈ {`Armed`,`UsingZram`}, `ok` true, `order_ok` true |
-| `cascade-health.sh` | includes `phase` non-null when CLI available |
-| BINARY_MATCH | not required for status-only if daemon untouched; if rebuild daemon, yes |
+| `ARCHITECTURE.md` | Alter — lifecycle module pointer |
+| `docs/FAQ.md` | Alter — Armed vs UsingVram |
+| `README.md` | Alter — status phases |
+| `validation.md` | Append on close |
+| ADR | N/A |
+| `DEGRADATION-MATRIX.md` | N/A (no new failure class beyond phase tags) |
+| cover gate tool | N/A (repo tool already exists) |
 
-## Implementation order (ITEM list)
+## Implementation order
 
 | ITEM | Work |
 | --- | --- |
@@ -303,21 +210,95 @@ E2E (IMPL, not unit):
 | ITEM-5 | FAQ + README + ARCHITECTURE |
 | ITEM-6 | validation.md live sample + IMPL.md + INDEX |
 
-## Out of SPEC
+### Pure API (ITEM-1)
 
-- Changing demote latency constants or free-floor.  
-- Forcing fill into VRAM.  
-- Pressure probe changes.  
-- Desktop app GUI beyond optional one-line phase (may call CLI later).  
-- Prometheus.  
-- Windows guest lifecycle.
+```rust
+// crates/ramshared-cli/src/cascade/lifecycle.rs
+pub fn derive_lifecycle(s: &CascadeSnapshot) -> LifecycleView;
+```
 
-## Security
+Build `CascadeSnapshot` from existing `read_swaps()` / ghost helpers — do **not** duplicate swap parsing.
 
-- No new privileged ioctl.  
-- Status readable without root if `/proc/swaps` is (typical).  
-- No kernel pointers in JSON.
+### ITEM-2 — CLI `status`
+
+```text
+ramshared status           # human text
+ramshared status --json    # one JSON object on stdout
+```
+
+Human minimum fields: phase, ok, tiers, daemon, demote, ghost, order_ok.  
+JSON required keys: `phase`, `phase_reason`, `ok`, `reasons`, `tiers.{zram,vram,disk}`, `order_ok`, `ghost`, `daemon`, `demote`, `thresholds_kib`, `ts`.
+
+### ITEM-3 — Daemon demote counters (optional)
+
+| If | Then |
+| --- | --- |
+| Existing local status exposes demote without new protocol | Wire into `DemoteSnapshot` |
+| Else | Leave null/false; IMPL notes gap; do not block Done on RF-4 partial |
+
+### ITEM-4 — cascade-health.sh
+
+1. Prefer `RAMSHARED_STATUS_JSON_CMD`, else `$RAMSHARED_BIN status --json`, else `./target/release/ramshared status --json`, else `command -v ramshared`.  
+2. On success, embed `phase`, `phase_reason`, `demote`, `thresholds_kib`.  
+3. On failure, emit nulls — **do not** invent phase in shell.  
+4. Keep existing keys for compatibility.
+
+### ITEM-5 — Docs
+
+FAQ “Is RamShared using my VRAM?”; README status phases; ARCHITECTURE paragraph + SPEC link.
+
+## Day-0
+
+One primary path: **pure function in CLI crate** is source of truth for phase.  
+`cascade-health.sh` must prefer CLI JSON or call the binary — no independent shell reimplementation of the phase table.  
+Exception: `RAMSHARED_STATUS_LEGACY=1` only as temporary kill-switch with removal after validation (reason: rollback; not dual product path).
+
+## Required tests matrix
+
+| Production path | Test (`file` :: `name`) | Kind | Kahneman | Cover |
+| --- | --- | --- | --- | --- |
+| `crates/ramshared-cli/src/cascade/lifecycle.rs` | `lifecycle.rs` :: `phase_off_when_no_tiers_no_daemon` | unit | #9 | ≥80% |
+| same | `phase_armed_low_vram_used` | unit | #9 | ≥80% |
+| same | `phase_using_zram` | unit | #9 | ≥80% |
+| same | `phase_using_vram` | unit | #9 | ≥80% |
+| same | `phase_using_disk` | unit | #9 | ≥80% |
+| same | `phase_degraded_ghost` | unit | #13 | ≥80% |
+| same | `phase_degraded_order` | unit | #13 | ≥80% |
+| same | `phase_degraded_hot_vram_no_daemon` | unit | #13/#16 | ≥80% |
+| same | `phase_demoting_only_when_flag` | unit | #13 | ≥80% |
+| same | `priority_degraded_beats_using_vram` | unit | #9 | ≥80% |
+| same | `active_threshold_from_env_invalid_defaults` | unit | #9 | ≥80% |
+| same | `json_shape_golden_or_roundtrip` | unit | #9 | ≥80% |
+| `crates/ramshared-cli/src/cascade/mod.rs` | status JSON smoke / injected swaps | unit | #9 | ≥80% |
+| package | `cargo test -p ramshared-cli` | unit | #9 | all pass |
+
+**Cover gate (canonical):**
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs \
+  -p ramshared-cli \
+  --files crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs \
+  --min 80 \
+  --report-json tmp/cascade-lifecycle-cov.json
+```
+
+**E2E (cascade surface — not cover script):**
+
+| Check | Expect |
+| --- | --- |
+| Live `ramshared status --json` after healthy up | `phase` ∈ {`Armed`,`UsingZram`}, `ok` true, `order_ok` true (or Using* when used ≥ threshold) |
+| `cascade-health.sh` | `phase` non-null when CLI available |
+| BINARY_MATCH | N/A for status-only if daemon binary untouched; required if `ramsharedd` rebuilt |
+
+## Validation checklist
+
+- [x] `cargo fmt` / `clippy -D warnings` / `cargo test -p ramshared-cli`  
+- [x] Cover gate script on matrix paths ≥80%  
+- [x] Live: `status` + `status --json` + `cascade-health.sh`  
+- [x] BINARY_MATCH N/A (status path) unless daemon rebuilt  
+- [x] Every matrix test name exists  
+- [x] Kahneman critical rows executable  
 
 ---
 
-**End of Step 2 SPEC.** Next: Step 3 IMPL (or optional 2.5 — low risk read-only; can skip if team accepts go).
+**End of Step 2 SPEC.** Step 3: see [`IMPL.md`](IMPL.md). Optional 2.5: low risk read-only — can skip if team accepts go.

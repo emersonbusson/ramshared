@@ -31,7 +31,7 @@ Kernel-adjacent and privileged userspace paths. Not a web/OWASP checklist.
 
 ## SSDV3
 
-Security-sensitive structural work uses Passo 2.5 + `AUDIT-2.5.md` when risk is high. SPEC must include the security checklist from `docs/SSDV3-PROMPTS.md`.
+Security-sensitive structural work uses SSDV3 Step 2.5 + `AUDIT-2.5.md` when risk is high. SPEC must include the security checklist from `docs/SSDV3-PROMPTS.md` (mark N/A when the surface is absent).
 
 ## Don't
 

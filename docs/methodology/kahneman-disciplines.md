@@ -1,275 +1,299 @@
-# Kahneman Disciplines — Cognitive Hygiene for AI Decisions
+# Kahneman Disciplines — Cognitive Hygiene for AI Decisions (RamShared)
 
-Disciplines derived from **Thinking, Fast and Slow** and **Noise** (Kahneman, Sibony, Sunstein) applied to the AI-assisted development loop in this monorepo.
+From **Thinking, Fast and Slow** and **Noise** (Kahneman, Sibony, Sunstein), applied **only** to AI-assisted work in **RamShared** (cascade, `crates/ramshared-*`, LKM/Windows lab, host-safety). Examples and rubrics are this repo’s paths — do not import foreign product process.
 
-**Why this exists:** LLMs speak System 1 with extreme fluency — they articulate ideas convincingly even when they are incorrect. The human developer must act as System 2: verifying, measuring, and questioning what seems obvious. This document introduces structural friction (checklists, numerical rubrics, mandatory counterfactuals) that forces System 2 analytical thinking into the loop at critical moments where System 1 errors would be costly.
+LLMs speak System 1 fluently — including when wrong. This doc is **hygiene, not a cure**: checklists and numeric friction so System 2 enters where System 1 is expensive. Gain is variance reduction over months, not one perfect answer.
 
-Kahneman makes it explicit: biases and noise are properties of the system, not removable bugs. What this document provides is **hygiene, not a cure**. The performance gain does not manifest in a single decision — it shows as variance reduction over several months.
+Spec pipeline that *uses* these disciplines: [`docs/SSDV3-PROMPTS.md`](../SSDV3-PROMPTS.md). Do not restate PRD/SPEC skeletons here.
+
+---
+
+## Master table (#1–#18)
+
+| # | Discipline | Rule (1 line) | RamShared example | Signal |
+| --- | --- | --- | --- | --- |
+| 1 | WYSIATI | State what was **not** seen before opining | “Without pageout under >50 concurrent, estimate X @ Y%” | Opens with “without having seen Z…” |
+| 2 | Counterfactual | Numeric/observable rollback on non-trivial decisions | `Rollback trigger: interrupt latency >50µs in dmesg → revert` | Commit/ADR/SPEC has real trigger |
+| 3 | Number, not adjective | Lead with metrics | “DMA 420ns→98ns, n=3, stddev 4%” not “fast” | Perf claims carry unit + n |
+| 4 | Anchoring | Reference class before bottom-up estimates | WSL2/CUDA work anchored on `drm/amdgpu` port (~3× inside view) | Roadmap/ADR cites reference class |
+| 5 | Availability | Design worst-case, not only happy path | `DEGRADATION-MATRIX.md`: GPU eviction, OOM under lock, PCIe reset | Matrix updated with critical features |
+| 6 | Calibrated confidence | Ranges, not false point precision | “~300 MB/s ±10%”; “65% chance load succeeds” | Claims include bounds |
+| 7 | Hindsight | Judge process at decision time, not only outcome | Postmortem: correct process/bad outcome vs fluke success | Template separates process vs result |
+| 8 | Planning fallacy | Bottom-up × reference-class multiplier | Inside 1w → adjusted 3w for driver-class work | Both numbers written |
+| 9 | Question substitution | Qualitative → measurable criterion | “Safe?” → checkpatch clean, lockdep quiet, kmemleak 0 | Metric paired with claim |
+| 10 | Hyperbolic discounting | Pay debt cheap; no `TODO later` | Dead path removed now | No new TODO-later in active paths |
+| 11 | Halo (tools) | New dep needs ADR/policy/evidence | Cargo dep cites ADR or this #11 | Dep PR references written justification |
+| 12 | Prompt priming | Adversarial/neutral review framing | “What bugs?” not “Looks good?” | Reviews use adversarial ask |
+| 13 | Illusion of validity | Effect + refusal **paired** with legitimate pass | ghost `up` fails **and** clean `up` works | Real failure mode tested, not mock-only |
+| 14 | Mass-refactor fallacy | Orthogonal slices; never rewrite whole tree | Format one crate; hang audit one subsystem | Atomic commits per slice |
+| 15 | Calibrated retry | Retry **only** proven transient | `EAGAIN`/`ETIMEDOUT` reconnect; never `-EINVAL`/checkpatch red | Classify before retry; deterministic fails at attempt 1 |
+| 16 | Fail-safe + independent curator | Safe default; cure must not die with resource | Demote works when VRAM full; no live WSL2 thrash to “heal” | Exhaustion tests; abort ≠ trigger threshold |
+| 17 | Replay idempotency | 2× apply = 1× effect | Second `down`/`swapoff`/`LeaseRelease` no double effect | Test asserts unique state, not “no panic twice” |
+| 18 | Right layer + proven sunset | Fix where root lives; remove shim only with class proof | Eviction fixed in demote engine, not sleep-loop; Day-0 sunset with drill | PR cites owning layer; sunset has proof for **this** class |
+
+**#15–#18** are runtime/infra hygiene with kernel / broker / WSL2 examples. Details below.
 
 ---
 
-## The 18 Operational Disciplines
-
-Each entry starts with the bias it combats, details the operational rule, and specifies the measurable signal indicating compliance.
-
-Disciplines **#15–#18** cover runtime/infra hygiene and are written with **kernel / broker / WSL2** examples.
-
-### Master Table (Consolidated View)
-
-| #   | Discipline               | Operational Rule (1 line)                                                                             | RamShared Example                                                                                                                         | Observable Signal                                                                                                             |
-| --- | ------------------------ | ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| 1   | WYSIATI                  | Explicitly declare what has not been seen before offering an opinion.                                 | "Without testing pageout under concurrency > 50 req/s, I estimate performance X with Y% confidence."                                      | Responses start with "Without having seen Z..."                                                                               |
-| 2   | Counterfactual           | Mandatory numerical rollback trigger for every non-trivial decision.                                  | "If interrupt latency > 50us in dmesg, revert the patch" stated in the commit body.                                                        | Commits/ADRs contain numerical rollback conditions.                                                                           |
-| 3   | Number, Not Adjective    | Always lead with raw metrics rather than qualitative adjectives.                                     | "DMA latency reduced from 420ns -> 98ns across 3 runs, stddev 4%" instead of "fast".                                                      | No performance claims allowed without metrics and run counts.                                                                 |
-| 4   | Anchoring                | Declare a reference class before building bottom-up estimates.                                        | WSL2 CUDA port anchored against `drm/amdgpu` porting effort (~3x original bottom-up estimate).                                            | Roadmap/ADR references an external reference class repository.                                                               |
-| 5   | Availability Heuristic   | Design for the worst-case scenario, not the happy path.                                               | `docs/reliability/DEGRADATION-MATRIX.md` covering host GPU eviction, OOM Killer invocation, and PCIe bus resets.                          | Degradation matrix exists and was updated with the latest feature.                                                           |
-| 6   | Calibrated Confidence    | State confidence intervals instead of single-point targets.                                           | "~300 MB/s ±10%" instead of "300 MB/s"; "65% probability of successful load" instead of "it will work".                                  | Numerical claims include standard deviations or confidence intervals.                                                         |
-| 7   | Hindsight Bias           | Postmortems must decouple process quality from outcome success.                                       | `docs/postmortems/` distinguishing "correct process, bad outcome" vs. "fluke success".                                                    | Postmortem templates separate process analysis from ultimate outcomes.                                                       |
-| 8   | Planning Fallacy         | Multiply bottom-up estimates by reference class overrun ratios.                                       | "Inside view estimate: 1 week; adjusted by reference class multiplier (3x): 3 weeks."                                                     | Roadmap lists both inside-view and adjusted estimates.                                                                       |
-| 9   | Substitution of Question | Translate qualitative evaluations into quantifiable metrics.                                           | "Good architecture?" -> 0 warnings in checkpatch, no deadlocks under lockdep, 0 leaks in kmemleak.                                        | Qualitative questions are paired with quantitative criteria.                                                                 |
-| 10  | Hyperbolic Discounting   | Refactor debt while it is cheap; reject deferred TODOs.                                               | `grep -r "TODO.*later\|FIXME"` returns no matches in active code paths.                                                                   | Grep checks remain clean in diff reviews.                                                                                    |
-| 11  | Halo Effect              | Every new external library must reference a justifying ADR or policy.                                 | New dependency requires referencing an ADR or this specific discipline (#11).                                                             | Dependency updates point to written ADRs.                                                                                     |
-| 12  | Prompt Priming           | Frame prompts neutrally or adversarially.                                                             | "What bugs do you find in this code?" instead of "Does this look correct?".                                                               | Pull request reviews use adversarial framing templates.                                                                      |
-| 13  | Illusion of Validity     | Test boundaries must validate failures and refusal paths, not just existence or happy paths.          | Paging refusal test paired with "does a legitimate input still pass?" to prevent false-positives under privileged boundaries.               | Destructive tools have integration tests executing the actual failure mode.                                                   |
-| 14  | Mass-Refactoring Fallacy | Deconstruct codebase cleanup into orthogonal atomic slices. Never rewrite a repository all at once.    | "Apply formatting rules only to the CUDA wrapper" instead of a repository-wide `refactor: clean codebase`.                                | Refactoring patches contain atomic commits segmented by crate/service.                                                       |
-| 15  | Calibrated Retry         | Retry only with a **proven transient** signature; deterministic failures fail-fast on attempt 1.       | NBD reconnect / DMA map retry only on `EAGAIN`/`ETIMEDOUT`; never retry `-EINVAL` ioctl or compile/checkpatch red.                        | Retry loops classify outcome before re-attempt; first deterministic fail logs the real cause.                                 |
-| 16  | Fail-safe + Independent Curator | Safe failure mode is the **default**; the cure mechanism must not die with the resource it cures. | Demote/reclaim path must work when VRAM is already exhausted; host-safety scripts must not thrash WSL2 live to "heal" pressure.             | Guards have tests from the **exhausted** state; abort-threshold ≠ trigger-threshold; live measurement at decision time.       |
-| 17  | Replay Idempotency       | Every effect behind retry/replay/command re-delivery is idempotent (2× = 1×).                        | Broker `SwapOn`/`DemoteAll`/`LeaseRelease` re-issued after timeout produces one state transition, not double slice.                      | Replayable ops have a 2× apply test asserting **unique** effect (not just "ran twice without panic").                        |
-| 18  | Right-Layer Root Cause + Proven Sunset | Fix in the layer that owns the root; remove workarounds only with proof the source covers **this** class. | WDDM eviction fixed in demote engine, not a userspace sleep-loop; dual-path shim removed only with Day-0 proof + multi-lens audit.         | Fix path cites owning layer; every shim sunset carries commit/test proof for **this** failure class.                          |
-
----
+## Details (#1–#14 short · #15–#18 full)
 
 <a id="disc-1"></a>
-### 1. WYSIATI — What You See Is All There Is
+### 1. WYSIATI
 
-**Bias:** AI models respond with high confidence based only on immediately visible context, hallucinating by omission.
-
-**Rule:** Before making a critical architectural decision, explicitly list what has NOT been inspected. Request required source files before analyzing a subsystem.
-
-**Signal:** Responses begin with: *"Without having inspected X, I estimate Y with Z% confidence."*
+**Bias:** Confident answers from visible context only.  
+**Rule:** Before critical architecture, list uninspected surfaces; fetch sources first.  
+**Signal:** “Without having inspected X, estimate Y @ Z% confidence.”
 
 <a id="disc-2"></a>
-### 2. Mandatory Counterfactuals
+### 2. Mandatory counterfactuals
 
-**Bias:** Architectural opinions without rollback criteria are System 1 intuitions disguised as reasoning.
-
-**Rule:** Every decision must carry a clear answer to: *"What would make me change my mind?"*. Valid answers are specific: *"If p99 latency > 500ms, revert"* or *"If memory allocation overhead exceeds 10%, rollback"*.
-
-**Signal:** Non-trivial commits contain a `Rollback trigger:` line in the commit body.
+**Bias:** Opinion without “what would change my mind?” is System 1.  
+**Rule:** Non-trivial decisions carry a specific reverse condition (unit + window).  
+**Signal:** `Rollback trigger:` in commit body / ADR / SPEC.  
+**Invalid:** “if it goes wrong, revert.”
 
 <a id="disc-3"></a>
-### 3. Number, Not Adjective
+### 3. Number, not adjective
 
-**Bias:** Question substitution: "Is this system fast?" (hard) becomes "Does it feel fast?" (easy).
-
-**Rule:** Claims must lead with numbers, not adjectives. Bad: *"The driver is much faster"*. Good: *"Latency decreased from 420ns to 98ns across 3 iterations, stddev 4%"*.
-
-**Signal:** Avoid terms like "obviously", "definitely", or "elegant" unless paired with a qualifying metric.
+**Bias:** “Is it fast?” becomes “does it feel fast?”  
+**Rule:** Lead with numbers; ban bare “obviously / elegant / faster.”  
+**Signal:** Metrics + run count + environment when comparative.
 
 <a id="disc-4"></a>
-### 4. Estimating via Anchoring
+### 4. Anchoring
 
-**Bias:** The first number introduced anchors all subsequent estimates.
-
-**Rule:** Project estimates must begin with a **reference class**, not a bottom-up task list. The baseline reference for this monorepo is the `drm/amdgpu` driver Rust porting effort (~3x overrun on initial bottom-up estimates).
-
-**Signal:** Roadmap logs state reference classes explicitly.
+**Bias:** First number freezes later estimates.  
+**Rule:** Start from a reference class (driver/port effort ~3× inside view for similar work).  
+**Signal:** Roadmap/ADR names the class.
 
 <a id="disc-5"></a>
-### 5. Availability Heuristic
+### 5. Availability heuristic
 
-**Bias:** AI models recall frequent events, omitting rare but catastrophic hardware failures.
-
-**Rule:** Explicitly list rare conditions before deciding on a design path: OOM killer during lock contention, PCIe bus resets, IOMMU translation faults, and VM host memory evictions.
-
-**Signal:** The [DEGRADATION-MATRIX.md](../reliability/DEGRADATION-MATRIX.md) is updated alongside critical features.
+**Bias:** Frequent cases crowd out rare catastrophic ones.  
+**Rule:** List rares before design: OOM under lock, PCIe reset, IOMMU fault, host GPU eviction.  
+**Signal:** [`DEGRADATION-MATRIX.md`](../reliability/DEGRADATION-MATRIX.md) updated with the feature.
 
 <a id="disc-6"></a>
-### 6. Calibrated Confidence
+### 6. Calibrated confidence
 
-**Bias:** Stating exact values triggers overconfidence. Ranges represent reality.
-
-**Rule:** Numerical estimates must carry error bounds (e.g., *"~300 MB/s ±10%"*). Probabilities must be calibrated (e.g., *"65% chance of passing integration tests"*).
-
-**Signal:** Technical claims lead with ranges rather than point values.
+**Bias:** Point estimates overstate certainty.  
+**Rule:** Ranges and calibrated probabilities.  
+**Signal:** Claims carry ± / intervals; stddev ≫ noise band → investigate, don’t accept.
 
 <a id="disc-7"></a>
-### 7. Hindsight Bias
+### 7. Hindsight bias
 
-**Bias:** A good outcome implies a good decision process. A bad outcome implies a bad process. Both are false.
-
-**Rule:** Evaluate decisions based on the **process and information available at the time**, not the final outcome. *"Correct process, failed outcome"* is acceptable; *"fluke success"* is a process alarm.
-
-**Signal:** Postmortems in `/docs/postmortems/` separate process evaluations from final outcomes.
+**Bias:** Outcome quality ≠ process quality.  
+**Rule:** Evaluate with information available **then**.  
+**Signal:** Postmortems separate process vs outcome (`docs/postmortems/` when used).
 
 <a id="disc-8"></a>
-### 8. Planning Fallacy
+### 8. Planning fallacy
 
-**Bias:** Inside view estimates (bottom-up task tracking) are systematically optimistic.
-
-**Rule:** Multiply bottom-up estimates by the reference class overrun factor (3x for device driver subsystems).
-
-**Signal:** Roadmaps cite both inside-view and reference-class-adjusted timelines.
+**Bias:** Inside-view task sums are optimistic.  
+**Rule:** Adjusted = inside view × reference-class multiplier (see #4).  
+**Signal:** Both numbers in plan/roadmap.
 
 <a id="disc-9"></a>
-### 9. Substitution of Question
+### 9. Substitution of question
 
-**Bias:** Complex questions are substituted for simpler ones without conscious realization.
-
-**Rule:** Translate qualitative questions into objective metrics. "Is this driver safe?" becomes "0 warnings under sparse/checkpatch, no deadlock warnings under lockdep, 0 leaks under kmemleak".
-
-**Signal:** Qualitative claims are followed by measurable verification criteria.
+**Bias:** Hard question silently replaced by easy one.  
+**Rule:** Force a metric: checkpatch/sparse, lockdep, cover %, p99, exit codes.  
+**Signal:** Qualitative claim paired with numeric gate (SSDV3 cover/E2E counts).
 
 <a id="disc-10"></a>
-### 10. Technical Debt Hyperbolic Discounting
+### 10. Hyperbolic discounting
 
-**Bias:** "I will refactor this later" heavily discounts future maintenance costs.
-
-**Rule:** Refactor debt while it is cheap, not when it fails. Remove dead code immediately rather than leaving a `TODO: clean up later` comment.
-
-**Signal:** `grep -r "TODO.*later\|FIXME"` returns no matches in active code paths.
+**Bias:** “Refactor later” discounts future pain.  
+**Rule:** Remove dead path now; no `TODO: later` on active paths.  
+**Signal:** Diff free of new TODO-later/FIXME debt dumps.
 
 <a id="disc-11"></a>
-### 11. Tooling Halo Effect
+### 11. Tooling halo
 
-**Bias:** "This tool worked on project A, so it must be the default for project B."
-
-**Rule:** Every new library, dependency, or framework must reference a written policy or ADR.
-
-**Signal:** Dependency additions reference a written ADR.
+**Bias:** Worked elsewhere → default here.  
+**Rule:** New dependency needs ADR, written policy, or measurable evidence.  
+**Signal:** Dep PR cites justification.
 
 <a id="disc-12"></a>
-### 12. Prompt Priming
+### 12. Prompt priming
 
-**Bias:** Prompt framing alters output. "What bugs are in this code?" yield different results than "Is this code correct?".
-
-**Rule:** Use adversarial framing for reviews: *"What issues do you find in this implementation?"* instead of *"Does this look ready?"*.
-
-**Signal:** Pull request reviews follow adversarial templates.
+**Bias:** Framing changes answers.  
+**Rule:** Reviews: “What issues?” not “Ready?”  
+**Signal:** Adversarial framing in PR/SSDV3 audit (pair programming can stay softer).
 
 <a id="disc-13"></a>
-### 13. Illusion of Validity
+### 13. Illusion of validity
 
-**Bias:** Happy path tests provide false confidence if they encode the same assumptions as the implementation.
-
-**Rule:** Every refusal path verification must be paired with a validation of a legitimate input. Destructive or privileged boundaries (sudo, rm, systemd) require integration tests simulating the actual failure mode.
-
-**Signal:** Integration tests validate real failure scenarios, not just mocks.
+**Bias:** Green tests encode the same wrong assumption as the code; “file exists” ≠ “protects.”  
+**Rule:** Validate purpose and failure mode. Every **refusal** test pairs with **legitimate still passes**. Privileged/destructive paths need real-mode proof (drill/integration), not hermetic mock only.  
+**Signal:** Failure-mode tests + paired legitimate path.
 
 <a id="disc-14"></a>
-### 14. Mass-Refactoring Fallacy
+### 14. Mass-refactoring fallacy
 
-**Bias:** The assumption that System 1 can predict all cascading side-effects of a global codebase rewrite.
+**Bias:** System 1 cannot foresee whole-tree rewrite side effects.  
+**Rule:** Orthogonal slices (crate/subsystem/pattern); atomic commits per slice.  
+**Signal:** No mega `refactor: clean codebase` blobs.
 
-**Rule:** Restructuring must be fatiated (sliced) orthogonally. Do not request global codebase cleanups; restrict changes to specific crates or modules. Each slice must map to an atomic commit.
-
-**Signal:** Cleanups contain atomic commits segmented by crate.
+---
 
 <a id="disc-15"></a>
-### 15. Calibrated Retry (transient ≠ deterministic)
+### 15. Calibrated retry (transient ≠ deterministic)
 
-**Bias:** Availability heuristic (#5) + Illusion of validity (#13). System 1 reaches for the familiar story — "flake, retry" — without classifying the failure. A retry that "sometimes passes" becomes false proof of health and buries the real bug.
-
-**Rule:** A retry loop may re-attempt only with a **proven transient signature**. Deterministic failures fail-fast on attempt 1:
+**Bias:** #5 + #13 — “flake, retry” without classification.  
+**Rule:** Retry only on **proven transient** signature; deterministic fails at attempt 1.
 
 | Transient (retry OK) | Deterministic (fail-fast) |
 | --- | --- |
-| `EAGAIN`, `ETIMEDOUT`, brief NBD disconnect | `-EINVAL` ioctl, bad uAPI size, compile error |
-| temporary DMA map busy under pressure | checkpatch/sparse red, lockdep splat design bug |
-| host GPU busy → short backoff before re-probe | wrong GFP in IRQ, capability denied |
+| `EAGAIN`, `ETIMEDOUT`, brief NBD drop | `-EINVAL` ioctl, bad uAPI size, compile error |
+| temporary DMA map busy | checkpatch/sparse red, lockdep design bug |
+| short GPU busy backoff | wrong GFP in IRQ, capability denied |
 
-Never mask a config/logic bug behind N reconnects of the broker or ublk client.
-
-**Signal:** Retry paths log the classification before re-attempt; deterministic failures appear on attempt 1 with the real cause (dmesg/`dev_err`/test output), not under N retries.
-
-**Pairs with:** #13 (exists ≠ works), #17 (retry is only safe if the effect is idempotent).
+**Signal:** Log classification before re-attempt; real cause on attempt 1.  
+**Pairs:** #13, #17 (retry only safe if effect idempotent).
 
 <a id="disc-16"></a>
-### 16. Fail-safe Default + Independent Curator
+### 16. Fail-safe default + independent curator
 
-**Bias:** Illusion of validity (#13) + Availability (#5). System 1 assumes "the mechanism exists, therefore it protects" and that the error path is too rare to design. Three failures are the same family: the curator that dies with the resource it should heal; blind retry that masks exhaustion; a guard that, when forgotten, leaks silently instead of failing loud.
-
-**Rule — two coupled invariants:**
-
-1. **Safe failure is the default.** Forgetting a protection fails loud, never silent leak. Example: privileged ioctl without `capable()` must refuse; device gone mid-I/O must return `-ENODEV`, not UAF.
-2. **The cure must not depend on the resource being healthy.** Reclaim/demote must still run when VRAM is already full; host-safety automation must not thrash the live WSL2 host to "prove" pressure (use qemu/civm). Abort-threshold ≠ trigger-threshold; the measurement at the gate is **live**, not a stale cache.
-
-PR checklist for every resource guard / watchdog / demote path:
-
-1. Test starts from the **exhausted** state (not only happy path).
-2. Abort-threshold ≠ trigger-threshold.
-3. Decision measurement is live at gate time.
-4. "Code exists" ≠ "protection active" on the target under test (`validation.md` / drill).
-
-**Signal:** Guards have exhaustion-path tests; demote/reclaim works under pressure; host-safety scripts refuse live thrash.
-
-**Pairs with:** #5 (DEGRADATION-MATRIX), `validation.md` tag `fail-safe`, `.claude/rules/benchmarks.md` host-safety.
-
-<a id="disc-17"></a>
-### 17. Idempotency of Replayable Effects
-
-**Bias:** Availability (#5) + happy-path optimism. System 1 assumes "the op runs once" and ignores that retry (#15), command re-delivery, agent reconnect, and operator double-click are the **common** case.
-
-**Rule:** Every effect behind retry/replay/redelivery must be idempotent: apply twice = apply once. Mechanisms:
-
-- Command id / generation counter on broker ops (`SwapOn`, `DemoteAll`, `LeaseRelease`)
-- State machine transitions that are no-ops when already in the target state
-- DMA map/unmap balanced so a second cleanup is safe
-- `ioctl` that returns success (or stable errno) when the resource is already configured as requested
-
-A non-idempotent side effect behind a "correct" retry is a latent double-slice / double-free / double-swapon bug.
-
-**Signal:** Replayable ops have a test that applies the effect **twice** and asserts a **unique** outcome (not merely "no panic twice").
-
-**Pairs with:** #15 (retry only transient) and #16 (fail-safe).
-
-<a id="disc-18"></a>
-### 18. Right-Layer Root Cause + Proven Workaround Sunset
-
-**Bias:** Attribute substitution (#9) in both directions. Under pressure, System 1 swaps "where does the root live?" for "how do I make it pass now?" and glues a band-aid in the wrong layer. The inverse is also System 1: Day-0 cleanup swaps "is it **proven** redundant?" for "it **looks** like a shim" and deletes the only defense of an uncovered class.
-
+**Bias:** “Mechanism exists ⇒ protects”; error path rare ⇒ undesigned.  
 **Rule:**
 
-1. **Fix in the layer that owns the root.** Examples:
-   - WDDM eviction latency → demote/canary engine (not a userspace `sleep` loop)
-   - uAPI layout bug → header + kernel handler together (not a client-only cast)
-   - Host thrash risk → safety script / civm policy (not a product dual-path)
-2. **Never reconstruct authoritative identity downstream** of a lossy transform (handle/offset must be validated at the boundary that owns the object).
-3. **Sunset workarounds only with proof** that the source fix covers **this** failure class. Two distinct failures need two proofs. Multi-lens audit (≥2 perspectives) before deleting "redundant" paths.
+1. **Safe failure is default** — missing protection fails loud (no silent leak/UAF).  
+2. **Cure must not depend on the resource being healthy** — demote/reclaim under full VRAM; host-safety must not thrash live WSL2 (qemu/civm). Abort-threshold ≠ trigger-threshold; measure **live** at the gate.
 
-**Signal:** Fix PRs cite the owning layer; every shim removal cites test/drill proof for this class; Day-0 exceptions in SPEC list reason + removal deadline + rollback.
+PR checklist for guards / watchdogs / demote:
 
-**Pairs with:** Day-0 policy in `docs/SSDV3-PROMPTS.md`, #13, #16.
+1. Test from **exhausted** state  
+2. Abort ≠ trigger threshold  
+3. Live measurement at decision  
+4. Deployed artifact == repo (`BINARY_MATCH` / validation) — existence ≠ active  
+
+**Signal:** Exhaustion-path tests; drills prove effect.  
+**Pairs:** #5, `validation.md`, [`.claude/rules/benchmarks.md`](../../.claude/rules/benchmarks.md).
+
+<a id="disc-17"></a>
+### 17. Idempotency of replayable effects
+
+**Bias:** Assumes “op runs once”; retry/reconnect/agent re-issue is the common case.  
+**Rule:** Behind retry/replay/redelivery: apply twice = apply once (generation counters, target-state no-ops, balanced map/unmap, ioctl success when already configured).  
+**Signal:** Test applies **2×** and asserts **unique** state effect.  
+**Pairs:** #15, #16.
+
+<a id="disc-18"></a>
+### 18. Right-layer root cause + proven sunset
+
+**Bias:** #9 both ways — “make it pass now” glues wrong layer; Day-0 cleanup deletes only defense of an uncovered class.  
+**Rule:**
+
+1. Fix where the root lives (eviction → demote engine; uAPI layout → header+handler; thrash → safety/civm policy).  
+2. Never reconstruct authoritative identity downstream of a lossy transform.  
+3. Sunset workarounds only with proof the source covers **this** failure class (two failures → two proofs; multi-lens before deleting “redundant” paths).
+
+**Signal:** PR cites owning layer; shim removal cites test/drill for this class; Day-0 exceptions list reason + deadline + rollback.  
+**Pairs:** Day-0 in SSDV3, #13, #16.
 
 ---
 
-## Noise Reduction
+## Disciplines → test evidence (SSDV3)
 
-**Noise** is unwanted random variation in professional judgments. The same LLM can produce different outputs under slight variations of the same prompt. We combat noise using **rubrics** — structured guidelines that translate judgment into procedure.
+Kahneman does **not** replace cover ≥80%. It defines **what kind of proof** a test must carry. Use in SPEC Kahneman blocks / IMPL close. Cover gates: [`docs/SSDV3-PROMPTS.md`](../SSDV3-PROMPTS.md) Step 3.
 
-### Active Rubrics
+| # | When SPEC cites it | Minimum proof (beyond cover) | Abort if… |
+| --- | --- | --- | --- |
+| **#9** | “quality / ready / validated” qualitative | Number: exit code, cover %, priority order, `used_kb`, p99 | Adjective-only / smoke without assert |
+| **#13** | privilege, uAPI refusal, preflight/`capable`, “check exists” | Real effect; refusal **and** legitimate pass | File-exists only; refusal without pair |
+| **#15** | NBD/ublk reconnect, DMA map busy, broker retry | Retry only transient class; deterministic fails once | Blind retry |
+| **#16** | reclaim, demote, VRAM budget, host-safety, gone device | Starts from **exhaustion** / deny / `-ENODEV` | Happy-path-only guard |
+| **#17** | cascade `up`/`down`, swapoff, lease, replayable ioctl | Apply **2×** → unique effect | “Ran twice without error” only |
 
-| System | Rubric |
+**Anti-pattern:** high cover on pure parsers in a crate, zero proof on cascade refusal, lock order, or live drill — still fails #13 and SSDV3 Step 3.
+
+---
+
+## Discipline → RamShared rubric
+
+| # | Where the signal is checked |
 | --- | --- |
-| Spec-driven development | [`docs/SSDV3-PROMPTS.md`](../SSDV3-PROMPTS.md), [`docs/specs/`](../specs/), [`docs/INDEX.md`](../INDEX.md) |
+| 1 | PRD fact tags; SPEC “without inspecting…” |
+| 2 | Commit `Rollback trigger:`; ADR; SPEC abort |
+| 3–6, 9 | SSDV3 validation + [`benchmarks.md`](../../.claude/rules/benchmarks.md) for P0 |
+| 5 | `docs/reliability/DEGRADATION-MATRIX.md` |
+| 7 | `docs/postmortems/` when used |
+| 10–12 | Review / coding rules |
+| 13–17 | SPEC test matrix + live drills / `validation.md` |
+| 15–16 | Host-safety scripts; no thrash on live WSL2 |
+| 18 | Day-0 in SSDV3; multi-lens before shim delete |
+| Hang-class | [`superprompt.md`](../../superprompt.md) (audit, not second SSDV3) |
+
+Shared rails: `.claude/rules/{coding,kernel,security,benchmarks,ssdv3,governance}.md`, `validation.md`, `docs/decisions/`.
+
+---
+
+## Counterfactual as gatekeeper
+
+If you cannot answer **“what would make me change my mind?”** with a specific unit/window, stop — System 1.
+
+| Valid | Invalid |
+| --- | --- |
+| “p99 +>5% over 3 benches → revert” | “if broken, revert” |
+| “lockdep splat in drill → revert” | “depends” |
+| “BINARY_MATCH fails after deploy → do not close IMPL” | “when things change” |
+
+---
+
+## Counterexamples (discipline as cargo cult)
+
+| Pattern | # | Symptom | Mitigation |
+| --- | --- | --- | --- |
+| Form without content | 2, 3, 6 | Empty rollback; metric without env/n | Refuse non-numeric triggers; record env |
+| Over-engineering | 5, 8 | Designing for fantasy rares at huge cost | Prioritize probability × impact in matrix |
+| Unjustified friction | 10–12 | Scope creep / NIH / hostile pair tone | Diff-only TODO; light ADR for deps; framing by context |
+| Nuance killed | 1, 4, 7, 9 | Paralysis listing all ignorance; metric kills valid qualitative NFR | Cap inference ~30%; reference class from driver/port work (e.g. `drm/amdgpu`), not unrelated products |
+| Drill fetish | 13 | Full live cascade drill for pure `plan_*` helpers with no host effect | Real-mode drill for privileged/destructive boundaries; unit for pure logic |
+| Slice paralysis | 14 | 1-file PRs forever | Slice = orthogonal crate/subsystem (e.g. only `ramshared-cli` cascade), tracked |
+| Retry theater | 15 | N NBD reconnects hide `-EINVAL` ioctl | Classify first |
+| Guard theater | 16 | “demote code exists” never drilled from full VRAM | Exhaustion test + BINARY_MATCH / health |
+| Double-apply | 17 | Retry “saved” run double-swapon | 2× unique-effect test |
+| Wrong-layer glue / reckless sunset | 18 | userspace sleep-loop for WDDM eviction; Day-0 delete of only defense | Fix in demote/owning layer + class proof |
+
+**Meta:** triggers written but never executed when condition fires = cargo cult. Capture firings (or justified non-fire) in postmortem/`validation.md`.
+
+---
+
+## Noise reduction
+
+Unwanted variance in judgments. Same model + slightly different prompt → different structure. Combat with **rubrics** (fixed procedure), not freeform opinion.
+
+| Procedure | Rubric |
+| --- | --- |
+| Spec-driven work | [`docs/SSDV3-PROMPTS.md`](../SSDV3-PROMPTS.md), `docs/specs/`, `docs/INDEX.md` |
 | Code quality | `.claude/rules/coding.md` |
-| Driver development | `.claude/rules/kernel.md` |
-| Documentation | `.claude/rules/documentation.md` |
+| Kernel | `.claude/rules/kernel.md` |
+| Security | `.claude/rules/security.md` |
+| Docs | `.claude/rules/documentation.md` |
 | Benchmarks / host safety | `.claude/rules/benchmarks.md` |
-| Empirical validation log | [`validation.md`](../../validation.md) |
+| Empirical log | [`validation.md`](../../validation.md) |
 
-**Signal of Noise Reduction:** Successive implementations of similar patterns yield uniform structures.
+**Signal:** successive similar features produce similarly shaped PRs/SPECs.
 
-### How agents should use this doc
+---
 
-1. **Before opining:** declare what was not inspected (#1).
-2. **With the opinion:** number, not adjective (#3); calibrated range (#6).
-3. **After the opinion:** numerical counterfactual / rollback trigger (#2).
-4. **On retry/reconnect/command paths:** #15 + #17.
-5. **On reclaim/demote/watchdog/host safety:** #16.
-6. **On shims and "quick" dual-path:** #18 + Day-0.
+## How agents use this doc
+
+1. **Before opinion:** uninspected surfaces (#1).  
+2. **With opinion:** number (#3), range (#6).  
+3. **After:** numeric counterfactual (#2).  
+4. **Retry/reconnect:** #15 + #17.  
+5. **Reclaim/demote/watchdog/host safety:** #16.  
+6. **Shim / dual-path:** #18 + Day-0.  
+7. **SSDV3 critical ITEM:** Kahneman block with **executable** evidence (see test table above).
 
 ### Auto-application (rollback of this doc)
 
-- **Adoption signal:** non-trivial PRs cite a discipline (#1–#18) in body, review, ADR, or SPEC Kahneman map.
-- **Doc rollback trigger:** if after 6 months <30% of non-trivial structural PRs cite any discipline, simplify to Top-5 + 1-pager via superseding ADR (cargo-cult detection).
+- **Adoption:** non-trivial PRs cite a discipline in body, review, ADR, or SPEC map.  
+- **Doc rollback:** after 6 months if &lt;30% of non-trivial structural PRs cite any discipline → simplify to Top-5 + 1-pager via superseding ADR (cargo-cult detection).
+
+### Non-scope
+
+Does not guarantee quality; does not replace human review; not philosophy — each rule has an observable signal.

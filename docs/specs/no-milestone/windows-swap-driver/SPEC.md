@@ -638,3 +638,6 @@ fail-closed (DT-20); drill kernel-page com residência confirmada (DT-21).
 - [ ] Nenhuma linguagem vaga em ponto crítico sem critério observável
 - [ ] **Gate do R7 (ITEM-8):** o drill de página-de-kernel rodou e a `DEGRADATION-MATRIX` foi atualizada
   **antes** de qualquer carga no host real
+
+
+> Related focused slice: [windows-storport-cuda-vram](../windows-storport-cuda-vram/SPEC.md) (CUDA storage-only; pagefile/soak/attestation remain open here).

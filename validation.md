@@ -1171,3 +1171,737 @@ bash scripts/safety/wslconfig-ctl.sh apply   # idempotent rewrite
 - Live cascade: nbd 4G, ramsharedd --size 4096, ok:true
 **Verdict:** ✅ research/decision closed where evidence exists; no fake “host-real PASS”
 **Next action:** optional bare-metal USB install (kernel-true); optional custom-kernel lab for ublk vs nbd; host Windows CUDA I/O only with gates
+
+## 2026-07-15 12:00 -03 — windows-storport-cuda-vram Step 3 IMPL partial
+
+**What:** Implement SPEC storage-only product path: winsvc config/evidence/runtime/queue/broker/service, CUDA probe planning, miniport owner/rundown/VPD, product vs lab installers and drill scaffolds.
+**Category:** windows / storport / cuda / ssdv3
+**How to measure:**
+```bash
+cargo fmt -p ramshared-winsvc -p ramshared-cuda -- --check
+cargo clippy -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets -- -D warnings
+cargo test -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc \
+  --files crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs \
+  --min 80 --report-json tmp/windows-storport-cuda-vram-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/probe.rs --min 80
+```
+**Measured data:**
+- winsvc lib tests: 72 passed
+- cover: config 95.5%, evidence 94.4%, driver_link 86.9%, broker_tenant 85.9%, runtime 86.8%, service 84.1%; cuda probe 80.0%
+- E2E Windows WDK/GPU/SCM: not run (env-bound) → IMPL partial
+- BINARY_MATCH: N/A (Windows-only slice)
+**Verdict:** 🟡 partial — pure policy green; live StorPort+CUDA proof deferred to supervised Windows lab
+**Next action:** MSVC cross-build + win11-drill Verifier IOCTL drill + approved physical probe/3-round SHA-256
+**Artifacts:** `tmp/windows-storport-cuda-vram-cov.json`, `docs/specs/no-milestone/windows-storport-cuda-vram/IMPL.md`
+
+## 2026-07-15 13:00 -03 — windows-storport-cuda-vram continue: Windows adapters + live CUDA probe
+
+**What:** Implement full `WindowsDriverLink` (VirtualAlloc + OVERLAPPED IOCTL) and `WindowsHostState` (elevation, reparse config, pagefile CIM, volume lock, CNG SHA-256); shared `cuda_probe` module; preflight `-StorageOnly`; fix windows-sys 0.61 CUDA loader (`FreeLibrary`/`GetProcAddress`); live DT-3 probe on RTX 2060 via WSL libcuda.
+**Category:** windows / cuda / ssdv3
+**How to measure:**
+```bash
+cargo test -p ramshared-winsvc --lib
+cargo test -p ramshared-winsvc probe_cuda_allocates_roundtrips_and_restores -- --ignored --nocapture
+./target/release/ramshared-winsvc probe-cuda --config /tmp/ramshared-probe/winsvc.toml
+cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc   # typechecks; link needs MSVC
+```
+**Measured data:**
+- probe-cuda PASS: ordinal=0 name=NVIDIA GeForce RTX 2060 size=536870912 free_before=5351931904 free_after=5351931904
+- cover gate still PASS (business files ≥80%)
+- MSVC: rustc compiles; link.exe absent (env-bound)
+**Verdict:** 🟡 still PARTIAL (StorPort LUN E2E env-bound) but ITEM-2 live CUDA proof closed on this host
+**Artifacts:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/probe-cuda-wsl-20260715.txt`
+**Next action:** MSVC Build Tools + win11-drill Verifier IOCTL + approved physical StorPort 3-round
+
+## 2026-07-15 14:00 -03 — windows-storport-cuda-vram full campaign (PARTIAL close-out)
+
+**What:** MSVC build product winsvc; Windows nvcuda probe; WDK rebuild+sign; win11-drill load driver CREATE/REGISTER + 4MiB SHA-256 I/O (lab backend); host preflight -StorageOnly PASS.
+**Category:** windows / storport / cuda / ssdv3
+**How to measure:**
+```text
+C:\ramshared\bin\ramshared-winsvc.exe probe-cuda --config C:\ProgramData\RamShared\winsvc.toml
+# guest (elevated PSD): CREATE_DISK ok REGISTER_QUEUE ok; sha_match=true 4MiB
+```
+**Measured data:**
+- winsvc.exe SHA256=F3453587C0AF7D432B566AA6F42C0C4370445B16E8803D12C5E3477BAD71CDDC size=647168
+- probe-cuda Windows: free_before=free_after=5360320512 size=512MiB PASS
+- guest: ramshared RUNNING; CREATE/REGISTER ok; sha=053EDE97406A271DBF208248B2070CCF79B9517431D994A2E79D146FFA760AA1 match=true bytes=4194304
+- VM memory reduced to 2GiB static to start under host free~9.7GiB; VM left Off
+**Verdict:** 🟡 PARTIAL — product CUDA probe + StorPort lab I/O proven; full product Online (CUDA backend+3 rounds+Verifier) still env-bound (guest no GPU; host no testsigning)
+**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/*
+**Next action:** enable host testsigning OR GPU lab VM; wire broker; run Invoke-CudaStorageDrill -ApprovePhysicalHost 3 rounds; Verifier IOCTL refusals
+
+## 2026-07-15 14:30 -03 — product Online CUDA + 3-round SHA-256 (PARTIAL remaining Verifier)
+
+**What:** Implemented `product_online.rs` (lease→CUDA→CREATE/REGISTER→I/O). Live host: ramshared RUNNING, broker on WSL :19876, console --storage-only reached Online backend=cuda LUN "RAMSHARE VRAMDISK" 64MiB; 3×4MiB SHA-256 all match.
+**Category:** windows / cuda / storport / ssdv3
+**How to measure:** Re-run isolated lab harness under `scripts/windows/` (e.g. `Run-GuestProductOnline.ps1` / `Run-GuestExhaustive.ps1`) with signed package; see `docs/specs/no-milestone/windows-storport-cuda-vram/`.
+**Measured data:**
+- Online: cuda=RTX 2060 size=67108864
+- R1 match=true 232ms EFF6FD0B…; R2 true 157ms; R3 true 153ms; all_match=true letter=S
+**Verdict:** 🟡 PARTIAL — product I/O proven; Verifier/REFUSE matrix + graceful stop still open (not index DONE)
+**Artifacts:** evidence/product-cuda-3rounds.json; C:\ProgramData\RamShared\evidence\run-*.jsonl
+**Next action:** Invoke-WinDriveIoctlValidation -Verifier on guest; graceful stop flag wiring
+
+## 2026-07-15 14:45 -03 — graceful stop + guest IOCTL refuse PASS (PARTIAL: Verifier open)
+
+**What:** Wired SCM/console stop via `AtomicBool` + `C:\ProgramData\RamShared\stop.request`; Gate A filters pagefiles to product volume letter; Gate B holds `LockedVolume` (soft-fail if unmounted). Live host product Online RTX 2060 64MiB then graceful stop exit 0. Guest win11-drill `Invoke-WinDriveIoctlValidation` STATUS=PASS for single-process REFUSE_* after signed miniport reload.
+**Category:** windows / storport / cuda / ssdv3
+**How to measure:** Re-run isolated lab harness under `scripts/windows/` (e.g. `Run-GuestProductOnline.ps1` / `Run-GuestExhaustive.ps1`) with signed package; see `docs/specs/no-milestone/windows-storport-cuda-vram/`.
+**Measured data:**
+- Graceful phases: Stopped→Leased→CudaReady→Online→Stopping→Stopped; exit_code=0
+- Gate A: system C:\pagefile no longer refuses teardown; volume lock soft-fail win32=5 when LUN unmounted
+- Guest verdict: PASS_VALID_QUEUE=1, REFUSE_UNKNOWN/RESERVED_DISK/REGISTER/BAD_RING/RING_INDEX_JUMP=1, VPD=1, NO_NEW_DUMP=1; FOREIGN_OWNER/REENTRY/RUNDOWN/RESERVED_CQE=0
+- Host old sys: reserved/owner refuse still 0 (testsigning No — cannot reload new package)
+**Verdict:** 🟡 PARTIAL — product Online + 3-round + graceful stop + guest single-process REFUSE closed; Verifier + multi-process injectors env-bound
+**Artifacts:** evidence/graceful-stop-*.txt|jsonl; evidence/ioctl-guest-verdict-pass.json; evidence/ioctl-guest-console.txt
+**Next action:** start win11-drill; enable Verifier; reload new sys on guest; foreign-owner PE + concurrent re-entry/rundown injectors
+
+## 2026-07-15 15:00 -03 — teardown letter/dismount fix + host hang observation
+
+**What:** Graceful stop hung because config letter (R) or free-letter (D) did not match live mount; UNREGISTER/DESTROY waited 30s each on mounted NTFS. Fixed: FSCTL dismount (no PowerShell) before Gate A/B; cancel COMMIT; careful HostExhaustive uses letters S/R/T only (never auto-D). Host exhaustive re-proof still GRACEFUL=false once with letter=D (old script); process pid 9148 became unkillable (kernel wait) after force-kill path.
+**Category:** windows / storport / reliability
+**Measured data:**
+- 3-round SHA match=true with letter=D (bug in test script free-letter picker) then stop hung 60s
+- taskkill /F elevated cannot kill pid 9148 ("no running instance" / zombie kernel wait)
+- Popup "D:\ não está acessível" = Explorer on orphan letter from that test
+**Verdict:** 🟡 PARTIAL — code path fixed; host needs reboot to clear hung winsvc + orphan LUN before re-proof; guest Verifier still open
+**Next action:** reboot Windows host (or logoff+driver reset if possible); rebuild winsvc; Run-HostExhaustive.ps1; then guest IOCTL+Verifier
+
+## 2026-07-15 15:30 -03 — Freeze postmortem (NOT random): I: paging + lab thrash + hard power
+
+**What:** Host freeze with SSD r/w stuck, WSL hang, reboot hung until power button. Investigated Event Log + dmesg + layout.
+**Category:** reliability / wsl2 / storage / host-safety
+**Evidence (Windows System):**
+- Kernel-Power **41** + EventLog **6008** (unexpected shutdown): **2026-07-15 15:08–15:10** (this incident), also 2026-07-14 and 2026-07-09/10
+- disk **Event ID 51**: "Erro … HarddiskN … durante uma **operação de paginação**" (paging I/O error) — historical bursts e.g. 2026-07-03 Harddisk5, 2026-07-11 Harddisk6
+**Evidence (WSL dmesg this boot):**
+- **OOM memcg**: `clamd` killed in docker cgroup (~15:11) right after stack up — memory pressure with full advoq compose
+- cascade tear-down logged zram0 remove + nbd0 disconnect (our stabilization)
+**Topology (smoking gun for build freezes):**
+- Entire Ubuntu root = `I:\wsl2\Ubuntu-24.04\ext4.vhdx` (~220G file)
+- WSL pagefile = `I:\wsl_swap\swap.vhdx` (4.1G) **same physical volume I:**
+- advoq builds write inside ext4.vhdx on **I:** → swap page-ins/outs also hit **I:** → queue collapse looks like “0 KB/s forever”
+**Lab contribution (same day earlier):**
+- hung `ramshared-winsvc` in kernel Stopping + orphan RAMSHARE LUN (100% disk / 0 KB/s) → storage stack sticky → reboot may hang
+**Actions taken:**
+1. cascade-down (nbd/zram off); `systemctl disable ramshared-cascade` (work mode)
+2. `docker builder prune -f` reclaimed **~12.74 GB**
+3. Document: do not co-run StorPort Online thrash + advoq full stack on I:
+**Verdict:** 🟡 root cause class identified (paging thrash on I: + concurrent load); host stable after cascade off; residual risk if I: fills or swap thrash during mega-builds
+**Not fixed by:** `wsl --update` (already latest)
+**Next:** free space on I:/C:; avoid cascade boot during advoq; optional lower WSL swap after `wsl --shutdown` only with approval
+
+## 2026-07-15 17:15 -03 — senior re-audit correction (PARTIAL, no false green)
+
+**What:** Re-audit and correct the storage-only product runtime, teardown boundary, Windows I/O
+lifetime, evidence, and isolated-VM harness after the prior solution produced unsafe teardown and
+overstated validation.
+
+**Category:** reliability / security / Windows StorPort / regression
+
+**Corrections implemented:**
+
+- Exact unique LUN identity is required before pagefile Gate A or any volume mutation. Candidate
+  letters and pre-identity dismount were removed.
+- Volume-lock/query/identity ambiguity is a hard refusal. Code 7 retains all owners and resumes
+  Online service; SCM no longer reports `Running` after owners have been dropped.
+- An independent 5-second CUDA observer enters failed-safe without destroying possibly-live state.
+- Startup no longer replays `DESTROY` from evidence; partial acquisition unwinds in reverse and
+  broker release failures are not hidden.
+- Cancelled overlapped IOCTLs are drained before their `OVERLAPPED` storage leaves scope; partial
+  Windows queue allocation is cleaned up.
+- Config is checked and read through one no-follow handle. OS helper calls are bounded.
+- Run/event identity, timestamps, actual counters, bounded latency sampling, and requested-byte
+  evidence were corrected.
+- The guest harness now bounds every PowerShell Direct call using jobs, measures real elapsed time,
+  stops the VM on failure, and requires an active verifier plus a running driver for pass 2.
+- The IOCTL script no longer accepts a size-only VPD fallback and no longer emits `STATUS=PASS` while
+  mandatory foreign-owner/reserved-CQE/re-entry/rundown verdicts are zero.
+
+**Measured gates:**
+
+```text
+cargo test -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets
+  block 41 pass; cuda 5 pass / 1 ignored; winsvc 77 pass / 1 ignored
+cargo clippy (three packages, all targets, -D warnings): PASS
+cargo clippy ramshared-winsvc --target x86_64-pc-windows-msvc --all-targets: PASS
+cargo fmt --check: PASS
+coverage: broker 85.9, config 95.5, driver_link 87.7, evidence 91.9,
+          runtime 86.8, service 84.3, cuda probe 80.0 percent: PASS
+Windows PowerShell 5.1 parser, both changed harnesses: PASS
+```
+
+**Isolated VM result:** The pre-Verifier pass proved the prior single-process subset and foreign-owner
+refusal. `REFUSE_RESERVED_CQE`, completion re-entry, and teardown-during-copy rundown remain unproved.
+After enabling standard Driver Verifier for `ramshared.sys`, Hyper-V showed `win11-drill` Running but
+PowerShell Direct did not become ready even after more than six minutes. The campaign was aborted and
+the VM was confirmed Off. No physical-host reset or destructive storage test was performed.
+
+**Correction to the earlier freeze postmortem:** Event 41 and 6008 prove an unexpected shutdown, not
+its cause. Historical Event 51 records do not prove the affected `HarddiskN` was the I: device or that
+queue collapse caused this incident. The dual-VHDX/pagefile topology and concurrent lab load remain a
+risk hypothesis only. A captured storage trace plus disk-number-to-device correlation is required for
+a causal conclusion.
+
+**Verdict:** 🟡 **PARTIAL** — corrected userspace safety and hermetic/cross-target gates are green;
+Driver Verifier, three concurrent Ring 0/3 injectors, and a supervised physical run of the corrected
+binary remain mandatory. Earlier physical CUDA/SHA evidence does not validate this corrected binary.
+
+**Next action:** recover/revert the checkpointed guest, rebuild/sign the current miniport, implement
+the missing concurrent injectors, then run the complete Verifier matrix. Only after that, run the
+supervised physical three-round campaign with exact identity and teardown evidence.
+
+## 2026-07-15 20:15 -03 — concurrent injectors + IoRundown (PARTIAL remains)
+
+**What:** concurrent injectors + IoRundown (PARTIAL remains). **Issue:** #54
+**Issue:** #54
+
+**What changed (this turn):**
+
+- `drivers/windows/ramshared/queue.c`: balanced `IoRundown` on `QSubmit`/`QCommitAndFetch` (release
+  before long-lived pend); refuse Failed/Closing; reserved CQE fails closed.
+- `scripts/windows/Invoke-WinDriveIoctlValidation.ps1`: three concurrent probes
+  (`Invoke-ReservedCqeInjection`, `Invoke-CompletionReentryInjection`,
+  `Invoke-RundownDuringCopyInjection`); dual-handle UNREGISTER; bounded VPD poll; lab size default
+  128 MiB to avoid `answer-disk.vhdx` (64 MiB) collision.
+- `scripts/windows/Test-WinDriveIoctlValidationStatic.ps1`: RED/GREEN static gate (PASS).
+- `scripts/windows/Run-GuestExhaustive.ps1`: INF + SetupAPI root-enum fallback; force replace locked
+  `System32\drivers\ramshared.sys`; 300s IOCTL timeout; live console capture.
+- Miniport rebuild/sign/deploy: SHA256 `4CEE404FC9C9029F55812F1D133AA36D61A2D64F92DB3D15CF01AFEF5ABAEC2A`.
+
+**Guest campaign** (`guest-exhaustive-20260715-201316`, `-SkipVerifier`):
+
+```text
+REFUSE_RESERVED_CQE=1
+COMPLETION_REENTRY_NO_SLOT_REUSE=1
+RUNDOWN_UNMAP_AFTER_COPY=1
+… all other REFUSE_* + PASS_VALID_QUEUE + NO_NEW_DUMP = 1
+VPD_SERIAL_MATCH=0
+STATUS=FAIL missing=VPD_SERIAL_MATCH
+```
+
+**Still open:**
+
+- VPD: adapter can enumerate (`ROOT\RAMSHARED\0000`) but no unique disk PDO under `Get-Disk`.
+- Driver Verifier full pass not re-run on this binary (prior PSD hang under Verifier).
+- Physical corrected winsvc Online E2E not re-proven.
+
+**Host safety:** no physical thrash; VM force-stopped on harness errors; `win11-drill` left Off.
+
+**Verdict:** 🟡 **PARTIAL** — concurrent Ring 0/3 injectors + rundown proven; VPD + Verifier + physical
+Online still required for DONE.
+
+## 2026-07-15 21:10 -03 — guest ITEM-3 STATUS=PASS (Verifier still open)
+
+**What:** guest ITEM-3 STATUS=PASS (Verifier still open). Campaign: `guest-exhaustive-20260715-210925` (`-SkipVerifier`), `GUEST_EXIT=0`
+**Issue:** #54
+
+**Campaign:** `guest-exhaustive-20260715-210925` (`-SkipVerifier`), `GUEST_EXIT=0`
+
+**Binary:** `ramshared.sys` SHA256 `1E57690EA63E6287D4790A134544DC9F46253BB356D1C2B3B1D65FC812F30CFF`
+
+**All ITEM-3 verdicts = 1**, including:
+
+- `REFUSE_RESERVED_CQE`, `COMPLETION_REENTRY_NO_SLOT_REUSE`, `RUNDOWN_UNMAP_AFTER_COPY`
+- `VPD_SERIAL_MATCH=1` via `Win32_DiskDrive` name `RAMSHARE VRAMDISK SCSI Disk Device`
+
+**Driver fixes that unblocked adapter/LUN:**
+
+- Virtual miniport init: `STOR_FEATURE_VIRTUAL_MINIPORT`, `HwAdapterControl`, `HwFreeAdapterResources`
+- FindAdapter must not force `Master`/`ScatterGather`/`NeedPhysicalAddresses` = FALSE
+  (was `STATUS_DEVICE_CONFIGURATION_ERROR` / problem 10)
+- HwStartIo: PnP/Power SRBs completed without CDB mis-decode
+- REPORT LUNS + zero capacity while inactive
+
+**Honest limits:** concurrent probes are ring/IOCTL concurrency, not full READ-copy SRB race.
+Driver Verifier matrix not re-run. Physical winsvc Online not re-proven.
+
+**Verdict:** 🟡 **PARTIAL** — guest IOCTL matrix green; Verifier + physical Online remain for DONE.
+
+## 2026-07-15 21:50 -03 — guest ITEM-3 + Driver Verifier STATUS=PASS
+
+**What:** guest ITEM-3 + Driver Verifier STATUS=PASS. Campaign: `guest-exhaustive-20260715-214831`
+**Issue:** #54
+
+**Campaign:** `guest-exhaustive-20260715-214831`
+**Binary:** `1E57690EA63E6287D4790A134544DC9F46253BB356D1C2B3B1D65FC812F30CFF`
+
+```text
+IOCTL_PASS1=PASS
+IOCTL_VERIFIER=PASS
+VERIFIER_RAN=true
+GUEST_EXIT=0
+```
+
+Pass 2: Verifier flags `0x2093B` on `ramshared.sys` (no DMA flag for virtual miniport).
+`verifier /query` listed `MODULE: ramshared.sys (load: 1 / unload: 0)`. All ITEM-3 verdicts = 1
+including VPD + concurrent probes; `NO_NEW_DUMP=1`. VM Off; verifier reset best-effort.
+
+**Harness fix:** schedule Verifier then guest `shutdown /r` (not only Restart-VM -Force); PSD wait 600s.
+
+**Still open for product DONE:** physical `ramshared-winsvc` Online E2E on this corrected stack;
+optional SRB-level re-entry/rundown-during-READ drill.
+
+**Verdict:** 🟡 **PARTIAL** (product) / guest StorPort ITEM-3+Verifier **PASS** for #54.
+
+## 2026-07-16 01:05 -03 — physical Online preflight RED (Online skipped)
+
+**What:** physical Online preflight RED (Online skipped). **Issue:** #54 residual product gate (physical winsvc Online).
+**Issue:** #54 residual product gate (physical winsvc Online).
+
+**Supervision:** read README + rules + MEMORY; no reboot; no thrash; no Online.
+
+### Audit of prior host image work
+
+| Artifact | SHA256 / state |
+| --- | --- |
+| package `C:\ramshared\package\ramshared.sys` | `1E57690E…` (guest Verifier PASS image) |
+| installed `C:\Windows\System32\drivers\ramshared.sys` | `E690306F…` len=32656 mtime=2026-07-15 13:23 |
+| `ramshared.sys.bak-host` | **MISSING** — prior Move-Item/Copy-Item access denied while image locked |
+| `ramshared-winsvc.exe` / `RamSharedWinSvc.exe` | both `F129B25F…` (rebuilt this session; service stopped) |
+
+**Empty tool output:** earlier elevated calls sometimes returned exit 0 with empty/truncated capture
+(wrapper/UNC). This preflight used `PREFLIGHT:` line labels; Windows capture has 36 lines
+(`/tmp/physical-preflight-windows.txt` + evidence copies). Silence was not treated as success.
+
+### Live preflight (non-destructive)
+
+- `ramshared` kernel: **Running** (cannot unload without reboot)
+- `RamSharedWinSvc`: **Stopped** (left stopped)
+- PnP: adapter OK, disk OK (`RAMSHARE VRAMDISK`); **Get-Disk RAMSHARE count=0**
+- Control: `CreateFile \\.\RamSharedCtl` → **OK err=0**
+- testsigning: **Yes**
+- cascade: **inactive**
+- GPU baseline: RTX 2060 used≈1348–1387 MiB free≈4568–4607 MiB
+- Default `winsvc.toml`: `volume_letter=D` size=512 MiB — **forbidden** for this supervised gate
+- Product cfg `winsvc-product.toml`: S: / 64 MiB available but unused because preflight RED
+
+### Decision
+
+**PREFLIGHT=RED → Online SKIPPED.**
+
+Reasons: BINARY_MATCH miniport fail; no installed backup; README lab-VM-only for Windows driver on
+daily host; orphan PnP disk without Get-Disk entry; no reboot allowed to swap guest-proven `.sys`.
+
+**Safe state:** no Online started; userspace service stopped; kernel miniport left loaded (no thrash
+unload). Evidence:
+`docs/specs/no-milestone/windows-storport-cuda-vram/evidence/physical-preflight-20260716T010502Z.txt`
+and `physical-preflight-windows-20260716T010502Z.txt`.
+
+**Tests:** `cargo test -p ramshared-winsvc --lib` → 77 pass / 1 ignored. `docs-check` OK.
+
+**Verdict:** 🟡 **PARTIAL** — guest StorPort+Verifier green; physical Online not proven and not safe
+to run under this preflight.
+
+## 2026-07-16 01:30 -03 — lab GPU probe: no CUDA in win11-drill (Online skipped)
+
+**What:** lab GPU probe: no CUDA in win11-drill (Online skipped)
+**Constraint:** daily-host preflight RED remains binding (no host Online/reboot/unload).
+
+**win11-drill GPU inventory:**
+- Host: `Get-VMGpuPartitionAdapter` count=1 but empty InstancePath/MinPartitionVRAM; AssignableDevice=0
+- Guest: Hyper-V Video OK; NVIDIA GeForce RTX 2060 PnP **Error** (`PCI\VEN_1414&DEV_008E`);
+  `nvidia-smi` **MISSING**; `nvcuda.dll` **false**
+
+**Decision:** Guest product Online (CUDA) **cannot** run. Not faked.
+Guest StorPort ITEM-3 + Verifier already **PASS** (`guest-exhaustive-20260715-214831`, sys `1E57690E…`).
+Physical host Online still **RED** (`physical-preflight-20260716T010502Z`: installed `E690306F…` ≠ package).
+
+**Closed safely this turn:**
+- `cargo test -p ramshared-winsvc --lib` 77 pass / 1 ignored
+- slice coverage ≥80% on winsvc business files (broker/config/driver_link/evidence/runtime/service)
+- `STATIC_INJECTOR_TEST=PASS`
+- clippy/fmt winsvc OK; docs-check OK
+- VM left **Off**
+
+**Verdict:** 🟡 **PARTIAL** (product). Terminal safe: no Online, no host thrash, lab VM Off.
+
+## 2026-07-16 02:58 -03 — proof closeout after GPU-PV timeout
+
+**What:** Supervised the bounded GPU-PV driver-package attempt, stopped it after the ten-minute
+ceiling, and performed an independent non-destructive verification closeout.
+
+**Safe terminal state:** `win11-drill` Off; guest and host staging removed; host RTX 2060 `OK` and
+visible through `nvidia-smi -L`. Guest NVIDIA remained `CM_PROB_FAILED_POST_START`, so DLL/tool
+presence was not accepted as CUDA proof. No blind retry, uninstall, host reboot, miniport change,
+WSL2 pressure, commit, or merge occurred.
+
+**Fresh local gates:** native tests (block 41, CUDA 5 + 1 ignored, winsvc 77 + 1 ignored), clippy
+`-D warnings`, fmt check, docs-check, diff check, and selected coverage ≥80% all passed. The isolated
+StorPort concurrent-injector/rundown/Verifier campaign remains PASS.
+
+**Promotion matrix:** physical `BINARY_MATCH` BLOCKED; real GPU-PV CUDA BLOCKED; product Online with
+three SHA rounds and cleanup BLOCKED; WSL2 freeze-elimination claim BLOCKED. The WSL2 claim requires
+an isolated twice-repeated before→action→after hang campaign with watchdog/timeout, swapoff-first,
+ghost/deleted-plus-used-kB, binary match, D-state/hung-task evidence, and cleanup. It was not run on
+the daily host.
+
+**Evidence:**
+`docs/specs/no-milestone/windows-storport-cuda-vram/evidence/gpupv-safe-close-20260716T025812Z.txt`
+and `evidence/verification-closeout-20260716.md`.
+
+**Verdict:** 🟡 **PARTIAL** — proven subsets remain green; CUDA Online and WSL2 freeze resolution are
+explicitly not proven.
+
+## 2026-07-16 10:00 -03 — VPD false-green invalidates prior ITEM-3 aggregate PASS
+
+**What:** Product-gates review found that `Invoke-WinDriveIoctlValidation.ps1` could set
+`VPD_SERIAL_MATCH=1` from a unique size/name match or one live PnP RAMSHARE device without observing
+the required 16-byte VPD serial. The harness now requires vendor/product + exact serial + exact size
+on one authoritative storage surface, and its static regression test forbids both permissive
+fallbacks.
+
+**Measured gates:** Windows PowerShell 5.1 parser PASS; `STATIC_INJECTOR_TEST=PASS`;
+`STATIC_VPD_FALLBACK_REFUSAL=PASS` with a negative fixture; staged WDK
+10.0.26100.0 build `BUILD_DRIVERS_OK` (`ramshared.sys` 31,744 bytes; staging removed); native Rust
+tests/clippy/fmt PASS; MSVC cross-target clippy PASS; selected coverage 80.0%–95.5%; docs/diff checks
+PASS; `cargo audit --no-fetch` PASS.
+
+**Live read-only preflight:** installed miniport SHA256 `E690306F…`; package SHA256 `1E57690E…`;
+`BINARY_MATCH=false`; kernel service Running; userspace service Stopped. No Online, install,
+replacement, reboot, or pressure action was performed.
+
+**Evidence:**
+`docs/specs/no-milestone/windows-storport-cuda-vram/evidence/vpd-false-green-audit-20260716.md`.
+
+**Verdict:** 🟡 **PARTIAL** — historical non-VPD injector/rundown/Verifier observations remain useful,
+but the prior aggregate ITEM-3 PASS is invalidated until the corrected harness is rerun in the
+isolated VM.
+
+**Additional teardown correction:** the read-only identity query returns the standard friendly name
+`RAMSHARE VRAMDISK SCSI Disk Device`. The prior parser split only once and compared product
+`VRAMDISK SCSI Disk Device` against exact `VRAMDISK`, falsely refusing every legitimate stop before
+Gate A. The parser now accepts only the exact two-token product identity with either no suffix or the
+standard `SCSI Disk Device` suffix; mismatched prefixes and arbitrary suffixes remain refused. The
+paired positive/refusal unit test passed, the winsvc library result is now 78 passed / 1 ignored, and
+service slice coverage is 84.9%.
+
+## 2026-07-16 10:46 -03 — corrected exact-VPD guest rerun fails honestly
+
+**What:** corrected exact-VPD guest rerun fails honestly. Campaign: `C:\ramshared\artifacts\guest-exhaustive-20260716-104650` using corrected harness SHA
+**Campaign:** `C:\ramshared\artifacts\guest-exhaustive-20260716-104650` using corrected harness SHA
+`6D7B2DC1…` and miniport SHA `1E57690E…`.
+
+**Before:** `win11-drill` Off; GPU partition rollback restored one bare adapter with empty partition
+values; DDA count 0; host RTX 2060 OK. Only the corrected IOCTL harness was deployed to the host lab
+bin directory.
+
+**Action:** bounded `Run-GuestExhaustive.ps1` without `-SkipVerifier`. PowerShell Direct became ready,
+the package deployed, pass 1 completed, the guest rebooted normally under Verifier, PSD returned in
+82 seconds, and pass 2 completed with Verifier flags `0x2093B` active on `ramshared.sys`.
+
+**Result:** both passes had every required non-VPD verdict = 1, including the three concurrent
+injectors, foreign-owner refusal, and `NO_NEW_DUMP`. Both correctly failed with
+`VPD_SERIAL_MATCH=0`; summary `IOCTL_PASS1=FAIL`, `IOCTL_VERIFIER=FAIL`, `VERIFIER_RAN=true`, guest
+exit 2. No blind retry was performed.
+
+**After:** VM Off; verifier reset best-effort; one bare GPU partition adapter with empty values; DDA
+count 0; host RTX 2060 OK.
+
+**Evidence:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/ioctl-guest-*-exact-vpd*`.
+
+**Verdict:** 🟡 **PARTIAL** — injector/rundown/Verifier subset passes; the miniport identity path must
+surface exact vendor/product/VPD serial/size before ITEM-3 can pass.
+
+## 2026-07-16 11:00 -03 — VPD placeholder PDO cache lifecycle corrected statically
+
+**What:** VPD placeholder PDO cache lifecycle corrected statically
+**Cause:** before CREATE, the miniport reported LUN 0 and VPD 0x80 with sixteen synthetic zero bytes.
+Windows cached that child PDO identity; `BusChangeDetected` did not replace it after CREATE, matching
+the corrected campaign's `VPD_SERIAL_MATCH=0` and stale PnP identities.
+
+**Fix:** the control device stays available, but the storage bus reports no LUN before CREATE.
+INQUIRY/capacity return NO_DEVICE; CREATE publishes complete serial/size then triggers an
+absent→present bus rescan. Serial input is exactly uppercase 16-hex; no synthetic/default serial
+remains. INQUIRY/VPD short allocations and READ CAPACITY(10/16) are now bounded and implemented.
+
+**Static/build evidence:** `STATIC_SCSI_LIFECYCLE_TEST=PASS`, `STATIC_INJECTOR_TEST=PASS`, negative
+no-LUN fixture PASS, and WDK 26100 `/W4 /WX /wd4324` `BUILD_DRIVERS_OK`. The only disabled warning is
+WDK `storport.h` C4324 for explicitly aligned structures; project warnings remain errors. Unsigned
+image: 32,256 bytes, SHA256 `5A1B7C830935F8C8B79DEA552D4CBB098548E5E5894B3F23672D099EA92674EC`.
+Staging was removed.
+
+**Evidence:**
+`docs/specs/no-milestone/windows-storport-cuda-vram/evidence/vpd-cache-lifecycle-fix-20260716.md`.
+
+**Verdict:** 🟡 **PARTIAL** — rebuild/sign/deploy plus isolated exact-VPD + Verifier rerun is still
+required. No VM run or physical-host mutation occurred in this correction step.
+
+## 2026-07-16 11:14 -03 — signed VPD lifecycle rerun remains RED
+
+**What:** signed VPD lifecycle rerun remains RED. Campaign: one bounded no-retry run,
+**Package:** isolated WDK 26100 `/W4 /WX /wd4324` build, Inf2Cat with zero warnings/errors, valid
+SYS/CAT/poolstress Authenticode, and no trust-store change. Signed package and guest-installed
+`ramshared.sys` matched at SHA256 `CD7E315D0DA5B24BB05C384846D7BA8123390300D2C3A3F73B10E52F9E80BC34`.
+Harness source/staged SHA matched at `6D7B2DC1…`.
+
+**Campaign:** one bounded no-retry run,
+`C:\ramshared\artifacts\guest-exhaustive-20260716-111439`, without `-SkipVerifier`. `Get-Disk` had no
+RAMSHARE disk before CREATE, but the PnP snapshot retained historical RAMSHARE child PDOs including
+one `OK`, so the no-stale-child lifecycle gate failed. Normal and Verifier passes both failed only
+`VPD_SERIAL_MATCH=0`; every other ITEM-3 verdict and `NO_NEW_DUMP` was 1. Verifier flags `0x2093B`
+were active; module load/unload was 1/0; no dumps appeared.
+
+**After:** no retry; VM Off; Verifier reset best-effort; one bare GPU-PV adapter; DDA=0; host RTX
+2060 OK; isolated staging removed. No physical driver install, Online action, trust-store mutation,
+host reboot, commit, or merge.
+
+**Evidence:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/signed-vpd-lifecycle-rerun-20260716.md`
+and raw `evidence/guest-exhaustive-20260716-111439/`.
+
+**Verdict:** 🟡 **PARTIAL / VPD BLOCKED** — the signed live result disproves promotion of the current
+`BusChangeDetected` lifecycle fix; retained child-PDO identity must be resolved and re-proven.
+
+## 2026-07-16 12:04 -03 — exact VPD + Driver Verifier PASS
+
+**What:** exact VPD + Driver Verifier PASS. Campaign: isolated guest `C:\ramshared\artifacts\guest-exhaustive-20260716-120459`. The deployed
+**Campaign:** isolated guest `C:\ramshared\artifacts\guest-exhaustive-20260716-120459`. The deployed
+and guest-loaded `ramshared.sys` matched SHA256
+`CD7E315D0DA5B24BB05C384846D7BA8123390300D2C3A3F73B10E52F9E80BC34`. A mandatory post-deploy
+reboot remapped the package image after the prior SCM `1056` stale-image condition; PSD returned in
+93 seconds, inside the 300-second bound.
+
+**Result:** normal and Verifier passes returned `STATUS=PASS` and exit 0. Every required ITEM-3
+verdict was 1 in both passes. `VPD_SERIAL_MATCH=1` observed vendor/product `RAMSHARE/VRAMDISK`, exact
+serial `ABCDEF0123456789`, and capacity `134217728` bytes on one `Win32_DiskDrive` candidate. Capacity
+came from `IOCTL_DISK_GET_LENGTH_INFO`; the CHS-derived WMI size was not accepted. Driver Verifier
+flags were `0x2093B`, with `ramshared.sys` load/unload 1/0. `NO_NEW_DUMP=1` in both passes.
+
+**Root-cause closure:** before CREATE, REPORT LUNS is empty and INQUIRY/capacity return `NO_DEVICE`;
+CREATE publishes the validated serial and size before `BusChangeDetected`. Historical RAMSHARE child
+PDOs were removed in the isolated guest. The harness now rejects friendly-name, size-only, and PnP
+presence fallbacks.
+
+**Independent closeout audit:** `git diff --check`, docs-check, `cargo fmt --all -- --check`,
+`cargo clippy -p ramshared-winsvc --all-targets -- -D warnings`, and 78 winsvc tests passed; one live
+CUDA test remained explicitly ignored. The SCSI/injector static test first reproduced a direct WSL
+UNC invocation failure (exit 1, empty `$PSScriptRoot` during parameter-default evaluation), then
+passed directly with exit 0 after resolving defaults from `$MyInvocation.MyCommand.Path` at runtime.
+The canonical WDK script then reproduced one deterministic `/Zi` UNC-PDB failure (`C1041`), moved the
+fix to the build layer (`/W4 /WX /wd4324 /Z7`), and returned `BUILD_DRIVERS_OK`. The resulting unsigned
+`ramshared.sys` was 32,256 bytes with SHA256 `A56D4C4F…`; it was not deployed. Checkpatch over the
+Windows-driver diff returned 0 errors and 0 warnings. The Windows MSVC toolchain cross-build passed
+from a disposable local staging copy. Slice coverage passed at config 95.5%, evidence 91.9%, driver
+link 87.7%, broker tenant 85.9%, runtime 86.8%, service 84.9%, and CUDA probe 80.0%.
+
+**After:** a read-only recapture recorded `win11-drill` Off, one GPU-PV adapter with empty partition
+values, DDA count 0, host display `NVIDIA GeForce RTX 2060` status `OK`, and successful `nvidia-smi`.
+No physical Online action, host driver replacement, pressure campaign, commit, or merge occurred.
+
+**Evidence:**
+`docs/specs/no-milestone/windows-storport-cuda-vram/evidence/vpd-exact-pass-20260716.md` and
+`docs/specs/no-milestone/windows-storport-cuda-vram/evidence/terminal-state-vpd-pass-20260716T170631Z.md`.
+Build audit: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/wdk-build-audit-20260716T171026Z.md`.
+
+**Verdict:** guest StorPort ITEM-3 + exact VPD + Verifier **PASS**. Product remains 🟡 **PARTIAL**:
+physical BINARY_MATCH/Online, GPU-PV protocol alignment for real CUDA, live StartIo READ-race
+strengthening, and the isolated WSL2 freeze-elimination campaign remain open.
+
+## 2026-07-16 14:52 -03 — sequential fronts: physical RED; GPU-PV probe-cuda PASS
+
+**What:** sequential fronts: physical RED; GPU-PV probe-cuda PASS
+### Physical host (read-only)
+
+`BINARY_MATCH=false`: package `CD7E315D…` ≠ installed `E690306F…`; no `.bak-host`.
+README policy: Windows kernel driver on daily host = **NO** (lab VM only). Product Online on the
+physical host **SKIPPED** (not attempted). Evidence:
+`docs/specs/no-milestone/windows-storport-cuda-vram/evidence/physical-preflight-readonly-20260716T172150Z.txt`.
+
+### GPU-PV lab (win11-drill)
+
+Host build `26200.8655`; guest `26200.8037`. Virtual PCI events still show request `0x10006` vs
+negotiated `0x10005`, but guest `nvidia-smi` lists the real RTX 2060 UUID and driver `610.74`.
+
+Bounded `probe-cuda` with lab side-by-side VC runtime: **PASS** (exit 0), 64 MiB DeviceMem,
+three offsets, free_before == free_after. No Online/format. Terminal: VM Off, host GPU OK.
+
+Evidence: `evidence/gpupv-probe-cuda-pass-20260716T173812Z.md`.
+
+### InfVerif
+
+BusType moved under Parameters (ERROR 1323 cleared). ERROR 1322 DIRID 13 remains open for
+attestation package work. Evidence: `evidence/infverif-20260716.md`.
+
+### Next
+
+1. Guest product Online + 3-round storage SHA (lab only, 64 MiB, exact VPD).
+2. Optional guest Windows Update to UBR ≥ host to silence protocol mismatch.
+3. StartIo READ concurrent race under Verifier (beyond ring/IOCTL injectors).
+4. InfVerif DIRID 13 package migration or documented waiver.
+5. Isolated WSL2 freeze campaign (never daily thrash).
+**Verdict:** 🟡 PARTIAL
+
+## 2026-07-16 14:53 -03 — guest product Online PARTIAL (64 MiB)
+
+**What:** guest product Online PARTIAL (64 MiB). Campaign `guest-product-online-20260716-145248` on win11-drill:
+Campaign `guest-product-online-20260716-145248` on win11-drill:
+
+- BINARY_MATCH package/guest `CD7E315D…`
+- Product Online true with CUDA RTX 2060; serial `B7A9E1BD0E71541A`; disk 64 MiB letter S
+- Three write/read SHA rounds **PASS**
+- Graceful stop **FAIL** within 60s (`forceKilledConsole`); VM later Off; host GPU OK
+- Lab JSONL lease broker used for Register/LeaseGrant (not full ramsharedd)
+
+Evidence: `evidence/guest-product-online-20260716-145248.md`.
+Harness fixes pending re-run: longer stop wait, no FileInfo JSON explosion.
+**Verdict:** 🟡 PARTIAL
+
+## 2026-07-16 15:13 -03 — guest product Online re-run 151304 PARTIAL
+
+**What:** guest product Online re-run 151304 PARTIAL
+- Online+CUDA+64MiB LUN serial A0B4FCE26201BD5D + 3 SHA PASS; BINARY_MATCH CD7E315D
+- Graceful stop still FAIL after 180s re-assert stop.request (force kill; no lease liberado)
+- Root cause: teardown refuse/resume Online loop or stop not effective; no Stopping line in stderr
+- Evidence: evidence/guest-product-online-20260716-151304.md
+- Terminal: VM Off, host GPU OK. No push.
+**Verdict:** 🟡 PARTIAL
+
+## 2026-07-16 17:42 -03 — guest product Online STOP_OK PASS (I/O-pump lock)
+
+**What:** guest product Online STOP_OK PASS (I/O-pump lock). Campaign `guest-product-online-20260716-174238` on win11-drill:
+Campaign `guest-product-online-20260716-174238` on win11-drill:
+
+- ONLINE + BINARY_MATCH CD7E315D… + 3 SHA PASS (serial E688A3B1F1D1F0C0, letter S, 64 MiB)
+- **STOP_OK=true**, forceKilled=false, **lease 1 liberado**
+- Root cause: CreateFile volume lock deadlocked when COMMIT loop stopped; fixed by I/O pump during lock + CREATE-time identity + registry Gate A
+- Evidence: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-174238.md`
+- Terminal: VM Off, host RTX 2060 OK. No physical Online, no push.
+**Verdict:** 🟡 PARTIAL
+
+## 2026-07-16 18:30 -03 — teardown audit correction + InfVerif DIRID 13 PASS
+
+**What:** teardown audit correction + InfVerif DIRID 13 PASS
+The `174238` campaign remains an empirical successful run, but its product-closure interpretation is
+invalidated. Audit found CREATE-only stop identity, registry-only pagefile authority, an unbounded
+mutating lock worker, and an incomplete harness exit conjunction.
+
+RED/GREEN corrections now require live letter-to-disk/VPD/capacity identity plus a single-disk-extent
+recheck, configured+active pagefile union fail-closed, a 30-second lock deadline that never resumes
+Online with a mutating worker outstanding, and three fresh no-retry lifecycle rounds with complete
+cleanup verdicts. These corrections are not yet live-proven, so product status remains **PARTIAL**.
+
+INF package isolation was separately validated with the real WDK 10.0.26100.0 tool. Initial DIRID 13
+migration produced `ERROR(1199)` until the model was restricted to build 16299+. Final
+`InfVerif.exe /w drivers/windows/ramshared/ramshared.inf` exited **0** with empty output. No driver
+install/load, VM mutation, physical-host action, commit, or push occurred for this validation.
+
+Evidence: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/infverif-dirid13-pass-20260716.md`.
+**Verdict:** 🟡 PARTIAL
+
+## 2026-07-16 19:00 -03 — teardown hardening static close; signed live rerun blocked
+
+**What:** teardown hardening static close; signed live rerun blocked
+Additional audit found two more ownership gaps: CUDA `DeviceMem` was dropped only after
+`LeaseRelease`, and a release flush failure removed the authoritative lease from memory. TDD now
+consumes the backend to free DeviceMem, verifies CUDA restoration within 64 MiB, then releases the
+lease. Ambiguous release retains the lease and is not replayed. The wildcard configured pagefile
+path `?:\pagefile.sys` is now unsafe for every product volume, and non-DOS paths fail closed.
+
+Full Rust, native/Windows clippy, MSVC release build, WDK `/W4 /WX` build, InfVerif, PowerShell
+parser/static tests, docs, diff, and >=80% slice coverage are green. Live rerun was not attempted:
+SignTool could see the machine certificate but could not access its private key from the current
+token, and no PFX password was available. No permission/trust-store bypass, driver install, VM
+mutation, physical-host action, commit, or push was performed.
+
+Evidence: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/teardown-hardening-static-20260716.md`.
+**Verdict:** 🟡 PARTIAL
+
+## 2026-07-16 20:11 -03 — guest product Online PASS after teardown hardening
+
+**What:** Rebuilt current `ramshared-winsvc` with the corrected teardown identity path, deployed the
+DIRID-13 signed miniport package to `win11-drill`, and ran the corrected no-retry three-lifecycle
+GPU-PV product campaign.
+
+**Result:**
+
+| Gate | Result |
+| --- | --- |
+| Campaign | `guest-product-online-20260716-201130` |
+| Lifecycle rounds | `3` |
+| ONLINE + CUDA | PASS, RTX 2060 via GPU-PV |
+| DriverStore/package BINARY_MATCH | PASS, `E297B73F…` |
+| Product exe | `C6C9EB92…` |
+| SHA I/O | PASS in all 3 rounds |
+| Graceful stop | PASS, no force-kill |
+| Lease release | PASS, `lease 1 liberado` each round |
+| CUDA restored | PASS |
+| Dumps | none new |
+| Terminal | VM Off, host RTX 2060 OK |
+
+**Fixes proven:** startup LUN wait pumps COMMIT; PnP root device is recreated/enabled without leaving
+`ROOT\RAMSHARED` disabled; DriverStore mismatch aborts before product start; stop identity binds
+letter + exact VPD serial + configured size without the teardown-time `PhysicalDriveN` length IOCTL;
+harness captures `RuntimeSummary exit_code: 0` when the PowerShell process object returns a null
+`ExitCode`.
+
+**Verdict:** ✅ isolated GPU-PV storage-only product path works.
+
+**Still not claimed:** physical daily-host authorization, SDV/Code Analysis, dedicated live StartIo
+READ-copy race strengthening, and WSL2 freeze elimination. The WSL2 freeze claim still requires a
+separate isolated before/action/after hang campaign; no daily WSL2 pressure/thrash was run.
+
+**Evidence:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-201130.md`.
+
+## 2026-07-16 22:08 -03 — current signed GPU-PV product + Verifier gates PASS
+
+**What:** Rebuilt the current Windows product and driver package, fixed project Code Analysis
+warnings, published signed package `ramshared.sys` SHA `97FD7B37…`, and reran both product Online
+and exhaustive IOCTL/Verifier campaigns on isolated `win11-drill`.
+
+**Category:** integration
+**How to measure:** Re-run isolated lab harness under `scripts/windows/` (e.g. `Run-GuestProductOnline.ps1` / `Run-GuestExhaustive.ps1`) with signed package; see `docs/specs/no-milestone/windows-storport-cuda-vram/`.
+
+**Measured data:**
+
+| Gate | Result |
+| --- | --- |
+| Product campaign | `guest-product-online-20260716-220848` |
+| Product exe SHA | `AAD4566897C9CF262F14AB783CCC6B2B2A43C8233A2E85ECA1FC562003246352` |
+| Driver package SHA | `97FD7B373ED7DD5AE7F38204070F8B89E08A2B25616AA2A128995E8D1FBFF34F` |
+| Product rounds | 3/3 PASS |
+| Round teardown | 9064 ms / 5026 ms / 4018 ms |
+| CUDA restore wait | 106 ms / 76 ms / 57 ms |
+| Exhaustive campaign | `guest-exhaustive-20260716-224913` |
+| IOCTL pass1 | PASS |
+| IOCTL under Verifier | PASS |
+| Verifier | `0x2093B`, `ramshared.sys` load 1 / unload 0 |
+| VPD exact | `VPD_SERIAL_MATCH=1`, serial `ABCDEF0123456789`, size `134217728` |
+| Dumps | none new |
+| Terminal | VM Off; verifier reset best-effort; host RTX 2060 OK |
+
+**Fixes proven:** stale DriverStore `ramshared.inf` packages are purged before install; missing
+post-reboot `ROOT\RAMSHARED\0000` is recreated via SetupAPI before IOCTL; root PnP and SCSIAdapter
+must be `OK|problem=0`; CUDA restoration still requires the 64 MiB threshold but now polls briefly
+before declaring failure.
+
+**Verdict:** ✅ works for the isolated GPU-PV storage-only product and current signed
+IOCTL/Verifier package.
+
+**Next action:** Keep physical daily-host Online, SDV, dedicated StartIo READ-copy live race, and
+isolated WSL2 freeze-elimination campaigns as separate non-claims.
+
+**Evidence:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-220848.md`,
+`docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260716-224913.md`.
+
+## 2026-07-16 22:50 -03 — WDK Code Analysis project-clean
+
+**What:** Ran MSVC/WDK Code Analysis over `drivers/windows/ramshared/{driver.c,virtdisk.c,queue.c,control.c}`
+after adding WDK callback prototypes and narrowing the probe exception filter.
+
+**Category:** local-check
+
+**Measured data:**
+
+- `cl /kernel /W4 /analyze` completed for the four driver files.
+- Project-file warnings under `C:\ramshared\src\drivers\windows\ramshared\*.c`: `0`.
+- WDK header warnings remain in `wdm.h`, `ntddk.h`, and `storport.h`.
+- SDV binaries (`sdv.exe` / `StaticDV.exe`) were not present in the local WDK image.
+
+**Verdict:** ✅ works for project Code Analysis; 🟡 SDV unavailable locally, not claimed.
+
+**Next action:** Run SDV on a WDK image that actually contains SDV, or keep the unavailability
+explicit in release notes.
+
+**Evidence:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/code-analysis-project-clean-20260716.md`.

@@ -33,6 +33,12 @@ impl<M: VramMemory> VramBackend<M> {
     pub fn mem_mut(&mut self) -> &mut M {
         &mut self.mem
     }
+
+    /// Consume the adapter so callers can explicitly order memory release
+    /// before releasing an external lease.
+    pub fn into_inner(self) -> M {
+        self.mem
+    }
 }
 
 impl<M: VramMemory> BlockBackend for VramBackend<M> {
@@ -182,5 +188,12 @@ mod tests {
         let mut buf = [0xAAu8; 4096];
         be.read_at(0, &mut buf).unwrap();
         assert_eq!(buf, [0u8; 4096]);
+    }
+
+    #[test]
+    fn vram_backend_into_inner_allows_explicit_release_order() {
+        let be = VramBackend::new(FakeVram::new(4096), 4096);
+        let mem = be.into_inner();
+        assert_eq!(mem.len(), 4096);
     }
 }
