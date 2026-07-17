@@ -2,7 +2,12 @@
 
 ## Status
 
-**NOT CLAIMED.** Daily host dry-run only until an isolated lab runs the full protocol.
+**NOT CLAIMED (env-bound).** Daily host dry-run only until a **disposable isolated WSL lab**
+runs the full protocol.
+
+This is **not** `win11-drill` (Windows Hyper-V guest) and **not** the daily WSL2 desktop host
+(`Ubuntu-24.04` with `/mnt/c/Users`). Thrash on the daily host is forbidden by
+`.claude/rules/benchmarks.md`.
 
 ## Script
 

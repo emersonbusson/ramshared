@@ -37,13 +37,23 @@ CREATE size (capacity via `IOCTL_DISK_GET_LENGTH_INFO`, not CHS `Win32_DiskDrive
 | README daily-host policy | Windows kernel driver = **lab VM only** |
 | Online limited (64 MiB / S:) | **SKIPPED** (preflight RED) |
 
-Promotion beyond this storage-only gate still excludes: SDV (tool unavailable locally; WDK
-headers/targets present but `sdv.exe` not installed) and the isolated WSL2 freeze-elimination
-campaign. **StartIo READ-copy race is claimed** (2026-07-17; Verifier `0x2093B` on
-`win11-drill` — see StartIo section below). WDK Code Analysis is project-clean for
-`drivers/windows/ramshared/*.c`; evidence: `evidence/code-analysis-project-clean-20260716.md`.
-The daily Windows host remains under lab-only kernel-driver policy and was not mutated for
-promotion.
+**Gate matrix (discipline close — Day-0 honesty):**
+
+| Gate | Status | Evidence |
+| --- | --- | --- |
+| Guest GPU-PV product Online (3× lifecycle) | **PASS** | `guest-product-online-20260716-220848` |
+| Guest ITEM-3 + Verifier + VPD exact | **PASS** | `guest-exhaustive-20260716-224913` (+ later campaigns) |
+| StartIo READ-copy race | **PASS** | `startio-claim-20260717` / verifier `092950` |
+| Manufactured pagefile Gate A (live Online) | **PASS** | `pagefile-online-refuse-20260717-102614` |
+| WDK Code Analysis (project sources) | **PASS** | `code-analysis-project-clean-20260716` |
+| InfVerif | **PASS** | `infverif-dirid13-pass-20260716` |
+| **SDV** | **N/A (DT-30)** | Microsoft retired on VS2022/WDK 26100; `sdv-probe-20260717` |
+| Daily-host physical Online | **RED / policy** | BINARY_MATCH fail + lab-only README |
+| WSL2 freeze-elimination | **env-bound partial** | scaffold + daily-host refuse; not win11-drill |
+
+WDK Code Analysis is project-clean for `drivers/windows/ramshared/*.c`; evidence:
+`evidence/code-analysis-project-clean-20260716.md`. The daily Windows host remains under lab-only
+kernel-driver policy and was not mutated for promotion.
 
 **Physical Online (2026-07-16 read-only recapture):** still **RED/SKIPPED** — package
 `CD7E315D…` ≠ installed `E690306F…`, and README forbids loading the Windows miniport on the daily
@@ -142,8 +152,8 @@ PowerShell parser validation passes for `Run-GuestExhaustive.ps1` and
 
 The canonical WDK build uses `/W4 /WX /wd4324 /Z7`; the x64 build returned
 `BUILD_DRIVERS_OK`. WDK Code Analysis is project-clean for repository driver files; WDK header
-analyzer warnings remain toolchain-scope noise. Static Driver Verifier and Linux `checkpatch.pl`
-were not available in this local tool image, so no SDV/checkpatch PASS is claimed. The Windows MSVC
+analyzer warnings remain toolchain-scope noise. Static Driver Verifier is **N/A (DT-30)** on
+VS2022/WDK 26100; Linux `checkpatch.pl` is out of scope for this Windows-only slice. The Windows MSVC
 toolchain build of `ramshared-winsvc` produced SHA `AAD45668…`.
 
 ### Isolated VM evidence (current signed miniport; VPD result invalidated)
@@ -271,29 +281,19 @@ CUDA restore, no dump. Flag: `Run-GuestProductOnline.ps1 -ManufacturedPagefileRe
   older version of the EWDK."**
 - MSBuild `/t:sdv` on `ramshared.vcxproj` → MSB4057 (project does not import a live SDV pipeline).
 
-**SDV_CLAIM=NOT_CLAIMED** — not an install oversight on this machine; modern WDK/VS2022 retired the
-tool. Claiming PASS would require a dedicated older EWDK environment (out of Day-0 VS2022 lab).
-Evidence: `evidence/sdv-probe-20260717/`.
+**SDV = N/A (DT-30)** — closed in SPEC. Not an open “install and re-run” task on this Day-0 path.
+Evidence: `evidence/sdv-probe-20260717/`. Optional future work (separate SPEC exception if ever
+needed): older EWDK image dedicated to SDV only — not required to close this slice.
 
-## Remaining promotion gates
+## Out-of-slice / env-bound (not false pendings)
 
-1. ~~Manufactured active-pagefile refusal~~ — unit + guest inject + **live Online+stop** PASS.
-2. Keep physical Online blocked by the lab-only policy; do not reinterpret guest proof as daily-host
-   authorization. (win11-drill GPU-PV Online is already claimed; daily-host miniport is not.)
-3. ~~StartIo READ-copy race~~ — **claimed** on win11-drill under Verifier (see above).
-4. Run the isolated **WSL2** freeze campaign before any freeze-elimination claim.
-   Scaffold: `scripts/safety/wsl2-freeze-campaign.sh`. This is **not** win11-drill (Windows Hyper-V
-   guest). The daily WSL2 host (`Ubuntu-24.04` + `/mnt/c/Users`) is correctly refused
-   (`daily_host_refused_without_isolated_lab_flag`). Full 2× before→action→after only with
-   `--allow-isolated-lab`, `RAMSHARED_ISOLATED_LAB=1`, and a non-daily host (or
-   `RAMSHARED_FORCE_ISOLATED_LAB=1` only on a true disposable WSL lab VM — never the daily box).
-5. SDV PASS — **blocked by Microsoft tool retirement on VS2022/WDK 26100**, not missing local
-   install. Optional future: older EWDK image dedicated to SDV only.
+These remain **honest non-PASS** for this machine, not unfinished Day-0 work:
 
-The WSL2 freeze claim is **BLOCKED, not PASS**. Promotion requires a dedicated isolated
-before→action→after campaign with watchdog/timeout, swapoff-first, ghost/deleted-plus-used-kB checks,
-`BINARY_MATCH`, D-state/hung-task capture, two idempotent repetitions, and cleanup. That campaign was
-not run on the daily WSL2 host because repository policy forbids live thrash pressure there.
+1. **Daily-host physical Online** — policy RED (lab-only miniport). Guest Online is PASS.
+2. **WSL2 freeze-elimination claim** — env-bound. Scaffold ready; daily host correctly refuses
+   thrash. Requires a **disposable isolated WSL lab** (not win11-drill, not the daily Ubuntu-24.04
+   host). See `docs/specs/no-milestone/wsl2-freeze/README.md` and
+   `scripts/safety/wsl2-freeze-campaign.sh`.
 
 ## Rollback triggers
 

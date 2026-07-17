@@ -369,7 +369,7 @@ No code implementation begins until `SPEC.md` and the mandatory Windows driver `
 
 ### Windows build and driver regression
 
-- Build the MSVC Rust binary and WDK driver; run `cargo fmt`, targeted `clippy -D warnings`, tests, InfVerif, SDV/CodeQL if available, and signature verification appropriate to the lab package.
+- Build the MSVC Rust binary and WDK driver; run `cargo fmt`, targeted `clippy -D warnings`, tests, InfVerif, WDK Code Analysis, Driver Verifier (lab VM), and signature verification appropriate to the lab package. **SDV is N/A on VS2022/WDK 26100** (Microsoft retired the tool; see SPEC DT-30) — do not treat SDV absence as incomplete Day-0 work.
 - In a disposable VM/checkpoint, rerun CREATE/REGISTER, NTFS format, raw I/O, malformed IOCTL, owner cleanup, clean teardown, and Driver Verifier smoke. This proves the unchanged driver surface did not regress; it does not prove CUDA VRAM.
 - Record OS/WDK/Rust/GPU-driver versions and artifact hashes.
 
