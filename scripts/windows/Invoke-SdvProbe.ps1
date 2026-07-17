@@ -51,8 +51,23 @@ $sdvTargets = "C:\Program Files (x86)\Windows Kits\10\build\$KitVersion\WindowsD
 if (Test-Path $sdvTargets) {
     $o.sdvTargetsPresent = $true
     $o.sdvTargetsPath = $sdvTargets
+    # WDK 10.0.26100+ ships a stub target that documents retirement.
+    $targetsText = Get-Content -LiteralPath $sdvTargets -Raw -EA SilentlyContinue
+    if ($targetsText -match 'no longer included in the Windows Driver Kit' -or
+        $targetsText -match 'no longer compatible with VS2022') {
+        $o.sdvRetiredFromModernWdk = $true
+        $o.reasons += "sdv_retired_from_wdk_vs2022_plus"
+        $snip = Join-Path $ArtifactDir "wdk-sdv-target-snippet.txt"
+        # Keep a short excerpt for evidence without copying the full targets file.
+        ($targetsText -split "`n" | Select-String -Pattern 'Target Name="sdv"|no longer included|no longer compatible|older version of the EWDK' |
+            ForEach-Object { $_.Line.Trim() }) -join "`n" |
+            Set-Content -Path $snip -Encoding utf8
+    } else {
+        $o.sdvRetiredFromModernWdk = $false
+    }
 } else {
     $o.reasons += "WindowsDriver.Sdv.targets_missing"
+    $o.sdvRetiredFromModernWdk = $null
 }
 
 # where after vcvars

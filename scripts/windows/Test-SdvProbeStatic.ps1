@@ -11,6 +11,7 @@ $required = @(
     "NOT_CLAIMED",
     "sdv.exe_not_on_path",
     "msbuild_target_sdv_missing",
+    "sdv_retired_from_wdk_vs2022_plus",
     "/t:sdv",
     "SDV_CLAIM",
     "WindowsDriver.Sdv.targets"
