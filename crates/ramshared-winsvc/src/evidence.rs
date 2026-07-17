@@ -381,4 +381,76 @@ mod tests {
         assert_ne!(row.event_id, first_event);
         assert_eq!(row.ts_utc_ms, first_ts + 1);
     }
+
+    #[test]
+    fn read_all_rows_missing_file_yields_not_found() {
+        let dir = std::env::temp_dir().join(format!(
+            "ramshared-ev-missing-{}-{}",
+            std::process::id(),
+            utc_ms()
+        ));
+        let path = dir.join("does_not_exist.jsonl");
+        let result = read_all_rows(&path);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn read_all_rows_ignores_empty_lines() {
+        let dir = std::env::temp_dir().join(format!(
+            "ramshared-ev-empty-{}-{}",
+            std::process::id(),
+            utc_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("empty.jsonl");
+        {
+            let mut file = File::create(&path).unwrap();
+            let row = RuntimeEvidence::base("run-1", "Online");
+            let json = serde_json::to_string(&row).unwrap();
+            file.write_all(b"\n").unwrap();
+            file.write_all(b"   \n").unwrap();
+            file.write_all(json.as_bytes()).unwrap();
+            file.write_all(b"\n").unwrap();
+            file.write_all(b"\t\n").unwrap();
+        }
+        let rows = read_all_rows(&path).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].run_id, "run-1");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_all_rows_invalid_json_yields_invalid_data() {
+        let dir = std::env::temp_dir().join(format!(
+            "ramshared-ev-invalid-{}-{}",
+            std::process::id(),
+            utc_ms()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("invalid.jsonl");
+        {
+            let mut file = File::create(&path).unwrap();
+            file.write_all(b"{ invalid json\n").unwrap();
+        }
+        let result = read_all_rows(&path);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn process_run_ids_are_unique_and_well_formed() {
+        let a = new_process_run_id();
+        let b = new_process_run_id();
+        let c = new_process_run_id();
+
+        assert!(a.starts_with("run-"));
+        assert!(b.starts_with("run-"));
+        assert!(c.starts_with("run-"));
+
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        assert_ne!(a, c);
+    }
 }

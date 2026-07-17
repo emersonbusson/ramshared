@@ -635,6 +635,15 @@ fn cuda_probe_via_lib() -> Result<GpuInfo, String> {
 }
 
 fn print_text_report(report: &CheckReport) {
+    print_basic_info(report);
+    print_swap_info(report);
+    print_backend_info(report);
+    print_decision(report);
+    print_details(report);
+    print_issues(report);
+}
+
+fn print_basic_info(report: &CheckReport) {
     println!(
         "WSL2: {} ({})",
         report.wsl.status.as_str(),
@@ -655,7 +664,9 @@ fn print_text_report(report: &CheckReport) {
         ),
         None => println!("GPU: unavailable"),
     }
+}
 
+fn print_swap_info(report: &CheckReport) {
     match report.swaps.first() {
         Some(swap) => println!(
             "Swap atual: {}, size={}MiB, used={}MiB, prio={}",
@@ -666,7 +677,9 @@ fn print_text_report(report: &CheckReport) {
         ),
         None => println!("Swap atual: none"),
     }
+}
 
+fn print_backend_info(report: &CheckReport) {
     println!(
         "Backends: nbd={}, ublk={}",
         report.backends.nbd_status.as_str(),
@@ -686,8 +699,13 @@ fn print_text_report(report: &CheckReport) {
             .map(|s| s.filename.as_str())
             .unwrap_or("none")
     );
-    println!("Decisao: {}", report.decision().as_str());
+}
 
+fn print_decision(report: &CheckReport) {
+    println!("Decisao: {}", report.decision().as_str());
+}
+
+fn print_details(report: &CheckReport) {
     println!("Detalhes:");
     println!(
         "  config: {}",
@@ -728,7 +746,9 @@ fn print_text_report(report: &CheckReport) {
     {
         println!("  nvidia-smi output: {}", one_line(output));
     }
+}
 
+fn print_issues(report: &CheckReport) {
     if !report.blockers.is_empty() {
         println!("Bloqueios:");
         for blocker in &report.blockers {

@@ -141,6 +141,24 @@ mod tests {
     }
 
     #[test]
+    fn pagefile_may_target_volume_edge_cases() {
+        // Invalid volume letters
+        assert!(pagefile_may_target_volume(r"S:\pagefile.sys", 'C').is_err());
+        assert!(pagefile_may_target_volume(r"S:\pagefile.sys", '1').is_err());
+
+        // Ambiguous paths (length < 3, missing slash, wrong slash)
+        assert!(pagefile_may_target_volume(r"S:", 'S').is_err());
+        assert!(pagefile_may_target_volume(r"S:pagefile", 'S').is_err());
+        assert!(pagefile_may_target_volume(r"S:/pagefile.sys", 'S').is_err());
+
+        // Invalid drive letters
+        assert!(pagefile_may_target_volume(r"1:\pagefile.sys", 'S').is_err());
+
+        // Whitespace trimming and case insensitivity
+        assert!(pagefile_may_target_volume("  s:\\pagefile.sys ", 's').unwrap());
+    }
+
+    #[test]
     fn lock_deadline_never_resumes_online() {
         assert_eq!(
             lock_wait_decision(Duration::from_secs(29), Duration::from_secs(30), false),
