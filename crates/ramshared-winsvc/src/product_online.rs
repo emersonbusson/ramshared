@@ -531,11 +531,8 @@ pub fn run_product_online(
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
 
-            if lock_wait_decision(
-                teardown_started.elapsed(),
-                Duration::from_secs(30),
-                false,
-            ) == LockWaitDecision::EnterFailedSafe
+            if lock_wait_decision(teardown_started.elapsed(), Duration::from_secs(30), false)
+                == LockWaitDecision::EnterFailedSafe
             {
                 state.healthy = false;
                 state.phase = RuntimePhase::FailedSafe;
@@ -543,9 +540,7 @@ pub fn run_product_online(
                 row.error_code = Some("30s".into());
                 sync_runtime_evidence(&mut row, &state);
                 let _ = evidence.append(&row);
-                teardown_diag(
-                    "FailedSafe: volume lock exceeded 30,000 ms; retaining I/O pump",
-                );
+                teardown_diag("FailedSafe: volume lock exceeded 30,000 ms; retaining I/O pump");
                 preserve_failed_safe_with_io(
                     "volume lock worker remains in flight",
                     &mut link,
