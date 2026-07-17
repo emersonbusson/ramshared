@@ -1927,3 +1927,22 @@ powershell -ExecutionPolicy Bypass -File scripts/windows/Test-WinDriveIoctlValid
 **Verdict:** 🟡 partial — StartIo READ-copy live strengthening harness landed and honestly RED; freeze-elimination still unclaimed; physical Online + SDV still blocked by policy/tooling
 **Next action:** Make storage-stack READ reach QSubmit (online/format or SPTI CDB READ under pump), re-run under Verifier; keep physical/SDV/WSL2 freeze as separate non-claims
 **Artifacts:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260717-004209/`, `scripts/safety/wsl2-freeze-campaign.sh`
+
+## 2026-07-17 03:06 -03 — StartIo hang-safe SKIP + Verifier ITEM-3 PASS
+
+**What:** Made STARTIO_READ_COPY_RACE hang-safe (no CreateFile on Win32-only LUN without Get-Disk; no background BlockingIoctl pump) and re-proved guest ITEM-3 under Driver Verifier.
+**Category:** windows / storport / e2e / isolation
+**How to measure:**
+```text
+powershell -ExecutionPolicy Bypass -File scripts/windows/Test-WinDriveIoctlValidationStatic.ps1
+# elevated:
+# C:\ramshared\bin\Run-GuestExhaustive.ps1
+```
+**Measured data:**
+- Static: STATIC_INJECTOR_TEST=PASS
+- Campaign `guest-exhaustive-20260717-024546` SkipVerifier: IOCTL_PASS1=PASS; STARTIO SKIP (no Get-Disk idx=2)
+- Campaign `guest-exhaustive-20260717-025401` Verifier: IOCTL_PASS1=PASS IOCTL_VERIFIER=PASS VERIFIER_RAN=true; STARTIO SKIP both passes; package SHA 97FD7B37…
+- Terminal: win11-drill Off after campaigns
+**Verdict:** 🟡 partial — ITEM-3+Verifier green; STARTIO_READ_COPY_RACE not claimed (Win32-only LUN / no MSFT_Disk surface for safe PhysicalDrive I/O)
+**Next action:** Prove StartIo under product Online (formatted volume / Get-Disk Online) or post-format guest LUN so SQEs reach QSubmit under Verifier
+**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260717-025401/

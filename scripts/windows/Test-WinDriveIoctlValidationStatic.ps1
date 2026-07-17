@@ -46,6 +46,7 @@ $requiredStartIoTokens = @(
     "StartQueuePump",
     "PhysicalReadWithPump",
     "DrainSqPublishCq",
+    "Find-RamshareDiskInfo",
     "STARTIO_READ_COPY_RACE"
 )
 foreach ($token in $requiredStartIoTokens) {
