@@ -595,6 +595,65 @@ mod tests {
         assert!(phases.contains(&TeardownPhase::ResumeOnline));
     }
 
+    /// Manufactured active-pagefile campaign (product path decision): a pagefile
+    /// identity on the product volume letter refuses Gate A before UNREGISTER/DESTROY.
+    #[test]
+    fn manufactured_pagefile_on_product_volume_refuses_gate_a() {
+        let c = cfg();
+        assert_eq!(c.volume_letter, 'D');
+        let mut state = online_state();
+        let mut disk = MemDisk {
+            created: true,
+            registered: true,
+            ..Default::default()
+        };
+        let mut wipe = NopWipe;
+        // Manufactured: configured/active identity points at product letter D:.
+        let mut gates = CountingGates {
+            a: Ok(vec![r"D:\pagefile.sys".into()]),
+            b: Ok(vec![r"D:\pagefile.sys".into()]),
+            n: std::cell::Cell::new(0),
+            lock_fail: false,
+            locked: false,
+        };
+        let mut phases = Vec::new();
+        let e = teardown_storage_only(
+            &c,
+            &mut state,
+            &mut disk,
+            &mut wipe,
+            &mut gates,
+            &mut phases,
+        )
+        .unwrap_err();
+        match e {
+            ProvisionError::PagefileSafety(s) => {
+                assert!(
+                    s.contains("gate_a_active"),
+                    "expected gate_a_active manufactured refuse, got {s}"
+                );
+                assert!(s.contains(r"D:\pagefile.sys") || s.contains("D:"), "{s}");
+            }
+            other => panic!("expected PagefileSafety, got {other}"),
+        }
+        let rt = pagefile_refusal_to_runtime(&ProvisionError::PagefileSafety(
+            "gate_a_active: D:\\pagefile.sys".into(),
+        ))
+        .expect("maps to runtime code 7");
+        assert_eq!(rt.code, 7);
+        assert_eq!(disk.destroy_calls, 0);
+        assert_eq!(disk.unreg_calls, 0);
+        assert!(state.online && state.disk_created && state.registered_queue);
+        assert_eq!(
+            phases,
+            [
+                TeardownPhase::Identity,
+                TeardownPhase::GateA,
+                TeardownPhase::ResumeOnline
+            ]
+        );
+    }
+
     #[test]
     fn identity_mismatch_refuses_before_gate_a_or_mutation() {
         let c = cfg();
