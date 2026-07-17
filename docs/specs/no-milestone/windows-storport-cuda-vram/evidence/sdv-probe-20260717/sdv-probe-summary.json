@@ -1,5 +1,5 @@
 ﻿{
-    "ts":  "2026-07-17T10:25:56.1394657-03:00",
+    "ts":  "2026-07-17T11:09:21.7236814-03:00",
     "project":  "C:\\ramshared\\src\\drivers\\windows\\ramshared\\ramshared.vcxproj",
     "projectExists":  true,
     "sdvOnPath":  false,
@@ -11,7 +11,9 @@
     "msbuildSdvExit":  1,
     "claim":  "NOT_CLAIMED",
     "reasons":  [
+                    "sdv_retired_from_wdk_vs2022_plus",
                     "sdv.exe_not_on_path",
                     "msbuild_target_sdv_missing"
-                ]
+                ],
+    "sdvRetiredFromModernWdk":  true
 }

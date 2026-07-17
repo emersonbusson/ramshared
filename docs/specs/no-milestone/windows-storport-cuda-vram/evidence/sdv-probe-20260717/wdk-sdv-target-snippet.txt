@@ -1,0 +1,2 @@
+﻿<Target Name="sdv">
+<Warning Text="Static Driver Verifier (SDV) is no longer included in the Windows Driver Kit and is no longer compatible with VS2022 and later.  To use SDV, install an older version of the EWDK."

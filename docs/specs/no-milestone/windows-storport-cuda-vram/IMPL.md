@@ -260,25 +260,35 @@ Live product Online + stop with mid-lifecycle inject is **PASS**
 `gate_a_active: S:\pagefile.sys`, Online resumed, then clean stop exit 0, lease release,
 CUDA restore, no dump. Flag: `Run-GuestProductOnline.ps1 -ManufacturedPagefileRefuse`.
 
-### SDV probe (2026-07-17)
+### SDV probe (2026-07-17, refreshed)
 
-`Invoke-SdvProbe.ps1`: `sdv.exe` not on PATH; MSBuild `/t:sdv` → MSB4057 (target missing).
-WDK has `WindowsDriver.Sdv.targets` but SDV tool package is not installed.
-**SDV_CLAIM=NOT_CLAIMED.** Evidence: `evidence/sdv-probe-20260717/`.
+`Invoke-SdvProbe.ps1` + WDK `10.0.26100.0` `WindowsDriver.Sdv.targets`:
+
+- `sdv.exe` is **not** on PATH (full tree search under Windows Kits / VS BuildTools: absent).
+- Winget package `Microsoft.WindowsWDK.10.0.26100` is already installed (no update available).
+- Official stub in WDK targets: **"Static Driver Verifier (SDV) is no longer included in the
+  Windows Driver Kit and is no longer compatible with VS2022 and later. To use SDV, install an
+  older version of the EWDK."**
+- MSBuild `/t:sdv` on `ramshared.vcxproj` → MSB4057 (project does not import a live SDV pipeline).
+
+**SDV_CLAIM=NOT_CLAIMED** — not an install oversight on this machine; modern WDK/VS2022 retired the
+tool. Claiming PASS would require a dedicated older EWDK environment (out of Day-0 VS2022 lab).
+Evidence: `evidence/sdv-probe-20260717/`.
 
 ## Remaining promotion gates
 
 1. ~~Manufactured active-pagefile refusal~~ — unit + guest inject + **live Online+stop** PASS.
 2. Keep physical Online blocked by the lab-only policy; do not reinterpret guest proof as daily-host
-   authorization.
+   authorization. (win11-drill GPU-PV Online is already claimed; daily-host miniport is not.)
 3. ~~StartIo READ-copy race~~ — **claimed** on win11-drill under Verifier (see above).
-4. Run the isolated WSL2 freeze campaign before any freeze-elimination claim.
-   Scaffold: `scripts/safety/wsl2-freeze-campaign.sh` — dry-run baseline + gate refuse on
-   daily host; full 2× before→action→after only with `--allow-isolated-lab`,
-   `RAMSHARED_ISOLATED_LAB=1`, and `--run-isolated` (cgroup-bounded pressure + watchdog).
-   Static: `scripts/safety/Test-Wsl2FreezeCampaignStatic.sh`.
-5. SDV PASS — install Static Driver Verifier component for WDK 10.0.26100, re-run
-   `Invoke-SdvProbe.ps1` / MSBuild `/t:sdv`, record defects=0.
+4. Run the isolated **WSL2** freeze campaign before any freeze-elimination claim.
+   Scaffold: `scripts/safety/wsl2-freeze-campaign.sh`. This is **not** win11-drill (Windows Hyper-V
+   guest). The daily WSL2 host (`Ubuntu-24.04` + `/mnt/c/Users`) is correctly refused
+   (`daily_host_refused_without_isolated_lab_flag`). Full 2× before→action→after only with
+   `--allow-isolated-lab`, `RAMSHARED_ISOLATED_LAB=1`, and a non-daily host (or
+   `RAMSHARED_FORCE_ISOLATED_LAB=1` only on a true disposable WSL lab VM — never the daily box).
+5. SDV PASS — **blocked by Microsoft tool retirement on VS2022/WDK 26100**, not missing local
+   install. Optional future: older EWDK image dedicated to SDV only.
 
 The WSL2 freeze claim is **BLOCKED, not PASS**. Promotion requires a dedicated isolated
 before→action→after campaign with watchdog/timeout, swapoff-first, ghost/deleted-plus-used-kB checks,
