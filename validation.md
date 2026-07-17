@@ -2025,3 +2025,21 @@ powershell -ExecutionPolicy Bypass -File scripts/windows/Test-SdvProbeStatic.ps1
 **Verdict:** ✅ works (live pagefile Online refuse); 🟡 partial (SDV tool absent)
 **Next action:** Isolated freeze claim; install SDV; keep physical Online blocked
 **Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/pagefile-online-refuse-20260717-102614/, evidence/sdv-probe-20260717/
+
+## 2026-07-17 11:10 -03 — SDV retired on modern WDK (verified, still NOT_CLAIMED)
+
+**What:** Verified SDV cannot be claimed on this Day-0 lab: WDK 10.0.26100 already installed; sdv.exe absent; official WindowsDriver.Sdv.targets stub states SDV is no longer in WDK and incompatible with VS2022+. Freeze remain daily-host refused; physical Online still policy-blocked.
+**Category:** windows / sdv / isolation
+**How to measure:**
+```text
+powershell -ExecutionPolicy Bypass -File scripts/windows/Invoke-SdvProbe.ps1
+bash scripts/safety/wsl2-freeze-campaign.sh --check-gates
+```
+**Measured data:**
+- winget: Microsoft.WindowsWDK.10.0.26100 installed, no update
+- tree search: no sdv.exe under Windows Kits / VS BuildTools
+- targets text: "no longer included in the Windows Driver Kit" / "no longer compatible with VS2022"
+- freeze --check-gates: daily_host=1 gates_ok=0
+**Verdict:** 🟡 partial — SDV gap is tool retirement (not agent install skip); freeze/physical still env/policy
+**Next action:** Optional older EWDK for SDV only; true isolated WSL lab for freeze claim
+**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/sdv-probe-20260717/
