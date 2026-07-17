@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.6.3](https://github.com/emersonbusson/ramshared/compare/v0.6.2...v0.6.3) (2026-07-17)
+
+
+### Documentation
+
+* **ssdv3:** close SDV as N/A (DT-30) on VS2022/WDK 26100 ([73a4097](https://github.com/emersonbusson/ramshared/commit/73a4097e9617c047c8ab31b5e9204e2306943075))
+* **ssdv3:** close SDV as N/A (DT-30) on VS2022/WDK 26100 ([da6272f](https://github.com/emersonbusson/ramshared/commit/da6272f4edb64ae68261d4b11bb036d3ed2b9c84))
+* **windows:** record SDV retirement on modern WDK ([ab65e6e](https://github.com/emersonbusson/ramshared/commit/ab65e6e835d7c9201c7950ea509a3de8c38d270e))
+* **windows:** record SDV retirement on modern WDK ([8ad6d8d](https://github.com/emersonbusson/ramshared/commit/8ad6d8d71ce13579cf1d0c84d70974cbaafb64c8))
+
 ## [0.6.2](https://github.com/emersonbusson/ramshared/compare/v0.6.1...v0.6.2) (2026-07-17)
 
 
