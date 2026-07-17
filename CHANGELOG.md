@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.5.0](https://github.com/emersonbusson/ramshared/compare/v0.4.3...v0.5.0) (2026-07-17)
+
+
+### Features
+
+* **scripts:** guest product Online harness; 64MiB lab PARTIAL proof ([2f58477](https://github.com/emersonbusson/ramshared/commit/2f5847754a752d4520d9a06e6a19dbe33706bdbb))
+* **winsvc:** graceful stop, Gate A volume filter, guest IOCTL evidence ([440460a](https://github.com/emersonbusson/ramshared/commit/440460ae4a1c422c75904b7c135c0322b71ed407))
+* **winsvc:** implement storport CUDA VRAM product path (SSDV3 partial) ([b3801ac](https://github.com/emersonbusson/ramshared/commit/b3801acc931e016519fd8f104962401ff40c73dd))
+* **winsvc:** product Online CUDA path + live 3-round proof ([1817409](https://github.com/emersonbusson/ramshared/commit/181740918e289c29e3fffd6faf3aef1c5ab3e679))
+* **winsvc:** Windows driver/host adapters + live CUDA probe ([b5384cc](https://github.com/emersonbusson/ramshared/commit/b5384cce7006b021d820a7eb75d80cf9b9968274))
+
+
+### Bug Fixes
+
+* **docs:** normalize validation.md schema for CI gate ([68d9cc4](https://github.com/emersonbusson/ramshared/commit/68d9cc4b06105aab04dd02e50156ba65727998a0))
+* **mm:** empty LUN before CREATE for exact VPD identity ([1852b51](https://github.com/emersonbusson/ramshared/commit/1852b51af23e9fddf8cf855820a3f99210326950))
+* **windows:** close isolated GPU-PV storage gate ([f865c94](https://github.com/emersonbusson/ramshared/commit/f865c94c3d2e19d527e8fdfe9a7cfcf3746ede1e))
+* **windows:** close isolated GPU-PV storage gate ([4e4b3c8](https://github.com/emersonbusson/ramshared/commit/4e4b3c8c6faf57e7d91ad933142e95c2d0821bad))
+* **winsvc:** fail-closed teardown identity and product Online gates ([e8de695](https://github.com/emersonbusson/ramshared/commit/e8de695e4a16448bbccf0941401e7f6df858128c))
+* **winsvc:** FSCTL dismount teardown; careful lab drive letters ([acba7c6](https://github.com/emersonbusson/ramshared/commit/acba7c6c8a9543680fcb5801005e6910954052ae))
+* **winsvc:** graceful stop via I/O-pump volume lock ([661ed17](https://github.com/emersonbusson/ramshared/commit/661ed170a000564c248d9eb648edaca0ad8f8686))
+
+
+### Documentation
+
+* **mm:** physical Online skip; GPU-PV probe-cuda PASS; InfVerif BusType ([bcb77ed](https://github.com/emersonbusson/ramshared/commit/bcb77ed9061eac91b321086c427758d7d681004f))
+* **ssdv3:** align cascade-lifecycle SPEC to platform template ([47b2a24](https://github.com/emersonbusson/ramshared/commit/47b2a2424be76e40135f55962d666d1af81092f6))
+* **ssdv3:** record exact VPD Verifier PASS and closeout evidence ([c28a23c](https://github.com/emersonbusson/ramshared/commit/c28a23c68a74db66a8b9f03bce86132811b76cce))
+* **ssdv3:** tighten RamShared SSDV3 and Kahneman gates ([06922fb](https://github.com/emersonbusson/ramshared/commit/06922fbb14098358bdf13cf89ac00cb6b4150caa))
+* **winsvc:** add product Online SHA single-round log artifact ([4b5f33f](https://github.com/emersonbusson/ramshared/commit/4b5f33fc07aa41dee259e09280042f0f875448a7))
+* **winsvc:** commit CUDA probe evidence artifact ([31a9f27](https://github.com/emersonbusson/ramshared/commit/31a9f27bdf43f87b047b1ea5c827c681e5d24db2))
+* **winsvc:** record MSVC/probe/guest StorPort live evidence ([13b8aa7](https://github.com/emersonbusson/ramshared/commit/13b8aa74e19c89f63a69ab976f733251d5a02e24))
+
 ## [0.4.3](https://github.com/emersonbusson/ramshared/compare/v0.4.2...v0.4.3) (2026-07-14)
 
 
