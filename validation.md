@@ -1967,3 +1967,23 @@ powershell -ExecutionPolicy Bypass -File scripts/windows/Test-WinDriveIoctlValid
 **Verdict:** ✅ works — STARTIO_READ_COPY_RACE claimed under Verifier on isolated guest
 **Next action:** Physical Online (policy), SDV (tool), isolated WSL2 freeze campaign remain non-claims
 **Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/startio-claim-20260717.md, evidence/startio-probe-20260717-092819/, evidence/startio-verifier-20260717-092950/
+
+## 2026-07-17 09:50 -03 — WSL2 freeze campaign scaffold hardened (still NOT claimed)
+
+**What:** Expanded `scripts/safety/wsl2-freeze-campaign.sh` with baseline artifact capture, D-state/hung_task probes, and a full isolated-lab protocol skeleton (2× before→action→after, swap-sanitize, cgroup pressure, watchdog). Daily host still refuses thrash.
+**Category:** wsl2 / safety / freeze
+**How to measure:**
+```text
+bash scripts/safety/Test-Wsl2FreezeCampaignStatic.sh
+bash scripts/safety/wsl2-freeze-campaign.sh --dry-run --artifact-dir /tmp/freeze-art
+# isolated lab only (never daily host):
+# RAMSHARED_ISOLATED_LAB=1 ./scripts/safety/wsl2-freeze-campaign.sh --allow-isolated-lab --run-isolated
+```
+**Measured data:**
+- STATIC_WSL2_FREEZE_CAMPAIGN=PASS
+- Dry-run on daily host: gates_ok=0 reason=daily_host_refused_without_isolated_lab_flag; claim NOT_CLAIMED; baseline artifacts written
+- --run-isolated without isolated flags: exit non-zero (refuse)
+- SDV: sdv.exe still absent (only WDK Sdv.targets/headers)
+**Verdict:** 🟡 partial — scaffold ready for isolated lab; freeze-elimination still unclaimed; no thrash on daily host
+**Next action:** Run --run-isolated on a true isolated WSL/VM lab with RAMSHARED_ISOLATED_LAB=1; keep physical Online + SDV blocked
+**Artifacts:** docs/specs/no-milestone/wsl2-freeze/evidence/freeze-baseline-20260717-094842
