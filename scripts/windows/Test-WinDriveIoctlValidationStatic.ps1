@@ -34,11 +34,23 @@ $source = Get-Content -LiteralPath $ScriptPath -Raw
 $requiredImplementations = @(
     "Invoke-ReservedCqeInjection",
     "Invoke-CompletionReentryInjection",
-    "Invoke-RundownDuringCopyInjection"
+    "Invoke-RundownDuringCopyInjection",
+    "Invoke-StartIoReadCopyRaceInjection"
 )
 foreach ($name in $requiredImplementations) {
     if ($source -notmatch [regex]::Escape("function $name")) {
         throw "missing concurrent injector: $name"
+    }
+}
+$requiredStartIoTokens = @(
+    "StartQueuePump",
+    "PhysicalReadWithPump",
+    "DrainSqPublishCq",
+    "STARTIO_READ_COPY_RACE"
+)
+foreach ($token in $requiredStartIoTokens) {
+    if ($source -notmatch [regex]::Escape($token)) {
+        throw "StartIo READ-copy race harness missing token: $token"
     }
 }
 
@@ -49,7 +61,8 @@ if ($source -match "require concurrent I/O injectors") {
 $requiredVerdicts = @(
     "REFUSE_RESERVED_CQE",
     "COMPLETION_REENTRY_NO_SLOT_REUSE",
-    "RUNDOWN_UNMAP_AFTER_COPY"
+    "RUNDOWN_UNMAP_AFTER_COPY",
+    "STARTIO_READ_COPY_RACE"
 )
 foreach ($name in $requiredVerdicts) {
     if ($source -notmatch [regex]::Escape("`$verdict.$name = 1")) {
