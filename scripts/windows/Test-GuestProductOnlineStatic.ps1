@@ -27,8 +27,19 @@ foreach ($field in $requiredVerdictFields) {
 if ($text -match "preStopLockProbe" -or $text -match "Pre-stop exclusive lock probe") {
     throw "pre_stop_probe_is_absent: harness still mutates/locks before product stop"
 }
-if ($text -notmatch 'for \(\$campaignRound = 1; \$campaignRound -le 3; \$campaignRound\+\+\)') {
-    throw "three_fresh_rounds_are_required: one Online session is not three lifecycle rounds"
+# Default product Online is three fresh lifecycle rounds. Manufactured pagefile
+# refuse may use a single round via \$lifecycleRounds override only.
+if ($text -notmatch '\$lifecycleRounds = 3') {
+    throw "three_fresh_rounds_are_required: default lifecycleRounds must be 3"
+}
+if ($text -notmatch 'for \(\$campaignRound = 1; \$campaignRound -le \$lifecycleRounds; \$campaignRound\+\+\)') {
+    throw "three_fresh_rounds_are_required: campaign loop must iterate lifecycleRounds"
+}
+if ($text -notmatch 'ManufacturedPagefileRefuse') {
+    throw "manufactured_pagefile_refuse: harness missing ManufacturedPagefileRefuse switch"
+}
+if ($text -notmatch 'PAGEFILE_REFUSE_PASS') {
+    throw "manufactured_pagefile_refuse: summary missing PAGEFILE_REFUSE_PASS"
 }
 if ($text -notmatch 'if \(-not \$summary\.PASS\)') {
     throw "verdict_requires_complete_graceful_stop: exit gate does not consume complete PASS"

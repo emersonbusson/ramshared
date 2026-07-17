@@ -2006,3 +2006,22 @@ powershell -ExecutionPolicy Bypass -File scripts/windows/Test-PagefileRefusalMan
 **Verdict:** ✅ works (decision path + guest inject); optional live Online+stop inject remains available
 **Next action:** Physical Online (policy), SDV (no sdv.exe), freeze claim (isolated lab)
 **Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/pagefile-refusal-20260717-095826/
+
+## 2026-07-17 10:31 -03 — Live pagefile Online+stop refuse + SDV probe NOT_CLAIMED
+
+**What:** Live Gate A refuse on win11-drill product Online (`-ManufacturedPagefileRefuse`): configured `S:\pagefile.sys` causes code 7 resume Online, then clean stop. SDV probe documents tool absence (MSB4057 / no sdv.exe).
+**Category:** windows / pagefile / e2e / sdv
+**How to measure:**
+```text
+# elevated lab:
+# Run-GuestProductOnline.ps1 -ManufacturedPagefileRefuse
+powershell -ExecutionPolicy Bypass -File scripts/windows/Invoke-SdvProbe.ps1
+powershell -ExecutionPolicy Bypass -File scripts/windows/Test-SdvProbeStatic.ps1
+```
+**Measured data:**
+- Live: pagefileRefusePass=true diagHit=gate_a_active S:\pagefile.sys; stillOnline; clean stop exit 0; lease liberado; cudaRestored; noNewDump; BINARY_MATCH 97FD7B37…
+- Host summary initially false-negative (expected 3 DT-13 rounds); corrected single-round PASS for refuse campaign
+- SDV: SDV_CLAIM=NOT_CLAIMED reasons=sdv.exe_not_on_path,msbuild_target_sdv_missing
+**Verdict:** ✅ works (live pagefile Online refuse); 🟡 partial (SDV tool absent)
+**Next action:** Isolated freeze claim; install SDV; keep physical Online blocked
+**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/pagefile-online-refuse-20260717-102614/, evidence/sdv-probe-20260717/
