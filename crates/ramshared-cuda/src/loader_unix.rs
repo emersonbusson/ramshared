@@ -52,3 +52,31 @@ pub fn error() -> String {
             .into_owned()
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+
+    #[test]
+    fn test_error_formatting() {
+        // Clear any preexisting errors
+        let _ = error();
+
+        let bogus_lib = CString::new("this_library_does_not_exist_12345.so").unwrap();
+        let handle = unsafe { open(bogus_lib.as_ptr()) };
+        assert!(handle.is_null(), "Opening a non-existent library should fail");
+
+        // The first call to error() should return the dlerror message
+        let err_msg = error();
+        assert!(!err_msg.is_empty());
+        assert_ne!(err_msg, "unknown dlopen error");
+        assert!(
+            err_msg.contains("this_library_does_not_exist_12345.so"),
+            "Error message should mention the failing library, got: {}", err_msg
+        );
+
+        // The second call to error() should return the fallback string because dlerror clears the error
+        let err_msg2 = error();
+        assert_eq!(err_msg2, "unknown dlopen error");
+    }
+}
