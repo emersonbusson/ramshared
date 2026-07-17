@@ -523,46 +523,46 @@ pub fn run_product_online(
         let lock_res = loop {
             match rx.try_recv() {
                 Ok(r) => break r,
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    if lock_wait_decision(
-                        teardown_started.elapsed(),
-                        Duration::from_secs(30),
-                        false,
-                    ) == LockWaitDecision::EnterFailedSafe
-                    {
-                        state.healthy = false;
-                        state.phase = RuntimePhase::FailedSafe;
-                        row.error_class = Some("teardown_timeout".into());
-                        row.error_code = Some("30s".into());
-                        sync_runtime_evidence(&mut row, &state);
-                        let _ = evidence.append(&row);
-                        teardown_diag(
-                            "FailedSafe: volume lock exceeded 30,000 ms; retaining I/O pump",
-                        );
-                        preserve_failed_safe_with_io(
-                            "volume lock worker remains in flight",
-                            &mut link,
-                            &mut dlink,
-                            &mut backend,
-                            &mut tenant,
-                            &mut stream,
-                            rx,
-                        );
-                    }
-                    match link.commit_and_fetch(Duration::from_millis(50)) {
-                        Ok(()) => {
-                            let _ = dlink.commit_and_fetch(&mut backend);
-                        }
-                        Err(crate::windows_driver::IoctlError::Timeout) => {}
-                        Err(e) => {
-                            teardown_diag(&format!("I/O pump during lock: {e}"));
-                        }
-                    }
-                }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     break Err(crate::windows_host::HostError::Volume(
                         "lock worker disconnected".into(),
                     ));
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+
+            if lock_wait_decision(
+                teardown_started.elapsed(),
+                Duration::from_secs(30),
+                false,
+            ) == LockWaitDecision::EnterFailedSafe
+            {
+                state.healthy = false;
+                state.phase = RuntimePhase::FailedSafe;
+                row.error_class = Some("teardown_timeout".into());
+                row.error_code = Some("30s".into());
+                sync_runtime_evidence(&mut row, &state);
+                let _ = evidence.append(&row);
+                teardown_diag(
+                    "FailedSafe: volume lock exceeded 30,000 ms; retaining I/O pump",
+                );
+                preserve_failed_safe_with_io(
+                    "volume lock worker remains in flight",
+                    &mut link,
+                    &mut dlink,
+                    &mut backend,
+                    &mut tenant,
+                    &mut stream,
+                    rx,
+                );
+            }
+            match link.commit_and_fetch(Duration::from_millis(50)) {
+                Ok(()) => {
+                    let _ = dlink.commit_and_fetch(&mut backend);
+                }
+                Err(crate::windows_driver::IoctlError::Timeout) => {}
+                Err(e) => {
+                    teardown_diag(&format!("I/O pump during lock: {e}"));
                 }
             }
         };
