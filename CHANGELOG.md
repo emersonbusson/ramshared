@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2](https://github.com/emersonbusson/ramshared/compare/v0.6.1...v0.6.2) (2026-07-17)
+
+
+### Bug Fixes
+
+* **windows:** claim StartIo READ-copy race under Verifier ([4ffd0e9](https://github.com/emersonbusson/ramshared/commit/4ffd0e95fb98fc0d0e140d466525a3616f9dfe29))
+* **windows:** claim StartIo READ-copy race under Verifier ([4cc459e](https://github.com/emersonbusson/ramshared/commit/4cc459edbd8dd70db463dd49b984d3e513c61c3d))
+
 ## [0.6.1](https://github.com/emersonbusson/ramshared/compare/v0.6.0...v0.6.1) (2026-07-17)
 
 
