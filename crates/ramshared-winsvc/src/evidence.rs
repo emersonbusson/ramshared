@@ -384,7 +384,11 @@ mod tests {
 
     #[test]
     fn read_all_rows_missing_file_yields_not_found() {
-        let dir = std::env::temp_dir().join(format!("ramshared-ev-missing-{}-{}", std::process::id(), utc_ms()));
+        let dir = std::env::temp_dir().join(format!(
+            "ramshared-ev-missing-{}-{}",
+            std::process::id(),
+            utc_ms()
+        ));
         let path = dir.join("does_not_exist.jsonl");
         let result = read_all_rows(&path);
         assert!(result.is_err());
@@ -393,7 +397,11 @@ mod tests {
 
     #[test]
     fn read_all_rows_ignores_empty_lines() {
-        let dir = std::env::temp_dir().join(format!("ramshared-ev-empty-{}-{}", std::process::id(), utc_ms()));
+        let dir = std::env::temp_dir().join(format!(
+            "ramshared-ev-empty-{}-{}",
+            std::process::id(),
+            utc_ms()
+        ));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("empty.jsonl");
         {
@@ -414,7 +422,11 @@ mod tests {
 
     #[test]
     fn read_all_rows_invalid_json_yields_invalid_data() {
-        let dir = std::env::temp_dir().join(format!("ramshared-ev-invalid-{}-{}", std::process::id(), utc_ms()));
+        let dir = std::env::temp_dir().join(format!(
+            "ramshared-ev-invalid-{}-{}",
+            std::process::id(),
+            utc_ms()
+        ));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("invalid.jsonl");
         {
