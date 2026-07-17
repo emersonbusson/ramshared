@@ -56,6 +56,24 @@ fn run(cmd: &str, args: &[String]) -> Result<()> {
     }
 }
 
+pub fn attach_swap_with<F>(
+    endpoint: &NbdEndpoint,
+    export: &str,
+    dev: &str,
+    prio: Option<i32>,
+    mut run_cmd: F,
+) -> std::result::Result<(), String>
+where
+    F: FnMut(&str, &[String]) -> Result<()>,
+{
+    run_cmd("nbd-client", &nbd_args(endpoint, export, dev))
+        .map_err(|e| format!("nbd-client: {e}"))?;
+    // DT-16: exported VRAM returns dirty/zeroed; the swap header needs to be rewritten.
+    run_cmd("mkswap", &[dev.to_string()]).map_err(|e| format!("mkswap: {e}"))?;
+    run_cmd("swapon", &swapon_args(dev, prio)).map_err(|e| format!("swapon: {e}"))?;
+    Ok(())
+}
+
 /// Full attach sequence (DT-16): `nbd-client` → `mkswap` → `swapon`. On failure,
 /// returns the message for the agent to report via `SwapOnDone{ok:false,detail}`.
 pub fn attach_swap(
@@ -64,19 +82,22 @@ pub fn attach_swap(
     dev: &str,
     prio: Option<i32>,
 ) -> std::result::Result<(), String> {
-    run("nbd-client", &nbd_args(endpoint, export, dev)).map_err(|e| format!("nbd-client: {e}"))?;
-    // DT-16: exported VRAM returns dirty/zeroed; the swap header needs to be rewritten.
-    run("mkswap", &[dev.to_string()]).map_err(|e| format!("mkswap: {e}"))?;
-    run("swapon", &swapon_args(dev, prio)).map_err(|e| format!("swapon: {e}"))?;
+    attach_swap_with(endpoint, export, dev, prio, run)
+}
+
+pub fn detach_swap_with<F>(dev: &str, mut run_cmd: F) -> std::result::Result<(), String>
+where
+    F: FnMut(&str, &[String]) -> Result<()>,
+{
+    run_cmd("swapoff", &[dev.to_string()]).map_err(|e| format!("swapoff: {e}"))?;
+    let _ = run_cmd("nbd-client", &["-d".to_string(), dev.to_string()]);
     Ok(())
 }
 
 /// Detach sequence: `swapoff` → `nbd-client -d`. Best-effort on disconnect (the device might
 /// have already fallen); what matters for integrity is that `swapoff` exited successfully.
 pub fn detach_swap(dev: &str) -> std::result::Result<(), String> {
-    run("swapoff", &[dev.to_string()]).map_err(|e| format!("swapoff: {e}"))?;
-    let _ = run("nbd-client", &["-d".to_string(), dev.to_string()]);
-    Ok(())
+    detach_swap_with(dev, run)
 }
 
 #[cfg(test)]
@@ -134,5 +155,67 @@ mod tests {
             vec!["-p", "-5", "/dev/nbd0"]
         );
         assert_eq!(swapon_args("/dev/nbd0", None), vec!["/dev/nbd0"]);
+    }
+
+    #[test]
+    fn attach_swap_with_nbd_client_fails() {
+        let ep = NbdEndpoint::Unix {
+            path: "/sock".into(),
+        };
+        let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |cmd, _| {
+            if cmd == "nbd-client" {
+                Err(Error::other("mock error"))
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(res, Err("nbd-client: mock error".into()));
+    }
+
+    #[test]
+    fn attach_swap_with_mkswap_fails() {
+        let ep = NbdEndpoint::Unix {
+            path: "/sock".into(),
+        };
+        let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |cmd, _| {
+            if cmd == "mkswap" {
+                Err(Error::other("mock error"))
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(res, Err("mkswap: mock error".into()));
+    }
+
+    #[test]
+    fn attach_swap_with_swapon_fails() {
+        let ep = NbdEndpoint::Unix {
+            path: "/sock".into(),
+        };
+        let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |cmd, _| {
+            if cmd == "swapon" {
+                Err(Error::other("mock error"))
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(res, Err("swapon: mock error".into()));
+    }
+
+    #[test]
+    fn attach_swap_with_success() {
+        let ep = NbdEndpoint::Unix {
+            path: "/sock".into(),
+        };
+        let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |_, _| Ok(()));
+        assert_eq!(res, Ok(()));
+    }
+
+    #[test]
+    fn detach_swap_error_path() {
+        let res = detach_swap("/dev/invalid_device_for_test");
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.starts_with("swapoff: "));
     }
 }

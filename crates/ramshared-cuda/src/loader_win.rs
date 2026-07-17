@@ -66,3 +66,23 @@ pub fn error() -> String {
     let code = unsafe { GetLastError() };
     format!("Windows error code: 0x{code:08X}")
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use windows_sys::Win32::Foundation::SetLastError;
+
+    #[test]
+    fn test_error_formatting() {
+        unsafe { SetLastError(0x00000005) };
+        assert_eq!(error(), "Windows error code: 0x00000005");
+
+        unsafe { SetLastError(0xC0000005) };
+        assert_eq!(error(), "Windows error code: 0xC0000005");
+
+        unsafe { SetLastError(0) };
+        assert_eq!(error(), "Windows error code: 0x00000000");
+    }
+}
