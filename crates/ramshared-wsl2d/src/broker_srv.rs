@@ -573,6 +573,12 @@ impl BrokerCore {
     }
 
     fn on_tick(&mut self, now: Instant, out: &mut Vec<Outbound>) {
+        self.tick_arbiter(now, out);
+        self.retry_stuck_zeroing(out);
+        self.emit_telemetry(out);
+    }
+
+    fn tick_arbiter(&mut self, now: Instant, out: &mut Vec<Outbound>) {
         // DT-20: only present tenants; only Free slices or slices with a present owner.
         // WinDrive / lease-only transports are excluded from swap round-robin (DT-7).
         let present: Vec<TenantView> = self
@@ -667,7 +673,9 @@ impl BrokerCore {
                 }
             }
         }
+    }
 
+    fn retry_stuck_zeroing(&mut self, out: &mut Vec<Outbound>) {
         // R4: retries zeroing of stuck slices (if `try_send(ZeroExport)` failed, `ZeroDone` doesn't arrive).
         // Grace period of 1 tick for zero in flight; above that, re-emits; ERROR after N
         // ticks without confirmation. Only touches slices in `pending_zero` (already swapped-off; safe to re-zero).
@@ -692,8 +700,6 @@ impl BrokerCore {
                 out.push(Outbound::ZeroSlice { slice, base, len });
             }
         }
-
-        self.emit_telemetry(out);
     }
 
     /// Reconciliation per tick (RF-4/RF-5): occupancy invariant + hysteresis (DT-12) → emits

@@ -402,9 +402,8 @@ impl<Q: QueueAccess> DriverLink<Q> {
             _ => return ST_EINVAL,
         }
         if sqe.op != OP_FLUSH {
-            let end = match sqe.offset.checked_add(sqe.len as u64) {
-                Some(e) => e,
-                None => return ST_EINVAL,
+            let Some(end) = sqe.offset.checked_add(sqe.len as u64) else {
+                return ST_EINVAL;
             };
             if end > backend.size_bytes() {
                 return ST_EINVAL;
@@ -413,29 +412,30 @@ impl<Q: QueueAccess> DriverLink<Q> {
         match sqe.op {
             OP_READ => {
                 let mut buf = vec![0u8; sqe.len as usize];
-                match backend.read_at(sqe.offset, &mut buf) {
-                    Ok(()) => match self.q.write_slot_from(sqe.buf_slot, &buf) {
-                        Ok(()) => ST_OK,
-                        Err(_) => ST_EINVAL,
-                    },
-                    Err(_) => ST_EIO,
+                if backend.read_at(sqe.offset, &mut buf).is_err() {
+                    return ST_EIO;
                 }
+                if self.q.write_slot_from(sqe.buf_slot, &buf).is_err() {
+                    return ST_EINVAL;
+                }
+                ST_OK
             }
             OP_WRITE => {
-                let data = match self.q.read_slot_owned(sqe.buf_slot, sqe.len) {
-                    Ok(d) => d,
-                    Err(_) => return ST_EINVAL,
+                let Ok(data) = self.q.read_slot_owned(sqe.buf_slot, sqe.len) else {
+                    return ST_EINVAL;
                 };
                 self.backend_writes += 1;
-                match backend.write_at(sqe.offset, &data) {
-                    Ok(()) => ST_OK,
-                    Err(_) => ST_EIO,
+                if backend.write_at(sqe.offset, &data).is_err() {
+                    return ST_EIO;
                 }
+                ST_OK
             }
-            OP_FLUSH => match backend.flush() {
-                Ok(()) => ST_OK,
-                Err(_) => ST_EIO,
-            },
+            OP_FLUSH => {
+                if backend.flush().is_err() {
+                    return ST_EIO;
+                }
+                ST_OK
+            }
             _ => ST_EINVAL,
         }
     }
