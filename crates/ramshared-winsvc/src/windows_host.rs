@@ -586,16 +586,29 @@ impl WindowsHostState {
         if text.is_empty() || text == "null" {
             return Ok(None);
         }
-        // Minimal parse without full JSON dependency path for optional fields.
-        let number = extract_json_u64(&text, "Number").unwrap_or(0) as u32;
-        let size = extract_json_u64(&text, "Size").unwrap_or(0);
-        let sn = extract_json_string(&text, "SerialNumber").unwrap_or_default();
+
+        #[derive(serde::Deserialize)]
+        struct DiskInfo {
+            #[serde(rename = "Number")]
+            number: Option<u32>,
+            #[serde(rename = "Size")]
+            size: Option<u64>,
+            #[serde(rename = "SerialNumber")]
+            serial_number: Option<String>,
+        }
+
+        let info = serde_json::from_str::<DiskInfo>(&text).unwrap_or(DiskInfo {
+            number: None,
+            size: None,
+            serial_number: None,
+        });
+
         let lun = LunIdentity {
             vendor: LunIdentity::VENDOR.into(),
             product: LunIdentity::PRODUCT.into(),
-            serial: sn,
-            size_bytes: size,
-            disk_number: number,
+            serial: info.serial_number.unwrap_or_default().trim().to_string(),
+            size_bytes: info.size.unwrap_or(0),
+            disk_number: info.number.unwrap_or(0),
         };
         if lun.matches_expected(serial, size_bytes) {
             Ok(Some(lun))
@@ -835,21 +848,6 @@ fn sha256_hex(data: &[u8]) -> Result<String, String> {
     }
 }
 
-fn extract_json_u64(json: &str, key: &str) -> Option<u64> {
-    let pat = format!("\"{key}\":");
-    let i = json.find(&pat)?;
-    let rest = json[i + pat.len()..].trim_start();
-    let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    num.parse().ok()
-}
-
-fn extract_json_string(json: &str, key: &str) -> Option<String> {
-    let pat = format!("\"{key}\":\"");
-    let i = json.find(&pat)?;
-    let rest = &json[i + pat.len()..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
-}
 
 fn parse_configured_pagefile_entry(entry: &str) -> Result<String, String> {
     let entry = entry.trim();
