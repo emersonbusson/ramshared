@@ -14,22 +14,22 @@ use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{CloseHandle, FALSE, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Security::Cryptography::{
-    BCRYPT_ALG_HANDLE, BCRYPT_HASH_HANDLE, BCRYPT_SHA256_ALGORITHM, BCryptCloseAlgorithmProvider,
-    BCryptCreateHash, BCryptDestroyHash, BCryptFinishHash, BCryptHashData,
-    BCryptOpenAlgorithmProvider,
+    BCryptCloseAlgorithmProvider, BCryptCreateHash, BCryptDestroyHash, BCryptFinishHash,
+    BCryptHashData, BCryptOpenAlgorithmProvider, BCRYPT_ALG_HANDLE, BCRYPT_HASH_HANDLE,
+    BCRYPT_SHA256_ALGORITHM,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+    GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_SHARE_READ, GetFileAttributesW, OPEN_EXISTING, ReadFile,
+    CreateFileW, GetFileAttributesW, ReadFile, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, OPEN_EXISTING,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
-use crate::config::{ConfigError, MAX_CONFIG_BYTES, WinDriveConfig};
+use crate::config::{ConfigError, WinDriveConfig, MAX_CONFIG_BYTES};
 use crate::host_safety::merge_pagefile_sources;
-use crate::service::{ObservedVolumeIdentity, parse_product_friendly_name};
+use crate::service::{parse_product_friendly_name, ObservedVolumeIdentity};
 
 /// Host-side errors (no kernel addresses).
 #[derive(Debug)]
@@ -258,8 +258,8 @@ impl WindowsHostState {
     fn configured_pagefiles_registry() -> Result<Vec<PagefileIdentity>, HostError> {
         use std::os::windows::ffi::OsStringExt;
         use windows_sys::Win32::System::Registry::{
-            HKEY_LOCAL_MACHINE, KEY_READ, REG_MULTI_SZ, RegCloseKey, RegOpenKeyExW,
-            RegQueryValueExW,
+            RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY_LOCAL_MACHINE, KEY_READ,
+            REG_MULTI_SZ,
         };
 
         let subkey = to_wide(r"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management");
@@ -613,21 +613,38 @@ impl WindowsHostState {
     }
 
     pub fn emit_event(summary: &str) -> Result<(), HostError> {
-        // Lifecycle summary only — no payloads. Best-effort Event Log via PowerShell.
+        use std::ptr;
+        use windows_sys::Win32::System::EventLog::{
+            DeregisterEventSource, RegisterEventSourceW, ReportEventW, EVENTLOG_INFORMATION_TYPE,
+        };
+
+        // Lifecycle summary only — no payloads. Best-effort Event Log via Windows API.
         let safe: String = summary
             .chars()
             .filter(|c| c.is_ascii() && !c.is_control())
             .take(200)
             .collect();
-        let _ = std::process::Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-Command",
-                &format!(
-                    "try {{ Write-EventLog -LogName Application -Source Application -EntryType Information -EventId 1000 -Message 'RamShared: {safe}' }} catch {{ }}"
-                ),
-            ])
-            .status();
+        let msg = format!("RamShared: {}", safe);
+        let source_wide = to_wide("Application");
+        let msg_wide = to_wide(&msg);
+        unsafe {
+            let handle = RegisterEventSourceW(ptr::null(), source_wide.as_ptr());
+            if handle != 0 {
+                let strings = [msg_wide.as_ptr()];
+                ReportEventW(
+                    handle,
+                    EVENTLOG_INFORMATION_TYPE,
+                    0,
+                    1000,
+                    ptr::null_mut(),
+                    1,
+                    0,
+                    strings.as_ptr(),
+                    ptr::null(),
+                );
+                DeregisterEventSource(handle);
+            }
+        }
         Ok(())
     }
 }
