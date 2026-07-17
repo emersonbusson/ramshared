@@ -229,6 +229,18 @@ the current package proof is `224913`. Evidence:
 `evidence/wdk-build-audit-20260716T171026Z.md`,
 `evidence/vpd-lifecycle-package-20260716-111336.json`, and `evidence/ioctl-guest-*-vpd-pass*`.
 
+
+### StartIo READ-copy race (2026-07-17 update)
+
+Harness is hang-safe: requires `Get-Disk` (MSFT_Disk) before any
+`\\.\PhysicalDriveN` CreateFile. Live campaigns
+`guest-exhaustive-20260717-024546` (SkipVerifier) and
+`guest-exhaustive-20260717-025401` (Verifier) keep ITEM-3 **PASS** with
+`STARTIO_READ_COPY_RACE=0` and explicit SKIP:
+`no Get-Disk for idx=N (Win32-only LUN; avoid CreateFile hang)`.
+Claim still requires a surface where Get-Disk Online works and SQEs advance
+under Verifier (product Online path or post-format LUN).
+
 ## Remaining promotion gates
 
 1. Optional: add a manufactured active-pagefile refusal campaign for the corrected product path.

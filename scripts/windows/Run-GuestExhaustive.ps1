@@ -479,7 +479,8 @@ if (-not $loadReadyObject.running -or -not $loadReadyObject.binaryMatch -or -not
     throw ("RamShared PnP gate failed before IOCTL pass1: " + $loadReady)
 }
 
-$ioctl1 = Invoke-GuestBounded -TimeoutSec 300 -ScriptBlock {
+# Budget 420s: VPD poll (~25s) + StartIo race (~15s) + concurrent injectors.
+$ioctl1 = Invoke-GuestBounded -TimeoutSec 420 -ScriptBlock {
     $ErrorActionPreference = "Continue"
     New-Item -Force -ItemType Directory C:\ramshared\artifacts\ioctl-validation | Out-Null
     $log = "C:\ramshared\artifacts\ioctl-validation\live-console.txt"
@@ -688,7 +689,7 @@ public static class RamSharedRootEnum {
         throw ("RamShared PnP gate failed before IOCTL verifier pass: " + $load2)
     }
 
-    $ioctl2 = Invoke-GuestBounded -TimeoutSec 300 -ScriptBlock {
+    $ioctl2 = Invoke-GuestBounded -TimeoutSec 420 -ScriptBlock {
         $ErrorActionPreference = "Continue"
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
             C:\ramshared\bin\Invoke-WinDriveIoctlValidation.ps1 `

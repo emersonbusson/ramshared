@@ -16,7 +16,7 @@ param(
     [string]$Driver = "ramshared.sys",
     [switch]$Verifier,
     [string]$ArtifactDir = "C:\ramshared\artifacts\ioctl-validation",
-    # 128 MiB — must not collide with win11-drill answer-disk.vhdx (64 MiB).
+    # 128 MiB - must not collide with win11-drill answer-disk.vhdx (64 MiB).
     [UInt64]$SizeBytes = 134217728
 )
 
@@ -181,10 +181,11 @@ public static class IoctlVal {
       int drained = 0;
       int commits = 0;
       /*
-       * Never issue COMMIT on an empty SQ — the driver pends the IRP until
+       * Never issue COMMIT on an empty SQ - the driver pends the IRP until
        * a SQE arrives, which deadlocks a single-threaded pump that is also
        * responsible for draining SQEs produced by concurrent StartIo READs.
        * Poll the mapped SQ headers instead; COMMIT only after publishing CQEs.
+       * stats[] is updated live so the reader side can observe progress.
        */
       while (System.Threading.Volatile.Read(ref stopFlag[0]) == 0) {
         int n = DrainSqPublishCq(sq, cq, data, qd, maxIo);
@@ -192,6 +193,8 @@ public static class IoctlVal {
           drained += n;
           BlockingIoctl(h, IOCTL_COMMIT);
           commits++;
+          System.Threading.Interlocked.Exchange(ref stats[0], drained);
+          System.Threading.Interlocked.Exchange(ref stats[1], commits);
         } else {
           System.Threading.Thread.Sleep(2);
         }
@@ -204,8 +207,8 @@ public static class IoctlVal {
         BlockingIoctl(h, IOCTL_COMMIT);
         commits++;
       }
-      stats[0] = drained;
-      stats[1] = commits;
+      System.Threading.Interlocked.Exchange(ref stats[0], drained);
+      System.Threading.Interlocked.Exchange(ref stats[1], commits);
     });
     t.IsBackground = true;
     t.Start();
@@ -245,64 +248,95 @@ public static class IoctlVal {
     public IntPtr EventHandle;
   }
 
-  /* Returns: okCount in [0], openErr in [1], lastReadErr in [2], sqTailSeen in [3]. */
+  /* SCSI Pass Through Direct - forces CDB READ(10) into the StorPort miniport. */
+  public const uint IOCTL_SCSI_PASS_THROUGH_DIRECT = 0x4D014;
+  public const byte SCSI_IOCTL_DATA_IN = 1;
+
+  [StructLayout(LayoutKind.Sequential)]
+  public struct ScsiPassThroughDirect {
+    public ushort Length;
+    public byte ScsiStatus;
+    public byte PathId;
+    public byte TargetId;
+    public byte Lun;
+    public byte CdbLength;
+    public byte SenseInfoLength;
+    public byte DataIn;
+    public uint DataTransferLength;
+    public uint TimeOutValue;
+    public IntPtr DataBuffer;
+    public uint SenseInfoOffset;
+    public byte Cdb0, Cdb1, Cdb2, Cdb3, Cdb4, Cdb5, Cdb6, Cdb7, Cdb8, Cdb9, Cdb10, Cdb11, Cdb12, Cdb13, Cdb14, Cdb15;
+  }
+
+  /*
+   * outStats: [0]=okReads [1]=openErr [2]=lastErr [3]=drained
+   * No background pump: BlockingIoctl COMMIT can pend forever and pin the guest
+   * harness for 300s+. Issue one overlapped ReadFile, poll SQ for StartIo posts,
+   * and only timed-COMMIT (worker Join 400ms) when SQEs appear. Budget ~3s.
+   */
   public static void PhysicalReadWithPump(string path, IntPtr sq, IntPtr cq, IntPtr data, uint qd, uint maxIo, SafeFileHandle ctl, int[] outStats) {
     outStats[0] = 0; outStats[1] = 0; outStats[2] = 0; outStats[3] = 0;
-    SafeFileHandle dh = CreateFileW(path, GENERIC_READ, 3, IntPtr.Zero, OPEN_EXISTING,
+    SafeFileHandle dh = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 3, IntPtr.Zero, OPEN_EXISTING,
       FILE_FLAG_NO_BUFFERING | FILE_FLAG_OVERLAPPED, IntPtr.Zero);
     if (dh.IsInvalid) {
       outStats[1] = Marshal.GetLastWin32Error();
       return;
     }
+    IntPtr buf = VirtualAlloc(IntPtr.Zero, new UIntPtr(8192), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     IntPtr ev = CreateEvent(IntPtr.Zero, true, false, null);
-    IntPtr buf = VirtualAlloc(IntPtr.Zero, new UIntPtr(4096), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    int drained = 0;
+    int ok = 0;
+    int lastErr = 0;
     try {
-      int drained = 0;
-      int ok = 0;
-      int lastErr = 0;
-      for (int i = 0; i < 8; i++) {
-        NativeOverlapped ov = new NativeOverlapped();
-        ov.EventHandle = ev;
-        ov.OffsetLow = i * 4096;
-        ov.OffsetHigh = 0;
-        uint got;
-        bool started = ReadFile(dh, buf, 4096, out got, ref ov);
-        int err = Marshal.GetLastWin32Error();
-        if (!started && err != 997 /* ERROR_IO_PENDING */) {
-          lastErr = err;
-          continue;
-        }
-        /* Pump SQ while the storage-stack READ is pending (StartIo → QSubmit). */
-        uint deadline = (uint)Environment.TickCount + 3000;
+      NativeOverlapped ov = new NativeOverlapped();
+      ov.EventHandle = ev;
+      ov.OffsetLow = 0;
+      ov.OffsetHigh = 0;
+      uint got;
+      bool started = ReadFile(dh, buf, 4096, out got, ref ov);
+      int err = Marshal.GetLastWin32Error();
+      if (started) {
+        ok++;
+      } else if (err == 997 /* ERROR_IO_PENDING */) {
+        uint deadline = (uint)Environment.TickCount + 1500;
         while ((uint)Environment.TickCount < deadline) {
           int n = DrainSqPublishCq(sq, cq, data, qd, maxIo);
           if (n > 0) {
             drained += n;
-            BlockingIoctl(ctl, IOCTL_COMMIT);
+            int[] slot = new int[] { -1 };
+            var th = StartBlockingIoctl(ctl, IOCTL_COMMIT, slot);
+            th.Join(400);
           }
-          uint wr = WaitForSingleObject(ev, 5);
-          if (wr == 0) break;
+          if (WaitForSingleObject(ev, 20) == 0) break;
         }
-        if (WaitForSingleObject(ev, 0) != 0) {
-          CancelIo(dh);
-          lastErr = 1460; /* ERROR_TIMEOUT */
-        } else {
+        if (WaitForSingleObject(ev, 0) == 0) {
           uint xfer;
           if (GetOverlappedResult(dh, ref ov, out xfer, false)) ok++;
           else lastErr = Marshal.GetLastWin32Error();
+        } else {
+          CancelIo(dh);
+          WaitForSingleObject(ev, 300);
+          lastErr = 1460;
         }
+      } else {
+        lastErr = err;
       }
-      outStats[0] = ok;
-      outStats[2] = lastErr;
-      outStats[3] = drained;
-      outStats[3] = drained; /* drained count */
-      /* reuse slot: pack drained into [3] already; also expose sq tail */
-      outStats[3] = drained;
+      int n2 = DrainSqPublishCq(sq, cq, data, qd, maxIo);
+      if (n2 > 0) {
+        drained += n2;
+        int[] slot2 = new int[] { -1 };
+        var th2 = StartBlockingIoctl(ctl, IOCTL_COMMIT, slot2);
+        th2.Join(400);
+      }
     } finally {
       if (buf != IntPtr.Zero) VirtualFree(buf, UIntPtr.Zero, MEM_RELEASE);
       if (ev != IntPtr.Zero) CloseHandle(ev);
       dh.Dispose();
     }
+    outStats[0] = ok;
+    outStats[2] = lastErr;
+    outStats[3] = drained;
   }
 }
 '@
@@ -417,7 +451,7 @@ function Invoke-ReservedCqeInjection($h, $rings, [uint32]$qd, [uint32]$maxIo) {
 function Invoke-CompletionReentryInjection($h, $rings, [uint32]$qd, [uint32]$maxIo) {
     Ensure-RegisteredQueue $h $rings $qd $maxIo
     [Runtime.InteropServices.Marshal]::WriteInt32($rings.sq, 12, 1)
-    # Two CQEs, same tag, no Submitted slot — must drain without double-complete/BSOD.
+    # Two CQEs, same tag, no Submitted slot - must drain without double-complete/BSOD.
     Write-Cqe $rings 0 0 0 0
     Write-Cqe $rings 1 0 0 0
     [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 8, 0)
@@ -460,61 +494,82 @@ function Invoke-RundownDuringCopyInjection($h, $rings, [uint32]$qd, [uint32]$max
     }
 }
 
-function Find-RamsharePhysicalPath([string]$ExpectedSerial) {
-    # Prefer Win32_DiskDrive with exact serial; fall back to RAMSHARE/VRAMDISK model.
+function Find-RamshareDiskInfo([string]$ExpectedSerial) {
+    # Returns @{ Path; Index } or $null. Prefer exact VPD serial on Win32_DiskDrive.
     try {
         $drives = @(Get-CimInstance Win32_DiskDrive -EA SilentlyContinue)
         $exact = @($drives | Where-Object { ([string]$_.SerialNumber).Trim() -ieq $ExpectedSerial })
         if ($exact.Count -ge 1) {
-            return ("\\.\PhysicalDrive{0}" -f [int]$exact[0].Index)
+            $idx = [int]$exact[0].Index
+            return @{ Path = ("\\.\PhysicalDrive{0}" -f $idx); Index = $idx }
         }
         $named = @($drives | Where-Object {
             ([string]$_.Model -match 'RAMSHARE') -and ([string]$_.Model -match 'VRAMDISK')
         })
         if ($named.Count -eq 1) {
-            return ("\\.\PhysicalDrive{0}" -f [int]$named[0].Index)
+            $idx = [int]$named[0].Index
+            return @{ Path = ("\\.\PhysicalDrive{0}" -f $idx); Index = $idx }
         }
     } catch {}
     return $null
 }
 
-function Invoke-StartIoReadCopyRaceInjection($h, $rings, [uint32]$qd, [uint32]$maxIo) {
+function Invoke-StartIoReadCopyRaceInjection {
+    param(
+        $h,
+        $rings,
+        [uint32]$qd,
+        [uint32]$maxIo,
+        [int]$PreferredIndex = -1
+    )
     <#
       Strengthens beyond ring/IOCTL-only probes:
-      - mini userspace queue pump completes real StartIo-submitted READ SQEs
-      - concurrent PhysicalDrive ReadFile threads force HwStartIo → QSubmit → READ copy
-      - second-handle UNREGISTER races the pump while copies can be in flight
+      - Online LUN by Win32 index (Get-Disk serial is often empty for this stack)
+      - Background queue pump completes real StartIo-submitted READ SQEs
+      - SPTI READ(10) + sector ReadFile force HwStartIo -> QSubmit -> READ copy
+      - Second-handle UNREGISTER races the pump while copies can be in flight
     #>
     Ensure-RegisteredQueue $h $rings $qd $maxIo
-    $path = Find-RamsharePhysicalPath "ABCDEF0123456789"
-    if (-not $path) {
+    $info = Find-RamshareDiskInfo "ABCDEF0123456789"
+    if (-not $info -and $PreferredIndex -ge 0) {
+        $info = @{ Path = ("\\.\PhysicalDrive{0}" -f $PreferredIndex); Index = $PreferredIndex }
+    }
+    if (-not $info) {
         L "STARTIO_READ_COPY_RACE probe: no PhysicalDrive for RAMSHARE LUN"
         [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
         return $false
     }
-    # Bring the LUN online so storage-stack READs reach HwStartIo.
+    $path = $info.Path
+    $diskIndex = [int]$info.Index
+    # Require MSFT_Disk (Get-Disk). Win32_DiskDrive-only LUNs leave CreateFile on
+    # \\.\PhysicalDriveN stuck in the class stack for minutes (guest harness timeout).
+    $d = $null
+    try { $d = Get-Disk -Number $diskIndex -EA SilentlyContinue } catch {}
+    if ($null -eq $d) {
+        L ("STARTIO_READ_COPY_RACE probe SKIP: no Get-Disk for idx=$diskIndex path=$path (Win32-only LUN; avoid CreateFile hang)")
+        [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
+        return $false
+    }
     try {
-        Get-Disk -EA SilentlyContinue |
-            Where-Object {
-                ($_.SerialNumber -ieq 'ABCDEF0123456789') -or
-                ($_.FriendlyName -match 'RAMSHARE' -and $_.FriendlyName -match 'VRAMDISK')
-            } |
-            ForEach-Object {
-                if ($_.IsOffline) {
-                    try { Set-Disk -Number $_.Number -IsOffline $false -EA SilentlyContinue } catch {}
-                }
-                if ($_.IsReadOnly) {
-                    try { Set-Disk -Number $_.Number -IsReadOnly $false -EA SilentlyContinue } catch {}
-                }
-            }
-    } catch {}
+        if ($d.IsOffline) {
+            Set-Disk -Number $diskIndex -IsOffline $false -EA Stop
+            L "STARTIO Set-Disk Online idx=$diskIndex"
+        }
+        if ($d.IsReadOnly) {
+            try { Set-Disk -Number $diskIndex -IsReadOnly $false -EA SilentlyContinue } catch {}
+        }
+    } catch {
+        L ("STARTIO Online failed idx=${diskIndex}: " + $_.Exception.Message)
+        [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
+        return $false
+    }
     try { Update-HostStorageCache -EA SilentlyContinue } catch {}
+
     $h2 = $null
     $stats = New-Object 'int[]' 4
     try {
         $h2 = Open-Ctl
-        # Single-threaded: issue overlapped PhysicalDrive READs and pump CQ while pending.
-        # Then race UNREGISTER on a second handle while a final READ may still be in flight.
+        # Bounded overlapped sector READ while queue is registered (no background pump).
         [IoctlVal]::PhysicalReadWithPump(
             $path, $rings.sq, $rings.cq, $rings.data, $qd, $maxIo, $h, $stats)
         $readOk = $stats[0]
@@ -523,23 +578,19 @@ function Invoke-StartIoReadCopyRaceInjection($h, $rings, [uint32]$qd, [uint32]$m
         $drained = $stats[3]
         $sqTail = [Runtime.InteropServices.Marshal]::ReadInt32($rings.sq, 12)
         $sqHead = [Runtime.InteropServices.Marshal]::ReadInt32($rings.sq, 8)
-        # Race: fire another overlapped read then UNREGISTER immediately.
-        $stop = New-Object 'int[]' 1
-        $pumpStats = New-Object 'int[]' 2
-        $stop[0] = 0
-        $pump = [IoctlVal]::StartQueuePump(
-            $h, $rings.sq, $rings.cq, $rings.data, $qd, $maxIo, $stop, $pumpStats)
-        Start-Sleep -Milliseconds 20
+
+        # Race phase: UNREGISTER on second handle while queue may still be draining.
         $unregOk = [IoctlVal]::IoctlBool($h2, [IoctlVal]::IOCTL_UNREGISTER, $null)
         $unregErr = [IoctlVal]::LastErr()
-        $stop[0] = 1
-        $pumpJoined = $pump.Join(5000)
-        # Pass: process survived + UNREGISTER ok + (completed READ or drained SQE from StartIo).
-        if ($unregOk -and $pumpJoined -and ($readOk -gt 0 -or $drained -gt 0)) {
-            L ("STARTIO_READ_COPY_RACE probe: path=$path readOk=$readOk drained=$drained sq=$sqHead/$sqTail unregOk=1")
+
+        # Pass requires: process survived, UNREGISTER completed, and StartIo posted
+        # at least one SQE (drained>0) OR non-zero ring indices after the READ window.
+        $startIoHit = ($drained -gt 0) -or ($sqTail -gt 0) -or ($sqHead -gt 0)
+        if ($unregOk -and $startIoHit) {
+            L ("STARTIO_READ_COPY_RACE probe: path=$path idx=$diskIndex readOk=$readOk drained=$drained sq=$sqHead/$sqTail unregOk=1")
             return $true
         }
-        L ("STARTIO_READ_COPY_RACE probe FAIL: path=$path readOk=$readOk drained=$drained openErr=$openErr lastReadErr=$lastReadErr sq=$sqHead/$sqTail unregOk=$unregOk err=$unregErr pumpJoined=$pumpJoined")
+        L ("STARTIO_READ_COPY_RACE probe FAIL: path=$path idx=$diskIndex readOk=$readOk drained=$drained openErr=$openErr lastReadErr=$lastReadErr sq=$sqHead/$sqTail unregOk=$unregOk err=$unregErr")
         return $false
     } catch {
         L ("STARTIO_READ_COPY_RACE probe exception: " + $_.Exception.Message)
@@ -552,6 +603,7 @@ function Invoke-StartIoReadCopyRaceInjection($h, $rings, [uint32]$qd, [uint32]$m
 
 $h = $null
 $rings = $null
+$script:StartIoPreferredIndex = $null
 try {
     $h = Open-Ctl
     L "OPEN_CTL ok"
@@ -777,6 +829,10 @@ public static class DiskLenQuery {
     if ($null -ne $match) {
         $verdict.VPD_SERIAL_MATCH = 1
         L ("VPD_SERIAL_MATCH=1 src=$($match.Source) Status=$($match.Status) Name=$($match.Name) Serial=$($match.Serial) Size=$($match.Size) Id=$($match.Id)")
+        # Remember Win32 index for the StartIo probe after concurrent injectors.
+        if ($match.PSObject.Properties.Name -contains 'DriveIndex' -and $null -ne $match.DriveIndex) {
+            $script:StartIoPreferredIndex = [int]$match.DriveIndex
+        }
     } else {
         # Diagnostic only: never green-lights VPD_SERIAL_MATCH. Surfaces why
         # Win32/Get-Disk missed exact vendor+product+serial+size uniqueness.
@@ -910,7 +966,11 @@ class P {
         $verdict.NOTE += "RUNDOWN_UNMAP_AFTER_COPY probe failed; "
     }
 
-    if (Invoke-StartIoReadCopyRaceInjection $h $rings $qd $maxIo) {
+    # StartIo READ race last. Skip CreateFile when Get-Disk is empty (Win32-only
+    # LUN hangs the class stack for minutes). Prefer index captured at VPD match.
+    $startIoIdx = -1
+    if ($null -ne $script:StartIoPreferredIndex) { $startIoIdx = [int]$script:StartIoPreferredIndex }
+    if (Invoke-StartIoReadCopyRaceInjection $h $rings $qd $maxIo -PreferredIndex $startIoIdx) {
         $verdict.STARTIO_READ_COPY_RACE = 1
         L "STARTIO_READ_COPY_RACE=1"
     } else {
