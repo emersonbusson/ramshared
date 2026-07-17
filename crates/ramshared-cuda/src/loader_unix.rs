@@ -64,7 +64,10 @@ mod tests {
 
         let bogus_lib = CString::new("this_library_does_not_exist_12345.so").unwrap();
         let handle = unsafe { open(bogus_lib.as_ptr()) };
-        assert!(handle.is_null(), "Opening a non-existent library should fail");
+        assert!(
+            handle.is_null(),
+            "Opening a non-existent library should fail"
+        );
 
         // The first call to error() should return the dlerror message
         let err_msg = error();
@@ -72,7 +75,8 @@ mod tests {
         assert_ne!(err_msg, "unknown dlopen error");
         assert!(
             err_msg.contains("this_library_does_not_exist_12345.so"),
-            "Error message should mention the failing library, got: {}", err_msg
+            "Error message should mention the failing library, got: {}",
+            err_msg
         );
 
         // The second call to error() should return the fallback string because dlerror clears the error
