@@ -1987,3 +1987,22 @@ bash scripts/safety/wsl2-freeze-campaign.sh --dry-run --artifact-dir /tmp/freeze
 **Verdict:** 🟡 partial — scaffold ready for isolated lab; freeze-elimination still unclaimed; no thrash on daily host
 **Next action:** Run --run-isolated on a true isolated WSL/VM lab with RAMSHARED_ISOLATED_LAB=1; keep physical Online + SDV blocked
 **Artifacts:** docs/specs/no-milestone/wsl2-freeze/evidence/freeze-baseline-20260717-094842
+
+## 2026-07-17 09:58 -03 — Manufactured pagefile Gate A refusal (unit + guest inject)
+
+**What:** Closed the optional manufactured active-pagefile refusal campaign for the product teardown path: unit test proves Gate A refuse/code 7/no destroy; guest lab injects configured PagingFiles for product letter and restores safely.
+**Category:** windows / pagefile / isolation / e2e
+**How to measure:**
+```text
+cargo test -p ramshared-winsvc --lib manufactured_pagefile
+powershell -ExecutionPolicy Bypass -File scripts/windows/Test-PagefileRefusalManufacturedStatic.ps1
+# guest lab:
+# Invoke-PagefileRefusalManufactured.ps1 -Letter S
+```
+**Measured data:**
+- Unit: manufactured_pagefile_on_product_volume_refuses_gate_a PASS
+- Static: STATIC_PAGEFILE_REFUSAL_MANUFACTURED=PASS
+- Guest win11-drill: PAGEFILE_REFUSAL_MANUFACTURED=1 restored=true configuredOnVolume=true (registry inject only)
+**Verdict:** ✅ works (decision path + guest inject); optional live Online+stop inject remains available
+**Next action:** Physical Online (policy), SDV (no sdv.exe), freeze claim (isolated lab)
+**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/pagefile-refusal-20260717-095826/

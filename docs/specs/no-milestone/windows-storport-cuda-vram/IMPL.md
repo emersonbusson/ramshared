@@ -247,9 +247,22 @@ pump hangs the class stack.
 Package SHA `97FD7B37…`. Evidence: `evidence/startio-claim-20260717.md`,
 `evidence/startio-probe-20260717-092819/`, `evidence/startio-verifier-20260717-092950/`.
 
+### Manufactured pagefile Gate A refusal (2026-07-17)
+
+| Layer | Evidence |
+| --- | --- |
+| Unit (product teardown path) | `manufactured_pagefile_on_product_volume_refuses_gate_a` — Gate A refuse, code 7, no UNREGISTER/DESTROY, Online retained |
+| Static | `scripts/windows/Test-PagefileRefusalManufacturedStatic.ps1` |
+| Guest lab inject | `Invoke-PagefileRefusalManufactured.ps1` on win11-drill: registry PagingFiles inject for letter `S:`, restore OK (`pagefile-refusal-20260717-095826`) |
+
+Live product Online + stop.request with the inject mid-lifecycle remains optional strengthening
+(registry inject alone proves DT-8 configured-source manufacturing; unit tests prove the product
+teardown decision).
+
 ## Remaining promotion gates
 
-1. Optional: add a manufactured active-pagefile refusal campaign for the corrected product path.
+1. ~~Manufactured active-pagefile refusal~~ — unit + guest registry manufacture **PASS** (see above);
+   optional live Online+stop inject still available via `-StopRequestPath`.
 2. Keep physical Online blocked by the lab-only policy; do not reinterpret guest proof as daily-host
    authorization.
 3. ~~StartIo READ-copy race~~ — **claimed** on win11-drill under Verifier (see above).
