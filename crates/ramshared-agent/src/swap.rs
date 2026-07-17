@@ -135,4 +135,12 @@ mod tests {
         );
         assert_eq!(swapon_args("/dev/nbd0", None), vec!["/dev/nbd0"]);
     }
+
+    #[test]
+    fn detach_swap_error_path() {
+        let res = detach_swap("/dev/invalid_device_for_test");
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.starts_with("swapoff: "));
+    }
 }
