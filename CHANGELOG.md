@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1](https://github.com/emersonbusson/ramshared/compare/v0.6.0...v0.6.1) (2026-07-17)
+
+
+### Bug Fixes
+
+* **windows:** hang-safe StartIo probe; re-prove Verifier ITEM-3 ([dd366bc](https://github.com/emersonbusson/ramshared/commit/dd366bc26cad13ef7b8064d9d22c352cc813acf9))
+* **windows:** hang-safe StartIo probe; re-prove Verifier ITEM-3 ([2d3c882](https://github.com/emersonbusson/ramshared/commit/2d3c8825ef9fcd448e544634be0861c809758e18))
+
 ## [0.6.0](https://github.com/emersonbusson/ramshared/compare/v0.5.0...v0.6.0) (2026-07-17)
 
 
