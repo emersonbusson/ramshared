@@ -1946,3 +1946,24 @@ powershell -ExecutionPolicy Bypass -File scripts/windows/Test-WinDriveIoctlValid
 **Verdict:** 🟡 partial — ITEM-3+Verifier green; STARTIO_READ_COPY_RACE not claimed (Win32-only LUN / no MSFT_Disk surface for safe PhysicalDrive I/O)
 **Next action:** Prove StartIo under product Online (formatted volume / Get-Disk Online) or post-format guest LUN so SQEs reach QSubmit under Verifier
 **Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260717-025401/
+
+## 2026-07-17 09:33 -03 — StartIo READ-copy race CLAIMED under Verifier
+
+**What:** Closed STARTIO_READ_COPY_RACE on isolated win11-drill by pumping the queue early post-CREATE until Get-Disk Online, then PhysicalDrive overlapped READ + second-handle UNREGISTER under Driver Verifier 0x2093B.
+**Category:** windows / storport / e2e / verifier
+**How to measure:**
+```text
+powershell -ExecutionPolicy Bypass -File scripts/windows/Test-WinDriveIoctlValidationStatic.ps1
+# elevated lab only (win11-drill):
+# C:\ramshared\bin\Run-StartIoProbe.ps1
+# then enable verifier 0x2093B, reboot guest, re-run IOCTL harness
+```
+**Measured data:**
+- Static: STATIC_INJECTOR_TEST=PASS (Wait-MsftDiskWithIoPump, early post-CREATE)
+- Probe `startio-probe-20260717-092819`: STATUS=PASS STARTIO_READ_COPY_RACE=1 readOk=1 drained=4 sq=4/4 unregOk=1; package 97FD7B37…
+- Verifier `startio-verifier-20260717-092950`: STATUS=PASS STARTIO_READ_COPY_RACE=1 readOk=1 drained=5 sq=5/5; flags 0x2093B; ramshared.sys load 1/unload 0; NO_NEW_DUMP=1
+- Root cause fixed: keep StartQueuePump during CreateFile/READ; run StartIo early post-CREATE before later UNREGISTER loses MSFT_Disk
+- Terminal: win11-drill Off; verifier /reset scheduled
+**Verdict:** ✅ works — STARTIO_READ_COPY_RACE claimed under Verifier on isolated guest
+**Next action:** Physical Online (policy), SDV (tool), isolated WSL2 freeze campaign remain non-claims
+**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/startio-claim-20260717.md, evidence/startio-probe-20260717-092819/, evidence/startio-verifier-20260717-092950/
