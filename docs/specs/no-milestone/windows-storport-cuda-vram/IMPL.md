@@ -4,12 +4,14 @@
 
 ## Status
 
-**PASS (storage-only product on isolated GPU-PV guest)** — campaign
-`guest-product-online-20260716-220848` on `win11-drill` completed three fresh lifecycle rounds with
-real RTX 2060 CUDA, DriverStore/package `BINARY_MATCH` on signed miniport
+**PASS (storage-only product on isolated GPU-PV guest; Day-0 slice closed for this path)** —
+campaign `guest-product-online-20260716-220848` on `win11-drill` completed three fresh lifecycle
+rounds with real RTX 2060 CUDA, DriverStore/package `BINARY_MATCH` on signed miniport
 `97FD7B373ED7DD5AE7F38204070F8B89E08A2B25616AA2A128995E8D1FBFF34F`, one SHA write/read per
 lifecycle, graceful stop, correlated lease release, CUDA free restoration, no new dumps, VM Off, and
 host GPU OK. Evidence: `evidence/guest-product-online-20260716-220848.md`.
+
+Security checklist (SPEC): **closed** with executable evidence. SDV: **N/A (DT-30)**.
 
 Isolated guest ITEM-3 with **exact VPD serial + size** and Driver Verifier is also **PASS** for the
 same signed miniport (`guest-exhaustive-20260716-224913`). Evidence:
