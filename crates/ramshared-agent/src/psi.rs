@@ -11,10 +11,15 @@ use std::io::{Error, ErrorKind, Result};
 use ramshared_broker::model::PsiSample;
 use ramshared_broker::protocol::SwapEntry;
 
+/// Core logic for `read_psi` with dependency injection for the file path.
+fn read_psi_impl(path: &str) -> Result<PsiSample> {
+    let raw = std::fs::read_to_string(path)?;
+    parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))
+}
+
 /// Reads and parses `/proc/pressure/memory`.
 pub fn read_psi() -> Result<PsiSample> {
-    let raw = std::fs::read_to_string("/proc/pressure/memory")?;
-    parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))
+    read_psi_impl("/proc/pressure/memory")
 }
 
 /// Parses the content of `/proc/pressure/memory`. Uses the `some` line (partial stall), which is
@@ -40,9 +45,14 @@ pub fn parse_psi(content: &str) -> Option<PsiSample> {
     })
 }
 
+/// Core logic for `read_swaps` with dependency injection.
+fn read_swaps_impl(path: &str) -> Result<Vec<SwapEntry>> {
+    Ok(parse_swaps(&std::fs::read_to_string(path)?))
+}
+
 /// Reads and parses `/proc/swaps`.
 pub fn read_swaps() -> Result<Vec<SwapEntry>> {
-    Ok(parse_swaps(&std::fs::read_to_string("/proc/swaps")?))
+    read_swaps_impl("/proc/swaps")
 }
 
 /// Parses `/proc/swaps`. The first line is the header; each subsequent line is
@@ -76,16 +86,22 @@ pub fn parse_memcg_swap(content: &str) -> Option<u64> {
     t.parse().ok()
 }
 
-/// Reads `memory.swap.current` from the process's cgroup v2 (via `/proc/self/cgroup` → unified mount in
-/// `/sys/fs/cgroup`). `None` if not cgroup v2 / missing file (degrade, DT-9). RF-2/DT-10.
-pub fn read_memcg_swap() -> Option<u64> {
-    let cg = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+/// Core logic for `read_memcg_swap` with dependency injection.
+fn read_memcg_swap_impl(cgroup_path: &str, sysfs_base: &str) -> Option<u64> {
+    let cg = std::fs::read_to_string(cgroup_path).ok()?;
     let path = cg.lines().find_map(|l| l.strip_prefix("0::"))?; // cgroup v2: single line `0::/<path>`
     let file = format!(
-        "/sys/fs/cgroup{}/memory.swap.current",
+        "{}{}/memory.swap.current",
+        sysfs_base,
         path.trim().trim_end_matches('/')
     );
     parse_memcg_swap(&std::fs::read_to_string(file).ok()?)
+}
+
+/// Reads `memory.swap.current` from the process's cgroup v2 (via `/proc/self/cgroup` → unified mount in
+/// `/sys/fs/cgroup`). `None` if not cgroup v2 / missing file (degrade, DT-9). RF-2/DT-10.
+pub fn read_memcg_swap() -> Option<u64> {
+    read_memcg_swap_impl("/proc/self/cgroup", "/sys/fs/cgroup")
 }
 
 /// Sums `sectors_read + sectors_written` (×512 = bytes) of device `dev` in `/proc/diskstats`.
@@ -103,15 +119,25 @@ pub fn parse_diskstats(content: &str, dev: &str) -> Option<u64> {
     })
 }
 
+/// Core logic for `read_diskstats` with dependency injection.
+fn read_diskstats_impl(path: &str, dev: &str) -> Option<u64> {
+    parse_diskstats(&std::fs::read_to_string(path).ok()?, dev)
+}
+
 /// Reads `/proc/diskstats` and sums sectors (×512) of device `dev`. `None` if missing.
 pub fn read_diskstats(dev: &str) -> Option<u64> {
-    parse_diskstats(&std::fs::read_to_string("/proc/diskstats").ok()?, dev)
+    read_diskstats_impl("/proc/diskstats", dev)
+}
+
+/// Core logic for `read_euid` with dependency injection.
+fn read_euid_impl(path: &str) -> Result<u32> {
+    let raw = std::fs::read_to_string(path)?;
+    parse_euid(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "campo Uid ausente"))
 }
 
 /// Reads the euid of the process via `/proc/self/status` (DT-26: no libc, only `/proc`).
 pub fn read_euid() -> Result<u32> {
-    let raw = std::fs::read_to_string("/proc/self/status")?;
-    parse_euid(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "campo Uid ausente"))
+    read_euid_impl("/proc/self/status")
 }
 
 /// Parses the line `Uid:\t<real>\t<effective>\t<saved>\t<fs>` and returns the euid (3rd field).
@@ -230,5 +256,135 @@ mod tests {
     #[test]
     fn parse_euid_no_line_is_none() {
         assert!(parse_euid("Name:\tx\nGid:\t0\t0\t0\t0\n").is_none());
+    }
+
+    fn write_temp_file(content: &str) -> String {
+        use std::env;
+        use std::fs;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path = env::temp_dir().join(format!("ramshared_test_{}_{}", std::process::id(), id));
+        fs::write(&path, content).unwrap();
+        path.to_string_lossy().to_string()
+    }
+
+    #[test]
+    fn read_psi_impl_success() {
+        let content = "some avg10=1.23 avg60=4.56 avg300=7.89 total=999\n";
+        let path = write_temp_file(content);
+        let psi = read_psi_impl(&path).unwrap();
+        assert_eq!(psi.avg10, 1.23);
+        assert_eq!(psi.avg60, 4.56);
+        assert_eq!(psi.stall_us, 999);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn read_psi_impl_not_found() {
+        assert!(read_psi_impl("/proc/nonexistent_psi_file_12345").is_err());
+    }
+
+    #[test]
+    fn read_psi_impl_invalid_data() {
+        let path = write_temp_file("invalid content\n");
+        let err = read_psi_impl(&path).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn read_swaps_impl_success() {
+        let content = "Filename\tType\tSize\tUsed\tPriority\n\
+                       /dev/nbd0\tpartition\t1048576\t2048\t-2\n";
+        let path = write_temp_file(content);
+        let swaps = read_swaps_impl(&path).unwrap();
+        assert_eq!(swaps.len(), 1);
+        assert_eq!(swaps[0].dev, "/dev/nbd0");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn read_swaps_impl_not_found() {
+        assert!(read_swaps_impl("/proc/nonexistent_swaps_file_12345").is_err());
+    }
+
+    #[test]
+    fn read_memcg_swap_impl_success() {
+        let cgroup_content = "0::/my_cgroup\n";
+        let cgroup_path = write_temp_file(cgroup_content);
+
+        let sysfs_base = std::env::temp_dir().join(format!(
+            "ramshared_sysfs_{}_{}",
+            std::process::id(),
+            std::sync::atomic::AtomicUsize::new(0)
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        std::fs::create_dir_all(sysfs_base.join("my_cgroup")).unwrap();
+        let swap_current_path = sysfs_base.join("my_cgroup/memory.swap.current");
+        std::fs::write(&swap_current_path, "4194304\n").unwrap();
+
+        let val = read_memcg_swap_impl(&cgroup_path, &sysfs_base.to_string_lossy()).unwrap();
+        assert_eq!(val, 4194304);
+
+        std::fs::remove_file(cgroup_path).unwrap();
+        std::fs::remove_dir_all(sysfs_base).unwrap();
+    }
+
+    #[test]
+    fn read_memcg_swap_impl_missing_cgroup_file() {
+        assert!(read_memcg_swap_impl("/proc/nonexistent_cgroup_file", "/sys/fs/cgroup").is_none());
+    }
+
+    #[test]
+    fn read_memcg_swap_impl_missing_0_line() {
+        let cgroup_content = "1:name=systemd:/\n";
+        let cgroup_path = write_temp_file(cgroup_content);
+
+        assert!(read_memcg_swap_impl(&cgroup_path, "/sys/fs/cgroup").is_none());
+
+        std::fs::remove_file(cgroup_path).unwrap();
+    }
+
+    #[test]
+    fn read_diskstats_impl_success() {
+        let content = "  43       0 nbd0 100 0 200 5 50 0 80 3 0 0\n";
+        let path = write_temp_file(content);
+
+        assert_eq!(read_diskstats_impl(&path, "nbd0"), Some((200 + 80) * 512));
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn read_diskstats_impl_missing_file() {
+        assert!(read_diskstats_impl("/proc/nonexistent_diskstats", "nbd0").is_none());
+    }
+
+    #[test]
+    fn read_euid_impl_success() {
+        let content = "Name:\tramshared-agent\nUid:\t1000\t1001\t1000\t1000\n";
+        let path = write_temp_file(content);
+
+        assert_eq!(read_euid_impl(&path).unwrap(), 1001);
+
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn read_euid_impl_missing_file() {
+        assert!(read_euid_impl("/proc/nonexistent_status").is_err());
+    }
+
+    #[test]
+    fn read_euid_impl_missing_uid() {
+        let content = "Name:\tramshared-agent\nGid:\t1000\t1001\t1000\t1000\n";
+        let path = write_temp_file(content);
+
+        let err = read_euid_impl(&path).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+
+        std::fs::remove_file(path).unwrap();
     }
 }
