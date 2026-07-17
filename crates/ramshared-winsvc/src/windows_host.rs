@@ -848,7 +848,6 @@ fn sha256_hex(data: &[u8]) -> Result<String, String> {
     }
 }
 
-
 fn parse_configured_pagefile_entry(entry: &str) -> Result<String, String> {
     let entry = entry.trim();
     let (path_and_min, max) = entry
