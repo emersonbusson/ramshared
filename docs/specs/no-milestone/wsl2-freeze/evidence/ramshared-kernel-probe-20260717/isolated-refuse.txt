@@ -1,0 +1,1 @@
+gates_ok=0 reasons=daily_host_refuses_run_isolated,shared_windows_desktop_refuses_run_isolated

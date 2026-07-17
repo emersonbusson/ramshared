@@ -2081,3 +2081,25 @@ gh release view v0.6.3
 **Verdict:** ✅ works (discipline close of open checklists)
 **Next action:** None on daily host; optional new env for freeze claim only
 **Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/{SPEC,IMPL}.md
+
+## 2026-07-17 12:18 -03 — Freeze: RamShared-Kernel is NOT isolab + shared-desktop gate
+
+**What:** Probed WSL distro `RamShared-Kernel` (custom kernel 6.18.35.2) as candidate freeze lab. Confirmed it mounts `/mnt/c/Users` on the same Windows desktop host as Ubuntu-24.04 — not disposable isolab. Tightened `wsl2-freeze-campaign.sh` so `/mnt/c/Users` marks shared desktop (any distro) and refuses `--run-isolated` without FORCE. Restored WSL PE binfmt (`WSLInterop`) so Windows interop works again from this session. Release v0.6.4 already Latest (PR #94).
+**Category:** safety / freeze / discipline
+**How to measure:**
+```text
+wsl -l -v
+wsl -d RamShared-Kernel --cd ~ -e bash -lc 'echo $WSL_DISTRO_NAME; test -d /mnt/c/Users && echo MNT=1'
+./scripts/safety/Test-Wsl2FreezeCampaignStatic.sh
+RAMSHARED_ISOLATED_LAB=1 ./scripts/safety/wsl2-freeze-campaign.sh --allow-isolated-lab --run-isolated --artifact-dir /tmp/freeze-refuse-test
+gh release view v0.6.4
+```
+**Measured data:**
+- RamShared-Kernel: DISTRO=RamShared-Kernel, MNT_C_USERS=1, same kernel as daily, same hostname
+- Static freeze campaign: PASS
+- Isolated run on daily: refuse `daily_host_refuses_run_isolated,shared_windows_desktop_refuses_run_isolated`
+- claim remains NOT_CLAIMED; no thrash
+- v0.6.4 Latest published
+**Verdict:** ✅ works (honest env classification + safer refuse gate)
+**Next action:** True freeze claim needs separate disposable lab VM/machine — not a second WSL distro on this desktop
+**Artifacts:** docs/specs/no-milestone/wsl2-freeze/evidence/ramshared-kernel-probe-20260717/; scripts/safety/wsl2-freeze-campaign.sh

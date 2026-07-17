@@ -19,6 +19,8 @@ required=(
   "WATCHDOG"
   "NOT_CLAIMED"
   "daily_host_refuses_run_isolated"
+  "shared_windows_desktop_refuses_run_isolated"
+  "shared_windows_desktop"
   "--run-isolated"
   "--artifact-dir"
 )

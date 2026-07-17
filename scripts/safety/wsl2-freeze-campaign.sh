@@ -59,16 +59,27 @@ hostname_s="$(hostname 2>/dev/null || echo unknown)"
 stamp="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)"
 
 is_daily_host=0
-# Heuristic: daily host markers used elsewhere in this repo.
-if [[ "${WSL_DISTRO_NAME:-}" == "Ubuntu-24.04" ]] && [[ -d /mnt/c/Users ]]; then
+shared_windows_desktop=0
+# Shared Windows desktop: /mnt/c/Users means this WSL instance rides the daily
+# Windows host (any distro name). A second distro like RamShared-Kernel is NOT
+# an isolab by itself — thrash still freezes the same physical machine.
+if [[ -d /mnt/c/Users ]]; then
+  shared_windows_desktop=1
+  is_daily_host=1
+fi
+# Named daily product distro (even if /mnt/c layout changes later).
+if [[ "${WSL_DISTRO_NAME:-}" == "Ubuntu-24.04" ]]; then
   is_daily_host=1
 fi
 if [[ "${RAMSHARED_FORCE_DAILY_HOST:-0}" == "1" ]]; then
   is_daily_host=1
 fi
-# Explicit override for true isolated lab VMs that still expose /mnt/c.
+# Explicit override ONLY for a true isolated lab VM that still exposes /mnt/c
+# (e.g. disposable Hyper-V guest). Second WSL distros on the desktop host must
+# NOT set this casually — see benchmarks.md host-safety.
 if [[ "${RAMSHARED_ISOLATED_LAB:-0}" == "1" && "${RAMSHARED_FORCE_ISOLATED_LAB:-0}" == "1" ]]; then
   is_daily_host=0
+  shared_windows_desktop=0
 fi
 
 ghost=false
@@ -121,6 +132,12 @@ if [[ "$is_daily_host" -eq 1 && "$RUN_ISOLATED" -eq 1 ]]; then
   gates_ok=0
   reasons+=("daily_host_refuses_run_isolated")
 fi
+# Even with --allow-isolated-lab, refuse thrash while on shared Windows desktop
+# unless FORCE_ISOLATED_LAB is set (true disposable isolab only).
+if [[ "$shared_windows_desktop" -eq 1 && "$RUN_ISOLATED" -eq 1 ]]; then
+  gates_ok=0
+  reasons+=("shared_windows_desktop_refuses_run_isolated")
+fi
 if [[ "${RAMSHARED_ISOLATED_LAB:-0}" != "1" && ( "$ALLOW_ISOLATED" -eq 1 || "$RUN_ISOLATED" -eq 1 ) ]]; then
   gates_ok=0
   reasons+=("RAMSHARED_ISOLATED_LAB!=1")
@@ -155,6 +172,8 @@ emit_summary() {
     echo "mode:          $MODE"
     echo "host:          $hostname_s"
     echo "daily_host:    $is_daily_host"
+    echo "shared_win_desktop: $shared_windows_desktop"
+    echo "wsl_distro:    ${WSL_DISTRO_NAME:-}"
     echo "ghost:         $ghost"
     echo "BINARY_MATCH:  $binary_match"
     echo "swap used_kib: $used_total"
