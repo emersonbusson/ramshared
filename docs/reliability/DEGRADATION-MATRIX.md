@@ -41,3 +41,13 @@
 - [`kahneman-disciplines.md`](../methodology/kahneman-disciplines.md) §5
 - [`wsl2-cascade-swap/SPEC.md`](../specs/no-milestone/wsl2-cascade-swap/SPEC.md) §8 (erros), §9 (eviction/DEMOTE), §13 (recovery)
 - [`wsl2-fase0-final.md`](wsl2-fase0-final.md) — a medida de 1,18 s que fundou a linha de eviction
+
+## CUDA storage-only product (windows-storport-cuda-vram)
+
+| State | Symptom | Operator action | Auto recovery |
+| --- | --- | --- | --- |
+| CUDA alloc fail | probe/runtime refuses before CREATE | free VRAM / lower size_bytes | none |
+| Device loss / stuck cuMemcpy | FailedSafe; health false | supervised reboot if stuck; no force kill | none |
+| Pagefile on volume at stop | exit/code 7; Online preserved | clear pagefile; re-stop | none |
+| Foreign process IOCTL | ACCESS_DENIED | only owner process | none |
+| False backend (lab C#) | not product ImagePath | use Install-RamSharedService.ps1 Rust | none |

@@ -1,0 +1,70 @@
+'\\wsl.localhost\Ubuntu-24.04\home\emdev\codespace\ramshared'
+CMD.EXE foi iniciado tendo o caminho acima como pasta atual.
+NÆo h  suporte para caminhos UNC. Padronizando para pasta do Windows.
+== cargo build -p ramshared-winsvc --release ==
+    Updating crates.io index
+ Downloading crates ...
+  Downloaded bitflags v2.13.0
+  Downloaded equivalent v1.0.2
+  Downloaded quote v1.0.45
+  Downloaded itoa v1.0.18
+  Downloaded windows-link v0.2.1
+  Downloaded serde_spanned v1.1.1
+  Downloaded toml_datetime v1.1.1+spec-1.1.0
+  Downloaded toml_writer v1.1.1+spec-1.1.0
+  Downloaded zmij v1.0.21
+  Downloaded toml_parser v1.1.2+spec-1.1.0
+  Downloaded windows-service v0.8.1
+  Downloaded memchr v2.8.2
+  Downloaded serde_derive v1.0.228
+  Downloaded serde_core v1.0.228
+  Downloaded unicode-ident v1.0.24
+  Downloaded toml v1.1.2+spec-1.1.0
+  Downloaded proc-macro2 v1.0.106
+  Downloaded serde v1.0.228
+  Downloaded widestring v1.2.1
+  Downloaded indexmap v2.14.0
+  Downloaded hashbrown v0.17.1
+  Downloaded serde_json v1.0.150
+  Downloaded winnow v1.0.3
+  Downloaded syn v2.0.117
+  Downloaded windows-sys v0.61.2
+   Compiling serde_core v1.0.228
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling zmij v1.0.21
+   Compiling serde v1.0.228
+   Compiling serde_json v1.0.150
+   Compiling windows-link v0.2.1
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.2
+   Compiling winnow v1.0.3
+   Compiling ramshared-vram v0.1.0 (C:\ramshared\src\crates\ramshared-vram)
+   Compiling windows-sys v0.61.2
+   Compiling widestring v1.2.1
+   Compiling bitflags v2.13.0
+   Compiling toml_writer v1.1.1+spec-1.1.0
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling ramshared-block v0.1.0 (C:\ramshared\src\crates\ramshared-block)
+   Compiling syn v2.0.117
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling serde_derive v1.0.228
+   Compiling toml v1.1.2+spec-1.1.0
+   Compiling windows-service v0.8.1
+   Compiling ramshared-cuda v0.1.0 (C:\ramshared\src\crates\ramshared-cuda)
+   Compiling ramshared-broker v0.1.0 (C:\ramshared\src\crates\ramshared-broker)
+   Compiling ramshared-winsvc v0.1.0 (C:\ramshared\src\crates\ramshared-winsvc)
+    Finished `release` profile [optimized] target(s) in 32.87s
+        1 arquivo(s) copiado(s).
+        1 arquivo(s) copiado(s).
+BUILD_OK
+ O volume na unidade C ‚ CANADA
+ O N£mero de S‚rie do Volume ‚ 34F0-8A44
+
+ Pasta de C:\ramshared\bin
+
+15/07/2026  11:24           647.168 ramshared-winsvc.exe
+               1 arquivo(s)        647.168 bytes
+               0 pasta(s)   135.149.277.184 bytes dispon¡veis

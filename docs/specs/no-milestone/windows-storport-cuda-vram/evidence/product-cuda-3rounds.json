@@ -1,0 +1,26 @@
+{
+  "product_online": true,
+  "letter": "S",
+  "all_match": true,
+  "rounds": [
+    {
+      "round": 1,
+      "match": true,
+      "ms": 232,
+      "sha": "EFF6FD0BBF299373DAF7993482B35BC2D9AF6833339A0994C689CADC782F7D8B"
+    },
+    {
+      "round": 2,
+      "match": true,
+      "ms": 157,
+      "sha": "0FA5BB03E3FDFB3AF3D3232E0C3EB5DEC067B736E997C2D6E2708DF524FB055F"
+    },
+    {
+      "round": 3,
+      "match": true,
+      "ms": 153,
+      "sha": "173188092776B6CE20926F38DE4EB804AF16BC2968DEBAF1DF5F763C51CB8CC1"
+    }
+  ],
+  "console_line": "product Online CUDA 64MiB 3-round SHA-256"
+}

@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "Windows userspace service for StorPort VRAM disk (SPEC windows-swap-driver)"
+description = "Windows userspace service for StorPort CUDA VRAM disk (SPEC windows-storport-cuda-vram)"
 
 [[bin]]
 name = "ramshared-winsvc"
@@ -19,19 +19,28 @@ path = "src/lib.rs"
 ramshared-block = { path = "../ramshared-block" }
 ramshared-broker = { path = "../ramshared-broker" }
 ramshared-vram = { path = "../ramshared-vram" }
+# Product CUDA path (probe + runtime); pure planning helpers are usable on all hosts.
+ramshared-cuda = { path = "../ramshared-cuda" }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "1.1"
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
+    "Win32_System_Memory",
+    "Win32_System_Registry",
     "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_EventLog",
+    "Win32_System_Services",
+    "Win32_Security_Cryptography",
+    "Win32_System_WindowsProgramming",
 ] }
-# CUDA loader is pulled transitively when Windows path uses ramshared-cuda.
-ramshared-cuda = { path = "../ramshared-cuda" }
 
 [lints.clippy]
 unwrap_used = "deny"

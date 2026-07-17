@@ -1,0 +1,10 @@
+{
+    "ARTIFACT":  "C:\\ramshared\\artifacts\\guest-product-online-20260716-145248",
+    "ONLINE":  true,
+    "BINARY_MATCH":  true,
+    "SYS_SHA":  "CD7E315D0DA5B24BB05C384846D7BA8123390300D2C3A3F73B10E52F9E80BC34",
+    "ROUNDS_PASS":  true,
+    "STOP_OK":  false,
+    "LETTER":  "S",
+    "DISK":  "N=2 Name=RAMSHARE VRAMDISK Size=67108864 Ser=[B7A9E1BD0E71541A]"
+}

@@ -181,6 +181,7 @@ dependencies = [
  "ramshared-cuda",
  "ramshared-vram",
  "serde",
+ "serde_json",
  "toml",
  "windows-service",
  "windows-sys",

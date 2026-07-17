@@ -1,0 +1,19 @@
+# RamShared storage-only product config (SPEC windows-storport-cuda-vram DT-1/DT-2).
+# Install to C:\ProgramData\RamShared\winsvc.toml (SCM path). Console/probe need absolute path.
+# No backend or pagefile fields — CUDA only.
+
+[win_drive]
+# 512 MiB LUN (must be >= 64 MiB, block-aligned).
+size_bytes = 536870912
+block_size = 4096
+cuda_device = 0
+# Requested reserve; effective is max(this, 512 MiB, ceil(total_vram/10)).
+reserve_bytes = 536870912
+# Power-of-two QD in 1..=256; QD * max_io_bytes must be <= 4 MiB.
+queue_depth = 4
+max_io_bytes = 1048576
+evidence_path = "C:\\ProgramData\\RamShared\\evidence"
+volume_letter = "D"
+broker = "127.0.0.1:7700"
+tenant = "windrive-host"
+heartbeat_secs = 5

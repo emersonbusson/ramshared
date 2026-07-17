@@ -1,0 +1,50 @@
+=== physical preflight audit 20260716T010502Z ===
+host=emedev date=2026-07-15T22:05:02-03:00
+cwd=/home/emdev/codespace/ramshared
+branch=main
+commit=acba7c6
+dirty=24 files
+
+=== hashes (package vs System32) ===
+FILE /mnt/c/ramshared/package/ramshared.sys
+-rwxrwxrwx 1 emdev emdev 33168 Jul 15 20:56 /mnt/c/ramshared/package/ramshared.sys
+1e57690ea63e6287d4790a134544dc9f46253bb356d1c2b3b1d65fc812f30cff  /mnt/c/ramshared/package/ramshared.sys
+FILE /mnt/c/Windows/System32/drivers/ramshared.sys
+-r-xr-xr-x 1 emdev emdev 32656 Jul 15 13:23 /mnt/c/Windows/System32/drivers/ramshared.sys
+e690306ff4bd64e44118de72143aa8ed9d9284a75e77ab0eb54cf3ef648d7fee  /mnt/c/Windows/System32/drivers/ramshared.sys
+MISSING /mnt/c/Windows/System32/drivers/ramshared.sys.bak-host
+FILE /mnt/c/ramshared/bin/ramshared-winsvc.exe
+-rwxrwxrwx 1 emdev emdev 1019392 Jul 15 22:00 /mnt/c/ramshared/bin/ramshared-winsvc.exe
+f129b25f0eff3b7650fd9653e7ee4389703f80e9e8b61947e4276b629248ac1c  /mnt/c/ramshared/bin/ramshared-winsvc.exe
+FILE /mnt/c/ramshared/bin/RamSharedWinSvc.exe
+-rwxrwxrwx 1 emdev emdev 1019392 Jul 15 22:00 /mnt/c/ramshared/bin/RamSharedWinSvc.exe
+f129b25f0eff3b7650fd9653e7ee4389703f80e9e8b61947e4276b629248ac1c  /mnt/c/ramshared/bin/RamSharedWinSvc.exe
+
+=== guest-proven package SHA (from last Verifier campaign) ===
+expected_guest_proven=1e57690ea63e6287d4790a134544dc9f46253bb356d1c2b3b1d65fc812f30cff
+
+=== cascade / host pressure ===
+inactive
+               total        used        free      shared  buff/cache   available
+Mem:            15Gi       2.9Gi       401Mi       144Mi        12Gi        12Gi
+Swap:          4.0Gi       273Mi       3.7Gi
+NAME     TYPE      SIZE   USED PRIO
+/dev/sdc partition   4G 273.5M   -2
+
+=== nvidia baseline ===
+name, memory.used [MiB], memory.free [MiB], memory.total [MiB]
+NVIDIA GeForce RTX 2060, 1387 MiB, 4568 MiB, 6144 MiB
+
+=== PREFLIGHT DECISION (no Online) ===
+PREFLIGHT=RED
+ONLINE=SKIPPED
+REASON_1=BINARY_MATCH_MINIPORT_FAIL installed=E690306F... package_guest_proven=1E57690E...
+REASON_2=NO_BACKUP_OF_INSTALLED_SYS bak-host=MISSING swap_attempt_failed_access_denied
+REASON_3=README_POLICY windows_driver_daily_host=lab_VM_only
+REASON_4=ORPHAN_PNP_DISK RAMSHARE VRAMDISK present status=OK but Get-Disk count=0
+REASON_5=SCM_DEFAULT_CFG volume_letter=D size=512MiB forbidden_for_this_gate
+REASON_6=NO_REBOOT_ALLOWED cannot_replace_locked_loaded_sys
+CTL_DEVICE=open_OK_err0 (Test-Path may lie; CreateFile is ground truth)
+WINSVC_BIN_MATCH=PASS both ramshared-winsvc.exe and RamSharedWinSvc.exe sha256=F129B25F...
+CASCADE=inactive
+EMPTY_TOOL_OUTPUT_NOTE=prior elevated commands sometimes returned exit0 with empty capture due to tool log truncation/UNC; this preflight uses PREFLIGHT: labels and non-zero line counts as proof of capture

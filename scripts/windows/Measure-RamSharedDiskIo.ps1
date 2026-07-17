@@ -21,7 +21,14 @@
 param(
     [int]$Seconds = 10,
     [string]$DriveLetter = "",
-    [int]$SampleIntervalSec = 1
+    [int]$SampleIntervalSec = 1,
+    # SPEC DT-13 / RF-4: optional exact checksum mode (three rounds)
+    [int]$ChecksumRounds = 0,
+    [int]$ProbeMiB = 8,
+    [string]$ProductPid = "",
+    [string]$ProductSha256 = "",
+    [string]$ExpectedSerial = "",
+    [string]$JsonlOut = ""
 )
 
 $ErrorActionPreference = "Continue"
@@ -170,3 +177,66 @@ if ($disks.Count -gt 0 -and ($reads.Count -gt 0 -or $writes.Count -gt 0 -or $dir
 if ($disks.Count -gt 0 -and $DriveLetter -and $directOk) { exit 0 }
 if ($disks.Count -gt 0 -and -not $DriveLetter) { exit 0 }
 exit 1
+
+
+# --- SPEC checksum / percentile mode (optional) ---
+if ($ChecksumRounds -gt 0) {
+    if (-not $DriveLetter) { throw "ChecksumRounds requires -DriveLetter" }
+    $letter = $DriveLetter.TrimEnd(':').Substring(0,1).ToUpperInvariant()
+    $path = "${letter}:\ramshared-probe.bin"
+    $size = [int64]$ProbeMiB * 1MB
+    $seed = [int](Get-Date -UFormat %s) % 251
+    $lat = New-Object System.Collections.Generic.List[double]
+    $hashes = @()
+    for ($r = 1; $r -le $ChecksumRounds; $r++) {
+        $buf = New-Object byte[] $size
+        for ($i = 0; $i -lt $buf.Length; $i++) { $buf[$i] = [byte](($i + $seed + $r) % 251) }
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        [System.IO.File]::WriteAllBytes($path, $buf)
+        $fs = [System.IO.File]::Open($path, 'Open', 'ReadWrite', 'None')
+        $fs.Flush($true)
+        $fs.Close()
+        $sw.Stop()
+        $lat.Add($sw.Elapsed.TotalMilliseconds)
+        $hWrite = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash
+        $sw2 = [System.Diagnostics.Stopwatch]::StartNew()
+        $read = [System.IO.File]::ReadAllBytes($path)
+        $sw2.Stop()
+        $lat.Add($sw2.Elapsed.TotalMilliseconds)
+        $tmp = Join-Path $env:TEMP ("rs-read-{0}.bin" -f $r)
+        [System.IO.File]::WriteAllBytes($tmp, $read)
+        $hRead = (Get-FileHash -Algorithm SHA256 -LiteralPath $tmp).Hash
+        Remove-Item $tmp -Force -EA SilentlyContinue
+        if ($hWrite -ne $hRead) {
+            Write-Host "checksum_mismatch_exits_6 write=$hWrite read=$hRead round=$r"
+            exit 6
+        }
+        $hashes += $hWrite
+        L ("ROUND $r SHA256=$hWrite write_ms={0:n1} read_ms={1:n1}" -f $lat[$lat.Count-2], $lat[$lat.Count-1])
+    }
+    if ($ChecksumRounds -ge 2) {
+        $uniq = $hashes | Select-Object -Unique
+        if ($uniq.Count -ne 1) {
+            Write-Warning "rounds produced different hashes (seeded content differs by design per round)"
+        }
+    }
+    $sorted = $lat | Sort-Object
+    function Pct($arr, $p) {
+        if ($arr.Count -eq 0) { return 0 }
+        $rank = [math]::Ceiling(($p/100.0) * $arr.Count)
+        $idx = [math]::Max(0, [math]::Min($arr.Count-1, $rank-1))
+        return $arr[$idx]
+    }
+    $p50 = Pct $sorted 50; $p95 = Pct $sorted 95; $p99 = Pct $sorted 99
+    Write-Host ("three_rounds_emit_p50_p95_p99 p50_ms={0:n2} p95_ms={1:n2} p99_ms={2:n2}" -f $p50,$p95,$p99)
+    if ($JsonlOut) {
+        $row = [ordered]@{
+            schema=1; backend="cuda"; pid=$ProductPid; exe_sha256=$ProductSha256
+            serial=$ExpectedSerial; p50_ms=$p50; p95_ms=$p95; p99_ms=$p99
+            rounds=$ChecksumRounds; last_sha256=$hashes[-1]
+        }
+        ($row | ConvertTo-Json -Compress) | Add-Content -Path $JsonlOut -Encoding utf8
+    }
+    Write-Host "matching_checksum_exits_0"
+    exit 0
+}

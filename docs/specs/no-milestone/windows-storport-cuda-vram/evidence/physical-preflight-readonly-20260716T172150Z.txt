@@ -1,0 +1,23 @@
+PREFLIGHT_PHYSICAL_READ_ONLY begin
+timestamp_utc=2026-07-16T17:21:50.6043025Z
+host=EMEDEV
+package_sha=CD7E315D0DA5B24BB05C384846D7BA8123390300D2C3A3F73B10E52F9E80BC34
+installed_sha=E690306FF4BD64E44118DE72143AA8ED9D9284A75E77AB0EB54CF3EF648D7FEE
+binary_match=False
+bak_host_exists=False
+package_len=33680
+installed_len=32656
+ramshared_running=True
+winsvc_running=False
+vm_win11_drill=Off
+gpu_adapters=1
+gpu_instance_empty=True
+dda_count=0
+host_gpu_status=OK
+host_gpu_name=NVIDIA GeForce RTX 2060
+nvidia_smi=NVIDIA GeForce RTX 2060, 1502 MiB, 6144 MiB, 610.74
+testsigning=True
+readme_policy=Windows kernel driver daily host = NO (lab VM only)
+online_decision=SKIPPED: BINARY_MATCH=false and daily-host miniport install forbidden by README
+next_surface=win11-drill lab Online after GPU-PV CUDA protocol alignment
+PREFLIGHT_PHYSICAL_READ_ONLY end

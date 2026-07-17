@@ -1,0 +1,115 @@
+
+Verifier Flags: 0x0002093b
+
+  Standard Flags:
+
+    [X] 0x00000001 Special pool.
+    [X] 0x00000002 Force IRQL checking.
+    [X] 0x00000008 Pool tracking.
+    [X] 0x00000010 I/O verification.
+    [X] 0x00000020 Deadlock detection.
+    [ ] 0x00000080 DMA checking.
+    [X] 0x00000100 Security checks.
+    [X] 0x00000800 Miscellaneous checks.
+    [X] 0x00020000 DDI compliance checking.
+
+  Additional Flags:
+
+    [ ] 0x00000004 Randomized low resources simulation.
+    [ ] 0x00000200 Force pending I/O requests.
+    [ ] 0x00000400 IRP logging.
+    [ ] 0x00002000 Invariant MDL checking for stack.
+    [ ] 0x00004000 Invariant MDL checking for driver.
+    [ ] 0x00008000 Power framework delay fuzzing.
+    [ ] 0x00010000 Port/miniport interface checking.
+    [ ] 0x00040000 Systematic low resources simulation.
+    [ ] 0x00080000 DDI compliance checking (additional).
+    [ ] 0x00200000 NDIS/WIFI verification.
+    [ ] 0x00800000 Kernel synchronization delay fuzzing.
+    [ ] 0x01000000 VM switch verification.
+    [ ] 0x02000000 Code integrity checks.
+
+    [X] Indicates flag is enabled.
+
+  Active Rule Classes:
+
+    None
+
+  Boot Mode:
+
+    Persistent
+
+  Rules:
+
+    All rules are using default settings
+
+  Extensions:
+
+    wdm: rules.default
+
+  Verified Drivers:
+
+    ramshared.sys
+
+The system reboot is required for the changes to take effect.
+
+
+No settings were changed.
+
+VerifyDrivers=ramshared.sys
+VerifyDriverLevel=133435
+No drivers are currently verified.
+
+
+Verifier Flags: 0x0002093b
+
+  Standard Flags:
+
+    [X] 0x00000001 Special pool.
+    [X] 0x00000002 Force IRQL checking.
+    [X] 0x00000008 Pool tracking.
+    [X] 0x00000010 I/O verification.
+    [X] 0x00000020 Deadlock detection.
+    [ ] 0x00000080 DMA checking.
+    [X] 0x00000100 Security checks.
+    [X] 0x00000800 Miscellaneous checks.
+    [X] 0x00020000 DDI compliance checking.
+
+  Additional Flags:
+
+    [ ] 0x00000004 Randomized low resources simulation.
+    [ ] 0x00000200 Force pending I/O requests.
+    [ ] 0x00000400 IRP logging.
+    [ ] 0x00002000 Invariant MDL checking for stack.
+    [ ] 0x00004000 Invariant MDL checking for driver.
+    [ ] 0x00008000 Power framework delay fuzzing.
+    [ ] 0x00010000 Port/miniport interface checking.
+    [ ] 0x00040000 Systematic low resources simulation.
+    [ ] 0x00080000 DDI compliance checking (additional).
+    [ ] 0x00200000 NDIS/WIFI verification.
+    [ ] 0x00800000 Kernel synchronization delay fuzzing.
+    [ ] 0x01000000 VM switch verification.
+    [ ] 0x02000000 Code integrity checks.
+
+    [X] Indicates flag is enabled.
+
+  Active Rule Classes:
+
+    None
+
+  Boot Mode:
+
+    Persistent
+
+  Rules:
+
+    All rules are using default settings
+
+  Extensions:
+
+    wdm: rules.default
+
+  Verified Drivers:
+
+    ramshared.sys
+
