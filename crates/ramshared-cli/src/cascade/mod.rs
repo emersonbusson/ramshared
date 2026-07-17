@@ -363,7 +363,7 @@ fn swapoff_try(path: &str) -> Result<(), CascadeError> {
         if p.is_empty() {
             continue;
         }
-        match sh("swapoff", &[p]) {
+        match sh("swapoff", &["--", p]) {
             Ok(_) => return Ok(()),
             Err(e) => last = e,
         }
@@ -535,11 +535,11 @@ fn try_recover_zero_used_orphans() -> Result<(), CascadeError> {
             for e in read_swaps() {
                 if e.filename.contains("nbd") && !e.is_ghost() {
                     let dev = e.canonical_path();
-                    let _ = sh("nbd-client", &["-d", &dev]);
+                    let _ = sh("nbd-client", &["-d", "--", &dev]);
                 }
             }
             // Also disconnect default product nbd even if already off swaps.
-            let _ = sh("nbd-client", &["-d", NBD]);
+            let _ = sh("nbd-client", &["-d", "--", NBD]);
 
             if daemon_kill_allowed(&read_swaps()) {
                 cascade_io::stop_daemon_gracefully();
@@ -1366,7 +1366,7 @@ Filename Type Size Used Priority
     #[test]
     fn swapoff_try_prefers_canonical_then_bare() {
         clear_test_seams();
-        push_sh("swapoff /dev/nbd0", Err("first fail"));
+        push_sh("swapoff -- /dev/nbd0", Err("first fail"));
         push_sh("swapoff", Ok(""));
         let r = swapoff_try("nbd0");
         clear_test_seams();
