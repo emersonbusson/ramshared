@@ -519,10 +519,7 @@ fn serve_ublk_residency<M: VramMemory, F: Fn() -> Option<u64>>(
         if touches_vram && !demoted && demote_rx.is_none() {
             match canary.as_mut() {
                 None => {
-                    baseline.push(lat_us);
-                    if baseline.len() >= 16 {
-                        baseline.sort_unstable();
-                        let med = baseline[baseline.len() / 2].max(1);
+                    if let Some(med) = calculate_baseline(&mut baseline, lat_us) {
                         canary = Some(Canary::new(residency, med));
                     }
                 }
@@ -555,6 +552,19 @@ fn serve_ublk_residency<M: VramMemory, F: Fn() -> Option<u64>>(
     let _ = backend.zero();
     let _ = probe.zero();
     Ok(())
+}
+
+/// Helper function to calculate the baseline median from the latency samples.
+/// Once enough samples (16) are collected, it returns the median value.
+fn calculate_baseline(baseline: &mut Vec<u64>, lat_us: u64) -> Option<u64> {
+    baseline.push(lat_us);
+    if baseline.len() >= 16 {
+        baseline.sort_unstable();
+        let med = baseline[baseline.len() / 2].max(1);
+        Some(med)
+    } else {
+        None
+    }
 }
 
 /// Like [`spawn_server_dt3_vram`], but the worker (owner of the CUDA context) **also runs
