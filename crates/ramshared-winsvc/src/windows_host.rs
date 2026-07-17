@@ -466,7 +466,7 @@ impl WindowsHostState {
         if !('D'..='Z').contains(&letter) {
             return Err(HostError::Volume("letter must be D..=Z".into()));
         }
-        if serial.len() != 16 {
+        if serial.len() != 16 || !serial.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(HostError::Identity("serial must be 16 hex chars".into()));
         }
         // Bind the configured letter to the exact disk. Serial+size without the
