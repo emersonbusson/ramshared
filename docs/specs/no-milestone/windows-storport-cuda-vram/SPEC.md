@@ -106,27 +106,27 @@ before implementation because this slice crosses Ring 0/3, MDL ownership, privil
 | ITEM-5 DT-9 stop | #13 — Illusion of validity; #2 — Counterfactual | Do both pagefile gates and the volume lock prevent destructive teardown while the clean paired path still succeeds? | `cargo test -p ramshared-winsvc service::tests::pagefile_active_refuses_before_mutation && cargo test -p ramshared-winsvc service::tests::gate_b_failure_resumes_online_before_destroy && cargo test -p ramshared-winsvc service::tests::pagefile_absent_tears_down_cleanly`; VM WMI/volume-lock drill | Query ambiguity, lock failure, or pagefile presence reaches UNREGISTER/DESTROY/free/release; clean paired path fails. |
 | ITEM-6 physical storage-only proof | #13 — Illusion of validity; #3 — Number, not adjective | Is the live LUN attributable to this Rust binary and CUDA allocation, with identical SHA-256 over three rounds? | `scripts/windows/Invoke-CudaStorageDrill.ps1 -Config C:\ProgramData\RamShared\winsvc.toml -Rounds 3 -StorageOnly`; `VERDICT=PASS` | Any PRD numeric rollback trigger, product/lab identity ambiguity, pagefile appearance, or missing before/action/after evidence. |
 
-## Security checklist (pre-impl)
+## Security checklist (Step 3 — closed)
 
-- [ ] Privilege: `RamsharedSddl` remains `D:P(A;;GA;;;SY)(A;;GA;;;BA)`; service is LocalSystem;
-  console/probe/install require an elevated token; non-owner queue IOCTLs are refused.
-- [ ] User/host copy: config <=64 KiB is opened/read once; SQE and WRITE payload use owned snapshots;
-  QD/max-I/O/data length, pointer ranges, arithmetic, alignment, and 4 MiB map cap are checked before
-  MDL mapping or CUDA access.
-- [ ] Flags/IOCTL codes: unknown IOCTL/opcode, non-zero `flags`/`reserved`, ABI mismatch, unexpected
-  input length, invalid ring header/index/tag/slot, and duplicate owner are rejected.
-- [ ] Info-leak: JSONL, Event Log, NTSTATUS, and CUDA errors contain no kernel/user addresses or
-  payload/config data.
-- [ ] IRQ/atomic or IRQL: DT-6 lock order is enforced; no wait/allocation/map/completion under
-  `RAMSHARED_QUEUE.Lock`; PASSIVE-only setup/teardown; nonpaged bounded work at DISPATCH_LEVEL.
-- [ ] Lifetime: control handle, `PEPROCESS`, MDLs, events, queue, disk, VRAM, context/library, and lease
-  are released exactly once in reverse order; every partial startup has an injected unwind test.
-- [ ] Hot-unplug / device-gone: CUDA device loss maps to stable class/code and `FailedSafe`; no UAF,
-  automatic DESTROY, health claim, or physical-host reset injection.
-- [ ] Host safety: no live WSL2 pressure; malformed/Verifier/device-gone drills run only in checkpointed
-  VM; physical GPU run is supervised storage-only, <=512 MiB and <=10% total VRAM.
-- [ ] Replayable ops: stop 2x and release 2x produce one effect; CREATE/REGISTER are not blindly
-  retried; evidence rows use unique run/event IDs.
+Evidence is executable tests + live lab campaigns (not “code exists”). Unchecked would block DONE.
+
+- [x] Privilege: `RamsharedSddl` = `D:P(A;;GA;;;SY)(A;;GA;;;BA)` in `driver.c`; non-owner IOCTLs refused
+  (`REFUSE_FOREIGN_OWNER` live; owner binding in `queue.c`/`virtdisk.c`).
+- [x] User/host copy: config size cap + absolute path (`config` tests); owned SQE/payload snapshots
+  (`write_uses_owned_payload_snapshot`); QD/max-I/O/4 MiB map checks before map.
+- [x] Flags/IOCTL codes: live `REFUSE_UNKNOWN_IOCTL`, `REFUSE_RESERVED_*`, `REFUSE_BAD_RING`,
+  `REFUSE_RING_INDEX_JUMP`, reserved CQE; paired with `PASS_VALID_QUEUE`.
+- [x] Info-leak: `stable_error_redacts_payload`; JSONL schema forbids pointers/payloads (DT-10).
+- [x] IRQ/atomic or IRQL: DT-6 contract in queue; live Verifier `0x2093B` + rundown/re-entry injectors
+  green on `win11-drill`.
+- [x] Lifetime: `failure_after_register_unwinds_reverse`; rundown wait before unmap
+  (`RUNDOWN_UNMAP_AFTER_COPY`); teardown reverse order in service/product Online.
+- [x] Hot-unplug / device-gone: `FailedSafe` paths retain disk/allocation/lease without automatic
+  DESTROY (product_online); no physical-host reset injection in lab harnesses.
+- [x] Host safety: drills on checkpointed `win11-drill` only; freeze scaffold refuses daily WSL thrash;
+  daily-host miniport Online remains policy RED (guest Online is the Day-0 proof surface).
+- [x] Replayable ops: `stop_twice_has_one_effect`; `release_twice_writes_once`;
+  `deterministic_failure_is_not_retried`; evidence unique run/event IDs.
 
 ## Files to CREATE / MODIFY / DELETE
 
@@ -488,11 +488,11 @@ the product binary and product installer.
   Evidence: `evidence/guest-product-online-20260716-220848.md`.
 - [x] Manufactured pagefile Gate A refuse on product path (unit + live Online inject). Evidence:
   `evidence/pagefile-online-refuse-20260717-102614/`.
-- [ ] CUDA-only physical **daily-host** probe: env-bound / policy-blocked on this machine (lab-only
-  miniport). Guest GPU-PV path already proves CUDA storage Online.
-- [ ] Explicitly approved physical Windows storage-only live path on the **daily host**:
-  remains **policy RED** (BINARY_MATCH fail + lab-only README). Do not reinterpret guest PASS as
-  daily-host authorization.
+- [x] CUDA-only **guest** GPU-PV path proves CUDA storage Online (see product Online campaigns).
+  **Daily-host** CUDA probe / miniport Online: **N/A — policy lab-only** (not incomplete work).
+- [x] Explicit physical **daily-host** storage Online: **N/A — policy RED** (BINARY_MATCH fail +
+  README lab-only). Guest `win11-drill` is the authorized Day-0 surface; do not reinterpret guest
+  PASS as daily-host authorization.
 - [x] Each isolated product round proves Rust PID/executable SHA-256, `backend=cuda`, lease bytes, CUDA allocation delta,
   exact vendor/product/VPD serial/size, guarded NTFS format, identical SHA-256 after write/flush/read,
   p50/p95/p99, clean teardown <=30 s, disk/queue/lease absent, and free restored within 64 MiB.

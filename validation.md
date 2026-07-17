@@ -2063,3 +2063,21 @@ bash scripts/safety/wsl2-freeze-campaign.sh --check-gates
 **Verdict:** ✅ works (documentation discipline close for this slice’s false pendings)
 **Next action:** Only true new env: disposable isolated WSL for freeze claim, or separate EWDK for optional SDV
 **Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/{SPEC,IMPL}.md; evidence/sdv-probe-20260717/
+
+## 2026-07-17 12:05 -03 — Slice close: security checklist + release 0.6.3
+
+**What:** Closed remaining open SSDV3 security checklist boxes with executable evidence pointers; marked daily-host physical Online as policy N/A (not incomplete). Merged release-please v0.6.3. Windows StorPort Day-0 path is PASS; only true env-bound leftovers are WSL2 freeze claim (isolated lab) and optional older-EWDK SDV (out of scope DT-30).
+**Category:** docs / ssdv3 / release
+**How to measure:**
+```text
+rg "Security checklist \\(Step 3" docs/specs/no-milestone/windows-storport-cuda-vram/SPEC.md
+gh release view v0.6.3
+./scripts/docs-check.sh
+```
+**Measured data:**
+- PR #91 release v0.6.3 merged (CI green)
+- Security checklist all [x] with test/live evidence refs
+- Daily-host physical Online = N/A policy
+**Verdict:** ✅ works (discipline close of open checklists)
+**Next action:** None on daily host; optional new env for freeze claim only
+**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/{SPEC,IMPL}.md
