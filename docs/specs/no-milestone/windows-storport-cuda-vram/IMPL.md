@@ -234,8 +234,17 @@ the current package proof is `224913`. Evidence:
 1. Optional: add a manufactured active-pagefile refusal campaign for the corrected product path.
 2. Keep physical Online blocked by the lab-only policy; do not reinterpret guest proof as daily-host
    authorization.
-3. Strengthen the live StartIo READ race under Verifier.
+3. **StartIo READ-copy race (in progress, not claimed):** harness now records
+   `STARTIO_READ_COPY_RACE` via `Invoke-StartIoReadCopyRaceInjection` (queue pump +
+   PhysicalDrive overlapped READ + second-handle UNREGISTER). Live campaigns
+   `guest-exhaustive-20260717-004209` / `001940` / `235724` kept all ITEM-3 + Verifier
+   verdicts green but `STARTIO_READ_COPY_RACE=0` with diagnostics
+   `openErr=0 lastReadErr=1460 drained=0 sq=0/0` (CreateFile OK; no SQE at QSubmit).
+   The gate is recorded but does not fail the ITEM-3 STATUS matrix until a campaign
+   proves storage-stack READ reaches `QSubmit` (then re-run under Verifier).
 4. Run the isolated WSL2 freeze campaign before any freeze-elimination claim.
+   Scaffold: `scripts/safety/wsl2-freeze-campaign.sh` (dry-run only on daily host;
+   refuses without `RAMSHARED_ISOLATED_LAB=1`).
 
 The WSL2 freeze claim is **BLOCKED, not PASS**. Promotion requires a dedicated isolated
 before→action→after campaign with watchdog/timeout, swapoff-first, ghost/deleted-plus-used-kB checks,

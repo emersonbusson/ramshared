@@ -1,0 +1,7 @@
+{
+    "ARTIFACT":  "C:\\ramshared\\artifacts\\guest-exhaustive-20260716-235724",
+    "IOCTL_PASS1":  "FAIL",
+    "IOCTL_VERIFIER":  "FAIL",
+    "VERIFIER_RAN":  true,
+    "LEAVE_VM_ON":  false
+}

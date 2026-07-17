@@ -1905,3 +1905,25 @@ after adding WDK callback prototypes and narrowing the probe exception filter.
 explicit in release notes.
 
 **Evidence:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/code-analysis-project-clean-20260716.md`.
+
+## 2026-07-17 00:50 -03 — StartIo READ-copy race harness + live RED diagnostics
+
+**What:** Added dedicated `STARTIO_READ_COPY_RACE` injector (queue pump + PhysicalDrive overlapped READ + second-handle UNREGISTER race) to `Invoke-WinDriveIoctlValidation.ps1`, static gate tokens, and isolated `scripts/safety/wsl2-freeze-campaign.sh` dry-run scaffold. Re-ran live guest exhaustive on `win11-drill` with signed package `97FD7B37…`.
+**Category:** windows / storport / isolation / e2e
+**How to measure:**
+```text
+powershell -ExecutionPolicy Bypass -File scripts/windows/Test-WinDriveIoctlValidationStatic.ps1
+# elevated lab only:
+# C:\ramshared\bin\Run-GuestExhaustive.ps1
+./scripts/safety/wsl2-freeze-campaign.sh --json
+```
+**Measured data:**
+- Static injectors: `STATIC_INJECTOR_TEST=PASS` (includes StartIo tokens)
+- Campaign `guest-exhaustive-20260717-004209` (`-SkipVerifier`): ITEM-3 required verdicts all 1; `STARTIO_READ_COPY_RACE=0`
+- StartIo diagnostics: `path=\\.\PhysicalDrive2 openErr=0 lastReadErr=1460 (timeout) drained=0 sq=0/0` — CreateFile OK but no SQE posted (I/O not observed at QSubmit)
+- Prior full Verifier campaigns `235724` / `001940`: same STARTIO fail only; all other ITEM-3 + Verifier green
+- WSL2 freeze scaffold dry-run: `daily_host=true gates_ok=false` refuse (no thrash)
+- PR queue: #55 merged (`f865c94`); #53 already contained; open PR count 0
+**Verdict:** 🟡 partial — StartIo READ-copy live strengthening harness landed and honestly RED; freeze-elimination still unclaimed; physical Online + SDV still blocked by policy/tooling
+**Next action:** Make storage-stack READ reach QSubmit (online/format or SPTI CDB READ under pump), re-run under Verifier; keep physical/SDV/WSL2 freeze as separate non-claims
+**Artifacts:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260717-004209/`, `scripts/safety/wsl2-freeze-campaign.sh`
