@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.4](https://github.com/emersonbusson/ramshared/compare/v0.6.3...v0.6.4) (2026-07-17)
+
+
+### Documentation
+
+* **ssdv3:** close security checklist for storport Day-0 path ([0315de0](https://github.com/emersonbusson/ramshared/commit/0315de03fe4af4e0fcb19391b2d7a7927ad3abca))
+* **ssdv3:** close security checklist for storport Day-0 path ([b445101](https://github.com/emersonbusson/ramshared/commit/b44510178391346d8d5ad54f5d5a39ca7d61e799))
+
 ## [0.6.3](https://github.com/emersonbusson/ramshared/compare/v0.6.2...v0.6.3) (2026-07-17)
 
 
