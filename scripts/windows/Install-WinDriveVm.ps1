@@ -57,12 +57,10 @@ $result = Invoke-Command -Session $sess -ScriptBlock {
     # Tear down legacy sc services if present
     sc.exe stop ramshared 2>$null | Out-Null
     sc.exe stop poolstress 2>$null | Out-Null
-    sc.exe delete ramshared 2>$null | Out-Null
     sc.exe delete poolstress 2>$null | Out-Null
     Start-Sleep 2
 
-    # Copy sys into drivers dir for INF
-    Copy-Item C:\ramshared\package\ramshared.sys C:\Windows\System32\drivers\ramshared.sys -Force
+    # poolstress remains a standalone legacy lab driver. RamShared uses DIRID 13.
     Copy-Item C:\ramshared\package\poolstress.sys C:\Windows\System32\drivers\poolstress.sys -Force
 
     # INF install
@@ -78,11 +76,7 @@ $result = Invoke-Command -Session $sess -ScriptBlock {
     sc.exe create poolstress type= kernel start= demand binPath= C:\Windows\System32\drivers\poolstress.sys 2>&1 | Out-Null
     sc.exe start poolstress 2>&1 | Out-String | ForEach-Object { $o += "START_POOL=$_" }
 
-    # If INF didn't create ramshared service, sc create
-    $q = sc.exe query ramshared 2>&1 | Out-String
-    if ($q -match "1060|does not exist|nao existe|não existe") {
-        sc.exe create ramshared type= kernel start= demand binPath= C:\Windows\System32\drivers\ramshared.sys 2>&1 | Out-String | ForEach-Object { $o += "SC_CREATE=$_" }
-    }
+    # The INF must own service creation and its Driver Store ImagePath.
     sc.exe start ramshared 2>&1 | Out-String | ForEach-Object { $o += "START_RAM=$_" }
 
     $o += "Q_RAM=$((sc.exe query ramshared | Out-String))"

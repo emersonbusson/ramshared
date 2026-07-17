@@ -61,6 +61,8 @@ QOwnerMatches(_In_ PRAMSHARED_QUEUE Q, _In_ PEPROCESS Process)
 /* Cap single MDL map: 4 MiB avoids system-PTE pressure on small lab VMs. */
 #define RAMSHARED_MAX_DATA_MDL (4u * 1024u * 1024u)
 
+static DRIVER_CANCEL QCommitCancel;
+
 static BOOLEAN
 QIsUserVa(_In_ ULONG_PTR Va, _In_ SIZE_T Len)
 {
@@ -80,6 +82,20 @@ QIsUserVa(_In_ ULONG_PTR Va, _In_ SIZE_T Len)
 		return FALSE;
 	}
 	return TRUE;
+}
+
+static LONG
+QProbeAndLockExceptionFilter(_In_ ULONG ExceptionCode)
+{
+	switch (ExceptionCode) {
+	case STATUS_ACCESS_VIOLATION:
+	case STATUS_DATATYPE_MISALIGNMENT:
+	case STATUS_GUARD_PAGE_VIOLATION:
+	case STATUS_IN_PAGE_ERROR:
+		return EXCEPTION_EXECUTE_HANDLER;
+	default:
+		return EXCEPTION_CONTINUE_SEARCH;
+	}
 }
 
 static NTSTATUS
@@ -113,7 +129,7 @@ QMapUserRegion(
 		MmProbeAndLockPages(mdl,
 				    AccessMode == KernelMode ? UserMode : AccessMode,
 				    IoModifyAccess);
-	} __except (EXCEPTION_EXECUTE_HANDLER) {
+	} __except (QProbeAndLockExceptionFilter(GetExceptionCode())) {
 		IoFreeMdl(mdl);
 		return STATUS_INVALID_PARAMETER;
 	}

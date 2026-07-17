@@ -9,6 +9,7 @@ pub mod config;
 pub mod cuda_probe;
 pub mod driver_link;
 pub mod evidence;
+pub mod host_safety;
 pub mod ntpagefile;
 pub mod proto;
 pub mod runtime;

@@ -8,11 +8,11 @@ Class       = SCSIAdapter
 ClassGuid   = {4d36e97b-e325-11ce-bfc1-08002be10318}
 Provider    = %ManufacturerName%
 CatalogFile = ramshared.cat
-DriverVer   = 07/09/2026,10.0.26200.1
+DriverVer   = 07/16/2026,10.0.26200.3
 PnpLockdown = 1
 
 [DestinationDirs]
-DefaultDestDir = 12
+DefaultDestDir = 13
 
 [SourceDisksNames]
 1 = %DiskName%,,,""
@@ -21,9 +21,9 @@ DefaultDestDir = 12
 ramshared.sys = 1,,
 
 [Manufacturer]
-%ManufacturerName% = Standard,NTamd64
+%ManufacturerName% = Standard,NTamd64.10.0...16299
 
-[Standard.NTamd64]
+[Standard.NTamd64.10.0...16299]
 %RamShared.DeviceDesc% = RamShared_Device, Root\RamShared
 
 [RamShared_Device.NT]
@@ -40,7 +40,7 @@ DisplayName    = %RamShared.SVCDESC%
 ServiceType    = 1               ; SERVICE_KERNEL_DRIVER
 StartType      = 3               ; SERVICE_DEMAND_START
 ErrorControl   = 1               ; SERVICE_ERROR_NORMAL
-ServiceBinary  = %12%\ramshared.sys
+ServiceBinary  = %13%\ramshared.sys
 LoadOrderGroup = SCSI Miniport
 AddReg         = RamShared_AddReg
 
