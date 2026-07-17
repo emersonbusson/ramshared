@@ -18,7 +18,10 @@ param(
     [string]$Password = $env:RAMSHARED_DRILL_PASSWORD,
     [UInt64]$SizeBytes = 67108864,
     [string]$Letter = "S",
-    [int]$BrokerPort = 19876
+    [int]$BrokerPort = 19876,
+    # Lab-only: inject configured PagingFiles for product letter before stop;
+    # expect Gate A refuse (code 7), Online retained, then restore registry and real stop.
+    [switch]$ManufacturedPagefileRefuse
 )
 
 $ErrorActionPreference = "Stop"
@@ -93,6 +96,18 @@ function Send-GuestFile([string]$Local, [string]$RemoteDir, [string]$Name) {
 }
 
 Send-GuestFile "C:\ramshared\bin\ramshared-winsvc.exe" "C:\ramshared\bin" "ramshared-winsvc.exe"
+if ($ManufacturedPagefileRefuse) {
+    $pfScript = "C:\ramshared\bin\Invoke-PagefileRefusalManufactured.ps1"
+    if (-not (Test-Path $pfScript)) {
+        # Prefer repo copy under src if bin not synced yet.
+        $alt = "C:\ramshared\src\scripts\windows\Invoke-PagefileRefusalManufactured.ps1"
+        if (Test-Path $alt) { $pfScript = $alt }
+    }
+    if (-not (Test-Path $pfScript)) {
+        throw "Invoke-PagefileRefusalManufactured.ps1 missing (need for -ManufacturedPagefileRefuse)"
+    }
+    Send-GuestFile $pfScript "C:\ramshared\bin" "Invoke-PagefileRefusalManufactured.ps1"
+}
 foreach ($dll in @("VCRUNTIME140.dll", "VCRUNTIME140_1.dll", "MSVCP140.dll")) {
     $p = Join-Path $env:SystemRoot ("System32\" + $dll)
     if (Test-Path $p) {
@@ -239,10 +254,16 @@ if ($rebootReady.Elapsed.TotalSeconds -ge 300) { throw "PSD not ready after depl
 W ("PSD_AFTER_DEPLOY_OK elapsed={0:n0}s" -f $rebootReady.Elapsed.TotalSeconds)
 
 $loads = @()
-for ($campaignRound = 1; $campaignRound -le 3; $campaignRound++) {
-W ("lifecycle round {0}/3 begin" -f $campaignRound)
-$roundLoad = Invoke-GuestBounded -TimeoutSec 300 -ScriptBlock {
-    param($cfg, $sizeBytes, $brokerPort, $letter)
+$lifecycleRounds = 3
+if ($ManufacturedPagefileRefuse) {
+    # One Online lifecycle is enough for Gate A refuse proof.
+    $lifecycleRounds = 1
+    W "ManufacturedPagefileRefuse=1 (single lifecycle + Gate A inject)"
+}
+for ($campaignRound = 1; $campaignRound -le $lifecycleRounds; $campaignRound++) {
+W ("lifecycle round {0}/{1} begin" -f $campaignRound, $lifecycleRounds)
+$roundLoad = Invoke-GuestBounded -TimeoutSec 360 -ScriptBlock {
+    param($cfg, $sizeBytes, $brokerPort, $letter, $manufacturedPagefileRefuse)
     $ErrorActionPreference = "Continue"
     $configuredLetter = $letter.ToUpperInvariant()
     $o = [ordered]@{}
@@ -510,6 +531,31 @@ try { $listener.Stop() } catch {}
     Remove-Item C:\ProgramData\RamShared\teardown-diag.log -Force -EA SilentlyContinue
     Remove-Item C:\ProgramData\RamShared\stop.request -Force -EA SilentlyContinue
 
+    $o.manufacturedPagefileRefuse = [bool]$manufacturedPagefileRefuse
+    $o.pagefileRefuse = $null
+    if ($manufacturedPagefileRefuse) {
+        # Inject configured PagingFiles entry for product letter, pulse stop,
+        # expect Gate A refuse (code 7) while process remains Online, then restore.
+        $inj = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `
+            C:\ramshared\bin\Invoke-PagefileRefusalManufactured.ps1 `
+            -Letter $letter `
+            -StopRequestPath C:\ProgramData\RamShared\stop.request `
+            -DiagPath C:\ProgramData\RamShared\teardown-diag.log `
+            -ErrLogPath $err `
+            -StopWaitSec 25 *>&1
+        $o.pagefileInjectOut = ($inj | Out-String)
+        $jsonLine = @($inj | Where-Object { $_ -is [string] -and $_.TrimStart().StartsWith("{") } | Select-Object -Last 1)
+        if ($jsonLine) {
+            try { $o.pagefileRefuse = ($jsonLine | ConvertFrom-Json) } catch {}
+        }
+        $o.pagefileRefusePass = $false
+        if ($o.pagefileRefuse -and $o.pagefileRefuse.pass -and $o.pagefileRefuse.refuseObserved) {
+            $o.pagefileRefusePass = $true
+        }
+        # Process should still be Online after refuse; now real stop without inject.
+        Start-Sleep 1
+    }
+
     # Graceful stop. On Gate A/B/lock refusal the runtime resumes Online and
     # clears the stop flag after the poller already deleted stop.request — so we
     # re-assert the file every 2s until exit, bounded by DT-13's 30s budget.
@@ -608,19 +654,26 @@ try { $listener.Stop() } catch {}
     $newDumps = @($dumpAfterRows | Where-Object { $dumpBeforeRows -notcontains $_ })
     $o.noNewDump = ($newDumps.Count -eq 0)
     $o.stopOk = $stopOk -and ($o.consoleExit -eq 0) -and ($o.teardownMs -le 30000) -and $o.leaseLiberado -and $o.cudaRestored -and $o.noNewDump
+    if ($manufacturedPagefileRefuse) {
+        # Campaign success requires Gate A refuse observed before the clean stop.
+        $o.stopOk = $o.stopOk -and [bool]$o.pagefileRefusePass
+    }
     # Compact JSON only — avoid serializing PSObject graphs.
     $o | ConvertTo-Json -Depth 4 -Compress
-} -ArgumentList @($cfgText, [uint64]$SizeBytes, $BrokerPort, $Letter)
+} -ArgumentList @($cfgText, [uint64]$SizeBytes, $BrokerPort, $Letter, [bool]$ManufacturedPagefileRefuse)
 $load = [string]($roundLoad | Where-Object { $_ -is [string] -and $_.TrimStart().StartsWith("{") } | Select-Object -Last 1)
 if ([string]::IsNullOrWhiteSpace($load)) { throw ("round {0} returned no JSON result" -f $campaignRound) }
 $load | Set-Content (Join-Path $art ("guest-result-round-{0}.json" -f $campaignRound))
 $loads += $load
-W ("lifecycle round {0}/3 result={1}" -f $campaignRound, $load)
+W ("lifecycle round {0}/{1} result={2}" -f $campaignRound, $lifecycleRounds, $load)
 $roundResult = $load | ConvertFrom-Json
 $roundPass = $roundResult.online -and $roundResult.binaryMatch -and $roundResult.roundsPass -and `
     ($roundResult.consoleExit -eq 0) -and (-not $roundResult.forceKilledConsole) -and `
     $roundResult.leaseLiberado -and $roundResult.cudaRestored -and $roundResult.noNewDump -and `
     ($roundResult.teardownMs -le 30000)
+if ($ManufacturedPagefileRefuse) {
+    $roundPass = $roundPass -and [bool]$roundResult.pagefileRefusePass
+}
 if (-not $roundPass) { throw ("lifecycle round {0} failed; no retry" -f $campaignRound) }
 }
 
@@ -634,9 +687,11 @@ $n = Get-PnpDevice -Class Display | Where-Object FriendlyName -Match NVIDIA | Se
 W ("HOST_GPU=" + $n.Status)
 $terminalSafe = $vmOff -and ($n.Status -eq "OK")
 
-# Parse the three independent lifecycle results and require the complete DT-13 conjunction.
+# DT-13 product Online requires 3 lifecycle rounds. Manufactured pagefile refuse
+# is a single-round strengthening gate (Online + Gate A refuse + clean stop).
 $results = @($loads | ForEach-Object { $_ | ConvertFrom-Json })
-$allOnline = ($results.Count -eq 3) -and (@($results | Where-Object { -not $_.online }).Count -eq 0)
+$expectedRounds = $lifecycleRounds
+$allOnline = ($results.Count -eq $expectedRounds) -and (@($results | Where-Object { -not $_.online }).Count -eq 0)
 $allBinaryMatch = (@($results | Where-Object { -not $_.binaryMatch }).Count -eq 0)
 $allSha = (@($results | Where-Object { -not $_.roundsPass }).Count -eq 0)
 $allExitZero = (@($results | Where-Object { $_.consoleExit -ne 0 }).Count -eq 0)
@@ -645,6 +700,10 @@ $allLeaseReleased = (@($results | Where-Object { -not $_.leaseLiberado }).Count 
 $allCudaRestored = (@($results | Where-Object { -not $_.cudaRestored }).Count -eq 0)
 $allNoNewDump = (@($results | Where-Object { -not $_.noNewDump }).Count -eq 0)
 $allWithinBudget = (@($results | Where-Object { $_.teardownMs -gt 30000 }).Count -eq 0)
+$allPagefileRefuse = $true
+if ($ManufacturedPagefileRefuse) {
+    $allPagefileRefuse = (@($results | Where-Object { -not $_.pagefileRefusePass }).Count -eq 0)
+}
 
 $summary = [ordered]@{
     ARTIFACT = $art
@@ -659,11 +718,13 @@ $summary = [ordered]@{
     NO_NEW_DUMP = $allNoNewDump
     TEARDOWN_WITHIN_BUDGET = $allWithinBudget
     TERMINAL_SAFE = $terminalSafe
+    MANUFACTURED_PAGEFILE_REFUSE = [bool]$ManufacturedPagefileRefuse
+    PAGEFILE_REFUSE_PASS = $allPagefileRefuse
 }
 $summary.PASS = $summary.ONLINE -and $summary.BINARY_MATCH -and $summary.ROUNDS_PASS -and `
     $summary.CONSOLE_EXIT_ZERO -and $summary.NO_FORCE_KILL -and $summary.LEASE_RELEASED -and `
     $summary.CUDA_RESTORED -and $summary.NO_NEW_DUMP -and `
-    $summary.TEARDOWN_WITHIN_BUDGET -and $summary.TERMINAL_SAFE
+    $summary.TEARDOWN_WITHIN_BUDGET -and $summary.TERMINAL_SAFE -and $allPagefileRefuse
 $summary | ConvertTo-Json | Set-Content (Join-Path $art "summary.json")
 W ("SUMMARY " + ($summary | ConvertTo-Json -Compress))
 

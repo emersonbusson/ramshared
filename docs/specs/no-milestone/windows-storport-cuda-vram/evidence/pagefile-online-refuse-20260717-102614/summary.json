@@ -1,0 +1,18 @@
+{
+  "ARTIFACT": "C:\\ramshared\\artifacts\\guest-product-online-20260717-102614",
+  "LIFECYCLE_ROUNDS": 1,
+  "ONLINE": true,
+  "BINARY_MATCH": true,
+  "ROUNDS_PASS": true,
+  "CONSOLE_EXIT_ZERO": true,
+  "NO_FORCE_KILL": true,
+  "LEASE_RELEASED": true,
+  "CUDA_RESTORED": true,
+  "NO_NEW_DUMP": true,
+  "TEARDOWN_WITHIN_BUDGET": true,
+  "TERMINAL_SAFE": true,
+  "MANUFACTURED_PAGEFILE_REFUSE": true,
+  "PAGEFILE_REFUSE_PASS": true,
+  "NOTE": "summary recomputed after host aggregator expected 3 rounds; live Gate A refuse observed (gate_a_active S:\\\\pagefile.sys) then clean stop exit 0",
+  "PASS": true
+}

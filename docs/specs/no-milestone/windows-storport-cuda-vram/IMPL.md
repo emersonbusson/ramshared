@@ -255,14 +255,20 @@ Package SHA `97FD7B37…`. Evidence: `evidence/startio-claim-20260717.md`,
 | Static | `scripts/windows/Test-PagefileRefusalManufacturedStatic.ps1` |
 | Guest lab inject | `Invoke-PagefileRefusalManufactured.ps1` on win11-drill: registry PagingFiles inject for letter `S:`, restore OK (`pagefile-refusal-20260717-095826`) |
 
-Live product Online + stop.request with the inject mid-lifecycle remains optional strengthening
-(registry inject alone proves DT-8 configured-source manufacturing; unit tests prove the product
-teardown decision).
+Live product Online + stop with mid-lifecycle inject is **PASS**
+(`guest-product-online-20260717-102614` / `pagefile-online-refuse-20260717-102614`):
+`gate_a_active: S:\pagefile.sys`, Online resumed, then clean stop exit 0, lease release,
+CUDA restore, no dump. Flag: `Run-GuestProductOnline.ps1 -ManufacturedPagefileRefuse`.
+
+### SDV probe (2026-07-17)
+
+`Invoke-SdvProbe.ps1`: `sdv.exe` not on PATH; MSBuild `/t:sdv` → MSB4057 (target missing).
+WDK has `WindowsDriver.Sdv.targets` but SDV tool package is not installed.
+**SDV_CLAIM=NOT_CLAIMED.** Evidence: `evidence/sdv-probe-20260717/`.
 
 ## Remaining promotion gates
 
-1. ~~Manufactured active-pagefile refusal~~ — unit + guest registry manufacture **PASS** (see above);
-   optional live Online+stop inject still available via `-StopRequestPath`.
+1. ~~Manufactured active-pagefile refusal~~ — unit + guest inject + **live Online+stop** PASS.
 2. Keep physical Online blocked by the lab-only policy; do not reinterpret guest proof as daily-host
    authorization.
 3. ~~StartIo READ-copy race~~ — **claimed** on win11-drill under Verifier (see above).
@@ -271,6 +277,8 @@ teardown decision).
    daily host; full 2× before→action→after only with `--allow-isolated-lab`,
    `RAMSHARED_ISOLATED_LAB=1`, and `--run-isolated` (cgroup-bounded pressure + watchdog).
    Static: `scripts/safety/Test-Wsl2FreezeCampaignStatic.sh`.
+5. SDV PASS — install Static Driver Verifier component for WDK 10.0.26100, re-run
+   `Invoke-SdvProbe.ps1` / MSBuild `/t:sdv`, record defects=0.
 
 The WSL2 freeze claim is **BLOCKED, not PASS**. Promotion requires a dedicated isolated
 before→action→after campaign with watchdog/timeout, swapoff-first, ghost/deleted-plus-used-kB checks,

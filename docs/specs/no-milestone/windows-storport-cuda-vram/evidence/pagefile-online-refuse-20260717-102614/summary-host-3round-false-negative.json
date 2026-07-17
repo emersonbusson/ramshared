@@ -1,0 +1,15 @@
+{
+    "ARTIFACT":  "C:\\ramshared\\artifacts\\guest-product-online-20260717-102614",
+    "LIFECYCLE_ROUNDS":  1,
+    "ONLINE":  false,
+    "BINARY_MATCH":  true,
+    "ROUNDS_PASS":  true,
+    "CONSOLE_EXIT_ZERO":  true,
+    "NO_FORCE_KILL":  true,
+    "LEASE_RELEASED":  true,
+    "CUDA_RESTORED":  true,
+    "NO_NEW_DUMP":  true,
+    "TEARDOWN_WITHIN_BUDGET":  true,
+    "TERMINAL_SAFE":  true,
+    "PASS":  false
+}

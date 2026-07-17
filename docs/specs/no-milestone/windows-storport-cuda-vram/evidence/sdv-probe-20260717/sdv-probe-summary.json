@@ -1,0 +1,17 @@
+﻿{
+    "ts":  "2026-07-17T10:25:56.1394657-03:00",
+    "project":  "C:\\ramshared\\src\\drivers\\windows\\ramshared\\ramshared.vcxproj",
+    "projectExists":  true,
+    "sdvOnPath":  false,
+    "sdvPath":  null,
+    "staticDvOnPath":  false,
+    "sdvTargetsPresent":  true,
+    "sdvTargetsPath":  "C:\\Program Files (x86)\\Windows Kits\\10\\build\\10.0.26100.0\\WindowsDriver.Sdv.targets",
+    "msbuildPath":  "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\MSBuild\\Current\\Bin\\MSBuild.exe",
+    "msbuildSdvExit":  1,
+    "claim":  "NOT_CLAIMED",
+    "reasons":  [
+                    "sdv.exe_not_on_path",
+                    "msbuild_target_sdv_missing"
+                ]
+}
