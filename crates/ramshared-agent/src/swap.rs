@@ -66,7 +66,8 @@ pub fn attach_swap_with<F>(
 where
     F: FnMut(&str, &[String]) -> Result<()>,
 {
-    run_cmd("nbd-client", &nbd_args(endpoint, export, dev)).map_err(|e| format!("nbd-client: {e}"))?;
+    run_cmd("nbd-client", &nbd_args(endpoint, export, dev))
+        .map_err(|e| format!("nbd-client: {e}"))?;
     // DT-16: exported VRAM returns dirty/zeroed; the swap header needs to be rewritten.
     run_cmd("mkswap", &[dev.to_string()]).map_err(|e| format!("mkswap: {e}"))?;
     run_cmd("swapon", &swapon_args(dev, prio)).map_err(|e| format!("swapon: {e}"))?;
@@ -158,7 +159,9 @@ mod tests {
 
     #[test]
     fn attach_swap_with_nbd_client_fails() {
-        let ep = NbdEndpoint::Unix { path: "/sock".into() };
+        let ep = NbdEndpoint::Unix {
+            path: "/sock".into(),
+        };
         let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |cmd, _| {
             if cmd == "nbd-client" {
                 Err(Error::other("mock error"))
@@ -171,7 +174,9 @@ mod tests {
 
     #[test]
     fn attach_swap_with_mkswap_fails() {
-        let ep = NbdEndpoint::Unix { path: "/sock".into() };
+        let ep = NbdEndpoint::Unix {
+            path: "/sock".into(),
+        };
         let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |cmd, _| {
             if cmd == "mkswap" {
                 Err(Error::other("mock error"))
@@ -184,7 +189,9 @@ mod tests {
 
     #[test]
     fn attach_swap_with_swapon_fails() {
-        let ep = NbdEndpoint::Unix { path: "/sock".into() };
+        let ep = NbdEndpoint::Unix {
+            path: "/sock".into(),
+        };
         let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |cmd, _| {
             if cmd == "swapon" {
                 Err(Error::other("mock error"))
@@ -197,10 +204,10 @@ mod tests {
 
     #[test]
     fn attach_swap_with_success() {
-        let ep = NbdEndpoint::Unix { path: "/sock".into() };
-        let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |_, _| {
-            Ok(())
-        });
+        let ep = NbdEndpoint::Unix {
+            path: "/sock".into(),
+        };
+        let res = attach_swap_with(&ep, "export", "/dev/nbd0", None, |_, _| Ok(()));
         assert_eq!(res, Ok(()));
     }
 }
