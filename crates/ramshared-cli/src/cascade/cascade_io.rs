@@ -128,15 +128,11 @@ pub(crate) fn setup_zram_sysfs(mb: u64, prio: i32) -> Result<(), CascadeError> {
     Ok(())
 }
 
-pub fn up() -> Result<(), CascadeError> {
-    let a = parse_up_args()?;
-    let prios = TierPriorities::default();
-    validate_order(prios).map_err(|e| CascadeError::Precondition(e.to_string()))?;
-
+fn check_transport(transport: Transport) -> Result<(), CascadeError> {
     // cascade-transport-policy ITEM-3: ublk fail-closed before idempotent return (#16).
     // Auto already resolved to Nbd on WSL2; explicit ublk or Auto→Ublk (non-WSL2) still blocked
     // until full up wire-up exists (SPEC future + dedicated AUDIT-2.5 for teardown).
-    if a.transport == Transport::Ublk {
+    if transport == Transport::Ublk {
         let msg = if is_wsl2() {
             "transport ublk recusado no WSL2 (freeze risk 2026-06-09; Day-1 = nbd). \
              Lab-only: daemon manual + RAMSHARED_ALLOW_UBLK_ON_WSL2=1 — nao e Day-0. \
@@ -147,6 +143,102 @@ pub fn up() -> Result<(), CascadeError> {
         };
         return Err(CascadeError::Precondition(msg.into()));
     }
+    Ok(())
+}
+
+fn check_safety_net(vram_mb: u64, force: bool, prios: &TierPriorities) -> Result<(), CascadeError> {
+    // A1 — DEMOTE safety net (requires a tier below VRAM).
+    let vram_bytes = vram_mb
+        .checked_mul(1024 * 1024)
+        .ok_or_else(|| CascadeError::Arg("--vram: overflow (MiB grande demais)".into()))?;
+    let net = vram_safety_net(lower_tier_present(), mem_available_bytes(), vram_bytes);
+    if !net.is_safe() && !force {
+        return Err(CascadeError::Precondition(
+            "sem rede de seguranca p/ DEMOTE (sem VHDX e RAM insuficiente); \
+             use --force-no-safety-net se intencional"
+                .into(),
+        ));
+    }
+    eprintln!("[up] rede de seguranca A1: {net:?}");
+    // Product order (always): zram (hot) > VRAM tier (cold, fast vs SSD) > disk VHDX (last).
+    eprintln!(
+        "[up] prioridade: zram({}) > VRAM/nbd({}) > VHDX(disk) — SSD so depois de VRAM",
+        prios.zram, prios.vram
+    );
+    Ok(())
+}
+
+fn spawn_daemon(daemon_path: &str, vram_mb: u64, swap_dev: &str) -> Result<(), CascadeError> {
+    let _ = fs::remove_file(SOCK);
+    let child = Command::new(daemon_path)
+        .args([
+            "--size",
+            &vram_mb.to_string(),
+            "--sock",
+            SOCK,
+            "--nbd",
+            swap_dev,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| CascadeError::Shell {
+            cmd: daemon_path.to_string(),
+            msg: e.to_string(),
+        })?;
+    let _ = fs::write(PID_FILE, child.id().to_string());
+    let mut ok = false;
+    for _ in 0..120 {
+        if Path::new(SOCK).exists() {
+            ok = true;
+            break;
+        }
+        sleep(Duration::from_millis(50));
+    }
+    if !ok {
+        // Best-effort cleanup of failed spawn; no swap yet so kill is allowed.
+        let _ = sh("pkill", &["-x", "ramsharedd"]);
+        disarm_forensics();
+        return Err(CascadeError::Precondition(
+            "daemon nao subiu (socket ausente)".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn connect_nbd(connections: u32, swap_dev: &str, vram_prio: i32) -> Result<(), CascadeError> {
+    let conns = connections.to_string();
+    let mut nbd_args: Vec<&str> = Vec::new();
+    if connections > 1 {
+        nbd_args.extend(["-C", conns.as_str()]);
+    }
+    nbd_args.extend(["-unix", SOCK, swap_dev]);
+    if let Err(e) = sh("nbd-client", &nbd_args) {
+        let _ = sh("pkill", &["-x", "ramsharedd"]);
+        disarm_forensics();
+        return Err(e);
+    }
+    if let Err(e) = sh("mkswap", &["-L", "RAMSHARED", swap_dev]) {
+        let _ = sh("nbd-client", &["-d", swap_dev]);
+        let _ = sh("pkill", &["-x", "ramsharedd"]);
+        disarm_forensics();
+        return Err(e);
+    }
+    if let Err(e) = sh("swapon", &["-p", &vram_prio.to_string(), swap_dev]) {
+        let _ = sh("nbd-client", &["-d", swap_dev]);
+        let _ = sh("pkill", &["-x", "ramsharedd"]);
+        disarm_forensics();
+        return Err(e);
+    }
+    Ok(())
+}
+
+pub fn up() -> Result<(), CascadeError> {
+    let a = parse_up_args()?;
+    let prios = TierPriorities::default();
+    validate_order(prios).map_err(|e| CascadeError::Precondition(e.to_string()))?;
+
+    check_transport(a.transport)?;
 
     // Ghosts: never auto-recover (#16).
     refuse_ghost_swap_state()?;
@@ -168,25 +260,8 @@ pub fn up() -> Result<(), CascadeError> {
     }
     refuse_half_cascade(&entries_after)?;
 
-    // A1 — DEMOTE safety net (requires a tier below VRAM).
-    let vram_bytes = a
-        .vram_mb
-        .checked_mul(1024 * 1024)
-        .ok_or_else(|| CascadeError::Arg("--vram: overflow (MiB grande demais)".into()))?;
-    let net = vram_safety_net(lower_tier_present(), mem_available_bytes(), vram_bytes);
-    if !net.is_safe() && !a.force {
-        return Err(CascadeError::Precondition(
-            "sem rede de seguranca p/ DEMOTE (sem VHDX e RAM insuficiente); \
-             use --force-no-safety-net se intencional"
-                .into(),
-        ));
-    }
-    eprintln!("[up] rede de seguranca A1: {net:?}");
-    // Product order (always): zram (hot) > VRAM tier (cold, fast vs SSD) > disk VHDX (last).
-    eprintln!(
-        "[up] prioridade: zram({}) > VRAM/nbd({}) > VHDX(disk) — SSD so depois de VRAM",
-        prios.zram, prios.vram
-    );
+    check_safety_net(a.vram_mb, a.force, &prios)?;
+
     fs::create_dir_all("/run/ramshared").map_err(|e| CascadeError::Io(e.to_string()))?;
 
     arm_forensics();
@@ -196,63 +271,9 @@ pub fn up() -> Result<(), CascadeError> {
 
     // VRAM tier (COLD): daemon + nbd.
     sh("modprobe", &["nbd", "nbds_max=1", "max_part=0"])?;
-    let _ = fs::remove_file(SOCK);
-    let child = Command::new(&a.daemon)
-        .args([
-            "--size",
-            &a.vram_mb.to_string(),
-            "--sock",
-            SOCK,
-            "--nbd",
-            &a.swap_dev,
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| CascadeError::Shell {
-            cmd: a.daemon.clone(),
-            msg: e.to_string(),
-        })?;
-    let _ = fs::write(PID_FILE, child.id().to_string());
-    let mut ok = false;
-    for _ in 0..120 {
-        if Path::new(SOCK).exists() {
-            ok = true;
-            break;
-        }
-        sleep(Duration::from_millis(50));
-    }
-    if !ok {
-        // Best-effort cleanup of failed spawn; no swap yet so kill is allowed.
-        let _ = sh("pkill", &["-x", "ramsharedd"]);
-        disarm_forensics();
-        return Err(CascadeError::Precondition(
-            "daemon nao subiu (socket ausente)".into(),
-        ));
-    }
-    let conns = a.connections.to_string();
-    let mut nbd_args: Vec<&str> = Vec::new();
-    if a.connections > 1 {
-        nbd_args.extend(["-C", conns.as_str()]);
-    }
-    nbd_args.extend(["-unix", SOCK, &a.swap_dev]);
-    if let Err(e) = sh("nbd-client", &nbd_args) {
-        let _ = sh("pkill", &["-x", "ramsharedd"]);
-        disarm_forensics();
-        return Err(e);
-    }
-    if let Err(e) = sh("mkswap", &["-L", "RAMSHARED", &a.swap_dev]) {
-        let _ = sh("nbd-client", &["-d", &a.swap_dev]);
-        let _ = sh("pkill", &["-x", "ramsharedd"]);
-        disarm_forensics();
-        return Err(e);
-    }
-    if let Err(e) = sh("swapon", &["-p", &prios.vram.to_string(), &a.swap_dev]) {
-        let _ = sh("nbd-client", &["-d", &a.swap_dev]);
-        let _ = sh("pkill", &["-x", "ramsharedd"]);
-        disarm_forensics();
-        return Err(e);
-    }
+    spawn_daemon(&a.daemon, a.vram_mb, &a.swap_dev)?;
+    connect_nbd(a.connections, &a.swap_dev, prios.vram)?;
+
     fs::write(SWAP_DEV_FILE, &a.swap_dev).map_err(|e| CascadeError::Io(e.to_string()))?;
     eprintln!(
         "[up] VRAM {} (prio {}, {} MiB, {} conexão(ões))",
@@ -278,8 +299,11 @@ pub fn down() -> Result<(), CascadeError> {
     let candidates = swapoff_candidates(recorded_swap.as_deref(), recorded_zram.as_deref());
     eprintln!("[down] swapoff candidatos: {candidates:?}");
 
+    // Fetch entries once to use in swapoff_all
+    let current_entries = read_swaps();
+
     // 1) ALWAYS swapoff first — never disconnect/kill with pages on the device.
-    let fails = swapoff_all(&candidates);
+    let fails = swapoff_all(&candidates, &current_entries);
     if !fails.is_empty() {
         for (p, msg) in &fails {
             eprintln!("[down] FALHA swapoff {p}: {msg}");

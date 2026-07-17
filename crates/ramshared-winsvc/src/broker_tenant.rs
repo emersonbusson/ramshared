@@ -498,4 +498,22 @@ mod tests {
         ));
         assert_eq!(stream.0.written().len(), written);
     }
+
+    #[test]
+    fn heartbeat_psi_writes_message() {
+        let t = BrokerTenant::new("wd", Duration::from_secs(5));
+        let mut out = Vec::new();
+        t.heartbeat_psi(&mut out).unwrap();
+
+        let mut cur = Cursor::new(out);
+        let msg = read_msg(&mut cur).unwrap().unwrap();
+        match msg {
+            Msg::Psi { sample, swaps, mem } => {
+                assert_eq!(sample, PsiSample::default());
+                assert!(swaps.is_empty());
+                assert!(mem.is_none());
+            }
+            other => panic!("expected Psi, got {other:?}"),
+        }
+    }
 }

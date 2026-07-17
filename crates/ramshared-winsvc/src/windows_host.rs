@@ -466,7 +466,7 @@ impl WindowsHostState {
         if !('D'..='Z').contains(&letter) {
             return Err(HostError::Volume("letter must be D..=Z".into()));
         }
-        if serial.len() != 16 {
+        if serial.len() != 16 || !serial.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(HostError::Identity("serial must be 16 hex chars".into()));
         }
         // Bind the configured letter to the exact disk. Serial+size without the
@@ -586,16 +586,29 @@ impl WindowsHostState {
         if text.is_empty() || text == "null" {
             return Ok(None);
         }
-        // Minimal parse without full JSON dependency path for optional fields.
-        let number = extract_json_u64(&text, "Number").unwrap_or(0) as u32;
-        let size = extract_json_u64(&text, "Size").unwrap_or(0);
-        let sn = extract_json_string(&text, "SerialNumber").unwrap_or_default();
+
+        #[derive(serde::Deserialize)]
+        struct DiskInfo {
+            #[serde(rename = "Number")]
+            number: Option<u32>,
+            #[serde(rename = "Size")]
+            size: Option<u64>,
+            #[serde(rename = "SerialNumber")]
+            serial_number: Option<String>,
+        }
+
+        let info = serde_json::from_str::<DiskInfo>(&text).unwrap_or(DiskInfo {
+            number: None,
+            size: None,
+            serial_number: None,
+        });
+
         let lun = LunIdentity {
             vendor: LunIdentity::VENDOR.into(),
             product: LunIdentity::PRODUCT.into(),
-            serial: sn,
-            size_bytes: size,
-            disk_number: number,
+            serial: info.serial_number.unwrap_or_default().trim().to_string(),
+            size_bytes: info.size.unwrap_or(0),
+            disk_number: info.number.unwrap_or(0),
         };
         if lun.matches_expected(serial, size_bytes) {
             Ok(Some(lun))
@@ -613,21 +626,38 @@ impl WindowsHostState {
     }
 
     pub fn emit_event(summary: &str) -> Result<(), HostError> {
-        // Lifecycle summary only — no payloads. Best-effort Event Log via PowerShell.
+        use std::ptr;
+        use windows_sys::Win32::System::EventLog::{
+            DeregisterEventSource, EVENTLOG_INFORMATION_TYPE, RegisterEventSourceW, ReportEventW,
+        };
+
+        // Lifecycle summary only — no payloads. Best-effort Event Log via Windows API.
         let safe: String = summary
             .chars()
             .filter(|c| c.is_ascii() && !c.is_control())
             .take(200)
             .collect();
-        let _ = std::process::Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-Command",
-                &format!(
-                    "try {{ Write-EventLog -LogName Application -Source Application -EntryType Information -EventId 1000 -Message 'RamShared: {safe}' }} catch {{ }}"
-                ),
-            ])
-            .status();
+        let msg = format!("RamShared: {}", safe);
+        let source_wide = to_wide("Application");
+        let msg_wide = to_wide(&msg);
+        unsafe {
+            let handle = RegisterEventSourceW(ptr::null(), source_wide.as_ptr());
+            if handle != 0 {
+                let strings = [msg_wide.as_ptr()];
+                ReportEventW(
+                    handle,
+                    EVENTLOG_INFORMATION_TYPE,
+                    0,
+                    1000,
+                    ptr::null_mut(),
+                    1,
+                    0,
+                    strings.as_ptr(),
+                    ptr::null(),
+                );
+                DeregisterEventSource(handle);
+            }
+        }
         Ok(())
     }
 }
@@ -833,22 +863,6 @@ fn sha256_hex(data: &[u8]) -> Result<String, String> {
         }
         Ok(out.iter().map(|b| format!("{b:02x}")).collect())
     }
-}
-
-fn extract_json_u64(json: &str, key: &str) -> Option<u64> {
-    let pat = format!("\"{key}\":");
-    let i = json.find(&pat)?;
-    let rest = json[i + pat.len()..].trim_start();
-    let num: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-    num.parse().ok()
-}
-
-fn extract_json_string(json: &str, key: &str) -> Option<String> {
-    let pat = format!("\"{key}\":\"");
-    let i = json.find(&pat)?;
-    let rest = &json[i + pat.len()..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
 }
 
 fn parse_configured_pagefile_entry(entry: &str) -> Result<String, String> {
