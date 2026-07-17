@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/emersonbusson/ramshared/compare/v0.5.0...v0.6.0) (2026-07-17)
+
+
+### Features
+
+* **windows:** StartIo READ-race harness + WSL2 freeze scaffold ([5a94f00](https://github.com/emersonbusson/ramshared/commit/5a94f00886a0ddc310d1f8521f600419767c015c))
+* **windows:** StartIo READ-race harness + WSL2 freeze scaffold ([cfbdf92](https://github.com/emersonbusson/ramshared/commit/cfbdf92f26b96fbbcb908496f033c6bdcd6f6609))
+
 ## [0.5.0](https://github.com/emersonbusson/ramshared/compare/v0.4.3...v0.5.0) (2026-07-17)
 
 
