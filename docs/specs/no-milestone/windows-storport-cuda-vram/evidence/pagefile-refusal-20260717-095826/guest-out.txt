@@ -1,0 +1,3 @@
+PAGEFILE_REFUSAL_MANUFACTURED=1
+{"letter":"S","manufactured":"S:\\pagefile.sys","restored":true,"refuseExpected":true,"refuseObserved":true,"stillOnline":false,"NOTE":"registry_injected; registry_only_no_stop; ","snapshotCount":1,"snapshot":["C:\\pagefile.sys 0 0"],"afterCount":2,"configuredOnVolume":true,"pass":true}
+EXIT=0
