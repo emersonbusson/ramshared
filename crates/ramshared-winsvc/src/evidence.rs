@@ -381,4 +381,19 @@ mod tests {
         assert_ne!(row.event_id, first_event);
         assert_eq!(row.ts_utc_ms, first_ts + 1);
     }
+
+    #[test]
+    fn process_run_ids_are_unique_and_well_formed() {
+        let a = new_process_run_id();
+        let b = new_process_run_id();
+        let c = new_process_run_id();
+
+        assert!(a.starts_with("run-"));
+        assert!(b.starts_with("run-"));
+        assert!(c.starts_with("run-"));
+
+        assert_ne!(a, b);
+        assert_ne!(b, c);
+        assert_ne!(a, c);
+    }
 }
