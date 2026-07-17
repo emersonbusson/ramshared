@@ -2043,3 +2043,23 @@ bash scripts/safety/wsl2-freeze-campaign.sh --check-gates
 **Verdict:** 🟡 partial — SDV gap is tool retirement (not agent install skip); freeze/physical still env/policy
 **Next action:** Optional older EWDK for SDV only; true isolated WSL lab for freeze claim
 **Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/evidence/sdv-probe-20260717/
+
+## 2026-07-17 11:20 -03 — SSDV3 close: SDV = N/A (DT-30), gates de-falsified
+
+**What:** Applied Day-0 discipline: SPEC DT-30 marks Static Driver Verifier N/A on VS2022/WDK 26100 (Microsoft retirement, not missing install). Primary kernel gates remain Code Analysis + Driver Verifier + live IOCTL. IMPL gate matrix separates claimed, N/A, policy RED, and env-bound partial. Freeze/physical daily Online stay honest non-claims without false “pending agent work”.
+**Category:** docs / ssdv3 / windows
+**How to measure:**
+```text
+rg "DT-30|SDV N/A" docs/specs/no-milestone/windows-storport-cuda-vram/SPEC.md
+powershell -ExecutionPolicy Bypass -File scripts/windows/Invoke-SdvProbe.ps1
+bash scripts/safety/wsl2-freeze-campaign.sh --check-gates
+./scripts/docs-check.sh
+```
+**Measured data:**
+- SPEC DT-30 added; ITEM-3 abort no longer requires SDV when DT-30 applies
+- Probe: sdv_retired_from_wdk_vs2022_plus (prior evidence)
+- Freeze: daily_host refuse (gates_ok=0)
+- Physical daily Online: policy RED unchanged
+**Verdict:** ✅ works (documentation discipline close for this slice’s false pendings)
+**Next action:** Only true new env: disposable isolated WSL for freeze claim, or separate EWDK for optional SDV
+**Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/{SPEC,IMPL}.md; evidence/sdv-probe-20260717/
