@@ -225,157 +225,200 @@ fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
     None
 }
 
-fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let mut size = DEFAULT_SIZE;
-    let mut sock = "/run/ramshared/wsl2d.sock".to_string();
-    let mut force = false;
-    let mut nbd_dev = "/dev/nbd0".to_string();
-    let mut transport = Transport::Nbd;
-    let mut queue_depth = 1u16;
-    let mut backend = BackendKind::Vram;
-    // ITEM-8 (broker): multi-slice mode flags. Parsing + validation here (pure/testable); the
-    // broker runtime (broker_srv + rework of run_nbd) comes in subsequent segments of ITEM-8.
-    let mut slices = 0u16;
-    let mut slice_mb = 0u64;
-    let mut listen_nbd: Option<String> = None;
-    let mut arbiter: Option<String> = None;
-    let mut advertise_nbd: Option<String> = None;
-    let mut telemetry_jsonl: Option<String> = None;
-    let args: Vec<String> = std::env::args().collect();
-    let mut i = 1;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--size" => {
-                i += 1;
-                let mb: u64 = args.get(i).ok_or("--size requer valor (MiB)")?.parse()?;
-                size = mb
-                    .checked_mul(1024 * 1024)
-                    .ok_or("--size: overflow (MiB grande demais)")?;
-            }
-            "--sock" => {
-                i += 1;
-                sock = args.get(i).ok_or("--sock requer caminho")?.clone();
-            }
-            "--force" => force = true,
-            "--nbd" => {
-                i += 1;
-                nbd_dev = args.get(i).ok_or("--nbd requer caminho")?.clone();
-            }
-            "--transport" => {
-                i += 1;
-                transport = match args.get(i).map(String::as_str) {
-                    Some("nbd") => Transport::Nbd,
-                    Some("ublk") => Transport::Ublk,
-                    _ => return Err("--transport requer 'nbd' ou 'ublk'".into()),
-                };
-            }
-            "--queue-depth" => {
-                i += 1;
-                queue_depth = args
-                    .get(i)
-                    .ok_or("--queue-depth requer valor")?
-                    .parse()
-                    .map_err(|_| "--queue-depth invalido")?;
-            }
-            "--backend" => {
-                i += 1;
-                backend = match args.get(i).map(String::as_str) {
-                    Some("vram") => BackendKind::Vram,
-                    Some("vulkan") => BackendKind::Vulkan,
-                    Some("ram") => BackendKind::Ram,
-                    _ => return Err("--backend requer 'vram', 'vulkan' ou 'ram'".into()),
-                };
-            }
-            "--slices" => {
-                i += 1;
-                slices = args
-                    .get(i)
-                    .ok_or("--slices requer valor")?
-                    .parse()
-                    .map_err(|_| "--slices inválido")?;
-            }
-            "--slice-mb" => {
-                i += 1;
-                slice_mb = args
-                    .get(i)
-                    .ok_or("--slice-mb requer valor (MiB)")?
-                    .parse()
-                    .map_err(|_| "--slice-mb inválido")?;
-            }
-            "--listen-nbd" => {
-                i += 1;
-                listen_nbd = Some(
-                    args.get(i)
-                        .ok_or("--listen-nbd requer tcp://IP:PORT")?
-                        .clone(),
-                );
-            }
-            "--arbiter-listen" => {
-                i += 1;
-                arbiter = Some(
-                    args.get(i)
-                        .ok_or("--arbiter-listen requer IP:PORT")?
-                        .clone(),
-                );
-            }
-            "--advertise-nbd" => {
-                i += 1;
-                advertise_nbd = Some(
-                    args.get(i)
-                        .ok_or("--advertise-nbd requer HOST:PORT")?
-                        .clone(),
-                );
-            }
-            "--telemetry-jsonl" => {
-                i += 1;
-                telemetry_jsonl = Some(
-                    args.get(i)
-                        .ok_or("--telemetry-jsonl requer caminho")?
-                        .clone(),
-                );
-            }
-            other => return Err(format!("argumento desconhecido: {other}").into()),
-        }
-        i += 1;
-    }
-    size -= size % BLOCK_SIZE as u64; // alinhar ao block size
+struct AppArgs {
+    size: u64,
+    sock: String,
+    force: bool,
+    nbd_dev: String,
+    transport: Transport,
+    queue_depth: u16,
+    backend: BackendKind,
+    slices: u16,
+    slice_bytes: u64,
+    listen_nbd_addr: Option<std::net::SocketAddr>,
+    arbiter_addr: Option<std::net::SocketAddr>,
+    advertise_tcp: Option<(String, u16)>,
+    telemetry_jsonl: Option<std::path::PathBuf>,
+}
 
-    // ITEM-8: validation of broker flags (pure/testable). RNF-2: bind never on 0.0.0.0/::.
-    if let Err(e) = validate_slice_flags(slices, slice_mb, matches!(transport, Transport::Ublk)) {
-        return Err(e.into());
+impl AppArgs {
+    fn parse() -> Result<Self, Box<dyn std::error::Error>> {
+        let mut size = DEFAULT_SIZE;
+        let mut sock = "/run/ramshared/wsl2d.sock".to_string();
+        let mut force = false;
+        let mut nbd_dev = "/dev/nbd0".to_string();
+        let mut transport = Transport::Nbd;
+        let mut queue_depth = 1u16;
+        let mut backend = BackendKind::Vram;
+        let mut slices = 0u16;
+        let mut slice_mb = 0u64;
+        let mut listen_nbd: Option<String> = None;
+        let mut arbiter: Option<String> = None;
+        let mut advertise_nbd: Option<String> = None;
+        let mut telemetry_jsonl: Option<String> = None;
+
+        let args: Vec<String> = std::env::args().collect();
+        let mut i = 1;
+        while i < args.len() {
+            match args[i].as_str() {
+                "--size" => {
+                    i += 1;
+                    let mb: u64 = args.get(i).ok_or("--size requer valor (MiB)")?.parse()?;
+                    size = mb
+                        .checked_mul(1024 * 1024)
+                        .ok_or("--size: overflow (MiB grande demais)")?;
+                }
+                "--sock" => {
+                    i += 1;
+                    sock = args.get(i).ok_or("--sock requer caminho")?.clone();
+                }
+                "--force" => force = true,
+                "--nbd" => {
+                    i += 1;
+                    nbd_dev = args.get(i).ok_or("--nbd requer caminho")?.clone();
+                }
+                "--transport" => {
+                    i += 1;
+                    transport = match args.get(i).map(String::as_str) {
+                        Some("nbd") => Transport::Nbd,
+                        Some("ublk") => Transport::Ublk,
+                        _ => return Err("--transport requer 'nbd' ou 'ublk'".into()),
+                    };
+                }
+                "--queue-depth" => {
+                    i += 1;
+                    queue_depth = args
+                        .get(i)
+                        .ok_or("--queue-depth requer valor")?
+                        .parse()
+                        .map_err(|_| "--queue-depth invalido")?;
+                }
+                "--backend" => {
+                    i += 1;
+                    backend = match args.get(i).map(String::as_str) {
+                        Some("vram") => BackendKind::Vram,
+                        Some("vulkan") => BackendKind::Vulkan,
+                        Some("ram") => BackendKind::Ram,
+                        _ => return Err("--backend requer 'vram', 'vulkan' ou 'ram'".into()),
+                    };
+                }
+                "--slices" => {
+                    i += 1;
+                    slices = args
+                        .get(i)
+                        .ok_or("--slices requer valor")?
+                        .parse()
+                        .map_err(|_| "--slices inválido")?;
+                }
+                "--slice-mb" => {
+                    i += 1;
+                    slice_mb = args
+                        .get(i)
+                        .ok_or("--slice-mb requer valor (MiB)")?
+                        .parse()
+                        .map_err(|_| "--slice-mb inválido")?;
+                }
+                "--listen-nbd" => {
+                    i += 1;
+                    listen_nbd = Some(
+                        args.get(i)
+                            .ok_or("--listen-nbd requer tcp://IP:PORT")?
+                            .clone(),
+                    );
+                }
+                "--arbiter-listen" => {
+                    i += 1;
+                    arbiter = Some(
+                        args.get(i)
+                            .ok_or("--arbiter-listen requer IP:PORT")?
+                            .clone(),
+                    );
+                }
+                "--advertise-nbd" => {
+                    i += 1;
+                    advertise_nbd = Some(
+                        args.get(i)
+                            .ok_or("--advertise-nbd requer HOST:PORT")?
+                            .clone(),
+                    );
+                }
+                "--telemetry-jsonl" => {
+                    i += 1;
+                    telemetry_jsonl = Some(
+                        args.get(i)
+                            .ok_or("--telemetry-jsonl requer caminho")?
+                            .clone(),
+                    );
+                }
+                other => return Err(format!("argumento desconhecido: {other}").into()),
+            }
+            i += 1;
+        }
+        size -= size % BLOCK_SIZE as u64; // alinhar ao block size
+
+        if let Err(e) = validate_slice_flags(slices, slice_mb, matches!(transport, Transport::Ublk))
+        {
+            return Err(e.into());
+        }
+
+        let listen_nbd_addr = listen_nbd
+            .as_deref()
+            .map(parse_private_listen)
+            .transpose()?;
+        let arbiter_addr = arbiter.as_deref().map(parse_private_listen).transpose()?;
+        let advertise_nbd_addr = advertise_nbd
+            .as_deref()
+            .map(parse_private_listen)
+            .transpose()?;
+
+        if advertise_nbd_addr.is_some() && listen_nbd_addr.is_none() {
+            return Err(
+                "--advertise-nbd exige --listen-nbd (anunciar um endpoint que se serve)".into(),
+            );
+        }
+
+        let advertise_tcp = advertise_nbd_addr
+            .or(listen_nbd_addr)
+            .map(|a| (a.ip().to_string(), a.port()));
+        let telemetry_jsonl = telemetry_jsonl.map(std::path::PathBuf::from);
+
+        let slice_bytes = if slices > 0 {
+            slice_mb
+                .checked_mul(1024 * 1024)
+                .ok_or("--slice-mb: overflow (MiB grande demais)")?
+        } else {
+            0
+        };
+
+        Ok(Self {
+            size,
+            sock,
+            force,
+            nbd_dev,
+            transport,
+            queue_depth,
+            backend,
+            slices,
+            slice_bytes,
+            listen_nbd_addr,
+            arbiter_addr,
+            advertise_tcp,
+            telemetry_jsonl,
+        })
     }
-    let listen_nbd_addr = listen_nbd
-        .as_deref()
-        .map(parse_private_listen)
-        .transpose()?;
-    let arbiter_addr = arbiter.as_deref().map(parse_private_listen).transpose()?;
-    let advertise_nbd_addr = advertise_nbd
-        .as_deref()
-        .map(parse_private_listen)
-        .transpose()?;
-    // --advertise-nbd only makes sense with --listen-nbd (advertise a TCP endpoint being served).
-    if advertise_nbd_addr.is_some() && listen_nbd_addr.is_none() {
-        return Err(
-            "--advertise-nbd exige --listen-nbd (anunciar um endpoint que se serve)".into(),
-        );
-    }
-    // TCP endpoint advertised to agents in SwapOn (DT-25): by default = bind addr; with
-    // --advertise-nbd, the forwarded host addr (civm case via port-forward, ITEM-12).
-    let advertise_tcp = advertise_nbd_addr
-        .or(listen_nbd_addr)
-        .map(|a| (a.ip().to_string(), a.port()));
-    let telemetry_jsonl = telemetry_jsonl.map(std::path::PathBuf::from);
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
+    let args = AppArgs::parse()?;
 
     // Broker mode (ITEM-8): --slices > 0 slices the memory and starts the arbiter. Requires --arbiter-listen
     // (the broker control point). --listen-nbd is optional (TCP/civm tenants besides Unix).
     // --backend ram serves without GPU (validation in QEMU, ITEM-11); vram is the production path.
-    if slices > 0 {
-        let arbiter_addr =
-            arbiter_addr.ok_or("--slices exige --arbiter-listen IP:PORT (ponto de controle)")?;
-        let slice_bytes = slice_mb
-            .checked_mul(1024 * 1024)
-            .ok_or("--slice-mb: overflow (MiB grande demais)")?;
-        return match backend {
+    if args.slices > 0 {
+        let arbiter_addr = args
+            .arbiter_addr
+            .ok_or("--slices exige --arbiter-listen IP:PORT (ponto de controle)")?;
+        return match args.backend {
             BackendKind::Vram => {
                 // CUDA Shell: creates the provider (Context impl VramProvider) and enters the
                 // generic path.
@@ -385,14 +428,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let ctx = cuda.create_context(&dev)?;
                 run_broker(
                     ctx,
-                    slice_bytes,
-                    slices,
-                    sock,
-                    force,
-                    listen_nbd_addr,
-                    advertise_tcp,
+                    args.slice_bytes,
+                    args.slices,
+                    args.sock,
+                    args.force,
+                    args.listen_nbd_addr,
+                    args.advertise_tcp,
                     arbiter_addr,
-                    telemetry_jsonl,
+                    args.telemetry_jsonl,
                 )
             }
             BackendKind::Vulkan => {
@@ -401,53 +444,60 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("[ramsharedd] GPU (vulkan): {}", provider.device_name());
                 run_broker(
                     provider,
-                    slice_bytes,
-                    slices,
-                    sock,
-                    force,
-                    listen_nbd_addr,
-                    advertise_tcp,
+                    args.slice_bytes,
+                    args.slices,
+                    args.sock,
+                    args.force,
+                    args.listen_nbd_addr,
+                    args.advertise_tcp,
                     arbiter_addr,
-                    telemetry_jsonl,
+                    args.telemetry_jsonl,
                 )
             }
             BackendKind::Ram => run_broker_ram(
-                slice_bytes,
-                slices,
-                sock,
-                listen_nbd_addr,
-                advertise_tcp,
+                args.slice_bytes,
+                args.slices,
+                args.sock,
+                args.listen_nbd_addr,
+                args.advertise_tcp,
                 arbiter_addr,
-                telemetry_jsonl,
+                args.telemetry_jsonl,
             ),
         };
     }
     // Without slices, there is nothing to arbitrate or export via TCP.
-    if arbiter_addr.is_some() || listen_nbd_addr.is_some() {
+    if args.arbiter_addr.is_some() || args.listen_nbd_addr.is_some() {
         return Err("--arbiter-listen/--listen-nbd require --slices N (N > 0)".into());
     }
 
-    match transport {
-        Transport::Nbd => match backend {
+    match args.transport {
+        Transport::Nbd => match args.backend {
             BackendKind::Vram => {
                 // CUDA Shell: creates the provider and enters the generic path.
                 let cuda = Cuda::load()?;
                 let dev = cuda.device(0)?;
                 eprintln!("[ramsharedd] GPU: {}", dev.name());
                 let ctx = cuda.create_context(&dev)?;
-                run_nbd(ctx, size, sock, force, nbd_dev, true)
+                run_nbd(ctx, args.size, args.sock, args.force, args.nbd_dev, true)
             }
             BackendKind::Vulkan => {
                 // Vulkan Shell (RF-V4/DT-11): Vulkan provider in the SAME generic run_nbd.
                 let provider = VulkanProvider::open(0)?;
                 eprintln!("[ramsharedd] GPU (vulkan): {}", provider.device_name());
-                run_nbd(provider, size, sock, force, nbd_dev, false)
+                run_nbd(
+                    provider,
+                    args.size,
+                    args.sock,
+                    args.force,
+                    args.nbd_dev,
+                    false,
+                )
             }
             BackendKind::Ram => Err(
                 "--backend ram não tem caminho NBD single; use --slices (broker) ou ublk".into(),
             ),
         },
-        Transport::Ublk => run_ublk(size, force, queue_depth, backend),
+        Transport::Ublk => run_ublk(args.size, args.force, args.queue_depth, args.backend),
     }
 }
 
