@@ -514,80 +514,207 @@ function Find-RamshareDiskInfo([string]$ExpectedSerial) {
     return $null
 }
 
+function Invoke-EnumerationIoPump {
+    param($h, $rings, [uint32]$qd, [uint32]$maxIo)
+    <#
+      One hang-safe drain+COMMIT step. COMMIT only when SQEs exist (empty SQ
+      pends BlockingIoctl forever). Join budget 400ms matches PhysicalReadWithPump.
+      Returns number of SQEs drained this call.
+    #>
+    $n = [IoctlVal]::DrainSqPublishCq($rings.sq, $rings.cq, $rings.data, $qd, $maxIo)
+    if ($n -gt 0) {
+        $slot = New-Object 'int[]' 1
+        $slot[0] = -1
+        $th = [IoctlVal]::StartBlockingIoctl($h, [IoctlVal]::IOCTL_COMMIT, $slot)
+        [void]$th.Join(400)
+    }
+    return [int]$n
+}
+
+function Wait-MsftDiskWithIoPump {
+    param(
+        $h,
+        $rings,
+        [uint32]$qd,
+        [uint32]$maxIo,
+        [int]$PreferredIndex = -1,
+        [string]$ExpectedSerial = "ABCDEF0123456789",
+        [UInt64]$SizeBytes = 134217728,
+        [int]$TimeoutSec = 20,
+        [string]$LogTag = "STARTIO"
+    )
+    <#
+      Product Online pattern: Windows may issue READs before Get-Disk exposes
+      MSFT_Disk. Keep the queue registered and run StartQueuePump (COMMIT only
+      when SQ non-empty) while polling Get-Disk. Never CreateFile on a
+      Win32-only LUN (class-stack hang). No DiskLenQuery here.
+    #>
+    $stopFlag = New-Object 'int[]' 1
+    $stopFlag[0] = 0
+    $pumpStats = New-Object 'int[]' 2
+    $pumpStats[0] = 0; $pumpStats[1] = 0
+    $pump = $null
+    try {
+        $pump = [IoctlVal]::StartQueuePump(
+            $h, $rings.sq, $rings.cq, $rings.data, $qd, $maxIo, $stopFlag, $pumpStats)
+        $deadline = (Get-Date).AddSeconds($TimeoutSec)
+        $rescanEvery = 0
+        while ((Get-Date) -lt $deadline) {
+            $d = $null
+            if ($PreferredIndex -ge 0) {
+                try { $d = Get-Disk -Number $PreferredIndex -EA SilentlyContinue } catch {}
+            }
+            if ($null -eq $d) {
+                try {
+                    $cands = @(Get-Disk -EA SilentlyContinue | Where-Object {
+                        ($_.FriendlyName -match 'RAMSHARE' -and $_.FriendlyName -match 'VRAMDISK') -or
+                        (([string]$_.SerialNumber).Trim() -ieq $ExpectedSerial)
+                    })
+                    if ($ExpectedSerial) {
+                        $exact = @($cands | Where-Object {
+                            ([string]$_.SerialNumber).Trim() -ieq $ExpectedSerial -and
+                            [uint64]$_.Size -eq [uint64]$SizeBytes
+                        })
+                        if ($exact.Count -ge 1) { $d = $exact[0] }
+                    }
+                    if ($null -eq $d -and $cands.Count -eq 1 -and [uint64]$cands[0].Size -eq [uint64]$SizeBytes) {
+                        $d = $cands[0]
+                    }
+                } catch {}
+            }
+            if ($null -ne $d) {
+                L ("$LogTag Wait-MsftDisk hit N=$($d.Number) Name=$($d.FriendlyName) Op=$($d.OperationalStatus) drained=$($pumpStats[0]) commits=$($pumpStats[1])")
+                return $d
+            }
+
+            $rescanEvery++
+            if (($rescanEvery % 10) -eq 0) {
+                # Prefer Update-HostStorageCache; diskpart rescan can block longer.
+                try { Update-HostStorageCache -EA SilentlyContinue } catch {}
+            }
+            Start-Sleep -Milliseconds 200
+        }
+        L ("$LogTag Wait-MsftDisk timeout after ${TimeoutSec}s drained=$($pumpStats[0]) commits=$($pumpStats[1]) preferred=$PreferredIndex")
+        return $null
+    } finally {
+        $stopFlag[0] = 1
+        if ($null -ne $pump) { [void]$pump.Join(2000) }
+    }
+}
+
 function Invoke-StartIoReadCopyRaceInjection {
     param(
         $h,
         $rings,
         [uint32]$qd,
         [uint32]$maxIo,
-        [int]$PreferredIndex = -1
+        [int]$PreferredIndex = -1,
+        [UInt64]$SizeBytes = 134217728
     )
     <#
       Strengthens beyond ring/IOCTL-only probes:
-      - Online LUN by Win32 index (Get-Disk serial is often empty for this stack)
-      - Background queue pump completes real StartIo-submitted READ SQEs
-      - SPTI READ(10) + sector ReadFile force HwStartIo -> QSubmit -> READ copy
-      - Second-handle UNREGISTER races the pump while copies can be in flight
+      - REGISTER + keep StartQueuePump for the whole probe (CreateFile/READ
+        need concurrent COMMIT; stopping the pump after Get-Disk hangs open)
+      - Online LUN by Get-Disk number (Win32-only CreateFile hangs class stack)
+      - Overlapped sector ReadFile forces HwStartIo -> QSubmit -> READ copy
+      - Second-handle UNREGISTER races while copies can still be in flight
     #>
     Ensure-RegisteredQueue $h $rings $qd $maxIo
-    $info = Find-RamshareDiskInfo "ABCDEF0123456789"
-    if (-not $info -and $PreferredIndex -ge 0) {
-        $info = @{ Path = ("\\.\PhysicalDrive{0}" -f $PreferredIndex); Index = $PreferredIndex }
-    }
-    if (-not $info) {
-        L "STARTIO_READ_COPY_RACE probe: no PhysicalDrive for RAMSHARE LUN"
-        [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
-        return $false
-    }
-    $path = $info.Path
-    $diskIndex = [int]$info.Index
-    # Require MSFT_Disk (Get-Disk). Win32_DiskDrive-only LUNs leave CreateFile on
-    # \\.\PhysicalDriveN stuck in the class stack for minutes (guest harness timeout).
-    $d = $null
-    try { $d = Get-Disk -Number $diskIndex -EA SilentlyContinue } catch {}
-    if ($null -eq $d) {
-        L ("STARTIO_READ_COPY_RACE probe SKIP: no Get-Disk for idx=$diskIndex path=$path (Win32-only LUN; avoid CreateFile hang)")
-        [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
-        return $false
-    }
-    try {
-        if ($d.IsOffline) {
-            Set-Disk -Number $diskIndex -IsOffline $false -EA Stop
-            L "STARTIO Set-Disk Online idx=$diskIndex"
-        }
-        if ($d.IsReadOnly) {
-            try { Set-Disk -Number $diskIndex -IsReadOnly $false -EA SilentlyContinue } catch {}
-        }
-    } catch {
-        L ("STARTIO Online failed idx=${diskIndex}: " + $_.Exception.Message)
-        [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
-        return $false
-    }
-    try { Update-HostStorageCache -EA SilentlyContinue } catch {}
 
+    $stopFlag = New-Object 'int[]' 1
+    $stopFlag[0] = 0
+    $pumpStats = New-Object 'int[]' 2
+    $pumpStats[0] = 0; $pumpStats[1] = 0
+    $pump = $null
     $h2 = $null
-    $stats = New-Object 'int[]' 4
     try {
+        # Product Online: pump must stay alive for enumeration + CreateFile + READ.
+        $pump = [IoctlVal]::StartQueuePump(
+            $h, $rings.sq, $rings.cq, $rings.data, $qd, $maxIo, $stopFlag, $pumpStats)
+
+        $info = Find-RamshareDiskInfo "ABCDEF0123456789"
+        if (-not $info -and $PreferredIndex -ge 0) {
+            $info = @{ Path = ("\\.\PhysicalDrive{0}" -f $PreferredIndex); Index = $PreferredIndex }
+        }
+        $prefIdx = $PreferredIndex
+        if ($info) { $prefIdx = [int]$info.Index }
+
+        # Poll Get-Disk while the background pump completes enumeration READs.
+        # (Do not call Wait-MsftDiskWithIoPump: it owns its own pump lifecycle.)
+        $d = $null
+        $deadline = (Get-Date).AddSeconds(20)
+        while ((Get-Date) -lt $deadline -and $null -eq $d) {
+            if ($prefIdx -ge 0) {
+                try { $d = Get-Disk -Number $prefIdx -EA SilentlyContinue } catch {}
+            }
+            if ($null -eq $d) {
+                try {
+                    $cands = @(Get-Disk -EA SilentlyContinue | Where-Object {
+                        ($_.FriendlyName -match 'RAMSHARE' -and $_.FriendlyName -match 'VRAMDISK') -or
+                        (([string]$_.SerialNumber).Trim() -ieq 'ABCDEF0123456789')
+                    })
+                    $exact = @($cands | Where-Object {
+                        ([string]$_.SerialNumber).Trim() -ieq 'ABCDEF0123456789' -and
+                        [uint64]$_.Size -eq [uint64]$SizeBytes
+                    })
+                    if ($exact.Count -ge 1) { $d = $exact[0] }
+                    elseif ($cands.Count -eq 1 -and [uint64]$cands[0].Size -eq [uint64]$SizeBytes) {
+                        $d = $cands[0]
+                    }
+                } catch {}
+            }
+            if ($null -eq $d) { Start-Sleep -Milliseconds 200 }
+        }
+        if ($null -eq $d) {
+            if (-not $info) {
+                L ("STARTIO_READ_COPY_RACE probe: no PhysicalDrive and no Get-Disk drained=$($pumpStats[0])")
+            } else {
+                L ("STARTIO_READ_COPY_RACE probe SKIP: no Get-Disk for idx=$($info.Index) path=$($info.Path) after pump drained=$($pumpStats[0]) (avoid CreateFile hang)")
+            }
+            return $false
+        }
+        L ("STARTIO Wait-MsftDisk hit N=$($d.Number) Name=$($d.FriendlyName) Op=$($d.OperationalStatus) drained=$($pumpStats[0]) commits=$($pumpStats[1])")
+
+        $diskIndex = [int]$d.Number
+        $path = "\\.\PhysicalDrive$diskIndex"
+        if ($info -and [int]$info.Index -eq $diskIndex) { $path = $info.Path }
+
+        try {
+            if ($d.IsOffline) {
+                Set-Disk -Number $diskIndex -IsOffline $false -EA Stop
+                L "STARTIO Set-Disk Online idx=$diskIndex"
+            }
+            if ($d.IsReadOnly) {
+                try { Set-Disk -Number $diskIndex -IsReadOnly $false -EA SilentlyContinue } catch {}
+            }
+        } catch {
+            L ("STARTIO Online failed idx=${diskIndex}: " + $_.Exception.Message)
+            return $false
+        }
+
         $h2 = Open-Ctl
-        # Bounded overlapped sector READ while queue is registered (no background pump).
+        # Pump stays concurrent: CreateFile/READ on PhysicalDrive can post SQEs
+        # that need COMMIT; PhysicalReadWithPump bounds the overlapped READ ~1.5s.
+        $stats = New-Object 'int[]' 4
+        L ("STARTIO PhysicalRead begin path=$path")
         [IoctlVal]::PhysicalReadWithPump(
             $path, $rings.sq, $rings.cq, $rings.data, $qd, $maxIo, $h, $stats)
         $readOk = $stats[0]
         $openErr = $stats[1]
         $lastReadErr = $stats[2]
-        $drained = $stats[3]
+        $drained = $stats[3] + [int]$pumpStats[0]
         $sqTail = [Runtime.InteropServices.Marshal]::ReadInt32($rings.sq, 12)
         $sqHead = [Runtime.InteropServices.Marshal]::ReadInt32($rings.sq, 8)
+        L ("STARTIO PhysicalRead done readOk=$readOk openErr=$openErr lastReadErr=$lastReadErr drained=$drained sq=$sqHead/$sqTail pumpCommits=$($pumpStats[1])")
 
-        # Race phase: UNREGISTER on second handle while queue may still be draining.
+        # Race phase: UNREGISTER on second handle while pump may still drain.
         $unregOk = [IoctlVal]::IoctlBool($h2, [IoctlVal]::IOCTL_UNREGISTER, $null)
         $unregErr = [IoctlVal]::LastErr()
 
-        # Pass requires: process survived, UNREGISTER completed, and StartIo posted
-        # at least one SQE (drained>0) OR non-zero ring indices after the READ window.
-        $startIoHit = ($drained -gt 0) -or ($sqTail -gt 0) -or ($sqHead -gt 0)
+        # Pass: survived + UNREGISTER ok + StartIo posted SQEs (probe or enum pump).
+        $startIoHit = ($drained -gt 0) -or ($sqTail -gt 0) -or ($sqHead -gt 0) -or ([int]$pumpStats[0] -gt 0)
         if ($unregOk -and $startIoHit) {
-            L ("STARTIO_READ_COPY_RACE probe: path=$path idx=$diskIndex readOk=$readOk drained=$drained sq=$sqHead/$sqTail unregOk=1")
+            L ("STARTIO_READ_COPY_RACE probe: path=$path idx=$diskIndex readOk=$readOk drained=$drained pumpDrained=$($pumpStats[0]) sq=$sqHead/$sqTail unregOk=1")
             return $true
         }
         L ("STARTIO_READ_COPY_RACE probe FAIL: path=$path idx=$diskIndex readOk=$readOk drained=$drained openErr=$openErr lastReadErr=$lastReadErr sq=$sqHead/$sqTail unregOk=$unregOk err=$unregErr")
@@ -596,6 +723,8 @@ function Invoke-StartIoReadCopyRaceInjection {
         L ("STARTIO_READ_COPY_RACE probe exception: " + $_.Exception.Message)
         return $false
     } finally {
+        $stopFlag[0] = 1
+        if ($null -ne $pump) { [void]$pump.Join(2000) }
         if ($h2 -and -not $h2.IsInvalid) { $h2.Dispose() }
         [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
     }
@@ -651,6 +780,18 @@ try {
     $maxIo = [uint32]1048576
     $rings = New-Rings $qd $maxIo
 
+    # StartIo READ race MUST run while CREATE is fresh: MSFT_Disk appears only
+    # while the queue is registered and enumeration READs are pumped (product
+    # Online pattern). After later UNREGISTER/IOCTL probes, Get-Disk drops the
+    # LUN and a deferred StartIo Wait times out with drained=0. Claim here.
+    if (Invoke-StartIoReadCopyRaceInjection $h $rings $qd $maxIo -PreferredIndex -1 -SizeBytes $SizeBytes) {
+        $verdict.STARTIO_READ_COPY_RACE = 1
+        L "STARTIO_READ_COPY_RACE=1 (early post-CREATE)"
+    } else {
+        L "STARTIO_READ_COPY_RACE=0 (early post-CREATE; will not retry later)"
+        $verdict.NOTE += "STARTIO_READ_COPY_RACE probe failed; "
+    }
+
     # --- REFUSE_RESERVED_REGISTER ---
     $reg = New-Object IoctlVal+Register
     $reg.abi_version = 1; $reg.disk_id = 0; $reg.queue_depth = $qd
@@ -702,6 +843,9 @@ try {
     # --- VPD_SERIAL_MATCH (INQUIRY vendor/product + VPD serial after CREATE) ---
     # Get-Disk often lags or omits zero/Unknown LUNs; PnP DiskDrive exposes
     # VEN_RAMSHARE&PROD_VRAMDISK from standard INQUIRY when the miniport works.
+    # Do NOT register+pump here: DiskLenQuery CreateFile on \\.\PhysicalDriveN
+    # hangs for minutes when READs are in-flight (guest harness 420s timeout).
+    # StartIo uses Wait-MsftDiskWithIoPump after REGISTER instead.
     $expectedSerial = "ABCDEF0123456789"
     try { "rescan" | diskpart 2>$null | Out-Null } catch {}
     try { Update-HostStorageCache -ErrorAction SilentlyContinue } catch {}
@@ -735,6 +879,7 @@ try {
                     Serial = ([string]$_.SerialNumber).Trim()
                     Size = [uint64]$_.Size
                     Id = "disk-$($_.Number)"
+                    DriveIndex = [int]$_.Number
                 }
             })
         } catch {}
@@ -966,17 +1111,9 @@ class P {
         $verdict.NOTE += "RUNDOWN_UNMAP_AFTER_COPY probe failed; "
     }
 
-    # StartIo READ race last. Skip CreateFile when Get-Disk is empty (Win32-only
-    # LUN hangs the class stack for minutes). Prefer index captured at VPD match.
-    $startIoIdx = -1
-    if ($null -ne $script:StartIoPreferredIndex) { $startIoIdx = [int]$script:StartIoPreferredIndex }
-    if (Invoke-StartIoReadCopyRaceInjection $h $rings $qd $maxIo -PreferredIndex $startIoIdx) {
-        $verdict.STARTIO_READ_COPY_RACE = 1
-        L "STARTIO_READ_COPY_RACE=1"
-    } else {
-        L "STARTIO_READ_COPY_RACE=0"
-        $verdict.NOTE += "STARTIO_READ_COPY_RACE probe failed; "
-    }
+    # StartIo race already attempted early post-CREATE (see above). Re-running
+    # after concurrent injectors is futile: MSFT_Disk is gone without a fresh
+    # CREATE/BusChange window.
 
     [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_DESTROY, $null)
     L "DESTROY ok"
