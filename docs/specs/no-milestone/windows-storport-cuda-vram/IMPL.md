@@ -37,11 +37,13 @@ CREATE size (capacity via `IOCTL_DISK_GET_LENGTH_INFO`, not CHS `Win32_DiskDrive
 | README daily-host policy | Windows kernel driver = **lab VM only** |
 | Online limited (64 MiB / S:) | **SKIPPED** (preflight RED) |
 
-Promotion beyond this storage-only gate still excludes: SDV (tool unavailable locally), the
-dedicated live StartIo READ-copy race strengthening, and the isolated WSL2 freeze-elimination
-campaign. WDK Code Analysis is project-clean for `drivers/windows/ramshared/*.c`; evidence:
-`evidence/code-analysis-project-clean-20260716.md`. The daily Windows host remains under lab-only
-kernel-driver policy and was not mutated for promotion.
+Promotion beyond this storage-only gate still excludes: SDV (tool unavailable locally; WDK
+headers/targets present but `sdv.exe` not installed) and the isolated WSL2 freeze-elimination
+campaign. **StartIo READ-copy race is claimed** (2026-07-17; Verifier `0x2093B` on
+`win11-drill` — see StartIo section below). WDK Code Analysis is project-clean for
+`drivers/windows/ramshared/*.c`; evidence: `evidence/code-analysis-project-clean-20260716.md`.
+The daily Windows host remains under lab-only kernel-driver policy and was not mutated for
+promotion.
 
 **Physical Online (2026-07-16 read-only recapture):** still **RED/SKIPPED** — package
 `CD7E315D…` ≠ installed `E690306F…`, and README forbids loading the Windows miniport on the daily
@@ -252,8 +254,10 @@ Package SHA `97FD7B37…`. Evidence: `evidence/startio-claim-20260717.md`,
    authorization.
 3. ~~StartIo READ-copy race~~ — **claimed** on win11-drill under Verifier (see above).
 4. Run the isolated WSL2 freeze campaign before any freeze-elimination claim.
-   Scaffold: `scripts/safety/wsl2-freeze-campaign.sh` (dry-run only on daily host;
-   refuses without `RAMSHARED_ISOLATED_LAB=1`).
+   Scaffold: `scripts/safety/wsl2-freeze-campaign.sh` — dry-run baseline + gate refuse on
+   daily host; full 2× before→action→after only with `--allow-isolated-lab`,
+   `RAMSHARED_ISOLATED_LAB=1`, and `--run-isolated` (cgroup-bounded pressure + watchdog).
+   Static: `scripts/safety/Test-Wsl2FreezeCampaignStatic.sh`.
 
 The WSL2 freeze claim is **BLOCKED, not PASS**. Promotion requires a dedicated isolated
 before→action→after campaign with watchdog/timeout, swapoff-first, ghost/deleted-plus-used-kB checks,
