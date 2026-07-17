@@ -1751,3 +1751,133 @@ Campaign `guest-product-online-20260716-174238` on win11-drill:
 - Evidence: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-174238.md`
 - Terminal: VM Off, host RTX 2060 OK. No physical Online, no push.
 
+## 2026-07-16 — teardown audit correction + InfVerif DIRID 13 PASS
+
+The `174238` campaign remains an empirical successful run, but its product-closure interpretation is
+invalidated. Audit found CREATE-only stop identity, registry-only pagefile authority, an unbounded
+mutating lock worker, and an incomplete harness exit conjunction.
+
+RED/GREEN corrections now require live letter-to-disk/VPD/capacity identity plus a single-disk-extent
+recheck, configured+active pagefile union fail-closed, a 30-second lock deadline that never resumes
+Online with a mutating worker outstanding, and three fresh no-retry lifecycle rounds with complete
+cleanup verdicts. These corrections are not yet live-proven, so product status remains **PARTIAL**.
+
+INF package isolation was separately validated with the real WDK 10.0.26100.0 tool. Initial DIRID 13
+migration produced `ERROR(1199)` until the model was restricted to build 16299+. Final
+`InfVerif.exe /w drivers/windows/ramshared/ramshared.inf` exited **0** with empty output. No driver
+install/load, VM mutation, physical-host action, commit, or push occurred for this validation.
+
+Evidence: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/infverif-dirid13-pass-20260716.md`.
+
+## 2026-07-16 — teardown hardening static close; signed live rerun blocked
+
+Additional audit found two more ownership gaps: CUDA `DeviceMem` was dropped only after
+`LeaseRelease`, and a release flush failure removed the authoritative lease from memory. TDD now
+consumes the backend to free DeviceMem, verifies CUDA restoration within 64 MiB, then releases the
+lease. Ambiguous release retains the lease and is not replayed. The wildcard configured pagefile
+path `?:\pagefile.sys` is now unsafe for every product volume, and non-DOS paths fail closed.
+
+Full Rust, native/Windows clippy, MSVC release build, WDK `/W4 /WX` build, InfVerif, PowerShell
+parser/static tests, docs, diff, and >=80% slice coverage are green. Live rerun was not attempted:
+SignTool could see the machine certificate but could not access its private key from the current
+token, and no PFX password was available. No permission/trust-store bypass, driver install, VM
+mutation, physical-host action, commit, or push was performed.
+
+Evidence: `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/teardown-hardening-static-20260716.md`.
+
+## 2026-07-16 — guest product Online PASS after teardown hardening
+
+**What:** Rebuilt current `ramshared-winsvc` with the corrected teardown identity path, deployed the
+DIRID-13 signed miniport package to `win11-drill`, and ran the corrected no-retry three-lifecycle
+GPU-PV product campaign.
+
+**Result:**
+
+| Gate | Result |
+| --- | --- |
+| Campaign | `guest-product-online-20260716-201130` |
+| Lifecycle rounds | `3` |
+| ONLINE + CUDA | PASS, RTX 2060 via GPU-PV |
+| DriverStore/package BINARY_MATCH | PASS, `E297B73F…` |
+| Product exe | `C6C9EB92…` |
+| SHA I/O | PASS in all 3 rounds |
+| Graceful stop | PASS, no force-kill |
+| Lease release | PASS, `lease 1 liberado` each round |
+| CUDA restored | PASS |
+| Dumps | none new |
+| Terminal | VM Off, host RTX 2060 OK |
+
+**Fixes proven:** startup LUN wait pumps COMMIT; PnP root device is recreated/enabled without leaving
+`ROOT\RAMSHARED` disabled; DriverStore mismatch aborts before product start; stop identity binds
+letter + exact VPD serial + configured size without the teardown-time `PhysicalDriveN` length IOCTL;
+harness captures `RuntimeSummary exit_code: 0` when the PowerShell process object returns a null
+`ExitCode`.
+
+**Verdict:** ✅ isolated GPU-PV storage-only product path works.
+
+**Still not claimed:** physical daily-host authorization, SDV/Code Analysis, dedicated live StartIo
+READ-copy race strengthening, and WSL2 freeze elimination. The WSL2 freeze claim still requires a
+separate isolated before/action/after hang campaign; no daily WSL2 pressure/thrash was run.
+
+**Evidence:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-201130.md`.
+
+## 2026-07-16 — current signed GPU-PV product + Verifier gates PASS
+
+**What:** Rebuilt the current Windows product and driver package, fixed project Code Analysis
+warnings, published signed package `ramshared.sys` SHA `97FD7B37…`, and reran both product Online
+and exhaustive IOCTL/Verifier campaigns on isolated `win11-drill`.
+
+**Category:** integration
+
+**Measured data:**
+
+| Gate | Result |
+| --- | --- |
+| Product campaign | `guest-product-online-20260716-220848` |
+| Product exe SHA | `AAD4566897C9CF262F14AB783CCC6B2B2A43C8233A2E85ECA1FC562003246352` |
+| Driver package SHA | `97FD7B373ED7DD5AE7F38204070F8B89E08A2B25616AA2A128995E8D1FBFF34F` |
+| Product rounds | 3/3 PASS |
+| Round teardown | 9064 ms / 5026 ms / 4018 ms |
+| CUDA restore wait | 106 ms / 76 ms / 57 ms |
+| Exhaustive campaign | `guest-exhaustive-20260716-224913` |
+| IOCTL pass1 | PASS |
+| IOCTL under Verifier | PASS |
+| Verifier | `0x2093B`, `ramshared.sys` load 1 / unload 0 |
+| VPD exact | `VPD_SERIAL_MATCH=1`, serial `ABCDEF0123456789`, size `134217728` |
+| Dumps | none new |
+| Terminal | VM Off; verifier reset best-effort; host RTX 2060 OK |
+
+**Fixes proven:** stale DriverStore `ramshared.inf` packages are purged before install; missing
+post-reboot `ROOT\RAMSHARED\0000` is recreated via SetupAPI before IOCTL; root PnP and SCSIAdapter
+must be `OK|problem=0`; CUDA restoration still requires the 64 MiB threshold but now polls briefly
+before declaring failure.
+
+**Verdict:** ✅ works for the isolated GPU-PV storage-only product and current signed
+IOCTL/Verifier package.
+
+**Next action:** Keep physical daily-host Online, SDV, dedicated StartIo READ-copy live race, and
+isolated WSL2 freeze-elimination campaigns as separate non-claims.
+
+**Evidence:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-220848.md`,
+`docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260716-224913.md`.
+
+## 2026-07-16 — WDK Code Analysis project-clean
+
+**What:** Ran MSVC/WDK Code Analysis over `drivers/windows/ramshared/{driver.c,virtdisk.c,queue.c,control.c}`
+after adding WDK callback prototypes and narrowing the probe exception filter.
+
+**Category:** local-check
+
+**Measured data:**
+
+- `cl /kernel /W4 /analyze` completed for the four driver files.
+- Project-file warnings under `C:\ramshared\src\drivers\windows\ramshared\*.c`: `0`.
+- WDK header warnings remain in `wdm.h`, `ntddk.h`, and `storport.h`.
+- SDV binaries (`sdv.exe` / `StaticDV.exe`) were not present in the local WDK image.
+
+**Verdict:** ✅ works for project Code Analysis; 🟡 SDV unavailable locally, not claimed.
+
+**Next action:** Run SDV on a WDK image that actually contains SDV, or keep the unavailability
+explicit in release notes.
+
+**Evidence:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/code-analysis-project-clean-20260716.md`.

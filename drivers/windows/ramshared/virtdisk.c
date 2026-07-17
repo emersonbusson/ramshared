@@ -86,6 +86,9 @@ VdActivate(_In_ const RAMSHARED_DISK_PARAMS *Params)
 {
 	NTSTATUS st;
 
+	if (g_AdapterExt == NULL) {
+		return STATUS_DEVICE_NOT_READY;
+	}
 	if (g_Active) {
 		return STATUS_DEVICE_BUSY;
 	}
@@ -95,9 +98,7 @@ VdActivate(_In_ const RAMSHARED_DISK_PARAMS *Params)
 	}
 	g_Active = TRUE;
 	/* Re-enumerate so capacity/media-ready is visible (DT-25, INF path). */
-	if (g_AdapterExt != NULL) {
-		StorPortNotification(BusChangeDetected, g_AdapterExt, (UCHAR)0);
-	}
+	StorPortNotification(BusChangeDetected, g_AdapterExt, (UCHAR)0);
 	return STATUS_SUCCESS;
 }
 

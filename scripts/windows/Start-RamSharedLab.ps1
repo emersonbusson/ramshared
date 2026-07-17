@@ -40,13 +40,6 @@ if (Test-Path "$PackageDir\ramshared.inf") {
         certutil -f -addstore Root "$PackageDir\ramshared-test.cer" 2>&1 | Out-Null
         certutil -f -addstore TrustedPublisher "$PackageDir\ramshared-test.cer" 2>&1 | Out-Null
     }
-    if (Test-Path "$PackageDir\ramshared.sys") {
-        try {
-            Copy-Item "$PackageDir\ramshared.sys" C:\Windows\System32\drivers\ramshared.sys -Force -EA Stop
-        } catch {
-            Write-Host "SYS_COPY_SKIP=$($_.Exception.Message)"
-        }
-    }
     pnputil /add-driver "$PackageDir\ramshared.inf" /install 2>&1 | Out-Null
     # Always ensure a single Root\RamShared node exists (post-reboot PnP often empty).
     $ex = @(Get-PnpDevice -EA SilentlyContinue | Where-Object {

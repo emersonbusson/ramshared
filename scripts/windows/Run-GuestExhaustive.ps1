@@ -66,7 +66,7 @@ if ($vm.State -ne "Running") {
 W ("VM state=" + (Get-VM $VMName).State)
 
 $readyWait = [Diagnostics.Stopwatch]::StartNew()
-while ($readyWait.Elapsed.TotalSeconds -lt 180) {
+while ($readyWait.Elapsed.TotalSeconds -lt 300) {
     try {
         $r = Invoke-GuestBounded -TimeoutSec 20 -ScriptBlock {
             "PSD_OK " + $env:COMPUTERNAME + " " + [Environment]::OSVersion.VersionString
@@ -77,7 +77,7 @@ while ($readyWait.Elapsed.TotalSeconds -lt 180) {
         Start-Sleep 3
     }
 }
-if ($readyWait.Elapsed.TotalSeconds -ge 180) { throw "PSD not ready after 180s" }
+if ($readyWait.Elapsed.TotalSeconds -ge 300) { throw "PSD not ready after 300s" }
 
 # A prior aborted run may still have the package binaries mapped by SCM.
 # Stop/delete + remove Root\RamShared so WriteAllBytes never races a loaded image.
@@ -103,7 +103,7 @@ W "pre-deploy driver cleanup done"
 Restart-VM -Name $VMName -Force
 Start-Sleep 10
 $readyWait = [Diagnostics.Stopwatch]::StartNew()
-while ($readyWait.Elapsed.TotalSeconds -lt 180) {
+while ($readyWait.Elapsed.TotalSeconds -lt 300) {
     try {
         $null = Invoke-GuestBounded -TimeoutSec 20 -ScriptBlock { "PSD_OK" }
         break
@@ -111,7 +111,7 @@ while ($readyWait.Elapsed.TotalSeconds -lt 180) {
         Start-Sleep 3
     }
 }
-if ($readyWait.Elapsed.TotalSeconds -ge 180) { throw "PSD not ready after pre-deploy reboot" }
+if ($readyWait.Elapsed.TotalSeconds -ge 300) { throw "PSD not ready after pre-deploy reboot (300s)" }
 W "pre-deploy reboot complete"
 
 function Send-GuestFile([string]$Local, [string]$RemoteDir, [string]$Name) {
@@ -135,35 +135,48 @@ if (Test-Path (Join-Path $pkg "ramshared.cat")) {
 Send-GuestFile "C:\ramshared\bin\Invoke-WinDriveIoctlValidation.ps1" "C:\ramshared\bin" "Invoke-WinDriveIoctlValidation.ps1"
 W "files deployed"
 
-$load = Invoke-GuestBounded -TimeoutSec 120 -ScriptBlock {
+$load = Invoke-GuestBounded -TimeoutSec 240 -ScriptBlock {
     $ErrorActionPreference = "Continue"
     $o = [ordered]@{}
     $o.testsigning = ((bcdedit /enum "{current}" | Out-String) -match "testsigning\s+Yes")
 
-    # Stop + disable device only — do NOT sc delete / delete-driver every run
-    # (that leaves the service MARKED_FOR_DELETE → SetupAPI 1072).
+    # Stop + remove stale devices before purging only ramshared.inf DriverStore packages.
+    # This avoids old DriverStore ghosts while still not deleting arbitrary services.
     sc.exe stop ramshared 2>$null | Out-Null
     sc.exe stop poolstress 2>$null | Out-Null
     Get-PnpDevice -EA SilentlyContinue |
         Where-Object { $_.InstanceId -like '*ROOT\RAMSHARED*' } |
-        ForEach-Object { pnputil /disable-device $_.InstanceId 2>$null | Out-Null }
+        ForEach-Object { pnputil /remove-device $_.InstanceId 2>$null | Out-Null }
     Start-Sleep 2
-
-    $sysDst = "C:\Windows\System32\drivers\ramshared.sys"
-    $copied = $false
-    foreach ($i in 1..10) {
+    function Get-RamSharedPublishedInf {
+        $names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
         try {
-            if (Test-Path $sysDst) {
-                takeown.exe /F $sysDst 2>$null | Out-Null
-                icacls.exe $sysDst /grant Administrators:F 2>$null | Out-Null
-                Move-Item -LiteralPath $sysDst -Destination "$sysDst.bak-$PID-$i" -Force -EA Stop
+            Get-WindowsDriver -Online -All -EA Stop |
+                Where-Object { $_.OriginalFileName -match '(?i)(^|\\)ramshared\.inf$' } |
+                ForEach-Object {
+                    if ($_.Driver -match '^oem\d+\.inf$') { [void]$names.Add($_.Driver) }
+                }
+        } catch {}
+        $published = $null
+        foreach ($line in (pnputil /enum-drivers 2>&1)) {
+            $s = [string]$line
+            if ($s -match 'Published Name\s*:\s*(oem\d+\.inf)') {
+                $published = $Matches[1]
+            } elseif ($published -and $s -match 'Original Name\s*:\s*ramshared\.inf') {
+                [void]$names.Add($published)
+                $published = $null
             }
-            Copy-Item C:\ramshared\package\ramshared.sys $sysDst -Force -EA Stop
-            $copied = $true
-            break
-        } catch { Start-Sleep 1 }
+        }
+        $names | Sort-Object
     }
-    $o.sysCopy = if ($copied) { "ok" } else { "locked" }
+    foreach ($publishedInf in @(Get-RamSharedPublishedInf)) {
+        $delete = pnputil /delete-driver $publishedInf /uninstall /force 2>&1 | Out-String
+        $deleteExit = $LASTEXITCODE
+        if ($deleteExit -ne 0 -and $delete -notmatch "Deleted driver package") {
+            throw ("delete stale ramshared package failed {0}: {1}" -f $publishedInf, $delete)
+        }
+    }
+
     if (Test-Path C:\ramshared\package\poolstress.sys) {
         Copy-Item C:\ramshared\package\poolstress.sys C:\Windows\System32\drivers\poolstress.sys -Force -EA SilentlyContinue
     }
@@ -229,16 +242,6 @@ public static class RamSharedRootEnum {
         }
     }
 
-    sc.exe create ramshared type= kernel start= demand `
-        binPath= \SystemRoot\System32\drivers\ramshared.sys `
-        group= "SCSI Miniport" 2>$null | Out-Null
-    $svc = "HKLM:\SYSTEM\CurrentControlSet\Services\ramshared"
-    if (Test-Path $svc) {
-        New-Item -Path "$svc\Parameters\PnpInterface" -Force | Out-Null
-        New-ItemProperty -Path "$svc\Parameters\PnpInterface" -Name "5" -PropertyType DWord -Value 1 -Force | Out-Null
-        # InfVerif ERROR 1323: BusType under Parameters, not the service key root.
-        New-ItemProperty -Path "$svc\Parameters" -Name "BusType" -PropertyType DWord -Value 0xA -Force | Out-Null
-    }
     $o.start_ram = (sc.exe start ramshared 2>&1 | Out-String)
     Get-PnpDevice -EA SilentlyContinue |
         Where-Object { $_.InstanceId -like '*ROOT\RAMSHARED*' } |
@@ -288,14 +291,17 @@ public static class RamSharedRootEnum {
     try { Update-HostStorageCache -ErrorAction SilentlyContinue } catch {}
 
     $o.running = ($o.ram -match "RUNNING")
-    $o.sysLen = (Get-Item C:\Windows\System32\drivers\ramshared.sys -EA SilentlyContinue).Length
-    $o.sysSha = if (Test-Path C:\Windows\System32\drivers\ramshared.sys) {
-        (Get-FileHash C:\Windows\System32\drivers\ramshared.sys -Algorithm SHA256).Hash
+    $rawImage = [string](Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\ramshared" -Name ImagePath -EA SilentlyContinue).ImagePath
+    $sysImage = $rawImage.Trim('"') -replace '^\\SystemRoot', $env:SystemRoot -replace '^\\\?\?\\', ''
+    $o.sysLen = (Get-Item $sysImage -EA SilentlyContinue).Length
+    $o.sysSha = if (Test-Path $sysImage) {
+        (Get-FileHash $sysImage -Algorithm SHA256).Hash
     } else { "missing" }
     $o.packageSha = if (Test-Path C:\ramshared\package\ramshared.sys) {
         (Get-FileHash C:\ramshared\package\ramshared.sys -Algorithm SHA256).Hash
     } else { "missing" }
-    $o.binaryMatch = ($o.sysSha -eq $o.packageSha -and $o.sysSha -ne "missing")
+    $o.driverImagePath = $sysImage
+    $o.binaryMatch = ($o.sysSha -eq $o.packageSha -and $o.sysSha -ne "missing" -and $sysImage -match '\\DriverStore\\FileRepository\\')
     $o | ConvertTo-Json -Compress
 }
 $load | Set-Content (Join-Path $art "guest-load.json")
@@ -320,17 +326,122 @@ while ($readyWait.Elapsed.TotalSeconds -lt 300) {
 if ($readyWait.Elapsed.TotalSeconds -ge 300) { throw "PSD not ready after post-deploy reboot (300s)" }
 W ("post-deploy reboot PSD_OK elapsed={0:n0}s" -f $readyWait.Elapsed.TotalSeconds)
 
-$loadReady = Invoke-GuestBounded -TimeoutSec 120 -ScriptBlock {
+$loadReady = Invoke-GuestBounded -TimeoutSec 180 -ScriptBlock {
     $ErrorActionPreference = "Continue"
     $o = [ordered]@{}
+    function Wait-RamSharedRootOk {
+        $log = @()
+        $rootDevices = @(Get-PnpDevice -EA SilentlyContinue |
+            Where-Object { $_.InstanceId -like '*ROOT\RAMSHARED*' })
+        if ($rootDevices.Count -lt 1) {
+            return [pscustomobject]@{ Ok = $false; State = "missing ROOT\RAMSHARED"; Log = "" }
+        }
+        foreach ($dev in $rootDevices) {
+            $enable = pnputil /enable-device $dev.InstanceId 2>&1 | Out-String
+            $log += ("enable {0} exit={1} {2}" -f $dev.InstanceId, $LASTEXITCODE, ($enable.Trim()))
+            $restart = pnputil /restart-device $dev.InstanceId 2>&1 | Out-String
+            $log += ("restart {0} exit={1} {2}" -f $dev.InstanceId, $LASTEXITCODE, ($restart.Trim()))
+        }
+        $stateRows = @()
+        for ($waitPnp = 0; $waitPnp -lt 30; $waitPnp++) {
+            $state = @(Get-PnpDevice -EA SilentlyContinue |
+                Where-Object { $_.InstanceId -like '*ROOT\RAMSHARED*' })
+            $stateRows = @($state | ForEach-Object {
+                "{0}|problem={1}|{2}|{3}" -f $_.Status, ([int]$_.Problem), $_.FriendlyName, $_.InstanceId
+            })
+            $ok = @($state | Where-Object { $_.Status -eq "OK" -and ([int]$_.Problem) -eq 0 })
+            $scsiState = @(Get-PnpDevice -Class SCSIAdapter -EA SilentlyContinue |
+                Where-Object { $_.InstanceId -like '*ROOT\RAMSHARED*' -or $_.FriendlyName -match 'RamShared' })
+            $scsiRows = @($scsiState | ForEach-Object {
+                "{0}|problem={1}|{2}|{3}" -f $_.Status, ([int]$_.Problem), $_.FriendlyName, $_.InstanceId
+            })
+            $scsiOk = @($scsiState | Where-Object { $_.Status -eq "OK" -and ([int]$_.Problem) -eq 0 })
+            if ($ok.Count -ge 1 -and $scsiOk.Count -ge 1) {
+                return [pscustomobject]@{
+                    Ok = $true
+                    State = ("root=[{0}] scsi=[{1}]" -f ($stateRows -join "; "), ($scsiRows -join "; "))
+                    Log = ($log -join "`n")
+                }
+            }
+            Start-Sleep 1
+        }
+        [pscustomobject]@{
+            Ok = $false
+            State = ("root=[{0}] scsi=[{1}]" -f ($stateRows -join "; "), ($scsiRows -join "; "))
+            Log = ($log -join "`n")
+        }
+    }
+    function Ensure-RamSharedRootDevice {
+        try {
+            if (-not ("RamSharedRootEnum" -as [type])) {
+                Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class RamSharedRootEnum {
+  static readonly Guid ScsiClass = new Guid("4d36e97b-e325-11ce-bfc1-08002be10318");
+  [StructLayout(LayoutKind.Sequential)]
+  struct SP_DEVINFO_DATA {
+    public int cbSize; public Guid ClassGuid; public int DevInst; public IntPtr Reserved;
+  }
+  [DllImport("setupapi.dll", CharSet=CharSet.Auto, SetLastError=true)]
+  static extern IntPtr SetupDiCreateDeviceInfoList(ref Guid g, IntPtr h);
+  [DllImport("setupapi.dll", CharSet=CharSet.Auto, SetLastError=true)]
+  static extern bool SetupDiCreateDeviceInfo(IntPtr list, string name, ref Guid g, string desc, IntPtr hwnd, int flags, ref SP_DEVINFO_DATA data);
+  [DllImport("setupapi.dll", CharSet=CharSet.Auto, SetLastError=true)]
+  static extern bool SetupDiSetDeviceRegistryProperty(IntPtr list, ref SP_DEVINFO_DATA data, int prop, byte[] buf, int size);
+  [DllImport("setupapi.dll", SetLastError=true)]
+  static extern bool SetupDiCallClassInstaller(int dif, IntPtr list, ref SP_DEVINFO_DATA data);
+  [DllImport("setupapi.dll", SetLastError=true)]
+  static extern bool SetupDiDestroyDeviceInfoList(IntPtr list);
+  [DllImport("newdev.dll", CharSet=CharSet.Auto, SetLastError=true)]
+  static extern bool UpdateDriverForPlugAndPlayDevices(IntPtr hwnd, string hwid, string inf, uint flags, out bool reboot);
+  public static string Install(string infPath) {
+    Guid g = ScsiClass;
+    IntPtr list = SetupDiCreateDeviceInfoList(ref g, IntPtr.Zero);
+    if (list == IntPtr.Zero || list == new IntPtr(-1))
+      return "CreateDeviceInfoList err=" + Marshal.GetLastWin32Error();
+    try {
+      SP_DEVINFO_DATA data = new SP_DEVINFO_DATA();
+      data.cbSize = Marshal.SizeOf(typeof(SP_DEVINFO_DATA));
+      if (!SetupDiCreateDeviceInfo(list, "RamShared", ref g, "RamShared VRAM Virtual Disk",
+            IntPtr.Zero, 0x00000001, ref data))
+        return "CreateDeviceInfo err=" + Marshal.GetLastWin32Error();
+      byte[] buf = Encoding.Unicode.GetBytes("Root\\RamShared\0\0");
+      if (!SetupDiSetDeviceRegistryProperty(list, ref data, 0x00000001, buf, buf.Length))
+        return "SetHWID err=" + Marshal.GetLastWin32Error();
+      if (!SetupDiCallClassInstaller(0x00000019, list, ref data))
+        return "RegisterDevice err=" + Marshal.GetLastWin32Error();
+      bool reboot;
+      if (!UpdateDriverForPlugAndPlayDevices(IntPtr.Zero, "Root\\RamShared", infPath, 0x00000001, out reboot))
+        return "UpdateDriver err=" + Marshal.GetLastWin32Error();
+      return "OK reboot=" + reboot;
+    } finally { SetupDiDestroyDeviceInfoList(list); }
+  }
+}
+'@ -ErrorAction Stop
+            }
+            [RamSharedRootEnum]::Install("C:\ramshared\package\ramshared.inf")
+        } catch {
+            "setupapi-exception: $($_.Exception.Message)"
+        }
+    }
+    $pnp = Wait-RamSharedRootOk
+    $o.rootRecreateAfterReboot = "not_needed"
+    if (-not $pnp.Ok -and $pnp.State -match "missing ROOT") {
+        $o.rootRecreateAfterReboot = Ensure-RamSharedRootDevice
+        Start-Sleep 2
+        $pnp = Wait-RamSharedRootOk
+    }
+    $o.pnpBeforeIoctl = $pnp.State
+    $o.pnpEnableLog = $pnp.Log
+    $o.pnpReady = [bool]$pnp.Ok
     sc.exe start ramshared 2>$null | Out-Null
     sc.exe start poolstress 2>$null | Out-Null
-    Get-PnpDevice -EA SilentlyContinue |
-        Where-Object { $_.InstanceId -like '*ROOT\RAMSHARED*' } |
-        ForEach-Object {
-            pnputil /enable-device $_.InstanceId 2>$null | Out-Null
-            pnputil /restart-device $_.InstanceId 2>$null | Out-Null
-        }
+    $pnpAfterStart = Wait-RamSharedRootOk
+    $o.pnpBeforeIoctl = $pnpAfterStart.State
+    $o.pnpEnableLog = (($o.pnpEnableLog, $pnpAfterStart.Log) -join "`n")
+    $o.pnpReady = [bool]$pnpAfterStart.Ok
     Start-Sleep 3
     # Re-clean any ghost DiskDrive nodes that reappeared after reboot without CREATE.
     $ghost = @(Get-PnpDevice -Class DiskDrive -EA SilentlyContinue |
@@ -345,13 +456,16 @@ $loadReady = Invoke-GuestBounded -TimeoutSec 120 -ScriptBlock {
     try { "rescan" | diskpart 2>$null | Out-Null } catch {}
     $o.ram = (sc.exe query ramshared 2>&1 | Out-String)
     $o.running = ($o.ram -match "RUNNING")
-    $o.sysSha = if (Test-Path C:\Windows\System32\drivers\ramshared.sys) {
-        (Get-FileHash C:\Windows\System32\drivers\ramshared.sys -Algorithm SHA256).Hash
+    $rawImage = [string](Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\ramshared" -Name ImagePath -EA SilentlyContinue).ImagePath
+    $sysImage = $rawImage.Trim('"') -replace '^\\SystemRoot', $env:SystemRoot -replace '^\\\?\?\\', ''
+    $o.sysSha = if (Test-Path $sysImage) {
+        (Get-FileHash $sysImage -Algorithm SHA256).Hash
     } else { "missing" }
     $o.packageSha = if (Test-Path C:\ramshared\package\ramshared.sys) {
         (Get-FileHash C:\ramshared\package\ramshared.sys -Algorithm SHA256).Hash
     } else { "missing" }
-    $o.binaryMatch = ($o.sysSha -eq $o.packageSha -and $o.sysSha -ne "missing")
+    $o.driverImagePath = $sysImage
+    $o.binaryMatch = ($o.sysSha -eq $o.packageSha -and $o.sysSha -ne "missing" -and $sysImage -match '\\DriverStore\\FileRepository\\')
     $o.diskDrives = @(Get-PnpDevice -Class DiskDrive -EA SilentlyContinue |
         ForEach-Object { "$($_.Status)|$($_.FriendlyName)|$($_.InstanceId)" }) -join "; "
     $o.disks = @(Get-Disk -EA SilentlyContinue |
@@ -360,6 +474,10 @@ $loadReady = Invoke-GuestBounded -TimeoutSec 120 -ScriptBlock {
 }
 $loadReady | Set-Content (Join-Path $art "guest-load-post-reboot.json")
 W ("load-ready=" + $loadReady)
+$loadReadyObject = $loadReady | ConvertFrom-Json
+if (-not $loadReadyObject.running -or -not $loadReadyObject.binaryMatch -or -not $loadReadyObject.pnpReady) {
+    throw ("RamShared PnP gate failed before IOCTL pass1: " + $loadReady)
+}
 
 $ioctl1 = Invoke-GuestBounded -TimeoutSec 300 -ScriptBlock {
     $ErrorActionPreference = "Continue"
@@ -433,17 +551,122 @@ if (-not $SkipVerifier) {
     if (-not $psdOk) { throw "PSD not ready after Verifier reboot (600s)" }
     W ("PSD after Verifier reboot OK elapsed={0}s" -f [int]$readyWait.Elapsed.TotalSeconds)
 
-    $load2 = Invoke-GuestBounded -TimeoutSec 120 -ScriptBlock {
+    $load2 = Invoke-GuestBounded -TimeoutSec 180 -ScriptBlock {
         $ErrorActionPreference = "Continue"
         $o = [ordered]@{}
+        function Wait-RamSharedRootOk {
+            $log = @()
+            $rootDevices = @(Get-PnpDevice -EA SilentlyContinue |
+                Where-Object { $_.InstanceId -like '*ROOT\RAMSHARED*' })
+            if ($rootDevices.Count -lt 1) {
+                return [pscustomobject]@{ Ok = $false; State = "missing ROOT\RAMSHARED"; Log = "" }
+            }
+            foreach ($dev in $rootDevices) {
+                $enable = pnputil /enable-device $dev.InstanceId 2>&1 | Out-String
+                $log += ("enable {0} exit={1} {2}" -f $dev.InstanceId, $LASTEXITCODE, ($enable.Trim()))
+                $restart = pnputil /restart-device $dev.InstanceId 2>&1 | Out-String
+                $log += ("restart {0} exit={1} {2}" -f $dev.InstanceId, $LASTEXITCODE, ($restart.Trim()))
+            }
+            $stateRows = @()
+            for ($waitPnp = 0; $waitPnp -lt 30; $waitPnp++) {
+                $state = @(Get-PnpDevice -EA SilentlyContinue |
+                    Where-Object { $_.InstanceId -like '*ROOT\RAMSHARED*' })
+                $stateRows = @($state | ForEach-Object {
+                    "{0}|problem={1}|{2}|{3}" -f $_.Status, ([int]$_.Problem), $_.FriendlyName, $_.InstanceId
+                })
+                $ok = @($state | Where-Object { $_.Status -eq "OK" -and ([int]$_.Problem) -eq 0 })
+                $scsiState = @(Get-PnpDevice -Class SCSIAdapter -EA SilentlyContinue |
+                    Where-Object { $_.InstanceId -like '*ROOT\RAMSHARED*' -or $_.FriendlyName -match 'RamShared' })
+                $scsiRows = @($scsiState | ForEach-Object {
+                    "{0}|problem={1}|{2}|{3}" -f $_.Status, ([int]$_.Problem), $_.FriendlyName, $_.InstanceId
+                })
+                $scsiOk = @($scsiState | Where-Object { $_.Status -eq "OK" -and ([int]$_.Problem) -eq 0 })
+                if ($ok.Count -ge 1 -and $scsiOk.Count -ge 1) {
+                    return [pscustomobject]@{
+                        Ok = $true
+                        State = ("root=[{0}] scsi=[{1}]" -f ($stateRows -join "; "), ($scsiRows -join "; "))
+                        Log = ($log -join "`n")
+                    }
+                }
+                Start-Sleep 1
+            }
+            [pscustomobject]@{
+                Ok = $false
+                State = ("root=[{0}] scsi=[{1}]" -f ($stateRows -join "; "), ($scsiRows -join "; "))
+                Log = ($log -join "`n")
+            }
+        }
+        function Ensure-RamSharedRootDevice {
+            try {
+                if (-not ("RamSharedRootEnum" -as [type])) {
+                    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class RamSharedRootEnum {
+  static readonly Guid ScsiClass = new Guid("4d36e97b-e325-11ce-bfc1-08002be10318");
+  [StructLayout(LayoutKind.Sequential)]
+  struct SP_DEVINFO_DATA {
+    public int cbSize; public Guid ClassGuid; public int DevInst; public IntPtr Reserved;
+  }
+  [DllImport("setupapi.dll", CharSet=CharSet.Auto, SetLastError=true)]
+  static extern IntPtr SetupDiCreateDeviceInfoList(ref Guid g, IntPtr h);
+  [DllImport("setupapi.dll", CharSet=CharSet.Auto, SetLastError=true)]
+  static extern bool SetupDiCreateDeviceInfo(IntPtr list, string name, ref Guid g, string desc, IntPtr hwnd, int flags, ref SP_DEVINFO_DATA data);
+  [DllImport("setupapi.dll", CharSet=CharSet.Auto, SetLastError=true)]
+  static extern bool SetupDiSetDeviceRegistryProperty(IntPtr list, ref SP_DEVINFO_DATA data, int prop, byte[] buf, int size);
+  [DllImport("setupapi.dll", SetLastError=true)]
+  static extern bool SetupDiCallClassInstaller(int dif, IntPtr list, ref SP_DEVINFO_DATA data);
+  [DllImport("setupapi.dll", SetLastError=true)]
+  static extern bool SetupDiDestroyDeviceInfoList(IntPtr list);
+  [DllImport("newdev.dll", CharSet=CharSet.Auto, SetLastError=true)]
+  static extern bool UpdateDriverForPlugAndPlayDevices(IntPtr hwnd, string hwid, string inf, uint flags, out bool reboot);
+  public static string Install(string infPath) {
+    Guid g = ScsiClass;
+    IntPtr list = SetupDiCreateDeviceInfoList(ref g, IntPtr.Zero);
+    if (list == IntPtr.Zero || list == new IntPtr(-1))
+      return "CreateDeviceInfoList err=" + Marshal.GetLastWin32Error();
+    try {
+      SP_DEVINFO_DATA data = new SP_DEVINFO_DATA();
+      data.cbSize = Marshal.SizeOf(typeof(SP_DEVINFO_DATA));
+      if (!SetupDiCreateDeviceInfo(list, "RamShared", ref g, "RamShared VRAM Virtual Disk",
+            IntPtr.Zero, 0x00000001, ref data))
+        return "CreateDeviceInfo err=" + Marshal.GetLastWin32Error();
+      byte[] buf = Encoding.Unicode.GetBytes("Root\\RamShared\0\0");
+      if (!SetupDiSetDeviceRegistryProperty(list, ref data, 0x00000001, buf, buf.Length))
+        return "SetHWID err=" + Marshal.GetLastWin32Error();
+      if (!SetupDiCallClassInstaller(0x00000019, list, ref data))
+        return "RegisterDevice err=" + Marshal.GetLastWin32Error();
+      bool reboot;
+      if (!UpdateDriverForPlugAndPlayDevices(IntPtr.Zero, "Root\\RamShared", infPath, 0x00000001, out reboot))
+        return "UpdateDriver err=" + Marshal.GetLastWin32Error();
+      return "OK reboot=" + reboot;
+    } finally { SetupDiDestroyDeviceInfoList(list); }
+  }
+}
+'@ -ErrorAction Stop
+                }
+                [RamSharedRootEnum]::Install("C:\ramshared\package\ramshared.inf")
+            } catch {
+                "setupapi-exception: $($_.Exception.Message)"
+            }
+        }
+        $pnp = Wait-RamSharedRootOk
+        $o.rootRecreateAfterReboot = "not_needed"
+        if (-not $pnp.Ok -and $pnp.State -match "missing ROOT") {
+            $o.rootRecreateAfterReboot = Ensure-RamSharedRootDevice
+            Start-Sleep 2
+            $pnp = Wait-RamSharedRootOk
+        }
+        $o.pnpBeforeIoctl = $pnp.State
+        $o.pnpEnableLog = $pnp.Log
+        $o.pnpReady = [bool]$pnp.Ok
         sc.exe start ramshared 2>$null | Out-Null
         sc.exe start poolstress 2>$null | Out-Null
-        Get-PnpDevice -EA SilentlyContinue |
-            Where-Object { $_.InstanceId -like '*ROOT\RAMSHARED*' } |
-            ForEach-Object {
-                pnputil /enable-device $_.InstanceId 2>$null | Out-Null
-                pnputil /restart-device $_.InstanceId 2>$null | Out-Null
-            }
+        $pnpAfterStart = Wait-RamSharedRootOk
+        $o.pnpBeforeIoctl = $pnpAfterStart.State
+        $o.pnpEnableLog = (($o.pnpEnableLog, $pnpAfterStart.Log) -join "`n")
+        $o.pnpReady = [bool]$pnpAfterStart.Ok
         Start-Sleep 4
         $o.verifier = (verifier /query 2>&1 | Out-String)
         $o.ram = (sc.exe query ramshared 2>&1 | Out-String)
@@ -461,8 +684,8 @@ if (-not $SkipVerifier) {
     $load2 | Set-Content (Join-Path $art "guest-load-verifier.json")
     W ("load2=" + $load2)
     $load2Object = $load2 | ConvertFrom-Json
-    if (-not $load2Object.running -or -not $load2Object.verifierActive) {
-        throw "Verifier gate failed: ramshared must be RUNNING and actively verified"
+    if (-not $load2Object.running -or -not $load2Object.verifierActive -or -not $load2Object.pnpReady) {
+        throw ("RamShared PnP gate failed before IOCTL verifier pass: " + $load2)
     }
 
     $ioctl2 = Invoke-GuestBounded -TimeoutSec 300 -ScriptBlock {

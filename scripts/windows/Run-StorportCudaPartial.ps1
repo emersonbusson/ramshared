@@ -70,12 +70,11 @@ $guestResult = Invoke-Command -VMName $VMName -Credential $cred -ScriptBlock {
   sc.exe stop ramshared 2>$null | Out-Null
   sc.exe stop poolstress 2>$null | Out-Null
   Start-Sleep 2
-  sc.exe delete ramshared 2>$null | Out-Null
   sc.exe delete poolstress 2>$null | Out-Null
   Start-Sleep 1
-  # install kernel services (path that worked historically)
+  # poolstress remains a standalone lab driver; RamShared is INF/DIRID-13 owned.
   sc.exe create poolstress type= kernel binPath= C:\ramshared\package\poolstress.sys | Out-Null
-  sc.exe create ramshared type= kernel binPath= C:\ramshared\package\ramshared.sys | Out-Null
+  $out.pnputil = (pnputil /add-driver C:\ramshared\package\ramshared.inf /install 2>&1 | Out-String)
   $s1 = sc.exe start poolstress 2>&1 | Out-String
   $s2 = sc.exe start ramshared 2>&1 | Out-String
   $out.poolstress = (sc.exe query poolstress | Out-String)

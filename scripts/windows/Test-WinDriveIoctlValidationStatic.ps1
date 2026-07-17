@@ -5,6 +5,7 @@ param(
     [string]$QueuePath,
     [string]$DriverPath,
     [string]$VirtdiskPath,
+    [string]$ControlPath,
     [string]$BuildScriptPath
 )
 
@@ -21,6 +22,9 @@ if ([string]::IsNullOrWhiteSpace($DriverPath)) {
 }
 if ([string]::IsNullOrWhiteSpace($VirtdiskPath)) {
     $VirtdiskPath = Join-Path $scriptRoot "..\..\drivers\windows\ramshared\virtdisk.c"
+}
+if ([string]::IsNullOrWhiteSpace($ControlPath)) {
+    $ControlPath = Join-Path $scriptRoot "..\..\drivers\windows\ramshared\control.c"
 }
 if ([string]::IsNullOrWhiteSpace($BuildScriptPath)) {
     $BuildScriptPath = Join-Path $scriptRoot "Build-Drivers.ps1"
@@ -106,6 +110,27 @@ if ($queueSource -notmatch "QCommitAndFetch[\s\S]{0,800}?ExAcquireRundownProtect
 if ($queueSource -notmatch "ExWaitForRundownProtectionRelease\(&Q->IoRundown\)") {
     throw "teardown does not wait IoRundown before unmap"
 }
+if ($queueSource -match [regex]::Escape("__except (EXCEPTION_EXECUTE_HANDLER)")) {
+    throw "QMapUserRegion still catches every exception instead of filtering expected probe faults"
+}
+if ($queueSource -notmatch "QProbeAndLockExceptionFilter\(\s*_In_ ULONG ExceptionCode\s*\)") {
+    throw "QMapUserRegion is missing explicit probe/lock exception filter"
+}
+if ($queueSource -notmatch "static DRIVER_CANCEL QCommitCancel;") {
+    throw "QCommitCancel is missing DRIVER_CANCEL prototype for WDK Code Analysis"
+}
+
+$controlSource = Get-Content -LiteralPath $ControlPath -Raw
+$requiredDispatchPrototypes = @(
+    "static DRIVER_DISPATCH CtlDispatchCreateClose;",
+    "static DRIVER_DISPATCH CtlDispatchCleanup;",
+    "static DRIVER_DISPATCH CtlDispatchDeviceControl;"
+)
+foreach ($token in $requiredDispatchPrototypes) {
+    if ($controlSource -notmatch [regex]::Escape($token)) {
+        throw "control dispatch lacks DRIVER_DISPATCH prototype: $token"
+    }
+}
 
 $driverSource = Get-Content -LiteralPath $DriverPath -Raw
 $requiredDriverTokens = @(
@@ -123,6 +148,8 @@ foreach ($token in $requiredDriverTokens) {
 $virtdiskSource = Get-Content -LiteralPath $VirtdiskPath -Raw
 $requiredVpdLifecycleTokens = @(
     "VdIsAsciiHexSerial(Params->serial)",
+    "g_AdapterExt == NULL",
+    "STATUS_DEVICE_NOT_READY",
     "VdHandleReportLuns(Srb, FALSE)",
     "VdHandleReportLuns(Srb, TRUE)",
     "Srb->SrbStatus = SRB_STATUS_NO_DEVICE",

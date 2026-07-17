@@ -20,6 +20,8 @@ pub struct LeaseState {
 enum ReleaseSent {
     #[default]
     None,
+    /// A frame write started but write+flush did not complete. Never replay it.
+    Attempted { lease: u32 },
     /// Release frame written and flushed for this lease id; further releases are no-ops.
     Sent { lease: u32 },
 }
@@ -30,6 +32,9 @@ pub enum BrokerTenantError {
     Io(String),
     Protocol(String),
     Denied(String),
+    ReleaseAmbiguous {
+        lease: u32,
+    },
     /// Co-residency gate: free VRAM < requested size (DT-20).
     CoresidenceFailClosed {
         free: u64,
@@ -44,6 +49,12 @@ impl std::fmt::Display for BrokerTenantError {
             BrokerTenantError::Io(s) => write!(f, "broker io: {s}"),
             BrokerTenantError::Protocol(s) => write!(f, "broker protocol: {s}"),
             BrokerTenantError::Denied(s) => write!(f, "lease denied: {s}"),
+            BrokerTenantError::ReleaseAmbiguous { lease } => {
+                write!(
+                    f,
+                    "lease release {lease} is ambiguous and will not be replayed"
+                )
+            }
             BrokerTenantError::CoresidenceFailClosed { free, need } => {
                 write!(f, "coresidence_fail_closed free={free} need={need}")
             }
@@ -190,20 +201,28 @@ impl BrokerTenant {
     /// A second same-process release for the same generation is a no-op.
     /// Protocol v1 has no ACK; broker-log correlation is the drill's responsibility.
     pub fn release<S: BufRead + Write>(&mut self, stream: &mut S) -> Result<(), BrokerTenantError> {
-        if let ReleaseSent::Sent { .. } = self.release_sent {
-            // Generation already released; leave stream closed by caller.
-            self.lease = None;
-            return Ok(());
+        match self.release_sent {
+            ReleaseSent::Sent { .. } => {
+                // Generation already released; leave stream closed by caller.
+                self.lease = None;
+                return Ok(());
+            }
+            ReleaseSent::Attempted { lease } => {
+                return Err(BrokerTenantError::ReleaseAmbiguous { lease });
+            }
+            ReleaseSent::None => {}
         }
-        let Some(st) = self.lease.take() else {
+        let Some(st) = self.lease.clone() else {
             return Ok(());
         };
+        self.release_sent = ReleaseSent::Attempted { lease: st.lease };
         write_msg(stream, &Msg::LeaseRelease { lease: st.lease })
             .map_err(|e| BrokerTenantError::Io(e.to_string()))?;
         stream
             .flush()
             .map_err(|e| BrokerTenantError::Io(e.to_string()))?;
         self.release_sent = ReleaseSent::Sent { lease: st.lease };
+        self.lease = None;
         self.requested_bytes = None;
         Ok(())
     }
@@ -437,5 +456,46 @@ mod tests {
             }
         }
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn failed_release_retains_lease_and_is_not_replayed() {
+        struct FailFlush(Dual);
+        impl std::io::Read for FailFlush {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                self.0.read(buf)
+            }
+        }
+        impl BufRead for FailFlush {
+            fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+                self.0.fill_buf()
+            }
+            fn consume(&mut self, amt: usize) {
+                self.0.consume(amt);
+            }
+        }
+        impl Write for FailFlush {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.write(buf)
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Err(std::io::Error::other("injected flush failure"))
+            }
+        }
+
+        let mut stream = FailFlush(Dual::new(Vec::new()));
+        let mut tenant = BrokerTenant::new("wd", Duration::from_secs(5));
+        tenant.force_lease_for_test(12, 1 << 20);
+        assert!(matches!(
+            tenant.release(&mut stream),
+            Err(BrokerTenantError::Io(_))
+        ));
+        assert_eq!(tenant.lease().map(|lease| lease.lease), Some(12));
+        let written = stream.0.written().len();
+        assert!(matches!(
+            tenant.release(&mut stream),
+            Err(BrokerTenantError::ReleaseAmbiguous { lease: 12 })
+        ));
+        assert_eq!(stream.0.written().len(), written);
     }
 }

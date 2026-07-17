@@ -157,10 +157,12 @@ if ($StorageOnly) {
 }
 
 # Driver package presence (optional)
-$sys = @(
-    "C:\Windows\System32\drivers\ramshared.sys",
-    "C:\ramshared\package\ramshared.sys"
-)
+$serviceImage = $null
+try {
+    $rawImage = [string](Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\ramshared" -Name ImagePath -EA Stop).ImagePath
+    $serviceImage = $rawImage.Trim('"') -replace '^\\SystemRoot', $env:SystemRoot -replace '^\\\?\?\\', ''
+} catch {}
+$sys = @($serviceImage, "C:\ramshared\package\ramshared.sys") | Where-Object { $_ }
 $drv = $false
 foreach ($s in $sys) {
     if (Test-Path $s) {

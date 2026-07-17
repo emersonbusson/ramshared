@@ -28,6 +28,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 use crate::config::{ConfigError, MAX_CONFIG_BYTES, WinDriveConfig};
+use crate::host_safety::merge_pagefile_sources;
 use crate::service::{ObservedVolumeIdentity, parse_product_friendly_name};
 
 /// Host-side errors (no kernel addresses).
@@ -89,6 +90,7 @@ impl LunIdentity {
 /// Exclusive volume lock handle.
 pub struct LockedVolume {
     pub letter: char,
+    pub disk_number: u32,
     handle: HANDLE,
 }
 
@@ -113,6 +115,22 @@ impl Drop for LockedVolume {
 const FSCTL_LOCK_VOLUME: u32 = 0x0009_0018;
 const FSCTL_UNLOCK_VOLUME: u32 = 0x0009_001c;
 const FSCTL_DISMOUNT_VOLUME: u32 = 0x0009_0020;
+const IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS: u32 = 0x0056_0000;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct DiskExtent {
+    disk_number: u32,
+    starting_offset: i64,
+    extent_length: i64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct VolumeDiskExtentsOne {
+    number_of_disk_extents: u32,
+    extents: [DiskExtent; 1],
+}
 
 /// Aggregate host queries used by product runtime.
 pub struct WindowsHostState;
@@ -202,12 +220,38 @@ impl WindowsHostState {
 
     /// Gate A/B pagefile query. Fail-closed on any error (DT-8).
     ///
-    /// Prefer registry `PagingFiles` (configured pagefiles) — no PowerShell. CIM
-    /// `Win32_PageFileUsage` hangs under GPU-PV guest load and blocked teardown.
-    /// Configured paths are a strict super-set for "is a pagefile on this letter?"
-    /// (DT-8 refuse if product letter hosts a pagefile).
+    /// Require both configured and actually allocated pagefile sources (DT-8).
+    /// Either source failing is unsafe. The CIM process is bounded and killed on
+    /// timeout so a provider hang cannot consume the teardown budget.
     pub fn active_pagefiles() -> Result<Vec<PagefileIdentity>, HostError> {
-        Self::configured_pagefiles_registry()
+        let configured = Self::configured_pagefiles_registry()
+            .map(|rows| rows.into_iter().map(|row| row.name).collect())
+            .map_err(|e| e.to_string());
+        let active = Self::active_pagefiles_cim().map_err(|e| e.to_string());
+        merge_pagefile_sources(configured, active)
+            .map(|paths| paths.into_iter().map(pagefile_identity).collect())
+            .map_err(HostError::Pagefile)
+    }
+
+    fn active_pagefiles_cim() -> Result<Vec<String>, HostError> {
+        let script = concat!(
+            "$ErrorActionPreference='Stop'; ",
+            "@(Get-CimInstance Win32_PageFileUsage -ErrorAction Stop | ",
+            "ForEach-Object { [string]$_.Name }) | ForEach-Object { Write-Output $_ }"
+        );
+        let output =
+            run_powershell_bounded(script, Duration::from_secs(3)).map_err(HostError::Pagefile)?;
+        if !output.status.success() {
+            return Err(HostError::Pagefile(format!(
+                "Win32_PageFileUsage failed status={:?} stderr={}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+                    .chars()
+                    .take(200)
+                    .collect::<String>()
+            )));
+        }
+        parse_pagefile_lines(&String::from_utf8_lossy(&output.stdout)).map_err(HostError::Pagefile)
     }
 
     /// Read `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PagingFiles`.
@@ -240,12 +284,21 @@ impl WindowsHostState {
                 &mut size,
             )
         };
-        if q1 != 0 || size == 0 {
+        if q1 != 0 {
             unsafe {
                 RegCloseKey(hkey);
             }
-            // Empty / missing = no configured pagefiles.
-            return Ok(Vec::new());
+            return Err(HostError::Pagefile(format!(
+                "RegQueryValueExW PagingFiles size failed status={q1}"
+            )));
+        }
+        if size == 0 || !size.is_multiple_of(2) {
+            unsafe {
+                RegCloseKey(hkey);
+            }
+            return Err(HostError::Pagefile(format!(
+                "PagingFiles invalid byte length {size}"
+            )));
         }
         if ty != REG_MULTI_SZ {
             unsafe {
@@ -279,6 +332,11 @@ impl WindowsHostState {
             .chunks_exact(2)
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();
+        if wide.last().copied() != Some(0) {
+            return Err(HostError::Pagefile(
+                "PagingFiles is not null terminated".into(),
+            ));
+        }
         let mut out = Vec::new();
         let mut start = 0usize;
         for i in 0..wide.len() {
@@ -288,12 +346,8 @@ impl WindowsHostState {
                 }
                 let s = std::ffi::OsString::from_wide(&wide[start..i]);
                 let name = s.to_string_lossy().to_string();
-                // Entries look like "C:\pagefile.sys 0 0" — take path token.
-                let path = name.split_whitespace().next().unwrap_or("").to_string();
-                if !path.is_empty() {
-                    let volume = path.get(..3).unwrap_or("").to_string();
-                    out.push(PagefileIdentity { name: path, volume });
-                }
+                let path = parse_configured_pagefile_entry(&name).map_err(HostError::Pagefile)?;
+                out.push(pagefile_identity(path));
                 start = i + 1;
             }
         }
@@ -301,6 +355,13 @@ impl WindowsHostState {
     }
 
     pub fn lock_volume(letter: char) -> Result<LockedVolume, HostError> {
+        Self::lock_product_volume(letter, None)
+    }
+
+    pub fn lock_product_volume(
+        letter: char,
+        expected_disk_number: Option<u32>,
+    ) -> Result<LockedVolume, HostError> {
         let letter = letter.to_ascii_uppercase();
         if !('D'..='Z').contains(&letter) {
             return Err(HostError::Volume("letter must be D..=Z".into()));
@@ -322,13 +383,31 @@ impl WindowsHostState {
         if handle == INVALID_HANDLE_VALUE {
             return Err(HostError::Volume(last_err("CreateFile volume")));
         }
+        let disk_number = match volume_disk_number(handle) {
+            Ok(number) => number,
+            Err(e) => {
+                unsafe { CloseHandle(handle) };
+                return Err(HostError::Volume(e));
+            }
+        };
+        if expected_disk_number.is_some_and(|expected| expected != disk_number) {
+            unsafe { CloseHandle(handle) };
+            return Err(HostError::Volume(format!(
+                "volume remapped: expected PhysicalDrive{} got PhysicalDrive{disk_number}",
+                expected_disk_number.unwrap_or_default()
+            )));
+        }
         if !fsctl(handle, FSCTL_LOCK_VOLUME) {
             unsafe {
                 CloseHandle(handle);
             }
             return Err(HostError::Volume(last_err("FSCTL_LOCK_VOLUME")));
         }
-        Ok(LockedVolume { letter, handle })
+        Ok(LockedVolume {
+            letter,
+            disk_number,
+            handle,
+        })
     }
 
     pub fn flush_and_dismount(vol: &LockedVolume) -> Result<(), HostError> {
@@ -382,7 +461,7 @@ impl WindowsHostState {
         letter: char,
         serial: &str,
         size_bytes: u64,
-    ) -> Result<ObservedVolumeIdentity, HostError> {
+    ) -> Result<(ObservedVolumeIdentity, u32), HostError> {
         let letter = letter.to_ascii_uppercase();
         if !('D'..='Z').contains(&letter) {
             return Err(HostError::Volume("letter must be D..=Z".into()));
@@ -390,27 +469,74 @@ impl WindowsHostState {
         if serial.len() != 16 {
             return Err(HostError::Identity("serial must be 16 hex chars".into()));
         }
-        // Get-Disk only — no Get-Partition. Unique serial+size is the hard identity.
+        // Bind the configured letter to the exact disk. Serial+size without the
+        // partition relation could select a correct product disk while the letter
+        // had been remapped to a foreign volume.
         let script = format!(
             concat!(
-                "$wantSerial='{serial}'; $wantSize=[uint64]{size}; ",
+                "$ErrorActionPreference='Stop'; ",
+                "$wantSerial='{serial}'; $wantLetter='{letter}'; $wantSize={size_bytes}; ",
                 "$d=@(Get-Disk -ErrorAction SilentlyContinue | Where-Object {{ ",
-                "  ($_.Size -eq $wantSize) -and ",
                 "  ((([string]$_.SerialNumber).Trim()) -ieq $wantSerial) -and ",
+                "  ([uint64]$_.Size -eq $wantSize) -and ",
                 "  ($_.FriendlyName -match 'RAMSHARE') ",
                 "}}); ",
                 "if($d.Count -ne 1){{ Write-Error ('disk_count='+$d.Count); exit 42 }}; ",
+                "$p=@(Get-Partition -DiskNumber $d[0].Number -ErrorAction Stop | ",
+                "Where-Object {{ ([string]$_.DriveLetter) -ieq $wantLetter }}); ",
+                "if($p.Count -ne 1){{ Write-Error ('letter_binding_count='+$p.Count); exit 43 }}; ",
                 "$n=($d[0].FriendlyName -replace '\\s+',' ').Trim(); ",
-                "Write-Output ($n+'|'+$d[0].Size+'|'+$d[0].SerialNumber.Trim())"
+                "Write-Output ([string]$d[0].Number+'|'+$n+'|'+([string]$d[0].SerialNumber).Trim()+'|'+[string]$d[0].Size)"
             ),
             serial = serial,
-            size = size_bytes
+            letter = letter,
+            size_bytes = size_bytes,
         );
-        Self::parse_identity_output(
-            letter,
-            &run_powershell_bounded(&script, Duration::from_secs(2))
-                .map_err(HostError::Identity)?,
-        )
+        let output =
+            run_powershell_bounded(&script, Duration::from_secs(4)).map_err(HostError::Identity)?;
+        if !output.status.success() {
+            return Err(HostError::Identity(format!(
+                "product volume query failed status={:?} stderr={}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+                    .chars()
+                    .take(200)
+                    .collect::<String>()
+            )));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut parts = stdout.trim().split('|');
+        let disk_number = parts
+            .next()
+            .and_then(|value| value.parse::<u32>().ok())
+            .ok_or_else(|| HostError::Identity("missing disk number".into()))?;
+        let name = parts.next().unwrap_or_default();
+        let observed_serial = parts.next().unwrap_or_default().trim().to_string();
+        let observed_size = parts
+            .next()
+            .and_then(|value| value.parse::<u64>().ok())
+            .ok_or_else(|| HostError::Identity("missing disk size".into()))?;
+        if parts.next().is_some() {
+            return Err(HostError::Identity(
+                "ambiguous product identity output".into(),
+            ));
+        }
+        let (vendor, product) = parse_product_friendly_name(name).map_err(HostError::Identity)?;
+        if observed_size != size_bytes {
+            return Err(HostError::Identity(format!(
+                "capacity mismatch expected={size_bytes} observed={observed_size}"
+            )));
+        }
+        Ok((
+            ObservedVolumeIdentity {
+                letter,
+                vendor,
+                product,
+                serial: observed_serial,
+                size_bytes: observed_size,
+            },
+            disk_number,
+        ))
     }
 
     fn parse_identity_output(
@@ -641,6 +767,35 @@ fn fsctl(handle: HANDLE, code: u32) -> bool {
     }
 }
 
+fn volume_disk_number(handle: HANDLE) -> Result<u32, String> {
+    let mut extents = VolumeDiskExtentsOne::default();
+    let mut returned = 0u32;
+    let ok = unsafe {
+        windows_sys::Win32::System::IO::DeviceIoControl(
+            handle,
+            IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS,
+            ptr::null(),
+            0,
+            &mut extents as *mut _ as *mut std::ffi::c_void,
+            std::mem::size_of::<VolumeDiskExtentsOne>() as u32,
+            &mut returned,
+            ptr::null_mut(),
+        )
+    };
+    if ok == FALSE {
+        return Err(last_err("IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS"));
+    }
+    if extents.number_of_disk_extents != 1
+        || returned < std::mem::size_of::<VolumeDiskExtentsOne>() as u32
+    {
+        return Err(format!(
+            "volume must have exactly one disk extent count={} bytes={returned}",
+            extents.number_of_disk_extents
+        ));
+    }
+    Ok(extents.extents[0].disk_number)
+}
+
 fn bcrypt_ok(status: i32) -> bool {
     status >= 0
 }
@@ -696,6 +851,45 @@ fn extract_json_string(json: &str, key: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+fn parse_configured_pagefile_entry(entry: &str) -> Result<String, String> {
+    let entry = entry.trim();
+    let (path_and_min, max) = entry
+        .rsplit_once(char::is_whitespace)
+        .ok_or_else(|| "PagingFiles entry missing maximum size".to_string())?;
+    let (path, min) = path_and_min
+        .trim_end()
+        .rsplit_once(char::is_whitespace)
+        .ok_or_else(|| "PagingFiles entry missing minimum size".to_string())?;
+    if min.parse::<u64>().is_err() || max.parse::<u64>().is_err() {
+        return Err("PagingFiles entry has non-numeric size".into());
+    }
+    let path = path.trim();
+    if path.len() < 3 || path.as_bytes().get(1) != Some(&b':') {
+        return Err("PagingFiles entry has invalid drive path".into());
+    }
+    Ok(path.to_string())
+}
+
+fn parse_pagefile_lines(output: &str) -> Result<Vec<String>, String> {
+    let mut paths = Vec::new();
+    for line in output.lines() {
+        let path = line.trim();
+        if path.is_empty() {
+            continue;
+        }
+        if path.len() < 3 || path.as_bytes().get(1) != Some(&b':') {
+            return Err("Win32_PageFileUsage returned an invalid drive path".into());
+        }
+        paths.push(path.to_string());
+    }
+    Ok(paths)
+}
+
+fn pagefile_identity(path: String) -> PagefileIdentity {
+    let volume = path.get(..3).unwrap_or("").to_string();
+    PagefileIdentity { name: path, volume }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -732,6 +926,15 @@ mod tests {
     fn pagefile_query_error_is_unsafe() {
         let err = HostError::Pagefile("WMI timeout".into());
         assert!(err.to_string().contains("pagefile"));
+    }
+
+    #[test]
+    fn configured_pagefile_parser_preserves_spaces() {
+        assert_eq!(
+            parse_configured_pagefile_entry(r"S:\paging files\pagefile.sys 0 4096").unwrap(),
+            r"S:\paging files\pagefile.sys"
+        );
+        assert!(parse_configured_pagefile_entry(r"S:\pagefile.sys dynamic").is_err());
     }
 
     #[test]

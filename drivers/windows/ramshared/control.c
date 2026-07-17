@@ -37,6 +37,10 @@ static PDRIVER_DISPATCH g_OrigClose;
 static PDRIVER_DISPATCH g_OrigCleanup;
 static PDRIVER_DISPATCH g_OrigDeviceControl;
 
+static DRIVER_DISPATCH CtlDispatchCreateClose;
+static DRIVER_DISPATCH CtlDispatchCleanup;
+static DRIVER_DISPATCH CtlDispatchDeviceControl;
+
 PDEVICE_OBJECT
 CtlGetControlDevice(VOID)
 {

@@ -22,6 +22,7 @@ use crate::driver_link::{DriverLink, QueueAccess};
 use crate::evidence::{
     EvidenceWriter, IoCounters, RuntimeEvidence, new_process_run_id, summarize_latencies, utc_ms,
 };
+use crate::host_safety::{LockWaitDecision, lock_wait_decision, pagefile_may_target_volume};
 use crate::proto::DiskParams;
 use crate::runtime::{
     RunMode, RuntimeError, RuntimeErrorClass, RuntimePhase, RuntimeState, RuntimeSummary,
@@ -266,6 +267,54 @@ pub fn run_product_online(
             message,
         ));
     }
+
+    let mut dlink = DriverLink::from_queue(q);
+    let startup_lun_deadline = Duration::from_secs(60);
+    let startup_lun_started = Instant::now();
+    loop {
+        // The startup LUN identity wait must pump I/O: Windows disk
+        // enumeration may issue READs before Get-Disk exposes the device.
+        let want_serial = serial_str.clone();
+        let want_size = cfg.size_bytes;
+        let startup_lun = readonly_host_call_with_io_pump(
+            &mut link,
+            &mut dlink,
+            &mut backend,
+            Duration::from_secs(5),
+            move || WindowsHostState::find_lun(&want_serial, want_size),
+        );
+        let startup_lun_error = match startup_lun {
+            Ok(Some(_)) => break,
+            Ok(None) => "not enumerated".to_string(),
+            Err(e) => e,
+        };
+        if startup_lun_started.elapsed() >= startup_lun_deadline {
+            let mut message = format!(
+                "startup LUN identity did not appear after {} ms: {}",
+                startup_lun_deadline.as_millis(),
+                startup_lun_error
+            );
+            if let Err(unreg_error) = link.unregister_queue() {
+                message.push_str(&format!("; UNREGISTER failed: {unreg_error}"));
+            }
+            if let Err(destroy_error) = link.destroy_disk() {
+                message.push_str(&format!("; DESTROY failed: {destroy_error}"));
+                preserve_failed_safe("startup missing LUN could not destroy disk");
+            }
+            if let Err(wipe_error) = backend.zero() {
+                message.push_str(&format!("; VRAM wipe failed: {wipe_error}"));
+            }
+            return Err(error_after_release(
+                &mut tenant,
+                &mut stream,
+                RuntimeErrorClass::Abi,
+                5,
+                message,
+            ));
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+
     state.phase = RuntimePhase::QueueRegistered;
     state.phase = RuntimePhase::Online;
     row.begin_event("Online", utc_ms());
@@ -282,7 +331,6 @@ pub fn run_product_online(
     );
 
     // --- I/O loop: one pending COMMIT at a time ---
-    let mut dlink = DriverLink::from_queue(q);
     let mut last_progress = Instant::now();
     let cuda_watchdog = CudaWatchdog::start(Duration::from_millis(5_000));
     let commit_watchdog = Duration::from_millis(5_000);
@@ -336,6 +384,7 @@ pub fn run_product_online(
         }
 
         state.phase = RuntimePhase::Stopping;
+        let teardown_started = Instant::now();
         row.begin_event("Stopping", utc_ms());
         sync_runtime_evidence(&mut row, &state);
         let _ = evidence.append(&row);
@@ -362,7 +411,48 @@ pub fn run_product_online(
             }
         };
 
-        // Identity + Gate A (no volume open — safe without I/O pump).
+        // Re-observe the exact letter-to-disk identity while the I/O pump stays
+        // available. CREATE-time values are expectations, never OS identity.
+        let identity_letter = teardown_letter;
+        let identity_serial = serial_str.clone();
+        let identity_size = cfg.size_bytes;
+        let (observed, observed_disk_number) = match readonly_host_call_with_io_pump(
+            &mut link,
+            &mut dlink,
+            &mut backend,
+            Duration::from_secs(5),
+            move || {
+                WindowsHostState::observe_product_volume(
+                    identity_letter,
+                    &identity_serial,
+                    identity_size,
+                )
+            },
+        ) {
+            Ok(observed) => observed,
+            Err(e) => {
+                refuse_stop_online(
+                    &mut state,
+                    &mut row,
+                    &mut evidence,
+                    &stop,
+                    &format!("volume_identity_observation: {e}"),
+                );
+                continue;
+            }
+        };
+        if let Err(e) = gates.accept_observed_identity(observed, observed_disk_number) {
+            refuse_stop_online(
+                &mut state,
+                &mut row,
+                &mut evidence,
+                &stop,
+                &format!("volume_identity: {e}"),
+            );
+            continue;
+        }
+
+        // Identity + Gate A (read-only, safe to refuse back to Online).
         if let Err(e) = gates.verify_volume_identity(teardown_letter) {
             teardown_diag(&format!(
                 "teardown refused (code 7) resume Online: volume_identity: {e}"
@@ -376,7 +466,15 @@ pub fn run_product_online(
             stop.store(false, Ordering::Release);
             continue;
         }
-        match gates.active_pagefiles() {
+        let gate_a = readonly_host_call_with_io_pump(
+            &mut link,
+            &mut dlink,
+            &mut backend,
+            Duration::from_secs(5),
+            WindowsHostState::active_pagefiles,
+        )
+        .and_then(|rows| gates.filter_pagefiles(rows));
+        match gate_a {
             Ok(pf) if pf.is_empty() => {
                 teardown_diag("teardown phase=GateA pagefiles_on_volume=0");
             }
@@ -414,14 +512,43 @@ pub fn run_product_online(
             "teardown phase=VolumeLock begin (I/O pump) letter={teardown_letter}"
         ));
         let letter_for_lock = teardown_letter;
+        let disk_for_lock = gates.expected_disk_number();
         let (tx, rx) = std::sync::mpsc::channel();
         thread::spawn(move || {
-            let _ = tx.send(WindowsHostState::lock_volume(letter_for_lock));
+            let _ = tx.send(WindowsHostState::lock_product_volume(
+                letter_for_lock,
+                Some(disk_for_lock),
+            ));
         });
         let lock_res = loop {
             match rx.try_recv() {
                 Ok(r) => break r,
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    if lock_wait_decision(
+                        teardown_started.elapsed(),
+                        Duration::from_secs(30),
+                        false,
+                    ) == LockWaitDecision::EnterFailedSafe
+                    {
+                        state.healthy = false;
+                        state.phase = RuntimePhase::FailedSafe;
+                        row.error_class = Some("teardown_timeout".into());
+                        row.error_code = Some("30s".into());
+                        sync_runtime_evidence(&mut row, &state);
+                        let _ = evidence.append(&row);
+                        teardown_diag(
+                            "FailedSafe: volume lock exceeded 30,000 ms; retaining I/O pump",
+                        );
+                        preserve_failed_safe_with_io(
+                            "volume lock worker remains in flight",
+                            &mut link,
+                            &mut dlink,
+                            &mut backend,
+                            &mut tenant,
+                            &mut stream,
+                            rx,
+                        );
+                    }
                     match link.commit_and_fetch(Duration::from_millis(50)) {
                         Ok(()) => {
                             let _ = dlink.commit_and_fetch(&mut backend);
@@ -439,6 +566,17 @@ pub fn run_product_online(
                 }
             }
         };
+        if teardown_started.elapsed() >= Duration::from_secs(30) {
+            drop(lock_res);
+            refuse_stop_online(
+                &mut state,
+                &mut row,
+                &mut evidence,
+                &stop,
+                "volume_lock_completed_after_30s_budget",
+            );
+            continue;
+        }
         match lock_res {
             Ok(vol) => {
                 gates.take_locked(vol);
@@ -459,6 +597,57 @@ pub fn run_product_online(
             }
         }
 
+        // Gate B is observed while the exact volume lock is held and while any
+        // outstanding miniport request can still be drained. Cache the snapshot
+        // so the destructive helper cannot silently re-query a weaker source.
+        let gate_b_timeout = Duration::from_secs(30)
+            .saturating_sub(teardown_started.elapsed())
+            .min(Duration::from_secs(5));
+        if gate_b_timeout.is_zero() {
+            let _ = gates.unlock_volume();
+            refuse_stop_online(
+                &mut state,
+                &mut row,
+                &mut evidence,
+                &stop,
+                "gate_b_budget_exhausted",
+            );
+            continue;
+        }
+        let gate_b = readonly_host_call_with_io_pump(
+            &mut link,
+            &mut dlink,
+            &mut backend,
+            gate_b_timeout,
+            WindowsHostState::active_pagefiles,
+        )
+        .and_then(|rows| gates.filter_pagefiles(rows));
+        match gate_b {
+            Ok(rows) if rows.is_empty() => gates.cache_pagefiles(rows),
+            Ok(rows) => {
+                let _ = gates.unlock_volume();
+                refuse_stop_online(
+                    &mut state,
+                    &mut row,
+                    &mut evidence,
+                    &stop,
+                    &format!("gate_b_active: {}", rows.join(",")),
+                );
+                continue;
+            }
+            Err(e) => {
+                let _ = gates.unlock_volume();
+                refuse_stop_online(
+                    &mut state,
+                    &mut row,
+                    &mut evidence,
+                    &stop,
+                    &format!("gate_b_query: {e}"),
+                );
+                continue;
+            }
+        }
+
         // Locked: stop serving, then Gate B → dismount → unregister → destroy → wipe.
         let _ = link.cancel_fetch();
         let mut svc = ServiceState {
@@ -470,38 +659,85 @@ pub fn run_product_online(
             registered_queue: true,
             online: true,
         };
-        let mut disk_ctl = LinkDisk {
-            link: &mut link,
-            unregistered: false,
-            destroyed: false,
-        };
-        let mut wipe = BackendWipe {
-            backend: &mut backend,
-        };
         let mut phases = Vec::new();
         let mut cfg_teardown = cfg.clone();
         cfg_teardown.volume_letter = teardown_letter;
 
         // Gate B + rest of destructive path (volume already locked).
-        match teardown_after_lock(
-            &cfg_teardown,
-            &mut svc,
-            &mut disk_ctl,
-            &mut wipe,
-            &mut gates,
-            &mut phases,
-        ) {
+        let teardown_result = {
+            let mut disk_ctl = LinkDisk {
+                link: &mut link,
+                unregistered: false,
+                destroyed: false,
+            };
+            let mut wipe = BackendWipe {
+                backend: &mut backend,
+            };
+            teardown_after_lock(
+                &cfg_teardown,
+                &mut svc,
+                &mut disk_ctl,
+                &mut wipe,
+                &mut gates,
+                &mut phases,
+            )
+        };
+        match teardown_result {
             Ok(()) => {
-                tenant.release(&mut stream).map_err(|e| {
-                    RuntimeError::new(
-                        RuntimeErrorClass::Broker,
-                        3,
-                        format!("destructive teardown completed but lease release failed: {e}"),
-                    )
-                })?;
+                // The disk and queue no longer reference the backend. Release
+                // DeviceMem and verify restoration before LeaseRelease (DT-8).
+                let device_mem = backend.into_inner();
+                drop(device_mem);
+                let free_after = match ctx.mem_info() {
+                    Ok((free_after, _)) => free_after,
+                    Err(e) => {
+                        state.healthy = false;
+                        state.phase = RuntimePhase::FailedSafe;
+                        state.allocated_bytes = 0;
+                        row.error_class = Some("cuda_restore_query".into());
+                        row.error_code = Some(e.to_string());
+                        sync_runtime_evidence(&mut row, &state);
+                        let _ = evidence.append(&row);
+                        preserve_failed_safe_lease(
+                            "CUDA free restoration query failed after destroy",
+                            &mut tenant,
+                            &mut stream,
+                        );
+                    }
+                };
+                row.free_bytes = free_after as u64;
+                if free_after.saturating_add(64 * 1024 * 1024) < free {
+                    state.healthy = false;
+                    state.phase = RuntimePhase::FailedSafe;
+                    state.allocated_bytes = 0;
+                    row.error_class = Some("cuda_restore_miss".into());
+                    row.error_code = Some(format!("before={free} after={free_after}"));
+                    sync_runtime_evidence(&mut row, &state);
+                    let _ = evidence.append(&row);
+                    preserve_failed_safe_lease(
+                        "CUDA free bytes not restored within 64 MiB after destroy",
+                        &mut tenant,
+                        &mut stream,
+                    );
+                }
+                if let Err(e) = tenant.release(&mut stream) {
+                    state.healthy = false;
+                    state.phase = RuntimePhase::FailedSafe;
+                    state.allocated_bytes = 0;
+                    row.error_class = Some("lease_release".into());
+                    row.error_code = Some(e.to_string());
+                    sync_runtime_evidence(&mut row, &state);
+                    let _ = evidence.append(&row);
+                    preserve_failed_safe_lease(
+                        "destructive teardown completed but lease release failed",
+                        &mut tenant,
+                        &mut stream,
+                    );
+                }
                 state.phase = RuntimePhase::Stopped;
                 state.lease_id = None;
                 state.allocated_bytes = 0;
+                row.duration_ms = teardown_started.elapsed().as_millis() as u64;
                 row.begin_event("Stopped", utc_ms());
                 sync_runtime_evidence(&mut row, &state);
                 let _ = evidence.append(&row);
@@ -631,6 +867,139 @@ fn preserve_failed_safe(reason: &str) -> ! {
     ));
     loop {
         thread::park_timeout(Duration::from_secs(1));
+    }
+}
+
+fn refuse_stop_online(
+    state: &mut RuntimeState,
+    row: &mut RuntimeEvidence,
+    evidence: &mut EvidenceWriter,
+    stop: &AtomicBool,
+    reason: &str,
+) {
+    teardown_diag(&format!(
+        "teardown refused (code 7) resume Online: {reason}"
+    ));
+    state.phase = RuntimePhase::Online;
+    row.begin_event("Online", utc_ms());
+    sync_runtime_evidence(row, state);
+    row.error_class = Some("pagefile_safety".into());
+    row.error_code = Some("7".into());
+    let _ = evidence.append(row);
+    stop.store(false, Ordering::Release);
+}
+
+fn readonly_host_call_with_io_pump<T, M, F>(
+    link: &mut WindowsDriverLink,
+    dlink: &mut DriverLink<WindowsMappedQueue>,
+    backend: &mut VramBackend<M>,
+    timeout: Duration,
+    operation: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    M: ramshared_vram::VramMemory,
+    F: FnOnce() -> Result<T, crate::windows_host::HostError> + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(operation());
+    });
+    let started = Instant::now();
+    loop {
+        match rx.try_recv() {
+            Ok(result) => return result.map_err(|e| e.to_string()),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                return Err("read-only host worker disconnected".into());
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!(
+                "read-only host observation timed out after {} ms",
+                timeout.as_millis()
+            ));
+        }
+        match link.commit_and_fetch(Duration::from_millis(50)) {
+            Ok(()) => dlink
+                .commit_and_fetch(backend)
+                .map(|_| ())
+                .map_err(|e| format!("I/O pump during host observation: {e}"))?,
+            Err(crate::windows_driver::IoctlError::Timeout) => {}
+            Err(e) => return Err(format!("I/O pump during host observation: {e}")),
+        }
+    }
+}
+
+fn preserve_failed_safe_with_io<M>(
+    reason: &str,
+    link: &mut WindowsDriverLink,
+    dlink: &mut DriverLink<WindowsMappedQueue>,
+    backend: &mut VramBackend<M>,
+    tenant: &mut BrokerTenant,
+    stream: &mut BrokStream,
+    receiver: std::sync::mpsc::Receiver<
+        Result<crate::windows_host::LockedVolume, crate::windows_host::HostError>,
+    >,
+) -> !
+where
+    M: ramshared_vram::VramMemory,
+{
+    teardown_diag(&format!(
+        "FailedSafe: {reason}; preserving I/O, disk, allocation, and lease until supervised reboot"
+    ));
+    let mut lock_receiver = Some(receiver);
+    let mut last_heartbeat = Instant::now();
+    loop {
+        if let Some(rx) = lock_receiver.as_ref() {
+            match rx.try_recv() {
+                Ok(result) => {
+                    drop(result);
+                    teardown_diag("FailedSafe: late volume-lock result drained and released");
+                    lock_receiver = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    lock_receiver = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        match link.commit_and_fetch(Duration::from_millis(50)) {
+            Ok(()) => {
+                if let Err(e) = dlink.commit_and_fetch(backend) {
+                    teardown_diag(&format!("FailedSafe I/O pump error: {e}"));
+                }
+            }
+            Err(crate::windows_driver::IoctlError::Timeout) => {}
+            Err(e) => teardown_diag(&format!("FailedSafe COMMIT error: {e}")),
+        }
+        if last_heartbeat.elapsed() >= Duration::from_secs(1) {
+            if let Err(e) = tenant.heartbeat_psi(stream) {
+                teardown_diag(&format!("FailedSafe broker heartbeat error: {e}"));
+            } else if let Err(e) = stream.flush() {
+                teardown_diag(&format!("FailedSafe broker flush error: {e}"));
+            }
+            last_heartbeat = Instant::now();
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn preserve_failed_safe_lease(
+    reason: &str,
+    tenant: &mut BrokerTenant,
+    stream: &mut BrokStream,
+) -> ! {
+    teardown_diag(&format!(
+        "FailedSafe: {reason}; allocation is free but lease ownership is retained"
+    ));
+    loop {
+        if let Err(e) = tenant.heartbeat_psi(stream) {
+            teardown_diag(&format!("FailedSafe broker heartbeat error: {e}"));
+        } else if let Err(e) = stream.flush() {
+            teardown_diag(&format!("FailedSafe broker flush error: {e}"));
+        }
+        thread::sleep(Duration::from_secs(1));
     }
 }
 
@@ -843,6 +1212,9 @@ struct HostGates {
     target: TeardownTarget,
     target_serial: String,
     target_size: u64,
+    identity_verified: bool,
+    expected_disk_number: Option<u32>,
+    pagefile_snapshot: Mutex<Option<Vec<String>>>,
 }
 
 impl HostGates {
@@ -853,6 +1225,9 @@ impl HostGates {
             target: TeardownTarget::new(volume_letter, serial, size_bytes)?,
             target_serial: serial.to_string(),
             target_size: size_bytes,
+            identity_verified: false,
+            expected_disk_number: None,
+            pagefile_snapshot: Mutex::new(None),
         })
     }
 
@@ -862,6 +1237,39 @@ impl HostGates {
 
     fn target_size(&self) -> u64 {
         self.target_size
+    }
+
+    fn accept_observed_identity(
+        &mut self,
+        observed: crate::service::ObservedVolumeIdentity,
+        disk_number: u32,
+    ) -> Result<(), String> {
+        self.target.verify_unique(&[observed])?;
+        self.identity_verified = true;
+        self.expected_disk_number = Some(disk_number);
+        Ok(())
+    }
+
+    fn expected_disk_number(&self) -> u32 {
+        self.expected_disk_number.unwrap_or(u32::MAX)
+    }
+
+    fn filter_pagefiles(
+        &self,
+        rows: Vec<crate::windows_host::PagefileIdentity>,
+    ) -> Result<Vec<String>, String> {
+        rows.into_iter().try_fold(Vec::new(), |mut found, row| {
+            if pagefile_may_target_volume(&row.name, self.volume_letter)? {
+                found.push(row.name);
+            }
+            Ok(found)
+        })
+    }
+
+    fn cache_pagefiles(&self, rows: Vec<String>) {
+        if let Ok(mut snapshot) = self.pagefile_snapshot.lock() {
+            *snapshot = Some(rows);
+        }
     }
 
     /// Install a volume lock obtained while the I/O pump was still running.
@@ -878,29 +1286,13 @@ impl PagefileGates for HostGates {
             self.target_serial(),
             self.target_size()
         ));
-        // Stop-path identity must not invoke PowerShell OR Path::exists on the
-        // volume root. Under GPU-PV both hang (observed: Get-Disk multi-second
-        // timeouts; Path::exists("S:\\") hung for the full 180s stop budget even
-        // while pre-stop FSCTL_LOCK_VOLUME from the harness succeeded).
-        //
-        // Day-0 identity is the CREATE-time 16-hex serial + configured letter +
-        // size we minted at Online. Destructive steps still require Gate A/B and
-        // exclusive volume lock (fail-closed on lock failure).
-        let _ = letter; // letter validated in HostGates::new / TeardownTarget
-        if self.target_serial().len() != 16
-            || !self.target_serial().bytes().all(|b| b.is_ascii_hexdigit())
-        {
-            let msg = "CREATE-time serial invalid".to_string();
-            teardown_diag(&format!("teardown phase=Identity FAIL: {msg}"));
-            return Err(msg);
-        }
-        if self.target_size() == 0 {
-            let msg = "CREATE-time size is zero".to_string();
+        if letter.to_ascii_uppercase() != self.volume_letter || !self.identity_verified {
+            let msg = "live letter-to-disk identity was not verified".to_string();
             teardown_diag(&format!("teardown phase=Identity FAIL: {msg}"));
             return Err(msg);
         }
         teardown_diag(&format!(
-            "teardown phase=Identity OK (CREATE-time) serial={} size={}",
+            "teardown phase=Identity OK (live exact) serial={} size={}",
             self.target_serial(),
             self.target_size()
         ));
@@ -915,7 +1307,6 @@ impl PagefileGates for HostGates {
             .as_ref()
             .map(|v| v.letter)
             .unwrap_or(self.volume_letter);
-        let prefix = format!("{}:", letter.to_ascii_uppercase());
         let gate = if self.locked.is_some() {
             "GateB"
         } else {
@@ -924,19 +1315,20 @@ impl PagefileGates for HostGates {
         teardown_diag(&format!(
             "teardown phase={gate} pagefile query letter={letter}"
         ));
-        WindowsHostState::active_pagefiles()
-            .map(|v| {
-                let filtered: Vec<String> = v
-                    .into_iter()
-                    .map(|p| p.name)
-                    .filter(|n| n.to_ascii_uppercase().starts_with(&prefix))
-                    .collect();
+        if let Ok(mut snapshot) = self.pagefile_snapshot.lock() {
+            if let Some(filtered) = snapshot.take() {
                 teardown_diag(&format!(
                     "teardown phase={gate} pagefiles_on_volume={}",
                     filtered.len()
                 ));
-                filtered
-            })
+                return Ok(filtered);
+            }
+        } else {
+            return Err("pagefile snapshot lock poisoned".into());
+        }
+        WindowsHostState::active_pagefiles()
+            .map_err(|e| e.to_string())
+            .and_then(|v| self.filter_pagefiles(v))
             .map_err(|e| {
                 teardown_diag(&format!("teardown phase={gate} FAIL: {e}"));
                 e.to_string()
@@ -956,7 +1348,7 @@ impl PagefileGates for HostGates {
         // Direct lock (no helper-thread timeout). Abandoned CreateFile threads
         // from timed-out attempts wedged the volume; pre-stop harness lock_ok
         // proves CreateFile returns promptly when the stack is not piled up.
-        match WindowsHostState::lock_volume(self.volume_letter) {
+        match WindowsHostState::lock_product_volume(self.volume_letter, self.expected_disk_number) {
             Ok(vol) => {
                 self.locked = Some(vol);
                 teardown_diag("teardown phase=VolumeLock OK");

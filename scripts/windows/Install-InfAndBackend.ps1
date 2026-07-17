@@ -104,8 +104,7 @@ sc.exe stop ramshared 2>$null | Out-Null
 sc.exe stop poolstress 2>$null | Out-Null
 Start-Sleep 2
 
-# Copy into drivers dir (INF CopyFiles also does this on install)
-Copy-Item "$PackageDir\ramshared.sys" C:\Windows\System32\drivers\ramshared.sys -Force
+# poolstress is a separate legacy lab tool. RamShared itself runs from DIRID 13.
 if (Test-Path "$PackageDir\poolstress.sys") {
     Copy-Item "$PackageDir\poolstress.sys" C:\Windows\System32\drivers\poolstress.sys -Force
 }
