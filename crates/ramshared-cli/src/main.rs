@@ -635,6 +635,12 @@ fn cuda_probe_via_lib() -> Result<GpuInfo, String> {
 }
 
 fn print_text_report(report: &CheckReport) {
+    print_overview(report);
+    print_details(report);
+    print_issues(report);
+}
+
+fn print_overview(report: &CheckReport) {
     println!(
         "WSL2: {} ({})",
         report.wsl.status.as_str(),
@@ -687,7 +693,9 @@ fn print_text_report(report: &CheckReport) {
             .unwrap_or("none")
     );
     println!("Decisao: {}", report.decision().as_str());
+}
 
+fn print_details(report: &CheckReport) {
     println!("Detalhes:");
     println!(
         "  config: {}",
@@ -728,7 +736,9 @@ fn print_text_report(report: &CheckReport) {
     {
         println!("  nvidia-smi output: {}", one_line(output));
     }
+}
 
+fn print_issues(report: &CheckReport) {
     if !report.blockers.is_empty() {
         println!("Bloqueios:");
         for blocker in &report.blockers {
