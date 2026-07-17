@@ -230,30 +230,27 @@ the current package proof is `224913`. Evidence:
 `evidence/vpd-lifecycle-package-20260716-111336.json`, and `evidence/ioctl-guest-*-vpd-pass*`.
 
 
-### StartIo READ-copy race (2026-07-17 update)
+### StartIo READ-copy race (2026-07-17 **CLAIMED**)
 
-Harness is hang-safe: requires `Get-Disk` (MSFT_Disk) before any
-`\\.\PhysicalDriveN` CreateFile. Live campaigns
-`guest-exhaustive-20260717-024546` (SkipVerifier) and
-`guest-exhaustive-20260717-025401` (Verifier) keep ITEM-3 **PASS** with
-`STARTIO_READ_COPY_RACE=0` and explicit SKIP:
-`no Get-Disk for idx=N (Win32-only LUN; avoid CreateFile hang)`.
-Claim still requires a surface where Get-Disk Online works and SQEs advance
-under Verifier (product Online path or post-format LUN).
+Harness fix: early post-CREATE StartIo with **live** `StartQueuePump` until after
+PhysicalDrive READ + second-handle UNREGISTER. MSFT_Disk appears only while
+enumeration READs are pumped (product Online pattern); CreateFile without the
+pump hangs the class stack.
+
+| Campaign | Verifier | STARTIO | Key line |
+| --- | --- | --- | --- |
+| `startio-probe-20260717-092819` | no | 1 | `readOk=1 drained=4 sq=4/4 unregOk=1` |
+| `startio-verifier-20260717-092950` | `0x2093B` | 1 | `readOk=1 drained=5 sq=5/5 unregOk=1`; load 1/unload 0 |
+
+Package SHA `97FD7B37…`. Evidence: `evidence/startio-claim-20260717.md`,
+`evidence/startio-probe-20260717-092819/`, `evidence/startio-verifier-20260717-092950/`.
 
 ## Remaining promotion gates
 
 1. Optional: add a manufactured active-pagefile refusal campaign for the corrected product path.
 2. Keep physical Online blocked by the lab-only policy; do not reinterpret guest proof as daily-host
    authorization.
-3. **StartIo READ-copy race (in progress, not claimed):** harness now records
-   `STARTIO_READ_COPY_RACE` via `Invoke-StartIoReadCopyRaceInjection` (queue pump +
-   PhysicalDrive overlapped READ + second-handle UNREGISTER). Live campaigns
-   `guest-exhaustive-20260717-004209` / `001940` / `235724` kept all ITEM-3 + Verifier
-   verdicts green but `STARTIO_READ_COPY_RACE=0` with diagnostics
-   `openErr=0 lastReadErr=1460 drained=0 sq=0/0` (CreateFile OK; no SQE at QSubmit).
-   The gate is recorded but does not fail the ITEM-3 STATUS matrix until a campaign
-   proves storage-stack READ reaches `QSubmit` (then re-run under Verifier).
+3. ~~StartIo READ-copy race~~ — **claimed** on win11-drill under Verifier (see above).
 4. Run the isolated WSL2 freeze campaign before any freeze-elimination claim.
    Scaffold: `scripts/safety/wsl2-freeze-campaign.sh` (dry-run only on daily host;
    refuses without `RAMSHARED_ISOLATED_LAB=1`).
