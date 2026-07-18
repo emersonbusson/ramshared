@@ -19,6 +19,8 @@ param(
     [string]$ArtifactRoot = "C:\ramshared\artifacts",
     [int]$PsDirectReadyTimeoutSec = 900,
     [int]$PsDirectRetrySec = 10,
+    [int]$ScheduledTaskTimeoutSec = 300,
+    [int]$ScheduledTaskPollSec = 5,
     [switch]$Start
 )
 
@@ -154,26 +156,48 @@ try {
         New-Item -ItemType Directory -Force -Path "C:\ramshared\artifacts" | Out-Null
         $script = "C:\ramshared\wsl-high-probe.ps1"
         $out = "C:\ramshared\artifacts\wsl-high-probe.out"
-        @'
+@'
 $ErrorActionPreference = "Continue"
-"whoami=$(whoami)"
-$principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-"is_admin=$($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
-"status_start"
-wsl.exe --status 2>&1
-"status_exit=$LASTEXITCODE"
-"list_start"
-wsl.exe -l -v 2>&1
-"list_exit=$LASTEXITCODE"
+$out = "C:\ramshared\artifacts\wsl-high-probe.out"
+$lines = New-Object System.Collections.Generic.List[string]
+function Add-ProbeLine {
+    param([object]$Value)
+    if ($null -eq $Value) {
+        return
+    }
+    foreach ($line in ($Value | Out-String) -split "`r?`n") {
+        if ($line.Length -gt 0) {
+            $script:lines.Add($line)
+        }
+    }
+}
+try {
+    Add-ProbeLine "whoami=$(whoami)"
+    $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    Add-ProbeLine "is_admin=$($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
+    Add-ProbeLine "status_start"
+    Add-ProbeLine (& wsl.exe --status 2>&1)
+    Add-ProbeLine "status_exit=$LASTEXITCODE"
+    Add-ProbeLine "list_start"
+    Add-ProbeLine (& wsl.exe -l -v 2>&1)
+    Add-ProbeLine "list_exit=$LASTEXITCODE"
+} finally {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $out) | Out-Null
+    $lines | Set-Content -Encoding UTF8 -LiteralPath $out
+}
 '@ | Set-Content -Encoding UTF8 -LiteralPath $script
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument ('-NoProfile -ExecutionPolicy Bypass -File "{0}" *> "{1}"' -f $script, $out)
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument ('-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $script)
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
         $principal = New-ScheduledTaskPrincipal -UserId "WIN11-DRILL\drilladmin" -RunLevel Highest -LogonType Password
         $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal
         Register-ScheduledTask -TaskName "RamSharedWslHighProbe" -InputObject $task -User "WIN11-DRILL\drilladmin" -Password $TaskPassword -Force | Out-Null
         Start-ScheduledTask -TaskName "RamSharedWslHighProbe"
-        Start-Sleep -Seconds 20
-        $info = Get-ScheduledTaskInfo -TaskName "RamSharedWslHighProbe"
+        $deadline = (Get-Date).AddSeconds($using:ScheduledTaskTimeoutSec)
+        do {
+            Start-Sleep -Seconds $using:ScheduledTaskPollSec
+            $state = (Get-ScheduledTask -TaskName "RamSharedWslHighProbe").State
+            $info = Get-ScheduledTaskInfo -TaskName "RamSharedWslHighProbe"
+        } while ($state -eq "Running" -and (Get-Date) -lt $deadline)
         $content = if (Test-Path -LiteralPath $out) {
             Get-Content -LiteralPath $out -Raw
         } else {
@@ -182,6 +206,7 @@ wsl.exe -l -v 2>&1
         Unregister-ScheduledTask -TaskName "RamSharedWslHighProbe" -Confirm:$false
         [pscustomobject]@{
             last_task_result = $info.LastTaskResult
+            final_state = $state.ToString()
             output = $content
         }
     } -ArgumentList @($Password)
