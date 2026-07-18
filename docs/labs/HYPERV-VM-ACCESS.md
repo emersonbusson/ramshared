@@ -49,14 +49,21 @@ slow-path operations. Do not classify a lab boot as failed from a short wait:
 use long bounded waits, progress logs, and the harness defaults before marking a
 campaign `PARTIAL`.
 
+Exception: `win11-wsl2-lab` now uses the host SSD path
+`C:\ramshared-hyperv\win11-wsl2-lab\Virtual Hard Disks\win11-wsl2-lab.vhdx`
+for its VM-owned VHD. The earlier HDD-backed VHD was too slow for Windows setup
+and WSL registration. This exception does not authorize creating more VMs or
+touching the real Windows/WSL storage.
+
 ## Secrets policy
 
 - The Windows guest password is not documented here and must not be committed.
 - Preferred source: host environment variable `RAMSHARED_DRILL_PASSWORD`.
 - Local password files such as `.drill-pw` are ignored by git and are
   local-only. Do not print their contents in logs, docs, or chat.
-- The canonical Windows lab user is `WIN11-DRILL\drilladmin`. Do not rely on
-  `.\drilladmin`; PowerShell Direct can reject that shorthand on this image.
+- Use the VM-qualified Windows lab identity, for example
+  `WIN11-DRILL\drilladmin` or `WIN11-WSL2-LAB\drilladmin`. Do not rely on
+  `.\drilladmin`; PowerShell Direct can reject that shorthand on these images.
 
 ## Elevated host PowerShell from WSL
 
@@ -184,8 +191,7 @@ pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \
 ```
 
 2026-07-18: `New-Win11Wsl2LabVm.ps1` created the single disposable VM
-`win11-wsl2-lab` with a new
-dynamic VHD at `E:\Hyper-V\win11-wsl2-lab\Virtual Hard Disks\win11-wsl2-lab.vhdx`,
+`win11-wsl2-lab` with a new dynamic VHD on the original HDD-backed lab path,
 attached the Windows 25H2 ISO and autounattend ISO, enabled nested
 virtualization, disabled checkpoints, and did not modify existing lab disks.
 The VM did not expose heartbeat/PowerShell Direct during the initial unattended
@@ -209,12 +215,39 @@ generated `E:\Hyper-V\iso\Win11_25H2_English_x64_v2_noprompt_unattend.iso`;
 the existing `win11-wsl2-lab` DVD now points at that ISO. All three approved lab
 VMs were returned to Off after the audit.
 
-2026-07-18 follow-up: with the no-prompt ISO attached, `win11-wsl2-lab` was
-started and observed for 20 minutes. Hyper-V reported `Running`, but heartbeat
-and key-value pair integration services stayed `Sem Contato` for the full
-window. The VM was turned Off. Next step is console/firmware/boot-media
-inspection on this same VM, or reinstalling this VM's own VHD if the installer
-state is invalid. Do not create another VM.
+2026-07-18 SSD recreation on the same VM:
+
+- No new VM was created. The existing `win11-wsl2-lab` VM was reused.
+- The active VM-owned VHD is now
+  `C:\ramshared-hyperv\win11-wsl2-lab\Virtual Hard Disks\win11-wsl2-lab.vhdx`.
+  The VM configuration path may still be under the original Hyper-V folder; the
+  hard disk path is authoritative.
+- Verify the active disk with:
+
+```powershell
+Get-VMHardDiskDrive -VMName win11-wsl2-lab | Select VMName,Path
+```
+
+- Windows setup required vTPM for this Windows 11 image. The VM has a local key
+  protector and `TpmEnabled=True`.
+- The working install path used the original Windows ISO plus an answer ISO.
+  The no-prompt remastered ISO previously reached an installer state that asked
+  for a storage driver, so do not assume remastering is the preferred path.
+- PowerShell Direct works with `WIN11-WSL2-LAB\drilladmin` and the local-only
+  `RAMSHARED_DRILL_PASSWORD` secret source.
+- Official WSL 2.7.10 is installed and AppX package status is `Ok`.
+  `C:\Program Files\WSL\wsl.exe --version` returns version information, but
+  `--status` and `-l -v` still timeout even after `vmcompute` is started.
+  Direct command probe artifact:
+  `C:\ramshared\artifacts\wsl-probe-vmcompute-20260718-193703`.
+  Harness probe artifact after timeout hardening:
+  `C:\ramshared\artifacts\win11-wsl-runtime-probe-20260718-194130`,
+  `STATUS=PARTIAL`, `REASON=guest_wsl_runtime_unavailable`.
+
+Current unblock for the WSL2 freeze campaign is WSL runtime initialization
+inside this existing guest, not VM creation, not HDD speed, and not daily WSL2
+pressure. Until `wsl --status` and `wsl -l -v` return normally inside
+`win11-wsl2-lab`, the campaign remains `PARTIAL`.
 
 ## `linux-kernel-lab` access
 

@@ -8,11 +8,13 @@
   directory. It never modifies win11-drill, never formats disks, and refuses to
   run when the target VM or target VHD already exists. The goal is to provide a
   clean WSL2-capable guest surface without reimaging an existing lab disk.
+  The default VHD root is on C: because the HDD-backed lab path is too slow for
+  Windows setup, Windows Update, and WSL package registration.
 #>
 [CmdletBinding()]
 param(
     [string]$VMName = "win11-wsl2-lab",
-    [string]$Root = "E:\Hyper-V\win11-wsl2-lab",
+    [string]$Root = "C:\ramshared-hyperv\win11-wsl2-lab",
     [string]$WindowsIso = "E:\Hyper-V\iso\Win11_25H2_English_x64_v2.iso",
     [string]$AutounattendIso = "E:\Hyper-V\iso\Win11_25H2_autounattend.iso",
     [int]$VhdSizeGB = 80,

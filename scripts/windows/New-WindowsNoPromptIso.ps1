@@ -66,7 +66,11 @@ if ((Test-Path -LiteralPath $OutputIso) -and -not $Force) {
 if (Test-Path -LiteralPath $StagingRoot) {
     $children = @(Get-ChildItem -LiteralPath $StagingRoot -Force -ErrorAction SilentlyContinue)
     if ($children.Count -gt 0) {
-        Fail "Staging root exists and is not empty: $StagingRoot"
+        if (-not $Force) {
+            Fail "Staging root exists and is not empty: $StagingRoot"
+        }
+        Remove-Item -LiteralPath $StagingRoot -Recurse -Force
+        New-Item -ItemType Directory -Force -Path $StagingRoot | Out-Null
     }
 } else {
     New-Item -ItemType Directory -Force -Path $StagingRoot | Out-Null
