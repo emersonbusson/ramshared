@@ -21,7 +21,7 @@ freeze campaign are not claimed on the shared desktop.
 | Shared TOML config | `ramshared-config` with defaults and validation |
 | Host agent | `ramshared-host-agent` registers `DccAgent` and forwards lease/status requests |
 | Local workload protocol | Bounded JSON-lines bridge, separate from broker protocol |
-| Generic workload measurement | Aggregate VRAM/RAM sampler for externally launched GPU workloads |
+| Generic workload measurement | Aggregate VRAM/RAM sampler and idle/load/recovery gate for externally launched GPU workloads |
 | Windows memory pressure | Locale-neutral CIM parser and Windows sampler boundary |
 | Explanations | Deterministic evidence formatter and `ramshared diagnose --events PATH`; no unsupported process attribution |
 
@@ -38,6 +38,7 @@ freeze campaign are not claimed on the shared desktop.
 - Root `ublk_io_smoke --ignored --test-threads=1`: PASS.
 - `./scripts/kernel/qemu-ublk-daemon.sh`: PASS.
 - `scripts/p0/measure-gpu-workload-vram.ps1` PowerShell parser: PASS.
+- `scripts/p0/Invoke-GpuWorkloadGate.ps1` PowerShell parser: PASS.
 - `cargo test -p ramshared-cli --all-targets`: PASS, including `diagnose` JSONL summaries.
 - `git diff --check`: PASS.
 
