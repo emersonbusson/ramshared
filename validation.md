@@ -892,7 +892,7 @@ swapon --show
 ```powershell
 # Windows Host: compile and sign
 .\scripts\windows\Build-Drivers.ps1
-.\scripts\windows\Sign-Drivers.ps1 -PfxPassword "TestSign!2026"
+.\scripts\windows\Sign-Drivers.ps1 -PfxPassword $env:RAMSHARED_TESTSIGN_PFX_PASSWORD
 # Install and run
 .\scripts\windows\Install-InfAndBackend.ps1 -FormatNtfs -DriveLetter S
 # Benchmark 10 rounds of 50MB
