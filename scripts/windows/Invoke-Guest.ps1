@@ -14,7 +14,7 @@
 [CmdletBinding()]
 param(
     [string]$VMName = "win11-drill",
-    [string]$User = ".\drilladmin",
+    [string]$User = "WIN11-DRILL\drilladmin",
     # Prefer env RAMSHARED_DRILL_PASSWORD (do not commit secrets). Passo 0 lab only.
     [string]$Password = $env:RAMSHARED_DRILL_PASSWORD,
     [string]$Command = "hostname; whoami; [Environment]::OSVersion.VersionString",

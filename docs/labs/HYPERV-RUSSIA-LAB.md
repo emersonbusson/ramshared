@@ -72,6 +72,10 @@ vmconnect.exe localhost linux-kernel-lab
 Set-VMDvdDrive -VMName linux-kernel-lab -Path $null
 ```
 
+Agent access and current non-interactive limits are documented in
+[`HYPERV-VM-ACCESS.md`](HYPERV-VM-ACCESS.md). Do not store guest passwords in
+tracked docs or scripts.
+
 ## DDA Apply (dangerous)
 
 Only with spare display / accept black host GPU:

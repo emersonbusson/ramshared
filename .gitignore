@@ -13,6 +13,14 @@
 MEMORY.md
 # docs/SSDV3-PROMPTS.md is tracked (canonical methodology for agents)
 
+# Local-only lab credentials. Keep values in the OS environment or private
+# host files; never commit them.
+.drill-pw
+*.drill-pw
+*.secret
+*.secrets
+*.local-secret
+
 # IDEs e Editores
 .vscode/
 .idea/

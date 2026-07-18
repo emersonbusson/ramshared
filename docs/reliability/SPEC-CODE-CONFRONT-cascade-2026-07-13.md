@@ -144,7 +144,7 @@ Not a full ITEM matrix (SPECs are multi-phase / multi-ITEM). Spot-check that nam
 | Protocol / model / arbiter / slices | `crates/ramshared-broker/{protocol,model,arbiter,slices}.rs` | **32** package tests pass | ✅ P1 library surface |
 | Agent tenant | `crates/ramshared-agent` | not re-run full agent suite this session | ⬜ sample only |
 | Daemon broker mode | `wsl2d/broker_srv.rs` | not re-run | ⬜ sample only |
-| P2 Windows DCC / Blender | out of this spot-check | — | ⬜ not claimed |
+| P2 Windows DCC host | out of this spot-check | — | ⬜ not claimed |
 
 ### windows-swap-driver (sample)
 
