@@ -57,6 +57,10 @@ pressure.
   rerun with `-Run -ApprovePhysicalHost` refused safely before creating a LUN because
   free VRAM was 5193 MiB for a 5120 MiB plan plus required 256 MiB operational margin.
   Post-refusal storage-only preflight PASSed with no residual LUN, Win32 disk, or PnP node.
+- 2026-07-18 `C:\ramshared\artifacts\vram-reclaim-matrix-20260718-012157`:
+  matrix runner emitted `matrix-summary.json` with `windows-3gib` as `PARTIAL`
+  before LUN creation because free VRAM was 5203 MiB for a 5120 MiB plan plus
+  required 256 MiB operational margin.
 
 ## Open Questions
 
