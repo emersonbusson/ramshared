@@ -132,6 +132,8 @@ version = "0.1.0"
 dependencies = [
  "ramshared-cuda",
  "ramshared-tier",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

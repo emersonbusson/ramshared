@@ -55,6 +55,11 @@ sudo ./target/release/ramshared down
 ```
 
 If `check` says blocked, run `sudo ./target/release/ramshared doctor` and fix what it prints.
+If you captured daemon/broker JSONL telemetry, summarize it locally with:
+
+```bash
+./target/release/ramshared diagnose --events /path/to/telemetry.jsonl
+```
 
 Start small (`1024` MiB). Don’t grab your whole VRAM if you also game on the same card.
 
