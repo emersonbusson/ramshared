@@ -2434,3 +2434,27 @@ git diff --check
 **Verdict:** ✅ Current public hygiene gap is closed with a repeatable gate;
 environment-bound product claims remain explicitly PARTIAL until their listed
 evidence exists.
+
+## 2026-07-17 22:55 -03 — gap register schema gate
+
+**What:** Added a machine-checkable gate for `docs/reliability/GAP-REGISTER.md`.
+It enforces concrete open-gate rows, rejects DONE/PASS promotion in the open
+table, rejects placeholder close evidence, and verifies that primary docs link
+back to the register.
+**Category:** ci-gate + documentation
+**How to measure:**
+```bash
+node tools/ci/check-gap-register.mjs
+./scripts/docs-check.sh
+node tools/ci/check-validation-schema.mjs --all
+git diff --check
+```
+**Measured data:**
+- `node tools/ci/check-gap-register.mjs`: **PASS**.
+- `./scripts/docs-check.sh`: **PASS**, including gap register and public
+  hygiene gates.
+- `node tools/ci/check-validation-schema.mjs --all`: **PASS**.
+- `git diff --check`: **PASS**.
+- Gap register state: **5** current open gates and **4** closed session gaps.
+**Verdict:** ✅ Open environment-bound gates are now protected by a repeatable
+schema gate, not just prose.
