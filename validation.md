@@ -2480,3 +2480,34 @@ git diff --check
 - `git diff --check`: **PASS**.
 **Verdict:** ✅ P0 workload docs now match the generic naming policy and the
 remaining workload measurement stays explicit as unmeasured, not app-specific.
+
+## 2026-07-17 23:20 -03 — QEMU drills gain in-guest binary match
+
+**What:** Updated the isolated QEMU ublk-daemon and broker drills to compare
+host-side SHA-256 with the binary copied into the guest initramfs before
+claiming PASS.
+**Category:** isolation + ci-gate
+**How to measure:**
+```bash
+bash -n scripts/kernel/qemu-ublk-daemon.sh
+bash -n scripts/kernel/qemu-broker-drill.sh
+./scripts/kernel/qemu-ublk-daemon.sh
+./scripts/kernel/qemu-broker-drill.sh
+./scripts/docs-check.sh
+node tools/ci/check-validation-schema.mjs --all
+git diff --check
+```
+**Measured data:**
+- `qemu-ublk-daemon.sh`: `KTEST-BINARY-MATCH=ok`,
+  `KTEST-SERVED=ok`, `KTEST-TERMINATED=ok`,
+  `KTEST-DEVICE-REMOVED=ok`.
+- `qemu-broker-drill.sh`: `KTEST-DAEMON-BINARY-MATCH=ok`,
+  `KTEST-AGENT-BINARY-MATCH=ok`, `KTEST-SWAP-ACTIVE=ok`,
+  `KTEST-TELEMETRY=ok`, `KTEST-SWAPOFF=ok`,
+  `KTEST-DAEMON-TERMINATED=ok`.
+- `./scripts/docs-check.sh`: **PASS**.
+- `node tools/ci/check-validation-schema.mjs --all`: **PASS**.
+- `git diff --check`: **PASS**.
+**Verdict:** ✅ Current isolated QEMU drills now include binary-match evidence.
+The universal WSL2 freeze claim remains PARTIAL until the separate GPU-PV/dxg
+host-reclaim campaign exists.
