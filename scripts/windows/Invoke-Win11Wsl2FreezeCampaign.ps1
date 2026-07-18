@@ -17,11 +17,13 @@
 param(
     [string]$VMName = "win11-drill",
     [string]$User = "WIN11-DRILL\drilladmin",
-    [string]$Password = $env:RAMSHARED_DRILL_PASSWORD,
+    [string]$Password = "",
     [string]$PasswordFile = "C:\ramshared\bin\.drill-pw",
     [string]$GuestRepo = "C:\ramshared\src",
     [string]$GuestDistro = "",
     [string]$ArtifactRoot = "C:\ramshared\artifacts",
+    [int]$PsDirectReadyTimeoutSec = 180,
+    [int]$PsDirectRetrySec = 10,
     [switch]$Start,
     [switch]$Run
 )
@@ -59,11 +61,57 @@ function Write-Summary {
     Write-Host "ARTIFACT_DIR=$Dir"
 }
 
+function Get-LocalDrillPassword {
+    param(
+        [string]$InitialPassword,
+        [string]$LocalPasswordFile
+    )
+    if (-not [string]::IsNullOrEmpty($InitialPassword)) {
+        return $InitialPassword
+    }
+    foreach ($scope in @("Machine", "User")) {
+        $value = [Environment]::GetEnvironmentVariable("RAMSHARED_DRILL_PASSWORD", $scope)
+        if (-not [string]::IsNullOrEmpty($value)) {
+            return $value
+        }
+    }
+    if (-not [string]::IsNullOrEmpty($env:RAMSHARED_DRILL_PASSWORD)) {
+        return $env:RAMSHARED_DRILL_PASSWORD
+    }
+    if (Test-Path -LiteralPath $LocalPasswordFile) {
+        return (Get-Content -LiteralPath $LocalPasswordFile -Raw).Trim()
+    }
+    return ""
+}
+
+function Invoke-GuestWithRetry {
+    param(
+        [pscredential]$Credential,
+        [scriptblock]$ScriptBlock,
+        [object[]]$ArgumentList = @()
+    )
+    $deadline = (Get-Date).AddSeconds($PsDirectReadyTimeoutSec)
+    $attempt = 0
+    $lastError = ""
+    do {
+        $attempt += 1
+        try {
+            return Invoke-Command -VMName $VMName -Credential $Credential -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList -ErrorAction Stop
+        } catch {
+            $lastError = $_.Exception.Message
+            if ($lastError -match "credencial.*inv|credential.*invalid|logon failure|senha.*incorreta") {
+                throw
+            }
+            Start-Sleep -Seconds $PsDirectRetrySec
+        }
+    } while ((Get-Date) -lt $deadline)
+
+    throw "PowerShell Direct did not become ready after $attempt attempts over ${PsDirectReadyTimeoutSec}s. Last error: $lastError"
+}
+
 $artifactDir = New-ArtifactDir -Root $ArtifactRoot
 
-if ([string]::IsNullOrEmpty($Password) -and (Test-Path -LiteralPath $PasswordFile)) {
-    $Password = (Get-Content -LiteralPath $PasswordFile -Raw).Trim()
-}
+$Password = Get-LocalDrillPassword -InitialPassword $Password -LocalPasswordFile $PasswordFile
 if ([string]::IsNullOrEmpty($Password)) {
     Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "missing_guest_credential"
     exit 2
@@ -72,14 +120,13 @@ if ([string]::IsNullOrEmpty($Password)) {
 try {
     if ($Start) {
         Start-VM -Name $VMName -ErrorAction Stop
-        Start-Sleep -Seconds 15
     }
     $sec = ConvertTo-SecureString $Password -AsPlainText -Force
     $cred = [pscredential]::new($User, $sec)
-    $identity = Invoke-Command -VMName $VMName -Credential $cred -ScriptBlock {
+    $identity = Invoke-GuestWithRetry -Credential $cred -ScriptBlock {
         [pscustomobject]@{ host = $env:COMPUTERNAME; whoami = (whoami) }
     }
-    $features = Invoke-Command -VMName $VMName -Credential $cred -ScriptBlock {
+    $features = Invoke-GuestWithRetry -Credential $cred -ScriptBlock {
         @(
             foreach ($featureName in @("Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform")) {
                 $state = "Unknown"
@@ -92,11 +139,11 @@ try {
             }
         )
     }
-    $repoExists = Invoke-Command -VMName $VMName -Credential $cred -ScriptBlock {
+    $repoExists = Invoke-GuestWithRetry -Credential $cred -ScriptBlock {
         param($GuestRepo)
         Test-Path -LiteralPath $GuestRepo
     } -ArgumentList $GuestRepo
-    $wslList = Invoke-Command -VMName $VMName -Credential $cred -ScriptBlock {
+    $wslList = Invoke-GuestWithRetry -Credential $cred -ScriptBlock {
         $job = Start-Job -ScriptBlock { wsl.exe -l -v 2>&1 | Out-String }
         if (Wait-Job $job -Timeout 20) {
             Receive-Job $job | Out-String
@@ -144,6 +191,10 @@ if (-not $probe.repo_exists) {
     }
     exit 2
 }
+if ($probe.wsl_list -match "not installed|REGDB_E_CLASSNOTREG|Wsl/CallMsi|CLASSNOTREG") {
+    Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "guest_wsl_runtime_unavailable"
+    exit 2
+}
 if ([string]::IsNullOrWhiteSpace($probe.distro)) {
     Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "guest_wsl_distro_missing"
     exit 2
@@ -155,7 +206,7 @@ if (-not $Run) {
     exit 2
 }
 
-$guestResult = Invoke-Command -VMName $VMName -Credential $cred -ScriptBlock {
+$guestResult = Invoke-GuestWithRetry -Credential $cred -ScriptBlock {
     param($GuestRepo, $Distro)
     $cmd = @"
 set -euo pipefail
