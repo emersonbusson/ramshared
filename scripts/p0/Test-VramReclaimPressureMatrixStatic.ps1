@@ -22,6 +22,9 @@ foreach ($needle in @(
     "App-agnostic aggregate VRAM pressure",
     "external_gpu_workload_mib",
     "windows+wsl2+external+reserve",
+    "RUN windows-3gib via Run-HostExhaustive.ps1 with external workload",
+    "ExternalWorkloadMiB",
+    "256MiB margin",
     "Refusing live matrix"
 )) {
     if ($text -notmatch [regex]::Escape($needle)) {

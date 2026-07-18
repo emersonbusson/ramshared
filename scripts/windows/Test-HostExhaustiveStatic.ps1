@@ -36,7 +36,15 @@ foreach ($needle in @(
     "Win32_DiskDrive",
     "remove stale pnp=",
     "PNP_GONE",
-    "WIN32_GONE"
+    "WIN32_GONE",
+    "[UInt64]`$SizeBytes",
+    "ExternalWorkloadMiB",
+    "MinFreeAfterPlanMiB",
+    "insufficient VRAM headroom",
+    "winsvc-run.toml",
+    "Start-CudaVramWorkload.ps1",
+    "EXTERNAL_WORKLOAD_OK",
+    '$_.Size -eq $SizeBytes'
 )) {
     if ($text -notmatch [regex]::Escape($needle)) {
         throw ("host_broker_required: missing " + $needle)
@@ -49,9 +57,15 @@ if ($text -notmatch 'product Online:') {
 if ($text -match 'if \(\$txt -match "product Online"\)') {
     throw "online_marker_must_be_strong: host harness still accepts startup banner as Online"
 }
-if ($text -notmatch '\$online -and \$all -and \$stopped -and \$exitCode -eq 0 -and \$leaseReleased' -or
+if ($text -notmatch '\$online -and \$all -and \$externalOk -and \$stopped -and \$exitCode -eq 0 -and \$leaseReleased' -or
     $text -notmatch '\$pnpLeft\.Count -eq 0') {
     throw "complete_pass_gate: host harness must require lease release for PASS"
+}
+if ($text -notmatch '\$online -and \$all -and \$externalOk -and \$stopped') {
+    throw "complete_pass_gate: host harness must require external workload result for PASS"
+}
+if ($text -match 'C:\\ProgramData\\RamShared\\winsvc-product\.toml"\s*\|?\s*Set-Content') {
+    throw "product_config_mutation_forbidden: host harness must use an artifact-local run config"
 }
 if ($text -notmatch 'Copy-Item \$brokerLog \(Join-Path \$art "broker-lab.log"\)') {
     throw "broker_log_artifact: host harness must preserve broker log evidence"
