@@ -23,7 +23,7 @@ freeze campaign are not claimed on the shared desktop.
 | Local workload protocol | Bounded JSON-lines bridge, separate from broker protocol |
 | Generic workload measurement | Aggregate VRAM/RAM sampler for externally launched GPU workloads |
 | Windows memory pressure | Locale-neutral CIM parser and Windows sampler boundary |
-| Explanations | Deterministic evidence formatter; no unsupported process attribution |
+| Explanations | Deterministic evidence formatter and `ramshared diagnose --events PATH`; no unsupported process attribution |
 
 ## Local evidence
 
@@ -38,6 +38,7 @@ freeze campaign are not claimed on the shared desktop.
 - Root `ublk_io_smoke --ignored --test-threads=1`: PASS.
 - `./scripts/kernel/qemu-ublk-daemon.sh`: PASS.
 - `scripts/p0/measure-gpu-workload-vram.ps1` PowerShell parser: PASS.
+- `cargo test -p ramshared-cli --all-targets`: PASS, including `diagnose` JSONL summaries.
 - `git diff --check`: PASS.
 
 ## Explicit non-claims
