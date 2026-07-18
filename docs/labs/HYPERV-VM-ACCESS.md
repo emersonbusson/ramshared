@@ -115,6 +115,16 @@ not present under `/lib/modules/6.8.0-134-generic`. This VM is currently an
 access/build lab, not proof of WSL2 GPU reclaim, GPU-PV reclaim, or the
 custom-kernel/ublk product transport.
 
+2026-07-18 refreshed capability audit:
+`C:\ramshared\artifacts\linux-kernel-lab-capability-20260718-112539` returned
+`STATUS=PARTIAL` with SSH and `sudo -n` OK, kernel `6.8.0-134-generic`,
+`/dev/ublk-control` absent, `modprobe ublk_drv` missing, and no GPU surface. The
+VM was returned to Off after the probe.
+
+If Hyper-V reports insufficient host memory when starting `linux-kernel-lab`,
+run `scripts/windows/Harden-LabVms.ps1` elevated. It sets the lab startup memory
+to 2 GiB, minimum to 1 GiB, and maximum to 8 GiB without changing disks.
+
 Documented GUI fallback:
 
 ```powershell
