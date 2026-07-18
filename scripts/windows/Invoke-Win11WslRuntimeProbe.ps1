@@ -17,7 +17,7 @@ param(
     [string]$Password = "",
     [string]$PasswordFile = "C:\ramshared\bin\.drill-pw",
     [string]$ArtifactRoot = "C:\ramshared\artifacts",
-    [int]$PsDirectReadyTimeoutSec = 180,
+    [int]$PsDirectReadyTimeoutSec = 900,
     [int]$PsDirectRetrySec = 10,
     [switch]$Start
 )
