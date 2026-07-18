@@ -139,6 +139,20 @@ The VM did not expose heartbeat/PowerShell Direct during the initial unattended
 boot window and was turned Off. Next step is console/boot-media inspection or a
 no-prompt Windows installer ISO; do not format or replace `win11-drill`.
 
+No-prompt ISO path:
+
+```bash
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \
+  "& 'C:\Windows\System32\sudo.exe' powershell.exe -NoProfile -ExecutionPolicy Bypass -File '\\wsl.localhost\Ubuntu-24.04\home\emdev\codespace\ramshared\scripts\windows\New-WindowsNoPromptIso.ps1'"
+```
+
+2026-07-18 inspection found both Windows ISOs contain
+`efi\microsoft\boot\efisys_noprompt.bin`, and the small
+`win11-autounattend.iso` contains `Autounattend.xml`. `New-WindowsNoPromptIso.ps1`
+is ready, but the host currently lacks `oscdimg.exe`; install Windows ADK
+Deployment Tools or pass `-Oscdimg` before generating the combined no-prompt
+autounattend ISO.
+
 ## `linux-kernel-lab` access
 
 The lab image is an Ubuntu cloud image with local user `emedev`, SSH keys
