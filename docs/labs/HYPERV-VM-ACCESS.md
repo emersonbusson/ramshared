@@ -109,6 +109,12 @@ local ignored credential source, then rerun the harness.
   `C:\ramshared\artifacts\win11-wsl2-freeze-campaign-20260718-123613`,
   `STATUS=PARTIAL`, `REASON=powershell_direct_failed` after WSL runtime repair
   attempts.
+- Runtime probe artifact:
+  `C:\ramshared\artifacts\win11-wsl-runtime-probe-20260718-130619`.
+  It confirmed WSL/VMP features enabled, no WSL Appx package, inbox
+  `C:\Windows\System32\wsl.exe` returning "WSL is not installed", and a
+  highest-privilege scheduled-task probe with no output
+  (`last_task_result=267009`).
 
 Next WSL2-freeze unblock is guest WSL runtime repair or reimage to a Windows lab
 image with WSL already functional, then rerun the harness. Do not run pressure
