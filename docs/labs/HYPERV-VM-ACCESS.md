@@ -151,6 +151,20 @@ local ignored credential source, then rerun the harness.
   `C:\Windows\System32\wsl.exe` returning "WSL is not installed", and a
   highest-privilege scheduled-task probe with no output
   (`last_task_result=267009`).
+- 2026-07-18 repaired the probe harness so the highest-privilege scheduled task
+  waits for completion and writes its own output file. New artifact
+  `C:\ramshared\artifacts\win11-wsl-runtime-probe-20260718-151127` reached the
+  guest, confirmed the scheduled task completed (`last_task_result=0`), and
+  proved the runtime is still unavailable:
+  `Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG`.
+- Additional guest-only repair attempts on `win11-drill`: MSI 2.7.10 repair
+  returned exit code 0, `Add-AppxPackage -Register` completed for the installed
+  WSL Appx manifest, `C:\Program Files\WSL\wsl.exe --install --no-distribution`
+  returned success, and the VM was rebooted. `wsl.exe --status` still reports
+  `REGDB_E_CLASSNOTREG`. The packaged WSL update path also reported DNS
+  resolution failure in the guest. This VM remains unsuitable for the WSL2
+  freeze campaign until WSL runtime registration is repaired or the guest is
+  reimaged.
 
 Next WSL2-freeze unblock is guest WSL runtime repair or reimage to a Windows lab
 image with WSL already functional, then rerun the harness. Do not run pressure
