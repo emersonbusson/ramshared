@@ -53,6 +53,10 @@ pressure.
 - 2026-07-18 `C:\ramshared\artifacts\vram-reclaim-matrix-windows3gib-run-20260718`:
   simultaneous Windows 3 GiB + 1 GiB external workload refused safely because free VRAM
   was 5150 MiB for a 5120 MiB plan plus required 256 MiB operational margin.
+- 2026-07-18 `C:\ramshared\artifacts\vram-reclaim-matrix-windows3gib-run-20260718-0055`:
+  rerun with `-Run -ApprovePhysicalHost` refused safely before creating a LUN because
+  free VRAM was 5193 MiB for a 5120 MiB plan plus required 256 MiB operational margin.
+  Post-refusal storage-only preflight PASSed with no residual LUN, Win32 disk, or PnP node.
 
 ## Open Questions
 
