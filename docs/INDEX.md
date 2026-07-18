@@ -28,5 +28,6 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`wsl2-cascade-orphan-recover`](specs/no-milestone/wsl2-cascade-orphan-recover/) | WSL2 cascade orphan recover — auto-heal after terminate without stacking | — | — | DONE |
 | [`wsl2-cascade-swap`](specs/no-milestone/wsl2-cascade-swap/) | Product Requirements Document — VRAM as a Cold Tier in WSL2 Swap Cascade (zram → VRAM → VHDX) | M01 | — | SPEC |
 | [`wsl2-custom-kernel-p1`](specs/no-milestone/wsl2-custom-kernel-p1/) | Custom WSL2 kernel P1 — official-tree base + ublk + zram writeback (definitive) | — | — | DONE |
+| [`wsl2-freeze-elimination-campaign`](specs/no-milestone/wsl2-freeze-elimination-campaign/) | WSL2 freeze-elimination campaign evidence gate | — | — | PARTIAL |
 | [`wsl2-native-vram-autotier`](specs/no-milestone/wsl2-native-vram-autotier/) | PRD — WSL2-native VRAM autotier | — | — | DONE |
 | [`wsl2-native-vram-tier`](specs/no-milestone/wsl2-native-vram-tier/) | Native VRAM memory tier on WSL2 kernel and/or Ubuntu — decision PRD | — | — | PRD |
