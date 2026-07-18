@@ -169,6 +169,14 @@ custom-kernel/ublk product transport.
 `/dev/ublk-control` absent, `modprobe ublk_drv` missing, and no GPU surface. The
 VM was returned to Off after the probe.
 
+2026-07-18 ublk capability repair:
+`linux-modules-extra-6.8.0-134-generic` was installed inside the lab, then
+`sudo -n modprobe ublk_drv` created `/dev/ublk-control`. Refreshed audit
+`C:\ramshared\artifacts\linux-kernel-lab-capability-20260718-131502` returned
+`STATUS=PASS` for SSH, passwordless sudo, `ublk_drv`, and `/dev/ublk-control`.
+This is only lab capability proof; product ublk transport still needs lifecycle,
+swapoff-first teardown, crash/drain, and no-ghost evidence.
+
 If Hyper-V reports insufficient host memory when starting `linux-kernel-lab`,
 run `scripts/windows/Harden-LabVms.ps1` elevated. It sets the lab startup memory
 to 2 GiB, minimum to 1 GiB, and maximum to 8 GiB without changing disks.
