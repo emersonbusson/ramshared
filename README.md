@@ -27,6 +27,7 @@ That’s it. No magic “free RAM for maxed-out games.” Just more room when yo
 | Install a Windows kernel driver on your daily PC | **No** — lab VM only; do not load it on a machine you care about |
 
 We measure things and write down what broke. Details: [validation.md](validation.md), [docs/FAQ.md](docs/FAQ.md).
+Open environment-bound claims are tracked in [docs/reliability/GAP-REGISTER.md](docs/reliability/GAP-REGISTER.md).
 
 ---
 

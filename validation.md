@@ -2103,7 +2103,7 @@ gh release view v0.6.4
 **Verdict:** ✅ works (honest env classification + safer refuse gate)
 **Next action:** True freeze claim needs separate disposable lab VM/machine — not a second WSL distro on this desktop
 **Artifacts:** docs/specs/no-milestone/wsl2-freeze/evidence/ramshared-kernel-probe-20260717/; scripts/safety/wsl2-freeze-campaign.sh
-## 2026-07-17 — Memory Broker DCC code surface implemented
+## 2026-07-17 21:10 — Memory Broker DCC code surface implemented
 
 **What:** Implemented the safe P2 code surface for the generic Windows host/DCC
 consumer: `DccAgent` transport, bounded local JSON-lines protocol, TOML config
@@ -2129,7 +2129,7 @@ isolated two-round WSL2 freeze campaign. The shared desktop was not thrashed.
 
 **Evidence:** `docs/specs/no-milestone/memory-broker/IMPL.md`
 
-## 2026-07-17 — Safe pending-gate audit on shared desktop
+## 2026-07-17 21:25 — Safe pending-gate audit on shared desktop
 
 **What:** Re-ran the freeze campaign gate and read-only cascade health probes
 after the generic naming/adapter changes.
@@ -2410,3 +2410,27 @@ daily host.
 freeze-gated daemon case remains unsafe to run on the daily host and is covered
 by the isolated QEMU drill that validates serve + SIGTERM teardown + device
 removal.
+
+## 2026-07-17 22:40 -03 — public hygiene gate and gap register
+
+**What:** Added a tracked public hygiene gate and a reliability gap register so
+future agents cannot silently reintroduce example-app naming, signing-password
+literals, or false DONE promotion for environment-bound claims.
+**Category:** ci-gate + documentation
+**How to measure:**
+```bash
+node tools/ci/check-public-hygiene.mjs
+./scripts/docs-check.sh
+git diff --check
+```
+**Measured data:**
+- `node tools/ci/check-public-hygiene.mjs`: **PASS**.
+- `./scripts/docs-check.sh`: **PASS** and now runs the public hygiene gate.
+- `git diff --check`: **PASS**.
+- Open gates are listed in `docs/reliability/GAP-REGISTER.md` with required
+  close evidence for external GPU workload pressure, isolated WSL2 freeze
+  campaign, Windows physical Online, guest GPU-PV CUDA, and custom-kernel ublk
+  product promotion.
+**Verdict:** ✅ Current public hygiene gap is closed with a repeatable gate;
+environment-bound product claims remain explicitly PARTIAL until their listed
+evidence exists.

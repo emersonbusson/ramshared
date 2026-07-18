@@ -45,6 +45,8 @@ freeze campaign are not claimed on the shared desktop.
 
 ## Explicit non-claims
 
+- The cross-feature source of truth for environment-bound open gates is
+  [`docs/reliability/GAP-REGISTER.md`](../../../reliability/GAP-REGISTER.md).
 - No evidence yet that an external GPU workload reduces WDDM budget and causes a
   successful live DEMOTE under load.
 - No evidence yet for two `before -> action -> after` freeze rounds on a
