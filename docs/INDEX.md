@@ -15,6 +15,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`cascade-lifecycle-observability`](specs/no-milestone/cascade-lifecycle-observability/) | Cascade lifecycle observability — state machine + fill/demote counters | — | — | DONE |
 | [`cascade-transport-policy`](specs/no-milestone/cascade-transport-policy/) | Cascade transport policy — NBD Day-1 on WSL2; ublk prefer off-WSL2 only | — | — | DONE |
 | [`cascade-vram-ondemand`](specs/no-milestone/cascade-vram-ondemand/) | Cascade VRAM on-demand — capacity without full CUDA pre-alloc; return under reclaim | — | — | DONE |
+| [`custom-kernel-ublk-product-transport`](specs/no-milestone/custom-kernel-ublk-product-transport/) | Custom-kernel ublk product transport gate | — | — | PARTIAL |
 | [`external-gpu-workload-wddm-pressure`](specs/no-milestone/external-gpu-workload-wddm-pressure/) | External GPU workload WDDM pressure correlation | — | — | PARTIAL |
 | [`kernel-native-language`](specs/no-milestone/kernel-native-language/) | Language policy for kernel-native VRAM work (C vs Rust) | — | — | PRD |
 | [`kernel-vram-as-memory`](specs/no-milestone/kernel-vram-as-memory/) | Kernel-true VRAM as process memory (HMM / NUMA / DEVICE_PRIVATE) — decision PRD | — | — | PRD |
