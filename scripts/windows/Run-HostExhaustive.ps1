@@ -10,6 +10,30 @@ function W($m) {
     $t = "[{0}] {1}" -f (Get-Date -Format HH:mm:ss), $m
     $t | Tee-Object -FilePath $log -Append
 }
+function Test-ControlPath([string]$Path) {
+    if (-not ("RamSharedCtlOpen" -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class RamSharedCtlOpen {
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern IntPtr CreateFile(string path, uint access, uint share, IntPtr sec, uint creation, uint flags, IntPtr template);
+  [DllImport("kernel32.dll", SetLastError=true)]
+  static extern bool CloseHandle(IntPtr h);
+
+  public static int TryOpen(string path) {
+    IntPtr h = CreateFile(path, 0x80000000u | 0x40000000u, 0, IntPtr.Zero, 3, 0, IntPtr.Zero);
+    long v = h.ToInt64();
+    if (v == -1 || v == 0) return Marshal.GetLastWin32Error();
+    CloseHandle(h);
+    return 0;
+  }
+}
+'@
+    }
+    return [RamSharedCtlOpen]::TryOpen($Path)
+}
 
 $stop = "C:\ProgramData\RamShared\stop.request"
 $brokerStop = "C:\ProgramData\RamShared\broker-lab.stop"
@@ -30,8 +54,16 @@ $rsNow = (sc.exe query ramshared | Out-String)
 $ctlOk = $false
 foreach ($ctl in @("\\.\RamSharedCtl", "\\.\GLOBALROOT\Device\RamSharedCtl")) {
     try {
-        if (Test-Path $ctl) { $ctlOk = $true; break }
-    } catch {}
+        $ctlErr = Test-ControlPath $ctl
+        if ($ctlErr -eq 0) {
+            W ("control path OK " + $ctl)
+            $ctlOk = $true
+            break
+        }
+        W ("control path open failed " + $ctl + " err=" + $ctlErr)
+    } catch {
+        W ("control path query failed " + $ctl + ": " + $_.Exception.Message)
+    }
 }
 if (($rsNow -match "RUNNING") -and -not $ctlOk) {
     W "FAIL ramshared service RUNNING but RamSharedCtl absent; reboot/unload/redeploy before physical Online"

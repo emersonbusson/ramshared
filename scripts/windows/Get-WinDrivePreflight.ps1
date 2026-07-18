@@ -29,6 +29,30 @@ function Bad([string]$msg) {
     Write-Host "[FAIL] $msg" -ForegroundColor Red
     $script:fail++
 }
+function Test-ControlPath([string]$Path) {
+    if (-not ("RamSharedCtlOpen" -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class RamSharedCtlOpen {
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern IntPtr CreateFile(string path, uint access, uint share, IntPtr sec, uint creation, uint flags, IntPtr template);
+  [DllImport("kernel32.dll", SetLastError=true)]
+  static extern bool CloseHandle(IntPtr h);
+
+  public static int TryOpen(string path) {
+    IntPtr h = CreateFile(path, 0x80000000u | 0x40000000u, 0, IntPtr.Zero, 3, 0, IntPtr.Zero);
+    long v = h.ToInt64();
+    if (v == -1 || v == 0) return Marshal.GetLastWin32Error();
+    CloseHandle(h);
+    return 0;
+  }
+}
+'@
+    }
+    return [RamSharedCtlOpen]::TryOpen($Path)
+}
 
 Write-Host "=== RamShared WinDrive preflight ===" -ForegroundColor Cyan
 if ($StorageOnly) {
@@ -219,12 +243,17 @@ try {
     $ctlOk = $false
     foreach ($ctl in $ctlPaths) {
         try {
-            if (Test-Path $ctl) {
+            $err = Test-ControlPath $ctl
+            if ($err -eq 0) {
                 $ctlOk = $true
                 Ok "Control path $ctl"
                 break
+            } else {
+                Warn "Control path $ctl open failed err=$err"
             }
-        } catch {}
+        } catch {
+            Warn "Control path $ctl query failed: $_"
+        }
     }
     if ($svcRunning -and -not $ctlOk) {
         if ($StorageOnly) {

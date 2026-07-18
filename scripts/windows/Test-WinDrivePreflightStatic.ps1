@@ -13,6 +13,8 @@ $text = Get-Content -LiteralPath $ScriptPath -Raw
 foreach ($needle in @(
     "\\.\RamSharedCtl",
     "\\.\GLOBALROOT\Device\RamSharedCtl",
+    "RamSharedCtlOpen",
+    "CreateFile",
     "ramshared service is RUNNING but RamSharedCtl is absent",
     "reboot/unload/redeploy before physical Online",
     "Get-PnpDevice -PresentOnly:`$false",
@@ -30,6 +32,9 @@ if ($text -notmatch 'if \(\$svcRunning -and -not \$ctlOk\)') {
 }
 if ($text -notmatch 'if \(\$StorageOnly\).*Bad') {
     throw "control_path_fail_closed: storage-only mode must fail hard"
+}
+if ($text -match 'Test-Path \$ctl') {
+    throw "control_path_testpath_forbidden: device namespace must be opened with CreateFile"
 }
 
 Write-Output "PASS Test-WinDrivePreflightStatic"

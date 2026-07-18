@@ -20,6 +20,9 @@ foreach ($needle in @(
     "LEASE_RELEASED",
     "\\.\RamSharedCtl",
     "\\.\GLOBALROOT\Device\RamSharedCtl",
+    "RamSharedCtlOpen",
+    "CreateFile",
+    "control path OK",
     "ramshared service RUNNING but RamSharedCtl absent",
     "disk identity refused before format/write",
     "^RAMSHARE\s+VRAMDISK$",
@@ -57,6 +60,9 @@ if ($text -notmatch '\$np \| Format-Volume') {
 }
 if ($text -notmatch '\[int\]\$disk\.Number -ne 0') {
     throw "disk_zero_forbidden: host harness must refuse disk 0 before format/write"
+}
+if ($text -match 'Test-Path \$ctl') {
+    throw "control_path_testpath_forbidden: device namespace must be opened with CreateFile"
 }
 
 Write-Output "PASS Test-HostExhaustiveStatic"
