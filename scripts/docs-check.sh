@@ -11,4 +11,5 @@ fi
 
 node tools/generate-docs-index.mjs --check
 node tools/check-broken-links.mjs --check
+node tools/ci/check-public-hygiene.mjs
 echo "✓ docs-check OK"
