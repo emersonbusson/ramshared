@@ -16,6 +16,9 @@ foreach ($needle in @(
     "DiskWriteBytesPersec",
     "PercentDiskTime",
     "Get-FileHash -Algorithm SHA256",
+    "Start-Job",
+    "probe_during_sampling",
+    "Direct load during sampling",
     "three_rounds_emit_p50_p95_p99",
     "matching_checksum_exits_0",
     "checksum_mismatch_exits_6"

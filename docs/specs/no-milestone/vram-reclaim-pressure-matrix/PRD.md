@@ -3,8 +3,9 @@
 ## Status
 
 **PARTIAL.** The 64 MiB Windows StorPort campaign is only a low-risk storage smoke. A
-3 GiB Windows storage-only LUN passed on 2026-07-18, but simultaneous external GPU
-pressure and WSL2/split-owner reclaim remain open.
+3 GiB Windows storage-only LUN passed on 2026-07-18, and a 3 GiB Windows LUN plus
+768 MiB synthetic external CUDA workload passed on the same host. The exact 3 GiB
+Windows plus 1 GiB external workload case, WSL2, and split-owner reclaim remain open.
 
 ## Goal
 
@@ -40,6 +41,15 @@ pressure.
 - 2026-07-18 `C:\ramshared\artifacts\exhaustive-20260718-003148`: Windows 3 GiB
   storage-only LUN passed with three SHA rounds, graceful teardown, lease release, no
   residual `Get-Disk`/`Win32_DiskDrive`/PnP nodes, and post-run preflight PASS.
+- 2026-07-18 `C:\ramshared\artifacts\exhaustive-20260718-003811`: Windows 3 GiB LUN
+  plus 768 MiB synthetic external CUDA workload passed with three SHA rounds, graceful
+  teardown, lease release, no residual `Get-Disk`/`Win32_DiskDrive`/PnP nodes, and
+  post-run preflight PASS. This is an intermediate proof; it does not close the exact
+  1 GiB external workload case.
+- 2026-07-18 `C:\ramshared\artifacts\exhaustive-20260718-004215`: 64 MiB Windows smoke
+  passed with `DISK_IO_MEASURE_OK=true`. During the PerfDisk sampling window the direct
+  load wrote 304 MiB and read 304 MiB with `match=True`; PerfDisk matched `5 S:`, showed
+  non-zero busy/write/queue counters, and the direct probe reported checksum match.
 - 2026-07-18 `C:\ramshared\artifacts\vram-reclaim-matrix-windows3gib-run-20260718`:
   simultaneous Windows 3 GiB + 1 GiB external workload refused safely because free VRAM
   was 5150 MiB for a 5120 MiB plan plus required 256 MiB operational margin.

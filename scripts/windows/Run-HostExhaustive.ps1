@@ -300,12 +300,17 @@ if ($ExternalWorkloadMiB -gt 0) {
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $workload,
             "-MiB", "$ExternalWorkloadMiB", "-HoldSec", "$ExternalWorkloadHoldSec"
         ) -PassThru -WindowStyle Hidden -RedirectStandardOutput $wo -RedirectStandardError $we
-        $wp.WaitForExit(($ExternalWorkloadHoldSec + 20) * 1000)
+        $completed = $wp.WaitForExit(($ExternalWorkloadHoldSec + 20) * 1000)
         $wp.Refresh()
-        if (-not $wp.HasExited) {
+        if (-not $completed -or -not $wp.HasExited) {
             W "FAIL external workload timeout"
             Stop-Process -Id $wp.Id -Force -ErrorAction SilentlyContinue
             $externalOk = $false
+        } elseif ($null -eq $wp.ExitCode -and
+            (Test-Path $wo) -and
+            ((Get-Content $wo -Raw -ErrorAction SilentlyContinue) -match '\[cuda-vram-workload\] released')) {
+            W "external workload exit_code recovered from success marker"
+            W "external workload OK"
         } elseif ($wp.ExitCode -ne 0) {
             W ("FAIL external workload exit=" + $wp.ExitCode)
             if (Test-Path $we) { Get-Content $we -Tail 20 | ForEach-Object { W ("external err: " + $_) } }
@@ -338,6 +343,42 @@ if ($letter) {
 }
 $all = ($rounds.Count -eq 3) -and (@($rounds | Where-Object { -not $_.match }).Count -eq 0)
 $rounds | ConvertTo-Json | Set-Content (Join-Path $art "rounds.json")
+
+$diskIoOk = $false
+if ($letter) {
+    $measure = "C:\ramshared\src\scripts\windows\Measure-RamSharedDiskIo.ps1"
+    if (-not (Test-Path $measure)) {
+        $measure = "C:\ramshared\scripts\windows\Measure-RamSharedDiskIo.ps1"
+    }
+    if (Test-Path $measure) {
+        $mo = Join-Path $art "disk-io.out"
+        $me = Join-Path $art "disk-io.err"
+        W ("disk I/O measure start letter=" + $letter)
+        $mp = Start-Process -FilePath powershell.exe -ArgumentList @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $measure,
+            "-Seconds", "3", "-DriveLetter", $letter, "-ProbeMiB", "8"
+        ) -PassThru -WindowStyle Hidden -RedirectStandardOutput $mo -RedirectStandardError $me
+        $measureCompleted = $mp.WaitForExit(20000)
+        $mp.Refresh()
+        if (-not $measureCompleted -or -not $mp.HasExited) {
+            W "FAIL disk I/O measure timeout"
+            Stop-Process -Id $mp.Id -Force -ErrorAction SilentlyContinue
+        } elseif ($null -eq $mp.ExitCode -and
+            (Test-Path $mo) -and
+            ((Get-Content $mo -Raw -ErrorAction SilentlyContinue) -match 'Direct .* match=True')) {
+            $diskIoOk = $true
+            W "disk I/O measure exit_code recovered from direct checksum"
+        } elseif ($mp.ExitCode -eq 0) {
+            $diskIoOk = $true
+            W "disk I/O measure OK"
+        } else {
+            W ("FAIL disk I/O measure exit=" + $mp.ExitCode)
+            if (Test-Path $me) { Get-Content $me -Tail 20 | ForEach-Object { W ("disk I/O err: " + $_) } }
+        }
+    } else {
+        W "FAIL disk I/O measure script missing"
+    }
+}
 
 # Graceful stop - wait up to 45s (FSCTL dismount should be fast)
 New-Item -ItemType File -Path $stop -Force | Out-Null
@@ -427,11 +468,12 @@ $sum = [ordered]@{
     WIN32_GONE  = ($win32Left.Count -eq 0)
     PNP_GONE    = ($pnpLeft.Count -eq 0)
     LEASE_RELEASED = [bool]$leaseReleased
+    DISK_IO_MEASURE_OK = [bool]$diskIoOk
 }
 $sum | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $art "summary.json")
 W ("SUMMARY " + ($sum | ConvertTo-Json -Compress))
 Write-Host ("ARTIFACT=" + $art)
-if ($online -and $all -and $externalOk -and $stopped -and $exitCode -eq 0 -and $leaseReleased -and
+if ($online -and $all -and $externalOk -and $diskIoOk -and $stopped -and $exitCode -eq 0 -and $leaseReleased -and
     $left.Count -eq 0 -and $win32Left.Count -eq 0 -and $pnpLeft.Count -eq 0) {
     exit 0
 } else {
