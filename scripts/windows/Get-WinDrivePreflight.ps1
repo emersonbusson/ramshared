@@ -175,7 +175,7 @@ try {
         })
     if ($disks.Count -gt 0) {
         if ($StorageOnly) {
-            Warn "Existing RamShared disk(s): $($disks.Number -join ',') — clear before campaign"
+            Bad "Existing RamShared disk(s): $($disks.Number -join ',') — clear before campaign"
         } else {
             Ok "RamShared disk present: N=$($disks.Number -join ',')"
         }
@@ -184,6 +184,27 @@ try {
     }
 } catch {
     Warn "Get-Disk failed: $_"
+}
+
+# Redundant Win32 disk inventory catches residual class-stack devices that may
+# still be visible to Task Manager even if the first Get-Disk pass races clean.
+try {
+    $win32Disks = @(Get-CimInstance Win32_DiskDrive -EA Stop | Where-Object {
+            $_.Model -match 'RAMSHARE|VRAMDISK|RamShared'
+        })
+    if ($win32Disks.Count -gt 0) {
+        $ids = @($win32Disks | ForEach-Object { "Index=$($_.Index) Model=$($_.Model) Serial=$($_.SerialNumber)" }) -join '; '
+        if ($StorageOnly) {
+            Bad "Residual RamShared Win32_DiskDrive node(s): $ids"
+        } else {
+            Warn "Residual RamShared Win32_DiskDrive node(s): $ids"
+        }
+    } else {
+        Ok "No residual RamShared Win32_DiskDrive nodes"
+    }
+} catch {
+    if ($StorageOnly) { Bad "Win32_DiskDrive query failed (fail-closed): $_" }
+    else { Warn "Win32_DiskDrive query failed: $_" }
 }
 
 # Ghost/stale PnP disk nodes can survive after surprise removal even when
