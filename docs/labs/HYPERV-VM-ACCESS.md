@@ -32,12 +32,16 @@ The reason `win11-wsl2-lab` exists is historical and specific: `win11-drill`
 already existed, but its guest WSL runtime was not usable for the freeze
 campaign, while `linux-kernel-lab` is a Linux VM and cannot prove Windows guest
 WSL2 behavior. `win11-wsl2-lab` was created as the one disposable Windows WSL2
-lab so agents would not repair-by-reformatting `win11-drill` or pressure the
-daily desktop WSL2 instance.
+lab so agents can run destructive WSL2 freeze/reclaim campaigns away from the
+real Windows desktop and the real daily WSL2 instance.
 
-Disk safety rule: never format, replace, or attach a host disk or an existing
-lab VHD as a workaround. Only operate on the VHD already owned by the selected
-lab VM, and only through the documented harness for that VM.
+Lab VM state is not protected product data. It is acceptable to reinstall,
+reset, format, or otherwise mutate the guest OS inside `win11-drill`,
+`win11-wsl2-lab`, or `linux-kernel-lab` when that is the selected test surface.
+The boundary is the VM ownership boundary: never format, replace, or attach a
+host disk, the real Windows system volume, the real WSL2 storage, or a VHD owned
+by a different VM as a workaround. Only operate on the VHD already owned by the
+selected lab VM, and record the action/artifacts.
 
 ## Secrets policy
 
@@ -146,13 +150,13 @@ Next WSL2-freeze unblock is guest WSL runtime repair or reimage to a Windows lab
 image with WSL already functional, then rerun the harness. Do not run pressure
 on the daily WSL2 desktop as a substitute.
 
-## `win11-wsl2-lab` disposable replacement
+## `win11-wsl2-lab` disposable Windows WSL2 lab
 
 Historical creation command for context only. Do not run this again unless the
 user explicitly approves creating a new VM in the current conversation. When
 `win11-drill` is not recoverable as a WSL2 guest, use the already-created
-`win11-wsl2-lab` instead of replacing or formatting the existing `win11-drill`
-disk:
+`win11-wsl2-lab` for destructive Windows WSL2 campaigns instead of touching the
+real desktop WSL2 instance:
 
 ```bash
 pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \
@@ -167,7 +171,8 @@ virtualization, disabled checkpoints, and did not modify existing lab disks.
 The VM did not expose heartbeat/PowerShell Direct during the initial unattended
 boot window and was turned Off. Next step is console/boot-media inspection or a
 no-prompt Windows installer ISO on this same VM; do not create another VM, and
-do not format or replace `win11-drill`.
+do not touch host disks or real WSL2 storage. Reinstalling this VM's own guest
+disk is allowed when needed for the isolated campaign.
 
 No-prompt ISO path:
 
