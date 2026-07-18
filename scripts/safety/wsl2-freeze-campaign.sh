@@ -115,6 +115,10 @@ hung_task_hits=0
 if dmesg 2>/dev/null | tail -n 200 | grep -qiE 'hung_task|Blocked for more than'; then
   hung_task_hits=1
 fi
+oom_hits=0
+if dmesg 2>/dev/null | tail -n 200 | grep -qiE 'Out of memory|Memory cgroup out of memory|Killed process'; then
+  oom_hits=1
+fi
 
 health_json="{}"
 if [[ -x "$ROOT/scripts/safety/cascade-health.sh" ]]; then
@@ -154,16 +158,20 @@ if [[ "$binary_match" == "false" ]]; then
   gates_ok=0
   reasons+=("BINARY_MATCH_false")
 fi
+if [[ "$oom_hits" -gt 0 ]]; then
+  gates_ok=0
+  reasons+=("recent_oom_marker")
+fi
 
 reason_csv="$(IFS=,; echo "${reasons[*]-}")"
 
 emit_summary() {
   if [[ "$JSON" -eq 1 ]]; then
-    printf '{"ts":"%s","mode":"%s","host":"%s","daily_host":%s,"ghost":%s,"binary_match":"%s","used_kib":%s,"has_deleted_swap":%s,"d_state":%s,"hung_task_hits":%s,"gates_ok":%s,"reasons":"%s","health":%s,"claim":"NOT_CLAIMED"}\n' \
+    printf '{"ts":"%s","mode":"%s","host":"%s","daily_host":%s,"ghost":%s,"binary_match":"%s","used_kib":%s,"has_deleted_swap":%s,"d_state":%s,"hung_task_hits":%s,"oom_hits":%s,"gates_ok":%s,"reasons":"%s","health":%s,"claim":"NOT_CLAIMED"}\n' \
       "$ts" "$MODE" "$hostname_s" \
       "$([[ $is_daily_host -eq 1 ]] && echo true || echo false)" \
       "$ghost" "$binary_match" "$used_total" "$has_deleted_swap" \
-      "$d_state_count" "$hung_task_hits" \
+      "$d_state_count" "$hung_task_hits" "$oom_hits" \
       "$([[ $gates_ok -eq 1 ]] && echo true || echo false)" \
       "$reason_csv" "$health_json"
   else
@@ -180,6 +188,7 @@ emit_summary() {
     echo "deleted swap:  $has_deleted_swap"
     echo "d_state:       $d_state_count"
     echo "hung_task:     $hung_task_hits"
+    echo "oom_hits:      $oom_hits"
     echo "gates_ok:      $gates_ok"
     if [[ ${#reasons[@]} -gt 0 ]]; then
       echo "refuse_reasons:"
@@ -233,11 +242,11 @@ fi
 # Always capture a read-only baseline (safe on daily host).
 capture_phase "$ARTIFACT_DIR" "baseline"
 write_artifact "$ARTIFACT_DIR" "summary.json" "$(
-  printf '{"ts":"%s","mode":"%s","host":"%s","daily_host":%s,"ghost":%s,"binary_match":"%s","used_kib":%s,"has_deleted_swap":%s,"d_state":%s,"hung_task_hits":%s,"gates_ok":%s,"reasons":"%s","claim":"NOT_CLAIMED"}\n' \
+  printf '{"ts":"%s","mode":"%s","host":"%s","daily_host":%s,"ghost":%s,"binary_match":"%s","used_kib":%s,"has_deleted_swap":%s,"d_state":%s,"hung_task_hits":%s,"oom_hits":%s,"gates_ok":%s,"reasons":"%s","claim":"NOT_CLAIMED"}\n' \
     "$ts" "$MODE" "$hostname_s" \
     "$([[ $is_daily_host -eq 1 ]] && echo true || echo false)" \
     "$ghost" "$binary_match" "$used_total" "$has_deleted_swap" \
-    "$d_state_count" "$hung_task_hits" \
+    "$d_state_count" "$hung_task_hits" "$oom_hits" \
     "$([[ $gates_ok -eq 1 ]] && echo true || echo false)" \
     "$reason_csv"
 )"
