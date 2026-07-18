@@ -159,6 +159,20 @@ if (-not $disk) {
     exit 1
 }
 W ("disk=N=" + $disk.Number + " Name=" + $disk.FriendlyName + " (RAMSHARE only)")
+$diskNameOk = ([string]$disk.FriendlyName) -match '^RAMSHARE\s+VRAMDISK$'
+$diskSizeOk = ([uint64]$disk.Size -eq 67108864)
+$diskNumberOk = ([int]$disk.Number -ne 0)
+$diskBootSystem = [bool]$disk.IsBoot -or [bool]$disk.IsSystem
+if (-not ($diskNameOk -and $diskSizeOk -and $diskNumberOk) -or $diskBootSystem) {
+    W ("FAIL disk identity refused before format/write: N={0} Name={1} Size={2} IsBoot={3} IsSystem={4}" -f
+        $disk.Number, $disk.FriendlyName, $disk.Size, $disk.IsBoot, $disk.IsSystem)
+    New-Item -ItemType File -Path $stop -Force | Out-Null
+    New-Item -ItemType File -Path $brokerStop -Force | Out-Null
+    Start-Sleep 1
+    if ($bp -and -not $bp.HasExited) { Stop-Process -Id $bp.Id -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $brokerLog) { Copy-Item $brokerLog (Join-Path $art "broker-lab.log") -Force }
+    exit 1
+}
 
 # Format carefully: only this disk number, prefer letter S, never steal C:
 $letter = $null
@@ -166,12 +180,24 @@ $part = Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue |
     Where-Object { $_.DriveLetter } | Select-Object -First 1
 if ($part) {
     $letter = [string]$part.DriveLetter
+    $vol = Get-Volume -DriveLetter $letter -ErrorAction SilentlyContinue
+    if (-not $vol -or $vol.FileSystemLabel -ne "RAMSHARED" -or $vol.FileSystem -ne "NTFS") {
+        W ("FAIL existing letter refused before write: {0}: label={1} fs={2}" -f
+            $letter, $vol.FileSystemLabel, $vol.FileSystem)
+        New-Item -ItemType File -Path $stop -Force | Out-Null
+        New-Item -ItemType File -Path $brokerStop -Force | Out-Null
+        Start-Sleep 1
+        if ($bp -and -not $bp.HasExited) { Stop-Process -Id $bp.Id -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $brokerLog) { Copy-Item $brokerLog (Join-Path $art "broker-lab.log") -Force }
+        exit 1
+    }
     W ("existing letter=" + $letter)
 } else {
     try {
-        if ($disk.PartitionStyle -eq "Raw") {
-            Initialize-Disk -Number $disk.Number -PartitionStyle GPT -Confirm:$false -ErrorAction SilentlyContinue
+        if ($disk.PartitionStyle -ne "Raw") {
+            throw "refuse non-raw RAMSHARE disk without mounted RAMSHARED volume"
         }
+        Initialize-Disk -Number $disk.Number -PartitionStyle GPT -Confirm:$false -ErrorAction Stop
         # Prefer S; if taken by non-RAMSHARE, use first free from R,S,T,U,V (not D/E/G system-ish)
         $candidates = @("S","R","T","U","V","W")
         $used = @()
@@ -182,7 +208,7 @@ if ($part) {
         }
         if (-not $pick) { throw "no free lab letter in S/R/T/U/V/W" }
         $np = New-Partition -DiskNumber $disk.Number -UseMaximumSize -DriveLetter $pick -ErrorAction Stop
-        Format-Volume -DriveLetter $pick -FileSystem NTFS -NewFileSystemLabel "RAMSHARED" -Confirm:$false | Out-Null
+        $np | Format-Volume -FileSystem NTFS -NewFileSystemLabel "RAMSHARED" -Confirm:$false | Out-Null
         $letter = $pick
         W ("formatted letter=" + $letter + " on disk " + $disk.Number + " only")
     } catch {
