@@ -30,7 +30,13 @@ foreach ($needle in @(
     "IsSystem",
     "existing letter refused before write",
     "RAMSHARED",
-    "refuse non-raw RAMSHARE disk without mounted RAMSHARED volume"
+    "refuse non-raw RAMSHARE disk without mounted RAMSHARED volume",
+    "`$p.Refresh()",
+    "exit_code recovered from RuntimeSummary",
+    "Win32_DiskDrive",
+    "remove stale pnp=",
+    "PNP_GONE",
+    "WIN32_GONE"
 )) {
     if ($text -notmatch [regex]::Escape($needle)) {
         throw ("host_broker_required: missing " + $needle)
@@ -43,7 +49,8 @@ if ($text -notmatch 'product Online:') {
 if ($text -match 'if \(\$txt -match "product Online"\)') {
     throw "online_marker_must_be_strong: host harness still accepts startup banner as Online"
 }
-if ($text -notmatch 'if \(\$online -and \$all -and \$stopped -and \$exitCode -eq 0 -and \$leaseReleased\)') {
+if ($text -notmatch '\$online -and \$all -and \$stopped -and \$exitCode -eq 0 -and \$leaseReleased' -or
+    $text -notmatch '\$pnpLeft\.Count -eq 0') {
     throw "complete_pass_gate: host harness must require lease release for PASS"
 }
 if ($text -notmatch 'Copy-Item \$brokerLog \(Join-Path \$art "broker-lab.log"\)') {

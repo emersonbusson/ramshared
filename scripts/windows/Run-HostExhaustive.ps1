@@ -279,6 +279,7 @@ $exitCode = -1
 for ($i = 0; $i -lt 45; $i++) {
     Start-Sleep 1
     if ($p.HasExited) {
+        $p.Refresh()
         $stopped = $true
         $exitCode = $p.ExitCode
         W ("process exited code=" + $exitCode + " after " + ($i+1) + "s")
@@ -313,12 +314,36 @@ if (Test-Path $err) {
     if ($errText -match "lease=(\d+)") {
         $leaseReleased = $brokerTail -match ("lease " + $Matches[1] + " liberado")
     }
+    if ($stopped -and $null -eq $exitCode -and $errText -match "exit_code:\s*0") {
+        $exitCode = 0
+        W "exit_code recovered from RuntimeSummary"
+    }
 }
 
-# Post-check: RAMSHARE disk should be gone after clean destroy
+# Post-check: RAMSHARE disk and stale class-stack nodes should be gone after clean destroy.
 Start-Sleep 2
 $left = @(Get-Disk | Where-Object { $_.FriendlyName -match "RAMSHARE|VRAMDISK" })
 W ("ramshare_disks_left=" + $left.Count)
+$win32Left = @(Get-CimInstance Win32_DiskDrive -ErrorAction SilentlyContinue | Where-Object {
+        $_.Model -match "RAMSHARE|VRAMDISK|RamShared"
+    })
+W ("ramshare_win32_disks_left=" + $win32Left.Count)
+$pnpLeft = @(Get-PnpDevice -PresentOnly:$false -ErrorAction SilentlyContinue | Where-Object {
+        $_.InstanceId -like "SCSI\DISK&VEN_RAMSHARE&PROD_VRAMDISK*" -or
+        $_.FriendlyName -match "RAMSHARE|VRAMDISK|RamShared"
+    })
+if ($left.Count -eq 0 -and $win32Left.Count -eq 0 -and $pnpLeft.Count -gt 0) {
+    foreach ($node in $pnpLeft) {
+        W ("remove stale pnp=" + $node.InstanceId)
+        pnputil.exe /remove-device $node.InstanceId | Out-File -FilePath $log -Append -Encoding utf8
+    }
+    Start-Sleep 2
+    $pnpLeft = @(Get-PnpDevice -PresentOnly:$false -ErrorAction SilentlyContinue | Where-Object {
+            $_.InstanceId -like "SCSI\DISK&VEN_RAMSHARE&PROD_VRAMDISK*" -or
+            $_.FriendlyName -match "RAMSHARE|VRAMDISK|RamShared"
+        })
+}
+W ("ramshare_pnp_nodes_left=" + $pnpLeft.Count)
 
 $sum = [ordered]@{
     HOST_ONLINE = [bool]$online
@@ -329,9 +354,16 @@ $sum = [ordered]@{
     EXIT        = $exitCode
     ROUNDS      = $rounds.Count
     LUN_GONE    = ($left.Count -eq 0)
+    WIN32_GONE  = ($win32Left.Count -eq 0)
+    PNP_GONE    = ($pnpLeft.Count -eq 0)
     LEASE_RELEASED = [bool]$leaseReleased
 }
 $sum | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $art "summary.json")
 W ("SUMMARY " + ($sum | ConvertTo-Json -Compress))
 Write-Host ("ARTIFACT=" + $art)
-if ($online -and $all -and $stopped -and $exitCode -eq 0 -and $leaseReleased) { exit 0 } else { exit 2 }
+if ($online -and $all -and $stopped -and $exitCode -eq 0 -and $leaseReleased -and
+    $left.Count -eq 0 -and $win32Left.Count -eq 0 -and $pnpLeft.Count -eq 0) {
+    exit 0
+} else {
+    exit 2
+}
