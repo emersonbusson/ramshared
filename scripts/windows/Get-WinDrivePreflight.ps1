@@ -174,6 +174,36 @@ if (-not $drv) {
     Warn "ramshared.sys not found in default paths (build/sign/deploy first)"
 }
 
+# Loaded miniport health. A running service without the control device means a
+# previous PnP/remove path left the physical host in a stale loaded state; fail
+# closed before a storage campaign tries to create a LUN.
+try {
+    $svcText = sc.exe query ramshared 2>$null | Out-String
+    $svcRunning = $svcText -match 'RUNNING'
+    $ctlPaths = @("\\.\RamSharedCtl", "\\.\GLOBALROOT\Device\RamSharedCtl")
+    $ctlOk = $false
+    foreach ($ctl in $ctlPaths) {
+        try {
+            if (Test-Path $ctl) {
+                $ctlOk = $true
+                Ok "Control path $ctl"
+                break
+            }
+        } catch {}
+    }
+    if ($svcRunning -and -not $ctlOk) {
+        if ($StorageOnly) {
+            Bad "ramshared service is RUNNING but RamSharedCtl is absent; reboot/unload/redeploy before physical Online"
+        } else {
+            Warn "ramshared service is RUNNING but RamSharedCtl is absent"
+        }
+    } elseif (-not $svcRunning) {
+        Warn "ramshared service not running yet; campaign must start it before Online"
+    }
+} catch {
+    Warn "ramshared service/control query failed: $_"
+}
+
 # Latest dump identity (no contents)
 $dumpDir = "C:\Windows\Minidump"
 if (Test-Path $dumpDir) {
