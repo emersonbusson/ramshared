@@ -29,7 +29,7 @@ foreach ($needle in @(
     }
 }
 
-foreach ($forbidden in @("Blender", "Battlefield", "YouTube", "After Effects")) {
+foreach ($forbidden in @("ExampleDccApp", "ExampleGameApp", "ExampleVideoApp", "ExampleCompositorApp")) {
     if ($text -match [regex]::Escape($forbidden)) {
         throw ("vram_reclaim_matrix_static: app-specific name forbidden: " + $forbidden)
     }
