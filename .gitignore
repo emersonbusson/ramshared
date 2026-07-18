@@ -1,4 +1,5 @@
 /target/
+/artifacts/packages/
 
 # Cache e logs do sistema de forense
 /mnt/c/wsl-forensics/
