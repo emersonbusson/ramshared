@@ -12,7 +12,8 @@ $text = Get-Content -LiteralPath $HarnessPath -Raw
 
 foreach ($needle in @(
     'win11-wsl2-lab',
-    'E:\Hyper-V\win11-wsl2-lab',
+    'C:\ramshared-hyperv\win11-wsl2-lab',
+    'HDD-backed lab path is too slow',
     'Win11_25H2_English_x64_v2.iso',
     'Win11_25H2_autounattend.iso',
     'VM already exists',

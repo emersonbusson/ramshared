@@ -109,6 +109,14 @@ function Invoke-GuestWithRetry {
     throw "PowerShell Direct did not become ready after $attempt attempts over ${PsDirectReadyTimeoutSec}s. Last error: $lastError"
 }
 
+function Get-GuestWslExe {
+    $packaged = "C:\Program Files\WSL\wsl.exe"
+    if (Test-Path -LiteralPath $packaged) {
+        return $packaged
+    }
+    return "wsl.exe"
+}
+
 $artifactDir = New-ArtifactDir -Root $ArtifactRoot
 
 $Password = Get-LocalDrillPassword -InitialPassword $Password -LocalPasswordFile $PasswordFile
@@ -144,7 +152,18 @@ try {
         Test-Path -LiteralPath $GuestRepo
     } -ArgumentList $GuestRepo
     $wslList = Invoke-GuestWithRetry -Credential $cred -ScriptBlock {
-        $job = Start-Job -ScriptBlock { wsl.exe -l -v 2>&1 | Out-String }
+        function Get-GuestWslExe {
+            $packaged = "C:\Program Files\WSL\wsl.exe"
+            if (Test-Path -LiteralPath $packaged) {
+                return $packaged
+            }
+            return "wsl.exe"
+        }
+        $wslExe = Get-GuestWslExe
+        $job = Start-Job -ScriptBlock {
+            param($WslExe)
+            & $WslExe -l -v 2>&1 | Out-String
+        } -ArgumentList $wslExe
         if (Wait-Job $job -Timeout 20) {
             Receive-Job $job | Out-String
         } else {
@@ -191,7 +210,7 @@ if (-not $probe.repo_exists) {
     }
     exit 2
 }
-if ($probe.wsl_list -match "not installed|REGDB_E_CLASSNOTREG|Wsl/CallMsi|CLASSNOTREG") {
+if ($probe.wsl_list -match "not installed|REGDB_E_CLASSNOTREG|Wsl/CallMsi|CLASSNOTREG|WSL_LIST_TIMEOUT") {
     Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "guest_wsl_runtime_unavailable"
     exit 2
 }
@@ -208,6 +227,14 @@ if (-not $Run) {
 
 $guestResult = Invoke-GuestWithRetry -Credential $cred -ScriptBlock {
     param($GuestRepo, $Distro)
+    function Get-GuestWslExe {
+        $packaged = "C:\Program Files\WSL\wsl.exe"
+        if (Test-Path -LiteralPath $packaged) {
+            return $packaged
+        }
+        return "wsl.exe"
+    }
+    $wslExe = Get-GuestWslExe
     $cmd = @"
 set -euo pipefail
 cd /mnt/c/ramshared/src
@@ -216,7 +243,7 @@ export RAMSHARED_FORCE_ISOLATED_LAB=1
 ./scripts/safety/wsl2-freeze-campaign.sh --allow-isolated-lab --run-isolated --artifact-dir /tmp/ramshared-wsl2-freeze-win11 --rounds 2 --json
 ./scripts/safety/validate-wsl2-freeze-campaign-artifact.sh /tmp/ramshared-wsl2-freeze-win11
 "@
-    wsl.exe -d $Distro -- bash -lc $cmd 2>&1 | Out-String
+    & $wslExe -d $Distro -- bash -lc $cmd 2>&1 | Out-String
 } -ArgumentList $GuestRepo, $probe.distro
 $guestResult | Set-Content -Encoding UTF8 (Join-Path $artifactDir "guest-campaign.out")
 

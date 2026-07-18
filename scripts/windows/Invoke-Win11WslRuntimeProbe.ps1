@@ -82,6 +82,14 @@ function Invoke-GuestWithRetry {
     throw "PowerShell Direct did not become ready after $attempt attempts over ${PsDirectReadyTimeoutSec}s. Last error: $lastError"
 }
 
+function Get-GuestWslExe {
+    $packaged = "C:\Program Files\WSL\wsl.exe"
+    if (Test-Path -LiteralPath $packaged) {
+        return $packaged
+    }
+    return "wsl.exe"
+}
+
 function Write-Summary {
     param(
         [string]$Dir,
@@ -123,6 +131,13 @@ try {
     $cred = [pscredential]::new($User, $sec)
     $probe = Invoke-GuestWithRetry -Credential $cred -ScriptBlock {
         $ErrorActionPreference = "Continue"
+        function Get-GuestWslExe {
+            $packaged = "C:\Program Files\WSL\wsl.exe"
+            if (Test-Path -LiteralPath $packaged) {
+                return $packaged
+            }
+            return "wsl.exe"
+        }
         $features = @(
             foreach ($name in @("Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform")) {
                 $feature = Get-WindowsOptionalFeature -Online -FeatureName $name
@@ -135,17 +150,45 @@ try {
         )
         $appx = Get-AppxPackage -AllUsers *WindowsSubsystemForLinux* |
             Select-Object Name, PackageFullName, Version, InstallLocation
-        $wslCommand = Get-Command wsl.exe -ErrorAction SilentlyContinue |
+        $wslExe = Get-GuestWslExe
+        $wslCommand = Get-Command $wslExe -ErrorAction SilentlyContinue |
             Select-Object Source, Version
-        $wslStatus = wsl.exe --status 2>&1 | Out-String
+        function Invoke-WslWithTimeout {
+            param(
+                [string]$Exe,
+                [string]$Arguments,
+                [int]$TimeoutSec = 30
+            )
+            $safeName = ($Arguments -replace '[^A-Za-z0-9]+', '_').Trim('_')
+            if ([string]::IsNullOrWhiteSpace($safeName)) {
+                $safeName = "wsl"
+            }
+            $stdout = "C:\ramshared\artifacts\wsl-psdirect-$safeName.out"
+            $stderr = "C:\ramshared\artifacts\wsl-psdirect-$safeName.err"
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $stdout) | Out-Null
+            $p = Start-Process -FilePath $Exe -ArgumentList $Arguments -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+            $done = $p.WaitForExit($TimeoutSec * 1000)
+            if (-not $done) {
+                try { $p.Kill() } catch {}
+            }
+            [pscustomobject]@{
+                done = $done
+                exit = if ($done) { $p.ExitCode } else { $null }
+                stdout = if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout -Raw } else { "" }
+                stderr = if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr -Raw } else { "" }
+            }
+        }
+        $wslStatus = Invoke-WslWithTimeout -Exe $wslExe -Arguments "--status"
         [pscustomobject]@{
             host = $env:COMPUTERNAME
             whoami = (whoami)
             features = $features
             appx = $appx
             wsl_command = $wslCommand
-            wsl_status = $wslStatus
-            wsl_status_exit = $LASTEXITCODE
+            wsl_status = $wslStatus.stdout
+            wsl_status_stderr = $wslStatus.stderr
+            wsl_status_exit = $wslStatus.exit
+            wsl_status_timeout = (-not $wslStatus.done)
         }
     }
     $probe | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $artifactDir "psdirect-probe.json")
@@ -160,6 +203,13 @@ try {
 $ErrorActionPreference = "Continue"
 $out = "C:\ramshared\artifacts\wsl-high-probe.out"
 $lines = New-Object System.Collections.Generic.List[string]
+function Get-GuestWslExe {
+    $packaged = "C:\Program Files\WSL\wsl.exe"
+    if (Test-Path -LiteralPath $packaged) {
+        return $packaged
+    }
+    return "wsl.exe"
+}
 function Add-ProbeLine {
     param([object]$Value)
     if ($null -eq $Value) {
@@ -171,16 +221,49 @@ function Add-ProbeLine {
         }
     }
 }
+function Invoke-WslWithTimeout {
+    param(
+        [string]$Exe,
+        [string]$Arguments,
+        [int]$TimeoutSec = 30
+    )
+    $safeName = ($Arguments -replace '[^A-Za-z0-9]+', '_').Trim('_')
+    if ([string]::IsNullOrWhiteSpace($safeName)) {
+        $safeName = "wsl"
+    }
+    $stdout = "C:\ramshared\artifacts\wsl-high-$safeName.out"
+    $stderr = "C:\ramshared\artifacts\wsl-high-$safeName.err"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $stdout) | Out-Null
+    $p = Start-Process -FilePath $Exe -ArgumentList $Arguments -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+    $done = $p.WaitForExit($TimeoutSec * 1000)
+    if (-not $done) {
+        try { $p.Kill() } catch {}
+    }
+    [pscustomobject]@{
+        done = $done
+        exit = if ($done) { $p.ExitCode } else { $null }
+        stdout = if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout -Raw } else { "" }
+        stderr = if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr -Raw } else { "" }
+    }
+}
 try {
     Add-ProbeLine "whoami=$(whoami)"
     $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    $wslExe = Get-GuestWslExe
     Add-ProbeLine "is_admin=$($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
+    Add-ProbeLine "wsl_exe=$wslExe"
     Add-ProbeLine "status_start"
-    Add-ProbeLine (& wsl.exe --status 2>&1)
-    Add-ProbeLine "status_exit=$LASTEXITCODE"
+    $status = Invoke-WslWithTimeout -Exe $wslExe -Arguments "--status"
+    Add-ProbeLine $status.stdout
+    Add-ProbeLine $status.stderr
+    Add-ProbeLine "status_timeout=$(-not $status.done)"
+    Add-ProbeLine "status_exit=$($status.exit)"
     Add-ProbeLine "list_start"
-    Add-ProbeLine (& wsl.exe -l -v 2>&1)
-    Add-ProbeLine "list_exit=$LASTEXITCODE"
+    $list = Invoke-WslWithTimeout -Exe $wslExe -Arguments "-l -v"
+    Add-ProbeLine $list.stdout
+    Add-ProbeLine $list.stderr
+    Add-ProbeLine "list_timeout=$(-not $list.done)"
+    Add-ProbeLine "list_exit=$($list.exit)"
 } finally {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $out) | Out-Null
     $lines | Set-Content -Encoding UTF8 -LiteralPath $out
@@ -188,9 +271,9 @@ try {
 '@ | Set-Content -Encoding UTF8 -LiteralPath $script
         $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument ('-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $script)
         $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
-        $principal = New-ScheduledTaskPrincipal -UserId "WIN11-DRILL\drilladmin" -RunLevel Highest -LogonType Password
+        $principal = New-ScheduledTaskPrincipal -UserId $using:User -RunLevel Highest -LogonType Password
         $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal
-        Register-ScheduledTask -TaskName "RamSharedWslHighProbe" -InputObject $task -User "WIN11-DRILL\drilladmin" -Password $TaskPassword -Force | Out-Null
+        Register-ScheduledTask -TaskName "RamSharedWslHighProbe" -InputObject $task -User $using:User -Password $TaskPassword -Force | Out-Null
         Start-ScheduledTask -TaskName "RamSharedWslHighProbe"
         $deadline = (Get-Date).AddSeconds($using:ScheduledTaskTimeoutSec)
         do {
@@ -222,6 +305,7 @@ $taskOutput = $taskProbe.output | Out-String
 $taskNoOutput = ($taskOutput -match "NO_OUTPUT")
 $runtimeReady = ($taskOutput -notmatch "not installed|REGDB_E_CLASSNOTREG|Wsl/CallMsi|CLASSNOTREG") -and
     (-not $taskNoOutput) -and
+    ($taskOutput -notmatch "status_timeout=True|list_timeout=True") -and
     ($taskOutput -match "status_exit=0|list_exit=0")
 if ($runtimeReady) {
     Write-Summary -Dir $artifactDir -Status "PASS" -Reason "wsl_runtime_ready_in_elevated_guest"

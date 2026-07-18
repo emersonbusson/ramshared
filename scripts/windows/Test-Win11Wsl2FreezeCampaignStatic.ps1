@@ -17,7 +17,8 @@ foreach ($needle in @(
     'function Invoke-GuestWithRetry',
     'PowerShell Direct did not become ready',
     'foreach ($featureName in @("Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform"))',
-    'Start-Job -ScriptBlock { wsl.exe -l -v',
+    'Start-Job -ScriptBlock {',
+    '& $WslExe -l -v',
     'WSL_LIST_TIMEOUT',
     'DAILY_HOST_USED',
     'RAMSHARED_ISOLATED_LAB=1',
@@ -29,6 +30,7 @@ foreach ($needle in @(
     'powershell_direct_failed',
     'wsl2_features_not_enabled',
     'guest_wsl_runtime_unavailable',
+    'CLASSNOTREG|WSL_LIST_TIMEOUT',
     'guest_wsl_distro_missing'
 )) {
     if ($text -notmatch [regex]::Escape($needle)) {
