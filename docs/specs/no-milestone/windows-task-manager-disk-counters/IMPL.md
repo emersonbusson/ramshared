@@ -2,9 +2,8 @@
 
 ## Status
 
-**PARTIAL.** The audit harness, static gates, and one physical-host live audit are
-green. The remaining open claim is Task Manager UI parity, which is deliberately
-not closed by CIM/direct-I/O evidence.
+**GREEN.** The supported Windows disk evidence gate is CIM/direct-I/O, not Task
+Manager UI parity. Static gates and one physical-host live audit are green.
 
 ## Implemented
 

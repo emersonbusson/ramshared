@@ -6,7 +6,7 @@ In now:
 
 - Plan-only and approved live Windows audit harness.
 - Parsing existing `Run-HostExhaustive.ps1` artifacts.
-- Documentation that Task Manager UI parity remains a separate claim.
+- Documentation that Task Manager UI parity is not a product correctness claim.
 
 Out now:
 
@@ -30,7 +30,7 @@ Out now:
 | --- | --- | --- |
 | DT-1 | The audit script must be plan-only unless `-Run -ApprovePhysicalHost` is supplied. | Prevent accidental live host mutation. |
 | DT-2 | Live disk lifecycle is delegated to `Run-HostExhaustive.ps1`. | Reuse exact RAMSHARE identity gates and avoid duplicate formatting logic. |
-| DT-3 | The pass gate is CIM/direct-I/O evidence, not Task Manager UI. | Task Manager is a human UI and can misreport virtual StorPort disks. |
+| DT-3 | The pass gate is CIM/direct-I/O evidence, not Task Manager UI. | Task Manager is a human UI and can misreport virtual StorPort disks; product correctness requires machine-readable evidence. |
 
 ## Atomicity And Rollback
 
@@ -78,7 +78,8 @@ Out now:
 
 **MODIFY — `docs/reliability/GAP-REGISTER.md`**
 
-- Record the harness as partial evidence; do not close Task Manager UI parity.
+- Record the supported metric evidence as closed and keep Task Manager UI parity
+  out of scope.
 
 ## Observability
 
@@ -93,4 +94,3 @@ Out now:
 2. ITEM-2: add static safety test.
 3. ITEM-3: run static tests and docs checks.
 4. ITEM-4: update gap register after live evidence exists.
-

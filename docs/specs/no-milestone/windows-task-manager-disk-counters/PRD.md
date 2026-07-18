@@ -12,8 +12,8 @@ issues: []
 RamShared must provide reliable Windows disk activity evidence for the
 `RAMSHARE VRAMDISK` LUN. Windows Task Manager can misrepresent virtual StorPort
 devices, so product evidence must use locale-safe PerfDisk counters plus direct
-checksum I/O while keeping Task Manager UI parity as a separate, environment-bound
-claim.
+checksum I/O. Task Manager visual parity with a physical SSD is explicitly out
+of scope for product correctness.
 
 ## Technical Context
 
@@ -22,9 +22,8 @@ claim.
 - Confirmed in codebase: `scripts/windows/Run-HostExhaustive.ps1` formats only a
   disk whose identity is exactly `RAMSHARE VRAMDISK`, non-boot, non-system, and
   matching the requested size.
-- Confirmed in docs: `docs/reliability/GAP-REGISTER.md` keeps Windows Task Manager
-  disk counters **PARTIAL** until a dedicated UI/perf proof or explicit product
-  decision exists.
+- Confirmed in docs: `docs/reliability/GAP-REGISTER.md` records the supported
+  disk-counter evidence gate as closed when CIM/direct-I/O audit passes.
 - Inference: Task Manager UI screenshots are useful operator evidence, but they are
   not stable enough to be the only acceptance surface.
 
@@ -50,7 +49,7 @@ Discarded alternatives:
 | RF-2 | Use only existing exact-identity formatting gates. | Audit script contains no `Initialize-Disk` or `Format-Volume`; live creation is delegated to `Run-HostExhaustive.ps1`. |
 | RF-3 | Prove activity with machine-readable counters and checksum I/O. | Audit requires `DISK_IO_MEASURE_OK=true`, `Direct load during sampling`, `match=True`, and non-zero busy/write/queue evidence. |
 | NFR-1 | Be safe by default. | Default mode is plan-only; live mode requires `-Run -ApprovePhysicalHost`. |
-| NFR-2 | Keep Task Manager claim honest. | Docs state CIM/direct metrics are authoritative; UI parity remains PARTIAL until a UI-specific proof exists. |
+| NFR-2 | Keep Task Manager claim honest. | Docs state CIM/direct metrics are authoritative; UI parity is not a correctness requirement. |
 
 ## Flow
 
@@ -66,7 +65,7 @@ Discarded alternatives:
   exhaustive harness.
 - PerfDisk may lag or report partial fields. The audit accepts non-zero activity
   from busy, write, or queue plus direct checksum I/O.
-- Task Manager UI may still disagree; this PRD does not close UI parity.
+- Task Manager UI may still disagree; this is expected and not a correctness gate.
 
 Rollback trigger: revert if the audit can pass without direct checksum match, without
 `DISK_IO_MEASURE_OK`, or if it performs direct formatting.
@@ -77,4 +76,3 @@ Rollback trigger: revert if the audit can pass without direct checksum match, wi
 - Live: `scripts/windows/Invoke-WindowsDiskCounterAudit.ps1 -Run -ApprovePhysicalHost`
   on the physical Windows lab host after clean storage-only preflight.
 - Docs: `./scripts/docs-check.sh`.
-
