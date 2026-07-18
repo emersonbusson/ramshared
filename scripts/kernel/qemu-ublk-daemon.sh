@@ -28,6 +28,7 @@ IRD="$WORK/irfs"; mkdir -p "$IRD/bin" "$IRD/modules"
 cp /bin/busybox "$IRD/bin/busybox"
 cp "$DAEMON" "$IRD/ramsharedd"
 cp "$UBLK_KO" "$IRD/modules/ublk_drv.ko"
+sha256sum "$DAEMON" | awk '{print $1}' > "$IRD/expected-ramsharedd.sha256"
 
 # Copia as libs dinamicas do daemon preservando os caminhos absolutos (o binario e
 # glibc-dinamico; sem CUDA no load — ver ldd). O linker /lib64/ld-linux entra junto.
@@ -45,6 +46,12 @@ $BB mount -t sysfs sysfs /sys
 $BB mount -t devtmpfs devtmpfs /dev 2>/dev/null
 echo "=====KTEST-BEGIN====="
 echo "KTEST-UNAME=$($BB uname -r)"
+EXPECTED="$($BB cat /expected-ramsharedd.sha256 2>/dev/null)"
+ACTUAL="$($BB sha256sum /ramsharedd 2>/dev/null)"
+ACTUAL="${ACTUAL%% *}"
+echo "KTEST-BINARY-SHA-EXPECTED=$EXPECTED"
+echo "KTEST-BINARY-SHA-ACTUAL=$ACTUAL"
+[ -n "$EXPECTED" ] && [ "$EXPECTED" = "$ACTUAL" ] && echo "KTEST-BINARY-MATCH=ok" || echo "KTEST-BINARY-MATCH=fail"
 
 # 1) carrega o driver ublk
 if $BB insmod /modules/ublk_drv.ko 2>/tmp/e; then
@@ -117,6 +124,7 @@ echo "=========== resultado ==========="
 grep -E "KTEST-" "$WORK/serial.log" || echo "sem output KTEST — kernel pode nao ter bootado"
 echo "================================="
 if grep -q "KTEST-SERVED=ok" "$WORK/serial.log" \
+   && grep -q "KTEST-BINARY-MATCH=ok" "$WORK/serial.log" \
    && grep -q "KTEST-TERMINATED=ok" "$WORK/serial.log" \
    && grep -q "KTEST-DEVICE-REMOVED=ok" "$WORK/serial.log"; then
   echo "QEMU-UBLK-DAEMON: PASS — daemon serviu I/O e fez teardown limpo (SIGTERM)."
