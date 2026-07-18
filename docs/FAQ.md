@@ -72,7 +72,8 @@ mounted Disk5 `RAMSHARE VRAMDISK` as `S:` and passed `DISK_IO_MEASURE_OK=true`.
 The measure script matched PerfDisk instance `5 S:`, generated 304 MiB write/read
 during sampling with `match=True`, observed non-zero busy/write/queue counters, and
 the direct 8 MiB checksum probe matched. Task Manager can still show odd % busy on
-StorPort; use the measure script for evidence.
+StorPort. This is not a RamShared correctness gate; use the measure script for
+supported evidence.
 
 ## Is RamShared using my VRAM right now?
 
