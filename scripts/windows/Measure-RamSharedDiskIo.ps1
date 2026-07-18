@@ -104,6 +104,40 @@ $latR = New-Object System.Collections.Generic.List[double]
 $latW = New-Object System.Collections.Generic.List[double]
 $qDepth = New-Object System.Collections.Generic.List[double]
 
+$sampleLoadJob = $null
+if ($DriveLetter) {
+    $letter = $DriveLetter.TrimEnd(':').Substring(0, 1)
+    $sampleLoadPath = "${letter}:\ramshared-io-sample-load.bin"
+    L "Starting direct I/O load during PerfDisk sampling -> $sampleLoadPath"
+    $sampleLoadJob = Start-Job -ArgumentList $sampleLoadPath, $ProbeMiB, $Seconds -ScriptBlock {
+        param($Path, $MiB, $DurationSec)
+        $ErrorActionPreference = "Stop"
+        $bytes = New-Object byte[] ([int64]$MiB * 1MB)
+        (New-Object Random).NextBytes($bytes)
+        $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, [int]$DurationSec))
+        $iterations = 0
+        $written = [int64]0
+        $read = [int64]0
+        $ok = $true
+        while ([DateTime]::UtcNow -lt $deadline) {
+            [IO.File]::WriteAllBytes($Path, $bytes)
+            $got = [IO.File]::ReadAllBytes($Path)
+            if ($got.Length -ne $bytes.Length) { $ok = $false }
+            $iterations++
+            $written += $bytes.Length
+            $read += $got.Length
+        }
+        Remove-Item $Path -Force -EA SilentlyContinue
+        [pscustomobject]@{
+            probe_during_sampling = $true
+            iterations = $iterations
+            bytes_written = $written
+            bytes_read = $read
+            match = $ok
+        }
+    }
+}
+
 $samples = [Math]::Max(1, [int]$Seconds)
 L "Sampling PerfDisk for ${samples}s (interval ${SampleIntervalSec}s) via CIM (locale-safe)"
 for ($i = 0; $i -lt $samples; $i++) {
@@ -118,6 +152,26 @@ for ($i = 0; $i -lt $samples; $i++) {
         if ($null -ne $r.CurrentDiskQueueLength) { $qDepth.Add([double]$r.CurrentDiskQueueLength) }
     }
     if ($i -lt ($samples - 1)) { Start-Sleep -Seconds $SampleIntervalSec }
+}
+
+if ($sampleLoadJob) {
+    Wait-Job $sampleLoadJob -Timeout ([Math]::Max(5, $Seconds + 5)) | Out-Null
+    if ($sampleLoadJob.State -eq "Running") {
+        Stop-Job $sampleLoadJob -Force -EA SilentlyContinue
+        L "Direct I/O load during sampling timed out"
+    } else {
+        $loadResult = Receive-Job $sampleLoadJob -EA SilentlyContinue
+        foreach ($lr in @($loadResult)) {
+            if ($lr.probe_during_sampling) {
+                L ("Direct load during sampling iterations={0} written={1} MiB read={2} MiB match={3}" -f
+                    $lr.iterations,
+                    [math]::Round(([double]$lr.bytes_written / 1MB), 2),
+                    [math]::Round(([double]$lr.bytes_read / 1MB), 2),
+                    $lr.match)
+            }
+        }
+    }
+    Remove-Job $sampleLoadJob -Force -EA SilentlyContinue
 }
 
 function Stat($list) {

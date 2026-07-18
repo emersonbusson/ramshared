@@ -31,6 +31,9 @@ if ($text -notmatch '\$directIps \+ \$neighborIps') {
 if ($text -notmatch 'ssh\.exe' -or $text -notmatch 'BatchMode=yes' -or $text -notmatch 'ConnectTimeout=10') {
     throw "ssh_smoke: helper must use bounded non-interactive SSH"
 }
+if ($text -notmatch 'ForEach-Object \{ \$_.ToString\(\) \}' -or $text -notmatch '\$sshExitCode = \$LASTEXITCODE') {
+    throw "ssh_smoke_capture: helper must capture native stderr/stdout without aborting"
+}
 if ($text -notmatch 'sudo -n true') {
     throw "sudo_smoke: helper must verify passwordless sudo without prompting"
 }

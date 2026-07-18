@@ -43,11 +43,16 @@ $ips = @($directIps + $neighborIps | Where-Object { $_ } | Select-Object -Unique
 $smokeResults = @()
 if ($Smoke) {
     foreach ($ip in $ips) {
+        $oldErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
         $output = & ssh.exe -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=no `
-            "$User@$ip" "hostname; uname -r; cloud-init status --wait; sudo -n true && echo SUDO_OK" 2>&1
+            "$User@$ip" "hostname; uname -r; cloud-init status --wait; sudo -n true && echo SUDO_OK" 2>&1 |
+            ForEach-Object { $_.ToString() }
+        $sshExitCode = $LASTEXITCODE
+        $ErrorActionPreference = $oldErrorActionPreference
         $smokeResults += [pscustomobject]@{
             ip = $ip
-            exit_code = $LASTEXITCODE
+            exit_code = $sshExitCode
             output = ($output -join "`n")
         }
     }
