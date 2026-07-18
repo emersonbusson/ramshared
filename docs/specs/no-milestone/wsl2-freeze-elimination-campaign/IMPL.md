@@ -12,10 +12,18 @@ instead of raw dmesg tail membership; `/tmp/ramshared-wsl2-freeze-windowed-17843
 reported `oom_hits=0` and refused action only because this is still the daily
 WSL2 desktop.
 
+`scripts/windows/Invoke-Win11Wsl2FreezeCampaign.ps1` is the isolated Windows
+guest path. 2026-07-18
+`C:\ramshared\artifacts\win11-wsl2-freeze-campaign-20260718-115419` remained
+`PARTIAL` because PowerShell Direct rejected the current local credential before
+the guest WSL2 campaign could run. No daily-host WSL2 action was used.
+
 ## Implemented
 
 - `scripts/safety/validate-wsl2-freeze-campaign-artifact.sh`
 - `scripts/safety/test-wsl2-freeze-campaign-artifact-static.sh`
+- `scripts/windows/Invoke-Win11Wsl2FreezeCampaign.ps1`
+- `scripts/windows/Test-Win11Wsl2FreezeCampaignStatic.ps1`
 
 ## Validation
 

@@ -72,6 +72,21 @@ PS1_PATH=$(wslpath -w scripts/windows/Run-GuestProductOnline.ps1)
 The harness starts the VM, deploys the current Windows package, runs three
 SHA I/O lifecycle rounds, performs graceful teardown, and stops the VM.
 
+## `win11-drill` WSL2 freeze campaign
+
+Use this path for WSL2 freeze-elimination proof instead of the daily desktop WSL:
+
+```bash
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \
+  "& 'C:\Windows\System32\sudo.exe' powershell.exe -NoProfile -ExecutionPolicy Bypass -File '\\wsl.localhost\Ubuntu-24.04\home\emdev\codespace\ramshared\scripts\windows\Invoke-Win11Wsl2FreezeCampaign.ps1' -Start -Run"
+```
+
+2026-07-18 attempt:
+`C:\ramshared\artifacts\win11-wsl2-freeze-campaign-20260718-115419` returned
+`STATUS=PARTIAL` because PowerShell Direct rejected the current local
+credential. Do not reset the VM password in git or document it here; refresh the
+local ignored credential source, then rerun the harness.
+
 ## `linux-kernel-lab` access
 
 The lab image is an Ubuntu cloud image with local user `emedev`, SSH keys
