@@ -8,6 +8,7 @@ or exposing secrets in git.
 | VM | Role | Non-interactive access |
 | --- | --- | --- |
 | `win11-drill` | Isolated Windows StorPort/CUDA lab | PowerShell Direct |
+| `win11-wsl2-lab` | Disposable Windows lab for WSL2 freeze campaigns | PowerShell Direct after install |
 | `linux-kernel-lab` | Generic Ubuntu/kernel build Hyper-V lab | SSH from Windows host (`emedev@<ip>`) |
 
 Do not use `gha-ubuntu-2404` for RamShared lab validation unless a task
@@ -119,6 +120,24 @@ local ignored credential source, then rerun the harness.
 Next WSL2-freeze unblock is guest WSL runtime repair or reimage to a Windows lab
 image with WSL already functional, then rerun the harness. Do not run pressure
 on the daily WSL2 desktop as a substitute.
+
+## `win11-wsl2-lab` disposable replacement
+
+When `win11-drill` is not recoverable as a WSL2 guest, create a separate lab
+instead of replacing or formatting the existing `win11-drill` disk:
+
+```bash
+pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \
+  "& 'C:\Windows\System32\sudo.exe' powershell.exe -NoProfile -ExecutionPolicy Bypass -File '\\wsl.localhost\Ubuntu-24.04\home\emdev\codespace\ramshared\scripts\windows\New-Win11Wsl2LabVm.ps1' -Start"
+```
+
+2026-07-18: `New-Win11Wsl2LabVm.ps1` created `win11-wsl2-lab` with a new
+dynamic VHD at `E:\Hyper-V\win11-wsl2-lab\Virtual Hard Disks\win11-wsl2-lab.vhdx`,
+attached the Windows 25H2 ISO and autounattend ISO, enabled nested
+virtualization, disabled checkpoints, and did not modify existing lab disks.
+The VM did not expose heartbeat/PowerShell Direct during the initial unattended
+boot window and was turned Off. Next step is console/boot-media inspection or a
+no-prompt Windows installer ISO; do not format or replace `win11-drill`.
 
 ## `linux-kernel-lab` access
 
