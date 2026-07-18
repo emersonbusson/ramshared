@@ -53,10 +53,41 @@ public static class RamSharedCtlOpen {
     }
     return [RamSharedCtlOpen]::TryOpen($Path)
 }
+function Test-ConfiguredPagingFilesConcrete {
+    try {
+        $mm = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
+        $configured = @((Get-ItemProperty -LiteralPath $mm -Name PagingFiles -EA Stop).PagingFiles)
+        $badConfigured = @()
+        foreach ($entry in $configured) {
+            $line = [string]$entry
+            if ([string]::IsNullOrWhiteSpace($line)) {
+                continue
+            }
+            $parts = @($line.Trim() -split '\s+')
+            $path = [string]$parts[0]
+            if ($path.StartsWith('?:\') -or $path -notmatch '^[A-Za-z]:\\' -or $parts.Count -lt 3) {
+                $badConfigured += $line
+            }
+        }
+        if ($badConfigured.Count -gt 0) {
+            if ($StorageOnly) {
+                Bad "Ambiguous/malformed PagingFiles entry blocks storage-only teardown: $($badConfigured -join ', ')"
+            } else {
+                Warn "Ambiguous/malformed PagingFiles entry: $($badConfigured -join ', ')"
+            }
+        } else {
+            Ok "Configured PagingFiles entries are concrete"
+        }
+    } catch {
+        if ($StorageOnly) { Bad "PagingFiles registry query failed (fail-closed): $_" }
+        else { Warn "PagingFiles registry query failed: $_" }
+    }
+}
 
 Write-Host "=== RamShared WinDrive preflight ===" -ForegroundColor Cyan
 if ($StorageOnly) {
     Write-Host "MODE=storage-only (no pagefile campaign)" -ForegroundColor Cyan
+    Test-ConfiguredPagingFilesConcrete
 }
 
 # OS

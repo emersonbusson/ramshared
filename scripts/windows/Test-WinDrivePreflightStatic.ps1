@@ -20,6 +20,9 @@ foreach ($needle in @(
     "Get-PnpDevice -PresentOnly:`$false",
     "SCSI\DISK&VEN_RAMSHARE&PROD_VRAMDISK",
     "Stale RamShared PnP disk node(s) present",
+    "Ambiguous/malformed PagingFiles entry blocks storage-only teardown",
+    "PagingFiles registry query failed (fail-closed)",
+    "StartsWith('?:\')",
     "Driver image/package mismatch",
     "Driver image matches package SHA256"
 )) {
