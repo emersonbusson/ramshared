@@ -137,7 +137,14 @@ When VRAM is shared between the Windows host and the WSL2 Linux guest, a resourc
 
 ### How Coexistence and Priority Management Work
 
-1. **WDDM / VidMm Authority:** The Windows Video Memory Manager (VidMm) is the absolute authority over GPU allocation. If a native Windows application (e.g., Blender, OBS, or a game) requests VRAM, Windows immediately demands that memory back.
+This behavior is application-agnostic. A game, a 3D tool, a video editor, or
+another GPU workload are only examples of Windows consumers. RamShared does
+not wait for a process name; it reacts to the host-authoritative WDDM budget
+and free-memory signals. Generic code, scripts, docs, and integration paths
+must be named after the role or behavior (`gpu_workload`, `dcc`, `host_agent`),
+not after one example application.
+
+1. **WDDM / VidMm Authority:** The Windows Video Memory Manager (VidMm) is the absolute authority over GPU allocation. If a native Windows GPU workload requests VRAM, Windows immediately demands that memory back.
 2. **WSL2 Active Monitoring:** The `ramshared-wsl2d` daemon constantly queries `/dev/dxg` (the Direct3D kernel interface inside WSL2) to monitor WDDM budget pressure and VRAM availability.
 3. **Triggering Eviction (DEMOTE):** 
    - When host VRAM pressure is detected (free VRAM budget drops below the safety threshold), the Linux guest triggers a **DEMOTE** loop.

@@ -53,7 +53,7 @@ Honest baseline (no custom code). Compare with Phase B: **p50 241 µs (ublk) / 3
 
 > Current measurement host: has `nbd-client` + `fio`, does **not** have `nbdkit`/`nbd-server` (`sudo apt install nbdkit` before running — preflight in script, F17).
 
-## 4. VRAM/RAM Render (native out-of-core) — `measure-render-vram.ps1` (feeds P2 gate)
+## 4. VRAM/RAM Render (native out-of-core) — `scripts/p0/measure-gpu-workload-vram.ps1` (feeds P2 gate)
 
 | Scene | GPU/VRAM | Max VRAM used (MiB) | Min RAM available (MiB) | Result (fit? spill?) | Date |
 | --- | --- | --- | --- | --- | --- |

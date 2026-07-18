@@ -1,7 +1,7 @@
 # SPEC — RamShared Memory Broker (P0 + P1 + P2)
 
 > SSDV3 STEP 2, generated from `docs/specs/no-milestone/memory-broker/PRD.md`. Slug: `memory-broker`.
-> Scope: **P0 (Measurement) + P1 (Linux-to-Linux Broker Core) + P2 (Windows Bridge + DCC Blender MVP)**.
+> Scope: **P0 (Measurement) + P1 (Linux-to-Linux Broker Core) + P2 (Windows Bridge + generic DCC/workload telemetry MVP)**.
 > Disciplines: Mandatory links to `docs/methodology/kahneman-disciplines.md` in every critical step.
 
 ## Audit Logs
@@ -69,13 +69,13 @@
   - Copiable civm runbook (`docs/runbooks/CIVM-TENANT.md`).
 
 ### Phase 2 Scope (Active)
-- **P2** — `ramshared-nvml` (FFI dlopen, RF-W1/W2); `ramshared-config` (TOML, RF-P3); Windows **DccAgent** (`ramshared-agent-win`, RF-W1); addon↔agent↔broker lease bridge (RF-W3); Blender Addon MVP (RF-W2); Windows installer (RF-P1).
+- **P2** — `ramshared-nvml` (FFI dlopen, RF-W1/W2); `ramshared-config` (TOML, RF-P3); Windows **DccAgent** (`ramshared-host-agent`, RF-W1); generic local workload↔agent↔broker lease bridge (RF-W3); Windows installer (RF-P1).
 
 ### Explicitly Out of Scope
 - RF-W4 (Interposer -> Phase 4).
 - RF-G3 (D3D12 inside WSL2 -> Phase 3 research).
 - Windows-as-swap-consumer (disk driver -> Phase 4).
-- Rewriting Blender Cycles.
+- Rewriting application engines.
 - Custom authentication/encryption (relies on private/Tailscale networks).
 - Multi-lease active concurrently (broker enforces 1 active lease at a time).
 - State persistence across broker restarts (in-memory only).
@@ -107,7 +107,7 @@
 | **RF-L3** | ITEM-9 | Linux PSI & swap automation |
 | **RF-L4** | ITEM-12 | copiable VM deployment runbook |
 | **RF-W1** | ITEM-13, ITEM-15, ITEM-16, ITEM-17 | Windows native memory pressure and NVML budget tracking |
-| **RF-W2** | ITEM-20 | Blender addon predictive engine & out-of-core orchestration |
+| **RF-W2** | ITEM-20 | Generic GPU workload telemetry and headroom recommendation |
 | **RF-W3** | ITEM-17, ITEM-18, ITEM-19 | Addon to broker lease handshake bridge |
 | **RF-P1** | ITEM-21 | Windows service wrapper and packaging |
 | **RF-P2** | ITEM-8 | NBD transport fallback mechanics |
@@ -153,7 +153,7 @@
 | **DT-32** | Windows Memory Pressure uses `GlobalMemoryStatusEx`. | Single fast system call tracking physical availability and commit limit. Rejects perfmon. |
 | **DT-33** | Hand-rolled NVML dlopen wrapper (`ramshared-nvml`). | Zero-dependency FFI. Loads `nvmlInit_v2` and `nvmlDeviceGetComputeRunningProcesses_v3`. |
 | **DT-34** | Core agent loop extracted to generic client framework. | Trait `AgentRole` abstracts away Linux-specific swap interfaces for Windows reuse. |
-| **DT-35** | Local Blender addon bridge uses distinct JSON-lines codec. | Separates internal addon queries from broker protocol frames. Bounded to 64 KiB. |
+| **DT-35** | Local DCC/workload bridge uses distinct JSON-lines codec. | Separates local workload queries from broker protocol frames. Bounded to 64 KiB. |
 | **DT-36** | DCC agents filtered out in `broker_srv::on_tick`. | Excludes non-swappable DCC tenants from swap rebalancing while preserving lease flows. |
 | **DT-37** | TOML config via `ramshared-config` (serde). | Centralizes options. CLI arguments override TOML values. |
 | **DT-38** | Graceful NVML fallback. | Missing GPU/driver falls back to CPU/RAM heuristics instead of crashing. |
@@ -209,7 +209,7 @@
 - `scripts/p0/measure-psi.sh` (collects `/proc/pressure/memory` metrics).
 - `scripts/p0/measure-net.sh` (matrice of VM-to-WSL2 latency).
 - `scripts/p0/measure-nbd-tcp.sh` (NBD/TCP raw performance tests).
-- `scripts/p0/measure-render-vram.ps1` (Windows telemetry probe for VRAM/RAM).
+- `scripts/p0/measure-gpu-workload-vram.ps1` (generic Windows telemetry probe for aggregate VRAM/RAM).
 
 ### ITEM-2 — ADR-0005
 - `docs/decisions/ADR-0005-broker-protocol-jsonl.md` (Design record for JSON-lines over TCP).
@@ -238,14 +238,15 @@
 ### ITEM-16 — `crates/ramshared-agent/src/client.rs`
 - Generic agent connection and state machine wrapper (`AgentRole` trait).
 
-### ITEM-17 — `crates/ramshared-agent/src/bin/ramshared-agent-win.rs`
+### ITEM-17 — `crates/ramshared-agent/src/bin/ramshared_host_agent.rs`
 - Windows Agent entry point executing `WinDccRole` and local bindings.
 
 ### ITEM-18 — `crates/ramshared-agent/src/local.rs`
-- Local Blender addon listener and JSON-lines codec (`LocalMsg`/`LocalReply`).
+- Local DCC/workload listener and JSON-lines codec (`LocalMsg`/`LocalReply`).
 
-### ITEM-20 — Blender Addon (`addons/ramshared_blender/`)
-- `__init__.py`, `predict.py`, `ooc.py`, `monitor.py`, `bridge.py` (Cycles integration).
+### ITEM-20 — Generic workload telemetry
+- `scripts/p0/measure-gpu-workload-vram.ps1` records aggregate VRAM/RAM for any externally launched GPU workload.
+- Host-specific adapters are explicitly deferred until requested and must not name the generic reclaim path.
 
 ---
 
@@ -296,5 +297,5 @@ Logs are printed to `stderr` in a key-value format prefixed with `[ramsharedd]` 
 2. **Crate Setup:** Create `ramshared-broker`, `ramshared-nvml`, and `ramshared-config`.
 3. **Broker Core:** Implement slices, arbiter, TCP listeners, and Named Exports negotiation.
 4. **Agent Integration:** Refactor agent main loop, implement Windows target code and metrics.
-5. **Blender Addon:** Implement Cycles out-of-core orchestration and local loopback bridge.
+5. **Generic DCC/workload telemetry:** Implement app-agnostic local bridge and aggregate workload measurement.
 6. **E2E Validation:** Run isolated QEMU crash tests and E2E remote VM simulations.

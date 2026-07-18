@@ -17,6 +17,8 @@
 | `gha-ubuntu-2404` | **V:\Hyper-V\…** | CI (optional) |
 | Host OS | **C:** | Never store lab VHD/ISO/export here |
 
+Access procedure for agents: [`HYPERV-VM-ACCESS.md`](HYPERV-VM-ACCESS.md).
+
 New VMs default: `R:\Hyper-V\VMs` + `R:\Hyper-V\VHDs` (`Set-VMHost`).
 
 ## Hard limits (applied)

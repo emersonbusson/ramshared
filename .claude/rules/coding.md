@@ -57,6 +57,21 @@ RamShared is an R&D and hardware acceleration project. Every modification and ev
 - Macros: `RAMSHARED_MAX_DEVICES` (UPPER_SNAKE_CASE)
 - Rust modules: `mod ramshared_core`
 
+## Product Naming Convention
+
+- Core components use behavior or role names, never an application name:
+  `vram_reclaim`, `gpu_budget`, `host_agent`, `broker`, and `swap_tier`.
+- Vendor and platform names are allowed only where they identify a real
+  implementation boundary, such as `ramshared-cuda`, `ramshared-dxg`, or a
+  Windows adapter.
+- Integration paths use domain roles such as `integrations/dcc/`; prefer no
+  application-specific integration directory in generic product code.
+- Application names are examples or host-compatibility data only. They must not
+  become feature names, source filenames, directories, broker policy names,
+  daemon names, reclaim policy names, or generic script names.
+- CLI/package names may use hyphens; source filenames and Rust modules use
+  `snake_case`.
+
 ## Error Handling
 
 - **C:** Never ignore return codes. Always propagate negative errno codes (e.g., `-ENOMEM`, `-EINVAL`). Clean up resources using the `goto out_err;` idiom to prevent memory leaks.
