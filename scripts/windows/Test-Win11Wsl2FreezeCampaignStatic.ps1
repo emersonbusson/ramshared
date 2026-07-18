@@ -13,6 +13,9 @@ $text = Get-Content -LiteralPath $HarnessPath -Raw
 foreach ($needle in @(
     'win11-drill',
     'PowerShell Direct',
+    'GetEnvironmentVariable("RAMSHARED_DRILL_PASSWORD", $scope)',
+    'function Invoke-GuestWithRetry',
+    'PowerShell Direct did not become ready',
     'foreach ($featureName in @("Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform"))',
     'Start-Job -ScriptBlock { wsl.exe -l -v',
     'WSL_LIST_TIMEOUT',
@@ -25,6 +28,7 @@ foreach ($needle in @(
     'STATUS=PARTIAL',
     'powershell_direct_failed',
     'wsl2_features_not_enabled',
+    'guest_wsl_runtime_unavailable',
     'guest_wsl_distro_missing'
 )) {
     if ($text -notmatch [regex]::Escape($needle)) {

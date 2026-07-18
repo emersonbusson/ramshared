@@ -87,6 +87,30 @@ pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \
 credential. Do not reset the VM password in git or document it here; refresh the
 local ignored credential source, then rerun the harness.
 
+2026-07-18 follow-up:
+
+- The local Machine `RAMSHARED_DRILL_PASSWORD` works for
+  `WIN11-DRILL\drilladmin`; do not print it and do not commit it.
+- `scripts/windows/Invoke-Win11Wsl2FreezeCampaign.ps1` now waits for
+  PowerShell Direct readiness and reads Machine/User/process/local ignored
+  credential sources without persisting the secret.
+- WSL and VirtualMachinePlatform optional features were enabled inside
+  `win11-drill`.
+- A tracked-source tarball was copied to `C:\ramshared\src` in the guest.
+- The official Microsoft WSL 2.7.10 MSI from `microsoft/WSL` releases installed
+  the Appx package, but guest `wsl.exe` still returned
+  `Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG`; removing the Appx made the stub
+  return "WSL is not installed" again. The MSIXBundle has the same package
+  identity as the MSI and was not installed over it.
+- Latest campaign artifact:
+  `C:\ramshared\artifacts\win11-wsl2-freeze-campaign-20260718-123613`,
+  `STATUS=PARTIAL`, `REASON=powershell_direct_failed` after WSL runtime repair
+  attempts.
+
+Next WSL2-freeze unblock is guest WSL runtime repair or reimage to a Windows lab
+image with WSL already functional, then rerun the harness. Do not run pressure
+on the daily WSL2 desktop as a substitute.
+
 ## `linux-kernel-lab` access
 
 The lab image is an Ubuntu cloud image with local user `emedev`, SSH keys
