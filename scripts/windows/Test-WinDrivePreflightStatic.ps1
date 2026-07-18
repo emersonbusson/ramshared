@@ -14,7 +14,10 @@ foreach ($needle in @(
     "\\.\RamSharedCtl",
     "\\.\GLOBALROOT\Device\RamSharedCtl",
     "ramshared service is RUNNING but RamSharedCtl is absent",
-    "reboot/unload/redeploy before physical Online"
+    "reboot/unload/redeploy before physical Online",
+    "Get-PnpDevice -PresentOnly:`$false",
+    "SCSI\DISK&VEN_RAMSHARE&PROD_VRAMDISK",
+    "Stale RamShared PnP disk node(s) present"
 )) {
     if ($text -notmatch [regex]::Escape($needle)) {
         throw ("control_path_fail_closed: missing " + $needle)

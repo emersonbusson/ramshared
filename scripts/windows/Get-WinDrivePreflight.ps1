@@ -131,6 +131,29 @@ try {
     Warn "Get-Disk failed: $_"
 }
 
+# Ghost/stale PnP disk nodes can survive after surprise removal even when
+# Get-Disk is clean. They poison identity checks, so storage-only preflight
+# refuses until the operator removes them or reboots.
+try {
+    $ghostDisks = @(Get-PnpDevice -PresentOnly:$false -EA SilentlyContinue | Where-Object {
+            $_.InstanceId -like 'SCSI\DISK&VEN_RAMSHARE&PROD_VRAMDISK*' -or
+            $_.FriendlyName -match 'RAMSHARE|VRAMDISK|RamShared'
+        })
+    if ($ghostDisks.Count -gt 0) {
+        $ids = @($ghostDisks | ForEach-Object { $_.InstanceId }) -join ', '
+        if ($StorageOnly) {
+            Bad "Stale RamShared PnP disk node(s) present: $ids"
+        } else {
+            Warn "Stale RamShared PnP disk node(s): $ids"
+        }
+    } else {
+        Ok "No stale RamShared PnP disk nodes"
+    }
+} catch {
+    if ($StorageOnly) { Bad "PnP ghost disk query failed (fail-closed): $_" }
+    else { Warn "PnP ghost disk query failed: $_" }
+}
+
 # Product binary / config
 if ($StorageOnly) {
     if (Test-Path -LiteralPath $ProductExe) {
