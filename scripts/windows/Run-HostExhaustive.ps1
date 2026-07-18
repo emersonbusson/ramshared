@@ -12,7 +12,10 @@ function W($m) {
 }
 
 $stop = "C:\ProgramData\RamShared\stop.request"
+$brokerStop = "C:\ProgramData\RamShared\broker-lab.stop"
+$brokerLog = "C:\ProgramData\RamShared\broker-lab.log"
 Remove-Item $stop -Force -ErrorAction SilentlyContinue
+Remove-Item $brokerStop, $brokerLog -Force -ErrorAction SilentlyContinue
 Get-Process ramshared-winsvc -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep 1
 
@@ -23,9 +26,96 @@ if ($rs -notmatch "RUNNING") {
     Start-Sleep 2
 }
 W ("ramshared running=" + ($rs -match "RUNNING"))
+$rsNow = (sc.exe query ramshared | Out-String)
+$ctlOk = $false
+foreach ($ctl in @("\\.\RamSharedCtl", "\\.\GLOBALROOT\Device\RamSharedCtl")) {
+    try {
+        if (Test-Path $ctl) { $ctlOk = $true; break }
+    } catch {}
+}
+if (($rsNow -match "RUNNING") -and -not $ctlOk) {
+    W "FAIL ramshared service RUNNING but RamSharedCtl absent; reboot/unload/redeploy before physical Online"
+    @{ HOST_ONLINE = $false; CONTROL_PATH = $false; ARTIFACT = $art } |
+        ConvertTo-Json | Set-Content (Join-Path $art "summary.json")
+    exit 1
+}
 
 $exe = "C:\ramshared\bin\ramshared-winsvc.exe"
 $cfg = "C:\ProgramData\RamShared\winsvc-product.toml"
+$cfgText = Get-Content $cfg -Raw -ErrorAction SilentlyContinue
+$brokerPort = 19876
+if ($cfgText -match 'broker\s*=\s*"127\.0\.0\.1:(\d+)"') {
+    $brokerPort = [int]$Matches[1]
+}
+
+# Minimal lab lease broker (JSONL, no BOM). This matches the guest product
+# campaign broker and keeps the physical host runner self-contained.
+$brokerScript = @'
+$ErrorActionPreference = "Continue"
+$port = [int]$env:RS_BROKER_PORT
+$log = "C:\ProgramData\RamShared\broker-lab.log"
+$utf8 = New-Object System.Text.UTF8Encoding $false
+$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $port)
+$listener.Start()
+[IO.File]::AppendAllText($log, ("listen 127.0.0.1:{0}`n" -f $port), $utf8)
+$leaseSeq = 1
+while ($true) {
+  if (Test-Path "C:\ProgramData\RamShared\broker-lab.stop") { break }
+  if (-not $listener.Pending()) { Start-Sleep -Milliseconds 50; continue }
+  $client = $listener.AcceptTcpClient()
+  $stream = $client.GetStream()
+  $reader = New-Object System.IO.StreamReader($stream, $utf8, $false, 4096, $true)
+  $writer = New-Object System.IO.StreamWriter($stream, $utf8, 4096, $true)
+  $writer.NewLine = "`n"
+  $writer.AutoFlush = $true
+  try {
+    while ($client.Connected) {
+      $line = $reader.ReadLine()
+      if ($null -eq $line) { break }
+      [IO.File]::AppendAllText($log, ("in " + $line + "`n"), $utf8)
+      try { $msg = $line | ConvertFrom-Json } catch {
+        [IO.File]::AppendAllText($log, ("parse_err " + $_.Exception.Message + "`n"), $utf8)
+        continue
+      }
+      $type = [string]$msg.type
+      if ($type -eq "register") {
+        $resp = '{"type":"registered","tenant_id":1}'
+      } elseif ($type -eq "lease_request") {
+        $bytes = [uint64]$msg.bytes
+        $id = $leaseSeq; $leaseSeq++
+        $resp = ('{{"type":"lease_granted","lease":{0},"bytes":{1}}}' -f $id, $bytes)
+      } elseif ($type -eq "lease_release") {
+        $id = [int]$msg.lease
+        [IO.File]::AppendAllText($log, ("lease {0} liberado`n" -f $id), $utf8)
+        $resp = '{"type":"ack"}'
+      } elseif ($type -eq "psi" -or $type -eq "status") {
+        $resp = '{"type":"ack"}'
+      } else {
+        $resp = ('{{"type":"error","reason":"unknown {0}"}}' -f $type)
+      }
+      $writer.WriteLine($resp)
+      [IO.File]::AppendAllText($log, ("out " + $resp + "`n"), $utf8)
+    }
+  } catch {
+    [IO.File]::AppendAllText($log, ("err " + $_.Exception.Message + "`n"), $utf8)
+  } finally {
+    try { $reader.Close() } catch {}
+    try { $writer.Close() } catch {}
+    try { $client.Close() } catch {}
+  }
+}
+try { $listener.Stop() } catch {}
+[IO.File]::AppendAllText($log, "stop`n", $utf8)
+'@
+$brokerPath = Join-Path $art "Lab-LeaseBroker.ps1"
+Set-Content -Encoding ascii $brokerPath -Value $brokerScript
+$env:RS_BROKER_PORT = "$brokerPort"
+$bp = Start-Process -FilePath powershell.exe -ArgumentList @(
+    "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $brokerPath
+) -PassThru -WindowStyle Hidden
+W ("started broker pid=" + $bp.Id + " port=" + $brokerPort)
+Start-Sleep 1
+
 $out = Join-Path $art "console.out"
 $err = Join-Path $art "console.err"
 $p = Start-Process -FilePath $exe -ArgumentList @("console", "--storage-only", "--config", $cfg) `
@@ -37,13 +127,17 @@ for ($i = 0; $i -lt 90; $i++) {
     Start-Sleep 1
     $txt = ""
     if (Test-Path $err) { $txt = Get-Content $err -Raw -ErrorAction SilentlyContinue }
-    if ($txt -match "product Online") { $online = $true; W "ONLINE seen"; break }
+    if ($txt -match "product Online:") { $online = $true; W "ONLINE seen"; break }
     if ($p.HasExited) { W ("exited early code=" + $p.ExitCode); break }
 }
 if (-not $online) {
     W "FAIL no Online"
     if (Test-Path $err) { Get-Content $err | Select-Object -Last 40 | ForEach-Object { W $_ } }
     @{ HOST_ONLINE = $false; ARTIFACT = $art } | ConvertTo-Json | Set-Content (Join-Path $art "summary.json")
+    New-Item -ItemType File -Path $brokerStop -Force | Out-Null
+    Start-Sleep 1
+    if ($bp -and -not $bp.HasExited) { Stop-Process -Id $bp.Id -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $brokerLog) { Copy-Item $brokerLog (Join-Path $art "broker-lab.log") -Force }
     exit 1
 }
 
@@ -58,6 +152,10 @@ for ($i = 0; $i -lt 40; $i++) {
 if (-not $disk) {
     W "FAIL no RAMSHARE disk"
     New-Item -ItemType File -Path $stop -Force | Out-Null
+    New-Item -ItemType File -Path $brokerStop -Force | Out-Null
+    Start-Sleep 1
+    if ($bp -and -not $bp.HasExited) { Stop-Process -Id $bp.Id -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $brokerLog) { Copy-Item $brokerLog (Join-Path $art "broker-lab.log") -Force }
     exit 1
 }
 W ("disk=N=" + $disk.Number + " Name=" + $disk.FriendlyName + " (RAMSHARE only)")
@@ -142,6 +240,22 @@ $ev = Get-ChildItem C:\ProgramData\RamShared\evidence\run-*.jsonl -ErrorAction S
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if ($ev) { Copy-Item $ev.FullName (Join-Path $art $ev.Name); W ("evidence=" + $ev.FullName) }
 if (Test-Path $err) { Copy-Item $err (Join-Path $art "console.err.copy") -Force }
+New-Item -ItemType File -Path $brokerStop -Force | Out-Null
+Start-Sleep 1
+if ($bp -and -not $bp.HasExited) { Stop-Process -Id $bp.Id -Force -ErrorAction SilentlyContinue }
+if (Test-Path $brokerLog) { Copy-Item $brokerLog (Join-Path $art "broker-lab.log") -Force }
+$brokerTail = ""
+if (Test-Path (Join-Path $art "broker-lab.log")) {
+    $brokerTail = [string](Get-Content (Join-Path $art "broker-lab.log") -Raw -ErrorAction SilentlyContinue)
+    if ($brokerTail.Length -gt 4000) { $brokerTail = $brokerTail.Substring($brokerTail.Length - 4000) }
+}
+$leaseReleased = $false
+if (Test-Path $err) {
+    $errText = [string](Get-Content $err -Raw -ErrorAction SilentlyContinue)
+    if ($errText -match "lease=(\d+)") {
+        $leaseReleased = $brokerTail -match ("lease " + $Matches[1] + " liberado")
+    }
+}
 
 # Post-check: RAMSHARE disk should be gone after clean destroy
 Start-Sleep 2
@@ -157,8 +271,9 @@ $sum = [ordered]@{
     EXIT        = $exitCode
     ROUNDS      = $rounds.Count
     LUN_GONE    = ($left.Count -eq 0)
+    LEASE_RELEASED = [bool]$leaseReleased
 }
 $sum | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $art "summary.json")
 W ("SUMMARY " + ($sum | ConvertTo-Json -Compress))
 Write-Host ("ARTIFACT=" + $art)
-if ($online -and $all -and $stopped -and $exitCode -eq 0) { exit 0 } else { exit 2 }
+if ($online -and $all -and $stopped -and $exitCode -eq 0 -and $leaseReleased) { exit 0 } else { exit 2 }
