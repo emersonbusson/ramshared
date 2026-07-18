@@ -2,8 +2,9 @@
 
 ## Status
 
-**OPEN.** The 64 MiB Windows StorPort campaign is only a low-risk storage smoke. It does
-not close VRAM reclaim behavior for GiB-scale shared GPU pressure.
+**PARTIAL.** The 64 MiB Windows StorPort campaign is only a low-risk storage smoke. A
+3 GiB Windows storage-only LUN passed on 2026-07-18, but simultaneous external GPU
+pressure and WSL2/split-owner reclaim remain open.
 
 ## Goal
 
@@ -33,6 +34,15 @@ pressure.
   explicit size, and explicit approval.
 - WSL2 pressure runs require an isolated lab or an explicit shared-desktop override. Daily
   WSL2 must remain read-only/dry-run.
+
+## Current Evidence
+
+- 2026-07-18 `C:\ramshared\artifacts\exhaustive-20260718-003148`: Windows 3 GiB
+  storage-only LUN passed with three SHA rounds, graceful teardown, lease release, no
+  residual `Get-Disk`/`Win32_DiskDrive`/PnP nodes, and post-run preflight PASS.
+- 2026-07-18 `C:\ramshared\artifacts\vram-reclaim-matrix-windows3gib-run-20260718`:
+  simultaneous Windows 3 GiB + 1 GiB external workload refused safely because free VRAM
+  was 5150 MiB for a 5120 MiB plan plus required 256 MiB operational margin.
 
 ## Open Questions
 

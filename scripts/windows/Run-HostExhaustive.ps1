@@ -1,6 +1,14 @@
 #Requires -Version 5.1
 # Careful host campaign: Online + 3-round SHA + graceful stop.
 # ONLY formats the RAMSHARE VRAMDISK LUN. Drive letter fixed to S (config).
+[CmdletBinding()]
+param(
+    [UInt64]$SizeBytes = 67108864,
+    [int]$ExternalWorkloadMiB = 0,
+    [int]$ExternalWorkloadHoldSec = 20,
+    [int]$MinFreeAfterPlanMiB = 256
+)
+
 $ErrorActionPreference = "Continue"
 $PreferredLetter = "S"
 $art = "C:\ramshared\artifacts\exhaustive-$(Get-Date -Format yyyyMMdd-HHmmss)"
@@ -33,6 +41,14 @@ public static class RamSharedCtlOpen {
 '@
     }
     return [RamSharedCtlOpen]::TryOpen($Path)
+}
+function Read-GpuFreeMiB {
+    try {
+        $line = & nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>$null |
+            Select-Object -First 1
+        if ($line) { return [int]$line.Trim() }
+    } catch {}
+    return 0
 }
 
 $stop = "C:\ProgramData\RamShared\stop.request"
@@ -75,6 +91,25 @@ if (($rsNow -match "RUNNING") -and -not $ctlOk) {
 $exe = "C:\ramshared\bin\ramshared-winsvc.exe"
 $cfg = "C:\ProgramData\RamShared\winsvc-product.toml"
 $cfgText = Get-Content $cfg -Raw -ErrorAction SilentlyContinue
+$plannedMiB = [int][Math]::Ceiling(([double]$SizeBytes / 1MB)) + $ExternalWorkloadMiB + $MinFreeAfterPlanMiB
+$freeBeforeMiB = Read-GpuFreeMiB
+W ("plan size_bytes={0} external_workload_mib={1} min_free_after_plan_mib={2} gpu_free_before_mib={3}" -f
+    $SizeBytes, $ExternalWorkloadMiB, $MinFreeAfterPlanMiB, $freeBeforeMiB)
+if ($freeBeforeMiB -gt 0 -and $plannedMiB -gt $freeBeforeMiB) {
+    W ("FAIL insufficient VRAM headroom: need_mib={0} free_mib={1}" -f $plannedMiB, $freeBeforeMiB)
+    @{ HOST_ONLINE = $false; HEADROOM = $false; ARTIFACT = $art; SIZE_BYTES = $SizeBytes } |
+        ConvertTo-Json | Set-Content (Join-Path $art "summary.json")
+    exit 1
+}
+$cfgRun = Join-Path $art "winsvc-run.toml"
+if ($cfgText -match '(?m)^size_bytes\s*=') {
+    $cfgText = $cfgText -replace '(?m)^size_bytes\s*=.*$', ("size_bytes = " + $SizeBytes)
+} else {
+    $cfgText = "[win_drive]`nsize_bytes = $SizeBytes`n" + $cfgText
+}
+Set-Content -Encoding ascii -Path $cfgRun -Value $cfgText
+$cfg = $cfgRun
+W ("run config=" + $cfg)
 $brokerPort = 19876
 if ($cfgText -match 'broker\s*=\s*"127\.0\.0\.1:(\d+)"') {
     $brokerPort = [int]$Matches[1]
@@ -176,7 +211,7 @@ if (-not $online) {
 $disk = $null
 for ($i = 0; $i -lt 40; $i++) {
     $disk = Get-Disk | Where-Object {
-        $_.FriendlyName -match "RAMSHARE|VRAMDISK" -and $_.Size -eq 67108864
+        $_.FriendlyName -match "RAMSHARE|VRAMDISK" -and $_.Size -eq $SizeBytes
     } | Select-Object -First 1
     if ($disk) { break }
     Start-Sleep 1
@@ -192,7 +227,7 @@ if (-not $disk) {
 }
 W ("disk=N=" + $disk.Number + " Name=" + $disk.FriendlyName + " (RAMSHARE only)")
 $diskNameOk = ([string]$disk.FriendlyName) -match '^RAMSHARE\s+VRAMDISK$'
-$diskSizeOk = ([uint64]$disk.Size -eq 67108864)
+$diskSizeOk = ([uint64]$disk.Size -eq $SizeBytes)
 $diskNumberOk = ([int]$disk.Number -ne 0)
 $diskBootSystem = [bool]$disk.IsBoot -or [bool]$disk.IsSystem
 if (-not ($diskNameOk -and $diskSizeOk -and $diskNumberOk) -or $diskBootSystem) {
@@ -245,6 +280,39 @@ if ($part) {
         W ("formatted letter=" + $letter + " on disk " + $disk.Number + " only")
     } catch {
         W ("format err: " + $_.Exception.Message)
+    }
+}
+
+$externalOk = $true
+if ($ExternalWorkloadMiB -gt 0) {
+    $workload = "C:\ramshared\src\scripts\p0\Start-CudaVramWorkload.ps1"
+    if (-not (Test-Path $workload)) {
+        $workload = "C:\ramshared\scripts\p0\Start-CudaVramWorkload.ps1"
+    }
+    if (-not (Test-Path $workload)) {
+        W "FAIL external workload script missing"
+        $externalOk = $false
+    } else {
+        $wo = Join-Path $art "external-workload.out"
+        $we = Join-Path $art "external-workload.err"
+        W ("external workload start mib=" + $ExternalWorkloadMiB)
+        $wp = Start-Process -FilePath powershell.exe -ArgumentList @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $workload,
+            "-MiB", "$ExternalWorkloadMiB", "-HoldSec", "$ExternalWorkloadHoldSec"
+        ) -PassThru -WindowStyle Hidden -RedirectStandardOutput $wo -RedirectStandardError $we
+        $wp.WaitForExit(($ExternalWorkloadHoldSec + 20) * 1000)
+        $wp.Refresh()
+        if (-not $wp.HasExited) {
+            W "FAIL external workload timeout"
+            Stop-Process -Id $wp.Id -Force -ErrorAction SilentlyContinue
+            $externalOk = $false
+        } elseif ($wp.ExitCode -ne 0) {
+            W ("FAIL external workload exit=" + $wp.ExitCode)
+            if (Test-Path $we) { Get-Content $we -Tail 20 | ForEach-Object { W ("external err: " + $_) } }
+            $externalOk = $false
+        } else {
+            W "external workload OK"
+        }
     }
 }
 
@@ -353,6 +421,8 @@ $sum = [ordered]@{
     ARTIFACT    = $art
     EXIT        = $exitCode
     ROUNDS      = $rounds.Count
+    SIZE_BYTES  = $SizeBytes
+    EXTERNAL_WORKLOAD_OK = [bool]$externalOk
     LUN_GONE    = ($left.Count -eq 0)
     WIN32_GONE  = ($win32Left.Count -eq 0)
     PNP_GONE    = ($pnpLeft.Count -eq 0)
@@ -361,7 +431,7 @@ $sum = [ordered]@{
 $sum | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $art "summary.json")
 W ("SUMMARY " + ($sum | ConvertTo-Json -Compress))
 Write-Host ("ARTIFACT=" + $art)
-if ($online -and $all -and $stopped -and $exitCode -eq 0 -and $leaseReleased -and
+if ($online -and $all -and $externalOk -and $stopped -and $exitCode -eq 0 -and $leaseReleased -and
     $left.Count -eq 0 -and $win32Left.Count -eq 0 -and $pnpLeft.Count -eq 0) {
     exit 0
 } else {

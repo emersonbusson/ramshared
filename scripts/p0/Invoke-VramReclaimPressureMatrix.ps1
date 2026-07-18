@@ -102,6 +102,20 @@ foreach ($c in $cases) {
         L "RUN windows-smoke via Run-HostExhaustive.ps1"
         & (Join-Path $PSScriptRoot "..\windows\Run-HostExhaustive.ps1")
         if ($LASTEXITCODE -ne 0) { throw "windows-smoke failed exit=$LASTEXITCODE" }
+    } elseif ($c.case -eq "windows-3gib") {
+        $needed = [int]$c.windows_lun_mib + [int]$c.external_gpu_workload_mib + $ReserveMiB
+        $gpuNow = Read-Gpu
+        if (($needed + 256) -gt $gpuNow.free_mib) {
+            throw ("Refusing windows-3gib: free VRAM {0}MiB < planned {1}MiB + 256MiB margin" -f
+                $gpuNow.free_mib, $needed)
+        }
+        L "RUN windows-3gib via Run-HostExhaustive.ps1 with external workload"
+        & (Join-Path $PSScriptRoot "..\windows\Run-HostExhaustive.ps1") `
+            -SizeBytes ([uint64]$c.windows_lun_mib * 1MB) `
+            -ExternalWorkloadMiB ([int]$c.external_gpu_workload_mib) `
+            -ExternalWorkloadHoldSec 20 `
+            -MinFreeAfterPlanMiB ($ReserveMiB + 256)
+        if ($LASTEXITCODE -ne 0) { throw "windows-3gib failed exit=$LASTEXITCODE" }
     } elseif ($c.case -like "wsl2-*") {
         if (-not $ApproveSharedDesktopWsl) {
             throw "Refusing $($c.case): WSL2 pressure requires isolated lab or -ApproveSharedDesktopWsl"
