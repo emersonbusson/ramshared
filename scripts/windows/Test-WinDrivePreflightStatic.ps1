@@ -17,7 +17,9 @@ foreach ($needle in @(
     "reboot/unload/redeploy before physical Online",
     "Get-PnpDevice -PresentOnly:`$false",
     "SCSI\DISK&VEN_RAMSHARE&PROD_VRAMDISK",
-    "Stale RamShared PnP disk node(s) present"
+    "Stale RamShared PnP disk node(s) present",
+    "Driver image/package mismatch",
+    "Driver image matches package SHA256"
 )) {
     if ($text -notmatch [regex]::Escape($needle)) {
         throw ("control_path_fail_closed: missing " + $needle)

@@ -20,7 +20,14 @@ foreach ($needle in @(
     "LEASE_RELEASED",
     "\\.\RamSharedCtl",
     "\\.\GLOBALROOT\Device\RamSharedCtl",
-    "ramshared service RUNNING but RamSharedCtl absent"
+    "ramshared service RUNNING but RamSharedCtl absent",
+    "disk identity refused before format/write",
+    "^RAMSHARE\s+VRAMDISK$",
+    "IsBoot",
+    "IsSystem",
+    "existing letter refused before write",
+    "RAMSHARED",
+    "refuse non-raw RAMSHARE disk without mounted RAMSHARED volume"
 )) {
     if ($text -notmatch [regex]::Escape($needle)) {
         throw ("host_broker_required: missing " + $needle)
@@ -41,6 +48,15 @@ if ($text -notmatch 'Copy-Item \$brokerLog \(Join-Path \$art "broker-lab.log"\)'
 }
 if ($text -match 'Stop-Process -Id \$p\.Id -Force[^\r\n]*exit 0') {
     throw "force_kill_cannot_pass: force-killed product must not be a passing path"
+}
+if ($text -match 'Format-Volume\s+-DriveLetter') {
+    throw "format_by_letter_forbidden: host harness must format the partition object, not a free letter"
+}
+if ($text -notmatch '\$np \| Format-Volume') {
+    throw "format_partition_object_required: host harness must pipe New-Partition result into Format-Volume"
+}
+if ($text -notmatch '\[int\]\$disk\.Number -ne 0') {
+    throw "disk_zero_forbidden: host harness must refuse disk 0 before format/write"
 }
 
 Write-Output "PASS Test-HostExhaustiveStatic"

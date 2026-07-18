@@ -196,6 +196,18 @@ foreach ($s in $sys) {
 if (-not $drv) {
     Warn "ramshared.sys not found in default paths (build/sign/deploy first)"
 }
+if ($StorageOnly -and
+    $serviceImage -and
+    (Test-Path -LiteralPath $serviceImage) -and
+    (Test-Path "C:\ramshared\package\ramshared.sys")) {
+    $serviceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $serviceImage).Hash
+    $packageHash = (Get-FileHash -Algorithm SHA256 -LiteralPath "C:\ramshared\package\ramshared.sys").Hash
+    if ($serviceHash -eq $packageHash) {
+        Ok "Driver image matches package SHA256=$serviceHash"
+    } else {
+        Bad "Driver image/package mismatch: service=$serviceHash package=$packageHash"
+    }
+}
 
 # Loaded miniport health. A running service without the control device means a
 # previous PnP/remove path left the physical host in a stale loaded state; fail
