@@ -2458,3 +2458,25 @@ git diff --check
 - Gap register state: **5** current open gates and **4** closed session gaps.
 **Verdict:** ✅ Open environment-bound gates are now protected by a repeatable
 schema gate, not just prose.
+
+## 2026-07-17 23:05 -03 — P0 workload wording cleanup
+
+**What:** Updated `docs/reliability/memory-broker-p0-results.md` to remove stale
+render/tester-specific wording and placeholder cells. The remaining open P0
+measurement now uses app-agnostic external GPU workload terminology aligned
+with `Invoke-GpuWorkloadGate.ps1`.
+**Category:** documentation
+**How to measure:**
+```bash
+rg -n "render|Render|Alex|PENDING|scene|failed" docs/reliability/memory-broker-p0-results.md
+./scripts/docs-check.sh
+node tools/ci/check-validation-schema.mjs --all
+git diff --check
+```
+**Measured data:**
+- Stale wording scan: **0** matches.
+- `./scripts/docs-check.sh`: **PASS**.
+- `node tools/ci/check-validation-schema.mjs --all`: **PASS**.
+- `git diff --check`: **PASS**.
+**Verdict:** ✅ P0 workload docs now match the generic naming policy and the
+remaining workload measurement stays explicit as unmeasured, not app-specific.
