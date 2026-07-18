@@ -40,6 +40,8 @@ freeze campaign are not claimed on the shared desktop.
 - `./scripts/kernel/qemu-ublk-daemon.sh`: PASS (`KTEST-BINARY-MATCH=ok`, `KTEST-SERVED=ok`, `KTEST-TERMINATED=ok`, `KTEST-DEVICE-REMOVED=ok`).
 - `scripts/p0/measure-gpu-workload-vram.ps1` PowerShell parser: PASS.
 - `scripts/p0/Invoke-GpuWorkloadGate.ps1` PowerShell parser: PASS.
+- `scripts/p0/Start-CudaVramWorkload.ps1` PowerShell parser: PASS; live smoke 128 MiB for 3 s: PASS.
+- `scripts/p0/Invoke-GpuWorkloadGate.ps1` with generic CUDA workload 1024 MiB for 35 s: PASS on RTX 2060 (idle peak 1525 MiB, loaded peak 2648 MiB, recovery peak 1540 MiB).
 - `cargo test -p ramshared-cli --all-targets`: PASS, including `diagnose` JSONL summaries.
 - `git diff --check`: PASS.
 

@@ -106,9 +106,12 @@ ssh.exe emedev@<ip>
 ```
 
 2026-07-17 live probe: `Get-VMNetworkAdapter.IPAddresses` was empty, but ARP
-resolved MAC `00-15-5D-00-FA-04` to `172.23.18.42`; SSH from Windows returned
+resolved the VM MAC through `Get-NetNeighbor`; SSH from Windows returned
 hostname `linux-kernel-lab`, kernel `6.8.0-134-generic`, `cloud-init` status
-`done`, and `sudo -n` succeeded.
+`done`, and `sudo -n` succeeded. The same probe found `/dev/ublk-control`
+absent; `sudo -n modprobe ublk_drv` failed because the module is not present
+under `/lib/modules/6.8.0-134-generic`. This VM is currently an access/build
+lab, not proof of the custom-kernel/ublk product transport.
 
 Documented GUI fallback:
 
