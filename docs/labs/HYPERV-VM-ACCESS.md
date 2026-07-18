@@ -14,6 +14,31 @@ or exposing secrets in git.
 Do not use `gha-ubuntu-2404` for RamShared lab validation unless a task
 explicitly names it.
 
+## VM inventory policy
+
+The approved RamShared lab inventory is closed:
+
+- `win11-drill`
+- `win11-wsl2-lab`
+- `linux-kernel-lab`
+
+Do not create additional VMs for RamShared validation without explicit user
+approval in the current conversation. Prefer repairing or using one of the
+existing lab VMs. If a disposable Windows WSL2 surface is needed, use the
+existing `win11-wsl2-lab`; do not create `win11-wsl2-lab-2`, clones, or
+replacement VMs.
+
+The reason `win11-wsl2-lab` exists is historical and specific: `win11-drill`
+already existed, but its guest WSL runtime was not usable for the freeze
+campaign, while `linux-kernel-lab` is a Linux VM and cannot prove Windows guest
+WSL2 behavior. `win11-wsl2-lab` was created as the one disposable Windows WSL2
+lab so agents would not repair-by-reformatting `win11-drill` or pressure the
+daily desktop WSL2 instance.
+
+Disk safety rule: never format, replace, or attach a host disk or an existing
+lab VHD as a workaround. Only operate on the VHD already owned by the selected
+lab VM, and only through the documented harness for that VM.
+
 ## Secrets policy
 
 - The Windows guest password is not documented here and must not be committed.
@@ -123,21 +148,26 @@ on the daily WSL2 desktop as a substitute.
 
 ## `win11-wsl2-lab` disposable replacement
 
-When `win11-drill` is not recoverable as a WSL2 guest, create a separate lab
-instead of replacing or formatting the existing `win11-drill` disk:
+Historical creation command for context only. Do not run this again unless the
+user explicitly approves creating a new VM in the current conversation. When
+`win11-drill` is not recoverable as a WSL2 guest, use the already-created
+`win11-wsl2-lab` instead of replacing or formatting the existing `win11-drill`
+disk:
 
 ```bash
 pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \
   "& 'C:\Windows\System32\sudo.exe' powershell.exe -NoProfile -ExecutionPolicy Bypass -File '\\wsl.localhost\Ubuntu-24.04\home\emdev\codespace\ramshared\scripts\windows\New-Win11Wsl2LabVm.ps1' -Start"
 ```
 
-2026-07-18: `New-Win11Wsl2LabVm.ps1` created `win11-wsl2-lab` with a new
+2026-07-18: `New-Win11Wsl2LabVm.ps1` created the single disposable VM
+`win11-wsl2-lab` with a new
 dynamic VHD at `E:\Hyper-V\win11-wsl2-lab\Virtual Hard Disks\win11-wsl2-lab.vhdx`,
 attached the Windows 25H2 ISO and autounattend ISO, enabled nested
 virtualization, disabled checkpoints, and did not modify existing lab disks.
 The VM did not expose heartbeat/PowerShell Direct during the initial unattended
 boot window and was turned Off. Next step is console/boot-media inspection or a
-no-prompt Windows installer ISO; do not format or replace `win11-drill`.
+no-prompt Windows installer ISO on this same VM; do not create another VM, and
+do not format or replace `win11-drill`.
 
 No-prompt ISO path:
 
@@ -149,9 +179,10 @@ pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \
 2026-07-18 inspection found both Windows ISOs contain
 `efi\microsoft\boot\efisys_noprompt.bin`, and the small
 `win11-autounattend.iso` contains `Autounattend.xml`. `New-WindowsNoPromptIso.ps1`
-is ready, but the host currently lacks `oscdimg.exe`; install Windows ADK
-Deployment Tools or pass `-Oscdimg` before generating the combined no-prompt
-autounattend ISO.
+is ready. Later the host installed official Windows ADK Deployment Tools and
+generated `E:\Hyper-V\iso\Win11_25H2_English_x64_v2_noprompt_unattend.iso`;
+the existing `win11-wsl2-lab` DVD now points at that ISO. All three approved lab
+VMs were returned to Off after the audit.
 
 ## `linux-kernel-lab` access
 
@@ -227,5 +258,5 @@ requires leaving one running:
 
 ```bash
 ./scripts/windows/wsl-elevated-ps.sh -NoProfile -ExecutionPolicy Bypass -Command \
-  "Get-VM -Name win11-drill,linux-kernel-lab | Select Name,State"
+  "Get-VM -Name win11-drill,win11-wsl2-lab,linux-kernel-lab | Select Name,State"
 ```
