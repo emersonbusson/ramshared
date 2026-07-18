@@ -43,6 +43,12 @@ host disk, the real Windows system volume, the real WSL2 storage, or a VHD owned
 by a different VM as a workaround. Only operate on the VHD already owned by the
 selected lab VM, and record the action/artifacts.
 
+These lab VMs live on slower host storage than an SSD-backed lab. Treat install,
+first boot, Windows Update, WSL install, and PowerShell Direct readiness as
+slow-path operations. Do not classify a lab boot as failed from a short wait:
+use long bounded waits, progress logs, and the harness defaults before marking a
+campaign `PARTIAL`.
+
 ## Secrets policy
 
 - The Windows guest password is not documented here and must not be committed.
@@ -188,6 +194,13 @@ is ready. Later the host installed official Windows ADK Deployment Tools and
 generated `E:\Hyper-V\iso\Win11_25H2_English_x64_v2_noprompt_unattend.iso`;
 the existing `win11-wsl2-lab` DVD now points at that ISO. All three approved lab
 VMs were returned to Off after the audit.
+
+2026-07-18 follow-up: with the no-prompt ISO attached, `win11-wsl2-lab` was
+started and observed for 20 minutes. Hyper-V reported `Running`, but heartbeat
+and key-value pair integration services stayed `Sem Contato` for the full
+window. The VM was turned Off. Next step is console/firmware/boot-media
+inspection on this same VM, or reinstalling this VM's own VHD if the installer
+state is invalid. Do not create another VM.
 
 ## `linux-kernel-lab` access
 

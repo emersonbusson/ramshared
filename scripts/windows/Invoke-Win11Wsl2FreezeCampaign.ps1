@@ -22,7 +22,7 @@ param(
     [string]$GuestRepo = "C:\ramshared\src",
     [string]$GuestDistro = "",
     [string]$ArtifactRoot = "C:\ramshared\artifacts",
-    [int]$PsDirectReadyTimeoutSec = 180,
+    [int]$PsDirectReadyTimeoutSec = 900,
     [int]$PsDirectRetrySec = 10,
     [switch]$Start,
     [switch]$Run
