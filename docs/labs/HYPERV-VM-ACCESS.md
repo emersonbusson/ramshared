@@ -102,6 +102,9 @@ local ignored credential source, then rerun the harness.
   `Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG`; removing the Appx made the stub
   return "WSL is not installed" again. The MSIXBundle has the same package
   identity as the MSI and was not installed over it.
+- A later `wsl.exe --install --web-download --no-distribution` and
+  `wsl.exe --update --web-download` attempt still returned "WSL is not
+  installed" from the inbox stub.
 - Latest campaign artifact:
   `C:\ramshared\artifacts\win11-wsl2-freeze-campaign-20260718-123613`,
   `STATUS=PARTIAL`, `REASON=powershell_direct_failed` after WSL runtime repair
