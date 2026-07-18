@@ -243,6 +243,12 @@ Get-VMHardDiskDrive -VMName win11-wsl2-lab | Select VMName,Path
   Harness probe artifact after timeout hardening:
   `C:\ramshared\artifacts\win11-wsl-runtime-probe-20260718-194130`,
   `STATUS=PARTIAL`, `REASON=guest_wsl_runtime_unavailable`.
+- Follow-up repair attempt: the existing VM was changed to 4 GiB fixed memory
+  with nested virtualization still exposed, `Microsoft-Hyper-V-All` was enabled
+  inside the guest, and WSL 2.7.10 was removed/reinstalled from a verified
+  MSIXBundle. The package installed cleanly, but the next runtime probe still
+  did not complete normally and PowerShell Direct broke during cleanup. The VM
+  was turned Off from the host. Do not repeat this as if it were untried.
 
 Current unblock for the WSL2 freeze campaign is WSL runtime initialization
 inside this existing guest, not VM creation, not HDD speed, and not daily WSL2
