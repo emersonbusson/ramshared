@@ -6,9 +6,11 @@
 two passing isolated-lab rounds from a real WSL2 environment that is not the
 daily desktop.
 
-2026-07-18 dry-run baseline on the daily WSL2 host stayed `NOT_CLAIMED` and
-refused action with `daily_host_refused_without_isolated_lab_flag` plus
-`recent_oom_marker`. OOM markers are explicit blockers for campaign closure.
+2026-07-18 dry-run baseline on the daily WSL2 host stayed `NOT_CLAIMED`.
+The OOM gate now uses `RAMSHARED_FREEZE_RECENT_DMESG_SEC` (default 1800s)
+instead of raw dmesg tail membership; `/tmp/ramshared-wsl2-freeze-windowed-1784385445`
+reported `oom_hits=0` and refused action only because this is still the daily
+WSL2 desktop.
 
 ## Implemented
 

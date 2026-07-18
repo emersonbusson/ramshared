@@ -32,6 +32,7 @@ RUN_ISOLATED=0
 ARTIFACT_DIR=""
 ROUNDS=2
 WATCHDOG_SEC="${RAMSHARED_FREEZE_WATCHDOG_SEC:-120}"
+RECENT_DMESG_SEC="${RAMSHARED_FREEZE_RECENT_DMESG_SEC:-1800}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -111,12 +112,32 @@ if [[ -r /proc/stat ]]; then
   # procs_blocked is a coarse D-state proxy on Linux.
   d_state_count="$(awk '/^procs_blocked/ {print $2+0}' /proc/stat 2>/dev/null || echo 0)"
 fi
+
+recent_dmesg_matches() {
+  local pattern="$1"
+  local window_sec="$2"
+  local uptime_sec
+  uptime_sec="$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0)"
+  dmesg 2>/dev/null | awk -v pattern="$pattern" -v now="$uptime_sec" -v window="$window_sec" '
+    BEGIN { IGNORECASE = 1; cutoff = now - window }
+    {
+      ts = -1
+      if (match($0, /^\[[[:space:]]*([0-9]+)(\.[0-9]+)?\]/, m)) {
+        ts = m[1] + 0
+      }
+      if ($0 ~ pattern && (ts < 0 || ts >= cutoff)) {
+        print
+      }
+    }
+  '
+}
+
 hung_task_hits=0
-if dmesg 2>/dev/null | tail -n 200 | grep -qiE 'hung_task|Blocked for more than'; then
+if recent_dmesg_matches 'hung_task|Blocked for more than' "$RECENT_DMESG_SEC" | grep -qi .; then
   hung_task_hits=1
 fi
 oom_hits=0
-if dmesg 2>/dev/null | tail -n 200 | grep -qiE 'Out of memory|Memory cgroup out of memory|Killed process'; then
+if recent_dmesg_matches 'Out of memory|Memory cgroup out of memory|Killed process' "$RECENT_DMESG_SEC" | grep -qi .; then
   oom_hits=1
 fi
 
@@ -167,11 +188,11 @@ reason_csv="$(IFS=,; echo "${reasons[*]-}")"
 
 emit_summary() {
   if [[ "$JSON" -eq 1 ]]; then
-    printf '{"ts":"%s","mode":"%s","host":"%s","daily_host":%s,"ghost":%s,"binary_match":"%s","used_kib":%s,"has_deleted_swap":%s,"d_state":%s,"hung_task_hits":%s,"oom_hits":%s,"gates_ok":%s,"reasons":"%s","health":%s,"claim":"NOT_CLAIMED"}\n' \
+    printf '{"ts":"%s","mode":"%s","host":"%s","daily_host":%s,"ghost":%s,"binary_match":"%s","used_kib":%s,"has_deleted_swap":%s,"d_state":%s,"hung_task_hits":%s,"oom_hits":%s,"recent_dmesg_sec":%s,"gates_ok":%s,"reasons":"%s","health":%s,"claim":"NOT_CLAIMED"}\n' \
       "$ts" "$MODE" "$hostname_s" \
       "$([[ $is_daily_host -eq 1 ]] && echo true || echo false)" \
       "$ghost" "$binary_match" "$used_total" "$has_deleted_swap" \
-      "$d_state_count" "$hung_task_hits" "$oom_hits" \
+      "$d_state_count" "$hung_task_hits" "$oom_hits" "$RECENT_DMESG_SEC" \
       "$([[ $gates_ok -eq 1 ]] && echo true || echo false)" \
       "$reason_csv" "$health_json"
   else
@@ -189,6 +210,7 @@ emit_summary() {
     echo "d_state:       $d_state_count"
     echo "hung_task:     $hung_task_hits"
     echo "oom_hits:      $oom_hits"
+    echo "recent_dmesg_sec: $RECENT_DMESG_SEC"
     echo "gates_ok:      $gates_ok"
     if [[ ${#reasons[@]} -gt 0 ]]; then
       echo "refuse_reasons:"
@@ -225,8 +247,8 @@ capture_phase() {
     awk '/^procs_blocked/ {print}' /proc/stat 2>/dev/null || true
     echo "=== ramsharedd ==="
     pgrep -a -x ramsharedd 2>/dev/null || echo "(none)"
-    echo "=== dmesg tail (hung_task filter) ==="
-    dmesg 2>/dev/null | tail -n 100 | grep -iE 'hung_task|Blocked for more than|Out of memory|ublk|nbd' || echo "(no hits)"
+    echo "=== dmesg recent fault filter (${RECENT_DMESG_SEC}s) ==="
+    recent_dmesg_matches 'hung_task|Blocked for more than|Out of memory|Memory cgroup out of memory|Killed process|ublk|nbd' "$RECENT_DMESG_SEC" || echo "(no hits)"
   } >"$dir/${label}.txt"
   if [[ -x "$ROOT/scripts/safety/cascade-health.sh" ]]; then
     "$ROOT/scripts/safety/cascade-health.sh" --once >"$dir/${label}-health.json" 2>/dev/null || echo '{}' >"$dir/${label}-health.json"
@@ -242,11 +264,11 @@ fi
 # Always capture a read-only baseline (safe on daily host).
 capture_phase "$ARTIFACT_DIR" "baseline"
 write_artifact "$ARTIFACT_DIR" "summary.json" "$(
-  printf '{"ts":"%s","mode":"%s","host":"%s","daily_host":%s,"ghost":%s,"binary_match":"%s","used_kib":%s,"has_deleted_swap":%s,"d_state":%s,"hung_task_hits":%s,"oom_hits":%s,"gates_ok":%s,"reasons":"%s","claim":"NOT_CLAIMED"}\n' \
+  printf '{"ts":"%s","mode":"%s","host":"%s","daily_host":%s,"ghost":%s,"binary_match":"%s","used_kib":%s,"has_deleted_swap":%s,"d_state":%s,"hung_task_hits":%s,"oom_hits":%s,"recent_dmesg_sec":%s,"gates_ok":%s,"reasons":"%s","claim":"NOT_CLAIMED"}\n' \
     "$ts" "$MODE" "$hostname_s" \
     "$([[ $is_daily_host -eq 1 ]] && echo true || echo false)" \
     "$ghost" "$binary_match" "$used_total" "$has_deleted_swap" \
-    "$d_state_count" "$hung_task_hits" "$oom_hits" \
+    "$d_state_count" "$hung_task_hits" "$oom_hits" "$RECENT_DMESG_SEC" \
     "$([[ $gates_ok -eq 1 ]] && echo true || echo false)" \
     "$reason_csv"
 )"

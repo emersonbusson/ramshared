@@ -22,6 +22,8 @@ required=(
   "shared_windows_desktop_refuses_run_isolated"
   "shared_windows_desktop"
   "oom_hits"
+  "recent_dmesg_sec"
+  "RAMSHARED_FREEZE_RECENT_DMESG_SEC"
   "recent_oom_marker"
   "Memory cgroup out of memory"
   "--run-isolated"
