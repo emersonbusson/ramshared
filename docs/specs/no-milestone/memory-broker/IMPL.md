@@ -36,6 +36,7 @@ freeze campaign are not claimed on the shared desktop.
 - `ramshared-wsl2d` ignored CUDA backend tests: PASS.
 - Root `ublk_control_smoke --ignored --test-threads=1`: PASS.
 - Root `ublk_io_smoke --ignored --test-threads=1`: PASS.
+- `./scripts/kernel/qemu-broker-drill.sh`: PASS (`KTEST-SWAP-ACTIVE=ok`, `KTEST-TELEMETRY=ok`, `KTEST-SWAPOFF=ok`, `KTEST-DAEMON-TERMINATED=ok`).
 - `./scripts/kernel/qemu-ublk-daemon.sh`: PASS.
 - `scripts/p0/measure-gpu-workload-vram.ps1` PowerShell parser: PASS.
 - `scripts/p0/Invoke-GpuWorkloadGate.ps1` PowerShell parser: PASS.
