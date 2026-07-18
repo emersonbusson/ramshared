@@ -3,9 +3,9 @@
 ## Status
 
 **PARTIAL.** The 64 MiB Windows StorPort campaign is only a low-risk storage smoke. A
-3 GiB Windows storage-only LUN passed on 2026-07-18, and a 3 GiB Windows LUN plus
-768 MiB synthetic external CUDA workload passed on the same host. The exact 3 GiB
-Windows plus 1 GiB external workload case, WSL2, and split-owner reclaim remain open.
+3 GiB Windows storage-only LUN passed on 2026-07-18, and the Windows 3 GiB plus
+1 GiB external CUDA workload subcase passed on the same host after freeing desktop
+VRAM and preserving a 1 GiB effective floor. WSL2 and split-owner reclaim remain open.
 
 ## Goal
 
@@ -46,6 +46,16 @@ pressure.
   teardown, lease release, no residual `Get-Disk`/`Win32_DiskDrive`/PnP nodes, and
   post-run preflight PASS. This is an intermediate proof; it does not close the exact
   1 GiB external workload case.
+- 2026-07-18 `C:\ramshared\artifacts\vram-reclaim-matrix-20260718-135319`: matrix
+  runner passed the exact Windows 3 GiB LUN plus 1 GiB external CUDA workload subcase
+  after closing GPU-heavy desktop apps. The run used `reserve_mib=768`, which combines
+  with the fixed 256 MiB operational margin to preserve a 1 GiB effective floor. The
+  delegated exhaustive artifact `C:\ramshared\artifacts\exhaustive-20260718-135319`
+  reported `ALL_MATCH=true`, `GRACEFUL=true`, `EXTERNAL_WORKLOAD_OK=true`,
+  `LUN_GONE=true`, `WIN32_GONE=true`, `PNP_GONE=true`, `LEASE_RELEASED=true`, and
+  `DISK_IO_MEASURE_OK=true`. Host System log later recorded `Kernel-Power` 41
+  and `EventLog` 6008 after a manual reboot, so this evidence must not be used
+  to close WSL2/desktop freeze elimination.
 - 2026-07-18 `C:\ramshared\artifacts\exhaustive-20260718-004215`: 64 MiB Windows smoke
   passed with `DISK_IO_MEASURE_OK=true`. During the PerfDisk sampling window the direct
   load wrote 304 MiB and read 304 MiB with `match=True`; PerfDisk matched `5 S:`, showed
