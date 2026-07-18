@@ -161,23 +161,19 @@ if ($DriveLetter) {
         $mib = $sz / 1MB
         $wMBs = [math]::Round($mib / [Math]::Max(0.001, $swWrite.Elapsed.TotalSeconds), 1)
         $rMBs = [math]::Round($mib / [Math]::Max(0.001, $swRead.Elapsed.TotalSeconds), 1)
-        $match = ($got.Length -eq $bytes.Length)
-        L ("Direct {0} MiB write={1} MB/s read={2} MB/s match={3}" -f $mib, $wMBs, $rMBs, $match)
+        $tmp = Join-Path $env:TEMP "ramshared-io-probe-read.bin"
+        [IO.File]::WriteAllBytes($tmp, $got)
+        $hashWrite = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash
+        $hashRead = (Get-FileHash -Algorithm SHA256 -LiteralPath $tmp).Hash
+        Remove-Item $tmp -Force -EA SilentlyContinue
+        $match = ($got.Length -eq $bytes.Length -and $hashWrite -eq $hashRead)
+        L ("Direct {0} MiB write={1} MB/s read={2} MB/s match={3} sha256={4}" -f $mib, $wMBs, $rMBs, $match, $hashWrite)
         Remove-Item $path -Force -EA SilentlyContinue
         $directOk = $match
     } catch {
         L ("Direct I/O failed: $($_.Exception.Message)")
     }
 }
-
-# Exit 0 if we have disk + (any perf sample OR successful direct IO OR letter not requested)
-if ($disks.Count -gt 0 -and ($reads.Count -gt 0 -or $writes.Count -gt 0 -or $directOk -or -not $DriveLetter)) {
-    exit 0
-}
-if ($disks.Count -gt 0 -and $DriveLetter -and $directOk) { exit 0 }
-if ($disks.Count -gt 0 -and -not $DriveLetter) { exit 0 }
-exit 1
-
 
 # --- SPEC checksum / percentile mode (optional) ---
 if ($ChecksumRounds -gt 0) {
@@ -240,3 +236,11 @@ if ($ChecksumRounds -gt 0) {
     Write-Host "matching_checksum_exits_0"
     exit 0
 }
+
+# Exit 0 if we have disk + (any perf sample OR successful direct IO OR letter not requested)
+if ($disks.Count -gt 0 -and ($reads.Count -gt 0 -or $writes.Count -gt 0 -or $directOk -or -not $DriveLetter)) {
+    exit 0
+}
+if ($disks.Count -gt 0 -and $DriveLetter -and $directOk) { exit 0 }
+if ($disks.Count -gt 0 -and -not $DriveLetter) { exit 0 }
+exit 1
