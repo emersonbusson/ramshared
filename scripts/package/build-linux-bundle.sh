@@ -67,6 +67,7 @@ install -m 0644 "$ROOT/scripts/safety/systemd/ramshared-cascade.service" "$STAGE
 
 install -m 0644 "$ROOT/scripts/p0/measure-gpu-workload-vram.ps1" "$STAGE/scripts/p0/"
 install -m 0644 "$ROOT/scripts/p0/Invoke-GpuWorkloadGate.ps1" "$STAGE/scripts/p0/"
+install -m 0644 "$ROOT/scripts/p0/Start-CudaVramWorkload.ps1" "$STAGE/scripts/p0/"
 install -m 0755 "$ROOT/scripts/package/build-linux-bundle.sh" "$STAGE/scripts/package/"
 
 install -m 0644 "$ROOT/README.md" "$STAGE/docs/"

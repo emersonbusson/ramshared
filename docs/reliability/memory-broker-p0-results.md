@@ -4,7 +4,7 @@
 
 ## Gate Status
 
-**P1 Gate: 🟡 PARTIAL — only §4 external GPU workload missing.** Closed: **§1 PSI** (idle+load, WSL2+civm), **§2 R1 network** (port-forward decision), **§3 NBD/TCP** (loopback + **cross-host p50 644 µs**), **§5 calibration** (proposes `delta_psi=10`). Only missing: **§4 external GPU workload** — needs a real workload that previously hit VRAM pressure; the app-agnostic sampler and gate are ready/validated on the host.
+**P1 Gate: 🟡 PARTIAL — §4 pressure is now measured, but daemon DEMOTE correlation is still missing.** Closed: **§1 PSI** (idle+load, WSL2+civm), **§2 R1 network** (port-forward decision), **§3 NBD/TCP** (loopback + **cross-host p50 644 µs**), **§4 aggregate external CUDA pressure** (idle/load/recovery), **§5 calibration** (proposes `delta_psi=10`). Still missing: matching daemon telemetry proving live DEMOTE/recovery without corruption under that pressure.
 
 ## Environments
 
@@ -12,7 +12,7 @@
 | --- | --- | --- | --- | --- | --- |
 | WSL2 | dev-host / WSL2 (`6.6.123.2-microsoft-standard-WSL2+`) | tenant dev (brain) | **enabled** (CONFIG_PSI=y, readable) | 4096 B | 2026-06-13 |
 | civm | `gha-ubuntu-2404` (Hyper-V, kernel `6.8.0-124-generic`) | tenant CI | **enabled** (`some`/`full` readable; some.avg10 0.5–7.8 according to CI load) | 4096 B | 2026-06-13 |
-| host | dev-host (Windows + RTX 2060) | external GPU workload | N/A (Windows) | N/A | — |
+| host | dev-host (Windows + RTX 2060) | external GPU workload | N/A (Windows) | N/A | 2026-07-17 |
 
 ## 1. PSI by Environment (idle / load) — `measure-psi.sh`
 
@@ -57,10 +57,10 @@ Honest baseline (no custom code). Compare with Phase B: **p50 241 µs (ublk) / 3
 
 | Workload | GPU/VRAM | Max VRAM used (MiB) | Min RAM available (MiB) | Result (fit? spill?) | Date |
 | --- | --- | --- | --- | --- | --- |
-| workload #1 | UNMEASURED | UNMEASURED | UNMEASURED | UNMEASURED | — |
-| workload #2 | UNMEASURED | UNMEASURED | UNMEASURED | UNMEASURED | — |
+| generic CUDA VRAM workload, 1024 MiB hold 35 s | RTX 2060 / 6144 MiB | 2648 loaded peak (idle peak 1525; recovery peak 1540) | captured in artifact JSON | PASS: aggregate VRAM pressure observed and recovered near idle | 2026-07-17 |
+| daemon DEMOTE correlation under external pressure | RTX 2060 / 6144 MiB | UNMEASURED | UNMEASURED | PARTIAL: daemon/cascade was not active for this gate | — |
 
-> **Sampler validated on dev-host** (RTX 2060): captures VRAM (nvidia-smi) + RAM free OK (e.g. VRAM 2015→1828 MiB / 6144, RAM free ~3670 MiB). **Bug caught in validation** (rule "run on host first", #13): `Get-Counter '\Memory\Available MBytes'` is **localized** and breaks on pt-BR Windows → swapped for CIM `Win32_OperatingSystem.FreePhysicalMemory` (locale-neutral). Only missing the **real** collection: an external GPU workload that previously hit VRAM pressure.
+> **Sampler validated on dev-host** (RTX 2060): captures VRAM (nvidia-smi) + RAM free OK (e.g. VRAM 2015→1828 MiB / 6144, RAM free ~3670 MiB). **Bug caught in validation** (rule "run on host first", #13): `Get-Counter '\Memory\Available MBytes'` is **localized** and breaks on pt-BR Windows → swapped for CIM `Win32_OperatingSystem.FreePhysicalMemory` (locale-neutral). 2026-07-17 artifact: `C:\ramshared\artifacts\gpu-workload-gate-20260717-224420`; the workload is synthetic and app-agnostic by design, so it proves WDDM/CUDA VRAM pressure and recovery, not process attribution.
 
 ## 5. Arbiter Defaults Calibration (ITEM-4)
 
@@ -96,6 +96,6 @@ Numbers from session 2026-06-16 (`docs/specs/no-milestone/broker-telemetry-recon
 - [x] §1 PSI civm: idle/CI (1.237, burst 19.4) + PSI enabled + PAGE_SIZE 4096 ✓
 - [x] §2 RTT/ports in both directions + **transport decision (port-forward)**
 - [x] §3 NBD/TCP: loopback (p50 174 µs) + **cross-host (p50 644 µs, 3 runs)** ✓
-- [ ] §4 external GPU workload VRAM/RAM (≥1 real workload; sampler and gate validated on host)
+- [x] §4 aggregate external GPU workload VRAM/RAM (generic CUDA workload; idle/load/recovery PASS)
 - [x] §5 calibration: **`delta_psi=10` proposed** (validate in e2e P1), `streak`=5, `psi_floor`=5 OK
-- [ ] **Gate P1 → OPEN** (only §4 external GPU workload missing) → unlocks ITEM-3+ (P1 code)
+- [ ] **Gate P1 → OPEN** (daemon DEMOTE correlation under external pressure still missing)

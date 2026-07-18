@@ -211,6 +211,7 @@
 - `scripts/p0/measure-nbd-tcp.sh` (NBD/TCP raw performance tests).
 - `scripts/p0/measure-gpu-workload-vram.ps1` (generic Windows telemetry probe for aggregate VRAM/RAM).
 - `scripts/p0/Invoke-GpuWorkloadGate.ps1` (idle/load/recovery aggregate VRAM pressure gate).
+- `scripts/p0/Start-CudaVramWorkload.ps1` (generic synthetic CUDA VRAM allocator for pressure campaigns when no external app is pinned to the architecture).
 
 ### ITEM-2 — ADR-0005
 - `docs/decisions/ADR-0005-broker-protocol-jsonl.md` (Design record for JSON-lines over TCP).
@@ -248,6 +249,7 @@
 ### ITEM-20 — Generic workload telemetry
 - `scripts/p0/measure-gpu-workload-vram.ps1` records aggregate VRAM/RAM for any externally launched GPU workload.
 - `scripts/p0/Invoke-GpuWorkloadGate.ps1` wraps the sampler into idle, loaded, and recovery windows. The gate passes only when aggregate VRAM rises by `MinDeltaMib` and later returns near idle.
+- `scripts/p0/Start-CudaVramWorkload.ps1` provides an app-agnostic CUDA workload that allocates, touches, holds, and releases a bounded VRAM slice for repeatable WDDM pressure validation.
 - Host-specific adapters are explicitly deferred until requested and must not name the generic reclaim path.
 
 ---
