@@ -2511,3 +2511,31 @@ git diff --check
 **Verdict:** ✅ Current isolated QEMU drills now include binary-match evidence.
 The universal WSL2 freeze claim remains PARTIAL until the separate GPU-PV/dxg
 host-reclaim campaign exists.
+
+## 2026-07-22 01:53 -03 — WSL2 external global GPU free-floor DEMOTE
+
+**What:** Ran the supervised shared-host WSL2 pressure campaign with a generic
+Windows CUDA workload consuming 4096 MiB of VRAM, WSL2 sparse VRAM capacity
+4096 MiB, zram 1024 MiB, and host disk telemetry for `C:` and `I:`.
+**Category:** WSL2 + external GPU pressure + telemetry
+**How to measure:**
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File scripts/windows/Invoke-SharedWslPressureCampaign.ps1 `
+  -ApproveSharedDailyHost -VramMiB 4096 -ZramMiB 1024 `
+  -Rounds 1 -ExternalWorkloadMiB 4096 -ExternalWorkloadHoldSec 90 `
+  -ExternalWorkloadDelaySec 8 -PostCampaignObserveSec 120 `
+  -HostDiskLetters C,I
+```
+**Measured data:**
+- Artifact: `C:\ramshared\artifacts\shared-wsl-pressure-20260722-015303`.
+- `STATUS=PASS`, `REASON=validated_external_global_gpu_demote`.
+- External workload released cleanly; `external_workload_ok=true`.
+- `ramshared diagnose --events --json`: `demotes=2`, timeline reason
+  `GlobalGpuFreeFloor`, process not attributed.
+- GPU pressure: min free 348 MiB; max used 5607 MiB.
+- Final health: `ghost=false`, daemon dead, no zram/VRAM swap left.
+- Host disk telemetry: `C:` max write 462.20 MiB/s, max read 304.79 MiB/s,
+  max queue 6; `I:` max write 315.09 MiB/s, max read 3.28 MiB/s, max queue 130.
+**Verdict:** ✅ The aggregate external VRAM pressure DEMOTE path is proven on
+the shared WSL2 host. This does not close the separate GiB reclaim matrix.

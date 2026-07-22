@@ -184,26 +184,30 @@ fn zero_window<B: BlockBackend>(
 /// canary (§9, baseline→Canary; serve-only, DT-16) and runs the §9.4 probe (content/free in
 /// cadence, with hysteresis via streak). Returns `Some(reason)` if any signal requests DEMOTE;
 /// the caller decides the ACTION (local swapoff in single, `DemoteAll` via broker in multi-slice).
+struct ResidencyCheckState<'a, M: VramMemory> {
+    canary: &'a mut Option<Canary>,
+    baseline: &'a mut Vec<u64>,
+    sampler: &'a mut ResidencySampler,
+    cadence: &'a mut Cadence,
+    probe: &'a mut CanaryProbe<M>,
+    free_floor_bytes: u64,
+}
+
 fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
     lat_us: u64,
-    canary: &mut Option<Canary>,
-    baseline: &mut Vec<u64>,
-    sampler: &mut ResidencySampler,
-    cadence: &mut Cadence,
-    probe: &mut CanaryProbe<M>,
-    free_floor_bytes: u64,
+    state: &mut ResidencyCheckState<'_, M>,
     mem_free: F,
 ) -> Option<DemoteReason> {
     // §9: per-request latency canary. content_ok=true/free=u64::MAX ON PURPOSE — the signal
     // here is latency; content and free-floor come from the probe §9.4 below.
     let mut latency_reason = None;
-    match canary.as_mut() {
+    match state.canary.as_mut() {
         None => {
-            baseline.push(lat_us);
-            if baseline.len() >= 16 {
-                baseline.sort_unstable();
-                let med = baseline[baseline.len() / 2].max(1);
-                *canary = Some(Canary::new(ResidencyConfig::default(), med));
+            state.baseline.push(lat_us);
+            if state.baseline.len() >= 16 {
+                state.baseline.sort_unstable();
+                let med = state.baseline[state.baseline.len() / 2].max(1);
+                *state.canary = Some(Canary::new(ResidencyConfig::default(), med));
                 eprintln!("[ramsharedd] canario armado (baseline={med} us)");
             }
         }
@@ -216,16 +220,17 @@ fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
     // §9.4: dedicated content/free probe in cadence (corrupted content demotes immediately;
     // free-floor/transient error require streak).
     let mut probe_reason = None;
-    if cadence.tick() {
-        let content = probe.check_content().ok();
+    if state.cadence.tick() {
+        let content = state.probe.check_content().ok();
         let free = mem_free();
-        let verdict = sampler.sample(content, free);
-        let streak = sampler.bad_streak();
+        let verdict = state.sampler.sample(content, free);
+        let streak = state.sampler.bad_streak();
         let trace_probe = std::env::var("RAMSHARED_TRACE_PROBE").ok().as_deref() == Some("1");
-        if should_log_probe_sample(content, free, free_floor_bytes, streak, trace_probe) {
+        if should_log_probe_sample(content, free, state.free_floor_bytes, streak, trace_probe) {
             eprintln!(
                 "[ramsharedd] sonda §9.4 sample: content={content:?} free={free:?} \
-                 floor={free_floor_bytes} streak={streak}"
+                 floor={} streak={streak}",
+                state.free_floor_bytes
             );
         }
         if let Verdict::Demote(reason) = verdict {
@@ -898,41 +903,40 @@ fn run_nbd<P: VramProvider>(
                     }
                 }
 
-                if touches_vram
-                    && !demoted
-                    && demote_rx.is_none()
-                    && let Some(reason) = residency_check(
-                        lat_us,
-                        &mut canary,
-                        &mut baseline,
-                        &mut sampler,
-                        &mut cadence,
-                        &mut probe,
-                        free_floor,
-                        || {
-                            let cuda_free = provider.mem_info().ok().map(|(f, _)| f);
-                            match (cuda_free, last_global_free) {
-                                (Some(cuda), Some(global)) => Some(cuda.min(global)),
-                                (Some(cuda), None) => Some(cuda),
-                                (None, Some(global)) => Some(global),
-                                (None, None) => None,
-                            }
-                        },
-                    )
-                {
-                    let sparse = matches!(backend, Be::Sparse(_));
-                    let skip = sparse && !sparse_residency_requests_swapoff(reason);
-                    if skip {
-                        eprintln!("[ramsharedd] sparse skip swapoff for {reason:?} lat={lat_us}us");
-                    }
-                    if !skip {
-                        eprintln!(
-                            "[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}"
-                        );
-                        last_demote_reason = Some(format!("{reason:?}"));
-                        demote_rx = Some(spawn_swapoff(&nbd_dev));
-                        swapoff_attempted = true;
-                        publish_demote(demotes_total, &last_demote_reason, true);
+                if touches_vram && !demoted && demote_rx.is_none() {
+                    let mut residency_state = ResidencyCheckState {
+                        canary: &mut canary,
+                        baseline: &mut baseline,
+                        sampler: &mut sampler,
+                        cadence: &mut cadence,
+                        probe: &mut probe,
+                        free_floor_bytes: free_floor,
+                    };
+                    if let Some(reason) = residency_check(lat_us, &mut residency_state, || {
+                        let cuda_free = provider.mem_info().ok().map(|(f, _)| f);
+                        match (cuda_free, last_global_free) {
+                            (Some(cuda), Some(global)) => Some(cuda.min(global)),
+                            (Some(cuda), None) => Some(cuda),
+                            (None, Some(global)) => Some(global),
+                            (None, None) => None,
+                        }
+                    }) {
+                        let sparse = matches!(backend, Be::Sparse(_));
+                        let skip = sparse && !sparse_residency_requests_swapoff(reason);
+                        if skip {
+                            eprintln!(
+                                "[ramsharedd] sparse skip swapoff for {reason:?} lat={lat_us}us"
+                            );
+                        }
+                        if !skip {
+                            eprintln!(
+                                "[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}"
+                            );
+                            last_demote_reason = Some(format!("{reason:?}"));
+                            demote_rx = Some(spawn_swapoff(&nbd_dev));
+                            swapoff_attempted = true;
+                            publish_demote(demotes_total, &last_demote_reason, true);
+                        }
                     }
                 }
             }
@@ -1415,22 +1419,21 @@ fn run_broker<P: VramProvider>(
     )?;
     let vram = std::sync::Arc::clone(&rt.vram);
     let mut backend = serve_broker_jobs(backend, &rt, |lat_us| {
-        residency_check(
-            lat_us,
-            &mut canary,
-            &mut baseline,
-            &mut sampler,
-            &mut cadence,
-            &mut probe,
-            ResidencyConfig::default().free_floor_bytes,
-            || {
-                let (f, t) = provider.mem_info().ok()?;
-                // RF-3/DT-5: publishes the gauge for reconciliation (free/total in bytes).
-                vram.free.store(f, Ordering::Relaxed);
-                vram.total.store(t, Ordering::Relaxed);
-                Some(f)
-            },
-        )
+        let mut residency_state = ResidencyCheckState {
+            canary: &mut canary,
+            baseline: &mut baseline,
+            sampler: &mut sampler,
+            cadence: &mut cadence,
+            probe: &mut probe,
+            free_floor_bytes: ResidencyConfig::default().free_floor_bytes,
+        };
+        residency_check(lat_us, &mut residency_state, || {
+            let (f, t) = provider.mem_info().ok()?;
+            // RF-3/DT-5: publishes the gauge for reconciliation (free/total in bytes).
+            vram.free.store(f, Ordering::Relaxed);
+            vram.total.store(t, Ordering::Relaxed);
+            Some(f)
+        })
     });
 
     let _ = rt.broker.join();
