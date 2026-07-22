@@ -399,7 +399,12 @@ pub fn run_product_online(
         // and the miniport waits on this process's COMMIT loop.
 
         let teardown_letter = cfg.volume_letter.to_ascii_uppercase();
-        let mut gates = match HostGates::new(teardown_letter, &serial_str, cfg.size_bytes) {
+        let mut gates = match HostGates::new(
+            teardown_letter,
+            cfg.volume_mount_path.clone(),
+            &serial_str,
+            cfg.size_bytes,
+        ) {
             Ok(g) => g,
             Err(e) => {
                 teardown_diag(&format!("HostGates::new identity error: {e}"));
@@ -416,32 +421,37 @@ pub fn run_product_online(
         let identity_letter = teardown_letter;
         let identity_serial = serial_str.clone();
         let identity_size = cfg.size_bytes;
-        let (observed, observed_disk_number) = match readonly_host_call_with_io_pump(
-            &mut link,
-            &mut dlink,
-            &mut backend,
-            Duration::from_secs(5),
-            move || {
-                WindowsHostState::observe_product_volume(
-                    identity_letter,
-                    &identity_serial,
-                    identity_size,
-                )
-            },
-        ) {
-            Ok(observed) => observed,
-            Err(e) => {
-                refuse_stop_online(
-                    &mut state,
-                    &mut row,
-                    &mut evidence,
-                    &stop,
-                    &format!("volume_identity_observation: {e}"),
-                );
-                continue;
-            }
-        };
-        if let Err(e) = gates.accept_observed_identity(observed, observed_disk_number) {
+        let identity_mount_path = cfg.volume_mount_path.clone();
+        let (observed, observed_disk_number, observed_volume_path) =
+            match readonly_host_call_with_io_pump(
+                &mut link,
+                &mut dlink,
+                &mut backend,
+                Duration::from_secs(5),
+                move || {
+                    WindowsHostState::observe_product_volume(
+                        identity_letter,
+                        identity_mount_path.as_deref(),
+                        &identity_serial,
+                        identity_size,
+                    )
+                },
+            ) {
+                Ok(observed) => observed,
+                Err(e) => {
+                    refuse_stop_online(
+                        &mut state,
+                        &mut row,
+                        &mut evidence,
+                        &stop,
+                        &format!("volume_identity_observation: {e}"),
+                    );
+                    continue;
+                }
+            };
+        if let Err(e) =
+            gates.accept_observed_identity(observed, observed_disk_number, observed_volume_path)
+        {
             refuse_stop_online(
                 &mut state,
                 &mut row,
@@ -513,12 +523,19 @@ pub fn run_product_online(
         ));
         let letter_for_lock = teardown_letter;
         let disk_for_lock = gates.expected_disk_number();
+        let volume_path_for_lock = gates.volume_device_path().map(str::to_owned);
         let (tx, rx) = std::sync::mpsc::channel();
         thread::spawn(move || {
-            let _ = tx.send(WindowsHostState::lock_product_volume(
-                letter_for_lock,
-                Some(disk_for_lock),
-            ));
+            let result = if let Some(path) = volume_path_for_lock {
+                WindowsHostState::lock_product_volume_path(
+                    &path,
+                    letter_for_lock,
+                    Some(disk_for_lock),
+                )
+            } else {
+                WindowsHostState::lock_product_volume(letter_for_lock, Some(disk_for_lock))
+            };
+            let _ = tx.send(result);
         });
         let lock_res = loop {
             match rx.try_recv() {
@@ -1202,6 +1219,8 @@ impl<M: ramshared_vram::VramMemory> WipeVram for BackendWipe<'_, M> {
 struct HostGates {
     locked: Option<crate::windows_host::LockedVolume>,
     volume_letter: char,
+    volume_mount_path: Option<std::path::PathBuf>,
+    volume_device_path: Option<String>,
     /// Validated at construction (letter/serial/size shape); kept for diagnostics.
     #[allow(dead_code)]
     target: TeardownTarget,
@@ -1213,10 +1232,17 @@ struct HostGates {
 }
 
 impl HostGates {
-    fn new(volume_letter: char, serial: &str, size_bytes: u64) -> Result<Self, String> {
+    fn new(
+        volume_letter: char,
+        volume_mount_path: Option<std::path::PathBuf>,
+        serial: &str,
+        size_bytes: u64,
+    ) -> Result<Self, String> {
         Ok(Self {
             locked: None,
             volume_letter,
+            volume_mount_path,
+            volume_device_path: None,
             target: TeardownTarget::new(volume_letter, serial, size_bytes)?,
             target_serial: serial.to_string(),
             target_size: size_bytes,
@@ -1238,15 +1264,26 @@ impl HostGates {
         &mut self,
         observed: crate::service::ObservedVolumeIdentity,
         disk_number: u32,
+        volume_device_path: String,
     ) -> Result<(), String> {
         self.target.verify_unique(&[observed])?;
+        if !volume_device_path.starts_with(r"\\?\Volume{") || !volume_device_path.ends_with('}') {
+            return Err("observed volume device path is invalid".into());
+        }
         self.identity_verified = true;
         self.expected_disk_number = Some(disk_number);
+        self.volume_device_path = Some(volume_device_path);
         Ok(())
     }
 
     fn expected_disk_number(&self) -> u32 {
         self.expected_disk_number.unwrap_or(u32::MAX)
+    }
+
+    fn volume_device_path(&self) -> Option<&str> {
+        self.volume_mount_path
+            .as_ref()
+            .and(self.volume_device_path.as_deref())
     }
 
     fn filter_pagefiles(
@@ -1343,7 +1380,16 @@ impl PagefileGates for HostGates {
         // Direct lock (no helper-thread timeout). Abandoned CreateFile threads
         // from timed-out attempts wedged the volume; pre-stop harness lock_ok
         // proves CreateFile returns promptly when the stack is not piled up.
-        match WindowsHostState::lock_product_volume(self.volume_letter, self.expected_disk_number) {
+        let result = if let Some(path) = self.volume_device_path() {
+            WindowsHostState::lock_product_volume_path(
+                path,
+                self.volume_letter,
+                self.expected_disk_number,
+            )
+        } else {
+            WindowsHostState::lock_product_volume(self.volume_letter, self.expected_disk_number)
+        };
+        match result {
             Ok(vol) => {
                 self.locked = Some(vol);
                 teardown_diag("teardown phase=VolumeLock OK");

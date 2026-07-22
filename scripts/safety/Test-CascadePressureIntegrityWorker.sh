@@ -25,7 +25,7 @@ for token in \
 	'integrity_result_failed'; do
 	grep -q "$token" "$PROBE"
 done
-grep -q 'interrupted_during_allocation' "$WORKER"
+grep -q 'interrupted_before_allocation' "$WORKER"
 
 python3 "$WORKER" --allocate-mib 16 --result "$RESULT" >"$LOG" 2>&1 &
 PID=$!
@@ -49,6 +49,32 @@ with open(sys.argv[1], encoding="utf-8") as source:
 
 assert result["status"] == "PASS", result
 assert result["allocated_mib"] == 16, result
+assert result["verified_chunks"] > 0, result
+assert result["checksum_before"] == result["checksum_after"], result
+PY
+
+rm -f -- "$RESULT" "$LOG"
+python3 "$WORKER" --allocate-mib 2048 --result "$RESULT" >"$LOG" 2>&1 &
+PID=$!
+for _ in $(seq 1 100); do
+	grep -q '^ALLOC ' "$LOG" 2>/dev/null && break
+	sleep 0.05
+done
+grep -q '^ALLOC ' "$LOG"
+kill -TERM "$PID"
+wait "$PID"
+PID=""
+
+python3 - "$RESULT" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    result = json.load(source)
+
+assert result["status"] == "PASS", result
+assert result["allocated_mib"] > 0, result
+assert result["allocated_mib"] < 2048, result
 assert result["verified_chunks"] > 0, result
 assert result["checksum_before"] == result["checksum_after"], result
 PY
