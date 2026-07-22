@@ -122,7 +122,7 @@ chmod 0700 "`$daemon_wrapper"
 if [ "$([int][bool]$PreallocateVram)" -eq 1 ]; then
   export RAMSHARED_VRAM_PREALLOC=1
 fi
-sudo -n ./target/release/ramshared up --vram "$VramMiB" --zram "$ZramMiB" --daemon "`$daemon_wrapper" >"`$artifact/ramshared-up.out" 2>"`$artifact/ramshared-up.err"
+sudo -n env RAMSHARED_TRACE_PROBE=1 ./target/release/ramshared up --vram "$VramMiB" --zram "$ZramMiB" --daemon "`$daemon_wrapper" >"`$artifact/ramshared-up.out" 2>"`$artifact/ramshared-up.err"
 ./scripts/safety/cascade-health.sh --once >"`$artifact/after-up-health.json"
 
 export RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_WSL_TERMINATION
