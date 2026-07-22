@@ -26,6 +26,7 @@ serde_json = "1"
 toml = "1.1"
 
 [target.'cfg(windows)'.dependencies]
+base64 = "0.22"
 windows-service = "0.8"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

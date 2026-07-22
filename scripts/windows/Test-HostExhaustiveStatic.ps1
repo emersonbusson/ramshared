@@ -42,6 +42,8 @@ foreach ($needle in @(
     "MinFreeAfterPlanMiB",
     "insufficient VRAM headroom",
     "winsvc-run.toml",
+    "volume_mount_path",
+    "mountToml",
     "Start-CudaVramWorkload.ps1",
     "EXTERNAL_WORKLOAD_OK",
     "WslPressureMiB",
@@ -93,6 +95,9 @@ if ($text -match 'Format-Volume\s+-DriveLetter') {
 }
 if ($text -match 'New-Partition[^\r\n]*-DriveLetter') {
     throw "explorer_drive_forbidden: temporary RamShared LUN must use a private mount path"
+}
+if ($text -notmatch 'volume_mount_path\s*=') {
+    throw "private_mount_config_required: artifact config must identify the private access path"
 }
 foreach ($destructive in @("Clear-Disk", "Remove-Disk", "Remove-Partition", "Set-Disk -IsOffline", "Set-Disk -IsReadOnly")) {
     if ($text -match [regex]::Escape($destructive)) {

@@ -42,8 +42,13 @@ if (-not $hostText.Contains('$wantSize={size_bytes}')) {
 if (-not $hostText.Contains('([uint64]$_.Size -eq $wantSize)')) {
     throw "volume_identity_query: product stop identity must filter Get-Disk by exact size"
 }
-if (-not $hostText.Contains('[string]$d[0].Number+''|''+$n+''|''+([string]$d[0].SerialNumber).Trim()+''|''+[string]$d[0].Size')) {
+if (-not $hostText.Contains('[string]$d[0].Number+''|''+$n+''|''+([string]$d[0].SerialNumber).Trim()+''|''+[string]$d[0].Size+''|''+$vp')) {
     throw "volume_identity_query: missing string-safe product identity output"
+}
+foreach ($needle in @('$wantMount', 'AccessPaths', 'Get-Volume -ErrorAction Stop', 'lock_product_volume_path')) {
+    if (-not $hostText.Contains($needle) -and -not $text.Contains($needle)) {
+        throw ("private_mount_identity_required: missing " + $needle)
+    }
 }
 if ($hostText.Contains('IOCTL_DISK_GET_LENGTH_INFO')) {
     throw "volume_identity_query: product stop must not depend on PhysicalDrive length IOCTL"

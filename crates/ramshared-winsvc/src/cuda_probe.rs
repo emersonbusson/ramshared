@@ -145,6 +145,7 @@ mod tests {
             max_io_bytes: 1024 * 1024,
             evidence_path: PathBuf::from(r"C:\ProgramData\RamShared\evidence"),
             volume_letter: 'D',
+            volume_mount_path: None,
             broker: "127.0.0.1:7700".into(),
             tenant: "probe".into(),
             heartbeat_secs: 5,
