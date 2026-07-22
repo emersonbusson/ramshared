@@ -12,6 +12,11 @@ if (-not (Test-Path -LiteralPath $script)) {
 $text = Get-Content -LiteralPath $script -Raw
 $required = @(
     "ApproveSharedDailyHost",
+    "PreallocateVram",
+    "ExternalWorkloadMiB",
+    "Start-CudaVramWorkload.ps1",
+    "external-workload.out",
+    "external-workload.err",
     "RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_WSL_TERMINATION",
     "RAMSHARED_WINDOWS_WATCHDOG_ARMED=1",
     "--approve-shared-daily-host",
@@ -22,6 +27,7 @@ $required = @(
     "WaitForExit",
     "wsl.exe",
     "--terminate",
+    "Stop-Process -Id `$externalProc.Id",
     "ramshared down",
     "DISK_MUTATION = `$false"
 )
