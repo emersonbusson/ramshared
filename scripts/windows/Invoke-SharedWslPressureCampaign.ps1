@@ -123,6 +123,7 @@ export RAMSHARED_FREEZE_WATCHDOG_SEC="$WatchdogSec"
   --rounds "$Rounds" \
   --watchdog-sec "$WatchdogSec" \
   --json >"`$artifact/campaign.out" 2>"`$artifact/campaign.err"
+export RAMSHARED_FREEZE_REQUIRED_ROUNDS="$Rounds"
 ./scripts/safety/validate-wsl2-freeze-campaign-artifact.sh "`$artifact/campaign" >"`$artifact/validation.out" 2>"`$artifact/validation.err"
 "@
 
