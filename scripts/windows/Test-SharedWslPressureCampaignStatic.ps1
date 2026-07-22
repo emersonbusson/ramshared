@@ -27,6 +27,7 @@ $required = @(
     "cascade-health.sh --loop",
     "ramsharedd-logged.sh",
     "daemon.out",
+    '>>"$artifactWsl/daemon.out"',
     "diagnose.json",
     "canario_demotes",
     'RAMSHARED_FREEZE_REQUIRED_ROUNDS="$Rounds"',
@@ -43,6 +44,10 @@ foreach ($needle in $required) {
     if (-not $text.Contains($needle)) {
         throw "missing token: $needle"
     }
+}
+
+if ($text.Contains('>>"`$artifact/daemon.out"')) {
+    throw "daemon wrapper must not depend on an unset runtime artifact variable"
 }
 
 $forbidden = @(
