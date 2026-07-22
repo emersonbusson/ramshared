@@ -193,6 +193,7 @@ fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
 ) -> Option<DemoteReason> {
     // §9: per-request latency canary. content_ok=true/free=u64::MAX ON PURPOSE — the signal
     // here is latency; content and free-floor come from the probe §9.4 below.
+    let mut latency_reason = None;
     match canary.as_mut() {
         None => {
             baseline.push(lat_us);
@@ -205,12 +206,13 @@ fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
         }
         Some(c) => {
             if let Verdict::Demote(reason) = c.sample(lat_us, true, u64::MAX) {
-                return Some(reason);
+                latency_reason = Some(reason);
             }
         }
     }
     // §9.4: dedicated content/free probe in cadence (corrupted content demotes immediately;
     // free-floor/transient error require streak).
+    let mut probe_reason = None;
     if cadence.tick() {
         let content = probe.check_content().ok();
         let free = mem_free();
@@ -219,10 +221,17 @@ fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
                 "[ramsharedd] sonda §9.4: content={content:?} free={free:?} streak={}",
                 sampler.bad_streak()
             );
-            return Some(reason);
+            probe_reason = Some(reason);
         }
     }
-    None
+    choose_residency_reason(latency_reason, probe_reason)
+}
+
+fn choose_residency_reason(
+    latency: Option<DemoteReason>,
+    probe: Option<DemoteReason>,
+) -> Option<DemoteReason> {
+    probe.or(latency)
 }
 
 fn sparse_residency_config(reserve_floor_bytes: u64) -> ResidencyConfig {
@@ -1568,17 +1577,11 @@ mod tests {
     #[test]
     fn probe_residency_reason_has_priority_over_latency() {
         assert_eq!(
-            choose_residency_reason(
-                Some(DemoteReason::Latency),
-                Some(DemoteReason::FreeFloor)
-            ),
+            choose_residency_reason(Some(DemoteReason::Latency), Some(DemoteReason::FreeFloor)),
             Some(DemoteReason::FreeFloor)
         );
         assert_eq!(
-            choose_residency_reason(
-                Some(DemoteReason::Latency),
-                Some(DemoteReason::Corruption)
-            ),
+            choose_residency_reason(Some(DemoteReason::Latency), Some(DemoteReason::Corruption)),
             Some(DemoteReason::Corruption)
         );
     }
