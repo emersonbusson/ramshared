@@ -11,6 +11,7 @@ use std::process::{Command, ExitCode};
 use ramshared_cuda::Cuda;
 
 mod cascade;
+mod diagnose;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Status {
@@ -170,7 +171,8 @@ impl CheckReport {
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
     let command = args.next();
-    let json = args.any(|arg| arg == "--json");
+    let rest = args.collect::<Vec<_>>();
+    let json = rest.iter().any(|arg| arg == "--json");
 
     match command.as_deref() {
         Some("check") => {
@@ -204,6 +206,7 @@ fn main() -> ExitCode {
         Some("up") => to_exit(cascade::up()),
         Some("down") => to_exit(cascade::down()),
         Some("status") => to_exit(cascade::status(json)),
+        Some("diagnose") => to_exit(diagnose::run(&rest)),
         Some("-h") | Some("--help") | None => {
             print_usage();
             ExitCode::SUCCESS
@@ -230,6 +233,7 @@ fn print_usage() {
     eprintln!("usage:");
     eprintln!("  ramshared check [--json]");
     eprintln!("  ramshared doctor [--json]");
+    eprintln!("  ramshared diagnose --events PATH [--json]");
     eprintln!("  ramshared up [--vram MiB] [--zram MiB] [--daemon PATH]");
     eprintln!("      defaults: 1024 MiB each, or RAMSHARED_VRAM_MIB / RAMSHARED_ZRAM_MIB");
     eprintln!("      --zram 0  skip zram (VRAM/NBD only)");

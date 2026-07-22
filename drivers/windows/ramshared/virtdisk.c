@@ -125,6 +125,14 @@ VdOwnerMatches(_In_ PEPROCESS Process)
 	return g_ActiveDisk.OwnerProcess == Process;
 }
 
+BOOLEAN
+VdOwnerExited(VOID)
+{
+	if (!g_Active || g_ActiveDisk.OwnerProcess == NULL)
+		return FALSE;
+	return PsGetProcessExitStatus(g_ActiveDisk.OwnerProcess) != STATUS_PENDING;
+}
+
 PVIRTUAL_DISK
 VdGetActive(VOID)
 {
@@ -186,7 +194,7 @@ VdSetSenseNotReady(_Inout_ PSCSI_REQUEST_BLOCK Srb)
 static BOOLEAN
 VdHandleInquiry(_In_opt_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
-	UCHAR response[36];
+	UCHAR response[64];
 	ULONG responseLen;
 	ULONG transferLen;
 	ULONG allocationLen;
@@ -211,13 +219,14 @@ VdHandleInquiry(_In_opt_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 
 	/* VPD pages */
 	if (page == 0x00) {
-		/* Supported VPD pages: 0x00, 0x80 */
+		/* Supported VPD pages: 0x00, 0x80, 0xB1. */
 		response[0] = 0x00;
 		response[1] = 0x00;
-		response[3] = 2;
+		response[3] = 3;
 		response[4] = 0x00;
 		response[5] = 0x80;
-		responseLen = 6;
+		response[6] = 0xB1;
+		responseLen = 7;
 		goto copy_response;
 	}
 	if (page == 0x80) {
@@ -231,6 +240,16 @@ VdHandleInquiry(_In_opt_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 		response[3] = 16;
 		RtlCopyMemory(&response[4], Disk->serial, 16);
 		responseLen = 20;
+		goto copy_response;
+	}
+	if (page == 0xB1) {
+		/* SBC Block Device Characteristics: 0x0001 = non-rotating. */
+		response[0] = 0x00;
+		response[1] = 0xB1;
+		response[3] = 60;
+		response[4] = 0x00;
+		response[5] = 0x01;
+		responseLen = 64;
 		goto copy_response;
 	}
 

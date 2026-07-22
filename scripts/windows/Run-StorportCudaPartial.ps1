@@ -2,7 +2,7 @@
 # Elevated host: start win11-drill, deploy package+winsvc, load driver, basic CREATE/REGISTER, probe verdicts.
 param(
   [string]$VMName = "win11-drill",
-  [string]$User = ".\drilladmin",
+  [string]$User = "WIN11-DRILL\drilladmin",
   [string]$Password = $env:RAMSHARED_DRILL_PASSWORD
 )
 $ErrorActionPreference = "Stop"

@@ -2,8 +2,12 @@
 
 > **Passo 3 SSDV3.** Implements [`SPEC.md`](SPEC.md).  
 > **Date:** 2026-07-10  
-> **Status:** **GREEN** — build, qemu, modules.vhdx, live kernel, ublk capability, cascade NBD smoke, CLI.  
-> Product cascade transport policy closed in `cascade-transport-policy` (NBD Day-1; ublk not product on WSL2).
+> **Status:** **HISTORICAL CAPABILITY GREEN / PRODUCT UBLK DEFERRED** — build,
+> qemu, modules.vhdx, live kernel, ublk capability, cascade NBD smoke, and CLI
+> were green for the recorded 2026-07-10 lab state. This does **not** close
+> current product ublk transport readiness. Product cascade transport policy is
+> closed in `cascade-transport-policy` as NBD Day-1; ublk remains deferred to
+> `custom-kernel-ublk-product-transport`.
 
 ---
 
@@ -82,9 +86,10 @@
 
 ## Env-bound gaps
 
-- Live WSL still on stock until user restarts after arm / runs apply.  
-- Full `modules_install` into lab `/lib/modules` may still be completing; post-apply may need modules on Windows modules.vhdx path if modprobe fails.  
-- BUILD OK line may appear when lab background make finishes modules_install.
+- The recorded GREEN state is historical and must be revalidated before use.
+- Current product transport remains NBD Day-1.
+- ublk product transport requires the dedicated
+  `custom-kernel-ublk-product-transport` lifecycle campaign.
 
 ---
 

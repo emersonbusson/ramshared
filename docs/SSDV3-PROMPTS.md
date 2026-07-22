@@ -75,7 +75,7 @@ One primary path. No shim, dual-path, dual-reader/writer, or dead code unless SP
 4. **Traceability** — RF → ITEM/DT → commit/test.  
 5. **No structural creativity in IMPL** — new decision → update SPEC first.  
 6. **Number before adjective** — P0: [`.claude/rules/benchmarks.md`](../.claude/rules/benchmarks.md).  
-7. **Host safety** — never thrash swap/ublk on live WSL2; pressure only qemu/civm.  
+7. **Host safety** — never run unsupervised swap/ublk pressure on live WSL2; prefer qemu/civm, or use the approved shared-host watchdog harness when explicitly authorized.  
 8. **English** structural docs and code comments.  
 9. **Cover + live E2E close Step 3** — `IMPL.md` / index `DONE` is not proof.  
 10. **Platform-native gates** — Linux LKM ≠ Windows WDK ≠ pure userspace cascade; pick the row in Cover vs E2E.
@@ -216,7 +216,7 @@ Fill items that apply; mark **N/A** with one-word reason when surface absent.
 - [ ] IRQ/atomic or IRQL: no illegal sleep; correct alloc context; lock order written  
 - [ ] Lifetime: get/put map/unmap balanced; remove reverse of probe  
 - [ ] Hot-unplug / device-gone: stable errno, not UAF  
-- [ ] Host safety: no live WSL2 thrash; Windows pressure only in lab VM when required  
+- [ ] Host safety: no unsupervised live WSL2 pressure; Windows/shared pressure only via the approved watchdog harness or lab VM when required  
 - [ ] Replayable ops: idempotent (#17)  
 
 #### Files to CREATE / MODIFY / DELETE
@@ -350,7 +350,7 @@ Implement → compile → tests for ITEM → cover on touched business logic →
 | Pure policy/logic in crates (`cascade` plan, tier, broker arbiter, dxg helpers, …) | **Canonical gate:** `node tools/ci/check-rust-slice-coverage.mjs -p <pkgs> --files <matrix paths> --min 80` (line % per production file; workspace average does **not** count). Optional `--report-json tmp/slice-cov.json` for IMPL evidence. |
 | Shell orchestration (`scripts/safety` cascade_io, install) | Live E2E + BINARY_MATCH when daemon + refusals; unit optional if SPEC says `N/A — E2E-only` |
 | Linux LKM | checkpatch/sparse/kselftest from **target kernel tree** + drill; not a fake in-repo `scripts/checkpatch.pl` |
-| Windows driver / winsvc | WDK build · InfVerif · SDV/Verifier as SPEC · lab VM drill; zero thrash on daily host |
+| Windows driver / winsvc | WDK build · InfVerif · SDV/Verifier as SPEC · lab VM drill; no unsupervised pressure on daily host |
 
 ### Live E2E evidence (blocks DONE)
 

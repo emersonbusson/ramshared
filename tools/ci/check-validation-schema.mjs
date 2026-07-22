@@ -180,6 +180,18 @@ export function validateEntry(entry) {
   return out
 }
 
+export function isSecurityRedaction(oldLine, newLine) {
+  const signingSecret =
+    /-PfxPassword\s+["'][^"']+["']/.test(oldLine) &&
+    /-PfxPassword\s+\$env:[A-Z0-9_]+/.test(newLine)
+  const historicalCredential =
+    /\b(password|credential)\b/i.test(oldLine) &&
+    /`[^`]+`/.test(oldLine) &&
+    /\b(password|credential)\b/i.test(newLine) &&
+    /\bredacted\b/i.test(newLine)
+  return signingSecret || historicalCredential
+}
+
 function parseDiff(baseRef) {
   let diff
   try {
@@ -205,23 +217,42 @@ function parseDiff(baseRef) {
 
   const added = new Set()
   const removedInEntries = []
+  let hunkRemoved = []
+  let hunkAdded = []
+  const flushHunk = () => {
+    if (hunkRemoved.length === hunkAdded.length) {
+      for (let i = 0; i < hunkRemoved.length; i++) {
+        if (!isSecurityRedaction(hunkRemoved[i].text, hunkAdded[i].text)) {
+          removedInEntries.push(hunkRemoved[i].line)
+        }
+      }
+    } else {
+      removedInEntries.push(...hunkRemoved.map((item) => item.line))
+    }
+    hunkRemoved = []
+    hunkAdded = []
+  }
   let newLine = 0
   let oldLine = 0
   for (const ln of diff.split('\n')) {
     const h = ln.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
     if (h) {
+      flushHunk()
       oldLine = parseInt(h[1], 10)
       newLine = parseInt(h[2], 10)
       continue
     }
     if (ln.startsWith('+') && !ln.startsWith('+++')) {
       added.add(newLine)
+      hunkAdded.push({ line: newLine, text: ln.slice(1) })
       newLine++
     } else if (ln.startsWith('-') && !ln.startsWith('---')) {
-      if (oldLine >= baseFirstEntry) removedInEntries.push(oldLine)
+      if (oldLine >= baseFirstEntry)
+        hunkRemoved.push({ line: oldLine, text: ln.slice(1) })
       oldLine++
     }
   }
+  flushHunk()
   return { added, removedInEntries }
 }
 

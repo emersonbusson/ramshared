@@ -53,6 +53,8 @@ pub enum TransportKind {
     NbdTcp,
     /// Windows StorPort path: lease budget only, never receives `SwapOn`.
     WinDrive,
+    /// Native Windows DCC consumer; lease-only, never a swap tenant.
+    DccAgent,
 }
 
 /// Revocable VRAM lease (RF-B3) — internal state of the broker, not serialized.
@@ -135,6 +137,7 @@ mod tests {
             TransportKind::NbdUnix,
             TransportKind::NbdTcp,
             TransportKind::WinDrive,
+            TransportKind::DccAgent,
         ] {
             let back: TransportKind =
                 serde_json::from_str(&serde_json::to_string(&tk).unwrap()).unwrap();

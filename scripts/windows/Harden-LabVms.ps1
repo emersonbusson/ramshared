@@ -47,7 +47,7 @@ foreach ($name in $labs) {
     if ($name -eq "linux-kernel-lab") {
         Set-VM -Name $name -AutomaticStartAction StartIfRunning -AutomaticStopAction ShutDown -ErrorAction SilentlyContinue
         try {
-            Set-VMMemory -VMName $name -DynamicMemoryEnabled $true -MinimumBytes 2GB -MaximumBytes 8GB
+            Set-VMMemory -VMName $name -DynamicMemoryEnabled $true -StartupBytes 2GB -MinimumBytes 1GB -MaximumBytes 8GB
         } catch { Write-Host "  mem: $($_.Exception.Message)" }
     }
     $sn = @(Get-VMSnapshot -VMName $name -ErrorAction SilentlyContinue)

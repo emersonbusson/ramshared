@@ -92,6 +92,24 @@ No reboot, download, commit, merge, host swap mutation, or live-host pressure wa
 performed. Each QEMU guest was transient and diskless and powered off after its
 bounded run.
 
+## Harness update — 2026-07-17
+
+The current `qemu-broker-drill.sh` and `qemu-ublk-daemon.sh` harnesses now verify
+in-guest SHA-256 against the host binary copied into the initramfs.
+
+Fresh single-run observations:
+
+- `qemu-broker-drill.sh`: `KTEST-DAEMON-BINARY-MATCH=ok`,
+  `KTEST-AGENT-BINARY-MATCH=ok`, `KTEST-SWAP-ACTIVE=ok`,
+  `KTEST-TELEMETRY=ok`, `KTEST-SWAPOFF=ok`,
+  `KTEST-DAEMON-TERMINATED=ok`.
+- `qemu-ublk-daemon.sh`: `KTEST-BINARY-MATCH=ok`, `KTEST-SERVED=ok`,
+  `KTEST-TERMINATED=ok`, `KTEST-DEVICE-REMOVED=ok`.
+
+This closes the harness-level binary-match gap for those current drills. It
+does not promote the universal WSL2 freeze claim, which still requires a
+disposable surface with functional GPU-PV/dxg and host reclaim.
+
 This campaign proves repeatable NBD swapoff-first lifecycle behavior and containment
 of the ublk forced-loss class in this QEMU environment. It does **not** prove the
 absence of freezes in the real WSL2 utility VM. Promotion requires a disposable

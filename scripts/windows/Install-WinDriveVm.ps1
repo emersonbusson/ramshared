@@ -8,15 +8,22 @@ param(
     [string]$RepoRoot = "C:\Users\emedev\ramshared-src",
     [switch]$SkipBuild,
     [string]$PfxPath = "C:\Users\emedev\ramshared-drill\certs\ramshared-test.pfx",
-    [string]$PfxPassword = "TestSign!2026",
+    [string]$PfxPassword = $env:RAMSHARED_TESTSIGN_PFX_PASSWORD,
     [string]$VmName = "win11-drill",
     [string]$GuestUser = "WIN11-DRILL\drilladmin",
-    [string]$GuestPassword = "Drill2026!"
+    [string]$GuestPassword = $env:RAMSHARED_DRILL_PASSWORD
 )
 
 $ErrorActionPreference = "Continue"
 $log = "C:\Users\emedev\ramshared-drill\install-windrive-vm.log"
 Start-Transcript -Path $log -Force
+
+if ([string]::IsNullOrEmpty($PfxPassword)) {
+    throw "Set -PfxPassword or env RAMSHARED_TESTSIGN_PFX_PASSWORD."
+}
+if ([string]::IsNullOrEmpty($GuestPassword)) {
+    throw "Set -GuestPassword or env RAMSHARED_DRILL_PASSWORD."
+}
 
 if (-not $SkipBuild) {
     & "$RepoRoot\scripts\windows\Build-Drivers.ps1" -RepoRoot $RepoRoot

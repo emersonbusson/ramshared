@@ -10,6 +10,7 @@ members = [
     "crates/ramshared-integrity",
     "crates/ramshared-uring",
     "crates/ramshared-broker",
+    "crates/ramshared-config",
     "crates/ramshared-agent",
     "crates/ramshared-vram",
     "crates/ramshared-vulkan",

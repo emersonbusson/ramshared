@@ -24,7 +24,7 @@ parents:
 
 1. See at a glance whether the cascade is **armed**, **filling**, **using VRAM**, **demoting**, or **broken**.  
 2. After pressure or a game reclaim, see **numbers**: when zram/VRAM first took pages, how much is used per tier, demote count/reason.  
-3. Keep today’s safety model: cgroup-bounded pressure probes in lab; no thrash on daily host as a product requirement.
+3. Keep today's safety model: cgroup-bounded probes; shared-host pressure requires explicit approval and the Windows watchdog, with no unsupervised thrash.
 
 ### Problem today
 

@@ -87,10 +87,10 @@ function deriveStatus(slugDir) {
     // SSDV3: IMPL with Status partial must not be index-quality DONE.
     try {
       const head = readFileSync(implPath, "utf8").slice(0, 4000);
-      if (/^##\s*Status\s*$/im.test(head) && /\bpartial\b/i.test(head)) {
-        const statusBlock = head.split(/##\s*Status/i)[1] || "";
-        const firstLines = statusBlock.split("\n").slice(0, 8).join("\n");
-        if (/\bpartial\b/i.test(firstLines) && !/\bimplemented\b/i.test(firstLines)) {
+      if (/^##\s*Status\s*$/im.test(head)) {
+        const afterStatus = head.split(/^##\s*Status\s*$/im)[1] || "";
+        const statusBlock = afterStatus.split(/^##\s/m)[0] || "";
+        if (/\bpartial\b/i.test(statusBlock) && !/\bimplemented\b/i.test(statusBlock)) {
           return "PARTIAL";
         }
       }
