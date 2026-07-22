@@ -1543,4 +1543,19 @@ mod tests {
         assert!(validate_slice_flags(MAX_SLICES, 64, false).is_ok());
         assert!(validate_slice_flags(MAX_SLICES + 1, 64, false).is_err());
     }
+
+    #[test]
+    fn sparse_free_floor_requests_swapoff_but_latency_does_not() {
+        assert!(sparse_residency_requests_swapoff(DemoteReason::FreeFloor));
+        assert!(sparse_residency_requests_swapoff(DemoteReason::Corruption));
+        assert!(!sparse_residency_requests_swapoff(DemoteReason::Latency));
+    }
+
+    #[test]
+    fn sparse_residency_uses_configured_reserve_floor() {
+        let cfg = sparse_residency_config(512 * 1024 * 1024);
+        assert_eq!(cfg.free_floor_bytes, 512 * 1024 * 1024);
+        assert_eq!(cfg.latency_mult, ResidencyConfig::default().latency_mult);
+        assert_eq!(cfg.consecutive, ResidencyConfig::default().consecutive);
+    }
 }
