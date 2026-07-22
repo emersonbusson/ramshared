@@ -1585,4 +1585,12 @@ mod tests {
             Some(DemoteReason::Corruption)
         );
     }
+
+    #[test]
+    fn probe_sample_logs_low_free_or_degraded_state() {
+        assert!(should_log_probe_sample(Some(true), Some(128), 512, 1));
+        assert!(should_log_probe_sample(None, Some(1024), 512, 0));
+        assert!(should_log_probe_sample(Some(true), None, 512, 0));
+        assert!(!should_log_probe_sample(Some(true), Some(2048), 512, 0));
+    }
 }
