@@ -8,7 +8,7 @@ publish.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-toml = "0.9"
+toml = "1.1"
 
 [lints.clippy]
 unwrap_used = "deny"
