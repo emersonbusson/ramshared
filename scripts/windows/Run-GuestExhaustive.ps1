@@ -2,7 +2,7 @@
 # Elevated: win11-drill deploy + IOCTL + optional Verifier reboot pass
 param(
     [string]$VMName = "win11-drill",
-    [string]$User = ".\drilladmin",
+    [string]$User = "WIN11-DRILL\drilladmin",
     [string]$Password = $env:RAMSHARED_DRILL_PASSWORD,
     [switch]$SkipVerifier,
     [switch]$LeaveVmOn

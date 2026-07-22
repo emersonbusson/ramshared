@@ -188,7 +188,8 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 			status = STATUS_INVALID_PARAMETER;
 			break;
 		}
-		if (VdIsActive() && !VdOwnerMatches(IoGetCurrentProcess())) {
+		if (VdIsActive() && !VdOwnerMatches(IoGetCurrentProcess()) &&
+		    !VdOwnerExited()) {
 			status = STATUS_ACCESS_DENIED;
 			break;
 		}

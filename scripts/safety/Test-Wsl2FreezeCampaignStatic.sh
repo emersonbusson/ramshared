@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Static gate for wsl2-freeze-campaign.sh — required tokens, no thrash path on daily host.
+# Static gate for wsl2-freeze-campaign.sh — required tokens for supervised pressure.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$ROOT/scripts/safety/wsl2-freeze-campaign.sh"
@@ -19,8 +19,25 @@ required=(
   "WATCHDOG"
   "NOT_CLAIMED"
   "daily_host_refuses_run_isolated"
+  "shared_windows_desktop_refuses_run_isolated"
+  "shared_windows_desktop"
+  "oom_hits"
+  "recent_dmesg_sec"
+  "RAMSHARED_FREEZE_RECENT_DMESG_SEC"
+  "recent_oom_marker"
+  "RAMSHARED_ALLOW_RECENT_OOM_MARKER"
+  "Memory cgroup out of memory"
   "--run-isolated"
+  "--approve-shared-daily-host"
+  "--run-shared-daily-host"
+  "RAMSHARED_SHARED_HOST_APPROVAL"
+  "I_ACCEPT_WSL_TERMINATION"
+  "RAMSHARED_WINDOWS_WATCHDOG_ARMED"
+  "missing_shared_host_ack_token"
+  "windows_watchdog_not_armed"
+  "shared-daily-host-complete.txt"
   "--artifact-dir"
+  "--integrity-result"
 )
 
 src="$(cat "$SCRIPT")"
@@ -53,6 +70,17 @@ rc=$?
 set -e
 if [[ "$rc" -eq 0 ]]; then
   echo "FAIL --run-isolated must refuse on daily host without isolated flags" >&2
+  exit 1
+fi
+
+# Shared daily-host action must also refuse without the explicit ack token and
+# external Windows watchdog marker.
+set +e
+"$SCRIPT" --approve-shared-daily-host --run-shared-daily-host --artifact-dir "$tmp/art3" >/dev/null 2>&1
+rc=$?
+set -e
+if [[ "$rc" -eq 0 ]]; then
+  echo "FAIL shared daily-host run must refuse without ack token/watchdog" >&2
   exit 1
 fi
 

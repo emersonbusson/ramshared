@@ -52,6 +52,6 @@ Optional: pure refactors without contract change, localized bugfixes, doc-only, 
 - New helper without checking kernel / `crates/` / existing SPECs
 - Prove LKM/cascade with foreign-app HTTP smoke — need cargo test, drills, dmesg, `/proc/swaps` as appropriate
 - Close Step 3 on index `DONE` / `IMPL.md` presence alone
-- Thrash swap/ublk on the live WSL2 host
+- Run unsupervised swap/ublk pressure on the live WSL2 host
 - Create `SPECvN.md`
 - Paste SSDV3/Kahneman process from other monorepos (tenant, OpenAPI, web e2e) into this tree

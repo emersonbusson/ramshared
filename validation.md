@@ -892,7 +892,7 @@ swapon --show
 ```powershell
 # Windows Host: compile and sign
 .\scripts\windows\Build-Drivers.ps1
-.\scripts\windows\Sign-Drivers.ps1 -PfxPassword "TestSign!2026"
+.\scripts\windows\Sign-Drivers.ps1 -PfxPassword $env:RAMSHARED_TESTSIGN_PFX_PASSWORD
 # Install and run
 .\scripts\windows\Install-InfAndBackend.ps1 -FormatNtfs -DriveLetter S
 # Benchmark 10 rounds of 50MB
@@ -982,7 +982,7 @@ sudo scripts/safety/cascade-pressure-probe.sh --mem-max 1200M --max-sec 90
 '
 ```
 **Measured data:**
-- Root cause: current guest was installed with `E:\Hyper-V\iso\unattend-staging\Autounattend.xml` password (len 13), **not** legacy `Drill2026!` from earlier Passo0 VM on `C:\Hyper-V\...`
+- Root cause: current guest was installed with `E:\Hyper-V\iso\unattend-staging\Autounattend.xml` password (len 13), **not** the legacy redacted Passo0 credential from the earlier VM on `C:\Hyper-V\...`
 - PSD_OK: `win11-drill\drilladmin` on host `WIN11-DRILL`
 - Smoke: Build **26200** UBR **8037**, testsigning **Yes**, IsAdmin **true**, FreeGB **~61.9**
 - `Invoke-Guest.ps1` OK with env password
@@ -2081,3 +2081,461 @@ gh release view v0.6.3
 **Verdict:** ✅ works (discipline close of open checklists)
 **Next action:** None on daily host; optional new env for freeze claim only
 **Artifacts:** docs/specs/no-milestone/windows-storport-cuda-vram/{SPEC,IMPL}.md
+
+## 2026-07-17 12:18 -03 — Freeze: RamShared-Kernel is NOT isolab + shared-desktop gate
+
+**What:** Probed WSL distro `RamShared-Kernel` (custom kernel 6.18.35.2) as candidate freeze lab. Confirmed it mounts `/mnt/c/Users` on the same Windows desktop host as Ubuntu-24.04 — not disposable isolab. Tightened `wsl2-freeze-campaign.sh` so `/mnt/c/Users` marks shared desktop (any distro) and refuses `--run-isolated` without FORCE. Restored WSL PE binfmt (`WSLInterop`) so Windows interop works again from this session. Release v0.6.4 already Latest (PR #94).
+**Category:** safety / freeze / discipline
+**How to measure:**
+```text
+wsl -l -v
+wsl -d RamShared-Kernel --cd ~ -e bash -lc 'echo $WSL_DISTRO_NAME; test -d /mnt/c/Users && echo MNT=1'
+./scripts/safety/Test-Wsl2FreezeCampaignStatic.sh
+RAMSHARED_ISOLATED_LAB=1 ./scripts/safety/wsl2-freeze-campaign.sh --allow-isolated-lab --run-isolated --artifact-dir /tmp/freeze-refuse-test
+gh release view v0.6.4
+```
+**Measured data:**
+- RamShared-Kernel: DISTRO=RamShared-Kernel, MNT_C_USERS=1, same kernel as daily, same hostname
+- Static freeze campaign: PASS
+- Isolated run on daily: refuse `daily_host_refuses_run_isolated,shared_windows_desktop_refuses_run_isolated`
+- claim remains NOT_CLAIMED; no thrash
+- v0.6.4 Latest published
+**Verdict:** ✅ works (honest env classification + safer refuse gate)
+**Next action:** True freeze claim needs separate disposable lab VM/machine — not a second WSL distro on this desktop
+**Artifacts:** docs/specs/no-milestone/wsl2-freeze/evidence/ramshared-kernel-probe-20260717/; scripts/safety/wsl2-freeze-campaign.sh
+## 2026-07-17 21:10 — Memory Broker DCC code surface implemented
+
+**What:** Implemented the safe P2 code surface for the generic Windows host/DCC
+consumer: `DccAgent` transport, bounded local JSON-lines protocol, TOML config
+crate, Windows memory-pressure sampler boundary, deterministic evidence
+explanations, and the generic DCC lease/status path.
+
+**Measured data:**
+
+- `cargo test --workspace --all-targets`: **PASS**, 650 tests passed; only
+  explicitly privileged/GPU/ublk tests remained ignored by environment gates.
+- Targeted Clippy with `-D warnings`: **PASS**.
+- `cargo fmt --all`, Python syntax compilation, and `git diff --check`: **PASS**.
+
+**Safety boundaries:** the DCC path can request/release a broker lease but
+cannot issue swap commands; local messages are capped at 64 KiB; process
+attribution is omitted unless explicitly observed.
+
+**Still not claimed:** live WDDM pressure caused by an external GPU workload, successful
+DEMOTE under that pressure, real scene completion under the lease, and the
+isolated two-round WSL2 freeze campaign. The shared desktop was not thrashed.
+
+**Verdict:** 🟡 **PARTIAL — code green, hardware gates open**
+
+**Evidence:** `docs/specs/no-milestone/memory-broker/IMPL.md`
+
+## 2026-07-17 21:25 — Safe pending-gate audit on shared desktop
+
+**What:** Re-ran the freeze campaign gate and read-only cascade health probes
+after the generic naming/adapter changes.
+
+**Measured data:**
+
+- `wsl2-freeze-campaign.sh --check-gates --json`: `gates_ok=false`, reason
+  `daily_host_refused_without_isolated_lab_flag`.
+- `Test-Wsl2FreezeCampaignStatic.sh`: `STATIC_WSL2_FREEZE_CAMPAIGN=PASS`.
+- `cascade-health.sh --once`: `ok=true`, daemon absent, no ghost swap, zero
+  zram/VRAM swap, disk swap used ~203 MiB, GPU free ~4508 MiB, D-state 0.
+
+**Verdict:** 🟡 **ENVIRONMENT-BOUND — correctly refused destructive action**.
+
+The WDDM pressure and two-round freeze gates remain unclaimed. Running them on
+this shared desktop would violate the repository host-safety policy.
+
+## 2026-07-17 19:25 -03 — Hyper-V VM access documented + win11-drill live product PASS
+
+**What:** Verified the correct non-interactive access path for the named lab
+VMs and documented it for future agents without storing secrets.
+
+**Measured data:**
+
+- `win11-drill` PowerShell Direct works with `WIN11-DRILL\drilladmin`.
+  The shorthand `.\drilladmin` can fail on this image.
+- `Run-GuestProductOnline.ps1` on `win11-drill`: **PASS**.
+  Artifact: `C:\ramshared\artifacts\guest-product-online-20260717-191834`.
+- Campaign summary: `LIFECYCLE_ROUNDS=3`, `ONLINE=true`,
+  `BINARY_MATCH=true`, `ROUNDS_PASS=true`, `CONSOLE_EXIT_ZERO=true`,
+  `NO_FORCE_KILL=true`, `LEASE_RELEASED=true`, `CUDA_RESTORED=true`,
+  `NO_NEW_DUMP=true`, `TERMINAL_SAFE=true`, `PASS=true`.
+- `linux-kernel-lab` boots under Hyper-V control, but no shell channel is
+  available from this session: no guest IP on `Default Switch`, KVP no contact,
+  Linux guest has no PowerShell Direct.
+- Terminal state confirmed: `win11-drill=Off`, `linux-kernel-lab=Off`.
+
+**Docs / script hygiene:**
+
+- Added `docs/labs/HYPERV-VM-ACCESS.md`.
+- Updated Windows harness defaults to `WIN11-DRILL\drilladmin`.
+- Added local-only credential ignore patterns for `.drill-pw` and secret files.
+
+**Verification:**
+
+- PowerShell parser for changed scripts: **PASS**.
+- `Test-GuestProductOnlineStatic.ps1`: **PASS**.
+- `Test-GuestExhaustiveStatic.ps1`: **PASS**.
+- `./scripts/docs-check.sh`: **PASS**.
+- `git diff --check`: **PASS**.
+
+**Verdict:** ✅ `win11-drill` access and product campaign are live-proven.
+`linux-kernel-lab` remains power-controllable only until SSH/serial/console
+automation is configured.
+
+## 2026-07-17 19:35 -03 — Windows lab credential hygiene
+
+**What:** Removed remaining hardcoded Windows lab/signing secret defaults from
+`Install-WinDriveVm.ps1`. The script now requires explicit parameters or
+environment variables for both the guest password and test-signing PFX
+password.
+
+**Measured data:**
+
+- `Install-WinDriveVm.ps1` uses `RAMSHARED_DRILL_PASSWORD` and
+  `RAMSHARED_TESTSIGN_PFX_PASSWORD`; no literal defaults.
+- Secret literal scan for old/default credential shapes: **PASS**.
+- PowerShell parser for changed Windows scripts: **PASS**.
+- `Test-SignDriversStatic.ps1`: **PASS**.
+- `cargo fmt --all -- --check`: **PASS**.
+- `cargo clippy --workspace --all-targets -- -D warnings`: **PASS**.
+- `cargo test --workspace --all-targets`: **PASS**.
+- `scripts/p0/measure-gpu-workload-vram.ps1` PowerShell parser: **PASS**.
+- `./scripts/docs-check.sh`: **PASS**.
+- `git diff --check`: **PASS**.
+- Terminal state confirmed: `win11-drill=Off`, `linux-kernel-lab=Off`.
+
+**Verdict:** ✅ tracked scripts no longer carry the known lab credential
+literals; local-only credential files remain ignored and must not be printed.
+
+## 2026-07-17 19:41 -03 — win11-drill exhaustive IOCTL + Verifier PASS
+
+**What:** Re-ran the isolated Windows exhaustive harness after fixing the
+canonical PowerShell Direct identity.
+
+**Measured data:**
+
+- Harness: `Run-GuestExhaustive.ps1`.
+- Artifact: `C:\ramshared\artifacts\guest-exhaustive-20260717-192931`.
+- `IOCTL_PASS1=PASS`.
+- `IOCTL_VERIFIER=PASS`.
+- `VERIFIER_RAN=true`.
+- Verifier flags observed: `0x0002093b`.
+- Verified module: `ramshared.sys`, `load: 1 / unload: 0`.
+- Driver Store/package `BINARY_MATCH=true` with package SHA
+  `97FD7B373ED7DD5AE7F38204070F8B89E08A2B25616AA2A128995E8D1FBFF34F`.
+- Terminal state confirmed: `win11-drill=Off`, `linux-kernel-lab=Off`.
+
+**Verification:**
+
+- `Test-GuestExhaustiveStatic.ps1`: **PASS**.
+- `./scripts/docs-check.sh`: **PASS**.
+- `git diff --check`: **PASS**.
+
+**Verdict:** ✅ `win11-drill` exhaustive IOCTL and Driver Verifier path are
+live-proven with the documented access path.
+
+## 2026-07-17 19:58 -03 — linux-kernel-lab SSH access recovered via ARP fallback
+
+**What:** Rechecked older records and restored the documented non-interactive
+access path for the Hyper-V Linux lab.
+
+**Measured data:**
+
+- Historical record found: 2026-07-10 validation said SSH worked from the
+  Windows host, not from WSL NAT.
+- Local access file confirms user `emedev`, SSH keys installed, passwordless
+  sudo, and MAC lookup fallback.
+- `Get-VMNetworkAdapter.IPAddresses` remained empty, but Windows neighbor
+  table mapped VM MAC `00-15-5D-00-FA-04` to `172.23.18.42`.
+- New helper `Get-LinuxKernelLabAccess.ps1 -Start -Smoke`: **PASS**.
+- SSH smoke from Windows host:
+  - hostname: `linux-kernel-lab`
+  - kernel: `6.8.0-134-generic`
+  - `cloud-init status --wait`: `done`
+  - `sudo -n true`: **PASS**
+  - SSH service: active
+  - netplan: DHCP on `eth0`, MAC match `00:15:5d:00:fa:04`
+  - root filesystem: 38G size, 7.1G used, 31G available
+  - memory: 5.8Gi total, ~5.3Gi available
+- Kernel clone probe: `~/src/WSL2-Linux-Kernel` HEAD `1bd4ed3d4`.
+- `/dev/ublk-control`: absent, consistent with the generic Ubuntu kernel.
+- Terminal state confirmed: `win11-drill=Off`, `linux-kernel-lab=Off`.
+
+**Docs / script hygiene:**
+
+- Added `scripts/windows/Get-LinuxKernelLabAccess.ps1`.
+- Updated `docs/labs/HYPERV-VM-ACCESS.md` with ARP fallback and SSH smoke
+  commands.
+
+**Verdict:** ✅ `linux-kernel-lab` is accessible again for non-destructive
+kernel-build/smoke work via Windows-host SSH. It remains unsuitable for VRAM
+proof because it has no GPU assignment.
+
+## 2026-07-17 20:20 -03 — app-specific DCC naming removed
+
+**What:** Removed the app-specific DCC adapter surface from this slice. The
+product behavior and public tree now use generic workload/DCC naming instead of
+promoting one GPU application as the architecture.
+
+**Measured data:**
+
+- Removed the app-specific Python adapter from `integrations/`.
+- Replaced the app-specific render probe with
+  `scripts/p0/measure-gpu-workload-vram.ps1`, which only samples aggregate
+  VRAM/RAM while any external GPU workload runs.
+- Updated README, naming rules, PRD/SPEC/IMPL, reliability docs, and validation
+  text to generic GPU workload / DCC host language.
+- App-specific name scan over README/docs/scripts/crates/validation/rules:
+  **PASS**.
+- PowerShell parser for `measure-gpu-workload-vram.ps1`: **PASS**.
+- `cargo test -p ramshared-agent --all-targets`: **PASS**.
+- `./scripts/docs-check.sh`: **PASS**.
+- `git diff --check`: **PASS**.
+- Terminal state confirmed: `win11-drill=Off`, `linux-kernel-lab=Off`.
+
+**Verdict:** ✅ The current slice no longer exposes an app-specific integration
+name as product architecture. Host-specific adapters remain deferred.
+
+## 2026-07-17 20:55 -03 — public app-name and elevated-access gap audit
+
+**What:** Extended the generic naming audit to changelog/history text, filesystem
+paths, and the documented elevated Hyper-V access path.
+
+**Measured data:**
+
+- Removed stale app-specific render-script wording from `CHANGELOG.md`.
+- Public content scan for example application names and old integration/script
+  names across repo surfaces, excluding local-only `MEMORY.md`: **PASS**.
+- Filesystem path scan for old app-specific directories/files: **PASS**.
+- Secret literal scan for lab password/signing/API-key shapes: **PASS**.
+- Elevated WSL wrapper `scripts/windows/wsl-elevated-ps.sh` successfully ran
+  `Get-VM`; terminal state confirmed:
+  - `win11-drill=Off`
+  - `linux-kernel-lab=Off`
+- `Test-LinuxKernelLabAccessStatic.ps1`: **PASS**.
+- PowerShell parser for changed Windows/P0 scripts: **PASS**.
+- `./scripts/docs-check.sh`: **PASS**.
+- `git diff --check`: **PASS**.
+
+**Verdict:** ✅ No remaining public app-specific naming gap was found. Elevated
+VM access is documented and currently works through the repository wrapper
+without committing or printing credentials.
+
+## 2026-07-17 21:15 -03 — workspace verification after naming cleanup
+
+**What:** Re-ran the verification loop after the generic naming cleanup and
+fixed a source-language gap found during manual review.
+
+**Measured data:**
+
+- Corrected new Rust source strings in `ramshared-config`,
+  `ramshared-host-agent`, and DEMOTE explanations to English.
+- New-source Portuguese/string scan for the touched Rust files: **PASS**.
+- `cargo fmt --all -- --check`: **PASS**.
+- `cargo clippy --workspace --all-targets -- -D warnings`: **PASS**.
+- `cargo test --workspace --all-targets`: **PASS**.
+- Post-format targeted tests:
+  `cargo test -p ramshared-config -p ramshared-agent --all-targets`: **PASS**.
+- App-specific public content/path scans: **PASS**.
+- Secret literal scan: **PASS**.
+- PowerShell parser checks for changed Windows/P0 scripts: **PASS**.
+- `Test-LinuxKernelLabAccessStatic.ps1`: **PASS**.
+- `./scripts/docs-check.sh`: **PASS**.
+- `git diff --check`: **PASS**.
+- Elevated VM state probe through `scripts/windows/wsl-elevated-ps.sh`: **PASS**,
+  with both `win11-drill` and `linux-kernel-lab` Off.
+
+**Verdict:** ✅ The current working tree is ready for normal review/test of the
+generic VRAM reclaim, host-agent, VM-access, and naming-policy slice. Destructive
+root/GPU ignored tests remain intentionally gated to isolated lab execution.
+
+## 2026-07-17 21:55 -03 — ignored root/GPU tests executed
+
+**What:** Executed the previously ignored CUDA, Vulkan, root ublk, VRAM ublk,
+fio, and bounded swap tests. The standalone ublk daemon smoke was executed via
+the existing isolated QEMU drill instead of opening its WSL2 freeze gate on the
+daily host.
+
+**Bugs found and fixed:**
+
+- `ublk_control_smoke` assumed `UBLK_F_SUPPORT_ZERO_COPY` was absent. Current
+  WSL2 ublk advertises it, so the test now asserts the current feature contract.
+- Current ublk rejects tiny 128 KiB smoke disks and BASIC params with
+  `max_sectors=0`. `Params::basic_disk` now defaults to 8 sectors (4 KiB), and
+  ublk smoke disks use 1 MiB minimum where needed.
+- Removed Portuguese strings/comments from the touched ublk UAPI/test code.
+
+**Ignored-test evidence:**
+
+- `cargo test -p ramshared-cuda -- --ignored --test-threads=1`: **PASS**.
+- `cargo test -p ramshared-vulkan -- --ignored --test-threads=1`: **PASS**.
+- `cargo test -p ramshared-winsvc cuda_probe::tests::probe_cuda_allocates_roundtrips_and_restores -- --ignored --test-threads=1`: **PASS**.
+- `cargo test -p ramshared-wsl2d backend::tests::vram_backend_serves_nbd_write_then_read -- --ignored --test-threads=1`: **PASS**.
+- `cargo test -p ramshared-wsl2d backend::tests::vram_gauge_outros_captures_real_graphics_usage -- --ignored --test-threads=1`: **PASS**.
+- Root `ublk_control_smoke --ignored --test-threads=1`: **PASS**.
+- Root `ublk_io_smoke --ignored --test-threads=1`: **PASS**.
+  - `bench_vram_ublk_read_latency`: p50 ~263 us, p99 ~642 us in the final run.
+  - `fio_bench_vram_ublk`: ~3715 IOPS / 14.5 MiB/s in the final run.
+  - `vram_ublk_round_trips_as_swap_device`: **PASS**; `/proc/swaps` returned to
+    the original disk-only state.
+- `./scripts/kernel/qemu-ublk-daemon.sh`: **PASS**.
+  - `KTEST-INSMOD=ok`
+  - `KTEST-UBLK-CONTROL=present`
+  - `KTEST-SERVED=ok`
+  - `KTEST-TERMINATED=ok`
+  - `KTEST-DEVICE-REMOVED=ok`
+
+**Terminal state:**
+
+- `/proc/swaps`: disk swap only (`/dev/sdc`).
+- `/dev/ublk*`: only `/dev/ublk-control`.
+- GPU memory after tests: 4565 / 6144 MiB free.
+- Elevated VM state probe: `win11-drill=Off`, `linux-kernel-lab=Off`.
+
+**Regression checks after fixes:**
+
+- `cargo fmt --all -- --check`: **PASS**.
+- `cargo clippy --workspace --all-targets -- -D warnings`: **PASS**.
+- `cargo test --workspace --all-targets`: **PASS**.
+- `./scripts/docs-check.sh`: **PASS**.
+- `git diff --check`: **PASS**.
+- App-specific public scan: **PASS**.
+- Secret literal scan: **PASS**.
+- PowerShell parser checks: **PASS**.
+
+**Verdict:** ✅ The ignored root/GPU surface is now exercised. The only WSL2
+freeze-gated daemon case remains unsafe to run on the daily host and is covered
+by the isolated QEMU drill that validates serve + SIGTERM teardown + device
+removal.
+
+## 2026-07-17 22:40 -03 — public hygiene gate and gap register
+
+**What:** Added a tracked public hygiene gate and a reliability gap register so
+future agents cannot silently reintroduce example-app naming, signing-password
+literals, or false DONE promotion for environment-bound claims.
+**Category:** ci-gate + documentation
+**How to measure:**
+```bash
+node tools/ci/check-public-hygiene.mjs
+./scripts/docs-check.sh
+git diff --check
+```
+**Measured data:**
+- `node tools/ci/check-public-hygiene.mjs`: **PASS**.
+- `./scripts/docs-check.sh`: **PASS** and now runs the public hygiene gate.
+- `git diff --check`: **PASS**.
+- Open gates are listed in `docs/reliability/GAP-REGISTER.md` with required
+  close evidence for external GPU workload pressure, isolated WSL2 freeze
+  campaign, Windows physical Online, guest GPU-PV CUDA, and custom-kernel ublk
+  product promotion.
+**Verdict:** ✅ Current public hygiene gap is closed with a repeatable gate;
+environment-bound product claims remain explicitly PARTIAL until their listed
+evidence exists.
+
+## 2026-07-17 22:55 -03 — gap register schema gate
+
+**What:** Added a machine-checkable gate for `docs/reliability/GAP-REGISTER.md`.
+It enforces concrete open-gate rows, rejects DONE/PASS promotion in the open
+table, rejects placeholder close evidence, and verifies that primary docs link
+back to the register.
+**Category:** ci-gate + documentation
+**How to measure:**
+```bash
+node tools/ci/check-gap-register.mjs
+./scripts/docs-check.sh
+node tools/ci/check-validation-schema.mjs --all
+git diff --check
+```
+**Measured data:**
+- `node tools/ci/check-gap-register.mjs`: **PASS**.
+- `./scripts/docs-check.sh`: **PASS**, including gap register and public
+  hygiene gates.
+- `node tools/ci/check-validation-schema.mjs --all`: **PASS**.
+- `git diff --check`: **PASS**.
+- Gap register state: **5** current open gates and **4** closed session gaps.
+**Verdict:** ✅ Open environment-bound gates are now protected by a repeatable
+schema gate, not just prose.
+
+## 2026-07-17 23:05 -03 — P0 workload wording cleanup
+
+**What:** Updated `docs/reliability/memory-broker-p0-results.md` to remove stale
+render/tester-specific wording and placeholder cells. The remaining open P0
+measurement now uses app-agnostic external GPU workload terminology aligned
+with `Invoke-GpuWorkloadGate.ps1`.
+**Category:** documentation
+**How to measure:**
+```bash
+rg -n "render|Render|Alex|PENDING|scene|failed" docs/reliability/memory-broker-p0-results.md
+./scripts/docs-check.sh
+node tools/ci/check-validation-schema.mjs --all
+git diff --check
+```
+**Measured data:**
+- Stale wording scan: **0** matches.
+- `./scripts/docs-check.sh`: **PASS**.
+- `node tools/ci/check-validation-schema.mjs --all`: **PASS**.
+- `git diff --check`: **PASS**.
+**Verdict:** ✅ P0 workload docs now match the generic naming policy and the
+remaining workload measurement stays explicit as unmeasured, not app-specific.
+
+## 2026-07-17 23:20 -03 — QEMU drills gain in-guest binary match
+
+**What:** Updated the isolated QEMU ublk-daemon and broker drills to compare
+host-side SHA-256 with the binary copied into the guest initramfs before
+claiming PASS.
+**Category:** isolation + ci-gate
+**How to measure:**
+```bash
+bash -n scripts/kernel/qemu-ublk-daemon.sh
+bash -n scripts/kernel/qemu-broker-drill.sh
+./scripts/kernel/qemu-ublk-daemon.sh
+./scripts/kernel/qemu-broker-drill.sh
+./scripts/docs-check.sh
+node tools/ci/check-validation-schema.mjs --all
+git diff --check
+```
+**Measured data:**
+- `qemu-ublk-daemon.sh`: `KTEST-BINARY-MATCH=ok`,
+  `KTEST-SERVED=ok`, `KTEST-TERMINATED=ok`,
+  `KTEST-DEVICE-REMOVED=ok`.
+- `qemu-broker-drill.sh`: `KTEST-DAEMON-BINARY-MATCH=ok`,
+  `KTEST-AGENT-BINARY-MATCH=ok`, `KTEST-SWAP-ACTIVE=ok`,
+  `KTEST-TELEMETRY=ok`, `KTEST-SWAPOFF=ok`,
+  `KTEST-DAEMON-TERMINATED=ok`.
+- `./scripts/docs-check.sh`: **PASS**.
+- `node tools/ci/check-validation-schema.mjs --all`: **PASS**.
+- `git diff --check`: **PASS**.
+**Verdict:** ✅ Current isolated QEMU drills now include binary-match evidence.
+The universal WSL2 freeze claim remains PARTIAL until the separate GPU-PV/dxg
+host-reclaim campaign exists.
+
+## 2026-07-22 01:53 -03 — WSL2 external global GPU free-floor DEMOTE
+
+**What:** Ran the supervised shared-host WSL2 pressure campaign with a generic
+Windows CUDA workload consuming 4096 MiB of VRAM, WSL2 sparse VRAM capacity
+4096 MiB, zram 1024 MiB, and host disk telemetry for `C:` and `I:`.
+**Category:** WSL2 + external GPU pressure + telemetry
+**How to measure:**
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File scripts/windows/Invoke-SharedWslPressureCampaign.ps1 `
+  -ApproveSharedDailyHost -VramMiB 4096 -ZramMiB 1024 `
+  -Rounds 1 -ExternalWorkloadMiB 4096 -ExternalWorkloadHoldSec 90 `
+  -ExternalWorkloadDelaySec 8 -PostCampaignObserveSec 120 `
+  -HostDiskLetters C,I
+```
+**Measured data:**
+- Artifact: `C:\ramshared\artifacts\shared-wsl-pressure-20260722-015303`.
+- `STATUS=PASS`, `REASON=validated_external_global_gpu_demote`.
+- External workload released cleanly; `external_workload_ok=true`.
+- `ramshared diagnose --events --json`: `demotes=2`, timeline reason
+  `GlobalGpuFreeFloor`, process not attributed.
+- GPU pressure: min free 348 MiB; max used 5607 MiB.
+- Final health: `ghost=false`, daemon dead, no zram/VRAM swap left.
+- Host disk telemetry: `C:` max write 462.20 MiB/s, max read 304.79 MiB/s,
+  max queue 6; `I:` max write 315.09 MiB/s, max read 3.28 MiB/s, max queue 130.
+**Verdict:** ✅ The aggregate external VRAM pressure DEMOTE path is proven on
+the shared WSL2 host. This does not close the separate GiB reclaim matrix.

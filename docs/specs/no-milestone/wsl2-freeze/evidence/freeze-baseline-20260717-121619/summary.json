@@ -1,0 +1,1 @@
+{"ts":"2026-07-17T12:16:19-03:00","mode":"dry-run","host":"emedev","daily_host":true,"ghost":false,"binary_match":"n/a","used_kib":242700,"has_deleted_swap":false,"d_state":0,"hung_task_hits":0,"gates_ok":false,"reasons":"daily_host_refused_without_isolated_lab_flag","claim":"NOT_CLAIMED"}

@@ -92,7 +92,7 @@ A watchdog sampler must continuously probe the residency of VRAM pages and monit
 5.  Active user space processes proceed normally, with cold pages stored in VRAM.
 
 ### 6.2 Emergency Path: Graceful Demotion
-1.  A high-demand GPU application (e.g., Blender, 3D Game) launches on the Windows host.
+1.  A high-demand GPU workload launches on the Windows host.
 2.  WDDM initiates eviction of the `ramshared` CUDA allocation to system memory.
 3.  The residency canary detects a latency spike (>1 second read delay) or `cuMemGetInfo` reports free memory dropping below the safety floor.
 4.  The watchdog triggers a demotion:

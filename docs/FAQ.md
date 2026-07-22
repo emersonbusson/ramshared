@@ -52,20 +52,28 @@ Important:
 
 1. **Letter `V: RAMSHARED` may be a physical SSD** that was labeled earlier — **not** the 64 MiB virtual LUN. Always check `Get-Disk` name + size (lab LUN is usually 64 MiB / Fibre Channel / `RAMSHARE VRAMDISK`).
 2. **Backend must be alive** (`WinDriveBackend` / winsvc). A ghost RAW disk after backend exit makes `Initialize-Disk` fail with StorageWMI **40004** (writes never complete).
-3. Prefer real metrics (do **not** trust Task Manager alone):
+3. Prefer real metrics (do **not** trust Task Manager alone). The measure script samples
+   locale-safe PerfDisk counters and, when a drive letter is provided, runs direct I/O
+   during the sampling window plus a checksum probe:
 
 ```powershell
 # Elevated from WSL: ./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\bin\...
 # Start backend if needed, then format only the RamShared LUN (free letter, not V: if V: is physical):
 .\scripts\windows\Start-RamSharedLab.ps1 -SizeBytes 67108864 -HoldSeconds 3600
 .\scripts\windows\Format-RamSharedLun.ps1 -ExpectedSizeBytes 67108864 -DriveLetter S -Force
-# Locale-safe PerfDisk (CIM) + optional sequential probe:
+# Locale-safe PerfDisk (CIM) + direct I/O load/checksum probe:
 .\scripts\windows\Measure-RamSharedDiskIo.ps1 -Seconds 10 -DriveLetter S
 ```
 
 4. Day-0 driver fix: **TEST UNIT READY no longer returns `SRB_STATUS_BUSY`** when the LUN is not ready (that made StorPort requeue forever → stuck 100%). It returns CHECK CONDITION **NOT READY** with autosense instead. Rebuild/reload `ramshared.sys` to pick that up.
 
-**Live lab (host 2026-07-14):** Disk5 `RAMSHARE VRAMDISK` 64 MiB RAW → GPT+NTFS `S:` label `RAMSHARED` with backend alive; direct probe **8 MiB write ≈ 1224 MB/s, read ≈ 146 MB/s, match=True**. Task Manager can still show odd % busy on StorPort; use the measure script.
+**Live lab (host 2026-07-18):** `C:\ramshared\artifacts\exhaustive-20260718-004215`
+mounted Disk5 `RAMSHARE VRAMDISK` as `S:` and passed `DISK_IO_MEASURE_OK=true`.
+The measure script matched PerfDisk instance `5 S:`, generated 304 MiB write/read
+during sampling with `match=True`, observed non-zero busy/write/queue counters, and
+the direct 8 MiB checksum probe matched. Task Manager can still show odd % busy on
+StorPort. This is not a RamShared correctness gate; use the measure script for
+supported evidence.
 
 ## Is RamShared using my VRAM right now?
 

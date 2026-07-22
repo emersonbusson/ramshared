@@ -291,7 +291,17 @@ needed): older EWDK image dedicated to SDV only — not required to close this s
 
 These remain **honest non-PASS** for this machine, not unfinished Day-0 work:
 
-1. **Daily-host physical Online** — policy RED (lab-only miniport). Guest Online is PASS.
+1. **Daily-host physical Online** — still PARTIAL. On 2026-07-17 the first physical
+   storage-only run reached the weak startup banner but failed to enumerate the
+   RAMSHARE LUN because no broker was listening on `127.0.0.1:19876`
+   (`C:\ramshared\artifacts\exhaustive-20260717-225024`). `Run-HostExhaustive.ps1`
+   now starts the same lab JSONL broker used by the guest harness, waits for
+   the strong `product Online:` line, preserves `broker-lab.log`, and requires
+   `LEASE_RELEASED` for PASS. The later 2026-07-17 preflight/run correctly
+   refused immediately with `CONTROL_PATH=false` because the physical miniport
+   remained loaded without `\\.\RamSharedCtl`
+   (`C:\ramshared\artifacts\exhaustive-20260717-230350`). A new physical Online
+   attempt requires reboot/unload/redeploy first. Guest Online is PASS.
 2. **WSL2 freeze-elimination claim** — env-bound. Scaffold ready; daily host correctly refuses
    thrash. Requires a **disposable isolated WSL lab** (not win11-drill, not the daily Ubuntu-24.04
    host). See `docs/specs/no-milestone/wsl2-freeze/README.md` and

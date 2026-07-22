@@ -396,6 +396,7 @@ impl Params {
     /// Assembles `ublk_params` only with type BASIC: disk size in 512 B sectors
     /// and logical/physical block size shifts. Other types remain zeroed.
     pub fn basic_disk(dev_sectors: u64, logical_bs_shift: u8, physical_bs_shift: u8) -> Self {
+        let default_max_sectors = 8; // 4 KiB: matches the smoke device max_io_buf_bytes.
         Self {
             len: UBLK_PARAMS_LEN as u32,
             types: UBLK_PARAM_TYPE_BASIC,
@@ -404,6 +405,7 @@ impl Params {
                 physical_bs_shift,
                 io_opt_shift: physical_bs_shift,
                 io_min_shift: logical_bs_shift,
+                max_sectors: default_max_sectors,
                 dev_sectors,
                 ..ParamBasic::default()
             },
@@ -459,7 +461,7 @@ impl Params {
         b[80..84].copy_from_slice(&self.zoned.max_active_zones.to_ne_bytes());
         b[84..88].copy_from_slice(&self.zoned.max_zone_append_sectors.to_ne_bytes());
         b[88..108].copy_from_slice(&self.zoned.reserved);
-        // 108..112: padding de alinhamento (zerado).
+        // 108..112: alignment padding (zeroed).
         b
     }
 
