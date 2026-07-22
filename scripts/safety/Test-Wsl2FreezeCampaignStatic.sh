@@ -25,6 +25,7 @@ required=(
   "recent_dmesg_sec"
   "RAMSHARED_FREEZE_RECENT_DMESG_SEC"
   "recent_oom_marker"
+  "RAMSHARED_ALLOW_RECENT_OOM_MARKER"
   "Memory cgroup out of memory"
   "--run-isolated"
   "--approve-shared-daily-host"
