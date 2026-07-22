@@ -11,10 +11,12 @@
 //! Backoff remains as future work.
 
 use core::ffi::c_int;
+use std::io::Read;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
+use std::process::{Command as ProcessCommand, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ramshared_block::protocol::{NBD_FLAG_CAN_MULTI_CONN, NBD_FLAG_HAS_FLAGS, NBD_FLAG_SEND_FLUSH};
 use ramshared_block::{
@@ -267,6 +269,76 @@ fn sparse_residency_config(reserve_floor_bytes: u64) -> ResidencyConfig {
 
 fn sparse_residency_requests_swapoff(reason: DemoteReason) -> bool {
     !matches!(reason, DemoteReason::Latency)
+}
+
+fn parse_nvidia_smi_free_bytes(output: &str) -> Option<u64> {
+    let first = output.lines().find(|line| !line.trim().is_empty())?.trim();
+    let token = first
+        .split(|ch: char| ch == ',' || ch.is_ascii_whitespace())
+        .find(|part| !part.is_empty())?;
+    let mib = token.parse::<u64>().ok()?;
+    mib.checked_mul(1024 * 1024)
+}
+
+fn command_stdout_with_timeout(program: &str, args: &[&str], timeout: Duration) -> Option<String> {
+    let mut child = ProcessCommand::new(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().ok()? {
+            if !status.success() {
+                return None;
+            }
+            let mut stdout = String::new();
+            child.stdout.take()?.read_to_string(&mut stdout).ok()?;
+            return Some(stdout);
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn global_gpu_free_bytes_from_nvidia_smi(timeout: Duration) -> Option<u64> {
+    const ARGS: &[&str] = &["--query-gpu=memory.free", "--format=csv,noheader,nounits"];
+    for program in ["/usr/lib/wsl/lib/nvidia-smi", "nvidia-smi"] {
+        if program.starts_with('/') && !Path::new(program).exists() {
+            continue;
+        }
+        if let Some(output) = command_stdout_with_timeout(program, ARGS, timeout)
+            && let Some(bytes) = parse_nvidia_smi_free_bytes(&output)
+        {
+            return Some(bytes);
+        }
+    }
+    None
+}
+
+fn observe_global_free_floor(
+    free_bytes: Option<u64>,
+    floor_bytes: u64,
+    committed_bytes: u64,
+    streak: &mut u32,
+    required: u32,
+) -> bool {
+    if committed_bytes == 0 {
+        *streak = 0;
+        return false;
+    }
+    if free_bytes.is_some_and(|free| free < floor_bytes) {
+        *streak = streak.saturating_add(1);
+        *streak >= required.max(1)
+    } else {
+        *streak = 0;
+        false
+    }
 }
 
 struct AppArgs {
@@ -615,6 +687,7 @@ fn run_nbd<P: VramProvider>(
         config: AutotierConfig::default(),
     });
     let budget_gate = dxg_gate.as_ref().map(|gate| gate as &dyn CommitBudgetGate);
+    let autotier_config = AutotierConfig::default();
     // Discipline 3: mlock host pages; for sparse, CUDA commit is on-demand (SPEC).
     lock_memory(force, true)?;
 
@@ -730,6 +803,12 @@ fn run_nbd<P: VramProvider>(
     let mut observed_budget_refuses = 0;
     let mut recovery = RecoveryTracker::new(3);
     let mut live = LiveCount::new();
+    let trace_probe = std::env::var("RAMSHARED_TRACE_PROBE").ok().as_deref() == Some("1");
+    let global_probe_interval = Duration::from_secs(1);
+    let global_probe_timeout = Duration::from_secs(2);
+    let mut next_global_probe_at = Instant::now();
+    let mut last_global_free: Option<u64> = None;
+    let mut global_free_streak = 0u32;
     // CLI status --json demote fields (cascade-lifecycle-observability ITEM-3)
     let mut demotes_total: u64 = 0;
     let mut last_demote_reason: Option<String> = None;
@@ -830,7 +909,15 @@ fn run_nbd<P: VramProvider>(
                         &mut cadence,
                         &mut probe,
                         free_floor,
-                        || provider.mem_info().ok().map(|(f, _)| f),
+                        || {
+                            let cuda_free = provider.mem_info().ok().map(|(f, _)| f);
+                            match (cuda_free, last_global_free) {
+                                (Some(cuda), Some(global)) => Some(cuda.min(global)),
+                                (Some(cuda), None) => Some(cuda),
+                                (None, Some(global)) => Some(global),
+                                (None, None) => None,
+                            }
+                        },
                     )
                 {
                     let sparse = matches!(backend, Be::Sparse(_));
@@ -907,32 +994,79 @@ fn run_nbd<P: VramProvider>(
         }
 
         if let (Some(dxg_provider), Be::Sparse(sparse)) = (&dxg, &backend) {
-            let budget_healthy = dxg_provider
-                .snapshot()
-                .ok()
-                .and_then(|snapshot| {
-                    commit_allowed(
+            let now = Instant::now();
+            if now >= next_global_probe_at {
+                next_global_probe_at = now + global_probe_interval;
+                last_global_free = global_gpu_free_bytes_from_nvidia_smi(global_probe_timeout);
+                if trace_probe || last_global_free.is_some_and(|free| free < free_floor * 2) {
+                    eprintln!(
+                        "[ramsharedd] global GPU sample: free={last_global_free:?} \
+                         floor={free_floor} streak={global_free_streak}"
+                    );
+                }
+            }
+
+            let committed = sparse.committed_bytes();
+            let chunk = sparse.chunk_bytes();
+            let budget_healthy = match dxg_provider.snapshot() {
+                Ok(snapshot) => {
+                    let decision = commit_allowed(
                         BudgetInput {
                             budget: snapshot.budget,
                             current_usage: snapshot.current_usage,
-                            cuda_committed: sparse.committed_bytes(),
+                            cuda_committed: committed,
                             sampled_at: snapshot.sampled_at,
                         },
-                        sparse.committed_bytes(),
-                        sparse.chunk_bytes(),
-                        &AutotierConfig::default(),
-                    )
-                    .ok()
-                })
-                .is_some();
+                        committed,
+                        chunk,
+                        &autotier_config,
+                    );
+                    if trace_probe {
+                        eprintln!(
+                            "[ramsharedd] WDDM poll sample: budget={} current_usage={} \
+                             cuda_committed={} chunk={} allow={}",
+                            snapshot.budget,
+                            snapshot.current_usage,
+                            committed,
+                            chunk,
+                            decision.is_ok()
+                        );
+                    }
+                    decision.is_ok()
+                }
+                Err(error) => {
+                    if trace_probe {
+                        eprintln!("[ramsharedd] WDDM poll sample error: {error}");
+                    }
+                    false
+                }
+            };
+            let global_constrained = observe_global_free_floor(
+                last_global_free,
+                free_floor,
+                committed,
+                &mut global_free_streak,
+                autotier_config.constrained_samples,
+            );
+            let global_healthy = last_global_free.is_none_or(|free| free >= free_floor);
 
-            if !demoted && demote_rx.is_none() && !budget_healthy {
-                eprintln!("[ramsharedd] WDDM poll constrained -> swapoff {nbd_dev}");
-                last_demote_reason = Some("WddmBudgetPoll".into());
+            if !demoted && demote_rx.is_none() && (!budget_healthy || global_constrained) {
+                if global_constrained {
+                    eprintln!(
+                        "[ramsharedd] global GPU free-floor constrained -> swapoff {nbd_dev} \
+                         free={last_global_free:?} floor={free_floor}"
+                    );
+                    last_demote_reason = Some("GlobalGpuFreeFloor".into());
+                } else {
+                    eprintln!("[ramsharedd] WDDM poll constrained -> swapoff {nbd_dev}");
+                    last_demote_reason = Some("WddmBudgetPoll".into());
+                }
                 demote_rx = Some(spawn_swapoff(&nbd_dev));
                 swapoff_attempted = true;
                 publish_demote(demotes_total, &last_demote_reason, true);
-            } else if demoted && recovery.observe(budget_healthy, sparse.chunks_live() == 0) {
+            } else if demoted
+                && recovery.observe(budget_healthy && global_healthy, sparse.chunks_live() == 0)
+            {
                 if activate_swap(&nbd_dev, 100) {
                     demoted = false;
                     swapoff_attempted = false;
@@ -1637,5 +1771,79 @@ mod tests {
             0,
             true
         ));
+    }
+
+    #[test]
+    fn nvidia_smi_free_parser_accepts_plain_csv_mib() {
+        assert_eq!(
+            parse_nvidia_smi_free_bytes("4731\n"),
+            Some(4731 * 1024 * 1024)
+        );
+        assert_eq!(
+            parse_nvidia_smi_free_bytes(" 222 MiB \n"),
+            Some(222 * 1024 * 1024)
+        );
+        assert_eq!(
+            parse_nvidia_smi_free_bytes("222, 5733\n"),
+            Some(222 * 1024 * 1024)
+        );
+    }
+
+    #[test]
+    fn nvidia_smi_free_parser_rejects_empty_or_bad_output() {
+        assert_eq!(parse_nvidia_smi_free_bytes(""), None);
+        assert_eq!(parse_nvidia_smi_free_bytes("N/A\n"), None);
+    }
+
+    #[test]
+    fn global_free_floor_demote_requires_committed_tier_and_streak() {
+        let mut streak = 0;
+        assert!(!observe_global_free_floor(
+            Some(128),
+            512,
+            0,
+            &mut streak,
+            3
+        ));
+        assert_eq!(streak, 0);
+
+        assert!(!observe_global_free_floor(
+            Some(128),
+            512,
+            1024,
+            &mut streak,
+            3
+        ));
+        assert_eq!(streak, 1);
+        assert!(!observe_global_free_floor(
+            Some(128),
+            512,
+            1024,
+            &mut streak,
+            3
+        ));
+        assert!(observe_global_free_floor(
+            Some(128),
+            512,
+            1024,
+            &mut streak,
+            3
+        ));
+    }
+
+    #[test]
+    fn global_free_floor_resets_on_healthy_or_missing_sample() {
+        let mut streak = 2;
+        assert!(!observe_global_free_floor(
+            Some(2048),
+            512,
+            1024,
+            &mut streak,
+            3
+        ));
+        assert_eq!(streak, 0);
+        streak = 2;
+        assert!(!observe_global_free_floor(None, 512, 1024, &mut streak, 3));
+        assert_eq!(streak, 0);
     }
 }
