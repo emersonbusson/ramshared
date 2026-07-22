@@ -63,4 +63,6 @@ Non-trivial commits (locks, DMA, or atomic allocation) **MUST** include `Rollbac
 - No auto-commit/auto-merge without supervision/approval.
 - No persisting secrets.
 - No undocumented dependencies.
-- No thrash pressure on the live WSL2 daily host.
+- No unsupervised thrash pressure on the live WSL2 daily host. Shared-host
+  pressure requires the Windows watchdog harness, explicit approval, telemetry,
+  bounded cgroup pressure, and cleanup artifacts.

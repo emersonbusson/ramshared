@@ -20,8 +20,11 @@ cited in a doc, PR, or decision, it becomes a registered benchmark** and must fo
 - **Fixed and versioned parameters** (bs, qd, size, runtime, ramp discarded). Parameter changed → new run.
 - **Realistic load when applicable** (#5): clean idle lies if real usage is with a loaded machine.
   Every run carries a **condition tag** (`idle` | `loaded`).
-- **Bounded and non-disruptive on the live host.** NEVER swap/ublk thrashing on WSL2 (FREEZES the host +
-  crashes user apps). Real pressure only in an **isolated** VM/qemu/civm (DT-29).
+- **Bounded and supervised on the live host.** Unsupervised swap/ublk thrashing on WSL2 is forbidden
+  because it can freeze the host and crash user apps. Real pressure should prefer an isolated
+  VM/qemu/civm. When the explicit target is the shared daily WSL2 host, it must go through
+  `scripts/windows/Invoke-SharedWslPressureCampaign.ps1` with approval, a Windows-side watchdog,
+  cgroup-bounded pressure, telemetry, and cleanup artifacts.
 
 ## Registration integrity (store correctly)
 

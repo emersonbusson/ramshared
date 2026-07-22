@@ -27,7 +27,7 @@ Spec pipeline that *uses* these disciplines: [`docs/SSDV3-PROMPTS.md`](../SSDV3-
 | 13 | Illusion of validity | Effect + refusal **paired** with legitimate pass | ghost `up` fails **and** clean `up` works | Real failure mode tested, not mock-only |
 | 14 | Mass-refactor fallacy | Orthogonal slices; never rewrite whole tree | Format one crate; hang audit one subsystem | Atomic commits per slice |
 | 15 | Calibrated retry | Retry **only** proven transient | `EAGAIN`/`ETIMEDOUT` reconnect; never `-EINVAL`/checkpatch red | Classify before retry; deterministic fails at attempt 1 |
-| 16 | Fail-safe + independent curator | Safe default; cure must not die with resource | Demote works when VRAM full; no live WSL2 thrash to “heal” | Exhaustion tests; abort ≠ trigger threshold |
+| 16 | Fail-safe + independent curator | Safe default; cure must not die with resource | Demote works when VRAM full; no unsupervised live WSL2 pressure to “heal” | Exhaustion tests; abort ≠ trigger threshold |
 | 17 | Replay idempotency | 2× apply = 1× effect | Second `down`/`swapoff`/`LeaseRelease` no double effect | Test asserts unique state, not “no panic twice” |
 | 18 | Right layer + proven sunset | Fix where root lives; remove shim only with class proof | Eviction fixed in demote engine, not sleep-loop; Day-0 sunset with drill | PR cites owning layer; sunset has proof for **this** class |
 
@@ -160,7 +160,7 @@ Spec pipeline that *uses* these disciplines: [`docs/SSDV3-PROMPTS.md`](../SSDV3-
 **Rule:**
 
 1. **Safe failure is default** — missing protection fails loud (no silent leak/UAF).  
-2. **Cure must not depend on the resource being healthy** — demote/reclaim under full VRAM; host-safety must not thrash live WSL2 (qemu/civm). Abort-threshold ≠ trigger-threshold; measure **live** at the gate.
+2. **Cure must not depend on the resource being healthy** — demote/reclaim under full VRAM; host-safety must not use unsupervised live WSL2 pressure (qemu/civm preferred, shared-host watchdog harness when explicit). Abort-threshold ≠ trigger-threshold; measure **live** at the gate.
 
 PR checklist for guards / watchdogs / demote:
 
@@ -222,7 +222,7 @@ Kahneman does **not** replace cover ≥80%. It defines **what kind of proof** a 
 | 7 | `docs/postmortems/` when used |
 | 10–12 | Review / coding rules |
 | 13–17 | SPEC test matrix + live drills / `validation.md` |
-| 15–16 | Host-safety scripts; no thrash on live WSL2 |
+| 15–16 | Host-safety scripts; no unsupervised pressure on live WSL2 |
 | 18 | Day-0 in SSDV3; multi-lens before shim delete |
 | Hang-class | [`superprompt.md`](../../superprompt.md) (audit, not second SSDV3) |
 

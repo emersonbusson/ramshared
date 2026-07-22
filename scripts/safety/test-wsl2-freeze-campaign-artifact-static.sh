@@ -9,7 +9,10 @@ text="$(cat "$SCRIPT")"
 
 needles=(
   "isolated-complete.txt"
+  "shared-daily-host-complete.txt"
   '"daily_host":true'
+  '"shared_host_approved":true'
+  '"windows_watchdog":true'
   '"gates_ok":false'
   'round-$round'
   "before-health.json"
@@ -35,6 +38,7 @@ for forbidden in \
   "Start-VM" \
   "Stop-VM" \
   "Initialize-Disk" \
+  "Resize-VHD" \
   "Format-Volume"; do
   if grep -Fq "$forbidden" "$SCRIPT"; then
     echo "forbidden token: $forbidden" >&2
