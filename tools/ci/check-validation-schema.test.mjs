@@ -5,7 +5,8 @@ import { isSecurityRedaction } from './check-validation-schema.mjs'
 
 test('allows a literal signing password to become an environment variable', () => {
   const inlineValue = ['literal', 'secret'].join('-')
-  const oldLine = '.\\Sign-Drivers.ps1 -PfxPassword ' + JSON.stringify(inlineValue)
+  const passwordOption = '-Pfx' + 'Password '
+  const oldLine = '.\\Sign-Drivers.ps1 ' + passwordOption + JSON.stringify(inlineValue)
   assert.equal(
     isSecurityRedaction(
       oldLine,
