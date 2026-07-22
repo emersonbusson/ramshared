@@ -63,22 +63,16 @@ def main() -> int:
     signal.signal(signal.SIGINT, request_stop)
 
     chunks: list[bytearray] = []
+    allocation_digest = hashlib.sha256()
     allocated_mib = 0
     try:
         while allocated_mib < allocate_mib:
             if stop_requested:
-                write_result(
-                    args.result,
-                    {
-                        "status": "FAIL",
-                        "reason": "interrupted_during_allocation",
-                        "allocated_mib": allocated_mib,
-                        "verified_chunks": 0,
-                    },
-                )
-                return 1
+                break
             current_mib = min(args.chunk_mib, allocate_mib - allocated_mib)
-            chunks.append(chunk_pattern(len(chunks), current_mib * 1024 * 1024))
+            chunk = chunk_pattern(len(chunks), current_mib * 1024 * 1024)
+            chunks.append(chunk)
+            allocation_digest.update(chunk)
             allocated_mib += current_mib
             if allocated_mib % 512 == 0 or allocated_mib == allocate_mib:
                 print(f"ALLOC {allocated_mib} MiB", flush=True)
@@ -93,7 +87,19 @@ def main() -> int:
         )
         return 1
 
-    checksum_before = digest_chunks(chunks)
+    if not chunks:
+        write_result(
+            args.result,
+            {
+                "status": "FAIL",
+                "reason": "interrupted_before_allocation",
+                "allocated_mib": 0,
+                "verified_chunks": 0,
+            },
+        )
+        return 1
+
+    checksum_before = allocation_digest.hexdigest()
     print(f"HOLD checksum={checksum_before}", flush=True)
     while not stop_requested:
         time.sleep(0.2)

@@ -247,7 +247,7 @@ impl WindowsHostState {
                 output.status,
                 String::from_utf8_lossy(&output.stderr)
                     .chars()
-                    .take(200)
+                    .take(1000)
                     .collect::<String>()
             )));
         }
@@ -368,6 +368,20 @@ impl WindowsHostState {
         }
         // \\.\D: volume path
         let path = format!("\\\\.\\{letter}:");
+        Self::lock_product_volume_path(&path, letter, expected_disk_number)
+    }
+
+    pub fn lock_product_volume_path(
+        path: &str,
+        letter: char,
+        expected_disk_number: Option<u32>,
+    ) -> Result<LockedVolume, HostError> {
+        let letter = letter.to_ascii_uppercase();
+        let drive_path = format!("\\\\.\\{letter}:");
+        let volume_guid = path.starts_with(r"\\?\Volume{") && path.ends_with('}');
+        if path != drive_path && !volume_guid {
+            return Err(HostError::Volume("invalid volume device path".into()));
+        }
         let wide = to_wide(&path);
         let handle = unsafe {
             CreateFileW(
@@ -459,9 +473,10 @@ impl WindowsHostState {
     /// which hangs under GPU-PV volume churn and burned the graceful-stop budget.
     pub fn observe_product_volume(
         letter: char,
+        mount_path: Option<&Path>,
         serial: &str,
         size_bytes: u64,
-    ) -> Result<(ObservedVolumeIdentity, u32), HostError> {
+    ) -> Result<(ObservedVolumeIdentity, u32, String), HostError> {
         let letter = letter.to_ascii_uppercase();
         if !('D'..='Z').contains(&letter) {
             return Err(HostError::Volume("letter must be D..=Z".into()));
@@ -469,9 +484,32 @@ impl WindowsHostState {
         if serial.len() != 16 || !serial.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(HostError::Identity("serial must be 16 hex chars".into()));
         }
-        // Bind the configured letter to the exact disk. Serial+size without the
-        // partition relation could select a correct product disk while the letter
-        // had been remapped to a foreign volume.
+        let partition_binding = if let Some(path) = mount_path {
+            let path = path.to_string_lossy().replace('/', "\\");
+            if path.contains(['\'', ';', '\r', '\n']) {
+                return Err(HostError::Identity("invalid private mount path".into()));
+            }
+            format!(
+                concat!(
+                    "$wantMount='{path}'; ",
+                    "$p=@(Get-Partition -DiskNumber $d[0].Number -ErrorAction Stop | ",
+                    "Where-Object {{ $ap=@($_.AccessPaths | Where-Object {{ ",
+                    "([string]$_).TrimEnd('\\') -ieq $wantMount.TrimEnd('\\') }}); $ap.Count -eq 1 }}); ",
+                    "if($p.Count -ne 1){{ Write-Error ('mount_binding_count='+$p.Count); exit 43 }}; "
+                ),
+                path = path
+            )
+        } else {
+            concat!(
+                "$p=@(Get-Partition -DiskNumber $d[0].Number -ErrorAction Stop | ",
+                "Where-Object { ([string]$_.DriveLetter) -ieq $wantLetter }); ",
+                "if($p.Count -ne 1){ Write-Error ('letter_binding_count='+$p.Count); exit 43 }; "
+            )
+            .to_string()
+        };
+        // Bind the configured access surface to the exact disk. Serial+size
+        // without the partition relation could select the product disk while a
+        // foreign volume occupied the configured path.
         let script = format!(
             concat!(
                 "$ErrorActionPreference='Stop'; ",
@@ -482,15 +520,20 @@ impl WindowsHostState {
                 "  ($_.FriendlyName -match 'RAMSHARE') ",
                 "}}); ",
                 "if($d.Count -ne 1){{ Write-Error ('disk_count='+$d.Count); exit 42 }}; ",
-                "$p=@(Get-Partition -DiskNumber $d[0].Number -ErrorAction Stop | ",
-                "Where-Object {{ ([string]$_.DriveLetter) -ieq $wantLetter }}); ",
-                "if($p.Count -ne 1){{ Write-Error ('letter_binding_count='+$p.Count); exit 43 }}; ",
+                "{partition_binding}",
+                "$v=@($p[0] | Get-Volume -ErrorAction Stop); ",
+                "if($v.Count -ne 1){{ Write-Error ('volume_count='+$v.Count); exit 44 }}; ",
+                "$vp=([string]$v[0].Path).TrimEnd('\\'); ",
+                "if($vp.Length -lt 13 -or -not $vp.StartsWith('\\\\?\\Volume{{') -or -not $vp.EndsWith('}}')){{ Write-Error 'volume_path_invalid'; exit 45 }}; ",
+                "$parsedGuid=[guid]::Empty; ",
+                "if(-not [guid]::TryParse($vp.Substring(11,$vp.Length-12),[ref]$parsedGuid)){{ Write-Error 'volume_guid_invalid'; exit 45 }}; ",
                 "$n=($d[0].FriendlyName -replace '\\s+',' ').Trim(); ",
-                "Write-Output ([string]$d[0].Number+'|'+$n+'|'+([string]$d[0].SerialNumber).Trim()+'|'+[string]$d[0].Size)"
+                "Write-Output ([string]$d[0].Number+'|'+$n+'|'+([string]$d[0].SerialNumber).Trim()+'|'+[string]$d[0].Size+'|'+$vp)"
             ),
             serial = serial,
             letter = letter,
             size_bytes = size_bytes,
+            partition_binding = partition_binding,
         );
         let output =
             run_powershell_bounded(&script, Duration::from_secs(4)).map_err(HostError::Identity)?;
@@ -516,6 +559,7 @@ impl WindowsHostState {
             .next()
             .and_then(|value| value.parse::<u64>().ok())
             .ok_or_else(|| HostError::Identity("missing disk size".into()))?;
+        let volume_path = parts.next().unwrap_or_default().to_string();
         if parts.next().is_some() {
             return Err(HostError::Identity(
                 "ambiguous product identity output".into(),
@@ -536,6 +580,7 @@ impl WindowsHostState {
                 size_bytes: observed_size,
             },
             disk_number,
+            volume_path,
         ))
     }
 
@@ -642,7 +687,7 @@ impl WindowsHostState {
         let msg_wide = to_wide(&msg);
         unsafe {
             let handle = RegisterEventSourceW(ptr::null(), source_wide.as_ptr());
-            if handle != 0 {
+            if !handle.is_null() {
                 let strings = [msg_wide.as_ptr()];
                 ReportEventW(
                     handle,
@@ -666,13 +711,21 @@ fn run_powershell_bounded(script: &str, timeout: Duration) -> Result<Output, Str
     // Channel + helper thread so a hung Get-Partition/WMI cannot block teardown
     // forever even if kill/wait races on Windows.
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
-    let script = script.to_string();
+    let wrapped_script = format!("$ProgressPreference='SilentlyContinue'; {script}");
+    let encoded_script = encode_powershell_command(&wrapped_script);
     let (tx, rx) = std::sync::mpsc::channel();
     let done = std::sync::Arc::new(AtomicBool::new(false));
     let done_w = std::sync::Arc::clone(&done);
     let worker = std::thread::spawn(move || {
         let child = match Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-OutputFormat",
+                "Text",
+                "-EncodedCommand",
+                &encoded_script,
+            ])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -725,6 +778,16 @@ fn run_powershell_bounded(script: &str, timeout: Duration) -> Result<Output, Str
         let _ = worker.join();
     }
     result
+}
+
+fn encode_powershell_command(script: &str) -> String {
+    use base64::Engine as _;
+
+    let utf16le = script
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    base64::engine::general_purpose::STANDARD.encode(utf16le)
 }
 
 /// Reject relative and empty config paths.
@@ -908,6 +971,21 @@ fn pagefile_identity(path: String) -> PagefileIdentity {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    #[test]
+    fn powershell_encoder_preserves_structural_characters() {
+        use base64::Engine as _;
+
+        let script = r#"Get-Disk | Where-Object { $_.Path -eq '\\?\Volume{abc}' }"#;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encode_powershell_command(script))
+            .unwrap();
+        let words = decoded
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        assert_eq!(String::from_utf16(&words).unwrap(), script);
+    }
 
     #[test]
     fn relative_config_is_rejected() {

@@ -36,6 +36,9 @@ pub struct WinDriveConfig {
     pub evidence_path: PathBuf,
     /// Drive letter for the storage-only volume (`D`..=`Z`).
     pub volume_letter: char,
+    /// Optional private NTFS mount path used instead of an Explorer drive letter.
+    #[serde(default)]
+    pub volume_mount_path: Option<PathBuf>,
     /// Broker listen address (e.g. `127.0.0.1:7700`).
     pub broker: String,
     pub tenant: String,
@@ -180,6 +183,22 @@ impl WinDriveConfig {
                 detail: format!("must be D..=Z, got {:?}", self.volume_letter),
             });
         }
+        if let Some(path) = &self.volume_mount_path {
+            let value = path.to_string_lossy().replace('/', "\\");
+            let prefix = r"C:\ProgramData\RamShared\mounts\";
+            if !value
+                .to_ascii_lowercase()
+                .starts_with(&prefix.to_ascii_lowercase())
+                || value[prefix.len()..].is_empty()
+                || value.contains("..")
+                || value.contains(['\'', ';', '\r', '\n'])
+            {
+                return Err(ConfigError::Invalid {
+                    field: "volume_mount_path",
+                    detail: format!("must be a child of {prefix}"),
+                });
+            }
+        }
         if self.tenant.is_empty() {
             return Err(ConfigError::Invalid {
                 field: "tenant",
@@ -259,6 +278,7 @@ tenant = "windrive-host"
         assert_eq!(c.heartbeat_secs, 5);
         assert_eq!(c.tenant, "windrive-host");
         assert_eq!(c.volume_letter, 'D');
+        assert!(c.volume_mount_path.is_none());
         assert!(is_absolute_path(&c.evidence_path));
         c.broker_addr().unwrap();
     }
@@ -501,6 +521,37 @@ tenant = "windrive-host"
     }
 
     #[test]
+    fn accept_private_volume_mount_path() {
+        let text = GOOD.replace(
+            r#"volume_letter = "D""#,
+            r#"volume_letter = "D"
+volume_mount_path = "C:\\ProgramData\\RamShared\\mounts\\lun-123""#,
+        );
+        let c = WinDriveConfig::from_toml(&text).unwrap();
+        assert_eq!(
+            c.volume_mount_path.as_deref(),
+            Some(Path::new(r"C:\ProgramData\RamShared\mounts\lun-123"))
+        );
+    }
+
+    #[test]
+    fn reject_private_mount_outside_owned_root() {
+        let text = GOOD.replace(
+            r#"volume_letter = "D""#,
+            r#"volume_letter = "D"
+volume_mount_path = "C:\\Users\\Public\\lun""#,
+        );
+        let e = WinDriveConfig::from_toml(&text).unwrap_err();
+        assert!(matches!(
+            e,
+            ConfigError::Invalid {
+                field: "volume_mount_path",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn reject_bad_broker() {
         let bad = GOOD.replace(r#"broker = "127.0.0.1:7700""#, r#"broker = "not-an-addr""#);
         let e = WinDriveConfig::from_toml(&bad).unwrap_err();
@@ -525,10 +576,10 @@ tenant = "windrive-host"
     }
 
     #[test]
-    fn is_absolute_accepts_windows_and_unix() {
+    fn is_absolute_accepts_native_and_windows_config_paths() {
         assert!(is_absolute_path(Path::new(r"C:\ProgramData\RamShared")));
         assert!(is_absolute_path(Path::new(r"\\?\C:\x")));
-        assert!(is_absolute_path(Path::new("/tmp/x")));
+        assert_eq!(is_absolute_path(Path::new("/tmp/x")), cfg!(unix));
         assert!(!is_absolute_path(Path::new("relative")));
     }
 
