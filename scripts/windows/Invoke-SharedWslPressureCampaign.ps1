@@ -19,7 +19,11 @@ param(
     [int]$ZramMiB = 256,
     [int]$Rounds = 2,
     [int]$WatchdogSec = 120,
-    [int]$OuterTimeoutSec = 420
+    [int]$OuterTimeoutSec = 420,
+    [switch]$PreallocateVram,
+    [ValidateRange(0, 4096)][int]$ExternalWorkloadMiB = 0,
+    [ValidateRange(1, 3600)][int]$ExternalWorkloadHoldSec = 60,
+    [ValidateRange(0, 120)][int]$ExternalWorkloadDelaySec = 4
 )
 
 $ErrorActionPreference = "Stop"
@@ -63,6 +67,8 @@ function Write-Summary {
         APPROVED_SHARED_DAILY_HOST = [bool]$ApproveSharedDailyHost
         OUTER_TIMEOUT_SEC = $OuterTimeoutSec
         DISK_MUTATION = $false
+        PREALLOCATE_VRAM = [bool]$PreallocateVram
+        EXTERNAL_WORKLOAD_MIB = $ExternalWorkloadMiB
     }
     foreach ($k in $Extra.Keys) { $summary[$k] = $Extra[$k] }
     $summary | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $Dir "summary.json")
@@ -110,7 +116,13 @@ trap cleanup EXIT INT TERM
 health_pid=`$!
 
 sudo -n ./target/release/ramshared down >"`$artifact/pre-down.out" 2>"`$artifact/pre-down.err" || true
-sudo -n ./target/release/ramshared up --vram "$VramMiB" --zram "$ZramMiB" >"`$artifact/ramshared-up.out" 2>"`$artifact/ramshared-up.err"
+daemon_wrapper="`$artifact/ramsharedd-logged.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'exec "$WslRepo/target/release/ramsharedd" "`$@" >>"$artifactWsl/daemon.out" 2>&1' >"`$daemon_wrapper"
+chmod 0700 "`$daemon_wrapper"
+if [ "$([int][bool]$PreallocateVram)" -eq 1 ]; then
+  export RAMSHARED_VRAM_PREALLOC=1
+fi
+sudo -n ./target/release/ramshared up --vram "$VramMiB" --zram "$ZramMiB" --daemon "`$daemon_wrapper" >"`$artifact/ramshared-up.out" 2>"`$artifact/ramshared-up.err"
 ./scripts/safety/cascade-health.sh --once >"`$artifact/after-up-health.json"
 
 export RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_WSL_TERMINATION
@@ -125,18 +137,59 @@ export RAMSHARED_FREEZE_WATCHDOG_SEC="$WatchdogSec"
   --json >"`$artifact/campaign.out" 2>"`$artifact/campaign.err"
 export RAMSHARED_FREEZE_REQUIRED_ROUNDS="$Rounds"
 ./scripts/safety/validate-wsl2-freeze-campaign-artifact.sh "`$artifact/campaign" >"`$artifact/validation.out" 2>"`$artifact/validation.err"
+kill "`$health_pid" 2>/dev/null || true
+wait "`$health_pid" 2>/dev/null || true
+health_pid=""
+python3 - "`$artifact/cascade-health.jsonl" "`$artifact/events.jsonl" <<'PY'
+import json, sys
+
+with open(sys.argv[1], encoding="utf-8") as source, open(sys.argv[2], "w", encoding="utf-8") as out:
+    for line in source:
+        if not line.strip():
+            continue
+        sample = json.loads(line)
+        demote = sample.get("demote") or {}
+        event = {
+            "t": sample.get("epoch"),
+            "swap_used": (sample.get("used_kib") or {}).get("vram", 0) * 1024,
+            "canario_demotes": demote.get("total", 0),
+            "demote_reason": demote.get("last_reason"),
+            "flag": "none" if sample.get("ok") else "partial",
+        }
+        out.write(json.dumps(event, separators=(",", ":")) + "\n")
+PY
+./target/release/ramshared diagnose --events "`$artifact/events.jsonl" --json >"`$artifact/diagnose.json"
 "@
 
-Set-Content -LiteralPath $guestScriptWin -Encoding ASCII -Value $guestScript
+$ascii = [System.Text.Encoding]::ASCII
+[System.IO.File]::WriteAllText($guestScriptWin, ($guestScript -replace "`r`n", "`n"), $ascii)
 
 $argList = @("-d", $Distro, "-u", "root", "--", "bash", $guestScriptWsl)
 $proc = Start-Process -FilePath "wsl.exe" -ArgumentList $argList -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -WindowStyle Hidden
+$externalProc = $null
+if ($ExternalWorkloadMiB -gt 0) {
+    Start-Sleep -Seconds $ExternalWorkloadDelaySec
+    $externalSource = Resolve-Path (Join-Path $PSScriptRoot "..\p0\Start-CudaVramWorkload.ps1")
+    $externalScript = Join-Path $artifactDir "external-workload.ps1"
+    Get-Content -LiteralPath $externalSource.Path -Raw | Set-Content -LiteralPath $externalScript -Encoding UTF8
+    $externalOut = Join-Path $artifactDir "external-workload.out"
+    $externalErr = Join-Path $artifactDir "external-workload.err"
+    $externalArgs = @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $externalScript,
+        "-MiB", $ExternalWorkloadMiB, "-HoldSec", $ExternalWorkloadHoldSec
+    )
+    $externalProc = Start-Process -FilePath "powershell.exe" -ArgumentList $externalArgs `
+        -RedirectStandardOutput $externalOut -RedirectStandardError $externalErr -PassThru -WindowStyle Hidden
+}
 
 if (-not $proc.WaitForExit($OuterTimeoutSec * 1000)) {
     "outer watchdog fired after ${OuterTimeoutSec}s" | Set-Content -Encoding UTF8 (Join-Path $artifactDir "windows-watchdog-fired.txt")
     try {
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     } catch {
+    }
+    if ($externalProc -ne $null -and -not $externalProc.HasExited) {
+        Stop-Process -Id $externalProc.Id -Force -ErrorAction SilentlyContinue
     }
     $term = Start-Process -FilePath "wsl.exe" -ArgumentList @("--terminate", $Distro) -PassThru -WindowStyle Hidden
     if (-not $term.WaitForExit(60000)) {
@@ -151,15 +204,33 @@ if (-not $proc.WaitForExit($OuterTimeoutSec * 1000)) {
 
 $proc.WaitForExit()
 $proc.Refresh()
+$externalExitCode = $null
+if ($externalProc -ne $null) {
+    if (-not $externalProc.WaitForExit(($ExternalWorkloadHoldSec + 20) * 1000)) {
+        Stop-Process -Id $externalProc.Id -Force -ErrorAction SilentlyContinue
+    } else {
+        $externalProc.Refresh()
+        $externalExitCode = [int]$externalProc.ExitCode
+    }
+}
 $exitCode = if ($proc.HasExited) { [int]$proc.ExitCode } else { $null }
 $validation = Join-Path $artifactDir "validation.out"
 $watchdogFired = Test-Path -LiteralPath (Join-Path $artifactDir "windows-watchdog-fired.txt")
-if (-not $watchdogFired -and (Test-Path -LiteralPath $validation) -and ((Get-Content -LiteralPath $validation -Raw) -match "WSL2_FREEZE_CAMPAIGN_VALIDATION=PASS")) {
+$externalWorkloadOk = $ExternalWorkloadMiB -eq 0
+if ($ExternalWorkloadMiB -gt 0) {
+    $externalWorkloadOutput = Join-Path $artifactDir "external-workload.out"
+    $externalWorkloadOk = $externalExitCode -eq 0 -and
+        (Test-Path -LiteralPath $externalWorkloadOutput) -and
+        (Get-Content -LiteralPath $externalWorkloadOutput -Raw).Contains("[cuda-vram-workload] released")
+}
+if (-not $watchdogFired -and $externalWorkloadOk -and (Test-Path -LiteralPath $validation) -and ((Get-Content -LiteralPath $validation -Raw) -match "WSL2_FREEZE_CAMPAIGN_VALIDATION=PASS")) {
     Write-Summary -Dir $artifactDir -Status "PASS" -Reason "validated_shared_daily_host_campaign" -Extra @{
         wsl_exit_code = $exitCode
         vram_mib = $VramMiB
         zram_mib = $ZramMiB
         rounds = $Rounds
+        external_workload_exit_code = $externalExitCode
+        external_workload_ok = [bool]$externalWorkloadOk
     }
     exit 0
 }
@@ -169,5 +240,7 @@ Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "shared_campaign_faile
     vram_mib = $VramMiB
     zram_mib = $ZramMiB
     rounds = $Rounds
+    external_workload_exit_code = $externalExitCode
+    external_workload_ok = [bool]$externalWorkloadOk
 }
 exit 2
