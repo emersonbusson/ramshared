@@ -21,6 +21,7 @@ param(
     [string]$PfxPath = "C:\Users\emedev\ramshared-drill\certs\ramshared-test.pfx",
     [string]$PfxPassword = $env:RAMSHARED_TESTSIGN_PFX_PASSWORD,
     [string]$CertSubject = "RamShared Test Signing",
+    [string]$PackageWorkDir = "C:\ramshared\artifacts\driver-package-build",
     [ValidateSet("CurrentUser", "LocalMachine")]
     [string]$CertStore = "LocalMachine"
 )
@@ -66,8 +67,14 @@ foreach ($f in $files) {
 # DT-25: Inf2Cat + sign catalog so pnputil accepts the package under testsigning
 $pkg = Join-Path $RepoRoot "drivers\windows\ramshared\x64\Release\package"
 New-Item -ItemType Directory -Force -Path $pkg | Out-Null
-Copy-Item (Join-Path $RepoRoot "drivers\windows\ramshared\x64\Release\ramshared.sys") (Join-Path $pkg "ramshared.sys") -Force
-Copy-Item (Join-Path $RepoRoot "drivers\windows\ramshared\ramshared.inf") (Join-Path $pkg "ramshared.inf") -Force
+$pkgLocal = $pkg
+if ($pkg -like '\\*') {
+    # UNC package staging: Inf2Cat cannot consume a WSL UNC directory.
+    $pkgLocal = $PackageWorkDir
+    New-Item -ItemType Directory -Force -Path $pkgLocal | Out-Null
+}
+Copy-Item (Join-Path $RepoRoot "drivers\windows\ramshared\x64\Release\ramshared.sys") (Join-Path $pkgLocal "ramshared.sys") -Force
+Copy-Item (Join-Path $RepoRoot "drivers\windows\ramshared\ramshared.inf") (Join-Path $pkgLocal "ramshared.inf") -Force
 
 $inf2cat = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x86\Inf2Cat.exe"
 if (-not (Test-Path $inf2cat)) {
@@ -78,10 +85,10 @@ if (-not $inf2cat -or -not (Test-Path $inf2cat)) {
     Write-Warning "Inf2Cat.exe not found - package will lack .cat (pnputil may reject)"
 } else {
     Write-Host "INF2CAT $inf2cat"
-    Push-Location $pkg
+    Push-Location $pkgLocal
     & $inf2cat /driver:. /os:10_X64 /verbose
     if ($LASTEXITCODE -ne 0) { throw "Inf2Cat failed $LASTEXITCODE" }
-    $cat = Join-Path $pkg "ramshared.cat"
+    $cat = Join-Path $pkgLocal "ramshared.cat"
     if (Test-Path $cat) {
         Invoke-SignTool -Path $cat
         Write-Host "CAT_OK $cat"
@@ -90,5 +97,8 @@ if (-not $inf2cat -or -not (Test-Path $inf2cat)) {
         Get-ChildItem $pkg | Format-Table Name, Length
     }
     Pop-Location
+}
+if ($pkgLocal -ne $pkg) {
+    Copy-Item $pkgLocal\* $pkg -Force
 }
 Write-Host "SIGN_OK package=$pkg"

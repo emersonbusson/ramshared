@@ -41,6 +41,8 @@ cp "$DAEMON" "$IRD/ramsharedd"
 cp "$AGENT" "$IRD/ramshared-agent"
 cp "$(command -v nbd-client)" "$IRD/bin/nbd-client"
 cp "$NBD_KO" "$IRD/modules/nbd.ko"
+sha256sum "$DAEMON" | awk '{print $1}' > "$IRD/expected-ramsharedd.sha256"
+sha256sum "$AGENT" | awk '{print $1}' > "$IRD/expected-agent.sha256"
 
 # Dynamic libraries for the 3 binaries (dynamic glibc; no CUDA in the RAM path). Preserves absolute
 # paths (including /lib64/ld-linux).
@@ -66,6 +68,18 @@ export PATH=/bin
 for a in mkswap swapon swapoff sleep cat kill; do \$BB ln -sf /bin/busybox /bin/\$a; done
 echo "=====KTEST-BEGIN====="
 echo "KTEST-UNAME=\$(\$BB uname -r)"
+DAEMON_EXPECTED="\$(\$BB cat /expected-ramsharedd.sha256 2>/dev/null)"
+DAEMON_ACTUAL="\$(\$BB sha256sum /ramsharedd 2>/dev/null)"
+DAEMON_ACTUAL="\${DAEMON_ACTUAL%% *}"
+AGENT_EXPECTED="\$(\$BB cat /expected-agent.sha256 2>/dev/null)"
+AGENT_ACTUAL="\$(\$BB sha256sum /ramshared-agent 2>/dev/null)"
+AGENT_ACTUAL="\${AGENT_ACTUAL%% *}"
+echo "KTEST-DAEMON-SHA-EXPECTED=\$DAEMON_EXPECTED"
+echo "KTEST-DAEMON-SHA-ACTUAL=\$DAEMON_ACTUAL"
+echo "KTEST-AGENT-SHA-EXPECTED=\$AGENT_EXPECTED"
+echo "KTEST-AGENT-SHA-ACTUAL=\$AGENT_ACTUAL"
+[ -n "\$DAEMON_EXPECTED" ] && [ "\$DAEMON_EXPECTED" = "\$DAEMON_ACTUAL" ] && echo "KTEST-DAEMON-BINARY-MATCH=ok" || echo "KTEST-DAEMON-BINARY-MATCH=fail"
+[ -n "\$AGENT_EXPECTED" ] && [ "\$AGENT_EXPECTED" = "\$AGENT_ACTUAL" ] && echo "KTEST-AGENT-BINARY-MATCH=ok" || echo "KTEST-AGENT-BINARY-MATCH=fail"
 
 # --- FASE 1: bring-up ---
 if \$BB insmod /modules/nbd.ko nbds_max=8 2>/tmp/e; then
@@ -154,6 +168,8 @@ echo "=========== resultado ==========="
 grep -E "KTEST-" "$WORK/serial.log" || echo "sem output KTEST — kernel pode nao ter bootado"
 echo "================================="
 if grep -q "KTEST-SWAP-ACTIVE=ok" "$WORK/serial.log" \
+   && grep -q "KTEST-DAEMON-BINARY-MATCH=ok" "$WORK/serial.log" \
+   && grep -q "KTEST-AGENT-BINARY-MATCH=ok" "$WORK/serial.log" \
    && grep -q "KTEST-SWAPOFF=ok" "$WORK/serial.log" \
    && grep -q "KTEST-DAEMON-TERMINATED=ok" "$WORK/serial.log" \
    && grep -q "KTEST-TELEMETRY=ok" "$WORK/serial.log"; then

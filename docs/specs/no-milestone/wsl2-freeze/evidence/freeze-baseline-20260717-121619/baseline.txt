@@ -1,0 +1,16 @@
+phase=baseline
+ts=2026-07-17T12:16:20-03:00
+=== /proc/swaps ===
+Filename				Type		Size		Used		Priority
+/dev/sdc                                partition	4194304		242872		-2
+=== meminfo (selected) ===
+MemTotal:       16376452 kB
+MemAvailable:   13002172 kB
+SwapTotal:       4194304 kB
+SwapFree:        3951432 kB
+=== procs_blocked ===
+procs_blocked 0
+=== ramsharedd ===
+(none)
+=== dmesg tail (hung_task filter) ===
+(no hits)

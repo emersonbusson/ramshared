@@ -148,6 +148,9 @@ foreach ($token in $requiredDispatchPrototypes) {
         throw "control dispatch lacks DRIVER_DISPATCH prototype: $token"
     }
 }
+if ($controlSource -notmatch [regex]::Escape("VdOwnerExited()")) {
+    throw "orphan_recovery_missing: DESTROY must permit recovery only after owner exit"
+}
 
 $driverSource = Get-Content -LiteralPath $DriverPath -Raw
 $requiredDriverTokens = @(
@@ -172,9 +175,13 @@ $requiredVpdLifecycleTokens = @(
     "Srb->SrbStatus = SRB_STATUS_NO_DEVICE",
     "allocationLen = Srb->Cdb[4]",
     "RtlCopyMemory(&response[4], Disk->serial, 16)",
+    "page == 0xB1",
+    "response[5] = 0x01",
     "(Srb->Cdb[1] & 0x1F) != 0x10",
     "allocationLen = ((ULONG)Srb->Cdb[10] << 24)",
-    "response[11] = (UCHAR)(bs & 0xFF)"
+    "response[11] = (UCHAR)(bs & 0xFF)",
+    "PsGetProcessExitStatus",
+    "VdOwnerExited"
 )
 foreach ($token in $requiredVpdLifecycleTokens) {
     if ($virtdiskSource -notmatch [regex]::Escape($token)) {

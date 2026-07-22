@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)] // teste: unwrap/expect é idiomático
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test: unwrap/expect is idiomatic
 
 use std::mem::{align_of, size_of};
 
@@ -110,7 +110,7 @@ fn io_desc_read_maps_to_block_request_with_512b_sector_units() {
         addr: 0x1000,
     };
 
-    let req = desc.to_block_request(44).expect("READ deve mapear");
+    let req = desc.to_block_request(44).expect("READ must map");
 
     assert_eq!(req.cmd, Command::Read);
     assert_eq!(req.handle, 44);
@@ -141,7 +141,7 @@ fn io_desc_discard_maps_to_trim_and_flush_ignores_sector_range() {
         addr: 0,
     }
     .to_block_request(8)
-    .expect("FLUSH deve mapear");
+    .expect("FLUSH must map");
 
     assert_eq!(flush.cmd, Command::Flush);
     assert_eq!(flush.offset, 0);
@@ -291,12 +291,13 @@ fn params_round_trips_through_kernel_byte_layout() {
     let params = ublk::Params::basic_disk(2048, 9, 12);
     assert_eq!(params.len, 112);
     assert_eq!(params.types, ublk::UBLK_PARAM_TYPE_BASIC);
+    assert_eq!(params.basic.max_sectors, 8);
     assert_eq!(params.basic.dev_sectors, 2048);
 
     let bytes = params.to_bytes();
     assert_eq!(ublk::Params::from_bytes(&bytes), params);
 
-    // dev_sectors em offset absoluto 24 (basic@8 + dev_sectors@16); verificado via cc.
+    // dev_sectors at absolute offset 24 (basic@8 + dev_sectors@16), verified via cc.
     assert_eq!(
         u64::from_ne_bytes([
             bytes[24], bytes[25], bytes[26], bytes[27], bytes[28], bytes[29], bytes[30], bytes[31],

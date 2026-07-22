@@ -37,3 +37,4 @@ VOID VdDeactivate(VOID);
 PVIRTUAL_DISK VdGetActive(VOID);
 BOOLEAN VdIsActive(VOID);
 BOOLEAN VdOwnerMatches(_In_ PEPROCESS Process);
+BOOLEAN VdOwnerExited(VOID);

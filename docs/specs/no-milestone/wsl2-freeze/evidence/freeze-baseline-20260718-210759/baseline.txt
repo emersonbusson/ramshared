@@ -1,0 +1,17 @@
+phase=baseline
+ts=2026-07-18T21:07:59-03:00
+=== /proc/swaps ===
+Filename				Type		Size		Used		Priority
+/dev/sdc                                partition	4194304		420652		-2
+=== meminfo (selected) ===
+MemTotal:       16376448 kB
+MemAvailable:   13525856 kB
+SwapTotal:       4194304 kB
+SwapFree:        3773620 kB
+=== procs_blocked ===
+procs_blocked 7
+=== ramsharedd ===
+(none)
+=== dmesg recent fault filter (1800s) ===
+[23596.608849] Memory cgroup out of memory: Killed process 7433 (postgres) total-vm:300632kB, anon-rss:42008kB, file-rss:2620kB, shmem-rss:596kB, UID:70 pgtables:608kB oom_score_adj:0
+[25381.106979] Memory cgroup out of memory: Killed process 3144 (postgres) total-vm:304196kB, anon-rss:25508kB, file-rss:2644kB, shmem-rss:264kB, UID:70 pgtables:624kB oom_score_adj:0

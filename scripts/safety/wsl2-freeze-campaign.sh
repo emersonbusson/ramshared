@@ -2,13 +2,19 @@
 # wsl2-freeze-campaign.sh — WSL2 hang/freeze audit campaign (RamShared).
 #
 # Policy (mandatory):
-#   - NEVER thrash swap/ublk/cascade pressure on the daily WSL2 host.
 #   - Default mode is dry-run / baseline capture only (read-only probes).
-#   - Destructive "action" phase requires ALL of:
+#   - Destructive "action" phase in an isolated lab requires ALL of:
 #       --allow-isolated-lab
 #       RAMSHARED_ISOLATED_LAB=1
 #       gates_ok (not daily host, no ghost daemon, no ghost swap with used>0)
-#   - Even in isolated lab, action uses cgroup-bounded cascade-pressure-probe
+#   - Destructive "action" phase on the shared daily WSL2 host requires ALL of:
+#       --approve-shared-daily-host --run-shared-daily-host
+#       RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_WSL_TERMINATION
+#       RAMSHARED_WINDOWS_WATCHDOG_ARMED=1
+#       gates_ok (no ghost daemon, no ghost swap with used>0, no recent OOM
+#       unless RAMSHARED_ALLOW_RECENT_OOM_MARKER=1 is set for a supervised
+#       evidence campaign)
+#   - Action uses cgroup-bounded cascade-pressure-probe
 #     (not full-VM thrash) with a hard watchdog.
 #
 # Promotion claim for "WSL2 freeze elimination" requires:
@@ -21,6 +27,7 @@
 #   ./scripts/safety/wsl2-freeze-campaign.sh --json          # machine-readable sample
 #   ./scripts/safety/wsl2-freeze-campaign.sh --artifact-dir PATH
 #   ./scripts/safety/wsl2-freeze-campaign.sh --allow-isolated-lab --run-isolated
+#   ./scripts/safety/wsl2-freeze-campaign.sh --approve-shared-daily-host --run-shared-daily-host
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -29,9 +36,12 @@ JSON=0
 CHECK_GATES=0
 ALLOW_ISOLATED=0
 RUN_ISOLATED=0
+APPROVE_SHARED=0
+RUN_SHARED=0
 ARTIFACT_DIR=""
 ROUNDS=2
 WATCHDOG_SEC="${RAMSHARED_FREEZE_WATCHDOG_SEC:-120}"
+RECENT_DMESG_SEC="${RAMSHARED_FREEZE_RECENT_DMESG_SEC:-1800}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -40,6 +50,8 @@ while [[ $# -gt 0 ]]; do
     --json) JSON=1; shift ;;
     --allow-isolated-lab) ALLOW_ISOLATED=1; shift ;;
     --run-isolated) RUN_ISOLATED=1; MODE="isolated"; shift ;;
+    --approve-shared-daily-host) APPROVE_SHARED=1; shift ;;
+    --run-shared-daily-host) RUN_SHARED=1; MODE="shared-daily-host"; shift ;;
     --artifact-dir) ARTIFACT_DIR="$2"; shift 2 ;;
     --rounds) ROUNDS="$2"; shift 2 ;;
     --watchdog-sec) WATCHDOG_SEC="$2"; shift 2 ;;
@@ -59,16 +71,27 @@ hostname_s="$(hostname 2>/dev/null || echo unknown)"
 stamp="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)"
 
 is_daily_host=0
-# Heuristic: daily host markers used elsewhere in this repo.
-if [[ "${WSL_DISTRO_NAME:-}" == "Ubuntu-24.04" ]] && [[ -d /mnt/c/Users ]]; then
+shared_windows_desktop=0
+# Shared Windows desktop: /mnt/c/Users means this WSL instance rides the daily
+# Windows host (any distro name). A second distro like RamShared-Kernel is NOT
+# an isolab by itself — thrash still freezes the same physical machine.
+if [[ -d /mnt/c/Users ]]; then
+  shared_windows_desktop=1
+  is_daily_host=1
+fi
+# Named daily product distro (even if /mnt/c layout changes later).
+if [[ "${WSL_DISTRO_NAME:-}" == "Ubuntu-24.04" ]]; then
   is_daily_host=1
 fi
 if [[ "${RAMSHARED_FORCE_DAILY_HOST:-0}" == "1" ]]; then
   is_daily_host=1
 fi
-# Explicit override for true isolated lab VMs that still expose /mnt/c.
+# Explicit override ONLY for a true isolated lab VM that still exposes /mnt/c
+# (e.g. disposable Hyper-V guest). Second WSL distros on the desktop host must
+# NOT set this casually — see benchmarks.md host-safety.
 if [[ "${RAMSHARED_ISOLATED_LAB:-0}" == "1" && "${RAMSHARED_FORCE_ISOLATED_LAB:-0}" == "1" ]]; then
   is_daily_host=0
+  shared_windows_desktop=0
 fi
 
 ghost=false
@@ -100,9 +123,33 @@ if [[ -r /proc/stat ]]; then
   # procs_blocked is a coarse D-state proxy on Linux.
   d_state_count="$(awk '/^procs_blocked/ {print $2+0}' /proc/stat 2>/dev/null || echo 0)"
 fi
+
+recent_dmesg_matches() {
+  local pattern="$1"
+  local window_sec="$2"
+  local uptime_sec
+  uptime_sec="$(awk '{print int($1)}' /proc/uptime 2>/dev/null || echo 0)"
+  dmesg 2>/dev/null | awk -v pattern="$pattern" -v now="$uptime_sec" -v window="$window_sec" '
+    BEGIN { IGNORECASE = 1; cutoff = now - window }
+    {
+      ts = -1
+      if (match($0, /^\[[[:space:]]*([0-9]+)(\.[0-9]+)?\]/, m)) {
+        ts = m[1] + 0
+      }
+      if ($0 ~ pattern && (ts < 0 || ts >= cutoff)) {
+        print
+      }
+    }
+  '
+}
+
 hung_task_hits=0
-if dmesg 2>/dev/null | tail -n 200 | grep -qiE 'hung_task|Blocked for more than'; then
+if recent_dmesg_matches 'hung_task|Blocked for more than' "$RECENT_DMESG_SEC" | grep -qi .; then
   hung_task_hits=1
+fi
+oom_hits=0
+if recent_dmesg_matches 'Out of memory|Memory cgroup out of memory|Killed process' "$RECENT_DMESG_SEC" | grep -qi .; then
+  oom_hits=1
 fi
 
 health_json="{}"
@@ -113,7 +160,7 @@ fi
 # Claim-ready gates (all must be true to even *start* an elimination campaign).
 gates_ok=1
 reasons=()
-if [[ "$is_daily_host" -eq 1 && "$ALLOW_ISOLATED" -eq 0 ]]; then
+if [[ "$is_daily_host" -eq 1 && "$ALLOW_ISOLATED" -eq 0 && "$APPROVE_SHARED" -eq 0 ]]; then
   gates_ok=0
   reasons+=("daily_host_refused_without_isolated_lab_flag")
 fi
@@ -121,9 +168,33 @@ if [[ "$is_daily_host" -eq 1 && "$RUN_ISOLATED" -eq 1 ]]; then
   gates_ok=0
   reasons+=("daily_host_refuses_run_isolated")
 fi
+# Even with --allow-isolated-lab, refuse thrash while on shared Windows desktop
+# unless FORCE_ISOLATED_LAB is set (true disposable isolab only).
+if [[ "$shared_windows_desktop" -eq 1 && "$RUN_ISOLATED" -eq 1 ]]; then
+  gates_ok=0
+  reasons+=("shared_windows_desktop_refuses_run_isolated")
+fi
 if [[ "${RAMSHARED_ISOLATED_LAB:-0}" != "1" && ( "$ALLOW_ISOLATED" -eq 1 || "$RUN_ISOLATED" -eq 1 ) ]]; then
   gates_ok=0
   reasons+=("RAMSHARED_ISOLATED_LAB!=1")
+fi
+if [[ "$RUN_SHARED" -eq 1 || "$APPROVE_SHARED" -eq 1 ]]; then
+  if [[ "$APPROVE_SHARED" -ne 1 || "$RUN_SHARED" -ne 1 ]]; then
+    gates_ok=0
+    reasons+=("shared_daily_host_requires_approval_and_run_flags")
+  fi
+  if [[ "${RAMSHARED_SHARED_HOST_APPROVAL:-}" != "I_ACCEPT_WSL_TERMINATION" ]]; then
+    gates_ok=0
+    reasons+=("missing_shared_host_ack_token")
+  fi
+  if [[ "${RAMSHARED_WINDOWS_WATCHDOG_ARMED:-0}" != "1" ]]; then
+    gates_ok=0
+    reasons+=("windows_watchdog_not_armed")
+  fi
+  if [[ "$shared_windows_desktop" -ne 1 ]]; then
+    gates_ok=0
+    reasons+=("shared_windows_desktop_not_detected")
+  fi
 fi
 if [[ "$ghost" == "true" ]]; then
   gates_ok=0
@@ -137,16 +208,25 @@ if [[ "$binary_match" == "false" ]]; then
   gates_ok=0
   reasons+=("BINARY_MATCH_false")
 fi
+if [[ "$oom_hits" -gt 0 && "${RAMSHARED_ALLOW_RECENT_OOM_MARKER:-0}" != "1" ]]; then
+  gates_ok=0
+  reasons+=("recent_oom_marker")
+elif [[ "$oom_hits" -gt 0 ]]; then
+  reasons+=("recent_oom_marker_allowed")
+fi
 
 reason_csv="$(IFS=,; echo "${reasons[*]-}")"
 
 emit_summary() {
   if [[ "$JSON" -eq 1 ]]; then
-    printf '{"ts":"%s","mode":"%s","host":"%s","daily_host":%s,"ghost":%s,"binary_match":"%s","used_kib":%s,"has_deleted_swap":%s,"d_state":%s,"hung_task_hits":%s,"gates_ok":%s,"reasons":"%s","health":%s,"claim":"NOT_CLAIMED"}\n' \
+    printf '{"ts":"%s","mode":"%s","host":"%s","daily_host":%s,"shared_windows_desktop":%s,"shared_host_approved":%s,"windows_watchdog":%s,"ghost":%s,"binary_match":"%s","used_kib":%s,"has_deleted_swap":%s,"d_state":%s,"hung_task_hits":%s,"oom_hits":%s,"recent_dmesg_sec":%s,"gates_ok":%s,"reasons":"%s","health":%s,"claim":"NOT_CLAIMED"}\n' \
       "$ts" "$MODE" "$hostname_s" \
       "$([[ $is_daily_host -eq 1 ]] && echo true || echo false)" \
+      "$([[ $shared_windows_desktop -eq 1 ]] && echo true || echo false)" \
+      "$([[ $APPROVE_SHARED -eq 1 ]] && echo true || echo false)" \
+      "$([[ ${RAMSHARED_WINDOWS_WATCHDOG_ARMED:-0} == 1 ]] && echo true || echo false)" \
       "$ghost" "$binary_match" "$used_total" "$has_deleted_swap" \
-      "$d_state_count" "$hung_task_hits" \
+      "$d_state_count" "$hung_task_hits" "$oom_hits" "$RECENT_DMESG_SEC" \
       "$([[ $gates_ok -eq 1 ]] && echo true || echo false)" \
       "$reason_csv" "$health_json"
   else
@@ -155,12 +235,18 @@ emit_summary() {
     echo "mode:          $MODE"
     echo "host:          $hostname_s"
     echo "daily_host:    $is_daily_host"
+    echo "shared_win_desktop: $shared_windows_desktop"
+    echo "shared_approved: $APPROVE_SHARED"
+    echo "windows_watchdog: ${RAMSHARED_WINDOWS_WATCHDOG_ARMED:-0}"
+    echo "wsl_distro:    ${WSL_DISTRO_NAME:-}"
     echo "ghost:         $ghost"
     echo "BINARY_MATCH:  $binary_match"
     echo "swap used_kib: $used_total"
     echo "deleted swap:  $has_deleted_swap"
     echo "d_state:       $d_state_count"
     echo "hung_task:     $hung_task_hits"
+    echo "oom_hits:      $oom_hits"
+    echo "recent_dmesg_sec: $RECENT_DMESG_SEC"
     echo "gates_ok:      $gates_ok"
     if [[ ${#reasons[@]} -gt 0 ]]; then
       echo "refuse_reasons:"
@@ -169,8 +255,8 @@ emit_summary() {
     echo "cascade-health: $health_json"
     echo
     echo "CLAIM STATUS: WSL2 freeze-elimination is NOT claimed."
-    echo "Next (isolated lab only): 2× before→action→after with watchdog, swapoff-first,"
-    echo "ghost check, BINARY_MATCH, D-state/hung_task capture, cleanup. No thrash here."
+    echo "Next: 2× before→action→after with watchdog, swapoff-first,"
+    echo "ghost check, BINARY_MATCH, D-state/hung_task capture, cleanup."
   fi
 }
 
@@ -197,8 +283,8 @@ capture_phase() {
     awk '/^procs_blocked/ {print}' /proc/stat 2>/dev/null || true
     echo "=== ramsharedd ==="
     pgrep -a -x ramsharedd 2>/dev/null || echo "(none)"
-    echo "=== dmesg tail (hung_task filter) ==="
-    dmesg 2>/dev/null | tail -n 100 | grep -iE 'hung_task|Blocked for more than|Out of memory|ublk|nbd' || echo "(no hits)"
+    echo "=== dmesg recent fault filter (${RECENT_DMESG_SEC}s) ==="
+    recent_dmesg_matches 'hung_task|Blocked for more than|Out of memory|Memory cgroup out of memory|Killed process|ublk|nbd' "$RECENT_DMESG_SEC" || echo "(no hits)"
   } >"$dir/${label}.txt"
   if [[ -x "$ROOT/scripts/safety/cascade-health.sh" ]]; then
     "$ROOT/scripts/safety/cascade-health.sh" --once >"$dir/${label}-health.json" 2>/dev/null || echo '{}' >"$dir/${label}-health.json"
@@ -214,11 +300,14 @@ fi
 # Always capture a read-only baseline (safe on daily host).
 capture_phase "$ARTIFACT_DIR" "baseline"
 write_artifact "$ARTIFACT_DIR" "summary.json" "$(
-  printf '{"ts":"%s","mode":"%s","host":"%s","daily_host":%s,"ghost":%s,"binary_match":"%s","used_kib":%s,"has_deleted_swap":%s,"d_state":%s,"hung_task_hits":%s,"gates_ok":%s,"reasons":"%s","claim":"NOT_CLAIMED"}\n' \
+    printf '{"ts":"%s","mode":"%s","host":"%s","daily_host":%s,"shared_windows_desktop":%s,"shared_host_approved":%s,"windows_watchdog":%s,"ghost":%s,"binary_match":"%s","used_kib":%s,"has_deleted_swap":%s,"d_state":%s,"hung_task_hits":%s,"oom_hits":%s,"recent_dmesg_sec":%s,"gates_ok":%s,"reasons":"%s","claim":"NOT_CLAIMED"}\n' \
     "$ts" "$MODE" "$hostname_s" \
     "$([[ $is_daily_host -eq 1 ]] && echo true || echo false)" \
+    "$([[ $shared_windows_desktop -eq 1 ]] && echo true || echo false)" \
+    "$([[ $APPROVE_SHARED -eq 1 ]] && echo true || echo false)" \
+    "$([[ ${RAMSHARED_WINDOWS_WATCHDOG_ARMED:-0} == 1 ]] && echo true || echo false)" \
     "$ghost" "$binary_match" "$used_total" "$has_deleted_swap" \
-    "$d_state_count" "$hung_task_hits" \
+    "$d_state_count" "$hung_task_hits" "$oom_hits" "$RECENT_DMESG_SEC" \
     "$([[ $gates_ok -eq 1 ]] && echo true || echo false)" \
     "$reason_csv"
 )"
@@ -232,11 +321,11 @@ if [[ "$CHECK_GATES" -eq 1 ]]; then
   exit 1
 fi
 
-# Isolated action path — hard refuse on daily host and incomplete flags.
-if [[ "$RUN_ISOLATED" -eq 1 ]]; then
+# Action path — hard refuse on incomplete flags/gates.
+if [[ "$RUN_ISOLATED" -eq 1 || "$RUN_SHARED" -eq 1 ]]; then
   if [[ "$gates_ok" -ne 1 ]]; then
-    echo "REFUSE isolated run: gates_ok=0 reasons=$reason_csv" >&2
-    write_artifact "$ARTIFACT_DIR" "isolated-refuse.txt" "gates_ok=0 reasons=$reason_csv"
+    echo "REFUSE $MODE run: gates_ok=0 reasons=$reason_csv" >&2
+    write_artifact "$ARTIFACT_DIR" "$MODE-refuse.txt" "gates_ok=0 reasons=$reason_csv"
     exit 1
   fi
 
@@ -246,7 +335,7 @@ if [[ "$RUN_ISOLATED" -eq 1 ]]; then
   while [[ "$round" -le "$ROUNDS" ]]; do
     rdir="$ARTIFACT_DIR/round-$round"
     mkdir -p "$rdir"
-    echo "=== isolated round $round/$ROUNDS ==="
+    echo "=== $MODE round $round/$ROUNDS ==="
     capture_phase "$rdir" "before"
 
     # swapoff-first / diagnose (never kill -9 ramsharedd).
@@ -260,10 +349,12 @@ if [[ "$RUN_ISOLATED" -eq 1 ]]; then
       set +e
       action_pid=""
       if [[ "$(id -u)" -eq 0 ]]; then
-        bash "$pressure" --max-sec "$WATCHDOG_SEC" &
+        bash "$pressure" --max-sec "$WATCHDOG_SEC" \
+          --integrity-result "$rdir/integrity-result.json" &
         action_pid=$!
       elif sudo -n true 2>/dev/null; then
-        sudo -n bash "$pressure" --max-sec "$WATCHDOG_SEC" &
+        sudo -n bash "$pressure" --max-sec "$WATCHDOG_SEC" \
+          --integrity-result "$rdir/integrity-result.json" &
         action_pid=$!
       else
         echo "SKIP pressure: need root/sudo -n for cgroup probe" >"$rdir/action-skip.txt"
@@ -299,9 +390,14 @@ if [[ "$RUN_ISOLATED" -eq 1 ]]; then
     round=$((round + 1))
   done
 
-  write_artifact "$ARTIFACT_DIR" "isolated-complete.txt" \
-    "rounds=$ROUNDS watchdog_sec=$WATCHDOG_SEC claim=PARTIAL_OR_ENV_BOUND see round dirs"
-  echo "Isolated rounds complete under $ARTIFACT_DIR (claim still needs human review)."
+  if [[ "$RUN_SHARED" -eq 1 ]]; then
+    write_artifact "$ARTIFACT_DIR" "shared-daily-host-complete.txt" \
+      "rounds=$ROUNDS watchdog_sec=$WATCHDOG_SEC claim=PARTIAL_OR_ENV_BOUND see round dirs"
+  else
+    write_artifact "$ARTIFACT_DIR" "isolated-complete.txt" \
+      "rounds=$ROUNDS watchdog_sec=$WATCHDOG_SEC claim=PARTIAL_OR_ENV_BOUND see round dirs"
+  fi
+  echo "$MODE rounds complete under $ARTIFACT_DIR (claim still needs human review)."
   exit 0
 fi
 

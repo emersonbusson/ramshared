@@ -13,7 +13,11 @@ fn get_features_from_ublk_control_without_creating_device() {
     let report = ublk_control::get_features(UBLK_CONTROL).expect("ublk GET_FEATURES");
 
     assert_ne!(report.features & ublk::UBLK_F_CMD_IOCTL_ENCODE, 0);
-    assert_eq!(report.features & ublk::UBLK_F_SUPPORT_ZERO_COPY, 0);
+    assert_ne!(
+        report.features & ublk::UBLK_F_SUPPORT_ZERO_COPY,
+        0,
+        "current WSL2 ublk advertises zero-copy support"
+    );
 }
 
 #[test]
@@ -82,7 +86,7 @@ fn fetch_req_parks_until_delete_aborts_without_starting_device() {
     let want = usize::from(report.queue_depth);
 
     let mut session = ublk_queue::FetchSession::open(&char_path, report.queue_depth, 4096)
-        .expect("abrir char device + submeter FETCH_REQ");
+        .expect("open char device + submit FETCH_REQ");
 
     // FETCH remains parked (-EIOCBQUEUED): no CQE before I/O or abort.
     assert!(
