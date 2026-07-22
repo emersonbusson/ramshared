@@ -249,6 +249,17 @@ Get-VMHardDiskDrive -VMName win11-wsl2-lab | Select VMName,Path
   MSIXBundle. The package installed cleanly, but the next runtime probe still
   did not complete normally and PowerShell Direct broke during cleanup. The VM
   was turned Off from the host. Do not repeat this as if it were untried.
+- 2026-07-21 follow-up on the same SSD-backed VM confirmed nested
+  virtualization, healthy heartbeat, PowerShell Direct, enabled WSL/VMP/Hyper-V
+  features, and a running `vmcompute`. The AppX payload and
+  `C:\Program Files\WSL\wslservice.exe` existed, but the `WslService` SCM entry
+  was absent. A temporary service entry started successfully and survived one
+  reboot, but `wsl.exe --status` and `wsl.exe -l -v` still timed out after 30
+  seconds with empty stdout/stderr. Removing that temporary entry and trying a
+  verified MSI repair did not restore the official service registration. The
+  VM was returned to Off. The runtime probe now refuses immediately with
+  `guest_wsl_service_missing` or `guest_wsl_service_not_running` before running
+  the elevated WSL commands.
 
 Current unblock for the WSL2 freeze campaign is WSL runtime initialization
 inside this existing guest, not VM creation, not HDD speed, and not daily WSL2
