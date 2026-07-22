@@ -153,6 +153,9 @@ try {
         $wslExe = Get-GuestWslExe
         $wslCommand = Get-Command $wslExe -ErrorAction SilentlyContinue |
             Select-Object Source, Version
+        $wslService = Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq "WslService" } |
+            Select-Object Name, State, StartMode, PathName, ExitCode
         function Invoke-WslWithTimeout {
             param(
                 [string]$Exe,
@@ -178,13 +181,23 @@ try {
                 stderr = if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr -Raw } else { "" }
             }
         }
-        $wslStatus = Invoke-WslWithTimeout -Exe $wslExe -Arguments "--status"
+        $wslStatus = if ($null -ne $wslService -and $wslService.State -eq "Running") {
+            Invoke-WslWithTimeout -Exe $wslExe -Arguments "--status"
+        } else {
+            [pscustomobject]@{
+                done = $false
+                exit = $null
+                stdout = ""
+                stderr = ""
+            }
+        }
         [pscustomobject]@{
             host = $env:COMPUTERNAME
             whoami = (whoami)
             features = $features
             appx = $appx
             wsl_command = $wslCommand
+            wsl_service = $wslService
             wsl_status = $wslStatus.stdout
             wsl_status_stderr = $wslStatus.stderr
             wsl_status_exit = $wslStatus.exit
@@ -192,6 +205,17 @@ try {
         }
     }
     $probe | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $artifactDir "psdirect-probe.json")
+
+    if ($null -eq $probe.wsl_service) {
+        Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "guest_wsl_service_missing"
+        exit 2
+    }
+    if ($probe.wsl_service.State -ne "Running") {
+        Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "guest_wsl_service_not_running" -Extra @{
+            service_state = $probe.wsl_service.State
+        }
+        exit 2
+    }
 
     $taskProbe = Invoke-GuestWithRetry -Credential $cred -ScriptBlock {
         param($TaskPassword)
