@@ -219,7 +219,8 @@ fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
         let free = mem_free();
         let verdict = sampler.sample(content, free);
         let streak = sampler.bad_streak();
-        if should_log_probe_sample(content, free, free_floor_bytes, streak) {
+        let trace_probe = std::env::var("RAMSHARED_TRACE_PROBE").ok().as_deref() == Some("1");
+        if should_log_probe_sample(content, free, free_floor_bytes, streak, trace_probe) {
             eprintln!(
                 "[ramsharedd] sonda §9.4 sample: content={content:?} free={free:?} \
                  floor={free_floor_bytes} streak={streak}"
@@ -248,8 +249,10 @@ fn should_log_probe_sample(
     free: Option<u64>,
     free_floor_bytes: u64,
     streak: u32,
+    trace_probe: bool,
 ) -> bool {
-    content != Some(true)
+    trace_probe
+        || content != Some(true)
         || free.is_none()
         || free.is_some_and(|f| f < free_floor_bytes.saturating_mul(2))
         || streak > 0
@@ -1611,7 +1614,13 @@ mod tests {
 
     #[test]
     fn probe_sample_logs_low_free_or_degraded_state() {
-        assert!(should_log_probe_sample(Some(true), Some(128), 512, 1, false));
+        assert!(should_log_probe_sample(
+            Some(true),
+            Some(128),
+            512,
+            1,
+            false
+        ));
         assert!(should_log_probe_sample(None, Some(1024), 512, 0, false));
         assert!(should_log_probe_sample(Some(true), None, 512, 0, false));
         assert!(!should_log_probe_sample(
@@ -1621,6 +1630,12 @@ mod tests {
             0,
             false
         ));
-        assert!(should_log_probe_sample(Some(true), Some(2048), 512, 0, true));
+        assert!(should_log_probe_sample(
+            Some(true),
+            Some(2048),
+            512,
+            0,
+            true
+        ));
     }
 }

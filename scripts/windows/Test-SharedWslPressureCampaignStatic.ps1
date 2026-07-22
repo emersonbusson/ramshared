@@ -32,6 +32,7 @@ $required = @(
     "canario_demotes",
     "WriteAllText",
     '-replace "`r`n", "`n"',
+    "RAMSHARED_TRACE_PROBE=1",
     'RAMSHARED_FREEZE_REQUIRED_ROUNDS="$Rounds"',
     "validate-wsl2-freeze-campaign-artifact.sh",
     "WaitForExit",
