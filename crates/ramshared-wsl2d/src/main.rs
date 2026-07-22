@@ -189,6 +189,7 @@ fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
     sampler: &mut ResidencySampler,
     cadence: &mut Cadence,
     probe: &mut CanaryProbe<M>,
+    free_floor_bytes: u64,
     mem_free: F,
 ) -> Option<DemoteReason> {
     // §9: per-request latency canary. content_ok=true/free=u64::MAX ON PURPOSE — the signal
@@ -216,10 +217,18 @@ fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
     if cadence.tick() {
         let content = probe.check_content().ok();
         let free = mem_free();
-        if let Verdict::Demote(reason) = sampler.sample(content, free) {
+        let verdict = sampler.sample(content, free);
+        let streak = sampler.bad_streak();
+        if should_log_probe_sample(content, free, free_floor_bytes, streak) {
+            eprintln!(
+                "[ramsharedd] sonda §9.4 sample: content={content:?} free={free:?} \
+                 floor={free_floor_bytes} streak={streak}"
+            );
+        }
+        if let Verdict::Demote(reason) = verdict {
             eprintln!(
                 "[ramsharedd] sonda §9.4: content={content:?} free={free:?} streak={}",
-                sampler.bad_streak()
+                streak
             );
             probe_reason = Some(reason);
         }
@@ -232,6 +241,18 @@ fn choose_residency_reason(
     probe: Option<DemoteReason>,
 ) -> Option<DemoteReason> {
     probe.or(latency)
+}
+
+fn should_log_probe_sample(
+    content: Option<bool>,
+    free: Option<u64>,
+    free_floor_bytes: u64,
+    streak: u32,
+) -> bool {
+    content != Some(true)
+        || free.is_none()
+        || free.is_some_and(|f| f < free_floor_bytes.saturating_mul(2))
+        || streak > 0
 }
 
 fn sparse_residency_config(reserve_floor_bytes: u64) -> ResidencyConfig {
@@ -805,6 +826,7 @@ fn run_nbd<P: VramProvider>(
                         &mut sampler,
                         &mut cadence,
                         &mut probe,
+                        free_floor,
                         || provider.mem_info().ok().map(|(f, _)| f),
                     )
                 {
@@ -1263,6 +1285,7 @@ fn run_broker<P: VramProvider>(
             &mut sampler,
             &mut cadence,
             &mut probe,
+            ResidencyConfig::default().free_floor_bytes,
             || {
                 let (f, t) = provider.mem_info().ok()?;
                 // RF-3/DT-5: publishes the gauge for reconciliation (free/total in bytes).
