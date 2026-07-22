@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.2](https://github.com/emersonbusson/ramshared/compare/v0.7.1...v0.7.2) (2026-07-22)
+
+
+### Bug Fixes
+
+* **windows:** support private volume teardown ([9263e21](https://github.com/emersonbusson/ramshared/commit/9263e217c93a49db035830e376bf9b9ebf808930))
+* **windows:** support private volume teardown ([c7b2489](https://github.com/emersonbusson/ramshared/commit/c7b24897c5fb3b5df01a60ac6f16f7aac0912f45))
+
 ## [0.7.1](https://github.com/emersonbusson/ramshared/compare/v0.7.0...v0.7.1) (2026-07-22)
 
 
