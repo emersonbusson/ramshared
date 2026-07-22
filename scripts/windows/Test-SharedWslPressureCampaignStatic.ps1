@@ -30,6 +30,8 @@ $required = @(
     '>>"$artifactWsl/daemon.out"',
     "diagnose.json",
     "canario_demotes",
+    "WriteAllText",
+    '-replace "`r`n", "`n"',
     'RAMSHARED_FREEZE_REQUIRED_ROUNDS="$Rounds"',
     "validate-wsl2-freeze-campaign-artifact.sh",
     "WaitForExit",
