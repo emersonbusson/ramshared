@@ -17,6 +17,7 @@ $required = @(
     "--approve-shared-daily-host",
     "--run-shared-daily-host",
     "cascade-health.sh --loop",
+    'RAMSHARED_FREEZE_REQUIRED_ROUNDS="$Rounds"',
     "validate-wsl2-freeze-campaign-artifact.sh",
     "WaitForExit",
     "wsl.exe",
