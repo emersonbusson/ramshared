@@ -92,6 +92,8 @@ if (($rsNow -match "RUNNING") -and -not $ctlOk) {
 
 $exe = "C:\ramshared\bin\ramshared-winsvc.exe"
 $cfg = "C:\ProgramData\RamShared\winsvc-product.toml"
+$mountRoot = "C:\ProgramData\RamShared\mounts"
+$mountPath = Join-Path $mountRoot ("lun-{0}" -f $PID)
 $cfgText = Get-Content $cfg -Raw -ErrorAction SilentlyContinue
 $stagedPressureMiB = if ($WslPressureMiB -gt 0) { $WslPressureMiB } else { $ExternalWorkloadMiB }
 $plannedMiB = [int][Math]::Ceiling(([double]$SizeBytes / 1MB)) + $stagedPressureMiB + $MinFreeAfterPlanMiB
@@ -115,6 +117,12 @@ if ($cfgText -match '(?m)^size_bytes\s*=') {
     $cfgText = $cfgText -replace '(?m)^size_bytes\s*=.*$', ("size_bytes = " + $SizeBytes)
 } else {
     $cfgText = "[win_drive]`nsize_bytes = $SizeBytes`n" + $cfgText
+}
+$mountToml = $mountPath.Replace('\', '\\')
+if ($cfgText -match '(?m)^volume_mount_path\s*=') {
+    $cfgText = $cfgText -replace '(?m)^volume_mount_path\s*=.*$', ('volume_mount_path = "' + $mountToml + '"')
+} else {
+    $cfgText = $cfgText -replace '(?m)^(volume_letter\s*=.*)$', ('$1' + "`n" + 'volume_mount_path = "' + $mountToml + '"')
 }
 Set-Content -Encoding ascii -Path $cfgRun -Value $cfgText
 $cfg = $cfgRun
@@ -253,8 +261,6 @@ if (-not ($diskNameOk -and $diskSizeOk -and $diskNumberOk) -or $diskBootSystem) 
 # Format carefully: only this disk number, mounted under a private directory so
 # Explorer never observes a temporary drive letter.
 $letter = $null
-$mountRoot = "C:\ProgramData\RamShared\mounts"
-$mountPath = Join-Path $mountRoot ("lun-{0}" -f $PID)
 $part = Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($part) {
     W "FAIL existing partition refused before private mount/write"
