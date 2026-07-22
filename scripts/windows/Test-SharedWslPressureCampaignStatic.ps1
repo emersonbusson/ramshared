@@ -1,0 +1,88 @@
+#Requires -Version 5.1
+[CmdletBinding()]
+param()
+
+$ErrorActionPreference = "Stop"
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$script = Join-Path $root "scripts\windows\Invoke-SharedWslPressureCampaign.ps1"
+if (-not (Test-Path -LiteralPath $script)) {
+    throw "missing script: $script"
+}
+
+$text = Get-Content -LiteralPath $script -Raw
+$required = @(
+    "ApproveSharedDailyHost",
+    "PreallocateVram",
+    "ExternalWorkloadMiB",
+    "PostCampaignObserveSec",
+    "HostDiskLetters",
+    "host-disk-logical.jsonl",
+    "host-disk-volumes.json",
+    "Win32_PerfFormattedData_PerfDisk_LogicalDisk",
+    "Win32_LogicalDisk",
+    "host_disk_telemetry_ok",
+    "Start-CudaVramWorkload.ps1",
+    "external-workload.ps1",
+    "external-workload.out",
+    "external-workload.err",
+    "[cuda-vram-workload] released",
+    "external_workload_ok",
+    "RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_WSL_TERMINATION",
+    "RAMSHARED_WINDOWS_WATCHDOG_ARMED=1",
+    "RAMSHARED_ALLOW_RECENT_OOM_MARKER=1",
+    "--approve-shared-daily-host",
+    "--run-shared-daily-host",
+    "cascade-health.sh --loop",
+    "ramsharedd-logged.sh",
+    "daemon.out",
+    '>>"$artifactWsl/daemon.out"',
+    "diagnose.json",
+    "validation-rc.txt",
+    "external_demote_ok",
+    "validated_external_global_gpu_demote",
+    "matrix_row_close",
+    "freeze_campaign_validated",
+    "canario_demotes",
+    "WriteAllText",
+    '-replace "`r`n", "`n"',
+    "RAMSHARED_TRACE_PROBE=1",
+    'RAMSHARED_FREEZE_REQUIRED_ROUNDS="$Rounds"',
+    "validate-wsl2-freeze-campaign-artifact.sh",
+    "WaitForExit",
+    "wsl.exe",
+    "--terminate",
+    "Stop-Process -Id `$externalProc.Id",
+    "ramshared down",
+    "DISK_MUTATION = `$false"
+)
+
+foreach ($needle in $required) {
+    if (-not $text.Contains($needle)) {
+        throw "missing token: $needle"
+    }
+}
+
+if ($text.Contains('>>"`$artifact/daemon.out"')) {
+    throw "daemon wrapper must not depend on an unset runtime artifact variable"
+}
+
+$forbidden = @(
+    "Initialize-Disk",
+    "Format-Volume",
+    "Resize-VHD",
+    "New-VHD",
+    "New-VM",
+    "Start-VM",
+    "Stop-VM",
+    "Remove-VM",
+    "Clear-Disk",
+    "diskpart"
+)
+
+foreach ($needle in $forbidden) {
+    if ($text -match [regex]::Escape($needle)) {
+        throw "forbidden token: $needle"
+    }
+}
+
+Write-Host "STATIC_SHARED_WSL_PRESSURE_CAMPAIGN=PASS"

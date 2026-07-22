@@ -43,7 +43,7 @@ PRDs, SPECs, ADRs, and agent rules describe the **final** primary path, not comp
 | Coding / agent convention | `.claude/rules/*` + sync `CLAUDE.md` / `AGENTS.md` when the root map changes (see `governance.md`) |
 | Build / test / drill command | Root `README.md` or relevant runbook; agent entrypoints if agents must run it |
 | Kahneman discipline / cognitive gate | `docs/methodology/kahneman-disciplines.md` + SPEC Kahneman map when critical |
-| Host safety / lab-only pressure | `benchmarks.md` rule + runbook; never document thrash on live WSL2 as a happy path |
+| Host safety / supervised pressure | `benchmarks.md` rule + runbook; never document direct live WSL2 pressure as a happy path |
 
 ## Spec index hygiene
 

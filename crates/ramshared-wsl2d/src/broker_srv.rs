@@ -192,7 +192,7 @@ impl BrokerCore {
                 .clone()
                 .map(|(host, port)| NbdEndpoint::Tcp { host, port }),
             // WinDrive is lease-only (SPEC windows-swap-driver DT-7); no NBD endpoint.
-            TransportKind::WinDrive => None,
+            TransportKind::WinDrive | TransportKind::DccAgent => None,
         }
     }
 
@@ -584,7 +584,13 @@ impl BrokerCore {
         let present: Vec<TenantView> = self
             .tenants
             .iter()
-            .filter(|(_, t)| t.present && t.transport != TransportKind::WinDrive)
+            .filter(|(_, t)| {
+                t.present
+                    && !matches!(
+                        t.transport,
+                        TransportKind::WinDrive | TransportKind::DccAgent
+                    )
+            })
             .map(|(id, t)| TenantView {
                 id: *id,
                 psi: t.psi,

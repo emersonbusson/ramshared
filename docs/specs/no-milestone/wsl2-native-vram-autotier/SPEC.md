@@ -23,6 +23,13 @@ Selection is automatic only for exactly 1 adapter. With more adapters, an explic
 
 `external_usage = current_usage.saturating_sub(cuda_committed)` and `usable_budget = budget.saturating_sub(external_usage).saturating_sub(safety_margin)`. A sample older than the configured maximum age is invalid. Invalid samples prohibit commit. State transitions require configurable consecutive constrained/recovery samples; a hard commit violation constrains immediately.
 
+On WSL2, CUDA `mem_info` is not a host-global free-memory authority during
+native Windows GPU pressure. The daemon therefore also samples aggregate GPU
+free memory through the WSL-provided `nvidia-smi` path, with timeout and
+hysteresis, and treats sustained global free below the reserve floor as
+`GlobalGpuFreeFloor`. This signal is app-agnostic and must not attribute the
+pressure to a process name.
+
 ## ITEM-3 — allocation gate
 
 Before every sparse first-write allocation, query policy. If `committed + chunk > usable_budget`, mark the tier constrained but **do not return an I/O error for a write already accepted from Linux swap**. Complete at most that in-flight chunk using the safety margin, then trigger bounded swapoff immediately. No subsequent new commit is admitted while demote is pending. Dxg unavailable at startup selects `cuda-fallback`; malformed output, ambiguous topology, or an ioctl failure after open fails closed rather than silently changing authority.

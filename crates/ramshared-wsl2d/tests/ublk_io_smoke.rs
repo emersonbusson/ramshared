@@ -20,7 +20,7 @@ fn serves_read_from_ram_backend_over_block_device() {
         .expect("ublk ADD_DEV");
     let mut guard = DeviceGuard::new(report.dev_id);
 
-    let dev_sectors = 256u64; // 128 KiB
+    let dev_sectors = 2048u64; // 1 MiB
     ublk_control::set_params(
         UBLK_CONTROL,
         report.dev_id,
@@ -75,7 +75,7 @@ fn serves_write_into_ram_backend_over_block_device() {
         .expect("ublk ADD_DEV");
     let mut guard = DeviceGuard::new(report.dev_id);
 
-    let dev_sectors = 256u64;
+    let dev_sectors = 2048u64;
     ublk_control::set_params(
         UBLK_CONTROL,
         report.dev_id,
@@ -126,7 +126,7 @@ fn dt3_serves_read_from_ram_backend_over_block_device() {
         .expect("ublk ADD_DEV");
     let mut guard = DeviceGuard::new(report.dev_id);
 
-    let dev_sectors = 256u64;
+    let dev_sectors = 2048u64;
     ublk_control::set_params(
         UBLK_CONTROL,
         report.dev_id,
@@ -175,7 +175,7 @@ fn dt3_serves_io_from_vram_over_block_device() {
     let mut guard = DeviceGuard::new(report.dev_id);
 
     let block_size = 4096u32;
-    let dev_sectors = 256u64; // 128 KiB
+    let dev_sectors = 2048u64; // 1 MiB
     ublk_control::set_params(
         UBLK_CONTROL,
         report.dev_id,
@@ -191,7 +191,7 @@ fn dt3_serves_io_from_vram_over_block_device() {
     let server = ublk_server::spawn_server_dt3_vram(
         &char_path,
         report.queue_depth,
-        vram_bytes, // buffer por tag = disco inteiro
+        vram_bytes, // buffer per tag = whole disk
         vram_bytes,
         block_size,
     )
@@ -205,7 +205,7 @@ fn dt3_serves_io_from_vram_over_block_device() {
     );
 
     // WRITE aligned block -> fsync -> drop cache -> READ must come from VRAM.
-    let off = 8192u64; // alinhado ao block size 4096
+    let off = 8192u64; // aligned to block size 4096
     let pattern: Vec<u8> = (0..block_size).map(|i| ((i * 7 + 3) % 251) as u8).collect();
     write_block(&block_path, off, &pattern);
     drop_page_cache();
@@ -237,7 +237,7 @@ fn dt3_vram_serves_concurrent_io_with_queue_depth_gt1() {
     );
 
     let block_size = 4096u32;
-    let dev_sectors = 256u64; // 128 KiB -> 32 blocos de 4KB
+    let dev_sectors = 2048u64; // 1 MiB -> 256 blocks of 4 KiB
     ublk_control::set_params(
         UBLK_CONTROL,
         report.dev_id,
@@ -342,7 +342,7 @@ fn dt3_vram_serves_concurrent_writes_with_queue_depth_gt1() {
     );
 
     let block_size = 4096u32;
-    let dev_sectors = 256u64; // 128 KiB -> 32 blocos de 4KB
+    let dev_sectors = 2048u64; // 1 MiB -> 256 blocks of 4 KiB
     ublk_control::set_params(
         UBLK_CONTROL,
         report.dev_id,
@@ -431,7 +431,7 @@ fn dt3_vram_serves_multipage_request() {
     let mut guard = DeviceGuard::new(report.dev_id);
 
     let block_size = 4096u32;
-    let dev_sectors = (max_req as u64 / SECTOR) * 4; // 512 KiB de disco
+    let dev_sectors = 2048u64; // 1 MiB
     // max_sectors couples with max_io_buf_bytes (kernel validates <= max_io_buf_bytes>>9)
     // and becomes the max_hw_sectors of the block device (ublk_drv.c:546).
     ublk_control::set_params(
@@ -512,7 +512,7 @@ fn dt3_vram_residency_triggers_demote_synthetic() {
     let mut guard = DeviceGuard::new(report.dev_id);
 
     let block_size = 4096u32;
-    let dev_sectors = 256u64;
+    let dev_sectors = 2048u64;
     ublk_control::set_params(
         UBLK_CONTROL,
         report.dev_id,

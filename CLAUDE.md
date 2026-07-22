@@ -29,6 +29,15 @@ RamShared requires that all code sent to Ring 0 is the definitive version for Da
 - Temporary workarounds to bypass hardware flaws or cache coherence issues.
 - Modules that ignore warnings from `checkpatch.pl`.
 
+## Product Naming
+
+Generic VRAM behavior uses role names such as `vram_reclaim`, `gpu_budget`,
+and `host_agent`. Integration paths use domain roles such as
+`integrations/dcc/`. Application names are examples or host-compatibility data
+only; they must not become feature names, source filenames, directories, broker
+policy names, daemon names, reclaim policy names, or generic script names.
+Source filenames use `snake_case`; CLI and package identifiers may use hyphens.
+
 ## Commits & Patches
 
 - **English** is mandatory across the entire project: source code, comments, commits, PRs, issues, and root/`/docs/` documents.

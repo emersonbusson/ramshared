@@ -368,6 +368,13 @@ package state, CUDA probe prerequisites, latest dump identity, and finite timeou
 read-only queries only; why: NFR-1 and DT-13. Test: drill's `PREFLIGHT_STORAGE_ONLY=PASS` and refusal
 when a target pagefile exists. Cover: N/A — E2E-only.
 
+**`scripts/windows/Set-WinPagingFilesConcrete.ps1`** — What: snapshot and normalize ambiguous
+Windows `PagingFiles` entries such as `?:\pagefile.sys` to a concrete `C:\pagefile.sys 0 0`
+entry only with `-Apply -Approve`; how: registry-only change with restore support and explicit
+`REBOOT_REQUIRED=1`; why: product teardown intentionally fails closed on ambiguous pagefile
+configuration. Tests: `Test-WinPagingFilesConcreteStatic.ps1`; no disk commands allowed.
+Cover: N/A — operator prep helper.
+
 **`drivers/windows/README.md`**, **`drivers/windows/ramshared/README.md`**, and
 **`scripts/windows/README.md`** — What: separate Rust CUDA product commands from explicit C# RAM VM
 harness, document storage-only bounds and evidence fields; why: RF-6/operator safety. Tests:
@@ -455,6 +462,9 @@ the product binary and product installer.
 | `scripts/windows/Format-RamSharedLun.ps1` | `scripts/windows/Format-RamSharedLun.ps1` :: `refuse_physical_same_size`; `refuse_wrong_serial`; `force_does_not_bypass_identity`; `format_exact_ramshared_lun` | drill/E2E | #13 | N/A — E2E-only; guarded disk mutation |
 | `scripts/windows/Measure-RamSharedDiskIo.ps1` | `scripts/windows/Measure-RamSharedDiskIo.ps1` :: `checksum_mismatch_exits_6`; `three_rounds_emit_p50_p95_p99`; `matching_checksum_exits_0` | drill/E2E | #3/#13 | N/A — E2E-only; live filesystem I/O |
 | `crates/ramshared-winsvc/src/main.rs` + Windows product surface | `scripts/windows/Invoke-CudaStorageDrill.ps1` :: `storage_only_cuda_three_rounds_sha256`; `pagefile_present_aborts_before_start`; `volume_lock_failure_aborts_before_destroy`; `broker_release_is_observed` | drill/E2E | #3/#13/#16 | N/A — E2E-only; physical Windows GPU |
+| `scripts/windows/Get-WinDrivePreflight.ps1` | `scripts/windows/Test-WinDrivePreflightStatic.ps1` :: `control_path_fail_closed` | static + physical preflight | #13/#16 | N/A — harness |
+| `scripts/windows/Set-WinPagingFilesConcrete.ps1` | `scripts/windows/Test-WinPagingFilesConcreteStatic.ps1` :: snapshot/restore approval; no disk mutation commands | static + operator prep | #13/#16 | N/A — registry prep |
+| `scripts/windows/Run-HostExhaustive.ps1` | `scripts/windows/Test-HostExhaustiveStatic.ps1` :: `host_broker_required`; `online_marker_must_be_strong`; `complete_pass_gate` | static + physical drill | #3/#13/#16 | N/A — harness |
 | `scripts/windows/Run-GuestProductOnline.ps1` | `scripts/windows/Test-GuestProductOnlineStatic.ps1` :: `verdict_requires_complete_graceful_stop`; `pre_stop_probe_is_absent`; `three_fresh_rounds_are_required` | static + isolated drill | #3/#13/#16 | N/A — harness |
 | `scripts/windows/Run-GuestExhaustive.ps1` | `scripts/windows/Test-GuestExhaustiveStatic.ps1` :: stale DriverStore purge; post-reboot root recreate; PnP/SCSI ready before IOCTL; bounded load timeout | static + isolated drill | #3/#13/#16 | N/A — harness |
 

@@ -14,7 +14,7 @@
 [CmdletBinding()]
 param(
     [string]$VMName = "win11-drill",
-    [string]$User = ".\drilladmin",
+    [string]$User = "WIN11-DRILL\drilladmin",
     [string]$Password = $env:RAMSHARED_DRILL_PASSWORD,
     [UInt64]$SizeBytes = 67108864,
     [string]$Letter = "S",

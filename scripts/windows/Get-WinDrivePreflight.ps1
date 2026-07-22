@@ -29,10 +29,65 @@ function Bad([string]$msg) {
     Write-Host "[FAIL] $msg" -ForegroundColor Red
     $script:fail++
 }
+function Test-ControlPath([string]$Path) {
+    if (-not ("RamSharedCtlOpen" -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+public static class RamSharedCtlOpen {
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern IntPtr CreateFile(string path, uint access, uint share, IntPtr sec, uint creation, uint flags, IntPtr template);
+  [DllImport("kernel32.dll", SetLastError=true)]
+  static extern bool CloseHandle(IntPtr h);
+
+  public static int TryOpen(string path) {
+    IntPtr h = CreateFile(path, 0x80000000u | 0x40000000u, 0, IntPtr.Zero, 3, 0, IntPtr.Zero);
+    long v = h.ToInt64();
+    if (v == -1 || v == 0) return Marshal.GetLastWin32Error();
+    CloseHandle(h);
+    return 0;
+  }
+}
+'@
+    }
+    return [RamSharedCtlOpen]::TryOpen($Path)
+}
+function Test-ConfiguredPagingFilesConcrete {
+    try {
+        $mm = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
+        $configured = @((Get-ItemProperty -LiteralPath $mm -Name PagingFiles -EA Stop).PagingFiles)
+        $badConfigured = @()
+        foreach ($entry in $configured) {
+            $line = [string]$entry
+            if ([string]::IsNullOrWhiteSpace($line)) {
+                continue
+            }
+            $parts = @($line.Trim() -split '\s+')
+            $path = [string]$parts[0]
+            if ($path.StartsWith('?:\') -or $path -notmatch '^[A-Za-z]:\\' -or $parts.Count -lt 3) {
+                $badConfigured += $line
+            }
+        }
+        if ($badConfigured.Count -gt 0) {
+            if ($StorageOnly) {
+                Bad "Ambiguous/malformed PagingFiles entry blocks storage-only teardown: $($badConfigured -join ', ')"
+            } else {
+                Warn "Ambiguous/malformed PagingFiles entry: $($badConfigured -join ', ')"
+            }
+        } else {
+            Ok "Configured PagingFiles entries are concrete"
+        }
+    } catch {
+        if ($StorageOnly) { Bad "PagingFiles registry query failed (fail-closed): $_" }
+        else { Warn "PagingFiles registry query failed: $_" }
+    }
+}
 
 Write-Host "=== RamShared WinDrive preflight ===" -ForegroundColor Cyan
 if ($StorageOnly) {
     Write-Host "MODE=storage-only (no pagefile campaign)" -ForegroundColor Cyan
+    Test-ConfiguredPagingFilesConcrete
 }
 
 # OS
@@ -120,7 +175,7 @@ try {
         })
     if ($disks.Count -gt 0) {
         if ($StorageOnly) {
-            Warn "Existing RamShared disk(s): $($disks.Number -join ',') — clear before campaign"
+            Bad "Existing RamShared disk(s): $($disks.Number -join ',') — clear before campaign"
         } else {
             Ok "RamShared disk present: N=$($disks.Number -join ',')"
         }
@@ -129,6 +184,50 @@ try {
     }
 } catch {
     Warn "Get-Disk failed: $_"
+}
+
+# Redundant Win32 disk inventory catches residual class-stack devices that may
+# still be visible to Task Manager even if the first Get-Disk pass races clean.
+try {
+    $win32Disks = @(Get-CimInstance Win32_DiskDrive -EA Stop | Where-Object {
+            $_.Model -match 'RAMSHARE|VRAMDISK|RamShared'
+        })
+    if ($win32Disks.Count -gt 0) {
+        $ids = @($win32Disks | ForEach-Object { "Index=$($_.Index) Model=$($_.Model) Serial=$($_.SerialNumber)" }) -join '; '
+        if ($StorageOnly) {
+            Bad "Residual RamShared Win32_DiskDrive node(s): $ids"
+        } else {
+            Warn "Residual RamShared Win32_DiskDrive node(s): $ids"
+        }
+    } else {
+        Ok "No residual RamShared Win32_DiskDrive nodes"
+    }
+} catch {
+    if ($StorageOnly) { Bad "Win32_DiskDrive query failed (fail-closed): $_" }
+    else { Warn "Win32_DiskDrive query failed: $_" }
+}
+
+# Ghost/stale PnP disk nodes can survive after surprise removal even when
+# Get-Disk is clean. They poison identity checks, so storage-only preflight
+# refuses until the operator removes them or reboots.
+try {
+    $ghostDisks = @(Get-PnpDevice -PresentOnly:$false -EA SilentlyContinue | Where-Object {
+            $_.InstanceId -like 'SCSI\DISK&VEN_RAMSHARE&PROD_VRAMDISK*' -or
+            $_.FriendlyName -match 'RAMSHARE|VRAMDISK|RamShared'
+        })
+    if ($ghostDisks.Count -gt 0) {
+        $ids = @($ghostDisks | ForEach-Object { $_.InstanceId }) -join ', '
+        if ($StorageOnly) {
+            Bad "Stale RamShared PnP disk node(s) present: $ids"
+        } else {
+            Warn "Stale RamShared PnP disk node(s): $ids"
+        }
+    } else {
+        Ok "No stale RamShared PnP disk nodes"
+    }
+} catch {
+    if ($StorageOnly) { Bad "PnP ghost disk query failed (fail-closed): $_" }
+    else { Warn "PnP ghost disk query failed: $_" }
 }
 
 # Product binary / config
@@ -172,6 +271,53 @@ foreach ($s in $sys) {
 }
 if (-not $drv) {
     Warn "ramshared.sys not found in default paths (build/sign/deploy first)"
+}
+if ($StorageOnly -and
+    $serviceImage -and
+    (Test-Path -LiteralPath $serviceImage) -and
+    (Test-Path "C:\ramshared\package\ramshared.sys")) {
+    $serviceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $serviceImage).Hash
+    $packageHash = (Get-FileHash -Algorithm SHA256 -LiteralPath "C:\ramshared\package\ramshared.sys").Hash
+    if ($serviceHash -eq $packageHash) {
+        Ok "Driver image matches package SHA256=$serviceHash"
+    } else {
+        Bad "Driver image/package mismatch: service=$serviceHash package=$packageHash"
+    }
+}
+
+# Loaded miniport health. A running service without the control device means a
+# previous PnP/remove path left the physical host in a stale loaded state; fail
+# closed before a storage campaign tries to create a LUN.
+try {
+    $svcText = sc.exe query ramshared 2>$null | Out-String
+    $svcRunning = $svcText -match 'RUNNING'
+    $ctlPaths = @("\\.\RamSharedCtl", "\\.\GLOBALROOT\Device\RamSharedCtl")
+    $ctlOk = $false
+    foreach ($ctl in $ctlPaths) {
+        try {
+            $err = Test-ControlPath $ctl
+            if ($err -eq 0) {
+                $ctlOk = $true
+                Ok "Control path $ctl"
+                break
+            } else {
+                Warn "Control path $ctl open failed err=$err"
+            }
+        } catch {
+            Warn "Control path $ctl query failed: $_"
+        }
+    }
+    if ($svcRunning -and -not $ctlOk) {
+        if ($StorageOnly) {
+            Bad "ramshared service is RUNNING but RamSharedCtl is absent; reboot/unload/redeploy before physical Online"
+        } else {
+            Warn "ramshared service is RUNNING but RamSharedCtl is absent"
+        }
+    } elseif (-not $svcRunning) {
+        Warn "ramshared service not running yet; campaign must start it before Online"
+    }
+} catch {
+    Warn "ramshared service/control query failed: $_"
 }
 
 # Latest dump identity (no contents)

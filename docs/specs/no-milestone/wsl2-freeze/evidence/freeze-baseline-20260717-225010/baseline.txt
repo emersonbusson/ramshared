@@ -1,0 +1,17 @@
+phase=baseline
+ts=2026-07-17T22:50:10-03:00
+=== /proc/swaps ===
+Filename				Type		Size		Used		Priority
+/dev/sdc                                partition	4194304		276600		-2
+=== meminfo (selected) ===
+MemTotal:       16376448 kB
+MemAvailable:   12637952 kB
+SwapTotal:       4194304 kB
+SwapFree:        3917704 kB
+=== procs_blocked ===
+procs_blocked 0
+=== ramsharedd ===
+(none)
+=== dmesg tail (hung_task filter) ===
+[ 9696.673163] Memory cgroup out of memory: Killed process 28531 (clamd) total-vm:1024396kB, anon-rss:444468kB, file-rss:12588kB, shmem-rss:0kB, UID:100 pgtables:2016kB oom_score_adj:0
+[ 9973.153405] Adding 131068k swap on /dev/ublkb0.  Priority:-3 extents:1 across:131068k SS

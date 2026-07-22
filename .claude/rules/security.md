@@ -20,7 +20,7 @@ Kernel-adjacent and privileged userspace paths. Not a web/OWASP checklist.
 - [ ] **IRQ/atomic:** no sleep; `GFP_ATOMIC` or no allocation; document lock order.
 - [ ] **Lifetime:** get/put and map/unmap balanced; module exit and device remove free resources in reverse order (`goto out_err`).
 - [ ] **Hot-unplug:** device gone → stable errno (`-ENODEV`/`-ENOENT`), not UAF.
-- [ ] **Host safety:** never thrash swap/ublk on the live WSL2 host; pressure tests only in qemu/civm (see `benchmarks.md`).
+- [ ] **Host safety:** never run unsupervised swap/ublk pressure on the live WSL2 host; shared-host pressure requires the approved Windows watchdog harness (see `benchmarks.md`).
 
 ## Userspace daemons / broker
 
