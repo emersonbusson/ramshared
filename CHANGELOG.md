@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.7.0](https://github.com/emersonbusson/ramshared/compare/v0.6.4...v0.7.0) (2026-07-22)
+
+
+### Features
+
+* **cli:** add telemetry diagnosis command ([69f9eba](https://github.com/emersonbusson/ramshared/commit/69f9ebaef88a062d7d61cfed39b7890c8097e649))
+* **core:** add generic workload lease bridge ([abfaf9f](https://github.com/emersonbusson/ramshared/commit/abfaf9fd58d0e06c96370340e79571d951a27d9a))
+* **p0:** add generic GPU workload gate ([ff9030e](https://github.com/emersonbusson/ramshared/commit/ff9030e927c2aa0428ccc6dc39977207c4de02a6))
+* **package:** add Linux bundle builder ([a6ae2ea](https://github.com/emersonbusson/ramshared/commit/a6ae2ea04c76f3df32d945e1fa22c19619ae9585))
+
+
+### Bug Fixes
+
+* **ci:** allow explicit security redactions ([c0225a4](https://github.com/emersonbusson/ramshared/commit/c0225a41a79b8f7a45c673e4d3a6fcb3eddaba0c))
+* **ci:** restore required docs check name ([456d9aa](https://github.com/emersonbusson/ramshared/commit/456d9aa35b73a99b940c999550bcee730aa7eeec))
+* **reclaim:** harden supervised split campaigns ([02850b2](https://github.com/emersonbusson/ramshared/commit/02850b25badb7e4bd2efdbc1a91a4e63d7e02f87))
+* **scripts:** refuse freeze thrash on shared Windows desktop ([99b60fc](https://github.com/emersonbusson/ramshared/commit/99b60fc60471f85344a669da439532d55eeb6a70))
+* **windows:** fail preflight on residual vram disks ([7a8b5ef](https://github.com/emersonbusson/ramshared/commit/7a8b5eff0e2a45622877ccbde07df1b37a7e355c))
+* **windows:** harden physical disk identity gates ([02109d3](https://github.com/emersonbusson/ramshared/commit/02109d34a96c4f7fe8048ea2f69cc3af6a6877c7))
+* **windows:** open control device for preflight ([6f8c9f5](https://github.com/emersonbusson/ramshared/commit/6f8c9f5cb3d7c7f0b46851b213ec3bfe76313d0b))
+* **wsl2:** capture daemon telemetry reliably ([2a07bf1](https://github.com/emersonbusson/ramshared/commit/2a07bf149761b0b31d3e871f6ed85ec2d256fe90))
+* **wsl2:** demote on global GPU free-floor pressure ([aba2b8e](https://github.com/emersonbusson/ramshared/commit/aba2b8ee805883b01ba05df8ce1555dfeacaede3))
+* **wsl2:** demote sparse tier on free-floor pressure ([ab39b38](https://github.com/emersonbusson/ramshared/commit/ab39b389d5bd05a62034f7af4f72029c3b2cdca1))
+* **wsl2:** fail fast on missing guest service ([14c731a](https://github.com/emersonbusson/ramshared/commit/14c731aebc7f9cc675d1dac8507a0ab67f2c5853))
+* **wsl2:** let free-floor probe preempt latency ([89553f7](https://github.com/emersonbusson/ramshared/commit/89553f7f4800e37b105bf91a91ae836975c03c8f))
+* **wsl2:** log low-free probe samples ([55e670f](https://github.com/emersonbusson/ramshared/commit/55e670f97bcbea40b4c0b1c91c76cbac68ff3222))
+* **wsl2:** trace probe samples in pressure harness ([da5b6ef](https://github.com/emersonbusson/ramshared/commit/da5b6ef1199e0338602952704702da711a70157e))
+* **wsl2:** validate configured campaign rounds ([ad762d8](https://github.com/emersonbusson/ramshared/commit/ad762d8d900486f8e1e00fa617afe20273c29c32))
+
+
+### Documentation
+
+* **broker:** record isolated P1 drill evidence ([949fecc](https://github.com/emersonbusson/ramshared/commit/949fecc6294eba9f93b70534e4542bf3e798e05c))
+* **gpu:** record wddm demote partial audit ([cd033fa](https://github.com/emersonbusson/ramshared/commit/cd033fafab4cfaa1bc1b9dfc04bf5dea894d5a4a))
+* **gpu:** record windows pressure matrix pass ([fc62b8e](https://github.com/emersonbusson/ramshared/commit/fc62b8e9d8b07497494321cee472e959178ec84b))
+* **lab:** clarify disposable vm boundary ([0ee6ce2](https://github.com/emersonbusson/ramshared/commit/0ee6ce27bd1e6f05365ae5230aa3b2d96f09e0c4))
+* **lab:** lock vm inventory policy ([8d4beca](https://github.com/emersonbusson/ramshared/commit/8d4beca3f84770f15f0c304a8c22e3c54c8905b4))
+* **lab:** record remaining WSL runtime blocker ([6fc7263](https://github.com/emersonbusson/ramshared/commit/6fc7263ba9120f16e9e56eb27fdd9036f78300aa))
+* **lab:** record ublk capability pass ([3c74b35](https://github.com/emersonbusson/ramshared/commit/3c74b35dea3723d539d71f162f84a78a27f122a7))
+* **reliability:** use generic workload wording ([8ad6a3f](https://github.com/emersonbusson/ramshared/commit/8ad6a3ff2a210c63be6bcec1b7fc64d995ab5029))
+* **security:** redact signing password example ([cfdec09](https://github.com/emersonbusson/ramshared/commit/cfdec0916ab2ae2da5c0a94168fa503bc91a9610))
+* **windows:** close supported disk counter gate ([83abbbf](https://github.com/emersonbusson/ramshared/commit/83abbbffac895bf19094f08ce4e992ca4c61b906))
+* **wsl2:** capture daily host freeze baseline ([f81f3da](https://github.com/emersonbusson/ramshared/commit/f81f3dacf774e84aed04fcc9e942b761f61365fe))
+* **wsl2:** close external GPU pressure gap ([a358acc](https://github.com/emersonbusson/ramshared/commit/a358acc0fe4db0fb149ff90b6087b97b9e659b1d))
+* **wsl2:** record clean runtime reinstall attempt ([2bd16d6](https://github.com/emersonbusson/ramshared/commit/2bd16d65f955577a12fe7da72be1a58c0ec99f08))
+
+
+### CI
+
+* **deps:** bump actions/setup-node from 6 to 7 in the all-actions group ([73b21c5](https://github.com/emersonbusson/ramshared/commit/73b21c5a211b193993ceb905fd4baac9f53244d8))
+* run public hygiene in docs workflow ([6cfea54](https://github.com/emersonbusson/ramshared/commit/6cfea54a94bf604b4f47dca1a9f74b95f0fc29a1))
+
 ## [0.6.4](https://github.com/emersonbusson/ramshared/compare/v0.6.3...v0.6.4) (2026-07-17)
 
 
