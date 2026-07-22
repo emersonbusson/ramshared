@@ -22,7 +22,7 @@ pressure.
 | Windows large LUN | 3 GiB Windows LUN | synthetic external GPU workload | No data corruption; clean teardown; no minidump; visible I/O counters under backend-active writes |
 | WSL2 small cascade | 1 GiB WSL2 VRAM tier | external GPU workload over reserve | DEMOTE or commit refusal before reserve is exhausted; swapoff-first; no ghost swap |
 | WSL2 product cascade | 4 GiB WSL2 VRAM tier | external GPU workload over reserve | VRAM returned via DEMOTE; zram/disk absorb pages; no freeze/hung task |
-| Split consumers | 4 GiB WSL2 + 1 GiB Windows | external workload requiring more than remaining free VRAM | At least one RamShared owner releases or refuses growth; external workload gets headroom; all RamShared data remains intact |
+| Split consumers | 3 GiB WSL2 + 1 GiB Windows | 1 GiB staged external workload | Establish both owners with a 256 MiB setup margin, then require reclaim to restore the 1 GiB target floor; all RamShared data remains intact |
 
 ## Acceptance
 
@@ -33,8 +33,15 @@ pressure.
 - A 64 MiB pass must never be reported as GiB-scale reclaim proof.
 - Physical host runs require clean preflight, concrete `PagingFiles`, no stale RAMSHARE LUN,
   explicit size, and explicit approval.
-- WSL2 pressure runs require an isolated lab or an explicit shared-desktop override. Daily
-  WSL2 must remain read-only/dry-run.
+- Shared-host WSL2 pressure requires `Invoke-SharedWslPressureCampaign.ps1`,
+  explicit approval, the Windows-side watchdog, bounded pressure, telemetry, and
+  cleanup artifacts. Direct or unsupervised pressure remains forbidden.
+- Split preflight requires resident owner allocations plus a fixed 256 MiB setup
+  margin. External pressure is staged after both owners are established; the
+  1 GiB reserve is the post-reclaim target, not a simultaneous allocation.
+- Each WSL2 pressure round must include `integrity-result.json` with `status=PASS`,
+  non-zero allocated MiB, non-zero verified chunks, and matching before/after
+  checksums.
 
 ## Current Evidence
 
@@ -71,6 +78,16 @@ pressure.
   matrix runner emitted `matrix-summary.json` with `windows-3gib` as `PARTIAL`
   before LUN creation because free VRAM was 5203 MiB for a 5120 MiB plan plus
   required 256 MiB operational margin.
+- 2026-07-22 `C:\ramshared\artifacts\shared-wsl-pressure-20260722-015303`:
+  supervised shared-host pressure proved aggregate external GPU DEMOTE telemetry
+  with C:/I: host disk telemetry, but the pressure worker was killed and the
+  artifact has no per-round checksum integrity proof. It is external-pressure
+  evidence only; it does not close WSL2 1 GiB, WSL2 4 GiB, or split-owner rows.
+- 2026-07-22 the split row was recalibrated from 4 GiB + 1 GiB to 3 GiB +
+  1 GiB for the 6144 MiB RTX 2060. The former row incorrectly treated the
+  post-reclaim reserve as simultaneously resident. The calibrated preflight
+  requires 4096 MiB of owners plus a 256 MiB setup margin, then stages 1024 MiB
+  of external pressure under the Windows watchdog.
 
 ## Open Questions
 

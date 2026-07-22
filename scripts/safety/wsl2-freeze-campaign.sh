@@ -349,10 +349,12 @@ if [[ "$RUN_ISOLATED" -eq 1 || "$RUN_SHARED" -eq 1 ]]; then
       set +e
       action_pid=""
       if [[ "$(id -u)" -eq 0 ]]; then
-        bash "$pressure" --max-sec "$WATCHDOG_SEC" &
+        bash "$pressure" --max-sec "$WATCHDOG_SEC" \
+          --integrity-result "$rdir/integrity-result.json" &
         action_pid=$!
       elif sudo -n true 2>/dev/null; then
-        sudo -n bash "$pressure" --max-sec "$WATCHDOG_SEC" &
+        sudo -n bash "$pressure" --max-sec "$WATCHDOG_SEC" \
+          --integrity-result "$rdir/integrity-result.json" &
         action_pid=$!
       else
         echo "SKIP pressure: need root/sudo -n for cgroup probe" >"$rdir/action-skip.txt"

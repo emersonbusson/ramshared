@@ -21,6 +21,7 @@
 param(
     [int]$Seconds = 10,
     [string]$DriveLetter = "",
+    [string]$AccessPath = "",
     [int]$SampleIntervalSec = 1,
     # SPEC DT-13 / RF-4: optional exact checksum mode (three rounds)
     [int]$ChecksumRounds = 0,
@@ -33,6 +34,70 @@ param(
 
 $ErrorActionPreference = "Continue"
 function L($m) { Write-Host ("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m) }
+
+$ioRoot = ""
+if ($AccessPath) {
+    $ioRoot = $AccessPath.TrimEnd('\')
+} elseif ($DriveLetter) {
+    $letter = $DriveLetter.TrimEnd(':').Substring(0, 1)
+    $ioRoot = "${letter}:"
+}
+
+$uncachedSource = @'
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+public static class RamSharedUncachedIo {
+  const uint GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000;
+  const uint CREATE_ALWAYS = 2;
+  public const uint FILE_FLAG_NO_BUFFERING = 0x20000000;
+  public const uint FILE_FLAG_WRITE_THROUGH = 0x80000000;
+  const uint MEM_COMMIT = 0x1000, MEM_RESERVE = 0x2000, MEM_RELEASE = 0x8000, PAGE_READWRITE = 4;
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern SafeFileHandle CreateFile(string p, uint a, uint s, IntPtr sa, uint c, uint f, IntPtr t);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool WriteFile(SafeFileHandle h, IntPtr b, uint n, out uint done, IntPtr ov);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool ReadFile(SafeFileHandle h, IntPtr b, uint n, out uint done, IntPtr ov);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetFilePointerEx(SafeFileHandle h, long d, out long pos, uint method);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr VirtualAlloc(IntPtr a, UIntPtr n, uint type, uint protect);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool VirtualFree(IntPtr a, UIntPtr n, uint type);
+
+  public static long[] Run(string path, int mib, int seconds) {
+    int size = checked(mib * 1024 * 1024);
+    byte[] expected = new byte[size], actual = new byte[size];
+    new Random(0x5253).NextBytes(expected);
+    IntPtr write = VirtualAlloc(IntPtr.Zero, (UIntPtr)size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    IntPtr read = VirtualAlloc(IntPtr.Zero, (UIntPtr)size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (write == IntPtr.Zero || read == IntPtr.Zero) throw new System.ComponentModel.Win32Exception();
+    long written = 0, readBytes = 0;
+    try {
+      Marshal.Copy(expected, 0, write, size);
+      using (var h = CreateFile(path, GENERIC_READ | GENERIC_WRITE, 0, IntPtr.Zero, CREATE_ALWAYS,
+                                FILE_FLAG_NO_BUFFERING | FILE_FLAG_WRITE_THROUGH, IntPtr.Zero)) {
+        if (h.IsInvalid) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        DateTime deadline = DateTime.UtcNow.AddSeconds(Math.Max(1, seconds));
+        do {
+          uint done; long pos;
+          if (!SetFilePointerEx(h, 0, out pos, 0) || !WriteFile(h, write, (uint)size, out done, IntPtr.Zero) || done != size)
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+          written += done;
+          if (!SetFilePointerEx(h, 0, out pos, 0) || !ReadFile(h, read, (uint)size, out done, IntPtr.Zero) || done != size)
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+          readBytes += done;
+        } while (DateTime.UtcNow < deadline);
+      }
+      Marshal.Copy(read, actual, 0, size);
+      bool match = expected.Length == actual.Length;
+      for (int i = 0; match && i < expected.Length; i++) match = expected[i] == actual[i];
+      return new long[] { written, readBytes, match ? 1 : 0 };
+    } finally {
+      if (write != IntPtr.Zero) VirtualFree(write, UIntPtr.Zero, MEM_RELEASE);
+      if (read != IntPtr.Zero) VirtualFree(read, UIntPtr.Zero, MEM_RELEASE);
+    }
+  }
+}
+'@
 
 $disks = @(Get-Disk | Where-Object {
         $_.FriendlyName -match 'RAMSHARE|RamShared|VRAMDISK' -or
@@ -105,35 +170,22 @@ $latW = New-Object System.Collections.Generic.List[double]
 $qDepth = New-Object System.Collections.Generic.List[double]
 
 $sampleLoadJob = $null
-if ($DriveLetter) {
-    $letter = $DriveLetter.TrimEnd(':').Substring(0, 1)
-    $sampleLoadPath = "${letter}:\ramshared-io-sample-load.bin"
+if ($ioRoot) {
+    $sampleLoadPath = Join-Path $ioRoot "ramshared-io-sample-load.bin"
     L "Starting direct I/O load during PerfDisk sampling -> $sampleLoadPath"
-    $sampleLoadJob = Start-Job -ArgumentList $sampleLoadPath, $ProbeMiB, $Seconds -ScriptBlock {
-        param($Path, $MiB, $DurationSec)
+    $sampleLoadJob = Start-Job -ArgumentList $sampleLoadPath, $ProbeMiB, $Seconds, $uncachedSource -ScriptBlock {
+        param($Path, $MiB, $DurationSec, $Source)
         $ErrorActionPreference = "Stop"
-        $bytes = New-Object byte[] ([int64]$MiB * 1MB)
-        (New-Object Random).NextBytes($bytes)
-        $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, [int]$DurationSec))
-        $iterations = 0
-        $written = [int64]0
-        $read = [int64]0
-        $ok = $true
-        while ([DateTime]::UtcNow -lt $deadline) {
-            [IO.File]::WriteAllBytes($Path, $bytes)
-            $got = [IO.File]::ReadAllBytes($Path)
-            if ($got.Length -ne $bytes.Length) { $ok = $false }
-            $iterations++
-            $written += $bytes.Length
-            $read += $got.Length
-        }
+        Add-Type -TypeDefinition $Source
+        $result = [RamSharedUncachedIo]::Run($Path, $MiB, $DurationSec)
         Remove-Item $Path -Force -EA SilentlyContinue
         [pscustomobject]@{
             probe_during_sampling = $true
-            iterations = $iterations
-            bytes_written = $written
-            bytes_read = $read
-            match = $ok
+            UNCACHED_WRITE_BYTES = [int64]$result[0]
+            UNCACHED_READ_BYTES = [int64]$result[1]
+            bytes_written = [int64]$result[0]
+            bytes_read = [int64]$result[1]
+            match = ([int64]$result[2] -eq 1)
         }
     }
 }
@@ -197,9 +249,8 @@ L ("Queue depth     avg={0} max={1}" -f $sq.avg, $sq.max)
 L "Note: Task Manager may still mis-report StorPort virtual disks; trust this sample + direct I/O."
 
 $directOk = $false
-if ($DriveLetter) {
-    $letter = $DriveLetter.TrimEnd(':').Substring(0, 1)
-    $path = "${letter}:\ramshared-io-probe.bin"
+if ($ioRoot) {
+    $path = Join-Path $ioRoot "ramshared-io-probe.bin"
     L "Optional direct I/O probe -> $path"
     try {
         # 16 MiB may exceed free space on 64 MiB LUN after NTFS overhead; use 8 MiB.
@@ -231,9 +282,8 @@ if ($DriveLetter) {
 
 # --- SPEC checksum / percentile mode (optional) ---
 if ($ChecksumRounds -gt 0) {
-    if (-not $DriveLetter) { throw "ChecksumRounds requires -DriveLetter" }
-    $letter = $DriveLetter.TrimEnd(':').Substring(0,1).ToUpperInvariant()
-    $path = "${letter}:\ramshared-probe.bin"
+    if (-not $ioRoot) { throw "ChecksumRounds requires -DriveLetter or -AccessPath" }
+    $path = Join-Path $ioRoot "ramshared-probe.bin"
     $size = [int64]$ProbeMiB * 1MB
     $seed = [int](Get-Date -UFormat %s) % 251
     $lat = New-Object System.Collections.Generic.List[double]

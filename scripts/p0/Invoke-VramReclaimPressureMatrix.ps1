@@ -13,7 +13,7 @@ param(
     [switch]$Run,
     [switch]$ApprovePhysicalHost,
     [switch]$ApproveSharedDesktopWsl,
-    [ValidateSet("all", "windows-smoke", "windows-3gib", "wsl2-1gib", "wsl2-4gib", "split-4gib-1gib")]
+    [ValidateSet("all", "windows-smoke", "windows-3gib", "wsl2-1gib", "wsl2-4gib", "split-3gib-1gib")]
     [string]$Case = "all",
     [int]$GpuIndex = 0,
     [int]$ReserveMiB = 1024,
@@ -75,7 +75,7 @@ $cases = @(
     New-Case "windows-3gib" 3072 0 1024 "Large LUN survives I/O; external pressure recovers; no dump"
     New-Case "wsl2-1gib" 0 1024 1024 "WSL2 tier demotes/refuses before reserve exhaustion"
     New-Case "wsl2-4gib" 0 4096 1024 "WSL2 cascade returns VRAM via swapoff-first DEMOTE"
-    New-Case "split-4gib-1gib" 1024 4096 1024 "One owner releases/refuses growth; external workload gets headroom"
+    New-Case "split-3gib-1gib" 1024 3072 1024 "One owner releases/refuses growth; external workload gets headroom"
 )
 
 if ($Case -ne "all") {
@@ -97,10 +97,10 @@ L ("GPU {0}: total={1}MiB free={2}MiB used={3}MiB reserve={4}MiB" -f
     $gpu.name, $gpu.total_mib, $gpu.free_mib, $gpu.used_mib, $ReserveMiB)
 
 foreach ($c in $cases) {
-    $needed = [int]$c.windows_lun_mib + [int]$c.wsl2_vram_mib + [int]$c.external_gpu_workload_mib + $ReserveMiB
-    if ($needed -gt $gpu.free_mib -and ($c.windows_lun_mib -gt 0 -or $c.wsl2_vram_mib -gt 0)) {
-        L ("REFUSE {0}: free VRAM {1}MiB < windows+wsl2+external+reserve {2}MiB" -f
-            $c.case, $gpu.free_mib, $needed)
+    $ownerPlan = [int]$c.windows_lun_mib + [int]$c.wsl2_vram_mib + 256
+    if ($ownerPlan -gt $gpu.free_mib -and ($c.windows_lun_mib -gt 0 -or $c.wsl2_vram_mib -gt 0)) {
+        L ("REFUSE {0}: free VRAM {1}MiB < owner_allocations_plus_margin {2}MiB" -f
+            $c.case, $gpu.free_mib, $ownerPlan)
     } else {
         L ("PLAN {0}: windows={1}MiB wsl2={2}MiB external={3}MiB expected={4}" -f
             $c.case, $c.windows_lun_mib, $c.wsl2_vram_mib, $c.external_gpu_workload_mib, $c.expected)
@@ -154,15 +154,36 @@ foreach ($c in $cases) {
         }
     } elseif ($c.case -like "wsl2-*") {
         if (-not $ApproveSharedDesktopWsl) {
-            L "REFUSE $($c.case): WSL2 pressure requires isolated lab or -ApproveSharedDesktopWsl"
-            Add-Result -Results $results -Case $c -Status "PARTIAL" -Reason "requires_isolated_lab_or_shared_desktop_wsl_approval"
+            L "REFUSE $($c.case): supervised Windows watchdog approval is required"
+            Add-Result -Results $results -Case $c -Status "PARTIAL" -Reason "shared_wsl_watchdog_required"
             continue
         }
-        L "PARTIAL $($c.case): use scripts/safety/wsl2-freeze-campaign.sh in an isolated lab"
-        Add-Result -Results $results -Case $c -Status "PARTIAL" -Reason "wsl2_orchestration_delegated_to_freeze_campaign"
+        $sharedHarness = Join-Path $PSScriptRoot "..\windows\Invoke-SharedWslPressureCampaign.ps1"
+        $caseOut = & $sharedHarness -ApproveSharedDailyHost -VramMiB ([int]$c.wsl2_vram_mib) `
+            -ExternalWorkloadMiB ([int]$c.external_gpu_workload_mib) 2>&1 | ForEach-Object { $_.ToString() }
+        $caseOut | Set-Content -Encoding utf8 (Join-Path $OutDir ($c.case + ".out"))
+        if ($LASTEXITCODE -eq 0) {
+            Add-Result -Results $results -Case $c -Status "PASS" -Reason "supervised_shared_wsl_campaign_pass"
+        } else {
+            Add-Result -Results $results -Case $c -Status "PARTIAL" -Reason "supervised_shared_wsl_campaign_exit_$LASTEXITCODE"
+        }
     } else {
-        L "PARTIAL $($c.case): split-owner live orchestration is not enabled"
-        Add-Result -Results $results -Case $c -Status "PARTIAL" -Reason "split_owner_orchestration_not_live_enabled"
+        if (-not $ApproveSharedDesktopWsl) {
+            L "REFUSE $($c.case): supervised Windows watchdog approval is required"
+            Add-Result -Results $results -Case $c -Status "PARTIAL" -Reason "shared_wsl_watchdog_required"
+            continue
+        }
+        L "RUN split owners via Run-HostExhaustive.ps1 and supervised WSL watchdog"
+        $caseOut = & (Join-Path $PSScriptRoot "..\windows\Run-HostExhaustive.ps1") `
+            -SizeBytes ([uint64]$c.windows_lun_mib * 1MB) -WslPressureMiB ([int]$c.wsl2_vram_mib) `
+            -ExternalWorkloadMiB ([int]$c.external_gpu_workload_mib) -ApproveSharedDesktopWsl `
+            -MinFreeAfterPlanMiB 256 2>&1 | ForEach-Object { $_.ToString() }
+        $caseOut | Set-Content -Encoding utf8 (Join-Path $OutDir ($c.case + ".out"))
+        if ($LASTEXITCODE -eq 0) {
+            Add-Result -Results $results -Case $c -Status "PASS" -Reason "split_supervised_campaign_pass"
+        } else {
+            Add-Result -Results $results -Case $c -Status "PARTIAL" -Reason "split_supervised_campaign_exit_$LASTEXITCODE"
+        }
     }
 }
 

@@ -28,7 +28,7 @@ foreach ($needle in @(
     "^RAMSHARE\s+VRAMDISK$",
     "IsBoot",
     "IsSystem",
-    "existing letter refused before write",
+    "existing partition refused before private mount/write",
     "RAMSHARED",
     "refuse non-raw RAMSHARE disk without mounted RAMSHARED volume",
     "`$p.Refresh()",
@@ -44,6 +44,14 @@ foreach ($needle in @(
     "winsvc-run.toml",
     "Start-CudaVramWorkload.ps1",
     "EXTERNAL_WORKLOAD_OK",
+    "WslPressureMiB",
+    "ApproveSharedDesktopWsl",
+    "Invoke-SharedWslPressureCampaign.ps1",
+    'Join-Path $PSScriptRoot "Invoke-SharedWslPressureCampaign.ps1"',
+    "Add-PartitionAccessPath",
+    "C:\ProgramData\RamShared\mounts",
+    '"-AccessPath", $mountPath',
+    "WSL_PRESSURE_OK",
     "`$completed = `$wp.WaitForExit",
     "external workload exit_code recovered from success marker",
     "\[cuda-vram-workload\] released",
@@ -82,6 +90,14 @@ if ($text -match 'Stop-Process -Id \$p\.Id -Force[^\r\n]*exit 0') {
 }
 if ($text -match 'Format-Volume\s+-DriveLetter') {
     throw "format_by_letter_forbidden: host harness must format the partition object, not a free letter"
+}
+if ($text -match 'New-Partition[^\r\n]*-DriveLetter') {
+    throw "explorer_drive_forbidden: temporary RamShared LUN must use a private mount path"
+}
+foreach ($destructive in @("Clear-Disk", "Remove-Disk", "Remove-Partition", "Set-Disk -IsOffline", "Set-Disk -IsReadOnly")) {
+    if ($text -match [regex]::Escape($destructive)) {
+        throw ("physical_disk_mutation_forbidden: " + $destructive)
+    }
 }
 if ($text -notmatch '\$np \| Format-Volume') {
     throw "format_partition_object_required: host harness must pipe New-Partition result into Format-Volume"

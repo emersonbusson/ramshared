@@ -15,26 +15,30 @@ foreach ($needle in @(
     "windows-3gib",
     "wsl2-1gib",
     "wsl2-4gib",
-    "split-4gib-1gib",
+    "split-3gib-1gib",
     "PLAN_ONLY=1",
     "-ApprovePhysicalHost",
     "-ApproveSharedDesktopWsl",
     "App-agnostic aggregate VRAM pressure",
     "external_gpu_workload_mib",
-    "windows+wsl2+external+reserve",
     "matrix-summary.json",
     "STATUS",
     "RUN windows-3gib via Run-HostExhaustive.ps1 with external workload",
     "ExternalWorkloadMiB",
     "256MiB margin",
     "Refusing live matrix",
-    "requires_isolated_lab_or_shared_desktop_wsl_approval",
     "insufficient_vram_headroom",
-    "split_owner_orchestration_not_live_enabled"
+    "shared_wsl_watchdog_required",
+    "owner_allocations_plus_margin",
+    "Invoke-SharedWslPressureCampaign.ps1"
 )) {
     if ($text -notmatch [regex]::Escape($needle)) {
         throw ("vram_reclaim_matrix_static: missing " + $needle)
     }
+}
+
+if ($text -match 'split-4gib-1gib') {
+    throw "uncalibrated_split_forbidden: 4 GiB + 1 GiB cannot preserve a 1 GiB floor on a 6 GiB GPU"
 }
 
 if ($text -match 'throw "Refusing \$\(\$c\.case\): WSL2 pressure') {

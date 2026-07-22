@@ -124,7 +124,7 @@ This feature is **L0→L1 bridge polish**: make userspace cascade **behave more 
 | NFR-L1 | No WSL hard freeze; swapoff-first + no kill -9 with live nbd (existing) |
 | NFR-L2 | Alloc path single-threaded with CUDA affinity (existing daemon model) |
 | NFR-L3 | Reclaim single-pass / rate-limited (Kahneman #15 — no thrash loop) |
-| NFR-L4 | Host safety: pressure tests via cgroup probe only; no thrash on live host |
+| NFR-L4 | Host safety: live-host pressure requires the bounded cgroup probe and Windows watchdog; no unsupervised thrash |
 | NFR-L5 | Default path remains NBD on WSL2 (ublk NO-GO unchanged) |
 
 ## 6. Flows

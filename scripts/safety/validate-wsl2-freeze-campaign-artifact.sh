@@ -23,6 +23,49 @@ forbidden_text() {
   fi
 }
 
+validate_integrity_result() {
+  local path="$1"
+  local round="$2"
+  need_file "$path"
+  local reason
+  if ! reason="$(
+    python3 - "$path" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as fh:
+        data = json.load(fh)
+except Exception as exc:
+    print(f"integrity_json_invalid:{exc}")
+    sys.exit(1)
+
+status = data.get("status")
+allocated_mib = data.get("allocated_mib")
+verified_chunks = data.get("verified_chunks")
+checksum_before = data.get("checksum_before")
+checksum_after = data.get("checksum_after")
+
+if status != "PASS":
+    print("integrity_status_not_pass")
+    sys.exit(1)
+if not isinstance(allocated_mib, int) or allocated_mib <= 0:
+    print("integrity_allocated_mib_invalid")
+    sys.exit(1)
+if not isinstance(verified_chunks, int) or verified_chunks <= 0:
+    print("integrity_verified_chunks_invalid")
+    sys.exit(1)
+if not checksum_before or not checksum_after or checksum_before != checksum_after:
+    print("integrity_checksum_mismatch")
+    sys.exit(1)
+print("ok")
+PY
+  )"; then
+    fail "$reason:round-$round"
+  fi
+}
+
 [[ -n "$ARTIFACT_DIR" ]] || fail "usage: validate-wsl2-freeze-campaign-artifact.sh ARTIFACT_DIR"
 [[ -d "$ARTIFACT_DIR" ]] || fail "missing_artifact_dir:$ARTIFACT_DIR"
 
@@ -69,6 +112,7 @@ while [[ "$round" -le "$ROUNDS" ]]; do
   forbidden_text "$rdir/after.txt" 'hung_task|Blocked for more than|Out of memory'
   grep -q 'OK diagnose complete' "$rdir/swap-sanitize-before.txt" || fail "sanitize_before_not_ok:round-$round"
   grep -q 'OK diagnose complete' "$rdir/swap-sanitize-after.txt" || fail "sanitize_after_not_ok:round-$round"
+  validate_integrity_result "$rdir/integrity-result.json" "$round"
   if grep -qE '\(deleted\)|\\040\(deleted\)' "$rdir/swaps-after-cleanup.txt"; then
     fail "deleted_swap_after_cleanup:round-$round"
   fi
