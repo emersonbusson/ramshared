@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1](https://github.com/emersonbusson/ramshared/compare/v0.7.0...v0.7.1) (2026-07-22)
+
+
+### Documentation
+
+* **readme:** align v0.7 support and safety status ([75e47a1](https://github.com/emersonbusson/ramshared/commit/75e47a1f0e961766aba7ca30239af9d27e87be11))
+* **readme:** align v0.7 support and safety status ([9cc7833](https://github.com/emersonbusson/ramshared/commit/9cc7833bf175ff47dd9302f21c1082471bfc7aa3))
+
 ## [0.7.0](https://github.com/emersonbusson/ramshared/compare/v0.6.4...v0.7.0) (2026-07-22)
 
 
