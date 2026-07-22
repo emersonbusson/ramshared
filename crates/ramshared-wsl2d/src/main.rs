@@ -1564,4 +1564,22 @@ mod tests {
         assert_eq!(cfg.latency_mult, ResidencyConfig::default().latency_mult);
         assert_eq!(cfg.consecutive, ResidencyConfig::default().consecutive);
     }
+
+    #[test]
+    fn probe_residency_reason_has_priority_over_latency() {
+        assert_eq!(
+            choose_residency_reason(
+                Some(DemoteReason::Latency),
+                Some(DemoteReason::FreeFloor)
+            ),
+            Some(DemoteReason::FreeFloor)
+        );
+        assert_eq!(
+            choose_residency_reason(
+                Some(DemoteReason::Latency),
+                Some(DemoteReason::Corruption)
+            ),
+            Some(DemoteReason::Corruption)
+        );
+    }
 }
