@@ -86,7 +86,7 @@ Rust. Linux/WSL2. NVIDIA day one.
 
 >>> COPY TWEET START
 
-Limits: not free RAM for maxed games. No thrash on live WSL2. Not every GPU/OS yet.
+Limits: not free RAM for maxed games. Live WSL2 pressure is supervised and bounded. Not every GPU/OS yet.
 
 What would you challenge first—the second-cushion idea or the give-it-back path?
 

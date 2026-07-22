@@ -5,6 +5,13 @@
 **PASS.** Validator, synthetic gates, and a real supervised shared-host WSL2
 campaign exist.
 
+2026-07-22 hardening update: the pressure probe now delegates allocation to
+`scripts/safety/cascade_pressure_integrity_worker.py`, and the artifact
+validator requires `round-N/integrity-result.json` with `status=PASS`, positive
+allocation/verification counts, and matching before/after checksums. Existing
+artifacts without that file remain historical evidence only; they cannot close
+new matrix rows that require checksum integrity.
+
 2026-07-22 live close:
 `C:\ramshared\artifacts\shared-wsl-pressure-20260722-002748` from
 `scripts/windows/Invoke-SharedWslPressureCampaign.ps1 -ApproveSharedDailyHost`
@@ -36,6 +43,8 @@ shared-host watchdog path closed this claim without creating another VM.
 
 - `scripts/safety/validate-wsl2-freeze-campaign-artifact.sh`
 - `scripts/safety/test-wsl2-freeze-campaign-artifact-static.sh`
+- `scripts/safety/cascade_pressure_integrity_worker.py`
+- `scripts/safety/Test-CascadePressureIntegrityWorker.sh`
 - `scripts/windows/Invoke-Win11Wsl2FreezeCampaign.ps1`
 - `scripts/windows/Test-Win11Wsl2FreezeCampaignStatic.ps1`
 - `scripts/windows/Invoke-SharedWslPressureCampaign.ps1`
@@ -44,6 +53,7 @@ shared-host watchdog path closed this claim without creating another VM.
 ## Validation
 
 - Static: `scripts/safety/test-wsl2-freeze-campaign-artifact-static.sh`
+- Static/integration: `scripts/safety/Test-CascadePressureIntegrityWorker.sh`
 - Static: `scripts/windows/Test-Win11Wsl2FreezeCampaignStatic.ps1`
 - Static: `scripts/windows/Test-SharedWslPressureCampaignStatic.ps1`
 - Live: `scripts/windows/Invoke-SharedWslPressureCampaign.ps1 -ApproveSharedDailyHost`

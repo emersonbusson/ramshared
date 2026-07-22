@@ -12,7 +12,7 @@ In now:
 Out now:
 
 - Process attribution.
-- Forcing WSL2 pressure on the daily host.
+- Direct or unsupervised WSL2 pressure on the daily host.
 - Treating aggregate VRAM pressure as DEMOTE evidence.
 
 ## Traceability

@@ -37,6 +37,7 @@ required=(
   "windows_watchdog_not_armed"
   "shared-daily-host-complete.txt"
   "--artifact-dir"
+  "--integrity-result"
 )
 
 src="$(cat "$SCRIPT")"

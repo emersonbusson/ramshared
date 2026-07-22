@@ -394,6 +394,8 @@ if (-not $watchdogFired -and $externalWorkloadOk -and $validationPass) {
         demote_total = $demoteTotal
         demote_reason = $demoteReason
         final_clean = [bool]$finalClean
+        freeze_campaign_validated = $true
+        matrix_row_close = $false
     }
     exit 0
 }
@@ -413,6 +415,8 @@ if ($external_demote_ok) {
         demote_reason = $demoteReason
         final_clean = [bool]$finalClean
         validation_pass = [bool]$validationPass
+        freeze_campaign_validated = $false
+        matrix_row_close = $false
     }
     exit 0
 }
@@ -431,5 +435,7 @@ Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "shared_campaign_faile
     demote_reason = $demoteReason
     final_clean = [bool]$finalClean
     validation_pass = [bool]$validationPass
+    freeze_campaign_validated = [bool]$validationPass
+    matrix_row_close = $false
 }
 exit 2

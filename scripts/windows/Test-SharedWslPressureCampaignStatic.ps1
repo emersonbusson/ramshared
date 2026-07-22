@@ -40,6 +40,8 @@ $required = @(
     "validation-rc.txt",
     "external_demote_ok",
     "validated_external_global_gpu_demote",
+    "matrix_row_close",
+    "freeze_campaign_validated",
     "canario_demotes",
     "WriteAllText",
     '-replace "`r`n", "`n"',

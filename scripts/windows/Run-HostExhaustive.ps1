@@ -6,7 +6,9 @@ param(
     [UInt64]$SizeBytes = 67108864,
     [int]$ExternalWorkloadMiB = 0,
     [int]$ExternalWorkloadHoldSec = 20,
-    [int]$MinFreeAfterPlanMiB = 256
+    [int]$MinFreeAfterPlanMiB = 256,
+    [int]$WslPressureMiB = 0,
+    [switch]$ApproveSharedDesktopWsl
 )
 
 $ErrorActionPreference = "Continue"
@@ -91,7 +93,8 @@ if (($rsNow -match "RUNNING") -and -not $ctlOk) {
 $exe = "C:\ramshared\bin\ramshared-winsvc.exe"
 $cfg = "C:\ProgramData\RamShared\winsvc-product.toml"
 $cfgText = Get-Content $cfg -Raw -ErrorAction SilentlyContinue
-$plannedMiB = [int][Math]::Ceiling(([double]$SizeBytes / 1MB)) + $ExternalWorkloadMiB + $MinFreeAfterPlanMiB
+$stagedPressureMiB = if ($WslPressureMiB -gt 0) { $WslPressureMiB } else { $ExternalWorkloadMiB }
+$plannedMiB = [int][Math]::Ceiling(([double]$SizeBytes / 1MB)) + $stagedPressureMiB + $MinFreeAfterPlanMiB
 $freeBeforeMiB = Read-GpuFreeMiB
 W ("plan size_bytes={0} external_workload_mib={1} min_free_after_plan_mib={2} gpu_free_before_mib={3}" -f
     $SizeBytes, $ExternalWorkloadMiB, $MinFreeAfterPlanMiB, $freeBeforeMiB)
@@ -100,6 +103,12 @@ if ($freeBeforeMiB -gt 0 -and $plannedMiB -gt $freeBeforeMiB) {
     @{ HOST_ONLINE = $false; HEADROOM = $false; ARTIFACT = $art; SIZE_BYTES = $SizeBytes } |
         ConvertTo-Json | Set-Content (Join-Path $art "summary.json")
     exit 1
+}
+if ($WslPressureMiB -gt 0 -and -not $ApproveSharedDesktopWsl) {
+    W "REFUSE WSL pressure: -ApproveSharedDesktopWsl is required before LUN creation"
+    @{ HOST_ONLINE = $false; WSL_PRESSURE_OK = $false; ARTIFACT = $art; SIZE_BYTES = $SizeBytes } |
+        ConvertTo-Json | Set-Content (Join-Path $art "summary.json")
+    exit 2
 }
 $cfgRun = Join-Path $art "winsvc-run.toml"
 if ($cfgText -match '(?m)^size_bytes\s*=') {
@@ -241,50 +250,54 @@ if (-not ($diskNameOk -and $diskSizeOk -and $diskNumberOk) -or $diskBootSystem) 
     exit 1
 }
 
-# Format carefully: only this disk number, prefer letter S, never steal C:
+# Format carefully: only this disk number, mounted under a private directory so
+# Explorer never observes a temporary drive letter.
 $letter = $null
-$part = Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue |
-    Where-Object { $_.DriveLetter } | Select-Object -First 1
+$mountRoot = "C:\ProgramData\RamShared\mounts"
+$mountPath = Join-Path $mountRoot ("lun-{0}" -f $PID)
+$part = Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($part) {
-    $letter = [string]$part.DriveLetter
-    $vol = Get-Volume -DriveLetter $letter -ErrorAction SilentlyContinue
-    if (-not $vol -or $vol.FileSystemLabel -ne "RAMSHARED" -or $vol.FileSystem -ne "NTFS") {
-        W ("FAIL existing letter refused before write: {0}: label={1} fs={2}" -f
-            $letter, $vol.FileSystemLabel, $vol.FileSystem)
-        New-Item -ItemType File -Path $stop -Force | Out-Null
-        New-Item -ItemType File -Path $brokerStop -Force | Out-Null
-        Start-Sleep 1
-        if ($bp -and -not $bp.HasExited) { Stop-Process -Id $bp.Id -Force -ErrorAction SilentlyContinue }
-        if (Test-Path $brokerLog) { Copy-Item $brokerLog (Join-Path $art "broker-lab.log") -Force }
-        exit 1
-    }
-    W ("existing letter=" + $letter)
+    W "FAIL existing partition refused before private mount/write"
+    New-Item -ItemType File -Path $stop -Force | Out-Null
+    New-Item -ItemType File -Path $brokerStop -Force | Out-Null
+    exit 1
 } else {
     try {
         if ($disk.PartitionStyle -ne "Raw") {
             throw "refuse non-raw RAMSHARE disk without mounted RAMSHARED volume"
         }
         Initialize-Disk -Number $disk.Number -PartitionStyle GPT -Confirm:$false -ErrorAction Stop
-        # Prefer S; if taken by non-RAMSHARE, use first free from R,S,T,U,V (not D/E/G system-ish)
-        $candidates = @("S","R","T","U","V","W")
-        $used = @()
-        Get-PSDrive -PSProvider FileSystem | ForEach-Object { $used += $_.Name }
-        $pick = $null
-        foreach ($c in $candidates) {
-            if ($used -notcontains $c) { $pick = $c; break }
-        }
-        if (-not $pick) { throw "no free lab letter in S/R/T/U/V/W" }
-        $np = New-Partition -DiskNumber $disk.Number -UseMaximumSize -DriveLetter $pick -ErrorAction Stop
+        New-Item -ItemType Directory -Force -Path $mountPath | Out-Null
+        $np = New-Partition -DiskNumber $disk.Number -UseMaximumSize -ErrorAction Stop
         $np | Format-Volume -FileSystem NTFS -NewFileSystemLabel "RAMSHARED" -Confirm:$false | Out-Null
-        $letter = $pick
-        W ("formatted letter=" + $letter + " on disk " + $disk.Number + " only")
+        Add-PartitionAccessPath -DiskNumber $disk.Number -PartitionNumber $np.PartitionNumber -AccessPath $mountPath -ErrorAction Stop
+        W ("formatted private mount=" + $mountPath + " on disk " + $disk.Number + " only")
     } catch {
         W ("format err: " + $_.Exception.Message)
     }
 }
 
 $externalOk = $true
-if ($ExternalWorkloadMiB -gt 0) {
+$wslPressureOk = ($WslPressureMiB -eq 0)
+if ($WslPressureMiB -gt 0) {
+    $sharedHarness = Join-Path $PSScriptRoot "Invoke-SharedWslPressureCampaign.ps1"
+    if (-not (Test-Path $sharedHarness)) {
+        $sharedHarness = "C:\ramshared\scripts\windows\Invoke-SharedWslPressureCampaign.ps1"
+    }
+    if (-not (Test-Path $sharedHarness)) {
+        W "FAIL shared WSL pressure harness missing"
+        $externalOk = $false
+    } else {
+        W ("shared WSL pressure start vram_mib={0} external_mib={1}" -f $WslPressureMiB, $ExternalWorkloadMiB)
+        $sharedOut = & $sharedHarness -ApproveSharedDailyHost -VramMiB $WslPressureMiB `
+            -ExternalWorkloadMiB $ExternalWorkloadMiB 2>&1 | ForEach-Object { $_.ToString() }
+        $sharedExit = $LASTEXITCODE
+        $sharedOut | Set-Content -Encoding utf8 (Join-Path $art "shared-wsl-pressure.out")
+        $wslPressureOk = ($sharedExit -eq 0)
+        $externalOk = $wslPressureOk
+        W ("shared WSL pressure exit={0}" -f $sharedExit)
+    }
+} elseif ($ExternalWorkloadMiB -gt 0) {
     $workload = "C:\ramshared\src\scripts\p0\Start-CudaVramWorkload.ps1"
     if (-not (Test-Path $workload)) {
         $workload = "C:\ramshared\scripts\p0\Start-CudaVramWorkload.ps1"
@@ -322,8 +335,8 @@ if ($ExternalWorkloadMiB -gt 0) {
 }
 
 $rounds = @()
-if ($letter) {
-    $probe = ($letter + ":\rs-probe.bin")
+if ($mountPath -and (Test-Path -LiteralPath $mountPath)) {
+    $probe = Join-Path $mountPath "rs-probe.bin"
     for ($r = 1; $r -le 3; $r++) {
         $sw = [Diagnostics.Stopwatch]::StartNew()
         $bytes = New-Object byte[] (4MB)
@@ -345,18 +358,18 @@ $all = ($rounds.Count -eq 3) -and (@($rounds | Where-Object { -not $_.match }).C
 $rounds | ConvertTo-Json | Set-Content (Join-Path $art "rounds.json")
 
 $diskIoOk = $false
-if ($letter) {
-    $measure = "C:\ramshared\src\scripts\windows\Measure-RamSharedDiskIo.ps1"
+if ($mountPath -and (Test-Path -LiteralPath $mountPath)) {
+    $measure = Join-Path $PSScriptRoot "Measure-RamSharedDiskIo.ps1"
     if (-not (Test-Path $measure)) {
         $measure = "C:\ramshared\scripts\windows\Measure-RamSharedDiskIo.ps1"
     }
     if (Test-Path $measure) {
         $mo = Join-Path $art "disk-io.out"
         $me = Join-Path $art "disk-io.err"
-        W ("disk I/O measure start letter=" + $letter)
+        W ("disk I/O measure start access_path=" + $mountPath)
         $mp = Start-Process -FilePath powershell.exe -ArgumentList @(
             "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $measure,
-            "-Seconds", "3", "-DriveLetter", $letter, "-ProbeMiB", "8"
+            "-Seconds", "3", "-AccessPath", $mountPath, "-ProbeMiB", "8"
         ) -PassThru -WindowStyle Hidden -RedirectStandardOutput $mo -RedirectStandardError $me
         $measureCompleted = $mp.WaitForExit(20000)
         $mp.Refresh()
@@ -453,17 +466,22 @@ if ($left.Count -eq 0 -and $win32Left.Count -eq 0 -and $pnpLeft.Count -gt 0) {
         })
 }
 W ("ramshare_pnp_nodes_left=" + $pnpLeft.Count)
+if ($mountPath -and (Test-Path -LiteralPath $mountPath)) {
+    Remove-Item -LiteralPath $mountPath -Force -ErrorAction SilentlyContinue
+}
 
 $sum = [ordered]@{
     HOST_ONLINE = [bool]$online
     ALL_MATCH   = [bool]$all
     GRACEFUL    = [bool]$stopped
     LETTER      = $letter
+    MOUNT_PATH  = $mountPath
     ARTIFACT    = $art
     EXIT        = $exitCode
     ROUNDS      = $rounds.Count
     SIZE_BYTES  = $SizeBytes
     EXTERNAL_WORKLOAD_OK = [bool]$externalOk
+    WSL_PRESSURE_OK = [bool]$wslPressureOk
     LUN_GONE    = ($left.Count -eq 0)
     WIN32_GONE  = ($win32Left.Count -eq 0)
     PNP_GONE    = ($pnpLeft.Count -eq 0)

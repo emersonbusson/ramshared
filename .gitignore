@@ -1,6 +1,8 @@
 /target/
 /artifacts/
 /artifacts/packages/
+/drivers/windows/ramshared/x64/
+/drivers/windows/tools/poolstress/x64/
 /C:*
 
 # Cache e logs do sistema de forense

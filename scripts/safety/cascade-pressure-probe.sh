@@ -14,12 +14,14 @@ ALLOC_GIB="${ALLOC_GIB:-6.5}"
 MAX_SEC="${MAX_SEC:-90}"
 PROVE_DISK=0
 CG="${CG:-/sys/fs/cgroup/ramshared-probe}"
+INTEGRITY_RESULT="${INTEGRITY_RESULT:-/tmp/ramshared-integrity-result.json.$$}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --mem-max) MEM_MAX="$2"; shift 2 ;;
     --alloc-gib) ALLOC_GIB="$2"; shift 2 ;;
     --max-sec) MAX_SEC="$2"; shift 2 ;;
+    --integrity-result) INTEGRITY_RESULT="$2"; shift 2 ;;
     --prove-disk) PROVE_DISK=1; shift ;;
     -h|--help) sed -n '1,16p' "$0"; exit 0 ;;
     *) echo "unknown: $1" >&2; exit 2 ;;
@@ -109,10 +111,14 @@ fi
 
 WORKER=""
 cleanup() {
+  local rc=$?
+  local worker_rc=0
   if [[ -n "$WORKER" ]] && kill -0 "$WORKER" 2>/dev/null; then
     log "releasing worker $WORKER"
     kill -TERM "$WORKER" 2>/dev/null || true
-    wait "$WORKER" 2>/dev/null || true
+    wait "$WORKER" 2>/dev/null || worker_rc=$?
+  elif [[ -n "$WORKER" ]]; then
+    wait "$WORKER" 2>/dev/null || worker_rc=$?
   fi
   # empty cgroup
   if [[ -f "$CG/cgroup.procs" ]]; then
@@ -122,33 +128,38 @@ cleanup() {
   fi
   log "final used_kb: $(read_used)"
   swapon --show || true
+  if [[ "$worker_rc" -ne 0 ]]; then
+    log "FAIL: integrity worker exit=$worker_rc"
+    rc=1
+  elif [[ ! -s "$INTEGRITY_RESULT" ]]; then
+    log "FAIL: integrity_result_missing path=$INTEGRITY_RESULT"
+    rc=1
+  elif ! python3 - "$INTEGRITY_RESULT" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    result = json.load(source)
+if result.get("status") != "PASS":
+    raise SystemExit(1)
+if result.get("checksum_before") != result.get("checksum_after"):
+    raise SystemExit(1)
+PY
+  then
+    log "FAIL: integrity_result_failed path=$INTEGRITY_RESULT"
+    rc=1
+  else
+    log "PASS: integrity result=$INTEGRITY_RESULT"
+  fi
+  trap - EXIT
+  exit "$rc"
 }
 trap cleanup EXIT
 
-python3 - "$ALLOC_GIB" <<'PY' &
-import sys, time
-target = int(float(sys.argv[1]) * 1024)
-chunks = []
-page = 4096
-got = 0
-chunk = 256
-try:
-    while got < target:
-        n = min(chunk, target - got)
-        b = bytearray(n * 1024 * 1024)
-        for i in range(0, len(b), page):
-            b[i] = 1
-        chunks.append(b)
-        got += n
-        if got % 512 == 0:
-            print(f"ALLOC {got} MiB", flush=True)
-    print("HOLD", flush=True)
-    while True:
-        time.sleep(1)
-except Exception as e:
-    print("ERR", e, flush=True)
-    time.sleep(2)
-PY
+rm -f -- "$INTEGRITY_RESULT"
+python3 "$(dirname "$0")/cascade_pressure_integrity_worker.py" \
+  --allocate-gib "$ALLOC_GIB" \
+  --result "$INTEGRITY_RESULT" &
 WORKER=$!
 echo "$WORKER" > "$CG/cgroup.procs"
 log "worker=$WORKER mem.max=$MEM_MAX alloc_gib=$ALLOC_GIB"

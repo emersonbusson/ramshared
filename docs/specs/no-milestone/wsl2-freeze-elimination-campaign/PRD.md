@@ -22,8 +22,9 @@ pressure runs remain PARTIAL.
   pressure on the daily WSL2 desktop unless isolated-lab gates or the explicit
   shared-host approval/watchdog gates are present.
 - Confirmed in codebase: isolated mode records `round-N/before*`, `action-rc.txt`,
-  `after*`, swap-sanitize logs, and `isolated-complete.txt`; shared-host mode
-  records the same round artifacts plus `shared-daily-host-complete.txt`.
+  `after*`, swap-sanitize logs, `integrity-result.json`, and
+  `isolated-complete.txt`; shared-host mode records the same round artifacts
+  plus `shared-daily-host-complete.txt`.
 - Confirmed in docs: `docs/reliability/GAP-REGISTER.md` requires two isolated-lab
   before/action/after rounds with watchdog, binary match, ghost checks, D-state,
   hung-task evidence, swapoff-first proof, and clean terminal state.
@@ -35,6 +36,7 @@ pressure runs remain PARTIAL.
 | RF-1 | Validate campaign completeness from artifacts. | Validator PASS requires `summary.json`, an isolated or approved shared-host completion marker, and two complete `round-N` dirs. |
 | RF-2 | Refuse unsafe daily-host or dry-run evidence as closure. | `daily_host=true` exits non-zero unless `shared_host_approved=true`, `windows_watchdog=true`, gates pass, and shared-host completion exists. |
 | RF-3 | Require hang/freeze safety evidence. | Each round must include before/after captures, health JSON, sanitize logs, action rc, no watchdog file, and no hung-task/D-state markers in captures. |
+| RF-4 | Require pressure-data integrity evidence. | Each round must include `integrity-result.json` with `status=PASS`, positive allocated MiB, positive verified chunk count, and matching before/after checksums. |
 | NFR-1 | Read-only validation. | Validator never runs pressure, swapoff, VM, or disk commands. |
 
 ## Validation Plan

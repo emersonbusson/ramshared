@@ -26,5 +26,10 @@ if ($script -match 'throw "Set -PfxPassword or RAMSHARED_TESTSIGN_PFX_PASSWORD"'
 if ($script -notmatch 'function Invoke-SignTool') {
     throw "store_signing_fallback: signing arguments are not centralized"
 }
+foreach ($token in @("PackageWorkDir", "UNC package staging", 'Copy-Item $pkgLocal\* $pkg')) {
+    if ($script -notmatch [regex]::Escape($token)) {
+        throw "unc_package_staging_missing: $token"
+    }
+}
 
 Write-Output "PASS Test-SignDriversStatic"

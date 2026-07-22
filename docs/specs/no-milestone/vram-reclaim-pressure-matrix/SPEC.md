@@ -14,9 +14,7 @@ In now:
 
 Out now:
 
-- WSL2 pressure on the daily desktop without explicit approval.
-- Split-owner orchestration until Windows large-LUN and WSL2 cleanup evidence are
-  both green.
+- Direct or unsupervised WSL2 pressure on the daily desktop.
 - Process attribution to any named external application.
 
 ## Decisions
@@ -24,9 +22,11 @@ Out now:
 | ID | Decision | Why |
 | --- | --- | --- |
 | DT-1 | `-Run` requires `-ApprovePhysicalHost`. | Avoid accidental physical host mutation. |
-| DT-2 | WSL2 cases without `-ApproveSharedDesktopWsl` become `PARTIAL`, not raw errors. | Preserve artifact evidence while protecting the daily WSL2 host. |
+| DT-2 | Daily-host WSL2 pressure requires the approved Windows watchdog harness; missing approval becomes `PARTIAL`. | A WSL-side hang must have an external termination and telemetry owner. |
 | DT-3 | Insufficient VRAM headroom becomes `PARTIAL` before creating a LUN. | A safe refusal is valid evidence, not corruption. |
-| DT-4 | Split-owner remains `PARTIAL` until a dedicated orchestrator exists. | Avoid half-running two owners without teardown proof. |
+| DT-4 | Split uses 1 GiB Windows + 3 GiB WSL2, then a staged 1 GiB external workload. | Both owners fit with a 256 MiB setup margin on the 6 GiB GPU; reclaim, rather than impossible simultaneous reservation, is tested. |
+| DT-5 | WSL2 artifact closure requires `integrity-result.json` per round. | A killed pressure worker is not proof that swapped data survived reclaim. |
+| DT-6 | Preflight uses owner allocations plus a 256 MiB setup margin; reserve is evaluated after staged pressure. | Reserve is an invariant to restore, not a third resident owner. |
 
 ## Validation
 
@@ -41,5 +41,5 @@ pwsh.exe -NoProfile -ExecutionPolicy Bypass -File scripts/p0/Invoke-VramReclaimP
 ```
 
 Rollback trigger: revert if WSL2 or split-owner gaps can close without
-before/action/after evidence, checksum integrity, DEMOTE/teardown proof, and a
+before/action/after evidence, per-round checksum integrity, DEMOTE/teardown proof, and a
 clean terminal state.
