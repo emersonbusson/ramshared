@@ -16,7 +16,6 @@
 * **ci:** allow explicit security redactions ([c0225a4](https://github.com/emersonbusson/ramshared/commit/c0225a41a79b8f7a45c673e4d3a6fcb3eddaba0c))
 * **ci:** restore required docs check name ([456d9aa](https://github.com/emersonbusson/ramshared/commit/456d9aa35b73a99b940c999550bcee730aa7eeec))
 * **reclaim:** harden supervised split campaigns ([02850b2](https://github.com/emersonbusson/ramshared/commit/02850b25badb7e4bd2efdbc1a91a4e63d7e02f87))
-* **scripts:** refuse freeze thrash on shared Windows desktop ([9970261](https://github.com/emersonbusson/ramshared/commit/9970261cf9fdde8dc0c09ed21ae88f83c730cba6))
 * **scripts:** refuse freeze thrash on shared Windows desktop ([99b60fc](https://github.com/emersonbusson/ramshared/commit/99b60fc60471f85344a669da439532d55eeb6a70))
 * **windows:** fail preflight on residual vram disks ([7a8b5ef](https://github.com/emersonbusson/ramshared/commit/7a8b5eff0e2a45622877ccbde07df1b37a7e355c))
 * **windows:** harden physical disk identity gates ([02109d3](https://github.com/emersonbusson/ramshared/commit/02109d34a96c4f7fe8048ea2f69cc3af6a6877c7))
@@ -50,7 +49,6 @@
 
 ### CI
 
-* **deps:** bump actions/setup-node from 6 to 7 in the all-actions group ([9986229](https://github.com/emersonbusson/ramshared/commit/99862295748f61f7496934936741733c1c734f65))
 * **deps:** bump actions/setup-node from 6 to 7 in the all-actions group ([73b21c5](https://github.com/emersonbusson/ramshared/commit/73b21c5a211b193993ceb905fd4baac9f53244d8))
 * run public hygiene in docs workflow ([6cfea54](https://github.com/emersonbusson/ramshared/commit/6cfea54a94bf604b4f47dca1a9f74b95f0fc29a1))
 
