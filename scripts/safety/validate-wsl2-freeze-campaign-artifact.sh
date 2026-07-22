@@ -27,16 +27,27 @@ forbidden_text() {
 [[ -d "$ARTIFACT_DIR" ]] || fail "missing_artifact_dir:$ARTIFACT_DIR"
 
 need_file "$ARTIFACT_DIR/summary.json"
-need_file "$ARTIFACT_DIR/isolated-complete.txt"
+
+COMPLETE_FILE="$ARTIFACT_DIR/isolated-complete.txt"
+MODE="isolated"
+if [[ ! -f "$COMPLETE_FILE" && -f "$ARTIFACT_DIR/shared-daily-host-complete.txt" ]]; then
+  COMPLETE_FILE="$ARTIFACT_DIR/shared-daily-host-complete.txt"
+  MODE="shared-daily-host"
+fi
+need_file "$COMPLETE_FILE"
 
 if grep -q '"daily_host":true' "$ARTIFACT_DIR/summary.json"; then
-  fail "daily_host_true"
+  if [[ "$MODE" != "shared-daily-host" ]]; then
+    fail "daily_host_true"
+  fi
+  grep -q '"shared_host_approved":true' "$ARTIFACT_DIR/summary.json" || fail "shared_host_not_approved"
+  grep -q '"windows_watchdog":true' "$ARTIFACT_DIR/summary.json" || fail "windows_watchdog_missing"
 fi
 if grep -q '"gates_ok":false' "$ARTIFACT_DIR/summary.json"; then
   fail "gates_not_ok"
 fi
-if ! grep -q "rounds=$ROUNDS" "$ARTIFACT_DIR/isolated-complete.txt"; then
-  fail "isolated_complete_round_count"
+if ! grep -q "rounds=$ROUNDS" "$COMPLETE_FILE"; then
+  fail "complete_round_count"
 fi
 
 round=1
@@ -64,5 +75,4 @@ while [[ "$round" -le "$ROUNDS" ]]; do
   round=$((round + 1))
 done
 
-echo "WSL2_FREEZE_CAMPAIGN_VALIDATION=PASS rounds=$ROUNDS artifact=$ARTIFACT_DIR"
-
+echo "WSL2_FREEZE_CAMPAIGN_VALIDATION=PASS mode=$MODE rounds=$ROUNDS artifact=$ARTIFACT_DIR"

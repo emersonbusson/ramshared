@@ -33,7 +33,7 @@ Sources: Day-0 policy, host-safety in [`.claude/rules/benchmarks.md`](.claude/ru
 | Free with used_kb≠0 | later hang/corruption | `ramshared-block` sparse, `wsl2d` teardown |
 | WDDM/budget refuse | swap write EIO | `ramshared-dxg`, autotier |
 | False CRASH report | postmortem noise | `scripts/safety/postmortem.sh` |
-| Pressure on daily WSL | guest instability | `cascade-pressure-probe` — **lab only** |
+| Unsupervised pressure on daily WSL | guest instability | `cascade-pressure-probe` only through lab or shared-host watchdog harness |
 
 ---
 
@@ -76,7 +76,9 @@ sudo ./scripts/safety/cascade-health.sh   # ok:true
 cargo llvm-cov -p ramshared-cli -p ramshared-tier -p ramshared-dxg -p ramshared-block --summary-only
 ```
 
-Do **not** run destructive demote/pressure on the daily WSL host.
+Do **not** run destructive demote/pressure directly on the daily WSL host. Use
+the Windows shared-host watchdog harness when that surface is explicitly
+authorized.
 
 ---
 
