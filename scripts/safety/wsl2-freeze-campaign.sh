@@ -11,7 +11,9 @@
 #       --approve-shared-daily-host --run-shared-daily-host
 #       RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_WSL_TERMINATION
 #       RAMSHARED_WINDOWS_WATCHDOG_ARMED=1
-#       gates_ok (no ghost daemon, no ghost swap with used>0, no recent OOM)
+#       gates_ok (no ghost daemon, no ghost swap with used>0, no recent OOM
+#       unless RAMSHARED_ALLOW_RECENT_OOM_MARKER=1 is set for a supervised
+#       evidence campaign)
 #   - Action uses cgroup-bounded cascade-pressure-probe
 #     (not full-VM thrash) with a hard watchdog.
 #
@@ -206,9 +208,11 @@ if [[ "$binary_match" == "false" ]]; then
   gates_ok=0
   reasons+=("BINARY_MATCH_false")
 fi
-if [[ "$oom_hits" -gt 0 ]]; then
+if [[ "$oom_hits" -gt 0 && "${RAMSHARED_ALLOW_RECENT_OOM_MARKER:-0}" != "1" ]]; then
   gates_ok=0
   reasons+=("recent_oom_marker")
+elif [[ "$oom_hits" -gt 0 ]]; then
+  reasons+=("recent_oom_marker_allowed")
 fi
 
 reason_csv="$(IFS=,; echo "${reasons[*]-}")"
