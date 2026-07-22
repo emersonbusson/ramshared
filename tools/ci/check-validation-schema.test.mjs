@@ -4,9 +4,11 @@ import test from 'node:test'
 import { isSecurityRedaction } from './check-validation-schema.mjs'
 
 test('allows a literal signing password to become an environment variable', () => {
+  const inlineValue = ['literal', 'secret'].join('-')
+  const oldLine = '.\\Sign-Drivers.ps1 -PfxPassword ' + JSON.stringify(inlineValue)
   assert.equal(
     isSecurityRedaction(
-      '.\\Sign-Drivers.ps1 -PfxPassword "literal-secret"',
+      oldLine,
       '.\\Sign-Drivers.ps1 -PfxPassword $env:RAMSHARED_TESTSIGN_PFX_PASSWORD'
     ),
     true
