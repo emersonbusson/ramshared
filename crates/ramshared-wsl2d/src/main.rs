@@ -225,6 +225,17 @@ fn residency_check<M: VramMemory, F: Fn() -> Option<u64>>(
     None
 }
 
+fn sparse_residency_config(reserve_floor_bytes: u64) -> ResidencyConfig {
+    ResidencyConfig {
+        free_floor_bytes: reserve_floor_bytes,
+        ..ResidencyConfig::default()
+    }
+}
+
+fn sparse_residency_requests_swapoff(reason: DemoteReason) -> bool {
+    !matches!(reason, DemoteReason::Latency)
+}
+
 struct AppArgs {
     size: u64,
     sock: String,
@@ -578,8 +589,10 @@ fn run_nbd<P: VramProvider>(
     let canary_region = provider.alloc(CANARY_BYTES)?;
     let mut probe = CanaryProbe::new(canary_region);
     let mut cadence = Cadence::new(CANARY_EVERY);
-    let mut sampler = ResidencySampler::new(ResidencyConfig::default());
-    let free_floor = ResidencyConfig::default().free_floor_bytes;
+    let reserve_floor = reserve_floor_bytes_from_env();
+    let residency_cfg = sparse_residency_config(reserve_floor);
+    let mut sampler = ResidencySampler::new(residency_cfg);
+    let free_floor = residency_cfg.free_floor_bytes;
     let idle_free = Duration::from_secs(idle_free_secs_from_env());
 
     enum Be<'a, Pr: VramProvider + 'a> {
@@ -633,7 +646,7 @@ fn run_nbd<P: VramProvider>(
         Be::Pre(VramBackend::new(mem, BLOCK_SIZE))
     } else {
         let chunk = chunk_bytes_from_env();
-        let reserve = reserve_floor_bytes_from_env();
+        let reserve = reserve_floor;
         let env_cap = commit_cap_bytes_from_env();
         let auto_cap = safe_commit_cap(size, total, reserve);
         let commit_cap = env_cap.min(auto_cap);
@@ -787,17 +800,10 @@ fn run_nbd<P: VramProvider>(
                     )
                 {
                     let sparse = matches!(backend, Be::Sparse(_));
-                    // Sparse: chunk-alloc latency ≠ WDDM eviction. FreeFloor → reclaim only.
-                    // Only Corruption forces swapoff on sparse.
-                    let skip = match (sparse, reason) {
-                        (true, DemoteReason::FreeFloor) | (true, DemoteReason::Latency) => {
-                            eprintln!(
-                                "[ramsharedd] sparse skip swapoff for {reason:?} lat={lat_us}us"
-                            );
-                            true
-                        }
-                        _ => false,
-                    };
+                    let skip = sparse && !sparse_residency_requests_swapoff(reason);
+                    if skip {
+                        eprintln!("[ramsharedd] sparse skip swapoff for {reason:?} lat={lat_us}us");
+                    }
                     if !skip {
                         eprintln!(
                             "[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}"
