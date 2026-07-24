@@ -184,7 +184,11 @@ function Test-HostDiskTelemetryArtifacts {
         return [pscustomobject]@{ Ok = $false; Reason = "telemetry_artifact_missing" }
     }
     try {
-        $volumes = @(Get-Content -LiteralPath $VolumePath -Raw | ConvertFrom-Json)
+        # Windows PowerShell 5.1 emits a JSON array as one pipeline item when
+        # ConvertFrom-Json is wrapped directly in @(...). Split assignment from
+        # array coercion so each volume remains independently enumerable.
+        $decodedVolumes = Get-Content -LiteralPath $VolumePath -Raw | ConvertFrom-Json
+        $volumes = @($decodedVolumes)
         $validVolumes = @($volumes | Where-Object {
             $null -eq $_.error -and $_.name -and $null -ne $_.size_bytes
         } | ForEach-Object { [string]$_.name })
