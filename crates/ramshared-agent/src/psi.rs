@@ -89,12 +89,17 @@ pub fn parse_memcg_swap(content: &str) -> Option<u64> {
 /// Core logic for `read_memcg_swap` with dependency injection.
 fn read_memcg_swap_impl(cgroup_path: &str, sysfs_base: &str) -> Option<u64> {
     let cg = std::fs::read_to_string(cgroup_path).ok()?;
-    let path = cg.lines().find_map(|l| l.strip_prefix("0::"))?; // cgroup v2: single line `0::/<path>`
-    let file = format!(
-        "{}{}/memory.swap.current",
-        sysfs_base,
-        path.trim().trim_end_matches('/')
-    );
+    let path_str = cg.lines().find_map(|l| l.strip_prefix("0::"))?.trim();
+
+    if path_str.contains("..") {
+        return None;
+    }
+
+    let safe_path = path_str.trim_matches('/');
+    let file = std::path::Path::new(sysfs_base)
+        .join(safe_path)
+        .join("memory.swap.current");
+
     parse_memcg_swap(&std::fs::read_to_string(file).ok()?)
 }
 
@@ -340,6 +345,16 @@ mod tests {
     #[test]
     fn read_memcg_swap_impl_missing_0_line() {
         let cgroup_content = "1:name=systemd:/\n";
+        let cgroup_path = write_temp_file(cgroup_content);
+
+        assert!(read_memcg_swap_impl(&cgroup_path, "/sys/fs/cgroup").is_none());
+
+        std::fs::remove_file(cgroup_path).unwrap();
+    }
+
+    #[test]
+    fn read_memcg_swap_impl_path_traversal() {
+        let cgroup_content = "0::/../../etc\n";
         let cgroup_path = write_temp_file(cgroup_content);
 
         assert!(read_memcg_swap_impl(&cgroup_path, "/sys/fs/cgroup").is_none());
