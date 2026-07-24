@@ -79,3 +79,86 @@ impl FetchSession {
         self.ring.drain()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn unique_test_path() -> std::path::PathBuf {
+        let id = std::process::id();
+        let counter = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!("ublk_queue_test_{}_{}.tmp", id, counter))
+    }
+
+    #[test]
+    fn test_read_io_desc_success() {
+        let path = unique_test_path();
+        let mut f = File::create(&path).unwrap();
+
+        let mut bytes = vec![0u8; 4096];
+        // Populate an IoDesc at tag 1 (offset 24)
+        let desc_offset = 24;
+        let op_flags: u32 = 0xdead_beef;
+        let nr_sectors: u32 = 0xcafe_babe;
+        let start_sector: u64 = 0x0123_4567_89ab_cdef;
+        let addr: u64 = 0xfedc_ba98_7654_3210;
+
+        bytes[desc_offset..desc_offset + 4].copy_from_slice(&op_flags.to_ne_bytes());
+        bytes[desc_offset + 4..desc_offset + 8].copy_from_slice(&nr_sectors.to_ne_bytes());
+        bytes[desc_offset + 8..desc_offset + 16].copy_from_slice(&start_sector.to_ne_bytes());
+        bytes[desc_offset + 16..desc_offset + 24].copy_from_slice(&addr.to_ne_bytes());
+
+        f.write_all(&bytes).unwrap();
+
+        // tag 1, queue_depth 4
+        let desc = read_io_desc(&path, 4, 1).unwrap();
+
+        assert_eq!(desc.op_flags, op_flags);
+        assert_eq!(desc.nr_sectors_or_zones, nr_sectors);
+        assert_eq!(desc.start_sector, start_sector);
+        assert_eq!(desc.addr, addr);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_read_io_desc_out_of_bounds_tag() {
+        let path = unique_test_path();
+        let mut f = File::create(&path).unwrap();
+        f.write_all(&[0u8; 4096]).unwrap();
+
+        // tag 4, queue_depth 4 (invalid, tag must be < queue_depth)
+        let res = read_io_desc(&path, 4, 4);
+        assert!(res.is_err());
+        assert_eq!(res.unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_fetch_session_open_and_drain() {
+        let path = unique_test_path();
+        let mut f = File::create(&path).unwrap();
+        f.write_all(&[0u8; 4096]).unwrap();
+
+        let mut session = FetchSession::open(&path, 4, 4096).unwrap();
+
+        let cqes = session.drain();
+        // Since we are running on a dummy file rather than a proper /dev/ublkc char device,
+        // the kernel immediately rejects the io_uring commands with -EOPNOTSUPP (-95)
+        // for each submitted tag in the queue_depth.
+        assert_eq!(cqes.len(), 4, "expected 4 completion events for queue_depth=4");
+        for cqe in cqes {
+            assert_eq!(cqe.result, -95, "expected -EOPNOTSUPP on dummy file");
+        }
+
+        let _ = std::fs::remove_file(path);
+    }
+}
