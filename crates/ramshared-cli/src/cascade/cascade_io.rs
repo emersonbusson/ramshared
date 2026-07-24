@@ -20,9 +20,18 @@ pub(crate) fn arm_forensics() {
         if let Some(parent) = Path::new(path).parent() {
             let _ = fs::create_dir_all(parent);
         }
-        if fs::write(path, &payload).is_ok() {
-            eprintln!("[up] forensics armed: {path}");
-            return;
+
+        let _ = fs::remove_file(path);
+        if let Ok(mut f) = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            use std::io::Write;
+            if f.write_all(payload.as_bytes()).is_ok() {
+                eprintln!("[up] forensics armed: {path}");
+                return;
+            }
         }
     }
 }
