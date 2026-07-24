@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.4](https://github.com/emersonbusson/ramshared/compare/v0.7.3...v0.7.4) (2026-07-24)
+
+
+### Bug Fixes
+
+* **core:** enforce exact teardown telemetry identity ([eb127c6](https://github.com/emersonbusson/ramshared/commit/eb127c6efebf1fc85fa094be689aacd7ac3172c2))
+* **core:** enforce exact teardown telemetry identity ([2439385](https://github.com/emersonbusson/ramshared/commit/24393851fb021027453f03c588d13918e0aa90c9))
+
 ## [0.7.3](https://github.com/emersonbusson/ramshared/compare/v0.7.2...v0.7.3) (2026-07-24)
 
 
