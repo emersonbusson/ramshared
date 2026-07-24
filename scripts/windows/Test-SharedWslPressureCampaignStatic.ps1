@@ -24,6 +24,7 @@ $required = @(
     "Test-HostDiskTelemetryArtifacts",
     "volume_identity_missing",
     "sample_identity_missing",
+    '$decodedVolumes',
     '$campaignPass = -not $watchdogFired',
     '$exitCode -eq 0',
     '$finalClean',
@@ -43,6 +44,9 @@ $required = @(
     "RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_WSL_TERMINATION",
     "RAMSHARED_WINDOWS_WATCHDOG_ARMED=1",
     "RAMSHARED_ALLOW_RECENT_OOM_MARKER=1",
+    "RAMSHARED_ACTION_CLEANUP_GRACE_SEC",
+    "RAMSHARED_PRESSURE_ALLOC_GIB",
+    "PressureAllocGiB",
     "--approve-shared-daily-host",
     "--run-shared-daily-host",
     "cascade-health.sh --loop",
@@ -78,6 +82,9 @@ foreach ($needle in $required) {
 
 if ($text.Contains('>>"`$artifact/daemon.out"')) {
     throw "daemon wrapper must not depend on an unset runtime artifact variable"
+}
+if ($text.Contains('$volumes = @(Get-Content -LiteralPath $VolumePath -Raw | ConvertFrom-Json)')) {
+    throw "PowerShell 5.1 must not wrap a ConvertFrom-Json array inside one pipeline item"
 }
 
 $forbidden = @(
