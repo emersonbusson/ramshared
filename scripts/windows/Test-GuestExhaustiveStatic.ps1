@@ -41,5 +41,8 @@ if ($text -notmatch 'PSDirectException|credencial.+inv.lida|credential.+invalid'
 if ($text -notmatch 'Start-Sleep -Seconds \$PsDirectRetryDelaySec') {
     throw "psdirect_retry: retries must include a bounded delay"
 }
+if ($text -match 'return\s+@\(Receive-Job') {
+    throw "psdirect_retry: retry wrapper must preserve the remote output stream for STATUS parsing"
+}
 
 Write-Output "PASS Test-GuestExhaustiveStatic"
