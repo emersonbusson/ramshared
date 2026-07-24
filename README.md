@@ -35,6 +35,8 @@ Release: **v0.7.2**, published on 2026-07-22.
 The status above is intentionally narrower than the architecture. Open claims
 and the exact evidence needed to close them live in
 [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md).
+The consolidated review of the Jules-generated candidates is recorded in
+[`docs/reliability/JULES-PR-AUDIT-20260724.md`](docs/reliability/JULES-PR-AUDIT-20260724.md).
 
 ## Quick Start
 
