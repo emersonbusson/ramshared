@@ -154,7 +154,11 @@ mod tests {
         // Since we are running on a dummy file rather than a proper /dev/ublkc char device,
         // the kernel immediately rejects the io_uring commands with -EOPNOTSUPP (-95)
         // for each submitted tag in the queue_depth.
-        assert_eq!(cqes.len(), 4, "expected 4 completion events for queue_depth=4");
+        assert_eq!(
+            cqes.len(),
+            4,
+            "expected 4 completion events for queue_depth=4"
+        );
         for cqe in cqes {
             assert_eq!(cqe.result, -95, "expected -EOPNOTSUPP on dummy file");
         }
