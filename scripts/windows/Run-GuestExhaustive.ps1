@@ -45,7 +45,8 @@ function Invoke-GuestBounded {
                 $reason = $job.ChildJobs[0].JobStateInfo.Reason
                 throw ("guest command ended in state {0}: {1}" -f $job.State, $reason)
             }
-            return @(Receive-Job -Job $job -ErrorAction Stop)
+            Receive-Job -Job $job -ErrorAction Stop
+            return
         } catch {
             $detail = $_.Exception.ToString()
             $transientPsDirectAuth = $detail -match
