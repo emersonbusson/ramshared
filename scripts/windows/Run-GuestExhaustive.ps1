@@ -32,20 +32,25 @@ function Invoke-GuestBounded {
     )
 
     for ($attempt = 0; $attempt -le $PsDirectRetryCount; $attempt++) {
-        $job = $null
+        $connectionJob = $null
         try {
-            $job = Invoke-Command -VMName $VMName -Credential $cred -ScriptBlock $ScriptBlock `
-                -ArgumentList $ArgumentList -AsJob -ErrorAction Stop
-            $completed = Wait-Job -Job $job -Timeout $TimeoutSec
+            $remoteScriptText = $ScriptBlock.ToString()
+            $connectionJob = Start-Job -ScriptBlock {
+                param($TargetVm, $TargetCredential, $RemoteScriptText, $RemoteArguments)
+                $remoteScript = [scriptblock]::Create($RemoteScriptText)
+                Invoke-Command -VMName $TargetVm -Credential $TargetCredential `
+                    -ScriptBlock $remoteScript -ArgumentList $RemoteArguments -ErrorAction Stop
+            } -ArgumentList @($VMName, $cred, $remoteScriptText, $ArgumentList)
+            $completed = Wait-Job -Job $connectionJob -Timeout $TimeoutSec
             if (-not $completed) {
-                Stop-Job -Job $job -ErrorAction SilentlyContinue
-                throw ("guest command timed out after {0}s" -f $TimeoutSec)
+                Stop-Job -Job $connectionJob -ErrorAction SilentlyContinue
+                throw ("guest connection or command timed out after {0}s" -f $TimeoutSec)
             }
-            if ($job.State -ne "Completed") {
-                $reason = $job.ChildJobs[0].JobStateInfo.Reason
-                throw ("guest command ended in state {0}: {1}" -f $job.State, $reason)
+            if ($connectionJob.State -ne "Completed") {
+                $reason = $connectionJob.ChildJobs[0].JobStateInfo.Reason
+                throw ("guest command ended in state {0}: {1}" -f $connectionJob.State, $reason)
             }
-            Receive-Job -Job $job -ErrorAction Stop
+            Receive-Job -Job $connectionJob -ErrorAction Stop
             return
         } catch {
             $detail = $_.Exception.ToString()
@@ -56,8 +61,8 @@ function Invoke-GuestBounded {
             }
             Start-Sleep -Seconds $PsDirectRetryDelaySec
         } finally {
-            if ($null -ne $job) {
-                Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+            if ($null -ne $connectionJob) {
+                Remove-Job -Job $connectionJob -Force -ErrorAction SilentlyContinue
             }
         }
     }
