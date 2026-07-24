@@ -6,6 +6,7 @@
 //! DT-14: `nbd-client` ALWAYS with `-timeout 30` and NEVER `-persist` (no auto-reconnect; the
 //! broker re-subscribes). DT-16: `mkswap` is mandatory at each attach (VRAM returns zeroed/dirty).
 
+use std::borrow::Cow;
 use std::io::{Error, Result};
 use std::process::Command;
 
@@ -13,46 +14,46 @@ use ramshared_broker::protocol::NbdEndpoint;
 
 /// Assembles `nbd-client` argv to attach `export` to `dev` (DT-14: `-timeout 30`, no
 /// `-persist`). Unix uses `-unix <path>`; TCP uses positional `<host> <port>`.
-pub fn nbd_args(endpoint: &NbdEndpoint, export: &str, dev: &str) -> Vec<String> {
-    let mut a: Vec<String> = vec!["-N".into(), export.into()];
+pub fn nbd_args<'a>(endpoint: &'a NbdEndpoint, export: &'a str, dev: &'a str) -> Vec<Cow<'a, str>> {
+    let mut a: Vec<Cow<'a, str>> = vec![Cow::Borrowed("-N"), Cow::Borrowed(export)];
     match endpoint {
         NbdEndpoint::Unix { path } => {
-            a.push("-unix".into());
-            a.push(path.clone());
-            a.push(dev.into());
+            a.push(Cow::Borrowed("-unix"));
+            a.push(Cow::Borrowed(path.as_str()));
+            a.push(Cow::Borrowed(dev));
         }
         NbdEndpoint::Tcp { host, port } => {
-            a.push(host.clone());
-            a.push(port.to_string());
-            a.push(dev.into());
+            a.push(Cow::Borrowed(host.as_str()));
+            a.push(Cow::Owned(port.to_string()));
+            a.push(Cow::Borrowed(dev));
         }
     }
-    a.push("-timeout".into());
-    a.push("30".into());
+    a.push(Cow::Borrowed("-timeout"));
+    a.push(Cow::Borrowed("30"));
     a
 }
 
 /// Assembles `swapon` argv (DT-7: only emits `-p <prio>` when priority is defined).
-pub fn swapon_args(dev: &str, prio: Option<i32>) -> Vec<String> {
+pub fn swapon_args(dev: &str, prio: Option<i32>) -> Vec<Cow<'_, str>> {
     let mut a = Vec::new();
     if let Some(p) = prio {
-        a.push("-p".to_string());
-        a.push(p.to_string());
+        a.push(Cow::Borrowed("-p"));
+        a.push(Cow::Owned(p.to_string()));
     }
-    a.push(dev.to_string());
+    a.push(Cow::Borrowed(dev));
     a
 }
 
 /// Runs a command and converts non-zero exit into `Err` with details (never swallows the error).
-fn run(cmd: &str, args: &[String]) -> Result<()> {
-    let status = Command::new(cmd).args(args).status()?;
+fn run(cmd: &str, args: &[Cow<'_, str>]) -> Result<()> {
+    let status = Command::new(cmd)
+        .args(args.iter().map(|c| c.as_ref()))
+        .status()?;
     if status.success() {
         Ok(())
     } else {
-        Err(Error::other(format!(
-            "{cmd} {} -> {status}",
-            args.join(" ")
-        )))
+        let joined_args = args.join(" ");
+        Err(Error::other(format!("{cmd} {joined_args} -> {status}")))
     }
 }
 
@@ -64,12 +65,12 @@ pub fn attach_swap_with<F>(
     mut run_cmd: F,
 ) -> std::result::Result<(), String>
 where
-    F: FnMut(&str, &[String]) -> Result<()>,
+    F: FnMut(&str, &[Cow<'_, str>]) -> Result<()>,
 {
     run_cmd("nbd-client", &nbd_args(endpoint, export, dev))
         .map_err(|e| format!("nbd-client: {e}"))?;
     // DT-16: exported VRAM returns dirty/zeroed; the swap header needs to be rewritten.
-    run_cmd("mkswap", &[dev.to_string()]).map_err(|e| format!("mkswap: {e}"))?;
+    run_cmd("mkswap", &[Cow::Borrowed(dev)]).map_err(|e| format!("mkswap: {e}"))?;
     run_cmd("swapon", &swapon_args(dev, prio)).map_err(|e| format!("swapon: {e}"))?;
     Ok(())
 }
@@ -87,10 +88,10 @@ pub fn attach_swap(
 
 pub fn detach_swap_with<F>(dev: &str, mut run_cmd: F) -> std::result::Result<(), String>
 where
-    F: FnMut(&str, &[String]) -> Result<()>,
+    F: FnMut(&str, &[Cow<'_, str>]) -> Result<()>,
 {
-    run_cmd("swapoff", &[dev.to_string()]).map_err(|e| format!("swapoff: {e}"))?;
-    let _ = run_cmd("nbd-client", &["-d".to_string(), dev.to_string()]);
+    run_cmd("swapoff", &[Cow::Borrowed(dev)]).map_err(|e| format!("swapoff: {e}"))?;
+    let _ = run_cmd("nbd-client", &[Cow::Borrowed("-d"), Cow::Borrowed(dev)]);
     Ok(())
 }
 
