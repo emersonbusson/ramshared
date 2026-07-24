@@ -90,6 +90,9 @@ pub fn parse_memcg_swap(content: &str) -> Option<u64> {
 fn read_memcg_swap_impl(cgroup_path: &str, sysfs_base: &str) -> Option<u64> {
     let cg = std::fs::read_to_string(cgroup_path).ok()?;
     let path = cg.lines().find_map(|l| l.strip_prefix("0::"))?; // cgroup v2: single line `0::/<path>`
+    if path.contains("..") {
+        return None;
+    }
     let file = format!(
         "{}{}/memory.swap.current",
         sysfs_base,
@@ -261,12 +264,20 @@ mod tests {
     fn write_temp_file(content: &str) -> String {
         use std::env;
         use std::fs;
+        use std::io::Write;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
         let path = env::temp_dir().join(format!("ramshared_test_{}_{}", std::process::id(), id));
-        fs::write(&path, content).unwrap();
+
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(content.as_bytes()).unwrap();
+
         path.to_string_lossy().to_string()
     }
 
