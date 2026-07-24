@@ -44,5 +44,11 @@ if ($text -notmatch 'Start-Sleep -Seconds \$PsDirectRetryDelaySec') {
 if ($text -match 'return\s+@\(Receive-Job') {
     throw "psdirect_retry: retry wrapper must preserve the remote output stream for STATUS parsing"
 }
+if ($text -notmatch '\$connectionJob\s*=\s*Start-Job') {
+    throw "psdirect_open_timeout: PowerShell Direct connection creation must run inside the bounded local job"
+}
+if ($text -match 'Invoke-Command[\s\S]{0,240}-AsJob') {
+    throw "psdirect_open_timeout: Invoke-Command -AsJob can block before Wait-Job owns the timeout"
+}
 
 Write-Output "PASS Test-GuestExhaustiveStatic"
