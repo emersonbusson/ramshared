@@ -542,3 +542,137 @@ pub fn decode_io_buffer_position(pos: u64) -> Option<IoBufferPosition> {
         buffer_offset: raw & UBLK_IO_BUF_BITS_MASK,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn test_params_to_bytes() {
+        let params = Params {
+            len: UBLK_PARAMS_LEN as u32,
+            types: UBLK_PARAM_TYPE_BASIC,
+            basic: ParamBasic {
+                logical_bs_shift: 9,
+                physical_bs_shift: 12,
+                io_opt_shift: 12,
+                io_min_shift: 9,
+                max_sectors: 8,
+                dev_sectors: 1024,
+                ..ParamBasic::default()
+            },
+            ..Params::default()
+        };
+
+        let bytes = params.to_bytes();
+        assert_eq!(bytes.len(), UBLK_PARAMS_LEN);
+
+        let decoded = Params::from_bytes(&bytes);
+        assert_eq!(params, decoded);
+    }
+
+    #[test]
+    fn test_io_desc_parsing_and_block_request() {
+        let desc = IoDesc {
+            op_flags: UBLK_IO_OP_READ as u32 | (1 << 8),
+            nr_sectors_or_zones: 2,
+            start_sector: 10,
+            addr: 0x1000,
+        };
+
+        let mut bytes = [0u8; 24];
+        bytes[0..4].copy_from_slice(&desc.op_flags.to_ne_bytes());
+        bytes[4..8].copy_from_slice(&desc.nr_sectors_or_zones.to_ne_bytes());
+        bytes[8..16].copy_from_slice(&desc.start_sector.to_ne_bytes());
+        bytes[16..24].copy_from_slice(&desc.addr.to_ne_bytes());
+
+        let parsed = IoDesc::from_ne_bytes(&bytes).unwrap();
+        assert_eq!(parsed, desc);
+        assert_eq!(parsed.operation(), UBLK_IO_OP_READ);
+        assert_eq!(parsed.flags(), 1);
+
+        let req = parsed.to_block_request(42).unwrap();
+        assert_eq!(req.cmd, Command::Read);
+        assert_eq!(req.handle, 42);
+        assert_eq!(req.offset, 10 * UBLK_SECTOR_SIZE);
+        assert_eq!(req.len, 2 * (UBLK_SECTOR_SIZE as u32));
+    }
+
+    #[test]
+    fn test_io_desc_to_block_request_ops() {
+        let write = IoDesc {
+            op_flags: UBLK_IO_OP_WRITE as u32,
+            nr_sectors_or_zones: 2,
+            start_sector: 10,
+            addr: 0x1000,
+        };
+        assert_eq!(write.to_block_request(42).unwrap().cmd, Command::Write);
+
+        let trim = IoDesc {
+            op_flags: UBLK_IO_OP_DISCARD as u32,
+            nr_sectors_or_zones: 2,
+            start_sector: 10,
+            addr: 0x1000,
+        };
+        assert_eq!(trim.to_block_request(42).unwrap().cmd, Command::Trim);
+
+        let flush = IoDesc {
+            op_flags: UBLK_IO_OP_FLUSH as u32,
+            nr_sectors_or_zones: 0,
+            start_sector: 0,
+            addr: 0,
+        };
+        let req = flush.to_block_request(42).unwrap();
+        assert_eq!(req.cmd, Command::Flush);
+        assert_eq!(req.offset, 0);
+        assert_eq!(req.len, 0);
+
+        let unknown = IoDesc {
+            op_flags: 99_u32,
+            nr_sectors_or_zones: 0,
+            start_sector: 0,
+            addr: 0,
+        };
+        assert_eq!(
+            unknown.to_block_request(42),
+            Err(IoRequestError::UnsupportedOp(99))
+        );
+    }
+
+    #[test]
+    fn test_io_request_error() {
+        assert_eq!(
+            IoRequestError::UnsupportedOp(99).ublk_result(),
+            UBLK_IO_RES_EINVAL
+        );
+        assert_eq!(
+            IoRequestError::LengthOverflow.ublk_result(),
+            UBLK_IO_RES_EINVAL
+        );
+        assert_eq!(
+            IoRequestError::OffsetOverflow.ublk_result(),
+            UBLK_IO_RES_EINVAL
+        );
+    }
+
+    #[test]
+    fn test_io_completion() {
+        let comp_ok = IoCompletion::ok(1, 2);
+        assert_eq!(comp_ok.qid, 1);
+        assert_eq!(comp_ok.tag, 2);
+        assert_eq!(comp_ok.result, UBLK_IO_RES_OK);
+
+        let cmd_ok = comp_ok.to_io_cmd();
+        assert_eq!(cmd_ok.q_id, 1);
+        assert_eq!(cmd_ok.tag, 2);
+        assert_eq!(cmd_ok.result, UBLK_IO_RES_OK);
+        assert_eq!(cmd_ok.addr_or_zone_append_lba, 0);
+
+        let comp_err = IoCompletion::from_request_error(3, 4, IoRequestError::LengthOverflow);
+        assert_eq!(comp_err.qid, 3);
+        assert_eq!(comp_err.tag, 4);
+        assert_eq!(comp_err.result, UBLK_IO_RES_EINVAL);
+    }
+}

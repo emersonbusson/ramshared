@@ -68,13 +68,28 @@ function Add-Result {
     })
 }
 
+function Read-SharedCampaignSummary {
+    param([string[]]$OutputLines)
+
+    $artifactLine = @($OutputLines | Where-Object { $_ -match '^ARTIFACT_DIR=(.+)$' } | Select-Object -Last 1)
+    if ($artifactLine.Count -ne 1) { return $null }
+    $artifactDir = $artifactLine[0].Substring('ARTIFACT_DIR='.Length).Trim()
+    $summaryPath = Join-Path $artifactDir "summary.json"
+    if (-not (Test-Path -LiteralPath $summaryPath)) { return $null }
+    try {
+        return Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json
+    } catch {
+        return $null
+    }
+}
+
 New-Item -Force -ItemType Directory -Path $OutDir | Out-Null
 $gpu = Read-Gpu
 $cases = @(
     New-Case "windows-smoke" 64 0 0 "Online + checksum + graceful teardown; not reclaim proof"
     New-Case "windows-3gib" 3072 0 1024 "Large LUN survives I/O; external pressure recovers; no dump"
     New-Case "wsl2-1gib" 0 1024 1024 "WSL2 tier demotes/refuses before reserve exhaustion"
-    New-Case "wsl2-4gib" 0 4096 1024 "WSL2 cascade returns VRAM via swapoff-first DEMOTE"
+    New-Case "wsl2-4gib" 0 4096 4096 "WSL2 cascade returns VRAM via swapoff-first DEMOTE"
     New-Case "split-3gib-1gib" 1024 3072 1024 "One owner releases/refuses growth; external workload gets headroom"
 )
 
@@ -160,12 +175,15 @@ foreach ($c in $cases) {
         }
         $sharedHarness = Join-Path $PSScriptRoot "..\windows\Invoke-SharedWslPressureCampaign.ps1"
         $caseOut = & $sharedHarness -ApproveSharedDailyHost -VramMiB ([int]$c.wsl2_vram_mib) `
-            -ExternalWorkloadMiB ([int]$c.external_gpu_workload_mib) 2>&1 | ForEach-Object { $_.ToString() }
+            -PreallocateVram -ExternalWorkloadMiB ([int]$c.external_gpu_workload_mib) *>&1 |
+            ForEach-Object { $_.ToString() }
         $caseOut | Set-Content -Encoding utf8 (Join-Path $OutDir ($c.case + ".out"))
-        if ($LASTEXITCODE -eq 0) {
+        $campaignSummary = Read-SharedCampaignSummary -OutputLines $caseOut
+        if ($null -ne $campaignSummary -and [bool]$campaignSummary.PASS -and
+            [bool]$campaignSummary.matrix_row_close) {
             Add-Result -Results $results -Case $c -Status "PASS" -Reason "supervised_shared_wsl_campaign_pass"
         } else {
-            Add-Result -Results $results -Case $c -Status "PARTIAL" -Reason "supervised_shared_wsl_campaign_exit_$LASTEXITCODE"
+            Add-Result -Results $results -Case $c -Status "PARTIAL" -Reason "shared_wsl_matrix_row_not_closed"
         }
     } else {
         if (-not $ApproveSharedDesktopWsl) {

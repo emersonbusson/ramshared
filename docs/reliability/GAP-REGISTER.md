@@ -6,15 +6,20 @@ guardrail against false DONE status.
 
 ## Current Open Gates
 
+Neither row below blocks the Linux/WSL2 NBD MVP: Windows remains an explicitly
+supervised beta, and ublk is outside the day-one transport scope. There are no
+open product gates for the calibrated Linux/WSL2 NBD MVP surface.
+
 | Gate | Status | Why it remains open | Required close evidence |
 | --- | --- | --- | --- |
-| GiB-scale VRAM reclaim matrix | PARTIAL | The Windows 3 GiB + 1 GiB external subcase passed previously. On 2026-07-22, `C:\ramshared\artifacts\exhaustive-20260722-044152` closed the 64 MiB private-mount smoke with three checksums, direct I/O, graceful teardown, lease release, and zero disk/Win32/PnP residue. `C:\ramshared\artifacts\exhaustive-20260722-044722` then passed the calibrated 1 GiB Windows + 3 GiB WSL2 row; nested artifact `shared-wsl-pressure-20260722-044734` passed two integrity-checked zram-before-VRAM rounds with watchdog telemetry and clean terminal state. | Run the remaining WSL2 1 GiB, WSL2 4 GiB, and split 3 GiB+1 GiB rows with integrity, reserve restoration, teardown, and clean terminal-state proof. |
+| Windows public driver distribution | BLOCKED | The validated package path is test-signed for supervised labs. Test-signing is not a public trust chain and cannot be promoted to production evidence; production trust requires an external Microsoft attestation or trusted signing identity. | Build from a clean release tag, obtain Microsoft attestation or another production-trusted signature, pass `InfVerif` and `SignTool verify /pa /all` with test-signing disabled, then pass install, rollback, and recovery drills on the declared compatibility surface. |
 | Custom-kernel/ublk as day-1 product transport | DEFERRED | NBD remains the day-1 WSL2 product path. ublk root and QEMU smokes are historical capability evidence, not product transport closure. 2026-07-18 `C:\ramshared\artifacts\linux-kernel-lab-capability-20260718-131502` reached `linux-kernel-lab` over SSH with passwordless sudo, installed/loaded `ublk_drv`, and passed capability audit with `/dev/ublk-control` present. The VM still has no GPU surface, and no product ublk lifecycle, swapoff-first teardown, crash/drain, or no-ghost proof exists yet. | Dedicated custom-kernel lab SPEC with full up/down wire-up, swapoff-first teardown, crash/drain drills, and terminal no-ghost proof using the now-capable `linux-kernel-lab` surface. |
 
 ## Closed In This Session
 
 | Gap | Close evidence |
 | --- | --- |
+| GiB-scale VRAM reclaim matrix | 2026-07-24 WSL2 1 GiB artifact `shared-wsl-pressure-20260723-232558`, WSL2 4 GiB artifact `shared-wsl-pressure-20260724-031615`, and split artifact `vram-reclaim-matrix-20260724-032344` all report a closed matrix row with integrity, DEMOTE, and clean terminal state. The split StorPort artifact `exhaustive-20260724-032344` also reports three checksum matches, graceful teardown, lease release, and zero disk/Win32/PnP residue. |
 | App-specific GPU workload naming | Public tracked scan for specific example application names and old render-specific terms is clean. Generic names are `gpu_workload`, `dcc`, `host_agent`, `vram_reclaim`, and `gpu_budget`. |
 | External GPU workload WDDM pressure | `C:\ramshared\artifacts\shared-wsl-pressure-20260722-015303` PASS from `scripts/windows/Invoke-SharedWslPressureCampaign.ps1 -ApproveSharedDailyHost -ExternalWorkloadMiB 4096 -PostCampaignObserveSec 120 -HostDiskLetters C,I`: generic external CUDA workload completed (`external_workload_ok=true`), `ramshared diagnose --events --json` observed `demotes=2` with timeline reason `GlobalGpuFreeFloor` and no process attribution, global GPU free fell to 348 MiB while GPU used peaked at 5607 MiB, final health was clean (`ghost=false`, daemon dead, no zram/VRAM swap left), and host disk telemetry was collected for `C:` and `I:`. This closes the aggregate external VRAM pressure claim; it does not close the GiB reclaim matrix rows. |
 | Historical signing password literal | `validation.md` now references `RAMSHARED_TESTSIGN_PFX_PASSWORD`; `tools/ci/check-public-hygiene.mjs` blocks the old literal and inline signing-password patterns. |

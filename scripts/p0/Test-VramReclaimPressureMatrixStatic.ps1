@@ -30,7 +30,14 @@ foreach ($needle in @(
     "insufficient_vram_headroom",
     "shared_wsl_watchdog_required",
     "owner_allocations_plus_margin",
-    "Invoke-SharedWslPressureCampaign.ps1"
+    "Invoke-SharedWslPressureCampaign.ps1",
+    'New-Case "wsl2-4gib" 0 4096 4096',
+    "Read-SharedCampaignSummary",
+    "campaignSummary.PASS",
+    "*>&1",
+    "matrix_row_close",
+    "shared_wsl_matrix_row_not_closed",
+    "-PreallocateVram"
 )) {
     if ($text -notmatch [regex]::Escape($needle)) {
         throw ("vram_reclaim_matrix_static: missing " + $needle)
