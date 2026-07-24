@@ -36,10 +36,12 @@ pub(crate) fn disarm_forensics() {
 pub(crate) fn stop_daemon_gracefully() {
     // Prefer PID file if we wrote one
     if let Ok(pid_s) = fs::read_to_string(PID_FILE)
-        && let Ok(pid) = pid_s.trim().parse::<i32>()
+        && let Ok(pid) = pid_s.trim().parse::<u32>()
+        && pid > 0
+        && fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|c| c.trim() == "ramsharedd")
     {
         let _ = Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
+            .args(["-TERM", "--", &pid.to_string()])
             .status();
     }
     // Wait up to 10s for voluntary exit (allows VRAM zero()).
