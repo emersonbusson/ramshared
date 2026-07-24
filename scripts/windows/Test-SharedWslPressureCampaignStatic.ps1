@@ -24,6 +24,7 @@ $required = @(
     "Test-HostDiskTelemetryArtifacts",
     "volume_identity_missing",
     "sample_identity_missing",
+    '$decodedVolumes',
     '$campaignPass = -not $watchdogFired',
     '$exitCode -eq 0',
     '$finalClean',
@@ -81,6 +82,9 @@ foreach ($needle in $required) {
 
 if ($text.Contains('>>"`$artifact/daemon.out"')) {
     throw "daemon wrapper must not depend on an unset runtime artifact variable"
+}
+if ($text.Contains('$volumes = @(Get-Content -LiteralPath $VolumePath -Raw | ConvertFrom-Json)')) {
+    throw "PowerShell 5.1 must not wrap a ConvertFrom-Json array inside one pipeline item"
 }
 
 $forbidden = @(
