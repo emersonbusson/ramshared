@@ -333,13 +333,24 @@ pub fn down() -> Result<(), CascadeError> {
         let _ = sh("zramctl", &["-r", z]);
     }
     // Also try reset any leftover zram still listed
-    for e in read_swaps() {
-        if e.filename.contains("zram") && !e.is_ghost() {
-            let z = e.canonical_path();
-            let _ = swapoff_try(&z);
-            let _ = sh("zramctl", &["-r", &z]);
+    std::thread::scope(|_s| {
+        for e in read_swaps() {
+            if e.filename.contains("zram") && !e.is_ghost() {
+                let z = e.canonical_path();
+
+                let task = move || {
+                    let _ = swapoff_try(&z);
+                    let _ = sh("zramctl", &["-r", &z]);
+                };
+
+                #[cfg(test)]
+                task();
+
+                #[cfg(not(test))]
+                _s.spawn(task);
+            }
         }
-    }
+    });
 
     // 3) Disconnect NBD only after swapoff (EOF → daemon zero() VRAM)
     let nbd_targets: Vec<String> = recorded_swap

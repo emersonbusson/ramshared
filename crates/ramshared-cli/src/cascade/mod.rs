@@ -374,43 +374,58 @@ fn swapoff_try(path: &str) -> Result<(), CascadeError> {
 /// Swapoff every candidate. Returns list of failures.
 /// **Never** kills the daemon from here.
 fn swapoff_all(paths: &[String], entries: &[SwapEntry]) -> Vec<(String, String)> {
-    let mut fails = Vec::new();
-    for p in paths {
-        if !is_allowlisted_managed_path(p) {
-            eprintln!("[down] swapoff skip (nao allowlist): {p}");
-            continue;
-        }
-        // Ghost with used>0 cannot be recovered without reboot — report loudly.
-        let p_canon = canonicalize_swap_path(p);
-        if let Some(msg) = ghost_used_blocks_swapoff(entries, p) {
-            fails.push((p.clone(), msg));
-            continue;
-        }
-        match swapoff_try(p) {
-            Ok(_) => eprintln!("[down] swapoff ok: {p_canon}"),
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("No such file") || msg.contains("Invalid argument") {
-                    // Fresh read: path may have left swaps since the start-of-batch snapshot.
-                    let live = read_swaps();
-                    let still = live.iter().any(|e| {
-                        (e.filename.contains(p)
-                            || e.bare_path() == *p
-                            || e.canonical_path() == p_canon)
-                            && e.used_kb > 0
-                    });
-                    if still {
-                        fails.push((p.clone(), msg));
-                    } else {
-                        eprintln!("[down] swapoff skip (ausente): {p_canon}");
-                    }
-                } else {
-                    fails.push((p.clone(), msg));
-                }
+    let fails = std::sync::Mutex::new(Vec::new());
+
+    std::thread::scope(|_s| {
+        for p in paths {
+            if !is_allowlisted_managed_path(p) {
+                eprintln!("[down] swapoff skip (nao allowlist): {p}");
+                continue;
             }
+            // Ghost with used>0 cannot be recovered without reboot — report loudly.
+            let p_canon = canonicalize_swap_path(p);
+            if let Some(msg) = ghost_used_blocks_swapoff(entries, p) {
+                fails.lock().unwrap().push((p.clone(), msg));
+                continue;
+            }
+
+            let p_clone = p.clone();
+            let fails_ref = &fails;
+
+            let task = move || {
+                match swapoff_try(&p_clone) {
+                    Ok(_) => eprintln!("[down] swapoff ok: {p_canon}"),
+                    Err(e) => {
+                        let msg = e.to_string();
+                        if msg.contains("No such file") || msg.contains("Invalid argument") {
+                            // Fresh read: path may have left swaps since the start-of-batch snapshot.
+                            let live = read_swaps();
+                            let still = live.iter().any(|e| {
+                                (e.filename.contains(&p_clone)
+                                    || e.bare_path() == p_clone
+                                    || e.canonical_path() == p_canon)
+                                    && e.used_kb > 0
+                            });
+                            if still {
+                                fails_ref.lock().unwrap().push((p_clone, msg));
+                            } else {
+                                eprintln!("[down] swapoff skip (ausente): {p_canon}");
+                            }
+                        } else {
+                            fails_ref.lock().unwrap().push((p_clone, msg));
+                        }
+                    }
+                }
+            };
+
+            #[cfg(test)]
+            task();
+
+            #[cfg(not(test))]
+            _s.spawn(task);
         }
-    }
-    fails
+    });
+    fails.into_inner().unwrap()
 }
 
 /// True if daemon process may be stopped (no active block VRAM swap).
@@ -563,11 +578,22 @@ fn try_recover_zero_used_orphans() -> Result<(), CascadeError> {
                 ));
             }
             // Leftover zero-used zram: swapoff again
-            for e in &after {
-                if e.filename.contains("zram") && !e.is_ghost() {
-                    let _ = swapoff_try(&e.canonical_path());
+            std::thread::scope(|_s| {
+                for e in &after {
+                    if e.filename.contains("zram") && !e.is_ghost() {
+                        let path = e.canonical_path();
+                        let task = move || {
+                            let _ = swapoff_try(&path);
+                        };
+
+                        #[cfg(test)]
+                        task();
+
+                        #[cfg(not(test))]
+                        _s.spawn(task);
+                    }
                 }
-            }
+            });
             eprintln!("[up] orphan recover: limpo — a seguir setup normal");
             Ok(())
         }
