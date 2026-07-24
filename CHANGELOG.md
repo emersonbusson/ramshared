@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.3](https://github.com/emersonbusson/ramshared/compare/v0.7.2...v0.7.3) (2026-07-24)
+
+
+### Bug Fixes
+
+* **core:** consolidate MVP safety and reclaim gates ([2b25c00](https://github.com/emersonbusson/ramshared/commit/2b25c007ae90abce0a032ccc1a5f03d554361dec))
+* **core:** consolidate MVP safety and reclaim gates ([daf74b1](https://github.com/emersonbusson/ramshared/commit/daf74b1bb62156f9962e3d9e140d1937fafb93c8))
+
+
+### Documentation
+
+* **core:** link consolidated Jules audit ([56ed0ca](https://github.com/emersonbusson/ramshared/commit/56ed0ca4e9bac0d296dfbbf5f8067ed680e692cf))
+
 ## [0.7.2](https://github.com/emersonbusson/ramshared/compare/v0.7.1...v0.7.2) (2026-07-22)
 
 
