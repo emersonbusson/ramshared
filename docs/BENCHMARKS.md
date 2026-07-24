@@ -97,3 +97,27 @@ Referência VRAM-swap (P0-RESULTS §3, mesma op 4K p50): **ublk 241 µs / NBD-Un
 - **Velocidade de Leitura:** O driver StorPort RAMShared atinge taxas de leitura de **~2.0 GB/s**, o que supera os limites físicos do barramento SATA III dos SSDs locais em aproximadamente **4x**, alinhando-se a velocidades de barramento NVMe PCIe Gen3.
 - **Velocidade de Escrita:** A escrita a **~420 MB/s** é competitiva com SSDs SATA III físicos, sofrendo apenas a latência de context switch e sincronização com o backend userspace do driver.
 - **Segurança e Consistência:** Zero corrupção sob preenchimento de 96% do volume, atestando a solidez da fila SCSI e da paginação física.
+
+## 2026-07-24 04:48 -03 — bounded WSL2 disk I/O repeatability
+
+**Context**
+- Branch/commit: `docs/readme-v074-release` @ `6f9aaad` (clean release merge)
+- Machine: Windows host / WSL2, RTX 2060 6144 MiB; GPU snapshot 737 MiB used / 5218 MiB free;
+  RAM available 14.1 GiB; WSL swap used 185 MiB.
+- Load: idle snapshot; no swap or device mutation. Three independent runs, each profile 3 s
+  plus 2 s ramp, 64 MiB temporary file, direct I/O, `fio`, `iodepth=1` and `8`.
+- Raw output: `/tmp/ramshared-bench-20260724/fio-round-{1,2,3}.txt`.
+
+**Results** (median across n=3; latency in microseconds)
+
+| Profile | Median p50 | Median p99 | p50 range | p99 range |
+|---|---:|---:|---:|---:|
+| randread QD1 | 163 | 273 | 159–165 | 265–273 |
+| randwrite QD1 | 137 | 273 | 135–137 | 269–314 |
+| randread QD8 | 277 | 469 | 265–277 | 461–474 |
+| randwrite QD8 | 237 | 2114 | 227–249 | 494–2278 |
+
+**Honest reading:** the bounded disk path is repeatable for reads and QD1 writes, while QD8
+writes show a long-tail p99 (494–2278 us). This is a disk-path baseline only; it does not
+prove StorPort or VRAM performance because the Windows driver was not loaded and no live swap
+pressure was introduced.

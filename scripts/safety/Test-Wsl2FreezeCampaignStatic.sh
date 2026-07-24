@@ -38,6 +38,13 @@ required=(
   "shared-daily-host-complete.txt"
   "--artifact-dir"
   "--integrity-result"
+  "ACTION_CLEANUP_GRACE_SEC"
+  "watchdog_deadline"
+  "action_cleanup_timeout"
+  "RAMSHARED_PRESSURE_ALLOC_GIB"
+  "RAMSHARED_PRESSURE_MEM_MAX"
+  "--alloc-gib"
+  "--mem-max"
 )
 
 src="$(cat "$SCRIPT")"
@@ -47,6 +54,14 @@ for token in "${required[@]}"; do
     exit 1
   fi
 done
+
+# The action watchdog must leave a grace interval for the pressure probe to
+# release its worker and verify integrity. Killing the controller can orphan a
+# worker in D-state while NBD swap is still active.
+if grep -Eq 'kill[[:space:]]+(-TERM[[:space:]]+)?["]?[$]action_pid' <<<"$src"; then
+  echo "FAIL action watchdog must never signal the pressure controller" >&2
+  exit 1
+fi
 
 # Dry-run must not require root and must exit 0 on daily host.
 tmp="$(mktemp -d)"
