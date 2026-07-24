@@ -58,8 +58,8 @@ done
 # The action watchdog must leave a grace interval for the pressure probe to
 # release its worker and verify integrity. Killing the controller can orphan a
 # worker in D-state while NBD swap is still active.
-if grep -Fq 'kill -KILL "$action_pid"' <<<"$src"; then
-  echo "FAIL action watchdog must never SIGKILL the pressure controller" >&2
+if grep -Eq 'kill[[:space:]]+(-TERM[[:space:]]+)?["]?[$]action_pid' <<<"$src"; then
+  echo "FAIL action watchdog must never signal the pressure controller" >&2
   exit 1
 fi
 
