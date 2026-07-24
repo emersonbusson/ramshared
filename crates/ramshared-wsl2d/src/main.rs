@@ -12,6 +12,7 @@
 
 use core::ffi::c_int;
 use std::io::Read;
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::process::{Command as ProcessCommand, Stdio};
@@ -784,7 +785,7 @@ fn run_nbd<P: VramProvider>(
 
     // --- Unix socket ---
     let path = Path::new(&sock);
-    let _ = std::fs::remove_file(path);
+    prepare_unix_socket_path(path)?;
     let listener = UnixListener::bind(path)?;
     eprintln!("[ramsharedd] escutando em {sock}");
     eprintln!("[ramsharedd] conecte: sudo nbd-client -C <N> -unix {sock} {nbd_dev}");
@@ -1131,28 +1132,86 @@ fn run_nbd<P: VramProvider>(
         }
     }
     let _ = probe.zero();
-    let _ = std::fs::remove_file(path);
+    cleanup_unix_socket_path(path);
     Ok(())
 }
 
-/// `used_kb` for the given nbd device path from `/proc/swaps` (0 if absent).
+/// `used_kb` for the given NBD device path from `/proc/swaps`.
+///
+/// A read error is unsafe to interpret as an absent swap device, so return the
+/// maximum value and keep the backend allocated.
 fn nbd_used_kb_from_proc(nbd_dev: &str) -> u64 {
-    let text = std::fs::read_to_string("/proc/swaps").unwrap_or_default();
-    let key = nbd_dev.trim();
-    let bare = key.rsplit('/').next().unwrap_or(key);
+    match std::fs::read_to_string("/proc/swaps") {
+        Ok(text) => nbd_used_kb_from_text(&text, nbd_dev),
+        Err(error) => {
+            eprintln!(
+                "[ramsharedd] cannot read /proc/swaps for {nbd_dev}: {error}; \
+                 keeping backend allocated"
+            );
+            u64::MAX
+        }
+    }
+}
+
+fn canonical_nbd_identity(path: &str) -> Option<String> {
+    let path = path
+        .trim()
+        .strip_suffix("\\040(deleted)")
+        .unwrap_or(path.trim());
+    let bare = if let Some(bare) = path.strip_prefix("/dev/") {
+        bare
+    } else if let Some(bare) = path.strip_prefix('/') {
+        bare
+    } else if !path.contains('/') {
+        path
+    } else {
+        return None;
+    };
+    let suffix = bare.strip_prefix("nbd")?;
+    if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!("/dev/{bare}"))
+}
+
+fn nbd_used_kb_from_text(text: &str, nbd_dev: &str) -> u64 {
+    let Some(key) = canonical_nbd_identity(nbd_dev) else {
+        return u64::MAX;
+    };
+    let mut used_kb = 0;
     for line in text.lines().skip(1) {
         let cols: Vec<&str> = line.split_whitespace().collect();
         if cols.len() < 5 {
             continue;
         }
-        let name = cols[0];
-        if (name.contains(bare) || name == key)
-            && let Ok(u) = cols[3].parse::<u64>()
+        if canonical_nbd_identity(cols[0]).as_deref() == Some(key.as_str())
+            && let Ok(observed) = cols[3].parse::<u64>()
         {
-            return u;
+            used_kb = used_kb.max(observed);
         }
     }
-    0
+    used_kb
+}
+
+fn prepare_unix_socket_path(path: &Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_socket() => std::fs::remove_file(path),
+        Ok(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("refusing to replace non-socket path {}", path.display()),
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn cleanup_unix_socket_path(path: &Path) {
+    if matches!(
+        std::fs::symlink_metadata(path),
+        Ok(metadata) if metadata.file_type().is_socket()
+    ) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// Broker control-plane parts consumed by the worker (data-plane). Backend-agnostic
@@ -1225,7 +1284,7 @@ fn broker_setup(
     let (demote_tx, demote_rx) = std::sync::mpsc::channel::<DemoteReason>();
 
     let path = Path::new(sock);
-    let _ = std::fs::remove_file(path);
+    prepare_unix_socket_path(path)?;
     let unix = UnixListener::bind(path)?;
     eprintln!("[ramsharedd] NBD unix em {sock}");
     let _ = spawn_acceptor(
@@ -1439,7 +1498,7 @@ fn run_broker<P: VramProvider>(
     let _ = rt.broker.join();
     let zeroed = backend.zero();
     let _ = probe.zero(); // DT-12/DT-17: zeroes the canary-region as well
-    let _ = std::fs::remove_file(Path::new(&sock));
+    cleanup_unix_socket_path(Path::new(&sock));
     zeroed?;
     eprintln!("[ramsharedd] broker VRAM encerrado (VRAM zerada)");
     Ok(())
@@ -1479,7 +1538,7 @@ fn run_broker_ram(
     let _ = serve_broker_jobs(backend, &rt, |_| None); // RAM: without residency
 
     let _ = rt.broker.join();
-    let _ = std::fs::remove_file(Path::new(&sock));
+    cleanup_unix_socket_path(Path::new(&sock));
     eprintln!("[ramsharedd] broker RAM encerrado");
     Ok(())
 }
@@ -1848,5 +1907,54 @@ mod tests {
         streak = 2;
         assert!(!observe_global_free_floor(None, 512, 1024, &mut streak, 3));
         assert_eq!(streak, 0);
+    }
+
+    #[test]
+    fn nbd_used_parser_requires_exact_device_identity() {
+        let swaps = "\
+Filename\t\t\tType\t\tSize\t\tUsed\t\tPriority
+/dev/nbd01                              partition\t1024\t\t0\t\t-2
+/tmp/nbd0-backup                       file\t\t1024\t\t0\t\t-3
+/dev/nbd0                              partition\t1024\t\t37\t\t-4
+";
+        assert_eq!(nbd_used_kb_from_text(swaps, "/dev/nbd0"), 37);
+        assert_eq!(nbd_used_kb_from_text(swaps, "/dev/nbd01"), 0);
+        assert_eq!(nbd_used_kb_from_text(swaps, "/dev/nbd9"), 0);
+    }
+
+    #[test]
+    fn nbd_used_parser_is_fail_safe_for_duplicate_and_deleted_rows() {
+        let swaps = "\
+Filename\t\t\tType\t\tSize\t\tUsed\t\tPriority
+/dev/nbd0                              partition\t1024\t\t0\t\t-2
+/dev/nbd0\\040(deleted)                 partition\t1024\t\t55\t\t-3
+";
+        assert_eq!(nbd_used_kb_from_text(swaps, "nbd0"), 55);
+    }
+
+    #[test]
+    fn unix_socket_setup_refuses_regular_file_and_symlink() {
+        let dir =
+            std::env::temp_dir().join(format!("ramshared-socket-path-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).expect("create socket test directory");
+        let regular = dir.join("regular");
+        std::fs::write(&regular, b"keep").expect("create regular file");
+        assert!(prepare_unix_socket_path(&regular).is_err());
+        assert_eq!(
+            std::fs::read(&regular).expect("regular file preserved"),
+            b"keep"
+        );
+
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&regular, &link).expect("create symlink");
+        assert!(prepare_unix_socket_path(&link).is_err());
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .expect("symlink preserved")
+                .file_type()
+                .is_symlink()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

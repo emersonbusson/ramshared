@@ -378,7 +378,7 @@ pub fn down() -> Result<(), CascadeError> {
     }
     // Also try reset any leftover zram still listed
     for e in read_swaps() {
-        if e.filename.contains("zram") && !e.is_ghost() {
+        if is_zram_device_path(&e.filename) && !e.is_ghost() {
             let z = e.canonical_path();
             let _ = swapoff_try(&z);
             let _ = sh("zramctl", &["-r", &z]);
@@ -392,12 +392,12 @@ pub fn down() -> Result<(), CascadeError> {
         .chain(
             read_swaps()
                 .into_iter()
-                .filter(|e| e.filename.contains("nbd"))
+                .filter(|e| is_nbd_device_path(&e.filename))
                 .map(|e| e.canonical_path()),
         )
         .collect();
     for dev in &nbd_targets {
-        if is_allowlisted_managed_path(dev) && dev.contains("nbd") {
+        if is_allowlisted_managed_path(dev) && is_nbd_device_path(dev) {
             let _ = sh("nbd-client", &["-d", dev]);
         }
     }

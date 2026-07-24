@@ -116,6 +116,15 @@ function Start-HostDiskTelemetry {
                 foreach ($letter in $Letters) {
                     $row = $perf | Where-Object { $_.Name -eq $letter } | Select-Object -First 1
                     $logical = Get-CimInstance -ClassName Win32_LogicalDisk -Filter ("DeviceID='{0}'" -f $letter) -ErrorAction SilentlyContinue
+                    if ($null -eq $row) {
+                        $rows += [ordered]@{
+                            ts = $timestamp
+                            epoch = $epoch
+                            name = $letter
+                            error = "perf_disk_identity_missing"
+                        }
+                        continue
+                    }
                     $rows += [ordered]@{
                         ts = $timestamp
                         epoch = $epoch
@@ -143,6 +152,50 @@ function Start-HostDiskTelemetry {
             }
             Start-Sleep -Seconds ([Math]::Max(1, [int]$Interval))
         }
+    }
+}
+
+function Test-HostDiskTelemetryArtifacts {
+    param(
+        [string[]]$Letters,
+        [string]$JsonlPath,
+        [string]$VolumePath
+    )
+    $expected = @(Normalize-HostDiskLetters -Letters $Letters)
+    if ($expected.Count -eq 0) {
+        return [pscustomobject]@{ Ok = $false; Reason = "no_expected_disk_identity" }
+    }
+    if (-not (Test-Path -LiteralPath $JsonlPath) -or
+        -not (Test-Path -LiteralPath $VolumePath)) {
+        return [pscustomobject]@{ Ok = $false; Reason = "telemetry_artifact_missing" }
+    }
+    try {
+        $volumes = @(Get-Content -LiteralPath $VolumePath -Raw | ConvertFrom-Json)
+        $validVolumes = @($volumes | Where-Object {
+            $null -eq $_.error -and $_.name -and $null -ne $_.size_bytes
+        } | ForEach-Object { [string]$_.name })
+        foreach ($letter in $expected) {
+            if ($validVolumes -notcontains $letter) {
+                return [pscustomobject]@{ Ok = $false; Reason = "volume_identity_missing:$letter" }
+            }
+        }
+
+        $validSamples = @{}
+        foreach ($line in @(Get-Content -LiteralPath $JsonlPath)) {
+            if ([string]::IsNullOrWhiteSpace($line)) { continue }
+            $row = $line | ConvertFrom-Json
+            if ($null -eq $row.error -and $row.name -and $null -ne $row.epoch) {
+                $validSamples[[string]$row.name] = $true
+            }
+        }
+        foreach ($letter in $expected) {
+            if (-not $validSamples.ContainsKey($letter)) {
+                return [pscustomobject]@{ Ok = $false; Reason = "sample_identity_missing:$letter" }
+            }
+        }
+        return [pscustomobject]@{ Ok = $true; Reason = "complete" }
+    } catch {
+        return [pscustomobject]@{ Ok = $false; Reason = "telemetry_parse_failed" }
     }
 }
 
@@ -362,10 +415,11 @@ if ($ExternalWorkloadMiB -gt 0) {
         (Test-Path -LiteralPath $externalWorkloadOutput) -and
         (Get-Content -LiteralPath $externalWorkloadOutput -Raw).Contains("[cuda-vram-workload] released")
 }
-$host_disk_telemetry_ok = (Test-Path -LiteralPath $hostDiskJsonl) -and
-    ((Get-Item -LiteralPath $hostDiskJsonl).Length -gt 0) -and
-    (Test-Path -LiteralPath $hostDiskVolumes)
-$validationPass = (Test-Path -LiteralPath $validation) -and ((Get-Content -LiteralPath $validation -Raw) -match "WSL2_FREEZE_CAMPAIGN_VALIDATION=PASS")
+$hostDiskAudit = Test-HostDiskTelemetryArtifacts -Letters $HostDiskLetters `
+    -JsonlPath $hostDiskJsonl -VolumePath $hostDiskVolumes
+$host_disk_telemetry_ok = [bool]$hostDiskAudit.Ok
+$validationPass = (Test-Path -LiteralPath $validation) -and
+    ((Get-Content -LiteralPath $validation -Raw) -match '(?m)^WSL2_FREEZE_CAMPAIGN_VALIDATION=PASS(?:\s|$)')
 $diagnosePath = Join-Path $artifactDir "diagnose.json"
 $diagnoseOk = $false
 $demoteTotal = 0
@@ -404,8 +458,14 @@ $external_demote_ok = $ExternalWorkloadMiB -gt 0 -and
     $demoteTotal -gt 0 -and
     $finalClean
 $matrixRowClose = $validationPass -and $external_demote_ok
+$campaignPass = -not $watchdogFired -and
+    $exitCode -eq 0 -and
+    $externalWorkloadOk -and
+    $validationPass -and
+    $finalClean -and
+    $host_disk_telemetry_ok
 
-if (-not $watchdogFired -and $externalWorkloadOk -and $validationPass) {
+if ($campaignPass) {
     Write-Summary -Dir $artifactDir -Status "PASS" -Reason "validated_shared_daily_host_campaign" -Extra @{
         wsl_exit_code = $exitCode
         vram_mib = $VramMiB
@@ -415,6 +475,7 @@ if (-not $watchdogFired -and $externalWorkloadOk -and $validationPass) {
         external_workload_ok = [bool]$externalWorkloadOk
         external_demote_ok = [bool]$external_demote_ok
         host_disk_telemetry_ok = [bool]$host_disk_telemetry_ok
+        host_disk_telemetry_reason = $hostDiskAudit.Reason
         diagnose_ok = [bool]$diagnoseOk
         demote_total = $demoteTotal
         demote_reason = $demoteReason
@@ -435,6 +496,7 @@ if ($external_demote_ok) {
         external_workload_ok = [bool]$externalWorkloadOk
         external_demote_ok = [bool]$external_demote_ok
         host_disk_telemetry_ok = [bool]$host_disk_telemetry_ok
+        host_disk_telemetry_reason = $hostDiskAudit.Reason
         diagnose_ok = [bool]$diagnoseOk
         demote_total = $demoteTotal
         demote_reason = $demoteReason
@@ -455,6 +517,7 @@ Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "shared_campaign_faile
     external_workload_ok = [bool]$externalWorkloadOk
     external_demote_ok = [bool]$external_demote_ok
     host_disk_telemetry_ok = [bool]$host_disk_telemetry_ok
+    host_disk_telemetry_reason = $hostDiskAudit.Reason
     diagnose_ok = [bool]$diagnoseOk
     demote_total = $demoteTotal
     demote_reason = $demoteReason

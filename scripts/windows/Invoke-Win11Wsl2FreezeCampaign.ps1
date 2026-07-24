@@ -247,7 +247,7 @@ export RAMSHARED_FORCE_ISOLATED_LAB=1
 } -ArgumentList $GuestRepo, $probe.distro
 $guestResult | Set-Content -Encoding UTF8 (Join-Path $artifactDir "guest-campaign.out")
 
-if ($guestResult -match 'WSL2_FREEZE_CAMPAIGN_VALIDATION=PASS') {
+if ($guestResult -match '(?m)^WSL2_FREEZE_CAMPAIGN_VALIDATION=PASS(?:\s|$)') {
     Write-Summary -Dir $artifactDir -Status "PASS" -Reason "validated_isolated_guest_campaign" -Extra @{
         distro = $probe.distro
     }

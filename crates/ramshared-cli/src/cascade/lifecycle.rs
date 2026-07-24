@@ -4,6 +4,8 @@
 
 use std::env;
 
+use super::{is_nbd_device_path, is_ublk_device_path, is_zram_device_path};
+
 /// Default active-use threshold (KiB). Residual nbd under this still counts as Armed.
 pub const DEFAULT_ACTIVE_KIB: u64 = 1024;
 
@@ -179,10 +181,9 @@ pub fn tiers_from_swap_names(
     let mut disk = TierSample::default();
 
     for (name, size, used, prio) in entries {
-        let low = name.to_ascii_lowercase();
-        if low.contains("zram") {
+        if is_zram_device_path(name) {
             merge_tier(&mut zram, *size, *used, *prio);
-        } else if low.contains("nbd") || low.contains("ublk") {
+        } else if is_nbd_device_path(name) || is_ublk_device_path(name) {
             merge_tier(&mut vram, *size, *used, *prio);
         } else {
             merge_tier(&mut disk, *size, *used, *prio);
