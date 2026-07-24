@@ -242,15 +242,16 @@ mod windows_svc {
         thread::spawn(move || {
             let path = stop_request_path();
             loop {
-                if path.exists() {
-                    let _ = std::fs::remove_file(&path);
-                    stop_c.store(true, Ordering::SeqCst);
-                    // Unbuffered diagnostic: redirected stderr can lose last lines on kill.
-                    diag_line("stop.request observed; AtomicBool=true");
-                    while stop_c.load(Ordering::Acquire) {
-                        thread::sleep(Duration::from_millis(50));
+                if path.is_file() {
+                    if std::fs::remove_file(&path).is_ok() {
+                        stop_c.store(true, Ordering::SeqCst);
+                        // Unbuffered diagnostic: redirected stderr can lose last lines on kill.
+                        diag_line("stop.request observed and removed; AtomicBool=true");
+                        while stop_c.load(Ordering::Acquire) {
+                            thread::sleep(Duration::from_millis(50));
+                        }
+                        diag_line("stop flag cleared (resume Online or process exit)");
                     }
-                    diag_line("stop flag cleared (resume Online or process exit)");
                 }
                 thread::sleep(Duration::from_millis(200));
             }
