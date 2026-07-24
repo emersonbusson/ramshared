@@ -385,7 +385,7 @@ fn swapoff_all(paths: &[String], entries: &[SwapEntry]) -> Vec<(String, String)>
             // Ghost with used>0 cannot be recovered without reboot — report loudly.
             let p_canon = canonicalize_swap_path(p);
             if let Some(msg) = ghost_used_blocks_swapoff(entries, p) {
-                fails.lock().unwrap().push((p.clone(), msg));
+                fails.lock().unwrap_or_else(|e| e.into_inner()).push((p.clone(), msg));
                 continue;
             }
 
@@ -407,12 +407,12 @@ fn swapoff_all(paths: &[String], entries: &[SwapEntry]) -> Vec<(String, String)>
                                     && e.used_kb > 0
                             });
                             if still {
-                                fails_ref.lock().unwrap().push((p_clone, msg));
+                                fails_ref.lock().unwrap_or_else(|e| e.into_inner()).push((p_clone, msg));
                             } else {
                                 eprintln!("[down] swapoff skip (ausente): {p_canon}");
                             }
                         } else {
-                            fails_ref.lock().unwrap().push((p_clone, msg));
+                            fails_ref.lock().unwrap_or_else(|e| e.into_inner()).push((p_clone, msg));
                         }
                     }
                 }
@@ -425,7 +425,7 @@ fn swapoff_all(paths: &[String], entries: &[SwapEntry]) -> Vec<(String, String)>
             _s.spawn(task);
         }
     });
-    fails.into_inner().unwrap()
+    fails.into_inner().unwrap_or_else(|e| e.into_inner())
 }
 
 /// True if daemon process may be stopped (no active block VRAM swap).
