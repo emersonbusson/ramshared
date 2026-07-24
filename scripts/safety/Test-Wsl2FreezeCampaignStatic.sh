@@ -41,6 +41,10 @@ required=(
   "ACTION_CLEANUP_GRACE_SEC"
   "watchdog_deadline"
   "action_cleanup_timeout"
+  "RAMSHARED_PRESSURE_ALLOC_GIB"
+  "RAMSHARED_PRESSURE_MEM_MAX"
+  "--alloc-gib"
+  "--mem-max"
 )
 
 src="$(cat "$SCRIPT")"
