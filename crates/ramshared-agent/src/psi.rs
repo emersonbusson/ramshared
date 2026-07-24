@@ -90,11 +90,17 @@ pub fn parse_memcg_swap(content: &str) -> Option<u64> {
 fn read_memcg_swap_impl(cgroup_path: &str, sysfs_base: &str) -> Option<u64> {
     let cg = std::fs::read_to_string(cgroup_path).ok()?;
     let path = cg.lines().find_map(|l| l.strip_prefix("0::"))?; // cgroup v2: single line `0::/<path>`
-    let file = format!(
-        "{}{}/memory.swap.current",
-        sysfs_base,
-        path.trim().trim_end_matches('/')
-    );
+
+    let mut file = std::path::PathBuf::from(sysfs_base);
+    for component in std::path::Path::new(path.trim()).components() {
+        match component {
+            std::path::Component::Normal(c) => file.push(c),
+            std::path::Component::RootDir => {} // Allow leading slash
+            _ => return None,                   // Reject traversal (.., .) and others
+        }
+    }
+    file.push("memory.swap.current");
+
     parse_memcg_swap(&std::fs::read_to_string(file).ok()?)
 }
 
@@ -342,6 +348,17 @@ mod tests {
         let cgroup_content = "1:name=systemd:/\n";
         let cgroup_path = write_temp_file(cgroup_content);
 
+        assert!(read_memcg_swap_impl(&cgroup_path, "/sys/fs/cgroup").is_none());
+
+        std::fs::remove_file(cgroup_path).unwrap();
+    }
+
+    #[test]
+    fn read_memcg_swap_impl_path_traversal() {
+        let cgroup_content = "0::/../../etc/shadow\n";
+        let cgroup_path = write_temp_file(cgroup_content);
+
+        // Path traversal should be rejected and return None
         assert!(read_memcg_swap_impl(&cgroup_path, "/sys/fs/cgroup").is_none());
 
         std::fs::remove_file(cgroup_path).unwrap();
