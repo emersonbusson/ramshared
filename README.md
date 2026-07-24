@@ -13,7 +13,7 @@ signals.
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.png)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.7.3"><img alt="Release v0.7.3" src="https://img.shields.io/badge/release-v0.7.3-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.7.4"><img alt="Release v0.7.4" src="https://img.shields.io/badge/release-v0.7.4-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux and WSL2 product path" src="https://img.shields.io/badge/product-Linux%20%7C%20WSL2-2563eb?style=flat-square">
   <img alt="Windows driver beta" src="https://img.shields.io/badge/Windows%20driver-supervised%20beta-d97706?style=flat-square">
@@ -21,7 +21,7 @@ signals.
 
 ## Current Status
 
-Release: **v0.7.3**, published on 2026-07-24.
+Release: **v0.7.4**, published on 2026-07-24.
 
 | Surface | Status | What that means |
 | --- | --- | --- |
@@ -171,8 +171,8 @@ scripts, systemd templates, documentation, and `SHA256SUMS`. Build caches,
 credentials, VM-local notes, and Windows driver artifacts are excluded. See
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-The official v0.7.3 Linux bundle and its detached checksum are available on
-the [v0.7.3 release page](https://github.com/emersonbusson/ramshared/releases/tag/v0.7.3).
+The official v0.7.4 Linux bundle and its detached checksum are available on
+the [v0.7.4 release page](https://github.com/emersonbusson/ramshared/releases/tag/v0.7.4).
 
 ## Windows Driver Beta
 
