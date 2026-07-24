@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.7.5](https://github.com/emersonbusson/ramshared/compare/v0.7.4...v0.7.5) (2026-07-24)
+
+
+### Bug Fixes
+
+* **safety:** enumerate Windows telemetry volumes ([9c9cc9c](https://github.com/emersonbusson/ramshared/commit/9c9cc9c89750988a5582ef738e53fbc7bb00e886))
+* **safety:** keep pressure controller alive ([a8f12fc](https://github.com/emersonbusson/ramshared/commit/a8f12fc0e01b05c86f07f4e271c309453d6f0aa9))
+* **safety:** preserve teardown after WSL watchdog ([26b4b9c](https://github.com/emersonbusson/ramshared/commit/26b4b9cdcdd589e91fcbec02f3dc58f6605c9c19))
+* **safety:** preserve WSL watchdog teardown ([288a5fc](https://github.com/emersonbusson/ramshared/commit/288a5fc2569091ff7297490d26f6194cf2eba516))
+
+
+### Documentation
+
+* align README with v0.7.4 release ([6f9aaad](https://github.com/emersonbusson/ramshared/commit/6f9aaadd7d421bf226b5a4604482bdd1a873156b))
+* align README with v0.7.4 release ([d56c482](https://github.com/emersonbusson/ramshared/commit/d56c482513e5ac29cdbe8c4d945032a32ce072fe))
+* record v0.7.4 real host smoke ([6c84a00](https://github.com/emersonbusson/ramshared/commit/6c84a00ce21ba08655c267941a9130ca53f0e752))
+* record WSL watchdog recovery evidence ([b65a7d2](https://github.com/emersonbusson/ramshared/commit/b65a7d2baf2309d4f29abd86751cb555b2290e6b))
+* satisfy validation entry schema ([9062e59](https://github.com/emersonbusson/ramshared/commit/9062e59fe62102023335048c5bff54a1295def4f))
+
 ## [0.7.4](https://github.com/emersonbusson/ramshared/compare/v0.7.3...v0.7.4) (2026-07-24)
 
 
