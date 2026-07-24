@@ -2676,3 +2676,24 @@ cargo audit
 fixed with fail-closed behavior and named regressions. The Linux/WSL2 NBD MVP
 claim remains bounded to the previously validated surface; Windows public
 distribution and ublk product transport remain BLOCKED/DEFERRED respectively.
+
+## 2026-07-24 — v0.7.4 real-host smoke and Windows cleanup
+
+**Environment:** exact tag `v0.7.4`; bounded WSL2 smoke on the real host with
+`ramshared up --vram 128 --zram 128`, followed by graceful `down`.
+
+**Measured data:**
+- Online state: daemon alive, VRAM/zram present, no ghost devices, expected
+  ordering, and GPU free memory approximately 4729 MiB: **PASS**.
+- Final state: daemon stopped, no VRAM/zram/ghost devices, disk swap only, and
+  GPU free memory approximately 4901 MiB: **PASS**.
+- Windows cleanup: the test-signed `ramshared` service, ROOT\RAMSHARED device,
+  and `oem25.inf` package were removed; `testsigning` and `nointegritychecks`
+  were disabled; no RAMSHARE LUN or pagefile remained: **PASS**.
+- Firmware Secure Boot remains physically disabled (`UEFISecureBootEnabled=0`)
+  and requires a manual UEFI enable/reboot before any anti-cheat compatibility
+  claim. The Windows driver is therefore not an official distribution yet.
+
+**Verdict:** v0.7.4 WSL2 bounded smoke is reproducible on the real host. Windows
+driver use remains limited to a separately isolated, test-signed development
+environment until Microsoft signing and Secure Boot verification are complete.
