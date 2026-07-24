@@ -41,6 +41,9 @@ RUN_SHARED=0
 ARTIFACT_DIR=""
 ROUNDS=2
 WATCHDOG_SEC="${RAMSHARED_FREEZE_WATCHDOG_SEC:-120}"
+ACTION_CLEANUP_GRACE_SEC="${RAMSHARED_ACTION_CLEANUP_GRACE_SEC:-45}"
+PRESSURE_ALLOC_GIB="${RAMSHARED_PRESSURE_ALLOC_GIB:-6.5}"
+PRESSURE_MEM_MAX="${RAMSHARED_PRESSURE_MEM_MAX:-1200M}"
 RECENT_DMESG_SEC="${RAMSHARED_FREEZE_RECENT_DMESG_SEC:-1800}"
 
 while [[ $# -gt 0 ]]; do
@@ -65,6 +68,12 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ ! "$WATCHDOG_SEC" =~ ^[1-9][0-9]*$ ||
+      ! "$ACTION_CLEANUP_GRACE_SEC" =~ ^[1-9][0-9]*$ ]]; then
+  echo "watchdog and cleanup grace must be positive integers" >&2
+  exit 2
+fi
 
 ts="$(date -Iseconds 2>/dev/null || date)"
 hostname_s="$(hostname 2>/dev/null || echo unknown)"
@@ -332,6 +341,7 @@ if [[ "$RUN_ISOLATED" -eq 1 || "$RUN_SHARED" -eq 1 ]]; then
   pressure="$ROOT/scripts/safety/cascade-pressure-probe.sh"
   sanitize="$ROOT/scripts/safety/swap-sanitize.sh"
   round=1
+  campaign_failed=0
   while [[ "$round" -le "$ROUNDS" ]]; do
     rdir="$ARTIFACT_DIR/round-$round"
     mkdir -p "$rdir"
@@ -350,23 +360,26 @@ if [[ "$RUN_ISOLATED" -eq 1 || "$RUN_SHARED" -eq 1 ]]; then
       action_pid=""
       if [[ "$(id -u)" -eq 0 ]]; then
         bash "$pressure" --max-sec "$WATCHDOG_SEC" \
+          --alloc-gib "$PRESSURE_ALLOC_GIB" \
+          --mem-max "$PRESSURE_MEM_MAX" \
           --integrity-result "$rdir/integrity-result.json" &
         action_pid=$!
       elif sudo -n true 2>/dev/null; then
         sudo -n bash "$pressure" --max-sec "$WATCHDOG_SEC" \
+          --alloc-gib "$PRESSURE_ALLOC_GIB" \
+          --mem-max "$PRESSURE_MEM_MAX" \
           --integrity-result "$rdir/integrity-result.json" &
         action_pid=$!
       else
         echo "SKIP pressure: need root/sudo -n for cgroup probe" >"$rdir/action-skip.txt"
       fi
       if [[ -n "$action_pid" ]]; then
+        watchdog_deadline=$((WATCHDOG_SEC + ACTION_CLEANUP_GRACE_SEC))
         (
-          sleep "$WATCHDOG_SEC"
+          sleep "$watchdog_deadline"
           if kill -0 "$action_pid" 2>/dev/null; then
-            echo "WATCHDOG fired after ${WATCHDOG_SEC}s" >"$rdir/watchdog.txt"
+            echo "action_cleanup_timeout after ${watchdog_deadline}s" >"$rdir/watchdog.txt"
             kill -TERM "$action_pid" 2>/dev/null || true
-            sleep 2
-            kill -KILL "$action_pid" 2>/dev/null || true
           fi
         ) &
         wd_pid=$!
@@ -387,8 +400,18 @@ if [[ "$RUN_ISOLATED" -eq 1 || "$RUN_SHARED" -eq 1 ]]; then
     fi
     # Cleanup marker: pressure probe should self-release cgroup; re-check swaps.
     cat /proc/swaps >"$rdir/swaps-after-cleanup.txt" 2>/dev/null || true
+    if [[ "$action_rc" -ne 0 || -f "$rdir/watchdog.txt" ]]; then
+      campaign_failed=1
+      break
+    fi
     round=$((round + 1))
   done
+
+  if [[ "$campaign_failed" -ne 0 ]]; then
+    write_artifact "$ARTIFACT_DIR" "campaign-failed.txt" \
+      "round=$round action_rc=$action_rc cleanup_grace_sec=$ACTION_CLEANUP_GRACE_SEC"
+    exit 1
+  fi
 
   if [[ "$RUN_SHARED" -eq 1 ]]; then
     write_artifact "$ARTIFACT_DIR" "shared-daily-host-complete.txt" \

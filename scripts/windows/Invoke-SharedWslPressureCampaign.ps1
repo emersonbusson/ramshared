@@ -20,6 +20,8 @@ param(
     [int]$Rounds = 2,
     [int]$WatchdogSec = 120,
     [int]$OuterTimeoutSec = 420,
+    [ValidateRange(5, 120)][int]$ActionCleanupGraceSec = 45,
+    [ValidateRange(0.0, 16.0)][double]$PressureAllocGiB = 0,
     [switch]$PreallocateVram,
     [ValidateRange(0, 4096)][int]$ExternalWorkloadMiB = 0,
     [ValidateRange(1, 3600)][int]$ExternalWorkloadHoldSec = 60,
@@ -29,6 +31,18 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($PressureAllocGiB -eq 0) {
+    # Allocate enough to exceed the 1200 MiB cgroup resident ceiling and fill
+    # the configured zram/VRAM tiers, without the old fixed 6.5 GiB overdrive.
+    $PressureAllocGiB = [Math]::Round(
+        [Math]::Max(1.5, ($VramMiB + $ZramMiB + 1712) / 1024.0), 2
+    )
+}
+$minimumOuterTimeoutSec = (($WatchdogSec + $ActionCleanupGraceSec) * $Rounds) + 60
+if ($OuterTimeoutSec -lt $minimumOuterTimeoutSec) {
+    throw "OuterTimeoutSec must be at least $minimumOuterTimeoutSec seconds for the configured rounds and cleanup grace."
+}
 
 if ($ArtifactRoot -notmatch '^[A-Za-z]:\\') {
     throw "ArtifactRoot must be an absolute Windows path such as C:\ramshared\artifacts. Quote backslashes when invoking from WSL."
@@ -283,6 +297,9 @@ export RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_WSL_TERMINATION
 export RAMSHARED_WINDOWS_WATCHDOG_ARMED=1
 export RAMSHARED_ALLOW_RECENT_OOM_MARKER=1
 export RAMSHARED_FREEZE_WATCHDOG_SEC="$WatchdogSec"
+export RAMSHARED_ACTION_CLEANUP_GRACE_SEC="$ActionCleanupGraceSec"
+export RAMSHARED_PRESSURE_ALLOC_GIB="$PressureAllocGiB"
+export RAMSHARED_PRESSURE_MEM_MAX=1200M
 ./scripts/safety/wsl2-freeze-campaign.sh \
   --approve-shared-daily-host \
   --run-shared-daily-host \
