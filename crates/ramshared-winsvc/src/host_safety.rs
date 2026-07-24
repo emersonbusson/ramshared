@@ -14,13 +14,39 @@ pub fn merge_pagefile_sources(
     let configured = configured.map_err(|e| format!("configured pagefiles: {e}"))?;
     let active = active.map_err(|e| format!("active pagefiles: {e}"))?;
     let mut unique = BTreeMap::new();
-    for path in configured.into_iter().chain(active) {
-        let path = path.trim().to_string();
-        if path.is_empty() {
+
+    for path in configured {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
             return Err("pagefile source returned an empty path".into());
         }
-        unique.insert(path.to_ascii_uppercase(), path);
+        let is_trimmed = trimmed.len() == path.len();
+        unique.insert(
+            trimmed.to_ascii_uppercase(),
+            if is_trimmed {
+                path
+            } else {
+                trimmed.to_string()
+            },
+        );
     }
+
+    for path in active {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            return Err("pagefile source returned an empty path".into());
+        }
+        let is_trimmed = trimmed.len() == path.len();
+        unique.insert(
+            trimmed.to_ascii_uppercase(),
+            if is_trimmed {
+                path
+            } else {
+                trimmed.to_string()
+            },
+        );
+    }
+
     Ok(unique.into_values().collect())
 }
 
