@@ -352,10 +352,17 @@ pub fn down() -> Result<(), CascadeError> {
                 .map(|e| e.canonical_path()),
         )
         .collect();
+    let mut handles = Vec::new();
     for dev in &nbd_targets {
         if is_allowlisted_managed_path(dev) && dev.contains("nbd") {
-            let _ = sh("nbd-client", &["-d", dev]);
+            let dev_clone = dev.clone();
+            handles.push(std::thread::spawn(move || {
+                let _ = sh("nbd-client", &["-d", &dev_clone]);
+            }));
         }
+    }
+    for h in handles {
+        let _ = h.join();
     }
 
     // 4) Daemon stop — only if no block VRAM swap remains
