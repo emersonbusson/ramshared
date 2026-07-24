@@ -1,6 +1,7 @@
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use ramshared_agent::swap::nbd_args;
 use ramshared_broker::protocol::NbdEndpoint;
+use std::hint::black_box;
 
 pub fn bench_nbd_args(c: &mut Criterion) {
     let endpoint_unix = NbdEndpoint::Unix {
