@@ -2700,3 +2700,39 @@ the Windows test-signing state.
 **Verdict:** ✅ v0.7.4 WSL2 bounded smoke is reproducible on the real host. Windows
 driver use remains limited to a separately isolated, test-signed development
 environment until Microsoft signing and Secure Boot verification are complete.
+
+## 2026-07-24 16:02 — WSL watchdog teardown regression and three-round proof
+
+**What:** Reproduced the shared-host WSL pressure hang, corrected watchdog
+ownership and bounded pressure sizing, and repeated the corrected campaign for
+three before/action/after rounds.
+
+**Commands:**
+```text
+scripts/safety/Test-Wsl2FreezeCampaignStatic.sh
+scripts/windows/Test-SharedWslPressureCampaignStatic.ps1
+scripts/windows/Invoke-SharedWslPressureCampaign.ps1 \
+  -ApproveSharedDailyHost -VramMiB 512 -ZramMiB 128 -Rounds 3 \
+  -WatchdogSec 45 -ActionCleanupGraceSec 90 -OuterTimeoutSec 540
+```
+
+**Measured data:**
+- Reproducer `shared-wsl-pressure-20260724-044917`: round 2 reached
+  `action_rc=143`; the old equal-deadline watchdog killed the controller while
+  its integrity worker was in D-state, leaving NBD/zram active until supervised
+  WSL recovery: **FAIL reproduced**.
+- First corrected probe `shared-wsl-pressure-20260724-155548`: teardown reached
+  a clean terminal state without WSL termination, but the intentionally short
+  30 s cleanup grace produced an honest `PARTIAL`: **expected boundary**.
+- Final campaign `shared-wsl-pressure-20260724-155908`: rounds 1/2/3 each
+  report `action_rc=0`, 1280 MiB allocated, 20 chunks verified, identical
+  before/after SHA-256, no watchdog marker, and artifact validation PASS.
+- Final health: daemon dead, no NBD/zram/ghost, only `/dev/sdc` disk swap;
+  Windows volume and sample identities for `C:` and `I:` revalidated: **PASS**.
+- Three repeated Linux and Windows static watchdog gates: **6/6 PASS**.
+
+**Verdict:** ✅ The reproduced hang was a harness teardown race, not silent data
+corruption. The watchdog now preserves controller ownership, gives integrity
+cleanup a separate grace interval, scales pressure to configured tiers, stops
+after a failed round, and leaves Windows as the only forceful WSL recovery
+owner. Three corrected live rounds completed with clean teardown.
