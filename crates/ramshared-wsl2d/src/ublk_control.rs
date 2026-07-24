@@ -197,15 +197,17 @@ mod tests {
 
     #[test]
     fn device_report_from_info() {
-        let mut info = ublk::CtrlDevInfo::default();
-        info.dev_id = 42;
-        info.nr_hw_queues = 2;
-        info.queue_depth = 128;
-        info.state = 1;
-        info.max_io_buf_bytes = 8192;
-        info.flags = 0xdeadbeef;
-        info.owner_uid = 1000;
-        info.owner_gid = 1001;
+        let info = ublk::CtrlDevInfo {
+            dev_id: 42,
+            nr_hw_queues: 2,
+            queue_depth: 128,
+            state: 1,
+            max_io_buf_bytes: 8192,
+            flags: 0xdeadbeef,
+            owner_uid: 1000,
+            owner_gid: 1001,
+            ..Default::default()
+        };
 
         let report = DeviceReport::from(info);
         assert_eq!(report.dev_id, 42);
@@ -220,21 +222,22 @@ mod tests {
 
     #[test]
     fn encode_decode_roundtrip() {
-        let mut info = ublk::CtrlDevInfo::default();
-        info.dev_id = 42;
-        info.nr_hw_queues = 2;
-        info.queue_depth = 128;
-        info.state = 1;
-        info.pad0 = 2;
-        info.max_io_buf_bytes = 8192;
-        info.ublksrv_pid = 9999;
-        info.pad1 = 3;
-        info.flags = 0xdeadbeef12345678;
-        info.ublksrv_flags = 0x87654321feadc0de;
-        info.owner_uid = 1000;
-        info.owner_gid = 1001;
-        info.reserved1 = 0x1111111111111111;
-        info.reserved2 = 0x2222222222222222;
+        let info = ublk::CtrlDevInfo {
+            dev_id: 42,
+            nr_hw_queues: 2,
+            queue_depth: 128,
+            state: 1,
+            pad0: 2,
+            max_io_buf_bytes: 8192,
+            ublksrv_pid: 9999,
+            pad1: 3,
+            flags: 0xdeadbeef12345678,
+            ublksrv_flags: 0x87654321feadc0de,
+            owner_uid: 1000,
+            owner_gid: 1001,
+            reserved1: 0x1111111111111111,
+            reserved2: 0x2222222222222222,
+        };
 
         let bytes = encode_dev_info(info);
         let decoded = decode_dev_info(bytes);
