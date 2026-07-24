@@ -18,11 +18,22 @@ pub(crate) fn arm_forensics() {
     );
     for path in ARMED_MARKER_CANDIDATES {
         if let Some(parent) = Path::new(path).parent() {
+            if fs::symlink_metadata(parent).is_ok_and(|meta| meta.is_symlink()) {
+                continue;
+            }
             let _ = fs::create_dir_all(parent);
         }
-        if fs::write(path, &payload).is_ok() {
-            eprintln!("[up] forensics armed: {path}");
-            return;
+        let _ = fs::remove_file(path);
+        #[allow(clippy::collapsible_if)]
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            if std::io::Write::write_all(&mut f, payload.as_bytes()).is_ok() {
+                eprintln!("[up] forensics armed: {path}");
+                return;
+            }
         }
     }
 }
