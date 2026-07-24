@@ -2677,7 +2677,10 @@ fixed with fail-closed behavior and named regressions. The Linux/WSL2 NBD MVP
 claim remains bounded to the previously validated surface; Windows public
 distribution and ublk product transport remain BLOCKED/DEFERRED respectively.
 
-## 2026-07-24 — v0.7.4 real-host smoke and Windows cleanup
+## 2026-07-24 04:30 — v0.7.4 real-host smoke and Windows cleanup
+
+**What:** Real-host smoke validation for the stable v0.7.4 tag and cleanup of
+the Windows test-signing state.
 
 **Environment:** exact tag `v0.7.4`; bounded WSL2 smoke on the real host with
 `ramshared up --vram 128 --zram 128`, followed by graceful `down`.
@@ -2694,6 +2697,6 @@ distribution and ublk product transport remain BLOCKED/DEFERRED respectively.
   and requires a manual UEFI enable/reboot before any anti-cheat compatibility
   claim. The Windows driver is therefore not an official distribution yet.
 
-**Verdict:** v0.7.4 WSL2 bounded smoke is reproducible on the real host. Windows
+**Verdict:** ✅ v0.7.4 WSL2 bounded smoke is reproducible on the real host. Windows
 driver use remains limited to a separately isolated, test-signed development
 environment until Microsoft signing and Secure Boot verification are complete.
