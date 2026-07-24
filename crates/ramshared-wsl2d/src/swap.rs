@@ -51,3 +51,35 @@ pub fn spawn_swapoff(dev: &str) -> Receiver<bool> {
     });
     rx
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    #[test]
+    fn test_swapoff_bin() {
+        let bin = swapoff_bin();
+        assert!(bin.ends_with("swapoff"));
+    }
+
+    #[test]
+    fn test_swapon_bin() {
+        let bin = swapon_bin();
+        assert!(bin.ends_with("swapon"));
+    }
+
+    #[test]
+    fn test_activate_swap_invalid_dev() {
+        assert!(!activate_swap(
+            "/dev/invalid_device_that_does_not_exist",
+            10
+        ));
+    }
+
+    #[test]
+    fn test_spawn_swapoff_invalid_dev() {
+        let rx = spawn_swapoff("/dev/invalid_device_that_does_not_exist");
+        assert!(!rx.recv().unwrap());
+    }
+}

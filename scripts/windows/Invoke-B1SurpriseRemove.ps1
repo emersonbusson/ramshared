@@ -101,14 +101,10 @@ Start-Sleep $PostWaitSec
 
 $dumpA = Dump-Name
 L "DUMP_AFTER=$dumpA"
-$newDump = ($dumpA -ne "none") -and ($dumpA -ne (Dump-Name)) # fix below
-# re-get before
-$dumpBefore = (Get-Content (Join-Path $ArtifactDir "dump-before.txt") -EA SilentlyContinue)
-if (-not $dumpBefore) { $dumpBefore = $null }
 
 # Store dump before properly at start
 # (re-read from first line we logged is fragile — capture now from variable we should have saved)
-# Fix: we logged DUMP_BEFORE — parse from that
+# We logged DUMP_BEFORE — parse from that
 $beforeLine = ($log | Where-Object { $_ -like "DUMP_BEFORE=*" } | Select-Object -First 1)
 $beforeName = if ($beforeLine) { $beforeLine.Substring("DUMP_BEFORE=".Length) } else { "none" }
 $newDump = ($dumpA -ne $beforeName) -and ($dumpA -ne "none")

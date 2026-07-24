@@ -2,10 +2,11 @@
 
 ## Status
 
-**PARTIAL.** The 64 MiB Windows StorPort campaign is only a low-risk storage smoke. A
-3 GiB Windows storage-only LUN passed on 2026-07-18, and the Windows 3 GiB plus
-1 GiB external CUDA workload subcase passed on the same host after freeing desktop
-VRAM and preserving a 1 GiB effective floor. WSL2 and split-owner reclaim remain open.
+**DONE on the calibrated RTX 2060 surface.** The Windows 3 GiB, WSL2 1 GiB,
+WSL2 4 GiB, and calibrated 1 GiB Windows + 3 GiB WSL2 + 1 GiB staged external
+pressure rows have passed integrity, reclaim, teardown, and clean-terminal gates.
+The 64 MiB Windows StorPort campaign remains a low-risk storage smoke and is not
+used as GiB-scale proof.
 
 ## Goal
 
@@ -88,10 +89,23 @@ pressure.
   post-reclaim reserve as simultaneously resident. The calibrated preflight
   requires 4096 MiB of owners plus a 256 MiB setup margin, then stages 1024 MiB
   of external pressure under the Windows watchdog.
+- 2026-07-24 `C:\ramshared\artifacts\shared-wsl-pressure-20260723-232558`:
+  the WSL2 1 GiB row passed two integrity rounds, DEMOTE, freeze validation,
+  and clean terminal state.
+- 2026-07-24 `C:\ramshared\artifacts\shared-wsl-pressure-20260724-031615`:
+  the WSL2 4 GiB row passed with preallocation, 4 GiB external pressure,
+  `matrix_row_close=true`, two DEMOTEs, two integrity rounds, and clean
+  terminal state.
+- 2026-07-24 `C:\ramshared\artifacts\vram-reclaim-matrix-20260724-032344`:
+  the calibrated split row passed. Its correlated StorPort artifact reports
+  three checksum matches, graceful teardown, lease release, and no residual
+  disk, Win32, or PnP identity. Its WSL2 artifact reports integrity, DEMOTE,
+  freeze validation, and clean terminal state.
 
-## Open Questions
+## Deferred Questions
 
 - Whether physical Windows large-LUN testing should format a 3 GiB VRAM-backed volume, or use
   unformatted block I/O only. Formatting is acceptable only with exact RAMSHARE identity gates.
-- Whether split-consumer proof runs on one physical host or across `win11-drill` plus WSL2 with
-  GPU-PV limitations documented.
+- Whether to repeat the split-consumer proof across additional GPU and Windows
+  compatibility surfaces. This does not weaken closure on the calibrated RTX
+  2060 surface.

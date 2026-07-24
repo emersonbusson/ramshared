@@ -1,27 +1,27 @@
 #!/usr/bin/env bash
-# postmortem.sh — Coletor forense "caixa-preta" do RamShared no WSL2.
+# postmortem.sh — "Black-box" forensic collector for RamShared in WSL2.
 #
 # Gathers into a single dated report in DURABLE Windows storage
 # (/mnt/c/wsl-forensics/, survives VM death) all the evidence
 # we need to debug a freeze — exactly the manual investigation that was done
 # for the 2026-07-03 hangs, now automated:
-#   - journalctl do boot alvo (default: boot anterior, -1) + sinais de crash
+#   - target boot journalctl (default: previous boot, -1) + crash signatures
 #     (kernel BUG / Oops / hung_task / OOM / D-state)
-#   - deteccao de morte-abrupta (no WSL2 quase todo fim e' abrupto; o sinal
-#     confiavel de CRASH e' a assinatura de kernel BUG/Oops)
-#   - Windows Event Log via powershell.exe: Kernel-Power 41/6008 (host travou?),
-#     nvlddmkm/Display/TDR 4101/4102 (driver GPU crashou?), Hyper-V-VmSwitch
-#     (VM recriada = restart?), erros dxgkrnl
-#   - dmesg atual, estado de GPU/mem/swap, crash dumps do WSL se houver
+#   - abrupt death detection (in WSL2 almost every end is abrupt; the reliable
+#     CRASH signal is the kernel BUG/Oops signature)
+#   - Windows Event Log via powershell.exe: Kernel-Power 41/6008 (host freeze?),
+#     nvlddmkm/Display/TDR 4101/4102 (GPU driver crash?), Hyper-V-VmSwitch
+#     (VM recreated = restart?), dxgkrnl errors
+#   - current dmesg, GPU/mem/swap state, WSL crash dumps if any
 #
-# Uso:
-#   postmortem.sh [BOOT_INDEX]   # BOOT_INDEX default = -1 (boot anterior)
-#   postmortem.sh --auto         # so coleta se o boot -1 tiver assinatura de crash
-#                                #  (ou marcador "armed" de um start arriscado);
-#                                #  idempotente (nao recoleta o mesmo boot)
+# Usage:
+#   postmortem.sh [BOOT_INDEX]   # BOOT_INDEX default = -1 (previous boot)
+#   postmortem.sh --auto         # only collects if boot -1 has crash signature
+#                                #  (or "armed" marker of a risky start);
+#                                #  idempotent (doesn't re-collect same boot)
 #
-# Nao causa efeito colateral perigoso: so LE logs e escreve o relatorio. Seguro
-# rodar a qualquer momento, no host vivo, sem tocar GPU/ublk/swap.
+# No dangerous side effects: only READS logs and writes report. Safe to run
+# at any time on live host without touching GPU/ublk/swap.
 set -uo pipefail
 NVSMI="$(command -v nvidia-smi 2>/dev/null || true)"; [ -x "$NVSMI" ] || NVSMI="/usr/lib/wsl/lib/nvidia-smi"
 

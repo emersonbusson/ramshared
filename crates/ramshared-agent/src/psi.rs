@@ -90,11 +90,15 @@ pub fn parse_memcg_swap(content: &str) -> Option<u64> {
 fn read_memcg_swap_impl(cgroup_path: &str, sysfs_base: &str) -> Option<u64> {
     let cg = std::fs::read_to_string(cgroup_path).ok()?;
     let path = cg.lines().find_map(|l| l.strip_prefix("0::"))?; // cgroup v2: single line `0::/<path>`
-    let file = format!(
-        "{}{}/memory.swap.current",
-        sysfs_base,
-        path.trim().trim_end_matches('/')
-    );
+    let mut file = std::path::PathBuf::from(sysfs_base);
+    for component in std::path::Path::new(path.trim()).components() {
+        match component {
+            std::path::Component::RootDir => {}
+            std::path::Component::Normal(name) => file.push(name),
+            _ => return None,
+        }
+    }
+    file.push("memory.swap.current");
     parse_memcg_swap(&std::fs::read_to_string(file).ok()?)
 }
 
@@ -260,13 +264,19 @@ mod tests {
 
     fn write_temp_file(content: &str) -> String {
         use std::env;
-        use std::fs;
+        use std::fs::OpenOptions;
+        use std::io::Write;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
         let path = env::temp_dir().join(format!("ramshared_test_{}_{}", std::process::id(), id));
-        fs::write(&path, content).unwrap();
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(content.as_bytes()).unwrap();
         path.to_string_lossy().to_string()
     }
 
@@ -345,6 +355,37 @@ mod tests {
         assert!(read_memcg_swap_impl(&cgroup_path, "/sys/fs/cgroup").is_none());
 
         std::fs::remove_file(cgroup_path).unwrap();
+    }
+
+    #[test]
+    fn read_memcg_swap_impl_rejects_parent_traversal() {
+        let cgroup_path = write_temp_file("0::/../../etc\n");
+
+        assert!(read_memcg_swap_impl(&cgroup_path, "/sys/fs/cgroup").is_none());
+
+        std::fs::remove_file(cgroup_path).unwrap();
+    }
+
+    #[test]
+    fn read_memcg_swap_impl_accepts_nested_normal_components() {
+        let cgroup_path = write_temp_file("0::/user.slice/session.scope\n");
+        let sysfs_base = std::env::temp_dir().join(format!(
+            "ramshared_cgroup_{}_{}",
+            std::process::id(),
+            std::sync::atomic::AtomicUsize::new(0)
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let nested = sysfs_base.join("user.slice/session.scope");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("memory.swap.current"), "8192\n").unwrap();
+
+        assert_eq!(
+            read_memcg_swap_impl(&cgroup_path, &sysfs_base.to_string_lossy()),
+            Some(8192)
+        );
+
+        std::fs::remove_file(cgroup_path).unwrap();
+        std::fs::remove_dir_all(sysfs_base).unwrap();
     }
 
     #[test]

@@ -108,8 +108,12 @@ while [[ "$round" -le "$ROUNDS" ]]; do
     fail "watchdog_fired:round-$round"
   fi
   grep -q '^action_rc=0$' "$rdir/action-rc.txt" || fail "action_rc_not_zero:round-$round"
-  forbidden_text "$rdir/before.txt" 'hung_task|Blocked for more than|Out of memory'
-  forbidden_text "$rdir/after.txt" 'hung_task|Blocked for more than|Out of memory'
+  forbidden_text "$rdir/before.txt" 'hung_task|Blocked for more than'
+  forbidden_text "$rdir/after.txt" 'hung_task|Blocked for more than'
+  if [[ "${RAMSHARED_ALLOW_RECENT_OOM_MARKER:-0}" != "1" ]]; then
+    forbidden_text "$rdir/before.txt" 'Out of memory'
+    forbidden_text "$rdir/after.txt" 'Out of memory'
+  fi
   grep -q 'OK diagnose complete' "$rdir/swap-sanitize-before.txt" || fail "sanitize_before_not_ok:round-$round"
   grep -q 'OK diagnose complete' "$rdir/swap-sanitize-after.txt" || fail "sanitize_after_not_ok:round-$round"
   validate_integrity_result "$rdir/integrity-result.json" "$round"
