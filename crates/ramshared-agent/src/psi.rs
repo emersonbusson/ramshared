@@ -90,6 +90,9 @@ pub fn parse_memcg_swap(content: &str) -> Option<u64> {
 fn read_memcg_swap_impl(cgroup_path: &str, sysfs_base: &str) -> Option<u64> {
     let cg = std::fs::read_to_string(cgroup_path).ok()?;
     let path = cg.lines().find_map(|l| l.strip_prefix("0::"))?; // cgroup v2: single line `0::/<path>`
+    if path.contains("..") {
+        return None;
+    }
     let file = format!(
         "{}{}/memory.swap.current",
         sysfs_base,
@@ -340,6 +343,16 @@ mod tests {
     #[test]
     fn read_memcg_swap_impl_missing_0_line() {
         let cgroup_content = "1:name=systemd:/\n";
+        let cgroup_path = write_temp_file(cgroup_content);
+
+        assert!(read_memcg_swap_impl(&cgroup_path, "/sys/fs/cgroup").is_none());
+
+        std::fs::remove_file(cgroup_path).unwrap();
+    }
+
+    #[test]
+    fn read_memcg_swap_impl_path_traversal() {
+        let cgroup_content = "0::/../../etc\n";
         let cgroup_path = write_temp_file(cgroup_content);
 
         assert!(read_memcg_swap_impl(&cgroup_path, "/sys/fs/cgroup").is_none());
