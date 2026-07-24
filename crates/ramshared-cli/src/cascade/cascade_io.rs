@@ -27,9 +27,20 @@ pub(crate) fn arm_forensics() {
     }
 }
 
+pub(crate) fn safe_remove_file(path: &str) {
+    let p = Path::new(path);
+    match fs::remove_file(p) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => {
+            eprintln!("[warn] falha ao remover arquivo {}: {}", path, e);
+        }
+    }
+}
+
 pub(crate) fn disarm_forensics() {
     for path in ARMED_MARKER_CANDIDATES {
-        let _ = fs::remove_file(path);
+        safe_remove_file(path);
     }
 }
 
@@ -45,7 +56,7 @@ pub(crate) fn stop_daemon_gracefully() {
     // Wait up to 10s for voluntary exit (allows VRAM zero()).
     for _ in 0..100 {
         if sh("pgrep", &["-x", "ramsharedd"]).is_err() {
-            let _ = fs::remove_file(PID_FILE);
+            safe_remove_file(PID_FILE);
             return;
         }
         sleep(Duration::from_millis(100));
@@ -61,7 +72,7 @@ pub(crate) fn stop_daemon_gracefully() {
     eprintln!("[down] daemon nao saiu em 10s; pkill -TERM (sem -9)");
     let _ = sh("pkill", &["-x", "ramsharedd"]);
     sleep(Duration::from_millis(500));
-    let _ = fs::remove_file(PID_FILE);
+    safe_remove_file(PID_FILE);
 }
 
 pub(crate) fn setup_zram(mb: u64, prio: i32) -> Result<String, CascadeError> {
@@ -169,7 +180,7 @@ fn check_safety_net(vram_mb: u64, force: bool, prios: &TierPriorities) -> Result
 }
 
 fn spawn_daemon(daemon_path: &str, vram_mb: u64, swap_dev: &str) -> Result<(), CascadeError> {
-    let _ = fs::remove_file(SOCK);
+    safe_remove_file(SOCK);
     let child = Command::new(daemon_path)
         .args([
             "--size",
@@ -361,10 +372,10 @@ pub fn down() -> Result<(), CascadeError> {
     // 4) Daemon stop — only if no block VRAM swap remains
     stop_daemon_gracefully();
 
-    let _ = fs::remove_file(SOCK);
-    let _ = fs::remove_file(ZRAM_DEV_FILE);
-    let _ = fs::remove_file(SWAP_DEV_FILE);
-    let _ = fs::remove_file(PID_FILE);
+    safe_remove_file(SOCK);
+    safe_remove_file(ZRAM_DEV_FILE);
+    safe_remove_file(SWAP_DEV_FILE);
+    safe_remove_file(PID_FILE);
     disarm_forensics();
     eprintln!("[down] cascata desmontada (swapoff-first, sem kill -9)");
     status(false)
