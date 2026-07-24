@@ -4,7 +4,7 @@
 //! descriptors by tag. Does not call `START_DEV`, does not create `/dev/ublkbN`, and does not touch
 //! swap. The `unsafe` of `mmap` is isolated in `ramshared-uring`.
 
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::path::Path;
@@ -51,9 +51,6 @@ pub fn read_io_desc(
 /// must remain open while the ring exists).
 pub struct FetchSession {
     ring: ramshared_uring::UblkFetchRing,
-    /// Char device `File`, kept open while the ring lives (drop guard).
-    #[allow(dead_code)]
-    char_dev: File,
 }
 
 impl FetchSession {
@@ -66,12 +63,12 @@ impl FetchSession {
     ) -> io::Result<Self> {
         let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
         let ring = ramshared_uring::UblkFetchRing::submit_fetch_all(
-            char_dev.as_raw_fd(),
+            char_dev.into(),
             queue_depth,
             buf_size,
         )?;
 
-        Ok(Self { ring, char_dev })
+        Ok(Self { ring })
     }
 
     /// Drains available CQEs (does not block).

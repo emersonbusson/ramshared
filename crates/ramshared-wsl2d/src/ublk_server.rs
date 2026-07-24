@@ -7,7 +7,6 @@
 
 use std::fs::OpenOptions;
 use std::io;
-use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -88,13 +87,9 @@ pub fn spawn_server(
     backend: RamBackend,
 ) -> io::Result<ServerHandle> {
     let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
-    let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
+    let server = ramshared_uring::UblkServer::new(char_dev.into(), queue_depth, buf_size)?;
 
-    let thread = thread::spawn(move || {
-        // Keeps the char device open while the loop uses the ring (dropped after).
-        let _char_dev = char_dev;
-        run_server_loop(server, backend)
-    });
+    let thread = thread::spawn(move || run_server_loop(server, backend));
 
     Ok(ServerHandle { thread })
 }
@@ -232,16 +227,14 @@ pub fn spawn_server_dt3<B: BlockBackend + Send + 'static>(
     backend: B,
 ) -> io::Result<ServerHandleDt3<B>> {
     let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
-    let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
+    let server = ramshared_uring::UblkServer::new(char_dev.into(), queue_depth, buf_size)?;
 
     let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(RING_CHAN_CAP);
     let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>();
     let worker = spawn_ublk_worker(backend, work_rx, reply_tx);
 
     let ring = thread::spawn(move || {
-        // The char device remains open while the ring lives; `work_tx` drops upon returning
-        // (terminates the worker).
-        let _char_dev = char_dev;
+        // `work_tx` drops upon returning (terminates the worker).
         run_ring_owner(server, queue_depth, buf_size, work_tx, reply_rx)
     });
 
@@ -407,7 +400,7 @@ pub fn spawn_server_dt3_vram(
     block_size: u32,
 ) -> io::Result<ServerHandleDt3Vram> {
     let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
-    let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
+    let server = ramshared_uring::UblkServer::new(char_dev.into(), queue_depth, buf_size)?;
 
     let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(RING_CHAN_CAP);
     let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>();
@@ -424,10 +417,8 @@ pub fn spawn_server_dt3_vram(
         Ok(())
     });
 
-    let ring = thread::spawn(move || {
-        let _char_dev = char_dev;
-        run_ring_owner(server, queue_depth, buf_size, work_tx, reply_rx)
-    });
+    let ring =
+        thread::spawn(move || run_ring_owner(server, queue_depth, buf_size, work_tx, reply_rx));
 
     Ok(ServerHandleDt3Vram { ring, worker })
 }
@@ -582,7 +573,7 @@ pub fn spawn_server_dt3_vram_with_residency(
     residency: ResidencyConfig,
 ) -> io::Result<ServerHandleDt3VramResidency> {
     let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
-    let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
+    let server = ramshared_uring::UblkServer::new(char_dev.into(), queue_depth, buf_size)?;
 
     let (work_tx, work_rx) = mpsc::sync_channel::<ublk::IoWork>(RING_CHAN_CAP);
     let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>();
@@ -616,10 +607,8 @@ pub fn spawn_server_dt3_vram_with_residency(
         )
     });
 
-    let ring = thread::spawn(move || {
-        let _char_dev = char_dev;
-        run_ring_owner(server, queue_depth, buf_size, work_tx, reply_rx)
-    });
+    let ring =
+        thread::spawn(move || run_ring_owner(server, queue_depth, buf_size, work_tx, reply_rx));
 
     Ok(ServerHandleDt3VramResidency {
         ring,

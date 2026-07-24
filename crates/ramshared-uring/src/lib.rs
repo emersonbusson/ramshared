@@ -254,6 +254,9 @@ pub struct UblkCompletion {
 /// I/O is ready or aborted). It owns the data buffers while FETCH calls are pending.
 pub struct UblkFetchRing {
     ring: IoUring<squeue::Entry128>,
+    /// The char device file descriptor, kept open for the lifetime of this ring.
+    #[allow(dead_code)]
+    fd: std::os::fd::OwnedFd,
     /// Data buffers per tag: the `addr` of each FETCH points to its corresponding
     /// buffer, which must remain alive while the command is parked in the kernel.
     /// Never read directly; exists to enforce the lifetime (drop guard).
@@ -265,7 +268,11 @@ impl UblkFetchRing {
     /// Submits `FETCH_REQ` for tags in `[0, queue_depth)` of queue 0 on `fd`, each using
     /// a buffer of `buf_size` bytes. Does not wait for CQE (`submit()` with want=0).
     /// The `fd` must remain open for the lifetime of this ring.
-    pub fn submit_fetch_all(fd: RawFd, queue_depth: u16, buf_size: usize) -> io::Result<Self> {
+    pub fn submit_fetch_all(
+        fd: std::os::fd::OwnedFd,
+        queue_depth: u16,
+        buf_size: usize,
+    ) -> io::Result<Self> {
         const UBLK_U_IO_FETCH_REQ: u32 = 0xc010_7520;
         const QUEUE_ID_ZERO: u16 = 0;
 
@@ -276,10 +283,13 @@ impl UblkFetchRing {
         for tag in 0..queue_depth {
             let addr = buffers[usize::from(tag)].as_mut_ptr() as u64;
             let cmd = fetch_cmd80(QUEUE_ID_ZERO, tag, addr);
-            let entry = opcode::UringCmd80::new(types::Fd(fd), UBLK_U_IO_FETCH_REQ)
-                .cmd(cmd)
-                .build()
-                .user_data(u64::from(tag));
+            let entry = opcode::UringCmd80::new(
+                types::Fd(std::os::fd::AsRawFd::as_raw_fd(&fd)),
+                UBLK_U_IO_FETCH_REQ,
+            )
+            .cmd(cmd)
+            .build()
+            .user_data(u64::from(tag));
 
             // SAFETY: `cmd` (including `addr`) is copied into the SQE during `push`.
             // The `addr` points to `buffers[tag]`, which remains valid inside this struct
@@ -295,7 +305,7 @@ impl UblkFetchRing {
         // Does not block (want=0); the FETCH requests remain parked in the driver.
         ring.submit()?;
 
-        Ok(Self { ring, buffers })
+        Ok(Self { ring, buffers, fd })
     }
 
     /// Drains currently available CQEs without blocking.
@@ -332,7 +342,7 @@ fn fetch_cmd80(q_id: u16, tag: u16, addr: u64) -> [u8; 80] {
 /// `COMMIT_AND_FETCH_REQ`. The `fd` of the char device must remain open for the
 /// lifetime of the server.
 pub struct UblkServer {
-    fd: RawFd,
+    fd: std::os::fd::OwnedFd,
     ring: IoUring<squeue::Entry128>,
     iodesc: MmapRo,
     buffers: Vec<Vec<u8>>,
@@ -344,11 +354,11 @@ impl UblkServer {
     const IO_DESC_SIZE: usize = 24;
 
     /// Creates the ring and maps the io-desc buffer for queue 0; does NOT submit FETCH commands.
-    pub fn new(fd: RawFd, queue_depth: u16, buf_size: usize) -> io::Result<Self> {
+    pub fn new(fd: std::os::fd::OwnedFd, queue_depth: u16, buf_size: usize) -> io::Result<Self> {
         let entries = u32::from(queue_depth).max(1).next_power_of_two();
         let ring = IoUring::<squeue::Entry128>::builder().build(entries)?;
         let iodesc_len = round_up_to_page(usize::from(queue_depth) * Self::IO_DESC_SIZE);
-        let iodesc = MmapRo::map_readonly(fd, iodesc_len, 0)?;
+        let iodesc = MmapRo::map_readonly(std::os::fd::AsRawFd::as_raw_fd(&fd), iodesc_len, 0)?;
         let buffers = (0..queue_depth).map(|_| vec![0u8; buf_size]).collect();
         Ok(Self {
             fd,
@@ -421,10 +431,11 @@ impl UblkServer {
 
     fn push(&mut self, cmd_op: u32, tag: u16, result: i32, addr: u64) -> io::Result<()> {
         let cmd = io_cmd80(0, tag, result, addr);
-        let entry = opcode::UringCmd80::new(types::Fd(self.fd), cmd_op)
-            .cmd(cmd)
-            .build()
-            .user_data(u64::from(tag));
+        let entry =
+            opcode::UringCmd80::new(types::Fd(std::os::fd::AsRawFd::as_raw_fd(&self.fd)), cmd_op)
+                .cmd(cmd)
+                .build()
+                .user_data(u64::from(tag));
 
         // SAFETY: `cmd` (carrying `addr`) is copied into the SQE in `push`. `addr` points
         // to `self.buffers[tag]`, which remains valid for the server's lifetime; `self.fd`
