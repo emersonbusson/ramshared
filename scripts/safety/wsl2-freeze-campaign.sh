@@ -379,7 +379,6 @@ if [[ "$RUN_ISOLATED" -eq 1 || "$RUN_SHARED" -eq 1 ]]; then
           sleep "$watchdog_deadline"
           if kill -0 "$action_pid" 2>/dev/null; then
             echo "action_cleanup_timeout after ${watchdog_deadline}s" >"$rdir/watchdog.txt"
-            kill -TERM "$action_pid" 2>/dev/null || true
           fi
         ) &
         wd_pid=$!
