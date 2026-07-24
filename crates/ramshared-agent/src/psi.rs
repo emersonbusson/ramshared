@@ -13,6 +13,12 @@ use ramshared_broker::protocol::SwapEntry;
 
 /// Core logic for `read_psi` with dependency injection for the file path.
 fn read_psi_impl(path: &str) -> Result<PsiSample> {
+    if path.contains("..") {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "path traversal detected",
+        ));
+    }
     let raw = std::fs::read_to_string(path)?;
     parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))
 }
@@ -47,6 +53,12 @@ pub fn parse_psi(content: &str) -> Option<PsiSample> {
 
 /// Core logic for `read_swaps` with dependency injection.
 fn read_swaps_impl(path: &str) -> Result<Vec<SwapEntry>> {
+    if path.contains("..") {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "path traversal detected",
+        ));
+    }
     Ok(parse_swaps(&std::fs::read_to_string(path)?))
 }
 
@@ -88,6 +100,9 @@ pub fn parse_memcg_swap(content: &str) -> Option<u64> {
 
 /// Core logic for `read_memcg_swap` with dependency injection.
 fn read_memcg_swap_impl(cgroup_path: &str, sysfs_base: &str) -> Option<u64> {
+    if cgroup_path.contains("..") || sysfs_base.contains("..") {
+        return None;
+    }
     let cg = std::fs::read_to_string(cgroup_path).ok()?;
     let path = cg.lines().find_map(|l| l.strip_prefix("0::"))?; // cgroup v2: single line `0::/<path>`
     let file = format!(
@@ -121,6 +136,9 @@ pub fn parse_diskstats(content: &str, dev: &str) -> Option<u64> {
 
 /// Core logic for `read_diskstats` with dependency injection.
 fn read_diskstats_impl(path: &str, dev: &str) -> Option<u64> {
+    if path.contains("..") {
+        return None;
+    }
     parse_diskstats(&std::fs::read_to_string(path).ok()?, dev)
 }
 
@@ -131,6 +149,12 @@ pub fn read_diskstats(dev: &str) -> Option<u64> {
 
 /// Core logic for `read_euid` with dependency injection.
 fn read_euid_impl(path: &str) -> Result<u32> {
+    if path.contains("..") {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "path traversal detected",
+        ));
+    }
     let raw = std::fs::read_to_string(path)?;
     parse_euid(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "campo Uid ausente"))
 }
@@ -260,13 +284,21 @@ mod tests {
 
     fn write_temp_file(content: &str) -> String {
         use std::env;
-        use std::fs;
+        use std::fs::OpenOptions;
+        use std::io::Write;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
         let path = env::temp_dir().join(format!("ramshared_test_{}_{}", std::process::id(), id));
-        fs::write(&path, content).unwrap();
+
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("Failed to create temporary test file securely");
+        file.write_all(content.as_bytes()).unwrap();
+
         path.to_string_lossy().to_string()
     }
 
