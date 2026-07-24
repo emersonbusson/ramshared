@@ -26,24 +26,39 @@ function Invoke-GuestBounded {
     param(
         [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock,
         [object[]]$ArgumentList = @(),
-        [ValidateRange(1, 900)][int]$TimeoutSec = 30
+        [ValidateRange(1, 900)][int]$TimeoutSec = 30,
+        [ValidateRange(0, 5)][int]$PsDirectRetryCount = 2,
+        [ValidateRange(1, 10)][int]$PsDirectRetryDelaySec = 3
     )
 
-    $job = Invoke-Command -VMName $VMName -Credential $cred -ScriptBlock $ScriptBlock `
-        -ArgumentList $ArgumentList -AsJob -ErrorAction Stop
-    try {
-        $completed = Wait-Job -Job $job -Timeout $TimeoutSec
-        if (-not $completed) {
-            Stop-Job -Job $job -ErrorAction SilentlyContinue
-            throw ("guest command timed out after {0}s" -f $TimeoutSec)
+    for ($attempt = 0; $attempt -le $PsDirectRetryCount; $attempt++) {
+        $job = $null
+        try {
+            $job = Invoke-Command -VMName $VMName -Credential $cred -ScriptBlock $ScriptBlock `
+                -ArgumentList $ArgumentList -AsJob -ErrorAction Stop
+            $completed = Wait-Job -Job $job -Timeout $TimeoutSec
+            if (-not $completed) {
+                Stop-Job -Job $job -ErrorAction SilentlyContinue
+                throw ("guest command timed out after {0}s" -f $TimeoutSec)
+            }
+            if ($job.State -ne "Completed") {
+                $reason = $job.ChildJobs[0].JobStateInfo.Reason
+                throw ("guest command ended in state {0}: {1}" -f $job.State, $reason)
+            }
+            return @(Receive-Job -Job $job -ErrorAction Stop)
+        } catch {
+            $detail = $_.Exception.ToString()
+            $transientPsDirectAuth = $detail -match
+                'PSDirectException|credencial.+inv.lida|credential.+invalid'
+            if (-not $transientPsDirectAuth -or $attempt -ge $PsDirectRetryCount) {
+                throw
+            }
+            Start-Sleep -Seconds $PsDirectRetryDelaySec
+        } finally {
+            if ($null -ne $job) {
+                Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+            }
         }
-        if ($job.State -ne "Completed") {
-            $reason = $job.ChildJobs[0].JobStateInfo.Reason
-            throw ("guest command ended in state {0}: {1}" -f $job.State, $reason)
-        }
-        Receive-Job -Job $job -ErrorAction Stop
-    } finally {
-        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
     }
 }
 
