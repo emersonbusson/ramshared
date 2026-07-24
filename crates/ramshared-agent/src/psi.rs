@@ -90,6 +90,9 @@ pub fn parse_memcg_swap(content: &str) -> Option<u64> {
 fn read_memcg_swap_impl(cgroup_path: &str, sysfs_base: &str) -> Option<u64> {
     let cg = std::fs::read_to_string(cgroup_path).ok()?;
     let path = cg.lines().find_map(|l| l.strip_prefix("0::"))?; // cgroup v2: single line `0::/<path>`
+    if path.contains("..") {
+        return None;
+    }
     let file = format!(
         "{}{}/memory.swap.current",
         sysfs_base,
@@ -270,6 +273,19 @@ mod tests {
         path.to_string_lossy().to_string()
     }
 
+    fn safe_remove_file(path: impl AsRef<std::path::Path>) {
+        let p = path.as_ref();
+        let p_str = p.to_string_lossy();
+        assert!(!p_str.contains(".."), "Path contains '..': {}", p_str);
+        assert!(!p_str.contains('\0'), "Path contains null byte: {}", p_str);
+        assert!(
+            p.starts_with(std::env::temp_dir()),
+            "Path is not in temp dir: {}",
+            p_str
+        );
+        std::fs::remove_file(p).unwrap();
+    }
+
     #[test]
     fn read_psi_impl_success() {
         let content = "some avg10=1.23 avg60=4.56 avg300=7.89 total=999\n";
@@ -278,7 +294,7 @@ mod tests {
         assert_eq!(psi.avg10, 1.23);
         assert_eq!(psi.avg60, 4.56);
         assert_eq!(psi.stall_us, 999);
-        std::fs::remove_file(path).unwrap();
+        safe_remove_file(path);
     }
 
     #[test]
@@ -291,7 +307,7 @@ mod tests {
         let path = write_temp_file("invalid content\n");
         let err = read_psi_impl(&path).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
-        std::fs::remove_file(path).unwrap();
+        safe_remove_file(path);
     }
 
     #[test]
@@ -302,7 +318,7 @@ mod tests {
         let swaps = read_swaps_impl(&path).unwrap();
         assert_eq!(swaps.len(), 1);
         assert_eq!(swaps[0].dev, "/dev/nbd0");
-        std::fs::remove_file(path).unwrap();
+        safe_remove_file(path);
     }
 
     #[test]
@@ -328,7 +344,7 @@ mod tests {
         let val = read_memcg_swap_impl(&cgroup_path, &sysfs_base.to_string_lossy()).unwrap();
         assert_eq!(val, 4194304);
 
-        std::fs::remove_file(cgroup_path).unwrap();
+        safe_remove_file(cgroup_path);
         std::fs::remove_dir_all(sysfs_base).unwrap();
     }
 
@@ -344,7 +360,7 @@ mod tests {
 
         assert!(read_memcg_swap_impl(&cgroup_path, "/sys/fs/cgroup").is_none());
 
-        std::fs::remove_file(cgroup_path).unwrap();
+        safe_remove_file(cgroup_path);
     }
 
     #[test]
@@ -354,7 +370,7 @@ mod tests {
 
         assert_eq!(read_diskstats_impl(&path, "nbd0"), Some((200 + 80) * 512));
 
-        std::fs::remove_file(path).unwrap();
+        safe_remove_file(path);
     }
 
     #[test]
@@ -369,7 +385,7 @@ mod tests {
 
         assert_eq!(read_euid_impl(&path).unwrap(), 1001);
 
-        std::fs::remove_file(path).unwrap();
+        safe_remove_file(path);
     }
 
     #[test]
@@ -385,6 +401,6 @@ mod tests {
         let err = read_euid_impl(&path).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
 
-        std::fs::remove_file(path).unwrap();
+        safe_remove_file(path);
     }
 }
