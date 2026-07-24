@@ -2,9 +2,9 @@
 
 ## Status
 
-**PARTIAL.** The matrix runner exists and emits per-case PASS/PARTIAL/FAIL
-artifacts. Windows smoke and Windows 3 GiB cases run through the host exhaustive
-harness; WSL2 and split-owner cases remain environment-bound.
+**DONE on the calibrated RTX 2060 surface.** Windows, WSL2 1 GiB, WSL2 4 GiB,
+and split-owner rows have live before/action/after evidence. See
+`evidence/matrix-close-20260724.md`.
 
 ## Implemented
 
@@ -18,12 +18,13 @@ harness; WSL2 and split-owner cases remain environment-bound.
 | Windows 3 GiB + 1 GiB external subcase | `C:\ramshared\artifacts\vram-reclaim-matrix-20260718-135319` passed with `reserve_mib=768` plus the fixed 256 MiB margin, preserving a 1 GiB effective floor |
 | WSL2 integrity gate | `scripts/safety/cascade_pressure_integrity_worker.py` plus `validate-wsl2-freeze-campaign-artifact.sh` now require a per-round checksum artifact before a WSL2 pressure artifact can validate |
 
-## Remaining
+## Closing evidence
 
-- WSL2 1 GiB and 4 GiB exact-size campaigns with per-round
-  `integrity-result.json`.
-- Live split-owner campaign evidence from the new supervised orchestrator.
-- Matrix-level DEMOTE telemetry correlation under exact WSL2/split sizes.
+- WSL2 1 GiB: `shared-wsl-pressure-20260723-232558`.
+- WSL2 4 GiB: `shared-wsl-pressure-20260724-031615`.
+- Split: `vram-reclaim-matrix-20260724-032344`,
+  `exhaustive-20260724-032344`, and
+  `shared-wsl-pressure-20260724-032358`.
 
 ## 2026-07-22 supervised split run
 

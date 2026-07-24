@@ -13,7 +13,7 @@ signals.
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.png)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.7.0"><img alt="Release v0.7.0" src="https://img.shields.io/badge/release-v0.7.0-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.7.2"><img alt="Release v0.7.2" src="https://img.shields.io/badge/release-v0.7.2-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux and WSL2 product path" src="https://img.shields.io/badge/product-Linux%20%7C%20WSL2-2563eb?style=flat-square">
   <img alt="Windows driver beta" src="https://img.shields.io/badge/Windows%20driver-supervised%20beta-d97706?style=flat-square">
@@ -21,7 +21,7 @@ signals.
 
 ## Current Status
 
-Release: **v0.7.0**, published on 2026-07-22.
+Release: **v0.7.2**, published on 2026-07-22.
 
 | Surface | Status | What that means |
 | --- | --- | --- |
@@ -29,12 +29,14 @@ Release: **v0.7.0**, published on 2026-07-22.
 | Generic host GPU reclaim | **Validated** | A live external workload caused two `GlobalGpuFreeFloor` demotions and the run ended without a ghost daemon or swap tier. |
 | WSL2 freeze campaign | **Validated** | Two supervised before/action/after rounds completed with watchdog, binary matching, integrity telemetry, and clean terminal state. |
 | Windows StorPort driver | **Supervised beta** | Physical-host and VM drills have passed, including a 3 GiB LUN and supported disk counters. It is not an unattended daily-host install. |
-| GiB split matrix | **Partial** | The 1 GiB Windows + 3 GiB WSL2 + external-pressure path passed data checks, but the old installed driver left a virtual LUN after teardown. Reboot, replacement-driver deployment, and clean reruns remain. |
+| GiB reclaim matrix | **Validated** | WSL2 1 GiB, WSL2 4 GiB, and calibrated 1 GiB Windows + 3 GiB WSL2 rows passed integrity, reclaim, and clean teardown gates. |
 | Custom-kernel ublk transport | **Deferred research** | NBD remains the day-one WSL2 transport. |
 
 The status above is intentionally narrower than the architecture. Open claims
 and the exact evidence needed to close them live in
 [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md).
+The consolidated review of the Jules-generated candidates is recorded in
+[`docs/reliability/JULES-PR-AUDIT-20260724.md`](docs/reliability/JULES-PR-AUDIT-20260724.md).
 
 ## Quick Start
 
@@ -189,11 +191,10 @@ Important boundaries:
 - drain any pagefile before backend teardown; surprise removal can cause
   Windows bugcheck `0x7A`.
 
-The current physical host still requires one reboot to unload the older driver
-and clear its residual 1 GiB virtual LUN. After reboot, the signed replacement
-must be deployed and the 1 GiB, 4 GiB, and calibrated 3 GiB + 1 GiB rows rerun
-with checksum, reserve restoration, lease release, and no-ghost proof. This is
-the open gate, not a completed release claim.
+The calibrated GiB reclaim matrix is closed on the tested RTX 2060 host. Public
+Windows distribution remains gated on a production-trusted or
+Microsoft-attested package. Test-signed lab packages are not public releases;
+see [`docs/packaging/WINDOWS-DRIVER-DISTRIBUTION.md`](docs/packaging/WINDOWS-DRIVER-DISTRIBUTION.md).
 
 ## Performance Evidence
 

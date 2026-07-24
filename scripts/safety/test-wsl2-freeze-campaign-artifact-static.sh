@@ -25,7 +25,8 @@ needles=(
   "integrity_checksum_mismatch"
   "integrity_verified_chunks_invalid"
   "action_rc=0"
-  "hung_task|Blocked for more than|Out of memory"
+  "hung_task|Blocked for more than"
+  "RAMSHARED_ALLOW_RECENT_OOM_MARKER"
   "deleted_swap_after_cleanup"
   "WSL2_FREEZE_CAMPAIGN_VALIDATION=PASS"
 )
@@ -99,5 +100,14 @@ if RAMSHARED_FREEZE_REQUIRED_ROUNDS=1 "$SCRIPT" "$bad_checksum" >/dev/null 2>&1;
   echo "validator accepted integrity checksum mismatch" >&2
   exit 1
 fi
+
+historical_oom="$tmp/historical-oom"
+make_valid_artifact "$historical_oom"
+printf 'Out of memory: historical marker\n' >"$historical_oom/round-1/before.txt"
+if RAMSHARED_FREEZE_REQUIRED_ROUNDS=1 "$SCRIPT" "$historical_oom" >/dev/null 2>&1; then
+  echo "validator accepted historical OOM without explicit allowance" >&2
+  exit 1
+fi
+RAMSHARED_FREEZE_REQUIRED_ROUNDS=1 RAMSHARED_ALLOW_RECENT_OOM_MARKER=1 "$SCRIPT" "$historical_oom" >/dev/null
 
 echo "PASS test-wsl2-freeze-campaign-artifact-static"
