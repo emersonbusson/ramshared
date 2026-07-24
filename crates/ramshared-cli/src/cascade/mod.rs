@@ -486,11 +486,11 @@ fn plan_orphan_action(entries: &[SwapEntry], cascade_healthy: bool) -> OrphanPla
 }
 
 fn clear_run_ramshared_state() {
-    let _ = fs::remove_file(SOCK);
-    let _ = fs::remove_file(ZRAM_DEV_FILE);
-    let _ = fs::remove_file(SWAP_DEV_FILE);
-    let _ = fs::remove_file(PID_FILE);
-    let _ = fs::remove_file("/run/ramshared/.armed");
+    cascade_io::remove_runtime_file(SOCK);
+    cascade_io::remove_runtime_file(ZRAM_DEV_FILE);
+    cascade_io::remove_runtime_file(SWAP_DEV_FILE);
+    cascade_io::remove_runtime_file(PID_FILE);
+    cascade_io::remove_runtime_file("/run/ramshared/.armed");
 }
 
 /// Auto-heal zero-used managed orphans (WSL terminate class). Single pass.

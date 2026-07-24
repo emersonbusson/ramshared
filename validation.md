@@ -2539,3 +2539,88 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
   max queue 6; `I:` max write 315.09 MiB/s, max read 3.28 MiB/s, max queue 130.
 **Verdict:** ✅ The aggregate external VRAM pressure DEMOTE path is proven on
 the shared WSL2 host. This does not close the separate GiB reclaim matrix.
+
+## 2026-07-24 03:40 -03 — calibrated GiB reclaim matrix closure
+
+**What:** Closed the remaining WSL2 1 GiB, WSL2 4 GiB, and calibrated split
+matrix rows under the approved Windows watchdog harness. Hardened the runner so
+integrity work completes before staged external pressure, the split runner
+captures all PowerShell streams, and matrix closure requires the nested
+campaign summary to report both `PASS` and `matrix_row_close=true`.
+**Category:** WSL2 + Windows StorPort + release verification
+**How to measure:**
+```bash
+cargo fmt --all -- --check
+cargo test --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo build --release --workspace
+./scripts/docs-check.sh
+node tools/ci/check-public-hygiene.mjs
+scripts/package/build-linux-bundle.sh --skip-build
+```
+**Measured data:**
+- WSL2 1 GiB:
+  `C:\ramshared\artifacts\shared-wsl-pressure-20260723-232558`, `PASS`,
+  two integrity rounds, DEMOTE, freeze validation, and clean terminal state.
+- WSL2 4 GiB:
+  `C:\ramshared\artifacts\shared-wsl-pressure-20260724-031615`, `PASS`,
+  preallocated VRAM, 4096 MiB external pressure, two DEMOTEs,
+  `matrix_row_close=true`, and clean terminal state.
+- Split 1 GiB Windows + 3 GiB WSL2 + 1 GiB staged external pressure:
+  `C:\ramshared\artifacts\vram-reclaim-matrix-20260724-032344`, `PASS`,
+  with three StorPort checksum matches, graceful teardown, lease release,
+  zero disk/Win32/PnP residue, WSL2 integrity, DEMOTE, and clean terminal state.
+- Rust format, workspace tests, clippy with warnings denied, and release build:
+  **PASS**.
+- All Windows/P0 static tests and both WSL2 freeze static suites: **PASS**.
+- Windows `ramshared.sys` and `poolstress.sys` rebuilt with WDK 26100,
+  `/W4 /WX`: **PASS**.
+- Docs, gap-register schema, public hygiene, and diff whitespace checks:
+  **PASS**.
+- Linux/WSL2 local bundle manifest verification and archive read: **PASS**.
+- `InfVerif.exe` is absent on this host. Public Windows distribution remains
+  blocked on production trust/attestation and its clean-tag install,
+  rollback, and recovery drill; test-signing is not release evidence.
+**Verdict:** ✅ The calibrated Linux/WSL2 GiB reclaim matrix is closed on the
+RTX 2060 surface. NBD remains the stable day-one transport; ublk stays
+deliberately deferred. Windows remains a supervised beta until the external
+production-signing gate is completed.
+
+## 2026-07-24 04:15 -03 — Jules PR audit and MVP consolidation
+
+**What:** Audited all 36 open Jules-generated PRs (`#107` through `#142`) and
+consolidated the valid concerns into one owning-layer implementation. Rejected
+parallel swapoff/NBD teardown, flaky kernel-specific fake-device tests,
+duplicate substring path checks, generated root junk, and unmeasured
+micro-optimizations. Kept NBD as the MVP transport and deferred the ublk
+`OwnedFd` refactor to its dedicated lifecycle scope.
+**Category:** security + reliability + release
+**How to measure:**
+```bash
+cargo test -p ramshared-agent -p ramshared-cli -p ramshared-winsvc \
+  -p ramshared-wsl2d -p ramshared-vulkan --all-targets
+cargo clippy -p ramshared-agent -p ramshared-cli -p ramshared-winsvc \
+  -p ramshared-wsl2d -p ramshared-vulkan --all-targets -- -D warnings
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent \
+  --files crates/ramshared-agent/src/psi.rs --min 80
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d \
+  --files crates/ramshared-wsl2d/src/demote_status.rs,crates/ramshared-wsl2d/src/swap.rs,crates/ramshared-wsl2d/src/telemetry.rs,crates/ramshared-wsl2d/src/ublk.rs,crates/ramshared-wsl2d/src/ublk_control.rs \
+  --min 80
+```
+**Measured data:**
+- Complete per-PR disposition:
+  `docs/reliability/JULES-PR-AUDIT-20260724.md`.
+- Targeted package tests and clippy with warnings denied: **PASS**.
+- Windows MSVC cross-check caught PR #116 removing a live cfg-windows field;
+  the patch was rejected and the cross-check then passed.
+- Agent PSI/cgroup slice coverage: **94.8%**.
+- WSL2 daemon touched slices: **92.7%–100%**.
+- Whole-file CLI coverage reports 4.2% for `cascade_io.rs` and 34.4% for
+  `main.rs`; these large command/shell boundary files are not SSDV3 matrix
+  slices. The newly introduced pure PID identity predicate has a named
+  regression test. Live cascade/matrix evidence remains the authoritative E2E
+  gate for the shell boundary.
+- `product_online.rs` is Windows-cfg and absent from the Linux llvm-cov profile;
+  Windows build/static/live campaign evidence is required instead.
+**Verdict:** ✅ Accepted/reworked Jules concerns are consolidated without
+weakening teardown order. Rejected/deferred PRs are not part of the MVP claim.

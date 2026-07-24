@@ -349,7 +349,7 @@ fn read_kernel_config(release: &str) -> (Option<String>, Option<String>) {
 
     let proc_config = Path::new("/proc/config.gz");
     if proc_config.exists() {
-        match Command::new("zcat").arg(proc_config).output() {
+        match Command::new("zcat").arg("--").arg(proc_config).output() {
             Ok(output) if output.status.success() => {
                 let text = String::from_utf8_lossy(&output.stdout).into_owned();
                 return (Some("/proc/config.gz".to_string()), Some(text));

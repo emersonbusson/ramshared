@@ -28,7 +28,7 @@ fn vk_err(ctx: &str, e: impl std::fmt::Debug) -> VramError {
 
 /// Selects a transfer queue family (prefers explicit `TRANSFER`; falls back to `GRAPHICS`/`COMPUTE`, which imply transfer per spec). Returns the family index.
 fn pick_transfer_family(instance: &ash::Instance, phys: vk::PhysicalDevice) -> Option<u32> {
-    // SAFETY: `phys` foi enumerado de `instance`; a query só lê propriedades.
+    // SAFETY: `phys` was enumerated from `instance`; the query only reads properties.
     let fams = unsafe { instance.get_physical_device_queue_family_properties(phys) };
     fams.iter()
         .position(|f| f.queue_flags.contains(vk::QueueFlags::TRANSFER))
@@ -41,8 +41,8 @@ fn pick_transfer_family(instance: &ash::Instance, phys: vk::PhysicalDevice) -> O
         .map(|i| i as u32)
 }
 
-/// Índice do 1º memory type que satisfaz `type_bits` (bitmask de `MemoryRequirements`) e contém
-/// todas as `want` flags. `None` se nenhum servir.
+/// Index of the first memory type that satisfies `type_bits` (bitmask of `MemoryRequirements`) and contains
+/// all `want` flags. `None` if none fit.
 fn pick_memory_type(
     props: &vk::PhysicalDeviceMemoryProperties,
     type_bits: u32,
@@ -53,7 +53,7 @@ fn pick_memory_type(
     })
 }
 
-/// Recursos do device lógico criados em `open` (carregados p/ o `VulkanProvider` em caso de sucesso).
+/// Logical device resources created in `open` (loaded into `VulkanProvider` on success).
 struct DeviceBits {
     device: ash::Device,
     queue: vk::Queue,
@@ -65,9 +65,9 @@ struct DeviceBits {
     staging_mapped: *mut u8,
 }
 
-/// Guarda RAII p/ o `goto out_err` (kernel idiom) na criação do device: em erro (qualquer `?`),
-/// destrói os recursos já criados na ordem inversa **e** o device. Em sucesso, `disarm()` impede a
-/// limpeza e os handles seguem p/ o `VulkanProvider`.
+/// RAII guard for the `goto out_err` (kernel idiom) in device creation: on error (any `?`),
+/// destroys the already created resources in reverse order **and** the device. On success, `disarm()` prevents
+/// cleanup and the handles are passed to the `VulkanProvider`.
 struct ResGuard {
     device: ash::Device,
     cmd_pool: Option<vk::CommandPool>,
@@ -186,16 +186,16 @@ impl VulkanProvider {
         let pdevs = unsafe { instance.enumerate_physical_devices() }
             .map_err(|e| vk_err("enumerate_physical_devices", e))?;
         if pdevs.is_empty() {
-            return Err(VramError::Provider("nenhum physical device Vulkan".into()));
+            return Err(VramError::Provider("no Vulkan physical device".into()));
         }
-        // Prefere uma GPU discreta; senão o ordinal pedido (clampado).
+        // Prefers a discrete GPU; otherwise the requested ordinal (clamped).
         let discrete = pdevs.iter().copied().find(|&p| {
-            // SAFETY: `p` é um handle válido enumerado de `instance`.
+            // SAFETY: `p` is a valid handle enumerated from `instance`.
             unsafe { instance.get_physical_device_properties(p) }.device_type
                 == vk::PhysicalDeviceType::DISCRETE_GPU
         });
         let phys = discrete.unwrap_or_else(|| pdevs[(ordinal as usize).min(pdevs.len() - 1)]);
-        // SAFETY: `phys` válido; `device_name` é C-string NUL-terminado de tamanho fixo.
+        // SAFETY: `phys` valid; `device_name` is a fixed-size NUL-terminated C-string.
         let props = unsafe { instance.get_physical_device_properties(phys) };
         let name = unsafe { CStr::from_ptr(props.device_name.as_ptr()) }
             .to_string_lossy()
@@ -206,15 +206,15 @@ impl VulkanProvider {
         Ok((phys, name, bits))
     }
 
-    /// Nome do device selecionado (ex.: "NVIDIA GeForce RTX 2060" ou "llvmpipe" no software).
+    /// Name of the selected device (e.g., \"NVIDIA GeForce RTX 2060\" or \"llvmpipe\" in software).
     pub fn device_name(&self) -> &str {
         &self.name
     }
 
-    /// Tamanho do maior heap `DEVICE_LOCAL` (bytes) — base do `total` do `mem_info` (DT-10). Fallback
-    /// p/ o maior heap se não houver DEVICE_LOCAL (caso de software/memória unificada).
+    /// Size of the largest heap `DEVICE_LOCAL` (bytes) — base of the `total` in `mem_info` (DT-10). Fallback
+    /// to the largest heap if there is no DEVICE_LOCAL (case of software/unified memory).
     pub fn device_local_total(&self) -> u64 {
-        // SAFETY: `phys` válido.
+        // SAFETY: `phys` valid.
         let mp = unsafe {
             self.instance
                 .get_physical_device_memory_properties(self.phys)
@@ -280,16 +280,16 @@ fn create_device_resources(
     let device = unsafe { instance.create_device(phys, &dci, None) }
         .map_err(|e| vk_err("create_device", e))?;
 
-    // Daqui pra baixo todo `?` é coberto pelo `guard` (destrói children + device em erro).
+    // From here on, every `?` is covered by `guard` (destroys children + device on error).
     let mut guard = ResGuard::new(device);
 
-    // SAFETY: `guard.device`/`qf` válidos.
+    // SAFETY: `guard.device`/`qf` valid.
     let queue = unsafe { guard.device.get_device_queue(qf, 0) };
 
     let pool_ci = vk::CommandPoolCreateInfo::default()
         .queue_family_index(qf)
         .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
-    // SAFETY: device + pool_ci válidos.
+    // SAFETY: device + pool_ci valid.
     let cmd_pool = unsafe { guard.device.create_command_pool(&pool_ci, None) }
         .map_err(|e| vk_err("create_command_pool", e))?;
     guard.cmd_pool = Some(cmd_pool);
@@ -298,15 +298,15 @@ fn create_device_resources(
         .command_pool(cmd_pool)
         .level(vk::CommandBufferLevel::PRIMARY)
         .command_buffer_count(1);
-    // SAFETY: device + cb_ai válidos; o(s) cmd buffer(s) são liberados junto com o pool.
+    // SAFETY: device + cb_ai valid; the cmd buffer(s) are freed together with the pool.
     let cbs = unsafe { guard.device.allocate_command_buffers(&cb_ai) }
         .map_err(|e| vk_err("allocate_command_buffers", e))?;
     let cmd_buf = cbs
         .first()
         .copied()
-        .ok_or_else(|| VramError::Provider("allocate_command_buffers devolveu vazio".into()))?;
+        .ok_or_else(|| VramError::Provider("allocate_command_buffers returned empty".into()))?;
 
-    // SAFETY: device válido.
+    // SAFETY: device valid.
     let fence = unsafe {
         guard
             .device
@@ -319,14 +319,14 @@ fn create_device_resources(
         .size(STAGING_BYTES)
         .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
-    // SAFETY: device + buf_ci válidos.
+    // SAFETY: device + buf_ci valid.
     let staging_buffer = unsafe { guard.device.create_buffer(&buf_ci, None) }
         .map_err(|e| vk_err("create_buffer(staging)", e))?;
     guard.staging_buffer = Some(staging_buffer);
 
-    // SAFETY: buffer válido.
+    // SAFETY: buffer valid.
     let req = unsafe { guard.device.get_buffer_memory_requirements(staging_buffer) };
-    // SAFETY: phys válido.
+    // SAFETY: phys valid.
     let mprops = unsafe { instance.get_physical_device_memory_properties(phys) };
     let mt = pick_memory_type(
         &mprops,
@@ -339,12 +339,12 @@ fn create_device_resources(
     let mai = vk::MemoryAllocateInfo::default()
         .allocation_size(req.size)
         .memory_type_index(mt);
-    // SAFETY: device + mai válidos.
+    // SAFETY: device + mai valid.
     let staging_memory = unsafe { guard.device.allocate_memory(&mai, None) }
         .map_err(|e| vk_err("allocate_memory(staging)", e))?;
     guard.staging_memory = Some(staging_memory);
 
-    // SAFETY: buffer + memory válidos; offset 0 satisfaz o alinhamento de `req`.
+    // SAFETY: buffer + memory valid; offset 0 satisfies the alignment of `req`.
     unsafe {
         guard
             .device
@@ -352,7 +352,7 @@ fn create_device_resources(
     }
     .map_err(|e| vk_err("bind_buffer_memory(staging)", e))?;
 
-    // SAFETY: memory HOST_VISIBLE recém-alocada; mapeia toda a faixa.
+    // SAFETY: newly allocated HOST_VISIBLE memory; maps the entire range.
     let raw = unsafe {
         guard.device.map_memory(
             staging_memory,

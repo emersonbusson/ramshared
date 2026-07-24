@@ -10,6 +10,9 @@ In now:
 - Plan-only default.
 - Windows smoke and Windows 3 GiB live cases through the existing host exhaustive
   harness.
+- Supervised WSL2 1 GiB and 4 GiB reclaim cases through the Windows watchdog
+  harness.
+- Calibrated split-owner case with staged external pressure.
 - Machine-readable `matrix-summary.json` for PASS/PARTIAL/FAIL per case.
 
 Out now:

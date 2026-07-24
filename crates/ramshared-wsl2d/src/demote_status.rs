@@ -122,6 +122,9 @@ fn extract_string_or_null(json: &str, key: &str) -> Option<String> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn roundtrip_render_parse() {
@@ -142,5 +145,65 @@ mod tests {
         assert_eq!(p.total, 0);
         assert!(p.last_reason.is_none());
         assert!(!p.in_progress);
+    }
+
+    #[test]
+    fn test_write_demote_status() {
+        let count = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-demote-test-{}-{}.json",
+            std::process::id(),
+            count
+        ));
+
+        let s = DemoteStatusFile {
+            total: 42,
+            last_reason: Some("Test write".into()),
+            in_progress: false,
+        };
+
+        write_demote_status(&path, &s).expect("write failed");
+
+        assert!(path.exists(), "Final file should exist");
+        assert!(
+            !path.with_extension("json.tmp").exists(),
+            "Temp file should be renamed/deleted"
+        );
+
+        let content = fs::read_to_string(&path).expect("read failed");
+        let parsed = parse_demote_status(&content).expect("parse failed");
+        assert_eq!(parsed, s);
+
+        // cleanup
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_write_demote_status_creates_dir() {
+        let count = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let nested_dir =
+            std::env::temp_dir().join(format!("ramshared-demote-nested-{}", std::process::id()));
+        let path = nested_dir.join(format!("test-{}.json", count));
+
+        let s = DemoteStatusFile {
+            total: 10,
+            last_reason: None,
+            in_progress: true,
+        };
+
+        // Ensure parent dir doesn't exist
+        let _ = fs::remove_dir_all(&nested_dir);
+
+        write_demote_status(&path, &s).expect("write failed");
+
+        assert!(nested_dir.exists(), "Parent directory should be created");
+        assert!(path.exists(), "Final file should exist");
+
+        let content = fs::read_to_string(&path).expect("read failed");
+        let parsed = parse_demote_status(&content).expect("parse failed");
+        assert_eq!(parsed, s);
+
+        // cleanup
+        let _ = fs::remove_dir_all(&nested_dir);
     }
 }

@@ -177,3 +177,137 @@ fn decode_dev_info(bytes: [u8; 64]) -> ublk::CtrlDevInfo {
         ]),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use std::fs::OpenOptions;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn smoke_auto_spec() {
+        let spec = DeviceSpec::smoke_auto();
+        assert_eq!(spec.dev_id, ublk::UBLK_DEV_ID_AUTO);
+        assert_eq!(spec.nr_hw_queues, 1);
+        assert_eq!(spec.queue_depth, 1);
+        assert_eq!(spec.max_io_buf_bytes, 4096);
+        assert_eq!(spec.flags, 0);
+    }
+
+    #[test]
+    fn device_report_from_info() {
+        let info = ublk::CtrlDevInfo {
+            dev_id: 42,
+            nr_hw_queues: 2,
+            queue_depth: 128,
+            state: 1,
+            max_io_buf_bytes: 8192,
+            flags: 0xdeadbeef,
+            owner_uid: 1000,
+            owner_gid: 1001,
+            ..Default::default()
+        };
+
+        let report = DeviceReport::from(info);
+        assert_eq!(report.dev_id, 42);
+        assert_eq!(report.nr_hw_queues, 2);
+        assert_eq!(report.queue_depth, 128);
+        assert_eq!(report.state, 1);
+        assert_eq!(report.max_io_buf_bytes, 8192);
+        assert_eq!(report.flags, 0xdeadbeef);
+        assert_eq!(report.owner_uid, 1000);
+        assert_eq!(report.owner_gid, 1001);
+    }
+
+    #[test]
+    fn encode_decode_roundtrip() {
+        let info = ublk::CtrlDevInfo {
+            dev_id: 42,
+            nr_hw_queues: 2,
+            queue_depth: 128,
+            state: 1,
+            pad0: 2,
+            max_io_buf_bytes: 8192,
+            ublksrv_pid: 9999,
+            pad1: 3,
+            flags: 0xdeadbeef12345678,
+            ublksrv_flags: 0x87654321feadc0de,
+            owner_uid: 1000,
+            owner_gid: 1001,
+            reserved1: 0x1111111111111111,
+            reserved2: 0x2222222222222222,
+        };
+
+        let bytes = encode_dev_info(info);
+        let decoded = decode_dev_info(bytes);
+        assert_eq!(info, decoded);
+    }
+
+    static TEST_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn get_unique_temp_path() -> std::path::PathBuf {
+        let counter = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        std::env::temp_dir().join(format!("ramshared_ublk_control_test_{}_{}", pid, counter))
+    }
+
+    #[test]
+    fn not_found_errors() {
+        let path = get_unique_temp_path();
+
+        assert_eq!(
+            get_features(&path).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            add_device(&path, DeviceSpec::smoke_auto())
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            delete_device(&path, 0).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            set_params(&path, 0, ublk::Params::default())
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            get_params(&path, 0).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            start_dev(&path, 0, 1).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            stop_dev(&path, 0).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn unsupported_errors() {
+        let path = get_unique_temp_path();
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .unwrap();
+
+        // A regular file must never be accepted as the ublk control device.
+        assert!(get_features(&path).is_err());
+        assert!(add_device(&path, DeviceSpec::smoke_auto()).is_err());
+        assert!(delete_device(&path, 0).is_err());
+        assert!(set_params(&path, 0, ublk::Params::default()).is_err());
+        assert!(get_params(&path, 0).is_err());
+        assert!(start_dev(&path, 0, 1).is_err());
+        assert!(stop_dev(&path, 0).is_err());
+
+        std::fs::remove_file(&path).unwrap();
+    }
+}

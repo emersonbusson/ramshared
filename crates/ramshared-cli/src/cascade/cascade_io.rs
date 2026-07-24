@@ -20,32 +20,64 @@ pub(crate) fn arm_forensics() {
         if let Some(parent) = Path::new(path).parent() {
             let _ = fs::create_dir_all(parent);
         }
-        if fs::write(path, &payload).is_ok() {
-            eprintln!("[up] forensics armed: {path}");
-            return;
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                if file.write_all(payload.as_bytes()).is_ok() {
+                    eprintln!("[up] forensics armed: {path}");
+                    return;
+                }
+                eprintln!("[warn] failed to write forensics marker: {path}");
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                match fs::symlink_metadata(path) {
+                    Ok(metadata)
+                        if metadata.file_type().is_file() && !metadata.file_type().is_symlink() =>
+                    {
+                        eprintln!("[up] forensics marker already exists: {path}");
+                        return;
+                    }
+                    _ => eprintln!("[warn] refusing non-regular forensics marker: {path}"),
+                }
+            }
+            Err(_) => {}
         }
+    }
+}
+
+pub(crate) fn remove_runtime_file(path: &str) {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => eprintln!("[warn] failed to remove runtime file {path}: {e}"),
     }
 }
 
 pub(crate) fn disarm_forensics() {
     for path in ARMED_MARKER_CANDIDATES {
-        let _ = fs::remove_file(path);
+        remove_runtime_file(path);
     }
 }
 
 pub(crate) fn stop_daemon_gracefully() {
     // Prefer PID file if we wrote one
     if let Ok(pid_s) = fs::read_to_string(PID_FILE)
-        && let Ok(pid) = pid_s.trim().parse::<i32>()
+        && let Ok(pid) = pid_s.trim().parse::<u32>()
+        && let Ok(comm) = fs::read_to_string(format!("/proc/{pid}/comm"))
+        && daemon_pid_matches(pid, &comm)
     {
         let _ = Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
+            .args(["-TERM", "--", &pid.to_string()])
             .status();
     }
     // Wait up to 10s for voluntary exit (allows VRAM zero()).
     for _ in 0..100 {
         if sh("pgrep", &["-x", "ramsharedd"]).is_err() {
-            let _ = fs::remove_file(PID_FILE);
+            remove_runtime_file(PID_FILE);
             return;
         }
         sleep(Duration::from_millis(100));
@@ -61,7 +93,11 @@ pub(crate) fn stop_daemon_gracefully() {
     eprintln!("[down] daemon nao saiu em 10s; pkill -TERM (sem -9)");
     let _ = sh("pkill", &["-x", "ramsharedd"]);
     sleep(Duration::from_millis(500));
-    let _ = fs::remove_file(PID_FILE);
+    remove_runtime_file(PID_FILE);
+}
+
+fn daemon_pid_matches(pid: u32, comm: &str) -> bool {
+    pid > 0 && comm.trim() == "ramsharedd"
 }
 
 pub(crate) fn setup_zram(mb: u64, prio: i32) -> Result<String, CascadeError> {
@@ -121,6 +157,14 @@ pub(crate) fn setup_zram_sysfs(mb: u64, prio: i32) -> Result<(), CascadeError> {
         .ok_or_else(|| CascadeError::Arg("zram size overflow".into()))?;
     fs::write(path.join("disksize"), bytes.to_string())
         .map_err(|e| CascadeError::Io(format!("disksize: {e}")))?;
+    let metadata = fs::symlink_metadata("/dev/zram0")
+        .map_err(|e| CascadeError::Io(format!("stat /dev/zram0: {e}")))?;
+    use std::os::unix::fs::FileTypeExt;
+    if !metadata.file_type().is_block_device() {
+        return Err(CascadeError::Precondition(
+            "/dev/zram0 is not a block device".into(),
+        ));
+    }
     sh("mkswap", &["/dev/zram0"])?;
     sh("swapon", &["-p", &prio.to_string(), "/dev/zram0"])?;
     fs::write(ZRAM_DEV_FILE, "/dev/zram0").map_err(|e| CascadeError::Io(e.to_string()))?;
@@ -169,7 +213,7 @@ fn check_safety_net(vram_mb: u64, force: bool, prios: &TierPriorities) -> Result
 }
 
 fn spawn_daemon(daemon_path: &str, vram_mb: u64, swap_dev: &str) -> Result<(), CascadeError> {
-    let _ = fs::remove_file(SOCK);
+    remove_runtime_file(SOCK);
     let child = Command::new(daemon_path)
         .args([
             "--size",
@@ -361,11 +405,24 @@ pub fn down() -> Result<(), CascadeError> {
     // 4) Daemon stop — only if no block VRAM swap remains
     stop_daemon_gracefully();
 
-    let _ = fs::remove_file(SOCK);
-    let _ = fs::remove_file(ZRAM_DEV_FILE);
-    let _ = fs::remove_file(SWAP_DEV_FILE);
-    let _ = fs::remove_file(PID_FILE);
+    remove_runtime_file(SOCK);
+    remove_runtime_file(ZRAM_DEV_FILE);
+    remove_runtime_file(SWAP_DEV_FILE);
+    remove_runtime_file(PID_FILE);
     disarm_forensics();
     eprintln!("[down] cascata desmontada (swapoff-first, sem kill -9)");
     status(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::daemon_pid_matches;
+
+    #[test]
+    fn daemon_pid_requires_positive_pid_and_exact_identity() {
+        assert!(daemon_pid_matches(42, "ramsharedd\n"));
+        assert!(!daemon_pid_matches(0, "ramsharedd\n"));
+        assert!(!daemon_pid_matches(42, "ramsharedd-helper\n"));
+        assert!(!daemon_pid_matches(42, "other\n"));
+    }
 }

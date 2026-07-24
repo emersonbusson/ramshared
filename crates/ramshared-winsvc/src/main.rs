@@ -242,15 +242,28 @@ mod windows_svc {
         thread::spawn(move || {
             let path = stop_request_path();
             loop {
-                if path.exists() {
-                    let _ = std::fs::remove_file(&path);
-                    stop_c.store(true, Ordering::SeqCst);
-                    // Unbuffered diagnostic: redirected stderr can lose last lines on kill.
-                    diag_line("stop.request observed; AtomicBool=true");
-                    while stop_c.load(Ordering::Acquire) {
-                        thread::sleep(Duration::from_millis(50));
+                match std::fs::symlink_metadata(&path) {
+                    Ok(metadata)
+                        if metadata.file_type().is_file() && !metadata.file_type().is_symlink() =>
+                    {
+                        match std::fs::remove_file(&path) {
+                            Ok(()) => {
+                                stop_c.store(true, Ordering::SeqCst);
+                                // Unbuffered diagnostic: redirected stderr can lose last lines on kill.
+                                diag_line("stop.request consumed; AtomicBool=true");
+                                while stop_c.load(Ordering::Acquire) {
+                                    thread::sleep(Duration::from_millis(50));
+                                }
+                                diag_line("stop flag cleared (resume Online or process exit)");
+                            }
+                            Err(e) => {
+                                diag_line(&format!("stop.request remove refused: {e}"));
+                            }
+                        }
                     }
-                    diag_line("stop flag cleared (resume Online or process exit)");
+                    Ok(_) => diag_line("stop.request rejected: not a regular file"),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => diag_line(&format!("stop.request metadata failed: {e}")),
                 }
                 thread::sleep(Duration::from_millis(200));
             }

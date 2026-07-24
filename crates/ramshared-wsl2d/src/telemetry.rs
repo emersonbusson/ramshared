@@ -204,9 +204,30 @@ mod tests {
     }
 
     #[test]
-    fn vram_outros_clamps_at_zero() {
+    fn vram_outros_normal_subtraction() {
         assert_eq!(vram_outros(2000, 500), 1500);
+    }
+
+    #[test]
+    fn vram_outros_clamps_at_zero() {
         assert_eq!(vram_outros(500, 2000), 0); // clamp (sampling skew)
+    }
+
+    #[test]
+    fn vram_outros_equal_values() {
+        assert_eq!(vram_outros(1024, 1024), 0);
+    }
+
+    #[test]
+    fn vram_outros_zero_values() {
+        assert_eq!(vram_outros(0, 0), 0);
+    }
+
+    #[test]
+    fn vram_outros_max_values() {
+        assert_eq!(vram_outros(u64::MAX, u64::MAX), 0);
+        assert_eq!(vram_outros(u64::MAX, 1), u64::MAX - 1);
+        assert_eq!(vram_outros(0, u64::MAX), 0);
     }
 
     #[test]

@@ -241,8 +241,19 @@ export RAMSHARED_FREEZE_REQUIRED_ROUNDS="$Rounds"
 validation_rc=0
 ./scripts/safety/validate-wsl2-freeze-campaign-artifact.sh "`$artifact/campaign" >"`$artifact/validation.out" 2>"`$artifact/validation.err" || validation_rc=`$?
 printf 'validation_rc=%s\n' "`$validation_rc" >"`$artifact/validation-rc.txt"
-if [ "$ExternalWorkloadMiB" -gt 0 ] && [ "$PostCampaignObserveSec" -gt 0 ]; then
-  sleep "$PostCampaignObserveSec"
+if [ "$ExternalWorkloadMiB" -gt 0 ]; then
+  printf 'campaign_validation_complete\n' >"`$artifact/external-phase-ready.txt"
+  external_deadline=`$((SECONDS + $ExternalWorkloadHoldSec + $PostCampaignObserveSec + 90))
+  while [ ! -f "`$artifact/external-phase-complete.txt" ]; do
+    if [ "`$SECONDS" -ge "`$external_deadline" ]; then
+      echo "external phase completion timed out" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+  if [ "$PostCampaignObserveSec" -gt 0 ]; then
+    sleep "$PostCampaignObserveSec"
+  fi
 fi
 kill "`$health_pid" 2>/dev/null || true
 wait "`$health_pid" 2>/dev/null || true
@@ -272,24 +283,46 @@ $ascii = [System.Text.Encoding]::ASCII
 [System.IO.File]::WriteAllText($guestScriptWin, ($guestScript -replace "`r`n", "`n"), $ascii)
 
 $argList = @("-d", $Distro, "-u", "root", "--", "bash", $guestScriptWsl)
+$campaignStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 $proc = Start-Process -FilePath "wsl.exe" -ArgumentList $argList -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -WindowStyle Hidden
 $externalProc = $null
+$externalExitCode = $null
+$externalReady = Join-Path $artifactDir "external-phase-ready.txt"
+$externalComplete = Join-Path $artifactDir "external-phase-complete.txt"
 if ($ExternalWorkloadMiB -gt 0) {
-    Start-Sleep -Seconds $ExternalWorkloadDelaySec
-    $externalSource = Resolve-Path (Join-Path $PSScriptRoot "..\p0\Start-CudaVramWorkload.ps1")
-    $externalScript = Join-Path $artifactDir "external-workload.ps1"
-    Get-Content -LiteralPath $externalSource.Path -Raw | Set-Content -LiteralPath $externalScript -Encoding UTF8
-    $externalOut = Join-Path $artifactDir "external-workload.out"
-    $externalErr = Join-Path $artifactDir "external-workload.err"
-    $externalArgs = @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $externalScript,
-        "-MiB", $ExternalWorkloadMiB, "-HoldSec", $ExternalWorkloadHoldSec
-    )
-    $externalProc = Start-Process -FilePath "powershell.exe" -ArgumentList $externalArgs `
-        -RedirectStandardOutput $externalOut -RedirectStandardError $externalErr -PassThru -WindowStyle Hidden
+    while (-not (Test-Path -LiteralPath $externalReady) -and -not $proc.HasExited -and
+        $campaignStopwatch.Elapsed.TotalSeconds -lt $OuterTimeoutSec) {
+        Start-Sleep -Seconds 1
+        $proc.Refresh()
+    }
+    if (Test-Path -LiteralPath $externalReady) {
+        Start-Sleep -Seconds $ExternalWorkloadDelaySec
+        $externalSource = Resolve-Path (Join-Path $PSScriptRoot "..\p0\Start-CudaVramWorkload.ps1")
+        $externalScript = Join-Path $artifactDir "external-workload.ps1"
+        Get-Content -LiteralPath $externalSource.Path -Raw | Set-Content -LiteralPath $externalScript -Encoding UTF8
+        $externalOut = Join-Path $artifactDir "external-workload.out"
+        $externalErr = Join-Path $artifactDir "external-workload.err"
+        $externalArgs = @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $externalScript,
+            "-MiB", $ExternalWorkloadMiB, "-HoldSec", $ExternalWorkloadHoldSec
+        )
+        $externalProc = Start-Process -FilePath "powershell.exe" -ArgumentList $externalArgs `
+            -RedirectStandardOutput $externalOut -RedirectStandardError $externalErr -PassThru -WindowStyle Hidden
+    }
 }
 
-if (-not $proc.WaitForExit($OuterTimeoutSec * 1000)) {
+if ($externalProc -ne $null) {
+    if (-not $externalProc.WaitForExit(($ExternalWorkloadHoldSec + 20) * 1000)) {
+        Stop-Process -Id $externalProc.Id -Force -ErrorAction SilentlyContinue
+    } else {
+        $externalProc.Refresh()
+        $externalExitCode = [int]$externalProc.ExitCode
+    }
+    New-Item -ItemType File -Force -Path $externalComplete | Out-Null
+}
+
+$remainingTimeoutMs = [Math]::Max(0, [int](($OuterTimeoutSec - $campaignStopwatch.Elapsed.TotalSeconds) * 1000))
+if (-not $proc.WaitForExit($remainingTimeoutMs)) {
     "outer watchdog fired after ${OuterTimeoutSec}s" | Set-Content -Encoding UTF8 (Join-Path $artifactDir "windows-watchdog-fired.txt")
     try {
         Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
@@ -315,15 +348,6 @@ if (-not $proc.WaitForExit($OuterTimeoutSec * 1000)) {
 
 $proc.WaitForExit()
 $proc.Refresh()
-$externalExitCode = $null
-if ($externalProc -ne $null) {
-    if (-not $externalProc.WaitForExit(($ExternalWorkloadHoldSec + 20) * 1000)) {
-        Stop-Process -Id $externalProc.Id -Force -ErrorAction SilentlyContinue
-    } else {
-        $externalProc.Refresh()
-        $externalExitCode = [int]$externalProc.ExitCode
-    }
-}
 if ($hostDiskJob -ne $null) {
     Stop-Job $hostDiskJob -ErrorAction SilentlyContinue
     Remove-Job $hostDiskJob -Force -ErrorAction SilentlyContinue
@@ -379,6 +403,7 @@ $external_demote_ok = $ExternalWorkloadMiB -gt 0 -and
     $diagnoseOk -and
     $demoteTotal -gt 0 -and
     $finalClean
+$matrixRowClose = $validationPass -and $external_demote_ok
 
 if (-not $watchdogFired -and $externalWorkloadOk -and $validationPass) {
     Write-Summary -Dir $artifactDir -Status "PASS" -Reason "validated_shared_daily_host_campaign" -Extra @{
@@ -395,7 +420,7 @@ if (-not $watchdogFired -and $externalWorkloadOk -and $validationPass) {
         demote_reason = $demoteReason
         final_clean = [bool]$finalClean
         freeze_campaign_validated = $true
-        matrix_row_close = $false
+        matrix_row_close = [bool]$matrixRowClose
     }
     exit 0
 }
@@ -416,7 +441,7 @@ if ($external_demote_ok) {
         final_clean = [bool]$finalClean
         validation_pass = [bool]$validationPass
         freeze_campaign_validated = $false
-        matrix_row_close = $false
+        matrix_row_close = [bool]$matrixRowClose
     }
     exit 0
 }
@@ -436,6 +461,6 @@ Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "shared_campaign_faile
     final_clean = [bool]$finalClean
     validation_pass = [bool]$validationPass
     freeze_campaign_validated = [bool]$validationPass
-    matrix_row_close = $false
+    matrix_row_close = [bool]$matrixRowClose
 }
 exit 2
