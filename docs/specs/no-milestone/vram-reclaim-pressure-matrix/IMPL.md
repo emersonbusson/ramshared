@@ -26,19 +26,19 @@ and split-owner rows have live before/action/after evidence. See
   `exhaustive-20260724-032344`, and
   `shared-wsl-pressure-20260724-032358`.
 
-## 2026-07-22 supervised split run
+## Historical 2026-07-22 supervised split run
 
 `C:\ramshared\artifacts\exhaustive-20260722-030004` established the calibrated
 1 GiB Windows + 3 GiB WSL2 owners and staged 1 GiB external pressure. The WSL
 watchdog artifact `shared-wsl-pressure-20260722-030018` passed external DEMOTE;
-the private-mounted Windows LUN passed three checksums and direct I/O. Closure
-remains partial because the installed older driver required configured letter
+the private-mounted Windows LUN passed three checksums and direct I/O. That run
+remained partial because its installed older driver required configured letter
 `S` during teardown, refused the private mount, and left an orphan virtual LUN.
-The source fix now permits administrator-only `DESTROY_DISK` after owner exit,
-reports non-rotating media through SCSI VPD `0xB1`, and the replacement driver
-builds with WDK `/W4 /WX`. Disk telemetry now generates aligned uncached,
-write-through reads and writes instead of measuring the Windows file cache.
-Reboot and deployment are required before rerunning the row.
+The later source fix permitted administrator-only `DESTROY_DISK` after owner
+exit, reported non-rotating media through SCSI VPD `0xB1`, and generated aligned
+uncached, write-through disk telemetry. The replacement driver was deployed and
+the row was rerun successfully on 2026-07-24; the current closure evidence is
+listed above.
 
 Rollback trigger: revert if a partial matrix case is reported as DONE without
 the required live campaign evidence.

@@ -120,13 +120,23 @@ pub struct BrokerCore {
 const ZERO_RETRY_GRACE: u32 = 1;
 const ZERO_RETRY_ERROR: u32 = 5;
 
-/// Extracts the trailing integer of a device (`/dev/nbd5` → 5), agnostic to the prefix (DT-21).
+/// Maps only an exact NBD block-device identity to its slice (DT-10/DT-21).
 fn dev_to_slice(dev: &str) -> Option<SliceId> {
-    let tail: String = dev.chars().rev().take_while(char::is_ascii_digit).collect();
-    if tail.is_empty() {
+    let dev = dev.trim();
+    let base = if let Some(base) = dev.strip_prefix("/dev/") {
+        base
+    } else if let Some(base) = dev.strip_prefix('/') {
+        base
+    } else if !dev.contains('/') {
+        dev
+    } else {
+        return None;
+    };
+    let slice = base.strip_prefix("nbd")?;
+    if slice.is_empty() || !slice.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
-    tail.chars().rev().collect::<String>().parse().ok()
+    slice.parse().ok()
 }
 
 impl BrokerCore {
@@ -383,7 +393,7 @@ impl BrokerCore {
                     .is_some_and(|s| s.state == SliceState::Active && s.tenant == Some(id))
             })
             .map(|(_, kb)| kb.saturating_mul(1024))
-            .sum();
+            .fold(0_u64, u64::saturating_add);
         if let Some(t) = self.tenants.get_mut(&id) {
             t.occupied_bytes = occupied;
         }
@@ -495,7 +505,7 @@ impl BrokerCore {
     }
 
     fn on_demote(&mut self, reason: &str, out: &mut Vec<Outbound>) {
-        self.demotes_total += 1;
+        self.demotes_total = self.demotes_total.saturating_add(1);
         self.last_demote_reason = Some(reason.to_string());
         out.push(Outbound::Log(format!(
             "[ramsharedd] DemoteAll reason={reason}"
@@ -549,7 +559,7 @@ impl BrokerCore {
                     .iter()
                     .filter_map(|s| self.slice_io.get(*s as usize))
                     .map(|c| c.bytes_served.load(Ordering::Relaxed))
-                    .sum(),
+                    .fold(0_u64, u64::saturating_add),
             })
             .collect();
         let slice_io = self
@@ -717,8 +727,12 @@ impl BrokerCore {
             .iter()
             .filter(|s| matches!(s.state, SliceState::Active | SliceState::Draining))
             .map(|s| s.len)
-            .sum();
-        let occupied: u64 = self.tenants.values().map(|t| t.occupied_bytes).sum();
+            .fold(0_u64, u64::saturating_add);
+        let occupied: u64 = self
+            .tenants
+            .values()
+            .map(|t| t.occupied_bytes)
+            .fold(0_u64, u64::saturating_add);
         // Σ diskstats (cumulative in bytes) of tenants reporting `mem` (RF-2); `None` if nobody
         // reports. The consumer derives the rate by the difference between samples (`t` field of the line).
         let page_io: Option<u64> = self.tenants.values().any(|t| t.mem.is_some()).then(|| {
@@ -726,15 +740,17 @@ impl BrokerCore {
                 .values()
                 .filter_map(|t| t.mem.as_ref())
                 .map(|m| m.diskstats_io)
-                .sum()
+                .fold(0_u64, u64::saturating_add)
         });
         let free = self.vram.free.load(Ordering::Relaxed);
         let total = self.vram.total.load(Ordering::Relaxed);
         let has_vram = total > 0; // F-v2-6: RAM sentinel (no GPU) → vram_* = None
-        let vram_alloc_daemon = alloc_active + CANARY_BYTES as u64;
+        let vram_alloc_daemon = alloc_active.saturating_add(CANARY_BYTES as u64);
         let vram_total_used = has_vram.then(|| total.saturating_sub(free));
         let vram_others = vram_total_used.map(|u| vram_outros(u, vram_alloc_daemon));
-        let demotes_delta = self.demotes_total - self.demotes_at_last_sample;
+        let demotes_delta = self
+            .demotes_total
+            .saturating_sub(self.demotes_at_last_sample);
         self.demotes_at_last_sample = self.demotes_total;
         let stuck_draining = self.pending_zero.values().any(|n| *n >= ZERO_RETRY_ERROR);
         let any_present = self.tenants.values().any(|t| t.present);
@@ -1003,8 +1019,11 @@ fn dispatch(
             }
             Outbound::Log(s) => eprintln!("{s}"),
             Outbound::Telemetry(core) => {
-                if let Some(s) = sink.as_mut() {
-                    s.emit(&core);
+                if let Some(s) = sink.as_mut()
+                    && let Err(error) = s.emit(&core)
+                {
+                    eprintln!("[ramsharedd] WARN telemetry disabled after write failure: {error}");
+                    *sink = None;
                 }
             }
         }
@@ -1035,7 +1054,7 @@ impl TelemetrySink {
         })
     }
 
-    fn emit(&mut self, core: &TelemetryCore) {
+    fn emit(&mut self, core: &TelemetryCore) -> std::io::Result<()> {
         let t = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -1046,10 +1065,10 @@ impl TelemetrySink {
             commit: self.commit.clone(),
             core: core.clone(),
         };
-        if let Ok(mut line) = serde_json::to_string(&sample) {
-            line.push('\n');
-            let _ = self.file.write_all(line.as_bytes());
-        }
+        let mut line = serde_json::to_string(&sample)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        line.push('\n');
+        self.file.write_all(line.as_bytes())
     }
 }
 
@@ -1476,8 +1495,8 @@ mod tests {
                 reconcile_delta: 0.0,
                 flag: ReconcileFlag::None,
             };
-            sink.emit(&tc);
-            sink.emit(&tc);
+            sink.emit(&tc).expect("first telemetry row");
+            sink.emit(&tc).expect("second telemetry row");
         }
         let content = std::fs::read_to_string(&path).expect("lê o jsonl");
         let lines: Vec<&str> = content.lines().collect();
@@ -1488,11 +1507,38 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
-    fn dev_to_slice_parses_trailing_int() {
+    fn telemetry_sink_surfaces_write_failure() {
+        let mut sink = TelemetrySink::open(PathBuf::from("/dev/full")).expect("open /dev/full");
+        let tc = TelemetryCore {
+            tenant: None,
+            slice: None,
+            swap_used: 0,
+            alloc_active: 0,
+            page_io_s: None,
+            vram_alloc_daemon: 0,
+            vram_total_used: None,
+            vram_outros: None,
+            canario_demotes: 0,
+            demote_reason: None,
+            reconcile_delta: 0.0,
+            flag: ReconcileFlag::Partial,
+        };
+        assert!(sink.emit(&tc).is_err());
+    }
+
+    #[test]
+    fn dev_to_slice_requires_exact_nbd_identity() {
         assert_eq!(dev_to_slice("/dev/nbd5"), Some(5));
         assert_eq!(dev_to_slice("/dev/nbd0"), Some(0));
+        assert_eq!(dev_to_slice("/nbd7"), Some(7));
+        assert_eq!(dev_to_slice("nbd9"), Some(9));
         assert_eq!(dev_to_slice("/dev/sda"), None);
+        assert_eq!(dev_to_slice("/dev/sda5"), None);
+        assert_eq!(dev_to_slice("/tmp/nbd5"), None);
+        assert_eq!(dev_to_slice("/dev/nbd5-backup"), None);
+        assert_eq!(dev_to_slice("/dev/nbd5\\040(deleted)"), None);
     }
 
     const SLICE: u64 = 64 * 1024 * 1024;

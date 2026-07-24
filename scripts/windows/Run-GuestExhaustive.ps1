@@ -708,8 +708,16 @@ public static class RamSharedRootEnum {
 }
 
 function Parse-Status([string]$text) {
-    if ($text -match "STATUS=PASS") { return "PASS" }
-    if ($text -match "STATUS=FAIL") { return "FAIL" }
+    $statusMatches = [regex]::Matches($text, '(?m)^STATUS=(PASS|FAIL)(?:\s.*)?$')
+    $exitMatches = [regex]::Matches($text, '(?m)^EXIT=(-?\d+)\s*$')
+    if ($statusMatches.Count -ne 1 -or $exitMatches.Count -ne 1) {
+        return "UNKNOWN"
+    }
+    if ([int]$exitMatches[0].Groups[1].Value -ne 0) {
+        return "FAIL"
+    }
+    if ($statusMatches[0].Groups[1].Value -eq "PASS") { return "PASS" }
+    if ($statusMatches[0].Groups[1].Value -eq "FAIL") { return "FAIL" }
     return "UNKNOWN"
 }
 $s1 = Parse-Status $ioctl1
