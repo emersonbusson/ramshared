@@ -121,6 +121,16 @@ pub(crate) fn setup_zram_sysfs(mb: u64, prio: i32) -> Result<(), CascadeError> {
         .ok_or_else(|| CascadeError::Arg("zram size overflow".into()))?;
     fs::write(path.join("disksize"), bytes.to_string())
         .map_err(|e| CascadeError::Io(format!("disksize: {e}")))?;
+
+    let meta = fs::metadata("/dev/zram0")
+        .map_err(|e| CascadeError::Io(format!("stat /dev/zram0: {e}")))?;
+    use std::os::unix::fs::FileTypeExt;
+    if !meta.file_type().is_block_device() {
+        return Err(CascadeError::Precondition(
+            "/dev/zram0 is not a block device".into(),
+        ));
+    }
+
     sh("mkswap", &["/dev/zram0"])?;
     sh("swapon", &["-p", &prio.to_string(), "/dev/zram0"])?;
     fs::write(ZRAM_DEV_FILE, "/dev/zram0").map_err(|e| CascadeError::Io(e.to_string()))?;
