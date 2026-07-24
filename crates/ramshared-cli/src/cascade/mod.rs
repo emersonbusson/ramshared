@@ -144,8 +144,7 @@ impl SwapEntry {
 
     /// True if this looks like a RamShared-managed or dangerous orphan tier.
     pub fn is_managed_or_orphan_vram_tier(&self) -> bool {
-        let f = self.filename.to_ascii_lowercase();
-        f.contains("nbd") || f.contains("ublk") || f.contains("zram") || f.contains("ramshared")
+        is_allowlisted_managed_path(&self.bare_path())
     }
 
     /// Basename-ish key for matching recorded paths.
@@ -181,15 +180,72 @@ pub fn canonicalize_swap_path(p: &str) -> String {
     format!("/dev/{p}")
 }
 
-/// Allowlist for auto swapoff: only nbd / ublk / zram (never disk VHDX).
+fn numbered_device_basename(path: &str, prefix: &str) -> bool {
+    let base = path.rsplit('/').next().unwrap_or(path);
+    let Some(number) = base.strip_prefix(prefix) else {
+        return false;
+    };
+    !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn has_device_path_shape(path: &str) -> bool {
+    !path.contains('/') || path.starts_with("/dev/") || path.matches('/').count() == 1
+}
+
+pub(crate) fn is_nbd_device_path(path: &str) -> bool {
+    let bare = path
+        .trim()
+        .replace("\\040(deleted)", " (deleted)")
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    has_device_path_shape(&bare) && numbered_device_basename(&bare, "nbd")
+}
+
+pub(crate) fn is_ublk_device_path(path: &str) -> bool {
+    let bare = path
+        .trim()
+        .replace("\\040(deleted)", " (deleted)")
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    has_device_path_shape(&bare) && numbered_device_basename(&bare, "ublkb")
+}
+
+pub(crate) fn is_zram_device_path(path: &str) -> bool {
+    let bare = path
+        .trim()
+        .replace("\\040(deleted)", " (deleted)")
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    has_device_path_shape(&bare) && numbered_device_basename(&bare, "zram")
+}
+
+/// Allowlist for automatic lifecycle operations: exact product block-device
+/// identities only, never a similarly named file or disk.
 fn is_allowlisted_managed_path(path: &str) -> bool {
-    let base = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
-    let base = base.split_whitespace().next().unwrap_or(&base);
-    base.starts_with("nbd")
-        || base.starts_with("ublk")
-        || base.starts_with("ublkb")
-        || base.starts_with("zram")
-        || base.contains("ramshared")
+    let bare = path
+        .trim()
+        .replace("\\040(deleted)", " (deleted)")
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    is_nbd_device_path(&bare)
+        || is_ublk_device_path(&bare)
+        || is_zram_device_path(&bare)
+        || bare
+            .strip_prefix("/dev/mapper/ramshared")
+            .is_some_and(|suffix| {
+                !suffix.is_empty()
+                    && suffix
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            })
 }
 
 /// Parse full `/proc/swaps` text into entries (skips header).
@@ -245,10 +301,7 @@ pub fn ghost_vram_swaps(entries: &[SwapEntry]) -> Vec<&SwapEntry> {
 /// Whether any nbd/ublk (non-ghost) swap is still active — daemon kill is forbidden.
 pub fn active_vram_block_swap(entries: &[SwapEntry]) -> bool {
     entries.iter().any(|e| {
-        !e.is_ghost()
-            && (e.filename.contains("nbd")
-                || e.filename.contains("ublk")
-                || e.filename.contains("\\040ublk"))
+        !e.is_ghost() && (is_nbd_device_path(&e.filename) || is_ublk_device_path(&e.filename))
     })
 }
 
@@ -256,7 +309,9 @@ fn lower_tier_present() -> bool {
     let vram_prio = TierPriorities::default().vram;
     read_swaps().iter().any(|e| {
         // Ignore our managed tiers when looking for DEMOTE sink.
-        if e.filename.contains("zram") || e.filename.contains("nbd") || e.filename.contains("ublk")
+        if is_zram_device_path(&e.filename)
+            || is_nbd_device_path(&e.filename)
+            || is_ublk_device_path(&e.filename)
         {
             return false;
         }
@@ -330,10 +385,7 @@ fn swapoff_candidates(recorded_swap: Option<&str>, recorded_zram: Option<&str>) 
 fn ghost_used_blocks_swapoff(entries: &[SwapEntry], path: &str) -> Option<String> {
     let p_canon = canonicalize_swap_path(path);
     entries.iter().find_map(|e| {
-        let matches = e.filename.contains(path.trim())
-            || e.bare_path() == *path
-            || e.canonical_path() == p_canon
-            || e.filename.contains(p_canon.trim_start_matches("/dev/"));
+        let matches = e.canonical_path() == p_canon;
         if matches && e.is_ghost() && e.used_kb > 0 {
             Some(format!(
                 "ghost swap used_kb={} — NAO e recuperavel com swapoff; \
@@ -393,12 +445,9 @@ fn swapoff_all(paths: &[String], entries: &[SwapEntry]) -> Vec<(String, String)>
                 if msg.contains("No such file") || msg.contains("Invalid argument") {
                     // Fresh read: path may have left swaps since the start-of-batch snapshot.
                     let live = read_swaps();
-                    let still = live.iter().any(|e| {
-                        (e.filename.contains(p)
-                            || e.bare_path() == *p
-                            || e.canonical_path() == p_canon)
-                            && e.used_kb > 0
-                    });
+                    let still = live
+                        .iter()
+                        .any(|e| e.canonical_path() == p_canon && e.used_kb > 0);
                     if still {
                         fails.push((p.clone(), msg));
                     } else {
@@ -474,10 +523,7 @@ fn plan_orphan_action(entries: &[SwapEntry], cascade_healthy: bool) -> OrphanPla
         return OrphanPlan::None;
     }
     let dirty_block = live_managed.iter().any(|e| {
-        e.used_kb > 0
-            && (e.filename.contains("nbd")
-                || e.filename.contains("ublk")
-                || e.filename.contains("\\040ublk"))
+        e.used_kb > 0 && (is_nbd_device_path(&e.filename) || is_ublk_device_path(&e.filename))
     });
     if dirty_block {
         return OrphanPlan::RefuseDirtyBackend;
@@ -535,7 +581,7 @@ fn try_recover_zero_used_orphans() -> Result<(), CascadeError> {
             }
             // Disconnect any nbd still visible or known allowlist devices.
             for e in read_swaps() {
-                if e.filename.contains("nbd") && !e.is_ghost() {
+                if is_nbd_device_path(&e.filename) && !e.is_ghost() {
                     let dev = e.canonical_path();
                     let _ = sh("nbd-client", &["-d", "--", &dev]);
                 }
@@ -564,7 +610,7 @@ fn try_recover_zero_used_orphans() -> Result<(), CascadeError> {
             }
             // Leftover zero-used zram: swapoff again
             for e in &after {
-                if e.filename.contains("zram") && !e.is_ghost() {
+                if is_zram_device_path(&e.filename) && !e.is_ghost() {
                     let _ = swapoff_try(&e.canonical_path());
                 }
             }
@@ -655,7 +701,7 @@ pub fn cascade_already_healthy(entries: &[SwapEntry]) -> bool {
     }
     let has_vram_swap = entries.iter().any(|e| {
         !e.is_ghost()
-            && (e.filename.contains("nbd") || e.filename.contains("ublk"))
+            && (is_nbd_device_path(&e.filename) || is_ublk_device_path(&e.filename))
             && e.is_managed_or_orphan_vram_tier()
     });
     if !has_vram_swap {
@@ -687,9 +733,9 @@ fn refuse_half_cascade(entries: &[SwapEntry]) -> Result<(), CascadeError> {
     let has_record = Path::new(SWAP_DEV_FILE).exists()
         || Path::new(ZRAM_DEV_FILE).exists()
         || Path::new(PID_FILE).exists();
-    let has_vram = entries
-        .iter()
-        .any(|e| !e.is_ghost() && (e.filename.contains("nbd") || e.filename.contains("ublk")));
+    let has_vram = entries.iter().any(|e| {
+        !e.is_ghost() && (is_nbd_device_path(&e.filename) || is_ublk_device_path(&e.filename))
+    });
     if has_record || has_vram {
         return Err(CascadeError::Precondition(
             "cascata pela metade (estado em /run/ramshared ou nbd/ublk sem daemon saudavel). \
@@ -1040,8 +1086,29 @@ mod tests {
         assert!(is_allowlisted_managed_path("/dev/nbd0"));
         assert!(is_allowlisted_managed_path("/zram0"));
         assert!(is_allowlisted_managed_path("/dev/ublkb0"));
+        assert!(is_allowlisted_managed_path("/dev/mapper/ramshared0"));
         assert!(!is_allowlisted_managed_path("/dev/sdc"));
         assert!(!is_allowlisted_managed_path("/dev/sdb"));
+        assert!(!is_allowlisted_managed_path("/dev/nbd0-backup"));
+        assert!(!is_allowlisted_managed_path("/tmp/nbd0"));
+        assert!(!is_allowlisted_managed_path("/swap/ramshared-backup"));
+    }
+
+    #[test]
+    fn similar_swap_names_are_not_managed_devices() {
+        let entries = parse_proc_swaps(
+            "Filename Type Size Used Priority\n\
+             /swap/nbd0-backup file 1024 99 -2\n\
+             /dev/nbd01 partition 1024 7 -3\n",
+        );
+        assert!(!entries[0].is_managed_or_orphan_vram_tier());
+        assert!(entries[1].is_managed_or_orphan_vram_tier());
+        assert!(!active_vram_block_swap(&entries[..1]));
+        assert!(swapoff_candidates_from(None, None, &entries[..1]).is_empty());
+        assert!(
+            ghost_used_blocks_swapoff(&entries, "/dev/nbd0").is_none(),
+            "nbd0 must not match nbd01 or a similarly named swap file"
+        );
     }
 
     #[test]

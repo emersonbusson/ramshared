@@ -10,10 +10,11 @@ text="$(cat "$SCRIPT")"
 needles=(
   "isolated-complete.txt"
   "shared-daily-host-complete.txt"
-  '"daily_host":true'
-  '"shared_host_approved":true'
-  '"windows_watchdog":true'
-  '"gates_ok":false'
+  "validate_summary"
+  "summary_gates_not_ok"
+  "summary_daily_host_missing"
+  "shared_host_not_approved"
+  "windows_watchdog_missing"
   'round-$round'
   "before-health.json"
   "after-health.json"
@@ -98,6 +99,24 @@ printf '{"status":"PASS","allocated_mib":16,"verified_chunks":1,"checksum_before
   >"$bad_checksum/round-1/integrity-result.json"
 if RAMSHARED_FREEZE_REQUIRED_ROUNDS=1 "$SCRIPT" "$bad_checksum" >/dev/null 2>&1; then
   echo "validator accepted integrity checksum mismatch" >&2
+  exit 1
+fi
+
+missing_summary_gate="$tmp/missing-summary-gate"
+make_valid_artifact "$missing_summary_gate"
+printf '{"daily_host":false}\n' >"$missing_summary_gate/summary.json"
+if RAMSHARED_FREEZE_REQUIRED_ROUNDS=1 "$SCRIPT" "$missing_summary_gate" >/dev/null 2>&1; then
+  echo "validator accepted summary without gates_ok=true" >&2
+  exit 1
+fi
+
+unapproved_daily="$tmp/unapproved-daily"
+make_valid_artifact "$unapproved_daily"
+printf '{"gates_ok":true,"daily_host":true,"shared_host_approved":false,"windows_watchdog":true}\n' \
+  >"$unapproved_daily/summary.json"
+mv "$unapproved_daily/isolated-complete.txt" "$unapproved_daily/shared-daily-host-complete.txt"
+if RAMSHARED_FREEZE_REQUIRED_ROUNDS=1 "$SCRIPT" "$unapproved_daily" >/dev/null 2>&1; then
+  echo "validator accepted unapproved daily-host summary" >&2
   exit 1
 fi
 

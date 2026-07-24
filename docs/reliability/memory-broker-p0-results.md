@@ -4,7 +4,13 @@
 
 ## Gate Status
 
-**P1 Gate: 🟡 PARTIAL — §4 pressure is now measured, but daemon DEMOTE correlation is still missing.** Closed: **§1 PSI** (idle+load, WSL2+civm), **§2 R1 network** (port-forward decision), **§3 NBD/TCP** (loopback + **cross-host p50 644 µs**), **§4 aggregate external CUDA pressure** (idle/load/recovery), **§5 calibration** (proposes `delta_psi=10`). Still missing: matching daemon telemetry proving live DEMOTE/recovery without corruption under that pressure.
+**P1 Gate: ✅ PASS on the calibrated RTX 2060 surface.** Closed:
+**§1 PSI** (idle+load, WSL2+civm), **§2 R1 network** (port-forward
+decision), **§3 NBD/TCP** (loopback + **cross-host p50 644 µs**),
+**§4 aggregate external CUDA pressure with daemon DEMOTE and integrity
+correlation**, and **§5 calibration** (proposes `delta_psi=10`). The later
+multi-tenant `eviction` reconciliation flag remains a separate environment-bound
+refinement and is not inferred from this gate.
 
 ## Environments
 
@@ -58,9 +64,16 @@ Honest baseline (no custom code). Compare with Phase B: **p50 241 µs (ublk) / 3
 | Workload | GPU/VRAM | Max VRAM used (MiB) | Min RAM available (MiB) | Result (fit? spill?) | Date |
 | --- | --- | --- | --- | --- | --- |
 | generic CUDA VRAM workload, 1024 MiB hold 35 s | RTX 2060 / 6144 MiB | 2648 loaded peak (idle peak 1525; recovery peak 1540) | captured in artifact JSON | PASS: aggregate VRAM pressure observed and recovered near idle | 2026-07-17 |
-| daemon DEMOTE correlation under external pressure | RTX 2060 / 6144 MiB | UNMEASURED | UNMEASURED | PARTIAL: daemon/cascade was not active for this gate | — |
+| daemon DEMOTE correlation under external pressure | RTX 2060 / 6144 MiB | 5607 MiB used peak; 348 MiB free minimum | integrity worker verified all allocated chunks; 2 DEMOTEs | PASS: `GlobalGpuFreeFloor` observed under a generic 4096 MiB external workload, checksums matched, and teardown was clean | 2026-07-22 |
 
 > **Sampler validated on dev-host** (RTX 2060): captures VRAM (nvidia-smi) + RAM free OK (e.g. VRAM 2015→1828 MiB / 6144, RAM free ~3670 MiB). **Bug caught in validation** (rule "run on host first", #13): `Get-Counter '\Memory\Available MBytes'` is **localized** and breaks on pt-BR Windows → swapped for CIM `Win32_OperatingSystem.FreePhysicalMemory` (locale-neutral). 2026-07-17 artifact: `C:\ramshared\artifacts\gpu-workload-gate-20260717-224420`; the workload is synthetic and app-agnostic by design, so it proves WDDM/CUDA VRAM pressure and recovery, not process attribution.
+
+The daemon correlation row is closed by
+`C:\ramshared\artifacts\shared-wsl-pressure-20260722-015303`: a 4096 MiB
+external CUDA workload drove global free VRAM to 348 MiB, the daemon recorded
+two `GlobalGpuFreeFloor` DEMOTEs, the integrity worker retained matching
+checksums, and the terminal health snapshot had no daemon, NBD/VRAM swap, or
+ghost entry. This does not claim per-process attribution.
 
 ## 5. Arbiter Defaults Calibration (ITEM-4)
 
@@ -98,4 +111,5 @@ Numbers from session 2026-06-16 (`docs/specs/no-milestone/broker-telemetry-recon
 - [x] §3 NBD/TCP: loopback (p50 174 µs) + **cross-host (p50 644 µs, 3 runs)** ✓
 - [x] §4 aggregate external GPU workload VRAM/RAM (generic CUDA workload; idle/load/recovery PASS)
 - [x] §5 calibration: **`delta_psi=10` proposed** (validate in e2e P1), `streak`=5, `psi_floor`=5 OK
-- [ ] **Gate P1 → OPEN** (daemon DEMOTE correlation under external pressure still missing)
+- [x] **Gate P1 → CLOSED** (daemon DEMOTE correlation under external pressure,
+  integrity, and clean terminal state captured on 2026-07-22)
