@@ -66,10 +66,43 @@ PY
   fi
 }
 
+validate_summary() {
+  local path="$1"
+  python3 - "$path" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as fh:
+        summary = json.load(fh)
+except Exception as exc:
+    print(f"summary_json_invalid:{exc}")
+    sys.exit(1)
+
+if summary.get("gates_ok") is not True:
+    print("summary_gates_not_ok")
+    sys.exit(1)
+if not isinstance(summary.get("daily_host"), bool):
+    print("summary_daily_host_missing")
+    sys.exit(1)
+if summary["daily_host"]:
+    if summary.get("shared_host_approved") is not True:
+        print("shared_host_not_approved")
+        sys.exit(1)
+    if summary.get("windows_watchdog") is not True:
+        print("windows_watchdog_missing")
+        sys.exit(1)
+print("ok")
+PY
+}
+
 [[ -n "$ARTIFACT_DIR" ]] || fail "usage: validate-wsl2-freeze-campaign-artifact.sh ARTIFACT_DIR"
 [[ -d "$ARTIFACT_DIR" ]] || fail "missing_artifact_dir:$ARTIFACT_DIR"
 
 need_file "$ARTIFACT_DIR/summary.json"
+if ! summary_reason="$(validate_summary "$ARTIFACT_DIR/summary.json")"; then
+  fail "$summary_reason"
+fi
 
 COMPLETE_FILE="$ARTIFACT_DIR/isolated-complete.txt"
 MODE="isolated"
@@ -79,15 +112,16 @@ if [[ ! -f "$COMPLETE_FILE" && -f "$ARTIFACT_DIR/shared-daily-host-complete.txt"
 fi
 need_file "$COMPLETE_FILE"
 
-if grep -q '"daily_host":true' "$ARTIFACT_DIR/summary.json"; then
+if grep -Eq '"daily_host"[[:space:]]*:[[:space:]]*true' "$ARTIFACT_DIR/summary.json"; then
   if [[ "$MODE" != "shared-daily-host" ]]; then
     fail "daily_host_true"
   fi
-  grep -q '"shared_host_approved":true' "$ARTIFACT_DIR/summary.json" || fail "shared_host_not_approved"
-  grep -q '"windows_watchdog":true' "$ARTIFACT_DIR/summary.json" || fail "windows_watchdog_missing"
-fi
-if grep -q '"gates_ok":false' "$ARTIFACT_DIR/summary.json"; then
-  fail "gates_not_ok"
+  grep -Eq '"shared_host_approved"[[:space:]]*:[[:space:]]*true' \
+    "$ARTIFACT_DIR/summary.json" || fail "shared_host_not_approved"
+  grep -Eq '"windows_watchdog"[[:space:]]*:[[:space:]]*true' \
+    "$ARTIFACT_DIR/summary.json" || fail "windows_watchdog_missing"
+elif [[ "$MODE" == "shared-daily-host" ]]; then
+  fail "shared_mode_without_daily_host"
 fi
 if ! grep -q "rounds=$ROUNDS" "$COMPLETE_FILE"; then
   fail "complete_round_count"

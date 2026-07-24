@@ -2624,3 +2624,55 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d \
   Windows build/static/live campaign evidence is required instead.
 **Verdict:** ✅ Accepted/reworked Jules concerns are consolidated without
 weakening teardown order. Rejected/deferred PRs are not part of the MVP claim.
+
+## 2026-07-24 04:13 -03 — post-v0.7.3 lifecycle and telemetry audit
+
+**What:** Audited teardown identity, broker reconciliation, telemetry sinks,
+campaign summaries, privileged socket paths, dependency advisories, and
+release-facing documentation. Fixed exact NBD matching, fail-closed
+`/proc/swaps` reads, lifecycle allowlists, broker slice attribution, telemetry
+write visibility, WSL campaign PASS criteria, and summary validation.
+**Category:** security + hang prevention + telemetry integrity + release docs
+**How to measure:**
+```bash
+cargo test --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo build --release --workspace
+cargo check -p ramshared-winsvc --target x86_64-pc-windows-msvc
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d \
+  --files crates/ramshared-wsl2d/src/broker_srv.rs,crates/ramshared-wsl2d/src/telemetry.rs --min 80
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli \
+  --files crates/ramshared-cli/src/cascade/mod.rs,crates/ramshared-cli/src/cascade/lifecycle.rs --min 80
+./scripts/docs-check.sh
+node tools/ci/check-validation-schema.mjs --all
+node tools/ci/check-gap-register.mjs
+node tools/ci/check-public-hygiene.mjs
+cargo audit
+```
+**Measured data:**
+- Workspace tests: **PASS**; 17 daemon binary tests include exact NBD identity,
+  duplicate/deleted row handling, and non-socket path refusal.
+- Broker regression `dev_to_slice_requires_exact_nbd_identity`: **PASS**;
+  `/dev/sda5`, nested paths, suffix lookalikes, and deleted entries are not
+  attributed to slice 5.
+- Telemetry sink `/dev/full` write-failure regression: **PASS**; write failure
+  is surfaced and the sink is disabled instead of silently dropping rows.
+- CLI lifecycle regressions: **68/68 PASS**; similarly named swap files are not
+  classified, swapped off, or disconnected as RamShared devices.
+- WSL artifact validator rejects missing `gates_ok`, unapproved daily-host
+  summaries, invalid integrity JSON, checksum mismatch, and incomplete rounds:
+  **PASS**.
+- All 21 Windows static harnesses, including shared WSL, exhaustive guest,
+  pagefile refusal, driver IOCTL, signing, and disk telemetry checks: **PASS**.
+- Rust slice coverage: broker service **89.5%**, telemetry **100%**, CLI
+  lifecycle **94.6%**, CLI cascade module **90.0%**.
+- RustSec scan: **0 known vulnerable dependencies** in 45 locked crates.
+- Release build, Windows MSVC cross-check, docs/index/links, validation schema,
+  gap register, public hygiene, archive read, and internal bundle
+  `SHA256SUMS`: **PASS**.
+- No new destructive pressure run was performed. Existing 2026-07-22 and
+  2026-07-24 supervised live artifacts remain the before/action/after evidence.
+**Verdict:** ✅ The confirmed post-release lifecycle and telemetry defects are
+fixed with fail-closed behavior and named regressions. The Linux/WSL2 NBD MVP
+claim remains bounded to the previously validated surface; Windows public
+distribution and ublk product transport remain BLOCKED/DEFERRED respectively.
