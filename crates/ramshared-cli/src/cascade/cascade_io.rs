@@ -105,26 +105,43 @@ pub(crate) fn setup_zram(mb: u64, prio: i32) -> Result<String, CascadeError> {
 
 pub(crate) fn setup_zram_sysfs(mb: u64, prio: i32) -> Result<(), CascadeError> {
     let path = PathBuf::from("/sys/block/zram0");
-    if !path.exists() {
+    let canon_path = fs::canonicalize(&path).map_err(|e| {
+        CascadeError::Precondition(format!("/sys/block/zram0 ausente ou inacessivel: {e}"))
+    })?;
+
+    if !canon_path.starts_with("/sys/") {
         return Err(CascadeError::Precondition(
-            "/sys/block/zram0 ausente".into(),
+            "Caminho sysfs do zram escapou do /sys/ (possivel symlink malicioso)".into(),
         ));
     }
-    let _ = fs::write(path.join("reset"), "1");
+
+    let _ = fs::write(canon_path.join("reset"), "1");
     for algo in ZRAM_ALGOS {
-        if fs::write(path.join("comp_algorithm"), algo.as_bytes()).is_ok() {
+        if fs::write(canon_path.join("comp_algorithm"), algo.as_bytes()).is_ok() {
             break;
         }
     }
     let bytes = mb
         .checked_mul(1024 * 1024)
         .ok_or_else(|| CascadeError::Arg("zram size overflow".into()))?;
-    fs::write(path.join("disksize"), bytes.to_string())
+    fs::write(canon_path.join("disksize"), bytes.to_string())
         .map_err(|e| CascadeError::Io(format!("disksize: {e}")))?;
-    sh("mkswap", &["/dev/zram0"])?;
-    sh("swapon", &["-p", &prio.to_string(), "/dev/zram0"])?;
-    fs::write(ZRAM_DEV_FILE, "/dev/zram0").map_err(|e| CascadeError::Io(e.to_string()))?;
-    eprintln!("[up] zram /dev/zram0 via sysfs prio={prio}");
+
+    let dev_path = fs::canonicalize("/dev/zram0").map_err(|e| {
+        CascadeError::Precondition(format!("/dev/zram0 ausente ou inacessivel: {e}"))
+    })?;
+
+    if !dev_path.starts_with("/dev/") {
+        return Err(CascadeError::Precondition(
+            "Caminho do dispositivo zram escapou do /dev/ (possivel symlink malicioso)".into(),
+        ));
+    }
+    let dev_str = dev_path.to_str().unwrap_or("/dev/zram0");
+
+    sh("mkswap", &[dev_str])?;
+    sh("swapon", &["-p", &prio.to_string(), dev_str])?;
+    fs::write(ZRAM_DEV_FILE, dev_str).map_err(|e| CascadeError::Io(e.to_string()))?;
+    eprintln!("[up] zram {dev_str} via sysfs prio={prio}");
     Ok(())
 }
 
