@@ -104,15 +104,33 @@ pub(crate) fn setup_zram(mb: u64, prio: i32) -> Result<String, CascadeError> {
 }
 
 pub(crate) fn setup_zram_sysfs(mb: u64, prio: i32) -> Result<(), CascadeError> {
-    let path = PathBuf::from("/sys/block/zram0");
-    if !path.exists() {
+    let raw_path = PathBuf::from("/sys/block/zram0");
+    if !raw_path.exists() {
         return Err(CascadeError::Precondition(
             "/sys/block/zram0 ausente".into(),
         ));
     }
-    let _ = fs::write(path.join("reset"), "1");
+
+    // Path sanitization: ensure canonical resolution prevents traversal/symlink trickery
+    let path = raw_path.canonicalize().map_err(|e| {
+        CascadeError::Precondition(format!("/sys/block/zram0 ausente ou invalido: {e}"))
+    })?;
+
+    if !path.starts_with("/sys/") {
+        return Err(CascadeError::Precondition(
+            "zram0 sysfs path invalido (fora de /sys)".into(),
+        ));
+    }
+
+    let reset_path = path.join("reset");
+    if !reset_path.exists() {
+        return Err(CascadeError::Precondition("reset file ausente".into()));
+    }
+    fs::write(&reset_path, "1").map_err(|e| CascadeError::Io(format!("reset falhou: {e}")))?;
+
     for algo in ZRAM_ALGOS {
-        if fs::write(path.join("comp_algorithm"), algo.as_bytes()).is_ok() {
+        let algo_path = path.join("comp_algorithm");
+        if algo_path.exists() && fs::write(&algo_path, algo.as_bytes()).is_ok() {
             break;
         }
     }
