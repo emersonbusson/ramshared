@@ -258,6 +258,36 @@ mod tests {
         assert!(parse_euid("Name:\tx\nGid:\t0\t0\t0\t0\n").is_none());
     }
 
+    fn safe_remove_file<P: AsRef<std::path::Path>>(path: P) {
+        let p = path.as_ref();
+        let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        if let Ok(canon) = std::fs::canonicalize(p) {
+            if canon.starts_with(&tmp) {
+                std::fs::remove_file(canon).unwrap();
+            } else {
+                panic!(
+                    "Security violation: attempt to remove file outside of temp_dir: {:?}",
+                    p
+                );
+            }
+        }
+    }
+
+    fn safe_remove_dir_all<P: AsRef<std::path::Path>>(path: P) {
+        let p = path.as_ref();
+        let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        if let Ok(canon) = std::fs::canonicalize(p) {
+            if canon.starts_with(&tmp) {
+                std::fs::remove_dir_all(canon).unwrap();
+            } else {
+                panic!(
+                    "Security violation: attempt to remove dir outside of temp_dir: {:?}",
+                    p
+                );
+            }
+        }
+    }
+
     fn write_temp_file(content: &str) -> String {
         use std::env;
         use std::fs;
@@ -278,7 +308,7 @@ mod tests {
         assert_eq!(psi.avg10, 1.23);
         assert_eq!(psi.avg60, 4.56);
         assert_eq!(psi.stall_us, 999);
-        std::fs::remove_file(path).unwrap();
+        safe_remove_file(path);
     }
 
     #[test]
@@ -291,7 +321,7 @@ mod tests {
         let path = write_temp_file("invalid content\n");
         let err = read_psi_impl(&path).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
-        std::fs::remove_file(path).unwrap();
+        safe_remove_file(path);
     }
 
     #[test]
@@ -302,7 +332,7 @@ mod tests {
         let swaps = read_swaps_impl(&path).unwrap();
         assert_eq!(swaps.len(), 1);
         assert_eq!(swaps[0].dev, "/dev/nbd0");
-        std::fs::remove_file(path).unwrap();
+        safe_remove_file(path);
     }
 
     #[test]
@@ -328,8 +358,8 @@ mod tests {
         let val = read_memcg_swap_impl(&cgroup_path, &sysfs_base.to_string_lossy()).unwrap();
         assert_eq!(val, 4194304);
 
-        std::fs::remove_file(cgroup_path).unwrap();
-        std::fs::remove_dir_all(sysfs_base).unwrap();
+        safe_remove_file(cgroup_path);
+        safe_remove_dir_all(sysfs_base);
     }
 
     #[test]
@@ -344,7 +374,7 @@ mod tests {
 
         assert!(read_memcg_swap_impl(&cgroup_path, "/sys/fs/cgroup").is_none());
 
-        std::fs::remove_file(cgroup_path).unwrap();
+        safe_remove_file(cgroup_path);
     }
 
     #[test]
@@ -354,7 +384,7 @@ mod tests {
 
         assert_eq!(read_diskstats_impl(&path, "nbd0"), Some((200 + 80) * 512));
 
-        std::fs::remove_file(path).unwrap();
+        safe_remove_file(path);
     }
 
     #[test]
@@ -369,7 +399,7 @@ mod tests {
 
         assert_eq!(read_euid_impl(&path).unwrap(), 1001);
 
-        std::fs::remove_file(path).unwrap();
+        safe_remove_file(path);
     }
 
     #[test]
@@ -385,6 +415,6 @@ mod tests {
         let err = read_euid_impl(&path).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
 
-        std::fs::remove_file(path).unwrap();
+        safe_remove_file(path);
     }
 }
