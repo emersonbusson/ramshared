@@ -32,5 +32,14 @@ if ($text -notmatch 'pnputil /delete-driver \$publishedInf /uninstall /force') {
 if ($text -notmatch '\$load = Invoke-GuestBounded -TimeoutSec 240') {
     throw "load_timeout_budget: initial package install/load needs a budget that covers DriverStore purge plus PnP wait"
 }
+if ($text -notmatch '\[ValidateRange\(0, 5\)\]\[int\]\$PsDirectRetryCount') {
+    throw "psdirect_retry: bounded guest commands must expose a limited transient retry count"
+}
+if ($text -notmatch 'PSDirectException|credencial.+inv.lida|credential.+invalid') {
+    throw "psdirect_retry: retry must be limited to the observed transient authentication transport failure"
+}
+if ($text -notmatch 'Start-Sleep -Seconds \$PsDirectRetryDelaySec') {
+    throw "psdirect_retry: retries must include a bounded delay"
+}
 
 Write-Output "PASS Test-GuestExhaustiveStatic"
