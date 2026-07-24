@@ -347,10 +347,16 @@ fn session(
     }
 
     // Cleanup: releases active slices (best-effort; broker reconciles on re-register).
+    let mut handles = Vec::new();
     for (slice, dev) in active.drain() {
-        if let Err(e) = swap::detach_swap(&dev) {
-            eprintln!("[agent] cleanup swapoff s{slice} ({dev}) falhou: {e}");
-        }
+        handles.push(thread::spawn(move || {
+            if let Err(e) = swap::detach_swap(&dev) {
+                eprintln!("[agent] cleanup swapoff s{slice} ({dev}) falhou: {e}");
+            }
+        }));
+    }
+    for h in handles {
+        let _ = h.join();
     }
     let _ = w.shutdown(std::net::Shutdown::Both);
     let _ = reader_handle.join();
