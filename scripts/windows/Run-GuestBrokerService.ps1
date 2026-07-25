@@ -213,6 +213,29 @@ try {
         if ($expectedHash -ne $actualHash) { throw "broker binary hash mismatch" }
         Pass "BROKER_BINARY_MATCH" "pid=$($service.ProcessId) sha256=$actualHash ready_ms=$readyMs"
         Pass "scm_start_ready_stop" "ready_ms=$readyMs"
+        $event = $null
+        for ($eventAttempt = 0; $eventAttempt -lt 20; $eventAttempt++) {
+            $event = Get-WinEvent -FilterHashtable @{
+                LogName = "Application"
+                StartTime = $before
+            } -ErrorAction SilentlyContinue | Where-Object {
+                $payload = if ($_.Properties.Count -gt 0) {
+                    [string]$_.Properties[0].Value
+                }
+                else {
+                    [string]$_.Message
+                }
+                $_.ProviderName -eq $brokerService -and
+                $_.Id -eq 1000 -and
+                $payload -match "transition=process_ready" -and
+                $payload -match "broker_instance_id=[0-9a-f]{32}"
+            } | Select-Object -First 1
+            if ($event) { break }
+            Start-Sleep -Milliseconds 100
+        }
+        if (-not $event) { throw "broker Event Log process_ready transition missing" }
+        Pass "broker_event_log_transition" `
+            "provider=$brokerService event_id=$($event.Id); transition=process_ready"
 
         $pipeNames = @()
         for ($pipeAttempt = 0; $pipeAttempt -lt 60; $pipeAttempt++) {

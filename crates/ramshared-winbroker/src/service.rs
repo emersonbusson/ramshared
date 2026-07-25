@@ -366,7 +366,49 @@ fn append_evidence(
         .append(true)
         .open(path)?;
     file.write_all(&row)?;
-    file.flush()
+    file.flush()?;
+    emit_event(transition, instance_id);
+    Ok(())
+}
+
+fn emit_event(transition: &str, instance_id: &str) {
+    use std::ptr;
+    use windows_sys::Win32::System::EventLog::{
+        DeregisterEventSource, EVENTLOG_INFORMATION_TYPE, RegisterEventSourceW, ReportEventW,
+    };
+
+    let transition: String = transition
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+        .take(80)
+        .collect();
+    let instance_id: String = instance_id
+        .chars()
+        .filter(char::is_ascii_hexdigit)
+        .take(32)
+        .collect();
+    let source: Vec<u16> = "RamSharedBroker\0".encode_utf16().collect();
+    let message: Vec<u16> = format!("transition={transition} broker_instance_id={instance_id}\0")
+        .encode_utf16()
+        .collect();
+    unsafe {
+        let handle = RegisterEventSourceW(ptr::null(), source.as_ptr());
+        if !handle.is_null() {
+            let strings = [message.as_ptr()];
+            let _ = ReportEventW(
+                handle,
+                EVENTLOG_INFORMATION_TYPE,
+                0,
+                1000,
+                ptr::null_mut(),
+                1,
+                0,
+                strings.as_ptr(),
+                ptr::null(),
+            );
+            let _ = DeregisterEventSource(handle);
+        }
+    }
 }
 
 fn serve_status(core: Arc<Mutex<BrokerSessionCore>>, stop: Arc<AtomicBool>) -> io::Result<()> {
