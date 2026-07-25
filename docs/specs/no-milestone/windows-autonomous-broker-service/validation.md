@@ -15,9 +15,10 @@ boots and the supervised physical-host campaign.
 | touched tests | broker 40; winbroker 19; winsvc 120 pass + 1 CUDA ignore; wsl2d suites PASS |
 | native MSVC release | PASS; broker and winsvc staged |
 | static PowerShell harness | PASS: 13 assertions |
+| final broker VM matrices | Peer / RetryBudget / Boundary PASS; Event Log PASS |
 | `lease.rs` cover | 98.7% (149/151) |
-| winbroker `lib.rs` cover | 81.5% (286/351) |
-| winsvc config / IPC / package / runtime | 96.7% / 83.3% / 89.0% / 88.9% |
+| winbroker `lib.rs` cover | 97.3% (286/294) |
+| winsvc config / IPC / package / runtime / evidence | 96.7% / 83.3% / 89.0% / 88.9% / 97.2% |
 | package transaction | 5/5 PASS for VM and physical package shapes |
 | VM healthy lifecycle | 3/3 PASS; 9/9 SHA; zero residue |
 | VM BrokerLossOnline | PASS; stop 4,838 ms; no reconnect; zero residue |
@@ -54,6 +55,16 @@ After:
   automatic consumer reconnect.
 
 Evidence: `evidence/vm-final/` and `evidence/package-final/`.
+
+The broker matrices were rerun after the final Event Log change. The loaded
+native broker matched SHA-256
+`EE7C102F620B5F21947321EE93F16E9C6D174A406E7426165EA64B9A0D746911`.
+Peer, RetryBudget and Boundary all observed Event ID 1000 from
+`RamSharedBroker` with `transition=process_ready`. Readiness was 506/476/671
+ms, blocked accept/read cancellation was 254–266 ms, and the partial-frame
+deadline fired at 10,021 ms. The complete evidence map is
+`evidence/README.md`; the post-change result is
+`evidence/vm-final/broker-final-matrices.json`.
 
 ## Physical before → action → after
 

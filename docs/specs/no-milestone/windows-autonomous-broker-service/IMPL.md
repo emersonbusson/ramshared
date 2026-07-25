@@ -12,7 +12,7 @@ implemented · cover ✓ · E2E ✓ · BINARY_MATCH ✓
 | --- | --- | --- |
 | `crates/ramshared-broker/src/lease.rs` | ITEM-2/RF-1,RF-5 | Shared sender-bound lease state. |
 | `crates/ramshared-wsl2d/src/broker_srv.rs` | ITEM-2/RF-5 | Linux integration and wire-equivalence tests. |
-| `crates/ramshared-winbroker/` | ITEM-3/4 | Native SCM broker, authenticated product/status pipes, immutable config and evidence. |
+| `crates/ramshared-winbroker/` | ITEM-3/4 | Native SCM broker, authenticated product/status pipes, immutable JSONL and Windows Event Log evidence. |
 | `crates/ramshared-winsvc/src/{config,ipc,package,runtime}.rs` | ITEM-5/6 | Fixed pipe client, safe broker-loss lifecycle and transactional package plans. |
 | `crates/ramshared-winsvc/src/main.rs` | ITEM-6 | Two-service install/repair/start/stop/status/uninstall controller. |
 | `scripts/windows/Run-GuestBrokerService.ps1` | ITEM-4 | ACL, protocol, recovery and BINARY_MATCH VM drill. |
@@ -27,11 +27,16 @@ implemented · cover ✓ · E2E ✓ · BINARY_MATCH ✓
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0.
 - Tests → broker 40; winbroker 19; winsvc 120 pass + 1 CUDA ignore;
   wsl2d library/binary/integration suites pass with hardware/root cases guarded.
-- Cover → `lease.rs` 98.7% (149/151); winbroker `lib.rs` 81.5%
-  (286/351); winsvc config 96.7% (348/360), IPC 83.3% (20/24),
-  package 89.0% (258/290), runtime 88.9% (568/639).
+- Cover → `lease.rs` 98.7% (149/151); winbroker `lib.rs` 97.3%
+  (286/294); winsvc config 96.7% (348/360), IPC 83.3% (20/24),
+  package 89.0% (258/290), runtime 88.9% (568/639), evidence 97.2%
+  (353/363).
 - SPEC matrix → every named Rust test and all five PowerShell harness surfaces
   are present; static harness PASS.
+- Final broker matrices → Peer, RetryBudget and Boundary PASS after the Event
+  Log implementation; native broker SHA
+  `EE7C102F...D746911`; readiness 476–671 ms; blocked stop 254–266 ms;
+  partial-frame refusal 10,021 ms.
 - Package E2E → FreshInstall, Repair, ManufacturedRollback,
   UninstallRefusal and CleanUninstall PASS for VM `R:` and physical `S:`
   manifests.
@@ -45,12 +50,15 @@ implemented · cover ✓ · E2E ✓ · BINARY_MATCH ✓
 - BINARY_MATCH → broker, winsvc and loaded driver SHA matched the active
   manifest in VM; the physical harness rejected a driver mismatch before
   install and used the same immutable manifest for all three boots.
-- Evidence → `evidence/{vm-final,package-final,physical-final}/`; rejected
-  attempts retained under `evidence/physical-failed-*`.
+- Evidence → indexed in `evidence/README.md`; final post-change broker proof is
+  `evidence/vm-final/broker-final-matrices.json`; rejected attempts retained
+  under `evidence/physical-failed-*`.
 
 ## Gaps
 
-closed
+closed for this SPEC. Demand-start remains the accepted policy. Production
+signing/Secure Boot distribution remains an independent repository release
+gate and is not reclassified by this implementation.
 
 ## Rollback trigger
 

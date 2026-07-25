@@ -1,0 +1,62 @@
+{
+  "schema": 1,
+  "vm": "win11-drill",
+  "binary_sha256": "EE7C102F620B5F21947321EE93F16E9C6D174A406E7426165EA64B9A0D746911",
+  "source_artifacts": [
+    "C:\\ramshared\\artifacts\\autonomous-broker-20260725-155034\\results.json",
+    "C:\\ramshared\\artifacts\\autonomous-broker-20260725-155050\\results.json",
+    "C:\\ramshared\\artifacts\\autonomous-broker-20260725-155221\\results.json"
+  ],
+  "matrices": {
+    "PeerMatrix": {
+      "ready_ms": 506,
+      "stop_ms": 254,
+      "tests": [
+        "SCM_DEPENDENCY_MATCH",
+        "SERVICE_SID_MATCH",
+        "BROKER_BINARY_MATCH",
+        "scm_start_ready_stop",
+        "broker_event_log_transition",
+        "register_and_lease_over_named_pipe",
+        "administrator_protocol_connect_is_refused",
+        "status_pipe_rejects_mutation",
+        "legitimate_service_sid_connects",
+        "unrelated_service_is_refused",
+        "stop_cancels_blocked_accept",
+        "stop_with_no_session_is_idempotent"
+      ]
+    },
+    "RetryBudget": {
+      "ready_ms": 476,
+      "stop_ms": 266,
+      "tests": [
+        "BROKER_BINARY_MATCH",
+        "broker_event_log_transition",
+        "only_not_found_and_busy_retry",
+        "deadline_stops_retry",
+        "fourth_failure_remains_stopped",
+        "deterministic_failure_does_not_restart"
+      ]
+    },
+    "Boundary": {
+      "ready_ms": 671,
+      "partial_frame_timeout_ms": 10021,
+      "blocked_read_stop_ms": 254,
+      "blocked_accept_stop_ms": 257,
+      "tests": [
+        "BROKER_BINARY_MATCH",
+        "broker_event_log_transition",
+        "administrator_protocol_connect_is_refused",
+        "status_pipe_rejects_mutation",
+        "oversized_line_is_refused",
+        "partial_frame_times_out",
+        "deny_only_service_sid_is_refused",
+        "stop_cancels_blocked_read",
+        "boundary_refusals_do_not_mutate",
+        "stop_cancels_blocked_accept",
+        "stop_with_no_session_is_idempotent"
+      ]
+    }
+  },
+  "verdict": "PASS"
+}

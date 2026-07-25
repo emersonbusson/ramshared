@@ -17,6 +17,10 @@ Linux/WSL2 already ships a **userspace VRAM block backend** (NBD/ublk path) used
 4. **Wake path Day-0:** single `IOCTL_RAMSHARED_COMMIT_AND_FETCH` loop (DT-22); events are auxiliary only.
 5. **Broker lease is logical budget only** (DT-20); Windows process does local `cuMemAlloc` after `cuMemGetInfo` fail-closed.
 6. **Revocation is holder-cooperative** (DT-19); no new broker force-revoke message.
+7. **Deployment refinement:** logical leases are served by the independent
+   `RamSharedBroker` SCM service over an authenticated local named pipe.
+   `ramshared-winsvc` retains all CUDA, queue, LUN and teardown ownership.
+   See ADR-0007.
 
 ## Alternatives considered
 
@@ -33,6 +37,8 @@ Linux/WSL2 already ships a **userspace VRAM block backend** (NBD/ublk path) used
 - WDK/SDV/InfVerif/Driver Verifier replace Linux `checkpatch` for the driver (DT-14).
 - Host-real loads gated on ITEM-8 + degradation matrix update + attestation policy (R9).
 - Linux workspace must stay green (RNF-8) when touching shared crates.
+- Broker failure after Online is a control-plane degradation, not permission
+  to stop the I/O pump or bypass the existing storage teardown gates.
 
 ## Rollback
 
