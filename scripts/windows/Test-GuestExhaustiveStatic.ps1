@@ -50,5 +50,9 @@ if ($text -notmatch '\$connectionJob\s*=\s*Start-Job') {
 if ($text -match 'Invoke-Command[\s\S]{0,240}-AsJob') {
     throw "psdirect_open_timeout: Invoke-Command -AsJob can block before Wait-Job owns the timeout"
 }
+if ($text -notmatch 'function Parse-Status\(\$lines\)' -or
+    $text -notmatch '@\(\$lines\)[\s\S]{0,160}-join\s+"`n"') {
+    throw "status_stream_normalization: STATUS parsing must normalize multi-record job output"
+}
 
 Write-Output "PASS Test-GuestExhaustiveStatic"
