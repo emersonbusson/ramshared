@@ -1,0 +1,1 @@
+{"error":"Falha na interrupção do serviço \u0027RamShared CUDA VRAM Disk Service (RamSharedWinSvc)\u0027.","verdict":"FAIL","boot":1,"schema":1,"completed_at":"2026-07-25T09:18:48.9162273-03:00","forced_kills":0,"manifest_sha256":"0F6DFDB3327EEDAF1143C5742B4E0CD3A00F16FDD8FF4FF3799230902AAC1F1A"}

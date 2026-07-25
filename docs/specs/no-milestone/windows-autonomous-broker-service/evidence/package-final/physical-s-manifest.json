@@ -1,0 +1,50 @@
+{
+    "schema":  1,
+    "version":  "0.1.0-physical",
+    "commit":  "3333333333333333333333333333333333333333",
+    "architecture":  "x86_64-pc-windows-msvc",
+    "start_policy":  "demand",
+    "services":  {
+                     "broker_name":  "RamSharedBroker",
+                     "broker_account":  "NT SERVICE\\RamSharedBroker",
+                     "consumer_name":  "RamSharedWinSvc",
+                     "consumer_account":  "LocalSystem"
+                 },
+    "artifacts":  [
+                      {
+                          "role":  "broker_exe",
+                          "relative_path":  "ramshared-winbroker.exe",
+                          "sha256":  "C4DB8AB296C9AF22E695CCDE8264F9EEAD1DA00EA3550D6C5A176F5AE5E79451"
+                      },
+                      {
+                          "role":  "broker_config",
+                          "relative_path":  "broker.toml",
+                          "sha256":  "7D9E42C6CF345C0703BFA7E6815A8DFDDFED7EA5FA23000D4FBB18CD0F51A50B"
+                      },
+                      {
+                          "role":  "winsvc_exe",
+                          "relative_path":  "ramshared-winsvc.exe",
+                          "sha256":  "F2B14796584DDF2ECB7D4E2BB16C12B2C48D49B9B7D02F07B480B46AC35C8701"
+                      },
+                      {
+                          "role":  "winsvc_config",
+                          "relative_path":  "winsvc.toml",
+                          "sha256":  "6C7AD746718E4F06BB786CD7FC782E63173B86908BFC9CE4A03CAE8C5CEAD604"
+                      },
+                      {
+                          "role":  "driver_inf",
+                          "relative_path":  "ramshared.inf",
+                          "sha256":  "334A70DB5C6012D87C24097EE61D2C978D67DB86ACFF3AD83FD7859E59F53ABD"
+                      },
+                      {
+                          "role":  "driver_cat",
+                          "relative_path":  "ramshared.cat",
+                          "sha256":  "555B9A8CF2C4D09A41DAF99D5A88B5845554784A11C2CDD7EB5F8A1B479AEAD6"
+                      },
+                      {
+                          "role":  "driver_sys",
+                          "relative_path":  "ramshared.sys",
+                          "sha256":  "324CC7C95A17BE3C245865F55EFC3E87B443D9CF711249068A4221DD86DEDBFA"
+                      }
+                  ]
+}
