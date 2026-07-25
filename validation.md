@@ -2829,7 +2829,7 @@ broker-loss containment, VM lifecycle and three-cold-boot physical campaign.
 **Measured data:**
 - Workspace fmt/clippy PASS; broker 40, winbroker 19 and winsvc 120 tests
   passed; wsl2d touched suites passed.
-- Per-file cover: lease 98.7%, winbroker 81.5%, winsvc config 96.7%, IPC
+- Per-file cover: lease 98.7%, winbroker 97.3%, winsvc config 96.7%, IPC
   83.3%, package 89.0%, runtime 88.9%.
 - Package transaction: FreshInstall, Repair, ManufacturedRollback,
   UninstallRefusal and CleanUninstall all PASS.
@@ -2847,3 +2847,27 @@ broker-loss containment, VM lifecycle and three-cold-boot physical campaign.
 **Verdict:** ✅ Autonomous Windows broker Step 3 is implemented and has
 legitimate VM and physical before→action→after evidence. The package remains
 test-signed/Test Mode; that distribution limitation is outside this surface.
+
+## 2026-07-25 15:53 — Autonomous broker discipline audit
+
+**What:** Re-confronted the implementation and evidence against every SPEC
+matrix row, closed the missing broker Event Log implementation, updated the
+required living documentation, and reran the affected native VM matrices.
+
+**Measured data:**
+- Native broker SHA-256
+  `EE7C102F620B5F21947321EE93F16E9C6D174A406E7426165EA64B9A0D746911`
+  matched the running SCM process in Peer, RetryBudget, and Boundary.
+- All three matrices observed Application Event ID 1000 from
+  `RamSharedBroker` with `transition=process_ready`.
+- Readiness was 506/476/671 ms; blocked accept/read cancellation was
+  254–266 ms; partial-frame refusal completed at 10,021 ms.
+- Legitimate service-SID admission passed. Administrator, unrelated-service,
+  deny-only SID, status mutation, oversized line, and partial-frame paths were
+  refused; boundary state remained zero registrations and zero leases.
+- Final proof:
+  `docs/specs/no-milestone/windows-autonomous-broker-service/evidence/vm-final/broker-final-matrices.json`.
+
+**Verdict:** ✅ The implementation/evidence discipline gaps for this SPEC are
+closed. Production-trusted Windows signing remains a separately tracked
+release gate and was not falsely reclassified.

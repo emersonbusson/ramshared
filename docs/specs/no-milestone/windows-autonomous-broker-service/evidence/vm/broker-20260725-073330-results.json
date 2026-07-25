@@ -1,0 +1,106 @@
+﻿[
+    {
+        "test":  "SCM_DEPENDENCY_MATCH",
+        "verdict":  "PASS",
+        "detail":  "RamSharedBroker",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "c9e838ae-20bb-4d2b-be60-a670ec50f57f",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "SERVICE_SID_MATCH",
+        "verdict":  "PASS",
+        "detail":  "broker=unrestricted consumer=unrestricted",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "c9e838ae-20bb-4d2b-be60-a670ec50f57f",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "BROKER_BINARY_MATCH",
+        "verdict":  "PASS",
+        "detail":  "pid=4028 sha256=CE358546AB76C76BBC2A0E61E4E951B34E35F27D05EF10FEE04FF373C70690F7 ready_ms=673",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "c9e838ae-20bb-4d2b-be60-a670ec50f57f",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "scm_start_ready_stop",
+        "verdict":  "PASS",
+        "detail":  "ready_ms=673",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "c9e838ae-20bb-4d2b-be60-a670ec50f57f",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "register_and_lease_over_named_pipe",
+        "verdict":  "PASS",
+        "detail":  "pipe boundary ready; product admission tested by consumer case",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "c9e838ae-20bb-4d2b-be60-a670ec50f57f",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "administrator_protocol_connect_is_refused",
+        "verdict":  "PASS",
+        "detail":  "ERROR_ACCESS_DENIED before protocol",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "c9e838ae-20bb-4d2b-be60-a670ec50f57f",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "status_pipe_rejects_mutation",
+        "verdict":  "PASS",
+        "detail":  "read-only codec refusal",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "c9e838ae-20bb-4d2b-be60-a670ec50f57f",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "stop_cancels_blocked_accept",
+        "verdict":  "PASS",
+        "detail":  "stop_ms=263",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "c9e838ae-20bb-4d2b-be60-a670ec50f57f",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "stop_with_no_session_is_idempotent",
+        "verdict":  "PASS",
+        "detail":  "second stop left service stopped",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "c9e838ae-20bb-4d2b-be60-a670ec50f57f",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "only_not_found_and_busy_retry",
+        "verdict":  "PASS",
+        "detail":  "covered by Rust retry-policy gate",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "c9e838ae-20bb-4d2b-be60-a670ec50f57f",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "deadline_stops_retry",
+        "verdict":  "PASS",
+        "detail":  "covered by Rust retry-policy gate",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "c9e838ae-20bb-4d2b-be60-a670ec50f57f",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "fourth_failure_remains_stopped",
+        "verdict":  "PASS",
+        "detail":  "restart delays=5s,15s,40s then NONE",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "c9e838ae-20bb-4d2b-be60-a670ec50f57f",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "deterministic_failure_does_not_restart",
+        "verdict":  "PASS",
+        "detail":  "normal service-specific exit remained stopped",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "c9e838ae-20bb-4d2b-be60-a670ec50f57f",
+        "PSShowComputerName":  true
+    }
+]

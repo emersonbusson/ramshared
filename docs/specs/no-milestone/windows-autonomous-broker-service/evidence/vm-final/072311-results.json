@@ -1,0 +1,52 @@
+{
+    "rows":  [
+                 {
+                     "test":  "cold_boot_no_login",
+                     "verdict":  "PASS",
+                     "detail":  "demand services remained stopped; no user startup dependency"
+                 },
+                 {
+                     "test":  "RamSharedBroker_BINARY_MATCH",
+                     "verdict":  "PASS",
+                     "detail":  "pid=3336; sha256=CE358546AB76C76BBC2A0E61E4E951B34E35F27D05EF10FEE04FF373C70690F7"
+                 },
+                 {
+                     "test":  "RamSharedWinSvc_BINARY_MATCH",
+                     "verdict":  "PASS",
+                     "detail":  "pid=4152; sha256=9E721E21893CFB217BC2F66E916C9470365C9E5249562942031EE829CB09415B"
+                 },
+                 {
+                     "test":  "broker_ready_to_online",
+                     "verdict":  "PASS",
+                     "detail":  "ready_ms=17175"
+                 },
+                 {
+                     "test":  "three_round_sha",
+                     "verdict":  "PASS",
+                     "detail":  "sha256=889031620793FCB898263FB673ED5271B1F380AEADCB5C2C96B2979465CE08B0; sha256=B5BD62A6578703AD367EAD1F1D8EE34B764C7F8D89C9D9D0CCB34045798FF5A7; sha256=BC3F00B4CFB3BA81AC2E63C0F47094FB385FFBFC95810ADEF46B88DF42303C03"
+                 },
+                 {
+                     "test":  "BrokerLossOnline",
+                     "verdict":  "PASS",
+                     "detail":  "consumer_stop_ms=6872; no reconnect; safe teardown completed"
+                 },
+                 {
+                     "test":  "zero_residue",
+                     "verdict":  "PASS",
+                     "detail":  "Win32_DiskDrive_count=0; services=Stopped; stop_request_error="
+                 }
+             ],
+    "metrics":  {
+                    "product_stop_ms":  7225,
+                    "consumer_stop_ms":  6872,
+                    "readiness_ms":  17175,
+                    "sha256":  [
+                                   "889031620793FCB898263FB673ED5271B1F380AEADCB5C2C96B2979465CE08B0",
+                                   "B5BD62A6578703AD367EAD1F1D8EE34B764C7F8D89C9D9D0CCB34045798FF5A7",
+                                   "BC3F00B4CFB3BA81AC2E63C0F47094FB385FFBFC95810ADEF46B88DF42303C03"
+                               ]
+                },
+    "PSComputerName":  "win11-drill",
+    "RunspaceId":  "b71216bc-d5ab-415d-9214-d1b39f55b756",
+    "PSShowComputerName":  true
+}

@@ -28,7 +28,7 @@ Release: **v0.7.4**, published on 2026-07-24.
 | Linux/WSL2 cascade | **Product path** | CLI, CUDA/NBD tier, zram/disk cascade, diagnostics, and opt-in systemd boot integration are implemented. |
 | Generic host GPU reclaim | **Validated** | A live external workload caused two `GlobalGpuFreeFloor` demotions and the run ended without a ghost daemon or swap tier. |
 | WSL2 freeze campaign | **Validated** | Two supervised before/action/after rounds completed with watchdog, binary matching, integrity telemetry, and clean terminal state. |
-| Windows StorPort driver | **Supervised beta** | Physical-host and VM drills have passed, including a 3 GiB LUN and supported disk counters. It is not an unattended daily-host install. |
+| Windows StorPort driver | **Supervised beta** | The packaged broker/consumer topology passed VM drills and three physical cold boots. It remains demand-start and test-signed, not a public normal-Windows install. |
 | GiB reclaim matrix | **Validated** | WSL2 1 GiB, WSL2 4 GiB, and calibrated 1 GiB Windows + 3 GiB WSL2 rows passed integrity, reclaim, and clean teardown gates. |
 | Custom-kernel ublk transport | **Deferred research** | NBD remains the day-one WSL2 transport. |
 
@@ -180,11 +180,24 @@ The Windows path is a StorPort virtual miniport backed by GPU memory. It has
 passed physical-host and Hyper-V drills, but deployment is still an elevated,
 supervised beta workflow.
 
+The installed topology has two SCM services:
+
+- `RamSharedBroker` runs as `NT SERVICE\RamSharedBroker` and owns logical
+  lease arbitration only;
+- `RamSharedWinSvc` runs as LocalSystem, depends on the broker, and owns
+  CUDA, queue, LUN and safe teardown;
+- their daily boundary is the authenticated local named pipe
+  `\\.\pipe\RamSharedBroker.v1`; no daily TCP listener is installed;
+- both are demand-start by default and are switched as one immutable,
+  SHA-256-validated product manifest.
+
 Important boundaries:
 
 - use a disposable VM for routine driver development;
 - use a physical host only for an explicitly approved campaign;
 - verify the signed package and running binary match before collecting proof;
+- refuse installation if the manifest-owned temporary volume letter is
+  already present; never remap an existing host volume;
 - mount the temporary LUN under a private directory when possible, not a
   persistent Explorer drive letter;
 - format only an exact `RAMSHARE VRAMDISK` identity that also matches the
@@ -198,6 +211,8 @@ The calibrated GiB reclaim matrix is closed on the tested RTX 2060 host. Public
 Windows distribution remains gated on a production-trusted or
 Microsoft-attested package. Test-signed lab packages are not public releases;
 see [`docs/packaging/WINDOWS-DRIVER-DISTRIBUTION.md`](docs/packaging/WINDOWS-DRIVER-DISTRIBUTION.md).
+Operational install, rollback and recovery steps are in
+[`docs/runbooks/windows-autonomous-broker.md`](docs/runbooks/windows-autonomous-broker.md).
 
 ## Performance Evidence
 
