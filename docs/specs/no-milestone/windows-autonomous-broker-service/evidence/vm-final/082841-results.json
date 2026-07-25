@@ -1,0 +1,57 @@
+{
+    "rows":  [
+                 {
+                     "test":  "cold_boot_no_login",
+                     "verdict":  "PASS",
+                     "detail":  "demand services remained stopped; no user startup dependency"
+                 },
+                 {
+                     "test":  "RamSharedBroker_BINARY_MATCH",
+                     "verdict":  "PASS",
+                     "detail":  "pid=4180; sha256=C4DB8AB296C9AF22E695CCDE8264F9EEAD1DA00EA3550D6C5A176F5AE5E79451"
+                 },
+                 {
+                     "test":  "RamSharedWinSvc_BINARY_MATCH",
+                     "verdict":  "PASS",
+                     "detail":  "pid=4224; sha256=F2B14796584DDF2ECB7D4E2BB16C12B2C48D49B9B7D02F07B480B46AC35C8701"
+                 },
+                 {
+                     "test":  "RamSharedDriver_BINARY_MATCH",
+                     "verdict":  "PASS",
+                     "detail":  "sha256=324CC7C95A17BE3C245865F55EFC3E87B443D9CF711249068A4221DD86DEDBFA; path=C:\\WINDOWS\\system32\\DriverStore\\FileRepository\\ramshared.inf_amd64_bed8524dd58bf8aa\\ramshared.sys"
+                 },
+                 {
+                     "test":  "broker_ready_to_online",
+                     "verdict":  "PASS",
+                     "detail":  "ready_ms=10107"
+                 },
+                 {
+                     "test":  "three_round_sha",
+                     "verdict":  "PASS",
+                     "detail":  "sha256=4D5E6E0713F8E6186DCA8A8528F2A40A3841CFA6258C4F6427878DD7DCE7DF3A; sha256=353527A32F8CFBC19AEDC311B363E476DA640CC854E032B5AE3D038F7294BFF3; sha256=002294250FCD0D8443866B4D72A3F32694DE9C85F909379A10F034ADFBCA31F7"
+                 },
+                 {
+                     "test":  "BrokerLossOnline",
+                     "verdict":  "PASS",
+                     "detail":  "consumer_stop_ms=4838; no reconnect; safe teardown completed"
+                 },
+                 {
+                     "test":  "zero_residue",
+                     "verdict":  "PASS",
+                     "detail":  "Win32_DiskDrive_count=0; services=Stopped; stop_request_error="
+                 }
+             ],
+    "metrics":  {
+                    "product_stop_ms":  5001,
+                    "consumer_stop_ms":  4838,
+                    "readiness_ms":  10107,
+                    "sha256":  [
+                                   "4D5E6E0713F8E6186DCA8A8528F2A40A3841CFA6258C4F6427878DD7DCE7DF3A",
+                                   "353527A32F8CFBC19AEDC311B363E476DA640CC854E032B5AE3D038F7294BFF3",
+                                   "002294250FCD0D8443866B4D72A3F32694DE9C85F909379A10F034ADFBCA31F7"
+                               ]
+                },
+    "PSComputerName":  "win11-drill",
+    "RunspaceId":  "bba8dfb9-e50b-4bfe-9048-9de76511a24a",
+    "PSShowComputerName":  true
+}

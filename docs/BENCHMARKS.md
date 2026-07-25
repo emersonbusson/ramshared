@@ -121,3 +121,59 @@ Referência VRAM-swap (P0-RESULTS §3, mesma op 4K p50): **ublk 241 µs / NBD-Un
 writes show a long-tail p99 (494–2278 us). This is a disk-path baseline only; it does not
 prove StorPort or VRAM performance because the Windows driver was not loaded and no live swap
 pressure was introduced.
+
+## 2026-07-25 06:15 -03 — autonomous broker SCM lifecycle
+
+**Context**
+- Base commit: `72845a0`; uncommitted SSDV3 Step 3 implementation under validation.
+- Machine: Hyper-V `win11-drill`, Windows build 26200.8037, 4 logical CPUs,
+  2047 MiB visible RAM (805 MiB free after the runs).
+- Load: idle; median CPU sample 0.54%; both RamShared services stopped and zero
+  RamShared disks before/after.
+- Artifact SHA-256:
+  `28D5C31BD5BD106B321F176D7C17334528C9C5EA8E4292891F...` (full value in
+  each `BROKER_BINARY_MATCH` evidence row).
+- Runs: three independent demand-start → pipe-ready → supported stop cycles.
+- Raw evidence:
+  `C:\ramshared\artifacts\autonomous-broker-20260725-{061504,061509,061514}\results.json`.
+
+**Results** (milliseconds, nearest-rank p99 for n=3)
+
+| Metric | Samples | Median | p99 | Range | Range / median |
+| --- | --- | ---: | ---: | ---: | ---: |
+| SCM start to broker ready | 519, 481, 606 | 519 | 606 | 125 | 24.1% |
+| Supported broker stop | 252, 256, 258 | 256 | 258 | 6 | 2.3% |
+
+**Honest reading:** readiness is far below the 30 s acceptance bound and stop
+is stable below 0.3 s in this idle VM. With only three samples, p99 is the
+maximum observation, not a production percentile. This benchmark measures the
+isolated broker SCM/pipe surface; it does not measure CUDA, StorPort, package
+transactions, cold boot, or the physical host.
+
+## 2026-07-25 09:28 -03 — autonomous product VM versus physical cold boot
+
+**Context**
+- Base commit: `72845a0`; Step 3 implementation under final validation.
+- VM: Hyper-V `win11-drill`, Windows 26200.8037, 2 GiB visible RAM.
+- Physical: Windows 11 build 26200, RTX 2060, Test Mode, idle supervised host.
+- Workload: demand-start product, 64 MiB LUN, three independent cold boots,
+  three random 8 MiB write/read/SHA rounds, supported consumer-first stop.
+- Physical manifest SHA: `0F6DFDB3327EEDAF1143C5742B4E0CD3A00F16FDD8FF4FF3799230902AAC1F1A`.
+
+**Results** (milliseconds; nearest-rank p99 for n=3)
+
+| Environment / metric | Samples | Median | p99 | Range / median |
+| --- | --- | ---: | ---: | ---: |
+| VM readiness | 9,908 / 19,784 / 11,556 | 11,556 | 19,784 | 85.5% |
+| VM consumer stop | 4,437 / 4,803 / 4,161 | 4,437 | 4,803 | 14.5% |
+| VM full product stop | 4,949 / 5,060 / 4,417 | 4,949 | 5,060 | 13.0% |
+| Physical readiness | 1,164 / 1,165 / 1,156 | 1,164 | 1,165 | 0.8% |
+| Physical consumer stop | 2,796 / 2,557 / 2,552 | 2,557 | 2,796 | 9.5% |
+| Physical full product stop | 3,049 / 2,810 / 2,805 | 2,810 | 3,049 | 8.7% |
+
+**Honest reading:** on these three idle samples, the physical host is about
+9.9x faster at median readiness and 1.8x faster at median full stop than the
+small VM. Physical readiness is also substantially more repeatable. This is a
+lifecycle benchmark, not a throughput benchmark; n=3 makes p99 the maximum
+sample and does not justify a production percentile claim. Both environments
+had all SHA rounds match and zero terminal residue.

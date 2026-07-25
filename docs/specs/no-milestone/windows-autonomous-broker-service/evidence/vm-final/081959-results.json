@@ -1,0 +1,62 @@
+{
+    "rows":  [
+                 {
+                     "test":  "cold_boot_no_login",
+                     "verdict":  "PASS",
+                     "detail":  "demand services remained stopped; no user startup dependency"
+                 },
+                 {
+                     "test":  "RamSharedBroker_BINARY_MATCH",
+                     "verdict":  "PASS",
+                     "detail":  "pid=4196; sha256=C4DB8AB296C9AF22E695CCDE8264F9EEAD1DA00EA3550D6C5A176F5AE5E79451"
+                 },
+                 {
+                     "test":  "RamSharedWinSvc_BINARY_MATCH",
+                     "verdict":  "PASS",
+                     "detail":  "pid=4240; sha256=F2B14796584DDF2ECB7D4E2BB16C12B2C48D49B9B7D02F07B480B46AC35C8701"
+                 },
+                 {
+                     "test":  "RamSharedDriver_BINARY_MATCH",
+                     "verdict":  "PASS",
+                     "detail":  "sha256=324CC7C95A17BE3C245865F55EFC3E87B443D9CF711249068A4221DD86DEDBFA; path=C:\\WINDOWS\\system32\\DriverStore\\FileRepository\\ramshared.inf_amd64_bed8524dd58bf8aa\\ramshared.sys"
+                 },
+                 {
+                     "test":  "broker_ready_to_online",
+                     "verdict":  "PASS",
+                     "detail":  "ready_ms=9908"
+                 },
+                 {
+                     "test":  "three_round_sha",
+                     "verdict":  "PASS",
+                     "detail":  "sha256=4BF89DF7297747D1EB1F71A5DD6EB3C56FCC3EFD5035FF0B35AB528F3F7CA57E; sha256=AAAE71E61D29BDD9B452A94C401C42664DE8B854EF461022E7D65D90DDB3AA15; sha256=430A4A6161545D8D0F1951A72094F42805EE6A59C6D1D515EF0CECA9E7512E4C"
+                 },
+                 {
+                     "test":  "consumer_first_stop",
+                     "verdict":  "PASS",
+                     "detail":  "consumer_stop_ms=4437; product_stop_ms=4949"
+                 },
+                 {
+                     "test":  "lease_release",
+                     "verdict":  "PASS",
+                     "detail":  "broker JSONL contains lease_released"
+                 },
+                 {
+                     "test":  "zero_residue",
+                     "verdict":  "PASS",
+                     "detail":  "Win32_DiskDrive_count=0; services=Stopped; stop_request_error=Service \u0027RamShared CUDA VRAM Disk Service (RamSharedWinSvc)\u0027 stop failed."
+                 }
+             ],
+    "metrics":  {
+                    "product_stop_ms":  4949,
+                    "consumer_stop_ms":  4437,
+                    "readiness_ms":  9908,
+                    "sha256":  [
+                                   "4BF89DF7297747D1EB1F71A5DD6EB3C56FCC3EFD5035FF0B35AB528F3F7CA57E",
+                                   "AAAE71E61D29BDD9B452A94C401C42664DE8B854EF461022E7D65D90DDB3AA15",
+                                   "430A4A6161545D8D0F1951A72094F42805EE6A59C6D1D515EF0CECA9E7512E4C"
+                               ]
+                },
+    "PSComputerName":  "win11-drill",
+    "RunspaceId":  "3c1fc9e1-3075-40e2-a7fe-48bfbff6472c",
+    "PSShowComputerName":  true
+}

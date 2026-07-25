@@ -1,0 +1,9 @@
+{
+    "manifest":  "C:\\ramshared\\artifacts\\product-package-20260725-091601\\candidate-old\\product-manifest.json",
+    "next_boot":  1,
+    "cold_boots":  3,
+    "schema":  1,
+    "last_completed_boot":  0,
+    "status":  "scheduled",
+    "manifest_sha256":  "0F6DFDB3327EEDAF1143C5742B4E0CD3A00F16FDD8FF4FF3799230902AAC1F1A"
+}

@@ -2819,3 +2819,31 @@ functional in Test Mode on this exact host/build/GPU. This is not an official
 Windows distribution or anti-cheat-compatible state: Test Mode remains enabled,
 the package is test-signed, and autonomous SCM use still requires a packaged,
 supervised broker dependency.
+
+## 2026-07-25 09:28 — Autonomous Windows broker Step 3 closure
+
+**What:** Implemented and validated the separately supervised Windows broker,
+authenticated named-pipe product boundary, transactional two-service package,
+broker-loss containment, VM lifecycle and three-cold-boot physical campaign.
+
+**Measured data:**
+- Workspace fmt/clippy PASS; broker 40, winbroker 19 and winsvc 120 tests
+  passed; wsl2d touched suites passed.
+- Per-file cover: lease 98.7%, winbroker 81.5%, winsvc config 96.7%, IPC
+  83.3%, package 89.0%, runtime 88.9%.
+- Package transaction: FreshInstall, Repair, ManufacturedRollback,
+  UninstallRefusal and CleanUninstall all PASS.
+- VM: 3/3 healthy lifecycles and BrokerLossOnline PASS; 12/12 SHA rounds;
+  zero residue; broker/winsvc/driver BINARY_MATCH.
+- Physical: manifest SHA `0F6DFD...C1F1A` across 3/3 cold boots; readiness
+  median 1,164 ms/p99 1,165 ms; full stop median 2,810 ms/p99 3,049 ms;
+  9/9 SHA rounds; residue 0; forced kills 0; final services stopped,
+  task/watchdog absent.
+- A preflight defect that selected the real 466 GiB `R:` data volume was
+  refused before formatting. SPEC DT-17 and the corrected harness require a
+  free manifest-owned letter; the completed campaign used `S:` and left `R:`
+  untouched.
+
+**Verdict:** ✅ Autonomous Windows broker Step 3 is implemented and has
+legitimate VM and physical before→action→after evidence. The package remains
+test-signed/Test Mode; that distribution limitation is outside this surface.
