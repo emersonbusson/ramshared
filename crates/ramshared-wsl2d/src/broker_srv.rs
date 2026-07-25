@@ -21,6 +21,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ramshared_broker::arbiter::{Action, Arbiter, ArbiterConfig, TenantView};
+use ramshared_broker::lease::{LeaseBook, LeaseDecision, LeaseDeny};
 use ramshared_broker::model::{PsiSample, Slice, SliceId, SliceState, TenantId, TransportKind};
 use ramshared_broker::protocol::{
     Msg, NbdEndpoint, PROTO_VERSION, SliceIo, SwapEntry, TenantMem, TenantStatus, read_msg,
@@ -95,8 +96,7 @@ pub struct BrokerCore {
     name_to_id: HashMap<String, TenantId>, // stable ID by name (DT-22)
     next_tenant: TenantId,
     pending_dest: HashMap<SliceId, TenantId>, // destination of a MoveSlice in flight (post-zero)
-    pending_lease: Option<(TenantId, u64)>,   // requested lease, not yet granted (RF-B3)
-    lease: Option<(u32, TenantId)>, // active lease (id, holder); the id comes from the arbiter
+    lease_book: LeaseBook,
     last_rebalance: Option<Instant>,
     // Telemetria/reconciliação (SPEC broker-telemetry-reconciliation).
     slice_io: Arc<Vec<SliceIoCounters>>, // counters per slice (data-plane writes, RF-1/DT-1)
@@ -151,6 +151,7 @@ impl BrokerCore {
         tol_frac: f64,
         recon_streak: u32,
     ) -> Self {
+        let lease_capacity = slice_map.total_bytes();
         Self {
             slice_map,
             arbiter: Arbiter::new(arbiter_cfg),
@@ -161,8 +162,7 @@ impl BrokerCore {
             name_to_id: HashMap::new(),
             next_tenant: 1,
             pending_dest: HashMap::new(),
-            pending_lease: None,
-            lease: None,
+            lease_book: LeaseBook::new(lease_capacity),
             last_rebalance: None,
             slice_io,
             vram,
@@ -267,7 +267,7 @@ impl BrokerCore {
             }
             Msg::Status => out.push(Outbound::ToSession(sid, self.status_reply())),
             Msg::LeaseRequest { bytes } => self.on_lease_request(sid, bytes, out),
-            Msg::LeaseRelease { lease } => self.on_lease_release(lease, out),
+            Msg::LeaseRelease { lease } => self.on_lease_release(sid, lease, out),
             other => {
                 // Broker→agent messages never arrive here; unexpected shape → close.
                 out.push(Outbound::ToSession(
@@ -411,36 +411,55 @@ impl BrokerCore {
             out.push(Outbound::CloseSession(sid));
             return;
         };
-        // P1: at most 1 lease pending/active (DT-19).
-        if self.pending_lease.is_some() || self.lease.is_some() {
-            out.push(Outbound::ToSession(
+        match self.lease_book.begin_request(holder, bytes) {
+            LeaseDecision::Pending(_) => out.push(Outbound::Log(format!(
+                "[ramsharedd] lease pedido holder={holder} bytes={bytes} (grant no próximo tick)"
+            ))),
+            LeaseDecision::Denied(reason) => out.push(Outbound::ToSession(
                 sid,
                 Msg::LeaseDenied {
-                    reason: "lease_em_andamento".into(),
+                    reason: match reason {
+                        LeaseDeny::ZeroBytes => "bytes_zero",
+                        LeaseDeny::OverCapacity => "acima_da_capacidade",
+                        _ => "lease_em_andamento",
+                    }
+                    .into(),
                 },
-            ));
-            return;
+            )),
         }
-        if bytes > self.slice_map.total_bytes() {
-            out.push(Outbound::ToSession(
-                sid,
-                Msg::LeaseDenied {
-                    reason: "acima_da_capacidade".into(),
-                },
-            ));
-            return;
-        }
-        self.pending_lease = Some((holder, bytes));
-        out.push(Outbound::Log(format!(
-            "[ramsharedd] lease pedido holder={holder} bytes={bytes} (grant no próximo tick)"
-        )));
     }
 
-    fn on_lease_release(&mut self, lease_id: u32, out: &mut Vec<Outbound>) {
-        if self.lease.map(|(id, _)| id) != Some(lease_id) {
-            return; // unknown lease; ignore
+    fn on_lease_release(&mut self, sid: usize, lease_id: u32, out: &mut Vec<Outbound>) {
+        let Some(&holder) = self.sessions.get(&sid) else {
+            out.push(Outbound::ToSession(
+                sid,
+                Msg::Error {
+                    reason: "lease release antes de register".into(),
+                },
+            ));
+            out.push(Outbound::CloseSession(sid));
+            return;
+        };
+        match self.lease_book.release(holder, lease_id) {
+            Ok(true) => {}
+            Ok(false) | Err(LeaseDeny::WrongLease) => {
+                out.push(Outbound::Log(format!(
+                    "[ramsharedd] lease {lease_id} release idempotente/ignorado holder={holder}"
+                )));
+                return;
+            }
+            Err(LeaseDeny::WrongHolder) => {
+                out.push(Outbound::ToSession(
+                    sid,
+                    Msg::Error {
+                        reason: "holder de lease incorreto".into(),
+                    },
+                ));
+                out.push(Outbound::CloseSession(sid));
+                return;
+            }
+            Err(_) => return,
         }
-        self.lease = None;
         let leased: Vec<SliceId> = self
             .slice_map
             .slices()
@@ -466,15 +485,27 @@ impl BrokerCore {
                 "[ramsharedd] tenant {id} desconectou; slices congeladas (DT-20)"
             )));
             // Lease holder/requester dropped → automatic release/cancel (DT-19).
-            if let Some((lid, h)) = self.lease
-                && h == id
-            {
-                self.on_lease_release(lid, out);
-            }
-            if self.pending_lease.map(|(h, _)| h) == Some(id) {
-                self.pending_lease = None;
+            let disconnected = self.lease_book.disconnect(id);
+            if let Some(lease) = disconnected.released {
+                self.release_slices(lease.id, out);
             }
         }
+    }
+
+    fn release_slices(&mut self, lease_id: u32, out: &mut Vec<Outbound>) {
+        let leased: Vec<SliceId> = self
+            .slice_map
+            .slices()
+            .iter()
+            .filter(|s| s.state == SliceState::Leased)
+            .map(|s| s.id)
+            .collect();
+        for slice in leased {
+            let _ = self.slice_map.unlease(slice);
+        }
+        out.push(Outbound::Log(format!(
+            "[ramsharedd] lease {lease_id} liberado; slices devolvidas ao tier de swap"
+        )));
     }
 
     fn on_zero_done(&mut self, slice: SliceId, ok: bool, out: &mut Vec<Outbound>) {
@@ -619,9 +650,11 @@ impl BrokerCore {
             .cloned()
             .collect();
 
-        let actions = self
-            .arbiter
-            .tick(now, &present, &visible, self.pending_lease);
+        let pending_lease = self
+            .lease_book
+            .pending()
+            .map(|pending| (pending.holder, pending.requested_bytes));
+        let actions = self.arbiter.tick(now, &present, &visible, pending_lease);
         for action in actions {
             match action {
                 Action::AssignFree { slice, to } => {
@@ -660,11 +693,7 @@ impl BrokerCore {
                         self.to_tenant(from, Msg::SwapOff { slice }, out);
                     }
                 }
-                Action::GrantLease {
-                    lease,
-                    holder,
-                    slices,
-                } => {
+                Action::GrantLease { holder, slices } => {
                     let mut granted = 0u64;
                     for s in &slices {
                         if let Some(len) = self.slice_map.get(*s).map(|sl| sl.len)
@@ -673,15 +702,20 @@ impl BrokerCore {
                             granted += len; // Free → Leased
                         }
                     }
-                    self.lease = Some((lease, holder));
-                    self.pending_lease = None;
+                    let Ok(lease) = self.lease_book.grant_pending(granted) else {
+                        out.push(Outbound::Log(
+                            "[ramsharedd] ERRO lease grant divergiu do LeaseBook".into(),
+                        ));
+                        continue;
+                    };
                     out.push(Outbound::Log(format!(
-                        "[ramsharedd] lease {lease} concedido holder={holder} slices={slices:?}"
+                        "[ramsharedd] lease {} concedido holder={holder} slices={slices:?}",
+                        lease.id
                     )));
                     self.to_tenant(
                         holder,
                         Msg::LeaseGranted {
-                            lease,
+                            lease: lease.id,
                             bytes: granted,
                         },
                         out,
@@ -1612,6 +1646,56 @@ mod tests {
             Instant::now(),
         );
         assert_eq!(n_leased(&c), 0); // devolvida ao tier de swap
+    }
+
+    #[test]
+    fn foreign_tenant_cannot_release_lease() {
+        let mut c = core(2);
+        reg(&mut c, 10, "holder");
+        reg(&mut c, 20, "foreign");
+        lease_req(&mut c, 10, SLICE);
+        c.handle(CoreEvent::Tick, Instant::now());
+
+        let out = c.handle(
+            CoreEvent::Msg(20, Msg::LeaseRelease { lease: 1 }),
+            Instant::now(),
+        );
+
+        assert_eq!(n_leased(&c), 1);
+        assert!(out.contains(&Outbound::CloseSession(20)));
+        assert!(out.iter().any(
+            |effect| matches!(effect, Outbound::ToSession(20, Msg::Error { reason }) if reason.contains("holder"))
+        ));
+    }
+
+    #[test]
+    fn shared_lease_book_preserves_linux_wire_effects() {
+        let mut c = core(2);
+        reg(&mut c, 10, "holder");
+
+        lease_req(&mut c, 10, SLICE);
+        let grant = c.handle(CoreEvent::Tick, Instant::now());
+        assert!(grant.contains(&Outbound::ToSession(
+            10,
+            Msg::LeaseGranted {
+                lease: 1,
+                bytes: SLICE,
+            },
+        )));
+
+        c.handle(
+            CoreEvent::Msg(10, Msg::LeaseRelease { lease: 1 }),
+            Instant::now(),
+        );
+        lease_req(&mut c, 10, SLICE);
+        let second = c.handle(CoreEvent::Tick, Instant::now());
+        assert!(second.contains(&Outbound::ToSession(
+            10,
+            Msg::LeaseGranted {
+                lease: 2,
+                bytes: SLICE,
+            },
+        )));
     }
 
     #[test]

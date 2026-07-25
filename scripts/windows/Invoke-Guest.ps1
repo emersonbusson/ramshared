@@ -16,12 +16,24 @@ param(
     [string]$VMName = "win11-drill",
     [string]$User = "WIN11-DRILL\drilladmin",
     # Prefer env RAMSHARED_DRILL_PASSWORD (do not commit secrets). Passo 0 lab only.
-    [string]$Password = $env:RAMSHARED_DRILL_PASSWORD,
+    [string]$Password = "",
     [string]$Command = "hostname; whoami; [Environment]::OSVersion.VersionString",
     [string]$File = ""
 )
 
 $ErrorActionPreference = "Stop"
+if ([string]::IsNullOrEmpty($Password)) {
+    foreach ($scope in @("Machine", "User")) {
+        $candidate = [Environment]::GetEnvironmentVariable("RAMSHARED_DRILL_PASSWORD", $scope)
+        if (-not [string]::IsNullOrEmpty($candidate)) {
+            $Password = $candidate
+            break
+        }
+    }
+}
+if ([string]::IsNullOrEmpty($Password)) {
+    $Password = $env:RAMSHARED_DRILL_PASSWORD
+}
 if ([string]::IsNullOrEmpty($Password)) {
     throw "Set -Password or env RAMSHARED_DRILL_PASSWORD (lab guest local admin)."
 }
