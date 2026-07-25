@@ -728,7 +728,8 @@ public static class RamSharedRootEnum {
     W "ioctl pass2 under Verifier done"
 }
 
-function Parse-Status([string]$text) {
+function Parse-Status($lines) {
+    $text = (@($lines) | ForEach-Object { [string]$_ }) -join "`n"
     $statusMatches = [regex]::Matches($text, '(?m)^STATUS=(PASS|FAIL)(?:\s.*)?$')
     $exitMatches = [regex]::Matches($text, '(?m)^EXIT=(-?\d+)\s*$')
     if ($statusMatches.Count -ne 1 -or $exitMatches.Count -ne 1) {
