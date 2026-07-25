@@ -73,6 +73,7 @@ kill.
 | RF | ITEM | commit |
 | --- | --- | --- |
 | RF-1, RF-5 | ITEM-2 | `2435a3d` |
-| RF-1, RF-2, RF-3, RF-5 | ITEM-3/4 | `2435a3d` |
+| RF-1, RF-2, RF-3, RF-5 | ITEM-3/4 | `2435a3d`, `ad15c33` |
 | RF-3, RF-4, RF-5, RF-6 | ITEM-5 | `2435a3d` |
 | RF-1, RF-2, RF-6, RF-7, RF-8 | ITEM-6/7/8/9 | `2435a3d`, `e6b759f` |
+| RF-1–RF-8 | Living docs and final evidence audit | `e917e3c` |
