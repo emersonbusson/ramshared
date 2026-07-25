@@ -32,5 +32,27 @@ if ($text -notmatch 'pnputil /delete-driver \$publishedInf /uninstall /force') {
 if ($text -notmatch '\$load = Invoke-GuestBounded -TimeoutSec 240') {
     throw "load_timeout_budget: initial package install/load needs a budget that covers DriverStore purge plus PnP wait"
 }
+if ($text -notmatch '\[ValidateRange\(0, 5\)\]\[int\]\$PsDirectRetryCount') {
+    throw "psdirect_retry: bounded guest commands must expose a limited transient retry count"
+}
+if ($text -notmatch 'PSDirectException|credencial.+inv.lida|credential.+invalid') {
+    throw "psdirect_retry: retry must be limited to the observed transient authentication transport failure"
+}
+if ($text -notmatch 'Start-Sleep -Seconds \$PsDirectRetryDelaySec') {
+    throw "psdirect_retry: retries must include a bounded delay"
+}
+if ($text -match 'return\s+@\(Receive-Job') {
+    throw "psdirect_retry: retry wrapper must preserve the remote output stream for STATUS parsing"
+}
+if ($text -notmatch '\$connectionJob\s*=\s*Start-Job') {
+    throw "psdirect_open_timeout: PowerShell Direct connection creation must run inside the bounded local job"
+}
+if ($text -match 'Invoke-Command[\s\S]{0,240}-AsJob') {
+    throw "psdirect_open_timeout: Invoke-Command -AsJob can block before Wait-Job owns the timeout"
+}
+if ($text -notmatch 'function Parse-Status\(\$lines\)' -or
+    $text -notmatch '@\(\$lines\)[\s\S]{0,160}-join\s+"`n"') {
+    throw "status_stream_normalization: STATUS parsing must normalize multi-record job output"
+}
 
 Write-Output "PASS Test-GuestExhaustiveStatic"
