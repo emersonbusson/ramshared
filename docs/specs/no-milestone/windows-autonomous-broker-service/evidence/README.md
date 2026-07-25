@@ -15,6 +15,7 @@ successful runs.
 | VM package transactions | FreshInstall, Repair, ManufacturedRollback, UninstallRefusal, CleanUninstall | `package-final/` |
 | VM lifecycle | three cold boots, SHA rounds, BINARY_MATCH, consumer-first stop, release and zero residue | `vm-final/` |
 | Physical lifecycle | three cold boots with one manifest, SHA rounds, watchdog, final cleanup | `physical-final/` |
+| Physical active deployment | final broker promotion, live lease, six integrity samples and retained healthy `S:` volume | `physical-active-20260725/activation.json` |
 | Refused physical attempts | occupied `R:` collision; incomplete stop-command evidence | `physical-failed-r-collision/`, `physical-failed-stop-cmdlet/` |
 
 The final broker matrices were rerun after adding the broker Event Log

@@ -116,3 +116,25 @@ Rejected attempts are retained as evidence, not counted as PASS:
 ✅ PASS — implemented, canonical cover passed, VM and physical live E2E
 passed, BINARY_MATCH passed, and no environment-bound gap remains for this
 surface.
+
+## Physical active deployment
+
+On 2026-07-25 the physical Test Mode host was promoted from the stopped
+acceptance package to immutable version `0.1.1-physical`, commit
+`ad15c339de2e3ada7644aaf0899b62ff81826fb3`. The final Event Log broker was
+combined with the winsvc and driver binaries from the successful three-boot
+campaign.
+
+Before: both services stopped, zero product disks, `S:` absent, pagefile only
+on `C:`, and the real 466 GiB `R:` volume healthy.
+
+Action: install the immutable package, start only `RamSharedWinSvc`, allow SCM
+to start the broker dependency, bind the exact 64 MiB product disk to `S:`,
+and run six independent 1 MiB random write/read/SHA samples over 50 seconds.
+
+After: both services remained Running with one stable broker instance and
+67,108,864-byte lease; all six SHA samples matched; `S:` was healthy; Event
+Log recorded `process_ready`, `registered_ready`, and `lease_granted`;
+broker/winsvc/driver BINARY_MATCH passed; pagefile remained only on `C:`; and
+`R:` remained unchanged. Evidence:
+`evidence/physical-active-20260725/activation.json`.

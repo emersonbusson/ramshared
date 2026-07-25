@@ -2871,3 +2871,26 @@ required living documentation, and reran the affected native VM matrices.
 **Verdict:** ✅ The implementation/evidence discipline gaps for this SPEC are
 closed. Production-trusted Windows signing remains a separately tracked
 release gate and was not falsely reclassified.
+
+## 2026-07-25 16:02 — Physical broker product left active
+
+**What:** Promoted the final Event Log broker into a new immutable physical
+package and left the demand-start product running on the approved Test Mode
+host.
+
+**Measured data:**
+- Active version `0.1.1-physical`, commit `ad15c339de2e…`.
+- Broker/winsvc/driver BINARY_MATCH:
+  `EE7C102F…D746911` / `F2B14796…35C8701` /
+  `324CC7C9…DEDBFA`.
+- One 64 MiB `RAMSHARE VRAMDISK`, healthy `S:`, one registered
+  67,108,864-byte lease and one stable broker instance.
+- Six random 1 MiB write/read/SHA samples matched over 50 seconds.
+- Both services remained Running; Event Log recorded process ready,
+  registration ready and lease granted.
+- Pagefile remained only on `C:`. The healthy 466 GiB `R:` volume was
+  preserved.
+
+**Verdict:** ✅ PASS_ACTIVE_STABLE. Host evidence:
+`C:\ramshared\artifacts\active-host-20260725-155910`; committed summary:
+`docs/specs/no-milestone/windows-autonomous-broker-service/evidence/physical-active-20260725/activation.json`.
