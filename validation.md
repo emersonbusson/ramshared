@@ -2736,3 +2736,44 @@ corruption. The watchdog now preserves controller ownership, gives integrity
 cleanup a separate grace interval, scales pressure to configured tiers, stops
 after a failed round, and leaves Windows as the only forceful WSL recovery
 owner. Three corrected live rounds completed with clean teardown.
+
+## 2026-07-24 22:20 — Bounded Windows harnesses and native guest closure
+
+**What:** Reproduced and fixed PowerShell Direct connection hangs and
+multi-record status misclassification, then reran the isolated Windows driver
+and product lifecycles on `win11-drill`.
+
+**Commands:**
+```text
+scripts/windows/Test-GuestExhaustiveStatic.ps1
+scripts/windows/Run-GuestExhaustive.ps1
+scripts/windows/Test-GuestProductOnlineStatic.ps1
+scripts/windows/Run-GuestProductOnline.ps1
+scripts/windows/Test-*.ps1
+scripts/p0/Test-*.ps1
+./scripts/docs-check.sh
+cargo fmt --all -- --check
+cargo test --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+**Measured data:**
+- `guest-exhaustive-20260724-215817`: normal and Driver Verifier IOCTL passes
+  are `PASS`; Verifier flags `0x2093B`, `ramshared.sys` load 1/unload 0,
+  package/running SHA-256
+  `324CC7C95A17BE3C245865F55EFC3E87B443D9CF711249068A4221DD86DEDBFA`,
+  no new dump, elevated harness exit 0.
+- `guest-product-online-20260724-221128`: three fresh CUDA/Online lifecycle
+  rounds passed exact disk identity and checksum gates; all console exits were
+  zero, no force-kill occurred, every lease was released, CUDA free memory was
+  restored, no new dump appeared, and terminal safety passed.
+- All Windows and P0 static harness tests, docs/index/link/gap/hygiene gates,
+  workspace tests, formatting, and clippy with warnings denied: **PASS**.
+- Hyper-V rollback export remains available at
+  `E:\Hyper-V\exports\win11-drill-pre-native-20260724-162906`; the drill VM
+  ended Off.
+
+**Verdict:** ✅ The isolated native Windows beta surface is repeatably green
+under Driver Verifier and three product Online lifecycles. This does not change
+the public-distribution gate: the package remains test-signed and requires a
+production-trusted or Microsoft-attested signature before official deployment.

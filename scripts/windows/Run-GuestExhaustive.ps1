@@ -26,24 +26,45 @@ function Invoke-GuestBounded {
     param(
         [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock,
         [object[]]$ArgumentList = @(),
-        [ValidateRange(1, 900)][int]$TimeoutSec = 30
+        [ValidateRange(1, 900)][int]$TimeoutSec = 30,
+        [ValidateRange(0, 5)][int]$PsDirectRetryCount = 2,
+        [ValidateRange(1, 10)][int]$PsDirectRetryDelaySec = 3
     )
 
-    $job = Invoke-Command -VMName $VMName -Credential $cred -ScriptBlock $ScriptBlock `
-        -ArgumentList $ArgumentList -AsJob -ErrorAction Stop
-    try {
-        $completed = Wait-Job -Job $job -Timeout $TimeoutSec
-        if (-not $completed) {
-            Stop-Job -Job $job -ErrorAction SilentlyContinue
-            throw ("guest command timed out after {0}s" -f $TimeoutSec)
+    for ($attempt = 0; $attempt -le $PsDirectRetryCount; $attempt++) {
+        $connectionJob = $null
+        try {
+            $remoteScriptText = $ScriptBlock.ToString()
+            $connectionJob = Start-Job -ScriptBlock {
+                param($TargetVm, $TargetCredential, $RemoteScriptText, $RemoteArguments)
+                $remoteScript = [scriptblock]::Create($RemoteScriptText)
+                Invoke-Command -VMName $TargetVm -Credential $TargetCredential `
+                    -ScriptBlock $remoteScript -ArgumentList $RemoteArguments -ErrorAction Stop
+            } -ArgumentList @($VMName, $cred, $remoteScriptText, $ArgumentList)
+            $completed = Wait-Job -Job $connectionJob -Timeout $TimeoutSec
+            if (-not $completed) {
+                Stop-Job -Job $connectionJob -ErrorAction SilentlyContinue
+                throw ("guest connection or command timed out after {0}s" -f $TimeoutSec)
+            }
+            if ($connectionJob.State -ne "Completed") {
+                $reason = $connectionJob.ChildJobs[0].JobStateInfo.Reason
+                throw ("guest command ended in state {0}: {1}" -f $connectionJob.State, $reason)
+            }
+            Receive-Job -Job $connectionJob -ErrorAction Stop
+            return
+        } catch {
+            $detail = $_.Exception.ToString()
+            $transientPsDirectAuth = $detail -match
+                'PSDirectException|credencial.+inv.lida|credential.+invalid'
+            if (-not $transientPsDirectAuth -or $attempt -ge $PsDirectRetryCount) {
+                throw
+            }
+            Start-Sleep -Seconds $PsDirectRetryDelaySec
+        } finally {
+            if ($null -ne $connectionJob) {
+                Remove-Job -Job $connectionJob -Force -ErrorAction SilentlyContinue
+            }
         }
-        if ($job.State -ne "Completed") {
-            $reason = $job.ChildJobs[0].JobStateInfo.Reason
-            throw ("guest command ended in state {0}: {1}" -f $job.State, $reason)
-        }
-        Receive-Job -Job $job -ErrorAction Stop
-    } finally {
-        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -707,7 +728,8 @@ public static class RamSharedRootEnum {
     W "ioctl pass2 under Verifier done"
 }
 
-function Parse-Status([string]$text) {
+function Parse-Status($lines) {
+    $text = (@($lines) | ForEach-Object { [string]$_ }) -join "`n"
     $statusMatches = [regex]::Matches($text, '(?m)^STATUS=(PASS|FAIL)(?:\s.*)?$')
     $exitMatches = [regex]::Matches($text, '(?m)^EXIT=(-?\d+)\s*$')
     if ($statusMatches.Count -ne 1 -or $exitMatches.Count -ne 1) {

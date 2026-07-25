@@ -45,20 +45,25 @@ function Invoke-GuestBounded {
         [object[]]$ArgumentList = @(),
         [ValidateRange(1, 900)][int]$TimeoutSec = 60
     )
-    $job = Invoke-Command -VMName $VMName -Credential $cred -ScriptBlock $ScriptBlock `
-        -ArgumentList $ArgumentList -AsJob -ErrorAction Stop
+    $connectionJob = Start-Job -ScriptBlock {
+        param($TargetVm, $TargetCredential, $RemoteScriptText, $RemoteArguments)
+        $remoteScript = [scriptblock]::Create($RemoteScriptText)
+        Invoke-Command -VMName $TargetVm -Credential $TargetCredential `
+            -ScriptBlock $remoteScript -ArgumentList $RemoteArguments -ErrorAction Stop
+    } -ArgumentList @($VMName, $cred, $ScriptBlock.ToString(), $ArgumentList)
     try {
-        $completed = Wait-Job -Job $job -Timeout $TimeoutSec
+        $completed = Wait-Job -Job $connectionJob -Timeout $TimeoutSec
         if (-not $completed) {
-            Stop-Job -Job $job -ErrorAction SilentlyContinue
-            throw ("guest command timed out after {0}s" -f $TimeoutSec)
+            Stop-Job -Job $connectionJob -ErrorAction SilentlyContinue
+            throw ("guest connection or command timed out after {0}s" -f $TimeoutSec)
         }
-        if ($job.State -ne "Completed") {
-            throw ("guest command state {0}: {1}" -f $job.State, $job.ChildJobs[0].JobStateInfo.Reason)
+        if ($connectionJob.State -ne "Completed") {
+            throw ("guest command state {0}: {1}" -f
+                $connectionJob.State, $connectionJob.ChildJobs[0].JobStateInfo.Reason)
         }
-        Receive-Job -Job $job -ErrorAction Stop
+        Receive-Job -Job $connectionJob -ErrorAction Stop
     } finally {
-        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        Remove-Job -Job $connectionJob -Force -ErrorAction SilentlyContinue
     }
 }
 
