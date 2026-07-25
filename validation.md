@@ -2777,3 +2777,45 @@ cargo clippy --workspace --all-targets -- -D warnings
 under Driver Verifier and three product Online lifecycles. This does not change
 the public-distribution gate: the package remains test-signed and requires a
 production-trusted or Microsoft-attested signature before official deployment.
+
+## 2026-07-24 22:52 — Physical Windows Test Mode repetition
+
+**What:** Enabled Windows Test Mode on the physical RTX 2060 host, performed a
+clean test-signed miniport deployment with a mandatory post-deploy reboot, and
+repeated the bounded product storage lifecycle three times.
+
+**Commands:**
+```text
+bcdedit /set testsigning on
+scripts/windows/Get-WinDrivePreflight.ps1 -StorageOnly
+devcon.exe install C:\ramshared\package\ramshared.inf Root\RamShared
+Restart-Computer -Force
+scripts/windows/Run-HostExhaustive.ps1 -SizeBytes 67108864
+scripts/windows/Get-WinDrivePreflight.ps1 -StorageOnly
+```
+
+**Measured data:**
+- Elevated post-deploy preflight
+  `physical-testmode-final-preflight-20260724-224916`: `testsigning Yes`,
+  `PREFLIGHT_STORAGE_ONLY=PASS`, control path open, no RAMSHARE disk/Win32/PnP
+  residue or minidump, and DriverStore/package SHA-256 match
+  `324CC7C95A17BE3C245865F55EFC3E87B443D9CF711249068A4221DD86DEDBFA`.
+- Physical campaigns `exhaustive-20260724-224946`,
+  `exhaustive-20260724-225047`, and `exhaustive-20260724-225124`: each reports
+  `HOST_ONLINE=true`, three matching SHA rounds, `GRACEFUL=true`, `EXIT=0`,
+  `LEASE_RELEASED=true`, `DISK_IO_MEASURE_OK=true`, and
+  `LUN_GONE=true`/`WIN32_GONE=true`/`PNP_GONE=true`.
+- Aggregate physical evidence: three fresh CUDA/Online lifecycles, nine SHA
+  matches, three direct disk-I/O checks, three graceful teardowns, zero forced
+  product termination, and zero residual storage identities.
+- Final elevated preflight `physical-testmode-final-20260724-225209`: PASS,
+  Test Mode still enabled, service/control available, no RAMSHARE storage
+  identity, no pagefile on RAMSHARE, and no minidump.
+- Terminal GPU observation: RTX 2060 at 681 MiB used, 5274 MiB free of
+  6144 MiB. Firmware Secure Boot remains disabled.
+
+**Verdict:** ✅ The supervised physical Windows storage path is repeatably
+functional in Test Mode on this exact host/build/GPU. This is not an official
+Windows distribution or anti-cheat-compatible state: Test Mode remains enabled,
+the package is test-signed, and autonomous SCM use still requires a packaged,
+supervised broker dependency.
