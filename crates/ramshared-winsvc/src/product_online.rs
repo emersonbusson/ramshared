@@ -5,8 +5,7 @@
 
 #![cfg(windows)]
 
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpStream;
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,9 +22,11 @@ use crate::evidence::{
     EvidenceWriter, IoCounters, RuntimeEvidence, new_process_run_id, summarize_latencies, utc_ms,
 };
 use crate::host_safety::{LockWaitDecision, lock_wait_decision, pagefile_may_target_volume};
+use crate::ipc::NamedPipeBrokerStream as BrokStream;
 use crate::proto::DiskParams;
 use crate::runtime::{
-    RunMode, RuntimeError, RuntimeErrorClass, RuntimePhase, RuntimeState, RuntimeSummary,
+    PostTeardownReleaseDisposition, RunMode, RuntimeError, RuntimeErrorClass, RuntimePhase,
+    RuntimeState, RuntimeSummary, post_teardown_release_disposition,
 };
 use crate::service::{
     DiskControl, PagefileGates, ServiceState, TeardownTarget, WipeVram, pagefile_refusal_to_runtime,
@@ -79,16 +80,16 @@ pub fn run_product_online(
     let _ = evidence.append(&row);
 
     // --- Broker lease ---
-    let addr = cfg
-        .broker_addr()
-        .map_err(|e| RuntimeError::new(RuntimeErrorClass::Config, 2, e.to_string()))?;
-    let raw = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|e| {
-        RuntimeError::new(RuntimeErrorClass::Broker, 3, format!("connect {addr}: {e}"))
+    let mut stream = BrokStream::connect_product_pipe(
+        Instant::now() + Duration::from_secs(cfg.broker_ready_timeout_secs),
+    )
+    .map_err(|error| {
+        RuntimeError::new(
+            RuntimeErrorClass::Broker,
+            3,
+            format!("named-pipe connect: {error:?}"),
+        )
     })?;
-    raw.set_read_timeout(Some(Duration::from_secs(10))).ok();
-    raw.set_write_timeout(Some(Duration::from_secs(10))).ok();
-    let mut stream = BrokStream::new(raw)
-        .map_err(|e| RuntimeError::new(RuntimeErrorClass::Broker, 3, format!("stream: {e}")))?;
     let mut tenant = BrokerTenant::new(cfg.tenant.clone(), Duration::from_secs(cfg.heartbeat_secs));
     tenant
         .register(&mut stream)
@@ -332,6 +333,7 @@ pub fn run_product_online(
 
     // --- I/O loop: one pending COMMIT at a time ---
     let mut last_progress = Instant::now();
+    let mut broker_lost_online = false;
     let cuda_watchdog = CudaWatchdog::start(Duration::from_millis(5_000));
     let commit_watchdog = Duration::from_millis(5_000);
 
@@ -375,10 +377,22 @@ pub fn run_product_online(
                     }
                 }
             }
-            if let Err(e) = tenant.heartbeat_psi(&mut stream) {
-                eprintln!("broker heartbeat failed: {e}");
-            } else if let Err(e) = stream.flush() {
-                eprintln!("broker heartbeat flush failed: {e}");
+            let broker_loss = match tenant.heartbeat_psi(&mut stream) {
+                Err(error) => Some(error.to_string()),
+                Ok(()) => stream.flush().err().map(|error| error.to_string()),
+            };
+            if let Some(e) = broker_loss {
+                broker_lost_online = true;
+                teardown_diag(&format!("broker_lost_online: {e}"));
+                state.healthy = false;
+                state.phase = RuntimePhase::FailedSafe;
+                row.begin_event("broker_lost_online", utc_ms());
+                row.error_class = Some("broker".into());
+                row.error_code = Some("3".into());
+                sync_runtime_evidence(&mut row, &state);
+                let _ = evidence.append(&row);
+                stop.store(true, Ordering::Release);
+                break;
             }
             thread::sleep(Duration::from_millis(10));
         }
@@ -740,6 +754,22 @@ pub fn run_product_online(
                     row.error_code = Some(e.to_string());
                     sync_runtime_evidence(&mut row, &state);
                     let _ = evidence.append(&row);
+                    if post_teardown_release_disposition(broker_lost_online, false)
+                        == PostTeardownReleaseDisposition::StopWithBrokerFailure
+                    {
+                        teardown_diag(
+                            "FailedSafe: safe teardown completed after broker loss; \
+                             lease release is unconfirmed",
+                        );
+                        return Err(RuntimeError::new(
+                            RuntimeErrorClass::Broker,
+                            3,
+                            format!(
+                                "broker lost Online; safe teardown completed; \
+                                 lease release unconfirmed: {e}"
+                            ),
+                        ));
+                    }
                     preserve_failed_safe_lease(
                         "destructive teardown completed but lease release failed",
                         &mut tenant,
@@ -1024,11 +1054,13 @@ fn sync_runtime_evidence(row: &mut RuntimeEvidence, state: &RuntimeState) {
     .into();
     row.phase = match state.phase {
         RuntimePhase::Stopped => "Stopped",
+        RuntimePhase::WaitingForBroker => "WaitingForBroker",
         RuntimePhase::Leased => "Leased",
         RuntimePhase::CudaReady => "CudaReady",
         RuntimePhase::DiskCreated => "DiskCreated",
         RuntimePhase::QueueRegistered => "QueueRegistered",
         RuntimePhase::Online => "Online",
+        RuntimePhase::Degraded => "Degraded",
         RuntimePhase::Stopping => "Stopping",
         RuntimePhase::FailedSafe => "FailedSafe",
     }
@@ -1119,46 +1151,6 @@ impl CudaWatchdog {
 impl Drop for CudaWatchdog {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
-    }
-}
-
-/// Split read/write over cloned TCP so `BufRead + Write` is available.
-struct BrokStream {
-    reader: BufReader<TcpStream>,
-    writer: TcpStream,
-}
-
-impl BrokStream {
-    fn new(stream: TcpStream) -> std::io::Result<Self> {
-        let writer = stream.try_clone()?;
-        Ok(Self {
-            reader: BufReader::new(stream),
-            writer,
-        })
-    }
-}
-
-impl Read for BrokStream {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.reader.read(buf)
-    }
-}
-
-impl BufRead for BrokStream {
-    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
-        self.reader.fill_buf()
-    }
-    fn consume(&mut self, amt: usize) {
-        self.reader.consume(amt);
-    }
-}
-
-impl Write for BrokStream {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.writer.write(buf)
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.writer.flush()
     }
 }
 

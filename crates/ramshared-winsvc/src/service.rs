@@ -323,7 +323,8 @@ pub fn teardown(
         evidence_path: std::path::PathBuf::from(r"C:\ProgramData\RamShared\evidence"),
         volume_letter: 'D',
         volume_mount_path: None,
-        broker: "127.0.0.1:7700".into(),
+        broker_pipe: crate::config::BrokerPipeV1::NamedPipeV1,
+        broker_ready_timeout_secs: 30,
         tenant: "wd".into(),
         heartbeat_secs: 5,
     };
@@ -495,7 +496,8 @@ mod tests {
             evidence_path: std::path::PathBuf::from(r"C:\ProgramData\RamShared\evidence"),
             volume_letter: 'D',
             volume_mount_path: None,
-            broker: "127.0.0.1:7700".into(),
+            broker_pipe: crate::config::BrokerPipeV1::NamedPipeV1,
+            broker_ready_timeout_secs: 30,
             tenant: "wd".into(),
             heartbeat_secs: 5,
         }

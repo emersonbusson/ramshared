@@ -71,14 +71,9 @@ pub enum Action {
         to: TenantId,
     },
     /// Revokes an `Active` slice from `from` to satisfy a lease (RF-B3).
-    RevokeForLease {
-        slice: SliceId,
-        from: TenantId,
-        lease: u32,
-    },
+    RevokeForLease { slice: SliceId, from: TenantId },
     /// Grants the lease when there are enough slices (only once).
     GrantLease {
-        lease: u32,
         holder: TenantId,
         slices: Vec<SliceId>,
     },
@@ -100,7 +95,6 @@ pub struct Arbiter {
     last_move: Option<MoveRecord>,
     cooldown_until: Option<Instant>,
     rr_cursor: usize,
-    next_lease_id: u32,
 }
 
 fn owner_psi(tenants: &[TenantView], id: TenantId) -> Option<f32> {
@@ -126,7 +120,6 @@ impl Arbiter {
             last_move: None,
             cooldown_until: None,
             rr_cursor: 0,
-            next_lease_id: 1,
         }
     }
 
@@ -188,10 +181,7 @@ impl Arbiter {
                     .take(need)
                     .copied()
                     .collect();
-                let lease = self.next_lease_id;
-                self.next_lease_id += 1;
                 actions.push(Action::GrantLease {
-                    lease,
                     holder,
                     slices: grant,
                 });
@@ -208,9 +198,8 @@ impl Arbiter {
                     })
                     .collect();
                 active.sort_by(|a, b| by_psi(a.2, b.2).then(a.0.cmp(&b.0)));
-                let lease = self.next_lease_id;
                 for (slice, from, _) in active.into_iter().take(deficit) {
-                    actions.push(Action::RevokeForLease { slice, from, lease });
+                    actions.push(Action::RevokeForLease { slice, from });
                 }
             }
             return actions;
@@ -475,7 +464,6 @@ mod tests {
                 .find(|x| matches!(x, Action::GrantLease { .. }))
                 .cloned(),
             Some(Action::GrantLease {
-                lease: 1,
                 holder: 9,
                 slices: vec![0]
             })

@@ -2,9 +2,7 @@
 //!
 //! Closed storage-only shape: CUDA + queue + evidence; no pagefile/backend selector.
 
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 
 use serde::Deserialize;
 
@@ -20,6 +18,12 @@ pub const MAX_IO_BYTES_CAP: u32 = 1 << 20;
 pub const MAX_QUEUE_DEPTH: u32 = 256;
 /// Single-open config read cap (DT-1).
 pub const MAX_CONFIG_BYTES: usize = 64 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrokerPipeV1 {
+    NamedPipeV1,
+}
 
 /// Configuration for the Windows CUDA storage-only service.
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -39,8 +43,8 @@ pub struct WinDriveConfig {
     /// Optional private NTFS mount path used instead of an Explorer drive letter.
     #[serde(default)]
     pub volume_mount_path: Option<PathBuf>,
-    /// Broker listen address (e.g. `127.0.0.1:7700`).
-    pub broker: String,
+    pub broker_pipe: BrokerPipeV1,
+    pub broker_ready_timeout_secs: u64,
     pub tenant: String,
     /// Heartbeat interval seconds (default 5).
     #[serde(default = "default_heartbeat_secs")]
@@ -73,6 +77,7 @@ impl std::error::Error for ConfigError {}
 
 /// TOML wrapper with a `[win_drive]` table.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Root {
     win_drive: WinDriveConfig,
 }
@@ -205,19 +210,13 @@ impl WinDriveConfig {
                 detail: "must be non-empty".into(),
             });
         }
-        SocketAddr::from_str(&self.broker).map_err(|e| ConfigError::Invalid {
-            field: "broker",
-            detail: e.to_string(),
-        })?;
+        if !(1..=30).contains(&self.broker_ready_timeout_secs) {
+            return Err(ConfigError::Invalid {
+                field: "broker_ready_timeout_secs",
+                detail: "must be in 1..=30".into(),
+            });
+        }
         Ok(())
-    }
-
-    /// Parsed broker socket address.
-    pub fn broker_addr(&self) -> Result<SocketAddr, ConfigError> {
-        SocketAddr::from_str(&self.broker).map_err(|e| ConfigError::Invalid {
-            field: "broker",
-            detail: e.to_string(),
-        })
     }
 
     /// Effective CUDA free reserve: `max(config, 512 MiB, ceil(total_vram/10))` (DT-2).
@@ -263,7 +262,8 @@ queue_depth = 4
 max_io_bytes = 1048576
 evidence_path = "C:\\ProgramData\\RamShared\\evidence"
 volume_letter = "D"
-broker = "127.0.0.1:7700"
+broker_pipe = "named_pipe_v1"
+broker_ready_timeout_secs = 30
 tenant = "windrive-host"
 "#;
 
@@ -280,7 +280,7 @@ tenant = "windrive-host"
         assert_eq!(c.volume_letter, 'D');
         assert!(c.volume_mount_path.is_none());
         assert!(is_absolute_path(&c.evidence_path));
-        c.broker_addr().unwrap();
+        assert_eq!(c.broker_pipe, BrokerPipeV1::NamedPipeV1);
     }
 
     #[test]
@@ -430,7 +430,7 @@ tenant = "windrive-host"
     fn from_reader_parses_good_utf8() {
         let c = WinDriveConfig::from_reader(GOOD.as_bytes()).unwrap();
         assert_eq!(c.queue_depth, 4);
-        assert_eq!(c.broker_addr().unwrap().port(), 7700);
+        assert_eq!(c.broker_ready_timeout_secs, 30);
     }
 
     #[test]
@@ -552,15 +552,44 @@ volume_mount_path = "C:\\Users\\Public\\lun""#,
     }
 
     #[test]
-    fn reject_bad_broker() {
-        let bad = GOOD.replace(r#"broker = "127.0.0.1:7700""#, r#"broker = "not-an-addr""#);
-        let e = WinDriveConfig::from_toml(&bad).unwrap_err();
+    fn accept_named_pipe_v1() {
+        let c = WinDriveConfig::from_toml(GOOD).unwrap();
+        assert_eq!(c.broker_pipe, BrokerPipeV1::NamedPipeV1);
+    }
+
+    #[test]
+    fn reject_tcp_daily_transport() {
+        let bad = GOOD.replace(r#"broker_pipe = "named_pipe_v1""#, r#"broker_pipe = "tcp""#);
         assert!(matches!(
-            e,
-            ConfigError::Invalid {
-                field: "broker",
+            WinDriveConfig::from_toml(&bad),
+            Err(ConfigError::Parse(_))
+        ));
+    }
+
+    #[test]
+    fn reject_ready_timeout_over_30() {
+        let bad = GOOD.replace(
+            "broker_ready_timeout_secs = 30",
+            "broker_ready_timeout_secs = 31",
+        );
+        assert!(matches!(
+            WinDriveConfig::from_toml(&bad),
+            Err(ConfigError::Invalid {
+                field: "broker_ready_timeout_secs",
                 ..
-            }
+            })
+        ));
+    }
+
+    #[test]
+    fn reject_unknown_broker_fields() {
+        let bad = GOOD.replace(
+            r#"broker_pipe = "named_pipe_v1""#,
+            "broker_pipe = \"named_pipe_v1\"\nbroker = \"127.0.0.1:7700\"",
+        );
+        assert!(matches!(
+            WinDriveConfig::from_toml(&bad),
+            Err(ConfigError::Parse(_))
         ));
     }
 

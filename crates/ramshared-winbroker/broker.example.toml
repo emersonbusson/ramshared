@@ -1,0 +1,5 @@
+[local_broker]
+schema = 1
+capacity_bytes = 536870912
+allowed_tenant = "windrive-host"
+evidence_path = "C:\\ProgramData\\RamShared\\evidence"

@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod arbiter;
+pub mod lease;
 pub mod model;
 pub mod protocol;
 pub mod slices;
