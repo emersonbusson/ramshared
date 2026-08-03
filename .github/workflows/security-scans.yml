@@ -66,6 +66,6 @@ jobs:
           limit-severities-for-sarif: true
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v4.37.4
         if: always() && hashFiles('trivy-results.sarif') != ''
         continue-on-error: true
