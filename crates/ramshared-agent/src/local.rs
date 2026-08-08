@@ -91,4 +91,12 @@ mod tests {
             .expect("msg");
         assert_eq!(decoded, msg);
     }
+
+    #[test]
+    fn local_protocol_read_too_large() {
+        let buf = vec![b'a'; MAX_LINE_BYTES + 1];
+        let err = read_json_line::<_, LocalMsg>(&mut Cursor::new(buf)).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(err.to_string(), "local message too large");
+    }
 }
