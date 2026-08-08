@@ -264,6 +264,7 @@ mod tests {
 
     fn safe_remove_file<P: AsRef<std::path::Path>>(path: P) {
         let path = path.as_ref();
+        #[allow(clippy::collapsible_if)]
         if let Ok(canon) = path.canonicalize() {
             if let Ok(tmp) = std::env::temp_dir().canonicalize() {
                 if canon.starts_with(&tmp) {
@@ -279,6 +280,7 @@ mod tests {
 
     fn safe_remove_dir_all<P: AsRef<std::path::Path>>(path: P) {
         let path = path.as_ref();
+        #[allow(clippy::collapsible_if)]
         if let Ok(canon) = path.canonicalize() {
             if let Ok(tmp) = std::env::temp_dir().canonicalize() {
                 if canon.starts_with(&tmp) {
