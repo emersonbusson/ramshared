@@ -75,6 +75,7 @@ fn kill_daemon_securely() {
     }
 }
 
+#[allow(clippy::collapsible_if)]
 fn daemon_alive_secure() -> bool {
     if let Ok(pid_s) = fs::read_to_string(PID_FILE)
         && let Ok(pid) = pid_s.trim().parse::<u32>()

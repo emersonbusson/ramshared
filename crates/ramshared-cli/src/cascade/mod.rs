@@ -939,6 +939,7 @@ fn parse_demote_status_file(text: &str) -> Option<DemoteSnapshot> {
     })
 }
 
+#[allow(clippy::collapsible_if)]
 fn daemon_alive_pid() -> (bool, Option<u32>) {
     if let Ok(s) = fs::read_to_string(PID_FILE)
         && let Ok(pid) = s.trim().parse::<u32>()
