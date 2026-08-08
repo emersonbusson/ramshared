@@ -1656,9 +1656,18 @@ fn run_ublk(
     // Orderly teardown: STOP_DEV aborts FETCHes -> worker exits loop (and zeroes
     // VRAM at the end, in VRAM path) -> join -> DEL_DEV. (Whoever did swapon must swapoff
     // before: del_gendisk waits for the openers of the block device.)
-    ublk_control::stop_dev(UBLK_CONTROL, report.dev_id)?;
-    server.join()?;
-    ublk_control::delete_device(UBLK_CONTROL, report.dev_id)?;
+
+    // We collect the results to ensure that all teardown steps (importantly `delete_device`)
+    // are attempted even if one of the prior steps fails, avoiding early return via `?`
+    // which would skip deletion and leave a D-state stall.
+    let stop_res = ublk_control::stop_dev(UBLK_CONTROL, report.dev_id);
+    let join_res = server.join();
+    let delete_res = ublk_control::delete_device(UBLK_CONTROL, report.dev_id);
+
+    stop_res?;
+    join_res?;
+    delete_res?;
+
     eprintln!("[ramsharedd] ublk device removido");
     Ok(())
 }

@@ -214,10 +214,14 @@ pub struct ServerHandleDt3<B> {
 
 impl<B> ServerHandleDt3<B> {
     pub fn join(self) -> io::Result<B> {
-        self.ring
+        let r_ring = self
+            .ring
             .join()
-            .map_err(|_| io::Error::other("ring owner panicked"))??;
-        self.worker.join()
+            .unwrap_or_else(|_| Err(io::Error::other("ring owner panicked")));
+        let r_worker = self.worker.join();
+
+        r_ring?;
+        r_worker
     }
 }
 
@@ -385,12 +389,17 @@ pub struct ServerHandleDt3Vram {
 
 impl ServerHandleDt3Vram {
     pub fn join(self) -> io::Result<()> {
-        self.ring
+        let r_ring = self
+            .ring
             .join()
-            .map_err(|_| io::Error::other("ring owner panicked"))??;
-        self.worker
+            .unwrap_or_else(|_| Err(io::Error::other("ring owner panicked")));
+        let r_worker = self
+            .worker
             .join()
-            .map_err(|_| io::Error::other("vram worker panicked"))?
+            .unwrap_or_else(|_| Err(io::Error::other("vram worker panicked")));
+
+        r_ring?;
+        r_worker
     }
 }
 
@@ -448,12 +457,17 @@ impl ServerHandleDt3VramResidency {
     }
 
     pub fn join(self) -> io::Result<()> {
-        self.ring
+        let r_ring = self
+            .ring
             .join()
-            .map_err(|_| io::Error::other("ring owner panicked"))??;
-        self.worker
+            .unwrap_or_else(|_| Err(io::Error::other("ring owner panicked")));
+        let r_worker = self
+            .worker
             .join()
-            .map_err(|_| io::Error::other("vram residency worker panicked"))?
+            .unwrap_or_else(|_| Err(io::Error::other("vram residency worker panicked")));
+
+        r_ring?;
+        r_worker
     }
 }
 
