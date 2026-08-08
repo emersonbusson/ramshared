@@ -82,6 +82,17 @@ struct TenantState {
     occupied_bytes: u64,
 }
 
+/// Configuration for the pure broker core.
+pub struct BrokerCoreConfig {
+    pub arbiter_cfg: ArbiterConfig,
+    pub endpoints: EndpointCfg,
+    pub swap_prio: Option<i32>,
+    pub slice_io: Arc<Vec<SliceIoCounters>>,
+    pub vram: Arc<VramGauge>,
+    pub tol_frac: f64,
+    pub recon_streak: u32,
+}
+
 /// Broker core: sole owner of `SliceMap` + `Arbiter` + session table (without locks; the
 /// IO layer runs this in a single thread). `BTreeMap` by `TenantId` gives stable iteration
 /// (deterministic round-robin).
@@ -140,22 +151,12 @@ fn dev_to_slice(dev: &str) -> Option<SliceId> {
 }
 
 impl BrokerCore {
-    #[allow(clippy::too_many_arguments)] // construtor do core: config + Arcs de telemetria
-    pub fn new(
-        slice_map: SliceMap,
-        arbiter_cfg: ArbiterConfig,
-        endpoints: EndpointCfg,
-        swap_prio: Option<i32>,
-        slice_io: Arc<Vec<SliceIoCounters>>,
-        vram: Arc<VramGauge>,
-        tol_frac: f64,
-        recon_streak: u32,
-    ) -> Self {
+    pub fn new(slice_map: SliceMap, cfg: BrokerCoreConfig) -> Self {
         Self {
             slice_map,
-            arbiter: Arbiter::new(arbiter_cfg),
-            endpoints,
-            swap_prio,
+            arbiter: Arbiter::new(cfg.arbiter_cfg),
+            endpoints: cfg.endpoints,
+            swap_prio: cfg.swap_prio,
             tenants: BTreeMap::new(),
             sessions: HashMap::new(),
             name_to_id: HashMap::new(),
@@ -164,15 +165,15 @@ impl BrokerCore {
             pending_lease: None,
             lease: None,
             last_rebalance: None,
-            slice_io,
-            vram,
+            slice_io: cfg.slice_io,
+            vram: cfg.vram,
             demotes_total: 0,
             last_demote_reason: None,
             demotes_at_last_sample: 0,
             recon_flag: ReconcileFlag::None,
             recon_count: 0,
-            tol_frac,
-            recon_streak,
+            tol_frac: cfg.tol_frac,
+            recon_streak: cfg.recon_streak,
             pending_zero: HashMap::new(),
         }
     }
@@ -866,13 +867,15 @@ pub fn spawn_broker(
     // Core (single thread owner of BrokerCore). Keeps an `io_tx` for the zero-done forwarders.
     let core = BrokerCore::new(
         slice_map,
-        cfg.arbiter,
-        cfg.endpoints,
-        cfg.swap_prio,
-        cfg.slice_io,
-        cfg.vram,
-        cfg.tol_frac,
-        cfg.recon_streak,
+        BrokerCoreConfig {
+            arbiter_cfg: cfg.arbiter,
+            endpoints: cfg.endpoints,
+            swap_prio: cfg.swap_prio,
+            slice_io: cfg.slice_io,
+            vram: cfg.vram,
+            tol_frac: cfg.tol_frac,
+            recon_streak: cfg.recon_streak,
+        },
     );
     let tick = cfg.tick;
     let sink = cfg.telemetry_jsonl.and_then(TelemetrySink::open);
@@ -1090,16 +1093,18 @@ mod tests {
         };
         BrokerCore::new(
             SliceMap::new(k, 64 * 1024 * 1024),
-            cfg,
-            EndpointCfg {
-                nbd_unix: Some("/run/x.sock".into()),
-                nbd_tcp: None,
+            BrokerCoreConfig {
+                arbiter_cfg: cfg,
+                endpoints: EndpointCfg {
+                    nbd_unix: Some("/run/x.sock".into()),
+                    nbd_tcp: None,
+                },
+                swap_prio: None,
+                slice_io: Arc::new((0..k).map(|_| SliceIoCounters::default()).collect()),
+                vram: Arc::new(VramGauge::default()),
+                tol_frac: 0.10,
+                recon_streak,
             },
-            None,
-            Arc::new((0..k).map(|_| SliceIoCounters::default()).collect()),
-            Arc::new(VramGauge::default()),
-            0.10,
-            recon_streak,
         )
     }
 
