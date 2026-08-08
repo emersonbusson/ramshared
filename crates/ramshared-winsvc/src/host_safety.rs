@@ -133,6 +133,18 @@ mod tests {
     }
 
     #[test]
+    fn merge_pagefile_empty_path_returns_error() {
+        assert_eq!(
+            merge_pagefile_sources(Ok(vec!["".into()]), Ok(vec![])).unwrap_err(),
+            "pagefile source returned an empty path"
+        );
+        assert_eq!(
+            merge_pagefile_sources(Ok(vec![]), Ok(vec!["   ".into()])).unwrap_err(),
+            "pagefile source returned an empty path"
+        );
+    }
+
+    #[test]
     fn wildcard_or_ambiguous_pagefile_path_is_unsafe() {
         assert!(pagefile_may_target_volume(r"?:\pagefile.sys", 'S').unwrap());
         assert!(pagefile_may_target_volume(r"S:\pagefile.sys", 'S').unwrap());
