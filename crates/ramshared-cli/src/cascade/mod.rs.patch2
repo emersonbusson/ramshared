@@ -1,0 +1,32 @@
+--- crates/ramshared-cli/src/cascade/mod.rs
++++ crates/ramshared-cli/src/cascade/mod.rs
+@@ -1401,7 +1401,8 @@
+              /dev/nbd0\\040(deleted) partition 1024 50 100\n",
+         ));
+         let e = read_swaps();
+-        let fails = swapoff_all(&["/dev/nbd0".to_string()], &e);
++        let binding = ["/dev/nbd0".to_string()];
++        let fails = swapoff_all(&binding, &e);
+         clear_test_seams();
+         assert_eq!(fails.len(), 1);
+         assert!(fails[0].1.contains("ghost"));
+@@ -1416,7 +1417,8 @@
+              /dev/sdc partition 999 0 -2\n",
+         ));
+         let e = read_swaps();
+-        let fails = swapoff_all(&["/dev/sdc".to_string(), "/dev/nbd0".to_string()], &e);
++        let binding = ["/dev/sdc".to_string(), "/dev/nbd0".to_string()];
++        let fails = swapoff_all(&binding, &e);
+         clear_test_seams();
+         assert!(fails.is_empty(), "{fails:?}");
+     }
+@@ -1430,7 +1432,8 @@
+              /dev/sdc partition 999 0 -2\n",
+         ));
+         let e = read_swaps();
+-        let fails = swapoff_all(&["/dev/nbd0".to_string()], &e);
++        let binding = ["/dev/nbd0".to_string()];
++        let fails = swapoff_all(&binding, &e);
+         clear_test_seams();
+         assert!(fails.is_empty(), "{fails:?}");
+     }

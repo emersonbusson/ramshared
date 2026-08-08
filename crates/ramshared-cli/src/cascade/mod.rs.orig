@@ -425,7 +425,7 @@ fn swapoff_try(path: &str) -> Result<(), CascadeError> {
 
 /// Swapoff every candidate. Returns list of failures.
 /// **Never** kills the daemon from here.
-fn swapoff_all<'a>(paths: &'a [String], entries: &[SwapEntry]) -> Vec<(&'a str, String)> {
+fn swapoff_all(paths: &[String], entries: &[SwapEntry]) -> Vec<(String, String)> {
     let mut fails = Vec::new();
     for p in paths {
         if !is_allowlisted_managed_path(p) {
@@ -435,7 +435,7 @@ fn swapoff_all<'a>(paths: &'a [String], entries: &[SwapEntry]) -> Vec<(&'a str, 
         // Ghost with used>0 cannot be recovered without reboot — report loudly.
         let p_canon = canonicalize_swap_path(p);
         if let Some(msg) = ghost_used_blocks_swapoff(entries, p) {
-            fails.push((p.as_str(), msg));
+            fails.push((p.clone(), msg));
             continue;
         }
         match swapoff_try(p) {
@@ -449,12 +449,12 @@ fn swapoff_all<'a>(paths: &'a [String], entries: &[SwapEntry]) -> Vec<(&'a str, 
                         .iter()
                         .any(|e| e.canonical_path() == p_canon && e.used_kb > 0);
                     if still {
-                        fails.push((p.as_str(), msg));
+                        fails.push((p.clone(), msg));
                     } else {
                         eprintln!("[down] swapoff skip (ausente): {p_canon}");
                     }
                 } else {
-                    fails.push((p.as_str(), msg));
+                    fails.push((p.clone(), msg));
                 }
             }
         }
@@ -1401,8 +1401,7 @@ Filename Type Size Used Priority
              /dev/nbd0\\040(deleted) partition 1024 50 100\n",
         ));
         let e = read_swaps();
-        let binding = ["/dev/nbd0".to_string()];
-        let fails = swapoff_all(&binding, &e);
+        let fails = swapoff_all(&["/dev/nbd0".to_string()], &e);
         clear_test_seams();
         assert_eq!(fails.len(), 1);
         assert!(fails[0].1.contains("ghost"));
@@ -1417,8 +1416,7 @@ Filename Type Size Used Priority
              /dev/sdc partition 999 0 -2\n",
         ));
         let e = read_swaps();
-        let binding = ["/dev/sdc".to_string(), "/dev/nbd0".to_string()];
-        let fails = swapoff_all(&binding, &e);
+        let fails = swapoff_all(&["/dev/sdc".to_string(), "/dev/nbd0".to_string()], &e);
         clear_test_seams();
         assert!(fails.is_empty(), "{fails:?}");
     }
@@ -1432,8 +1430,7 @@ Filename Type Size Used Priority
              /dev/sdc partition 999 0 -2\n",
         ));
         let e = read_swaps();
-        let binding = ["/dev/nbd0".to_string()];
-        let fails = swapoff_all(&binding, &e);
+        let fails = swapoff_all(&["/dev/nbd0".to_string()], &e);
         clear_test_seams();
         assert!(fails.is_empty(), "{fails:?}");
     }

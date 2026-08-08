@@ -1,0 +1,38 @@
+--- crates/ramshared-cli/src/cascade/mod.rs
++++ crates/ramshared-cli/src/cascade/mod.rs
+@@ -426,17 +426,17 @@
+
+ /// Swapoff every candidate. Returns list of failures.
+ /// **Never** kills the daemon from here.
+-fn swapoff_all(paths: &[String], entries: &[SwapEntry]) -> Vec<(String, String)> {
++fn swapoff_all<'a>(paths: &'a [String], entries: &[SwapEntry]) -> Vec<(&'a str, String)> {
+     let mut fails = Vec::new();
+     for p in paths {
+         if !is_allowlisted_managed_path(p) {
+             eprintln!("[down] swapoff skip (nao allowlist): {p}");
+             continue;
+         }
+         // Ghost with used>0 cannot be recovered without reboot — report loudly.
+         let p_canon = canonicalize_swap_path(p);
+         if let Some(msg) = ghost_used_blocks_swapoff(entries, p) {
+-            fails.push((p.clone(), msg));
++            fails.push((p.as_str(), msg));
+             continue;
+         }
+         match swapoff_try(p) {
+@@ -449,12 +449,12 @@
+                     let still = live
+                         .iter()
+                         .any(|e| e.canonical_path() == p_canon && e.used_kb > 0);
+                     if still {
+-                        fails.push((p.clone(), msg));
++                        fails.push((p.as_str(), msg));
+                     } else {
+                         eprintln!("[down] swapoff skip (ausente): {p_canon}");
+                     }
+                 } else {
+-                    fails.push((p.clone(), msg));
++                    fails.push((p.as_str(), msg));
+                 }
+             }
+         }
