@@ -257,8 +257,7 @@ pub struct UblkFetchRing {
     /// Data buffers per tag: the `addr` of each FETCH points to its corresponding
     /// buffer, which must remain alive while the command is parked in the kernel.
     /// Never read directly; exists to enforce the lifetime (drop guard).
-    #[allow(dead_code)]
-    buffers: Vec<Vec<u8>>,
+    _buffers: Vec<Vec<u8>>,
 }
 
 impl UblkFetchRing {
@@ -295,7 +294,10 @@ impl UblkFetchRing {
         // Does not block (want=0); the FETCH requests remain parked in the driver.
         ring.submit()?;
 
-        Ok(Self { ring, buffers })
+        Ok(Self {
+            ring,
+            _buffers: buffers,
+        })
     }
 
     /// Drains currently available CQEs without blocking.
