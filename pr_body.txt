@@ -1,0 +1,22 @@
+## Resumo
+Removes the unused `target` field and its `#[allow(dead_code)]` attribute from the `HostGates` struct to improve code health.
+
+## Commits
+| Commit | O que fez | Por que fez | Detalhes |
+|---|---|---|---|
+| 🧹 [code health improvement] Remove unused target field from HostGates | Removed `target` field | Improves code health and clarity | <details><summary>detalhes</summary>**Arquivos:** crates/ramshared-winsvc/src/product_online.rs<br>**Validacao:** cargo test<br>**Risco/rollback:** N/A</details> |
+
+## Issue
+N/A
+
+## Responsavel
+@jules
+
+## Labels
+code-health
+
+## Validacao
+✅ **Verification:** Ran `cargo check` and `cargo test --package ramshared-winsvc` to verify that the struct's behavior and validation constraints remain fully intact.
+
+## Rollback trigger
+N/A
