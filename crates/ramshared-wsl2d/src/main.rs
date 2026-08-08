@@ -21,8 +21,8 @@ use std::time::{Duration, Instant};
 
 use ramshared_block::protocol::{NBD_FLAG_CAN_MULTI_CONN, NBD_FLAG_HAS_FLAGS, NBD_FLAG_SEND_FLUSH};
 use ramshared_block::{
-    BlockBackend, Command, CommitBudgetGate, SparseVramBackend, chunk_bytes_from_env,
-    commit_cap_bytes_from_env, idle_free_secs_from_env, prealloc_enabled,
+    BlockBackend, Command, CommitBudgetGate, SparseVramBackend, SparseVramConfig,
+    chunk_bytes_from_env, commit_cap_bytes_from_env, idle_free_secs_from_env, prealloc_enabled,
     reserve_floor_bytes_from_env, safe_commit_cap, serve,
 };
 use ramshared_broker::arbiter::ArbiterConfig;
@@ -762,14 +762,16 @@ fn run_nbd<P: VramProvider>(
         let env_cap = commit_cap_bytes_from_env();
         let auto_cap = safe_commit_cap(size, total, reserve);
         let commit_cap = env_cap.min(auto_cap);
-        let sparse = SparseVramBackend::new_with_limits_and_gate(
+        let sparse = SparseVramBackend::new_with_config(
             &provider,
-            size,
-            chunk,
-            BLOCK_SIZE,
-            reserve,
-            Some(commit_cap),
-            budget_gate,
+            SparseVramConfig {
+                capacity: size,
+                chunk_bytes: chunk,
+                block_size: BLOCK_SIZE,
+                reserve_floor_bytes: reserve,
+                commit_cap_bytes: Some(commit_cap),
+                budget_gate,
+            },
         )
         .map_err(|e| e.0)?;
         eprintln!(

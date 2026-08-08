@@ -25,6 +25,15 @@ struct Chunk<'p, P: VramProvider + 'p> {
     last_write: Option<Instant>,
 }
 
+pub struct SparseVramConfig<'p> {
+    pub capacity: u64,
+    pub chunk_bytes: u64,
+    pub block_size: u32,
+    pub reserve_floor_bytes: u64,
+    pub commit_cap_bytes: Option<u64>,
+    pub budget_gate: Option<&'p dyn CommitBudgetGate>,
+}
+
 /// Block device: advertised `capacity`, physical commit in `chunk_bytes` units.
 pub struct SparseVramBackend<'p, P: VramProvider + 'p> {
     provider: &'p P,
@@ -52,63 +61,43 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         chunk_bytes: u64,
         block_size: u32,
     ) -> Result<Self, IoError> {
-        Self::new_with_limits_and_gate(
+        Self::new_with_config(
             provider,
-            capacity,
-            chunk_bytes,
-            block_size,
-            reserve_floor_bytes_from_env(),
-            None,
-            None,
+            SparseVramConfig {
+                capacity,
+                chunk_bytes,
+                block_size,
+                reserve_floor_bytes: reserve_floor_bytes_from_env(),
+                commit_cap_bytes: None,
+                budget_gate: None,
+            },
         )
     }
 
-    /// Same as [`new`] with explicit safety limits (tests + daemon).
-    pub fn new_with_limits(
-        provider: &'p P,
-        capacity: u64,
-        chunk_bytes: u64,
-        block_size: u32,
-        reserve_floor_bytes: u64,
-        commit_cap_bytes: Option<u64>,
-    ) -> Result<Self, IoError> {
-        Self::new_with_limits_and_gate(
-            provider,
-            capacity,
-            chunk_bytes,
-            block_size,
-            reserve_floor_bytes,
-            commit_cap_bytes,
-            None,
-        )
-    }
-
-    pub fn new_with_limits_and_gate(
-        provider: &'p P,
-        capacity: u64,
-        chunk_bytes: u64,
-        block_size: u32,
-        reserve_floor_bytes: u64,
-        commit_cap_bytes: Option<u64>,
-        budget_gate: Option<&'p dyn CommitBudgetGate>,
-    ) -> Result<Self, IoError> {
-        if capacity == 0 {
+    pub fn new_with_config(provider: &'p P, config: SparseVramConfig<'p>) -> Result<Self, IoError> {
+        if config.capacity == 0 {
             return Err(IoError("sparse: capacity 0".into()));
         }
-        if chunk_bytes == 0 || !chunk_bytes.is_multiple_of(u64::from(block_size)) {
+        if config.chunk_bytes == 0
+            || !config
+                .chunk_bytes
+                .is_multiple_of(u64::from(config.block_size))
+        {
             return Err(IoError(format!(
-                "sparse: chunk_bytes={chunk_bytes} must be >0 and multiple of block_size={block_size}"
+                "sparse: chunk_bytes={} must be >0 and multiple of block_size={}",
+                config.chunk_bytes, config.block_size
             )));
         }
-        let n = capacity.div_ceil(chunk_bytes);
+        let n = config.capacity.div_ceil(config.chunk_bytes);
         if n > 1_000_000 {
             return Err(IoError(format!("sparse: too many chunks ({n})")));
         }
         // Cap commit to capacity; optional env can lower further.
-        let commit_cap = commit_cap_bytes
+        let commit_cap = config
+            .commit_cap_bytes
             .unwrap_or_else(commit_cap_bytes_from_env)
-            .min(capacity)
-            .max(chunk_bytes);
+            .min(config.capacity)
+            .max(config.chunk_bytes);
         let mut chunks = Vec::with_capacity(n as usize);
         for _ in 0..n {
             chunks.push(Chunk {
@@ -119,12 +108,12 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         }
         Ok(Self {
             provider,
-            capacity,
-            chunk_bytes,
-            block_size,
-            reserve_floor_bytes,
+            capacity: config.capacity,
+            chunk_bytes: config.chunk_bytes,
+            block_size: config.block_size,
+            reserve_floor_bytes: config.reserve_floor_bytes,
             commit_cap_bytes: commit_cap,
-            budget_gate,
+            budget_gate: config.budget_gate,
             chunks,
             alloc_fails: 0,
             reclaim_frees: 0,
@@ -578,13 +567,16 @@ mod tests {
         // FakeProvider reports 8GiB free always — use commit_cap instead for hard stop.
         let p = FakeProvider::new();
         let chunk = 256 * 1024u64;
-        let mut be = SparseVramBackend::new_with_limits(
+        let mut be = SparseVramBackend::new_with_config(
             &p,
-            2 * chunk,
-            chunk,
-            4096,
-            0,           // no free-floor (fake has lots of free)
-            Some(chunk), // only one chunk allowed
+            SparseVramConfig {
+                capacity: 2 * chunk,
+                chunk_bytes: chunk,
+                block_size: 4096,
+                reserve_floor_bytes: 0,
+                commit_cap_bytes: Some(chunk),
+                budget_gate: None,
+            },
         )
         .unwrap();
         be.write_at(0, &[1u8; 4096]).unwrap();
@@ -603,14 +595,16 @@ mod tests {
             }
         }
         let p = FakeProvider::new();
-        let mut be = SparseVramBackend::new_with_limits_and_gate(
+        let mut be = SparseVramBackend::new_with_config(
             &p,
-            1024 * 1024,
-            256 * 1024,
-            4096,
-            0,
-            None,
-            Some(&Deny),
+            SparseVramConfig {
+                capacity: 1024 * 1024,
+                chunk_bytes: 256 * 1024,
+                block_size: 4096,
+                reserve_floor_bytes: 0,
+                commit_cap_bytes: None,
+                budget_gate: Some(&Deny),
+            },
         )
         .unwrap();
         be.write_at(0, &[1u8; 4096]).unwrap();
@@ -681,13 +675,16 @@ mod tests {
             }
         }
         let p = TightProvider;
-        let mut be = SparseVramBackend::new_with_limits(
+        let mut be = SparseVramBackend::new_with_config(
             &p,
-            1024 * 1024,
-            256 * 1024,
-            4096,
-            512 * 1024, // reserve 512KiB
-            None,
+            SparseVramConfig {
+                capacity: 1024 * 1024,
+                chunk_bytes: 256 * 1024,
+                block_size: 4096,
+                reserve_floor_bytes: 512 * 1024,
+                commit_cap_bytes: None,
+                budget_gate: None,
+            },
         )
         .unwrap();
         let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
@@ -713,8 +710,18 @@ mod tests {
             }
         }
         let p = BadInfo;
-        let mut be =
-            SparseVramBackend::new_with_limits(&p, 1024 * 1024, 256 * 1024, 4096, 0, None).unwrap();
+        let mut be = SparseVramBackend::new_with_config(
+            &p,
+            SparseVramConfig {
+                capacity: 1024 * 1024,
+                chunk_bytes: 256 * 1024,
+                block_size: 4096,
+                reserve_floor_bytes: 0,
+                commit_cap_bytes: None,
+                budget_gate: None,
+            },
+        )
+        .unwrap();
         let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
         assert!(
             err.0.contains("mem_info") || err.0.contains("no gpu"),
