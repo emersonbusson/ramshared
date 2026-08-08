@@ -133,6 +133,16 @@ mod tests {
     }
 
     #[test]
+    fn empty_pagefile_path_returns_error() {
+        // Empty path
+        assert!(merge_pagefile_sources(Ok(vec!["".into()]), Ok(vec![])).is_err());
+        assert!(merge_pagefile_sources(Ok(vec![]), Ok(vec!["".into()])).is_err());
+
+        // Whitespace-only path (which gets trimmed to empty)
+        assert!(merge_pagefile_sources(Ok(vec!["   ".into()]), Ok(vec![])).is_err());
+    }
+
+    #[test]
     fn wildcard_or_ambiguous_pagefile_path_is_unsafe() {
         assert!(pagefile_may_target_volume(r"?:\pagefile.sys", 'S').unwrap());
         assert!(pagefile_may_target_volume(r"S:\pagefile.sys", 'S').unwrap());
