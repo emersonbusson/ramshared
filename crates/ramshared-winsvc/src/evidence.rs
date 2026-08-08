@@ -288,6 +288,14 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn utc_ms_is_greater_than_zero() {
+        assert!(
+            utc_ms() > 0,
+            "utc_ms() should return a value greater than 0"
+        );
+    }
+
+    #[test]
     fn append_preserves_prior_rows() {
         let dir =
             std::env::temp_dir().join(format!("ramshared-ev-{}-{}", std::process::id(), utc_ms()));
