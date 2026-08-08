@@ -239,8 +239,8 @@ impl WindowsHostState {
             "@(Get-CimInstance Win32_PageFileUsage -ErrorAction Stop | ",
             "ForEach-Object { [string]$_.Name }) | ForEach-Object { Write-Output $_ }"
         );
-        let output =
-            run_powershell_bounded(script, Duration::from_secs(3)).map_err(HostError::Pagefile)?;
+        let output = run_powershell_bounded(script, Duration::from_secs(3), &[])
+            .map_err(HostError::Pagefile)?;
         if !output.status.success() {
             return Err(HostError::Pagefile(format!(
                 "Win32_PageFileUsage failed status={:?} stderr={}",
@@ -448,21 +448,20 @@ impl WindowsHostState {
         }
         // Letter-only discovery is a fallback; callers that know serial should use
         // observe_product_volume.
-        let script = format!(
-            concat!(
-                "$letter='{letter}'; ",
-                "$parts=@(Get-Partition -ErrorAction SilentlyContinue | ",
-                "Where-Object {{ $_.DriveLetter -eq $letter }}); ",
-                "if($parts.Count -ne 1){{ exit 42 }}; ",
-                "$d=Get-Disk -Number $parts[0].DiskNumber -ErrorAction Stop; ",
-                "$n=($d.FriendlyName -replace '\\s+',' ').Trim(); ",
-                "Write-Output ($n+'|'+$d.Size+'|'+$d.SerialNumber)"
-            ),
-            letter = letter
+        let script = concat!(
+            "$letter=$env:RAMSHARED_LETTER; ",
+            "$parts=@(Get-Partition -ErrorAction SilentlyContinue | ",
+            "Where-Object { $_.DriveLetter -eq $letter }); ",
+            "if($parts.Count -ne 1){ exit 42 }; ",
+            "$d=Get-Disk -Number $parts[0].DiskNumber -ErrorAction Stop; ",
+            "$n=($d.FriendlyName -replace '\\s+',' ').Trim(); ",
+            "Write-Output ($n+'|'+$d.Size+'|'+$d.SerialNumber)"
         );
+        let envs = [("RAMSHARED_LETTER", letter.to_string())];
+        let envs_refs: Vec<(&str, &str)> = envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
         Self::parse_identity_output(
             letter,
-            &run_powershell_bounded(&script, Duration::from_secs(8))
+            &run_powershell_bounded(script, Duration::from_secs(8), &envs_refs)
                 .map_err(HostError::Identity)?,
         )
     }
@@ -484,21 +483,24 @@ impl WindowsHostState {
         if serial.len() != 16 || !serial.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(HostError::Identity("serial must be 16 hex chars".into()));
         }
+
+        let mut envs = vec![
+            ("RAMSHARED_SERIAL".to_string(), serial.to_string()),
+            ("RAMSHARED_LETTER".to_string(), letter.to_string()),
+            ("RAMSHARED_SIZE".to_string(), size_bytes.to_string()),
+        ];
+
         let partition_binding = if let Some(path) = mount_path {
-            let path = path.to_string_lossy().replace('/', "\\");
-            if path.contains(['\'', ';', '\r', '\n']) {
-                return Err(HostError::Identity("invalid private mount path".into()));
-            }
-            format!(
-                concat!(
-                    "$wantMount='{path}'; ",
-                    "$p=@(Get-Partition -DiskNumber $d[0].Number -ErrorAction Stop | ",
-                    "Where-Object {{ $ap=@($_.AccessPaths | Where-Object {{ ",
-                    "([string]$_).TrimEnd('\\') -ieq $wantMount.TrimEnd('\\') }}); $ap.Count -eq 1 }}); ",
-                    "if($p.Count -ne 1){{ Write-Error ('mount_binding_count='+$p.Count); exit 43 }}; "
-                ),
-                path = path
+            let path_str = path.to_string_lossy().replace('/', "\\");
+            envs.push(("RAMSHARED_MOUNT".to_string(), path_str));
+            concat!(
+                "$wantMount=$env:RAMSHARED_MOUNT; ",
+                "$p=@(Get-Partition -DiskNumber $d[0].Number -ErrorAction Stop | ",
+                "Where-Object { $ap=@($_.AccessPaths | Where-Object { ",
+                "([string]$_).TrimEnd('\\') -ieq $wantMount.TrimEnd('\\') }); $ap.Count -eq 1 }); ",
+                "if($p.Count -ne 1){ Write-Error ('mount_binding_count='+$p.Count); exit 43 }; "
             )
+            .to_string()
         } else {
             concat!(
                 "$p=@(Get-Partition -DiskNumber $d[0].Number -ErrorAction Stop | ",
@@ -513,7 +515,7 @@ impl WindowsHostState {
         let script = format!(
             concat!(
                 "$ErrorActionPreference='Stop'; ",
-                "$wantSerial='{serial}'; $wantLetter='{letter}'; $wantSize={size_bytes}; ",
+                "$wantSerial=$env:RAMSHARED_SERIAL; $wantLetter=$env:RAMSHARED_LETTER; $wantSize=[uint64]$env:RAMSHARED_SIZE; ",
                 "$d=@(Get-Disk -ErrorAction SilentlyContinue | Where-Object {{ ",
                 "  ((([string]$_.SerialNumber).Trim()) -ieq $wantSerial) -and ",
                 "  ([uint64]$_.Size -eq $wantSize) -and ",
@@ -530,13 +532,12 @@ impl WindowsHostState {
                 "$n=($d[0].FriendlyName -replace '\\s+',' ').Trim(); ",
                 "Write-Output ([string]$d[0].Number+'|'+$n+'|'+([string]$d[0].SerialNumber).Trim()+'|'+[string]$d[0].Size+'|'+$vp)"
             ),
-            serial = serial,
-            letter = letter,
-            size_bytes = size_bytes,
             partition_binding = partition_binding,
         );
-        let output =
-            run_powershell_bounded(&script, Duration::from_secs(4)).map_err(HostError::Identity)?;
+        let envs_refs: Vec<(&str, &str)> =
+            envs.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+        let output = run_powershell_bounded(&script, Duration::from_secs(4), &envs_refs)
+            .map_err(HostError::Identity)?;
         if !output.status.success() {
             return Err(HostError::Identity(format!(
                 "product volume query failed status={:?} stderr={}",
@@ -619,11 +620,11 @@ impl WindowsHostState {
 
     pub fn find_lun(serial: &str, size_bytes: u64) -> Result<Option<LunIdentity>, HostError> {
         // Storage module via PowerShell (VPD serial when exposed).
-        let script = format!(
-            "Get-Disk | Where-Object {{ $_.Size -eq {size_bytes} -and $_.FriendlyName -match 'RAMSHARE|VRAMDISK' }} | Select-Object -First 1 Number,FriendlyName,Size,SerialNumber | ConvertTo-Json -Compress"
-        );
-        let output =
-            run_powershell_bounded(&script, Duration::from_secs(5)).map_err(HostError::Identity)?;
+        let script = "Get-Disk | Where-Object { $_.Size -eq [uint64]$env:RAMSHARED_SIZE -and $_.FriendlyName -match 'RAMSHARE|VRAMDISK' } | Select-Object -First 1 Number,FriendlyName,Size,SerialNumber | ConvertTo-Json -Compress";
+        let envs = [("RAMSHARED_SIZE", size_bytes.to_string())];
+        let envs_refs: Vec<(&str, &str)> = envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let output = run_powershell_bounded(script, Duration::from_secs(5), &envs_refs)
+            .map_err(HostError::Identity)?;
         if !output.status.success() {
             return Err(HostError::Identity("Get-Disk failed".into()));
         }
@@ -707,7 +708,11 @@ impl WindowsHostState {
     }
 }
 
-fn run_powershell_bounded(script: &str, timeout: Duration) -> Result<Output, String> {
+fn run_powershell_bounded(
+    script: &str,
+    timeout: Duration,
+    envs: &[(&str, &str)],
+) -> Result<Output, String> {
     // Channel + helper thread so a hung Get-Partition/WMI cannot block teardown
     // forever even if kill/wait races on Windows.
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
@@ -716,6 +721,10 @@ fn run_powershell_bounded(script: &str, timeout: Duration) -> Result<Output, Str
     let (tx, rx) = std::sync::mpsc::channel();
     let done = std::sync::Arc::new(AtomicBool::new(false));
     let done_w = std::sync::Arc::clone(&done);
+    let envs = envs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect::<Vec<_>>();
     let worker = std::thread::spawn(move || {
         let child = match Command::new("powershell.exe")
             .args([
@@ -726,6 +735,7 @@ fn run_powershell_bounded(script: &str, timeout: Duration) -> Result<Output, Str
                 "-EncodedCommand",
                 &encoded_script,
             ])
+            .envs(envs.into_iter())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
