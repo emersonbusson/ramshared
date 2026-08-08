@@ -64,6 +64,13 @@ mod tests {
     }
 
     #[test]
+    fn vhdx_present_but_no_ram_headroom_is_still_safe() {
+        let net = vram_safety_net(true, 512 * 1024 * 1024, GIB);
+        assert_eq!(net, SafetyNet::VhdxBelow);
+        assert!(net.is_safe());
+    }
+
+    #[test]
     fn ram_headroom_covers_when_no_vhdx() {
         // swap=0 in .wslconfig, but 4 GiB of free RAM covers 1 GiB of VRAM capacity.
         let net = vram_safety_net(false, 4 * GIB, GIB);
@@ -75,6 +82,14 @@ mod tests {
     fn no_vhdx_and_no_ram_is_unsafe() {
         // swap disabled and insufficient RAM: arming VRAM would trigger OOM during DEMOTE.
         let net = vram_safety_net(false, 256 * 1024 * 1024, GIB);
+        assert_eq!(net, SafetyNet::None);
+        assert!(!net.is_safe());
+    }
+
+    #[test]
+    fn ram_just_below_vram_is_unsafe() {
+        // Boundary condition: RAM is 1 byte short of VRAM size.
+        let net = vram_safety_net(false, GIB - 1, GIB);
         assert_eq!(net, SafetyNet::None);
         assert!(!net.is_safe());
     }
