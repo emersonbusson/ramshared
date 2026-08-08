@@ -1079,6 +1079,18 @@ mod tests {
         assert_eq!(canonicalize_swap_path("/zram0"), "/dev/zram0");
         assert_eq!(canonicalize_swap_path("  /ublkb0  "), "/dev/ublkb0");
         assert_eq!(canonicalize_swap_path(""), "");
+
+        // Whitespace and empty strings
+        assert_eq!(canonicalize_swap_path("   "), "");
+        assert_eq!(canonicalize_swap_path("\t\n"), "");
+
+        // Leading/trailing spaces on /dev paths
+        assert_eq!(canonicalize_swap_path("  /dev/zram0  "), "/dev/zram0");
+
+        // Edge cases
+        assert_eq!(canonicalize_swap_path("dev/nbd0"), "/dev/dev/nbd0");
+        assert_eq!(canonicalize_swap_path("//nbd0"), "/dev//nbd0");
+        assert_eq!(canonicalize_swap_path("/dev/"), "/dev/");
     }
 
     #[test]
