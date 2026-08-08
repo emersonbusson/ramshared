@@ -150,11 +150,14 @@ impl EvidenceWriter {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .read(true)
-            .open(&path)?;
+        let mut opts = OpenOptions::new();
+        opts.create(true).append(true).read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let file = opts.open(&path)?;
         Ok(Self { path, file })
     }
 
@@ -405,7 +408,14 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("empty.jsonl");
         {
-            let mut file = File::create(&path).unwrap();
+            let mut opts = OpenOptions::new();
+            opts.create(true).write(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut file = opts.open(&path).unwrap();
             let row = RuntimeEvidence::base("run-1", "Online");
             let json = serde_json::to_string(&row).unwrap();
             file.write_all(b"\n").unwrap();
@@ -430,7 +440,14 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("invalid.jsonl");
         {
-            let mut file = File::create(&path).unwrap();
+            let mut opts = OpenOptions::new();
+            opts.create(true).write(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut file = opts.open(&path).unwrap();
             file.write_all(b"{ invalid json\n").unwrap();
         }
         let result = read_all_rows(&path);
