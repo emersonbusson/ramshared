@@ -1235,7 +1235,6 @@ impl HostGates {
         serial: &str,
         size_bytes: u64,
     ) -> Result<Self, String> {
-        TeardownTarget::new(volume_letter, serial, size_bytes)?;
         Ok(Self {
             locked: None,
             volume_letter,
@@ -1263,8 +1262,7 @@ impl HostGates {
         disk_number: u32,
         volume_device_path: String,
     ) -> Result<(), String> {
-        TeardownTarget::new(self.volume_letter, &self.target_serial, self.target_size)?
-            .verify_unique(&[observed])?;
+        TeardownTarget::new(self.volume_letter, &self.target_serial, self.target_size)?.verify_unique(&[observed])?;
         if !volume_device_path.starts_with(r"\\?\Volume{") || !volume_device_path.ends_with('}') {
             return Err("observed volume device path is invalid".into());
         }
