@@ -346,6 +346,12 @@ mod tests {
         assert_eq!(s.max_us, 50);
         assert_eq!(s.samples, 5);
         assert_eq!(nearest_rank_percentile(&[], 50.0), 0);
+
+        let edge_case_samples = [10, 20, 30, 40, 50];
+        assert_eq!(nearest_rank_percentile(&edge_case_samples, 0.0), 10);
+        assert_eq!(nearest_rank_percentile(&edge_case_samples, -10.0), 10);
+        assert_eq!(nearest_rank_percentile(&edge_case_samples, 100.0), 50);
+        assert_eq!(nearest_rank_percentile(&edge_case_samples, 150.0), 50);
     }
 
     #[test]
