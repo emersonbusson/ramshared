@@ -453,4 +453,12 @@ mod tests {
         assert_ne!(b, c);
         assert_ne!(a, c);
     }
+
+    #[test]
+    fn utc_ms_returns_positive_time() {
+        let t1 = utc_ms();
+        assert!(t1 > 0);
+        let t2 = utc_ms();
+        assert!(t2 >= t1);
+    }
 }
