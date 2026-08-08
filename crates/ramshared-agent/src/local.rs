@@ -95,7 +95,7 @@ mod tests {
     #[test]
     fn local_protocol_read_too_large() {
         let buf = vec![b'a'; MAX_LINE_BYTES + 1];
-        let err = read_json_line::<_, LocalMsg>(&mut Cursor::new(buf)).unwrap_err();
+        let err = read_json_line::<_, LocalMsg>(&mut Cursor::new(buf)).expect_err("read expected to fail");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
         assert_eq!(err.to_string(), "local message too large");
     }
