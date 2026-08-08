@@ -64,4 +64,14 @@ mod tests {
         assert!(!wd.expired(t1 + Duration::from_secs(89)));
         assert!(wd.expired(t1 + Duration::from_secs(90)));
     }
+
+    #[test]
+    fn touch_updates_last_field() {
+        let t0 = Instant::now();
+        let mut wd = Watchdog::new(Duration::from_secs(90), t0);
+        assert_eq!(wd.last, t0);
+        let t1 = t0 + Duration::from_secs(10);
+        wd.touch(t1);
+        assert_eq!(wd.last, t1);
+    }
 }
