@@ -91,4 +91,16 @@ mod tests {
             .expect("msg");
         assert_eq!(decoded, msg);
     }
+
+    #[test]
+    fn write_json_line_too_large_errors() {
+        let msg = LocalMsg::LeaseRequest {
+            bytes: 4096,
+            client: "A".repeat(MAX_LINE_BYTES),
+        };
+        let mut buf = Vec::new();
+        let err = write_json_line(&mut buf, &msg).expect_err("expected write to fail");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(err.to_string(), "local message too large");
+    }
 }
