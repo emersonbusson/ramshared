@@ -52,8 +52,7 @@ pub fn read_io_desc(
 pub struct FetchSession {
     ring: ramshared_uring::UblkFetchRing,
     /// Char device `File`, kept open while the ring lives (drop guard).
-    #[allow(dead_code)]
-    char_dev: File,
+    _char_dev: File,
 }
 
 impl FetchSession {
@@ -71,7 +70,10 @@ impl FetchSession {
             buf_size,
         )?;
 
-        Ok(Self { ring, char_dev })
+        Ok(Self {
+            ring,
+            _char_dev: char_dev,
+        })
     }
 
     /// Drains available CQEs (does not block).

@@ -1222,8 +1222,7 @@ struct HostGates {
     volume_mount_path: Option<std::path::PathBuf>,
     volume_device_path: Option<String>,
     /// Validated at construction (letter/serial/size shape); kept for diagnostics.
-    #[allow(dead_code)]
-    target: TeardownTarget,
+    _target: TeardownTarget,
     target_serial: String,
     target_size: u64,
     identity_verified: bool,
@@ -1243,7 +1242,7 @@ impl HostGates {
             volume_letter,
             volume_mount_path,
             volume_device_path: None,
-            target: TeardownTarget::new(volume_letter, serial, size_bytes)?,
+            _target: TeardownTarget::new(volume_letter, serial, size_bytes)?,
             target_serial: serial.to_string(),
             target_size: size_bytes,
             identity_verified: false,
