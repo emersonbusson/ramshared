@@ -32,17 +32,16 @@ pub fn read_io_desc(
     let map = ramshared_uring::MmapRo::map_readonly(char_dev.as_raw_fd(), len, 0)?;
 
     let start = usize::from(tag) * ublk::UBLK_IO_DESC_SIZE;
-    let end = start + ublk::UBLK_IO_DESC_SIZE;
-    let bytes = map.as_bytes();
-    if end > bytes.len() {
+    let mut buf = [0u8; ublk::UBLK_IO_DESC_SIZE];
+
+    if map.read_chunk(start, &mut buf).is_none() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "io-desc fora do buffer mapeado",
         ));
     }
 
-    ublk::IoDesc::from_ne_bytes(&bytes[start..end])
-        .ok_or_else(|| io::Error::other("io-desc menor que 24 bytes"))
+    ublk::IoDesc::from_ne_bytes(&buf).ok_or_else(|| io::Error::other("io-desc menor que 24 bytes"))
 }
 
 /// FETCH session in a ublk queue: holds the `/dev/ublkcN` char device `File` and

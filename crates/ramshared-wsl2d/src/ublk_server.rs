@@ -124,7 +124,7 @@ fn run_server_loop(
             }
 
             // result == UBLK_IO_RES_OK (0): there is a request ready at the tag.
-            let iod = ublk::IoDesc::from_ne_bytes(server.io_desc_bytes(completion.tag))
+            let iod = ublk::IoDesc::from_ne_bytes(&server.io_desc_bytes(completion.tag))
                 .ok_or_else(|| io::Error::other("io-desc invalido no mmap"))?;
             let result = match iod.to_block_request(completion.tag) {
                 Ok(req) => serve_request(&req, &mut backend, server.buffer_mut(completion.tag)),
@@ -330,7 +330,7 @@ fn dispatch_request(
     work_tx: &SyncSender<ublk::IoWork>,
     buf_pool: &mut Vec<Vec<u8>>,
 ) -> io::Result<bool> {
-    let iod = ublk::IoDesc::from_ne_bytes(server.io_desc_bytes(tag))
+    let iod = ublk::IoDesc::from_ne_bytes(&server.io_desc_bytes(tag))
         .ok_or_else(|| io::Error::other("io-desc invalido no mmap"))?;
     let req = match iod.to_block_request(tag) {
         Ok(req) => req,

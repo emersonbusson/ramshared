@@ -10,7 +10,6 @@ use std::ffi::c_void;
 use std::io;
 use std::os::fd::RawFd;
 use std::ptr;
-use std::slice;
 
 use io_uring::{IoUring, opcode, squeue, types};
 
@@ -69,11 +68,23 @@ impl MmapRo {
         Ok(Self { ptr, len })
     }
 
-    /// Read-only view of the mapped bytes.
-    pub fn as_bytes(&self) -> &[u8] {
-        // SAFETY: `ptr` originates from a successful `mmap` call exposing `len` readable
-        // bytes (`PROT_READ`) and remains valid until `self` is dropped (`munmap`).
-        unsafe { slice::from_raw_parts(self.ptr.cast::<u8>(), self.len) }
+    /// Safely copies a chunk of mapped bytes into `dest`. Returns `None` if the chunk is out of bounds.
+    pub fn read_chunk(&self, offset: usize, dest: &mut [u8]) -> Option<()> {
+        if offset.checked_add(dest.len())? > self.len {
+            return None;
+        }
+        // SAFETY: `ptr` originates from a successful `mmap` call and is valid for `len` bytes.
+        // We verified the `offset` and `dest.len()` are within bounds.
+        // We use `ptr::copy_nonoverlapping` to avoid constructing a Rust reference (`&[u8]`)
+        // to a shared memory region that the kernel could mutate concurrently, preventing UB.
+        unsafe {
+            ptr::copy_nonoverlapping(
+                self.ptr.cast::<u8>().add(offset),
+                dest.as_mut_ptr(),
+                dest.len(),
+            );
+        }
+        Some(())
     }
 }
 
@@ -400,9 +411,22 @@ impl UblkServer {
     }
 
     /// Returns the read-only mapped bytes of `ublksrv_io_desc` for the given `tag`.
-    pub fn io_desc_bytes(&self, tag: u16) -> &[u8] {
+    pub fn io_desc_bytes(&self, tag: u16) -> [u8; Self::IO_DESC_SIZE] {
         let start = usize::from(tag) * Self::IO_DESC_SIZE;
-        &self.iodesc.as_bytes()[start..start + Self::IO_DESC_SIZE]
+        let mut buf = [0u8; Self::IO_DESC_SIZE];
+        // The bounds are enforced during `mmap` size calculation (queue_depth * IO_DESC_SIZE).
+        // Since `io_desc_bytes` cannot return an error (changing the signature would propagate far),
+        // we assert the bounds directly to avoid the `expect_used` clippy lint.
+        assert!(start.saturating_add(Self::IO_DESC_SIZE) <= self.iodesc.len);
+
+        unsafe {
+            ptr::copy_nonoverlapping(
+                self.iodesc.ptr.cast::<u8>().add(start),
+                buf.as_mut_ptr(),
+                Self::IO_DESC_SIZE,
+            );
+        }
+        buf
     }
 
     /// Returns the mutable data buffer for `tag` (READ populates this; WRITE comes pre-populated).
