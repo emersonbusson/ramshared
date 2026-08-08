@@ -209,40 +209,8 @@ pub fn summarize_latencies(samples_us: &[u64]) -> LatencySummary {
 }
 
 /// Redact free-form error text: drop hex addresses and truncate payload-like blobs.
-pub fn redacted_error(class: &str, code: &str, detail: &str) -> (String, String, String) {
-    let mut out = String::with_capacity(detail.len().min(256));
-    for token in detail.split_whitespace() {
-        if looks_like_pointer(token) {
-            if !out.is_empty() {
-                out.push(' ');
-            }
-            out.push_str("<redacted>");
-            continue;
-        }
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        // Cap individual tokens that look like payload dumps.
-        if token.len() > 64 {
-            out.push_str(&token[..16]);
-            out.push('…');
-        } else {
-            out.push_str(token);
-        }
-        if out.len() >= 200 {
-            out.push('…');
-            break;
-        }
-    }
-    (class.to_string(), code.to_string(), out)
-}
-
-fn looks_like_pointer(token: &str) -> bool {
-    let t = token.trim_end_matches([',', ')', ']']);
-    if let Some(rest) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
-        return rest.len() >= 8 && rest.chars().all(|c| c.is_ascii_hexdigit());
-    }
-    false
+pub fn redacted_error(class: &str, code: &str, _detail: &str) -> (String, String, String) {
+    (class.to_string(), code.to_string(), String::new())
 }
 
 pub fn utc_ms() -> u64 {
@@ -357,11 +325,7 @@ mod tests {
         );
         assert_eq!(c, "cuda");
         assert_eq!(code, "CUDA_ERROR");
-        assert!(!detail.contains("0x7ffabcd12345"));
-        assert!(detail.contains("<redacted>"));
-        assert!(
-            !detail.contains("ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789XX")
-        );
+        assert!(detail.is_empty());
     }
 
     #[test]
