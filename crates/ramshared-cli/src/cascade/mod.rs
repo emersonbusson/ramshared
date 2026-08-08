@@ -1358,6 +1358,30 @@ Filename Type Size Used Priority
     }
 
     #[test]
+    fn ghost_vram_swaps_filtering() {
+        let text = "\
+Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority
+/dev/sdb                                partition\t8388608\t\t100\t\t-2
+/dev/sdb\\040(deleted)                   partition\t8388608\t\t100\t\t-2
+/dev/ublkb0\\040(deleted)                partition\t524284\t\t117504\t\t-3
+/dev/zram0 (deleted)                    partition\t1048576\t\t0\t\t200
+/dev/nbd0                               partition\t1048576\t\t0\t\t100
+";
+        let entries = parse_proc_swaps(text);
+        assert_eq!(entries.len(), 5);
+
+        let ghosts = ghost_vram_swaps(&entries);
+        assert_eq!(ghosts.len(), 2);
+
+        // Ensure the returned entries are the correct ones
+        assert!(ghosts.iter().any(|e| e.filename.contains("ublkb0")));
+        assert!(ghosts.iter().any(|e| e.filename.contains("zram0")));
+
+        // Ensure they don't contain the non-managed ghost
+        assert!(!ghosts.iter().any(|e| e.filename.contains("sdb")));
+    }
+
+    #[test]
     fn swapoff_candidates_from_merges_records_and_live() {
         let live = parse_proc_swaps(
             "Filename Type Size Used Priority\n\
