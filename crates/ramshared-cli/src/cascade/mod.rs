@@ -940,30 +940,17 @@ fn parse_demote_status_file(text: &str) -> Option<DemoteSnapshot> {
 }
 
 fn daemon_alive_pid() -> (bool, Option<u32>) {
-    // Match cascade-health: newest ramsharedd process.
-    let out = Command::new("pgrep")
-        .args(["-n", "-x", "ramsharedd"])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if let Ok(pid) = s.parse::<u32>() {
+    if let Ok(s) = fs::read_to_string(PID_FILE)
+        && let Ok(pid) = s.trim().parse::<u32>()
+        && pid > 0
+    {
+        if let Ok(comm) = fs::read_to_string(format!("/proc/{pid}/comm")) {
+            if comm.trim() == "ramsharedd" {
                 return (true, Some(pid));
             }
-            // Some systems: pgrep -f
-            (true, None)
-        }
-        _ => {
-            // Fallback: pid file
-            if let Ok(s) = fs::read_to_string(PID_FILE)
-                && let Ok(pid) = s.trim().parse::<u32>()
-                && Path::new(&format!("/proc/{pid}")).exists()
-            {
-                return (true, Some(pid));
-            }
-            (false, None)
         }
     }
+    (false, None)
 }
 
 fn status_timestamp() -> String {

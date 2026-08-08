@@ -63,8 +63,7 @@ pub(crate) fn disarm_forensics() {
     }
 }
 
-pub(crate) fn stop_daemon_gracefully() {
-    // Prefer PID file if we wrote one
+fn kill_daemon_securely() {
     if let Ok(pid_s) = fs::read_to_string(PID_FILE)
         && let Ok(pid) = pid_s.trim().parse::<u32>()
         && let Ok(comm) = fs::read_to_string(format!("/proc/{pid}/comm"))
@@ -74,15 +73,31 @@ pub(crate) fn stop_daemon_gracefully() {
             .args(["-TERM", "--", &pid.to_string()])
             .status();
     }
+}
+
+fn daemon_alive_secure() -> bool {
+    if let Ok(pid_s) = fs::read_to_string(PID_FILE)
+        && let Ok(pid) = pid_s.trim().parse::<u32>()
+        && pid > 0
+    {
+        if let Ok(comm) = fs::read_to_string(format!("/proc/{pid}/comm")) {
+            return comm.trim() == "ramsharedd";
+        }
+    }
+    false
+}
+
+pub(crate) fn stop_daemon_gracefully() {
+    kill_daemon_securely();
     // Wait up to 10s for voluntary exit (allows VRAM zero()).
     for _ in 0..100 {
-        if sh("pgrep", &["-x", "ramsharedd"]).is_err() {
+        if !daemon_alive_secure() {
             remove_runtime_file(PID_FILE);
             return;
         }
         sleep(Duration::from_millis(100));
     }
-    // Only SIGTERM via pkill -x; never -9 from this tool.
+    // Only SIGTERM via targeted kill; never -9 from this tool.
     if !daemon_kill_allowed(&read_swaps()) {
         eprintln!(
             "[down] ABORT pkill: ainda ha nbd/ublk em /proc/swaps — \
@@ -91,7 +106,7 @@ pub(crate) fn stop_daemon_gracefully() {
         return;
     }
     eprintln!("[down] daemon nao saiu em 10s; pkill -TERM (sem -9)");
-    let _ = sh("pkill", &["-x", "ramsharedd"]);
+    kill_daemon_securely();
     sleep(Duration::from_millis(500));
     remove_runtime_file(PID_FILE);
 }
@@ -117,8 +132,8 @@ pub(crate) fn setup_zram(mb: u64, prio: i32) -> Result<String, CascadeError> {
                     last_err = format!("zramctl retornou device inesperado: {zdev}");
                     continue;
                 }
-                sh("mkswap", &[&zdev])?;
-                sh("swapon", &["-p", &prio.to_string(), &zdev])?;
+                sh("mkswap", &["--", &zdev])?;
+                sh("swapon", &["-p", &prio.to_string(), "--", &zdev])?;
                 fs::write(ZRAM_DEV_FILE, &zdev).map_err(|e| CascadeError::Io(e.to_string()))?;
                 eprintln!("[up] zram {zdev} algo={algo} prio={prio}");
                 return Ok(zdev);
@@ -165,8 +180,8 @@ pub(crate) fn setup_zram_sysfs(mb: u64, prio: i32) -> Result<(), CascadeError> {
             "/dev/zram0 is not a block device".into(),
         ));
     }
-    sh("mkswap", &["/dev/zram0"])?;
-    sh("swapon", &["-p", &prio.to_string(), "/dev/zram0"])?;
+    sh("mkswap", &["--", "/dev/zram0"])?;
+    sh("swapon", &["-p", &prio.to_string(), "--", "/dev/zram0"])?;
     fs::write(ZRAM_DEV_FILE, "/dev/zram0").map_err(|e| CascadeError::Io(e.to_string()))?;
     eprintln!("[up] zram /dev/zram0 via sysfs prio={prio}");
     Ok(())
@@ -241,7 +256,7 @@ fn spawn_daemon(daemon_path: &str, vram_mb: u64, swap_dev: &str) -> Result<(), C
     }
     if !ok {
         // Best-effort cleanup of failed spawn; no swap yet so kill is allowed.
-        let _ = sh("pkill", &["-x", "ramsharedd"]);
+        kill_daemon_securely();
         disarm_forensics();
         return Err(CascadeError::Precondition(
             "daemon nao subiu (socket ausente)".into(),
@@ -256,21 +271,21 @@ fn connect_nbd(connections: u32, swap_dev: &str, vram_prio: i32) -> Result<(), C
     if connections > 1 {
         nbd_args.extend(["-C", conns.as_str()]);
     }
-    nbd_args.extend(["-unix", SOCK, swap_dev]);
+    nbd_args.extend(["-unix", SOCK, "--", swap_dev]);
     if let Err(e) = sh("nbd-client", &nbd_args) {
-        let _ = sh("pkill", &["-x", "ramsharedd"]);
+        kill_daemon_securely();
         disarm_forensics();
         return Err(e);
     }
-    if let Err(e) = sh("mkswap", &["-L", "RAMSHARED", swap_dev]) {
-        let _ = sh("nbd-client", &["-d", swap_dev]);
-        let _ = sh("pkill", &["-x", "ramsharedd"]);
+    if let Err(e) = sh("mkswap", &["-L", "RAMSHARED", "--", swap_dev]) {
+        let _ = sh("nbd-client", &["-d", "--", swap_dev]);
+        kill_daemon_securely();
         disarm_forensics();
         return Err(e);
     }
-    if let Err(e) = sh("swapon", &["-p", &vram_prio.to_string(), swap_dev]) {
-        let _ = sh("nbd-client", &["-d", swap_dev]);
-        let _ = sh("pkill", &["-x", "ramsharedd"]);
+    if let Err(e) = sh("swapon", &["-p", &vram_prio.to_string(), "--", swap_dev]) {
+        let _ = sh("nbd-client", &["-d", "--", swap_dev]);
+        kill_daemon_securely();
         disarm_forensics();
         return Err(e);
     }
@@ -374,14 +389,14 @@ pub fn down() -> Result<(), CascadeError> {
 
     // 2) Reset zram devices we know about
     if let Some(ref z) = recorded_zram {
-        let _ = sh("zramctl", &["-r", z]);
+        let _ = sh("zramctl", &["-r", "--", z]);
     }
     // Also try reset any leftover zram still listed
     for e in read_swaps() {
         if is_zram_device_path(&e.filename) && !e.is_ghost() {
             let z = e.canonical_path();
             let _ = swapoff_try(&z);
-            let _ = sh("zramctl", &["-r", &z]);
+            let _ = sh("zramctl", &["-r", "--", &z]);
         }
     }
 
@@ -398,7 +413,7 @@ pub fn down() -> Result<(), CascadeError> {
         .collect();
     for dev in &nbd_targets {
         if is_allowlisted_managed_path(dev) && is_nbd_device_path(dev) {
-            let _ = sh("nbd-client", &["-d", dev]);
+            let _ = sh("nbd-client", &["-d", "--", dev]);
         }
     }
 
