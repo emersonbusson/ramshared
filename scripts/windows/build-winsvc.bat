@@ -2,10 +2,10 @@
 setlocal
 call "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul
 set PATH=%USERPROFILE%\.cargo\bin;%PATH%
-if exist C:\Users\emedev\ramshared-src (
-  cd /d C:\Users\emedev\ramshared-src
+if defined RAMSHARED_REPO_ROOT (
+  cd /d "%RAMSHARED_REPO_ROOT%"
 ) else (
-  cd /d C:\ramshared\src
+  cd /d "%~dp0\..\.."
 )
 echo == cargo build -p ramshared-winbroker -p ramshared-winsvc --release ==
 cargo build -p ramshared-winbroker -p ramshared-winsvc --release

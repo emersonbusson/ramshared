@@ -12,6 +12,12 @@
 #include <wdmsec.h>
 #include "protocol.h"
 
+/*
+ * Adapter-wide limit advertised to StorPort. It must not exceed the smallest
+ * data slot supported by any registered matrix configuration (DT-37).
+ */
+#define RAMSHARED_MATRIX_MAX_IO (256u * 1024u)
+
 /* Device extension for the StorPort adapter (virtual). */
 typedef struct _RAMSHARED_ADAPTER_EXT {
 	PVOID StorPortExt; /* reserved for StorPort-owned memory */

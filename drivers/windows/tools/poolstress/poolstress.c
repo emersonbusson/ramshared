@@ -29,6 +29,34 @@ static PDEVICE_OBJECT g_Device = NULL;
 static PVOID g_Pool = NULL;
 static SIZE_T g_PoolSize = 0;
 
+static VOID
+PoolstressFill(_Inout_updates_bytes_(bytes) PUCHAR pool, SIZE_T bytes)
+{
+	SIZE_T offset = 0;
+
+	if (pool == NULL || bytes == 0)
+		return;
+	while (offset < bytes) {
+		ULONG i;
+		ULONG chunk = (ULONG)min(bytes - offset, (SIZE_T)(16 * 1024 * 1024));
+		NTSTATUS status;
+
+		if ((SIZE_T)chunk > bytes - offset)
+			return;
+#pragma warning(suppress:6386) /* offset + chunk is bounded above */
+		status = BCryptGenRandom(NULL, pool + offset, chunk,
+					BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+		if (!NT_SUCCESS(status)) {
+			for (i = 0; i < chunk; i++) {
+#pragma warning(suppress:6386) /* i < chunk <= bytes - offset */
+				pool[offset + i] = (UCHAR)((offset + i) * 131u);
+			}
+		}
+		offset += chunk;
+	}
+}
+
+_Function_class_(DRIVER_DISPATCH)
 static NTSTATUS
 PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 {
@@ -52,7 +80,7 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 		if (code == IOCTL_POOLSTRESS_ALLOC) {
 			POOLSTRESS_ALLOC_IN *in;
 			SIZE_T bytes;
-			ULONG i;
+			SIZE_T i;
 
 			if (inLen < sizeof(POOLSTRESS_ALLOC_IN) || buf == NULL) {
 				status = STATUS_INVALID_PARAMETER;
@@ -74,21 +102,11 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 				break;
 			}
 			g_PoolSize = bytes;
-			/* Incompressible fill (DT-21) — prefer BCrypt; fallback pattern. */
-			{
-				NTSTATUS br = BCryptGenRandom(
-					NULL, (PUCHAR)g_Pool,
-					(ULONG)min(bytes, (SIZE_T)0x7fffffff),
-					BCRYPT_USE_SYSTEM_PREFERRED_RNG);
-				if (!NT_SUCCESS(br)) {
-					for (i = 0; i < (ULONG)(bytes / sizeof(ULONG)); i++) {
-						((PULONG)g_Pool)[i] = i * 2654435761u;
-					}
-				}
-			}
+			/* Fill every byte in bounded BCrypt calls (DT-21). */
+			PoolstressFill((PUCHAR)g_Pool, bytes);
 			/* Touch every page so pages are resident then pageable. */
-			for (i = 0; i < (ULONG)(bytes / PAGE_SIZE); i++) {
-				volatile UCHAR *p = (PUCHAR)g_Pool + (SIZE_T)i * PAGE_SIZE;
+			for (i = 0; i < bytes / PAGE_SIZE; i++) {
+				volatile UCHAR *p = (PUCHAR)g_Pool + i * PAGE_SIZE;
 				*p = *p;
 			}
 		} else if (code == IOCTL_POOLSTRESS_READBACK) {
@@ -126,6 +144,7 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	return status;
 }
 
+_Function_class_(DRIVER_UNLOAD)
 static VOID
 PoolstressUnload(_In_ PDRIVER_OBJECT DriverObject)
 {
