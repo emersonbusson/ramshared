@@ -64,7 +64,12 @@ in place.
 ## Physical acceptance
 
 Use `Run-HostAutonomousLifecycle.ps1` only with explicit physical-host
-approval. The harness requires one manifest across three cold boots, a
-SYSTEM startup task, a 600-second shutdown watchdog, three SHA rounds per
-boot and zero residue before every reboot. Preserve failed evidence; do not
-count a corrected rerun as proof that the failed attempt passed.
+approval. Each cold boot requires a separate current invocation with both
+`-ApprovePhysicalHost` and `-ApproveReboot`; the harness never chains the next
+reboot automatically. A single-use, 30-minute resume token authorizes only the
+one-shot SYSTEM startup action. Watchdog shutdown additionally requires
+`-AllowWatchdogShutdown` for that exact boot. The harness requires one manifest
+across three cold boots, intended-payload/read-back SHA matches, exact
+current-run Online/disk identity, zero residue, and watchdog/task cleanup.
+Preserve failed evidence; do not count a corrected rerun as proof that the
+failed attempt passed.

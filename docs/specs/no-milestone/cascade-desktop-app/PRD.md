@@ -5,33 +5,39 @@ milestone: —
 issues: []
 ---
 
-# PRD — App de controle da cascata (linda e usável)
+# PRD — Cascade control app (polished and usable)
 
 ## 1. Summary
 
-O path shippable é a cascata zram→VRAM→disco. Falta uma **superfície de app**: ligar, desligar, ver status, ligar boot — sem digitar uma dúzia de comandos e sem Electron.
+The shippable path is the zram→VRAM→disk cascade. What is missing is an
+**application surface**: start, stop, view status, and enable boot without
+typing a dozen commands or adding Electron.
 
-**Confirmed in codebase:** `ramshared check|up|down|status`, `install-cascade-boot.sh`, preflight fail-closed.  
-**Confirmed in lab (2026-07-10):** WSL2 + WSLg + `zenity` + `notify-send`.  
-**Inference:** menu zenity + fallback CLI cobre 90% do “parecer app” com risco baixo.
+**Confirmed in codebase:** `ramshared check|up|down|status`,
+`install-cascade-boot.sh`, and fail-closed preflight.
+**Confirmed in lab (2026-07-10):** WSL2 + WSLg + `zenity` + `notify-send`.
+**Inference:** a zenity menu plus CLI fallback covers 90% of the “feels like an
+app” experience at low risk.
 
 ## 2. Technical context
 
-- Root ainda é necessário para `up`/`down`/boot (swap). App pede `pkexec` ou documenta `sudo`.  
-- Não toca LKM. Não host-real Windows.  
-- Kernel-true track blocked neste lab (`kernel-vram-as-memory/PASSO0-INVENTORY.md`).
+- Root is still required for `up`/`down`/boot (swap). The app requests `pkexec`
+  or documents `sudo`.
+- Does not touch the LKM or the real Windows host.
+- The kernel-true track is blocked in this lab
+  (`kernel-vram-as-memory/PASSO0-INVENTORY.md`).
 
 ## 3. Recommended option
 
-**`scripts/safety/cascade-app.sh`** + `.desktop` opcional:
+**`scripts/safety/cascade-app.sh`** plus an optional `.desktop` file:
 
-- GUI: zenity list (Start / Stop / Status / Check / Enable boot / Disable boot / Quit)  
-- CLI: mesmos verbos `start|stop|status|check|enable-boot|disable-boot`  
-- Notificações: `notify-send` em sucesso/falha  
-- Defaults conservadores: conf `/etc/ramshared/cascade.conf` ou 1024/1024  
+- GUI: zenity list (Start / Stop / Status / Check / Enable boot / Disable boot / Quit)
+- CLI: the same verbs, `start|stop|status|check|enable-boot|disable-boot`
+- Notifications: `notify-send` on success/failure
+- Conservative defaults: `/etc/ramshared/cascade.conf` or 1024/1024
 
-**Rejected:** Electron/Tauri neste ciclo (peso + supply chain).  
-**Rejected:** system tray nativo Windows-only no MVP (WSL first).
+**Rejected:** Electron/Tauri in this cycle (weight + supply chain).
+**Rejected:** a native Windows-only system tray in the MVP (WSL first).
 
 ## 4. Functional requirements
 
@@ -56,13 +62,14 @@ O path shippable é a cascata zram→VRAM→disco. Falta uma **superfície de ap
 
 ## 6. Flows
 
-1. User opens “RamShared Cushion” → Start → polkit/sudo → notify OK / fail.  
-2. Game on Windows → demote still daemon-side; app Status shows if VRAM tier gone.  
-3. Quit app does **not** stop cascade (service stays up).
+1. The user opens “RamShared Cushion” → Start → polkit/sudo → notify success or failure.
+2. A game on Windows starts → demote remains daemon-side; app Status shows whether the VRAM tier is gone.
+3. Quitting the app does **not** stop the cascade (the service stays up).
 
 ## 7–8. Data / API
 
-No new ABI. Calls existing binaries and scripts. Env: `RAMSHARED_BIN_DIR`, `RAMSHARED_REPO`.
+No new ABI. It calls existing binaries and scripts. Environment:
+`RAMSHARED_BIN_DIR`, `RAMSHARED_REPO`.
 
 ## 9. Risks
 
@@ -86,11 +93,11 @@ Windows tray EXE, auto-demote UI graphing, Electron.
 
 ## 13. Acceptance
 
-- [ ] `cascade-app.sh status|check` sem root  
-- [ ] `start|stop` com sudo/pkexec  
-- [ ] zenity menu se DISPLAY+zenity  
-- [ ] `.desktop` install helper  
-- [ ] plain README section  
+- [ ] `cascade-app.sh status|check` without root
+- [ ] `start|stop` with sudo/pkexec
+- [ ] zenity menu when DISPLAY+zenity is available
+- [ ] `.desktop` install helper
+- [ ] plain-language README section
 
 ## 14. Validation
 

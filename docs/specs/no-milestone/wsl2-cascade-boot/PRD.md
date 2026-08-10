@@ -5,108 +5,120 @@ milestone: —
 issues: []
 ---
 
-# PRD — Cascade no boot do WSL2 (sem travar)
+# PRD — WSL2 cascade at boot (without hanging)
 
 ## 1. Summary
 
-Quando o WSL2 sobe, o usuário quer o colchão de memória (zram → VRAM ociosa → disco) **já ligado**, e quer que a VRAM **volte para a placa** se um jogo ou render 3D no Windows precisar dela — **sem matar processos e sem travar o WSL**.
+When WSL2 starts, the user wants the memory cushion (zram → idle VRAM → disk)
+**already enabled**, and wants VRAM to **return to the graphics card** when a
+Windows game or 3D render needs it — **without killing processes or hanging
+WSL**.
 
-Hoje isso só funciona com `sudo ramshared up` manual. O path ublk antigo (`ramsharedd.service`) **não** é o produto Day-1 (NBD + CLI). Este PRD fecha o gap de **boot + parada ordenada + recusa se o estado estiver sujo**.
+Today this works only with a manual `sudo ramshared up`. The old ublk path
+(`ramsharedd.service`) is **not** the Day-1 product (NBD + CLI). This PRD
+closes the **boot + ordered stop + refusal on dirty state** gap.
 
-**Confirmed in codebase:** `ramshared up/down` com anti-hang (swapoff antes de matar daemon), canário free-floor/latência no daemon, DEMOTE medido.  
-**Confirmed in docs:** freeze histórico por ghost swap / kill errado (`cascade.rs` contract, `validation.md`).  
-**Inference (pouco):** unit systemd é a forma estável de “no boot” no WSL com `systemd=true`.
+**Confirmed in codebase:** `ramshared up/down` with anti-hang behavior
+(swapoff before killing the daemon), a free-floor/latency canary in the daemon,
+and measured DEMOTE.
+**Confirmed in docs:** historical freezes from ghost swap / incorrect kill
+(`cascade.rs` contract, `validation.md`).
+**Inference (limited):** a systemd unit is the stable way to provide “at boot”
+in WSL with `systemd=true`.
 
 ## 2. Technical context
 
-- Day-1: `ramshared up` → zram prio 200 + NBD/CUDA prio 100 + VHDX prio -2.
-- DEMOTE: `swapoff` do tier VRAM; páginas caem no disco; processos vivos.
-- WDDM eviction: data-safe, latency-unsafe (~1,18 s em leitura 4K sob reclaim).
-- Travamentos reais vêm de: matar daemon com nbd ativo, swap fantasma `(deleted)`, thrash host, ublk sem fix.
+- Day-1: `ramshared up` → zram priority 200 + NBD/CUDA priority 100 + VHDX priority -2.
+- DEMOTE: `swapoff` the VRAM tier; pages fall to disk; processes remain alive.
+- WDDM eviction: data-safe, latency-unsafe (~1.18 s for a 4K read under reclaim).
+- Real hangs result from killing a daemon with active nbd, ghost `(deleted)` swap,
+  host thrash, or ublk without the fix.
 
 ## 3. Recommended option
 
-**Unit systemd `ramshared-cascade.service` (oneshot + RemainAfterExit)** que:
+**Systemd unit `ramshared-cascade.service` (oneshot + RemainAfterExit)** that:
 
-1. Roda **preflight NBD** (fail-closed).
-2. Roda `ramshared up` com tamanhos de `/etc/ramshared/cascade.conf`.
-3. No stop (incluindo `wsl --shutdown` se systemd parar units): `ramshared down` (swapoff-first).
+1. Runs **NBD preflight** (fail-closed).
+2. Runs `ramshared up` with sizes from `/etc/ramshared/cascade.conf`.
+3. On stop (including `wsl --shutdown` when systemd stops units), runs
+   `ramshared down` (swapoff-first).
 
-**Não** reutilizar `ramsharedd.service` ublk como path de produto.
+**Do not** reuse the ublk `ramsharedd.service` as the product path.
 
 ## 4. Functional requirements
 
 | ID | Requirement |
 | --- | --- |
-| RF-1 | Install opt-in: só habilita boot depois de `ramshared check` ready e preflight OK |
-| RF-2 | Boot: preflight → `up`; se preflight falhar, unit falha **sem** deixar swap sujo |
-| RF-3 | Stop: sempre `down` (swapoff → nbd disconnect → daemon); nunca kill -9 com nbd em `/proc/swaps` |
-| RF-4 | Config: VRAM/ZRAM MiB em conf (default conservador 1024/1024) |
-| RF-5 | `up` idempotente se cascata já saudável (re-boot de unit / start duplo) |
-| RF-6 | Docs humanas: o que fazer no dia a dia, o que não fazer, o que o demote custa |
+| RF-1 | Opt-in install: enable boot only after `ramshared check` is ready and preflight passes |
+| RF-2 | Boot: preflight → `up`; if preflight fails, the unit fails **without** leaving dirty swap |
+| RF-3 | Stop: always `down` (swapoff → nbd disconnect → daemon); never `kill -9` while nbd appears in `/proc/swaps` |
+| RF-4 | Config: VRAM/ZRAM MiB in config (conservative default 1024/1024) |
+| RF-5 | `up` is idempotent when the cascade is already healthy (unit reboot / duplicate start) |
+| RF-6 | Human docs: what to do daily, what not to do, and what demotion costs |
 
 ## 5. Non-functional
 
 | ID | Requirement |
 | --- | --- |
-| NFR-1 | Preferir **recusar start** a arriscar hang |
-| NFR-2 | Timeout de stop alto o suficiente para swapoff com uso real (ex.: 600 s) |
-| NFR-3 | Sem thrash no host; sem enable automático no `install` de forensics |
-| NFR-4 | RNF host-safety: pressão agressiva só em VM (já regra do repo) |
+| NFR-1 | Prefer **refusing start** over risking a hang |
+| NFR-2 | Stop timeout high enough for swapoff with real use (for example, 600 s) |
+| NFR-3 | No host thrash; no automatic enable in forensic install |
+| NFR-4 | Host-safety RNF: aggressive pressure only in a VM (already a repository rule) |
 
 ## 6. Flows
 
-1. **Primeira vez:** build → check → install-cascade-boot → enable → reboot WSL → swapon mostra 3 tiers.  
-2. **Jogo no Windows:** free VRAM cai → canário → DEMOTE → VRAM tier some; apps WSL seguem.  
-3. **Shutdown WSL:** systemd stop → down ordenado.  
-4. **Estado sujo:** preflight/up recusa; mensagem pede `wsl --shutdown` se ghost.
+1. **First time:** build → check → install-cascade-boot → enable → restart WSL → `swapon` shows three tiers.
+2. **Windows game:** free VRAM falls → canary → DEMOTE → VRAM tier disappears; WSL apps continue.
+3. **WSL shutdown:** systemd stop → ordered `down`.
+4. **Dirty state:** preflight/up refuses; message requests `wsl --shutdown` if a ghost exists.
 
 ## 7. Data model
 
-- `/etc/ramshared/cascade.conf` — `VRAM_MIB`, `ZRAM_MIB`, paths de binário.  
-- `/run/ramshared/*` — estado runtime (já existente).
+- `/etc/ramshared/cascade.conf` — `VRAM_MIB`, `ZRAM_MIB`, binary paths.
+- `/run/ramshared/*` — runtime state (already exists).
 
 ## 8. API / Interfaces
 
-- CLI inalterado em superfície principal: `check|doctor|up|down|status`.  
-- Scripts: `install-cascade-boot.sh`, `uninstall-cascade-boot.sh`, `cascade-preflight.sh`.  
-- Unit: `ramshared-cascade.service`.  
-- Env opcional: `RAMSHARED_VRAM_MIB`, `RAMSHARED_ZRAM_MIB`.
+- Unchanged main CLI surface: `check|doctor|up|down|status`.
+- Scripts: `install-cascade-boot.sh`, `uninstall-cascade-boot.sh`,
+  `cascade-preflight.sh`.
+- Unit: `ramshared-cascade.service`.
+- Optional environment: `RAMSHARED_VRAM_MIB`, `RAMSHARED_ZRAM_MIB`.
 
 ## 9. Dependencies and risks
 
-- WSL com `systemd=true` no `/etc/wsl.conf`.  
-- `nbd-client`, `modprobe nbd/zram`, NVIDIA no guest.  
-- Risco residual: engasgo durante DEMOTE/WDDM — **não** é freeze eterno; documentar honestamente.
+- WSL with `systemd=true` in `/etc/wsl.conf`.
+- `nbd-client`, `modprobe nbd/zram`, NVIDIA in the guest.
+- Residual risk: a stall during DEMOTE/WDDM — **not** an eternal freeze; document it honestly.
 
 ## 10. Implementation strategy
 
-1. SPEC + AUDIT-2.5 (go).  
-2. Preflight NBD + unit + install.  
-3. Env defaults + idempotent up.  
-4. Docs humanas.  
+1. SPEC + AUDIT-2.5 (go).
+2. NBD preflight + unit + install.
+3. Environment defaults + idempotent up.
+4. Human documentation.
 5. IMPL + validation entry.
 
 ## 11. Documents to update
 
-README, FAQ, ROADMAP, ARCHITECTURE, CONTRIBUTING, validation.md, this folder IMPL.
+README, FAQ, ROADMAP, ARCHITECTURE, CONTRIBUTING, validation.md, this folder's IMPL.
 
 ## 12. Out of scope
 
-- Host-real Windows driver.  
-- Enable automático sem opt-in.  
-- ublk como path de boot.  
-- Promessa de zero latência sob reclaim.
+- Real Windows host driver.
+- Automatic enable without opt-in.
+- ublk as the boot path.
+- A promise of zero latency under reclaim.
 
 ## 13. Acceptance criteria
 
-- [ ] install opt-in documentado e scriptado  
-- [ ] preflight recusa ghost / GPU sem folga / binário ausente  
-- [ ] unit stop chama down  
-- [ ] up idempotente com cascata já ativa  
-- [ ] docs em linguagem humana; README diz o que acontece no jogo  
-- [ ] testes unitários de parse env + suite workspace verde  
+- [ ] opt-in install documented and scripted
+- [ ] preflight refuses a ghost / GPU without headroom / missing binary
+- [ ] unit stop calls down
+- [ ] up is idempotent with an already active cascade
+- [ ] human documentation; README says what happens during a game
+- [ ] unit tests for environment parsing + green workspace suite
 
 ## 14. Validation
 
-`cargo test -p ramshared-cli`; dry-run preflight; `docs-check`; entrada em `validation.md`.
+`cargo test -p ramshared-cli`; dry-run preflight; docs-check; entry in `validation.md`.

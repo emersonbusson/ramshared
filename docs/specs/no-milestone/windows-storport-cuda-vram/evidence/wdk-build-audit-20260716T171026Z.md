@@ -17,7 +17,7 @@ output tree. The only disabled warning remains WDK aligned-structure warning C43
 ## GREEN
 
 Environment: Visual Studio 2022 Build Tools 17.14.35, WDK `10.0.26100.0`, x64, repository accessed
-through `\\wsl.localhost\Ubuntu-24.04\home\emdev\codespace\ramshared`.
+through `<repo-root>`.
 
 ```text
 STATIC_SCSI_LIFECYCLE_TEST=PASS

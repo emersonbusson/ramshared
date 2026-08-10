@@ -1,72 +1,102 @@
-# Postmortem — <título curto do incidente>
+# Postmortem — Short incident title
 
-> Postmortem blameless: avalia **processo, não outcome** (Kahneman #7). Copie
-> para `docs/postmortems/AAAA-MM-DD-<slug>.md`.
+> Blameless review: assess the process, not only the outcome (Kahneman #7).
+> Copy to `docs/postmortems/YYYY-MM-DD-<slug>.md`.
 
-## Metadados
+**Governance schema:** 1
 
-- **Data:** AAAA-MM-DD
-- **Severidade:** P0 (panic/perda de dado) · P1 (OOPS/stall grave) · P2 (regressão) · P3 (menor)
-- **Componente:** `mm` | `drm` | `cxl` | `pci` | `dma` | `core`
-- **Autor:** @usuario
-- **ADR/SPEC relacionada:** `docs/decisions/ADR-NNN.md` / `docs/<feature>/SPEC*.md`
+## Metadata
 
-## Resumo
+- **Incident ID:** `<stable-id>`
+- **UTC interval:** `<start> → <end>`
+- **Severity:** P0 (panic/data loss) · P1 (OOPS/severe stall) · P2 (regression) · P3 (minor)
+- **Component:** `mm` | `drm` | `cxl` | `pci` | `dma` | `core` | `windows` | `wsl2`
+- **Owner role:** `<role, never a username>`
+- **Affected claim IDs:** `<claims>`
+- **Related ADR/SPEC:** `docs/decisions/ADR-NNN.md` / `docs/specs/no-milestone/<slug>/SPEC.md`
+- **Evidence manifest:** `<repository-relative path>`
 
-Um parágrafo, suficiente para alguém fora do incidente.
+## Summary
 
-## Timeline (UTC, baseada em `dmesg`/`ftrace`)
+One paragraph sufficient for a reader outside the incident.
 
-| Hora | Evento (com a linha de `dmesg`/contador relevante) |
+## Timeline
+
+| UTC time | Event and evidence signal |
 | --- | --- |
 | 00:00 | ... |
 
-## Blast radius (NÚMERO, não adjetivo — #3)
+## Measured blast radius
 
-- Tasks/CPUs/nós NUMA afetados: `<n>`
-- Orçamento estourado: ex. stall de interrupção `<x> ms` (limite `<y> ms`); DMA `<z> ns`
-- Duração até detecção / até mitigação: `<min>`
-- Dados perdidos? (páginas de swap, BOs, etc.): `<sim/não + n>`
+- Tasks/CPUs/NUMA nodes affected: `<n>`
+- Exceeded budget: `<observed value and unit>` versus `<limit>`
+- Detection and mitigation durations: `<values and units>`
+- Data loss or corruption: `<state plus count>`
 
-## Detecção
+## Detection
 
-Como apareceu: `lockdep` splat | `kmemleak` report | `KASAN` | OOPS/panic em `dmesg` |
-`kselftest`/KUnit falhou | contador `/proc/vmstat` | report de usuário. **Existe ≠
-funciona (#13):** se um teste verde não pegou, dizer por quê.
+State how the incident appeared: lockdep, kmemleak, KASAN, OOPS/panic,
+kselftest/KUnit, `/proc/vmstat`, SCM/Event Log, watchdog, or operator report.
+If an earlier green test missed it, explain the missing failure mode.
 
-## Causa raiz
+## Root cause
 
-Dimensão técnica precisa (lock invertido, `dma_map` não desfeito, GFP errado em
-contexto atômico, race suspend/resume, eviction não tratada...). **Não fechar como
-"sorte/azar"** sem a causa técnica.
+Give the precise owning-layer cause: lock inversion, unbalanced DMA mapping,
+wrong allocation context, lifetime race, storage teardown ordering, or another
+specific mechanism. Do not close with “luck” or “be more careful”.
 
-## Análise de processo (não de outcome) — #7
+## Process analysis
 
-- O processo estava **certo na hora**, mesmo sabendo hoje que deu errado? (válido)
-- Ou **funcionou/falhou por acidente** (decisão Sistema 1 que deu sorte/azar)? (alarme)
-- O `Rollback trigger:` do patch/ADR existia e tinha número? Disparou? Foi acionado?
+- Was the decision reasonable with the evidence available at the time?
+- Did it succeed or fail accidentally?
+- Did the existing rollback trigger fire, and was it acted on?
+- Which defense worked and limited the blast radius?
 
-## Counterfactual retrospectivo (rollback trigger) — #2
+## Counterfactual rollback trigger
 
-O critério numérico que, em retrospecto, deveria ter revertido:
-`se <métrica> <op> <valor> por <janela>, reverter para <release/commit>`.
-(Ex.: `se stall de interrupção > 1 ms em 3 amostras, reverter o patch`.)
+Use a numeric or observable condition:
+`if <metric/state> <operator> <limit> for <window>, restore <known-good state>`.
 
-## Ações corretivas
+## Corrective actions
 
-| Ação | Tipo | Dono | Prazo | Critério de done (numérico) | PR/commit |
+| Action ID | Type | Owner role | Due date | Numeric/observable done criterion | PR/commit |
 | --- | --- | --- | --- | --- | --- |
-| ... | prevent\|detect\|respond | @u | AAAA-MM-DD | ex. "kselftest cobre o modo de falha; 0 kmemleak em soak 24h" | #NNN |
+| ... | prevent\|detect\|respond | ... | YYYY-MM-DD | ... | ... |
 
-> **Obrigatório:** ao menos uma ação `detect` = um **kselftest/KUnit de regressão**
-> que reproduz o modo de falha real (#13), não um mock.
+At least one `detect` action must reproduce the real failure mode through a
+named regression test or platform drill.
 
-## Anti-padrões (não fazer)
+## Effectiveness closure
 
-- ❌ Blame em pessoa. ❌ Hindsight ("era óbvio"). ❌ "Vamos ter mais cuidado" sem
-  ação mensurável. ❌ Fechar sem causa técnica. ❌ Ação corretiva sem dono/prazo/número.
+Repeat this block for every corrective action. `effective` requires measured
+post-fix evidence for the regression, the legitimate path, and the critical
+refusal path.
 
-## Referências
+**Action ID:** `<stable-id>`
 
-- [`kahneman-disciplines.md`](../methodology/kahneman-disciplines.md) §7 (hindsight), §2 (counterfactual), §13 (ilusão de validade)
-- [`reliability/DEGRADATION-MATRIX.md`](../reliability/DEGRADATION-MATRIX.md) — atualizar se o cenário não estava previsto
+**Type:** `prevent` | `detect` | `respond`
+
+**Owner role:** `<role>`
+
+**Due date:** `YYYY-MM-DD`
+
+**Regression command:** `<repository-relative runner/test path>`
+
+**Threshold:** `<number and unit or observable state>`
+
+**Revalidation:** `<legitimate path result>; <critical refusal path result>`
+
+**Observed result:** `<measured result>`
+
+**Evidence:** `<repository-relative artifact or validation path>`
+
+**Closure state:** `open` | `effective` | `blocked`
+
+## Residual limitations
+
+List environment-bound or externally owned gaps. Do not convert them to DONE.
+
+## References
+
+- [`kahneman-disciplines.md`](../methodology/kahneman-disciplines.md)
+- [`DEGRADATION-MATRIX.md`](../reliability/DEGRADATION-MATRIX.md)

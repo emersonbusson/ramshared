@@ -77,7 +77,7 @@ From open/internal-style config PR #259:
 
 - **Commit subject:** `config: <verb> CONFIG_<SYMBOL>`  
   Examples: `config: disable CONFIG_DRM`, `config: enable CONFIG_PSI_DEFAULT_DISABLED`
-- **Body:** short; often just `Signed-off-by: Name <email@linux.microsoft.com>`
+- **Body:** short; often just `Signed-off-by: Name <maintainer-address>`
 - **PR description:** e.g. “compile and smoke tested.”
 - **Granularity:** **one logical Kconfig change per commit** (not a giant “optimize everything” blob — that pattern failed in #245 for external + lack of data)
 - **Language:** **English** only for commits/PR text  

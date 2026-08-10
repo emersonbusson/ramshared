@@ -57,7 +57,7 @@ cgroup `memory.max=512M`, then RESTORE `swapon -p 100 /dev/nbd0`.
 | Canary trigger unit tests | **12/12** (`residency` + ublk residency) |
 | Restore | **swapon -p 100 OK** (cascade back) |
 
-RAW: `/home/emdev/fase0/CASCADE-DEMOTE-20260709-163527.txt` · also [`validation.md`](../../validation.md).
+RAW: `<legacy-private-artifact-root>/CASCADE-DEMOTE-20260709-163527.txt` · also [`validation.md`](../../validation.md).
 
 ## Coverage §14
 

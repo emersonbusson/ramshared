@@ -65,11 +65,11 @@
 
 **What:** Audit the workspace for native language leakage, local filesystem paths, or credentials in comments and documents.
 **Category:** local-check
-**How to measure:** Run recursive `grep` searches for local host paths `/home/emdev/` and workstation hostname `EMEDEV` across the workspace.
+**How to measure:** Run recursive `grep` searches for local host paths `<legacy-private-root>/` and workstation hostname `EMEDEV` across the workspace.
 **Measured data:**
 - Comments translated to English across all 10 workspace crates (47 files modified).
 - Local hostname `EMEDEV` replaced with `dev-workstation` in `docs/BENCHMARKS.md`.
-- File paths `file:///home/emdev/` in specs rewritten to relative directories (`../../`).
+- File paths `file://<legacy-private-root>/` in specs rewritten to relative directories (`../../`).
 - 0 raw matching files found for confidential host indicators in `git ls-files` tracker.
 **Verdict:** ✅ works
 **Next action:** None.
@@ -107,7 +107,7 @@
 | hog integrity | **563200 pages OK, 0 corruption** |
 | restore | **swapon -p 100 /dev/nbd0 OK** |
 
-**RAW:** `/home/emdev/fase0/CASCADE-DEMOTE-20260709-163527.txt`
+**RAW:** `<legacy-private-artifact-root>/CASCADE-DEMOTE-20260709-163527.txt`
 
 **Verdict:** DEMOTE action path **PASS** on live host with active VRAM pages; A1 sink (VHDX) absorbed; cascade restored.
 
@@ -136,7 +136,7 @@
 - Full ITEM-8 product B1/B2 (kill winsvc + page-in after teardown): **open** until `ramshared-winsvc` SCM path exists.
 - Do not promote host-real until B1/B2 product path is empirical.
 
-RAW: `C:\Users\emedev\ramshared-drill\agent-item8-pagefile-kpd.log`, artifacts-item8/
+RAW: `C:\ramshared\artifacts\agent-item8-pagefile-kpd.log`, artifacts-item8/
 
 ## 2026-07-09 — ITEM-8 B2 lab on win11-drill (honest)
 
@@ -169,7 +169,7 @@ RAW: `C:\Users\emedev\ramshared-drill\agent-item8-pagefile-kpd.log`, artifacts-i
 - #2: checkpoint available for restore if needed.
 - Host-real still **forbidden**.
 
-Artifacts: `C:\Users\emedev\ramshared-drill\artifacts-b2\`, guest minidump 27437.
+Artifacts: `C:\ramshared\artifacts\artifacts-b2\`, guest minidump 27437.
 
 ## 2026-07-09 — B2 analysis + storage-only retest (win11-drill)
 
@@ -230,7 +230,7 @@ Earlier run PASS (no dump); one later run TIMEOUT (backend/disk lifecycle flaky 
 ### Host-real
 Still **forbidden**.
 
-Artifacts: `C:\Users\emedev\ramshared-drill\artifacts-all-fronts\`
+Artifacts: `C:\ramshared\artifacts\artifacts-all-fronts\`
 
 ## 2026-07-09 — DT-9 + reboot kill (win11-drill)
 
@@ -951,7 +951,7 @@ swapon --show
 **How to measure:**
 ```bash
 ./scripts/windows/wsl-elevated-ps.sh -Command "Get-Service RamSharedWinSvc,ramshared | ft Name,Status,StartType"
-./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\bin\Install-InfAndBackend.ps1 -RepoRoot C:\Users\emedev\ramshared-src -FormatNtfs -DriveLetter C -Force
+./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\bin\Install-InfAndBackend.ps1 -RepoRoot C:\ramshared\src -FormatNtfs -DriveLetter C -Force
 # expect REFUSE_FORMAT letter C in use
 sudo scripts/safety/cascade-pressure-probe.sh --mem-max 1200M --max-sec 90
 ./scripts/safety/cascade-health.sh
@@ -974,7 +974,7 @@ sudo scripts/safety/cascade-pressure-probe.sh --mem-max 1200M --max-sec 90
 **How to measure:**
 ```bash
 ./scripts/windows/wsl-elevated-ps.sh -Command '
-  # password: Machine env RAMSHARED_DRILL_PASSWORD (set this session from unattend-staging)
+  # credential source: Machine env RAMSHARED_DRILL_PASSWORD (set this session from unattend-staging)
   $pw=[Environment]::GetEnvironmentVariable("RAMSHARED_DRILL_PASSWORD","Machine")
   $cred=New-Object PSCredential(".\drilladmin",(ConvertTo-SecureString $pw -AsPlainText -Force))
   if ((Get-VM win11-drill).State -ne "Running") { Start-VM win11-drill; Start-Sleep 20 }
@@ -1092,7 +1092,7 @@ sudo env HOG_MB=4500 CAP_MB=256 MIN_NBD_MIB=150 DEMOTE_CAP_MB=5500 RESTORE=1 \
 - Disk5: RAMSHARE VRAMDISK 67108864 RAW → **GPT + NTFS** letter **S:** label RAMSHARED Size~64 MiB
 - Direct 8 MiB probe: **write ≈ 1224 MB/s**, **read ≈ 146 MB/s**, **match=True**
 - PerfDisk instance: `5 S:` (CIM)
-- `ramshared.sys` rebuilt with TUR sense fix (BUILD_DRIVERS_OK, size 29696, 11:52) under `C:\Users\emedev\ramshared-src\...\x64\Release\`
+- `ramshared.sys` rebuilt with TUR sense fix (BUILD_DRIVERS_OK, size 29696, 11:52) under `C:\ramshared\src\...\x64\Release\`
 - Host reload of new .sys left for guest/lab path (physical host pagefile still FORBIDDEN on this LUN)
 **Verdict:** ✅ Format + real I/O path PASS; measure script locale-safe PASS; driver source Day-0 TUR fix + rebuild PASS
 **Next action:** sign+reload new sys on win11-drill guest for full TUR-not-ready path; optional host package update when not using LUN for pagefile
@@ -1116,7 +1116,7 @@ sudo env HOG_MB=4500 CAP_MB=256 MIN_NBD_MIB=150 DEMOTE_CAP_MB=5500 RESTORE=1 \
 - Volume: letter **D:** **NTFS** label path already_ntfs / probe OK
 - Direct probe (guest): **write ≈ 101.9 MB/s**, **read ≈ 64.9 MB/s**, **match=True** (4 MiB fallback; full `Measure-RamSharedDiskIo.ps1` hit guest ExecutionPolicy block — numbers from inline probe)
 - Teardown: backend STOP_OK; VM **Off** (no host pagefile on LUN; no thrash)
-- Artifacts: `C:\Users\emedev\ramshared-drill\agent-guest-tm-reload-20260714-122717.json` (also earlier attempts 121725 pnputil-only FAIL, 122425 Trim parse FAIL — fixed)
+- Artifacts: `C:\ramshared\artifacts\agent-guest-tm-reload-20260714-122717.json` (also earlier attempts 121725 pnputil-only FAIL, 122425 Trim parse FAIL — fixed)
 - Prior same-day host path (EMEDEV): Disk5 RAMSHARE RAW→S: NTFS; probe 8 MiB write≈1224 / read≈146 match=True (validation 11:52 entry)
 **Verdict:** ✅ Guest signed reload + CREATE/FORMAT/MEASURE **PASS** (pass=9 fail=0)
 **Next action:** optional Bypass execution policy on guest for CIM measure script; optional INF/PnP FriendlyName branding (RAMSHARE vs Msft Virtual Disk)
@@ -1277,21 +1277,21 @@ C:\ramshared\bin\ramshared-winsvc.exe probe-cuda --config C:\ProgramData\RamShar
 - Kernel-Power **41** + EventLog **6008** (unexpected shutdown): **2026-07-15 15:08–15:10** (this incident), also 2026-07-14 and 2026-07-09/10
 - disk **Event ID 51**: "Erro … HarddiskN … durante uma **operação de paginação**" (paging I/O error) — historical bursts e.g. 2026-07-03 Harddisk5, 2026-07-11 Harddisk6
 **Evidence (WSL dmesg this boot):**
-- **OOM memcg**: `clamd` killed in docker cgroup (~15:11) right after stack up — memory pressure with full advoq compose
+- **OOM memcg**: `clamd` killed in docker cgroup (~15:11) right after stack up — memory pressure with full unrelated workload compose
 - cascade tear-down logged zram0 remove + nbd0 disconnect (our stabilization)
 **Topology (smoking gun for build freezes):**
 - Entire Ubuntu root = `I:\wsl2\Ubuntu-24.04\ext4.vhdx` (~220G file)
 - WSL pagefile = `I:\wsl_swap\swap.vhdx` (4.1G) **same physical volume I:**
-- advoq builds write inside ext4.vhdx on **I:** → swap page-ins/outs also hit **I:** → queue collapse looks like “0 KB/s forever”
+- unrelated workload builds write inside ext4.vhdx on **I:** → swap page-ins/outs also hit **I:** → queue collapse looks like “0 KB/s forever”
 **Lab contribution (same day earlier):**
 - hung `ramshared-winsvc` in kernel Stopping + orphan RAMSHARE LUN (100% disk / 0 KB/s) → storage stack sticky → reboot may hang
 **Actions taken:**
 1. cascade-down (nbd/zram off); `systemctl disable ramshared-cascade` (work mode)
 2. `docker builder prune -f` reclaimed **~12.74 GB**
-3. Document: do not co-run StorPort Online thrash + advoq full stack on I:
+3. Document: do not co-run StorPort Online thrash + unrelated workload full stack on I:
 **Verdict:** 🟡 root cause class identified (paging thrash on I: + concurrent load); host stable after cascade off; residual risk if I: fills or swap thrash during mega-builds
 **Not fixed by:** `wsl --update` (already latest)
-**Next:** free space on I:/C:; avoid cascade boot during advoq; optional lower WSL swap after `wsl --shutdown` only with approval
+**Next:** free space on I:/C:; avoid cascade boot during unrelated workload; optional lower WSL swap after `wsl --shutdown` only with approval
 
 ## 2026-07-15 17:15 -03 — senior re-audit correction (PARTIAL, no false green)
 
@@ -2894,3 +2894,364 @@ host.
 **Verdict:** ✅ PASS_ACTIVE_STABLE. Host evidence:
 `C:\ramshared\artifacts\active-host-20260725-155910`; committed summary:
 `docs/specs/no-milestone/windows-autonomous-broker-service/evidence/physical-active-20260725/activation.json`.
+## 2026-08-09 09:15 -03 — Public benchmark evidence integrity gate
+
+**What:** Added a RamShared-only, zero-dependency public evidence contract for
+benchmark records and explicit SSDV3 claim manifests. Historical benchmark
+bytes were not rewritten; five human sections and three old JSONL rows are now
+mapped to honest legacy-unqualified identities.
+
+**Category:** ci-gate / isolation
+
+**Environment:** repository worktree; Node.js 24.15.0; no Windows, WSL2,
+driver, daemon, disk, swap, GPU-pressure, or reboot action.
+
+**Before:** `docs/BENCHMARKS.md` had 5 dated sections while
+`docs/benchmarks/results.jsonl` had 3 pre-schema rows. There was no artifact
+hash validator, statistics recomputation, comparison fingerprint, prose parity
+gate, or explicit SPEC evidence manifest.
+
+**Action:** Implemented and executed the two Node test suites, both repository
+validators, and the complete `scripts/docs-check.sh` gate twice.
+
+**After:** 5/5 human benchmark sections map exactly once; 3/3 old JSONL rows
+have explicit legacy-unqualified mappings; no old row is promotable. The SPEC
+claim validator accepts only explicit `PARTIAL`/`DONE` manifests and requires
+the applicable named tests, cover classification, live before/action/after,
+legitimate/refusal cases, cleanup, artifacts, and BINARY_MATCH.
+
+**Measured data:** benchmark validator tests 11 passed / 0 failed; SPEC claim
+tests 7 passed / 0 failed; repository counts sections=5, records=3, legacy=5;
+two complete docs-check runs exited 0 and produced byte-identical output.
+
+**How to measure:** `node --test tools/ci/check-benchmark-evidence.test.mjs`;
+`node --test tools/ci/check-spec-evidence.test.mjs`;
+`node tools/ci/check-benchmark-evidence.mjs --check`;
+`node tools/ci/check-spec-evidence.mjs --check`; `./scripts/docs-check.sh`.
+
+**Artifacts:** `docs/benchmarks/evidence.schema.json`,
+`docs/benchmarks/legacy-unqualified.json`,
+`docs/benchmarks/benchmark-map.json`, and
+`docs/specs/no-milestone/benchmark-evidence-integrity/evidence/validation-summary.json`.
+
+**Limitations:** This gate does not retroactively qualify historical numbers
+and does not execute platform workloads. Windows physical storage performance
+remains blocked on the separately approved host reboot and real 75-sample
+matrix.
+
+**Rollback trigger:** Revert validator integration if one malformed,
+duplicate, hash-mismatched, sensitive, statistically forged, incomparable, or
+non-PASS record passes; if one sensitive value is printed; or if identical
+inputs produce different normalized output.
+
+**Verdict:** ✅ The public benchmark/claim evidence gate is implemented and
+its legitimate plus refusal paths are reproducible without host mutation.
+
+## 2026-08-09 11:02 -03 — Documentation governance integrity
+
+**Governance schema:** 1
+
+**What:** Implemented and exercised the fail-closed structural documentation
+governance gate.
+
+**Slug:** `documentation-governance-integrity`
+
+**Environment/commit:** repository worktree at
+`95739d1f972bcefe7eb5df8861cf8c526503e074`; Node.js 24.15.0; no runtime,
+driver, daemon, disk, swap, GPU-pressure, network, or reboot action.
+
+**Scope:** Canonical-document ownership, objective routing, evidence-qualified
+claims, provenance sanitization, bounded journey records, postmortem action
+effectiveness, strict validation closure, and evidence-derived index status.
+
+**Before:** DONE could be inferred from document presence, validation closure
+did not require a strict before/action/after record, and no single read-only
+gate checked the complete structural documentation surface.
+
+**Action:** Ran 34 governance tests, 14 validation-schema tests, 7 index tests,
+per-file Node coverage, the structural governance CLI, and the integrated
+documentation gate twice.
+
+**After:** The structural scan inspected 304 files with 0 findings. The three
+production files measured 100.00/82.87/100.00%,
+86.67/88.24/96.67%, and 96.72/80.26/100.00% line/branch/function coverage.
+
+**Legitimate case:** An evidence-qualified claim with current hashed artifacts,
+named tests, cleanup, and the required platform classification is accepted and
+is the only path to DONE.
+
+**Required refusals:** unqualified IMPL presented as DONE; sensitive/private
+provenance; stale evidence artifact; missing BINARY_MATCH where required;
+unbounded journey record.
+
+**Tests/coverage:** 55 tests passed, 0 failed; every production file exceeded
+80% lines and branches; two structural runs were deterministic and exited 0.
+
+**Platform gates:** N/A — repository-only Node tooling; BINARY_MATCH N/A.
+
+**Artifacts:**
+`docs/specs/no-milestone/documentation-governance-integrity/evidence/validation-summary.json`
+and its `evidence-manifest.json`.
+
+**Cleanup:** Complete; the checkers are read-only and left 0 runtime or host
+resources.
+
+**Limitations:** This governance slice qualifies documentation claims only; it
+does not promote any Windows, WSL2, kernel, signing, VM, or physical result.
+
+**Rollback trigger:** One false DONE promotion, one sensitive value printed,
+one automatic source rewrite, or different normalized output for identical
+input.
+
+**Verdict:** ✅ Documentation governance integrity is implemented and its
+legitimate and refusal paths are reproducible without host mutation.
+
+## 2026-08-09 11:02 -03 — Documentation localization integrity
+
+**Governance schema:** 1
+
+**What:** Implemented and exercised the bounded English/PT-BR localization
+integrity gate.
+
+**Slug:** `documentation-localization-integrity`
+
+**Environment/commit:** repository worktree at
+`95739d1f972bcefe7eb5df8861cf8c526503e074`; Node.js 24.15.0; no runtime,
+driver, daemon, disk, swap, GPU-pressure, network, or reboot action.
+
+**Scope:** English canonical documentation, complete root README in Brazilian
+Portuguese, a non-normative Portuguese navigation portal, reciprocal language
+switches, source-hash freshness, local links, and authority boundaries.
+
+**Before:** Required localized entries existed only as an intended policy;
+freshness, reciprocal switches, protected document classes, and localized
+authority were not enforced by one deterministic gate.
+
+**Action:** Ran the 15 named localization tests, the repository localization
+CLI twice, syntax checks, and per-file Node coverage.
+
+**After:** Both required localized files passed with 0 findings; two CLI runs
+were byte-identical with SHA-256
+`f1964e7db9763a1028e20c5dfdaee6c13e85a2d81ba0685b1205c50a45b7300c`.
+Coverage was 98.59% lines, 86.90% branches, and 100.00% functions.
+
+**Legitimate case:** Current exact source hashes, reciprocal README switches,
+five portal objectives, valid local links, and explicit non-normative policy
+are accepted.
+
+**Required refusals:** stale canonical source hash; missing required
+localization; broken language switch; positive localized authority claim;
+protected normative localization path.
+
+**Tests/coverage:** 15 tests passed, 0 failed; per-file line/branch/function
+coverage exceeded 80%; repository CLI inspected 2 files with 0 findings.
+
+**Platform gates:** N/A — repository-only Node tooling; BINARY_MATCH N/A.
+
+**Artifacts:**
+`docs/specs/no-milestone/documentation-localization-integrity/evidence/validation-summary.json`
+and its `evidence-manifest.json`.
+
+**Cleanup:** Complete; both runs were read-only and left 0 runtime or host
+resources.
+
+**Limitations:** Localized documents are informational. PRD, SPEC, IMPL, ADR,
+CI, evidence, benchmarks, and validation remain English canonical records.
+
+**Rollback trigger:** One stale hash, missing file, broken switch, positive
+authority claim, sensitive diagnostic, or nondeterministic result passes.
+
+**Verdict:** ✅ The bounded localization contract is implemented without
+duplicating or translating normative engineering records.
+
+## 2026-08-09 11:02 -03 — Public repository candidate integrity
+
+**Governance schema:** 1
+
+**What:** Implemented and exercised the public repository candidate hygiene
+gate.
+
+**Slug:** `public-repository-hygiene`
+
+**Environment/commit:** repository worktree at
+`95739d1f972bcefe7eb5df8861cf8c526503e074`; Node.js 24.15.0; no runtime,
+driver, daemon, disk, swap, GPU-pressure, network, or reboot action.
+
+**Scope:** Candidate, staged-index, and tracked-file scanning; bounded text and
+binary handling; sanitized findings; scoped allowlists; and portable script
+defaults for a public RamShared checkout.
+
+**Before:** The hygiene scanner could miss nonignored untracked candidates or
+read a staged path from different working-tree bytes, and diagnostics did not
+have the current bounded candidate contract.
+
+**Action:** Ran 12 named hygiene tests, per-file Node coverage, the real
+candidate scan, PowerShell 5.1 parser/static checks, and the integrated docs
+gate.
+
+**After:** The current candidate scan inspected 681 files with 0 findings.
+Coverage was 94.38% lines, 85.29% branches, and 100.00% functions; all 12 tests
+passed.
+
+**Legitimate case:** A clean candidate containing tracked, staged, and
+nonignored untracked public files is accepted without exposing file contents.
+
+**Required refusals:** staged index/worktree byte divergence; private profile
+path; credential/token/key fixture; kernel-address fixture; invalid scan mode;
+Git enumeration failure.
+
+**Tests/coverage:** 12 tests passed, 0 failed; per-file line/branch/function
+coverage exceeded 80%; candidate CLI exited 0 with 0 findings.
+
+**Platform gates:** PowerShell 5.1 parser/static checks only; no operator
+script execution; BINARY_MATCH N/A.
+
+**Artifacts:**
+`docs/specs/no-milestone/public-repository-hygiene/evidence/validation-summary.json`
+and its `evidence-manifest.json`.
+
+**Cleanup:** Complete; the checker is read-only and left 0 runtime or host
+resources.
+
+**Limitations:** This gate prevents candidate hygiene false-greens; it does not
+qualify driver behavior, release signing, VM E2E, or physical-host stability.
+
+**Rollback trigger:** One staged blob is read from worktree bytes, one
+nonignored candidate is skipped, one sensitive match is echoed, or three
+consecutive no-load candidate scans exceed 10 seconds.
+
+**Verdict:** ✅ Public repository candidate integrity is implemented and the
+legitimate plus refusal paths are reproducible without host mutation.
+
+## 2026-08-10 01:12 -03 — Windows 11 lab media and OOBE revalidation
+
+**What:** Reproduced the disposable-lab OOBE failure, corrected and sealed the
+unattended media contract, and exercised the next clean VM start without
+rebooting the physical Windows host or WSL.
+
+**Measured data:** The failed `clean-5` guest remained at
+`IMAGE_STATE_UNDEPLOYABLE`, `OOBEInProgress=1`, `SetupPhase=4`, and
+`SetupType=2`. Its sealed XML was legitimately refused because `AutoLogon`
+omitted the Microsoft-required `LogonCount`. The corrected XML is 5,015 bytes,
+has SHA-256 `8C22438E54B7E4319D2AB454627E7DB6014AAF6B7DE16BABEC03818F368CF61C`,
+and the same hash was independently read from the new 8,454,309,888-byte ISO;
+the ISO SHA-256 is
+`EE07B0766773105C22E952658FBDED018A1894846123DFF23991D6281E34A785`.
+The Windows static aggregate, including the new OOBE/media refusals, exited 0;
+`docs-check` and scoped whitespace checks exited 0. Dropping only reclaimable
+WSL cache reduced `buff/cache` from 9.7 GiB to 1.2 GiB without stopping a
+process or restarting WSL. Hyper-V still refused the supported 4,096 MiB VM
+start with `0x800705AA`: host free memory was 3,798 MiB while the unrelated
+`gha-ubuntu-2404` VM retained 12,288 MiB. Both RamShared disposable guests are
+Off; the foreign VM was not mutated.
+
+**Evidence:**
+`tmp/windows-task-manager-disk-counters-e2e/20260810-oobe-media-validation.json`
+and `C:\ramshared\artifacts\win11-verifier-clean-6-thumbnail.png` (14,858
+bytes; SHA-256
+`638E6A4D9487FB6A740E2AB11B74923384BF14A5AAD56CA186C43939DBB59F8B`).
+
+**Verdict:** 🟡 Media and orchestration corrections are validated, but VM E2E,
+Driver Verifier, BINARY_MATCH, storage matrix, and benchmarks remain blocked by
+the observable host-memory boundary. This is partial, not DONE.
+
+## 2026-08-10 08:42 -03 — Disposable VM Driver Verifier and exact teardown
+
+**What:** Replaced repeated Windows installation with an immutable 20 GiB
+ready-base plus differencing-VHD clones, corrected the offline Hyper-V
+integration-service and phase-bound teardown contracts, recovered the prior
+failed run exactly, and completed the signed `.8` driver campaign on a fresh
+Generation-2 Windows 11 clone. No physical-host or WSL reboot occurred.
+
+**Measured data:** The immutable base was 20,505,952,256 bytes with SHA-256
+`1F17888E525553810881E835FB2E3B8F7C74B9A4EAEC3481F7BCE8A118B63EC2`.
+The new clone used a differencing VHD, a new VM ID, four vCPUs, 4 GiB startup
+memory, vTPM, the Private sealed switch, and zero checkpoints. A legitimate
+Hyper-V `0x800705AA` refusal occurred while Windows had only 4,336,263,168
+free physical bytes and WSL used 12,280,619,008 bytes with 4,284,153,856 bytes
+of swap used. Gracefully shutting down only two completed RamShared lab VMs
+raised host-free memory to 10,003,623,936 bytes; no foreign process was killed.
+
+The fresh readiness gates passed on their first complete attempts in 110,401
+ms before the campaign and 92,229 ms after Secure Boot was restored `On`.
+The signed driver loaded with SHA-256
+`5E4FF79148274EC1A029A057714F0066389B6E103F5425E5C3C2AAB1ADB07A55`
+and BINARY_MATCH true. Normal I/O passed in 87,690 ms and Driver Verifier I/O
+passed in 25,347 ms. Both paths proved the legitimate queue, six required
+refusals, three race/rundown guards, VPD serial `ABCDEF0123456789`, a
+134,217,728-byte Virtual SSD with 4,096-byte logical/physical sectors, zero
+Event 153, and zero new dumps. Verifier reset reached zero. Exact teardown
+removed one ROOT, service, OEM INF, and retired PnP node with every action exit
+0; independent final observations found package/service/ROOT/disk/PnP,
+Verifier target, TestSigning, and signer certificates all zero. The terminal
+clone state is Off and host-free memory reached 12,420,276,224 bytes.
+
+**Evidence:**
+`tmp/windows-task-manager-disk-counters-e2e/20260810-vm-verifier-final.json`,
+`C:\ramshared\artifacts\ready-clone-5e48f1bf-9f55-4d32-9d98-f913a9092ed8`,
+`C:\ramshared\artifacts\guest-verifier-d0f9a571-c7bb-4f78-9e40-aa7233ed85e6`,
+and exact recovery
+`C:\ramshared\artifacts\guest-verifier-recovery-156cd553-535f-4fe6-8383-f35ba823345f`.
+
+**Verdict:** 🟡 The disposable-VM driver, Verifier, BINARY_MATCH, refusal,
+rollback, firmware-restoration, and zero-residue slice is legitimately green.
+The overall SPEC remains partial because the supervised physical-host `.8`
+deployment/BINARY_MATCH and 75-sample five-cell storage benchmark matrix have
+not run; they must not be inferred from VM evidence.
+
+## 2026-08-10 10:53 -03 — Jules/Dependabot consolidation pre-merge gate
+
+**What:** Audited Dependabot PR #158 and Jules PRs #160–#187, consolidated the
+valid findings into RamShared-owned implementations, replaced unsafe or
+incomplete patches with SPEC-first fail-closed fixes, and exercised the complete
+repository-local validation plan before creating the single superseding PR.
+Issue #188 is the remote traceability anchor. No old PR was closed before the
+consolidated replacement existed and passed its local gates.
+
+**Measured data:** `cargo fmt --all -- --check`, workspace clippy with
+`-D warnings`, the complete workspace test suite, `cargo deny check`, the
+pinned RustSec audit (1,197 advisories checked against 54 dependencies), the
+Windows MSVC target check, actionlint 1.7.7, 242 Node tests, the complete
+Windows PowerShell static aggregate, public-hygiene candidate scan, and
+`scripts/docs-check.sh` exited 0. The canonical Rust coverage planner executed
+all mapped entries serially against immutable `origin/main` and exited 0. The
+lowest production-file line results were 81.5% for
+`ramshared-wsl2d/src/main.rs`, 82.2% for `ublk_server.rs`, 83.3% for winsvc
+`ipc.rs`, and 84.4% for both cascade orchestration and CLI dispatch; every
+mapped production file was at least 80%. The ublk slice measured 91.2%
+(`ramshared-uring/src/lib.rs`), 95.0% (`ublk_queue.rs`), and 82.2%
+(`ublk_server.rs`). A prior transient coverage child stall was not promoted:
+the checker now has a tested 15-minute terminal deadline and private target
+directories, and this full serialized rerun completed with exit 0.
+
+**Remote controls:** GitHub REST observations now prove default workflow token
+`read`, Actions PR approval disabled, selected-action allowlisting with SHA
+pinning required, 30-day artifact/log retention, enforced-admin strict branch
+protection with conversation resolution, and two protected environments with
+required reviewer, self-review refusal, and protected-branch policy. The
+branch protection now requires only the same-run `required-checks` aggregate.
+The SPEC-first `observed` remote-gate state was added with a RED→GREEN refusal
+suite so a valid administrator observation can close the gate without being
+misrepresented as a local workflow. Both `--check-local` and strict `--check`
+now exit 0 with `CI_CONTRACT_STATUS=PASS`.
+
+**Safety boundary:** All real `/dev/ublk-control`, CUDA device, swap activation,
+Windows driver, SCM, storage mutation, VM, pressure, reboot, and physical-host
+tests remained ignored or uninvoked. Refusal tests used only nonexistent paths
+and regular files. No `ramsharedd` daemon, product swap, ublk block device, VM,
+or driver was activated by this gate.
+
+**Artifacts:** `tmp/*-cov.json`,
+`docs/reliability/JULES-PR-AUDIT-20260810.md`, and
+`docs/governance/remote-controls-observation.json`.
+
+**Rollback trigger:** Any mapped production file below 80%; any unbounded
+coverage child; any aggregate CI false-green; any loaded artifact mismatch;
+any unexpected swap/device/driver activation; or any regression from the exact
+identity, bounds, teardown, and refusal contracts added by this consolidation.
+
+**Verdict:** 🟡 Repository-local implementation, static validation, coverage,
+and remote hardening are green. CI promotion still awaits the single PR's
+hosted `required-checks`; Windows physical-host BINARY_MATCH and the 75-sample
+five-cell storage matrix remain explicitly env-bound and are not invented from
+offline proof.

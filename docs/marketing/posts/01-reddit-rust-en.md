@@ -1,34 +1,34 @@
 # Post 01 — Reddit r/rust (English)
 
-**Sim: quase tudo abaixo é para COLAR no Reddit.**  
-Há **3 coisas** para colar/anexar — não 1 bloco só.
+**Yes: almost everything below is for PASTING into Reddit.**
+There are **3 things** to paste/attach — not just one block.
 
-| O quê | ID | Onde no Reddit | Como usar |
+| What | ID | Where on Reddit | How to use it |
 | --- | --- | --- | --- |
-| **Título** | **T-EN-1** | campo **Title** | Copia o texto entre as linhas `>>> COPY TITLE START` e `>>> COPY TITLE END` |
-| **Corpo** | **B-EN-1** | campo **Text** (corpo do post) | Copia o texto entre `>>> COPY BODY START` e `>>> COPY BODY END` |
-| **Imagem** | **IMG-1** | botão de imagem / mídia | Baixa o PNG e anexa (não é texto) |
+| **Title** | **T-EN-1** | **Title** field | Copy the text between `>>> COPY TITLE START` and `>>> COPY TITLE END` |
+| **Body** | **B-EN-1** | **Text** field (post body) | Copy the text between `>>> COPY BODY START` and `>>> COPY BODY END` |
+| **Image** | **IMG-1** | image / media button | Download and attach the PNG (it is not text) |
 
-**Não cole** as linhas que começam com `>>>` — são só marcadores.
+**Do not paste** lines that begin with `>>>` — they are only delimiters.
 
 ---
 
-## Passos (ordem)
+## Steps (in order)
 
-| Passo | O que fazer |
+| Step | What to do |
 | --- | --- |
-| **S1** | Abre https://www.reddit.com/r/rust → **Create Post** → tipo **Text** |
-| **S2** | Comunidade = **r/rust** |
-| **S3** | No campo **Title**, cola **T-EN-1** (bloco abaixo) |
-| **S4** | No campo **Text**, cola **B-EN-1** (bloco grande abaixo) |
-| **S5** | Anexa a imagem **IMG-1** (link no final) |
-| **S6** | Flair **Show & Tell** se aparecer |
-| **S7** | Clica **Post** |
-| **S8** | **Para.** Não posta em outro lugar hoje |
+| **S1** | Open https://www.reddit.com/r/rust → **Create Post** → **Text** type |
+| **S2** | Community = **r/rust** |
+| **S3** | In the **Title** field, paste **T-EN-1** (the block below) |
+| **S4** | In the **Text** field, paste **B-EN-1** (the large block below) |
+| **S5** | Attach **IMG-1** (link at the end) |
+| **S6** | Select **Show & Tell** flair if it appears |
+| **S7** | Click **Post** |
+| **S8** | **Stop.** Do not post elsewhere today |
 
 ---
 
-## T-EN-1 — cola no TITLE
+## T-EN-1 — paste into TITLE
 
 >>> COPY TITLE START
 
@@ -38,10 +38,13 @@ Há **3 coisas** para colar/anexar — não 1 bloco só.
 
 ---
 
-## B-EN-1 — cola no TEXT / BODY
+## B-EN-1 — paste into TEXT / BODY
 
-Tudo entre START e END abaixo (incluindo “Numbers”, “Try it”, “Honest limits”, o link do repo, etc.) é **um único texto** para o corpo do post.  
-Sim: os números, o `quickstart.sh` e o “Looking for feedback” **também são para colar**.
+Everything between START and END below (including “Numbers”, “Try it”, “Honest
+limits”, the repository link, and so on) is **one single text** for the post
+body.
+Yes: the numbers, `quickstart.sh`, and “Looking for feedback” **are also for
+pasting**.
 
 >>> COPY BODY START
 
@@ -77,19 +80,19 @@ https://github.com/emersonbusson/ramshared
 
 ---
 
-## IMG-1 — NÃO é texto (anexar arquivo)
+## IMG-1 — is NOT text (attach the file)
 
-1. Abre: https://github.com/emersonbusson/ramshared/blob/main/docs/marketing/cascade-diagram.png  
-2. Baixa o PNG (Download / raw).  
-3. No post do Reddit, anexa essa imagem.
+1. Open: https://github.com/emersonbusson/ramshared/blob/main/docs/marketing/cascade-diagram.png
+2. Download the PNG (Download / raw).
+3. Attach that image to the Reddit post.
 
 ---
 
-## Checklist mental
+## Mental checklist
 
-- [ ] Title = só a linha do **T-EN-1**  
-- [ ] Body = **tudo** do **B-EN-1** (do “When your PC…” até o link do GitHub)  
-- [ ] Imagem anexada  
-- [ ] Postou e parou  
+- [ ] Title = only the **T-EN-1** line
+- [ ] Body = **all** of **B-EN-1** (from “When your PC…” through the GitHub link)
+- [ ] Image attached
+- [ ] Posted and stopped
 
-Próximo canal (não hoje): [`02-twitter-en.md`](02-twitter-en.md)
+Next channel (not today): [`02-twitter-en.md`](02-twitter-en.md)

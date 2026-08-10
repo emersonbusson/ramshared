@@ -50,7 +50,7 @@ Mainline destination: [`docs/specs/no-milestone/mainline-vram-tiering/PRD.md`](.
 
 ```bash
 # Repo on Windows path recommended for -File:
-REPO_WIN='C:\Users\emedev\ramshared-src'   # or your mirror
+REPO_WIN='C:\ramshared\src'   # or your mirror
 # Mirror if needed:
 # rsync -a --delete --exclude target --exclude .git ./ /mnt/c/Users/emedev/ramshared-src/
 

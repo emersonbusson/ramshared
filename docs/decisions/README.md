@@ -1,29 +1,30 @@
 # Architecture Decision Records (ADRs)
 
-Registros de decisão numerados e **append-only**. Cada decisão não-trivial de
-arquitetura/lock/DMA/memória vira um ADR.
+Numbered, **append-only** decision records. Every non-trivial architecture,
+lock, DMA, or memory decision becomes an ADR.
 
-## Formato
+## Format
 
-`ADR-NNNN-slug.md`, com seções:
+`ADR-NNNN-slug.md`, with these sections:
 
-- **Status** — Proposed | Accepted | Superseded by ADR-XXXX (com data).
-- **Context** — o problema e as forças; fatos com número.
-- **Decision** — o que foi decidido (imperativo).
-- **Consequences** — trade-offs (+ e −), incl. o que fica pior.
-- **Alternatives considered** — o que foi descartado e por quê.
-- **Kahneman** — disciplina(s) aplicada(s) ([`../methodology/kahneman-disciplines.md`](../methodology/kahneman-disciplines.md)).
-- **Rollback trigger** — condição **numérica/observável** que reverte a decisão
-  (governance.md exige isto em mudança estrutural).
+- **Status** — Proposed | Accepted | Superseded by ADR-XXXX (with date).
+- **Context** — the problem and forces; facts with numbers.
+- **Decision** — what was decided (imperative).
+- **Consequences** — trade-offs (+ and −), including what gets worse.
+- **Alternatives considered** — what was discarded and why.
+- **Kahneman** — discipline(s) applied
+  ([`../methodology/kahneman-disciplines.md`](../methodology/kahneman-disciplines.md)).
+- **Rollback trigger** — a **numeric/observable** condition that reverses the
+  decision (`governance.md` requires this for structural changes).
 
-## Índice
+## Index
 
-| ADR | Título | Status |
+| ADR | Title | Status |
 | --- | --- | --- |
-| [0001](ADR-0001-vram-cascade-tiering.md) | Cascata de swap zram→VRAM→VHDX (VRAM como tier frio) | Accepted |
-| [0002](ADR-0002-rust-userspace-port.md) | Daemon/CLI userspace em Rust (port do design nbd-vram) | Accepted |
-| [0003](ADR-0003-page-state-swap-safety.md) | Estados de página: herdar swap do Linux; daemon garante durabilidade/DEMOTE/atomicidade | Accepted |
-| [0004](ADR-0004-ublk-io-uring-crate.md) | Crate ublk/io_uring | Accepted |
-| [0005](ADR-0005-broker-protocol-jsonl.md) | Broker protocol JSONL | Accepted |
+| [0001](ADR-0001-vram-cascade-tiering.md) | zram→VRAM→VHDX swap cascade (VRAM as a cold tier) | Accepted |
+| [0002](ADR-0002-rust-userspace-port.md) | Rust userspace daemon/CLI (port of the nbd-vram design) | Accepted |
+| [0003](ADR-0003-page-state-swap-safety.md) | Page states: inherit Linux swap; daemon guarantees durability/DEMOTE/atomicity | Accepted |
+| [0004](ADR-0004-ublk-io-uring-crate.md) | ublk/io_uring crate | Accepted |
+| [0005](ADR-0005-broker-protocol-jsonl.md) | Broker JSONL protocol | Accepted |
 | [0006](ADR-0006-storport-virtual-miniport.md) | StorPort virtual miniport (Windows) | Accepted |
 | [0007](ADR-0007-kernel-native-language-c.md) | Kernel-native work in **C**, not app Rust | Accepted |
