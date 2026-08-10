@@ -135,6 +135,11 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 				   (const RAMSHARED_REGISTER *)buf,
 				   Irp->RequestorMode,
 				   IoGetCurrentProcess());
+		if (NT_SUCCESS(status) &&
+		    !VdApplyRegisteredQueueDepth(VdGetActive(), VdGetAdapterExt())) {
+			QUnregister(&VdGetActive()->queue);
+			status = STATUS_DEVICE_CONFIGURATION_ERROR;
+		}
 		break;
 
 	case IOCTL_RAMSHARED_UNREGISTER_QUEUE:

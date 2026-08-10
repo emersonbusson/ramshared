@@ -16,11 +16,11 @@
 [CmdletBinding()]
 param(
     [string]$VMName = "win11-drill",
-    [string]$SrcHost = "C:\Users\emedev\ramshared-src",
+    [string]$SrcHost = "C:\ramshared\src",
     [string]$DstGuest = "C:\ramshared",
     [string]$User = "WIN11-DRILL\drilladmin",
     [string]$Password = $env:RAMSHARED_DRILL_PASSWORD,
-    [string]$ResultsJson = "C:\Users\emedev\ramshared-drill\agent-disciplined-results.json"
+    [string]$ResultsJson = "C:\ramshared\artifacts\agent-disciplined-results.json"
 )
 
 $ErrorActionPreference = "Continue"

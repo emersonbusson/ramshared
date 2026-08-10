@@ -19,6 +19,11 @@ typedef struct _VIRTUAL_DISK {
 	UCHAR serial[16];
 	RAMSHARED_QUEUE queue;
 	volatile LONG state;
+	volatile LONG InquirySeen;
+	volatile LONG AppliedQueueDepth;
+	UCHAR InquiryPathId;
+	UCHAR InquiryTargetId;
+	UCHAR InquiryLun;
 	/* DT-5: CREATE requestor; balanced ObReference/Dereference. */
 	PEPROCESS OwnerProcess;
 } VIRTUAL_DISK, *PVIRTUAL_DISK;
@@ -38,3 +43,5 @@ PVIRTUAL_DISK VdGetActive(VOID);
 BOOLEAN VdIsActive(VOID);
 BOOLEAN VdOwnerMatches(_In_ PEPROCESS Process);
 BOOLEAN VdOwnerExited(VOID);
+BOOLEAN VdApplyRegisteredQueueDepth(_Inout_ PVIRTUAL_DISK Disk,
+				    _In_ PVOID DevExt);

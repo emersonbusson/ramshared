@@ -9,7 +9,7 @@
 
 .EXAMPLE
   # From WSL:
-  ./scripts/windows/wsl-elevated-ps.sh -File C:\Users\emedev\ramshared-src\scripts\windows\Invoke-Guest.ps1 -Command "hostname; whoami"
+  ./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\src\scripts\windows\Invoke-Guest.ps1 -Command "hostname; whoami"
 #>
 [CmdletBinding()]
 param(

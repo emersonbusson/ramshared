@@ -10,11 +10,18 @@ param(
     [string]$HostBinDir = "C:\ramshared\bin",
     [string]$DriverPackage = "C:\ramshared\artifacts\driver-package-build",
     [string]$ArtifactRoot = "C:\ramshared\artifacts",
+    [ValidateSet(1, 4, 16)]
+    [uint32]$QueueDepth = 4,
+    [uint32]$MaxIoBytes = 1048576,
     [ValidatePattern("^[A-Z]$")]
     [string]$VolumeLetter = "R"
 )
 
 $ErrorActionPreference = "Stop"
+if ([uint64]$QueueDepth * [uint64]$MaxIoBytes -gt 4MB) {
+    throw "queue depth x max I/O exceeds 4 MiB"
+}
+. (Join-Path $PSScriptRoot "Invoke-GuestPsDirectBounded.ps1")
 function Get-DrillPassword {
     if ($Password) { return $Password }
     foreach ($scope in @("Machine", "User")) {
@@ -46,8 +53,8 @@ function New-Package([string]$Root, [string]$Version, [string]$Commit) {
         ), [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllLines((Join-Path $Root "winsvc.toml"), [string[]]@(
             "[win_drive]", "size_bytes = 67108864", "block_size = 4096",
-            "cuda_device = 0", "reserve_bytes = 536870912", "queue_depth = 4",
-            "max_io_bytes = 1048576",
+            "cuda_device = 0", "reserve_bytes = 536870912",
+            "queue_depth = $QueueDepth", "max_io_bytes = $MaxIoBytes",
             'evidence_path = "C:\\ProgramData\\RamShared\\evidence\\winsvc.jsonl"',
             "volume_letter = `"$VolumeLetter`"", 'broker_pipe = "named_pipe_v1"',
             "broker_ready_timeout_secs = 30", 'tenant = "windows-drive"',
@@ -99,15 +106,14 @@ New-Package $oldPackage $oldVersion $oldCommit
 New-Package $newPackage $newVersion $newCommit
 $oldVersionRootName = "$oldVersion-$($oldCommit.Substring(0, 12))"
 
-$credential = [pscredential]::new($User,
-    (ConvertTo-SecureString (Get-DrillPassword) -AsPlainText -Force))
 if ((Get-VM $VMName).State -ne "Running") { Start-VM $VMName | Out-Null }
-$session = New-PSSession -VMName $VMName -Credential $credential
 $guestInput = "C:\ramshared\product-package-input"
 $guestResults = "C:\ramshared\product-package-results.json"
 
 try {
-    Invoke-Command -Session $session -ScriptBlock {
+    Invoke-GuestPsDirectBounded -VMName $VMName -User $User `
+        -Password (Get-DrillPassword) -Operation invoke -TimeoutSeconds 210 `
+        -ScriptBlock {
         param($inputRoot)
         $ramDisks = @(Get-Disk -ErrorAction Stop | Where-Object FriendlyName -Match "RAMSHARE")
         if ($ramDisks.Count -ne 0) { throw "preflight refuses existing RamShared disk" }
@@ -126,11 +132,19 @@ try {
             -ErrorAction SilentlyContinue
         Remove-Item $inputRoot -Recurse -Force -ErrorAction SilentlyContinue
         New-Item $inputRoot -ItemType Directory -Force | Out-Null
-    } -ArgumentList $guestInput
-    Copy-Item $oldPackage (Join-Path $guestInput "old") -ToSession $session -Recurse
-    Copy-Item $newPackage (Join-Path $guestInput "new") -ToSession $session -Recurse
+    } -ArgumentList @($guestInput) | Out-Null
+    Invoke-GuestPsDirectBounded -VMName $VMName -User $User `
+        -Password (Get-DrillPassword) -Operation copy_to -Recurse `
+        -SourcePath $oldPackage -DestinationPath (Join-Path $guestInput "old") `
+        -TimeoutSeconds 300 | Out-Null
+    Invoke-GuestPsDirectBounded -VMName $VMName -User $User `
+        -Password (Get-DrillPassword) -Operation copy_to -Recurse `
+        -SourcePath $newPackage -DestinationPath (Join-Path $guestInput "new") `
+        -TimeoutSeconds 300 | Out-Null
 
-    $results = Invoke-Command -Session $session -ScriptBlock {
+    $results = Invoke-GuestPsDirectBounded -VMName $VMName -User $User `
+        -Password (Get-DrillPassword) -Operation invoke -TimeoutSeconds 600 `
+        -ScriptBlock {
         param($inputRoot, $selectedCase, $resultPath, $expectedOldRoot)
         $ErrorActionPreference = "Stop"
         $rows = [Collections.Generic.List[object]]::new()
@@ -223,12 +237,15 @@ try {
         }
         $rows | ConvertTo-Json -Depth 6 | Set-Content $resultPath -Encoding UTF8
         $rows
-    } -ArgumentList $guestInput, $Case, $guestResults, $oldVersionRootName
+    } -ArgumentList @($guestInput, $Case, $guestResults, $oldVersionRootName)
 
-    Copy-Item $guestResults (Join-Path $hostRun "results.json") -FromSession $session -Force
+    Invoke-GuestPsDirectBounded -VMName $VMName -User $User `
+        -Password (Get-DrillPassword) -Operation copy_from `
+        -SourcePath $guestResults -DestinationPath (Join-Path $hostRun "results.json") `
+        -TimeoutSeconds 210 | Out-Null
     $results
     Write-Host "EVIDENCE=$hostRun"
 }
 finally {
-    if ($session) { Remove-PSSession $session }
+    # Every PowerShell Direct session belongs to its bounded child worker.
 }

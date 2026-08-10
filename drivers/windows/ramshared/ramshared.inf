@@ -8,7 +8,7 @@ Class       = SCSIAdapter
 ClassGuid   = {4d36e97b-e325-11ce-bfc1-08002be10318}
 Provider    = %ManufacturerName%
 CatalogFile = ramshared.cat
-DriverVer   = 07/16/2026,10.0.26200.3
+DriverVer   = 08/09/2026,10.0.26200.8
 PnpLockdown = 1
 
 [DestinationDirs]
@@ -48,7 +48,8 @@ AddReg         = RamShared_AddReg
 HKR, "Parameters\PnpInterface", "5", 0x00010001, 0x00000001
 ; Virtual StorPort: no real bus resources. BusType must live under Parameters
 ; (InfVerif ERROR 1323 rejects HKR,, BusType at the service key root).
-HKR, "Parameters", "BusType", 0x00010001, 0x0000000A
+; STORAGE_BUS_TYPE::BusTypeVirtual is 0x0E. Never advertise SAS (0x0A).
+HKR, "Parameters", "BusType", 0x00010001, 0x0000000E
 
 [Strings]
 SPSVCINST_ASSOCSERVICE = 0x00000002

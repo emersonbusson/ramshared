@@ -17,13 +17,20 @@ if ($inf -notmatch '(?im)^ServiceBinary\s*=\s*%13%\\ramshared\.sys\s*$') {
 }
 
 $productHarness = Get-Content (Join-Path $RepoRoot "scripts\windows\Run-GuestProductOnline.ps1") -Raw
+$autonomousHarness = Get-Content (Join-Path $RepoRoot `
+        "scripts\windows\Run-GuestAutonomousLifecycle.ps1") -Raw
 if ($productHarness -match 'System32\\drivers\\ramshared\.sys' -or
     $productHarness -match 'sc\.exe create ramshared') {
     throw "product_harness_uses_installed_service_image: manual System32 service path remains"
 }
-if ($productHarness -notmatch 'ImagePath') {
-    throw "product_harness_uses_installed_service_image: service ImagePath is not hashed"
+if ($productHarness -notmatch 'Run-GuestAutonomousLifecycle\.ps1' -or
+    $autonomousHarness -notmatch 'Get-CimInstance\s+Win32_SystemDriver' -or
+    $autonomousHarness -notmatch '\.PathName' -or
+    $autonomousHarness -notmatch 'Get-FileHash\s+\$driverPath' -or
+    $autonomousHarness -notmatch 'driver BINARY_MATCH failed') {
+    throw "product_harness_uses_installed_service_image: delegated loaded ImagePath is not hashed"
 }
+Write-Output "PASS product_harness_uses_installed_service_image"
 
 $canonicalScripts = @(
     "Install-InfAndBackend.ps1",

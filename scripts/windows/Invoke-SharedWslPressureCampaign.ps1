@@ -13,7 +13,7 @@
 param(
     [switch]$ApproveSharedDailyHost,
     [string]$Distro = "Ubuntu-24.04",
-    [string]$WslRepo = "/home/emdev/codespace/ramshared",
+    [string]$WslRepo = $env:RAMSHARED_WSL_REPO,
     [string]$ArtifactRoot = "C:\ramshared\artifacts",
     [int]$VramMiB = 1024,
     [int]$ZramMiB = 256,
@@ -31,6 +31,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+if ([string]::IsNullOrWhiteSpace($WslRepo)) {
+    throw "Set -WslRepo or RAMSHARED_WSL_REPO to the repository path inside the selected distro."
+}
 
 if ($PressureAllocGiB -eq 0) {
     # Allocate enough to exceed the 1200 MiB cgroup resident ceiling and fill
