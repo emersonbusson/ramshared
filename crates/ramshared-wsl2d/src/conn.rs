@@ -76,10 +76,13 @@ impl LiveCount {
     }
 
     /// Registers the closing of a connection; returns `true` when **all** open
-    /// connections have closed (the worker should terminate). `saturating_sub` avoids underflow if
-    /// a `Closed` arrives unbalanced (it shouldn't, but it is defensive).
+    /// connections have closed (the worker should terminate). An unbalanced
+    /// `Closed` is ignored so it cannot emit a second terminal transition.
     pub fn on_close(&mut self) -> bool {
-        self.live = self.live.saturating_sub(1);
+        if self.live == 0 {
+            return false;
+        }
+        self.live -= 1;
         self.live == 0 && self.opened
     }
 
@@ -131,7 +134,7 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
         let idx = match server_handshake(&mut reader, &mut hs_writer, &exports, tx_flags) {
             Ok(i) => i,
             Err(e) => {
-                eprintln!("[ramsharedd] conn: handshake falhou: {e}");
+                eprintln!("[ramsharedd] conn: handshake failed: {e}");
                 let _ = jobs.send(WMsg::Closed);
                 return;
             }
@@ -142,19 +145,19 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
         let mut hdr = [0u8; REQUEST_LEN];
         loop {
             if reader.read_exact(&mut hdr).is_err() {
-                break; // EOF ou erro de socket
+                break; // EOF or socket error
             }
             let req = match parse_request(&hdr) {
                 Ok(r) => r,
                 Err(e) => {
-                    eprintln!("[ramsharedd] conn: request malformado: {e}; desconectando");
+                    eprintln!("[ramsharedd] conn: malformed request: {e}; disconnecting");
                     break;
                 }
             };
             // Anti-DoS: a WRITE can never exceed the negotiated export (prevents allocating gigabytes).
             if req.cmd == Command::Write && req.len as u64 > export_size {
                 eprintln!(
-                    "[ramsharedd] conn: WRITE len {} excede o export; desconectando",
+                    "[ramsharedd] conn: WRITE len {} exceeds export; disconnecting",
                     req.len
                 );
                 break;
@@ -227,7 +230,7 @@ pub fn spawn_acceptor(
             let stream = match listener.accept() {
                 Ok((s, _)) => s,
                 Err(e) => {
-                    eprintln!("[ramsharedd] accept falhou: {e}");
+                    eprintln!("[ramsharedd] accept failed: {e}");
                     break;
                 }
             };
@@ -258,7 +261,7 @@ pub fn spawn_acceptor_tcp(
             let stream = match listener.accept() {
                 Ok((s, _)) => s,
                 Err(e) => {
-                    eprintln!("[ramsharedd] accept tcp falhou: {e}");
+                    eprintln!("[ramsharedd] TCP accept failed: {e}");
                     break;
                 }
             };
@@ -281,7 +284,141 @@ pub fn spawn_acceptor_tcp(
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
-    use std::sync::mpsc::sync_channel;
+    use ramshared_block::handshake::NBD_OPT_EXPORT_NAME;
+    use ramshared_block::protocol::{IHAVEOPT, NBD_REQUEST_MAGIC};
+    use std::io::{self, Cursor};
+    use std::net::{Shutdown, TcpStream};
+    use std::os::unix::net::{UnixListener as TestUnixListener, UnixStream as TestUnixStream};
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc::{TryRecvError, sync_channel};
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    static SOCKET_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Default)]
+    struct WriterState {
+        bytes: Mutex<Vec<u8>>,
+        writes: AtomicUsize,
+        flushes: AtomicUsize,
+    }
+
+    #[derive(Clone, Copy)]
+    enum WriterFailure {
+        Never,
+        WriteAt(usize),
+        Flush,
+    }
+
+    struct TestWriter {
+        state: Arc<WriterState>,
+        failure: WriterFailure,
+    }
+
+    impl TestWriter {
+        fn new(state: Arc<WriterState>, failure: WriterFailure) -> Self {
+            Self { state, failure }
+        }
+    }
+
+    impl Write for TestWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let write_index = self.state.writes.fetch_add(1, Ordering::SeqCst);
+            if let WriterFailure::WriteAt(expected) = self.failure
+                && write_index == expected
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "test write failure",
+                ));
+            }
+            self.state.bytes.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.state.flushes.fetch_add(1, Ordering::SeqCst);
+            if matches!(self.failure, WriterFailure::Flush) {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "test flush failure",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    fn join_with_deadline(handle: JoinHandle<()>) {
+        let (done_tx, done_rx) = sync_channel(1);
+        std::thread::spawn(move || {
+            let _ = done_tx.send(handle.join().is_ok());
+        });
+        assert!(
+            done_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap_or(false),
+            "connection thread must terminate within the bounded test deadline"
+        );
+    }
+
+    fn recv_with_deadline<T>(rx: &Receiver<T>) -> T {
+        rx.recv_timeout(Duration::from_secs(1)).unwrap_or_else(|_| {
+            panic!("connection message must arrive within the bounded test deadline")
+        })
+    }
+
+    fn assert_only_closed(rx: &Receiver<WMsg>) {
+        assert!(matches!(recv_with_deadline(rx), WMsg::Closed));
+        assert!(matches!(
+            rx.try_recv(),
+            Err(TryRecvError::Empty | TryRecvError::Disconnected)
+        ));
+    }
+
+    fn one_export(size: u64) -> Arc<Vec<Export>> {
+        Arc::new(vec![Export {
+            name: "default".to_string(),
+            size,
+        }])
+    }
+
+    fn export_name_handshake(name: &[u8]) -> Vec<u8> {
+        let mut wire = Vec::new();
+        wire.extend_from_slice(&(1u32 << 1).to_be_bytes()); // NBD_FLAG_C_NO_ZEROES
+        wire.extend_from_slice(&IHAVEOPT.to_be_bytes());
+        wire.extend_from_slice(&NBD_OPT_EXPORT_NAME.to_be_bytes());
+        wire.extend_from_slice(&(name.len() as u32).to_be_bytes());
+        wire.extend_from_slice(name);
+        wire
+    }
+
+    fn request_bytes(command: u16, handle: u64, len: u32, magic: u32) -> [u8; REQUEST_LEN] {
+        let mut wire = [0u8; REQUEST_LEN];
+        wire[0..4].copy_from_slice(&magic.to_be_bytes());
+        wire[4..6].copy_from_slice(&0u16.to_be_bytes());
+        wire[6..8].copy_from_slice(&command.to_be_bytes());
+        wire[8..16].copy_from_slice(&handle.to_be_bytes());
+        wire[16..24].copy_from_slice(&0u64.to_be_bytes());
+        wire[24..28].copy_from_slice(&len.to_be_bytes());
+        wire
+    }
+
+    fn reply(header: u8, data: &[u8], disconnect: bool) -> Reply {
+        Reply {
+            reply: [header; SIMPLE_REPLY_LEN],
+            data: data.to_vec(),
+            disconnect,
+        }
+    }
+
+    fn socket_path(label: &str) -> PathBuf {
+        let suffix = SOCKET_COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!(
+            "ramshared-conn-{label}-{}-{suffix}.sock",
+            std::process::id()
+        ))
+    }
 
     fn dummy_req() -> Request {
         Request {
@@ -320,7 +457,7 @@ mod tests {
         assert!(tx.try_send(2).is_ok());
         assert!(
             tx.try_send(3).is_err(),
-            "deve recusar além do cap (backpressure)"
+            "must reject beyond the cap (backpressure)"
         );
     }
 
@@ -349,6 +486,240 @@ mod tests {
         assert_eq!(lc.live(), 0);
     }
 
+    #[test]
+    fn live_count_refuses_duplicate_closed() {
+        let mut lc = LiveCount::new();
+        lc.on_open();
+        assert!(lc.on_close(), "the balanced close is terminal");
+        assert!(
+            !lc.on_close(),
+            "a duplicate Closed must not emit another terminal transition"
+        );
+        assert_eq!(lc.live(), 0);
+    }
+
+    #[test]
+    fn writer_writes_header_data_and_flushes() {
+        let state = Arc::new(WriterState::default());
+        let (tx, rx) = channel();
+        let writer = spawn_writer(
+            TestWriter::new(Arc::clone(&state), WriterFailure::Never),
+            rx,
+        );
+        tx.send(reply(0x11, &[0x22, 0x33], false)).unwrap();
+        drop(tx);
+        join_with_deadline(writer);
+
+        let mut expected = vec![0x11; SIMPLE_REPLY_LEN];
+        expected.extend_from_slice(&[0x22, 0x33]);
+        assert_eq!(*state.bytes.lock().unwrap(), expected);
+        assert_eq!(state.flushes.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn writer_stops_on_disconnect_or_io_error() {
+        let disconnect_state = Arc::new(WriterState::default());
+        let (disconnect_tx, disconnect_rx) = channel();
+        let disconnect_writer = spawn_writer(
+            TestWriter::new(Arc::clone(&disconnect_state), WriterFailure::Never),
+            disconnect_rx,
+        );
+        disconnect_tx.send(reply(0x44, &[0x55], true)).unwrap();
+        disconnect_tx.send(reply(0x66, &[0x77], false)).unwrap();
+        drop(disconnect_tx);
+        join_with_deadline(disconnect_writer);
+        let mut disconnect_expected = vec![0x44; SIMPLE_REPLY_LEN];
+        disconnect_expected.push(0x55);
+        assert_eq!(*disconnect_state.bytes.lock().unwrap(), disconnect_expected);
+        assert_eq!(disconnect_state.flushes.load(Ordering::SeqCst), 1);
+
+        let write_error_state = Arc::new(WriterState::default());
+        let (write_error_tx, write_error_rx) = channel();
+        let write_error_writer = spawn_writer(
+            TestWriter::new(Arc::clone(&write_error_state), WriterFailure::WriteAt(1)),
+            write_error_rx,
+        );
+        write_error_tx.send(reply(0x88, &[0x99], false)).unwrap();
+        drop(write_error_tx);
+        join_with_deadline(write_error_writer);
+        assert_eq!(
+            *write_error_state.bytes.lock().unwrap(),
+            vec![0x88; SIMPLE_REPLY_LEN]
+        );
+        assert_eq!(write_error_state.flushes.load(Ordering::SeqCst), 0);
+
+        let flush_error_state = Arc::new(WriterState::default());
+        let (flush_error_tx, flush_error_rx) = channel();
+        let flush_error_writer = spawn_writer(
+            TestWriter::new(Arc::clone(&flush_error_state), WriterFailure::Flush),
+            flush_error_rx,
+        );
+        flush_error_tx.send(reply(0xaa, &[], false)).unwrap();
+        drop(flush_error_tx);
+        join_with_deadline(flush_error_writer);
+        assert_eq!(
+            *flush_error_state.bytes.lock().unwrap(),
+            vec![0xaa; SIMPLE_REPLY_LEN]
+        );
+        assert_eq!(flush_error_state.flushes.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn reader_enqueues_write_payload_then_closed() {
+        let mut wire = export_name_handshake(b"");
+        wire.extend_from_slice(&request_bytes(1, 0x0102_0304, 3, NBD_REQUEST_MAGIC));
+        wire.extend_from_slice(&[7, 8, 9]);
+        let (jobs_tx, jobs_rx) = sync_channel(2);
+        let (reply_tx, _reply_rx) = channel();
+        let reader = spawn_reader(
+            Cursor::new(wire),
+            TestWriter::new(Arc::new(WriterState::default()), WriterFailure::Never),
+            one_export(4096),
+            0,
+            jobs_tx,
+            reply_tx,
+        );
+        join_with_deadline(reader);
+
+        match recv_with_deadline(&jobs_rx) {
+            WMsg::Job(job) => {
+                assert_eq!(job.export, 0);
+                assert_eq!(job.req.cmd, Command::Write);
+                assert_eq!(job.req.handle, 0x0102_0304);
+                assert_eq!(job.payload, vec![7, 8, 9]);
+            }
+            _ => panic!("reader must enqueue the negotiated write job"),
+        }
+        assert_only_closed(&jobs_rx);
+    }
+
+    #[test]
+    fn reader_refusal_and_eof_emit_closed() {
+        let (refusal_tx, refusal_rx) = sync_channel(1);
+        let (reply_tx, _reply_rx) = channel();
+        let refusal_reader = spawn_reader(
+            Cursor::new(export_name_handshake(b"missing")),
+            TestWriter::new(Arc::new(WriterState::default()), WriterFailure::Never),
+            one_export(4096),
+            0,
+            refusal_tx,
+            reply_tx,
+        );
+        join_with_deadline(refusal_reader);
+        assert_only_closed(&refusal_rx);
+
+        let (eof_tx, eof_rx) = sync_channel(1);
+        let (reply_tx, _reply_rx) = channel();
+        let eof_reader = spawn_reader(
+            Cursor::new(export_name_handshake(b"")),
+            TestWriter::new(Arc::new(WriterState::default()), WriterFailure::Never),
+            one_export(4096),
+            0,
+            eof_tx,
+            reply_tx,
+        );
+        join_with_deadline(eof_reader);
+        assert_only_closed(&eof_rx);
+    }
+
+    #[test]
+    fn reader_malformed_and_oversized_write_emit_closed() {
+        let mut malformed_wire = export_name_handshake(b"");
+        malformed_wire.extend_from_slice(&request_bytes(0, 1, 0, 0));
+        let (malformed_tx, malformed_rx) = sync_channel(1);
+        let (reply_tx, _reply_rx) = channel();
+        let malformed_reader = spawn_reader(
+            Cursor::new(malformed_wire),
+            TestWriter::new(Arc::new(WriterState::default()), WriterFailure::Never),
+            one_export(4096),
+            0,
+            malformed_tx,
+            reply_tx,
+        );
+        join_with_deadline(malformed_reader);
+        assert_only_closed(&malformed_rx);
+
+        let mut oversized_wire = export_name_handshake(b"");
+        oversized_wire.extend_from_slice(&request_bytes(1, 2, 4097, NBD_REQUEST_MAGIC));
+        let (oversized_tx, oversized_rx) = sync_channel(1);
+        let (reply_tx, _reply_rx) = channel();
+        let oversized_reader = spawn_reader(
+            Cursor::new(oversized_wire),
+            TestWriter::new(Arc::new(WriterState::default()), WriterFailure::Never),
+            one_export(4096),
+            0,
+            oversized_tx,
+            reply_tx,
+        );
+        join_with_deadline(oversized_reader);
+        assert_only_closed(&oversized_rx);
+    }
+
+    #[test]
+    fn reader_stops_when_worker_is_closed() {
+        let mut wire = export_name_handshake(b"");
+        wire.extend_from_slice(&request_bytes(0, 3, 0, NBD_REQUEST_MAGIC));
+        let (jobs_tx, jobs_rx) = sync_channel(1);
+        drop(jobs_rx);
+        let (reply_tx, _reply_rx) = channel();
+        let reader = spawn_reader(
+            Cursor::new(wire),
+            TestWriter::new(Arc::new(WriterState::default()), WriterFailure::Never),
+            one_export(4096),
+            0,
+            jobs_tx,
+            reply_tx,
+        );
+        join_with_deadline(reader);
+    }
+
+    #[test]
+    fn wire_conn_balances_opened_and_closed() {
+        let (server, mut client) = TestUnixStream::pair().unwrap();
+        let writer = server.try_clone().unwrap();
+        let hs_writer = server.try_clone().unwrap();
+        let (jobs_tx, jobs_rx) = sync_channel(2);
+        let exports = one_export(4096);
+        assert!(wire_conn(server, writer, hs_writer, &exports, 0, &jobs_tx));
+        assert!(matches!(recv_with_deadline(&jobs_rx), WMsg::Opened));
+
+        client.write_all(&export_name_handshake(b"")).unwrap();
+        client.shutdown(Shutdown::Write).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut handshake_reply = [0u8; 28];
+        client.read_exact(&mut handshake_reply).unwrap();
+        assert_eq!(
+            &handshake_reply[0..8],
+            &ramshared_block::protocol::NBDMAGIC.to_be_bytes()
+        );
+        assert_only_closed(&jobs_rx);
+    }
+
+    #[test]
+    fn acceptors_stop_when_worker_is_closed() {
+        let unix_path = socket_path("acceptor");
+        let _ = std::fs::remove_file(&unix_path);
+        let unix_listener = TestUnixListener::bind(&unix_path).unwrap();
+        let (unix_jobs_tx, unix_jobs_rx) = sync_channel(1);
+        drop(unix_jobs_rx);
+        let unix_acceptor = spawn_acceptor(unix_listener, one_export(4096), 0, unix_jobs_tx);
+        let unix_client = TestUnixStream::connect(&unix_path).unwrap();
+        join_with_deadline(unix_acceptor);
+        drop(unix_client);
+        std::fs::remove_file(&unix_path).unwrap();
+
+        let tcp_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let tcp_addr = tcp_listener.local_addr().unwrap();
+        let (tcp_jobs_tx, tcp_jobs_rx) = sync_channel(1);
+        drop(tcp_jobs_rx);
+        let tcp_acceptor = spawn_acceptor_tcp(tcp_listener, one_export(4096), 0, tcp_jobs_tx);
+        let tcp_client = TcpStream::connect(tcp_addr).unwrap();
+        join_with_deadline(tcp_acceptor);
+        drop(tcp_client);
+    }
+
     // DT-7 / DT-18: unbounded replica — worker progresses even with the writer stopped.
     // If the replica were bounded and the writer did not drain, the worker would block →
     // Jobs channel would fill up → reader would block → deadlock (this test would hang).
@@ -356,7 +727,7 @@ mod tests {
     fn slow_writer_does_not_deadlock() {
         let (jobs_tx, jobs_rx) = sync_channel::<WMsg>(2); // small Jobs channel
         let (reply_tx, reply_rx) = channel::<Reply>(); // UNBOUNDED replica (DT-7)
-        let _writer_parado = reply_rx; // holds without draining (simulates a hung socket)
+        let _stalled_writer = reply_rx; // holds without draining (simulates a hung socket)
 
         let worker = std::thread::spawn(move || {
             let mut served = 0u32;
@@ -390,7 +761,7 @@ mod tests {
         assert_eq!(
             worker.join().unwrap(),
             10,
-            "worker processou tudo sem deadlock"
+            "worker processed every job without deadlock"
         );
     }
 }

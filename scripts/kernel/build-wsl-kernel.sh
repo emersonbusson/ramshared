@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# build-wsl-kernel.sh — build reutilizável de kernel WSL2 custom a partir da base
-# OFICIAL da Microsoft + configs extras. Embute as lições do toolkit:
-#   - parte do Microsoft/config-wsl (todos os configs de boot do WSL2 garantidos);
-#   - aplica configs extras e VERIFICA que pegaram (pega o gotcha bool vs --module);
-#   - roda modules_install (senão os .ko não carregam no boot).
+# build-wsl-kernel.sh — reusable custom WSL2 kernel build from the official
+# Microsoft base plus extra configs. It incorporates the toolkit lessons:
+#   - starts from Microsoft/config-wsl (all WSL2 boot configs guaranteed);
+#   - applies extra configs and VERIFIES that they took effect (catches bool vs. --module);
+#   - runs modules_install (otherwise .ko files do not load at boot).
 #
-# uso: build-wsl-kernel.sh [CONFIG=y|m|n ...]
-#   default: CONFIG_BLK_DEV_UBLK=m CONFIG_ZRAM_WRITEBACK=y CONFIG_IO_URING=y (Fase B)
-# env: KTAG (branch/tag, default linux-msft-wsl-6.6.y), KSRC (dir fonte), JOBS.
+# usage: build-wsl-kernel.sh [CONFIG=y|m|n ...]
+#   default: CONFIG_BLK_DEV_UBLK=m CONFIG_ZRAM_WRITEBACK=y CONFIG_IO_URING=y (Phase B)
+# env: KTAG (branch/tag, default linux-msft-wsl-6.6.y), KSRC (source directory), JOBS.
 #
-# Saída: imprime o bzImage + a kernelrelease (passe ao qemu-validate.sh / boot-kernel-safe.ps1).
+# Output: prints bzImage and kernelrelease (pass them to qemu-validate.sh / boot-kernel-safe.ps1).
 set -euo pipefail
 
 # SPEC wsl2-custom-kernel-p1: default 6.18.y; override with KTAG=
@@ -22,12 +22,12 @@ echo "[build] deps..."
 sudo apt-get install -y -q build-essential flex bison libelf-dev libssl-dev bc dwarves cpio python3 >/dev/null
 
 if [ ! -d "$KSRC/.git" ]; then
-  echo "[build] clonando $KTAG -> $KSRC"
+  echo "[build] cloning $KTAG -> $KSRC"
   git clone --depth 1 --branch "$KTAG" https://github.com/microsoft/WSL2-Linux-Kernel.git "$KSRC"
 fi
 cd "$KSRC"
 
-echo "[build] base = Microsoft/config-wsl + configs extras"
+echo "[build] base = Microsoft/config-wsl + extra configs"
 cp Microsoft/config-wsl .config
 for kv in "${CONFIGS[@]}"; do
   name="${kv%%=*}"; val="${kv##*=}"
@@ -35,7 +35,7 @@ for kv in "${CONFIGS[@]}"; do
     y) ./scripts/config --file .config --enable  "$name" ;;
     m) ./scripts/config --file .config --module  "$name" ;;
     n) ./scripts/config --file .config --disable "$name" ;;
-    *) echo "[build] valor inválido em $kv (use y|m|n)"; exit 2 ;;
+    *) echo "[build] invalid value in $kv (use y|m|n)"; exit 2 ;;
   esac
 done
 make olddefconfig >/dev/null
@@ -49,13 +49,13 @@ for kv in "${CONFIGS[@]}"; do
   if { [ "$val" = "y" ] && [ "$got" = "y" ]; } || { [ "$val" = "m" ] && [ "$got" = "m" ]; } || { [ "$val" = "n" ] && [ "$got" = "(unset)" ]; }; then
     echo "[build]  OK  $name=$got"
   else
-    echo "[build] !!!! $name pedido=$val mas ficou=$got — provável dependência faltando (ex.: bool exige --enable, não --module; ou depende de outro CONFIG)."
+    echo "[build] !!!! $name requested=$val but resolved=$got — probable missing dependency (for example, a bool requires --enable, not --module; or depends on another CONFIG)."
     fail=1
   fi
 done
-[ "$fail" = 1 ] && { echo "[build] configs não aplicaram; abortando."; exit 1; }
+[ "$fail" = 1 ] && { echo "[build] configs did not apply; aborting."; exit 1; }
 
-echo "[build] make -j$JOBS (pesado; -j limitado evita travar o WSL2)..."
+echo "[build] make -j$JOBS (resource-intensive; limited -j avoids stalling WSL2)..."
 make -j"$JOBS"
 echo "[build] modules_install..."
 sudo make modules_install >/dev/null
@@ -65,6 +65,6 @@ echo "=============================================="
 echo "[build] OK"
 echo "  bzImage : $KSRC/arch/x86/boot/bzImage"
 echo "  release : $REL"
-echo "  validar : sudo bash scripts/kernel/qemu-validate.sh $KSRC/arch/x86/boot/bzImage \"$REL\" \\"
+echo "  validate : sudo bash scripts/kernel/qemu-validate.sh $KSRC/arch/x86/boot/bzImage \"$REL\" \\"
 echo "              $KSRC/drivers/block/ublk_drv.ko $KSRC/mm/zsmalloc.ko $KSRC/drivers/block/zram/zram.ko"
 echo "=============================================="

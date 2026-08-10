@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# qemu-ublk-daemon.sh — valida o CICLO DE VIDA do daemon ublk (`--backend ram`) num
-# QEMU ISOLADO. Prova, sem risco pro host: (1) insmod ublk_drv; (2) o daemon sobe e
-# cria /dev/ublkbN; (3) serve I/O (dd write+read); (4) SIGTERM -> teardown ordenado
-# (STOP_DEV -> join -> DEL_DEV) -> device removido + daemon sai 0.
+# qemu-ublk-daemon.sh — validates the ublk daemon LIFECYCLE (`--backend ram`) in an
+# ISOLATED QEMU. Proves without risk to the host: (1) insmod ublk_drv; (2) the daemon starts and
+# creates /dev/ublkbN; (3) serves I/O (dd write+read); (4) SIGTERM -> ordered teardown
+# (STOP_DEV -> join -> DEL_DEV) -> device removed and daemon exits 0.
 #
 # WHY QEMU: running this daemon in WSL2 FROZE the host (orphaned device on teardown ->
 # I/O in D-state). In a VM, any stall is contained by `timeout` — the host remains intact.
 # RAM backend (no GPU): `Cuda::load()` is only called in the VRAM path, so the binary
 # (CUDA via dlopen) runs without libcuda. The teardown bug is independent of the backend.
 #
-# uso: qemu-ublk-daemon.sh [bzImage] [daemon_bin] [ublk_drv.ko]
-# saida 0 = PASS (serve + teardown limpo). SPEC: docs/ublk-daemon-integration/IMPL.md F2.
+# usage: qemu-ublk-daemon.sh [bzImage] [daemon_bin] [ublk_drv.ko]
+# exit 0 = PASS (serve plus clean teardown). SPEC: docs/ublk-daemon-integration/IMPL.md F2.
 set -euo pipefail
 
 BZ="${1:-$HOME/WSL2-Linux-Kernel/arch/x86/boot/bzImage}"
@@ -18,10 +18,10 @@ DAEMON="${2:-$(dirname "$0")/../../target/debug/ramsharedd}"
 UBLK_KO="${3:-$HOME/WSL2-Linux-Kernel/drivers/block/ublk_drv.ko}"
 
 for f in "$BZ" "$DAEMON" "$UBLK_KO"; do
-  [ -f "$f" ] || { echo "arquivo inexistente: $f" >&2; exit 2; }
+  [ -f "$f" ] || { echo "missing file: $f" >&2; exit 2; }
 done
-command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 ausente" >&2; exit 2; }
-[ -x /bin/busybox ] || { echo "busybox-static ausente" >&2; exit 2; }
+command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 missing" >&2; exit 2; }
+[ -x /bin/busybox ] || { echo "busybox-static missing" >&2; exit 2; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 IRD="$WORK/irfs"; mkdir -p "$IRD/bin" "$IRD/modules"
@@ -30,8 +30,8 @@ cp "$DAEMON" "$IRD/ramsharedd"
 cp "$UBLK_KO" "$IRD/modules/ublk_drv.ko"
 sha256sum "$DAEMON" | awk '{print $1}' > "$IRD/expected-ramsharedd.sha256"
 
-# Copia as libs dinamicas do daemon preservando os caminhos absolutos (o binario e
-# glibc-dinamico; sem CUDA no load — ver ldd). O linker /lib64/ld-linux entra junto.
+# Copies the daemon's dynamic libraries while preserving absolute paths (the binary is
+# glibc-dynamic; no CUDA on load — see ldd). The /lib64/ld-linux linker is included as well.
 for lib in $(ldd "$DAEMON" | grep -oE '/[^ ]+\.so[^ ]*'); do
   mkdir -p "$IRD$(dirname "$lib")"
   cp "$lib" "$IRD$lib"
@@ -53,7 +53,7 @@ echo "KTEST-BINARY-SHA-EXPECTED=$EXPECTED"
 echo "KTEST-BINARY-SHA-ACTUAL=$ACTUAL"
 [ -n "$EXPECTED" ] && [ "$EXPECTED" = "$ACTUAL" ] && echo "KTEST-BINARY-MATCH=ok" || echo "KTEST-BINARY-MATCH=fail"
 
-# 1) carrega o driver ublk
+# 1) loads the ublk driver
 if $BB insmod /modules/ublk_drv.ko 2>/tmp/e; then
   echo "KTEST-INSMOD=ok"
 else
@@ -61,13 +61,13 @@ else
 fi
 [ -e /dev/ublk-control ] && echo "KTEST-UBLK-CONTROL=present" || echo "KTEST-UBLK-CONTROL=absent"
 
-# 2) sobe o daemon (backend RAM, override da trava de WSL2, --force p/ mlockall best-effort)
+# 2) starts the daemon (RAM backend, WSL2 lockout override, --force for best-effort mlockall)
 RAMSHARED_ALLOW_UBLK_ON_WSL2=1 /ramsharedd --transport ublk --backend ram \
   --size 8 --queue-depth 1 --force >/tmp/daemon.log 2>&1 &
 DPID=$!
 echo "KTEST-DAEMON-PID=$DPID"
 
-# 3) espera o /dev/ublkb0 surgir (bounded ~15s)
+# 3) waits for /dev/ublkb0 to appear (bounded ~15s)
 DEV=""
 i=0
 while [ $i -lt 150 ]; do
@@ -78,14 +78,14 @@ while [ $i -lt 150 ]; do
 done
 if [ -n "$DEV" ]; then
   echo "KTEST-DEVICE=$DEV"
-  # 4) serve I/O: write + read de 4KB
+  # 4) serves I/O: 4 KB write and read
   if $BB dd if=/dev/zero of="$DEV" bs=4096 count=1 conv=fsync 2>/dev/null \
      && $BB dd if="$DEV" of=/dev/null bs=4096 count=1 2>/dev/null; then
     echo "KTEST-SERVED=ok"
   else
     echo "KTEST-SERVED=fail"
   fi
-  # 5) SIGTERM -> teardown ordenado; espera o daemon sair (bounded ~12s)
+  # 5) SIGTERM -> ordered teardown; waits for the daemon to exit (bounded ~12s)
   $BB kill -TERM "$DPID"
   j=0; GONE=0
   while [ $j -lt 120 ]; do
@@ -97,7 +97,7 @@ if [ -n "$DEV" ]; then
   else
     echo "KTEST-TERMINATED=timeout"
   fi
-  # 6) device removido pelo teardown?
+  # 6) device removed by teardown?
   [ -b "$DEV" ] && echo "KTEST-DEVICE-REMOVED=no" || echo "KTEST-DEVICE-REMOVED=ok"
 else
   echo "KTEST-DEVICE=absent"
@@ -115,22 +115,22 @@ chmod +x "$IRD/init"
 ACCEL=(-machine accel=tcg)
 [ -w /dev/kvm ] && ACCEL=(-enable-kvm -cpu host)
 
-echo "[qemu-ublk-daemon] bootando (accel: ${ACCEL[*]})..."
+echo "[qemu-ublk-daemon] booting (accel: ${ACCEL[*]})..."
 timeout 180 qemu-system-x86_64 "${ACCEL[@]}" -m 512 -smp 2 -nographic -no-reboot \
   -kernel "$BZ" -initrd "$WORK/initramfs.gz" \
   -append "console=ttyS0 panic=1 rdinit=/init" > "$WORK/serial.log" 2>&1 || true
 
-echo "=========== resultado ==========="
-grep -E "KTEST-" "$WORK/serial.log" || echo "sem output KTEST — kernel pode nao ter bootado"
+echo "=========== result ==========="
+grep -E "KTEST-" "$WORK/serial.log" || echo "no KTEST output — kernel may not have booted"
 echo "================================="
 if grep -q "KTEST-SERVED=ok" "$WORK/serial.log" \
    && grep -q "KTEST-BINARY-MATCH=ok" "$WORK/serial.log" \
    && grep -q "KTEST-TERMINATED=ok" "$WORK/serial.log" \
    && grep -q "KTEST-DEVICE-REMOVED=ok" "$WORK/serial.log"; then
-  echo "QEMU-UBLK-DAEMON: PASS — daemon serviu I/O e fez teardown limpo (SIGTERM)."
+  echo "QEMU-UBLK-DAEMON: PASS — daemon served I/O and completed clean teardown (SIGTERM)."
   exit 0
 else
-  echo "QEMU-UBLK-DAEMON: FAIL/INCONCLUSIVO — veja os KTEST acima e o serial."
+  echo "QEMU-UBLK-DAEMON: FAIL/INCONCLUSIVE — see the KTEST output above and the serial log."
   echo "--- tail serial ---"; tail -25 "$WORK/serial.log"
   exit 1
 fi

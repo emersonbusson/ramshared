@@ -188,7 +188,7 @@ impl PipeServer {
         let owner_sid = resolve_service_sid(owner_service_sid)?;
         let expected_sid = resolve_service_sid(expected_service_sid)?;
         let descriptor = security_descriptor(&owner_sid, &expected_sid, status)?;
-        let mut attributes = SECURITY_ATTRIBUTES {
+        let attributes = SECURITY_ATTRIBUTES {
             nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: descriptor.0,
             bInheritHandle: 0,
@@ -203,7 +203,7 @@ impl PipeServer {
                 buffer,
                 buffer,
                 10_000,
-                &mut attributes,
+                &attributes,
             )
         };
         if handle == INVALID_HANDLE_VALUE {
@@ -294,7 +294,7 @@ fn cancel_and_wait(handle: HANDLE, overlapped: &OVERLAPPED) {
     }
 }
 
-pub fn verify_client_service_sid(pipe: HANDLE, expected: &OwnedSid) -> Result<(), PipeAuthError> {
+fn verify_client_service_sid(pipe: HANDLE, expected: &OwnedSid) -> Result<(), PipeAuthError> {
     if unsafe { ImpersonateNamedPipeClient(pipe) } == 0 {
         return Err(io::Error::last_os_error().into());
     }

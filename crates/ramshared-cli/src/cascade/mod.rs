@@ -189,7 +189,13 @@ fn numbered_device_basename(path: &str, prefix: &str) -> bool {
 }
 
 fn has_device_path_shape(path: &str) -> bool {
-    !path.contains('/') || path.starts_with("/dev/") || path.matches('/').count() == 1
+    if let Some(rest) = path.strip_prefix("/dev/") {
+        !rest.is_empty() && !rest.contains('/')
+    } else if let Some(rest) = path.strip_prefix('/') {
+        !rest.is_empty() && !rest.contains('/')
+    } else {
+        !path.is_empty() && !path.contains('/')
+    }
 }
 
 pub(crate) fn is_nbd_device_path(path: &str) -> bool {
@@ -429,7 +435,7 @@ fn swapoff_all(paths: &[String], entries: &[SwapEntry]) -> Vec<(String, String)>
     let mut fails = Vec::new();
     for p in paths {
         if !is_allowlisted_managed_path(p) {
-            eprintln!("[down] swapoff skip (nao allowlist): {p}");
+            eprintln!("[down] swapoff skip (not allowlisted): {p}");
             continue;
         }
         // Ghost with used>0 cannot be recovered without reboot — report loudly.
@@ -671,11 +677,6 @@ fn resolve_transport(t: Transport) -> Result<Transport, CascadeError> {
             }
         }
     }
-}
-
-fn parse_up_args() -> Result<UpArgs, CascadeError> {
-    let args: Vec<String> = std::env::args().skip(2).collect(); // skip "ramshared up"
-    parse_up_args_from(&args, default_daemon())
 }
 
 /// Default MiB from env (`RAMSHARED_VRAM_MIB` / `RAMSHARED_ZRAM_MIB`) or 1024.
@@ -939,31 +940,29 @@ fn parse_demote_status_file(text: &str) -> Option<DemoteSnapshot> {
     })
 }
 
-fn daemon_alive_pid() -> (bool, Option<u32>) {
-    // Match cascade-health: newest ramsharedd process.
-    let out = Command::new("pgrep")
-        .args(["-n", "-x", "ramsharedd"])
-        .output();
-    match out {
-        Ok(o) if o.status.success() => {
-            let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if let Ok(pid) = s.parse::<u32>() {
-                return (true, Some(pid));
-            }
-            // Some systems: pgrep -f
-            (true, None)
-        }
-        _ => {
-            // Fallback: pid file
-            if let Ok(s) = fs::read_to_string(PID_FILE)
-                && let Ok(pid) = s.trim().parse::<u32>()
-                && Path::new(&format!("/proc/{pid}")).exists()
-            {
-                return (true, Some(pid));
-            }
-            (false, None)
-        }
+fn daemon_alive_pid_from(
+    pid_record: Option<&str>,
+    read_comm: impl FnOnce(u32) -> Option<String>,
+) -> (bool, Option<u32>) {
+    let Some(pid) = pid_record
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.chars().any(char::is_whitespace))
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|pid| *pid > 0)
+    else {
+        return (false, None);
+    };
+    match read_comm(pid).map(|comm| comm.trim().to_string()) {
+        Some(comm) if comm == "ramsharedd" => (true, Some(pid)),
+        _ => (false, None),
     }
+}
+
+fn daemon_alive_pid() -> (bool, Option<u32>) {
+    let record = fs::read_to_string(PID_FILE).ok();
+    daemon_alive_pid_from(record.as_deref(), |pid| {
+        fs::read_to_string(format!("/proc/{pid}/comm")).ok()
+    })
 }
 
 fn status_timestamp() -> String {
@@ -1034,14 +1033,14 @@ pub fn status(as_json: bool) -> Result<(), CascadeError> {
 
     let ghosts = ghost_vram_swaps(&entries);
     if !ghosts.is_empty() {
-        eprintln!("[status] AVISO: swap fantasma detectado:");
+        eprintln!("[status] WARNING: ghost swap detected:");
         for g in ghosts {
             eprintln!(
                 "  {} size_kb={} used_kb={} prio={}",
                 g.filename, g.size_kb, g.used_kb, g.priority
             );
         }
-        eprintln!("  acao: wsl --shutdown no Windows, depois ramshared down/up");
+        eprintln!("  action: wsl --shutdown on Windows, then ramshared down/up");
     }
     Ok(())
 }
@@ -1058,7 +1057,7 @@ fn print_tier(name: &str, t: &TierSample) {
 }
 
 mod cascade_io;
-pub use cascade_io::{down, up};
+pub use cascade_io::{down, up_with_args};
 
 #[cfg(test)]
 mod tests {
@@ -1092,6 +1091,46 @@ mod tests {
         assert!(!is_allowlisted_managed_path("/dev/nbd0-backup"));
         assert!(!is_allowlisted_managed_path("/tmp/nbd0"));
         assert!(!is_allowlisted_managed_path("/swap/ramshared-backup"));
+    }
+
+    #[test]
+    fn malformed_managed_paths_are_refused() {
+        for path in [
+            "/dev/dev/nbd0",
+            "/dev//nbd0",
+            "//nbd0",
+            "/tmp/../dev/nbd0",
+            "/dev/nbd0/extra",
+        ] {
+            assert!(!is_allowlisted_managed_path(path), "accepted {path}");
+        }
+    }
+
+    #[test]
+    fn status_daemon_requires_owned_pid_record_and_exact_comm() {
+        assert_eq!(
+            daemon_alive_pid_from(Some("42\n"), |pid| (pid == 42)
+                .then(|| "ramsharedd\n".into())),
+            (true, Some(42))
+        );
+        for record in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("-1"),
+            Some("42 43"),
+            Some("abc"),
+        ] {
+            assert_eq!(
+                daemon_alive_pid_from(record, |_| Some("ramsharedd".into())),
+                (false, None)
+            );
+        }
+        assert_eq!(
+            daemon_alive_pid_from(Some("42"), |_| Some("foreign-daemon\n".into())),
+            (false, None)
+        );
+        assert_eq!(daemon_alive_pid_from(Some("42"), |_| None), (false, None));
     }
 
     #[test]

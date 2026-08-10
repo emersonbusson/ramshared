@@ -1,24 +1,24 @@
 <#
 .SYNOPSIS
-  Troca o kernel do WSL2 de forma SEGURA e AUTO-CURÁVEL.
+  Switches the WSL2 kernel SAFELY with AUTO-RECOVERY.
 
 .DESCRIPTION
-  Arma o kernel custom no .wslconfig (com backup), reinicia o WSL e verifica o boot
-  com timeout. Se o kernel NÃO bootar (timeout ou versão errada), RESTAURA o .wslconfig
-  do backup e reinicia → volta sozinho ao kernel da Microsoft. "Se der problema, arruma
-  sozinho." Reutilizável p/ qualquer kernel custom (toolkit Fase B+).
+  Arms the custom kernel in .wslconfig (with a backup), restarts WSL, and verifies boot
+  with a timeout. If the kernel does NOT boot (timeout or incorrect version), RESTORES
+  .wslconfig from the backup and restarts → it automatically returns to the Microsoft kernel.
+  Reusable for any custom kernel (Phase B+ toolkit).
 
-  Critério de auto-revert = FALHA DE BOOT (catastrófico). Se o kernel boota mas um
-  módulo (ex.: ublk_drv) falha, NÃO reverte (kernel é usável) — só avisa.
+  Auto-revert criterion = BOOT FAILURE (catastrophic). If the kernel boots but a
+  module (for example, ublk_drv) fails, it does NOT revert (the kernel is usable) — it only warns.
 
-.PARAMETER KernelPath     Caminho Windows do bzImage (default C:\wsl\kernel-ramshared)
-.PARAMETER ExpectedVersion `uname -r` esperado (default 6.6.123.2-microsoft-standard-WSL2+)
+  .PARAMETER KernelPath     Windows path to bzImage (default C:\wsl\kernel-ramshared)
+  .PARAMETER ExpectedVersion Expected `uname -r` (default 6.6.123.2-microsoft-standard-WSL2+)
 .PARAMETER WslConfig      .wslconfig (default $env:USERPROFILE\.wslconfig)
-.PARAMETER CleanConfig    .wslconfig limpo p/ restaurar no fail (default C:\wsl\wslconfig-original.txt)
-.PARAMETER TimeoutSec     Timeout do boot-check (default 60)
-.PARAMETER CheckModules   Módulos a testar pós-boot via modprobe (default "ublk_drv")
-.PARAMETER DryRunConfig   Se setado: só exercita a lógica de Arm/Revert nesse arquivo e sai (teste, não toca o WSL)
-.PARAMETER PreflightOnly  Valida pré-requisitos e arm/desarm em arquivo temporário. Não chama wsl --shutdown.
+  .PARAMETER CleanConfig    Clean .wslconfig to restore on failure (default C:\wsl\wslconfig-original.txt)
+  .PARAMETER TimeoutSec     Boot-check timeout (default 60)
+  .PARAMETER CheckModules   Modules to test post-boot with modprobe (default "ublk_drv")
+  .PARAMETER DryRunConfig   When set: exercises Arm/Revert logic only in this file and exits (test; does not touch WSL)
+  .PARAMETER PreflightOnly  Validates prerequisites and arms/disarms a temporary file. Does not call wsl --shutdown.
 #>
 param(
   [string]$KernelPath      = "C:\wsl\kernel-ramshared",
@@ -39,7 +39,7 @@ function To-WslPath([string]$p) {
   return ($p -replace '\\', '/')
 }
 
-# Arma kernel= sob [wsl2] de forma idempotente (substitui se já existir; cria [wsl2] se faltar).
+# Arms kernel= under [wsl2] idempotently (replaces it if present; creates [wsl2] if missing).
 function Arm-Config([string]$cfgPath, [string]$kernelWin) {
   $kline = "kernel=" + (To-WslPath $kernelWin)
   $lines = @(); if (Test-Path $cfgPath) { $lines = @(Get-Content $cfgPath) }
@@ -47,15 +47,15 @@ function Arm-Config([string]$cfgPath, [string]$kernelWin) {
   foreach ($l in $lines) {
     if ($l -match '^\s*\[wsl2\]\s*$')      { $inWsl2 = $true; $hasWsl2 = $true; $out += $l; continue }
     if ($l -match '^\s*\[')                { if ($inWsl2 -and -not $added) { $out += $kline; $added = $true }; $inWsl2 = $false; $out += $l; continue }
-    if ($inWsl2 -and $l -match '^\s*kernel\s*=') { continue }  # remove kernel= antigo (substitui)
+    if ($inWsl2 -and $l -match '^\s*kernel\s*=') { continue }  # remove the old kernel= (replace it)
     $out += $l
   }
-  if ($inWsl2 -and -not $added) { $out += $kline; $added = $true }          # [wsl2] era a última seção
-  if (-not $hasWsl2)            { $out = @("[wsl2]", $kline) + $out }        # não havia [wsl2]
-  if (-not (Set-CfgRetry $cfgPath $out)) { throw "não consegui escrever $cfgPath (locked/ACL?)" }
+  if ($inWsl2 -and -not $added) { $out += $kline; $added = $true }          # [wsl2] was the final section
+  if (-not $hasWsl2)            { $out = @("[wsl2]", $kline) + $out }        # [wsl2] was absent
+  if (-not (Set-CfgRetry $cfgPath $out)) { throw "could not write $cfgPath (locked/ACL?)" }
 }
 
-# Escrita com retry — locks transitórios do .wslconfig (WSL/editor/antivírus/OneDrive).
+# Retried write — transient .wslconfig locks (WSL/editor/antivirus/OneDrive).
 function Set-CfgRetry([string]$path, [string[]]$lines) {
   for ($i = 0; $i -lt 6; $i++) {
     try { Set-Content -Path $path -Value $lines -Encoding ASCII -ErrorAction Stop; return $true }
@@ -75,43 +75,43 @@ function Disarm-Config([string]$cfgPath) {
   } catch { return $false }
 }
 
-# --- Modo TESTE (não toca o WSL): exercita Arm + mostra o resultado ---
+# --- TEST mode (does not touch WSL): exercises Arm and shows the result ---
 if ($DryRunConfig -ne "") {
-  Write-Host "[dry-run] armando kernel em $DryRunConfig ..."
+  Write-Host "[dry-run] arming kernel in $DryRunConfig ..."
   Arm-Config $DryRunConfig $KernelPath
-  Write-Host "--- resultado ---"; Get-Content $DryRunConfig | ForEach-Object { Write-Host $_ }
-  Write-Host "[dry-run] (idempotência) armando de novo ..."
+  Write-Host "--- result ---"; Get-Content $DryRunConfig | ForEach-Object { Write-Host $_ }
+  Write-Host "[dry-run] (idempotence) arming again ..."
   Arm-Config $DryRunConfig $KernelPath
   $n = @(Select-String -Path $DryRunConfig -Pattern '^\s*kernel=').Count
-  Write-Host "ARM: linhas kernel= = $n (esperado 1)"
-  Write-Host "[dry-run] desarmando (revert determinístico) ..."
+  Write-Host "ARM: kernel= lines = $n (expected 1)"
+  Write-Host "[dry-run] disarming (deterministic revert) ..."
   $ok = Disarm-Config $DryRunConfig
   $d = @(Select-String -Path $DryRunConfig -Pattern '^\s*kernel=').Count
-  Write-Host "DISARM: ok=$ok ; linhas kernel= = $d (esperado 0)"
+  Write-Host "DISARM: ok=$ok ; kernel= lines = $d (expected 0)"
   exit 0
 }
 
-# --- Modo PREFLIGHT (não toca no WSL real): valida inputs + dry-run isolado ---
+# --- PREFLIGHT mode (does not touch real WSL): validates inputs and runs an isolated dry run ---
 if ($PreflightOnly) {
   Write-Host "PREFLIGHT: launcher=$PSCommandPath"
   Write-Host "PREFLIGHT: kernel=$KernelPath"
   Write-Host "PREFLIGHT: expected=$ExpectedVersion"
-  if (-not (Test-Path $KernelPath)) { Write-Error "kernel inexistente: $KernelPath" }
+  if (-not (Test-Path $KernelPath)) { Write-Error "kernel missing: $KernelPath" }
   $kernelSize = (Get-Item $KernelPath).Length
-  if ($kernelSize -le 0) { Write-Error "kernel vazio: $KernelPath" }
+  if ($kernelSize -le 0) { Write-Error "kernel empty: $KernelPath" }
   Write-Host "PREFLIGHT: kernel-size=$kernelSize"
 
   if (Test-Path $CleanConfig) {
     if (Select-String -Path $CleanConfig -Pattern '^\s*kernel=' -Quiet) {
-      Write-Error "backup '$CleanConfig' contém kernel=; não é limpo"
+      Write-Error "backup '$CleanConfig' contains kernel=; it is not clean"
     }
     Write-Host "PREFLIGHT: clean-config=ok"
   } else {
-    Write-Warning "PREFLIGHT: CleanConfig ausente; launcher criará se o .wslconfig atual estiver limpo"
+    Write-Warning "PREFLIGHT: CleanConfig absent; launcher will create it if the current .wslconfig is clean"
   }
 
   if ((Test-Path $WslConfig) -and (Select-String -Path $WslConfig -Pattern '^\s*kernel=' -Quiet)) {
-    Write-Warning "PREFLIGHT: .wslconfig atual já contém kernel=; boot real pode já estar armado"
+    Write-Warning "PREFLIGHT: current .wslconfig already contains kernel=; real boot may already be armed"
   } else {
     Write-Host "PREFLIGHT: current-wslconfig=disarmed"
   }
@@ -121,10 +121,10 @@ if ($PreflightOnly) {
   try {
     Arm-Config $tmp $KernelPath
     $n = @(Select-String -Path $tmp -Pattern '^\s*kernel=').Count
-    if ($n -ne 1) { Write-Error "dry-run arm gerou $n linhas kernel= (esperado 1)" }
-    if (-not (Disarm-Config $tmp)) { Write-Error "dry-run disarm falhou" }
+    if ($n -ne 1) { Write-Error "dry-run arm produced $n kernel= lines (expected 1)" }
+    if (-not (Disarm-Config $tmp)) { Write-Error "dry-run disarm failed" }
     $d = @(Select-String -Path $tmp -Pattern '^\s*kernel=').Count
-    if ($d -ne 0) { Write-Error "dry-run disarm deixou $d linhas kernel= (esperado 0)" }
+    if ($d -ne 0) { Write-Error "dry-run disarm left $d kernel= lines (expected 0)" }
     Write-Host "PREFLIGHT: arm-disarm=ok"
   } finally {
     Remove-Item $tmp -Force -ErrorAction SilentlyContinue
@@ -132,63 +132,63 @@ if ($PreflightOnly) {
 
   $active = (wsl.exe -e sh -c "uname -r" 2>&1) -join "`n"
   Write-Host "PREFLIGHT: active-uname=$($active.Trim())"
-  Write-Host "PREFLIGHT: OK (nenhum shutdown executado)"
+  Write-Host "PREFLIGHT: OK (no shutdown executed)"
   exit 0
 }
 
-# --- 1. backup LIMPO garantido (revert SEMPRE restaura algo bootável) ---
+# --- 1. guaranteed CLEAN backup (revert ALWAYS restores a bootable state) ---
 if (Test-Path $CleanConfig) {
   if (Select-String -Path $CleanConfig -Pattern '^\s*kernel=' -Quiet) {
-    Write-Error "backup '$CleanConfig' NÃO está limpo (contém kernel=). Aponte -CleanConfig p/ um .wslconfig SEM kernel custom."
+    Write-Error "backup '$CleanConfig' is NOT clean (contains kernel=). Point -CleanConfig to a .wslconfig WITHOUT a custom kernel."
   }
 } else {
   if ((Test-Path $WslConfig) -and (Select-String -Path $WslConfig -Pattern '^\s*kernel=' -Quiet)) {
-    Write-Error "Sem backup limpo e o .wslconfig atual já tem kernel=. Crie '$CleanConfig' (versão sem kernel=) antes."
+    Write-Error "No clean backup and the current .wslconfig already has kernel=. Create '$CleanConfig' (a version without kernel=) first."
   }
   if (Test-Path $WslConfig) { Copy-Item $WslConfig $CleanConfig -Force } else { Set-Content $CleanConfig "[wsl2]" -Encoding ASCII }
-  Write-Host "backup limpo criado: $CleanConfig"
+  Write-Host "clean backup created: $CleanConfig"
 }
 
-# --- 2-4. arma + reinicia + verifica, com FAIL-SAFE total: QUALQUER falha/erro/exceção
-# (inclusive wsl --shutdown lançar) → o finally reverte ao kernel MS. Nunca fica armado-quebrado.
+# --- 2-4. arm, restart, verify, with total FAIL-SAFE: ANY failure/error/exception
+# (including wsl --shutdown throwing) → finally reverts to the Microsoft kernel. It never remains broken and armed.
 $confirmed = $false; $uname = ""
 try {
-  Write-Host "armando kernel=$KernelPath em $WslConfig (backup: $CleanConfig)"
+  Write-Host "arming kernel=$KernelPath in $WslConfig (backup: $CleanConfig)"
   Arm-Config $WslConfig $KernelPath
   Write-Host "wsl --shutdown ..."; wsl --shutdown; Start-Sleep -Seconds 3
-  Write-Host "bootando + verificando (timeout ${TimeoutSec}s)..."
+  Write-Host "booting and verifying (timeout ${TimeoutSec}s)..."
   $job = Start-Job -ScriptBlock { (wsl.exe -e sh -c "uname -r") 2>&1 }
   if (Wait-Job $job -Timeout $TimeoutSec) {
     $uname = ((Receive-Job $job) -join "`n").Trim()
     if ($uname -match [regex]::Escape($ExpectedVersion)) { $confirmed = $true }
-    else { Write-Warning "uname inesperado: '$uname' (esperado conter '$ExpectedVersion')" }
+    else { Write-Warning "unexpected uname: '$uname' (expected to contain '$ExpectedVersion')" }
   } else {
-    Stop-Job $job; Write-Warning "boot NÃO respondeu em ${TimeoutSec}s (provável falha de boot)"
+    Stop-Job $job; Write-Warning "boot did NOT respond in ${TimeoutSec}s (probable boot failure)"
   }
   Remove-Job $job -Force -ErrorAction SilentlyContinue
 } catch {
-  Write-Warning "erro durante a troca: $_"
+  Write-Warning "error during the switch: $_"
 } finally {
   if (-not $confirmed) {
-    Write-Warning "FALHA → auto-revertendo ao kernel da Microsoft..."
-    # Desarme determinístico (não depende do backup) + nunca escapa do finally.
+    Write-Warning "FAILURE → auto-reverting to the Microsoft kernel..."
+    # Deterministic disarm (does not depend on the backup) and never escapes finally.
     if (Disarm-Config $WslConfig) {
       try { wsl --shutdown } catch { }
-      Write-Host "REVERTIDO. O próximo wsl usa o kernel da Microsoft. Nenhum dado afetado."
+      Write-Host "REVERTED. The next WSL launch uses the Microsoft kernel. No data affected."
     } else {
-      Write-Warning ("REVERT AUTOMÁTICO FALHOU ao reescrever $WslConfig (locked/ACL?). " +
-        "AÇÃO MANUAL: apague a linha 'kernel=' de $WslConfig e rode 'wsl --shutdown'. Backup limpo: $CleanConfig")
+      Write-Warning ("AUTOMATIC REVERT FAILED while rewriting $WslConfig (locked/ACL?). " +
+        "MANUAL ACTION: delete the 'kernel=' line from $WslConfig and run 'wsl --shutdown'. Clean backup: $CleanConfig")
     }
   }
 }
 
-# --- 5. resultado (módulo é best-effort: NÃO reverte; kernel é usável mesmo se falhar) ---
+# --- 5. result (module is best effort: it does NOT revert; the kernel remains usable if it fails) ---
 if ($confirmed) {
-  Write-Host "OK: kernel custom bootou ($uname)."
+  Write-Host "OK: custom kernel booted ($uname)."
   $mod = (wsl.exe -e sh -c "sudo modprobe $CheckModules 2>&1 && ls /dev/ublk-control 2>/dev/null && echo MOD-OK") 2>&1
-  if ($mod -match "MOD-OK") { Write-Host "módulos OK ($CheckModules carregou)." }
-  else { Write-Warning "kernel OK, mas módulo '$CheckModules' não carregou: $mod (kernel mantido; investigar)" }
-  Write-Host "PRONTO. Kernel custom ativo."
+  if ($mod -match "MOD-OK") { Write-Host "modules OK ($CheckModules loaded)." }
+  else { Write-Warning "kernel OK, but module '$CheckModules' did not load: $mod (kernel retained; investigate)" }
+  Write-Host "READY. Custom kernel active."
   exit 0
 } else {
   exit 1

@@ -69,12 +69,12 @@ mod tests {
         assert!(s.contains("CUresult=2"));
     }
 
-    /// Roundtrip real Host→VRAM→Host. Exige GPU CUDA funcional (WSL2/GPU-PV).
-    /// Rodar com: `cargo test -p ramshared-cuda -- --ignored`
+    /// Real Host→VRAM→Host roundtrip. Requires a working CUDA GPU (WSL2/GPU-PV).
+    /// Run with: `cargo test -p ramshared-cuda -- --ignored`.
     #[test]
-    #[ignore = "requer GPU CUDA funcional (rodar com --ignored num host com GPU)"]
+    #[ignore = "requires a working CUDA GPU (run with --ignored on a GPU host)"]
     fn gpu_roundtrip_256mib() {
-        let cuda = Cuda::load().expect("libcuda deve carregar");
+        let cuda = Cuda::load().expect("libcuda must load");
         assert!(cuda.device_count().unwrap() >= 1);
         let dev = cuda.device(0).unwrap();
         let ctx = cuda.create_context(&dev).unwrap();
@@ -86,16 +86,16 @@ mod tests {
         let mut mem = ctx.alloc(size).unwrap();
         mem.zero().unwrap();
 
-        // padrão conhecido em três offsets
+        // Known pattern at three offsets.
         let pat: Vec<u8> = (0..4096).map(|i| (i % 251) as u8).collect();
         for off in [0usize, size / 2, size - pat.len()] {
             mem.write_at(off, &pat).unwrap();
             let mut out = vec![0u8; pat.len()];
             mem.read_at(off, &mut out).unwrap();
-            assert_eq!(out, pat, "roundtrip divergiu em off={off}");
+            assert_eq!(out, pat, "roundtrip diverged at off={off}");
         }
 
-        // fora da faixa é erro, não corrupção
+        // Out-of-range access is an error, not corruption.
         let mut tiny = [0u8; 16];
         assert!(matches!(
             mem.read_at(size - 8, &mut tiny),

@@ -83,6 +83,17 @@ struct TenantState {
     occupied_bytes: u64,
 }
 
+/// Named configuration for the pure broker core.
+pub struct BrokerCoreConfig {
+    pub arbiter_cfg: ArbiterConfig,
+    pub endpoints: EndpointCfg,
+    pub swap_prio: Option<i32>,
+    pub slice_io: Arc<Vec<SliceIoCounters>>,
+    pub vram: Arc<VramGauge>,
+    pub tol_frac: f64,
+    pub recon_streak: u32,
+}
+
 /// Broker core: sole owner of `SliceMap` + `Arbiter` + session table (without locks; the
 /// IO layer runs this in a single thread). `BTreeMap` by `TenantId` gives stable iteration
 /// (deterministic round-robin).
@@ -140,23 +151,13 @@ fn dev_to_slice(dev: &str) -> Option<SliceId> {
 }
 
 impl BrokerCore {
-    #[allow(clippy::too_many_arguments)] // construtor do core: config + Arcs de telemetria
-    pub fn new(
-        slice_map: SliceMap,
-        arbiter_cfg: ArbiterConfig,
-        endpoints: EndpointCfg,
-        swap_prio: Option<i32>,
-        slice_io: Arc<Vec<SliceIoCounters>>,
-        vram: Arc<VramGauge>,
-        tol_frac: f64,
-        recon_streak: u32,
-    ) -> Self {
+    pub fn new(slice_map: SliceMap, cfg: BrokerCoreConfig) -> Self {
         let lease_capacity = slice_map.total_bytes();
         Self {
             slice_map,
-            arbiter: Arbiter::new(arbiter_cfg),
-            endpoints,
-            swap_prio,
+            arbiter: Arbiter::new(cfg.arbiter_cfg),
+            endpoints: cfg.endpoints,
+            swap_prio: cfg.swap_prio,
             tenants: BTreeMap::new(),
             sessions: HashMap::new(),
             name_to_id: HashMap::new(),
@@ -164,15 +165,15 @@ impl BrokerCore {
             pending_dest: HashMap::new(),
             lease_book: LeaseBook::new(lease_capacity),
             last_rebalance: None,
-            slice_io,
-            vram,
+            slice_io: cfg.slice_io,
+            vram: cfg.vram,
             demotes_total: 0,
             last_demote_reason: None,
             demotes_at_last_sample: 0,
             recon_flag: ReconcileFlag::None,
             recon_count: 0,
-            tol_frac,
-            recon_streak,
+            tol_frac: cfg.tol_frac,
+            recon_streak: cfg.recon_streak,
             pending_zero: HashMap::new(),
         }
     }
@@ -523,9 +524,9 @@ impl BrokerCore {
             }
             return;
         }
-        self.pending_zero.remove(&slice); // zero confirmado → encerra o retry (R4)
+        self.pending_zero.remove(&slice); // confirmed zero ends the retry (R4)
         if self.slice_map.release(slice).is_err() {
-            return; // não estava Draining; ignora
+            return; // was not Draining; ignore
         }
         // Movement in flight: the cleaned slice goes to the destination (SwapOn).
         if let Some(dest) = self.pending_dest.remove(&slice)
@@ -900,13 +901,15 @@ pub fn spawn_broker(
     // Core (single thread owner of BrokerCore). Keeps an `io_tx` for the zero-done forwarders.
     let core = BrokerCore::new(
         slice_map,
-        cfg.arbiter,
-        cfg.endpoints,
-        cfg.swap_prio,
-        cfg.slice_io,
-        cfg.vram,
-        cfg.tol_frac,
-        cfg.recon_streak,
+        BrokerCoreConfig {
+            arbiter_cfg: cfg.arbiter,
+            endpoints: cfg.endpoints,
+            swap_prio: cfg.swap_prio,
+            slice_io: cfg.slice_io,
+            vram: cfg.vram,
+            tol_frac: cfg.tol_frac,
+            recon_streak: cfg.recon_streak,
+        },
     );
     let tick = cfg.tick;
     let sink = cfg.telemetry_jsonl.and_then(TelemetrySink::open);
@@ -1124,16 +1127,18 @@ mod tests {
         };
         BrokerCore::new(
             SliceMap::new(k, 64 * 1024 * 1024),
-            cfg,
-            EndpointCfg {
-                nbd_unix: Some("/run/x.sock".into()),
-                nbd_tcp: None,
+            BrokerCoreConfig {
+                arbiter_cfg: cfg,
+                endpoints: EndpointCfg {
+                    nbd_unix: Some("/run/x.sock".into()),
+                    nbd_tcp: None,
+                },
+                swap_prio: None,
+                slice_io: Arc::new((0..k).map(|_| SliceIoCounters::default()).collect()),
+                vram: Arc::new(VramGauge::default()),
+                tol_frac: 0.10,
+                recon_streak,
             },
-            None,
-            Arc::new((0..k).map(|_| SliceIoCounters::default()).collect()),
-            Arc::new(VramGauge::default()),
-            0.10,
-            recon_streak,
         )
     }
 
@@ -1304,7 +1309,7 @@ mod tests {
         }
         assert!(
             saw_error,
-            "deve escalar a ERROR (R4) após N ticks sem confirmar"
+            "must escalate to ERROR (R4) after N unconfirmed ticks"
         );
         // Zero confirms → Free + stops retrying.
         c.handle(CoreEvent::ZeroDone(0, true), Instant::now());
@@ -1314,7 +1319,7 @@ mod tests {
             !after
                 .iter()
                 .any(|x| matches!(x, Outbound::ZeroSlice { slice: 0, .. })),
-            "pós-confirmação: sem mais retry"
+            "after confirmation: no more retries"
         );
     }
 
@@ -1498,12 +1503,12 @@ mod tests {
         assert_eq!(
             tick_flag(&mut c),
             ReconcileFlag::None,
-            "1º tick: streak ainda não atingido"
+            "first tick: streak not reached yet"
         );
         assert_eq!(
             tick_flag(&mut c),
             ReconcileFlag::Unaccounted,
-            "2º tick: confirma"
+            "second tick: confirms"
         );
     }
 
@@ -1532,12 +1537,12 @@ mod tests {
             sink.emit(&tc).expect("first telemetry row");
             sink.emit(&tc).expect("second telemetry row");
         }
-        let content = std::fs::read_to_string(&path).expect("lê o jsonl");
+        let content = std::fs::read_to_string(&path).expect("reads the jsonl");
         let lines: Vec<&str> = content.lines().collect();
-        assert_eq!(lines.len(), 2, "uma linha por emit");
-        let v: serde_json::Value = serde_json::from_str(lines[0]).expect("json válido");
+        assert_eq!(lines.len(), 2, "one line per emit");
+        let v: serde_json::Value = serde_json::from_str(lines[0]).expect("valid JSON");
         assert_eq!(v["swap_used"], 7);
-        assert!(v.get("t").is_some(), "carimbo de tempo presente");
+        assert!(v.get("t").is_some(), "timestamp is present");
         let _ = std::fs::remove_file(&path);
     }
 
@@ -1708,7 +1713,7 @@ mod tests {
         psi(&mut c, 20, 0.0);
         c.handle(CoreEvent::Tick, Instant::now()); // s0 → swap(1) Active (round-robin)
         assert_eq!(c.slice_map.get(0).unwrap().tenant, Some(1));
-        // dcc(20) pede lease que precisa da slice → revoga de swap(1)
+        // dcc(20) requests a lease that needs the slice → revokes it from swap(1)
         lease_req(&mut c, 20, SLICE);
         let o = c.handle(CoreEvent::Tick, Instant::now());
         assert!(
@@ -1718,8 +1723,8 @@ mod tests {
         assert!(
             !o.iter()
                 .any(|x| matches!(x, Outbound::ToSession(_, Msg::LeaseGranted { .. })))
-        ); // ainda não
-        // swapoff confirma → zero → release → Free
+        ); // not yet
+        // swapoff confirms → zero → release → Free
         c.handle(
             CoreEvent::Msg(
                 10,
@@ -1733,7 +1738,7 @@ mod tests {
         );
         c.handle(CoreEvent::ZeroDone(0, true), Instant::now());
         assert_eq!(c.slice_map.get(0).unwrap().state, SliceState::Free);
-        // próximo tick: agora há Free suficiente → GrantLease p/ dcc(20)
+        // next tick: enough Free capacity now exists → GrantLease for dcc(20)
         let o = c.handle(CoreEvent::Tick, Instant::now());
         assert!(
             o.iter()
@@ -1775,7 +1780,7 @@ mod tests {
 
     /// SPEC windows-swap-driver DT-7: WinDrive never receives SwapOn (lease-only).
     #[test]
-    fn windrive_nao_recebe_swap() {
+    fn windrive_does_not_receive_swap() {
         let mut c = core(2);
         reg_transport(&mut c, 10, "swap", TransportKind::NbdUnix);
         reg_transport(&mut c, 20, "windrive", TransportKind::WinDrive);
@@ -1802,7 +1807,7 @@ mod tests {
 
     /// SPEC windows-swap-driver DT-7: WinDrive can acquire a lease (revokes swap if needed).
     #[test]
-    fn windrive_pode_lease() {
+    fn windrive_can_lease() {
         let mut c = core(1);
         reg_transport(&mut c, 10, "swap", TransportKind::NbdUnix);
         reg_transport(&mut c, 20, "windrive", TransportKind::WinDrive);

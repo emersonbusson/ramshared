@@ -34,6 +34,9 @@ use crate::service::{
 use crate::windows_driver::{WindowsDriverLink, WindowsMappedQueue};
 use crate::windows_host::WindowsHostState;
 
+const STARTUP_LUN_PROVIDER_TIMEOUT: Duration = Duration::from_secs(12);
+const STARTUP_LUN_PUMP_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Serial: 16 uppercase hex digits derived from run id hash (DT-11).
 pub fn serial_from_run_id(run_id: &str) -> [u8; 16] {
     let mut out = [b'0'; 16];
@@ -60,6 +63,7 @@ pub fn run_product_online(
     cfg: &WinDriveConfig,
     mode: RunMode,
     stop: Arc<AtomicBool>,
+    resume_notifier: Option<Arc<AtomicBool>>,
 ) -> Result<RuntimeSummary, RuntimeError> {
     let run_id = new_process_run_id();
     let mut state = RuntimeState::new(mode);
@@ -281,8 +285,10 @@ pub fn run_product_online(
             &mut link,
             &mut dlink,
             &mut backend,
-            Duration::from_secs(5),
-            move || WindowsHostState::find_lun(&want_serial, want_size),
+            STARTUP_LUN_PUMP_TIMEOUT,
+            move || {
+                WindowsHostState::find_lun(&want_serial, want_size, STARTUP_LUN_PROVIDER_TIMEOUT)
+            },
         );
         let startup_lun_error = match startup_lun {
             Ok(Some(_)) => break,
@@ -441,7 +447,7 @@ pub fn run_product_online(
                 &mut link,
                 &mut dlink,
                 &mut backend,
-                Duration::from_secs(5),
+                Duration::from_secs(15),
                 move || {
                     WindowsHostState::observe_product_volume(
                         identity_letter,
@@ -458,6 +464,7 @@ pub fn run_product_online(
                         &mut row,
                         &mut evidence,
                         &stop,
+                        resume_notifier.as_deref(),
                         &format!("volume_identity_observation: {e}"),
                     );
                     continue;
@@ -471,6 +478,7 @@ pub fn run_product_online(
                 &mut row,
                 &mut evidence,
                 &stop,
+                resume_notifier.as_deref(),
                 &format!("volume_identity: {e}"),
             );
             continue;
@@ -487,7 +495,7 @@ pub fn run_product_online(
             row.error_class = Some("pagefile_safety".into());
             row.error_code = Some("7".into());
             let _ = evidence.append(&row);
-            stop.store(false, Ordering::Release);
+            resume_online_stop(&stop, resume_notifier.as_deref());
             continue;
         }
         let gate_a = readonly_host_call_with_io_pump(
@@ -513,7 +521,7 @@ pub fn run_product_online(
                 row.error_class = Some("pagefile_safety".into());
                 row.error_code = Some("7".into());
                 let _ = evidence.append(&row);
-                stop.store(false, Ordering::Release);
+                resume_online_stop(&stop, resume_notifier.as_deref());
                 continue;
             }
             Err(e) => {
@@ -526,7 +534,7 @@ pub fn run_product_online(
                 row.error_class = Some("pagefile_safety".into());
                 row.error_code = Some("7".into());
                 let _ = evidence.append(&row);
-                stop.store(false, Ordering::Release);
+                resume_online_stop(&stop, resume_notifier.as_deref());
                 continue;
             }
         }
@@ -537,90 +545,95 @@ pub fn run_product_online(
         ));
         let letter_for_lock = teardown_letter;
         let disk_for_lock = gates.expected_disk_number();
-        let volume_path_for_lock = gates.volume_device_path().map(str::to_owned);
-        let (tx, rx) = std::sync::mpsc::channel();
-        thread::spawn(move || {
-            let result = if let Some(path) = volume_path_for_lock {
-                WindowsHostState::lock_product_volume_path(
-                    &path,
-                    letter_for_lock,
-                    Some(disk_for_lock),
-                )
-            } else {
-                WindowsHostState::lock_product_volume(letter_for_lock, Some(disk_for_lock))
-            };
-            let _ = tx.send(result);
-        });
-        let lock_res = loop {
-            match rx.try_recv() {
-                Ok(r) => break r,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    break Err(crate::windows_host::HostError::Volume(
-                        "lock worker disconnected".into(),
-                    ));
+        if gates.has_mounted_volume() {
+            let volume_path_for_lock = gates.volume_device_path().map(str::to_owned);
+            let (tx, rx) = std::sync::mpsc::channel();
+            thread::spawn(move || {
+                let result = if let Some(path) = volume_path_for_lock {
+                    WindowsHostState::lock_product_volume_path(
+                        &path,
+                        letter_for_lock,
+                        Some(disk_for_lock),
+                    )
+                } else {
+                    WindowsHostState::lock_product_volume(letter_for_lock, Some(disk_for_lock))
+                };
+                let _ = tx.send(result);
+            });
+            let lock_res = loop {
+                match rx.try_recv() {
+                    Ok(r) => break r,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        break Err(crate::windows_host::HostError::Volume(
+                            "lock worker disconnected".into(),
+                        ));
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            }
 
-            if lock_wait_decision(teardown_started.elapsed(), Duration::from_secs(30), false)
-                == LockWaitDecision::EnterFailedSafe
-            {
-                state.healthy = false;
-                state.phase = RuntimePhase::FailedSafe;
-                row.error_class = Some("teardown_timeout".into());
-                row.error_code = Some("30s".into());
-                sync_runtime_evidence(&mut row, &state);
-                let _ = evidence.append(&row);
-                teardown_diag("FailedSafe: volume lock exceeded 30,000 ms; retaining I/O pump");
-                preserve_failed_safe_with_io(
-                    "volume lock worker remains in flight",
-                    &mut link,
-                    &mut dlink,
-                    &mut backend,
-                    &mut tenant,
-                    &mut stream,
-                    rx,
+                if lock_wait_decision(teardown_started.elapsed(), Duration::from_secs(30), false)
+                    == LockWaitDecision::EnterFailedSafe
+                {
+                    state.healthy = false;
+                    state.phase = RuntimePhase::FailedSafe;
+                    row.error_class = Some("teardown_timeout".into());
+                    row.error_code = Some("30s".into());
+                    sync_runtime_evidence(&mut row, &state);
+                    let _ = evidence.append(&row);
+                    teardown_diag("FailedSafe: volume lock exceeded 30,000 ms; retaining I/O pump");
+                    preserve_failed_safe_with_io(
+                        "volume lock worker remains in flight",
+                        &mut link,
+                        &mut dlink,
+                        &mut backend,
+                        &mut tenant,
+                        &mut stream,
+                        rx,
+                    );
+                }
+                match link.commit_and_fetch(Duration::from_millis(50)) {
+                    Ok(()) => {
+                        let _ = dlink.commit_and_fetch(&mut backend);
+                    }
+                    Err(crate::windows_driver::IoctlError::Timeout) => {}
+                    Err(e) => {
+                        teardown_diag(&format!("I/O pump during lock: {e}"));
+                    }
+                }
+            };
+            if teardown_started.elapsed() >= Duration::from_secs(30) {
+                drop(lock_res);
+                refuse_stop_online(
+                    &mut state,
+                    &mut row,
+                    &mut evidence,
+                    &stop,
+                    resume_notifier.as_deref(),
+                    "volume_lock_completed_after_30s_budget",
                 );
-            }
-            match link.commit_and_fetch(Duration::from_millis(50)) {
-                Ok(()) => {
-                    let _ = dlink.commit_and_fetch(&mut backend);
-                }
-                Err(crate::windows_driver::IoctlError::Timeout) => {}
-                Err(e) => {
-                    teardown_diag(&format!("I/O pump during lock: {e}"));
-                }
-            }
-        };
-        if teardown_started.elapsed() >= Duration::from_secs(30) {
-            drop(lock_res);
-            refuse_stop_online(
-                &mut state,
-                &mut row,
-                &mut evidence,
-                &stop,
-                "volume_lock_completed_after_30s_budget",
-            );
-            continue;
-        }
-        match lock_res {
-            Ok(vol) => {
-                gates.take_locked(vol);
-                teardown_diag("teardown phase=VolumeLock OK");
-            }
-            Err(e) => {
-                teardown_diag(&format!(
-                    "teardown refused (code 7) resume Online: volume_lock: {e}"
-                ));
-                state.phase = RuntimePhase::Online;
-                row.begin_event("Online", utc_ms());
-                sync_runtime_evidence(&mut row, &state);
-                row.error_class = Some("pagefile_safety".into());
-                row.error_code = Some("7".into());
-                let _ = evidence.append(&row);
-                stop.store(false, Ordering::Release);
                 continue;
             }
+            match lock_res {
+                Ok(vol) => {
+                    gates.take_locked(vol);
+                    teardown_diag("teardown phase=VolumeLock OK");
+                }
+                Err(e) => {
+                    teardown_diag(&format!(
+                        "teardown refused (code 7) resume Online: volume_lock: {e}"
+                    ));
+                    state.phase = RuntimePhase::Online;
+                    row.begin_event("Online", utc_ms());
+                    sync_runtime_evidence(&mut row, &state);
+                    row.error_class = Some("pagefile_safety".into());
+                    row.error_code = Some("7".into());
+                    let _ = evidence.append(&row);
+                    resume_online_stop(&stop, resume_notifier.as_deref());
+                    continue;
+                }
+            }
+        } else {
+            teardown_diag("teardown phase=VolumeLock N/A (exact RAW disk)");
         }
 
         // Gate B is observed while the exact volume lock is held and while any
@@ -636,6 +649,7 @@ pub fn run_product_online(
                 &mut row,
                 &mut evidence,
                 &stop,
+                resume_notifier.as_deref(),
                 "gate_b_budget_exhausted",
             );
             continue;
@@ -657,6 +671,7 @@ pub fn run_product_online(
                     &mut row,
                     &mut evidence,
                     &stop,
+                    resume_notifier.as_deref(),
                     &format!("gate_b_active: {}", rows.join(",")),
                 );
                 continue;
@@ -668,6 +683,7 @@ pub fn run_product_online(
                     &mut row,
                     &mut evidence,
                     &stop,
+                    resume_notifier.as_deref(),
                     &format!("gate_b_query: {e}"),
                 );
                 continue;
@@ -804,7 +820,7 @@ pub fn run_product_online(
                     row.error_class = Some("pagefile_safety".into());
                     row.error_code = Some("7".into());
                     let _ = evidence.append(&row);
-                    stop.store(false, Ordering::Release);
+                    resume_online_stop(&stop, resume_notifier.as_deref());
                     continue;
                 }
                 teardown_diag(&format!("teardown non-code7 failure → FailedSafe: {e}"));
@@ -848,13 +864,15 @@ fn teardown_after_lock(
         }
     }
 
-    phases.push(TeardownPhase::FlushDismount);
-    if let Err(e) = gates.flush_and_dismount() {
-        let _ = gates.unlock_volume();
-        phases.push(TeardownPhase::ResumeOnline);
-        return Err(ProvisionError::PagefileSafety(format!(
-            "flush_dismount: {e}"
-        )));
+    if gates.has_mounted_volume() {
+        phases.push(TeardownPhase::FlushDismount);
+        if let Err(e) = gates.flush_and_dismount() {
+            let _ = gates.unlock_volume();
+            phases.push(TeardownPhase::ResumeOnline);
+            return Err(ProvisionError::PagefileSafety(format!(
+                "flush_dismount: {e}"
+            )));
+        }
     }
 
     if state.registered_queue {
@@ -868,10 +886,12 @@ fn teardown_after_lock(
         state.disk_created = false;
     }
 
-    phases.push(TeardownPhase::Unlock);
-    gates
-        .unlock_volume()
-        .map_err(|e| ProvisionError::Disk(format!("unlock: {e}")))?;
+    if gates.has_mounted_volume() {
+        phases.push(TeardownPhase::Unlock);
+        gates
+            .unlock_volume()
+            .map_err(|e| ProvisionError::Disk(format!("unlock: {e}")))?;
+    }
 
     phases.push(TeardownPhase::Wipe);
     wipe.zero().map_err(ProvisionError::Disk)?;
@@ -917,6 +937,7 @@ fn refuse_stop_online(
     row: &mut RuntimeEvidence,
     evidence: &mut EvidenceWriter,
     stop: &AtomicBool,
+    resume_notifier: Option<&AtomicBool>,
     reason: &str,
 ) {
     teardown_diag(&format!(
@@ -928,6 +949,23 @@ fn refuse_stop_online(
     row.error_class = Some("pagefile_safety".into());
     row.error_code = Some("7".into());
     let _ = evidence.append(row);
+    resume_online_stop(stop, resume_notifier);
+}
+
+fn resume_online_stop(stop: &AtomicBool, resume_notifier: Option<&AtomicBool>) {
+    if let Some(notifier) = resume_notifier {
+        teardown_diag("SCM stop remains pending; safety retry scheduled");
+        notifier.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while notifier.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        if notifier.load(Ordering::Acquire) {
+            teardown_diag("FailedSafe: SCM retry monitor did not acknowledge stop refusal");
+            return;
+        }
+        return;
+    }
     stop.store(false, Ordering::Release);
 }
 
@@ -1213,6 +1251,7 @@ struct HostGates {
     volume_letter: char,
     volume_mount_path: Option<std::path::PathBuf>,
     volume_device_path: Option<String>,
+    raw_disk: bool,
     /// Validated at construction (letter/serial/size shape); kept for diagnostics.
     #[allow(dead_code)]
     target: TeardownTarget,
@@ -1235,6 +1274,7 @@ impl HostGates {
             volume_letter,
             volume_mount_path,
             volume_device_path: None,
+            raw_disk: false,
             target: TeardownTarget::new(volume_letter, serial, size_bytes)?,
             target_serial: serial.to_string(),
             target_size: size_bytes,
@@ -1256,15 +1296,18 @@ impl HostGates {
         &mut self,
         observed: crate::service::ObservedVolumeIdentity,
         disk_number: u32,
-        volume_device_path: String,
+        volume_device_path: Option<String>,
     ) -> Result<(), String> {
         self.target.verify_unique(&[observed])?;
-        if !volume_device_path.starts_with(r"\\?\Volume{") || !volume_device_path.ends_with('}') {
+        if let Some(path) = volume_device_path.as_deref()
+            && (!path.starts_with(r"\\?\Volume{") || !path.ends_with('}'))
+        {
             return Err("observed volume device path is invalid".into());
         }
         self.identity_verified = true;
         self.expected_disk_number = Some(disk_number);
-        self.volume_device_path = Some(volume_device_path);
+        self.raw_disk = volume_device_path.is_none();
+        self.volume_device_path = volume_device_path;
         Ok(())
     }
 
@@ -1358,6 +1401,9 @@ impl PagefileGates for HostGates {
                 e.to_string()
             })
     }
+    fn has_mounted_volume(&self) -> bool {
+        !self.raw_disk
+    }
     fn lock_volume(&mut self, letter: char) -> Result<(), String> {
         self.volume_letter = letter.to_ascii_uppercase();
         if self.locked.is_some() {
@@ -1433,5 +1479,35 @@ mod tests {
         let s = serial_from_run_id("run-1");
         assert_eq!(s.len(), 16);
         assert!(s.iter().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn scm_refusal_ack_schedules_same_stop_retry() {
+        let stop = Arc::new(AtomicBool::new(true));
+        let notifier = Arc::new(AtomicBool::new(false));
+        let notifier_for_monitor = Arc::clone(&notifier);
+        let stop_for_monitor = Arc::clone(&stop);
+        let monitor = thread::spawn(move || {
+            while !notifier_for_monitor.load(Ordering::Acquire) {
+                thread::yield_now();
+            }
+            stop_for_monitor.store(false, Ordering::Release);
+            notifier_for_monitor.store(false, Ordering::Release);
+            thread::sleep(Duration::from_millis(10));
+            stop_for_monitor.store(true, Ordering::Release);
+        });
+
+        resume_online_stop(&stop, Some(&notifier));
+        monitor.join().unwrap();
+
+        assert!(!notifier.load(Ordering::Acquire));
+        assert!(stop.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn console_resume_clears_stop_without_scm_notifier() {
+        let stop = AtomicBool::new(true);
+        resume_online_stop(&stop, None);
+        assert!(!stop.load(Ordering::Acquire));
     }
 }

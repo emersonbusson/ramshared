@@ -70,4 +70,19 @@ mod tests {
         assert!(text.contains("GpuApp.exe"));
         assert!(text.contains("not observed"));
     }
+
+    #[test]
+    fn explanation_reports_free_bytes_without_floor_breach() {
+        let text = explain_demote(&DemoteEvidence {
+            reason: "AppRequest".into(),
+            vram_free_bytes: Some(1024),
+            free_floor_bytes: 512,
+            swapoff_ms: Some(15),
+            pages_moved: Some(2),
+            process_attribution: None,
+        });
+        assert!(text.contains("DEMOTE requested by AppRequest with 1024 free bytes"));
+        assert!(!text.contains("fell below the floor"));
+        assert!(text.contains("process not attributed"));
+    }
 }
