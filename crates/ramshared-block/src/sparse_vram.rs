@@ -18,6 +18,16 @@ pub trait CommitBudgetGate {
     fn allow_commit(&self, committed: u64, next_chunk: u64) -> Result<(), String>;
 }
 
+/// Named sparse allocation and safety policy.
+pub struct SparseVramConfig<'p> {
+    pub capacity: u64,
+    pub chunk_bytes: u64,
+    pub block_size: u32,
+    pub reserve_floor_bytes: u64,
+    pub commit_cap_bytes: Option<u64>,
+    pub budget_gate: Option<&'p dyn CommitBudgetGate>,
+}
+
 /// One sparse slot.
 struct Chunk<'p, P: VramProvider + 'p> {
     mem: Option<P::Mem<'p>>,
@@ -52,14 +62,16 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         chunk_bytes: u64,
         block_size: u32,
     ) -> Result<Self, IoError> {
-        Self::new_with_limits_and_gate(
+        Self::new_with_config(
             provider,
-            capacity,
-            chunk_bytes,
-            block_size,
-            reserve_floor_bytes_from_env(),
-            None,
-            None,
+            SparseVramConfig {
+                capacity,
+                chunk_bytes,
+                block_size,
+                reserve_floor_bytes: reserve_floor_bytes_from_env(),
+                commit_cap_bytes: None,
+                budget_gate: None,
+            },
         )
     }
 
@@ -72,17 +84,20 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         reserve_floor_bytes: u64,
         commit_cap_bytes: Option<u64>,
     ) -> Result<Self, IoError> {
-        Self::new_with_limits_and_gate(
+        Self::new_with_config(
             provider,
-            capacity,
-            chunk_bytes,
-            block_size,
-            reserve_floor_bytes,
-            commit_cap_bytes,
-            None,
+            SparseVramConfig {
+                capacity,
+                chunk_bytes,
+                block_size,
+                reserve_floor_bytes,
+                commit_cap_bytes,
+                budget_gate: None,
+            },
         )
     }
 
+    /// Compatibility wrapper for callers that supply every safety boundary.
     pub fn new_with_limits_and_gate(
         provider: &'p P,
         capacity: u64,
@@ -92,23 +107,43 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         commit_cap_bytes: Option<u64>,
         budget_gate: Option<&'p dyn CommitBudgetGate>,
     ) -> Result<Self, IoError> {
-        if capacity == 0 {
+        Self::new_with_config(
+            provider,
+            SparseVramConfig {
+                capacity,
+                chunk_bytes,
+                block_size,
+                reserve_floor_bytes,
+                commit_cap_bytes,
+                budget_gate,
+            },
+        )
+    }
+
+    pub fn new_with_config(provider: &'p P, config: SparseVramConfig<'p>) -> Result<Self, IoError> {
+        if config.capacity == 0 {
             return Err(IoError("sparse: capacity 0".into()));
         }
-        if chunk_bytes == 0 || !chunk_bytes.is_multiple_of(u64::from(block_size)) {
+        if config.chunk_bytes == 0
+            || !config
+                .chunk_bytes
+                .is_multiple_of(u64::from(config.block_size))
+        {
             return Err(IoError(format!(
-                "sparse: chunk_bytes={chunk_bytes} must be >0 and multiple of block_size={block_size}"
+                "sparse: chunk_bytes={} must be >0 and multiple of block_size={}",
+                config.chunk_bytes, config.block_size
             )));
         }
-        let n = capacity.div_ceil(chunk_bytes);
+        let n = config.capacity.div_ceil(config.chunk_bytes);
         if n > 1_000_000 {
             return Err(IoError(format!("sparse: too many chunks ({n})")));
         }
         // Cap commit to capacity; optional env can lower further.
-        let commit_cap = commit_cap_bytes
+        let commit_cap = config
+            .commit_cap_bytes
             .unwrap_or_else(commit_cap_bytes_from_env)
-            .min(capacity)
-            .max(chunk_bytes);
+            .min(config.capacity)
+            .max(config.chunk_bytes);
         let mut chunks = Vec::with_capacity(n as usize);
         for _ in 0..n {
             chunks.push(Chunk {
@@ -119,12 +154,12 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         }
         Ok(Self {
             provider,
-            capacity,
-            chunk_bytes,
-            block_size,
-            reserve_floor_bytes,
+            capacity: config.capacity,
+            chunk_bytes: config.chunk_bytes,
+            block_size: config.block_size,
+            reserve_floor_bytes: config.reserve_floor_bytes,
             commit_cap_bytes: commit_cap,
-            budget_gate,
+            budget_gate: config.budget_gate,
             chunks,
             alloc_fails: 0,
             reclaim_frees: 0,

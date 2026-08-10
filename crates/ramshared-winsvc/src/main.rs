@@ -136,20 +136,47 @@ mod windows_svc {
     fn run_service() -> Result<(), Box<dyn std::error::Error>> {
         use ramshared_winsvc::product_online::run_product_online;
         use std::sync::Arc;
+        use std::sync::Mutex;
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_handler = Arc::clone(&stop);
+        let stop_for_monitor = Arc::clone(&stop);
+        let status_for_handler = Arc::new(Mutex::new(
+            None::<service_control_handler::ServiceStatusHandle>,
+        ));
+        let status_slot = Arc::clone(&status_for_handler);
         let status_handle =
             service_control_handler::register(SERVICE_NAME, move |control| match control {
                 ServiceControl::Stop | ServiceControl::Shutdown => {
-                    stop_for_handler.store(true, Ordering::SeqCst);
+                    if !stop_for_handler.swap(true, Ordering::SeqCst)
+                        && let Ok(status) = status_slot.lock()
+                        && let Some(handle) = *status
+                    {
+                        let stop_pending_result = handle.set_service_status(ServiceStatus {
+                            service_type: ServiceType::OWN_PROCESS,
+                            current_state: ServiceState::StopPending,
+                            controls_accepted: ServiceControlAccept::empty(),
+                            exit_code: ServiceExitCode::Win32(0),
+                            checkpoint: 1,
+                            wait_hint: Duration::from_secs(30),
+                            process_id: None,
+                        });
+                        match stop_pending_result {
+                            Ok(()) => diag_line("SCM status=StopPending"),
+                            Err(error) => {
+                                diag_line(&format!("SCM StopPending status failed: {error}"));
+                            }
+                        }
+                    }
                     ServiceControlHandlerResult::NoError
                 }
                 ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
                 _ => ServiceControlHandlerResult::NotImplemented,
             })?;
-
+        *status_for_handler
+            .lock()
+            .map_err(|_| "SCM status handle lock poisoned")? = Some(status_handle);
         status_handle.set_service_status(ServiceStatus {
             service_type: ServiceType::OWN_PROCESS,
             current_state: ServiceState::StartPending,
@@ -184,8 +211,29 @@ mod windows_svc {
             process_id: None,
         })?;
 
+        let resume_notifier = Arc::new(AtomicBool::new(false));
+        let monitor_done = Arc::new(AtomicBool::new(false));
+        let notifier_for_monitor = Arc::clone(&resume_notifier);
+        let done_for_monitor = Arc::clone(&monitor_done);
+        let status_monitor = thread::spawn(move || {
+            while !done_for_monitor.load(Ordering::Acquire) {
+                if notifier_for_monitor.load(Ordering::Acquire) {
+                    // Keep the one SCM STOP transaction pending. Briefly
+                    // resume the I/O loop, then retry the safety gates.
+                    stop_for_monitor.store(false, Ordering::Release);
+                    notifier_for_monitor.store(false, Ordering::Release);
+                    thread::sleep(Duration::from_secs(1));
+                    stop_for_monitor.store(true, Ordering::Release);
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+        });
+
         // Blocks until stop is set (SCM Stop) then runs Gate A/B teardown inside.
-        let result = run_product_online(&cfg, RunMode::Scm, Arc::clone(&stop));
+        let result =
+            run_product_online(&cfg, RunMode::Scm, Arc::clone(&stop), Some(resume_notifier));
+        monitor_done.store(true, Ordering::Release);
+        let _ = status_monitor.join();
 
         match result {
             Ok(summary) => {
@@ -325,7 +373,7 @@ mod windows_svc {
                 thread::sleep(Duration::from_millis(200));
             }
         });
-        match run_product_online(&cfg, RunMode::Console, stop) {
+        match run_product_online(&cfg, RunMode::Console, stop, None) {
             Ok(s) => {
                 eprintln!("console stopped: {:?}", s);
                 let _ = std::io::Write::flush(&mut std::io::stderr());

@@ -28,7 +28,7 @@ toml = "1.1"
 sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
-base64 = "0.22"
+base64 = { version = "0.23", default-features = false, features = ["std"] }
 windows-service = "0.8"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",

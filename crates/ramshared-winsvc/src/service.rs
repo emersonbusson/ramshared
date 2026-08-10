@@ -159,6 +159,10 @@ pub trait PagefileGates {
     fn verify_volume_identity(&self, letter: char) -> Result<(), String>;
     /// Gate A/B: list active pagefile identities. Err = query unsafe (fail-closed).
     fn active_pagefiles(&self) -> Result<Vec<String>, String>;
+    /// RAW product disks have no filesystem volume to lock or dismount.
+    fn has_mounted_volume(&self) -> bool {
+        true
+    }
     /// Exclusive volume lock. Err = lock failure.
     fn lock_volume(&mut self, letter: char) -> Result<(), String>;
     fn unlock_volume(&mut self) -> Result<(), String>;
@@ -226,10 +230,12 @@ pub fn teardown_storage_only(
     phases.push(TeardownPhase::Drain);
     // Drain is caller/runtime responsibility for live I/O; marker only here.
 
-    phases.push(TeardownPhase::VolumeLock);
-    if let Err(e) = gates.lock_volume(cfg.volume_letter) {
-        phases.push(TeardownPhase::ResumeOnline);
-        return Err(ProvisionError::PagefileSafety(format!("volume_lock: {e}")));
+    if gates.has_mounted_volume() {
+        phases.push(TeardownPhase::VolumeLock);
+        if let Err(e) = gates.lock_volume(cfg.volume_letter) {
+            phases.push(TeardownPhase::ResumeOnline);
+            return Err(ProvisionError::PagefileSafety(format!("volume_lock: {e}")));
+        }
     }
 
     phases.push(TeardownPhase::GateB);
@@ -250,13 +256,15 @@ pub fn teardown_storage_only(
         }
     }
 
-    phases.push(TeardownPhase::FlushDismount);
-    if let Err(e) = gates.flush_and_dismount() {
-        let _ = gates.unlock_volume();
-        phases.push(TeardownPhase::ResumeOnline);
-        return Err(ProvisionError::PagefileSafety(format!(
-            "flush_dismount: {e}"
-        )));
+    if gates.has_mounted_volume() {
+        phases.push(TeardownPhase::FlushDismount);
+        if let Err(e) = gates.flush_and_dismount() {
+            let _ = gates.unlock_volume();
+            phases.push(TeardownPhase::ResumeOnline);
+            return Err(ProvisionError::PagefileSafety(format!(
+                "flush_dismount: {e}"
+            )));
+        }
     }
 
     // Destructive frontier — only while volume remains locked.
@@ -271,10 +279,12 @@ pub fn teardown_storage_only(
         state.disk_created = false;
     }
 
-    phases.push(TeardownPhase::Unlock);
-    gates
-        .unlock_volume()
-        .map_err(|e| ProvisionError::Disk(format!("unlock: {e}")))?;
+    if gates.has_mounted_volume() {
+        phases.push(TeardownPhase::Unlock);
+        gates
+            .unlock_volume()
+            .map_err(|e| ProvisionError::Disk(format!("unlock: {e}")))?;
+    }
 
     phases.push(TeardownPhase::Wipe);
     wipe.zero().map_err(ProvisionError::Disk)?;
@@ -478,6 +488,41 @@ mod tests {
 
         fn flush_and_dismount(&mut self) -> Result<(), String> {
             panic!("dismount must not run after identity refusal")
+        }
+
+        fn volume_locked(&self) -> bool {
+            false
+        }
+    }
+
+    struct RawGates {
+        queries: std::cell::Cell<u32>,
+    }
+
+    impl PagefileGates for RawGates {
+        fn verify_volume_identity(&self, _: char) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn active_pagefiles(&self) -> Result<Vec<String>, String> {
+            self.queries.set(self.queries.get() + 1);
+            Ok(vec![])
+        }
+
+        fn has_mounted_volume(&self) -> bool {
+            false
+        }
+
+        fn lock_volume(&mut self, _: char) -> Result<(), String> {
+            panic!("an exact RAW disk has no volume to lock")
+        }
+
+        fn unlock_volume(&mut self) -> Result<(), String> {
+            panic!("an exact RAW disk has no volume to unlock")
+        }
+
+        fn flush_and_dismount(&mut self) -> Result<(), String> {
+            panic!("an exact RAW disk has no filesystem to dismount")
         }
 
         fn volume_locked(&self) -> bool {
@@ -787,6 +832,51 @@ mod tests {
         assert_eq!(disk.destroy_calls, 1);
         assert_eq!(disk.unreg_calls, 1);
         assert!(!gates.locked);
+    }
+
+    #[test]
+    fn exact_raw_disk_runs_both_gates_without_volume_operations() {
+        let c = cfg();
+        let mut state = online_state();
+        let mut disk = MemDisk {
+            created: true,
+            registered: true,
+            ..Default::default()
+        };
+        let mut wipe = NopWipe;
+        let mut gates = RawGates {
+            queries: std::cell::Cell::new(0),
+        };
+        let mut phases = Vec::new();
+
+        teardown_storage_only(
+            &c,
+            &mut state,
+            &mut disk,
+            &mut wipe,
+            &mut gates,
+            &mut phases,
+        )
+        .unwrap();
+
+        assert_eq!(gates.queries.get(), 2);
+        assert_eq!(disk.unreg_calls, 1);
+        assert_eq!(disk.destroy_calls, 1);
+        assert!(!state.online);
+        assert!(state.lease.is_none());
+        assert_eq!(
+            phases,
+            [
+                TeardownPhase::Identity,
+                TeardownPhase::GateA,
+                TeardownPhase::Drain,
+                TeardownPhase::GateB,
+                TeardownPhase::Unregister,
+                TeardownPhase::Destroy,
+                TeardownPhase::Wipe,
+                TeardownPhase::Release,
+            ]
+        );
     }
 
     #[test]

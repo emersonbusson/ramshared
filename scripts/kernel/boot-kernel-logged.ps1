@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-  Wrapper com log persistente para boot-kernel-safe.ps1.
+  Wrapper with a persistent log for boot-kernel-safe.ps1.
 
 .DESCRIPTION
-  Executa o launcher seguro em um PowerShell filho e grava stdout/stderr em
-  C:\wsl\boot-ramshared.log. O processo filho isola o exit do launcher para que
-  este wrapper consiga registrar o codigo final.
+  Runs the safe launcher in a child PowerShell and writes stdout/stderr to
+  C:\wsl\boot-ramshared.log. The child process isolates the launcher's exit so
+  this wrapper can record the final code.
 #>
 param(
   [string]$Launcher = "C:\wsl\boot-kernel-safe.ps1",

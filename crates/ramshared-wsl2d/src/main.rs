@@ -61,6 +61,7 @@ const UBLK_CONTROL: &str = "/dev/ublk-control";
 const SECTOR: u64 = 512;
 
 /// VRAM tier transport: NBD (Unix socket) or ublk (direct block device).
+#[derive(Clone, Copy)]
 enum Transport {
     Nbd,
     Ublk,
@@ -116,7 +117,7 @@ fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("[ramsharedd] erro: {e}");
+            eprintln!("[ramsharedd] error: {e}");
             std::process::ExitCode::from(1)
         }
     }
@@ -128,10 +129,10 @@ fn parse_private_listen(s: &str) -> Result<std::net::SocketAddr, String> {
     let raw = s.strip_prefix("tcp://").unwrap_or(s);
     let addr: std::net::SocketAddr = raw
         .parse()
-        .map_err(|_| format!("endereço inválido '{s}' (use IP:PORT)"))?;
+        .map_err(|_| format!("invalid address '{s}' (use IP:PORT)"))?;
     if addr.ip().is_unspecified() {
         return Err(format!(
-            "bind em {} recusado — RNF-2: só rede privada/loopback, nunca 0.0.0.0/::",
+            "bind on {} refused — RNF-2: private network or loopback only, never 0.0.0.0/::",
             addr.ip()
         ));
     }
@@ -293,19 +294,37 @@ fn command_stdout_with_timeout(program: &str, args: &[&str], timeout: Duration) 
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
+    // Drain while the child is still running. Waiting for exit before reading
+    // stdout lets a finite command deadlock once its pipe fills; on every
+    // terminal path below the child is reaped before this reader is joined.
+    let stdout = child.stdout.take()?;
+    let drain = std::thread::spawn(move || {
+        let mut stdout = stdout;
+        let mut output = String::new();
+        stdout.read_to_string(&mut output).map(|_| output)
+    });
     let started = Instant::now();
     loop {
-        if let Some(status) = child.try_wait().ok()? {
+        let status = match child.try_wait() {
+            Ok(status) => status,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = drain.join();
+                return None;
+            }
+        };
+        if let Some(status) = status {
+            let output = drain.join().ok()?.ok()?;
             if !status.success() {
                 return None;
             }
-            let mut stdout = String::new();
-            child.stdout.take()?.read_to_string(&mut stdout).ok()?;
-            return Some(stdout);
+            return Some(output);
         }
         if started.elapsed() >= timeout {
             let _ = child.kill();
             let _ = child.wait();
+            let _ = drain.join();
             return None;
         }
         std::thread::sleep(Duration::from_millis(25));
@@ -365,6 +384,14 @@ struct AppArgs {
 
 impl AppArgs {
     fn parse() -> Result<Self, Box<dyn std::error::Error>> {
+        let args: Vec<String> = std::env::args().collect();
+        Self::parse_from(&args)
+    }
+
+    /// Parses an explicit argv vector before any backend selection or side effect.
+    /// Keeping this boundary injectable makes all public refusals testable without
+    /// loading CUDA/Vulkan or touching swap, NBD, or ublk state (memory-broker DT-46).
+    fn parse_from(args: &[String]) -> Result<Self, Box<dyn std::error::Error>> {
         let mut size = DEFAULT_SIZE;
         let mut sock = "/run/ramshared/wsl2d.sock".to_string();
         let mut force = false;
@@ -379,41 +406,43 @@ impl AppArgs {
         let mut advertise_nbd: Option<String> = None;
         let mut telemetry_jsonl: Option<String> = None;
 
-        let args: Vec<String> = std::env::args().collect();
         let mut i = 1;
         while i < args.len() {
             match args[i].as_str() {
                 "--size" => {
                     i += 1;
-                    let mb: u64 = args.get(i).ok_or("--size requer valor (MiB)")?.parse()?;
+                    let mb: u64 = args
+                        .get(i)
+                        .ok_or("--size requires a value (MiB)")?
+                        .parse()?;
                     size = mb
                         .checked_mul(1024 * 1024)
-                        .ok_or("--size: overflow (MiB grande demais)")?;
+                        .ok_or("--size: MiB value overflow")?;
                 }
                 "--sock" => {
                     i += 1;
-                    sock = args.get(i).ok_or("--sock requer caminho")?.clone();
+                    sock = args.get(i).ok_or("--sock requires a path")?.clone();
                 }
                 "--force" => force = true,
                 "--nbd" => {
                     i += 1;
-                    nbd_dev = args.get(i).ok_or("--nbd requer caminho")?.clone();
+                    nbd_dev = args.get(i).ok_or("--nbd requires a path")?.clone();
                 }
                 "--transport" => {
                     i += 1;
                     transport = match args.get(i).map(String::as_str) {
                         Some("nbd") => Transport::Nbd,
                         Some("ublk") => Transport::Ublk,
-                        _ => return Err("--transport requer 'nbd' ou 'ublk'".into()),
+                        _ => return Err("--transport requires 'nbd' or 'ublk'".into()),
                     };
                 }
                 "--queue-depth" => {
                     i += 1;
                     queue_depth = args
                         .get(i)
-                        .ok_or("--queue-depth requer valor")?
+                        .ok_or("--queue-depth requires a value")?
                         .parse()
-                        .map_err(|_| "--queue-depth invalido")?;
+                        .map_err(|_| "--queue-depth is invalid")?;
                 }
                 "--backend" => {
                     i += 1;
@@ -421,30 +450,30 @@ impl AppArgs {
                         Some("vram") => BackendKind::Vram,
                         Some("vulkan") => BackendKind::Vulkan,
                         Some("ram") => BackendKind::Ram,
-                        _ => return Err("--backend requer 'vram', 'vulkan' ou 'ram'".into()),
+                        _ => return Err("--backend requires 'vram', 'vulkan', or 'ram'".into()),
                     };
                 }
                 "--slices" => {
                     i += 1;
                     slices = args
                         .get(i)
-                        .ok_or("--slices requer valor")?
+                        .ok_or("--slices requires a value")?
                         .parse()
-                        .map_err(|_| "--slices inválido")?;
+                        .map_err(|_| "--slices is invalid")?;
                 }
                 "--slice-mb" => {
                     i += 1;
                     slice_mb = args
                         .get(i)
-                        .ok_or("--slice-mb requer valor (MiB)")?
+                        .ok_or("--slice-mb requires a value (MiB)")?
                         .parse()
-                        .map_err(|_| "--slice-mb inválido")?;
+                        .map_err(|_| "--slice-mb is invalid")?;
                 }
                 "--listen-nbd" => {
                     i += 1;
                     listen_nbd = Some(
                         args.get(i)
-                            .ok_or("--listen-nbd requer tcp://IP:PORT")?
+                            .ok_or("--listen-nbd requires tcp://IP:PORT")?
                             .clone(),
                     );
                 }
@@ -452,7 +481,7 @@ impl AppArgs {
                     i += 1;
                     arbiter = Some(
                         args.get(i)
-                            .ok_or("--arbiter-listen requer IP:PORT")?
+                            .ok_or("--arbiter-listen requires IP:PORT")?
                             .clone(),
                     );
                 }
@@ -460,7 +489,7 @@ impl AppArgs {
                     i += 1;
                     advertise_nbd = Some(
                         args.get(i)
-                            .ok_or("--advertise-nbd requer HOST:PORT")?
+                            .ok_or("--advertise-nbd requires HOST:PORT")?
                             .clone(),
                     );
                 }
@@ -468,15 +497,15 @@ impl AppArgs {
                     i += 1;
                     telemetry_jsonl = Some(
                         args.get(i)
-                            .ok_or("--telemetry-jsonl requer caminho")?
+                            .ok_or("--telemetry-jsonl requires a path")?
                             .clone(),
                     );
                 }
-                other => return Err(format!("argumento desconhecido: {other}").into()),
+                other => return Err(format!("unknown argument: {other}").into()),
             }
             i += 1;
         }
-        size -= size % BLOCK_SIZE as u64; // alinhar ao block size
+        size -= size % BLOCK_SIZE as u64; // align to the block size
 
         if let Err(e) = validate_slice_flags(slices, slice_mb, matches!(transport, Transport::Ublk))
         {
@@ -495,8 +524,16 @@ impl AppArgs {
 
         if advertise_nbd_addr.is_some() && listen_nbd_addr.is_none() {
             return Err(
-                "--advertise-nbd exige --listen-nbd (anunciar um endpoint que se serve)".into(),
+                "--advertise-nbd requires --listen-nbd (cannot advertise an unserved endpoint)"
+                    .into(),
             );
+        }
+
+        if slices > 0 && arbiter_addr.is_none() {
+            return Err("--slices requires --arbiter-listen IP:PORT (broker control point)".into());
+        }
+        if slices == 0 && (arbiter_addr.is_some() || listen_nbd_addr.is_some()) {
+            return Err("--arbiter-listen/--listen-nbd require --slices N (N > 0)".into());
         }
 
         let advertise_tcp = advertise_nbd_addr
@@ -507,7 +544,7 @@ impl AppArgs {
         let slice_bytes = if slices > 0 {
             slice_mb
                 .checked_mul(1024 * 1024)
-                .ok_or("--slice-mb: overflow (MiB grande demais)")?
+                .ok_or("--slice-mb: MiB value overflow")?
         } else {
             0
         };
@@ -530,96 +567,310 @@ impl AppArgs {
     }
 }
 
+/// A validated daemon action. The parser and selector decide this before any
+/// driver, swap, NBD-client, or ublk side effect (memory-broker DT-46).
+enum DaemonAction {
+    Broker(AppArgs),
+    Nbd(AppArgs),
+    Ublk(AppArgs),
+}
+
+/// The production shell is deliberately behind this small interface so the
+/// safety-critical argv/plan boundary can be tested with a recording runner.
+trait DaemonActionRunner {
+    fn execute(&mut self, action: DaemonAction) -> Result<(), Box<dyn std::error::Error>>;
+}
+
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let args = AppArgs::parse()?;
+    let mut runner = ProductionDaemonRunner;
+    run_with(args, &mut runner)
+}
 
-    // Broker mode (ITEM-8): --slices > 0 slices the memory and starts the arbiter. Requires --arbiter-listen
-    // (the broker control point). --listen-nbd is optional (TCP/civm tenants besides Unix).
-    // --backend ram serves without GPU (validation in QEMU, ITEM-11); vram is the production path.
+fn run_with<R: DaemonActionRunner>(
+    args: AppArgs,
+    runner: &mut R,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let action = select_daemon_action(args)?;
+    runner.execute(action)
+}
+
+fn select_daemon_action(args: AppArgs) -> Result<DaemonAction, Box<dyn std::error::Error>> {
     if args.slices > 0 {
-        let arbiter_addr = args
-            .arbiter_addr
-            .ok_or("--slices exige --arbiter-listen IP:PORT (ponto de controle)")?;
-        return match args.backend {
-            BackendKind::Vram => {
-                // CUDA Shell: creates the provider (Context impl VramProvider) and enters the
-                // generic path.
-                let cuda = Cuda::load()?;
-                let dev = cuda.device(0)?;
-                eprintln!("[ramsharedd] GPU: {}", dev.name());
-                let ctx = cuda.create_context(&dev)?;
-                run_broker(
-                    ctx,
-                    args.slice_bytes,
-                    args.slices,
-                    args.sock,
-                    args.force,
-                    args.listen_nbd_addr,
-                    args.advertise_tcp,
-                    arbiter_addr,
-                    args.telemetry_jsonl,
-                )
-            }
-            BackendKind::Vulkan => {
-                // Vulkan Shell (RF-V4/DT-11): Vulkan provider in the SAME generic run_broker.
-                let provider = VulkanProvider::open(0)?;
-                eprintln!("[ramsharedd] GPU (vulkan): {}", provider.device_name());
-                run_broker(
-                    provider,
-                    args.slice_bytes,
-                    args.slices,
-                    args.sock,
-                    args.force,
-                    args.listen_nbd_addr,
-                    args.advertise_tcp,
-                    arbiter_addr,
-                    args.telemetry_jsonl,
-                )
-            }
-            BackendKind::Ram => run_broker_ram(
-                args.slice_bytes,
-                args.slices,
-                args.sock,
-                args.listen_nbd_addr,
-                args.advertise_tcp,
-                arbiter_addr,
-                args.telemetry_jsonl,
-            ),
-        };
+        if args.arbiter_addr.is_none() {
+            return Err("--slices requires --arbiter-listen IP:PORT (broker control point)".into());
+        }
+        return Ok(DaemonAction::Broker(args));
     }
-    // Without slices, there is nothing to arbitrate or export via TCP.
     if args.arbiter_addr.is_some() || args.listen_nbd_addr.is_some() {
         return Err("--arbiter-listen/--listen-nbd require --slices N (N > 0)".into());
     }
+    match (args.transport, args.backend) {
+        (Transport::Nbd, BackendKind::Ram) => Err(
+            "--backend ram has no single NBD path; use --slices (broker) or ublk".into(),
+        ),
+        (Transport::Ublk, BackendKind::Vulkan) => Err(
+            "ublk with --backend vulkan is not supported (DT-11); use --backend vram, or Vulkan via --slices / --transport nbd"
+                .into(),
+        ),
+        (Transport::Nbd, _) => Ok(DaemonAction::Nbd(args)),
+        (Transport::Ublk, _) => Ok(DaemonAction::Ublk(args)),
+    }
+}
 
-    match args.transport {
-        Transport::Nbd => match args.backend {
-            BackendKind::Vram => {
-                // CUDA Shell: creates the provider and enters the generic path.
-                let cuda = Cuda::load()?;
-                let dev = cuda.device(0)?;
-                eprintln!("[ramsharedd] GPU: {}", dev.name());
-                let ctx = cuda.create_context(&dev)?;
-                run_nbd(ctx, args.size, args.sock, args.force, args.nbd_dev, true)
+struct ProductionDaemonRunner;
+
+impl DaemonActionRunner for ProductionDaemonRunner {
+    fn execute(&mut self, action: DaemonAction) -> Result<(), Box<dyn std::error::Error>> {
+        match action {
+            DaemonAction::Broker(args) => {
+                let AppArgs {
+                    force,
+                    backend,
+                    slices,
+                    slice_bytes,
+                    sock,
+                    listen_nbd_addr,
+                    arbiter_addr,
+                    advertise_tcp,
+                    telemetry_jsonl,
+                    ..
+                } = args;
+                let arbiter_addr = arbiter_addr
+                    .ok_or("--slices requires --arbiter-listen IP:PORT (broker control point)")?;
+                match backend {
+                    BackendKind::Vram => {
+                        let cuda = Cuda::load()?;
+                        let dev = cuda.device(0)?;
+                        eprintln!("[ramsharedd] GPU: {}", dev.name());
+                        let ctx = cuda.create_context(&dev)?;
+                        run_broker(
+                            ctx,
+                            slice_bytes,
+                            slices,
+                            sock,
+                            force,
+                            listen_nbd_addr,
+                            advertise_tcp,
+                            arbiter_addr,
+                            telemetry_jsonl,
+                        )
+                    }
+                    BackendKind::Vulkan => {
+                        let provider = VulkanProvider::open(0)?;
+                        eprintln!("[ramsharedd] GPU (Vulkan): {}", provider.device_name());
+                        run_broker(
+                            provider,
+                            slice_bytes,
+                            slices,
+                            sock,
+                            force,
+                            listen_nbd_addr,
+                            advertise_tcp,
+                            arbiter_addr,
+                            telemetry_jsonl,
+                        )
+                    }
+                    BackendKind::Ram => run_broker_ram(
+                        slice_bytes,
+                        slices,
+                        sock,
+                        listen_nbd_addr,
+                        advertise_tcp,
+                        arbiter_addr,
+                        telemetry_jsonl,
+                    ),
+                }
             }
-            BackendKind::Vulkan => {
-                // Vulkan Shell (RF-V4/DT-11): Vulkan provider in the SAME generic run_nbd.
-                let provider = VulkanProvider::open(0)?;
-                eprintln!("[ramsharedd] GPU (vulkan): {}", provider.device_name());
-                run_nbd(
-                    provider,
-                    args.size,
-                    args.sock,
-                    args.force,
-                    args.nbd_dev,
-                    false,
-                )
+            DaemonAction::Nbd(args) => {
+                let AppArgs {
+                    backend,
+                    size,
+                    sock,
+                    force,
+                    nbd_dev,
+                    ..
+                } = args;
+                match backend {
+                    BackendKind::Vram => {
+                        let cuda = Cuda::load()?;
+                        let dev = cuda.device(0)?;
+                        eprintln!("[ramsharedd] GPU: {}", dev.name());
+                        let ctx = cuda.create_context(&dev)?;
+                        run_nbd(ctx, size, sock, force, nbd_dev, true)
+                    }
+                    BackendKind::Vulkan => {
+                        let provider = VulkanProvider::open(0)?;
+                        eprintln!("[ramsharedd] GPU (Vulkan): {}", provider.device_name());
+                        run_nbd(provider, size, sock, force, nbd_dev, false)
+                    }
+                    BackendKind::Ram => Err(
+                        "--backend ram has no single NBD path; use --slices (broker) or ublk"
+                            .into(),
+                    ),
+                }
             }
-            BackendKind::Ram => Err(
-                "--backend ram não tem caminho NBD single; use --slices (broker) ou ublk".into(),
-            ),
-        },
-        Transport::Ublk => run_ublk(args.size, args.force, args.queue_depth, args.backend),
+            DaemonAction::Ublk(args) => {
+                run_ublk(args.size, args.force, args.queue_depth, args.backend)
+            }
+        }
+    }
+}
+
+/// Minimal WDDM-budget view used by the NBD policy. The daemon core needs only
+/// a fresh budget/current-usage sample; `/dev/dxg` stays in the production
+/// adapter so deterministic tests can inject a safe snapshot.
+struct NbdBudgetSnapshot {
+    budget: u64,
+    current_usage: u64,
+    sampled_at: Instant,
+}
+
+trait NbdBudgetProvider {
+    fn snapshot(&self) -> Result<NbdBudgetSnapshot, String>;
+}
+
+struct ProductionNbdBudgetProvider(DxgBudgetProvider);
+
+impl NbdBudgetProvider for ProductionNbdBudgetProvider {
+    fn snapshot(&self) -> Result<NbdBudgetSnapshot, String> {
+        let snapshot = self.0.snapshot().map_err(|error| error.to_string())?;
+        Ok(NbdBudgetSnapshot {
+            budget: snapshot.budget,
+            current_usage: snapshot.current_usage,
+            sampled_at: snapshot.sampled_at,
+        })
+    }
+}
+
+/// OS-facing edges for the NBD worker. The production implementation owns the
+/// process memory lock, protocol acceptor, `/proc/swaps` observation, and
+/// demote-status file. Tests inject a deterministic in-memory implementation,
+/// so exercising daemon logic never requires a CUDA context, NBD client, swap
+/// device, or host status path.
+trait NbdRuntimeStarter {
+    fn lock_memory(
+        &mut self,
+        force: bool,
+        lock_future: bool,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+
+    fn start_acceptor(
+        &mut self,
+        listener: UnixListener,
+        exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+        tx_flags: u16,
+        jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+
+    fn nbd_used_kb(&mut self, nbd_dev: &str) -> u64;
+
+    fn publish_demote(&mut self, total: u64, reason: &Option<String>, in_progress: bool);
+
+    fn elapsed_us(&mut self, started: Instant) -> u64;
+
+    fn spawn_swapoff(&mut self, nbd_dev: &str) -> std::sync::mpsc::Receiver<bool>;
+
+    fn activate_swap(&mut self, nbd_dev: &str, priority: i16) -> bool;
+
+    fn startup_budget(
+        &mut self,
+        _requested: bool,
+    ) -> Result<Option<Box<dyn NbdBudgetProvider>>, Box<dyn std::error::Error>> {
+        Ok(None)
+    }
+
+    fn global_free_bytes(&mut self, _timeout: Duration) -> Option<u64> {
+        None
+    }
+
+    /// Production waits between fail-closed teardown observations. Tests inject
+    /// zero only after supplying deterministic replacement observations.
+    fn teardown_retry_delay(&mut self) -> Duration {
+        Duration::from_secs(5)
+    }
+}
+
+struct ProductionNbdRuntimeStarter;
+
+impl NbdRuntimeStarter for ProductionNbdRuntimeStarter {
+    fn lock_memory(
+        &mut self,
+        force: bool,
+        lock_future: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        lock_memory(force, lock_future)
+    }
+
+    fn start_acceptor(
+        &mut self,
+        listener: UnixListener,
+        exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+        tx_flags: u16,
+        jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let _ = spawn_acceptor(listener, exports, tx_flags, jobs_tx);
+        Ok(())
+    }
+
+    fn nbd_used_kb(&mut self, nbd_dev: &str) -> u64 {
+        nbd_used_kb_from_proc(nbd_dev)
+    }
+
+    fn publish_demote(&mut self, total: u64, reason: &Option<String>, in_progress: bool) {
+        let st = ramshared_wsl2d::DemoteStatusFile {
+            total,
+            last_reason: reason.clone(),
+            in_progress,
+        };
+        if let Err(error) = ramshared_wsl2d::write_demote_status(
+            std::path::Path::new(ramshared_wsl2d::DEMOTE_STATUS_PATH),
+            &st,
+        ) {
+            eprintln!("[ramsharedd] demote-status write: {error}");
+        }
+    }
+
+    fn elapsed_us(&mut self, started: Instant) -> u64 {
+        started.elapsed().as_micros() as u64
+    }
+
+    fn spawn_swapoff(&mut self, nbd_dev: &str) -> std::sync::mpsc::Receiver<bool> {
+        spawn_swapoff(nbd_dev)
+    }
+
+    fn activate_swap(&mut self, nbd_dev: &str, priority: i16) -> bool {
+        activate_swap(nbd_dev, priority)
+    }
+
+    fn startup_budget(
+        &mut self,
+        requested: bool,
+    ) -> Result<Option<Box<dyn NbdBudgetProvider>>, Box<dyn std::error::Error>> {
+        if !requested {
+            return Ok(None);
+        }
+        match DxgBudgetProvider::open(None) {
+            Ok(provider) => {
+                eprintln!(
+                    "[ramsharedd] budget_source=dxg adapter={} (WDDM authority)",
+                    provider.adapter_luid()
+                );
+                Ok(Some(Box::new(ProductionNbdBudgetProvider(provider))))
+            }
+            Err(error) if error.permits_startup_fallback() => {
+                eprintln!(
+                    "[ramsharedd] budget_source=cuda-fallback reason={error}; \
+                     CUDA free-floor is secondary compatibility mode"
+                );
+                Ok(None)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn global_free_bytes(&mut self, timeout: Duration) -> Option<u64> {
+        global_gpu_free_bytes_from_nvidia_smi(timeout)
     }
 }
 
@@ -633,6 +884,33 @@ fn run_nbd<P: VramProvider>(
     nbd_dev: String,
     use_dxg_budget: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let mut starter = ProductionNbdRuntimeStarter;
+    run_nbd_with_startup(
+        provider,
+        size,
+        sock,
+        force,
+        nbd_dev,
+        use_dxg_budget,
+        prealloc_enabled(),
+        &mut starter,
+    )
+}
+
+/// Injectable NBD composition. `use_prealloc` is captured by the production
+/// environment wrapper before this function begins; tests choose the small
+/// preallocated path explicitly and never mutate process environment.
+#[allow(clippy::too_many_arguments)] // explicit daemon boundary keeps OS-facing test seams injectable
+fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
+    provider: P,
+    size: u64,
+    sock: String,
+    force: bool,
+    nbd_dev: String,
+    use_dxg_budget: bool,
+    use_prealloc: bool,
+    starter: &mut S,
+) -> Result<(), Box<dyn std::error::Error>> {
     let (free, total) = provider.mem_info()?;
     eprintln!(
         "[ramsharedd] VRAM livre={} MiB total={} MiB",
@@ -640,39 +918,14 @@ fn run_nbd<P: VramProvider>(
         total >> 20
     );
 
-    let use_prealloc = prealloc_enabled();
-
-    let dxg = if use_dxg_budget {
-        match DxgBudgetProvider::open(None) {
-            Ok(provider) => {
-                eprintln!(
-                    "[ramsharedd] budget_source=dxg adapter={} (WDDM authority)",
-                    provider.adapter_luid()
-                );
-                Some(provider)
-            }
-            Err(error) if error.permits_startup_fallback() => {
-                eprintln!(
-                    "[ramsharedd] budget_source=cuda-fallback reason={error}; \
-                     CUDA free-floor is secondary compatibility mode"
-                );
-                None
-            }
-            Err(error) => return Err(error.into()),
-        }
-    } else {
-        None
-    };
-    struct DxgGate<'a> {
-        provider: &'a DxgBudgetProvider,
+    let dxg = starter.startup_budget(use_dxg_budget)?;
+    struct NbdBudgetGate<'a> {
+        provider: &'a dyn NbdBudgetProvider,
         config: AutotierConfig,
     }
-    impl CommitBudgetGate for DxgGate<'_> {
+    impl CommitBudgetGate for NbdBudgetGate<'_> {
         fn allow_commit(&self, committed: u64, next_chunk: u64) -> Result<(), String> {
-            let snapshot = self
-                .provider
-                .snapshot()
-                .map_err(|error| error.to_string())?;
+            let snapshot = self.provider.snapshot()?;
             commit_allowed(
                 BudgetInput {
                     budget: snapshot.budget,
@@ -688,14 +941,14 @@ fn run_nbd<P: VramProvider>(
             .map_err(|error| error.to_string())
         }
     }
-    let dxg_gate = dxg.as_ref().map(|provider| DxgGate {
+    let dxg_gate = dxg.as_deref().map(|provider| NbdBudgetGate {
         provider,
         config: AutotierConfig::default(),
     });
     let budget_gate = dxg_gate.as_ref().map(|gate| gate as &dyn CommitBudgetGate);
     let autotier_config = AutotierConfig::default();
     // Discipline 3: mlock host pages; for sparse, CUDA commit is on-demand (SPEC).
-    lock_memory(force, true)?;
+    starter.lock_memory(force, true)?;
 
     // --- dedicated residency canary (§9.4) — always a small separate alloc ---
     let canary_region = provider.alloc(CANARY_BYTES)?;
@@ -762,14 +1015,16 @@ fn run_nbd<P: VramProvider>(
         let env_cap = commit_cap_bytes_from_env();
         let auto_cap = safe_commit_cap(size, total, reserve);
         let commit_cap = env_cap.min(auto_cap);
-        let sparse = SparseVramBackend::new_with_limits_and_gate(
+        let sparse = SparseVramBackend::new_with_config(
             &provider,
-            size,
-            chunk,
-            BLOCK_SIZE,
-            reserve,
-            Some(commit_cap),
-            budget_gate,
+            ramshared_block::sparse_vram::SparseVramConfig {
+                capacity: size,
+                chunk_bytes: chunk,
+                block_size: BLOCK_SIZE,
+                reserve_floor_bytes: reserve,
+                commit_cap_bytes: Some(commit_cap),
+                budget_gate,
+            },
         )
         .map_err(|e| e.0)?;
         eprintln!(
@@ -797,7 +1052,10 @@ fn run_nbd<P: VramProvider>(
         size: device_size,
     }]);
     let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel::<WMsg>(CHAN_CAP);
-    let _acceptor = spawn_acceptor(listener, exports, tx_flags, jobs_tx);
+    if let Err(error) = starter.start_acceptor(listener, exports, tx_flags, jobs_tx) {
+        cleanup_unix_socket_path(path);
+        return Err(error);
+    }
     eprintln!("[ramsharedd] transmitting (single CUDA worker; multi-connection)");
 
     let mut canary: Option<Canary> = None;
@@ -818,20 +1076,7 @@ fn run_nbd<P: VramProvider>(
     // CLI status --json demote fields (cascade-lifecycle-observability ITEM-3)
     let mut demotes_total: u64 = 0;
     let mut last_demote_reason: Option<String> = None;
-    let publish_demote = |total: u64, reason: &Option<String>, in_progress: bool| {
-        let st = ramshared_wsl2d::DemoteStatusFile {
-            total,
-            last_reason: reason.clone(),
-            in_progress,
-        };
-        if let Err(e) = ramshared_wsl2d::write_demote_status(
-            std::path::Path::new(ramshared_wsl2d::DEMOTE_STATUS_PATH),
-            &st,
-        ) {
-            eprintln!("[ramsharedd] demote-status write: {e}");
-        }
-    };
-    publish_demote(0, &None, false);
+    starter.publish_demote(0, &None, false);
 
     // recv_timeout so sparse reclaim runs even with no NBD I/O (idle free).
     const RECV_TICK: Duration = Duration::from_secs(5);
@@ -868,7 +1113,7 @@ fn run_nbd<P: VramProvider>(
                 let touches_vram = matches!(job.req.cmd, Command::Read | Command::Write);
                 let t0 = std::time::Instant::now();
                 let out = serve(&job.req, &job.payload, &mut backend);
-                let lat_us = t0.elapsed().as_micros() as u64;
+                let lat_us = starter.elapsed_us(t0);
                 let _ = job.reply.send(Reply {
                     reply: out.reply,
                     data: out.read_data,
@@ -881,13 +1126,13 @@ fn run_nbd<P: VramProvider>(
                             demoted = true;
                             swapoff_confirmed = true;
                             demotes_total = demotes_total.saturating_add(1);
-                            publish_demote(demotes_total, &last_demote_reason, false);
+                            starter.publish_demote(demotes_total, &last_demote_reason, false);
                             eprintln!(
                                 "[ramsharedd] DEMOTE: swapoff {nbd_dev} OK (canario desarmado)"
                             );
                         }
                         Ok(false) => {
-                            publish_demote(demotes_total, &last_demote_reason, false);
+                            starter.publish_demote(demotes_total, &last_demote_reason, false);
                             eprintln!(
                                 "[ramsharedd] DEMOTE: swapoff {nbd_dev} FALHOU; canario re-armado"
                             );
@@ -896,7 +1141,7 @@ fn run_nbd<P: VramProvider>(
                             demote_rx = Some(rx);
                         }
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            publish_demote(demotes_total, &last_demote_reason, false);
+                            starter.publish_demote(demotes_total, &last_demote_reason, false);
                             eprintln!(
                                 "[ramsharedd] DEMOTE: thread de swapoff sumiu; canario re-armado"
                             );
@@ -934,9 +1179,9 @@ fn run_nbd<P: VramProvider>(
                                 "[ramsharedd] DEMOTE ({reason:?}) lat={lat_us}us -> swapoff {nbd_dev}"
                             );
                             last_demote_reason = Some(format!("{reason:?}"));
-                            demote_rx = Some(spawn_swapoff(&nbd_dev));
+                            demote_rx = Some(starter.spawn_swapoff(&nbd_dev));
                             swapoff_attempted = true;
-                            publish_demote(demotes_total, &last_demote_reason, true);
+                            starter.publish_demote(demotes_total, &last_demote_reason, true);
                         }
                     }
                 }
@@ -951,9 +1196,9 @@ fn run_nbd<P: VramProvider>(
                 if !demoted && demote_rx.is_none() {
                     eprintln!("[ramsharedd] WDDM constrained -> bounded swapoff {nbd_dev}");
                     last_demote_reason = Some("WddmBudget".into());
-                    demote_rx = Some(spawn_swapoff(&nbd_dev));
+                    demote_rx = Some(starter.spawn_swapoff(&nbd_dev));
                     swapoff_attempted = true;
-                    publish_demote(demotes_total, &last_demote_reason, true);
+                    starter.publish_demote(demotes_total, &last_demote_reason, true);
                 }
             }
         }
@@ -966,18 +1211,18 @@ fn run_nbd<P: VramProvider>(
                     swapoff_confirmed = true;
                     recovery.reset();
                     demotes_total = demotes_total.saturating_add(1);
-                    publish_demote(demotes_total, &last_demote_reason, false);
+                    starter.publish_demote(demotes_total, &last_demote_reason, false);
                     eprintln!("[ramsharedd] DEMOTE: swapoff {nbd_dev} OK (parked)");
                 }
                 Ok(false) => {
                     recovery.reset();
-                    publish_demote(demotes_total, &last_demote_reason, false);
+                    starter.publish_demote(demotes_total, &last_demote_reason, false);
                     eprintln!("[ramsharedd] DEMOTE: swapoff {nbd_dev} FALHOU");
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => demote_rx = Some(rx),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     recovery.reset();
-                    publish_demote(demotes_total, &last_demote_reason, false);
+                    starter.publish_demote(demotes_total, &last_demote_reason, false);
                     eprintln!("[ramsharedd] DEMOTE: thread de swapoff sumiu");
                 }
             }
@@ -985,7 +1230,7 @@ fn run_nbd<P: VramProvider>(
 
         // SPEC ITEM-2: reclaim on worker thread (I/O or idle tick).
         if let Be::Sparse(ref mut sp) = backend {
-            let used_kb = nbd_used_kb_from_proc(&nbd_dev);
+            let used_kb = starter.nbd_used_kb(&nbd_dev);
             let free_b = provider.mem_info().ok().map(|(f, _)| f);
             match sp.try_reclaim(used_kb, free_b, free_floor, idle_free) {
                 Ok(0) => {}
@@ -1002,7 +1247,7 @@ fn run_nbd<P: VramProvider>(
             let now = Instant::now();
             if now >= next_global_probe_at {
                 next_global_probe_at = now + global_probe_interval;
-                last_global_free = global_gpu_free_bytes_from_nvidia_smi(global_probe_timeout);
+                last_global_free = starter.global_free_bytes(global_probe_timeout);
                 if trace_probe || last_global_free.is_some_and(|free| free < free_floor * 2) {
                     eprintln!(
                         "[ramsharedd] global GPU sample: free={last_global_free:?} \
@@ -1066,13 +1311,13 @@ fn run_nbd<P: VramProvider>(
                     eprintln!("[ramsharedd] WDDM poll constrained -> swapoff {nbd_dev}");
                     last_demote_reason = Some("WddmBudgetPoll".into());
                 }
-                demote_rx = Some(spawn_swapoff(&nbd_dev));
+                demote_rx = Some(starter.spawn_swapoff(&nbd_dev));
                 swapoff_attempted = true;
-                publish_demote(demotes_total, &last_demote_reason, true);
+                starter.publish_demote(demotes_total, &last_demote_reason, true);
             } else if demoted
                 && recovery.observe(budget_healthy && global_healthy, sparse.chunks_live() == 0)
             {
-                if activate_swap(&nbd_dev, 100) {
+                if starter.activate_swap(&nbd_dev, 100) {
                     demoted = false;
                     swapoff_attempted = false;
                     swapoff_confirmed = false;
@@ -1090,17 +1335,17 @@ fn run_nbd<P: VramProvider>(
         match rx.recv_timeout(std::time::Duration::from_secs(5)) {
             Ok(true) => {
                 swapoff_confirmed = true;
-                eprintln!("[ramsharedd] teardown: swapoff {nbd_dev} confirmado (DEMOTE limpo)")
+                eprintln!("[ramsharedd] teardown: swapoff {nbd_dev} confirmed (clean DEMOTE)")
             }
             Ok(false) => eprintln!(
-                "[ramsharedd] teardown: AVISO swapoff {nbd_dev} NAO confirmou (swap pode estar inconsistente)"
+                "[ramsharedd] teardown: WARNING swapoff {nbd_dev} did not confirm (swap may be inconsistent)"
             ),
             Err(_) => eprintln!(
-                "[ramsharedd] teardown: AVISO swapoff {nbd_dev} sem confirmacao em 5s (timeout/thread sumiu)"
+                "[ramsharedd] teardown: WARNING no swapoff confirmation for {nbd_dev} in 5s (timeout/thread disappeared)"
             ),
         }
     }
-    let mut used_kb = nbd_used_kb_from_proc(&nbd_dev);
+    let mut used_kb = starter.nbd_used_kb(&nbd_dev);
     while !backend_release_allowed(swapoff_attempted, swapoff_confirmed, used_kb) {
         eprintln!(
             "[ramsharedd] REFUSE teardown: swapoff_confirmed={swapoff_confirmed} \
@@ -1111,12 +1356,14 @@ fn run_nbd<P: VramProvider>(
         }
         if swapoff_attempted
             && !swapoff_confirmed
-            && let Ok(true) = spawn_swapoff(&nbd_dev).recv_timeout(Duration::from_secs(30))
+            && let Ok(true) = starter
+                .spawn_swapoff(&nbd_dev)
+                .recv_timeout(Duration::from_secs(30))
         {
             swapoff_confirmed = true;
         }
-        std::thread::sleep(Duration::from_secs(5));
-        used_kb = nbd_used_kb_from_proc(&nbd_dev);
+        std::thread::sleep(starter.teardown_retry_delay());
+        used_kb = starter.nbd_used_kb(&nbd_dev);
     }
     match &mut backend {
         Be::Pre(b) => {
@@ -1214,18 +1461,32 @@ fn cleanup_unix_socket_path(path: &Path) {
     }
 }
 
-/// Broker control-plane parts consumed by the worker (data-plane). Backend-agnostic
-/// (applies to VRAM and RAM) — only backend and residency differ between modes.
-struct BrokerRuntime {
+/// The worker-owned half of broker startup. Keeping the `Receiver` owned (not
+/// borrowed) makes the data-plane runnable in a bounded test thread without
+/// pretending that `Receiver` is `Sync`.
+struct BrokerWorkerRuntime {
     geom: Vec<(u64, u64)>,
     jobs_rx: std::sync::mpsc::Receiver<WMsg>,
     demote_tx: std::sync::mpsc::Sender<DemoteReason>,
     shutdown: std::sync::Arc<AtomicBool>,
-    broker: std::thread::JoinHandle<()>,
     /// IO counters per slice (telemetry RF-1): worker increments, broker reads in `Status`.
     pub slice_io: std::sync::Arc<Vec<SliceIoCounters>>,
     /// VRAM Gauge (RF-3): the residency closure publishes free/total; broker reads on tick.
     pub vram: std::sync::Arc<VramGauge>,
+}
+
+/// Broker control-plane parts retained by the daemon shell until the worker has
+/// stopped. Splitting this value transfers the non-`Sync` receiver exactly once
+/// to the worker and keeps the broker join handle for orderly cleanup.
+struct BrokerRuntime {
+    worker: BrokerWorkerRuntime,
+    broker: std::thread::JoinHandle<()>,
+}
+
+impl BrokerRuntime {
+    fn into_parts(self) -> (BrokerWorkerRuntime, std::thread::JoinHandle<()>) {
+        (self.worker, self.broker)
+    }
 }
 
 /// Reconciliation tolerance (DT-7, provisional — calibrate at P0).
@@ -1233,12 +1494,175 @@ const RECON_TOL_FRAC: f64 = 0.10;
 /// Consecutive ticks to confirm a reconciliation flag (hysteresis DT-12).
 const RECON_STREAK: u32 = 3;
 
+/// Builds the broker control-plane configuration before binding any listener.
+/// This preserves the exact telemetry and endpoint wiring while keeping the
+/// decision boundary testable without a GPU, swap device, or NBD client.
+#[cfg(test)]
+fn build_broker_config(
+    slices: u16,
+    sock: &str,
+    advertise_tcp: Option<(String, u16)>,
+    arbiter_addr: std::net::SocketAddr,
+    telemetry_jsonl: Option<std::path::PathBuf>,
+) -> BrokerConfig {
+    build_broker_config_with_tick(
+        slices,
+        sock,
+        advertise_tcp,
+        arbiter_addr,
+        telemetry_jsonl,
+        Duration::from_secs(2),
+    )
+}
+
+/// Builds the exact broker control-plane configuration with an explicit core
+/// poll interval. Production retains the two-second contract; a bounded local
+/// harness can use a short interval solely to prove shutdown/cleanup without
+/// starting a GPU, swap device, or NBD client.
+fn build_broker_config_with_tick(
+    slices: u16,
+    sock: &str,
+    advertise_tcp: Option<(String, u16)>,
+    arbiter_addr: std::net::SocketAddr,
+    telemetry_jsonl: Option<std::path::PathBuf>,
+    tick: Duration,
+) -> BrokerConfig {
+    let slice_io = std::sync::Arc::new(
+        (0..slices)
+            .map(|_| SliceIoCounters::default())
+            .collect::<Vec<_>>(),
+    );
+    let vram = std::sync::Arc::new(VramGauge::default());
+    BrokerConfig {
+        listen: arbiter_addr,
+        endpoints: EndpointCfg {
+            nbd_unix: Some(sock.to_string()),
+            nbd_tcp: advertise_tcp,
+        },
+        swap_prio: None,
+        arbiter: ArbiterConfig::default(),
+        tick,
+        slice_io,
+        vram,
+        tol_frac: RECON_TOL_FRAC,
+        recon_streak: RECON_STREAK,
+        telemetry_jsonl,
+    }
+}
+
+/// The listeners owned by one broker-start attempt. The Unix pathname is cleaned
+/// only when it was successfully bound by this attempt; an existing regular
+/// file or socket is never replaced (DT-17 safe cleanup).
+struct BrokerListeners {
+    path: std::path::PathBuf,
+    unix: UnixListener,
+    tcp: Option<std::net::TcpListener>,
+}
+
+impl BrokerListeners {
+    fn cleanup(self) {
+        let path = self.path.clone();
+        drop(self);
+        cleanup_unix_socket_path(&path);
+    }
+
+    fn into_parts(self) -> (UnixListener, Option<std::net::TcpListener>) {
+        (self.unix, self.tcp)
+    }
+}
+
+/// Binds the safe socket portion of broker startup. If the optional TCP bind
+/// fails after Unix binding succeeded, it closes and removes only that newly
+/// created Unix socket before returning the refusal.
+fn bind_broker_listeners(
+    path: &Path,
+    listen_nbd_addr: Option<std::net::SocketAddr>,
+) -> std::io::Result<BrokerListeners> {
+    prepare_unix_socket_path(path)?;
+    let unix = UnixListener::bind(path)?;
+    let tcp = match listen_nbd_addr {
+        Some(addr) => match std::net::TcpListener::bind(addr) {
+            Ok(listener) => Some(listener),
+            Err(error) => {
+                drop(unix);
+                cleanup_unix_socket_path(path);
+                return Err(error);
+            }
+        },
+        None => None,
+    };
+    Ok(BrokerListeners {
+        path: path.to_path_buf(),
+        unix,
+        tcp,
+    })
+}
+
+/// Starts the data-plane acceptors after the broker control plane has bound.
+/// Keeping this side-effect behind a narrow interface lets the daemon prove its
+/// listener ownership and bounded shutdown with a recording harness, while the
+/// production implementation still uses the real protocol acceptors.
+trait BrokerAcceptorStarter {
+    fn start(
+        &mut self,
+        unix: UnixListener,
+        tcp: Option<std::net::TcpListener>,
+        exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+        tx_flags: u16,
+        jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+}
+
+struct ProductionBrokerAcceptorStarter;
+
+impl BrokerAcceptorStarter for ProductionBrokerAcceptorStarter {
+    fn start(
+        &mut self,
+        unix: UnixListener,
+        tcp: Option<std::net::TcpListener>,
+        exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+        tx_flags: u16,
+        jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let _ = spawn_acceptor(
+            unix,
+            std::sync::Arc::clone(&exports),
+            tx_flags,
+            jobs_tx.clone(),
+        );
+        if let Some(tcp) = tcp {
+            let addr = tcp.local_addr()?;
+            eprintln!("[ramsharedd] NBD TCP listener at {addr}");
+            let _ = ramshared_wsl2d::conn::spawn_acceptor_tcp(tcp, exports, tx_flags, jobs_tx);
+        }
+        Ok(())
+    }
+}
+
+/// Installs the production signal bridge once per daemon process. Tests inject
+/// their own explicit flag, so no test needs to modify process signal state.
+fn install_broker_shutdown_bridge() -> std::sync::Arc<AtomicBool> {
+    unsafe {
+        signal(SIGINT, handle_shutdown);
+        signal(SIGTERM, handle_shutdown);
+    }
+    let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+    let mirror = std::sync::Arc::clone(&shutdown);
+    std::thread::spawn(move || {
+        while !SHUTDOWN.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        mirror.store(true, Ordering::SeqCst);
+    });
+    shutdown
+}
+
 /// Starts the broker control-plane (independent of backend): slices map + geometry +
 /// NBD exports ("s0".."sN"), acceptors (always Unix; TCP if `--listen-nbd`) feeding the
 /// SAME `jobs` worker channel, the arbiter (`spawn_broker`, sharing `jobs` for the
 /// hygiene `ZeroExport` DT-17 and consuming the DEMOTE channel) and the `SHUTDOWN` bridge
 /// (signal handler only touches the async-signal-safe static variable → mirrored in `Arc`).
-#[allow(clippy::too_many_arguments)] // setup do control-plane: geometria + rede + telemetria
+#[allow(clippy::too_many_arguments)] // control-plane setup: geometry, network, and telemetry
 fn broker_setup(
     slices: u16,
     slice_bytes: u64,
@@ -1247,6 +1671,39 @@ fn broker_setup(
     advertise_tcp: Option<(String, u16)>,
     arbiter_addr: std::net::SocketAddr,
     telemetry_jsonl: Option<std::path::PathBuf>,
+) -> Result<BrokerRuntime, Box<dyn std::error::Error>> {
+    let shutdown = install_broker_shutdown_bridge();
+    let mut acceptors = ProductionBrokerAcceptorStarter;
+    broker_setup_with_acceptors(
+        slices,
+        slice_bytes,
+        sock,
+        listen_nbd_addr,
+        advertise_tcp,
+        arbiter_addr,
+        telemetry_jsonl,
+        shutdown,
+        Duration::from_secs(2),
+        &mut acceptors,
+    )
+}
+
+/// The bounded, injectable broker startup core. Production passes the signal
+/// bridge and real protocol acceptors; local tests pass an explicit shutdown
+/// flag and recording starter, while still binding only temporary Unix and
+/// loopback TCP sockets.
+#[allow(clippy::too_many_arguments)]
+fn broker_setup_with_acceptors(
+    slices: u16,
+    slice_bytes: u64,
+    sock: &str,
+    listen_nbd_addr: Option<std::net::SocketAddr>,
+    advertise_tcp: Option<(String, u16)>,
+    arbiter_addr: std::net::SocketAddr,
+    telemetry_jsonl: Option<std::path::PathBuf>,
+    shutdown: std::sync::Arc<AtomicBool>,
+    broker_tick: Duration,
+    acceptors: &mut dyn BrokerAcceptorStarter,
 ) -> Result<BrokerRuntime, Box<dyn std::error::Error>> {
     // Slices map: export index (resolved by handshake) == geometry index == exports index
     // ("s{id}" names identical to those emitted by the broker in SwapOn).
@@ -1264,103 +1721,77 @@ fn broker_setup(
             .collect::<Vec<_>>(),
     );
 
-    unsafe {
-        signal(SIGINT, handle_shutdown);
-        signal(SIGTERM, handle_shutdown);
-    }
-    let shutdown = std::sync::Arc::new(AtomicBool::new(false));
-    {
-        let mirror = std::sync::Arc::clone(&shutdown);
-        std::thread::spawn(move || {
-            while !SHUTDOWN.load(Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            mirror.store(true, Ordering::SeqCst);
-        });
-    }
-
     let tx_flags = NBD_FLAG_HAS_FLAGS | NBD_FLAG_SEND_FLUSH | NBD_FLAG_CAN_MULTI_CONN;
     let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel::<WMsg>(CHAN_CAP);
     let (demote_tx, demote_rx) = std::sync::mpsc::channel::<DemoteReason>();
 
-    let path = Path::new(sock);
-    prepare_unix_socket_path(path)?;
-    let unix = UnixListener::bind(path)?;
-    eprintln!("[ramsharedd] NBD unix em {sock}");
-    let _ = spawn_acceptor(
-        unix,
-        std::sync::Arc::clone(&exports),
-        tx_flags,
-        jobs_tx.clone(),
-    );
-    if let Some(addr) = listen_nbd_addr {
-        let tcp = std::net::TcpListener::bind(addr)?;
-        eprintln!("[ramsharedd] NBD tcp em {addr}");
-        let _ = ramshared_wsl2d::conn::spawn_acceptor_tcp(
-            tcp,
-            std::sync::Arc::clone(&exports),
-            tx_flags,
-            jobs_tx.clone(),
-        );
-    }
+    let listeners = bind_broker_listeners(Path::new(sock), listen_nbd_addr)?;
 
-    let slice_io = std::sync::Arc::new(
-        (0..slices)
-            .map(|_| SliceIoCounters::default())
-            .collect::<Vec<_>>(),
-    );
-    let vram = std::sync::Arc::new(VramGauge::default());
-    let bcfg = BrokerConfig {
-        listen: arbiter_addr,
-        endpoints: EndpointCfg {
-            nbd_unix: Some(sock.to_string()),
-            nbd_tcp: advertise_tcp,
-        },
-        swap_prio: None,
-        arbiter: ArbiterConfig::default(),
-        tick: Duration::from_secs(2), // SPEC §/DT-24: tick=2s (streak=5 → 10s window)
-        slice_io: std::sync::Arc::clone(&slice_io),
-        vram: std::sync::Arc::clone(&vram),
-        tol_frac: RECON_TOL_FRAC,
-        recon_streak: RECON_STREAK,
+    let bcfg = build_broker_config_with_tick(
+        slices,
+        sock,
+        advertise_tcp,
+        arbiter_addr,
         telemetry_jsonl,
-    };
-    let (broker, broker_addr) = spawn_broker(
+        broker_tick,
+    );
+    let slice_io = std::sync::Arc::clone(&bcfg.slice_io);
+    let vram = std::sync::Arc::clone(&bcfg.vram);
+    let (broker, broker_addr) = match spawn_broker(
         bcfg,
         slice_map,
         demote_rx,
         jobs_tx.clone(),
         std::sync::Arc::clone(&shutdown),
-    )?;
-    eprintln!("[ramsharedd] broker (árbitro) em {broker_addr}");
+    ) {
+        Ok(result) => result,
+        Err(error) => {
+            listeners.cleanup();
+            return Err(error.into());
+        }
+    };
+    let (unix, tcp) = listeners.into_parts();
+    eprintln!("[ramsharedd] NBD Unix listener at {sock}");
+    if let Err(error) = acceptors.start(unix, tcp, exports, tx_flags, jobs_tx.clone()) {
+        shutdown.store(true, Ordering::SeqCst);
+        let _ = broker.join();
+        cleanup_unix_socket_path(Path::new(sock));
+        return Err(error);
+    }
+    eprintln!("[ramsharedd] broker arbiter at {broker_addr}");
     drop(jobs_tx); // clones (acceptors + broker) keep the channel; worker owns the rx
 
     Ok(BrokerRuntime {
-        geom,
-        jobs_rx,
-        demote_tx,
-        shutdown,
+        worker: BrokerWorkerRuntime {
+            geom,
+            jobs_rx,
+            demote_tx,
+            shutdown,
+            slice_io,
+            vram,
+        },
         broker,
-        slice_io,
-        vram,
     })
 }
 
-/// Broker worker (data-plane), generic over the backend (VRAM or RAM): serves each `Job`
-/// via [`SliceView`] of the export's geometry. DT-28: runs until `shutdown`, does NOT terminate when
-/// NBD connections drop (the broker persists). Residency is injected via closure — VRAM passes the
-/// canary §9/§9.4; RAM passes `|_| None` (RAM does not suffer WDDM eviction). On DEMOTE, notifies the
-/// broker (`DemoteAll` to all tenants; the shared VRAM compromises ALL slices) and
-/// stops sampling. Returns backend for teardown (safe wipe is the owner's responsibility).
-fn serve_broker_jobs<B: BlockBackend>(
+/// Bounded broker worker loop. Production uses a 500 ms shutdown poll; tests
+/// inject a shorter positive interval to prove that an idle worker cannot wait
+/// indefinitely after its explicit stop signal.
+fn serve_broker_jobs_with_poll<B: BlockBackend>(
     mut backend: B,
-    rt: &BrokerRuntime,
+    rt: BrokerWorkerRuntime,
     mut residency: impl FnMut(u64) -> Option<DemoteReason>,
+    poll_interval: Duration,
 ) -> B {
+    let poll_interval = if poll_interval.is_zero() {
+        Duration::from_millis(1)
+    } else {
+        poll_interval
+    };
     let mut demoted = false;
     eprintln!("[ramsharedd] em transmissão (worker único; multi-slice/broker)");
     loop {
-        let msg = match rt.jobs_rx.recv_timeout(Duration::from_millis(500)) {
+        let msg = match rt.jobs_rx.recv_timeout(poll_interval) {
             Ok(m) => m,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if rt.shutdown.load(Ordering::SeqCst) {
@@ -1436,23 +1867,69 @@ fn run_broker<P: VramProvider>(
     arbiter_addr: std::net::SocketAddr,
     telemetry_jsonl: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let setup_sock = sock.clone();
+    run_broker_with_setup(
+        provider,
+        slice_bytes,
+        slices,
+        sock,
+        force,
+        lock_memory,
+        move || {
+            broker_setup(
+                slices,
+                slice_bytes,
+                &setup_sock,
+                listen_nbd_addr,
+                advertise_tcp,
+                arbiter_addr,
+                telemetry_jsonl,
+            )
+        },
+        Duration::from_millis(500),
+    )
+}
+
+/// Generic VRAM broker lifecycle after driver construction. The production
+/// wrapper supplies the real memory lock and broker setup; tests supply a
+/// heap-backed provider and pre-stopped bounded runtime. This preserves the
+/// same zero-before-release ordering while making it observable without CUDA.
+#[allow(clippy::too_many_arguments)] // explicit daemon boundary keeps lock/setup test seams injectable
+fn run_broker_with_setup<P, L, S>(
+    provider: P,
+    slice_bytes: u64,
+    slices: u16,
+    sock: String,
+    force: bool,
+    lock: L,
+    setup: S,
+    worker_poll: Duration,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    P: VramProvider,
+    L: FnOnce(bool, bool) -> Result<(), Box<dyn std::error::Error>>,
+    S: FnOnce() -> Result<BrokerRuntime, Box<dyn std::error::Error>>,
+{
     let total = (slices as u64)
         .checked_mul(slice_bytes)
         .ok_or("--slices * --slice-mb: overflow")?;
 
-    // O `provider` (CUDA hoje; Vulkan amanhã) já vem pronto do shell em `run()`. Daqui pra baixo o
-    // caminho é genérico sobre `VramProvider`/`VramMemory` (RF-G1).
+    // The provider has already been initialized by the production shell. The
+    // lifecycle below remains generic over VramProvider/VramMemory (RF-G1).
     let (free, total_vram) = provider.mem_info()?;
     eprintln!(
-        "[ramsharedd] VRAM livre={} MiB total={} MiB",
+        "[ramsharedd] VRAM free={} MiB total={} MiB",
         free >> 20,
         total_vram >> 20
     );
     let mut mem = provider.alloc(total as usize)?;
     mem.zero()?;
     // CUDA/VRAM have already been allocated above -> safe to lock MCL_FUTURE all at once.
-    lock_memory(force, true)?; // Discipline 3: locks memory BEFORE serving swap
-    let backend = VramBackend::new(mem, BLOCK_SIZE);
+    if let Err(error) = lock(force, true) {
+        let _ = mem.zero();
+        return Err(error);
+    }
+    let mut backend = VramBackend::new(mem, BLOCK_SIZE);
     eprintln!(
         "[ramsharedd] broker VRAM: {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE}",
         slice_bytes >> 20,
@@ -1467,40 +1944,48 @@ fn run_broker<P: VramProvider>(
     let mut canary: Option<Canary> = None;
     let mut baseline: Vec<u64> = Vec::new();
 
-    let rt = broker_setup(
-        slices,
-        slice_bytes,
-        &sock,
-        listen_nbd_addr,
-        advertise_tcp,
-        arbiter_addr,
-        telemetry_jsonl,
-    )?;
-    let vram = std::sync::Arc::clone(&rt.vram);
-    let mut backend = serve_broker_jobs(backend, &rt, |lat_us| {
-        let mut residency_state = ResidencyCheckState {
-            canary: &mut canary,
-            baseline: &mut baseline,
-            sampler: &mut sampler,
-            cadence: &mut cadence,
-            probe: &mut probe,
-            free_floor_bytes: ResidencyConfig::default().free_floor_bytes,
-        };
-        residency_check(lat_us, &mut residency_state, || {
-            let (f, t) = provider.mem_info().ok()?;
-            // RF-3/DT-5: publishes the gauge for reconciliation (free/total in bytes).
-            vram.free.store(f, Ordering::Relaxed);
-            vram.total.store(t, Ordering::Relaxed);
-            Some(f)
-        })
-    });
+    let rt = match setup() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            let backend_zeroed = backend.zero();
+            let probe_zeroed = probe.zero();
+            cleanup_unix_socket_path(Path::new(&sock));
+            backend_zeroed?;
+            probe_zeroed?;
+            return Err(error);
+        }
+    };
+    let (worker, broker) = rt.into_parts();
+    let vram = std::sync::Arc::clone(&worker.vram);
+    backend = serve_broker_jobs_with_poll(
+        backend,
+        worker,
+        |lat_us| {
+            let mut residency_state = ResidencyCheckState {
+                canary: &mut canary,
+                baseline: &mut baseline,
+                sampler: &mut sampler,
+                cadence: &mut cadence,
+                probe: &mut probe,
+                free_floor_bytes: ResidencyConfig::default().free_floor_bytes,
+            };
+            residency_check(lat_us, &mut residency_state, || {
+                let (f, t) = provider.mem_info().ok()?;
+                // RF-3/DT-5: publishes the gauge for reconciliation (free/total in bytes).
+                vram.free.store(f, Ordering::Relaxed);
+                vram.total.store(t, Ordering::Relaxed);
+                Some(f)
+            })
+        },
+        worker_poll,
+    );
 
-    let _ = rt.broker.join();
+    let _ = broker.join();
     let zeroed = backend.zero();
     let _ = probe.zero(); // DT-12/DT-17: zeroes the canary-region as well
     cleanup_unix_socket_path(Path::new(&sock));
     zeroed?;
-    eprintln!("[ramsharedd] broker VRAM encerrado (VRAM zerada)");
+    eprintln!("[ramsharedd] broker VRAM stopped (VRAM zeroed)");
     Ok(())
 }
 
@@ -1516,31 +2001,209 @@ fn run_broker_ram(
     arbiter_addr: std::net::SocketAddr,
     telemetry_jsonl: Option<std::path::PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let setup_sock = sock.clone();
+    run_broker_ram_with_setup(
+        slice_bytes,
+        slices,
+        sock,
+        move || {
+            broker_setup(
+                slices,
+                slice_bytes,
+                &setup_sock,
+                listen_nbd_addr,
+                advertise_tcp,
+                arbiter_addr,
+                telemetry_jsonl,
+            )
+        },
+        Duration::from_millis(500),
+    )
+}
+
+/// Heap-RAM broker lifecycle using the same bounded worker and cleanup order as
+/// the VRAM path. The setup boundary is injectable for a no-driver local proof.
+fn run_broker_ram_with_setup<S>(
+    slice_bytes: u64,
+    slices: u16,
+    sock: String,
+    setup: S,
+    worker_poll: Duration,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    S: FnOnce() -> Result<BrokerRuntime, Box<dyn std::error::Error>>,
+{
     let total = (slices as u64)
         .checked_mul(slice_bytes)
         .ok_or("--slices * --slice-mb: overflow")?;
     let backend = RamBackend::new(total as usize);
     eprintln!(
-        "[ramsharedd] broker RAM (sem GPU): {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE}",
+        "[ramsharedd] broker RAM (without GPU): {slices} slices x {} MiB = {} MiB, block_size={BLOCK_SIZE}",
         slice_bytes >> 20,
         total >> 20
     );
 
-    let rt = broker_setup(
-        slices,
-        slice_bytes,
-        &sock,
-        listen_nbd_addr,
-        advertise_tcp,
-        arbiter_addr,
-        telemetry_jsonl,
-    )?;
-    let _ = serve_broker_jobs(backend, &rt, |_| None); // RAM: without residency
+    let rt = setup()?;
+    let (worker, broker) = rt.into_parts();
+    let _ = serve_broker_jobs_with_poll(backend, worker, |_| None, worker_poll); // RAM: no residency
 
-    let _ = rt.broker.join();
+    let _ = broker.join();
     cleanup_unix_socket_path(Path::new(&sock));
-    eprintln!("[ramsharedd] broker RAM encerrado");
+    eprintln!("[ramsharedd] broker RAM stopped");
     Ok(())
+}
+
+/// A created ublk device identity. Keeping only these stable values at the
+/// daemon boundary prevents the lifecycle core from touching a kernel handle.
+#[derive(Clone, Copy)]
+struct UblkDevice {
+    id: u32,
+    queue_depth: u16,
+}
+
+trait UblkServer {
+    fn join(self: Box<Self>) -> std::io::Result<()>;
+}
+
+struct ProductionUblkServer(UblkHandle);
+
+impl UblkServer for ProductionUblkServer {
+    fn join(self: Box<Self>) -> std::io::Result<()> {
+        self.0.join()
+    }
+}
+
+/// OS/device edge for the ublk lifecycle. The lifecycle core owns ordering and
+/// rollback; the production adapter is the only implementation that opens
+/// `/dev/ublk-control` or creates a ublk server.
+trait UblkRuntime {
+    fn guard_not_wsl2(&mut self) -> Result<(), Box<dyn std::error::Error>>;
+    fn lock_memory(
+        &mut self,
+        force: bool,
+        lock_future: bool,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+    fn install_shutdown_handler(&mut self) -> Result<(), Box<dyn std::error::Error>>;
+    fn add_device(&mut self, queue_depth: u16) -> Result<UblkDevice, Box<dyn std::error::Error>>;
+    fn set_params(
+        &mut self,
+        device: UblkDevice,
+        sectors: u64,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+    fn start_server(
+        &mut self,
+        backend: BackendKind,
+        char_path: &str,
+        block_path: &str,
+        queue_depth: u16,
+        size: u64,
+    ) -> Result<Box<dyn UblkServer>, Box<dyn std::error::Error>>;
+    fn start_device(&mut self, device: UblkDevice) -> Result<(), Box<dyn std::error::Error>>;
+    fn wait_for_shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>>;
+    fn stop_device(&mut self, device: UblkDevice) -> Result<(), Box<dyn std::error::Error>>;
+    fn delete_device(&mut self, device: UblkDevice) -> Result<(), Box<dyn std::error::Error>>;
+}
+
+struct ProductionUblkRuntime;
+
+impl UblkRuntime for ProductionUblkRuntime {
+    fn guard_not_wsl2(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        guard_not_wsl2()
+    }
+
+    fn lock_memory(
+        &mut self,
+        force: bool,
+        lock_future: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        lock_memory(force, lock_future)
+    }
+
+    fn install_shutdown_handler(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        unsafe {
+            signal(SIGINT, handle_shutdown);
+            signal(SIGTERM, handle_shutdown);
+        }
+        Ok(())
+    }
+
+    fn add_device(&mut self, queue_depth: u16) -> Result<UblkDevice, Box<dyn std::error::Error>> {
+        let mut spec = ublk_control::DeviceSpec::smoke_auto();
+        spec.queue_depth = queue_depth;
+        let report = ublk_control::add_device(UBLK_CONTROL, spec)?;
+        Ok(UblkDevice {
+            id: report.dev_id,
+            queue_depth: report.queue_depth,
+        })
+    }
+
+    fn set_params(
+        &mut self,
+        device: UblkDevice,
+        sectors: u64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        ublk_control::set_params(
+            UBLK_CONTROL,
+            device.id,
+            ublk::Params::basic_disk(sectors, 12, 12),
+        )?;
+        Ok(())
+    }
+
+    fn start_server(
+        &mut self,
+        backend: BackendKind,
+        char_path: &str,
+        block_path: &str,
+        queue_depth: u16,
+        size: u64,
+    ) -> Result<Box<dyn UblkServer>, Box<dyn std::error::Error>> {
+        let handle = match backend {
+            BackendKind::Vram => {
+                UblkHandle::Vram(ublk_server::spawn_server_dt3_vram_with_residency(
+                    char_path,
+                    queue_depth,
+                    BLOCK_SIZE as usize,
+                    size as usize,
+                    BLOCK_SIZE,
+                    block_path.to_string(),
+                    ResidencyConfig::default(),
+                )?)
+            }
+            BackendKind::Ram => UblkHandle::Ram(ublk_server::spawn_server_dt3(
+                char_path,
+                queue_depth,
+                BLOCK_SIZE as usize,
+                RamBackend::new(size as usize),
+            )?),
+            BackendKind::Vulkan => {
+                return Err("ublk with --backend vulkan not supported (DT-11)".into());
+            }
+        };
+        Ok(Box::new(ProductionUblkServer(handle)))
+    }
+
+    fn start_device(&mut self, device: UblkDevice) -> Result<(), Box<dyn std::error::Error>> {
+        ublk_control::start_dev(UBLK_CONTROL, device.id, std::process::id())?;
+        Ok(())
+    }
+
+    fn wait_for_shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        while !SHUTDOWN.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        Ok(())
+    }
+
+    fn stop_device(&mut self, device: UblkDevice) -> Result<(), Box<dyn std::error::Error>> {
+        ublk_control::stop_dev(UBLK_CONTROL, device.id)?;
+        Ok(())
+    }
+
+    fn delete_device(&mut self, device: UblkDevice) -> Result<(), Box<dyn std::error::Error>> {
+        ublk_control::delete_device(UBLK_CONTROL, device.id)?;
+        Ok(())
+    }
 }
 
 /// ublk path: serves `/dev/ublkbN` directly (io_uring), without socket. The DT-3 worker is the
@@ -1553,113 +2216,75 @@ fn run_ublk(
     queue_depth: u16,
     backend: BackendKind,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // DT-11: ublk+Vulkan not yet implemented. The ublk residency server
-    // (spawn_server_dt3_vram_with_residency) is CUDA-fixed, not generic over
-    // VramProvider; generifying it and refactoring is a separate task (only validatable on native host).
-    // Fails early, before any side-effects (add_device/mlockall).
+    let mut runtime = ProductionUblkRuntime;
+    run_ublk_with_runtime(size, force, queue_depth, backend, &mut runtime)
+}
+
+/// Ordered ublk lifecycle with explicit rollback after every post-create
+/// failure. The test runtime is pure in-memory; only ProductionUblkRuntime can
+/// touch a kernel device.
+fn run_ublk_with_runtime(
+    size: u64,
+    force: bool,
+    queue_depth: u16,
+    backend: BackendKind,
+    runtime: &mut dyn UblkRuntime,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // DT-11: refusal before guard, memory lock, or device creation.
     if let BackendKind::Vulkan = backend {
-        return Err("ublk with --backend vulkan not yet supported (DT-11: ublk \
+        return Err("ublk with --backend vulkan not supported (DT-11: ublk \
              residency server is CUDA-fixed). Use --backend vram (CUDA), or Vulkan \
              via --slices (broker) / --transport nbd."
             .into());
     }
-    // SAFETY LOCK: refuses to serve ublk on WSL2. An unsuccessful daemon teardown
-    // orphans `/dev/ublkbN` -> I/O in D-state -> FREEZES WSL2 (2026-06-09).
-    guard_not_wsl2()?;
-    // Discipline 3: locks memory + protects from OOM (entire process; worker owns
-    // CUDA, but mlockall/oom_score_adj are process-wide). Only MCL_CURRENT here —
-    // MCL_FUTURE is armed later, in arm_future_lock, see comment there.
-    lock_memory(force, false)?;
+    runtime.guard_not_wsl2()?;
+    // MCL_CURRENT only: MCL_FUTURE races dxgkrnl mapping and can hang the host.
+    runtime.lock_memory(force, false)?;
+    runtime.install_shutdown_handler()?;
 
-    // SAFETY: registers async-signal-safe handler (just an atomic store) to exit
-    // in an orderly fashion. signal() only stores the pointer; the old return is ignored.
-    unsafe {
-        signal(SIGINT, handle_shutdown);
-        signal(SIGTERM, handle_shutdown);
+    let device = runtime.add_device(queue_depth)?;
+    let sectors = size / SECTOR;
+    if let Err(error) = runtime.set_params(device, sectors) {
+        let _ = runtime.delete_device(device);
+        return Err(error);
+    }
+    let char_path = format!("/dev/ublkc{}", device.id);
+    let block_path = format!("/dev/ublkb{}", device.id);
+    let server =
+        match runtime.start_server(backend, &char_path, &block_path, device.queue_depth, size) {
+            Ok(server) => server,
+            Err(error) => {
+                let _ = runtime.delete_device(device);
+                return Err(error);
+            }
+        };
+    if let Err(error) = runtime.start_device(device) {
+        let _ = runtime.stop_device(device);
+        let _ = server.join();
+        let _ = runtime.delete_device(device);
+        return Err(error);
     }
 
-    let dev_sectors = size / SECTOR;
-    let mut spec = ublk_control::DeviceSpec::smoke_auto();
-    spec.queue_depth = queue_depth;
-    let report = ublk_control::add_device(UBLK_CONTROL, spec)?;
-    ublk_control::set_params(
-        UBLK_CONTROL,
-        report.dev_id,
-        ublk::Params::basic_disk(dev_sectors, 12, 12),
-    )?;
-
-    let char_path = format!("/dev/ublkc{}", report.dev_id);
-    let block_path = format!("/dev/ublkb{}", report.dev_id);
-
-    // Backend: VRAM (worker owning the CUDA context + residency §9/§9.4; swap_dev = the
-    // device itself, which DEMOTE removes from swap) or RAM (without GPU; reuses the
-    // spawn_server_dt3 already validated in-process, without residency — to validate the lifecycle/teardown
-    // in QEMU).
-    let server = match backend {
-        BackendKind::Vram => UblkHandle::Vram(ublk_server::spawn_server_dt3_vram_with_residency(
-            &char_path,
-            report.queue_depth,
-            BLOCK_SIZE as usize, // buf_size per tag: device requests are <= 4KB (smoke_auto)
-            size as usize,
-            BLOCK_SIZE,
-            block_path.clone(),
-            ResidencyConfig::default(),
-        )?),
-        BackendKind::Ram => UblkHandle::Ram(ublk_server::spawn_server_dt3(
-            &char_path,
-            report.queue_depth,
-            BLOCK_SIZE as usize,
-            RamBackend::new(size as usize),
-        )?),
-        // Unreachable: barred at the beginning of run_ublk (DT-11). Defensive, without panic.
-        BackendKind::Vulkan => {
-            return Err("ublk with --backend vulkan not supported (DT-11)".into());
-        }
-    };
-    // dxgkrnl ANTI-BUG (incident 2026-07-03): We do NOT arm MCL_FUTURE in the
-    // ublk+vram path. dxgkrnl's `dxg_map_iospace` maps VRAM in 2 steps (anonymous vm_mmap
-    // -> io_remap_pfn_range over it); with MCL_FUTURE active, step 1
-    // pre-populates the VMA and step 2 hits BUG_ON(!pte_none) -> kernel BUG with lock
-    // held -> host hangs. And `spawn_server_dt3_vram_with_residency` runs
-    // Cuda::load()/create_context() (= the dxg_map_iospace calls) in a THREAD that runs
-    // ASYNCHRONOUS to this point — it is not possible to "arm MCL_FUTURE after CUDA" with
-    // safety (there would be a race: main's MCL_FUTURE could fall in the middle of
-    // the worker's create_context). Therefore we stick only to MCL_CURRENT (lock_memory
-    // above, lock_future=false), which does NOT affect future mmaps -> zero collision with
-    // dxgkrnl. Confirmed by reading mm/memory.c + Layers A/B.
-    //
-    // TRADE-OFF (Discipline 3 / anti-deadlock RNF-1): I/O buffers allocated AFTER
-    // this point are not locked by MCL_FUTURE. Under extreme memory pressure,
-    // this theoretically reopens the D-state vector. Correct future mitigation: explicit
-    // mlock() only on the residency/staging buffers (uring/canary), instead of the
-    // blind MCL_FUTURE. Until then: run only supervised / low swap priority.
-    // SPEC: docs/reliability/BLACK-BOX-FORENSICS.md.
-    eprintln!(
-        "[ramsharedd] mlockall: MCL_CURRENT-only no caminho ublk+vram (anti-dxgkrnl-BUG; MCL_FUTURE desarmado de proposito)"
-    );
-    ublk_control::start_dev(UBLK_CONTROL, report.dev_id, std::process::id())?;
     eprintln!(
         "[ramsharedd] ublk device: {block_path} ({} MiB, qd={}, backend={})",
         size >> 20,
-        report.queue_depth,
+        device.queue_depth,
         backend.label()
     );
     eprintln!("[ramsharedd] swapon: sudo swapon {block_path}");
     eprintln!("[ramsharedd] Ctrl-C / SIGTERM to exit");
 
-    // Waits for the shutdown signal (polling the flag; sleep ignores EINTR).
-    while !SHUTDOWN.load(Ordering::SeqCst) {
-        std::thread::sleep(Duration::from_millis(200));
-    }
-    eprintln!("[ramsharedd] signal received — exiting");
-
-    // Orderly teardown: STOP_DEV aborts FETCHes -> worker exits loop (and zeroes
-    // VRAM at the end, in VRAM path) -> join -> DEL_DEV. (Whoever did swapon must swapoff
-    // before: del_gendisk waits for the openers of the block device.)
-    ublk_control::stop_dev(UBLK_CONTROL, report.dev_id)?;
-    server.join()?;
-    ublk_control::delete_device(UBLK_CONTROL, report.dev_id)?;
-    eprintln!("[ramsharedd] ublk device removido");
+    // STOP_DEV aborts FETCHes, then the server can join, then DEL_DEV removes
+    // the node. Cleanup still runs if the wait or stop stage reported an error.
+    let wait = runtime.wait_for_shutdown();
+    let stop = runtime.stop_device(device);
+    let joined = server.join();
+    let deleted = runtime.delete_device(device);
+    wait?;
+    stop?;
+    joined?;
+    deleted?;
+    eprintln!("[ramsharedd] ublk device removed");
     Ok(())
 }
 
@@ -1672,26 +2297,60 @@ fn run_ublk(
 /// daemon only in VM/QEMU (`scripts/kernel/qemu-validate.sh`), where a stall is
 /// recoverable without dropping the host.
 fn guard_not_wsl2() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::var("RAMSHARED_ALLOW_UBLK_ON_WSL2")
+    let allow_override = std::env::var("RAMSHARED_ALLOW_UBLK_ON_WSL2")
         .ok()
         .as_deref()
-        == Some("1")
-    {
+        == Some("1");
+    if allow_override {
         eprintln!("[ramsharedd] WARNING: RAMSHARED_ALLOW_UBLK_ON_WSL2=1 — WSL2 lock ignored");
-        return Ok(());
     }
     let osrelease = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    ublk_osrelease_guard(&osrelease, allow_override).map_err(Into::into)
+}
+
+/// Pure WSL2 safety policy: only an explicit operator override permits ublk
+/// on a Microsoft/WSL kernel. Keeping the environment/proc read outside this
+/// function makes the refusal matrix testable without inspecting host state.
+fn ublk_osrelease_guard(osrelease: &str, allow_override: bool) -> Result<(), String> {
+    if allow_override {
+        return Ok(());
+    }
     let lower = osrelease.to_ascii_lowercase();
     if lower.contains("microsoft") || lower.contains("wsl") {
         return Err(format!(
-            "RECUSADO: --transport ublk no WSL2 ({}) pode CONGELAR o sistema se o teardown \
-             do daemon falhar (device orfao -> I/O em D-state). Valide o daemon em VM/qemu. \
-             Override consciente: RAMSHARED_ALLOW_UBLK_ON_WSL2=1.",
+            "refused: --transport ublk on WSL2 ({}) can freeze the system if daemon teardown \
+             fails (orphaned device -> D-state I/O). Validate the daemon in VM/QEMU. \
+             Conscious override: RAMSHARED_ALLOW_UBLK_ON_WSL2=1.",
             osrelease.trim()
-        )
-        .into());
+        ));
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MemoryLockStatus {
+    Protected,
+    ForcedDegraded { locked: bool, oom_ok: bool },
+}
+
+/// Pure fail-closed decision after the two process-local protection attempts.
+/// `--force` is the sole explicit opt-in to a degraded anti-deadlock posture.
+fn memory_lock_status(
+    locked: bool,
+    oom_ok: bool,
+    force: bool,
+) -> Result<MemoryLockStatus, &'static str> {
+    if !locked && !force {
+        return Err("mlockall failed; run as root or use --force");
+    }
+    if !oom_ok && !force {
+        return Err("could not set oom_score_adj=-1000; run as root or use --force");
+    }
+    if locked && oom_ok {
+        Ok(MemoryLockStatus::Protected)
+    } else {
+        Ok(MemoryLockStatus::ForcedDegraded { locked, oom_ok })
+    }
 }
 
 /// Locks memory (mlockall) + protects from OOM killer (oom_score_adj=-1000) BEFORE
@@ -1712,21 +2371,18 @@ fn lock_memory(force: bool, lock_future: bool) -> Result<(), Box<dyn std::error:
         MCL_CURRENT
     };
     let locked = unsafe { mlockall(flags) } == 0;
-    if !locked && !force {
-        return Err("mlockall failed; run as root or use --force".into());
-    }
     let oom_ok = std::fs::write("/proc/self/oom_score_adj", "-1000").is_ok();
-    if !oom_ok && !force {
-        return Err("could not set oom_score_adj=-1000; run as root or use --force".into());
-    }
-    if locked && oom_ok {
-        eprintln!("[ramsharedd] memory locked (mlockall) + oom_score_adj=-1000");
-    } else {
-        eprintln!(
-            "[ramsharedd] WARNING --force: mlockall={} oom_score_adj={} (anti-deadlock NOT guaranteed)",
-            if locked { "ok" } else { "FAILED" },
-            if oom_ok { "ok" } else { "FAILED" }
-        );
+    match memory_lock_status(locked, oom_ok, force)? {
+        MemoryLockStatus::Protected => {
+            eprintln!("[ramsharedd] memory locked (mlockall) + oom_score_adj=-1000");
+        }
+        MemoryLockStatus::ForcedDegraded { locked, oom_ok } => {
+            eprintln!(
+                "[ramsharedd] WARNING --force: mlockall={} oom_score_adj={} (anti-deadlock NOT guaranteed)",
+                if locked { "ok" } else { "FAILED" },
+                if oom_ok { "ok" } else { "FAILED" }
+            );
+        }
     }
     Ok(())
 }
@@ -1740,6 +2396,2155 @@ fn lock_memory(force: bool, lock_future: bool) -> Result<(), Box<dyn std::error:
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+    use std::cell::RefCell;
+
+    struct TestMemory {
+        bytes: RefCell<Vec<u8>>,
+    }
+
+    impl TestMemory {
+        fn new(bytes: usize) -> Self {
+            Self {
+                bytes: RefCell::new(vec![0; bytes]),
+            }
+        }
+
+        fn range(&self, off: u64, len: usize) -> Result<(usize, usize), ramshared_vram::VramError> {
+            let start =
+                usize::try_from(off).map_err(|_| ramshared_vram::VramError::OutOfRange {
+                    off,
+                    len: len as u64,
+                    size: self.bytes.borrow().len() as u64,
+                })?;
+            let end =
+                start
+                    .checked_add(len)
+                    .ok_or_else(|| ramshared_vram::VramError::OutOfRange {
+                        off,
+                        len: len as u64,
+                        size: self.bytes.borrow().len() as u64,
+                    })?;
+            if end > self.bytes.borrow().len() {
+                return Err(ramshared_vram::VramError::OutOfRange {
+                    off,
+                    len: len as u64,
+                    size: self.bytes.borrow().len() as u64,
+                });
+            }
+            Ok((start, end))
+        }
+    }
+
+    impl VramMemory for TestMemory {
+        fn len(&self) -> usize {
+            self.bytes.borrow().len()
+        }
+
+        fn zero(&mut self) -> Result<(), ramshared_vram::VramError> {
+            self.bytes.borrow_mut().fill(0);
+            Ok(())
+        }
+
+        fn read_at(&self, off: u64, dst: &mut [u8]) -> Result<(), ramshared_vram::VramError> {
+            let (start, end) = self.range(off, dst.len())?;
+            dst.copy_from_slice(&self.bytes.borrow()[start..end]);
+            Ok(())
+        }
+
+        fn write_at(&mut self, off: u64, src: &[u8]) -> Result<(), ramshared_vram::VramError> {
+            let (start, end) = self.range(off, src.len())?;
+            self.bytes.borrow_mut()[start..end].copy_from_slice(src);
+            Ok(())
+        }
+    }
+
+    /// In-memory VRAM that records each secure-wipe request. It lets the
+    /// lifecycle refusal tests prove wipe ordering without a GPU context.
+    struct ZeroRecordingMemory {
+        bytes: usize,
+        zeroed: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+    }
+
+    impl VramMemory for ZeroRecordingMemory {
+        fn len(&self) -> usize {
+            self.bytes
+        }
+
+        fn zero(&mut self) -> Result<(), ramshared_vram::VramError> {
+            self.zeroed
+                .lock()
+                .expect("test zero record lock")
+                .push(self.bytes);
+            Ok(())
+        }
+
+        fn read_at(&self, off: u64, dst: &mut [u8]) -> Result<(), ramshared_vram::VramError> {
+            Err(ramshared_vram::VramError::OutOfRange {
+                off,
+                len: dst.len() as u64,
+                size: self.bytes as u64,
+            })
+        }
+
+        fn write_at(&mut self, off: u64, src: &[u8]) -> Result<(), ramshared_vram::VramError> {
+            Err(ramshared_vram::VramError::OutOfRange {
+                off,
+                len: src.len() as u64,
+                size: self.bytes as u64,
+            })
+        }
+    }
+
+    struct ZeroRecordingProvider {
+        zeroed: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+    }
+
+    impl VramProvider for ZeroRecordingProvider {
+        type Mem<'a>
+            = ZeroRecordingMemory
+        where
+            Self: 'a;
+
+        fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, ramshared_vram::VramError> {
+            Ok(ZeroRecordingMemory {
+                bytes,
+                zeroed: std::sync::Arc::clone(&self.zeroed),
+            })
+        }
+
+        fn mem_info(&self) -> Result<(u64, u64), ramshared_vram::VramError> {
+            Ok((8 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024))
+        }
+    }
+
+    fn daemon_argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|part| (*part).to_string()).collect()
+    }
+
+    #[test]
+    fn daemon_residency_probe_and_latency_paths_are_fake_backed() {
+        let mut canary = None;
+        let mut baseline = Vec::new();
+        let mut sampler = ResidencySampler::new(ResidencyConfig {
+            latency_mult: 2,
+            consecutive: 1,
+            free_floor_bytes: 100,
+        });
+        let mut cadence = Cadence::new(1);
+        let mut probe = CanaryProbe::new(TestMemory::new(CANARY_BYTES));
+        let mut state = ResidencyCheckState {
+            canary: &mut canary,
+            baseline: &mut baseline,
+            sampler: &mut sampler,
+            cadence: &mut cadence,
+            probe: &mut probe,
+            free_floor_bytes: 100,
+        };
+        assert_eq!(
+            residency_check(10, &mut state, || Some(99)),
+            Some(DemoteReason::FreeFloor)
+        );
+
+        let mut canary = None;
+        let mut baseline = Vec::new();
+        let mut sampler = ResidencySampler::new(ResidencyConfig::default());
+        let mut cadence = Cadence::new(u32::MAX);
+        let mut probe = CanaryProbe::new(TestMemory::new(CANARY_BYTES));
+        let mut state = ResidencyCheckState {
+            canary: &mut canary,
+            baseline: &mut baseline,
+            sampler: &mut sampler,
+            cadence: &mut cadence,
+            probe: &mut probe,
+            free_floor_bytes: ResidencyConfig::default().free_floor_bytes,
+        };
+        for _ in 0..16 {
+            assert_eq!(residency_check(10, &mut state, || Some(u64::MAX)), None);
+        }
+        assert_eq!(residency_check(1_000, &mut state, || Some(u64::MAX)), None);
+        assert_eq!(residency_check(1_000, &mut state, || Some(u64::MAX)), None);
+        assert_eq!(
+            residency_check(1_000, &mut state, || Some(u64::MAX)),
+            Some(DemoteReason::Latency)
+        );
+    }
+
+    #[test]
+    fn daemon_zero_window_and_backend_labels_are_deterministic() {
+        let mut backend = RamBackend::new(2 * 1024 * 1024);
+        backend
+            .write_at(0, &vec![0xA5; 2 * 1024 * 1024])
+            .expect("fill heap backend");
+        zero_window(&mut backend, 512, (1 << 20) + 512).expect("zero selected window");
+        let mut zeroed = vec![0xFF; (1 << 20) + 512];
+        backend
+            .read_at(512, &mut zeroed)
+            .expect("read zeroed window");
+        assert!(zeroed.iter().all(|byte| *byte == 0));
+        let mut untouched = [0u8; 512];
+        backend.read_at(0, &mut untouched).expect("read prefix");
+        assert!(untouched.iter().all(|byte| *byte == 0xA5));
+        assert_eq!(BackendKind::Vram.label(), "vram");
+        assert_eq!(BackendKind::Vulkan.label(), "vulkan");
+        assert_eq!(BackendKind::Ram.label(), "ram");
+    }
+
+    #[test]
+    fn daemon_args_accept_broker_wiring_and_normalize_addresses() {
+        let args = AppArgs::parse_from(&daemon_argv(&[
+            "ramsharedd",
+            "--size",
+            "257",
+            "--sock",
+            "/tmp/ramshared-daemon-test.sock",
+            "--backend",
+            "ram",
+            "--slices",
+            "2",
+            "--slice-mb",
+            "64",
+            "--listen-nbd",
+            "tcp://127.0.0.1:10809",
+            "--advertise-nbd",
+            "127.0.0.1:10810",
+            "--arbiter-listen",
+            "127.0.0.1:7777",
+            "--telemetry-jsonl",
+            "/tmp/ramshared-daemon-test.jsonl",
+        ]))
+        .expect("safe broker-RAM argv must parse");
+
+        assert_eq!(args.size, 257 * 1024 * 1024);
+        assert_eq!(args.slice_bytes, 64 * 1024 * 1024);
+        assert!(matches!(args.backend, BackendKind::Ram));
+        assert!(matches!(args.transport, Transport::Nbd));
+        assert_eq!(args.listen_nbd_addr.unwrap().to_string(), "127.0.0.1:10809");
+        assert_eq!(args.arbiter_addr.unwrap().to_string(), "127.0.0.1:7777");
+        assert_eq!(args.advertise_tcp, Some(("127.0.0.1".into(), 10810)));
+        assert_eq!(
+            args.telemetry_jsonl.unwrap(),
+            std::path::PathBuf::from("/tmp/ramshared-daemon-test.jsonl")
+        );
+    }
+
+    #[test]
+    fn daemon_args_refuse_invalid_or_unsafe_combinations_before_backend() {
+        for argv in [
+            daemon_argv(&["ramsharedd", "--unknown"]),
+            daemon_argv(&["ramsharedd", "--slices", "1"]),
+            daemon_argv(&[
+                "ramsharedd",
+                "--slices",
+                "1",
+                "--slice-mb",
+                "1",
+                "--arbiter-listen",
+                "0.0.0.0:7777",
+            ]),
+            daemon_argv(&["ramsharedd", "--slices", "257", "--slice-mb", "1"]),
+            daemon_argv(&["ramsharedd", "--advertise-nbd", "127.0.0.1:10809"]),
+            daemon_argv(&[
+                "ramsharedd",
+                "--transport",
+                "ublk",
+                "--slices",
+                "1",
+                "--slice-mb",
+                "1",
+            ]),
+        ] {
+            assert!(
+                AppArgs::parse_from(&argv).is_err(),
+                "unsafe argv unexpectedly parsed: {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn daemon_args_cover_flag_boundaries_before_backend() {
+        let parsed = AppArgs::parse_from(&daemon_argv(&[
+            "ramsharedd",
+            "--size",
+            "3",
+            "--sock",
+            "/tmp/ramsharedd-boundary.sock",
+            "--force",
+            "--nbd",
+            "/dev/nbd77",
+            "--transport",
+            "nbd",
+            "--queue-depth",
+            "2",
+            "--backend",
+            "vram",
+        ]))
+        .expect("all single-daemon scalar flags must parse before backend selection");
+        assert_eq!(parsed.size, 3 * 1024 * 1024);
+        assert_eq!(parsed.sock, "/tmp/ramsharedd-boundary.sock");
+        assert!(parsed.force);
+        assert_eq!(parsed.nbd_dev, "/dev/nbd77");
+        assert_eq!(parsed.queue_depth, 2);
+        assert!(matches!(parsed.transport, Transport::Nbd));
+        assert!(matches!(parsed.backend, BackendKind::Vram));
+
+        for argv in [
+            daemon_argv(&["ramsharedd", "--size"]),
+            daemon_argv(&["ramsharedd", "--size", "not-a-number"]),
+            daemon_argv(&["ramsharedd", "--size", "18446744073709551615"]),
+            daemon_argv(&["ramsharedd", "--sock"]),
+            daemon_argv(&["ramsharedd", "--nbd"]),
+            daemon_argv(&["ramsharedd", "--transport"]),
+            daemon_argv(&["ramsharedd", "--transport", "tcp"]),
+            daemon_argv(&["ramsharedd", "--queue-depth"]),
+            daemon_argv(&["ramsharedd", "--queue-depth", "zero"]),
+            daemon_argv(&["ramsharedd", "--backend"]),
+            daemon_argv(&["ramsharedd", "--backend", "cpu"]),
+            daemon_argv(&["ramsharedd", "--slices"]),
+            daemon_argv(&["ramsharedd", "--slices", "many"]),
+            daemon_argv(&["ramsharedd", "--slice-mb"]),
+            daemon_argv(&["ramsharedd", "--slice-mb", "many"]),
+            daemon_argv(&["ramsharedd", "--listen-nbd"]),
+            daemon_argv(&["ramsharedd", "--listen-nbd", "not-an-address"]),
+            daemon_argv(&["ramsharedd", "--arbiter-listen"]),
+            daemon_argv(&["ramsharedd", "--arbiter-listen", "not-an-address"]),
+            daemon_argv(&["ramsharedd", "--advertise-nbd"]),
+            daemon_argv(&["ramsharedd", "--advertise-nbd", "not-an-address"]),
+            daemon_argv(&["ramsharedd", "--telemetry-jsonl"]),
+        ] {
+            assert!(
+                AppArgs::parse_from(&argv).is_err(),
+                "invalid argv unexpectedly reached a backend plan: {argv:?}"
+            );
+        }
+
+        let overflow = AppArgs::parse_from(&daemon_argv(&[
+            "ramsharedd",
+            "--slices",
+            "1",
+            "--slice-mb",
+            "18446744073709551615",
+            "--arbiter-listen",
+            "127.0.0.1:7777",
+        ]));
+        assert!(
+            overflow.is_err(),
+            "slice MiB overflow must refuse before a plan"
+        );
+    }
+
+    #[test]
+    fn daemon_broker_config_preserves_telemetry_and_exact_endpoints() {
+        let telemetry = std::path::PathBuf::from("/tmp/ramshared-daemon-telemetry.jsonl");
+        let cfg = build_broker_config(
+            3,
+            "/tmp/ramshared-daemon.sock",
+            Some(("127.0.0.1".into(), 10810)),
+            "127.0.0.1:7777".parse().expect("loopback address"),
+            Some(telemetry.clone()),
+        );
+
+        assert_eq!(cfg.listen.to_string(), "127.0.0.1:7777");
+        assert_eq!(
+            cfg.endpoints.nbd_unix.as_deref(),
+            Some("/tmp/ramshared-daemon.sock")
+        );
+        assert_eq!(cfg.endpoints.nbd_tcp, Some(("127.0.0.1".into(), 10810)));
+        assert_eq!(cfg.telemetry_jsonl, Some(telemetry));
+        assert_eq!(cfg.slice_io.len(), 3);
+        assert_eq!(cfg.vram.free.load(Ordering::Relaxed), 0);
+        assert_eq!(cfg.vram.total.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn daemon_broker_ram_binds_loopback_and_cleans_owned_socket() {
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-daemon-broker-{}-{}.sock",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let _ = std::fs::remove_file(&path);
+        let listeners = bind_broker_listeners(
+            &path,
+            Some("127.0.0.1:0".parse().expect("loopback address")),
+        )
+        .expect("temporary loopback listeners must bind");
+
+        assert!(
+            std::fs::symlink_metadata(&path)
+                .expect("owned socket exists")
+                .file_type()
+                .is_socket()
+        );
+        assert!(
+            listeners
+                .tcp
+                .as_ref()
+                .expect("TCP listener requested")
+                .local_addr()
+                .expect("TCP listener address")
+                .ip()
+                .is_loopback()
+        );
+
+        listeners.cleanup();
+        assert!(
+            !path.exists(),
+            "cleanup must remove only the Unix socket it bound"
+        );
+    }
+
+    #[test]
+    fn daemon_broker_bind_conflict_refuses_and_preserves_existing_listener() {
+        let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("occupy loopback");
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-daemon-conflict-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            bind_broker_listeners(
+                &path,
+                Some(occupied.local_addr().expect("occupied address"))
+            )
+            .is_err(),
+            "an occupied broker port must fail before a worker starts"
+        );
+        assert!(
+            !path.exists(),
+            "a failed TCP bind must clean up the Unix socket created for this attempt"
+        );
+        let probe = std::net::TcpStream::connect(occupied.local_addr().expect("occupied address"));
+        assert!(
+            probe.is_ok(),
+            "the pre-existing listener must remain usable"
+        );
+    }
+
+    #[test]
+    fn daemon_broker_setup_stops_bounded_without_backend() {
+        struct RecordingAcceptors {
+            unix_started: bool,
+            tcp_started: bool,
+            exports: usize,
+        }
+
+        impl BrokerAcceptorStarter for RecordingAcceptors {
+            fn start(
+                &mut self,
+                unix: UnixListener,
+                tcp: Option<std::net::TcpListener>,
+                exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+                _tx_flags: u16,
+                _jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.unix_started = unix.local_addr().is_ok();
+                self.tcp_started = tcp
+                    .as_ref()
+                    .and_then(|listener| listener.local_addr().ok())
+                    .is_some_and(|addr| addr.ip().is_loopback());
+                self.exports = exports.len();
+                Ok(())
+            }
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-daemon-bounded-broker-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let mut acceptors = RecordingAcceptors {
+            unix_started: false,
+            tcp_started: false,
+            exports: 0,
+        };
+        let runtime = broker_setup_with_acceptors(
+            1,
+            4096,
+            path.to_str().expect("temporary path is UTF-8"),
+            Some("127.0.0.1:0".parse().expect("loopback NBD listener")),
+            Some(("127.0.0.1".into(), 10809)),
+            "127.0.0.1:0".parse().expect("loopback arbiter listener"),
+            None,
+            std::sync::Arc::clone(&shutdown),
+            Duration::from_millis(1),
+            &mut acceptors,
+        )
+        .expect("safe temporary broker control plane must start");
+        assert!(
+            acceptors.unix_started,
+            "temporary Unix listener was handed off"
+        );
+        assert!(
+            acceptors.tcp_started,
+            "loopback TCP listener was handed off"
+        );
+        assert_eq!(acceptors.exports, 1, "slice geometry becomes one export");
+
+        shutdown.store(true, Ordering::SeqCst);
+        let (worker, broker) = runtime.into_parts();
+        let _backend = serve_broker_jobs_with_poll(
+            RamBackend::new(4096),
+            worker,
+            |_| None,
+            Duration::from_millis(1),
+        );
+        broker
+            .join()
+            .expect("broker exits after its injected shutdown");
+        cleanup_unix_socket_path(&path);
+        assert!(
+            !path.exists(),
+            "owned temporary socket is cleaned after stop"
+        );
+    }
+
+    #[test]
+    fn daemon_broker_acceptor_failure_rolls_back_owned_socket() {
+        struct FailingAcceptors;
+
+        impl BrokerAcceptorStarter for FailingAcceptors {
+            fn start(
+                &mut self,
+                _unix: UnixListener,
+                _tcp: Option<std::net::TcpListener>,
+                _exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+                _tx_flags: u16,
+                _jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                Err(std::io::Error::other("injected acceptor failure").into())
+            }
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-daemon-rollback-broker-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let result = broker_setup_with_acceptors(
+            1,
+            4096,
+            path.to_str().expect("temporary path is UTF-8"),
+            None,
+            None,
+            "127.0.0.1:0".parse().expect("loopback arbiter listener"),
+            None,
+            std::sync::Arc::clone(&shutdown),
+            Duration::from_millis(1),
+            &mut FailingAcceptors,
+        );
+        let error = match result {
+            Ok(_) => panic!("injected acceptor failure must refuse startup"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("injected acceptor failure"));
+        assert!(
+            shutdown.load(Ordering::SeqCst),
+            "failure signals broker shutdown"
+        );
+        assert!(
+            !path.exists(),
+            "failure removes only the temporary Unix socket created by this attempt"
+        );
+    }
+
+    #[test]
+    fn daemon_nbd_prealloc_worker_uses_fake_provider_and_injected_acceptor() {
+        struct TestProvider;
+
+        impl VramProvider for TestProvider {
+            type Mem<'a>
+                = TestMemory
+            where
+                Self: 'a;
+
+            fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, ramshared_vram::VramError> {
+                Ok(TestMemory::new(bytes))
+            }
+
+            fn mem_info(&self) -> Result<(u64, u64), ramshared_vram::VramError> {
+                Ok((8 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024))
+            }
+        }
+
+        struct SafeStarter {
+            lock_calls: usize,
+            saw_socket: bool,
+            zero_done: Option<std::sync::mpsc::Receiver<bool>>,
+            reply: Option<std::sync::mpsc::Receiver<Reply>>,
+            status_updates: Vec<(u64, Option<String>, bool)>,
+        }
+
+        impl NbdRuntimeStarter for SafeStarter {
+            fn lock_memory(
+                &mut self,
+                _force: bool,
+                _lock_future: bool,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.lock_calls += 1;
+                Ok(())
+            }
+
+            fn start_acceptor(
+                &mut self,
+                listener: UnixListener,
+                exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+                _tx_flags: u16,
+                jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.saw_socket = listener.local_addr().is_ok()
+                    && exports.len() == 1
+                    && exports[0].name == "default"
+                    && exports[0].size == 4096;
+                let (zero_tx, zero_rx) = std::sync::mpsc::channel();
+                let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+                jobs_tx.send(WMsg::Opened)?;
+                jobs_tx.send(WMsg::ZeroExport {
+                    base: 0,
+                    len: 512,
+                    done: zero_tx,
+                })?;
+                jobs_tx.send(WMsg::Job(ramshared_wsl2d::conn::Job {
+                    export: 0,
+                    req: ramshared_block::Request {
+                        flags: 0,
+                        cmd: Command::Write,
+                        handle: 99,
+                        offset: 0,
+                        len: 512,
+                    },
+                    payload: vec![0xC3; 512],
+                    reply: reply_tx,
+                }))?;
+                jobs_tx.send(WMsg::Closed)?;
+                self.zero_done = Some(zero_rx);
+                self.reply = Some(reply_rx);
+                Ok(())
+            }
+
+            fn nbd_used_kb(&mut self, _nbd_dev: &str) -> u64 {
+                0
+            }
+
+            fn publish_demote(&mut self, total: u64, reason: &Option<String>, in_progress: bool) {
+                self.status_updates
+                    .push((total, reason.clone(), in_progress));
+            }
+
+            fn elapsed_us(&mut self, _started: Instant) -> u64 {
+                10
+            }
+
+            fn spawn_swapoff(&mut self, _nbd_dev: &str) -> std::sync::mpsc::Receiver<bool> {
+                panic!("the safe prealloc fixture must not request swapoff")
+            }
+
+            fn activate_swap(&mut self, _nbd_dev: &str, _priority: i16) -> bool {
+                panic!("the safe prealloc fixture must not activate swap")
+            }
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-daemon-safe-nbd-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut starter = SafeStarter {
+            lock_calls: 0,
+            saw_socket: false,
+            zero_done: None,
+            reply: None,
+            status_updates: Vec::new(),
+        };
+        run_nbd_with_startup(
+            TestProvider,
+            4096,
+            path.to_string_lossy().into_owned(),
+            false,
+            "/dev/ramshared-test-nbd".into(),
+            false,
+            true,
+            &mut starter,
+        )
+        .expect("fake prealloc worker must complete without a CUDA, swap, or NBD device");
+
+        assert_eq!(starter.lock_calls, 1);
+        assert!(
+            starter.saw_socket,
+            "temporary Unix listener reached injected starter"
+        );
+        assert_eq!(
+            starter
+                .zero_done
+                .take()
+                .expect("zero completion receiver")
+                .recv_timeout(Duration::from_secs(1)),
+            Ok(true)
+        );
+        assert!(
+            !starter
+                .reply
+                .take()
+                .expect("worker reply receiver")
+                .recv_timeout(Duration::from_secs(1))
+                .expect("write reply before deadline")
+                .disconnect
+        );
+        assert_eq!(starter.status_updates, vec![(0, None, false)]);
+        assert!(
+            !path.exists(),
+            "temporary socket is removed after fake worker teardown"
+        );
+    }
+
+    #[test]
+    fn daemon_nbd_sparse_floor_refusal_reclaims_without_provider_allocation() {
+        struct FloorProvider;
+
+        impl VramProvider for FloorProvider {
+            type Mem<'a>
+                = TestMemory
+            where
+                Self: 'a;
+
+            fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, ramshared_vram::VramError> {
+                assert_eq!(
+                    bytes, CANARY_BYTES,
+                    "sparse write must refuse before chunk allocation"
+                );
+                Ok(TestMemory::new(bytes))
+            }
+
+            fn mem_info(&self) -> Result<(u64, u64), ramshared_vram::VramError> {
+                Ok((0, 8 * 1024 * 1024 * 1024))
+            }
+        }
+
+        struct SparseStarter {
+            replies: Option<std::sync::mpsc::Receiver<Reply>>,
+            used_kb_calls: usize,
+        }
+
+        impl NbdRuntimeStarter for SparseStarter {
+            fn lock_memory(
+                &mut self,
+                _force: bool,
+                _lock_future: bool,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                Ok(())
+            }
+
+            fn start_acceptor(
+                &mut self,
+                _listener: UnixListener,
+                _exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+                _tx_flags: u16,
+                jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+                jobs_tx.send(WMsg::Opened)?;
+                jobs_tx.send(WMsg::Job(ramshared_wsl2d::conn::Job {
+                    export: 0,
+                    req: ramshared_block::Request {
+                        flags: 0,
+                        cmd: Command::Write,
+                        handle: 1,
+                        offset: 0,
+                        len: 512,
+                    },
+                    payload: vec![0x9A; 512],
+                    reply: reply_tx.clone(),
+                }))?;
+                jobs_tx.send(WMsg::Job(ramshared_wsl2d::conn::Job {
+                    export: 0,
+                    req: ramshared_block::Request {
+                        flags: 0,
+                        cmd: Command::Flush,
+                        handle: 2,
+                        offset: 0,
+                        len: 0,
+                    },
+                    payload: Vec::new(),
+                    reply: reply_tx,
+                }))?;
+                jobs_tx.send(WMsg::Closed)?;
+                self.replies = Some(reply_rx);
+                Ok(())
+            }
+
+            fn nbd_used_kb(&mut self, _nbd_dev: &str) -> u64 {
+                self.used_kb_calls += 1;
+                0
+            }
+
+            fn publish_demote(
+                &mut self,
+                _total: u64,
+                _reason: &Option<String>,
+                _in_progress: bool,
+            ) {
+            }
+
+            fn elapsed_us(&mut self, _started: Instant) -> u64 {
+                10
+            }
+
+            fn spawn_swapoff(&mut self, _nbd_dev: &str) -> std::sync::mpsc::Receiver<bool> {
+                panic!("free-floor refusal must not request swapoff")
+            }
+
+            fn activate_swap(&mut self, _nbd_dev: &str, _priority: i16) -> bool {
+                panic!("free-floor refusal must not activate swap")
+            }
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-daemon-sparse-floor-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut starter = SparseStarter {
+            replies: None,
+            used_kb_calls: 0,
+        };
+        run_nbd_with_startup(
+            FloorProvider,
+            4096,
+            path.to_string_lossy().into_owned(),
+            false,
+            "/dev/ramshared-test-nbd".into(),
+            false,
+            false,
+            &mut starter,
+        )
+        .expect("sparse floor refusal remains a safe daemon outcome");
+        assert!(
+            starter.used_kb_calls >= 2,
+            "worker and teardown use injected usage evidence"
+        );
+        assert_eq!(
+            starter
+                .replies
+                .take()
+                .expect("reply receiver")
+                .try_iter()
+                .count(),
+            2
+        );
+        assert!(
+            !path.exists(),
+            "sparse safe teardown removes its temporary socket"
+        );
+    }
+
+    #[test]
+    fn daemon_nbd_budget_poll_uses_injected_wddm_snapshot_and_global_probe() {
+        struct BudgetProvider;
+
+        impl VramProvider for BudgetProvider {
+            type Mem<'a>
+                = TestMemory
+            where
+                Self: 'a;
+
+            fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, ramshared_vram::VramError> {
+                assert_eq!(
+                    bytes, CANARY_BYTES,
+                    "poll fixture must not allocate sparse chunks"
+                );
+                Ok(TestMemory::new(bytes))
+            }
+
+            fn mem_info(&self) -> Result<(u64, u64), ramshared_vram::VramError> {
+                Ok((8 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024))
+            }
+        }
+
+        struct FreshBudget(std::rc::Rc<std::cell::Cell<usize>>);
+
+        impl NbdBudgetProvider for FreshBudget {
+            fn snapshot(&self) -> Result<NbdBudgetSnapshot, String> {
+                self.0.set(self.0.get() + 1);
+                Ok(NbdBudgetSnapshot {
+                    budget: 4 * 1024 * 1024 * 1024,
+                    current_usage: 0,
+                    sampled_at: Instant::now(),
+                })
+            }
+        }
+
+        struct BudgetStarter {
+            budget: Option<Box<dyn NbdBudgetProvider>>,
+            budget_calls: std::rc::Rc<std::cell::Cell<usize>>,
+            global_calls: usize,
+        }
+
+        impl NbdRuntimeStarter for BudgetStarter {
+            fn lock_memory(
+                &mut self,
+                _force: bool,
+                _lock_future: bool,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                Ok(())
+            }
+
+            fn start_acceptor(
+                &mut self,
+                _listener: UnixListener,
+                _exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+                _tx_flags: u16,
+                jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                let (reply_tx, _reply_rx) = std::sync::mpsc::channel();
+                jobs_tx.send(WMsg::Opened)?;
+                jobs_tx.send(WMsg::Job(ramshared_wsl2d::conn::Job {
+                    export: 0,
+                    req: ramshared_block::Request {
+                        flags: 0,
+                        cmd: Command::Flush,
+                        handle: 7,
+                        offset: 0,
+                        len: 0,
+                    },
+                    payload: Vec::new(),
+                    reply: reply_tx,
+                }))?;
+                jobs_tx.send(WMsg::Closed)?;
+                Ok(())
+            }
+
+            fn nbd_used_kb(&mut self, _nbd_dev: &str) -> u64 {
+                0
+            }
+
+            fn publish_demote(
+                &mut self,
+                _total: u64,
+                _reason: &Option<String>,
+                _in_progress: bool,
+            ) {
+            }
+
+            fn elapsed_us(&mut self, _started: Instant) -> u64 {
+                10
+            }
+
+            fn spawn_swapoff(&mut self, _nbd_dev: &str) -> std::sync::mpsc::Receiver<bool> {
+                panic!("healthy fresh budget must not request swapoff")
+            }
+
+            fn activate_swap(&mut self, _nbd_dev: &str, _priority: i16) -> bool {
+                panic!("healthy fresh budget must not activate swap")
+            }
+
+            fn startup_budget(
+                &mut self,
+                requested: bool,
+            ) -> Result<Option<Box<dyn NbdBudgetProvider>>, Box<dyn std::error::Error>>
+            {
+                assert!(requested, "test requests the WDDM budget path");
+                Ok(self.budget.take())
+            }
+
+            fn global_free_bytes(&mut self, _timeout: Duration) -> Option<u64> {
+                self.global_calls += 1;
+                Some(8 * 1024 * 1024 * 1024)
+            }
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-daemon-budget-poll-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut starter = BudgetStarter {
+            budget: Some(Box::new(FreshBudget(std::rc::Rc::clone(&calls)))),
+            budget_calls: std::rc::Rc::clone(&calls),
+            global_calls: 0,
+        };
+        run_nbd_with_startup(
+            BudgetProvider,
+            4096,
+            path.to_string_lossy().into_owned(),
+            false,
+            "/dev/ramshared-test-nbd".into(),
+            true,
+            false,
+            &mut starter,
+        )
+        .expect("fresh injected budget keeps sparse daemon available");
+        assert!(
+            starter.budget_calls.get() >= 1,
+            "budget snapshot was polled"
+        );
+        assert!(
+            starter.global_calls >= 1,
+            "global free probe was bounded and polled"
+        );
+        assert!(
+            !path.exists(),
+            "budget poll fixture cleans its temporary socket"
+        );
+    }
+
+    #[test]
+    fn daemon_nbd_budget_constraint_demotes_then_recovers_with_fake_swap() {
+        struct BudgetProvider;
+
+        impl VramProvider for BudgetProvider {
+            type Mem<'a>
+                = TestMemory
+            where
+                Self: 'a;
+
+            fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, ramshared_vram::VramError> {
+                assert_eq!(
+                    bytes, CANARY_BYTES,
+                    "recovery fixture has no sparse allocation"
+                );
+                Ok(TestMemory::new(bytes))
+            }
+
+            fn mem_info(&self) -> Result<(u64, u64), ramshared_vram::VramError> {
+                Ok((8 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024))
+            }
+        }
+
+        struct SequenceBudget(
+            std::cell::RefCell<std::collections::VecDeque<Result<NbdBudgetSnapshot, String>>>,
+        );
+
+        impl NbdBudgetProvider for SequenceBudget {
+            fn snapshot(&self) -> Result<NbdBudgetSnapshot, String> {
+                self.0
+                    .borrow_mut()
+                    .pop_front()
+                    .expect("one budget sample per injected worker tick")
+            }
+        }
+
+        struct RecoveryStarter {
+            budget: Option<Box<dyn NbdBudgetProvider>>,
+            swapoff_calls: usize,
+            activate_calls: usize,
+            statuses: Vec<(u64, Option<String>, bool)>,
+        }
+
+        impl NbdRuntimeStarter for RecoveryStarter {
+            fn lock_memory(
+                &mut self,
+                _force: bool,
+                _lock_future: bool,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                Ok(())
+            }
+
+            fn start_acceptor(
+                &mut self,
+                _listener: UnixListener,
+                _exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+                _tx_flags: u16,
+                jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                let (reply_tx, _reply_rx) = std::sync::mpsc::channel();
+                jobs_tx.send(WMsg::Opened)?;
+                for handle in 0..3 {
+                    jobs_tx.send(WMsg::Job(ramshared_wsl2d::conn::Job {
+                        export: 0,
+                        req: ramshared_block::Request {
+                            flags: 0,
+                            cmd: Command::Flush,
+                            handle,
+                            offset: 0,
+                            len: 0,
+                        },
+                        payload: Vec::new(),
+                        reply: reply_tx.clone(),
+                    }))?;
+                }
+                jobs_tx.send(WMsg::Closed)?;
+                Ok(())
+            }
+
+            fn nbd_used_kb(&mut self, _nbd_dev: &str) -> u64 {
+                0
+            }
+
+            fn publish_demote(&mut self, total: u64, reason: &Option<String>, in_progress: bool) {
+                self.statuses.push((total, reason.clone(), in_progress));
+            }
+
+            fn elapsed_us(&mut self, _started: Instant) -> u64 {
+                10
+            }
+
+            fn spawn_swapoff(&mut self, _nbd_dev: &str) -> std::sync::mpsc::Receiver<bool> {
+                self.swapoff_calls += 1;
+                let (tx, rx) = std::sync::mpsc::channel();
+                tx.send(true).expect("in-memory swapoff completion");
+                rx
+            }
+
+            fn activate_swap(&mut self, _nbd_dev: &str, priority: i16) -> bool {
+                assert_eq!(priority, 100);
+                self.activate_calls += 1;
+                true
+            }
+
+            fn startup_budget(
+                &mut self,
+                requested: bool,
+            ) -> Result<Option<Box<dyn NbdBudgetProvider>>, Box<dyn std::error::Error>>
+            {
+                assert!(requested);
+                Ok(self.budget.take())
+            }
+
+            fn global_free_bytes(&mut self, _timeout: Duration) -> Option<u64> {
+                Some(8 * 1024 * 1024 * 1024)
+            }
+        }
+
+        let healthy = || NbdBudgetSnapshot {
+            budget: 4 * 1024 * 1024 * 1024,
+            current_usage: 0,
+            sampled_at: Instant::now(),
+        };
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-daemon-budget-recovery-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut starter = RecoveryStarter {
+            budget: Some(Box::new(SequenceBudget(std::cell::RefCell::new(
+                [
+                    Err("injected stale WDDM sample".into()),
+                    Ok(healthy()),
+                    Ok(healthy()),
+                    Ok(healthy()),
+                ]
+                .into(),
+            )))),
+            swapoff_calls: 0,
+            activate_calls: 0,
+            statuses: Vec::new(),
+        };
+        run_nbd_with_startup(
+            BudgetProvider,
+            4096,
+            path.to_string_lossy().into_owned(),
+            false,
+            "/dev/ramshared-test-nbd".into(),
+            true,
+            false,
+            &mut starter,
+        )
+        .expect("healthy hysteresis recovers the fake sparse daemon");
+        assert_eq!(starter.swapoff_calls, 1);
+        assert_eq!(starter.activate_calls, 1);
+        assert_eq!(
+            starter.statuses,
+            vec![
+                (0, None, false),
+                (0, Some("WddmBudgetPoll".into()), true),
+                (1, Some("WddmBudgetPoll".into()), false),
+            ]
+        );
+        assert!(
+            !path.exists(),
+            "recovery fixture cleans its temporary socket"
+        );
+    }
+
+    #[test]
+    fn daemon_nbd_teardown_refuses_until_fake_usage_and_swapoff_confirm() {
+        struct TestProvider;
+
+        impl VramProvider for TestProvider {
+            type Mem<'a>
+                = TestMemory
+            where
+                Self: 'a;
+
+            fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, ramshared_vram::VramError> {
+                Ok(TestMemory::new(bytes))
+            }
+
+            fn mem_info(&self) -> Result<(u64, u64), ramshared_vram::VramError> {
+                Ok((8 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024))
+            }
+        }
+
+        struct TeardownStarter {
+            usage: std::collections::VecDeque<u64>,
+            swapoff_calls: usize,
+        }
+
+        impl NbdRuntimeStarter for TeardownStarter {
+            fn lock_memory(
+                &mut self,
+                _force: bool,
+                _lock_future: bool,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                Ok(())
+            }
+
+            fn start_acceptor(
+                &mut self,
+                _listener: UnixListener,
+                _exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+                _tx_flags: u16,
+                jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                jobs_tx.send(WMsg::Opened)?;
+                jobs_tx.send(WMsg::Closed)?;
+                Ok(())
+            }
+
+            fn nbd_used_kb(&mut self, _nbd_dev: &str) -> u64 {
+                self.usage
+                    .pop_front()
+                    .expect("one injected usage observation per teardown step")
+            }
+
+            fn publish_demote(
+                &mut self,
+                _total: u64,
+                _reason: &Option<String>,
+                _in_progress: bool,
+            ) {
+            }
+
+            fn elapsed_us(&mut self, _started: Instant) -> u64 {
+                10
+            }
+
+            fn spawn_swapoff(&mut self, _nbd_dev: &str) -> std::sync::mpsc::Receiver<bool> {
+                self.swapoff_calls += 1;
+                let (tx, rx) = std::sync::mpsc::channel();
+                tx.send(true).expect("fake swapoff completion");
+                rx
+            }
+
+            fn activate_swap(&mut self, _nbd_dev: &str, _priority: i16) -> bool {
+                panic!("teardown refusal must not activate swap")
+            }
+
+            fn teardown_retry_delay(&mut self) -> Duration {
+                Duration::ZERO
+            }
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-daemon-teardown-refusal-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut starter = TeardownStarter {
+            usage: [64, 0].into(),
+            swapoff_calls: 0,
+        };
+        run_nbd_with_startup(
+            TestProvider,
+            4096,
+            path.to_string_lossy().into_owned(),
+            false,
+            "/dev/ramshared-test-nbd".into(),
+            false,
+            true,
+            &mut starter,
+        )
+        .expect("confirmed fake swapoff and zero usage release the fake backend");
+        assert_eq!(starter.swapoff_calls, 1);
+        assert!(
+            starter.usage.is_empty(),
+            "all teardown observations were consumed"
+        );
+        assert!(
+            !path.exists(),
+            "teardown fixture cleans its temporary socket"
+        );
+    }
+
+    #[test]
+    fn daemon_nbd_residency_demote_uses_injected_clock_and_swapoff() {
+        struct TestProvider;
+
+        impl VramProvider for TestProvider {
+            type Mem<'a>
+                = TestMemory
+            where
+                Self: 'a;
+
+            fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, ramshared_vram::VramError> {
+                Ok(TestMemory::new(bytes))
+            }
+
+            fn mem_info(&self) -> Result<(u64, u64), ramshared_vram::VramError> {
+                Ok((8 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024))
+            }
+        }
+
+        struct DemoteStarter {
+            latencies: std::collections::VecDeque<u64>,
+            swapoff_calls: usize,
+            replies: Option<std::sync::mpsc::Receiver<Reply>>,
+            status_updates: Vec<(u64, Option<String>, bool)>,
+        }
+
+        impl NbdRuntimeStarter for DemoteStarter {
+            fn lock_memory(
+                &mut self,
+                _force: bool,
+                _lock_future: bool,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                Ok(())
+            }
+
+            fn start_acceptor(
+                &mut self,
+                _listener: UnixListener,
+                _exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+                _tx_flags: u16,
+                jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+                jobs_tx.send(WMsg::Opened)?;
+                for handle in 0..20 {
+                    jobs_tx.send(WMsg::Job(ramshared_wsl2d::conn::Job {
+                        export: 0,
+                        req: ramshared_block::Request {
+                            flags: 0,
+                            cmd: Command::Write,
+                            handle,
+                            offset: 0,
+                            len: 512,
+                        },
+                        payload: vec![0x3C; 512],
+                        reply: reply_tx.clone(),
+                    }))?;
+                }
+                jobs_tx.send(WMsg::Closed)?;
+                self.replies = Some(reply_rx);
+                Ok(())
+            }
+
+            fn nbd_used_kb(&mut self, _nbd_dev: &str) -> u64 {
+                0
+            }
+
+            fn publish_demote(&mut self, total: u64, reason: &Option<String>, in_progress: bool) {
+                self.status_updates
+                    .push((total, reason.clone(), in_progress));
+            }
+
+            fn elapsed_us(&mut self, _started: Instant) -> u64 {
+                self.latencies
+                    .pop_front()
+                    .expect("one injected latency per worker job")
+            }
+
+            fn spawn_swapoff(&mut self, _nbd_dev: &str) -> std::sync::mpsc::Receiver<bool> {
+                self.swapoff_calls += 1;
+                let (tx, rx) = std::sync::mpsc::channel();
+                tx.send(true).expect("in-memory swapoff completion");
+                rx
+            }
+
+            fn activate_swap(&mut self, _nbd_dev: &str, _priority: i16) -> bool {
+                panic!("a successful terminal DEMOTE must not attempt recovery")
+            }
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-daemon-fake-demote-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut starter = DemoteStarter {
+            latencies: std::iter::repeat_n(10, 16)
+                .chain(std::iter::repeat_n(1_000, 3))
+                .chain(std::iter::once(10))
+                .collect(),
+            swapoff_calls: 0,
+            replies: None,
+            status_updates: Vec::new(),
+        };
+        run_nbd_with_startup(
+            TestProvider,
+            4096,
+            path.to_string_lossy().into_owned(),
+            false,
+            "/dev/ramshared-test-nbd".into(),
+            false,
+            true,
+            &mut starter,
+        )
+        .expect("injected terminal DEMOTE must tear down the fake prealloc backend");
+
+        assert_eq!(
+            starter.swapoff_calls, 1,
+            "one DEMOTE starts one bounded swapoff"
+        );
+        assert_eq!(
+            starter.status_updates,
+            vec![
+                (0, None, false),
+                (0, Some("Latency".into()), true),
+                (1, Some("Latency".into()), false),
+            ]
+        );
+        let replies = starter
+            .replies
+            .take()
+            .expect("injected reply receiver")
+            .try_iter()
+            .count();
+        assert_eq!(
+            replies, 20,
+            "every queued write gets a reply before shutdown"
+        );
+        assert!(
+            !path.exists(),
+            "fake DEMOTE cleanup removes the temporary socket"
+        );
+    }
+
+    #[test]
+    fn daemon_broker_vram_and_ram_lifecycles_use_injected_runtime() {
+        struct TestProvider;
+
+        impl VramProvider for TestProvider {
+            type Mem<'a>
+                = TestMemory
+            where
+                Self: 'a;
+
+            fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, ramshared_vram::VramError> {
+                Ok(TestMemory::new(bytes))
+            }
+
+            fn mem_info(&self) -> Result<(u64, u64), ramshared_vram::VramError> {
+                Ok((8 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024))
+            }
+        }
+
+        struct NoopAcceptors;
+
+        impl BrokerAcceptorStarter for NoopAcceptors {
+            fn start(
+                &mut self,
+                _unix: UnixListener,
+                _tcp: Option<std::net::TcpListener>,
+                _exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+                _tx_flags: u16,
+                _jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                Ok(())
+            }
+        }
+
+        fn runtime(path: &Path, shutdown: std::sync::Arc<AtomicBool>) -> BrokerRuntime {
+            broker_setup_with_acceptors(
+                1,
+                4096,
+                path.to_str().expect("temporary path is UTF-8"),
+                None,
+                None,
+                "127.0.0.1:0".parse().expect("loopback arbiter listener"),
+                None,
+                shutdown,
+                Duration::from_millis(1),
+                &mut NoopAcceptors,
+            )
+            .expect("temporary injected broker runtime")
+        }
+
+        let vram_path = std::env::temp_dir().join(format!(
+            "ramshared-daemon-vram-lifecycle-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&vram_path);
+        let vram_shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let vram_runtime = runtime(&vram_path, std::sync::Arc::clone(&vram_shutdown));
+        vram_shutdown.store(true, Ordering::SeqCst);
+        run_broker_with_setup(
+            TestProvider,
+            4096,
+            1,
+            vram_path.to_string_lossy().into_owned(),
+            false,
+            |_force, _future| Ok(()),
+            || Ok(vram_runtime),
+            Duration::from_millis(1),
+        )
+        .expect("fake VRAM broker lifecycle");
+        assert!(
+            !vram_path.exists(),
+            "VRAM lifecycle cleans its owned socket"
+        );
+
+        let ram_path = std::env::temp_dir().join(format!(
+            "ramshared-daemon-ram-lifecycle-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&ram_path);
+        let ram_shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let ram_runtime = runtime(&ram_path, std::sync::Arc::clone(&ram_shutdown));
+        ram_shutdown.store(true, Ordering::SeqCst);
+        run_broker_ram_with_setup(
+            4096,
+            1,
+            ram_path.to_string_lossy().into_owned(),
+            || Ok(ram_runtime),
+            Duration::from_millis(1),
+        )
+        .expect("heap RAM broker lifecycle");
+        assert!(!ram_path.exists(), "RAM lifecycle cleans its owned socket");
+    }
+
+    #[test]
+    fn daemon_broker_setup_failure_zeroes_allocated_vram_before_return() {
+        let zeroed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let result = run_broker_with_setup(
+            ZeroRecordingProvider {
+                zeroed: std::sync::Arc::clone(&zeroed),
+            },
+            4096,
+            1,
+            std::env::temp_dir()
+                .join(format!(
+                    "ramshared-daemon-setup-refusal-{}.sock",
+                    std::process::id()
+                ))
+                .to_string_lossy()
+                .into_owned(),
+            false,
+            |_force, _future| Ok(()),
+            || Err("injected broker setup refusal".into()),
+            Duration::from_millis(1),
+        );
+
+        assert!(
+            result.is_err(),
+            "injected broker setup refusal must propagate"
+        );
+        assert_eq!(
+            *zeroed.lock().expect("test zero record lock"),
+            vec![4096, 4096, CANARY_BYTES],
+            "initialization, backend cleanup, then canary cleanup must all zero before return"
+        );
+    }
+
+    #[test]
+    fn daemon_broker_lock_refusal_zeroes_allocated_vram_before_return() {
+        let zeroed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let setup_called = std::sync::Arc::new(AtomicBool::new(false));
+        let setup_called_by_closure = std::sync::Arc::clone(&setup_called);
+        let result = run_broker_with_setup(
+            ZeroRecordingProvider {
+                zeroed: std::sync::Arc::clone(&zeroed),
+            },
+            4096,
+            1,
+            std::env::temp_dir()
+                .join(format!(
+                    "ramshared-daemon-lock-refusal-{}.sock",
+                    std::process::id()
+                ))
+                .to_string_lossy()
+                .into_owned(),
+            false,
+            |_force, _future| Err("injected memory-lock refusal".into()),
+            move || {
+                setup_called_by_closure.store(true, Ordering::SeqCst);
+                Err("broker setup must not run after memory-lock refusal".into())
+            },
+            Duration::from_millis(1),
+        );
+
+        assert!(
+            result.is_err(),
+            "injected memory-lock refusal must propagate"
+        );
+        assert!(
+            !setup_called.load(Ordering::SeqCst),
+            "memory-lock refusal must stop before canary allocation or broker setup"
+        );
+        assert_eq!(
+            *zeroed.lock().expect("test zero record lock"),
+            vec![4096, 4096],
+            "initialization and refusal cleanup must both wipe the allocated backend"
+        );
+    }
+
+    #[test]
+    fn daemon_ublk_runtime_orders_lifecycle_and_rolls_back_without_device() {
+        #[derive(Default)]
+        struct FakeServer {
+            joined: bool,
+        }
+
+        impl UblkServer for FakeServer {
+            fn join(mut self: Box<Self>) -> std::io::Result<()> {
+                self.joined = true;
+                Ok(())
+            }
+        }
+
+        #[derive(Default)]
+        struct FakeRuntime {
+            calls: Vec<&'static str>,
+        }
+
+        impl UblkRuntime for FakeRuntime {
+            fn guard_not_wsl2(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+                self.calls.push("guard");
+                Ok(())
+            }
+
+            fn lock_memory(
+                &mut self,
+                _force: bool,
+                lock_future: bool,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                assert!(!lock_future, "ublk keeps MCL_FUTURE disabled");
+                self.calls.push("lock");
+                Ok(())
+            }
+
+            fn install_shutdown_handler(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+                self.calls.push("signal");
+                Ok(())
+            }
+
+            fn add_device(
+                &mut self,
+                queue_depth: u16,
+            ) -> Result<UblkDevice, Box<dyn std::error::Error>> {
+                assert_eq!(queue_depth, 3);
+                self.calls.push("add");
+                Ok(UblkDevice {
+                    id: 41,
+                    queue_depth,
+                })
+            }
+
+            fn set_params(
+                &mut self,
+                device: UblkDevice,
+                sectors: u64,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                assert_eq!(device.id, 41);
+                assert_eq!(sectors, 16);
+                self.calls.push("params");
+                Ok(())
+            }
+
+            fn start_server(
+                &mut self,
+                backend: BackendKind,
+                char_path: &str,
+                block_path: &str,
+                queue_depth: u16,
+                size: u64,
+            ) -> Result<Box<dyn UblkServer>, Box<dyn std::error::Error>> {
+                assert!(matches!(backend, BackendKind::Ram));
+                assert_eq!(char_path, "/dev/ublkc41");
+                assert_eq!(block_path, "/dev/ublkb41");
+                assert_eq!(queue_depth, 3);
+                assert_eq!(size, 8192);
+                self.calls.push("server");
+                Ok(Box::<FakeServer>::default())
+            }
+
+            fn start_device(
+                &mut self,
+                device: UblkDevice,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                assert_eq!(device.id, 41);
+                self.calls.push("start");
+                Ok(())
+            }
+
+            fn wait_for_shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+                self.calls.push("wait");
+                Ok(())
+            }
+
+            fn stop_device(
+                &mut self,
+                device: UblkDevice,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                assert_eq!(device.id, 41);
+                self.calls.push("stop");
+                Ok(())
+            }
+
+            fn delete_device(
+                &mut self,
+                device: UblkDevice,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                assert_eq!(device.id, 41);
+                self.calls.push("delete");
+                Ok(())
+            }
+        }
+
+        let mut runtime = FakeRuntime::default();
+        run_ublk_with_runtime(8192, false, 3, BackendKind::Ram, &mut runtime)
+            .expect("injected RAM ublk lifecycle");
+        assert_eq!(
+            runtime.calls,
+            vec![
+                "guard", "lock", "signal", "add", "params", "server", "start", "wait", "stop",
+                "delete",
+            ]
+        );
+
+        let mut refusal_runtime = FakeRuntime::default();
+        assert!(
+            run_ublk_with_runtime(8192, false, 3, BackendKind::Vulkan, &mut refusal_runtime)
+                .is_err()
+        );
+        assert!(
+            refusal_runtime.calls.is_empty(),
+            "Vulkan refusal must occur before a ublk runtime operation"
+        );
+    }
+
+    #[test]
+    fn daemon_ublk_runtime_failures_delete_candidate_before_return() {
+        #[derive(Clone, Copy)]
+        enum Failure {
+            Params,
+            Server,
+            Start,
+            Wait,
+        }
+
+        struct Server(std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+        impl UblkServer for Server {
+            fn join(self: Box<Self>) -> std::io::Result<()> {
+                self.0.lock().expect("test call log").push("join");
+                Ok(())
+            }
+        }
+
+        struct Runtime {
+            failure: Failure,
+            calls: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+        }
+
+        impl Runtime {
+            fn mark(&self, call: &'static str) {
+                self.calls.lock().expect("test call log").push(call);
+            }
+
+            fn fail(&self, stage: Failure) -> bool {
+                std::mem::discriminant(&self.failure) == std::mem::discriminant(&stage)
+            }
+        }
+
+        impl UblkRuntime for Runtime {
+            fn guard_not_wsl2(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("guard");
+                Ok(())
+            }
+
+            fn lock_memory(
+                &mut self,
+                _force: bool,
+                _lock_future: bool,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("lock");
+                Ok(())
+            }
+
+            fn install_shutdown_handler(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("signal");
+                Ok(())
+            }
+
+            fn add_device(
+                &mut self,
+                queue_depth: u16,
+            ) -> Result<UblkDevice, Box<dyn std::error::Error>> {
+                self.mark("add");
+                Ok(UblkDevice { id: 9, queue_depth })
+            }
+
+            fn set_params(
+                &mut self,
+                _device: UblkDevice,
+                _sectors: u64,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("params");
+                if self.fail(Failure::Params) {
+                    Err(std::io::Error::other("params failure").into())
+                } else {
+                    Ok(())
+                }
+            }
+
+            fn start_server(
+                &mut self,
+                _backend: BackendKind,
+                _char_path: &str,
+                _block_path: &str,
+                _queue_depth: u16,
+                _size: u64,
+            ) -> Result<Box<dyn UblkServer>, Box<dyn std::error::Error>> {
+                self.mark("server");
+                if self.fail(Failure::Server) {
+                    Err(std::io::Error::other("server failure").into())
+                } else {
+                    Ok(Box::new(Server(std::sync::Arc::clone(&self.calls))))
+                }
+            }
+
+            fn start_device(
+                &mut self,
+                _device: UblkDevice,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("start");
+                if self.fail(Failure::Start) {
+                    Err(std::io::Error::other("start failure").into())
+                } else {
+                    Ok(())
+                }
+            }
+
+            fn wait_for_shutdown(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("wait");
+                if self.fail(Failure::Wait) {
+                    Err(std::io::Error::other("wait failure").into())
+                } else {
+                    Ok(())
+                }
+            }
+
+            fn stop_device(
+                &mut self,
+                _device: UblkDevice,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("stop");
+                Ok(())
+            }
+
+            fn delete_device(
+                &mut self,
+                _device: UblkDevice,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.mark("delete");
+                Ok(())
+            }
+        }
+
+        for (failure, expected) in [
+            (
+                Failure::Params,
+                vec!["guard", "lock", "signal", "add", "params", "delete"],
+            ),
+            (
+                Failure::Server,
+                vec![
+                    "guard", "lock", "signal", "add", "params", "server", "delete",
+                ],
+            ),
+            (
+                Failure::Start,
+                vec![
+                    "guard", "lock", "signal", "add", "params", "server", "start", "stop", "join",
+                    "delete",
+                ],
+            ),
+            (
+                Failure::Wait,
+                vec![
+                    "guard", "lock", "signal", "add", "params", "server", "start", "wait", "stop",
+                    "join", "delete",
+                ],
+            ),
+        ] {
+            let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let mut runtime = Runtime {
+                failure,
+                calls: std::sync::Arc::clone(&calls),
+            };
+            assert!(run_ublk_with_runtime(4096, false, 1, BackendKind::Ram, &mut runtime).is_err());
+            assert_eq!(*calls.lock().expect("test call log"), expected);
+        }
+    }
+
+    #[test]
+    fn daemon_ublk_wsl_guard_and_memory_lock_policy_are_pure_and_fail_closed() {
+        assert!(ublk_osrelease_guard("6.6.0-microsoft-standard-WSL2", false).is_err());
+        assert!(ublk_osrelease_guard("6.6.0-wsl", false).is_err());
+        assert!(ublk_osrelease_guard("6.8.0-generic", false).is_ok());
+        assert!(
+            ublk_osrelease_guard("6.6.0-microsoft-standard-WSL2", true).is_ok(),
+            "explicit override is the only way past the WSL2 guard"
+        );
+
+        assert!(matches!(
+            memory_lock_status(true, true, false),
+            Ok(MemoryLockStatus::Protected)
+        ));
+        assert!(memory_lock_status(false, true, false).is_err());
+        assert!(memory_lock_status(true, false, false).is_err());
+        assert!(matches!(
+            memory_lock_status(false, false, true),
+            Ok(MemoryLockStatus::ForcedDegraded {
+                locked: false,
+                oom_ok: false
+            })
+        ));
+        assert!(matches!(
+            memory_lock_status(true, false, true),
+            Ok(MemoryLockStatus::ForcedDegraded {
+                locked: true,
+                oom_ok: false
+            })
+        ));
+    }
+
+    #[test]
+    fn daemon_worker_serves_job_counts_io_and_stops_on_shutdown() {
+        let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel(CHAN_CAP);
+        let (demote_tx, _demote_rx) = std::sync::mpsc::channel();
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let slice_io = std::sync::Arc::new(vec![SliceIoCounters::default()]);
+        let worker_rt = BrokerWorkerRuntime {
+            geom: vec![(0, 4096)],
+            jobs_rx,
+            demote_tx,
+            shutdown: std::sync::Arc::clone(&shutdown),
+            slice_io: std::sync::Arc::clone(&slice_io),
+            vram: std::sync::Arc::new(VramGauge::default()),
+        };
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(move || {
+                serve_broker_jobs_with_poll(
+                    RamBackend::new(4096),
+                    worker_rt,
+                    |_| None,
+                    Duration::from_millis(10),
+                )
+            });
+            jobs_tx
+                .send(WMsg::Job(ramshared_wsl2d::conn::Job {
+                    export: 0,
+                    req: ramshared_block::Request {
+                        flags: 0,
+                        cmd: Command::Write,
+                        handle: 7,
+                        offset: 0,
+                        len: 512,
+                    },
+                    payload: vec![0x5A; 512],
+                    reply: reply_tx,
+                }))
+                .expect("worker queue accepts bounded test job");
+
+            let reply = reply_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("worker reply must arrive before the test deadline");
+            assert!(!reply.disconnect);
+            assert_eq!(slice_io[0].bytes_served.load(Ordering::Relaxed), 512);
+            assert_eq!(slice_io[0].io_count.load(Ordering::Relaxed), 1);
+
+            shutdown.store(true, Ordering::SeqCst);
+            let started = Instant::now();
+            let _backend = worker.join().expect("worker joins after shutdown");
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "worker shutdown must honor its bounded poll interval"
+            );
+        });
+    }
+
+    #[test]
+    fn daemon_command_timeout_terminates_child_without_hang() {
+        let output = command_stdout_with_timeout(
+            "head",
+            &["-c", "131072", "/dev/zero"],
+            Duration::from_secs(1),
+        )
+        .expect("a finite child that fills stdout must be drained before its deadline");
+        assert_eq!(output.len(), 131072);
+
+        assert_eq!(
+            command_stdout_with_timeout("false", &[], Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(
+            command_stdout_with_timeout(
+                "definitely-not-a-ramshared-command",
+                &[],
+                Duration::from_secs(1)
+            ),
+            None
+        );
+        let started = Instant::now();
+        assert_eq!(
+            command_stdout_with_timeout("sleep", &["1"], Duration::from_millis(25)),
+            None
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "a timed-out child must be reaped, not left running"
+        );
+    }
+
+    #[test]
+    fn daemon_plan_routes_validated_actions_without_starting_a_backend() {
+        struct CapturingRunner(Option<DaemonAction>);
+
+        impl DaemonActionRunner for CapturingRunner {
+            fn execute(&mut self, action: DaemonAction) -> Result<(), Box<dyn std::error::Error>> {
+                self.0 = Some(action);
+                Ok(())
+            }
+        }
+
+        let args = AppArgs::parse_from(&daemon_argv(&[
+            "ramsharedd",
+            "--backend",
+            "ram",
+            "--slices",
+            "1",
+            "--slice-mb",
+            "1",
+            "--arbiter-listen",
+            "127.0.0.1:7777",
+        ]))
+        .expect("validated broker argv");
+        let mut runner = CapturingRunner(None);
+        run_with(args, &mut runner).expect("capturing runner must receive a plan");
+        assert!(matches!(
+            runner.0,
+            Some(DaemonAction::Broker(AppArgs {
+                slices: 1,
+                backend: BackendKind::Ram,
+                ..
+            }))
+        ));
+
+        let single_ram = AppArgs::parse_from(&daemon_argv(&["ramsharedd", "--backend", "ram"]))
+            .expect("argv itself is syntactically valid");
+        assert!(
+            select_daemon_action(single_ram).is_err(),
+            "single NBD RAM must refuse before a backend is selected"
+        );
+    }
+
+    #[test]
+    fn daemon_ublk_vulkan_refuses_before_device_mutation() {
+        let args = AppArgs::parse_from(&daemon_argv(&[
+            "ramsharedd",
+            "--transport",
+            "ublk",
+            "--backend",
+            "vulkan",
+        ]))
+        .expect("the syntax is valid so the planner owns this refusal");
+        let error = match select_daemon_action(args) {
+            Ok(_) => panic!("ublk Vulkan must refuse before selecting any device backend"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("ublk with --backend vulkan"),
+            "refusal must identify the unsupported transport/backend pair"
+        );
+    }
+
+    #[test]
+    fn daemon_production_runner_refuses_safe_terminal_actions_before_platform_load() {
+        fn terminal_args(transport: Transport, backend: BackendKind) -> AppArgs {
+            AppArgs {
+                size: DEFAULT_SIZE,
+                sock: "/tmp/ramsharedd-terminal.sock".into(),
+                force: false,
+                nbd_dev: "/dev/ramshared-test-nbd".into(),
+                transport,
+                queue_depth: 1,
+                backend,
+                slices: 0,
+                slice_bytes: 0,
+                listen_nbd_addr: None,
+                arbiter_addr: None,
+                advertise_tcp: None,
+                telemetry_jsonl: None,
+            }
+        }
+
+        let mut runner = ProductionDaemonRunner;
+        let nbd = runner.execute(DaemonAction::Nbd(terminal_args(
+            Transport::Nbd,
+            BackendKind::Ram,
+        )));
+        assert!(
+            nbd.expect_err("RAM single NBD is terminally refused")
+                .to_string()
+                .contains("no single NBD path")
+        );
+
+        let ublk = runner.execute(DaemonAction::Ublk(terminal_args(
+            Transport::Ublk,
+            BackendKind::Vulkan,
+        )));
+        assert!(
+            ublk.expect_err("Vulkan ublk is terminally refused")
+                .to_string()
+                .contains("ublk with --backend vulkan")
+        );
+
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time is after Unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "ramshared-production-runner-refusal-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).expect("create isolated temporary refusal directory");
+        let sock = dir.join("owned-by-test-regular-file");
+        std::fs::write(&sock, b"do-not-replace").expect("create regular preflight file");
+        let broker = runner.execute(DaemonAction::Broker(AppArgs {
+            size: DEFAULT_SIZE,
+            sock: sock.to_string_lossy().into_owned(),
+            force: false,
+            nbd_dev: "/dev/ramshared-test-nbd".into(),
+            transport: Transport::Nbd,
+            queue_depth: 1,
+            backend: BackendKind::Ram,
+            slices: 1,
+            slice_bytes: BLOCK_SIZE as u64,
+            listen_nbd_addr: None,
+            arbiter_addr: Some("127.0.0.1:7777".parse().expect("loopback arbiter address")),
+            advertise_tcp: None,
+            telemetry_jsonl: None,
+        }));
+        assert!(
+            broker
+                .expect_err("broker-RAM must refuse a regular socket path")
+                .to_string()
+                .contains("refusing to replace non-socket path"),
+            "the production runner must preserve a non-socket path before acceptor startup"
+        );
+        assert_eq!(
+            std::fs::read(&sock).expect("regular preflight file remains readable"),
+            b"do-not-replace"
+        );
+        std::fs::remove_dir_all(&dir).expect("remove isolated temporary refusal directory");
+    }
 
     #[test]
     fn private_listen_accepts_loopback_and_lan() {

@@ -83,4 +83,14 @@ mod tests {
     fn ram_exactly_equal_to_vram_is_safe() {
         assert_eq!(vram_safety_net(false, GIB, GIB), SafetyNet::RamHeadroom);
     }
+
+    #[test]
+    fn ram_just_short_of_vram_is_unsafe() {
+        assert_eq!(vram_safety_net(false, GIB - 1, GIB), SafetyNet::None);
+    }
+
+    #[test]
+    fn vhdx_present_has_precedence_over_ram_headroom() {
+        assert_eq!(vram_safety_net(true, 4 * GIB, GIB), SafetyNet::VhdxBelow);
+    }
 }

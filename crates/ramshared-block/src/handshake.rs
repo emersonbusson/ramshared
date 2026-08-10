@@ -38,8 +38,8 @@ impl From<io::Error> for HandshakeError {
 impl fmt::Display for HandshakeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            HandshakeError::Io(e) => write!(f, "io no handshake: {e}"),
-            HandshakeError::Aborted => f.write_str("cliente abortou o handshake (NBD_OPT_ABORT)"),
+            HandshakeError::Io(e) => write!(f, "handshake I/O: {e}"),
+            HandshakeError::Aborted => f.write_str("client aborted the handshake (NBD_OPT_ABORT)"),
         }
     }
 }
@@ -90,7 +90,7 @@ fn bad(msg: &'static str) -> HandshakeError {
 /// `[u32 name_len][name][u16 n_info][...]`. Malformed/truncated ⇒ error (closes).
 fn go_export_name(data: &[u8]) -> Result<&[u8], HandshakeError> {
     if data.len() < 4 {
-        return Err(bad("GO/INFO sem campo de nome"));
+        return Err(bad("GO/INFO is missing the name field"));
     }
     let name_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
     let name_end = 4usize
@@ -98,14 +98,14 @@ fn go_export_name(data: &[u8]) -> Result<&[u8], HandshakeError> {
         .ok_or_else(|| bad("name_len overflow"))?;
     // needs the name + n_info (u16) after it.
     if data.len() < name_end + 2 {
-        return Err(bad("GO/INFO truncado"));
+        return Err(bad("truncated GO/INFO"));
     }
     Ok(&data[4..name_end])
 }
 
 /// Export names are UTF-8.
 fn name_utf8(name: &[u8]) -> Result<&str, HandshakeError> {
-    core::str::from_utf8(name).map_err(|_| bad("nome de export não-UTF-8"))
+    core::str::from_utf8(name).map_err(|_| bad("export name is not UTF-8"))
 }
 
 /// Resolves the name to an index in `exports`; empty name ⇒ `exports[0]` (default, Phase B compatibility).
@@ -149,7 +149,7 @@ pub fn server_handshake<R: Read, W: Write>(
                 // entire payload is the name (empty = default). EXPORT_NAME has no error reply:
                 // unknown export ⇒ closes the connection (Io).
                 let name = name_utf8(&data)?;
-                let idx = find_export(exports, name).ok_or_else(|| bad("export desconhecido"))?;
+                let idx = find_export(exports, name).ok_or_else(|| bad("unknown export"))?;
                 w.write_all(&exports[idx].size.to_be_bytes())?;
                 w.write_all(&tx_flags.to_be_bytes())?;
                 if !no_zeroes {
@@ -254,7 +254,7 @@ mod tests {
         // export reply: size(u64) + tx_flags(u16), WITHOUT 124 zeros (NO_ZEROES) — byte-compat with Phase B
         assert_eq!(u64::from_be_bytes(out[18..26].try_into().unwrap()), 1 << 20);
         assert_eq!(u16::from_be_bytes([out[26], out[27]]), 1);
-        assert_eq!(out.len(), 28, "NO_ZEROES => sem padding de 124");
+        assert_eq!(out.len(), 28, "NO_ZEROES => no 124-byte padding");
     }
 
     #[test]
@@ -292,7 +292,7 @@ mod tests {
         v.extend_from_slice(&0u32.to_be_bytes()); // client_flags
         v.extend_from_slice(&IHAVEOPT.to_be_bytes()); // opt magic
         v.extend_from_slice(&NBD_OPT_INFO.to_be_bytes()); // opt
-        v.extend_from_slice(&u32::MAX.to_be_bytes()); // len absurdo
+        v.extend_from_slice(&u32::MAX.to_be_bytes()); // absurd length
         let mut r = Cursor::new(v);
         let mut out = Vec::new();
         let res = server_handshake(&mut r, &mut out, &one(4096), 1);

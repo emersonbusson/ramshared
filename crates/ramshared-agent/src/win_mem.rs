@@ -61,4 +61,10 @@ mod tests {
     fn malformed_output_is_rejected() {
         assert_eq!(parse_cim_sample("FreePhysicalMemory=abc"), None);
     }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn sample_fallback_returns_none() {
+        assert_eq!(sample(), None);
+    }
 }
