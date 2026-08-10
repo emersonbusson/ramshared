@@ -178,8 +178,8 @@ $workerPath = Join-Path $testRoot "worker.ps1"
 $childPidPath = Join-Path $testRoot "grandchild.pid"
 $failureWorkerPath = Join-Path $testRoot "failure-worker.ps1"
 $worker = @'
-param([string]$GrandchildPidPath)
-$child = Start-Process -FilePath (Join-Path $PSHOME "powershell.exe") `
+param([string]$GrandchildPidPath, [string]$PowerShellPath)
+$child = Start-Process -FilePath $PowerShellPath `
     -ArgumentList @("-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 60") `
     -PassThru
 [IO.File]::WriteAllText($GrandchildPidPath, [string]$child.Id)
@@ -193,11 +193,16 @@ Start-Sleep -Seconds 60
 '@
 try {
     [IO.File]::WriteAllText($workerPath, $worker, [Text.UTF8Encoding]::new($false))
-    $powershell = Join-Path $PSHOME "powershell.exe"
+    $powershell = (Get-Process -Id $PID -ErrorAction Stop).Path
+    if ([string]::IsNullOrWhiteSpace($powershell) -or
+        -not (Test-Path -LiteralPath $powershell -PathType Leaf)) {
+        throw "psdirect_runner_uses_current_host_executable failed: current PowerShell path is unavailable"
+    }
     $workerArguments = @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
         (Quote-GuestProcessArgument $workerPath), "-GrandchildPidPath",
-        (Quote-GuestProcessArgument $childPidPath)) -join " "
+        (Quote-GuestProcessArgument $childPidPath), "-PowerShellPath",
+        (Quote-GuestProcessArgument $powershell)) -join " "
     $timedOut = Invoke-BoundedGuestProcess $powershell $workerArguments 2 @{}
     if ($timedOut.completed -or -not $timedOut.process_tree_terminated -or
         -not (Test-Path -LiteralPath $childPidPath -PathType Leaf)) {
@@ -214,6 +219,7 @@ try {
     }
     Write-Output "PASS psdirect_redirected_streams_are_drained"
     Write-Output "PASS psdirect_timeout_terminates_child_tree"
+    Write-Output "PASS psdirect_runner_uses_current_host_executable"
 
     [IO.File]::WriteAllText($failureWorkerPath, "exit 17", [Text.UTF8Encoding]::new($false))
     $failureArguments = @(

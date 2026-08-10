@@ -3302,3 +3302,37 @@ Windows static wrapper parses differently under PowerShell 5.1.
 **Verdict:** 🟡 Every first-run failure has a local legitimate and refusal
 proof, but promotion remains pending the new hosted `required-checks` run. No
 physical-host or live storage claim is inferred from these safe gates.
+
+## 2026-08-10 11:30 -03 — Cross-version PowerShell static runner
+
+**What:** Corrected the only new refusal from PR #189's second hosted run: the
+PowerShell Direct process-tree fixture assumed `$PSHOME\powershell.exe`, while
+the GitHub Windows runner hosts PowerShell 7 as `pwsh.exe`.
+
+**Before:** All Windows Rust tests passed on the hosted runner, then the static
+fixture failed before spawning its manufactured child because the assumed
+PowerShell 7 path did not exist. No product, VM, SCM, disk, or driver action had
+started.
+
+**Action:** SPEC DT-26 now binds the fixture to the exact executable path of
+its current PowerShell process, verifies that it is a file, and passes that
+path explicitly to the synthetic grandchild. The product PowerShell Direct
+worker and its deadlines are unchanged.
+
+**After / measured data:** On Windows PowerShell 5.1, the focused harness
+reported seven PASS markers, including
+`psdirect_runner_uses_current_host_executable`, process-tree termination,
+redirected-stream drain, and nonzero-child refusal. `docs-check` and whitespace
+checks exited 0. The PowerShell 7 proof remains the next hosted run; no retry or
+fallback executable is guessed.
+
+**Refusals:** A missing/non-file current executable path is terminal, and the
+existing timeout, surviving grandchild, partial output, or nonzero child cases
+remain RED.
+
+**Rollback trigger:** The static fixture assumes a fixed executable filename,
+accepts a missing path, or weakens timeout/process-tree termination.
+
+**Verdict:** 🟡 The cross-version defect is locally closed without live host
+mutation; final promotion still requires the replacement hosted Windows and
+same-run aggregate checks.
