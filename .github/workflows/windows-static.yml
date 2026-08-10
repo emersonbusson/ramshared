@@ -47,6 +47,7 @@ jobs:
                 throw
               }
             }
+          }
 
   windows-static-summary:
     name: windows-static-summary
@@ -67,4 +68,3 @@ jobs:
             exit 1
           }
           Write-Output 'WINDOWS_STATIC_SUMMARY=PASS'
-          }

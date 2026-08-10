@@ -3255,3 +3255,50 @@ and remote hardening are green. CI promotion still awaits the single PR's
 hosted `required-checks`; Windows physical-host BINARY_MATCH and the 75-sample
 five-cell storage matrix remain explicitly env-bound and are not invented from
 offline proof.
+
+## 2026-08-10 11:25 -03 — Consolidation hosted-gate refusal closure
+
+**What:** Confronted the first hosted run of PR #189, reproduced each failure,
+and corrected the contracts rather than bypassing the aggregate. The fixes
+cover exact opaque-evidence redaction, append-only validation separators,
+PowerShell 5.1 syntax, the transitive pinned Trivy action allowlist, and six
+Rust source paths that the hosted merge-ref correctly refused as unmapped.
+
+**Before:** The same-run aggregate was RED. Comment-language and validation
+schema refused their diffs, Windows static parsing failed, Trivy could not run
+its pinned setup action under the selected-action policy, and Rust selection
+reported six `changed-rust-file-unmapped` errors.
+
+**Action:** Added SPEC-first RED→GREEN fixtures. Opaque invalid-UTF-8 evidence
+now permits only a byte-exact private-root first-line redaction; a new entry's
+single separator blank is append-only-safe; the Windows workflow and broker
+static harness parse under Windows PowerShell 5.1; the selected action list
+includes `aquasecurity/setup-trivy@*`; and the Rust planner now distinguishes
+whole-file structural module surfaces from named Windows platform E2E. The
+structural grammar rejects functions, constants, statics, impls, macros,
+malformed delimiters, unsafe package bindings, and shell execution.
+
+**After / measured data:** 240 CI Node tests passed. Planner coverage measured
+88.85% lines, 81.80% branches, and 97.70% functions; comment-language measured
+92.61%, 83.71%, and 98.51%; validation-schema measured 86.76%, 88.71%, and
+96.77%; localization measured 98.59%, 86.90%, and 100%. The exact PR merge-ref
+selection is `READY` with 19 owning entries and zero unmapped Rust paths. The
+complete Windows static aggregate, actionlint 1.7.7, docs-check, public hygiene,
+strict CI contract, workspace fmt/clippy, and the workspace test suite exited
+0. Rust tests passed with only declared GPU/root/device tests ignored; no live
+daemon, swap, ublk, CUDA, SCM, storage, VM, shutdown, or reboot path ran.
+
+**Refusals:** Arbitrary invalid UTF-8 edits remain exit 2; nonblank historical
+validation edits remain blocked; structural Rust containing executable logic
+is refused; and a failed structural package test makes the planner nonzero.
+
+**Artifacts:** `tmp/ci-fix-*-cov.json` and PR #189 hosted run diagnostics.
+
+**Rollback trigger:** Any suffix byte in protected opaque evidence changes;
+any nonblank history rewrite passes; a Rust executable file is admitted as
+structural; a selected action executes outside the pinned allowlist; or the
+Windows static wrapper parses differently under PowerShell 5.1.
+
+**Verdict:** 🟡 Every first-run failure has a local legitimate and refusal
+proof, but promotion remains pending the new hosted `required-checks` run. No
+physical-host or live storage claim is inferred from these safe gates.

@@ -411,7 +411,8 @@
 - RF / DT: RF-1, RF-5; DT-2.
 - Symbol: module surface only.
 - Tests: `cargo test -p ramshared-broker`.
-- Cover: aggregated touched-slice ≥80%.
+- Cover: N/A — structural module surface; the exact package suite is bound by the
+  `rust-slice-structural-contract-v1` declaration below.
 
 **`crates/ramshared-wsl2d/src/broker_srv.rs`**
 
@@ -437,7 +438,8 @@
 - What: export `ipc` on Windows and `package` cross-platform.
 - RF / DT: RF-3, RF-7; DT-3, DT-8.
 - Tests: crate unit suite.
-- Cover: N/A — exports.
+- Cover: N/A — structural module surface; the exact package suite is bound by the
+  `rust-slice-structural-contract-v1` declaration below.
 
 **`crates/ramshared-winsvc/src/config.rs`**
 
@@ -585,6 +587,104 @@ No tracked file is deleted at SPEC time. During ITEM-6, delete
 7. **ITEM-7 — Product harness migration:** remove all generated lab brokers from guest/host product campaigns and require package/guest BINARY_MATCH for both Rust services.
 8. **ITEM-8 — Full VM gate and docs:** run static/unit/coverage/cross-build plus package, failure, autonomous lifecycle, rollback, and uninstall matrices; update ADR/runbooks/reliability/README; create validation evidence.
 9. **ITEM-9 — Physical Test Mode gate:** with explicit supervision and one immutable package, complete three cold boots and final cleanup; only then update the gap register and decide automatic-start promotion.
+
+## Rust slice ownership contracts
+
+<!-- rust-slice-structural-contract-v1
+{
+  "schema_version": 1,
+  "id": "windows-autonomous-structural-rust",
+  "kind": "rust-structural-contract",
+  "files": [
+    "crates/ramshared-broker/src/lib.rs",
+    "crates/ramshared-winsvc/src/lib.rs"
+  ],
+  "verifications": [
+    {
+      "source": "crates/ramshared-broker/src/lib.rs",
+      "package": "ramshared-broker",
+      "cargo_test": [
+        "cargo",
+        "test",
+        "-p",
+        "ramshared-broker",
+        "--lib"
+      ]
+    },
+    {
+      "source": "crates/ramshared-winsvc/src/lib.rs",
+      "package": "ramshared-winsvc",
+      "cargo_test": [
+        "cargo",
+        "test",
+        "-p",
+        "ramshared-winsvc",
+        "--lib"
+      ]
+    }
+  ]
+}
+-->
+
+<!-- rust-slice-platform-e2e-v1
+{
+  "schema_version": 1,
+  "id": "windows-autonomous-platform-e2e-rust",
+  "kind": "windows-platform-e2e",
+  "files": [
+    "crates/ramshared-winbroker/src/main.rs",
+    "crates/ramshared-winbroker/src/service.rs",
+    "crates/ramshared-winsvc/src/bin/ramshared-service-sid-probe.rs",
+    "crates/ramshared-winsvc/src/cuda_probe.rs"
+  ],
+  "verifications": [
+    {
+      "source": "crates/ramshared-winbroker/src/main.rs",
+      "static": {
+        "path": "scripts/windows/Test-AutonomousBrokerStatic.ps1",
+        "test": "broker_cli_contract"
+      },
+      "live": {
+        "path": "scripts/windows/Run-GuestBrokerService.ps1",
+        "test": "scm_start_ready_stop"
+      }
+    },
+    {
+      "source": "crates/ramshared-winbroker/src/service.rs",
+      "static": {
+        "path": "scripts/windows/Test-AutonomousBrokerStatic.ps1",
+        "test": "broker_service_contract"
+      },
+      "live": {
+        "path": "scripts/windows/Run-GuestBrokerService.ps1",
+        "test": "scm_start_ready_stop"
+      }
+    },
+    {
+      "source": "crates/ramshared-winsvc/src/bin/ramshared-service-sid-probe.rs",
+      "static": {
+        "path": "scripts/windows/Test-AutonomousBrokerStatic.ps1",
+        "test": "service_sid_probe_contract"
+      },
+      "live": {
+        "path": "scripts/windows/Run-GuestBrokerService.ps1",
+        "test": "legitimate_service_sid_connects"
+      }
+    },
+    {
+      "source": "crates/ramshared-winsvc/src/cuda_probe.rs",
+      "static": {
+        "path": "scripts/windows/Test-AutonomousBrokerStatic.ps1",
+        "test": "cuda_probe_uses_local_broker_config"
+      },
+      "live": {
+        "path": "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+        "test": "three_round_sha"
+      }
+    }
+  ]
+}
+-->
 
 ## Required tests matrix
 

@@ -90,6 +90,7 @@
 | DT-14 | All checks return exit `0` only for a clean scope, exit `1` for policy findings, and exit `2` for usage/configuration errors. Output order is sorted by path, line, rule, and reason code. | Stable exit and output semantics make local/CI comparison reproducible. |
 | DT-15 | Validation diff failures are findings, never an empty successful diff. A line added inside an existing entry is an append-only violation, and a newly added entry cannot inherit a historical date allowlist exemption. | The former parser swallowed an invalid Git base and validated only newly added headers, creating three reproducible false-green paths. |
 | DT-16 | Historical validation permits only a controlled public-provenance redaction: a private profile/artifact root becomes an explicit redacted or portable RamShared root, or an unrelated product identity becomes the neutral phrase `unrelated workload`. The normalized line must otherwise preserve every number, verdict marker, command semantic, and evidence claim. | Public release hygiene cannot retain private identities, but append-only evidence must not allow a sanitation edit to rewrite measurements or outcomes. |
+| DT-17 | The validation diff checker permits newly added blank separator lines inside the prior terminal entry only when the immediately following parsed entry header is also newly added. Every nonblank insertion, a blank insertion before an existing entry, or a new malformed entry remains an append-only violation. | Markdown convention places one blank line before an appended heading. Treating that separator as old-entry content blocks legitimate append-only records, while a structural next-header proof prevents the exception from hiding edits to history. |
 
 ### Claim record contract
 
@@ -598,6 +599,7 @@ Numeric/observable triggers:
   `legacy_validation_entries_remain_accepted`,
   `validation_log_remains_append_only`, `invalid_base_ref_fails_nonzero`,
   `added_line_inside_existing_entry_is_append_only_violation`,
+  `new_entry_separator_blank_is_append_only_safe`,
   `new_entry_with_legacy_timestamp_is_not_allowlisted`,
   `public_provenance_redaction_preserves_metrics_and_verdict`,
   `public_provenance_redaction_cannot_change_measurement_or_claim`.

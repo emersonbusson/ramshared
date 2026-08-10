@@ -30,7 +30,7 @@ function fixture() {
   const canonical = [
     '# RamShared\n',
     '\n',
-    '[Português (Brasil)](README.pt-BR.md)\n',
+    '[Portugu\u00eas (Brasil)](README.pt-BR.md)\n',
     '\n',
     '[Portal](docs/pt-BR/README.md)\n',
   ].join('')
@@ -39,16 +39,16 @@ function fixture() {
     '\n',
     '[English](README.md)\n',
     '\n',
-    '> Esta página é informativa e não normativa; o README.md em inglês é a referência canônica.\n',
+    '> Esta p\u00e1gina \u00e9 informativa e n\u00e3o normativa; o README.md em ingl\u00eas \u00e9 a refer\u00eancia can\u00f4nica.\n',
     '\n',
     '[Portal](docs/pt-BR/README.md)\n',
   ].join('')
   const portal = [
-    '# Portal em português\n',
+    '# Portal em portugu\u00eas\n',
     '\n',
     '[English README](../../README.md)\n',
-    '[README em português](../../README.pt-BR.md)\n',
-    '> Este portal é informativo e não substitui a documentação técnica em inglês.\n',
+    '[README em portugu\u00eas](../../README.pt-BR.md)\n',
+    '> Este portal \u00e9 informativo e n\u00e3o substitui a documenta\u00e7\u00e3o t\u00e9cnica em ingl\u00eas.\n',
     '\n',
     '## Quickstart\n',
     '[Quickstart](../../README.md#quick-start)\n',
@@ -134,20 +134,20 @@ test('broken_language_switch_fails', () => {
 
 test('authority_claim_is_rejected_without_echo', () => {
   const { root } = fixture()
-  const claim = 'Esta tradução é o documento normativo oficial e a fonte canônica.\n'
+  const claim = 'Esta tradu\u00e7\u00e3o \u00e9 o documento normativo oficial e a fonte can\u00f4nica.\n'
   write(root, 'README.pt-BR.md', claim)
   const findings = findingsFor(root)
   const serialized = JSON.stringify(findings)
   assert.match(serialized, /AUTHORITY_CLAIM/)
   assert.doesNotMatch(serialized, /normativo oficial/)
-  write(root, 'README.pt-BR.md', '> Página informativa e não normativa.\nEsta tradução é a fonte canônica.\n')
+  write(root, 'README.pt-BR.md', '> P\u00e1gina informativa e n\u00e3o normativa.\nEsta tradu\u00e7\u00e3o \u00e9 a fonte can\u00f4nica.\n')
   assert.match(JSON.stringify(findingsFor(root)), /AUTHORITY_CLAIM/)
 })
 
 test('protected_normative_localization_path_fails', () => {
   const { root, manifest } = fixture()
   const protectedPath = 'docs/specs/no-milestone/example/SPEC.pt-BR.md'
-  write(root, protectedPath, '# Tradução\n')
+  write(root, protectedPath, '# Tradu\u00e7\u00e3o\n')
   manifest.entries[1].localized_path = protectedPath
   write(root, 'docs/localization/manifest.json', `${JSON.stringify(manifest)}\n`)
   assert.match(JSON.stringify(findingsFor(root)), /PROTECTED_PATH/)

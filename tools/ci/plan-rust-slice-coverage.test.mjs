@@ -334,6 +334,44 @@ function platformRoot(entry = platformEntry(), { wrapperIncludesStatic = true } 
   return root
 }
 
+function structuralEntry() {
+  return {
+    id: 'fixture-structural',
+    kind: 'rust-structural-contract',
+    spec: 'docs/specs/no-milestone/fixture/SPEC.md',
+    files: ['crates/fixture/src/lib.rs'],
+    verifications: [{
+      source: 'crates/fixture/src/lib.rs',
+      package: 'fixture',
+      cargo_test: ['cargo', 'test', '-p', 'fixture', '--lib'],
+    }],
+  }
+}
+
+function structuralDeclaration(entry) {
+  return {
+    schema_version: 1,
+    id: entry.id,
+    kind: entry.kind,
+    files: entry.files,
+    verifications: entry.verifications,
+  }
+}
+
+function structuralRoot(entry = structuralEntry(), source = `#![forbid(unsafe_code)]
+
+pub mod policy;
+#[cfg(windows)]
+pub mod windows;
+pub use policy::{Decision, decide};
+pub(crate) use policy as internal_policy;
+`) {
+  const specText = embeddedOwnership('rust-slice-structural-contract-v1', structuralDeclaration(entry))
+  const root = fixtureRoot(specText)
+  writeFixtureFile(root, entry.files[0], source)
+  return root
+}
+
 function localizationEntry() {
   return {
     id: 'fixture-localization',
@@ -710,6 +748,117 @@ test('windows_platform_entry_refuses_static_harness_outside_windows_ci', () => {
   assert.equal(result.errors.some((item) => item.rule === 'platform-static-harness-not-run'), true)
 })
 
+test('structural_contract_accepts_only_module_surface_and_runs_package_tests', () => {
+  const entry = structuralEntry()
+  const map = { schema_version: 2, entries: [entry] }
+  const root = structuralRoot(entry)
+  const validation = validateCoverageMap(map, root)
+  assert.equal(validation.ok, true)
+
+  const selection = selectCoverageEntries(map, entry.files, root)
+  assert.equal(selection.ok, true)
+  assert.equal(selection.state, 'READY')
+
+  const calls = []
+  const execution = runCoveragePlan(selection.entries, {
+    root,
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  assert.equal(execution.ok, true)
+  assert.deepEqual(calls, [{
+    command: 'cargo',
+    args: ['test', '-p', 'fixture', '--lib'],
+    options: { cwd: root, shell: false, stdio: 'inherit' },
+  }])
+
+  const duplicated = {
+    ...entry,
+    verifications: [entry.verifications[0], entry.verifications[0]],
+  }
+  const failedCalls = []
+  const failed = runCoveragePlan([duplicated], {
+    root,
+    spawn(command, args, options) {
+      failedCalls.push({ command, args, options })
+      return { status: 1 }
+    },
+  })
+  assert.equal(failed.ok, false)
+  assert.equal(failedCalls.length, 1)
+  assert.equal(failed.errors.some((item) => item.rule === 'structural-package-test-failed'), true)
+})
+
+test('structural_contract_refuses_executable_or_malformed_rust', () => {
+  const entry = structuralEntry()
+  for (const source of [
+    'pub fn hidden_business_logic() {}\n',
+    'pub const LIMIT: usize = 1;\n',
+    'pub use policy::{Decision;\n',
+    '# not_an_attribute\npub mod policy;\n',
+    'pub use "literal";\n',
+    'pub use 1;\n',
+    'pub use policy();\n',
+    'pub use ;\n',
+    'pub enum Decision {}\n',
+    '// comments only\n',
+  ]) {
+    const result = validateCoverageMap(
+      { schema_version: 2, entries: [entry] },
+      structuralRoot(entry, source),
+    )
+    assert.equal(result.ok, false)
+    assert.equal(result.errors.some((item) => item.rule === 'structural-rust-source-invalid'), true)
+  }
+
+  const invalidVerification = structuralEntry()
+  invalidVerification.verifications[0].package = 'other'
+  const invalidVerificationResult = validateCoverageMap(
+    { schema_version: 2, entries: [invalidVerification] },
+    structuralRoot(invalidVerification),
+  )
+  assert.equal(invalidVerificationResult.ok, false)
+  assert.equal(invalidVerificationResult.errors.some((item) => item.rule === 'structural-verification-invalid'), true)
+  assert.equal(invalidVerificationResult.errors.some((item) => item.rule === 'structural-source-files-mismatch'), true)
+
+  const missingContractRoot = fixtureRoot('no structural declaration\n')
+  writeFixtureFile(missingContractRoot, entry.files[0], 'pub mod policy;\n')
+  const missingContract = validateCoverageMap({ schema_version: 2, entries: [entry] }, missingContractRoot)
+  assert.equal(missingContract.errors.some((item) => item.rule === 'structural-spec-contract-missing'), true)
+
+  const mismatchedRoot = structuralRoot(entry)
+  writeFixtureFile(
+    mismatchedRoot,
+    'docs/specs/no-milestone/fixture/SPEC.md',
+    embeddedOwnership('rust-slice-structural-contract-v1', {
+      ...structuralDeclaration(entry),
+      files: ['crates/fixture/src/other.rs'],
+    }),
+  )
+  const mismatched = validateCoverageMap({ schema_version: 2, entries: [entry] }, mismatchedRoot)
+  assert.equal(mismatched.errors.some((item) => item.rule === 'structural-spec-contract-mismatch'), true)
+})
+
+test('windows_autonomous_sources_have_exact_structural_or_platform_owners', () => {
+  const map = JSON.parse(readFileSync(path.join(REPOSITORY_ROOT, 'docs', 'governance', 'rust-slice-coverage.json'), 'utf8'))
+  const files = [
+    'crates/ramshared-broker/src/lib.rs',
+    'crates/ramshared-winbroker/src/main.rs',
+    'crates/ramshared-winbroker/src/service.rs',
+    'crates/ramshared-winsvc/src/bin/ramshared-service-sid-probe.rs',
+    'crates/ramshared-winsvc/src/cuda_probe.rs',
+    'crates/ramshared-winsvc/src/lib.rs',
+  ]
+  const selected = selectCoverageEntries(map, files, REPOSITORY_ROOT)
+  assert.equal(selected.ok, true)
+  assert.deepEqual(selected.entries.map((entry) => entry.id), [
+    'windows-autonomous-platform-e2e-rust',
+    'windows-autonomous-structural-rust',
+  ])
+})
+
 test('localization_differential_accepts_comment_only_source_change', () => {
   const entry = localizationEntry()
   const map = { schema_version: 2, entries: [entry] }
@@ -717,7 +866,7 @@ test('localization_differential_accepts_comment_only_source_change', () => {
   const result = selectCoverageEntries(map, entry.files, root, {
     baseRevision: 'a'.repeat(40),
     readBaseFile() {
-      return '// Comentario anterior\npub fn policy() {}\n'
+      return '// Coment\u00e1rio anterior\npub fn policy() {}\n'
     },
   })
   assert.equal(result.ok, true)

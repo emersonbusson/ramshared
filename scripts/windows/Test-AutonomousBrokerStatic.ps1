@@ -17,7 +17,12 @@ function Assert-Static([bool]$Condition, [string]$Name, [string]$Detail) {
 $spec = Get-Content (Join-Path $RepoRoot `
         "docs\specs\no-milestone\windows-autonomous-broker-service\SPEC.md") -Raw
 $broker = Get-Content (Join-Path $RepoRoot "crates\ramshared-winbroker\src\pipe.rs") -Raw
+$brokerMain = Get-Content (Join-Path $RepoRoot "crates\ramshared-winbroker\src\main.rs") -Raw
+$brokerService = Get-Content (Join-Path $RepoRoot "crates\ramshared-winbroker\src\service.rs") -Raw
 $consumer = Get-Content (Join-Path $RepoRoot "crates\ramshared-winsvc\src\main.rs") -Raw
+$serviceSidProbe = Get-Content (Join-Path $RepoRoot `
+        "crates\ramshared-winsvc\src\bin\ramshared-service-sid-probe.rs") -Raw
+$cudaProbe = Get-Content (Join-Path $RepoRoot "crates\ramshared-winsvc\src\cuda_probe.rs") -Raw
 $online = Get-Content (Join-Path $RepoRoot "crates\ramshared-winsvc\src\product_online.rs") -Raw
 $installer = Get-Content (Join-Path $RepoRoot "scripts\windows\Install-RamSharedService.ps1") -Raw
 $build = Get-Content (Join-Path $RepoRoot "scripts\windows\build-winsvc.bat") -Raw
@@ -30,6 +35,22 @@ Assert-Static ($broker -match [regex]::Escape("\\.\pipe\RamSharedBroker.v1")) `
     "canonical_product_pipe" "fixed named-pipe endpoint is compiled into the broker"
 Assert-Static ($broker -notmatch "TcpListener|TcpStream") `
     "no_broker_tcp_surface" "native broker pipe module has no TCP transport"
+Assert-Static ($brokerMain -match "fn parse_cli" -and
+    $brokerMain -match [regex]::Escape('console --config <absolute>') -and
+    $brokerMain -match "cli_has_no_tcp_listen_option" -and
+    $brokerMain -notmatch "TcpListener") `
+    "broker_cli_contract" "broker entry accepts only the sealed service/console configuration surface"
+Assert-Static ($brokerService -match 'SERVICE_NAME: &str = "RamSharedBroker"' -and
+    $brokerService -match "report_deterministic_start_failure" -and
+    $brokerService -match "verify_active_config") `
+    "broker_service_contract" "SCM entry binds deterministic failure and active-manifest verification"
+Assert-Static ($serviceSidProbe -match "deny-only" -and
+    $serviceSidProbe -match "S-1-5-80-" -and
+    $serviceSidProbe -match "service_dispatcher::start") `
+    "service_sid_probe_contract" "service-SID probe retains deny-only and SCM boundaries"
+Assert-Static ($cudaProbe -match "broker_pipe" -and
+    $cudaProbe -match "BrokerPipeV1::NamedPipeV1") `
+    "cuda_probe_uses_local_broker_config" "CUDA probe fixture uses the native local broker selector"
 Assert-Static ($consumer -match "Global\\RamSharedProductInstall.v1") `
     "protected_installer_mutex_named" "product controller uses the SPEC mutex"
 Assert-Static ($consumer -match "ReplaceFileW" -and $consumer -match "REPLACEFILE_WRITE_THROUGH") `

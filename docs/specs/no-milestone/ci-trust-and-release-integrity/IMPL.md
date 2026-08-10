@@ -21,7 +21,7 @@ not claimed until the consolidation pull request publishes and passes the
 | `.github/workflows/{windows-lab,wsl2-lab}.yml` | ITEM-5 / RF-6 | Add protected plan-only isolated-lab entrypoints with no host execution. |
 | `.github/workflows/release-integrity.yml` | ITEM-6 / RF-7 | Add protected nonpublishing bundle/SBOM validation. |
 | `tools/ci/check-ci-contract.mjs` | ITEM-1–ITEM-8 / RF-1–RF-11 | Validate source and observed remote controls, aggregate same-run results, and fail closed on missing, unsafe, or stale evidence. |
-| `tools/ci/plan-rust-slice-coverage.mjs` | ITEM-6.6 / RF-10 | Map every changed Rust production file to its owning SPEC gate and execute exact coverage commands. |
+| `tools/ci/plan-rust-slice-coverage.mjs` | ITEM-6.6 / RF-10 | Map every changed Rust production file to exact line, platform, localization, test-only, or whole-file structural ownership and execute only tokenized commands. |
 | `tools/ci/check-rust-slice-coverage.mjs` | ITEM-6.6 / RF-10 | Isolate coverage target state and enforce a terminal 15-minute child deadline. |
 | `docs/governance/{ci-contract,remote-controls-observation,rust-slice-coverage}*` | ITEM-1–ITEM-8 / RF-1–RF-11 | Record the executable contract, sanitized GitHub REST observation, and exact SPEC ownership map. |
 
@@ -30,11 +30,13 @@ not claimed until the consolidation pull request publishes and passes the
 - contract tests: `node --test tools/ci/check-ci-contract.test.mjs tools/ci/check-ci-aggregate.test.mjs` → 50 passed, 0 failed.
 - contract cover: 90.36% lines, 82.64% branches, 99.08% functions.
 - strict source/remote gate: `node tools/ci/check-ci-contract.mjs --check` → exit 0, PASS.
-- Node repository suite: `node --test tools/**/*.test.mjs` → 242 passed, 0 failed.
+- Node CI suite: `node --test tools/ci/*.test.mjs` → 240 passed, 0 failed.
+- Rust planner cover: 88.85% lines, 81.80% branches, 97.70% functions; exact PR merge-ref selection → READY with 19 entries and zero unmapped paths.
+- structural Rust: two declaration/reexport-only `lib.rs` files → N/A line coverage by DT-28; exact `cargo test -p ramshared-broker --lib` and `cargo test -p ramshared-winsvc --lib` commands pass, while manufactured executable/malformed surfaces are refused.
 - actionlint: pinned 1.7.7 over every workflow → exit 0.
 - Rust planner: `plan-rust-slice-coverage.mjs --all --base-revision <origin-main-sha> --run` → exit 0; every mapped production file at least 80%, minimum 81.5%.
 - remote observation: read-only workflow tokens, PR approval disabled, selected Actions with SHA pinning, 30-day retention, strict/admin/conversation branch protection, `required-checks`, and two protected environments.
-- E2E: hosted PR action is pending; lab workflows remained plan-only and no host, VM, driver, GPU, swap, shutdown, or reboot action ran.
+- E2E: the first hosted PR action legitimately failed five policy/syntax/ownership classes; all are reproduced and locally GREEN, and the replacement hosted run is pending. Lab workflows remained plan-only and no host, VM, driver, GPU, swap, shutdown, or reboot action ran.
 
 ## Gaps
 
