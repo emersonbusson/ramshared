@@ -1035,11 +1035,12 @@ mod tests {
             "#!/bin/sh\nprintf '%s' \"$$\" > \"$1\"\nexec sleep 10\n",
         );
         let pid_arg = pid_file.to_string_lossy().into_owned();
+        let sleeper_arg = as_program(&sleeper);
         let started = Instant::now();
         let error = error_from(
             run_command_bounded_for(
-                &as_program(&sleeper),
-                &[pid_arg.as_str()],
+                "/bin/sh",
+                &[sleeper_arg.as_str(), pid_arg.as_str()],
                 Duration::from_millis(40),
             ),
             "sleeping direct child must time out",

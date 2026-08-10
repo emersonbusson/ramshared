@@ -3336,3 +3336,33 @@ accepts a missing path, or weakens timeout/process-tree termination.
 **Verdict:** 🟡 The cross-version defect is locally closed without live host
 mutation; final promotion still requires the replacement hosted Windows and
 same-run aggregate checks.
+
+## 2026-08-10 11:32 -03 — Cascade timeout fixture ETXTBSY closure
+
+**What:** Removed a hosted-filesystem race from the existing bounded-command
+timeout test without changing production orchestration or adding a retry.
+
+**Before:** The second hosted Linux run passed fmt and clippy, then one of 88
+CLI tests failed because executing a freshly written temporary script returned
+`ETXTBSY`; the production runner correctly surfaced the error instead of
+mislabeling it as a timeout.
+
+**Action:** SPEC DT-T3a now requires the closed script to be passed to the
+immutable `/bin/sh` interpreter. The script still `exec`s its bounded sleep,
+so the PID written by the fixture remains the exact direct child that must be
+terminated and reaped.
+
+**After / measured data:** The exact test passed 20 consecutive executions.
+The full 88-unit/5-integration CLI coverage run passed, and canonical
+`cascade_io.rs` line coverage measured 84.5% (1,141/1,351). Package clippy with
+`-D warnings`, fmt, docs-check, and whitespace checks exited 0. No swap,
+daemon, NBD, ublk, CUDA, root, or host action ran.
+
+**Refusals:** Interpreter failure, missing PID receipt, timeout over one
+second, or a surviving child remains terminal; there is no retry path.
+
+**Rollback trigger:** Any `ETXTBSY` recurrence, retry introduction, timeout
+false-green, or surviving fixture PID.
+
+**Verdict:** 🟡 The deterministic Linux fixture and its coverage are green;
+hosted aggregate promotion remains pending the next immutable PR run.

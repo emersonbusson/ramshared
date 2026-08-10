@@ -99,6 +99,16 @@ During normal `down`, the recorded device and the current swap scan are
 canonicalized and deduplicated before `nbd-client -d`; an allowlisted NBD
 device is detached at most once per invocation.
 
+### DT-T3a — Stable timeout fixture execution
+
+The Linux timeout/reaping test closes its generated script and invokes it as
+an argument to the immutable `/bin/sh` interpreter. It does not execute the
+freshly written temporary inode directly. The script still `exec`s the bounded
+sleep so the observed PID is the exact child reaped by the production runner.
+This removes an overlay/antivirus `ETXTBSY` race without adding a retry or
+weakening the timeout assertion; an interpreter error remains a terminal test
+failure.
+
 ### DT-T4 — zram output contract
 
 `zramctl --find` output is accepted only as an exact trimmed `/dev/zram<decimal>`
