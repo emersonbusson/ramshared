@@ -139,6 +139,7 @@ Until then, a missing base record is a configuration error and the active
 | DT-10 | In `--all`, an invalid-UTF-8 body under the exact protected-history/evidence classes is treated as opaque historical evidence and excluded from content inventory. Invalid UTF-8 outside that exact class, an over-limit/read/path error anywhere, or an invalid protected file selected by `--diff` returns exit 2. | Immutable binary evidence is explicitly not a language input, while changed or mutable text must fail closed rather than becoming an unreviewed exception. |
 | DT-11 | The seven measured Rust paths listed in the canonical coverage-owner section receive exactly one `rust-line-coverage` owner at 80%, with the command and package/file argv tokens aligned between this SPEC and `docs/governance/rust-slice-coverage.json`. The former lower-coverage production paths listed there have exact feature-SPEC owners; zero paths from this historical set remain low-coverage or unmapped, and neither set receives a localization exemption. | Measured per-file line coverage can close only the paths that meet the canonical threshold, while preserving DT-18's fail-closed ownership rule for every future unmapped business path. |
 | DT-12 | `crates/ramshared-cuda/src/lib.rs` and `crates/ramshared-wsl2d/src/backend.rs` may receive the one exact DT-24 `rust-test-only-localization-differential` owner declared below, but only if the planner proves from a full immutable base that every non-comment difference is inside the declared root `#[cfg(test)] mod tests` region and the projected production text is otherwise identical. The owner runs each exact package `cargo test --lib` command and requires the already-recorded ignored GPU test evidence from the immutable base; it is never a line-coverage or N/A exemption. | These two measured-low files changed only test diagnostics, so a fail-closed test-boundary proof preserves the production coverage rule without treating test text as production behavior. |
+| DT-13 | `--diff` permits one opaque protected-file public-provenance redaction only when the current first line is exactly the ASCII placeholder `'<repo-root>'`, the base first line is a private WSL repository root, and every byte after the first line is identical between base and current. Any second-line change, different placeholder, non-private base line, missing base blob, or invalid UTF-8 protected change remains exit 2. The exception produces no language finding because it validates bytes rather than decoding historical text. | A public repository must remove a private root from legacy OEM-encoded evidence without translating or re-encoding the historical payload. A byte-exact suffix proof keeps DT-10 fail-closed for every broader rewrite. |
 
 ## Scanner contract
 
@@ -323,7 +324,8 @@ leave protected bytes untouched.
   absolute paths, and environment values.
 - [x] Resource bounds: file, path, finding, and binary-probe limits are fixed;
   DT-10 limits the opaque-evidence exception to invalid UTF-8 in unchanged
-  protected inventory only.
+  protected inventory; DT-13 permits only a byte-exact first-line private-root
+  redaction in diff mode.
 - [x] Runtime safety: no shell pipeline, network, daemon, driver, GPU, swap,
   disk, reboot, or host mutation.
 - [x] Replayable ops: repeated runs over identical bytes and base ref are
@@ -347,8 +349,8 @@ leave protected bytes untouched.
 
 - Purpose: surgical scanner, path, diff, sanitization, ratchet, test, and
   rollback contract. Step 3 changes only its activation state, DT-9, and
-  DT-11/DT-12.
-- RF / DT: RF-1..RF-7; DT-1..DT-12.
+  DT-11/DT-12/DT-13.
+- RF / DT: RF-1..RF-7; DT-1..DT-13.
 - Required validation: scoped Markdown-link and syntax checks.
 - Cover target: N/A — documentation only.
 
@@ -771,6 +773,7 @@ the checker never writes it.
 | same | `sanitized_finding_omits_source_and_marker_text` | unit | #16 | ≥80% |
 | same | `output_is_sorted_and_deterministic` | integration | #17 | ≥80% |
 | same | `resource_bound_and_invalid_utf8_fail_closed` | unit | #16 | ≥80% |
+| same | `opaque_protected_private_root_redaction_is_byte_exact` | integration/refusal | #13/#16 | ≥80% |
 | same | `invalid_cli_argument_and_base_return_two` | integration | — | ≥80% |
 | same | `ratchet_rejects_growth_and_accepts_strict_decrease` | integration | #17 | ≥80% |
 | same | `ratchet_uses_base_record_not_pr_record` | integration | #17 | ≥80% |

@@ -375,6 +375,96 @@
       "min": 80
     },
     {
+      "id": "windows-autonomous-structural-rust",
+      "kind": "rust-structural-contract",
+      "spec": "docs/specs/no-milestone/windows-autonomous-broker-service/SPEC.md",
+      "files": [
+        "crates/ramshared-broker/src/lib.rs",
+        "crates/ramshared-winsvc/src/lib.rs"
+      ],
+      "verifications": [
+        {
+          "source": "crates/ramshared-broker/src/lib.rs",
+          "package": "ramshared-broker",
+          "cargo_test": [
+            "cargo",
+            "test",
+            "-p",
+            "ramshared-broker",
+            "--lib"
+          ]
+        },
+        {
+          "source": "crates/ramshared-winsvc/src/lib.rs",
+          "package": "ramshared-winsvc",
+          "cargo_test": [
+            "cargo",
+            "test",
+            "-p",
+            "ramshared-winsvc",
+            "--lib"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "windows-autonomous-platform-e2e-rust",
+      "kind": "windows-platform-e2e",
+      "spec": "docs/specs/no-milestone/windows-autonomous-broker-service/SPEC.md",
+      "files": [
+        "crates/ramshared-winbroker/src/main.rs",
+        "crates/ramshared-winbroker/src/service.rs",
+        "crates/ramshared-winsvc/src/bin/ramshared-service-sid-probe.rs",
+        "crates/ramshared-winsvc/src/cuda_probe.rs"
+      ],
+      "verifications": [
+        {
+          "source": "crates/ramshared-winbroker/src/main.rs",
+          "static": {
+            "path": "scripts/windows/Test-AutonomousBrokerStatic.ps1",
+            "test": "broker_cli_contract"
+          },
+          "live": {
+            "path": "scripts/windows/Run-GuestBrokerService.ps1",
+            "test": "scm_start_ready_stop"
+          }
+        },
+        {
+          "source": "crates/ramshared-winbroker/src/service.rs",
+          "static": {
+            "path": "scripts/windows/Test-AutonomousBrokerStatic.ps1",
+            "test": "broker_service_contract"
+          },
+          "live": {
+            "path": "scripts/windows/Run-GuestBrokerService.ps1",
+            "test": "scm_start_ready_stop"
+          }
+        },
+        {
+          "source": "crates/ramshared-winsvc/src/bin/ramshared-service-sid-probe.rs",
+          "static": {
+            "path": "scripts/windows/Test-AutonomousBrokerStatic.ps1",
+            "test": "service_sid_probe_contract"
+          },
+          "live": {
+            "path": "scripts/windows/Run-GuestBrokerService.ps1",
+            "test": "legitimate_service_sid_connects"
+          }
+        },
+        {
+          "source": "crates/ramshared-winsvc/src/cuda_probe.rs",
+          "static": {
+            "path": "scripts/windows/Test-AutonomousBrokerStatic.ps1",
+            "test": "cuda_probe_uses_local_broker_config"
+          },
+          "live": {
+            "path": "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+            "test": "three_round_sha"
+          }
+        }
+      ]
+    },
+    {
       "id": "windows-task-manager-platform-e2e-rust",
       "kind": "windows-platform-e2e",
       "spec": "docs/specs/no-milestone/windows-task-manager-disk-counters/SPEC.md",

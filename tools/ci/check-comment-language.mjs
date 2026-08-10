@@ -492,6 +492,30 @@ function opaqueProtectedInventoryError(error, classification, mode) {
     error instanceof LanguageError && error.message === 'invalid-utf8'
 }
 
+function splitFirstLine(buffer) {
+  const newline = buffer.indexOf(0x0a)
+  if (newline < 0) return null
+  let lineEnd = newline
+  if (lineEnd > 0 && buffer[lineEnd - 1] === 0x0d) lineEnd--
+  return { line: buffer.subarray(0, lineEnd), suffix: buffer.subarray(newline + 1) }
+}
+
+function opaqueProtectedRootRedaction(root, baseRef, relative, current) {
+  if (typeof baseRef !== 'string') return false
+  let base
+  try {
+    base = gitBuffer(root, ['show', `${baseRef}:${relative}`])
+  } catch {
+    return false
+  }
+  const before = splitFirstLine(base)
+  const after = splitFirstLine(current)
+  if (before === null || after === null || after.line.toString('ascii') !== "'<repo-root>'") return false
+  const privateRoot = before.line.toString('ascii')
+  if (!/^'\\\\wsl(?:\.localhost)?\\[^\\\r\n]+\\home\\[^\\\r\n]+\\[^'\r\n]+'$/i.test(privateRoot)) return false
+  return before.suffix.equals(after.suffix)
+}
+
 function countFindings(findings, classification) {
   return {
     files: new Set(findings.map((item) => item.path)).size,
@@ -532,7 +556,7 @@ function snapshotFor(counts, protectedPaths, protectedDigest) {
   }
 }
 
-function scanEntries(root, entries, mode) {
+function scanEntries(root, entries, mode, baseRef) {
   const mutable = []
   const protectedFindings = []
   const protectedDigest = createHash('sha256')
@@ -554,6 +578,9 @@ function scanEntries(root, entries, mode) {
       findings = scanBuffer(relative, buffer ?? readRepositoryBuffer(root, relative), lineNumbers)
     } catch (error) {
       if (opaqueProtectedInventoryError(error, classification, mode)) continue
+      if (mode === 'diff' && classification === 'protected' &&
+          error instanceof LanguageError && error.message === 'invalid-utf8' &&
+          opaqueProtectedRootRedaction(root, baseRef, relative, readRepositoryBuffer(root, relative))) continue
       throw error
     }
     if (classification === 'protected') {
@@ -578,7 +605,7 @@ export function run({ root = REPO_ROOT, mode = 'all', baseRef } = {}) {
   const entries = mode === 'all'
     ? new Map(enumerateTrackedPaths(root).map((relative) => [relative, null]))
     : getDiffAddedLines(root, baseRef)
-  const scanned = scanEntries(root, entries, mode)
+  const scanned = scanEntries(root, entries, mode, baseRef)
   return {
     ok: mode === 'all' ? scanned.counts.mutable_lines === 0 : scanned.findings.length === 0,
     findings: scanned.findings,

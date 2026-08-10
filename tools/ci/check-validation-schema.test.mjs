@@ -119,6 +119,12 @@ test('added_line_inside_existing_entry_is_append_only_violation', () => {
   assert.match(JSON.stringify(run({ root, baseRef: 'HEAD' })), /append-only-violation/)
 })
 
+test('new_entry_separator_blank_is_append_only_safe', () => {
+  const root = gitFixture('## 2026-01-01 10:00 — old\n**What:** old\n**Verdict:** ✅\n')
+  appendFileSync(path.join(root, 'validation.md'), '\n## 2026-01-01 11:00 — new\n**What:** new\n**Measured data:** 1 run\n**Verdict:** ✅\n')
+  assert.deepEqual(run({ root, baseRef: 'HEAD' }), { ok: true, violations: [] })
+})
+
 test('new_entry_with_legacy_timestamp_is_not_allowlisted', () => {
   const root = gitFixture('## 2026-01-01 10:00 — old\n**What:** old\n**Verdict:** ✅\n')
   appendFileSync(path.join(root, 'validation.md'), '\n## 2026-01-01 11:00 — malformed\n')

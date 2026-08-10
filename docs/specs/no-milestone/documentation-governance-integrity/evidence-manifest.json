@@ -4,7 +4,7 @@
   "status": "DONE",
   "spec": {
     "path": "docs/specs/no-milestone/documentation-governance-integrity/SPEC.md",
-    "sha256": "f2476427e9e6a0635f5875a059043905a0ffd6818dc0d0817ccc7a30149e6387"
+    "sha256": "5b816618381f577f46137aabf2b0d37f9462937bb395a4594241de138e6af4d6"
   },
   "tests": [
     {

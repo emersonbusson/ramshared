@@ -374,10 +374,13 @@ export function run({ root = ROOT, baseRef = null, all = false } = {}) {
   for (let index = 0; index < entries.length; index++) {
     const e = entries[index]
     const nextLine = index + 1 < entries.length ? entries[index + 1].headerLine : lines.length + 1
-    const addedInside = [...added].some((line) => line > e.headerLine && line < nextLine)
+    const addedInside = [...added].filter((line) => line > e.headerLine && line < nextLine)
     if (added.has(e.headerLine)) {
       violations.push(...validateEntry(e))
-    } else if (addedInside && !isAllowed(e)) {
+    } else if (addedInside.length > 0 && !isAllowed(e)) {
+      const nextEntryIsNew = index + 1 < entries.length && added.has(entries[index + 1].headerLine)
+      const separatorOnly = nextEntryIsNew && addedInside.every((line) => lines[line - 1].trim() === '')
+      if (separatorOnly) continue
       violations.push({ line: e.headerLine, rule: 'append-only-violation', message: 'added content inside an existing entry; append a new entry instead' })
     }
   }

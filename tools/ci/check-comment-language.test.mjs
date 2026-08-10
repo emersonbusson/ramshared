@@ -305,6 +305,30 @@ test('opaque_protected_inventory_skips_invalid_utf8_but_diff_fails_closed', (t) 
   assert.equal(result.counts.finding_count, 0)
 })
 
+test('opaque_protected_private_root_redaction_is_byte_exact', (t) => {
+  const target = 'docs/specs/no-milestone/example/evidence/legacy.txt'
+  const root = repository(t, { [target]: 'placeholder\n' })
+  const privateLine = Buffer.from("'\\\\wsl.localhost\\Ubuntu-24.04\\home\\private-user\\repo'\r\n")
+  const suffix = Buffer.from([0x43, 0x50, 0x2d, 0x31, 0x32, 0x35, 0x32, 0x3a, 0x20, 0xff, 0x0d, 0x0a])
+  write(root, target, Buffer.concat([privateLine, suffix]))
+  git(root, ['add', target])
+  git(root, ['commit', '-qm', 'opaque-private-root'])
+
+  write(root, target, Buffer.concat([Buffer.from("'<repo-root>'\n"), suffix]))
+  assert.equal(run({ root, mode: 'diff', baseRef: 'HEAD' }).ok, true)
+
+  write(root, target, Buffer.concat([Buffer.from("'<repo-root>'\n"), suffix, Buffer.from('changed')]))
+  assert.throws(
+    () => run({ root, mode: 'diff', baseRef: 'HEAD' }),
+    (error) => error instanceof LanguageError && error.message === 'invalid-utf8',
+  )
+  write(root, target, Buffer.concat([Buffer.from("'<other-root>'\n"), suffix]))
+  assert.throws(
+    () => run({ root, mode: 'diff', baseRef: 'HEAD' }),
+    (error) => error instanceof LanguageError && error.message === 'invalid-utf8',
+  )
+})
+
 test('invalid_cli_argument_and_base_return_two', (t) => {
   const root = repository(t, { 'README.md': 'English fixture\n' })
   assert.equal(main(['--unknown'], root, SILENT_IO), 2)

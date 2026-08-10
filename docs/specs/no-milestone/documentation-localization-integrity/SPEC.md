@@ -111,9 +111,9 @@ copies of those sources.
 
 Positive authority patterns include English and Portuguese forms of a localized
 document being normative, canonical, official, authoritative, or the source of
-truth. A line explicitly negating those claims (for example, “não é normativo”
-or “not normative”) is not a finding. Diagnostics report only the file, line,
-rule, and stable reason code.
+truth. A line explicitly negating those claims in either supported language is
+not a finding. Diagnostics report only the file, line, rule, and stable reason
+code.
 
 ## Atomicity and rollback
 

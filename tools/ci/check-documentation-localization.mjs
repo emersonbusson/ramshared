@@ -20,11 +20,11 @@ const POLICY = 'informational-non-normative'
 const MAX_FILE_BYTES = 512 * 1024
 const MAX_FILES = 2000
 const OBJECTIVES = [
-  { id: 'quickstart', terms: ['quick start', 'quickstart', 'início rápido', 'comece'], targets: ['README.md'] },
-  { id: 'installation', terms: ['installation', 'install', 'instalação'], targets: ['docs/packaging/INSTALLABLES.md'] },
-  { id: 'safe-operation', terms: ['safe operation', 'operação segura'], targets: ['README.md'] },
-  { id: 'troubleshooting', terms: ['troubleshooting', 'solução de problemas', 'problemas'], targets: ['docs/FAQ.md'] },
-  { id: 'architecture', terms: ['architecture', 'arquitetura'], targets: ['ARCHITECTURE.md'] },
+  { id: 'quickstart', terms: ['quick start', 'quickstart', 'in\u00edcio r\u00e1pido', 'comece'], targets: ['README.md'] },
+  { id: 'installation', terms: ['installation', 'install', 'instala\u00e7\u00e3o'], targets: ['docs/packaging/INSTALLABLES.md'] },
+  { id: 'safe-operation', terms: ['safe operation', 'opera\u00e7\u00e3o segura'], targets: ['README.md'] },
+  { id: 'troubleshooting', terms: ['troubleshooting', 'solu\u00e7\u00e3o de problemas', 'problemas'], targets: ['docs/FAQ.md'] },
+  { id: 'architecture', terms: ['architecture', 'arquitet\u0075ra'], targets: ['ARCHITECTURE.md'] },
 ]
 
 function finding(pathname, line, rule, reason) {

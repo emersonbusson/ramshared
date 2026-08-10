@@ -13,9 +13,11 @@ const LINE_COVERAGE_KIND = 'rust-line-coverage'
 const WINDOWS_PLATFORM_KIND = 'windows-platform-e2e'
 const LOCALIZATION_KIND = 'rust-localization-comment-differential'
 const TEST_ONLY_LOCALIZATION_KIND = 'rust-test-only-localization-differential'
+const STRUCTURAL_KIND = 'rust-structural-contract'
 const PLATFORM_MARKER = 'rust-slice-platform-e2e-v1'
 const LOCALIZATION_MARKER = 'rust-slice-localization-comment-differential-v1'
 const TEST_ONLY_LOCALIZATION_MARKER = 'rust-slice-test-only-localization-differential-v1'
+const STRUCTURAL_MARKER = 'rust-slice-structural-contract-v1'
 const WINDOWS_STATIC_WRAPPER = 'scripts/windows/Test-WindowsCiStatic.ps1'
 const VALIDATION_EVIDENCE_PATH = 'validation.md'
 const FULL_SHA = /^[0-9a-f]{40}$/i
@@ -152,6 +154,16 @@ function expectedTestOnlyLocalizationDeclaration(entry) {
   }
 }
 
+function expectedStructuralDeclaration(entry) {
+  return {
+    schema_version: 1,
+    id: entry.id,
+    kind: entry.kind,
+    files: entry.files,
+    verifications: entry.verifications,
+  }
+}
+
 function escapedRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
@@ -177,7 +189,7 @@ function validateCommonEntry(entry, root, errors, ids) {
   }
   if (ids.has(entry.id)) errors.push(finding('coverage-entry-duplicate', entry.id))
   ids.add(entry.id)
-  if (![LINE_COVERAGE_KIND, WINDOWS_PLATFORM_KIND, LOCALIZATION_KIND, TEST_ONLY_LOCALIZATION_KIND].includes(entry.kind)) {
+  if (![LINE_COVERAGE_KIND, WINDOWS_PLATFORM_KIND, LOCALIZATION_KIND, TEST_ONLY_LOCALIZATION_KIND, STRUCTURAL_KIND].includes(entry.kind)) {
     errors.push(finding('coverage-kind-invalid', entry.id))
     return null
   }
@@ -371,13 +383,55 @@ function validateTestOnlyLocalizationEntry(entry, root, specText, errors) {
   }
 }
 
+function validStructuralVerification(value) {
+  return exactKeys(value, ['source', 'package', 'cargo_test']) &&
+    isRustProductionPath(value.source) && typeof value.package === 'string' &&
+    /^[a-z0-9][a-z0-9-]*$/.test(value.package) &&
+    value.source.startsWith(`crates/${value.package}/src/`) &&
+    validCargoTestCommand(value.cargo_test, value.package)
+}
+
+function validateStructuralEntry(entry, root, specText, errors) {
+  if (!exactKeys(entry, ['id', 'kind', 'spec', 'files', 'verifications'])) {
+    errors.push(finding('structural-entry-fields-invalid', entry.id))
+  }
+  if (!Array.isArray(entry.verifications) || entry.verifications.length !== entry.files.length) {
+    errors.push(finding('structural-verifications-invalid', entry.id))
+    return
+  }
+  const observedSources = []
+  for (const verification of entry.verifications) {
+    if (!validStructuralVerification(verification)) {
+      errors.push(finding('structural-verification-invalid', entry.id))
+      continue
+    }
+    observedSources.push(verification.source)
+    const source = readText(path.join(root, verification.source))
+    if (!isStructuralRustModule(source)) {
+      errors.push(finding('structural-rust-source-invalid', verification.source))
+    }
+  }
+  if (JSON.stringify(observedSources) !== JSON.stringify(entry.files) || new Set(observedSources).size !== observedSources.length) {
+    errors.push(finding('structural-source-files-mismatch', entry.id))
+  }
+  const declaration = parseSpecDeclaration(specText, STRUCTURAL_MARKER)
+  if (declaration.state === 'missing') {
+    errors.push(finding('structural-spec-contract-missing', entry.id))
+  } else if (declaration.state !== 'ok') {
+    errors.push(finding('structural-spec-contract-invalid', entry.id))
+  } else if (!sameJson(declaration.value, expectedStructuralDeclaration(entry))) {
+    errors.push(finding('structural-spec-contract-mismatch', entry.id))
+  }
+}
+
 function validEntry(entry, root, errors, ids) {
   const specText = validateCommonEntry(entry, root, errors, ids)
   if (specText === null) return
   if (entry.kind === LINE_COVERAGE_KIND) validateLineCoverageEntry(entry, specText, errors)
   else if (entry.kind === WINDOWS_PLATFORM_KIND) validatePlatformEntry(entry, root, specText, errors)
   else if (entry.kind === LOCALIZATION_KIND) validateLocalizationEntry(entry, specText, errors)
-  else validateTestOnlyLocalizationEntry(entry, root, specText, errors)
+  else if (entry.kind === TEST_ONLY_LOCALIZATION_KIND) validateTestOnlyLocalizationEntry(entry, root, specText, errors)
+  else validateStructuralEntry(entry, root, specText, errors)
 }
 
 export function validateCoverageMap(map, root = ROOT) {
@@ -572,6 +626,61 @@ function lexRustForTestOnly(source) {
   }
   if (stack.length !== 0) return null
   return { text, tokens, pairs }
+}
+
+export function isStructuralRustModule(source) {
+  const lexed = lexRustForTestOnly(source)
+  if (lexed === null) return false
+  const { tokens, pairs } = lexed
+  let index = 0
+  let declarations = 0
+
+  while (index < tokens.length) {
+    while (tokens[index]?.value === '#') {
+      let bracket = index + 1
+      if (tokens[bracket]?.value === '!') bracket++
+      if (tokens[bracket]?.value !== '[' || tokens[bracket].depth !== 0) return false
+      const end = pairs.get(bracket)
+      if (end === undefined) return false
+      index = end + 1
+    }
+    if (index >= tokens.length) break
+
+    if (tokens[index]?.value === 'pub') {
+      index++
+      if (tokens[index]?.value === '(') {
+        const end = pairs.get(index)
+        if (end === undefined) return false
+        index = end + 1
+      }
+    }
+
+    if (tokens[index]?.value === 'mod') {
+      if (!isRustIdentifierStart(tokens[index + 1]?.value?.[0]) || tokens[index + 2]?.value !== ';') return false
+      index += 3
+      declarations++
+      continue
+    }
+
+    if (tokens[index]?.value === 'use') {
+      const statementDepth = tokens[index].depth
+      index++
+      let sawPath = false
+      while (index < tokens.length && !(tokens[index].value === ';' && tokens[index].depth === statementDepth)) {
+        const value = tokens[index].value
+        if (value === '<literal>' || value === '<number>' || ['(', ')', '[', ']', '=', '!', '#'].includes(value)) return false
+        if (!isRustIdentifierStart(value?.[0]) && ![':', '{', '}', ',', '*'].includes(value)) return false
+        sawPath = true
+        index++
+      }
+      if (!sawPath || tokens[index]?.value !== ';') return false
+      index++
+      declarations++
+      continue
+    }
+    return false
+  }
+  return declarations > 0
 }
 
 function testOnlyModuleAnalysis(source, testModule) {
@@ -866,6 +975,7 @@ export function selectCoverageEntries(map, changedPaths, root = ROOT, options = 
 
 export function runCoveragePlan(entries, { root = ROOT, spawn = spawnSync } = {}) {
   const failures = []
+  const structuralCommands = new Set()
   for (const entry of entries) {
     if (entry.kind === LINE_COVERAGE_KIND) {
       const result = spawn(entry.command[0], entry.command.slice(1), {
@@ -882,6 +992,18 @@ export function runCoveragePlan(entries, { root = ROOT, spawn = spawnSync } = {}
           stdio: 'inherit',
         })
         if (result?.status !== 0) failures.push(finding('test-only-package-test-failed', verification.source))
+      }
+    } else if (entry.kind === STRUCTURAL_KIND) {
+      for (const verification of entry.verifications) {
+        const key = JSON.stringify(verification.cargo_test)
+        if (structuralCommands.has(key)) continue
+        structuralCommands.add(key)
+        const result = spawn(verification.cargo_test[0], verification.cargo_test.slice(1), {
+          cwd: root,
+          shell: false,
+          stdio: 'inherit',
+        })
+        if (result?.status !== 0) failures.push(finding('structural-package-test-failed', verification.source))
       }
     }
   }
@@ -961,6 +1083,7 @@ export function main(argv = process.argv.slice(2), { root = ROOT, print = consol
       print(`RUST_SLICE_TEST_ONLY_LOCALIZATION_REQUIRED=${entry.id}`)
       if (staticTestOnlyInspection) print(`RUST_SLICE_TEST_ONLY_LOCALIZATION_BASE_PROOF_DEFERRED=${entry.id}`)
     }
+    if (entry.kind === STRUCTURAL_KIND) print(`RUST_SLICE_STRUCTURAL_CONTRACT_REQUIRED=${entry.id}`)
   }
   if (!options.run || selection.entries.length === 0) return 0
   const execution = runCoveragePlan(selection.entries, { root, spawn })
