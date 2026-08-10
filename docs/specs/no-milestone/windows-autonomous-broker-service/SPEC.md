@@ -87,6 +87,7 @@
 | DT-23 | The VM autonomous lifecycle accepts an explicit immutable `HostBinDir` and forwards it unchanged to `Run-GuestProductPackage.ps1`. The default remains the documented host staging directory, but qualification commands name the freshly hashed candidate directory; the harness never requires overwriting a physical-host service image merely to test a guest VM. | Reusing `C:\ramshared\bin` couples guest qualification to the physical service staging area and can make a VM proof silently consume stale binaries. Explicit staging preserves package identity and keeps the stopped physical installation untouched. |
 | DT-24 | Every host-side PowerShell Direct connect, remote invocation, and `Copy-Item -ToSession`/`-FromSession` in the VM product-package and autonomous-lifecycle harnesses runs in one disposable child `powershell.exe`. The parent starts concurrent stdout/stderr drains before waiting, applies a numeric outer deadline that exceeds the 180-second bounded readiness retry window, and on timeout targets only that exact child PID with `taskkill /T /F`; failure to observe child-tree exit is RED. Each worker opens one session, performs one operation, and removes that session in `finally`. Nonzero child exit, timeout, malformed/missing typed result, or cleanup failure is a fail-closed harness error. The password is passed only through the worker environment, never through its command line, payload file, or diagnostics. This deadline discipline does not authorize a physical-host restart; VM cold-boot behavior remains an explicitly invoked VM-only E2E action. | A PS Direct call can block before an in-process timeout or shared session cleanup owns it. Redirected pipes can also deadlock a parent that waits before draining. A killed child must not leave a reusable host session or a false successful package/lifecycle result. |
 | DT-25 | The VM cold-boot action is a deferred guest-only shutdown, never `shutdown.exe /s /t 0` inside the typed PowerShell Direct worker. The lifecycle harness validates a 15–30 second requested delay, asks the guest to schedule that delay, requires a typed receipt with Boolean `shutdown_scheduled = true`, Int32 `delay_seconds` equal to the request, and a zero `shutdown.exe` exit code, and only then begins bounded `Off` polling. The delay gives the remote `Invoke-Command` return, result export, and worker `Remove-PSSession` cleanup a completion window; failure to schedule or validate the receipt is RED. This is not a physical-host reboot authorization. | Immediate guest shutdown can tear down PowerShell Direct before its worker exports the required typed result, falsely reporting a failed lifecycle even when the guest correctly accepted the shutdown request. |
+| DT-26 | The manufactured PowerShell Direct deadline seam resolves the exact executable of its current PowerShell host, requires that path to be an existing file, and passes it explicitly to the synthetic grandchild. It never assumes `$PSHOME\powershell.exe`: Windows PowerShell 5.1 normally hosts `powershell.exe`, while PowerShell 7 normally hosts `pwsh.exe`. The chosen path is used only for the static timeout/process-tree fixture and does not change the product worker interpreter or authorize a guest/host action. | A source-only gate that works only under Windows PowerShell 5.1 can fail on the GitHub Windows runner after every product test has passed. Binding the already-running interpreter makes the manufactured process-tree proof portable without weakening identity or timeout checks. |
 
 ## Atomicity and rollback
 
@@ -319,7 +320,8 @@
   `psdirect_timeout_terminates_child_tree`,
   `psdirect_nonzero_child_is_red`,
   `psdirect_calls_are_session_finally_cleaned`,
-  `deferred_guest_shutdown_preserves_psdirect_result`.
+  `deferred_guest_shutdown_preserves_psdirect_result`,
+  `psdirect_runner_uses_current_host_executable`.
 - Cover target: N/A — Windows VM E2E.
 
 **`scripts/windows/Run-GuestProductPackage.ps1`**
@@ -337,7 +339,7 @@
 
 - Purpose: the shared PowerShell 5.1 outer-deadline, asynchronous-drain,
   typed-result, and session-cleanup boundary used by the two VM harnesses.
-- Required tests: every DT-24/DT-25 test named above.
+- Required tests: every DT-24/DT-25/DT-26 test named above.
 - Cover target: N/A — manufactured PowerShell seam.
 
 **`scripts/windows/Test-GuestPsDirectDeadlineStatic.ps1`**
@@ -349,7 +351,8 @@
   `psdirect_redirected_streams_are_drained`,
   `psdirect_timeout_terminates_child_tree`, `psdirect_nonzero_child_is_red`,
   `psdirect_calls_are_session_finally_cleaned`,
-  `deferred_guest_shutdown_preserves_psdirect_result`.
+  `deferred_guest_shutdown_preserves_psdirect_result`,
+  `psdirect_runner_uses_current_host_executable`.
 - Cover target: N/A — manufactured PowerShell seam.
 
 **`scripts/windows/Run-HostAutonomousLifecycle.ps1`**
@@ -703,7 +706,7 @@ No tracked file is deleted at SPEC time. During ITEM-6, delete
 | Package transactions | `scripts/windows/Run-GuestProductPackage.ps1` :: `FreshInstall`, `Repair`, `ManufacturedRollback`, `UninstallRefusal`, `CleanUninstall` | isolated VM | #2/#17 | N/A — Windows E2E |
 | Online broker loss | `scripts/windows/Run-GuestBrokerService.ps1` :: `BrokerLossOnline` | isolated VM | #16 | N/A — Windows E2E |
 | Autonomous VM lifecycle | `scripts/windows/Run-GuestAutonomousLifecycle.ps1` :: `cold_boot_no_login`, `three_round_sha`, `consumer_first_stop`, `lease_release`, `zero_residue`, `current_online_evidence_failure_is_red`, `event153_query_failure_is_red`, `recovery_volume_query_failure_is_red`, `guest_lifecycle_forwards_explicit_host_bin_dir`, `psdirect_outer_deadline_is_enforced`, `psdirect_redirected_streams_are_drained`, `psdirect_timeout_terminates_child_tree`, `psdirect_nonzero_child_is_red`, `psdirect_calls_are_session_finally_cleaned`, `deferred_guest_shutdown_preserves_psdirect_result` | isolated VM/static | #9/#13/#15/#16 | N/A — Windows E2E |
-| VM PowerShell Direct deadline seam | `scripts/windows/Test-GuestPsDirectDeadlineStatic.ps1` :: `psdirect_outer_deadline_is_enforced`, `psdirect_redirected_streams_are_drained`, `psdirect_timeout_terminates_child_tree`, `psdirect_nonzero_child_is_red`, `psdirect_calls_are_session_finally_cleaned`, `deferred_guest_shutdown_preserves_psdirect_result` | manufactured | #13/#15/#16/#17 | N/A — PowerShell seam |
+| VM PowerShell Direct deadline seam | `scripts/windows/Test-GuestPsDirectDeadlineStatic.ps1` :: `psdirect_outer_deadline_is_enforced`, `psdirect_redirected_streams_are_drained`, `psdirect_timeout_terminates_child_tree`, `psdirect_nonzero_child_is_red`, `psdirect_calls_are_session_finally_cleaned`, `deferred_guest_shutdown_preserves_psdirect_result`, `psdirect_runner_uses_current_host_executable` | manufactured | #13/#15/#16/#17 | N/A — PowerShell seam |
 | Static product boundary | `scripts/windows/Test-AutonomousBrokerStatic.ps1` :: `BROKER_BINARY_MATCH`, `SCM_DEPENDENCY_MATCH`, `SERVICE_SID_MATCH`, `DAILY_TCP_LISTENER_ABSENT`, `NO_LAB_BROKER_REFERENCE`; `scripts/windows/Test-HostExhaustiveStatic.ps1` :: `package_broker_required`, `consumer_first_stop_required`, `complete_pass_gate` | static | #13 | N/A — harness |
 | Physical immutable package | `scripts/windows/Run-HostAutonomousLifecycle.ps1` :: `three_cold_boots_same_manifest`, `final_preflight_clean`, `resume_marker_is_monotonic`, `cleanup_artifacts_complete`, `intended_payload_corruption_is_red`, `exact_online_identity_required_before_format`, `non_raw_lun_refuses_before_mutation`, `active_pagefile_refuses_before_install`, `configured_pagefile_refuses_before_install`, `pagefile_query_failure_refuses_before_install`, `stop_request_error_is_red`, `bounded_child_terminates_process_tree`, `resume_task_has_one_time_token_without_approval_switch`, `stale_or_replayed_resume_token_is_refused`, `watchdog_shutdown_requires_separate_approval`, `failure_cleanup_disarms_watchdog_and_task` | manufactured + physical supervised | #5/#9/#16/#17 | N/A — environment-bound |
 | Physical harness manufactured safety | `scripts/windows/Test-HostAutonomousLifecycleStatic.ps1` :: `intended_payload_corruption_is_red`, `exact_online_identity_required_before_format`, `non_raw_lun_refuses_before_mutation`, `active_pagefile_refuses_before_install`, `configured_pagefile_refuses_before_install`, `pagefile_query_failure_refuses_before_install`, `stop_request_error_is_red`, `bounded_child_terminates_process_tree`, `resume_task_has_one_time_token_without_approval_switch`, `stale_or_replayed_resume_token_is_refused`, `watchdog_shutdown_requires_separate_approval`, `failure_cleanup_disarms_watchdog_and_task` | manufactured | #13/#15/#16/#17 | N/A — PowerShell seam |
