@@ -1,0 +1,435 @@
+{
+  "schema_version": 2,
+  "entries": [
+    {
+      "id": "cascade-lifecycle-observability",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/cascade-lifecycle-observability/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-cli",
+        "--files",
+        "crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs,crates/ramshared-cli/src/main.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/cascade-lifecycle-cov.json"
+      ],
+      "packages": [
+        "ramshared-cli"
+      ],
+      "files": [
+        "crates/ramshared-cli/src/cascade/lifecycle.rs",
+        "crates/ramshared-cli/src/cascade/mod.rs",
+        "crates/ramshared-cli/src/main.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "cascade-transport-orchestration",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/cascade-transport-policy/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-cli",
+        "--files",
+        "crates/ramshared-cli/src/cascade/cascade_io.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/cascade-transport-orchestration-cov.json"
+      ],
+      "packages": [
+        "ramshared-cli"
+      ],
+      "files": [
+        "crates/ramshared-cli/src/cascade/cascade_io.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "windows-autonomous-broker-lease",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/windows-autonomous-broker-service/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-broker",
+        "--files",
+        "crates/ramshared-broker/src/lease.rs",
+        "--min",
+        "80"
+      ],
+      "packages": [
+        "ramshared-broker"
+      ],
+      "files": [
+        "crates/ramshared-broker/src/lease.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "windows-autonomous-broker-core",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/windows-autonomous-broker-service/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-winbroker",
+        "--files",
+        "crates/ramshared-winbroker/src/lib.rs",
+        "--min",
+        "80"
+      ],
+      "packages": [
+        "ramshared-winbroker"
+      ],
+      "files": [
+        "crates/ramshared-winbroker/src/lib.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "windows-autonomous-winsvc",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/windows-autonomous-broker-service/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-winsvc",
+        "--files",
+        "crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/ipc.rs,crates/ramshared-winsvc/src/package.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/evidence.rs",
+        "--min",
+        "80"
+      ],
+      "packages": [
+        "ramshared-winsvc"
+      ],
+      "files": [
+        "crates/ramshared-winsvc/src/config.rs",
+        "crates/ramshared-winsvc/src/ipc.rs",
+        "crates/ramshared-winsvc/src/package.rs",
+        "crates/ramshared-winsvc/src/runtime.rs",
+        "crates/ramshared-winsvc/src/evidence.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "windows-storport-cuda-vram",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/windows-storport-cuda-vram/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-winsvc",
+        "--files",
+        "crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs,crates/ramshared-winsvc/src/host_safety.rs",
+        "--min",
+        "80"
+      ],
+      "packages": [
+        "ramshared-winsvc"
+      ],
+      "files": [
+        "crates/ramshared-winsvc/src/config.rs",
+        "crates/ramshared-winsvc/src/evidence.rs",
+        "crates/ramshared-winsvc/src/driver_link.rs",
+        "crates/ramshared-winsvc/src/broker_tenant.rs",
+        "crates/ramshared-winsvc/src/runtime.rs",
+        "crates/ramshared-winsvc/src/service.rs",
+        "crates/ramshared-winsvc/src/host_safety.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "comment-language-rust-localization-high-coverage",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/comment-language-integrity/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-block,ramshared-broker,ramshared-wsl2d",
+        "--files",
+        "crates/ramshared-block/src/handshake.rs,crates/ramshared-block/src/protocol.rs,crates/ramshared-broker/src/arbiter.rs,crates/ramshared-broker/src/protocol.rs,crates/ramshared-wsl2d/src/broker_srv.rs,crates/ramshared-wsl2d/src/canary_probe.rs,crates/ramshared-wsl2d/src/telemetry.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/comment-language-rust-cov.json"
+      ],
+      "packages": [
+        "ramshared-block",
+        "ramshared-broker",
+        "ramshared-wsl2d"
+      ],
+      "files": [
+        "crates/ramshared-block/src/handshake.rs",
+        "crates/ramshared-block/src/protocol.rs",
+        "crates/ramshared-broker/src/arbiter.rs",
+        "crates/ramshared-broker/src/protocol.rs",
+        "crates/ramshared-wsl2d/src/broker_srv.rs",
+        "crates/ramshared-wsl2d/src/canary_probe.rs",
+        "crates/ramshared-wsl2d/src/telemetry.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "comment-language-rust-test-only-localization",
+      "kind": "rust-test-only-localization-differential",
+      "spec": "docs/specs/no-milestone/comment-language-integrity/SPEC.md",
+      "files": [
+        "crates/ramshared-cuda/src/lib.rs",
+        "crates/ramshared-wsl2d/src/backend.rs"
+      ],
+      "verifications": [
+        {
+          "source": "crates/ramshared-cuda/src/lib.rs",
+          "package": "ramshared-cuda",
+          "test_module": "tests",
+          "cargo_test": ["cargo", "test", "-p", "ramshared-cuda", "--lib"],
+          "ignored_gpu_tests": [
+            {
+              "name": "gpu_roundtrip_256mib",
+              "command": ["cargo", "test", "-p", "ramshared-cuda", "--", "--ignored", "--test-threads=1"],
+              "evidence": "validation.md"
+            }
+          ]
+        },
+        {
+          "source": "crates/ramshared-wsl2d/src/backend.rs",
+          "package": "ramshared-wsl2d",
+          "test_module": "tests",
+          "cargo_test": ["cargo", "test", "-p", "ramshared-wsl2d", "--lib"],
+          "ignored_gpu_tests": [
+            {
+              "name": "vram_backend_serves_nbd_write_then_read",
+              "command": ["cargo", "test", "-p", "ramshared-wsl2d", "backend::tests::vram_backend_serves_nbd_write_then_read", "--", "--ignored", "--test-threads=1"],
+              "evidence": "validation.md"
+            },
+            {
+              "name": "vram_gauge_outros_captures_real_graphics_usage",
+              "command": ["cargo", "test", "-p", "ramshared-wsl2d", "backend::tests::vram_gauge_outros_captures_real_graphics_usage", "--", "--ignored", "--test-threads=1"],
+              "evidence": "validation.md"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "memory-broker-agent-cli",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/memory-broker/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-agent",
+        "--files",
+        "crates/ramshared-agent/src/main.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/memory-broker-agent-cli-cov.json"
+      ],
+      "packages": [
+        "ramshared-agent"
+      ],
+      "files": [
+        "crates/ramshared-agent/src/main.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "memory-broker-support-safety",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/memory-broker/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-agent,ramshared-tier",
+        "--files",
+        "crates/ramshared-agent/src/explain.rs,crates/ramshared-agent/src/local.rs,crates/ramshared-agent/src/win_mem.rs,crates/ramshared-tier/src/cascade.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/memory-broker-support-safety-cov.json"
+      ],
+      "packages": [
+        "ramshared-agent",
+        "ramshared-tier"
+      ],
+      "files": [
+        "crates/ramshared-agent/src/explain.rs",
+        "crates/ramshared-agent/src/local.rs",
+        "crates/ramshared-agent/src/win_mem.rs",
+        "crates/ramshared-tier/src/cascade.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "cascade-vram-ondemand-policy",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/cascade-vram-ondemand/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-block",
+        "--files",
+        "crates/ramshared-block/src/sparse_vram.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/cascade-vram-ondemand-policy-cov.json"
+      ],
+      "packages": [
+        "ramshared-block"
+      ],
+      "files": [
+        "crates/ramshared-block/src/sparse_vram.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "memory-broker-ublk-safety",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/memory-broker/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-uring,ramshared-wsl2d",
+        "--files",
+        "crates/ramshared-uring/src/lib.rs,crates/ramshared-wsl2d/src/ublk_queue.rs,crates/ramshared-wsl2d/src/ublk_server.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/memory-broker-ublk-safety-cov.json"
+      ],
+      "packages": [
+        "ramshared-uring",
+        "ramshared-wsl2d"
+      ],
+      "files": [
+        "crates/ramshared-uring/src/lib.rs",
+        "crates/ramshared-wsl2d/src/ublk_queue.rs",
+        "crates/ramshared-wsl2d/src/ublk_server.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "memory-broker-wsl2d-daemon",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/memory-broker/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-wsl2d",
+        "--files",
+        "crates/ramshared-wsl2d/src/main.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/memory-broker-wsl2d-daemon-cov.json"
+      ],
+      "packages": [
+        "ramshared-wsl2d"
+      ],
+      "files": [
+        "crates/ramshared-wsl2d/src/main.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "wsl2-cascade-connection-transport",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/wsl2-cascade-swap/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-wsl2d",
+        "--files",
+        "crates/ramshared-wsl2d/src/conn.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/wsl2-conn-cov.json"
+      ],
+      "packages": [
+        "ramshared-wsl2d"
+      ],
+      "files": [
+        "crates/ramshared-wsl2d/src/conn.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "windows-task-manager-platform-e2e-rust",
+      "kind": "windows-platform-e2e",
+      "spec": "docs/specs/no-milestone/windows-task-manager-disk-counters/SPEC.md",
+      "files": [
+        "crates/ramshared-winbroker/src/pipe.rs",
+        "crates/ramshared-winsvc/src/main.rs",
+        "crates/ramshared-winsvc/src/product_online.rs",
+        "crates/ramshared-winsvc/src/windows_host.rs"
+      ],
+      "verifications": [
+        {
+          "source": "crates/ramshared-winbroker/src/pipe.rs",
+          "static": {
+            "path": "scripts/windows/Test-AutonomousBrokerStatic.ps1",
+            "test": "canonical_product_pipe"
+          },
+          "live": {
+            "path": "scripts/windows/Run-GuestBrokerService.ps1",
+            "test": "register_and_lease_over_named_pipe"
+          }
+        },
+        {
+          "source": "crates/ramshared-winsvc/src/main.rs",
+          "static": {
+            "path": "scripts/windows/Test-ProductOnlineStatic.ps1",
+            "test": "scm_stop_pending_status_error_is_logged"
+          },
+          "live": {
+            "path": "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+            "test": "scm_stop_returns_cleanly"
+          }
+        },
+        {
+          "source": "crates/ramshared-winsvc/src/product_online.rs",
+          "static": {
+            "path": "scripts/windows/Test-ProductOnlineStatic.ps1",
+            "test": "startup_lun_observation_budgets_are_nested"
+          },
+          "live": {
+            "path": "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+            "test": "exact_raw_lun_before_stop"
+          }
+        },
+        {
+          "source": "crates/ramshared-winsvc/src/windows_host.rs",
+          "static": {
+            "path": "scripts/windows/Test-ProductOnlineStatic.ps1",
+            "test": "powershell_dynamic_values_use_environment_only"
+          },
+          "live": {
+            "path": "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+            "test": "exact_raw_lun_before_stop"
+          }
+        }
+      ]
+    }
+  ]
+}

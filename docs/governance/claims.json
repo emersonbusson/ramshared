@@ -1,0 +1,162 @@
+{
+  "schema_version": 1,
+  "claims": [
+    {
+      "slug": "benchmark-evidence-integrity",
+      "state": "DONE",
+      "owner_role": "documentation-governance",
+      "canonical_spec": "docs/specs/no-milestone/benchmark-evidence-integrity/SPEC.md",
+      "implementation_paths": [
+        "tools/ci/check-benchmark-evidence.mjs",
+        "tools/ci/check-spec-evidence.mjs"
+      ],
+      "named_tests": [
+        {
+          "path": "tools/ci/check-benchmark-evidence.test.mjs",
+          "name": "valid_v1_record_passes"
+        },
+        {
+          "path": "tools/ci/check-spec-evidence.test.mjs",
+          "name": "complete_done_manifest_passes"
+        }
+      ],
+      "cover": {
+        "mode": "N/A — Node named tests",
+        "minimum_percent": null,
+        "evidence_path": "docs/specs/no-milestone/benchmark-evidence-integrity/evidence/validation-summary.json"
+      },
+      "validation": {
+        "record_path": "validation.md",
+        "verdict": "✅",
+        "source_commit": "95739d1f972bcefe7eb5df8861cf8c526503e074",
+        "evidence_paths": [
+          "docs/specs/no-milestone/benchmark-evidence-integrity/evidence-manifest.json"
+        ]
+      },
+      "binary_match_required": false,
+      "environment_blocker": null,
+      "missing_gate": null,
+      "next_proof": null,
+      "rollback_trigger": "one invalid evidence record or false DONE passes"
+    },
+    {
+      "slug": "documentation-governance-integrity",
+      "state": "DONE",
+      "owner_role": "documentation-governance",
+      "canonical_spec": "docs/specs/no-milestone/documentation-governance-integrity/SPEC.md",
+      "implementation_paths": [
+        "tools/ci/check-documentation-governance.mjs",
+        "tools/ci/check-validation-schema.mjs",
+        "tools/generate-docs-index.mjs"
+      ],
+      "named_tests": [
+        {
+          "path": "tools/ci/check-documentation-governance.test.mjs",
+          "name": "claims_done_requires_all_evidence"
+        },
+        {
+          "path": "tools/ci/check-validation-schema.test.mjs",
+          "name": "governance_entry_requires_before_action_after"
+        },
+        {
+          "path": "tools/generate-docs-index.test.mjs",
+          "name": "build_rows_fails_closed_to_unqualified_without_done_claim"
+        }
+      ],
+      "cover": {
+        "mode": "node-built-in",
+        "minimum_percent": 80,
+        "evidence_path": "docs/specs/no-milestone/documentation-governance-integrity/evidence/validation-summary.json"
+      },
+      "validation": {
+        "record_path": "validation.md",
+        "verdict": "✅",
+        "source_commit": "95739d1f972bcefe7eb5df8861cf8c526503e074",
+        "evidence_paths": [
+          "docs/specs/no-milestone/documentation-governance-integrity/evidence-manifest.json"
+        ]
+      },
+      "binary_match_required": false,
+      "environment_blocker": null,
+      "missing_gate": null,
+      "next_proof": null,
+      "rollback_trigger": "one false DONE promotion or one sensitive-output leak"
+    },
+    {
+      "slug": "documentation-localization-integrity",
+      "state": "DONE",
+      "owner_role": "documentation-governance",
+      "canonical_spec": "docs/specs/no-milestone/documentation-localization-integrity/SPEC.md",
+      "implementation_paths": [
+        "tools/ci/check-documentation-localization.mjs",
+        "docs/localization/manifest.json"
+      ],
+      "named_tests": [
+        {
+          "path": "tools/ci/check-documentation-localization.test.mjs",
+          "name": "manifest_current_hashes_pass"
+        },
+        {
+          "path": "tools/ci/check-documentation-localization.test.mjs",
+          "name": "authority_claim_is_rejected_without_echo"
+        }
+      ],
+      "cover": {
+        "mode": "node-built-in",
+        "minimum_percent": 80,
+        "evidence_path": "docs/specs/no-milestone/documentation-localization-integrity/evidence/validation-summary.json"
+      },
+      "validation": {
+        "record_path": "validation.md",
+        "verdict": "✅",
+        "source_commit": "95739d1f972bcefe7eb5df8861cf8c526503e074",
+        "evidence_paths": [
+          "docs/specs/no-milestone/documentation-localization-integrity/evidence-manifest.json"
+        ]
+      },
+      "binary_match_required": false,
+      "environment_blocker": null,
+      "missing_gate": null,
+      "next_proof": null,
+      "rollback_trigger": "one stale hash, broken switch, or authority claim passes"
+    },
+    {
+      "slug": "public-repository-hygiene",
+      "state": "DONE",
+      "owner_role": "documentation-governance",
+      "canonical_spec": "docs/specs/no-milestone/public-repository-hygiene/SPEC.md",
+      "implementation_paths": [
+        "tools/ci/check-public-hygiene.mjs",
+        "docs/governance/public-hygiene-allowlist.json"
+      ],
+      "named_tests": [
+        {
+          "path": "tools/ci/check-public-hygiene.test.mjs",
+          "name": "candidate_scans_nonignored_untracked_file"
+        },
+        {
+          "path": "tools/ci/check-public-hygiene.test.mjs",
+          "name": "staged_reads_index_blob_not_worktree"
+        }
+      ],
+      "cover": {
+        "mode": "node-built-in",
+        "minimum_percent": 80,
+        "evidence_path": "docs/specs/no-milestone/public-repository-hygiene/evidence/validation-summary.json"
+      },
+      "validation": {
+        "record_path": "validation.md",
+        "verdict": "✅",
+        "source_commit": "95739d1f972bcefe7eb5df8861cf8c526503e074",
+        "evidence_paths": [
+          "docs/specs/no-milestone/public-repository-hygiene/evidence-manifest.json"
+        ]
+      },
+      "binary_match_required": false,
+      "environment_blocker": null,
+      "missing_gate": null,
+      "next_proof": null,
+      "rollback_trigger": "one candidate bypass or sensitive diagnostic passes"
+    }
+  ]
+}

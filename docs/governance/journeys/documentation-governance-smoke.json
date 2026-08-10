@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "journey_id": "documentation-governance-smoke",
+  "version": 1,
+  "run_id": "documentation-governance-smoke-v1",
+  "profile": "smoke",
+  "target_layer": "documentation",
+  "seed": 1,
+  "clock_policy": "monotonic",
+  "timeout_seconds": 60,
+  "parameters": {
+    "expected_clean_findings": 0,
+    "expected_refusal_exit": 1,
+    "expected_usage_exit": 2
+  },
+  "runner_refs": [
+    "tools/ci/check-documentation-governance.mjs",
+    "scripts/docs-check.sh"
+  ],
+  "actions": [
+    {
+      "id": "governance-check",
+      "runner_ref": "tools/ci/check-documentation-governance.mjs",
+      "wait_strategy": "process-exit",
+      "timeout_seconds": 60
+    }
+  ],
+  "checkpoints": {
+    "before": "git status and current finding count",
+    "action": "governance CLI exit and sanitized output hash",
+    "after": "finding count, expected files, and zero host mutation"
+  },
+  "legitimate_case": {
+    "name": "clean public documentation",
+    "expected_exit": 0
+  },
+  "refusal_cases": [
+    {
+      "name": "private path",
+      "expected_exit": 1,
+      "terminal_state": "NO-GO"
+    },
+    {
+      "name": "false DONE claim",
+      "expected_exit": 1,
+      "terminal_state": "NO-GO"
+    }
+  ],
+  "invariants": [
+    "no-sensitive-output",
+    "no-host-mutation",
+    "deterministic-ordering",
+    "idempotent-cleanup"
+  ],
+  "reporters": [
+    "scope-counts",
+    "rule-counts",
+    "status"
+  ],
+  "artifacts": [
+    "tmp/documentation-governance-e2e/documentation-governance-smoke-v1/"
+  ],
+  "cleanup": {
+    "idempotent": true,
+    "mode": "remove-temporary-report"
+  },
+  "consumer_paths": [
+    "scripts/docs-check.sh"
+  ],
+  "verdict": "PASS",
+  "rollback_trigger": "one sensitive diagnostic or one false DONE"
+}

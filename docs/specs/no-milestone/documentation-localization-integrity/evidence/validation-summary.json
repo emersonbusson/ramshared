@@ -1,0 +1,31 @@
+{
+  "schema_version": "ramshared-validation-summary/v1",
+  "slug": "documentation-localization-integrity",
+  "before": {
+    "required_manifest_entries": 2,
+    "canonical_readme_sha256": "e4acb2f93861e05bca1935421396d8a44b5670ca4ff7326053d31df51335d3c8",
+    "checker_findings": 0,
+    "runtime_or_host_mutation": false
+  },
+  "action": {
+    "named_tests": 15,
+    "test_failures": 0,
+    "coverage_lines_percent": 98.59,
+    "coverage_branches_percent": 86.9,
+    "coverage_functions_percent": 100,
+    "checker_command": "node tools/ci/check-documentation-localization.mjs --all",
+    "checker_runs": 2,
+    "refusal_fixture_classes": 8,
+    "syntax_checks": 2
+  },
+  "after": {
+    "checker_exit_code": 0,
+    "checker_files": 2,
+    "checker_findings": 0,
+    "deterministic_output": true,
+    "sanitized_output_sha256": "f1964e7db9763a1028e20c5dfdaee6c13e85a2d81ba0685b1205c50a45b7300c",
+    "read_only_repeat": true,
+    "runtime_or_host_mutation": false
+  },
+  "verdict": "PASS"
+}

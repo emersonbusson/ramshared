@@ -1,0 +1,93 @@
+{
+  "schema_version": "ramshared-spec-evidence/v1",
+  "slug": "public-repository-hygiene",
+  "status": "DONE",
+  "spec": {
+    "path": "docs/specs/no-milestone/public-repository-hygiene/SPEC.md",
+    "sha256": "4ee5e9efb4d1ee593eda95b01f8853447d319e940a3585624a3527c542d30749"
+  },
+  "tests": [
+    {
+      "name": "candidate_scans_nonignored_untracked_file",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "integration",
+      "exit_code": 0
+    },
+    {
+      "name": "staged_reads_index_blob_not_worktree",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "integration",
+      "exit_code": 0
+    },
+    {
+      "name": "full_repository_candidate_is_clean",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    }
+  ],
+  "cover": [
+    {
+      "path": "tools/ci/check-public-hygiene.mjs",
+      "line_percent": 94.38,
+      "branch_percent": 85.29,
+      "function_percent": 100.0,
+      "classification": "Node per-file coverage",
+      "justification": "94.38% lines, 85.29% branches, and 100.00% functions exceed the SPEC 80% thresholds."
+    }
+  ],
+  "live": {
+    "required": true,
+    "before": {
+      "candidate_mode_available": false,
+      "staged_index_blob_mode_available": false
+    },
+    "action": {
+      "command": "node tools/ci/check-public-hygiene.mjs --candidate"
+    },
+    "after": {
+      "candidate_files": 681,
+      "findings": 0,
+      "exit_code": 0
+    },
+    "legitimate": {
+      "verdict": "PASS"
+    },
+    "refusals": [
+      {
+        "name": "staged index differs from working tree",
+        "verdict": "PASS"
+      },
+      {
+        "name": "sensitive candidate content",
+        "verdict": "PASS"
+      }
+    ],
+    "cleanup": {
+      "complete": true,
+      "residue": 0
+    },
+    "evidence_artifacts": [
+      "docs/specs/no-milestone/public-repository-hygiene/evidence/validation-summary.json"
+    ]
+  },
+  "binary_match": {
+    "required": false,
+    "passed": false,
+    "identities": []
+  },
+  "artifacts": [
+    {
+      "path": "docs/specs/no-milestone/public-repository-hygiene/evidence/validation-summary.json",
+      "bytes": 688,
+      "sha256": "7b2f1bba81035aa6e6e92326958f7228b9e774fab4c867f1d3318d9ebaca6034"
+    }
+  ],
+  "validation_path": "validation.md",
+  "impl_path": "docs/specs/no-milestone/public-repository-hygiene/IMPL.md",
+  "gaps": {
+    "open": [],
+    "env_bound": []
+  },
+  "rollback_trigger": "one staged blob bypass, skipped public candidate, or sensitive diagnostic"
+}

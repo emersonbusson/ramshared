@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ramshared-spec-evidence/v1",
+  "title": "RamShared SSDV3 evidence claim manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "slug", "status", "spec", "tests", "cover",
+    "live", "binary_match", "artifacts", "validation_path", "impl_path",
+    "gaps", "rollback_trigger"
+  ],
+  "properties": {
+    "schema_version": { "const": "ramshared-spec-evidence/v1" },
+    "slug": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "status": { "enum": ["PARTIAL", "DONE"] },
+    "spec": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": { "sha256": { "type": "string", "pattern": "^[A-Fa-f0-9]{64}$" } }
+    },
+    "tests": { "type": "array", "minItems": 1 },
+    "cover": { "type": "array", "minItems": 1 },
+    "live": { "type": "object" },
+    "binary_match": { "type": "object" },
+    "artifacts": { "type": "array", "minItems": 1 },
+    "validation_path": { "type": "string" },
+    "impl_path": { "type": "string" },
+    "gaps": { "type": "object", "required": ["open", "env_bound"] },
+    "rollback_trigger": { "type": "string", "minLength": 8 }
+  }
+}

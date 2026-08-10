@@ -1,28 +1,31 @@
-# RamShared — Registro de Benchmarks
+# RamShared — Benchmark Log
 
-> **Log único de TODOS os benchmarks**, com contexto completo (tipo, branch/commit, horário, carga da
-> máquina e o que estava aberto). Número sem contexto engana — a mesma medição muda conforme a máquina
-> está ociosa ou em uso (Kahneman #3 número-não-adjetivo + #1 WYSIATI registrar o estado).
+> **Canonical log for every benchmark**, with complete context (type,
+> branch/commit, time, machine load, and active workloads). A number without
+> context is misleading because the same measurement changes between idle and
+> busy states (Kahneman #3 number-not-adjective and #1 WYSIATI state capture).
 >
-> **Append-only:** cada run é uma entrada nova ao fim; não reescrever entradas antigas. Decisões
-> consolidadas (go/no-go) vão para [`memory-broker/P0-RESULTS.md`](reliability/memory-broker-p0-results.md).
+> **Append-only:** every run is a new entry at the end; do not rewrite older
+> entries. Consolidated go/no-go decisions belong in
+> [`memory-broker/P0-RESULTS.md`](reliability/memory-broker-p0-results.md).
 
-## Template de entrada
+## Entry template
 
 ```
-## AAAA-MM-DD HH:MM TZ — <tipo do benchmark>
-**Contexto**
+## YYYY-MM-DD HH:MM TZ — <benchmark type>
+**Context**
 - Branch/commit: <branch> @ <hash> (<subject>)
-- Máquina: <host> (<GPU/VRAM>), WSL2 <kernel>, RAM <total>
-- Carga (snapshot): VRAM usado/livre; RAM avail/free; swap usado; disco (util/latência)
-- Aberto (GUI Windows): <apps> | WSL2: <procs>
-- Ferramenta/parâmetros: <fio/cuMemcpy/…, bounded?>
-**Resultados** (tabela: métrica | valor | unidade)
-**Leitura honesta** (o que o número diz + caveats + o que falta)
+- Machine: <host> (<GPU/VRAM>), WSL2 <kernel>, RAM <total>
+- Load (snapshot): VRAM used/free; RAM available/free; swap used; disk utilization/latency
+- Active Windows GUI: <apps> | WSL2: <processes>
+- Tool/parameters: <fio/cuMemcpy/…, bounded?>
+**Results** (table: metric | value | unit)
+**Honest reading** (what the number supports, caveats, and missing proof)
 ```
 
 ---
 
+<!-- ramshared-benchmark-id: 2026-06-15-vram-headroom-nvme4k -->
 ## 2026-06-15 23:10 -03 — Q1a (headroom VRAM/RAM) + Q1b (NVMe 4K, contido)
 
 **Contexto**
@@ -77,6 +80,7 @@ Referência VRAM-swap (P0-RESULTS §3, mesma op 4K p50): **ublk 241 µs / NBD-Un
 
 ---
 
+<!-- ramshared-benchmark-id: 2026-07-13-storport-vs-sata -->
 ## 2026-07-13 17:53 -03 — E2E StorPort RAMShared (Disk S:) vs Local SATA SSD
 **Contexto**
 - Branch/commit: `main` @ `b02c8e0` (Release please, dependabot, and custom static gates)
@@ -98,6 +102,7 @@ Referência VRAM-swap (P0-RESULTS §3, mesma op 4K p50): **ublk 241 µs / NBD-Un
 - **Velocidade de Escrita:** A escrita a **~420 MB/s** é competitiva com SSDs SATA III físicos, sofrendo apenas a latência de context switch e sincronização com o backend userspace do driver.
 - **Segurança e Consistência:** Zero corrupção sob preenchimento de 96% do volume, atestando a solidez da fila SCSI e da paginação física.
 
+<!-- ramshared-benchmark-id: 2026-07-24-wsl2-disk-io -->
 ## 2026-07-24 04:48 -03 — bounded WSL2 disk I/O repeatability
 
 **Context**
@@ -122,6 +127,7 @@ writes show a long-tail p99 (494–2278 us). This is a disk-path baseline only; 
 prove StorPort or VRAM performance because the Windows driver was not loaded and no live swap
 pressure was introduced.
 
+<!-- ramshared-benchmark-id: 2026-07-25-autonomous-broker-scm -->
 ## 2026-07-25 06:15 -03 — autonomous broker SCM lifecycle
 
 **Context**
@@ -150,6 +156,7 @@ maximum observation, not a production percentile. This benchmark measures the
 isolated broker SCM/pipe surface; it does not measure CUDA, StorPort, package
 transactions, cold boot, or the physical host.
 
+<!-- ramshared-benchmark-id: 2026-07-25-autonomous-product-vm-physical -->
 ## 2026-07-25 09:28 -03 — autonomous product VM versus physical cold boot
 
 **Context**
