@@ -1,42 +1,53 @@
-# LIBRARIES — decisões de API/subsistema (RamShared)
+# LIBRARIES — API/subsystem decisions (RamShared)
 
-Registro anti-halo (Kahneman #11): nenhuma API/subsistema/dependência entra sem
-**critério mensurável**, **alternativas** e um **"quando revisitar"**. Um LKM
-ideal tem zero deps externas — aqui o registro é de **escolhas de API de kernel**
-e das poucas deps userspace. Inclui "deliberadamente NÃO usado". O caminho NBD atual segue
-zero-dep externa; a Fase B/ublk tem uma exceção userspace explicitamente gated.
+Anti-halo record (Kahneman #11): no API, subsystem, or dependency enters
+without a **measurable criterion**, **alternatives**, and a **"when to
+revisit."** An ideal LKM has zero external dependencies — this record covers
+**kernel API choices** and the few userspace dependencies. It includes what is
+**deliberately NOT used**. The current NBD path remains free of external
+dependencies; Phase B/ublk has an explicitly gated userspace exception.
 
-## Escolhas ativas
+## Active choices
 
-| Escolha | Critério (mensurável / compatibilidade dura) | Quando revisitar |
+| Choice | Criterion (measurable / hard compatibility) | When to revisit |
 | --- | --- | --- |
-| **Block backend: NBD** (Fase A) | único que funciona em GeForce consumer (`nvidia_p2p_*` → `EINVAL`); `nbd.ko` presente, só `modprobe` | quando o kernel WSL2 tiver `CONFIG_BLK_DEV_UBLK` |
-| **Block backend: ublk** (Fase B) | latência menor (io_uring), sem round-trip socket | exige kernel custom; só após Fase B |
-| **Userspace ring: `ramshared-uring` + `io-uring` crate** (Fase B, gated) | `ramshared-uring` isola qualquer `unsafe` de SQE; `io-uring 0.7.12` (MIT/Apache-2.0) evita hand-roll de barreiras acquire/release; lockfile traz também `libc`, `bitflags`, `cfg-if`; ADR-0004 aceita a exceção | remover se bench ublk não superar NBD ou se auditoria de supply chain falhar |
-| **Broker protocol: `serde`/`serde_json` (JSON-lines)** (P1, broker) | control-plane ~1 msg/s/tenant, debugável com `nc`/`jq`; `serde 1.0.228` + `serde_json 1.0.150` (MIT/Apache-2.0) dão validação de shape de graça e evitam parser hand-rolled frágil; confinado ao crate `ramshared-broker` (daemon/lib seguem `#![forbid(unsafe_code)]`); [ADR-0005](decisions/ADR-0005-broker-protocol-jsonl.md) | migrar p/ length-prefixed (`bincode`) se payload >64 KiB/msg ou >100 msg/s/tenant |
-| **Tier quente: zram (lzo-rle)** | RAM comprimida, baixa latência; presente (`CONFIG_ZRAM=m`) | se `CONFIG_ZRAM_WRITEBACK` for habilitado → writeback p/ VRAM |
-| **VRAM: CUDA Driver API via `dlopen` / `LoadLibraryW`** | mesma tabela `_v2` em `libcuda.so` (Linux/WSL2) e `nvcuda.dll` (Windows); loader split `loader_unix`/`loader_win` (SPEC windows-swap-driver ITEM-1) | se a Microsoft/NVIDIA quebrar símbolos estáveis `_v2` ou surgir path coerente (CXL bare-metal) |
-| **Windows block path: StorPort virtual miniport + SPSC rings** (P4) | Day-0 do-zero; userspace `ramshared-winsvc` + CUDA; pagefile secundário; [ADR-0006](decisions/ADR-0006-storport-virtual-miniport.md) | se ITEM-8 provar B2 inviável (BugCheck 0x7a sem mitigação) → park PRD abort #2b |
-| **Windows deps (`windows-sys` / futuro `windows-service`)** | `windows-sys` já em `ramshared-cuda` (loader); winsvc preencherá sob `cfg(windows)` só | se `cargo deny`/audit falhar ou licença sair de MIT/Apache |
-| **VRAM backend Vulkan: `ash` 0.38** (RF-G2) | binding Vulkan padrão (battle-tested, mantido); reuso > hand-roll do loader/FFI (regra dura #1); `DEVICE_LOCAL` + staging + transfer queue cobre "qualquer GPU" (AMD/Intel/NVIDIA); **validado no lavapipe** (Vulkan em CPU): round-trip bytes-iguais. `unsafe` isolado no crate `ramshared-vulkan` (`// SAFETY:` por bloco), fronteira do trait sem `unsafe`. MIT/Apache-2.0 | se `cargo audit`/`deny` sobre `ash` falhar, ou se D3D12/`/dev/dxg` (RF-G3) cobrir não-NVIDIA dentro do WSL2 |
-| **Userspace lang: Rust (std)** | safety + RAII de recursos GPU (ver [ADR-0002](decisions/ADR-0002-rust-userspace-port.md)) | se FFI provar instável (rollback do ADR-0002) |
+| **Block backend: NBD** (Phase A) | the only one that works on consumer GeForce (`nvidia_p2p_*` → `EINVAL`); `nbd.ko` present, requiring only `modprobe` | when the WSL2 kernel has `CONFIG_BLK_DEV_UBLK` |
+| **Block backend: ublk** (Phase B) | lower latency (io_uring), without a socket round trip | requires a custom kernel; only after Phase B |
+| **Userspace ring: `ramshared-uring` + `io-uring` crate** (Phase B, gated) | `ramshared-uring` isolates any SQE `unsafe`; `io-uring 0.7.12` (MIT/Apache-2.0) avoids hand-rolled acquire/release barriers; the lockfile also brings `libc`, `bitflags`, and `cfg-if`; ADR-0004 accepts the exception | remove if the ublk benchmark does not surpass NBD or the supply-chain audit fails |
+| **Broker protocol: `serde`/`serde_json` (JSON Lines)** (P1, broker) | control plane at ~1 msg/s/tenant, debuggable with `nc`/`jq`; `serde 1.0.228` + `serde_json 1.0.150` (MIT/Apache-2.0) provide shape validation for free and avoid a fragile hand-rolled parser; confined to the `ramshared-broker` crate (daemon/library retain `#![forbid(unsafe_code)]`); [ADR-0005](decisions/ADR-0005-broker-protocol-jsonl.md) | migrate to length-prefixed (`bincode`) if payload >64 KiB/msg or >100 msg/s/tenant |
+| **Hot tier: zram (lzo-rle)** | compressed RAM, low latency; present (`CONFIG_ZRAM=m`) | if `CONFIG_ZRAM_WRITEBACK` is enabled → writeback to VRAM |
+| **VRAM: CUDA Driver API via `dlopen` / `LoadLibraryW`** | same `_v2` table in `libcuda.so` (Linux/WSL2) and `nvcuda.dll` (Windows); split `loader_unix`/`loader_win` loader (windows-swap-driver SPEC ITEM-1) | if Microsoft/NVIDIA break stable `_v2` symbols or a coherent path emerges (bare-metal CXL) |
+| **Windows block path: StorPort virtual miniport + SPSC rings** (P4) | Day-0 from scratch; userspace `ramshared-winsvc` + CUDA; secondary pagefile; [ADR-0006](decisions/ADR-0006-storport-virtual-miniport.md) | if ITEM-8 proves B2 infeasible (BugCheck 0x7a without mitigation) → park PRD abort #2b |
+| **Windows dependencies (`windows-sys` / future `windows-service`)** | `windows-sys` already exists in `ramshared-cuda` (loader); winsvc will add `windows-service` only under `cfg(windows)` | if `cargo deny`/audit fails or the license leaves MIT/Apache |
+| **Windows config/evidence codecs: `toml` 1.1.3 and `base64` 0.23.1** | `toml` parses the closed service configuration; `base64` encodes the fixed PowerShell UTF-16LE command. `base64` uses `default-features = false, features = ["std"]`, deliberately excluding its default `simd-unsafe` path because this control-plane encoding is not throughput-sensitive. Both are MIT/Apache-2.0. | revisit on RustSec/cargo-deny failure, an incompatible config grammar, or removal of the bounded PowerShell adapter |
+| **VRAM backend Vulkan: `ash` 0.38** (RF-G2) | standard Vulkan binding (battle-tested, maintained); reuse > hand-roll of loader/FFI (hard rule #1); `DEVICE_LOCAL` + staging + transfer queue covers "any GPU" (AMD/Intel/NVIDIA); **validated in lavapipe** (Vulkan on CPU): byte-identical round trip. `unsafe` isolated in the `ramshared-vulkan` crate (`// SAFETY:` per block), with an `unsafe`-free trait boundary. MIT/Apache-2.0 | if `cargo audit`/`deny` on `ash` fails, or if D3D12/`/dev/dxg` (RF-G3) covers non-NVIDIA within WSL2 |
+| **Userspace language: Rust (std)** | safety + GPU-resource RAII (see [ADR-0002](decisions/ADR-0002-rust-userspace-port.md)) | if FFI proves unstable (ADR-0002 rollback) |
 
-## Deliberadamente NÃO usado
+## Deliberately NOT used
 
-- **ImDisk / WinSpd as product** — only historical instruments for Passo 0; product is StorPort Day-0 (ADR-0006).
-- **`nvidia_p2p_get_pages_persistent` / BAR1 `ioremap_wc`** — `EINVAL` em GeForce consumer; BAR1 mapeia só ~16 MiB (framebuffer).
-- **zram-writeback** — exige `CONFIG_ZRAM_WRITEBACK` (kernel custom); cascata por prioridade resolve Day-0.
-- **MTD/phram (MMIO direto)** — descartado por performance (CPU memcpy).
-- **OpenCL** (proposta original do PRD-2) — CUDA escolhido para o caminho WSL2/GPU-PV.
-- **`vulkano` (Vulkan alto nível)** — esconde o controle de memória/filas que o tier precisa (alloc `DEVICE_LOCAL`, transfer queue, staging) e adiciona peso; `ash` (binding fino) escolhido no RF-G2. Hand-roll do FFI `libvulkan` também descartado: superfície grande demais p/ Day-0 (regra dura #1).
-- **`clap` (arg parsing)** — descartado p/ preservar **zero-dep externa** num projeto
-  Ring-0/Day-0 (#11). Para ~4-9 flags o parser hand-rolled (`std::env::args`) atende; clap
-  traria ~10 crates transitivas + custo de build. A qualidade do "polish" (issue #3 LOW) veio
-  de **erros tipados** (`CascadeError`, sem dep), não de clap. Revisitar se o CLI crescer
-  muito (muitos subcommands/validações com `--help` rico).
+- **ImDisk / WinSpd as product** — only historical instruments for Phase 0;
+  the product is Day-0 StorPort (ADR-0006).
+- **`nvidia_p2p_get_pages_persistent` / BAR1 `ioremap_wc`** — `EINVAL` on
+  consumer GeForce; BAR1 maps only ~16 MiB (framebuffer).
+- **zram-writeback** — requires `CONFIG_ZRAM_WRITEBACK` (custom kernel); a
+  priority cascade resolves Day-0.
+- **MTD/phram (direct MMIO)** — discarded for performance (CPU memcpy).
+- **OpenCL** (original PRD-2 proposal) — CUDA selected for the WSL2/GPU-PV
+  path.
+- **`vulkano` (high-level Vulkan)** — hides the memory/queue control required
+  by the tier (`DEVICE_LOCAL` allocation, transfer queue, staging) and adds
+  weight; `ash` (thin binding) is selected in RF-G2. Hand-rolled `libvulkan`
+  FFI is also discarded: its surface is too large for Day-0 (hard rule #1).
+- **`clap` (argument parsing)** — discarded to preserve **zero external
+  dependencies** in a Ring-0/Day-0 project (#11). For ~4–9 flags, the
+  hand-rolled parser (`std::env::args`) is sufficient; clap would bring ~10
+  transitive crates + build cost. The quality of the "polish" (issue #3 LOW)
+  came from **typed errors** (`CascadeError`, without a dependency), not clap.
+  Revisit if the CLI grows substantially (many subcommands/validations with
+  rich `--help`).
 
-## Forward (bare-metal — decisões a registrar quando aplicável)
+## Forward (bare metal — decisions to record when applicable)
 
-`HMM`/`devm_memremap_pages(DEVICE_PRIVATE)` vs NUMA hotplug · `spinlock` vs
-`mutex` em hot path · `workqueue` vs `kthread` — cada uma exigirá critério
-mensurável e ADR própria.
+`HMM`/`devm_memremap_pages(DEVICE_PRIVATE)` versus NUMA hotplug · `spinlock`
+versus `mutex` on the hot path · `workqueue` versus `kthread` — each requires a
+measurable criterion and its own ADR.

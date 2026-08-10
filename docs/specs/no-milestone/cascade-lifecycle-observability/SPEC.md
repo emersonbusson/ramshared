@@ -110,6 +110,43 @@ ITEM-3: if cheap demote counters exist without new protocol, wire them; else lea
 `status` / phase derivation **must not** call `swapoff`/`swapon`/`nbd-client -d`/`pkill`/CUDA alloc or start pressure probe.  
 May read `/proc/swaps`, `pgrep`/`/proc/*/cmdline`, optional env, optional existing status socket/file.
 
+### DT-6 — CLI dispatch is a fail-closed safety boundary
+
+`crates/ramshared-cli/src/main.rs` is business logic, not N/A boilerplate: it
+decides whether the operator can reach a read-only status path, a diagnostic
+reader, or the mutating cascade commands. `main()` is the production adapter;
+the argv parser and command/exit dispatch accept injected argv, I/O, and action
+outcomes so they can be tested without probing CUDA, changing swap, starting a
+daemon, or relying on process-global arguments.
+
+The command grammar is exact and fail-closed:
+
+- `check`, `doctor`, and `status` accept either no option or exactly one
+  `--json`. Unknown or repeated options print a diagnostic and return exit 2
+  before the corresponding probe/status action.
+- `down` accepts no arguments. Any argument returns exit 2 before
+  `cascade::down()` can inspect or mutate the cascade.
+- `up` forwards its exact remaining argv to the existing cascade parser. Its
+  malformed-argument refusal must return non-zero before any setup, swap, or
+  daemon action.
+- `diagnose` forwards its exact remaining argv to `diagnose::run`; its parser
+  owns `--events` and `--json` validation.
+- Empty argv and `-h`/`--help` print usage and return 0; an unknown command
+  prints usage and returns 2.
+
+`check` and `doctor` preserve their existing report decision: `ready` returns
+0 and `blocked` returns 1 in text and JSON forms. Command tokens, JSON keys,
+and diagnose event input are protocol/operator surface and must not be changed
+while translating human diagnostics to English.
+
+### DT-7 — Status trusts only the owned daemon PID record
+
+The read-only status path reports the daemon alive only when the product PID
+record contains one positive integer and `/proc/<pid>/comm` is exactly
+`ramsharedd`. It does not use `pgrep`, a process-name fallback, or a newest-PID
+selection. A missing, malformed, stale, or foreign-identity record reports the
+daemon absent without signaling or mutating any process.
+
 ## Atomicity and rollback
 
 **Atomicity frontier:** phase derivation is a pure function of a snapshot — no multi-step host mutation in this SPEC. Health script either embeds CLI JSON fields or emits nulls (no partial shell recompute of the phase table).
@@ -165,8 +202,8 @@ May read `/proc/swaps`, `pgrep`/`/proc/*/cmdline`, optional env, optional existi
 
 | Path | What | RF/DT | Tests / cover |
 | --- | --- | --- | --- |
-| `crates/ramshared-cli/src/cascade/mod.rs` | `mod lifecycle`; replace thin `status()`; build snapshot from swaps | ITEM-2 | `status_json_flag_smoke` if injectable; cover ≥80% if treated as business logic |
-| `crates/ramshared-cli/src/main.rs` | `status` / `status --json` argv | ITEM-2 | dispatch only — N/A boilerplate if pure wiring |
+| `crates/ramshared-cli/src/cascade/mod.rs` | `mod lifecycle`; replace thin `status()`; build snapshot from swaps; exact owned PID-record status | ITEM-2 / DT-7 | `status_daemon_requires_owned_pid_record_and_exact_comm`; `malformed_managed_paths_are_refused`; cover ≥80% |
+| `crates/ramshared-cli/src/main.rs` | exact command dispatch, `status`/`--json` gate, check/doctor decision rendering, diagnose forwarding, and mutating-command refusals | ITEM-2 / DT-5 / DT-6 | named CLI unit + process integration matrix; canonical per-file cover ≥80% |
 | `scripts/safety/cascade-health.sh` | emit `phase`, `phase_reason`, `demote`, `thresholds_kib` from CLI JSON | ITEM-4 | E2E only |
 | `docs/FAQ.md`, `README.md`, `docs/ARCHITECTURE.md` | Armed vs Using VRAM; status pointer | ITEM-5 | N/A |
 | `validation.md` | append live sample | ITEM-6 | append-only |
@@ -270,6 +307,13 @@ Exception: `RAMSHARED_STATUS_LEGACY=1` only as temporary kill-switch with remova
 | same | `active_threshold_from_env_invalid_defaults` | unit | #9 | ≥80% |
 | same | `json_shape_golden_or_roundtrip` | unit | #9 | ≥80% |
 | `crates/ramshared-cli/src/cascade/mod.rs` | status JSON smoke / injected swaps | unit | #9 | ≥80% |
+| `crates/ramshared-cli/src/main.rs` | `dispatch_refuses_invalid_flags_before_action` | unit/refusal | #13/#16 | ≥80% |
+| same | `dispatch_forwards_exact_status_and_diagnose_args` | unit | #13 | ≥80% |
+| same | `cli_help_and_unknown_command` | process/CLI | #13 | ≥80% |
+| same | `cli_check_and_doctor_report_decision_json_and_text` | process/CLI | #9/#13 | ≥80% |
+| same | `cli_status_flags_are_exact_and_read_only` | process/CLI/refusal | #16 | ≥80% |
+| same | `cli_diagnose_forwards_event_args` | process/CLI | #13 | ≥80% |
+| same | `cli_up_and_down_refuse_before_mutation` | process/CLI/refusal | #16/#17 | ≥80% |
 | package | `cargo test -p ramshared-cli` | unit | #9 | all pass |
 
 **Cover gate (canonical):**
@@ -277,7 +321,7 @@ Exception: `RAMSHARED_STATUS_LEGACY=1` only as temporary kill-switch with remova
 ```bash
 node tools/ci/check-rust-slice-coverage.mjs \
   -p ramshared-cli \
-  --files crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs \
+  --files crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs,crates/ramshared-cli/src/main.rs \
   --min 80 \
   --report-json tmp/cascade-lifecycle-cov.json
 ```

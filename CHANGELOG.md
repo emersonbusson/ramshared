@@ -218,7 +218,7 @@
 
 ### Bug Fixes
 
-* **ci:** green gates + port security scans from advoq pattern ([7242b2b](https://github.com/emersonbusson/ramshared/commit/7242b2bd674f638912448667876c965873f48042))
+* **ci:** green gates + add RamShared security scans ([7242b2b](https://github.com/emersonbusson/ramshared/commit/7242b2bd674f638912448667876c965873f48042))
 
 
 ### Documentation
@@ -456,7 +456,7 @@
 * **marketing:** split launch posts into one file per channel ([9881842](https://github.com/emersonbusson/ramshared/commit/98818428a9dbf2e9d33e3cc894cbd2ac56495146))
 * **marketing:** unify COPY START/END markers on all post files ([5a3243b](https://github.com/emersonbusson/ramshared/commit/5a3243bcdf641d2ad244dcc7d73f8cdbb9248823))
 * mature dual-track status (WSL2 Day-1, Windows lab-only) ([d19dfdf](https://github.com/emersonbusson/ramshared/commit/d19dfdfa4c2a3283f15297353abccef12ffde470))
-* **methodology:** expand Kahneman disciplines to match advoq full rigor ([b547fca](https://github.com/emersonbusson/ramshared/commit/b547fca0c05c9a2a324bf46900cb0eeb03f3fc96))
+* **methodology:** expand Kahneman disciplines for full RamShared rigor ([b547fca](https://github.com/emersonbusson/ramshared/commit/b547fca0c05c9a2a324bf46900cb0eeb03f3fc96))
 * **mm:** ADR-0007 + audit — kernel-native work is C not app Rust ([547e0a7](https://github.com/emersonbusson/ramshared/commit/547e0a7d24b0bed381d965c239a364b8cabf11bb))
 * **mm:** align RF-L10 preflight with sparse gate from AUDIT-2.5 ([7b8412e](https://github.com/emersonbusson/ramshared/commit/7b8412e857567ce3e675381e0b6c124f89aef121))
 * **mm:** close Phase 1 code audit ([b1c2156](https://github.com/emersonbusson/ramshared/commit/b1c21565acdf8eb7d78a1046b425106d8f0e3a3e))
@@ -529,7 +529,7 @@
 * spec ssdv3 do ring loop ublk ([#3](https://github.com/emersonbusson/ramshared/issues/3)) ([a3ec754](https://github.com/emersonbusson/ramshared/commit/a3ec75454eff480e26676c22a85eb16100b00558))
 * **ssdv3:** adopt unique SPEC model and kernel methodology stack ([3d77d32](https://github.com/emersonbusson/ramshared/commit/3d77d3270e7fbc1f7f0a4681c0eb68b43e2d0034))
 * **ssdv3:** analise do teardown F2 + recipe de validacao em qemu ([#3](https://github.com/emersonbusson/ramshared/issues/3)) ([9153405](https://github.com/emersonbusson/ramshared/commit/91534051bc2d96a4b22e2cfdedbfb4ffd67ca498))
-* **ssdv3:** expand prompt framework to match advoq rigor (full length) ([366939a](https://github.com/emersonbusson/ramshared/commit/366939a864822f04bbaea0a7dd92e15d9a8624f5))
+* **ssdv3:** expand the RamShared prompt framework (full length) ([366939a](https://github.com/emersonbusson/ramshared/commit/366939a864822f04bbaea0a7dd92e15d9a8624f5))
 * **ssdv3:** Fase B design specs — zram-writeback & ublk (esteira até SPECv2, go) ([#3](https://github.com/emersonbusson/ramshared/issues/3)) ([9c63a2e](https://github.com/emersonbusson/ramshared/commit/9c63a2e59faae918a7caab7d17449a14329be4cf))
 * **ssdv3:** Fase B prep — ADR-0004 (io_uring crate) + runbook do kernel custom ([#3](https://github.com/emersonbusson/ramshared/issues/3)) ([6613638](https://github.com/emersonbusson/ramshared/commit/66136385975e1411d6a7b74271653a0a2f35e9ea))
 * **ssdv3:** fix runbook — CONFIG_ZRAM_WRITEBACK é bool (--enable), pego ao validar o build ([#3](https://github.com/emersonbusson/ramshared/issues/3)) ([adda3f9](https://github.com/emersonbusson/ramshared/commit/adda3f90cf2c0666fa9c721694e26e8162316ed0))
@@ -561,7 +561,7 @@
 * translate all remaining legacy comments to English ([a4260bc](https://github.com/emersonbusson/ramshared/commit/a4260bc4f2658449a29ed8f7d0e6e8f97a8a62a7))
 * **vram:** registra validação de aceitação §14 (cascata + DEMOTE) ([5bd6b99](https://github.com/emersonbusson/ramshared/commit/5bd6b995477b4a710920263401fbc8ece4248544))
 * **windows-vram-drive:** drill Passo 0 executado em VM — R7 refinado ([e931844](https://github.com/emersonbusson/ramshared/commit/e931844668732117dec94e881ec6a40f05374765))
-* **windows-vram-drive:** translate PRD and adapt to advoq layout ([166aeca](https://github.com/emersonbusson/ramshared/commit/166aeca2c94a66f4e79501028ff0774044d2acbf))
+* **windows-vram-drive:** translate PRD and adopt the RamShared SSDV3 layout ([166aeca](https://github.com/emersonbusson/ramshared/commit/166aeca2c94a66f4e79501028ff0774044d2acbf))
 
 
 ### CI

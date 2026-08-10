@@ -5,37 +5,42 @@ milestone: —
 issues: []
 ---
 
-# PRD — Linguagem para “nativo de verdade no kernel”
+# PRD — Language for “truly native in the kernel”
 
-> **Tipo:** PRD de **política / arquitetura** (não é feature de swap).  
-> **Decisão canônica:** [ADR-0007](../../../decisions/ADR-0007-kernel-native-language-c.md).  
-> **Auditoria:** [AUDIT-2.5.md](./AUDIT-2.5.md) → **go**.
+> **Type:** **policy / architecture** PRD (not a swap feature).
+> **Canonical decision:** [ADR-0007](../../../decisions/ADR-0007-kernel-native-language-c.md).
+> **Audit:** [AUDIT-2.5.md](./AUDIT-2.5.md) → **go**.
 
 ## 1. Summary
 
-Definir **oficialmente** que:
+Formally define that:
 
-> **“Nativo de verdade no kernel” → C (estilo mainline / custom WSL kernel), não Rust de aplicação.**
+> **“Truly native in the kernel” → C (mainline style / custom WSL kernel), not application Rust.**
 
-O produto Day-1 no WSL (**cascade**) continua em **Rust** (userspace).  
-Este PRD **não** substitui `wsl2-native-vram-tier` (fases P0–P3); ele **trava a linguagem** da parte kernel dessas fases.
+The Day-1 WSL product (**cascade**) remains in **Rust** (userspace).
+This PRD does **not** replace `wsl2-native-vram-tier` (P0–P3 phases); it
+locks the language for the kernel portion of those phases.
 
 ## 2. Technical context
 
-| Camada | Stack atual | Class |
+| Layer | Current stack | Class |
 | --- | --- | --- |
 | CLI / daemon / CUDA FFI userspace | Rust (ADR-0002) | Confirmed in codebase |
 | Windows StorPort | C/WDK | Confirmed |
-| Kernel Linux rules no repo | C style + optional RfL mention | Confirmed in `.claude/rules/kernel.md` |
+| Kernel Linux rules in repository | C style + optional RfL mention | Confirmed in `.claude/rules/kernel.md` |
 | GPU-PV limits | VRAM not bare device memory in WSL guest | Confirmed FASE0 / PASSO0 |
 
-**Inference (scarce):** RfL may appear in some mainline drivers later; still not default for RamShared mm work.
+**Inference (limited):** RfL may appear in some mainline drivers later; it is
+still not the default for RamShared memory-management work.
 
 ## 3. Recommended option
 
-**ADR-0007:** C default for kernel-native; Rust userspace unchanged; RfL only as audited exception.
+**ADR-0007:** C is the default for kernel-native work; Rust userspace is
+unchanged; RfL is permitted only as an audited exception.
 
-**Not recommended:** full PRD/SPEC/IMPL of a C LKM in this document — that stays under `kernel-vram-as-memory` / future P1–P2 SPECs **using this language policy**.
+**Not recommended:** a full PRD/SPEC/IMPL for a C LKM in this document — that
+remains under `kernel-vram-as-memory` / future P1–P2 SPECs **using this
+language policy**.
 
 ## 4. Functional requirements
 
@@ -61,7 +66,7 @@ N/A beyond “new kernel file → C” and “new userspace crate → Rust”.
 
 ## 8. API
 
-N/A (policy). Kernel uAPI when designed uses C headers / sysfs as usual.
+N/A (policy). When designed, kernel uAPI uses C headers / sysfs as usual.
 
 ## 9. Risks
 
@@ -73,34 +78,34 @@ N/A (policy). Kernel uAPI when designed uses C headers / sysfs as usual.
 
 ## 10. Strategy
 
-1. Accept ADR-0007 + AUDIT go.  
-2. Point `wsl2-native-vram-tier` §8 at ADR-0007.  
-3. Future P1/P2 SPEC must cite ADR-0007 in Kahneman/language block.
+1. Accept ADR-0007 + AUDIT go.
+2. Point `wsl2-native-vram-tier` §8 at ADR-0007.
+3. Future P1/P2 SPEC must cite ADR-0007 in the Kahneman/language block.
 
 ## 11. Documents
 
-- ADR-0007  
-- This PRD + AUDIT-2.5  
-- Cross-link `wsl2-native-vram-tier`  
-- `docs/decisions/README.md` if present  
+- ADR-0007
+- This PRD + AUDIT-2.5
+- Cross-link `wsl2-native-vram-tier`
+- `docs/decisions/README.md` if present
 
 ## 12. Out of scope
 
-- Implementing LKM  
-- Changing cascade language  
-- Dual-boot install  
+- Implementing LKM
+- Changing cascade language
+- Dual-boot install
 
 ## 13. Acceptance
 
-- [x] ADR written  
-- [x] AUDIT go/no-go  
-- [x] PRD policy IDs  
-- [x] Cross-links  
+- [x] ADR written
+- [x] AUDIT go/no-go
+- [x] PRD policy IDs
+- [x] Cross-links
 
 ## 14. Validation
 
-- `node tools/generate-docs-index.mjs`  
-- Human: language split readable in ADR §Decision  
+- `node tools/generate-docs-index.mjs`
+- Human: language split readable in ADR §Decision
 
 ## 15. Kahneman
 

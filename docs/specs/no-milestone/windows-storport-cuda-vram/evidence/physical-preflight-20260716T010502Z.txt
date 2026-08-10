@@ -1,6 +1,6 @@
 === physical preflight audit 20260716T010502Z ===
 host=emedev date=2026-07-15T22:05:02-03:00
-cwd=/home/emdev/codespace/ramshared
+cwd=<repo-root>
 branch=main
 commit=acba7c6
 dirty=24 files

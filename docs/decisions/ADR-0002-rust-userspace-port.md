@@ -1,41 +1,50 @@
-# ADR-0002 — Daemon/CLI userspace em Rust (port do design da referência)
+# ADR-0002 — Rust userspace daemon/CLI (port of the reference design)
 
 **Status:** Accepted (2026-06-05).
 
 ## Context
 
-O tier VRAM (ADR-0001) é um daemon userspace (Ring 3) que aloca VRAM via CUDA
-Driver API e serve como block device NBD. Existe uma referência provada
-(`c0deJedi/nbd-vram`, MIT, C) com esse design exato, validada em bare-metal. O
-repo usa C (kernel) + Rust for Linux; `coding.md` proíbe `.unwrap()/.expect()` em
-produção e exige `goto out_err`/RAII e `// SAFETY` em `unsafe`.
+The VRAM tier (ADR-0001) is a userspace daemon (Ring 3) that allocates VRAM
+through the CUDA Driver API and serves an NBD block device. A proven reference
+(`c0deJedi/nbd-vram`, MIT, C) uses this exact design and has been validated on
+bare metal. The repository uses C (kernel) + Rust for Linux; `coding.md`
+forbids `.unwrap()/.expect()` in production and requires `goto out_err`/RAII
+and `// SAFETY` in `unsafe`.
 
 ## Decision
 
-Implementar o daemon e a CLI em **Rust (std, userspace)**, **portando** o design
-da referência (CUDA via FFI sobre `libcuda`, protocolo NBD fixed-newstyle) —
-**não** forkando o C. `unsafe` de FFI isolado em `ramshared-cuda`, com RAII
-garantindo a ordem de teardown (`free → ctx destroy → dlclose`).
+Implement the daemon and CLI in **Rust (std, userspace)**, **porting** the
+reference design (CUDA through FFI over `libcuda`, fixed-newstyle NBD
+protocol) — **not** forking the C implementation. Isolate FFI `unsafe` in
+`ramshared-cuda`, with RAII guaranteeing teardown order
+(`free → ctx destroy → dlclose`).
 
 ## Consequences
 
-- (+) Memory safety, `Result<T,E>`, RAII de recursos GPU; alinhado a `coding.md`.
-- (+) Roundtrip já validado em GPU real (RTX 2060) — `ramshared-cuda`.
-- (−) Custo de port (traduzir + reorganizar em crates) vs. copiar o C.
+- (+) Memory safety, `Result<T,E>`, and GPU-resource RAII; aligned with
+  `coding.md`.
+- (+) Round trip already validated on a real GPU (RTX 2060) —
+  `ramshared-cuda`.
+- (−) Porting cost (translation + reorganization into crates) versus copying
+  the C implementation.
 
 ## Alternatives considered
 
-- **Forkar o C da referência:** rejeitado — Day-0 prefere reescrita limpa; perde safety.
-- **Reescrever do zero ignorando a referência:** rejeitado — a referência é blueprint provado (anti-NIH).
+- **Fork the reference C implementation:** rejected — Day-0 prefers a clean
+  rewrite; it loses safety.
+- **Rewrite from scratch while ignoring the reference:** rejected — the
+  reference is a proven blueprint (anti-NIH).
 
 ## Kahneman
 
-- #4 anchoring (referência como reference class) · #11 halo (adoção justificada por evidência: roundtrip GPU verde).
+- #4 anchoring (reference as the reference class) · #11 halo (adoption
+  justified by evidence: green GPU round trip).
 
 ## Rollback trigger
 
-Reavaliar fork em C se o FFI Rust↔`libcuda` no WSL2/GPU-PV apresentar falhas de
-`cuInit`/`cuMemcpy` que a referência C não tem, em ≥ 2 ambientes distintos.
+Re-evaluate a C fork if Rust↔`libcuda` FFI on WSL2/GPU-PV has `cuInit`/
+`cuMemcpy` failures that the C reference does not have in ≥2 distinct
+environments.
 
 Links: [`../specs/no-milestone/wsl2-cascade-swap/SPEC.md`](../specs/no-milestone/wsl2-cascade-swap/SPEC.md) §4 ·
 `crates/ramshared-cuda`.

@@ -79,6 +79,14 @@
 | DT-15 | Add protected immutable `broker.toml` with `[local_broker] schema = 1`, `capacity_bytes`, `allowed_tenant`, and absolute `evidence_path`. The installer single-open parses both version-owned broker and winsvc configs and requires `allowed_tenant == win_drive.tenant`, `capacity_bytes == win_drive.size_bytes`, and `capacity_bytes` to be non-zero and a multiple of `win_drive.block_size`. The Windows session core grants only when `LeaseRequest.bytes == capacity_bytes`; smaller/larger requests are denied. Each service independently re-hashes its own config against the active manifest before creating IPC/CUDA/storage effects. | A standalone control-plane service has no Linux slice pool from which to infer capacity. Exact request/cross-config equality and runtime hash checks make manual or torn configuration divergence fail closed without adding fields to protocol v1. |
 | DT-16 | `LeaseRelease` authorization is sender-bound. `BrokerCore::on_msg` passes the session ID into `on_lease_release`; both broker shells resolve the authenticated registered holder and call `LeaseBook::release(holder, lease)`. An unregistered session or wrong holder receives `Msg::Error`, is closed, and does not mutate the lease. Unknown/duplicate release from the correct holder is logged as an idempotent no-op. Disconnect calls `LeaseBook::disconnect(holder)` exactly once. | The current Linux handler accepts only a lease ID, so a different registered tenant that learns/guesses the ID could release another holder's lease. The shared extraction must fix, not preserve, that authorization defect. |
 | DT-17 | The physical-host drill takes its target volume letter from the immutable packaged `winsvc_config`; before product install it proves that the letter is absent from both the host drive map and pagefile set. A collision is a pre-exposure refusal: the harness never removes, remaps, formats, or reletters the existing volume. VM and physical evidence may use different manifests when their safe free letters differ, but all boots in one physical campaign use one manifest hash. | Drive letters are host-global operator state. The lab convention `R:` can name a real data volume on the official host, so a hard-coded drill letter is unsafe and invalidates identity evidence. |
+| DT-18 | Every physical integrity round hashes the intended in-memory payload before the write and compares it with the exact read-back bytes. Before any partition mutation, the harness binds the immutable manifest and effective `winsvc_config` size/sector/letter to the current winsvc PID/run `Online` serial, then requires exactly one `RAMSHARE VRAMDISK` with that serial and size, Virtual bus, matching sectors, `PartitionStyle=RAW`, zero partitions, and non-boot/non-system flags. A non-RAW or contradictory observation is a refusal, never a reusable prior volume. | Hashing the file after the write lets consistent corruption pass. Friendly-name plus a hard-coded size can select a foreign or stale device, while the product serial is deliberately generated per Online run and therefore must come from current-run evidence rather than be invented from the package. |
+| DT-19 | Physical preflight refuses the packaged volume letter when it appears in either active `Win32_PageFileUsage` or configured `PagingFiles`; query or parse failure is also a refusal. A stop command exception is RED even if SCM later reports `Stopped`; the harness never records a supported-stop PASS after a failed operator surface. | A configured next-boot pagefile remains host-persistent state even when it is not active yet. SCM terminal state alone does not prove that the supported stop command returned cleanly. |
+| DT-20 | Every potentially blocking physical child (CIM/storage discovery, format, and controller invocation) uses redirected asynchronous output draining, a numeric deadline, and verified `taskkill /T /F` process-tree termination on timeout. The parent never calls unbounded `Stop-Job`/`Remove-Job` on a worker stuck in device I/O. Timeout or incomplete tree termination is RED and retains bounded evidence. | A watchdog can stop services but cannot release a controller blocked in a synchronous cmdlet or a PowerShell job waiting in device I/O. Draining redirected pipes only after waiting can itself deadlock on a full pipe. |
+| DT-21 | Each physical reboot requires a fresh explicit operator invocation with `-ApprovePhysicalHost -ApproveReboot`. That invocation creates one cryptographically random, single-use resume token valid for at most 30 minutes, persists only its SHA-256 and expiry in campaign state, and schedules a one-shot startup command containing the token but never `-ApprovePhysicalHost`. Startup atomically consumes the exact unexpired token before mutation and unregisters the task. After one boot drill it stops in `awaiting_approval`; it never schedules or performs the next reboot itself. Watchdog shutdown requires the separate `-AllowWatchdogShutdown` approval for that exact boot, and its delayed worker is bound to a unique marker nonce so an older worker cannot act on a later boot's marker. Every boot-action catch/finally path disarms the marker and unregisters the task; no failure leaves a delayed shutdown or replayable approval behind. | A persisted approval switch is not fresh authorization. Automatic chained reboots conflict with the operator requirement to approve each reboot and make a failed scheduled task replayable on later boots. A distinct short-lived one-use token preserves no-login cold-boot execution without granting the startup task general physical-host authority or surviving a cancelled reboot indefinitely. Generation-binding also prevents an earlier sleeping watchdog from mistaking a newly armed campaign for its own failed boot. |
+| DT-22 | The VM autonomous lifecycle treats runtime evidence and Disk Event ID 153 as safety sources, never as best-effort diagnostics. Before disk discovery it requires exactly one schema-1 `Online` row from the current `RamSharedWinSvc` PID: the row PID, `run_id`, evidence filename, timestamp, vendor/product, 16-hex `lun_serial`, and configured size must agree, and any evidence directory/list/read/JSON failure is RED. It binds that serial to one exact `RAMSHARE VRAMDISK` before format or I/O. The Event Log query filters the `disk` provider over the current I/O interval and uses terminating errors; only `NoMatchingEventsFound` is a legitimate zero-event observation, while every provider/query failure is RED rather than an empty retry count. Format-timeout recovery likewise uses terminating volume observation, so an unreadable or ambiguous volume state refuses `Clear-Disk`. | A missing evidence directory, malformed row, unavailable Event provider, or failed volume query previously collapsed into an empty collection. That can turn unknown ownership, unobserved retry errors, or a published volume into a false PASS. |
+| DT-23 | The VM autonomous lifecycle accepts an explicit immutable `HostBinDir` and forwards it unchanged to `Run-GuestProductPackage.ps1`. The default remains the documented host staging directory, but qualification commands name the freshly hashed candidate directory; the harness never requires overwriting a physical-host service image merely to test a guest VM. | Reusing `C:\ramshared\bin` couples guest qualification to the physical service staging area and can make a VM proof silently consume stale binaries. Explicit staging preserves package identity and keeps the stopped physical installation untouched. |
+| DT-24 | Every host-side PowerShell Direct connect, remote invocation, and `Copy-Item -ToSession`/`-FromSession` in the VM product-package and autonomous-lifecycle harnesses runs in one disposable child `powershell.exe`. The parent starts concurrent stdout/stderr drains before waiting, applies a numeric outer deadline that exceeds the 180-second bounded readiness retry window, and on timeout targets only that exact child PID with `taskkill /T /F`; failure to observe child-tree exit is RED. Each worker opens one session, performs one operation, and removes that session in `finally`. Nonzero child exit, timeout, malformed/missing typed result, or cleanup failure is a fail-closed harness error. The password is passed only through the worker environment, never through its command line, payload file, or diagnostics. This deadline discipline does not authorize a physical-host restart; VM cold-boot behavior remains an explicitly invoked VM-only E2E action. | A PS Direct call can block before an in-process timeout or shared session cleanup owns it. Redirected pipes can also deadlock a parent that waits before draining. A killed child must not leave a reusable host session or a false successful package/lifecycle result. |
+| DT-25 | The VM cold-boot action is a deferred guest-only shutdown, never `shutdown.exe /s /t 0` inside the typed PowerShell Direct worker. The lifecycle harness validates a 15–30 second requested delay, asks the guest to schedule that delay, requires a typed receipt with Boolean `shutdown_scheduled = true`, Int32 `delay_seconds` equal to the request, and a zero `shutdown.exe` exit code, and only then begins bounded `Off` polling. The delay gives the remote `Invoke-Command` return, result export, and worker `Remove-PSSession` cleanup a completion window; failure to schedule or validate the receipt is RED. This is not a physical-host reboot authorization. | Immediate guest shutdown can tear down PowerShell Direct before its worker exports the required typed result, falsely reporting a failed lifecycle even when the guest correctly accepted the shutdown request. |
 
 ## Atomicity and rollback
 
@@ -299,11 +307,50 @@
 **`scripts/windows/Run-GuestAutonomousLifecycle.ps1`**
 
 - Purpose: one VM autonomous lifecycle campaign with Online I/O and exact cleanup evidence.
-- RF / DT: RF-4, RF-5, RF-6; DT-4, DT-7, DT-10, DT-12, DT-14.
+- RF / DT: RF-4, RF-5, RF-6; DT-4, DT-7, DT-10, DT-12, DT-14, DT-22, DT-23, DT-24, DT-25.
 - Required tests: `scripts/windows/Run-GuestAutonomousLifecycle.ps1` ::
   `cold_boot_no_login`, `three_round_sha`, `consumer_first_stop`,
-  `lease_release`, `zero_residue`.
+  `lease_release`, `zero_residue`,
+  `current_online_evidence_failure_is_red`,
+  `event153_query_failure_is_red`,
+  `recovery_volume_query_failure_is_red`,
+  `psdirect_outer_deadline_is_enforced`,
+  `psdirect_redirected_streams_are_drained`,
+  `psdirect_timeout_terminates_child_tree`,
+  `psdirect_nonzero_child_is_red`,
+  `psdirect_calls_are_session_finally_cleaned`,
+  `deferred_guest_shutdown_preserves_psdirect_result`.
 - Cover target: N/A — Windows VM E2E.
+
+**`scripts/windows/Run-GuestProductPackage.ps1`**
+
+- Purpose: prepare and exercise immutable VM product packages without an
+  unbounded host-side PowerShell Direct operation.
+- RF / DT: RF-2, RF-4, RF-5; DT-8, DT-9, DT-13, DT-24.
+- Required tests: `FreshInstall`, `Repair`, `ManufacturedRollback`,
+  `UninstallRefusal`, `CleanUninstall`,
+  `guest_product_package_retries_psdirect_readiness`, and every DT-24 test
+  named for `Run-GuestAutonomousLifecycle.ps1` above.
+- Cover target: N/A — Windows VM E2E/static seam.
+
+**`scripts/windows/Invoke-GuestPsDirectBounded.ps1`**
+
+- Purpose: the shared PowerShell 5.1 outer-deadline, asynchronous-drain,
+  typed-result, and session-cleanup boundary used by the two VM harnesses.
+- Required tests: every DT-24/DT-25 test named above.
+- Cover target: N/A — manufactured PowerShell seam.
+
+**`scripts/windows/Test-GuestPsDirectDeadlineStatic.ps1`**
+
+- Purpose: parser/static checks plus a locally manufactured child process tree
+  that exercises the production deadline, stream-drain, termination, and
+  fail-closed result guards without opening a VM session.
+- Required tests: `psdirect_outer_deadline_is_enforced`,
+  `psdirect_redirected_streams_are_drained`,
+  `psdirect_timeout_terminates_child_tree`, `psdirect_nonzero_child_is_red`,
+  `psdirect_calls_are_session_finally_cleaned`,
+  `deferred_guest_shutdown_preserves_psdirect_result`.
+- Cover target: N/A — manufactured PowerShell seam.
 
 **`scripts/windows/Run-HostAutonomousLifecycle.ps1`**
 
@@ -311,9 +358,32 @@
 - RF / DT: all acceptance; DT-14.
 - Required tests: `scripts/windows/Run-HostAutonomousLifecycle.ps1` ::
   `three_cold_boots_same_manifest`, `final_preflight_clean`,
-  `resume_marker_is_monotonic`, `cleanup_artifacts_complete`.
+  `resume_marker_is_monotonic`, `cleanup_artifacts_complete`,
+  `intended_payload_corruption_is_red`,
+  `exact_online_identity_required_before_format`,
+  `non_raw_lun_refuses_before_mutation`,
+  `active_pagefile_refuses_before_install`,
+  `configured_pagefile_refuses_before_install`,
+  `pagefile_query_failure_refuses_before_install`,
+  `stop_request_error_is_red`, `bounded_child_terminates_process_tree`,
+  `resume_task_has_one_time_token_without_approval_switch`,
+  `stale_or_replayed_resume_token_is_refused`,
+  `watchdog_shutdown_requires_separate_approval`,
+  `failure_cleanup_disarms_watchdog_and_task`.
 - Cover target: N/A — physical E2E.
 - Kahneman: #5/#9.
+
+**`scripts/windows/Test-HostAutonomousLifecycleStatic.ps1`**
+
+- Purpose: PowerShell 5.1 manufactured tests for the physical harness's pure
+  identity, pagefile, integrity, stop, authorization, cleanup, and bounded-child
+  contracts. It may create and terminate only its own temporary PowerShell
+  process tree; it never invokes the harness's physical execution path.
+- Required tests: every manufactured test named for
+  `Run-HostAutonomousLifecycle.ps1` above except the four live three-boot
+  evidence names.
+- Cover target: N/A — manufactured PowerShell seam.
+- Kahneman: #13/#15/#16/#17.
 
 ### MODIFY
 
@@ -532,9 +602,11 @@ No tracked file is deleted at SPEC time. During ITEM-6, delete
 | SCM/IPC peer boundary | `scripts/windows/Run-GuestBrokerService.ps1` :: `legitimate_service_sid_connects`, `administrator_protocol_connect_is_refused`, `unrelated_service_is_refused`, `deny_only_service_sid_is_refused`, `oversized_line_is_refused`, `partial_frame_times_out`, `stop_cancels_blocked_accept`, `stop_cancels_blocked_read`, `status_pipe_rejects_mutation`, `scm_start_ready_stop`, `broker_event_log_transition`, `fourth_failure_remains_stopped`, `deterministic_failure_does_not_restart` | isolated VM | #13/#15/#16 | N/A — Windows E2E |
 | Package transactions | `scripts/windows/Run-GuestProductPackage.ps1` :: `FreshInstall`, `Repair`, `ManufacturedRollback`, `UninstallRefusal`, `CleanUninstall` | isolated VM | #2/#17 | N/A — Windows E2E |
 | Online broker loss | `scripts/windows/Run-GuestBrokerService.ps1` :: `BrokerLossOnline` | isolated VM | #16 | N/A — Windows E2E |
-| Autonomous VM lifecycle | `scripts/windows/Run-GuestAutonomousLifecycle.ps1` :: `cold_boot_no_login`, `three_round_sha`, `consumer_first_stop`, `lease_release`, `zero_residue` | isolated VM | #9/#13/#16 | N/A — Windows E2E |
+| Autonomous VM lifecycle | `scripts/windows/Run-GuestAutonomousLifecycle.ps1` :: `cold_boot_no_login`, `three_round_sha`, `consumer_first_stop`, `lease_release`, `zero_residue`, `current_online_evidence_failure_is_red`, `event153_query_failure_is_red`, `recovery_volume_query_failure_is_red`, `guest_lifecycle_forwards_explicit_host_bin_dir`, `psdirect_outer_deadline_is_enforced`, `psdirect_redirected_streams_are_drained`, `psdirect_timeout_terminates_child_tree`, `psdirect_nonzero_child_is_red`, `psdirect_calls_are_session_finally_cleaned`, `deferred_guest_shutdown_preserves_psdirect_result` | isolated VM/static | #9/#13/#15/#16 | N/A — Windows E2E |
+| VM PowerShell Direct deadline seam | `scripts/windows/Test-GuestPsDirectDeadlineStatic.ps1` :: `psdirect_outer_deadline_is_enforced`, `psdirect_redirected_streams_are_drained`, `psdirect_timeout_terminates_child_tree`, `psdirect_nonzero_child_is_red`, `psdirect_calls_are_session_finally_cleaned`, `deferred_guest_shutdown_preserves_psdirect_result` | manufactured | #13/#15/#16/#17 | N/A — PowerShell seam |
 | Static product boundary | `scripts/windows/Test-AutonomousBrokerStatic.ps1` :: `BROKER_BINARY_MATCH`, `SCM_DEPENDENCY_MATCH`, `SERVICE_SID_MATCH`, `DAILY_TCP_LISTENER_ABSENT`, `NO_LAB_BROKER_REFERENCE`; `scripts/windows/Test-HostExhaustiveStatic.ps1` :: `package_broker_required`, `consumer_first_stop_required`, `complete_pass_gate` | static | #13 | N/A — harness |
-| Physical immutable package | `scripts/windows/Run-HostAutonomousLifecycle.ps1` :: `three_cold_boots_same_manifest`, `final_preflight_clean`, `resume_marker_is_monotonic`, `cleanup_artifacts_complete` | physical supervised | #5/#9/#16 | N/A — environment-bound |
+| Physical immutable package | `scripts/windows/Run-HostAutonomousLifecycle.ps1` :: `three_cold_boots_same_manifest`, `final_preflight_clean`, `resume_marker_is_monotonic`, `cleanup_artifacts_complete`, `intended_payload_corruption_is_red`, `exact_online_identity_required_before_format`, `non_raw_lun_refuses_before_mutation`, `active_pagefile_refuses_before_install`, `configured_pagefile_refuses_before_install`, `pagefile_query_failure_refuses_before_install`, `stop_request_error_is_red`, `bounded_child_terminates_process_tree`, `resume_task_has_one_time_token_without_approval_switch`, `stale_or_replayed_resume_token_is_refused`, `watchdog_shutdown_requires_separate_approval`, `failure_cleanup_disarms_watchdog_and_task` | manufactured + physical supervised | #5/#9/#16/#17 | N/A — environment-bound |
+| Physical harness manufactured safety | `scripts/windows/Test-HostAutonomousLifecycleStatic.ps1` :: `intended_payload_corruption_is_red`, `exact_online_identity_required_before_format`, `non_raw_lun_refuses_before_mutation`, `active_pagefile_refuses_before_install`, `configured_pagefile_refuses_before_install`, `pagefile_query_failure_refuses_before_install`, `stop_request_error_is_red`, `bounded_child_terminates_process_tree`, `resume_task_has_one_time_token_without_approval_switch`, `stale_or_replayed_resume_token_is_refused`, `watchdog_shutdown_requires_separate_approval`, `failure_cleanup_disarms_watchdog_and_task` | manufactured | #13/#15/#16/#17 | N/A — PowerShell seam |
 
 Required command gates before ITEM-8 can close:
 
@@ -566,15 +638,15 @@ The VM and physical commands are environment-bound gates, not substitutes for th
 - [x] Per-file Rust slice coverage gates are at least 80% for every matrix
   business-logic path.
 - [x] Both Windows binaries cross-build for `x86_64-pc-windows-msvc`.
-- [x] Static Windows product-boundary scripts emit every required PASS marker.
-- [x] Legitimate service-SID access and all named refusal/cancellation cases
+- [x] Static/manufactured Windows physical-lifecycle safety tests emit every required PASS marker.
+- [ ] Revalidate legitimate service-SID access and all named refusal/cancellation cases
   pass in the disposable Windows VM.
-- [x] Package install, repair, manufactured rollback, uninstall refusal, and
+- [ ] Revalidate package install, repair, manufactured rollback, uninstall refusal, and
   clean uninstall pass in the disposable Windows VM.
-- [x] Autonomous VM lifecycle captures before → action → after, BINARY_MATCH,
+- [ ] Revalidate autonomous VM lifecycle before → action → after, BINARY_MATCH,
   three SHA rounds, broker-loss containment, graceful stop, and zero residue.
-- [x] Three physical Test Mode cold boots pass with one immutable manifest
-  through the approved watchdog harness.
-- [x] README, ADRs, degradation matrix, runbook, gap register, `validation.md`,
+- [ ] Three corrected physical Test Mode cold boots pass with one immutable
+  manifest and one fresh approval per reboot through the approved watchdog harness.
+- [ ] README, ADRs, degradation matrix, runbook, gap register, `validation.md`,
   and `IMPL.md` match the evidence without promoting production signing.
 - [x] `./scripts/docs-check.sh` and `git diff --check` pass.

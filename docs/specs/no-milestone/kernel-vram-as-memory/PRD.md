@@ -5,227 +5,246 @@ milestone: —
 issues: []
 ---
 
-# PRD — VRAM “de verdade” no kernel (página de processo mapeia VRAM)
+# PRD — VRAM “for real” in the kernel (process pages map VRAM)
 
-> **Tipo:** PRD de **decisão / descoberta** (Passo 1 SSDV3).  
-> **Não** autoriza IMPL de LKM. SPEC só depois de **gates de ambiente** (§14).  
-> **Produto Day-1 em produção:** continua a cascata WSL2 ([`wsl2-cascade-swap`](../wsl2-cascade-swap/PRD.md), ADR-0001).
+> **Type:** **decision / discovery** PRD (SSDV3 Step 1).
+> Does **not** authorize LKM implementation. A SPEC follows only after the
+> **environment gates** (§14).
+> **Day-1 product in production:** the WSL2 cascade continues
+> ([`wsl2-cascade-swap`](../wsl2-cascade-swap/PRD.md), ADR-0001).
 
 ## 1. Summary
 
-O manifesto do RamShared prefere o **menor nível arquitetural estável**: HMM, NUMA, CXL — não wrappers eternos de userspace. A pergunta honesta é:
+The RamShared manifesto prefers the **lowest stable architectural level**:
+HMM, NUMA, CXL — not eternal userspace wrappers. The honest question is:
 
-> **A melhor forma “linda” de usar VRAM ociosa é o kernel tratar VRAM como memória de processo (fault/migrate), em vez de swap em block device?**
+> **Is the best “elegant” way to use idle VRAM for the kernel to treat VRAM as process memory (fault/migrate), rather than swap in a block device?**
 
-**Resposta curta deste PRD:**
+**This PRD's short answer:**
 
-| Ambiente | É a melhor abordagem? |
+| Environment | Is it the best approach? |
 | --- | --- |
-| **WSL2 + GPU-PV (GeForce consumer)** | **Não** para Day-0. Sem DRM/BAR/`nvidia_p2p` útil no guest; VRAM sob WDDM é **latency-unsafe** (~1,18 s medido). Cascata zram→VRAM→disco permanece o path shippable. **Confirmed in docs** (ADR-0001, FASE0-FINAL). |
-| **Linux bare-metal com GPU + BAR/ReBAR + stack DRM/HMM cooperativo** | **Sim, candidato de longo prazo** — alinha manifesto e remove o hop NBD/daemon. Exige hardware, driver e gates empíricos **antes** de SPEC/IMPL. **Inference** até medir no lab bare-metal. |
-| **Windows host nativo** | Outro contrato (pagefile + miniport lab). Não é HMM Linux. Ver `windows-swap-driver`. |
+| **WSL2 + GPU-PV (consumer GeForce)** | **No** for Day-0. No useful guest DRM/BAR/`nvidia_p2p`; VRAM under WDDM is **latency-unsafe** (~1.18 s measured). The zram→VRAM→disk cascade remains the shippable path. **Confirmed in docs** (ADR-0001, FASE0-FINAL). |
+| **Bare-metal Linux with GPU + BAR/ReBAR + cooperative DRM/HMM stack** | **Yes, a long-term candidate** — aligns with the manifesto and removes the NBD/daemon hop. Requires hardware, driver, and empirical gates **before** SPEC/IMPL. **Inference** until measured in a bare-metal lab. |
+| **Native Windows host** | A different contract (pagefile plus miniport lab). Not Linux HMM. See `windows-swap-driver`. |
 
-Este PRD **não cancela** a cascata. Ele **abre a trilha K (kernel-true)** com critérios de go/no-go, para não misturar sonho de manifesto com o que roda no notebook WSL de hoje.
+This PRD does **not cancel** the cascade. It **opens track K (kernel-true)**
+with go/no-go criteria so that manifesto aspirations are not confused with what
+runs on today's WSL notebook.
 
 ## 2. Technical context
 
-### 2.1 O que “kernel de verdade” significa
+### 2.1 What “truly in the kernel” means
 
-Hoje (cascade):
+Today (cascade):
 
 ```text
 process page → anon → swap → block I/O (NBD) → userspace CUDA → VRAM
 ```
 
-Kernel-true (alvo desta trilha):
+Kernel-true (target of this track):
 
 ```text
 process page → page table / migration → device memory (VRAM) as memory tier
-              (HMM migrate, DEVICE_PRIVATE, ou memória hotplug NUMA)
+              (HMM migrate, DEVICE_PRIVATE, or NUMA hotplug memory)
 ```
 
-O processo **não** “lê um disco GPU”; a MMU / migrate path move páginas entre DRAM e device memory.
+The process does **not** “read a GPU disk”; the MMU / migration path moves
+pages between DRAM and device memory.
 
-### 2.2 Por que a cascata existe (não é preguiça)
+### 2.2 Why the cascade exists (it is not laziness)
 
-| Fato | Fonte | Classificação |
+| Fact | Source | Classification |
 | --- | --- | --- |
-| Eviction WDDM: dado íntegro, leitura 4K até **~1,18 s** | `docs/reliability/wsl2-fase0-final.md` | **Confirmed in docs** + empirical |
-| Cascata zram→VRAM→VHDX comprovada (spill ~983 MiB VRAM) | FASE0 Part C, ADR-0001 | **Confirmed** |
-| NUMA/HMM/`nvidia_p2p` rejeitados no WSL GeForce guest | ADR-0001 Alternatives | **Confirmed in docs** |
+| WDDM eviction: data intact, 4K read up to **~1.18 s** | `docs/reliability/wsl2-fase0-final.md` | **Confirmed in docs** plus empirical |
+| Proven zram→VRAM→VHDX cascade (spill ~983 MiB VRAM) | FASE0 Part C, ADR-0001 | **Confirmed** |
+| NUMA/HMM/`nvidia_p2p` rejected in the WSL GeForce guest | ADR-0001 Alternatives | **Confirmed in docs** |
 | Manifesto: bare-metal first, HMM/NUMA/CXL | `MANIFESTO.md` | **Confirmed in docs** |
-| Cascade Day-1 + boot opt-in shippable | `wsl2-cascade-*`, README | **Confirmed in codebase** |
+| Shippable Day-1 cascade plus opt-in boot | `wsl2-cascade-*`, README | **Confirmed in codebase** |
 
-**Conclusão de contexto:** no GPU-PV, “mapear VRAM como RAM” **não elimina** o dono real da memória (WDDM no host). Um LKM no guest que finja que VRAM é DRAM **herda a mesma latência de reclaim** — só que no path de **page fault / migrate**, o que pode ser **pior** (stall no context do processo, sem demote de swapoff limpo).
+**Context conclusion:** under GPU-PV, “mapping VRAM as RAM” does **not remove**
+the true memory owner (WDDM on the host). An LKM in the guest that pretends
+VRAM is DRAM **inherits the same reclaim latency** — but on the **page-fault /
+migration** path, which can be **worse** (a stall in process context without a
+clean swapoff demotion).
 
-### 2.3 Opções de kernel-true (árvore)
+### 2.3 Kernel-true options (tree)
 
-| Opção | Mecanismo | Precisa | WSL GPU-PV? |
+| Option | Mechanism | Requires | WSL GPU-PV? |
 | --- | --- | --- | --- |
-| **K1 — HMM + `DEVICE_PRIVATE`** | migrate to/from device pages; fault-in | driver GPU + HMM + kernel config | **No** (sem stack cooperativo no guest consumer) |
-| **K2 — NUMA hotplug via ReBAR/BAR** | `add_memory` / memory block de região PCIe | ReBAR, IOMMU, coerência ou regras explícitas de não-coerência | **No** no guest PV típico |
-| **K3 — DRM/TTM “stolen” / carve-out** | memória gerida pelo DRM como pool | controle do driver DRM no SO | Bare-metal Linux possível; WSL não |
-| **K4 — CXL / device coherent memory** | memória de dispositivo coerente | hardware CXL | Futuro; fora do lab atual |
-| **C — Cascade (atual)** | swap priorities + NBD/CUDA + DEMOTE | CUDA userspace + nbd | **Yes — product** |
+| **K1 — HMM + `DEVICE_PRIVATE`** | migrate to/from device pages; fault-in | GPU driver + HMM + kernel config | **No** (no cooperative stack in the consumer guest) |
+| **K2 — NUMA hotplug through ReBAR/BAR** | `add_memory` / PCIe-region memory block | ReBAR, IOMMU, coherence or explicit non-coherence rules | **No** in a typical PV guest |
+| **K3 — DRM/TTM “stolen” / carve-out** | DRM-managed memory as a pool | control of the DRM driver in the OS | Bare-metal Linux possible; not WSL |
+| **K4 — CXL / coherent device memory** | coherent device memory | CXL hardware | Future; outside the current lab |
+| **C — Cascade (current)** | swap priorities + NBD/CUDA + DEMOTE | CUDA userspace + nbd | **Yes — product** |
 
 ## 3. Recommended option
 
-### 3.1 Decisão de produto (agora)
+### 3.1 Product decision (now)
 
-1. **Manter cascade** como único path **shippable** em WSL2/Linux GPU-PV.  
-2. **Não** iniciar IMPL de LKM “VRAM = RAM” no WSL.  
-3. **Abrir trilha K** com este PRD: pesquisa **bare-metal only**, gateada.  
-4. SPEC da trilha K **só** se §14 gates passarem (hardware + medições).
+1. **Keep the cascade** as the only **shippable** path on WSL2/Linux GPU-PV.
+2. **Do not** start an LKM implementation of “VRAM = RAM” in WSL.
+3. **Open track K** with this PRD: gated, **bare-metal-only research**.
+4. Create a track-K SPEC **only** if §14 gates pass (hardware plus measurements).
 
-### 3.2 Por que não “kernel de verdade” no WSL agora
+### 3.2 Why not “truly in the kernel” in WSL now
 
-| Argumento a favor do kernel | Contra-fato |
+| Kernel argument | Counterfactual |
 | --- | --- |
-| “Mais lindo / manifesto” | Beleza sem caminho de I/O e reclaim = panic e freeze |
-| “Sem hop userspace” | No PV, o hop real é **host WDDM**, não o NBD |
-| “App confia na MMU” | Fault de 1 s em page-in é pior UX que demote de swap frio |
-| “Day-0 limpo” | Day-0 limpo no WSL **já é** cascade (ADR-0001) |
+| “More elegant / manifesto-aligned” | Elegance without an I/O and reclaim path = panic and freeze |
+| “No userspace hop” | In PV, the real hop is **host WDDM**, not NBD |
+| “The application trusts the MMU” | A 1 s page-in fault is worse UX than cold-swap demotion |
+| “Clean Day-0” | Clean Day-0 in WSL **is already** the cascade (ADR-0001) |
 
-### 3.3 Quando kernel-true **é** a melhor abordagem
+### 3.3 When kernel-true **is** the best approach
 
-Quando **todas** forem verdade:
+When **all** are true:
 
-1. Linux bare-metal (ou VM com GPU passthrough real), não só GPU-PV.  
-2. Acesso a região de memória de device **visível** ao kernel (BAR/ReBAR ou API HMM do vendor).  
-3. Medição de latência de migrate/fault sob pressão da GPU **antes** de expor a apps genéricas.  
-4. Plano de **demote/offline** do nó/device memory sem UAF (equivalente A1 + canário).  
-5. SSDV3 completo (SPEC + AUDIT-2.5 go) — locks, DMA, IRQ, lifetime.
+1. Bare-metal Linux (or a VM with real GPU passthrough), not only GPU-PV.
+2. Access to a device-memory region **visible** to the kernel (BAR/ReBAR or
+   vendor HMM API).
+3. Measurement of migration/fault latency under GPU pressure **before** exposing
+   it to generic applications.
+4. A **demote/offline** plan for the node/device memory without UAF (A1 plus
+   canary equivalent).
+5. Complete SSDV3 (SPEC + AUDIT-2.5 go) — locks, DMA, IRQ, lifetime.
 
-Até lá, “kernel de verdade” é **objetivo de arquitetura**, não plano de sprint.
+Until then, “truly in the kernel” is an **architecture goal**, not a sprint plan.
 
-## 4. Functional requirements (trilha K — se gates passarem)
+## 4. Functional requirements (track K — if gates pass)
 
-Escopo **somente bare-metal research**. IDs para traceability futura.
+Scope is **bare-metal research only**. IDs support future traceability.
 
 | ID | Requirement | Class |
 | --- | --- | --- |
-| RF-K1 | Expor um pool de device memory usável pelo mm (migrate ou hotplug) com tamanho configurável | Inference até lab |
-| RF-K2 | Processos anônimos podem ter páginas em device memory sem block device de swap | Inference |
-| RF-K3 | Sob pressão da GPU / reset / unplug: **offline ou migrate-back** para DRAM sem panic; apps sobrevivem ou recebem SIGBUS documentado | Confirmed pattern (cascade demote analog) |
-| RF-K4 | Superfície uAPI mínima (sysfs/debugfs ou ioctl privileged) com `capable` + bounds | Confirmed practice (security rules) |
-| RF-K5 | Zero dual-path “cascade + LKM” no mesmo host sem ADR de exceção Day-0 | Day-0 policy |
-| RF-K6 | Cascade permanece instalável e documentada enquanto trilha K não tiver P0 numérico | Confirmed product need |
+| RF-K1 | Expose a device-memory pool usable by mm (migration or hotplug) with configurable size | Inference until lab |
+| RF-K2 | Anonymous processes can hold pages in device memory without a swap block device | Inference |
+| RF-K3 | Under GPU pressure / reset / unplug: **offline or migrate back** to DRAM without panic; applications survive or receive documented SIGBUS | Confirmed pattern (cascade-demote analogue) |
+| RF-K4 | Minimal uAPI surface (privileged sysfs/debugfs or ioctl) with `capable` plus bounds | Confirmed practice (security rules) |
+| RF-K5 | No dual “cascade + LKM” path on the same host without a Day-0 exception ADR | Day-0 policy |
+| RF-K6 | Cascade remains installable and documented while track K lacks numerical P0 evidence | Confirmed product need |
 
-### Fora da trilha K (não confundir)
+### Outside track K (do not conflate)
 
-- Substituir cascade no WSL por LKM.  
-- Windows StorPort como HMM.  
-- Prometer “app mappeia VRAM” sem root/driver.
+- Replacing the WSL cascade with an LKM.
+- Windows StorPort as HMM.
+- Promising “the app maps VRAM” without root/driver.
 
 ## 5. Non-functional requirements
 
 | ID | Requirement |
 | --- | --- |
-| NFR-K1 | Latência de fault/migrate sob idle e sob load GPU: **número** (p50/p99), ≥3 runs — regra benchmarks |
-| NFR-K2 | Nenhum path de panic em GPU reset / D3; matriz de degradação atualizada |
-| NFR-K3 | checkpatch/sparse/lockdep em qualquer LKM; sem `printk` solto |
-| NFR-K4 | Host safety: pressão de memória só em VM isolada se o lab for compartilhado |
-| NFR-K5 | Rollback trigger numérico no SPEC (ex.: p99 fault > p99 swap VHDX sob load → demote feature) |
+| NFR-K1 | Fault/migration latency under idle and GPU load: a **number** (p50/p99), ≥3 runs — benchmark rule |
+| NFR-K2 | No panic path during GPU reset / D3; degradation matrix updated |
+| NFR-K3 | checkpatch/sparse/lockdep for any LKM; no unstructured `printk` |
+| NFR-K4 | Host safety: memory pressure only in an isolated VM if the lab is shared |
+| NFR-K5 | Numerical rollback trigger in the SPEC (for example, p99 fault > p99 VHDX swap under load → demote feature) |
 
 ## 6. Flows
 
-### 6.1 Discovery (agora — este PRD)
+### 6.1 Discovery (now — this PRD)
 
 ```text
-Pergunta manifesto → inventário de hardware lab
-  → se WSL-only: STOP trilha K (cascade only)
-  → se bare-metal GPU+BAR: Passo 0 medição (latência BAR/HMM probe)
-  → se PASS: SPEC.md trilha K
-  → se FAIL: append validation + manter cascade
+Manifesto question → lab hardware inventory
+  → if WSL-only: STOP track K (cascade only)
+  → if bare-metal GPU+BAR: Step 0 measurement (BAR/HMM-probe latency)
+  → if PASS: track-K SPEC.md
+  → if FAIL: append validation + keep cascade
 ```
 
-### 6.2 Happy path (futuro, pós-SPEC)
+### 6.2 Happy path (future, post-SPEC)
 
-1. Admin habilita pool device memory (tamanho ≤ free-floor GPU).  
-2. mm coloca páginas frias em device memory (policy / cgroup / madvise — a decidir no SPEC).  
-3. GPU app sobe → curator demove/offline device pages → DRAM.  
-4. Processo continua.
+1. Administrator enables the device-memory pool (size ≤ GPU free floor).
+2. mm places cold pages in device memory (policy / cgroup / `madvise` — to be
+   decided in the SPEC).
+3. GPU application increases → curator demotes/offlines device pages → DRAM.
+4. The process continues.
 
 ### 6.3 Failure path
 
-GPU reset mid-page → I/O/migrate fail → páginas DRAM ou sinal estável; **nunca** silent corruption.
+GPU reset mid-page → I/O/migration failure → DRAM pages or stable signal;
+**never** silent corruption.
 
 ## 7. Data model
 
-| Conceito | Notas |
+| Concept | Notes |
 | --- | --- |
-| Device memory pool | tamanho, nó NUMA ou HMM device, free-floor |
-| Page state | DRAM / DEVICE / migrating (SPEC detalha) |
-| Lease / holder | quem “possui” o carve-out vs CUDA apps (co-residência) |
+| Device memory pool | size, NUMA node or HMM device, free floor |
+| Page state | DRAM / DEVICE / migrating (SPEC details) |
+| Lease / holder | who “owns” the carve-out versus CUDA apps (co-residency) |
 
-## 8. API / Interfaces (rascunho — SPEC congela)
+## 8. API / Interfaces (draft — SPEC freezes it)
 
-- Sysfs ou debugfs sob `/sys/kernel/ramshared/` ou device class — **privileged**.  
-- Possível ioctl mínimo só se sysfs não bastar.  
-- **Proibido** no PRD: copiar uAPI Windows; copiar NBD ABI.
+- Sysfs or debugfs under `/sys/kernel/ramshared/` or a device class —
+  **privileged**.
+- Possible minimal ioctl only if sysfs is insufficient.
+- **Forbidden** in the PRD: copy Windows uAPI; copy NBD ABI.
 
-Sem structs finais aqui (evita ABI prematura).
+No final structs here (avoids premature ABI).
 
 ## 9. Dependencies and risks
 
-| Risco | Impacto | Mitigação |
+| Risk | Impact | Mitigation |
 | --- | --- | --- |
-| Confundir trilha K com produto WSL | Usuário instala LKM e trava | Docs + gates; README aponta cascade |
-| Latency-unsafe igual WDDM em passthrough mal feito | Freeze em fault | Medir antes de SPEC; canário obrigatório |
-| Coerência de cache CPU↔GPU errada | corrupção | Só paths documentados vendor; sem inventar snoop |
-| Escopo monstro HMM+DRM+IOMMU | never-ship | Um mecanismo por SPEC (K1 **ou** K2, não os dois) |
-| Halo do manifesto (#11) | “kernel = melhor” sem evidência | Este PRD + ADR se pivotar |
+| Confusing track K with the WSL product | User installs an LKM and hangs | Docs plus gates; README points to cascade |
+| WDDM-like latency-unsafe behavior in flawed passthrough | Freeze on fault | Measure before SPEC; canary required |
+| Incorrect CPU↔GPU cache coherence | corruption | Only vendor-documented paths; do not invent snooping |
+| Monster HMM+DRM+IOMMU scope | never-ship | One mechanism per SPEC (K1 **or** K2, not both) |
+| Manifesto halo (#11) | “kernel = better” without evidence | This PRD plus ADR if pivoting |
 
-**Dependências:** lab bare-metal, kernel headers, possivelmente out-of-tree vs mainline policy (decidir no SPEC).
+**Dependencies:** bare-metal lab, kernel headers, and possibly an
+out-of-tree versus mainline policy (decide in the SPEC).
 
 ## 10. Implementation strategy
 
-| Fase | Ação | Artefato |
+| Phase | Action | Artifact |
 | --- | --- | --- |
-| **0** | Este PRD + ADR pointer (opcional) | `PRD.md` |
-| **0.5** | Inventário lab: bare-metal? ReBAR? driver open? | `validation.md` entry |
-| **1** | Passo 0 medição (sem LKM de produção): latência acesso região / probe HMM | runbook + números |
-| **2** | SPEC **um** de {K1, K2, K3} — o que o lab suportar | `SPEC.md` + AUDIT-2.5 |
-| **3** | IMPL mínimo + kselftest | `IMPL.md` |
-| **—** | Em paralelo: cascade polish (app, boot, demote) | já em andamento |
+| **0** | This PRD plus ADR pointer (optional) | `PRD.md` |
+| **0.5** | Lab inventory: bare-metal? ReBAR? open driver? | `validation.md` entry |
+| **1** | Step 0 measurement (no production LKM): region-access latency / HMM probe | runbook plus numbers |
+| **2** | Exactly one SPEC from {K1, K2, K3} — what the lab supports | `SPEC.md` + AUDIT-2.5 |
+| **3** | Minimal IMPL plus kselftest | `IMPL.md` |
+| **—** | In parallel: cascade polish (app, boot, demote) | already in progress |
 
-**Ordem de preferência se lab permitir:** K1 (HMM) se vendor stack existir; senão K2 (NUMA/BAR) se ReBAR estável; K3 só com maintainer DRM consciente; K4 quando houver hardware.
+**Preference order if the lab allows:** K1 (HMM) if a vendor stack exists;
+otherwise K2 (NUMA/BAR) if ReBAR is stable; K3 only with a DRM-aware maintainer;
+K4 when the hardware exists.
 
-## 11. Documents to update (quando gates passarem)
+## 11. Documents to update (when gates pass)
 
-- `ROADMAP.md` — trilha K “gated” (este PRD já referencia).  
-- Novo ADR se abandonarmos cascade **em bare-metal** (não no WSL).  
-- `DEGRADATION-MATRIX.md` — linhas fault/migrate/GPU reset.  
-- `MANIFESTO.md` — opcional: “cascade = bridge; kernel-true = destino bare-metal”.  
-- `docs/INDEX.md` via generate script.
+- `ROADMAP.md` — gated track K (this PRD already references it).
+- New ADR if the cascade is abandoned **on bare metal** (not WSL).
+- `DEGRADATION-MATRIX.md` — fault/migration/GPU-reset rows.
+- `MANIFESTO.md` — optional: “cascade = bridge; kernel-true = bare-metal destination”.
+- `docs/INDEX.md` through the generation script.
 
 ## 12. Out of scope
 
-- IMPL LKM neste ciclo.  
-- Substituir cascade no README como path único.  
-- Windows HMM.  
-- CXL sem hardware.  
-- “App store” packaging da trilha K.
+- LKM implementation in this cycle.
+- Replacing cascade as the sole README path.
+- Windows HMM.
+- CXL without hardware.
+- “App store” packaging for track K.
 
-## 13. Acceptance criteria (deste PRD — decisão)
+## 13. Acceptance criteria (this PRD — decision)
 
-- [x] Pergunta “kernel de verdade é melhor?” respondida **por ambiente**.  
-- [x] Cascade preservada como Day-1.  
-- [x] Gates explícitos antes de SPEC (§14).  
-- [x] Opções K1–K4 + C documentadas.  
-- [x] Abuse cases kernel listados (§ abaixo).  
-- [ ] SPEC: **só** após Passo 0 bare-metal PASS (não bloqueia merge deste PRD).
+- [x] The question “is a true kernel better?” is answered **by environment**.
+- [x] Cascade is preserved as Day-1.
+- [x] Explicit gates before SPEC (§14).
+- [x] K1–K4 plus C options documented.
+- [x] Kernel abuse cases listed (§ below).
+- [ ] SPEC: **only** after Step 0 bare-metal PASS (does not block merging this PRD).
 
-### Abuse cases (obrigatório em discovery)
+### Abuse cases (mandatory in discovery)
 
-| Abuse | Risco | Tratamento na trilha K |
+| Abuse | Risk | Treatment in track K |
 | --- | --- | --- |
 | ioctl size/TOCTOU | kernel memory corruption | copy_from_user once; max bounds |
-| map device memory sem ownership | UAF / DMA to freed | get/put lifetime; unplug path |
-| GFP em IRQ no migrate | deadlock | context matrix no SPEC |
+| map device memory without ownership | UAF / DMA to freed memory | get/put lifetime; unplug path |
+| GFP in IRQ during migration | deadlock | context matrix in the SPEC |
 | capability bypass | unprivileged DoS/hang | CAP_SYS_ADMIN |
-| info-leak de endereços | KASLR break | sem %px em logs default |
-| co-residência CUDA + pool | thrash / 1,18 s class | free-floor + demote/offline |
+| address info leak | KASLR break | no `%px` in default logs |
+| CUDA co-residency plus pool | thrash / 1.18 s class | free floor plus demote/offline |
 
 ## 14. Validation / gates (go → SPEC)
 
@@ -233,53 +252,58 @@ Sem structs finais aqui (evita ABI prematura).
 
 | Check | Pass condition |
 | --- | --- |
-| A1 | Lab **não** é só WSL GPU-PV guest; bare-metal Linux ou passthrough documentado |
-| A2 | Ferramenta de inventário registra: GPU, driver, ReBAR y/n, `/proc/iomem` relevantes (sem vazar segredo) |
-| A3 | Operador confirma: pressão de teste **não** no host de trabalho diário se risco de hang |
+| A1 | Lab is **not** only a WSL GPU-PV guest; bare-metal Linux or documented passthrough |
+| A2 | Inventory tool records: GPU, driver, ReBAR y/n, relevant `/proc/iomem` (without leaking secrets) |
+| A3 | Operator confirms test pressure is **not** on the daily work host when there is hang risk |
 
 ### Gate B — Measurement (must before SPEC freeze)
 
 | Check | Pass condition |
 | --- | --- |
-| B1 | ≥3 runs latência acesso ou migrate probe; median + p99 + condition tag idle/loaded |
-| B2 | Comparar p99 com swap em disco **no mesmo snapshot** (regra benchmarks) |
-| B3 | Se p99 device path sob load GPU > limiar de “congela UI” (definir no Passo 0, default: >50 ms page fault genérico ou > p99 disk×N) → **no-go** como hot memory; só cold tier policy no SPEC |
+| B1 | ≥3 runs of access latency or migration probe; median + p99 + idle/loaded condition tag |
+| B2 | Compare p99 with disk swap **in the same snapshot** (benchmark rule) |
+| B3 | If device-path p99 under GPU load exceeds the “freezes UI” threshold (define in Step 0; default: >50 ms generic page fault or > p99 disk×N) → **no-go** as hot memory; only cold-tier policy in the SPEC |
 
 ### Gate C — Process
 
 | Check | Pass |
 | --- | --- |
-| C1 | AUDIT-2.5 go no SPEC (locks/DMA/mm) |
-| C2 | Rollback trigger numérico no SPEC |
-| C3 | Cascade docs não prometem “já temos NUMA” |
+| C1 | AUDIT-2.5 go in the SPEC (locks/DMA/mm) |
+| C2 | Numerical rollback trigger in the SPEC |
+| C3 | Cascade docs do not promise “we already have NUMA” |
 
-### Verdict deste PRD
+### This PRD's verdict
 
 | Track | Verdict |
 | --- | --- |
 | **Cascade (WSL/product)** | **GO continue** |
-| **Kernel-true (trilha K)** | **GO research / NO-GO implement** até A+B |
-| **Kernel-true no WSL GPU-PV** | **NO-GO** (reaffirmed ADR-0001) |
+| **Kernel-true (track K)** | **GO research / NO-GO implement** until A+B |
+| **Kernel-true in WSL GPU-PV** | **NO-GO** (reaffirmed ADR-0001) |
 
-## 15. Kahneman map (resumo)
+## 15. Kahneman map (summary)
 
-| # | Aplicação |
+| # | Application |
 | --- | --- |
-| #2 | Counterfactual: LKM no WSL sem BAR → fault 1 s → pior que cascade |
-| #3 | 1,18 s é âncora; não adjetivo “rápido no kernel” |
-| #5 | GPU reset / reclaim no pior caso |
-| #11 | Anti-halo: manifesto bare-metal ≠ melhor no WSL |
-| #13 | Existência de HMM no kernel mainline ≠ nosso hardware |
-| #16 | Fail-safe: offline/demote independente do path CUDA app |
-| #18 | Cascade não é shim eterno se trilha K provar; sunset só com evidência |
+| #2 | Counterfactual: LKM in WSL without BAR → 1 s fault → worse than cascade |
+| #3 | 1.18 s is an anchor; not the adjective “fast in the kernel” |
+| #5 | GPU reset / reclaim in the worst case |
+| #11 | Anti-halo: bare-metal manifesto ≠ best on WSL |
+| #13 | HMM existing in mainline kernel ≠ our hardware |
+| #16 | Fail-safe: offline/demote independent from CUDA application path |
+| #18 | Cascade is not an eternal shim if track K proves itself; sunset only with evidence |
 
 ## 16. Answer to the product question (plain language)
 
-**“Não conseguimos fazer de forma linda no kernel de verdade?”**  
-Conseguimos **imaginar e planejar** de forma linda — e **devemos** (este PRD).  
-No **WSL com GPU virtualizada**, não conseguimos **entregar** isso de forma Day-0 limpa e confiável: o dono da VRAM não é o kernel do Linux.  
-A forma linda **hoje** é a cascata (kernel no swap, userspace só no backend).  
-A forma linda **depois**, no metal, é a trilha K — **se** os gates de medição passarem.
+**“Can we not make this elegantly in the real kernel?”**
+We can **imagine and plan** it elegantly — and **should** (this PRD).
+In **WSL with virtualized GPU**, we cannot **deliver** it as a clean, reliable
+Day-0 path: the Linux kernel does not own VRAM.
+The elegant form **today** is the cascade (kernel in swap, userspace only in
+the backend).
+The elegant form **later**, on metal, is track K — **if** the measurement gates
+pass.
 
-**“Deveríamos gerar um PRD seguindo o SSD?”**  
-**Sim.** Este arquivo **é** esse PRD. Próximo passo SSD: **não** SPEC automático — **Passo 0 de inventário/medição bare-metal** ou explicitamente arquivar trilha K como “blocked on hardware” em `validation.md`.
+**“Should we generate an SSD-following PRD?”**
+**Yes.** This file **is** that PRD. The next realistic SSD step is **not** an
+automatic SPEC — it is **Step 0 bare-metal inventory/measurement** or explicitly
+archive track K as “blocked on hardware” in `validation.md`.
