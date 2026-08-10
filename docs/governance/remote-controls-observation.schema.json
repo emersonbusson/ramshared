@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ramshared.dev/schemas/remote-controls-observation.schema.json",
+  "title": "RamShared remote controls observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository",
+    "default_branch",
+    "observed_at_utc",
+    "source",
+    "actions",
+    "branch_protection",
+    "environments"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "repository": { "type": "string", "maxLength": 128, "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+    "default_branch": { "type": "string", "maxLength": 128, "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*$" },
+    "observed_at_utc": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$" },
+    "source": { "const": "github-rest-api" },
+    "actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "default_workflow_permissions",
+        "can_approve_pull_request_reviews",
+        "allowed_actions",
+        "sha_pinning_required",
+        "artifact_and_log_retention_days"
+      ],
+      "properties": {
+        "default_workflow_permissions": { "enum": ["read", "write"] },
+        "can_approve_pull_request_reviews": { "type": "boolean" },
+        "allowed_actions": { "enum": ["all", "local_only", "selected"] },
+        "sha_pinning_required": { "type": "boolean" },
+        "artifact_and_log_retention_days": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "branch_protection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strict", "enforce_admins", "required_conversation_resolution", "required_status_checks"],
+      "properties": {
+        "strict": { "type": "boolean" },
+        "enforce_admins": { "type": "boolean" },
+        "required_conversation_resolution": { "type": "boolean" },
+        "required_status_checks": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._+:/()\\-]{0,127}$"
+          }
+        }
+      }
+    },
+    "environments": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protected-isolated-lab": { "$ref": "#/$defs/environment" },
+        "protected-release": { "$ref": "#/$defs/environment" }
+      }
+    }
+  },
+  "$defs": {
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_reviewers", "prevent_self_review", "protected_branches"],
+      "properties": {
+        "required_reviewers": { "type": "boolean" },
+        "prevent_self_review": { "type": "boolean" },
+        "protected_branches": { "type": "boolean" }
+      }
+    }
+  }
+}

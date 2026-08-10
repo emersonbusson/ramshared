@@ -1,0 +1,939 @@
+{
+  "schema_version": 1,
+  "contract_state": "PASS",
+  "p0_requirements": [
+    {
+      "id": "ci-contract",
+      "gate_ids": [
+        "ci-contract"
+      ]
+    },
+    {
+      "id": "rust-supply-chain",
+      "gate_ids": [
+        "cargo-audit",
+        "cargo-deny"
+      ]
+    },
+    {
+      "id": "bounded-least-privilege",
+      "gate_ids": [
+        "rust-quality",
+        "docs-integrity",
+        "validation-schema",
+        "comment-language",
+        "pr-body",
+        "gitleaks",
+        "cargo-audit",
+        "trivy",
+        "closed-pr-cancellation"
+      ]
+    },
+    {
+      "id": "action-provenance",
+      "gate_ids": [
+        "rust-quality",
+        "docs-integrity",
+        "validation-schema",
+        "comment-language",
+        "pr-body",
+        "gitleaks",
+        "cargo-audit",
+        "trivy",
+        "release-automation",
+        "ci-contract",
+        "closed-pr-cancellation"
+      ]
+    },
+    {
+      "id": "public-hygiene-coverage",
+      "gate_ids": [
+        "docs-integrity"
+      ]
+    },
+    {
+      "id": "rust-slice-coverage",
+      "gate_ids": [
+        "rust-slice-coverage"
+      ]
+    },
+    {
+      "id": "windows-static",
+      "gate_ids": [
+        "windows-static"
+      ]
+    },
+    {
+      "id": "protected-labs",
+      "gate_ids": [
+        "windows-lab-plan",
+        "wsl2-lab-plan"
+      ]
+    },
+    {
+      "id": "artifact-hygiene",
+      "gate_ids": [
+        "artifact-hygiene"
+      ]
+    },
+    {
+      "id": "release-integrity",
+      "gate_ids": [
+        "release-integrity"
+      ]
+    },
+    {
+      "id": "fail-closed-aggregate",
+      "gate_ids": [
+        "aggregate"
+      ]
+    },
+    {
+      "id": "remote-controls",
+      "gate_ids": [
+        "remote-controls"
+      ]
+    }
+  ],
+  "gates": [
+    {
+      "id": "rust-quality",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "rust",
+      "context": "fmt + clippy + test",
+      "trust": "pull-request",
+      "triggers": [
+        "pull_request",
+        "push-main"
+      ],
+      "selection": {
+        "mode": "always",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 30,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        }
+      },
+      "required_commands": [
+        "cargo fmt --all -- --check",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "docs-integrity",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/ci.yml",
+      "job": "docs",
+      "context": "docs index + links",
+      "trust": "pull-request",
+      "triggers": [
+        "pull_request",
+        "push-main"
+      ],
+      "selection": {
+        "mode": "always",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 20,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        }
+      },
+      "required_commands": [
+        "./scripts/docs-check.sh",
+        "--test-coverage-include=tools/ci/check-public-hygiene.mjs",
+        "--test-coverage-lines=80",
+        "--test-coverage-branches=80",
+        "--test-coverage-functions=80",
+        "tools/ci/check-public-hygiene.test.mjs",
+        "go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "validation-schema",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/validation-schema.yml",
+      "job": "validation-schema",
+      "context": "validation-schema",
+      "trust": "pull-request",
+      "triggers": [
+        "pull_request"
+      ],
+      "selection": {
+        "mode": "always",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 10,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        }
+      },
+      "required_commands": [
+        "node tools/ci/check-validation-schema.mjs"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "comment-language",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/comment-language.yml",
+      "job": "comment-language",
+      "context": "comment-language",
+      "trust": "pull-request",
+      "triggers": [
+        "pull_request"
+      ],
+      "selection": {
+        "mode": "always",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 10,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        }
+      },
+      "required_commands": [
+        "node tools/ci/check-comment-language.mjs"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "pr-body",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/pr-body.yml",
+      "job": "pr-body",
+      "context": "pr-body",
+      "trust": "pull-request",
+      "triggers": [
+        "pull_request"
+      ],
+      "selection": {
+        "mode": "always",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 10,
+        "permissions": {
+          "contents": "read",
+          "pull-requests": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        }
+      },
+      "required_commands": [],
+      "open_gaps": []
+    },
+    {
+      "id": "gitleaks",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/gitleaks.yml",
+      "job": "gitleaks",
+      "context": "gitleaks",
+      "trust": "pull-request",
+      "triggers": [
+        "pull_request",
+        "push-main"
+      ],
+      "selection": {
+        "mode": "always",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 30,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        }
+      },
+      "required_commands": [],
+      "open_gaps": []
+    },
+    {
+      "id": "cargo-audit",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/security-scans.yml",
+      "job": "cargo-audit",
+      "context": "cargo-audit",
+      "trust": "pull-request",
+      "triggers": [
+        "pull_request",
+        "push-main"
+      ],
+      "selection": {
+        "mode": "always",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 30,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        },
+        "advisory_db": {
+          "url": "https://github.com/RustSec/advisory-db.git",
+          "commit": "309ad29d8fe448bf986019e05d47b9e0e29a2218",
+          "commit_utc": "2026-08-09T12:34:06Z",
+          "max_age_days": 7,
+          "upstream_head_health": {
+            "mode": "scheduled-curator",
+            "cannot_override_snapshot_age": true
+          }
+        }
+      },
+      "required_commands": [
+        "cargo install cargo-audit --locked --version 0.22.2",
+        "cargo install cargo-deny --locked --version 0.19.9",
+        "cargo audit"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "trivy",
+      "required": false,
+      "implementation": "current",
+      "workflow": ".github/workflows/security-scans.yml",
+      "job": "trivy",
+      "context": "Trivy filesystem scan",
+      "trust": "pull-request",
+      "triggers": [
+        "pull_request",
+        "push-main"
+      ],
+      "selection": {
+        "mode": "always",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 30,
+        "permissions": {
+          "contents": "read",
+          "security-events": "write"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        }
+      },
+      "required_commands": [],
+      "allowed_continue_on_error_steps": [
+        "Upload Trivy SARIF"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "release-automation",
+      "required": false,
+      "implementation": "current",
+      "workflow": ".github/workflows/release.yml",
+      "job": "release-please",
+      "context": "release-please",
+      "trust": "release",
+      "triggers": [
+        "push-main"
+      ],
+      "selection": {
+        "mode": "never",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 45,
+        "permissions": {
+          "contents": "write",
+          "pull-requests": "write",
+          "issues": "write"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": false
+        }
+      },
+      "required_commands": [],
+      "open_gaps": []
+    },
+    {
+      "id": "closed-pr-cancellation",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/cancel-closed-pr.yml",
+      "job": "cancel-closed-pr",
+      "context": "closed-pr-cancellation",
+      "trust": "maintenance",
+      "triggers": [
+        "pull_request-closed"
+      ],
+      "selection": {
+        "mode": "never",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 10,
+        "permissions": {
+          "actions": "write",
+          "pull-requests": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": false
+        },
+        "closed_pr_cancellation": {
+          "merged_only": true,
+          "same_repository_only": true
+        }
+      },
+      "required_commands": [
+        "github.rest.actions.cancelWorkflowRun"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "ci-contract",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/ci-contract.yml",
+      "job": "contract",
+      "context": "ci-contract",
+      "trust": "pull-request",
+      "triggers": [
+        "pull_request",
+        "push-main"
+      ],
+      "selection": {
+        "mode": "always",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 10,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        }
+      },
+      "required_commands": [
+        "node tools/ci/check-ci-contract.mjs --check-local",
+        "tools/ci/check-ci-contract.test.mjs",
+        "tools/ci/plan-rust-slice-coverage.test.mjs",
+        "node tools/ci/plan-rust-slice-coverage.mjs --all"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "cargo-deny",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/security-scans.yml",
+      "job": "cargo-audit",
+      "context": "cargo-audit",
+      "trust": "pull-request",
+      "triggers": [
+        "pull_request",
+        "push-main"
+      ],
+      "selection": {
+        "mode": "always",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 30,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        }
+      },
+      "required_commands": [
+        "cargo deny check"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "rust-slice-coverage",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/ci-contract.yml",
+      "job": "slice-coverage",
+      "context": "rust-slice-coverage",
+      "trust": "pull-request",
+      "triggers": [
+        "pull_request",
+        "push-main"
+      ],
+      "selection": {
+        "mode": "always",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 30,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        },
+        "rust_slice_coverage": {
+          "map": "docs/governance/rust-slice-coverage.json",
+          "planner": "tools/ci/plan-rust-slice-coverage.mjs",
+          "llvm_cov_version": "0.8.7",
+          "min": 80
+        }
+      },
+      "required_commands": [
+        "node tools/ci/plan-rust-slice-coverage.mjs"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "windows-static",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/windows-static.yml",
+      "job": "windows-static",
+      "context": "windows-static",
+      "trust": "pull-request",
+      "triggers": [
+        "pull_request",
+        "push-main"
+      ],
+      "selection": {
+        "mode": "always",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 45,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        }
+      },
+      "required_commands": [
+        "cargo test -p ramshared-winbroker",
+        "cargo test -p ramshared-winsvc",
+        "scripts/windows/Test-WindowsCiStatic.ps1"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "windows-lab-plan",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/windows-lab.yml",
+      "job": "windows-lab-plan",
+      "context": "windows-lab-plan",
+      "trust": "isolated-lab",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "selection": {
+        "mode": "never",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 15,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        },
+        "lab_plan": {
+          "kind": "windows",
+          "mode": "plan",
+          "target": "isolated-lab",
+          "environment": "protected-isolated-lab",
+          "host_action": "none"
+        }
+      },
+      "required_commands": [
+        "node tools/ci/plan-isolated-lab.mjs --kind windows",
+        "node tools/ci/check-ci-artifacts.mjs --check"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "wsl2-lab-plan",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/wsl2-lab.yml",
+      "job": "wsl2-lab-plan",
+      "context": "wsl2-lab-plan",
+      "trust": "isolated-lab",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "selection": {
+        "mode": "never",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 15,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        },
+        "lab_plan": {
+          "kind": "wsl2",
+          "mode": "plan",
+          "target": "isolated-lab",
+          "environment": "protected-isolated-lab",
+          "host_action": "none"
+        }
+      },
+      "required_commands": [
+        "node tools/ci/plan-isolated-lab.mjs --kind wsl2",
+        "node tools/ci/check-ci-artifacts.mjs --check"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "artifact-hygiene",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/ci-contract.yml",
+      "job": "artifact-hygiene",
+      "context": "artifact-hygiene",
+      "trust": "pull-request",
+      "triggers": [
+        "pull_request",
+        "push-main"
+      ],
+      "selection": {
+        "mode": "always",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 10,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        }
+      },
+      "required_commands": [
+        "tools/ci/check-ci-artifacts.test.mjs"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "release-integrity",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/release-integrity.yml",
+      "job": "release-integrity",
+      "context": "release-integrity",
+      "trust": "release",
+      "triggers": [
+        "push-tag"
+      ],
+      "selection": {
+        "mode": "never",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 45,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": false
+        },
+        "release_integrity": {
+          "environment": "protected-release",
+          "sbom_generator": {
+            "name": "cargo-cyclonedx",
+            "version": "0.5.9",
+            "spec_version": "1.5"
+          },
+          "publication": "forbidden"
+        }
+      },
+      "required_commands": [
+        "git diff --quiet",
+        "scripts/package/build-linux-bundle.sh",
+        "cargo install cargo-cyclonedx --locked --version 0.5.9",
+        "cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --override-filename ramshared-sbom",
+        "node tools/ci/write-release-manifest.mjs",
+        "node tools/ci/check-release-integrity.mjs --check"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "aggregate",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/ci-contract.yml",
+      "job": "aggregate",
+      "context": "required-checks",
+      "trust": "pull-request",
+      "triggers": [
+        "pull_request",
+        "push-main"
+      ],
+      "selection": {
+        "mode": "always",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 10,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": true
+        }
+      },
+      "required_commands": [
+        "node tools/ci/check-ci-contract.mjs --aggregate-needs"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "remote-controls",
+      "required": true,
+      "implementation": "observed",
+      "context": "remote-controls",
+      "trust": "remote",
+      "triggers": [],
+      "selection": {
+        "mode": "never",
+        "paths": []
+      },
+      "observation": "docs/governance/remote-controls-observation.json",
+      "open_gaps": []
+    }
+  ],
+  "aggregate": {
+    "id": "aggregate",
+    "implementation": "current",
+    "workflow": ".github/workflows/ci-contract.yml",
+    "job": "aggregate",
+    "open_gaps": [],
+    "architecture": {
+      "kind": "local-reusable-needs-v1",
+      "callers": [
+        {
+          "job": "contract",
+          "kind": "direct",
+          "gates": [
+            "ci-contract"
+          ]
+        },
+        {
+          "job": "ci-core",
+          "kind": "reusable",
+          "workflow": "./.github/workflows/ci.yml",
+          "summary_job": "ci-summary",
+          "summary_needs": [
+            "rust",
+            "docs"
+          ],
+          "gates": [
+            "rust-quality",
+            "docs-integrity"
+          ]
+        },
+        {
+          "job": "security",
+          "kind": "reusable",
+          "workflow": "./.github/workflows/security-scans.yml",
+          "summary_job": "security-summary",
+          "summary_needs": [
+            "cargo-audit",
+            "trivy"
+          ],
+          "gates": [
+            "cargo-audit",
+            "cargo-deny",
+            "trivy"
+          ]
+        },
+        {
+          "job": "gitleaks",
+          "kind": "reusable",
+          "workflow": "./.github/workflows/gitleaks.yml",
+          "summary_job": "gitleaks-summary",
+          "summary_needs": [
+            "gitleaks"
+          ],
+          "gates": [
+            "gitleaks"
+          ]
+        },
+        {
+          "job": "comment-language",
+          "kind": "reusable",
+          "workflow": "./.github/workflows/comment-language.yml",
+          "summary_job": "comment-language-summary",
+          "summary_needs": [
+            "comment-language"
+          ],
+          "gates": [
+            "comment-language"
+          ]
+        },
+        {
+          "job": "pr-body",
+          "kind": "reusable",
+          "workflow": "./.github/workflows/pr-body.yml",
+          "summary_job": "pr-body-summary",
+          "summary_needs": [
+            "pr-body"
+          ],
+          "gates": [
+            "pr-body"
+          ]
+        },
+        {
+          "job": "validation-schema",
+          "kind": "reusable",
+          "workflow": "./.github/workflows/validation-schema.yml",
+          "summary_job": "validation-schema-summary",
+          "summary_needs": [
+            "validation-schema"
+          ],
+          "gates": [
+            "validation-schema"
+          ]
+        },
+        {
+          "job": "windows-static",
+          "kind": "reusable",
+          "workflow": "./.github/workflows/windows-static.yml",
+          "summary_job": "windows-static-summary",
+          "summary_needs": [
+            "windows-static"
+          ],
+          "gates": [
+            "windows-static"
+          ]
+        },
+        {
+          "job": "artifact-hygiene",
+          "kind": "direct",
+          "gates": [
+            "artifact-hygiene"
+          ]
+        },
+        {
+          "job": "slice-coverage",
+          "kind": "direct",
+          "gates": [
+            "rust-slice-coverage"
+          ]
+        }
+      ]
+    }
+  }
+}
