@@ -61,6 +61,33 @@ test('observations_catalog_documented_spec_implementation_and_test_surfaces_with
   assert.deepEqual(result.catalog.observations[1].documented_surface.implementation_paths, [])
 })
 
+test('capability_observations_ignore_empty_untracked_spec_directory', (t) => {
+  const ctx = fixture()
+  t.after(() => rmSync(ctx.root, { recursive: true, force: true }))
+  mkdirSync(path.join(ctx.root, 'docs', 'specs', 'no-milestone', 'empty-local-slug'))
+
+  const result = buildCapabilityObservations(ctx.root, ctx.policy)
+
+  assert.deepEqual(result.findings, [])
+  assert.deepEqual(result.catalog.observations.map((item) => item.slug), ['alpha', 'beta'])
+})
+
+test('capability_observations_refuse_dangling_named_document_symlink', (t) => {
+  const ctx = fixture()
+  t.after(() => rmSync(ctx.root, { recursive: true, force: true }))
+  const broken = path.join(ctx.root, 'docs', 'specs', 'no-milestone', 'broken-document')
+  mkdirSync(broken)
+  symlinkSync(path.join(ctx.root, 'missing-spec.md'), path.join(broken, 'SPEC.md'))
+
+  const result = buildCapabilityObservations(ctx.root, ctx.policy)
+
+  assert.deepEqual(result.catalog.observations.map((item) => item.slug), ['alpha', 'beta', 'broken-document'])
+  assert.deepEqual(result.findings, [{
+    rule: 'document-unsafe',
+    detail: 'docs/specs/no-milestone/broken-document/SPEC.md',
+  }])
+})
+
 test('observation_policy_and_discovery_fail_closed_on_unsafe_or_unbounded_input', (t) => {
   const ctx = fixture()
   t.after(() => rmSync(ctx.root, { recursive: true, force: true }))
