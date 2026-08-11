@@ -3520,3 +3520,40 @@ the outer terminal deadline.
 
 **Verdict:** 🟡 The process-tree fix is locally proven; the final hosted PR
 aggregate remains the promotion gate.
+
+## 2026-08-10 22:39 -03 — Deterministic serial Rust admission
+
+**What:** Removed intra-binary scheduling races from canonical Rust admission
+after ordinary workspace tests and exact coverage independently retained Rust
+test processes on hosted runners without any intervening Rust source change.
+
+**Before:** Workspace and coverage commands used the default multi-threaded
+Rust test harness while suites exercised process-global signals, environment,
+Unix sockets, and child lifecycle. Repeated hosted execution was therefore
+schedule-dependent even though prior runs and the same source were green.
+
+**Action:** SPEC DT-31 requires the exact workspace command
+`cargo test --workspace -- --test-threads=1` and appends
+`-- --test-threads=1` to every `cargo llvm-cov` child. DT-30 still owns the
+complete process tree and remains terminal; no retry, skip, or test exclusion
+was added.
+
+**After / measured data:** Both focused TDD tests were RED before the commands
+changed and GREEN afterward. The bounded local workspace suite exited 0 in
+24.69 seconds. All non-ignored tests passed; GPU, root/ublk, and the dangerous
+WSL2 daemon smoke remained ignored. The complete Node CI suite is 243/243.
+Contract tests are 52/52 at 90.36% lines, 82.64% branches, and 99.08%
+functions. Coverage-checker tests are 13/13 at 93.08% lines, 86.18% branches,
+and 91.30% functions. Strict contract, actionlint 1.7.7, docs-check, public
+hygiene, validation schema, and whitespace gates exit 0.
+
+**Refusals:** The 300-second local verification wrapper kills its process group
+on overrun. Canonical CI retains its declared 30-minute job bound, and exact
+coverage retains DT-30's 15-minute child bound. No ignored hardware test was
+promoted to offline proof.
+
+**Rollback trigger:** A serial run changes product behavior, exceeds its finite
+job deadline, hides a failing test, or leaves a Cargo/test descendant alive.
+
+**Verdict:** 🟡 Local deterministic admission is green; merge still requires
+the final hosted same-revision `required-checks` success.
