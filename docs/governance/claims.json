@@ -41,7 +41,7 @@
     },
     {
       "slug": "documentation-governance-integrity",
-      "state": "DONE",
+      "state": "PARTIAL",
       "owner_role": "documentation-governance",
       "canonical_spec": "docs/specs/no-milestone/documentation-governance-integrity/SPEC.md",
       "implementation_paths": [
@@ -70,16 +70,16 @@
       },
       "validation": {
         "record_path": "validation.md",
-        "verdict": "✅",
+        "verdict": "🟡",
         "source_commit": "95739d1f972bcefe7eb5df8861cf8c526503e074",
         "evidence_paths": [
           "docs/specs/no-milestone/documentation-governance-integrity/evidence-manifest.json"
         ]
       },
       "binary_match_required": false,
-      "environment_blocker": null,
-      "missing_gate": null,
-      "next_proof": null,
+      "environment_blocker": "A clean-checkout GitHub Actions documentation job has not yet passed the corrected capability catalog.",
+      "missing_gate": "same-revision hosted documentation admission",
+      "next_proof": "Push the correction and require the canonical CI Contract documentation job plus required-checks to succeed on the same revision.",
       "rollback_trigger": "one false DONE promotion or one sensitive-output leak"
     },
     {

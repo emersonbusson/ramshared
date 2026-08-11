@@ -105,8 +105,7 @@
       "context": "fmt + clippy + test",
       "trust": "pull-request",
       "triggers": [
-        "pull_request",
-        "push-main"
+        "workflow_call"
       ],
       "selection": {
         "mode": "always",
@@ -141,8 +140,7 @@
       "context": "docs index + links",
       "trust": "pull-request",
       "triggers": [
-        "pull_request",
-        "push-main"
+        "workflow_call"
       ],
       "selection": {
         "mode": "always",
@@ -163,6 +161,12 @@
       },
       "required_commands": [
         "./scripts/docs-check.sh",
+        "node tools/ci/check-task-log.mjs --diff",
+        "node tools/ci/check-document-lifecycle.mjs --all --base",
+        "node tools/ci/check-campaign-evidence-lifecycle.mjs --check --base",
+        "--test-coverage-include=tools/ci/check-campaign-evidence-lifecycle.mjs",
+        "tools/ci/check-campaign-evidence-lifecycle.test.mjs",
+        "--test-coverage-include=tools/ci/generate-capability-observations.mjs",
         "--test-coverage-include=tools/ci/check-public-hygiene.mjs",
         "--test-coverage-lines=80",
         "--test-coverage-branches=80",
@@ -181,7 +185,7 @@
       "context": "validation-schema",
       "trust": "pull-request",
       "triggers": [
-        "pull_request"
+        "workflow_call"
       ],
       "selection": {
         "mode": "always",
@@ -214,7 +218,7 @@
       "context": "comment-language",
       "trust": "pull-request",
       "triggers": [
-        "pull_request"
+        "workflow_call"
       ],
       "selection": {
         "mode": "always",
@@ -247,7 +251,7 @@
       "context": "pr-body",
       "trust": "pull-request",
       "triggers": [
-        "pull_request"
+        "workflow_call"
       ],
       "selection": {
         "mode": "always",
@@ -279,8 +283,7 @@
       "context": "gitleaks",
       "trust": "pull-request",
       "triggers": [
-        "pull_request",
-        "push-main"
+        "workflow_call"
       ],
       "selection": {
         "mode": "always",
@@ -311,8 +314,8 @@
       "context": "cargo-audit",
       "trust": "pull-request",
       "triggers": [
-        "pull_request",
-        "push-main"
+        "workflow_call",
+        "workflow_dispatch"
       ],
       "selection": {
         "mode": "always",
@@ -357,8 +360,8 @@
       "context": "Trivy filesystem scan",
       "trust": "pull-request",
       "triggers": [
-        "pull_request",
-        "push-main"
+        "workflow_call",
+        "workflow_dispatch"
       ],
       "selection": {
         "mode": "always",
@@ -502,8 +505,8 @@
       "context": "cargo-audit",
       "trust": "pull-request",
       "triggers": [
-        "pull_request",
-        "push-main"
+        "workflow_call",
+        "workflow_dispatch"
       ],
       "selection": {
         "mode": "always",
@@ -576,8 +579,7 @@
       "context": "windows-static",
       "trust": "pull-request",
       "triggers": [
-        "pull_request",
-        "push-main"
+        "workflow_call"
       ],
       "selection": {
         "mode": "always",

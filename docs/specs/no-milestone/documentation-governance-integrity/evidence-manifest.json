@@ -1,10 +1,10 @@
 {
   "schema_version": "ramshared-spec-evidence/v1",
   "slug": "documentation-governance-integrity",
-  "status": "DONE",
+  "status": "PARTIAL",
   "spec": {
     "path": "docs/specs/no-milestone/documentation-governance-integrity/SPEC.md",
-    "sha256": "5b816618381f577f46137aabf2b0d37f9462937bb395a4594241de138e6af4d6"
+    "sha256": "8b394818fa43274ba1c20bf7ad0f5648d03d12eb180e502ad68fc1dd7684da37"
   },
   "tests": [
     {
@@ -29,6 +29,24 @@
       "name": "qualified_claim_is_the_only_done_path",
       "path": "tools/ci/check-documentation-governance.test.mjs",
       "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "capability_observations_ignore_empty_untracked_spec_directory",
+      "path": "tools/ci/generate-capability-observations.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "capability_observations_preserve_readme_only_historical_surface",
+      "path": "tools/ci/generate-capability-observations.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "capability_observations_refuse_dangling_named_document_symlink",
+      "path": "tools/ci/generate-capability-observations.test.mjs",
+      "kind": "unit",
       "exit_code": 0
     }
   ],
@@ -56,6 +74,14 @@
       "function_percent": 100.0,
       "classification": "Node per-file coverage",
       "justification": "96.72% lines, 80.26% branches, and 100.00% functions exceed the SPEC thresholds."
+    },
+    {
+      "path": "tools/ci/generate-capability-observations.mjs",
+      "line_percent": 97.89,
+      "branch_percent": 93.10,
+      "function_percent": 100.0,
+      "classification": "Node per-file coverage",
+      "justification": "97.89% lines, 93.10% branches, and 100.00% functions exceed the SPEC thresholds."
     }
   ],
   "live": {
@@ -108,7 +134,12 @@
   "validation_path": "validation.md",
   "impl_path": "docs/specs/no-milestone/documentation-governance-integrity/IMPL.md",
   "gaps": {
-    "open": [],
+    "open": [
+      {
+        "blocker": "The corrected catalog has not yet passed the same-revision hosted documentation job.",
+        "next_proof": "Push this revision and require the canonical CI Contract documentation job and required-checks to succeed."
+      }
+    ],
     "env_bound": []
   },
   "rollback_trigger": "one false DONE promotion, sensitive diagnostic, rewrite, or nondeterministic result"

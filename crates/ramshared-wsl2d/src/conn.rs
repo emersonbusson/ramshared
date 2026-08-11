@@ -42,13 +42,15 @@ pub struct Reply {
     pub disconnect: bool,
 }
 
-/// Worker channel message (DT-15). `Opened`/`Closed` control the deterministic
-/// termination; `Job` is work; `ZeroExport` is the broker slice cleanup (DT-17): the
-/// worker (single thread owning the backend) zeroes the `[base, base+len)` window and confirms via `done`.
+/// Worker channel message (DT-15). `Opened`/`Closed` control connection
+/// accounting; `Job` is work; `ZeroExport` is the broker slice cleanup
+/// (DT-17); and `Shutdown` is the internal broker-worker wake (DT-50). These
+/// control variants are never exposed as NBD wire values.
 pub enum WMsg {
     Opened,
     Job(Job),
     Closed,
+    Shutdown,
     ZeroExport {
         base: u64,
         len: u64,

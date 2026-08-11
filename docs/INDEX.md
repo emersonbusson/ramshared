@@ -12,6 +12,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | --- | --- | --- | --- | --- |
 | [`benchmark-evidence-integrity`](specs/no-milestone/benchmark-evidence-integrity/) | Benchmark and validation evidence integrity | — | — | DONE |
 | [`broker-telemetry-reconciliation`](specs/no-milestone/broker-telemetry-reconciliation/) | Memory broker telemetry collection and reconciliation | — | — | UNQUALIFIED |
+| [`campaign-evidence-lifecycle`](specs/no-milestone/campaign-evidence-lifecycle/) | Campaign evidence lifecycle and custody | — | — | UNQUALIFIED |
 | [`cascade-desktop-app`](specs/no-milestone/cascade-desktop-app/) | Desktop control app for WSL2/Linux cascade (zenity + CLI) | — | — | UNQUALIFIED |
 | [`cascade-lifecycle-observability`](specs/no-milestone/cascade-lifecycle-observability/) | Cascade lifecycle observability — state machine + fill/demote counters | — | — | UNQUALIFIED |
 | [`cascade-transport-policy`](specs/no-milestone/cascade-transport-policy/) | Cascade transport policy — NBD Day-1 on WSL2; ublk prefer off-WSL2 only | — | — | UNQUALIFIED |
@@ -19,7 +20,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`ci-trust-and-release-integrity`](specs/no-milestone/ci-trust-and-release-integrity/) | CI trust and release integrity | — | — | UNQUALIFIED |
 | [`comment-language-integrity`](specs/no-milestone/comment-language-integrity/) | Canonical English and comment-language integrity | — | — | SPEC |
 | [`custom-kernel-ublk-product-transport`](specs/no-milestone/custom-kernel-ublk-product-transport/) | Custom-kernel ublk product transport gate | — | — | UNQUALIFIED |
-| [`documentation-governance-integrity`](specs/no-milestone/documentation-governance-integrity/) | Documentation governance and evidence integrity | — | — | DONE |
+| [`documentation-governance-integrity`](specs/no-milestone/documentation-governance-integrity/) | Documentation governance and evidence integrity | — | — | PARTIAL |
 | [`documentation-localization-integrity`](specs/no-milestone/documentation-localization-integrity/) | Documentation localization integrity | — | — | DONE |
 | [`external-gpu-workload-wddm-pressure`](specs/no-milestone/external-gpu-workload-wddm-pressure/) | External GPU workload WDDM pressure correlation | — | — | UNQUALIFIED |
 | [`kernel-native-language`](specs/no-milestone/kernel-native-language/) | Language policy for kernel-native VRAM work (C vs Rust) | — | — | PRD |

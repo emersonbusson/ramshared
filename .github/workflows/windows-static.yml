@@ -1,9 +1,6 @@
 name: Windows Static
 
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_call:
 
 permissions: {}

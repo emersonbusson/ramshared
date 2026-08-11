@@ -6,9 +6,6 @@ name: Security Scans
 # - Trivy filesystem scan (CRITICAL/HIGH, unfixed ignored)
 
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
   workflow_call:
 
