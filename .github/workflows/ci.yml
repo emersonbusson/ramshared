@@ -119,6 +119,14 @@ jobs:
           --test-coverage-functions=80
           tools/ci/generate-capability-observations.test.mjs
 
+      - name: Campaign evidence lifecycle coverage
+        run: >-
+          node --test --experimental-test-coverage
+          --test-coverage-include=tools/ci/check-campaign-evidence-lifecycle.mjs
+          --test-coverage-lines=80 --test-coverage-branches=80
+          --test-coverage-functions=80
+          tools/ci/check-campaign-evidence-lifecycle.test.mjs
+
   ci-summary:
     name: ci-summary
     if: always()

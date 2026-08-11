@@ -831,20 +831,6 @@
     },
     {
       "kind": "artifact-observation",
-      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260716-235724/host-side.log",
-      "owner_role": "windows-reliability",
-      "surface": "windows-storage",
-      "classification": "legacy-unqualified",
-      "retention_class": "historical-immutable",
-      "immutable": true,
-      "promotion_eligible": false,
-      "reason": "Predates campaign evidence lifecycle v1 and is observed only.",
-      "bytes": 19644,
-      "sha256": "da872d0254b9ad1c255c2220b16d0690841f30781ea61b739b17d61421701546",
-      "bounded": true
-    },
-    {
-      "kind": "artifact-observation",
       "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260716-235724/ioctl-pass1.txt",
       "owner_role": "windows-reliability",
       "surface": "windows-storage",
@@ -915,20 +901,6 @@
     },
     {
       "kind": "artifact-observation",
-      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260717-001940/host-side.log",
-      "owner_role": "windows-reliability",
-      "surface": "windows-storage",
-      "classification": "legacy-unqualified",
-      "retention_class": "historical-immutable",
-      "immutable": true,
-      "promotion_eligible": false,
-      "reason": "Predates campaign evidence lifecycle v1 and is observed only.",
-      "bytes": 19650,
-      "sha256": "ebd00d397af987da5d36b0c1de6121d4edd596966ef424c8f10c1191911e6d2a",
-      "bounded": true
-    },
-    {
-      "kind": "artifact-observation",
       "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260717-001940/ioctl-pass1.txt",
       "owner_role": "windows-reliability",
       "surface": "windows-storage",
@@ -995,20 +967,6 @@
       "reason": "Predates campaign evidence lifecycle v1 and is observed only.",
       "bytes": 583,
       "sha256": "9ca829db0e7805b74e3a1f07bcbb6bd4f0079b5b80bfdd9e27d215262a333320",
-      "bounded": true
-    },
-    {
-      "kind": "artifact-observation",
-      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260717-004209/host-side.log",
-      "owner_role": "windows-reliability",
-      "surface": "windows-storage",
-      "classification": "legacy-unqualified",
-      "retention_class": "historical-immutable",
-      "immutable": true,
-      "promotion_eligible": false,
-      "reason": "Predates campaign evidence lifecycle v1 and is observed only.",
-      "bytes": 11202,
-      "sha256": "9d33e3d626326e46f320a04f29460192c869ca7c76533c2e9db6b6240caf377a",
       "bounded": true
     },
     {
@@ -1769,20 +1727,6 @@
     },
     {
       "kind": "artifact-observation",
-      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/pagefile-online-refuse-20260717-102614/host-side.log",
-      "owner_role": "windows-reliability",
-      "surface": "windows-storage",
-      "classification": "legacy-unqualified",
-      "retention_class": "historical-immutable",
-      "immutable": true,
-      "promotion_eligible": false,
-      "reason": "Predates campaign evidence lifecycle v1 and is observed only.",
-      "bytes": 34692,
-      "sha256": "afe02b89923d9dd44c45c9b0221774ca334fac508bb86a0a749c4fcc6cd1ca61",
-      "bounded": true
-    },
-    {
-      "kind": "artifact-observation",
       "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/pagefile-online-refuse-20260717-102614/summary-corrected.json",
       "owner_role": "windows-reliability",
       "surface": "windows-storage",
@@ -2003,20 +1947,6 @@
       "reason": "Predates campaign evidence lifecycle v1 and is observed only.",
       "bytes": 0,
       "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "bounded": true
-    },
-    {
-      "kind": "artifact-observation",
-      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/sdv-probe-20260717/msbuild-sdv.log",
-      "owner_role": "windows-reliability",
-      "surface": "windows-storage",
-      "classification": "legacy-unqualified",
-      "retention_class": "historical-immutable",
-      "immutable": true,
-      "promotion_eligible": false,
-      "reason": "Predates campaign evidence lifecycle v1 and is observed only.",
-      "bytes": 180,
-      "sha256": "cc8f8b50c1b253632cd8aa88beaea0bcc912c8e4482deca3897881c0c0143191",
       "bounded": true
     },
     {

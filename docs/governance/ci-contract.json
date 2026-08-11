@@ -164,6 +164,8 @@
         "node tools/ci/check-task-log.mjs --diff",
         "node tools/ci/check-document-lifecycle.mjs --all --base",
         "node tools/ci/check-campaign-evidence-lifecycle.mjs --check --base",
+        "--test-coverage-include=tools/ci/check-campaign-evidence-lifecycle.mjs",
+        "tools/ci/check-campaign-evidence-lifecycle.test.mjs",
         "--test-coverage-include=tools/ci/generate-capability-observations.mjs",
         "--test-coverage-include=tools/ci/check-public-hygiene.mjs",
         "--test-coverage-lines=80",
