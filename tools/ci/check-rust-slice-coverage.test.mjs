@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
@@ -493,10 +493,18 @@ test("coverage_child_runner_uses_private_target_without_shell_and_propagates_fai
       env: { SAFE: "yes" },
       error: (line) => commands.push(line),
       spawnCommand: (command, args, options) => {
-        assert.equal(command, "cargo");
+        assert.equal(command, "timeout");
+        assert.deepEqual(args.slice(0, 4), [
+          "--signal=TERM",
+          "--kill-after=5s",
+          "15m",
+          "cargo",
+        ]);
         assert.equal(args.includes("--output-path"), true);
         assert.equal(options.env.CARGO_TARGET_DIR, targetPath);
+        assert.equal(options.env.SAFE, "yes");
         assert.equal(options.shell, false);
+        assert.equal(options.timeout, 15 * 60_000 + 10_000);
         writeFileSync(reportPath, "{}\n");
         return { status: 0, stdout: "", stderr: "" };
       },
@@ -550,7 +558,7 @@ test("coverage_child_deadline_is_terminal_and_fail_closed", () => {
         }),
       (error) => error?.code === "COVERAGE_CHILD_TIMEOUT" && error.exitCode === 2,
     );
-    assert.equal(observedOptions.timeout, 15 * 60_000);
+    assert.equal(observedOptions.timeout, 15 * 60_000 + 10_000);
     assert.equal(observedOptions.killSignal, "SIGTERM");
     assert.equal(existsSync(reportPath), false);
   } finally {
@@ -592,6 +600,32 @@ test("coverage_child_deadline_terminates_descendant_process_tree", () => {
     assert.equal(observedOptions.timeout, 15 * 60_000 + 10_000);
     assert.equal(observedOptions.killSignal, "SIGTERM");
     assert.equal(existsSync(reportPath), false);
+
+    const childPidPath = join(root, "descendant.pid");
+    const supervised = spawnSync(
+      "timeout",
+      [
+        "--signal=TERM",
+        "--kill-after=0.2s",
+        "0.1s",
+        "sh",
+        "-c",
+        'sleep 60 & child=$!; echo "$child" > "$RS_DESCENDANT_PID_FILE"; wait',
+      ],
+      {
+        env: { ...process.env, RS_DESCENDANT_PID_FILE: childPidPath },
+        encoding: "utf8",
+        timeout: 2_000,
+      },
+    );
+    assert.equal(supervised.status, 124, supervised.stderr);
+    const descendantPid = Number.parseInt(readFileSync(childPidPath, "utf8").trim(), 10);
+    assert.equal(Number.isSafeInteger(descendantPid), true);
+    assert.throws(
+      () => process.kill(descendantPid, 0),
+      (error) => error?.code === "ESRCH",
+      "the timeout supervisor must terminate the descendant, not only its shell parent",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

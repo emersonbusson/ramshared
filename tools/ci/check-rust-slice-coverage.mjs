@@ -61,6 +61,8 @@ const COVERAGE_LOCK_WAIT_MS = 60_000;
 const COVERAGE_LOCK_POLL_MS = 100;
 const COVERAGE_LOCK_LEASE_MS = 45 * 60_000;
 const COVERAGE_CHILD_TIMEOUT_MS = 15 * 60_000;
+const COVERAGE_CHILD_KILL_GRACE_MS = 5_000;
+const COVERAGE_SUPERVISOR_TIMEOUT_MS = COVERAGE_CHILD_TIMEOUT_MS + 10_000;
 
 class CoverageGateError extends Error {
   constructor(code, message, exitCode = 2) {
@@ -529,26 +531,33 @@ function runLlvmCov(
   if (!existsSync(join(repoRoot, "Cargo.toml"))) {
     throw new CoverageGateError("COVERAGE_TOOL_ROOT_INVALID", "Cargo.toml not found at repository root", 2);
   }
-  const args = ["llvm-cov"];
-  for (const packageName of packages) args.push("-p", packageName);
-  args.push("--json", "--summary-only", "--output-path", jsonOutPath);
+  const cargoArgs = ["llvm-cov"];
+  for (const packageName of packages) cargoArgs.push("-p", packageName);
+  cargoArgs.push("--json", "--summary-only", "--output-path", jsonOutPath);
 
-  const renderedArgs = args.map((argument) =>
+  const renderedArgs = cargoArgs.map((argument) =>
     argument === jsonOutPath ? "<private-run>/llvm-cov.json" : argument,
   );
   error(`$ cargo ${renderedArgs.join(" ")}`);
-  const result = spawnCommand("cargo", args, {
+  const supervisorArgs = [
+    "--signal=TERM",
+    `--kill-after=${COVERAGE_CHILD_KILL_GRACE_MS / 1_000}s`,
+    `${COVERAGE_CHILD_TIMEOUT_MS / 60_000}m`,
+    "cargo",
+    ...cargoArgs,
+  ];
+  const result = spawnCommand("timeout", supervisorArgs, {
     cwd: repoRoot,
     env: { ...env, CARGO_TARGET_DIR: cargoTargetDir },
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
     shell: false,
-    timeout: COVERAGE_CHILD_TIMEOUT_MS,
+    timeout: COVERAGE_SUPERVISOR_TIMEOUT_MS,
     killSignal: "SIGTERM",
   });
   if (result.stdout) process.stderr.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
-  if (result.error?.code === "ETIMEDOUT") {
+  if (result.status === 124 || result.error?.code === "ETIMEDOUT") {
     throw new CoverageGateError(
       "COVERAGE_CHILD_TIMEOUT",
       "cargo llvm-cov exceeded the 15-minute deadline",
@@ -697,7 +706,9 @@ function main(argv = process.argv, { print = console.log, error = console.error 
 }
 
 export {
+  COVERAGE_CHILD_KILL_GRACE_MS,
   COVERAGE_CHILD_TIMEOUT_MS,
+  COVERAGE_SUPERVISOR_TIMEOUT_MS,
   COVERAGE_LOCK_LEASE_MS,
   COVERAGE_LOCK_POLL_MS,
   COVERAGE_LOCK_WAIT_MS,
