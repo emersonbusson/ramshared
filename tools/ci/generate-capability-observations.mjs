@@ -6,7 +6,7 @@
  * only qualified claim registry; its state is copied here as reconciliation
  * context and every generated row remains OBSERVED.
  */
-import { existsSync, lstatSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { lstatSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +15,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const POLICY_PATH = 'docs/governance/capability-observation-policy.json'
 const CLAIMS_PATH = 'docs/governance/claims.json'
 const DOCUMENT_NAMES = Object.freeze({ prd: 'PRD.md', spec: 'SPEC.md', implementation: 'IMPL.md' })
+const OBSERVATION_DOCUMENT_NAMES = Object.freeze([...Object.values(DOCUMENT_NAMES), 'README.md'])
 const CLAIM_STATES = new Set(['PRD', 'SPEC', 'UNQUALIFIED', 'PARTIAL', 'BLOCKED', 'DONE', 'N/A'])
 
 function isObject(value) {
@@ -52,6 +53,40 @@ function isDirectory(directoryPath) {
   } catch {
     return false
   }
+}
+
+function inspectDirectoryEntry(entryPath) {
+  try {
+    const stat = lstatSync(entryPath)
+    return {
+      present: true,
+      regularFile: stat.isFile() && !stat.isSymbolicLink(),
+      unreadable: false,
+    }
+  } catch (error) {
+    return {
+      present: error?.code !== 'ENOENT',
+      regularFile: false,
+      unreadable: error?.code !== 'ENOENT',
+    }
+  }
+}
+
+function hasNamedObservationDocument(directoryPath) {
+  return OBSERVATION_DOCUMENT_NAMES.some((filename) =>
+    inspectDirectoryEntry(path.join(directoryPath, filename)).present)
+}
+
+function isUsableNamedDocument(entry, relative, findings) {
+  if (entry.unreadable) {
+    findings.push(finding('document-read', relative))
+    return false
+  }
+  if (!entry.regularFile) {
+    findings.push(finding('document-unsafe', relative))
+    return false
+  }
+  return true
 }
 
 function normalisePath(value) {
@@ -113,7 +148,9 @@ function collectSpecDirectories(root, policy, findings) {
   for (const name of readdirSync(base).sort()) {
     if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) continue
     const candidate = path.join(base, name)
-    if (isDirectory(candidate)) directories.push({ slug: name, absolute: candidate, relative: `${policy.spec_root}/${name}` })
+    if (isDirectory(candidate) && hasNamedObservationDocument(candidate)) {
+      directories.push({ slug: name, absolute: candidate, relative: `${policy.spec_root}/${name}` })
+    }
   }
   if (directories.length > policy.max_specs) findings.push(finding('spec-limit', String(directories.length)))
   return directories.slice(0, policy.max_specs)
@@ -138,14 +175,15 @@ function isTestPath(value) {
 function documentPathsForDirectory(root, directory, policy, findings) {
   const documents = { prd: null, spec: null, implementation: null }
   const allReferences = new Set()
+  const readmeRelative = `${directory.relative}/README.md`
+  const readmeEntry = inspectDirectoryEntry(path.join(root, readmeRelative))
+  if (readmeEntry.present) isUsableNamedDocument(readmeEntry, readmeRelative, findings)
   for (const [kind, filename] of Object.entries(DOCUMENT_NAMES)) {
     const relative = `${directory.relative}/${filename}`
     const absolute = path.join(root, relative)
-    if (!existsSync(absolute)) continue
-    if (!isRegularFile(absolute)) {
-      findings.push(finding('document-unsafe', relative))
-      continue
-    }
+    const entry = inspectDirectoryEntry(absolute)
+    if (!entry.present) continue
+    if (!isUsableNamedDocument(entry, relative, findings)) continue
     let text
     try {
       text = readFileSync(absolute, 'utf8')

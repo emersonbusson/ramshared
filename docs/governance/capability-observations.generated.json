@@ -361,7 +361,7 @@
         "claim_present": true,
         "observation_is_not_a_claim": true,
         "registry_path": "docs/governance/claims.json",
-        "registry_state": "DONE"
+        "registry_state": "PARTIAL"
       },
       "documented_surface": {
         "implementation_paths": [
@@ -371,11 +371,13 @@
           "tools/ci/check-gap-register.mjs",
           "tools/ci/check-public-hygiene.mjs",
           "tools/ci/check-validation-schema.mjs",
+          "tools/ci/generate-capability-observations.mjs",
           "tools/generate-docs-index.mjs"
         ],
         "test_paths": [
           "tools/ci/check-documentation-governance.test.mjs",
           "tools/ci/check-validation-schema.test.mjs",
+          "tools/ci/generate-capability-observations.test.mjs",
           "tools/generate-docs-index.test.mjs"
         ]
       },
@@ -650,30 +652,6 @@
         "registry_state": null
       },
       "documented_surface": {
-        "implementation_paths": [],
-        "test_paths": []
-      },
-      "documents": {
-        "implementation": null,
-        "prd": null,
-        "spec": null
-      },
-      "observation_state": "OBSERVED",
-      "promotion": {
-        "authority": "docs/governance/claims.json",
-        "permitted": false,
-        "reason": "Only the qualified claims registry may publish capability state."
-      },
-      "slug": "win11-drill-gpupv-cuda"
-    },
-    {
-      "claim_reconciliation": {
-        "claim_present": false,
-        "observation_is_not_a_claim": true,
-        "registry_path": "docs/governance/claims.json",
-        "registry_state": null
-      },
-      "documented_surface": {
         "implementation_paths": [
           "crates/ramshared-broker/src/lease.rs",
           "crates/ramshared-broker/src/lib.rs",
@@ -727,30 +705,6 @@
         "reason": "Only the qualified claims registry may publish capability state."
       },
       "slug": "windows-autonomous-broker-service"
-    },
-    {
-      "claim_reconciliation": {
-        "claim_present": false,
-        "observation_is_not_a_claim": true,
-        "registry_path": "docs/governance/claims.json",
-        "registry_state": null
-      },
-      "documented_surface": {
-        "implementation_paths": [],
-        "test_paths": []
-      },
-      "documents": {
-        "implementation": null,
-        "prd": null,
-        "spec": null
-      },
-      "observation_state": "OBSERVED",
-      "promotion": {
-        "authority": "docs/governance/claims.json",
-        "permitted": false,
-        "reason": "Only the qualified claims registry may publish capability state."
-      },
-      "slug": "windows-physical-product-online"
     },
     {
       "claim_reconciliation": {
