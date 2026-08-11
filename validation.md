@@ -3441,3 +3441,43 @@ SARIF `continue-on-error` allowlist returns.
 
 **Verdict:** 🟡 The false-green is locally closed; the corrected hosted
 security job and final same-run aggregate remain the promotion proof.
+
+## 2026-08-10 21:41 -03 — Hosted CI trust slice qualification
+
+**What:** Qualified the complete CI trust and release-integrity implementation
+on the immutable PR #189 revision `aa2282bf4d002c7560e057cc4a6dc01313e0d953`.
+
+**Before:** Local contracts and each reproduced refusal were green, but the
+slice correctly remained partial until a same-run hosted aggregate proved the
+actual GitHub orchestration, Windows runtime, security publication, and exact
+coverage behavior.
+
+**Action:** GitHub Actions run `31446546130` executed the contract entrypoint
+and every reusable caller on the same pull-request revision. No bypass, retry,
+manual success, host runner, lab mode, or tolerated failure was used.
+
+**After / measured data:** All 20/20 jobs concluded success. Terminal
+`required-checks` job `93642837435` is SUCCESS. The hosted Windows static job
+completed in 98 seconds; exact Rust coverage completed in 221 seconds with 36
+per-file PASS rows and a minimum of 80.8% (893/1,105 lines in
+`crates/ramshared-cli/src/main.rs`); cargo-audit/cargo-deny completed in 292
+seconds; and Trivy generated, validated, and uploaded the exact SARIF in 19
+seconds. Workspace fmt/clippy/tests, docs, actionlint, gitleaks, validation,
+comment-language, PR-body, artifact hygiene, and every summary gate passed.
+
+**Refusals:** The same-run aggregator still rejects failed, cancelled, skipped,
+missing, or tolerated callers; coverage below 80%, invalid SARIF, supply-chain
+policy failure, Windows static failure, or unsafe remote controls remain
+terminal.
+
+**Artifacts:** GitHub run `31446546130`, terminal job `93642837435`, coverage
+job `93642007224`, Windows job `93642007476`, security jobs `93642007461` and
+`93642007478`.
+
+**Rollback trigger:** Any required caller ceases to conclude success on the
+same revision, any mapped file falls below 80%, SARIF publication regresses,
+or branch/environment controls drift from the recorded strict observation.
+
+**Verdict:** ✅ CI trust and release integrity is implemented and qualified.
+This verdict does not promote the separately env-bound physical Windows,
+driver-signing, VM-lab, GPU-pressure, or live storage matrices.
