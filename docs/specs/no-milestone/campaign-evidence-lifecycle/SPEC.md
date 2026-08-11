@@ -98,7 +98,10 @@ The checker fails closed for each of the following:
 | `inventory_tamper_and_orphan_are_refused` | Hash/bytes and exact-set custody are enforced. |
 | `historical_catalog_is_observed_not_qualified` | Legacy evidence remains visible but ineligible for promotion. |
 | `catalog_ignores_untracked_local_evidence` | An ignored local artifact does not change the committed catalog. |
+| `prospective_ratchet_ignores_untracked_local_evidence` | A valid newly tracked campaign is not invalidated by an ignored local artifact beside it. |
 | `cli_catalog_generation_uses_tracked_git_paths` | The public `--generate` and `--check` commands use Git-tracked evidence only and reject invalid arguments. |
+| `cli_refuses_missing_policy_or_tracked_source` | CLI failures for absent policy, an unavailable Git source, and a stale repository result remain terminal. |
+| `manifest_refuses_untracked_and_malformed_inputs` | Invalid timestamps, policy data, untracked declared artifacts, and nonregular files cannot enter the catalog. |
 | `repository_check_refuses_missing_tracked_file_source` | A repository check without a trustworthy tracked-file source is terminal. |
 | `diff_ratchet_refuses_new_unmanifested_evidence` | Future evidence adopts the contract without rewriting history. |
 

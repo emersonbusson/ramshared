@@ -323,14 +323,39 @@ test('cli_catalog_generation_uses_tracked_git_paths', () => {
 
     assert.equal(runCli(['--generate'], root), 0)
     git(root, ['add', 'docs/governance/campaign-evidence-catalog.generated.json'])
+    git(root, [
+      '-c', 'user.name=RamShared fixture',
+      '-c', 'user.email=fixture@localhost',
+      'commit', '--quiet', '-m', 'fixture evidence',
+    ])
     write(root, ignored, 'local only\n')
 
     assert.equal(runCli(['--check'], root), 0)
+    assert.equal(runCli(['--check', '--base', 'HEAD'], root), 0)
+    assert.equal(runCli(['--check', '--base', 'missing-ref'], root), 1)
     assert.equal(runCli(['--unexpected'], root), 64)
     const catalog = JSON.parse(readFileSync(join(root, 'docs/governance/campaign-evidence-catalog.generated.json'), 'utf8'))
     assert.deepEqual(catalog.entries.map((entry) => entry.path), [tracked])
   } finally {
     rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('cli_refuses_missing_policy_or_tracked_source', () => {
+  const withoutPolicy = fixtureRoot()
+  const withoutGit = fixtureRoot()
+  try {
+    assert.equal(runCli(['--generate'], withoutPolicy), 1)
+
+    write(
+      withoutGit,
+      'docs/governance/campaign-evidence-lifecycle.json',
+      `${JSON.stringify(repositoryPolicy())}\n`,
+    )
+    assert.equal(runCli(['--generate'], withoutGit), 1)
+  } finally {
+    rmSync(withoutPolicy, { recursive: true, force: true })
+    rmSync(withoutGit, { recursive: true, force: true })
   }
 })
 
@@ -347,6 +372,38 @@ test('diff_ratchet_refuses_new_unmanifested_evidence', () => {
         policy: policy(),
       }),
       ['new-evidence-manifest-missing:docs/specs/no-milestone/wsl2-freeze/evidence/new-campaign'],
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('prospective_ratchet_ignores_untracked_local_evidence', () => {
+  const root = fixtureRoot()
+  try {
+    const runRelative =
+      'docs/specs/no-milestone/wsl2-freeze/evidence/freeze-20260811-001'
+    const artifact = '{"status":"sanitized"}\n'
+    const artifactPath = `${runRelative}/before-after.json`
+    const manifestPath = `${runRelative}/campaign-manifest.json`
+    write(root, artifactPath, artifact)
+    const manifest = completeManifest({
+      runRelative,
+      artifactRelative: 'before-after.json',
+      artifact,
+    })
+    delete manifest._run_relative
+    write(root, manifestPath, `${JSON.stringify(manifest)}\n`)
+    write(root, `${runRelative}/local-forensics.log`, 'local only\n')
+
+    assert.deepEqual(
+      validateProspectiveEvidence({
+        changedPaths: [manifestPath, artifactPath],
+        root,
+        policy: policy(),
+        trackedPaths: new Set([manifestPath, artifactPath]),
+      }),
+      [],
     )
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -381,6 +438,10 @@ test('repository_check_requires_a_current_catalog_and_closed_manifest', () => {
     write(root, 'docs/governance/campaign-evidence-catalog.generated.json', renderEvidenceCatalog(catalog))
 
     assert.deepEqual(validateRepository({ root, trackedPaths }).findings, [])
+    assert.match(
+      validateRepository({ root, trackedPaths, base: 'missing-ref' }).findings.join('\n'),
+      /base-diff/,
+    )
     write(root, 'docs/governance/campaign-evidence-catalog.generated.json', '{}\n')
     assert.match(validateRepository({ root, trackedPaths }).findings.join('\n'), /catalog-stale/)
     const manifestPath = join(root, runRelative, 'campaign-manifest.json')
@@ -388,6 +449,105 @@ test('repository_check_requires_a_current_catalog_and_closed_manifest', () => {
     rmSync(manifestPath)
     symlinkSync(outside, manifestPath)
     assert.match(validateRepository({ root, trackedPaths }).findings.join('\n'), /manifest:.*manifest-parse/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('manifest_refuses_untracked_and_malformed_inputs', () => {
+  const root = fixtureRoot()
+  try {
+    const runRelative =
+      'docs/specs/no-milestone/wsl2-freeze/evidence/freeze-20260811-001'
+    const artifact = '{"status":"sanitized"}\n'
+    const artifactPath = `${runRelative}/before-after.json`
+    write(root, artifactPath, artifact)
+    const manifest = completeManifest({
+      runRelative,
+      artifactRelative: 'before-after.json',
+      artifact,
+    })
+
+    manifest.started_at = 'not-a-timestamp'
+    assert.match(
+      validateCampaignManifest(manifest, {
+        root,
+        runRelative,
+        policy: policy(),
+        now: '2026-08-11T12:03:00Z',
+      }).join('\n'),
+      /started-timestamp/,
+    )
+
+    manifest.started_at = '2026-99-99T99:99:99Z'
+    assert.match(
+      validateCampaignManifest(manifest, {
+        root,
+        runRelative,
+        policy: policy(),
+        now: '2026-08-11T12:03:00Z',
+      }).join('\n'),
+      /started-timestamp/,
+    )
+
+    manifest.started_at = '2026-08-11T12:00:00Z'
+    assert.match(
+      validateCampaignManifest(manifest, {
+        root,
+        runRelative,
+        policy: {},
+        now: '2026-08-11T12:03:00Z',
+      }).join('\n'),
+      /policy-schema/,
+    )
+    assert.match(
+      validateCampaignManifest(manifest, {
+        root,
+        runRelative,
+        policy: policy(),
+        now: '2026-08-11T12:03:00Z',
+        trackedPaths: new Set([`${runRelative}/campaign-manifest.json`]),
+      }).join('\n'),
+      /artifact-untracked/,
+    )
+
+    manifest.artifacts[0].bytes = -1
+    assert.match(
+      validateCampaignManifest(manifest, {
+        root,
+        runRelative,
+        policy: policy(),
+        now: '2026-08-11T12:03:00Z',
+      }).join('\n'),
+      /artifact-metadata/,
+    )
+
+    manifest.artifacts = []
+    assert.match(
+      validateCampaignManifest(manifest, {
+        root,
+        runRelative,
+        policy: policy(),
+        now: '2026-08-11T12:03:00Z',
+      }).join('\n'),
+      /artifacts/,
+    )
+
+    manifest.artifacts = [{
+      path: 'missing.json',
+      bytes: Buffer.byteLength(artifact),
+      sha256: sha256(artifact),
+      sanitized: true,
+    }]
+    assert.match(
+      validateCampaignManifest(manifest, {
+        root,
+        runRelative,
+        policy: policy(),
+        now: '2026-08-11T12:03:00Z',
+      }).join('\n'),
+      /artifact-missing/,
+    )
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
