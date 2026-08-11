@@ -948,6 +948,15 @@ test('main_returns_zero_after_required_p0_items_exist', () => {
   assert.equal(main(['--unknown'], { root: ROOT, print: () => {}, error: () => {} }), 2)
 })
 
+test('ci_contract_requires_serial_rust_test_execution', () => {
+  const workflow = readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8')
+  const contract = JSON.parse(readFileSync(path.join(ROOT, 'docs', 'governance', 'ci-contract.json'), 'utf8'))
+  const gate = contract.gates.find((item) => item.id === 'rust-quality')
+  const command = 'cargo test --workspace -- --test-threads=1'
+  assert.equal(gate.required_commands.includes(command), true)
+  assert.match(workflow, /^\s*run:\s*cargo test --workspace -- --test-threads=1\s*$/m)
+})
+
 test('aggregate_cli_accepts_complete_same_run_results_and_rejects_invalid_json', () => {
   const contract = JSON.parse(readFileSync(path.join(ROOT, 'docs', 'governance', 'ci-contract.json'), 'utf8'))
   const needs = Object.fromEntries(contract.aggregate.architecture.callers.map((caller) => [caller.job, { result: 'success' }]))
