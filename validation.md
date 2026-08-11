@@ -3610,3 +3610,20 @@ the final hosted same-revision `required-checks` success.
 **How to measure:** `./scripts/docs-check.sh`; `node --test tools/ci/*.test.mjs tools/*.test.mjs`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace -- --test-threads=1`; `node tools/ci/check-ci-contract.mjs --check-local`; and `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml`.
 **Measured data:** docs-check passed with 332 structural files, 210 tracked Markdown files, 212 classified worktree documents, 35 passive capability observations, 181 campaign-evidence observations, 2 historical cleanup receipts, and 9 ADR records. The complete Node suite passed 307/307; the benchmark and SPEC evidence hardening tests passed 24/24 with the real-record validators green; Rust format, clippy, and the serial workspace suite exited 0. Hardware-, root-, GPU-, and lab-bound tests remained explicitly ignored rather than promoted.
 **Verdict:** ✅ Static governance and evidence-custody controls are green. This does not qualify live Windows, WSL2, GPU, driver, VM, swap, disk, kernel, or hosted-CI claims; those require their owned environment and before/action/after evidence.
+
+## 2026-08-11 13:21 -03 — Canonical CI automatic entrypoint verification
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0004`.
+**Owner role:** `ci-governance`.
+**Observed at:** `2026-08-11T13:21:44-03:00`.
+**Verified at:** `2026-08-11T13:21:44-03:00`.
+**Source revision:** `35ff48a793aaf52b6552b7b831138160a5f258e1`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only local verification and replace no prior hosted evidence.
+**Freshness:** Revalidate on any workflow trigger, aggregate caller, required-check contract, or CI policy change.
+**What:** Verified that CI Contract is the sole automatic pull-request/main entrypoint and that canonical child workflows cannot reintroduce duplicate direct runs.
+**Category:** `ci-gate`.
+**How to measure:** `./scripts/docs-check.sh`; `node --test tools/ci/*.test.mjs tools/*.test.mjs`; `node tools/ci/check-ci-contract.mjs --check-local`; `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml`; `gitleaks git --log-opts=-1 --redact --verbose`; and `git diff --check`.
+**Measured data:** docs-check passed with 332 structural files, 223 tracked Markdown files, 212 classified documents, 35 capability observations, 181 campaign-evidence observations, 2 cleanup receipts, and 9 ADR records. The complete Node suite passed 309/309; the strict local CI contract returned PASS; Actionlint and Gitleaks returned 0 findings; whitespace checks passed.
+**Verdict:** 🟡 The source topology is locally green and duplicate automatic children are rejected. A fresh same-revision hosted `required-checks` aggregate remains mandatory before promotion; no hosted, Windows, lab, VM, GPU, disk, or kernel result is claimed here.
