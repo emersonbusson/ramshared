@@ -3558,8 +3558,6 @@ job deadline, hides a failing test, or leaves a Cargo/test descendant alive.
 **Verdict:** 🟡 Local deterministic admission is green; merge still requires
 the final hosted same-revision `required-checks` success.
 
-<!-- validation-schema-v2 -->
-
 ## 2026-08-11 12:34 -03 — Broker shutdown wake closes release CI hang
 
 **Evidence schema:** `ramshared.validation.v2`.
