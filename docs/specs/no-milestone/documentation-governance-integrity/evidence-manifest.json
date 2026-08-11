@@ -1,0 +1,115 @@
+{
+  "schema_version": "ramshared-spec-evidence/v1",
+  "slug": "documentation-governance-integrity",
+  "status": "DONE",
+  "spec": {
+    "path": "docs/specs/no-milestone/documentation-governance-integrity/SPEC.md",
+    "sha256": "5b816618381f577f46137aabf2b0d37f9462937bb395a4594241de138e6af4d6"
+  },
+  "tests": [
+    {
+      "name": "claims_done_requires_all_evidence",
+      "path": "tools/ci/check-documentation-governance.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "governance_check_is_deterministic",
+      "path": "tools/ci/check-documentation-governance.test.mjs",
+      "kind": "integration",
+      "exit_code": 0
+    },
+    {
+      "name": "governance_entry_requires_before_action_after",
+      "path": "tools/ci/check-validation-schema.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "qualified_claim_is_the_only_done_path",
+      "path": "tools/ci/check-documentation-governance.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    }
+  ],
+  "cover": [
+    {
+      "path": "tools/ci/check-documentation-governance.mjs",
+      "line_percent": 100.0,
+      "branch_percent": 82.87,
+      "function_percent": 100.0,
+      "classification": "Node per-file coverage",
+      "justification": "100.00% lines, 82.87% branches, and 100.00% functions exceed the SPEC thresholds."
+    },
+    {
+      "path": "tools/ci/check-validation-schema.mjs",
+      "line_percent": 86.67,
+      "branch_percent": 88.24,
+      "function_percent": 96.67,
+      "classification": "Node per-file coverage",
+      "justification": "86.67% lines, 88.24% branches, and 96.67% functions exceed the SPEC thresholds."
+    },
+    {
+      "path": "tools/generate-docs-index.mjs",
+      "line_percent": 96.72,
+      "branch_percent": 80.26,
+      "function_percent": 100.0,
+      "classification": "Node per-file coverage",
+      "justification": "96.72% lines, 80.26% branches, and 100.00% functions exceed the SPEC thresholds."
+    }
+  ],
+  "live": {
+    "required": true,
+    "before": {
+      "evidence_qualified_done_required": false,
+      "strict_schema1_closure": false
+    },
+    "action": {
+      "command": "node tools/ci/check-documentation-governance.mjs --all"
+    },
+    "after": {
+      "structural_files": 304,
+      "findings": 0,
+      "exit_code": 0
+    },
+    "legitimate": {
+      "verdict": "PASS"
+    },
+    "refusals": [
+      {
+        "name": "unqualified IMPL presented as DONE",
+        "verdict": "PASS"
+      },
+      {
+        "name": "sensitive provenance diagnostic",
+        "verdict": "PASS"
+      }
+    ],
+    "cleanup": {
+      "complete": true,
+      "residue": 0
+    },
+    "evidence_artifacts": [
+      "docs/specs/no-milestone/documentation-governance-integrity/evidence/validation-summary.json"
+    ]
+  },
+  "binary_match": {
+    "required": false,
+    "passed": false,
+    "identities": []
+  },
+  "artifacts": [
+    {
+      "path": "docs/specs/no-milestone/documentation-governance-integrity/evidence/validation-summary.json",
+      "bytes": 747,
+      "sha256": "07bfb6d4cb9e4a4116d9225493be8589494d4a19e28abdc109e765ac570d5563"
+    }
+  ],
+  "validation_path": "validation.md",
+  "impl_path": "docs/specs/no-milestone/documentation-governance-integrity/IMPL.md",
+  "gaps": {
+    "open": [],
+    "env_bound": []
+  },
+  "rollback_trigger": "one false DONE promotion, sensitive diagnostic, rewrite, or nondeterministic result"
+}

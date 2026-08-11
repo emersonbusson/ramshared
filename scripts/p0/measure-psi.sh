@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# P0 ITEM-1 — amostra /proc/pressure/memory (linhas `some` e `full`) a 1 Hz, em CSV.
-# Uso: measure-psi.sh [DURATION_s] [OUT_csv]
-# SPEC: docs/memory-broker/SPECv2.md ITEM-1 (gate P0; PRD §10). Sem dependência de produto.
-# Disciplina Kahneman #3 (número, não adjetivo): a saída alimenta o P0-RESULTS.md.
+# P0 ITEM-1 — samples /proc/pressure/memory (`some` and `full` lines) at 1 Hz, in CSV.
+# Usage: measure-psi.sh [DURATION_s] [OUT_csv]
+# SPEC: docs/memory-broker/SPECv2.md ITEM-1 (P0 gate; PRD §10). No product dependency.
+# Kahneman discipline #3 (number, not adjective): the output feeds P0-RESULTS.md.
 set -euo pipefail
 
 DURATION="${1:-300}"
@@ -12,19 +12,19 @@ LOG_PREFIX="[p0-psi]"
 
 log() { echo "$LOG_PREFIX $*" >&2; }
 
-# Preflight: sem CONFIG_PSI o arquivo não existe — o broker depende de PSI (DT-15).
+# Preflight: without CONFIG_PSI the file does not exist — the broker depends on PSI (DT-15).
 [ -r "$PSI" ] || {
-	log "ERRO: $PSI ilegível. Kernel sem CONFIG_PSI/PSI_DEFAULT_DISABLED? PSI é pré-requisito."
+	log "ERROR: $PSI is unreadable. Kernel without CONFIG_PSI/PSI_DEFAULT_DISABLED? PSI is required."
 	exit 1
 }
 
-log "amostrando $PSI por ${DURATION}s -> $OUT"
+log "sampling $PSI for ${DURATION}s -> $OUT"
 echo "ts,kind,avg10,avg60,avg300,total_us" > "$OUT"
 
 end=$(( $(date +%s) + DURATION ))
 while [ "$(date +%s)" -lt "$end" ]; do
 	now=$(date +%s)
-	# Linhas: "some avg10=0.00 avg60=0.00 avg300=0.00 total=N"
+	# Lines: "some avg10=0.00 avg60=0.00 avg300=0.00 total=N"
 	while read -r kind a10 a60 a300 total; do
 		[ -n "$kind" ] || continue
 		printf '%s,%s,%s,%s,%s,%s\n' \
@@ -34,4 +34,4 @@ while [ "$(date +%s)" -lt "$end" ]; do
 	sleep 1
 done
 
-log "fim: $(( $(wc -l < "$OUT") - 1 )) amostras em $OUT"
+log "end: $(( $(wc -l < "$OUT") - 1 )) samples in $OUT"

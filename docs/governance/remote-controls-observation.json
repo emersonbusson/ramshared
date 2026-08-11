@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "repository": "emersonbusson/ramshared",
+  "default_branch": "main",
+  "observed_at_utc": "2026-08-10T13:55:01Z",
+  "source": "github-rest-api",
+  "actions": {
+    "default_workflow_permissions": "read",
+    "can_approve_pull_request_reviews": false,
+    "allowed_actions": "selected",
+    "sha_pinning_required": true,
+    "artifact_and_log_retention_days": 30
+  },
+  "branch_protection": {
+    "strict": true,
+    "enforce_admins": true,
+    "required_conversation_resolution": true,
+    "required_status_checks": [
+      "required-checks"
+    ]
+  },
+  "environments": {
+    "protected-isolated-lab": {
+      "required_reviewers": true,
+      "prevent_self_review": true,
+      "protected_branches": true
+    },
+    "protected-release": {
+      "required_reviewers": true,
+      "prevent_self_review": true,
+      "protected_branches": true
+    }
+  }
+}

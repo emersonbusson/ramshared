@@ -94,7 +94,7 @@ Sem isso, **não** se afirma “driver Windows pronto” nem ITEM-8 PASS.
 | `cargo test` no guest | **SKIP** — `link.exe` ausente (precisa VS Build Tools); lógica pure já verde no Linux |
 | WDK / nvcuda | **SKIP** |
 
-Artefatos: `C:\Users\emedev\ramshared-drill\agent-disciplined-results.json`, `artifacts-disciplined\`.
+Artefatos: `C:\ramshared\artifacts\agent-disciplined-results.json`, `artifacts-disciplined\`.
 
 ### Como reproduzir (disciplina operacional)
 
@@ -110,7 +110,7 @@ rsync -a --delete --exclude target --exclude .git \
   ./ /mnt/c/Users/emedev/ramshared-src/
 export RAMSHARED_DRILL_PASSWORD='…'  # lab only
 ./scripts/windows/wsl-elevated-ps.sh -File \
-  'C:\Users\emedev\ramshared-src\scripts\windows\Invoke-DisciplinedCampaign.ps1'
+  'C:\ramshared\src\scripts\windows\Invoke-DisciplinedCampaign.ps1'
 ```
 
 ## Gaps

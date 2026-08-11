@@ -13,10 +13,14 @@ $text = Get-Content -LiteralPath $HarnessPath -Raw
 foreach ($needle in @(
     'efisys_noprompt.bin',
     'Autounattend.xml',
+    'Win11LabMediaContract.ps1',
+    'SealedAutounattendSha256',
     'oscdimg.exe not found',
-    'Mount-DiskImage -ImagePath $SourceIso -PassThru',
-    'Dismount-DiskImage -ImagePath $SourceIso',
-    'robocopy $sourceRoot $StagingRoot /MIR',
+    'Get-Win11LabAutounattendContract -Path $AutounattendXml',
+    'Assert-Win11LabSealedAutounattendContract',
+    'Invoke-Win11LabSourceIsoStage -IsoPath $SourceIso',
+    'Invoke-Win11LabPrimaryIsoContract -IsoPath $OutputIso',
+    'Assert-Win11LabPrimaryIsoContract',
     '-bootdata:$bootData',
     'disk_mutation = $false',
     'Output ISO already exists',
@@ -27,7 +31,7 @@ foreach ($needle in @(
     }
 }
 
-if ($text -match 'New-VHD|Remove-VHD|Format-Volume|Initialize-Disk|Resize-VHD|Convert-VHD|Remove-VM|Set-Content.*RAMSHARED_DRILL_PASSWORD') {
+if ($text -match 'Mount-DiskImage|Dismount-DiskImage|robocopy \$sourceRoot|New-VHD|Remove-VHD|Format-Volume|Initialize-Disk|Resize-VHD|Convert-VHD|Remove-VM|Set-Content.*RAMSHARED_DRILL_PASSWORD') {
     throw "windows_noprompt_iso_static: disk mutation or secret persistence is forbidden"
 }
 

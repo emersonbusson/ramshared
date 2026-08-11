@@ -86,9 +86,9 @@ mod tests {
     fn cadence_fires_every_n() {
         let mut cad = Cadence::new(64);
         for _ in 0..63 {
-            assert!(!cad.tick(), "não deve disparar antes do 64º");
+            assert!(!cad.tick(), "must not fire before the 64th tick");
         }
-        assert!(cad.tick(), "deve disparar no 64º tick");
+        assert!(cad.tick(), "must fire on the 64th tick");
     }
 
     #[test]

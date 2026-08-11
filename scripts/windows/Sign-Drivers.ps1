@@ -17,8 +17,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$RepoRoot = "C:\Users\emedev\ramshared-src",
-    [string]$PfxPath = "C:\Users\emedev\ramshared-drill\certs\ramshared-test.pfx",
+    [string]$RepoRoot = "C:\ramshared\src",
+    [string]$PfxPath = "C:\ramshared\artifacts\certs\ramshared-test.pfx",
     [string]$PfxPassword = $env:RAMSHARED_TESTSIGN_PFX_PASSWORD,
     [string]$CertSubject = "RamShared Test Signing",
     [string]$PackageWorkDir = "C:\ramshared\artifacts\driver-package-build",

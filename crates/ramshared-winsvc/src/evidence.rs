@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// Stable schema version for evidence rows.
 pub const EVIDENCE_SCHEMA: u32 = 1;
+pub const MAX_LIFECYCLE_ROW_BYTES: usize = 16 * 1024;
 
 /// I/O counters recorded in evidence.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +72,18 @@ pub struct RuntimeEvidence {
     pub error_class: Option<String>,
     pub error_code: Option<String>,
     pub duration_ms: u64,
+    #[serde(default)]
+    pub broker_service: String,
+    #[serde(default)]
+    pub broker_instance_id: String,
+    #[serde(default)]
+    pub broker_pipe: String,
+    #[serde(default)]
+    pub broker_protocol: u32,
+    #[serde(default)]
+    pub broker_retry_count: u32,
+    #[serde(default)]
+    pub broker_transition: String,
 }
 
 impl RuntimeEvidence {
@@ -110,6 +123,12 @@ impl RuntimeEvidence {
             error_class: None,
             error_code: None,
             duration_ms: 0,
+            broker_service: "RamSharedBroker".into(),
+            broker_instance_id: String::new(),
+            broker_pipe: r"\\.\pipe\RamSharedBroker.v1".into(),
+            broker_protocol: ramshared_broker::protocol::PROTO_VERSION,
+            broker_retry_count: 0,
+            broker_transition: String::new(),
         }
     }
 
@@ -164,9 +183,15 @@ impl EvidenceWriter {
 
     /// Append one evidence row. Never rewrites prior rows.
     pub fn append(&mut self, row: &RuntimeEvidence) -> std::io::Result<()> {
-        let line = serde_json::to_string(row)
+        let line = serde_json::to_vec(row)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        self.file.write_all(line.as_bytes())?;
+        if line.len() + 1 > MAX_LIFECYCLE_ROW_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "lifecycle evidence row exceeds 16 KiB",
+            ));
+        }
+        self.file.write_all(&line)?;
         self.file.write_all(b"\n")?;
         self.file.flush()?;
         Ok(())
@@ -208,41 +233,9 @@ pub fn summarize_latencies(samples_us: &[u64]) -> LatencySummary {
     }
 }
 
-/// Redact free-form error text: drop hex addresses and truncate payload-like blobs.
-pub fn redacted_error(class: &str, code: &str, detail: &str) -> (String, String, String) {
-    let mut out = String::with_capacity(detail.len().min(256));
-    for token in detail.split_whitespace() {
-        if looks_like_pointer(token) {
-            if !out.is_empty() {
-                out.push(' ');
-            }
-            out.push_str("<redacted>");
-            continue;
-        }
-        if !out.is_empty() {
-            out.push(' ');
-        }
-        // Cap individual tokens that look like payload dumps.
-        if token.len() > 64 {
-            out.push_str(&token[..16]);
-            out.push('…');
-        } else {
-            out.push_str(token);
-        }
-        if out.len() >= 200 {
-            out.push('…');
-            break;
-        }
-    }
-    (class.to_string(), code.to_string(), out)
-}
-
-fn looks_like_pointer(token: &str) -> bool {
-    let t = token.trim_end_matches([',', ')', ']']);
-    if let Some(rest) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
-        return rest.len() >= 8 && rest.chars().all(|c| c.is_ascii_hexdigit());
-    }
-    false
+/// Retain stable classification while discarding unstructured detail.
+pub fn redacted_error(class: &str, code: &str, _detail: &str) -> (String, String, String) {
+    (class.to_string(), code.to_string(), String::new())
 }
 
 pub fn utc_ms() -> u64 {
@@ -278,6 +271,12 @@ pub fn read_all_rows(path: &Path) -> std::io::Result<Vec<RuntimeEvidence>> {
         out.push(row);
     }
     Ok(out)
+}
+
+pub fn last_complete_row(rows: &[RuntimeEvidence]) -> Option<&RuntimeEvidence> {
+    rows.iter()
+        .rev()
+        .find(|row| !row.run_id.is_empty() && !row.event_id.is_empty() && row.ts_utc_ms != 0)
 }
 
 #[cfg(test)]
@@ -349,19 +348,24 @@ mod tests {
     }
 
     #[test]
-    fn stable_error_redacts_payload() {
+    fn stable_error_discards_free_form_detail() {
         let (c, code, detail) = redacted_error(
             "cuda",
             "CUDA_ERROR",
-            "op failed at 0x7ffabcd12345 with blob ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789XX",
+            "password=s3cr3t token=short-secret path=C:\\Users\\operator",
         );
         assert_eq!(c, "cuda");
         assert_eq!(code, "CUDA_ERROR");
-        assert!(!detail.contains("0x7ffabcd12345"));
-        assert!(detail.contains("<redacted>"));
-        assert!(
-            !detail.contains("ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789XX")
-        );
+        assert!(detail.is_empty());
+    }
+
+    #[test]
+    fn nearest_rank_clamps_boundary_percentiles() {
+        let samples = [10, 20, 30];
+        assert_eq!(nearest_rank_percentile(&samples, -1.0), 10);
+        assert_eq!(nearest_rank_percentile(&samples, 0.0), 10);
+        assert_eq!(nearest_rank_percentile(&samples, 100.0), 30);
+        assert_eq!(nearest_rank_percentile(&samples, 101.0), 30);
     }
 
     #[test]
@@ -452,5 +456,51 @@ mod tests {
         assert_ne!(a, b);
         assert_ne!(b, c);
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn lifecycle_row_has_broker_identity() {
+        let row = RuntimeEvidence::base("run", "WaitingForBroker");
+        assert_eq!(row.broker_service, "RamSharedBroker");
+        assert_eq!(row.broker_pipe, r"\\.\pipe\RamSharedBroker.v1");
+        assert_eq!(
+            row.broker_protocol,
+            ramshared_broker::protocol::PROTO_VERSION
+        );
+    }
+
+    #[test]
+    fn oversized_lifecycle_row_is_refused() {
+        let dir = std::env::temp_dir().join(format!(
+            "ramshared-ev-oversize-{}-{}",
+            std::process::id(),
+            utc_ms()
+        ));
+        let path = dir.join("oversize.jsonl");
+        let mut writer = EvidenceWriter::open(&path).unwrap();
+        let mut row = RuntimeEvidence::base("run", "FailedSafe");
+        row.broker_transition = "x".repeat(MAX_LIFECYCLE_ROW_BYTES);
+        let error = writer.append(&row).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn status_uses_last_complete_row() {
+        let mut incomplete = RuntimeEvidence::base("run", "Ready");
+        incomplete.event_id.clear();
+        let complete = RuntimeEvidence::base("run", "Stopped");
+        let rows = [complete.clone(), incomplete];
+        assert_eq!(last_complete_row(&rows), Some(&complete));
+    }
+
+    #[test]
+    fn status_never_promotes_stale_evidence_to_current_health() {
+        let stale = RuntimeEvidence::base("old-run", "Online");
+        let rows = [stale];
+        let row = last_complete_row(&rows).expect("complete evidence");
+        assert_eq!(row.phase, "Online");
+        let current_health: Option<bool> = None;
+        assert_ne!(current_health, Some(true));
     }
 }

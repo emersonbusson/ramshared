@@ -71,14 +71,9 @@ pub enum Action {
         to: TenantId,
     },
     /// Revokes an `Active` slice from `from` to satisfy a lease (RF-B3).
-    RevokeForLease {
-        slice: SliceId,
-        from: TenantId,
-        lease: u32,
-    },
+    RevokeForLease { slice: SliceId, from: TenantId },
     /// Grants the lease when there are enough slices (only once).
     GrantLease {
-        lease: u32,
         holder: TenantId,
         slices: Vec<SliceId>,
     },
@@ -100,7 +95,6 @@ pub struct Arbiter {
     last_move: Option<MoveRecord>,
     cooldown_until: Option<Instant>,
     rr_cursor: usize,
-    next_lease_id: u32,
 }
 
 fn owner_psi(tenants: &[TenantView], id: TenantId) -> Option<f32> {
@@ -126,7 +120,6 @@ impl Arbiter {
             last_move: None,
             cooldown_until: None,
             rr_cursor: 0,
-            next_lease_id: 1,
         }
     }
 
@@ -188,10 +181,7 @@ impl Arbiter {
                     .take(need)
                     .copied()
                     .collect();
-                let lease = self.next_lease_id;
-                self.next_lease_id += 1;
                 actions.push(Action::GrantLease {
-                    lease,
                     holder,
                     slices: grant,
                 });
@@ -208,9 +198,8 @@ impl Arbiter {
                     })
                     .collect();
                 active.sort_by(|a, b| by_psi(a.2, b.2).then(a.0.cmp(&b.0)));
-                let lease = self.next_lease_id;
                 for (slice, from, _) in active.into_iter().take(deficit) {
-                    actions.push(Action::RevokeForLease { slice, from, lease });
+                    actions.push(Action::RevokeForLease { slice, from });
                 }
             }
             return actions;
@@ -328,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn histerese_moves_only_after_streak() {
+    fn hysteresis_moves_only_after_streak() {
         let mut c = cfg();
         c.streak = 3;
         let mut arb = Arbiter::new(c);
@@ -380,7 +369,7 @@ mod tests {
     }
 
     #[test]
-    fn nunca_zero_protege_donor_pressionado_com_uma_slice() {
+    fn never_zero_protects_pressured_donor_with_one_slice() {
         let mut c = cfg();
         c.streak = 1;
         let mut arb = Arbiter::new(c);
@@ -395,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn counterfactual_reverte_quando_drenado_piora_2x_acima_do_piso() {
+    fn counterfactual_reverts_when_drained_tenant_worsens_2x_above_floor() {
         let mut c = cfg();
         c.streak = 1;
         let mut arb = Arbiter::new(c);
@@ -423,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn counterfactual_nao_reverte_por_ruido_abaixo_do_piso() {
+    fn counterfactual_does_not_revert_for_noise_below_floor() {
         // DT-23: worsens 2× but below psi_floor is not real pressure → does not revert.
         let mut c = cfg();
         c.streak = 1;
@@ -442,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn lease_revoga_alem_do_nunca_zero() {
+    fn lease_revokes_beyond_never_zero() {
         // DT-8: lease request drains Active even leaving tenant at zero.
         let mut arb = Arbiter::new(cfg());
         let t0 = Instant::now();
@@ -463,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn lease_concede_de_free_sem_round_robin() {
+    fn lease_grants_free_slice_without_round_robin() {
         // R2: Free slice is granted to the lease, not round-robinned.
         let mut arb = Arbiter::new(cfg());
         let t0 = Instant::now();
@@ -475,7 +464,6 @@ mod tests {
                 .find(|x| matches!(x, Action::GrantLease { .. }))
                 .cloned(),
             Some(Action::GrantLease {
-                lease: 1,
                 holder: 9,
                 slices: vec![0]
             })
@@ -484,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn lease_segura_free_enquanto_revoga_para_completar() {
+    fn lease_holds_free_slice_while_revoking_to_complete() {
         // need=2, 1 Free + 1 Active → revokes 1, does NOT grant yet, does NOT round-robin the Free (R2).
         let mut arb = Arbiter::new(cfg());
         let t0 = Instant::now();
@@ -505,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn round_robin_distribui_free_entre_presentes() {
+    fn round_robin_distributes_free_slices_among_present_tenants() {
         let mut arb = Arbiter::new(cfg());
         let t0 = Instant::now();
         let tenants = [tv(1, 0.0, 0), tv(2, 0.0, 0)];
@@ -525,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn sem_diferencial_nao_move() {
+    fn no_differential_does_not_move() {
         let mut c = cfg();
         c.streak = 1;
         let mut arb = Arbiter::new(c);

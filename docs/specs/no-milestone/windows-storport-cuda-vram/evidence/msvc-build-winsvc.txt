@@ -1,4 +1,4 @@
-'\\wsl.localhost\Ubuntu-24.04\home\emdev\codespace\ramshared'
+'<repo-root>'
 CMD.EXE foi iniciado tendo o caminho acima como pasta atual.
 NÆo h  suporte para caminhos UNC. Padronizando para pasta do Windows.
 == cargo build -p ramshared-winsvc --release ==

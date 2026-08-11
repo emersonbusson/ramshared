@@ -14,7 +14,7 @@ reference_impl: c0deJedi/nbd-vram (MIT) — blueprint/benchmark only, NOT includ
 
 ## 0. Audit Provenance (SSDV3 Step 2.5 — single-file model)
 
-> **Arquivo único:** este `SPEC.md`. Revisões do Passo 2.5 são **in-place**; arqueologia = `git log` — **não** criar `SPECvN.md` (política alinhada ao Advoq).
+> **Single-file RamShared model:** Step 2.5 revisions are in place; history remains in `git log` — do **not** create `SPECvN.md`.
 
 - **Rodada 1 (pré-Phase-0 architecture):** `no-go` — MVP “VRAM as hot swap” contradizia Phase 0.
 - **Rodada 2 (pivot cascade, 2026-06):** blockers V3-F1…F8 incorporados **in-place** neste arquivo:
@@ -214,6 +214,29 @@ Triggers (b)/(c) from §9.1 are probed by a dedicated canary region (separate fr
 - **ublk (Phase B):** v2 §10.2 + custom kernel recipe (unchanged).
 - **VHDX:** unmanaged; only read/validated (priority < VRAM).
 
+### 10.1 Connection transport ownership and bounded unit contract (DT-Conn-1)
+
+`crates/ramshared-wsl2d/src/conn.rs` owns the pure NBD connection boundary.
+The acceptor emits one `Opened` before it starts a reader; every reader terminal
+path (handshake refusal, EOF, malformed request, oversized WRITE, and
+worker-channel closure) emits at most one balancing `Closed`. A duplicate or
+otherwise unbalanced `Closed` must not produce a second worker-termination
+signal. The writer sends the exact reply header, then reply data, then flushes;
+it stops after a disconnect reply or any write/flush error. Diagnostic prose is
+English-only and never changes request, reply, handshake, or control bytes.
+
+The named tests use only `Cursor`, channel, Unix-pair, or loopback listener
+fixtures with a bounded receive/join deadline. They do not allocate CUDA,
+require root, configure swap, start a daemon, or use a physical socket.
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs \
+  -p ramshared-wsl2d \
+  --files crates/ramshared-wsl2d/src/conn.rs \
+  --min 80 \
+  --report-json tmp/wsl2-conn-cov.json
+```
+
 ## 11. Safety Limits (updated)
 
 - No auto-start. VRAM **never** as the highest priority swap (V3-F1). Fixed scheme: `200 > 100 > −2`.
@@ -259,9 +282,28 @@ Acceptance: canary detects (a) §9.1; daemon enters `Demoted`; swapoff of VRAM c
 ### 14.5 Hard Failure (SIGKILL) → `recover` (v2 §14.5).
 ### 14.6 `down` leaves `/proc/swaps` only with VHDX; zram removed; VRAM freed.
 
+### 14.7 Connection transport contract (DT-Conn-1)
+
+| Test name | Fixture / evidence | Required result | Discipline |
+|---|---|---|---|
+| `live_count_refuses_duplicate_closed` | pure counter | a second unbalanced `Closed` never returns a terminal signal | #13/#17 |
+| `writer_writes_header_data_and_flushes` | in-memory writer | exact header/data order and one flush | #13 |
+| `writer_stops_on_disconnect_or_io_error` | deterministic error writer | no write after disconnect; write/flush error exits | #15/#16 |
+| `reader_enqueues_write_payload_then_closed` | in-memory valid handshake/request | negotiated export, exact payload, then one `Closed` | #13/#17 |
+| `reader_refusal_and_eof_emit_closed` | refusal and EOF fixtures | no job after refusal/EOF; one balancing `Closed` | #16 |
+| `reader_malformed_and_oversized_write_emit_closed` | malformed header and bounded export | no allocation/job after refusal; one `Closed` | #16 |
+| `reader_stops_when_worker_is_closed` | disconnected bounded worker channel | reader exits within its test deadline | #15/#16 |
+| `wire_conn_balances_opened_and_closed` | Unix stream pair | `Opened` precedes exactly one `Closed` | #13/#17 |
+| `acceptors_stop_when_worker_is_closed` | Unix and TCP loopback listeners | acceptors stop after the worker refusal without a retry loop | #15/#16 |
+
+The DT-Conn-1 canonical per-file gate is the command in §10.1; a package or
+workspace average cannot substitute for its 80% line threshold.
+
 ## 15. Definition of Done
 
 - `cargo fmt`/`clippy -D warnings`/`test` green; no `.unwrap()` in production.
+- DT-Conn-1 named unit/refusal matrix and the canonical `conn.rs` per-file
+  coverage gate are green before this connection boundary is considered closed.
 - `check` covers `ready` and `blocked`.
 - §14.3 (cascade in order) and §14.4 (DEMOTE without killing processes) green.
 - `down`/`recover` leave the system at baseline (only VHDX).

@@ -1,0 +1,114 @@
+﻿[
+    {
+        "test":  "SCM_DEPENDENCY_MATCH",
+        "verdict":  "PASS",
+        "detail":  "RamSharedBroker",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "3d51157a-7411-4f7f-a459-c5e10107c22b",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "SERVICE_SID_MATCH",
+        "verdict":  "PASS",
+        "detail":  "broker=unrestricted consumer=unrestricted",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "3d51157a-7411-4f7f-a459-c5e10107c22b",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "BROKER_BINARY_MATCH",
+        "verdict":  "PASS",
+        "detail":  "pid=3296 sha256=1ED02405720D1E83B072D45C2FB06F30F54060BCFF7343D44B0E76F36521396B ready_ms=560",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "3d51157a-7411-4f7f-a459-c5e10107c22b",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "scm_start_ready_stop",
+        "verdict":  "PASS",
+        "detail":  "ready_ms=560",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "3d51157a-7411-4f7f-a459-c5e10107c22b",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "register_and_lease_over_named_pipe",
+        "verdict":  "PASS",
+        "detail":  "pipe boundary ready; product admission tested by consumer case",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "3d51157a-7411-4f7f-a459-c5e10107c22b",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "administrator_protocol_connect_is_refused",
+        "verdict":  "PASS",
+        "detail":  "ERROR_ACCESS_DENIED before protocol",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "3d51157a-7411-4f7f-a459-c5e10107c22b",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "status_pipe_rejects_mutation",
+        "verdict":  "PASS",
+        "detail":  "read-only codec refusal",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "3d51157a-7411-4f7f-a459-c5e10107c22b",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "oversized_line_is_refused",
+        "verdict":  "PASS",
+        "detail":  "mode=oversized; elapsed_ms=31",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "3d51157a-7411-4f7f-a459-c5e10107c22b",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "partial_frame_times_out",
+        "verdict":  "PASS",
+        "detail":  "mode=partial; elapsed_ms=10067",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "3d51157a-7411-4f7f-a459-c5e10107c22b",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "deny_only_service_sid_is_refused",
+        "verdict":  "PASS",
+        "detail":  "connected under restricted token; explicit group attributes refused before parse",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "3d51157a-7411-4f7f-a459-c5e10107c22b",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "stop_cancels_blocked_read",
+        "verdict":  "PASS",
+        "detail":  "stop_ms=259",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "3d51157a-7411-4f7f-a459-c5e10107c22b",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "boundary_refusals_do_not_mutate",
+        "verdict":  "PASS",
+        "detail":  "registered=0; leases=0",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "3d51157a-7411-4f7f-a459-c5e10107c22b",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "stop_cancels_blocked_accept",
+        "verdict":  "PASS",
+        "detail":  "stop_ms=268",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "3d51157a-7411-4f7f-a459-c5e10107c22b",
+        "PSShowComputerName":  true
+    },
+    {
+        "test":  "stop_with_no_session_is_idempotent",
+        "verdict":  "PASS",
+        "detail":  "second stop left service stopped",
+        "PSComputerName":  "win11-drill",
+        "RunspaceId":  "3d51157a-7411-4f7f-a459-c5e10107c22b",
+        "PSShowComputerName":  true
+    }
+]

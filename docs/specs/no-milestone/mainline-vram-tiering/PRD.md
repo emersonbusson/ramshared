@@ -5,108 +5,120 @@ milestone: —
 issues: []
 ---
 
-# PRD — Um dia no kernel Linux mainline (VRAM como tier de memória)
+# PRD — One day in the Linux mainline kernel (VRAM as a memory tier)
 
-> **Tipo:** PRD de **estratégia / destino** (SSDV3 Passo 1).  
-> **Não** autoriza dump de LKM out-of-tree como “já é mainline”.  
-> Tracks relacionados: `kernel-vram-as-memory` (lab gates), `wsl2-cascade-swap` (ponte shippable).
+> **Type:** **strategy / destination** PRD (SSDV3 Step 1).
+> Does **not** authorize dumping an out-of-tree LKM as “already mainline.”
+> Related tracks: `kernel-vram-as-memory` (lab gates),
+> `wsl2-cascade-swap` (shippable bridge).
 
 ## 1. Summary
 
-Pergunta do produto:
+Product question:
 
-> **Qual é a melhor abordagem para, um dia, isso fazer parte do kernel Linux nativamente?**
+> **What is the best approach for this to become part of the Linux kernel natively one day?**
 
-**Resposta deste PRD:**
+**This PRD's answer:**
 
-O destino mainline **não** é “NBD + CUDA daemon” nem “app zenity”. É um **tier de memória de device** integrado ao mm (HMM / memory tiers / demotion) com:
+The mainline destination is **not** “NBD + CUDA daemon” or a “zenity app.” It
+is a **device-memory tier** integrated with mm (HMM / memory tiers / demotion)
+with:
 
-1. **modelo de memória** aceito pela comunidade (tiering, não “finja que é DRAM barata”),  
-2. **driver de device** cooperativo (DRM/HMM ou CXL),  
-3. **política de demote** sob pressão (GPU precisa da VRAM),  
-4. **séries de patches** pequenas, revisáveis, com benchmarks e selftests.
+1. a **memory model** accepted by the community (tiering, not “pretend it is
+   cheap DRAM”),
+2. a cooperative **device driver** (DRM/HMM or CXL),
+3. a **demotion policy** under pressure (the GPU needs VRAM),
+4. small, reviewable **patch series** with benchmarks and selftests.
 
-A cascata WSL e o lab Hyper-V/dual-boot são **degraus de evidência**, não o patch final.
+The WSL cascade and Hyper-V/dual-boot lab are **evidence steps**, not the final
+patch.
 
 ## 2. Technical context
 
-### 2.1 O que “nativo no mainline” significa
+### 2.1 What “native in mainline” means
 
-| Camada | Mainline? | Notas |
+| Layer | Mainline? | Notes |
 | --- | --- | --- |
-| Swap em block device + userspace CUDA | Não é “mm nativo” | Útil como **ponte** / product |
-| `memory tiering` + demotion (cold pages → slow memory) | Já existe infraestrutura | CXL/DRAM tiers; estender a **device memory** |
-| HMM `DEVICE_PRIVATE` / migrate to device | Já no kernel | Precisa **driver** que registre device memory |
-| NUMA node de BAR (hotplug) | Possível, polêmico | Coerência, poisoning, offline |
-| Módulo out-of-tree `ramshared.ko` | **Não** é mainline | Só protótipo até upstream |
+| Block-device swap + userspace CUDA | Not “native mm” | Useful as a **bridge** / product |
+| `memory tiering` + demotion (cold pages → slow memory) | Infrastructure already exists | CXL/DRAM tiers; extend to **device memory** |
+| HMM `DEVICE_PRIVATE` / migrate to device | Already in kernel | Requires a **driver** that registers device memory |
+| BAR NUMA node (hotplug) | Possible, controversial | Coherence, poisoning, offline |
+| Out-of-tree `ramshared.ko` module | **Not** mainline | Prototype only until upstream |
 
-### 2.2 Por que não “subir o monólito RamShared de uma vez”
+### 2.2 Why not “upstream the entire RamShared monolith at once”
 
-- Mainline exige **um problema por série**, owners (mm, drm, nvidia/amd open), e **não** depende de stack Windows WDDM.  
-- Evidência de latência (1,18 s sob reclaim) prova que VRAM **sem política de demote** é inaceitável como hot memory — isso **deve** estar no design upstream.  
-- Vendor lock (só CUDA closed) **bloqueia** merge; paths preferem **DRM/HMM abertos** ou CXL.
+- Mainline requires **one problem per series**, owners (mm, drm, open
+  nvidia/amd), and does **not** depend on the Windows WDDM stack.
+- Latency evidence (1.18 s under reclaim) proves that VRAM **without a
+  demotion policy** is unacceptable as hot memory — that **must** be in the
+  upstream design.
+- Vendor lock (closed CUDA only) **blocks** merge; paths prefer **open DRM/HMM**
+  or CXL.
 
-### 2.3 Lab reality (este projeto)
+### 2.3 Lab reality (this project)
 
-| Lab | Serve para mainline? |
+| Lab | Useful for mainline? |
 | --- | --- |
-| WSL GPU-PV | Produto + demote policy; **não** valida BAR/HMM real |
-| Hyper-V sem GPU | Build kernel, kselftest, QEMU; **sem** device memory |
-| Hyper-V + DDA (experimental) | Possível `lspci 10de` no guest; frágil em GeForce |
-| Dual-boot bare-metal | **Melhor** para driver + mm experiments |
-| Upstream CI | QEMU + virtio + selftests obrigatórios mesmo com GPU lab |
+| WSL GPU-PV | Product plus demotion policy; does **not** validate real BAR/HMM |
+| Hyper-V without GPU | Kernel build, kselftest, QEMU; **without** device memory |
+| Hyper-V + DDA (experimental) | Possible `lspci 10de` in guest; fragile on GeForce |
+| Bare-metal dual boot | **Best** for driver plus mm experiments |
+| Upstream CI | QEMU plus virtio plus selftests required even with a GPU lab |
 
-## 3. Recommended option (melhor abordagem para mainline)
+## 3. Recommended option (best approach for mainline)
 
-### Estratégia em 4 camadas (ordenadas)
+### Four-layer strategy (ordered)
 
 ```text
-L0  Product bridge     cascade zram→VRAM→disk (userspace)     [já existe]
-L1  Policy & metrics   demote, free-floor, latency canary     [já existe / polish]
-L2  Out-of-tree proto  minimal LKM or driver hook on bare metal [só com Gate A PASS]
-L3  Upstream series    mm tiering + driver hooks + selftests  [destino]
+L0  Product bridge     cascade zram→VRAM→disk (userspace)     [already exists]
+L1  Policy & metrics   demote, free-floor, latency canary     [already exists / polish]
+L2  Out-of-tree proto  minimal LKM or driver hook on bare metal [only with Gate A PASS]
+L3  Upstream series    mm tiering + driver hooks + selftests  [destination]
 ```
 
-**Melhor caminho para L3 (mainline):**
+**Best path to L3 (mainline):**
 
-1. **Não** propor “RamShared filesystem de swap” como core.  
-2. Propor **VRAM (ou device memory) como memory tier frio** com demotion automática (reutilizar ideias de demotion/CXL tiers).  
-3. Implementar **primeiro** em hardware onde o kernel já tem dono (AMDGPU HMM, ou CXL, ou NVIDIA open-gpu-kernel-modules onde aplicável).  
-4. Manter **userspace policy agent** opcional (sysfs) — mainline aceita knobs; não aceita daemon NBD como ABI do mm.  
-5. Cada RFC: problema, API, rollback, números.
+1. **Do not** propose a “RamShared swap filesystem” as core.
+2. Propose **VRAM (or device memory) as a cold memory tier** with automatic
+   demotion (reuse demotion/CXL-tier ideas).
+3. Implement **first** on hardware where the kernel already has an owner
+   (AMDGPU HMM, CXL, or NVIDIA open-gpu-kernel-modules where applicable).
+4. Keep an optional **userspace policy agent** (sysfs) — mainline accepts knobs;
+   it does not accept an NBD daemon as the mm ABI.
+5. Each RFC: problem, API, rollback, numbers.
 
-### Alternativas rejeitadas como “caminho mainline”
+### Alternatives rejected as a “mainline path”
 
-| Alternativa | Por que não |
+| Alternative | Why not |
 | --- | --- |
-| Só NBD/CUDA forever | Nunca vira mm nativo |
-| LKM monstro no WSL | Ambiente errado + unreviewable |
-| Fork do kernel | Fora do objetivo “parte do Linux” |
-| Windows StorPort como “upstream Linux” | Outro SO |
+| NBD/CUDA only forever | Never becomes native mm |
+| Monster LKM in WSL | Wrong environment plus unreviewable |
+| Kernel fork | Outside the goal of “part of Linux” |
+| Windows StorPort as “upstream Linux” | Different OS |
 
-## 4. Functional requirements (destino L3)
+## 4. Functional requirements (L3 destination)
 
 | ID | Requirement |
 | --- | --- |
-| RF-M1 | Device memory registrável como tier com capacidade e latência de classe “cold” |
-| RF-M2 | Migrate/demote de páginas anônimas frias para device memory sob pressão de DRAM |
-| RF-M3 | Promote/demote reverso quando device free-floor ou driver sinaliza “GPU precisa” |
-| RF-M4 | Offline seguro do tier (GPU reset, unbind) sem silent corruption |
-| RF-M5 | uAPI estável mínima (sysfs/debugfs) documentada; sem ioctl experimental eterno |
-| RF-M6 | kselftest ou selftest de migrate + failure injection |
+| RF-M1 | Device memory registerable as a tier with capacity and “cold” latency class |
+| RF-M2 | Migrate/demote cold anonymous pages to device memory under DRAM pressure |
+| RF-M3 | Reverse promotion/demotion when the device free floor or driver signals “GPU needs it” |
+| RF-M4 | Safe offline of the tier (GPU reset, unbind) without silent corruption |
+| RF-M5 | Minimal stable documented uAPI (sysfs/debugfs); no eternal experimental ioctl |
+| RF-M6 | kselftest or selftest for migration plus failure injection |
 
 ## 5. Non-functional
 
 | ID | Requirement |
 | --- | --- |
-| NFR-M1 | Patches checkpatch-clean; series ≤ reviewável (~10–20 commits temáticos) |
-| NFR-M2 | Números: p50/p99 fault e bandwidth vs disk swap (benchmarks.md) |
-| NFR-M3 | Zero dependência de CUDA userspace no path hot do kernel |
-| NFR-M4 | Documentação Documentation/admin-guide ou mm/ |
+| NFR-M1 | Patches checkpatch-clean; series ≤ reviewable (~10–20 thematic commits) |
+| NFR-M2 | Numbers: p50/p99 fault and bandwidth versus disk swap (`benchmarks.md`) |
+| NFR-M3 | Zero CUDA-userspace dependency in the kernel hot path |
+| NFR-M4 | Documentation in `Documentation/admin-guide` or `mm/` |
 
 ## 6. Flows
 
-### 6.1 Contribuição (humano + lab)
+### 6.1 Contribution (human plus lab)
 
 ```text
 Evidence (cascade + bare-metal numbers)
@@ -117,7 +129,7 @@ Evidence (cascade + bare-metal numbers)
   → maintainer ack → mainline
 ```
 
-### 6.2 Runtime (sistema com feature merged)
+### 6.2 Runtime (system with merged feature)
 
 ```text
 DRAM pressure → cold pages → device tier
@@ -126,79 +138,84 @@ GPU workload → driver free-floor signal → demote/offline device pages → DR
 
 ## 7. Data model
 
-- Memory tier descriptor (cost, bandwidth class, nodes)  
-- Device memory regions (PFN ranges, owner driver)  
-- Stats: migrated bytes, demote latency, fail counters  
+- Memory tier descriptor (cost, bandwidth class, nodes)
+- Device memory regions (PFN ranges, owner driver)
+- Stats: migrated bytes, demotion latency, failure counters
 
-## 8. API (rascunho — SPEC futuro congela)
+## 8. API (draft — future SPEC freezes it)
 
-Preferência: **sysfs** under memory tier / device class; evitar ioctl novo se sysfs bastar.  
-Alinhamento com APIs existentes de demotion/tiering (reuso antes de criar).
+Preference: **sysfs** under memory tier / device class; avoid a new ioctl if
+sysfs suffices.
+Align with existing demotion/tiering APIs (reuse before creating).
 
 ## 9. Dependencies and risks
 
-| Risco | Mitigação |
+| Risk | Mitigation |
 | --- | --- |
-| Vendor closed stack | Priorizar drivers open; dual-path proibido no design mainline |
+| Closed vendor stack | Prioritize open drivers; dual path forbidden in the mainline design |
 | Latency-unsafe hot use | Default **cold tier only**; canary inherited from RamShared evidence |
-| Scope creep “todo RamShared no mm” | RF-M* só tiering+migrate; broker/app fora |
-| Lab só WSL | Bloqueia L2/L3 até bare-metal (PRD kernel-vram-as-memory) |
+| Scope creep “all of RamShared in mm” | RF-M* only tiering+migrate; broker/app excluded |
+| WSL-only lab | Blocks L2/L3 until bare metal (`kernel-vram-as-memory` PRD) |
 
-## 10. Implementation strategy (anos, não sprints)
+## 10. Implementation strategy (years, not sprints)
 
-| Fase | O quê | Critério de saída |
+| Phase | What | Exit criterion |
 | --- | --- | --- |
-| **P0** | Ponte product (cascade) + docs honestas | já |
-| **P1** | Lab bare-metal (dual-boot / DDA) + Passo 0 B numbers | Gate A+B PASS |
-| **P2** | Protótipo mínimo alignado a HMM ou tiering (out-of-tree) | demo migrate + demote |
-| **P3** | RFC + selftests QEMU | feedback mm/drm |
-| **P4** | Series mainline | merged or NACK documentado |
+| **P0** | Product bridge (cascade) plus honest docs | already |
+| **P1** | Bare-metal lab (dual boot / DDA) plus Step 0 B numbers | Gate A+B PASS |
+| **P2** | Minimal prototype aligned to HMM or tiering (out of tree) | migration plus demotion demo |
+| **P3** | RFC plus QEMU selftests | mm/drm feedback |
+| **P4** | Mainline series | merged or documented NACK |
 
-**Hyper-V no R:** acelera P1 (build/boot kernel genérico).  
-**DDA:** acelera P1 GPU se funcionar.  
-**Dual-boot:** melhor P1–P2.  
-**Nada disso é P4 sozinho.**
+**Hyper-V on R:** accelerates P1 (generic kernel build/boot).
+**DDA:** accelerates GPU P1 if it works.
+**Dual boot:** best for P1–P2.
+**None of these alone is P4.**
 
 ## 11. Documents
 
-- Este PRD  
-- `kernel-vram-as-memory/PRD.md` + PASSO0  
-- MANIFESTO (bridge vs destination)  
-- Futuro: `SPEC.md` só após P1 PASS e escolha K1 vs K2  
+- This PRD
+- `kernel-vram-as-memory/PRD.md` plus PASSO0
+- MANIFESTO (bridge versus destination)
+- Future: `SPEC.md` only after P1 PASS and K1 versus K2 selection
 
 ## 12. Out of scope
 
-- Garantia de merge no mainline  
-- Suporte Windows no kernel Linux  
-- App zenity como requisito de upstream  
+- Guarantee of a mainline merge
+- Windows support in the Linux kernel
+- A zenity app as an upstream requirement
 
-## 13. Acceptance (deste PRD)
+## 13. Acceptance (this PRD)
 
-- [x] Destino mainline descrito sem confundir com cascade  
-- [x] Camadas L0–L3  
-- [x] RF-M* e riscos vendor  
-- [x] Ligação explícita labs Hyper-V / dual-boot como P1, não como “já é nativo”  
-- [ ] SPEC L3: **bloqueado** até P1 medido  
+- [x] Mainline destination described without conflating it with cascade
+- [x] L0–L3 layers
+- [x] RF-M* and vendor risks
+- [x] Explicit Hyper-V / dual-boot lab connection as P1, not “already native”
+- [ ] L3 SPEC: **blocked** until P1 is measured
 
 ## 14. Validation
 
-- Review humano deste PRD  
-- Labs: scripts `New-LinuxKernelLabVm.ps1`, `Prepare-DdaGpu.ps1`, `Prepare-DualBootRussia.ps1`  
-- Qualquer claim “mainline-ready” exige citação de commit upstream real  
+- Human review of this PRD
+- Labs: scripts `New-LinuxKernelLabVm.ps1`, `Prepare-DdaGpu.ps1`,
+  `Prepare-DualBootRussia.ps1`
+- Any “mainline-ready” claim requires a citation to a real upstream commit
 
 ## 15. Kahneman
 
-| # | Uso |
+| # | Use |
 | --- | --- |
-| #11 | Anti-halo: ter LKM local ≠ mainline |
-| #13 | Existir HMM ≠ nosso driver registrado |
-| #3 | Latência medida antes de RFC |
-| #18 | Cascade sunset só com prova da classe de problema no path nativo |
+| #11 | Anti-halo: having a local LKM ≠ mainline |
+| #13 | HMM existing ≠ our driver registered |
+| #3 | Measured latency before RFC |
+| #18 | Sunset cascade only with proof of the same problem class in the native path |
 
 ## 16. Plain answer
 
-**Melhor abordagem para um dia ser nativo no Linux:**  
-tratar VRAM como **memory tier frio com demote**, via **infra mm existente + driver cooperativo**, com **RFC e selftests** — não via NBD permanente.  
+**Best approach to become native in Linux one day:**
+treat VRAM as a **cold memory tier with demotion**, through **existing mm
+infrastructure plus a cooperative driver**, with **RFCs and selftests** — not
+through permanent NBD.
 
-**PRD disso:** este arquivo.  
-**Próximo SSD realista:** P1 lab (VM + dual-boot) → números → só então SPEC de protótipo kernel.
+**PRD for it:** this file.
+**Next realistic SSD:** P1 lab (VM plus dual boot) → numbers → only then a
+kernel-prototype SPEC.

@@ -15,6 +15,7 @@
 #include "virtdisk.h"
 #include "queue.h"
 
+#include <ntddstor.h>
 #include <initguid.h>
 /* {A5B3C1D0-8E4F-4A2B-9C7D-1E2F3A4B5C6D} - control device interface GUID */
 DEFINE_GUID(GUID_DEVINTERFACE_RAMSHARED_CTL,
@@ -35,6 +36,7 @@ HwStorFindAdapter(
 	_In_ PBOOLEAN Again)
 {
 	PRAMSHARED_ADAPTER_EXT ext = (PRAMSHARED_ADAPTER_EXT)DeviceExtension;
+	ULONG bus_status;
 
 	UNREFERENCED_PARAMETER(HwContext);
 	UNREFERENCED_PARAMETER(BusInformation);
@@ -45,6 +47,15 @@ HwStorFindAdapter(
 
 	if (ext != NULL)
 		ext->AdapterStopped = FALSE;
+
+	/*
+	 * This is a software-defined storage path, not physical SAS/NVMe/SATA.
+	 * Storport otherwise exposes its default miniport bus (commonly SAS) to
+	 * storage property consumers and Task Manager.
+	 */
+	bus_status = StorPortSetAdapterBusType(DeviceExtension, BusTypeVirtual);
+	if (bus_status != STOR_STATUS_SUCCESS)
+		return SP_RETURN_ERROR;
 
 	/*
 	 * Complete PORT_CONFIGURATION_INFORMATION only — do NOT zero it and do
@@ -59,7 +70,15 @@ HwStorFindAdapter(
 	ConfigInfo->NumberOfBuses = 1;
 	ConfigInfo->MaximumNumberOfTargets = 1;
 	ConfigInfo->MaximumNumberOfLogicalUnits = 1;
-	ConfigInfo->MaximumTransferLength = RAMSHARED_MAX_IO;
+	ConfigInfo->MaximumTransferLength = RAMSHARED_MATRIX_MAX_IO;
+	ConfigInfo->MaxNumberOfIO = RAMSHARED_MAX_QD;
+	ConfigInfo->MaxIOsPerLun = RAMSHARED_MAX_QD;
+	/*
+	 * A virtual miniport otherwise starts at depth 250. The userspace ring can
+	 * be QD1, so begin conservatively and apply the registered per-LUN depth
+	 * after the first valid INQUIRY (DT-32).
+	 */
+	ConfigInfo->InitialLunQueueDepth = 1;
 	ConfigInfo->NumberOfPhysicalBreaks = SP_UNINITIALIZED_VALUE;
 	ConfigInfo->AlignmentMask = 0; /* byte aligned; no HBA constraint */
 	ConfigInfo->CachesData = FALSE;

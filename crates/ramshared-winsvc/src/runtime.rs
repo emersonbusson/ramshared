@@ -8,13 +8,51 @@ use crate::config::WinDriveConfig;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimePhase {
     Stopped,
+    WaitingForBroker,
     Leased,
     CudaReady,
     DiskCreated,
     QueueRegistered,
     Online,
+    Degraded,
     Stopping,
     FailedSafe,
+}
+
+pub fn contain_broker_loss(state: &mut RuntimeState) {
+    if matches!(
+        state.phase,
+        RuntimePhase::Online | RuntimePhase::Degraded | RuntimePhase::FailedSafe
+    ) {
+        state.phase = RuntimePhase::FailedSafe;
+        state.healthy = false;
+    } else {
+        state.phase = RuntimePhase::Stopped;
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PostTeardownReleaseDisposition {
+    CleanStop,
+    StopWithBrokerFailure,
+    PreserveFailedSafe,
+}
+
+pub fn post_teardown_release_disposition(
+    broker_lost_online: bool,
+    release_succeeded: bool,
+) -> PostTeardownReleaseDisposition {
+    if release_succeeded {
+        PostTeardownReleaseDisposition::CleanStop
+    } else if broker_lost_online {
+        PostTeardownReleaseDisposition::StopWithBrokerFailure
+    } else {
+        PostTeardownReleaseDisposition::PreserveFailedSafe
+    }
+}
+
+pub fn uninstall_plan_safe(storage_owned: bool, ambiguous: bool) -> bool {
+    !storage_owned && !ambiguous
 }
 
 /// How the process was entered.
@@ -382,19 +420,37 @@ fn unwind_from<O: RuntimeOps>(
 /// Product CLI verbs accepted by the binary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProductCommand {
-    Install,
+    Install { manifest: String },
+    Repair { manifest: String },
+    Status { json: bool },
+    Start,
+    Stop,
     Uninstall,
     ProbeCuda { config: String },
     Console { config: String, storage_only: bool },
-    ScmDefault,
+    ScmDefault { config: Option<String> },
 }
 
 /// Parse argv (skip program name). Rejects lab backend verbs.
 pub fn parse_product_cli(args: &[String]) -> Result<ProductCommand, RuntimeError> {
     match args.first().map(String::as_str) {
-        None | Some("") => Ok(ProductCommand::ScmDefault),
-        Some("install") => Ok(ProductCommand::Install),
-        Some("uninstall") => Ok(ProductCommand::Uninstall),
+        None | Some("") => Ok(ProductCommand::ScmDefault { config: None }),
+        Some("--config") if args.len() == 2 => Ok(ProductCommand::ScmDefault {
+            config: Some(require_config_flag(args)?),
+        }),
+        Some("install") => Ok(ProductCommand::Install {
+            manifest: require_absolute_flag(args, "--manifest")?,
+        }),
+        Some("repair") => Ok(ProductCommand::Repair {
+            manifest: require_absolute_flag(args, "--manifest")?,
+        }),
+        Some("status") if args.len() == 1 => Ok(ProductCommand::Status { json: false }),
+        Some("status") if args.len() == 2 && args[1] == "--json" => {
+            Ok(ProductCommand::Status { json: true })
+        }
+        Some("start") if args.len() == 1 => Ok(ProductCommand::Start),
+        Some("stop") if args.len() == 1 => Ok(ProductCommand::Stop),
+        Some("uninstall") if args.len() == 1 => Ok(ProductCommand::Uninstall),
         Some("probe-cuda") => {
             let config = require_config_flag(args)?;
             Ok(ProductCommand::ProbeCuda { config })
@@ -430,17 +486,25 @@ pub fn parse_product_cli(args: &[String]) -> Result<ProductCommand, RuntimeError
 }
 
 fn require_config_flag(args: &[String]) -> Result<String, RuntimeError> {
+    require_absolute_flag(args, "--config")
+}
+
+fn require_absolute_flag(args: &[String], flag: &str) -> Result<String, RuntimeError> {
     let mut i = 0;
     while i < args.len() {
-        if args[i] == "--config" {
+        if args[i] == flag {
             let path = args.get(i + 1).cloned().ok_or_else(|| {
-                RuntimeError::new(RuntimeErrorClass::Config, 2, "--config requires a path")
+                RuntimeError::new(
+                    RuntimeErrorClass::Config,
+                    2,
+                    format!("{flag} requires a path"),
+                )
             })?;
             if path.is_empty() || !path_is_absolute_str(&path) {
                 return Err(RuntimeError::new(
                     RuntimeErrorClass::Config,
                     2,
-                    "config path must be absolute",
+                    format!("{flag} path must be absolute"),
                 ));
             }
             return Ok(path);
@@ -450,7 +514,7 @@ fn require_config_flag(args: &[String]) -> Result<String, RuntimeError> {
     Err(RuntimeError::new(
         RuntimeErrorClass::Config,
         2,
-        "missing --config <absolute-path>",
+        format!("missing {flag} <absolute-path>"),
     ))
 }
 
@@ -477,7 +541,7 @@ pub fn product_runtime_selected(cmd: &ProductCommand) -> bool {
         ProductCommand::Console {
             storage_only: true,
             ..
-        } | ProductCommand::ScmDefault
+        } | ProductCommand::ScmDefault { .. }
             | ProductCommand::ProbeCuda { .. }
     )
 }
@@ -501,7 +565,8 @@ mod tests {
             evidence_path: PathBuf::from(r"C:\ProgramData\RamShared\evidence"),
             volume_letter: 'D',
             volume_mount_path: None,
-            broker: "127.0.0.1:7700".into(),
+            broker_pipe: crate::config::BrokerPipeV1::NamedPipeV1,
+            broker_ready_timeout_secs: 30,
             tenant: "wd".into(),
             heartbeat_secs: 5,
         }
@@ -600,6 +665,57 @@ mod tests {
         assert_eq!(ops.released.len(), 1);
         assert_eq!(ops.freed, 0);
         assert_eq!(state.phase, RuntimePhase::FailedSafe);
+    }
+
+    #[test]
+    fn online_broker_loss_is_not_replayed() {
+        let mut state = RuntimeState::new(RunMode::Scm);
+        state.phase = RuntimePhase::Online;
+        state.effects.lease_acquire = 1;
+        contain_broker_loss(&mut state);
+        contain_broker_loss(&mut state);
+        assert_eq!(state.phase, RuntimePhase::FailedSafe);
+        assert_eq!(state.effects.lease_acquire, 1);
+        assert!(!state.healthy);
+    }
+
+    #[test]
+    fn pre_exposure_broker_loss_unwinds() {
+        let mut state = RuntimeState::new(RunMode::Scm);
+        state.phase = RuntimePhase::WaitingForBroker;
+        contain_broker_loss(&mut state);
+        assert_eq!(state.phase, RuntimePhase::Stopped);
+        assert_eq!(
+            post_teardown_release_disposition(false, false),
+            PostTeardownReleaseDisposition::PreserveFailedSafe
+        );
+    }
+
+    #[test]
+    fn online_broker_loss_keeps_pump_until_safe_stop() {
+        let mut state = RuntimeState::new(RunMode::Scm);
+        state.phase = RuntimePhase::Online;
+        contain_broker_loss(&mut state);
+        assert_eq!(state.phase, RuntimePhase::FailedSafe);
+        assert_eq!(
+            post_teardown_release_disposition(true, false),
+            PostTeardownReleaseDisposition::StopWithBrokerFailure
+        );
+    }
+
+    #[test]
+    fn online_pipe_eof_is_not_reconnected() {
+        assert_eq!(
+            post_teardown_release_disposition(true, true),
+            PostTeardownReleaseDisposition::CleanStop
+        );
+    }
+
+    #[test]
+    fn unsafe_uninstall_plan_refuses() {
+        assert!(!uninstall_plan_safe(true, false));
+        assert!(!uninstall_plan_safe(false, true));
+        assert!(uninstall_plan_safe(false, false));
     }
 
     #[test]
@@ -783,6 +899,12 @@ mod tests {
     fn scm_and_console_select_same_runtime() {
         let scm = parse_product_cli(&[]).unwrap();
         assert!(product_runtime_selected(&scm));
+        assert_eq!(
+            parse_product_cli(&["--config".into(), r"C:\product\winsvc.toml".into()]).unwrap(),
+            ProductCommand::ScmDefault {
+                config: Some(r"C:\product\winsvc.toml".into())
+            }
+        );
         let console = parse_product_cli(&[
             "console".into(),
             "--config".into(),
@@ -795,5 +917,27 @@ mod tests {
             ProductCommand::Console { storage_only, .. } => assert!(storage_only),
             _ => panic!("expected console"),
         }
+    }
+
+    #[test]
+    fn status_json_parses() {
+        assert_eq!(
+            parse_product_cli(&["status".into(), "--json".into()]).unwrap(),
+            ProductCommand::Status { json: true }
+        );
+        assert!(parse_product_cli(&["status".into(), "--xml".into()]).is_err());
+    }
+
+    #[test]
+    fn start_stop_commands_are_explicit() {
+        assert_eq!(
+            parse_product_cli(&["start".into()]).unwrap(),
+            ProductCommand::Start
+        );
+        assert_eq!(
+            parse_product_cli(&["stop".into()]).unwrap(),
+            ProductCommand::Stop
+        );
+        assert!(parse_product_cli(&["start".into(), "now".into()]).is_err());
     }
 }

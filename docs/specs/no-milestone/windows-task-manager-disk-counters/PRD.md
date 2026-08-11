@@ -1,78 +1,103 @@
 ---
 slug: windows-task-manager-disk-counters
-title: Windows virtual disk counter audit
+title: Windows virtual disk identity, counters, and performance matrix
 milestone: —
 issues: []
 ---
 
-# PRD - Windows virtual disk counter audit
+# PRD - Windows virtual disk identity, counters, and performance matrix
 
 ## Summary
 
-RamShared must provide reliable Windows disk activity evidence for the
-`RAMSHARE VRAMDISK` LUN. Windows Task Manager can misrepresent virtual StorPort
-devices, so product evidence must use locale-safe PerfDisk counters plus direct
-checksum I/O. Task Manager visual parity with a physical SSD is explicitly out
-of scope for product correctness.
+RamShared must expose an honest Windows storage identity and provide reliable
+activity, capacity, integrity, latency, and throughput evidence for the
+`RAMSHARE VRAMDISK` LUN. The operator surface must distinguish actual device
+properties from Task Manager rounding or cache behavior. Acceptance uses
+locale-safe Windows storage/CIM APIs plus direct checksum I/O; Task Manager
+screenshots remain secondary human evidence.
 
 ## Technical Context
 
-- Confirmed in codebase: `scripts/windows/Measure-RamSharedDiskIo.ps1` samples
-  `Win32_PerfFormattedData_PerfDisk_PhysicalDisk` and performs checksum I/O.
-- Confirmed in codebase: `scripts/windows/Run-HostExhaustive.ps1` formats only a
-  disk whose identity is exactly `RAMSHARE VRAMDISK`, non-boot, non-system, and
-  matching the requested size.
-- Confirmed in docs: `docs/reliability/GAP-REGISTER.md` records the supported
-  disk-counter evidence gate as closed when CIM/direct-I/O audit passes.
-- Inference: Task Manager UI screenshots are useful operator evidence, but they are
-  not stable enough to be the only acceptance surface.
+- `Measure-RamSharedDiskIo.ps1` samples
+  `Win32_PerfFormattedData_PerfDisk_PhysicalDisk` and performs direct checksum
+  I/O.
+- Existing host lifecycle scripts format only an exact, non-boot, non-system
+  `RAMSHARE VRAMDISK` of the configured size.
+- On the physical host on 2026-07-25, `MSFT_Disk` reported the active 64 MiB
+  LUN as exactly 67,108,864 bytes with 4 KiB sectors; `MSFT_Volume` reported
+  healthy NTFS; `MSFT_PhysicalDisk` reported SSD/non-rotating. Task Manager
+  displayed a 1.0 GB capacity floor, `0 MB` formatted, and `HDD (SAS)`.
+- The miniport already reports VPD B1 rotation rate `0x0001`, but does not
+  override StorPort's default bus property.
+- The live checksum harness produced a PowerShell 5.1 locale conversion error
+  and still exited zero. Measurement errors therefore do not currently fail
+  closed.
 
 ## Recommended Option
 
-Create a Windows audit harness that runs plan-only by default and, when explicitly
-approved, delegates live disk creation to `Run-HostExhaustive.ps1`. The audit parses
-the generated artifact and requires `DISK_IO_MEASURE_OK`, direct load during sampling,
-checksum match, and at least one non-zero PerfDisk activity signal.
+Extend the audit into a VM-first, physical-supervised matrix. Report the
+virtual bus honestly as `BusTypeVirtual`, retain SCSI direct-access semantics
+and non-rotating media, and verify exact values through Windows storage APIs.
+Exercise 64 MiB, 256 MiB, 1 GiB and 2 GiB configurations plus 512-byte/4 KiB
+logical sectors and queue-depth/workload profiles. Every benchmark cell has at
+least three runs, fixed parameters, direct integrity, context capture, and
+idle/loaded tags where safe.
 
-Discarded alternatives:
+Rejected alternatives:
 
-- Directly format from the audit script. Rejected: this would duplicate disk-safety
-  gates and increase risk to physical disks.
-- Treat Task Manager screenshots as the gate. Rejected: screenshots are manual,
-  locale/UI dependent, and cannot safely close low-level correctness.
+- Pretend the virtual miniport is NVMe, SATA, or physical SAS. Those are false
+  transport claims; Windows has a `BusTypeVirtual` identity.
+- Treat Task Manager screenshots as the sole gate. They are manual,
+  locale/UI-dependent, cacheable, and rounded for small devices.
+- Format directly from the audit script. Product lifecycle scripts remain the
+  only formatting authority.
 
 ## Requirements
 
 | ID | Requirement | Acceptance |
 | --- | --- | --- |
-| RF-1 | Produce a reproducible Windows disk-counter audit artifact. | `Invoke-WindowsDiskCounterAudit.ps1 -Run -ApprovePhysicalHost` emits `audit-summary.json`. |
-| RF-2 | Use only existing exact-identity formatting gates. | Audit script contains no `Initialize-Disk` or `Format-Volume`; live creation is delegated to `Run-HostExhaustive.ps1`. |
-| RF-3 | Prove activity with machine-readable counters and checksum I/O. | Audit requires `DISK_IO_MEASURE_OK=true`, `Direct load during sampling`, `match=True`, and non-zero busy/write/queue evidence. |
-| NFR-1 | Be safe by default. | Default mode is plan-only; live mode requires `-Run -ApprovePhysicalHost`. |
-| NFR-2 | Keep Task Manager claim honest. | Docs state CIM/direct metrics are authoritative; UI parity is not a correctness requirement. |
+| RF-1 | Produce reproducible disk property/counter artifacts. | Each run emits raw properties, samples, context, commands and verdict. |
+| RF-2 | Reuse exact-identity lifecycle safety. | Matrix contains no broad disk selection and delegates create/format/teardown to product-safe routines. |
+| RF-3 | Prove activity with counters and checksum I/O. | Direct read/write checksum matches and at least one PerfDisk activity signal is non-zero. |
+| RF-4 | Report an honest virtual/non-rotating identity. | Windows reports `BusType=Virtual`, exact vendor/product/serial, `MediaType=SSD`, `SpindleSpeed=0`, and exact size/sectors. |
+| RF-5 | Exercise supported sizes and I/O qualities. | Matrix covers 64 MiB, 256 MiB, 1 GiB, 2 GiB; 512/4096-byte sectors; QD 1/4/16; sequential, random 4 KiB, mixed, flush and integrity. |
+| RF-6 | Detect hangs and regressions. | Cells are bounded; ≥3 runs report median/p99/deviation; stability requires one identity/lease, forward-moving counters, matching hashes and clean teardown. |
+| RF-7 | Fail closed on measurement errors. | Locale/parser/tool errors produce non-zero exit and cannot emit PASS. |
+| NFR-1 | Be safe by default. | Default is plan-only; live physical mode requires `-Run -ApprovePhysicalHost`. |
+| NFR-2 | Keep UI claims honest and useful. | Docs explain UI rounding/cache, use APIs as canonical, and collect a refreshed 1 GiB screenshot as secondary evidence. |
+| NFR-3 | Preserve the daily host. | VM + Verifier precede physical deployment; physical load is bounded/watchdog-supervised, pagefile-free on the product volume, and never touches a foreign disk. |
 
 ## Flow
 
-1. Plan-only: collect expected stages and write `audit-plan.json`.
-2. Live: run storage-only preflight.
-3. Live: invoke `Run-HostExhaustive.ps1` with explicit `SizeBytes`.
-4. Live: parse the generated `summary.json` and `disk-io.out`.
-5. Live: emit pass/fail `audit-summary.json` and leave the LUN torn down.
+1. Plan-only: emit the exact matrix and safety requirements.
+2. Baseline: capture active manifest, services, GPU/RAM, disks, volumes,
+   pagefiles, storage properties and counters.
+3. VM: WDK build/install, identity/property checks, Driver Verifier, I/O,
+   refusal and teardown drills.
+4. Physical: preflight GPU/storage/pagefile state, install one immutable
+   configuration per cell, run ≥3 fixed workload repetitions, and perform
+   supported teardown between cells.
+5. Aggregate median/p99/deviation and regression thresholds. Only an accepted
+   demand-start configuration may be left active.
 
 ## Risks
 
-- Physical disk formatting risk is contained by delegating to the existing host
-  exhaustive harness.
-- PerfDisk may lag or report partial fields. The audit accepts non-zero activity
-  from busy, write, or queue plus direct checksum I/O.
-- Task Manager UI may still disagree; this is expected and not a correctness gate.
+- A bus-property change can break enumeration. Any missing PDO, changed
+  identity, or Verifier finding blocks physical deployment.
+- Larger VRAM allocations can starve the desktop GPU. Unsafe cells are refused
+  when current free VRAM is below size plus reserve.
+- Task Manager may still round or cache values. API truth and direct I/O remain
+  authoritative; UI disagreement stays visible in evidence.
 
-Rollback trigger: revert if the audit can pass without direct checksum match, without
-`DISK_IO_MEASURE_OK`, or if it performs direct formatting.
+Rollback trigger: revert if an audit passes after any tool/parser error,
+without checksum match, with size/sector mismatch, with a non-virtual or
+rotating identity, with a Driver Verifier finding, after a foreign-volume
+mutation, or when supported stop exceeds 45 seconds.
 
 ## Validation Plan
 
-- Static: `scripts/windows/Test-WindowsDiskCounterAuditStatic.ps1`.
-- Live: `scripts/windows/Invoke-WindowsDiskCounterAudit.ps1 -Run -ApprovePhysicalHost`
-  on the physical Windows lab host after clean storage-only preflight.
-- Docs: `./scripts/docs-check.sh`.
+- Static PowerShell contract tests.
+- WDK `/W4 /WX`, Code Analysis, InfVerif, and disposable-VM Driver Verifier.
+- Live VM and approved physical matrix with BINARY_MATCH, before/action/after,
+  exact refusals, registered benchmarks and final active-state observation.
+- `./scripts/docs-check.sh`.

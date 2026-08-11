@@ -1,0 +1,70 @@
+name: Windows Static
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions: {}
+
+concurrency:
+  group: windows-static-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-static:
+    name: windows-static
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+
+      - name: Windows Rust tests
+        shell: pwsh
+        run: |
+          cargo test -p ramshared-winbroker
+          cargo test -p ramshared-winsvc
+
+      - name: Static-only Windows suite
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & scripts/windows/Test-WindowsCiStatic.ps1 -RepoRoot $env:GITHUB_WORKSPACE
+          foreach ($switchName in @('Install', 'Service', 'Vm', 'Hardware', 'Gpu', 'Pressure', 'Shutdown', 'Reboot', 'PhysicalHost')) {
+            $attempt = @{ RepoRoot = $env:GITHUB_WORKSPACE }
+            $attempt[$switchName] = $true
+            try {
+              & scripts/windows/Test-WindowsCiStatic.ps1 @attempt
+              throw "windows-static refusal accepted $switchName"
+            } catch {
+              if ($_.Exception.Message -notmatch 'windows_static_suite_(refuses_mutating_switches|rejects_physical_host_flag)') {
+                throw
+              }
+            }
+          }
+
+  windows-static-summary:
+    name: windows-static-summary
+    if: always()
+    needs: [windows-static]
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Require completed Windows static gate
+        shell: pwsh
+        env:
+          WINDOWS_STATIC_RESULT: ${{ needs.windows-static.result }}
+        run: |
+          if ($env:WINDOWS_STATIC_RESULT -ne 'success') {
+            Write-Output 'WINDOWS_STATIC_SUMMARY=FAIL'
+            exit 1
+          }
+          Write-Output 'WINDOWS_STATIC_SUMMARY=PASS'

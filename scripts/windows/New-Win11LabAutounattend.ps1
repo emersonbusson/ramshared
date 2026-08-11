@@ -6,8 +6,8 @@
 .DESCRIPTION
   The generated file is local lab material and may contain a lab password. Keep
   it outside the repository, normally under E:\Hyper-V\iso\unattend-staging.
-  The XML creates the lab administrator during the specialize pass so the guest
-  does not get stuck in manual OOBE before PowerShell Direct is usable.
+  The XML creates the lab administrator during the OOBE pass and binds one
+  automatic logon so the guest reaches a manageable terminal setup state.
 #>
 [CmdletBinding()]
 param(
@@ -155,8 +155,17 @@ $xml = @"
           <PlainText>true</PlainText>
         </Password>
         <Enabled>true</Enabled>
+        <LogonCount>1</LogonCount>
+        <Domain>$escapedComputerName</Domain>
         <Username>$escapedUser</Username>
       </AutoLogon>
+      <FirstLogonCommands>
+        <SynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Description>Disable automatic logon after the first lab sign-in</Description>
+          <CommandLine>reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoLogonCount /t REG_DWORD /d 0 /f</CommandLine>
+        </SynchronousCommand>
+      </FirstLogonCommands>
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
         <HideLocalAccountScreen>true</HideLocalAccountScreen>

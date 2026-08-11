@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ramshared-comment-language-ratchet-v1",
+  "title": "RamShared comment-language ratchet record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schema",
+    "revision",
+    "approval",
+    "initial",
+    "current"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "./comment-language-baseline.schema.json"
+    },
+    "schema": {
+      "const": "ramshared-comment-language-ratchet/v1"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "approval": {
+      "$ref": "#/$defs/approval"
+    },
+    "initial": {
+      "$ref": "#/$defs/snapshot"
+    },
+    "current": {
+      "$ref": "#/$defs/snapshot"
+    }
+  },
+  "$defs": {
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "approver_role",
+        "channel"
+      ],
+      "properties": {
+        "approver_role": {
+          "const": "repository-maintainer"
+        },
+        "channel": {
+          "const": "pull-request-review"
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutable_files",
+        "mutable_lines",
+        "protected_files",
+        "protected_lines",
+        "protected_paths",
+        "protected_inventory_sha256"
+      ],
+      "properties": {
+        "mutable_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mutable_lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "protected_files": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "protected_lines": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "protected_paths": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "protected_inventory_sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    }
+  }
+}

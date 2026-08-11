@@ -37,6 +37,12 @@ cited in a doc, PR, or decision, it becomes a registered benchmark** and must fo
 - **Append-only:** never rewrite old entries; each run = new entry with a `run-id`.
 - **Raw output saved** (or reproducible) — to re-audit if a parse is incorrect.
 - **Reproducible:** the harness records the exact command; re-running = same invocation.
+- **Public evidence envelope:** every new benchmark claim uses
+  `docs/benchmarks/evidence.schema.json` (`ramshared-evidence/v1`) and passes
+  `node tools/ci/check-benchmark-evidence.mjs --check`. A public PASS requires
+  repository-relative, SHA-256-verifiable sanitized artifacts. Host-private or
+  pre-schema evidence is explicitly `legacy-unqualified` and cannot be a
+  baseline, regression PASS, or promotion claim.
 
 ## Artifacts (what lives where)
 

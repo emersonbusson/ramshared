@@ -14,7 +14,7 @@ Everything you need to post is **one file per channel**.
 | ID | File | Language |
 | --- | --- | --- |
 | **IMG-1** | [`cascade-diagram.png`](cascade-diagram.png) · [`.svg`](cascade-diagram.svg) | English |
-| **IMG-PT-1** | [`cascade-diagram-pt.png`](cascade-diagram-pt.png) · [`.svg`](cascade-diagram-pt.svg) | Português (humano) |
+| **IMG-PT-1** | [`cascade-diagram-pt.png`](cascade-diagram-pt.png) · [`.svg`](cascade-diagram-pt.svg) | Brazilian Portuguese (human) |
 
 ## Other docs
 

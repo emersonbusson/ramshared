@@ -32,17 +32,9 @@ pub fn read_io_desc(
     let map = ramshared_uring::MmapRo::map_readonly(char_dev.as_raw_fd(), len, 0)?;
 
     let start = usize::from(tag) * ublk::UBLK_IO_DESC_SIZE;
-    let end = start + ublk::UBLK_IO_DESC_SIZE;
-    let bytes = map.as_bytes();
-    if end > bytes.len() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "io-desc fora do buffer mapeado",
-        ));
-    }
-
-    ublk::IoDesc::from_ne_bytes(&bytes[start..end])
-        .ok_or_else(|| io::Error::other("io-desc menor que 24 bytes"))
+    let snapshot = map.copy_array::<{ ublk::UBLK_IO_DESC_SIZE }>(start)?;
+    ublk::IoDesc::from_ne_bytes(&snapshot)
+        .ok_or_else(|| io::Error::other("io-desc is shorter than 24 bytes"))
 }
 
 /// FETCH session in a ublk queue: holds the `/dev/ublkcN` char device `File` and
@@ -52,8 +44,7 @@ pub fn read_io_desc(
 pub struct FetchSession {
     ring: ramshared_uring::UblkFetchRing,
     /// Char device `File`, kept open while the ring lives (drop guard).
-    #[allow(dead_code)]
-    char_dev: File,
+    _char_dev: File,
 }
 
 impl FetchSession {
@@ -71,11 +62,95 @@ impl FetchSession {
             buf_size,
         )?;
 
-        Ok(Self { ring, char_dev })
+        Ok(Self {
+            ring,
+            _char_dev: char_dev,
+        })
     }
 
     /// Drains available CQEs (does not block).
     pub fn drain(&mut self) -> Vec<ramshared_uring::UblkCompletion> {
         self.ring.drain()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::Write;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    fn descriptor_fixture(label: &str) -> (std::path::PathBuf, File) {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("ramshared-{label}-{}-{nonce}", std::process::id()));
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("create descriptor fixture");
+        file.set_len(ramshared_uring::page_size() as u64)
+            .expect("size descriptor fixture");
+        let descriptor = ublk::IoDesc {
+            op_flags: u32::from(ublk::UBLK_IO_OP_READ),
+            nr_sectors_or_zones: 8,
+            start_sector: 17,
+            addr: 0x1234_5678,
+        };
+        let mut bytes = [0u8; ublk::UBLK_IO_DESC_SIZE];
+        bytes[0..4].copy_from_slice(&descriptor.op_flags.to_ne_bytes());
+        bytes[4..8].copy_from_slice(&descriptor.nr_sectors_or_zones.to_ne_bytes());
+        bytes[8..16].copy_from_slice(&descriptor.start_sector.to_ne_bytes());
+        bytes[16..24].copy_from_slice(&descriptor.addr.to_ne_bytes());
+        file.write_all(&bytes).expect("write descriptor fixture");
+        file.flush().expect("flush descriptor fixture");
+        (path, file)
+    }
+
+    #[test]
+    fn regular_file_descriptor_queue_decodes_owned_snapshot() {
+        let (path, file) = descriptor_fixture("queue-descriptor");
+        let descriptor = read_io_desc(&path, 1, 0).expect("decode descriptor");
+        assert_eq!(descriptor.op_flags, u32::from(ublk::UBLK_IO_OP_READ));
+        assert_eq!(descriptor.nr_sectors_or_zones, 8);
+        assert_eq!(descriptor.start_sector, 17);
+        assert_eq!(descriptor.addr, 0x1234_5678);
+        assert_eq!(
+            read_io_desc(&path, 1, 1)
+                .expect_err("out-of-range tag")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert!(read_io_desc(path.with_extension("missing"), 1, 0).is_err());
+
+        drop(file);
+        fs::remove_file(path).expect("remove descriptor fixture");
+    }
+
+    #[test]
+    fn regular_file_fetch_session_drains_refusal_without_a_device() {
+        let (path, file) = descriptor_fixture("queue-fetch");
+        let mut session = FetchSession::open(&path, 1, 4096).expect("open fetch session");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let completions = loop {
+            let current = session.drain();
+            if !current.is_empty() {
+                break current;
+            }
+            assert!(Instant::now() < deadline, "regular-file CQE deadline");
+            std::thread::yield_now();
+        };
+        assert_eq!(completions.len(), 1);
+        assert!(completions[0].result < 0);
+
+        drop(session);
+        drop(file);
+        fs::remove_file(path).expect("remove fetch fixture");
     }
 }

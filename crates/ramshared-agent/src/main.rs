@@ -12,7 +12,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::HashMap;
-use std::io::BufReader;
+use std::io::{BufReader, ErrorKind};
 use std::net::TcpStream;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
@@ -33,6 +33,8 @@ const POLL_SLICE: Duration = Duration::from_millis(200);
 const INITIAL_BACKOFF: Duration = Duration::from_secs(2);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const PRODUCTIVE_SESSION: Duration = Duration::from_secs(10);
+/// One-shot `--status` I/O deadline (DT-45); prevents a silent broker from hanging the CLI.
+const STATUS_IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Next backoff (doubles with cap). Pure/testable.
 fn next_backoff(cur: Duration) -> Duration {
@@ -47,6 +49,17 @@ struct Config {
     transport: TransportKind,
     watchdog: Duration,
     status_only: bool,
+}
+
+enum ParsedArgs {
+    Help,
+    Config(Config),
+}
+
+enum CliExit {
+    Help,
+    Usage(String),
+    Runtime(String),
 }
 
 /// Command from the main loop to the execution thread.
@@ -79,14 +92,23 @@ enum ExecResult {
 }
 
 fn usage() -> String {
-    "uso:\n  \
-     ramshared-agent --broker HOST:PORT --tenant NOME [--swap-prio P] \
+    "Usage:\n  \
+     ramshared-agent --broker HOST:PORT --tenant NAME [--swap-prio P] \
      [--nbd-base /dev/nbd] [--transport tcp|unix] [--watchdog-secs 90]\n  \
      ramshared-agent --broker HOST:PORT --status"
         .to_string()
 }
 
-fn parse_args(args: &[String]) -> Result<Config, String> {
+fn usage_diagnostic(message: &str) -> String {
+    let usage = usage();
+    if message.ends_with(&usage) {
+        message.to_string()
+    } else {
+        format!("{message}\n{usage}")
+    }
+}
+
+fn parse_args(args: &[String]) -> Result<ParsedArgs, String> {
     let mut broker = None;
     let mut tenant = None;
     let mut swap_prio = None;
@@ -100,7 +122,7 @@ fn parse_args(args: &[String]) -> Result<Config, String> {
         let mut take = |name: &str| -> Result<String, String> {
             it.next()
                 .cloned()
-                .ok_or_else(|| format!("{name} exige um valor"))
+                .ok_or_else(|| format!("{name} requires a value"))
         };
         match arg.as_str() {
             "--broker" => broker = Some(take("--broker")?),
@@ -109,7 +131,7 @@ fn parse_args(args: &[String]) -> Result<Config, String> {
                 let v = take("--swap-prio")?;
                 swap_prio = Some(
                     v.parse()
-                        .map_err(|_| format!("--swap-prio inválido: {v}"))?,
+                        .map_err(|_| format!("--swap-prio is invalid: {v}"))?,
                 );
             }
             "--nbd-base" => nbd_base = take("--nbd-base")?,
@@ -117,63 +139,98 @@ fn parse_args(args: &[String]) -> Result<Config, String> {
                 transport = match take("--transport")?.as_str() {
                     "tcp" => TransportKind::NbdTcp,
                     "unix" => TransportKind::NbdUnix,
-                    other => return Err(format!("--transport inválido: {other} (use tcp|unix)")),
+                    other => return Err(format!("--transport is invalid: {other} (use tcp|unix)")),
                 };
             }
             "--watchdog-secs" => {
                 let v = take("--watchdog-secs")?;
                 let s: u64 = v
                     .parse()
-                    .map_err(|_| format!("--watchdog-secs inválido: {v}"))?;
+                    .map_err(|_| format!("--watchdog-secs is invalid: {v}"))?;
                 watchdog = Duration::from_secs(s);
             }
             "--status" => status_only = true,
-            "-h" | "--help" => return Err(usage()),
-            other => return Err(format!("argumento desconhecido: {other}\n{}", usage())),
+            "-h" | "--help" => return Ok(ParsedArgs::Help),
+            other => return Err(format!("unknown argument: {other}\n{}", usage())),
         }
     }
 
-    Ok(Config {
-        broker: broker.ok_or_else(|| format!("--broker é obrigatório\n{}", usage()))?,
+    Ok(ParsedArgs::Config(Config {
+        broker: broker.ok_or_else(|| format!("--broker is required\n{}", usage()))?,
         tenant: tenant.unwrap_or_default(),
         swap_prio,
         nbd_base,
         transport,
         watchdog,
         status_only,
-    })
+    }))
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let cfg = parse_args(&args).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+fn run(args: &[String]) -> Result<(), CliExit> {
+    let cfg = match parse_args(args).map_err(CliExit::Usage)? {
+        ParsedArgs::Help => return Err(CliExit::Help),
+        ParsedArgs::Config(cfg) => cfg,
+    };
 
     if cfg.status_only {
-        return run_status(&cfg);
+        return run_status(&cfg).map_err(|error| CliExit::Runtime(error.to_string()));
     }
     if cfg.tenant.is_empty() {
-        return Err(format!("--tenant é obrigatório no modo agente\n{}", usage()).into());
+        return Err(CliExit::Usage(format!(
+            "--tenant is required in agent mode\n{}",
+            usage()
+        )));
     }
 
     // DT-26: swap requires privilege. Reads euid via /proc (no libc) and refuses early, with number.
-    let euid = psi::read_euid()?;
+    let euid = psi::read_euid().map_err(|error| CliExit::Runtime(error.to_string()))?;
     if euid != 0 {
-        return Err(format!("precisa de root para swap (euid atual={euid}, esperado 0)").into());
+        return Err(CliExit::Runtime(format!(
+            "root is required for swap (current euid={euid}, expected 0)"
+        )));
     }
 
-    run_agent(&cfg)
+    run_agent(&cfg).map_err(|error| CliExit::Runtime(error.to_string()))
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match run(&args) {
+        Ok(()) => {}
+        Err(CliExit::Help) => println!("{}", usage()),
+        Err(CliExit::Usage(message)) => {
+            eprintln!("{}", usage_diagnostic(&message));
+            std::process::exit(2);
+        }
+        Err(CliExit::Runtime(message)) => {
+            eprintln!("[agent] error: {message}");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// `--status` mode: one-shot query (does not register; the broker responds with `StatusReply` to any
 /// session) and prints the status.
 fn run_status(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
     let stream = TcpStream::connect(&cfg.broker)?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_read_timeout(Some(STATUS_IO_TIMEOUT))?;
+    stream.set_write_timeout(Some(STATUS_IO_TIMEOUT))?;
     let mut w = stream.try_clone()?;
     let mut r = BufReader::new(stream);
     write_msg(&mut w, &Msg::Status)?;
     for _ in 0..50 {
-        match read_msg(&mut r)? {
+        let response = match read_msg(&mut r) {
+            Ok(response) => response,
+            Err(error) if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
+                return Err(format!(
+                    "broker status timed out after {}s",
+                    STATUS_IO_TIMEOUT.as_secs()
+                )
+                .into());
+            }
+            Err(error) => return Err(error.into()),
+        };
+        match response {
             Some(Msg::StatusReply {
                 tenants,
                 slices,
@@ -205,12 +262,14 @@ fn run_status(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
                 println!("last_rebalance_secs={last_rebalance_secs:?}");
                 return Ok(());
             }
-            Some(Msg::Error { reason }) => return Err(reason.into()),
+            Some(Msg::Error { reason }) => {
+                return Err(format!("broker rejected status: {reason}").into());
+            }
             Some(_) => continue,
             None => break,
         }
     }
-    Err("broker não respondeu StatusReply".into())
+    Err("broker did not return StatusReply".into())
 }
 
 /// Spawns the execution thread (lives for the entire process duration) and runs the session loop with reconnection.
@@ -233,8 +292,8 @@ fn run_agent(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
         let result = session(cfg, &cmd_tx, &res_rx);
         let ran = t0.elapsed();
         match result {
-            Ok(()) => eprintln!("[agent] sessão encerrada (EOF); reconectando em {backoff:?}…"),
-            Err(e) => eprintln!("[agent] sessão caiu: {e}; reconectando em {backoff:?}"),
+            Ok(()) => eprintln!("[agent] session closed (EOF); reconnecting in {backoff:?}…"),
+            Err(e) => eprintln!("[agent] session failed: {e}; reconnecting in {backoff:?}"),
         }
         thread::sleep(backoff);
         // Productive session (connected + ran) → goes back to minimum; quick failure (broker down) → grows.
@@ -293,7 +352,7 @@ fn session(
                     }
                 }
                 (s, sw) => eprintln!(
-                    "[agent] PSI ilegível (psi={:?} swaps={:?}); pulando ciclo",
+                    "[agent] PSI unreadable (psi={:?} swaps={:?}); skipping cycle",
                     s.err(),
                     sw.err()
                 ),
@@ -339,7 +398,7 @@ fn session(
         // (4) watchdog: silent broker beyond the deadline ⇒ dead session.
         if wd.expired(Instant::now()) {
             eprintln!(
-                "[agent] watchdog: broker silencioso por {}s; encerrando sessão",
+                "[agent] watchdog: broker silent for {}s; closing session",
                 cfg.watchdog.as_secs()
             );
             break;
@@ -349,7 +408,7 @@ fn session(
     // Cleanup: releases active slices (best-effort; broker reconciles on re-register).
     for (slice, dev) in active.drain() {
         if let Err(e) = swap::detach_swap(&dev) {
-            eprintln!("[agent] cleanup swapoff s{slice} ({dev}) falhou: {e}");
+            eprintln!("[agent] cleanup swapoff s{slice} ({dev}) failed: {e}");
         }
     }
     let _ = w.shutdown(std::net::Shutdown::Both);
@@ -370,7 +429,7 @@ fn handle_msg(
 ) -> bool {
     match msg {
         Msg::Registered { tenant_id } => {
-            eprintln!("[agent] registrado: tenant_id={tenant_id}");
+            eprintln!("[agent] registered: tenant_id={tenant_id}");
             true
         }
         Msg::Ack => true, // heartbeat (already touched the watchdog)
@@ -401,7 +460,7 @@ fn handle_msg(
             cmd_tx.send(ExecCmd::Off { slice, dev }).is_ok()
         }
         Msg::DemoteAll => {
-            eprintln!("[agent] DemoteAll: soltando {} slice(s)", active.len());
+            eprintln!("[agent] DemoteAll: releasing {} slice(s)", active.len());
             for (slice, dev) in active.iter() {
                 if cmd_tx
                     .send(ExecCmd::Off {
@@ -416,11 +475,11 @@ fn handle_msg(
             true
         }
         Msg::Error { reason } => {
-            eprintln!("[agent] broker recusou a sessão: {reason}");
+            eprintln!("[agent] broker refused the session: {reason}");
             false
         }
         other => {
-            eprintln!("[agent] msg ignorada: {other:?}");
+            eprintln!("[agent] ignored message: {other:?}");
             true
         }
     }
@@ -469,7 +528,7 @@ fn reader_loop(mut reader: BufReader<TcpStream>, msg_tx: Sender<Msg>) {
             }
             Ok(None) => break, // clean EOF
             Err(e) => {
-                eprintln!("[agent] erro de leitura do socket: {e}");
+                eprintln!("[agent] socket read error: {e}");
                 break;
             }
         }
@@ -480,9 +539,44 @@ fn reader_loop(mut reader: BufReader<TcpStream>, msg_tx: Sender<Msg>) {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+    use std::net::TcpListener;
 
     fn args(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn parse_config(v: &[&str]) -> Config {
+        match parse_args(&args(v)).expect("arguments must parse as a configuration") {
+            ParsedArgs::Config(config) => config,
+            ParsedArgs::Help => panic!("test expected configuration, not help"),
+        }
+    }
+
+    fn test_config(broker: String, watchdog: Duration) -> Config {
+        Config {
+            broker,
+            tenant: "test-tenant".to_string(),
+            swap_prio: Some(-3),
+            nbd_base: "/dev/ramshared-test-nbd".to_string(),
+            transport: TransportKind::NbdTcp,
+            watchdog,
+            status_only: false,
+        }
+    }
+
+    fn expect_register_and_psi(reader: &mut BufReader<TcpStream>) {
+        assert!(matches!(
+            read_msg(reader).expect("registration must decode"),
+            Some(Msg::Register {
+                proto: PROTO_VERSION,
+                tenant,
+                transport: TransportKind::NbdTcp,
+            }) if tenant == "test-tenant"
+        ));
+        assert!(matches!(
+            read_msg(reader).expect("PSI report must decode"),
+            Some(Msg::Psi { mem: Some(_), .. })
+        ));
     }
 
     #[test]
@@ -501,7 +595,7 @@ mod tests {
 
     #[test]
     fn parse_minimal_agent() {
-        let c = parse_args(&args(&["--broker", "10.0.0.1:7000", "--tenant", "wsl2"])).unwrap();
+        let c = parse_config(&["--broker", "10.0.0.1:7000", "--tenant", "wsl2"]);
         assert_eq!(c.broker, "10.0.0.1:7000");
         assert_eq!(c.tenant, "wsl2");
         assert_eq!(c.nbd_base, "/dev/nbd");
@@ -513,7 +607,7 @@ mod tests {
 
     #[test]
     fn parse_full_flags() {
-        let c = parse_args(&args(&[
+        let c = parse_config(&[
             "--broker",
             "h:1",
             "--tenant",
@@ -526,8 +620,7 @@ mod tests {
             "unix",
             "--watchdog-secs",
             "30",
-        ]))
-        .unwrap();
+        ]);
         assert_eq!(c.swap_prio, Some(-3));
         assert!(matches!(c.transport, TransportKind::NbdUnix));
         assert_eq!(c.watchdog, Duration::from_secs(30));
@@ -535,7 +628,7 @@ mod tests {
 
     #[test]
     fn status_mode_needs_no_tenant() {
-        let c = parse_args(&args(&["--broker", "h:1", "--status"])).unwrap();
+        let c = parse_config(&["--broker", "h:1", "--status"]);
         assert!(c.status_only);
         assert!(c.tenant.is_empty());
     }
@@ -563,5 +656,236 @@ mod tests {
     #[test]
     fn flag_without_value_errors() {
         assert!(parse_args(&args(&["--broker"])).is_err());
+    }
+
+    #[test]
+    fn help_is_a_parse_outcome() {
+        assert!(matches!(
+            parse_args(&args(&["--help"])),
+            Ok(ParsedArgs::Help)
+        ));
+    }
+
+    #[test]
+    fn usage_diagnostic_adds_usage_once() {
+        let usage = usage();
+        assert_eq!(
+            usage_diagnostic("invalid input"),
+            format!("invalid input\n{usage}")
+        );
+        assert_eq!(usage_diagnostic(&usage), usage);
+    }
+
+    #[test]
+    fn swap_on_prefers_broker_priority_without_running_swap() {
+        let cfg = test_config("127.0.0.1:1".to_string(), Duration::from_secs(1));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let mut active = HashMap::new();
+
+        assert!(handle_msg(
+            &cfg,
+            Msg::SwapOn {
+                slice: 7,
+                export: "s7".to_string(),
+                endpoint: NbdEndpoint::Tcp {
+                    host: "127.0.0.1".to_string(),
+                    port: 10809,
+                },
+                swap_prio: Some(-9),
+            },
+            &mut active,
+            &cmd_tx,
+        ));
+        assert_eq!(
+            active.get(&7),
+            Some(&"/dev/ramshared-test-nbd7".to_string())
+        );
+        match cmd_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("SwapOn must be dispatched")
+        {
+            ExecCmd::On {
+                slice,
+                export,
+                endpoint,
+                dev,
+                prio,
+            } => {
+                assert_eq!(slice, 7);
+                assert_eq!(export, "s7");
+                assert!(matches!(endpoint, NbdEndpoint::Tcp { port: 10809, .. }));
+                assert_eq!(dev, "/dev/ramshared-test-nbd7");
+                assert_eq!(prio, Some(-9));
+            }
+            ExecCmd::Off { .. } => panic!("SwapOn must not dispatch SwapOff"),
+        }
+    }
+
+    #[test]
+    fn demote_all_dispatches_release_without_running_swap() {
+        let cfg = test_config("127.0.0.1:1".to_string(), Duration::from_secs(1));
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let mut active = HashMap::from([
+            (1, "/dev/ramshared-test-nbd1".to_string()),
+            (2, "/dev/ramshared-test-nbd2".to_string()),
+        ]);
+
+        assert!(handle_msg(&cfg, Msg::DemoteAll, &mut active, &cmd_tx));
+        let mut releases = [
+            cmd_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("first DemoteAll release must dispatch"),
+            cmd_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("second DemoteAll release must dispatch"),
+        ]
+        .into_iter()
+        .map(|cmd| match cmd {
+            ExecCmd::Off { slice, dev } => (slice, dev),
+            ExecCmd::On { .. } => panic!("DemoteAll must only dispatch SwapOff"),
+        })
+        .collect::<Vec<_>>();
+        releases.sort_unstable();
+        assert_eq!(
+            releases,
+            vec![
+                (1, "/dev/ramshared-test-nbd1".to_string()),
+                (2, "/dev/ramshared-test-nbd2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn session_registers_dispatches_commands_and_stops_on_refusal() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener must bind");
+        let broker = listener
+            .local_addr()
+            .expect("listener address must be available")
+            .to_string();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("agent must connect");
+            let mut reader = BufReader::new(stream.try_clone().expect("stream must clone"));
+            expect_register_and_psi(&mut reader);
+            write_msg(&mut stream, &Msg::Registered { tenant_id: 42 })
+                .expect("Registered must write");
+            write_msg(&mut stream, &Msg::Ack).expect("Ack must write");
+            write_msg(&mut stream, &Msg::SwapOff { slice: 7 }).expect("SwapOff must write");
+            write_msg(
+                &mut stream,
+                &Msg::LeaseGranted {
+                    lease: 9,
+                    bytes: 4096,
+                },
+            )
+            .expect("non-command frame must write");
+            write_msg(
+                &mut stream,
+                &Msg::Error {
+                    reason: "test refusal".to_string(),
+                },
+            )
+            .expect("broker refusal must write");
+        });
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (_res_tx, res_rx) = mpsc::channel();
+        let cfg = test_config(broker, Duration::from_secs(1));
+
+        assert!(session(&cfg, &cmd_tx, &res_rx).is_ok());
+        server.join().expect("broker fixture must finish");
+        match cmd_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("broker command must dispatch")
+        {
+            ExecCmd::Off { slice, dev } => {
+                assert_eq!(slice, 7);
+                assert_eq!(dev, "/dev/ramshared-test-nbd7");
+            }
+            ExecCmd::On { .. } => panic!("SwapOff frame must not attach swap"),
+        }
+        assert!(cmd_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn session_reports_execution_results_without_running_swap() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener must bind");
+        let broker = listener
+            .local_addr()
+            .expect("listener address must be available")
+            .to_string();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("agent must connect");
+            let mut reader = BufReader::new(stream.try_clone().expect("stream must clone"));
+            expect_register_and_psi(&mut reader);
+            assert!(matches!(
+                read_msg(&mut reader).expect("SwapOn completion must decode"),
+                Some(Msg::SwapOnDone {
+                    slice: 3,
+                    ok: false,
+                    ref detail,
+                }) if detail == "test attach refusal"
+            ));
+            assert!(matches!(
+                read_msg(&mut reader).expect("SwapOff completion must decode"),
+                Some(Msg::SwapOffDone {
+                    slice: 3,
+                    ok: true,
+                    ref detail,
+                }) if detail == "/dev/ramshared-test-nbd3"
+            ));
+            write_msg(
+                &mut stream,
+                &Msg::Error {
+                    reason: "fixture complete".to_string(),
+                },
+            )
+            .expect("broker refusal must write");
+        });
+        let (cmd_tx, _cmd_rx) = mpsc::channel();
+        let (res_tx, res_rx) = mpsc::channel();
+        res_tx
+            .send(ExecResult::On {
+                slice: 3,
+                ok: false,
+                detail: "test attach refusal".to_string(),
+            })
+            .expect("test result must queue");
+        res_tx
+            .send(ExecResult::Off {
+                slice: 3,
+                ok: true,
+                detail: "/dev/ramshared-test-nbd3".to_string(),
+            })
+            .expect("test result must queue");
+        let cfg = test_config(broker, Duration::from_secs(1));
+
+        assert!(session(&cfg, &cmd_tx, &res_rx).is_ok());
+        server.join().expect("broker fixture must finish");
+    }
+
+    #[test]
+    fn session_watchdog_terminates_silent_broker_without_swap() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listener must bind");
+        let broker = listener
+            .local_addr()
+            .expect("listener address must be available")
+            .to_string();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("agent must connect");
+            let mut reader = BufReader::new(stream);
+            expect_register_and_psi(&mut reader);
+            assert!(
+                read_msg(&mut reader)
+                    .expect("client shutdown must decode as EOF")
+                    .is_none()
+            );
+        });
+        let (cmd_tx, _cmd_rx) = mpsc::channel();
+        let (_res_tx, res_rx) = mpsc::channel();
+        let cfg = test_config(broker, Duration::from_millis(1));
+        let started = Instant::now();
+
+        assert!(session(&cfg, &cmd_tx, &res_rx).is_ok());
+        assert!(started.elapsed() < Duration::from_secs(1));
+        server.join().expect("silent broker fixture must finish");
     }
 }

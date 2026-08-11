@@ -1,0 +1,26 @@
+{
+  "schema_version": "ramshared-validation-summary/v1",
+  "slug": "public-repository-hygiene",
+  "before": {
+    "candidate_mode_available": false,
+    "staged_index_blob_mode_available": false,
+    "portable_default_policy_complete": false
+  },
+  "action": {
+    "named_tests": 12,
+    "docs_check_repetitions": 2,
+    "windows_static_harnesses": 24,
+    "powershell_scripts_parsed": 80
+  },
+  "after": {
+    "candidate_files": 681,
+    "candidate_findings": 0,
+    "line_coverage_percent": 94.38,
+    "branch_coverage_percent": 85.29,
+    "function_coverage_percent": 100.0,
+    "test_failures": 0,
+    "docs_check_exit": 0,
+    "deterministic_output": true
+  },
+  "verdict": "PASS"
+}

@@ -37,6 +37,7 @@ $verdict = [ordered]@{
     RUNDOWN_UNMAP_AFTER_COPY         = 0
     STARTIO_READ_COPY_RACE           = 0
     VPD_SERIAL_MATCH                 = 0
+    EXACT_VIRTUAL_NONROTATING_IDENTITY = 0
     NO_NEW_DUMP                      = 0
     DRIVER                           = $Driver
     VERIFIER                         = [bool]$Verifier
@@ -674,6 +675,19 @@ function Invoke-StartIoReadCopyRaceInjection {
             return $false
         }
         L ("STARTIO Wait-MsftDisk hit N=$($d.Number) Name=$($d.FriendlyName) Op=$($d.OperationalStatus) drained=$($pumpStats[0]) commits=$($pumpStats[1])")
+        # Get-Disk exists only while the userspace queue is registered and
+        # enumeration READs are being serviced. Preserve the authoritative
+        # property snapshot here; later refusal probes intentionally unregister
+        # the queue and can make MSFT_Disk disappear.
+        $script:EarlyPropertyDisk = $d | Select-Object Number, FriendlyName,
+            Size, BusType, LogicalSectorSize, PhysicalSectorSize
+        $script:EarlyPhysicalDisk = Get-PhysicalDisk -ErrorAction SilentlyContinue |
+            Where-Object {
+                [uint64]$_.Size -eq [uint64]$SizeBytes -and
+                [string]$_.FriendlyName -like "RAMSHARE*"
+            } |
+            Select-Object -First 1 DeviceId, FriendlyName, Size, BusType,
+                MediaType, SpindleSpeed
 
         $diskIndex = [int]$d.Number
         $path = "\\.\PhysicalDrive$diskIndex"
@@ -733,6 +747,8 @@ function Invoke-StartIoReadCopyRaceInjection {
 $h = $null
 $rings = $null
 $script:StartIoPreferredIndex = $null
+$script:EarlyPropertyDisk = $null
+$script:EarlyPhysicalDisk = $null
 try {
     $h = Open-Ctl
     L "OPEN_CTL ok"
@@ -978,6 +994,56 @@ public static class DiskLenQuery {
         if ($match.PSObject.Properties.Name -contains 'DriveIndex' -and $null -ne $match.DriveIndex) {
             $script:StartIoPreferredIndex = [int]$match.DriveIndex
         }
+        $propertyDeadline = (Get-Date).AddSeconds(10)
+        $propertyDisk = $script:EarlyPropertyDisk
+        $physicalDisk = $script:EarlyPhysicalDisk
+        while ((Get-Date) -lt $propertyDeadline) {
+            if (-not $propertyDisk) {
+                $propertyDisk = Get-Disk -Number $script:StartIoPreferredIndex `
+                    -ErrorAction SilentlyContinue
+            }
+            if (-not $physicalDisk) {
+                $physicalDisk = Get-PhysicalDisk -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        [uint64]$_.Size -eq [uint64]$SizeBytes -and
+                        [string]$_.FriendlyName -like "RAMSHARE*"
+                    } |
+                    Select-Object -First 1
+            }
+            if ($propertyDisk -and $physicalDisk) {
+                $propertyOk =
+                    $propertyDisk.BusType -eq "Virtual" -and
+                    [uint64]$propertyDisk.Size -eq [uint64]$SizeBytes -and
+                    [uint32]$propertyDisk.LogicalSectorSize -eq 4096 -and
+                    [uint32]$propertyDisk.PhysicalSectorSize -eq 4096 -and
+                    [string]$physicalDisk.MediaType -eq "SSD" -and
+                    [uint64]$physicalDisk.SpindleSpeed -eq 0
+                L ("PROPERTY_IDENTITY Bus=$($propertyDisk.BusType) " +
+                    "Size=$($propertyDisk.Size) Logical=$($propertyDisk.LogicalSectorSize) " +
+                    "Physical=$($propertyDisk.PhysicalSectorSize) " +
+                    "Media=$($physicalDisk.MediaType) Spindle=$($physicalDisk.SpindleSpeed)")
+                if ($propertyOk) {
+                    $verdict.EXACT_VIRTUAL_NONROTATING_IDENTITY = 1
+                    L "exact_virtual_nonrotating_identity=1"
+                }
+                break
+            }
+            Start-Sleep -Milliseconds 250
+        }
+        if (-not $propertyDisk -or -not $physicalDisk) {
+            $diskDiag = @(Get-Disk -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    "N=$($_.Number),Name=$($_.FriendlyName),Size=$($_.Size),Bus=$($_.BusType)"
+                }) -join ";"
+            $physicalDiag = @(Get-PhysicalDisk -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    "Id=$($_.DeviceId),Name=$($_.FriendlyName),Size=$($_.Size)," +
+                    "Media=$($_.MediaType),Spindle=$($_.SpindleSpeed),Bus=$($_.BusType)"
+                }) -join ";"
+            L ("PROPERTY_IDENTITY_MISSING DiskFound=$([bool]$propertyDisk) " +
+                "PhysicalFound=$([bool]$physicalDisk) Disks=[$diskDiag] " +
+                "PhysicalDisks=[$physicalDiag]")
+        }
     } else {
         # Diagnostic only: never green-lights VPD_SERIAL_MATCH. Surfaces why
         # Win32/Get-Disk missed exact vendor+product+serial+size uniqueness.
@@ -1157,6 +1223,7 @@ $required = @(
     'COMPLETION_REENTRY_NO_SLOT_REUSE',
     'RUNDOWN_UNMAP_AFTER_COPY',
     'VPD_SERIAL_MATCH',
+    'EXACT_VIRTUAL_NONROTATING_IDENTITY',
     'NO_NEW_DUMP'
 )
 # STARTIO_READ_COPY_RACE is a dedicated strengthening gate. It is always recorded

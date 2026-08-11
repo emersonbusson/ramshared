@@ -1,0 +1,23 @@
+{
+  "schema_version": "ramshared-validation-summary/v1",
+  "slug": "benchmark-evidence-integrity",
+  "before": {
+    "human_benchmark_sections": 5,
+    "legacy_jsonl_rows": 3,
+    "qualified_v1_rows": 0
+  },
+  "action": {
+    "benchmark_validator_tests": 11,
+    "spec_claim_tests": 7,
+    "docs_check_repetitions": 2
+  },
+  "after": {
+    "mapped_human_sections": 5,
+    "mapped_legacy_jsonl_rows": 3,
+    "legacy_unqualified_markers": 5,
+    "test_failures": 0,
+    "docs_check_exit": 0,
+    "deterministic_output": true
+  },
+  "verdict": "PASS"
+}

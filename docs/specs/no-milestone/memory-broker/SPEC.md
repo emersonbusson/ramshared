@@ -6,7 +6,7 @@
 
 ## Audit Logs
 
-> **Modelo Advoq/RamShared:** um único `SPEC.md` por feature. Cada rodada do Passo 2.5 **revisa este arquivo in-place**; o histórico de texto antigo vive no `git log` — **não** há `SPECv2.md` / `SPECvN.md`.
+> **RamShared model:** one `SPEC.md` per feature. Each Step 2.5 pass revises this file in place; prior text remains in `git log` — do **not** create `SPECv2.md` / `SPECvN.md`.
 
 ### Phase 0 & Phase 1 Audit (Step 2.5) — changelog deste `SPEC.md`
 - **1st Audit (2026-06-09):** Result: no-go. Findings F1–F17 → incorporados in-place.
@@ -115,7 +115,7 @@
 
 ---
 
-## Technical Decisions (DT-1 to DT-44)
+## Technical Decisions (DT-1 to DT-49)
 
 | ID | Technical Decision | Rationale & Trade-offs |
 | --- | --- | --- |
@@ -163,6 +163,10 @@
 | **DT-42** | Agent handles auto-release counterfactual by checking PID VRAM usage. | Releases VRAM back to swap pool if the renderer consumes <50% of lease for 5 min. |
 | **DT-43** | Cross-compile target gating. | Conditional dependencies keep workspace tests compilable on Linux hosts. |
 | **DT-44** | DCC Agent reports dummy PSI frame to satisfy broker. | Avoids protocol changes. Dummy reports are ignored due to the DCC filter. |
+| **DT-45** | `ramshared-agent` has an explicit public CLI termination contract. | `-h`/`--help` print English usage to stdout and exit 0; malformed or incomplete CLI input (including missing `--broker` or agent-mode `--tenant`) writes a diagnostic plus usage to stderr and exits 2; a `--status` transport/runtime refusal, clean EOF, or bounded I/O timeout exits 1. `--status` sets both read and write deadlines to 5 s, accepts one `StatusReply` within at most 50 frames, and reports a timeout without retrying or starting swap work. Broker `Msg` variant names and wire values remain unchanged; a broker-supplied error reason is preserved after an English local diagnostic prefix. |
+| **DT-47** | A ublk descriptor is copied into an owned fixed-size array after the CQE; Rust never creates or returns `&[u8]` over the kernel-mutated shared mapping. | The kernel is an external writer. A borrowed Rust slice would express immutability that the mapping cannot guarantee and can become aliasing UB. The copy is bounds-checked and decoding uses only the owned snapshot. |
+| **DT-48** | Every ublk composite handle joins both the ring owner and the backend worker before returning; the ring result has deterministic precedence only after both attempts complete. | An early `?` on the ring result can abandon an unjoined worker and leave teardown incomplete. Joining both preserves ownership cleanup without inventing recovery. |
+| **DT-49** | Every ublk descriptor, buffer, and completion operation validates `tag < queue_depth` before accessing the rounded shared mapping or buffer vector. | Page-rounded mappings can contain bytes beyond the declared queue. Mapping bounds alone do not prove tag ownership, and unchecked vector indexing can panic on a kernel-supplied tag. An invalid tag is a terminal `InvalidInput` refusal. |
 
 ---
 
@@ -186,7 +190,7 @@
 | **ITEM-1 (P0)** | #3 Number, #1 WYSIATI | Do the PSI/RTT/NBD metrics contain real units and counts? | Filled `docs/reliability/memory-broker-p0-results.md` | Missing metrics |
 | **ITEM-4 (Arbiter)** | #2 Counterfactual | What triggers a rebalance undo? | `cargo test` verifying `RevertMove` under counterfactual floor | Missing counterfactual tests |
 | **ITEM-8 (Hygiene)** | #5 Worst-case | Does tenant B read garbage from tenant A's slice? | Zero-fill unit tests and E2E validation showing clean blocks | Slices assigned without `ZeroDone` |
-| **ITEM-9 (Watchdog)** | #13 Validity Illusion | Does the watchdog handle dead brokers with active swap? | QEMU drill phase 2 showing clean EIO recovery under 5s | Stuck swapoff during simulation |
+| **ITEM-9 (Agent CLI and watchdog)** | #13 Validity Illusion, #15 Retry semantics, #16 Safe defaults | Does the public CLI distinguish help, malformed input, broker refusal, and a bounded silent broker without starting swap work? | Named process tests for status success/refusal/timeout plus the existing isolated QEMU phase-2 drill showing clean EIO recovery under 5s | A status command exceeds its 5 s I/O deadline, retries silently, starts swap work, or a QEMU simulation leaves swapoff stuck |
 | **ITEM-11 (Drill)** | #5 Worst-case | Is the drill executed on disposable machines? | Marked logs from E2E simulation running in isolated QEMU | Stalls or hangs exceeding 60s |
 | **ITEM-13 (NVML)** | #3 Number | Do NVML metrics align with CUDA memory calls? | Unit test comparing `mem_info` results | Systematic memory metric drifts |
 | **ITEM-20 (Addon)** | #2 Counterfactual | Does predictive allocation trigger out-of-core fallback? | Real scene render completing under VRAM limit simulation | Scene crash due to VRAM exhaustion |
@@ -226,6 +230,11 @@
 - `crates/ramshared-broker/src/slices.rs`
 - `crates/ramshared-broker/src/arbiter.rs`
 
+### ITEM-9 — Agent public CLI process tests
+- `crates/ramshared-agent/tests/agent_cli.rs` (real child-process diagnostics,
+  refusal, exit-code, status reply, and bounded-timeout tests using a local
+  TCP listener; no swap command is issued).
+
 ### ITEM-13 — Crate `ramshared-nvml`
 - `crates/ramshared-nvml/Cargo.toml`
 - `crates/ramshared-nvml/src/lib.rs` (hand-rolled NVML dlopen bindings, `VramBudget`, `RenderVram`).
@@ -255,6 +264,16 @@
 ---
 
 ## Files to MODIFY
+
+### ITEM-9 — `crates/ramshared-agent/src/main.rs`
+- Keep the `Msg` wire protocol and agent-mode swap behavior unchanged.
+- Make the public CLI termination contract from DT-45 explicit: help is a
+  successful stdout response; malformed input is a stderr refusal with exit 2;
+  `--status` runtime failures are stderr failures with exit 1.
+- Use an English `Usage` diagnostic and English local diagnostics only. Preserve
+  option spellings, `Msg` variant names, and broker-provided reason values.
+- Bound `--status` socket read and write I/O at 5 s and do not retry a silent
+  broker from the one-shot status command.
 
 ### ITEM-5 — `crates/ramshared-block/src/handshake.rs`
 - Update `server_handshake` to select named exports:
@@ -292,6 +311,131 @@ Logs are printed to `stderr` in a key-value format prefixed with `[ramsharedd]` 
 | Lease granted | `[ramsharedd] lease granted id=1 holder=dcc-agent bytes=4294967296 slices=[0, 1]` |
 | Watchdog trigger | `[agent] watchdog expired broker=127.0.0.1:7777 cleaning up mounts` |
 | Slice sanitization | `[ramsharedd] zeroed slice=0 duration=45ms status=ok` |
+
+### ITEM-9 public CLI process contract and coverage
+
+The following are real `ramshared-agent` child-process tests. Their local TCP
+fixtures issue only `Msg::Status`/reply frames; they never invoke `SwapOn`,
+`swapon`, `swapoff`, NBD, or a host/VM drill.
+
+| Test name | Path | Assertion |
+| --- | --- | --- |
+| `cli_help_prints_usage_and_exits_zero` | `crates/ramshared-agent/tests/agent_cli.rs` | English usage on stdout; exit 0. |
+| `cli_missing_broker_refuses_with_exit_two` | same | Required option refusal on stderr; exit 2. |
+| `cli_invalid_transport_refuses_with_exit_two` | same | Invalid transport refusal on stderr; exit 2. |
+| `cli_missing_tenant_refuses_with_exit_two` | same | Agent-mode tenant refusal on stderr; exit 2 before privilege or socket work. |
+| `cli_status_reply_prints_public_status_and_exits_zero` | same | Local `StatusReply` is printed and exits 0. |
+| `cli_status_broker_refusal_exits_one` | same | Local broker `Msg::Error` reason is surfaced; exit 1. |
+| `cli_status_timeout_exits_one_within_six_seconds` | same | A local silent peer produces the DT-45 timeout diagnostic and exits 1 within six seconds. |
+| `help_is_a_parse_outcome` | `crates/ramshared-agent/src/main.rs` :: `tests` | Parser distinguishes help from a malformed argument. |
+| `usage_diagnostic_adds_usage_once` | same | Every malformed-input diagnostic gains one English usage block. |
+| `swap_on_prefers_broker_priority_without_running_swap` | same | `SwapOn` dispatch preserves broker priority without invoking the executor. |
+| `demote_all_dispatches_release_without_running_swap` | same | `DemoteAll` queues releases without invoking the executor. |
+| `session_registers_dispatches_commands_and_stops_on_refusal` | `crates/ramshared-agent/src/main.rs` :: `tests` | Real local agent session registers, reports PSI, dispatches command messages to its execution channel, and stops on a broker refusal without executing swap commands. |
+| `session_reports_execution_results_without_running_swap` | same | Real local session emits queued execution results through its sole writer without running a swap command. |
+| `session_watchdog_terminates_silent_broker_without_swap` | same | A real local silent session terminates at the watchdog deadline with no active swap command. |
+
+The canonical per-file coverage owner for this business path is:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent --files crates/ramshared-agent/src/main.rs --min 80 --report-json tmp/memory-broker-agent-cli-cov.json
+```
+
+The process tests provide the public-surface validity/refusal evidence (#13),
+the timeout test proves the no-retry terminal path (#15), and the no-swap
+fixtures prove the safe default (#16). The isolated QEMU drill remains the
+separate required live proof for active-swap EIO recovery.
+
+### ITEM-8 daemon entry-point bounded test contract and coverage
+
+**DT-46 — `ramsharedd` parses and plans before any backend, GPU, swap, NBD
+client, or ublk action.** The daemon entry point is a business-safety boundary,
+not untested wiring. Its parser accepts an injected argv vector; the resulting
+plan validates slice geometry, private-only listener addresses, and advertised
+endpoint consistency before it can select a backend. A bounded test runtime may
+use only a loopback TCP listener, a temporary Unix-socket pathname, heap-backed
+`RamBackend`, and an in-process broker. It must have an explicit stop signal
+and join deadline; timeout is a refusal and its cleanup removes only the socket
+that it created. It must never load CUDA/Vulkan, invoke `swapon`/`swapoff`,
+touch `/dev/nbd*` or `/dev/ublk*`, or mutate a host/VM.
+
+The production shell remains responsible for CUDA/Vulkan construction,
+`mlockall`, swap lifecycle, and device setup. Tests inject a bounded runtime
+only around the safe broker-RAM control plane; they do not claim a GPU, NBD, or
+ublk live proof. The daemon's externally visible flag spellings, NBD export
+names, JSON wire values, and telemetry JSONL schema remain unchanged.
+
+| Test name | Fixture / assertion | Discipline |
+| --- | --- | --- |
+| `daemon_args_accept_broker_wiring_and_normalize_addresses` | injected argv; exact slices, private loopback listeners, advertisement, and telemetry path are retained | #13 |
+| `daemon_args_refuse_invalid_or_unsafe_combinations_before_backend` | injected malformed/missing/unspecified/oversized/conflicting argv; no runner call | #16/#17 |
+| `daemon_args_cover_flag_boundaries_before_backend` | injected argv covers every scalar flag, alignment, missing values, overflow, and mutually dependent endpoint refusal before a runner/backend action | #13/#16 |
+| `daemon_process_refusals_exit_before_backend` | real child process with invalid safe argv; English diagnostic and exit 1 before a runner/backend action | #13/#16 |
+| `daemon_broker_config_preserves_telemetry_and_exact_endpoints` | pure broker config construction; exact Unix/TCP endpoint and JSONL path | #13 |
+| `daemon_broker_ram_binds_loopback_and_cleans_owned_socket` | temporary Unix socket + loopback TCP + bounded stop/join; no GPU, swap, or device | #15/#16 |
+| `daemon_broker_setup_stops_bounded_without_backend` | injected shutdown and recording acceptor starter; real temporary Unix/loopback arbiter listeners are released after a bounded worker/broker join, with no NBD client, GPU, or swap | #15/#16 |
+| `daemon_broker_acceptor_failure_rolls_back_owned_socket` | injected acceptor-start failure stops the just-started broker and removes only its temporary owned Unix socket | #15/#16 |
+| `daemon_broker_vram_and_ram_lifecycles_use_injected_runtime` | heap-backed Vram/RAM backends plus an injected, pre-stopped broker runtime prove allocation, bounded worker exit, broker join, zeroing, and owned-socket cleanup without CUDA, swap, or an NBD client/device | #13/#15/#16 |
+| `daemon_broker_setup_failure_zeroes_allocated_vram_before_return` | an injected broker-setup refusal after backend and canary allocation must explicitly zero both allocations and remove only its owned temporary Unix socket before returning the refusal; no CUDA, swap, NBD client, or device | #13/#15/#16 |
+| `daemon_broker_lock_refusal_zeroes_allocated_vram_before_return` | an injected memory-lock refusal after backend allocation must explicitly zero that allocation and return before canary allocation or broker setup; no CUDA, swap, NBD client, or device | #13/#15/#16 |
+| `daemon_broker_bind_conflict_refuses_and_preserves_existing_listener` | occupied loopback port; no worker is started and the pre-existing listener remains usable | #16/#17 |
+| `daemon_worker_serves_job_counts_io_and_stops_on_shutdown` | heap `RamBackend`, channel job, bounded reply/join; exact counters and terminal shutdown | #13/#15 |
+| `daemon_command_timeout_terminates_child_without_hang` | harmless child process; success, nonzero, missing executable, and deadline branches | #15/#16 |
+| `daemon_nbd_prealloc_worker_uses_fake_provider_and_injected_acceptor` | heap-backed `VramProvider`, no-op memory lock, and injected worker messages exercise prealloc protocol setup/zero/write/close/teardown without a CUDA context, NBD client/device, swap command, or `/proc` mutation | #13/#15/#16 |
+| `daemon_nbd_sparse_floor_refusal_reclaims_without_provider_allocation` | zero-free heap provider plus injected write/flush/close proves sparse free-floor refusal and idle reclaim decisions without allocating a sparse chunk, CUDA, NBD device, swap, or `/proc` access | #3/#15/#16 |
+| `daemon_nbd_budget_poll_uses_injected_wddm_snapshot_and_global_probe` | fake fresh WDDM budget and bounded global-free probe exercise sparse budget reconciliation with no `/dev/dxg`, subprocess, CUDA, NBD device, or swap command | #3/#13/#15/#16 |
+| `daemon_nbd_budget_constraint_demotes_then_recovers_with_fake_swap` | injected stale/error then healthy WDDM snapshots and fake swapoff/swapon prove constrained DEMOTE plus hysteretic recovery without `/dev/dxg`, CUDA, NBD device, or swap command | #3/#15/#16 |
+| `daemon_nbd_teardown_refuses_until_fake_usage_and_swapoff_confirm` | injected nonzero usage followed by zero usage and fake swapoff confirmation prove fail-closed teardown retry without a five-second test sleep, NBD device, or swap command | #15/#16/#17 |
+| `daemon_nbd_residency_demote_uses_injected_clock_and_swapoff` | deterministic latency baseline/spike sequence and injected successful swapoff prove DEMOTE state/status/teardown without timing sleeps, CUDA, NBD device, or a real swap command | #3/#15/#16 |
+| `daemon_ublk_runtime_orders_lifecycle_and_rolls_back_without_device` | injected ublk runtime proves guard → lock → create → configure → start → bounded stop/join/delete ordering and refusal-before-runtime; it never opens `/dev/ublk-control` or creates a block device | #15/#16/#17 |
+| `daemon_ublk_runtime_failures_delete_candidate_before_return` | injected set-params/server/start/wait failures prove cleanup attempts remain ordered and terminal before error return, without a ublk device | #15/#16/#17 |
+| `daemon_ublk_vulkan_refuses_before_device_mutation` | unsupported ublk/Vulkan combination returns before `/dev/ublk-control` | #16 |
+| `daemon_production_runner_refuses_safe_terminal_actions_before_platform_load` | production runner receives synthetic RAM-NBD and Vulkan-ublk terminal actions plus a broker-RAM regular-file socket conflict; every case refuses before CUDA/Vulkan loading, swap, NBD client/device, or acceptor startup, preserving the existing file | #16/#17 |
+| `daemon_ublk_wsl_guard_and_memory_lock_policy_are_pure_and_fail_closed` | pure os-release/override and lock-result matrices prove WSL2 refusal plus protected-memory refusal without inspecting host state, setting OOM score, or opening a device | #16/#17 |
+| `mmap_descriptor_snapshot_is_owned_and_bounds_checked` | a regular-file mapping proves descriptor reads return an owned array, preserve an earlier snapshot after mapped bytes change, and reject an out-of-range offset | #13/#16 |
+| `regular_file_ublk_adapters_refuse_without_a_device` | page-aligned regular-file and invalid-descriptor fixtures cover mmap, queue construction, queue-depth tag refusal, and every control command; they may observe only deterministic kernel refusal and never open `/dev/ublk*` | #13/#16 |
+| `regular_file_descriptor_queue_decodes_owned_snapshot` | a page-sized regular file carries one manufactured io descriptor; queue decoding returns the exact owned values and rejects an out-of-range tag without submitting a device request | #13/#16 |
+| `regular_file_fetch_session_drains_refusal_without_a_device` | a regular-file fetch session exercises RAII ownership and bounded CQE draining; a kernel refusal is accepted only as refusal evidence and no ublk device is created | #15/#16 |
+| `regular_file_server_handles_join_after_kernel_refusal` | RAM and generic DT-3 servers run against a page-sized regular file, return a bounded kernel refusal, and join every thread without opening `/dev/ublk*` | #15/#16/#17 |
+| `fake_queue_runs_dispatch_commit_and_abort_without_a_device` | an injected in-memory queue drives READ dispatch, worker reply, COMMIT, and terminal ABORT while recording exact results without a kernel device | #13/#15/#16 |
+| `fake_queue_rejects_unsupported_and_preserves_write_payload` | an injected unsupported descriptor commits `EINVAL`; a separate WRITE descriptor proves the exact copied payload and recycled buffer without a kernel device | #13/#16 |
+| `serve_request_refuses_unsupported_commands_and_covers_trim` | pure RAM backend requests prove trim is the documented no-op while unsupported/disconnect commands return `EINVAL` | #13/#16 |
+| `server_and_worker_join_outcomes_are_fail_closed` | manufactured success and panic outcomes cover single/composite/residency joins, deterministic error mapping, demote observation, and join-all behavior | #15/#16 |
+| `dt3_join_attempts_worker_after_ring_error` | manufactured ring failure plus an observable worker completion proves both join attempts occur and the ring error retains precedence | #15/#16 |
+| `dt3_vram_join_attempts_worker_after_ring_error` | the unit-returning VRAM join path has the same manufactured both-attempts contract | #15/#16 |
+
+The canonical coverage owner for this entry point is:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs \
+  -p ramshared-wsl2d \
+  --files crates/ramshared-wsl2d/src/main.rs \
+  --min 80 \
+  --report-json tmp/memory-broker-wsl2d-daemon-cov.json
+```
+
+The ublk shared-memory and composite-teardown business paths use this separate
+canonical slice gate:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs \
+  -p ramshared-uring,ramshared-wsl2d \
+  --files crates/ramshared-uring/src/lib.rs,crates/ramshared-wsl2d/src/ublk_queue.rs,crates/ramshared-wsl2d/src/ublk_server.rs \
+  --min 80 \
+  --report-json tmp/memory-broker-ublk-safety-cov.json
+```
+
+The bounded support-policy tests imported from the PR audit use:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent,ramshared-tier --files crates/ramshared-agent/src/explain.rs,crates/ramshared-agent/src/local.rs,crates/ramshared-agent/src/win_mem.rs,crates/ramshared-tier/src/cascade.rs --min 80 --report-json tmp/memory-broker-support-safety-cov.json
+```
+
+The safe suite is necessary but not sufficient for a deployment claim. The
+remaining live gate is server-only: a disposable VM/QEMU or approved WSL2
+environment must exercise the selected production backend and record
+`BINARY_MATCH` plus before/action/after evidence. Until then this entry-point
+slice has an explicit `BINARY_MATCH/E2E` gap and is not a live-daemon DONE.
 
 ---
 

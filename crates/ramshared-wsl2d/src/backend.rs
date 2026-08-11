@@ -126,7 +126,7 @@ mod tests {
     /// Composition of cuda + block in real VRAM: serves an NBD WRITE and READ.
     /// `cargo test -p ramshared-wsl2d -- --ignored` on a host with a GPU.
     #[test]
-    #[ignore = "requer GPU CUDA funcional (WSL2/GPU-PV)"]
+    #[ignore = "requires a functional CUDA GPU (WSL2/GPU-PV)"]
     fn vram_backend_serves_nbd_write_then_read() {
         let cuda = Cuda::load().expect("libcuda");
         let dev = cuda.device(0).unwrap();
@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(
             u32::from_be_bytes([w.reply[4], w.reply[5], w.reply[6], w.reply[7]]),
             0,
-            "WRITE deve dar NBD_OK"
+            "WRITE must return NBD_OK"
         );
 
         let r = serve(
@@ -164,13 +164,13 @@ mod tests {
             &[],
             &mut be,
         );
-        assert_eq!(r.read_data, payload, "READ deve devolver o que foi escrito");
+        assert_eq!(r.read_data, payload, "READ must return the written payload");
     }
 
-    /// VRAM gauge with REAL `mem_info` (RF-3): `vram_outros` (subtração) captures graphics/Windows
+    /// VRAM gauge with real `mem_info` (RF-3): `vram_outros` (subtraction) captures graphics/Windows
     /// usage. `cargo test -p ramshared-wsl2d -- --ignored` on a host with a GPU.
     #[test]
-    #[ignore = "requer GPU CUDA funcional (WSL2/GPU-PV)"]
+    #[ignore = "requires a working CUDA GPU (WSL2/GPU-PV)"]
     fn vram_gauge_outros_captures_real_graphics_usage() {
         use crate::telemetry::{VramGauge, vram_outros};
         use std::sync::atomic::Ordering;
@@ -183,21 +183,21 @@ mod tests {
         let gauge = VramGauge::default();
         gauge.free.store(free as u64, Ordering::Relaxed);
         gauge.total.store(total as u64, Ordering::Relaxed);
-        assert!(total > 0 && free <= total, "mem_info coerente");
+        assert!(total > 0 && free <= total, "mem_info is consistent");
         let used = (total - free) as u64;
         let alloc_daemon = chunk as u64;
         let outros = vram_outros(used, alloc_daemon);
         // On a desktop in use, total usage > what the daemon allocated (due to graphics) → outros > 0.
         assert!(
             used > alloc_daemon,
-            "uso total ({used}) > daemon ({alloc_daemon})"
+            "total usage ({used}) > daemon allocation ({alloc_daemon})"
         );
         assert!(
             outros > 0,
-            "vram_outros capta gráficos/Windows: {outros} bytes"
+            "vram_outros captures graphics/Windows usage: {outros} bytes"
         );
         eprintln!(
-            "VRAM real (MiB): total={} free={} used={} daemon={} outros={}",
+            "Real VRAM (MiB): total={} free={} used={} daemon={} other={}",
             total >> 20,
             free >> 20,
             used >> 20,
@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn slice_view_isolates_neighbors() {
-        // RamBackend of 128B = 2 slices de 64B; writing to slice 1 does not leak to slice 0.
+        // A 128B RamBackend has two 64B slices; writing slice 1 must not leak to slice 0.
         let mut be = RamBackend::new(128);
         {
             let mut s1 = SliceView::new(&mut be, 64, 64);
@@ -219,11 +219,14 @@ mod tests {
             let s0 = SliceView::new(&mut be, 0, 64);
             let mut buf = [0xFFu8; 64];
             s0.read_at(0, &mut buf).unwrap();
-            assert_eq!(buf, [0u8; 64], "slice 0 não pode ver a escrita na slice 1");
+            assert_eq!(buf, [0u8; 64], "slice 0 must not see the write to slice 1");
         }
         let mut raw = [0u8; 64];
         be.read_at(64, &mut raw).unwrap();
-        assert_eq!(raw, [0xAB; 64], "a escrita caiu na janela certa do backend");
+        assert_eq!(
+            raw, [0xAB; 64],
+            "the write reached the correct backend window"
+        );
     }
 
     #[test]
@@ -243,7 +246,10 @@ mod tests {
             &mut view,
         );
         let errno = u32::from_be_bytes([out.reply[4], out.reply[5], out.reply[6], out.reply[7]]);
-        assert_ne!(errno, 0, "fora da janela da slice deve falhar (EINVAL)");
+        assert_ne!(
+            errno, 0,
+            "access outside the slice window must fail (EINVAL)"
+        );
     }
 
     #[test]

@@ -1,0 +1,27 @@
+{
+  "schema_version": "ramshared-validation-summary/v1",
+  "slug": "documentation-governance-integrity",
+  "before": {
+    "done_required_evidence_claim": false,
+    "canonical_objective_router": false,
+    "strict_schema1_closure": false
+  },
+  "action": {
+    "governance_tests": 34,
+    "validation_tests": 14,
+    "index_tests": 7,
+    "docs_check_repetitions": 2
+  },
+  "after": {
+    "structural_files": 304,
+    "governance_findings": 0,
+    "governance_line_coverage_percent": 100.0,
+    "governance_branch_coverage_percent": 82.87,
+    "validation_line_coverage_percent": 86.67,
+    "validation_branch_coverage_percent": 88.24,
+    "test_failures": 0,
+    "docs_check_exit": 0,
+    "deterministic_output": true
+  },
+  "verdict": "PASS"
+}

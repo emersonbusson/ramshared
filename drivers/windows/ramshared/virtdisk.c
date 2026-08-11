@@ -192,7 +192,8 @@ VdSetSenseNotReady(_Inout_ PSCSI_REQUEST_BLOCK Srb)
  * CDB[1] EVPD bit, CDB[2] page code (DT-5 / RF-4 / VPD_SERIAL_MATCH).
  */
 static BOOLEAN
-VdHandleInquiry(_In_opt_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
+VdHandleInquiry(_In_opt_ PVIRTUAL_DISK Disk, _In_ PVOID DevExt,
+		_Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
 	UCHAR response[64];
 	ULONG responseLen;
@@ -205,6 +206,20 @@ VdHandleInquiry(_In_opt_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 	page = Srb->Cdb[2];
 	allocationLen = Srb->Cdb[4];
 	RtlZeroMemory(response, sizeof(response));
+
+	if (Disk != NULL) {
+		Disk->InquiryPathId = Srb->PathId;
+		Disk->InquiryTargetId = Srb->TargetId;
+		Disk->InquiryLun = Srb->Lun;
+		KeMemoryBarrier();
+		InterlockedExchange(&Disk->InquirySeen, 1);
+		if (Disk->queue.Registered &&
+		    !VdApplyRegisteredQueueDepth(Disk, DevExt)) {
+			InterlockedExchange(&Disk->state, VdStateFailed);
+			Srb->SrbStatus = SRB_STATUS_ERROR;
+			return TRUE;
+		}
+	}
 
 	if (evpd == 0) {
 		response[0] = 0x00; /* direct-access */
@@ -267,6 +282,30 @@ copy_response:
 		RtlCopyMemory(Srb->DataBuffer, response, transferLen);
 	Srb->DataTransferLength = transferLen;
 	Srb->SrbStatus = SRB_STATUS_SUCCESS;
+	return TRUE;
+}
+
+BOOLEAN
+VdApplyRegisteredQueueDepth(_Inout_ PVIRTUAL_DISK Disk, _In_ PVOID DevExt)
+{
+	ULONG depth;
+
+	if (Disk == NULL || DevExt == NULL)
+		return FALSE;
+	if (InterlockedCompareExchange(&Disk->InquirySeen, 0, 0) == 0 ||
+	    !Disk->queue.Registered)
+		return TRUE;
+	depth = Disk->queue.QueueDepth;
+	if (depth == 0 || depth > RAMSHARED_MAX_QD)
+		return FALSE;
+	if ((ULONG)InterlockedCompareExchange(&Disk->AppliedQueueDepth, 0, 0) ==
+	    depth)
+		return TRUE;
+	if (!StorPortSetDeviceQueueDepth(DevExt, Disk->InquiryPathId,
+					 Disk->InquiryTargetId, Disk->InquiryLun,
+					 depth))
+		return FALSE;
+	InterlockedExchange(&Disk->AppliedQueueDepth, (LONG)depth);
 	return TRUE;
 }
 
@@ -418,7 +457,7 @@ VdTranslateSrb(
 		break;
 
 	case SCSIOP_INQUIRY:
-		(void)VdHandleInquiry(Disk, Srb);
+		(void)VdHandleInquiry(Disk, DevExt, Srb);
 		break;
 
 	case SCSIOP_READ_CAPACITY:
@@ -479,6 +518,19 @@ VdTranslateSrb(
 		if (st == STATUS_PENDING) {
 			Srb->SrbStatus = SRB_STATUS_PENDING;
 			return;
+		}
+		if (st == STATUS_INSUFFICIENT_RESOURCES) {
+			/*
+			 * The request has not started: the bounded ring is temporarily
+			 * full. Apply per-LUN backpressure and let StorPort retry after
+			 * one outstanding request completes. Permanent QSubmit errors
+			 * still fail below.
+			 */
+			(void)StorPortDeviceBusy(DevExt, Srb->PathId,
+						Srb->TargetId, Srb->Lun, 1);
+			Srb->ScsiStatus = SCSISTAT_BUSY;
+			Srb->SrbStatus = SRB_STATUS_BUSY;
+			break;
 		}
 		if (!NT_SUCCESS(st)) {
 			Srb->SrbStatus = SRB_STATUS_ERROR;

@@ -4,22 +4,48 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
+
+permissions: {}
 
 concurrency:
-  group: gitleaks-${{ github.ref }}
+  group: gitleaks-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   gitleaks:
     name: gitleaks
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Gitleaks Scan
-        uses: gitleaks/gitleaks-action@v3
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  gitleaks-summary:
+    name: gitleaks-summary
+    if: always()
+    needs: [gitleaks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Require completed gitleaks gate
+        env:
+          GITLEAKS_RESULT: ${{ needs.gitleaks.result }}
+        run: |
+          set -euo pipefail
+          if [ "$GITLEAKS_RESULT" != success ]; then
+            echo "GITLEAKS_SUMMARY=FAIL"
+            exit 1
+          fi
+          echo "GITLEAKS_SUMMARY=PASS"

@@ -9,7 +9,7 @@ or exposing secrets in git.
 | --- | --- | --- |
 | `win11-drill` | Isolated Windows StorPort/CUDA lab | PowerShell Direct |
 | `win11-wsl2-lab` | Disposable Windows lab for WSL2 freeze campaigns | PowerShell Direct after install |
-| `linux-kernel-lab` | Generic Ubuntu/kernel build Hyper-V lab | SSH from Windows host (`emedev@<ip>`) |
+| `linux-kernel-lab` | Generic Ubuntu/kernel build Hyper-V lab | SSH from Windows host (`<lab-user>@<ip>`) |
 
 Do not use `gha-ubuntu-2404` for RamShared lab validation unless a task
 explicitly names it.
@@ -121,7 +121,7 @@ Use this path for WSL2 freeze-elimination proof instead of the daily desktop WSL
 
 ```bash
 pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \
-  "& 'C:\Windows\System32\sudo.exe' powershell.exe -NoProfile -ExecutionPolicy Bypass -File '\\wsl.localhost\Ubuntu-24.04\home\emdev\codespace\ramshared\scripts\windows\Invoke-Win11Wsl2FreezeCampaign.ps1' -Start -Run"
+  "& 'C:\Windows\System32\sudo.exe' powershell.exe -NoProfile -ExecutionPolicy Bypass -File '<repo-root>\scripts\windows\Invoke-Win11Wsl2FreezeCampaign.ps1' -Start -Run"
 ```
 
 2026-07-18 attempt:
@@ -187,7 +187,7 @@ real desktop WSL2 instance:
 
 ```bash
 pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \
-  "& 'C:\Windows\System32\sudo.exe' powershell.exe -NoProfile -ExecutionPolicy Bypass -File '\\wsl.localhost\Ubuntu-24.04\home\emdev\codespace\ramshared\scripts\windows\New-Win11Wsl2LabVm.ps1' -Start"
+  "& 'C:\Windows\System32\sudo.exe' powershell.exe -NoProfile -ExecutionPolicy Bypass -File '<repo-root>\scripts\windows\New-Win11Wsl2LabVm.ps1' -Start"
 ```
 
 2026-07-18: `New-Win11Wsl2LabVm.ps1` created the single disposable VM
@@ -204,7 +204,7 @@ No-prompt ISO path:
 
 ```bash
 pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \
-  "& 'C:\Windows\System32\sudo.exe' powershell.exe -NoProfile -ExecutionPolicy Bypass -File '\\wsl.localhost\Ubuntu-24.04\home\emdev\codespace\ramshared\scripts\windows\New-WindowsNoPromptIso.ps1'"
+  "& 'C:\Windows\System32\sudo.exe' powershell.exe -NoProfile -ExecutionPolicy Bypass -File '<repo-root>\scripts\windows\New-WindowsNoPromptIso.ps1'"
 ```
 
 2026-07-18 inspection found both Windows ISOs contain
@@ -296,7 +296,7 @@ $adapter = Get-VMNetworkAdapter -VMName linux-kernel-lab
 $mac = ($adapter.MacAddress -replace "(.{2})(?=.)", '$1-').ToUpperInvariant()
 Get-NetNeighbor -AddressFamily IPv4 |
   ? { $_.LinkLayerAddress -and $_.LinkLayerAddress.ToUpperInvariant() -eq $mac }
-ssh.exe emedev@<ip>
+ssh.exe <lab-user>@<ip>
 ```
 
 2026-07-18 live probe: `Get-VMNetworkAdapter.IPAddresses` was empty, but ARP

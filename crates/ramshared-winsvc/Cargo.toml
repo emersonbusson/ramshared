@@ -18,19 +18,22 @@ path = "src/lib.rs"
 [dependencies]
 ramshared-block = { path = "../ramshared-block" }
 ramshared-broker = { path = "../ramshared-broker" }
+ramshared-winbroker = { path = "../ramshared-winbroker" }
 ramshared-vram = { path = "../ramshared-vram" }
 # Product CUDA path (probe + runtime); pure planning helpers are usable on all hosts.
 ramshared-cuda = { path = "../ramshared-cuda" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1.1"
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
-base64 = "0.22"
+base64 = { version = "0.23", default-features = false, features = ["std"] }
 windows-service = "0.8"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
     "Win32_System_Memory",
