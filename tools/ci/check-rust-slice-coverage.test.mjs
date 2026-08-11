@@ -501,6 +501,7 @@ test("coverage_child_runner_uses_private_target_without_shell_and_propagates_fai
           "cargo",
         ]);
         assert.equal(args.includes("--output-path"), true);
+        assert.deepEqual(args.slice(-2), ["--", "--test-threads=1"]);
         assert.equal(options.env.CARGO_TARGET_DIR, targetPath);
         assert.equal(options.env.SAFE, "yes");
         assert.equal(options.shell, false);
