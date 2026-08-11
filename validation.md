@@ -3481,3 +3481,42 @@ or branch/environment controls drift from the recorded strict observation.
 **Verdict:** ✅ CI trust and release integrity is implemented and qualified.
 This verdict does not promote the separately env-bound physical Windows,
 driver-signing, VM-lab, GPU-pressure, or live storage matrices.
+
+## 2026-08-10 22:27 -03 — Coverage deadline owns descendant processes
+
+**What:** Closed the process-lifetime gap exposed by PR #189 hosted run
+`31447000916` attempt 1.
+
+**Before:** The exact Rust coverage command completed all Rust tests, wrote its
+report, and printed a passing 96.5% result for the last measured file, but the
+earlier `ramshared-wsl2d` command had crossed the 15-minute direct-child
+deadline. GitHub cleanup then terminated orphaned `cargo` and instrumented
+`ramsharedd` processes. The checker failed closed, but its `spawnSync` SIGTERM
+did not own the descendant tree.
+
+**Action:** SPEC DT-30 now requires the Linux/WSL2 coverage command to run in a
+GNU coreutils `timeout` process group with TERM at 15 minutes, KILL after five
+seconds, and a later 15-minute-10-second Node bound. Exit 124 and outer timeout
+remain the stable terminal `COVERAGE_CHILD_TIMEOUT`; partial reports and retries
+remain forbidden.
+
+**After / measured data:** TDD RED observed exit 124 incorrectly classified as
+`COVERAGE_CHILD_FAILED`. GREEN is 13/13 checker tests. A manufactured shell
+spawned a 60-second descendant; the supervisor returned 124 in about 0.1 s and
+the recorded descendant PID returned `ESRCH`. Checker coverage is 93.07% lines,
+86.18% branches, and 91.30% functions. Checker plus planner is 38/38; syntax,
+docs-check, public hygiene, and whitespace gates exit 0.
+
+**Refusals:** Timeout never consumes a report, never retries, and fails if the
+supervisor cannot start. The final PR revision still requires a fresh hosted
+same-run aggregate before merge.
+
+**Artifacts:** Hosted failure job `93643265744`; sanitized local TDD output in
+the command history only (no private paths or raw process data committed).
+
+**Rollback trigger:** A timed-out coverage command leaves any Cargo/test
+descendant alive, returns coverage green, consumes a partial report, or exceeds
+the outer terminal deadline.
+
+**Verdict:** 🟡 The process-tree fix is locally proven; the final hosted PR
+aggregate remains the promotion gate.
