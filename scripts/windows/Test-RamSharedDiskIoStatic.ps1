@@ -5,6 +5,15 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Get-CurrentPowerShellExecutable {
+    $path = (Get-Process -Id $PID -ErrorAction Stop).Path
+    if ([string]::IsNullOrWhiteSpace($path) -or
+        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "static_child_uses_current_host_executable failed: current PowerShell path is unavailable"
+    }
+    $path
+}
 if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
     $ScriptPath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "Measure-RamSharedDiskIo.ps1"
 }
@@ -136,7 +145,7 @@ exit `$LASTEXITCODE
         $priorErrorAction = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
-            $output = & (Join-Path $PSHOME "powershell.exe") -NoProfile -NonInteractive `
+            $output = & (Get-CurrentPowerShellExecutable) -NoProfile -NonInteractive `
                 -ExecutionPolicy Bypass -File $wrapperPath 2>&1
             $observedExit = $LASTEXITCODE
         } finally {
@@ -149,6 +158,8 @@ exit `$LASTEXITCODE
         Remove-Item -LiteralPath $wrapperPath -Force -ErrorAction SilentlyContinue
     }
 }
+
+Write-Output "PASS static_child_uses_current_host_executable"
 
 try {
     Resolve-RamSharedDiskBinding @($disk) @($partition) `

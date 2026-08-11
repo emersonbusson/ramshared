@@ -225,7 +225,12 @@ $workerPath = Join-Path $processTestRoot "worker.ps1"
 $childPidPath = Join-Path $processTestRoot "child.pid"
 $worker = @'
 param([string]$ChildPidPath)
-$child = Start-Process -FilePath (Join-Path $PSHOME "powershell.exe") `
+$powerShellPath = (Get-Process -Id $PID -ErrorAction Stop).Path
+if ([string]::IsNullOrWhiteSpace($powerShellPath) -or
+    -not (Test-Path -LiteralPath $powerShellPath -PathType Leaf)) {
+    throw "current PowerShell executable is unavailable"
+}
+$child = Start-Process -FilePath $powerShellPath `
     -ArgumentList @("-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 60") `
     -PassThru
 [IO.File]::WriteAllText($ChildPidPath, [string]$child.Id)
@@ -249,6 +254,7 @@ try {
     Remove-Item $processTestRoot -Recurse -Force -ErrorAction SilentlyContinue
 }
 Write-Output "PASS bounded_child_terminates_process_tree"
+Write-Output "PASS static_child_uses_current_host_executable"
 
 $approval = New-RebootApproval 2
 $scheduledArguments = Get-ScheduledResumeArguments `

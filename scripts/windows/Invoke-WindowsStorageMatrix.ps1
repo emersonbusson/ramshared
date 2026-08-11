@@ -113,6 +113,14 @@ function Write-Json($Value, [string]$Path, [int]$Depth = 8) {
     [IO.File]::WriteAllText($Path, ($Value | ConvertTo-Json -Depth $Depth),
         [Text.UTF8Encoding]::new($false))
 }
+function Get-CurrentPowerShellExecutable {
+    $path = (Get-Process -Id $PID -ErrorAction Stop).Path
+    if ([string]::IsNullOrWhiteSpace($path) -or
+        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "current PowerShell executable is unavailable"
+    }
+    $path
+}
 function Get-Sha256([string]$Path) {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
 }
@@ -504,7 +512,7 @@ function Arm-Watchdog {
     $timeout = $watchdogTimeout.Replace("'", "''")
     $cleanup = (Join-Path $OutDir "watchdog-cleanup.json").Replace("'", "''")
     $allowShutdown = if ($AllowWatchdogShutdown) { '$true' } else { '$false' }
-    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @(
+    Start-Process (Get-CurrentPowerShellExecutable) -WindowStyle Hidden -ArgumentList @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
         "& { while(Test-Path '$marker') { Start-Sleep 30; " +
         "if(-not (Test-Path '$marker')) { break }; " +
@@ -997,7 +1005,7 @@ function Start-BoundedPowerShellChild(
     [string[]]$Arguments,
     [int]$TimeoutSeconds
 ) {
-    Start-BoundedExternalProcess (Join-Path $PSHOME "powershell.exe") `
+    Start-BoundedExternalProcess (Get-CurrentPowerShellExecutable) `
         (@("-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
                 (Quote-ProcessArgument $ScriptPath)) + $Arguments) $TimeoutSeconds
 }
@@ -1265,7 +1273,7 @@ function Get-SanitizedInvocation {
         } else { [string]$entry.Value }
     }
     [ordered]@{
-        executable = (Join-Path $PSHOME "powershell.exe")
+        executable = Get-CurrentPowerShellExecutable
         script = $script:HarnessPath
         arguments = $arguments
     }
@@ -2027,9 +2035,10 @@ if ($EvidenceSelfTestCase) {
     $event153Count = if ($EvidenceSelfTestCase -eq "event_153") { 1 } else { 0 }
     $event153Refused = $false
     try {
-        $manufacturedEvents = if ($event153Count -eq 1) {
-            @([pscustomobject]@{ Id = 153 })
-        } else { @() }
+        [object[]]$manufacturedEvents = @()
+        if ($event153Count -eq 1) {
+            $manufacturedEvents = @([pscustomobject]@{ Id = 153 })
+        }
         Assert-NoDiskRetryEvents "manufactured" $manufacturedEvents
     } catch {
         if ($EvidenceSelfTestCase -ne "event_153" -or
