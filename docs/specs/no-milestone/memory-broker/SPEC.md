@@ -115,7 +115,7 @@
 
 ---
 
-## Technical Decisions (DT-1 to DT-49)
+## Technical Decisions (DT-1 to DT-50)
 
 | ID | Technical Decision | Rationale & Trade-offs |
 | --- | --- | --- |
@@ -167,6 +167,7 @@
 | **DT-47** | A ublk descriptor is copied into an owned fixed-size array after the CQE; Rust never creates or returns `&[u8]` over the kernel-mutated shared mapping. | The kernel is an external writer. A borrowed Rust slice would express immutability that the mapping cannot guarantee and can become aliasing UB. The copy is bounds-checked and decoding uses only the owned snapshot. |
 | **DT-48** | Every ublk composite handle joins both the ring owner and the backend worker before returning; the ring result has deterministic precedence only after both attempts complete. | An early `?` on the ring result can abandon an unjoined worker and leave teardown incomplete. Joining both preserves ownership cleanup without inventing recovery. |
 | **DT-49** | Every ublk descriptor, buffer, and completion operation validates `tag < queue_depth` before accessing the rounded shared mapping or buffer vector. | Page-rounded mappings can contain bytes beyond the declared queue. Mapping bounds alone do not prove tag ownership, and unchecked vector indexing can panic on a kernel-supplied tag. An invalid tag is a terminal `InvalidInput` refusal. |
+| **DT-50** | Broker worker shutdown uses a dedicated `WMsg::Shutdown` control-plane wake paired with the atomic terminal flag; it never depends only on `recv_timeout` expiring. | The shutdown requester stores the flag before a nonblocking `try_send`. A queued wake releases an idle receiver immediately; a full queue proves the worker is runnable and the loop checks the flag before receiving the next message; a disconnected queue is already terminal. This avoids a timer-dependent join hang without blocking a signal-bridge thread or changing NBD wire values. |
 
 ---
 
@@ -288,7 +289,8 @@
 - Implement `SliceView` (window projection helper). Move `RamBackend` here.
 
 ### ITEM-7 — `crates/ramshared-wsl2d/src/conn.rs`
-- Make readers/writers generic over stream types. Add `ZeroExport` to `WMsg`.
+- Make readers/writers generic over stream types. Add `ZeroExport` and the
+  internal broker-only `Shutdown` wake to `WMsg`; neither is an NBD wire value.
 
 ### ITEM-8 — `crates/ramshared-wsl2d/src/main.rs`
 - Wire CLI options (`--slices`, `--slice-mb`, `--listen-nbd`, `--arbiter-listen`). Re-route eviction signals to broker.
@@ -380,6 +382,8 @@ names, JSON wire values, and telemetry JSONL schema remain unchanged.
 | `daemon_broker_lock_refusal_zeroes_allocated_vram_before_return` | an injected memory-lock refusal after backend allocation must explicitly zero that allocation and return before canary allocation or broker setup; no CUDA, swap, NBD client, or device | #13/#15/#16 |
 | `daemon_broker_bind_conflict_refuses_and_preserves_existing_listener` | occupied loopback port; no worker is started and the pre-existing listener remains usable | #16/#17 |
 | `daemon_worker_serves_job_counts_io_and_stops_on_shutdown` | heap `RamBackend`, channel job, bounded reply/join; exact counters and terminal shutdown | #13/#15 |
+| `daemon_worker_shutdown_wake_is_not_timer_dependent` | a 30 s receive interval plus the dedicated nonblocking wake must join within 1 s, proving shutdown does not wait for the timer | #15/#16 |
+| `daemon_worker_shutdown_full_queue_is_nonblocking` | a full worker queue returns the explicit full-queue wake result while setting the terminal flag; no shutdown sender can block | #15/#16/#17 |
 | `daemon_command_timeout_terminates_child_without_hang` | harmless child process; success, nonzero, missing executable, and deadline branches | #15/#16 |
 | `daemon_nbd_prealloc_worker_uses_fake_provider_and_injected_acceptor` | heap-backed `VramProvider`, no-op memory lock, and injected worker messages exercise prealloc protocol setup/zero/write/close/teardown without a CUDA context, NBD client/device, swap command, or `/proc` mutation | #13/#15/#16 |
 | `daemon_nbd_sparse_floor_refusal_reclaims_without_provider_allocation` | zero-free heap provider plus injected write/flush/close proves sparse free-floor refusal and idle reclaim decisions without allocating a sparse chunk, CUDA, NBD device, swap, or `/proc` access | #3/#15/#16 |

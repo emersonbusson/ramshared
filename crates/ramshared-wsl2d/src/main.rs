@@ -4371,6 +4371,59 @@ mod tests {
     }
 
     #[test]
+    fn daemon_worker_shutdown_wake_is_not_timer_dependent() {
+        let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel(CHAN_CAP);
+        let (demote_tx, _demote_rx) = std::sync::mpsc::channel();
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = BrokerShutdown::new(
+            std::sync::Arc::clone(&shutdown),
+            jobs_tx.clone(),
+        );
+        let worker_rt = BrokerWorkerRuntime {
+            geom: vec![(0, 4096)],
+            jobs_rx,
+            demote_tx,
+            shutdown,
+            slice_io: std::sync::Arc::new(vec![SliceIoCounters::default()]),
+            vram: std::sync::Arc::new(VramGauge::default()),
+        };
+
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(move || {
+                serve_broker_jobs_with_poll(
+                    RamBackend::new(4096),
+                    worker_rt,
+                    |_| None,
+                    Duration::from_secs(30),
+                )
+            });
+            std::thread::sleep(Duration::from_millis(20));
+            assert_eq!(stop.request(), BrokerShutdownWake::Queued);
+            let started = Instant::now();
+            let _backend = worker.join().expect("shutdown wake joins worker");
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "explicit shutdown wake must not wait for the receive timer"
+            );
+        });
+    }
+
+    #[test]
+    fn daemon_worker_shutdown_full_queue_is_nonblocking() {
+        let (jobs_tx, _jobs_rx) = std::sync::mpsc::sync_channel(CHAN_CAP);
+        for _ in 0..CHAN_CAP {
+            jobs_tx
+                .try_send(WMsg::Opened)
+                .expect("manufactured queue has exact capacity");
+        }
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = BrokerShutdown::new(std::sync::Arc::clone(&shutdown), jobs_tx);
+
+        assert_eq!(stop.request(), BrokerShutdownWake::QueueFull);
+        assert!(shutdown.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn daemon_command_timeout_terminates_child_without_hang() {
         let output = command_stdout_with_timeout(
             "head",
