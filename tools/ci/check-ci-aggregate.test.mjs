@@ -140,10 +140,19 @@ test('repository_aggregate_is_a_same_run_local_reusable_architecture', () => {
   assert.equal(result.ok, true)
 })
 
-test('reusable_callers_do_not_cancel_their_direct_workflow_runs', () => {
+test('canonical_reusable_callers_do_not_reintroduce_duplicate_automatic_triggers', () => {
   const contract = JSON.parse(readFileSync(path.join(ROOT, 'docs', 'governance', 'ci-contract.json'), 'utf8'))
   for (const caller of contract.aggregate.architecture.callers.filter((item) => item.kind === 'reusable')) {
     const workflow = readFileSync(path.join(ROOT, caller.workflow), 'utf8')
-    assert.match(workflow, /^  group: .*github\.workflow/m, caller.workflow)
+    assert.match(workflow, /^  workflow_call:\s*$/m, caller.workflow)
+    assert.doesNotMatch(workflow, /^  (?:pull_request|push):/m, caller.workflow)
   }
+})
+
+test('canonical_entrypoint_revalidates_pull_request_edits', () => {
+  const workflow = readFileSync(path.join(ROOT, '.github', 'workflows', 'ci-contract.yml'), 'utf8')
+  assert.match(
+    workflow,
+    /^  pull_request:\n    types: \[opened, edited, reopened, synchronize, ready_for_review\]$/m,
+  )
 })

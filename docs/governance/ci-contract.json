@@ -105,8 +105,7 @@
       "context": "fmt + clippy + test",
       "trust": "pull-request",
       "triggers": [
-        "pull_request",
-        "push-main"
+        "workflow_call"
       ],
       "selection": {
         "mode": "always",
@@ -141,8 +140,7 @@
       "context": "docs index + links",
       "trust": "pull-request",
       "triggers": [
-        "pull_request",
-        "push-main"
+        "workflow_call"
       ],
       "selection": {
         "mode": "always",
@@ -185,7 +183,7 @@
       "context": "validation-schema",
       "trust": "pull-request",
       "triggers": [
-        "pull_request"
+        "workflow_call"
       ],
       "selection": {
         "mode": "always",
@@ -218,7 +216,7 @@
       "context": "comment-language",
       "trust": "pull-request",
       "triggers": [
-        "pull_request"
+        "workflow_call"
       ],
       "selection": {
         "mode": "always",
@@ -251,7 +249,7 @@
       "context": "pr-body",
       "trust": "pull-request",
       "triggers": [
-        "pull_request"
+        "workflow_call"
       ],
       "selection": {
         "mode": "always",
@@ -283,8 +281,7 @@
       "context": "gitleaks",
       "trust": "pull-request",
       "triggers": [
-        "pull_request",
-        "push-main"
+        "workflow_call"
       ],
       "selection": {
         "mode": "always",
@@ -315,8 +312,8 @@
       "context": "cargo-audit",
       "trust": "pull-request",
       "triggers": [
-        "pull_request",
-        "push-main"
+        "workflow_call",
+        "workflow_dispatch"
       ],
       "selection": {
         "mode": "always",
@@ -361,8 +358,8 @@
       "context": "Trivy filesystem scan",
       "trust": "pull-request",
       "triggers": [
-        "pull_request",
-        "push-main"
+        "workflow_call",
+        "workflow_dispatch"
       ],
       "selection": {
         "mode": "always",
@@ -506,8 +503,8 @@
       "context": "cargo-audit",
       "trust": "pull-request",
       "triggers": [
-        "pull_request",
-        "push-main"
+        "workflow_call",
+        "workflow_dispatch"
       ],
       "selection": {
         "mode": "always",
@@ -580,8 +577,7 @@
       "context": "windows-static",
       "trust": "pull-request",
       "triggers": [
-        "pull_request",
-        "push-main"
+        "workflow_call"
       ],
       "selection": {
         "mode": "always",

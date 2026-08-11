@@ -244,6 +244,7 @@
           "tools/ci/write-release-manifest.mjs"
         ],
         "test_paths": [
+          "tools/ci/check-ci-aggregate.test.mjs",
           "tools/ci/check-ci-artifacts.test.mjs",
           "tools/ci/check-ci-contract.test.mjs",
           "tools/ci/check-public-hygiene.test.mjs",
