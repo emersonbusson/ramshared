@@ -40,7 +40,7 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Tests (ignored cases require GPU/root)
-        run: cargo test --workspace
+        run: cargo test --workspace -- --test-threads=1
 
   docs:
     name: docs index + links

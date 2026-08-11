@@ -534,6 +534,7 @@ function runLlvmCov(
   const cargoArgs = ["llvm-cov"];
   for (const packageName of packages) cargoArgs.push("-p", packageName);
   cargoArgs.push("--json", "--summary-only", "--output-path", jsonOutPath);
+  cargoArgs.push("--", "--test-threads=1");
 
   const renderedArgs = cargoArgs.map((argument) =>
     argument === jsonOutPath ? "<private-run>/llvm-cov.json" : argument,
