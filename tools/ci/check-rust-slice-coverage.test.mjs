@@ -557,3 +557,42 @@ test("coverage_child_deadline_is_terminal_and_fail_closed", () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("coverage_child_deadline_terminates_descendant_process_tree", () => {
+  const runLlvmCov = checkerApi("runLlvmCov");
+  const root = mkdtempSync(join(tmpdir(), "ramshared-cov-tree-timeout-"));
+  try {
+    writeFileSync(join(root, "Cargo.toml"), "[workspace]\n");
+    const reportPath = join(root, "result.json");
+    let observedCommand;
+    let observedArgs;
+    let observedOptions;
+    assert.throws(
+      () =>
+        runLlvmCov(["ramshared-wsl2d"], reportPath, join(root, "private-target"), {
+          repoRoot: root,
+          error: () => {},
+          spawnCommand: (command, args, options) => {
+            observedCommand = command;
+            observedArgs = args;
+            observedOptions = options;
+            return { status: 124, signal: null, stdout: "", stderr: "" };
+          },
+        }),
+      (error) => error?.code === "COVERAGE_CHILD_TIMEOUT" && error.exitCode === 2,
+    );
+    assert.equal(observedCommand, "timeout");
+    assert.deepEqual(observedArgs.slice(0, 5), [
+      "--signal=TERM",
+      "--kill-after=5s",
+      "15m",
+      "cargo",
+      "llvm-cov",
+    ]);
+    assert.equal(observedOptions.timeout, 15 * 60_000 + 10_000);
+    assert.equal(observedOptions.killSignal, "SIGTERM");
+    assert.equal(existsSync(reportPath), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
