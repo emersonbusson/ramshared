@@ -1,5 +1,76 @@
 # Changelog
 
+## [0.8.0](https://github.com/emersonbusson/ramshared/compare/v0.7.4...v0.8.0) (2026-08-11)
+
+
+### Features
+
+* consolidate RamShared safety and CI ([fd5cbf2](https://github.com/emersonbusson/ramshared/commit/fd5cbf2d39a026bcf737a3082ef2497d3861b257))
+* **docs:** govern evidence lifecycle ([3ce0c3c](https://github.com/emersonbusson/ramshared/commit/3ce0c3cdd2662081263fcefd9bee305bb0b411c2))
+* harden RamShared runtime safety ([b39013e](https://github.com/emersonbusson/ramshared/commit/b39013e815c68a5bdd79497e394fd32bb9c88233))
+* **windows:** add autonomous broker service ([2435a3d](https://github.com/emersonbusson/ramshared/commit/2435a3d1aff26a1e4abdcd031e1b1108d0979c84))
+
+
+### Bug Fixes
+
+* **ci:** centralize canonical workflow triggers ([35ff48a](https://github.com/emersonbusson/ramshared/commit/35ff48a793aaf52b6552b7b831138160a5f258e1))
+* **ci:** close hosted validation gaps ([965ba57](https://github.com/emersonbusson/ramshared/commit/965ba5770230bd027da8970086c6d96d67310d16))
+* **ci:** fail closed on SARIF publication ([aa2282b](https://github.com/emersonbusson/ramshared/commit/aa2282bf4d002c7560e057cc4a6dc01313e0d953))
+* **ci:** serialize Rust admission tests ([3eab21e](https://github.com/emersonbusson/ramshared/commit/3eab21eed3b6477ee4171518dbbbf7c33e8d5139))
+* **ci:** stabilize campaign evidence checkout ([fcb12c6](https://github.com/emersonbusson/ramshared/commit/fcb12c6e626baf22280a45ca9f6bf566c3169257))
+* **ci:** stabilize capability catalog discovery ([a6c6600](https://github.com/emersonbusson/ramshared/commit/a6c6600b33b082e647badccff644e54d6eb77a6d))
+* **ci:** terminate timed-out coverage process trees ([5368771](https://github.com/emersonbusson/ramshared/commit/5368771065ed62f41399694095cab25aa5e533d8))
+* **core:** drain broker queue before shutdown ([795a292](https://github.com/emersonbusson/ramshared/commit/795a2924216f3524350a658ceaddc93b561abeeb))
+* **core:** stabilize broker shutdown and CI admission ([379d132](https://github.com/emersonbusson/ramshared/commit/379d132b8e7c93d0331c36ea6c2e36ededbe47fe))
+* **core:** wake broker worker on shutdown ([20eb5bb](https://github.com/emersonbusson/ramshared/commit/20eb5bb3e64e706f5a8debbddc652b3ea9deb66e))
+* **governance:** simplify task timestamp display ([899c17b](https://github.com/emersonbusson/ramshared/commit/899c17b8a96cdb4f1f29ffe3a91751d44e6cf1c5))
+* **safety:** enumerate Windows telemetry volumes ([9c9cc9c](https://github.com/emersonbusson/ramshared/commit/9c9cc9c89750988a5582ef738e53fbc7bb00e886))
+* **safety:** keep pressure controller alive ([a8f12fc](https://github.com/emersonbusson/ramshared/commit/a8f12fc0e01b05c86f07f4e271c309453d6f0aa9))
+* **safety:** preserve teardown after WSL watchdog ([26b4b9c](https://github.com/emersonbusson/ramshared/commit/26b4b9cdcdd589e91fcbec02f3dc58f6605c9c19))
+* **safety:** preserve WSL watchdog teardown ([288a5fc](https://github.com/emersonbusson/ramshared/commit/288a5fc2569091ff7297490d26f6194cf2eba516))
+* **windows:** bound PowerShell Direct connection open ([6e8359d](https://github.com/emersonbusson/ramshared/commit/6e8359d8869caa384e8a47b55cb90349b27bf8e3))
+* **windows:** bound PowerShell Direct guest harnesses ([e1cd405](https://github.com/emersonbusson/ramshared/commit/e1cd4059747e1948ecbf44871a91d01a4934444a))
+* **windows:** bound product PowerShell Direct open ([8e7f6cb](https://github.com/emersonbusson/ramshared/commit/8e7f6cbb6d68df5a60e82ed7653c77d7e9ae0b9d))
+* **windows:** emit broker lifecycle events ([ad15c33](https://github.com/emersonbusson/ramshared/commit/ad15c339de2e3ada7644aaf0899b62ff81826fb3))
+* **windows:** harden driver and lab validation ([35a1a35](https://github.com/emersonbusson/ramshared/commit/35a1a353791d8e43855b36266be1257976534db6))
+* **windows:** make static harnesses host-portable ([8890c90](https://github.com/emersonbusson/ramshared/commit/8890c903284b0f0dc695226604b24d15795f936d))
+* **windows:** normalize guest status output records ([4a6a45b](https://github.com/emersonbusson/ramshared/commit/4a6a45b13e91d6a3be4b44f6ff4ca1160b43dbd5))
+* **windows:** preserve bounded guest output stream ([3315d33](https://github.com/emersonbusson/ramshared/commit/3315d3332cd3f3f406518490dae595c7f840fba0))
+* **windows:** retry transient PowerShell Direct auth ([096afbd](https://github.com/emersonbusson/ramshared/commit/096afbd3f97a9982f639f2e2218e6650c949e52c))
+* **windows:** support hosted PowerShell runner ([8219483](https://github.com/emersonbusson/ramshared/commit/82194836c084e4e31ab68da2b22d9837344d692b))
+
+
+### Documentation
+
+* align README with v0.7.4 release ([6f9aaad](https://github.com/emersonbusson/ramshared/commit/6f9aaadd7d421bf226b5a4604482bdd1a873156b))
+* align README with v0.7.4 release ([d56c482](https://github.com/emersonbusson/ramshared/commit/d56c482513e5ac29cdbe8c4d945032a32ce072fe))
+* **ci:** record campaign evidence admission ([b28f7c4](https://github.com/emersonbusson/ramshared/commit/b28f7c44173737b3e9a9f3957af13ef005a59f02))
+* **ci:** record canonical trigger verification ([1bf874e](https://github.com/emersonbusson/ramshared/commit/1bf874ee4e78f4d271642be3f4f1eaeee55b7d04))
+* **ci:** record coverage process-tree validation ([9e4567c](https://github.com/emersonbusson/ramshared/commit/9e4567cffb7f539a6485038508619f4142b208f1))
+* **ci:** record deterministic Rust admission ([3021542](https://github.com/emersonbusson/ramshared/commit/3021542b319f2e28968b1280046ee5b49c9952c7))
+* **ci:** record hosted aggregate qualification ([6112405](https://github.com/emersonbusson/ramshared/commit/611240579f8786c99ae7e0340068d02d9b5ff0fb))
+* **ci:** record hosted campaign admission ([644a06b](https://github.com/emersonbusson/ramshared/commit/644a06bcfb4c5541ba49f09c61356c74d11d78d0))
+* **ci:** record hosted campaign admission ([45e6e8a](https://github.com/emersonbusson/ramshared/commit/45e6e8ab2600bee3f80cdf33b7a54c85e1032181))
+* consolidate specifications and validation ([853c113](https://github.com/emersonbusson/ramshared/commit/853c11313699c890c62badfaee805049dfe6c91d))
+* **core:** preserve append-only validation boundary ([6e488df](https://github.com/emersonbusson/ramshared/commit/6e488df7dba5cf92a2174f59b8330d7416d68b01))
+* **core:** record broker shutdown validation ([eb58945](https://github.com/emersonbusson/ramshared/commit/eb5894539da233f51244570cc0c2b3dc6495cf5f))
+* record bounded Windows guest closure ([acd4839](https://github.com/emersonbusson/ramshared/commit/acd4839099aaf514171000758aba03baf0c8e3b1))
+* record physical Windows Test Mode evidence ([72845a0](https://github.com/emersonbusson/ramshared/commit/72845a00d4c9ebaf1e2885c0874f27d05a40105e))
+* record physical Windows Test Mode evidence ([2c9992e](https://github.com/emersonbusson/ramshared/commit/2c9992e4a133d082161a39eec1572639127473c2))
+* record v0.7.4 real host smoke ([6c84a00](https://github.com/emersonbusson/ramshared/commit/6c84a00ce21ba08655c267941a9130ca53f0e752))
+* record WSL watchdog recovery evidence ([b65a7d2](https://github.com/emersonbusson/ramshared/commit/b65a7d2baf2309d4f29abd86751cb555b2290e6b))
+* satisfy validation entry schema ([9062e59](https://github.com/emersonbusson/ramshared/commit/9062e59fe62102023335048c5bff54a1295def4f))
+* **windows:** close broker discipline gaps ([e917e3c](https://github.com/emersonbusson/ramshared/commit/e917e3cc3de01ed744ab225d1539191be3626a22))
+* **windows:** finalize broker traceability ([046e857](https://github.com/emersonbusson/ramshared/commit/046e8578d4abebcc8a790b3b4c3b0eebe1619747))
+* **windows:** finalize broker traceability ([00ca1dd](https://github.com/emersonbusson/ramshared/commit/00ca1dd8ea60d1d1bfc652100d8d6caf94d15a8a))
+* **windows:** record active physical deployment ([95739d1](https://github.com/emersonbusson/ramshared/commit/95739d1f972bcefe7eb5df8861cf8c526503e074))
+* **windows:** record autonomous broker validation ([e6b759f](https://github.com/emersonbusson/ramshared/commit/e6b759f237202d7a16f6377b61b2b453d752a475))
+
+
+### CI
+
+* enforce fail-closed repository trust ([0c903e8](https://github.com/emersonbusson/ramshared/commit/0c903e8c4e5474998ff51ff2da6901d78a9d5bbd))
+
 ## [0.7.4](https://github.com/emersonbusson/ramshared/compare/v0.7.3...v0.7.4) (2026-07-24)
 
 
