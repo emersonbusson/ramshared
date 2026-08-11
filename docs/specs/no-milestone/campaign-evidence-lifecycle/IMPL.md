@@ -5,7 +5,7 @@
 
 ## Status
 
-implemented · cover N/A for Rust · static repository E2E ✓ · BINARY_MATCH N/A
+partial · cover ✓ · static repository E2E ✓ · hosted CI pending · BINARY_MATCH N/A
 
 This slice implements a read-only documentation and custody gate. It does not
 run or qualify a WSL2, Windows, VM, GPU, driver, storage, or kernel campaign.
@@ -16,22 +16,32 @@ Those native paths remain environment-bound under their own owners.
 | Path | ITEM/RF | Change |
 | --- | --- | --- |
 | `docs/governance/campaign-evidence-lifecycle.json` | ITEM-1 / RF-1–RF-4 | Explicit roots, roles, retention classification, and bounded artifact limits. |
-| `tools/ci/check-campaign-evidence-lifecycle.mjs` | ITEM-2–ITEM-5 / RF-1–RF-9 | Read-only manifest validation, historical catalog generation, integrity and prospective-diff ratchet. |
-| `tools/ci/check-campaign-evidence-lifecycle.test.mjs` | ITEM-2–ITEM-5 / RF-1–RF-9 | Legitimate fixture plus lifecycle, traversal, symlink, tamper, orphan, sensitive-content, bounds, and ratchet refusals. |
+| `tools/ci/check-campaign-evidence-lifecycle.mjs` | ITEM-2–ITEM-5 / RF-1–RF-9 | Read-only manifest validation, Git-tracked catalog discovery, integrity, and prospective-diff ratchet. |
+| `tools/ci/check-campaign-evidence-lifecycle.test.mjs` | ITEM-2–ITEM-5 / RF-1–RF-9 | Legitimate fixture plus lifecycle, traversal, symlink, tamper, orphan, sensitive-content, clean-checkout, bounds, and ratchet refusals. |
 | `docs/governance/campaign-evidence-catalog.generated.json` | ITEM-3 / RF-5 | Deterministic observed catalog; legacy records are non-promotable. |
 | `docs/labs/EVIDENCE-RETENTION.md` | ITEM-4 / RF-6 | Public, historical, CI, release, and protected-local retention boundaries. |
-| `scripts/docs-check.sh`, `.github/workflows/ci.yml` | ITEM-6 / RF-10 | Static admission and pull-request diff checks. |
+| `scripts/docs-check.sh`, `.github/workflows/ci.yml`, `docs/governance/ci-contract.json` | ITEM-6 / RF-10 | Static admission, pull-request diff checks, and hosted Node coverage contract. |
 
 ## Validation (numbers)
 
 - lifecycle tests: `node --test tools/ci/check-campaign-evidence-lifecycle.test.mjs`
-  → 9 passed, 0 failed.
+  → 16 passed, 0 failed.
+- cover: `node --test --experimental-test-coverage
+  --test-coverage-include=tools/ci/check-campaign-evidence-lifecycle.mjs
+  --test-coverage-lines=80 --test-coverage-branches=80
+  --test-coverage-functions=80
+  tools/ci/check-campaign-evidence-lifecycle.test.mjs` → 97.87% lines,
+  80.31% branches, 95.92% functions.
 - legitimate repository gate:
   `node tools/ci/check-campaign-evidence-lifecycle.mjs --check` → exit 0;
-  181 observed entries, all existing historical evidence marked
+  176 observed entries, all existing historical evidence marked
   `legacy-unqualified` unless a future valid v1 manifest says otherwise.
 - deterministic catalog: generate then check produces byte-identical output
-  for identical repository input.
+  for identical Git-tracked repository input; ignored local logs do not alter
+  the catalog or the prospective ratchet.
+- clean-checkout E2E: a detached temporary Git worktree at `fcb12c6` passed
+  the repository checker, `./scripts/docs-check.sh`, the named coverage gate,
+  and `node tools/ci/check-ci-contract.mjs --check-local`.
 - refusals: invalid state/time, unsafe path, sensitive artifact, symlink,
   checksum/byte tamper, orphan file, oversize historical file, stale catalog,
   and newly added unmanifested evidence all return NO-GO in named fixtures.
@@ -44,7 +54,9 @@ The repository starts with historical observations, not retroactive campaign
 promotion. Native producers must still publish a new, approved v1 manifest
 after their own surface-specific before/action/after, binary identity,
 legitimate/refusal, and cleanup gates complete. A local hash checks integrity
-of a checked-out artifact; it does not authenticate an experiment author.
+of a checked-out artifact; it does not authenticate an experiment author. A
+same-revision hosted documentation job remains required before this CI-admission
+change is promoted.
 
 ## Rollback trigger
 
@@ -56,4 +68,4 @@ accepted as current, or any host/lab mutation caused by this checker.
 
 | RF | ITEM | Commit |
 | --- | --- | --- |
-| RF-1–RF-10 | ITEM-1–ITEM-6 | pending — no automatic commit |
+| RF-1–RF-10 | ITEM-1–ITEM-6 | `2a7cb25`, `84dd0b2`, `fcb12c6` |
