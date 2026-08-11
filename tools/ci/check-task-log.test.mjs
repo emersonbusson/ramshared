@@ -11,9 +11,8 @@ const RECORD = `## TASK-0001 — Fixture task
 **Schema:** \`ramshared.task.v1\`.
 **Status:** \`in_progress\`.
 **Owner role:** \`governance\`.
-**Registered date:** \`2026-08-11\`.
+**Date:** \`2026-08-11\`.
 **Registered time:** \`12:00:00\`.
-**Updated date:** \`2026-08-11\`.
 **Updated time:** \`12:00:00\`.
 **Source revision:** \`fd5cbf2d39a026bcf737a3082ef2497d3861b257\`.
 **Destinations:** \`TASK.md\`.
@@ -48,11 +47,23 @@ test('accepts a complete versioned task record', () => {
   assert.deepEqual(validateTaskLog(taskLog()), [])
 })
 
+test('uses one date when registration and update share a calendar day', () => {
+  const redundant = taskLog(
+    RECORD.replace(
+      '**Date:** `2026-08-11`.',
+      '**Registered date:** `2026-08-11`.\\n**Updated date:** `2026-08-11`.'
+    )
+  )
+
+  assert.deepEqual(validateTaskLog(taskLog()), [])
+  assert.match(JSON.stringify(validateTaskLog(redundant)), /redundant/)
+})
+
 test('rejects combined timestamps or missing separate date and time fields', () => {
   const combined = taskLog()
-    .replace('**Registered date:** `2026-08-11`.\n**Registered time:** `12:00:00`.', '**Registered at:** `2026-08-11T12:00:00-03:00`.')
+    .replace('**Date:** `2026-08-11`.\n**Registered time:** `12:00:00`.', '**Registered at:** `2026-08-11T12:00:00-03:00`.')
 
-  assert.match(JSON.stringify(validateTaskLog(combined)), /Registered date/)
+  assert.match(JSON.stringify(validateTaskLog(combined)), /Date/)
   assert.match(JSON.stringify(validateTaskLog(combined)), /Registered time/)
 })
 
