@@ -5,7 +5,7 @@
 
 ## Status
 
-partial · cover ✓ · static repository E2E ✓ · hosted CI pending · BINARY_MATCH N/A
+implemented · cover ✓ · static repository E2E ✓ · hosted CI ✓ · BINARY_MATCH N/A
 
 This slice implements a read-only documentation and custody gate. It does not
 run or qualify a WSL2, Windows, VM, GPU, driver, storage, or kernel campaign.
@@ -54,9 +54,9 @@ The repository starts with historical observations, not retroactive campaign
 promotion. Native producers must still publish a new, approved v1 manifest
 after their own surface-specific before/action/after, binary identity,
 legitimate/refusal, and cleanup gates complete. A local hash checks integrity
-of a checked-out artifact; it does not authenticate an experiment author. A
-same-revision hosted documentation job remains required before this CI-admission
-change is promoted.
+of a checked-out artifact; it does not authenticate an experiment author. The
+same-revision hosted canonical aggregate passed on `379d132`; later changes to
+this checker or its workflow require fresh hosted evidence.
 
 ## Rollback trigger
 
