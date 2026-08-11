@@ -22,7 +22,7 @@ all 20 jobs succeeded and the terminal `required-checks` context is SUCCESS.
 | `.github/workflows/release-integrity.yml` | ITEM-6 / RF-7 | Add protected nonpublishing bundle/SBOM validation. |
 | `tools/ci/check-ci-contract.mjs` | ITEM-1–ITEM-8 / RF-1–RF-11 | Validate source and observed remote controls, aggregate same-run results, and fail closed on missing, unsafe, or stale evidence. |
 | `tools/ci/plan-rust-slice-coverage.mjs` | ITEM-6.6 / RF-10 | Map every changed Rust production file to exact line, platform, localization, test-only, or whole-file structural ownership and execute only tokenized commands. |
-| `tools/ci/check-rust-slice-coverage.mjs` | ITEM-6.6 / RF-10 | Isolate coverage target state and enforce a terminal 15-minute child deadline. |
+| `tools/ci/check-rust-slice-coverage.mjs` | ITEM-6.6 / RF-10 | Isolate coverage target state and enforce a terminal 15-minute process-tree deadline with a five-second TERM-to-KILL grace period. |
 | `docs/governance/{ci-contract,remote-controls-observation,rust-slice-coverage}*` | ITEM-1–ITEM-8 / RF-1–RF-11 | Record the executable contract, sanitized GitHub REST observation, and exact SPEC ownership map. |
 
 ## Validation (numbers)
@@ -31,6 +31,13 @@ all 20 jobs succeeded and the terminal `required-checks` context is SUCCESS.
 - contract cover: 90.36% lines, 82.64% branches, 99.08% functions.
 - strict source/remote gate: `node tools/ci/check-ci-contract.mjs --check` → exit 0, PASS.
 - Node CI suite: `node --test tools/ci/*.test.mjs` → 241 passed, 0 failed.
+- coverage deadline regression: hosted run `31447000916` attempt 1 reached the
+  direct-child deadline after every Rust test and measured file passed, then
+  GitHub cleanup found orphaned `cargo` and instrumented `ramsharedd`
+  processes. The DT-30 RED classified exit 124 as a generic child failure.
+  GREEN is 13/13 checker tests; the manufactured GNU `timeout` process group
+  returned 124 and the descendant PID returned `ESRCH`. Checker coverage is
+  93.07% lines, 86.18% branches, and 91.30% functions.
 - Rust planner cover: 88.85% lines, 81.80% branches, 97.70% functions; exact PR merge-ref selection → READY with 19 entries and zero unmapped paths.
 - structural Rust: two declaration/reexport-only `lib.rs` files → N/A line coverage by DT-28; exact `cargo test -p ramshared-broker --lib` and `cargo test -p ramshared-winsvc --lib` commands pass, while manufactured executable/malformed surfaces are refused.
 - actionlint: pinned 1.7.7 over every workflow → exit 0.
@@ -44,16 +51,20 @@ all 20 jobs succeeded and the terminal `required-checks` context is SUCCESS.
   static, supply-chain, artifact, and SARIF publication gates.
 - env-bound: release signing/publishing and any future live isolated-lab action
   remain outside this SPEC revision.
+- promotion condition: the final PR revision containing DT-30 must pass the
+  hosted `required-checks` aggregate before merge; a rerun of the old revision
+  is not accepted as proof for the fix.
 
 ## Rollback trigger
 
 One selected failure/cancellation/skip reaches aggregate green; a pull-request
 job gains undeclared write authority; a mutable Action reference executes; a
-coverage child exceeds 15 minutes without terminal failure; or a plan-only lab
-path reaches a host action.
+coverage child exceeds 15 minutes without terminal failure, leaves one Cargo or
+test descendant alive, or consumes a partial report; or a plan-only lab path
+reaches a host action.
 
 ## Traceability
 
 | RF | ITEM | commit |
 | --- | --- | --- |
-| RF-1–RF-11 | ITEM-1–ITEM-8 | `0c903e8`, `965ba57`, `aa2282b`; hosted run `31446546130` |
+| RF-1–RF-11 | ITEM-1–ITEM-8 | `0c903e8`, `965ba57`, `aa2282b`, `bba912f`, `5368771`; hosted run `31446546130` |
