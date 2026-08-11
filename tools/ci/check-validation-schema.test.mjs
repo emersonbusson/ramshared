@@ -6,7 +6,11 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { isSecurityRedaction, parseDiff, run } from './check-validation-schema.mjs'
-import { parseEntries, validateEntry } from './check-validation-schema.mjs'
+import {
+  parseEntries,
+  validateEntry,
+  validateVersionedEvidenceEntry,
+} from './check-validation-schema.mjs'
 
 function entry(text) {
   return parseEntries(text.split('\n'), 1)[0]
@@ -103,6 +107,55 @@ test('legacy_validation_entries_remain_accepted', () => {
   assert.deepEqual(validateEntry(parsed), [])
 })
 
+test('versioned evidence requires temporal custody and review policy', () => {
+  const parsed = entry(
+    '## 2026-08-11 12:00 — fixture\n' +
+      '**Evidence schema:** `ramshared.validation.v2`.\n' +
+      '**What:** fixture\n' +
+      '**Verdict:** ✅'
+  )
+  const output = JSON.stringify(validateVersionedEvidenceEntry(parsed))
+  assert.match(output, /Evidence ID/)
+  assert.match(output, /Observed at/)
+  assert.match(output, /Source revision/)
+  assert.match(output, /Lifecycle/)
+})
+
+test('reviewable versioned evidence requires freshness and retention', () => {
+  const parsed = entry(
+    '## 2026-08-11 12:00 — fixture\n' +
+      '**Evidence schema:** `ramshared.validation.v2`.\n' +
+      '**Evidence ID:** `EVD-0001`.\n' +
+      '**Owner role:** `governance`.\n' +
+      '**Observed at:** `2026-08-11T12:00:00-03:00`.\n' +
+      '**Verified at:** `2026-08-11T12:01:00-03:00`.\n' +
+      '**Source revision:** `fd5cbf2d39a026bcf737a3082ef2497d3861b257`.\n' +
+      '**Lifecycle:** `reviewable`.\n' +
+      '**What:** fixture\n' +
+      '**Verdict:** ✅'
+  )
+  const output = JSON.stringify(validateVersionedEvidenceEntry(parsed))
+  assert.match(output, /Retention/)
+  assert.match(output, /Freshness/)
+})
+
+test('accepts immutable versioned evidence with an immutability reason', () => {
+  const parsed = entry(
+    '## 2026-08-11 12:00 — fixture\n' +
+      '**Evidence schema:** `ramshared.validation.v2`.\n' +
+      '**Evidence ID:** `EVD-0001`.\n' +
+      '**Owner role:** `governance`.\n' +
+      '**Observed at:** `2026-08-11T12:00:00-03:00`.\n' +
+      '**Verified at:** `2026-08-11T12:01:00-03:00`.\n' +
+      '**Source revision:** `fd5cbf2d39a026bcf737a3082ef2497d3861b257`.\n' +
+      '**Lifecycle:** `immutable`.\n' +
+      '**Immutability reason:** Bound to a content-addressed release artifact.\n' +
+      '**What:** fixture\n' +
+      '**Verdict:** ✅'
+  )
+  assert.deepEqual(validateVersionedEvidenceEntry(parsed), [])
+})
+
 test('validation_log_remains_append_only', () => {
   assert.equal(isSecurityRedaction('**Verdict:** ✅', '**Verdict:** 🔴'), false)
 })
@@ -122,6 +175,26 @@ test('added_line_inside_existing_entry_is_append_only_violation', () => {
 test('new_entry_separator_blank_is_append_only_safe', () => {
   const root = gitFixture('## 2026-01-01 10:00 — old\n**What:** old\n**Verdict:** ✅\n')
   appendFileSync(path.join(root, 'validation.md'), '\n## 2026-01-01 11:00 — new\n**What:** new\n**Measured data:** 1 run\n**Verdict:** ✅\n')
+  assert.deepEqual(run({ root, baseRef: 'HEAD' }), { ok: true, violations: [] })
+})
+
+test('schema marker before a new versioned evidence record is append-only safe', () => {
+  const root = gitFixture('## 2026-01-01 10:00 — old\n**What:** old\n**Verdict:** ✅\n')
+  appendFileSync(
+    path.join(root, 'validation.md'),
+    '\n<!-- validation-schema-v2 -->\n\n' +
+      '## 2026-08-11 12:00 — new\n' +
+      '**Evidence schema:** `ramshared.validation.v2`.\n' +
+      '**Evidence ID:** `EVD-0001`.\n' +
+      '**Owner role:** `governance`.\n' +
+      '**Observed at:** `2026-08-11T12:00:00-03:00`.\n' +
+      '**Verified at:** `2026-08-11T12:01:00-03:00`.\n' +
+      '**Source revision:** `fd5cbf2d39a026bcf737a3082ef2497d3861b257`.\n' +
+      '**Lifecycle:** `immutable`.\n' +
+      '**Immutability reason:** Fixture.\n' +
+      '**What:** new\n' +
+      '**Verdict:** ✅\n'
+  )
   assert.deepEqual(run({ root, baseRef: 'HEAD' }), { ok: true, violations: [] })
 })
 

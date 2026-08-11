@@ -3558,6 +3558,25 @@ job deadline, hides a failing test, or leaves a Cargo/test descendant alive.
 **Verdict:** 🟡 Local deterministic admission is green; merge still requires
 the final hosted same-revision `required-checks` success.
 
+<!-- validation-schema-v2 -->
+
+## 2026-08-11 12:16 -03 — Temporal governance record contracts
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0001`.
+**Owner role:** `governance`.
+**Observed at:** `2026-08-11T12:16:00-03:00`.
+**Verified at:** `2026-08-11T12:16:00-03:00`.
+**Source revision:** `fd5cbf2d39a026bcf737a3082ef2497d3861b257`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain in the append-only validation log.
+**Freshness:** Revalidate whenever either record checker changes.
+**What:** Verified the RamShared-native task and evidence record contracts.
+**Category:** `ci-gate`.
+**How to measure:** `node --test tools/ci/check-task-log.test.mjs tools/ci/check-validation-schema.test.mjs`; `node tools/ci/check-task-log.mjs --all`; and `node tools/ci/check-validation-schema.mjs --all`.
+**Measured data:** 26/26 focused Node tests passed; 2/2 schema checkers exited 0 in all-record mode.
+**Verdict:** ✅ The temporal contracts validate locally; this record does not qualify any hardware or hosted CI claim.
+
 ## 2026-08-11 12:34 -03 — Broker shutdown wake closes release CI hang
 
 **Evidence schema:** `ramshared.validation.v2`.
@@ -3574,3 +3593,20 @@ the final hosted same-revision `required-checks` success.
 **How to measure:** `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace -- --test-threads=1`; the two canonical Rust slice coverage commands from the memory-broker SPEC; 100 bounded repetitions of `daemon_worker_serves_job_counts_io_and_stops_on_shutdown`; and the release RAM-broker before/action/after drill.
 **Measured data:** Workspace tests exited 0; `ramsharedd` passed 47/47; stress passed 100/100; `main.rs` coverage was 81.7% (2827/3461) and `conn.rs` 96.5% (497/515). The loaded release executable exactly matched `target/release/ramsharedd`; SIGTERM exited 0 in 1995 ms and removed the owned socket. A regular-file socket refusal exited 1 and preserved SHA-256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
 **Verdict:** 🟡 The local code, cover, BINARY_MATCH, legitimate path, and refusal are green; PR #151 still requires a refreshed same-revision hosted aggregate before promotion.
+
+## 2026-08-11 12:43 -03 — Native governance, evidence, and cleanup lifecycle integration
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0003`.
+**Owner role:** `governance`.
+**Observed at:** `2026-08-11T12:43:55-03:00`.
+**Verified at:** `2026-08-11T12:43:55-03:00`.
+**Source revision:** `6e488df7dba5cf92a2174f59b8330d7416d68b01`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the governance records, generated catalog, and sanitized historical receipts in their owned repository paths; do not treat local lab outputs as public proof.
+**Freshness:** Revalidate when a governed checker, lifecycle policy, CI command, retention policy, or evidence catalog changes.
+**What:** Verified the RamShared-native task/evidence custody, Markdown lifecycle policy, passive capability observations, campaign evidence lifecycle, cleanup receipt register, threat model, ADR registry, and pull-request ratchets.
+**Category:** `ci-gate`.
+**How to measure:** `./scripts/docs-check.sh`; `node --test tools/ci/*.test.mjs tools/*.test.mjs`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace -- --test-threads=1`; `node tools/ci/check-ci-contract.mjs --check-local`; and `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml`.
+**Measured data:** docs-check passed with 332 structural files, 210 tracked Markdown files, 212 classified worktree documents, 35 passive capability observations, 181 campaign-evidence observations, 2 historical cleanup receipts, and 9 ADR records. The complete Node suite passed 307/307; the benchmark and SPEC evidence hardening tests passed 24/24 with the real-record validators green; Rust format, clippy, and the serial workspace suite exited 0. Hardware-, root-, GPU-, and lab-bound tests remained explicitly ignored rather than promoted.
+**Verdict:** ✅ Static governance and evidence-custody controls are green. This does not qualify live Windows, WSL2, GPU, driver, VM, swap, disk, kernel, or hosted-CI claims; those require their owned environment and before/action/after evidence.
