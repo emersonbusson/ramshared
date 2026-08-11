@@ -160,6 +160,7 @@ const MEMORY_BROKER_WSL2D_DAEMON_MAIN_TESTS = [
   'daemon_worker_serves_job_counts_io_and_stops_on_shutdown',
   'daemon_worker_shutdown_wake_is_not_timer_dependent',
   'daemon_worker_shutdown_full_queue_is_nonblocking',
+  'daemon_worker_shutdown_drains_queued_io_before_stop',
   'daemon_command_timeout_terminates_child_without_hang',
   'daemon_nbd_prealloc_worker_uses_fake_provider_and_injected_acceptor',
   'daemon_nbd_sparse_floor_refusal_reclaims_without_provider_allocation',

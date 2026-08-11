@@ -4460,7 +4460,7 @@ mod tests {
 
     #[test]
     fn daemon_worker_shutdown_full_queue_is_nonblocking() {
-        let (jobs_tx, _jobs_rx) = std::sync::mpsc::sync_channel(CHAN_CAP);
+        let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel(CHAN_CAP);
         for _ in 0..CHAN_CAP {
             jobs_tx
                 .try_send(WMsg::Opened)
@@ -4471,6 +4471,65 @@ mod tests {
 
         assert_eq!(stop.request(), BrokerShutdownWake::QueueFull);
         assert!(shutdown.load(Ordering::SeqCst));
+
+        let mut opened = 0;
+        loop {
+            match jobs_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("full-queue notifier appends a terminal wake")
+            {
+                WMsg::Opened => opened += 1,
+                WMsg::Shutdown => break,
+                _ => panic!("manufactured queue contains only Opened and Shutdown"),
+            }
+        }
+        assert_eq!(opened, CHAN_CAP, "shutdown wake preserves prior FIFO work");
+    }
+
+    #[test]
+    fn daemon_worker_shutdown_drains_queued_io_before_stop() {
+        let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel(CHAN_CAP);
+        let (demote_tx, _demote_rx) = std::sync::mpsc::channel();
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = BrokerShutdown::new(std::sync::Arc::clone(&shutdown), jobs_tx.clone());
+        let slice_io = std::sync::Arc::new(vec![SliceIoCounters::default()]);
+        let worker_rt = BrokerWorkerRuntime {
+            geom: vec![(0, 4096)],
+            jobs_rx,
+            demote_tx,
+            shutdown,
+            slice_io: std::sync::Arc::clone(&slice_io),
+            vram: std::sync::Arc::new(VramGauge::default()),
+        };
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        jobs_tx
+            .send(WMsg::Job(ramshared_wsl2d::conn::Job {
+                export: 0,
+                req: ramshared_block::Request {
+                    flags: 0,
+                    cmd: Command::Write,
+                    handle: 11,
+                    offset: 0,
+                    len: 512,
+                },
+                payload: vec![0xA5; 512],
+                reply: reply_tx,
+            }))
+            .expect("queue accepts write before shutdown");
+        assert_eq!(stop.request(), BrokerShutdownWake::Queued);
+
+        let _backend = serve_broker_jobs_with_poll(
+            RamBackend::new(4096),
+            worker_rt,
+            |_| None,
+            Duration::from_secs(30),
+        );
+        let reply = reply_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("queued write receives a reply before shutdown");
+        assert!(!reply.disconnect);
+        assert_eq!(slice_io[0].bytes_served.load(Ordering::Relaxed), 512);
+        assert_eq!(slice_io[0].io_count.load(Ordering::Relaxed), 1);
     }
 
     #[test]
