@@ -1485,6 +1485,7 @@ enum BrokerShutdownWake {
     Queued,
     QueueFull,
     Disconnected,
+    NotifierUnavailable,
 }
 
 /// Paired terminal flag and explicit worker-channel wake. `request` stores the
@@ -1505,7 +1506,17 @@ impl BrokerShutdown {
         self.flag.store(true, Ordering::SeqCst);
         match self.wake_tx.try_send(WMsg::Shutdown) {
             Ok(()) => BrokerShutdownWake::Queued,
-            Err(std::sync::mpsc::TrySendError::Full(_)) => BrokerShutdownWake::QueueFull,
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                let wake_tx = self.wake_tx.clone();
+                match std::thread::Builder::new()
+                    .name("ramshared-broker-shutdown".into())
+                    .spawn(move || {
+                        let _ = wake_tx.send(WMsg::Shutdown);
+                    }) {
+                    Ok(_) => BrokerShutdownWake::QueueFull,
+                    Err(_) => BrokerShutdownWake::NotifierUnavailable,
+                }
+            }
             Err(std::sync::mpsc::TrySendError::Disconnected(_)) => BrokerShutdownWake::Disconnected,
         }
     }
@@ -1836,9 +1847,6 @@ fn serve_broker_jobs_with_poll<B: BlockBackend>(
     let mut demoted = false;
     eprintln!("[ramsharedd] em transmissão (worker único; multi-slice/broker)");
     loop {
-        if rt.shutdown.load(Ordering::SeqCst) {
-            break;
-        }
         let msg = match rt.jobs_rx.recv_timeout(poll_interval) {
             Ok(m) => m,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
