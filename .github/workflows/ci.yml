@@ -4,9 +4,6 @@ name: CI
 # ramshared-cuda loads libcuda at runtime and GPU-required tests are ignored,
 # so the hosted runner exercises only hardware-independent logic.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_call:
 
 permissions: {}

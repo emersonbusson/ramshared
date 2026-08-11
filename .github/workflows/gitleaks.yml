@@ -1,9 +1,6 @@
 name: Security — Gitleaks
 
 on:
-  pull_request:
-  push:
-    branches: [main]
   workflow_call:
 
 permissions: {}

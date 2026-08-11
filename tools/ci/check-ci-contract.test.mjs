@@ -957,6 +957,17 @@ test('ci_contract_requires_serial_rust_test_execution', () => {
   assert.match(workflow, /^\s*run:\s*cargo test --workspace -- --test-threads=1\s*$/m)
 })
 
+test('canonical_reusable_workflow_rejects_undeclared_direct_trigger', () => {
+  const gate = currentGate({ triggers: ['workflow_call'] })
+  const canonical = validWorkflow().replace('  pull_request:', '  workflow_call:')
+  const canonicalResult = validateWorkflowPolicy(currentOnlyContract(gate), fixtureRoot(canonical))
+  assert.deepEqual(canonicalResult.errors, [])
+
+  const duplicate = canonical.replace('  workflow_call:', '  workflow_call:\n  pull_request:')
+  const duplicateResult = validateWorkflowPolicy(currentOnlyContract(gate), fixtureRoot(duplicate))
+  assert.equal(duplicateResult.errors.some((item) => item.rule === 'undeclared-direct-trigger'), true)
+})
+
 test('aggregate_cli_accepts_complete_same_run_results_and_rejects_invalid_json', () => {
   const contract = JSON.parse(readFileSync(path.join(ROOT, 'docs', 'governance', 'ci-contract.json'), 'utf8'))
   const needs = Object.fromEntries(contract.aggregate.architecture.callers.map((caller) => [caller.job, { result: 'success' }]))
