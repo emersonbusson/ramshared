@@ -3557,3 +3557,22 @@ job deadline, hides a failing test, or leaves a Cargo/test descendant alive.
 
 **Verdict:** 🟡 Local deterministic admission is green; merge still requires
 the final hosted same-revision `required-checks` success.
+
+<!-- validation-schema-v2 -->
+
+## 2026-08-11 12:34 -03 — Broker shutdown wake closes release CI hang
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0002`.
+**Owner role:** `reliability`.
+**Observed at:** `2026-08-11T12:34:00-03:00`.
+**Verified at:** `2026-08-11T12:34:00-03:00`.
+**Source revision:** `795a2924216f3524350a658ceaddc93b561abeeb`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the summary here; local raw logs remain under `tmp/pr151-broker-shutdown-e2e/` until hosted verification completes.
+**Freshness:** Revalidate on any broker worker, shutdown bridge, channel, or CI Rust-toolchain change.
+**What:** Replaced timer-only broker-worker termination with an explicit nonblocking control wake that drains earlier FIFO I/O.
+**Category:** `ci-gate`.
+**How to measure:** `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace -- --test-threads=1`; the two canonical Rust slice coverage commands from the memory-broker SPEC; 100 bounded repetitions of `daemon_worker_serves_job_counts_io_and_stops_on_shutdown`; and the release RAM-broker before/action/after drill.
+**Measured data:** Workspace tests exited 0; `ramsharedd` passed 47/47; stress passed 100/100; `main.rs` coverage was 81.7% (2827/3461) and `conn.rs` 96.5% (497/515). The loaded release executable exactly matched `target/release/ramsharedd`; SIGTERM exited 0 in 1995 ms and removed the owned socket. A regular-file socket refusal exited 1 and preserved SHA-256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+**Verdict:** 🟡 The local code, cover, BINARY_MATCH, legitimate path, and refusal are green; PR #151 still requires a refreshed same-revision hosted aggregate before promotion.
