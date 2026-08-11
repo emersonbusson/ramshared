@@ -3366,3 +3366,43 @@ false-green, or surviving fixture PID.
 
 **Verdict:** 🟡 The deterministic Linux fixture and its coverage are green;
 hosted aggregate promotion remains pending the next immutable PR run.
+
+## 2026-08-10 21:22 -03 — Windows static cross-version closure
+
+**What:** Closed the remaining PowerShell 5.1/7 incompatibilities in the
+source-only Windows suite before rerunning PR #189.
+
+**Before:** The hosted PowerShell 7 job failed in the storage-matrix fixture
+because it constructed `$PSHOME\powershell.exe`. After binding the child to
+the current `pwsh.exe`, a local PowerShell 7 run exposed a second legitimate
+false RED: pipeline assignment of `@()` reached an `[object[]]` parameter as
+one null element, so the zero-Event-153 case was counted as one event.
+
+**Action:** SPEC DT-93 and broker DT-27 now require every manufactured child
+to resolve and validate the exact current PowerShell executable. The four
+static harnesses with child processes were audited together. The storage
+matrix now uses that exact executable for bounded children, watchdog launch,
+and invocation evidence, and initializes the manufactured empty event set as
+`[object[]]@()` before the optional one-event assignment.
+
+**After / measured data:** The complete 15-harness Windows static wrapper
+exited 0 under both Windows PowerShell 5.1 and PowerShell 7. The focused storage
+matrix passed in both runtimes, including
+`static_child_uses_current_host_executable`,
+`event153_zero_case_is_cross_version_empty`, all timeout/process-tree cases,
+the legitimate zero-event case, and the one-event refusal. The three other
+affected focused harnesses passed under Windows PowerShell 5.1. `rg` found zero
+remaining `$PSHOME\powershell.exe` constructions in `Test-*.ps1`;
+`docs-check` and whitespace validation exited 0. No VM, SCM, disk, driver,
+GPU-pressure, shutdown, reboot, or physical-host action ran.
+
+**Refusals:** Missing/non-file current executable paths remain terminal; one
+Event 153 remains RED; timeout, nonzero child, failed stream drain, or a
+surviving child process tree remains RED.
+
+**Rollback trigger:** Any Windows static child again depends on a fixed
+PowerShell filename, the zero-event case counts a null row, or the complete
+wrapper diverges between Windows PowerShell 5.1 and PowerShell 7.
+
+**Verdict:** 🟡 Local cross-version static evidence is complete and green;
+promotion still requires the replacement hosted `required-checks` run.

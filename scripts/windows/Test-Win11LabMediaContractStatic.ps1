@@ -11,6 +11,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Get-CurrentPowerShellExecutable {
+    $path = (Get-Process -Id $PID -ErrorAction Stop).Path
+    if ([string]::IsNullOrWhiteSpace($path) -or
+        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "static_child_uses_current_host_executable failed: current PowerShell path is unavailable"
+    }
+    $path
+}
+
 if ([string]::IsNullOrWhiteSpace($ContractPath)) {
     $ContractPath = Join-Path $PSScriptRoot "Win11LabMediaContract.ps1"
 }
@@ -415,7 +424,7 @@ if ($isoBuilderText -notmatch '(?s)\[ValidateRange\(300,\s*1800\)\]\s*\[int\]\$O
 $timeoutStarted = [DateTime]::UtcNow
 Assert-RefusalWithoutSecret -ExpectedCode "external_process_timeout" -Action {
     Invoke-Win11LabExternalProcessBounded `
-        -FilePath (Join-Path $PSHOME "powershell.exe") `
+        -FilePath (Get-CurrentPowerShellExecutable) `
         -ArgumentValues @("-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 5") `
         -TimeoutSeconds 1 | Out-Null
 }
@@ -423,6 +432,7 @@ if (([DateTime]::UtcNow - $timeoutStarted).TotalSeconds -ge 5) {
     throw "win11_lab_media_static: bounded external process exceeded deadline"
 }
 Write-Output "PASS oscdimg_deadline_terminates_process_tree"
+Write-Output "PASS static_child_uses_current_host_executable"
 
 $switchNameParameterPattern = '(?s)\[Parameter\(Mandatory\s*=\s*\$true\)\]\s*\[ValidateNotNullOrEmpty\(\)\]\s*\[string\]\$SwitchName(?:,|\s*\))'
 if ($vmCreatorText -notmatch $switchNameParameterPattern -or

@@ -167,7 +167,11 @@ function Invoke-BoundedProcess {
 }
 function Invoke-BoundedPowerShellChild {
     param([string]$ScriptPath, [string[]]$Arguments, [int]$Seconds)
-    $powershell = Join-Path $PSHOME "powershell.exe"
+    $powershell = (Get-Process -Id $PID -ErrorAction Stop).Path
+    if ([string]::IsNullOrWhiteSpace($powershell) -or
+        -not (Test-Path -LiteralPath $powershell -PathType Leaf)) {
+        throw "current PowerShell executable is unavailable"
+    }
     $childArguments = @(
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", (Quote-ProcessArgument $ScriptPath)) + $Arguments

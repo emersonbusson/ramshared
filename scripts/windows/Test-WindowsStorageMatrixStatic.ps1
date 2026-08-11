@@ -23,6 +23,11 @@ $text = Get-Content -LiteralPath $HarnessPath -Raw
 $windowsHost = Get-Content -LiteralPath $WindowsHostPath -Raw
 $productOnline = Get-Content -LiteralPath $ProductOnlinePath -Raw
 
+if ($text -match 'Join-Path\s+\$PSHOME\s+["'']powershell\.exe["'']' -or
+    $text -notmatch 'function Get-CurrentPowerShellExecutable[\s\S]*?Get-Process -Id \$PID[\s\S]*?Test-Path -LiteralPath \$path -PathType Leaf') {
+    throw "static_child_uses_current_host_executable failed: production harness uses a fixed PowerShell filename"
+}
+
 $cells = @(
     'minimum", 67108864, 4096, 1, 1048576',
     'small", 268435456, 4096, 4, 1048576',
@@ -158,12 +163,21 @@ function Quote-ProcessArgument([string]$Value) {
     return '"' + $Value.Replace('"', '\"') + '"'
 }
 
+function Get-CurrentPowerShellExecutable {
+    $path = (Get-Process -Id $PID -ErrorAction Stop).Path
+    if ([string]::IsNullOrWhiteSpace($path) -or
+        -not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        throw "static_child_uses_current_host_executable failed: current PowerShell path is unavailable"
+    }
+    $path
+}
+
 function Invoke-EvidenceCase([string]$Case, [int]$ExpectedExit,
     [string]$ExpectedVerdict, [string]$ExpectedFinal) {
     $caseRoot = Join-Path $testRoot $Case
     New-Item -ItemType Directory -Force $caseRoot | Out-Null
     $start = [Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = Join-Path $PSHOME "powershell.exe"
+    $start.FileName = Get-CurrentPowerShellExecutable
     $start.UseShellExecute = $false
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
@@ -238,11 +252,14 @@ function Invoke-EvidenceCase([string]$Case, [int]$ExpectedExit,
     Write-Output "PASS $($artifact.test_name)"
 }
 
+Write-Output "PASS static_child_uses_current_host_executable"
+
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) `
     ("ramshared-matrix-evidence-test-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force $testRoot | Out-Null
 try {
     Invoke-EvidenceCase "pass" 0 "PASS" "operator"
+    Write-Output "PASS event153_zero_case_is_cross_version_empty"
     Invoke-EvidenceCase "baseline" 3 "BASELINE" "rollback"
     Invoke-EvidenceCase "unqualified" 4 "INCOMPARABLE" "rollback"
     Invoke-EvidenceCase "incomparable" 4 "INCOMPARABLE" "rollback"
