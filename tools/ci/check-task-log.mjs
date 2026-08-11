@@ -3,8 +3,8 @@
  * Validates the RamShared task log and its temporal provenance.
  *
  * `TASK.md` is intentionally mutable: task state may change. A change to an
- * existing task must advance its `Updated at` timestamp, so the log preserves
- * a reviewable temporal boundary without pretending that it is append-only.
+ * existing task must advance its separate updated date/time fields, so the log
+ * remains reviewable without crowding every record with a timezone suffix.
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
@@ -16,7 +16,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const TARGET = 'TASK.md'
 const MARKER = '<!-- task-schema-v1 -->'
 const TASK_HEADER_RE = /^## (TASK-\d{4,})\s+—\s+(.+)$/
-const RFC3339_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
+const LEGACY_TIMESTAMP_RE = /^(?<date>\d{4}-\d{2}-\d{2})T(?<time>\d{2}:\d{2}:\d{2}(?:\.\d+)?)(?:Z|[+-]\d{2}:\d{2})$/
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+const TIME_RE = /^\d{2}:\d{2}:\d{2}(?:\.\d+)?$/
 const SOURCE_REVISION_RE = /^[0-9a-f]{7,64}$/i
 const STATUSES = new Set(['planned', 'in_progress', 'blocked', 'completed', 'cancelled'])
 
@@ -29,6 +31,46 @@ function value(body, label) {
     .replace(/^`|`\.?$/g, '')
     .replace(/\.$/, '')
     .trim()
+}
+
+function isCalendarDate(value) {
+  if (!DATE_RE.test(value)) return false
+  const [year, month, day] = value.split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+}
+
+function isClockTime(value) {
+  if (!TIME_RE.test(value)) return false
+  const [hour, minute, second] = value.split(/[.:]/).map(Number)
+  return hour < 24 && minute < 60 && second < 60
+}
+
+function temporalFields(record, prefix) {
+  const sharedDate = value(record.body, 'Date')
+  const specificDate = value(record.body, `${prefix} date`)
+  const time = value(record.body, `${prefix} time`)
+  if (sharedDate || specificDate || time) {
+    return {
+      date: specificDate || sharedDate,
+      time,
+      sharedDate: Boolean(sharedDate),
+      specificDate: Boolean(specificDate),
+      legacy: false,
+    }
+  }
+  const legacy = value(record.body, `${prefix} at`).match(LEGACY_TIMESTAMP_RE)
+  if (!legacy) return { date: '', time: '', legacy: false }
+  return { date: legacy.groups.date, time: legacy.groups.time, legacy: true }
+}
+
+function temporalValue(temporal) {
+  if (!isCalendarDate(temporal.date) || !isClockTime(temporal.time)) return null
+  return `${temporal.date}T${temporal.time}`
+}
+
+function temporalLine(line) {
+  return /^(?:\*\*Date:\*\*|\*\*(?:Registered|Updated) (?:at|date|time):\*\*)/u.test(line)
 }
 
 function parseTaskLog(text) {
@@ -59,14 +101,27 @@ function validateRecord(record) {
   const status = value(record.body, 'Status')
   if (!STATUSES.has(status)) add('`**Status:**` must be planned, in_progress, blocked, completed, or cancelled')
   if (!value(record.body, 'Owner role')) add('missing `**Owner role:**`')
-  for (const label of ['Registered at', 'Updated at']) {
-    const timestamp = value(record.body, label)
-    if (!RFC3339_RE.test(timestamp)) add(`missing or invalid \`**${label}:**\` RFC3339 timestamp`)
+
+  const registered = temporalFields(record, 'Registered')
+  const updated = temporalFields(record, 'Updated')
+  for (const [label, temporal] of [['Registered', registered], ['Updated', updated]]) {
+    if (temporal.legacy) add(`use separate \`**Date:**\` or \`**${label} date:**\`, plus \`**${label} time:**\` fields`)
+    if (!isCalendarDate(temporal.date)) add(`missing or invalid \`**Date:**\` / \`**${label} date:**\``)
+    if (!isClockTime(temporal.time)) add(`missing or invalid \`**${label} time:**\``)
   }
-  const registered = value(record.body, 'Registered at')
-  const updated = value(record.body, 'Updated at')
-  if (RFC3339_RE.test(registered) && RFC3339_RE.test(updated) && Date.parse(updated) < Date.parse(registered)) {
-    add('`**Updated at:**` must not precede `**Registered at:**`')
+  const registeredValue = temporalValue(registered)
+  const updatedValue = temporalValue(updated)
+  if (registeredValue && updatedValue && updatedValue < registeredValue) {
+    add('`**Updated date/time:**` must not precede `**Registered date/time:**`')
+  }
+  if (
+    (registered.sharedDate && (registered.specificDate || updated.specificDate)) ||
+    (!registered.sharedDate &&
+      registeredValue &&
+      updatedValue &&
+      registered.date === updated.date)
+  ) {
+    add('use one shared `**Date:**` when registration and update share a calendar day')
   }
   if (!SOURCE_REVISION_RE.test(value(record.body, 'Source revision'))) {
     add('missing or invalid `**Source revision:**` Git revision')
@@ -113,9 +168,9 @@ function readBaseTaskLog(root, baseRef) {
     return {
       validBase: true,
       text: execFileSync('git', ['show', `${baseRef}:${TARGET}`], {
-      cwd: root,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: root,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
       }),
     }
   } catch {
@@ -124,7 +179,7 @@ function readBaseTaskLog(root, baseRef) {
 }
 
 function comparable(record) {
-  return record.body.join('\n').trim()
+  return record.body.filter((line) => !temporalLine(line)).join('\n').trim()
 }
 
 export function run({ root = ROOT, baseRef = null, all = false } = {}) {
@@ -148,10 +203,10 @@ export function run({ root = ROOT, baseRef = null, all = false } = {}) {
           continue
         }
         if (comparable(prior) === comparable(next)) continue
-        const priorUpdated = value(prior.body, 'Updated at')
-        const nextUpdated = value(next.body, 'Updated at')
-        if (!RFC3339_RE.test(nextUpdated) || nextUpdated === priorUpdated || Date.parse(nextUpdated) <= Date.parse(priorUpdated)) {
-          violations.push({ line: next.headerLine, rule: 'temporal-update', message: `changed task ${id} requires a newer \`**Updated at:**\` RFC3339 timestamp` })
+        const priorUpdated = temporalValue(temporalFields(prior, 'Updated'))
+        const nextUpdated = temporalValue(temporalFields(next, 'Updated'))
+        if (!nextUpdated || nextUpdated === priorUpdated || nextUpdated <= priorUpdated) {
+          violations.push({ line: next.headerLine, rule: 'temporal-update', message: `changed task ${id} requires a newer \`**Updated date:**\` and \`**Updated time:**\`` })
         }
       }
     }

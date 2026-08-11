@@ -51,12 +51,12 @@ test('uses one date when registration and update share a calendar day', () => {
   const redundant = taskLog(
     RECORD.replace(
       '**Date:** `2026-08-11`.',
-      '**Registered date:** `2026-08-11`.\\n**Updated date:** `2026-08-11`.'
+      '**Registered date:** `2026-08-11`.\n**Updated date:** `2026-08-11`.'
     )
   )
 
   assert.deepEqual(validateTaskLog(taskLog()), [])
-  assert.match(JSON.stringify(validateTaskLog(redundant)), /redundant/)
+  assert.match(JSON.stringify(validateTaskLog(redundant)), /shared/)
 })
 
 test('rejects combined timestamps or missing separate date and time fields', () => {

@@ -10,13 +10,15 @@ reinterpret or rewrite historical evidence.
 
 - `Schema: ramshared.task.v1`;
 - a bounded status and an owner role;
-- `Registered at` and `Updated at` as RFC3339 timestamps;
+- `Registered time` and `Updated time`, plus one shared `Date` when both
+  moments are on the same calendar day; otherwise separate `Registered date`
+  and `Updated date` fields;
 - the observed Git source revision;
 - destinations, scope, and evidence or blockers.
 
 The log is mutable only to represent current work. When an existing task
-changes, `Updated at` must advance. A task cannot be silently removed in a
-diff-aware review.
+changes, its updated date/time must advance. A task cannot be silently removed
+in a diff-aware review.
 
 Run:
 
