@@ -8,6 +8,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import test from 'node:test'
@@ -15,6 +16,7 @@ import test from 'node:test'
 import {
   buildEvidenceCatalog,
   renderEvidenceCatalog,
+  runCli,
   validateCampaignManifest,
   validateProspectiveEvidence,
   validateRepository,
@@ -37,6 +39,14 @@ function write(root, relative, content) {
   mkdirSync(dirname(destination), { recursive: true })
   writeFileSync(destination, content)
   return destination
+}
+
+function git(root, args) {
+  return execFileSync('git', args, {
+    cwd: root,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
 }
 
 function policy() {
@@ -277,6 +287,53 @@ test('historical_catalog_is_observed_not_qualified', () => {
   }
 })
 
+test('catalog_ignores_untracked_local_evidence', () => {
+  const root = fixtureRoot()
+  try {
+    const tracked =
+      'docs/specs/no-milestone/wsl2-freeze/evidence/historical/summary.txt'
+    const ignored =
+      'docs/specs/no-milestone/wsl2-freeze/evidence/historical/local-forensics.log'
+    write(root, tracked, 'tracked historical observation\n')
+    write(root, ignored, 'local only\n')
+
+    const catalog = buildEvidenceCatalog({
+      root,
+      policy: policy(),
+      trackedPaths: new Set([tracked]),
+    })
+
+    assert.deepEqual(catalog.entries.map((entry) => entry.path), [tracked])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('cli_catalog_generation_uses_tracked_git_paths', () => {
+  const root = fixtureRoot()
+  try {
+    const tracked =
+      'docs/specs/no-milestone/wsl2-freeze/evidence/historical/summary.txt'
+    const ignored =
+      'docs/specs/no-milestone/wsl2-freeze/evidence/historical/local-forensics.log'
+    write(root, tracked, 'tracked historical observation\n')
+    write(root, 'docs/governance/campaign-evidence-lifecycle.json', `${JSON.stringify(repositoryPolicy())}\n`)
+    git(root, ['init', '--quiet'])
+    git(root, ['add', 'docs/governance/campaign-evidence-lifecycle.json', tracked])
+
+    assert.equal(runCli(['--generate'], root), 0)
+    git(root, ['add', 'docs/governance/campaign-evidence-catalog.generated.json'])
+    write(root, ignored, 'local only\n')
+
+    assert.equal(runCli(['--check'], root), 0)
+    assert.equal(runCli(['--unexpected'], root), 64)
+    const catalog = JSON.parse(readFileSync(join(root, 'docs/governance/campaign-evidence-catalog.generated.json'), 'utf8'))
+    assert.deepEqual(catalog.entries.map((entry) => entry.path), [tracked])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('diff_ratchet_refuses_new_unmanifested_evidence', () => {
   const root = fixtureRoot()
   try {
@@ -311,22 +368,41 @@ test('repository_check_requires_a_current_catalog_and_closed_manifest', () => {
     })
     delete manifest._run_relative
     write(root, `${runRelative}/campaign-manifest.json`, `${JSON.stringify(manifest)}\n`)
+    const trackedPaths = new Set([
+      `${runRelative}/before-after.json`,
+      `${runRelative}/campaign-manifest.json`,
+    ])
     write(
       root,
       'docs/governance/campaign-evidence-lifecycle.json',
       `${JSON.stringify(activePolicy)}\n`,
     )
-    const catalog = buildEvidenceCatalog({ root, policy: activePolicy })
+    const catalog = buildEvidenceCatalog({ root, policy: activePolicy, trackedPaths })
     write(root, 'docs/governance/campaign-evidence-catalog.generated.json', renderEvidenceCatalog(catalog))
 
-    assert.deepEqual(validateRepository({ root }).findings, [])
+    assert.deepEqual(validateRepository({ root, trackedPaths }).findings, [])
     write(root, 'docs/governance/campaign-evidence-catalog.generated.json', '{}\n')
-    assert.match(validateRepository({ root }).findings.join('\n'), /catalog-stale/)
+    assert.match(validateRepository({ root, trackedPaths }).findings.join('\n'), /catalog-stale/)
     const manifestPath = join(root, runRelative, 'campaign-manifest.json')
     const outside = write(root, 'outside-manifest.json', '{}\n')
     rmSync(manifestPath)
     symlinkSync(outside, manifestPath)
-    assert.match(validateRepository({ root }).findings.join('\n'), /manifest:.*manifest-parse/)
+    assert.match(validateRepository({ root, trackedPaths }).findings.join('\n'), /manifest:.*manifest-parse/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('repository_check_refuses_missing_tracked_file_source', () => {
+  const root = fixtureRoot()
+  try {
+    write(
+      root,
+      'docs/governance/campaign-evidence-lifecycle.json',
+      `${JSON.stringify(repositoryPolicy())}\n`,
+    )
+
+    assert.match(validateRepository({ root }).findings.join('\n'), /tracked-files/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

@@ -20,6 +20,12 @@ implementation change. Native campaign scripts continue to own execution.
 `docs/INDEX.md` remains an SSDV3 index. The generated catalog is a separate
 observed-fact view and never changes an SSDV3 status.
 
+## Technical decisions
+
+| # | Decision | Why |
+| --- | --- | --- |
+| DT-1 | The historical catalog and discovered campaign manifests are derived only from repository paths returned by `git ls-files` beneath configured evidence roots. Ignored or untracked local files, directories, symlinks, and logs do not change the catalog or the repository check. Failure to obtain the tracked-path set is a terminal `tracked-files` finding. The prospective `--base` ratchet remains responsible for newly added tracked evidence. | The catalog is committed public metadata and must be byte-identical in a developer workspace and a clean GitHub Actions checkout. Local forensic logs must not create stale generated output or a false hosted failure. |
+
 ## Manifest v1
 
 New runs use `campaign-manifest.json` inside a single run directory under an
@@ -59,8 +65,8 @@ orphan temporary files terminal.
 
 ## Historical catalog and ratchet
 
-The catalog generator scans committed `docs/**/evidence/**` files with bounded
-file and byte limits. Existing groups become immutable
+The catalog generator scans only Git-tracked `docs/**/evidence/**` files with
+bounded file and byte limits. Existing groups become immutable
 `legacy-unqualified` observations with an owner and reason from the policy.
 They are deliberately ineligible for PASS promotion.
 
@@ -91,7 +97,15 @@ The checker fails closed for each of the following:
 | `unsafe_or_sensitive_artifact_is_refused` | Path, symlink, size, and sanitization boundaries fail closed. |
 | `inventory_tamper_and_orphan_are_refused` | Hash/bytes and exact-set custody are enforced. |
 | `historical_catalog_is_observed_not_qualified` | Legacy evidence remains visible but ineligible for promotion. |
+| `catalog_ignores_untracked_local_evidence` | An ignored local artifact does not change the committed catalog. |
+| `cli_catalog_generation_uses_tracked_git_paths` | The public `--generate` and `--check` commands use Git-tracked evidence only and reject invalid arguments. |
+| `repository_check_refuses_missing_tracked_file_source` | A repository check without a trustworthy tracked-file source is terminal. |
 | `diff_ratchet_refuses_new_unmanifested_evidence` | Future evidence adopts the contract without rewriting history. |
+
+The canonical coverage gate for `tools/ci/check-campaign-evidence-lifecycle.mjs`
+uses Node's built-in per-file thresholds of at least 80% lines, branches, and
+functions. It is a static repository gate; no host or campaign runner is
+executed.
 
 ## Platform gates and limits
 
