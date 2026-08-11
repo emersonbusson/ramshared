@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -150,6 +150,47 @@ test('rejects_absolute_missing_or_hash_mismatched_artifact', () => {
   writeFileSync(path.join(root, 'evidence', 'result.json'), '{}')
   const mismatch = validRecord({ artifacts: [{ path: 'evidence/result.json', bytes: 2, sha256: SHA }] })
   assert.match(validateRecord(mismatch, { root }).join('\n'), /artifact-hash/)
+})
+
+test('rejects_symlinked_or_oversized_artifacts_without_following_them', () => {
+  const root = fixtureRepo()
+  const evidence = path.join(root, 'evidence')
+  mkdirSync(evidence)
+  const target = path.join(evidence, 'target.json')
+  const artifact = path.join(evidence, 'result.json')
+  writeFileSync(target, '{}')
+  symlinkSync(target, artifact)
+  const linked = validRecord({ artifacts: [{ path: 'evidence/result.json', bytes: 2, sha256: SHA }] })
+  assert.match(validateRecord(linked, { root }).join('\n'), /artifact-symlink/)
+
+  rmSync(artifact)
+  writeFileSync(artifact, 'x'.repeat(8 * 1024 * 1024 + 1))
+  const large = validRecord({ artifacts: [{ path: 'evidence/result.json', bytes: 8 * 1024 * 1024 + 1, sha256: SHA }] })
+  assert.match(validateRecord(large, { root }).join('\n'), /artifact-byte-limit/)
+})
+
+test('rejects_artifact_inventory_exhaustion_and_symlinked_registry_files', () => {
+  const record = validRecord({ artifacts: Array.from({ length: 129 }, () => ({ path: 'artifact.json', bytes: 0, sha256: SHA })) })
+  assert.match(validateRecord(record, { root: process.cwd() }).join('\n'), /artifact-count-limit/)
+
+  const root = fixtureRepo()
+  const results = path.join(root, 'docs', 'benchmarks', 'results.jsonl')
+  const target = path.join(root, 'docs', 'benchmarks', 'target.jsonl')
+  writeFileSync(target, readFileSync(results))
+  rmSync(results)
+  symlinkSync(target, results)
+  assert.match(validateRepository({ root }).findings.join('\n'), /results-symlink/)
+})
+
+test('rejects_artifact_traversal_and_malformed_jsonl_without_echoing_contents', () => {
+  const traversal = validRecord({ artifacts: [{ path: '../private.json', bytes: 0, sha256: SHA }] })
+  assert.match(validateRecord(traversal, { root: process.cwd() }).join('\n'), /artifact-path/)
+
+  const root = fixtureRepo()
+  writeFileSync(path.join(root, 'docs', 'benchmarks', 'results.jsonl'), '{private-token}\n')
+  const findings = validateRepository({ root }).findings.join('\n')
+  assert.match(findings, /jsonl-parse:1/)
+  assert.doesNotMatch(findings, /private-token/)
 })
 
 test('rejects_secret_pii_or_kernel_address_without_echoing_value', () => {

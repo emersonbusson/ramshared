@@ -44,6 +44,10 @@ const ENTRY_HEADER_RE = /^## \d{4}-\d{2}-\d{2}/
 const ENTRY_HEADER_FULL_RE = /^## \d{4}-\d{2}-\d{2} \d{2}:\d{2}\b/
 const BOLD_LABEL_RE = /^\*\*[^*]+:\*\*/
 const DIGIT_RE = /\d/
+const VERSIONED_EVIDENCE_MARKER = '<!-- validation-schema-v2 -->'
+const RFC3339_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
+const EVIDENCE_ID_RE = /^EVD-\d{4,}$/
+const SOURCE_REVISION_RE = /^[0-9a-f]{7,64}$/i
 
 const EFFECT_CATEGORIES = new Set([
   'integration',
@@ -181,6 +185,35 @@ export function validateEntry(entry) {
     out.push(...validateGovernanceEntry(entry))
   }
 
+  return out
+}
+
+export function validateVersionedEvidenceEntry(entry) {
+  const out = []
+  const add = (message) => out.push({ line: entry.headerLine, rule: 'evidence-v2', message })
+  if (firstLabel(entry.body, 'Evidence schema').blockText.trim() !== '`ramshared.validation.v2`.') {
+    add('missing `**Evidence schema:** `ramshared.validation.v2``')
+  }
+  const evidenceID = firstLabel(entry.body, 'Evidence ID').blockText.trim().replace(/^`|`\.?$/g, '')
+  if (!EVIDENCE_ID_RE.test(evidenceID)) add('missing or invalid `**Evidence ID:**`')
+  if (!firstLabel(entry.body, 'Owner role').blockText.trim()) add('missing `**Owner role:**`')
+  for (const label of ['Observed at', 'Verified at']) {
+    const timestamp = firstLabel(entry.body, label).blockText.trim().replace(/^`|`\.?$/g, '')
+    if (!RFC3339_RE.test(timestamp)) add(`missing or invalid \`**${label}:**\` RFC3339 timestamp`)
+  }
+  const sourceRevision = firstLabel(entry.body, 'Source revision').blockText.trim().replace(/^`|`\.?$/g, '')
+  if (!SOURCE_REVISION_RE.test(sourceRevision)) add('missing or invalid `**Source revision:**` Git revision')
+  const lifecycle = firstLabel(entry.body, 'Lifecycle').blockText.trim().replace(/^`|`\.?$/g, '')
+  if (!['reviewable', 'immutable'].includes(lifecycle)) {
+    add('`**Lifecycle:**` must be `reviewable` or `immutable`')
+    return out
+  }
+  if (lifecycle === 'reviewable') {
+    if (!firstLabel(entry.body, 'Retention').blockText.trim()) add('missing `**Retention:**` for reviewable evidence')
+    if (!firstLabel(entry.body, 'Freshness').blockText.trim()) add('missing `**Freshness:**` for reviewable evidence')
+  } else if (!firstLabel(entry.body, 'Immutability reason').blockText.trim() && !firstLabel(entry.body, 'Retention').blockText.trim()) {
+    add('immutable evidence requires `**Immutability reason:**` or `**Retention:**`')
+  }
   return out
 }
 
@@ -332,6 +365,7 @@ export function run({ root = ROOT, baseRef = null, all = false } = {}) {
   }
   const content = readFileSync(file, 'utf8')
   const lines = content.split('\n')
+  const versionedMarkerLine = lines.findIndex((line) => line.trim() === VERSIONED_EVIDENCE_MARKER) + 1
   const firstEntryLine = findFirstEntryLine(lines)
   const entries = parseEntries(lines, firstEntryLine)
   if (entries.length === 0) {
@@ -353,7 +387,12 @@ export function run({ root = ROOT, baseRef = null, all = false } = {}) {
 
   if (all) {
     for (const e of entries) {
-      if (!isAllowed(e)) violations.push(...validateEntry(e))
+      if (!isAllowed(e)) {
+        violations.push(...validateEntry(e))
+        if (versionedMarkerLine > 0 && e.headerLine > versionedMarkerLine) {
+          violations.push(...validateVersionedEvidenceEntry(e))
+        }
+      }
     }
     return { ok: violations.length === 0, violations }
   }
@@ -379,9 +418,19 @@ export function run({ root = ROOT, baseRef = null, all = false } = {}) {
       violations.push(...validateEntry(e))
     } else if (addedInside.length > 0 && !isAllowed(e)) {
       const nextEntryIsNew = index + 1 < entries.length && added.has(entries[index + 1].headerLine)
-      const separatorOnly = nextEntryIsNew && addedInside.every((line) => lines[line - 1].trim() === '')
+      const separatorOnly = nextEntryIsNew && addedInside.every((line) => {
+        const text = lines[line - 1].trim()
+        return text === '' || text === VERSIONED_EVIDENCE_MARKER
+      })
       if (separatorOnly) continue
       violations.push({ line: e.headerLine, rule: 'append-only-violation', message: 'added content inside an existing entry; append a new entry instead' })
+    }
+  }
+  if (versionedMarkerLine > 0) {
+    for (const e of entries) {
+      if (e.headerLine > versionedMarkerLine && added.has(e.headerLine)) {
+        violations.push(...validateVersionedEvidenceEntry(e))
+      }
     }
   }
   return { ok: violations.length === 0, violations }

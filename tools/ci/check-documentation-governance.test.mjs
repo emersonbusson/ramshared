@@ -120,4 +120,16 @@ test('governance_check_is_deterministic', () => { const privatePath = ['', 'home
 test('repository_governance_run_passes', () => { const result = runGovernance({ root: process.cwd() }); assert.equal(result.ok, true); assert.equal(result.counts.findings, 0); assert.ok(result.counts.files > 100) })
 test('governance_cli_is_read_only', () => { const src = readFileSync(new URL('./check-documentation-governance.mjs', import.meta.url), 'utf8'); assert.doesNotMatch(src, /\b(?:writeFile|rmSync|unlinkSync|execSync|spawnSync)\b/) })
 test('docs_check_includes_governance_gate', () => { const text = readFileSync(new URL('../../scripts/docs-check.sh', import.meta.url), 'utf8'); assert.match(text, /check-documentation-governance\.mjs --all/) })
+test('docs_check_keeps_temporal_custody_and_observation_gates', () => {
+  const text = readFileSync(new URL('../../scripts/docs-check.sh', import.meta.url), 'utf8')
+  for (const command of [
+    'check-document-lifecycle.mjs --all',
+    'generate-documentation-inventory.mjs --check',
+    'generate-capability-observations.mjs --check',
+    'check-task-log.mjs --all',
+    'check-space-cleanup-receipts.mjs --check',
+    'check-campaign-evidence-lifecycle.mjs --check',
+    'check-adr-index.mjs --check',
+  ]) assert.ok(text.includes(command), `missing ${command}`)
+})
 test('docs_check_is_read_only', () => { const text = readFileSync(new URL('../../scripts/docs-check.sh', import.meta.url), 'utf8'); assert.doesNotMatch(text, /\b(?:rm|swapoff|sc\.exe|shutdown|Restart-Computer)\b/) })

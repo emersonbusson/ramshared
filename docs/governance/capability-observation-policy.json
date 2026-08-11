@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "catalog_path": "docs/governance/capability-observations.generated.json",
+  "spec_root": "docs/specs/no-milestone",
+  "max_specs": 128,
+  "max_document_bytes": 262144,
+  "allowed_surface_prefixes": [
+    "crates",
+    "kernel",
+    "scripts",
+    "src",
+    "tests",
+    "tools",
+    "windows"
+  ]
+}

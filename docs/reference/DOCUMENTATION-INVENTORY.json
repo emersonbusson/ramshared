@@ -1,0 +1,2667 @@
+{
+  "schemaVersion": "ramshared.documentation-inventory.v1",
+  "source": "Markdown paths visible in the repository worktree; classification is not content verification",
+  "counts": {
+    "total": 223,
+    "classified": 212,
+    "excluded": 11,
+    "unclassified": 0,
+    "ambiguous": 0
+  },
+  "entries": [
+    {
+      "path": ".claude/rules/benchmarks.md",
+      "disposition": "classified",
+      "ruleId": "agent-rules",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "agent-governance",
+      "canonicalSource": ".claude/rules/documentation.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": ".claude/rules/coding.md",
+      "disposition": "classified",
+      "ruleId": "agent-rules",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "agent-governance",
+      "canonicalSource": ".claude/rules/documentation.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": ".claude/rules/documentation.md",
+      "disposition": "classified",
+      "ruleId": "agent-rules",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "agent-governance",
+      "canonicalSource": ".claude/rules/documentation.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": ".claude/rules/governance.md",
+      "disposition": "classified",
+      "ruleId": "agent-rules",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "agent-governance",
+      "canonicalSource": ".claude/rules/documentation.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": ".claude/rules/kernel.md",
+      "disposition": "classified",
+      "ruleId": "agent-rules",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "agent-governance",
+      "canonicalSource": ".claude/rules/documentation.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": ".claude/rules/security.md",
+      "disposition": "classified",
+      "ruleId": "agent-rules",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "agent-governance",
+      "canonicalSource": ".claude/rules/documentation.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": ".claude/rules/ssdv3.md",
+      "disposition": "classified",
+      "ruleId": "agent-rules",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "agent-governance",
+      "canonicalSource": ".claude/rules/documentation.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": ".github/pull_request_template.md",
+      "disposition": "excluded",
+      "ruleId": "pull-request-template",
+      "verification": {
+        "state": "not-applicable"
+      },
+      "owner": "release-engineering",
+      "reason": "Review template is governed as repository process metadata."
+    },
+    {
+      "path": "AGENTS.md",
+      "disposition": "classified",
+      "ruleId": "agent-entrypoints",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "agent-governance",
+      "canonicalSource": "AGENTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "ARCHITECTURE.md",
+      "disposition": "classified",
+      "ruleId": "root-architecture-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "CHANGELOG.md",
+      "disposition": "classified",
+      "ruleId": "root-project-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "CHANGELOG.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "CLAUDE.md",
+      "disposition": "classified",
+      "ruleId": "agent-source-of-truth",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "agent-governance",
+      "canonicalSource": "CLAUDE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "disposition": "classified",
+      "ruleId": "root-contributing-document",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "CONTRIBUTING.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "MANIFESTO.md",
+      "disposition": "classified",
+      "ruleId": "root-manifesto-document",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "MANIFESTO.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "README.md",
+      "disposition": "classified",
+      "ruleId": "root-product-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "product-documentation",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "README.pt-BR.md",
+      "disposition": "excluded",
+      "ruleId": "localized-root-readme",
+      "verification": {
+        "state": "not-applicable"
+      },
+      "owner": "product-documentation",
+      "reason": "Localized derivative; README.md remains canonical."
+    },
+    {
+      "path": "ROADMAP.md",
+      "disposition": "classified",
+      "ruleId": "root-roadmap-document",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "product-documentation",
+      "canonicalSource": "ROADMAP.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "SECURITY.md",
+      "disposition": "classified",
+      "ruleId": "root-security-document",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "security",
+      "canonicalSource": "SECURITY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "TASK.md",
+      "disposition": "classified",
+      "ruleId": "root-task-map",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "delivery-governance",
+      "canonicalSource": "TASK.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/BENCHMARKS.md",
+      "disposition": "classified",
+      "ruleId": "top-level-docs",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/DOCUMENTATION-PARITY.md",
+      "disposition": "classified",
+      "ruleId": "top-level-docs",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/FAQ.md",
+      "disposition": "classified",
+      "ruleId": "top-level-docs",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/INDEX.md",
+      "disposition": "classified",
+      "ruleId": "top-level-docs",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/LIBRARIES.md",
+      "disposition": "classified",
+      "ruleId": "top-level-docs",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/SSDV3-PROMPTS.md",
+      "disposition": "classified",
+      "ruleId": "top-level-docs",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/benchmarks/README.md",
+      "disposition": "classified",
+      "ruleId": "benchmark-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "benchmarking",
+      "canonicalSource": "docs/BENCHMARKS.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/broker-telemetry-reconciliation/README.md",
+      "disposition": "classified",
+      "ruleId": "telemetry-reconciliation-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/ci/CI-TOPOLOGY.md",
+      "disposition": "classified",
+      "ruleId": "ci-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "release-engineering",
+      "canonicalSource": "docs/ci/CI-TOPOLOGY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/ci/RELEASE-INTEGRITY.md",
+      "disposition": "classified",
+      "ruleId": "ci-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "release-engineering",
+      "canonicalSource": "docs/ci/CI-TOPOLOGY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/decisions/ADR-0001-vram-cascade-tiering.md",
+      "disposition": "classified",
+      "ruleId": "architecture-decisions",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/decisions/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/decisions/ADR-0002-rust-userspace-port.md",
+      "disposition": "classified",
+      "ruleId": "architecture-decisions",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/decisions/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/decisions/ADR-0003-page-state-swap-safety.md",
+      "disposition": "classified",
+      "ruleId": "architecture-decisions",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/decisions/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/decisions/ADR-0004-ublk-io-uring-crate.md",
+      "disposition": "classified",
+      "ruleId": "architecture-decisions",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/decisions/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/decisions/ADR-0005-broker-protocol-jsonl.md",
+      "disposition": "classified",
+      "ruleId": "architecture-decisions",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/decisions/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/decisions/ADR-0006-storport-virtual-miniport.md",
+      "disposition": "classified",
+      "ruleId": "architecture-decisions",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/decisions/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/decisions/ADR-0007-kernel-native-language-c.md",
+      "disposition": "classified",
+      "ruleId": "architecture-decisions",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/decisions/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/decisions/ADR-0007-windows-local-broker-ipc.md",
+      "disposition": "classified",
+      "ruleId": "architecture-decisions",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/decisions/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/decisions/ADR-0008-evidence-and-document-lifecycle.md",
+      "disposition": "classified",
+      "ruleId": "architecture-decisions",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/decisions/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/decisions/README.md",
+      "disposition": "classified",
+      "ruleId": "architecture-decisions",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/decisions/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/governance/CAPABILITY-OBSERVATIONS.md",
+      "disposition": "classified",
+      "ruleId": "documentation-governance",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/governance/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/governance/DOCUMENT-LIFECYCLE.md",
+      "disposition": "classified",
+      "ruleId": "documentation-governance",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/governance/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/governance/README.md",
+      "disposition": "classified",
+      "ruleId": "documentation-governance",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/governance/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/governance/RECORD-SCHEMAS.md",
+      "disposition": "classified",
+      "ruleId": "documentation-governance",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/governance/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/labs/DUALBOOT-KERNEL-TRUE.md",
+      "disposition": "classified",
+      "ruleId": "lab-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "lab-safety",
+      "canonicalSource": "docs/labs/LAB-DISK-GUARD.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/labs/EVIDENCE-RETENTION.md",
+      "disposition": "classified",
+      "ruleId": "lab-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "lab-safety",
+      "canonicalSource": "docs/labs/LAB-DISK-GUARD.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/labs/HYPERV-RUSSIA-LAB.md",
+      "disposition": "classified",
+      "ruleId": "lab-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "lab-safety",
+      "canonicalSource": "docs/labs/LAB-DISK-GUARD.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/labs/HYPERV-VM-ACCESS.md",
+      "disposition": "classified",
+      "ruleId": "lab-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "lab-safety",
+      "canonicalSource": "docs/labs/LAB-DISK-GUARD.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/labs/LAB-DISK-GUARD.md",
+      "disposition": "classified",
+      "ruleId": "lab-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "lab-safety",
+      "canonicalSource": "docs/labs/LAB-DISK-GUARD.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/labs/PARALLEL-WINDOWS-AND-CUSTOM-KERNEL.md",
+      "disposition": "classified",
+      "ruleId": "lab-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "lab-safety",
+      "canonicalSource": "docs/labs/LAB-DISK-GUARD.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/labs/WSL-KERNEL-LAB.md",
+      "disposition": "classified",
+      "ruleId": "lab-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "lab-safety",
+      "canonicalSource": "docs/labs/LAB-DISK-GUARD.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/labs/WSL2-UPSTREAM-CONFIG-PR.md",
+      "disposition": "classified",
+      "ruleId": "lab-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "lab-safety",
+      "canonicalSource": "docs/labs/LAB-DISK-GUARD.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/marketing/DEMO.md",
+      "disposition": "classified",
+      "ruleId": "marketing-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "product-documentation",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/marketing/LAUNCH-KIT.md",
+      "disposition": "classified",
+      "ruleId": "marketing-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "product-documentation",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/marketing/posts/01-reddit-rust-en.md",
+      "disposition": "excluded",
+      "ruleId": "marketing-post-copy",
+      "verification": {
+        "state": "not-applicable"
+      },
+      "owner": "product-documentation",
+      "reason": "Campaign copy is not normative product documentation."
+    },
+    {
+      "path": "docs/marketing/posts/02-twitter-en.md",
+      "disposition": "excluded",
+      "ruleId": "marketing-post-copy",
+      "verification": {
+        "state": "not-applicable"
+      },
+      "owner": "product-documentation",
+      "reason": "Campaign copy is not normative product documentation."
+    },
+    {
+      "path": "docs/marketing/posts/03-twitter-pt.md",
+      "disposition": "excluded",
+      "ruleId": "marketing-post-copy",
+      "verification": {
+        "state": "not-applicable"
+      },
+      "owner": "product-documentation",
+      "reason": "Campaign copy is not normative product documentation."
+    },
+    {
+      "path": "docs/marketing/posts/04-reddit-brdev-pt.md",
+      "disposition": "excluded",
+      "ruleId": "marketing-post-copy",
+      "verification": {
+        "state": "not-applicable"
+      },
+      "owner": "product-documentation",
+      "reason": "Campaign copy is not normative product documentation."
+    },
+    {
+      "path": "docs/marketing/posts/05-linkedin-en.md",
+      "disposition": "excluded",
+      "ruleId": "marketing-post-copy",
+      "verification": {
+        "state": "not-applicable"
+      },
+      "owner": "product-documentation",
+      "reason": "Campaign copy is not normative product documentation."
+    },
+    {
+      "path": "docs/marketing/posts/06-linkedin-pt.md",
+      "disposition": "excluded",
+      "ruleId": "marketing-post-copy",
+      "verification": {
+        "state": "not-applicable"
+      },
+      "owner": "product-documentation",
+      "reason": "Campaign copy is not normative product documentation."
+    },
+    {
+      "path": "docs/marketing/posts/07-hackernews-en.md",
+      "disposition": "excluded",
+      "ruleId": "marketing-post-copy",
+      "verification": {
+        "state": "not-applicable"
+      },
+      "owner": "product-documentation",
+      "reason": "Campaign copy is not normative product documentation."
+    },
+    {
+      "path": "docs/marketing/posts/README.md",
+      "disposition": "excluded",
+      "ruleId": "marketing-post-copy",
+      "verification": {
+        "state": "not-applicable"
+      },
+      "owner": "product-documentation",
+      "reason": "Campaign copy is not normative product documentation."
+    },
+    {
+      "path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",
+      "disposition": "classified",
+      "ruleId": "methodology-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "methodology",
+      "canonicalSource": "docs/methodology/kahneman-disciplines.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/methodology/kahneman-disciplines.md",
+      "disposition": "classified",
+      "ruleId": "methodology-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "methodology",
+      "canonicalSource": "docs/methodology/kahneman-disciplines.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/packaging/INSTALLABLES.md",
+      "disposition": "classified",
+      "ruleId": "packaging-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "release-engineering",
+      "canonicalSource": "docs/packaging/INSTALLABLES.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/packaging/WINDOWS-DRIVER-DISTRIBUTION.md",
+      "disposition": "classified",
+      "ruleId": "packaging-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "release-engineering",
+      "canonicalSource": "docs/packaging/INSTALLABLES.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/postmortems/2026-07-09-wsl-ghost-ublk-hang.md",
+      "disposition": "classified",
+      "ruleId": "postmortem-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/postmortems/TEMPLATE.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/postmortems/TEMPLATE.md",
+      "disposition": "classified",
+      "ruleId": "postmortem-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/postmortems/TEMPLATE.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/pt-BR/README.md",
+      "disposition": "excluded",
+      "ruleId": "localized-documents",
+      "verification": {
+        "state": "not-applicable"
+      },
+      "owner": "product-documentation",
+      "reason": "Localized derivative; English documentation remains canonical."
+    },
+    {
+      "path": "docs/reference/REFERENCE-INDEX.md",
+      "disposition": "classified",
+      "ruleId": "reference-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/reference/REFERENCE-INDEX.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/BLACK-BOX-FORENSICS.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/DEGRADATION-MATRIX.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/GAP-REGISTER.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/HANG-FREEZE-AUDIT-2026-07-13.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/JULES-PR-AUDIT-20260724.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/JULES-PR-AUDIT-20260810.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/SPEC-CODE-CONFRONT-cascade-2026-07-13.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/evidence/wsl2-freeze-qemu-campaign-20260716.md",
+      "disposition": "classified",
+      "ruleId": "reliability-evidence",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/reliability/memory-broker-p0-results.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/wsl2-cascade-validation.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/wsl2-fase0-final.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reviews/README.md",
+      "disposition": "classified",
+      "ruleId": "review-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/reviews/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/runbooks/FASE-B-KERNEL.md",
+      "disposition": "classified",
+      "ruleId": "operation-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "operations",
+      "canonicalSource": "docs/runbooks/windows-autonomous-broker.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/runbooks/README.md",
+      "disposition": "classified",
+      "ruleId": "operation-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "operations",
+      "canonicalSource": "docs/runbooks/windows-autonomous-broker.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/runbooks/REVIEW-ADR.md",
+      "disposition": "classified",
+      "ruleId": "operation-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "operations",
+      "canonicalSource": "docs/runbooks/windows-autonomous-broker.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/runbooks/WORKSTATION-SPACE-RECOVERY.md",
+      "disposition": "classified",
+      "ruleId": "operation-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "operations",
+      "canonicalSource": "docs/runbooks/windows-autonomous-broker.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/runbooks/windows-autonomous-broker.md",
+      "disposition": "classified",
+      "ruleId": "operation-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "operations",
+      "canonicalSource": "docs/runbooks/windows-autonomous-broker.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/runbooks/windows-vram-drive-drill.md",
+      "disposition": "classified",
+      "ruleId": "operation-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "operations",
+      "canonicalSource": "docs/runbooks/windows-autonomous-broker.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/security/THREAT-MODEL.md",
+      "disposition": "classified",
+      "ruleId": "security-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "security",
+      "canonicalSource": "docs/security/THREAT-MODEL.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/benchmark-evidence-integrity/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/benchmark-evidence-integrity/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/benchmark-evidence-integrity/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/broker-telemetry-reconciliation/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/broker-telemetry-reconciliation/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/broker-telemetry-reconciliation/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/campaign-evidence-lifecycle/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/campaign-evidence-lifecycle/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/campaign-evidence-lifecycle/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/campaign-evidence-lifecycle/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-desktop-app/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-desktop-app/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-desktop-app/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-desktop-app/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-lifecycle-observability/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-lifecycle-observability/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-lifecycle-observability/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-transport-policy/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-transport-policy/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-transport-policy/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-transport-policy/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-vram-ondemand/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-vram-ondemand/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-vram-ondemand/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/cascade-vram-ondemand/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/ci-trust-and-release-integrity/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/ci-trust-and-release-integrity/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/ci-trust-and-release-integrity/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/comment-language-integrity/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/comment-language-integrity/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/custom-kernel-ublk-product-transport/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/custom-kernel-ublk-product-transport/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/custom-kernel-ublk-product-transport/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/documentation-governance-integrity/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/documentation-governance-integrity/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/documentation-governance-integrity/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/documentation-localization-integrity/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/documentation-localization-integrity/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/documentation-localization-integrity/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/external-gpu-workload-wddm-pressure/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/external-gpu-workload-wddm-pressure/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/external-gpu-workload-wddm-pressure/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/kernel-native-language/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/kernel-native-language/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/kernel-vram-as-memory/PASSO0-INVENTORY.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-inventory-and-checklists",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/kernel-vram-as-memory/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/mainline-vram-tiering/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/memory-broker/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/memory-broker/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/memory-broker/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/public-repository-hygiene/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/public-repository-hygiene/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/public-repository-hygiene/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/vram-reclaim-pressure-matrix/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/vram-reclaim-pressure-matrix/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/vram-reclaim-pressure-matrix/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/vram-reclaim-pressure-matrix/evidence/matrix-close-20260724.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-autonomous-broker-service/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-autonomous-broker-service/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-autonomous-broker-service/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-autonomous-broker-service/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-autonomous-broker-service/evidence/README.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-autonomous-broker-service/validation.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-validation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/code-analysis-project-clean-20260716.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/gpupv-offline-umd-copy-20260716T134200Z.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/gpupv-probe-cuda-pass-20260716T173812Z.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260716-224913.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-harness-closure-20260724.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-145248.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-151304.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-174238.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-201130.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-220848.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/infverif-20260716.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/infverif-dirid13-pass-20260716.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/physical-testmode-repetition-20260724.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/signed-vpd-lifecycle-rerun-20260716.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/startio-claim-20260717.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/teardown-hardening-static-20260716.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/terminal-state-vpd-pass-20260716T170631Z.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/verification-closeout-20260716.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/vpd-cache-lifecycle-fix-20260716.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/vpd-exact-pass-20260716.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/vpd-false-green-audit-20260716.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/wdk-build-audit-20260716T171026Z.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-swap-driver/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-swap-driver/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-swap-driver/PREFLIGHT.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-preflight-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-swap-driver/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-task-manager-disk-counters/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-task-manager-disk-counters/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-task-manager-disk-counters/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/windows-task-manager-disk-counters/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-cascade-boot/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-cascade-boot/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-cascade-boot/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-cascade-orphan-recover/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-cascade-orphan-recover/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-cascade-orphan-recover/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-cascade-orphan-recover/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-cascade-swap/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-cascade-swap/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-custom-kernel-p1/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-custom-kernel-p1/AUDIT-PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-custom-kernel-p1/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-custom-kernel-p1/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-custom-kernel-p1/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-freeze-elimination-campaign/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-freeze-elimination-campaign/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-freeze-elimination-campaign/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-freeze/README.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-readmes",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-freeze/evidence/ramshared-kernel-probe-20260717/probe.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-evidence-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-native-vram-autotier/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-native-vram-autotier/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-native-vram-autotier/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-native-vram-autotier/RESEARCH.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-research-and-preflight",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-native-vram-autotier/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-native-vram-tier/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-relay-lifecycle-reliability/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-relay-lifecycle-reliability/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-relay-lifecycle-reliability/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-upstream-native-contribution/CONTRIBUTION-CHECKLIST.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-contribution-checklists",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-upstream-native-contribution/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-upstream-native-contribution/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "drivers/windows/README.md",
+      "disposition": "classified",
+      "ruleId": "windows-driver-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "windows-driver",
+      "canonicalSource": "drivers/windows/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "drivers/windows/ramshared/README.md",
+      "disposition": "classified",
+      "ruleId": "windows-driver-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "windows-driver",
+      "canonicalSource": "drivers/windows/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "drivers/windows/tools/poolstress/README.md",
+      "disposition": "classified",
+      "ruleId": "windows-driver-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "windows-driver",
+      "canonicalSource": "drivers/windows/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "scripts/windows/README.md",
+      "disposition": "classified",
+      "ruleId": "windows-script-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "windows-driver",
+      "canonicalSource": "scripts/windows/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "superprompt.md",
+      "disposition": "classified",
+      "ruleId": "root-hang-audit",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "superprompt.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "validation.md",
+      "disposition": "classified",
+      "ruleId": "root-validation-log",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    }
+  ]
+}

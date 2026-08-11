@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { lstatSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const MAX_FILE_BYTES = 8 * 1024 * 1024
 const MAX_RECORDS = 10000
+const MAX_ARTIFACTS = 128
+const MAX_ARTIFACT_TOTAL_BYTES = 64 * 1024 * 1024
 const SHA256_RE = /^[0-9a-f]{64}$/i
 const VERDICTS = new Set(['RED', 'YELLOW', 'INCOMPARABLE', 'BASELINE', 'PASS'])
 
@@ -72,6 +74,41 @@ function sensitiveRule(value) {
   return rules.some((rule) => rule.test(text))
 }
 
+function resolveRepositoryFile(root, rel, findings, rule) {
+  if (typeof rel !== 'string' || !rel || path.isAbsolute(rel) || /^[A-Za-z]:[\\/]/.test(rel) || rel.split(/[\\/]/).includes('..')) {
+    findings.push(`${rule}-path`)
+    return null
+  }
+  const resolvedRoot = path.resolve(root)
+  const full = path.resolve(resolvedRoot, rel)
+  if (!full.startsWith(`${resolvedRoot}${path.sep}`)) {
+    findings.push(`${rule}-path`)
+    return null
+  }
+  let stat
+  try { stat = lstatSync(full) } catch { findings.push(`${rule}-missing`); return null }
+  if (stat.isSymbolicLink()) { findings.push(`${rule}-symlink`); return null }
+  if (!stat.isFile()) { findings.push(`${rule}-not-file`); return null }
+  return { full, stat }
+}
+
+function readArtifact(file, findings) {
+  if (file.stat.size > MAX_FILE_BYTES) {
+    findings.push('artifact-byte-limit')
+    return null
+  }
+  try { return readFileSync(file.full) } catch { findings.push('artifact-read'); return null }
+}
+
+function readRepositoryFile(file, findings, rule) {
+  let stat
+  try { stat = lstatSync(file) } catch { findings.push(`missing-${rule}`); return null }
+  if (stat.isSymbolicLink()) { findings.push(`${rule}-symlink`); return null }
+  if (!stat.isFile()) { findings.push(`${rule}-not-file`); return null }
+  if (stat.size > MAX_FILE_BYTES) { findings.push(`${rule}-byte-limit`); return null }
+  try { return readFileSync(file, 'utf8') } catch { findings.push(`${rule}-read`); return null }
+}
+
 function requiredObject(record, key, findings) {
   if (!record[key] || typeof record[key] !== 'object' || Array.isArray(record[key])) {
     findings.push(`required-${key}`)
@@ -129,44 +166,35 @@ export function validateRecord(record, { root = ROOT } = {}) {
   if (typeof record.decision.rollback_trigger !== 'string' || record.decision.rollback_trigger.length < 3) findings.push('rollback-trigger')
   if (record.lifecycle.binary_match !== true || record.lifecycle.legitimate?.verdict !== 'PASS' || !Array.isArray(record.lifecycle.refusals) || record.lifecycle.refusals.length < 1 || record.lifecycle.cleanup?.complete !== true || record.lifecycle.residue !== 0) findings.push('lifecycle-incomplete')
 
-  for (const artifact of record.artifacts) {
-    const rel = artifact?.path
-    if (typeof rel !== 'string' || !rel || path.isAbsolute(rel) || /^[A-Za-z]:[\\/]/.test(rel) || rel.split(/[\\/]/).includes('..')) {
-      findings.push('artifact-path')
-      continue
-    }
-    const full = path.resolve(root, rel)
-    if (!full.startsWith(`${path.resolve(root)}${path.sep}`) || !existsSync(full)) {
-      findings.push('artifact-missing')
-      continue
-    }
-    const stat = statSync(full)
-    if (!stat.isFile() || stat.size !== artifact.bytes) findings.push('artifact-size')
-    const actual = sha256(readFileSync(full))
-    if (!SHA256_RE.test(artifact.sha256 ?? '') || actual !== artifact.sha256.toLowerCase()) findings.push('artifact-hash')
+  if (record.artifacts.length > MAX_ARTIFACTS) findings.push('artifact-count-limit')
+  let artifactTotalBytes = 0
+  for (const artifact of record.artifacts.slice(0, MAX_ARTIFACTS)) {
+    const file = resolveRepositoryFile(root, artifact?.path, findings, 'artifact')
+    if (!file) continue
+    if (!Number.isSafeInteger(artifact?.bytes) || artifact.bytes < 0 || file.stat.size !== artifact.bytes) findings.push('artifact-size')
+    artifactTotalBytes += file.stat.size
+    if (artifactTotalBytes > MAX_ARTIFACT_TOTAL_BYTES) findings.push('artifact-total-byte-limit')
+    const bytes = readArtifact(file, findings)
+    if (!bytes) continue
+    if (!SHA256_RE.test(artifact.sha256 ?? '') || sha256(bytes) !== artifact.sha256.toLowerCase()) findings.push('artifact-hash')
+    if (sensitiveRule(bytes.toString('utf8'))) findings.push('artifact-sensitive-content')
   }
 
   if (sensitiveRule(record)) findings.push('sensitive-content')
   return [...new Set(findings)]
 }
 
-function readBounded(file) {
-  const stat = statSync(file)
-  if (stat.size > MAX_FILE_BYTES) throw new Error('file-size-limit')
-  return readFileSync(file, 'utf8')
-}
-
-function parseJson(file, findings, rule) {
+function parseJson(contents, findings, rule, file) {
   try {
-    return JSON.parse(readBounded(file))
+    return JSON.parse(contents)
   } catch {
     findings.push(`${rule}:${path.basename(file)}`)
     return null
   }
 }
 
-function parseJsonl(file, findings) {
-  const lines = readBounded(file).split(/\r?\n/).filter((line) => line.trim())
+function parseJsonl(contents, findings) {
+  const lines = contents.split(/\r?\n/).filter((line) => line.trim())
   if (lines.length > MAX_RECORDS) {
     findings.push('record-count-limit')
     return []
@@ -202,12 +230,13 @@ export function validateRepository({ root = ROOT } = {}) {
     legacy: path.join(bench, 'legacy-unqualified.json'),
     map: path.join(bench, 'benchmark-map.json'),
   }
-  for (const [key, file] of Object.entries(required)) if (!existsSync(file)) findings.push(`missing-${key}`)
-  if (findings.length) return { ok: false, findings }
+  const source = {}
+  for (const [key, file] of Object.entries(required)) source[key] = readRepositoryFile(file, findings, key)
+  if (findings.length) return { ok: false, findings: [...new Set(findings)].sort() }
 
-  const records = parseJsonl(required.results, findings)
-  const legacyDoc = parseJson(required.legacy, findings, 'legacy-parse')
-  const mapDoc = parseJson(required.map, findings, 'map-parse')
+  const records = parseJsonl(source.results, findings)
+  const legacyDoc = parseJson(source.legacy, findings, 'legacy-parse', required.legacy)
+  const mapDoc = parseJson(source.map, findings, 'map-parse', required.map)
   const legacyEntries = Array.isArray(legacyDoc?.entries) ? legacyDoc.entries : []
   const mappings = Array.isArray(mapDoc?.entries) ? mapDoc.entries : []
   if (legacyDoc?.schema_version !== 'ramshared-legacy-benchmarks/v1') findings.push('legacy-schema')
@@ -231,7 +260,9 @@ export function validateRepository({ root = ROOT } = {}) {
     if (typeof entry.reason !== 'string' || entry.reason.length < 8) findings.push(`legacy-reason:${entry.id ?? 'missing'}`)
   }
 
-  const ids = benchmarkIds(readBounded(required.markdown))
+  if (sensitiveRule(legacyDoc)) findings.push('legacy-sensitive-content')
+  if (sensitiveRule(mapDoc)) findings.push('map-sensitive-content')
+  const ids = benchmarkIds(source.markdown)
   const seenBenchmark = new Set()
   for (const item of ids) {
     if (!item.id) { findings.push(`benchmark-id-missing:${item.line}`); continue }
