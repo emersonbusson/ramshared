@@ -128,7 +128,7 @@
       "required_commands": [
         "cargo fmt --all -- --check",
         "cargo clippy --workspace --all-targets -- -D warnings",
-        "cargo test --workspace"
+        "cargo test --workspace -- --test-threads=1"
       ],
       "open_gaps": []
     },
