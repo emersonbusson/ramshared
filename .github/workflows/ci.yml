@@ -4,9 +4,6 @@ name: CI
 # ramshared-cuda loads libcuda at runtime and GPU-required tests are ignored,
 # so the hosted runner exercises only hardware-independent logic.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_call:
 
 permissions: {}
@@ -50,6 +47,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -61,6 +60,16 @@ jobs:
 
       - name: Docs check
         run: ./scripts/docs-check.sh
+
+      - name: Governance change ratchet
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          node tools/ci/check-task-log.mjs --diff "$PR_BASE_SHA"
+          node tools/ci/check-document-lifecycle.mjs --all --base "$PR_BASE_SHA"
+          node tools/ci/check-campaign-evidence-lifecycle.mjs --check --base "$PR_BASE_SHA"
 
       - name: Documentation governance coverage
         run: >-
@@ -101,6 +110,22 @@ jobs:
           --test-coverage-lines=80 --test-coverage-branches=80
           --test-coverage-functions=80
           tools/ci/check-documentation-localization.test.mjs
+
+      - name: Capability observation coverage
+        run: >-
+          node --test --experimental-test-coverage
+          --test-coverage-include=tools/ci/generate-capability-observations.mjs
+          --test-coverage-lines=80 --test-coverage-branches=80
+          --test-coverage-functions=80
+          tools/ci/generate-capability-observations.test.mjs
+
+      - name: Campaign evidence lifecycle coverage
+        run: >-
+          node --test --experimental-test-coverage
+          --test-coverage-include=tools/ci/check-campaign-evidence-lifecycle.mjs
+          --test-coverage-lines=80 --test-coverage-branches=80
+          --test-coverage-functions=80
+          tools/ci/check-campaign-evidence-lifecycle.test.mjs
 
   ci-summary:
     name: ci-summary

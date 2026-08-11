@@ -1,0 +1,467 @@
+{
+  "schemaVersion": "ramshared.document-lifecycle-policy.v1",
+  "owner": "documentation-governance",
+  "registeredAt": "2026-08-11T15:15:12Z",
+  "routes": [
+    {
+      "id": "root-product-documents",
+      "pattern": "README.md",
+      "owner": "product-documentation",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "root-architecture-documents",
+      "pattern": "ARCHITECTURE.md",
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "root-project-documents",
+      "pattern": "CHANGELOG.md",
+      "owner": "documentation-governance",
+      "canonicalSource": "CHANGELOG.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "root-contributing-document",
+      "pattern": "CONTRIBUTING.md",
+      "owner": "documentation-governance",
+      "canonicalSource": "CONTRIBUTING.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "root-manifesto-document",
+      "pattern": "MANIFESTO.md",
+      "owner": "architecture",
+      "canonicalSource": "MANIFESTO.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "root-roadmap-document",
+      "pattern": "ROADMAP.md",
+      "owner": "product-documentation",
+      "canonicalSource": "ROADMAP.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "root-security-document",
+      "pattern": "SECURITY.md",
+      "owner": "security",
+      "canonicalSource": "SECURITY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "root-validation-log",
+      "pattern": "validation.md",
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "root-task-map",
+      "pattern": "TASK.md",
+      "owner": "delivery-governance",
+      "canonicalSource": "TASK.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "root-hang-audit",
+      "pattern": "superprompt.md",
+      "owner": "reliability",
+      "canonicalSource": "superprompt.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "agent-entrypoints",
+      "pattern": "AGENTS.md",
+      "owner": "agent-governance",
+      "canonicalSource": "AGENTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "agent-source-of-truth",
+      "pattern": "CLAUDE.md",
+      "owner": "agent-governance",
+      "canonicalSource": "CLAUDE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "agent-rules",
+      "pattern": ".claude/rules/*.md",
+      "owner": "agent-governance",
+      "canonicalSource": ".claude/rules/documentation.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "top-level-docs",
+      "pattern": "docs/*.md",
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "ssdv3-stages",
+      "pattern": "docs/specs/**/PRD.md",
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "ssdv3-specifications",
+      "pattern": "docs/specs/**/SPEC.md",
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "ssdv3-implementation-records",
+      "pattern": "docs/specs/**/IMPL.md",
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "ssdv3-audits",
+      "pattern": "docs/specs/**/AUDIT*.md",
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "ssdv3-research-and-preflight",
+      "pattern": "docs/specs/**/RESEARCH.md",
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "historical",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "ssdv3-preflight-records",
+      "pattern": "docs/specs/**/PREFLIGHT.md",
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "historical",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "ssdv3-inventory-and-checklists",
+      "pattern": "docs/specs/**/PASSO0-*.md",
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "historical",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "ssdv3-contribution-checklists",
+      "pattern": "docs/specs/**/CONTRIBUTION-CHECKLIST.md",
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "ssdv3-validation-records",
+      "pattern": "docs/specs/**/validation.md",
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "ssdv3-evidence-records",
+      "pattern": "docs/specs/**/evidence/**/*.md",
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "ssdv3-readmes",
+      "pattern": "docs/specs/no-milestone/*/README.md",
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "benchmark-documents",
+      "pattern": "docs/benchmarks/**/*.md",
+      "owner": "benchmarking",
+      "canonicalSource": "docs/BENCHMARKS.md",
+      "lifecycle": "historical",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "telemetry-reconciliation-documents",
+      "pattern": "docs/broker-telemetry-reconciliation/**/*.md",
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "historical",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "ci-documents",
+      "pattern": "docs/ci/**/*.md",
+      "owner": "release-engineering",
+      "canonicalSource": "docs/ci/CI-TOPOLOGY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "architecture-decisions",
+      "pattern": "docs/decisions/**/*.md",
+      "owner": "architecture",
+      "canonicalSource": "docs/decisions/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "documentation-governance",
+      "pattern": "docs/governance/**/*.md",
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/governance/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "lab-runbooks",
+      "pattern": "docs/labs/**/*.md",
+      "owner": "lab-safety",
+      "canonicalSource": "docs/labs/LAB-DISK-GUARD.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "marketing-documents",
+      "pattern": "docs/marketing/*.md",
+      "owner": "product-documentation",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "methodology-documents",
+      "pattern": "docs/methodology/**/*.md",
+      "owner": "methodology",
+      "canonicalSource": "docs/methodology/kahneman-disciplines.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "packaging-documents",
+      "pattern": "docs/packaging/**/*.md",
+      "owner": "release-engineering",
+      "canonicalSource": "docs/packaging/INSTALLABLES.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "postmortem-documents",
+      "pattern": "docs/postmortems/**/*.md",
+      "owner": "reliability",
+      "canonicalSource": "docs/postmortems/TEMPLATE.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "reference-documents",
+      "pattern": "docs/reference/**/*.md",
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/reference/REFERENCE-INDEX.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "security-documents",
+      "pattern": "docs/security/**/*.md",
+      "owner": "security",
+      "canonicalSource": "docs/security/THREAT-MODEL.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:25:34Z"
+    },
+    {
+      "id": "reliability-evidence",
+      "pattern": "docs/reliability/evidence/**/*.md",
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "reliability-documents",
+      "pattern": "docs/reliability/*.md",
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "review-documents",
+      "pattern": "docs/reviews/**/*.md",
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/reviews/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "operation-runbooks",
+      "pattern": "docs/runbooks/**/*.md",
+      "owner": "operations",
+      "canonicalSource": "docs/runbooks/windows-autonomous-broker.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "windows-driver-documents",
+      "pattern": "drivers/windows/**/*.md",
+      "owner": "windows-driver",
+      "canonicalSource": "drivers/windows/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "windows-script-documents",
+      "pattern": "scripts/windows/**/*.md",
+      "owner": "windows-driver",
+      "canonicalSource": "scripts/windows/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    }
+  ],
+  "exclusions": [
+    {
+      "id": "localized-root-readme",
+      "pattern": "README.pt-BR.md",
+      "owner": "product-documentation",
+      "reason": "Localized derivative; README.md remains canonical.",
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "localized-documents",
+      "pattern": "docs/pt-BR/**/*.md",
+      "owner": "product-documentation",
+      "reason": "Localized derivative; English documentation remains canonical.",
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "marketing-post-copy",
+      "pattern": "docs/marketing/posts/**/*.md",
+      "owner": "product-documentation",
+      "reason": "Campaign copy is not normative product documentation.",
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "pull-request-template",
+      "pattern": ".github/pull_request_template.md",
+      "owner": "release-engineering",
+      "reason": "Review template is governed as repository process metadata.",
+      "registeredAt": "2026-08-11T15:15:12Z"
+    }
+  ]
+}

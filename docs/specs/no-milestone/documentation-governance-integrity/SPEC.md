@@ -91,6 +91,7 @@
 | DT-15 | Validation diff failures are findings, never an empty successful diff. A line added inside an existing entry is an append-only violation, and a newly added entry cannot inherit a historical date allowlist exemption. | The former parser swallowed an invalid Git base and validated only newly added headers, creating three reproducible false-green paths. |
 | DT-16 | Historical validation permits only a controlled public-provenance redaction: a private profile/artifact root becomes an explicit redacted or portable RamShared root, or an unrelated product identity becomes the neutral phrase `unrelated workload`. The normalized line must otherwise preserve every number, verdict marker, command semantic, and evidence claim. | Public release hygiene cannot retain private identities, but append-only evidence must not allow a sanitation edit to rewrite measurements or outcomes. |
 | DT-17 | The validation diff checker permits newly added blank separator lines inside the prior terminal entry only when the immediately following parsed entry header is also newly added. Every nonblank insertion, a blank insertion before an existing entry, or a new malformed entry remains an append-only violation. | Markdown convention places one blank line before an appended heading. Treating that separator as old-entry content blocks legitimate append-only records, while a structural next-header proof prevents the exception from hiding edits to history. |
+| DT-18 | The capability-observation generator catalogs only a direct slug directory that contains at least one direct `PRD.md`, `SPEC.md`, `IMPL.md`, or historical `README.md` directory entry. Empty local directories are ignored because Git cannot preserve them. A named entry that exists but is a symlink, directory, unreadable file, or otherwise non-regular remains observable and is a terminal `document-unsafe` or `document-read` finding; discovery must use `lstat`, not `existsSync`, so a dangling named symlink cannot become a false absence. Once a clean-checkout drift is found, the affected claim remains `PARTIAL` until a fresh same-revision hosted documentation job passes. | The generated catalog must be byte-identical in a developer checkout and the clean GitHub Actions checkout without dropping a tracked historical README-only surface, while unsafe named documentation entries remain fail-closed and a locally green correction cannot mask an unverified hosted admission path. |
 
 ### Claim record contract
 
@@ -567,6 +568,64 @@ Numeric/observable triggers:
 
 ## Files to MODIFY
 
+**`tools/ci/generate-capability-observations.mjs`**
+
+- What: enumerate a capability slug only after direct `lstat` discovery of at
+  least one named observation document (`PRD.md`, `SPEC.md`, `IMPL.md`, or a
+  historical `README.md`). Use the same entry-aware check while reading
+  documents, so a dangling named symlink is reported as `document-unsafe`
+  instead of silently skipped.
+- RF / DT: RF-8, NFR-2, DT-10, DT-14, DT-18.
+- Before → after: an untracked empty local slug changes the catalog locally
+  but disappears in a clean checkout → empty slug directories are ignored in
+  both environments while a tracked README-only surface remains; a dangling
+  `SPEC.md` is silently absent → it is a terminal sanitized finding.
+- Required tests: `capability_observations_ignore_empty_untracked_spec_directory`,
+  `capability_observations_preserve_readme_only_historical_surface`,
+  `capability_observations_refuse_dangling_named_document_symlink`.
+- Cover target: ≥80% lines, branches, and functions using the existing Node
+  capability-observation coverage command; measured per this production file.
+
+**`tools/ci/generate-capability-observations.test.mjs`**
+
+- What: add temporary-tree positive and refusal fixtures for DT-18 without
+  writing the repository catalog.
+- RF / DT: DT-18.
+- Cover target: N/A — test harness; it drives the production file's Node
+  coverage threshold.
+
+**`docs/governance/CAPABILITY-OBSERVATIONS.md`**
+
+- What: document direct named-document discovery, ignored empty directories,
+  and fail-closed named unsafe entries.
+- RF / DT: RF-1, RF-8, DT-2, DT-18.
+- Cover target: N/A — documentation.
+
+**`docs/governance/capability-observations.generated.json`**
+
+- What: regenerate only through
+  `node tools/ci/generate-capability-observations.mjs --write` after the
+  deterministic discovery rule changes; never hand-edit.
+- RF / DT: RF-8, DT-14, DT-18.
+- Required test: the generator `--check` command is synchronized after a
+  generated write.
+- Cover target: N/A — generated output.
+
+**`docs/specs/no-milestone/documentation-governance-integrity/evidence-manifest.json`**
+
+- What: refresh the exact `SPEC.md` SHA-256 only after the DT-18 evidence,
+  named test outcomes, and coverage row are measured; never hand-wave a stale
+  manifest as a passing documentation gate. DT-18 uses the append-only root
+  validation record rather than a new file under `evidence/`, because a new
+  evidence artifact requires its own campaign manifest. Keep this manifest
+  `PARTIAL` with a concrete hosted-revalidation next proof until the same
+  revision passes the GitHub documentation job.
+- RF / DT: RF-8, DT-14, DT-18.
+- Required test: `node tools/ci/check-spec-evidence.mjs --check` returns 0
+  after the manifest and artifact hashes are current.
+- Cover target: N/A — immutable evidence manifest validated by its owning
+  checker.
+
 **`tools/generate-docs-index.mjs`**
 
 - What: add `loadClaimsRegistry()`, `qualifiedStatus(slugDir, claims)`, and
@@ -722,6 +781,9 @@ file existence is insufficient when the requirement is policy behavior.
 | same | `governance_cli_is_read_only` | source scan finds no mutation command | same |
 | same | `docs_check_includes_governance_gate` | shell order includes gate | same |
 | same | `docs_check_is_read_only` | shell has no runtime mutation path | same |
+| `tools/ci/generate-capability-observations.test.mjs` | `capability_observations_ignore_empty_untracked_spec_directory` | empty local slug does not change the generated catalog | Node ≥80% production file |
+| same | `capability_observations_preserve_readme_only_historical_surface` | tracked README-only surface remains catalogued | same |
+| same | `capability_observations_refuse_dangling_named_document_symlink` | a named dangling document entry is a terminal unsafe finding | same |
 | `tools/ci/check-validation-schema.test.mjs` | `governance_entry_requires_before_action_after` | schema-1 missing state fails | Node ≥80% production file |
 | same | `governance_entry_requires_refusals_measurement_and_rollback` | missing evidence fields fails | same |
 | same | `legacy_validation_entries_remain_accepted` | existing allowlisted history remains readable | same |
@@ -741,6 +803,12 @@ node --test --experimental-test-coverage \
   --test-coverage-lines=80 --test-coverage-branches=80 \
   --test-coverage-functions=80 \
   tools/ci/check-validation-schema.test.mjs
+
+node --test --experimental-test-coverage \
+  --test-coverage-include=tools/ci/generate-capability-observations.mjs \
+  --test-coverage-lines=80 --test-coverage-branches=80 \
+  --test-coverage-functions=80 \
+  tools/ci/generate-capability-observations.test.mjs
 ```
 
 There is no Rust crate or Rust production file in this slice; the canonical

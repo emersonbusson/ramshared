@@ -1,0 +1,1156 @@
+{
+  "kind": "passive-document-and-surface-observations",
+  "observation_state": "OBSERVED",
+  "observations": [
+    {
+      "claim_reconciliation": {
+        "claim_present": true,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": "DONE"
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/docs-check.sh",
+          "tools/ci/check-benchmark-evidence.mjs",
+          "tools/ci/check-spec-evidence.mjs"
+        ],
+        "test_paths": [
+          "tools/ci/check-benchmark-evidence.test.mjs",
+          "tools/ci/check-spec-evidence.test.mjs"
+        ]
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/benchmark-evidence-integrity/IMPL.md",
+        "prd": "docs/specs/no-milestone/benchmark-evidence-integrity/PRD.md",
+        "spec": "docs/specs/no-milestone/benchmark-evidence-integrity/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "benchmark-evidence-integrity"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-agent/src/main.rs",
+          "crates/ramshared-agent/src/psi.rs",
+          "crates/ramshared-broker/src/protocol.rs",
+          "crates/ramshared-cuda/src/driver.rs",
+          "crates/ramshared-wsl2d/Cargo.toml",
+          "crates/ramshared-wsl2d/src/broker_srv.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
+          "crates/ramshared-wsl2d/src/telemetry.rs",
+          "scripts/kernel/qemu-broker-drill.sh"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/broker-telemetry-reconciliation/IMPL.md",
+        "prd": "docs/specs/no-milestone/broker-telemetry-reconciliation/PRD.md",
+        "spec": "docs/specs/no-milestone/broker-telemetry-reconciliation/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "broker-telemetry-reconciliation"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/docs-check.sh",
+          "tools/ci/check-campaign-evidence-lifecycle.mjs"
+        ],
+        "test_paths": [
+          "tools/ci/check-campaign-evidence-lifecycle.test.mjs"
+        ]
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/campaign-evidence-lifecycle/IMPL.md",
+        "prd": "docs/specs/no-milestone/campaign-evidence-lifecycle/PRD.md",
+        "spec": "docs/specs/no-milestone/campaign-evidence-lifecycle/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "campaign-evidence-lifecycle"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/safety/cascade-app.sh",
+          "scripts/safety/install-cascade-app.sh",
+          "scripts/safety/ramshared-cushion.desktop.in"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/cascade-desktop-app/IMPL.md",
+        "prd": "docs/specs/no-milestone/cascade-desktop-app/PRD.md",
+        "spec": "docs/specs/no-milestone/cascade-desktop-app/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "cascade-desktop-app"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-cli/src/cascade/cascade_io.rs",
+          "crates/ramshared-cli/src/cascade/lifecycle.rs",
+          "crates/ramshared-cli/src/cascade/mod.rs",
+          "crates/ramshared-cli/src/main.rs",
+          "crates/ramshared-wsl2d/src/demote_status.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
+          "crates/ramshared-wsl2d/src/residency.rs",
+          "crates/ramshared-wsl2d/src/telemetry.rs",
+          "scripts/safety/cascade-health.sh",
+          "scripts/safety/cascade-pressure-probe.sh"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/cascade-lifecycle-observability/IMPL.md",
+        "prd": "docs/specs/no-milestone/cascade-lifecycle-observability/PRD.md",
+        "spec": "docs/specs/no-milestone/cascade-lifecycle-observability/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "cascade-lifecycle-observability"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-cli/src/cascade/cascade_io.rs"
+        ],
+        "test_paths": [
+          "tools/ci/plan-rust-slice-coverage.test.mjs"
+        ]
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/cascade-transport-policy/IMPL.md",
+        "prd": "docs/specs/no-milestone/cascade-transport-policy/PRD.md",
+        "spec": "docs/specs/no-milestone/cascade-transport-policy/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "cascade-transport-policy"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-block/src/lib.rs",
+          "crates/ramshared-block/src/sparse_vram.rs",
+          "crates/ramshared-vram/src/lib.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
+          "scripts/safety/cascade-pressure-probe.sh",
+          "scripts/safety/cascade.conf.example"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/cascade-vram-ondemand/IMPL.md",
+        "prd": "docs/specs/no-milestone/cascade-vram-ondemand/PRD.md",
+        "spec": "docs/specs/no-milestone/cascade-vram-ondemand/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "cascade-vram-ondemand"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-cli/src/main.rs",
+          "scripts/docs-check.sh",
+          "scripts/package/build-linux-bundle.sh",
+          "scripts/windows/Test-WindowsCiStatic.ps1",
+          "tools/ci/check-benchmark-evidence.mjs",
+          "tools/ci/check-campaign-evidence-lifecycle.mjs",
+          "tools/ci/check-ci-artifacts.mjs",
+          "tools/ci/check-ci-contract.mjs",
+          "tools/ci/check-documentation-governance.mjs",
+          "tools/ci/check-public-hygiene.mjs",
+          "tools/ci/check-release-integrity.mjs",
+          "tools/ci/check-rust-slice-coverage.mjs",
+          "tools/ci/check-spec-evidence.mjs",
+          "tools/ci/plan-isolated-lab.mjs",
+          "tools/ci/plan-rust-slice-coverage.mjs",
+          "tools/ci/write-release-manifest.mjs"
+        ],
+        "test_paths": [
+          "tools/ci/check-campaign-evidence-lifecycle.test.mjs",
+          "tools/ci/check-ci-aggregate.test.mjs",
+          "tools/ci/check-ci-artifacts.test.mjs",
+          "tools/ci/check-ci-contract.test.mjs",
+          "tools/ci/check-public-hygiene.test.mjs",
+          "tools/ci/check-release-integrity.test.mjs",
+          "tools/ci/check-rust-slice-coverage.test.mjs",
+          "tools/ci/plan-isolated-lab.test.mjs",
+          "tools/ci/plan-rust-slice-coverage.test.mjs",
+          "tools/ci/write-release-manifest.test.mjs"
+        ]
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/ci-trust-and-release-integrity/IMPL.md",
+        "prd": "docs/specs/no-milestone/ci-trust-and-release-integrity/PRD.md",
+        "spec": "docs/specs/no-milestone/ci-trust-and-release-integrity/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "ci-trust-and-release-integrity"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-agent/src/main.rs",
+          "crates/ramshared-block/src/handshake.rs",
+          "crates/ramshared-block/src/protocol.rs",
+          "crates/ramshared-broker/src/arbiter.rs",
+          "crates/ramshared-broker/src/protocol.rs",
+          "crates/ramshared-cli/src/cascade/cascade_io.rs",
+          "crates/ramshared-cli/src/cascade/mod.rs",
+          "crates/ramshared-cli/src/main.rs",
+          "crates/ramshared-cuda/src/lib.rs",
+          "crates/ramshared-wsl2d/src/backend.rs",
+          "crates/ramshared-wsl2d/src/broker_srv.rs",
+          "crates/ramshared-wsl2d/src/canary_probe.rs",
+          "crates/ramshared-wsl2d/src/conn.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
+          "crates/ramshared-wsl2d/src/telemetry.rs",
+          "scripts/kernel/boot-kernel-logged.ps1",
+          "scripts/kernel/boot-kernel-safe.ps1",
+          "scripts/kernel/build-wsl-kernel.sh",
+          "scripts/kernel/qemu-broker-drill.sh",
+          "scripts/kernel/qemu-ublk-crash-e1.sh",
+          "scripts/kernel/qemu-ublk-crash-e1b.sh",
+          "scripts/kernel/qemu-ublk-daemon.sh",
+          "scripts/kernel/qemu-validate.sh",
+          "scripts/p0/measure-cascade-demote.sh",
+          "scripts/p0/measure-nbd-tcp.sh",
+          "scripts/p0/measure-net.sh",
+          "scripts/p0/measure-psi-load.sh",
+          "scripts/p0/measure-psi.sh",
+          "scripts/p0/measure-vram-headroom.sh",
+          "tools/ci/check-comment-language.mjs",
+          "tools/ci/comment-language-baseline.schema.json",
+          "tools/ci/plan-rust-slice-coverage.mjs"
+        ],
+        "test_paths": [
+          "tools/ci/check-comment-language.test.mjs",
+          "tools/ci/plan-rust-slice-coverage.test.mjs"
+        ]
+      },
+      "documents": {
+        "implementation": null,
+        "prd": "docs/specs/no-milestone/comment-language-integrity/PRD.md",
+        "spec": "docs/specs/no-milestone/comment-language-integrity/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "comment-language-integrity"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/windows/Get-LinuxKernelLabAccess.ps1",
+          "scripts/windows/Invoke-LinuxKernelLabCapabilityAudit.ps1",
+          "scripts/windows/Test-LinuxKernelLabCapabilityAuditStatic.ps1"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/custom-kernel-ublk-product-transport/IMPL.md",
+        "prd": "docs/specs/no-milestone/custom-kernel-ublk-product-transport/PRD.md",
+        "spec": "docs/specs/no-milestone/custom-kernel-ublk-product-transport/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "custom-kernel-ublk-product-transport"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": true,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": "PARTIAL"
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/docs-check.sh",
+          "tools/check-broken-links.mjs",
+          "tools/ci/check-documentation-governance.mjs",
+          "tools/ci/check-gap-register.mjs",
+          "tools/ci/check-public-hygiene.mjs",
+          "tools/ci/check-validation-schema.mjs",
+          "tools/ci/generate-capability-observations.mjs",
+          "tools/generate-docs-index.mjs"
+        ],
+        "test_paths": [
+          "tools/ci/check-documentation-governance.test.mjs",
+          "tools/ci/check-validation-schema.test.mjs",
+          "tools/ci/generate-capability-observations.test.mjs",
+          "tools/generate-docs-index.test.mjs"
+        ]
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/documentation-governance-integrity/IMPL.md",
+        "prd": "docs/specs/no-milestone/documentation-governance-integrity/PRD.md",
+        "spec": "docs/specs/no-milestone/documentation-governance-integrity/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "documentation-governance-integrity"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": true,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": "DONE"
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/docs-check.sh",
+          "tools/ci/check-documentation-localization.mjs",
+          "tools/ci/check-spec-evidence.mjs"
+        ],
+        "test_paths": [
+          "tools/ci/check-documentation-localization.test.mjs"
+        ]
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/documentation-localization-integrity/IMPL.md",
+        "prd": "docs/specs/no-milestone/documentation-localization-integrity/PRD.md",
+        "spec": "docs/specs/no-milestone/documentation-localization-integrity/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "documentation-localization-integrity"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/p0/Invoke-ExternalGpuWddmPressureAudit.ps1",
+          "scripts/p0/Invoke-GpuWorkloadGate.ps1",
+          "scripts/p0/Test-ExternalGpuWddmPressureAuditStatic.ps1"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/external-gpu-workload-wddm-pressure/IMPL.md",
+        "prd": "docs/specs/no-milestone/external-gpu-workload-wddm-pressure/PRD.md",
+        "spec": "docs/specs/no-milestone/external-gpu-workload-wddm-pressure/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "external-gpu-workload-wddm-pressure"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": null,
+        "prd": "docs/specs/no-milestone/kernel-native-language/PRD.md",
+        "spec": null
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "kernel-native-language"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": null,
+        "prd": "docs/specs/no-milestone/kernel-vram-as-memory/PRD.md",
+        "spec": null
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "kernel-vram-as-memory"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": null,
+        "prd": "docs/specs/no-milestone/mainline-vram-tiering/PRD.md",
+        "spec": null
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "mainline-vram-tiering"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-agent/src/bin/ramshared_host_agent.rs",
+          "crates/ramshared-agent/src/local.rs",
+          "crates/ramshared-agent/src/main.rs",
+          "crates/ramshared-agent/src/win_mem.rs",
+          "crates/ramshared-block/src/handshake.rs",
+          "crates/ramshared-broker/Cargo.toml",
+          "crates/ramshared-broker/src/arbiter.rs",
+          "crates/ramshared-broker/src/lib.rs",
+          "crates/ramshared-broker/src/model.rs",
+          "crates/ramshared-broker/src/protocol.rs",
+          "crates/ramshared-broker/src/slices.rs",
+          "crates/ramshared-config/Cargo.toml",
+          "crates/ramshared-config/src/lib.rs",
+          "crates/ramshared-wsl2d/src/backend.rs",
+          "crates/ramshared-wsl2d/src/broker_srv.rs",
+          "crates/ramshared-wsl2d/src/conn.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
+          "crates/ramshared-wsl2d/src/residency.rs",
+          "scripts/kernel/qemu-broker-drill.sh",
+          "scripts/kernel/qemu-ublk-daemon.sh",
+          "scripts/p0/Invoke-GpuWorkloadGate.ps1",
+          "scripts/p0/Start-CudaVramWorkload.ps1",
+          "scripts/p0/measure-gpu-workload-vram.ps1",
+          "scripts/p0/measure-nbd-tcp.sh",
+          "scripts/p0/measure-net.sh",
+          "scripts/p0/measure-psi.sh"
+        ],
+        "test_paths": [
+          "crates/ramshared-agent/tests/agent_cli.rs",
+          "tools/ci/plan-rust-slice-coverage.test.mjs"
+        ]
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/memory-broker/IMPL.md",
+        "prd": "docs/specs/no-milestone/memory-broker/PRD.md",
+        "spec": "docs/specs/no-milestone/memory-broker/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "memory-broker"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": true,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": "DONE"
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/docs-check.sh",
+          "scripts/p0/measure-cascade-demote.sh",
+          "scripts/windows/Build-Drivers.ps1",
+          "scripts/windows/Install-InfAndBackend.ps1",
+          "scripts/windows/Install-WinDriveVm.ps1",
+          "scripts/windows/Invoke-DisciplinedCampaign.ps1",
+          "scripts/windows/Invoke-Guest.ps1",
+          "scripts/windows/Invoke-SharedWslPressureCampaign.ps1",
+          "scripts/windows/Measure-CDrivePressure.ps1",
+          "scripts/windows/Run-StorportCudaPartial.ps1",
+          "scripts/windows/Sign-Drivers.ps1",
+          "scripts/windows/build-winsvc.bat",
+          "tools/ci/check-public-hygiene.mjs"
+        ],
+        "test_paths": [
+          "tools/ci/check-public-hygiene.test.mjs"
+        ]
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/public-repository-hygiene/IMPL.md",
+        "prd": "docs/specs/no-milestone/public-repository-hygiene/PRD.md",
+        "spec": "docs/specs/no-milestone/public-repository-hygiene/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "public-repository-hygiene"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/safety/cascade_pressure_integrity_worker.py"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/vram-reclaim-pressure-matrix/IMPL.md",
+        "prd": "docs/specs/no-milestone/vram-reclaim-pressure-matrix/PRD.md",
+        "spec": "docs/specs/no-milestone/vram-reclaim-pressure-matrix/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "vram-reclaim-pressure-matrix"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-broker/src/lease.rs",
+          "crates/ramshared-broker/src/lib.rs",
+          "crates/ramshared-broker/src/protocol.rs",
+          "crates/ramshared-broker/src/slices.rs",
+          "crates/ramshared-winbroker/Cargo.toml",
+          "crates/ramshared-winbroker/broker.example.toml",
+          "crates/ramshared-winbroker/src/lib.rs",
+          "crates/ramshared-winbroker/src/main.rs",
+          "crates/ramshared-winbroker/src/pipe.rs",
+          "crates/ramshared-winbroker/src/service.rs",
+          "crates/ramshared-winsvc/Cargo.toml",
+          "crates/ramshared-winsvc/src/bin/ramshared-service-sid-probe.rs",
+          "crates/ramshared-winsvc/src/config.rs",
+          "crates/ramshared-winsvc/src/evidence.rs",
+          "crates/ramshared-winsvc/src/ipc.rs",
+          "crates/ramshared-winsvc/src/lib.rs",
+          "crates/ramshared-winsvc/src/main.rs",
+          "crates/ramshared-winsvc/src/package.rs",
+          "crates/ramshared-winsvc/src/product_online.rs",
+          "crates/ramshared-winsvc/src/runtime.rs",
+          "crates/ramshared-winsvc/src/windows_driver.rs",
+          "crates/ramshared-winsvc/winsvc.example.toml",
+          "crates/ramshared-wsl2d/src/broker_srv.rs",
+          "scripts/docs-check.sh",
+          "scripts/windows/Copy-RamSharedProtectedEvidence.ps1",
+          "scripts/windows/Install-RamSharedService.ps1",
+          "scripts/windows/Invoke-GuestPsDirectBounded.ps1",
+          "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+          "scripts/windows/Run-GuestBrokerService.ps1",
+          "scripts/windows/Run-GuestProductOnline.ps1",
+          "scripts/windows/Run-GuestProductPackage.ps1",
+          "scripts/windows/Run-HostAutonomousLifecycle.ps1",
+          "scripts/windows/Run-HostExhaustive.ps1",
+          "scripts/windows/Test-AutonomousBrokerStatic.ps1",
+          "scripts/windows/Test-GuestPsDirectDeadlineStatic.ps1",
+          "scripts/windows/Test-HostAutonomousLifecycleStatic.ps1",
+          "scripts/windows/Test-HostExhaustiveStatic.ps1"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/windows-autonomous-broker-service/IMPL.md",
+        "prd": "docs/specs/no-milestone/windows-autonomous-broker-service/PRD.md",
+        "spec": "docs/specs/no-milestone/windows-autonomous-broker-service/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "windows-autonomous-broker-service"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-block/src/request.rs",
+          "crates/ramshared-block/src/vram_backend.rs",
+          "crates/ramshared-cuda/src/driver.rs",
+          "crates/ramshared-cuda/src/probe.rs",
+          "crates/ramshared-winsvc/Cargo.toml",
+          "crates/ramshared-winsvc/src/broker_tenant.rs",
+          "crates/ramshared-winsvc/src/config.rs",
+          "crates/ramshared-winsvc/src/driver_link.rs",
+          "crates/ramshared-winsvc/src/evidence.rs",
+          "crates/ramshared-winsvc/src/host_safety.rs",
+          "crates/ramshared-winsvc/src/lib.rs",
+          "crates/ramshared-winsvc/src/main.rs",
+          "crates/ramshared-winsvc/src/proto.rs",
+          "crates/ramshared-winsvc/src/runtime.rs",
+          "crates/ramshared-winsvc/src/service.rs",
+          "crates/ramshared-winsvc/src/windows_driver.rs",
+          "crates/ramshared-winsvc/src/windows_host.rs",
+          "crates/ramshared-winsvc/winsvc.example.toml",
+          "scripts/docs-check.sh",
+          "scripts/safety/wsl2-freeze-campaign.sh",
+          "scripts/windows/Format-RamSharedLun.ps1",
+          "scripts/windows/Get-WinDrivePreflight.ps1",
+          "scripts/windows/Install-RamSharedLabService.ps1",
+          "scripts/windows/Install-RamSharedService.ps1",
+          "scripts/windows/Invoke-CudaStorageDrill.ps1",
+          "scripts/windows/Invoke-DriverSoak.ps1",
+          "scripts/windows/Invoke-SdvProbe.ps1",
+          "scripts/windows/Invoke-WinDriveBackend.ps1",
+          "scripts/windows/Invoke-WinDriveIoctlValidation.ps1",
+          "scripts/windows/Measure-RamSharedDiskIo.ps1",
+          "scripts/windows/README.md",
+          "scripts/windows/Run-GuestExhaustive.ps1",
+          "scripts/windows/Run-GuestProductOnline.ps1",
+          "scripts/windows/Run-HostExhaustive.ps1",
+          "scripts/windows/Set-WinPagingFilesConcrete.ps1",
+          "scripts/windows/Start-RamSharedLab.ps1",
+          "scripts/windows/Stop-RamSharedLab.ps1",
+          "scripts/windows/Test-CudaStorageDrillStatic.ps1",
+          "scripts/windows/Test-GuestExhaustiveStatic.ps1",
+          "scripts/windows/Test-GuestProductOnlineStatic.ps1",
+          "scripts/windows/Test-HostExhaustiveStatic.ps1",
+          "scripts/windows/Test-PagefileRefusalManufacturedStatic.ps1",
+          "scripts/windows/Test-WinDrivePreflightStatic.ps1",
+          "scripts/windows/Test-WinPagingFilesConcreteStatic.ps1",
+          "scripts/windows/WinDriveBackend.cs"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/windows-storport-cuda-vram/IMPL.md",
+        "prd": "docs/specs/no-milestone/windows-storport-cuda-vram/PRD.md",
+        "spec": "docs/specs/no-milestone/windows-storport-cuda-vram/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "windows-storport-cuda-vram"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-block/Cargo.toml",
+          "crates/ramshared-block/src/lib.rs",
+          "crates/ramshared-block/src/vram_backend.rs",
+          "crates/ramshared-broker/src/model.rs",
+          "crates/ramshared-cuda/Cargo.toml",
+          "crates/ramshared-cuda/src/ffi.rs",
+          "crates/ramshared-winsvc/src/proto.rs",
+          "crates/ramshared-wsl2d/src/backend.rs",
+          "crates/ramshared-wsl2d/src/broker_srv.rs",
+          "scripts/windows/Build-Drivers.ps1"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/windows-swap-driver/IMPL.md",
+        "prd": "docs/specs/no-milestone/windows-swap-driver/PRD.md",
+        "spec": "docs/specs/no-milestone/windows-swap-driver/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "windows-swap-driver"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-winbroker/src/pipe.rs",
+          "crates/ramshared-winsvc/src/main.rs",
+          "crates/ramshared-winsvc/src/product_online.rs",
+          "crates/ramshared-winsvc/src/service.rs",
+          "crates/ramshared-winsvc/src/windows_host.rs",
+          "scripts/docs-check.sh",
+          "scripts/windows/Copy-RamSharedProtectedEvidence.ps1",
+          "scripts/windows/Ensure-Win11LabSealedSwitch.ps1",
+          "scripts/windows/Invoke-GuestPsDirectBounded.ps1",
+          "scripts/windows/Invoke-WindowsDiskCounterAudit.ps1",
+          "scripts/windows/Invoke-WindowsStorageMatrix.ps1",
+          "scripts/windows/Measure-RamSharedDiskIo.ps1",
+          "scripts/windows/New-Win11LabAutounattend.ps1",
+          "scripts/windows/New-Win11LabReadyClone.ps1",
+          "scripts/windows/New-Win11Wsl2LabVm.ps1",
+          "scripts/windows/New-WindowsNoPromptIso.ps1",
+          "scripts/windows/Recover-GuestVerifierExactRun.ps1",
+          "scripts/windows/Run-GuestAutonomousLifecycle.ps1",
+          "scripts/windows/Run-GuestExhaustive.ps1",
+          "scripts/windows/Run-GuestProductPackage.ps1",
+          "scripts/windows/Seal-Win11LabReadyBase.ps1",
+          "scripts/windows/Set-Win11LabDriverTestFirmware.ps1",
+          "scripts/windows/Set-Win11LabNetworkTransition.ps1",
+          "scripts/windows/Test-GuestExhaustiveStatic.ps1",
+          "scripts/windows/Test-GuestPsDirectDeadlineStatic.ps1",
+          "scripts/windows/Test-RamSharedDiskIoStatic.ps1",
+          "scripts/windows/Test-RecoverGuestVerifierExactRunStatic.ps1",
+          "scripts/windows/Test-Win11LabDriverTestFirmwareStatic.ps1",
+          "scripts/windows/Test-Win11LabMediaContractStatic.ps1",
+          "scripts/windows/Test-Win11LabNetworkTransitionStatic.ps1",
+          "scripts/windows/Test-Win11LabReadyBaseStatic.ps1",
+          "scripts/windows/Test-Win11LabReadyCloneStatic.ps1",
+          "scripts/windows/Test-Win11LabReadyStatic.ps1",
+          "scripts/windows/Test-WindowsCiStatic.ps1",
+          "scripts/windows/Test-WindowsDiskCounterAuditStatic.ps1",
+          "scripts/windows/Test-WindowsStorageMatrixStatic.ps1",
+          "scripts/windows/Wait-Win11LabReady.ps1",
+          "scripts/windows/Win11LabMediaContract.ps1"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/windows-task-manager-disk-counters/IMPL.md",
+        "prd": "docs/specs/no-milestone/windows-task-manager-disk-counters/PRD.md",
+        "spec": "docs/specs/no-milestone/windows-task-manager-disk-counters/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "windows-task-manager-disk-counters"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-cli/src/main.rs",
+          "scripts/safety/cascade-preflight.sh",
+          "scripts/safety/cascade-up.sh",
+          "scripts/safety/cascade.conf.example",
+          "scripts/safety/install-cascade-boot.sh",
+          "scripts/safety/systemd/ramshared-cascade.service",
+          "scripts/safety/uninstall-cascade-boot.sh"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-cascade-boot/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-cascade-boot/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-cascade-boot"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-cascade-orphan-recover/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-cascade-orphan-recover/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-cascade-orphan-recover/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-cascade-orphan-recover"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-wsl2d/src/conn.rs"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": null,
+        "prd": "docs/specs/no-milestone/wsl2-cascade-swap/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-cascade-swap/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-cascade-swap"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/kernel/boot-kernel-logged.ps1",
+          "scripts/kernel/boot-kernel-safe.ps1",
+          "scripts/kernel/build-wsl-kernel.sh",
+          "scripts/kernel/qemu-validate.sh",
+          "scripts/kernel/wsl-kernel-lib.sh",
+          "scripts/kernel/wsl-kernel.sh"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-custom-kernel-p1/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-custom-kernel-p1/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-custom-kernel-p1/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-custom-kernel-p1"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": null,
+        "prd": null,
+        "spec": null
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-freeze"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/safety/Test-CascadePressureIntegrityWorker.sh",
+          "scripts/safety/cascade_pressure_integrity_worker.py",
+          "scripts/safety/test-wsl2-freeze-campaign-artifact-static.sh",
+          "scripts/safety/validate-wsl2-freeze-campaign-artifact.sh",
+          "scripts/safety/wsl2-freeze-campaign.sh",
+          "scripts/windows/Invoke-SharedWslPressureCampaign.ps1",
+          "scripts/windows/Invoke-Win11Wsl2FreezeCampaign.ps1",
+          "scripts/windows/Test-SharedWslPressureCampaignStatic.ps1",
+          "scripts/windows/Test-Win11Wsl2FreezeCampaignStatic.ps1"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-freeze-elimination-campaign/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-freeze-elimination-campaign/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-freeze-elimination-campaign/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-freeze-elimination-campaign"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-block/src/sparse_vram.rs",
+          "crates/ramshared-wsl2d/src/autotier.rs"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-native-vram-autotier/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-native-vram-autotier/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-native-vram-autotier/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-native-vram-autotier"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": null,
+        "prd": "docs/specs/no-milestone/wsl2-native-vram-tier/PRD.md",
+        "spec": null
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-native-vram-tier"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/safety/test-wsl-relay-health.sh",
+          "scripts/safety/wsl-relay-health.sh"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-relay-lifecycle-reliability/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-relay-lifecycle-reliability/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-relay-lifecycle-reliability/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-relay-lifecycle-reliability"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": null,
+        "prd": "docs/specs/no-milestone/wsl2-upstream-native-contribution/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-upstream-native-contribution/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-upstream-native-contribution"
+    }
+  ],
+  "policy_path": "docs/governance/capability-observation-policy.json",
+  "qualification_authority": "docs/governance/claims.json",
+  "schema_version": "ramshared-capability-observations/v1"
+}

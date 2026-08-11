@@ -1101,6 +1101,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                     }
                     None
                 }
+                WMsg::Shutdown => break,
                 WMsg::Job(job) => Some(job),
                 WMsg::ZeroExport { base, len, done } => {
                     let ok = zero_window(&mut backend, base, len).is_ok();
@@ -1475,12 +1476,59 @@ struct BrokerWorkerRuntime {
     pub vram: std::sync::Arc<VramGauge>,
 }
 
+/// Result of the nonblocking broker-worker shutdown wake (DT-50). A full queue
+/// is safe because it proves the receiver has pending work; the worker checks
+/// the terminal flag before receiving the next message. A disconnected queue
+/// is already terminal.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BrokerShutdownWake {
+    Queued,
+    QueueFull,
+    Disconnected,
+    NotifierUnavailable,
+}
+
+/// Paired terminal flag and explicit worker-channel wake. `request` stores the
+/// flag first and never blocks, so signal mirroring and rollback paths cannot
+/// deadlock behind a full bounded queue.
+#[derive(Clone)]
+struct BrokerShutdown {
+    flag: std::sync::Arc<AtomicBool>,
+    wake_tx: std::sync::mpsc::SyncSender<WMsg>,
+}
+
+impl BrokerShutdown {
+    fn new(flag: std::sync::Arc<AtomicBool>, wake_tx: std::sync::mpsc::SyncSender<WMsg>) -> Self {
+        Self { flag, wake_tx }
+    }
+
+    fn request(&self) -> BrokerShutdownWake {
+        self.flag.store(true, Ordering::SeqCst);
+        match self.wake_tx.try_send(WMsg::Shutdown) {
+            Ok(()) => BrokerShutdownWake::Queued,
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                let wake_tx = self.wake_tx.clone();
+                match std::thread::Builder::new()
+                    .name("ramshared-broker-shutdown".into())
+                    .spawn(move || {
+                        let _ = wake_tx.send(WMsg::Shutdown);
+                    }) {
+                    Ok(_) => BrokerShutdownWake::QueueFull,
+                    Err(_) => BrokerShutdownWake::NotifierUnavailable,
+                }
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => BrokerShutdownWake::Disconnected,
+        }
+    }
+}
+
 /// Broker control-plane parts retained by the daemon shell until the worker has
 /// stopped. Splitting this value transfers the non-`Sync` receiver exactly once
 /// to the worker and keeps the broker join handle for orderly cleanup.
 struct BrokerRuntime {
     worker: BrokerWorkerRuntime,
     broker: std::thread::JoinHandle<()>,
+    shutdown: BrokerShutdown,
 }
 
 impl BrokerRuntime {
@@ -1639,22 +1687,25 @@ impl BrokerAcceptorStarter for ProductionBrokerAcceptorStarter {
     }
 }
 
-/// Installs the production signal bridge once per daemon process. Tests inject
-/// their own explicit flag, so no test needs to modify process signal state.
-fn install_broker_shutdown_bridge() -> std::sync::Arc<AtomicBool> {
+/// Installs the production signal handlers before listener setup. The handler
+/// remains async-signal-safe and only stores the process-global atomic flag.
+fn install_broker_signal_handlers() {
     unsafe {
         signal(SIGINT, handle_shutdown);
         signal(SIGTERM, handle_shutdown);
     }
-    let shutdown = std::sync::Arc::new(AtomicBool::new(false));
-    let mirror = std::sync::Arc::clone(&shutdown);
+}
+
+/// Mirrors the process signal into both the broker terminal flag and its
+/// explicit channel wake. Tests call `BrokerShutdown::request` directly and do
+/// not modify process signal state.
+fn install_broker_shutdown_bridge(shutdown: BrokerShutdown) {
     std::thread::spawn(move || {
         while !SHUTDOWN.load(Ordering::SeqCst) {
             std::thread::sleep(Duration::from_millis(100));
         }
-        mirror.store(true, Ordering::SeqCst);
+        let _ = shutdown.request();
     });
-    shutdown
 }
 
 /// Starts the broker control-plane (independent of backend): slices map + geometry +
@@ -1672,9 +1723,10 @@ fn broker_setup(
     arbiter_addr: std::net::SocketAddr,
     telemetry_jsonl: Option<std::path::PathBuf>,
 ) -> Result<BrokerRuntime, Box<dyn std::error::Error>> {
-    let shutdown = install_broker_shutdown_bridge();
+    install_broker_signal_handlers();
+    let shutdown = std::sync::Arc::new(AtomicBool::new(false));
     let mut acceptors = ProductionBrokerAcceptorStarter;
-    broker_setup_with_acceptors(
+    let runtime = broker_setup_with_acceptors(
         slices,
         slice_bytes,
         sock,
@@ -1685,7 +1737,9 @@ fn broker_setup(
         shutdown,
         Duration::from_secs(2),
         &mut acceptors,
-    )
+    )?;
+    install_broker_shutdown_bridge(runtime.shutdown.clone());
+    Ok(runtime)
 }
 
 /// The bounded, injectable broker startup core. Production passes the signal
@@ -1723,6 +1777,7 @@ fn broker_setup_with_acceptors(
 
     let tx_flags = NBD_FLAG_HAS_FLAGS | NBD_FLAG_SEND_FLUSH | NBD_FLAG_CAN_MULTI_CONN;
     let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel::<WMsg>(CHAN_CAP);
+    let broker_shutdown = BrokerShutdown::new(std::sync::Arc::clone(&shutdown), jobs_tx.clone());
     let (demote_tx, demote_rx) = std::sync::mpsc::channel::<DemoteReason>();
 
     let listeners = bind_broker_listeners(Path::new(sock), listen_nbd_addr)?;
@@ -1753,7 +1808,7 @@ fn broker_setup_with_acceptors(
     let (unix, tcp) = listeners.into_parts();
     eprintln!("[ramsharedd] NBD Unix listener at {sock}");
     if let Err(error) = acceptors.start(unix, tcp, exports, tx_flags, jobs_tx.clone()) {
-        shutdown.store(true, Ordering::SeqCst);
+        let _ = broker_shutdown.request();
         let _ = broker.join();
         cleanup_unix_socket_path(Path::new(sock));
         return Err(error);
@@ -1771,6 +1826,7 @@ fn broker_setup_with_acceptors(
             vram,
         },
         broker,
+        shutdown: broker_shutdown,
     })
 }
 
@@ -1804,6 +1860,7 @@ fn serve_broker_jobs_with_poll<B: BlockBackend>(
         let job = match msg {
             // DT-28: NBD connections coming and going do NOT terminate the daemon (the broker persists).
             WMsg::Opened | WMsg::Closed => continue,
+            WMsg::Shutdown => break,
             WMsg::Job(job) => job,
             WMsg::ZeroExport { base, len, done } => {
                 let ok = zero_window(&mut backend, base, len).is_ok();
@@ -2882,7 +2939,10 @@ mod tests {
         );
         assert_eq!(acceptors.exports, 1, "slice geometry becomes one export");
 
-        shutdown.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            runtime.shutdown.request(),
+            BrokerShutdownWake::Queued | BrokerShutdownWake::QueueFull
+        ));
         let (worker, broker) = runtime.into_parts();
         let _backend = serve_broker_jobs_with_poll(
             RamBackend::new(4096),
@@ -3870,7 +3930,7 @@ mod tests {
         let _ = std::fs::remove_file(&vram_path);
         let vram_shutdown = std::sync::Arc::new(AtomicBool::new(false));
         let vram_runtime = runtime(&vram_path, std::sync::Arc::clone(&vram_shutdown));
-        vram_shutdown.store(true, Ordering::SeqCst);
+        let _ = vram_runtime.shutdown.request();
         run_broker_with_setup(
             TestProvider,
             4096,
@@ -3894,7 +3954,7 @@ mod tests {
         let _ = std::fs::remove_file(&ram_path);
         let ram_shutdown = std::sync::Arc::new(AtomicBool::new(false));
         let ram_runtime = runtime(&ram_path, std::sync::Arc::clone(&ram_shutdown));
-        ram_shutdown.store(true, Ordering::SeqCst);
+        let _ = ram_runtime.shutdown.request();
         run_broker_ram_with_setup(
             4096,
             1,
@@ -4318,6 +4378,7 @@ mod tests {
         let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel(CHAN_CAP);
         let (demote_tx, _demote_rx) = std::sync::mpsc::channel();
         let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = BrokerShutdown::new(std::sync::Arc::clone(&shutdown), jobs_tx.clone());
         let slice_io = std::sync::Arc::new(vec![SliceIoCounters::default()]);
         let worker_rt = BrokerWorkerRuntime {
             geom: vec![(0, 4096)],
@@ -4360,7 +4421,7 @@ mod tests {
             assert_eq!(slice_io[0].bytes_served.load(Ordering::Relaxed), 512);
             assert_eq!(slice_io[0].io_count.load(Ordering::Relaxed), 1);
 
-            shutdown.store(true, Ordering::SeqCst);
+            assert_eq!(stop.request(), BrokerShutdownWake::Queued);
             let started = Instant::now();
             let _backend = worker.join().expect("worker joins after shutdown");
             assert!(
@@ -4368,6 +4429,115 @@ mod tests {
                 "worker shutdown must honor its bounded poll interval"
             );
         });
+    }
+
+    #[test]
+    fn daemon_worker_shutdown_wake_is_not_timer_dependent() {
+        let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel(CHAN_CAP);
+        let (demote_tx, _demote_rx) = std::sync::mpsc::channel();
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = BrokerShutdown::new(std::sync::Arc::clone(&shutdown), jobs_tx.clone());
+        let worker_rt = BrokerWorkerRuntime {
+            geom: vec![(0, 4096)],
+            jobs_rx,
+            demote_tx,
+            shutdown,
+            slice_io: std::sync::Arc::new(vec![SliceIoCounters::default()]),
+            vram: std::sync::Arc::new(VramGauge::default()),
+        };
+
+        std::thread::scope(|scope| {
+            let worker = scope.spawn(move || {
+                serve_broker_jobs_with_poll(
+                    RamBackend::new(4096),
+                    worker_rt,
+                    |_| None,
+                    Duration::from_secs(30),
+                )
+            });
+            std::thread::sleep(Duration::from_millis(20));
+            assert_eq!(stop.request(), BrokerShutdownWake::Queued);
+            let started = Instant::now();
+            let _backend = worker.join().expect("shutdown wake joins worker");
+            assert!(
+                started.elapsed() < Duration::from_secs(1),
+                "explicit shutdown wake must not wait for the receive timer"
+            );
+        });
+    }
+
+    #[test]
+    fn daemon_worker_shutdown_full_queue_is_nonblocking() {
+        let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel(CHAN_CAP);
+        for _ in 0..CHAN_CAP {
+            jobs_tx
+                .try_send(WMsg::Opened)
+                .expect("manufactured queue has exact capacity");
+        }
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = BrokerShutdown::new(std::sync::Arc::clone(&shutdown), jobs_tx);
+
+        assert_eq!(stop.request(), BrokerShutdownWake::QueueFull);
+        assert!(shutdown.load(Ordering::SeqCst));
+
+        let mut opened = 0;
+        loop {
+            match jobs_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("full-queue notifier appends a terminal wake")
+            {
+                WMsg::Opened => opened += 1,
+                WMsg::Shutdown => break,
+                _ => panic!("manufactured queue contains only Opened and Shutdown"),
+            }
+        }
+        assert_eq!(opened, CHAN_CAP, "shutdown wake preserves prior FIFO work");
+    }
+
+    #[test]
+    fn daemon_worker_shutdown_drains_queued_io_before_stop() {
+        let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel(CHAN_CAP);
+        let (demote_tx, _demote_rx) = std::sync::mpsc::channel();
+        let shutdown = std::sync::Arc::new(AtomicBool::new(false));
+        let stop = BrokerShutdown::new(std::sync::Arc::clone(&shutdown), jobs_tx.clone());
+        let slice_io = std::sync::Arc::new(vec![SliceIoCounters::default()]);
+        let worker_rt = BrokerWorkerRuntime {
+            geom: vec![(0, 4096)],
+            jobs_rx,
+            demote_tx,
+            shutdown,
+            slice_io: std::sync::Arc::clone(&slice_io),
+            vram: std::sync::Arc::new(VramGauge::default()),
+        };
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        jobs_tx
+            .send(WMsg::Job(ramshared_wsl2d::conn::Job {
+                export: 0,
+                req: ramshared_block::Request {
+                    flags: 0,
+                    cmd: Command::Write,
+                    handle: 11,
+                    offset: 0,
+                    len: 512,
+                },
+                payload: vec![0xA5; 512],
+                reply: reply_tx,
+            }))
+            .expect("queue accepts write before shutdown");
+        assert_eq!(stop.request(), BrokerShutdownWake::Queued);
+
+        let _backend = serve_broker_jobs_with_poll(
+            RamBackend::new(4096),
+            worker_rt,
+            |_| None,
+            Duration::from_secs(30),
+        );
+        let reply = reply_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("queued write receives a reply before shutdown");
+        assert!(!reply.disconnect);
+        assert_eq!(slice_io[0].bytes_served.load(Ordering::Relaxed), 512);
+        assert_eq!(slice_io[0].io_count.load(Ordering::Relaxed), 1);
     }
 
     #[test]

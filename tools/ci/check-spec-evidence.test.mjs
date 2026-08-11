@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -113,4 +113,47 @@ test('artifact_hash_mismatch_fails', () => {
   const record = doneManifest(ctx)
   record.artifacts[0].sha256 = 'b'.repeat(64)
   assert.match(validateClaimManifest(record, ctx.root).join('\n'), /artifact-hash/)
+})
+
+test('rejects_symlinked_or_oversized_evidence_artifacts', () => {
+  const ctx = fixture()
+  const record = doneManifest(ctx)
+  const evidence = path.join(ctx.dir, 'evidence', 'result.json')
+  const target = path.join(ctx.dir, 'evidence', 'target.json')
+  writeFileSync(target, '{}')
+  rmSync(evidence)
+  symlinkSync(target, evidence)
+  assert.match(validateClaimManifest(record, ctx.root).join('\n'), /artifact-symlink/)
+
+  rmSync(evidence)
+  writeFileSync(evidence, 'x'.repeat(8 * 1024 * 1024 + 1))
+  record.artifacts[0] = {
+    path: record.artifacts[0].path,
+    bytes: 8 * 1024 * 1024 + 1,
+    sha256: hash('x'.repeat(8 * 1024 * 1024 + 1)),
+  }
+  assert.match(validateClaimManifest(record, ctx.root).join('\n'), /artifact-byte-limit/)
+})
+
+test('rejects_artifact_inventory_exhaustion_and_sensitive_provenance', () => {
+  const ctx = fixture()
+  const record = doneManifest(ctx)
+  record.artifacts = Array.from({ length: 129 }, () => ({ ...record.artifacts[0] }))
+  assert.match(validateClaimManifest(record, ctx.root).join('\n'), /artifact-count-limit/)
+
+  const sensitive = doneManifest(ctx)
+  sensitive.live.action.command = 'run --token private-value'
+  const findings = validateClaimManifest(sensitive, ctx.root).join('\n')
+  assert.match(findings, /sensitive-content/)
+  assert.doesNotMatch(findings, /private-value/)
+})
+
+test('rejects_traversal_and_malformed_repository_manifests', () => {
+  const ctx = fixture()
+  const traversal = doneManifest(ctx)
+  traversal.artifacts[0].path = '../outside.json'
+  assert.match(validateClaimManifest(traversal, ctx.root).join('\n'), /artifact-path/)
+
+  writeFileSync(path.join(ctx.dir, 'evidence-manifest.json'), '{not-json')
+  assert.match(validateRepositoryClaims({ root: ctx.root }).findings.join('\n'), /manifest-parse/)
 })

@@ -43,6 +43,12 @@ aggregate calls the same-revision local reusable workflows inside one entrypoint
 run, and consumes only those caller conclusions. It never races separately
 scheduled workflow runs or infers a status from artifacts.
 
+`CI Contract` is the sole automatic pull-request/main entrypoint. Its reusable
+canonical workflows expose `workflow_call` only, so a source revision does not
+run a direct duplicate beside the aggregate. The security workflow retains an
+explicit manual `workflow_dispatch` path for an operator-initiated read-only
+scan; it is not a second automatic admission path.
+
 ## Selection and aggregate semantics
 
 Every pull-request/main caller runs instead of relying on an outer path filter.

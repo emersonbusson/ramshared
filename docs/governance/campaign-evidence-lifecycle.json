@@ -1,0 +1,63 @@
+{
+  "schema_version": "ramshared-campaign-evidence-policy/v1",
+  "limits": {
+    "max_artifacts_per_run": 128,
+    "max_artifact_bytes": 8388608,
+    "max_total_artifact_bytes": 67108864,
+    "max_catalog_entries": 4096
+  },
+  "legacy": {
+    "owner_role": "reliability-evidence",
+    "classification": "legacy-unqualified",
+    "retention_class": "historical-immutable",
+    "immutable": true,
+    "reason": "Predates campaign evidence lifecycle v1 and is observed only."
+  },
+  "roots": [
+    {
+      "prefix": "docs/reliability/evidence/",
+      "owner_role": "reliability-evidence",
+      "surface": "wsl2-freeze"
+    },
+    {
+      "prefix": "docs/specs/no-milestone/benchmark-evidence-integrity/evidence/",
+      "owner_role": "benchmark-evidence",
+      "surface": "benchmark"
+    },
+    {
+      "prefix": "docs/specs/no-milestone/documentation-governance-integrity/evidence/",
+      "owner_role": "documentation-governance",
+      "surface": "other"
+    },
+    {
+      "prefix": "docs/specs/no-milestone/documentation-localization-integrity/evidence/",
+      "owner_role": "documentation-governance",
+      "surface": "other"
+    },
+    {
+      "prefix": "docs/specs/no-milestone/public-repository-hygiene/evidence/",
+      "owner_role": "repository-hygiene",
+      "surface": "other"
+    },
+    {
+      "prefix": "docs/specs/no-milestone/vram-reclaim-pressure-matrix/evidence/",
+      "owner_role": "windows-reliability",
+      "surface": "windows-storage"
+    },
+    {
+      "prefix": "docs/specs/no-milestone/windows-autonomous-broker-service/evidence/",
+      "owner_role": "windows-reliability",
+      "surface": "windows-storage"
+    },
+    {
+      "prefix": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/",
+      "owner_role": "windows-reliability",
+      "surface": "windows-storage"
+    },
+    {
+      "prefix": "docs/specs/no-milestone/wsl2-freeze/evidence/",
+      "owner_role": "wsl2-reliability",
+      "surface": "wsl2-freeze"
+    }
+  ]
+}

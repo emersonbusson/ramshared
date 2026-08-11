@@ -519,16 +519,34 @@ function permissionsBlock(lines, indent) {
   return permissions
 }
 
+function workflowTriggerNames(text) {
+  const block = topLevelBlock(text.split(/\r?\n/), 'on')
+  if (block === null) return []
+  return block
+    .map((line) => line.match(/^  ([A-Za-z][A-Za-z0-9_-]*):(?:\s|$)/))
+    .filter(Boolean)
+    .map((match) => match[1])
+}
+
 function hasTrigger(text, trigger) {
   if (trigger === 'pull_request') return /^\s*pull_request:\s*(?:#.*)?$/m.test(text)
   if (trigger === 'pull_request-closed') return /^\s*pull_request:\s*$/m.test(text) && /^\s*types:\s*\[closed\]\s*$/m.test(text)
   if (trigger === 'push-main') return /^\s*push:\s*(?:#.*)?$/m.test(text) && /^\s*branches:\s*\[main\]\s*$/m.test(text)
   if (trigger === 'workflow_dispatch') return /^\s*workflow_dispatch:\s*(?:#.*)?$/m.test(text)
+  if (trigger === 'workflow_call') return workflowTriggerNames(text).includes('workflow_call')
   if (trigger === 'release') return /^\s*release:\s*(?:#.*)?$/m.test(text)
   if (trigger === 'push-tag') {
     return /^\s*push:\s*(?:#.*)?$/m.test(text) && /^\s*tags:\s*$/m.test(text) && /^\s*-\s*['"]v\*['"]\s*$/m.test(text)
   }
   return false
+}
+
+function permitsDirectTrigger(declared, actual, text) {
+  if (actual === 'pull_request') {
+    return declared.has('pull_request') || (declared.has('pull_request-closed') && hasTrigger(text, 'pull_request-closed'))
+  }
+  if (actual === 'push') return declared.has('push-main') || declared.has('push-tag')
+  return declared.has(actual)
 }
 
 function workflowConcurrency(text) {
@@ -682,6 +700,12 @@ function policyFindings(gate, text, block) {
   const observed = []
   if (/^\s*pull_request_target:\s*(?:#.*)?$/m.test(text)) observed.push('pull-request-target')
   for (const trigger of gate.triggers) if (!hasTrigger(text, trigger)) observed.push('trigger-absent')
+  const declaredTriggers = new Set(gate.triggers)
+  for (const trigger of workflowTriggerNames(text)) {
+    if (trigger !== 'workflow_call' && !permitsDirectTrigger(declaredTriggers, trigger, text)) {
+      observed.push('undeclared-direct-trigger')
+    }
+  }
 
   const observedName = fieldValue(block, 'name') ?? gate.job
   if (observedName !== gate.context) observed.push('context-mismatch')

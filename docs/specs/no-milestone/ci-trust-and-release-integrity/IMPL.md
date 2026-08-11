@@ -5,13 +5,16 @@
 
 ## Status
 
-implemented · cover ✓ · E2E hosted ✓ · BINARY_MATCH N/A
+partial · cover ✓ · E2E hosted revalidation pending · BINARY_MATCH N/A
 
 The local CI topology, exact coverage planning, artifact/release integrity,
 Windows static boundary, and GitHub remote controls are implemented and
 validated. The strict local contract is PASS. Pull request #189 run
 `31446546130` executed the same revision through the hosted same-run aggregate;
 all 20 jobs succeeded and the terminal `required-checks` context is SUCCESS.
+DT-32 changes the automatic-entrypoint topology after that run: the local
+contract and workflow checks are green, but a fresh same-revision hosted
+aggregate is required before this IMPL can again claim hosted qualification.
 
 ## Files
 
@@ -23,6 +26,7 @@ all 20 jobs succeeded and the terminal `required-checks` context is SUCCESS.
 | `tools/ci/check-ci-contract.mjs` | ITEM-1–ITEM-8 / RF-1–RF-11 | Validate source and observed remote controls, aggregate same-run results, and fail closed on missing, unsafe, or stale evidence. |
 | `tools/ci/plan-rust-slice-coverage.mjs` | ITEM-6.6 / RF-10 | Map every changed Rust production file to exact line, platform, localization, test-only, or whole-file structural ownership and execute only tokenized commands. |
 | `tools/ci/check-rust-slice-coverage.mjs` | ITEM-6.6 / RF-10 | Isolate coverage target state and enforce a terminal 15-minute process-tree deadline with a five-second TERM-to-KILL grace period. |
+| `.github/workflows/{ci,ci-contract,security-scans,gitleaks,comment-language,pr-body,validation-schema,windows-static}.yml`, `tools/ci/check-ci-contract.mjs` | DT-32 | Make CI Contract the sole automatic entrypoint, retain only its local reusable callers, and reject undeclared direct triggers. |
 | `docs/governance/{ci-contract,remote-controls-observation,rust-slice-coverage}*` | ITEM-1–ITEM-8 / RF-1–RF-11 | Record the executable contract, sanitized GitHub REST observation, and exact SPEC ownership map. |
 
 ## Validation (numbers)
@@ -49,6 +53,7 @@ all 20 jobs succeeded and the terminal `required-checks` context is SUCCESS.
 - Rust planner: `plan-rust-slice-coverage.mjs --all --base-revision <origin-main-sha> --run` → exit 0; the hosted exact selection emitted 36 per-file PASS rows and every mapped production file was at least 80%, with a minimum of 80.8% (`crates/ramshared-cli/src/main.rs`, 893/1,105 lines).
 - remote observation: read-only workflow tokens, PR approval disabled, selected Actions with SHA pinning, 30-day retention, strict/admin/conversation branch protection, `required-checks`, and two protected environments.
 - E2E: hosted run `31446546130` completed 20/20 jobs successfully in one immutable revision. `required-checks` job `93642837435` is SUCCESS; Windows static completed in 98 seconds, exact Rust coverage in 221 seconds, Rust supply-chain policy in 292 seconds, and Trivy generated, validated, and uploaded its exact SARIF in 19 seconds. Lab workflows remained plan-only and no host, VM, driver, GPU, swap, shutdown, or reboot action ran.
+- DT-32 local gate: 53 contract/aggregate tests passed; checker coverage was 90.57% lines, 83.09% branches, and 99.12% functions. Strict contract, actionlint 1.7.7, docs-check, and scoped whitespace checks exited 0. The old PR #191 hosted run remains evidence of the stale duplicate only, not proof of the new topology.
 
 ## Gaps
 
@@ -59,6 +64,9 @@ all 20 jobs succeeded and the terminal `required-checks` context is SUCCESS.
 - promotion condition: the final PR revision containing DT-30 must pass the
   hosted `required-checks` aggregate before merge; a rerun of the old revision
   is not accepted as proof for the fix.
+- promotion condition (DT-32): the changed topology must complete one fresh
+  same-revision hosted `required-checks` aggregate with no duplicate automatic
+  CI workflow and no unfinished reusable child check.
 
 ## Rollback trigger
 

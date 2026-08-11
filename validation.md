@@ -3557,3 +3557,108 @@ job deadline, hides a failing test, or leaves a Cargo/test descendant alive.
 
 **Verdict:** 🟡 Local deterministic admission is green; merge still requires
 the final hosted same-revision `required-checks` success.
+
+<!-- validation-schema-v2 -->
+
+## 2026-08-11 12:16 -03 — Temporal governance record contracts
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0001`.
+**Owner role:** `governance`.
+**Observed at:** `2026-08-11T12:16:00-03:00`.
+**Verified at:** `2026-08-11T12:16:00-03:00`.
+**Source revision:** `fd5cbf2d39a026bcf737a3082ef2497d3861b257`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain in the append-only validation log.
+**Freshness:** Revalidate whenever either record checker changes.
+**What:** Verified the RamShared-native task and evidence record contracts.
+**Category:** `ci-gate`.
+**How to measure:** `node --test tools/ci/check-task-log.test.mjs tools/ci/check-validation-schema.test.mjs`; `node tools/ci/check-task-log.mjs --all`; and `node tools/ci/check-validation-schema.mjs --all`.
+**Measured data:** 26/26 focused Node tests passed; 2/2 schema checkers exited 0 in all-record mode.
+**Verdict:** ✅ The temporal contracts validate locally; this record does not qualify any hardware or hosted CI claim.
+
+## 2026-08-11 12:34 -03 — Broker shutdown wake closes release CI hang
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0002`.
+**Owner role:** `reliability`.
+**Observed at:** `2026-08-11T12:34:00-03:00`.
+**Verified at:** `2026-08-11T12:34:00-03:00`.
+**Source revision:** `795a2924216f3524350a658ceaddc93b561abeeb`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the summary here; local raw logs remain under `tmp/pr151-broker-shutdown-e2e/` until hosted verification completes.
+**Freshness:** Revalidate on any broker worker, shutdown bridge, channel, or CI Rust-toolchain change.
+**What:** Replaced timer-only broker-worker termination with an explicit nonblocking control wake that drains earlier FIFO I/O.
+**Category:** `ci-gate`.
+**How to measure:** `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace -- --test-threads=1`; the two canonical Rust slice coverage commands from the memory-broker SPEC; 100 bounded repetitions of `daemon_worker_serves_job_counts_io_and_stops_on_shutdown`; and the release RAM-broker before/action/after drill.
+**Measured data:** Workspace tests exited 0; `ramsharedd` passed 47/47; stress passed 100/100; `main.rs` coverage was 81.7% (2827/3461) and `conn.rs` 96.5% (497/515). The loaded release executable exactly matched `target/release/ramsharedd`; SIGTERM exited 0 in 1995 ms and removed the owned socket. A regular-file socket refusal exited 1 and preserved SHA-256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+**Verdict:** 🟡 The local code, cover, BINARY_MATCH, legitimate path, and refusal are green; PR #151 still requires a refreshed same-revision hosted aggregate before promotion.
+
+## 2026-08-11 12:43 -03 — Native governance, evidence, and cleanup lifecycle integration
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0003`.
+**Owner role:** `governance`.
+**Observed at:** `2026-08-11T12:43:55-03:00`.
+**Verified at:** `2026-08-11T12:43:55-03:00`.
+**Source revision:** `6e488df7dba5cf92a2174f59b8330d7416d68b01`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the governance records, generated catalog, and sanitized historical receipts in their owned repository paths; do not treat local lab outputs as public proof.
+**Freshness:** Revalidate when a governed checker, lifecycle policy, CI command, retention policy, or evidence catalog changes.
+**What:** Verified the RamShared-native task/evidence custody, Markdown lifecycle policy, passive capability observations, campaign evidence lifecycle, cleanup receipt register, threat model, ADR registry, and pull-request ratchets.
+**Category:** `ci-gate`.
+**How to measure:** `./scripts/docs-check.sh`; `node --test tools/ci/*.test.mjs tools/*.test.mjs`; `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo test --workspace -- --test-threads=1`; `node tools/ci/check-ci-contract.mjs --check-local`; and `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml`.
+**Measured data:** docs-check passed with 332 structural files, 210 tracked Markdown files, 212 classified worktree documents, 35 passive capability observations, 181 campaign-evidence observations, 2 historical cleanup receipts, and 9 ADR records. The complete Node suite passed 307/307; the benchmark and SPEC evidence hardening tests passed 24/24 with the real-record validators green; Rust format, clippy, and the serial workspace suite exited 0. Hardware-, root-, GPU-, and lab-bound tests remained explicitly ignored rather than promoted.
+**Verdict:** ✅ Static governance and evidence-custody controls are green. This does not qualify live Windows, WSL2, GPU, driver, VM, swap, disk, kernel, or hosted-CI claims; those require their owned environment and before/action/after evidence.
+
+## 2026-08-11 13:21 -03 — Canonical CI automatic entrypoint verification
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0004`.
+**Owner role:** `ci-governance`.
+**Observed at:** `2026-08-11T13:21:44-03:00`.
+**Verified at:** `2026-08-11T13:21:44-03:00`.
+**Source revision:** `35ff48a793aaf52b6552b7b831138160a5f258e1`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only local verification and replace no prior hosted evidence.
+**Freshness:** Revalidate on any workflow trigger, aggregate caller, required-check contract, or CI policy change.
+**What:** Verified that CI Contract is the sole automatic pull-request/main entrypoint and that canonical child workflows cannot reintroduce duplicate direct runs.
+**Category:** `ci-gate`.
+**How to measure:** `./scripts/docs-check.sh`; `node --test tools/ci/*.test.mjs tools/*.test.mjs`; `node tools/ci/check-ci-contract.mjs --check-local`; `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml`; `gitleaks git --log-opts=-1 --redact --verbose`; and `git diff --check`.
+**Measured data:** docs-check passed with 332 structural files, 223 tracked Markdown files, 212 classified documents, 35 capability observations, 181 campaign-evidence observations, 2 cleanup receipts, and 9 ADR records. The complete Node suite passed 309/309; the strict local CI contract returned PASS; Actionlint and Gitleaks returned 0 findings; whitespace checks passed.
+**Verdict:** 🟡 The source topology is locally green and duplicate automatic children are rejected. A fresh same-revision hosted `required-checks` aggregate remains mandatory before promotion; no hosted, Windows, lab, VM, GPU, disk, or kernel result is claimed here.
+
+## 2026-08-11 14:40 -03 — Campaign evidence clean-checkout admission
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0005`.
+**Owner role:** `ci-governance`.
+**Observed at:** `2026-08-11T14:40:00-03:00`.
+**Verified at:** `2026-08-11T14:40:00-03:00`.
+**Source revision:** `fcb12c6e626baf22280a45ca9f6bf566c3169257`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this summary and the generated catalog; temporary clean
+worktrees are removed after verification.
+**Freshness:** Revalidate on any campaign evidence policy, checker, catalog,
+or documentation workflow change.
+**What:** Made campaign evidence discovery deterministic between a developer
+workspace containing ignored forensic logs and a clean GitHub Actions checkout.
+**Category:** `ci-gate`.
+**How to measure:** `node tools/ci/check-campaign-evidence-lifecycle.mjs
+--generate`; `node tools/ci/check-campaign-evidence-lifecycle.mjs --check`;
+the named Node coverage command; `./scripts/docs-check.sh`; and the same
+commands from a detached temporary Git worktree at the source revision.
+**Measured data:** The checker reported 176 Git-tracked observations. The
+named suite passed 16/16; coverage was 97.87% lines, 80.31% branches, and
+95.92% functions. The clean checkout passed the repository checker,
+documentation gate, coverage command, and local CI contract.
+**Refusals:** A missing Git source, malformed CLI arguments, a stale catalog,
+an untracked declared artifact, and ignored local artifacts beside a newly
+tracked campaign all produce the expected terminal outcomes in named tests.
+**Rollback trigger:** A clean checkout and a workspace with ignored local
+evidence produce different catalogs, an ignored artifact changes a repository
+verdict, or the hosted documentation job accepts a coverage failure.
+**Verdict:** 🟡 Static and clean-checkout proof is green. A fresh same-revision
+hosted `required-checks` aggregate remains mandatory before promotion; no
+Windows, WSL2, VM, driver, GPU, storage, swap, kernel, or reboot proof is
+claimed here.
