@@ -1,142 +1,152 @@
-# Runbook — Kernel WSL2 custom para a Fase B (zram-writeback + ublk)
+# Runbook — Custom WSL2 kernel for Phase B (zram writeback + ublk)
 
 > **Canonical SSDV3 (P1):** [`docs/specs/no-milestone/wsl2-custom-kernel-p1/`](../specs/no-milestone/wsl2-custom-kernel-p1/)  
 > (PRD · SPEC · IMPL · AUDIT-2.5). Day-to-day CLI: `bash scripts/kernel/wsl-kernel.sh status|enable|arm|apply`.
 
-Destrava o **Passo 3 (IMPL) dos itens 4-5** (zram-writeback theme + ublk; see ADR-0004 and `docs/specs/no-milestone/wsl2-cascade-swap/`).
-O kernel prebuilt da Microsoft **não** tem os configs (verificado: `# CONFIG_ZRAM_WRITEBACK is
-not set`, `# CONFIG_BLK_DEV_UBLK is not set`). `CONFIG_IO_URING=y` **já existe**.
+Unblocks **Step 3 (IMPL) for items 4–5** (the zram-writeback topic + ublk;
+see ADR-0004 and `docs/specs/no-milestone/wsl2-cascade-swap/`). The Microsoft
+prebuilt kernel **does not** have these configurations (verified:
+`# CONFIG_ZRAM_WRITEBACK is not set`, `# CONFIG_BLK_DEV_UBLK is not set`).
+`CONFIG_IO_URING=y` **already exists**.
 
-> **Atenção:** o passo de **boot** exige `wsl --shutdown` (no Windows) — encerra TODAS as sessões
-> WSL, inclusive a do agente. Por isso o build/install é runbook (o dono controla o restart).
+> **Warning:** the **boot** step requires `wsl --shutdown` (on Windows) — it
+> ends **all** WSL sessions, including the agent's. Therefore build/install is
+> a runbook: the owner controls the restart.
 
-## Fluxo seguro e reutilizável (toolkit `scripts/kernel/`)
+## Safe, reusable workflow (`scripts/kernel/` toolkit)
 
-Use o toolkit — é seguro (valida isolado antes de armar) e **auto-curável** (reverte sozinho
-se não bootar). As seções manuais abaixo são a referência do que os scripts fazem.
+Use the toolkit — it is safe (it validates in isolation before arming) and
+**self-healing** (it reverts itself if it does not boot). The manual sections
+below are the reference for what the scripts do.
 
 ```sh
-# 1. BUILD (base oficial MS + configs; verifica que pegaram; modules_install)
+# 1. BUILD (official Microsoft base + configurations; verifies they applied; modules_install)
 bash scripts/kernel/build-wsl-kernel.sh CONFIG_BLK_DEV_UBLK=m CONFIG_ZRAM_WRITEBACK=y CONFIG_IO_URING=y
-#    → imprime o bzImage e a <release> (use abaixo).
+#    → prints the bzImage and <release> (use it below).
 
-# 2. VALIDAÇÃO ISOLADA (QEMU, NÃO toca o WSL) — prova que o kernel boota
+# 2. ISOLATED VALIDATION (QEMU, DOES NOT touch WSL) — proves the kernel boots
 sudo bash scripts/kernel/qemu-validate.sh ~/WSL2-Linux-Kernel/arch/x86/boot/bzImage "<release>" \
   ~/WSL2-Linux-Kernel/drivers/block/ublk_drv.ko ~/WSL2-Linux-Kernel/mm/zsmalloc.ko \
   ~/WSL2-Linux-Kernel/drivers/block/zram/zram.ko
-#    → "QEMU-VALIDATE: PASS" = bootou ao userspace. Só prossiga se PASS.
+#    → "QEMU-VALIDATE: PASS" = booted to userspace. Proceed only if it passes.
 
-# 3. copia o bzImage p/ o Windows
+# 3. Copy the bzImage to Windows
 mkdir -p /mnt/c/wsl && cp ~/WSL2-Linux-Kernel/arch/x86/boot/bzImage /mnt/c/wsl/kernel-ramshared
-cp scripts/kernel/boot-kernel-safe.ps1 /mnt/c/wsl/   # launcher auto-curável
-cp scripts/kernel/boot-kernel-logged.ps1 /mnt/c/wsl/ # wrapper com log persistente
+cp scripts/kernel/boot-kernel-safe.ps1 /mnt/c/wsl/   # self-healing launcher
+cp scripts/kernel/boot-kernel-logged.ps1 /mnt/c/wsl/ # wrapper with persistent log
 ```
 
 ```powershell
-# 4a. PREFLIGHT SEGURO (no PowerShell do Windows; NÃO encerra o WSL):
+# 4a. SAFE PREFLIGHT (in Windows PowerShell; DOES NOT end WSL):
 powershell -ExecutionPolicy Bypass -File C:\wsl\boot-kernel-logged.ps1 -PreflightOnly
-#    → valida kernel, backup limpo, .wslconfig e arm/desarm em arquivo temporário.
-#    O log fica em C:\wsl\boot-ramshared.log.
+#    → validates the kernel, clean backup, .wslconfig, and arm/disarm in a temporary file.
+#    The log is at C:\wsl\boot-ramshared.log.
 
-# 4b. TROCA SEGURA + AUTO-REVERT (encerra o WSL):
+# 4b. SAFE SWITCH + AUTO-REVERT (ends WSL):
 powershell -ExecutionPolicy Bypass -File C:\wsl\boot-kernel-logged.ps1
-#    → faz backup do .wslconfig, arma, wsl --shutdown, verifica o boot (timeout).
-#    Se NÃO bootar: RESTAURA o .wslconfig e reinicia → volta sozinho ao kernel da Microsoft.
-#    O log fica em C:\wsl\boot-ramshared.log.
-#    Teste a lógica de arm sem tocar o WSL:  ... -DryRunConfig C:\wsl\test.txt
+#    → backs up .wslconfig, arms it, runs wsl --shutdown, and checks boot (timeout).
+#    If it DOES NOT boot: RESTORES .wslconfig and restarts → returns to the Microsoft kernel.
+#    The log is at C:\wsl\boot-ramshared.log.
+#    Test the arming logic without touching WSL: ... -DryRunConfig C:\wsl\test.txt
 ```
 
-Pré-requisito do auto-revert: um `.wslconfig` **limpo** (sem `kernel=`) em `C:\wsl\wslconfig-original.txt`
-(o launcher cria na 1ª vez se o atual ainda não tiver `kernel=`).
+Auto-revert prerequisite: a **clean** `.wslconfig` (without `kernel=`) at
+`C:\wsl\wslconfig-original.txt` (the launcher creates it the first time when
+the current file does not yet contain `kernel=`).
 
-## 0. Pré-requisitos (no WSL2)
+## 0. Prerequisites (in WSL2)
 
 ```sh
-# Deps de build de kernel (faltam: flex, bison, libelf-dev).
+# Kernel build dependencies (missing: flex, bison, libelf-dev).
 sudo apt-get update
 sudo apt-get install -y build-essential flex bison libelf-dev libssl-dev bc dwarves \
   python3 pahole cpio
 ```
 
-## 1. Fonte do kernel (tag = versão em uso)
+## 1. Kernel source (tag = version in use)
 
 ```sh
-uname -r   # ex.: 6.6.114.1-microsoft-standard-WSL2  → use a tag linux-msft-wsl-6.6.y
+uname -r   # for example: 6.6.114.1-microsoft-standard-WSL2 → use tag linux-msft-wsl-6.6.y
 cd ~
 git clone --depth 1 --branch linux-msft-wsl-6.6.y \
   https://github.com/microsoft/WSL2-Linux-Kernel.git
 cd WSL2-Linux-Kernel
 ```
 
-## 2. Config: base Microsoft + os 2 CONFIGs da Fase B
+## 2. Configuration: Microsoft base + the two Phase B CONFIGs
 
 ```sh
-# Base = config oficial do WSL2 (já vem no repo em Microsoft/config-wsl).
+# Base = the official WSL2 configuration (already in the repository at Microsoft/config-wsl).
 cp Microsoft/config-wsl .config
-# Habilita os gatekeepers da Fase B:
-./scripts/config --file .config --enable  CONFIG_ZRAM_WRITEBACK   # BOOL (depende de CONFIG_ZRAM=m), item 4
+# Enable the Phase B gatekeepers:
+./scripts/config --file .config --enable  CONFIG_ZRAM_WRITEBACK   # BOOL (depends on CONFIG_ZRAM=m), item 4
 ./scripts/config --file .config --module  CONFIG_BLK_DEV_UBLK      # ublk_drv (item 5)
-./scripts/config --file .config --enable  CONFIG_IO_URING          # já =y; garante
+./scripts/config --file .config --enable  CONFIG_IO_URING          # already =y; ensures it
 make olddefconfig
-# Confirme:
+# Confirm:
 grep -E "CONFIG_ZRAM_WRITEBACK|CONFIG_BLK_DEV_UBLK|CONFIG_IO_URING" .config
 ```
 
-## 3. Build (pesado — cuidado no WSL2)
+## 3. Build (heavy — use caution in WSL2)
 
 ```sh
-# -j limitado evita travar o WSL2 (regra MEMORY: builds pesados podem congelar).
+# A limited -j avoids freezing WSL2 (MEMORY rule: heavy builds can freeze it).
 make -j"$(($(nproc)/2))" 2>&1 | tee /tmp/kbuild.log
-# Saída: ./arch/x86/boot/bzImage
+# Output: ./arch/x86/boot/bzImage
 ls -la arch/x86/boot/bzImage
-# Instala os módulos (ublk_drv.ko, zram.ko c/ writeback) em /lib/modules/<release>/
-# — o kernel bootado procura os .ko aí. OBRIGATÓRIO p/ ublk/zram carregarem.
+# Installs modules (ublk_drv.ko, zram.ko with writeback) in /lib/modules/<release>/
+# — the booted kernel looks for the .ko files there. REQUIRED for ublk/zram to load.
 sudo make modules_install
 ```
 
-## 4. Install (Windows-side)
+## 4. Install (Windows side)
 
 ```sh
-# Copie o bzImage para um caminho Windows (ex.: C:\wsl\kernel-ramshared).
+# Copy the bzImage to a Windows path (for example, C:\wsl\kernel-ramshared).
 mkdir -p /mnt/c/wsl
 cp arch/x86/boot/bzImage /mnt/c/wsl/kernel-ramshared
 ```
 
-No **Windows**, `%UserProfile%\.wslconfig`:
+On **Windows**, `%UserProfile%\.wslconfig`:
 
 ```ini
 [wsl2]
 kernel=C:\\wsl\\kernel-ramshared
 ```
 
-## 5. Boot (encerra a sessão do agente)
+## 5. Boot (ends the agent session)
 
 ```powershell
-# No PowerShell/CMD do Windows:
+# In Windows PowerShell/CMD:
 wsl --shutdown
-# Reabra o WSL.
+# Reopen WSL.
 ```
 
-## 6. Verificação pós-boot (nova sessão)
+## 6. Post-boot verification (new session)
 
 ```sh
-uname -r                                   # deve refletir o kernel novo
-zcat /proc/config.gz | grep -E "ZRAM_WRITEBACK|BLK_DEV_UBLK"   # ambos m/y
-sudo modprobe ublk_drv && ls /dev/ublk-control   # item 5 disponível
-# zram writeback: backing_dev passa a existir após zram alocado.
+uname -r                                   # must reflect the new kernel
+zcat /proc/config.gz | grep -E "ZRAM_WRITEBACK|BLK_DEV_UBLK"   # both m/y
+sudo modprobe ublk_drv && ls /dev/ublk-control   # item 5 available
+# zram writeback: backing_dev starts to exist after zram is allocated.
 ```
 
-## 7. Então: Passo 3 da Fase B (SSDV3)
+## 7. Then: Phase B Step 3 (SSDV3)
 
-- **Item 4** (zram-writeback-VRAM theme; cascade SPEC: [`wsl2-cascade-swap`](../specs/no-milestone/wsl2-cascade-swap/SPEC.md)): a recomendação ativa é **NÃO** implementar o
-  backing userspace (reentrância sob reclaim + DEMOTE sem drenagem) — preferir block device de
-  VRAM **kernel-side** OU manter a cascata de 2 tiers. Reabrir SPEC se o caminho kernel-side for
-  perseguido. **Não** basta o kernel ter o config; o desenho seguro exige o driver kernel-side.
+- **Item 4** (zram-writeback-VRAM topic; cascade SPEC:
+  [`wsl2-cascade-swap`](../specs/no-milestone/wsl2-cascade-swap/SPEC.md)): the
+  current recommendation is **NOT** to implement userspace backing
+  (reentrancy under reclaim + DEMOTE without draining) — prefer a kernel-side
+  VRAM block device **or** keep the two-tier cascade. Reopen the SPEC if the
+  kernel-side path is pursued. It is **not** enough for the kernel to have the
+  configuration; the safe design requires the kernel-side driver.
 - **Item 5** ([`ADR-0004`](../decisions/ADR-0004-ublk-io-uring-crate.md)):
-  IMPL do servidor ublk reusando o worker H1; `io-uring` crate (ADR-0004); `--swap-dev` genérico;
-  **bench latência ublk vs NBD** (gate de adoção — sem ganho, manter NBD).
+  implement the ublk server by reusing worker H1; use the `io-uring` crate
+  (ADR-0004); use generic `--swap-dev`; **benchmark ublk latency versus NBD**
+  (adoption gate — without a gain, keep NBD).
 
 ## Rollback
 
-- Remover a linha `kernel=` do `.wslconfig` + `wsl --shutdown` → volta ao kernel prebuilt da MS.
-  App-only; nenhum dado é tocado (a cascata Day-0 de 2 tiers segue funcionando no kernel padrão).
+- Remove the `kernel=` line from `.wslconfig` + run `wsl --shutdown` → return
+  to the Microsoft prebuilt kernel. Application-only; no data is touched (the
+  Day-0 two-tier cascade continues to work on the standard kernel).

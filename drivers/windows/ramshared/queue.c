@@ -481,6 +481,8 @@ QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 			srb = Q->Inflight[tag].Srb;
 			Q->Inflight[tag].Srb = NULL;
 			Q->Cq->head = Q->Cq->head + 1;
+			/* REENTRANT_REQUEST_COMPLETE_SLOT_FREE (DT-34). */
+			Q->Inflight[tag].State = RamSlotFree;
 			KeReleaseSpinLock(&Q->Lock, old);
 			if (srb != NULL) {
 				PVOID adext = VdGetAdapterExt();
@@ -491,7 +493,6 @@ QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 				}
 			}
 			KeAcquireSpinLock(&Q->Lock, &old);
-			Q->Inflight[tag].State = RamSlotFree;
 			continue;
 		}
 
@@ -537,6 +538,14 @@ QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 			} else {
 				srb->SrbStatus = SRB_STATUS_ERROR;
 			}
+			/*
+			 * RequestComplete can synchronously admit another SRB. All
+			 * bounce-buffer access is finished, so publish the slot free
+			 * before that re-entrant boundary (DT-34).
+			 */
+			KeAcquireSpinLock(&Q->Lock, &old);
+			Q->Inflight[tag].State = RamSlotFree;
+			KeReleaseSpinLock(&Q->Lock, old);
 			{
 				PVOID adext = VdGetAdapterExt();
 
@@ -546,7 +555,6 @@ QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 			}
 
 			KeAcquireSpinLock(&Q->Lock, &old);
-			Q->Inflight[tag].State = RamSlotFree;
 		}
 	}
 

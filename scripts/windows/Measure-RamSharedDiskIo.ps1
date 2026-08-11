@@ -14,8 +14,8 @@
   Prefer this over Task Manager for lab numbers.
 
 .EXAMPLE
-  .\Measure-RamSharedDiskIo.ps1 -Seconds 10
-  .\Measure-RamSharedDiskIo.ps1 -Seconds 8 -DriveLetter S
+  .\Measure-RamSharedDiskIo.ps1 -Seconds 8 -DriveLetter S `
+    -ExpectedSerial ABCDEF0123456789 -ExpectedSizeBytes 1GB -ChecksumRounds 3
 #>
 [CmdletBinding()]
 param(
@@ -29,11 +29,156 @@ param(
     [string]$ProductPid = "",
     [string]$ProductSha256 = "",
     [string]$ExpectedSerial = "",
+    [uint64]$ExpectedSizeBytes = 0,
     [string]$JsonlOut = ""
 )
 
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = "Stop"
 function L($m) { Write-Host ("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m) }
+
+function Get-Sha256Hex {
+    param([byte[]]$Bytes)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        return [BitConverter]::ToString($sha256.ComputeHash($Bytes)).Replace("-", "")
+    } finally {
+        $sha256.Dispose()
+    }
+}
+
+function Test-RamSharedPayloadMatch {
+    param([byte[]]$ExpectedBytes, [byte[]]$ActualBytes)
+    if ($null -eq $ExpectedBytes -or $null -eq $ActualBytes -or
+        $ExpectedBytes.Length -ne $ActualBytes.Length) {
+        return $false
+    }
+    return (Get-Sha256Hex $ExpectedBytes) -eq (Get-Sha256Hex $ActualBytes)
+}
+
+function Resolve-RamSharedDiskBinding {
+    param(
+        [object[]]$Disks,
+        [object[]]$TargetPartitions,
+        [string]$Serial,
+        [uint64]$SizeBytes,
+        [string]$Letter,
+        [string]$Path
+    )
+    $normalizedSerial = $Serial.Trim().ToUpperInvariant()
+    if ($normalizedSerial -notmatch '^[0-9A-F]{16}$') {
+        throw "ExpectedSerial must be exactly 16 hexadecimal characters"
+    }
+    if ($SizeBytes -eq 0) {
+        throw "ExpectedSizeBytes must be greater than zero"
+    }
+    $candidates = @($Disks | Where-Object {
+            ([string]$_.FriendlyName).Trim() -ieq "RAMSHARE VRAMDISK" -and
+            ([string]$_.SerialNumber).Trim().ToUpperInvariant() -eq $normalizedSerial -and
+            [uint64]$_.Size -eq $SizeBytes -and
+            ([string]$_.BusType).Trim() -ieq "Virtual"
+        })
+    if ($candidates.Count -ne 1) {
+        throw "exact RamShared disk cardinality must be one; observed=$($candidates.Count)"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Letter) -or
+        -not [string]::IsNullOrWhiteSpace($Path)) {
+        if ($TargetPartitions.Count -ne 1) {
+            throw "target access path partition cardinality must be one; observed=$($TargetPartitions.Count)"
+        }
+        $partition = $TargetPartitions[0]
+        if ([int]$partition.DiskNumber -ne [int]$candidates[0].Number) {
+            throw "target access path maps to foreign disk"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($Letter)) {
+            $expectedLetter = $Letter.TrimEnd(':').Substring(0, 1).ToUpperInvariant()
+            if (([string]$partition.DriveLetter).ToUpperInvariant() -ne $expectedLetter) {
+                throw "target drive letter mapping changed"
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($Path)) {
+            $expectedPath = $Path.TrimEnd('\') + '\'
+            $paths = @($partition.AccessPaths | ForEach-Object { ([string]$_).TrimEnd('\') + '\' })
+            if ($paths -notcontains $expectedPath) {
+                throw "target access path mapping changed"
+            }
+        }
+    }
+    return $candidates[0]
+}
+
+function Assert-RamSharedUncachedProbe {
+    param([object[]]$Results)
+    if ($Results.Count -ne 1) {
+        throw "uncached probe result cardinality must be one; observed=$($Results.Count)"
+    }
+    $result = $Results[0]
+    if (-not $result.probe_during_sampling -or
+        [int64]$result.UNCACHED_WRITE_BYTES -le 0 -or
+        [int64]$result.UNCACHED_READ_BYTES -le 0 -or
+        -not [bool]$result.match) {
+        throw "uncached probe failed integrity or positive-byte contract"
+    }
+    return $result
+}
+
+function Assert-RamSharedCounterActivity {
+    param(
+        [double]$ReadBytesPerSecMax,
+        [double]$WriteBytesPerSecMax,
+        [double]$PercentDiskTimeMax,
+        [int]$PerfRowSamples
+    )
+    if ($PerfRowSamples -le 0) {
+        throw "no exact PerfDisk row was sampled"
+    }
+    if ($ReadBytesPerSecMax -le 0 -and $WriteBytesPerSecMax -le 0) {
+        throw "PerfDisk reported zero read/write activity"
+    }
+    if ($PercentDiskTimeMax -lt 0) {
+        throw "PerfDisk reported invalid activity percentage"
+    }
+    return $true
+}
+
+function New-RamSharedCounterEvidence {
+    param(
+        $ReadStats,
+        $WriteStats,
+        $BusyStats,
+        $ReadLatencyStats,
+        $WriteLatencyStats,
+        $QueueStats,
+        [int]$PerfRowSamples,
+        [int64]$UncachedWriteBytes,
+        [int64]$UncachedReadBytes,
+        [string]$ExpectedSerial,
+        [uint64]$ExpectedSizeBytes
+    )
+    return [pscustomobject][ordered]@{
+        serial = $ExpectedSerial.Trim().ToUpperInvariant()
+        expected_size_bytes = $ExpectedSizeBytes
+        perf_row_samples = $PerfRowSamples
+        disk_read_bytes_per_sec_avg = $ReadStats.avg
+        disk_read_bytes_per_sec_max = $ReadStats.max
+        disk_write_bytes_per_sec_avg = $WriteStats.avg
+        disk_write_bytes_per_sec_max = $WriteStats.max
+        percent_disk_time_avg = $BusyStats.avg
+        percent_disk_time_max = $BusyStats.max
+        avg_disk_sec_per_read_ms_avg = $ReadLatencyStats.avg
+        avg_disk_sec_per_write_ms_avg = $WriteLatencyStats.avg
+        current_disk_queue_length_avg = $QueueStats.avg
+        uncached_write_bytes = $UncachedWriteBytes
+        uncached_read_bytes = $UncachedReadBytes
+    }
+}
+
+function Write-Utf8JsonLine {
+    param([string]$LiteralPath, $Value)
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $json = $Value | ConvertTo-Json -Compress
+    [IO.File]::AppendAllText($LiteralPath, $json + [Environment]::NewLine, $utf8NoBom)
+}
 
 $ioRoot = ""
 if ($AccessPath) {
@@ -99,15 +244,25 @@ public static class RamSharedUncachedIo {
 }
 '@
 
-$disks = @(Get-Disk | Where-Object {
-        $_.FriendlyName -match 'RAMSHARE|RamShared|VRAMDISK' -or
-        ($_.BusType -eq 'Fibre Channel' -and $_.FriendlyName -match 'RAM')
-    })
-if ($disks.Count -eq 0) {
-    Write-Warning "No RamShared disk found. Is WinDriveBackend / CREATE_DISK running?"
-    Get-Disk | Format-Table Number, FriendlyName, Size, BusType, PartitionStyle -AutoSize
-    exit 2
+$allDisks = @(Get-Disk -ErrorAction Stop)
+$targetPartitions = @()
+if ($ioRoot) {
+    if ($DriveLetter) {
+        $targetPartitions = @(Get-Partition -DriveLetter $DriveLetter.TrimEnd(':').Substring(0, 1) `
+                -ErrorAction Stop)
+    } else {
+        $targetPartitions = @(Get-Partition -AccessPath ($AccessPath.TrimEnd('\') + '\') `
+                -ErrorAction Stop)
+    }
 }
+try {
+    $selectedDisk = Resolve-RamSharedDiskBinding $allDisks $targetPartitions `
+        $ExpectedSerial $ExpectedSizeBytes $DriveLetter $AccessPath
+} catch {
+    [Console]::Error.WriteLine("measurement_error_exits_7: " + $_.Exception.Message)
+    exit 7
+}
+$disks = @($selectedDisk)
 
 foreach ($d in $disks) {
     L ("DISK N=$($d.Number) Name=$($d.FriendlyName) Size=$($d.Size) Style=$($d.PartitionStyle) Bus=$($d.BusType)")
@@ -168,6 +323,9 @@ $busy = New-Object System.Collections.Generic.List[double]
 $latR = New-Object System.Collections.Generic.List[double]
 $latW = New-Object System.Collections.Generic.List[double]
 $qDepth = New-Object System.Collections.Generic.List[double]
+$perfRowSamples = 0
+$uncachedWriteBytes = 0
+$uncachedReadBytes = 0
 
 $sampleLoadJob = $null
 if ($ioRoot) {
@@ -177,15 +335,18 @@ if ($ioRoot) {
         param($Path, $MiB, $DurationSec, $Source)
         $ErrorActionPreference = "Stop"
         Add-Type -TypeDefinition $Source
-        $result = [RamSharedUncachedIo]::Run($Path, $MiB, $DurationSec)
-        Remove-Item $Path -Force -EA SilentlyContinue
-        [pscustomobject]@{
-            probe_during_sampling = $true
-            UNCACHED_WRITE_BYTES = [int64]$result[0]
-            UNCACHED_READ_BYTES = [int64]$result[1]
-            bytes_written = [int64]$result[0]
-            bytes_read = [int64]$result[1]
-            match = ([int64]$result[2] -eq 1)
+        try {
+            $result = [RamSharedUncachedIo]::Run($Path, $MiB, $DurationSec)
+            [pscustomobject]@{
+                probe_during_sampling = $true
+                UNCACHED_WRITE_BYTES = [int64]$result[0]
+                UNCACHED_READ_BYTES = [int64]$result[1]
+                bytes_written = [int64]$result[0]
+                bytes_read = [int64]$result[1]
+                match = ([int64]$result[2] -eq 1)
+            }
+        } finally {
+            Remove-Item $Path -Force -ErrorAction SilentlyContinue
         }
     }
 }
@@ -194,7 +355,11 @@ $samples = [Math]::Max(1, [int]$Seconds)
 L "Sampling PerfDisk for ${samples}s (interval ${SampleIntervalSec}s) via CIM (locale-safe)"
 for ($i = 0; $i -lt $samples; $i++) {
     $rows = Get-RamSharedPerfRows -DiskNumbers $diskNums
+    if ($rows.Count -gt 1) {
+        throw "PerfDisk exact-row cardinality exceeded one; observed=$($rows.Count)"
+    }
     foreach ($r in $rows) {
+        $perfRowSamples++
         # Properties are bytes/sec and percent already cooked in FormattedData.
         if ($null -ne $r.DiskReadBytesPersec) { $reads.Add([double]$r.DiskReadBytesPersec) }
         if ($null -ne $r.DiskWriteBytesPersec) { $writes.Add([double]$r.DiskWriteBytesPersec) }
@@ -207,23 +372,26 @@ for ($i = 0; $i -lt $samples; $i++) {
 }
 
 if ($sampleLoadJob) {
-    Wait-Job $sampleLoadJob -Timeout ([Math]::Max(5, $Seconds + 5)) | Out-Null
-    if ($sampleLoadJob.State -eq "Running") {
-        Stop-Job $sampleLoadJob -Force -EA SilentlyContinue
-        L "Direct I/O load during sampling timed out"
-    } else {
-        $loadResult = Receive-Job $sampleLoadJob -EA SilentlyContinue
-        foreach ($lr in @($loadResult)) {
-            if ($lr.probe_during_sampling) {
-                L ("Direct load during sampling iterations={0} written={1} MiB read={2} MiB match={3}" -f
-                    $lr.iterations,
-                    [math]::Round(([double]$lr.bytes_written / 1MB), 2),
-                    [math]::Round(([double]$lr.bytes_read / 1MB), 2),
-                    $lr.match)
-            }
+    try {
+        Wait-Job $sampleLoadJob -Timeout ([Math]::Max(5, $Seconds + 5)) | Out-Null
+        if ($sampleLoadJob.State -ne "Completed") {
+            # uncached_probe_uses_powershell51_job_cleanup: Stop-Job has no
+            # -Force parameter on Windows PowerShell 5.1. The matrix owns the
+            # independent process deadline for a job that cannot be stopped.
+            Stop-Job $sampleLoadJob -ErrorAction SilentlyContinue
+            throw "uncached direct I/O job did not complete; state=$($sampleLoadJob.State)"
         }
+        $loadResult = @(Receive-Job $sampleLoadJob -ErrorAction Stop)
+        $uncachedResult = Assert-RamSharedUncachedProbe $loadResult
+        $uncachedWriteBytes = [int64]$uncachedResult.UNCACHED_WRITE_BYTES
+        $uncachedReadBytes = [int64]$uncachedResult.UNCACHED_READ_BYTES
+        L ("Direct load during sampling written={0} MiB read={1} MiB match={2}" -f
+            [math]::Round(([double]$uncachedWriteBytes / 1MB), 2),
+            [math]::Round(([double]$uncachedReadBytes / 1MB), 2),
+            $uncachedResult.match)
+    } finally {
+        Remove-Job $sampleLoadJob -Force -ErrorAction SilentlyContinue
     }
-    Remove-Job $sampleLoadJob -Force -EA SilentlyContinue
 }
 
 function Stat($list) {
@@ -232,20 +400,24 @@ function Stat($list) {
     return @{ avg = [math]::Round($a.Average, 2); max = [math]::Round($a.Maximum, 2) }
 }
 
-$sr = Stat $reads
-$sw = Stat $writes
-$sb = Stat $busy
-$slr = Stat $latR
-$slw = Stat $latW
-$sq = Stat $qDepth
+$readStats = Stat $reads
+$writeStats = Stat $writes
+$busyStats = Stat $busy
+$readLatencyStats = Stat $latR
+$writeLatencyStats = Stat $latW
+$queueStats = Stat $qDepth
+if ($ioRoot) {
+    Assert-RamSharedCounterActivity `
+        $readStats.max $writeStats.max $busyStats.max $perfRowSamples | Out-Null
+}
 
 L "=== Summary ($Seconds s) ==="
-L ("Busy pct DiskTime  avg={0} pct max={1} pct" -f $sb.avg, $sb.max)
-L ("Read            avg={0} MB/s max={1} MB/s" -f [math]::Round($sr.avg / 1MB, 2), [math]::Round($sr.max / 1MB, 2))
-L ("Write           avg={0} MB/s max={1} MB/s" -f [math]::Round($sw.avg / 1MB, 2), [math]::Round($sw.max / 1MB, 2))
-L ("Latency read    avg={0} ms max={1} ms" -f $slr.avg, $slr.max)
-L ("Latency write   avg={0} ms max={1} ms" -f $slw.avg, $slw.max)
-L ("Queue depth     avg={0} max={1}" -f $sq.avg, $sq.max)
+L ("Busy pct DiskTime  avg={0} pct max={1} pct" -f $busyStats.avg, $busyStats.max)
+L ("Read            avg={0} MB/s max={1} MB/s" -f [math]::Round($readStats.avg / 1MB, 2), [math]::Round($readStats.max / 1MB, 2))
+L ("Write           avg={0} MB/s max={1} MB/s" -f [math]::Round($writeStats.avg / 1MB, 2), [math]::Round($writeStats.max / 1MB, 2))
+L ("Latency read    avg={0} ms max={1} ms" -f $readLatencyStats.avg, $readLatencyStats.max)
+L ("Latency write   avg={0} ms max={1} ms" -f $writeLatencyStats.avg, $writeLatencyStats.max)
+L ("Queue depth     avg={0} max={1}" -f $queueStats.avg, $queueStats.max)
 L "Note: Task Manager may still mis-report StorPort virtual disks; trust this sample + direct I/O."
 
 $directOk = $false
@@ -266,12 +438,9 @@ if ($ioRoot) {
         $mib = $sz / 1MB
         $wMBs = [math]::Round($mib / [Math]::Max(0.001, $swWrite.Elapsed.TotalSeconds), 1)
         $rMBs = [math]::Round($mib / [Math]::Max(0.001, $swRead.Elapsed.TotalSeconds), 1)
-        $tmp = Join-Path $env:TEMP "ramshared-io-probe-read.bin"
-        [IO.File]::WriteAllBytes($tmp, $got)
-        $hashWrite = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash
-        $hashRead = (Get-FileHash -Algorithm SHA256 -LiteralPath $tmp).Hash
-        Remove-Item $tmp -Force -EA SilentlyContinue
-        $match = ($got.Length -eq $bytes.Length -and $hashWrite -eq $hashRead)
+        $hashWrite = Get-Sha256Hex $bytes
+        $hashRead = Get-Sha256Hex $got
+        $match = Test-RamSharedPayloadMatch $bytes $got
         L ("Direct {0} MiB write={1} MB/s read={2} MB/s match={3} sha256={4}" -f $mib, $wMBs, $rMBs, $match, $hashWrite)
         Remove-Item $path -Force -EA SilentlyContinue
         $directOk = $match
@@ -282,63 +451,92 @@ if ($ioRoot) {
 
 # --- SPEC checksum / percentile mode (optional) ---
 if ($ChecksumRounds -gt 0) {
-    if (-not $ioRoot) { throw "ChecksumRounds requires -DriveLetter or -AccessPath" }
-    $path = Join-Path $ioRoot "ramshared-probe.bin"
-    $size = [int64]$ProbeMiB * 1MB
-    $seed = [int](Get-Date -UFormat %s) % 251
-    $lat = New-Object System.Collections.Generic.List[double]
-    $hashes = @()
-    for ($r = 1; $r -le $ChecksumRounds; $r++) {
-        $buf = New-Object byte[] $size
-        for ($i = 0; $i -lt $buf.Length; $i++) { $buf[$i] = [byte](($i + $seed + $r) % 251) }
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        [System.IO.File]::WriteAllBytes($path, $buf)
-        $fs = [System.IO.File]::Open($path, 'Open', 'ReadWrite', 'None')
-        $fs.Flush($true)
-        $fs.Close()
-        $sw.Stop()
-        $lat.Add($sw.Elapsed.TotalMilliseconds)
-        $hWrite = (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash
-        $sw2 = [System.Diagnostics.Stopwatch]::StartNew()
-        $read = [System.IO.File]::ReadAllBytes($path)
-        $sw2.Stop()
-        $lat.Add($sw2.Elapsed.TotalMilliseconds)
-        $tmp = Join-Path $env:TEMP ("rs-read-{0}.bin" -f $r)
-        [System.IO.File]::WriteAllBytes($tmp, $read)
-        $hRead = (Get-FileHash -Algorithm SHA256 -LiteralPath $tmp).Hash
-        Remove-Item $tmp -Force -EA SilentlyContinue
-        if ($hWrite -ne $hRead) {
-            Write-Host "checksum_mismatch_exits_6 write=$hWrite read=$hRead round=$r"
-            exit 6
+    $priorErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Stop"
+    try {
+        if (-not $ioRoot) { throw "ChecksumRounds requires -DriveLetter or -AccessPath" }
+        $path = Join-Path $ioRoot "ramshared-probe.bin"
+        $size = [int64]$ProbeMiB * 1MB
+        $seed = [int]([DateTime]::UtcNow.Ticks % 251)
+        $lat = New-Object System.Collections.Generic.List[double]
+        $hashes = @()
+        for ($r = 1; $r -le $ChecksumRounds; $r++) {
+            $buf = New-Object byte[] $size
+            for ($i = 0; $i -lt $buf.Length; $i++) {
+                $buf[$i] = [byte](($i + $seed + $r) % 251)
+            }
+            $hWrite = Get-Sha256Hex $buf
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            [System.IO.File]::WriteAllBytes($path, $buf)
+            $fs = [System.IO.File]::Open($path, 'Open', 'ReadWrite', 'None')
+            try {
+                $fs.Flush($true)
+            }
+            finally {
+                $fs.Dispose()
+            }
+            $sw.Stop()
+            $lat.Add($sw.Elapsed.TotalMilliseconds)
+            $sw2 = [System.Diagnostics.Stopwatch]::StartNew()
+            $read = [System.IO.File]::ReadAllBytes($path)
+            $sw2.Stop()
+            $lat.Add($sw2.Elapsed.TotalMilliseconds)
+            $hRead = Get-Sha256Hex $read
+            if (-not (Test-RamSharedPayloadMatch $buf $read)) {
+                Write-Host "checksum_mismatch_exits_6 write=$hWrite read=$hRead round=$r"
+                exit 6
+            }
+            $hashes += $hWrite
+            L ("ROUND $r SHA256=$hWrite write_ms={0:n1} read_ms={1:n1}" -f
+                $lat[$lat.Count-2], $lat[$lat.Count-1])
         }
-        $hashes += $hWrite
-        L ("ROUND $r SHA256=$hWrite write_ms={0:n1} read_ms={1:n1}" -f $lat[$lat.Count-2], $lat[$lat.Count-1])
-    }
-    if ($ChecksumRounds -ge 2) {
-        $uniq = $hashes | Select-Object -Unique
-        if ($uniq.Count -ne 1) {
-            Write-Warning "rounds produced different hashes (seeded content differs by design per round)"
+        if ($ChecksumRounds -ge 2) {
+            $uniq = $hashes | Select-Object -Unique
+            if ($uniq.Count -ne 1) {
+                L "Rounds use distinct deterministic content as designed"
+            }
         }
-    }
-    $sorted = $lat | Sort-Object
-    function Pct($arr, $p) {
-        if ($arr.Count -eq 0) { return 0 }
-        $rank = [math]::Ceiling(($p/100.0) * $arr.Count)
-        $idx = [math]::Max(0, [math]::Min($arr.Count-1, $rank-1))
-        return $arr[$idx]
-    }
-    $p50 = Pct $sorted 50; $p95 = Pct $sorted 95; $p99 = Pct $sorted 99
-    Write-Host ("three_rounds_emit_p50_p95_p99 p50_ms={0:n2} p95_ms={1:n2} p99_ms={2:n2}" -f $p50,$p95,$p99)
-    if ($JsonlOut) {
-        $row = [ordered]@{
-            schema=1; backend="cuda"; pid=$ProductPid; exe_sha256=$ProductSha256
-            serial=$ExpectedSerial; p50_ms=$p50; p95_ms=$p95; p99_ms=$p99
-            rounds=$ChecksumRounds; last_sha256=$hashes[-1]
+        $sorted = $lat | Sort-Object
+        function Pct($arr, $p) {
+            if ($arr.Count -eq 0) { return 0 }
+            $rank = [math]::Ceiling(($p/100.0) * $arr.Count)
+            $idx = [math]::Max(0, [math]::Min($arr.Count-1, $rank-1))
+            return $arr[$idx]
         }
-        ($row | ConvertTo-Json -Compress) | Add-Content -Path $JsonlOut -Encoding utf8
+        $p50 = Pct $sorted 50
+        $p95 = Pct $sorted 95
+        $p99 = Pct $sorted 99
+        Write-Host ("three_rounds_emit_p50_p95_p99 p50_ms={0:n2} p95_ms={1:n2} p99_ms={2:n2}" -f
+            $p50, $p95, $p99)
+        if ($JsonlOut) {
+            $counterEvidence = New-RamSharedCounterEvidence `
+                $readStats $writeStats $busyStats $readLatencyStats `
+                $writeLatencyStats $queueStats $perfRowSamples `
+                $uncachedWriteBytes $uncachedReadBytes `
+                $ExpectedSerial $ExpectedSizeBytes
+            $row = [ordered]@{
+                schema=1; backend="cuda"; pid=$ProductPid; exe_sha256=$ProductSha256
+                p50_ms=$p50; p95_ms=$p95; p99_ms=$p99
+                rounds=$ChecksumRounds; last_sha256=$hashes[-1]
+            }
+            foreach ($property in $counterEvidence.PSObject.Properties) {
+                $row[$property.Name] = $property.Value
+            }
+            Write-Utf8JsonLine $JsonlOut $row
+        }
+        Write-Host "matching_checksum_exits_0"
+        exit 0
     }
-    Write-Host "matching_checksum_exits_0"
-    exit 0
+    catch {
+        Write-Error ("measurement_error_exits_7: " + $_.Exception.Message)
+        exit 7
+    }
+    finally {
+        if ($path) {
+            Remove-Item $path -Force -ErrorAction SilentlyContinue
+        }
+        $ErrorActionPreference = $priorErrorAction
+    }
 }
 
 # Exit 0 if we have disk + (any perf sample OR successful direct IO OR letter not requested)

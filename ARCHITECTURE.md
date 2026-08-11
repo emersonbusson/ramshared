@@ -7,7 +7,7 @@ Two tracks share CUDA/block pieces. Only one is the daily product.
 | Track | Status | Where we test |
 | --- | --- | --- |
 | Linux / WSL2 cascade | Product | Your machine + qemu drills |
-| Windows StorPort | Lab only | Hyper-V disposable VM |
+| Windows StorPort | Supervised beta | Hyper-V VM + approved physical Test Mode campaign |
 
 ---
 
@@ -57,13 +57,20 @@ SPEC: [docs/specs/no-milestone/wsl2-cascade-boot/](docs/specs/no-milestone/wsl2-
 
 ---
 
-## Track 2 — Windows lab (not day-1 install)
+## Track 2 — Windows supervised beta
 
-Secondary pagefile on a StorPort virtual disk. Userspace completes I/O.  
+The native path is a StorPort virtual disk whose I/O is completed by
+`RamSharedWinSvc`. A separate least-privilege `RamSharedBroker` SCM service
+owns only logical lease arbitration. The consumer depends on the broker and
+uses the authenticated `\\.\pipe\RamSharedBroker.v1` boundary; the installed
+daily profile has no TCP listener. Both services and their immutable configs
+are selected by one hashed product manifest and are demand-start by default.
 
 **Hard rule:** never tear the disk down under a **hot** pagefile (BugCheck **0x7A** proven). Ordered teardown (DT-9) refuses that.
 
-Do not load this on a physical daily driver. See the windows-swap-driver SPEC/IMPL.
+Physical execution remains explicitly approved and watchdog-supervised.
+Public distribution still requires a production-trusted signature and
+normal-Windows proof with Test Mode disabled.
 
 ---
 

@@ -3,7 +3,8 @@
 param(
   [string]$VMName = "win11-drill",
   [string]$User = "WIN11-DRILL\drilladmin",
-  [string]$Password = $env:RAMSHARED_DRILL_PASSWORD
+  [string]$Password = $env:RAMSHARED_DRILL_PASSWORD,
+  [string]$ArtifactRoot = "C:\ramshared\artifacts"
 )
 $ErrorActionPreference = "Stop"
 if ([string]::IsNullOrEmpty($Password)) {
@@ -36,7 +37,7 @@ while ($t -lt 120) {
 }
 if ($t -ge 120) { throw "PSD not ready" }
 
-$artifact = "C:\Users\emedev\ramshared-drill\agent-storport-cuda-$(Get-Date -Format yyyyMMdd-HHmmss)"
+$artifact = Join-Path $ArtifactRoot "agent-storport-cuda-$(Get-Date -Format yyyyMMdd-HHmmss)"
 New-Item -Force -ItemType Directory $artifact | Out-Null
 
 # Deploy files into guest via PSD Copy-VMFile if available, else base64

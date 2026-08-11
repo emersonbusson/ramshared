@@ -1,24 +1,27 @@
-# Runbook — Revisão periódica de ADRs e disciplinas (anti-cargo-cult)
+# Runbook — Periodic ADR and discipline review (anti-cargo-cult)
 
-Revisão **trimestral** (ou ao fechar milestone) que checa se as disciplinas
-Kahneman e os ADRs estão vivos, não viraram ritual. É o mecanismo de
-auto-aplicação de [`../methodology/kahneman-disciplines.md`](../methodology/kahneman-disciplines.md).
+A **quarterly** review (or one performed when closing a milestone) that checks
+whether Kahneman disciplines and ADRs remain alive rather than becoming ritual.
+It is the self-enforcement mechanism for
+[`../methodology/kahneman-disciplines.md`](../methodology/kahneman-disciplines.md).
 
 ## Checklist
 
-1. **Rollback triggers ativos** — para cada ADR em [`../decisions/`](../decisions/)
-   com `Rollback trigger:`: a condição já disparou? Se sim, foi acionada? Condição
-   disparada e nada feito = cargo cult → abrir postmortem.
-2. **Adoção das disciplinas** — nos commits não-triviais (`feat|fix|refactor|perf`)
-   do período, ≥ 30% citam alguma disciplina (#1–14) no body/ADR/review? Se < 30%
-   por 6 meses → simplificar para Top-5 (gatilho do próprio doc Kahneman).
-3. **Anchors existem** — todo arquivo citado pelas disciplinas/`ssdv3.md` existe
-   (`docs/postmortems/`, `docs/reliability/`, `docs/decisions/`, `docs/LIBRARIES.md`,
-   `methodology/SUPERPROMPT.md`). Verificável por grep de paths.
-4. **Higiene** — ADRs superseded marcados; `DEGRADATION-MATRIX.md` atualizada na
-   última feature crítica.
+1. **Active rollback triggers** — for each ADR in
+   [`../decisions/`](../decisions/) with `Rollback trigger:`: has the condition
+   already fired? If so, was it acted on? A fired condition with no action =
+   cargo cult → open a postmortem.
+2. **Discipline adoption** — among non-trivial commits
+   (`feat|fix|refactor|perf`) in the period, do ≥30% cite a discipline (#1–14)
+   in the body/ADR/review? If <30% for 6 months → simplify to Top-5 (the
+   Kahneman document's own trigger).
+3. **Anchors exist** — does every file cited by the disciplines/`ssdv3.md`
+   exist (`docs/postmortems/`, `docs/reliability/`, `docs/decisions/`,
+   `docs/LIBRARIES.md`, `methodology/SUPERPROMPT.md`)? Verify with a path grep.
+4. **Hygiene** — mark superseded ADRs; update `DEGRADATION-MATRIX.md` for the
+   latest critical feature.
 
-## Saída
+## Output
 
-Uma entrada em [`../postmortems/`](../postmortems/) (mesmo "sem desvio"),
-registrando acionamentos de rollback trigger e a % de adoção medida.
+An entry in [`../postmortems/`](../postmortems/) (including “no deviation”),
+recording rollback-trigger activations and the measured adoption percentage.

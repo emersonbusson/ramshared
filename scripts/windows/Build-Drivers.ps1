@@ -8,8 +8,9 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$RepoRoot = "C:\Users\emedev\ramshared-src",
-    [string]$KitVersion = "10.0.26100.0"
+    [string]$RepoRoot = "C:\ramshared\src",
+    [string]$KitVersion = "10.0.26100.0",
+    [switch]$CodeAnalysis
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,6 +50,13 @@ $cflags = @(
     "/D_WIN32_WINNT=0x0A00", "/DWINVER=0x0A00", "/DNTDDI_VERSION=0xA000010",
     "/I`"$incShared`"", "/I`"$incKm`"", "/I`"$incKmCrt`""
 ) -join " "
+if ($CodeAnalysis) {
+    # Analyze project sources with /WX while excluding WDK-owned headers.
+    # WDK 10.0.26100 otherwise emits analyzer findings from wdm.h itself.
+    $cflags += " /analyze /analyze:external- /external:W0" +
+        " /external:I`"$incShared`" /external:I`"$incKm`"" +
+        " /external:I`"$incKmCrt`""
+}
 
 $ldflagsCommon = @(
     "/nologo", "/driver", "/entry:GsDriverEntry", "/subsystem:NATIVE",

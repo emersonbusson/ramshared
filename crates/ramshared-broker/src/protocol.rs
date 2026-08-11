@@ -105,7 +105,7 @@ pub struct TenantStatus {
     pub psi: PsiSample,
     pub slices: Vec<SliceId>,
     pub present: bool,
-    /// Served bytes (accumulated) of the `Active` slices of this tenant (telemetria RF-1).
+    /// Served bytes (accumulated) of the `Active` slices of this tenant (telemetry RF-1).
     #[serde(default)]
     pub bytes_served: u64,
 }
@@ -154,7 +154,7 @@ pub fn read_msg<R: BufRead>(r: &mut R) -> std::io::Result<Option<Msg>> {
     if !had_newline && buf.len() > MAX_LINE_BYTES {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "linha excede MAX_LINE_BYTES",
+            "line exceeds MAX_LINE_BYTES",
         ));
     }
     let line = buf.strip_suffix(b"\n").unwrap_or(&buf);
@@ -305,7 +305,7 @@ mod tests {
         let mut cur = Cursor::new(line.to_vec());
         match read_msg(&mut cur).unwrap().unwrap() {
             Msg::Psi { mem, .. } => assert_eq!(mem, None),
-            other => panic!("esperava Psi, veio {other:?}"),
+            other => panic!("expected Psi, got {other:?}"),
         }
     }
 
@@ -316,7 +316,7 @@ mod tests {
         let mut cur = Cursor::new(line.to_vec());
         match read_msg(&mut cur).unwrap().unwrap() {
             Msg::StatusReply { slice_io, .. } => assert!(slice_io.is_empty()),
-            other => panic!("esperava StatusReply, veio {other:?}"),
+            other => panic!("expected StatusReply, got {other:?}"),
         }
     }
 

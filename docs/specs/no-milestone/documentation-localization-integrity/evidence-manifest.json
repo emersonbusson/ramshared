@@ -1,0 +1,172 @@
+{
+  "schema_version": "ramshared-spec-evidence/v1",
+  "slug": "documentation-localization-integrity",
+  "status": "DONE",
+  "spec": {
+    "path": "docs/specs/no-milestone/documentation-localization-integrity/SPEC.md",
+    "sha256": "5e2aa2c94ce782d2ee07fde9f9e59e0483704cc9cb9cf3867db39c587f9a0e2b"
+  },
+  "tests": [
+    {
+      "name": "manifest_current_hashes_pass",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "missing_required_localization_fails",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "stale_source_hash_fails",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "language_switches_and_portal_links_pass",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "broken_language_switch_fails",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "authority_claim_is_rejected_without_echo",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "protected_normative_localization_path_fails",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "invalid_manifest_state_policy_fails",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "manifest_schema_and_path_guards_fail",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "portal_missing_objective_fails",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "checker_output_is_deterministic_and_read_only",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "integration",
+      "exit_code": 0
+    },
+    {
+      "name": "missing_canonical_readme_fails_closed",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "cli_usage_error_returns_two",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "integration",
+      "exit_code": 0
+    },
+    {
+      "name": "cli_all_returns_zero_for_current_repository",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "integration",
+      "exit_code": 0
+    },
+    {
+      "name": "repository_localization_gate_passes",
+      "path": "tools/ci/check-documentation-localization.test.mjs",
+      "kind": "integration",
+      "exit_code": 0
+    }
+  ],
+  "cover": [
+    {
+      "path": "tools/ci/check-documentation-localization.mjs",
+      "line_percent": 98.59,
+      "branch_percent": 86.9,
+      "function_percent": 100,
+      "classification": "Node built-in coverage",
+      "justification": "The zero-dependency checker is covered by the named Node test suite."
+    }
+  ],
+  "live": {
+    "required": true,
+    "before": {
+      "manifest_entries": 2,
+      "canonical_readme_sha256": "e4acb2f93861e05bca1935421396d8a44b5670ca4ff7326053d31df51335d3c8",
+      "findings": 0
+    },
+    "action": {
+      "command": "node tools/ci/check-documentation-localization.mjs --all",
+      "repetitions": 2
+    },
+    "after": {
+      "exit_code": 0,
+      "findings": 0,
+      "deterministic_output": true,
+      "read_only": true
+    },
+    "legitimate": {
+      "verdict": "PASS"
+    },
+    "refusals": [
+      {
+        "name": "stale canonical source hash",
+        "verdict": "PASS"
+      },
+      {
+        "name": "positive localized authority claim",
+        "verdict": "PASS"
+      },
+      {
+        "name": "broken language switch",
+        "verdict": "PASS"
+      }
+    ],
+    "cleanup": {
+      "complete": true,
+      "residue": 0
+    },
+    "evidence_artifacts": [
+      "docs/specs/no-milestone/documentation-localization-integrity/evidence/validation-summary.json"
+    ]
+  },
+  "binary_match": {
+    "required": false,
+    "passed": false,
+    "identities": []
+  },
+  "artifacts": [
+    {
+      "path": "docs/specs/no-milestone/documentation-localization-integrity/evidence/validation-summary.json",
+      "bytes": 990,
+      "sha256": "9d2e1797ec5a69f5e9af3b079e942ce2baf46dd13c9dae0d10045bccde1fd1b1"
+    }
+  ],
+  "validation_path": "docs/specs/no-milestone/documentation-localization-integrity/evidence/validation-summary.json",
+  "impl_path": "docs/specs/no-milestone/documentation-localization-integrity/IMPL.md",
+  "gaps": {
+    "open": [],
+    "env_bound": []
+  },
+  "rollback_trigger": "one stale hash, broken link, authority claim, sensitive diagnostic, or nondeterministic result passes the gate"
+}

@@ -1,0 +1,38 @@
+{
+  "schema_version": "ramshared-legacy-benchmarks/v1",
+  "entries": [
+    {
+      "id": "legacy-2026-06-15-vram-headroom-nvme4k",
+      "benchmark_id": "2026-06-15-vram-headroom-nvme4k",
+      "qualified": false,
+      "reason": "No v1 public artifact manifest or complete loaded-identity context exists; this narrative cannot be a regression baseline."
+    },
+    {
+      "id": "legacy-2026-07-13-storport-vs-sata",
+      "benchmark_id": "2026-07-13-storport-vs-sata",
+      "qualified": false,
+      "reason": "No v1 raw public sample bundle, platform fingerprint, or loaded-identity manifest exists; this narrative cannot be a regression baseline."
+    },
+    {
+      "id": "legacy-wsl2-disk-io-20260724-0448",
+      "benchmark_id": "2026-07-24-wsl2-disk-io",
+      "run_id": "wsl2-disk-io-20260724-0448",
+      "qualified": false,
+      "reason": "The old JSONL row predates the public v1 evidence envelope and artifact hashes."
+    },
+    {
+      "id": "legacy-windows-autonomous-broker-scm-20260725-0615",
+      "benchmark_id": "2026-07-25-autonomous-broker-scm",
+      "run_id": "windows-autonomous-broker-scm-20260725-0615",
+      "qualified": false,
+      "reason": "The old JSONL row points to host-private artifacts and predates the public v1 evidence envelope."
+    },
+    {
+      "id": "legacy-windows-autonomous-product-20260725-0928",
+      "benchmark_id": "2026-07-25-autonomous-product-vm-physical",
+      "run_id": "windows-autonomous-product-20260725-0928",
+      "qualified": false,
+      "reason": "The old JSONL row predates v1 source, fingerprint, artifact-hash, refusal, and cleanup fields."
+    }
+  ]
+}

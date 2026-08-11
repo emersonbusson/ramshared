@@ -1,0 +1,185 @@
+name: CI Contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ci-contract-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: ci-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.17.0
+
+      - name: Contract checker coverage
+        run: >-
+          node --test --experimental-test-coverage
+          --test-coverage-include=tools/ci/check-ci-contract.mjs
+          --test-coverage-lines=80 --test-coverage-branches=80
+          --test-coverage-functions=80
+          tools/ci/check-ci-contract.test.mjs
+          tools/ci/check-ci-aggregate.test.mjs
+
+      - name: Verify local contract admission
+        run: node tools/ci/check-ci-contract.mjs --check-local
+
+      - name: Exact Rust coverage planner coverage
+        run: >-
+          node --test --experimental-test-coverage
+          --test-coverage-include=tools/ci/plan-rust-slice-coverage.mjs
+          --test-coverage-lines=80 --test-coverage-branches=80
+          --test-coverage-functions=80
+          tools/ci/plan-rust-slice-coverage.test.mjs
+
+      - name: Validate exact SPEC coverage map
+        run: node tools/ci/plan-rust-slice-coverage.mjs --all
+
+  ci-core:
+    name: ci-core
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  security:
+    name: security
+    uses: ./.github/workflows/security-scans.yml
+    permissions:
+      contents: read
+      security-events: write
+
+  gitleaks:
+    name: gitleaks
+    uses: ./.github/workflows/gitleaks.yml
+    permissions:
+      contents: read
+
+  comment-language:
+    name: comment-language
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/comment-language.yml
+    permissions:
+      contents: read
+
+  pr-body:
+    name: pr-body
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/pr-body.yml
+    permissions:
+      contents: read
+      pull-requests: read
+
+  validation-schema:
+    name: validation-schema
+    if: github.event_name == 'pull_request'
+    uses: ./.github/workflows/validation-schema.yml
+    permissions:
+      contents: read
+
+  windows-static:
+    name: windows-static
+    uses: ./.github/workflows/windows-static.yml
+    permissions:
+      contents: read
+
+  artifact-hygiene:
+    name: artifact-hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.17.0
+
+      - name: Artifact policy checker coverage
+        run: >-
+          node --test --experimental-test-coverage
+          --test-coverage-include=tools/ci/check-ci-artifacts.mjs
+          --test-coverage-lines=80 --test-coverage-branches=80
+          --test-coverage-functions=80
+          tools/ci/check-ci-artifacts.test.mjs
+
+  slice-coverage:
+    name: rust-slice-coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Rust coverage toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install pinned cargo llvm-cov
+        run: cargo install cargo-llvm-cov --locked --version 0.8.7
+
+      - name: Run exact SPEC-selected Rust coverage
+        shell: bash
+        env:
+          CI_EVENT_NAME: ${{ github.event_name }}
+          CI_BASE_REF: ${{ github.base_ref }}
+          CI_PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$CI_EVENT_NAME" = pull_request ]; then
+            test -n "$CI_BASE_REF"
+            CI_BASE_SHA="$(git rev-parse --verify "origin/$CI_BASE_REF^{commit}")"
+            [[ "$CI_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            git diff --name-only "$CI_BASE_SHA...$GITHUB_SHA" > tmp-ci-rust-slice-changes.txt
+            node tools/ci/plan-rust-slice-coverage.mjs \
+              --changed-files tmp-ci-rust-slice-changes.txt \
+              --base-revision "$CI_BASE_SHA" --run
+          elif [ "$CI_EVENT_NAME" = push ]; then
+            test -n "$CI_PUSH_BEFORE"
+            CI_BASE_SHA="$(git rev-parse --verify "${CI_PUSH_BEFORE}^{commit}")"
+            [[ "$CI_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+            node tools/ci/plan-rust-slice-coverage.mjs \
+              --all --base-revision "$CI_BASE_SHA" --run
+          else
+            echo "unsupported CI event for Rust slice coverage"
+            exit 1
+          fi
+
+  aggregate:
+    name: required-checks
+    if: always()
+    needs: [contract, ci-core, security, gitleaks, comment-language, pr-body, validation-schema, windows-static, artifact-hygiene, slice-coverage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout contract tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Aggregate same-run canonical callers
+        env:
+          CI_NEEDS_JSON: ${{ toJSON(needs) }}
+        run: node tools/ci/check-ci-contract.mjs --aggregate-needs "$CI_NEEDS_JSON"

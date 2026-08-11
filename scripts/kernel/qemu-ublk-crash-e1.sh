@@ -25,10 +25,10 @@
 # .claude/rules/benchmarks.md:23). No sudo: qemu runs as a normal user (TCG if
 # /dev/kvm is not writable).
 #
-# uso: qemu-ublk-crash-e1.sh [bzImage] [daemon_bin] [ublk_drv.ko]
-# saida 0 = experimento rodou e produziu um veredito; saida 1 = inconclusivo (setup nao
-# completou). O veredito (Ramo A/B) NAO decide o exit code — leia KTEST-E1-VERDICT e o
-# serial completo (impresso sempre, nao so as linhas KTEST-).
+# usage: qemu-ublk-crash-e1.sh [bzImage] [daemon_bin] [ublk_drv.ko]
+# exit 0 = experiment ran and produced a verdict; exit 1 = inconclusive (setup did not
+# complete). The verdict (Branch A/B) does NOT decide the exit code — read KTEST-E1-VERDICT and the
+# complete serial log (always printed, not only KTEST- lines).
 set -euo pipefail
 
 BZ="${1:-$HOME/WSL2-Linux-Kernel/arch/x86/boot/bzImage}"
@@ -36,10 +36,10 @@ DAEMON="${2:-$(dirname "$0")/../../target/debug/ramsharedd}"
 UBLK_KO="${3:-$HOME/WSL2-Linux-Kernel/drivers/block/ublk_drv.ko}"
 
 for f in "$BZ" "$DAEMON" "$UBLK_KO"; do
-  [ -f "$f" ] || { echo "arquivo inexistente: $f" >&2; exit 2; }
+  [ -f "$f" ] || { echo "missing file: $f" >&2; exit 2; }
 done
-command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 ausente" >&2; exit 2; }
-[ -x /bin/busybox ] || { echo "busybox-static ausente" >&2; exit 2; }
+command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 missing" >&2; exit 2; }
+[ -x /bin/busybox ] || { echo "busybox-static missing" >&2; exit 2; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 IRD="$WORK/irfs"; mkdir -p "$IRD/bin" "$IRD/modules"
@@ -62,20 +62,20 @@ $BB mount -t devtmpfs devtmpfs /dev 2>/dev/null
 echo "=====KTEST-E1-BEGIN====="
 echo "KTEST-UNAME=$($BB uname -r)"
 
-# 1) driver ublk
+# 1) ublk driver
 if $BB insmod /modules/ublk_drv.ko 2>/tmp/e; then
   echo "KTEST-INSMOD=ok"
 else
   echo "KTEST-INSMOD=fail: $($BB cat /tmp/e)"
 fi
 
-# 2) daemon (backend RAM, device maior p/ ser um alvo de swap com sentido: 64 MiB)
+# 2) daemon (RAM backend, larger device so it is a meaningful swap target: 64 MiB)
 RAMSHARED_ALLOW_UBLK_ON_WSL2=1 /ramsharedd --transport ublk --backend ram \
   --size 64 --queue-depth 4 --force >/tmp/daemon.log 2>&1 &
 DPID=$!
 echo "KTEST-DAEMON-PID=$DPID"
 
-# 3) espera /dev/ublkbN (bounded ~15s)
+# 3) waits for /dev/ublkbN (bounded ~15s)
 DEV=""
 i=0
 while [ $i -lt 150 ]; do
@@ -87,7 +87,7 @@ done
 [ -n "$DEV" ] || { echo "KTEST-DEVICE=absent"; echo "=====KTEST-E1-END====="; $BB poweroff -f; exit 0; }
 echo "KTEST-DEVICE=$DEV"
 
-# 4) arma como swap
+# 4) arms it as swap
 if $BB mkswap "$DEV" >/tmp/mkswap.log 2>&1 && $BB swapon "$DEV" >/tmp/swapon.log 2>&1; then
   echo "KTEST-SWAPON=ok"
 else
@@ -118,8 +118,8 @@ KB_THRESHOLD=4096
 SWAPPED=0
 k=0
 while [ $k -lt 400 ]; do
-  # /proc/swaps: Filename Type Size Used Priority -> Used e a coluna $4, nao $3
-  # (bug da 1a/2a rodada: $3 e Size, sempre constante -> disparava no iter=0).
+  # /proc/swaps: Filename Type Size Used Priority -> Used is column $4, not $3
+  # (bug in rounds 1 and 2: $3 is Size, always constant -> triggered at iter=0).
   USED=$($BB awk 'NR==2{print $4+0}' /proc/swaps 2>/dev/null)
   [ -z "$USED" ] && USED=0
   if [ "$USED" -ge "$KB_THRESHOLD" ]; then SWAPPED=1; break; fi
@@ -138,7 +138,7 @@ echo "KTEST-KILL-T0-MS=$T0_MS"
 $BB kill -KILL "$DPID"
 echo "KTEST-SIGKILL-SENT=1"
 
-# 8) observa se o device some sozinho (monitor_work do kernel), bounded ~40s.
+# 8) observes whether the device disappears on its own (kernel monitor_work), bounded ~40s.
 GONE=0
 m=0
 while [ $m -lt 400 ]; do
@@ -178,24 +178,24 @@ chmod +x "$IRD/init"
 ACCEL=(-machine accel=tcg)
 [ -w /dev/kvm ] && ACCEL=(-enable-kvm -cpu host)
 
-echo "[qemu-ublk-crash-e1] bootando (accel: ${ACCEL[*]})..."
+echo "[qemu-ublk-crash-e1] booting (accel: ${ACCEL[*]})..."
 timeout 240 qemu-system-x86_64 "${ACCEL[@]}" -m 256 -smp 2 -nographic -no-reboot \
   -kernel "$BZ" -initrd "$WORK/initramfs.gz" \
   -append "console=ttyS0 panic=1 rdinit=/init" > "$WORK/serial.log" 2>&1 || true
 
-echo "=========== SERIAL COMPLETO (kernel + KTEST) ==========="
+echo "=========== COMPLETE SERIAL LOG (kernel + KTEST) ==========="
 cat "$WORK/serial.log"
-echo "=========== fim do serial ==========="
+echo "=========== end of serial log ==========="
 
-echo "=========== resumo KTEST ==========="
-grep -E "KTEST-" "$WORK/serial.log" || echo "sem output KTEST — kernel pode nao ter bootado"
+echo "=========== KTEST summary ==========="
+grep -E "KTEST-" "$WORK/serial.log" || echo "no KTEST output — kernel may not have booted"
 echo "====================================="
 
 if grep -q "KTEST-E1-VERDICT=" "$WORK/serial.log"; then
   VERDICT="$(grep -oE 'KTEST-E1-VERDICT=[A-Z-]+' "$WORK/serial.log" | tail -1)"
-  echo "QEMU-UBLK-CRASH-E1: EXPERIMENTO COMPLETO — $VERDICT"
+  echo "QEMU-UBLK-CRASH-E1: EXPERIMENT COMPLETE — $VERDICT"
   exit 0
 else
-  echo "QEMU-UBLK-CRASH-E1: INCONCLUSIVO — setup nao chegou ao veredito."
+  echo "QEMU-UBLK-CRASH-E1: INCONCLUSIVE — setup did not reach a verdict."
   exit 1
 fi

@@ -1,0 +1,27 @@
+﻿[
+    {
+        "test":  "FreshInstall",
+        "verdict":  "PASS",
+        "detail":  "version=0.1.0-vm; services=Stopped; dependency=match"
+    },
+    {
+        "test":  "Repair",
+        "verdict":  "PASS",
+        "detail":  "active_manifest_sha256=67594DDF653EFC49F8161E71C5B172F7CF0962DED86744E71FC33379844603C1; idempotent=true"
+    },
+    {
+        "test":  "ManufacturedRollback",
+        "verdict":  "PASS",
+        "detail":  "active=1111111111111111111111111111111111111111; both_image_paths=old"
+    },
+    {
+        "test":  "UninstallRefusal",
+        "verdict":  "PASS",
+        "detail":  "corrupt active pointer refused before SCM mutation"
+    },
+    {
+        "test":  "CleanUninstall",
+        "verdict":  "PASS",
+        "detail":  "services=absent; active_pointer=absent"
+    }
+]

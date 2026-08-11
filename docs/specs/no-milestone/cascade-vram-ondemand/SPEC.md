@@ -52,6 +52,12 @@ struct Chunk {
 }
 ```
 
+Construction uses one typed `SparseVramConfig` for capacity, chunk geometry,
+reserve floor, commit cap, and optional host budget gate. Existing convenience
+constructors remain as compatibility wrappers. The daemon uses the named
+configuration so safety limits cannot be silently transposed among positional
+integer arguments.
+
 ### Semantics
 
 | Op | Behaviour |
@@ -167,6 +173,7 @@ vram_mode=sparse|prealloc
 | Live: pressure order | `sudo bash scripts/safety/cascade-pressure-probe.sh --prove-disk` → zram → nbd → disk |
 | Live: after pressure release used_kb→0 + idle | committed falls; free_GPU rises |
 | Kill-switch | PREALLOC=1 → Δ free ≈ size |
+| Safe daemon wiring: `daemon_args_refuse_invalid_or_unsafe_combinations_before_backend`, `daemon_command_timeout_terminates_child_without_hang` | injected argv and harmless child process; unsafe plans fail before CUDA, swap, NBD client, or ublk setup |
 
 **Note:** `scripts/safety/cascade-pressure-probe.sh` is a **real** host-safe harness (cgroup MemoryMax; in git since `06957fe`). Not a placeholder.
 
@@ -203,4 +210,18 @@ vram_mode=sparse|prealloc
 2. SparseVramBackend GREEN  
 3. Wire daemon + env  
 4. Live gates  
-5. IMPL.md  
+5. IMPL.md
+
+### Entry-point boundary (shared with memory-broker DT-46)
+
+`crates/ramshared-wsl2d/src/main.rs` must keep sparse/prealloc and hardware
+selection behind a parsed, validated plan. The only safe local coverage fixture
+is broker-RAM with temporary sockets and a bounded stop/join. It cannot stand
+in for the required live sparse GPU gate above; `BINARY_MATCH` and live E2E
+remain explicitly deferred until an approved disposable environment is used.
+
+The named sparse-policy construction and compatibility wrappers are covered by:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block --files crates/ramshared-block/src/sparse_vram.rs --min 80 --report-json tmp/cascade-vram-ondemand-policy-cov.json
+```

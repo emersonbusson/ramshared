@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "host_mode": "physical-test-mode",
+  "before": {
+    "timestamp": "2026-07-25T15:59:10.9572267-03:00",
+    "services": "stopped",
+    "ramshared_disks": 0,
+    "drive_s_present": false,
+    "pagefiles": ["C:\\pagefile.sys"],
+    "drive_r": {
+      "label": "RUSSIA",
+      "size": 500105736192
+    }
+  },
+  "active_manifest": {
+    "version": "0.1.1-physical",
+    "commit": "ad15c339de2e3ada7644aaf0899b62ff81826fb3",
+    "start_policy": "demand"
+  },
+  "stability_window_seconds": 50,
+  "samples": 6,
+  "integrity_matches": 6,
+  "broker_instance_id": "e480cd11bd026a75b646b65203601a7f",
+  "lease_id": 1,
+  "lease_bytes": 67108864,
+  "binary_match": {
+    "RamSharedBroker": "EE7C102F620B5F21947321EE93F16E9C6D174A406E7426165EA64B9A0D746911",
+    "RamSharedWinSvc": "F2B14796584DDF2ECB7D4E2BB16C12B2C48D49B9B7D02F07B480B46AC35C8701",
+    "ramshared.sys": "324CC7C95A17BE3C245865F55EFC3E87B443D9CF711249068A4221DD86DEDBFA"
+  },
+  "event_log_transitions": [
+    "process_ready",
+    "registered_ready",
+    "lease_granted"
+  ],
+  "after": {
+    "services": "running",
+    "disk_count": 1,
+    "disk_size": 67108864,
+    "volume": "S:",
+    "volume_health": "Healthy",
+    "pagefiles": ["C:\\pagefile.sys"],
+    "drive_r_preserved": true,
+    "gpu_used_mib_range": [1349, 1628],
+    "gpu_free_mib_range": [4327, 4606]
+  },
+  "host_artifacts": "C:\\ramshared\\artifacts\\active-host-20260725-155910",
+  "verdict": "PASS_ACTIVE_STABLE"
+}

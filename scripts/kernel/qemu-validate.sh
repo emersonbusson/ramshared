@@ -1,32 +1,32 @@
 #!/usr/bin/env bash
-# qemu-validate.sh — valida um kernel WSL2 custom num QEMU ISOLADO (não toca o WSL).
-# Prova, ANTES de armar no .wslconfig: (1) o bzImage boota até o userspace; (2) o
-# `uname -r` confere com a release esperada; (3) os módulos alvo carregam (insmod na
-# ordem dada). Console via ttyS0 (CONFIG_SERIAL_8250_CONSOLE=y no config-wsl).
+# qemu-validate.sh — validates a custom WSL2 kernel in an ISOLATED QEMU (does not touch WSL).
+# Before arming .wslconfig, proves: (1) bzImage boots to userspace; (2) `uname -r`
+# matches the expected release; (3) target modules load (insmod in the supplied
+# order). Console uses ttyS0 (CONFIG_SERIAL_8250_CONSOLE=y in config-wsl).
 #
-# uso: qemu-validate.sh <bzImage> <kernelrelease> [mod1.ko mod2.ko ...]
-#   módulos na ORDEM de dependência (ex.: zsmalloc.ko ANTES de zram.ko).
-# saída 0 = PASS (kernel bootou + release confere). Detalhes de módulo no log.
+# usage: qemu-validate.sh <bzImage> <kernelrelease> [mod1.ko mod2.ko ...]
+#   modules in dependency ORDER (for example, zsmalloc.ko BEFORE zram.ko).
+# exit 0 = PASS (kernel booted and release matches). Module details are in the log.
 #
-# Reutilizável p/ qualquer build de kernel (toolkit Fase B+). SPEC: docs/runbooks/FASE-B-KERNEL.md
+# Reusable for any kernel build (Phase B+ toolkit). SPEC: docs/runbooks/FASE-B-KERNEL.md
 set -euo pipefail
 
-BZ="${1:?uso: qemu-validate.sh <bzImage> <kernelrelease> [mods...]}"
-REL="${2:?falta kernelrelease}"
+BZ="${1:?usage: qemu-validate.sh <bzImage> <kernelrelease> [mods...]}"
+REL="${2:?missing kernelrelease}"
 shift 2
 MODS=("$@")
 
-[ -f "$BZ" ] || { echo "bzImage inexistente: $BZ" >&2; exit 2; }
-command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 ausente (apt install qemu-system-x86)" >&2; exit 2; }
-[ -x /bin/busybox ] || { echo "busybox-static ausente (apt install busybox-static)" >&2; exit 2; }
+[ -f "$BZ" ] || { echo "bzImage missing: $BZ" >&2; exit 2; }
+command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 missing (apt install qemu-system-x86)" >&2; exit 2; }
+[ -x /bin/busybox ] || { echo "busybox-static missing (apt install busybox-static)" >&2; exit 2; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 IRD="$WORK/irfs"; mkdir -p "$IRD/bin" "$IRD/modules"
 cp /bin/busybox "$IRD/bin/busybox"
 
-# módulos numerados p/ preservar a ordem de dependência
+# numbered modules preserve dependency order
 i=0; for m in "${MODS[@]}"; do
-  [ -f "$m" ] || { echo "módulo inexistente: $m" >&2; exit 2; }
+  [ -f "$m" ] || { echo "module missing: $m" >&2; exit 2; }
   cp "$m" "$IRD/modules/$(printf '%02d' "$i")-$(basename "$m")"; i=$((i+1))
 done
 
@@ -59,13 +59,13 @@ chmod +x "$IRD/init"
 ACCEL=(-machine accel=tcg)
 [ -w /dev/kvm ] && ACCEL=(-enable-kvm -cpu host)
 
-echo "[qemu-validate] bootando $BZ (release esperada: $REL; accel: ${ACCEL[*]})..."
+echo "[qemu-validate] booting $BZ (expected release: $REL; accel: ${ACCEL[*]})..."
 timeout 180 qemu-system-x86_64 "${ACCEL[@]}" -m 1024 -nographic -no-reboot \
   -kernel "$BZ" -initrd "$WORK/initramfs.gz" \
   -append "console=ttyS0 panic=1 rdinit=/init" > "$WORK/serial.log" 2>&1 || true
 
-echo "=========== resultado ==========="
-grep -E "KTEST-" "$WORK/serial.log" || { echo "sem output KTEST — kernel pode não ter bootado"; }
+echo "=========== result ==========="
+grep -E "KTEST-" "$WORK/serial.log" || { echo "no KTEST output — kernel may not have booted"; }
 echo "================================="
 # GATE = boot to userspace (uname matches). This is the catastrophic risk ("fails to boot").
 # The insmod via busybox in the minimal initramfs is BEST-EFFORT (the busybox applet is
@@ -73,11 +73,11 @@ echo "================================="
 # AUTHORITATIVE module validation is POST-BOOT, in the real kernel, via kmod (boot-kernel-safe.ps1
 # does `modprobe` + auto-revert). Therefore, the verdict does NOT gate on modules.
 if grep -q "KTEST-UNAME=$REL" "$WORK/serial.log" && grep -q "KTEST-END" "$WORK/serial.log"; then
-  echo "QEMU-VALIDATE: PASS — kernel bootou ao userspace, release confere."
-  echo "(módulos: best-effort no initramfs; validação real = pós-boot via kmod no launcher)"
+  echo "QEMU-VALIDATE: PASS — kernel booted to userspace; release matches."
+  echo "(modules: best effort in initramfs; authoritative validation = post-boot through kmod in the launcher)"
   exit 0
 else
-  echo "QEMU-VALIDATE: FAIL — kernel não bootou ou release diferente. Veja o serial acima."
-  echo "--- tail do serial ---"; tail -15 "$WORK/serial.log"
+  echo "QEMU-VALIDATE: FAIL — kernel did not boot or the release differs. See the serial log above."
+  echo "--- serial tail ---"; tail -15 "$WORK/serial.log"
   exit 1
 fi

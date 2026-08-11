@@ -30,6 +30,36 @@ use crate::{
 const EIO: i32 = -5;
 const EINVAL: i32 = -22;
 
+trait QueueServer {
+    fn submit_initial_fetch(&mut self) -> io::Result<()>;
+    fn wait_and_drain(&mut self) -> io::Result<Vec<ramshared_uring::UblkCompletion>>;
+    fn io_desc_snapshot(&self, tag: u16) -> io::Result<[u8; ublk::UBLK_IO_DESC_SIZE]>;
+    fn buffer_mut(&mut self, tag: u16) -> io::Result<&mut [u8]>;
+    fn commit_and_fetch(&mut self, tag: u16, result: i32) -> io::Result<()>;
+}
+
+impl QueueServer for ramshared_uring::UblkServer {
+    fn submit_initial_fetch(&mut self) -> io::Result<()> {
+        ramshared_uring::UblkServer::submit_initial_fetch(self)
+    }
+
+    fn wait_and_drain(&mut self) -> io::Result<Vec<ramshared_uring::UblkCompletion>> {
+        ramshared_uring::UblkServer::wait_and_drain(self)
+    }
+
+    fn io_desc_snapshot(&self, tag: u16) -> io::Result<[u8; ublk::UBLK_IO_DESC_SIZE]> {
+        ramshared_uring::UblkServer::io_desc_snapshot(self, tag)
+    }
+
+    fn buffer_mut(&mut self, tag: u16) -> io::Result<&mut [u8]> {
+        ramshared_uring::UblkServer::buffer_mut(self, tag)
+    }
+
+    fn commit_and_fetch(&mut self, tag: u16, result: i32) -> io::Result<()> {
+        ramshared_uring::UblkServer::commit_and_fetch(self, tag, result)
+    }
+}
+
 /// Serves a ublk `Request` against any [`BlockBackend`] using `buf` (where data
 /// lives) and returns the COMMIT `result`: transferred bytes (`>= 0`) or
 /// `-errno`. Serves **in-place** in the buffer (no alloc in the hot path — DT-8). `buf` is the
@@ -118,16 +148,17 @@ fn run_server_loop(
             }
             if completion.result < 0 {
                 return Err(io::Error::other(format!(
-                    "FETCH falhou: {}",
+                    "FETCH failed: {}",
                     completion.result
                 )));
             }
 
             // result == UBLK_IO_RES_OK (0): there is a request ready at the tag.
-            let iod = ublk::IoDesc::from_ne_bytes(server.io_desc_bytes(completion.tag))
-                .ok_or_else(|| io::Error::other("io-desc invalido no mmap"))?;
+            let snapshot = server.io_desc_snapshot(completion.tag)?;
+            let iod = ublk::IoDesc::from_ne_bytes(&snapshot)
+                .ok_or_else(|| io::Error::other("invalid io-desc snapshot"))?;
             let result = match iod.to_block_request(completion.tag) {
-                Ok(req) => serve_request(&req, &mut backend, server.buffer_mut(completion.tag)),
+                Ok(req) => serve_request(&req, &mut backend, server.buffer_mut(completion.tag)?),
                 Err(_) => EINVAL, // ublk op without safe equivalence
             };
             server.commit_and_fetch(completion.tag, result)?;
@@ -214,10 +245,15 @@ pub struct ServerHandleDt3<B> {
 
 impl<B> ServerHandleDt3<B> {
     pub fn join(self) -> io::Result<B> {
-        self.ring
+        let ring_result = self
+            .ring
             .join()
-            .map_err(|_| io::Error::other("ring owner panicked"))??;
-        self.worker.join()
+            .unwrap_or_else(|_| Err(io::Error::other("ring owner panicked")));
+        let worker_result = self.worker.join();
+        match ring_result {
+            Ok(()) => worker_result,
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -248,8 +284,8 @@ pub fn spawn_server_dt3<B: BlockBackend + Send + 'static>(
     Ok(ServerHandleDt3 { ring, worker })
 }
 
-fn run_ring_owner(
-    mut server: ramshared_uring::UblkServer,
+fn run_ring_owner<S: QueueServer>(
+    mut server: S,
     queue_depth: u16,
     buf_size: usize,
     work_tx: SyncSender<ublk::IoWork>,
@@ -272,7 +308,7 @@ fn run_ring_owner(
                     in_flight -= 1;
                     commit_reply(&mut server, reply, &mut buf_pool)?;
                 }
-                Err(_) => return Err(io::Error::other("worker encerrou inesperadamente")),
+                Err(_) => return Err(io::Error::other("worker terminated unexpectedly")),
             }
             // Drains additional replies already ready, without blocking.
             while let Ok(reply) = reply_rx.try_recv() {
@@ -287,7 +323,7 @@ fn run_ring_owner(
                 }
                 if completion.result < 0 {
                     return Err(io::Error::other(format!(
-                        "FETCH falhou: {}",
+                        "FETCH failed: {}",
                         completion.result
                     )));
                 }
@@ -301,14 +337,14 @@ fn run_ring_owner(
 
 /// Copies READ data (if any) to the tag buffer, completes via COMMIT, and
 /// returns the buffer to the pool (without dealloc — preserves capacity).
-fn commit_reply(
-    server: &mut ramshared_uring::UblkServer,
+fn commit_reply<S: QueueServer>(
+    server: &mut S,
     reply: WorkerReply,
     buf_pool: &mut Vec<Vec<u8>>,
 ) -> io::Result<()> {
     if reply.is_read && reply.result >= 0 {
         let n = usize::try_from(reply.result).unwrap_or(0);
-        let tag_buf = server.buffer_mut(reply.tag);
+        let tag_buf = server.buffer_mut(reply.tag)?;
         let n = n.min(reply.buf.len()).min(tag_buf.len());
         tag_buf[..n].copy_from_slice(&reply.buf[..n]);
     }
@@ -324,14 +360,15 @@ fn commit_reply(
 /// (copying the WRITE payload from the tag buffer), and sends it to the worker. Returns `true`
 /// if work was sent, `false` if it rejected the request (already completed with error; the
 /// buffer, if it was taken from the pool, goes back to it).
-fn dispatch_request(
-    server: &mut ramshared_uring::UblkServer,
+fn dispatch_request<S: QueueServer>(
+    server: &mut S,
     tag: u16,
     work_tx: &SyncSender<ublk::IoWork>,
     buf_pool: &mut Vec<Vec<u8>>,
 ) -> io::Result<bool> {
-    let iod = ublk::IoDesc::from_ne_bytes(server.io_desc_bytes(tag))
-        .ok_or_else(|| io::Error::other("io-desc invalido no mmap"))?;
+    let snapshot = server.io_desc_snapshot(tag)?;
+    let iod = ublk::IoDesc::from_ne_bytes(&snapshot)
+        .ok_or_else(|| io::Error::other("invalid io-desc snapshot"))?;
     let req = match iod.to_block_request(tag) {
         Ok(req) => req,
         Err(_) => {
@@ -349,7 +386,7 @@ fn dispatch_request(
 
     // WRITE: kernel already copied bio->tag buffer; passes it in the yielded buffer.
     if req.cmd == Command::Write {
-        let tag_buf = server.buffer_mut(tag);
+        let tag_buf = server.buffer_mut(tag)?;
         if len <= tag_buf.len() {
             buf.copy_from_slice(&tag_buf[..len]);
         } else {
@@ -368,7 +405,7 @@ fn dispatch_request(
     };
     work_tx
         .send(work)
-        .map_err(|_| io::Error::other("worker encerrou inesperadamente"))?;
+        .map_err(|_| io::Error::other("worker terminated unexpectedly"))?;
     Ok(true)
 }
 
@@ -385,12 +422,18 @@ pub struct ServerHandleDt3Vram {
 
 impl ServerHandleDt3Vram {
     pub fn join(self) -> io::Result<()> {
-        self.ring
+        let ring_result = self
+            .ring
             .join()
-            .map_err(|_| io::Error::other("ring owner panicked"))??;
-        self.worker
+            .unwrap_or_else(|_| Err(io::Error::other("ring owner panicked")));
+        let worker_result = self
+            .worker
             .join()
-            .map_err(|_| io::Error::other("vram worker panicked"))?
+            .unwrap_or_else(|_| Err(io::Error::other("vram worker panicked")));
+        match ring_result {
+            Ok(()) => worker_result,
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -448,12 +491,18 @@ impl ServerHandleDt3VramResidency {
     }
 
     pub fn join(self) -> io::Result<()> {
-        self.ring
+        let ring_result = self
+            .ring
             .join()
-            .map_err(|_| io::Error::other("ring owner panicked"))??;
-        self.worker
+            .unwrap_or_else(|_| Err(io::Error::other("ring owner panicked")));
+        let worker_result = self
+            .worker
             .join()
-            .map_err(|_| io::Error::other("vram residency worker panicked"))?
+            .unwrap_or_else(|_| Err(io::Error::other("vram residency worker panicked")));
+        match ring_result {
+            Ok(()) => worker_result,
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -626,6 +675,314 @@ pub fn spawn_server_dt3_vram_with_residency(
         worker,
         demotes,
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod join_tests {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::fs::{self, OpenOptions};
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn regular_file_fixture(label: &str) -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("ramshared-{label}-{}-{nonce}", std::process::id()));
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("create regular-file fixture");
+        file.set_len(ramshared_uring::page_size() as u64)
+            .expect("size regular-file fixture");
+        path
+    }
+
+    fn join_with_timeout<T: Send + 'static>(join: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            let _ = tx.send(join());
+        });
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("server join deadline")
+    }
+
+    fn descriptor_bytes(cmd: u8, sectors: u32) -> [u8; ublk::UBLK_IO_DESC_SIZE] {
+        let mut bytes = [0u8; ublk::UBLK_IO_DESC_SIZE];
+        bytes[0..4].copy_from_slice(&u32::from(cmd).to_ne_bytes());
+        bytes[4..8].copy_from_slice(&sectors.to_ne_bytes());
+        bytes
+    }
+
+    struct FakeQueue {
+        completions: VecDeque<Vec<ramshared_uring::UblkCompletion>>,
+        descriptor: [u8; ublk::UBLK_IO_DESC_SIZE],
+        buffers: Vec<Vec<u8>>,
+        commits: Arc<Mutex<Vec<(u16, i32)>>>,
+        submitted: bool,
+    }
+
+    impl FakeQueue {
+        fn new(
+            descriptor: [u8; ublk::UBLK_IO_DESC_SIZE],
+            completions: Vec<Vec<ramshared_uring::UblkCompletion>>,
+            commits: Arc<Mutex<Vec<(u16, i32)>>>,
+        ) -> Self {
+            Self {
+                completions: completions.into(),
+                descriptor,
+                buffers: vec![vec![0u8; 4096]],
+                commits,
+                submitted: false,
+            }
+        }
+    }
+
+    impl QueueServer for FakeQueue {
+        fn submit_initial_fetch(&mut self) -> io::Result<()> {
+            self.submitted = true;
+            Ok(())
+        }
+
+        fn wait_and_drain(&mut self) -> io::Result<Vec<ramshared_uring::UblkCompletion>> {
+            if !self.submitted {
+                return Err(io::Error::other("fetch not submitted"));
+            }
+            self.completions
+                .pop_front()
+                .ok_or_else(|| io::Error::other("manufactured completion exhaustion"))
+        }
+
+        fn io_desc_snapshot(&self, tag: u16) -> io::Result<[u8; ublk::UBLK_IO_DESC_SIZE]> {
+            if tag == 0 {
+                Ok(self.descriptor)
+            } else {
+                Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid tag"))
+            }
+        }
+
+        fn buffer_mut(&mut self, tag: u16) -> io::Result<&mut [u8]> {
+            self.buffers
+                .get_mut(usize::from(tag))
+                .map(Vec::as_mut_slice)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid tag"))
+        }
+
+        fn commit_and_fetch(&mut self, tag: u16, result: i32) -> io::Result<()> {
+            self.commits
+                .lock()
+                .expect("commit mutex")
+                .push((tag, result));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn regular_file_server_handles_join_after_kernel_refusal() {
+        let path = regular_file_fixture("ublk-server");
+        let ram_handle = spawn_server(&path, 1, 4096, RamBackend::new(4096))
+            .expect("spawn RAM server on refusal fixture");
+        let ram_result = join_with_timeout(move || ram_handle.join());
+        assert!(ram_result.is_err());
+
+        let dt3_handle = spawn_server_dt3(&path, 1, 4096, RamBackend::new(4096))
+            .expect("spawn DT-3 server on refusal fixture");
+        let dt3_result = join_with_timeout(move || dt3_handle.join());
+        assert!(dt3_result.is_err());
+
+        fs::remove_file(path).expect("remove regular-file fixture");
+    }
+
+    #[test]
+    fn fake_queue_runs_dispatch_commit_and_abort_without_a_device() {
+        let commits = Arc::new(Mutex::new(Vec::new()));
+        let queue = FakeQueue::new(
+            descriptor_bytes(ublk::UBLK_IO_OP_READ, 1),
+            vec![
+                vec![ramshared_uring::UblkCompletion { tag: 0, result: 0 }],
+                vec![ramshared_uring::UblkCompletion {
+                    tag: 0,
+                    result: ublk::UBLK_IO_RES_ABORT,
+                }],
+            ],
+            Arc::clone(&commits),
+        );
+        let (work_tx, work_rx) = mpsc::sync_channel(1);
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let worker = spawn_ublk_worker(RamBackend::new(4096), work_rx, reply_tx);
+        run_ring_owner(queue, 1, 4096, work_tx, reply_rx).expect("fake queue loop");
+        assert_eq!(worker.join().expect("fake worker").size_bytes(), 4096);
+        assert_eq!(*commits.lock().expect("commit mutex"), vec![(0, 512)]);
+    }
+
+    #[test]
+    fn fake_queue_rejects_unsupported_and_preserves_write_payload() {
+        let commits = Arc::new(Mutex::new(Vec::new()));
+        let unsupported = FakeQueue::new(
+            descriptor_bytes(ublk::UBLK_IO_OP_WRITE_SAME, 1),
+            vec![
+                vec![ramshared_uring::UblkCompletion { tag: 0, result: 0 }],
+                vec![ramshared_uring::UblkCompletion {
+                    tag: 0,
+                    result: ublk::UBLK_IO_RES_ABORT,
+                }],
+            ],
+            Arc::clone(&commits),
+        );
+        let (work_tx, work_rx) = mpsc::sync_channel(1);
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let worker = spawn_ublk_worker(RamBackend::new(4096), work_rx, reply_tx);
+        run_ring_owner(unsupported, 1, 4096, work_tx, reply_rx).expect("unsupported request loop");
+        worker.join().expect("unsupported worker");
+        assert_eq!(*commits.lock().expect("commit mutex"), vec![(0, EINVAL)]);
+
+        let write_commits = Arc::new(Mutex::new(Vec::new()));
+        let mut write_queue = FakeQueue::new(
+            descriptor_bytes(ublk::UBLK_IO_OP_WRITE, 1),
+            Vec::new(),
+            Arc::clone(&write_commits),
+        );
+        write_queue.buffers[0][..512].fill(0x5a);
+        let (work_tx, work_rx) = mpsc::sync_channel(1);
+        let mut pool = vec![vec![0u8; 4096]];
+        assert!(
+            dispatch_request(&mut write_queue, 0, &work_tx, &mut pool).expect("dispatch write")
+        );
+        let work = work_rx.recv().expect("write work");
+        assert!(work.payload.iter().all(|byte| *byte == 0x5a));
+        commit_reply(
+            &mut write_queue,
+            WorkerReply {
+                qid: 0,
+                tag: 0,
+                result: 512,
+                buf: work.payload,
+                is_read: false,
+            },
+            &mut pool,
+        )
+        .expect("commit write");
+        assert_eq!(
+            *write_commits.lock().expect("write commit mutex"),
+            vec![(0, 512)]
+        );
+        assert_eq!(pool.len(), 1);
+    }
+
+    #[test]
+    fn server_and_worker_join_outcomes_are_fail_closed() {
+        let success = ServerHandle {
+            thread: thread::spawn(|| Ok(RamBackend::new(512))),
+        };
+        assert_eq!(success.join().expect("server success").size_bytes(), 512);
+
+        let panic = ServerHandle {
+            thread: thread::spawn(|| -> io::Result<RamBackend> { panic!("manufactured") }),
+        };
+        let panic_error = match panic.join() {
+            Ok(_) => panic!("manufactured server panic must be refused"),
+            Err(error) => error,
+        };
+        assert_eq!(panic_error.to_string(), "server thread panicked");
+
+        let worker = WorkerHandle {
+            thread: thread::spawn(|| -> u8 { panic!("manufactured") }),
+        };
+        assert_eq!(
+            worker.join().expect_err("worker panic refusal").to_string(),
+            "ublk worker panicked"
+        );
+
+        let dt3_success = ServerHandleDt3 {
+            ring: thread::spawn(|| Ok(())),
+            worker: WorkerHandle {
+                thread: thread::spawn(|| 11u8),
+            },
+        };
+        assert_eq!(dt3_success.join().expect("DT-3 success"), 11);
+
+        let residency = ServerHandleDt3VramResidency {
+            ring: thread::spawn(|| Ok(())),
+            worker: thread::spawn(|| Ok(())),
+            demotes: Arc::new(AtomicU32::new(3)),
+        };
+        assert_eq!(residency.demote_count(), 3);
+        residency.join().expect("residency success");
+    }
+
+    #[test]
+    fn serve_request_refuses_unsupported_commands_and_covers_trim() {
+        let mut backend = RamBackend::new(4096);
+        let mut buffer = vec![0u8; 4096];
+        for (cmd, expected) in [
+            (Command::Trim, 0),
+            (Command::Disc, EINVAL),
+            (Command::Unknown(255), EINVAL),
+        ] {
+            let request = Request {
+                flags: 0,
+                cmd,
+                handle: 1,
+                offset: 0,
+                len: 4096,
+            };
+            assert_eq!(serve_request(&request, &mut backend, &mut buffer), expected);
+        }
+
+        let oversized = Request {
+            flags: 0,
+            cmd: Command::Read,
+            handle: 2,
+            offset: 0,
+            len: 8192,
+        };
+        assert_eq!(serve_request(&oversized, &mut backend, &mut buffer), EINVAL);
+    }
+
+    #[test]
+    fn dt3_join_attempts_worker_after_ring_error() {
+        let completed = Arc::new(AtomicBool::new(false));
+        let worker_completed = Arc::clone(&completed);
+        let handle = ServerHandleDt3 {
+            ring: thread::spawn(|| Err(io::Error::other("ring failure"))),
+            worker: WorkerHandle {
+                thread: thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(50));
+                    worker_completed.store(true, Ordering::Release);
+                    7u8
+                }),
+            },
+        };
+
+        let err = handle.join().expect_err("ring failure must win");
+        assert_eq!(err.to_string(), "ring failure");
+        assert!(completed.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn dt3_vram_join_attempts_worker_after_ring_error() {
+        let completed = Arc::new(AtomicBool::new(false));
+        let worker_completed = Arc::clone(&completed);
+        let handle = ServerHandleDt3Vram {
+            ring: thread::spawn(|| Err(io::Error::other("ring failure"))),
+            worker: thread::spawn(move || {
+                thread::sleep(Duration::from_millis(50));
+                worker_completed.store(true, Ordering::Release);
+                Ok(())
+            }),
+        };
+
+        let err = handle.join().expect_err("ring failure must win");
+        assert_eq!(err.to_string(), "ring failure");
+        assert!(completed.load(Ordering::Acquire));
+    }
 }
 
 #[cfg(test)]

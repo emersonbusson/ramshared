@@ -6,7 +6,7 @@
 
 | Question | Answer |
 | --- | --- |
-| “Deixar só o que precisamos?” | **Yes for repo diffs/configs** (Kconfig extras, scripts, docs). **No** for “kernel minimal sem stack WSL” — keep full MS WSL2 stack + our deltas. |
+| “Keep only what we need?” | **Yes for repository diffs/configuration** (Kconfig extras, scripts, docs). **No** to a “minimal kernel without the WSL stack” — keep the full Microsoft WSL2 stack plus our deltas. |
 | Product distro | **`Ubuntu-24.04`** (default) — day-1 cascade / daily use |
 | Lab distro | **`RamShared-Kernel`** — passwordless, rebuild, break, re-import from backup |
 | Fill C:? | **No** — live VHDX on **R:**, backup on **E:** |
@@ -25,7 +25,7 @@ Sparse live size today ~2 GB used; grows only as packages/sources land **inside*
 ## Lab profile (inside distro)
 
 - User default: `emedev` (`/etc/wsl.conf`)
-- Password: **empty** (`passwd -d`) for local lab only
+- Local authentication: password login disabled with `passwd -d`; local lab only
 - `sudo`: **NOPASSWD** (`/etc/sudoers.d/90-emedev-lab`)
 - Marker: `/etc/ramshared/lab-profile`
 - Build deps: `build-essential`, `libssl-dev`, `libelf-dev`, `bc`, `bison`, `flex`, `dwarves`, etc.

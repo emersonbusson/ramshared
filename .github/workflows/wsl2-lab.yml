@@ -1,0 +1,61 @@
+name: WSL2 Lab Plan Boundary
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Plan mode only.
+        required: true
+        type: choice
+        options:
+          - plan
+      target:
+        description: Isolated target only.
+        required: true
+        type: choice
+        options:
+          - isolated-lab
+
+permissions: {}
+
+concurrency:
+  group: wsl2-lab-plan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wsl2-lab-plan:
+    name: wsl2-lab-plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: protected-isolated-lab
+    permissions:
+      contents: read
+    env:
+      LAB_MODE: ${{ inputs.mode }}
+      LAB_TARGET: ${{ inputs.target }}
+      LAB_REVISION: ${{ github.sha }}
+      LAB_ENVIRONMENT: protected-isolated-lab
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.17.0
+
+      - name: Prepare plan artifact directory
+        run: mkdir -p tmp/ci-lab-plan
+
+      - name: Write isolated WSL2 plan
+        run: node tools/ci/plan-isolated-lab.mjs --kind wsl2 --out tmp/ci-lab-plan/plan.json --manifest tmp/ci-lab-plan/artifact-manifest.json
+
+      - name: Verify plan artifact manifest
+        run: node tools/ci/check-ci-artifacts.mjs --check tmp/ci-lab-plan/artifact-manifest.json --root tmp/ci-lab-plan
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: wsl2-lab-plan-${{ github.sha }}
+          path: tmp/ci-lab-plan
+          retention-days: 14

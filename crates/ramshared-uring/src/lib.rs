@@ -10,7 +10,6 @@ use std::ffi::c_void;
 use std::io;
 use std::os::fd::RawFd;
 use std::ptr;
-use std::slice;
 
 use io_uring::{IoUring, opcode, squeue, types};
 
@@ -69,11 +68,27 @@ impl MmapRo {
         Ok(Self { ptr, len })
     }
 
-    /// Read-only view of the mapped bytes.
-    pub fn as_bytes(&self) -> &[u8] {
-        // SAFETY: `ptr` originates from a successful `mmap` call exposing `len` readable
-        // bytes (`PROT_READ`) and remains valid until `self` is dropped (`munmap`).
-        unsafe { slice::from_raw_parts(self.ptr.cast::<u8>(), self.len) }
+    /// Copies one bounds-checked range into an owned array.
+    ///
+    /// The kernel may update this shared mapping. Returning a borrowed Rust
+    /// slice would incorrectly express that the bytes are immutable for the
+    /// borrow's lifetime. Callers decode only this point-in-time snapshot.
+    pub fn copy_array<const N: usize>(&self, offset: usize) -> io::Result<[u8; N]> {
+        let end = offset
+            .checked_add(N)
+            .filter(|end| *end <= self.len)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "mmap range out of bounds")
+            })?;
+        debug_assert!(end <= self.len);
+        let mut snapshot = [0u8; N];
+        // SAFETY: the checked range `[offset, offset + N)` lies within the
+        // readable mapping. The destination is a distinct owned array of N
+        // bytes, so the regions cannot overlap.
+        unsafe {
+            ptr::copy_nonoverlapping(self.ptr.cast::<u8>().add(offset), snapshot.as_mut_ptr(), N);
+        }
+        Ok(snapshot)
     }
 }
 
@@ -257,8 +272,7 @@ pub struct UblkFetchRing {
     /// Data buffers per tag: the `addr` of each FETCH points to its corresponding
     /// buffer, which must remain alive while the command is parked in the kernel.
     /// Never read directly; exists to enforce the lifetime (drop guard).
-    #[allow(dead_code)]
-    buffers: Vec<Vec<u8>>,
+    _buffers: Vec<Vec<u8>>,
 }
 
 impl UblkFetchRing {
@@ -295,7 +309,10 @@ impl UblkFetchRing {
         // Does not block (want=0); the FETCH requests remain parked in the driver.
         ring.submit()?;
 
-        Ok(Self { ring, buffers })
+        Ok(Self {
+            ring,
+            _buffers: buffers,
+        })
     }
 
     /// Drains currently available CQEs without blocking.
@@ -399,24 +416,38 @@ impl UblkServer {
         Ok(self.drain())
     }
 
-    /// Returns the read-only mapped bytes of `ublksrv_io_desc` for the given `tag`.
-    pub fn io_desc_bytes(&self, tag: u16) -> &[u8] {
+    /// Returns an owned snapshot of `ublksrv_io_desc` for the given `tag`.
+    pub fn io_desc_snapshot(&self, tag: u16) -> io::Result<[u8; Self::IO_DESC_SIZE]> {
+        self.validate_tag(tag)?;
         let start = usize::from(tag) * Self::IO_DESC_SIZE;
-        &self.iodesc.as_bytes()[start..start + Self::IO_DESC_SIZE]
+        self.iodesc.copy_array::<{ Self::IO_DESC_SIZE }>(start)
     }
 
     /// Returns the mutable data buffer for `tag` (READ populates this; WRITE comes pre-populated).
-    pub fn buffer_mut(&mut self, tag: u16) -> &mut [u8] {
-        &mut self.buffers[usize::from(tag)]
+    pub fn buffer_mut(&mut self, tag: u16) -> io::Result<&mut [u8]> {
+        self.validate_tag(tag)?;
+        Ok(&mut self.buffers[usize::from(tag)])
     }
 
     /// Completes the request on `tag` with `result` and re-arms the FETCH command.
     pub fn commit_and_fetch(&mut self, tag: u16, result: i32) -> io::Result<()> {
+        self.validate_tag(tag)?;
         const UBLK_U_IO_COMMIT_AND_FETCH_REQ: u32 = 0xc010_7521;
         let addr = self.buffers[usize::from(tag)].as_mut_ptr() as u64;
         self.push(UBLK_U_IO_COMMIT_AND_FETCH_REQ, tag, result, addr)?;
         self.ring.submit()?;
         Ok(())
+    }
+
+    fn validate_tag(&self, tag: u16) -> io::Result<()> {
+        if tag < self.queue_depth {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "tag must be < queue_depth",
+            ))
+        }
     }
 
     fn push(&mut self, cmd_op: u32, tag: u16, result: i32, addr: u64) -> io::Result<()> {
@@ -440,8 +471,30 @@ impl UblkServer {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+    use std::fs::{self, OpenOptions};
+    use std::io::{Seek, SeekFrom, Write};
+    use std::os::fd::AsRawFd;
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    fn regular_file_fixture(label: &str, len: usize) -> (std::path::PathBuf, std::fs::File) {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("ramshared-{label}-{}-{nonce}", std::process::id()));
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("create regular-file fixture");
+        file.set_len(len as u64).expect("size regular-file fixture");
+        (path, file)
+    }
 
     #[test]
     fn fetch_cmd80_packs_ublksrv_io_cmd_in_first_16_bytes() {
@@ -457,5 +510,102 @@ mod tests {
             0xdead_beef
         );
         assert!(cmd[16..].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn mmap_descriptor_snapshot_is_owned_and_bounds_checked() {
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-mmap-snapshot-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&path)
+            .expect("create mapping fixture");
+        file.write_all(b"abcdefgh").expect("write fixture");
+        file.flush().expect("flush fixture");
+        let map = MmapRo::map_readonly(file.as_raw_fd(), 8, 0).expect("map fixture");
+
+        let first = map.copy_array::<4>(0).expect("first snapshot");
+        file.seek(SeekFrom::Start(0)).expect("seek fixture");
+        file.write_all(b"WXYZ").expect("mutate fixture");
+        file.flush().expect("flush mutation");
+        let second = map.copy_array::<4>(0).expect("second snapshot");
+
+        assert_eq!(first, *b"abcd");
+        assert_eq!(second, *b"WXYZ");
+        assert!(map.copy_array::<4>(6).is_err());
+        drop(map);
+        drop(file);
+        fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
+    fn regular_file_ublk_adapters_refuse_without_a_device() {
+        let page = page_size();
+        assert!(page >= 4096);
+        assert_eq!(round_up_to_page(1), page);
+        assert_eq!(round_up_to_page(page + 1), page * 2);
+        assert!(MmapRo::map_readonly(-1, 0, 0).is_err());
+        assert!(MmapRo::map_readonly(-1, page, 0).is_err());
+
+        assert_eq!(expect_zero(0, "test").expect("zero result"), ());
+        assert!(expect_zero(7, "test").is_err());
+
+        let (path, file) = regular_file_fixture("ublk-refusal", page);
+        let fd = file.as_raw_fd();
+        let mut info = [0u8; 64];
+        let mut params = [0u8; 112];
+        assert!(ublk_get_features(fd).is_err());
+        assert!(ublk_add_dev(fd, 9, &mut info).is_err());
+        assert!(ublk_del_dev(fd, 9).is_err());
+        assert!(ublk_set_params(fd, 9, &mut params).is_err());
+        assert!(ublk_get_params(fd, 9, &mut params).is_err());
+        assert!(ublk_start_dev(fd, 9, std::process::id()).is_err());
+        assert!(ublk_stop_dev(fd, 9).is_err());
+
+        let mut server = UblkServer::new(fd, 1, 4096).expect("regular-file server fixture");
+        assert_eq!(
+            server.io_desc_snapshot(0).expect("zero descriptor"),
+            [0u8; 24]
+        );
+        assert!(server.io_desc_snapshot(1).is_err());
+        assert_eq!(server.buffer_mut(0).expect("tag zero buffer").len(), 4096);
+        assert!(server.buffer_mut(1).is_err());
+        assert!(server.commit_and_fetch(1, 0).is_err());
+        server
+            .submit_initial_fetch()
+            .expect("submit regular-file refusal");
+        let completions = server.wait_and_drain().expect("drain regular-file refusal");
+        assert_eq!(completions.len(), 1);
+        assert!(completions[0].result < 0);
+
+        drop(server);
+        drop(file);
+        fs::remove_file(path).expect("remove regular-file fixture");
+    }
+
+    #[test]
+    fn regular_file_fetch_ring_drains_refusal_without_a_device() {
+        let (path, file) = regular_file_fixture("ublk-fetch-refusal", page_size());
+        let mut ring = UblkFetchRing::submit_fetch_all(file.as_raw_fd(), 2, 4096)
+            .expect("submit regular-file fetches");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let completions = loop {
+            let current = ring.drain();
+            if current.len() == 2 {
+                break current;
+            }
+            assert!(Instant::now() < deadline, "regular-file CQE deadline");
+            std::thread::yield_now();
+        };
+        assert!(completions.iter().all(|completion| completion.result < 0));
+
+        drop(ring);
+        drop(file);
+        fs::remove_file(path).expect("remove regular-file fixture");
     }
 }

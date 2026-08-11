@@ -20,6 +20,21 @@ Get-Volume -DriveLetter C, R, V, E, G | Select-Object DriveLetter, FileSystemLab
     @{n = "FreeGB"; e = { [math]::Round($_.SizeRemaining / 1GB, 1) } } |
     Format-Table -AutoSize
 
+$profilePaths = if ([string]::IsNullOrWhiteSpace($env:USERPROFILE)) { @() } else { @(
+    "AppData\Local\Temp",
+    "AppData\Local\Docker",
+    "AppData\Local\Packages",
+    "AppData\Local\pnpm-store",
+    "AppData\Local\pnpm",
+    "AppData\Local\npm-cache",
+    "AppData\Local\Microsoft\Windows\INetCache",
+    "AppData\Local\Microsoft\Windows\DeliveryOptimization",
+    "AppData\Local\wsl",
+    "Downloads",
+    ".cargo",
+    ".rustup"
+) | ForEach-Object { Join-Path $env:USERPROFILE $_ } }
+
 $paths = @(
     "C:\Hyper-V",
     "C:\ProgramData\Microsoft\Windows\Virtual Hard Disks",
@@ -33,27 +48,15 @@ $paths = @(
     "C:\pagefile.sys",
     "C:\hiberfil.sys",
     "C:\swapfile.sys",
-    "C:\Users\emedev\AppData\Local\Temp",
-    "C:\Users\emedev\AppData\Local\Docker",
-    "C:\Users\emedev\AppData\Local\Packages",
-    "C:\Users\emedev\AppData\Local\pnpm-store",
-    "C:\Users\emedev\AppData\Local\pnpm",
-    "C:\Users\emedev\AppData\Local\npm-cache",
-    "C:\Users\emedev\AppData\Local\Microsoft\Windows\INetCache",
-    "C:\Users\emedev\AppData\Local\Microsoft\Windows\DeliveryOptimization",
-    "C:\Users\emedev\AppData\Local\wsl",
-    "C:\Users\emedev\Downloads",
-    "C:\Users\emedev\.cargo",
-    "C:\Users\emedev\.rustup",
-    "C:\Users\emedev\ramshared-src",
-    "C:\Users\emedev\ramshared-drill",
+    "C:\ramshared\src",
+    "C:\ramshared\artifacts",
     "C:\Program Files\Microsoft Visual Studio",
     "C:\Program Files (x86)\Windows Kits",
     "C:\Program Files\NVIDIA GPU Computing Toolkit",
     "C:\Program Files\dotnet",
     "C:\ProgramData\Docker",
     "C:\ProgramData\Microsoft\VisualStudio"
-)
+) + $profilePaths
 
 Write-Host "=== KNOWN HEAVY PATHS (GB) ===" -ForegroundColor Cyan
 $rows = foreach ($p in $paths) {

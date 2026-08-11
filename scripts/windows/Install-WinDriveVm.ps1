@@ -5,9 +5,10 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$RepoRoot = "C:\Users\emedev\ramshared-src",
+    [string]$RepoRoot = "C:\ramshared\src",
     [switch]$SkipBuild,
-    [string]$PfxPath = "C:\Users\emedev\ramshared-drill\certs\ramshared-test.pfx",
+    [string]$PfxPath = "C:\ramshared\artifacts\certs\ramshared-test.pfx",
+    [string]$ArtifactRoot = "C:\ramshared\artifacts",
     [string]$PfxPassword = $env:RAMSHARED_TESTSIGN_PFX_PASSWORD,
     [string]$VmName = "win11-drill",
     [string]$GuestUser = "WIN11-DRILL\drilladmin",
@@ -15,7 +16,8 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
-$log = "C:\Users\emedev\ramshared-drill\install-windrive-vm.log"
+$log = Join-Path $ArtifactRoot "install-windrive-vm.log"
+New-Item -ItemType Directory -Force -Path $ArtifactRoot | Out-Null
 Start-Transcript -Path $log -Force
 
 if ([string]::IsNullOrEmpty($PfxPassword)) {
@@ -48,7 +50,7 @@ Copy-Item "$RepoRoot\drivers\windows\ramshared\x64\Release\ramshared.sys" -Desti
 Copy-Item "$RepoRoot\drivers\windows\tools\poolstress\x64\Release\poolstress.sys" -Destination C:\ramshared\package\poolstress.sys -ToSession $sess -Force
 Copy-Item "$RepoRoot\drivers\windows\ramshared\ramshared.inf" -Destination C:\ramshared\package\ramshared.inf -ToSession $sess -Force
 Copy-Item "$RepoRoot\scripts\windows\*.ps1" -Destination C:\ramshared\scripts\windows\ -ToSession $sess -Force
-$cer = "C:\Users\emedev\ramshared-drill\certs\ramshared-test.cer"
+$cer = [IO.Path]::ChangeExtension($PfxPath, ".cer")
 if (Test-Path $cer) {
     Copy-Item $cer -Destination C:\ramshared\package\ramshared-test.cer -ToSession $sess -Force
 }

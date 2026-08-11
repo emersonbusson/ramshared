@@ -1,643 +1,642 @@
-# SPEC — RamShared P4 / Trilha 2: swap-para-VRAM no Windows nativo (StorPort virtual miniport)
+# SPEC — RamShared P4 / Track 2: native Windows swap-to-VRAM (StorPort virtual miniport)
 
-> **Arquivo único:** `SPEC.md` (modelo Advoq/RamShared). Histórico de revisões = `git log` deste path — **sem** `SPECvN.md`.
+> **Single-file RamShared model:** revision history remains in this path's `git log` — no `SPECvN.md`.
 >
-> **Revisado após auditoria do Passo 2.5 (2026-07-08):** no-go na 1ª rodada → correções in-place; re-auditoria = **GO**.
-> Achados da re-auditoria: só **LOW** (L1–L4, sem decisão estrutural nova). C1–H4 da 1ª rodada re-verificados e **fechados** neste mesmo arquivo.
+> **Reviewed after the Step 2.5 audit (2026-07-08):** no-go in round 1 → in-place corrections; re-audit = **GO**.
+> Re-audit findings: only **LOW** (L1–L4, no new structural decision). C1–H4 from round 1 were re-verified and **closed** in this same file.
 >
-> **Candidato ativo para IMPL (Passo 3):** este arquivo. Gate residual de produto: trâmite EV/Partner
-> Center (R9) em curso antes de carga no host real / ITEM-11; zero driver no host real antes do
-> ITEM-8 (kernel-page) em VM.
+> **Active candidate for IMPL (Step 3):** this file. Residual product gate: EV/Partner Center (R9)
+> process remains in progress before loading on the real host / ITEM-11; no driver on the real host before
+> ITEM-8 (kernel-page) in a VM.
 >
-> Motivo do no-go na 1ª rodada: 2 CRITICAL + 4 HIGH estruturais (paths inventados vs código real). Achados bloqueantes endereçados **in-place**:
+> Reason for the round-1 no-go: 2 structural CRITICAL + 4 HIGH findings (invented paths vs real code). Blocking findings addressed **in place**:
 >
-> - **C1** (RNF-5 / ITEM-8 Map / `Invoke-RevokeDrill`): o SPEC alegava "broker sinaliza revoke" ao
->   holder do lease. **Falso no código:** não existe `Msg` broker→holder de force-revoke; o lease só
->   termina por `LeaseRelease` do holder (`broker_srv.rs:427`) ou **disconnect** auto-release
->   (`:456-464`). `RevokeForLease` revoga **swap de outros tenants** para *conceder* o lease, não o
->   lease em si. Este SPEC redefine RNF-5 no mecanismo real (holder-cooperative + disconnect forçado
->   como último recurso admin) — DT-19.
-> - **C2** (provision / RF-5): lease `Free→Leased` **não libera** `DeviceMem` no daemon (só muda
->   estado em `slices.rs:89-95`); WinDrive faz `cuMemAlloc` **local**. Sem DT, IMPL double-claim
->   silencioso na mesma GPU. Fecha co-residência: orçamento lógico no broker + gate físico
->   `cuMemGetInfo.free` no Windows + free-floor operacional — DT-20.
-> - **H1** (R8): "encolher" era vago. Fecha a sequência observável de revogação com pagefile
->   ativo (sem API mágica de shrink) — DT-19.
-> - **H2** (ITEM-8): enviesar paged-pool pro pagefile-VRAM via "C: mínimo" é heurística, não
->   garantia. Gate exige `% Usage` do pagefile-VRAM > 0 **antes** de matar o serviço; senão ABORT
->   do drill (não "pass" silencioso) — DT-21.
-> - **H3** (ITEM-3): heartbeat do WinDrive era "mínimo" sem shape. Fecha como `Msg::Psi` default
->   (padrão P2 DT-13); `Lib` Drop do CUDA vira `loader::close` (não `dlclose` incondicional).
-> - **H4** (ITEM-5): superfície de build WDK ausente. Lista `.vcxproj`/INF/package sob
->   Arquivos a CRIAR.
+> - **C1** (RNF-5 / ITEM-8 Map / `Invoke-RevokeDrill`): the SPEC claimed that the broker signals revocation
+>   to the lease holder. **False in code:** no broker→holder force-revoke `Msg` exists; the lease ends only
+>   through holder `LeaseRelease` (`broker_srv.rs:427`) or **disconnect** auto-release (`:456-464`).
+>   `RevokeForLease` revokes **swap from other tenants** to *grant* the lease, not the lease itself. This
+>   SPEC redefines RNF-5 around the real mechanism (holder-cooperative + forced disconnect as a last admin
+>   resort) — DT-19.
+> - **C2** (provision / RF-5): a `Free→Leased` lease **does not free** `DeviceMem` in the daemon (it only
+>   changes state in `slices.rs:89-95`); WinDrive performs `cuMemAlloc` **locally**. Without this DT, IMPL
+>   silently double-claims the same GPU. It closes co-residency: logical broker budget + physical Windows
+>   `cuMemGetInfo.free` gate + operational free floor — DT-20.
+> - **H1** (R8): “shrink” was vague. It closes the observable revocation sequence with an active pagefile
+>   (no magical shrink API) — DT-19.
+> - **H2** (ITEM-8): biasing paged pool toward pagefile-VRAM via “minimum C:” is a heuristic, not a
+>   guarantee. The gate requires pagefile-VRAM `% Usage` > 0 **before** the service is killed; otherwise
+>   the drill ABORTs (not a silent “pass”) — DT-21.
+> - **H3** (ITEM-3): the WinDrive heartbeat was “minimal” without a shape. It is closed as default
+>   `Msg::Psi` (P2 DT-13 pattern); CUDA `Lib` Drop becomes `loader::close` (not unconditional `dlclose`).
+> - **H4** (ITEM-5): the WDK build surface was absent. It lists `.vcxproj`/INF/package under
+>   Files to CREATE.
 >
-> **Re-auditoria GO — LOWs incorporados (sem decisão nova):**
-> - **L1:** DT-2 alinhado a DT-22 (events = auxiliar; wake primário = COMMIT_AND_FETCH).
-> - **L2:** `RAMSHARED_DISK_PARAMS` explicitado em `protocol.h` (não só na linha do IOCTL).
-> - **L3:** DT-4/buffer path sob SRBEX usa helpers StorPort (`StorPortGetSystemAddress`), não
->   `Srb->DataBuffer` classic-only.
-> - **L4:** matriz RF-5/RNF-5 aponta DT-19/DT-20.
+> **GO re-audit — LOWs incorporated (no new decision):**
+> - **L1:** DT-2 aligns with DT-22 (events = auxiliary; primary wake = COMMIT_AND_FETCH).
+> - **L2:** `RAMSHARED_DISK_PARAMS` is explicit in `protocol.h` (not only on the IOCTL line).
+> - **L3:** the DT-4 buffer path under SRBEX uses StorPort helpers (`StorPortGetSystemAddress`), not
+>   classic-only `Srb->DataBuffer`.
+> - **L4:** the RF-5/RNF-5 matrix points to DT-19/DT-20.
 >
-> **SSDV3 PASSO 2** (pós 2.5), a partir de `PRD.md` (GO) + drill Passo 0 (PASS-A + B1 contido user-page).
-> **Adaptação de plataforma (DT-14):** checklist Windows-kernel (WDK/SDV/Driver Verifier/InfVerif),
-> não `checkpatch.pl`/`make modules`.
+> **SSDV3 STEP 2** (after 2.5), from `PRD.md` (GO) + Step 0 drill (PASS-A + contained user-page B1).
+> **Platform adaptation (DT-14):** Windows-kernel checklist (WDK/SDV/Driver Verifier/InfVerif),
+> not `checkpatch.pl`/`make modules`.
 
-## Escopo fechado desta implementação
+## Closed implementation scope
 
-**Entra agora (RF-1..RF-8, RNF-1..RNF-8 do PRD, num único SPEC):**
+**In now (RF-1..RF-8, RNF-1..RNF-8 from the PRD, in one SPEC):**
 
-- **RF-4** — port da camada CUDA para `nvcuda.dll` (Windows), reusando a **mesma tabela de símbolos**
-  do `ramshared-cuda` (ITEM-1).
-- **RF-3** — serviço userspace Windows (`ramshared-winsvc`) que respalda I/O de bloco em VRAM,
-  reusando o adaptador `VramBackend` promovido (ITEM-2, ITEM-3, ITEM-6).
-- **RF-5** — serviço vira tenant do broker existente (`LeaseRequest`/`LeaseRelease`), novo
+- **RF-4** — port the CUDA layer to `nvcuda.dll` (Windows), reusing the **same symbol table** from
+  `ramshared-cuda` (ITEM-1).
+- **RF-3** — Windows userspace service (`ramshared-winsvc`) that backs block I/O with VRAM, reusing the
+  promoted `VramBackend` adapter (ITEM-2, ITEM-3, ITEM-6).
+- **RF-5** — service becomes a tenant of the existing broker (`LeaseRequest`/`LeaseRelease`), with new
   `TransportKind::WinDrive` (ITEM-3).
-- **RF-2** — protocolo driver↔serviço **definitivo Day-0**: par de rings SPSC (SQ/CQ) em memória do
-  serviço, travada+mapeada pelo driver, + data area bounce-buffer + doorbell IOCTL (ITEM-4 ABI, ITEM-5
-  driver, ITEM-6 serviço).
-- **RF-1** — driver StorPort **virtual miniport** do-zero: disco virtual, control device seguro
+- **RF-2** — definitive Day-0 driver↔service protocol: an SPSC ring pair (SQ/CQ) in service memory,
+  locked+mapped by the driver, plus a data-area bounce buffer and doorbell IOCTL (ITEM-4 ABI, ITEM-5
+  driver, ITEM-6 service).
+- **RF-1** — from-scratch StorPort **virtual miniport** driver: virtual disk and secure control device
   (ITEM-4, ITEM-5).
-- **RF-6** — ativação do pagefile secundário via `NtCreatePagingFile` + smoke pós-update (ITEM-7).
-- **RF-7** — teardown ordenado + contenção de crash do serviço (ITEM-5 comportamento de driver, ITEM-8
-  drill).
-- **RF-8** — instalador attestation-signed (ITEM-11; a mecânica de assinatura; o onboarding EV/Partner
-  Center é organizacional, R9, fora do código).
-- **RNF-1** (N=72h, DT-12), **RNF-2** (K na 1ª medição, DT-13), **RNF-3** (Day-0), **RNF-4** (validação
-  na fronteira kernel), **RNF-5** (lease revogável com pagefile ativo), **RNF-6** (VM-only para
-  pressão/fuzz/drill), **RNF-7** (attestation carrega), **RNF-8** (zero regressão Linux).
+- **RF-6** — secondary-pagefile activation through `NtCreatePagingFile` plus post-update smoke (ITEM-7).
+- **RF-7** — ordered teardown plus service-crash containment (ITEM-5 driver behavior, ITEM-8 drill).
+- **RF-8** — attestation-signed installer (ITEM-11; signing mechanics; EV/Partner Center onboarding is
+  organizational, R9, outside code).
+- **RNF-1** (N=72h, DT-12), **RNF-2** (K at first measurement, DT-13), **RNF-3** (Day-0), **RNF-4**
+  (kernel-boundary validation), **RNF-5** (revocable lease with active pagefile), **RNF-6** (VM-only
+  pressure/fuzz/drill), **RNF-7** (attestation loads), **RNF-8** (zero Linux regression).
 
-**Fora agora (Day-0, sem dual-path):**
+**Out now (Day-0, no dual path):**
 
-- Pagefile **primário**/boot-time (impossibilidade estrutural, PRD §2/§12).
-- Distribuição via **Windows Update** e WHCP/HLK completo (plano B registrado, não neste MVP — PRD §12,
+- **Primary**/boot-time pagefile (structural impossibility, PRD §2/§12).
+- Distribution through **Windows Update** and full WHCP/HLK (Plan B is recorded, not in this MVP — PRD §12,
   §14 #2a).
-- GPUs **não-NVIDIA** (Vulkan/D3D12 → trilha P3; o trait `VramProvider` mantém a porta aberta, mas
-  nenhum backend Vulkan-Windows entra aqui).
-- Interposer `nvcuda.dll` v2; tiering RAM↔VRAM dentro do serviço (MVP = VRAM-only, igual tier Linux);
-  compressão/dedup; auth/cripto própria (rede privada só, igual P1/P2).
-- **Multi-lease** (broker é 1-lease-por-vez, `crates/ramshared-wsl2d/src/broker_srv.rs:403`).
-- **Novo `Msg` de force-revoke de lease** (C1/DT-19 — reusa disconnect/holder release).
-- **Liberar `DeviceMem` do daemon no GrantLease** (C2/DT-20 — orçamento lógico + alloc local).
-- Zero-copy do buffer do SRB (bounce-buffer é a escolha Day-0 — DT-4; zero-copy é otimização futura
-  gated por medição, não dual-path).
+- **Non-NVIDIA** GPUs (Vulkan/D3D12 → P3 track; the `VramProvider` trait keeps the door open, but no
+  Vulkan-Windows backend enters here).
+- `nvcuda.dll` v2 interposer; RAM↔VRAM tiering within the service (MVP = VRAM-only, like the Linux tier);
+  compression/dedup; custom auth/cryptography (private network only, like P1/P2).
+- **Multi-lease** (broker is one-lease-at-a-time, `crates/ramshared-wsl2d/src/broker_srv.rs:403`).
+- **New lease force-revoke `Msg`** (C1/DT-19 — reuse disconnect/holder release).
+- **Freeing daemon `DeviceMem` in GrantLease** (C2/DT-20 — logical budget + local allocation).
+- SRB-buffer zero-copy (bounce buffer is the Day-0 choice — DT-4; zero-copy is a future
+  measurement-gated optimization, not a dual path).
 
-**Dependências assumidas prontas (Confirmado no codebase, verificado nesta geração):**
+**Assumed-ready dependencies (confirmed in the codebase, verified in this pass):**
 
-- `trait VramProvider` (`crates/ramshared-vram/src/lib.rs:61`, `alloc`+`mem_info`) e `trait VramMemory`
-  (`:41`, `zero`/`read_at`/`write_at`), sem `unsafe`, hardware-agnósticos.
-- `ramshared-cuda`: `Cuda::load()` (`driver.rs:79`), `Syms` (`ffi.rs:47`) com os símbolos `_v2`
+- `trait VramProvider` (`crates/ramshared-vram/src/lib.rs:61`, `alloc`+`mem_info`) and `trait VramMemory`
+  (`:41`, `zero`/`read_at`/`write_at`), without `unsafe`, hardware agnostic.
+- `ramshared-cuda`: `Cuda::load()` (`driver.rs:79`), `Syms` (`ffi.rs:47`) with `_v2` symbols
   (`cuInit`, `cuDeviceGetCount`, `cuDeviceGet`, `cuDeviceGetName`, `cuCtxCreate_v2`, `cuCtxDestroy_v2`,
   `cuCtxSynchronize`, `cuMemAlloc_v2`, `cuMemFree_v2`, `cuMemcpyHtoD_v2`, `cuMemcpyDtoH_v2`,
-  `cuMemsetD8_v2`, `cuMemGetInfo_v2`, `cuGetErrorString` opcional), RAII em ordem inversa.
-- `ramshared-block`: `trait BlockBackend` (`request.rs:16`, métodos `size_bytes`/`block_size`/
-  `read_at`/`write_at`/`flush`), `serve()` (`request.rs:55`, validação→`NBD_EINVAL` antes do
-  backend), `pub struct IoError(pub String)` (`:13` — **struct**, não enum).
-- `VramBackend<M>` (`crates/ramshared-wsl2d/src/backend.rs:11-55`): adaptador `VramMemory`→`BlockBackend`,
-  **genérico e sem acoplamento a `ublk`** nas linhas 11-55 (o `use crate::ublk` em `:8` serve
-  `SliceView`/`RamBackend`/testes abaixo). É o alvo de promoção (DT-6).
-- `ramshared-broker`: `enum Msg` (`protocol.rs:19`) com `LeaseRequest{bytes}` (`:42`),
+  `cuMemsetD8_v2`, `cuMemGetInfo_v2`, optional `cuGetErrorString`), RAII in reverse order.
+- `ramshared-block`: `trait BlockBackend` (`request.rs:16`, methods `size_bytes`/`block_size`/
+  `read_at`/`write_at`/`flush`), `serve()` (`request.rs:55`, validation→`NBD_EINVAL` before the
+  backend), `pub struct IoError(pub String)` (`:13` — **struct**, not enum).
+- `VramBackend<M>` (`crates/ramshared-wsl2d/src/backend.rs:11-55`): a `VramMemory`→`BlockBackend`
+  adapter, **generic and decoupled from `ublk`** at lines 11-55 (`use crate::ublk` at `:8` serves
+  `SliceView`/`RamBackend`/tests below). It is the promotion target (DT-6).
+- `ramshared-broker`: `enum Msg` (`protocol.rs:19`) with `LeaseRequest{bytes}` (`:42`),
   `LeaseRelease{lease}` (`:45`), `LeaseGranted{lease,bytes}` (`:64`), `LeaseDenied{reason}` (`:68`),
-  `Register{proto,tenant,transport}` (`:21`); **sem** Msg de force-revoke ao holder (C1);
-  `write_msg`/`read_msg` (`:132`/`:144`, **monomórficos em `Msg`**, teto `MAX_LINE_BYTES=64KiB`);
-  `PROTO_VERSION=1` (`:12`); `enum TransportKind` (`model.rs:48` = `NbdUnix`|`NbdTcp` hoje).
+  `Register{proto,tenant,transport}` (`:21`); **no** force-revoke-to-holder Msg (C1);
+  `write_msg`/`read_msg` (`:132`/`:144`, **monomorphic in `Msg`**, `MAX_LINE_BYTES=64KiB` ceiling);
+  `PROTO_VERSION=1` (`:12`); `enum TransportKind` (`model.rs:48` = `NbdUnix`|`NbdTcp` today).
 - `BrokerCore` / `endpoint_for` / `on_tick` / lease: **`crates/ramshared-wsl2d/src/broker_srv.rs`**
-  (não no crate `ramshared-broker` — lição P2). `endpoint_for` L182-195; `on_tick` L573;
+  (not in crate `ramshared-broker` — P2 lesson). `endpoint_for` L182-195; `on_tick` L573;
   1-lease L403; capacity L412; grant L628-664; disconnect auto-release L456-464.
-- `SliceMap::lease/unlease` (`crates/ramshared-broker/src/slices.rs:89,99`) só mudam estado —
-  **não** liberam VRAM física (C2/DT-20).
-- Precedente empírico do Passo 0 (drill VM 2026-07-03, `PASSO0-DRILL-RUNBOOK.md`): PASS-A + B1 contido
-  3× para **página de usuário**; **página de kernel não-refutada** (é o que ITEM-8 fecha). Achado de
-  método: **dado incompressível** (`RandomNumberGenerator`) é obrigatório para forçar paginação real
-  (a Memory Compression do Win11 mascara dado compressível).
-- Precedente de padrão P2 (`docs/specs/no-milestone/memory-broker/SPEC.md`): `windows-service`+`windows-sys`
-  sob `[target.'cfg(windows)']`, bin com `main` real + stub `not(windows)` (workspace verde no Linux),
-  novo `TransportKind` quebra `match` exaustivo em `endpoint_for` e exige filtro em `on_tick`.
+- `SliceMap::lease/unlease` (`crates/ramshared-broker/src/slices.rs:89,99`) only changes state — it
+  **does not** free physical VRAM (C2/DT-20).
+- Step 0 empirical precedent (VM drill 2026-07-03, `PASSO0-DRILL-RUNBOOK.md`): PASS-A + contained B1
+  3× for a **user page**; **kernel page not refuted** (what ITEM-8 closes). Method finding:
+  **incompressible data** (`RandomNumberGenerator`) is required to force real paging (Win11 Memory
+  Compression masks compressible data).
+- P2 pattern precedent (`docs/specs/no-milestone/memory-broker/SPEC.md`): `windows-service`+`windows-sys`
+  under `[target.'cfg(windows)']`, bin with real `main` + `not(windows)` stub (green Linux workspace),
+  new `TransportKind` breaks exhaustive `match` in `endpoint_for` and requires filtering in `on_tick`.
 
-## Matriz de rastreabilidade PRD → SPEC
+## PRD → SPEC traceability matrix
 
-| PRD | Implementação no SPEC |
+| PRD | SPEC implementation |
 | --- | --- |
 | RF-1 (StorPort virtual miniport) | ITEM-4 (ABI), ITEM-5 (driver) — DT-1, DT-17, DT-18 |
-| RF-2 (protocolo driver↔serviço) | ITEM-4 (ABI/`protocol.h`+mirror), ITEM-5 (rings/doorbell/inflight no driver), ITEM-6 (`driver_link` no serviço) — DT-2, DT-3, DT-4, DT-17, DT-18 |
-| RF-3 (serviço userspace Rust) | ITEM-2 (`VramBackend` promovido), ITEM-3 (skeleton+broker), ITEM-6 (loop de I/O ↔ VRAM) — DT-6, DT-15, DT-16 |
-| RF-4 (port CUDA → `nvcuda.dll`) | ITEM-1 (`ramshared-cuda` cross-platform) — DT-5 |
-| RF-5 (tenant do broker) | ITEM-3 (`broker_tenant` + `TransportKind::WinDrive` + `on_tick` + `endpoint_for`) — DT-7, DT-19, DT-20 |
-| RF-6 (pagefile secundário + smoke) | ITEM-7 (`ntpagefile` + `smoke`) — DT-8 |
-| RF-7 (teardown + contenção de crash) | ITEM-5 (contenção determinística no driver, DT-10), ITEM-8 (drill + teardown ordenado, DT-9, DT-11) |
-| RF-8 (instalador attestation-signed) | ITEM-11 — organizacional R9 fora do código |
-| RNF-1 (zero BSOD, N horas) | ITEM-10 (soak Driver Verifier) — DT-12, DT-14 |
-| RNF-2 (números, não adjetivos; teto K) | ITEM-9 (`Measure-PagefileVram.ps1`) — DT-13 |
-| RNF-3 (Day-0) | todos os ITEMs; sem shim/dual-path (DT-4/DT-5/DT-15 justificados) |
-| RNF-4 (validação fronteira kernel) | ITEM-5 (validação de IOCTL + MDL untrusted) — DT-14, DT-17, DT-18 |
-| RNF-5 (lease revogável c/ pagefile) | ITEM-3, ITEM-7/8 (`Invoke-RevokeDrill`, R8) — DT-19 (holder-cooperative; sem Msg revoke) |
-| RNF-6 (não-disruptivo, VM-only) | ITEM-8, ITEM-10 (pressão/fuzz/drill só em VM) |
-| RNF-7 (attestation carrega) | ITEM-11 (verificação em 26200.8655, test-signing OFF) |
-| RNF-8 (zero regressão Linux) | ITEM-1, ITEM-2 (únicos que tocam crates compartilhados) — gate = drills/testes Linux verdes |
+| RF-2 (driver↔service protocol) | ITEM-4 (ABI/`protocol.h`+mirror), ITEM-5 (rings/doorbell/inflight in driver), ITEM-6 (`driver_link` in service) — DT-2, DT-3, DT-4, DT-17, DT-18 |
+| RF-3 (Rust userspace service) | ITEM-2 (promoted `VramBackend`), ITEM-3 (skeleton+broker), ITEM-6 (I/O ↔ VRAM loop) — DT-6, DT-15, DT-16 |
+| RF-4 (CUDA port → `nvcuda.dll`) | ITEM-1 (cross-platform `ramshared-cuda`) — DT-5 |
+| RF-5 (broker tenant) | ITEM-3 (`broker_tenant` + `TransportKind::WinDrive` + `on_tick` + `endpoint_for`) — DT-7, DT-19, DT-20 |
+| RF-6 (secondary pagefile + smoke) | ITEM-7 (`ntpagefile` + `smoke`) — DT-8 |
+| RF-7 (teardown + crash containment) | ITEM-5 (deterministic driver containment, DT-10), ITEM-8 (drill + ordered teardown, DT-9, DT-11) |
+| RF-8 (attestation-signed installer) | ITEM-11 — organizational R9 outside code |
+| RNF-1 (zero BSOD, N hours) | ITEM-10 (Driver Verifier soak) — DT-12, DT-14 |
+| RNF-2 (numbers, not adjectives; K ceiling) | ITEM-9 (`Measure-PagefileVram.ps1`) — DT-13 |
+| RNF-3 (Day-0) | all ITEMs; no shim/dual path (DT-4/DT-5/DT-15 justified) |
+| RNF-4 (kernel-boundary validation) | ITEM-5 (IOCTL + untrusted MDL validation) — DT-14, DT-17, DT-18 |
+| RNF-5 (revocable lease with pagefile) | ITEM-3, ITEM-7/8 (`Invoke-RevokeDrill`, R8) — DT-19 (holder-cooperative; no revoke Msg) |
+| RNF-6 (non-disruptive, VM-only) | ITEM-8, ITEM-10 (pressure/fuzz/drill only in VM) |
+| RNF-7 (attestation loads) | ITEM-11 (verification on 26200.8655, test-signing OFF) |
+| RNF-8 (zero Linux regression) | ITEM-1, ITEM-2 (only shared crates touched) — gate = green Linux drills/tests |
 
-## Decisões técnicas
+## Technical decisions
 
-Decisões fechadas aqui que o PRD deixou como "Inferência: a fixar na SPEC".
+Decisions closed here that the PRD left as “Inference: to be fixed in the SPEC”.
 
-| # | Decisão | Justificativa |
+| # | Decision | Rationale |
 | --- | --- | --- |
-| DT-1 | **RF-1 = StorPort *virtual* miniport** via `VIRTUAL_HW_INITIALIZATION_DATA` (`StorPortInitialize`), **+ control device separado** criado com `IoCreateDeviceSecure` (SDDL restrito a SYSTEM+Administrators) exposto por device-interface GUID. O disco é enumerado pelo miniport; o canal ao serviço é o control device (não o path SCSI). | Padrão exato provado pelo WinSpd (StorPort virtual miniport real + control device — PRD §2/§3). Control device separado dá superfície de IOCTL própria e segurável (RNF-4), sem misturar com o path de storage. |
-| DT-2 | **RF-2 = par de rings SPSC (SQ driver→serviço, CQ serviço→driver)** em memória **do serviço**, travada e mapeada pelo driver (`MmProbeAndLockPages` + `MmGetSystemAddressForMdlSafe`), + **data area bounce-buffer** (slots fixos `queue_depth × max_io_bytes`), + doorbell `IOCTL_RAMSHARED_COMMIT_AND_FETCH` (IRP pendável). Auto-reset events no REGISTER são **sinalização auxiliar** (`KeSetEvent`); o **wake primário do serviço é o IRP pendável** (DT-22) — não dual-path de espera. Modelo `ublk` adaptado ao IOCTL/MDL do Windows. | Rejeita: **NBD-sobre-loopback**; **proxy do ImDisk**; **zero-copy** do buffer do SRB (DT-4). Ring SPSC + doorbell = "1 modo: disco delegado a userspace" (PRD §3). |
-| DT-3 | **Uma thread de I/O de VRAM no serviço** (single-consumer do SQ, single-producer do CQ). | Afinidade de thread do contexto CUDA é thread-local (`ramshared-cuda` `driver.rs:176-181`; `VramMemory` doc `lib.rs:38-40`); o daemon Linux já roda todo I/O de VRAM numa thread só. Reusar o invariante evita `cuCtxSetCurrent` e corridas. |
-| DT-4 | **Bounce-buffer** (driver copia buffer do SRB ↔ slot da data area: WRITE antes de postar o SQE, READ após o CQE OK), **não zero-copy**. Sob SRBEX (DT-23) o ponteiro do buffer vem de **`StorPortGetSystemAddress` / helpers StorPort** — não assumir `Srb->DataBuffer` classic como único path. | O memcpy extra é desprezível vs PCIe em µs (RNF-2/R6). Zero-copy = otimização futura gated por medição (ITEM-9), não dual-path Day-0. |
-| DT-5 | **RF-4 = tornar `ramshared-cuda` cross-platform**, não crate novo: extrair a fronteira de loader (`dlopen`/`dlsym`/`dlclose` vs `LoadLibraryW`/`GetProcAddress`/`FreeLibrary`) para `loader_unix.rs`/`loader_win.rs` selecionados por `#[cfg]`; `Syms` (`ffi.rs:47`) e `driver.rs` (wrappers seguros) ficam **idênticos** e compartilhados; a lista de candidatos vira `nvcuda.dll` no Windows. **Não é dual-path:** é **uma** tabela de símbolos (os nomes `_v2` existem iguais na `nvcuda.dll`), dois loaders de SO. | RF-4 pede explicitamente "a **mesma** tabela de símbolos" (PRD §2/§8). Crate paralelo duplicaria `Syms`+`driver.rs` (viola DRY/Day-0). Custo: toca o crate CUDA validado → RNF-8 (gate = testes CUDA + roundtrip GPU Linux verdes; #14). |
-| DT-6 | **Promover o adaptador genérico `VramBackend<M>` para `ramshared-block`** (crate ganha dep em `ramshared-vram`); `ramshared-wsl2d` passa a `pub use ramshared_block::VramBackend` (deleta a def local, comportamento preservado). Ambos os SOs reusam o **mesmo** adaptador testado. | Regra dura #1 (reuso) + imutabilidade/DRY: o serviço Windows precisa de `VramMemory→BlockBackend`; duplicar 45 linhas divergiria Linux/Windows. `ramshared-block` é o lar natural ("onde VRAM vira block device"). As linhas 11-55 não usam `ublk` (verificado). Gate: drills `qemu-ublk-*` verdes (RNF-8, #14). |
-| DT-7 | **RF-5 = novo `TransportKind::WinDrive`** (aditivo em `crates/ramshared-broker/src/model.rs:48`, hoje só `NbdUnix`/`NbdTcp` — **`DccAgent` ainda NÃO existe no código**). Adicionar a variante **quebra o `match` exaustivo** em `endpoint_for` (`crates/ramshared-wsl2d/src/broker_srv.rs:182-195`) → braço `WinDrive => None` obrigatório; e o tenant é **excluído do round-robin/rebalance de swap** filtrando por transport em `on_tick` (`:573-584`) ao construir `present` a partir de `TenantState.transport` (`:74`). Se o P2 `DccAgent` aterrissar depois, o filtro generaliza para "transports lease-only". **`arbiter.rs` sem diff** (`TenantView` não tem transport — L50). | Reuso do padrão P2 (C1/C2/DT-5 do memory-broker SPEC), verificado no código atual. O `WinDrive` só faz lease, nunca recebe `SwapOn`. |
-| DT-8 | **`NtCreatePagingFile`** isolada em `ntpagefile.rs`: allow-list **DT-24** (`26200.*`), falha-graciosa, pagefile mínimo em `C:`. Remoção: `NtSetSystemInformation` remove; se SO não liberar a quente → **reboot** (é o "shrink" real — H1/DT-19). | API não-documentada (R5); allow-list vazia era gap M3. |
-| DT-9 | **Teardown NUNCA remove o disco com pagefile ativo** (é exatamente o vetor B1 de BSOD). Ordem obrigatória (RF-7a): desativar pagefile → (reboot se o SO não liberar a quente) → drenar I/O em voo → destruir o disco virtual → `VramBackend::zero()` (wipe — reuso DT-17 do Linux) → `LeaseRelease`. | O drill (`PASSO0-DRILL-RUNBOOK.md`) mostrou que arrancar o disco com pagefile ativo é o cenário perigoso; o teardown seguro é o oposto disso. Wipe antes de devolver porque o pagefile conteve memória de processos (PRD fluxo 5). |
-| DT-10 | **Contenção de crash (RF-7b) = comportamento determinístico no driver.** Quando o serviço morre (fecho do handle do control device → `IRP_MJ_CLEANUP`/`CLOSE`), o driver **completa TODOS os SRBs em voo com `SRB_STATUS_ERROR`/`STATUS_DEVICE_NOT_CONNECTED`** — nunca deixa SRB pendente (isso travaria o storage stack) e nunca completa como sucesso parcial. É o análogo do SIGBUS-contido do Linux, e é o que torna o cenário **B2 (erro mediado por driver)** finalmente testável (o disco NÃO some; o I/O falha de forma limpa). | Este é o **lever** de mitigação do R7: o driver pode **errar** o I/O de paging em vez de fazer o disco sumir — a hipótese (PRD fluxo 4) de que o erro mediado é mais recuperável que "disco arrancado". Provado/refutado em ITEM-8. |
-| DT-11 | **Drill de página-de-kernel** via test driver **VM-only** `ramshared-poolstress.sys`: `ExAllocatePool2(POOL_FLAG_PAGED,...)` em GB + `BCryptGenRandom` + touch + IOCTL read-back; C: pagefile mínimo (heurística); **gate de residência DT-21** antes do kill; B1 vs B2 (DT-10). | Fecha lacuna do Passo 0 (só user-page). H2: placement no pagefile-VRAM não é garantido — daí DT-21. |
-| DT-12 | **RNF-1: N = 72 h agregadas** (3× 24 h independentes, espírito ≥3 rodadas do `benchmarks.md`) com **Driver Verifier Standard** ativo + fuzz do caminho de I/O e dos IOCTLs, **zero BugCheck**. | Âncora reference-class (#4/#8): durações de stress HLK/WHQL (24-72 h). 3×24 h dá variância entre rodadas em vez de 1 amostra. Número fixado; counterfactual: qualquer BugCheck aborta a promoção. |
-| DT-13 | **RNF-2: K "fixado na 1ª medição real", NÃO inventado agora.** O harness `Measure-PagefileVram.ps1` mede lado-a-lado (pagefile-VRAM vs pagefile em disco) **na mesma janela**, ≥3 rodadas, p50/p99+desvio, tags `idle`/`loaded`, saída dupla `results.jsonl`+`BENCHMARKS.md`. Gate = **(a)** alívio de capacidade (uso do pagefile-VRAM > 0 sob pressão) **e (b)** p99 de page-in ≤ **K×** o do disco, com **K definido pela primeira medição** (não "mais rápido que o disco" — VRAM perde pro NVMe, dado Linux). | PRD RNF-2/§13.3 corrigido pela auditoria 2.5: o valor é **capacidade**, não velocidade. Inventar K seria anchoring (#4). O SPEC fecha **como medir**, não o número. |
-| DT-14 | **Checklist de validação Windows-kernel substitui o Linux** (registrado, não silencioso — exigência da tarefa): build WDK/EWDK via MSBuild com `TreatWarningsAsErrors`+`/W4 /WX`; **Static Driver Verifier** (`msbuild /p:RunCodeAnalysis=true` + SDV) report limpo (ou waivers documentados); **Driver Verifier** runtime durante RNF-1; `InfVerif.exe /w` (INF universal); `ApiValidator`; `signtool` + submissão attestation (Partner Center); harness de integração em VM via **PowerShell Direct** (equivalente kselftest, RNF-6). Rust userspace mantém `cargo fmt/clippy/test/audit/deny`. | Não há `checkpatch.pl`/`make modules` aqui. A estrutura/rigor do checklist é preservada; as ferramentas são as reais de driver Windows. |
-| DT-15 | **Config `WinDriveConfig`** própria do serviço agora (self-contained, seção `[win_drive]`); quando o `ramshared-config` da P2 aterrissar, absorve esta seção. Não é shim: é a config **desta** feature. | P2 (`ramshared-config`) é SPEC, não IMPL — não assumir pronto. Definir local mantém Day-0 e evita dual-path especulativo. |
-| DT-16 | **Cross-compile gating (padrão P2 DT-12):** `ramshared-winsvc` + deps Windows (`windows`, `windows-service`, `windows-sys`, `ntapi`) sob `[target.'cfg(windows)'.dependencies]`; módulos de FFI Windows `#[cfg(windows)]`; o bin tem `#[cfg(windows)] fn main` real **e** `#[cfg(not(windows))] fn main` stub (`eprintln!`+`exit(2)`). | Mantém `cargo test --workspace` verde no host Linux (o driver C não entra no cargo; o serviço compila como stub). |
-| DT-17 | **`protocol.h` (C) é a ÚNICA fonte de verdade da ABI** (structs `RAMSHARED_*`, IOCTL codes, `RAMSHARED_ABI_VERSION`). O lado Rust é um mirror `#[repr(C)]` com `const { assert!(size_of::<Sqe>()==32) }` (etc.) + um teste de golden-bytes cross-check. Igual a um uapi header do kernel Linux. | uAPI/ABI (categoria 4 SSDV3): layout exposto entre Ring-0 e Ring-3 é irreversível após release; drift C↔Rust vira corrupção silenciosa. |
-| DT-18 | **O driver trata a memória mapeada (rings/data area) e todos os índices/tags como NÃO-CONFIÁVEIS** (defesa em profundidade): head/tail do CQ bounds-checked a cada iteração; cada tag de CQE validado contra a inflight table (rejeitar tag desconhecido/duplicado → nunca completar um SRB duas vezes, que seria UAF/BugCheck). | O serviço é Ring-3; um serviço bugado/comprometido não pode induzir OOB nem double-complete no Ring-0 (RNF-4, #13 ilusão de validade — validar o modo de falha real, não o happy path). |
-| DT-19 | **RNF-5 / R8 = revogação holder-cooperative + disconnect** (C1). Protocolo **intocado** além de `TransportKind::WinDrive` (sem novo `Msg`). (a) **Normal:** serviço executa DT-9 completo e só então `LeaseRelease`. (b) **Admin / teste de revogação:** `Invoke-RevokeDrill.ps1` manda o **serviço** (SCM stop / named-pipe admin / CLI) iniciar (a) — **não** finge um frame broker inexistente. (c) **Último recurso:** fechar a sessão TCP (broker `CloseSession` ou kill do socket) dispara auto-release no broker; o serviço trata `read_msg` EOF como "lease perdido no papel" e **se pagefile ainda ativo** entra em DT-9 de emergência (pode precisar reboot). Abort: pagefile ativo + socket morto sem DT-9 = vetor B1 residual (documentado na DEGRADATION-MATRIX). | Código real: lease só some por `LeaseRelease` ou disconnect. Inventar `LeaseRevoke` seria mudança de uAPI do broker (fora do escopo Day-0 desta feature, e P1 deliberadamente não medi usage do holder). |
-| DT-20 | **Co-residência VRAM (C2): lease é orçamento lógico; alloc é físico e local.** (1) Broker: `LeaseRequest` reserva slices `Free→Leased` (`slices.rs:89-95`) — **não** faz `cuMemFree` do `DeviceMem` do daemon; a VRAM do pool Linux continua alocada. (2) WinDrive: após `LeaseGranted{bytes}`, mede `cuMemGetInfo` **no processo Windows** e só então `alloc(min(granted.bytes, free))`; se `free < config.size_bytes` → **fail-closed** (log + `LeaseRelease` imediato + não cria disco). (3) Operação com daemon WSL2 no mesmo GPU: o operador dimensiona **free-floor do daemon ≥ size_bytes do WinDrive** (ou para o pool antes do provision Windows). Fórmula proibida: assumir que lease "transfere" bytes do pool Linux pro Windows. (4) Gate de teste: com daemon segurando pool > GPU−size, provision Windows **deve** falhar gracioso (teste `coresidence_fail_closed`). | Mesma GPU física (RTX 2060). Double-claim silencioso é o bug de IMPL mais caro; fechar no SPEC evita thrash/OOM no host. Alinhado ao modelo P2 (lease = permissão/orçamento; uso CUDA é local). |
-| DT-21 | **ITEM-8 — evidência de residência no pagefile-VRAM é gate, não esperança (H2).** Antes de matar o serviço no drill de kernel-page: (i) dado **incompressível** no paged pool (`BCryptGenRandom`); (ii) contador `\Paging File(<volume-vram>)\% Usage` **> 0** (ou `Win32_PageFileUsage.CurrentUsage` do volume VRAM > 0); (iii) se após pressão o uso do pagefile-VRAM == 0, o drill **ABORTA como INCONCLUSIVO** (não conta como PASS e não conta como BSOD) — C: mínimo é heurística, o SO pode manter kernel pages em C:. Só então: kill serviço / B1 vs B2, ≥3 execuções com residência confirmada. | Passo 0 já mostrou que Memory Compression + placement opaco mascaram o teste. Sem (ii) o ITEM-8 seria teatro (#13). |
-| DT-22 | **Wake path único Day-0 (H3 parcial / M1):** o serviço **só** espera trabalho via `DeviceIoControl(IOCTL_RAMSHARED_COMMIT_AND_FETCH)` pendável (loop único). Os handles `sq_event`/`cq_event` no REGISTER são **sinalização auxiliar do driver** (`KeSetEvent` no submit / opcional no CQE) para futuros waiters; o MVP do serviço **não** faz `WaitForSingleObject` neles como caminho primário. Barreiras SPSC: writer faz store-release das entries **antes** de avançar `tail` (driver: `KeMemoryBarrier`/`MemoryBarrier`; serviço Rust: `Ordering::Release` no tail mirror se usar atomics; com `volatile` C + barreira explícita). Reader carrega `tail` com acquire-equivalente antes de ler entries. | Dual-path de wake = dual-path Day-0 disfarçado. Um caminho testável. |
-| DT-23 | **SRB surface (M2):** miniport declara suporte a **`STORAGE_REQUEST_BLOCK` (SRBEX)** via `VIRTUAL_HW_INITIALIZATION_DATA` / feature bits do StorPort moderno; handlers aceitam SRBEX e leem buffer via APIs StorPort (`StorPortGetSystemAddress` etc.). Fallback classic `SCSI_REQUEST_BLOCK` **só** se SDV/harness na build 26200 exigir — registrado como waiver, não como segundo produto. | Win11 25H2 + WDK atual; WinSpd histórico usa paths clássicos, mas Day-0 mira o stack atual. |
-| DT-24 | **`NtCreatePagingFile` allow-list (M3):** builds suportadas no MVP = **Windows 11 25H2 `26200.*`** (a do drill e a do host). `RtlGetVersion` fora da série 26200 → `PagefileError::UnsupportedBuild`, disco continua utilizável sem pagefile (smoke RF-6). Expandir a lista só com evidência de drill em VM na build nova. | Evita allow-list vazia (interpretação na IMPL) e scope creep. |
-| DT-25 | **Install Day-0 = INF + signed `.cat` + root device (`Root\RamShared`).** Lab: `Inf2Cat` + test-sign `.cat`; `certutil -addstore Root/TrustedPublisher`; `pnputil /add-driver` + **`devcon install inf Root\RamShared`** (guest pnputil sem `/add-device`). Proibido `sc create` como path de produto (conflita com PnP → status 1072). Após `StorPortInitialize`, **hook dispatch** só no control device e **forward** IRPs StorPort (DT-25). LUN 1 bus/target/LUN; CREATE → `BusChangeDetected`. **MDL data ≤ 4 MiB**. COMMIT com cancel routine. **R/W: `StorPortGetSystemAddress` apenas** (`MapBuffers=NON_READ_WRITE`); parse LBA do CDB (10/16). | Evidência 2026-07-09: sc-only → 0 disco; INF+devcon → `Get-Disk N=1 RAMSHARE VRAMDISK 64MiB`; format com DataBuffer cru → BSOD **0xD1**. |
+| DT-1 | **RF-1 = StorPort *virtual* miniport** through `VIRTUAL_HW_INITIALIZATION_DATA` (`StorPortInitialize`), **plus a separate control device** created with `IoCreateDeviceSecure` (SDDL restricted to SYSTEM+Administrators) and exposed by device-interface GUID. The disk is enumerated by the miniport; the service channel is the control device (not the SCSI path). | Exact pattern proven by WinSpd (real StorPort virtual miniport + control device — PRD §2/§3). A separate control device provides a distinct, securable IOCTL surface (RNF-4), without mixing it with the storage path. |
+| DT-2 | **RF-2 = an SPSC ring pair (SQ driver→service, CQ service→driver)** in **service** memory, locked and mapped by the driver (`MmProbeAndLockPages` + `MmGetSystemAddressForMdlSafe`), plus a **data-area bounce buffer** (fixed `queue_depth × max_io_bytes` slots), plus `IOCTL_RAMSHARED_COMMIT_AND_FETCH` doorbell (pending IRP). Auto-reset events in REGISTER are **auxiliary signaling** (`KeSetEvent`); the **service primary wake is the pending IRP** (DT-22) — not a dual wait path. `ublk` model adapted to Windows IOCTL/MDL. | Rejects: **NBD-over-loopback**; **ImDisk proxy**; SRB-buffer **zero-copy** (DT-4). SPSC ring + doorbell = “one mode: disk delegated to userspace” (PRD §3). |
+| DT-3 | **One VRAM I/O thread in the service** (SQ single-consumer, CQ single-producer). | CUDA-context thread affinity is thread-local (`ramshared-cuda` `driver.rs:176-181`; `VramMemory` documentation `lib.rs:38-40`); the Linux daemon already runs all VRAM I/O in one thread. Reusing the invariant avoids `cuCtxSetCurrent` and races. |
+| DT-4 | **Bounce buffer** (driver copies SRB buffer ↔ data-area slot: WRITE before posting the SQE, READ after an OK CQE), **not zero-copy**. Under SRBEX (DT-23), the buffer pointer comes from **`StorPortGetSystemAddress` / StorPort helpers** — do not assume classic `Srb->DataBuffer` is the only path. | Extra memcpy is negligible versus PCIe in µs (RNF-2/R6). Zero-copy is a future measurement-gated optimization (ITEM-9), not a Day-0 dual path. |
+| DT-5 | **RF-4 = make `ramshared-cuda` cross-platform**, not a new crate: extract the loader boundary (`dlopen`/`dlsym`/`dlclose` vs `LoadLibraryW`/`GetProcAddress`/`FreeLibrary`) to `loader_unix.rs`/`loader_win.rs` selected by `#[cfg]`; `Syms` (`ffi.rs:47`) and `driver.rs` (safe wrappers) stay **identical** and shared; candidates become `nvcuda.dll` on Windows. **This is not a dual path:** it is **one** symbol table (the `_v2` names are identical in `nvcuda.dll`), with two OS loaders. | RF-4 explicitly requires “the **same** symbol table” (PRD §2/§8). A parallel crate would duplicate `Syms`+`driver.rs` (violates DRY/Day-0). Cost: touches validated CUDA crate → RNF-8 (gate = green CUDA tests + Linux GPU roundtrip; #14). |
+| DT-6 | **Promote generic `VramBackend<M>` adapter to `ramshared-block`** (crate gains `ramshared-vram` dependency); `ramshared-wsl2d` becomes `pub use ramshared_block::VramBackend` (deletes local definition, behavior preserved). Both OSs reuse the **same** tested adapter. | Hard rule #1 (reuse) + immutability/DRY: Windows service needs `VramMemory→BlockBackend`; duplicating 45 lines would diverge Linux/Windows. `ramshared-block` is the natural home (“where VRAM becomes a block device”). Lines 11-55 do not use `ublk` (verified). Gate: green `qemu-ublk-*` drills (RNF-8, #14). |
+| DT-7 | **RF-5 = new `TransportKind::WinDrive`** (additive in `crates/ramshared-broker/src/model.rs:48`, currently only `NbdUnix`/`NbdTcp` — **`DccAgent` does not yet exist in code**). Adding the variant **breaks exhaustive `match`** in `endpoint_for` (`crates/ramshared-wsl2d/src/broker_srv.rs:182-195`) → mandatory `WinDrive => None` arm; the tenant is **excluded from swap round-robin/rebalance** by transport filtering in `on_tick` (`:573-584`) when constructing `present` from `TenantState.transport` (`:74`). If P2 `DccAgent` lands later, the filter generalizes to “lease-only transports”. **No `arbiter.rs` diff** (`TenantView` has no transport — L50). | Reuse of P2 pattern (C1/C2/DT-5 from memory-broker SPEC), verified in current code. `WinDrive` only leases; it never receives `SwapOn`. |
+| DT-8 | **`NtCreatePagingFile`** isolated in `ntpagefile.rs`: **DT-24** allowlist (`26200.*`), graceful failure, minimum pagefile on `C:`. Removal: `NtSetSystemInformation` removes it; if the OS does not release it hot → **reboot** (the real “shrink” — H1/DT-19). | Undocumented API (R5); empty allowlist was M3 gap. |
+| DT-9 | **Teardown NEVER removes the disk with an active pagefile** (the exact B1 BSOD vector). Required order (RF-7a): disable pagefile → (reboot if the OS does not release it hot) → drain in-flight I/O → destroy virtual disk → `VramBackend::zero()` (wipe — reuse Linux DT-17) → `LeaseRelease`. | The `PASSO0-DRILL-RUNBOOK.md` drill showed that pulling the disk with an active pagefile is the dangerous case; safe teardown is its opposite. Wipe before return because the pagefile contained process memory (PRD flow 5). |
+| DT-10 | **Crash containment (RF-7b) = deterministic driver behavior.** When the service dies (control-device handle close → `IRP_MJ_CLEANUP`/`CLOSE`), the driver **completes ALL in-flight SRBs with `SRB_STATUS_ERROR`/`STATUS_DEVICE_NOT_CONNECTED`** — it never leaves an SRB pending (which would stall the storage stack) and never completes partial success. This is analogous to contained Linux SIGBUS and makes **B2 (driver-mediated error)** testable at last (the disk does NOT disappear; I/O fails cleanly). | This is the R7 mitigation **lever**: the driver can **fail** paging I/O instead of making the disk disappear — the hypothesis (PRD flow 4) that mediated error is more recoverable than a “pulled disk”. Proven/refuted in ITEM-8. |
+| DT-11 | **Kernel-page drill** through **VM-only** test driver `ramshared-poolstress.sys`: GB-scale `ExAllocatePool2(POOL_FLAG_PAGED,...)` + `BCryptGenRandom` + touch + IOCTL read-back; minimum C: pagefile (heuristic); **DT-21 residency gate** before kill; B1 vs B2 (DT-10). | Closes Step 0 gap (user-page only). H2: placement in pagefile-VRAM is not guaranteed — hence DT-21. |
+| DT-12 | **RNF-1: N = aggregate 72 h** (3× independent 24 h runs, in the spirit of ≥3 `benchmarks.md` rounds) with **Driver Verifier Standard** active + I/O-path and IOCTL fuzzing, **zero BugCheck**. | Reference-class anchor (#4/#8): HLK/WHQL stress durations (24-72 h). 3×24 h provides variation between runs rather than one sample. Number fixed; counterfactual: any BugCheck aborts promotion. |
+| DT-13 | **RNF-2: K “fixed at the first real measurement,” NOT invented now.** `Measure-PagefileVram.ps1` measures side by side (pagefile-VRAM vs disk pagefile) **in the same window**, ≥3 runs, p50/p99+deviation, `idle`/`loaded` tags, dual `results.jsonl`+`BENCHMARKS.md` output. Gate = **(a)** capacity relief (pagefile-VRAM usage > 0 under pressure) **and (b)** page-in p99 ≤ **K×** disk, with **K defined by the first measurement** (not “faster than disk” — VRAM loses to NVMe, given Linux). | PRD RNF-2/§13.3 corrected by the 2.5 audit: the value is **capacity**, not speed. Inventing K would be anchoring (#4). The SPEC closes **how to measure**, not the number. |
+| DT-14 | **Windows-kernel validation checklist replaces Linux** (recorded, not silent — task requirement): WDK/EWDK build through MSBuild with `TreatWarningsAsErrors`+`/W4 /WX`; clean **Static Driver Verifier** (`msbuild /p:RunCodeAnalysis=true` + SDV) report (or documented waivers); runtime **Driver Verifier** during RNF-1; universal-INF `InfVerif.exe /w`; `ApiValidator`; `signtool` + attestation submission (Partner Center); VM integration harness through **PowerShell Direct** (kselftest equivalent, RNF-6). Rust userspace retains `cargo fmt/clippy/test/audit/deny`. | There is no `checkpatch.pl`/`make modules` here. The checklist structure/rigor is preserved; the tools are real Windows-driver tools. |
+| DT-15 | Service-owned **`WinDriveConfig`** now (self-contained, `[win_drive]` section); when P2 `ramshared-config` lands, it absorbs this section. It is not a shim: it is this feature's **own** config. | P2 (`ramshared-config`) is SPEC, not IMPL — do not assume it is ready. A local definition keeps Day-0 and avoids speculative dual paths. |
+| DT-16 | **Cross-compile gating (P2 DT-12 pattern):** `ramshared-winsvc` + Windows dependencies (`windows`, `windows-service`, `windows-sys`, `ntapi`) under `[target.'cfg(windows)'.dependencies]`; Windows FFI modules `#[cfg(windows)]`; the bin has real `#[cfg(windows)] fn main` **and** stub `#[cfg(not(windows))] fn main` (`eprintln!`+`exit(2)`). | Keeps `cargo test --workspace` green on Linux host (C driver does not enter cargo; service compiles as stub). |
+| DT-17 | **`protocol.h` (C) is the ONLY ABI source of truth** (`RAMSHARED_*` structs, IOCTL codes, `RAMSHARED_ABI_VERSION`). Rust side is a `#[repr(C)]` mirror with `const { assert!(size_of::<Sqe>()==32) }` (etc.) plus a golden-bytes cross-check test. Like a Linux kernel uapi header. | uAPI/ABI (SSDV3 category 4): layout exposed between Ring-0 and Ring-3 is irreversible after release; C↔Rust drift becomes silent corruption. |
+| DT-18 | **The driver treats mapped memory (rings/data area) and every index/tag as UNTRUSTED** (defense in depth): CQ head/tail bounds-checked each iteration; every CQE tag validated against the inflight table (reject unknown/duplicate tag → never complete an SRB twice, which would be UAF/BugCheck). | Service is Ring-3; a buggy/compromised service must not induce OOB or double-complete in Ring-0 (RNF-4, #13 illusion of validity — validate the real failure mode, not the happy path). |
+| DT-19 | **RNF-5 / R8 = holder-cooperative revocation + disconnect** (C1). Protocol **unchanged** apart from `TransportKind::WinDrive` (no new `Msg`). (a) **Normal:** service completes DT-9 before `LeaseRelease`. (b) **Admin / revocation test:** `Invoke-RevokeDrill.ps1` tells the **service** (SCM stop / named-pipe admin / CLI) to start (a) — it does **not** fabricate a nonexistent broker frame. (c) **Last resort:** close TCP session (broker `CloseSession` or socket kill) triggers broker auto-release; service treats `read_msg` EOF as “lease lost on paper” and, **if pagefile is still active**, enters emergency DT-9 (may require reboot). Abort: active pagefile + dead socket without DT-9 = residual B1 vector (documented in DEGRADATION-MATRIX). | Real code: a lease disappears only through `LeaseRelease` or disconnect. Inventing `LeaseRevoke` would be a broker uAPI change (outside this feature's Day-0 scope, and P1 deliberately did not mediate holder usage). |
+| DT-20 | **VRAM co-residency (C2): lease is a logical budget; allocation is physical and local.** (1) Broker: `LeaseRequest` reserves `Free→Leased` slices (`slices.rs:89-95`) — it **does not** `cuMemFree` daemon `DeviceMem`; Linux-pool VRAM remains allocated. (2) WinDrive: after `LeaseGranted{bytes}`, measure `cuMemGetInfo` **in the Windows process** and only then `alloc(min(granted.bytes, free))`; if `free < config.size_bytes` → **fail closed** (log + immediate `LeaseRelease` + no disk creation). (3) Operating with WSL2 daemon on the same GPU: operator sizes **daemon free floor ≥ WinDrive size_bytes** (or stops the pool before Windows provision). Forbidden formula: assume the lease “transfers” Linux-pool bytes to Windows. (4) Test gate: with daemon holding pool > GPU−size, Windows provision **must** fail gracefully (test `coresidence_fail_closed`). | Same physical GPU (RTX 2060). Silent double-claim is the most expensive IMPL bug; closing it in the SPEC prevents host thrash/OOM. Aligned with P2 model (lease = permission/budget; CUDA usage is local). |
+| DT-21 | **ITEM-8 — pagefile-VRAM residency evidence is a gate, not hope (H2).** Before killing the service in the kernel-page drill: (i) **incompressible** data in paged pool (`BCryptGenRandom`); (ii) `\Paging File(<volume-vram>)\% Usage` counter **> 0** (or `Win32_PageFileUsage.CurrentUsage` for VRAM volume > 0); (iii) if pagefile-VRAM usage == 0 after pressure, the drill **ABORTS AS INCONCLUSIVE** (does not count as PASS and does not count as BSOD) — minimum C: is a heuristic; the OS may keep kernel pages in C:. Only then: kill service / B1 vs B2, ≥3 executions with confirmed residency. | Step 0 already showed that Memory Compression + opaque placement mask the test. Without (ii), ITEM-8 would be theater (#13). |
+| DT-22 | **Single Day-0 wake path (partial H3 / M1):** service **only** waits for work through pending `DeviceIoControl(IOCTL_RAMSHARED_COMMIT_AND_FETCH)` (one loop). `sq_event`/`cq_event` handles in REGISTER are **auxiliary driver signaling** (`KeSetEvent` on submit / optional on CQE) for future waiters; service MVP does **not** use `WaitForSingleObject` on them as the primary path. SPSC barriers: writer stores entries with release semantics **before** advancing `tail` (driver: `KeMemoryBarrier`/`MemoryBarrier`; Rust service: `Ordering::Release` on tail mirror if atomics are used; explicit barrier with `volatile` C). Reader loads `tail` with acquire-equivalent semantics before reading entries. | Dual wake path = disguised Day-0 dual path. One testable path. |
+| DT-23 | **SRB surface (M2):** miniport declares **`STORAGE_REQUEST_BLOCK` (SRBEX)** support through `VIRTUAL_HW_INITIALIZATION_DATA` / modern StorPort feature bits; handlers accept SRBEX and read buffers through StorPort APIs (`StorPortGetSystemAddress`, etc.). Classic `SCSI_REQUEST_BLOCK` fallback **only** if SDV/harness on build 26200 requires it — recorded as a waiver, not a second product. | Win11 25H2 + current WDK; historical WinSpd uses classic paths, but Day-0 targets the current stack. |
+| DT-24 | **`NtCreatePagingFile` allowlist (M3):** MVP-supported builds = **Windows 11 25H2 `26200.*`** (the drill and host build). `RtlGetVersion` outside 26200 series → `PagefileError::UnsupportedBuild`; disk remains usable without pagefile (RF-6 smoke). Expand the list only with VM drill evidence on the new build. | Prevents an empty allowlist (IMPL interpretation) and scope creep. |
+| DT-25 | **Day-0 install = INF + signed `.cat` + root device (`Root\RamShared`).** Lab: `Inf2Cat` + test-sign `.cat`; `certutil -addstore Root/TrustedPublisher`; `pnputil /add-driver` + **`devcon install inf Root\RamShared`** (guest pnputil without `/add-device`). `sc create` is forbidden as product path (conflicts with PnP → status 1072). After `StorPortInitialize`, **hook dispatch** only on the control device and **forward** StorPort IRPs (DT-25). LUN 1 bus/target/LUN; CREATE → `BusChangeDetected`. **MDL data ≤ 4 MiB**. COMMIT with cancel routine. **R/W: `StorPortGetSystemAddress` only** (`MapBuffers=NON_READ_WRITE`); parse CDB LBA (10/16). | Evidence 2026-07-09: sc-only → 0 disk; INF+devcon → `Get-Disk N=1 RAMSHARE VRAMDISK 64MiB`; format with raw DataBuffer → BSOD **0xD1**. |
 
-## Fronteira de atomicidade e política de rollback
+## Atomicity boundary and rollback policy
 
-**Fronteira de atomicidade desta implementação:**
+**Atomicity boundary of this implementation:**
 
-- **Atômico:** (1) **um I/O de bloco** (SQE→VRAM→CQE→completion do SRB) é completado **exatamente uma
-  vez**, OK **ou** erro, nunca sucesso parcial (`serve()`/`BlockBackend` já garante isso no plano
-  reusado; o driver garante o exactly-once via inflight table + DT-18). (2) O **handshake REGISTER** é
-  all-or-nothing: ou a fila inteira é validada+travada+mapeada, ou `IOCTL_RAMSHARED_REGISTER_QUEUE`
-  falha e **nada** fica travado (unwind em ordem inversa, idioma `goto out_err`). (3) **Lease** reusa a
-  serialização 1-lease-por-vez do broker (`crates/ramshared-wsl2d/src/broker_srv.rs:403`;
-  `LeaseGranted` só após slices drenadas, `:628-664`). **Force-revoke do holder NÃO existe no
-  protocolo** (C1/DT-19) — ver fronteira de revogação abaixo.
-- **Fora da atomicidade (eventual / multi-passo, estados parciais aceitos e documentados):**
-  - **Ativação do pagefile** (`NtCreatePagingFile`) é operação de SO multi-passo, **não** transacional:
-    estado parcial aceito = "disco ativo, pagefile ainda não" → a feature degrada, não quebra (DT-8).
-  - **Teardown** é uma sequência (DT-9); estado parcial aceito = "pagefile desativado aguardando reboot,
-    disco ainda presente" — nunca "disco removido com pagefile ativo".
-  - **Revogação de lease com pagefile ativo (R8/RNF-5 / DT-19):** **holder-cooperative only** no
-    protocolo atual. Caminhos reais: (1) **serviço inicia** `LeaseRelease` após teardown ordenado
-    do pagefile (DT-9); (2) **disconnect** da sessão TCP → broker auto-`on_lease_release`
-    (`broker_srv.rs:456-464`) — o serviço DEVE ter completado DT-9 *antes* de fechar o socket, ou
-    (admin) aceitar o risco residual documentado. **Não há** `Msg::LeaseRevoke` nem "broker sinaliza
-    revoke" (C1). Sequência observável (H1): `pagefile off` (`ntpagefile::remove_secondary` /
-    `NtSetSystemInformation` remove) → se SO não liberar a quente, **reboot** (único shrink real;
-    não inventar API de "encolher sob carga") → drain I/O → destroy disk → `zero()` →
-    `LeaseRelease`. Pior caso = revogação lenta (minutos se reboot), **nunca silenciosa**.
-  - **Predição de capacidade** (orçamento de VRAM vs pressão) é snapshot → margem conservadora.
+- **Atomic:** (1) **one block I/O** (SQE→VRAM→CQE→SRB completion) completes **exactly once**, either OK
+  **or** error, never partial success (`serve()`/`BlockBackend` already guarantees this in the reused
+  layer; the driver guarantees exactly-once through the inflight table + DT-18). (2) The **REGISTER
+  handshake** is all-or-nothing: either the entire queue is validated+locked+mapped, or
+  `IOCTL_RAMSHARED_REGISTER_QUEUE` fails and **nothing** remains locked (reverse-order unwind, `goto
+  out_err` idiom). (3) **Lease** reuses broker one-lease-at-a-time serialization
+  (`crates/ramshared-wsl2d/src/broker_srv.rs:403`; `LeaseGranted` only after drained slices, `:628-664`).
+  **Holder force-revoke DOES NOT exist in the protocol** (C1/DT-19) — see revocation boundary below.
+- **Outside atomicity (eventual / multi-step; partial states accepted and documented):**
+  - **Pagefile activation** (`NtCreatePagingFile`) is a multi-step OS operation, **not** transactional:
+    accepted partial state = “disk active, pagefile not yet active” → feature degrades, not breaks (DT-8).
+  - **Teardown** is a sequence (DT-9); accepted partial state = “pagefile disabled awaiting reboot, disk
+    still present” — never “disk removed with active pagefile”.
+  - **Lease revocation with active pagefile (R8/RNF-5 / DT-19):** **holder-cooperative only** in the
+    current protocol. Real paths: (1) **service starts** `LeaseRelease` after ordered pagefile teardown
+    (DT-9); (2) TCP-session **disconnect** → broker auto-`on_lease_release` (`broker_srv.rs:456-464`) —
+    service MUST complete DT-9 *before* closing the socket, or an admin accepts documented residual risk.
+    There is **no** `Msg::LeaseRevoke` nor “broker signals revoke” (C1). Observable sequence (H1):
+    `pagefile off` (`ntpagefile::remove_secondary` / `NtSetSystemInformation` removes) → if OS does not
+    release it hot, **reboot** (only real shrink; do not invent an “shrink under load” API) → drain I/O →
+    destroy disk → `zero()` → `LeaseRelease`. Worst case = slow revocation (minutes if reboot), **never
+    silent**.
+  - **Capacity prediction** (VRAM budget vs pressure) is a snapshot → conservative margin.
 
-**Política de rollback:**
+**Rollback policy:**
 
-- **Rollback de app:** desinstalar (remover driver via INF + parar/remover serviço). A config de pagefile
-  reverte para `C:`-only. Cada ITEM Rust compila isolado; `git revert` do ITEM reverte a superfície
-  (reverter ITEM-1/ITEM-2 exige revalidar os drills Linux — por isso o gate #14).
-- **Rollback de migration:** **N/A** — não há schema/estado persistido migrável (a VRAM é volátil por
-  design; o conteúdo do pagefile é transitório).
-- **Rollback de dados:** **N/A** — Day-0, sem produção viva, sem dado durável (o wipe `zero()` no
-  teardown é higiene, não migração).
-- **Proibido / `forward-only`:** **proibido em qualquer ambiente** remover/destruir o disco virtual com
-  pagefile ativo (vetor B1 de BSOD, DT-9) — restrição operacional `forward-only` explícita: uma vez o
-  pagefile ativo, o único caminho seguro é desativá-lo primeiro (reboot se necessário). Abort trigger
-  correspondente em ITEM-8.
+- **Application rollback:** uninstall (remove driver through INF + stop/remove service). Pagefile config
+  returns to `C:`-only. Each Rust ITEM compiles in isolation; `git revert` of an ITEM reverts its surface
+  (reverting ITEM-1/ITEM-2 requires revalidating Linux drills — therefore gate #14).
+- **Migration rollback:** **N/A** — no migratable persistent schema/state exists (VRAM is volatile by
+  design; pagefile contents are transient).
+- **Data rollback:** **N/A** — Day-0, no live production, no durable data (`zero()` wipe on teardown is
+  hygiene, not migration).
+- **Forbidden / `forward-only`:** removing/destroying the virtual disk with an active pagefile is
+  **forbidden in every environment** (B1 BSOD vector, DT-9) — explicit `forward-only` operational
+  restriction: once the pagefile is active, the only safe path is to disable it first (reboot if needed).
+  Corresponding abort trigger is in ITEM-8.
 
-## Mapa Kahneman por etapa crítica
+## Kahneman map by critical step
 
-| Etapa / ITEM | Disciplina Kahneman | Link | Pergunta obrigatória | Evidência mínima | Abort trigger |
+| Step / ITEM | Kahneman discipline | Link | Required question | Minimum evidence | Abort trigger |
 | --- | --- | --- | --- | --- | --- |
-| ITEM-1 (RF-4 loader cross-platform) | #14 Mass-Refactoring + #1 WYSIATI | [`#14`](../../../methodology/kahneman-disciplines.md#disc-14) · [`#1`](../../../methodology/kahneman-disciplines.md#disc-1) | A `nvcuda.dll` exporta os **mesmos** símbolos `_v2` do `ffi.rs`? A refação muda o caminho Linux? | Windows: `Cuda::load()` resolve os 13 símbolos + `mem_info()` retorna `free/total` plausível na RTX 2060. Linux: `cargo test -p ramshared-cuda` + `gpu_roundtrip_256mib` (`--ignored`) verdes. | Qualquer símbolo `_v2` ausente na `nvcuda.dll`, **ou** qualquer regressão nos testes/roundtrip Linux. |
-| ITEM-2 (promover `VramBackend`) | #14 Mass-Refactoring | [`#14`](../../../methodology/kahneman-disciplines.md#disc-14) | A promoção muda o comportamento do daemon Linux? | Drills `qemu-ublk-daemon.sh` + `qemu-ublk-crash-e1b.sh` (SIGBUS 5/5) verdes; `cargo test -p ramshared-wsl2d` sem regressão. | Qualquer regressão de drill/teste do daemon Linux → reverter a promoção. |
-| ITEM-4 (RF-2 ABI `protocol.h`+mirror) | #9 Substituição de pergunta | [`#9`](../../../methodology/kahneman-disciplines.md#disc-9) | "O protocolo está certo?" → o layout C bate byte-a-byte com o mirror Rust? | `const { assert!(...) }` de tamanho compila nos dois lados; teste golden-bytes (bytes fixos ↔ struct) passa; `sizeof` C == `size_of` Rust em CI. | Drift de tamanho/offset entre `protocol.h` e o mirror Rust. |
-| ITEM-5 (driver: IOCTL surface + rings) | #13 Ilusão de validade + #5 Availability | [`#13`](../../../methodology/kahneman-disciplines.md#disc-13) · [`#5`](../../../methodology/kahneman-disciplines.md#disc-5) | REGISTER/doorbell **malformados** (buffer curto, `queue_depth` não-potência-de-2, VA nula, offset desalinhado, tag desconhecido/duplicado) são **rejeitados antes** de `MmProbeAndLockPages`/de tocar VRAM/de completar SRB? | SDV report limpo; teste sob Driver Verifier: cada entrada malformada → IOCTL falha com `STATUS_INVALID_PARAMETER`, **zero BugCheck**; teste **pareado** "entrada legítima ainda funciona". | Qualquer BugCheck a partir de entrada malformada; defeito SDV sem waiver; double-complete de SRB observável. |
-| ITEM-6 + ITEM-8 (crash c/ pagefile ativo — vetor R7) | #5 Availability + #2 Counterfactual | [`#5`](../../../methodology/kahneman-disciplines.md#disc-5) · [`#2`](../../../methodology/kahneman-disciplines.md#disc-2) | Matar o serviço com **página de kernel** (paged pool, dado incompressível) **confirmada no pagefile-VRAM** → contido **ou** `KERNEL_DATA_INPAGE_ERROR` 0x7a? B2 (DT-10) vs B1? | `Invoke-KernelPageDrill.ps1`: (DT-21) `% Usage` pagefile-VRAM > 0 **antes** do kill; senão INCONCLUSIVO. ≥3 execuções com residência; B1 vs B2; captura BSOD/`MEMORY.DMP`. | **B2 produz BugCheck 0x7a sem mitigação especificável** → aborto PRD §14 #2b. Drill sem residência confirmada **não** conta como PASS. |
-| ITEM-7 (`NtCreatePagingFile`, não-documentada) | #1 WYSIATI + #2 Counterfactual | [`#1`](../../../methodology/kahneman-disciplines.md#disc-1) · [`#2`](../../../methodology/kahneman-disciplines.md#disc-2) | O Windows **ativa** um pagefile secundário no volume do **nosso** miniport (não testado — WYSIATI PRD §14 #1)? Build fora da allow-list degrada gracioso? | `Win32_PageFileUsage` mostra `<vram>:\pagefile.sys` ativo pós-`NtCreatePagingFile`; teste de fallback (build não suportado → sem pagefile, disco formatável/utilizável). | Ativação dá BugCheck/corrupção, **ou** não há caminho de falha-graciosa (disco quebra junto com o pagefile). |
-| ITEM-9 (RNF-2 gate numérico) | #3 Número não adjetivo + #11 Halo | [`#3`](../../../methodology/kahneman-disciplines.md#disc-3) · [`#11`](../../../methodology/kahneman-disciplines.md#disc-11) | O pagefile-VRAM **alivia capacidade** (uso > 0 sob pressão) e não é **catastroficamente** mais lento que o disco? | `results.jsonl`+`BENCHMARKS.md`: p50/p99 lado-a-lado, mesma janela, ≥3 rodadas, tags `idle`/`loaded`; contador de uso do pagefile-VRAM > 0. | Alívio de capacidade == 0 (nunca usado sob pressão) **ou** p99 > K× o do disco (K da 1ª medição) → não promove (PRD §14 #2c). |
-| ITEM-10 (RNF-1 soak) | #5 Availability + #6 Confiança calibrada | [`#5`](../../../methodology/kahneman-disciplines.md#disc-5) · [`#6`](../../../methodology/kahneman-disciplines.md#disc-6) | 72 h (3×24 h) sob Driver Verifier + fuzz sem BugCheck? | Logs do Driver Verifier + harness de soak; 3 rodadas registradas com `run-id`. | Qualquer BugCheck em qualquer rodada. |
-| ITEM-11 (RF-8 attestation) | #2 Counterfactual | [`#2`](../../../methodology/kahneman-disciplines.md#disc-2) | O driver attestation-signed **carrega** em build estável com test-signing OFF? | Carga em Windows 11 25H2 **26200.8655**, test-signing OFF, driver confiável por padrão (RNF-7). | Não carrega em build estável (política apertou) **e** custo WHCP não se justifica → abortar/park (PRD §14 #2a). |
-| RNF-5 (revogação c/ pagefile ativo, R8) | #5 Availability + #2 Counterfactual | [`#5`](../../../methodology/kahneman-disciplines.md#disc-5) · [`#2`](../../../methodology/kahneman-disciplines.md#disc-2) | Serviço executa DT-9 e só então `LeaseRelease`, sem pagefile ativo no disconnect? | `Invoke-RevokeDrill.ps1`: SCM stop/admin → pagefile off (ou reboot path) → destroy → wipe → `LeaseRelease` observado no log do broker; tempo pior caso medido. **Não** existe frame broker de revoke (C1/DT-19). | Pagefile ainda ativo após "release"; deadlock no teardown; broker ainda mostra lease após disconnect limpo. |
+| ITEM-1 (RF-4 cross-platform loader) | #14 Mass-Refactoring + #1 WYSIATI | [`#14`](../../../methodology/kahneman-disciplines.md#disc-14) · [`#1`](../../../methodology/kahneman-disciplines.md#disc-1) | Does `nvcuda.dll` export the **same** `_v2` symbols from `ffi.rs`? Does the refactor change the Linux path? | Windows: `Cuda::load()` resolves all 13 symbols + `mem_info()` returns plausible `free/total` on RTX 2060. Linux: green `cargo test -p ramshared-cuda` + `gpu_roundtrip_256mib` (`--ignored`). | Any missing `_v2` symbol in `nvcuda.dll`, **or** any Linux test/roundtrip regression. |
+| ITEM-2 (promote `VramBackend`) | #14 Mass-Refactoring | [`#14`](../../../methodology/kahneman-disciplines.md#disc-14) | Does promotion change Linux daemon behavior? | Green `qemu-ublk-daemon.sh` + `qemu-ublk-crash-e1b.sh` drills (SIGBUS 5/5); no `cargo test -p ramshared-wsl2d` regression. | Any daemon drill/test regression → revert promotion. |
+| ITEM-4 (RF-2 ABI `protocol.h`+mirror) | #9 Question substitution | [`#9`](../../../methodology/kahneman-disciplines.md#disc-9) | “Is the protocol correct?” → does C layout match Rust mirror byte-for-byte? | Size `const { assert!(...) }` compiles on both sides; golden-bytes test (fixed bytes ↔ struct) passes; C `sizeof` == Rust `size_of` in CI. | Size/offset drift between `protocol.h` and Rust mirror. |
+| ITEM-5 (driver: IOCTL surface + rings) | #13 Illusion of validity + #5 Availability | [`#13`](../../../methodology/kahneman-disciplines.md#disc-13) · [`#5`](../../../methodology/kahneman-disciplines.md#disc-5) | Are malformed REGISTER/doorbell inputs (short buffer, non-power-of-two `queue_depth`, null VA, unaligned offset, unknown/duplicate tag) **rejected before** `MmProbeAndLockPages`/touching VRAM/completing an SRB? | Clean SDV report; test under Driver Verifier: every malformed input → IOCTL fails with `STATUS_INVALID_PARAMETER`, **zero BugCheck**; paired “legitimate input still works” test. | Any BugCheck from malformed input; SDV defect without waiver; observable SRB double-complete. |
+| ITEM-6 + ITEM-8 (crash with active pagefile — R7 vector) | #5 Availability + #2 Counterfactual | [`#5`](../../../methodology/kahneman-disciplines.md#disc-5) · [`#2`](../../../methodology/kahneman-disciplines.md#disc-2) | Kill service with a **kernel page** (paged pool, incompressible data) **confirmed in pagefile-VRAM** → contained **or** `KERNEL_DATA_INPAGE_ERROR` 0x7a? B2 (DT-10) vs B1? | `Invoke-KernelPageDrill.ps1`: (DT-21) pagefile-VRAM `% Usage` > 0 **before** kill; otherwise INCONCLUSIVE. ≥3 executions with residency; B1 vs B2; capture BSOD/`MEMORY.DMP`. | **B2 produces BugCheck 0x7a without a specified mitigation** → PRD §14 #2b abort. Drill without confirmed residency does **not** count as PASS. |
+| ITEM-7 (`NtCreatePagingFile`, undocumented) | #1 WYSIATI + #2 Counterfactual | [`#1`](../../../methodology/kahneman-disciplines.md#disc-1) · [`#2`](../../../methodology/kahneman-disciplines.md#disc-2) | Does Windows **activate** a secondary pagefile on the volume of **our** miniport (untested — WYSIATI PRD §14 #1)? Does an out-of-allowlist build degrade gracefully? | `Win32_PageFileUsage` shows active `<vram>:\pagefile.sys` after `NtCreatePagingFile`; fallback test (unsupported build → no pagefile, disk remains formattable/usable). | Activation causes BugCheck/corruption, **or** no graceful-failure path exists (disk breaks together with pagefile). |
+| ITEM-9 (RNF-2 numeric gate) | #3 Number, not adjective + #11 Halo | [`#3`](../../../methodology/kahneman-disciplines.md#disc-3) · [`#11`](../../../methodology/kahneman-disciplines.md#disc-11) | Does pagefile-VRAM **relieve capacity** (usage > 0 under pressure) without becoming **catastrophically** slower than disk? | `results.jsonl`+`BENCHMARKS.md`: side-by-side p50/p99, same window, ≥3 runs, `idle`/`loaded` tags; pagefile-VRAM usage counter > 0. | Capacity relief == 0 (never used under pressure) **or** p99 > K× disk (K from first measurement) → do not promote (PRD §14 #2c). |
+| ITEM-10 (RNF-1 soak) | #5 Availability + #6 Calibrated confidence | [`#5`](../../../methodology/kahneman-disciplines.md#disc-5) · [`#6`](../../../methodology/kahneman-disciplines.md#disc-6) | 72 h (3×24 h) under Driver Verifier + fuzz with no BugCheck? | Driver Verifier logs + soak harness; 3 runs recorded with `run-id`. | Any BugCheck in any run. |
+| ITEM-11 (RF-8 attestation) | #2 Counterfactual | [`#2`](../../../methodology/kahneman-disciplines.md#disc-2) | Does the attestation-signed driver **load** on a stable build with test-signing OFF? | Load on Windows 11 25H2 **26200.8655**, test-signing OFF, driver trusted by default (RNF-7). | Does not load on stable build (policy tightened) **and** WHCP cost is not justified → abort/park (PRD §14 #2a). |
+| RNF-5 (revocation with active pagefile, R8) | #5 Availability + #2 Counterfactual | [`#5`](../../../methodology/kahneman-disciplines.md#disc-5) · [`#2`](../../../methodology/kahneman-disciplines.md#disc-2) | Does the service complete DT-9 before `LeaseRelease`, with no active pagefile on disconnect? | `Invoke-RevokeDrill.ps1`: SCM stop/admin → pagefile off (or reboot path) → destroy → wipe → `LeaseRelease` observed in broker log; worst-case duration measured. There is **no** revoke broker frame (C1/DT-19). | Pagefile still active after “release”; teardown deadlock; broker still shows lease after clean disconnect. |
 
-## Checklist de segurança (pré-implementação)
+## Security checklist (pre-implementation)
 
-- [ ] **Isolamento (RNF-4/DT-1):** control device criado com `IoCreateDeviceSecure` + SDDL
-  `D:P(A;;GA;;;SY)(A;;GA;;;BA)` (só SYSTEM + Administrators); serviço roda como LocalSystem. Ninguém sem
-  privilégio abre o device.
-- [ ] **Buffer overflow / OOB (RNF-4/DT-18):** todo IOCTL `METHOD_BUFFERED` valida
-  `Parameters.DeviceIoControl.InputBufferLength == sizeof(struct esperado)` **antes** de ler
-  `SystemBuffer`; REGISTER valida `abi_version`, `queue_depth` (potência de 2, ≤ `RAMSHARED_MAX_QD`),
-  `block_size ∈ {512,4096}`, `max_io_bytes` limitado, VAs não-nulas e comprimentos consistentes **antes**
-  de `MmProbeAndLockPages`; cada SQE valida offset/len (alinhado ao `block_size`, dentro da faixa) antes
-  de tocar VRAM (espelha `ramshared_block::validate`).
-- [ ] **Memória mapeada não-confiável (DT-18):** head/tail do CQ bounds-checked a cada iteração; tag de
-  CQE validado contra a inflight table (rejeitar desconhecido/duplicado → sem double-complete de SRB).
-- [ ] **Preemption / IRQL:** cópias bounce e travamento de MDL fora de `DISPATCH_LEVEL` quando exigido;
-  completion de SRB segue as regras de IRQL do StorPort; nada de alocação paginável em caminho de I/O
-  quente (análogo a `GFP_ATOMIC`).
-- [ ] **Input validation (serviço):** `bytes` do lease revalidado no serviço antes de encaminhar ao
-  broker; o broker já recusa `> total` (`broker_srv.rs:412`).
-- [ ] **`unsafe`/FFI (Rust):** CUDA-Windows (ITEM-1), `driver_link` (ITEM-6), `ntpagefile` (ITEM-7) com
-  `// SAFETY:` por bloco; superfície segura sem `unsafe` (padrão `ramshared-cuda`).
-- [ ] **Segredos/ponteiros:** sem credencial hardcoded; **nenhum endereço de kernel logado** (WPP/ETW
-  sem ponteiros — alinhado a `coding.md`: nunca vazar KASLR); telemetria sem PII (o conteúdo do pagefile
-  é memória de processos — **nunca** logar payload).
-- [ ] **Kernel Oops/erro interno:** IOCTL falho retorna NTSTATUS genérico; sem vazar detalhe de
-  implementação/offset interno ao Ring-3.
+- [ ] **Isolation (RNF-4/DT-1):** control device created with `IoCreateDeviceSecure` + SDDL
+  `D:P(A;;GA;;;SY)(A;;GA;;;BA)` (SYSTEM + Administrators only); service runs as LocalSystem. Nobody
+  without privilege opens the device.
+- [ ] **Buffer overflow / OOB (RNF-4/DT-18):** every `METHOD_BUFFERED` IOCTL validates
+  `Parameters.DeviceIoControl.InputBufferLength == sizeof(expected struct)` **before** reading
+  `SystemBuffer`; REGISTER validates `abi_version`, power-of-two `queue_depth` (≤ `RAMSHARED_MAX_QD`),
+  `block_size ∈ {512,4096}`, bounded `max_io_bytes`, non-null VAs, and consistent lengths **before**
+  `MmProbeAndLockPages`; every SQE validates offset/len (aligned to `block_size`, in range) before
+  touching VRAM (mirrors `ramshared_block::validate`).
+- [ ] **Untrusted mapped memory (DT-18):** CQ head/tail bounds-checked every iteration; CQE tag validated
+  against the inflight table (reject unknown/duplicate → no SRB double-complete).
+- [ ] **Preemption / IRQL:** bounce copies and MDL locking occur outside `DISPATCH_LEVEL` when required;
+  SRB completion follows StorPort IRQL rules; no pageable allocation in hot I/O path (analogous to
+  `GFP_ATOMIC`).
+- [ ] **Input validation (service):** lease `bytes` revalidated in service before forwarding to broker;
+  broker already rejects `> total` (`broker_srv.rs:412`).
+- [ ] **`unsafe`/FFI (Rust):** CUDA-Windows (ITEM-1), `driver_link` (ITEM-6), `ntpagefile` (ITEM-7) each
+  use `// SAFETY:` per block; safe surface without `unsafe` (`ramshared-cuda` pattern).
+- [ ] **Secrets/pointers:** no hardcoded credential; **no kernel address logged** (WPP/ETW without
+  pointers — aligned with `coding.md`: never leak KASLR); telemetry without PII (pagefile content is
+  process memory — **never** log payload).
+- [ ] **Kernel Oops/internal error:** failing IOCTL returns generic NTSTATUS; no implementation detail or
+  internal offset leaks to Ring-3.
 
-## Arquivos a CRIAR
+## Files to CREATE
 
 ### `drivers/windows/ramshared/protocol.h`  *(ITEM-4 — RF-1/RF-2, DT-17)*
 
-- **Propósito:** fonte de verdade única da ABI driver↔serviço (uAPI Windows).
-- **Requisitos cobertos:** RF-2, DT-17, DT-18.
-- **Structs/Types (layout fixo `#pragma pack(push,8)`; todo `UINTxx`):**
+- **Purpose:** single source of truth for the driver↔service ABI (Windows uAPI).
+- **Requirements covered:** RF-2, DT-17, DT-18.
+- **Structs/types (fixed `#pragma pack(push,8)` layout; all `UINTxx`):**
   ```c
   #define RAMSHARED_ABI_VERSION 1u
-  #define RAMSHARED_MAX_QD      256u        /* queue_depth máximo (potência de 2) */
-  #define RAMSHARED_MAX_IO      (1u<<20)    /* 1 MiB por slot (bounce) */
+  #define RAMSHARED_MAX_QD      256u        /* maximum queue_depth (power of 2) */
+  #define RAMSHARED_MAX_IO      (1u<<20)    /* 1 MiB per bounce slot */
 
   enum ramshared_op { RAMSHARED_OP_READ=0, RAMSHARED_OP_WRITE=1, RAMSHARED_OP_FLUSH=2 };
-  /* status: 0=OK; senão errno-like alinhado ao ramshared-block */
+  /* status: 0=OK; otherwise errno-like and aligned with ramshared-block */
   #define RAMSHARED_ST_OK     0
   #define RAMSHARED_ST_EIO    5
   #define RAMSHARED_ST_EINVAL 22
 
-  typedef struct _RAMSHARED_SQE {   /* driver -> serviço, 32 bytes */
+  typedef struct _RAMSHARED_SQE {   /* driver -> service, 32 bytes */
       UINT64 tag; UINT32 op; UINT32 flags;
       UINT64 offset; UINT32 len; UINT32 buf_slot;
   } RAMSHARED_SQE;
 
-  typedef struct _RAMSHARED_CQE {   /* serviço -> driver, 16 bytes */
+  typedef struct _RAMSHARED_CQE {   /* service -> driver, 16 bytes */
       UINT64 tag; INT32 status; UINT32 reserved;
   } RAMSHARED_CQE;
 
-  typedef struct _RAMSHARED_RING_HDR { /* precede entries[]; SPSC */
-      UINT32 magic; UINT32 entries;      /* entries = queue_depth (potência de 2) */
+  typedef struct _RAMSHARED_RING_HDR { /* precedes entries[]; SPSC */
+      UINT32 magic; UINT32 entries;      /* entries = queue_depth (power of 2) */
       volatile UINT32 head; volatile UINT32 tail;
   } RAMSHARED_RING_HDR;
 
-  typedef struct _RAMSHARED_REGISTER { /* payload do IOCTL REGISTER */
+  typedef struct _RAMSHARED_REGISTER { /* REGISTER IOCTL payload */
       UINT32 abi_version; UINT32 disk_id; UINT32 queue_depth; UINT32 block_size;
       UINT32 max_io_bytes; UINT32 reserved;
       UINT64 sq_ring_va; UINT64 cq_ring_va;
       UINT64 data_area_va; UINT64 data_area_len;
-      UINT64 sq_event_handle; UINT64 cq_event_handle; /* auxiliar (DT-22); wake primário = IRP */
+      UINT64 sq_event_handle; UINT64 cq_event_handle; /* auxiliary (DT-22); primary wake = IRP */
   } RAMSHARED_REGISTER;
 
   typedef struct _RAMSHARED_DISK_PARAMS { /* IOCTL CREATE_DISK */
-      UINT64 size_bytes;   /* múltiplo de block_size */
-      UINT32 block_size;   /* 512 ou 4096 */
+      UINT64 size_bytes;   /* multiple of block_size */
+      UINT32 block_size;   /* 512 or 4096 */
       UINT32 reserved;
-      UCHAR  serial[16];   /* INQUIRY VPD / identificação estável */
+      UCHAR  serial[16];   /* INQUIRY VPD / stable identification */
   } RAMSHARED_DISK_PARAMS;
   ```
 - **IOCTL codes:** `CTL_CODE(FILE_DEVICE_MASS_STORAGE, 0x800|N, METHOD_BUFFERED, FILE_READ_ACCESS|FILE_WRITE_ACCESS)`
-  para `IOCTL_RAMSHARED_REGISTER_QUEUE` (N=0), `IOCTL_RAMSHARED_UNREGISTER_QUEUE` (N=1),
+  for `IOCTL_RAMSHARED_REGISTER_QUEUE` (N=0), `IOCTL_RAMSHARED_UNREGISTER_QUEUE` (N=1),
   `IOCTL_RAMSHARED_COMMIT_AND_FETCH` (N=2), `IOCTL_RAMSHARED_CREATE_DISK` (N=3, `RAMSHARED_DISK_PARAMS{size_bytes,block_size,serial[]}`),
   `IOCTL_RAMSHARED_DESTROY_DISK` (N=4).
-- **Padrão de referência:** headers uapi do kernel Linux (struct-size estável); WinSpd `winspd.h`.
-- **Testes requeridos:** compilação C emite `C_ASSERT(sizeof(RAMSHARED_SQE)==32)` etc.
-- **Disciplina Kahneman:** #9 (ver Mapa — ITEM-4).
+- **Reference pattern:** Linux-kernel uapi headers (stable struct size); WinSpd `winspd.h`.
+- **Required tests:** C compilation emits `C_ASSERT(sizeof(RAMSHARED_SQE)==32)`, etc.
+- **Kahneman discipline:** #9 (see Map — ITEM-4).
 
-### `drivers/windows/ramshared/protocol_check.rs` *(mirror Rust; vive em `crates/ramshared-winsvc/src/proto.rs`)*  *(ITEM-4 — RF-2, DT-17)*
+### `drivers/windows/ramshared/protocol_check.rs` *(Rust mirror; lives in `crates/ramshared-winsvc/src/proto.rs`)*  *(ITEM-4 — RF-2, DT-17)*
 
-- **Propósito:** mirror `#[repr(C)]` exato de `protocol.h` + asserts de tamanho + golden-bytes.
-- **Structs:** `#[repr(C)] pub struct Sqe { pub tag:u64, pub op:u32, pub flags:u32, pub offset:u64, pub len:u32, pub buf_slot:u32 }` (idem `Cqe`, `RingHdr`, `Register`); `pub const ABI_VERSION:u32=1; pub const MAX_QD:u32=256; pub const MAX_IO:u32=1<<20;`.
-- **Funções:** `const _: () = { assert!(core::mem::size_of::<Sqe>()==32); assert!(core::mem::size_of::<Cqe>()==16); /* ... */ };`
-- **Testes requeridos:** `golden_sqe_bytes` (serializa uma `Sqe` conhecida e compara com o byte-array fixo que o C produz).
+- **Purpose:** exact `#[repr(C)]` mirror of `protocol.h` + size assertions + golden bytes.
+- **Structs:** `#[repr(C)] pub struct Sqe { pub tag:u64, pub op:u32, pub flags:u32, pub offset:u64, pub len:u32, pub buf_slot:u32 }` (same for `Cqe`, `RingHdr`, `Register`); `pub const ABI_VERSION:u32=1; pub const MAX_QD:u32=256; pub const MAX_IO:u32=1<<20;`.
+- **Functions:** `const _: () = { assert!(core::mem::size_of::<Sqe>()==32); assert!(core::mem::size_of::<Cqe>()==16); /* ... */ };`
+- **Required tests:** `golden_sqe_bytes` (serializes a known `Sqe` and compares it with the fixed byte array produced by C).
 
 ### `drivers/windows/ramshared/driver.c` + `driver.h`  *(ITEM-5 — RF-1, DT-1)*
 
-- **Propósito:** `DriverEntry`; registra o **StorPort virtual miniport** e cria o control device.
-- **Requisitos cobertos:** RF-1, DT-1.
-- **Funções (assinatura exata WDK):**
-  - `NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING)` — monta `VIRTUAL_HW_INITIALIZATION_DATA`
-    (callbacks abaixo) → `StorPortInitialize`; cria control device (DT-1) via `IoCreateDeviceSecure`
-    (SDDL SYSTEM+Admin) + `IoRegisterDeviceInterface` (GUID próprio).
+- **Purpose:** `DriverEntry`; registers the **StorPort virtual miniport** and creates the control device.
+- **Requirements covered:** RF-1, DT-1.
+- **Functions (exact WDK signatures):**
+  - `NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING)` — constructs `VIRTUAL_HW_INITIALIZATION_DATA`
+    (callbacks below) → `StorPortInitialize`; creates control device (DT-1) through `IoCreateDeviceSecure`
+    (SYSTEM+Admin SDDL) + `IoRegisterDeviceInterface` (own GUID).
   - `ULONG HwStorFindAdapter(PVOID DevExt, ..., PPORT_CONFIGURATION_INFORMATION)` — 1 bus/target/lun
-    virtual; sem I/O de porta real.
+    virtual; no real port I/O.
   - `BOOLEAN HwStorInitialize(PVOID DevExt)`; `BOOLEAN HwStorResetBus(PVOID,ULONG)`.
-  - `BOOLEAN HwStorStartIo(PVOID DevExt, PSCSI_REQUEST_BLOCK Srb)` — na prática recebe SRBEX
-    (DT-23); dispatch SCSI → `virtdisk.c`.
-- **Dependências:** `storport.lib`, `ntstrsafe.lib`. **Padrão:** WinSpd (virtual miniport + control device).
-- **Testes:** SDV/InfVerif no ITEM-5; enumeração do disco no harness VM.
+  - `BOOLEAN HwStorStartIo(PVOID DevExt, PSCSI_REQUEST_BLOCK Srb)` — in practice receives SRBEX
+    (DT-23); SCSI dispatch → `virtdisk.c`.
+- **Dependencies:** `storport.lib`, `ntstrsafe.lib`. **Pattern:** WinSpd (virtual miniport + control device).
+- **Tests:** SDV/InfVerif in ITEM-5; disk enumeration in VM harness.
 
 ### `drivers/windows/ramshared/virtdisk.c` + `virtdisk.h`  *(ITEM-5 — RF-1)*
 
-- **Propósito:** estado do disco virtual + tradução de comandos SCSI.
+- **Purpose:** virtual-disk state plus SCSI-command translation.
 - **Structs:** `typedef struct _VIRTUAL_DISK { UINT64 size_bytes; UINT32 block_size; UCHAR serial[16]; RAMSHARED_QUEUE queue; volatile LONG state; } VIRTUAL_DISK;`
-- **Funções:** `NTSTATUS VdCreate(PVIRTUAL_DISK,const RAMSHARED_DISK_PARAMS*)`; `VOID VdTranslateSrb(PVIRTUAL_DISK,PSCSI_REQUEST_BLOCK)` — trata `SCSIOP_READ/WRITE(10|16)`, `SYNCHRONIZE_CACHE`(→FLUSH), `INQUIRY`, `READ_CAPACITY(16)`, `TEST_UNIT_READY`; READ/WRITE/FLUSH viram SQE via `queue.c`.
-- **Testes:** formatação NTFS no harness VM (ITEM-5).
+- **Functions:** `NTSTATUS VdCreate(PVIRTUAL_DISK,const RAMSHARED_DISK_PARAMS*)`; `VOID VdTranslateSrb(PVIRTUAL_DISK,PSCSI_REQUEST_BLOCK)` — handles `SCSIOP_READ/WRITE(10|16)`, `SYNCHRONIZE_CACHE`(→FLUSH), `INQUIRY`, `READ_CAPACITY(16)`, `TEST_UNIT_READY`; READ/WRITE/FLUSH become SQEs through `queue.c`.
+- **Tests:** NTFS formatting in VM harness (ITEM-5).
 
 ### `drivers/windows/ramshared/queue.c` + `queue.h`  *(ITEM-5 — RF-2, DT-2, DT-10, DT-18)*
 
-- **Propósito:** rings SPSC, inflight table, doorbell, MDL lock/map, contenção de crash.
-- **Structs:** `typedef struct _RAMSHARED_QUEUE { PMDL sq_mdl,cq_mdl,data_mdl; PRAMSHARED_RING_HDR sq,cq; PUCHAR data; PKEVENT sq_event,cq_event; RAMSHARED_INFLIGHT inflight[RAMSHARED_MAX_QD]; KSPIN_LOCK lock; PIRP pended_fetch; } RAMSHARED_QUEUE;` (inflight guarda o `PSCSI_REQUEST_BLOCK` + `op` + `buf_slot` por tag).
-- **Funções:**
-  - `NTSTATUS QRegister(PRAMSHARED_QUEUE,const RAMSHARED_REGISTER*,KPROCESSOR_MODE)` — **valida tudo**
+- **Purpose:** SPSC rings, inflight table, doorbell, MDL lock/map, crash containment.
+- **Structs:** `typedef struct _RAMSHARED_QUEUE { PMDL sq_mdl,cq_mdl,data_mdl; PRAMSHARED_RING_HDR sq,cq; PUCHAR data; PKEVENT sq_event,cq_event; RAMSHARED_INFLIGHT inflight[RAMSHARED_MAX_QD]; KSPIN_LOCK lock; PIRP pended_fetch; } RAMSHARED_QUEUE;` (inflight keeps the `PSCSI_REQUEST_BLOCK` + `op` + `buf_slot` by tag).
+- **Functions:**
+  - `NTSTATUS QRegister(PRAMSHARED_QUEUE,const RAMSHARED_REGISTER*,KPROCESSOR_MODE)` — **validates everything**
     (DT-18) → `MmProbeAndLockPages`(sq/cq/data) → `MmGetSystemAddressForMdlSafe` → `ObReferenceObjectByHandle`
-    dos 2 eventos. Falha → unwind em ordem inversa (nada travado, atomicidade REGISTER).
+    for the 2 events. Failure → reverse-order unwind (nothing locked, REGISTER atomicity).
   - `NTSTATUS QSubmit(PRAMSHARED_QUEUE,PSCSI_REQUEST_BLOCK,enum ramshared_op,UINT64 off,UINT32 len)` —
-    aloca tag+slot; se WRITE, copia buffer do SRB (via helper StorPort/DT-23/DT-4) → slot; publica SQE
-    (barreira **antes** de avançar `tail`, DT-22); `KeSetEvent(sq_event)` auxiliar; se houver
-    `pended_fetch`, completa-o (wake primário do serviço).
-  - `NTSTATUS QCommitAndFetch(PRAMSHARED_QUEUE,PIRP)` — dreno do CQ (valida tag/head/tail, DT-18): para
-    cada CQE, se READ+OK copia slot → buffer do SRB (helper StorPort), mapeia status→`SRB_STATUS_*`,
-    `StorPortNotification(RequestComplete)`; se SQ vazio, **pend** o IRP (`pended_fetch`), senão completa
-    com a contagem de SQEs novos.
-  - `VOID QTeardownOnCrash(PRAMSHARED_QUEUE)` (DT-10) — em `IRP_MJ_CLEANUP`/`CLOSE`: **completa TODOS os
-    SRBs em voo com `SRB_STATUS_ERROR`** (determinístico, nunca pendente); `MmUnlockPages`;
-    `ObDereferenceObject` dos eventos.
-- **Disciplina Kahneman:** #13+#5 (ITEM-5) e #5+#2 (ITEM-6/8) no Mapa.
-- **Testes:** fuzz de IOCTL sob Driver Verifier (ITEM-5); drill de crash (ITEM-8).
+    allocates tag+slot; if WRITE, copies SRB buffer (through StorPort helper/DT-23/DT-4) → slot; publishes SQE
+    (**before** advancing `tail`, DT-22); auxiliary `KeSetEvent(sq_event)`; if `pended_fetch` exists,
+    completes it (service primary wake).
+  - `NTSTATUS QCommitAndFetch(PRAMSHARED_QUEUE,PIRP)` — CQ drain (validates tag/head/tail, DT-18): for
+    each CQE, if READ+OK copy slot → SRB buffer (StorPort helper), map status→`SRB_STATUS_*`,
+    `StorPortNotification(RequestComplete)`; if SQ is empty, **pend** the IRP (`pended_fetch`), otherwise
+    complete with the new-SQE count.
+  - `VOID QTeardownOnCrash(PRAMSHARED_QUEUE)` (DT-10) — in `IRP_MJ_CLEANUP`/`CLOSE`: **completes ALL
+    in-flight SRBs with `SRB_STATUS_ERROR`** (deterministic, never pending); `MmUnlockPages`;
+    `ObDereferenceObject` for events.
+- **Kahneman discipline:** #13+#5 (ITEM-5) and #5+#2 (ITEM-6/8) in the Map.
+- **Tests:** IOCTL fuzz under Driver Verifier (ITEM-5); crash drill (ITEM-8).
 
 ### `drivers/windows/ramshared/control.c` + `control.h`  *(ITEM-5 — RF-1/RF-2, RNF-4, DT-1)*
 
-- **Propósito:** dispatch dos IOCTLs do control device + segurança.
-- **Funções:** `NTSTATUS CtlDeviceControl(PDEVICE_OBJECT,PIRP)` — `switch(ioctl)` sobre os 5 códigos;
-  valida `InputBufferLength`/`OutputBufferLength` antes de usar `SystemBuffer` (RNF-4); COMMIT_AND_FETCH
-  pode retornar `STATUS_PENDING`. `IRP_MJ_CLEANUP` → `QTeardownOnCrash`.
-- **Testes:** entradas malformadas → `STATUS_INVALID_PARAMETER`, zero BugCheck (ITEM-5, #13).
+- **Purpose:** control-device IOCTL dispatch plus security.
+- **Functions:** `NTSTATUS CtlDeviceControl(PDEVICE_OBJECT,PIRP)` — `switch(ioctl)` over the 5 codes;
+  validates `InputBufferLength`/`OutputBufferLength` before using `SystemBuffer` (RNF-4); COMMIT_AND_FETCH
+  may return `STATUS_PENDING`. `IRP_MJ_CLEANUP` → `QTeardownOnCrash`.
+- **Tests:** malformed inputs → `STATUS_INVALID_PARAMETER`, zero BugCheck (ITEM-5, #13).
 
 ### `drivers/windows/ramshared/ramshared.inf`  *(ITEM-5/ITEM-11 — RF-1/RF-8)*
 
-- **Propósito:** INF **universal** (attestation-signable), instala o miniport + control device interface.
-- **Testes:** `InfVerif.exe /w ramshared.inf` limpo (DT-14).
+- **Purpose:** **universal** INF (attestation-signable), installs the miniport + control-device interface.
+- **Tests:** clean `InfVerif.exe /w ramshared.inf` (DT-14).
 
 ### `drivers/windows/ramshared/ramshared.vcxproj` (+ `.vcxproj.filters`, `ramshared.sln`)  *(ITEM-5 — H4, DT-14)*
 
-- **Propósito:** superfície de build WDK/EWDK Day-0 (não deixar o implementador inventar o projeto).
-- **Props:** `ConfigurationType=Driver`, `DriverType=WDM`/`MiniPort` conforme template StorPort do
+- **Purpose:** Day-0 WDK/EWDK build surface (do not make the implementer invent the project).
+- **Props:** `ConfigurationType=Driver`, `DriverType=WDM`/`MiniPort` according to the StorPort template in
   WDK, `Platform=x64`, `TreatWarningAsError=true`, `/W4 /WX`, link `storport.lib` + `ntstrsafe.lib`.
-- **Targets:** `Build` (Release), `Sdv` (`RunCodeAnalysis` + Static Driver Verifier), pacote INF.
-- **Testes:** build limpo no EWDK; SDV report anexável no IMPL.
+- **Targets:** `Build` (Release), `Sdv` (`RunCodeAnalysis` + Static Driver Verifier), INF package.
+- **Tests:** clean EWDK build; SDV report attachable to IMPL.
 
-### `drivers/windows/ramshared/package/` (`ramshared.inf` já listado, `ramshared.man` WPP opcional)  *(ITEM-5/11)*
+### `drivers/windows/ramshared/package/` (`ramshared.inf` already listed, optional WPP `ramshared.man`)  *(ITEM-5/11)*
 
-- **Propósito:** layout de empacotamento attestation (`signtool` + Partner Center).
+- **Purpose:** attestation packaging layout (`signtool` + Partner Center).
 
 ### `crates/ramshared-winsvc/` (`Cargo.toml`, `src/main.rs`, `src/service.rs`, `src/driver_link.rs`, `src/ntpagefile.rs`, `src/broker_tenant.rs`, `src/smoke.rs`, `src/config.rs`, `src/proto.rs`)  *(ITEM-3/ITEM-6/ITEM-7 — RF-3/RF-5/RF-6, DT-15, DT-16)*
 
-- **Propósito:** serviço Windows (LocalSystem) que respalda I/O em VRAM, arbitra lease e ativa o pagefile.
-- **Requisitos cobertos:** RF-3, RF-5, RF-6, DT-15, DT-16.
-- **Structs/Types:**
-  - `config.rs`: `#[derive(Deserialize)] struct WinDriveConfig { size_bytes:u64, block_size:u32, pagefile_min:u64, pagefile_max:u64, priority:i32, broker:SocketAddr, tenant:String }` (seção `[win_drive]`, DT-15).
-  - `driver_link.rs`: `struct DriverLink { ctl: HANDLE, q: QueueMap }`; `QueueMap` possui os rings+data area (memória do serviço) e os 2 eventos; método `run_io_loop<B: BlockBackend>(&mut self, backend:&mut B)` (thread única, DT-3) — `DeviceIoControl(COMMIT_AND_FETCH)` (bloqueia) → para cada SQE novo: `match op { READ=>backend.read_at(off, slot); WRITE=>backend.write_at(off, slot); FLUSH=>backend.flush() }` → posta CQE (status mapeado de `IoError`) → recomeça. `unsafe` FFI isolado (`// SAFETY:`).
-  - `ntpagefile.rs` (DT-8): `fn create_secondary(volume:&Path, min:u64, max:u64) -> Result<(),PagefileError>` (`NtCreatePagingFile`); `fn remove_secondary(volume:&Path)`; guard `supported_build() -> bool` via `RtlGetVersion` (allow-list); falha-graciosa.
-  - `broker_tenant.rs` (RF-5, DT-7, DT-19, DT-20): reusa `ramshared_broker::{Msg, write_msg, read_msg}` (monomórficos em `Msg`); `Register{proto:PROTO_VERSION, tenant, transport:TransportKind::WinDrive}`; `acquire(bytes)->LeaseRequest`; `release(lease)->LeaseRelease`; trata `LeaseGranted/Denied`. **Heartbeat (H3):** `Msg::Psi { sample: PsiSample::default(), swaps: vec![], mem: None }` em intervalo configurável (default 5s) — keepalive TCP + presença; PSI é ignorado na arbitragem porque `on_tick` exclui WinDrive (DT-7). **EOF/`Error`/close:** se pagefile ativo → DT-9 de emergência (DT-19c). **Pós-Granted:** gate `cuMemGetInfo` (DT-20) antes de `alloc`.
-  - `smoke.rs` (RF-6/fluxo 6): `fn post_boot_smoke() -> SmokeResult` — verifica disco enumerado + pagefile ativo (`Win32_PageFileUsage`); regressão (tipo ImDisk #38) → desativa a feature graciosamente + loga.
-  - `service.rs`: `fn provision()` (fluxo 1: config → `LeaseRequest` → `LeaseGranted` → **`mem_info` free≥size** (DT-20) → CUDA `alloc` → `IOCTL_CREATE_DISK` → REGISTER → volume NTFS → `NtCreatePagingFile` allow-list 26200 (DT-24)); fail-closed em qualquer passo com `LeaseRelease` se grant já ocorreu. `fn teardown()` = DT-9. `fn on_revoke_request()` (admin/SCM) = DT-19a.
-  - `main.rs`: `#[cfg(windows)] fn main()` (SCM via `windows-service`) + `#[cfg(not(windows))] fn main(){ eprintln!("ramshared-winsvc: Windows-only"); std::process::exit(2); }` (DT-16).
-- **Dependências internas:** `ramshared-cuda` (RF-4), `ramshared-vram`, `ramshared-block` (`BlockBackend`+`VramBackend`), `ramshared-broker`.
-- **Dependências externas (só `[target.'cfg(windows)']`):** `windows`/`windows-sys` (IOCTL, `MmXxx` via handles, `Win32_PageFileUsage`), `windows-service` (SCM), `ntapi` ou FFI própria p/ `NtCreatePagingFile`/`RtlGetVersion`, `serde`+`toml`.
-- **Padrão de referência:** `ramshared-agent` (cliente do broker) + `ramshared-wsl2d/main.rs` (loop de I/O de VRAM em thread única, `run_nbd`); memory-broker SPEC P2 (cross-compile gating).
-- **Testes requeridos:** `driver_link` roundtrip contra um **fake driver** (mock de `DeviceIoControl` em memória) — SQE READ/WRITE/FLUSH → backend em RAM → CQE; `broker_tenant` `LeaseRequest`→`Granted` contra fake broker; `ntpagefile` fallback (build não suportado → `Err` graciosa); `config` parse. (Puros, rodam no Linux; o bin é stub — DT-16.)
-- **Disciplina Kahneman:** ITEM-6/ITEM-7 no Mapa.
+- **Purpose:** Windows service (LocalSystem) that backs VRAM I/O, arbitrates lease, and activates the pagefile.
+- **Requirements covered:** RF-3, RF-5, RF-6, DT-15, DT-16.
+- **Structs/types:**
+  - `config.rs`: `#[derive(Deserialize)] struct WinDriveConfig { size_bytes:u64, block_size:u32, pagefile_min:u64, pagefile_max:u64, priority:i32, broker:SocketAddr, tenant:String }` (`[win_drive]` section, DT-15).
+  - `driver_link.rs`: `struct DriverLink { ctl: HANDLE, q: QueueMap }`; `QueueMap` owns rings+data area (service memory) and the 2 events; method `run_io_loop<B: BlockBackend>(&mut self, backend:&mut B)` (single thread, DT-3) — blocking `DeviceIoControl(COMMIT_AND_FETCH)` → for each new SQE: `match op { READ=>backend.read_at(off, slot); WRITE=>backend.write_at(off, slot); FLUSH=>backend.flush() }` → post CQE (status mapped from `IoError`) → repeat. Isolated `unsafe` FFI (`// SAFETY:`).
+  - `ntpagefile.rs` (DT-8): `fn create_secondary(volume:&Path, min:u64, max:u64) -> Result<(),PagefileError>` (`NtCreatePagingFile`); `fn remove_secondary(volume:&Path)`; `supported_build() -> bool` guard through `RtlGetVersion` (allowlist); graceful failure.
+  - `broker_tenant.rs` (RF-5, DT-7, DT-19, DT-20): reuses `ramshared_broker::{Msg, write_msg, read_msg}` (monomorphic in `Msg`); `Register{proto:PROTO_VERSION, tenant, transport:TransportKind::WinDrive}`; `acquire(bytes)->LeaseRequest`; `release(lease)->LeaseRelease`; handles `LeaseGranted/Denied`. **Heartbeat (H3):** `Msg::Psi { sample: PsiSample::default(), swaps: vec![], mem: None }` at configurable interval (default 5s) — TCP keepalive + presence; PSI is ignored in arbitration because `on_tick` excludes WinDrive (DT-7). **EOF/`Error`/close:** active pagefile → emergency DT-9 (DT-19c). **After Granted:** `cuMemGetInfo` gate (DT-20) before `alloc`.
+  - `smoke.rs` (RF-6/flow 6): `fn post_boot_smoke() -> SmokeResult` — checks enumerated disk + active pagefile (`Win32_PageFileUsage`); regression (such as ImDisk #38) → gracefully disables feature + logs.
+  - `service.rs`: `fn provision()` (flow 1: config → `LeaseRequest` → `LeaseGranted` → **`mem_info` free≥size** (DT-20) → CUDA `alloc` → `IOCTL_CREATE_DISK` → REGISTER → NTFS volume → `NtCreatePagingFile` 26200 allowlist (DT-24)); fails closed at any step with `LeaseRelease` if grant already occurred. `fn teardown()` = DT-9. `fn on_revoke_request()` (admin/SCM) = DT-19a.
+  - `main.rs`: `#[cfg(windows)] fn main()` (SCM through `windows-service`) + `#[cfg(not(windows))] fn main(){ eprintln!("ramshared-winsvc: Windows-only"); std::process::exit(2); }` (DT-16).
+- **Internal dependencies:** `ramshared-cuda` (RF-4), `ramshared-vram`, `ramshared-block` (`BlockBackend`+`VramBackend`), `ramshared-broker`.
+- **External dependencies (only `[target.'cfg(windows)']`):** `windows`/`windows-sys` (IOCTL, `MmXxx` through handles, `Win32_PageFileUsage`), `windows-service` (SCM), `ntapi` or own FFI for `NtCreatePagingFile`/`RtlGetVersion`, `serde`+`toml`.
+- **Reference pattern:** `ramshared-agent` (broker client) + `ramshared-wsl2d/main.rs` (single-thread VRAM I/O loop, `run_nbd`); memory-broker SPEC P2 (cross-compile gating).
+- **Required tests:** `driver_link` roundtrip against a **fake driver** (in-memory `DeviceIoControl` mock) — SQE READ/WRITE/FLUSH → RAM backend → CQE; `broker_tenant` `LeaseRequest`→`Granted` against fake broker; `ntpagefile` fallback (unsupported build → graceful `Err`); `config` parse. (Pure, run on Linux; bin is stub — DT-16.)
+- **Kahneman discipline:** ITEM-6/ITEM-7 in the Map.
 
 ### `drivers/windows/tools/poolstress/` (`poolstress.c`, `poolstress.inf`)  *(ITEM-8 — RF-7, DT-11; VM-only)*
 
-- **Propósito:** test driver que **força página de kernel** (paged pool incompressível) ao pagefile-VRAM
-  e permite page-in sob comando. **Nunca** distribuído (só test-signing em VM, RNF-6).
-- **Funções:** `DriverEntry` cria control device; IOCTL `ALLOC(n_gb)` → `ExAllocatePool2(POOL_FLAG_PAGED,...)` + `BCryptGenRandom` (incompressível) + toca; IOCTL `READBACK` → lê tudo (força page-in); IOCTL `TRIM_WS` → força trim do working set (`ZwSetSystemInformation`/pressão).
-- **Testes:** é o próprio instrumento do drill (ITEM-8).
+- **Purpose:** test driver that **forces a kernel page** (incompressible paged pool) into pagefile-VRAM
+  and permits command-driven page-in. **Never** distributed (test-signing in VM only, RNF-6).
+- **Functions:** `DriverEntry` creates control device; IOCTL `ALLOC(n_gb)` → `ExAllocatePool2(POOL_FLAG_PAGED,...)` + incompressible `BCryptGenRandom` + touch; IOCTL `READBACK` → reads all data (forces page-in); IOCTL `TRIM_WS` → forces working-set trim (`ZwSetSystemInformation`/pressure).
+- **Tests:** it is the drill instrument itself (ITEM-8).
 
 ### `scripts/windows/` (`Invoke-DriverSoak.ps1`, `Invoke-KernelPageDrill.ps1`, `Measure-PagefileVram.ps1`, `Invoke-RevokeDrill.ps1`, `Build-Sign-Install.ps1`)  *(ITEM-8/9/10/11 — RNF-1/RNF-2/RNF-5/RNF-6/RF-8, DT-11/DT-12/DT-13)*
 
-- **Propósito:** harness de integração/medição em VM via **PowerShell Direct** (padrão do
-  `PASSO0-DRILL-RUNBOOK.md`).
-- **Funções:** `Invoke-KernelPageDrill.ps1` (carrega `poolstress`, pagefile-VRAM ativo, C: mínimo, pressão
-  incompressível, mata o serviço, captura BSOD/`MEMORY.DMP`, ≥3 execuções); `Measure-PagefileVram.ps1`
-  (lado-a-lado vs disco, ≥3 rodadas, contexto auto, `results.jsonl`+`BENCHMARKS.md`, DT-13);
-  `Invoke-DriverSoak.ps1` (Driver Verifier Standard, 3×24 h, DT-12); `Invoke-RevokeDrill.ps1`
-  (RNF-5/R8/**DT-19**: para o serviço via SCM/admin → DT-9 → confere `LeaseRelease` no broker;
-  **não** envia Msg inventada).
-- **Testes:** produzem as evidências dos ITEMs 8/9/10/11 e da linha RNF-5 do Mapa.
+- **Purpose:** VM integration/measurement harness through **PowerShell Direct** (`PASSO0-DRILL-RUNBOOK.md`
+  pattern).
+- **Functions:** `Invoke-KernelPageDrill.ps1` (loads `poolstress`, active pagefile-VRAM, minimum C:,
+  incompressible pressure, kills service, captures BSOD/`MEMORY.DMP`, ≥3 executions);
+  `Measure-PagefileVram.ps1` (side by side vs disk, ≥3 runs, automatic context,
+  `results.jsonl`+`BENCHMARKS.md`, DT-13); `Invoke-DriverSoak.ps1` (Driver Verifier Standard, 3×24 h,
+  DT-12); `Invoke-RevokeDrill.ps1` (RNF-5/R8/**DT-19**: stops service through SCM/admin → DT-9 → checks
+  `LeaseRelease` at broker; **does not** send an invented Msg).
+- **Tests:** produce evidence for ITEMs 8/9/10/11 and the Map RNF-5 row.
 
-## Arquivos a MODIFICAR
+## Files to MODIFY
 
-### `crates/ramshared-cuda/src/ffi.rs` + `src/driver.rs` (+ novos `src/loader_unix.rs`, `src/loader_win.rs`)  *(ITEM-1 — RF-4, DT-5) — RNF-8*
+### `crates/ramshared-cuda/src/ffi.rs` + `src/driver.rs` (+ new `src/loader_unix.rs`, `src/loader_win.rs`)  *(ITEM-1 — RF-4, DT-5) — RNF-8*
 
-- **O que muda:** extrair a fronteira de loader. Hoje `ffi.rs:13-19` declara `dlopen/dlsym/dlclose/dlerror`
-  com `#[link(name="dl")]` **incondicional** (não compila no Windows). Depois: `loader_unix.rs`
+- **What changes:** extract the loader boundary. Today `ffi.rs:13-19` declares `dlopen/dlsym/dlclose/dlerror`
+  with unconditional `#[link(name="dl")]` (does not compile on Windows). Afterwards: `loader_unix.rs`
   (`#[cfg(unix)]`, dlopen) e `loader_win.rs` (`#[cfg(windows)]`, `LoadLibraryW`+`GetProcAddress`+`FreeLibrary`);
-  `Cuda::load()` (`driver.rs:79`) chama `loader::open`/`loader::sym`/`loader::close`.
-- **Requisitos cobertos:** RF-4, DT-5.
-- **Função/bloco afetado:** `ffi` (extern block unix-only), `CANDIDATES` (`driver.rs:69-75`),
-  `Cuda::load`, **`Lib` Drop** (`driver.rs:52-61` — hoje chama `ffi::dlclose` **sempre**; vira
-  `loader::close`, senão Windows quebra no Drop — H3).
-- **Antes:** `dlopen`/`dlsym` diretos; candidatos Linux/WSL2.
-- **Depois:** loader por SO; Windows `CANDIDATES=["nvcuda.dll"]`. `Syms` (`ffi.rs:47-62`, **13
-  obrigatórios + 1 opcional** `cuGetErrorString`) e wrappers `driver.rs` loader-agnósticos.
-- **Por quê:** RF-4 exige a MESMA tabela de símbolos na `nvcuda.dll` (PRD §2/§8); um crate só evita
-  duplicar `Syms`+`driver.rs` (Day-0/DRY).
-- **Impacto:** **não** quebra ABI userspace; Linux **não** muda de comportamento. `ramshared-vulkan`/`wsl2d`
-  não tocados. **RNF-8** = gate.
-- **Testes requeridos:** Linux: `cargo test -p ramshared-cuda` + `gpu_roundtrip_256mib --ignored` verdes
-  (sem regressão). Windows: `Cuda::load()` resolve os 13 símbolos na `nvcuda.dll`; `mem_info()` plausível.
-- **Disciplina Kahneman:** #14 + #1 (Mapa ITEM-1).
+  `Cuda::load()` (`driver.rs:79`) calls `loader::open`/`loader::sym`/`loader::close`.
+- **Requirements covered:** RF-4, DT-5.
+- **Affected function/block:** `ffi` (Unix-only extern block), `CANDIDATES` (`driver.rs:69-75`),
+  `Cuda::load`, **`Lib` Drop** (`driver.rs:52-61` — currently always calls `ffi::dlclose`; becomes
+  `loader::close`, otherwise Windows breaks in Drop — H3).
+- **Before:** direct `dlopen`/`dlsym`; Linux/WSL2 candidates.
+- **After:** OS-specific loader; Windows `CANDIDATES=["nvcuda.dll"]`. `Syms` (`ffi.rs:47-62`, **13
+  mandatory + 1 optional** `cuGetErrorString`) and `driver.rs` wrappers are loader agnostic.
+- **Why:** RF-4 requires the SAME symbol table in `nvcuda.dll` (PRD §2/§8); one crate avoids duplicating
+  `Syms`+`driver.rs` (Day-0/DRY).
+- **Impact:** does **not** break userspace ABI; Linux behavior **does not** change. `ramshared-vulkan`/`wsl2d`
+  are untouched. **RNF-8** = gate.
+- **Required tests:** Linux: green `cargo test -p ramshared-cuda` + `gpu_roundtrip_256mib --ignored`
+  (no regression). Windows: `Cuda::load()` resolves the 13 symbols in `nvcuda.dll`; plausible `mem_info()`.
+- **Kahneman discipline:** #14 + #1 (ITEM-1 Map).
 
 ### `crates/ramshared-cuda/Cargo.toml`  *(ITEM-1 — RF-4, DT-16)*
 
-- **O que muda:** deps do loader Windows sob `[target.'cfg(windows)'.dependencies]` (`windows-sys` p/
-  `LoadLibraryW`/`GetProcAddress`); Linux mantém o `#[link(name="dl")]`/libc. **Impacto:** nenhum no Linux.
+- **What changes:** Windows loader dependencies under `[target.'cfg(windows)'.dependencies]` (`windows-sys` for
+  `LoadLibraryW`/`GetProcAddress`); Linux retains `#[link(name="dl")]`/libc. **Impact:** none on Linux.
 
-### `crates/ramshared-block/src/lib.rs` + novo `src/vram_backend.rs`  *(ITEM-2 — RF-3, DT-6) — RNF-8*
+### `crates/ramshared-block/src/lib.rs` + new `src/vram_backend.rs`  *(ITEM-2 — RF-3, DT-6) — RNF-8*
 
-- **O que muda:** criar `vram_backend.rs` com o `VramBackend<M>` **promovido** (mover verbatim as linhas
-  11-55 de `wsl2d/backend.rs`, que **não** usam `ublk`); `lib.rs` `pub use vram_backend::VramBackend`.
-- **Requisitos cobertos:** RF-3, DT-6.
-- **Antes:** `ramshared-block` não conhece VRAM; `VramBackend` vive em `wsl2d`.
-- **Depois:** `ramshared-block` depende de `ramshared-vram`; expõe `VramBackend<M: VramMemory>`.
-- **Por quê:** o serviço Windows (`x86_64-pc-windows-msvc`) **não** compila o `wsl2d` (Linux-only); precisa
-  do adaptador de um lib compartilhado — reuso, não duplicação.
-- **Impacto:** `ramshared-block/Cargo.toml` ganha `ramshared-vram`; sem quebra de API (aditivo).
-- **Testes requeridos:** os testes de `backend.rs` que exercem `VramBackend` migram junto; `cargo test -p ramshared-block` verde.
-- **Disciplina Kahneman:** #14 (Mapa ITEM-2).
+- **What changes:** create `vram_backend.rs` with promoted `VramBackend<M>` (move lines 11-55 from
+  `wsl2d/backend.rs` verbatim, which **do not** use `ublk`); `lib.rs` `pub use vram_backend::VramBackend`.
+- **Requirements covered:** RF-3, DT-6.
+- **Before:** `ramshared-block` does not know VRAM; `VramBackend` lives in `wsl2d`.
+- **After:** `ramshared-block` depends on `ramshared-vram`; exposes `VramBackend<M: VramMemory>`.
+- **Why:** Windows service (`x86_64-pc-windows-msvc`) **does not** compile `wsl2d` (Linux-only); it needs
+  the adapter from a shared library — reuse, not duplication.
+- **Impact:** `ramshared-block/Cargo.toml` gains `ramshared-vram`; no API break (additive).
+- **Required tests:** `backend.rs` tests that exercise `VramBackend` migrate with it; green `cargo test -p ramshared-block`.
+- **Kahneman discipline:** #14 (ITEM-2 Map).
 
 ### `crates/ramshared-wsl2d/src/backend.rs`  *(ITEM-2 — RF-3, DT-6) — RNF-8*
 
-- **O que muda:** deletar a def local de `VramBackend` (linhas 10-55) e `pub use ramshared_block::VramBackend;`.
-  `SliceView`/`RamBackend`/`use crate::ublk` **permanecem**.
-- **Por quê:** comportamento preservado; o daemon Linux passa a usar o mesmo tipo compartilhado.
-- **Impacto:** `main.rs` (`run_nbd`) e callers de `VramBackend` inalterados (mesmo nome/assinatura).
-- **Testes requeridos:** drills `qemu-ublk-daemon.sh` + `qemu-ublk-crash-e1b.sh` verdes (gate RNF-8, #14).
+- **What changes:** delete local `VramBackend` definition (lines 10-55) and add `pub use ramshared_block::VramBackend;`.
+  `SliceView`/`RamBackend`/`use crate::ublk` **remain**.
+- **Why:** behavior is preserved; Linux daemon uses the same shared type.
+- **Impact:** `main.rs` (`run_nbd`) and `VramBackend` callers unchanged (same name/signature).
+- **Required tests:** green `qemu-ublk-daemon.sh` + `qemu-ublk-crash-e1b.sh` drills (RNF-8, #14).
 
 ### `crates/ramshared-broker/src/model.rs`  *(ITEM-3 — RF-5, DT-7)*
 
-- **O que muda:** `enum TransportKind` ganha `WinDrive` (aditivo no wire serde). **Impacto:** aditivo,
-  **mas quebra o `match` exaustivo** em `endpoint_for` → tem de vir com a modificação abaixo.
+- **What changes:** `enum TransportKind` gains `WinDrive` (additive on serde wire). **Impact:** additive,
+  **but breaks exhaustive `match`** in `endpoint_for` → must come with the change below.
 
 ### `crates/ramshared-wsl2d/src/broker_srv.rs`  *(ITEM-3 — RF-5, DT-7)*
 
-- **O que muda:** (a) `endpoint_for` ganha braço `TransportKind::WinDrive => None` (WinDrive não tem
-  endpoint NBD; mantém o `match` exaustivo compilando); (b) `on_tick` **exclui** tenants
-  `transport == WinDrive` ao construir `present` (round-robin/rebalance de swap) — se o P2 `DccAgent` já
-  existir, o filtro vira "transports lease-only". **Por quê:** o `WinDrive` é lease-only (DT-7).
-- **Testes requeridos:** `BrokerCore`: `windrive_nao_recebe_swap` (1 WinDrive + 1 tenant swap → só o swap
-  recebe `SwapOn`); `windrive_pode_lease` (lease do WinDrive revoga o swap); **`arbiter.rs` sem diff**.
+- **What changes:** (a) `endpoint_for` gains `TransportKind::WinDrive => None` arm (WinDrive has no NBD
+  endpoint; keeps exhaustive `match` compiling); (b) `on_tick` **excludes** `transport == WinDrive`
+  tenants when constructing `present` (swap round-robin/rebalance) — if P2 `DccAgent` already exists,
+  filter becomes “lease-only transports”. **Why:** `WinDrive` is lease-only (DT-7).
+- **Required tests:** `BrokerCore`: `windrive_nao_recebe_swap` (1 WinDrive + 1 swap tenant → only swap
+  receives `SwapOn`); `windrive_pode_lease` (WinDrive lease revokes swap); **no `arbiter.rs` diff**.
 
 ### `Cargo.toml` (workspace) / `crates/ramshared-block/Cargo.toml`  *(ITEM-2/ITEM-3, DT-16)*
 
-- **O que muda:** workspace `members += "crates/ramshared-winsvc"`. `ramshared-block` dep `ramshared-vram`.
-  `ramshared-winsvc` herda `publish=false`; deps Windows sob `[target.'cfg(windows)']` (DT-16).
+- **What changes:** workspace `members += "crates/ramshared-winsvc"`. `ramshared-block` depends on `ramshared-vram`.
+  `ramshared-winsvc` inherits `publish=false`; Windows dependencies under `[target.'cfg(windows)']` (DT-16).
 
-## Arquivos a DELETAR
+## Files to DELETE
 
-| Arquivo | Motivo |
+| File | Reason |
 | --- | --- |
-| — | Nenhum. A def local de `VramBackend` em `wsl2d/backend.rs` é **substituída** por re-export (ITEM-2), não é arquivo a deletar. Day-0 aditivo. |
+| — | None. The local `VramBackend` definition in `wsl2d/backend.rs` is **replaced** by re-export (ITEM-2); it is not a file to delete. Additive Day-0. |
 
-## Observabilidade
+## Observability
 
-**Métricas / contadores (serviço — ETW ou perf counters):**
+**Metrics / counters (service — ETW or perf counters):**
 
-- `ramshared_win_io_ops_total` (Counter, labels `op=read|write|flush`) — no `run_io_loop`.
-- `ramshared_win_bytes_served_total` (Counter) — por CQE OK.
-- `ramshared_win_inflight_depth` (Gauge) — profundidade da inflight.
-- `ramshared_win_vram_bytes{kind=free|used|total}` (Gauge) — de `mem_info()`.
-- `ramshared_win_pagefile_vram_usage_bytes` (Gauge) — de `Win32_PageFileUsage` do volume-VRAM (o "alívio
-  de capacidade" do gate RNF-2/DT-13).
+- `ramshared_win_io_ops_total` (Counter, labels `op=read|write|flush`) — in `run_io_loop`.
+- `ramshared_win_bytes_served_total` (Counter) — per OK CQE.
+- `ramshared_win_inflight_depth` (Gauge) — inflight depth.
+- `ramshared_win_vram_bytes{kind=free|used|total}` (Gauge) — from `mem_info()`.
+- `ramshared_win_pagefile_vram_usage_bytes` (Gauge) — from VRAM-volume `Win32_PageFileUsage` (the
+  RNF-2/DT-13 capacity-relief gate).
 - `ramshared_win_lease_events_total` (Counter, `event=acquire|granted|denied|release|revoke`).
 
-**Driver (WPP tracing, sem endereços de kernel):** enumeração do disco, REGISTER/UNREGISTER, contagem de
-SQE/CQE, injeção de erro em `QTeardownOnCrash`, rejeições de IOCTL malformado.
+**Driver (WPP tracing, without kernel addresses):** disk enumeration, REGISTER/UNREGISTER, SQE/CQE count,
+error injection in `QTeardownOnCrash`, malformed-IOCTL rejections.
 
-**Logs estruturados (serviço):**
+**Structured logs (service):**
 
-| Evento | Level | Campos |
+| Event | Level | Fields |
 | --- | --- | --- |
-| Pagefile ativado/desativado | Info | `volume`, `min`, `max`, `priority`, `build` |
+| Pagefile activated/deactivated | Info | `volume`, `min`, `max`, `priority`, `build` |
 | Lease acquire/granted/denied/release/revoke | Info | `tenant`, `bytes`, `lease` |
-| Smoke pós-update: regressão | Warn | `check`, `detalhe`, `degrade=true` |
-| Driver reportou erro em voo (crash contido) | Error | `inflight_falhos`, `op` |
-| Teardown ordenado (fase) | Info | `fase` (`pagefile_off`/`drain`/`destroy`/`wipe`/`release`) |
+| Post-update smoke: regression | Warn | `check`, `detalhe`, `degrade=true` |
+| Driver reported in-flight error (contained crash) | Error | `inflight_falhos`, `op` |
+| Ordered teardown (phase) | Info | `fase` (`pagefile_off`/`drain`/`destroy`/`wipe`/`release`) |
 
-**Benchmarks (RNF-2):** `docs/benchmarks/results.jsonl` (1 linha/run) + `docs/BENCHMARKS.md` (humano),
-append-only, contexto automático (`benchmarks.md`).
+**Benchmarks (RNF-2):** `docs/benchmarks/results.jsonl` (1 line/run) + human `docs/BENCHMARKS.md`,
+append-only, automatic context (`benchmarks.md`).
 
-## Contratos e documentação viva
+## Contracts and living documentation
 
-| Documento | Atualização necessária | Motivo |
+| Document | Required update | Reason |
 | --- | --- | --- |
-| `docs/specs/no-milestone/windows-swap-driver/IMPL.md` | Criar (por ITEM) | rastreabilidade SSDV3 (após GO do Passo 2.5); preflight em `PREFLIGHT.md` |
-| `Documentation/` (uAPI/ABI) → `drivers/windows/ramshared/protocol.h` | Criar | nova ABI Ring-0↔Ring-3 (DT-17) |
-| `docs/decisions/ADR-0006-storport-virtual-miniport.md` | Criar | decisão do-zero StorPort + protocolo RF-2 (ring SPSC) — arquitetural (anti-halo #11) |
-| `docs/memory-broker/PRD.md` §10/§12 | Alterar | marcar "driver de swap Windows" (P4/Trilha 2) detalhado aqui; tirar do fora-de-escopo global |
-| `docs/memory-broker/VISION.md` (L28) | Alterar | a linha "fora de escopo por ora" aponta para esta feature |
-| `docs/reliability/DEGRADATION-MATRIX.md` | Alterar | novos modos: crash do backend c/ pagefile ativo (B2 mediado), update do Windows (ImDisk #38), revogação de lease c/ pagefile, `NtCreatePagingFile` guard-fail |
-| `docs/LIBRARIES.md` | Alterar | WDK/StorPort; `windows`/`windows-sys`/`windows-service`/`ntapi`; loader `nvcuda.dll` |
-| `deny.toml` | Alterar | licenças `windows*`/`ntapi`/`toml` (MIT/Apache-2.0 — allow-list atual) |
-| `CLAUDE.md` | Alterar | novo tree `drivers/windows/` (padrão estrutural) |
-| `.claude/rules/*.md` | N/A | nenhuma convenção nova (kernel.md já cobre "mapear/desmapear explicitamente" — vale p/ MDL) |
-| `docs/methodology/kahneman-disciplines.md` | N/A | nenhuma disciplina/âncora nova |
-| `README.md`/`ARCHITECTURE.md` | Alterar | novo componente (Trilha 2); `MEMORY.md` entrada por ITEM |
-| `docs/INDEX.md` | Alterar | status da feature vira `SPEC` |
+| `docs/specs/no-milestone/windows-swap-driver/IMPL.md` | Create (per ITEM) | SSDV3 traceability (after Step 2.5 GO); preflight in `PREFLIGHT.md` |
+| `Documentation/` (uAPI/ABI) → `drivers/windows/ramshared/protocol.h` | Create | new Ring-0↔Ring-3 ABI (DT-17) |
+| `docs/decisions/ADR-0006-storport-virtual-miniport.md` | Create | from-scratch StorPort decision + RF-2 protocol (SPSC ring) — architectural (anti-halo #11) |
+| `docs/memory-broker/PRD.md` §10/§12 | Change | mark the “Windows swap driver” (P4/Track 2) as detailed here; remove it from global out-of-scope |
+| `docs/memory-broker/VISION.md` (L28) | Change | the “out of scope for now” line points to this feature |
+| `docs/reliability/DEGRADATION-MATRIX.md` | Change | new modes: backend crash with active pagefile (mediated B2), Windows update (ImDisk #38), lease revocation with pagefile, `NtCreatePagingFile` guard-fail |
+| `docs/LIBRARIES.md` | Change | WDK/StorPort; `windows`/`windows-sys`/`windows-service`/`ntapi`; `nvcuda.dll` loader |
+| `deny.toml` | Change | `windows*`/`ntapi`/`toml` licenses (MIT/Apache-2.0 — current allowlist) |
+| `CLAUDE.md` | Change | new `drivers/windows/` tree (structural pattern) |
+| `.claude/rules/*.md` | N/A | no new convention (`kernel.md` already covers “map/unmap explicitly” — applies to MDL) |
+| `docs/methodology/kahneman-disciplines.md` | N/A | no new discipline/anchor |
+| `README.md`/`ARCHITECTURE.md` | Change | new component (Track 2); `MEMORY.md` entry per ITEM |
+| `docs/INDEX.md` | Change | feature status becomes `SPEC` |
 
-## Ordem de implementação
+## Implementation order
 
-Lista numerada, sem gaps; **userspace antes de kernel** (PRD §10); cada ITEM cita seu RF/RNF/DT nos
-commits (regra dura SSDV3 #4); `IMPL.md` por ITEM. **Fase 0 (drill do Passo 0) já executada** com
-ressalva (kernel-page fica pro ITEM-8).
+Numbered list, no gaps; **userspace before kernel** (PRD §10); each ITEM cites its RF/RNF/DT in commits
+(SSDV3 hard rule #4); `IMPL.md` per ITEM. **Phase 0 (Step 0 drill) is already executed** with a caveat
+(kernel page remains for ITEM-8).
 
-1. **ITEM-1 — RF-4:** `ramshared-cuda` cross-platform (loader split, DT-5). Testável userspace-only no
-   host real (aloca/escreve/lê VRAM via `nvcuda.dll`); valida o pilar VRAM e o RNF-8. *(PRD §10.1)*
-2. **ITEM-2 — RF-3 (base):** promover `VramBackend<M>` p/ `ramshared-block` (DT-6); gate = drills Linux.
-3. **ITEM-3 — RF-3/RF-5:** skeleton `ramshared-winsvc` + `broker_tenant` + `TransportKind::WinDrive`
-   (`model.rs`+`endpoint_for`+`on_tick`); lease e2e contra o broker existente, VRAM local, **sem driver**.
+1. **ITEM-1 — RF-4:** cross-platform `ramshared-cuda` (loader split, DT-5). Userspace-only testable on
+   real host (allocates/writes/reads VRAM through `nvcuda.dll`); validates VRAM pillar and RNF-8. *(PRD §10.1)*
+2. **ITEM-2 — RF-3 (base):** promote `VramBackend<M>` to `ramshared-block` (DT-6); gate = Linux drills.
+3. **ITEM-3 — RF-3/RF-5:** `ramshared-winsvc` skeleton + `broker_tenant` + `TransportKind::WinDrive`
+   (`model.rs`+`endpoint_for`+`on_tick`); e2e lease against existing broker, local VRAM, **no driver**.
    *(PRD §10.2)*
-4. **ITEM-4 — RF-1/RF-2 (ABI):** `protocol.h` + mirror Rust `proto.rs` + asserts de tamanho + golden-bytes
-   (DT-17). **Contrato congelado antes do driver** (template: structs/headers primeiro).
-5. **ITEM-5 — RF-1/RF-2 (driver MVP):** StorPort virtual miniport (`driver.c`/`virtdisk.c`) + control
-   device seguro (`control.c`, RNF-4) + rings/doorbell/inflight/MDL (`queue.c`, DT-2/DT-18) + contenção
-   determinística (`QTeardownOnCrash`, DT-10). Em VM (test-signing): disco enumera → formata NTFS →
-   SDV/InfVerif limpos → fuzz de IOCTL sob Driver Verifier. *(PRD §10.3)*
-6. **ITEM-6 — RF-3 (completo):** `driver_link.rs` (lado serviço do RF-2) ligado ao `VramBackend`; e2e
-   read/write/flush ↔ VRAM real na VM; Driver Verifier + fuzz do caminho de I/O.
-7. **ITEM-7 — RF-6:** `ntpagefile.rs` + ativação do pagefile secundário (DT-8) + `smoke.rs` (fluxo 6). *(PRD §10.4 parte)*
-8. **ITEM-8 — RF-7 (o gate do R7):** `poolstress.sys` + `Invoke-KernelPageDrill.ps1` (DT-11) + teardown
-   ordenado (DT-9) + comparação B1 vs B2. **Alimenta a `DEGRADATION-MATRIX` antes de qualquer host real.**
+4. **ITEM-4 — RF-1/RF-2 (ABI):** `protocol.h` + Rust `proto.rs` mirror + size assertions + golden bytes
+   (DT-17). **Contract frozen before driver** (template: structs/headers first).
+5. **ITEM-5 — RF-1/RF-2 (driver MVP):** StorPort virtual miniport (`driver.c`/`virtdisk.c`) + secure
+   control device (`control.c`, RNF-4) + rings/doorbell/inflight/MDL (`queue.c`, DT-2/DT-18) + deterministic
+   containment (`QTeardownOnCrash`, DT-10). In VM (test-signing): disk enumerates → formats NTFS → clean
+   SDV/InfVerif → IOCTL fuzz under Driver Verifier. *(PRD §10.3)*
+6. **ITEM-6 — RF-3 (complete):** `driver_link.rs` (RF-2 service side) connected to `VramBackend`; e2e
+   read/write/flush ↔ real VRAM in VM; Driver Verifier + I/O-path fuzz.
+7. **ITEM-7 — RF-6:** `ntpagefile.rs` + secondary-pagefile activation (DT-8) + `smoke.rs` (flow 6). *(PRD §10.4 part)*
+8. **ITEM-8 — RF-7 (the R7 gate):** `poolstress.sys` + `Invoke-KernelPageDrill.ps1` (DT-11) + ordered
+   teardown (DT-9) + B1 vs B2 comparison. **Feeds `DEGRADATION-MATRIX` before any real host.**
    *(PRD §10.4)*
-9. **ITEM-9 — RNF-2:** `Measure-PagefileVram.ps1` lado-a-lado vs pagefile em disco (DT-13), VM e depois host. *(PRD §10.5)*
+9. **ITEM-9 — RNF-2:** `Measure-PagefileVram.ps1` side by side vs disk pagefile (DT-13), VM then host. *(PRD §10.5)*
 10. **ITEM-10 — RNF-1:** `Invoke-DriverSoak.ps1` (Driver Verifier, 72 h/3×24 h, DT-12), zero BugCheck.
-11. **ITEM-11 — RF-8/RNF-7:** `Build-Sign-Install.ps1` (attestation + submissão Partner Center); carga no
-    host real (test-signing OFF, 26200.8655), primeiro uso supervisionado (RNF-6). *(PRD §10.6)*
+11. **ITEM-11 — RF-8/RNF-7:** `Build-Sign-Install.ps1` (attestation + Partner Center submission); load on
+    real host (test-signing OFF, 26200.8655), first supervised use (RNF-6). *(PRD §10.6)*
 
-## Plano de testes
+## Test plan
 
-**Backend / puros (rodam aqui, Linux — o bin Windows é stub, DT-16):**
+**Backend / pure (run here, Linux — Windows bin is stub, DT-16):**
 
-- `ramshared-cuda`: sem regressão Linux (`cargo test -p ramshared-cuda`); `#[ignore]` `gpu_roundtrip_256mib`.
-- `ramshared-block`: `VramBackend` migrado (write→read roundtrip; OOB→erro).
-- `ramshared-winsvc`: `driver_link` roundtrip contra fake `DeviceIoControl` (READ/WRITE/FLUSH → RAM → CQE);
+- `ramshared-cuda`: no Linux regression (`cargo test -p ramshared-cuda`); `#[ignore]` `gpu_roundtrip_256mib`.
+- `ramshared-block`: migrated `VramBackend` (write→read roundtrip; OOB→error).
+- `ramshared-winsvc`: `driver_link` roundtrip against fake `DeviceIoControl` (READ/WRITE/FLUSH → RAM → CQE);
   `broker_tenant` LeaseRequest→Granted (fake broker); **`coresidence_fail_closed`** (DT-20: free < size →
-  LeaseRelease + sem CREATE_DISK); `ntpagefile` fallback build-não-suportado; `config` parse.
+  LeaseRelease + no CREATE_DISK); `ntpagefile` unsupported-build fallback; `config` parse.
 
 - `ramshared-broker`/`wsl2d`: `BrokerCore` `windrive_nao_recebe_swap` + `windrive_pode_lease`;
-  **`arbiter.rs` sem diff**; drills `qemu-ublk-*` + `qemu-broker-drill.sh` (RNF-8).
+  **no `arbiter.rs` diff**; `qemu-ublk-*` + `qemu-broker-drill.sh` drills (RNF-8).
 
-**Driver Windows (VM, test-signing — RNF-6):**
+**Windows driver (VM, test-signing — RNF-6):**
 
-- **Estado/hooks:** enumeração do disco; INF/SDV/InfVerif/ApiValidator limpos.
-- **Fluxos de bloco:** formatação NTFS; READ/WRITE/FLUSH e2e ↔ VRAM; `READ_CAPACITY`/`INQUIRY` corretos.
-- **Isolamento Ring-0↔Ring-3 (RNF-4/#13):** REGISTER/doorbell malformados rejeitados (`STATUS_INVALID_PARAMETER`,
-  zero BugCheck) **pareado** com "entrada legítima ainda funciona"; tag desconhecido/duplicado não
-  double-completa SRB (DT-18).
-- **Concorrência/atomicidade:** fila cheia (`queue_depth`); flush drena; contenção de crash (DT-10) completa
-  todos os SRBs em voo com erro, storage stack não trava.
-- **Pior caso (ITEM-8, #5/#2):** `Invoke-KernelPageDrill.ps1` — página de **kernel** incompressível no
-  pagefile-VRAM, mata o serviço, B1 vs B2, ≥3 execuções; captura BSOD/`MEMORY.DMP`.
+- **State/hooks:** disk enumeration; clean INF/SDV/InfVerif/ApiValidator.
+- **Block flows:** NTFS formatting; READ/WRITE/FLUSH e2e ↔ VRAM; correct `READ_CAPACITY`/`INQUIRY`.
+- **Ring-0↔Ring-3 isolation (RNF-4/#13):** malformed REGISTER/doorbell rejected (`STATUS_INVALID_PARAMETER`,
+  zero BugCheck) **paired** with “legitimate input still works”; unknown/duplicate tag does not
+  double-complete an SRB (DT-18).
+- **Concurrency/atomicity:** full queue (`queue_depth`); flush drains; crash containment (DT-10) completes
+  all in-flight SRBs with error; storage stack does not stall.
+- **Worst case (ITEM-8, #5/#2):** `Invoke-KernelPageDrill.ps1` — incompressible **kernel** page in
+  pagefile-VRAM, kills service, B1 vs B2, ≥3 executions; captures BSOD/`MEMORY.DMP`.
 
-**Medição (RNF-2/#3):** `Measure-PagefileVram.ps1` — p50/p99 lado-a-lado, mesma janela, ≥3 rodadas,
-`idle`/`loaded`, `results.jsonl`+`BENCHMARKS.md`; contador de uso do pagefile-VRAM > 0.
+**Measurement (RNF-2/#3):** `Measure-PagefileVram.ps1` — side-by-side p50/p99, same window, ≥3 runs,
+`idle`/`loaded`, `results.jsonl`+`BENCHMARKS.md`; pagefile-VRAM usage counter > 0.
 
 **Soak (RNF-1):** `Invoke-DriverSoak.ps1` — 3×24 h Driver Verifier + fuzz, zero BugCheck.
 
-**Manuais / evidências das etapas críticas:** cargas do driver attestation-signed (RNF-7); revogação
-holder-cooperative com pagefile ativo (`Invoke-RevokeDrill.ps1`, RNF-5/R8/DT-19); co-residência
-fail-closed (DT-20); drill kernel-page com residência confirmada (DT-21).
+**Manual / critical-step evidence:** attestation-signed driver loads (RNF-7); holder-cooperative revocation
+with active pagefile (`Invoke-RevokeDrill.ps1`, RNF-5/R8/DT-19); fail-closed co-residency (DT-20);
+kernel-page drill with confirmed residency (DT-21).
 
-## Checklist de validação
+## Validation checklist
 
-> **DT-14 — checklist Windows-kernel (substitui o Linux; registrado, não silencioso).** Estrutura/rigor
-> preservados; ferramentas reais de driver Windows.
+> **DT-14 — Windows-kernel checklist (replaces Linux; recorded, not silent).** Structure/rigor are
+> preserved; tools are real Windows-driver tools.
 
-**Driver (kernel-mode, C — WDK/EWDK):**
+**Driver (kernel mode, C — WDK/EWDK):**
 
-- [ ] Build MSBuild Release x64 com `TreatWarningsAsErrors=true` + `/W4 /WX` limpo (substitui `make W=1`/`checkpatch.pl`)
-- [ ] **Static Driver Verifier** (`msbuild /p:RunCodeAnalysis=true` + SDV) report limpo ou waivers documentados (substitui `sparse`)
-- [ ] **Code Analysis / PREfast for drivers** sem defeito não-waivado
-- [ ] `InfVerif.exe /w ramshared.inf` limpo (INF universal); `ApiValidator` limpo
-- [ ] **Driver Verifier Standard** ativo durante o soak (ITEM-10) — zero BugCheck (substitui KASAN/lockdep)
-- [ ] Harness de integração em VM via PowerShell Direct PASS (substitui `make kselftest`): enumeração,
-  NTFS, I/O e2e, IOCTL malformado rejeitado, contenção de crash (RNF-6)
-- [ ] `signtool verify` + driver attestation-signed **carrega** em 26200.8655, test-signing OFF (RNF-7)
+- [ ] Clean Release x64 MSBuild with `TreatWarningsAsErrors=true` + `/W4 /WX` (replaces `make W=1`/`checkpatch.pl`)
+- [ ] Clean **Static Driver Verifier** (`msbuild /p:RunCodeAnalysis=true` + SDV) report or documented waivers (replaces `sparse`)
+- [ ] **Code Analysis / PREfast for drivers** without unwaived defect
+- [ ] Clean `InfVerif.exe /w ramshared.inf` (universal INF); clean `ApiValidator`
+- [ ] **Driver Verifier Standard** active during soak (ITEM-10) — zero BugCheck (replaces KASAN/lockdep)
+- [ ] PASS VM integration harness through PowerShell Direct (replaces `make kselftest`): enumeration,
+  NTFS, e2e I/O, malformed IOCTL rejected, crash containment (RNF-6)
+- [ ] `signtool verify` + attestation-signed driver **loads** on 26200.8655, test-signing OFF (RNF-7)
 
-**Serviço + libs (Rust userspace):**
+**Service + libraries (Rust userspace):**
 
-- [ ] `cargo fmt --all -- --check` limpo
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` limpo (novas crates + bin stub)
-- [ ] `cargo test --workspace` verde (novos testes puros + atuais sem regressão; bin Windows = stub no Linux, DT-16)
-- [ ] `cargo audit` + `cargo deny check` verdes com `windows*`/`ntapi`/`toml`
-- [ ] **RNF-8:** drills `qemu-ublk-daemon.sh` + `qemu-ublk-crash-e1b.sh` + `qemu-broker-drill.sh` PASS; **`arbiter.rs` sem diff**
-- [ ] `#[ignore]` CUDA `nvcuda.dll` na RTX 2060 (ITEM-1) — `mem_info` plausível
+- [ ] Clean `cargo fmt --all -- --check`
+- [ ] Clean `cargo clippy --workspace --all-targets -- -D warnings` (new crates + bin stub)
+- [ ] Green `cargo test --workspace` (new pure tests + existing no regression; Windows bin = Linux stub, DT-16)
+- [ ] Green `cargo audit` + `cargo deny check` with `windows*`/`ntapi`/`toml`
+- [ ] **RNF-8:** PASS `qemu-ublk-daemon.sh` + `qemu-ublk-crash-e1b.sh` + `qemu-broker-drill.sh` drills; **no `arbiter.rs` diff**
+- [ ] `#[ignore]` CUDA `nvcuda.dll` on RTX 2060 (ITEM-1) — plausible `mem_info`
 
 **Docs:**
 
-- [ ] `docs/INDEX.md` regenerado (status `SPEC`); links das âncoras Kahneman válidos
-- [ ] `DEGRADATION-MATRIX.md`, `LIBRARIES.md`, `ADR-0006`, `IMPL.md` atualizados no mesmo commit da fatia estrutural
+- [ ] Regenerated `docs/INDEX.md` (status `SPEC`); valid Kahneman-anchor links
+- [ ] `DEGRADATION-MATRIX.md`, `LIBRARIES.md`, `ADR-0006`, `IMPL.md` updated in the same structural-slice commit
 
-**Gates cognitivos:**
+**Cognitive gates:**
 
-- [ ] Cada ITEM crítico aponta para `docs/methodology/kahneman-disciplines.md` (Mapa) com âncora exata
-- [ ] Cada etapa crítica registra pergunta obrigatória, evidência mínima e abort trigger
-- [ ] Nenhuma linguagem vaga em ponto crítico sem critério observável
-- [ ] **Gate do R7 (ITEM-8):** o drill de página-de-kernel rodou e a `DEGRADATION-MATRIX` foi atualizada
-  **antes** de qualquer carga no host real
+- [ ] Every critical ITEM points to `docs/methodology/kahneman-disciplines.md` (Map) with exact anchor
+- [ ] Every critical step records required question, minimum evidence, and abort trigger
+- [ ] No vague language at a critical point without observable criterion
+- [ ] **R7 gate (ITEM-8):** kernel-page drill has run and `DEGRADATION-MATRIX` is updated
+  **before** any load on the real host
 
 
 > Related focused slice: [windows-storport-cuda-vram](../windows-storport-cuda-vram/SPEC.md) (CUDA storage-only; pagefile/soak/attestation remain open here).

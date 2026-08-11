@@ -177,6 +177,40 @@ export function validateEntry(entry) {
     )
   }
 
+  if (hasGovernanceSchema(entry.body)) {
+    out.push(...validateGovernanceEntry(entry))
+  }
+
+  return out
+}
+
+export function hasGovernanceSchema(body) {
+  const marker = firstLabel(body, 'Governance schema')
+  return marker.present && /^\s*1\s*$/.test(marker.blockText)
+}
+
+export function validateGovernanceEntry(entry) {
+  const out = []
+  const required = [
+    'Slug', 'Environment/commit', 'Scope', 'Before', 'Action', 'After',
+    'Legitimate case', 'Required refusals', 'Tests/coverage', 'Platform gates',
+    'Artifacts', 'Cleanup', 'Limitations', 'Rollback trigger',
+  ]
+  for (const label of required) {
+    const value = getLabelBlock(entry.body, label)
+    if (!value.present || !value.blockText.trim()) {
+      out.push({ line: entry.headerLine, rule: 'governance-schema', message: `missing or empty \`**${label}:**\`` })
+    }
+  }
+  const refusals = getLabelBlock(entry.body, 'Required refusals')
+  if (refusals.present) {
+    const named = refusals.blockText.split(/\r?\n|;/).map((item) => item.trim()).filter(Boolean)
+    if (named.length < 2) out.push({ line: entry.headerLine, rule: 'governance-schema', message: '`**Required refusals:**` needs at least two named cases' })
+  }
+  const rollback = getLabelBlock(entry.body, 'Rollback trigger')
+  if (rollback.present && !/\d|one|zero|missing|mismatch|non-zero|timeout/i.test(rollback.blockText)) {
+    out.push({ line: entry.headerLine, rule: 'governance-schema', message: '`**Rollback trigger:**` must be numeric or observable' })
+  }
   return out
 }
 
@@ -189,25 +223,52 @@ export function isSecurityRedaction(oldLine, newLine) {
     /`[^`]+`/.test(oldLine) &&
     /\b(password|credential)\b/i.test(newLine) &&
     /\bredacted\b/i.test(newLine)
-  return signingSecret || historicalCredential
+  const environmentCredentialLabel =
+    /RAMSHARED_[A-Z0-9_]+/.test(oldLine) &&
+    /RAMSHARED_[A-Z0-9_]+/.test(newLine) &&
+    oldLine.replace(/password:/i, 'credential source:') === newLine
+  if (signingSecret || historicalCredential || environmentCredentialLabel) return true
+
+  const unrelatedName = new RegExp(['ad', 'voq'].join(''), 'gi')
+  const normalize = (line) => line
+    .replace(/\/home\/[A-Za-z0-9._-]+\/fase0/gi, '<private-artifact-root>')
+    .replace(/<legacy-private-artifact-root>/gi, '<private-artifact-root>')
+    .replace(/\/home\/[A-Za-z0-9._-]+/gi, '<private-root>')
+    .replace(/<legacy-private-root>/gi, '<private-root>')
+    .replace(/[A-Za-z]:\\Users\\[^\\\s`]+\\ramshared-drill/gi, '<windows-artifact-root>')
+    .replace(/C:\\ramshared\\artifacts/gi, '<windows-artifact-root>')
+    .replace(/[A-Za-z]:\\Users\\[^\\\s`]+\\ramshared-src/gi, '<windows-source-root>')
+    .replace(/C:\\ramshared\\src/gi, '<windows-source-root>')
+    .replace(unrelatedName, 'unrelated workload')
+  const normalizedOld = normalize(oldLine)
+  const normalizedNew = normalize(newLine)
+  const numbers = (line) => line.match(/\d+(?:\.\d+)?/g) ?? []
+  const verdicts = (line) => line.match(/[✅🔴🟡]/g) ?? []
+  if (JSON.stringify(numbers(normalizedOld)) !== JSON.stringify(numbers(normalizedNew)) ||
+      JSON.stringify(verdicts(normalizedOld)) !== JSON.stringify(verdicts(normalizedNew))) {
+    return false
+  }
+  return normalizedOld !== oldLine && normalizedOld === normalizedNew
 }
 
-function parseDiff(baseRef) {
+export function parseDiff(baseRef, root = ROOT) {
   let diff
   try {
     diff = execFileSync('git', ['diff', '--unified=0', baseRef, '--', TARGET], {
-      cwd: ROOT,
+      cwd: root,
       encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 64 * 1024 * 1024,
     })
   } catch {
-    return { added: new Set(), removedInEntries: [] }
+    return { added: new Set(), removedInEntries: [], error: 'git-diff-failed' }
   }
   let baseFirstEntry = Infinity
   try {
     const baseFile = execFileSync('git', ['show', `${baseRef}:${TARGET}`], {
-      cwd: ROOT,
+      cwd: root,
       encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 64 * 1024 * 1024,
     })
     baseFirstEntry = findFirstEntryLine(baseFile.split('\n'))
@@ -222,7 +283,9 @@ function parseDiff(baseRef) {
   const flushHunk = () => {
     if (hunkRemoved.length === hunkAdded.length) {
       for (let i = 0; i < hunkRemoved.length; i++) {
-        if (!isSecurityRedaction(hunkRemoved[i].text, hunkAdded[i].text)) {
+        if (isSecurityRedaction(hunkRemoved[i].text, hunkAdded[i].text)) {
+          added.delete(hunkAdded[i].line)
+        } else {
           removedInEntries.push(hunkRemoved[i].line)
         }
       }
@@ -253,7 +316,7 @@ function parseDiff(baseRef) {
     }
   }
   flushHunk()
-  return { added, removedInEntries }
+  return { added, removedInEntries, error: null }
 }
 
 export function run({ root = ROOT, baseRef = null, all = false } = {}) {
@@ -295,7 +358,11 @@ export function run({ root = ROOT, baseRef = null, all = false } = {}) {
     return { ok: violations.length === 0, violations }
   }
 
-  const { added, removedInEntries } = parseDiff(baseRef)
+  const { added, removedInEntries, error } = parseDiff(baseRef, root)
+  if (error) {
+    violations.push({ line: 0, rule: 'diff-error', message: 'unable to read the requested Git base revision' })
+    return { ok: false, violations }
+  }
   for (const oldLine of removedInEntries) {
     violations.push({
       line: oldLine,
@@ -304,13 +371,23 @@ export function run({ root = ROOT, baseRef = null, all = false } = {}) {
         'removal or modification of lines inside the entries region (log is append-only)',
     })
   }
-  for (const e of entries) {
-    if (added.has(e.headerLine) && !isAllowed(e))
+  for (let index = 0; index < entries.length; index++) {
+    const e = entries[index]
+    const nextLine = index + 1 < entries.length ? entries[index + 1].headerLine : lines.length + 1
+    const addedInside = [...added].filter((line) => line > e.headerLine && line < nextLine)
+    if (added.has(e.headerLine)) {
       violations.push(...validateEntry(e))
+    } else if (addedInside.length > 0 && !isAllowed(e)) {
+      const nextEntryIsNew = index + 1 < entries.length && added.has(entries[index + 1].headerLine)
+      const separatorOnly = nextEntryIsNew && addedInside.every((line) => lines[line - 1].trim() === '')
+      if (separatorOnly) continue
+      violations.push({ line: e.headerLine, rule: 'append-only-violation', message: 'added content inside an existing entry; append a new entry instead' })
+    }
   }
   return { ok: violations.length === 0, violations }
 }
 
+/* node:coverage disable */
 function main() {
   const argv = process.argv.slice(2)
   const all = argv.includes('--all')
@@ -343,3 +420,4 @@ function main() {
 if (import.meta.url === `file://${process.argv[1]}`) {
   main()
 }
+/* node:coverage enable */

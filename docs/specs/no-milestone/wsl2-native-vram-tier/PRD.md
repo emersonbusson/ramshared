@@ -5,35 +5,43 @@ milestone: —
 issues: []
 ---
 
-# PRD — VRAM “nativa” no kernel do WSL2 (e Ubuntu): o que é possível e onde testar
+# PRD — “Native” VRAM in the WSL2 kernel (and Ubuntu): what is possible and where to test it
 
-> **Tipo:** PRD de **decisão / descoberta** (SSDV3 Passo 1).  
-> **Não** autoriza IMPL de LKM no WSL.  
-> **Produto Day-1:** continua a cascata userspace (`wsl2-cascade-swap` + boot/app).  
-> Relacionados: `kernel-vram-as-memory`, `mainline-vram-tiering`, lab `linux-kernel-lab`.
+> **Type:** **decision / discovery** PRD (SSDV3 Step 1).
+> Does **not** authorize LKM implementation in WSL.
+> **Day-1 product:** the userspace cascade continues
+> (`wsl2-cascade-swap` plus boot/app).
+> Related: `kernel-vram-as-memory`, `mainline-vram-tiering`, and the
+> `linux-kernel-lab` lab.
 
 ## 1. Summary
 
-### O que este PRD responde
+### What this PRD answers
 
-1. Como seria o kernel (WSL2 **e/ou** Ubuntu) fazer **nativamente** o papel de “usar VRAM ociosa como memória”, em vez de só o daemon NBD/CUDA.  
-2. O que é **viável sob GPU-PV (WSL2)** vs o que só existe em **bare-metal / mainline**.  
-3. **Onde testar** cada camada (WSL host, VM Hyper-V, dual-boot) — **sem** misturar os três.  
-4. **Qual linguagem** usar em cada camada.
+1. How the kernel (WSL2 **and/or** Ubuntu) could **natively** fulfill the role
+   of “using idle VRAM as memory,” rather than only the NBD/CUDA daemon.
+2. What is **viable under GPU-PV (WSL2)** versus what exists only on
+   **bare metal / mainline**.
+3. **Where to test** each layer (WSL host, Hyper-V VM, dual boot) — **without**
+   conflating the three.
+4. **Which language** to use in each layer.
 
-### Resposta curta
+### Short answer
 
-| Camada | “Nativo”? | Viável no WSL2 GPU-PV hoje? | Onde provar |
+| Layer | “Native”? | Viable in WSL2 GPU-PV today? | Where to prove it |
 | --- | --- | --- | --- |
-| **P0 — Cascade** (zram → VRAM NBD/CUDA → disco + DEMOTE) | Kernel faz **swap**; backend VRAM é **userspace** | **Sim** — produto | **WSL2** |
-| **P1 — Kernel mais perto** (ublk, zram writeback, canário no kernel, prioridade/policy sysfs) | Mais kernel, ainda não “VRAM = página anônima” | **Parcial** (custom WSL kernel / config) | **WSL2** (+ build na VM) |
-| **P2 — Device memory mm** (HMM / `DEVICE_PRIVATE` / tier de device) | Sim, mm nativo | **Não** de forma Day-0 limpa sob GPU-PV (VRAM é do WDDM host) | Bare-metal / dual-boot / DDA — **não** a VM sem GPU |
-| **P3 — Mainline** | Upstream Linux | Fora do WSL como target primário | Mainline + hardware open |
+| **P0 — Cascade** (zram → VRAM NBD/CUDA → disk plus DEMOTE) | Kernel performs **swap**; VRAM backend is **userspace** | **Yes** — product | **WSL2** |
+| **P1 — Closer kernel** (ublk, zram writeback, kernel canary, sysfs priority/policy) | More kernel, but not yet “VRAM = anonymous page” | **Partial** (custom WSL kernel / config) | **WSL2** (plus VM build) |
+| **P2 — Device-memory mm** (HMM / `DEVICE_PRIVATE` / device tier) | Yes, native mm | **No** as a clean Day-0 path under GPU-PV (VRAM belongs to host WDDM) | Bare metal / dual boot / DDA — **not** a VM without GPU |
+| **P3 — Mainline** | Upstream Linux | Outside WSL as the primary target | Mainline plus open hardware |
 
-**VM `linux-kernel-lab`:** serve para **compilar, kselftest, quebrar kernel sem matar o WSL**.  
-**Não** prova sozinha “VRAM nativa no mm”, porque em geral **não enxerga a GPU** como device memory bare-metal.
+**`linux-kernel-lab` VM:** used to **build, run kselftest, and break kernels
+without killing WSL**.
+It does **not** independently prove “native VRAM in mm,” because it normally
+**does not see the GPU** as bare-metal device memory.
 
-**Dual-boot:** opcional; **não** é requisito do produto WSL. Espaço em E: já preparado se um dia for preciso.
+**Dual boot:** optional; **not** a requirement for the WSL product. Space on E:
+is already prepared if it is needed one day.
 
 ---
 
@@ -41,33 +49,33 @@ issues: []
 
 ### 2.1 Confirmed (codebase / lab)
 
-| Fato | Fonte | Class |
+| Fact | Source | Class |
 | --- | --- | --- |
-| Cascade zram→VRAM→VHDX + DEMOTE medido | FASE0, validation, ADR-0001 | Confirmed |
-| WDDM eviction: data-safe, latency-unsafe (~1,18 s) | FASE0-FINAL | Confirmed |
-| WSL guest GPU-PV: vendor Microsoft `0x1414`, sem `/dev/dri` típico | PASSO0 inventory | Confirmed |
-| Produto Day-1: Rust userspace + `ramshared up/down` | crates, README | Confirmed |
-| Hyper-V `linux-kernel-lab`: Ubuntu cloudimg, lab auth | validation 2026-07-10 | Confirmed |
+| Measured zram→VRAM→VHDX cascade plus DEMOTE | FASE0, validation, ADR-0001 | Confirmed |
+| WDDM eviction: data-safe, latency-unsafe (~1.18 s) | FASE0-FINAL | Confirmed |
+| WSL guest GPU-PV: Microsoft vendor `0x1414`, without typical `/dev/dri` | PASSO0 inventory | Confirmed |
+| Day-1 product: Rust userspace plus `ramshared up/down` | crates, README | Confirmed |
+| Hyper-V `linux-kernel-lab`: Ubuntu cloud image, lab auth | validation 2026-07-10 | Confirmed |
 | Dual-boot space ~32 GB unallocated on E: | DUALBOOT-KERNEL-TRUE | Confirmed |
 
-### 2.2 O que “nativo” **não** significa neste PRD
+### 2.2 What “native” **does not** mean in this PRD
 
-- Não significa “abandonar o WSL e só dual-boot”.  
-- Não significa “a VM Linux é o ambiente de prova de VRAM”.  
-- Não significa “NBD/CUDA deixam de existir amanhã no WSL”.
+- It does not mean “abandon WSL and use only dual boot.”
+- It does not mean “the Linux VM is the VRAM proof environment.”
+- It does not mean “NBD/CUDA cease to exist tomorrow in WSL.”
 
-### 2.3 Modelo mental (três kernels)
+### 2.3 Mental model (three kernels)
 
 ```text
-A) Kernel WSL2 (Microsoft / custom bzImage)
+A) WSL2 kernel (Microsoft / custom bzImage)
      - real Linux kernel, virtualized MM + GPU-PV
      - best product surface for RamShared today
 
-B) Kernel Ubuntu genérico (VM Hyper-V ou dual-boot)
+B) Generic Ubuntu kernel (Hyper-V VM or dual boot)
      - A-like if dual-boot/bare-metal GPU
      - VM without GPU: kernel engineering only
 
-C) Kernel mainline (upstream)
+C) Mainline kernel (upstream)
      - long-term home for mm tier / HMM cooperation
 ```
 
@@ -75,32 +83,33 @@ C) Kernel mainline (upstream)
 
 ## 3. Recommended option
 
-### 3.1 Estratégia em fases (Day-0 honest)
+### 3.1 Phase strategy (honest Day-0)
 
-| Phase | Nome | O que construir | Kernel “nativo”? |
+| Phase | Name | What to build | “Native” kernel? |
 | --- | --- | --- | --- |
-| **P0** | Product bridge | Manter/melhorar cascade + demote + app/boot | Swap nativo; VRAM via userspace |
-| **P1** | WSL kernel-closer | Custom WSL kernel options: ublk, `CONFIG_ZRAM_WRITEBACK` se útil; sysfs/policy; menos hop | Mais nativo no **I/O e política** |
-| **P2** | Research device-memory | HMM/tier só com evidência de device memory real | Só fora de GPU-PV “limpo” |
-| **P3** | Mainline | RFC + selftests (ver `mainline-vram-tiering`) | Upstream |
+| **P0** | Product bridge | Keep/improve cascade plus demote plus app/boot | Native swap; VRAM through userspace |
+| **P1** | WSL kernel-closer | Custom WSL kernel options: ublk, useful `CONFIG_ZRAM_WRITEBACK`; sysfs/policy; fewer hops | More native in **I/O and policy** |
+| **P2** | Device-memory research | HMM/tier only with evidence of real device memory | Only outside clean GPU-PV |
+| **P3** | Mainline | RFC plus selftests (see `mainline-vram-tiering`) | Upstream |
 
-**Recomendação de produto:** **P0 obrigatório**; **P1** quando custom kernel WSL valer a pena; **P2/P3** sem bloquear o dia a dia.
+**Product recommendation:** **P0 is mandatory**; **P1** when a custom WSL
+kernel is worthwhile; **P2/P3** must not block day-to-day use.
 
-### 3.2 Onde testar (matriz obrigatória)
+### 3.2 Where to test (mandatory matrix)
 
-| Hipótese | Ambiente de prova | Anti-padrão |
+| Hypothesis | Proof environment | Anti-pattern |
 | --- | --- | --- |
-| Cascade / demote / latência WDDM | **WSL2 no host com GPU** | Só VM sem GPU |
-| Build kernel, checkpatch, kselftest sem GPU | **`linux-kernel-lab` (Hyper-V)** | Thrash no WSL diário |
-| Crash de módulo / lockdep pesado | VM ou dual-boot | Host WSL de trabalho |
-| “Página anônima em device memory” | Dual-boot/DDA + GPU real | VM sem GPU; WSL GPU-PV sozinho |
-| Claim de mainline | QEMU selftests + um lab GPU | Chat-only |
+| Cascade / demote / WDDM latency | **WSL2 on the host with GPU** | VM without GPU only |
+| Kernel build, checkpatch, kselftest without GPU | **`linux-kernel-lab` (Hyper-V)** | Thrash on daily WSL |
+| Module crash / heavy lockdep | VM or dual boot | Work WSL host |
+| “Anonymous page in device memory” | Dual boot/DDA plus real GPU | VM without GPU; WSL GPU-PV alone |
+| Mainline claim | QEMU selftests plus one GPU lab | Chat-only |
 
-### 3.3 Dual-boot neste PRD
+### 3.3 Dual boot in this PRD
 
-**Opcional.** Não é o caminho “ligar WSL e usar”.  
-Espaço em **E: ESPANHA (~32 GB unallocated)** existe se P2 precisar de bare-metal.  
-R: RUSSIA continua mau para shrink NTFS (~2,7 GB shrinkable).
+**Optional.** It is not the “turn on WSL and use it” path.
+Space on **E: ESPANHA (~32 GB unallocated)** exists if P2 requires bare metal.
+R: RUSSIA remains bad for NTFS shrinking (~2.7 GB shrinkable).
 
 ---
 
@@ -108,13 +117,13 @@ R: RUSSIA continua mau para shrink NTFS (~2,7 GB shrinkable).
 
 | ID | Requirement | Phase |
 | --- | --- | --- |
-| RF-W1 | Documentar contrato P0: kernel swap + userspace VRAM backend + DEMOTE | P0 |
-| RF-W2 | CLI/app continua fail-closed (ghost swap, swapoff-first) | P0 |
-| RF-W3 | Se P1: lista explícita de `CONFIG_*` / ublk / writeback e rollback | P1 |
-| RF-W4 | Qualquer uAPI kernel (sysfs/debugfs/ioctl) com `capable`, bounds, sem info-leak | P1+ |
-| RF-W5 | Matriz de teste WSL vs VM vs bare-metal preenchida em IMPL | all |
-| RF-W6 | Não afirmar “nativo VRAM mm” sem evidência de device memory / bare-metal ou DDA | all |
-| RF-W7 | VM lab permanece isolada (sem senha lab ok); host UAC intocado | ops |
+| RF-W1 | Document the P0 contract: kernel swap plus userspace VRAM backend plus DEMOTE | P0 |
+| RF-W2 | CLI/app remain fail-closed (ghost swap, swapoff-first) | P0 |
+| RF-W3 | If P1: explicit `CONFIG_*` / ublk / writeback list and rollback | P1 |
+| RF-W4 | Any kernel uAPI (sysfs/debugfs/ioctl) has `capable`, bounds, and no information leak | P1+ |
+| RF-W5 | WSL versus VM versus bare-metal test matrix is filled in IMPL | all |
+| RF-W6 | Do not claim “native VRAM mm” without device-memory / bare-metal or DDA evidence | all |
+| RF-W7 | VM lab remains isolated (passwordless lab is acceptable); host UAC unchanged | ops |
 
 ---
 
@@ -122,16 +131,16 @@ R: RUSSIA continua mau para shrink NTFS (~2,7 GB shrinkable).
 
 | ID | Requirement |
 | --- | --- |
-| NFR-W1 | Latência: número + unidade + n≥3 se for gate (benchmarks.md) |
-| NFR-W2 | Host safety: sem thrash no WSL diário |
-| NFR-W3 | Day-0: sem dual-path “ImDisk forever” / shim eterno |
-| NFR-W4 | Linguagem por camada (ver §8) — sem misturar no hot path |
+| NFR-W1 | Latency: number plus unit plus n≥3 when it is a gate (`benchmarks.md`) |
+| NFR-W2 | Host safety: no thrash on daily WSL |
+| NFR-W3 | Day-0: no dual “ImDisk forever” / eternal shim path |
+| NFR-W4 | Language by layer (see §8) — do not mix in the hot path |
 
 ---
 
 ## 6. Flows
 
-### 6.1 Uso produto (o que o usuário “liga”)
+### 6.1 Product use (what the user “turns on”)
 
 ```text
 WSL starts → (optional systemd cascade) → ramshared up
@@ -140,139 +149,141 @@ WSL starts → (optional systemd cascade) → ramshared up
   → GPU pressure → DEMOTE → disk
 ```
 
-### 6.2 Engenharia P1 (custom WSL kernel)
+### 6.2 P1 engineering (custom WSL kernel)
 
 ```text
 Build kernel (VM or WSL) → boot-kernel-safe → measure ublk/writeback
   → go/no-go vs NBD cascade
 ```
 
-### 6.3 Pesquisa P2 (só se hardware permitir)
+### 6.3 P2 research (only if hardware permits)
 
 ```text
 Bare-metal or DDA → driver/device memory → migrate/demote pages
-  → Gate B numbers → SPEC separado
+  → Gate B numbers → separate SPEC
 ```
 
 ---
 
-## 7. Data model / interfaces (rascunho)
+## 7. Data model / interfaces (draft)
 
-### P0 (hoje)
+### P0 (today)
 
-- Userspace: `ramshared`, `ramsharedd`, sockets NBD, `/proc/swaps`  
+- Userspace: `ramshared`, `ramsharedd`, NBD sockets, `/proc/swaps`
 - Config: `/etc/ramshared/cascade.conf`
 
-### P1 (futuro)
+### P1 (future)
 
-- Possível: sysfs `.../ramshared/` ou parâmetros de módulo  
-- ublk device nodes se kernel custom  
+- Possible: sysfs `.../ramshared/` or module parameters
+- ublk device nodes if the kernel is custom
 
-### P2 (futuro)
+### P2 (future)
 
-- Memory tier / HMM registration — **SPEC próprio** após Gate A/B
+- Memory-tier / HMM registration — a **dedicated SPEC** after Gate A/B
 
-Sem congelar ABI neste PRD.
+Do not freeze ABI in this PRD.
 
 ---
 
-## 8. Implementation languages (resposta à pergunta “qual linguagem?”)
+## 8. Implementation languages (answer to “which language?”)
 
-> **Canonical decision (audited):** [ADR-0007](../../../decisions/ADR-0007-kernel-native-language-c.md) ·  
+> **Canonical decision (audited):** [ADR-0007](../../../decisions/ADR-0007-kernel-native-language-c.md) ·
 > [kernel-native-language PRD + AUDIT-2.5](../kernel-native-language/) → **go**.
 
-| Camada | Linguagem **adequada** | Por quê |
+| Layer | Appropriate **language** | Why |
 | --- | --- | --- |
-| **Kernel Linux** (LKM, mm, ublk glue, sysfs) | **C11 estilo mainline** (TAB 8, checkpatch) | ABI, reviewers, lockdep, ecossistema |
-| **Kernel novo código “verde”** (opcional) | **Rust for Linux** só com SPEC + exception audit | Não é default (ADR-0007) |
-| **Daemon / CLI / broker / cascade (P0)** | **Rust** (já é o stack) | ADR-0002 |
-| **FFI CUDA** | **Rust + `unsafe` isolado** em `ramshared-cuda` | Única fronteira unsafe userspace |
-| **Windows StorPort lab** | **C (WDK)** + userspace Rust/C# lab | Kernel Windows |
-| **Scripts lab / Hyper-V** | **PowerShell** (host) + **bash** (WSL) | Automação, não produto hot path |
-| **Inadequado** para “nativo no kernel” | Python/Node/Go como LKM; **app Rust fingindo LKM** | Não roda em kernel context |
+| **Linux kernel** (LKM, mm, ublk glue, sysfs) | **C11 mainline style** (TAB 8, checkpatch) | ABI, reviewers, lockdep, ecosystem |
+| **New “greenfield” kernel code** (optional) | **Rust for Linux** only with SPEC plus exception audit | Not the default (ADR-0007) |
+| **Daemon / CLI / broker / cascade (P0)** | **Rust** (already the stack) | ADR-0002 |
+| **CUDA FFI** | **Rust plus isolated `unsafe`** in `ramshared-cuda` | Only unsafe userspace boundary |
+| **Windows StorPort lab** | **C (WDK)** plus Rust/C# userspace lab | Windows kernel |
+| **Lab / Hyper-V scripts** | **PowerShell** (host) plus **bash** (WSL) | Automation, not product hot path |
+| **Inappropriate** for “native in the kernel” | Python/Node/Go as LKM; **Rust application pretending to be an LKM** | Does not run in kernel context |
 
-### Recomendação prática do projeto
+### Practical project recommendation
 
-1. **Continuar P0 em Rust** (userspace).  
-2. **“Nativo de verdade no kernel” → C** (mainline/custom WSL kernel) — **ADR-0007**.  
-3. **Rust for Linux** só exceção auditada — não reescrever mm em Rust.  
-4. Escolher C **não** prova device memory no GPU-PV (#13).
+1. **Continue P0 in Rust** (userspace).
+2. **“Truly native in the kernel” → C** (mainline/custom WSL kernel) —
+   **ADR-0007**.
+3. **Rust for Linux** only as an audited exception — do not rewrite mm in Rust.
+4. Choosing C does **not** prove device memory under GPU-PV (#13).
 
 ---
 
 ## 9. Dependencies and risks
 
-| Risco | Mitigação |
+| Risk | Mitigation |
 | --- | --- |
-| Halo: “kernel nativo” = joga fora cascade | P0 permanece shippable |
-| Halo: VM Linux prova VRAM | Matriz §3.2 |
-| Custom WSL kernel brick boot | `boot-kernel-safe.ps1`, dual entry MS kernel |
-| GPU-PV latency 1,18 s em path “quente” | VRAM sempre cold; demote |
-| Scope P2 no WSL | PRD diz NO-GO até evidência |
+| Halo: “native kernel” = throw away cascade | P0 remains shippable |
+| Halo: Linux VM proves VRAM | §3.2 matrix |
+| Custom WSL kernel bricks boot | `boot-kernel-safe.ps1`, dual Microsoft-kernel entry |
+| GPU-PV 1.18 s latency in a “hot” path | VRAM always cold; demote |
+| P2 scope in WSL | PRD says NO-GO until evidence |
 
 ---
 
 ## 10. Implementation strategy
 
-| Step | Artifact | Env |
+| Step | Artifact | Environment |
 | --- | --- | --- |
-| Now | Este PRD | — |
-| P0 polish | IMPL cascade/app já em andamento | WSL |
-| P1 SPEC (se go) | **Delivery PRD (authoritative):** [`../wsl2-custom-kernel-p1/PRD.md`](../wsl2-custom-kernel-p1/PRD.md) → then `SPEC.md` in that folder | WSL custom kernel; build on `RamShared-Kernel` lab |
-| P2 | Só após bare-metal/DDA evidence | Fora do escopo “só WSL” |
+| Now | This PRD | — |
+| P0 polish | Cascade/app IMPL already in progress | WSL |
+| P1 SPEC (if go) | **Delivery PRD (authoritative):** [`../wsl2-custom-kernel-p1/PRD.md`](../wsl2-custom-kernel-p1/PRD.md) → then `SPEC.md` in that folder | Custom WSL kernel; build in `RamShared-Kernel` lab |
+| P2 | Only after bare-metal/DDA evidence | Outside “WSL only” scope |
 | P3 | `mainline-vram-tiering` | upstream |
 
 ---
 
 ## 11. Documents to update
 
-- Este PRD + pointer em `docs/labs/DUALBOOT-KERNEL-TRUE.md` (opcional)  
-- README: uma linha “native kernel = research; product = cascade on WSL”  
-- `PASSO0` kernel-vram: link cruzado  
+- This PRD plus optional pointer in `docs/labs/DUALBOOT-KERNEL-TRUE.md`
+- README: one line, “native kernel = research; product = cascade on WSL”
+- `PASSO0` kernel-vram: cross-link
 
 ---
 
 ## 12. Out of scope
 
-- Obrigar dual-boot para usar RamShared  
-- Reescrever cascade em C  
-- StorPort Windows como “kernel Linux nativo”  
-- PROMETER P2 no GPU-PV  
+- Require dual boot to use RamShared
+- Rewrite cascade in C
+- Windows StorPort as “native Linux kernel”
+- PROMISE P2 under GPU-PV
 
 ---
 
-## 13. Acceptance (deste PRD)
+## 13. Acceptance (this PRD)
 
-- [x] Distingue P0/P1/P2/P3  
-- [x] Matriz de teste WSL vs VM vs bare-metal  
-- [x] Dual-boot opcional, não central  
-- [x] Linguagens por camada  
-- [x] RF/NFR e riscos  
-- [ ] SPEC P1: só se houver decisão de custom WSL kernel  
+- [x] Distinguishes P0/P1/P2/P3
+- [x] WSL versus VM versus bare-metal test matrix
+- [x] Dual boot optional, not central
+- [x] Languages by layer
+- [x] RF/NFR and risks
+- [ ] P1 SPEC: only when there is a custom WSL-kernel decision
 
 ---
 
 ## 14. Validation
 
-- Leitura cruzada ADR-0001, FASE0, cascade IMPL  
-- Lab: WSL for P0; `linux-kernel-lab` for kernel **builds**; E: unallocated for optional dual-boot  
+- Cross-reading ADR-0001, FASE0, cascade IMPL
+- Lab: WSL for P0; `linux-kernel-lab` for kernel **builds**; E: unallocated
+  for optional dual boot
 
 ---
 
 ## 15. Kahneman
 
-| # | Uso |
+| # | Use |
 | --- | --- |
-| #11 | Anti-halo “nativo = melhor no WSL agora” |
-| #13 | Existir HMM ≠ GPU-PV expõe device memory |
-| #2 | Counterfactual: VRAM hot no WSL → stall 1 s |
-| #18 | Cascade sunset só com prova da mesma classe de problema no path nativo |
+| #11 | Anti-halo: “native = better in WSL now” |
+| #13 | HMM existing ≠ GPU-PV exposes device memory |
+| #2 | Counterfactual: hot VRAM in WSL → 1 s stall |
+| #18 | Sunset cascade only with proof of the same problem class in the native path |
 
 ---
 
 ## 16. Plain language (for humans)
 
-**What you turn on in WSL today** is not “the kernel maps VRAM like RAM.”  
+**What you turn on in WSL today** is not “the kernel maps VRAM like RAM.”
 It is “the Linux kernel’s **swap** uses a **GPU-backed disk** as a cold tier, and we pull that tier out if the GPU gets busy.”
 
 **A “native kernel” future** would push more of that into mm/device-memory APIs — that is a **research** track (P2/P3), not the day-1 install.

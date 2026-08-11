@@ -68,6 +68,8 @@ before implementation because this slice crosses Ring 0/3, MDL ownership, privil
 | DT-12 | The CUDA-owning thread records start/end for every synchronous READ/WRITE/FLUSH; a supervisor watchdog marks health false after 5,000 ms without progress and requests no new fetch. `CancelIoEx` bounds an empty pending COMMIT_AND_FETCH, but `cuMemcpy*` itself is not cancellable: the watchdog must not destroy context, terminate the worker/process, post a speculative CQE, or claim clean recovery while that call is outstanding. If the CUDA call returns, its request and safely drainable requests complete once with error and state becomes `FailedSafe`; if it remains stuck, preserve disk/allocation/lease and require supervised reboot recovery. No automatic restart is configured. The >5,000 ms observation is an immediate campaign abort even though safe recovery may exceed 5 s. | The PRD's 5 s gate cannot be honestly implemented as cancellation over synchronous CUDA Driver API calls. Separating detection from unsafe cancellation preserves state and prevents double completion or pagefile-hot destroy. |
 | DT-13 | The storage-only campaign is three fresh start/format/write-flush-read/stop rounds, each using at most `min(512 MiB, floor(total_vram/10))`. It records MiB/s and nearest-rank p50/p95/p99 request latency but defines no promotion threshold. The verdict requires Online, package↔loaded `BINARY_MATCH`, all SHA rounds, console exit 0, no force-kill, correlated lease release, CUDA free restoration within 64 MiB, no new dump/BugCheck, exact terminal VM/GPU state, and teardown <=30 s. `STOP_OK` means that complete conjunction, not merely process exit. Any failed term aborts before another physical-host round. | Prevents a process crash, forced exit, missing release, or incomplete cleanup from being summarized as a graceful-stop pass. |
 | DT-30 | **SDV is N/A on the Day-0 VS2022 + WDK 10.0.26100 lab path.** Microsoft retired Static Driver Verifier from modern WDK: `WindowsDriver.Sdv.targets` is a stub warning that SDV is no longer included and is incompatible with VS2022+. Evidence: `scripts/windows/Invoke-SdvProbe.ps1` + `evidence/sdv-probe-20260717/` (`sdv_retired_from_wdk_vs2022_plus`). **Primary static/dynamic kernel gates for this SPEC remain:** WDK Code Analysis project-clean, InfVerif, and live Driver Verifier (`0x2093B`) + named IOCTL/VPD/StartIo/rundown verdicts on `win11-drill`. Claiming SDV PASS requires a dedicated older EWDK image and is **out of scope** for this Day-0 path (not a temporary install gap). | Kahneman #13: do not leave a permanent false “pending install” when the toolchain itself removed the tool. Day-0 honesty: one primary analysis path (CA + Verifier), not dual-tool aspiration. |
+| DT-31 | Evidence errors retain only the stable `error_class` and `error_code`; the free-form detail field is always empty. | Token heuristics cannot prove that a short password, tenant token, path, or user content is safe. Stable codes preserve attribution without persisting secrets. |
+| DT-32 | Dynamic values passed to PowerShell storage observations are supplied only through an explicit child-process environment allowlist; they are never interpolated into the script body. | Quoting is not a sufficient cross-language boundary. Environment binding keeps script text constant while the existing exact identity, cardinality, and timeout refusals remain authoritative. |
 
 ## Atomicity and rollback
 
@@ -240,9 +242,17 @@ Evidence is executable tests + live lab campaigns (not “code exists”). Unche
   `scripts/windows/Measure-RamSharedDiskIo.ps1`, and `scripts/windows/Format-RamSharedLun.ps1`.
 - Required tests: `scripts/windows/Invoke-CudaStorageDrill.ps1` ::
   `storage_only_cuda_three_rounds_sha256`, `pagefile_present_aborts_before_start`,
-  `volume_lock_failure_aborts_before_destroy`, and `broker_release_is_observed` (#13/#16).
+  `volume_lock_failure_aborts_before_destroy`, and `broker_release_is_observed` (#13/#16), plus
+  `scripts/windows/Test-CudaStorageDrillStatic.ps1` :: `powershell51_script_parses` and
+  `script_is_ascii_for_bomless_powershell51`.
 - Cover target: N/A — E2E-only; physical Windows GPU evidence.
 - Kahneman: ITEM-6 row.
+
+**`scripts/windows/Test-CudaStorageDrillStatic.ps1`**
+- Purpose: execute the Windows PowerShell 5.1 parser and enforce ASCII source for the BOM-free drill.
+- RF / DT: RF-4, RF-5, RF-6; DT-8 through DT-13.
+- Required tests: `powershell51_script_parses`, `script_is_ascii_for_bomless_powershell51`.
+- Cover target: N/A — static harness.
 
 ### MODIFY
 
@@ -448,7 +458,7 @@ the product binary and product installer.
 | Production path | Test (`file` :: `name`) | Kind | Kahneman | Cover |
 | --- | --- | --- | --- | --- |
 | `crates/ramshared-winsvc/src/config.rs` | `crates/ramshared-winsvc/src/config.rs` :: `parse_product_config`; `reject_unknown_backend`; `reject_queue_data_area_over_4mib`; `reserve_cannot_lower_policy_floor` | unit | #13 | >=80% |
-| `crates/ramshared-winsvc/src/evidence.rs` | `crates/ramshared-winsvc/src/evidence.rs` :: `append_preserves_prior_rows`; `nearest_rank_percentiles_are_deterministic`; `stable_error_redacts_payload` | unit | #9 | >=80% |
+| `crates/ramshared-winsvc/src/evidence.rs` | `crates/ramshared-winsvc/src/evidence.rs` :: `append_preserves_prior_rows`; `nearest_rank_percentiles_are_deterministic`; `stable_error_discards_free_form_detail`; `nearest_rank_clamps_boundary_percentiles` | unit | #9/#13 | >=80% |
 | `crates/ramshared-winsvc/src/driver_link.rs` | `crates/ramshared-winsvc/src/driver_link.rs` :: `roundtrip_write_read_flush`; `unknown_flags_return_einval`; `write_uses_owned_payload_snapshot`; `invalid_slot_does_not_touch_backend` | unit | #13 | >=80% |
 | `crates/ramshared-winsvc/src/broker_tenant.rs` | `crates/ramshared-winsvc/src/broker_tenant.rs` :: `granted_bytes_must_equal_requested`; `release_flushes_before_session_close`; `release_twice_writes_once`; `failed_release_retains_lease_and_is_not_replayed`; `lease_denied` | unit | #13/#17 | >=80% |
 | `crates/ramshared-winsvc/src/runtime.rs` | `crates/ramshared-winsvc/src/runtime.rs` :: `no_fallback_after_cuda_failure`; `failure_after_register_unwinds_reverse`; `deterministic_failure_is_not_retried`; `stop_twice_has_one_effect`; `ambiguous_crash_state_is_not_replayed`; `cuda_watchdog_does_not_destroy_stuck_context` | unit | #15/#16/#17 | >=80% |
@@ -457,11 +467,11 @@ the product binary and product installer.
 | `crates/ramshared-block/src/vram_backend.rs` | `crates/ramshared-block/src/vram_backend.rs` :: `vram_backend_into_inner_allows_explicit_release_order` | unit | #16/#17 | >=80% |
 | `crates/ramshared-cuda/src/driver.rs` | `ramshared-winsvc probe-cuda` :: `probe_cuda_allocates_roundtrips_and_restores` | integration | #9/#16 | N/A — E2E-only; real `nvcuda.dll`/GPU |
 | `drivers/windows/ramshared/control.c`<br>`drivers/windows/ramshared/queue.c`<br>`drivers/windows/ramshared/virtdisk.c` | `scripts/windows/Invoke-WinDriveIoctlValidation.ps1` :: `PASS_VALID_QUEUE`; all named `REFUSE_*`; `COMPLETION_REENTRY_NO_SLOT_REUSE`; `RUNDOWN_UNMAP_AFTER_COPY`; `VPD_SERIAL_MATCH`; `STARTIO_READ_COPY_RACE` | WDK/Verifier (+ CA) | #5/#13 | N/A — WDK/Verifier; **SDV N/A — DT-30** |
-| `crates/ramshared-winsvc/src/windows_host.rs` | `crates/ramshared-winsvc/src/windows_host.rs` :: `pagefile_query_matches_canonical_volume`; `pagefile_query_error_is_unsafe`; `exclusive_volume_lock_closes_pagefile_race`; `lun_identity_requires_vendor_product_serial_and_size` | integration | #13 | N/A — E2E-only; Windows COM/VPD |
+| `crates/ramshared-winsvc/src/windows_host.rs` | `crates/ramshared-winsvc/src/windows_host.rs` :: `pagefile_query_matches_canonical_volume`; `pagefile_query_error_is_unsafe`; `exclusive_volume_lock_closes_pagefile_race`; `lun_identity_requires_vendor_product_serial_and_size`; `powershell_dynamic_values_use_environment_only` | integration/static | #13/#16 | N/A — Windows process boundary; static source test on Linux |
 | `crates/ramshared-winsvc/src/main.rs` | `scripts/windows/Install-RamSharedService.ps1` :: `PRODUCT_IMAGEPATH_MATCH`; `NO_LAB_SCRIPT_REFERENCE` | drill/E2E | #13/#18 | N/A — E2E-only; SCM |
 | `scripts/windows/Format-RamSharedLun.ps1` | `scripts/windows/Format-RamSharedLun.ps1` :: `refuse_physical_same_size`; `refuse_wrong_serial`; `force_does_not_bypass_identity`; `format_exact_ramshared_lun` | drill/E2E | #13 | N/A — E2E-only; guarded disk mutation |
 | `scripts/windows/Measure-RamSharedDiskIo.ps1` | `scripts/windows/Measure-RamSharedDiskIo.ps1` :: `checksum_mismatch_exits_6`; `three_rounds_emit_p50_p95_p99`; `matching_checksum_exits_0` | drill/E2E | #3/#13 | N/A — E2E-only; live filesystem I/O |
-| `crates/ramshared-winsvc/src/main.rs` + Windows product surface | `scripts/windows/Invoke-CudaStorageDrill.ps1` :: `storage_only_cuda_three_rounds_sha256`; `pagefile_present_aborts_before_start`; `volume_lock_failure_aborts_before_destroy`; `broker_release_is_observed` | drill/E2E | #3/#13/#16 | N/A — E2E-only; physical Windows GPU |
+| `crates/ramshared-winsvc/src/main.rs` + Windows product surface | `scripts/windows/Invoke-CudaStorageDrill.ps1` :: `storage_only_cuda_three_rounds_sha256`; `pagefile_present_aborts_before_start`; `volume_lock_failure_aborts_before_destroy`; `broker_release_is_observed`; `scripts/windows/Test-CudaStorageDrillStatic.ps1` :: `powershell51_script_parses`; `script_is_ascii_for_bomless_powershell51` | static + drill/E2E | #3/#13/#16 | N/A — live rows require physical Windows GPU |
 | `scripts/windows/Get-WinDrivePreflight.ps1` | `scripts/windows/Test-WinDrivePreflightStatic.ps1` :: `control_path_fail_closed` | static + physical preflight | #13/#16 | N/A — harness |
 | `scripts/windows/Set-WinPagingFilesConcrete.ps1` | `scripts/windows/Test-WinPagingFilesConcreteStatic.ps1` :: snapshot/restore approval; no disk mutation commands | static + operator prep | #13/#16 | N/A — registry prep |
 | `scripts/windows/Run-HostExhaustive.ps1` | `scripts/windows/Test-HostExhaustiveStatic.ps1` :: `host_broker_required`; `online_marker_must_be_strong`; `complete_pass_gate` | static + physical drill | #3/#13/#16 | N/A — harness |
@@ -474,7 +484,7 @@ the product binary and product installer.
 - [x] `cargo clippy -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets -- -D warnings`
 - [x] `cargo test -p ramshared-cuda -p ramshared-block -p ramshared-winsvc`
 - [x] `cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc`
-- [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs --min 80`
+- [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs,crates/ramshared-winsvc/src/host_safety.rs --min 80`
   (also CUDA probe cover ≥80% when `crates/ramshared-cuda/src/probe.rs` is in the gate set)
 - [ ] If pure planning logic changes in `crates/ramshared-cuda/src/driver.rs`, include that file in a
   separate `ramshared-cuda` cover gate at >=80%; hardware-only lines remain live-E2E evidence.

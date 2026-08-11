@@ -60,7 +60,7 @@ try {
 }
 $ramsharedPf = $pf | Where-Object { $_.Name -match 'RamShared|VRAM' }
 if ($ramsharedPf) {
-    L "pagefile present on target volume — abort before start"
+    L "pagefile present on target volume - abort before start"
     $result.pagefile_present_aborts_before_start = 1
     $result.VERDICT = "ABORT"
     $result.note = "pagefile active: refuse product start"

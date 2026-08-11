@@ -5,6 +5,7 @@
 use std::env;
 use std::fmt;
 use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -168,81 +169,238 @@ impl CheckReport {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CliCommand {
+    Check { json: bool },
+    Doctor { json: bool },
+    Up { args: Vec<String> },
+    Down,
+    Status { json: bool },
+    Diagnose { args: Vec<String> },
+    Help,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CliParseError {
+    UnsupportedCommand(String),
+    InvalidOption {
+        command: &'static str,
+        options: Vec<String>,
+    },
+}
+
+impl fmt::Display for CliParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CliParseError::UnsupportedCommand(command) => {
+                write!(f, "unsupported command: {command}")
+            }
+            CliParseError::InvalidOption { command, options } => {
+                write!(f, "invalid {command} option: {}", options.join(" "))
+            }
+        }
+    }
+}
+
+fn parse_json_option(command: &'static str, options: &[String]) -> Result<bool, CliParseError> {
+    match options {
+        [] => Ok(false),
+        [option] if option == "--json" => Ok(true),
+        _ => Err(CliParseError::InvalidOption {
+            command,
+            options: options.to_vec(),
+        }),
+    }
+}
+
+fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
+    let Some((command, options)) = args.split_first() else {
+        return Ok(CliCommand::Help);
+    };
+
+    match command.as_str() {
+        "check" => Ok(CliCommand::Check {
+            json: parse_json_option("check", options)?,
+        }),
+        "doctor" => Ok(CliCommand::Doctor {
+            json: parse_json_option("doctor", options)?,
+        }),
+        "up" => Ok(CliCommand::Up {
+            args: options.to_vec(),
+        }),
+        "down" => {
+            if options.is_empty() {
+                Ok(CliCommand::Down)
+            } else {
+                Err(CliParseError::InvalidOption {
+                    command: "down",
+                    options: options.to_vec(),
+                })
+            }
+        }
+        "status" => Ok(CliCommand::Status {
+            json: parse_json_option("status", options)?,
+        }),
+        "diagnose" => Ok(CliCommand::Diagnose {
+            args: options.to_vec(),
+        }),
+        "-h" | "--help" => Ok(CliCommand::Help),
+        other => Err(CliParseError::UnsupportedCommand(other.to_string())),
+    }
+}
+
+trait CliActionRunner {
+    fn check(&mut self, json: bool, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
+    fn doctor(&mut self, json: bool, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
+    fn up(&mut self, args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
+    fn down(&mut self, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
+    fn status(&mut self, json: bool, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
+    fn diagnose(
+        &mut self,
+        args: &[String],
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
+}
+
+struct SystemCliActions;
+
+impl CliActionRunner for SystemCliActions {
+    fn check(&mut self, json: bool, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
+        let report = run_check();
+        let output = if json {
+            writeln!(stdout, "{}", render_json(&report))
+        } else {
+            print_text_report(&report, stdout)
+        };
+        if let Err(error) = output {
+            let _ = writeln!(stderr, "failed to write check report: {error}");
+            return ExitCode::from(1);
+        }
+        match report.decision() {
+            Decision::Ready => ExitCode::SUCCESS,
+            Decision::Blocked => ExitCode::from(1),
+        }
+    }
+
+    fn doctor(&mut self, json: bool, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
+        let report = run_check();
+        let recommendations = recommendations_for(&report);
+        let output = if json {
+            writeln!(stdout, "{}", render_doctor_json(&report, &recommendations))
+        } else {
+            print_text_report(&report, stdout)
+                .and_then(|()| print_recommendations(&recommendations, stdout))
+        };
+        if let Err(error) = output {
+            let _ = writeln!(stderr, "failed to write doctor report: {error}");
+            return ExitCode::from(1);
+        }
+        match report.decision() {
+            Decision::Ready => ExitCode::SUCCESS,
+            Decision::Blocked => ExitCode::from(1),
+        }
+    }
+
+    fn up(&mut self, args: &[String], _stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
+        to_exit(cascade::up_with_args(args), stderr)
+    }
+
+    fn down(&mut self, _stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
+        to_exit(cascade::down(), stderr)
+    }
+
+    fn status(&mut self, json: bool, _stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode {
+        to_exit(cascade::status(json), stderr)
+    }
+
+    fn diagnose(
+        &mut self,
+        args: &[String],
+        _stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        to_exit(diagnose::run(args), stderr)
+    }
+}
+
 fn main() -> ExitCode {
-    let mut args = env::args().skip(1);
-    let command = args.next();
-    let rest = args.collect::<Vec<_>>();
-    let json = rest.iter().any(|arg| arg == "--json");
+    let args = env::args().skip(1).collect::<Vec<_>>();
+    let mut actions = SystemCliActions;
+    let stdout = std::io::stdout();
+    let stderr = std::io::stderr();
+    let mut stdout = stdout.lock();
+    let mut stderr = stderr.lock();
+    run_from_args(&args, &mut actions, &mut stdout, &mut stderr)
+}
 
-    match command.as_deref() {
-        Some("check") => {
-            let report = run_check();
-            if json {
-                println!("{}", render_json(&report));
-            } else {
-                print_text_report(&report);
-            }
-
-            match report.decision() {
-                Decision::Ready => ExitCode::SUCCESS,
-                Decision::Blocked => ExitCode::from(1),
-            }
-        }
-        Some("doctor") => {
-            let report = run_check();
-            let recommendations = recommendations_for(&report);
-            if json {
-                println!("{}", render_doctor_json(&report, &recommendations));
-            } else {
-                print_text_report(&report);
-                print_recommendations(&recommendations);
-            }
-
-            match report.decision() {
-                Decision::Ready => ExitCode::SUCCESS,
-                Decision::Blocked => ExitCode::from(1),
-            }
-        }
-        Some("up") => to_exit(cascade::up()),
-        Some("down") => to_exit(cascade::down()),
-        Some("status") => to_exit(cascade::status(json)),
-        Some("diagnose") => to_exit(diagnose::run(&rest)),
-        Some("-h") | Some("--help") | None => {
-            print_usage();
+fn run_from_args<R: CliActionRunner>(
+    args: &[String],
+    actions: &mut R,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    match parse_cli_command(args) {
+        Ok(CliCommand::Check { json }) => actions.check(json, stdout, stderr),
+        Ok(CliCommand::Doctor { json }) => actions.doctor(json, stdout, stderr),
+        Ok(CliCommand::Up { args }) => actions.up(&args, stdout, stderr),
+        Ok(CliCommand::Down) => actions.down(stdout, stderr),
+        Ok(CliCommand::Status { json }) => actions.status(json, stdout, stderr),
+        Ok(CliCommand::Diagnose { args }) => actions.diagnose(&args, stdout, stderr),
+        Ok(CliCommand::Help) => {
+            print_usage(stderr);
             ExitCode::SUCCESS
         }
-        Some(other) => {
-            eprintln!("unsupported command: {other}");
-            print_usage();
+        Err(error) => {
+            let _ = writeln!(stderr, "{error}");
+            print_usage(stderr);
             ExitCode::from(2)
         }
     }
 }
 
-fn to_exit<E: fmt::Display>(r: Result<(), E>) -> ExitCode {
+fn to_exit<E: fmt::Display>(r: Result<(), E>, stderr: &mut dyn Write) -> ExitCode {
     match r {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("{e}");
+            let _ = writeln!(stderr, "{e}");
             ExitCode::from(1)
         }
     }
 }
 
-fn print_usage() {
-    eprintln!("usage:");
-    eprintln!("  ramshared check [--json]");
-    eprintln!("  ramshared doctor [--json]");
-    eprintln!("  ramshared diagnose --events PATH [--json]");
-    eprintln!("  ramshared up [--vram MiB] [--zram MiB] [--daemon PATH]");
-    eprintln!("      defaults: 1024 MiB each, or RAMSHARED_VRAM_MIB / RAMSHARED_ZRAM_MIB");
-    eprintln!("      --zram 0  skip zram (VRAM/NBD only)");
-    eprintln!("  ramshared status [--json]   # phase Armed/UsingVram/… + tiers");
-    eprintln!("  ramshared down   # always swapoff before stopping the daemon (anti hang)");
-    eprintln!();
-    eprintln!("boot on WSL2 (opt-in, fail-closed):");
-    eprintln!("  sudo bash scripts/safety/install-cascade-boot.sh --enable");
-    eprintln!("  sudo bash scripts/safety/uninstall-cascade-boot.sh");
+fn print_usage(stderr: &mut dyn Write) {
+    let _ = writeln!(stderr, "usage:");
+    let _ = writeln!(stderr, "  ramshared check [--json]");
+    let _ = writeln!(stderr, "  ramshared doctor [--json]");
+    let _ = writeln!(stderr, "  ramshared diagnose --events PATH [--json]");
+    let _ = writeln!(
+        stderr,
+        "  ramshared up [--vram MiB] [--zram MiB] [--daemon PATH]"
+    );
+    let _ = writeln!(
+        stderr,
+        "      defaults: 1024 MiB each, or RAMSHARED_VRAM_MIB / RAMSHARED_ZRAM_MIB"
+    );
+    let _ = writeln!(stderr, "      --zram 0  skip zram (VRAM/NBD only)");
+    let _ = writeln!(
+        stderr,
+        "  ramshared status [--json]   # phase Armed/UsingVram/… + tiers"
+    );
+    let _ = writeln!(
+        stderr,
+        "  ramshared down   # always swapoff before stopping the daemon (anti hang)"
+    );
+    let _ = writeln!(stderr);
+    let _ = writeln!(stderr, "boot on WSL2 (opt-in, fail-closed):");
+    let _ = writeln!(
+        stderr,
+        "  sudo bash scripts/safety/install-cascade-boot.sh --enable"
+    );
+    let _ = writeln!(
+        stderr,
+        "  sudo bash scripts/safety/uninstall-cascade-boot.sh"
+    );
 }
 
 fn run_check() -> CheckReport {
@@ -256,31 +414,31 @@ fn run_check() -> CheckReport {
     let mut warnings = Vec::new();
 
     if wsl.status == Status::Fail {
-        blockers.push("kernel nao parece ser WSL2".to_string());
+        blockers.push("kernel does not appear to be WSL2".to_string());
     }
     if cuda.status == Status::Fail {
-        blockers.push(format!("CUDA indisponivel: {}", cuda.detail));
+        blockers.push(format!("CUDA unavailable: {}", cuda.detail));
     }
     if backends.nbd_status == Status::Fail && backends.ublk_status == Status::Fail {
-        blockers.push("nenhum backend de bloco disponivel sem kernel customizado".to_string());
+        blockers.push("no block backend is available without a custom kernel".to_string());
     }
     if kernel.swap != Some(KernelConfig::BuiltIn) {
         match kernel.swap {
             Some(config) if config.enabled() => {}
-            Some(_) => blockers.push("CONFIG_SWAP esta desabilitado".to_string()),
-            None => warnings.push("nao foi possivel confirmar CONFIG_SWAP".to_string()),
+            Some(_) => blockers.push("CONFIG_SWAP is disabled".to_string()),
+            None => warnings.push("could not confirm CONFIG_SWAP".to_string()),
         }
     }
     if kernel.io_uring != Some(KernelConfig::BuiltIn) {
         match kernel.io_uring {
             Some(config) if config.enabled() => {}
-            Some(_) => warnings.push("CONFIG_IO_URING esta desabilitado".to_string()),
-            None => warnings.push("nao foi possivel confirmar CONFIG_IO_URING".to_string()),
+            Some(_) => warnings.push("CONFIG_IO_URING is disabled".to_string()),
+            None => warnings.push("could not confirm CONFIG_IO_URING".to_string()),
         }
     }
     if backends.nbd_detail.contains("module-not-loaded") {
         warnings.push(
-            "CONFIG_BLK_DEV_NBD existe, mas /dev/nbd* nao esta presente; start podera exigir modprobe nbd"
+            "CONFIG_BLK_DEV_NBD exists, but /dev/nbd* is not present; start may require modprobe nbd"
                 .to_string(),
         );
     }
@@ -523,7 +681,7 @@ fn probe_cuda() -> CudaProbe {
             nvidia_smi_status,
             nvidia_smi_output,
             gpu: None,
-            detail: "/dev/dxg ausente".to_string(),
+            detail: "/dev/dxg is absent".to_string(),
         };
     }
 
@@ -536,7 +694,7 @@ fn probe_cuda() -> CudaProbe {
             nvidia_smi_status,
             nvidia_smi_output,
             gpu: None,
-            detail: "libcuda.so nao encontrada".to_string(),
+            detail: "libcuda.so not found".to_string(),
         };
     };
 
@@ -552,7 +710,7 @@ fn probe_cuda() -> CudaProbe {
             nvidia_smi_status,
             nvidia_smi_output,
             gpu: None,
-            detail: "nvidia-smi reportou GPU bloqueada pelo sistema operacional".to_string(),
+            detail: "nvidia-smi reported the GPU is blocked by the operating system".to_string(),
         };
     }
 
@@ -626,7 +784,7 @@ fn run_nvidia_smi() -> (Option<PathBuf>, Option<i32>, Option<String>) {
 fn cuda_probe_via_lib() -> Result<GpuInfo, String> {
     let cuda = Cuda::load().map_err(|e| e.to_string())?;
     if cuda.device_count().map_err(|e| e.to_string())? < 1 {
-        return Err("CUDA nao encontrou devices".to_string());
+        return Err("CUDA found no devices".to_string());
     }
     let dev = cuda.device(0).map_err(|e| e.to_string())?;
     let ctx = cuda.create_context(&dev).map_err(|e| e.to_string())?;
@@ -638,59 +796,74 @@ fn cuda_probe_via_lib() -> Result<GpuInfo, String> {
     })
 }
 
-fn print_text_report(report: &CheckReport) {
-    print_basic_info(report);
-    print_swap_info(report);
-    print_backend_info(report);
-    print_decision(report);
-    print_details(report);
-    print_issues(report);
+fn print_text_report<W: Write + ?Sized>(
+    report: &CheckReport,
+    output: &mut W,
+) -> std::io::Result<()> {
+    print_basic_info(report, output)?;
+    print_swap_info(report, output)?;
+    print_backend_info(report, output)?;
+    print_decision(report, output)?;
+    print_details(report, output)?;
+    print_issues(report, output)
 }
 
-fn print_basic_info(report: &CheckReport) {
-    println!(
+fn print_basic_info<W: Write + ?Sized>(
+    report: &CheckReport,
+    output: &mut W,
+) -> std::io::Result<()> {
+    writeln!(
+        output,
         "WSL2: {} ({})",
         report.wsl.status.as_str(),
         report.wsl.release
-    );
-    println!(
+    )?;
+    writeln!(
+        output,
         "CUDA: {} ({})",
         report.cuda.status.as_str(),
         report.cuda.detail
-    );
+    )?;
 
     match &report.cuda.gpu {
-        Some(gpu) => println!(
-            "GPU: {}, total={}MiB, livre={}MiB",
+        Some(gpu) => writeln!(
+            output,
+            "GPU: {}, total={}MiB, free={}MiB",
             gpu.name,
             bytes_to_mib(gpu.total_bytes),
             bytes_to_mib(gpu.free_bytes)
         ),
-        None => println!("GPU: unavailable"),
+        None => writeln!(output, "GPU: unavailable"),
     }
 }
 
-fn print_swap_info(report: &CheckReport) {
+fn print_swap_info<W: Write + ?Sized>(report: &CheckReport, output: &mut W) -> std::io::Result<()> {
     match report.swaps.first() {
-        Some(swap) => println!(
-            "Swap atual: {}, size={}MiB, used={}MiB, prio={}",
+        Some(swap) => writeln!(
+            output,
+            "Current swap: {}, size={}MiB, used={}MiB, prio={}",
             swap.filename,
             kib_to_mib(swap.size_kib),
             kib_to_mib(swap.used_kib),
             swap.priority
         ),
-        None => println!("Swap atual: none"),
+        None => writeln!(output, "Current swap: none"),
     }
 }
 
-fn print_backend_info(report: &CheckReport) {
-    println!(
+fn print_backend_info<W: Write + ?Sized>(
+    report: &CheckReport,
+    output: &mut W,
+) -> std::io::Result<()> {
+    writeln!(
+        output,
         "Backends: nbd={}, ublk={}",
         report.backends.nbd_status.as_str(),
         report.backends.ublk_status.as_str()
-    );
-    println!(
-        "Tiers (cascata): zram={}, vram=nbd({}), vhdx={}",
+    )?;
+    writeln!(
+        output,
+        "Tiers (cascade): zram={}, vram=nbd({}), vhdx={}",
         if report.kernel.zram.is_some_and(KernelConfig::enabled) {
             "ok"
         } else {
@@ -702,70 +875,93 @@ fn print_backend_info(report: &CheckReport) {
             .first()
             .map(|s| s.filename.as_str())
             .unwrap_or("none")
-    );
+    )
 }
 
-fn print_decision(report: &CheckReport) {
-    println!("Decisao: {}", report.decision().as_str());
+fn print_decision<W: Write + ?Sized>(report: &CheckReport, output: &mut W) -> std::io::Result<()> {
+    writeln!(output, "Decision: {}", report.decision().as_str())
 }
 
-fn print_details(report: &CheckReport) {
-    println!("Detalhes:");
-    println!(
+fn print_details<W: Write + ?Sized>(report: &CheckReport, output: &mut W) -> std::io::Result<()> {
+    writeln!(output, "Details:")?;
+    writeln!(
+        output,
         "  config: {}",
         report.kernel.config_source.as_deref().unwrap_or("unknown")
-    );
-    println!("  CONFIG_SWAP: {}", config_text(report.kernel.swap));
-    println!("  CONFIG_IO_URING: {}", config_text(report.kernel.io_uring));
-    println!(
+    )?;
+    writeln!(output, "  CONFIG_SWAP: {}", config_text(report.kernel.swap))?;
+    writeln!(
+        output,
+        "  CONFIG_IO_URING: {}",
+        config_text(report.kernel.io_uring)
+    )?;
+    writeln!(
+        output,
         "  kernel.io_uring_disabled: {}",
         io_uring_runtime_text(report.kernel.io_uring_runtime)
-    );
-    println!("  CONFIG_BLK_DEV_NBD: {}", config_text(report.kernel.nbd));
-    println!("  CONFIG_BLK_DEV_UBLK: {}", config_text(report.kernel.ublk));
-    println!("  CONFIG_ZRAM: {}", config_text(report.kernel.zram));
-    println!("  nbd: {}", report.backends.nbd_detail);
-    println!("  ublk: {}", report.backends.ublk_detail);
-    println!(
+    )?;
+    writeln!(
+        output,
+        "  CONFIG_BLK_DEV_NBD: {}",
+        config_text(report.kernel.nbd)
+    )?;
+    writeln!(
+        output,
+        "  CONFIG_BLK_DEV_UBLK: {}",
+        config_text(report.kernel.ublk)
+    )?;
+    writeln!(output, "  CONFIG_ZRAM: {}", config_text(report.kernel.zram))?;
+    writeln!(output, "  nbd: {}", report.backends.nbd_detail)?;
+    writeln!(output, "  ublk: {}", report.backends.ublk_detail)?;
+    writeln!(
+        output,
         "  /dev/dxg: {}",
         if report.cuda.dxg_present {
             "present"
         } else {
             "missing"
         }
-    );
-    println!(
+    )?;
+    writeln!(
+        output,
         "  libcuda: {}",
         report.cuda.libcuda_path.as_deref().unwrap_or("missing")
-    );
-    println!(
+    )?;
+    writeln!(
+        output,
         "  nvidia-smi: {}",
         report.cuda.nvidia_smi_path.as_deref().unwrap_or("missing")
-    );
+    )?;
     if let Some(code) = report.cuda.nvidia_smi_status {
-        println!("  nvidia-smi exit: {code}");
+        writeln!(output, "  nvidia-smi exit: {code}")?;
     }
-    if let Some(output) = &report.cuda.nvidia_smi_output
-        && !output.is_empty()
+    if let Some(nvidia_smi_output) = &report.cuda.nvidia_smi_output
+        && !nvidia_smi_output.is_empty()
     {
-        println!("  nvidia-smi output: {}", one_line(output));
+        writeln!(
+            output,
+            "  nvidia-smi output: {}",
+            one_line(nvidia_smi_output)
+        )?;
     }
+    Ok(())
 }
 
-fn print_issues(report: &CheckReport) {
+fn print_issues<W: Write + ?Sized>(report: &CheckReport, output: &mut W) -> std::io::Result<()> {
     if !report.blockers.is_empty() {
-        println!("Bloqueios:");
+        writeln!(output, "Blockers:")?;
         for blocker in &report.blockers {
-            println!("  - {blocker}");
+            writeln!(output, "  - {blocker}")?;
         }
     }
 
     if !report.warnings.is_empty() {
-        println!("Avisos:");
+        writeln!(output, "Warnings:")?;
         for warning in &report.warnings {
-            println!("  - {warning}");
+            writeln!(output, "  - {warning}")?;
         }
     }
+    Ok(())
 }
 
 fn recommendations_for(report: &CheckReport) -> Vec<String> {
@@ -773,22 +969,22 @@ fn recommendations_for(report: &CheckReport) -> Vec<String> {
 
     if report.wsl.status == Status::Fail {
         recommendations.push(
-            "Execute isto apenas em uma distro WSL2; este projeto nao deve rodar em Linux bare-metal neste modo"
+            "Run this only in a WSL2 distro; this project must not run on bare-metal Linux in this mode"
                 .to_string(),
         );
     }
 
     if !report.cuda.dxg_present {
         recommendations.push(
-            "No Windows, atualize WSL com `wsl --update`; depois execute `wsl --shutdown` quando puder interromper a distro"
+            "On Windows, update WSL with `wsl --update`; then run `wsl --shutdown` when you can interrupt the distro"
                 .to_string(),
         );
         recommendations.push(
-            "Atualize o driver NVIDIA no Windows; nao instale driver NVIDIA Linux dentro do WSL"
+            "Update the NVIDIA driver on Windows; do not install the NVIDIA Linux driver inside WSL"
                 .to_string(),
         );
         recommendations.push(
-            "Reabra a distro e confirme que `/dev/dxg` existe antes de tentar qualquer teste de VRAM"
+            "Reopen the distro and confirm that `/dev/dxg` exists before trying any VRAM test"
                 .to_string(),
         );
     }
@@ -800,40 +996,40 @@ fn recommendations_for(report: &CheckReport) -> Vec<String> {
         .is_some_and(|output| output.contains("GPU access blocked by the operating system"))
     {
         recommendations.push(
-            "A GPU esta bloqueada pelo host; feche apps que possam monopolizar a GPU, atualize Windows/driver NVIDIA e reinicie o WSL manualmente"
+            "The GPU is blocked by the host; close apps that may monopolize it, update Windows/the NVIDIA driver, and restart WSL manually"
                 .to_string(),
         );
     }
 
     if report.cuda.libcuda_path.is_none() {
         recommendations.push(
-            "Instale apenas o CUDA Toolkit compativel com WSL se precisar compilar; evite pacotes `cuda`, `cuda-12-x` ou `cuda-drivers` dentro do WSL"
+            "Install only the WSL-compatible CUDA Toolkit if you need to compile; avoid `cuda`, `cuda-12-x`, or `cuda-drivers` packages inside WSL"
                 .to_string(),
         );
     }
 
     if report.backends.nbd_detail.contains("module-not-loaded") {
         recommendations.push(
-            "Para a fase de start futura, o backend MVP deve usar `nbd`; carregar o modulo com `modprobe nbd` deve ser uma acao manual e separada"
+            "For a future start phase, the MVP backend must use `nbd`; loading the module with `modprobe nbd` must be a separate manual action"
                 .to_string(),
         );
     }
 
     if report.backends.ublk_status == Status::Fail {
         recommendations.push(
-            "`ublk` esta indisponivel neste kernel; ignore por enquanto e mantenha o MVP em `nbd`"
+            "`ublk` is unavailable in this kernel; ignore it for now and keep the MVP on `nbd`"
                 .to_string(),
         );
     }
 
     if report.decision() == Decision::Ready {
         recommendations.push(
-            "Ambiente pronto para o proximo passo seguro: implementar e rodar um CUDA smoke test sem swap e com alocacao pequena"
+            "Environment ready for the next safe step: implement and run a CUDA smoke test without swap and with a small allocation"
                 .to_string(),
         );
     } else {
         recommendations.push(
-            "Nao execute `ramshared start`, `swapon`, testes de pressao de memoria ou auto-start ate `ramshared check` retornar `ready`"
+            "Do not run `ramshared start`, `swapon`, memory-pressure tests, or auto-start until `ramshared check` returns `ready`"
                 .to_string(),
         );
     }
@@ -841,11 +1037,15 @@ fn recommendations_for(report: &CheckReport) -> Vec<String> {
     recommendations
 }
 
-fn print_recommendations(recommendations: &[String]) {
-    println!("Recomendacoes:");
+fn print_recommendations<W: Write + ?Sized>(
+    recommendations: &[String],
+    output: &mut W,
+) -> std::io::Result<()> {
+    writeln!(output, "Recommendations:")?;
     for recommendation in recommendations {
-        println!("  - {recommendation}");
+        writeln!(output, "  - {recommendation}")?;
     }
+    Ok(())
 }
 
 fn render_doctor_json(report: &CheckReport, recommendations: &[String]) -> String {
@@ -1024,7 +1224,172 @@ impl fmt::Display for KernelConfig {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
+
+    #[derive(Default)]
+    struct RecordingCliActions {
+        calls: Vec<CliCommand>,
+        exit: u8,
+    }
+
+    impl RecordingCliActions {
+        fn with_exit(exit: u8) -> Self {
+            Self {
+                calls: Vec::new(),
+                exit,
+            }
+        }
+
+        fn result(&self) -> ExitCode {
+            ExitCode::from(self.exit)
+        }
+    }
+
+    impl CliActionRunner for RecordingCliActions {
+        fn check(
+            &mut self,
+            json: bool,
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Check { json });
+            self.result()
+        }
+
+        fn doctor(
+            &mut self,
+            json: bool,
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Doctor { json });
+            self.result()
+        }
+
+        fn up(
+            &mut self,
+            args: &[String],
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Up {
+                args: args.to_vec(),
+            });
+            self.result()
+        }
+
+        fn down(
+            &mut self,
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Down);
+            self.result()
+        }
+
+        fn status(
+            &mut self,
+            json: bool,
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Status { json });
+            self.result()
+        }
+
+        fn diagnose(
+            &mut self,
+            args: &[String],
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Diagnose {
+                args: args.to_vec(),
+            });
+            self.result()
+        }
+    }
+
+    fn cli_args(args: &[&str]) -> Vec<String> {
+        args.iter().map(|arg| (*arg).to_string()).collect()
+    }
+
+    #[test]
+    fn dispatch_refuses_invalid_flags_before_action() {
+        for args in [
+            cli_args(&["check", "--verbose"]),
+            cli_args(&["doctor", "--json", "--json"]),
+            cli_args(&["status", "--unsafe"]),
+            cli_args(&["status", "--json", "--json"]),
+            cli_args(&["down", "--force"]),
+        ] {
+            let mut actions = RecordingCliActions::default();
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let exit = run_from_args(&args, &mut actions, &mut stdout, &mut stderr);
+
+            assert_eq!(exit, ExitCode::from(2));
+            assert!(
+                actions.calls.is_empty(),
+                "{args:?} must not reach an action"
+            );
+            assert!(stdout.is_empty());
+            assert!(
+                String::from_utf8_lossy(&stderr).contains("invalid"),
+                "{args:?} must explain the refusal"
+            );
+        }
+    }
+
+    #[test]
+    fn dispatch_forwards_exact_status_and_diagnose_args() {
+        let mut actions = RecordingCliActions::with_exit(1);
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        assert_eq!(
+            run_from_args(
+                &cli_args(&["status", "--json"]),
+                &mut actions,
+                &mut stdout,
+                &mut stderr,
+            ),
+            ExitCode::from(1)
+        );
+        assert_eq!(
+            run_from_args(
+                &cli_args(&["diagnose", "--events", "sample.jsonl", "--json"]),
+                &mut actions,
+                &mut stdout,
+                &mut stderr,
+            ),
+            ExitCode::from(1)
+        );
+        assert_eq!(
+            run_from_args(
+                &cli_args(&["up", "--zram", "invalid"]),
+                &mut actions,
+                &mut stdout,
+                &mut stderr,
+            ),
+            ExitCode::from(1)
+        );
+
+        assert_eq!(
+            actions.calls,
+            vec![
+                CliCommand::Status { json: true },
+                CliCommand::Diagnose {
+                    args: cli_args(&["--events", "sample.jsonl", "--json"]),
+                },
+                CliCommand::Up {
+                    args: cli_args(&["--zram", "invalid"]),
+                },
+            ]
+        );
+    }
 
     #[test]
     fn parses_proc_swaps() {
@@ -1170,7 +1535,7 @@ CONFIG_BLK_DEV_NBD=m\n\
                         .to_string(),
                 ),
                 gpu: None,
-                detail: "/dev/dxg ausente".to_string(),
+                detail: "/dev/dxg is absent".to_string(),
             },
             backends: BackendProbe {
                 nbd_status: Status::Ok,
@@ -1178,7 +1543,7 @@ CONFIG_BLK_DEV_NBD=m\n\
                 ublk_status: Status::Fail,
                 ublk_detail: "CONFIG_BLK_DEV_UBLK disabled or unknown".to_string(),
             },
-            blockers: vec!["CUDA indisponivel: /dev/dxg ausente".to_string()],
+            blockers: vec!["CUDA unavailable: /dev/dxg is absent".to_string()],
             warnings: Vec::new(),
         };
 
@@ -1192,12 +1557,12 @@ CONFIG_BLK_DEV_NBD=m\n\
         assert!(
             recommendations
                 .iter()
-                .any(|item| item.contains("nao instale driver NVIDIA Linux"))
+                .any(|item| item.contains("do not install the NVIDIA Linux driver inside WSL"))
         );
         assert!(
             recommendations
                 .iter()
-                .any(|item| item.contains("Nao execute `ramshared start`"))
+                .any(|item| item.contains("Do not run `ramshared start`"))
         );
     }
 }

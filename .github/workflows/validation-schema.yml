@@ -3,18 +3,45 @@ name: Validation Schema Gate
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
+  workflow_call:
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: validation-schema-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   validation-schema:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
       - name: Validate new entries in validation.md
         run: node tools/ci/check-validation-schema.mjs --diff "origin/${{ github.base_ref }}"
+
+  validation-schema-summary:
+    name: validation-schema-summary
+    if: always()
+    needs: [validation-schema]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Require completed validation schema gate
+        env:
+          VALIDATION_SCHEMA_RESULT: ${{ needs.validation-schema.result }}
+        run: |
+          set -euo pipefail
+          if [ "$VALIDATION_SCHEMA_RESULT" != success ]; then
+            echo "VALIDATION_SCHEMA_SUMMARY=FAIL"
+            exit 1
+          fi
+          echo "VALIDATION_SCHEMA_SUMMARY=PASS"

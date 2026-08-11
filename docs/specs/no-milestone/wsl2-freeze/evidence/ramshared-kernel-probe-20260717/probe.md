@@ -17,7 +17,7 @@ Is WSL distro `RamShared-Kernel` a disposable isolated lab for freeze-eliminatio
 | /mnt/c/Users | yes | yes |
 | os-release | Ubuntu 24.04.4 | Ubuntu 24.04.4 |
 | hostname | emedev | emedev |
-| repo at /home/emdev/codespace/ramshared | yes | no (use /mnt/c/ramshared or Windows path) |
+| repo at <repo-root> | yes | no (use /mnt/c/ramshared or Windows path) |
 
 ## Verdict
 **NOT an isolab.** Second WSL distro on the **same Windows desktop host**. Thrash would still freeze the daily machine.

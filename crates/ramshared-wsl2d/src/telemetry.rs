@@ -143,7 +143,7 @@ mod tests {
     fn reconcile_idle_none() {
         let (delta, flag) = reconcile(&base(), 0.10);
         assert_eq!(flag, ReconcileFlag::None);
-        assert!(delta < 0.0, "ocupado < emprestado => delta negativo");
+        assert!(delta < 0.0, "occupied < borrowed => negative delta");
     }
 
     #[test]
@@ -199,7 +199,7 @@ mod tests {
         assert_eq!(flag, ReconcileFlag::Unaccounted);
         assert!(
             (delta - 1.0).abs() < 1e-9,
-            "delta = 1.0 (drift total), não occupied cru"
+            "delta = 1.0 (total drift), not raw occupied"
         );
     }
 
@@ -253,13 +253,13 @@ mod tests {
             commit: Some("c".into()),
             core,
         };
-        let line = serde_json::to_string(&sample).expect("serializa JSON");
+        let line = serde_json::to_string(&sample).expect("serializes JSON");
         assert!(line.contains("\"t\":1718"));
         assert!(
             line.contains("\"swap_used\":1024"),
-            "flatten: campo do core na raiz"
+            "flatten: core field at the root"
         );
         assert!(line.contains("\"flag\":\"none\""), "snake_case");
-        assert!(!line.contains("\"core\":"), "flatten não aninha");
+        assert!(!line.contains("\"core\":"), "flatten does not nest");
     }
 }

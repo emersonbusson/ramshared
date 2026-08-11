@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# qemu-broker-drill.sh — drill end-to-end do Memory Broker (P1) num QEMU ISOLADO, sem GPU.
-# Prova, sem risco pro host, o caminho completo broker↔agente↔swap-sobre-NBD:
-#   FASE 1 (bring-up): insmod nbd; o daemon sobe em modo broker (--backend ram, 2 slices) e
-#                      escuta o árbitro; o agente registra (Register→Registered).
-#   FASE 2 (arbitragem): o árbitro assina as slices livres ao tenant (round-robin) → o agente
-#                        anexa cada export (nbd-client → mkswap → swapon) → /proc/swaps as mostra.
-#   FASE 3 (teardown): swapoff + nbd-client -d (ordem limpa, daemon ainda servindo) → SIGTERM no
-#                      daemon → o worker encerra (DT-28) e sai 0; nenhum swap órfão.
+# qemu-broker-drill.sh — end-to-end Memory Broker (P1) drill in an ISOLATED QEMU, without a GPU.
+# Proves the complete broker↔agent↔swap-over-NBD path without risk to the host:
+#   PHASE 1 (bring-up): insmod nbd; the daemon starts in broker mode (--backend ram, 2 slices) and
+#                       listens for the arbiter; the agent registers (Register→Registered).
+#   PHASE 2 (arbitration): the arbiter assigns free slices to the tenant (round-robin) → the agent
+#                          attaches each export (nbd-client → mkswap → swapon) → /proc/swaps shows them.
+#   PHASE 3 (teardown): swapoff + nbd-client -d (clean order while the daemon still serves) → SIGTERM
+#                       to the daemon → the worker terminates (DT-28) and exits 0; no orphaned swap.
 #
 # WHY QEMU (session rule): running the swap daemon + nbd-client + swapon directly in WSL2 can
 # freeze the host (swapoff over a dead NBD -> I/O in D-state). In a VM, any stall is contained
 # by `timeout` — the host remains unaffected. RAM backend: Cuda::load() is not called (no libcuda).
 #
-# uso: qemu-broker-drill.sh [bzImage] [daemon_bin] [agent_bin] [nbd.ko]
-# saída 0 = PASS (swap ativo via broker + teardown limpo).
+# usage: qemu-broker-drill.sh [bzImage] [daemon_bin] [agent_bin] [nbd.ko]
+# exit 0 = PASS (swap active through the broker and clean teardown).
 # SPEC: docs/memory-broker/SPECv2.md ITEM-11.
 set -euo pipefail
 
@@ -28,11 +28,11 @@ ARBITER=127.0.0.1:7000
 SOCK=/tmp/broker.sock
 
 for f in "$BZ" "$DAEMON" "$AGENT" "$NBD_KO"; do
-  [ -f "$f" ] || { echo "arquivo inexistente: $f" >&2; exit 2; }
+  [ -f "$f" ] || { echo "missing file: $f" >&2; exit 2; }
 done
-command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 ausente" >&2; exit 2; }
-command -v nbd-client >/dev/null || { echo "nbd-client ausente (instale nbd-client)" >&2; exit 2; }
-[ -x /bin/busybox ] || { echo "busybox-static ausente" >&2; exit 2; }
+command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 missing" >&2; exit 2; }
+command -v nbd-client >/dev/null || { echo "nbd-client missing (install nbd-client)" >&2; exit 2; }
+[ -x /bin/busybox ] || { echo "busybox-static missing" >&2; exit 2; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 IRD="$WORK/irfs"; mkdir -p "$IRD/bin" "$IRD/modules"
@@ -81,29 +81,29 @@ echo "KTEST-AGENT-SHA-ACTUAL=\$AGENT_ACTUAL"
 [ -n "\$DAEMON_EXPECTED" ] && [ "\$DAEMON_EXPECTED" = "\$DAEMON_ACTUAL" ] && echo "KTEST-DAEMON-BINARY-MATCH=ok" || echo "KTEST-DAEMON-BINARY-MATCH=fail"
 [ -n "\$AGENT_EXPECTED" ] && [ "\$AGENT_EXPECTED" = "\$AGENT_ACTUAL" ] && echo "KTEST-AGENT-BINARY-MATCH=ok" || echo "KTEST-AGENT-BINARY-MATCH=fail"
 
-# --- FASE 1: bring-up ---
+# --- PHASE 1: bring-up ---
 if \$BB insmod /modules/nbd.ko nbds_max=8 2>/tmp/e; then
   echo "KTEST-NBD=ok"
 else
   echo "KTEST-NBD=fail: \$(\$BB cat /tmp/e)"
 fi
 
-# daemon em modo broker RAM (sem GPU): N slices, socket Unix + árbitro TCP.
+# daemon in RAM broker mode (without a GPU): N slices, Unix socket, and TCP arbiter.
 /ramsharedd --transport nbd --backend ram \\
   --slices $SLICES --slice-mb $SLICE_MB --sock $SOCK --arbiter-listen $ARBITER \\
   --telemetry-jsonl /tmp/telem.jsonl \\
   >/tmp/daemon.log 2>&1 &
 DPID=\$!
 echo "KTEST-DAEMON-PID=\$DPID"
-\$BB sleep 1   # árbitro liga + socket Unix pronto
+\$BB sleep 1   # arbiter starts and the Unix socket becomes ready
 
-# agente (tenant local: transporte unix → endpoint = socket Unix do daemon).
+# agent (local tenant: Unix transport → endpoint = the daemon's Unix socket).
 /ramshared-agent --broker $ARBITER --tenant vm --transport unix \\
   --nbd-base /dev/nbd --watchdog-secs 120 >/tmp/agent.log 2>&1 &
 APID=\$!
 echo "KTEST-AGENT-PID=\$APID"
 
-# --- FASE 2: arbitragem → swap ativo. Espera /proc/swaps mostrar pelo menos 1 nbd (bounded ~25s)
+# --- PHASE 2: arbitration → active swap. Waits for /proc/swaps to show at least one nbd (bounded ~25s)
 N=0; i=0
 while [ \$i -lt 250 ]; do
   N=\$(\$BB grep -c '/dev/nbd' /proc/swaps 2>/dev/null); [ -z "\$N" ] && N=0
@@ -119,12 +119,12 @@ else
   echo "KTEST-SWAP-ACTIVE=fail"
 fi
 
-# --- Telemetria (RF-5): o broker emite 1 linha JSONL por tick em /tmp/telem.jsonl. Prova o
-# write-no-arquivo do daemon vivo (in qemu, isolado). RAM → vram_*=null (sentinela esperada).
+# --- Telemetry (RF-5): the broker emits one JSONL line per tick in /tmp/telem.jsonl. Proves the
+# live daemon's write-to-file (isolated in QEMU). RAM → vram_*=null (expected sentinel).
 TLINES=\$(\$BB grep -c '"flag"' /tmp/telem.jsonl 2>/dev/null); [ -z "\$TLINES" ] && TLINES=0
 echo "KTEST-TELEMETRY-LINES=\$TLINES"
 [ "\$TLINES" -ge 1 ] && echo "KTEST-TELEMETRY=ok" || echo "KTEST-TELEMETRY=fail"
-\$BB sleep 2.5  # deixa >=1 tick (2s) emitir uma amostra completa
+\$BB sleep 2.5  # lets >=1 tick (2s) emit a complete sample
 echo "KTEST-TELEMETRY-SAMPLE:"; \$BB cat /tmp/telem.jsonl 2>/dev/null
 
 # --- PHASE 3: clean teardown. swapoff + disconnect NBD WHILE the daemon is still serving, then
@@ -159,13 +159,13 @@ chmod +x "$IRD/init"
 ACCEL=(-machine accel=tcg)
 [ -w /dev/kvm ] && ACCEL=(-enable-kvm -cpu host)
 
-echo "[qemu-broker-drill] bootando (accel: ${ACCEL[*]})..."
+echo "[qemu-broker-drill] booting (accel: ${ACCEL[*]})..."
 timeout 240 qemu-system-x86_64 "${ACCEL[@]}" -m 512 -smp 2 -nographic -no-reboot \
   -kernel "$BZ" -initrd "$WORK/initramfs.gz" \
   -append "console=ttyS0 panic=1 rdinit=/init" > "$WORK/serial.log" 2>&1 || true
 
-echo "=========== resultado ==========="
-grep -E "KTEST-" "$WORK/serial.log" || echo "sem output KTEST — kernel pode nao ter bootado"
+echo "=========== result ==========="
+grep -E "KTEST-" "$WORK/serial.log" || echo "no KTEST output — kernel may not have booted"
 echo "================================="
 if grep -q "KTEST-SWAP-ACTIVE=ok" "$WORK/serial.log" \
    && grep -q "KTEST-DAEMON-BINARY-MATCH=ok" "$WORK/serial.log" \
@@ -173,10 +173,10 @@ if grep -q "KTEST-SWAP-ACTIVE=ok" "$WORK/serial.log" \
    && grep -q "KTEST-SWAPOFF=ok" "$WORK/serial.log" \
    && grep -q "KTEST-DAEMON-TERMINATED=ok" "$WORK/serial.log" \
    && grep -q "KTEST-TELEMETRY=ok" "$WORK/serial.log"; then
-  echo "QEMU-BROKER-DRILL: PASS — broker assinou slices, swap ativo via NBD, telemetria JSONL, teardown limpo."
+  echo "QEMU-BROKER-DRILL: PASS — broker assigned slices, swap active through NBD, JSONL telemetry, clean teardown."
   exit 0
 else
-  echo "QEMU-BROKER-DRILL: FAIL/INCONCLUSIVO — veja os KTEST acima e o serial."
+  echo "QEMU-BROKER-DRILL: FAIL/INCONCLUSIVE — see the KTEST output above and the serial log."
   echo "--- tail serial ---"; tail -30 "$WORK/serial.log"
   exit 1
 fi

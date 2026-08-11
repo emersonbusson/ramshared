@@ -1,0 +1,90 @@
+{
+  "schema_version": "ramshared-spec-evidence/v1",
+  "slug": "benchmark-evidence-integrity",
+  "status": "DONE",
+  "spec": {
+    "path": "docs/specs/no-milestone/benchmark-evidence-integrity/SPEC.md",
+    "sha256": "ed0eaef1dcd53b73464f123a193d44c5fda98386276ca57bcebdc69a63492b36"
+  },
+  "tests": [
+    {
+      "name": "valid_v1_record_passes",
+      "path": "tools/ci/check-benchmark-evidence.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    },
+    {
+      "name": "complete_done_manifest_passes",
+      "path": "tools/ci/check-spec-evidence.test.mjs",
+      "kind": "unit",
+      "exit_code": 0
+    }
+  ],
+  "cover": [
+    {
+      "path": "tools/ci/check-benchmark-evidence.mjs",
+      "classification": "N/A — Node unit-tested",
+      "justification": "The canonical Rust slice coverage tool is not applicable to zero-dependency Node business logic."
+    },
+    {
+      "path": "tools/ci/check-spec-evidence.mjs",
+      "classification": "N/A — Node unit-tested",
+      "justification": "The canonical Rust slice coverage tool is not applicable to zero-dependency Node business logic."
+    }
+  ],
+  "live": {
+    "required": true,
+    "before": {
+      "benchmark_sections": 5,
+      "legacy_jsonl_rows": 3,
+      "evidence_gate": false
+    },
+    "action": {
+      "command": "./scripts/docs-check.sh"
+    },
+    "after": {
+      "mapped_sections": 5,
+      "mapped_legacy_rows": 3,
+      "docs_check_exit": 0
+    },
+    "legitimate": {
+      "verdict": "PASS"
+    },
+    "refusals": [
+      {
+        "name": "hash-mismatched artifact",
+        "verdict": "PASS"
+      },
+      {
+        "name": "non-PASS promotion",
+        "verdict": "PASS"
+      }
+    ],
+    "cleanup": {
+      "complete": true,
+      "residue": 0
+    },
+    "evidence_artifacts": [
+      "docs/specs/no-milestone/benchmark-evidence-integrity/evidence/validation-summary.json"
+    ]
+  },
+  "binary_match": {
+    "required": false,
+    "passed": false,
+    "identities": []
+  },
+  "artifacts": [
+    {
+      "path": "docs/specs/no-milestone/benchmark-evidence-integrity/evidence/validation-summary.json",
+      "bytes": 550,
+      "sha256": "2252c540a792aba5fc8de74a0ea84ae2b861fa62e84390750c97e88c058d4375"
+    }
+  ],
+  "validation_path": "validation.md",
+  "impl_path": "docs/specs/no-milestone/benchmark-evidence-integrity/IMPL.md",
+  "gaps": {
+    "open": [],
+    "env_bound": []
+  },
+  "rollback_trigger": "one invalid claim or sensitive diagnostic passes the public gate"
+}

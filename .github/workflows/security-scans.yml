@@ -1,6 +1,6 @@
 name: Security Scans
 
-# Port of Advoq security posture for a Rust userspace repo (ubuntu-latest).
+# RamShared security gates for the Rust userspace repository (ubuntu-latest).
 # Gitleaks stays in its own workflow (already required). This adds:
 # - cargo-audit (Rust CVE advisories)
 # - Trivy filesystem scan (CRITICAL/HIGH, unfixed ignored)
@@ -10,36 +10,75 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
 
-permissions:
-  contents: read
-  security-events: write
+permissions: {}
 
 concurrency:
-  group: security-scans-${{ github.ref }}
+  group: security-scans-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   cargo-audit:
     name: cargo-audit
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
 
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        run: cargo install cargo-audit --locked --version 0.22.2
 
-      - name: Audit crates.io advisories
-        run: cargo audit
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --version 0.19.9
+
+      - name: Audit vetted RustSec snapshot
+        env:
+          RUSTSEC_DB_URL: https://github.com/RustSec/advisory-db.git
+          RUSTSEC_DB_COMMIT: 309ad29d8fe448bf986019e05d47b9e0e29a2218
+          RUSTSEC_DB_COMMIT_UTC: "2026-08-09T12:34:06Z"
+          RUSTSEC_DB_MAX_AGE_DAYS: "7"
+        run: |
+          set -euo pipefail
+          RUSTSEC_DB_DIR="$(mktemp -d)"
+          trap 'rm -rf -- "$RUSTSEC_DB_DIR"' EXIT
+          git init --quiet "$RUSTSEC_DB_DIR"
+          git -C "$RUSTSEC_DB_DIR" remote add origin "$RUSTSEC_DB_URL"
+          git -C "$RUSTSEC_DB_DIR" fetch --depth=1 origin "$RUSTSEC_DB_COMMIT"
+          git -C "$RUSTSEC_DB_DIR" checkout --detach --quiet FETCH_HEAD
+          actual_commit="$(git -C "$RUSTSEC_DB_DIR" rev-parse HEAD)"
+          test "$actual_commit" = "$RUSTSEC_DB_COMMIT"
+          actual_snapshot_epoch="$(git -C "$RUSTSEC_DB_DIR" show -s --format=%ct HEAD)"
+          declared_snapshot_epoch="$(date -u --date="$RUSTSEC_DB_COMMIT_UTC" +%s)"
+          test "$actual_snapshot_epoch" -eq "$declared_snapshot_epoch"
+          RUSTSEC_DB_MAX_AGE_SECONDS="$((RUSTSEC_DB_MAX_AGE_DAYS * 86400))"
+          snapshot_age_seconds="$(( $(date -u +%s) - actual_snapshot_epoch ))"
+          if [ "$snapshot_age_seconds" -lt 0 ] || [ "$snapshot_age_seconds" -gt "$RUSTSEC_DB_MAX_AGE_SECONDS" ]; then
+            echo "RustSec advisory-db snapshot is outside its allowed age."
+            exit 1
+          fi
+          echo "RUSTSEC_DB_SNAPSHOT=$actual_commit"
+          echo "RUSTSEC_DB_SNAPSHOT_AGE_SECONDS=$snapshot_age_seconds"
+          echo "RUSTSEC_UPSTREAM_HEAD_HEALTH=scheduled-curator-required"
+          cargo audit --db "$RUSTSEC_DB_DIR" --no-fetch
+
+      - name: Enforce dependency policy
+        run: cargo deny check
 
   trivy:
     name: Trivy filesystem scan
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Run Trivy summary
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -65,7 +104,37 @@ jobs:
           output: trivy-results.sarif
           limit-severities-for-sarif: true
 
+      - name: Validate Trivy SARIF
+        run: |
+          set -euo pipefail
+          test -s trivy-results.sarif
+          jq -e '.version == "2.1.0" and (.runs | type == "array")' trivy-results.sarif >/dev/null
+
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@v4
-        if: always() && hashFiles('trivy-results.sarif') != ''
-        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        if: always() && hashFiles('trivy-results.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        with:
+          sarif_file: trivy-results.sarif
+
+  security-summary:
+    name: security-summary
+    if: always()
+    needs: [cargo-audit, trivy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Require completed security gates
+        env:
+          CARGO_AUDIT_RESULT: ${{ needs.cargo-audit.result }}
+          TRIVY_RESULT: ${{ needs.trivy.result }}
+        run: |
+          set -euo pipefail
+          for result in "$CARGO_AUDIT_RESULT" "$TRIVY_RESULT"; do
+            if [ "$result" != success ]; then
+              echo "SECURITY_SUMMARY=FAIL"
+              exit 1
+            fi
+          done
+          echo "SECURITY_SUMMARY=PASS"

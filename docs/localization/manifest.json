@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "canonical_language": "en",
+  "current_policy": "informational-non-normative",
+  "protected_document_classes": [
+    "prd",
+    "spec",
+    "impl",
+    "adr",
+    "ci",
+    "evidence",
+    "benchmark"
+  ],
+  "entries": [
+    {
+      "canonical_source": "README.md",
+      "localized_path": "README.pt-BR.md",
+      "source_sha256": "1d3aae9efa08a78c25d1c9f26eaa8d1f4761637f1486cdd3739038f54020fea7",
+      "state": "current",
+      "policy": "informational-non-normative"
+    },
+    {
+      "canonical_source": "README.md",
+      "localized_path": "docs/pt-BR/README.md",
+      "source_sha256": "1d3aae9efa08a78c25d1c9f26eaa8d1f4761637f1486cdd3739038f54020fea7",
+      "state": "current",
+      "policy": "informational-non-normative"
+    }
+  ]
+}

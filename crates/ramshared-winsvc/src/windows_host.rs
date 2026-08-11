@@ -74,6 +74,18 @@ pub struct LunIdentity {
     pub disk_number: u32,
 }
 
+#[derive(serde::Deserialize)]
+struct DiskInfo {
+    #[serde(rename = "Number")]
+    number: u32,
+    #[serde(rename = "FriendlyName")]
+    friendly_name: String,
+    #[serde(rename = "Size")]
+    size: u64,
+    #[serde(rename = "SerialNumber")]
+    serial_number: String,
+}
+
 impl LunIdentity {
     pub const VENDOR: &'static str = "RAMSHARE";
     pub const PRODUCT: &'static str = "VRAMDISK";
@@ -85,6 +97,43 @@ impl LunIdentity {
             && self.serial.eq_ignore_ascii_case(serial)
             && self.size_bytes == size_bytes
     }
+}
+
+fn parse_find_lun_output(
+    text: &str,
+    expected_serial: &str,
+    expected_size_bytes: u64,
+) -> Result<Option<LunIdentity>, HostError> {
+    let disks = serde_json::from_str::<Vec<DiskInfo>>(text)
+        .map_err(|error| HostError::Identity(format!("malformed Get-Disk output: {error}")))?;
+    if disks.is_empty() {
+        return Ok(None);
+    }
+    if disks.len() != 1 {
+        return Err(HostError::Identity(format!(
+            "ambiguous exact LUN identity count={}",
+            disks.len()
+        )));
+    }
+
+    let info = disks.into_iter().next().ok_or_else(|| {
+        HostError::Identity("exact LUN identity disappeared during parsing".into())
+    })?;
+    let (vendor, product) =
+        parse_product_friendly_name(info.friendly_name.trim()).map_err(HostError::Identity)?;
+    let lun = LunIdentity {
+        vendor,
+        product,
+        serial: info.serial_number.trim().to_string(),
+        size_bytes: info.size,
+        disk_number: info.number,
+    };
+    if !lun.matches_expected(expected_serial, expected_size_bytes) {
+        return Err(HostError::Identity(
+            "Get-Disk returned a contradictory exact LUN identity".into(),
+        ));
+    }
+    Ok(Some(lun))
 }
 
 /// Exclusive volume lock handle.
@@ -239,8 +288,8 @@ impl WindowsHostState {
             "@(Get-CimInstance Win32_PageFileUsage -ErrorAction Stop | ",
             "ForEach-Object { [string]$_.Name }) | ForEach-Object { Write-Output $_ }"
         );
-        let output =
-            run_powershell_bounded(script, Duration::from_secs(3)).map_err(HostError::Pagefile)?;
+        let output = run_powershell_bounded(script, Duration::from_secs(3), &[])
+            .map_err(HostError::Pagefile)?;
         if !output.status.success() {
             return Err(HostError::Pagefile(format!(
                 "Win32_PageFileUsage failed status={:?} stderr={}",
@@ -382,7 +431,7 @@ impl WindowsHostState {
         if path != drive_path && !volume_guid {
             return Err(HostError::Volume("invalid volume device path".into()));
         }
-        let wide = to_wide(&path);
+        let wide = to_wide(path);
         let handle = unsafe {
             CreateFileW(
                 wide.as_ptr(),
@@ -448,22 +497,24 @@ impl WindowsHostState {
         }
         // Letter-only discovery is a fallback; callers that know serial should use
         // observe_product_volume.
-        let script = format!(
-            concat!(
-                "$letter='{letter}'; ",
-                "$parts=@(Get-Partition -ErrorAction SilentlyContinue | ",
-                "Where-Object {{ $_.DriveLetter -eq $letter }}); ",
-                "if($parts.Count -ne 1){{ exit 42 }}; ",
-                "$d=Get-Disk -Number $parts[0].DiskNumber -ErrorAction Stop; ",
-                "$n=($d.FriendlyName -replace '\\s+',' ').Trim(); ",
-                "Write-Output ($n+'|'+$d.Size+'|'+$d.SerialNumber)"
-            ),
-            letter = letter
+        let script = concat!(
+            "$letter=$env:RAMSHARED_LETTER; ",
+            "$parts=@(Get-Partition -ErrorAction SilentlyContinue | ",
+            "Where-Object { $_.DriveLetter -eq $letter }); ",
+            "if($parts.Count -ne 1){ exit 42 }; ",
+            "$d=Get-Disk -Number $parts[0].DiskNumber -ErrorAction Stop; ",
+            "$n=($d.FriendlyName -replace '\\s+',' ').Trim(); ",
+            "Write-Output ($n+'|'+$d.Size+'|'+$d.SerialNumber)"
         );
+        let letter_value = letter.to_string();
         Self::parse_identity_output(
             letter,
-            &run_powershell_bounded(&script, Duration::from_secs(8))
-                .map_err(HostError::Identity)?,
+            &run_powershell_bounded(
+                script,
+                Duration::from_secs(8),
+                &[("RAMSHARED_LETTER", letter_value.as_str())],
+            )
+            .map_err(HostError::Identity)?,
         )
     }
 
@@ -476,7 +527,7 @@ impl WindowsHostState {
         mount_path: Option<&Path>,
         serial: &str,
         size_bytes: u64,
-    ) -> Result<(ObservedVolumeIdentity, u32, String), HostError> {
+    ) -> Result<(ObservedVolumeIdentity, u32, Option<String>), HostError> {
         let letter = letter.to_ascii_uppercase();
         if !('D'..='Z').contains(&letter) {
             return Err(HostError::Volume("letter must be D..=Z".into()));
@@ -484,26 +535,26 @@ impl WindowsHostState {
         if serial.len() != 16 || !serial.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(HostError::Identity("serial must be 16 hex chars".into()));
         }
+        let mut env_values = vec![
+            ("RAMSHARED_SERIAL", serial.to_string()),
+            ("RAMSHARED_LETTER", letter.to_string()),
+            ("RAMSHARED_SIZE", size_bytes.to_string()),
+        ];
         let partition_binding = if let Some(path) = mount_path {
-            let path = path.to_string_lossy().replace('/', "\\");
-            if path.contains(['\'', ';', '\r', '\n']) {
-                return Err(HostError::Identity("invalid private mount path".into()));
-            }
-            format!(
-                concat!(
-                    "$wantMount='{path}'; ",
-                    "$p=@(Get-Partition -DiskNumber $d[0].Number -ErrorAction Stop | ",
-                    "Where-Object {{ $ap=@($_.AccessPaths | Where-Object {{ ",
-                    "([string]$_).TrimEnd('\\') -ieq $wantMount.TrimEnd('\\') }}); $ap.Count -eq 1 }}); ",
-                    "if($p.Count -ne 1){{ Write-Error ('mount_binding_count='+$p.Count); exit 43 }}; "
-                ),
-                path = path
+            env_values.push(("RAMSHARED_MOUNT", path.to_string_lossy().replace('/', "\\")));
+            concat!(
+                "$wantMount=$env:RAMSHARED_MOUNT; ",
+                "$p=@(Get-Partition -DiskNumber $d[0].Number -ErrorAction SilentlyContinue | ",
+                "Where-Object { $ap=@($_.AccessPaths | Where-Object { ",
+                "([string]$_).TrimEnd('\\') -ieq $wantMount.TrimEnd('\\') }); $ap.Count -eq 1 }); ",
+                "if(@($p).Length -ne 1){ Write-Error ('mount_binding_count='+@($p).Length); exit 43 }; "
             )
+            .to_string()
         } else {
             concat!(
-                "$p=@(Get-Partition -DiskNumber $d[0].Number -ErrorAction Stop | ",
+                "$p=@(Get-Partition -DiskNumber $d[0].Number -ErrorAction SilentlyContinue | ",
                 "Where-Object { ([string]$_.DriveLetter) -ieq $wantLetter }); ",
-                "if($p.Count -ne 1){ Write-Error ('letter_binding_count='+$p.Count); exit 43 }; "
+                "if(@($p).Length -ne 1){ Write-Error ('letter_binding_count='+@($p).Length); exit 43 }; "
             )
             .to_string()
         };
@@ -513,30 +564,38 @@ impl WindowsHostState {
         let script = format!(
             concat!(
                 "$ErrorActionPreference='Stop'; ",
-                "$wantSerial='{serial}'; $wantLetter='{letter}'; $wantSize={size_bytes}; ",
+                "$wantSerial=$env:RAMSHARED_SERIAL; $wantLetter=$env:RAMSHARED_LETTER; $wantSize=[uint64]$env:RAMSHARED_SIZE; ",
                 "$d=@(Get-Disk -ErrorAction SilentlyContinue | Where-Object {{ ",
                 "  ((([string]$_.SerialNumber).Trim()) -ieq $wantSerial) -and ",
                 "  ([uint64]$_.Size -eq $wantSize) -and ",
                 "  ($_.FriendlyName -match 'RAMSHARE') ",
                 "}}); ",
-                "if($d.Count -ne 1){{ Write-Error ('disk_count='+$d.Count); exit 42 }}; ",
-                "{partition_binding}",
-                "$v=@($p[0] | Get-Volume -ErrorAction Stop); ",
-                "if($v.Count -ne 1){{ Write-Error ('volume_count='+$v.Count); exit 44 }}; ",
+                "if(@($d).Length -ne 1){{ Write-Error ('disk_count='+@($d).Length); exit 42 }}; ",
+                "$raw=([string]$d[0].PartitionStyle -eq 'RAW' -and [uint32]$d[0].NumberOfPartitions -eq 0); ",
+                "if(-not $raw){{ {partition_binding} }} else {{ ",
+                "$foreign=@(Get-Partition -ErrorAction SilentlyContinue | Where-Object {{ ",
+                "([string]$_.DriveLetter) -ieq $wantLetter }}); ",
+                "if(@($foreign).Length -ne 0){{ Write-Error ('raw_letter_occupied='+$wantLetter); exit 43 }}; ",
+                "$p=@() }}; ",
+                "$v=if($raw){{ @() }}else{{ @($p[0] | Get-Volume -ErrorAction Stop) }}; ",
+                "if($raw){{ $vp='RAW' }}else{{ ",
+                "if(@($v).Length -ne 1){{ Write-Error ('volume_count='+@($v).Length); exit 44 }}; ",
                 "$vp=([string]$v[0].Path).TrimEnd('\\'); ",
                 "if($vp.Length -lt 13 -or -not $vp.StartsWith('\\\\?\\Volume{{') -or -not $vp.EndsWith('}}')){{ Write-Error 'volume_path_invalid'; exit 45 }}; ",
                 "$parsedGuid=[guid]::Empty; ",
                 "if(-not [guid]::TryParse($vp.Substring(11,$vp.Length-12),[ref]$parsedGuid)){{ Write-Error 'volume_guid_invalid'; exit 45 }}; ",
+                "}}; ",
                 "$n=($d[0].FriendlyName -replace '\\s+',' ').Trim(); ",
                 "Write-Output ([string]$d[0].Number+'|'+$n+'|'+([string]$d[0].SerialNumber).Trim()+'|'+[string]$d[0].Size+'|'+$vp)"
             ),
-            serial = serial,
-            letter = letter,
-            size_bytes = size_bytes,
             partition_binding = partition_binding,
         );
-        let output =
-            run_powershell_bounded(&script, Duration::from_secs(4)).map_err(HostError::Identity)?;
+        let env_refs = env_values
+            .iter()
+            .map(|(key, value)| (*key, value.as_str()))
+            .collect::<Vec<_>>();
+        let output = run_powershell_bounded(&script, Duration::from_secs(12), &env_refs)
+            .map_err(HostError::Identity)?;
         if !output.status.success() {
             return Err(HostError::Identity(format!(
                 "product volume query failed status={:?} stderr={}",
@@ -559,7 +618,12 @@ impl WindowsHostState {
             .next()
             .and_then(|value| value.parse::<u64>().ok())
             .ok_or_else(|| HostError::Identity("missing disk size".into()))?;
-        let volume_path = parts.next().unwrap_or_default().to_string();
+        let volume_path_token = parts.next().unwrap_or_default();
+        let volume_path = if volume_path_token == "RAW" {
+            None
+        } else {
+            Some(volume_path_token.to_string())
+        };
         if parts.next().is_some() {
             return Err(HostError::Identity(
                 "ambiguous product identity output".into(),
@@ -617,49 +681,40 @@ impl WindowsHostState {
         })
     }
 
-    pub fn find_lun(serial: &str, size_bytes: u64) -> Result<Option<LunIdentity>, HostError> {
-        // Storage module via PowerShell (VPD serial when exposed).
-        let script = format!(
-            "Get-Disk | Where-Object {{ $_.Size -eq {size_bytes} -and $_.FriendlyName -match 'RAMSHARE|VRAMDISK' }} | Select-Object -First 1 Number,FriendlyName,Size,SerialNumber | ConvertTo-Json -Compress"
+    pub fn find_lun(
+        serial: &str,
+        size_bytes: u64,
+        provider_timeout: Duration,
+    ) -> Result<Option<LunIdentity>, HostError> {
+        // Storage module via PowerShell (VPD serial when exposed). The query
+        // always serializes an array so zero is distinguishable from malformed
+        // output and ambiguity is never silently truncated.
+        if serial.len() != 16 || !serial.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(HostError::Identity("serial must be 16 hex chars".into()));
+        }
+        let script = concat!(
+            "$wantSerial=$env:RAMSHARED_SERIAL; $wantSize=[uint64]$env:RAMSHARED_SIZE; ",
+            "$items = @(Get-Disk | Where-Object { $_.Size -eq $wantSize -and ",
+            "(([string]$_.FriendlyName -replace '\\s+', ' ').Trim()) -eq 'RAMSHARE VRAMDISK' -and ",
+            "([string]$_.SerialNumber).Trim() -ieq $wantSerial } | ",
+            "Select-Object Number,FriendlyName,Size,SerialNumber); ",
+            "ConvertTo-Json -InputObject $items -Compress"
         );
-        let output =
-            run_powershell_bounded(&script, Duration::from_secs(5)).map_err(HostError::Identity)?;
+        let size_value = size_bytes.to_string();
+        let output = run_powershell_bounded(
+            script,
+            provider_timeout,
+            &[
+                ("RAMSHARED_SERIAL", serial),
+                ("RAMSHARED_SIZE", size_value.as_str()),
+            ],
+        )
+        .map_err(HostError::Identity)?;
         if !output.status.success() {
             return Err(HostError::Identity("Get-Disk failed".into()));
         }
-        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if text.is_empty() || text == "null" {
-            return Ok(None);
-        }
-
-        #[derive(serde::Deserialize)]
-        struct DiskInfo {
-            #[serde(rename = "Number")]
-            number: Option<u32>,
-            #[serde(rename = "Size")]
-            size: Option<u64>,
-            #[serde(rename = "SerialNumber")]
-            serial_number: Option<String>,
-        }
-
-        let info = serde_json::from_str::<DiskInfo>(&text).unwrap_or(DiskInfo {
-            number: None,
-            size: None,
-            serial_number: None,
-        });
-
-        let lun = LunIdentity {
-            vendor: LunIdentity::VENDOR.into(),
-            product: LunIdentity::PRODUCT.into(),
-            serial: info.serial_number.unwrap_or_default().trim().to_string(),
-            size_bytes: info.size.unwrap_or(0),
-            disk_number: info.number.unwrap_or(0),
-        };
-        if lun.matches_expected(serial, size_bytes) {
-            Ok(Some(lun))
-        } else {
-            Ok(None)
-        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        parse_find_lun_output(text.trim(), serial, size_bytes)
     }
 
     pub fn binary_sha256(path: &Path) -> Result<String, HostError> {
@@ -707,25 +762,34 @@ impl WindowsHostState {
     }
 }
 
-fn run_powershell_bounded(script: &str, timeout: Duration) -> Result<Output, String> {
+fn run_powershell_bounded(
+    script: &str,
+    timeout: Duration,
+    environment: &[(&str, &str)],
+) -> Result<Output, String> {
     // Channel + helper thread so a hung Get-Partition/WMI cannot block teardown
     // forever even if kill/wait races on Windows.
     use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
     let wrapped_script = format!("$ProgressPreference='SilentlyContinue'; {script}");
     let encoded_script = encode_powershell_command(&wrapped_script);
+    let environment = validate_powershell_environment(environment)?;
     let (tx, rx) = std::sync::mpsc::channel();
     let done = std::sync::Arc::new(AtomicBool::new(false));
     let done_w = std::sync::Arc::clone(&done);
     let worker = std::thread::spawn(move || {
-        let child = match Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-OutputFormat",
-                "Text",
-                "-EncodedCommand",
-                &encoded_script,
-            ])
+        let mut command = Command::new("powershell.exe");
+        command.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-OutputFormat",
+            "Text",
+            "-EncodedCommand",
+            &encoded_script,
+        ]);
+        for (key, value) in &environment {
+            command.env(key, value);
+        }
+        let child = match command
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
@@ -778,6 +842,31 @@ fn run_powershell_bounded(script: &str, timeout: Duration) -> Result<Output, Str
         let _ = worker.join();
     }
     result
+}
+
+fn validate_powershell_environment(
+    environment: &[(&str, &str)],
+) -> Result<Vec<(String, String)>, String> {
+    const ALLOWED: [&str; 4] = [
+        "RAMSHARED_LETTER",
+        "RAMSHARED_MOUNT",
+        "RAMSHARED_SERIAL",
+        "RAMSHARED_SIZE",
+    ];
+    let mut validated = Vec::with_capacity(environment.len());
+    for (key, value) in environment {
+        if !ALLOWED.contains(key) {
+            return Err(format!("PowerShell environment key is not allowed: {key}"));
+        }
+        if value.contains('\0') {
+            return Err(format!("PowerShell environment value contains NUL: {key}"));
+        }
+        if validated.iter().any(|(seen, _)| seen == key) {
+            return Err(format!("duplicate PowerShell environment key: {key}"));
+        }
+        validated.push(((*key).to_string(), (*value).to_string()));
+    }
+    Ok(validated)
 }
 
 fn encode_powershell_command(script: &str) -> String {
@@ -988,6 +1077,14 @@ mod tests {
     }
 
     #[test]
+    fn mounted_identity_query_has_bounded_cold_start_budget() {
+        const CHILD_QUERY_BUDGET: Duration = Duration::from_secs(12);
+        const SCM_STOP_BUDGET: Duration = Duration::from_secs(30);
+        assert!(CHILD_QUERY_BUDGET > Duration::from_secs(4));
+        assert!(CHILD_QUERY_BUDGET < SCM_STOP_BUDGET);
+    }
+
+    #[test]
     fn relative_config_is_rejected() {
         let e = validate_absolute_config_path(Path::new("winsvc.toml")).unwrap_err();
         assert!(matches!(
@@ -1052,5 +1149,42 @@ mod tests {
             ..lun.clone()
         };
         assert!(!bad.matches_expected("ABCDEF0123456789", 64 * 1024 * 1024));
+    }
+
+    #[test]
+    fn find_lun_zero_is_retryable() {
+        assert_eq!(
+            parse_find_lun_output("[]", "ABCDEF0123456789", 64 * 1024 * 1024).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn find_lun_exact_singleton_succeeds() {
+        let json = r#"[{"Number":7,"FriendlyName":"RAMSHARE VRAMDISK","Size":67108864,"SerialNumber":"ABCDEF0123456789"}]"#;
+        let observed = parse_find_lun_output(json, "ABCDEF0123456789", 64 * 1024 * 1024)
+            .unwrap()
+            .unwrap();
+        assert_eq!(observed.disk_number, 7);
+        assert!(observed.matches_expected("ABCDEF0123456789", 64 * 1024 * 1024));
+    }
+
+    #[test]
+    fn find_lun_ambiguity_is_refused() {
+        let row = r#"{"Number":7,"FriendlyName":"RAMSHARE VRAMDISK","Size":67108864,"SerialNumber":"ABCDEF0123456789"}"#;
+        let error = parse_find_lun_output(
+            &format!("[{row},{row}]"),
+            "ABCDEF0123456789",
+            64 * 1024 * 1024,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("ambiguous exact LUN identity"));
+    }
+
+    #[test]
+    fn find_lun_malformed_output_is_refused() {
+        let error = parse_find_lun_output(r#"{"Number":7}"#, "ABCDEF0123456789", 64 * 1024 * 1024)
+            .unwrap_err();
+        assert!(error.to_string().contains("malformed Get-Disk output"));
     }
 }

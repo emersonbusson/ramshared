@@ -68,9 +68,9 @@ impl fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ProtocolError::ShortBuffer { got, need } => {
-                write!(f, "buffer curto: {got} < {need}")
+                write!(f, "short buffer: {got} < {need}")
             }
-            ProtocolError::BadMagic(m) => write!(f, "magic de requisição inválido: {m:#010x}"),
+            ProtocolError::BadMagic(m) => write!(f, "invalid request magic: {m:#010x}"),
         }
     }
 }
@@ -136,7 +136,7 @@ mod tests {
     #[test]
     fn parses_a_well_formed_write_request() {
         let raw = build_request(1, 0xdead_beef, 4096, 8192);
-        let r = parse_request(&raw).expect("deve parsear");
+        let r = parse_request(&raw).expect("must parse");
         assert_eq!(r.cmd, Command::Write);
         assert_eq!(r.handle, 0xdead_beef);
         assert_eq!(r.offset, 4096);

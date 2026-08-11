@@ -1,0 +1,11 @@
+{
+    "broker":  "Stopped",
+    "consumer":  "Stopped",
+    "ramshared_disks":  0,
+    "paging_files":  [
+                         "C:\\pagefile.sys"
+                     ],
+    "PSComputerName":  "win11-drill",
+    "RunspaceId":  "bcf2cc0b-b5ca-4585-bf2d-237dff94ca0f",
+    "PSShowComputerName":  true
+}
