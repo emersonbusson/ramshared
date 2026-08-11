@@ -65,7 +65,7 @@
 | RF-2 | DT-2, ITEM-2, ITEM-8 |
 | RF-3 | DT-6, ITEM-3 |
 | RF-4 | DT-3, DT-4, ITEM-3 |
-| RF-5 | DT-7, ITEM-3 |
+| RF-5 | DT-7, DT-33, ITEM-3 |
 | RF-6 | DT-8, ITEM-4 |
 | RF-7 | DT-9, ITEM-5 |
 | RF-8 | DT-10, ITEM-6 |
@@ -115,6 +115,7 @@
 | DT-30 | On Linux/WSL2, the DT-26 deadline supervises `cargo llvm-cov` and every descendant in one process group through GNU coreutils `timeout --signal=TERM --kill-after=5s 15m`. The Node parent retains a later 15-minute-10-second terminal bound. Exit 124 or an outer `ETIMEDOUT` is the stable `COVERAGE_CHILD_TIMEOUT` tool error; no partial report is consumed and no retry occurs. A missing supervisor is `COVERAGE_CHILD_START_FAILED`. Named test: `coverage_child_deadline_terminates_descendant_process_tree`. | The hosted run `31447000916` proved that `spawnSync` timing out only the direct Cargo process can leave instrumented `cargo`/`ramsharedd` descendants alive. Those descendants retained pipes and delayed terminal failure even though every test and measured file passed. The deadline must own the whole process tree, not just its first PID. |
 | DT-31 | Canonical Linux Rust tests execute each test binary serially: the CI workspace command is exactly `cargo test --workspace -- --test-threads=1`, and `check-rust-slice-coverage.mjs` appends `-- --test-threads=1` to every `cargo llvm-cov` invocation. This does not retry, ignore, or reorder test binaries; it removes only intra-binary concurrency. Named test: `ci_contract_requires_serial_rust_test_execution`; DT-30 remains the terminal containment if a serial test still hangs. | Hosted runs showed independent ordinary-test and coverage runners intermittently retaining Rust test processes despite unchanged Rust source. Several suites exercise process-global signal bridges, environment, sockets, and child lifecycle. Parallel test threads make those seams schedule-dependent; serial execution trades seconds for deterministic repository admission. |
 | DT-32 | `ci-contract.yml` is the sole automatic canonical entrypoint: it runs on pull-request `opened`, `edited`, `reopened`, `synchronize`, and `ready_for_review` events and on main pushes. Canonical reusable workflows expose only `workflow_call`; they must not independently declare `pull_request` or `push`. The only noncanonical exception is `security-scans.yml` retaining `workflow_dispatch` for an operator-initiated read-only scan. The contract checker rejects every undeclared direct trigger. `required-checks` remains the sole branch-protection context. Named tests: `canonical_reusable_workflow_rejects_undeclared_direct_trigger` and `canonical_entrypoint_revalidates_pull_request_edits`. | The PR-191 hosted run created a direct and a reusable copy of every core gate. The reusable `docs` job completed every step and its parent run/aggregate succeeded, yet GitHub left its individual check run `in_progress`; that stale duplicate left the PR visually `UNSTABLE` despite a successful required aggregate. One canonical run eliminates redundant runner use and removes this ambiguous status surface. Routing an edit through the aggregate prevents a prior green context from silently covering a subsequently invalid PR body. |
+| DT-33 | The canonical documentation job runs the exact Node line/branch/function coverage command for `tools/ci/check-campaign-evidence-lifecycle.mjs` and its named test file after the repository lifecycle check. The thresholds are 80% each and the command is represented in the checked-in CI contract. | Campaign evidence catalog data is committed public metadata. Its clean-checkout discovery behavior is a repository-admission boundary and must be tested in the same hosted job that rejects stale catalog output. |
 
 ## Atomicity and rollback
 
@@ -453,7 +454,7 @@ one public release manifest accepts a test-signed Windows driver.
 - Kahneman: #13, #16, #17.
 
 **`.github/workflows/ci.yml`**
-- RF / DT: RF-2, RF-4, RF-5, RF-10; DT-2–DT-7, DT-12, DT-14, DT-17, DT-32.
+- RF / DT: RF-2, RF-4, RF-5, RF-10; DT-2–DT-7, DT-12, DT-14, DT-17, DT-32, DT-33.
 - Before → after: independent basic jobs without complete contract mapping and
   explicit bounds → bounded jobs admitted only by the canonical local reusable
   caller, plus the explicitly narrow noncanonical dispatch/body-edit paths,
@@ -636,6 +637,7 @@ second compatibility workflow.
 | `tools/ci/check-release-integrity.mjs` | `tools/ci/check-release-integrity.test.mjs` :: `release_manifest_requires_bound_inputs` | unit | #9/#13 | ≥80% Node |
 | same | same :: `release_manifest_rejects_test_signed_driver` | refusal | #13/#16 | ≥80% Node |
 | `tools/ci/check-public-hygiene.mjs` | `tools/ci/check-public-hygiene.test.mjs` :: `public_hygiene_rejects_sensitive_content_without_echo` | refusal | #13 | ≥80% Node |
+| `tools/ci/check-campaign-evidence-lifecycle.mjs` | `tools/ci/check-campaign-evidence-lifecycle.test.mjs` :: `cli_catalog_generation_uses_tracked_git_paths` | integration/refusal | #13/#16 | ≥80% Node |
 | `scripts/windows/Test-WindowsCiStatic.ps1` | same :: `windows_static_suite_refuses_mutating_switches` | static/refusal | #16 | N/A — hosted Windows static E2E |
 | protected lab workflow contract | workflow/static fixture :: `lab_dispatch_rejects_daily_or_physical_target` | dispatch refusal | #16 | N/A — manual isolated-lab E2E |
 | protected lab workflow contract | workflow/static fixture :: `plan_only_dispatch_has_no_host_mutation` | dispatch E2E | #17 | N/A — manual isolated-lab E2E |

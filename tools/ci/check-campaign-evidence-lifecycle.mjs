@@ -72,6 +72,37 @@ function relativeFrom(root, full) {
   return path.relative(root, full).split(path.sep).join('/')
 }
 
+function trackedPath(trackedPaths, relative) {
+  return trackedPaths === null || trackedPaths.has(relative)
+}
+
+function trackedDescendant(trackedPaths, relative) {
+  if (trackedPaths === null) return true
+  const prefix = `${relative}/`
+  return [...trackedPaths].some((item) => item === relative || item.startsWith(prefix))
+}
+
+function trackedEvidencePaths(root, policy) {
+  try {
+    const roots = policy.roots.map((item) => item.prefix.slice(0, -1))
+    const output = execFileSync('git', ['ls-files', '-z', '--', ...roots], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      maxBuffer: 4 * 1024 * 1024,
+    })
+    const paths = new Set()
+    for (const candidate of output.split('\0')) {
+      const safe = safeRelative(candidate)
+      if (!safe || !policy.roots.some((item) => safe.startsWith(item.prefix))) continue
+      paths.add(safe)
+    }
+    return paths
+  } catch {
+    return null
+  }
+}
+
 function boundedFile(full, maximum) {
   const stat = lstatSync(full)
   if (stat.isSymbolicLink()) throw new Error('symlink')
@@ -121,7 +152,7 @@ function parseInstant(value, now, findings, label) {
   return instant
 }
 
-function walkFiles(directory, findings, prefix = '', budget = null) {
+function walkFiles(directory, findings, prefix = '', budget = null, trackedPaths = null, root = null) {
   const files = []
   let entries = []
   try { entries = readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name)) } catch {
@@ -131,6 +162,8 @@ function walkFiles(directory, findings, prefix = '', budget = null) {
   for (const entry of entries) {
     const relative = prefix ? `${prefix}/${entry.name}` : entry.name
     const full = path.join(directory, entry.name)
+    const repositoryRelative = root ? relativeFrom(root, full) : null
+    if (repositoryRelative && !trackedDescendant(trackedPaths, repositoryRelative)) continue
     let stat
     try { stat = lstatSync(full) } catch { push(findings, 'artifact-stat'); continue }
     if (stat.isSymbolicLink()) {
@@ -138,11 +171,12 @@ function walkFiles(directory, findings, prefix = '', budget = null) {
       continue
     }
     if (stat.isDirectory()) {
-      const descendants = walkFiles(full, findings, relative, budget)
+      const descendants = walkFiles(full, findings, relative, budget, trackedPaths, root)
       if (descendants.length === 0) push(findings, 'artifact-orphan-directory')
       files.push(...descendants)
       continue
     }
+    if (repositoryRelative && !trackedPath(trackedPaths, repositoryRelative)) continue
     if (!stat.isFile()) {
       push(findings, 'artifact-nonregular')
       continue
@@ -196,7 +230,7 @@ function normalizePolicy(policy) {
   }
 }
 
-function manifestFiles(root, policy, findings = []) {
+function manifestFiles(root, policy, findings = [], trackedPaths = null) {
   const found = []
   let visited = 0
   let exhausted = false
@@ -205,17 +239,19 @@ function manifestFiles(root, policy, findings = []) {
     let entries = []
     try { entries = readdirSync(directory, { withFileTypes: true }) } catch { return }
     for (const entry of entries) {
+      const full = path.join(directory, entry.name)
+      const relative = relativeFrom(root, full)
+      if (!trackedDescendant(trackedPaths, relative)) continue
       if (visited >= policy.limits.max_catalog_entries) {
         push(findings, 'catalog-entry-limit')
         exhausted = true
         return
       }
       visited++
-      const full = path.join(directory, entry.name)
       // Discover the filename before trusting its type. A symlink called
       // campaign-manifest.json is itself a terminal custody failure.
-      if (entry.name === MANIFEST_NAME) {
-        found.push(relativeFrom(root, full))
+      if (entry.name === MANIFEST_NAME && trackedPath(trackedPaths, relative)) {
+        found.push(relative)
         continue
       }
       if (entry.isDirectory()) scan(full)
@@ -242,7 +278,7 @@ function validArtifactPath(value) {
   return safe && safe !== MANIFEST_NAME ? safe : null
 }
 
-export function validateCampaignManifest(manifest, { root = ROOT, runRelative, policy, now = new Date().toISOString() } = {}) {
+export function validateCampaignManifest(manifest, { root = ROOT, runRelative, policy, now = new Date().toISOString(), trackedPaths = null } = {}) {
   const findings = []
   const normalizedPolicy = normalizePolicy(policy)
   for (const finding of normalizedPolicy.findings) push(findings, finding)
@@ -321,6 +357,10 @@ export function validateCampaignManifest(manifest, { root = ROOT, runRelative, p
       push(findings, 'artifact-missing')
       continue
     }
+    if (!trackedPath(trackedPaths, relativeFrom(root, artifactPath))) {
+      push(findings, 'artifact-untracked')
+      continue
+    }
     let before
     let bytes
     let after
@@ -340,7 +380,7 @@ export function validateCampaignManifest(manifest, { root = ROOT, runRelative, p
   if (totalBytes > normalizedPolicy.policy.limits.max_total_artifact_bytes) push(findings, 'artifact-total-limit')
 
   if (runPath && existsSync(runPath)) {
-    const discovered = walkFiles(runPath, findings)
+    const discovered = walkFiles(runPath, findings, '', null, trackedPaths, root)
     const actual = new Set(discovered.map((item) => item.relative))
     const expected = new Set(declared)
     if (actual.has(MANIFEST_NAME)) expected.add(MANIFEST_NAME)
@@ -357,17 +397,22 @@ function configuredRoots(root, policy) {
   })).filter((configured) => configured.full && existsSync(configured.full))
 }
 
-export function buildEvidenceCatalog({ root = ROOT, policy } = {}) {
+export function buildEvidenceCatalog({ root = ROOT, policy, trackedPaths = null } = {}) {
   const normalized = normalizePolicy(policy)
   if (!normalized.policy) throw new Error(`invalid-policy:${normalized.findings.join(',')}`)
   const catalogFindings = []
-  const manifestPaths = manifestFiles(root, normalized.policy, catalogFindings)
+  const manifestPaths = manifestFiles(root, normalized.policy, catalogFindings, trackedPaths)
   const manifests = new Map()
   for (const manifestPath of manifestPaths) {
     const findings = []
     const manifest = readCampaignManifest(root, manifestPath, findings)
     const runRelative = path.posix.dirname(manifestPath)
-    const validation = manifest ? validateCampaignManifest(manifest, { root, runRelative, policy: normalized.policy }) : findings
+    const validation = manifest ? validateCampaignManifest(manifest, {
+      root,
+      runRelative,
+      policy: normalized.policy,
+      trackedPaths,
+    }) : findings
     manifests.set(runRelative, { manifest_path: manifestPath, manifest, findings: validation })
   }
   const entries = []
@@ -378,7 +423,7 @@ export function buildEvidenceCatalog({ root = ROOT, policy } = {}) {
   }
   for (const configured of configuredRoots(root, normalized.policy)) {
     const discoveryFindings = []
-    const files = walkFiles(configured.full, discoveryFindings, '', budget)
+    const files = walkFiles(configured.full, discoveryFindings, '', budget, trackedPaths, root)
     // Empty historical directories carry no public artifact and are not a
     // promotion surface. Exact-set custody remains strict for a v1 run.
     for (const finding of discoveryFindings) {
@@ -466,7 +511,7 @@ function nearestManifestRun(root, evidencePrefix, changed) {
   return { missing: `${evidencePrefix}${tail}` }
 }
 
-export function validateProspectiveEvidence({ changedPaths = [], root = ROOT, policy } = {}) {
+export function validateProspectiveEvidence({ changedPaths = [], root = ROOT, policy, trackedPaths = null } = {}) {
   const normalized = normalizePolicy(policy)
   if (!normalized.policy) return normalized.findings.sort()
   const findings = []
@@ -487,7 +532,12 @@ export function validateProspectiveEvidence({ changedPaths = [], root = ROOT, po
     const manifestPath = `${candidate}/${MANIFEST_NAME}`
     const parseFindings = []
     const manifest = readCampaignManifest(root, manifestPath, parseFindings)
-    for (const finding of manifest ? validateCampaignManifest(manifest, { root, runRelative: candidate, policy: normalized.policy }) : parseFindings) push(findings, `new-evidence-manifest-invalid:${candidate}:${finding}`)
+    for (const finding of manifest ? validateCampaignManifest(manifest, {
+      root,
+      runRelative: candidate,
+      policy: normalized.policy,
+      trackedPaths,
+    }) : parseFindings) push(findings, `new-evidence-manifest-invalid:${candidate}:${finding}`)
   }
   return findings.sort()
 }
@@ -513,28 +563,42 @@ function gitAddedPaths(root, base) {
   }
 }
 
-export function validateRepository({ root = ROOT, base } = {}) {
+export function validateRepository({ root = ROOT, base, trackedPaths = undefined } = {}) {
   const findings = []
   const policy = loadPolicy(root, findings)
   if (!policy) return { ok: false, findings: findings.sort(), count: 0 }
+  const tracked = trackedPaths === undefined ? trackedEvidencePaths(root, policy) : trackedPaths
+  if (tracked === null) push(findings, 'tracked-files')
   let catalog
-  try { catalog = buildEvidenceCatalog({ root, policy }) } catch { push(findings, 'catalog-build') }
+  if (tracked !== null) {
+    try { catalog = buildEvidenceCatalog({ root, policy, trackedPaths: tracked }) } catch { push(findings, 'catalog-build') }
+  }
   const catalogPath = resolveWithin(root, CATALOG_RELATIVE)
   if (!catalogPath || !existsSync(catalogPath)) push(findings, 'catalog-missing')
   else if (catalog && readFileSync(catalogPath, 'utf8') !== renderEvidenceCatalog(catalog)) push(findings, 'catalog-stale')
   for (const finding of catalog?.findings ?? []) push(findings, finding)
   const manifestDiscoveryFindings = []
-  for (const manifestPath of manifestFiles(root, policy, manifestDiscoveryFindings)) {
+  for (const manifestPath of tracked === null ? [] : manifestFiles(root, policy, manifestDiscoveryFindings, tracked)) {
     const parseFindings = []
     const manifest = readCampaignManifest(root, manifestPath, parseFindings)
     const runRelative = path.posix.dirname(manifestPath)
-    const validation = manifest ? validateCampaignManifest(manifest, { root, runRelative, policy }) : parseFindings
+    const validation = manifest ? validateCampaignManifest(manifest, {
+      root,
+      runRelative,
+      policy,
+      trackedPaths: tracked,
+    }) : parseFindings
     for (const finding of validation) push(findings, `manifest:${runRelative}:${finding}`)
   }
   for (const finding of manifestDiscoveryFindings) push(findings, finding)
   if (base) {
     try {
-      for (const finding of validateProspectiveEvidence({ changedPaths: gitAddedPaths(root, base), root, policy })) push(findings, finding)
+      for (const finding of validateProspectiveEvidence({
+        changedPaths: gitAddedPaths(root, base),
+        root,
+        policy,
+        trackedPaths: tracked,
+      })) push(findings, finding)
     } catch { push(findings, 'base-diff') }
   }
   return { ok: findings.length === 0, findings: findings.sort(), count: catalog?.entries.length ?? 0 }
@@ -557,21 +621,29 @@ function usage() {
   return 64
 }
 
-function main() {
-  const args = process.argv.slice(2)
+export function runCli(args, root = ROOT) {
   if (args.length === 1 && args[0] === '--generate') {
     const findings = []
-    const policy = loadPolicy(ROOT, findings)
+    const policy = loadPolicy(root, findings)
     if (!policy) {
       for (const finding of findings) console.error(`campaign-evidence — ${finding}`)
       return 1
     }
-    writeAtomically(resolveWithin(ROOT, CATALOG_RELATIVE), renderEvidenceCatalog(buildEvidenceCatalog({ root: ROOT, policy })))
+    const tracked = trackedEvidencePaths(root, policy)
+    if (tracked === null) {
+      console.error('campaign-evidence — tracked-files')
+      return 1
+    }
+    writeAtomically(resolveWithin(root, CATALOG_RELATIVE), renderEvidenceCatalog(buildEvidenceCatalog({
+      root,
+      policy,
+      trackedPaths: tracked,
+    })))
     console.log('✓ campaign evidence catalog generated')
     return 0
   }
   if (args[0] !== '--check' || !(args.length === 1 || (args.length === 3 && args[1] === '--base' && args[2]))) return usage()
-  const result = validateRepository({ root: ROOT, base: args[2] })
+  const result = validateRepository({ root, base: args[2] })
   if (!result.ok) {
     for (const finding of result.findings) console.error(`campaign-evidence — ${finding}`)
     return 1
@@ -580,4 +652,6 @@ function main() {
   return 0
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exit(main())
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exit(runCli(process.argv.slice(2)))
+}
