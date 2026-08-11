@@ -3627,3 +3627,38 @@ the final hosted same-revision `required-checks` success.
 **How to measure:** `./scripts/docs-check.sh`; `node --test tools/ci/*.test.mjs tools/*.test.mjs`; `node tools/ci/check-ci-contract.mjs --check-local`; `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml`; `gitleaks git --log-opts=-1 --redact --verbose`; and `git diff --check`.
 **Measured data:** docs-check passed with 332 structural files, 223 tracked Markdown files, 212 classified documents, 35 capability observations, 181 campaign-evidence observations, 2 cleanup receipts, and 9 ADR records. The complete Node suite passed 309/309; the strict local CI contract returned PASS; Actionlint and Gitleaks returned 0 findings; whitespace checks passed.
 **Verdict:** 🟡 The source topology is locally green and duplicate automatic children are rejected. A fresh same-revision hosted `required-checks` aggregate remains mandatory before promotion; no hosted, Windows, lab, VM, GPU, disk, or kernel result is claimed here.
+
+## 2026-08-11 14:40 -03 — Campaign evidence clean-checkout admission
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0005`.
+**Owner role:** `ci-governance`.
+**Observed at:** `2026-08-11T14:40:00-03:00`.
+**Verified at:** `2026-08-11T14:40:00-03:00`.
+**Source revision:** `fcb12c6e626baf22280a45ca9f6bf566c3169257`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this summary and the generated catalog; temporary clean
+worktrees are removed after verification.
+**Freshness:** Revalidate on any campaign evidence policy, checker, catalog,
+or documentation workflow change.
+**What:** Made campaign evidence discovery deterministic between a developer
+workspace containing ignored forensic logs and a clean GitHub Actions checkout.
+**Category:** `ci-gate`.
+**How to measure:** `node tools/ci/check-campaign-evidence-lifecycle.mjs
+--generate`; `node tools/ci/check-campaign-evidence-lifecycle.mjs --check`;
+the named Node coverage command; `./scripts/docs-check.sh`; and the same
+commands from a detached temporary Git worktree at the source revision.
+**Measured data:** The checker reported 176 Git-tracked observations. The
+named suite passed 16/16; coverage was 97.87% lines, 80.31% branches, and
+95.92% functions. The clean checkout passed the repository checker,
+documentation gate, coverage command, and local CI contract.
+**Refusals:** A missing Git source, malformed CLI arguments, a stale catalog,
+an untracked declared artifact, and ignored local artifacts beside a newly
+tracked campaign all produce the expected terminal outcomes in named tests.
+**Rollback trigger:** A clean checkout and a workspace with ignored local
+evidence produce different catalogs, an ignored artifact changes a repository
+verdict, or the hosted documentation job accepts a coverage failure.
+**Verdict:** 🟡 Static and clean-checkout proof is green. A fresh same-revision
+hosted `required-checks` aggregate remains mandatory before promotion; no
+Windows, WSL2, VM, driver, GPU, storage, swap, kernel, or reboot proof is
+claimed here.
