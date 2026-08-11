@@ -3662,3 +3662,36 @@ verdict, or the hosted documentation job accepts a coverage failure.
 hosted `required-checks` aggregate remains mandatory before promotion; no
 Windows, WSL2, VM, driver, GPU, storage, swap, kernel, or reboot proof is
 claimed here.
+
+## 2026-08-11 14:58 -03 — Hosted canonical CI admission
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0006`.
+**Owner role:** `ci-governance`.
+**Observed at:** `2026-08-11T14:58:00-03:00`.
+**Verified at:** `2026-08-11T14:58:00-03:00`.
+**Source revision:** `379d132b8e7c93d0331c36ea6c2e36ededbe47fe`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the hosted run URL and this append-only summary; no raw
+runner data is copied into the repository.
+**Freshness:** Revalidate on every canonical workflow, CI contract, campaign
+evidence checker, or release-admission change.
+**What:** Confirmed the merged campaign-evidence and canonical-entrypoint
+changes on the real GitHub Actions `main` surface.
+**Category:** `ci-gate`.
+**How to measure:** GitHub Actions run `31519630838` at the source revision;
+inspect its `required-checks` conclusion and all selected caller summaries.
+**Measured data:** 7/7 active callers plus the aggregate passed (8 successful
+conclusions): `ci-contract`, CI core, security, Gitleaks, Windows static,
+artifact hygiene, exact Rust slice coverage, and `required-checks`.
+3/3 pull-request-only callers (comment-language, validation-schema, and
+PR-body) were correctly skipped for a `main` push.
+**Refusals:** The aggregate remains fail-closed for a failed, cancelled,
+missing, or unexpectedly skipped active caller. No old cancelled same-SHA
+execution was used as positive evidence.
+**Rollback trigger:** `required-checks` is absent, a selected caller is
+cancelled or skipped, the hosted catalog differs from the committed catalog,
+or a main push produces a duplicate automatic child workflow.
+**Verdict:** ✅ The hosted `main` aggregate is green for this revision. This
+CI result does not qualify Windows, WSL2, VM, driver, GPU, storage, swap,
+kernel, or reboot evidence.
