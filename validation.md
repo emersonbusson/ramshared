@@ -3406,3 +3406,38 @@ wrapper diverges between Windows PowerShell 5.1 and PowerShell 7.
 
 **Verdict:** 🟡 Local cross-version static evidence is complete and green;
 promotion still requires the replacement hosted `required-checks` run.
+
+## 2026-08-10 21:34 -03 — Fail-closed Trivy SARIF publication
+
+**What:** Closed a security-evidence false-green observed in PR #189's hosted
+Trivy job.
+
+**Before:** The blocking CRITICAL/HIGH scan passed, but the immutable CodeQL
+upload action received its default `sarif_file: ../results`, emitted
+`Path does not exist: ../results`, and stayed green because the step was
+allowlisted with `continue-on-error: true`.
+
+**Action:** SPEC DT-29 separates scan, local SARIF validation, and trusted
+publication. The workflow now requires a non-empty `trivy-results.sarif`,
+validates SARIF version 2.1.0 and an array of runs with `jq`, passes the exact
+file to the pinned upload action, and removes error tolerance. Fork pull
+requests retain the blocking scan and local validation but skip publication
+because their token cannot receive `security-events: write`. The CI contract
+now requires all three commands and has no SARIF error allowlist.
+
+**After / measured data:** A genuine RED first showed the old allowlist in
+`ci_contract_requires_fail_closed_trivy_sarif_publication`. GREEN is 51/51
+contract/aggregate tests, with checker coverage 90.36% lines, 82.64% branches,
+and 99.08% functions. Strict CI contract, actionlint 1.7.7, docs-check, public
+hygiene, and whitespace gates exited 0.
+
+**Refusals:** Missing, empty, malformed, or wrong-version SARIF is terminal;
+same-repository publication failure is terminal; CRITICAL/HIGH findings remain
+terminal before publication.
+
+**Rollback trigger:** A Trivy job reports success while SARIF validation or an
+eligible upload fails, the upload path differs from the generated file, or a
+SARIF `continue-on-error` allowlist returns.
+
+**Verdict:** 🟡 The false-green is locally closed; the corrected hosted
+security job and final same-run aggregate remain the promotion proof.

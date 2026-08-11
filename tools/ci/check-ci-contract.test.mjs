@@ -709,6 +709,20 @@ test('item6_release_integrity_workflow_is_current_and_nonpublishing', () => {
   assert.equal(result.gaps.some((item) => item.startsWith('release-integrity:')), false)
 })
 
+test('ci_contract_requires_fail_closed_trivy_sarif_publication', () => {
+  const contract = JSON.parse(readFileSync(path.join(ROOT, 'docs', 'governance', 'ci-contract.json'), 'utf8'))
+  const gate = contract.gates.find((item) => item.id === 'trivy')
+  const workflow = readFileSync(path.join(ROOT, gate.workflow), 'utf8')
+
+  assert.deepEqual(gate.allowed_continue_on_error_steps ?? [], [])
+  assert.ok(gate.required_commands.includes('sarif_file: trivy-results.sarif'))
+  assert.ok(gate.required_commands.includes('test -s trivy-results.sarif'))
+  assert.ok(gate.required_commands.includes("jq -e '.version == \"2.1.0\" and (.runs | type == \"array\")' trivy-results.sarif"))
+  assert.match(workflow, /name: Validate Trivy SARIF[\s\S]*test -s trivy-results\.sarif/)
+  assert.match(workflow, /uses: github\/codeql-action\/upload-sarif@[0-9a-f]{40}[\s\S]*sarif_file: trivy-results\.sarif/)
+  assert.doesNotMatch(workflow, /name: Upload Trivy SARIF[\s\S]{0,300}continue-on-error:\s*true/)
+})
+
 test('closed_pull_request_cancellation_has_minimum_permission', () => {
   const workflow = readFileSync(path.join(ROOT, '.github', 'workflows', 'cancel-closed-pr.yml'), 'utf8')
   assert.match(workflow, /pull_request:\n\s+types: \[closed\]/)
