@@ -72,6 +72,24 @@ test('capability_observations_ignore_empty_untracked_spec_directory', (t) => {
   assert.deepEqual(result.catalog.observations.map((item) => item.slug), ['alpha', 'beta'])
 })
 
+test('capability_observations_preserve_readme_only_historical_surface', (t) => {
+  const ctx = fixture()
+  t.after(() => rmSync(ctx.root, { recursive: true, force: true }))
+  const historical = path.join(ctx.root, 'docs', 'specs', 'no-milestone', 'historical-readme')
+  mkdirSync(historical)
+  writeFileSync(path.join(historical, 'README.md'), '# Historical surface\n')
+
+  const result = buildCapabilityObservations(ctx.root, ctx.policy)
+
+  assert.deepEqual(result.findings, [])
+  assert.deepEqual(result.catalog.observations.map((item) => item.slug), ['alpha', 'beta', 'historical-readme'])
+  assert.deepEqual(result.catalog.observations[2].documents, {
+    prd: null,
+    spec: null,
+    implementation: null,
+  })
+})
+
 test('capability_observations_refuse_dangling_named_document_symlink', (t) => {
   const ctx = fixture()
   t.after(() => rmSync(ctx.root, { recursive: true, force: true }))
