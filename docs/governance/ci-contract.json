@@ -378,9 +378,10 @@
           "cancel_in_progress": true
         }
       },
-      "required_commands": [],
-      "allowed_continue_on_error_steps": [
-        "Upload Trivy SARIF"
+      "required_commands": [
+        "test -s trivy-results.sarif",
+        "jq -e '.version == \"2.1.0\" and (.runs | type == \"array\")' trivy-results.sarif",
+        "sarif_file: trivy-results.sarif"
       ],
       "open_gaps": []
     },

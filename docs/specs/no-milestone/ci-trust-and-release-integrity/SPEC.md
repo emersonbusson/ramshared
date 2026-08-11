@@ -111,6 +111,7 @@
 | DT-26 | The coverage checker's `cargo llvm-cov` child has one 15-minute wall-clock deadline, uses `SIGTERM`, and returns the stable `COVERAGE_CHILD_TIMEOUT` tool error on `ETIMEDOUT`. The timeout is terminal: the checker does not retry, consume a partial report, or relabel the run as a coverage failure. Exact-owner isolation cleanup still runs. | A Rust test binary can deadlock even when lock acquisition and target ownership are correct. An unbounded synchronous child stalls the entire CI aggregate and can retain temporary state indefinitely. Fifteen minutes accommodates a clean private-target workspace build while preserving a deterministic terminal bound. |
 | DT-27 | The remote-controls gate uses the distinct implementation state `observed` only after the administrator observation exists and passes DT-21/DT-22. An `observed` gate is valid only for required gate ID `remote-controls`, remote trust, no workflow triggers, `selection.mode=never`, the exact observation path, and zero open gaps; it owns no workflow, job, policy, or command. `contract_state=PASS` may include this one observed gate, while any other observed gate or an observed gate with a gap is blocking. | Treating a closed administrator observation as a local workflow invents an execution surface; keeping it `env-bound` after valid proof makes PASS structurally impossible. A separate terminal state preserves the source/remote trust boundary. |
 | DT-28 | `rust-structural-contract` is the sole non-executable Rust ownership kind. Its feature SPEC contains one byte-for-byte matching `rust-slice-structural-contract-v1` JSON declaration. Every verification binds one exact production source path to its workspace package and tokenized `cargo test -p <package> --lib` command. The planner strips comments with its conservative Rust lexer and accepts the complete remaining file only when it consists of crate/module attributes, `mod`/`pub mod` declarations, and `use`/`pub use` declarations; any function, impl, type, constant, static, macro invocation, executable statement, malformed source, unbalanced delimiter, foreign package path, shell command, or undeclared field is blocking. `--run` executes each distinct declared package test once without a shell. This kind is not a coverage percentage and may be used only when LLVM has no executable regions for the whole file and the feature SPEC explicitly justifies `Cover: N/A — structural module surface`. | A module surface containing only declarations can legitimately produce LLVM 0/0. Treating it as 0% blocks valid glue forever, while treating every absent profile as 100% could hide uninstrumented business logic. A closed whole-file grammar plus the package suite preserves fail-closed ownership without manufacturing coverage. |
+| DT-29 | The Trivy job treats SARIF generation, validation, and trusted publication as separate fail-closed phases. After the blocking CRITICAL/HIGH scan writes `trivy-results.sarif`, an ordinary shell step requires a non-empty file and validates SARIF 2.1.0 with an array of runs. The immutable CodeQL upload action receives the exact `sarif_file: trivy-results.sarif` input and has no `continue-on-error`; publication runs only for main-repository pull requests or non-pull-request events, because fork tokens cannot receive `security-events: write`. A fork still must pass the scan and local SARIF validation. Named test: `ci_contract_requires_fail_closed_trivy_sarif_publication`. | Omitting `sarif_file` made the upload action use its nonexistent `../results` default, while an allowlisted `continue-on-error` turned the red annotation into a green security job. The vulnerability gate remained blocking, but silent loss of the promised code-scanning artifact is an evidence false-green. |
 
 ## Atomicity and rollback
 
@@ -456,13 +457,15 @@ one public release manifest accepts a test-signed Windows driver.
 - Cover: N/A — workflow orchestration.
 
 **`.github/workflows/security-scans.yml`**
-- RF / DT: RF-3, RF-4; DT-3–DT-6, DT-14, DT-17.
+- RF / DT: RF-3, RF-4; DT-3–DT-6, DT-14, DT-17, DT-29.
 - Before → after: advisory scan only → advisory plus `cargo deny check`, each
   under explicit least permissions, timeout, immutable actions, and no broad
   retry/tolerance. `cargo audit` fetches only the contract-recorded immutable
   advisory-db snapshot, checks its 7-day maximum age, and uses `--no-fetch`.
 - Tests: `ci_contract_rejects_continue_on_error_for_gate`,
-  `ci_contract_rejects_stale_advisory_snapshot`, and live security job.
+  `ci_contract_rejects_stale_advisory_snapshot`,
+  `ci_contract_requires_fail_closed_trivy_sarif_publication`, and live security
+  job.
 - Cover: N/A — workflow orchestration.
 
 **`.github/workflows/gitleaks.yml`**, **`.github/workflows/comment-language.yml`**,
