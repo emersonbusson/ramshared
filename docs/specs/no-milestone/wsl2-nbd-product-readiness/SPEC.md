@@ -38,6 +38,7 @@
 | RF-NBD-5, RF-NBD-10, RF-NBD-12 | ITEM-4 — capacity and swapoff-first lifecycle |
 | RF-NBD-6, NFR-NBD-4 | ITEM-5 — size promotion and benchmark matrix |
 | RF-NBD-7, RF-NBD-8 | ITEM-6 — approval, no reboot, and Relay gates |
+| RF-NBD-13 | ITEM-8 — exact legacy unit migration |
 | RF-NBD-11, NFR-NBD-1..6 | ITEM-7 — safety, observability, and evidence |
 
 ## Technical decisions
@@ -57,6 +58,7 @@
 | DT-NBD-11 | A live daemon must resolve to the selected sealed release. | Presence of a binary is not deployment identity. |
 | DT-NBD-12 | A failure is a stable refusal, not a retry loop. | Deterministic identity/capacity/lifecycle failures are not transient. |
 | DT-NBD-13 | `crates/ramshared-cli/src/cascade/cascade_io.rs` owns the NBD teardown effects; `cascade/lifecycle.rs` only derives a read-only status view. | The executor must prove `swapoff` before NBD disconnect or daemon stop through an injected local seam; status derivation cannot own lifecycle effects. |
+| DT-NBD-14 | A conflicting `ramshared-cascade.service` is never overwritten by the normal installer. Replacement is allowed only with both the named release approval and a second current SHA-256 approval for one inactive, disabled, root-owned regular legacy file; the installer copies it to a sealed immutable backup before atomic replacement. | The exact observed legacy artifact, rather than a path or name alone, is the authority boundary. A wrong hash, a symlink, unknown metadata, activity, enablement, backup mismatch, or any failed replacement refuses or restores the prior unit. |
 
 ## Atomicity/rollback
 
@@ -66,6 +68,7 @@
 | Product state | `PRODUCT_OFF → READY` only after all preconditions; no partial ready. | Any failed gate leaves `BLOCKED` or the prior `PRODUCT_OFF` state. |
 | NBD lifecycle | Attach, verify identity, then publish swap; teardown does swapoff before disconnect. | If swapoff fails, keep daemon/NBD alive; do not disconnect or kill. |
 | ublk retirement | Stop/disable only an identified legacy service under approval. | If ownership or active device is ambiguous, make no service mutation; leave `BLOCKED`. Never unload module. |
+| Legacy cascade unit migration | Hash-bind one inactive legacy unit, seal its backup, then atomically replace the unit. | Missing/stale/mismatched approval, non-regular metadata, backup mismatch, or a failed replacement leaves or restores the prior unit and removes the new release selection. |
 | Host/WSL | No reboot, shutdown, termination, or host configuration change. | A request for any such action is a refusal before mutation. |
 | Evidence | Write one sanitized result after each bounded phase. | A failed write invalidates the gate; do not infer success from process exit alone. |
 
@@ -90,6 +93,9 @@ test metadata only; production code has no test environment switch.
 | `unit-staged` | New unit file staged when prior unit was absent. | Remove unit staging and new destination; absent prior unit remains absent. |
 | `unit-linked` | New unit hard link published and ownership flag set. | Remove only the owned new unit and destination. |
 | `unit-staging-removed` | Unit staging path removed after successful link. | Remove only the owned new unit and destination. |
+| `legacy-unit-backed-up` | Exact legacy unit backup was sealed before replacement. | Retain the old unit; remove the staged release and leave the backup as immutable forensic evidence. |
+| `legacy-unit-staged` | Replacement unit was staged after the sealed backup. | Retain the old unit and remove staging/release; do not publish the replacement. |
+| `legacy-unit-replaced` | Replacement unit was atomically published. | Restore only the root-owned immutable backup whose SHA-256 still equals the approved legacy hash; otherwise report rollback failure without inferring recovery. |
 | `selector-staged` | New selector symlink staged. | Remove selector staging and new destination; prior selector remains. |
 | `selector-owner-normalized` | Staged selector ownership normalized. | Remove selector staging and new destination; prior selector remains. |
 | `selector-published` | Atomic selector replacement completed. | Restore prior selector, then remove new destination. |
@@ -195,6 +201,8 @@ No gaps are permitted between items:
 7. **ITEM-7:** run local source/static/manufactured tests and record an explicit
    `partial` `IMPL.md`; run approved live E2E before any root validation record
    or readiness claim.
+8. **ITEM-8:** add an exact SHA-256-bound legacy-unit migration with backup and
+   rollback tests; retain normal conflict refusal when that separate approval is absent.
 
 ## Required tests matrix
 
@@ -221,7 +229,11 @@ environment-bound and are not inferred from a manufactured test.
 | `scripts/safety/test-nbd-product-preflight.sh` | `product_off_ready_blocked_state_matrix` | manufactured | #13 | All state distinctions and reason codes match. |
 | `scripts/safety/test-nbd-product-preflight.sh` | `capacity_sink_identity_and_alignment_refusals` | manufactured refusal | #13/#16 | Wrong/ambiguous sink and alignment refuse. |
 | `scripts/safety/test-nbd-product-preflight.sh` | `n3_or_ublk_capability_does_not_promote_nbd_product` | manufactured refusal | #2 | Capability is not product readiness. |
-| `scripts/safety/install-cascade-boot.sh` + `scripts/safety/test-nbd-product-preflight.sh` | `installer_every_post_write_phase_rolls_back` | manufactured rollback | #13/#17 | Inject after each of the 17 named post-write markers; preserve prior selector/unit state and remove the new destination. |
+| `scripts/safety/install-cascade-boot.sh` + `scripts/safety/test-nbd-product-preflight.sh` | `installer_every_post_write_phase_rolls_back` | manufactured rollback | #13/#17 | Inject after each of the 20 named post-write markers; preserve prior selector/unit state and remove the new destination. |
+| `scripts/safety/install-cascade-boot.sh` + `scripts/safety/test-nbd-product-preflight.sh` | `legacy_unit_migration_requires_exact_hash_and_restores_on_failure` | manufactured approval/rollback | #3/#13/#17 | Default conflict refusal; only an inactive root-owned regular unit matching the supplied SHA-256 is backed up and atomically replaced; stale/mismatched metadata or injected failure retains/restores it. |
+| `scripts/safety/install-cascade-boot.sh` + `scripts/safety/test-nbd-product-preflight.sh` | `corrupt_published_legacy_backup_refuses_before_replacement` | manufactured refusal | #3/#13 | A post-publish backup hash mismatch refuses before replacement staging and leaves the legacy unit unchanged. |
+| `scripts/safety/install-cascade-boot.sh` + `scripts/safety/test-nbd-product-preflight.sh` | `legacy_backup_root_symlink_is_refused` | manufactured refusal | #3/#13 | A pre-existing backup-root symlink refuses before any backup write. |
+| `scripts/safety/install-cascade-boot.sh` + `scripts/safety/test-nbd-product-preflight.sh` | `legacy_restore_reloads_systemd_after_daemon_reload` | manufactured rollback | #13/#16 | A failure after daemon reload restores the old unit and reloads systemd again. |
 | `scripts/safety/cascade-up.sh` + `cascade-down.sh` | `nbd_lifecycle_before_action_after` | live E2E | #16/#17 | Approved NBD run, swapoff-first teardown, no ghost. |
 | `scripts/safety/nbd-product-preflight.sh` | `relay_gate_before_action_after` | live E2E | #18 | Relay check is clean before and after; no automatic reap. |
 | release/cascade surface | `NBD_BENCHMARK_MATRIX` | live benchmark | #9 | 1/2/4 GiB cells, n≥3, median/p99/deviation/integrity. |
@@ -278,7 +290,7 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-tier --files crates/ram
 - [ ] Static/manufactured tests cover legitimate and refusal pairs in the
   matrix.
 - [ ] Manufactured release install proves owner/mode/hash immutability and all
-  17 named post-write selector/unit/destination rollback frontiers.
+  20 named post-write selector/unit/destination rollback frontiers.
 - [ ] Readiness proves NBD-only, no active ublk service/device, and no module
   unload.
 - [ ] `BINARY_MATCH` proves the live daemon resolves to the sealed version

@@ -51,7 +51,7 @@ readiness from a mock.
 | Ordered size/benchmark matrix | PASS — DT-NBD-7 and ITEM-5 |
 | Approval/no-reboot boundary | PASS — DT-NBD-8/9 and ITEM-6 |
 | Relay ownership boundary | PASS — DT-NBD-10 and paired refusal |
-| Swapoff-first and layer rollback | PASS locally — injected `swapoff_completes_before_nbd_disconnect`, `failed_swapoff_keeps_daemon_and_device_alive`, and all 17 manufactured installer post-write rollback phases |
+| Swapoff-first and layer rollback | PASS locally — injected `swapoff_completes_before_nbd_disconnect`, `failed_swapoff_keeps_daemon_and_device_alive`, and all 20 manufactured installer post-write rollback phases |
 | Security/public-hygiene boundary | PASS — checklist and ITEM-7 |
 | Live WSL, GPU, and host evidence | NOT RUN — environment-bound; no claim made |
 
