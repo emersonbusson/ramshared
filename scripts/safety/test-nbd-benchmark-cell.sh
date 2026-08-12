@@ -173,9 +173,9 @@ assert_identity_refusal nbd_identity_sink_hash_substitution NBD_IDENTITY_SINK_HA
 pass nbd_second_tier_identity_refuses_missing_duplicate_foreign_and_substitution
 
 cat >"$TMP/samples.jsonl" <<'EOF'
-{"schema":1,"run":1,"mode":"nbd","condition":"idle","tier_mib":1024,"allocation_to_hold_ms":100,"pattern":"shake256-v1","allocation_chunk_bytes":67108864,"worker_threads":1,"workload":"anonymous_memory_sequential_write","allocated_mib":3584,"memory_max_mib":1200,"checksum_match":true,"max_zram_delta_kib":1041000,"max_nbd_delta_kib":1041000,"max_disk_delta_kib":100000,"max_scratch_delta_kib":0,"ghost_swap":false,"binary_match":"PASS"}
-{"schema":1,"run":2,"mode":"nbd","condition":"idle","tier_mib":1024,"allocation_to_hold_ms":200,"pattern":"shake256-v1","allocation_chunk_bytes":67108864,"worker_threads":1,"workload":"anonymous_memory_sequential_write","allocated_mib":3584,"memory_max_mib":1200,"checksum_match":true,"max_zram_delta_kib":1042000,"max_nbd_delta_kib":1042000,"max_disk_delta_kib":110000,"max_scratch_delta_kib":0,"ghost_swap":false,"binary_match":"PASS"}
-{"schema":1,"run":3,"mode":"nbd","condition":"idle","tier_mib":1024,"allocation_to_hold_ms":400,"pattern":"shake256-v1","allocation_chunk_bytes":67108864,"worker_threads":1,"workload":"anonymous_memory_sequential_write","allocated_mib":3584,"memory_max_mib":1200,"checksum_match":true,"max_zram_delta_kib":1043000,"max_nbd_delta_kib":1043000,"max_disk_delta_kib":120000,"max_scratch_delta_kib":0,"ghost_swap":false,"binary_match":"PASS"}
+{"schema":1,"run":1,"mode":"nbd","condition":"idle","tier_mib":1024,"allocation_to_hold_ms":100,"pattern":"shake256-v1","allocation_chunk_bytes":67108864,"worker_threads":1,"workload":"anonymous_memory_sequential_write","allocated_mib":3584,"memory_high_mib":1200,"memory_max_mib":4096,"checksum_match":true,"max_zram_delta_kib":1041000,"max_nbd_delta_kib":1041000,"max_disk_delta_kib":100000,"max_scratch_delta_kib":0,"ghost_swap":false,"binary_match":"PASS"}
+{"schema":1,"run":2,"mode":"nbd","condition":"idle","tier_mib":1024,"allocation_to_hold_ms":200,"pattern":"shake256-v1","allocation_chunk_bytes":67108864,"worker_threads":1,"workload":"anonymous_memory_sequential_write","allocated_mib":3584,"memory_high_mib":1200,"memory_max_mib":4096,"checksum_match":true,"max_zram_delta_kib":1042000,"max_nbd_delta_kib":1042000,"max_disk_delta_kib":110000,"max_scratch_delta_kib":0,"ghost_swap":false,"binary_match":"PASS"}
+{"schema":1,"run":3,"mode":"nbd","condition":"idle","tier_mib":1024,"allocation_to_hold_ms":400,"pattern":"shake256-v1","allocation_chunk_bytes":67108864,"worker_threads":1,"workload":"anonymous_memory_sequential_write","allocated_mib":3584,"memory_high_mib":1200,"memory_max_mib":4096,"checksum_match":true,"max_zram_delta_kib":1043000,"max_nbd_delta_kib":1043000,"max_disk_delta_kib":120000,"max_scratch_delta_kib":0,"ghost_swap":false,"binary_match":"PASS"}
 EOF
 printf '{"schema":1}\n' >"$TMP/context.json"
 
@@ -248,9 +248,9 @@ if "$CELL" --aggregate --samples "$TMP/binary-mismatch.jsonl" --out "$TMP/binary
 fi
 
 cat >"$TMP/disk.jsonl" <<'EOF'
-{"schema":1,"run":1,"mode":"disk-only","condition":"idle","tier_mib":1024,"allocation_to_hold_ms":101,"pattern":"shake256-v1","allocation_chunk_bytes":67108864,"worker_threads":1,"workload":"anonymous_memory_sequential_write","allocated_mib":3584,"memory_max_mib":1200,"checksum_match":true,"max_zram_delta_kib":1041000,"max_nbd_delta_kib":0,"max_disk_delta_kib":100000,"max_scratch_delta_kib":1041000,"ghost_swap":false,"binary_match":"N/A"}
-{"schema":1,"run":2,"mode":"disk-only","condition":"idle","tier_mib":1024,"allocation_to_hold_ms":102,"pattern":"shake256-v1","allocation_chunk_bytes":67108864,"worker_threads":1,"workload":"anonymous_memory_sequential_write","allocated_mib":3584,"memory_max_mib":1200,"checksum_match":true,"max_zram_delta_kib":1042000,"max_nbd_delta_kib":0,"max_disk_delta_kib":110000,"max_scratch_delta_kib":1042000,"ghost_swap":false,"binary_match":"N/A"}
-{"schema":1,"run":3,"mode":"disk-only","condition":"idle","tier_mib":1024,"allocation_to_hold_ms":103,"pattern":"shake256-v1","allocation_chunk_bytes":67108864,"worker_threads":1,"workload":"anonymous_memory_sequential_write","allocated_mib":3584,"memory_max_mib":1200,"checksum_match":true,"max_zram_delta_kib":1043000,"max_nbd_delta_kib":0,"max_disk_delta_kib":120000,"max_scratch_delta_kib":1043000,"ghost_swap":false,"binary_match":"N/A"}
+{"schema":1,"run":1,"mode":"disk-only","condition":"idle","tier_mib":1024,"allocation_to_hold_ms":101,"pattern":"shake256-v1","allocation_chunk_bytes":67108864,"worker_threads":1,"workload":"anonymous_memory_sequential_write","allocated_mib":3584,"memory_high_mib":1200,"memory_max_mib":4096,"checksum_match":true,"max_zram_delta_kib":1041000,"max_nbd_delta_kib":0,"max_disk_delta_kib":100000,"max_scratch_delta_kib":1041000,"ghost_swap":false,"binary_match":"N/A"}
+{"schema":1,"run":2,"mode":"disk-only","condition":"idle","tier_mib":1024,"allocation_to_hold_ms":102,"pattern":"shake256-v1","allocation_chunk_bytes":67108864,"worker_threads":1,"workload":"anonymous_memory_sequential_write","allocated_mib":3584,"memory_high_mib":1200,"memory_max_mib":4096,"checksum_match":true,"max_zram_delta_kib":1042000,"max_nbd_delta_kib":0,"max_disk_delta_kib":110000,"max_scratch_delta_kib":1042000,"ghost_swap":false,"binary_match":"N/A"}
+{"schema":1,"run":3,"mode":"disk-only","condition":"idle","tier_mib":1024,"allocation_to_hold_ms":103,"pattern":"shake256-v1","allocation_chunk_bytes":67108864,"worker_threads":1,"workload":"anonymous_memory_sequential_write","allocated_mib":3584,"memory_high_mib":1200,"memory_max_mib":4096,"checksum_match":true,"max_zram_delta_kib":1043000,"max_nbd_delta_kib":0,"max_disk_delta_kib":120000,"max_scratch_delta_kib":1043000,"ghost_swap":false,"binary_match":"N/A"}
 EOF
 "$CELL" --aggregate --samples "$TMP/disk.jsonl" --out "$TMP/disk-summary.json" \
   --mode disk-only --condition idle --tier-mib 1024
@@ -285,7 +285,8 @@ for run, elapsed in enumerate((101, 202, 303), start=1):
         "worker_threads": 1,
         "workload": "anonymous_memory_sequential_write",
         "allocated_mib": allocated,
-        "memory_max_mib": 1200,
+        "memory_high_mib": 1200,
+        "memory_max_mib": tier + 3072,
         "checksum_match": True,
         "max_zram_delta_kib": 1024 * 1024,
         "max_nbd_delta_kib": tier * 1024 if mode == "nbd" else 0,
@@ -648,6 +649,11 @@ done
 pass disk_control_scratch_is_exclusive_identity_bound_and_swapoff_first
 pass scratch_identity_is_stable_for_empty_and_allocated_regular_file
 pass disk_control_accepts_fresh_zero_used_zram_with_exact_topology
+grep -Fq 'MEMORY_HIGH_MIB=1200' "$ROOT/scripts/safety/nbd-benchmark-cell.sh"
+grep -Fq 'MEMORY_MAX_MIB=$((ALLOCATE_MIB + 512))' "$ROOT/scripts/safety/nbd-benchmark-cell.sh"
+grep -Fq 'MEMORY_HIGH_MIB * 1024 * 1024)) >"$CG/memory.high"' "$ROOT/scripts/safety/nbd-benchmark-cell.sh"
+grep -Fq 'MEMORY_MAX_MIB * 1024 * 1024)) >"$CG/memory.max"' "$ROOT/scripts/safety/nbd-benchmark-cell.sh"
+pass cgroup_high_forces_reclaim_without_hard_limit_oom
 pass benchmark_cleanup_refuses_ghost_or_residual_swap
 pass benchmark_start_barrier_launcher_is_in_cgroup_before_exec
 pass benchmark_live_seams_are_unavailable_in_approved_mode

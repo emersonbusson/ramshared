@@ -104,7 +104,7 @@ to an external communication.
 | RF-NBD-12 | Make the actual cascade teardown executor fail closed after an injected `swapoff` failure. | Local action tracing proves `swapoff` completes before NBD disconnect/daemon stop and emits neither later action after refusal. |
 | RF-NBD-13 | Migrate the conflicting legacy cascade unit without a blind overwrite. | The installer refuses an absent, mismatched, stale, active, enabled, symlinked, or unapproved legacy unit; an approved exact SHA-256 creates an immutable backup and atomically replaces only that unit. |
 | RF-NBD-14 | Compare disk-only and NBD under one identical base topology. | Every pair starts a fresh product-owned 1 GiB zram tier at priority 200; disk-only uses one fresh exact 8 GiB scratch swapfile at priority 100, while NBD uses one exact `V`-sized NBD tier at priority 100. The pre-existing host lower sink is untouched and excluded from the second-tier comparison. |
-| RF-NBD-15 | Prove that each size cell exercises its declared tier rather than merely allocating address space. | Each worker is admitted to a 1200 MiB cgroup before it starts, uses `V + 2560 MiB`, waits at a start barrier, holds the allocation, and records zram/second-tier deltas sufficient to prove occupancy. |
+| RF-NBD-15 | Prove that each size cell exercises its declared tier rather than merely allocating address space. | Each worker is admitted before start to a cgroup with `memory.high=1200 MiB` and emergency `memory.max=V+3072 MiB`, uses `V + 2560 MiB`, waits at a start barrier, holds the allocation, and records zram/second-tier deltas sufficient to prove occupancy. |
 | RF-NBD-16 | Keep the bounded external GPU condition comparable across a pair. | One CUDA context is created and held across the disk-only and NBD cells for the same size/condition pair; the pair records the same ready-time GPU snapshot. |
 | RF-NBD-17 | Bound every Windows-to-WSL process call and every campaign handshake. | Release discovery, cell execution, and watchdog termination have explicit deadlines; every ready/release artifact is fresh and create-once; a timeout is a RED/unverified termination, never an inferred cleanup. |
 | RF-NBD-18 | Capture enough context to reproduce and audit each benchmark result. | Evidence records branch/commit and dirty state, sealed release and script hashes, kernel, GPU total/free/utilization/temperature, RAM and swap baselines, lower-tier identity/free capacity, exact command parameters, pair identity, and terminal classification, with a sanitized public envelope. |
@@ -192,7 +192,9 @@ captures one baseline snapshot. It then:
    `RED/unverified_terminated`, not as a clean terminal state.
 
 The worker contract is deliberately size-dependent: it allocates and holds
-`V + 2560 MiB` while constrained by a 1200 MiB cgroup. A start barrier places
+`V + 2560 MiB` while a 1200 MiB `memory.high` forces reclaim and a
+`V + 3072 MiB` `memory.max` bounds emergencies without killing valid
+swapcache/writeback. A start barrier places
 the worker in the cgroup before allocation begins. Each sample must prove
 occupancy through observed zram/second-tier deltas and record
 `allocation_to_hold_ms`, `allocation_chunk_bytes`, and `worker_threads`; the
