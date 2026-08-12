@@ -39,8 +39,12 @@ make_identity_fixture() {
   printf '%s  ./bin/ramsharedd\n' "$daemon_hash" >"$root/release/SHA256SUMS"
   ln -s "$root/release/bin/ramsharedd" "$root/proc/4242/exe"
   printf '4242\n' >"$root/run/ramsharedd.pid"
-  printf 'Filename Type Size Used Priority\n/dev/nbd0 partition 1048576 0 100\n' >"$root/proc/swaps"
+  # A 1 GiB block device has 2,097,152 512-byte sectors.  mkswap may
+  # expose a small amount less through /proc/swaps, so the fixture starts
+  # with the observed 4 KiB overhead instead of conflating the two sizes.
+  printf 'Filename Type Size Used Priority\n/dev/nbd0 partition 1048572 0 100\n' >"$root/proc/swaps"
   printf '43:0\n' >"$root/sys/block/nbd0/dev"
+  printf '2097152\n' >"$root/sys/block/nbd0/size"
   : >"$root/dev/nbd0"
 }
 
@@ -90,6 +94,8 @@ PY
 [[ $identity_output == *'NBD_IDENTITY_STATE=PASS'* &&
   $identity_output == *'NBD_DEVICE=/dev/nbd0'* &&
   $identity_output == *'NBD_BLOCK_MAJOR_MINOR=43:0'* &&
+  $identity_output == *'NBD_CAPACITY_SECTORS=2097152'* &&
+  $identity_output == *'NBD_USABLE_SIZE_KIB=1048572'* &&
   $identity_output == *'NBD_SIZE_KIB=1048576'* &&
   $identity_output == *'NBD_PRIORITY=100'* &&
   $identity_output == *'NBD_SERVER_PID=4242'* &&
@@ -99,6 +105,20 @@ PY
   exit 1
 }
 pass nbd_second_tier_identity_is_observed_and_separate_from_lower_sink
+
+exact_usable_identity_root="$TMP/identity-usable-exact"
+make_identity_fixture "$exact_usable_identity_root"
+sed -i 's/1048572 0 100/1048576 0 100/' "$exact_usable_identity_root/proc/swaps"
+exact_usable_output=$(run_identity_fixture "$exact_usable_identity_root" "$lower_sink_identity")
+[[ $exact_usable_output == *'NBD_IDENTITY_STATE=PASS'* &&
+  $exact_usable_output == *'NBD_CAPACITY_SECTORS=2097152'* &&
+  $exact_usable_output == *'NBD_USABLE_SIZE_KIB=1048576'* &&
+  $exact_usable_output == *'NBD_SIZE_KIB=1048576'* ]] || {
+  printf 'FAIL exact mkswap usable size was not accepted independently of capacity: %s\n' \
+    "$exact_usable_output" >&2
+  exit 1
+}
+pass nbd_identity_accepts_bounded_mkswap_overhead_and_exact_usable_size
 
 missing_identity_root="$TMP/identity-missing"
 make_identity_fixture "$missing_identity_root"
@@ -117,10 +137,23 @@ rm -- "$foreign_identity_root/dev/nbd0"
 ln -s ../foreign "$foreign_identity_root/dev/nbd0"
 assert_identity_refusal nbd_identity_foreign_device NBD_IDENTITY_FOREIGN_DEVICE "$foreign_identity_root" "$lower_sink_identity"
 
-size_identity_root="$TMP/identity-size"
-make_identity_fixture "$size_identity_root"
-sed -i 's/1048576 0 100/1048575 0 100/' "$size_identity_root/proc/swaps"
-assert_identity_refusal nbd_identity_size_mismatch NBD_IDENTITY_SIZE_MISMATCH "$size_identity_root" "$lower_sink_identity"
+capacity_identity_root="$TMP/identity-capacity"
+make_identity_fixture "$capacity_identity_root"
+printf '2097136\n' >"$capacity_identity_root/sys/block/nbd0/size"
+assert_identity_refusal nbd_identity_capacity_mismatch NBD_IDENTITY_CAPACITY_MISMATCH \
+  "$capacity_identity_root" "$lower_sink_identity"
+
+usable_identity_root="$TMP/identity-usable-loss"
+make_identity_fixture "$usable_identity_root"
+sed -i 's/1048572 0 100/1048567 0 100/' "$usable_identity_root/proc/swaps"
+assert_identity_refusal nbd_identity_excessive_usable_loss NBD_IDENTITY_USABLE_SIZE_INVALID \
+  "$usable_identity_root" "$lower_sink_identity"
+
+malformed_capacity_identity_root="$TMP/identity-capacity-malformed"
+make_identity_fixture "$malformed_capacity_identity_root"
+printf 'not-a-sector-count\n' >"$malformed_capacity_identity_root/sys/block/nbd0/size"
+assert_identity_refusal nbd_identity_malformed_sysfs_capacity NBD_IDENTITY_SYSFS_CAPACITY_INVALID \
+  "$malformed_capacity_identity_root" "$lower_sink_identity"
 
 priority_identity_root="$TMP/identity-priority"
 make_identity_fixture "$priority_identity_root"
