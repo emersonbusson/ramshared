@@ -651,6 +651,32 @@ create_zram_control() {
   printf 'ZRAM_CONTROL_DEVICE=%s\n' "$zdev" >"$ARTIFACT_DIR/zram-control.txt"
 }
 
+republish_sample_baseline() {
+  local zdev lower lower_type original_nbd_identity
+  [[ -f $ZRAM_RECORD && ! -L $ZRAM_RECORD ]] || return 1
+  IFS= read -r zdev <"$ZRAM_RECORD" || return 1
+  [[ $zdev =~ ^/dev/zram[0-9]+$ ]] || return 1
+  if [[ $MODE == nbd ]]; then
+    lower=$NBD_DEVICE
+    lower_type=partition
+    original_nbd_identity=$NBD_SECOND_TIER_IDENTITY_SHA256
+  else
+    lower=$SCRATCH_SWAP
+    lower_type=file
+  fi
+  nbd_republish_swap_pair "$SWAPS_FILE" "$zdev" "$lower" "$lower_type" /sbin/swapoff /sbin/swapon \
+    || return 1
+  if [[ $MODE == nbd ]]; then
+    derive_nbd_second_tier_identity "$SWAPS_FILE" "$SYS_BLOCK_ROOT" "$DEV_ROOT" "$PROC_ROOT" \
+      "$PID_FILE" "$DAEMON" "$RELEASE/SHA256SUMS" "$LOWER_SINK_IDENTITY_SHA256" 0 \
+      || return 1
+    [[ $NBD_SECOND_TIER_IDENTITY_SHA256 == "$original_nbd_identity" ]] || return 1
+    pinned_preflight | grep -q '^NBD_BINARY_MATCH=PASS$' || return 1
+  else
+    [[ $(scratch_identity) == "$SCRATCH_IDENTITY" ]] || return 1
+  fi
+}
+
 write_live_context_v2() {
   local preflight kernel manifest_sha zram_device zram_name zram_algorithm zram_size_kib zram_priority
   local lower_kind lower_identity binary_match input_bundle_manifest_sha
@@ -1041,17 +1067,6 @@ print("true" if ok else "false")
 PY
   )
   [[ $checksum_match == true ]] || refuse SAMPLE_CHECKSUM_FAILED
-  restored=0
-  for _ in $(seq 1 150); do
-    read -r z1 n1 d1 ghost1 <<<"$(swap_used)"
-    s1=$(scratch_used_kib)
-    if (( z1 <= z0 + 8192 && n1 <= n0 + 8192 && d1 <= d0 + 8192 && s1 <= s0 + 8192 && ghost1 == 0 )); then
-      restored=1
-      break
-    fi
-    sleep 0.2
-  done
-  (( restored == 1 )) || refuse baseline_swap_not_restored
   max_z_delta=$((max_z - z0)); (( max_z_delta >= 0 )) || max_z_delta=0
   max_n_delta=$((max_n - n0)); (( max_n_delta >= 0 )) || max_n_delta=0
   max_d_delta=$((max_d - d0)); (( max_d_delta >= 0 )) || max_d_delta=0
@@ -1084,6 +1099,9 @@ row = {
 with open(path, "a", encoding="utf-8") as target:
     target.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
 PY
+  if (( run < RUNS )); then
+    republish_sample_baseline || refuse BASELINE_REPUBLICATION_FAILED
+  fi
 done
 
 cleanup_disk_scratch || refuse FINAL_SCRATCH_OFF_FAILED

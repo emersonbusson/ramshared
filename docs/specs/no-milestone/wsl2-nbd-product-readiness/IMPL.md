@@ -21,7 +21,7 @@ live claim is made.
 | `scripts/safety/nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14,15,17,18,19,20 | Disk/NBD cell, common zram topology, cgroup-before-start occupancy, exact scratch identity, cleanup, comparison, and internal custody envelope. |
 | `scripts/safety/nbd-benchmark-cgroup-launch.sh` | ITEM-5 / RF-NBD-15 | In-cgroup launcher and create-once start barrier. |
 | `scripts/safety/nbd-benchmark-lib.sh` | ITEM-5 / RF-NBD-14,17 | Identity-bound scratch and swapoff-first helpers. |
-| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Sixteen manufactured/refusal suites for topology, observed NBD identity, cgroup reclaim/emergency bounds, stable scratch identity, fresh zero-used zram, occupancy, cleanup, seams, custody, and aggregation. |
+| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Seventeen manufactured/refusal suites for topology, observed NBD identity, cgroup bounds, exact between-run republication, scratch/zram, occupancy, cleanup, seams, custody, and aggregation. |
 | `scripts/p0/Start-CudaVramWorkload.ps1` | ITEM-5 / RF-NBD-16,17 | Fresh pair-scoped CUDA handshakes and unconditional cleanup. |
 | `scripts/windows/Invoke-NbdBenchmarkMatrix.ps1` | ITEM-5..7 / RF-NBD-6,16..20 | Bounded Windows/WSL controller, numeric headroom, pair custody, promotion order, watchdog classification, and public pair envelope. |
 | `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | ITEM-5..7 / RF-NBD-16..20 | PowerShell static/manufactured contract and refusal checks. |
@@ -38,7 +38,7 @@ live claim is made.
   `failed_swapoff_keeps_daemon_and_device_alive`, and
   `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` are
   present and pass in the CLI suite.
-- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 16/16;
+- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 17/17;
   `bash scripts/safety/test-nbd-product-preflight.sh` → 26/26.
 - Public evidence: `node --test tools/ci/check-benchmark-evidence.test.mjs`
   → 15/15, including the sanitized pair-envelope fixture and custody rules.
@@ -88,11 +88,16 @@ live claim is made.
   swapcache/writeback. The contract now writes 1200 MiB to `memory.high` to
   force reclaim and writes `V+3072 MiB` to `memory.max` as an allocation-bound
   emergency ceiling. Cleanup again left only the pre-existing disk swap.
+- Seventh live campaign attempt: the first 3584 MiB allocation reached HOLD and
+  passed full integrity without OOM, but freed swapcache did not return below
+  an arbitrary tolerance within 30 seconds. Between runs the exact same zram
+  and lower devices are now removed lower-first and republished zram-first at
+  priorities 200/100; identities and NBD BINARY_MATCH are revalidated.
 
 ## SPEC matrix → named tests
 
 The corrected implementation has local coverage for all source/static/
-manufactured names in SPEC § Required tests matrix, including the 16 cell
+manufactured names in SPEC § Required tests matrix, including the 17 cell
 tests, 26 preflight suites, fresh CUDA handshake/refusal checks, bounded WSL
 controller checks, exact ratio/baseline mappings, public-pair custody, and
 `sealed_bundle_contains_benchmark_runner_and_worker`. The live rows

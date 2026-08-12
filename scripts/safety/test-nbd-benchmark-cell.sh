@@ -523,7 +523,7 @@ for forbidden in 'shutdown.exe' 'Restart-Computer' 'Stop-Computer' 'rmmod' 'modp
 done
 grep -Fq 'PRODUCT_OFF' "$CELL"
 grep -Fq 'BINARY_MATCH' "$CELL"
-grep -Fq 'baseline_swap_not_restored' "$CELL"
+grep -Fq 'BASELINE_REPUBLICATION_FAILED' "$CELL"
 grep -Fq 'managed_swap_count' "$CELL"
 grep -Fq 'O_CREAT | os.O_EXCL | os.O_NOFOLLOW' "$CELL"
 grep -Fq 'SCRATCH_IDENTITY' "$CELL"
@@ -646,6 +646,53 @@ for bad_row in "/dev/zram1 partition 1048572 0 200" "/dev/nbd0 partition 1048572
     exit 1
   fi
 done
+cat >"$TMP/swapoff-republish.py" <<'PY'
+#!/usr/bin/env python3
+import os, sys
+path = sys.argv[-1]
+swaps = os.environ["SWAPS_FIXTURE"]
+with open(swaps, encoding="utf-8") as source:
+    lines = source.readlines()
+with open(swaps, "w", encoding="utf-8") as target:
+    target.writelines(line for line in lines if not line.startswith(path + " "))
+with open(os.environ["ORDER_FIXTURE"], "a", encoding="utf-8") as target:
+    target.write("off:" + path + "\n")
+PY
+cat >"$TMP/swapon-republish.py" <<'PY'
+#!/usr/bin/env python3
+import os, sys
+priority = sys.argv[sys.argv.index("-p") + 1]
+path = sys.argv[-1]
+kind = "partition" if path.startswith("/dev/zram") else "file"
+with open(os.environ["SWAPS_FIXTURE"], "a", encoding="utf-8") as target:
+    target.write(f"{path} {kind} 1048572 0 {priority}\n")
+with open(os.environ["ORDER_FIXTURE"], "a", encoding="utf-8") as target:
+    target.write("on:" + priority + ":" + path + "\n")
+PY
+chmod 0700 "$TMP/swapoff-republish.py" "$TMP/swapon-republish.py"
+cp -- "$TMP/disk-control-swaps" "$TMP/republish-swaps"
+: >"$TMP/republish-order"
+SWAPS_FIXTURE="$TMP/republish-swaps" ORDER_FIXTURE="$TMP/republish-order" \
+nbd_republish_swap_pair "$TMP/republish-swaps" /dev/zram0 "$scratch" file \
+    "$TMP/swapoff-republish.py" "$TMP/swapon-republish.py"
+cat >"$TMP/expected-republish-order" <<EOF
+off:$scratch
+off:/dev/zram0
+on:200:/dev/zram0
+on:100:$scratch
+EOF
+cmp -s "$TMP/expected-republish-order" "$TMP/republish-order" || {
+  echo 'FAIL sample baseline republication order changed' >&2
+  exit 1
+}
+for extra in "/dev/zram9 partition 1048572 0 200" "/dev/nbd9 partition 1048572 0 100" "/dev/ublkb9 partition 1048572 0 100"; do
+  cp -- "$TMP/disk-control-swaps" "$TMP/republish-extra"
+  printf '%s\n' "$extra" >>"$TMP/republish-extra"
+  if nbd_swap_pair_topology_exact "$TMP/republish-extra" /dev/zram0 "$scratch" file; then
+    echo 'FAIL sample republication accepted extra managed swap' >&2
+    exit 1
+  fi
+done
 pass disk_control_scratch_is_exclusive_identity_bound_and_swapoff_first
 pass scratch_identity_is_stable_for_empty_and_allocated_regular_file
 pass disk_control_accepts_fresh_zero_used_zram_with_exact_topology
@@ -654,6 +701,7 @@ grep -Fq 'MEMORY_MAX_MIB=$((ALLOCATE_MIB + 512))' "$ROOT/scripts/safety/nbd-benc
 grep -Fq 'MEMORY_HIGH_MIB * 1024 * 1024)) >"$CG/memory.high"' "$ROOT/scripts/safety/nbd-benchmark-cell.sh"
 grep -Fq 'MEMORY_MAX_MIB * 1024 * 1024)) >"$CG/memory.max"' "$ROOT/scripts/safety/nbd-benchmark-cell.sh"
 pass cgroup_high_forces_reclaim_without_hard_limit_oom
+pass sample_baseline_republication_is_exact_and_ordered
 pass benchmark_cleanup_refuses_ghost_or_residual_swap
 pass benchmark_start_barrier_launcher_is_in_cgroup_before_exec
 pass benchmark_live_seams_are_unavailable_in_approved_mode
