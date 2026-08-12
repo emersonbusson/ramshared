@@ -800,10 +800,9 @@ cmp -s "$TMP/expected-republish-order" "$TMP/republish-order" || {
 
 test_nbd_sample_connected_republication_contract() {
   local reconnect_swaps reconnect_order expected_order
-  local swapoff_cmd forbidden_attach_cmd mkswap_cmd swapon_cmd output rc
+  local swapoff_cmd mkswap_cmd swapon_cmd output rc
 
   swapoff_cmd="$TMP/swapoff-reconnect.py"
-  forbidden_attach_cmd="$TMP/nbd-client-must-not-run.py"
   mkswap_cmd="$TMP/mkswap-reconnect.py"
   swapon_cmd="$TMP/swapon-reconnect.py"
   cat >"$swapoff_cmd" <<'PY'
@@ -823,10 +822,6 @@ with open(swaps, "w", encoding="utf-8") as target:
     target.writelines(line for line in lines if not line.startswith(path + " "))
 with open(os.environ["ORDER_FIXTURE"], "a", encoding="utf-8") as target:
     target.write("off:" + path + "\n")
-PY
-  cat >"$forbidden_attach_cmd" <<'PY'
-#!/usr/bin/env python3
-raise SystemExit("nbd_client_must_not_run_for_connected_device")
 PY
   cat >"$mkswap_cmd" <<'PY'
 #!/usr/bin/env python3
@@ -862,7 +857,7 @@ with open(os.environ["SWAPS_FIXTURE"], "a", encoding="utf-8") as target:
 with open(os.environ["ORDER_FIXTURE"], "a", encoding="utf-8") as target:
     target.write("on:" + priority + ":" + path + "\n")
 PY
-  chmod 0700 "$swapoff_cmd" "$forbidden_attach_cmd" "$mkswap_cmd" "$swapon_cmd"
+  chmod 0700 "$swapoff_cmd" "$mkswap_cmd" "$swapon_cmd"
 
   reconnect_swaps="$TMP/reconnect-swaps"
   reconnect_order="$TMP/reconnect-order"
@@ -870,7 +865,6 @@ PY
   sed -i "s|$scratch file 8388604 0 100|/dev/nbd0 partition 1048572 0 100|" "$reconnect_swaps"
   : >"$reconnect_order"
   SWAPS_FIXTURE="$reconnect_swaps" ORDER_FIXTURE="$reconnect_order" \
-    NBD_CLIENT_COMMAND="$forbidden_attach_cmd" \
     nbd_preserved_connection_republish_swap_pair "$reconnect_swaps" /dev/zram0 /dev/nbd0 \
       "$swapoff_cmd" "$mkswap_cmd" "$swapon_cmd"
   nbd_swap_pair_topology_exact "$reconnect_swaps" /dev/zram0 /dev/nbd0 partition || {
@@ -897,7 +891,7 @@ EOF
     : >"$reconnect_order"
     set +e
     output=$(SWAPS_FIXTURE="$reconnect_swaps" ORDER_FIXTURE="$reconnect_order" \
-      NBD_CLIENT_COMMAND="$forbidden_attach_cmd" RECONNECT_FAIL_STAGE="$fail_stage" \
+      RECONNECT_FAIL_STAGE="$fail_stage" \
       RECONNECT_TOPOLOGY_DRIFT="$topology_drift" \
       nbd_preserved_connection_republish_swap_pair "$reconnect_swaps" /dev/zram0 /dev/nbd0 \
         "$swapoff_cmd" "$mkswap_cmd" "$swapon_cmd" 2>&1)
@@ -939,6 +933,17 @@ EOF
     echo 'FAIL connected NBD republication performed an attach or detach' >&2
     exit 1
   }
+  if awk '
+    /^nbd_preserved_connection_republish_swap_pair\(\)/ { body = 1 }
+    body { print }
+    body && /^}/ { exit }
+  ' "$BENCHMARK_LIB" | grep -Eq 'nbd-client|attach_command|detach'; then
+    echo 'FAIL connected NBD republication contains an attach/detach path' >&2
+    exit 1
+  fi
+  grep -Fq 'original_nbd_identity=$NBD_SECOND_TIER_IDENTITY_SHA256' "$CELL"
+  grep -Fq '[[ $NBD_SECOND_TIER_IDENTITY_SHA256 == "$original_nbd_identity" ]]' "$CELL"
+  grep -Fq "pinned_preflight | grep -q '^NBD_BINARY_MATCH=PASS$'" "$CELL"
   pass nbd_sample_preserves_connected_device_without_reattach
 }
 
