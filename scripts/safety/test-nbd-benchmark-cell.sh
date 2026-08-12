@@ -628,8 +628,26 @@ chmod 0700 "$TMP/swapoff-pass.sh"
 SCRATCH_FIXTURE="$scratch" SWAPS_FIXTURE="$TMP/swaps" \
   nbd_cleanup_scratch "$scratch" "$scratch_identity" "$TMP/swaps" "$TMP/swapoff-pass.sh"
 [[ ! -e $scratch ]] || { echo 'FAIL exact successful cleanup retained scratch' >&2; exit 1; }
+scratch="$TMP/disk-control.swap"
+: >"$scratch"
+cat >"$TMP/disk-control-swaps" <<EOF
+Filename Type Size Used Priority
+/dev/sdc partition 4194304 1024 -2
+/dev/zram0 partition 1048572 0 200
+$scratch file 8388604 0 100
+EOF
+nbd_disk_control_topology_exact "$TMP/disk-control-swaps" "$scratch"
+for bad_row in "/dev/zram1 partition 1048572 0 200" "/dev/nbd0 partition 1048572 0 100" "/dev/ublkb0 partition 1048572 0 100" "/dev/zram0 partition 1048572 0 199" "$scratch file 8388604 0 99" "$scratch file 8388604 0 100 extra" "$scratch (deleted) file 8388604 0 100"; do
+  cp -- "$TMP/disk-control-swaps" "$TMP/disk-control-invalid"
+  printf '%s\n' "$bad_row" >>"$TMP/disk-control-invalid"
+  if nbd_disk_control_topology_exact "$TMP/disk-control-invalid" "$scratch"; then
+    echo 'FAIL invalid disk control topology was accepted' >&2
+    exit 1
+  fi
+done
 pass disk_control_scratch_is_exclusive_identity_bound_and_swapoff_first
 pass scratch_identity_is_stable_for_empty_and_allocated_regular_file
+pass disk_control_accepts_fresh_zero_used_zram_with_exact_topology
 pass benchmark_cleanup_refuses_ghost_or_residual_swap
 pass benchmark_start_barrier_launcher_is_in_cgroup_before_exec
 pass benchmark_live_seams_are_unavailable_in_approved_mode
