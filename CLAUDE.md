@@ -6,6 +6,9 @@
 
 [`.claude/rules/*.md`](.claude/rules/*.md) are the authoritative code rules. `AGENTS.md` mirrors these guidelines.
 
+- Agent orchestration and dispatch: [`.claude/rules/agent-orchestration.md`](.claude/rules/agent-orchestration.md).
+- Its rendered policy and canonical typed records are the machine-checked source.
+
 **Documentation scope:** only this repository. Do not load or invent requirements from other products/monorepos when working here.
 
 Before changing code:

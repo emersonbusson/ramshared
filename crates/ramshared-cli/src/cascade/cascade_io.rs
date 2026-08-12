@@ -767,6 +767,131 @@ fn up_with_config(a: UpArgs) -> Result<(), CascadeError> {
     status(false)
 }
 
+/// One local cascade-down step. The plan is pure: it contains no process,
+/// filesystem, daemon, or device operation by itself.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum NbdLifecycleAction {
+    Swapoff(String),
+    ResetZram(String),
+    DisconnectNbd(String),
+    StopDaemon,
+}
+
+/// Ordered, injected teardown contract for managed swap and NBD ownership.
+///
+/// Every swapoff action precedes every NBD disconnect and daemon stop. The
+/// executor stops at the first swapoff error, so later ownership-changing
+/// actions cannot run after a failed swapoff.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct NbdLifecyclePlan {
+    actions: Vec<NbdLifecycleAction>,
+}
+
+/// Constructs the local teardown sequence from already-authorized paths.
+///
+/// Callers provide the swap, zram-reset, and NBD targets separately so the
+/// ordering contract is testable without querying a live host.
+fn plan_nbd_lifecycle(
+    swapoff_targets: Vec<String>,
+    zram_reset_targets: Vec<String>,
+    nbd_disconnect_targets: Vec<String>,
+) -> NbdLifecyclePlan {
+    let mut actions = Vec::new();
+    let mut seen_swapoffs = Vec::new();
+    for target in swapoff_targets {
+        let target = canonicalize_swap_path(&target);
+        if !is_allowlisted_managed_path(&target) || seen_swapoffs.contains(&target) {
+            continue;
+        }
+        seen_swapoffs.push(target.clone());
+        actions.push(NbdLifecycleAction::Swapoff(target));
+    }
+    for target in zram_reset_targets {
+        let target = canonicalize_swap_path(&target);
+        if is_zram_device_path(&target) {
+            actions.push(NbdLifecycleAction::ResetZram(target));
+        }
+    }
+    let mut seen_nbd_disconnects = Vec::new();
+    for target in nbd_disconnect_targets {
+        let target = canonicalize_swap_path(&target);
+        if !is_nbd_device_path(&target) || seen_nbd_disconnects.contains(&target) {
+            continue;
+        }
+        seen_nbd_disconnects.push(target.clone());
+        actions.push(NbdLifecycleAction::DisconnectNbd(target));
+    }
+    actions.push(NbdLifecycleAction::StopDaemon);
+    NbdLifecyclePlan { actions }
+}
+
+/// Narrow side-effect boundary for the pure NBD lifecycle plan.
+trait NbdLifecycleExecutor {
+    fn swapoff(&self, device: &str) -> Result<(), CascadeError>;
+    fn reset_zram(&self, device: &str);
+    fn disconnect_nbd(&self, device: &str);
+    fn stop_daemon(&self);
+}
+
+/// Runs an injected plan. A swapoff failure is terminal for this invocation:
+/// it cannot fall through to NBD disconnect or daemon stop.
+fn execute_nbd_lifecycle_plan<E: NbdLifecycleExecutor>(
+    plan: &NbdLifecyclePlan,
+    executor: &E,
+) -> Result<(), CascadeError> {
+    for action in &plan.actions {
+        match action {
+            NbdLifecycleAction::Swapoff(device) => executor.swapoff(device)?,
+            NbdLifecycleAction::ResetZram(device) => executor.reset_zram(device),
+            NbdLifecycleAction::DisconnectNbd(device) => executor.disconnect_nbd(device),
+            NbdLifecycleAction::StopDaemon => executor.stop_daemon(),
+        }
+    }
+    Ok(())
+}
+
+struct RuntimeNbdLifecycleExecutor<'a, R> {
+    runner: &'a R,
+    paths: &'a RuntimePaths,
+}
+
+impl<R: CommandRunner> NbdLifecycleExecutor for RuntimeNbdLifecycleExecutor<'_, R> {
+    fn swapoff(&self, device: &str) -> Result<(), CascadeError> {
+        match self.runner.run("swapoff", &["--", device]) {
+            Ok(_) => {
+                eprintln!("[down] swapoff ok: {device}");
+                Ok(())
+            }
+            Err(error) => {
+                let message = error.to_string();
+                let absent =
+                    message.contains("No such file") || message.contains("Invalid argument");
+                let still_active = read_swaps()
+                    .iter()
+                    .any(|entry| entry.canonical_path() == device && entry.used_kb > 0);
+                if absent && !still_active {
+                    eprintln!("[down] swapoff skip (absent): {device}");
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+        }
+    }
+
+    fn reset_zram(&self, device: &str) {
+        let _ = self.runner.run("zramctl", &["-r", device]);
+    }
+
+    fn disconnect_nbd(&self, device: &str) {
+        let _ = self.runner.run("nbd-client", &["-d", device]);
+    }
+
+    fn stop_daemon(&self) {
+        stop_daemon_gracefully_at(self.paths, Duration::from_secs(10));
+    }
+}
+
 fn down_with_runtime<R: CommandRunner>(
     runner: &R,
     paths: &RuntimePaths,
@@ -780,72 +905,55 @@ fn down_with_runtime<R: CommandRunner>(
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    let candidates = swapoff_candidates(recorded_swap.as_deref(), recorded_zram.as_deref());
+    // Capture the local swap snapshot once. The pure plan below receives only
+    // explicit paths; it never reads host state itself.
+    let current_entries = read_swaps();
+    let candidates = swapoff_candidates_from(
+        recorded_swap.as_deref(),
+        recorded_zram.as_deref(),
+        &current_entries,
+    );
     eprintln!("[down] swapoff candidates: {candidates:?}");
 
-    // Fetch entries once to use in swapoff_all
-    let current_entries = read_swaps();
-
-    // 1) ALWAYS swapoff first — never disconnect/kill with pages on the device.
-    let fails = swapoff_all(&candidates, &current_entries);
-    if !fails.is_empty() {
-        for (p, msg) in &fails {
-            eprintln!("[down] swapoff failure {p}: {msg}");
-        }
-        // If ghost with used>0, hard fail and do not kill daemon / nbd-disconnect.
-        let swaps_now = read_swaps();
-        let ghosts = ghost_vram_swaps(&swaps_now);
-        if ghosts.iter().any(|e| e.used_kb > 0) {
-            return Err(CascadeError::Precondition(
-                "ghost swap has pages in use — forcing it can hang WSL. \
-                 On Windows run `wsl --shutdown`, then `sudo ramshared down` and `up`."
-                    .into(),
-            ));
-        }
-        // Non-ghost failures: still refuse kill if block swap remains
-        if active_vram_block_swap(&read_swaps()) {
-            return Err(CascadeError::Precondition(
-                "swapoff is incomplete and nbd/ublk remains in /proc/swaps; \
-                 do not kill the daemon. Intervene with manual swapoff."
-                    .into(),
-            ));
-        }
+    // A ghost with pages is unsafe before any lifecycle action. The plan is
+    // intentionally not executed, preserving the daemon and device state.
+    if ghost_vram_swaps(&current_entries)
+        .iter()
+        .any(|entry| entry.used_kb > 0)
+    {
+        return Err(CascadeError::Precondition(
+            "ghost swap has pages in use — forcing it can hang WSL. \
+             On Windows run `wsl --shutdown`, then `sudo ramshared down` and `up`."
+                .into(),
+        ));
     }
 
-    // 2) Reset zram devices we know about
-    if let Some(ref z) = recorded_zram {
-        let _ = runner.run("zramctl", &["-r", z]);
-    }
-    // Also try reset any leftover zram still listed
-    for e in read_swaps() {
-        if is_zram_device_path(&e.filename) && !e.is_ghost() {
-            let z = e.canonical_path();
-            let _ = swapoff_try(&z);
-            let _ = runner.run("zramctl", &["-r", &z]);
-        }
-    }
-
-    // 3) Disconnect NBD only after swapoff (EOF → daemon zero() VRAM)
-    let mut nbd_targets: Vec<String> = recorded_swap
-        .into_iter()
-        .map(|s| canonicalize_swap_path(&s))
+    let zram_reset_targets = recorded_zram
+        .iter()
+        .cloned()
         .chain(
-            read_swaps()
-                .into_iter()
-                .filter(|e| is_nbd_device_path(&e.filename))
-                .map(|e| e.canonical_path()),
+            current_entries
+                .iter()
+                .filter(|entry| is_zram_device_path(&entry.filename) && !entry.is_ghost())
+                .map(SwapEntry::canonical_path),
         )
         .collect();
-    nbd_targets.sort();
-    nbd_targets.dedup();
-    for dev in &nbd_targets {
-        if is_allowlisted_managed_path(dev) && is_nbd_device_path(dev) {
-            let _ = runner.run("nbd-client", &["-d", dev]);
-        }
-    }
+    let nbd_disconnect_targets = recorded_swap
+        .iter()
+        .cloned()
+        .chain(
+            current_entries
+                .iter()
+                .filter(|entry| is_nbd_device_path(&entry.filename) && !entry.is_ghost())
+                .map(SwapEntry::canonical_path),
+        )
+        .collect();
+    let plan = plan_nbd_lifecycle(candidates, zram_reset_targets, nbd_disconnect_targets);
+    let executor = RuntimeNbdLifecycleExecutor { runner, paths };
 
-    // 4) Daemon stop — only if no block VRAM swap remains
-    stop_daemon_gracefully_at(paths, Duration::from_secs(10));
+    // ALWAYS swapoff before NBD disconnect/daemon stop. A swapoff error returns
+    // here, leaving runtime records, daemon, and NBD device untouched.
+    execute_nbd_lifecycle_plan(&plan, &executor)?;
 
     remove_runtime_file(&paths.socket);
     remove_runtime_file(&paths.zram_dev_file);
@@ -1613,6 +1721,94 @@ mod tests {
         assert!(paths.forensics_markers[0].exists());
     }
 
+    struct RecordingNbdLifecycleExecutor {
+        calls: RefCell<Vec<String>>,
+        fail_swapoff: bool,
+    }
+
+    impl RecordingNbdLifecycleExecutor {
+        fn new(fail_swapoff: bool) -> Self {
+            Self {
+                calls: RefCell::new(Vec::new()),
+                fail_swapoff,
+            }
+        }
+
+        fn calls(&self) -> Vec<String> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    impl NbdLifecycleExecutor for RecordingNbdLifecycleExecutor {
+        fn swapoff(&self, device: &str) -> Result<(), CascadeError> {
+            self.calls.borrow_mut().push(format!("swapoff {device}"));
+            if self.fail_swapoff {
+                return Err(CascadeError::Shell {
+                    cmd: format!("swapoff {device}"),
+                    msg: "manufactured swapoff refusal".into(),
+                });
+            }
+            Ok(())
+        }
+
+        fn reset_zram(&self, device: &str) {
+            self.calls.borrow_mut().push(format!("reset-zram {device}"));
+        }
+
+        fn disconnect_nbd(&self, device: &str) {
+            self.calls
+                .borrow_mut()
+                .push(format!("disconnect-nbd {device}"));
+        }
+
+        fn stop_daemon(&self) {
+            self.calls.borrow_mut().push("stop-daemon".into());
+        }
+    }
+
+    #[test]
+    // TestName: swapoff_completes_before_nbd_disconnect
+    fn swapoff_completes_before_nbd_disconnect() {
+        let plan = plan_nbd_lifecycle(
+            vec!["/dev/nbd0".into(), "/dev/zram0".into()],
+            vec!["/dev/zram0".into()],
+            vec!["/dev/nbd0".into()],
+        );
+        let executor = RecordingNbdLifecycleExecutor::new(false);
+
+        execute_nbd_lifecycle_plan(&plan, &executor)
+            .unwrap_or_else(|error| panic!("local injected lifecycle: {error}"));
+
+        assert_eq!(
+            executor.calls(),
+            vec![
+                "swapoff /dev/nbd0",
+                "swapoff /dev/zram0",
+                "reset-zram /dev/zram0",
+                "disconnect-nbd /dev/nbd0",
+                "stop-daemon",
+            ]
+        );
+    }
+
+    #[test]
+    // TestName: failed_swapoff_keeps_daemon_and_device_alive
+    fn failed_swapoff_keeps_daemon_and_device_alive() {
+        let plan = plan_nbd_lifecycle(
+            vec!["/dev/nbd0".into()],
+            Vec::new(),
+            vec!["/dev/nbd0".into()],
+        );
+        let executor = RecordingNbdLifecycleExecutor::new(true);
+
+        let error = error_from(
+            execute_nbd_lifecycle_plan(&plan, &executor),
+            "a refused swapoff must stop the injected plan",
+        );
+        assert!(error.to_string().contains("manufactured swapoff refusal"));
+        assert_eq!(executor.calls(), vec!["swapoff /dev/nbd0"]);
+    }
+
     #[test]
     fn down_with_runtime_preserves_swapoff_first_and_cleans_temp_state() {
         let fixture = TestDir::new();
@@ -1633,9 +1829,11 @@ mod tests {
             .unwrap_or_else(|error| panic!("write test marker: {error}"));
         let _seams = ParentSeams::install(
             "Filename Type Size Used Priority\n/dev/nbd0 partition 1024 0 100\n/dev/zram0 partition 1024 0 200\n",
-            8,
+            0,
         );
         let runner = ScriptedRunner::new(vec![
+            ("swapoff -- /dev/nbd0".into(), Ok(String::new())),
+            ("swapoff -- /dev/zram0".into(), Ok(String::new())),
             ("zramctl -r /dev/zram0".into(), Ok(String::new())),
             ("zramctl -r /dev/zram0".into(), Ok(String::new())),
             ("nbd-client -d /dev/nbd0".into(), Ok(String::new())),
@@ -1646,6 +1844,8 @@ mod tests {
         assert_eq!(
             runner.calls(),
             vec![
+                "swapoff -- /dev/nbd0",
+                "swapoff -- /dev/zram0",
                 "zramctl -r /dev/zram0",
                 "zramctl -r /dev/zram0",
                 "nbd-client -d /dev/nbd0",

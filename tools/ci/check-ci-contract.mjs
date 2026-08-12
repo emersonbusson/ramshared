@@ -29,6 +29,9 @@ const LAB_PLAN_TARGET = 'isolated-lab'
 const LAB_PLAN_ENVIRONMENT = 'protected-isolated-lab'
 const RELEASE_ENVIRONMENT = 'protected-release'
 const RELEASE_SBOM_GENERATOR = { name: 'cargo-cyclonedx', version: '0.5.9', spec_version: '1.5' }
+const RELEASE_PROMOTION_POLICY = 'docs/governance/release-promotion.json'
+const RELEASE_TARGET_TAG = 'v0.9.0-beta.1'
+const RELEASE_INTEGRITY_ARTIFACT_RETENTION_DAYS = 14
 const LOCAL_REUSABLE_AGGREGATE_KIND = 'local-reusable-needs-v1'
 const RUST_SLICE_COVERAGE_MAP = 'docs/governance/rust-slice-coverage.json'
 const RUST_SLICE_COVERAGE_PLANNER = 'tools/ci/plan-rust-slice-coverage.mjs'
@@ -207,6 +210,21 @@ function validateLabPlanPolicy(gate, policy, errors) {
   }
 }
 
+function validateReleaseProducerPolicy(gate, policy, errors) {
+  const required = gate.id === 'release-automation' && gate.implementation === 'current'
+  const producer = policy.release_producer
+  if (producer === undefined) {
+    if (required) errors.push(finding(gate.id, 'release-producer-policy-missing'))
+    return
+  }
+  if (!isObject(producer) || producer.target_tag !== RELEASE_TARGET_TAG ||
+      producer.credential !== 'github-app-required' || producer.release_config !== 'release-please-config.json' ||
+      producer.draft !== true || producer.prerelease !== true || producer.force_tag_creation !== true ||
+      producer.skip_github_release !== false || producer.release_as !== RELEASE_TARGET_TAG.slice(1)) {
+    errors.push(finding(gate.id, 'release-producer-policy-invalid'))
+  }
+}
+
 function validateReleaseIntegrityPolicy(gate, policy, errors) {
   const requiresReleasePolicy = gate.id === 'release-integrity' && gate.implementation === 'current'
   const release = policy.release_integrity
@@ -218,8 +236,25 @@ function validateReleaseIntegrityPolicy(gate, policy, errors) {
       !isObject(release.sbom_generator) || release.sbom_generator.name !== RELEASE_SBOM_GENERATOR.name ||
       release.sbom_generator.version !== RELEASE_SBOM_GENERATOR.version ||
       release.sbom_generator.spec_version !== RELEASE_SBOM_GENERATOR.spec_version ||
-      release.publication !== 'forbidden') {
+      release.publication !== 'forbidden' || release.promotion_policy !== RELEASE_PROMOTION_POLICY ||
+      release.target_tag !== RELEASE_TARGET_TAG ||
+      release.integrity_artifact_retention_days !== RELEASE_INTEGRITY_ARTIFACT_RETENTION_DAYS) {
     errors.push(finding(gate.id, 'release-integrity-policy-invalid'))
+  }
+}
+
+function validateReleasePublicationPolicy(gate, policy, errors) {
+  const required = gate.id === 'release-publication' && gate.implementation === 'current'
+  const publication = policy.release_publication
+  if (publication === undefined) {
+    if (required) errors.push(finding(gate.id, 'release-publication-policy-missing'))
+    return
+  }
+  if (!isObject(publication) || publication.environment !== RELEASE_ENVIRONMENT ||
+      publication.promotion_policy !== RELEASE_PROMOTION_POLICY || publication.target_tag !== RELEASE_TARGET_TAG ||
+      publication.manual_only !== true || publication.credential !== 'github-app-required' ||
+      publication.draft_only !== true) {
+    errors.push(finding(gate.id, 'release-publication-policy-invalid'))
   }
 }
 
@@ -271,7 +306,9 @@ function validatePolicy(gate, errors, now) {
   }
   validateAdvisoryDatabase(gate, policy, errors, now)
   validateLabPlanPolicy(gate, policy, errors)
+  validateReleaseProducerPolicy(gate, policy, errors)
   validateReleaseIntegrityPolicy(gate, policy, errors)
+  validateReleasePublicationPolicy(gate, policy, errors)
   validateRustSliceCoveragePolicy(gate, policy, errors)
   validateClosedPrCancellationPolicy(gate, policy, errors)
 }
@@ -536,7 +573,8 @@ function hasTrigger(text, trigger) {
   if (trigger === 'workflow_call') return workflowTriggerNames(text).includes('workflow_call')
   if (trigger === 'release') return /^\s*release:\s*(?:#.*)?$/m.test(text)
   if (trigger === 'push-tag') {
-    return /^\s*push:\s*(?:#.*)?$/m.test(text) && /^\s*tags:\s*$/m.test(text) && /^\s*-\s*['"]v\*['"]\s*$/m.test(text)
+    return /^\s*push:\s*(?:#.*)?$/m.test(text) && /^\s*tags:\s*$/m.test(text) &&
+      new RegExp(`^\\s*-\\s*['"]${RELEASE_TARGET_TAG.replace(/[.+?^${}()|[\]\\]/g, '\\$&')}['"]\\s*$`, 'm').test(text)
   }
   return false
 }
@@ -578,9 +616,295 @@ function continueOnErrorSteps(lines) {
   for (const line of lines) {
     const name = line.match(/^\s*-\s*name:\s*(.+?)\s*$/)
     if (name) stepName = name[1]
-    if (/^\s*continue-on-error:\s*true\s*$/i.test(line)) steps.push(stepName)
+    const continuation = line.match(/^\s*continue-on-error:\s*(.*?)\s*$/iu)
+    if (continuation && continuation[1].toLowerCase() !== 'false') steps.push(stepName)
   }
   return steps
+}
+
+function scalarField(line, indent, key) {
+  const expression = new RegExp(`^${' '.repeat(indent)}${key}:\\s*(.*?)\\s*$`, 'u')
+  const match = line.match(expression)
+  return match ? match[1] : null
+}
+
+function runValue(lines, start, raw) {
+  if (!/^[>|][+-]?$/u.test(raw)) return { value: raw, next: start + 1 }
+  const content = []
+  let index = start + 1
+  while (index < lines.length) {
+    const line = lines[index]
+    if (line.trim() === '') {
+      content.push('')
+      index += 1
+      continue
+    }
+    if (!/^ {10,}/u.test(line)) break
+    content.push(line.slice(10))
+    index += 1
+  }
+  return { value: content.join('\n'), next: index }
+}
+
+function jobSteps(block) {
+  const start = block.findIndex((line) => /^    steps:\s*$/u.test(line))
+  if (start === -1) return []
+  const steps = []
+  let current = null
+  let index = start + 1
+  const addProperty = (step, key, raw, lineIndex) => {
+    if (key === 'run') {
+      const parsed = runValue(block, lineIndex, raw)
+      step.run = parsed.value
+      return parsed.next
+    }
+    step.properties[key] = raw
+    return lineIndex + 1
+  }
+  while (index < block.length) {
+    const line = block[index]
+    if (/^    [A-Za-z][A-Za-z0-9_-]*:\s*/u.test(line)) break
+    const header = line.match(/^      -\s*(.*?)\s*$/u)
+    if (header) {
+      if (current) steps.push(current)
+      current = { properties: {}, run: null }
+      const property = header[1].match(/^([A-Za-z][A-Za-z0-9_-]*):\s*(.*?)\s*$/u)
+      index = property ? addProperty(current, property[1], property[2], index) : index + 1
+      continue
+    }
+    if (!current) {
+      index += 1
+      continue
+    }
+    const property = line.match(/^        ([A-Za-z][A-Za-z0-9_-]*):\s*(.*?)\s*$/u)
+    index = property ? addProperty(current, property[1], property[2], index) : index + 1
+  }
+  if (current) steps.push(current)
+  return steps
+}
+
+function defaultRunShell(lines, indent) {
+  const defaults = lines.findIndex((line) => new RegExp(`^${' '.repeat(indent)}defaults:\\s*$`, 'u').test(line))
+  if (defaults === -1) return null
+  let run = -1
+  for (let index = defaults + 1; index < lines.length; index++) {
+    if (new RegExp(`^ {0,${indent}}\\S`, 'u').test(lines[index])) break
+    if (new RegExp(`^${' '.repeat(indent + 2)}run:\\s*$`, 'u').test(lines[index])) {
+      run = index
+      break
+    }
+  }
+  if (run === -1) return null
+  for (let index = run + 1; index < lines.length; index++) {
+    if (new RegExp(`^ {0,${indent + 2}}\\S`, 'u').test(lines[index])) break
+    const shell = scalarField(lines[index], indent + 4, 'shell')
+    if (shell !== null) return shell
+  }
+  return null
+}
+
+function normalizedCondition(value) {
+  if (typeof value !== 'string') return ''
+  const trimmed = value.trim().replace(/^\$\{\{\s*/u, '').replace(/\s*\}\}$/u, '')
+  const quoted = trimmed.match(/^(['"])(.*)\1$/u)
+  return (quoted ? quoted[2] : trimmed).replace(/\s+/gu, ' ').toLowerCase()
+}
+
+function directEventNames(triggers) {
+  if (triggers.includes('workflow_call')) return null
+  const events = new Set()
+  for (const trigger of triggers) {
+    if (trigger === 'pull_request' || trigger === 'pull_request-closed') events.add('pull_request')
+    else if (trigger === 'push-main' || trigger === 'push-tag') events.add('push')
+    else if (trigger === 'workflow_dispatch') events.add('workflow_dispatch')
+    else if (trigger === 'release') events.add('release')
+  }
+  return events.size > 0 ? events : null
+}
+
+function conditionCanRun(value, triggers) {
+  const condition = normalizedCondition(value)
+  if (!condition || condition === 'always()' || condition === 'success()' || condition === 'true') return true
+  if (/^(?:false|0|!true|1\s*==\s*0)$/u.test(condition) || /(?:^|&&)\s*false(?:\s|$)/u.test(condition) ||
+      /\b(?:failure|cancelled)\(\)/u.test(condition)) return false
+  const events = directEventNames(triggers)
+  if (!events) return true
+  const equal = [...condition.matchAll(/github\.event_name\s*==\s*['"]([a-z_]+)['"]/gu)]
+  if (equal.some((match) => !events.has(match[1]))) return false
+  const unequal = [...condition.matchAll(/github\.event_name\s*!=\s*['"]([a-z_]+)['"]/gu)]
+  return !unequal.some((match) => events.size === 1 && events.has(match[1]))
+}
+
+function heredocFreeScript(value) {
+  const lines = value.split(/\r?\n/u)
+  const active = []
+  const executable = []
+  let sawHeredoc = false
+  for (const line of lines) {
+    if (active.length > 0) {
+      if (line.trim() === active[0]) active.shift()
+      continue
+    }
+    executable.push(line)
+    for (const match of line.matchAll(/<<-?\s*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/gu)) {
+      active.push(match[1] ?? match[2] ?? match[3])
+      sawHeredoc = true
+    }
+  }
+  return { text: executable.join('\n'), sawHeredoc }
+}
+
+function normalizeShellScript(value) {
+  return value.replace(/\\\r?\n/gu, ' ').replace(/\s+/gu, ' ').trim()
+}
+
+function containsRequiredCommand(value, command) {
+  return normalizeShellScript(value).includes(normalizeShellScript(command))
+}
+
+function shellSegments(line) {
+  const segments = []
+  let start = 0
+  let quote = ''
+  for (let index = 0; index < line.length; index++) {
+    const character = line[index]
+    if (character === '\\') {
+      index += 1
+      continue
+    }
+    if (quote) {
+      if (character === quote) quote = '';
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      continue
+    }
+    if (character === ';' || character === '|') {
+      segments.push(line.slice(start, index))
+      if ((character === '|' || character === '&') && line[index + 1] === character) index += 1
+      start = index + 1
+    }
+  }
+  segments.push(line.slice(start))
+  return segments
+}
+
+function containsExecutableCommand(value, command) {
+  const textOnly = /^(?:echo|printf|:|true|false|cat|grep|sed|awk)\b/iu
+  return value.split(/\r?\n/u).some((line) => {
+    const segments = shellSegments(line)
+    return segments.some((segment) => {
+      const executable = segment.trim()
+      return executable !== '' && !executable.startsWith('#') && !textOnly.test(executable) &&
+        containsRequiredCommand(executable, command)
+    })
+  })
+}
+
+function requiredCommandContexts(value, command) {
+  return value.split(/\r?\n/u).filter((line) => containsRequiredCommand(line, command))
+}
+
+function shellControlText(value) {
+  let quote = ''
+  let controls = ''
+  for (let index = 0; index < value.length; index++) {
+    const character = value[index]
+    if (character === '\\') {
+      controls += ' '
+      index += 1
+      continue
+    }
+    if (quote) {
+      if (character === quote) quote = ''
+      else if (quote === '"' && character === '$' && value[index + 1] === '(') controls += '$('
+      else controls += ' '
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      continue
+    }
+    controls += character
+  }
+  return controls
+}
+
+function masksFailure(value, shell) {
+  const controls = shellControlText(value)
+  const powershell = /^(?:pwsh|powershell)\b/iu.test(shell ?? '')
+  return (!powershell && /(^|[^&])&(?!&)/u.test(controls)) || /\|&?/u.test(controls) || /\|\|/u.test(controls) ||
+    /;\s*(?:exit\s+0|true)(?:\s*;|\s*$)/u.test(controls) || /&&\s*true(?:\s*;|\s*$)/u.test(controls) ||
+    /(?:^|[;&|]\s*)!\s*\S/u.test(controls) || /\b(?:if|while|until)\b/u.test(controls) || /\$\(/u.test(controls) ||
+    /\([^\r\n]*\)/u.test(controls)
+}
+
+function unsafeShell(value) {
+  if (!value) return false
+  const shell = value.trim().toLowerCase()
+  if (['bash', 'sh', 'pwsh', 'powershell', 'cmd'].includes(shell)) return false
+  if (!shell.includes('{0}')) return false
+  if (/\b(?:bash|sh)\b/u.test(shell)) return !/(?:\s-e(?:\s|$)|\berrexit\b)/u.test(shell)
+  if (/\b(?:pwsh|powershell)\b/u.test(shell)) return !/erroractionpreference\s*=\s*['"]?stop/u.test(shell)
+  return true
+}
+
+function requiredCommandFindings(gate, text, block) {
+  const findings = []
+  const steps = jobSteps(block)
+  const jobIf = fieldValue(block, 'if')
+  const jobContinuation = fieldValue(block, 'continue-on-error')
+  const workflowShell = defaultRunShell(text.split(/\r?\n/u), 0)
+  const jobShell = defaultRunShell(block, 4)
+  for (const command of gate.required_commands) {
+    let rawMatch = false
+    let heredocOnly = false
+    let unreachable = false
+    let continued = false
+    let masked = false
+    let shellUnsafe = false
+    let executable = false
+    for (const step of steps) {
+      if (typeof step.run !== 'string') continue
+      if (containsRequiredCommand(step.run, command)) rawMatch = true
+      const script = heredocFreeScript(step.run)
+      const contexts = requiredCommandContexts(script.text, command)
+      if (!containsExecutableCommand(script.text, command)) {
+        if (containsRequiredCommand(step.run, command) && script.sawHeredoc) heredocOnly = true
+        if (contexts.some((context) => masksFailure(context, step.properties.shell ?? jobShell ?? workflowShell))) masked = true
+        continue
+      }
+      if (!conditionCanRun(jobIf, gate.triggers) || !conditionCanRun(step.properties.if, gate.triggers)) {
+        unreachable = true
+        continue
+      }
+      if ((typeof jobContinuation === 'string' && jobContinuation.trim().toLowerCase() !== 'false') ||
+          (typeof step.properties['continue-on-error'] === 'string' && step.properties['continue-on-error'].trim().toLowerCase() !== 'false')) {
+        continued = true
+        continue
+      }
+      const shell = step.properties.shell ?? jobShell ?? workflowShell
+      if (contexts.some((context) => masksFailure(context, shell))) {
+        masked = true
+        continue
+      }
+      if (unsafeShell(shell)) {
+        shellUnsafe = true
+        continue
+      }
+      executable = true
+    }
+    if (executable) continue
+    if (heredocOnly && !unreachable && !continued && !masked && !shellUnsafe) findings.push('required-command-heredoc-only')
+    else if (unreachable) findings.push('required-command-unreachable')
+    else if (continued) findings.push('required-command-continue-on-error')
+    else if (masked) findings.push('required-command-failure-masked')
+    else if (shellUnsafe) findings.push('required-command-shell-unsafe')
+    else if (!rawMatch) findings.push('required-command-absent')
+    else findings.push('required-command-not-executable')
+  }
+  return findings
 }
 
 function workflowDispatchInputValues(text, input) {
@@ -597,6 +921,21 @@ function workflowDispatchInputValues(text, input) {
     if (value) values.push(value[1])
   }
   return { isChoice, values }
+}
+
+function workflowDispatchStringInput(text, input) {
+  const lines = text.split(/\r?\n/)
+  const start = lines.findIndex((line) => new RegExp(`^      ${input}:\\s*$`).test(line))
+  if (start === -1) return false
+  let required = false
+  let type = false
+  for (let index = start + 1; index < lines.length; index++) {
+    const line = lines[index]
+    if (/^      [A-Za-z][A-Za-z0-9_-]*:\s*$/.test(line)) break
+    if (/^        required:\s*true\s*$/.test(line)) required = true
+    if (/^        type:\s*string\s*$/.test(line)) type = true
+  }
+  return required && type
 }
 
 function labPlanWorkflowFindings(gate, text, block) {
@@ -655,6 +994,37 @@ function labPlanWorkflowFindings(gate, text, block) {
   return observed
 }
 
+function releaseProducerWorkflowFindings(gate, text, block, root) {
+  const policy = gate.policy.release_producer
+  if (!policy) return []
+  const observed = []
+  const joined = block.join('\n')
+  const appTokenStart = joined.indexOf('id: release-app-token')
+  const appTokenUse = joined.indexOf('uses: actions/create-github-app-token@', appTokenStart)
+  if (!joined.includes('name: Require release GitHub App credentials') ||
+      !joined.includes('test -n "$RELEASE_APP_ID"') || !joined.includes('test -n "$RELEASE_APP_PRIVATE_KEY"') ||
+      appTokenStart === -1 || appTokenUse === -1 || /\bif:\s*/.test(joined.slice(appTokenStart, appTokenUse)) ||
+      !joined.includes('token: ${{ steps.release-app-token.outputs.token }}') ||
+      !joined.includes('git ls-remote --refs') || !joined.includes('refs/tags/$RELEASE_TARGET_TAG') ||
+      !joined.includes("if: ${{ steps.target.outputs.run == 'true' }}") ||
+      /RELEASE_PLEASE_TOKEN|GITHUB_TOKEN|\bPAT\b|\|\|/.test(joined)) {
+    observed.push('release-producer-credential-invalid')
+  }
+  try {
+    const config = JSON.parse(readFileSync(path.join(root, policy.release_config), 'utf8'))
+    const manifest = JSON.parse(readFileSync(path.join(root, '.release-please-manifest.json'), 'utf8'))
+    if (config['release-type'] !== 'simple' || config.versioning !== 'prerelease' ||
+        config['prerelease-type'] !== 'beta' || config.prerelease !== true || config.draft !== true ||
+        config['force-tag-creation'] !== true || config['skip-github-release'] !== false ||
+        config['release-as'] !== policy.target_tag.slice(1) || manifest?.['.'] !== '0.8.0') {
+      observed.push('release-producer-config-invalid')
+    }
+  } catch {
+    observed.push('release-producer-config-invalid')
+  }
+  return observed
+}
+
 function releaseIntegrityWorkflowFindings(gate, text, block) {
   const policy = gate.policy.release_integrity
   if (!policy) return []
@@ -668,12 +1038,62 @@ function releaseIntegrityWorkflowFindings(gate, text, block) {
     'git diff --quiet',
     'cargo install cargo-cyclonedx --locked --version 0.5.9',
     'cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --override-filename ramshared-sbom',
+    'test "$RELEASE_TAG" = "$RELEASE_TARGET_TAG"',
+    'sha256sum "$archive" > "$archive.sha256"',
     'node tools/ci/write-release-manifest.mjs',
+    '--checksum "artifacts/release/ramshared-linux-$RELEASE_TAG.tar.gz.sha256"',
     'node tools/ci/check-release-integrity.mjs --check',
+    'actions/upload-artifact@',
+    `retention-days: ${policy.integrity_artifact_retention_days}`,
+    'release-integrity-${{ env.RELEASE_TAG }}-${{ steps.identity.outputs.revision }}',
   ]
-  if (!markers.every((marker) => joined.includes(marker))) observed.push('release-integrity-command-mismatch')
+  if (!markers.every((marker) => joined.includes(marker)) || !text.includes(`- '${policy.target_tag}'`)) {
+    observed.push('release-integrity-command-mismatch')
+  }
   const publishing = /workflow_dispatch|gh\s+release|upload-release-asset|action-gh-release|create-release|release-please/i
   if (publishing.test(text)) observed.push('release-integrity-publication-reachable')
+  return observed
+}
+
+function releasePublicationWorkflowFindings(gate, text, block) {
+  const policy = gate.policy.release_publication
+  if (!policy) return []
+  const joined = block.join('\n')
+  const observed = []
+  if (fieldValue(block, 'runs-on') !== 'ubuntu-latest' || /runs-on:\s*self-hosted/i.test(joined)) {
+    observed.push('release-publication-runner-invalid')
+  }
+  if (fieldValue(block, 'environment') !== policy.environment) observed.push('release-publication-environment-mismatch')
+  if (!['tag', 'source_sha', 'integrity_run_id'].every((input) => workflowDispatchStringInput(text, input))) {
+    observed.push('release-publication-dispatch-input-invalid')
+  }
+  const markers = [
+    "if: github.ref == 'refs/heads/main'",
+    'ref: ${{ github.event.repository.default_branch }}',
+    'RELEASE_TAG: ${{ inputs.tag }}',
+    'SOURCE_SHA: ${{ inputs.source_sha }}',
+    'INTEGRITY_RUN_ID: ${{ inputs.integrity_run_id }}',
+    'node tools/ci/check-release-publication.mjs',
+    `--policy ${policy.promotion_policy}`,
+    'node tools/ci/check-release-integrity.mjs',
+    '--check artifacts/release/release-manifest.json',
+    'name: Require publication GitHub App credentials',
+    'permission-contents: write',
+    'permission-actions: read',
+    'ref: ${{ inputs.source_sha }}',
+    'refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG',
+    'actions/download-artifact@',
+    'name: release-integrity-${{ inputs.tag }}-${{ inputs.source_sha }}',
+    'run-id: ${{ inputs.integrity_run_id }}',
+    'gh release upload "$RELEASE_TAG" "artifacts/release/$asset"',
+    'gh release edit "$RELEASE_TAG" --draft=false --prerelease',
+  ]
+  if (!markers.every((marker) => joined.includes(marker)) ||
+      joined.indexOf('Validate exact protected dispatch identity') > joined.indexOf('Create publication GitHub App token')) {
+    observed.push('release-publication-command-mismatch')
+  }
+  const forbidden = /workflow_run|^\s*push:|^\s*pull_request:|--clobber|gh\s+release\s+create|gh\s+api\s+--method\s+POST/i
+  if (forbidden.test(text)) observed.push('release-publication-mutation-topology-invalid')
   return observed
 }
 
@@ -696,7 +1116,7 @@ function closedPrCancellationWorkflowFindings(gate, block) {
   return []
 }
 
-function policyFindings(gate, text, block) {
+function policyFindings(gate, text, block, root = ROOT) {
   const observed = []
   if (/^\s*pull_request_target:\s*(?:#.*)?$/m.test(text)) observed.push('pull-request-target')
   for (const trigger of gate.triggers) if (!hasTrigger(text, trigger)) observed.push('trigger-absent')
@@ -743,7 +1163,9 @@ function policyFindings(gate, text, block) {
   }
   observed.push(...closedPrCancellationWorkflowFindings(gate, block))
   observed.push(...labPlanWorkflowFindings(gate, text, block))
+  observed.push(...releaseProducerWorkflowFindings(gate, text, block, root))
   observed.push(...releaseIntegrityWorkflowFindings(gate, text, block))
+  observed.push(...releasePublicationWorkflowFindings(gate, text, block))
 
   const rootPermissions = permissionsBlock(text.split(/\r?\n/), 0)
   const scopedPermissions = permissionsBlock(block, 4)
@@ -761,10 +1183,12 @@ function policyFindings(gate, text, block) {
 
   if (gate.policy.action_pinning === 'full-sha') observed.push(...mutableActionReferences(block))
   if (gate.policy.continue_on_error === false) {
-    const allowed = new Set(gate.allowed_continue_on_error_steps ?? [])
-    for (const step of continueOnErrorSteps(block)) if (!step || !allowed.has(step)) observed.push('continue-on-error')
+    for (const step of continueOnErrorSteps(block)) {
+      void step
+      observed.push('continue-on-error')
+    }
   }
-  for (const command of gate.required_commands) if (!block.join('\n').includes(command)) observed.push('required-command-absent')
+  observed.push(...requiredCommandFindings(gate, text, block))
   return [...new Set(observed)].sort()
 }
 
@@ -791,6 +1215,9 @@ function reusableCallerFindings(contract, caller, root, entrypointText) {
   }
   const childText = readFileSync(childPath, 'utf8')
   if (!/^\s*workflow_call:\s*(?:#.*)?$/m.test(childText)) findings.push('aggregate-reusable-workflow-call-absent')
+  if (workflowTriggerNames(childText).some((trigger) => trigger === 'pull_request' || trigger === 'push')) {
+    findings.push('aggregate-reusable-direct-trigger')
+  }
   if (!workflowConcurrency(childText)?.group_value?.includes('${{ github.workflow }}')) findings.push('aggregate-reusable-concurrency-unscoped')
   if (!sameStringSet(jobIds(childText), [...caller.summary_needs, caller.summary_job])) findings.push('aggregate-reusable-child-jobs-mismatch')
   const summary = jobBlock(childText, caller.summary_job)
@@ -916,7 +1343,7 @@ function inspectGate(gate, root, errors, gaps) {
     settleGateFindings(gate, observed, errors, gaps)
     return
   }
-  settleGateFindings(gate, policyFindings(gate, text, block), errors, gaps)
+  settleGateFindings(gate, policyFindings(gate, text, block, root), errors, gaps)
 }
 
 export function validateWorkflowPolicy(contract, root = ROOT) {

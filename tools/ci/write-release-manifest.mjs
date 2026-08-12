@@ -6,9 +6,9 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 const SOURCE_SHA_RE = /^[0-9a-f]{40}$/
-const TAG_RE = /^v[0-9][0-9A-Za-z.+-]*$/
 const RUST_VERSION_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
 const SBOM_GENERATOR = { name: 'cargo-cyclonedx', version: '0.5.9', spec_version: '1.5' }
+const TARGET_TAG = 'v0.9.0-beta.1'
 
 function safeRelative(value) {
   return typeof value === 'string' && value.length > 0 && !path.isAbsolute(value) &&
@@ -24,10 +24,11 @@ function isObject(value) {
 }
 
 function inputIsValid(input) {
-  return isObject(input) && TAG_RE.test(input.tag) && SOURCE_SHA_RE.test(input.revision) &&
+  return isObject(input) && input.tag === TARGET_TAG && SOURCE_SHA_RE.test(input.revision) &&
     input.clean_tree === true && RUST_VERSION_RE.test(input.rust_version) &&
-    safeRelative(input.bundle_path) && safeRelative(input.sbom_path) &&
-    (input.prior_release === 'none' || TAG_RE.test(input.prior_release)) &&
+    safeRelative(input.bundle_path) && safeRelative(input.checksum_path) && safeRelative(input.sbom_path) &&
+    input.checksum_path === `${input.bundle_path}.sha256` &&
+    (input.prior_release === 'none' || /^v[0-9][0-9A-Za-z.+-]*$/.test(input.prior_release)) &&
     typeof input.rollback_trigger === 'string' && input.rollback_trigger.length > 0 &&
     input.rollback_trigger.length <= 256
 }
@@ -59,6 +60,11 @@ function validateSbom(record) {
   }
 }
 
+function validateDetachedChecksum(bundle, checksum) {
+  const expected = `${bundle.sha256}  ${path.basename(bundle.path)}\n`
+  if (checksum.content.toString('utf8') !== expected) throw new Error('release-manifest-input-invalid')
+}
+
 function evidenceRecord(record) {
   return {
     path: record.path,
@@ -76,8 +82,20 @@ export function buildReleaseManifest(input, { root = process.cwd() } = {}) {
   if (!inputIsValid(input)) throw new Error('release-manifest-input-invalid')
   const lock = readRecord(root, 'Cargo.lock')
   const bundle = readRecord(root, input.bundle_path)
+  const checksum = readRecord(root, input.checksum_path)
   const sbom = readRecord(root, input.sbom_path)
+  validateDetachedChecksum(bundle, checksum)
   validateSbom(sbom)
+  const publicAssets = [
+    `ramshared-linux-${input.tag}.tar.gz`,
+    `ramshared-linux-${input.tag}.tar.gz.sha256`,
+    'ramshared-sbom.cdx.json',
+    'release-manifest.json',
+  ]
+  if (path.basename(bundle.path) !== publicAssets[0] || path.basename(checksum.path) !== publicAssets[1] ||
+      path.basename(sbom.path) !== publicAssets[2]) {
+    throw new Error('release-manifest-input-invalid')
+  }
   return {
     schema_version: 1,
     terminal_status: 'PASS',
@@ -96,6 +114,13 @@ export function buildReleaseManifest(input, { root = process.cwd() } = {}) {
       sha256: bundle.sha256,
       checksums_verified: true,
     },
+    detached_checksum: {
+      path: checksum.path,
+      archive: bundle.path,
+      algorithm: 'sha256',
+      bytes: checksum.bytes,
+      sha256: checksum.sha256,
+    },
     sbom: {
       path: sbom.path,
       format: 'CycloneDX',
@@ -110,8 +135,9 @@ export function buildReleaseManifest(input, { root = process.cwd() } = {}) {
       schema_version: 1,
       source_sha: input.revision,
       terminal_status: 'PASS',
-      artifacts: [evidenceRecord(bundle), evidenceRecord(sbom)],
+      artifacts: [evidenceRecord(bundle), evidenceRecord(checksum), evidenceRecord(sbom)],
     },
+    public_assets: publicAssets,
     windows_driver_status: 'not-included',
     windows_drivers: [],
     rollback: {
@@ -152,12 +178,12 @@ function parseArguments(argv) {
       continue
     }
     const value = argv[index + 1]
-    if (!['--tag', '--revision', '--rust-version', '--bundle', '--sbom', '--prior-release', '--rollback-trigger', '--out'].includes(key) ||
+    if (!['--tag', '--revision', '--rust-version', '--bundle', '--checksum', '--sbom', '--prior-release', '--rollback-trigger', '--out'].includes(key) ||
         typeof value !== 'string' || values.has(key)) return null
     values.set(key, value)
     index += 2
   }
-  const required = ['--tag', '--revision', '--rust-version', '--bundle', '--sbom', '--prior-release', '--rollback-trigger', '--out']
+  const required = ['--tag', '--revision', '--rust-version', '--bundle', '--checksum', '--sbom', '--prior-release', '--rollback-trigger', '--out']
   if (!cleanTree || required.some((key) => !values.has(key))) return null
   return {
     input: {
@@ -166,6 +192,7 @@ function parseArguments(argv) {
       clean_tree: true,
       rust_version: values.get('--rust-version'),
       bundle_path: values.get('--bundle'),
+      checksum_path: values.get('--checksum'),
       sbom_path: values.get('--sbom'),
       prior_release: values.get('--prior-release'),
       rollback_trigger: values.get('--rollback-trigger'),
@@ -181,7 +208,7 @@ export function main(argv = process.argv.slice(2), {
 } = {}) {
   const args = parseArguments(argv)
   if (!args) {
-    error('usage: write-release-manifest.mjs --tag <tag> --revision <sha> --rust-version <version> --bundle <path> --sbom <path> --prior-release <tag|none> --rollback-trigger <text> --out <path> --clean-tree')
+    error('usage: write-release-manifest.mjs --tag <tag> --revision <sha> --rust-version <version> --bundle <path> --checksum <path> --sbom <path> --prior-release <tag|none> --rollback-trigger <text> --out <path> --clean-tree')
     return 2
   }
   if (!resolveOutput(cwd, args.out_path)) {

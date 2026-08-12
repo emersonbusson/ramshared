@@ -1,212 +1,199 @@
-# Public-safe contribution checklist — WSL upstream-native strategy
+# Public-safe contribution checklist — WSL #41054 config-only request
 
-> **Status:** preparation only. This checklist prepares material for human
-> review. It must not be posted, sent, or used to create an external issue,
-> comment, pull request, patch, email, branch, or tag without a new explicit
-> decision.
+> Preparation only. This file renders a local human-review packet. It must not
+> post an issue, comment, pull request, patch, email, branch, tag, or milestone
+> change. All material is English and public-safe.
 
 ## 1. Safety envelope
 
-- [ ] Confirm the packet is limited to one lane: **A — configuration**, **B —
-  dxgkrnl FORTIFY**, or **C — native NUMA refusal**.
-- [ ] Confirm no packet combines #41054 with Lane B.
-- [ ] Confirm no packet asks for a guest-native VRAM-as-NUMA/HMM change.
-- [ ] Confirm no claim says that a FORTIFY warning caused or fixed a freeze,
-  reset, TDR, display failure, or other runtime incident.
-- [ ] Confirm all source facts link only to official Microsoft or Linux primary
-  sources.
-- [ ] Remove private paths, usernames, machine or account identifiers, distro
-  names, IP addresses, tokens, dump files, raw host logs, screenshots, and
-  unredacted diagnostic output.
-- [ ] Replace any local result with a sanitized test ID, public target identity,
-  command class, result, and observable stop/rollback state.
-- [ ] Confirm no test result is described as `DONE` when its required
-  environment was unavailable; use `PARTIAL`, `REFUSED`, or
-  `NEEDS_REVALIDATION` instead.
-
-Passing this section is `UPSTREAM_PUBLIC_EVIDENCE_REDACTION`.
-
-## 2. Common evidence sheet
-
-Use this table in a local human-review packet only. Do not fill it with
-environment identifiers that are not public.
-
-| Field | Required value |
-| --- | --- |
-| Lane | `CONFIG`, `DXG_FORTIFY`, or `NATIVE_NUMA` |
-| Target | Public repository, branch or tag, and full commit ID |
-| Date | UTC date of the source revalidation |
-| Base configuration | Architecture and public config file name |
-| Tests | Named SPEC test IDs and `PASS` / `PARTIAL` / `REFUSED` / `NEEDS_REVALIDATION` |
-| Commands | Sanitized command class and exit/result, without local path or host data |
-| Stop state | `NONE`, `TDR_STOP`, `BOOT_ROLLBACK`, or source/layout refusal |
-| Recovery | Sanitized confirmation of known-good selection or campaign stop |
-| Reviewer decision | `HOLD`, `READY_FOR_HUMAN_REVIEW`, or `REJECTED` |
-
-Revalidation is required when the target branch, tag, release, Kconfig
-dependencies, dxgkrnl layout, FORTIFY state, build result, or thirty-day review
-window changes. This is `UPSTREAM_BRANCH_REVALIDATION`.
-
-## 3. Lane A — #41054 configuration-adoption packet
-
-### Required evidence before human review
-
-- [ ] `UPSTREAM_CONFIG_X86_DELTA_EXACT`: the x86 request is exactly:
+- [ ] Confirm the packet is for **#41054 configuration only**.
+- [ ] Confirm the exact target is
+      `14794180686c2fb6307fbe359c359bec765249f3`.
+- [ ] Confirm the canonical files are exactly:
+      `arch/x86/configs/config-wsl` and
+      `arch/arm64/configs/config-wsl-arm64`.
+- [ ] Confirm x86 requests only:
 
   ```text
   CONFIG_BLK_DEV_UBLK=m
   CONFIG_ZRAM_WRITEBACK=y
   ```
 
-- [ ] `UPSTREAM_CONFIG_ARM64_DELTA_REVALIDATION`: arm64 is checked
-  independently; do not request redundant zram writeback if it is already
-  enabled.
-- [ ] `UPSTREAM_CONFIG_OLDDEFCONFIG`, `UPSTREAM_CONFIG_BUILD_W1`,
-  `UPSTREAM_CONFIG_SPARSE_C1`, and `UPSTREAM_CONFIG_CHECKPATCH` have the
-  recorded status.
-- [ ] `UPSTREAM_CONFIG_MODULES_PACKAGE`, `UPSTREAM_CONFIG_UBLK_MODULE_LOAD`,
-  and `UPSTREAM_CONFIG_ZRAM_WRITEBACK_CAPABILITY` have the recorded status, or
-  are clearly `PARTIAL` because live approval was absent.
-- [ ] `UPSTREAM_CONFIG_BOOT_1`, `UPSTREAM_CONFIG_BOOT_2`, and
-  `UPSTREAM_CONFIG_BOOT_3` are recorded only after explicit approval on an
-  isolated surface.
-- [ ] `UPSTREAM_SAFETY_COUNTER_BASELINE` records a `0` increment for reset/TDR,
-  guest BUG/Oops, and unexpected dxg errors for every approved boot.
-- [ ] `UPSTREAM_CONFIG_PRODUCT_SCOPE_REFUSAL` confirms that the symbols do not
-  make RamShared ublk transport ready; existing custom-kernel and NBD paths
-  remain unchanged.
-- [ ] No TDR/reset, display instability, guest BUG/Oops, dxg error, boot
-  failure, or rollback failure was encountered. If one occurred, stop rather
-  than preparing a packet.
+- [ ] Confirm arm64 is independent: ublk is a candidate and
+      `CONFIG_ZRAM_WRITEBACK=y` is already on; no duplicate writeback request.
+- [ ] Confirm no driver code, UAPI, native VRAM, NBD product, ublk product,
+      or N3 host-contract request appears in the packet.
+- [ ] Confirm no community PR to `microsoft/WSL2-Linux-Kernel` is proposed.
+- [ ] Confirm no private path, username, machine/account identifier, IP,
+      token, dump, screenshot, raw log, or internal Microsoft route appears.
+- [ ] Confirm missing build/boot/host evidence is `PARTIAL`, `REFUSED`, or
+      `NEEDS_REVALIDATION`, never `DONE`.
 
-### Prepared status update — do not post automatically
+Passing this section is `UPSTREAM_CONFIG_PUBLIC_REDACTION` plus
+`NO_EXTERNAL_KERNEL_PR_REFUSAL`.
 
-````markdown
+## 2. Source and architecture evidence sheet
+
+| Field | Required value |
+| --- | --- |
+| Repository | `microsoft/WSL2-Linux-Kernel` |
+| Target revision | `14794180686c2fb6307fbe359c359bec765249f3` |
+| x86 source | `arch/x86/configs/config-wsl` |
+| arm64 source | `arch/arm64/configs/config-wsl-arm64` |
+| Build entry | `Microsoft/config-wsl` (resolve in target tree) |
+| arm64 build entry | `Microsoft/config-wsl-arm64` where supported by target tree |
+| Revalidation UTC | `<date>` |
+| Source result | `PASS` / `PARTIAL` / `NEEDS_REVALIDATION` |
+
+| Architecture | Current `CONFIG_BLK_DEV_UBLK` | Current `CONFIG_ZRAM_WRITEBACK` | Requested action |
+| --- | --- | --- | --- |
+| x86 | `not set` at the pinned SHA | `not set` at the pinned SHA | Request `m` and `y`, respectively. |
+| arm64 | `not set` at the pinned SHA | `y` at the pinned SHA | Keep ublk as candidate; request no writeback delta. |
+
+Use the exact target files, not a generated distro config or an older branch.
+Any branch/tag/SHA/path/Kconfig dependency change invalidates this sheet.
+
+## 3. Evidence status contract
+
+| Test ID | Status | Evidence reference |
+| --- | --- | --- |
+| `UPSTREAM_SOURCE_SHA_REVALIDATION` | `UNVERIFIED` | `<public target + full SHA>` |
+| `UPSTREAM_CANONICAL_ARCH_PATHS` | `UNVERIFIED` | `<both exact paths>` |
+| `X86_CONFIG_PAIR` | `UNVERIFIED` | `<two current values + exact delta>` |
+| `ARM64_INDEPENDENT_PAIR` | `UNVERIFIED` | `<ublk candidate/writeback already y>` |
+| `UPSTREAM_CONFIG_OLDDEFCONFIG_X86` | `PARTIAL` until run | `<target-tree result>` |
+| `UPSTREAM_CONFIG_OLDDEFCONFIG_ARM64` | `PARTIAL` until run | `<target-tree result>` |
+| `UPSTREAM_CONFIG_BUILD_W1` | `PARTIAL` until run | `<target-tree result>` |
+| `UPSTREAM_CONFIG_SPARSE_C1` | `PARTIAL` until run | `<target-tree result>` |
+| `UPSTREAM_CONFIG_MODULE_PACKAGE` | `PARTIAL` until run | `<target-tree result>` |
+| `UPSTREAM_CONFIG_UBLK_CAPABILITY_NO_PRODUCT` | `REFUSED` unless approved | `<isolated capability result>` |
+| `UPSTREAM_CONFIG_WRITEBACK_CAPABILITY` | `REFUSED` unless approved | `<architecture result>` |
+| `UPSTREAM_CONFIG_PUBLIC_REDACTION` | `UNVERIFIED` | `<manual review>` |
+| `NO_EXTERNAL_KERNEL_PR_REFUSAL` | `PASS` for this local packet | `No external action performed` |
+| `N3_SCOPE_REFUSAL` | `PASS` for this local packet | `N3 is separate` |
+
+The result is `READY_FOR_HUMAN_REVIEW` only when source/path/config evidence
+passes and all unavailable environment rows are explicitly accepted as
+`PARTIAL`; it is never an adoption or product-ready result.
+
+## 4. #41054 configuration packet — do not post automatically
+
+```markdown
 Title: Request WSL x86 kernel configuration support for ublk and zram writeback
 
-This is a narrowly scoped configuration request for the x86 WSL kernel:
+This is a narrowly scoped configuration request for the x86 WSL kernel. At
+the reviewed public target `<branch-or-tag>` / `<full-commit-id>`, the
+canonical source is `arch/x86/configs/config-wsl`.
 
-```text
+Requested x86 values:
+
 CONFIG_BLK_DEV_UBLK=m
 CONFIG_ZRAM_WRITEBACK=y
+
+The arm64 configuration was checked independently at
+`arch/arm64/configs/config-wsl-arm64`: ublk remains a candidate and
+CONFIG_ZRAM_WRITEBACK=y is already enabled, so no redundant arm64 writeback
+request is made.
+
+This is configuration evidence only. It does not request a driver, UAPI,
+native VRAM memory, NBD/ublk product policy, or a community pull request to
+the WSL2-Linux-Kernel repository. RamShared continues to use its NBD product
+path independently of Microsoft adoption.
+
+Sanitized evidence: `<named test IDs and statuses>`.
 ```
 
-The reviewed public target is `<branch-or-tag>` at `<full-commit-id>`.
-The corresponding arm64 configuration was checked independently; its result is
-`<sanitized-arm64-state>`.
+If Microsoft requests patch-ready material, a human may prepare one logical
+config commit per x86 symbol in the exact target tree. That is a separate,
+explicit decision; this checklist never creates it.
 
-This request does not propose a WSL feature, a kernel-driver change, a GPU
-memory change, or a product transport policy change. The two symbols are
-requested independently of any product adoption decision.
+## 5. Capability boundary — do not promote
 
-Sanitized evidence: `<named-config-and-build-test-IDs with status>`.
-````
+- [ ] `UPSTREAM_CONFIG_UBLK_CAPABILITY_NO_PRODUCT`: a module/control node, if
+      approved and observed, is capability evidence only.
+- [ ] `UPSTREAM_CONFIG_WRITEBACK_CAPABILITY`: writeback behavior is recorded
+      per architecture without a pressure workload.
+- [ ] `UPSTREAM_CONFIG_PRODUCT_SCOPE_REFUSAL`: no capability result changes
+      RamShared’s NBD-only product decision.
+- [ ] `N3_SCOPE_REFUSAL`: no config result creates host-authoritative VRAM,
+      guest PFNs, NUMA/HMM ownership, or an N3 interface.
 
-If Microsoft asks for commits, prepare at most one logical configuration commit
-per symbol and use the exact target tree. Example subjects, subject to target
-tree policy:
+The accepted terminal language is `CAPABILITY_ONLY`, `PARTIAL`, or `REFUSED`.
+Do not use `READY`, `ADOPTED`, or `DONE` for a symbol observation.
 
-```text
-config: enable CONFIG_BLK_DEV_UBLK
-config: enable CONFIG_ZRAM_WRITEBACK
-```
+## 6. Issue and milestone mapping
 
-Do not invent a `Signed-off-by`, a maintainer, a mailing list, a target branch,
-or an internal Microsoft route.
+These local records reconcile existing open trackers with the milestone labels
+recorded in the corresponding PRD frontmatter. They do not edit or close an
+issue or milestone, and this packet has not created or submitted a comment,
+branch, tag, or pull request. The actual upstream discussion remains
+`microsoft/WSL#41054`; no external PR is proposed.
 
-## 4. Lane B — separate dxgkrnl FORTIFY release-adoption packet
+| Tracker item | Required state | Scope owner | Current milestone | Boundary |
+| --- | --- | --- | --- | --- |
+| `emersonbusson/ramshared#194` | `OPEN_PARTIAL` | WSL2 NBD product readiness | `v0.9.0-beta.1 — WSL2 NBD` | Tracked readiness work; no live completion or `READY` claim. |
+| `emersonbusson/ramshared#196` | `OPEN_PARTIAL` | Microsoft-native N3 public host contract | `Microsoft-native N3 — Design` | Host-authoritative RFC; no adoption, live host, or product claim. |
+| `emersonbusson/ramshared#197` | `OPEN_PARTIAL` | WSL upstream config tracker | `Microsoft-native N3 — Design` | Local tracker only; upstream discussion remains `microsoft/WSL#41054`. |
+| `microsoft/WSL#41054` | `HUMAN_REVIEW_ONLY` | WSL feature/config request | External issue; no local milestone | Config-only; no community kernel PR. |
+| `emersonbusson/ramshared#145` | `KEEP_OPEN_PARTIAL` | Post-NBD ublk research/retirement evidence | `M-UBLK-POST-NBD` | Must not own or block NBD readiness. |
+| `emersonbusson/ramshared#156` | `KEEP_OPEN_PARTIAL` | Windows production signing + packaged supervised broker | `M-WINDOWS-PRODUCT-GATES` | External release gates; not NBD or N3. |
 
-### Required triage before human review
+### #194 tracking note — WSL2 NBD readiness
 
-- [ ] `DXG_FORTIFY_RELEASE_ANCESTRY`: evaluate public target ancestry for
-  `1dda0bd6b031fec40afb3c6c9d59b8b89fd9e8db`.
-- [ ] If the target contains that commit, record regression verification only;
-  do not prepare a duplicate report, patch, or request.
-- [ ] If it lacks the commit, `DXG_FORTIFY_SOURCE_LAYOUT` and
-  `DXG_FORTIFY_WIRE_LAYOUT` verify the exact target header, `cmd_size`,
-  allocation, and both variable copies.
-- [ ] `DXG_FORTIFY_REPRO_OBJECT_COUNT_1` covers the observed one-object case;
-  `DXG_FORTIFY_REPRO_OBJECT_COUNT_MULTI` covers a valid multi-object boundary
-  for the first copy. `NOT_REPRODUCED` stops the report/patch path.
-- [ ] Any candidate is the exact one-line flexible-array change or an
-  equivalently verified backport. Refactors, UAPI changes, and replacement
-  designs are out of scope.
-- [ ] `DXG_FORTIFY_CHECKPATCH`, `DXG_FORTIFY_BUILD_W1`,
-  `DXG_FORTIFY_SPARSE_C1`, named regression checks, and three approved manual
-  boots have recorded status before any release-adoption decision.
-- [ ] `UPSTREAM_SAFETY_COUNTER_BASELINE` records a `0` increment for reset/TDR,
-  guest BUG/Oops, and unexpected dxg errors for every approved boot.
-- [ ] Run `get_maintainer.pl` against the verified exact source only if a
-  human-approved contribution route still requires it. Do not prefill
-  recipients.
-- [ ] `DXG_FORTIFY_CAUSALITY_REFUSAL` is recorded: this is a scoped FORTIFY
-  diagnostic and release-adoption question, not a root-cause claim.
+`#194` is the current local tracker for the NBD readiness pack and is mapped
+to `v0.9.0-beta.1 — WSL2 NBD`. The product transport remains NBD-only, with
+sealed-release, exact `BINARY_MATCH`, Relay, swapoff-first, lower-tier
+capacity, and bounded GiB evidence gates. The pack remains `PARTIAL` until
+those same-surface live gates are measured; this mapping does not claim
+completion, adoption, or a host action.
 
-### Prepared separate report — do not post automatically
+### #196 tracking note — Microsoft-native N3
 
-```markdown
-Title: Verify release adoption of dxgkrnl flexible-array FORTIFY fix
+`#196` is the current local tracker for the public host-contract RFC and is
+mapped to `Microsoft-native N3 — Design`. The contract remains
+`REFUSED_HOST_CONTRACT` until Microsoft-owned semantics and independent
+evidence exist. The guest model remains pure and advisory: it cannot invent
+PFNs, guest NUMA ownership, or host residency. This mapping does not claim
+native VRAM adoption or live host validation.
 
-This report is separate from #41054 and concerns only the public target
-`<branch-or-tag>` at `<full-commit-id>`.
+### #197 tracking note — upstream configuration lane
 
-Target ancestry for
-`1dda0bd6b031fec40afb3c6c9d59b8b89fd9e8db` is `<contains-or-does-not-contain>`.
+`#197` is the current local tracker for the upstream configuration lane and is
+mapped to `Microsoft-native N3 — Design`. It tracks the narrow x86/arm64
+configuration evidence packet only. The actual upstream discussion is
+`microsoft/WSL#41054`; no comment, issue mutation, patch, or external pull
+request is performed by this checklist. Missing build, boot, and capability
+evidence remains `PARTIAL`, `REFUSED`, or `NEEDS_REVALIDATION`.
 
-On an explicitly approved isolated test surface, the scoped diagnostic in
-`dxgvmb_send_wait_sync_object_gpu` was `<reproduced-or-not-reproduced>` for
-`<object-count-case>`. Source review confirmed that the wire layout is
-`fences[object_count]` followed by `handles[object_count]`; both
-variable-length copy bounds and the command allocation were reviewed.
+### #145 status note — keep open partial
 
-If target ancestry lacks the known minimal fix and the exact source/reproducer
-matches, request review of the already identified flexible-array change or an
-equivalently verified backport. This report does not claim that the diagnostic
-caused a freeze, GPU reset, TDR, or display problem.
+`#145` remains `KEEP_OPEN_PARTIAL` for post-NBD ublk research/retirement
+evidence. It is not the owner of the NBD-only product, must not block the NBD
+readiness pack, and must not be closed by a config-only or NBD result. Close it
+only after its own ublk lifecycle contract and evidence satisfy its owner.
 
-Sanitized evidence: `<named-source-build-regression-test-IDs with status>`.
-```
+### #156 status note — keep open partial
 
-### Maintainer discovery record — do not send automatically
+`#156` remains `KEEP_OPEN_PARTIAL` for the two documented Windows product
+gates: production/Microsoft signing and a packaged supervised broker suitable
+for autonomous SCM daily use. It is independent of #41054, NBD readiness, and
+the N3 host contract. Existing physical evidence does not close those gates.
 
-```text
-Source revision: <full-public-commit-id>
-Files: drivers/hv/dxgkrnl/dxgvmbus.c, drivers/hv/dxgkrnl/dxgvmbus.h
-Command class: scripts/get_maintainer.pl against the verified source
-Result: <sanitized-human-reviewed-recipient-output or NOT_RUN>
-```
+## 7. Final handoff
 
-Names or addresses discovered by this command stay out of this repository until
-the human-approved submission workflow specifically requires them.
+- [ ] `UPSTREAM_TEMPLATE_SCOPE_SEPARATION` passes: #41054, #145, #156, #194,
+      #196, #197, NBD, and N3 have distinct owners and claims.
+- [ ] #145 and #156 are explicitly `KEEP_OPEN_PARTIAL`.
+- [ ] #194 is mapped to `v0.9.0-beta.1 — WSL2 NBD` without a live-completion claim.
+- [ ] #196 is mapped to `Microsoft-native N3 — Design` and remains
+      `REFUSED_HOST_CONTRACT` pending host-owned semantics and evidence.
+- [ ] #197 is mapped to `Microsoft-native N3 — Design`; the actual upstream
+      discussion remains `microsoft/WSL#41054`.
+- [ ] No milestone mutation was performed.
+- [ ] No external pull request is proposed or submitted.
+- [ ] All target-sensitive rows have a current full-SHA revalidation or
+      `NEEDS_REVALIDATION`.
+- [ ] A human chooses `HOLD`, `READY_FOR_HUMAN_REVIEW`, or `REJECTED`.
 
-## 5. Lane C — native VRAM-as-NUMA refusal response
-
-### Prepared refusal — do not post automatically
-
-```markdown
-This scope does not propose guest-native VRAM-as-NUMA, HMM,
-MEMORY_DEVICE_PRIVATE, synthetic PFNs, or guest-side add_memory(). WSL GPU-PV
-does not by itself establish the required guest-owned device-memory contract.
-
-Before reconsideration, the host owner must provide a documented WDDM/GPU-PV
-ownership and capacity contract, guest-visible cooperative-driver-owned memory,
-host/guest migration-reclaim-reset-TDR-offline semantics, and an isolated
-hardware validation surface. Until then, this is
-REFUSED_NATIVE_NUMA_CONTRACT.
-```
-
-Passing this section is `NATIVE_NUMA_CONTRACT_REFUSAL`.
-
-## 6. Final human review
-
-- [ ] `UPSTREAM_TEMPLATE_SCOPE_SEPARATION` passes: Lane A stays on #41054,
-  Lane B remains a separate release-adoption path, and Lane C remains a
-  refusal.
-- [ ] All material is English and public-safe.
-- [ ] No external communication or host-mutating action is queued or implied.
-- [ ] No branch/release claim remains stale.
-- [ ] If any live test recorded a safety stop, the packet is rejected until a
-  separate approved recovery/diagnostic plan exists.
-
-The final state is always a human decision: `HOLD`, `READY_FOR_HUMAN_REVIEW`,
-or `REJECTED`. This checklist never sends material itself.
+The checklist never sends material itself. Any external action requires a new
+explicit decision and must not be inferred from a green local check.

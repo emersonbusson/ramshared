@@ -3,7 +3,7 @@ name: Release Integrity
 on:
   push:
     tags:
-      - 'v*'
+      - 'v0.9.0-beta.1'
 
 permissions: {}
 
@@ -20,6 +20,7 @@ jobs:
     permissions:
       contents: read
     env:
+      RELEASE_TARGET_TAG: v0.9.0-beta.1
       RELEASE_TAG: ${{ github.ref_name }}
       RELEASE_EVENT_SHA: ${{ github.sha }}
       RAMSHARED_PACKAGE_OUT: artifacts/release
@@ -38,16 +39,19 @@ jobs:
         with:
           node-version: 22.17.0
 
-      - name: Verify clean tag source
+      - name: Verify clean target tag source
+        id: identity
         shell: bash
         run: |
           set -euo pipefail
+          test "$RELEASE_TAG" = "$RELEASE_TARGET_TAG"
           git diff --quiet
           git diff --cached --quiet
           test -z "$(git status --porcelain)"
           tag_revision="$(git rev-list -n 1 "$RELEASE_TAG")"
           event_revision="$(git rev-parse "${RELEASE_EVENT_SHA}^{commit}")"
           test "$event_revision" = "$tag_revision"
+          printf 'revision=%s\n' "$tag_revision" >> "$GITHUB_OUTPUT"
           printf 'RELEASE_REVISION=%s\n' "$tag_revision" >> "$GITHUB_ENV"
           printf 'SOURCE_DATE_EPOCH=%s\n' "$(git show -s --format=%ct "$tag_revision")" >> "$GITHUB_ENV"
 
@@ -63,6 +67,15 @@ jobs:
           cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --override-filename ramshared-sbom
           mv ramshared-sbom.cdx.json artifacts/release/ramshared-sbom.cdx.json
 
+      - name: Write and verify detached archive checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="ramshared-linux-$RELEASE_TAG.tar.gz"
+          cd artifacts/release
+          sha256sum "$archive" > "$archive.sha256"
+          sha256sum --check "$archive.sha256"
+
       - name: Write release manifest
         shell: bash
         run: |
@@ -75,6 +88,7 @@ jobs:
             --revision "$RELEASE_REVISION" \
             --rust-version "$rust_version" \
             --bundle "artifacts/release/ramshared-linux-$RELEASE_TAG.tar.gz" \
+            --checksum "artifacts/release/ramshared-linux-$RELEASE_TAG.tar.gz.sha256" \
             --sbom artifacts/release/ramshared-sbom.cdx.json \
             --prior-release "$prior_release" \
             --rollback-trigger "bundle checksum mismatch" \
@@ -84,3 +98,32 @@ jobs:
       - name: Validate release manifest
         shell: bash
         run: node tools/ci/check-release-integrity.mjs --check artifacts/release/release-manifest.json --root . --tag "$RELEASE_TAG" --revision "$RELEASE_REVISION"
+
+      - name: Stage exact integrity candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate_dir=tmp/release-integrity-candidate
+          mkdir -p "$candidate_dir/artifacts/release"
+          for asset in \
+            "ramshared-linux-$RELEASE_TAG.tar.gz" \
+            "ramshared-linux-$RELEASE_TAG.tar.gz.sha256" \
+            ramshared-sbom.cdx.json \
+            release-manifest.json; do
+            cp -- "artifacts/release/$asset" "$candidate_dir/artifacts/release/$asset"
+          done
+          expected="$(printf '%s\n' \
+            "artifacts/release/ramshared-linux-$RELEASE_TAG.tar.gz" \
+            "artifacts/release/ramshared-linux-$RELEASE_TAG.tar.gz.sha256" \
+            'artifacts/release/ramshared-sbom.cdx.json' \
+            'artifacts/release/release-manifest.json')"
+          actual="$(find "$candidate_dir" -type f -printf '%P\n' | LC_ALL=C sort)"
+          test "$actual" = "$expected"
+
+      - name: Upload exact integrity candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-integrity-${{ env.RELEASE_TAG }}-${{ steps.identity.outputs.revision }}
+          path: tmp/release-integrity-candidate
+          if-no-files-found: error
+          retention-days: 14

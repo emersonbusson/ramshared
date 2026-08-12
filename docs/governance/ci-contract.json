@@ -79,7 +79,8 @@
     {
       "id": "release-integrity",
       "gate_ids": [
-        "release-integrity"
+        "release-integrity",
+        "release-publication"
       ]
     },
     {
@@ -383,8 +384,7 @@
       },
       "required_commands": [
         "test -s trivy-results.sarif",
-        "jq -e '.version == \"2.1.0\" and (.runs | type == \"array\")' trivy-results.sarif",
-        "sarif_file: trivy-results.sarif"
+        "jq -e '.version == \"2.1.0\" and (.runs | type == \"array\")' trivy-results.sarif"
       ],
       "open_gaps": []
     },
@@ -416,6 +416,16 @@
         "retry_class": "none",
         "concurrency": {
           "cancel_in_progress": false
+        },
+        "release_producer": {
+          "target_tag": "v0.9.0-beta.1",
+          "credential": "github-app-required",
+          "release_config": "release-please-config.json",
+          "draft": true,
+          "prerelease": true,
+          "force_tag_creation": true,
+          "skip_github_release": false,
+          "release_as": "0.9.0-beta.1"
         }
       },
       "required_commands": [],
@@ -454,9 +464,7 @@
           "same_repository_only": true
         }
       },
-      "required_commands": [
-        "github.rest.actions.cancelWorkflowRun"
-      ],
+      "required_commands": [],
       "open_gaps": []
     },
     {
@@ -755,7 +763,10 @@
             "version": "0.5.9",
             "spec_version": "1.5"
           },
-          "publication": "forbidden"
+          "publication": "forbidden",
+          "promotion_policy": "docs/governance/release-promotion.json",
+          "target_tag": "v0.9.0-beta.1",
+          "integrity_artifact_retention_days": 14
         }
       },
       "required_commands": [
@@ -765,6 +776,50 @@
         "cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --override-filename ramshared-sbom",
         "node tools/ci/write-release-manifest.mjs",
         "node tools/ci/check-release-integrity.mjs --check"
+      ],
+      "open_gaps": []
+    },
+    {
+      "id": "release-publication",
+      "required": true,
+      "implementation": "current",
+      "workflow": ".github/workflows/release-publication.yml",
+      "job": "release-publication",
+      "context": "release-publication",
+      "trust": "release",
+      "triggers": [
+        "workflow_dispatch"
+      ],
+      "selection": {
+        "mode": "never",
+        "paths": []
+      },
+      "policy": {
+        "timeout_minutes": 45,
+        "permissions": {
+          "contents": "read"
+        },
+        "permissions_scope": "job",
+        "action_pinning": "full-sha",
+        "continue_on_error": false,
+        "retry_class": "none",
+        "concurrency": {
+          "cancel_in_progress": false
+        },
+        "release_publication": {
+          "environment": "protected-release",
+          "promotion_policy": "docs/governance/release-promotion.json",
+          "target_tag": "v0.9.0-beta.1",
+          "manual_only": true,
+          "credential": "github-app-required",
+          "draft_only": true
+        }
+      },
+      "required_commands": [
+        "node tools/ci/check-release-integrity.mjs",
+        "node tools/ci/check-release-publication.mjs",
+        "gh release upload \"$RELEASE_TAG\" \"artifacts/release/$asset\"",
+        "gh release edit \"$RELEASE_TAG\" --draft=false --prerelease"
       ],
       "open_gaps": []
     },
