@@ -381,51 +381,138 @@ function New-Plan {
     }
 }
 
-function Resolve-SelectedRelease {
-    $probe = Invoke-BoundedProcess -FilePath (Get-WslExecutable) -ArgumentValues @(
+function New-DirectWslRootArguments {
+    param([Parameter(Mandatory = $true)][string[]]$LinuxArguments)
+    @(
         "-d", $Distro, "-u", "root", "--", "env", "-i",
-        "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root", "bash", "--noprofile", "--norc", "-c",
-        'selected="$(readlink -f /opt/ramshared/current)" && test -n "$selected" && test -f "$selected/SOURCE_COMMIT" && test -f "$selected/SOURCE_TREE_STATE" && test -f "$selected/SHA256SUMS" && test -f "$selected/INSTALLED_MANIFEST_SHA256" && test -f "$selected/INSTALL_PROVENANCE.json" && test -f "$selected/INPUT_BUNDLE_SHA256SUMS" && commit="$(cat "$selected/SOURCE_COMMIT")" && tree_state="$(cat "$selected/SOURCE_TREE_STATE")" && installed_manifest="$(sha256sum "$selected/SHA256SUMS" | awk "{print \$1}")" && test "$(cat "$selected/INSTALLED_MANIFEST_SHA256")" = "$installed_manifest" || exit 47; bundle_manifest="$(python3 -c "import json,re,sys; digest=json.load(open(sys.argv[1], encoding=\"utf-8\"))[\"input_bundle_manifest_sha256\"]; assert isinstance(digest,str) and re.fullmatch(r\"[0-9a-fA-F]{64}\",digest); print(digest.lower())" "$selected/INSTALL_PROVENANCE.json")" && printf "%s\n%s\n%s\n%s\n%s\n%s\n" "$selected" "$(basename "$selected")" "$commit" "$tree_state" "$installed_manifest" "$bundle_manifest"'
+        "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root"
+    ) + @($LinuxArguments)
+}
+
+function Invoke-SelectedReleaseDirectRead {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string[]]$LinuxArguments
+    )
+    $run = Invoke-BoundedProcess -FilePath (Get-WslExecutable) -ArgumentValues @(
+        New-DirectWslRootArguments -LinuxArguments $LinuxArguments
     ) -TimeoutSec 30
-    if ($probe.timed_out) { throw "selected_release_timeout" }
-    if (-not $probe.completed -or $probe.exit_code -ne 0) { throw "selected_release_unknown" }
-    $lines = @($probe.stdout -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if ($lines.Count -ne 6) { throw "selected_release_unknown" }
-    $selected = [string]$lines[0]
-    $version = [string]$lines[1]
-    $sourceCommit = [string]$lines[2]
-    $sourceTreeState = [string]$lines[3]
-    $installedManifestSha256 = [string]$lines[4]
-    $inputBundleManifestSha256 = [string]$lines[5]
-    if ($selected -notmatch '^/opt/ramshared/releases/[A-Za-z0-9._-]+$') {
-        throw "selected_release_invalid"
+    if ($run.timed_out) { throw ("selected_release_timeout:" + $Name) }
+    if (-not $run.completed -or $run.exit_code -ne 0 -or -not $run.stream_drain_complete) {
+        throw ("selected_release_read_failed:" + $Name)
     }
-    if ($sourceCommit -notmatch '^[0-9a-f]{40}$' -or $sourceTreeState -ne "clean") {
+    $lines = @($run.stdout -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($lines.Count -ne 1) { throw ("selected_release_read_invalid:" + $Name) }
+    [pscustomobject]@{ name = $Name; line = [string]$lines[0]; run = $run }
+}
+
+function Assert-SelectedReleaseRecords {
+    param(
+        [Parameter(Mandatory = $true)][string]$Selected,
+        [Parameter(Mandatory = $true)][string]$SourceCommit,
+        [Parameter(Mandatory = $true)][string]$SourceTreeState,
+        [Parameter(Mandatory = $true)][string]$InstalledManifestLine,
+        [Parameter(Mandatory = $true)][string]$StoredInstalledManifest,
+        [Parameter(Mandatory = $true)][string]$InputManifestLine,
+        [Parameter(Mandatory = $true)][string]$ProvenanceJson,
+        [Parameter(Mandatory = $true)][string]$ExpectedCommit
+    )
+    $selectorMatch = [regex]::Match($Selected, '^/opt/ramshared/releases/([A-Za-z0-9][A-Za-z0-9._-]{0,127})$')
+    if (-not $selectorMatch.Success) { throw "selected_release_invalid" }
+    $version = $selectorMatch.Groups[1].Value
+    if ($SourceCommit -cnotmatch '^[0-9a-f]{40}$' -or $SourceTreeState -cne "clean") {
         throw "selected_release_source_identity_invalid"
     }
-    if ($installedManifestSha256 -notmatch '^[0-9a-f]{64}$') {
+    $installedMatch = [regex]::Match($InstalledManifestLine, '^([0-9a-f]{64})\s+\S+$')
+    if (-not $installedMatch.Success) { throw "selected_release_manifest_identity_invalid" }
+    $installedManifestSha256 = $installedMatch.Groups[1].Value
+    if ($StoredInstalledManifest -cne $installedManifestSha256) {
         throw "selected_release_manifest_identity_invalid"
     }
-    if ($inputBundleManifestSha256 -notmatch '^[0-9a-f]{64}$') {
-        throw "selected_release_input_bundle_manifest_invalid"
+    $inputMatch = [regex]::Match($InputManifestLine, '^([0-9a-f]{64})\s+\S+$')
+    if (-not $inputMatch.Success) { throw "selected_release_input_bundle_manifest_invalid" }
+    $inputBundleManifestSha256 = $inputMatch.Groups[1].Value
+    try {
+        $provenance = $ProvenanceJson | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "selected_release_provenance_invalid"
     }
-    if ($sourceCommit -ne $ExpectedSourceCommit) {
-        throw "selected_release_source_mismatch"
+    foreach ($propertyName in @("schema_version", "source_commit", "source_tree_state", "input_bundle_manifest_sha256")) {
+        if ($provenance.PSObject.Properties.Name -notcontains $propertyName) {
+            throw "selected_release_provenance_invalid"
+        }
     }
+    if ([string]$provenance.schema_version -cne "ramshared-installed-release-provenance/v1" -or
+        [string]$provenance.source_commit -cne $SourceCommit -or
+        [string]$provenance.source_tree_state -cne $SourceTreeState -or
+        [string]$provenance.input_bundle_manifest_sha256 -cne $inputBundleManifestSha256) {
+        throw "selected_release_provenance_invalid"
+    }
+    if ($SourceCommit -cne $ExpectedCommit) { throw "selected_release_source_mismatch" }
     [pscustomobject]@{
-        selected = $selected
+        selected = $Selected
         version = $version
-        source_commit = $sourceCommit
-        source_tree_state = $sourceTreeState
+        source_commit = $SourceCommit
+        source_tree_state = $SourceTreeState
         manifest_sha256 = $installedManifestSha256
         installed_manifest_sha256 = $installedManifestSha256
         input_bundle_manifest_sha256 = $inputBundleManifestSha256
+    }
+}
+
+function Resolve-SelectedRelease {
+    $reads = @()
+    $selectedRead = Invoke-SelectedReleaseDirectRead -Name "selector" -LinuxArguments @(
+        "readlink", "-f", "/opt/ramshared/current"
+    )
+    $reads += $selectedRead
+    $selected = $selectedRead.line
+    if ($selected -cnotmatch '^/opt/ramshared/releases/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+        throw "selected_release_invalid"
+    }
+
+    $sourceRead = Invoke-SelectedReleaseDirectRead -Name "source_commit" -LinuxArguments @(
+        "cat", "--", ($selected + "/SOURCE_COMMIT")
+    )
+    $treeRead = Invoke-SelectedReleaseDirectRead -Name "source_tree_state" -LinuxArguments @(
+        "cat", "--", ($selected + "/SOURCE_TREE_STATE")
+    )
+    $installedManifestRead = Invoke-SelectedReleaseDirectRead -Name "installed_manifest" -LinuxArguments @(
+        "sha256sum", "--", ($selected + "/SHA256SUMS")
+    )
+    $storedManifestRead = Invoke-SelectedReleaseDirectRead -Name "stored_installed_manifest" -LinuxArguments @(
+        "cat", "--", ($selected + "/INSTALLED_MANIFEST_SHA256")
+    )
+    $provenanceRead = Invoke-SelectedReleaseDirectRead -Name "install_provenance" -LinuxArguments @(
+        "cat", "--", ($selected + "/INSTALL_PROVENANCE.json")
+    )
+    $inputManifestRead = Invoke-SelectedReleaseDirectRead -Name "input_bundle_manifest" -LinuxArguments @(
+        "sha256sum", "--", ($selected + "/INPUT_BUNDLE_SHA256SUMS")
+    )
+    $reads += @($sourceRead, $treeRead, $installedManifestRead, $storedManifestRead, $provenanceRead, $inputManifestRead)
+
+    $identity = Assert-SelectedReleaseRecords -Selected $selected `
+        -SourceCommit $sourceRead.line -SourceTreeState $treeRead.line `
+        -InstalledManifestLine $installedManifestRead.line `
+        -StoredInstalledManifest $storedManifestRead.line `
+        -InputManifestLine $inputManifestRead.line -ProvenanceJson $provenanceRead.line `
+        -ExpectedCommit $ExpectedSourceCommit
+    $allStreamsDrained = @($reads | Where-Object { -not $_.run.stream_drain_complete }).Count -eq 0
+    [pscustomobject]@{
+        selected = $identity.selected
+        version = $identity.version
+        source_commit = $identity.source_commit
+        source_tree_state = $identity.source_tree_state
+        manifest_sha256 = $identity.manifest_sha256
+        installed_manifest_sha256 = $identity.installed_manifest_sha256
+        input_bundle_manifest_sha256 = $identity.input_bundle_manifest_sha256
         containment = [ordered]@{
-            call = "selected_release_discovery"
+            call = "selected_release_discovery_direct_argv"
             timeout_sec = 30
-            completed = $probe.completed
-            exit_code = $probe.exit_code
-            stream_drain_complete = $probe.stream_drain_complete
+            call_count = $reads.Count
+            completed = $true
+            exit_code = 0
+            stream_drain_complete = $allStreamsDrained
         }
     }
 }
@@ -2061,6 +2148,66 @@ param(
             $actual = [IO.File]::ReadAllText($outputPath, [Text.Encoding]::UTF8)
             if ($actual -cne $expected) { throw "manufactured_windows_command_line_corrupted" }
             Write-Output "windows_command_line=PASS"
+            return
+        }
+        "selected-release-direct-argv" {
+            $arguments = @(New-DirectWslRootArguments -LinuxArguments @(
+                "readlink", "-f", "/opt/ramshared/current"
+            ))
+            $expected = @(
+                "-d", $Distro, "-u", "root", "--", "env", "-i",
+                "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root",
+                "readlink", "-f", "/opt/ramshared/current"
+            )
+            if ($arguments.Count -ne $expected.Count) { throw "manufactured_selected_release_argv_count_invalid" }
+            for ($index = 0; $index -lt $expected.Count; $index++) {
+                if ([string]$arguments[$index] -cne [string]$expected[$index]) {
+                    throw "manufactured_selected_release_argv_invalid"
+                }
+            }
+            if ($arguments -contains "bash" -or $arguments -contains "-c" -or
+                (@($arguments | Where-Object { $_ -match '["$]' }).Count -ne 0)) {
+                throw "manufactured_selected_release_shell_program_present"
+            }
+            $commit = ("a" * 40) -join ""
+            $installed = ("b" * 64) -join ""
+            $inputBundle = ("c" * 64) -join ""
+            $provenance = [ordered]@{
+                schema_version = "ramshared-installed-release-provenance/v1"
+                source_commit = $commit
+                source_tree_state = "clean"
+                input_bundle_manifest_sha256 = $inputBundle
+            } | ConvertTo-Json -Compress
+            $valid = @{
+                Selected = "/opt/ramshared/releases/reviewed-v1"
+                SourceCommit = $commit
+                SourceTreeState = "clean"
+                InstalledManifestLine = ($installed + "  /opt/ramshared/releases/reviewed-v1/SHA256SUMS")
+                StoredInstalledManifest = $installed
+                InputManifestLine = ($inputBundle + "  /opt/ramshared/releases/reviewed-v1/INPUT_BUNDLE_SHA256SUMS")
+                ProvenanceJson = $provenance
+                ExpectedCommit = $commit
+            }
+            $identity = Assert-SelectedReleaseRecords @valid
+            if ($identity.version -cne "reviewed-v1" -or $identity.manifest_sha256 -cne $installed -or
+                $identity.input_bundle_manifest_sha256 -cne $inputBundle) {
+                throw "manufactured_selected_release_valid_records_failed"
+            }
+            foreach ($mutation in @(
+                @{ Name = "selector_case"; Key = "Selected"; Value = "/OPT/RAMSHARED/RELEASES/reviewed-v1" },
+                @{ Name = "source"; Key = "SourceCommit"; Value = (("d" * 40) -join "") },
+                @{ Name = "tree_case"; Key = "SourceTreeState"; Value = "Clean" },
+                @{ Name = "installed"; Key = "StoredInstalledManifest"; Value = (("d" * 64) -join "") },
+                @{ Name = "input"; Key = "InputManifestLine"; Value = (("d" * 64) -join "") + "  input" },
+                @{ Name = "provenance"; Key = "ProvenanceJson"; Value = '{"schema_version":"ramshared-installed-release-provenance/v1","source_commit":"0000000000000000000000000000000000000000","source_tree_state":"clean","input_bundle_manifest_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}' }
+            )) {
+                $mutationArguments = @{} + $valid
+                $mutationArguments[$mutation.Key] = $mutation.Value
+                $refused = $false
+                try { $null = Assert-SelectedReleaseRecords @mutationArguments } catch { $refused = $true }
+                if (-not $refused) { throw ("manufactured_selected_release_mutation_accepted:" + $mutation.Name) }
+            }
+            Write-Output "selected_release_direct_argv=PASS"
             return
         }
         "nbd-identity" {
