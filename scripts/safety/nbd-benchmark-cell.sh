@@ -600,7 +600,7 @@ os.close(fd)
 PY
   chmod 0600 -- "$SCRATCH_SWAP" || refuse SCRATCH_MODE_FAILED
   identity=$(scratch_identity) || refuse SCRATCH_IDENTITY_INVALID
-  [[ $identity == *':0:0:600:regular file' ]] || refuse SCRATCH_IDENTITY_INVALID
+  [[ $identity == *':0:0:600:8180' ]] || refuse SCRATCH_IDENTITY_INVALID
   SCRATCH_IDENTITY=$identity
   SCRATCH_IDENTITY_SHA256=$(printf '%s' "$SCRATCH_IDENTITY" | sha256sum | awk '{print $1}')
   fallocate -l 8G -- "$SCRATCH_SWAP" || refuse SCRATCH_ALLOCATION_FAILED
