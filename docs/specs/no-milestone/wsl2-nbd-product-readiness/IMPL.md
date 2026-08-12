@@ -44,7 +44,7 @@ the frozen connection-preserving candidate with zero findings.
   `failed_swapoff_keeps_daemon_and_device_alive`, and
   `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` are
   present and pass in the CLI suite.
-- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 23/23;
+- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 24/24;
   `bash scripts/safety/test-nbd-product-preflight.sh` → 26/26.
 - Public evidence: `node --test tools/ci/check-benchmark-evidence.test.mjs`
   → 15/15, including the sanitized pair-envelope fixture and custody rules.
@@ -194,11 +194,22 @@ the frozen connection-preserving candidate with zero findings.
   reason concealed. Checkpoint `7b33d20` now requires stable per-stage
   republication reasons; its GREEN implementation is diagnostic custody, not
   completion evidence, and requires sealing plus a fresh run.
+- Attempt 14 (2026-08-12, reviewed release source `875fe4b`): disk-only again
+  completed 3/3, and NBD sample one again passed HOLD/integrity. The new stage
+  custody isolated the refusal to `NBD_REPUBLICATION_ZRAM_RECORD_INVALID`.
+  Cleanup left only `/dev/sdc`. The zram runtime record is CLI cleanup state,
+  not immutable sample identity; checkpoint `ff5e58e` now requires the cell to
+  capture the one validated `/dev/zramN` from live topology before the first
+  worker and use that exact identity across samples. The local GREEN is not
+  live evidence. Checkpoint `724ab7f` additionally reproduced that the capture
+  must be followed by a full exact zram/NBD pair gate before context, cgroup,
+  or worker admission. Fresh independent Gate A passed the frozen local 24/24
+  GREEN with zero findings; sealing and a fresh run remain required.
 
 ## SPEC matrix → named tests
 
 The corrected implementation has local coverage for its source/static/
-manufactured names, including the 23 cell tests, 26 preflight suites, fresh
+manufactured names, including the 24 cell tests, 26 preflight suites, fresh
 CUDA handshake/refusal checks, bounded WSL controller checks, exact
 ratio/baseline mappings, public-pair custody, and
 `sealed_bundle_contains_benchmark_runner_and_worker`, and both DT-NBD-40

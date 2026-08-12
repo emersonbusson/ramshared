@@ -16,6 +16,7 @@ SWAP_FIXTURE=""
 RUNS=3
 SAMPLE_TIMEOUT_SEC=120
 SAMPLE_BASELINE_REASON=""
+SAMPLE_ZRAM_DEVICE=""
 ALLOCATE_MIB=""
 MEMORY_HIGH_MIB=1200
 MEMORY_MAX_MIB=""
@@ -500,6 +501,17 @@ print(zram, nbd, disk, ghost)
 PY
 }
 
+capture_sample_zram_device() {
+  awk '
+    NR == 1 { next }
+    $1 ~ /^\/dev\/zram[0-9]+$/ && $2 == "partition" && $5 == 200 && NF == 5 {
+      device = $1
+      found += 1
+    }
+    END { if (found == 1) print device; else exit 1 }
+  ' "$SWAPS_FILE"
+}
+
 if [[ $ACTION == validate-nbd-identity-fixture ]]; then
   [[ ${RAMSHARED_NBD_ALLOW_MANUFACTURED_IDENTITY_TEST:-} == 1 ]] || refuse IDENTITY_FIXTURE_FORBIDDEN
   [[ $IDENTITY_FIXTURE_ROOT == /* && -d $IDENTITY_FIXTURE_ROOT && ! -L $IDENTITY_FIXTURE_ROOT ]] \
@@ -704,14 +716,10 @@ create_zram_control() {
 }
 
 republish_sample_baseline() {
-  local zdev lower lower_type original_nbd_identity transaction_output
+  local zdev=$SAMPLE_ZRAM_DEVICE lower lower_type original_nbd_identity transaction_output
   SAMPLE_BASELINE_REASON="BASELINE_REPUBLICATION_FAILED"
-  [[ -f $ZRAM_RECORD && ! -L $ZRAM_RECORD ]] \
-    || { SAMPLE_BASELINE_REASON=NBD_REPUBLICATION_ZRAM_RECORD_INVALID; return 1; }
-  IFS= read -r zdev <"$ZRAM_RECORD" \
-    || { SAMPLE_BASELINE_REASON=NBD_REPUBLICATION_ZRAM_RECORD_INVALID; return 1; }
   [[ $zdev =~ ^/dev/zram[0-9]+$ ]] \
-    || { SAMPLE_BASELINE_REASON=NBD_REPUBLICATION_ZRAM_RECORD_INVALID; return 1; }
+    || { SAMPLE_BASELINE_REASON=NBD_REPUBLICATION_ZRAM_IDENTITY_INVALID; return 1; }
   if [[ $MODE == nbd ]]; then
     lower=$NBD_DEVICE
     lower_type=partition
@@ -1067,6 +1075,12 @@ else
   nbd_disk_control_topology_exact "$SWAPS_FILE" "$SCRATCH_SWAP" || refuse DISK_CONTROL_TIERS_MISSING
 fi
 
+SAMPLE_ZRAM_DEVICE=$(capture_sample_zram_device) || refuse ZRAM_SAMPLE_IDENTITY_INVALID
+readonly SAMPLE_ZRAM_DEVICE
+if [[ $MODE == nbd ]]; then
+  nbd_swap_pair_topology_exact "$SWAPS_FILE" "$SAMPLE_ZRAM_DEVICE" "$NBD_DEVICE" partition \
+    || refuse NBD_INITIAL_SWAP_TOPOLOGY_INVALID
+fi
 write_live_context_v2
 
 mkdir -- "$CG"
