@@ -1558,6 +1558,13 @@ mod tests {
         );
         assert_eq!(runner.calls().len(), 8);
 
+        // The direct stop seam is intentionally fail-closed while managed
+        // swap remains published. Model the caller's completed swapoff before
+        // waiting for the exact child; otherwise the fixture itself leaks and
+        // the package test never terminates.
+        TEST_SWAPS.with(|cell| {
+            *cell.borrow_mut() = Some("Filename Type Size Used Priority\n".to_string())
+        });
         stop_daemon_gracefully_at(&paths, Duration::from_secs(1));
         daemon
             .wait()

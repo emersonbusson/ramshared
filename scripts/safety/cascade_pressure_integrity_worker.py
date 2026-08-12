@@ -18,8 +18,12 @@ def request_stop(_signum: int, _frame: object) -> None:
     stop_requested = True
 
 
-def chunk_pattern(index: int, size: int) -> bytearray:
+def chunk_pattern(index: int, size: int, pattern: str = "repeated-sha256-v1") -> bytearray:
     seed = hashlib.sha256(f"ramshared:{index}".encode("ascii")).digest()
+    if pattern == "shake256-v1":
+        return bytearray(hashlib.shake_256(seed).digest(size))
+    if pattern != "repeated-sha256-v1":
+        raise ValueError(f"unsupported pattern: {pattern}")
     repeats, remainder = divmod(size, len(seed))
     return bytearray(seed * repeats + seed[:remainder])
 
@@ -45,6 +49,12 @@ def parse_args() -> argparse.Namespace:
     size.add_argument("--allocate-mib", type=int)
     size.add_argument("--allocate-gib", type=float)
     parser.add_argument("--chunk-mib", type=int, default=64)
+    parser.add_argument("--chunk-delay-ms", type=int, default=0)
+    parser.add_argument(
+        "--pattern",
+        choices=("repeated-sha256-v1", "shake256-v1"),
+        default="repeated-sha256-v1",
+    )
     parser.add_argument("--result", required=True)
     return parser.parse_args()
 
@@ -58,6 +68,8 @@ def main() -> int:
     )
     if allocate_mib <= 0 or args.chunk_mib <= 0:
         raise ValueError("allocation and chunk sizes must be positive")
+    if not 0 <= args.chunk_delay_ms <= 1000:
+        raise ValueError("chunk delay must be between 0 and 1000 milliseconds")
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
@@ -70,12 +82,16 @@ def main() -> int:
             if stop_requested:
                 break
             current_mib = min(args.chunk_mib, allocate_mib - allocated_mib)
-            chunk = chunk_pattern(len(chunks), current_mib * 1024 * 1024)
+            chunk = chunk_pattern(
+                len(chunks), current_mib * 1024 * 1024, args.pattern
+            )
             chunks.append(chunk)
             allocation_digest.update(chunk)
             allocated_mib += current_mib
-            if allocated_mib % 512 == 0 or allocated_mib == allocate_mib:
+            if args.chunk_delay_ms > 0 or allocated_mib % 512 == 0 or allocated_mib == allocate_mib:
                 print(f"ALLOC {allocated_mib} MiB", flush=True)
+            if args.chunk_delay_ms > 0:
+                time.sleep(args.chunk_delay_ms / 1000)
     except MemoryError:
         write_result(
             args.result,
@@ -115,6 +131,7 @@ def main() -> int:
             "verified_chunks": len(chunks),
             "checksum_before": checksum_before,
             "checksum_after": checksum_after,
+            "pattern": args.pattern,
         },
     )
     print(f"INTEGRITY {status}", flush=True)

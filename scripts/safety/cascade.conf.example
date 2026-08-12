@@ -8,8 +8,12 @@
 VRAM_MIB=1024
 ZRAM_MIB=1024
 
-# An operator-approved release must contain exactly one existing lower-tier
-# directory. Leave this empty in a generic bundle so the read-only preflight
-# refuses instead of guessing a host path. The check also accepts a scoped
-# RAMSHARED_NBD_LOWER_SINK override for an attended, approved execution.
+# The package builder replaces these three values together. They bind one
+# machine-specific lower tier by canonical path, directory type, and an exact
+# filesystem identity digest. A live product preflight never accepts an
+# environment override: publish a new sealed release instead.
 NBD_LOWER_SINK=
+NBD_LOWER_SINK_TYPE=directory
+NBD_LOWER_SINK_IDENTITY_SHA256=
+NBD_LOWER_SINK_FS_BLOCK_BYTES=
+NBD_LOWER_SINK_BINDING=unbound

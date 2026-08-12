@@ -1,62 +1,105 @@
 # IMPL — WSL2 NBD-only product readiness
 
+> SSDV3 Step 3 · SPEC: `docs/specs/no-milestone/wsl2-nbd-product-readiness/SPEC.md`
+
 ## Status
 
-**SSDV3 Step 3: `PARTIAL` (source/static/manufactured plus one supervised
-live WSL2 NBD pilot).** The 1 GiB NBD lifecycle, Relay before/action/after,
-daemon identity, device, and swap ordering are live-verified. The required
-1/2/4 GiB benchmark matrix remains unrun, so this is not DONE.
+`partial` · cover ✓ · E2E partial (historical 1 GiB pilot only) · BINARY_MATCH
+partial (historical pilot only). The corrected implementation and local
+static/manufactured gates are green. The new ordered 1/2/4 GiB Windows/WSL2
+matrix has not run on the reviewed release, so this is not DONE and no new
+live claim is made.
 
-| Local gate | Exact result |
-| --- | --- |
-| `cargo test -p ramshared-tier --all-targets` | 52 passed (shared package suite) |
-| `cargo test -p ramshared-cli --all-targets` | 95 passed (90 unit + 5 integration) |
-| Exact CLI lifecycle contracts | 2 passed: `swapoff_completes_before_nbd_disconnect`, `failed_swapoff_keeps_daemon_and_device_alive` |
-| `bash scripts/safety/test-nbd-product-preflight.sh` | 22 named suites passed, including one aggregate that injects all 20 post-write rollback phases and exact legacy-unit migration/backup refusal coverage |
-| `cargo clippy -p ramshared-tier --all-targets -- -D warnings` | pass |
-| `cargo clippy -p ramshared-cli --all-targets -- -D warnings` | pass |
-| `cargo fmt --all -- --check` | pass |
-| `nbd_readiness.rs` line coverage | 83.9% (251/299), minimum 80% pass |
-| `cascade_io.rs` line coverage | 85.5% (1255/1467), minimum 80% pass |
+## Files
 
-## Implemented local ownership
+| Path | ITEM/RF | Change |
+| --- | --- | --- |
+| `crates/ramshared-tier/src/nbd_readiness.rs` | ITEM-4 / RF-NBD-5,10,12 | Pure NBD readiness, capacity, state, and refusal model. |
+| `crates/ramshared-cli/src/cascade/cascade_io.rs` | ITEM-4 / RF-NBD-10,12 | Teardown executor proves swapoff before NBD disconnect/daemon stop through an injected plan. |
+| `scripts/safety/nbd-product-preflight.sh` | ITEM-1..4,6 / RF-NBD-1..10,19 | Sealed installed-release, lower-sink, Relay, state, BINARY_MATCH, no-reboot, and live-seam gates. |
+| `scripts/safety/install-cascade-boot.sh` | ITEM-2,8 / RF-NBD-2,13 | Attended lower-sink-bound install, provenance, immutable backup, selector transaction, and rollback frontiers. |
+| `scripts/safety/nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14,15,17,18,19,20 | Disk/NBD cell, common zram topology, cgroup-before-start occupancy, exact scratch identity, cleanup, comparison, and internal custody envelope. |
+| `scripts/safety/nbd-benchmark-cgroup-launch.sh` | ITEM-5 / RF-NBD-15 | In-cgroup launcher and create-once start barrier. |
+| `scripts/safety/nbd-benchmark-lib.sh` | ITEM-5 / RF-NBD-14,17 | Identity-bound scratch and swapoff-first helpers. |
+| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Thirteen manufactured/refusal suites for topology, observed NBD identity, occupancy, cleanup, seams, custody, and aggregation. |
+| `scripts/p0/Start-CudaVramWorkload.ps1` | ITEM-5 / RF-NBD-16,17 | Fresh pair-scoped CUDA handshakes and unconditional cleanup. |
+| `scripts/windows/Invoke-NbdBenchmarkMatrix.ps1` | ITEM-5..7 / RF-NBD-6,16..20 | Bounded Windows/WSL controller, numeric headroom, pair custody, promotion order, watchdog classification, and public pair envelope. |
+| `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | ITEM-5..7 / RF-NBD-16..20 | PowerShell static/manufactured contract and refusal checks. |
+| `scripts/windows/Test-WindowsCiStatic.ps1` | ITEM-7 / RF-NBD-17..19 | Windows static wrapper includes the matrix harness. |
+| `scripts/package/build-linux-bundle.sh` | ITEM-2,5 / RF-NBD-2,9,18 | Universal unbound input bundle with source identity and input manifest; binding occurs only in attended install. |
+| `tools/ci/check-benchmark-evidence.test.mjs` | ITEM-7 / RF-NBD-11,18,20 | Public pair evidence schema validator fixture, 15/15 tests. |
+| `docs/governance/capability-observations.generated.json` | ITEM-7 / RF-NBD-11 | Generated capability facts remain separate from live proof. |
 
-| PRD/SPEC item | Exact local path and evidence |
-| --- | --- |
-| Pure NBD readiness/capacity/refusal model | `crates/ramshared-tier/src/nbd_readiness.rs`; exact 80% gate above |
-| NBD transport integration | `crates/ramshared-tier/src/cascade.rs`; covered by the shared tier suite |
-| Real teardown executor | `crates/ramshared-cli/src/cascade/cascade_io.rs`; injected `NbdLifecyclePlan` / `NbdLifecycleExecutor` proves every `swapoff` precedes NBD disconnect and daemon stop |
-| Failed swapoff refusal | `failed_swapoff_keeps_daemon_and_device_alive` records only `swapoff`; it records neither disconnect nor daemon stop |
-| Installer rollback | `scripts/safety/install-cascade-boot.sh` has 20 named post-write markers; `scripts/safety/test-nbd-product-preflight.sh` injects a failure after each marker in a temporary fixture |
-| Legacy unit migration | A conflicting unit remains a refusal unless a second approval supplies its exact SHA-256. The manufactured migration test proves absent/stale approvals do not mutate it; an injected final-phase failure restores the old unit from a sealed backup. |
-| Read-only product preflight | `scripts/safety/nbd-product-preflight.sh` and the same 22-suite manufactured harness |
-| Live 1 GiB activation | `evidence/2026-08-12-live/{before.txt,action-sudo.txt,after-active.txt,binary-match.txt}`; `/dev/zram0` priority 200, `/dev/nbd0` priority 100, disk priority -2, Relay clean, and `BINARY_MATCH=PASS` |
+## Validation (numbers)
 
-## Evidence matrix and open gaps
+- Tests: `cargo test -p ramshared-cli --all-targets` → 95 passed; `cargo test
+  -p ramshared-tier --all-targets` → 52 passed.
+- Named local lifecycle contracts: `swapoff_completes_before_nbd_disconnect`,
+  `failed_swapoff_keeps_daemon_and_device_alive`, and
+  `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` are
+  present and pass in the CLI suite.
+- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 13/13;
+  `bash scripts/safety/test-nbd-product-preflight.sh` → 26/26.
+- Public evidence: `node --test tools/ci/check-benchmark-evidence.test.mjs`
+  → 15/15, including the sanitized pair-envelope fixture and custody rules.
+- Format/lint: `cargo fmt --all -- --check` → pass; `cargo clippy -p
+  ramshared-cli -p ramshared-tier --all-targets -- -D warnings` → pass.
+- Cover: `crates/ramshared-tier/src/nbd_readiness.rs` → 83.9% (251/299);
+  `crates/ramshared-cli/src/cascade/cascade_io.rs` → 85.6% (1259/1471), both
+  above the 80% per-file gate. The report JSON is local-only under `tmp/`.
+- Generated/docs hygiene: capability-observation `--check`, `./scripts/docs-check.sh`,
+  and `git diff --check` → pass in the current static slice.
+- PowerShell: focused `Test-NbdBenchmarkMatrixStatic.ps1` → pass; complete
+  `Test-WindowsCiStatic.ps1 -RepoRoot <repo>` → pass, including
+  `windows_static_wrapper_includes_nbd_benchmark_harness` and
+  `windows_static_suite_runs_named_static_harnesses`. No live CUDA or
+  Windows/WSL matrix is claimed here.
 
-| Required evidence | Local result | Live/E2E result | Status |
-| --- | --- | --- | --- |
-| `nbd_lifecycle_before_action_after` | Pure injected ordering/refusal | Live 1 GiB pilot passed: before disk-only, action created zram/NBD, after priorities were 200/100/-2 with no ghost | `PARTIAL` / benchmark matrix remains |
-| `relay_gate_before_action_after` | Read-only manufactured refusal | Live Relay checks were `CLEAN` before and after, with zero candidates | `PASS` for the 1 GiB pilot |
-| `NBD_BENCHMARK_MATRIX` | Schema only | No 1/2/4 GiB cells or n≥3 statistics | `PARTIAL` / environment-bound |
-| `BINARY_MATCH` | Static stale/deleted daemon refusal | Live `ramsharedd` executable and selected sealed binary both resolved to `/opt/ramshared/releases/v0.8.0-8-g0b09518/bin/ramsharedd` | `PASS` for the 1 GiB pilot |
-| Sealed installer transaction | 20-phase rollback and legacy-unit migration manufactured tests | Attended install migrated the approved legacy unit, retained a root-owned immutable backup, selected `v0.8.0-8-g0b09518`, and kept the service disabled | `PASS` for the installed release |
+## SPEC matrix → named tests
 
-The open gap is the ordered 1/2/4 GiB benchmark matrix with n>=3 and
-median/p99/deviation. `validation.md` records the supervised 1 GiB
-before → action → after evidence; no benchmark claim is inferred from it.
+The corrected implementation has local coverage for all source/static/
+manufactured names in SPEC § Required tests matrix, including the 13 cell
+tests, 26 preflight suites, fresh CUDA handshake/refusal checks, bounded WSL
+controller checks, exact ratio/baseline mappings, public-pair custody, and
+`sealed_bundle_contains_benchmark_runner_and_worker`. The live rows
+`nbd_lifecycle_before_action_after`, `relay_gate_before_action_after`, and
+`NBD_BENCHMARK_MATRIX` remain environment-bound.
 
-## Numeric rollback trigger
+## E2E (historical pilot only)
 
-Rollback/refusal is mandatory when **any one** (`>= 1`) of these occurs:
-`swapoff` returns an error; an active NBD/ublk swap entry remains; any one of
-the **20/20** manufactured post-write rollback phases fails to restore prior
-selector/unit state and remove the destination; a legacy-unit migration hash,
-metadata, backup, or restoration check fails; or lower-tier capacity is
-`L < V + max(ceil(0.10 × V), 512 MiB)`. The local executor returns before NBD
-disconnect and daemon stop after a failed `swapoff`; a live operator must not
-infer that this source evidence authorizes teardown.
+The only live evidence currently retained is the supervised 1 GiB pilot under
+[`evidence/2026-08-12-live/`](evidence/2026-08-12-live/):
+
+- Before: `before.txt` observed `PRODUCT_OFF`, disk-only lower sink, Relay
+  `CLEAN`, and no managed zram/NBD swap.
+- Action: `action-sudo.txt` activated the sealed `v0.8.0-8-g0b09518` release.
+- After: `after-active.txt` observed zram priority 200, NBD priority 100, disk
+  priority -2, Relay `CLEAN`, and `BINARY_MATCH=PASS`; `binary-match.txt`
+  records the resolved executable equality.
+- This pilot is historical evidence only. It does not prove any new 1/2/4 GiB
+  pair, n≥3 statistics, pair-scoped CUDA custody, or the corrected reviewed
+  release. `validation.md` was intentionally not updated in this docs-only
+  reconciliation.
+
+## Gaps
+
+`env-bound (blocker)` — clean reviewed-release deployment; legitimate
+Windows/WSL2 before/action/after execution for P1/Q2/Q4
+idle and bounded pairs; n=3 median/p99/deviation and backend comparisons;
+per-cell occupancy, cleanup, Relay, and BINARY_MATCH receipts; root
+`validation.md`; Gate B; PR checks and merge.
+No reboot or WSL shutdown is part of this record.
+
+## Rollback trigger
+
+Rollback/refuse on any one observable failure: `swapoff` error; residual
+managed/ghost swap or daemon; BINARY_MATCH mismatch; lower-tier capacity below
+`V + max(ceil(0.10 × V), 512 MiB)`; any failed installer rollback phase; stale
+selector/provenance/manifest; CUDA cleanup failure; timeout classified as
+anything other than `RED/unverified_terminated`; or any live seam/host action.
 
 ## Traceability
 
-`PRD.md` RF-NBD-1..13 → `SPEC.md` ITEM-1..8 → this explicit partial record.
+| RF | ITEM | commit |
+| --- | --- | --- |
+| RF-NBD-1..20 | ITEM-1..8 | pending — current source revision `88077b159ca521acaed6f3fc1ad9c713cfce58da`; no commit created by this docs reconciliation |
