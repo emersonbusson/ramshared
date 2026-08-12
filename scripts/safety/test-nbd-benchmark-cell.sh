@@ -983,6 +983,43 @@ EOF
 
 test_nbd_sample_connected_republication_contract
 
+test_sample_zram_identity_requires_exact_initial_pair_before_worker() {
+  local swaps="$TMP/initial-pair-swaps" capture_line pair_line context_line cgroup_line extra
+  printf 'Filename Type Size Used Priority\n/dev/zram0 partition 1048572 0 200\n/dev/nbd0 partition 1048572 0 100\n' >"$swaps"
+  nbd_swap_pair_topology_exact "$swaps" /dev/zram0 /dev/nbd0 partition || {
+    echo 'FAIL legitimate initial zram/NBD pair was refused' >&2
+    exit 1
+  }
+
+  for extra in \
+    '/dev/zram9 partition 1048572 0 200' \
+    '/dev/zram9 partition 1048572 0 100' \
+    '/dev/zram9 file 1048572 0 200' \
+    '/dev/zram9 partition 1048572 0 200 extra' \
+    '/dev/nbd9 partition 1048572 0 100' \
+    '/dev/ublkb9 partition 1048572 0 100'; do
+    printf 'Filename Type Size Used Priority\n/dev/zram0 partition 1048572 0 200\n/dev/nbd0 partition 1048572 0 100\n%s\n' \
+      "$extra" >"$swaps"
+    if nbd_swap_pair_topology_exact "$swaps" /dev/zram0 /dev/nbd0 partition; then
+      printf 'FAIL invalid initial pair row was accepted: %s\n' "$extra" >&2
+      exit 1
+    fi
+  done
+
+  capture_line=$(grep -nF 'SAMPLE_ZRAM_DEVICE=$(capture_sample_zram_device)' "$CELL" | cut -d: -f1)
+  pair_line=$(grep -nF 'nbd_swap_pair_topology_exact "$SWAPS_FILE" "$SAMPLE_ZRAM_DEVICE" "$NBD_DEVICE" partition' "$CELL" | cut -d: -f1)
+  context_line=$(grep -nF 'write_live_context_v2' "$CELL" | tail -1 | cut -d: -f1)
+  cgroup_line=$(grep -nF 'mkdir -- "$CG"' "$CELL" | cut -d: -f1)
+  [[ $capture_line =~ ^[0-9]+$ && $pair_line =~ ^[0-9]+$ && $context_line =~ ^[0-9]+$ && $cgroup_line =~ ^[0-9]+$ \
+    && $capture_line -lt $pair_line && $pair_line -lt $context_line && $context_line -lt $cgroup_line ]] || {
+    echo 'FAIL exact initial pair is not validated after capture and before context/cgroup/worker' >&2
+    exit 1
+  }
+  pass sample_zram_identity_requires_exact_initial_pair_before_worker
+}
+
+test_sample_zram_identity_requires_exact_initial_pair_before_worker
+
 reconnect_calls=$(grep -Fc 'transaction_output=$(nbd_preserved_connection_republish_swap_pair' "$CELL" || true)
 disk_republish_calls=$(grep -Fc 'nbd_republish_swap_pair "$SWAPS_FILE" "$zdev" "$lower" "$lower_type"' "$CELL" || true)
 [[ $reconnect_calls == 1 && $disk_republish_calls == 1 ]] || {
