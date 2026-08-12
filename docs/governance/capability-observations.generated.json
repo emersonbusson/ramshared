@@ -582,6 +582,36 @@
     },
     {
       "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-tier/src/lib.rs",
+          "crates/ramshared-tier/src/n3_state.rs"
+        ],
+        "test_paths": [
+          "crates/ramshared-tier/tests/n3_state.rs",
+          "tools/ci/plan-rust-slice-coverage.test.mjs"
+        ]
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/microsoft-native-vram-memory-tier/IMPL.md",
+        "prd": "docs/specs/no-milestone/microsoft-native-vram-memory-tier/PRD.md",
+        "spec": "docs/specs/no-milestone/microsoft-native-vram-memory-tier/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "microsoft-native-vram-memory-tier"
+    },
+    {
+      "claim_reconciliation": {
         "claim_present": true,
         "observation_is_not_a_claim": true,
         "registry_path": "docs/governance/claims.json",
@@ -619,6 +649,42 @@
         "reason": "Only the qualified claims registry may publish capability state."
       },
       "slug": "public-repository-hygiene"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/docs-check.sh",
+          "scripts/package/build-linux-bundle.sh",
+          "tools/ci/check-ci-contract.mjs",
+          "tools/ci/check-release-integrity.mjs",
+          "tools/ci/check-release-publication.mjs",
+          "tools/ci/write-release-manifest.mjs"
+        ],
+        "test_paths": [
+          "tools/ci/check-ci-contract.test.mjs",
+          "tools/ci/check-release-integrity.test.mjs",
+          "tools/ci/check-release-publication.test.mjs",
+          "tools/ci/write-release-manifest.test.mjs"
+        ]
+      },
+      "documents": {
+        "implementation": null,
+        "prd": "docs/specs/no-milestone/release-promotion-publication/PRD.md",
+        "spec": "docs/specs/no-milestone/release-promotion-publication/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "release-promotion-publication"
     },
     {
       "claim_reconciliation": {
@@ -1097,6 +1163,41 @@
         "reason": "Only the qualified claims registry may publish capability state."
       },
       "slug": "wsl2-native-vram-tier"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-cli/src/cascade/cascade_io.rs",
+          "crates/ramshared-tier/src/cascade.rs",
+          "crates/ramshared-tier/src/lib.rs",
+          "crates/ramshared-tier/src/nbd_readiness.rs",
+          "crates/ramshared-wsl2d/src/state.rs",
+          "scripts/package/build-linux-bundle.sh",
+          "scripts/safety/cascade-up.sh",
+          "scripts/safety/install-cascade-boot.sh",
+          "scripts/safety/nbd-product-preflight.sh",
+          "scripts/safety/test-nbd-product-preflight.sh"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-nbd-product-readiness/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-nbd-product-readiness/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-nbd-product-readiness/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-nbd-product-readiness"
     },
     {
       "claim_reconciliation": {
