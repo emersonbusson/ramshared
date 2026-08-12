@@ -32,6 +32,9 @@ readonly ROLLBACK_POST_WRITE_PHASES=(
   unit-staged
   unit-linked
   unit-staging-removed
+  legacy-unit-backed-up
+  legacy-unit-staged
+  legacy-unit-replaced
   selector-staged
   selector-owner-normalized
   selector-published
@@ -602,13 +605,13 @@ EOF
 }
 
 inject_rollback_failure_after_phase() {
-  local phase=$1 install=$2 temporary="$2.manufactured"
-  if ! awk -v phase="$phase" '
+  local phase=$1 install=$2 injection=${3:-"false # manufactured rollback failure after $phase"} temporary="$2.manufactured"
+  if ! awk -v phase="$phase" -v injection="$injection" '
     {
       print
       if ($0 ~ "^[[:space:]]*# NBD_INSTALL_POST_WRITE_PHASE=" phase "$" ) {
         matches += 1
-        print "false # manufactured rollback failure after " phase
+        print injection
       }
     }
     END { exit(matches == 1 ? 0 : 91) }
@@ -620,7 +623,7 @@ inject_rollback_failure_after_phase() {
 }
 
 new_rollback_installer_fixture() {
-  local name=$1 phase=$2 unit_mode=${3:-existing} root source target unit
+  local name=$1 phase=$2 unit_mode=${3:-existing} injection=${4:-} root source target unit
   root=$(new_fixture "rollback-$name")
   source="$root/opt/ramshared/releases/v1.2.3"
   target="$root/product"
@@ -631,7 +634,7 @@ new_rollback_installer_fixture() {
     -e "s|^PRODUCT_ROOT=/opt/ramshared$|PRODUCT_ROOT=$target|" \
     -e "s|^UNIT_PATH=/etc/systemd/system/ramshared-cascade.service$|UNIT_PATH=$unit|" \
     "$REPO_ROOT/scripts/safety/install-cascade-boot.sh" >"$source/scripts/safety/install-cascade-boot.sh"
-  inject_rollback_failure_after_phase "$phase" "$source/scripts/safety/install-cascade-boot.sh" || return 1
+  inject_rollback_failure_after_phase "$phase" "$source/scripts/safety/install-cascade-boot.sh" "$injection" || return 1
   chmod 0755 "$source/scripts/safety/install-cascade-boot.sh"
   printf 'v1.2.3\n' >"$source/RELEASE_VERSION"
   chmod 0644 "$source/RELEASE_VERSION"
@@ -643,6 +646,9 @@ new_rollback_installer_fixture() {
   ln -s releases/v0.0.1 "$target/current"
   if [[ $unit_mode == existing ]]; then
     install -m 0644 "$source/systemd/ramshared-cascade.service" "$unit"
+  elif [[ $unit_mode == legacy ]]; then
+    printf '[Unit]\nDescription=legacy fixture for exact migration\n' >"$unit"
+    chmod 0644 "$unit"
   fi
 
   cat >"$root/bin/id" <<'EOF'
@@ -650,9 +656,10 @@ new_rollback_installer_fixture() {
 [[ ${1:-} == -u ]] && { printf '0\n'; exit 0; }
 exec /usr/bin/id "$@"
 EOF
-  cat >"$root/bin/systemctl" <<'EOF'
+cat >"$root/bin/systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$*" >>"${RAMSHARED_SYSTEMCTL_LOG:-/dev/null}"
 case "${1:-}" in
   is-active) exit 3 ;;
   is-enabled) exit 1 ;;
@@ -669,7 +676,7 @@ EOF
 set -euo pipefail
 if [[ ${1:-} == -c && ${2:-} == %u:%g:%a ]]; then
   path=${4:-}
-  if [[ $path == "${RAMSHARED_ROLLBACK_PRODUCT_ROOT:?}"/releases/* ]]; then
+  if [[ $path == "${RAMSHARED_ROLLBACK_PRODUCT_ROOT:?}"/* || $path == "${RAMSHARED_ROLLBACK_UNIT_PATH:?}" ]]; then
     mode=$(/usr/bin/stat -c '%a' -- "$path")
     printf '0:0:%s\n' "$mode"
     exit 0
@@ -701,13 +708,19 @@ EOF
 }
 
 run_rollback_installer() {
-  local root=$1 phase=$2 source="$1/opt/ramshared/releases/v1.2.3"
+  local root=$1 phase=$2 migration_hash=${3:-} source="$1/opt/ramshared/releases/v1.2.3"
+  local -a arguments=(--approve-nbd-product-install v1.2.3)
+  if [[ -n $migration_hash ]]; then
+    arguments+=(--approve-legacy-unit-replacement "$migration_hash")
+  fi
   set +e
   RUN_OUTPUT=$(env \
     "PATH=$root/bin:$PATH" \
     "RAMSHARED_ROLLBACK_PHASE=$phase" \
     "RAMSHARED_ROLLBACK_PRODUCT_ROOT=$root/product" \
-    "$source/scripts/safety/install-cascade-boot.sh" --approve-nbd-product-install v1.2.3 2>&1)
+    "RAMSHARED_ROLLBACK_UNIT_PATH=$root/systemd/ramshared-cascade.service" \
+    "RAMSHARED_SYSTEMCTL_LOG=$root/state/systemctl.log" \
+    "$source/scripts/safety/install-cascade-boot.sh" "${arguments[@]}" 2>&1)
   RUN_EXIT=$?
   set -e
 }
@@ -734,10 +747,11 @@ assert_rollback_preserves_prior_selector_and_unit() {
 }
 
 test_installer_every_post_write_phase_rolls_back() {
-  local root selector_before unit_before unit_mode failures=0 phase
+  local root selector_before unit_before unit_mode migration_hash failures=0 phase
   for phase in "${ROLLBACK_POST_WRITE_PHASES[@]}"; do
     case $phase in
       unit-staged|unit-linked|unit-staging-removed) unit_mode=absent ;;
+      legacy-unit-backed-up|legacy-unit-staged|legacy-unit-replaced) unit_mode=legacy ;;
       *) unit_mode=existing ;;
     esac
     if ! root=$(new_rollback_installer_fixture "$phase" "$phase" "$unit_mode"); then
@@ -751,7 +765,11 @@ test_installer_every_post_write_phase_rolls_back() {
     else
       unit_before=absent
     fi
-    run_rollback_installer "$root" "$phase"
+    migration_hash=
+    if [[ $unit_mode == legacy ]]; then
+      migration_hash=$(sha256sum -- "$root/systemd/ramshared-cascade.service" | awk '{print $1}')
+    fi
+    run_rollback_installer "$root" "$phase" "$migration_hash"
     if ! assert_exit "installer_rollback_$phase" 1 || ! assert_rollback_preserves_prior_selector_and_unit "installer_rollback_$phase" "$root" "$selector_before" "$unit_before"; then
       failures=1
     fi
@@ -824,6 +842,131 @@ test_installer_active_enabled_or_unknown_units_refuse_without_writes() {
   pass installer_active_enabled_or_unknown_units_refuse_without_writes
 }
 
+test_legacy_unit_migration_requires_exact_hash_and_restores_on_failure() {
+  local root source unit old_hash backup_hash
+  root=$(new_rollback_installer_fixture legacy-unit-migration daemon-reloaded existing)
+  source="$root/opt/ramshared/releases/v1.2.3"
+  unit="$root/systemd/ramshared-cascade.service"
+  printf '[Unit]\nDescription=legacy exact migration fixture\n' >"$unit"
+  chmod 0644 "$unit"
+  old_hash=$(sha256sum -- "$unit" | awk '{print $1}')
+
+  run_rollback_installer "$root" daemon-reloaded
+  if ! assert_exit legacy_unit_migration_requires_exact_hash_and_restores_on_failure 1 ||
+    ! assert_contains legacy_unit_migration_requires_exact_hash_and_restores_on_failure 'NBD_INSTALL_REASON=LEGACY_UNIT_APPROVAL_MISSING'; then
+    return
+  fi
+
+  set +e
+  RUN_OUTPUT=$(env \
+    "PATH=$root/bin:$PATH" \
+    "RAMSHARED_ROLLBACK_PRODUCT_ROOT=$root/product" \
+    "RAMSHARED_ROLLBACK_UNIT_PATH=$unit" \
+    "$source/scripts/safety/install-cascade-boot.sh" \
+    --approve-nbd-product-install v1.2.3 \
+    --approve-legacy-unit-replacement "${old_hash/a/b}" 2>&1)
+  RUN_EXIT=$?
+  set -e
+  if ! assert_exit legacy_unit_migration_requires_exact_hash_and_restores_on_failure 1 ||
+    ! assert_contains legacy_unit_migration_requires_exact_hash_and_restores_on_failure 'NBD_INSTALL_REASON=LEGACY_UNIT_HASH_MISMATCH' ||
+    [[ $(sha256sum -- "$unit" | awk '{print $1}') != "$old_hash" ]]; then
+    fail 'legacy_unit_migration_requires_exact_hash_and_restores_on_failure stale approval mutated the legacy unit'
+    return
+  fi
+
+  set +e
+  RUN_OUTPUT=$(env \
+    "PATH=$root/bin:$PATH" \
+    "RAMSHARED_ROLLBACK_PRODUCT_ROOT=$root/product" \
+    "RAMSHARED_ROLLBACK_UNIT_PATH=$unit" \
+    "$source/scripts/safety/install-cascade-boot.sh" \
+    --approve-nbd-product-install v1.2.3 \
+    --approve-legacy-unit-replacement "$old_hash" 2>&1)
+  RUN_EXIT=$?
+  set -e
+  if ! assert_exit legacy_unit_migration_requires_exact_hash_and_restores_on_failure 1 ||
+    [[ $(sha256sum -- "$unit" | awk '{print $1}') != "$old_hash" ]]; then
+    fail 'legacy_unit_migration_requires_exact_hash_and_restores_on_failure old unit was not restored'
+    return
+  fi
+  backup_hash=$(sha256sum -- "$root/product/legacy-units/ramshared-cascade.service.$old_hash.bak" | awk '{print $1}')
+  if [[ $backup_hash != "$old_hash" ]]; then
+    fail 'legacy_unit_migration_requires_exact_hash_and_restores_on_failure immutable backup mismatch'
+    return
+  fi
+
+  pass legacy_unit_migration_requires_exact_hash_and_restores_on_failure
+}
+
+test_corrupt_legacy_backup_is_never_restored() {
+  local root source unit old_hash injection
+  injection='chmod u+w "$LEGACY_BACKUP"; printf corrupt >"$LEGACY_BACKUP"; chmod 0444 "$LEGACY_BACKUP"; false # manufactured corrupt-backup rollback'
+  root=$(new_rollback_installer_fixture corrupt-legacy-backup legacy-unit-replaced legacy "$injection")
+  source="$root/opt/ramshared/releases/v1.2.3"
+  unit="$root/systemd/ramshared-cascade.service"
+  old_hash=$(sha256sum -- "$unit" | awk '{print $1}')
+  run_rollback_installer "$root" legacy-unit-replaced "$old_hash"
+  if ! assert_exit corrupt_legacy_backup_is_never_restored 1 ||
+    ! assert_contains corrupt_legacy_backup_is_never_restored 'NBD_INSTALL_ROLLBACK=LEGACY_UNIT_RESTORE_FAILED'; then
+    return
+  fi
+  if [[ $(sha256sum -- "$unit" | awk '{print $1}') == "$old_hash" ]]; then
+    fail 'corrupt_legacy_backup_is_never_restored silently restored a corrupted backup'
+    return
+  fi
+  pass corrupt_legacy_backup_is_never_restored
+}
+
+test_corrupt_published_legacy_backup_refuses_before_replacement() {
+  local root unit old_hash injection
+  injection='chmod u+w "$LEGACY_BACKUP"; printf corrupt >"$LEGACY_BACKUP"; chmod 0444 "$LEGACY_BACKUP" # manufactured pre-replacement backup corruption'
+  root=$(new_rollback_installer_fixture corrupt-published-legacy-backup legacy-unit-backed-up legacy "$injection")
+  unit="$root/systemd/ramshared-cascade.service"
+  old_hash=$(sha256sum -- "$unit" | awk '{print $1}')
+  run_rollback_installer "$root" legacy-unit-backed-up "$old_hash"
+  if ! assert_exit corrupt_published_legacy_backup_refuses_before_replacement 1 ||
+    ! assert_contains corrupt_published_legacy_backup_refuses_before_replacement 'NBD_INSTALL_REASON=LEGACY_UNIT_BACKUP_HASH_MISMATCH' ||
+    [[ $(sha256sum -- "$unit" | awk '{print $1}') != "$old_hash" ]]; then
+    fail 'corrupt_published_legacy_backup_refuses_before_replacement replaced the legacy unit after backup corruption'
+    return
+  fi
+  pass corrupt_published_legacy_backup_refuses_before_replacement
+}
+
+test_legacy_backup_root_symlink_is_refused() {
+  local root unit old_hash redirect
+  root=$(new_rollback_installer_fixture legacy-backup-root-symlink legacy-unit-backed-up legacy)
+  unit="$root/systemd/ramshared-cascade.service"
+  old_hash=$(sha256sum -- "$unit" | awk '{print $1}')
+  redirect="$root/redirected-legacy-backups"
+  mkdir -p "$redirect"
+  ln -s "$redirect" "$root/product/legacy-units"
+  run_rollback_installer "$root" legacy-unit-backed-up "$old_hash"
+  if ! assert_exit legacy_backup_root_symlink_is_refused 1 ||
+    ! assert_contains legacy_backup_root_symlink_is_refused 'NBD_INSTALL_REASON=LEGACY_BACKUP_ROOT_INVALID' ||
+    [[ -n $(find "$redirect" -mindepth 1 -print -quit) ]]; then
+    fail 'legacy_backup_root_symlink_is_refused followed a redirected backup root'
+    return
+  fi
+  pass legacy_backup_root_symlink_is_refused
+}
+
+test_legacy_restore_reloads_systemd_after_daemon_reload() {
+  local root unit old_hash reloads
+  root=$(new_rollback_installer_fixture legacy-restore-reload daemon-reloaded legacy)
+  unit="$root/systemd/ramshared-cascade.service"
+  old_hash=$(sha256sum -- "$unit" | awk '{print $1}')
+  run_rollback_installer "$root" daemon-reloaded "$old_hash"
+  reloads=$(grep -cx 'daemon-reload' "$root/state/systemctl.log" || true)
+  if ! assert_exit legacy_restore_reloads_systemd_after_daemon_reload 1 ||
+    [[ $reloads != 2 ]] ||
+    [[ $(sha256sum -- "$unit" | awk '{print $1}') != "$old_hash" ]]; then
+    fail "legacy_restore_reloads_systemd_after_daemon_reload reloads=$reloads"
+    return
+  fi
+  pass legacy_restore_reloads_systemd_after_daemon_reload
+}
+
 test_release_manifest_and_modes_are_verified || true
 test_binary_match_rejects_stale_or_deleted_daemon || true
 test_relay_check_failure_blocks_readiness || true
@@ -841,6 +984,11 @@ test_sealed_nbd_bundle_and_lifecycle_wiring || true
 test_installer_manifest_and_unit_refusals_are_prewrite || true
 test_installer_active_enabled_or_unknown_units_refuse_without_writes || true
 test_installer_every_post_write_phase_rolls_back || true
+test_legacy_unit_migration_requires_exact_hash_and_restores_on_failure || true
+test_corrupt_legacy_backup_is_never_restored || true
+test_corrupt_published_legacy_backup_refuses_before_replacement || true
+test_legacy_backup_root_symlink_is_refused || true
+test_legacy_restore_reloads_systemd_after_daemon_reload || true
 
 if [[ $fail_count -ne 0 ]]; then
   printf 'FAIL Test-NbdProductPreflight passed=%s failed=%s\n' "$pass_count" "$fail_count" >&2

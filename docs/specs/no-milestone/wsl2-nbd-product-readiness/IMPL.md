@@ -11,7 +11,7 @@ host operation was run for this record.
 | `cargo test -p ramshared-tier --all-targets` | 52 passed (shared package suite) |
 | `cargo test -p ramshared-cli --all-targets` | 95 passed (90 unit + 5 integration) |
 | Exact CLI lifecycle contracts | 2 passed: `swapoff_completes_before_nbd_disconnect`, `failed_swapoff_keeps_daemon_and_device_alive` |
-| `bash scripts/safety/test-nbd-product-preflight.sh` | 17 passed, including all 17 post-write rollback phases |
+| `bash scripts/safety/test-nbd-product-preflight.sh` | 22 named suites passed, including one aggregate that injects all 20 post-write rollback phases and exact legacy-unit migration/backup refusal coverage |
 | `cargo clippy -p ramshared-tier --all-targets -- -D warnings` | pass |
 | `cargo clippy -p ramshared-cli --all-targets -- -D warnings` | pass |
 | `cargo fmt --all -- --check` | pass |
@@ -26,8 +26,9 @@ host operation was run for this record.
 | NBD transport integration | `crates/ramshared-tier/src/cascade.rs`; covered by the shared tier suite |
 | Real teardown executor | `crates/ramshared-cli/src/cascade/cascade_io.rs`; injected `NbdLifecyclePlan` / `NbdLifecycleExecutor` proves every `swapoff` precedes NBD disconnect and daemon stop |
 | Failed swapoff refusal | `failed_swapoff_keeps_daemon_and_device_alive` records only `swapoff`; it records neither disconnect nor daemon stop |
-| Installer rollback | `scripts/safety/install-cascade-boot.sh` has 17 named post-write markers; `scripts/safety/test-nbd-product-preflight.sh` injects a failure after each marker in a temporary fixture |
-| Read-only product preflight | `scripts/safety/nbd-product-preflight.sh` and the same 17-pass manufactured harness |
+| Installer rollback | `scripts/safety/install-cascade-boot.sh` has 20 named post-write markers; `scripts/safety/test-nbd-product-preflight.sh` injects a failure after each marker in a temporary fixture |
+| Legacy unit migration | A conflicting unit remains a refusal unless a second approval supplies its exact SHA-256. The manufactured migration test proves absent/stale approvals do not mutate it; an injected final-phase failure restores the old unit from a sealed backup. |
+| Read-only product preflight | `scripts/safety/nbd-product-preflight.sh` and the same 22-suite manufactured harness |
 
 ## Evidence matrix and open gaps
 
@@ -37,7 +38,7 @@ host operation was run for this record.
 | `relay_gate_before_action_after` | Read-only manufactured refusal only | Not run | `PARTIAL` / environment-bound |
 | `NBD_BENCHMARK_MATRIX` | Schema only | No 1/2/4 GiB cells or n≥3 statistics | `PARTIAL` / environment-bound |
 | `BINARY_MATCH` | Static stale/deleted daemon refusal only | **N/A / not run**; no live daemon or selected release | `PARTIAL` |
-| Sealed installer transaction | Temporary-fixture rollback only | No `/opt/ramshared` install | `PARTIAL` |
+| Sealed installer transaction | 20-phase rollback and legacy-unit migration manufactured tests | A first attended install on 2026-08-12 correctly refused `PRODUCT_UNIT_CONFLICT`; the legacy migration is not yet installed or live-verified | `PARTIAL` |
 
 Open gaps are an approved WSL2 NBD surface, a named sealed release and live
 daemon for `BINARY_MATCH`, Relay before/action/after evidence, and the ordered
@@ -48,12 +49,13 @@ there is no live before → action → after evidence.
 
 Rollback/refusal is mandatory when **any one** (`>= 1`) of these occurs:
 `swapoff` returns an error; an active NBD/ublk swap entry remains; any one of
-the **17/17** manufactured post-write rollback phases fails to restore prior
-selector/unit state and remove the destination; or lower-tier capacity is
+the **20/20** manufactured post-write rollback phases fails to restore prior
+selector/unit state and remove the destination; a legacy-unit migration hash,
+metadata, backup, or restoration check fails; or lower-tier capacity is
 `L < V + max(ceil(0.10 × V), 512 MiB)`. The local executor returns before NBD
 disconnect and daemon stop after a failed `swapoff`; a live operator must not
 infer that this source evidence authorizes teardown.
 
 ## Traceability
 
-`PRD.md` RF-NBD-1..12 → `SPEC.md` ITEM-1..7 → this explicit partial record.
+`PRD.md` RF-NBD-1..13 → `SPEC.md` ITEM-1..8 → this explicit partial record.
