@@ -18,10 +18,10 @@ live claim is made.
 | `crates/ramshared-cli/src/cascade/cascade_io.rs` | ITEM-4 / RF-NBD-10,12 | Teardown executor proves swapoff before NBD disconnect/daemon stop through an injected plan. |
 | `scripts/safety/nbd-product-preflight.sh` | ITEM-1..4,6 / RF-NBD-1..10,19 | Sealed installed-release, lower-sink, Relay, state, BINARY_MATCH, no-reboot, and live-seam gates. |
 | `scripts/safety/install-cascade-boot.sh` | ITEM-2,8 / RF-NBD-2,13 | Attended lower-sink-bound install, provenance, immutable backup, selector transaction, and rollback frontiers. |
-| `scripts/safety/nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14,15,17,18,19,20 | Disk/NBD cell, common zram topology, cgroup-before-start occupancy, exact scratch identity, cleanup, comparison, and internal custody envelope. |
+| `scripts/safety/nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14,15,17,18,19,20 | Disk/NBD cell, common zram topology, cgroup-before-start occupancy, exact scratch identity, exact device-name classification, cleanup, comparison, and internal custody envelope. |
 | `scripts/safety/nbd-benchmark-cgroup-launch.sh` | ITEM-5 / RF-NBD-15 | In-cgroup launcher and create-once start barrier. |
 | `scripts/safety/nbd-benchmark-lib.sh` | ITEM-5 / RF-NBD-14,17 | Identity-bound scratch and swapoff-first helpers. |
-| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Eighteen manufactured/refusal suites for topology, identity, cgroup bounds, exact republication, activity receipts, scratch/zram, occupancy, cleanup, seams, custody, and aggregation. |
+| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Nineteen manufactured/refusal suites for topology, identity, exact device-name classification, cgroup bounds, exact republication, activity receipts, scratch/zram, occupancy, cleanup, seams, custody, and aggregation. |
 | `scripts/p0/Start-CudaVramWorkload.ps1` | ITEM-5 / RF-NBD-16,17 | Fresh pair-scoped CUDA handshakes and unconditional cleanup. |
 | `scripts/windows/Invoke-NbdBenchmarkMatrix.ps1` | ITEM-5..7 / RF-NBD-6,16..20 | Bounded Windows/WSL controller, numeric headroom, pair custody, promotion order, watchdog classification, and public pair envelope. |
 | `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | ITEM-5..7 / RF-NBD-16..20 | PowerShell static/manufactured contract and refusal checks. |
@@ -38,7 +38,7 @@ live claim is made.
   `failed_swapoff_keeps_daemon_and_device_alive`, and
   `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` are
   present and pass in the CLI suite.
-- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 18/18;
+- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 19/19;
   `bash scripts/safety/test-nbd-product-preflight.sh` → 26/26.
 - Public evidence: `node --test tools/ci/check-benchmark-evidence.test.mjs`
   → 15/15, including the sanitized pair-envelope fixture and custody rules.
@@ -97,11 +97,23 @@ live claim is made.
   disk-control occupancy predicate refused. The prior code discarded observed
   deltas on refusal, so the cell now writes the exact four activity deltas and
   both thresholds before making any occupancy decision.
+- Attempt 9b (2026-08-12, sealed release source
+  `6c83be7`): the disk-only worker reached HOLD after allocating 3584 MiB and
+  passed its checksum integrity proof. The persisted activity receipt measured
+  zram `1048572 KiB`, NBD `2820804 KiB`, scratch `2820804 KiB`, and disk
+  `0 KiB`, against the zram/second-tier thresholds of `1040384 KiB`. The
+  scratch path was under `/var/lib/ramshared/nbd`, so substring classification
+  counted the same scratch pages as NBD and rejected the legitimate disk
+  control. Cleanup returned to `PRODUCT_OFF`; `/proc/swaps` retained only the
+  pre-existing `/dev/sdc`. The exact-device classifier is now covered by
+  `swap_device_classifier_requires_exact_device_names` and the local cell
+  harness is 19/19; the live matrix remains open and no completion claim is
+  made.
 
 ## SPEC matrix → named tests
 
 The corrected implementation has local coverage for all source/static/
-manufactured names in SPEC § Required tests matrix, including the 18 cell
+manufactured names in SPEC § Required tests matrix, including the 19 cell
 tests, 26 preflight suites, fresh CUDA handshake/refusal checks, bounded WSL
 controller checks, exact ratio/baseline mappings, public-pair custody, and
 `sealed_bundle_contains_benchmark_runner_and_worker`. The live rows
@@ -145,4 +157,4 @@ anything other than `RED/unverified_terminated`; or any live seam/host action.
 
 | RF | ITEM | commit |
 | --- | --- | --- |
-| RF-NBD-1..20 | ITEM-1..8 | pending — reviewed source revision `e8b0e62a4e39c8c015436e3c922df402c65457c0` plus the focused scratch-identity fix in this change; live matrix remains incomplete |
+| RF-NBD-1..20 | ITEM-1..8 | pending — reviewed source revision `368133ff3382d3f43ea5d1c3cbb66173e0fe8320` plus the focused exact-device classifier fix; the sealed release used by Attempt 9b was `6c83be7`; live matrix remains incomplete |
