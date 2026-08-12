@@ -1,0 +1,5 @@
+[137956.962668] zram: Added device: zram0
+[137957.051030] zram0: detected capacity change from 0 to 2097152
+[137957.223902] Adding 1048572k swap on /dev/zram0.  Priority:200 extents:1 across:1048572k SS
+[137958.649121] nbd0: detected capacity change from 0 to 2097152
+[137958.759789] Adding 1048572k swap on /dev/nbd0.  Priority:100 extents:1 across:1048572k SS
