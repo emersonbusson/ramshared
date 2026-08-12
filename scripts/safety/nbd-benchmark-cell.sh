@@ -15,6 +15,7 @@ OUT=""
 SWAP_FIXTURE=""
 RUNS=3
 SAMPLE_TIMEOUT_SEC=120
+SAMPLE_BASELINE_REASON=""
 ALLOCATE_MIB=""
 MEMORY_HIGH_MIB=1200
 MEMORY_MAX_MIB=""
@@ -703,17 +704,23 @@ create_zram_control() {
 }
 
 republish_sample_baseline() {
-  local zdev lower lower_type original_nbd_identity
-  [[ -f $ZRAM_RECORD && ! -L $ZRAM_RECORD ]] || return 1
-  IFS= read -r zdev <"$ZRAM_RECORD" || return 1
-  [[ $zdev =~ ^/dev/zram[0-9]+$ ]] || return 1
+  local zdev lower lower_type original_nbd_identity transaction_output
+  SAMPLE_BASELINE_REASON="BASELINE_REPUBLICATION_FAILED"
+  [[ -f $ZRAM_RECORD && ! -L $ZRAM_RECORD ]] \
+    || { SAMPLE_BASELINE_REASON=NBD_REPUBLICATION_ZRAM_RECORD_INVALID; return 1; }
+  IFS= read -r zdev <"$ZRAM_RECORD" \
+    || { SAMPLE_BASELINE_REASON=NBD_REPUBLICATION_ZRAM_RECORD_INVALID; return 1; }
+  [[ $zdev =~ ^/dev/zram[0-9]+$ ]] \
+    || { SAMPLE_BASELINE_REASON=NBD_REPUBLICATION_ZRAM_RECORD_INVALID; return 1; }
   if [[ $MODE == nbd ]]; then
     lower=$NBD_DEVICE
     lower_type=partition
     original_nbd_identity=$NBD_SECOND_TIER_IDENTITY_SHA256
-    nbd_preserved_connection_republish_swap_pair "$SWAPS_FILE" "$zdev" "$lower" \
-      /sbin/swapoff /sbin/mkswap /sbin/swapon \
-      || return 1
+    if ! transaction_output=$(nbd_preserved_connection_republish_swap_pair \
+      "$SWAPS_FILE" "$zdev" "$lower" /sbin/swapoff /sbin/mkswap /sbin/swapon 2>&1); then
+      SAMPLE_BASELINE_REASON=$(nbd_republication_reason_from_output "$transaction_output")
+      return 1
+    fi
   else
     lower=$SCRATCH_SWAP
     lower_type=file
@@ -723,9 +730,11 @@ republish_sample_baseline() {
   if [[ $MODE == nbd ]]; then
     derive_nbd_second_tier_identity "$SWAPS_FILE" "$SYS_BLOCK_ROOT" "$DEV_ROOT" "$PROC_ROOT" \
       "$PID_FILE" "$DAEMON" "$RELEASE/SHA256SUMS" "$LOWER_SINK_IDENTITY_SHA256" 0 \
-      || return 1
-    [[ $NBD_SECOND_TIER_IDENTITY_SHA256 == "$original_nbd_identity" ]] || return 1
-    pinned_preflight | grep -q '^NBD_BINARY_MATCH=PASS$' || return 1
+      || { SAMPLE_BASELINE_REASON=${NBD_IDENTITY_REASON:-NBD_REPUBLICATION_IDENTITY_INVALID}; return 1; }
+    [[ $NBD_SECOND_TIER_IDENTITY_SHA256 == "$original_nbd_identity" ]] \
+      || { SAMPLE_BASELINE_REASON=NBD_REPUBLICATION_IDENTITY_DRIFT; return 1; }
+    pinned_preflight | grep -q '^NBD_BINARY_MATCH=PASS$' \
+      || { SAMPLE_BASELINE_REASON=NBD_REPUBLICATION_BINARY_MATCH_FAILED; return 1; }
   else
     [[ $(scratch_identity) == "$SCRATCH_IDENTITY" ]] || return 1
   fi
@@ -1181,7 +1190,7 @@ with open(path, "a", encoding="utf-8") as target:
     target.write(json.dumps(row, sort_keys=True, separators=(",", ":")) + "\n")
 PY
   if (( run < RUNS )); then
-    republish_sample_baseline || refuse BASELINE_REPUBLICATION_FAILED
+    republish_sample_baseline || refuse "$SAMPLE_BASELINE_REASON"
   fi
 done
 

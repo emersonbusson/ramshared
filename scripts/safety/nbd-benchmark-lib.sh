@@ -65,16 +65,34 @@ nbd_preserved_connection_republish_swap_pair() {
   local swaps_file=$1 zram_path=$2 nbd_path=$3
   local swapoff_command=$4 mkswap_command=$5 swapon_command=$6
 
-  [[ $nbd_path =~ ^/dev/nbd[0-9]+$ ]] || return 1
-  nbd_swap_pair_topology_exact "$swaps_file" "$zram_path" "$nbd_path" partition || return 1
-  "$swapoff_command" -- "$nbd_path" || return 1
-  "$swapoff_command" -- "$zram_path" || return 1
+  [[ $nbd_path =~ ^/dev/nbd[0-9]+$ ]] \
+    || { printf 'NBD_REPUBLICATION_REASON=NBD_REPUBLICATION_DEVICE_INVALID\n' >&2; return 1; }
+  nbd_swap_pair_topology_exact "$swaps_file" "$zram_path" "$nbd_path" partition \
+    || { printf 'NBD_REPUBLICATION_REASON=NBD_REPUBLICATION_PRE_TOPOLOGY_INVALID\n' >&2; return 1; }
+  "$swapoff_command" -- "$nbd_path" \
+    || { printf 'NBD_REPUBLICATION_REASON=NBD_REPUBLICATION_SWAPOFF_NBD_FAILED\n' >&2; return 1; }
+  "$swapoff_command" -- "$zram_path" \
+    || { printf 'NBD_REPUBLICATION_REASON=NBD_REPUBLICATION_SWAPOFF_ZRAM_FAILED\n' >&2; return 1; }
   [[ $(nbd_swap_exact_count "$swaps_file" "$nbd_path") == 0 \
-    && $(nbd_swap_exact_count "$swaps_file" "$zram_path") == 0 ]] || return 1
-  "$mkswap_command" -L RAMSHARED -- "$nbd_path" || return 1
-  "$swapon_command" -p 200 -- "$zram_path" || return 1
-  "$swapon_command" -p 100 -- "$nbd_path" || return 1
-  nbd_swap_pair_topology_exact "$swaps_file" "$zram_path" "$nbd_path" partition
+    && $(nbd_swap_exact_count "$swaps_file" "$zram_path") == 0 ]] \
+    || { printf 'NBD_REPUBLICATION_REASON=NBD_REPUBLICATION_SWAP_ABSENCE_FAILED\n' >&2; return 1; }
+  "$mkswap_command" -L RAMSHARED -- "$nbd_path" \
+    || { printf 'NBD_REPUBLICATION_REASON=NBD_REPUBLICATION_MKSWAP_FAILED\n' >&2; return 1; }
+  "$swapon_command" -p 200 -- "$zram_path" \
+    || { printf 'NBD_REPUBLICATION_REASON=NBD_REPUBLICATION_ZRAM_SWAPON_FAILED\n' >&2; return 1; }
+  "$swapon_command" -p 100 -- "$nbd_path" \
+    || { printf 'NBD_REPUBLICATION_REASON=NBD_REPUBLICATION_NBD_SWAPON_FAILED\n' >&2; return 1; }
+  nbd_swap_pair_topology_exact "$swaps_file" "$zram_path" "$nbd_path" partition \
+    || { printf 'NBD_REPUBLICATION_REASON=NBD_REPUBLICATION_POST_TOPOLOGY_INVALID\n' >&2; return 1; }
+}
+
+nbd_republication_reason_from_output() {
+  local output=$1 reason
+  reason=$(awk -F= '
+    $1 == "NBD_REPUBLICATION_REASON" { value = $2; found += 1 }
+    END { if (found == 1) { print value; exit 0 } exit 1 }
+  ' <<<"$output" 2>/dev/null) || reason=NBD_REPUBLICATION_TRANSACTION_FAILED
+  printf '%s\n' "$reason"
 }
 
 nbd_cleanup_scratch() {
