@@ -10,11 +10,11 @@
 > blocking live gate; local or manufactured results are never promoted into
 > missing cells.
 >
-> The first independent Gate A found benchmark-contract blockers in the first
-> harness revision. Those corrections are implemented and covered by the
-> named local tests below. The final independent Gate A passed on the frozen
-> pre-commit workspace. Until the reviewed release and legitimate live
-> evidence pass, the matrix remains **NO-GO** for a product claim.
+> Earlier independent Gate A reviews found benchmark-contract blockers; their
+> corresponding revisions and focused tests are retained below. The current
+> connection-preserving DT-NBD-41 correction passed fresh frozen-tree Gate A.
+> Until the sealed release and legitimate live evidence pass, the matrix
+> remains **NO-GO** for a product claim.
 
 ## Closed scope
 
@@ -165,7 +165,7 @@ sealed release and return a stable refusal code.
 | #3 | Is the selected artifact and capacity measured now? | `RELEASE_MANIFEST_MATCH`, `LOWER_TIER_CAPACITY_FORMULA` | Stale/nominal/ambiguous data. |
 | #9 | Is each benchmark claim numeric? | `NBD_BENCHMARK_MATRIX` | Missing units, p99, deviation, or n<3. |
 | #13 | Are legitimate and refusal boundaries paired? | `PRODUCT_OFF_IS_NOT_READY`, `CAPACITY_SHORTFALL_REFUSAL`, `RELAY_GATE_REFUSAL` | Any fail-open classification. |
-| #15 | Is retry justified as transient? | `DETERMINISTIC_GATE_NO_RETRY`, `NBD_SAMPLE_RECONNECT_TRANSACTION` | Repeating identity, capacity, socket, attach, label, or topology failures. |
+| #15 | Is retry justified as transient? | `DETERMINISTIC_GATE_NO_RETRY`, `nbd_sample_preserves_connected_device_without_reattach` | Repeating identity, capacity, label, swapon, or topology failures; any attach/detach attempt. |
 | #16 | Can demotion exhaust its sink? | `LOWER_TIER_CAPACITY_FORMULA`, `SWAPOFF_FIRST_DEMOTION` | Shortfall, swapoff error, or active references. |
 | #17 | Is activation/deactivation idempotent? | `NBD_LIFECYCLE_IDEMPOTENCY` | Double attach, double swap, or selector drift. |
 | #18 | Is the decision made by the owning layer? | `UBLK_RETIREMENT_NO_MODULE_UNLOAD`, `RELAY_OWNER_BOUNDARY` | Guest code unloads a host-owned module or repairs Relay automatically. |
@@ -318,7 +318,7 @@ environment-bound and are not inferred from a manufactured test.
 | `scripts/safety/test-nbd-benchmark-cell.sh` | `disk_control_and_nbd_candidate_share_one_workload_contract` | static/manufactured | #3/#9/#16 | Both modes use one 1 GiB zram base, the same `V + 2560 MiB` allocation, `memory.high=1200 MiB`, `memory.max=V+3072 MiB`, `allocation_chunk_bytes=67108864`, `worker_threads=1`, and disk-only precedes NBD; only the second tier differs. |
 | `scripts/safety/test-nbd-benchmark-cell.sh` | `cgroup_high_forces_reclaim_without_hard_limit_oom` | manufactured/static | #3/#13/#16 | The cgroup writes the 1200 MiB reclaim threshold to `memory.high`, writes the allocation-derived emergency bound to `memory.max`, and every sample/context carries both exact values. |
 | `scripts/safety/nbd-benchmark-lib.sh` + `scripts/safety/test-nbd-benchmark-cell.sh` | `sample_baseline_republication_is_exact_and_ordered` | manufactured/refusal | #3/#13/#16 | Between runs, the exact lower and zram swaps are removed lower-first and republished zram-then-lower at priorities 200/100; cardinality, type, ghost absence, and identity are checked before and after. |
-| `scripts/safety/nbd-benchmark-lib.sh` + `scripts/safety/nbd-benchmark-cell.sh` + `scripts/safety/test-nbd-benchmark-cell.sh` | `nbd_sample_reconnect_republication_is_exact_and_refuses_invalid_socket_or_commands` | manufactured/refusal | #3/#13/#15/#16/#17/#18 | NBD first validates the exact pair, removes NBD then zram, proves absence, requires the exact canonical runtime Unix socket and exact NBD device, reconnects without `-persist`, labels with `RAMSHARED`, publishes zram then NBD at 200/100, and revalidates topology. Missing/regular/mismatched sockets, command failures, order drift, or a post-publish topology mismatch refuse without a retry or broad cleanup; the caller must re-derive identity and `BINARY_MATCH`. |
+| `scripts/safety/nbd-benchmark-lib.sh` + `scripts/safety/nbd-benchmark-cell.sh` + `scripts/safety/test-nbd-benchmark-cell.sh` | `nbd_sample_preserves_connected_device_without_reattach` | manufactured/refusal | #3/#13/#15/#16/#17/#18 | NBD validates the exact pair, removes NBD then zram from swap, proves both rows absent, labels the still-connected NBD device, publishes zram then NBD at 200/100, and revalidates topology. Any attach/detach attempt, command failure, order drift, or post-publish topology mismatch refuses without retry or broad cleanup; the caller re-derives equal identity and repeats `BINARY_MATCH`. |
 | `scripts/safety/nbd-benchmark-cell.sh` + `scripts/safety/test-nbd-benchmark-cell.sh` | `activity_refusal_persists_exact_observed_deltas` | manufactured/static | #3/#13/#18 | Before any occupancy verdict, the cell persists exact observed zram/NBD/disk/scratch deltas and configured thresholds so a RED cannot discard the measurement needed to diagnose it. |
 | `scripts/safety/nbd-benchmark-cell.sh` + `scripts/safety/test-nbd-benchmark-cell.sh` | `swap_device_classifier_requires_exact_device_names` | manufactured | #3/#13/#18 | Classify only `/dev/zramN` as zram and `/dev/nbdN` or `/dev/ublkbN` as the managed second tier; every other swap path, including a directory component containing `nbd`, remains disk. |
 | `scripts/safety/test-nbd-benchmark-cell.sh` | `benchmark_start_barrier_and_size_occupancy_contract` | manufactured/refusal | #3/#13/#16 | Worker admission is proven before allocation; each tier size has the expected zram/second-tier occupancy delta; a fixed-size or post-start cgroup sample refuses. |
@@ -368,7 +368,7 @@ environment-bound and are not inferred from a manufactured test.
 | --- | --- | --- | --- |
 | `nbd_lifecycle_before_action_after` | Injected ordering/refusal plus live pilot | `PASS` at 1 GiB | Live before/action/after exists; larger-size lifecycle remains coupled to the matrix. |
 | `relay_gate_before_action_after` | Manufactured refusals plus live read-only gate | `PASS` for the pilot | Relay was clean before/after without automatic reap. |
-| `NBD_BENCHMARK_MATRIX` | Corrected cell/preflight/controller implementation; cell 23/23 including the explicit NBD reconnect transaction, preflight 26/26, public-evidence validator 15/15, complete Windows static wrapper, reconnect-capable simple daemon runtime, and fresh independent Gate A PASS | `PARTIAL` / `NO-GO` | The reconnect correction is locally qualified but still requires sealed deployment; no complete 1/2/4 GiB disk-only/NBD n=3 matrix has run on that reviewed release. |
+| `NBD_BENCHMARK_MATRIX` | Corrected cell/preflight/controller implementation; cell 23/23 including connection-preserving NBD republication, preflight 26/26, public-evidence validator 15/15, complete Windows static wrapper, reconnect-capable simple daemon runtime, and fresh independent Gate A PASS | `PARTIAL` / `NO-GO` | The new republication correction still requires sealed deployment; no complete 1/2/4 GiB disk-only/NBD n=3 matrix has run on that reviewed release. |
 | `BINARY_MATCH` | Static refusals plus live selected release | `PASS` for the pilot | Each matrix NBD cell must repeat the identity proof. |
 
 ### Benchmark matrix
@@ -400,16 +400,15 @@ The cell must reject before evaluating an over-width decimal value in Bash
 arithmetic; Windows must carry and revalidate the same three-value identity in
 its internal custody gate.
 
-Between NBD samples, `swapoff /dev/nbdN` is not assumed to leave a reusable
-connection: the production client deliberately has no `-persist` mode. The
-cell therefore uses the NBD-specific transaction in DT-NBD-41, not the disk
-control's generic lower-swap republish helper. After NBD then zram are absent,
-it requires the exact canonical Unix socket `/run/ramshared/wsl2d.sock` to be a
-real socket rather than a file or symlink, reattaches the same NBD device,
-rewrites the `RAMSHARED` swap label, and publishes zram then NBD. Any failure
-is one fail-closed sample refusal; it does not trigger a hidden retry or broad
-device cleanup. The cell re-derives NBD identity and repeats `BINARY_MATCH`
-before starting the next worker.
+Between NBD samples, `swapoff /dev/nbdN` removes only the swap mapping and is
+not treated as an NBD detach. The cell therefore uses the NBD-specific
+transaction in DT-NBD-41, not the disk control's generic lower-swap helper and
+not a second `nbd-client` attach. After NBD then zram swap rows are absent, it
+rewrites the `RAMSHARED` label on the still-connected device and publishes
+zram then NBD. Any failure is one fail-closed sample refusal; it does not
+trigger a hidden retry, attach, detach, or broad device cleanup. The cell
+re-derives equal NBD identity and repeats pinned `BINARY_MATCH` before starting
+the next worker.
 
 For `bounded`, one Windows-owned 512 MiB CUDA context is created after the
 numeric headroom gate and held across disk-only then NBD for the same pair. GPU
