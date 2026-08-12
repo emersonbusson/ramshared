@@ -9,15 +9,22 @@ RELEASE_ROOT="$PRODUCT_ROOT/releases"
 UNIT_PATH=/etc/systemd/system/ramshared-cascade.service
 CURRENT_SELECTOR="$PRODUCT_ROOT/current"
 APPROVED_VERSION=
+LEGACY_UNIT_APPROVED_HASH=
 declare -A INSTALL_MANIFEST_HASHES=()
 DESTINATION=
 STAGING=
 SELECTOR_STAGING=
 UNIT_STAGING=
+ROLLBACK_UNIT_STAGING=
+LEGACY_BACKUP_ROOT=
+LEGACY_BACKUP=
+LEGACY_BACKUP_STAGING=
 ROLLBACK_SELECTOR_STAGING=
 PRIOR_SELECTOR_TARGET=
 PUBLISHED_DESTINATION=0
 UNIT_CREATED=0
+LEGACY_UNIT_REPLACED=0
+LEGACY_UNIT_RELOAD_REQUIRED=0
 
 refuse() {
   printf 'NBD_INSTALL_STATE=REFUSED\n'
@@ -30,6 +37,8 @@ usage() {
 Usage:
   install-cascade-boot.sh [--plan]
   install-cascade-boot.sh --approve-nbd-product-install <version>
+  install-cascade-boot.sh --approve-nbd-product-install <version> \\
+    --approve-legacy-unit-replacement <sha256>
 
 The default is a read-only plan. Approval must name exactly the sealed release
 version in this bundle. This source-only slice installs its unit disabled: a
@@ -125,6 +134,10 @@ systemctl_status() {
   printf '%s\n' "$status"
 }
 
+is_sha256() {
+  [[ $1 =~ ^[[:xdigit:]]{64}$ ]]
+}
+
 check_unit_inert() {
   local unit=$1 active enabled
   active=$(systemctl_status is-active "$unit")
@@ -146,8 +159,58 @@ check_existing_unit_file() {
   [[ ! -L $UNIT_PATH ]] || refuse PRODUCT_UNIT_CONFLICT
   if [[ -e $UNIT_PATH ]]; then
     [[ -f $UNIT_PATH ]] || refuse PRODUCT_UNIT_CONFLICT
-    cmp -s "$expected_unit" "$UNIT_PATH" || refuse PRODUCT_UNIT_CONFLICT
+    if ! cmp -s "$expected_unit" "$UNIT_PATH"; then
+      [[ -n $LEGACY_UNIT_APPROVED_HASH ]] || refuse LEGACY_UNIT_APPROVAL_MISSING
+      is_sha256 "$LEGACY_UNIT_APPROVED_HASH" || refuse LEGACY_UNIT_APPROVAL_INVALID
+      [[ $(stat -c '%u:%g:%a' -- "$UNIT_PATH" 2>/dev/null || true) == '0:0:644' ]] || refuse LEGACY_UNIT_METADATA_INVALID
+      [[ $(sha256sum -- "$UNIT_PATH" | awk '{print $1}') == "${LEGACY_UNIT_APPROVED_HASH,,}" ]] || refuse LEGACY_UNIT_HASH_MISMATCH
+    fi
   fi
+}
+
+legacy_unit_replacement_required() {
+  [[ -f $UNIT_PATH && ! -L $UNIT_PATH ]] && ! cmp -s "$DESTINATION/systemd/ramshared-cascade.service" "$UNIT_PATH"
+}
+
+verify_legacy_backup_or_refuse() {
+  [[ -n $LEGACY_BACKUP && -f $LEGACY_BACKUP && ! -L $LEGACY_BACKUP ]] || refuse LEGACY_UNIT_BACKUP_CONFLICT
+  [[ $(stat -c '%u:%g:%a' -- "$LEGACY_BACKUP" 2>/dev/null || true) == '0:0:444' ]] || refuse LEGACY_UNIT_BACKUP_CONFLICT
+  [[ $(sha256sum -- "$LEGACY_BACKUP" | awk '{print $1}') == "${LEGACY_UNIT_APPROVED_HASH,,}" ]] || refuse LEGACY_UNIT_BACKUP_HASH_MISMATCH
+}
+
+prepare_legacy_backup_root_or_refuse() {
+  if [[ -e $LEGACY_BACKUP_ROOT || -L $LEGACY_BACKUP_ROOT ]]; then
+    [[ -d $LEGACY_BACKUP_ROOT && ! -L $LEGACY_BACKUP_ROOT ]] || refuse LEGACY_BACKUP_ROOT_INVALID
+    [[ $(stat -c '%u:%g:%a' -- "$LEGACY_BACKUP_ROOT" 2>/dev/null || true) == '0:0:755' ]] || refuse LEGACY_BACKUP_ROOT_INVALID
+  else
+    install -d -m 0755 "$LEGACY_BACKUP_ROOT"
+  fi
+  [[ -d $LEGACY_BACKUP_ROOT && ! -L $LEGACY_BACKUP_ROOT ]] || refuse LEGACY_BACKUP_ROOT_INVALID
+  [[ $(stat -c '%u:%g:%a' -- "$LEGACY_BACKUP_ROOT" 2>/dev/null || true) == '0:0:755' ]] || refuse LEGACY_BACKUP_ROOT_INVALID
+}
+
+backup_legacy_unit_if_required() {
+  local observed_hash
+  legacy_unit_replacement_required || return 0
+  observed_hash=$(sha256sum -- "$UNIT_PATH" | awk '{print $1}')
+  [[ $observed_hash == "${LEGACY_UNIT_APPROVED_HASH,,}" ]] || refuse LEGACY_UNIT_HASH_MISMATCH
+  [[ $(stat -c '%u:%g:%a' -- "$UNIT_PATH" 2>/dev/null || true) == '0:0:644' ]] || refuse LEGACY_UNIT_METADATA_INVALID
+
+  LEGACY_BACKUP_ROOT="$PRODUCT_ROOT/legacy-units"
+  LEGACY_BACKUP="$LEGACY_BACKUP_ROOT/ramshared-cascade.service.$observed_hash.bak"
+  LEGACY_BACKUP_STAGING="$LEGACY_BACKUP_ROOT/.ramshared-cascade.service.$observed_hash.$$.staging"
+  prepare_legacy_backup_root_or_refuse
+  if [[ -e $LEGACY_BACKUP || -L $LEGACY_BACKUP ]]; then
+    verify_legacy_backup_or_refuse
+    return 0
+  fi
+
+  install -m 0444 "$UNIT_PATH" "$LEGACY_BACKUP_STAGING"
+  chown root:root "$LEGACY_BACKUP_STAGING"
+  [[ $(sha256sum -- "$LEGACY_BACKUP_STAGING" | awk '{print $1}') == "$observed_hash" ]] || refuse LEGACY_UNIT_BACKUP_HASH_MISMATCH
+  mv -T "$LEGACY_BACKUP_STAGING" "$LEGACY_BACKUP"
+  verify_legacy_backup_or_refuse
+  # NBD_INSTALL_POST_WRITE_PHASE=legacy-unit-backed-up
 }
 
 path_exists_or_link() {
@@ -202,6 +265,23 @@ remove_created_unit_if_owned() {
   UNIT_CREATED=0
 }
 
+restore_legacy_unit_if_replaced() {
+  (( LEGACY_UNIT_REPLACED )) || return 0
+  [[ -n $LEGACY_BACKUP && -f $LEGACY_BACKUP && ! -L $LEGACY_BACKUP ]] || return 1
+  [[ $(stat -c '%u:%g:%a' -- "$LEGACY_BACKUP" 2>/dev/null || true) == '0:0:444' ]] || return 1
+  [[ $(sha256sum -- "$LEGACY_BACKUP" | awk '{print $1}') == "${LEGACY_UNIT_APPROVED_HASH,,}" ]] || return 1
+  ROLLBACK_UNIT_STAGING="$(dirname -- "$UNIT_PATH")/.ramshared-cascade.rollback.$$"
+  install -m 0644 "$LEGACY_BACKUP" "$ROLLBACK_UNIT_STAGING" || return 1
+  chown root:root "$ROLLBACK_UNIT_STAGING" || return 1
+  [[ $(sha256sum -- "$ROLLBACK_UNIT_STAGING" | awk '{print $1}') == "${LEGACY_UNIT_APPROVED_HASH,,}" ]] || return 1
+  mv -Tf "$ROLLBACK_UNIT_STAGING" "$UNIT_PATH" || return 1
+  if (( LEGACY_UNIT_RELOAD_REQUIRED )); then
+    systemctl daemon-reload || return 1
+    LEGACY_UNIT_RELOAD_REQUIRED=0
+  fi
+  LEGACY_UNIT_REPLACED=0
+}
+
 rollback_after_failure() {
   local status=$?
   trap - EXIT
@@ -212,8 +292,11 @@ rollback_after_failure() {
     if selector_points_to_destination; then
       restore_prior_selector || printf 'NBD_INSTALL_ROLLBACK=SELECTOR_RESTORE_FAILED\n' >&2
     fi
+    restore_legacy_unit_if_replaced || printf 'NBD_INSTALL_ROLLBACK=LEGACY_UNIT_RESTORE_FAILED\n' >&2
     remove_created_unit_if_owned
     remove_path_if_present "$UNIT_STAGING"
+    remove_path_if_present "$ROLLBACK_UNIT_STAGING"
+    remove_path_if_present "$LEGACY_BACKUP_STAGING"
     if (( PUBLISHED_DESTINATION )) && ! selector_points_to_destination; then
       remove_path_if_present "$DESTINATION"
       PUBLISHED_DESTINATION=0
@@ -225,7 +308,19 @@ rollback_after_failure() {
 
 install_unit_if_absent() {
   if path_exists_or_link "$UNIT_PATH"; then
-    check_existing_unit_file "$DESTINATION/systemd/ramshared-cascade.service"
+    if ! legacy_unit_replacement_required; then
+      check_existing_unit_file "$DESTINATION/systemd/ramshared-cascade.service"
+      return
+    fi
+    backup_legacy_unit_if_required
+    verify_legacy_backup_or_refuse
+    path_exists_or_link "$UNIT_STAGING" && refuse INSTALL_STAGING_EXISTS
+    install -m 0644 "$DESTINATION/systemd/ramshared-cascade.service" "$UNIT_STAGING"
+    # NBD_INSTALL_POST_WRITE_PHASE=legacy-unit-staged
+    chown root:root "$UNIT_STAGING"
+    mv -Tf "$UNIT_STAGING" "$UNIT_PATH"
+    LEGACY_UNIT_REPLACED=1
+    # NBD_INSTALL_POST_WRITE_PHASE=legacy-unit-replaced
     return
   fi
 
@@ -247,6 +342,11 @@ while (($# > 0)); do
     --approve-nbd-product-install)
       (($# >= 2)) || refuse APPROVAL_SCOPE_MISSING
       APPROVED_VERSION=$2
+      shift 2
+      ;;
+    --approve-legacy-unit-replacement)
+      (($# >= 2)) || refuse LEGACY_UNIT_APPROVAL_MISSING
+      LEGACY_UNIT_APPROVED_HASH=$2
       shift 2
       ;;
     --enable)
@@ -272,6 +372,7 @@ if [[ -z $APPROVED_VERSION ]]; then
 fi
 
 [[ $APPROVED_VERSION == "$RELEASE_VERSION" ]] || refuse APPROVAL_SCOPE_INVALID
+[[ -z $LEGACY_UNIT_APPROVED_HASH || $LEGACY_UNIT_APPROVED_HASH =~ ^[[:xdigit:]]{64}$ ]] || refuse LEGACY_UNIT_APPROVAL_INVALID
 [[ $(id -u) -eq 0 ]] || refuse ROOT_REQUIRED
 command -v systemctl >/dev/null 2>&1 || refuse SYSTEMD_UNAVAILABLE
 check_unit_inert ramshared-cascade.service
@@ -321,6 +422,9 @@ chown -h root:root "$SELECTOR_STAGING"
 # NBD_INSTALL_POST_WRITE_PHASE=selector-owner-normalized
 mv -Tf "$SELECTOR_STAGING" "$CURRENT_SELECTOR"
 # NBD_INSTALL_POST_WRITE_PHASE=selector-published
+if (( LEGACY_UNIT_REPLACED )); then
+  LEGACY_UNIT_RELOAD_REQUIRED=1
+fi
 systemctl daemon-reload
 # NBD_INSTALL_POST_WRITE_PHASE=daemon-reloaded
 

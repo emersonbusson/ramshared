@@ -62,6 +62,7 @@ Ship one NBD-only WSL2 path with these decisions:
 | Transport | NBD is the only supported WSL2 product transport. |
 | Release root | Sealed `/opt/ramshared/releases/<version>` artifacts; no in-place mutation. |
 | Legacy ublk | Retire product service/autostart/control-plane references; never unload `ublk_drv`. |
+| Legacy unit migration | Replace an inactive, disabled legacy `ramshared-cascade.service` only with a current approval bound to its observed SHA-256; preserve an immutable backup before the atomic replacement. |
 | Status | `PRODUCT_OFF`, `READY`, or `BLOCKED`, with an independent readiness reason. |
 | Capacity | Enforce `L >= V + max(ceil(10% of V), 512 MiB)` before activation and demotion. |
 | Sizes | Promote in order: 1 GiB pilot, then 2 GiB, then 4 GiB. No skipped size. |
@@ -90,6 +91,7 @@ to an external communication.
 | RF-NBD-10 | Retain swapoff-first teardown. | NBD swap is absent before daemon stop or device disconnect. |
 | RF-NBD-11 | Publish public-safe evidence. | Reports contain no host identity, secret, private path, or raw log. |
 | RF-NBD-12 | Make the actual cascade teardown executor fail closed after an injected `swapoff` failure. | Local action tracing proves `swapoff` completes before NBD disconnect/daemon stop and emits neither later action after refusal. |
+| RF-NBD-13 | Migrate the conflicting legacy cascade unit without a blind overwrite. | The installer refuses an absent, mismatched, stale, active, enabled, symlinked, or unapproved legacy unit; an approved exact SHA-256 creates an immutable backup and atomically replaces only that unit. |
 
 ## Non-functional requirements
 
@@ -190,6 +192,7 @@ stable reason code.
 | Legacy ublk service remains active | Active unit/device or unknown ownership → do not activate NBD; retire only after explicit approval. |
 | Relay is stranded or unreadable | Non-zero/ambiguous check → `BLOCKED`; do not reap automatically. |
 | Daemon identity is stale/deleted | `BINARY_MATCH` fail → no readiness claim; stop only after swapoff-first. |
+| Legacy cascade unit conflicts with the sealed unit | Refuse by default. A separately approved SHA-256-bound migration backs up the inactive root-owned regular legacy unit before atomic replacement; any mismatch or replacement failure restores it. |
 | WSL asks for reboot/shutdown | Refuse before mutation; status remains `BLOCKED` or `PRODUCT_OFF`. |
 | Large size causes host pressure | Stop the cell, preserve evidence, and do not promote; no shared-host pressure is inferred. |
 | Operator retries a deterministic failure | One bounded attempt; #15 refusal prevents blind retry. |
