@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
@@ -442,7 +442,7 @@ test('workflow_policy_rejects_target_context_permissions_and_missing_command', (
   ]) assert.equal(result.errors.some((item) => item.rule === rule), true, rule)
 })
 
-test('workflow_policy_allows_named_best_effort_step_only_when_allowlisted', () => {
+test('workflow_policy_rejects_best_effort_steps even when a legacy allowlist names them', () => {
   const workflow = [
     'name: Scoped fixture',
     'on:',
@@ -468,8 +468,115 @@ test('workflow_policy_allows_named_best_effort_step_only_when_allowlisted', () =
   })
   const root = fixtureRoot(workflow, currentOnlyContract(gate))
   const result = validateWorkflowPolicy(currentOnlyContract(gate), root)
+  assert.equal(result.status, 'NO-GO')
+  assert.equal(result.errors.some((item) => item.rule === 'continue-on-error'), true)
+})
+
+test('required commands must be reachable standalone commands, not tolerated text', () => {
+  const fixtures = [
+    {
+      name: 'job false literal',
+      workflow: validWorkflow().replace('    name: quality', '    if: false\n    name: quality'),
+      rule: 'required-command-unreachable',
+    },
+    {
+      name: 'job quoted false literal',
+      workflow: validWorkflow().replace('    name: quality', "    if: 'false'\n    name: quality"),
+      rule: 'required-command-unreachable',
+    },
+    {
+      name: 'step false expression',
+      workflow: validWorkflow().replace('      - run: node --test', '      - if: ${{ false }}\n        run: node --test'),
+      rule: 'required-command-unreachable',
+    },
+    {
+      name: 'event exclusion',
+      workflow: validWorkflow().replace('      - run: node --test', "      - if: github.event_name == 'push'\n        run: node --test"),
+      rule: 'required-command-unreachable',
+    },
+    {
+      name: 'step continuation expression',
+      workflow: validWorkflow().replace('      - run: node --test', '      - continue-on-error: ${{ github.event_name == \'pull_request\' }}\n        run: node --test'),
+      rule: 'required-command-continue-on-error',
+    },
+    {
+      name: 'background command',
+      workflow: validWorkflow().replace('      - run: node --test', '      - run: node --test &'),
+      rule: 'required-command-failure-masked',
+    },
+    {
+      name: 'or true',
+      workflow: validWorkflow().replace('      - run: node --test', '      - run: node --test || true'),
+      rule: 'required-command-failure-masked',
+    },
+    ...[
+      ['pipeline', 'node --test | cat'],
+      ['pipeline stderr', 'node --test |& cat'],
+      ['or fallback', 'node --test || fallback'],
+      ['trailing semicolon true', 'node --test; true'],
+      ['trailing and true', 'node --test && true'],
+      ['shell negation', '! node --test'],
+      ['conditional context', 'if node --test; then echo done; fi'],
+      ['command substitution fallback', 'echo "$(node --test)" || fallback'],
+      ['subshell fallback', '(node --test) || fallback'],
+    ].map(([name, run]) => ({
+      name,
+      workflow: validWorkflow().replace('      - run: node --test', `      - run: ${run}`),
+      rule: 'required-command-failure-masked',
+    })),
+    {
+      name: 'exit zero',
+      workflow: validWorkflow().replace('      - run: node --test', '      - run: node --test; exit 0'),
+      rule: 'required-command-failure-masked',
+    },
+    {
+      name: 'heredoc only',
+      workflow: validWorkflow().replace('      - run: node --test', [
+        '      - run: |',
+        "          cat <<'COMMAND'",
+        '          node --test',
+        '          COMMAND',
+      ].join('\n')),
+      rule: 'required-command-heredoc-only',
+    },
+    {
+      name: 'shell comment only',
+      workflow: validWorkflow().replace('      - run: node --test', '      - run: # node --test'),
+      rule: 'required-command-not-executable',
+    },
+    {
+      name: 'echo text only',
+      workflow: validWorkflow().replace('      - run: node --test', '      - run: echo "node --test"'),
+      rule: 'required-command-not-executable',
+    },
+    {
+      name: 'custom step shell masks failure',
+      workflow: validWorkflow().replace('      - run: node --test', '      - shell: bash {0}\n        run: node --test'),
+      rule: 'required-command-shell-unsafe',
+    },
+    {
+      name: 'job default shell masks failure',
+      workflow: validWorkflow().replace('    steps:', '    defaults:\n      run:\n        shell: bash {0}\n    steps:'),
+      rule: 'required-command-shell-unsafe',
+    },
+    {
+      name: 'workflow default shell masks failure',
+      workflow: validWorkflow().replace('permissions:', 'defaults:\n  run:\n    shell: bash {0}\n\npermissions:'),
+      rule: 'required-command-shell-unsafe',
+    },
+  ]
+  for (const fixture of fixtures) {
+    const result = validateWorkflowPolicy(currentOnlyContract(), fixtureRoot(fixture.workflow, currentOnlyContract()))
+    assert.equal(result.status, 'NO-GO', fixture.name)
+    assert.equal(result.errors.some((item) => item.rule === fixture.rule), true, fixture.name)
+  }
+})
+
+test('required command accepts a reachable default-shell and a matching event condition', () => {
+  const workflow = validWorkflow().replace('      - run: node --test', "      - if: github.event_name == 'pull_request'\n        run: node --test")
+  const result = validateWorkflowPolicy(currentOnlyContract(), fixtureRoot(workflow, currentOnlyContract()))
   assert.equal(result.status, 'PARTIAL')
-  assert.deepEqual(result.errors, [])
+  assert.equal(result.errors.some((item) => item.rule.startsWith('required-command-')), false)
 })
 
 test('workflow_policy_rejects_stale_gap_and_missing_current_workflow', () => {
@@ -690,23 +797,90 @@ test('item6_release_integrity_workflow_is_current_and_nonpublishing', () => {
     environment: 'protected-release',
     sbom_generator: { name: 'cargo-cyclonedx', version: '0.5.9', spec_version: '1.5' },
     publication: 'forbidden',
+    promotion_policy: 'docs/governance/release-promotion.json',
+    target_tag: 'v0.9.0-beta.1',
+    integrity_artifact_retention_days: 14,
   })
   assert.deepEqual(gate.open_gaps, [])
 
   const workflow = readFileSync(path.join(ROOT, gate.workflow), 'utf8')
   assert.match(workflow, /push:/)
-  assert.match(workflow, /- 'v\*'/)
+  assert.match(workflow, /- 'v0\.9\.0-beta\.1'/)
   assert.match(workflow, /environment: protected-release/)
   assert.match(workflow, /git diff --quiet/)
   assert.match(workflow, /cargo install cargo-cyclonedx --locked --version 0\.5\.9/)
   assert.match(workflow, /cargo cyclonedx --manifest-path Cargo\.toml --format json --spec-version 1\.5 --override-filename ramshared-sbom/)
+  assert.match(workflow, /sha256sum "\$archive" > "\$archive\.sha256"/)
+  assert.match(workflow, /--checksum "artifacts\/release\/ramshared-linux-\$RELEASE_TAG\.tar\.gz\.sha256"/)
   assert.match(workflow, /write-release-manifest\.mjs/)
   assert.match(workflow, /check-release-integrity\.mjs --check/)
+  assert.match(workflow, /actions\/upload-artifact@[0-9a-f]{40}/)
+  assert.match(workflow, /name: release-integrity-\$\{\{ env\.RELEASE_TAG \}\}-\$\{\{ steps\.identity\.outputs\.revision \}\}/)
+  assert.match(workflow, /retention-days: 14/)
   assert.doesNotMatch(workflow, /workflow_dispatch|gh release|upload-release-asset|action-gh-release|create-release|contents:\s*write/i)
 
   const result = run({ root: ROOT })
   assert.equal(result.errors.some((item) => item.gate === 'release-integrity'), false)
   assert.equal(result.gaps.some((item) => item.startsWith('release-integrity:')), false)
+})
+
+test('release_producer_requires_github_app_token_without_fallback', () => {
+  const workflow = readFileSync(path.join(ROOT, '.github', 'workflows', 'release.yml'), 'utf8')
+  const config = JSON.parse(readFileSync(path.join(ROOT, 'release-please-config.json'), 'utf8'))
+  const manifest = JSON.parse(readFileSync(path.join(ROOT, '.release-please-manifest.json'), 'utf8'))
+  assert.match(workflow, /name: Require release GitHub App credentials/)
+  assert.match(workflow, /test -n "\$RELEASE_APP_ID"/)
+  assert.match(workflow, /test -n "\$RELEASE_APP_PRIVATE_KEY"/)
+  assert.match(workflow, /uses: actions\/create-github-app-token@[0-9a-f]{40}/)
+  assert.match(workflow, /token: \$\{\{ steps\.release-app-token\.outputs\.token \}\}/)
+  assert.match(workflow, /git ls-remote --refs/)
+  assert.match(workflow, /refs\/tags\/\$RELEASE_TARGET_TAG/)
+  assert.match(workflow, /if: \$\{\{ steps\.target\.outputs\.run == 'true' \}\}/)
+  assert.doesNotMatch(workflow, /RELEASE_PLEASE_TOKEN|GITHUB_TOKEN|\bPAT\b|\|\|/)
+  assert.equal(config.$schema, 'https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json')
+  assert.equal(config['release-type'], 'simple')
+  assert.equal(config.versioning, 'prerelease')
+  assert.equal(config['prerelease-type'], 'beta')
+  assert.equal(config.prerelease, true)
+  assert.equal(config.draft, true)
+  assert.equal(config['force-tag-creation'], true)
+  assert.equal(config['skip-github-release'], false)
+  assert.equal(config['release-as'], '0.9.0-beta.1')
+  assert.equal(manifest['.'], '0.8.0')
+  assert.match(config['pull-request-header'], /draft prerelease/i)
+})
+
+test('publication_workflow_is_protected_manual_exact_sha_only', () => {
+  const publicationPath = path.join(ROOT, '.github', 'workflows', 'release-publication.yml')
+  assert.equal(existsSync(publicationPath), true)
+  const workflow = readFileSync(publicationPath, 'utf8')
+  assert.match(workflow, /^  workflow_dispatch:\s*$/m)
+  assert.match(workflow, /environment: protected-release/)
+  assert.match(workflow, /target tag, source SHA, and integrity run ID/)
+  assert.match(workflow, /actions\/download-artifact@[0-9a-f]{40}/)
+  assert.match(workflow, /permission-contents: write/)
+  assert.match(workflow, /permission-actions: read/)
+  assert.match(workflow, /node tools\/ci\/check-release-publication\.mjs/)
+  assert.match(workflow, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/)
+  assert.match(workflow, /ref: \$\{\{ inputs\.source_sha \}\}/)
+  assert.match(workflow, /refs\/tags\/\$RELEASE_TAG:refs\/tags\/\$RELEASE_TAG/)
+  assert.match(workflow, /run-id: \$\{\{ inputs\.integrity_run_id \}\}/)
+  assert.match(workflow, /gh release upload "\$RELEASE_TAG" "artifacts\/release\/\$asset"/)
+  assert.match(workflow, /gh release edit "\$RELEASE_TAG" --draft=false --prerelease/)
+  assert.doesNotMatch(workflow, /workflow_run|pull_request|^  push:|--clobber/i)
+})
+
+test('release_promotion_node_coverage_is_wired_into_the_canonical_pr_caller', () => {
+  const workflow = readFileSync(path.join(ROOT, '.github', 'workflows', 'ci-contract.yml'), 'utf8')
+  for (const module of [
+    'tools/ci/check-release-integrity.mjs',
+    'tools/ci/write-release-manifest.mjs',
+    'tools/ci/check-release-publication.mjs',
+  ]) {
+    assert.match(workflow, new RegExp(`--test-coverage-include=${module.replace(/[./-]/g, '\\$&')}`))
+  }
+  assert.match(workflow, /--test-coverage-lines=80 --test-coverage-branches=80/)
+  assert.match(workflow, /--test-coverage-functions=80/)
 })
 
 test('ci_contract_requires_fail_closed_trivy_sarif_publication', () => {
@@ -715,7 +889,6 @@ test('ci_contract_requires_fail_closed_trivy_sarif_publication', () => {
   const workflow = readFileSync(path.join(ROOT, gate.workflow), 'utf8')
 
   assert.deepEqual(gate.allowed_continue_on_error_steps ?? [], [])
-  assert.ok(gate.required_commands.includes('sarif_file: trivy-results.sarif'))
   assert.ok(gate.required_commands.includes('test -s trivy-results.sarif'))
   assert.ok(gate.required_commands.includes("jq -e '.version == \"2.1.0\" and (.runs | type == \"array\")' trivy-results.sarif"))
   assert.match(workflow, /name: Validate Trivy SARIF[\s\S]*test -s trivy-results\.sarif/)
