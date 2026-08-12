@@ -363,7 +363,7 @@ environment-bound and are not inferred from a manufactured test.
 | --- | --- | --- | --- |
 | `nbd_lifecycle_before_action_after` | Injected ordering/refusal plus live pilot | `PASS` at 1 GiB | Live before/action/after exists; larger-size lifecycle remains coupled to the matrix. |
 | `relay_gate_before_action_after` | Manufactured refusals plus live read-only gate | `PASS` for the pilot | Relay was clean before/after without automatic reap. |
-| `NBD_BENCHMARK_MATRIX` | Corrected cell/preflight/controller implementation; cell 18/18, preflight 26/26, public-evidence validator 15/15, complete Windows static wrapper, and focused independent Gate A passes | `PARTIAL` / `NO-GO` | No complete 1/2/4 GiB disk-only/NBD n=3 matrix has run on the reviewed sealed release; legitimate live before/action/after evidence remains required. |
+| `NBD_BENCHMARK_MATRIX` | Corrected cell/preflight/controller implementation; cell 22/22, preflight 26/26, public-evidence validator 15/15, complete Windows static wrapper, and focused independent Gate A passes | `PARTIAL` / `NO-GO` | No complete 1/2/4 GiB disk-only/NBD n=3 matrix has run on the reviewed sealed release; legitimate live before/action/after evidence remains required. |
 | `BINARY_MATCH` | Static refusals plus live selected release | `PASS` for the pilot | Each matrix NBD cell must repeat the identity proof. |
 
 ### Benchmark matrix
@@ -440,12 +440,9 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-tier --files crates/ram
   coverage owner: its exact two-line N3/NBD module declaration projection is
   owned by `microsoft-native-vram-memory-tier-n3-module-export-glue` in the N3
   SPEC and must not gain a re-export or any other glue.
-- [ ] Static/manufactured tests cover legitimate and refusal pairs in the
-  corrected matrix implementation. The exact DT-NBD-40 tests
-  `nbd_usable_size_overflow_refuses_before_bash_arithmetic` and
-  `windows_nbd_capacity_and_usable_size_are_strict_custody_fields` are a
-  current local Gate A `NO-GO` until their RED reproducers are made green; no
-  earlier local-green result substitutes for them.
+- [x] Static/manufactured tests cover legitimate and refusal pairs in the
+  corrected matrix implementation, including DT-NBD-40 overflow, all supported
+  capacities, trailing fields, and strict Windows custody.
 - [x] Manufactured release install proves owner/mode/hash immutability and all
   25 named post-write selector/unit/destination rollback frontiers.
 - [x] Readiness proves NBD-only, no active ublk service/device, and no module
