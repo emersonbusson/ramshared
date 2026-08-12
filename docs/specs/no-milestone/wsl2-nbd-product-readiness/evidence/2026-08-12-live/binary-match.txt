@@ -1,0 +1,4 @@
+BINARY_MATCH=PASS
+pid=2062165
+live=/opt/ramshared/releases/v0.8.0-8-g0b09518/bin/ramsharedd
+expected=/opt/ramshared/releases/v0.8.0-8-g0b09518/bin/ramsharedd

@@ -3695,3 +3695,46 @@ or a main push produces a duplicate automatic child workflow.
 **Verdict:** ✅ The hosted `main` aggregate is green for this revision. This
 CI result does not qualify Windows, WSL2, VM, driver, GPU, storage, swap,
 kernel, or reboot evidence.
+
+## 2026-08-12 10:58 -03 — WSL2 NBD 1 GiB supervised activation
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0007`.
+**Owner role:** `wsl2-nbd-operator`.
+**Observed at:** `2026-08-12T13:56:34Z`.
+**Verified at:** `2026-08-12T13:58:08Z`.
+**Source revision:** `0b09518c530253a3219326ae3c0fe006e60ef99c`.
+**Lifecycle:** `reviewable`.
+**Retention:** Preserve the sanitized before/action/after receipts under
+`docs/specs/no-milestone/wsl2-nbd-product-readiness/evidence/2026-08-12-live/`.
+**Freshness:** Revalidate after any NBD lifecycle, sealed-release, daemon,
+Relay, or swap-order change.
+**What:** Installed the sealed WSL2 NBD release with explicit approval,
+migrated the inactive legacy unit by exact SHA-256, and activated the approved
+1 GiB NBD pilot without a reboot.
+**Category:** `wsl2-nbd-live`.
+**How to measure:** `ramshared status`; `/proc/swaps`; `wsl-relay-health.sh
+--check`; `nbd-product-preflight.sh --check`; the approved `cascade-up.sh
+--execute`; and `readlink /proc/<ramsharedd-pid>/exe` under `sudo`.
+**Measured data:** Before activation, only `/dev/sdc` swap was present
+(4,194,304 KiB, priority -2, 3,518,416 KiB used), Relay reported zero
+candidates, and product preflight reported `PRODUCT_OFF`. The unprivileged
+action refused with `I/O: Permission denied` before device creation. The
+approved `sudo` action created `/dev/zram0` and `/dev/nbd0`, each 1,048,572
+KiB, at priorities 200 and 100 respectively; `/dev/sdc` remained at -2.
+After activation the daemon PID was 2062165 and both executable paths resolved
+to the sealed `v0.8.0-8-g0b09518` binary; preflight reported
+`NBD_BINARY_MATCH=PASS`, `NBD_TRANSPORT=nbd`, `NBD_PRODUCT_STATE=READY`, and
+Relay remained `CLEAN` with zero candidates. The unit remained inactive and
+disabled; no reboot occurred.
+**Refusals:** Missing operator privilege produced `I/O: Permission denied`
+without creating an NBD device or daemon. The initial installer path had also
+refused the mismatched legacy unit before the exact SHA-scoped migration
+approval was supplied.
+**Rollback trigger:** Any failed `swapoff`, remaining managed NBD/ublk swap,
+Relay candidate, binary mismatch, ghost state, or priority ordering other than
+zram 200 > NBD 100 > disk -2 requires the named safe teardown rather than a
+second activation.
+**Verdict:** 🟡 The real 1 GiB WSL2 NBD activation and identity checks passed.
+The required 1/2/4 GiB benchmark matrix with n>=3 and median/p99/deviation is
+not yet run, so this does not claim index-quality DONE.
