@@ -702,6 +702,9 @@ grep -Fq 'MEMORY_HIGH_MIB * 1024 * 1024)) >"$CG/memory.high"' "$ROOT/scripts/saf
 grep -Fq 'MEMORY_MAX_MIB * 1024 * 1024)) >"$CG/memory.max"' "$ROOT/scripts/safety/nbd-benchmark-cell.sh"
 pass cgroup_high_forces_reclaim_without_hard_limit_oom
 pass sample_baseline_republication_is_exact_and_ordered
+grep -Fq 'run-$run-activity.json' "$ROOT/scripts/safety/nbd-benchmark-cell.sh"
+grep -Fq '"required_delta_kib"' "$ROOT/scripts/safety/nbd-benchmark-cell.sh"
+pass activity_refusal_persists_exact_observed_deltas
 pass benchmark_cleanup_refuses_ghost_or_residual_swap
 pass benchmark_start_barrier_launcher_is_in_cgroup_before_exec
 pass benchmark_live_seams_are_unavailable_in_approved_mode

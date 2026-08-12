@@ -1071,6 +1071,23 @@ PY
   max_n_delta=$((max_n - n0)); (( max_n_delta >= 0 )) || max_n_delta=0
   max_d_delta=$((max_d - d0)); (( max_d_delta >= 0 )) || max_d_delta=0
   max_s_delta=$((max_s - s0)); (( max_s_delta >= 0 )) || max_s_delta=0
+  python3 - "$ARTIFACT_DIR/run-$run-activity.json" "$MODE" "$TIER_MIB" \
+    "$max_z_delta" "$max_n_delta" "$max_d_delta" "$max_s_delta" <<'PY'
+import json, os, sys
+path, mode, tier, zram, nbd, disk, scratch = sys.argv[1:]
+record = {
+    "schema": 1,
+    "mode": mode,
+    "tier_mib": int(tier),
+    "observed_delta_kib": {"zram": int(zram), "nbd": int(nbd), "disk": int(disk), "scratch": int(scratch)},
+    "required_delta_kib": {"zram": 1024 * 1024 - 8192, "second_tier": int(tier) * 1024 - 8192},
+}
+temporary = path + ".tmp"
+with open(temporary, "w", encoding="utf-8") as target:
+    json.dump(record, target, sort_keys=True, separators=(",", ":"))
+    target.write("\n")
+os.replace(temporary, path)
+PY
   if [[ $MODE == nbd ]]; then
     (( max_z_delta >= 1024 * 1024 - 8192 \
       && max_n_delta >= TIER_MIB * 1024 - 8192 \
