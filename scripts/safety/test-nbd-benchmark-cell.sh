@@ -49,10 +49,10 @@ make_identity_fixture() {
 }
 
 run_identity_fixture() {
-  local root=$1 lower_sink_identity=$2
+  local root=$1 lower_sink_identity=$2 tier_mib=${3:-1024}
   RAMSHARED_NBD_ALLOW_MANUFACTURED_IDENTITY_TEST=1 \
     "$CELL" --validate-nbd-identity-fixture --identity-fixture-root "$root" \
-    --tier-mib 1024 --lower-sink-identity-sha256 "$lower_sink_identity"
+    --tier-mib "$tier_mib" --lower-sink-identity-sha256 "$lower_sink_identity"
 }
 
 assert_identity_refusal() {
@@ -120,6 +120,23 @@ exact_usable_output=$(run_identity_fixture "$exact_usable_identity_root" "$lower
 }
 pass nbd_identity_accepts_bounded_mkswap_overhead_and_exact_usable_size
 
+for tier_mib in 2048 4096; do
+  tier_identity_root="$TMP/identity-tier-$tier_mib"
+  make_identity_fixture "$tier_identity_root"
+  usable_kib=$((tier_mib * 1024 - 4))
+  capacity_sectors=$((tier_mib * 2048))
+  sed -i "s/1048572 0 100/$usable_kib 0 100/" "$tier_identity_root/proc/swaps"
+  printf '%s\n' "$capacity_sectors" >"$tier_identity_root/sys/block/nbd0/size"
+  tier_output=$(run_identity_fixture "$tier_identity_root" "$lower_sink_identity" "$tier_mib")
+  [[ $tier_output == *"NBD_CAPACITY_SECTORS=$capacity_sectors"* &&
+    $tier_output == *"NBD_USABLE_SIZE_KIB=$usable_kib"* &&
+    $tier_output == *"NBD_SIZE_KIB=$((tier_mib * 1024))"* ]] || {
+    printf 'FAIL tier %s capacity/usable identity mismatch: %s\n' "$tier_mib" "$tier_output" >&2
+    exit 1
+  }
+done
+pass nbd_capacity_contract_covers_all_supported_tiers
+
 missing_identity_root="$TMP/identity-missing"
 make_identity_fixture "$missing_identity_root"
 printf 'Filename Type Size Used Priority\n' >"$missing_identity_root/proc/swaps"
@@ -136,6 +153,12 @@ make_identity_fixture "$foreign_identity_root"
 rm -- "$foreign_identity_root/dev/nbd0"
 ln -s ../foreign "$foreign_identity_root/dev/nbd0"
 assert_identity_refusal nbd_identity_foreign_device NBD_IDENTITY_FOREIGN_DEVICE "$foreign_identity_root" "$lower_sink_identity"
+
+trailing_identity_root="$TMP/identity-trailing-field"
+make_identity_fixture "$trailing_identity_root"
+sed -i 's/1048572 0 100/1048572 0 100 trailing/' "$trailing_identity_root/proc/swaps"
+assert_identity_refusal nbd_identity_trailing_swap_field NBD_IDENTITY_FOREIGN_DEVICE \
+  "$trailing_identity_root" "$lower_sink_identity"
 
 capacity_identity_root="$TMP/identity-capacity"
 make_identity_fixture "$capacity_identity_root"
@@ -164,6 +187,12 @@ make_identity_fixture "$malformed_capacity_identity_root"
 printf 'not-a-sector-count\n' >"$malformed_capacity_identity_root/sys/block/nbd0/size"
 assert_identity_refusal nbd_identity_malformed_sysfs_capacity NBD_IDENTITY_SYSFS_CAPACITY_INVALID \
   "$malformed_capacity_identity_root" "$lower_sink_identity"
+
+whitespace_capacity_identity_root="$TMP/identity-capacity-whitespace"
+make_identity_fixture "$whitespace_capacity_identity_root"
+printf '2 097152\n' >"$whitespace_capacity_identity_root/sys/block/nbd0/size"
+assert_identity_refusal nbd_identity_noncanonical_sysfs_capacity NBD_IDENTITY_SYSFS_CAPACITY_INVALID \
+  "$whitespace_capacity_identity_root" "$lower_sink_identity"
 
 priority_identity_root="$TMP/identity-priority"
 make_identity_fixture "$priority_identity_root"
