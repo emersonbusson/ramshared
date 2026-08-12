@@ -10,6 +10,7 @@ if ! command -v node >/dev/null 2>&1; then
 fi
 
 node tools/ci/check-documentation-governance.mjs --all
+node tools/ci/check-agent-orchestration.mjs --check
 node tools/ci/check-documentation-localization.mjs --all
 node tools/ci/check-document-lifecycle.mjs --all
 node tools/ci/generate-documentation-inventory.mjs --check
@@ -23,6 +24,10 @@ node tools/check-broken-links.mjs --check
 node tools/ci/check-gap-register.mjs
 node tools/ci/check-public-hygiene.mjs --candidate
 node --test --test-reporter=dot tools/ci/check-public-hygiene.test.mjs
+node --experimental-test-coverage \
+  --test-coverage-include=tools/ci/check-agent-orchestration.mjs \
+  --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 \
+  --test-reporter=dot tools/ci/check-agent-orchestration.test.mjs
 node --test --test-reporter=dot tools/ci/check-documentation-governance.test.mjs
 node --test --test-reporter=dot tools/ci/check-documentation-localization.test.mjs
 node --test --test-reporter=dot tools/generate-docs-index.test.mjs
