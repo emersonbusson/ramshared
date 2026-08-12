@@ -50,7 +50,7 @@ function ConvertTo-WindowsCommandLineArgument {
     param([Parameter(Mandatory = $true)][string]$Value)
     if ($Value.Length -eq 0) { return '""' }
     if ($Value -notmatch '[\s"]') { return $Value }
-    '"' + ($Value -replace '(\\*)"', '$1$1\\"' -replace '(\\+)$', '$1$1') + '"'
+    '"' + ($Value -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"'
 }
 
 function ConvertTo-WindowsCommandLine {
@@ -2035,6 +2035,32 @@ function Invoke-ManufacturedSelfTest {
                 throw "manufactured_matrix_inventory_invalid"
             }
             Write-Output "matrix_inventory=PASS"
+            return
+        }
+        "windows-command-line" {
+            $root = Join-Path $ArtifactRoot "windows command line manufactured"
+            New-Item -ItemType Directory -Force -Path $root | Out-Null
+            $childPath = Join-Path $root "argument child.ps1"
+            $outputPath = Join-Path $root "argument output.txt"
+            $childSource = @'
+param(
+    [Parameter(Mandatory = $true)][string]$Value,
+    [Parameter(Mandatory = $true)][string]$OutputPath
+)
+[IO.File]::WriteAllText($OutputPath, $Value, [Text.UTF8Encoding]::new($false))
+'@
+            [IO.File]::WriteAllText($childPath, $childSource, [Text.UTF8Encoding]::new($false))
+            $expected = 'selected="$(readlink -f /opt/ramshared/current)" && printf "%s\n" "$selected"'
+            $run = Invoke-BoundedProcess -FilePath (Get-CurrentPowerShellExecutable) -ArgumentValues @(
+                "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", $childPath,
+                "-Value", $expected, "-OutputPath", $outputPath
+            ) -TimeoutSec 15
+            if (-not $run.completed -or $run.exit_code -ne 0 -or -not (Test-Path -LiteralPath $outputPath -PathType Leaf)) {
+                throw "manufactured_windows_command_line_child_failed"
+            }
+            $actual = [IO.File]::ReadAllText($outputPath, [Text.Encoding]::UTF8)
+            if ($actual -cne $expected) { throw "manufactured_windows_command_line_corrupted" }
+            Write-Output "windows_command_line=PASS"
             return
         }
         "nbd-identity" {

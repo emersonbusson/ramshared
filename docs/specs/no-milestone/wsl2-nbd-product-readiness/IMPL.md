@@ -59,6 +59,12 @@ live claim is made.
   inventory writer. The new exact manufactured test
   `matrix_inventory_is_ps51_safe_and_repository_relative` reproduces and
   closes that pre-cell failure; the failed attempt retained `PRODUCT_OFF`.
+- Second live campaign attempt: after deploying the inventory fix, selected
+  release discovery failed before any cell. A diagnostic using the same
+  `ProcessStartInfo` path proved that the Windows command-line encoder emitted
+  one extra backslash before embedded quotes and corrupted the Bash argument.
+  `windows_command_line_preserves_exact_wsl_shell_argument` now runs a real
+  child process and requires the complex argument to arrive byte-exactly.
 
 ## SPEC matrix → named tests
 

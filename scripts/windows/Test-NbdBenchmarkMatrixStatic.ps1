@@ -291,6 +291,7 @@ try {
         @{ Name = "nbd-identity"; Expected = "nbd_identity_invalid_fields=REFUSED" },
         @{ Name = "nbd-identity"; Expected = "nbd_identity_lower_and_sink_aliases=REFUSED" },
         @{ Name = "matrix-inventory"; Expected = "matrix_inventory=PASS" },
+        @{ Name = "windows-command-line"; Expected = "windows_command_line=PASS" },
         @{ Name = "cuda-cleanup"; Expected = "cuda_process_terminated=True" },
         @{ Name = "cuda-post-start-cleanup"; Expected = "cuda_post_start_cleanup=PASS" },
         @{ Name = "cuda-native-cleanup"; Expected = "cuda_native_cleanup_failure=PASS" }
@@ -304,6 +305,7 @@ try {
     }
     Write-Output "PASS manufactured_nbd_identity_behavior"
     Write-Output "PASS matrix_inventory_is_ps51_safe_and_repository_relative"
+    Write-Output "PASS windows_command_line_preserves_exact_wsl_shell_argument"
 
     $contractSelfTests = @(
         @{ Name = "source-identity"; Expected = "source_identity=REFUSED" },
