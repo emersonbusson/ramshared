@@ -965,6 +965,16 @@ EOF
     exit 1
   fi
   grep -Fq 'original_nbd_identity=$NBD_SECOND_TIER_IDENTITY_SHA256' "$CELL"
+  grep -Fq 'SAMPLE_ZRAM_DEVICE=$(capture_sample_zram_device)' "$CELL"
+  grep -Fq 'local zdev=$SAMPLE_ZRAM_DEVICE' "$CELL"
+  if awk '
+    /^republish_sample_baseline\(\)/ { body = 1 }
+    body { print }
+    body && /^}/ { exit }
+  ' "$CELL" | grep -Fq 'ZRAM_RECORD'; then
+    echo 'FAIL sample republication still trusts the mutable zram runtime receipt' >&2
+    exit 1
+  fi
   grep -Fq '[[ $NBD_SECOND_TIER_IDENTITY_SHA256 == "$original_nbd_identity" ]]' "$CELL"
   grep -Fq "pinned_preflight | grep -q '^NBD_BINARY_MATCH=PASS$'" "$CELL"
   grep -Fq 'refuse "$SAMPLE_BASELINE_REASON"' "$CELL"
