@@ -22,6 +22,11 @@ readonly ROLLBACK_POST_WRITE_PHASES=(
   release-roots-prepared
   staging-directory-created
   release-copied
+  input-bundle-manifest-copied
+  lower-sink-bound
+  installed-provenance-recorded
+  installed-manifest-regenerated
+  installed-manifest-receipt-recorded
   staging-owner-normalized
   staging-directories-sealed
   staging-executables-sealed
@@ -71,9 +76,94 @@ write_manifest() {
   local release=$1
   (
     cd "$release"
-    find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+    find . -type f ! -name SHA256SUMS ! -name INSTALLED_MANIFEST_SHA256 -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
   )
   chmod 0644 "$release/SHA256SUMS"
+}
+
+write_generic_config() {
+  local release=$1
+  printf '%s\n' \
+    'NBD_LOWER_SINK=' \
+    'NBD_LOWER_SINK_TYPE=directory' \
+    'NBD_LOWER_SINK_IDENTITY_SHA256=' \
+    'NBD_LOWER_SINK_FS_BLOCK_BYTES=' \
+    'NBD_LOWER_SINK_BINDING=unbound' \
+    >"$release/scripts/safety/cascade.conf.example"
+  chmod 0644 "$release/scripts/safety/cascade.conf.example"
+}
+
+write_bound_config() {
+  local release=$1 sink=$2 canonical metadata identity fs_block
+  canonical=$(readlink -f -- "$sink")
+  metadata=$(stat -c '%d:%i:%u:%g:%a:%F' -- "$canonical")
+  identity=$(printf '%s\0%s\0%s' "$canonical" directory "$metadata" | sha256sum | awk '{print $1}')
+  fs_block=$(stat -fc '%s' -- "$canonical")
+  printf '%s\n' \
+    "NBD_LOWER_SINK=$canonical" \
+    'NBD_LOWER_SINK_TYPE=directory' \
+    "NBD_LOWER_SINK_IDENTITY_SHA256=$identity" \
+    "NBD_LOWER_SINK_FS_BLOCK_BYTES=$fs_block" \
+    'NBD_LOWER_SINK_BINDING=bound' \
+    >"$release/scripts/safety/cascade.conf.example"
+  chmod 0644 "$release/scripts/safety/cascade.conf.example"
+}
+
+write_installed_provenance() {
+  local release=$1 input_digest=$2 sink=$3 canonical metadata identity fs_block available
+  canonical=$(readlink -f -- "$sink")
+  metadata=$(stat -c '%d:%i:%u:%g:%a:%F' -- "$canonical")
+  identity=$(printf '%s\0%s\0%s' "$canonical" directory "$metadata" | sha256sum | awk '{print $1}')
+  fs_block=$(stat -fc '%s' -- "$canonical")
+  available=$(df -Pk -- "$canonical" | awk 'NR == 2 { print $4 }')
+  python3 - "$release/INSTALL_PROVENANCE.json" "$input_digest" \
+    "$(tr -d '[:space:]' <"$release/SOURCE_COMMIT")" \
+    "$(tr -d '[:space:]' <"$release/SOURCE_BRANCH")" \
+    "$(tr -d '[:space:]' <"$release/SOURCE_TREE_STATE")" \
+    "$canonical" "$identity" "$fs_block" "$available" <<'PY'
+import json
+import os
+import sys
+
+out, digest, commit, branch, tree_state, sink, identity, block, available = sys.argv[1:]
+record = {
+    "schema_version": "ramshared-installed-release-provenance/v1",
+    "input_bundle_manifest_sha256": digest,
+    "source_commit": commit,
+    "source_branch": branch,
+    "source_tree_state": tree_state,
+    "lower_sink": {
+        "canonical_path": sink,
+        "identity_sha256": identity,
+        "filesystem_block_bytes": int(block),
+        "available_kib_at_bind": int(available),
+    },
+}
+with open(out, "w", encoding="utf-8") as target:
+    json.dump(record, target, sort_keys=True, separators=(",", ":"))
+    target.write("\n")
+PY
+  chmod 0644 "$release/INSTALL_PROVENANCE.json"
+}
+
+make_generic_bundle_fixture() {
+  local release=$1
+  rm -f -- "$release/INSTALL_PROVENANCE.json" "$release/INPUT_BUNDLE_SHA256SUMS" "$release/INSTALLED_MANIFEST_SHA256"
+  write_generic_config "$release"
+  write_manifest "$release"
+}
+
+make_installed_release_fixture() {
+  local root=$1 release=$2 input_digest
+  make_generic_bundle_fixture "$release"
+  cp -- "$release/SHA256SUMS" "$release/INPUT_BUNDLE_SHA256SUMS"
+  chmod 0644 "$release/INPUT_BUNDLE_SHA256SUMS"
+  input_digest=$(sha256sum -- "$release/INPUT_BUNDLE_SHA256SUMS" | awk '{print $1}')
+  write_bound_config "$release" "$root/sink"
+  write_installed_provenance "$release" "$input_digest" "$root/sink"
+  write_manifest "$release"
+  sha256sum -- "$release/SHA256SUMS" | awk '{print $1}' >"$release/INSTALLED_MANIFEST_SHA256"
+  chmod 0644 "$release/INSTALLED_MANIFEST_SHA256"
 }
 
 seal_fixture_release() {
@@ -114,10 +204,13 @@ new_fixture() {
   printf '#!/usr/bin/env bash\nexit 0\n' >"$release/bin/ramshared"
   printf '#!/usr/bin/env bash\nexit 0\n' >"$release/bin/ramsharedd"
   chmod 0755 "$release/bin/ramshared" "$release/bin/ramsharedd"
-  for script in cascade-up.sh cascade-down.sh; do
+  for script in cascade-up.sh cascade-down.sh nbd-benchmark-cell.sh \
+    nbd-benchmark-cgroup-launch.sh cascade_pressure_integrity_worker.py wsl-relay-health.sh; do
     printf '#!/usr/bin/env bash\nexit 0\n' >"$release/scripts/safety/$script"
     chmod 0755 "$release/scripts/safety/$script"
   done
+  printf '# benchmark library fixture\n' >"$release/scripts/safety/nbd-benchmark-lib.sh"
+  chmod 0644 "$release/scripts/safety/nbd-benchmark-lib.sh"
   if [[ -f "$PRODUCT" ]]; then
     install -m 0755 "$PRODUCT" "$release/scripts/safety/nbd-product-preflight.sh"
   else
@@ -126,9 +219,12 @@ new_fixture() {
   fi
   printf '[Service]\n' >"$release/systemd/ramshared-cascade.service"
   chmod 0644 "$release/systemd/ramshared-cascade.service"
-  printf 'NBD_LOWER_SINK=\n' >"$release/scripts/safety/cascade.conf.example"
-  chmod 0644 "$release/scripts/safety/cascade.conf.example"
-  write_manifest "$release"
+  write_generic_config "$release"
+  printf '0123456789abcdef0123456789abcdef01234567\n' >"$release/SOURCE_COMMIT"
+  printf 'fixture/main\n' >"$release/SOURCE_BRANCH"
+  printf 'clean\n' >"$release/SOURCE_TREE_STATE"
+  chmod 0644 "$release/SOURCE_COMMIT" "$release/SOURCE_BRANCH" "$release/SOURCE_TREE_STATE"
+  make_installed_release_fixture "$root" "$release"
   seal_fixture_release "$release"
   ln -s releases/v1.2.3 "$product_root/current"
 
@@ -196,6 +292,14 @@ activate_nbd_fixture() {
   : >"$root/dev/nbd0"
 }
 
+add_exact_daemon_fixture_process() {
+  local root=$1 pid=$2
+  local release="$root/opt/ramshared/releases/v1.2.3"
+  [[ $pid =~ ^[1-9][0-9]*$ ]] || return 1
+  mkdir -p "$root/proc/$pid"
+  ln -s "$release/bin/ramsharedd" "$root/proc/$pid/exe"
+}
+
 run_product() {
   local root=$1
   shift
@@ -220,7 +324,6 @@ run_product() {
     "RAMSHARED_RELAY_ARGS=$root/state/relay.args" \
     "RAMSHARED_RELAY_FAIL=$root/state/relay.fail" \
     "RAMSHARED_SYSTEMCTL_STATE=$root/state" \
-    "RAMSHARED_NBD_LOWER_SINK=$root/sink" \
     "RAMSHARED_NBD_VRAM_MIB=1024" \
     "$PRODUCT" "$@" 2>&1)
   RUN_EXIT=$?
@@ -273,6 +376,24 @@ test_binary_match_rejects_stale_or_deleted_daemon() {
   assert_exit binary_match_rejects_stale_or_deleted_daemon 1 || return
   assert_contains binary_match_rejects_stale_or_deleted_daemon 'NBD_READINESS_REASON=BINARY_MATCH_FAILED' || return
   pass binary_match_rejects_stale_or_deleted_daemon
+}
+
+test_product_off_rejects_exact_daemon_without_pidfile() {
+  local root
+  root=$(new_fixture product-off-exact-daemon)
+  add_exact_daemon_fixture_process "$root" 4242
+
+  run_product "$root" --check
+  assert_exit product_off_missing_pidfile_for_exact_daemon 1 || return
+  assert_contains product_off_missing_pidfile_for_exact_daemon 'NBD_PRODUCT_STATE=BLOCKED' || return
+  assert_contains product_off_missing_pidfile_for_exact_daemon 'NBD_READINESS_REASON=DAEMON_PID_MISSING' || return
+
+  add_exact_daemon_fixture_process "$root" 4243
+  run_product "$root" --check
+  assert_exit product_off_ambiguous_exact_daemons_without_pidfile 1 || return
+  assert_contains product_off_ambiguous_exact_daemons_without_pidfile 'NBD_PRODUCT_STATE=BLOCKED' || return
+  assert_contains product_off_ambiguous_exact_daemons_without_pidfile 'NBD_READINESS_REASON=DAEMON_PID_AMBIGUOUS' || return
+  pass product_off_rejects_exact_daemon_without_pidfile
 }
 
 test_relay_check_failure_blocks_readiness() {
@@ -341,41 +462,36 @@ test_product_off_ready_blocked_state_matrix() {
 }
 
 test_capacity_sink_identity_and_alignment_refusals() {
-  local root
+  local root release
   root=$(new_fixture capacity)
+  release="$root/opt/ramshared/releases/v1.2.3"
   activate_nbd_fixture "$root"
   run_product "$root" --check
   assert_exit capacity_sink_identity_and_alignment_refusals 0 || return
 
-  set +e
-  RUN_OUTPUT=$(env \
-    "RAMSHARED_PRODUCT_ROOT=$root/opt/ramshared" \
-    "RAMSHARED_NBD_PROC_ROOT=$root/proc" \
-    "RAMSHARED_NBD_SWAPS_FILE=$root/proc/swaps" \
-    "RAMSHARED_NBD_PID_FILE=$root/run/ramsharedd.pid" \
-    "RAMSHARED_NBD_MODULES_FILE=$root/proc/modules" \
-    "RAMSHARED_NBD_DEV_ROOT=$root/dev" \
-    "RAMSHARED_NBD_SYS_BLOCK_ROOT=$root/sys/block" \
-    "RAMSHARED_NBD_SYSTEMCTL=$root/bin/systemctl" \
-    "RAMSHARED_NBD_RELAY_HEALTH=$root/bin/relay" \
-    "RAMSHARED_NBD_DF=$root/bin/df" \
-    "RAMSHARED_NBD_STAT=$root/bin/stat" \
-    "RAMSHARED_NBD_EXPECT_UID=$(id -u)" \
-    "RAMSHARED_NBD_EXPECT_GID=$(id -g)" \
-    "RAMSHARED_RELAY_ARGS=$root/state/relay.args" \
-    "RAMSHARED_RELAY_FAIL=$root/state/relay.fail" \
-    "RAMSHARED_SYSTEMCTL_STATE=$root/state" \
-    "RAMSHARED_NBD_VRAM_MIB=1024" \
-    "$PRODUCT" --check 2>&1)
-  RUN_EXIT=$?
-  set -e
+  unseal_fixture_release "$release"
+  make_generic_bundle_fixture "$release"
+  seal_fixture_release "$release"
+  run_product "$root" --check
   assert_exit capacity_sink_identity_and_alignment_refusals 1 || return
-  assert_contains capacity_sink_identity_and_alignment_refusals 'NBD_READINESS_REASON=LOWER_TIER_SINK_UNKNOWN' || return
+  assert_contains capacity_sink_identity_and_alignment_refusals 'NBD_READINESS_REASON=INSTALL_PROVENANCE_UNMANIFESTED' || return
 
+  unseal_fixture_release "$release"
+  make_installed_release_fixture "$root" "$release"
+  seal_fixture_release "$release"
   RAMSHARED_NBD_STAT_ALIGNMENT_BYTES=0 run_product "$root" --check
   assert_exit capacity_sink_identity_and_alignment_refusals 1 || return
   assert_contains capacity_sink_identity_and_alignment_refusals 'NBD_READINESS_REASON=LOWER_TIER_ALIGNMENT_INVALID' || return
   pass capacity_sink_identity_and_alignment_refusals
+}
+
+test_environment_lower_sink_cannot_override_derived_release() {
+  local root
+  root=$(new_fixture environment-override)
+  RAMSHARED_NBD_LOWER_SINK="$root/sink" run_product "$root" --check
+  assert_exit environment_lower_sink_cannot_override_derived_release 1 || return
+  assert_contains environment_lower_sink_cannot_override_derived_release 'NBD_READINESS_REASON=LOWER_TIER_ENV_OVERRIDE_FORBIDDEN' || return
+  pass environment_lower_sink_cannot_override_derived_release
 }
 
 test_n3_or_ublk_capability_does_not_promote_nbd_product() {
@@ -477,21 +593,25 @@ test_manifest_special_objects_refuse_without_reading_them() {
 }
 
 test_sealed_nbd_bundle_and_lifecycle_wiring() {
-  local up down install bundle service config source failures=0
+  local up down benchmark launcher benchmark_lib worker install bundle service config source failures=0
   up="$REPO_ROOT/scripts/safety/cascade-up.sh"
   down="$REPO_ROOT/scripts/safety/cascade-down.sh"
+  benchmark="$REPO_ROOT/scripts/safety/nbd-benchmark-cell.sh"
+  launcher="$REPO_ROOT/scripts/safety/nbd-benchmark-cgroup-launch.sh"
+  benchmark_lib="$REPO_ROOT/scripts/safety/nbd-benchmark-lib.sh"
+  worker="$REPO_ROOT/scripts/safety/cascade_pressure_integrity_worker.py"
   install="$REPO_ROOT/scripts/safety/install-cascade-boot.sh"
   bundle="$REPO_ROOT/scripts/package/build-linux-bundle.sh"
   service="$REPO_ROOT/scripts/safety/systemd/ramshared-cascade.service"
   config="$REPO_ROOT/scripts/safety/cascade.conf.example"
 
-  for source in "$up" "$down" "$install" "$bundle" "$service" "$config"; do
+  for source in "$up" "$down" "$benchmark" "$launcher" "$benchmark_lib" "$worker" "$install" "$bundle" "$service" "$config"; do
     if [[ ! -f $source ]]; then
       fail "sealed_nbd_bundle_and_lifecycle_wiring missing=$source"
       failures=1
     fi
   done
-  for source in "$up" "$down" "$install" "$bundle" "$PRODUCT" "$0"; do
+  for source in "$up" "$down" "$benchmark" "$launcher" "$worker" "$install" "$bundle" "$PRODUCT" "$0"; do
     if [[ ! -x $source ]]; then
       fail "sealed_nbd_bundle_and_lifecycle_wiring entrypoint_not_executable=$source"
       failures=1
@@ -501,6 +621,9 @@ test_sealed_nbd_bundle_and_lifecycle_wiring() {
   if ! grep -Fq 'PRODUCT_ROOT=/opt/ramshared' "$up" ||
     ! grep -Fq -- '--transport nbd' "$up" ||
     ! grep -Fq 'activate:$RELEASE_VERSION' "$up" ||
+    ! grep -Fq 'activate:$RELEASE_VERSION:vram=$VRAM_MIB:zram=$ZRAM_MIB' "$up" ||
+    ! grep -Fq '^(1024|2048|4096)$' "$up" ||
+    ! grep -Fq 'RAMSHARED_NBD_VRAM_MIB=$VRAM_MIB "$PREFLIGHT" --check' "$up" ||
     ! grep -Fq 'NBD_LIFECYCLE_STATE=PLAN' "$up"; then
     fail 'sealed_nbd_bundle_and_lifecycle_wiring activation is not sealed NBD plan/refuse'
     failures=1
@@ -532,6 +655,12 @@ test_sealed_nbd_bundle_and_lifecycle_wiring() {
   fi
   if ! grep -Fq 'STAGE_RELEASE="$STAGE/release"' "$bundle" ||
     ! grep -Fq 'nbd-product-preflight.sh' "$bundle" ||
+    ! grep -Fq 'nbd-benchmark-cell.sh' "$bundle" ||
+    ! grep -Fq 'nbd-benchmark-cgroup-launch.sh' "$bundle" ||
+    ! grep -Fq 'nbd-benchmark-lib.sh' "$bundle" ||
+    ! grep -Fq 'cascade_pressure_integrity_worker.py' "$bundle" ||
+    ! grep -Fq 'SOURCE_COMMIT' "$bundle" ||
+    ! grep -Fq 'SOURCE_TREE_STATE' "$bundle" ||
     ! grep -Fq 'wsl-relay-health.sh' "$bundle" ||
     ! grep -Fq 'find . -type f ! -name SHA256SUMS -print0' "$bundle" ||
     ! grep -Fq 'chmod 0644 "$STAGE_RELEASE/SHA256SUMS"' "$bundle" ||
@@ -555,11 +684,69 @@ test_sealed_nbd_bundle_and_lifecycle_wiring() {
   pass sealed_nbd_bundle_and_lifecycle_wiring
 }
 
+test_sealed_bundle_contains_benchmark_runner_and_worker() {
+  local root bundle_root generic_version generic_release sink
+  root=$(new_fixture produced-bundle)
+  bundle_root="$root/packages"
+  generic_version="generic-fixture-$(date +%s)-$$"
+  sink="$root/sink"
+
+  set +e
+  RUN_OUTPUT=$(RAMSHARED_PACKAGE_OUT="$bundle_root" \
+    RAMSHARED_PACKAGE_VERSION="$generic_version" \
+    "$REPO_ROOT/scripts/package/build-linux-bundle.sh" --skip-build 2>&1)
+  RUN_EXIT=$?
+  set -e
+  assert_exit sealed_bundle_contains_benchmark_runner_and_worker 0 || return
+  generic_release="$bundle_root/ramshared-linux-$generic_version/release"
+  grep -qx 'NBD_LOWER_SINK_BINDING=unbound' "$generic_release/scripts/safety/cascade.conf.example" || {
+    fail 'sealed_bundle_contains_benchmark_runner_and_worker generic bundle is not explicitly unbound'
+    return
+  }
+  grep -qx 'NBD_LOWER_SINK=' "$generic_release/scripts/safety/cascade.conf.example" || {
+    fail 'sealed_bundle_contains_benchmark_runner_and_worker generic bundle contains a lower sink path'
+    return
+  }
+  [[ ! -e $generic_release/INSTALL_PROVENANCE.json && ! -e $generic_release/INPUT_BUNDLE_SHA256SUMS \
+    && ! -e $generic_release/INSTALLED_MANIFEST_SHA256 ]] || {
+    fail 'sealed_bundle_contains_benchmark_runner_and_worker generic bundle contains a machine binding receipt'
+    return
+  }
+  (cd "$generic_release" && sha256sum -c --status SHA256SUMS) || {
+    fail 'sealed_bundle_contains_benchmark_runner_and_worker generic bundle manifest does not verify'
+    return
+  }
+  for required in \
+    scripts/safety/nbd-benchmark-cell.sh \
+    scripts/safety/nbd-benchmark-cgroup-launch.sh \
+    scripts/safety/nbd-benchmark-lib.sh \
+    scripts/safety/cascade_pressure_integrity_worker.py \
+    scripts/safety/nbd-product-preflight.sh \
+    SOURCE_COMMIT SOURCE_BRANCH SOURCE_TREE_STATE; do
+    [[ -f $generic_release/$required && ! -L $generic_release/$required ]] || {
+      fail "sealed_bundle_contains_benchmark_runner_and_worker missing=$required"
+      return
+    }
+  done
+  set +e
+  RUN_OUTPUT=$(RAMSHARED_PACKAGE_OUT="$bundle_root" \
+    RAMSHARED_PACKAGE_VERSION="obsolete-lower-sink-$(date +%s)-$$" \
+    "$REPO_ROOT/scripts/package/build-linux-bundle.sh" --skip-build --lower-sink "$sink" 2>&1)
+  RUN_EXIT=$?
+  set -e
+  if [[ $RUN_EXIT -eq 0 || $RUN_OUTPUT != *'unsupported argument: --lower-sink'* ]]; then
+    fail 'sealed_bundle_contains_benchmark_runner_and_worker builder still accepts lower-sink binding'
+    return
+  fi
+  pass sealed_bundle_contains_benchmark_runner_and_worker
+}
+
 new_installer_fixture() {
   local name=$1 root release
   root=$(new_fixture "installer-$name")
   release="$root/opt/ramshared/releases/v1.2.3"
   unseal_fixture_release "$release"
+  make_generic_bundle_fixture "$release"
   install -m 0755 "$REPO_ROOT/scripts/safety/install-cascade-boot.sh" "$release/scripts/safety/"
   install -m 0755 "$REPO_ROOT/scripts/safety/wsl-relay-health.sh" "$release/scripts/safety/"
   printf 'v1.2.3\n' >"$release/RELEASE_VERSION"
@@ -629,6 +816,7 @@ new_rollback_installer_fixture() {
   target="$root/product"
   unit="$root/systemd/ramshared-cascade.service"
   unseal_fixture_release "$source"
+  make_generic_bundle_fixture "$source"
   install -m 0755 "$REPO_ROOT/scripts/safety/wsl-relay-health.sh" "$source/scripts/safety/"
   sed \
     -e "s|^PRODUCT_ROOT=/opt/ramshared$|PRODUCT_ROOT=$target|" \
@@ -709,7 +897,7 @@ EOF
 
 run_rollback_installer() {
   local root=$1 phase=$2 migration_hash=${3:-} source="$1/opt/ramshared/releases/v1.2.3"
-  local -a arguments=(--approve-nbd-product-install v1.2.3)
+  local -a arguments=(--approve-nbd-product-install v1.2.3 --lower-sink "$root/sink")
   if [[ -n $migration_hash ]]; then
     arguments+=(--approve-legacy-unit-replacement "$migration_hash")
   fi
@@ -720,6 +908,7 @@ run_rollback_installer() {
     "RAMSHARED_ROLLBACK_PRODUCT_ROOT=$root/product" \
     "RAMSHARED_ROLLBACK_UNIT_PATH=$root/systemd/ramshared-cascade.service" \
     "RAMSHARED_SYSTEMCTL_LOG=$root/state/systemctl.log" \
+    "RAMSHARED_NBD_DF_MOUNT_POINT=$root/sink" \
     "$source/scripts/safety/install-cascade-boot.sh" "${arguments[@]}" 2>&1)
   RUN_EXIT=$?
   set -e
@@ -778,6 +967,41 @@ test_installer_every_post_write_phase_rolls_back() {
   pass installer_every_post_write_phase_rolls_back
 }
 
+test_attended_derived_install_is_bound_and_sealed() {
+  local root source installed input_digest installed_digest
+  root=$(new_rollback_installer_fixture attended-derived-install daemon-reloaded existing)
+  source="$root/opt/ramshared/releases/v1.2.3"
+  sed \
+    -e "s|^PRODUCT_ROOT=/opt/ramshared$|PRODUCT_ROOT=$root/product|" \
+    -e "s|^UNIT_PATH=/etc/systemd/system/ramshared-cascade.service$|UNIT_PATH=$root/systemd/ramshared-cascade.service|" \
+    "$REPO_ROOT/scripts/safety/install-cascade-boot.sh" >"$source/scripts/safety/install-cascade-boot.sh"
+  chmod 0755 "$source/scripts/safety/install-cascade-boot.sh"
+  write_manifest "$source"
+  run_rollback_installer "$root" no-injection
+  assert_exit attended_derived_install_is_bound_and_sealed 0 || return
+  installed="$root/product/releases/v1.2.3"
+  [[ -d $installed && ! -L $installed ]] || { fail 'attended_derived_install_is_bound_and_sealed destination missing'; return; }
+  [[ $(readlink -- "$root/product/current") == releases/v1.2.3 ]] || { fail 'attended_derived_install_is_bound_and_sealed selector mismatch'; return; }
+  grep -qx "NBD_LOWER_SINK=$root/sink" "$installed/scripts/safety/cascade.conf.example" || { fail 'attended_derived_install_is_bound_and_sealed binding missing'; return; }
+  grep -qx 'NBD_LOWER_SINK_BINDING=bound' "$installed/scripts/safety/cascade.conf.example" || { fail 'attended_derived_install_is_bound_and_sealed binding state invalid'; return; }
+  input_digest=$(sha256sum -- "$installed/INPUT_BUNDLE_SHA256SUMS" | awk '{print $1}')
+  installed_digest=$(sha256sum -- "$installed/SHA256SUMS" | awk '{print $1}')
+  [[ $(tr -d '[:space:]' <"$installed/INSTALLED_MANIFEST_SHA256") == "$installed_digest" ]] || { fail 'attended_derived_install_is_bound_and_sealed installed receipt mismatch'; return; }
+  python3 - "$installed/INSTALL_PROVENANCE.json" "$input_digest" <<'PY' || { fail 'attended_derived_install_is_bound_and_sealed provenance invalid'; return; }
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    record = json.load(source)
+assert record["schema_version"] == "ramshared-installed-release-provenance/v1"
+assert record["input_bundle_manifest_sha256"] == sys.argv[2]
+assert record["lower_sink"]["canonical_path"].startswith("/")
+PY
+  [[ $(find "$installed" -type d -perm /0222 -print -quit) == '' ]] || { fail 'attended_derived_install_is_bound_and_sealed directory not sealed'; return; }
+  [[ $(find "$installed" -type f -perm /0222 -print -quit) == '' ]] || { fail 'attended_derived_install_is_bound_and_sealed file not sealed'; return; }
+  printf 'PASS installed_release_and_input_bundle_manifests_are_distinct\n'
+  pass attended_derived_install_is_bound_and_sealed
+}
+
 run_installer() {
   local root=$1 state=$2
   shift 2
@@ -788,6 +1012,7 @@ run_installer() {
     "PATH=$root/bin:$PATH" \
     "RAMSHARED_INSTALL_SYSTEMCTL_STATE=$state" \
     "RAMSHARED_INSTALL_WRITE_MARKER=$root/state/installer-writes" \
+    "RAMSHARED_NBD_DF_MOUNT_POINT=$root/sink" \
     "$release/scripts/safety/install-cascade-boot.sh" "$@" 2>&1)
   RUN_EXIT=$?
   set -e
@@ -833,7 +1058,7 @@ test_installer_active_enabled_or_unknown_units_refuse_without_writes() {
       unknown) expected=PRODUCT_UNIT_ACTIVITY_UNKNOWN ;;
       unknown-enabled) expected=PRODUCT_UNIT_ENABLEMENT_UNKNOWN ;;
     esac
-    run_installer "$root" "$state" --approve-nbd-product-install v1.2.3
+    run_installer "$root" "$state" --approve-nbd-product-install v1.2.3 --lower-sink "$root/sink"
     if ! assert_exit "installer_$state" 1 || ! assert_contains "installer_$state" "NBD_INSTALL_REASON=$expected" || ! assert_installer_was_read_only "installer_$state" "$root/state/installer-writes"; then
       failures=1
     fi
@@ -862,8 +1087,10 @@ test_legacy_unit_migration_requires_exact_hash_and_restores_on_failure() {
     "PATH=$root/bin:$PATH" \
     "RAMSHARED_ROLLBACK_PRODUCT_ROOT=$root/product" \
     "RAMSHARED_ROLLBACK_UNIT_PATH=$unit" \
+    "RAMSHARED_NBD_DF_MOUNT_POINT=$root/sink" \
     "$source/scripts/safety/install-cascade-boot.sh" \
     --approve-nbd-product-install v1.2.3 \
+    --lower-sink "$root/sink" \
     --approve-legacy-unit-replacement "${old_hash/a/b}" 2>&1)
   RUN_EXIT=$?
   set -e
@@ -879,8 +1106,10 @@ test_legacy_unit_migration_requires_exact_hash_and_restores_on_failure() {
     "PATH=$root/bin:$PATH" \
     "RAMSHARED_ROLLBACK_PRODUCT_ROOT=$root/product" \
     "RAMSHARED_ROLLBACK_UNIT_PATH=$unit" \
+    "RAMSHARED_NBD_DF_MOUNT_POINT=$root/sink" \
     "$source/scripts/safety/install-cascade-boot.sh" \
     --approve-nbd-product-install v1.2.3 \
+    --lower-sink "$root/sink" \
     --approve-legacy-unit-replacement "$old_hash" 2>&1)
   RUN_EXIT=$?
   set -e
@@ -969,11 +1198,13 @@ test_legacy_restore_reloads_systemd_after_daemon_reload() {
 
 test_release_manifest_and_modes_are_verified || true
 test_binary_match_rejects_stale_or_deleted_daemon || true
+test_product_off_rejects_exact_daemon_without_pidfile || true
 test_relay_check_failure_blocks_readiness || true
 test_reboot_and_shutdown_requests_are_refused || true
 test_legacy_ublk_retirement_never_unloads_module || true
 test_product_off_ready_blocked_state_matrix || true
 test_capacity_sink_identity_and_alignment_refusals || true
+test_environment_lower_sink_cannot_override_derived_release || true
 test_n3_or_ublk_capability_does_not_promote_nbd_product || true
 test_space_delimited_swap_rows_are_not_missed || true
 test_capacity_sink_identity_requires_one_bound_df_record || true
@@ -981,9 +1212,11 @@ test_selector_lstat_owner_is_verified || true
 test_symlinked_sysfs_ublk_is_detected || true
 test_manifest_special_objects_refuse_without_reading_them || true
 test_sealed_nbd_bundle_and_lifecycle_wiring || true
+test_sealed_bundle_contains_benchmark_runner_and_worker || true
 test_installer_manifest_and_unit_refusals_are_prewrite || true
 test_installer_active_enabled_or_unknown_units_refuse_without_writes || true
 test_installer_every_post_write_phase_rolls_back || true
+test_attended_derived_install_is_bound_and_sealed || true
 test_legacy_unit_migration_requires_exact_hash_and_restores_on_failure || true
 test_corrupt_legacy_backup_is_never_restored || true
 test_corrupt_published_legacy_backup_refuses_before_replacement || true

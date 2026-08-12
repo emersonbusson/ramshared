@@ -54,3 +54,16 @@
 **Destinations:** `.github/workflows/`, `docs/ci/CI-TOPOLOGY.md`, `docs/governance/ci-contract.json`, `docs/specs/no-milestone/ci-trust-and-release-integrity/`, and `tools/ci/`.
 **Scope:** Route automatic pull-request and main events through the single same-run CI Contract aggregate, keep canonical children reusable-only, and reject any undeclared direct trigger.
 **Evidence / blockers:** The local contract, 309 Node tests, documentation gates, Actionlint, and Gitleaks passed. Hosted same-revision qualification remains an explicit promotion blocker; the prior hosted run does not qualify the changed topology.
+
+## TASK-0004 — WSL2 NBD benchmark qualification
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `in_progress`.
+**Owner role:** `wsl2-reliability`.
+**Date:** `2026-08-12`.
+**Registered time:** `12:15:54`.
+**Updated time:** `15:38:00`.
+**Source revision:** `88077b159ca521acaed6f3fc1ad9c713cfce58da`.
+**Destinations:** branch `feat/wsl2-nbd-benchmark-matrix`, milestone `v0.9.0-beta.1 — WSL2 NBD`, issue `#194`, `docs/specs/no-milestone/wsl2-nbd-product-readiness/`, `scripts/safety/`, `scripts/windows/`, `scripts/p0/`, and the sealed Linux bundle.
+**Scope:** Correct and qualify the paired 1/2/4 GiB disk-versus-NBD benchmark with identical zram topology, cgroup-before-start containment, exact scratch identity, pair-scoped CUDA, bounded Windows-to-WSL calls, source/BINARY_MATCH binding, numeric comparison/regression records, and fail-closed cleanup. Run no live pressure until static/manufactured gates and a fresh independent Sol Gate A pass.
+**Evidence / blockers:** Independent Gate A found false-green occupancy, daemon-observation, context-schema, pair-topology, selector-TOCTOU, NBD-device-identity, and exact-TestName gaps; they were fixed TDD-first. The final independent Gate A passed on frozen workspace SHA-256 `050a3f73a3248965d3f575919f28ee2ec0c68fcb562e1d7b2944cc0dcc1a4bf4`. Green local gates include cell 13/13, preflight 26/26, public-evidence validator 15/15, complete Windows static wrapper, CLI 95, tier 52, and Rust cover 85.6%/83.9%. Clean reviewed-release deployment, legitimate Windows/WSL2 before/action/after matrix (1/2/4 GiB × idle/bounded × disk/NBD, n≥3), root validation append, Gate B, PR checks, and merge remain open. The historical 1 GiB pilot remains historical only. No new reboot, WSL shutdown, or live pressure has occurred in this task record.

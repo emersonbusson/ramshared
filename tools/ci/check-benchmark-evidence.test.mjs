@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -12,6 +13,138 @@ import {
 } from './check-benchmark-evidence.mjs'
 
 const SHA = 'a'.repeat(64)
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function publicMetric(samples) {
+  return {
+    unit: 'ms',
+    samples,
+    aggregation: 'median-nearest-rank-p99-population-stddev',
+    ...computeStats(samples),
+  }
+}
+
+function wsl2PublicPairFixture() {
+  const root = mkdtempSync(path.join(tmpdir(), 'ramshared-wsl2-public-pair-'))
+  const artifactRoot = [
+    'docs', 'specs', 'no-milestone', 'wsl2-nbd-product-readiness', 'evidence',
+    'wsl2-nbd-1024-idle-fixture',
+  ]
+  const directory = path.join(root, ...artifactRoot)
+  mkdirSync(directory, { recursive: true })
+  const custody = JSON.stringify({
+    schema_version: 'ramshared-nbd-public-pair-custody/v1',
+    pair_id: '1024-idle',
+    cleanup: { complete: true, terminal_state: 'PRODUCT_OFF' },
+    cells: [
+      { mode: 'disk-only', binary_match: 'N/A', context_sha256: 'c'.repeat(64) },
+      { mode: 'nbd', binary_match: 'PASS', context_sha256: 'd'.repeat(64) },
+    ],
+  })
+  const comparison = JSON.stringify({
+    schema_version: 'ramshared-nbd-public-pair-comparison/v1',
+    pair_id: '1024-idle',
+    baseline_verdict: 'BASELINE_CANDIDATE',
+    nbd_vs_disk_median_ratio: 1.05,
+    nbd_vs_disk_p99_ratio: 1.04,
+  })
+  const custodyPath = path.join(directory, 'pair-custody.json')
+  const comparisonPath = path.join(directory, 'pair-comparison.json')
+  writeFileSync(custodyPath, custody)
+  writeFileSync(comparisonPath, comparison)
+  const artifact = (name, contents) => ({
+    path: [...artifactRoot, name].join('/'),
+    bytes: Buffer.byteLength(contents),
+    sha256: sha256(contents),
+  })
+  const record = {
+    schema_version: 'ramshared-evidence/v1',
+    run_id: 'wsl2-nbd-1024-idle-fixture',
+    surface: 'wsl2-nbd',
+    slug: 'wsl2-nbd-product-readiness',
+    utc: { started: '2026-08-12T12:00:00.000Z', ended: '2026-08-12T12:02:00.000Z' },
+    source: {
+      commit: '1'.repeat(40),
+      dirty: false,
+      dirty_entry_count: 0,
+      invocation: 'Invoke-NbdBenchmarkMatrix.ps1 approved pair 1024-idle',
+      harness_revision: 'b'.repeat(64),
+    },
+    platform: {
+      kernel_release: '6.6.0-manufactured',
+      gpu_model: 'Manufactured GPU',
+      gpu_driver: '1.2.3',
+      zram: {
+        device: 'zram0',
+        algorithm: 'zstd',
+        size_kib: 1048576,
+        priority: 200,
+        identity_sha256: 'e'.repeat(64),
+      },
+      lower: { type: 'nbd', sink_type: 'directory', sink_identity_sha256: '6'.repeat(64) },
+    },
+    candidate: {
+      classification: 'candidate/noncanonical',
+      canonical: false,
+      publication_state: 'campaign-root-pending-repository-copy',
+      repository_artifact_root: artifactRoot.join('/'),
+      installed_manifest_sha256: '2'.repeat(64),
+      input_bundle_manifest_sha256: 'not_exposed',
+      pair_custody_sha256: sha256(custody),
+    },
+    workload: {
+      profile: 'anonymous_memory_sequential_write',
+      parameters: {
+        tier_mib: 1024,
+        condition: 'idle',
+        pattern: 'shake256-v1',
+        allocation_chunk_bytes: 67108864,
+        worker_threads: 1,
+        allocated_mib: 3584,
+      },
+      warmup_seconds: 0,
+      runs: 3,
+    },
+    comparison: {
+      platform_fingerprint: '',
+      baseline_run_id: 'candidate-self',
+      baseline_fingerprint: '',
+      qualified: false,
+      pair_environment_fingerprint: '3'.repeat(64),
+      baseline_verdict: 'BASELINE_CANDIDATE',
+    },
+    metrics: {
+      disk_allocation_to_hold_ms: publicMetric([100, 110, 120]),
+      nbd_allocation_to_hold_ms: publicMetric([105, 115, 125]),
+    },
+    lifecycle: {
+      before: { custody_sha256: 'c'.repeat(64) },
+      action: { pair_id: '1024-idle', mode_order: ['disk-only', 'nbd'] },
+      after: { terminal_state: 'PRODUCT_OFF', custody_sha256: 'd'.repeat(64) },
+      binary_match: true,
+      legitimate: { verdict: 'PASS' },
+      refusals: [{ name: 'approved_live_fixture_seams_forbidden', verdict: 'PASS' }],
+      cleanup: { complete: true },
+      residue: 0,
+    },
+    artifacts: [
+      artifact('pair-custody.json', custody),
+      artifact('pair-comparison.json', comparison),
+    ],
+    decision: {
+      verdict: 'BASELINE',
+      promotable: false,
+      gaps: ['baseline_absent', 'candidate/noncanonical'],
+      rollback_trigger: 'Any NBD identity, comparison, custody, cleanup, or repository-copy validation mismatch.',
+    },
+  }
+  record.comparison.platform_fingerprint = platformFingerprint(record)
+  record.comparison.baseline_fingerprint = record.comparison.platform_fingerprint
+  return { root, record, custodyPath }
+}
 
 function validRecord(overrides = {}) {
   const record = {
@@ -260,4 +393,24 @@ test('legacy_marker_cannot_promote', () => {
   const legacy = JSON.parse(readFileSync(legacyPath, 'utf8'))
   assert.equal(legacy.entries[0].qualified, true)
   assert.match(validateRepository({ root }).findings.join('\n'), /legacy-qualified/)
+})
+
+test('public_pair_evidence_matches_repository_validator_fixture', () => {
+  const fixture = wsl2PublicPairFixture()
+  try {
+    assert.deepEqual(validateRecord(fixture.record, { root: fixture.root }), [])
+
+    writeFileSync(fixture.custodyPath, '{"tampered":true}')
+    assert.match(validateRecord(fixture.record, { root: fixture.root }).join('\n'), /artifact-hash/)
+
+    const invalidLifecycle = structuredClone(fixture.record)
+    invalidLifecycle.lifecycle.binary_match = false
+    assert.match(validateRecord(invalidLifecycle, { root: fixture.root }).join('\n'), /lifecycle-incomplete/)
+
+    const invalidPromotion = structuredClone(fixture.record)
+    invalidPromotion.decision = { ...invalidPromotion.decision, verdict: 'PASS', promotable: true }
+    assert.match(validateRecord(invalidPromotion, { root: fixture.root }).join('\n'), /pass-not-qualified/)
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
 })

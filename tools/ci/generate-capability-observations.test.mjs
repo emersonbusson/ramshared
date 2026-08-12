@@ -39,7 +39,7 @@ function fixture() {
   return { root, policy }
 }
 
-test('observations_catalog_documented_spec_implementation_and_test_surfaces_without_promotion', (t) => {
+test('capability_observations_are_deterministic_and_checked', (t) => {
   const ctx = fixture()
   t.after(() => rmSync(ctx.root, { recursive: true, force: true }))
 

@@ -1178,13 +1178,28 @@
           "crates/ramshared-tier/src/lib.rs",
           "crates/ramshared-tier/src/nbd_readiness.rs",
           "crates/ramshared-wsl2d/src/state.rs",
+          "scripts/docs-check.sh",
+          "scripts/p0/Start-CudaVramWorkload.ps1",
           "scripts/package/build-linux-bundle.sh",
+          "scripts/safety/Test-CascadePressureIntegrityWorker.sh",
+          "scripts/safety/cascade-down.sh",
           "scripts/safety/cascade-up.sh",
+          "scripts/safety/cascade_pressure_integrity_worker.py",
           "scripts/safety/install-cascade-boot.sh",
+          "scripts/safety/nbd-benchmark-cell.sh",
+          "scripts/safety/nbd-benchmark-cgroup-launch.sh",
+          "scripts/safety/nbd-benchmark-lib.sh",
           "scripts/safety/nbd-product-preflight.sh",
-          "scripts/safety/test-nbd-product-preflight.sh"
+          "scripts/safety/test-nbd-benchmark-cell.sh",
+          "scripts/safety/test-nbd-product-preflight.sh",
+          "scripts/windows/Invoke-NbdBenchmarkMatrix.ps1",
+          "scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1",
+          "scripts/windows/Test-WindowsCiStatic.ps1"
         ],
-        "test_paths": []
+        "test_paths": [
+          "tools/ci/check-benchmark-evidence.test.mjs",
+          "tools/ci/generate-capability-observations.test.mjs"
+        ]
       },
       "documents": {
         "implementation": "docs/specs/no-milestone/wsl2-nbd-product-readiness/IMPL.md",
