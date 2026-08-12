@@ -1428,6 +1428,8 @@ function Get-NbdIdentity {
         $device = [string](Get-RequiredProperty -Object $nbd -Name "device")
         $blockMajorMinor = [string](Get-RequiredProperty -Object $nbd -Name "block_major_minor")
         $sizeKib = ConvertTo-StrictInt64 -Value (Get-RequiredProperty -Object $nbd -Name "size_kib") -Name "nbd_size_kib"
+        $capacitySectors = ConvertTo-StrictInt64 -Value (Get-RequiredProperty -Object $nbd -Name "capacity_sectors") -Name "nbd_capacity_sectors"
+        $usableSizeKib = ConvertTo-StrictInt64 -Value (Get-RequiredProperty -Object $nbd -Name "usable_size_kib") -Name "nbd_usable_size_kib"
         $priority = ConvertTo-StrictInt64 -Value (Get-RequiredProperty -Object $nbd -Name "priority") -Name "nbd_priority"
         $serverPid = ConvertTo-StrictInt64 -Value (Get-RequiredProperty -Object $nbd -Name "server_pid") -Name "nbd_server_pid"
         $daemonRelativePath = [string](Get-RequiredProperty -Object $nbd -Name "daemon_executable_relative_path")
@@ -1436,10 +1438,13 @@ function Get-NbdIdentity {
     } catch {
         throw ($FailurePrefix + "_nbd_identity_invalid")
     }
-    if ($ExpectedTierMiB -lt 1 -or $ExpectedTierMiB -gt ([int64]::MaxValue / 1024) -or
+    if ($ExpectedTierMiB -lt 1 -or $ExpectedTierMiB -gt ([int64]::MaxValue / 2048) -or
         $device -notmatch '^/dev/nbd[0-9]+$' -or
         $blockMajorMinor -notmatch '^[1-9][0-9]*:[0-9]+$' -or
-        $sizeKib -ne ($ExpectedTierMiB * 1024) -or $priority -ne 100 -or $serverPid -lt 1 -or
+        $sizeKib -ne ($ExpectedTierMiB * 1024) -or
+        $capacitySectors -ne ($ExpectedTierMiB * 2048) -or
+        $usableSizeKib -lt ($sizeKib - 8) -or $usableSizeKib -gt $sizeKib -or
+        $priority -ne 100 -or $serverPid -lt 1 -or
         $daemonRelativePath -cne "bin/ramsharedd") {
         throw ($FailurePrefix + "_nbd_identity_invalid")
     }
@@ -1453,6 +1458,8 @@ function Get-NbdIdentity {
         device = $device
         block_major_minor = $blockMajorMinor
         size_kib = $sizeKib
+        capacity_sectors = $capacitySectors
+        usable_size_kib = $usableSizeKib
         priority = $priority
         server_pid = $serverPid
         daemon_executable_relative_path = $daemonRelativePath
@@ -2223,7 +2230,8 @@ param(
             $newContext = {
                 param([hashtable]$Overrides)
                 $nbd = [ordered]@{
-                    device = "/dev/nbd0"; block_major_minor = "43:0"; size_kib = 1048576; priority = 100
+                    device = "/dev/nbd0"; block_major_minor = "43:0"; size_kib = 1048576
+                    capacity_sectors = 2097152; usable_size_kib = 1048572; priority = 100
                     server_pid = 4242; daemon_executable_relative_path = "bin/ramsharedd"
                     daemon_manifest_sha256 = ("e" * 64) -join ""; identity_sha256 = $lowerIdentity
                 }
@@ -2256,7 +2264,7 @@ param(
                 throw "manufactured_nbd_identity_positive_invalid"
             }
             foreach ($field in @(
-                "device", "block_major_minor", "size_kib", "priority", "server_pid",
+                "device", "block_major_minor", "size_kib", "capacity_sectors", "usable_size_kib", "priority", "server_pid",
                 "daemon_executable_relative_path", "daemon_manifest_sha256", "identity_sha256"
             )) {
                 & $assertIdentity @{ $field = $null } "manufactured_nbd_identity_invalid"
@@ -2264,6 +2272,8 @@ param(
             & $assertIdentity @{ device = "/dev/nvme0n1" } "manufactured_nbd_identity_invalid"
             & $assertIdentity @{ block_major_minor = "43-0" } "manufactured_nbd_identity_invalid"
             & $assertIdentity @{ size_kib = 1048575 } "manufactured_nbd_identity_invalid"
+            & $assertIdentity @{ capacity_sectors = 2097151 } "manufactured_nbd_identity_invalid"
+            & $assertIdentity @{ usable_size_kib = 1048567 } "manufactured_nbd_identity_invalid"
             & $assertIdentity @{ priority = 99 } "manufactured_nbd_identity_invalid"
             & $assertIdentity @{ server_pid = 0 } "manufactured_nbd_identity_invalid"
             & $assertIdentity @{ daemon_executable_relative_path = "bin/foreign" } "manufactured_nbd_identity_invalid"
@@ -2449,7 +2459,8 @@ Write-Output "[cuda-vram-workload] released"
                     }
                     if ($Mode -eq "nbd") {
                         $record["nbd"] = [pscustomobject]@{
-                            device = "/dev/nbd0"; block_major_minor = "43:0"; size_kib = 1048576; priority = 100
+                            device = "/dev/nbd0"; block_major_minor = "43:0"; size_kib = 1048576
+                            capacity_sectors = 2097152; usable_size_kib = 1048572; priority = 100
                             server_pid = 4242; daemon_executable_relative_path = "bin/ramsharedd"
                             daemon_manifest_sha256 = $scriptHash; identity_sha256 = $lowerIdentity
                         }
@@ -2629,7 +2640,8 @@ Write-Output "[cuda-vram-workload] released"
                         sink_type = "directory"; sink_identity_sha256 = ("d" * 64) -join ""
                     }
                     nbd = [ordered]@{
-                        device = "/dev/nbd0"; block_major_minor = "43:0"; size_kib = 1048576; priority = 100
+                        device = "/dev/nbd0"; block_major_minor = "43:0"; size_kib = 1048576
+                        capacity_sectors = 2097152; usable_size_kib = 1048572; priority = 100
                         server_pid = 4242; daemon_executable_relative_path = "bin/ramsharedd"
                         daemon_manifest_sha256 = ("e" * 64) -join ""; identity_sha256 = ("c" * 64) -join ""
                     }
@@ -2772,7 +2784,8 @@ Write-Output "[cuda-vram-workload] released"
                     }
                     if ($Mode -eq "nbd") {
                         $context | Add-Member -NotePropertyName "nbd" -NotePropertyValue ([pscustomobject]@{
-                            device = "/dev/nbd0"; block_major_minor = "43:0"; size_kib = 1048576; priority = 100
+                            device = "/dev/nbd0"; block_major_minor = "43:0"; size_kib = 1048576
+                            capacity_sectors = 2097152; usable_size_kib = 1048572; priority = 100
                             server_pid = 4242; daemon_executable_relative_path = "bin/ramsharedd"
                             daemon_manifest_sha256 = ("8" * 64) -join ""; identity_sha256 = ($lowerIdentityHashCharacter * 64) -join ""
                         })

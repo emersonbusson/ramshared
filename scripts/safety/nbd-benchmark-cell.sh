@@ -19,6 +19,7 @@ ALLOCATE_MIB=""
 MEMORY_HIGH_MIB=1200
 MEMORY_MAX_MIB=""
 CHUNK_MIB=64
+NBD_MKSWAP_OVERHEAD_KIB=8
 SEALED_RELEASE_ROOT=""
 RELEASE_VERSION=""
 EXPECTED_SOURCE_COMMIT=""
@@ -34,6 +35,8 @@ NBD_IDENTITY_REASON=""
 NBD_DEVICE=""
 NBD_BLOCK_MAJOR_MINOR=""
 NBD_SIZE_KIB=""
+NBD_USABLE_SIZE_KIB=""
+NBD_CAPACITY_SECTORS=""
 NBD_PRIORITY=""
 NBD_SERVER_PID=""
 NBD_DAEMON_MANIFEST_SHA256=""
@@ -370,12 +373,16 @@ derive_nbd_second_tier_identity() {
   local swaps_file=$1 sys_block_root=$2 dev_root=$3 proc_root=$4 pid_file=$5 daemon_path=$6
   local manifest_path=$7 lower_sink_identity=$8 fixture_mode=$9
   local line filename type size_kib used_kib priority remainder nbd_index="" nbd_name="" candidate_count=0
-  local device_path sys_device_path daemon_hash raw_exe resolved_exe pid expected_size_kib
+  local device_path sys_device_path sys_size_path daemon_hash raw_exe resolved_exe pid
+  local expected_size_kib expected_capacity_sectors
+  local -a capacity_lines=()
 
   NBD_IDENTITY_REASON=""
   NBD_DEVICE=""
   NBD_BLOCK_MAJOR_MINOR=""
   NBD_SIZE_KIB=""
+  NBD_USABLE_SIZE_KIB=""
+  NBD_CAPACITY_SECTORS=""
   NBD_PRIORITY=""
   NBD_SERVER_PID=""
   NBD_DAEMON_MANIFEST_SHA256=""
@@ -403,18 +410,19 @@ derive_nbd_second_tier_identity() {
     candidate_count=$((candidate_count + 1))
     nbd_name=nbd$nbd_index
     NBD_DEVICE=$filename
-    NBD_SIZE_KIB=$size_kib
+    NBD_USABLE_SIZE_KIB=$size_kib
     NBD_PRIORITY=$priority
   done <"$swaps_file"
   (( candidate_count >= 1 )) || { identity_fail NBD_IDENTITY_MISSING; return 1; }
   (( candidate_count == 1 )) || { identity_fail NBD_IDENTITY_DUPLICATE; return 1; }
   [[ $NBD_DEVICE == "/dev/$nbd_name" ]] || { identity_fail NBD_IDENTITY_FOREIGN_DEVICE; return 1; }
   expected_size_kib=$((TIER_MIB * 1024))
-  [[ $NBD_SIZE_KIB == "$expected_size_kib" ]] || { identity_fail NBD_IDENTITY_SIZE_MISMATCH; return 1; }
+  expected_capacity_sectors=$((expected_size_kib * 2))
   [[ $NBD_PRIORITY == 100 ]] || { identity_fail NBD_IDENTITY_PRIORITY_MISMATCH; return 1; }
 
   device_path="$dev_root/$nbd_name"
   sys_device_path="$sys_block_root/$nbd_name/dev"
+  sys_size_path="$sys_block_root/$nbd_name/size"
   if [[ $fixture_mode == 1 ]]; then
     [[ -f $device_path && ! -L $device_path ]] || { identity_fail NBD_IDENTITY_FOREIGN_DEVICE; return 1; }
   else
@@ -423,6 +431,27 @@ derive_nbd_second_tier_identity() {
   [[ -f $sys_device_path && ! -L $sys_device_path ]] || { identity_fail NBD_IDENTITY_FOREIGN_DEVICE; return 1; }
   NBD_BLOCK_MAJOR_MINOR=$(tr -d '[:space:]' <"$sys_device_path")
   [[ $NBD_BLOCK_MAJOR_MINOR =~ ^[0-9]+:[0-9]+$ ]] || { identity_fail NBD_IDENTITY_FOREIGN_DEVICE; return 1; }
+  [[ -f $sys_size_path && ! -L $sys_size_path ]] \
+    || { identity_fail NBD_IDENTITY_SYSFS_CAPACITY_INVALID; return 1; }
+  mapfile -t capacity_lines <"$sys_size_path" \
+    || { identity_fail NBD_IDENTITY_SYSFS_CAPACITY_INVALID; return 1; }
+  (( ${#capacity_lines[@]} == 1 )) \
+    || { identity_fail NBD_IDENTITY_SYSFS_CAPACITY_INVALID; return 1; }
+  NBD_CAPACITY_SECTORS=${capacity_lines[0]}
+  # The supported tiers need at most seven decimal digits. Bound untrusted
+  # decimal text before Bash arithmetic so an over-width value cannot wrap.
+  [[ $NBD_CAPACITY_SECTORS =~ ^[1-9][0-9]{0,7}$ ]] \
+    || { identity_fail NBD_IDENTITY_SYSFS_CAPACITY_INVALID; return 1; }
+  [[ $NBD_CAPACITY_SECTORS == "$expected_capacity_sectors" ]] \
+    || { identity_fail NBD_IDENTITY_CAPACITY_MISMATCH; return 1; }
+  [[ $NBD_USABLE_SIZE_KIB =~ ^[1-9][0-9]{0,7}$ ]] \
+    || { identity_fail NBD_IDENTITY_USABLE_SIZE_INVALID; return 1; }
+  (( NBD_USABLE_SIZE_KIB >= expected_size_kib - NBD_MKSWAP_OVERHEAD_KIB && \
+    NBD_USABLE_SIZE_KIB <= expected_size_kib )) \
+    || { identity_fail NBD_IDENTITY_USABLE_SIZE_INVALID; return 1; }
+  # Keep the context and identity normalized to the exact block capacity. The
+  # /proc/swaps value is an observed mkswap usable-size detail, not capacity.
+  NBD_SIZE_KIB=$expected_size_kib
 
   grep -qx '[1-9][0-9]*' "$pid_file" || { identity_fail NBD_IDENTITY_SERVER_PID_INVALID; return 1; }
   pid=$(tr -d '[:space:]' <"$pid_file")
@@ -487,6 +516,8 @@ if [[ $ACTION == validate-nbd-identity-fixture ]]; then
   printf 'NBD_IDENTITY_STATE=PASS\n'
   printf 'NBD_DEVICE=%s\n' "$NBD_DEVICE"
   printf 'NBD_BLOCK_MAJOR_MINOR=%s\n' "$NBD_BLOCK_MAJOR_MINOR"
+  printf 'NBD_CAPACITY_SECTORS=%s\n' "$NBD_CAPACITY_SECTORS"
+  printf 'NBD_USABLE_SIZE_KIB=%s\n' "$NBD_USABLE_SIZE_KIB"
   printf 'NBD_SIZE_KIB=%s\n' "$NBD_SIZE_KIB"
   printf 'NBD_PRIORITY=%s\n' "$NBD_PRIORITY"
   printf 'NBD_SERVER_PID=%s\n' "$NBD_SERVER_PID"
@@ -700,7 +731,8 @@ republish_sample_baseline() {
 write_live_context_v2() {
   local preflight kernel manifest_sha zram_device zram_name zram_algorithm zram_size_kib zram_priority
   local lower_kind lower_identity binary_match input_bundle_manifest_sha
-  local nbd_device nbd_block_major_minor nbd_size_kib nbd_priority nbd_server_pid nbd_daemon_manifest_sha
+  local nbd_device nbd_block_major_minor nbd_size_kib nbd_usable_size_kib nbd_capacity_sectors
+  local nbd_priority nbd_server_pid nbd_daemon_manifest_sha
   preflight="$ARTIFACT_DIR/preflight-off.txt"
   [[ $MODE == nbd ]] && preflight="$ARTIFACT_DIR/preflight-ready.txt"
   kernel=$(uname -r)
@@ -723,6 +755,8 @@ write_live_context_v2() {
     nbd_device=$NBD_DEVICE
     nbd_block_major_minor=$NBD_BLOCK_MAJOR_MINOR
     nbd_size_kib=$NBD_SIZE_KIB
+    nbd_usable_size_kib=$NBD_USABLE_SIZE_KIB
+    nbd_capacity_sectors=$NBD_CAPACITY_SECTORS
     nbd_priority=$NBD_PRIORITY
     nbd_server_pid=$NBD_SERVER_PID
     nbd_daemon_manifest_sha=$NBD_DAEMON_MANIFEST_SHA256
@@ -733,6 +767,8 @@ write_live_context_v2() {
     nbd_device=""
     nbd_block_major_minor=""
     nbd_size_kib=""
+    nbd_usable_size_kib=""
+    nbd_capacity_sectors=""
     nbd_priority=""
     nbd_server_pid=""
     nbd_daemon_manifest_sha=""
@@ -742,7 +778,8 @@ write_live_context_v2() {
     "$SOURCE_COMMIT" "$SOURCE_BRANCH" "$SOURCE_TREE_STATE" "$PAIR_ID" "$UTC_STARTED" "$RELEASE" "$zram_name" \
     "$zram_algorithm" "$zram_size_kib" "$zram_priority" "$lower_kind" "$lower_identity" \
     "$LOWER_SINK_TYPE" "$LOWER_SINK_IDENTITY_SHA256" "$binary_match" "$input_bundle_manifest_sha" \
-    "$nbd_device" "$nbd_block_major_minor" "$nbd_size_kib" "$nbd_priority" "$nbd_server_pid" \
+    "$nbd_device" "$nbd_block_major_minor" "$nbd_size_kib" "$nbd_usable_size_kib" \
+    "$nbd_capacity_sectors" "$nbd_priority" "$nbd_server_pid" \
     "$nbd_daemon_manifest_sha" <<'PY'
 import hashlib
 import json
@@ -753,7 +790,8 @@ import sys
  kernel, manifest_sha, source_commit, source_branch, source_tree_state, pair_id, utc_started, release_root,
  zram_name, zram_algorithm, zram_size_kib, zram_priority, lower_kind, lower_identity,
  sink_type, sink_identity, binary_match, input_bundle_manifest_sha, nbd_device, nbd_block_major_minor,
- nbd_size_kib, nbd_priority, nbd_server_pid, nbd_daemon_manifest_sha) = sys.argv[1:]
+ nbd_size_kib, nbd_usable_size_kib, nbd_capacity_sectors, nbd_priority, nbd_server_pid,
+ nbd_daemon_manifest_sha) = sys.argv[1:]
 fields = {}
 with open(preflight_path, encoding="utf-8") as source:
     for line in source:
@@ -839,6 +877,8 @@ if mode == "nbd":
         "device": nbd_device,
         "block_major_minor": nbd_block_major_minor,
         "size_kib": int(nbd_size_kib),
+        "usable_size_kib": int(nbd_usable_size_kib),
+        "capacity_sectors": int(nbd_capacity_sectors),
         "priority": int(nbd_priority),
         "server_pid": int(nbd_server_pid),
         "daemon_executable_relative_path": "bin/ramsharedd",
@@ -1006,8 +1046,9 @@ if [[ $MODE == nbd ]]; then
     || refuse "$NBD_IDENTITY_REASON"
   ACTION_BINARY_MATCH=PASS
   expected_kib=$((TIER_MIB * 1024))
-  actual_kib=$(awk '$1 ~ /\/nbd[0-9]+$/ { print $3 }' "$SWAPS_FILE")
-  [[ $actual_kib =~ ^[0-9]+$ && $actual_kib -ge $((expected_kib - 8)) && $actual_kib -le $((expected_kib + 8)) ]] || refuse NBD_SIZE_MISMATCH
+  actual_kib=$NBD_USABLE_SIZE_KIB
+  [[ $actual_kib =~ ^[0-9]+$ && $actual_kib -ge $((expected_kib - NBD_MKSWAP_OVERHEAD_KIB)) \
+    && $actual_kib -le $expected_kib ]] || refuse NBD_IDENTITY_USABLE_SIZE_INVALID
 else
   create_zram_control
   create_disk_scratch

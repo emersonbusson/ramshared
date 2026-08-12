@@ -4,11 +4,11 @@
 
 ## Status
 
-`partial` · cover ✓ · E2E partial (historical 1 GiB pilot only) · BINARY_MATCH
-partial (historical pilot only). The corrected implementation and local
-static/manufactured gates are green. The new ordered 1/2/4 GiB Windows/WSL2
-matrix has not run on the reviewed release, so this is not DONE and no new
-live claim is made.
+`partial` · local static/manufactured gates green · cover ✓ · E2E partial ·
+BINARY_MATCH partial. Attempt 10 proved the corrected 1 GiB disk-only cell and
+reached NBD `READY`/`BINARY_MATCH=PASS`, but NBD sampling remains open after a
+pre-sample identity refusal. The complete ordered 1/2/4 GiB Windows/WSL2
+matrix has not run on the corrected release, so this is not DONE.
 
 ## Files
 
@@ -18,13 +18,13 @@ live claim is made.
 | `crates/ramshared-cli/src/cascade/cascade_io.rs` | ITEM-4 / RF-NBD-10,12 | Teardown executor proves swapoff before NBD disconnect/daemon stop through an injected plan. |
 | `scripts/safety/nbd-product-preflight.sh` | ITEM-1..4,6 / RF-NBD-1..10,19 | Sealed installed-release, lower-sink, Relay, state, BINARY_MATCH, no-reboot, and live-seam gates. |
 | `scripts/safety/install-cascade-boot.sh` | ITEM-2,8 / RF-NBD-2,13 | Attended lower-sink-bound install, provenance, immutable backup, selector transaction, and rollback frontiers. |
-| `scripts/safety/nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14,15,17,18,19,20 | Disk/NBD cell, common zram topology, cgroup-before-start occupancy, exact scratch identity, exact device-name classification, cleanup, comparison, and internal custody envelope. |
+| `scripts/safety/nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14,15,17,18,19,20 | Disk/NBD cell, common zram topology, cgroup-before-start occupancy, exact scratch identity, exact device-name classification, sysfs-derived NBD capacity with bounded mkswap usable-size validation, cleanup, comparison, and internal custody envelope. |
 | `scripts/safety/nbd-benchmark-cgroup-launch.sh` | ITEM-5 / RF-NBD-15 | In-cgroup launcher and create-once start barrier. |
 | `scripts/safety/nbd-benchmark-lib.sh` | ITEM-5 / RF-NBD-14,17 | Identity-bound scratch and swapoff-first helpers. |
-| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Nineteen manufactured/refusal suites for topology, identity, exact device-name classification, cgroup bounds, exact republication, activity receipts, scratch/zram, occupancy, cleanup, seams, custody, and aggregation. |
+| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Twenty-two manufactured/refusal suites for topology, identity, exact device-name classification, all supported sysfs capacities, bounded mkswap usable size, overflow/trailing-field refusal, cgroup bounds, exact republication, activity receipts, cleanup, seams, custody, and aggregation. |
 | `scripts/p0/Start-CudaVramWorkload.ps1` | ITEM-5 / RF-NBD-16,17 | Fresh pair-scoped CUDA handshakes and unconditional cleanup. |
-| `scripts/windows/Invoke-NbdBenchmarkMatrix.ps1` | ITEM-5..7 / RF-NBD-6,16..20 | Bounded Windows/WSL controller, numeric headroom, pair custody, promotion order, watchdog classification, and public pair envelope. |
-| `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | ITEM-5..7 / RF-NBD-16..20 | PowerShell static/manufactured contract and refusal checks. |
+| `scripts/windows/Invoke-NbdBenchmarkMatrix.ps1` | ITEM-5..7 / RF-NBD-6,16..20 | Bounded Windows/WSL controller, numeric headroom, strict NBD capacity/usable-size custody, pair custody, promotion order, watchdog classification, and public pair envelope. |
+| `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | ITEM-5..7 / RF-NBD-16..20 | PowerShell static/manufactured contract and refusal checks, including strict NBD capacity/usable-size custody. |
 | `scripts/windows/Test-WindowsCiStatic.ps1` | ITEM-7 / RF-NBD-17..19 | Windows static wrapper includes the matrix harness. |
 | `scripts/package/build-linux-bundle.sh` | ITEM-2,5 / RF-NBD-2,9,18 | Universal unbound input bundle with source identity and input manifest; binding occurs only in attended install. |
 | `tools/ci/check-benchmark-evidence.test.mjs` | ITEM-7 / RF-NBD-11,18,20 | Public pair evidence schema validator fixture, 15/15 tests. |
@@ -38,7 +38,7 @@ live claim is made.
   `failed_swapoff_keeps_daemon_and_device_alive`, and
   `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` are
   present and pass in the CLI suite.
-- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 19/19;
+- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 22/22;
   `bash scripts/safety/test-nbd-product-preflight.sh` → 26/26.
 - Public evidence: `node --test tools/ci/check-benchmark-evidence.test.mjs`
   → 15/15, including the sanitized pair-envelope fixture and custody rules.
@@ -54,6 +54,12 @@ live claim is made.
   `windows_static_wrapper_includes_nbd_benchmark_harness` and
   `windows_static_suite_runs_named_static_harnesses`. No live CUDA or
   Windows/WSL matrix is claimed here.
+- DT-NBD-40 RED→GREEN: the shell reproducer first proved that
+  `18446744073710600192` wrapped to a valid size in Bash; the Windows
+  reproducer independently showed missing, malformed, wrong, and overflowing
+  capacity/usable fields were accepted. Bounded decimal validation and strict
+  Windows custody now make both named tests green, including 1/2/4 GiB and
+  trailing-field cases. Independent Gate A remains required before commit.
 - First live campaign attempt: exited before any benchmark cell because
   PowerShell 5.1 rejected a multi-character `TrimStart` argument in the matrix
   inventory writer. The new exact manufactured test
@@ -109,14 +115,27 @@ live claim is made.
   `swap_device_classifier_requires_exact_device_names` and the local cell
   harness is 19/19; the live matrix remains open and no completion claim is
   made.
+- Attempt 10 (2026-08-12, reviewed release source `38e49ff`, before the
+  capacity/usable-size correction): the disk-only cell completed all three
+  samples and passed its integrity, occupancy, and cleanup gates. The NBD
+  cell reached `READY` with `BINARY_MATCH=PASS`, then refused before its first
+  sample because `/proc/swaps` reported the valid 1 GiB usable size of
+  `1048572 KiB` while the harness incorrectly required `1048576 KiB` as the
+  block capacity. Cleanup was verified as `PRODUCT_OFF`, with only the
+  pre-existing `/dev/sdc` remaining in `/proc/swaps`. The corrected contract
+  now reads exact sectors from `/sys/block/nbdN/size`, permits at most 8 KiB
+  of mkswap usable-size loss, keeps context `nbd.size_kib` at the exact tier,
+  and records the observed usable size separately; no live rerun has been
+  performed in this task.
 
 ## SPEC matrix → named tests
 
-The corrected implementation has local coverage for all source/static/
-manufactured names in SPEC § Required tests matrix, including the 19 cell
-tests, 26 preflight suites, fresh CUDA handshake/refusal checks, bounded WSL
-controller checks, exact ratio/baseline mappings, public-pair custody, and
-`sealed_bundle_contains_benchmark_runner_and_worker`. The live rows
+The corrected implementation has local coverage for its source/static/
+manufactured names, including the 22 cell tests, 26 preflight suites, fresh
+CUDA handshake/refusal checks, bounded WSL controller checks, exact
+ratio/baseline mappings, public-pair custody, and
+`sealed_bundle_contains_benchmark_runner_and_worker`, and both DT-NBD-40
+names. The live rows
 `nbd_lifecycle_before_action_after`, `relay_gate_before_action_after`, and
 `NBD_BENCHMARK_MATRIX` remain environment-bound.
 
