@@ -813,9 +813,15 @@ import sys
 if tuple(sys.argv[1:]) not in (("--", "/dev/nbd0"), ("--", "/dev/zram0")):
     raise SystemExit("unexpected_swapoff_argv")
 path = sys.argv[-1]
+if os.environ.get("RECONNECT_FORGED_REASON") == "1":
+    print("NBD_REPUBLICATION_REASON=FORGED_BY_COMMAND", file=sys.stderr)
 if os.environ.get("RECONNECT_FAIL_STAGE") == "swapoff:" + path:
     raise SystemExit(31)
 swaps = os.environ["SWAPS_FIXTURE"]
+if os.environ.get("RECONNECT_FAIL_STAGE") == "swapoff-no-remove:" + path:
+    with open(os.environ["ORDER_FIXTURE"], "a", encoding="utf-8") as target:
+        target.write("off-no-remove:" + path + "\n")
+    raise SystemExit(0)
 with open(swaps, encoding="utf-8") as source:
     lines = source.readlines()
 with open(swaps, "w", encoding="utf-8") as target:
@@ -830,6 +836,8 @@ import sys
 
 if sys.argv[1:] != ["-L", "RAMSHARED", "--", "/dev/nbd0"]:
     raise SystemExit("unexpected_mkswap_argv")
+if os.environ.get("RECONNECT_FORGED_REASON") == "1":
+    print("NBD_REPUBLICATION_REASON=FORGED_BY_COMMAND", file=sys.stderr)
 if os.environ.get("RECONNECT_FAIL_STAGE") == "mkswap":
     raise SystemExit(33)
 with open(os.environ["ORDER_FIXTURE"], "a", encoding="utf-8") as target:
@@ -886,13 +894,18 @@ EOF
 
   assert_reconnect_refusal() {
     local name=$1 expected_reason=$2 fail_stage=${3:-} topology_drift=${4:-0}
+    local pre_topology_drift=${5:-0} forged_reason=${6:-0} parsed_reason
     cp -- "$TMP/disk-control-swaps" "$reconnect_swaps"
     sed -i "s|$scratch file 8388604 0 100|/dev/nbd0 partition 1048572 0 100|" "$reconnect_swaps"
+    if [[ $pre_topology_drift == 1 ]]; then
+      printf '/dev/nbd9 partition 1048572 0 100\n' >>"$reconnect_swaps"
+    fi
     : >"$reconnect_order"
     set +e
     output=$(SWAPS_FIXTURE="$reconnect_swaps" ORDER_FIXTURE="$reconnect_order" \
       RECONNECT_FAIL_STAGE="$fail_stage" \
       RECONNECT_TOPOLOGY_DRIFT="$topology_drift" \
+      RECONNECT_FORGED_REASON="$forged_reason" \
       nbd_preserved_connection_republish_swap_pair "$reconnect_swaps" /dev/zram0 /dev/nbd0 \
         "$swapoff_cmd" "$mkswap_cmd" "$swapon_cmd" 2>&1)
     rc=$?
@@ -901,8 +914,10 @@ EOF
       printf 'FAIL %s accepted an invalid reconnect transaction: %s\n' "$name" "$output" >&2
       exit 1
     }
-    grep -Fqx "NBD_REPUBLICATION_REASON=$expected_reason" <<<"$output" || {
-      printf 'FAIL %s did not persist exact reason %s: %s\n' "$name" "$expected_reason" "$output" >&2
+    parsed_reason=$(nbd_republication_reason_from_output "$output")
+    [[ $parsed_reason == "$expected_reason" && $parsed_reason != *$'\n'* ]] || {
+      printf 'FAIL %s did not collapse to exact reason %s: raw=%s parsed=%s\n' \
+        "$name" "$expected_reason" "$output" "$parsed_reason" >&2
       exit 1
     }
     ! grep -Eq 'attach:|detach:' "$reconnect_order" || {
@@ -911,11 +926,14 @@ EOF
     }
   }
 
+  assert_reconnect_refusal pre_topology_invalid NBD_REPUBLICATION_PRE_TOPOLOGY_INVALID '' 0 1
   assert_reconnect_refusal nbd_swapoff_failure NBD_REPUBLICATION_SWAPOFF_NBD_FAILED swapoff:/dev/nbd0
   ! grep -Fq 'off:/dev/zram0' "$reconnect_order" || {
     echo 'FAIL NBD swapoff refusal advanced to zram swapoff' >&2
     exit 1
   }
+  assert_reconnect_refusal zram_swapoff_failure NBD_REPUBLICATION_SWAPOFF_ZRAM_FAILED swapoff:/dev/zram0
+  assert_reconnect_refusal swap_absence_failure NBD_REPUBLICATION_SWAP_ABSENCE_FAILED swapoff-no-remove:/dev/zram0
   assert_reconnect_refusal mkswap_failure NBD_REPUBLICATION_MKSWAP_FAILED mkswap
   ! grep -Fq 'on:' "$reconnect_order" || {
     echo 'FAIL mkswap refusal advanced to swapon' >&2
@@ -932,6 +950,7 @@ EOF
     echo 'FAIL topology refusal did not reach the post-publish verifier' >&2
     exit 1
   }
+  assert_reconnect_refusal forged_child_reason NBD_REPUBLICATION_TRANSACTION_FAILED mkswap 0 0 1
 
   ! grep -Eq 'attach:|detach:' "$reconnect_order" || {
     echo 'FAIL connected NBD republication performed an attach or detach' >&2
@@ -954,7 +973,7 @@ EOF
 
 test_nbd_sample_connected_republication_contract
 
-reconnect_calls=$(grep -Fc 'nbd_preserved_connection_republish_swap_pair "$SWAPS_FILE" "$zdev" "$lower"' "$CELL" || true)
+reconnect_calls=$(grep -Fc 'transaction_output=$(nbd_preserved_connection_republish_swap_pair' "$CELL" || true)
 disk_republish_calls=$(grep -Fc 'nbd_republish_swap_pair "$SWAPS_FILE" "$zdev" "$lower" "$lower_type"' "$CELL" || true)
 [[ $reconnect_calls == 1 && $disk_republish_calls == 1 ]] || {
   echo 'FAIL NBD and disk sample republication paths are not both explicit' >&2

@@ -77,7 +77,11 @@ the frozen connection-preserving candidate with zero findings.
   requires `mkswap -L RAMSHARED`, publishes zram/NBD in 200/100 order, and
   validates exact topology. The production caller re-derives equal identity
   and repeats pinned `BINARY_MATCH`; disk-only retains the generic scratch
-  republish path.
+  republish path. After Attempt 13 exposed another generic refusal, checkpoint
+  `7b33d20` required stable stage receipts. All eight transaction frontiers and
+  forged child output are now executed; cardinality-safe parsing emits one
+  owned reason or one fallback. Fresh independent Gate A passed this frozen
+  diagnostic-custody candidate.
 - DT-NBD-42 RED→GREEN: the focused injected runtime received only one reply
   from two sequential connection generations because the first balanced
   `Closed` terminated the simple worker. The corrected runtime treats zero
@@ -179,6 +183,17 @@ the frozen connection-preserving candidate with zero findings.
   pre-existing `/dev/sdc` swap with no RamShared process. The connection-
   preserving DT-NBD-41 correction is local-only and requires a new sealed
   release plus fresh approved matrix rerun.
+- Attempt 13 (2026-08-12, reviewed release source `73e1977`): disk-only again
+  completed 3/3 with integrity, occupancy, and cleanup. NBD sample one reached
+  HOLD and passed integrity, then returned the same generic
+  `BASELINE_REPUBLICATION_FAILED`; cleanup was bounded and left only
+  `/dev/sdc`. A separate supervised no-pressure lifecycle diagnostic proved
+  that the same connected `/dev/nbd0` retained its kernel PID after swapoff,
+  accepted `mkswap`, and republished at zram/NBD priorities 200/100. This
+  isolates the remaining failure to a post-load frontier that the generic
+  reason concealed. Checkpoint `7b33d20` now requires stable per-stage
+  republication reasons; its GREEN implementation is diagnostic custody, not
+  completion evidence, and requires sealing plus a fresh run.
 
 ## SPEC matrix → named tests
 
