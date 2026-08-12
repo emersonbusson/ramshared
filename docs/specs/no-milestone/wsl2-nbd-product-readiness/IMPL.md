@@ -65,6 +65,12 @@ live claim is made.
   one extra backslash before embedded quotes and corrupted the Bash argument.
   `windows_command_line_preserves_exact_wsl_shell_argument` now runs a real
   child process and requires the complex argument to arrive byte-exactly.
+- Third live campaign attempt: the corrected CRT encoder preserved an ordinary
+  child argument, but the nested Bash/Python discovery program was still
+  reparsed by `wsl.exe` and exited 127 before any cell. Discovery no longer
+  transports an inline shell program: bounded direct `readlink`, `cat`, and
+  `sha256sum` argv return the sealed records, and PowerShell validates the exact
+  installed manifest, input manifest, source state, and provenance.
 
 ## SPEC matrix → named tests
 
