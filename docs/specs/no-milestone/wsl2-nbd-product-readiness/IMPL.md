@@ -54,6 +54,11 @@ live claim is made.
   `windows_static_wrapper_includes_nbd_benchmark_harness` and
   `windows_static_suite_runs_named_static_harnesses`. No live CUDA or
   Windows/WSL matrix is claimed here.
+- First live campaign attempt: exited before any benchmark cell because
+  PowerShell 5.1 rejected a multi-character `TrimStart` argument in the matrix
+  inventory writer. The new exact manufactured test
+  `matrix_inventory_is_ps51_safe_and_repository_relative` reproduces and
+  closes that pre-cell failure; the failed attempt retained `PRODUCT_OFF`.
 
 ## SPEC matrix → named tests
 
