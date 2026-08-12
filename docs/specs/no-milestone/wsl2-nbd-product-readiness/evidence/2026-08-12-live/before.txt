@@ -1,0 +1,35 @@
+2026-08-12T13:56:34Z
+[ramshared status]
+phase: UsingDisk (disk_used_ge_threshold)
+ok: true
+zram: present=false prio=null size_kib=0 used_kib=0
+vram: present=false prio=null size_kib=0 used_kib=0
+disk: present=true prio=-2 size_kib=4194304 used_kib=3518416
+daemon: dead pid=null
+demote: total=? last_reason=? in_progress=false
+ghost: false order_ok: true active_kib: 1024
+
+NAME     TYPE      SIZE USED PRIO
+/dev/sdc partition   4G 3.4G   -2
+[swaps]
+Filename				Type		Size		Used		Priority
+/dev/sdc                                partition	4194304		3518416		-2
+[systemd]
+inactive
+disabled
+[relay]
+{"schema_version":1,"timestamp_utc":"2026-08-12T13:56:37Z","mode":"check","inspected":0,"candidates":[],"candidate_count":0,"term_survivors":0,"kill_survivors":0,"duration_ms":0,"reason":"clean","verdict":"CLEAN"}
+[preflight]
+NBD_RELEASE_VERSION=v0.8.0-8-g0b09518
+NBD_RELEASE_MANIFEST_SHA256=5c17eebc622294cd86fc7f29144a0190a3a4c5d0707097f3df698f1f2c55af3e
+NBD_RELEASE_GATE=PASS
+NBD_SELECTOR=PASS
+NBD_LOWER_FREE_BYTES=894819336192
+NBD_LOWER_REQUIRED_BYTES=1610612736
+NBD_LOWER_TIER_CAPACITY=PASS
+NBD_RELAY_GATE=PASS
+NBD_BINARY_MATCH=NOT_APPLICABLE
+NBD_UBLK_MODULE=LOADED_INERT
+NBD_TRANSPORT=none
+NBD_PRODUCT_STATE=PRODUCT_OFF
+NBD_READINESS_REASON=product_off

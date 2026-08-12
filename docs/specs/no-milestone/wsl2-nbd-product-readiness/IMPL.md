@@ -2,9 +2,10 @@
 
 ## Status
 
-**SSDV3 Step 3: `PARTIAL` (source/static/manufactured only).** No live WSL2
-NBD lifecycle, Relay, benchmark, daemon identity, device, service, swap, or
-host operation was run for this record.
+**SSDV3 Step 3: `PARTIAL` (source/static/manufactured plus one supervised
+live WSL2 NBD pilot).** The 1 GiB NBD lifecycle, Relay before/action/after,
+daemon identity, device, and swap ordering are live-verified. The required
+1/2/4 GiB benchmark matrix remains unrun, so this is not DONE.
 
 | Local gate | Exact result |
 | --- | --- |
@@ -29,21 +30,21 @@ host operation was run for this record.
 | Installer rollback | `scripts/safety/install-cascade-boot.sh` has 20 named post-write markers; `scripts/safety/test-nbd-product-preflight.sh` injects a failure after each marker in a temporary fixture |
 | Legacy unit migration | A conflicting unit remains a refusal unless a second approval supplies its exact SHA-256. The manufactured migration test proves absent/stale approvals do not mutate it; an injected final-phase failure restores the old unit from a sealed backup. |
 | Read-only product preflight | `scripts/safety/nbd-product-preflight.sh` and the same 22-suite manufactured harness |
+| Live 1 GiB activation | `evidence/2026-08-12-live/{before.txt,action-sudo.txt,after-active.txt,binary-match.txt}`; `/dev/zram0` priority 200, `/dev/nbd0` priority 100, disk priority -2, Relay clean, and `BINARY_MATCH=PASS` |
 
 ## Evidence matrix and open gaps
 
 | Required evidence | Local result | Live/E2E result | Status |
 | --- | --- | --- | --- |
-| `nbd_lifecycle_before_action_after` | Pure injected ordering/refusal only | Not run | `PARTIAL` / environment-bound |
-| `relay_gate_before_action_after` | Read-only manufactured refusal only | Not run | `PARTIAL` / environment-bound |
+| `nbd_lifecycle_before_action_after` | Pure injected ordering/refusal | Live 1 GiB pilot passed: before disk-only, action created zram/NBD, after priorities were 200/100/-2 with no ghost | `PARTIAL` / benchmark matrix remains |
+| `relay_gate_before_action_after` | Read-only manufactured refusal | Live Relay checks were `CLEAN` before and after, with zero candidates | `PASS` for the 1 GiB pilot |
 | `NBD_BENCHMARK_MATRIX` | Schema only | No 1/2/4 GiB cells or n≥3 statistics | `PARTIAL` / environment-bound |
-| `BINARY_MATCH` | Static stale/deleted daemon refusal only | **N/A / not run**; no live daemon or selected release | `PARTIAL` |
-| Sealed installer transaction | 20-phase rollback and legacy-unit migration manufactured tests | A first attended install on 2026-08-12 correctly refused `PRODUCT_UNIT_CONFLICT`; the legacy migration is not yet installed or live-verified | `PARTIAL` |
+| `BINARY_MATCH` | Static stale/deleted daemon refusal | Live `ramsharedd` executable and selected sealed binary both resolved to `/opt/ramshared/releases/v0.8.0-8-g0b09518/bin/ramsharedd` | `PASS` for the 1 GiB pilot |
+| Sealed installer transaction | 20-phase rollback and legacy-unit migration manufactured tests | Attended install migrated the approved legacy unit, retained a root-owned immutable backup, selected `v0.8.0-8-g0b09518`, and kept the service disabled | `PASS` for the installed release |
 
-Open gaps are an approved WSL2 NBD surface, a named sealed release and live
-daemon for `BINARY_MATCH`, Relay before/action/after evidence, and the ordered
-1/2/4 GiB matrix. Root `validation.md` is intentionally not updated because
-there is no live before → action → after evidence.
+The open gap is the ordered 1/2/4 GiB benchmark matrix with n>=3 and
+median/p99/deviation. `validation.md` records the supervised 1 GiB
+before → action → after evidence; no benchmark claim is inferred from it.
 
 ## Numeric rollback trigger
 
