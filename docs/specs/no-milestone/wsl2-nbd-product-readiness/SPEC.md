@@ -369,7 +369,7 @@ environment-bound and are not inferred from a manufactured test.
 | --- | --- | --- | --- |
 | `nbd_lifecycle_before_action_after` | Injected ordering/refusal plus live pilot | `PASS` at 1 GiB | Live before/action/after exists; larger-size lifecycle remains coupled to the matrix. |
 | `relay_gate_before_action_after` | Manufactured refusals plus live read-only gate | `PASS` for the pilot | Relay was clean before/after without automatic reap. |
-| `NBD_BENCHMARK_MATRIX` | Corrected cell/preflight/controller implementation; cell 23/23 including connection-preserving NBD republication, preflight 26/26, public-evidence validator 15/15, complete Windows static wrapper, reconnect-capable simple daemon runtime, and fresh independent Gate A PASS | `PARTIAL` / `NO-GO` | The new republication correction still requires sealed deployment; no complete 1/2/4 GiB disk-only/NBD n=3 matrix has run on that reviewed release. |
+| `NBD_BENCHMARK_MATRIX` | Corrected cell/preflight/controller implementation; cell 24/24 including exact initial-pair admission and connection-preserving NBD republication, preflight 26/26, public-evidence validator 15/15, complete Windows static wrapper, reconnect-capable simple daemon runtime, and fresh independent Gate A PASS | `PARTIAL` / `NO-GO` | The initial-pair correction requires sealed deployment; no complete 1/2/4 GiB disk-only/NBD n=3 matrix has run on that reviewed release. |
 | `BINARY_MATCH` | Static refusals plus live selected release | `PASS` for the pilot | Each matrix NBD cell must repeat the identity proof. |
 
 ### Benchmark matrix
