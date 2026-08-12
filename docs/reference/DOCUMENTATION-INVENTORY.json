@@ -2,13 +2,25 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Markdown paths visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 223,
-    "classified": 212,
+    "total": 235,
+    "classified": 224,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
   },
   "entries": [
+    {
+      "path": ".claude/rules/agent-orchestration.md",
+      "disposition": "classified",
+      "ruleId": "agent-rules",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "agent-governance",
+      "canonicalSource": ".claude/rules/documentation.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
     {
       "path": ".claude/rules/benchmarks.md",
       "disposition": "classified",
@@ -1644,6 +1656,54 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/specs/no-milestone/microsoft-native-vram-memory-tier/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/microsoft-native-vram-memory-tier/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/microsoft-native-vram-memory-tier/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/microsoft-native-vram-memory-tier/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
       "path": "docs/specs/no-milestone/public-repository-hygiene/IMPL.md",
       "disposition": "classified",
       "ruleId": "ssdv3-implementation-records",
@@ -1669,6 +1729,42 @@
     },
     {
       "path": "docs/specs/no-milestone/public-repository-hygiene/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/release-promotion-publication/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/release-promotion-publication/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/release-promotion-publication/SPEC.md",
       "disposition": "classified",
       "ruleId": "ssdv3-specifications",
       "verification": {
@@ -2511,6 +2607,54 @@
       "path": "docs/specs/no-milestone/wsl2-native-vram-tier/PRD.md",
       "disposition": "classified",
       "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-nbd-product-readiness/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-nbd-product-readiness/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-nbd-product-readiness/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-nbd-product-readiness/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
       "verification": {
         "state": "unverified"
       },

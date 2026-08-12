@@ -27,7 +27,9 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`kernel-vram-as-memory`](specs/no-milestone/kernel-vram-as-memory/) | Kernel-true VRAM as process memory (HMM / NUMA / DEVICE_PRIVATE) — decision PRD | — | — | PRD |
 | [`mainline-vram-tiering`](specs/no-milestone/mainline-vram-tiering/) | Path to native mainline Linux — VRAM as a memory tier (long-term) | — | — | PRD |
 | [`memory-broker`](specs/no-milestone/memory-broker/) | RamShared Memory Broker (Unified Final) | — | — | UNQUALIFIED |
+| [`microsoft-native-vram-memory-tier`](specs/no-milestone/microsoft-native-vram-memory-tier/) | Microsoft-native VRAM memory tier — host-authoritative N3 RFC | — | — | UNQUALIFIED |
 | [`public-repository-hygiene`](specs/no-milestone/public-repository-hygiene/) | Public repository candidate integrity | — | — | DONE |
+| [`release-promotion-publication`](specs/no-milestone/release-promotion-publication/) | Protected beta release promotion and publication | — | — | SPEC |
 | [`vram-reclaim-pressure-matrix`](specs/no-milestone/vram-reclaim-pressure-matrix/) | PRD - VRAM reclaim pressure matrix | — | — | UNQUALIFIED |
 | [`windows-autonomous-broker-service`](specs/no-milestone/windows-autonomous-broker-service/) | Autonomous Windows broker service packaging and supervision | — | — | UNQUALIFIED |
 | [`windows-storport-cuda-vram`](specs/no-milestone/windows-storport-cuda-vram/) | Windows StorPort I/O backed by CUDA VRAM | — | — | UNQUALIFIED |
@@ -40,5 +42,6 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`wsl2-freeze-elimination-campaign`](specs/no-milestone/wsl2-freeze-elimination-campaign/) | WSL2 freeze-elimination campaign evidence gate | — | — | UNQUALIFIED |
 | [`wsl2-native-vram-autotier`](specs/no-milestone/wsl2-native-vram-autotier/) | PRD — WSL2-native VRAM autotier | — | — | UNQUALIFIED |
 | [`wsl2-native-vram-tier`](specs/no-milestone/wsl2-native-vram-tier/) | Native VRAM memory tier on WSL2 kernel and/or Ubuntu — decision PRD | — | — | PRD |
+| [`wsl2-nbd-product-readiness`](specs/no-milestone/wsl2-nbd-product-readiness/) | WSL2 NBD-only product readiness | — | — | UNQUALIFIED |
 | [`wsl2-relay-lifecycle-reliability`](specs/no-milestone/wsl2-relay-lifecycle-reliability/) | WSL2 Relay lifecycle reliability | — | — | UNQUALIFIED |
-| [`wsl2-upstream-native-contribution`](specs/no-milestone/wsl2-upstream-native-contribution/) | WSL upstream-native contribution strategy — config adoption and dxgkrnl FORTIFY release path | — | — | SPEC |
+| [`wsl2-upstream-native-contribution`](specs/no-milestone/wsl2-upstream-native-contribution/) | WSL #41054 config-only contribution boundary | — | — | SPEC |
