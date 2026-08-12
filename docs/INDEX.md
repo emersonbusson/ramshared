@@ -27,21 +27,21 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`kernel-vram-as-memory`](specs/no-milestone/kernel-vram-as-memory/) | Kernel-true VRAM as process memory (HMM / NUMA / DEVICE_PRIVATE) — decision PRD | — | — | PRD |
 | [`mainline-vram-tiering`](specs/no-milestone/mainline-vram-tiering/) | Path to native mainline Linux — VRAM as a memory tier (long-term) | — | — | PRD |
 | [`memory-broker`](specs/no-milestone/memory-broker/) | RamShared Memory Broker (Unified Final) | — | — | UNQUALIFIED |
-| [`microsoft-native-vram-memory-tier`](specs/no-milestone/microsoft-native-vram-memory-tier/) | Microsoft-native VRAM memory tier — host-authoritative N3 RFC | — | — | UNQUALIFIED |
+| [`microsoft-native-vram-memory-tier`](specs/no-milestone/microsoft-native-vram-memory-tier/) | Microsoft-native VRAM memory tier — host-authoritative N3 RFC | Microsoft-native N3 — Design | #196 | UNQUALIFIED |
 | [`public-repository-hygiene`](specs/no-milestone/public-repository-hygiene/) | Public repository candidate integrity | — | — | DONE |
-| [`release-promotion-publication`](specs/no-milestone/release-promotion-publication/) | Protected beta release promotion and publication | — | — | SPEC |
+| [`release-promotion-publication`](specs/no-milestone/release-promotion-publication/) | Protected beta release promotion and publication | v0.9.0-beta.1 — WSL2 NBD | #195 | SPEC |
 | [`vram-reclaim-pressure-matrix`](specs/no-milestone/vram-reclaim-pressure-matrix/) | PRD - VRAM reclaim pressure matrix | — | — | UNQUALIFIED |
-| [`windows-autonomous-broker-service`](specs/no-milestone/windows-autonomous-broker-service/) | Autonomous Windows broker service packaging and supervision | — | — | UNQUALIFIED |
-| [`windows-storport-cuda-vram`](specs/no-milestone/windows-storport-cuda-vram/) | Windows StorPort I/O backed by CUDA VRAM | — | — | UNQUALIFIED |
+| [`windows-autonomous-broker-service`](specs/no-milestone/windows-autonomous-broker-service/) | Autonomous Windows broker service packaging and supervision | — | #156 | UNQUALIFIED |
+| [`windows-storport-cuda-vram`](specs/no-milestone/windows-storport-cuda-vram/) | Windows StorPort I/O backed by CUDA VRAM | — | #28 | UNQUALIFIED |
 | [`windows-swap-driver`](specs/no-milestone/windows-swap-driver/) | Swap-to-VRAM on Native Windows (StorPort virtual miniport) | P4 | — | UNQUALIFIED |
 | [`windows-task-manager-disk-counters`](specs/no-milestone/windows-task-manager-disk-counters/) | Windows virtual disk identity, counters, and performance matrix | — | — | UNQUALIFIED |
 | [`wsl2-cascade-boot`](specs/no-milestone/wsl2-cascade-boot/) | WSL2 cascade auto-start on boot with fail-closed anti-hang | — | — | UNQUALIFIED |
 | [`wsl2-cascade-orphan-recover`](specs/no-milestone/wsl2-cascade-orphan-recover/) | WSL2 cascade orphan recover — auto-heal after terminate without stacking | — | — | UNQUALIFIED |
 | [`wsl2-cascade-swap`](specs/no-milestone/wsl2-cascade-swap/) | Product Requirements Document — VRAM as a Cold Tier in WSL2 Swap Cascade (zram → VRAM → VHDX) | M01 | — | SPEC |
-| [`wsl2-custom-kernel-p1`](specs/no-milestone/wsl2-custom-kernel-p1/) | Custom WSL2 kernel P1 — official-tree base + ublk + zram writeback (definitive) | — | — | UNQUALIFIED |
+| [`wsl2-custom-kernel-p1`](specs/no-milestone/wsl2-custom-kernel-p1/) | Custom WSL2 kernel P1 — official-tree base + ublk + zram writeback (definitive) | — | microsoft/WSL#41054 | UNQUALIFIED |
 | [`wsl2-freeze-elimination-campaign`](specs/no-milestone/wsl2-freeze-elimination-campaign/) | WSL2 freeze-elimination campaign evidence gate | — | — | UNQUALIFIED |
 | [`wsl2-native-vram-autotier`](specs/no-milestone/wsl2-native-vram-autotier/) | PRD — WSL2-native VRAM autotier | — | — | UNQUALIFIED |
 | [`wsl2-native-vram-tier`](specs/no-milestone/wsl2-native-vram-tier/) | Native VRAM memory tier on WSL2 kernel and/or Ubuntu — decision PRD | — | — | PRD |
-| [`wsl2-nbd-product-readiness`](specs/no-milestone/wsl2-nbd-product-readiness/) | WSL2 NBD-only product readiness | — | — | UNQUALIFIED |
-| [`wsl2-relay-lifecycle-reliability`](specs/no-milestone/wsl2-relay-lifecycle-reliability/) | WSL2 Relay lifecycle reliability | — | — | UNQUALIFIED |
-| [`wsl2-upstream-native-contribution`](specs/no-milestone/wsl2-upstream-native-contribution/) | WSL #41054 config-only contribution boundary | — | — | SPEC |
+| [`wsl2-nbd-product-readiness`](specs/no-milestone/wsl2-nbd-product-readiness/) | WSL2 NBD-only product readiness | v0.9.0-beta.1 — WSL2 NBD | #194 | UNQUALIFIED |
+| [`wsl2-relay-lifecycle-reliability`](specs/no-milestone/wsl2-relay-lifecycle-reliability/) | WSL2 Relay lifecycle reliability | — | microsoft/WSL#41242, microsoft/WSL#41286 | UNQUALIFIED |
+| [`wsl2-upstream-native-contribution`](specs/no-milestone/wsl2-upstream-native-contribution/) | WSL #41054 config-only contribution boundary | Microsoft-native N3 — Design | microsoft/WSL#41054, #197 | SPEC |

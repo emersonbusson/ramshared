@@ -121,55 +121,49 @@ explicit decision; this checklist never creates it.
 The accepted terminal language is `CAPABILITY_ONLY`, `PARTIAL`, or `REFUSED`.
 Do not use `READY`, `ADOPTED`, or `DONE` for a symbol observation.
 
-## 6. Issue drafts and milestone mapping
+## 6. Issue and milestone mapping
 
-These are local English drafts and planning mappings. They do not edit or close
-any external issue or milestone. The proposed milestone names are internal
-labels until a separately approved owner assigns a real public milestone.
+These local records reconcile existing open trackers with the milestone labels
+recorded in the corresponding PRD frontmatter. They do not edit or close an
+issue or milestone, and this packet has not created or submitted a comment,
+branch, tag, or pull request. The actual upstream discussion remains
+`microsoft/WSL#41054`; no external PR is proposed.
 
-| Tracker item | Required state | Scope owner | Proposed mapping | Boundary |
+| Tracker item | Required state | Scope owner | Current milestone | Boundary |
 | --- | --- | --- | --- | --- |
-| `microsoft/WSL#41054` | `HUMAN_REVIEW_ONLY` | WSL feature/config request | `M-UPSTREAM-CONFIG` | Config-only; no community kernel PR. |
+| `emersonbusson/ramshared#194` | `OPEN_PARTIAL` | WSL2 NBD product readiness | `v0.9.0-beta.1 — WSL2 NBD` | Tracked readiness work; no live completion or `READY` claim. |
+| `emersonbusson/ramshared#196` | `OPEN_PARTIAL` | Microsoft-native N3 public host contract | `Microsoft-native N3 — Design` | Host-authoritative RFC; no adoption, live host, or product claim. |
+| `emersonbusson/ramshared#197` | `OPEN_PARTIAL` | WSL upstream config tracker | `Microsoft-native N3 — Design` | Local tracker only; upstream discussion remains `microsoft/WSL#41054`. |
+| `microsoft/WSL#41054` | `HUMAN_REVIEW_ONLY` | WSL feature/config request | External issue; no local milestone | Config-only; no community kernel PR. |
 | `emersonbusson/ramshared#145` | `KEEP_OPEN_PARTIAL` | Post-NBD ublk research/retirement evidence | `M-UBLK-POST-NBD` | Must not own or block NBD readiness. |
 | `emersonbusson/ramshared#156` | `KEEP_OPEN_PARTIAL` | Windows production signing + packaged supervised broker | `M-WINDOWS-PRODUCT-GATES` | External release gates; not NBD or N3. |
-| New RamShared issue, number unassigned | `DRAFT_ONLY` | WSL2 NBD product readiness | `M-NBD-READINESS` | Create only if the NBD owner explicitly requests a new issue. |
-| New RamShared issue, number unassigned | `DRAFT_ONLY` | Microsoft-native N3 host contract | `M-N3-HOST-CONTRACT` | Host-authoritative RFC; not #41054 or #145. |
 
-### Draft for the future NBD issue — do not create automatically
+### #194 tracking note — WSL2 NBD readiness
 
-```markdown
-Title: WSL2 NBD-only product readiness and immutable release gate
+`#194` is the current local tracker for the NBD readiness pack and is mapped
+to `v0.9.0-beta.1 — WSL2 NBD`. The product transport remains NBD-only, with
+sealed-release, exact `BINARY_MATCH`, Relay, swapoff-first, lower-tier
+capacity, and bounded GiB evidence gates. The pack remains `PARTIAL` until
+those same-surface live gates are measured; this mapping does not claim
+completion, adoption, or a host action.
 
-Define the supported WSL2 product transport as NBD-only. Before a READY claim,
-require a sealed `/opt/ramshared/releases/<version>` artifact, exact live
-BINARY_MATCH, a Relay `--check` pass, swapoff-first lifecycle, and usable
-lower-tier capacity of at least
-V + max(ceil(10% of V), 512 MiB) for the configured VRAM tier V.
+### #196 tracking note — Microsoft-native N3
 
-Qualify 1 GiB first, then 2 GiB and 4 GiB only after the preceding cell passes
-with n>=3 integrity/performance runs. Retire legacy ublk product service
-ownership without unloading `ublk_drv`. No reboot or WSL shutdown is part of
-the gate. Product-off, ready, and blocked states must remain distinct.
+`#196` is the current local tracker for the public host-contract RFC and is
+mapped to `Microsoft-native N3 — Design`. The contract remains
+`REFUSED_HOST_CONTRACT` until Microsoft-owned semantics and independent
+evidence exist. The guest model remains pure and advisory: it cannot invent
+PFNs, guest NUMA ownership, or host residency. This mapping does not claim
+native VRAM adoption or live host validation.
 
-Current status: DRAFT_ONLY; no external issue created by this packet.
-```
+### #197 tracking note — upstream configuration lane
 
-### Draft for the N3 RFC issue — do not create automatically
-
-```markdown
-Title: Define a host-authoritative N3 contract before native VRAM tier work
-
-Prepare a public, versioned RFC that makes Windows host/WDDM/VIDMM authority
-explicit for VRAM budget, residency, pressure, reset/TDR, migration, revoke,
-and offline semantics. The guest implementation is a pure Rust state model:
-it accepts bounded, fresh, epoch-tagged observations and emits advisory intent;
-it never invents PFNs, guest NUMA ownership, or host residency.
-
-Until that host contract and independent evidence exist, the result is
-REFUSED_HOST_CONTRACT and the WSL2 NBD product remains independent.
-
-Current status: DRAFT_ONLY; no external issue or RFC submitted by this packet.
-```
+`#197` is the current local tracker for the upstream configuration lane and is
+mapped to `Microsoft-native N3 — Design`. It tracks the narrow x86/arm64
+configuration evidence packet only. The actual upstream discussion is
+`microsoft/WSL#41054`; no comment, issue mutation, patch, or external pull
+request is performed by this checklist. Missing build, boot, and capability
+evidence remains `PARTIAL`, `REFUSED`, or `NEEDS_REVALIDATION`.
 
 ### #145 status note — keep open partial
 
@@ -187,15 +181,19 @@ the N3 host contract. Existing physical evidence does not close those gates.
 
 ## 7. Final handoff
 
-- [ ] `UPSTREAM_TEMPLATE_SCOPE_SEPARATION` passes: #41054, #145, #156, NBD,
-      and N3 have distinct owners and claims.
+- [ ] `UPSTREAM_TEMPLATE_SCOPE_SEPARATION` passes: #41054, #145, #156, #194,
+      #196, #197, NBD, and N3 have distinct owners and claims.
 - [ ] #145 and #156 are explicitly `KEEP_OPEN_PARTIAL`.
-- [ ] The NBD future issue is draft-only and has no number or external write.
-- [ ] The N3 future issue is draft-only and states `REFUSED_HOST_CONTRACT`.
+- [ ] #194 is mapped to `v0.9.0-beta.1 — WSL2 NBD` without a live-completion claim.
+- [ ] #196 is mapped to `Microsoft-native N3 — Design` and remains
+      `REFUSED_HOST_CONTRACT` pending host-owned semantics and evidence.
+- [ ] #197 is mapped to `Microsoft-native N3 — Design`; the actual upstream
+      discussion remains `microsoft/WSL#41054`.
 - [ ] No milestone mutation was performed.
+- [ ] No external pull request is proposed or submitted.
 - [ ] All target-sensitive rows have a current full-SHA revalidation or
       `NEEDS_REVALIDATION`.
 - [ ] A human chooses `HOLD`, `READY_FOR_HUMAN_REVIEW`, or `REJECTED`.
 
-The checklist never sends material itself. A future external action requires a
-new explicit decision and must not be inferred from a green local check.
+The checklist never sends material itself. Any external action requires a new
+explicit decision and must not be inferred from a green local check.

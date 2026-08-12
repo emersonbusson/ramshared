@@ -1,8 +1,9 @@
 ---
 slug: wsl2-nbd-product-readiness
 title: "WSL2 NBD-only product readiness"
-milestone: —
-issues: []
+milestone: v0.9.0-beta.1 — WSL2 NBD
+issues:
+  - 194
 ---
 
 # PRD — WSL2 NBD-only product readiness
