@@ -1,299 +1,231 @@
 ---
 slug: wsl2-upstream-native-contribution
-title: "WSL upstream-native contribution strategy — config adoption and dxgkrnl FORTIFY release path"
+title: "WSL #41054 config-only contribution boundary"
 milestone: —
 issues:
   - "microsoft/WSL#41054"
 ---
 
-# PRD — WSL upstream-native contribution strategy
+# PRD — WSL #41054 config-only contribution boundary
 
-> **Status:** SSDV3 Step 1 — documentation and contribution preparation only.
-> This PRD does not open, comment on, or submit any external issue, pull
-> request, patch, or kernel build.
+## Summary
 
-## 1. Summary
+This pack describes one narrow request to Microsoft: evaluate two x86 WSL
+kernel configuration symbols through the existing
+[`microsoft/WSL#41054`](https://github.com/microsoft/WSL/issues/41054)
+feature request. It is configuration evidence only. It is not a kernel code
+change, an external kernel pull request, a RamShared product gate, or a native
+VRAM proposal.
 
-RamShared needs a narrow upstream-native strategy for optional WSL-kernel
-capability, without treating downstream configuration adoption as a product
-dependency. The strategy has three independent lanes.
-
-| Lane | Outcome | Route | Product consequence |
-| --- | --- | --- | --- |
-| **A — stock configuration** | Request `CONFIG_BLK_DEV_UBLK=m` and `CONFIG_ZRAM_WRITEBACK=y` for the x86 WSL configuration. | Existing [microsoft/WSL issue #41054](https://github.com/microsoft/WSL/issues/41054) and Microsoft internal adoption. | Non-blocking; custom-kernel and NBD paths remain. |
-| **B — dxgkrnl FORTIFY** | Verify release adoption of the minimal flexible-array fix for a scoped FORTIFY diagnostic. | A separate, human-reviewed WSL bug/release-adoption report. | No claim that it fixes a RamShared/WSL freeze. |
-| **C — native VRAM-as-NUMA** | Refuse a guest-only NUMA/HMM implementation under WSL GPU-PV. | No contribution in this slice. | Host WDDM/GPU-PV contract work is required first. |
-
-**Decision:** keep #41054 as the narrowly scoped configuration request, keep
-the dxgkrnl fix as a separate release-adoption path, and refuse to call
-GPU-PV guest VRAM a native NUMA memory tier.
-
-## 2. Technical context
-
-### 2.1 Primary-source facts
-
-| Fact | Source | Classification |
-| --- | --- | --- |
-| #41054 is an open feature request for the two requested symbols. | [microsoft/WSL issue #41054](https://github.com/microsoft/WSL/issues/41054) | Confirmed in official Microsoft source |
-| WSL kernel bugs/features belong in `microsoft/WSL`; reusable kernel code follows the Linux upstream process. | [WSL2-Linux-Kernel README](https://github.com/microsoft/WSL2-Linux-Kernel/blob/linux-msft-wsl-6.18.y/README.md) | Confirmed in official Microsoft source |
-| At this PRD’s revalidation point, x86 `config-wsl` disables both requested symbols and enables `CONFIG_FORTIFY_SOURCE=y`. | [x86 config-wsl](https://github.com/microsoft/WSL2-Linux-Kernel/blob/linux-msft-wsl-6.18.y/arch/x86/configs/config-wsl) | Confirmed in official Microsoft source |
-| At the same point, arm64 already enables zram writeback but disables ublk. | [arm64 config-wsl](https://github.com/microsoft/WSL2-Linux-Kernel/blob/linux-msft-wsl-6.18.y/arch/arm64/configs/config-wsl-arm64) | Confirmed in official Microsoft source |
-| The released `linux-msft-wsl-6.18.35.2` source has a one-element trailing `fence_values` array; rolling source has [`1dda0bd6b031`](https://github.com/microsoft/WSL2-Linux-Kernel/commit/1dda0bd6b031fec40afb3c6c9d59b8b89fd9e8db), a one-line flexible-array FORTIFY fix. | [release tag](https://github.com/microsoft/WSL2-Linux-Kernel/tree/linux-msft-wsl-6.18.35.2), [fix commit](https://github.com/microsoft/WSL2-Linux-Kernel/commit/1dda0bd6b031fec40afb3c6c9d59b8b89fd9e8db) | Confirmed in official Microsoft source |
-| dxgkrnl is a Hyper-V paravirtualized GPU driver whose hardware access occurs through host VM bus communication. | [dxgkrnl Kconfig](https://github.com/microsoft/WSL2-Linux-Kernel/blob/linux-msft-wsl-6.18.y/drivers/hv/dxgkrnl/Kconfig) | Confirmed in official Microsoft source |
-| HMM/device-private migration requires device-owned memory and driver migration/lifetime work; a config switch does not create that contract. | [Linux HMM documentation](https://docs.kernel.org/6.15/mm/hmm.html) | Confirmed in official Linux source |
-
-Microsoft documents that the WSL custom-kernel setting is host-wide and may
-need an explicit WSL shutdown to take effect. Three-boot acceptance is therefore
-manual and never a default RamShared or CI action.
-([advanced WSL configuration](https://learn.microsoft.com/en-us/windows/wsl/wsl-config),
-[WSL shutdown](https://learn.microsoft.com/en-us/windows/wsl/basic-commands))
-
-### 2.2 RamShared context
-
-| Existing decision | Relation here |
-| --- | --- |
-| [`wsl2-custom-kernel-p1`](../wsl2-custom-kernel-p1/PRD.md) owns safe custom-kernel activation and rollback. | This PRD does not change that surface. |
-| [`custom-kernel-ublk-product-transport`](../custom-kernel-ublk-product-transport/PRD.md) keeps ublk product transport deferred. | Stock capability is not product transport readiness. |
-| [`wsl2-native-vram-autotier`](../wsl2-native-vram-autotier/RESEARCH.md) records host WDDM/GPU-PV budget authority. | Lane C preserves its guest-PFN/NUMA refusal. |
-
-### 2.3 dxgkrnl diagnostic boundary
-
-A sanitized, read-only diagnostic observed
-`memcpy: detected field-spanning write (size 4)` during Xwayland activity in
-`dxgvmb_send_wait_sync_object_gpu` on the released `linux-msft-wsl-6.18.35.2`
-source state. At that release, `dxgvmbus.c:3095` contains the relevant
-variable-copy path and `dxgvmbus.h` around lines 719–727 declares
-`u64 fence_values[1]`. The wire layout is:
+The source identity for this revision is the exact public commit
+[`14794180686c2fb6307fbe359c359bec765249f3`](https://github.com/microsoft/WSL2-Linux-Kernel/commit/14794180686c2fb6307fbe359c359bec765249f3)
+in `microsoft/WSL2-Linux-Kernel`. The canonical configuration paths are:
 
 ```text
-fences[object_count] followed by handles[object_count]
+arch/x86/configs/config-wsl
+arch/arm64/configs/config-wsl-arm64
 ```
 
-The two variable-length copies must be audited together: the fence copy and
-the object-handle copy. Evidence must cover the observed `object_count == 1`
-case and a valid multi-object case. The known flexible-array commit is the
-preferred minimal candidate only after exact release/source/reproducer
-verification.
+At that pinned source:
 
-This diagnostic is not evidence that it caused a RamShared hang, WSL hang,
-GPU reset, display failure, or TDR. No causal claim is permitted here.
+| Architecture | Canonical file | `CONFIG_BLK_DEV_UBLK` | `CONFIG_ZRAM_WRITEBACK` | Decision |
+| --- | --- | --- | --- | --- |
+| x86 | `arch/x86/configs/config-wsl` | not set | not set | Request both symbols as config-only evidence for #41054. |
+| arm64 | `arch/arm64/configs/config-wsl-arm64` | not set | `y` | ublk is a separate candidate; writeback is already on and must not be requested redundantly. |
 
-## 3. Recommended option
+The official build entry point uses `KCONFIG_CONFIG=Microsoft/config-wsl`
+(`Microsoft/config-wsl-arm64` for arm64 where supported); the canonical source
+files above are the architecture-specific facts that must be revalidated. A
+path or branch change invalidates the result.
 
-### 3.1 Lane A — configuration adoption
+## Technical context
 
-Keep #41054 as one WSL feature request. The x86 evidence package is restricted
-to exactly:
+The [WSL2-Linux-Kernel README](https://github.com/microsoft/WSL2-Linux-Kernel/blob/14794180686c2fb6307fbe359c359bec765249f3/README.md)
+directs WSL feature requests to the WSL project,
+states that the kernel repository does not accept issue reports, and directs
+kernel code contributions to the normal upstream Linux process. Therefore this
+pack prepares a human-review packet only. It does not create a community PR to
+`microsoft/WSL2-Linux-Kernel`, push a branch, or submit a kernel patch.
 
-```text
-CONFIG_BLK_DEV_UBLK=m
-CONFIG_ZRAM_WRITEBACK=y
-```
+The [x86 config](https://raw.githubusercontent.com/microsoft/WSL2-Linux-Kernel/14794180686c2fb6307fbe359c359bec765249f3/arch/x86/configs/config-wsl)
+and [arm64 config](https://raw.githubusercontent.com/microsoft/WSL2-Linux-Kernel/14794180686c2fb6307fbe359c359bec765249f3/arch/arm64/configs/config-wsl-arm64)
+are the pinned primary-source inputs. `CONFIG_BLK_DEV_UBLK=m` and `CONFIG_ZRAM_WRITEBACK=y` are capabilities, not a
+RamShared product transport decision. NBD remains the supported WSL2 product
+path. The separate [`wsl2-nbd-product-readiness`](../wsl2-nbd-product-readiness/PRD.md)
+pack owns product readiness. The separate
+[`microsoft-native-vram-memory-tier`](../microsoft-native-vram-memory-tier/PRD.md)
+pack owns the host-authoritative N3 RFC; N3 is not part of #41054.
 
-Microsoft decides whether/when to adopt the configuration internally. A
-community pull request to `microsoft/WSL2-Linux-Kernel` is neither the route
-nor an acceptance gate. If Microsoft requests patch-ready material, prepare
-one logical config commit per symbol while keeping one public feature request.
+## Recommended option
 
-Arm64 is an independent revalidation. Since zram writeback is currently
-enabled there, it must not receive a redundant request. Any branch/tag change
-returns the result to `NEEDS_REVALIDATION`.
+Keep one public request, one exact source identity, and two architecture
+records:
 
-### 3.2 Lane B — dxgkrnl release adoption
+1. Revalidate the pinned SHA and both canonical files.
+2. Prepare the x86 request exactly as:
 
-Lane B remains separate from #41054.
+   ```text
+   CONFIG_BLK_DEV_UBLK=m
+   CONFIG_ZRAM_WRITEBACK=y
+   ```
 
-1. Verify whether the exact target release contains `1dda0bd6b031`.
-2. If it contains the commit, run regression verification only; do not prepare
-   a duplicate report or patch.
-3. If it lacks the commit, verify the header/source layout and reproduce the
-   exact FORTIFY diagnostic on an explicitly approved isolated surface.
-4. Only then request adoption of that exact minimal commit or an equivalently
-   verified backport. Do not refactor, alter UAPI, or invent a substitute fix.
-5. Run `get_maintainer.pl` only after exact source verification. Do not guess a
-   maintainer, list, or Linux-upstream destination for WSL-specific code.
+3. Record arm64 independently: ublk remains a candidate, while
+   `CONFIG_ZRAM_WRITEBACK=y` is already enabled at the pinned source.
+4. Run only the later named source/build/package/capability gates under
+   explicit approval; no swap or pressure workload is needed for this config
+   request.
+5. Prepare an English human-review draft for #41054 and do not post it.
 
-### 3.3 Lane C — explicit refusal
+If Microsoft asks for patch-ready material, a human may prepare one logical
+config commit per symbol in the exact target tree. That possible future action
+does not authorize a community pull request in this repository or a product
+dependency on adoption.
 
-Guest-native VRAM-as-NUMA, HMM, `MEMORY_DEVICE_PRIVATE`, fake PFNs, and
-guest-side `add_memory()` are refused until all of the following exist:
+## Functional requirements
 
-1. a documented host WDDM/GPU-PV ownership and capacity contract;
-2. guest-visible, cooperative-driver-owned device-memory resources;
-3. host/guest migration, reclaim, reset, TDR, and offline semantics; and
-4. an isolated hardware lab that can test them without relying on a desktop
-   WSL instance.
-
-`/dev/dxg`, CUDA allocation, a custom kernel, or a successful config build is
-not a substitute for those prerequisites.
-
-## 4. Functional requirements
-
-| ID | Requirement | Verifiable acceptance |
+| ID | Requirement | Acceptance |
 | --- | --- | --- |
-| **RF-U1** | Keep Lane A restricted to the two x86 symbols through #41054/internal adoption. | Evidence contains no driver code, product feature request, or community kernel PR plan. |
-| **RF-U2** | Revalidate x86 and arm64 source/configuration at each target branch or release. | Public branch/tag/commit and exact config state are recorded. |
-| **RF-U3** | Require official build, checkpatch, sparse, `W=1`, module-package, capability, and three-boot gates for Lane A. | Every named Lane A test is PASS, PARTIAL, REFUSED, or NEEDS_REVALIDATION. |
-| **RF-U4** | Preserve custom-kernel/NBD fallbacks while adoption is pending/rejected. | No Lane A outcome changes product transport policy. |
-| **RF-U5** | Keep Lane B separate and release-specific. | It verifies exact `1dda0bd6b031` ancestry before report/patch action. |
-| **RF-U6** | Treat both `dxgvmb_send_wait_sync_object_gpu` variable copies as one wire-layout contract. | One-object and multi-object tests cover both copies and allocation bounds. |
-| **RF-U7** | Refuse causal claims about the FORTIFY diagnostic. | Public text uses diagnostic/release wording only. |
-| **RF-U8** | Refuse Lane C until the host-contract prerequisites exist. | `NATIVE_NUMA_CONTRACT_REFUSAL` passes. |
-| **RF-U9** | Produce public-safe evidence/templates only. | No private paths, usernames, machine names, account IDs, IP addresses, tokens, dumps, or raw host logs. |
-| **RF-U10** | Define lifetime maintenance and branch revalidation. | Branch/release/Kconfig/build change or 30-day review forces NEEDS_REVALIDATION. |
+| RF-U-1 | Pin #41054 evidence to the exact SHA. | Full SHA and revalidation date are recorded. |
+| RF-U-2 | Use the canonical x86 and arm64 config paths. | No generic defconfig or remembered path is accepted. |
+| RF-U-3 | Request only the two x86 config deltas. | x86 request is exactly ublk=m and zram writeback=y. |
+| RF-U-4 | Record arm64 independently. | ublk is candidate; existing zram writeback is not requested redundantly. |
+| RF-U-5 | Keep the route config-only. | No driver, UAPI, product, or native-memory request appears in the packet. |
+| RF-U-6 | Refuse an external kernel PR. | No branch, patch upload, pull request, or push is prepared by this pack. |
+| RF-U-7 | Preserve product independence. | NBD remains the WSL2 product path while #41054 is pending/rejected. |
+| RF-U-8 | Keep N3 separate. | N3 RFC links only to its own pack and is not a #41054 acceptance gate. |
+| RF-U-9 | Revalidate branch/tag/config drift. | Any target change returns status to `NEEDS_REVALIDATION`. |
+| RF-U-10 | Keep evidence public-safe and English. | No private host data, credentials, raw logs, or unreviewed text. |
 
-## 5. Non-functional requirements
+## Non-functional requirements
 
 | ID | Requirement |
 | --- | --- |
-| **NFR-U1** | No external write: no issue, comment, PR, email, branch push, or tag is created. |
-| **NFR-U2** | No unsupervised WSL pressure, swap, ublk I/O, or GPU stress. Runtime diagnostics require explicit approval and isolation. |
-| **NFR-U3** | Evidence records public target identity, Kconfig base, toolchain identity, command result, and sanitized verdict. |
-| **NFR-U4** | For each approved boot, reset/TDR, guest BUG/Oops, and unexpected dxg-error counter deltas must be zero; any nonzero delta, boot failure, or display instability stops the campaign. |
-| **NFR-U5** | Three custom-kernel boots are manual; CI never shuts down WSL or changes host configuration. |
-| **NFR-U6** | The dxg candidate is one minimal change; refactors, UAPI changes, and speculative fixes are rejected. |
-| **NFR-U7** | Sources are official Microsoft or Linux primary sources only. |
-| **NFR-U8** | Missing environment evidence is PARTIAL, never DONE. |
+| NFR-U-1 | No external write, network submission, host reboot, WSL shutdown, swap, or pressure is performed. |
+| NFR-U-2 | Source facts use official Microsoft/Linux primary sources only. |
+| NFR-U-3 | Missing live target evidence is `PARTIAL`, `REFUSED`, or `NEEDS_REVALIDATION`, never `DONE`. |
+| NFR-U-4 | Build and capability evidence records command class, target identity, and sanitized result. |
+| NFR-U-5 | The config request never changes RamShared transport or release policy. |
+| NFR-U-6 | A 30-day review or any source/Kconfig/dependency change invalidates the packet. |
 
-## 6. Flows
+## Flows
 
-### Lane A
+### Source revalidation
 
-1. Record public target branch/tag/commit.
-2. Revalidate x86/arm64 config facts and the exact two x86 deltas.
-3. Run official-tree `olddefconfig`, `W=1`, sparse, and checkpatch gates.
-4. Package modules through the official WSL workflow; prove ublk and zram
-   writeback capability without creating a swap workload.
-5. With explicit approval, complete three independent custom-kernel boots.
-6. Prepare a human review packet for #41054/Microsoft adoption; do not post it.
+1. Record repository, branch/tag, and full target revision.
+2. Verify that the target resolves to the exact requested SHA, or mark
+   `NEEDS_REVALIDATION`.
+3. Read `arch/x86/configs/config-wsl` and
+   `arch/arm64/configs/config-wsl-arm64` from that revision.
+4. Record the two x86 current values and arm64 current values independently.
+5. Stop on a path, architecture, branch, or value mismatch.
 
-### Lane B
+### Human-review packet
 
-1. Check target release ancestry for `1dda0bd6b031`.
-2. Audit header/source layout, `cmd_size`, and both variable-copy bounds.
-3. Reproduce the exact warning for one and multiple objects only on an approved
-   isolated surface; non-reproduction stops the path.
-4. If needed, test the exact one-line candidate through official gates and
-   three explicit boots.
-5. Prepare a separate human-reviewed release-adoption report; never append it
-   to #41054.
+1. Fill the common evidence sheet in
+   [`CONTRIBUTION-CHECKLIST.md`](CONTRIBUTION-CHECKLIST.md).
+2. Include the exact x86 delta and the arm64 non-duplicate observation.
+3. Mark every test `PASS`, `PARTIAL`, `REFUSED`, or `NEEDS_REVALIDATION`.
+4. Keep the packet local and unposted until a separate explicit decision.
 
-### Lane C
+### Capability boundary
 
-1. A proposal claims guest VRAM can become a NUMA/HMM tier.
-2. Check all four host-contract requirements.
-3. If any is absent, return `REFUSED_NATIVE_NUMA_CONTRACT`, retain the
-   RamShared cascade path, and create no patch.
+If a custom kernel proves that ublk or writeback loads, record capability only.
+Do not call ublk product-ready, do not replace the NBD path, and do not infer
+N3 host ownership. Return `UPSTREAM_CONFIG_PRODUCT_SCOPE_REFUSAL` for any such
+attempt.
 
-## 7. Data and state model
-
-This documentation workflow has no RamShared runtime interface.
+## Data/state model
 
 | Field | Values | Meaning |
 | --- | --- | --- |
-| `lane` | `CONFIG`, `DXG_FORTIFY`, `NATIVE_NUMA` | Independent contribution boundary |
-| `state` | `UNVERIFIED`, `NEEDS_REVALIDATION`, `READY_FOR_HUMAN_REVIEW`, `PARTIAL`, `REFUSED`, `ADOPTED` | Evidence status, not product release status |
-| `target` | public branch/tag + commit | Exact source reviewed |
-| `evidence` | named test IDs + sanitized verdicts | Reproducible public-safe proof |
-| `rollback_trigger` | observable trigger | Stop/recovery condition |
+| `target_repo` | public repository | Exact source owner. |
+| `target_revision` | full SHA | Must equal `14794180686c2fb6307fbe359c359bec765249f3` for this revision. |
+| `architecture` | `x86`, `arm64` | Independent evidence row. |
+| `config_path` | canonical architecture path | Source file read from target revision. |
+| `symbol_state` | `not_set`, `m`, `y`, `unknown` | Exact Kconfig value. |
+| `requested_delta` | x86 pair or none | Only x86 has the two requested changes. |
+| `status` | `UNVERIFIED`, `PASS`, `PARTIAL`, `REFUSED`, `NEEDS_REVALIDATION` | Evidence status, not product status. |
+| `external_action` | `NONE`, `HUMAN_REVIEW_ONLY` | This pack never posts. |
 
-`ADOPTED` requires a public released Microsoft source/release containing the
-verified change. A rolling-branch commit alone is not proof for an installed
-release.
+`ADOPTED` is deliberately not a local status: Microsoft’s released source
+and product decision own adoption. A rolling source result is not installed
+release evidence.
 
-## 8. Interfaces
+## Interfaces
 
 | Interface | Contract |
 | --- | --- |
-| `microsoft/WSL#41054` | Lane A only; existing feature request; human-mediated updates only. |
-| `Microsoft/config-wsl` | x86 candidate limited to the two requested symbols. |
-| `Microsoft/config-wsl-arm64` | Independent revalidation target. |
-| `drivers/hv/dxgkrnl` | Lane B only; exact release/source decides whether a fix is needed. |
-| Linux submission process | Only after verified `get_maintainer.pl` ownership. |
-| RamShared runtime | No change: no CLI, daemon, uAPI, sysfs, or transport switch. |
+| `microsoft/WSL#41054` | One feature request; human-mediated review only. |
+| `arch/x86/configs/config-wsl` | Canonical x86 source at the pinned revision. |
+| `arch/arm64/configs/config-wsl-arm64` | Canonical arm64 source and independent revalidation. |
+| `Microsoft/config-wsl` | Official build invocation/config entry point; resolve against target tree. |
+| WSL2-Linux-Kernel README | Route authority: WSL feature request, normal upstream code process. |
+| RamShared NBD pack | Product owner; unaffected by adoption. |
+| N3 pack | Host-authoritative RFC owner; separate issue and gate. |
 
-## 9. Dependencies and risks
+## Dependencies/risks
 
-| Risk | Mitigation |
+| Risk | Mitigation and rollback trigger |
 | --- | --- |
-| No Microsoft adoption timeline. | #41054 is non-blocking; custom kernel/NBD remain independent. |
-| Branch/release drift. | Revalidate on every listed trigger and at least every 30 days. |
-| arm64 differs from x86. | Never copy x86 evidence to arm64. |
-| dxg fix is already in a target release. | Stop patch/report path; run regression verification only. |
-| Warning does not reproduce. | Stop; do not infer a fault or manufacture a patch. |
-| Test correlates with TDR/reset/BUG/Oops. | Stop immediately and use only the approved recovery path; retain sanitized counters. |
-| GPU-PV is mistaken for guest device memory. | Enforce `NATIVE_NUMA_CONTRACT_REFUSAL`. |
+| SHA or branch changes | Stop and return `NEEDS_REVALIDATION`; do not copy old values. |
+| Canonical path differs | Stop; verify the official target tree rather than guessing. |
+| arm64 writeback request duplicates existing `y` | Remove the redundant request; retain independent ublk candidate note. |
+| Capability becomes product claim | Refusal test preserves NBD and custom-kernel separation. |
+| Community PR is proposed | Refuse; keep the packet local and human-reviewed. |
+| N3 is bundled into #41054 | Refuse and link the separate host-authoritative N3 pack. |
+| Missing target build/boot evidence | `PARTIAL`; never infer adoption or product readiness. |
 
-## 10. Implementation strategy
+Rollback trigger: any public text or action claims Microsoft adoption, changes
+the target tree, opens an external PR, routes RamShared through ublk, or treats
+N3 as a config consequence. Remove the claim from the packet and return to the
+last source-pinned status.
 
-1. Create this PRD, the matching SPEC, and public-safe templates.
-2. Do not change RamShared code, CI, configuration, claims, validation logs, or
-   existing WSL research/spec files.
-3. A later human-approved campaign creates a clean target-kernel worktree and
-   executes only the named SPEC tests.
-4. SSDV3 Step 2.5 is required before any live dxg candidate boot or external
-   patch/submission decision.
-5. Three-boot validation requires current explicit approval and an isolated
-   surface; unavailable infrastructure remains PARTIAL.
+## Implementation strategy
 
-## 11. Documents to update
+This task revises the PRD, SPEC, and checklist only. A later approved campaign
+may execute the named tests in the SPEC, then hand the packet to a human for
+#41054. It must not create an external action automatically. N3 and NBD remain
+separate workstreams.
+
+## Documents
 
 | Document | Action |
 | --- | --- |
-| This `PRD.md` | Create now |
-| `SPEC.md` in this folder | Create now |
-| `CONTRIBUTION-CHECKLIST.md` in this folder | Create now |
-| `validation.md` | N/A — excluded and no live validation occurs. |
-| `docs/INDEX.md` | N/A — explicitly excluded. |
-| Claims registry, existing specs, and upstream research note | N/A — preserve existing ownership/worktree changes. |
+| `PRD.md` | Revise the config-only decision and source pin. |
+| `SPEC.md` | Revise the executable matrix and boundary rules. |
+| `CONTRIBUTION-CHECKLIST.md` | Revise English packet, issue drafts, and milestone mapping. |
+| `wsl2-nbd-product-readiness/` | Separate NBD product owner; no issue ownership is imported. |
+| `microsoft-native-vram-memory-tier/` | Separate N3 host-authority owner. |
+| `IMPL.md`, `validation.md`, release docs | Not created or changed here. |
+| `docs/INDEX.md` | Regenerate as a generated index after the complete pack update. |
 
-## 12. Out of scope
+## Out of scope
 
-- Any external issue/PR/comment/patch/submission.
-- A community pull request to `microsoft/WSL2-Linux-Kernel`.
-- Changing RamShared NBD/ublk product policy or custom-kernel activation.
-- New dxgkrnl design, UAPI, refactor, or speculative FORTIFY change.
-- Claims that the FORTIFY warning caused a freeze, reset, or TDR.
-- Guest-native VRAM-as-NUMA/HMM implementation.
-- Edits to `validation.md`, `docs/INDEX.md`, claims, or other agents’ files.
+- A community PR, patch upload, branch push, issue/comment submission, or
+  Microsoft internal route;
+- dxgkrnl/FORTIFY work, kernel code, driver/UAPI changes, or maintainer guesses;
+- ublk product transport, NBD product readiness, or custom-kernel promotion;
+- host-authoritative N3 implementation or guest-native VRAM memory;
+- host reboot, WSL shutdown, swap, pressure, GPU workload, or live kernel boot;
+- edits to release documentation, code, CI/workflows, `IMPL.md`, validation
+  records, or `MEMORY.md`.
 
-## 13. Acceptance criteria
+## Acceptance
 
 | ID | Criterion |
 | --- | --- |
-| **A1** | Lane A has only the exact two x86 symbols and separate arm64 revalidation. |
-| **A2** | Lane B pins `1dda0bd6b031` and release ancestry before any contribution action. |
-| **A3** | Lane B covers both variable copies plus one/multi-object conditions. |
-| **A4** | Lane C refuses native NUMA without host WDDM/GPU-PV contract evidence. |
-| **A5** | SPEC names official build, checkpatch, sparse, `W=1`, modules, three-boot, rollback, and TDR tests. |
-| **A6** | Templates are public-safe and separate #41054 from Lane B. |
-| **A7** | No external action or live kernel/GPU/swap operation is performed by this documentation work. |
-| **A8** | Branch/release revalidation and maintenance are explicit. |
+| A-U-1 | Exact SHA and canonical x86/arm64 paths are recorded. |
+| A-U-2 | x86 request is exactly `CONFIG_BLK_DEV_UBLK=m` + `CONFIG_ZRAM_WRITEBACK=y`. |
+| A-U-3 | arm64 records ublk as candidate and writeback already `y`, without a duplicate request. |
+| A-U-4 | #41054 packet is config-only and no external kernel PR is proposed. |
+| A-U-5 | NBD product and N3 RFC remain separate owners/gates. |
+| A-U-6 | Issue drafts/milestone mapping retain #145/#156 as `KEEP_OPEN_PARTIAL`. |
+| A-U-7 | Named source/build/capability/refusal tests and rollback are present. |
+| A-U-8 | No live or external action is claimed by this documentation revision. |
 
-## 14. Validation plan
+## Validation
 
-The later campaign records `PASS`, `PARTIAL`, `REFUSED`, or
-`NEEDS_REVALIDATION` for every named test in [`SPEC.md`](SPEC.md).
-
-```text
-before: public target identity, sanitized kernel state, no active test workload
-action: one bounded, approved config/dxg step on an isolated surface
-after: capability/diagnostic result, boot state, reset/TDR count, rollback state
-```
-
-Mandatory stops: custom boot failure, test-correlated guest BUG/Oops or dxg
-failure, test-correlated host GPU reset/TDR/recovery/display instability, or a
-FORTIFY source/diagnostic mismatch.
-
-## 15. Kahneman map
-
-| Discipline | Decision | Executable evidence / abort |
-| --- | --- | --- |
-| **#2** | Config enablement does not prove product ublk; flexible array does not prove a freeze cure. | `UPSTREAM_CONFIG_PRODUCT_SCOPE_REFUSAL`; `DXG_FORTIFY_CAUSALITY_REFUSAL` |
-| **#3** | Exact target source and diagnostic are required. | `UPSTREAM_BRANCH_REVALIDATION`; `DXG_FORTIFY_RELEASE_ANCESTRY` |
-| **#9** | Three boots and every safety-counter delta are measured, not described. | `UPSTREAM_SAFETY_COUNTER_BASELINE` |
-| **#13** | Both legitimate object-count boundaries and mismatch refusal are mandatory. | `DXG_FORTIFY_REPRO_OBJECT_COUNT_1`; `DXG_FORTIFY_REPRO_OBJECT_COUNT_MULTI`; `DXG_FORTIFY_SOURCE_MISMATCH_REFUSAL` |
-| **#15** | Missing symbols/source mismatch/non-reproduction are not blindly retried. | `UPSTREAM_RETRY_POLICY_REFUSAL` |
-| **#16** | TDR/reset/boot failure stops independently of RamShared. | `UPSTREAM_TDR_STOP`; `UPSTREAM_CUSTOM_KERNEL_ROLLBACK` |
-| **#17** | Evidence replay produces no external side effect. | `UPSTREAM_EVIDENCE_REPLAY` |
-| **#18** | WSL config belongs to Microsoft; device memory belongs to host-contract owners. | `NATIVE_NUMA_CONTRACT_REFUSAL` |
+The docs-only validation is repository index/check/hygiene/diff. The future
+campaign must execute the exact target-tree gates in `SPEC.md`; absent approved
+build/boot evidence remains `PARTIAL`. A green config build cannot close NBD
+readiness or N3 host ownership.
