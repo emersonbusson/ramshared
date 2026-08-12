@@ -3011,7 +3011,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_nbd_prealloc_worker_uses_fake_provider_and_injected_acceptor() {
+    fn daemon_nbd_serves_two_connection_generations_before_explicit_shutdown() {
         struct TestProvider;
 
         impl VramProvider for TestProvider {
@@ -3076,9 +3076,24 @@ mod tests {
                         len: 512,
                     },
                     payload: vec![0xC3; 512],
+                    reply: reply_tx.clone(),
+                }))?;
+                jobs_tx.send(WMsg::Closed)?;
+                jobs_tx.send(WMsg::Opened)?;
+                jobs_tx.send(WMsg::Job(ramshared_wsl2d::conn::Job {
+                    export: 0,
+                    req: ramshared_block::Request {
+                        flags: 0,
+                        cmd: Command::Write,
+                        handle: 100,
+                        offset: 512,
+                        len: 512,
+                    },
+                    payload: vec![0x5A; 512],
                     reply: reply_tx,
                 }))?;
                 jobs_tx.send(WMsg::Closed)?;
+                jobs_tx.send(WMsg::Shutdown)?;
                 self.zero_done = Some(zero_rx);
                 self.reply = Some(reply_rx);
                 Ok(())
@@ -3143,15 +3158,14 @@ mod tests {
                 .recv_timeout(Duration::from_secs(1)),
             Ok(true)
         );
-        assert!(
-            !starter
-                .reply
-                .take()
-                .expect("worker reply receiver")
-                .recv_timeout(Duration::from_secs(1))
-                .expect("write reply before deadline")
-                .disconnect
-        );
+        let replies = starter
+            .reply
+            .take()
+            .expect("worker reply receiver")
+            .try_iter()
+            .collect::<Vec<_>>();
+        assert_eq!(replies.len(), 2, "both connection generations are served");
+        assert!(replies.iter().all(|reply| !reply.disconnect));
         assert_eq!(starter.status_updates, vec![(0, None, false)]);
         assert!(
             !path.exists(),

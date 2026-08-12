@@ -220,10 +220,26 @@ Triggers (b)/(c) from §9.1 are probed by a dedicated canary region (separate fr
 The acceptor emits one `Opened` before it starts a reader; every reader terminal
 path (handshake refusal, EOF, malformed request, oversized WRITE, and
 worker-channel closure) emits at most one balancing `Closed`. A duplicate or
-otherwise unbalanced `Closed` must not produce a second worker-termination
-signal. The writer sends the exact reply header, then reply data, then flushes;
-it stops after a disconnect reply or any write/flush error. Diagnostic prose is
+otherwise unbalanced `Closed` must not produce a second zero-live transition.
+The writer sends the exact reply header, then reply data, then flushes; it stops
+after a disconnect reply or any write/flush error. Diagnostic prose is
 English-only and never changes request, reply, handshake, or control bytes.
+
+#### DT-Conn-1a — simple NBD listener lifetime (supersedes terminal `Closed`)
+
+For the simple single-export `run_nbd` runtime only, a balanced `Closed` that
+makes the live count zero is a quiescent transition, not worker termination.
+The same listener, backend, and daemon identity remain available to accept a
+later connection generation. The simple runtime terminates only on an explicit
+`WMsg::Shutdown`, worker-channel disconnect, or fatal worker error. Its
+SIGINT/SIGTERM handler performs only an async-signal-safe atomic store; one
+bounded bridge converts that observation into the explicit `WMsg::Shutdown`
+wake. The bridge does not poll-spin, retry a failed shutdown, or alter broker
+semantics. Normal terminal cleanup then removes only the owned Unix socket.
+
+This narrowly supersedes the old terminal interpretation of `Closed` in
+DT-Conn-1. It does not change the balancing contract in `conn.rs`, wire
+protocol, broker worker behavior, or swapoff-first lifecycle ordering.
 
 The named tests use only `Cursor`, channel, Unix-pair, or loopback listener
 fixtures with a bounded receive/join deadline. They do not allocate CUDA,
@@ -286,7 +302,7 @@ Acceptance: canary detects (a) §9.1; daemon enters `Demoted`; swapoff of VRAM c
 
 | Test name | Fixture / evidence | Required result | Discipline |
 |---|---|---|---|
-| `live_count_refuses_duplicate_closed` | pure counter | a second unbalanced `Closed` never returns a terminal signal | #13/#17 |
+| `live_count_refuses_duplicate_closed` | pure counter | a second unbalanced `Closed` never returns a second zero-live transition | #13/#17 |
 | `writer_writes_header_data_and_flushes` | in-memory writer | exact header/data order and one flush | #13 |
 | `writer_stops_on_disconnect_or_io_error` | deterministic error writer | no write after disconnect; write/flush error exits | #15/#16 |
 | `reader_enqueues_write_payload_then_closed` | in-memory valid handshake/request | negotiated export, exact payload, then one `Closed` | #13/#17 |
@@ -295,6 +311,8 @@ Acceptance: canary detects (a) §9.1; daemon enters `Demoted`; swapoff of VRAM c
 | `reader_stops_when_worker_is_closed` | disconnected bounded worker channel | reader exits within its test deadline | #15/#16 |
 | `wire_conn_balances_opened_and_closed` | Unix stream pair | `Opened` precedes exactly one `Closed` | #13/#17 |
 | `acceptors_stop_when_worker_is_closed` | Unix and TCP loopback listeners | acceptors stop after the worker refusal without a retry loop | #15/#16 |
+| `daemon_nbd_serves_two_connection_generations_before_explicit_shutdown` | injected simple NBD runtime | first balanced close reaches quiescence, a second generation is served, and only explicit `Shutdown` removes the owned socket | #13/#16/#17 |
+| `daemon_nbd_explicit_shutdown_wakes_idle_runtime_without_timer_dependence` | injected simple NBD runtime | explicit shutdown returns before the receive tick and removes the owned socket | #13/#16 |
 
 The DT-Conn-1 canonical per-file gate is the command in §10.1; a package or
 workspace average cannot substitute for its 80% line threshold.
