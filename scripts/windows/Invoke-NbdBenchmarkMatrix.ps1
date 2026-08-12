@@ -356,7 +356,8 @@ function New-Plan {
                     worker_threads = 1
                     workload = "anonymous_memory_sequential_write"
                     allocated_mib = $tier + 2560
-                    memory_max_mib = 1200
+                    memory_high_mib = 1200
+                    memory_max_mib = $tier + 3072
                     external_workload_mib = if ($condition -eq "bounded") { 512 } else { 0 }
                     reserve_mib = 512
                     cell_required_free_vram_mib = $tier + $reserve_mib
@@ -1479,6 +1480,7 @@ function Get-ComparisonContract {
         [int]$Context.tier_mib -ne [int]$Cell.tier_mib -or $Context.condition -ne $Cell.condition -or
         $workload.name -ne "anonymous_memory_sequential_write" -or $workload.pattern -ne "shake256-v1" -or
         [int]$workload.allocated_mib -ne [int]$Cell.allocated_mib -or
+        [int]$workload.memory_high_mib -ne [int]$Cell.memory_high_mib -or
         [int]$workload.memory_max_mib -ne [int]$Cell.memory_max_mib -or
         [int]$workload.allocation_chunk_bytes -ne [int]$Cell.allocation_chunk_bytes -or
         [int]$workload.worker_threads -ne [int]$Cell.worker_threads -or
@@ -1560,6 +1562,7 @@ function Get-ComparisonContract {
         lower_sink_binding = $lowerSinkBinding
         script_sha256 = $normalizedScriptHashes
         memory_max_mib = [int]$workload.memory_max_mib
+        memory_high_mib = [int]$workload.memory_high_mib
         allocation_chunk_bytes = [int]$workload.allocation_chunk_bytes
         worker_threads = [int]$workload.worker_threads
         allocated_mib = [int]$workload.allocated_mib
@@ -1658,6 +1661,7 @@ function New-PairComparison {
         lower_sink_binding = $diskContract.lower_sink_binding
         script_sha256 = $diskContract.script_sha256
         memory_max_mib = $diskContract.memory_max_mib
+        memory_high_mib = $diskContract.memory_high_mib
         allocation_chunk_bytes = $diskContract.allocation_chunk_bytes
         worker_threads = $diskContract.worker_threads
         allocated_mib = $diskContract.allocated_mib
@@ -1687,6 +1691,7 @@ function New-PairComparison {
                 "Start-CudaVramWorkload.ps1" = $cudaScriptHash
             }
             memory_max_mib = $diskContract.memory_max_mib
+            memory_high_mib = $diskContract.memory_high_mib
             tier_mib = $diskContract.tier_mib
             condition = $diskContract.condition
             command_contract = $diskContract.command_contract
@@ -2399,8 +2404,8 @@ Write-Output "[cuda-vram-workload] released"
             New-Item -ItemType Directory -Path $temp | Out-Null
             $savedBaseline = $script:BaselineFile
             try {
-                $cellDisk = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_max_mib = 1200; allocation_chunk_bytes = 67108864; worker_threads = 1 }
-                $cellNbd = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_max_mib = 1200; allocation_chunk_bytes = 67108864; worker_threads = 1 }
+                $cellDisk = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = 1 }
+                $cellNbd = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = 1 }
                 $sourceCommit = ("a" * 40) -join ""
                 $manifestSha256 = ("b" * 64) -join ""
                 $scriptHash = ("c" * 64) -join ""
@@ -2440,7 +2445,7 @@ Write-Output "[cuda-vram-workload] released"
                             "--expected-manifest-sha256", $manifestSha256, "--pair-id", "1024-idle", "--runs", "3", "--sample-timeout-sec", "120"
                         )
                         script_sha256 = [pscustomobject]$scriptHashes
-                        workload = [pscustomobject]@{ name = "anonymous_memory_sequential_write"; pattern = "shake256-v1"; allocated_mib = 3584; memory_max_mib = 1200; allocation_chunk_bytes = 67108864; worker_threads = 1 }
+                        workload = [pscustomobject]@{ name = "anonymous_memory_sequential_write"; pattern = "shake256-v1"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = 1 }
                     }
                     if ($Mode -eq "nbd") {
                         $record["nbd"] = [pscustomobject]@{

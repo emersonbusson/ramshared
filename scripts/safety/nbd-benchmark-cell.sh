@@ -15,7 +15,8 @@ OUT=""
 RUNS=3
 SAMPLE_TIMEOUT_SEC=120
 ALLOCATE_MIB=""
-MEMORY_MAX_MIB=1200
+MEMORY_HIGH_MIB=1200
+MEMORY_MAX_MIB=""
 CHUNK_MIB=64
 SEALED_RELEASE_ROOT=""
 RELEASE_VERSION=""
@@ -93,6 +94,7 @@ if [[ $ACTION == aggregate || $ACTION == run ]]; then
   [[ $TIER_MIB =~ ^(1024|2048|4096)$ ]] || refuse TIER_SIZE_INVALID
   [[ $RUNS == 3 ]] || refuse RUN_COUNT_INVALID
   ALLOCATE_MIB=$((TIER_MIB + 2560))
+  MEMORY_MAX_MIB=$((ALLOCATE_MIB + 512))
 elif [[ $ACTION == validate-nbd-identity-fixture ]]; then
   [[ $TIER_MIB =~ ^(1024|2048|4096)$ ]] || refuse TIER_SIZE_INVALID
 fi
@@ -133,7 +135,8 @@ for row in rows:
         and row.get("worker_threads") == 1
         and row.get("workload") == "anonymous_memory_sequential_write"
         and row.get("allocated_mib") == tier_mib + 2560
-        and row.get("memory_max_mib") == 1200
+        and row.get("memory_high_mib") == 1200
+        and row.get("memory_max_mib") == tier_mib + 3072
         and row.get("checksum_match") is True
         and row.get("ghost_swap") is False
     )
@@ -178,7 +181,8 @@ summary = {
     "worker_threads": 1,
     "workload": "anonymous_memory_sequential_write",
     "allocated_mib": tier_mib + 2560,
-    "memory_max_mib": 1200,
+    "memory_high_mib": 1200,
+    "memory_max_mib": tier_mib + 3072,
     "checksum": "PASS",
     "ghost_swap": False,
     "binary_match": "PASS" if mode == "nbd" else "N/A",
@@ -688,7 +692,7 @@ write_live_context_v2() {
     nbd_daemon_manifest_sha=""
   fi
   python3 - "$ARTIFACT_DIR/context.json" "$preflight" "$MODE" "$CONDITION" "$TIER_MIB" \
-    "$ALLOCATE_MIB" "$MEMORY_MAX_MIB" "$CHUNK_MIB" "$VERSION" "$kernel" "$manifest_sha" \
+    "$ALLOCATE_MIB" "$MEMORY_HIGH_MIB" "$MEMORY_MAX_MIB" "$CHUNK_MIB" "$VERSION" "$kernel" "$manifest_sha" \
     "$SOURCE_COMMIT" "$SOURCE_BRANCH" "$SOURCE_TREE_STATE" "$PAIR_ID" "$UTC_STARTED" "$RELEASE" "$zram_name" \
     "$zram_algorithm" "$zram_size_kib" "$zram_priority" "$lower_kind" "$lower_identity" \
     "$LOWER_SINK_TYPE" "$LOWER_SINK_IDENTITY_SHA256" "$binary_match" "$input_bundle_manifest_sha" \
@@ -699,7 +703,7 @@ import json
 import os
 import sys
 
-(out, preflight_path, mode, condition, tier, allocated, memory_max, chunk, version,
+(out, preflight_path, mode, condition, tier, allocated, memory_high, memory_max, chunk, version,
  kernel, manifest_sha, source_commit, source_branch, source_tree_state, pair_id, utc_started, release_root,
  zram_name, zram_algorithm, zram_size_kib, zram_priority, lower_kind, lower_identity,
  sink_type, sink_identity, binary_match, input_bundle_manifest_sha, nbd_device, nbd_block_major_minor,
@@ -778,6 +782,7 @@ record = {
         "name": "anonymous_memory_sequential_write",
         "pattern": "shake256-v1",
         "allocated_mib": int(allocated),
+        "memory_high_mib": int(memory_high),
         "memory_max_mib": int(memory_max),
         "allocation_chunk_bytes": int(chunk) * 1024 * 1024,
         "worker_threads": 1,
@@ -966,6 +971,7 @@ fi
 write_live_context_v2
 
 mkdir -- "$CG"
+printf '%s\n' $((MEMORY_HIGH_MIB * 1024 * 1024)) >"$CG/memory.high"
 printf '%s\n' $((MEMORY_MAX_MIB * 1024 * 1024)) >"$CG/memory.max"
 [[ -f $CG/memory.swap.max ]] && printf 'max\n' >"$CG/memory.swap.max"
 
@@ -1070,7 +1076,7 @@ row = {
     "tier_mib": int(tier), "allocation_to_hold_ms": int(elapsed), "pattern": "shake256-v1",
     "allocation_chunk_bytes": 64 * 1024 * 1024, "worker_threads": 1,
     "workload": "anonymous_memory_sequential_write", "allocated_mib": int(allocated),
-    "memory_max_mib": 1200, "checksum_match": True,
+    "memory_high_mib": 1200, "memory_max_mib": int(allocated) + 512, "checksum_match": True,
     "max_zram_delta_kib": int(zram), "max_nbd_delta_kib": int(nbd),
     "max_disk_delta_kib": int(disk), "max_scratch_delta_kib": int(scratch), "ghost_swap": False,
     "binary_match": binary,
