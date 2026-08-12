@@ -172,6 +172,37 @@ assert_identity_refusal nbd_identity_sink_hash_substitution NBD_IDENTITY_SINK_HA
   "$sink_substitution_root" "$sink_substitution_identity"
 pass nbd_second_tier_identity_refuses_missing_duplicate_foreign_and_substitution
 
+run_swap_classifier_fixture() {
+  local swaps_file=$1
+  RAMSHARED_NBD_ALLOW_MANUFACTURED_SWAP_CLASSIFIER_TEST=1 \
+    "$CELL" --classify-swap-fixture --swap-fixture "$swaps_file"
+}
+
+classifier_swaps="$TMP/swap-classifier-swaps"
+cat >"$classifier_swaps" <<'EOF'
+Filename Type Size Used Priority
+/dev/zram0 partition 1048576 64 200
+/dev/nbd0 partition 1048576 128 100
+/dev/ublkb0 partition 1048576 384 99
+/var/lib/ramshared/nbd/.ramshared-benchmark-swap-1024-idle-42 file 8388608 512 100
+/mnt/nbd-control.swap file 8388608 256 -2
+/dev/zramish0 file 8388608 128 -2
+/dev/nbd0.backup file 8388608 64 -2
+EOF
+set +e
+classifier_output=$(run_swap_classifier_fixture "$classifier_swaps" 2>&1)
+classifier_rc=$?
+set -e
+[[ $classifier_rc == 0 && $classifier_output == *'SWAP_USED_ZRAM_KIB=64'* &&
+  $classifier_output == *'SWAP_USED_NBD_KIB=512'* &&
+  $classifier_output == *'SWAP_USED_DISK_KIB=960'* &&
+  $classifier_output == *'SWAP_USED_GHOST=0'* ]] || {
+  printf 'FAIL swap_device_classifier_requires_exact_device_names: rc=%s output=%s\n' \
+    "$classifier_rc" "$classifier_output" >&2
+  exit 1
+}
+pass swap_device_classifier_requires_exact_device_names
+
 cat >"$TMP/samples.jsonl" <<'EOF'
 {"schema":1,"run":1,"mode":"nbd","condition":"idle","tier_mib":1024,"allocation_to_hold_ms":100,"pattern":"shake256-v1","allocation_chunk_bytes":67108864,"worker_threads":1,"workload":"anonymous_memory_sequential_write","allocated_mib":3584,"memory_high_mib":1200,"memory_max_mib":4096,"checksum_match":true,"max_zram_delta_kib":1041000,"max_nbd_delta_kib":1041000,"max_disk_delta_kib":100000,"max_scratch_delta_kib":0,"ghost_swap":false,"binary_match":"PASS"}
 {"schema":1,"run":2,"mode":"nbd","condition":"idle","tier_mib":1024,"allocation_to_hold_ms":200,"pattern":"shake256-v1","allocation_chunk_bytes":67108864,"worker_threads":1,"workload":"anonymous_memory_sequential_write","allocated_mib":3584,"memory_high_mib":1200,"memory_max_mib":4096,"checksum_match":true,"max_zram_delta_kib":1042000,"max_nbd_delta_kib":1042000,"max_disk_delta_kib":110000,"max_scratch_delta_kib":0,"ghost_swap":false,"binary_match":"PASS"}
