@@ -885,7 +885,7 @@ EOF
   }
 
   assert_reconnect_refusal() {
-    local name=$1 fail_stage=${2:-} topology_drift=${3:-0}
+    local name=$1 expected_reason=$2 fail_stage=${3:-} topology_drift=${4:-0}
     cp -- "$TMP/disk-control-swaps" "$reconnect_swaps"
     sed -i "s|$scratch file 8388604 0 100|/dev/nbd0 partition 1048572 0 100|" "$reconnect_swaps"
     : >"$reconnect_order"
@@ -901,29 +901,33 @@ EOF
       printf 'FAIL %s accepted an invalid reconnect transaction: %s\n' "$name" "$output" >&2
       exit 1
     }
+    grep -Fqx "NBD_REPUBLICATION_REASON=$expected_reason" <<<"$output" || {
+      printf 'FAIL %s did not persist exact reason %s: %s\n' "$name" "$expected_reason" "$output" >&2
+      exit 1
+    }
     ! grep -Eq 'attach:|detach:' "$reconnect_order" || {
       printf 'FAIL %s performed an NBD attach or detach\n' "$name" >&2
       exit 1
     }
   }
 
-  assert_reconnect_refusal nbd_swapoff_failure swapoff:/dev/nbd0
+  assert_reconnect_refusal nbd_swapoff_failure NBD_REPUBLICATION_SWAPOFF_NBD_FAILED swapoff:/dev/nbd0
   ! grep -Fq 'off:/dev/zram0' "$reconnect_order" || {
     echo 'FAIL NBD swapoff refusal advanced to zram swapoff' >&2
     exit 1
   }
-  assert_reconnect_refusal mkswap_failure mkswap
+  assert_reconnect_refusal mkswap_failure NBD_REPUBLICATION_MKSWAP_FAILED mkswap
   ! grep -Fq 'on:' "$reconnect_order" || {
     echo 'FAIL mkswap refusal advanced to swapon' >&2
     exit 1
   }
-  assert_reconnect_refusal zram_swapon_failure swapon:200
+  assert_reconnect_refusal zram_swapon_failure NBD_REPUBLICATION_ZRAM_SWAPON_FAILED swapon:200
   ! grep -Fq 'on:100:/dev/nbd0' "$reconnect_order" || {
     echo 'FAIL zram swapon refusal advanced to NBD swapon' >&2
     exit 1
   }
-  assert_reconnect_refusal nbd_swapon_failure swapon:100
-  assert_reconnect_refusal post_publish_topology_drift '' 1
+  assert_reconnect_refusal nbd_swapon_failure NBD_REPUBLICATION_NBD_SWAPON_FAILED swapon:100
+  assert_reconnect_refusal post_publish_topology_drift NBD_REPUBLICATION_POST_TOPOLOGY_INVALID '' 1
   grep -Fqx 'on:100:/dev/nbd0' "$reconnect_order" || {
     echo 'FAIL topology refusal did not reach the post-publish verifier' >&2
     exit 1
@@ -944,6 +948,7 @@ EOF
   grep -Fq 'original_nbd_identity=$NBD_SECOND_TIER_IDENTITY_SHA256' "$CELL"
   grep -Fq '[[ $NBD_SECOND_TIER_IDENTITY_SHA256 == "$original_nbd_identity" ]]' "$CELL"
   grep -Fq "pinned_preflight | grep -q '^NBD_BINARY_MATCH=PASS$'" "$CELL"
+  grep -Fq 'refuse "$SAMPLE_BASELINE_REASON"' "$CELL"
   pass nbd_sample_preserves_connected_device_without_reattach
 }
 
