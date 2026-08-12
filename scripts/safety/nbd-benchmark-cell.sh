@@ -960,8 +960,7 @@ if [[ $MODE == nbd ]]; then
 else
   create_zram_control
   create_disk_scratch
-  read -r z n _ ghost <<<"$(swap_used)"
-  (( z > 0 && n == 0 && ghost == 0 )) || refuse DISK_CONTROL_TIERS_MISSING
+  nbd_disk_control_topology_exact "$SWAPS_FILE" "$SCRATCH_SWAP" || refuse DISK_CONTROL_TIERS_MISSING
 fi
 
 write_live_context_v2
