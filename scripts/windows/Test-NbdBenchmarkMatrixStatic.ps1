@@ -226,6 +226,129 @@ try {
     Write-Output "PASS bounded_cell_requires_numeric_gpu_headroom"
 
     $source = Get-Content -LiteralPath $script -Raw
+    $functionSourceStart = $source.IndexOf("function Write-JsonNoBom")
+    $functionSourceEndMatch = [regex]::Match(
+        $source,
+        '(?m)^if \(-not \[string\]::IsNullOrWhiteSpace\(\$ManufacturedSelfTestCase\)\) \{'
+    )
+    if ($functionSourceStart -lt 0 -or -not $functionSourceEndMatch.Success -or
+        $functionSourceEndMatch.Index -le $functionSourceStart) {
+        throw "matrix function source extraction failed"
+    }
+    . ([scriptblock]::Create($source.Substring($functionSourceStart, $functionSourceEndMatch.Index - $functionSourceStart)))
+    $lowerIdentity = ("c" * 64) -join ""
+    $sinkIdentity = ("d" * 64) -join ""
+    $daemonManifestSha256 = ("e" * 64) -join ""
+    $newNbdCapacityContext = {
+        param([hashtable]$Overrides)
+        $nbd = [ordered]@{
+            device = "/dev/nbd0"; block_major_minor = "43:0"; size_kib = 1048576
+            capacity_sectors = 2097152; usable_size_kib = 1048572; priority = 100
+            server_pid = 4242; daemon_executable_relative_path = "bin/ramsharedd"
+            daemon_manifest_sha256 = $daemonManifestSha256; identity_sha256 = $lowerIdentity
+        }
+        foreach ($key in $Overrides.Keys) {
+            if ($null -eq $Overrides[$key]) { $null = $nbd.Remove($key) } else { $nbd[$key] = $Overrides[$key] }
+        }
+        [pscustomobject]@{
+            schema = 2; pair_id = "1024-idle"; mode = "nbd"; condition = "idle"; tier_mib = 1024
+            release = [pscustomobject]@{ version = "manufactured-v1"; source_commit = (("a" * 40) -join ""); source_tree_state = "clean"; manifest_sha256 = (("b" * 64) -join "") }
+            binary_match = "PASS"; watchdog = [pscustomobject]@{ armed = $true; outcome = "not_fired" }
+            lower = [pscustomobject]@{
+                type = "nbd"; identity_sha256 = $lowerIdentity
+                sink_type = "directory"; sink_identity_sha256 = $sinkIdentity
+            }
+            nbd = [pscustomobject]$nbd
+        }
+    }
+    $capacityCustodyFailures = New-Object 'System.Collections.Generic.List[string]'
+    $validCapacityContext = & $newNbdCapacityContext @{}
+    $validCapacityLower = Get-ModeBoundLowerTopology -Context $validCapacityContext -ExpectedMode "nbd" -FailurePrefix "manufactured"
+    try {
+        $validCapacityIdentity = Get-NbdIdentity -Context $validCapacityContext -ExpectedTierMiB 1024 -LowerTopology $validCapacityLower -FailurePrefix "manufactured"
+        $capacityProperty = $validCapacityIdentity.PSObject.Properties["capacity_sectors"]
+        $usableProperty = $validCapacityIdentity.PSObject.Properties["usable_size_kib"]
+        if ($null -eq $capacityProperty -or $null -eq $usableProperty -or
+            $capacityProperty.Value -ne 2097152 -or $usableProperty.Value -ne 1048572) {
+            [void]$capacityCustodyFailures.Add("identity_valid_values_not_retained")
+        }
+    } catch {
+        [void]$capacityCustodyFailures.Add("identity_valid_context_refused")
+    }
+    $identityRefusalMutations = @(
+        @{ name = "missing_capacity"; overrides = @{ capacity_sectors = $null } },
+        @{ name = "missing_usable"; overrides = @{ usable_size_kib = $null } },
+        @{ name = "malformed_capacity"; overrides = @{ capacity_sectors = "2097152.0" } },
+        @{ name = "malformed_usable"; overrides = @{ usable_size_kib = "1048572.0" } },
+        @{ name = "wrong_capacity"; overrides = @{ capacity_sectors = 2097151 } },
+        @{ name = "capacity_overflow"; overrides = @{ capacity_sectors = "18446744073709551616" } },
+        @{ name = "usable_overflow"; overrides = @{ usable_size_kib = "18446744073710600192" } },
+        @{ name = "excess_usable_loss"; overrides = @{ usable_size_kib = 1048567 } }
+    )
+    foreach ($mutation in $identityRefusalMutations) {
+        $context = & $newNbdCapacityContext $mutation.overrides
+        $lower = Get-ModeBoundLowerTopology -Context $context -ExpectedMode "nbd" -FailurePrefix "manufactured"
+        $accepted = $false
+        try { Get-NbdIdentity -Context $context -ExpectedTierMiB 1024 -LowerTopology $lower -FailurePrefix "manufactured" | Out-Null; $accepted = $true } catch {}
+        if ($accepted) { [void]$capacityCustodyFailures.Add("identity_" + $mutation.name + "_accepted") }
+    }
+    $newCapacityEvidence = {
+        param([hashtable]$Overrides, [string]$Name)
+        $dir = Join-Path $tmp ("nbd-capacity-custody-" + $Name)
+        New-Item -ItemType Directory -Path $dir | Out-Null
+        $contextPath = Join-Path $dir "context.json"
+        $samplesPath = Join-Path $dir "samples.jsonl"
+        $summaryPath = Join-Path $dir "summary.json"
+        $inventoryPath = Join-Path $dir "artifact-inventory.json"
+        $envelopePath = Join-Path $dir "evidence-envelope.json"
+        $beforePath = Join-Path $dir "before.txt"
+        $actionPath = Join-Path $dir "action.txt"
+        $afterPath = Join-Path $dir "after.txt"
+        $context = & $newNbdCapacityContext $Overrides
+        Write-JsonNoBom -Value $context -Path $contextPath
+        [IO.File]::WriteAllText($samplesPath, '{"sample":"manufactured"}' + "`n", [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText($beforePath, "before=manufactured`n", [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText($actionPath, "action=manufactured`n", [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText($afterPath, "after=manufactured`n", [Text.UTF8Encoding]::new($false))
+        $summary = [ordered]@{
+            status = "PASS"; terminal_state = "PRODUCT_OFF"; mode = "nbd"; binary_match = "PASS"
+            context_sha256 = Get-Sha256File -Path $contextPath
+        }
+        Write-JsonNoBom -Value $summary -Path $summaryPath
+        $inventory = [ordered]@{ schema = 2; files = @(
+            [ordered]@{ name = "before.txt"; bytes = (Get-Item -LiteralPath $beforePath).Length; sha256 = Get-Sha256File -Path $beforePath },
+            [ordered]@{ name = "action.txt"; bytes = (Get-Item -LiteralPath $actionPath).Length; sha256 = Get-Sha256File -Path $actionPath },
+            [ordered]@{ name = "after.txt"; bytes = (Get-Item -LiteralPath $afterPath).Length; sha256 = Get-Sha256File -Path $afterPath },
+            [ordered]@{ name = "context.json"; bytes = (Get-Item -LiteralPath $contextPath).Length; sha256 = Get-Sha256File -Path $contextPath },
+            [ordered]@{ name = "samples.jsonl"; bytes = (Get-Item -LiteralPath $samplesPath).Length; sha256 = Get-Sha256File -Path $samplesPath },
+            [ordered]@{ name = "summary.json"; bytes = (Get-Item -LiteralPath $summaryPath).Length; sha256 = Get-Sha256File -Path $summaryPath }
+        ) }
+        Write-JsonNoBom -Value $inventory -Path $inventoryPath
+        $envelope = [ordered]@{
+            schema_version = "ramshared-nbd-cell-evidence/v1"; pair_id = "1024-idle"; mode = "nbd"
+            release = [ordered]@{ version = "manufactured-v1"; source_commit = (("a" * 40) -join ""); manifest_sha256 = (("b" * 64) -join "") }
+            context_sha256 = Get-Sha256File -Path $contextPath; summary_sha256 = Get-Sha256File -Path $summaryPath
+            artifact_inventory_sha256 = Get-Sha256File -Path $inventoryPath; binary_match = "PASS"
+            watchdog = [ordered]@{ armed = $true; outcome = "not_fired" }; classification = "INCOMPARABLE"
+            artifacts = @($inventory.files | ForEach-Object { [ordered]@{ path = $_.name; bytes = $_.bytes; sha256 = $_.sha256 } })
+        }
+        Write-JsonNoBom -Value $envelope -Path $envelopePath
+        [pscustomobject]@{ directory = $dir; summary = [pscustomobject]$summary }
+    }
+    $validCapacityEvidence = & $newCapacityEvidence @{} "valid"
+    try { Assert-CellEvidence -Summary $validCapacityEvidence.summary -CellResultDirectory $validCapacityEvidence.directory | Out-Null } catch {
+        [void]$capacityCustodyFailures.Add("evidence_valid_context_refused")
+    }
+    foreach ($mutation in $identityRefusalMutations) {
+        $evidence = & $newCapacityEvidence $mutation.overrides $mutation.name
+        $accepted = $false
+        try { Assert-CellEvidence -Summary $evidence.summary -CellResultDirectory $evidence.directory | Out-Null; $accepted = $true } catch {}
+        if ($accepted) { [void]$capacityCustodyFailures.Add("evidence_" + $mutation.name + "_accepted") }
+    }
+    if ($capacityCustodyFailures.Count -ne 0) {
+        throw ("NBD capacity/usable-size custody accepted invalid state: " + ($capacityCustodyFailures -join ","))
+    }
+    Write-Output "PASS windows_nbd_capacity_and_usable_size_are_strict_custody_fields"
     if ($source -notmatch 'watchdog_timeout_red[\s\S]*promotion_stopped') {
         throw "watchdog must be RED and stop promotion"
     }

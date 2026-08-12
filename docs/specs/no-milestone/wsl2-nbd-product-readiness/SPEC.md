@@ -99,6 +99,7 @@
 | DT-NBD-37 | A successful cell writes a sanitized `context.json` schema 2, complete SHA-256 inventory, and an internal `ramshared-nbd-cell-evidence/v1` custody envelope. The context records UTC start, pair ID, full normalized argv, exact installed-release manifest and input-bundle manifest digest, source/script/zram/lower-tier identity, and a cell-local watchdog outcome. The inventory verifies every listed regular artifact; its own file and the internal envelope are excluded to avoid a recursive hash cycle, while the internal envelope hashes context, summary, and inventory. A disk-only cell has `BINARY_MATCH=N/A` and is never represented as public `ramshared-evidence/v1`. | A process exit and a partial inventory do not establish reproducible custody. A disk control cannot truthfully satisfy the public schema's `lifecycle.binary_match=true`, so cell custody and public pair evidence must be separate. |
 | DT-NBD-38 | Windows creates exactly one strict `ramshared-evidence/v1` envelope for a completed disk/NBD pair only after both cell custody records validate, the NBD cell reports `BINARY_MATCH=PASS`, comparison succeeds, and pair cleanup is complete. The public envelope has `lifecycle.binary_match=true`; it carries only sanitized pair facts and SHA-256 custody references. `BASELINE_CANDIDATE` maps to a non-promotable `BASELINE` decision, `NOT_COMPARABLE` maps to a non-promotable `INCOMPARABLE` decision, compatible green maps to a qualified `PASS`, and red/yellow remain non-promotable. | Public evidence is a claim about the paired NBD path, not the disk control alone. Mapping the controller's comparison vocabulary explicitly prevents a candidate or incomparable row from being presented as a public pass. |
 | DT-NBD-39 | Selected-release discovery records the exact installed `SHA256SUMS` digest as `installed_manifest_sha256`, validates `INSTALLED_MANIFEST_SHA256`, and records the preserved input-bundle manifest digest from `INSTALL_PROVENANCE.json`. Cell argv always binds `--expected-manifest-sha256` to the installed release manifest, never to a bundle-input digest; it accepts only `/opt/ramshared/releases/VERSION`, verifies the installed manifest, provenance/input digest, and exact bound sink before mutation, and never re-resolves `current` or invokes selector-derived lifecycle wrappers. The controller places generated public-pair artifacts under the campaign root with only repository-relative target names, labels them `candidate/noncanonical`, and does not append `docs/benchmarks/results.jsonl` or claim canonical evidence until the artifacts are copied into the repository and `node tools/ci/check-benchmark-evidence.mjs --check` validates them. | A bundle that produced an installed release and the installed release itself are different custody objects. The strict repository validator cannot validate host-local campaign files, so publication has an explicit copy-and-validate boundary. |
+| DT-NBD-40 | Treat `/proc/swaps` usable size and `/sys/block/nbdN/size` capacity as untrusted decimal identity inputs. Before any Bash arithmetic, the cell rejects noncanonical, over-width, or out-of-range text against trusted tier-derived bounds. The exact contract is `capacity_sectors == tier_mib * 2048` and `usable_size_kib in [tier_mib * 1024 - 8, tier_mib * 1024]`. Context/custody records retain all three distinct values: canonical block `size_kib`, observed `capacity_sectors`, and observed `usable_size_kib`. Windows parses both observed fields as strict, non-overflowing integral values and enforces the same relation in `Get-NbdIdentity` and `Assert-CellEvidence`. | A 20-digit `/proc/swaps` value can wrap in Bash arithmetic and falsely equal a valid size. Omitting either observed field from Windows custody permits an incomplete or substituted NBD identity to reach comparison/public-evidence code. |
 
 ## Atomicity/rollback
 
@@ -326,7 +327,9 @@ environment-bound and are not inferred from a manufactured test.
 | `scripts/safety/test-nbd-benchmark-cell.sh` | `cell_context_writer_is_unique_and_schema_v2` | static/refusal | #3/#18 | Exactly one live context writer and call remain, and the emitted context schema is exactly 2. |
 | `scripts/safety/nbd-benchmark-cgroup-launch.sh` + `scripts/safety/test-nbd-benchmark-cell.sh` | `benchmark_start_barrier_launcher_is_in_cgroup_before_exec` | manufactured/refusal | #13/#16 | The exact launcher PID is admitted before the worker starts; a fresh barrier is required before exec. |
 | `scripts/safety/nbd-benchmark-cell.sh` + `scripts/safety/test-nbd-benchmark-cell.sh` | `nbd_second_tier_identity_is_observed_and_separate_from_lower_sink` | manufactured/identity | #3/#16/#18 | The NBD identity is derived from the exact swap row, block device, size, priority, server PID, and manifest-matched daemon; the installed lower-sink identity remains separate. |
-| `scripts/safety/nbd-benchmark-cell.sh` + `scripts/safety/test-nbd-benchmark-cell.sh` | `nbd_identity_accepts_bounded_mkswap_overhead_and_exact_usable_size` | manufactured/identity | #3/#13/#18 | The exact NBD block capacity comes from the sysfs sector count, while `/proc/swaps` usable KiB may differ only by the bounded mkswap metadata allowance; malformed or wrong capacity and excessive loss refuse. |
+| `scripts/safety/nbd-benchmark-cell.sh` + `scripts/safety/test-nbd-benchmark-cell.sh` | `nbd_identity_accepts_bounded_mkswap_overhead_and_exact_usable_size` | manufactured/identity | #3/#13/#18 | The exact NBD block capacity comes from the sysfs sector count, while `/proc/swaps` usable KiB may differ by at most 8 KiB of mkswap metadata allowance; malformed or wrong capacity and excessive loss refuse. |
+| `scripts/safety/nbd-benchmark-cell.sh` + `scripts/safety/test-nbd-benchmark-cell.sh` | `nbd_usable_size_overflow_refuses_before_bash_arithmetic` | manufactured/refusal | #3/#13/#16/#18 | The exact `/proc/swaps` usable-size fixture `18446744073710600192` refuses as untrusted over-range text before Bash arithmetic can wrap it; a legitimate bounded usable size remains independent of exact block capacity. |
+| `scripts/windows/Invoke-NbdBenchmarkMatrix.ps1` + `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | `windows_nbd_capacity_and_usable_size_are_strict_custody_fields` | manufactured/refusal | #3/#13/#16/#18 | `Get-NbdIdentity` and `Assert-CellEvidence` require strict integral, non-overflowing `capacity_sectors` and `usable_size_kib`; the capacity is exactly `tier_mib * 2048`, usable size is within the inclusive 8 KiB mkswap interval, and missing, malformed, wrong, over-range, or excessive-loss values refuse before custody/comparison promotion. |
 | `scripts/safety/nbd-benchmark-cell.sh` + `scripts/safety/test-nbd-benchmark-cell.sh` | `nbd_second_tier_identity_refuses_missing_duplicate_foreign_and_substitution` | manufactured refusal | #13/#16/#18 | Missing, duplicate, foreign, size/priority/PID/executable/hash mismatch, and lower-sink-hash substitution all refuse. |
 | `scripts/package/build-linux-bundle.sh` + `scripts/safety/test-nbd-product-preflight.sh` | **TestName: `sealed_bundle_contains_benchmark_runner_and_worker`** | manufactured package/preflight | #3/#13 | A no-argument universal bundle contains every runner/worker dependency, source identity, and input manifest but no host binding; an attended fake-root installer derives a bound sealed release that passes read-only manufactured preflight without an environment lower-sink seam. |
 | `scripts/p0/Start-CudaVramWorkload.ps1` + `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | `cuda_workload_uses_fresh_handshakes_and_finally_releases_context` | static/manufactured refusal | #13/#16/#17 | Ready/release files are create-once; startup failure, deadline, and normal completion release device memory/context. |
@@ -382,8 +385,15 @@ only after its own membership is verified. Disk-only and NBD use those exact
 inputs and the same fresh 1 GiB zram tier at priority 200. The disk control
 uses one newly created exact 8 GiB scratch swapfile at priority 100; NBD uses
 one exact `V`-sized NBD tier at priority 100. The pre-existing WSL lower sink
-remains untouched and is not the compared second tier. The configured NBD swap
-size must independently equal the cell tier size before sampling.
+remains untouched and is not the compared second tier. The NBD block-device
+capacity must independently equal the cell tier size before sampling; the
+`/proc/swaps` usable-size field may be up to 8 KiB smaller because of mkswap
+metadata and is recorded separately. Both observed fields are untrusted text
+until bounded against the trusted tier: capacity is exactly `tier_mib * 2048`
+sectors and usable size is in `[tier_mib * 1024 - 8, tier_mib * 1024]` KiB.
+The cell must reject before evaluating an over-width decimal value in Bash
+arithmetic; Windows must carry and revalidate the same three-value identity in
+its internal custody gate.
 
 For `bounded`, one Windows-owned 512 MiB CUDA context is created after the
 numeric headroom gate and held across disk-only then NBD for the same pair. GPU
@@ -430,8 +440,12 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-tier --files crates/ram
   coverage owner: its exact two-line N3/NBD module declaration projection is
   owned by `microsoft-native-vram-memory-tier-n3-module-export-glue` in the N3
   SPEC and must not gain a re-export or any other glue.
-- [x] Static/manufactured tests cover legitimate and refusal pairs in the
-  corrected matrix implementation.
+- [ ] Static/manufactured tests cover legitimate and refusal pairs in the
+  corrected matrix implementation. The exact DT-NBD-40 tests
+  `nbd_usable_size_overflow_refuses_before_bash_arithmetic` and
+  `windows_nbd_capacity_and_usable_size_are_strict_custody_fields` are a
+  current local Gate A `NO-GO` until their RED reproducers are made green; no
+  earlier local-green result substitutes for them.
 - [x] Manufactured release install proves owner/mode/hash immutability and all
   25 named post-write selector/unit/destination rollback frontiers.
 - [x] Readiness proves NBD-only, no active ublk service/device, and no module

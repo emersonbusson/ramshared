@@ -149,6 +149,16 @@ sed -i 's/1048572 0 100/1048567 0 100/' "$usable_identity_root/proc/swaps"
 assert_identity_refusal nbd_identity_excessive_usable_loss NBD_IDENTITY_USABLE_SIZE_INVALID \
   "$usable_identity_root" "$lower_sink_identity"
 
+overflow_usable_identity_root="$TMP/identity-usable-overflow"
+make_identity_fixture "$overflow_usable_identity_root"
+# 2^64 + 1048576 would wrap to the nominal 1 GiB value in unchecked Bash
+# arithmetic. It must be refused as untrusted decimal input before arithmetic.
+sed -i 's/1048572 0 100/18446744073710600192 0 100/' \
+  "$overflow_usable_identity_root/proc/swaps"
+assert_identity_refusal nbd_usable_size_overflow NBD_IDENTITY_USABLE_SIZE_INVALID \
+  "$overflow_usable_identity_root" "$lower_sink_identity"
+pass nbd_usable_size_overflow_refuses_before_bash_arithmetic
+
 malformed_capacity_identity_root="$TMP/identity-capacity-malformed"
 make_identity_fixture "$malformed_capacity_identity_root"
 printf 'not-a-sector-count\n' >"$malformed_capacity_identity_root/sys/block/nbd0/size"
@@ -157,7 +167,7 @@ assert_identity_refusal nbd_identity_malformed_sysfs_capacity NBD_IDENTITY_SYSFS
 
 priority_identity_root="$TMP/identity-priority"
 make_identity_fixture "$priority_identity_root"
-sed -i 's/1048576 0 100/1048576 0 -2/' "$priority_identity_root/proc/swaps"
+sed -i 's/1048572 0 100/1048572 0 -2/' "$priority_identity_root/proc/swaps"
 assert_identity_refusal nbd_identity_priority_mismatch NBD_IDENTITY_PRIORITY_MISMATCH "$priority_identity_root" "$lower_sink_identity"
 
 server_identity_root="$TMP/identity-server"
