@@ -1962,7 +1962,7 @@ function Write-MatrixArtifactInventory {
     $rows = @()
     Get-ChildItem -LiteralPath $CampaignRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
         if ($_.Name -eq "matrix-artifact-inventory.json") { return }
-        $relative = $_.FullName.Substring($CampaignRoot.Length).TrimStart('\\', '/') -replace '\\', '/'
+        $relative = $_.FullName.Substring($CampaignRoot.Length).TrimStart([char]'\', [char]'/') -replace '\\', '/'
         $rows += [ordered]@{
             path = $relative
             bytes = $_.Length
@@ -2022,6 +2022,19 @@ function Invoke-ManufacturedSelfTest {
             }
             Write-Output "selector_flip_deactivation=PINNED"
             Write-Output "selector_flip_preflight=PINNED"
+            return
+        }
+        "matrix-inventory" {
+            $root = Join-Path $ArtifactRoot "matrix-inventory-manufactured"
+            $nested = Join-Path $root "nested"
+            New-Item -ItemType Directory -Force -Path $nested | Out-Null
+            [IO.File]::WriteAllText((Join-Path $nested "file.txt"), "fixture`n", [Text.UTF8Encoding]::new($false))
+            Write-MatrixArtifactInventory -CampaignRoot $root
+            $record = Get-Content -LiteralPath (Join-Path $root "matrix-artifact-inventory.json") -Raw | ConvertFrom-Json
+            if (@($record.files).Count -ne 1 -or [string]$record.files[0].path -cne "nested/file.txt") {
+                throw "manufactured_matrix_inventory_invalid"
+            }
+            Write-Output "matrix_inventory=PASS"
             return
         }
         "nbd-identity" {
