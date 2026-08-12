@@ -51,15 +51,30 @@ function readFrontmatter(filePath) {
   if (end === -1) return null;
   const block = raw.slice(3, end).trim();
   const fm = {};
-  for (const line of block.split(/\r?\n/)) {
-    const m = line.match(/^([a-zA-Z_]+):\s*(.+)$/);
+  const lines = block.split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const m = line.match(/^([a-zA-Z_]+):\s*(.*)$/);
     if (!m) continue;
     const key = m[1];
     const value = m[2].trim();
     if (key === "slug" || key === "title" || key === "milestone") {
       fm[key] = stripQuotes(value);
     } else if (key === "issues") {
-      fm.issues = parseIssueList(value);
+      if (value) {
+        fm.issues = parseIssueList(value);
+        continue;
+      }
+      const issues = [];
+      let next = index + 1;
+      for (; next < lines.length; next += 1) {
+        const item = lines[next].match(/^\s*-\s*(.*?)\s*$/);
+        if (!item) break;
+        const parsed = parseIssueEntry(item[1]);
+        if (parsed !== null) issues.push(parsed);
+      }
+      fm.issues = issues;
+      index = next - 1;
     }
   }
   return fm;
@@ -75,8 +90,20 @@ function parseIssueList(value) {
   return inner
     .split(",")
     .map((s) => s.trim())
-    .map((s) => Number(s))
-    .filter((n) => Number.isFinite(n));
+    .map(parseIssueEntry)
+    .filter((issue) => issue !== null);
+}
+
+function parseIssueEntry(value) {
+  const normalized = stripQuotes(value.trim());
+  if (/^\d+$/.test(normalized)) {
+    const issue = Number(normalized);
+    return Number.isFinite(issue) ? issue : null;
+  }
+  if (/^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*#\d+$/.test(normalized)) {
+    return normalized;
+  }
+  return null;
 }
 
 export function loadClaimsRegistry(root = REPO_ROOT) {
@@ -232,7 +259,9 @@ export function renderIndex(rows, indexPath = INDEX_PATH) {
   ];
   const indexDir = dirname(indexPath);
   for (const r of rows) {
-    const issues = r.issues.length > 0 ? r.issues.map((n) => `#${n}`).join(", ") : "—";
+    const issues = r.issues.length > 0
+      ? r.issues.map((issue) => typeof issue === "number" ? `#${issue}` : issue).join(", ")
+      : "—";
     const rel = relative(indexDir, r.dir).split("\\").join("/");
     const link = `[\`${r.slug}\`](${rel}/)`;
     table.push(

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "target_tag": "v0.9.0-beta.1",
+  "release_channel": "beta",
+  "public_assets": [
+    "ramshared-linux-v0.9.0-beta.1.tar.gz",
+    "ramshared-linux-v0.9.0-beta.1.tar.gz.sha256",
+    "ramshared-sbom.cdx.json",
+    "release-manifest.json"
+  ]
+}

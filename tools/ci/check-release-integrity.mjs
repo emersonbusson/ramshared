@@ -14,6 +14,7 @@ const TAG_RE = /^v[0-9][0-9A-Za-z.+-]*$/
 const RUST_VERSION_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
 const SBOM_GENERATOR = { name: 'cargo-cyclonedx', version: '0.5.9', spec_version: '1.5' }
 const DRIVER_SIGNING = new Set(['test-signed', 'unknown', 'untrusted', 'production-trusted'])
+const TARGET_TAG = 'v0.9.0-beta.1'
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -150,8 +151,38 @@ function validateEvidence(manifest, root, errors) {
   const evidence = manifest.evidence
   const result = validateArtifactManifest(evidence, { root })
   for (const rule of result.errors) add(errors, `release-evidence-${rule}`)
-  if (!evidenceContains(evidence, manifest.linux_bundle) || !evidenceContains(evidence, manifest.sbom)) {
+  if (!evidenceContains(evidence, manifest.linux_bundle) || !evidenceContains(evidence, manifest.detached_checksum) ||
+      !evidenceContains(evidence, manifest.sbom)) {
     add(errors, 'release-evidence-record-missing')
+  }
+}
+
+function sameStrings(left, right) {
+  return Array.isArray(left) && left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function validatePublicAssets(manifest, root, errors) {
+  const tag = manifest?.source?.tag
+  const expected = [
+    `ramshared-linux-${tag}.tar.gz`,
+    `ramshared-linux-${tag}.tar.gz.sha256`,
+    'ramshared-sbom.cdx.json',
+    'release-manifest.json',
+  ]
+  if (tag !== TARGET_TAG || !sameStrings(manifest?.public_assets, expected)) add(errors, 'release-public-assets-invalid')
+  const checksum = manifest?.detached_checksum
+  if (!isObject(checksum) || checksum.archive !== manifest?.linux_bundle?.path || checksum.algorithm !== 'sha256' ||
+      checksum.path !== `${manifest?.linux_bundle?.path}.sha256`) {
+    add(errors, 'detached-checksum-invalid')
+    return
+  }
+  const record = releaseFile(checksum, root, errors)
+  if (!record || !isObject(manifest?.linux_bundle)) return
+  const expectedChecksum = `${manifest.linux_bundle.sha256}  ${path.basename(manifest.linux_bundle.path)}\n`
+  if (record.bytes.toString('utf8') !== expectedChecksum) add(errors, 'detached-checksum-content-invalid')
+  if (path.basename(manifest.linux_bundle.path) !== expected[0] || path.basename(checksum.path) !== expected[1] ||
+      path.basename(manifest.sbom?.path ?? '') !== expected[2]) {
+    add(errors, 'release-public-assets-invalid')
   }
 }
 
@@ -176,6 +207,7 @@ export function validateReleaseManifest(manifest, options = {}) {
     add(errors, 'linux-bundle-invalid')
   }
   releaseFile(bundle, options.root, errors)
+  validatePublicAssets(manifest, options.root, errors)
   validateSbom(manifest, options.root, errors)
   validateEvidence(manifest, options.root, errors)
 

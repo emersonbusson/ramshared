@@ -1,0 +1,230 @@
+name: Release Publication
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact protected beta tag
+        required: true
+        type: string
+      source_sha:
+        description: Exact 40-character source commit SHA
+        required: true
+        type: string
+      integrity_run_id:
+        description: Successful Release Integrity workflow run ID
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release-publication-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release-publication:
+    name: release-publication
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: protected-release
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      INTEGRITY_RUN_ID: ${{ inputs.integrity_run_id }}
+    steps:
+      - name: Checkout trusted policy tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+
+      # The protected dispatch binds target tag, source SHA, and integrity run ID.
+      - name: Validate exact protected dispatch identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/ci/check-release-publication.mjs \
+            --policy docs/governance/release-promotion.json \
+            --tag "$RELEASE_TAG" \
+            --source-sha "$SOURCE_SHA" \
+            --integrity-run-id "$INTEGRITY_RUN_ID"
+
+      - name: Require publication GitHub App credentials
+        shell: bash
+        env:
+          RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+          RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_APP_ID"
+          test -n "$RELEASE_APP_PRIVATE_KEY"
+
+      - name: Create publication GitHub App token
+        id: release-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ramshared
+          permission-contents: write
+          permission-actions: read
+          permission-metadata: read
+
+      - name: Checkout exact source SHA
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          token: ${{ steps.release-app-token.outputs.token }}
+
+      - name: Verify target tag resolves to checked-out source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          tag_sha="$(git rev-list -n 1 "refs/tags/$RELEASE_TAG")"
+          checkout_sha="$(git rev-parse HEAD)"
+          test "$tag_sha" = "$SOURCE_SHA"
+          test "$checkout_sha" = "$SOURCE_SHA"
+
+      - name: Verify successful exact integrity run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p tmp/release-publication
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$INTEGRITY_RUN_ID" > tmp/release-publication/integrity-run.json
+          jq -e --arg sha "$SOURCE_SHA" '
+            .name == "Release Integrity" and
+            .event == "push" and
+            .status == "completed" and
+            .conclusion == "success" and
+            .head_sha == $sha
+          ' tmp/release-publication/integrity-run.json > /dev/null
+
+      - name: Download exact integrity candidate
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-integrity-${{ inputs.tag }}-${{ inputs.source_sha }}
+          path: tmp/release-integrity-artifact
+          github-token: ${{ steps.release-app-token.outputs.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.integrity_run_id }}
+
+      - name: Restore exact four-file integrity candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(printf '%s\n' \
+            "artifacts/release/ramshared-linux-$RELEASE_TAG.tar.gz" \
+            "artifacts/release/ramshared-linux-$RELEASE_TAG.tar.gz.sha256" \
+            'artifacts/release/ramshared-sbom.cdx.json' \
+            'artifacts/release/release-manifest.json')"
+          actual="$(find tmp/release-integrity-artifact -type f -printf '%P\n' | LC_ALL=C sort)"
+          test "$actual" = "$expected"
+          mkdir -p artifacts/release
+          for asset in \
+            "ramshared-linux-$RELEASE_TAG.tar.gz" \
+            "ramshared-linux-$RELEASE_TAG.tar.gz.sha256" \
+            ramshared-sbom.cdx.json \
+            release-manifest.json; do
+            cp -- "tmp/release-integrity-artifact/artifacts/release/$asset" "artifacts/release/$asset"
+          done
+
+      - name: Validate exact integrity candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/ci/check-release-integrity.mjs \
+            --check artifacts/release/release-manifest.json \
+            --root . --tag "$RELEASE_TAG" --revision "$SOURCE_SHA"
+          node tools/ci/check-release-publication.mjs \
+            --policy docs/governance/release-promotion.json \
+            --manifest artifacts/release/release-manifest.json \
+            --root . --tag "$RELEASE_TAG" --source-sha "$SOURCE_SHA" \
+            --integrity-run-id "$INTEGRITY_RUN_ID" \
+            --out tmp/release-publication/candidate.json
+
+      - name: Read exact draft release inventory
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > tmp/release-publication/remote-release.json
+
+      - name: Plan idempotent publication
+        id: publication-plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/ci/check-release-publication.mjs \
+            --policy docs/governance/release-promotion.json \
+            --candidate tmp/release-publication/candidate.json \
+            --remote tmp/release-publication/remote-release.json \
+            --out tmp/release-publication/plan.json
+          status="$(jq -r '.status' tmp/release-publication/plan.json)"
+          test "$status" = ADVANCE -o "$status" = NO_CHANGE
+          printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
+
+      - name: Upload only missing exact assets
+        if: ${{ steps.publication-plan.outputs.status == 'ADVANCE' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          jq -r '.upload_assets[]' tmp/release-publication/plan.json | while IFS= read -r asset; do
+            case "$asset" in
+              "ramshared-linux-$RELEASE_TAG.tar.gz"|"ramshared-linux-$RELEASE_TAG.tar.gz.sha256"|ramshared-sbom.cdx.json|release-manifest.json) ;;
+              *) exit 1 ;;
+            esac
+            gh release upload "$RELEASE_TAG" "artifacts/release/$asset"
+          done
+
+      - name: Verify complete draft inventory before visibility change
+        if: ${{ steps.publication-plan.outputs.status == 'ADVANCE' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > tmp/release-publication/remote-release-after-upload.json
+          node tools/ci/check-release-publication.mjs \
+            --policy docs/governance/release-promotion.json \
+            --candidate tmp/release-publication/candidate.json \
+            --remote tmp/release-publication/remote-release-after-upload.json \
+            --out tmp/release-publication/post-upload-plan.json
+          jq -e '.status == "ADVANCE" and .upload_assets == [] and .publish == true' \
+            tmp/release-publication/post-upload-plan.json > /dev/null
+
+      - name: Publish verified beta draft
+        if: ${{ steps.publication-plan.outputs.status == 'ADVANCE' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease
+
+      - name: Verify idempotent published state
+        if: ${{ steps.publication-plan.outputs.status == 'ADVANCE' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > tmp/release-publication/remote-release-published.json
+          node tools/ci/check-release-publication.mjs \
+            --policy docs/governance/release-promotion.json \
+            --candidate tmp/release-publication/candidate.json \
+            --remote tmp/release-publication/remote-release-published.json \
+            --out tmp/release-publication/final-plan.json
+          jq -e '.status == "NO_CHANGE" and .upload_assets == [] and .publish == false' \
+            tmp/release-publication/final-plan.json > /dev/null

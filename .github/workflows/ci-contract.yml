@@ -40,6 +40,24 @@ jobs:
       - name: Verify local contract admission
         run: node tools/ci/check-ci-contract.mjs --check-local
 
+      - name: Release promotion checker coverage
+        run: |
+          node --test --experimental-test-coverage \
+            --test-coverage-include=tools/ci/check-release-integrity.mjs \
+            --test-coverage-lines=80 --test-coverage-branches=80 \
+            --test-coverage-functions=80 \
+            tools/ci/check-release-integrity.test.mjs
+          node --test --experimental-test-coverage \
+            --test-coverage-include=tools/ci/write-release-manifest.mjs \
+            --test-coverage-lines=80 --test-coverage-branches=80 \
+            --test-coverage-functions=80 \
+            tools/ci/write-release-manifest.test.mjs
+          node --test --experimental-test-coverage \
+            --test-coverage-include=tools/ci/check-release-publication.mjs \
+            --test-coverage-lines=80 --test-coverage-branches=80 \
+            --test-coverage-functions=80 \
+            tools/ci/check-release-publication.test.mjs
+
       - name: Exact Rust coverage planner coverage
         run: >-
           node --test --experimental-test-coverage
