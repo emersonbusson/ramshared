@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Read-only identity helpers and exact scratch cleanup transaction shared by the
-# live benchmark cell and manufactured tests.
+# Identity predicates and narrow injected swap transactions shared by the live
+# benchmark cell and manufactured tests.
 
 nbd_scratch_identity() {
   local path=$1
@@ -58,6 +58,33 @@ nbd_republish_swap_pair() {
   "$swapon_command" -p 200 -- "$zram_path" || return 1
   "$swapon_command" -p 100 -- "$lower_path" || return 1
   nbd_swap_pair_topology_exact "$swaps_file" "$zram_path" "$lower_path" "$lower_type"
+}
+
+nbd_runtime_socket_exact() {
+  local socket_path=$1 expected_socket=$2 resolved
+  [[ $socket_path == "$expected_socket" && $socket_path == /* && -S $socket_path && ! -L $socket_path ]] \
+    || return 1
+  resolved=$(readlink -f -- "$socket_path" 2>/dev/null) || return 1
+  [[ $resolved == "$expected_socket" ]]
+}
+
+nbd_reconnect_republish_swap_pair() {
+  (( $# == 9 )) || return 1
+  local swaps_file=$1 zram_path=$2 nbd_path=$3 socket_path=$4 expected_socket=$5
+  local swapoff_command=$6 attach_command=$7 mkswap_command=$8 swapon_command=$9
+
+  [[ $nbd_path =~ ^/dev/nbd[0-9]+$ ]] || return 1
+  nbd_swap_pair_topology_exact "$swaps_file" "$zram_path" "$nbd_path" partition || return 1
+  "$swapoff_command" -- "$nbd_path" || return 1
+  "$swapoff_command" -- "$zram_path" || return 1
+  [[ $(nbd_swap_exact_count "$swaps_file" "$nbd_path") == 0 \
+    && $(nbd_swap_exact_count "$swaps_file" "$zram_path") == 0 ]] || return 1
+  nbd_runtime_socket_exact "$socket_path" "$expected_socket" || return 1
+  "$attach_command" -unix "$socket_path" "$nbd_path" || return 1
+  "$mkswap_command" -L RAMSHARED -- "$nbd_path" || return 1
+  "$swapon_command" -p 200 -- "$zram_path" || return 1
+  "$swapon_command" -p 100 -- "$nbd_path" || return 1
+  nbd_swap_pair_topology_exact "$swaps_file" "$zram_path" "$nbd_path" partition
 }
 
 nbd_cleanup_scratch() {

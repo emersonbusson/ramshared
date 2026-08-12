@@ -5,10 +5,14 @@
 ## Status
 
 `partial` · local static/manufactured gates green · cover ✓ · E2E partial ·
-BINARY_MATCH partial. Attempt 10 proved the corrected 1 GiB disk-only cell and
-reached NBD `READY`/`BINARY_MATCH=PASS`, but NBD sampling remains open after a
-pre-sample identity refusal. The complete ordered 1/2/4 GiB Windows/WSL2
-matrix has not run on the corrected release, so this is not DONE.
+BINARY_MATCH partial. Attempt 11b proved the corrected 1 GiB disk-only cell
+and NBD sample-one allocation, checksum, and occupancy, but failed while
+republishing the NBD baseline for sample two. The local correction now includes
+an explicit reconnect transaction and a daemon that serves two sequential
+connection generations before explicit shutdown and passed its fresh
+independent Gate A; it has not been deployed or rerun live. The complete ordered 1/2/4
+GiB Windows/WSL2 matrix has not run on the corrected release, so this is not
+DONE.
 
 ## Files
 
@@ -18,10 +22,10 @@ matrix has not run on the corrected release, so this is not DONE.
 | `crates/ramshared-cli/src/cascade/cascade_io.rs` | ITEM-4 / RF-NBD-10,12 | Teardown executor proves swapoff before NBD disconnect/daemon stop through an injected plan. |
 | `scripts/safety/nbd-product-preflight.sh` | ITEM-1..4,6 / RF-NBD-1..10,19 | Sealed installed-release, lower-sink, Relay, state, BINARY_MATCH, no-reboot, and live-seam gates. |
 | `scripts/safety/install-cascade-boot.sh` | ITEM-2,8 / RF-NBD-2,13 | Attended lower-sink-bound install, provenance, immutable backup, selector transaction, and rollback frontiers. |
-| `scripts/safety/nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14,15,17,18,19,20 | Disk/NBD cell, common zram topology, cgroup-before-start occupancy, exact scratch identity, exact device-name classification, sysfs-derived NBD capacity with bounded mkswap usable-size validation, cleanup, comparison, and internal custody envelope. |
+| `scripts/safety/nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14,15,17,18,19,20 | Disk/NBD cell, common zram topology, cgroup-before-start occupancy, exact scratch identity, exact device-name classification, sysfs-derived NBD capacity with bounded mkswap usable-size validation, explicit NBD reconnect baseline transaction, cleanup, comparison, and internal custody envelope. |
 | `scripts/safety/nbd-benchmark-cgroup-launch.sh` | ITEM-5 / RF-NBD-15 | In-cgroup launcher and create-once start barrier. |
-| `scripts/safety/nbd-benchmark-lib.sh` | ITEM-5 / RF-NBD-14,17 | Identity-bound scratch and swapoff-first helpers. |
-| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Twenty-two manufactured/refusal suites for topology, identity, exact device-name classification, all supported sysfs capacities, bounded mkswap usable size, overflow/trailing-field refusal, cgroup bounds, exact republication, activity receipts, cleanup, seams, custody, and aggregation. |
+| `scripts/safety/nbd-benchmark-lib.sh` | ITEM-5 / RF-NBD-14,17 | Identity-bound scratch, disk republication, and exact NBD reconnect baseline helpers. |
+| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Twenty-three manufactured/refusal suites for topology, identity, exact device-name classification, all supported sysfs capacities, bounded mkswap usable size, overflow/trailing-field refusal, cgroup bounds, disk and NBD reconnect republication, activity receipts, cleanup, seams, custody, and aggregation. |
 | `scripts/p0/Start-CudaVramWorkload.ps1` | ITEM-5 / RF-NBD-16,17 | Fresh pair-scoped CUDA handshakes and unconditional cleanup. |
 | `scripts/windows/Invoke-NbdBenchmarkMatrix.ps1` | ITEM-5..7 / RF-NBD-6,16..20 | Bounded Windows/WSL controller, numeric headroom, strict NBD capacity/usable-size custody, pair custody, promotion order, watchdog classification, and public pair envelope. |
 | `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | ITEM-5..7 / RF-NBD-16..20 | PowerShell static/manufactured contract and refusal checks, including strict NBD capacity/usable-size custody. |
@@ -38,7 +42,7 @@ matrix has not run on the corrected release, so this is not DONE.
   `failed_swapoff_keeps_daemon_and_device_alive`, and
   `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` are
   present and pass in the CLI suite.
-- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 22/22;
+- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 23/23;
   `bash scripts/safety/test-nbd-product-preflight.sh` → 26/26.
 - Public evidence: `node --test tools/ci/check-benchmark-evidence.test.mjs`
   → 15/15, including the sanitized pair-envelope fixture and custody rules.
@@ -60,6 +64,27 @@ matrix has not run on the corrected release, so this is not DONE.
   capacity/usable fields were accepted. Bounded decimal validation and strict
   Windows custody now make both named tests green, including 1/2/4 GiB and
   trailing-field cases. Independent Gate A remains required before commit.
+- DT-NBD-41 RED→GREEN: the committed reproducer first reached the intended
+  missing `nbd_reconnect_republish_swap_pair` function after all preceding
+  cell contracts passed. The helper now proves lower-first NBD/zram removal,
+  absence, an exact non-symlink Unix-socket endpoint, exact `nbd-client -unix`
+  argv without `-persist`, mandatory `mkswap -L RAMSHARED`, zram/NBD publish
+  order, and final exact topology. It refuses regular/mismatched sockets,
+  lower swapoff, attach, mkswap, both swapon stages, and post-publish topology
+  drift without retry or broad cleanup. The production NBD caller then
+  re-derives identity and repeats `BINARY_MATCH`; disk-only retains the generic
+  scratch republish path.
+- DT-NBD-42 RED→GREEN: the focused injected runtime received only one reply
+  from two sequential connection generations because the first balanced
+  `Closed` terminated the simple worker. The corrected runtime treats zero
+  live clients as quiescent, serves both generations against the same backend,
+  and terminates only on an explicit shutdown request. An owned, cancelable,
+  joined, nonblocking bridge carries production SIGINT/SIGTERM into a channel
+  wake; a full/disconnected queue falls back to the same terminal atomic at the
+  worker boundary. Focused tests prove two replies, idle wake,
+  full/disconnected queue refusal, and owned-socket cleanup. Canonical coverage
+  remains above threshold (`main.rs` 81.7%, `conn.rs` 96.5%). The fresh
+  independent Gate A passed on this exact runtime/shell contract before sealing.
 - First live campaign attempt: exited before any benchmark cell because
   PowerShell 5.1 rejected a multi-character `TrimStart` argument in the matrix
   inventory writer. The new exact manufactured test
@@ -127,11 +152,21 @@ matrix has not run on the corrected release, so this is not DONE.
   of mkswap usable-size loss, keeps context `nbd.size_kib` at the exact tier,
   and records the observed usable size separately; no live rerun has been
   performed in this task.
+- Attempt 11b (2026-08-12, reviewed release source `d1e270d`): disk-only
+  completed 3/3 samples with integrity, occupancy, and cleanup. NBD sample one
+  reached HOLD, passed its checksum, and recorded zram `1048572 KiB`, NBD
+  `1048572 KiB`, and disk `450740 KiB` occupancy before
+  `BASELINE_REPUBLICATION_FAILED`. The kernel receipt shows that
+  `swapoff /dev/nbd0` caused `NBD_DISCONNECT`; this is expected for the
+  deliberately non-persistent client and proves that generic swapoff/swapon
+  cannot republish NBD. The DT-NBD-41 local correction is not live evidence;
+  cleanup returned to `PRODUCT_OFF`, and a fresh approved rerun remains
+  required.
 
 ## SPEC matrix → named tests
 
 The corrected implementation has local coverage for its source/static/
-manufactured names, including the 22 cell tests, 26 preflight suites, fresh
+manufactured names, including the 23 cell tests, 26 preflight suites, fresh
 CUDA handshake/refusal checks, bounded WSL controller checks, exact
 ratio/baseline mappings, public-pair custody, and
 `sealed_bundle_contains_benchmark_runner_and_worker`, and both DT-NBD-40
@@ -176,4 +211,4 @@ anything other than `RED/unverified_terminated`; or any live seam/host action.
 
 | RF | ITEM | commit |
 | --- | --- | --- |
-| RF-NBD-1..20 | ITEM-1..8 | pending — reviewed source revision `368133ff3382d3f43ea5d1c3cbb66173e0fe8320` plus the focused exact-device classifier fix; the sealed release used by Attempt 9b was `6c83be7`; live matrix remains incomplete |
+| RF-NBD-1..20 | ITEM-1..8 | pending — Attempt 11b used reviewed source `d1e270d`; local RED checkpoints `b2b9fe9` and `3eb8e70` plus the reconnect GREEN passed independent Gate A and still require sealing and a live rerun |

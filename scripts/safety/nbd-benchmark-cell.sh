@@ -58,6 +58,7 @@ ZRAM_RECORD=${RAMSHARED_NBD_ZRAM_RECORD:-/run/ramshared/zram-dev}
 PROC_ROOT=${RAMSHARED_NBD_PROC_ROOT:-/proc}
 DEV_ROOT=${RAMSHARED_NBD_DEV_ROOT:-/dev}
 SYS_BLOCK_ROOT=${RAMSHARED_NBD_SYS_BLOCK_ROOT:-/sys/block}
+NBD_RUNTIME_SOCKET=/run/ramshared/wsl2d.sock
 
 refuse() {
   printf 'NBD_BENCHMARK_STATE=REFUSED\n'
@@ -711,12 +712,15 @@ republish_sample_baseline() {
     lower=$NBD_DEVICE
     lower_type=partition
     original_nbd_identity=$NBD_SECOND_TIER_IDENTITY_SHA256
+    nbd_reconnect_republish_swap_pair "$SWAPS_FILE" "$zdev" "$lower" "$NBD_RUNTIME_SOCKET" \
+      /run/ramshared/wsl2d.sock /sbin/swapoff /usr/sbin/nbd-client /sbin/mkswap /sbin/swapon \
+      || return 1
   else
     lower=$SCRATCH_SWAP
     lower_type=file
+    nbd_republish_swap_pair "$SWAPS_FILE" "$zdev" "$lower" "$lower_type" /sbin/swapoff /sbin/swapon \
+      || return 1
   fi
-  nbd_republish_swap_pair "$SWAPS_FILE" "$zdev" "$lower" "$lower_type" /sbin/swapoff /sbin/swapon \
-    || return 1
   if [[ $MODE == nbd ]]; then
     derive_nbd_second_tier_identity "$SWAPS_FILE" "$SYS_BLOCK_ROOT" "$DEV_ROOT" "$PROC_ROOT" \
       "$PID_FILE" "$DAEMON" "$RELEASE/SHA256SUMS" "$LOWER_SINK_IDENTITY_SHA256" 0 \

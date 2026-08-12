@@ -6,7 +6,16 @@ CELL="$ROOT/scripts/safety/nbd-benchmark-cell.sh"
 CGROUP_LAUNCH="$ROOT/scripts/safety/nbd-benchmark-cgroup-launch.sh"
 BENCHMARK_LIB="$ROOT/scripts/safety/nbd-benchmark-lib.sh"
 TMP=$(mktemp -d)
-trap 'rm -rf -- "$TMP"' EXIT
+declare -a TEST_CHILD_PIDS=()
+cleanup_test_children() {
+  local pid
+  for pid in "${TEST_CHILD_PIDS[@]}"; do
+    kill -TERM "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+  rm -rf -- "$TMP"
+}
+trap cleanup_test_children EXIT
 
 pass_count=0
 
@@ -790,19 +799,33 @@ cmp -s "$TMP/expected-republish-order" "$TMP/republish-order" || {
 }
 
 test_nbd_sample_reconnect_republication_contract() {
-  local socket regular_socket reconnect_swaps reconnect_order expected_order
+  local socket socket_ready socket_pid regular_socket reconnect_swaps reconnect_order expected_order
   local swapoff_cmd attach_cmd mkswap_cmd swapon_cmd output rc
 
   socket="$TMP/reconnect-wsl2d.sock"
-  python3 - "$socket" <<'PY'
+  socket_ready="$TMP/reconnect-wsl2d-ready"
+  python3 - "$socket" "$socket_ready" <<'PY' &
+import os
 import socket
 import sys
 
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 sock.bind(sys.argv[1])
-sock.close()
+sock.listen(4)
+fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+os.close(fd)
+while True:
+    connection, _ = sock.accept()
+    connection.close()
 PY
-  [[ -S $socket && ! -L $socket ]] || {
+  socket_pid=$!
+  TEST_CHILD_PIDS+=("$socket_pid")
+  for _ in $(seq 1 100); do
+    [[ -f $socket_ready ]] && break
+    kill -0 "$socket_pid" 2>/dev/null || break
+    sleep 0.01
+  done
+  [[ -f $socket_ready && -S $socket && ! -L $socket ]] || {
     echo 'FAIL manufactured Unix socket is not a socket' >&2
     exit 1
   }
@@ -818,7 +841,7 @@ PY
 import os
 import sys
 
-if sys.argv[1:] not in (("--", "/dev/nbd0"), ("--", "/dev/zram0")):
+if tuple(sys.argv[1:]) not in (("--", "/dev/nbd0"), ("--", "/dev/zram0")):
     raise SystemExit("unexpected_swapoff_argv")
 path = sys.argv[-1]
 if os.environ.get("RECONNECT_FAIL_STAGE") == "swapoff:" + path:
@@ -834,6 +857,7 @@ PY
   cat >"$attach_cmd" <<'PY'
 #!/usr/bin/env python3
 import os
+import socket
 import stat
 import sys
 
@@ -843,6 +867,10 @@ if sys.argv[1:] != expected or "-persist" in sys.argv[1:]:
 metadata = os.lstat(expected[1])
 if not stat.S_ISSOCK(metadata.st_mode):
     raise SystemExit("attach_without_socket")
+connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+connection.settimeout(1)
+connection.connect(expected[1])
+connection.close()
 if os.environ.get("RECONNECT_FAIL_STAGE") == "attach":
     raise SystemExit(32)
 with open(os.environ["ORDER_FIXTURE"], "a", encoding="utf-8") as target:
@@ -943,6 +971,11 @@ EOF
     echo 'FAIL mismatched socket target reached nbd-client' >&2
     exit 1
   }
+  assert_reconnect_refusal nbd_swapoff_failure "$socket" "$socket" swapoff:/dev/nbd0
+  ! grep -Fq 'off:/dev/zram0' "$reconnect_order" || {
+    echo 'FAIL NBD swapoff refusal advanced to zram swapoff' >&2
+    exit 1
+  }
   assert_reconnect_refusal attach_failure "$socket" "$socket" attach
   ! grep -Fq 'mkswap:' "$reconnect_order" || {
     echo 'FAIL attach refusal advanced to mkswap' >&2
@@ -969,6 +1002,13 @@ EOF
 }
 
 test_nbd_sample_reconnect_republication_contract
+
+reconnect_calls=$(grep -Fc 'nbd_reconnect_republish_swap_pair "$SWAPS_FILE" "$zdev" "$lower" "$NBD_RUNTIME_SOCKET"' "$CELL" || true)
+disk_republish_calls=$(grep -Fc 'nbd_republish_swap_pair "$SWAPS_FILE" "$zdev" "$lower" "$lower_type"' "$CELL" || true)
+[[ $reconnect_calls == 1 && $disk_republish_calls == 1 ]] || {
+  echo 'FAIL NBD and disk sample republication paths are not both explicit' >&2
+  exit 1
+}
 
 for extra in "/dev/zram9 partition 1048572 0 200" "/dev/nbd9 partition 1048572 0 100" "/dev/ublkb9 partition 1048572 0 100"; do
   cp -- "$TMP/disk-control-swaps" "$TMP/republish-extra"
