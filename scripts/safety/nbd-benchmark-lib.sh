@@ -5,7 +5,7 @@
 nbd_scratch_identity() {
   local path=$1
   [[ -f $path && ! -L $path ]] || return 1
-  stat -c '%d:%i:%u:%g:%a:%F' -- "$path" 2>/dev/null
+  stat -c '%d:%i:%u:%g:%a:%f' -- "$path" 2>/dev/null
 }
 
 nbd_scratch_matches() {

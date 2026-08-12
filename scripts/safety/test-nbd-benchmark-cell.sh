@@ -592,12 +592,21 @@ wait "$launcher_pid"
 }
 
 scratch="$TMP/scratch.swap"
-printf 'scratch\n' >"$scratch"
+: >"$scratch"
 chmod 0600 "$scratch"
 scratch_identity=$(nbd_scratch_identity "$scratch")
+[[ $scratch_identity == *':600:8180' ]] || {
+  echo 'FAIL empty scratch identity is not stable numeric regular-file metadata' >&2
+  exit 1
+}
+truncate -s 8192 "$scratch"
+[[ $(nbd_scratch_identity "$scratch") == "$scratch_identity" ]] || {
+  echo 'FAIL allocated scratch changed stable identity' >&2
+  exit 1
+}
 ln -s "$scratch" "$TMP/scratch-link"
 ! nbd_scratch_identity "$TMP/scratch-link" >/dev/null
-! nbd_scratch_matches "$scratch" "0:0:0:0:600:regular file"
+! nbd_scratch_matches "$scratch" "0:0:0:0:600:8180"
 printf 'Filename Type Size Used Priority\n%s file 1024 0 100\n' "$scratch" >"$TMP/swaps"
 cat >"$TMP/swapoff-fail.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -620,6 +629,7 @@ SCRATCH_FIXTURE="$scratch" SWAPS_FIXTURE="$TMP/swaps" \
   nbd_cleanup_scratch "$scratch" "$scratch_identity" "$TMP/swaps" "$TMP/swapoff-pass.sh"
 [[ ! -e $scratch ]] || { echo 'FAIL exact successful cleanup retained scratch' >&2; exit 1; }
 pass disk_control_scratch_is_exclusive_identity_bound_and_swapoff_first
+pass scratch_identity_is_stable_for_empty_and_allocated_regular_file
 pass benchmark_cleanup_refuses_ghost_or_residual_swap
 pass benchmark_start_barrier_launcher_is_in_cgroup_before_exec
 pass benchmark_live_seams_are_unavailable_in_approved_mode

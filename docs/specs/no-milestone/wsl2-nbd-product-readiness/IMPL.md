@@ -21,7 +21,7 @@ live claim is made.
 | `scripts/safety/nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14,15,17,18,19,20 | Disk/NBD cell, common zram topology, cgroup-before-start occupancy, exact scratch identity, cleanup, comparison, and internal custody envelope. |
 | `scripts/safety/nbd-benchmark-cgroup-launch.sh` | ITEM-5 / RF-NBD-15 | In-cgroup launcher and create-once start barrier. |
 | `scripts/safety/nbd-benchmark-lib.sh` | ITEM-5 / RF-NBD-14,17 | Identity-bound scratch and swapoff-first helpers. |
-| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Thirteen manufactured/refusal suites for topology, observed NBD identity, occupancy, cleanup, seams, custody, and aggregation. |
+| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Fourteen manufactured/refusal suites for topology, observed NBD identity, stable scratch identity, occupancy, cleanup, seams, custody, and aggregation. |
 | `scripts/p0/Start-CudaVramWorkload.ps1` | ITEM-5 / RF-NBD-16,17 | Fresh pair-scoped CUDA handshakes and unconditional cleanup. |
 | `scripts/windows/Invoke-NbdBenchmarkMatrix.ps1` | ITEM-5..7 / RF-NBD-6,16..20 | Bounded Windows/WSL controller, numeric headroom, pair custody, promotion order, watchdog classification, and public pair envelope. |
 | `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | ITEM-5..7 / RF-NBD-16..20 | PowerShell static/manufactured contract and refusal checks. |
@@ -38,7 +38,7 @@ live claim is made.
   `failed_swapoff_keeps_daemon_and_device_alive`, and
   `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` are
   present and pass in the CLI suite.
-- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 13/13;
+- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 14/14;
   `bash scripts/safety/test-nbd-product-preflight.sh` → 26/26.
 - Public evidence: `node --test tools/ci/check-benchmark-evidence.test.mjs`
   → 15/15, including the sanitized pair-envelope fixture and custody rules.
@@ -71,11 +71,18 @@ live claim is made.
   transports an inline shell program: bounded direct `readlink`, `cat`, and
   `sha256sum` argv return the sealed records, and PowerShell validates the exact
   installed manifest, input manifest, source state, and provenance.
+- Fourth live campaign attempt: direct release discovery and campaign preflight
+  passed, then the first disk-only cell refused before `mkswap` because GNU
+  `stat %F` reports a newly created file as `regular empty file`. Scratch
+  identity now uses stable numeric file-mode metadata and the manufactured test
+  requires the identity to remain exact across empty-file allocation. The
+  zero-byte, root-owned, inactive residue was moved to a root-only quarantine;
+  it was never present in `/proc/swaps`.
 
 ## SPEC matrix → named tests
 
 The corrected implementation has local coverage for all source/static/
-manufactured names in SPEC § Required tests matrix, including the 13 cell
+manufactured names in SPEC § Required tests matrix, including the 14 cell
 tests, 26 preflight suites, fresh CUDA handshake/refusal checks, bounded WSL
 controller checks, exact ratio/baseline mappings, public-pair custody, and
 `sealed_bundle_contains_benchmark_runner_and_worker`. The live rows
@@ -119,4 +126,4 @@ anything other than `RED/unverified_terminated`; or any live seam/host action.
 
 | RF | ITEM | commit |
 | --- | --- | --- |
-| RF-NBD-1..20 | ITEM-1..8 | pending — current source revision `88077b159ca521acaed6f3fc1ad9c713cfce58da`; no commit created by this docs reconciliation |
+| RF-NBD-1..20 | ITEM-1..8 | pending — reviewed source revision `e8b0e62a4e39c8c015436e3c922df402c65457c0` plus the focused scratch-identity fix in this change; live matrix remains incomplete |
