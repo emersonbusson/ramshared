@@ -1,28 +1,15 @@
-# RamShared cascade sizes (MiB). Copied to /etc/ramshared/cascade.conf on install
-# if that file does not exist yet. Edit the copy under /etc — not this example.
+# Sealed NBD cascade configuration for one release.
 #
-# Kernel order is FIXED (not configured here):
-#   zram prio 200  →  VRAM/nbd prio 100  →  SSD/VHDX prio ≈ -2
-# When WSL RAM (e.g. memory=16G in .wslconfig) is under pressure, pages go to
-# VRAM tier BEFORE the disk swap. These numbers only set HOW MUCH of each tier.
-#
-# Keep VRAM below free GPU memory − headroom (games / desktop need headroom).
-# The daemon gives VRAM back when free memory on the card drops (DEMOTE).
+# This file is packaged inside /opt/ramshared/releases/<version>. It is not
+# sourced as shell code. Change a setting by publishing and selecting another
+# sealed version; never edit a selected release in place.
 
-# Capacity advertised as NBD size (MiB). Sparse: not fully committed at up.
-# On a 6 GiB GPU, 4096 is the recommended product default (4 GiB for WSL2 cascade);
-# 6144 is max "up to 6G" but commit is auto-capped to (GPU total − reserve).
-# Shared desktop: keep MIN_VRAM_HEADROOM so Windows/Hyper-V/civm still have GPU free.
-VRAM_MIB=4096
-ZRAM_MIB=2048
+# The current source-only gate permits the 1 GiB pilot configuration only.
+VRAM_MIB=1024
+ZRAM_MIB=1024
 
-# Reserve floor (MiB): never allocate another CUDA chunk if free would fall below this.
-# Also used as sparse preflight headroom. Prefer 1024 when Windows + other VMs share the GPU.
-MIN_VRAM_HEADROOM_MIB=1024
-
-# Optional env (export before up / in systemd unit Environment=):
-#   RAMSHARED_VRAM_PREALLOC=1        # old full cuMemAlloc(size) at start
-#   RAMSHARED_VRAM_CHUNK_MIB=128
-#   RAMSHARED_VRAM_IDLE_FREE_SEC=30
-#   RAMSHARED_VRAM_COMMIT_CAP_MIB=5120  # optional hard cap; default = min(VRAM_MIB, total−reserve)
-#   RAMSHARED_MIN_VRAM_FREE_MIB=512     # same as MIN_VRAM_HEADROOM for daemon free-floor
+# An operator-approved release must contain exactly one existing lower-tier
+# directory. Leave this empty in a generic bundle so the read-only preflight
+# refuses instead of guessing a host path. The check also accepts a scoped
+# RAMSHARED_NBD_LOWER_SINK override for an attended, approved execution.
+NBD_LOWER_SINK=

@@ -1,106 +1,331 @@
 #!/usr/bin/env bash
-# install-cascade-boot.sh — opt-in WSL2 cascade on boot (fail-closed).
-# SPEC: docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md ITEM-1
-#
-# Default: install unit + conf only (does NOT enable).
-# Enable with:  sudo bash scripts/safety/install-cascade-boot.sh --enable
+# Install one already-built, sealed NBD release. The no-argument path is a
+# read-only plan; every filesystem or systemd write needs exact version scope.
 set -euo pipefail
 
-REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-SD="$REPO/scripts/safety/systemd"
-SCRIPTS="$REPO/scripts/safety"
-BIN_DIR="${RAMSHARED_BIN_DIR:-$REPO/target/release}"
-ENABLE=0
+SOURCE_RELEASE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+PRODUCT_ROOT=/opt/ramshared
+RELEASE_ROOT="$PRODUCT_ROOT/releases"
+UNIT_PATH=/etc/systemd/system/ramshared-cascade.service
+CURRENT_SELECTOR="$PRODUCT_ROOT/current"
+APPROVED_VERSION=
+declare -A INSTALL_MANIFEST_HASHES=()
+DESTINATION=
+STAGING=
+SELECTOR_STAGING=
+UNIT_STAGING=
+ROLLBACK_SELECTOR_STAGING=
+PRIOR_SELECTOR_TARGET=
+PUBLISHED_DESTINATION=0
+UNIT_CREATED=0
 
-for arg in "$@"; do
-  case "$arg" in
-    --enable) ENABLE=1 ;;
+refuse() {
+  printf 'NBD_INSTALL_STATE=REFUSED\n'
+  printf 'NBD_INSTALL_REASON=%s\n' "$1"
+  exit 1
+}
+
+usage() {
+  cat <<'EOF'
+Usage:
+  install-cascade-boot.sh [--plan]
+  install-cascade-boot.sh --approve-nbd-product-install <version>
+
+The default is a read-only plan. Approval must name exactly the sealed release
+version in this bundle. This source-only slice installs its unit disabled: a
+separate scoped lifecycle approval is required before it can activate or
+deactivate a cascade.
+EOF
+}
+
+read_release_version() {
+  local version trailing
+  [[ -f $SOURCE_RELEASE/RELEASE_VERSION && ! -L $SOURCE_RELEASE/RELEASE_VERSION ]] || refuse RELEASE_VERSION_MISSING
+  IFS= read -r version <"$SOURCE_RELEASE/RELEASE_VERSION" || refuse RELEASE_VERSION_MISSING
+  trailing=$(sed -n '2p' "$SOURCE_RELEASE/RELEASE_VERSION")
+  [[ -z $trailing && $version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || refuse RELEASE_VERSION_INVALID
+  RELEASE_VERSION=$version
+}
+
+verify_release_tree() {
+  local root=$1 manifest line digest relative actual listed required
+  [[ -f $root/SHA256SUMS && ! -L $root/SHA256SUMS ]] || refuse RELEASE_MANIFEST_MISSING
+  [[ -z $(find "$root" -type l -print -quit) ]] || refuse RELEASE_SYMLINK_FORBIDDEN
+  [[ -z $(find "$root" \( -type p -o -type b -o -type c -o -type s \) -print -quit) ]] || refuse RELEASE_NON_REGULAR_OBJECT
+  manifest="$root/SHA256SUMS"
+  INSTALL_MANIFEST_HASHES=()
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line =~ ^([[:xdigit:]]{64})\ \ \./([A-Za-z0-9][A-Za-z0-9._/-]*)$ ]] || refuse RELEASE_MANIFEST_FORMAT_INVALID
+    digest=${BASH_REMATCH[1],,}
+    relative=${BASH_REMATCH[2]}
+    [[ $relative != SHA256SUMS && $relative != ../* && $relative != */../* && $relative != *'/..' && $relative != *'//' && $relative != *'/./'* ]] || refuse RELEASE_MANIFEST_PATH_INVALID
+    [[ -z ${INSTALL_MANIFEST_HASHES[$relative]+x} ]] || refuse RELEASE_MANIFEST_DUPLICATE
+    [[ -f $root/$relative && ! -L $root/$relative ]] || refuse RELEASE_MANIFEST_ENTRY_MISSING
+    actual=$(sha256sum -- "$root/$relative" | awk '{print $1}')
+    [[ $actual == "$digest" ]] || refuse RELEASE_MANIFEST_HASH_MISMATCH
+    INSTALL_MANIFEST_HASHES[$relative]=$digest
+  done <"$manifest"
+  [[ ${#INSTALL_MANIFEST_HASHES[@]} -gt 0 ]] || refuse RELEASE_MANIFEST_EMPTY
+  while IFS= read -r -d '' listed; do
+    relative=${listed#"$root"/}
+    [[ -n ${INSTALL_MANIFEST_HASHES[$relative]+x} ]] || refuse RELEASE_MANIFEST_INCOMPLETE
+  done < <(find "$root" -type f ! -name SHA256SUMS -print0)
+  for required in \
+    bin/ramshared \
+    bin/ramsharedd \
+    scripts/safety/install-cascade-boot.sh \
+    scripts/safety/nbd-product-preflight.sh \
+    scripts/safety/cascade-up.sh \
+    scripts/safety/cascade-down.sh \
+    scripts/safety/wsl-relay-health.sh \
+    scripts/safety/cascade.conf.example \
+    systemd/ramshared-cascade.service; do
+    [[ -f $root/$required && ! -L $root/$required ]] || refuse RELEASE_LAYOUT_INVALID
+  done
+  [[ -x $root/bin/ramshared && -x $root/bin/ramsharedd ]] || refuse RELEASE_LAYOUT_INVALID
+  (cd "$root" && sha256sum -c --status SHA256SUMS) || refuse RELEASE_MANIFEST_HASH_MISMATCH
+}
+
+require_sealed_node() {
+  local path=$1 metadata mode
+  metadata=$(stat -c '%u:%g:%a' -- "$path" 2>/dev/null || true)
+  [[ $metadata =~ ^0:0:([0-7]{3,4})$ ]] || refuse RELEASE_SEAL_OWNER_MODE_INVALID
+  mode=${BASH_REMATCH[1]}
+  (( (8#$mode & 0222) == 0 )) || refuse RELEASE_SEAL_OWNER_MODE_INVALID
+
+  if [[ -d $path ]]; then
+    [[ $mode == 555 ]] || refuse RELEASE_SEAL_OWNER_MODE_INVALID
+  elif [[ -f $path ]]; then
+    if [[ -x $path ]]; then
+      [[ $mode == 555 ]] || refuse RELEASE_SEAL_OWNER_MODE_INVALID
+    else
+      [[ $mode == 444 ]] || refuse RELEASE_SEAL_OWNER_MODE_INVALID
+    fi
+  else
+    refuse RELEASE_NON_REGULAR_OBJECT
+  fi
+}
+
+verify_sealed_release_tree() {
+  local root=$1 path
+  while IFS= read -r -d '' path; do
+    require_sealed_node "$path"
+  done < <(find "$root" -type d -print0)
+  while IFS= read -r -d '' path; do
+    require_sealed_node "$path"
+  done < <(find "$root" -type f -print0)
+}
+
+systemctl_status() {
+  local operation=$1 unit=$2 status
+  set +e
+  systemctl "$operation" --quiet "$unit" >/dev/null 2>&1
+  status=$?
+  set -e
+  printf '%s\n' "$status"
+}
+
+check_unit_inert() {
+  local unit=$1 active enabled
+  active=$(systemctl_status is-active "$unit")
+  case $active in
+    3|4) ;;
+    0) refuse PRODUCT_UNIT_ACTIVE ;;
+    *) refuse PRODUCT_UNIT_ACTIVITY_UNKNOWN ;;
+  esac
+  enabled=$(systemctl_status is-enabled "$unit")
+  case $enabled in
+    1) ;;
+    0) refuse PRODUCT_UNIT_ENABLED ;;
+    *) refuse PRODUCT_UNIT_ENABLEMENT_UNKNOWN ;;
+  esac
+}
+
+check_existing_unit_file() {
+  local expected_unit=${1:-"$SOURCE_RELEASE/systemd/ramshared-cascade.service"}
+  [[ ! -L $UNIT_PATH ]] || refuse PRODUCT_UNIT_CONFLICT
+  if [[ -e $UNIT_PATH ]]; then
+    [[ -f $UNIT_PATH ]] || refuse PRODUCT_UNIT_CONFLICT
+    cmp -s "$expected_unit" "$UNIT_PATH" || refuse PRODUCT_UNIT_CONFLICT
+  fi
+}
+
+path_exists_or_link() {
+  [[ -e $1 || -L $1 ]]
+}
+
+capture_prior_selector() {
+  local target resolved version
+  if [[ -L $CURRENT_SELECTOR ]]; then
+    target=$(readlink -- "$CURRENT_SELECTOR" 2>/dev/null || true)
+    [[ $target =~ ^releases/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || refuse CURRENT_SELECTOR_INVALID
+    version=${target#releases/}
+    resolved=$(readlink -f -- "$CURRENT_SELECTOR" 2>/dev/null || true)
+    [[ $resolved == "$RELEASE_ROOT/$version" && -d $resolved ]] || refuse CURRENT_SELECTOR_INVALID
+    PRIOR_SELECTOR_TARGET=$target
+  elif [[ -e $CURRENT_SELECTOR ]]; then
+    refuse CURRENT_SELECTOR_CONFLICT
+  fi
+}
+
+selector_points_to_destination() {
+  local resolved
+  [[ -n $DESTINATION && -L $CURRENT_SELECTOR ]] || return 1
+  resolved=$(readlink -f -- "$CURRENT_SELECTOR" 2>/dev/null || true)
+  [[ $resolved == "$DESTINATION" ]]
+}
+
+remove_path_if_present() {
+  local path=$1
+  [[ -n $path ]] || return 0
+  path_exists_or_link "$path" || return 0
+  rm -rf -- "$path"
+}
+
+restore_prior_selector() {
+  if [[ -n $PRIOR_SELECTOR_TARGET ]]; then
+    path_exists_or_link "$ROLLBACK_SELECTOR_STAGING" && return 1
+    ln -s "$PRIOR_SELECTOR_TARGET" "$ROLLBACK_SELECTOR_STAGING" || return 1
+    chown -h root:root "$ROLLBACK_SELECTOR_STAGING" || return 1
+    mv -Tf "$ROLLBACK_SELECTOR_STAGING" "$CURRENT_SELECTOR" || return 1
+    return 0
+  fi
+
+  rm -f -- "$CURRENT_SELECTOR"
+}
+
+remove_created_unit_if_owned() {
+  (( UNIT_CREATED )) || return 0
+  if [[ -f $UNIT_PATH ]] && cmp -s "$DESTINATION/systemd/ramshared-cascade.service" "$UNIT_PATH"; then
+    rm -f -- "$UNIT_PATH"
+  fi
+  UNIT_CREATED=0
+}
+
+rollback_after_failure() {
+  local status=$?
+  trap - EXIT
+  if (( status != 0 )); then
+    set +e
+    remove_path_if_present "$STAGING"
+    remove_path_if_present "$SELECTOR_STAGING"
+    if selector_points_to_destination; then
+      restore_prior_selector || printf 'NBD_INSTALL_ROLLBACK=SELECTOR_RESTORE_FAILED\n' >&2
+    fi
+    remove_created_unit_if_owned
+    remove_path_if_present "$UNIT_STAGING"
+    if (( PUBLISHED_DESTINATION )) && ! selector_points_to_destination; then
+      remove_path_if_present "$DESTINATION"
+      PUBLISHED_DESTINATION=0
+    fi
+    remove_path_if_present "$ROLLBACK_SELECTOR_STAGING"
+  fi
+  exit "$status"
+}
+
+install_unit_if_absent() {
+  if path_exists_or_link "$UNIT_PATH"; then
+    check_existing_unit_file "$DESTINATION/systemd/ramshared-cascade.service"
+    return
+  fi
+
+  path_exists_or_link "$UNIT_STAGING" && refuse INSTALL_STAGING_EXISTS
+  install -m 0644 "$DESTINATION/systemd/ramshared-cascade.service" "$UNIT_STAGING"
+  # NBD_INSTALL_POST_WRITE_PHASE=unit-staged
+  ln "$UNIT_STAGING" "$UNIT_PATH" || refuse PRODUCT_UNIT_CONFLICT
+  UNIT_CREATED=1
+  # NBD_INSTALL_POST_WRITE_PHASE=unit-linked
+  rm -f -- "$UNIT_STAGING"
+  # NBD_INSTALL_POST_WRITE_PHASE=unit-staging-removed
+}
+
+while (($# > 0)); do
+  case "$1" in
+    --plan)
+      shift
+      ;;
+    --approve-nbd-product-install)
+      (($# >= 2)) || refuse APPROVAL_SCOPE_MISSING
+      APPROVED_VERSION=$2
+      shift 2
+      ;;
+    --enable)
+      refuse BOOT_ENABLE_REQUIRES_LIFECYCLE_APPROVAL
+      ;;
     --help|-h)
-      echo "Usage: sudo bash $0 [--enable]"
-      echo "  Installs ramshared-cascade.service. Add --enable to start now and on boot."
+      usage
       exit 0
       ;;
+    *) refuse UNSUPPORTED_ARGUMENT ;;
   esac
 done
 
-[[ "$(id -u)" -eq 0 ]] || { echo "run with sudo" >&2; exit 1; }
+read_release_version
+verify_release_tree "$SOURCE_RELEASE"
 
-echo "== RamShared cascade boot install =="
-
-if [[ ! -x "$BIN_DIR/ramshared" || ! -x "$BIN_DIR/ramsharedd" ]]; then
-  echo "  building release binaries..."
-  if ! command -v cargo >/dev/null 2>&1; then
-    echo "cargo not found and binaries missing under $BIN_DIR" >&2
-    exit 1
-  fi
-  (cd "$REPO" && cargo build -p ramshared-cli -p ramshared-wsl2d --release)
+if [[ -z $APPROVED_VERSION ]]; then
+  printf 'NBD_INSTALL_STATE=PLAN\n'
+  printf 'NBD_INSTALL_RELEASE=%s\n' "$RELEASE_VERSION"
+  printf 'NBD_INSTALL_TARGET=%s\n' "$RELEASE_ROOT/$RELEASE_VERSION"
+  printf 'NBD_INSTALL_SELECTOR=%s/current\n' "$PRODUCT_ROOT"
+  exit 0
 fi
 
-CLI="$BIN_DIR/ramshared"
-export PATH="/usr/lib/wsl/lib:${PATH:-}"
+[[ $APPROVED_VERSION == "$RELEASE_VERSION" ]] || refuse APPROVAL_SCOPE_INVALID
+[[ $(id -u) -eq 0 ]] || refuse ROOT_REQUIRED
+command -v systemctl >/dev/null 2>&1 || refuse SYSTEMD_UNAVAILABLE
+check_unit_inert ramshared-cascade.service
+check_unit_inert ramsharedd.service
+check_existing_unit_file
+capture_prior_selector
 
-echo "  running ramshared check..."
-if ! "$CLI" check; then
-  echo "CASCADE-INSTALL: refuse — ramshared check is not ready. Fix doctor output first." >&2
-  exit 1
-fi
-echo "  [ok] check ready"
+DESTINATION="$RELEASE_ROOT/$RELEASE_VERSION"
+[[ ! -e $DESTINATION && ! -L $DESTINATION ]] || refuse RELEASE_VERSION_EXISTS
+STAGING="$RELEASE_ROOT/.${RELEASE_VERSION}.staging.$$"
+SELECTOR_STAGING="$PRODUCT_ROOT/.current.${RELEASE_VERSION}.$$"
+UNIT_STAGING="$(dirname -- "$UNIT_PATH")/.ramshared-cascade.${RELEASE_VERSION}.$$"
+ROLLBACK_SELECTOR_STAGING="$PRODUCT_ROOT/.rollback-current.${RELEASE_VERSION}.$$"
+[[ ! -e $STAGING && ! -L $STAGING && ! -e $SELECTOR_STAGING && ! -L $SELECTOR_STAGING && ! -e $ROLLBACK_SELECTOR_STAGING && ! -L $ROLLBACK_SELECTOR_STAGING ]] || refuse INSTALL_STAGING_EXISTS
 
-export RAMSHARED_REPO="$REPO"
-export RAMSHARED_BIN_DIR="$BIN_DIR"
-if ! "$SCRIPTS/cascade-preflight.sh"; then
-  echo "CASCADE-INSTALL: refuse — preflight failed." >&2
-  exit 1
-fi
+trap rollback_after_failure EXIT
+install -d -m 0755 "$PRODUCT_ROOT" "$RELEASE_ROOT"
+# NBD_INSTALL_POST_WRITE_PHASE=release-roots-prepared
 
-install -d -m 0755 /etc/ramshared
-if [[ ! -f /etc/ramshared/cascade.conf ]]; then
-  install -m 0644 "$SCRIPTS/cascade.conf.example" /etc/ramshared/cascade.conf
-  echo "  [ok] wrote /etc/ramshared/cascade.conf (edit sizes there)"
-else
-  echo "  [ok] keeping existing /etc/ramshared/cascade.conf"
-fi
+umask 022
+install -d -m 0755 "$STAGING"
+# NBD_INSTALL_POST_WRITE_PHASE=staging-directory-created
+cp -a "$SOURCE_RELEASE/." "$STAGING/"
+# NBD_INSTALL_POST_WRITE_PHASE=release-copied
+chown -R root:root "$STAGING"
+# NBD_INSTALL_POST_WRITE_PHASE=staging-owner-normalized
+find "$STAGING" -type d -exec chmod 0555 {} +
+# NBD_INSTALL_POST_WRITE_PHASE=staging-directories-sealed
+find "$STAGING" -type f -perm /111 -exec chmod 0555 {} +
+# NBD_INSTALL_POST_WRITE_PHASE=staging-executables-sealed
+find "$STAGING" -type f ! -perm /111 -exec chmod 0444 {} +
+# NBD_INSTALL_POST_WRITE_PHASE=staging-files-sealed
+verify_release_tree "$STAGING"
+# NBD_INSTALL_POST_WRITE_PHASE=staging-manifest-verified
+verify_sealed_release_tree "$STAGING"
+# NBD_INSTALL_POST_WRITE_PHASE=staging-seal-verified
 
-sed -e "s|@REPO_PATH@|$REPO|g" \
-    -e "s|@SCRIPTS_PATH@|$SCRIPTS|g" \
-    -e "s|@BIN_DIR@|$BIN_DIR|g" \
-    "$SD/ramshared-cascade.service" > /etc/systemd/system/ramshared-cascade.service
-chmod 0644 /etc/systemd/system/ramshared-cascade.service
-echo "  [ok] /etc/systemd/system/ramshared-cascade.service"
-
-# Ensure scripts are executable in the tree we point at.
-chmod +x "$SCRIPTS/cascade-preflight.sh" "$SCRIPTS/cascade-up.sh" "$SCRIPTS/cascade-down.sh"
-
-if ! command -v systemctl >/dev/null 2>&1; then
-  echo "CASCADE-INSTALL: systemctl missing. Enable systemd in /etc/wsl.conf:" >&2
-  echo "  [boot]" >&2
-  echo "  systemd=true" >&2
-  echo "Then: wsl --shutdown and reopen the distro." >&2
-  exit 1
-fi
-
+# Rename only a new, verified version directory. Existing sealed versions are
+# never rewritten, and the selector is the only object replaced atomically.
+mv -T "$STAGING" "$DESTINATION"
+PUBLISHED_DESTINATION=1
+# NBD_INSTALL_POST_WRITE_PHASE=destination-published
+install_unit_if_absent
+ln -s "releases/$RELEASE_VERSION" "$SELECTOR_STAGING"
+# NBD_INSTALL_POST_WRITE_PHASE=selector-staged
+chown -h root:root "$SELECTOR_STAGING"
+# NBD_INSTALL_POST_WRITE_PHASE=selector-owner-normalized
+mv -Tf "$SELECTOR_STAGING" "$CURRENT_SELECTOR"
+# NBD_INSTALL_POST_WRITE_PHASE=selector-published
 systemctl daemon-reload
-echo "  [ok] daemon-reload"
+# NBD_INSTALL_POST_WRITE_PHASE=daemon-reloaded
 
-if [[ "$ENABLE" -eq 1 ]]; then
-  systemctl enable ramshared-cascade.service
-  systemctl start ramshared-cascade.service
-  echo "  [ok] enabled and started"
-  "$CLI" status || true
-else
-  echo
-  echo "Installed but NOT enabled (on purpose)."
-  echo "When you want it on every WSL boot:"
-  echo "  sudo systemctl enable --now ramshared-cascade.service"
-  echo "Or re-run: sudo bash $0 --enable"
-fi
-
-echo
-echo "Done."
-echo "  Config:  /etc/ramshared/cascade.conf"
-echo "  Logs:    journalctl -u ramshared-cascade -b"
-echo "  Stop:    sudo systemctl stop ramshared-cascade   # runs ramshared down"
-echo "  Remove:  sudo bash $SCRIPTS/uninstall-cascade-boot.sh"
-echo
-echo "If you open a heavy game on Windows, RamShared tries to give GPU memory back"
-echo "by itself (DEMOTE). You may feel a short slowdown in WSL — that is not a freeze."
+trap - EXIT
+printf 'NBD_INSTALL_STATE=INSTALLED\n'
+printf 'NBD_INSTALL_RELEASE=%s\n' "$RELEASE_VERSION"
+printf 'NBD_INSTALL_SELECTOR=%s/current\n' "$PRODUCT_ROOT"
+printf 'NBD_INSTALL_ENABLED=0\n'

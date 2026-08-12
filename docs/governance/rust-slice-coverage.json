@@ -520,6 +520,71 @@
           }
         }
       ]
+    },
+    {
+      "id": "wsl2-nbd-product-readiness",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/wsl2-nbd-product-readiness/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-tier",
+        "--files",
+        "crates/ramshared-tier/src/nbd_readiness.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/wsl2-nbd-product-readiness-cov.json"
+      ],
+      "packages": [
+        "ramshared-tier"
+      ],
+      "files": [
+        "crates/ramshared-tier/src/nbd_readiness.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "microsoft-native-vram-memory-tier-n3-state",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/microsoft-native-vram-memory-tier/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-tier",
+        "--files",
+        "crates/ramshared-tier/src/n3_state.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/microsoft-native-vram-memory-tier-n3-cov.json"
+      ],
+      "packages": [
+        "ramshared-tier"
+      ],
+      "files": [
+        "crates/ramshared-tier/src/n3_state.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "microsoft-native-vram-memory-tier-n3-module-export-glue",
+      "kind": "rust-module-export-glue-differential",
+      "spec": "docs/specs/no-milestone/microsoft-native-vram-memory-tier/SPEC.md",
+      "files": [
+        "crates/ramshared-tier/src/lib.rs"
+      ],
+      "package": "ramshared-tier",
+      "declaration": "pub mod n3_state;\npub mod nbd_readiness;",
+      "cargo_test": [
+        "cargo",
+        "test",
+        "-p",
+        "ramshared-tier",
+        "--all-targets"
+      ]
     }
   ]
 }

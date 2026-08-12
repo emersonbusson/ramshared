@@ -16,6 +16,8 @@
 #![forbid(unsafe_code)]
 
 pub mod cascade;
+pub mod n3_state;
+pub mod nbd_readiness;
 pub mod priority;
 
 pub use cascade::{SafetyNet, Tier, vram_safety_net};
