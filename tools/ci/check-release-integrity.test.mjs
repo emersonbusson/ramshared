@@ -14,6 +14,7 @@ import {
 
 const SOURCE_SHA = '0123456789abcdef0123456789abcdef01234567'
 const SBOM_GENERATOR = { name: 'cargo-cyclonedx', version: '0.5.9', spec_version: '1.5' }
+const TARGET_TAG = 'v0.9.0-beta.1'
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
@@ -39,9 +40,12 @@ function fixture({ manifest: manifestOverrides = {}, sbomContent } = {}) {
   const cargoLock = 'version = 4\n'
   writeFileSync(path.join(root, 'Cargo.lock'), cargoLock)
 
-  const bundlePath = 'artifacts/release/ramshared-linux-v0.8.0.tar.gz'
+  const bundlePath = `artifacts/release/ramshared-linux-${TARGET_TAG}.tar.gz`
   const bundleBytes = Buffer.from('ramshared-linux-bundle\n')
   writeFileSync(path.join(root, bundlePath), bundleBytes)
+  const checksumPath = `${bundlePath}.sha256`
+  const checksumBytes = Buffer.from(`${sha256(bundleBytes)}  ${path.basename(bundlePath)}\n`)
+  writeFileSync(path.join(root, checksumPath), checksumBytes)
   const sbomPath = 'artifacts/release/ramshared-sbom.cdx.json'
   const sbomBytes = Buffer.from(sbomContent ?? JSON.stringify({
     bomFormat: 'CycloneDX',
@@ -67,11 +71,18 @@ function fixture({ manifest: manifestOverrides = {}, sbomContent } = {}) {
     source_sha: SOURCE_SHA,
     cargo_lock_sha256: sha256(cargoLock),
   }
+  const checksum = {
+    path: checksumPath,
+    archive: bundlePath,
+    algorithm: 'sha256',
+    bytes: checksumBytes.length,
+    sha256: sha256(checksumBytes),
+  }
   const manifest = {
     schema_version: 1,
     terminal_status: 'PASS',
     source: {
-      tag: 'v0.8.0',
+      tag: TARGET_TAG,
       sha: SOURCE_SHA,
       clean_tree: true,
       cargo_lock_sha256: sha256(cargoLock),
@@ -79,13 +90,20 @@ function fixture({ manifest: manifestOverrides = {}, sbomContent } = {}) {
     },
     sbom_generator: SBOM_GENERATOR,
     linux_bundle: bundle,
+    detached_checksum: checksum,
     sbom,
     evidence: {
       schema_version: 1,
       source_sha: SOURCE_SHA,
       terminal_status: 'PASS',
-      artifacts: [evidenceRecord(bundle), evidenceRecord(sbom)],
+      artifacts: [evidenceRecord(bundle), evidenceRecord(checksum), evidenceRecord(sbom)],
     },
+    public_assets: [
+      `ramshared-linux-${TARGET_TAG}.tar.gz`,
+      `ramshared-linux-${TARGET_TAG}.tar.gz.sha256`,
+      'ramshared-sbom.cdx.json',
+      'release-manifest.json',
+    ],
     windows_driver_status: 'not-included',
     windows_drivers: [],
     rollback: {
@@ -96,31 +114,53 @@ function fixture({ manifest: manifestOverrides = {}, sbomContent } = {}) {
   }
   const manifestPath = path.join(root, 'artifacts', 'release', 'release-manifest.json')
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
-  return { root, manifestPath, manifest, bundlePath, sbomPath }
+  return { root, manifestPath, manifest, bundlePath, checksumPath, sbomPath }
 }
 
 test('release_manifest_requires_bound_inputs', () => {
   const valid = fixture()
   assert.deepEqual(validateSourceBinding(valid.manifest, {
     root: valid.root,
-    expected_tag: 'v0.8.0',
+    expected_tag: TARGET_TAG,
     expected_revision: SOURCE_SHA,
   }), { ok: true, errors: [] })
   assert.deepEqual(validateReleaseManifest(valid.manifest, {
     root: valid.root,
-    expected_tag: 'v0.8.0',
+    expected_tag: TARGET_TAG,
     expected_revision: SOURCE_SHA,
   }), { ok: true, errors: [] })
 
-  const missing = fixture({ manifest: { source: { tag: 'v0.8.0' } } })
+  const missing = fixture({ manifest: { source: { tag: TARGET_TAG } } })
   const result = validateReleaseManifest(missing.manifest, { root: missing.root })
   assert.equal(result.ok, false)
   assert.equal(result.errors.includes('source-binding-invalid'), true)
 })
 
+test('release_manifest_requires_exact_four_public_assets', () => {
+  const valid = fixture()
+  assert.deepEqual(validateReleaseManifest(valid.manifest, { root: valid.root }), { ok: true, errors: [] })
+  const invalid = fixture({ manifest: { public_assets: [`ramshared-linux-${TARGET_TAG}.tar.gz`] } })
+  const result = validateReleaseManifest(invalid.manifest, { root: invalid.root })
+  assert.equal(result.ok, false)
+  assert.equal(result.errors.includes('release-public-assets-invalid'), true)
+})
+
+test('release_manifest_rejects_invalid_detached_checksum_or_historical_target', () => {
+  const invalidChecksum = fixture()
+  writeFileSync(path.join(invalidChecksum.root, invalidChecksum.checksumPath), '0'.repeat(64) + '  wrong.tar.gz\n')
+  const checksumResult = validateReleaseManifest(invalidChecksum.manifest, { root: invalidChecksum.root })
+  assert.equal(checksumResult.errors.includes('release-file-hash-mismatch'), true)
+  assert.equal(checksumResult.errors.includes('detached-checksum-content-invalid'), true)
+
+  const historical = fixture()
+  historical.manifest.source.tag = 'v0.8.0'
+  const historicalResult = validateReleaseManifest(historical.manifest, { root: historical.root })
+  assert.equal(historicalResult.errors.includes('release-public-assets-invalid'), true)
+})
+
 test('release_manifest_rejects_dirty_source', () => {
   const invalid = fixture({ manifest: { source: {
-    tag: 'v0.8.0', sha: SOURCE_SHA, clean_tree: false,
+    tag: TARGET_TAG, sha: SOURCE_SHA, clean_tree: false,
     cargo_lock_sha256: '0'.repeat(64), rust_version: '1.88.0',
   } } })
   const result = validateReleaseManifest(invalid.manifest, { root: invalid.root })
@@ -208,8 +248,8 @@ test('release_manifest_checks_expected_identity_and_accepted_sbom_tool_shapes', 
   const bytes = readFileSync(path.join(withComponents.root, withComponents.sbomPath))
   record.bytes = bytes.length
   record.sha256 = sha256(bytes)
-  withComponents.manifest.evidence.artifacts[1].bytes = bytes.length
-  withComponents.manifest.evidence.artifacts[1].sha256 = sha256(bytes)
+  withComponents.manifest.evidence.artifacts[2].bytes = bytes.length
+  withComponents.manifest.evidence.artifacts[2].sha256 = sha256(bytes)
   assert.deepEqual(validateReleaseManifest(withComponents.manifest, { root: withComponents.root }), { ok: true, errors: [] })
 
   const mismatch = validateSourceBinding(withComponents.manifest, {
@@ -241,7 +281,7 @@ test('release_manifest_cli_uses_stable_errors_without_echoing_values', () => {
 test('release_manifest_cli_accepts_verified_input', () => {
   const valid = fixture()
   const output = []
-  assert.equal(main(['--check', valid.manifestPath, '--root', valid.root, '--tag', 'v0.8.0', '--revision', SOURCE_SHA], {
+  assert.equal(main(['--check', valid.manifestPath, '--root', valid.root, '--tag', TARGET_TAG, '--revision', SOURCE_SHA], {
     print: (line) => output.push(line),
     error: () => assert.fail('verified manifest must not emit an error'),
   }), 0)

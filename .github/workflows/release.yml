@@ -21,11 +21,20 @@ jobs:
       issues: write
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      HAS_RELEASE_APP: ${{ secrets.RELEASE_APP_ID != '' && secrets.RELEASE_APP_PRIVATE_KEY != '' }}
+      RELEASE_TARGET_TAG: v0.9.0-beta.1
     steps:
+      - name: Require release GitHub App credentials
+        shell: bash
+        env:
+          RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+          RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_APP_ID"
+          test -n "$RELEASE_APP_PRIVATE_KEY"
+
       - name: Create release GitHub App token
         id: release-app-token
-        if: ${{ env.HAS_RELEASE_APP == 'true' }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
           app-id: ${{ secrets.RELEASE_APP_ID }}
@@ -37,9 +46,25 @@ jobs:
           permission-issues: write
           permission-metadata: read
 
+      - name: Refuse duplicate beta tag production
+        id: target
+        shell: bash
+        env:
+          RELEASE_APP_TOKEN: ${{ steps.release-app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          tag_ref="$(GIT_TERMINAL_PROMPT=0 git ls-remote --refs "https://x-access-token:${RELEASE_APP_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$RELEASE_TARGET_TAG")"
+          if [ -n "$tag_ref" ]; then
+            echo 'run=false' >> "$GITHUB_OUTPUT"
+            echo 'RELEASE_PLEASE_STATUS=NO_CHANGE'
+          else
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run release-please
+        if: ${{ steps.target.outputs.run == 'true' }}
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         with:
-          token: ${{ steps.release-app-token.outputs.token || secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          token: ${{ steps.release-app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
