@@ -12,6 +12,7 @@ TIER_MIB=""
 ARTIFACT_DIR=""
 SAMPLES=""
 OUT=""
+SWAP_FIXTURE=""
 RUNS=3
 SAMPLE_TIMEOUT_SEC=120
 ALLOCATE_MIB=""
@@ -71,6 +72,8 @@ while [[ $# -gt 0 ]]; do
     --artifact-dir) ARTIFACT_DIR=${2:-}; shift 2 ;;
     --samples) SAMPLES=${2:-}; shift 2 ;;
     --out) OUT=${2:-}; shift 2 ;;
+    --classify-swap-fixture) ACTION=classify-swap-fixture; shift ;;
+    --swap-fixture) SWAP_FIXTURE=${2:-}; shift 2 ;;
     --runs) RUNS=${2:-}; shift 2 ;;
     --sample-timeout-sec) SAMPLE_TIMEOUT_SEC=${2:-}; shift 2 ;;
     --sealed-release-root) SEALED_RELEASE_ROOT=${2:-}; shift 2 ;;
@@ -86,7 +89,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ $ACTION == aggregate || $ACTION == run || $ACTION == validate-evidence || $ACTION == validate-nbd-identity-fixture ]] \
+[[ $ACTION == aggregate || $ACTION == run || $ACTION == validate-evidence || \
+  $ACTION == validate-nbd-identity-fixture || $ACTION == classify-swap-fixture ]] \
   || refuse ACTION_REQUIRED
 if [[ $ACTION == aggregate || $ACTION == run ]]; then
   [[ $MODE == disk-only || $MODE == nbd ]] || refuse MODE_INVALID
@@ -97,6 +101,11 @@ if [[ $ACTION == aggregate || $ACTION == run ]]; then
   MEMORY_MAX_MIB=$((ALLOCATE_MIB + 512))
 elif [[ $ACTION == validate-nbd-identity-fixture ]]; then
   [[ $TIER_MIB =~ ^(1024|2048|4096)$ ]] || refuse TIER_SIZE_INVALID
+elif [[ $ACTION == classify-swap-fixture ]]; then
+  [[ ${RAMSHARED_NBD_ALLOW_MANUFACTURED_SWAP_CLASSIFIER_TEST:-} == 1 ]] \
+    || refuse SWAP_CLASSIFIER_FIXTURE_FORBIDDEN
+  [[ $SWAP_FIXTURE == /* && -f $SWAP_FIXTURE && ! -L $SWAP_FIXTURE ]] \
+    || refuse SWAP_CLASSIFIER_FIXTURE_INVALID
 fi
 
 aggregate_samples() {
@@ -436,6 +445,31 @@ derive_nbd_second_tier_identity() {
     || { identity_fail NBD_IDENTITY_SINK_HASH_SUBSTITUTION; return 1; }
 }
 
+swap_used() {
+  python3 - "$SWAPS_FILE" <<'PY'
+import re
+import sys
+zram = nbd = disk = 0
+ghost = 0
+with open(sys.argv[1], encoding="utf-8") as source:
+    next(source, None)
+    for line in source:
+        if "(deleted)" in line:
+            ghost = 1
+        fields = line.split()
+        if len(fields) < 5:
+            continue
+        name, used = fields[0], int(fields[3])
+        if re.fullmatch(r"/dev/zram[0-9]+", name):
+            zram += used
+        elif re.fullmatch(r"/dev/(?:nbd[0-9]+|ublkb[0-9]+)", name):
+            nbd += used
+        else:
+            disk += used
+print(zram, nbd, disk, ghost)
+PY
+}
+
 if [[ $ACTION == validate-nbd-identity-fixture ]]; then
   [[ ${RAMSHARED_NBD_ALLOW_MANUFACTURED_IDENTITY_TEST:-} == 1 ]] || refuse IDENTITY_FIXTURE_FORBIDDEN
   [[ $IDENTITY_FIXTURE_ROOT == /* && -d $IDENTITY_FIXTURE_ROOT && ! -L $IDENTITY_FIXTURE_ROOT ]] \
@@ -459,6 +493,16 @@ if [[ $ACTION == validate-nbd-identity-fixture ]]; then
   printf 'NBD_DAEMON_MANIFEST_SHA256=%s\n' "$NBD_DAEMON_MANIFEST_SHA256"
   printf 'NBD_SECOND_TIER_IDENTITY_SHA256=%s\n' "$NBD_SECOND_TIER_IDENTITY_SHA256"
   printf 'NBD_LOWER_SINK_IDENTITY_SHA256=%s\n' "$IDENTITY_LOWER_SINK_SHA256"
+  exit 0
+fi
+
+if [[ $ACTION == classify-swap-fixture ]]; then
+  SWAPS_FILE=$SWAP_FIXTURE
+  read -r zram_used nbd_used disk_used ghost_used <<<"$(swap_used)"
+  printf 'SWAP_USED_ZRAM_KIB=%s\n' "$zram_used"
+  printf 'SWAP_USED_NBD_KIB=%s\n' "$nbd_used"
+  printf 'SWAP_USED_DISK_KIB=%s\n' "$disk_used"
+  printf 'SWAP_USED_GHOST=%s\n' "$ghost_used"
   exit 0
 fi
 
@@ -549,30 +593,6 @@ load_bound_lower_sink() {
   LOWER_SINK_CANONICAL=$canonical
   LOWER_SINK_TYPE=directory
   LOWER_SINK_IDENTITY_SHA256=$actual_identity
-}
-
-swap_used() {
-  python3 - "$SWAPS_FILE" <<'PY'
-import sys
-zram = nbd = disk = 0
-ghost = 0
-with open(sys.argv[1], encoding="utf-8") as source:
-    next(source, None)
-    for line in source:
-        if "(deleted)" in line:
-            ghost = 1
-        fields = line.split()
-        if len(fields) < 5:
-            continue
-        name, used = fields[0].lower(), int(fields[3])
-        if "zram" in name:
-            zram += used
-        elif "nbd" in name or "ublk" in name:
-            nbd += used
-        else:
-            disk += used
-print(zram, nbd, disk, ghost)
-PY
 }
 
 managed_swap_count() {
