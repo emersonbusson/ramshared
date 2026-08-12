@@ -231,11 +231,13 @@ For the simple single-export `run_nbd` runtime only, a balanced `Closed` that
 makes the live count zero is a quiescent transition, not worker termination.
 The same listener, backend, and daemon identity remain available to accept a
 later connection generation. The simple runtime terminates only on an explicit
-`WMsg::Shutdown`, worker-channel disconnect, or fatal worker error. Its
-SIGINT/SIGTERM handler performs only an async-signal-safe atomic store; one
-bounded bridge converts that observation into the explicit `WMsg::Shutdown`
-wake. The bridge does not poll-spin, retry a failed shutdown, or alter broker
-semantics. Normal terminal cleanup then removes only the owned Unix socket.
+shutdown request or fatal worker error. Its SIGINT/SIGTERM handler performs
+only an async-signal-safe atomic store; one owned bounded bridge attempts a
+nonblocking `WMsg::Shutdown` wake. If the bounded queue is full or already
+disconnected, the worker observes that same terminal atomic before its next
+receive instead of blocking a signal thread. The bridge is canceled and joined
+on every return; it does not poll-spin, retry, or alter broker semantics.
+Normal terminal cleanup then removes only the owned Unix socket.
 
 This narrowly supersedes the old terminal interpretation of `Closed` in
 DT-Conn-1. It does not change the balancing contract in `conn.rs`, wire
@@ -313,6 +315,7 @@ Acceptance: canary detects (a) §9.1; daemon enters `Demoted`; swapoff of VRAM c
 | `acceptors_stop_when_worker_is_closed` | Unix and TCP loopback listeners | acceptors stop after the worker refusal without a retry loop | #15/#16 |
 | `daemon_nbd_serves_two_connection_generations_before_explicit_shutdown` | injected simple NBD runtime | first balanced close reaches quiescence, a second generation is served, and only explicit `Shutdown` removes the owned socket | #13/#16/#17 |
 | `daemon_nbd_explicit_shutdown_wakes_idle_runtime_without_timer_dependence` | injected simple NBD runtime | explicit shutdown returns before the receive tick and removes the owned socket | #13/#16 |
+| `daemon_nbd_shutdown_bridge_full_or_disconnected_queue_is_nonblocking` | bounded channel + owned bridge | a full or disconnected worker queue cannot block the signal bridge or retain its sender thread | #13/#15/#16 |
 
 The DT-Conn-1 canonical per-file gate is the command in §10.1; a package or
 workspace average cannot substitute for its 80% line threshold.

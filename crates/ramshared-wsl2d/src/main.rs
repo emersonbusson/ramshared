@@ -763,6 +763,13 @@ trait NbdRuntimeStarter {
         jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
     ) -> Result<(), Box<dyn std::error::Error>>;
 
+    fn start_shutdown_bridge(
+        &mut self,
+        _jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+    ) -> Result<Option<NbdShutdownBridge>, Box<dyn std::error::Error>> {
+        Ok(None)
+    }
+
     fn nbd_used_kb(&mut self, nbd_dev: &str) -> u64;
 
     fn publish_demote(&mut self, total: u64, reason: &Option<String>, in_progress: bool);
@@ -793,6 +800,41 @@ trait NbdRuntimeStarter {
 
 struct ProductionNbdRuntimeStarter;
 
+struct NbdShutdownBridge {
+    stop: std::sync::Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for NbdShutdownBridge {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+fn spawn_nbd_shutdown_bridge(
+    shutdown: &'static AtomicBool,
+    jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+    poll_interval: Duration,
+) -> NbdShutdownBridge {
+    let stop = std::sync::Arc::new(AtomicBool::new(false));
+    let worker_stop = std::sync::Arc::clone(&stop);
+    let worker = std::thread::spawn(move || {
+        while !shutdown.load(Ordering::SeqCst) && !worker_stop.load(Ordering::SeqCst) {
+            std::thread::sleep(poll_interval);
+        }
+        if shutdown.load(Ordering::SeqCst) {
+            let _ = jobs_tx.try_send(WMsg::Shutdown);
+        }
+    });
+    NbdShutdownBridge {
+        stop,
+        worker: Some(worker),
+    }
+}
+
 impl NbdRuntimeStarter for ProductionNbdRuntimeStarter {
     fn lock_memory(
         &mut self,
@@ -811,6 +853,21 @@ impl NbdRuntimeStarter for ProductionNbdRuntimeStarter {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let _ = spawn_acceptor(listener, exports, tx_flags, jobs_tx);
         Ok(())
+    }
+
+    fn start_shutdown_bridge(
+        &mut self,
+        jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+    ) -> Result<Option<NbdShutdownBridge>, Box<dyn std::error::Error>> {
+        unsafe {
+            signal(SIGINT, handle_shutdown);
+            signal(SIGTERM, handle_shutdown);
+        }
+        Ok(Some(spawn_nbd_shutdown_bridge(
+            &SHUTDOWN,
+            jobs_tx,
+            Duration::from_millis(100),
+        )))
     }
 
     fn nbd_used_kb(&mut self, nbd_dev: &str) -> u64 {
@@ -1052,10 +1109,17 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
         size: device_size,
     }]);
     let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel::<WMsg>(CHAN_CAP);
-    if let Err(error) = starter.start_acceptor(listener, exports, tx_flags, jobs_tx) {
+    if let Err(error) = starter.start_acceptor(listener, exports, tx_flags, jobs_tx.clone()) {
         cleanup_unix_socket_path(path);
         return Err(error);
     }
+    let _shutdown_bridge = match starter.start_shutdown_bridge(jobs_tx) {
+        Ok(bridge) => bridge,
+        Err(error) => {
+            cleanup_unix_socket_path(path);
+            return Err(error);
+        }
+    };
     eprintln!("[ramsharedd] transmitting (single CUDA worker; multi-connection)");
 
     let mut canary: Option<Canary> = None;
@@ -1078,10 +1142,12 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
     let mut last_demote_reason: Option<String> = None;
     starter.publish_demote(0, &None, false);
 
-    // recv_timeout so sparse reclaim runs even with no NBD I/O (idle free).
     const RECV_TICK: Duration = Duration::from_secs(5);
 
     loop {
+        if SHUTDOWN.load(Ordering::SeqCst) {
+            break;
+        }
         let msg = match jobs_rx.recv_timeout(RECV_TICK) {
             Ok(m) => Some(m),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
@@ -1097,7 +1163,10 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                 }
                 WMsg::Closed => {
                     if live.on_close() {
-                        break;
+                        // No client can observe residency while the runtime is
+                        // quiescent. Wait for the next generation or explicit
+                        // shutdown instead of running a synthetic reclaim tick.
+                        continue;
                     }
                     None
                 }
@@ -3174,6 +3243,60 @@ mod tests {
     }
 
     #[test]
+    fn daemon_nbd_explicit_shutdown_wakes_idle_runtime_without_timer_dependence() {
+        static TEST_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+        TEST_SHUTDOWN.store(false, Ordering::SeqCst);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let bridge = spawn_nbd_shutdown_bridge(&TEST_SHUTDOWN, tx, Duration::from_millis(5));
+        assert!(
+            rx.try_recv().is_err(),
+            "shutdown is not emitted before approval"
+        );
+
+        TEST_SHUTDOWN.store(true, Ordering::SeqCst);
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(1)),
+            Ok(WMsg::Shutdown)
+        ));
+        drop(bridge);
+        TEST_SHUTDOWN.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn daemon_nbd_shutdown_bridge_full_or_disconnected_queue_is_nonblocking() {
+        static FULL_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+        FULL_SHUTDOWN.store(false, Ordering::SeqCst);
+        let (full_tx, full_rx) = std::sync::mpsc::sync_channel(1);
+        full_tx.send(WMsg::Opened).expect("fill bounded queue");
+        let full_bridge =
+            spawn_nbd_shutdown_bridge(&FULL_SHUTDOWN, full_tx, Duration::from_millis(5));
+        FULL_SHUTDOWN.store(true, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(20));
+        let started = Instant::now();
+        drop(full_bridge);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(matches!(full_rx.recv(), Ok(WMsg::Opened)));
+        assert!(
+            full_rx.try_recv().is_err(),
+            "a full queue is never blocked on"
+        );
+        FULL_SHUTDOWN.store(false, Ordering::SeqCst);
+
+        static DISCONNECTED_SHUTDOWN: AtomicBool = AtomicBool::new(false);
+        DISCONNECTED_SHUTDOWN.store(false, Ordering::SeqCst);
+        let (disconnected_tx, disconnected_rx) = std::sync::mpsc::sync_channel(1);
+        drop(disconnected_rx);
+        let disconnected_bridge = spawn_nbd_shutdown_bridge(
+            &DISCONNECTED_SHUTDOWN,
+            disconnected_tx,
+            Duration::from_millis(5),
+        );
+        DISCONNECTED_SHUTDOWN.store(true, Ordering::SeqCst);
+        drop(disconnected_bridge);
+        DISCONNECTED_SHUTDOWN.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
     fn daemon_nbd_sparse_floor_refusal_reclaims_without_provider_allocation() {
         struct FloorProvider;
 
@@ -3244,6 +3367,7 @@ mod tests {
                     reply: reply_tx,
                 }))?;
                 jobs_tx.send(WMsg::Closed)?;
+                jobs_tx.send(WMsg::Shutdown)?;
                 self.replies = Some(reply_rx);
                 Ok(())
             }
@@ -3386,6 +3510,7 @@ mod tests {
                     reply: reply_tx,
                 }))?;
                 jobs_tx.send(WMsg::Closed)?;
+                jobs_tx.send(WMsg::Shutdown)?;
                 Ok(())
             }
 
@@ -3540,6 +3665,7 @@ mod tests {
                     }))?;
                 }
                 jobs_tx.send(WMsg::Closed)?;
+                jobs_tx.send(WMsg::Shutdown)?;
                 Ok(())
             }
 
@@ -3675,6 +3801,7 @@ mod tests {
             ) -> Result<(), Box<dyn std::error::Error>> {
                 jobs_tx.send(WMsg::Opened)?;
                 jobs_tx.send(WMsg::Closed)?;
+                jobs_tx.send(WMsg::Shutdown)?;
                 Ok(())
             }
 
@@ -3802,6 +3929,7 @@ mod tests {
                     }))?;
                 }
                 jobs_tx.send(WMsg::Closed)?;
+                jobs_tx.send(WMsg::Shutdown)?;
                 self.replies = Some(reply_rx);
                 Ok(())
             }

@@ -1177,6 +1177,8 @@
           "crates/ramshared-tier/src/cascade.rs",
           "crates/ramshared-tier/src/lib.rs",
           "crates/ramshared-tier/src/nbd_readiness.rs",
+          "crates/ramshared-wsl2d/src/conn.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
           "crates/ramshared-wsl2d/src/state.rs",
           "scripts/docs-check.sh",
           "scripts/p0/Start-CudaVramWorkload.ps1",
