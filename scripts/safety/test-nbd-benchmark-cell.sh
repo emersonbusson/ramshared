@@ -788,6 +788,188 @@ cmp -s "$TMP/expected-republish-order" "$TMP/republish-order" || {
   echo 'FAIL sample baseline republication order changed' >&2
   exit 1
 }
+
+test_nbd_sample_reconnect_republication_contract() {
+  local socket regular_socket reconnect_swaps reconnect_order expected_order
+  local swapoff_cmd attach_cmd mkswap_cmd swapon_cmd output rc
+
+  socket="$TMP/reconnect-wsl2d.sock"
+  python3 - "$socket" <<'PY'
+import socket
+import sys
+
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.bind(sys.argv[1])
+sock.close()
+PY
+  [[ -S $socket && ! -L $socket ]] || {
+    echo 'FAIL manufactured Unix socket is not a socket' >&2
+    exit 1
+  }
+  regular_socket="$TMP/reconnect-regular-file"
+  : >"$regular_socket"
+
+  swapoff_cmd="$TMP/swapoff-reconnect.py"
+  attach_cmd="$TMP/nbd-client-reconnect.py"
+  mkswap_cmd="$TMP/mkswap-reconnect.py"
+  swapon_cmd="$TMP/swapon-reconnect.py"
+  cat >"$swapoff_cmd" <<'PY'
+#!/usr/bin/env python3
+import os
+import sys
+
+if sys.argv[1:] not in (("--", "/dev/nbd0"), ("--", "/dev/zram0")):
+    raise SystemExit("unexpected_swapoff_argv")
+path = sys.argv[-1]
+if os.environ.get("RECONNECT_FAIL_STAGE") == "swapoff:" + path:
+    raise SystemExit(31)
+swaps = os.environ["SWAPS_FIXTURE"]
+with open(swaps, encoding="utf-8") as source:
+    lines = source.readlines()
+with open(swaps, "w", encoding="utf-8") as target:
+    target.writelines(line for line in lines if not line.startswith(path + " "))
+with open(os.environ["ORDER_FIXTURE"], "a", encoding="utf-8") as target:
+    target.write("off:" + path + "\n")
+PY
+  cat >"$attach_cmd" <<'PY'
+#!/usr/bin/env python3
+import os
+import stat
+import sys
+
+expected = ["-unix", os.environ["EXPECTED_SOCKET"], "/dev/nbd0"]
+if sys.argv[1:] != expected or "-persist" in sys.argv[1:]:
+    raise SystemExit("unexpected_attach_argv")
+metadata = os.lstat(expected[1])
+if not stat.S_ISSOCK(metadata.st_mode):
+    raise SystemExit("attach_without_socket")
+if os.environ.get("RECONNECT_FAIL_STAGE") == "attach":
+    raise SystemExit(32)
+with open(os.environ["ORDER_FIXTURE"], "a", encoding="utf-8") as target:
+    target.write("attach:-unix:" + expected[1] + ":/dev/nbd0\n")
+PY
+  cat >"$mkswap_cmd" <<'PY'
+#!/usr/bin/env python3
+import os
+import sys
+
+if sys.argv[1:] != ["-L", "RAMSHARED", "--", "/dev/nbd0"]:
+    raise SystemExit("unexpected_mkswap_argv")
+if os.environ.get("RECONNECT_FAIL_STAGE") == "mkswap":
+    raise SystemExit(33)
+with open(os.environ["ORDER_FIXTURE"], "a", encoding="utf-8") as target:
+    target.write("mkswap:-L:RAMSHARED:/dev/nbd0\n")
+PY
+  cat >"$swapon_cmd" <<'PY'
+#!/usr/bin/env python3
+import os
+import sys
+
+args = sys.argv[1:]
+expected = {
+    ("-p", "200", "--", "/dev/zram0"),
+    ("-p", "100", "--", "/dev/nbd0"),
+}
+if tuple(args) not in expected:
+    raise SystemExit("unexpected_swapon_argv")
+priority, path = args[1], args[-1]
+if os.environ.get("RECONNECT_FAIL_STAGE") == "swapon:" + priority:
+    raise SystemExit(34)
+with open(os.environ["SWAPS_FIXTURE"], "a", encoding="utf-8") as target:
+    target.write(f"{path} partition 1048572 0 {priority}\n")
+    if os.environ.get("RECONNECT_TOPOLOGY_DRIFT") == "1" and path == "/dev/nbd0":
+        target.write("/dev/nbd9 partition 1048572 0 100\n")
+with open(os.environ["ORDER_FIXTURE"], "a", encoding="utf-8") as target:
+    target.write("on:" + priority + ":" + path + "\n")
+PY
+  chmod 0700 "$swapoff_cmd" "$attach_cmd" "$mkswap_cmd" "$swapon_cmd"
+
+  reconnect_swaps="$TMP/reconnect-swaps"
+  reconnect_order="$TMP/reconnect-order"
+  cp -- "$TMP/disk-control-swaps" "$reconnect_swaps"
+  sed -i "s|$scratch file 8388604 0 100|/dev/nbd0 partition 1048572 0 100|" "$reconnect_swaps"
+  : >"$reconnect_order"
+  SWAPS_FIXTURE="$reconnect_swaps" ORDER_FIXTURE="$reconnect_order" EXPECTED_SOCKET="$socket" \
+    nbd_reconnect_republish_swap_pair "$reconnect_swaps" /dev/zram0 /dev/nbd0 "$socket" "$socket" \
+      "$swapoff_cmd" "$attach_cmd" "$mkswap_cmd" "$swapon_cmd"
+  nbd_swap_pair_topology_exact "$reconnect_swaps" /dev/zram0 /dev/nbd0 partition || {
+    echo 'FAIL NBD reconnect did not restore the exact zram/NBD pair' >&2
+    exit 1
+  }
+  expected_order="$TMP/expected-reconnect-order"
+  cat >"$expected_order" <<EOF
+off:/dev/nbd0
+off:/dev/zram0
+attach:-unix:$socket:/dev/nbd0
+mkswap:-L:RAMSHARED:/dev/nbd0
+on:200:/dev/zram0
+on:100:/dev/nbd0
+EOF
+  cmp -s "$expected_order" "$reconnect_order" || {
+    echo 'FAIL NBD reconnect transaction order changed' >&2
+    exit 1
+  }
+
+  assert_reconnect_refusal() {
+    local name=$1 actual_socket=$2 expected_socket=$3 fail_stage=${4:-} topology_drift=${5:-0}
+    cp -- "$TMP/disk-control-swaps" "$reconnect_swaps"
+    sed -i "s|$scratch file 8388604 0 100|/dev/nbd0 partition 1048572 0 100|" "$reconnect_swaps"
+    : >"$reconnect_order"
+    set +e
+    output=$(SWAPS_FIXTURE="$reconnect_swaps" ORDER_FIXTURE="$reconnect_order" \
+      EXPECTED_SOCKET="$expected_socket" RECONNECT_FAIL_STAGE="$fail_stage" \
+      RECONNECT_TOPOLOGY_DRIFT="$topology_drift" \
+      nbd_reconnect_republish_swap_pair "$reconnect_swaps" /dev/zram0 /dev/nbd0 \
+        "$actual_socket" "$expected_socket" "$swapoff_cmd" "$attach_cmd" "$mkswap_cmd" "$swapon_cmd" 2>&1)
+    rc=$?
+    set -e
+    [[ $rc -ne 0 ]] || {
+      printf 'FAIL %s accepted an invalid reconnect transaction: %s\n' "$name" "$output" >&2
+      exit 1
+    }
+    ! grep -Fq 'detach:' "$reconnect_order" || {
+      printf 'FAIL %s performed broad reconnect cleanup\n' "$name" >&2
+      exit 1
+    }
+  }
+
+  assert_reconnect_refusal regular_socket "$regular_socket" "$regular_socket"
+  ! grep -Fq 'attach:' "$reconnect_order" || {
+    echo 'FAIL regular socket replacement reached nbd-client' >&2
+    exit 1
+  }
+  assert_reconnect_refusal socket_mismatch "$socket" "$regular_socket"
+  ! grep -Fq 'attach:' "$reconnect_order" || {
+    echo 'FAIL mismatched socket target reached nbd-client' >&2
+    exit 1
+  }
+  assert_reconnect_refusal attach_failure "$socket" "$socket" attach
+  ! grep -Fq 'mkswap:' "$reconnect_order" || {
+    echo 'FAIL attach refusal advanced to mkswap' >&2
+    exit 1
+  }
+  assert_reconnect_refusal mkswap_failure "$socket" "$socket" mkswap
+  ! grep -Fq 'on:' "$reconnect_order" || {
+    echo 'FAIL mkswap refusal advanced to swapon' >&2
+    exit 1
+  }
+  assert_reconnect_refusal zram_swapon_failure "$socket" "$socket" swapon:200
+  ! grep -Fq 'on:100:/dev/nbd0' "$reconnect_order" || {
+    echo 'FAIL zram swapon refusal advanced to NBD swapon' >&2
+    exit 1
+  }
+  assert_reconnect_refusal nbd_swapon_failure "$socket" "$socket" swapon:100
+  assert_reconnect_refusal post_publish_topology_drift "$socket" "$socket" '' 1
+  grep -Fqx 'on:100:/dev/nbd0' "$reconnect_order" || {
+    echo 'FAIL topology refusal did not reach the post-publish verifier' >&2
+    exit 1
+  }
+
+  pass nbd_sample_reconnect_republication_is_exact_and_refuses_invalid_socket_or_commands
+}
+
+test_nbd_sample_reconnect_republication_contract
+
 for extra in "/dev/zram9 partition 1048572 0 200" "/dev/nbd9 partition 1048572 0 100" "/dev/ublkb9 partition 1048572 0 100"; do
   cp -- "$TMP/disk-control-swaps" "$TMP/republish-extra"
   printf '%s\n' "$extra" >>"$TMP/republish-extra"
