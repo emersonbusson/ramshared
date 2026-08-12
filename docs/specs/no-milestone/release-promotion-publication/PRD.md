@@ -1,8 +1,9 @@
 ---
 slug: release-promotion-publication
 title: Protected beta release promotion and publication
-milestone: —
-issues: []
+milestone: v0.9.0-beta.1 — WSL2 NBD
+issues:
+  - 195
 ---
 
 # PRD — Protected beta release promotion and publication

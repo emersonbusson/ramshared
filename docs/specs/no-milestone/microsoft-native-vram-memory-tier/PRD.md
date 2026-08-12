@@ -1,8 +1,9 @@
 ---
 slug: microsoft-native-vram-memory-tier
 title: "Microsoft-native VRAM memory tier — host-authoritative N3 RFC"
-milestone: —
-issues: []
+milestone: Microsoft-native N3 — Design
+issues:
+  - 196
 ---
 
 # PRD — Microsoft-native VRAM memory tier: host-authoritative N3 RFC

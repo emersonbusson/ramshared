@@ -41,6 +41,37 @@ test('build_rows_uses_frontmatter_and_heading_fallback', () => {
   assert.equal(rows[1].title, 'PRD — Heading fallback')
 })
 
+test('build_rows_parses_block_issue_lists_with_ordered_local_and_external_refs', () => {
+  const root = rootFixture()
+  write(root, 'docs/specs/no-milestone/mixed/PRD.md', [
+    '---',
+    'slug: mixed',
+    'title: Mixed issue metadata',
+    'milestone: M1',
+    'issues:',
+    '  - 194',
+    '  - "owner/repo#195"',
+    '  - malformed',
+    '  - 196.5',
+    '  - 197',
+    '---',
+    '# ignored',
+    '',
+  ].join('\n'))
+  const rows = buildRows(root)
+  assert.deepEqual(rows[0].issues, [194, 'owner/repo#195', 197])
+  const rendered = renderIndex(rows, path.join(root, 'docs', 'INDEX.md'))
+  assert.match(rendered, /#194, owner\/repo#195, #197/)
+  assert.doesNotMatch(rendered, /malformed|196\.5|NaN/)
+})
+
+test('repository_block_issue_metadata_renders_all_current_issue_refs', () => {
+  const rendered = renderIndex(buildRows(process.cwd()))
+  for (const reference of ['#194', '#195', '#196', '#197', 'microsoft/WSL#41054']) {
+    assert.match(rendered, new RegExp(reference.replace(/[#/]/g, '\\$&')))
+  }
+})
+
 test('build_rows_fails_closed_to_unqualified_without_done_claim', () => {
   const root = rootFixture()
   const dir = path.join(root, 'docs/specs/no-milestone/implemented')

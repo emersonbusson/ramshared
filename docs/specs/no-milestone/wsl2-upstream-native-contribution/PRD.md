@@ -1,9 +1,10 @@
 ---
 slug: wsl2-upstream-native-contribution
 title: "WSL #41054 config-only contribution boundary"
-milestone: —
+milestone: Microsoft-native N3 — Design
 issues:
   - "microsoft/WSL#41054"
+  - 197
 ---
 
 # PRD — WSL #41054 config-only contribution boundary
