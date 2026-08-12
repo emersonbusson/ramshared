@@ -1,20 +1,17 @@
 [Unit]
-Description=RamShared memory cushion (zram + idle GPU + disk)
-Documentation=file://@REPO_PATH@/docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md
+Description=RamShared sealed NBD-only cascade (scoped approval required)
+Documentation=file:///opt/ramshared/current/scripts/safety/nbd-product-preflight.sh
 After=local-fs.target
-# Do not hard-require network; GPU/NBD are local.
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 User=root
-# Prefer refuse over hang (Restart=no).
-Environment=RAMSHARED_REPO=@REPO_PATH@
-Environment=RAMSHARED_BIN_DIR=@BIN_DIR@
-EnvironmentFile=-/etc/ramshared/cascade.conf
-ExecStartPre=@SCRIPTS_PATH@/cascade-preflight.sh
-ExecStart=@SCRIPTS_PATH@/cascade-up.sh
-ExecStop=@SCRIPTS_PATH@/cascade-down.sh
+# No approval is embedded here. Without a version-scoped systemd override the
+# lifecycle scripts plan/refuse and cannot start a cascade unattended.
+ExecStartPre=/opt/ramshared/current/scripts/safety/nbd-product-preflight.sh --check
+ExecStart=/opt/ramshared/current/scripts/safety/cascade-up.sh --execute
+ExecStop=/opt/ramshared/current/scripts/safety/cascade-down.sh --execute
 TimeoutStartSec=120
 TimeoutStopSec=600
 Restart=no

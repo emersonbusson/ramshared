@@ -49,6 +49,53 @@ const COMMENT_LANGUAGE_COVERAGE_ENTRY = {
   files: COMMENT_LANGUAGE_HIGH_COVERAGE_FILES,
   min: 80,
 }
+const MICROSOFT_NATIVE_VRAM_N3_COVERAGE_ENTRY = {
+  id: 'microsoft-native-vram-memory-tier-n3-state',
+  kind: 'rust-line-coverage',
+  spec: 'docs/specs/no-milestone/microsoft-native-vram-memory-tier/SPEC.md',
+  command: [
+    'node', 'tools/ci/check-rust-slice-coverage.mjs',
+    '-p', 'ramshared-tier',
+    '--files', 'crates/ramshared-tier/src/n3_state.rs',
+    '--min', '80',
+    '--report-json', 'tmp/microsoft-native-vram-memory-tier-n3-cov.json',
+  ],
+  packages: ['ramshared-tier'],
+  files: ['crates/ramshared-tier/src/n3_state.rs'],
+  min: 80,
+}
+const MICROSOFT_NATIVE_VRAM_N3_MODULE_EXPORT_GLUE_ENTRY = {
+  id: 'microsoft-native-vram-memory-tier-n3-module-export-glue',
+  kind: 'rust-module-export-glue-differential',
+  spec: 'docs/specs/no-milestone/microsoft-native-vram-memory-tier/SPEC.md',
+  files: ['crates/ramshared-tier/src/lib.rs'],
+  package: 'ramshared-tier',
+  declaration: 'pub mod n3_state;\npub mod nbd_readiness;',
+  cargo_test: ['cargo', 'test', '-p', 'ramshared-tier', '--all-targets'],
+}
+const WSL2_NBD_PRODUCT_READINESS_COVERAGE_ENTRY = {
+  id: 'wsl2-nbd-product-readiness',
+  kind: 'rust-line-coverage',
+  spec: 'docs/specs/no-milestone/wsl2-nbd-product-readiness/SPEC.md',
+  command: [
+    'node', 'tools/ci/check-rust-slice-coverage.mjs',
+    '-p', 'ramshared-tier',
+    '--files', 'crates/ramshared-tier/src/nbd_readiness.rs',
+    '--min', '80',
+    '--report-json', 'tmp/wsl2-nbd-product-readiness-cov.json',
+  ],
+  packages: ['ramshared-tier'],
+  files: ['crates/ramshared-tier/src/nbd_readiness.rs'],
+  min: 80,
+}
+const WSL2_NBD_PRODUCT_READINESS_TESTS = [
+  'nbd_only_transport_is_the_only_ready_value',
+  'lower_tier_formula_uses_ten_percent_or_512_mib',
+  'capacity_shortfall_refuses_before_mutation',
+  'product_off_is_not_ready_alias',
+  'deterministic_gate_failure_is_not_retried',
+  'activation_and_deactivation_are_idempotent',
+]
 const COMMENT_LANGUAGE_TEST_ONLY_ENTRY = {
   id: 'comment-language-rust-test-only-localization',
   kind: 'rust-test-only-localization-differential',
@@ -264,6 +311,33 @@ function fixtureRoot(specText) {
   writeFileSync(path.join(root, 'docs', 'specs', 'no-milestone', 'fixture', 'SPEC.md'), specText)
   writeFileSync(path.join(root, 'crates', 'fixture', 'src', 'policy.rs'), 'pub fn policy() {}\n')
   return root
+}
+
+function moduleExportGlueRoot(
+  entry = MICROSOFT_NATIVE_VRAM_N3_MODULE_EXPORT_GLUE_ENTRY,
+  headSource = 'pub mod cascade;\npub mod priority;\npub mod n3_state;\npub mod nbd_readiness;\n',
+) {
+  const root = mkdtempSync(path.join(tmpdir(), 'ramshared-module-export-'))
+  mkdirSync(path.join(root, 'docs', 'specs', 'no-milestone', 'microsoft-native-vram-memory-tier'), { recursive: true })
+  mkdirSync(path.join(root, 'crates', 'ramshared-tier', 'src'), { recursive: true })
+  writeFileSync(
+    path.join(root, 'docs', 'specs', 'no-milestone', 'microsoft-native-vram-memory-tier', 'SPEC.md'),
+    embeddedOwnership('rust-slice-module-export-glue-differential-v1', {
+      schema_version: 1,
+      id: entry.id,
+      kind: entry.kind,
+      files: entry.files,
+      package: entry.package,
+      declaration: entry.declaration,
+      cargo_test: entry.cargo_test,
+    }),
+  )
+  writeFileSync(path.join(root, entry.files[0]), headSource)
+  return root
+}
+
+function moduleExportGlueBaseReader(source = 'pub mod cascade;\npub mod priority;\n') {
+  return (_revision, file) => file === 'crates/ramshared-tier/src/lib.rs' ? source : null
 }
 
 function coverageMap() {
@@ -511,6 +585,124 @@ test('changed_business_rust_file_requires_mapped_spec_command', () => {
   const unmapped = selectCoverageEntries(coverageMap(), ['crates/fixture/src/unmapped.rs'], root)
   assert.equal(unmapped.ok, false)
   assert.equal(unmapped.errors.some((item) => item.rule === 'changed-rust-file-unmapped'), true)
+})
+
+test('microsoft_native_vram_n3_state_has_exact_coverage_owner', () => {
+  const map = JSON.parse(readFileSync(path.join(REPOSITORY_ROOT, 'docs', 'governance', 'rust-slice-coverage.json'), 'utf8'))
+  const entry = map.entries.find((item) => item.id === MICROSOFT_NATIVE_VRAM_N3_COVERAGE_ENTRY.id)
+  assert.deepEqual(entry, MICROSOFT_NATIVE_VRAM_N3_COVERAGE_ENTRY)
+
+  const selected = selectCoverageEntries(
+    { schema_version: 2, entries: [entry] },
+    MICROSOFT_NATIVE_VRAM_N3_COVERAGE_ENTRY.files,
+    REPOSITORY_ROOT,
+  )
+  assert.equal(selected.ok, true)
+  assert.equal(selected.state, 'READY')
+  assert.deepEqual(selected.entries.map((item) => item.id), [MICROSOFT_NATIVE_VRAM_N3_COVERAGE_ENTRY.id])
+})
+
+test('microsoft_native_vram_n3_module_export_glue_accepts_exact_projection_and_all_targets', () => {
+  const entry = MICROSOFT_NATIVE_VRAM_N3_MODULE_EXPORT_GLUE_ENTRY
+  const map = { schema_version: 2, entries: [entry] }
+  const root = moduleExportGlueRoot(entry)
+  const selected = selectCoverageEntries(map, entry.files, root, {
+    baseRevision: 'e'.repeat(40),
+    readBaseFile: moduleExportGlueBaseReader(),
+  })
+  assert.equal(selected.ok, true)
+  assert.equal(selected.state, 'READY')
+  assert.deepEqual(selected.entries.map((item) => item.id), [entry.id])
+
+  const calls = []
+  const execution = runCoveragePlan(selected.entries, {
+    root,
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0 }
+    },
+  })
+  assert.equal(execution.ok, true)
+  assert.deepEqual(calls, [{
+    command: 'cargo',
+    args: ['test', '-p', 'ramshared-tier', '--all-targets'],
+    options: { cwd: root, shell: false, stdio: 'inherit' },
+  }])
+})
+
+test('microsoft_native_vram_n3_module_export_glue_rejects_non_glue_changes_and_wrong_scope', () => {
+  const entry = MICROSOFT_NATIVE_VRAM_N3_MODULE_EXPORT_GLUE_ENTRY
+  const base = 'pub mod cascade;\npub mod priority;\n'
+  const invalidSources = [
+    `${base}pub fn hidden() {}\npub mod n3_state;\npub mod nbd_readiness;\n`,
+    `${base}pub static LIMIT: usize = 1;\npub mod n3_state;\npub mod nbd_readiness;\n`,
+    `${base}pub unsafe fn hidden() {}\npub mod n3_state;\npub mod nbd_readiness;\n`,
+    `${base}pub mod n3_state;\npub mod nbd_readiness;\npub mod extra;\n`,
+    `pub mod changed;\npub mod priority;\npub mod n3_state;\npub mod nbd_readiness;\n`,
+    `${base}pub mod n3_state; \npub mod nbd_readiness;\n`,
+    `${base}pub mod n3_state;\n`,
+  ]
+  for (const headSource of invalidSources) {
+    const result = selectCoverageEntries(
+      { schema_version: 2, entries: [entry] },
+      entry.files,
+      moduleExportGlueRoot(entry, headSource),
+      { baseRevision: 'f'.repeat(40), readBaseFile: moduleExportGlueBaseReader(base) },
+    )
+    assert.equal(result.ok, false)
+    assert.equal(result.errors.some((item) => item.rule === 'module-export-glue-differential-not-proven'), true)
+  }
+
+  const wrongPath = {
+    ...entry,
+    files: ['crates/ramshared-tier/src/other.rs'],
+  }
+  const wrongPathResult = validateCoverageMap(
+    { schema_version: 2, entries: [wrongPath] },
+    moduleExportGlueRoot(wrongPath),
+  )
+  assert.equal(wrongPathResult.ok, false)
+  assert.equal(wrongPathResult.errors.some((item) => item.rule === 'module-export-glue-path-invalid'), true)
+
+  const wrongDeclaration = { ...entry, declaration: 'pub mod other;' }
+  const wrongDeclarationResult = validateCoverageMap(
+    { schema_version: 2, entries: [wrongDeclaration] },
+    moduleExportGlueRoot(wrongDeclaration),
+  )
+  assert.equal(wrongDeclarationResult.ok, false)
+  assert.equal(
+    wrongDeclarationResult.errors.some((item) => item.rule === 'module-export-glue-declaration-invalid'),
+    true,
+  )
+})
+
+test('wsl2_nbd_product_readiness_has_exact_coverage_owner_and_named_tests', () => {
+  const map = JSON.parse(readFileSync(path.join(REPOSITORY_ROOT, 'docs', 'governance', 'rust-slice-coverage.json'), 'utf8'))
+  const entry = map.entries.find((item) => item.id === WSL2_NBD_PRODUCT_READINESS_COVERAGE_ENTRY.id)
+  assert.deepEqual(entry, WSL2_NBD_PRODUCT_READINESS_COVERAGE_ENTRY)
+
+  const selected = selectCoverageEntries(
+    { schema_version: 2, entries: [entry] },
+    WSL2_NBD_PRODUCT_READINESS_COVERAGE_ENTRY.files,
+    REPOSITORY_ROOT,
+  )
+  assert.equal(selected.ok, true)
+  assert.equal(selected.state, 'READY')
+  assert.deepEqual(selected.entries.map((item) => item.id), [WSL2_NBD_PRODUCT_READINESS_COVERAGE_ENTRY.id])
+
+  const readinessTests = readFileSync(
+    path.join(REPOSITORY_ROOT, 'crates', 'ramshared-tier', 'tests', 'nbd_product_readiness.rs'),
+    'utf8',
+  )
+  for (const name of WSL2_NBD_PRODUCT_READINESS_TESTS) {
+    assert.match(readinessTests, new RegExp(`\\bfn ${name}\\s*\\(`))
+  }
+
+  const cascadeTests = readFileSync(
+    path.join(REPOSITORY_ROOT, 'crates', 'ramshared-tier', 'src', 'cascade.rs'),
+    'utf8',
+  )
+  assert.match(cascadeTests, /\bfn ublk_service_is_not_a_product_dependency\s*\(/)
 })
 
 test('comment_language_measured_rust_files_keep_exact_ownership_boundaries', () => {

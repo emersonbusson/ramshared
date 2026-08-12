@@ -6,6 +6,8 @@
 //! `swapoff` cannot drain pages and may trigger out-of-memory (OOM) conditions.
 //! Thus: VRAM must not be armed without a safety net tier active.
 
+use crate::nbd_readiness::ProductTransport;
+
 /// Tiers of the swap cascade, ordered from hottest to coldest.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Tier {
@@ -15,6 +17,19 @@ pub enum Tier {
     Vram,
     /// WSL2 default swap VHDX — Last resort.
     Vhdx,
+}
+
+impl Tier {
+    /// Returns the product transport owned by this tier, if it has one.
+    ///
+    /// The VRAM tier is deliberately NBD-only for the WSL2 product path;
+    /// ublk capability is never a product dependency.
+    pub const fn product_transport(self) -> Option<ProductTransport> {
+        match self {
+            Self::Vram => Some(ProductTransport::Nbd),
+            Self::Zram | Self::Vhdx => None,
+        }
+    }
 }
 
 /// Safety net status for the VRAM demotion path (Invariant A1).
@@ -92,5 +107,12 @@ mod tests {
     #[test]
     fn vhdx_present_has_precedence_over_ram_headroom() {
         assert_eq!(vram_safety_net(true, 4 * GIB, GIB), SafetyNet::VhdxBelow);
+    }
+
+    #[test]
+    fn ublk_service_is_not_a_product_dependency() {
+        assert_eq!(Tier::Vram.product_transport(), Some(ProductTransport::Nbd));
+        assert_eq!(Tier::Zram.product_transport(), None);
+        assert_eq!(Tier::Vhdx.product_transport(), None);
     }
 }

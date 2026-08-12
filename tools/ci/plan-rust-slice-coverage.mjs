@@ -13,13 +13,19 @@ const LINE_COVERAGE_KIND = 'rust-line-coverage'
 const WINDOWS_PLATFORM_KIND = 'windows-platform-e2e'
 const LOCALIZATION_KIND = 'rust-localization-comment-differential'
 const TEST_ONLY_LOCALIZATION_KIND = 'rust-test-only-localization-differential'
+const MODULE_EXPORT_GLUE_KIND = 'rust-module-export-glue-differential'
 const STRUCTURAL_KIND = 'rust-structural-contract'
 const PLATFORM_MARKER = 'rust-slice-platform-e2e-v1'
 const LOCALIZATION_MARKER = 'rust-slice-localization-comment-differential-v1'
 const TEST_ONLY_LOCALIZATION_MARKER = 'rust-slice-test-only-localization-differential-v1'
+const MODULE_EXPORT_GLUE_MARKER = 'rust-slice-module-export-glue-differential-v1'
 const STRUCTURAL_MARKER = 'rust-slice-structural-contract-v1'
 const WINDOWS_STATIC_WRAPPER = 'scripts/windows/Test-WindowsCiStatic.ps1'
 const VALIDATION_EVIDENCE_PATH = 'validation.md'
+const MODULE_EXPORT_GLUE_PATH = 'crates/ramshared-tier/src/lib.rs'
+const MODULE_EXPORT_GLUE_PACKAGE = 'ramshared-tier'
+const MODULE_EXPORT_GLUE_DECLARATION = 'pub mod n3_state;\npub mod nbd_readiness;'
+const MODULE_EXPORT_GLUE_CARGO_TEST = ['cargo', 'test', '-p', MODULE_EXPORT_GLUE_PACKAGE, '--all-targets']
 const FULL_SHA = /^[0-9a-f]{40}$/i
 const TEST_NAME = /^[a-z][a-z0-9_]*$/
 
@@ -154,6 +160,18 @@ function expectedTestOnlyLocalizationDeclaration(entry) {
   }
 }
 
+function expectedModuleExportGlueDeclaration(entry) {
+  return {
+    schema_version: 1,
+    id: entry.id,
+    kind: entry.kind,
+    files: entry.files,
+    package: entry.package,
+    declaration: entry.declaration,
+    cargo_test: entry.cargo_test,
+  }
+}
+
 function expectedStructuralDeclaration(entry) {
   return {
     schema_version: 1,
@@ -189,7 +207,8 @@ function validateCommonEntry(entry, root, errors, ids) {
   }
   if (ids.has(entry.id)) errors.push(finding('coverage-entry-duplicate', entry.id))
   ids.add(entry.id)
-  if (![LINE_COVERAGE_KIND, WINDOWS_PLATFORM_KIND, LOCALIZATION_KIND, TEST_ONLY_LOCALIZATION_KIND, STRUCTURAL_KIND].includes(entry.kind)) {
+  if (![LINE_COVERAGE_KIND, WINDOWS_PLATFORM_KIND, LOCALIZATION_KIND, TEST_ONLY_LOCALIZATION_KIND,
+    MODULE_EXPORT_GLUE_KIND, STRUCTURAL_KIND].includes(entry.kind)) {
     errors.push(finding('coverage-kind-invalid', entry.id))
     return null
   }
@@ -383,6 +402,32 @@ function validateTestOnlyLocalizationEntry(entry, root, specText, errors) {
   }
 }
 
+function validateModuleExportGlueEntry(entry, specText, errors) {
+  if (!exactKeys(entry, ['id', 'kind', 'spec', 'files', 'package', 'declaration', 'cargo_test'])) {
+    errors.push(finding('module-export-glue-entry-fields-invalid', entry.id))
+  }
+  if (JSON.stringify(entry.files) !== JSON.stringify([MODULE_EXPORT_GLUE_PATH])) {
+    errors.push(finding('module-export-glue-path-invalid', entry.id))
+  }
+  if (entry.package !== MODULE_EXPORT_GLUE_PACKAGE) {
+    errors.push(finding('module-export-glue-package-invalid', entry.id))
+  }
+  if (entry.declaration !== MODULE_EXPORT_GLUE_DECLARATION) {
+    errors.push(finding('module-export-glue-declaration-invalid', entry.id))
+  }
+  if (JSON.stringify(entry.cargo_test) !== JSON.stringify(MODULE_EXPORT_GLUE_CARGO_TEST)) {
+    errors.push(finding('module-export-glue-cargo-test-invalid', entry.id))
+  }
+  const declaration = parseSpecDeclaration(specText, MODULE_EXPORT_GLUE_MARKER)
+  if (declaration.state === 'missing') {
+    errors.push(finding('module-export-glue-spec-contract-missing', entry.id))
+  } else if (declaration.state !== 'ok') {
+    errors.push(finding('module-export-glue-spec-contract-invalid', entry.id))
+  } else if (!sameJson(declaration.value, expectedModuleExportGlueDeclaration(entry))) {
+    errors.push(finding('module-export-glue-spec-contract-mismatch', entry.id))
+  }
+}
+
 function validStructuralVerification(value) {
   return exactKeys(value, ['source', 'package', 'cargo_test']) &&
     isRustProductionPath(value.source) && typeof value.package === 'string' &&
@@ -431,6 +476,7 @@ function validEntry(entry, root, errors, ids) {
   else if (entry.kind === WINDOWS_PLATFORM_KIND) validatePlatformEntry(entry, root, specText, errors)
   else if (entry.kind === LOCALIZATION_KIND) validateLocalizationEntry(entry, specText, errors)
   else if (entry.kind === TEST_ONLY_LOCALIZATION_KIND) validateTestOnlyLocalizationEntry(entry, root, specText, errors)
+  else if (entry.kind === MODULE_EXPORT_GLUE_KIND) validateModuleExportGlueEntry(entry, specText, errors)
   else validateStructuralEntry(entry, root, specText, errors)
 }
 
@@ -746,6 +792,59 @@ function projectTestOnlyModule(source, testModule) {
   }
 }
 
+function moduleExportGlueSpans(source, declaration = MODULE_EXPORT_GLUE_DECLARATION) {
+  const lexed = lexRustForTestOnly(source)
+  if (lexed === null) return null
+  const declarations = declaration.split('\n')
+  if (declarations.length === 0 || new Set(declarations).size !== declarations.length ||
+    declarations.some((item) => !/^pub mod [a-z][a-z0-9_]*;$/.test(item))) return null
+
+  const spans = []
+  for (const expected of declarations) {
+    const values = ['pub', 'mod', expected.slice('pub mod '.length, -1), ';']
+    const matches = []
+    for (let index = 0; index <= lexed.tokens.length - values.length; index++) {
+      if (lexed.tokens[index].depth !== 0) continue
+      if (!values.every((value, offset) => lexed.tokens[index + offset].value === value)) continue
+      const start = lexed.tokens[index].start
+      const end = lexed.tokens[index + values.length - 1].end
+      const lineStart = start === 0 ? 0 : lexed.text.lastIndexOf('\n', start - 1) + 1
+      if (lexed.text.slice(lineStart, end + 1) !== `${expected}\n`) continue
+      matches.push({ start: lineStart, end: end + 1 })
+    }
+    if (matches.length === 0) continue
+    if (matches.length !== 1) return null
+    spans.push(matches[0])
+  }
+  if (spans.length === 0) return []
+  return spans.length === declarations.length ? spans.sort((left, right) => left.start - right.start) : null
+}
+
+function projectModuleExportGlue(source, declaration = MODULE_EXPORT_GLUE_DECLARATION) {
+  if (!isStructuralRustModule(source)) return null
+  const spans = moduleExportGlueSpans(source, declaration)
+  const declarationCount = declaration.split('\n').length
+  if (spans === null || spans.length !== declarationCount) return null
+  let projection = source
+  for (const span of [...spans].sort((left, right) => right.start - left.start)) {
+    projection = `${projection.slice(0, span.start)}${projection.slice(span.end)}`
+  }
+  return projection
+}
+
+export function isExactModuleExportGlueDifferential(
+  baseSource,
+  headSource,
+  declaration = MODULE_EXPORT_GLUE_DECLARATION,
+) {
+  const base = decodeUtf8(baseSource)
+  const head = decodeUtf8(headSource)
+  if (base === null || head === null || !isStructuralRustModule(base)) return false
+  if (moduleExportGlueSpans(base, declaration)?.length !== 0) return false
+  const projection = projectModuleExportGlue(head, declaration)
+  return projection !== null && projection === base
+}
+
 export function stripRustComments(source) {
   const text = decodeUtf8(source)
   if (text === null) return null
@@ -917,6 +1016,34 @@ function validateTestOnlyLocalizationDifferential(entry, root, options, errors) 
   }
 }
 
+function validateModuleExportGlueDifferential(entry, root, options, errors) {
+  if (options.baseRevision === null || options.baseRevision === undefined) {
+    errors.push(finding('module-export-glue-differential-base-required', entry.id))
+    return
+  }
+  if (typeof options.baseRevision !== 'string' || !FULL_SHA.test(options.baseRevision)) {
+    errors.push(finding('module-export-glue-differential-base-invalid', entry.id))
+    return
+  }
+  const readBaseFile = baseFileReader(root, options)
+  for (const file of entry.files) {
+    const baseSource = readBaseFileSafely(readBaseFile, options.baseRevision, file)
+    let headSource
+    try {
+      headSource = readFileSync(path.join(root, file))
+    } catch {
+      headSource = null
+    }
+    if (baseSource === null || baseSource === undefined) {
+      errors.push(finding('module-export-glue-differential-base-read-failed', file))
+    } else if (headSource === null) {
+      errors.push(finding('module-export-glue-differential-head-read-failed', file))
+    } else if (!isExactModuleExportGlueDifferential(baseSource, headSource, entry.declaration)) {
+      errors.push(finding('module-export-glue-differential-not-proven', file))
+    }
+  }
+}
+
 function selectStaticAllEntries(map, root) {
   const checked = validateCoverageMap(map, root)
   if (!checked.ok) return { ok: false, state: 'BLOCKED', entries: [], errors: checked.errors }
@@ -963,6 +1090,7 @@ export function selectCoverageEntries(map, changedPaths, root = ROOT, options = 
     if (!validatedSpecialOwners.has(owner.id)) {
       if (owner.kind === LOCALIZATION_KIND) validateLocalizationDifferential(owner, root, options, errors)
       if (owner.kind === TEST_ONLY_LOCALIZATION_KIND) validateTestOnlyLocalizationDifferential(owner, root, options, errors)
+      if (owner.kind === MODULE_EXPORT_GLUE_KIND) validateModuleExportGlueDifferential(owner, root, options, errors)
       validatedSpecialOwners.add(owner.id)
     }
     selected.set(owner.id, owner)
@@ -993,6 +1121,13 @@ export function runCoveragePlan(entries, { root = ROOT, spawn = spawnSync } = {}
         })
         if (result?.status !== 0) failures.push(finding('test-only-package-test-failed', verification.source))
       }
+    } else if (entry.kind === MODULE_EXPORT_GLUE_KIND) {
+      const result = spawn(entry.cargo_test[0], entry.cargo_test.slice(1), {
+        cwd: root,
+        shell: false,
+        stdio: 'inherit',
+      })
+      if (result?.status !== 0) failures.push(finding('module-export-glue-package-test-failed', entry.id))
     } else if (entry.kind === STRUCTURAL_KIND) {
       for (const verification of entry.verifications) {
         const key = JSON.stringify(verification.cargo_test)
@@ -1083,6 +1218,7 @@ export function main(argv = process.argv.slice(2), { root = ROOT, print = consol
       print(`RUST_SLICE_TEST_ONLY_LOCALIZATION_REQUIRED=${entry.id}`)
       if (staticTestOnlyInspection) print(`RUST_SLICE_TEST_ONLY_LOCALIZATION_BASE_PROOF_DEFERRED=${entry.id}`)
     }
+    if (entry.kind === MODULE_EXPORT_GLUE_KIND) print(`RUST_SLICE_MODULE_EXPORT_GLUE_DIFFERENTIAL_REQUIRED=${entry.id}`)
     if (entry.kind === STRUCTURAL_KIND) print(`RUST_SLICE_STRUCTURAL_CONTRACT_REQUIRED=${entry.id}`)
   }
   if (!options.run || selection.entries.length === 0) return 0
