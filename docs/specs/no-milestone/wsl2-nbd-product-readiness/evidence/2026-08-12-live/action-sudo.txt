@@ -1,0 +1,35 @@
+NBD_RELEASE_VERSION=v0.8.0-8-g0b09518
+NBD_RELEASE_MANIFEST_SHA256=5c17eebc622294cd86fc7f29144a0190a3a4c5d0707097f3df698f1f2c55af3e
+NBD_RELEASE_GATE=PASS
+NBD_SELECTOR=PASS
+NBD_LOWER_FREE_BYTES=894815240192
+NBD_LOWER_REQUIRED_BYTES=1610612736
+NBD_LOWER_TIER_CAPACITY=PASS
+NBD_RELAY_GATE=PASS
+NBD_BINARY_MATCH=NOT_APPLICABLE
+NBD_UBLK_MODULE=LOADED_INERT
+NBD_TRANSPORT=none
+NBD_PRODUCT_STATE=PRODUCT_OFF
+NBD_READINESS_REASON=product_off
+NBD_LIFECYCLE_STATE=EXECUTING
+NBD_LIFECYCLE_ACTION=activate
+NBD_LIFECYCLE_VERSION=v0.8.0-8-g0b09518
+[up] A1 safety net: VhdxBelow
+[up] priority: zram(200) > VRAM/nbd(100) > VHDX(disk) — SSD only after VRAM
+[up] forensics armed: /mnt/c/wsl-forensics/.armed
+[up] zram /dev/zram0 algo=lzo-rle prio=200
+[up] VRAM /dev/nbd0 (prio 100, 1024 MiB, 1 connection(s))
+[up] cascade active: zram(200) > VRAM(100) > VHDX | anti-hang: down always swapoff before daemon stop
+phase: UsingDisk (disk_used_ge_threshold)
+ok: true
+zram: present=true prio=200 size_kib=1048572 used_kib=0
+vram: present=true prio=100 size_kib=1048572 used_kib=0
+disk: present=true prio=-2 size_kib=4194304 used_kib=2106676
+daemon: alive pid=2062165
+demote: total=0 last_reason=? in_progress=false
+ghost: false order_ok: true active_kib: 1024
+
+NAME       TYPE       SIZE USED PRIO
+/dev/sdc   partition    4G   2G   -2
+/dev/zram0 partition 1024M   0B  200
+/dev/nbd0  partition 1024M   0B  100
