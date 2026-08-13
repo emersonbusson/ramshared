@@ -1109,9 +1109,10 @@ pass benchmark_live_seams_are_unavailable_in_approved_mode
 pass reviewed_release_binding_and_evidence_custody_refuse_drift
 
 test_failure_receipt_contract() {
-  local token
+  local token receipt_dir receipt symlink_target first_reason second_reason recorded
   for token in \
-    'write_failure_receipt()' \
+    'nbd_write_failure_receipt' \
+    'nbd_failure_receipt_allowed' \
     'failure-receipt.json' \
     'ramshared-nbd-cell-failure/v1' \
     'FAILURE_REASON' \
@@ -1119,14 +1120,142 @@ test_failure_receipt_contract() {
     'pair_id' \
     'terminal_state' \
     'PRODUCT_OFF'; do
-    if ! grep -Fq -- "$token" "$CELL"; then
+    if ! grep -Fq -- "$token" "$CELL" && ! grep -Fq -- "$token" "$BENCHMARK_LIB"; then
       printf 'FAIL failure_receipt_is_sanitized_and_requires_verified_product_off: missing %s\n' \
         "$token" >&2
       exit 1
     fi
   done
+  receipt_dir="$TMP/failure-receipt"
+  mkdir -p "$receipt_dir"
+  receipt="$receipt_dir/failure-receipt.json"
+  first_reason=FIRST_FAILURE
+  second_reason=SECOND_FAILURE
+  recorded=""
+  recorded=$(nbd_first_failure_reason "$recorded" "$first_reason")
+  recorded=$(nbd_first_failure_reason "$recorded" "$second_reason")
+  [[ $recorded == "$first_reason" ]] || {
+    printf 'FAIL failure receipt replaced the first stable reason: %s\n' "$recorded" >&2
+    exit 1
+  }
+  if nbd_failure_receipt_allowed 2 0 PRODUCT_OFF 0 0; then
+    echo 'FAIL failure receipt gate accepted cleanup failure' >&2
+    exit 1
+  fi
+  nbd_failure_receipt_allowed 2 1 PRODUCT_OFF 1 0 || {
+    echo 'FAIL failure receipt gate refused exact terminal PRODUCT_OFF proof' >&2
+    exit 1
+  }
+  if nbd_write_failure_receipt "$receipt" PRODUCT_READY "$recorded" release-v1 pair-1 disk-only idle 1024; then
+    echo 'FAIL failure receipt accepted a non-PRODUCT_OFF terminal state' >&2
+    exit 1
+  fi
+  [[ ! -e $receipt ]] || { echo 'FAIL failure receipt was written before PRODUCT_OFF' >&2; exit 1; }
+  nbd_write_failure_receipt "$receipt" PRODUCT_OFF "$recorded" release-v1 pair-1 disk-only idle 1024
+  python3 - "$receipt" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    record = json.load(source)
+expected = {
+    "schema_version", "status", "reason", "terminal_state", "release_version",
+    "pair_id", "mode", "condition", "tier_mib",
+}
+assert set(record) == expected, record
+assert record["schema_version"] == "ramshared-nbd-cell-failure/v1", record
+assert record["status"] == "RED", record
+assert record["reason"] == "FIRST_FAILURE", record
+assert record["terminal_state"] == "PRODUCT_OFF", record
+assert record["release_version"] == "release-v1", record
+assert record["pair_id"] == "pair-1", record
+assert record["mode"] == "disk-only", record
+assert record["condition"] == "idle", record
+assert record["tier_mib"] == 1024, record
+assert "path" not in record and "pid" not in record, record
+assert all("/" not in str(record[name]) and "\\" not in str(record[name]) for name in (
+    "reason", "release_version", "pair_id", "mode", "condition"
+)), record
+PY
+  printf 'preexisting receipt\n' >"$receipt"
+  if nbd_write_failure_receipt "$receipt" PRODUCT_OFF "$recorded" release-v1 pair-1 disk-only idle 1024; then
+    echo 'FAIL failure receipt overwrote a preexisting artifact' >&2
+    exit 1
+  fi
+  [[ $(<"$receipt") == 'preexisting receipt' ]] || {
+    echo 'FAIL failure receipt modified a preexisting artifact' >&2
+    exit 1
+  }
+  symlink_target="$receipt_dir/preexisting-target"
+  receipt="$receipt_dir/failure-receipt-symlink.json"
+  printf 'preexisting symlink target\n' >"$symlink_target"
+  ln -s "$(basename -- "$symlink_target")" "$receipt"
+  if nbd_write_failure_receipt "$receipt" PRODUCT_OFF "$recorded" release-v1 pair-1 disk-only idle 1024; then
+    echo 'FAIL failure receipt accepted a symlink destination' >&2
+    exit 1
+  fi
+  [[ $(<"$symlink_target") == 'preexisting symlink target' ]] || {
+    echo 'FAIL failure receipt modified a symlink destination target' >&2
+    exit 1
+  }
+  receipt="$receipt_dir/failure-receipt-race.json"
+  if RAMSHARED_NBD_TEST_FAILURE_RECEIPT_RACE=publish-preexisting \
+    nbd_write_failure_receipt "$receipt" PRODUCT_OFF FIRST_FAILURE release-v1 \
+      pair-1 disk-only idle 1024; then
+    echo 'FAIL failure receipt accepted a concurrent destination publication' >&2
+    exit 1
+  fi
+  [[ -f $receipt && ! -L $receipt ]] || {
+    echo 'FAIL manufactured concurrent destination was not published' >&2
+    exit 1
+  }
+  [[ $(<"$receipt") == 'concurrent receipt bytes must survive exactly' ]] || {
+    echo 'FAIL failure receipt overwrote concurrent destination bytes' >&2
+    exit 1
+  }
+  if compgen -G "$receipt_dir/.failure-receipt.*" >/dev/null; then
+    echo 'FAIL failure receipt left a temporary candidate after concurrent publish' >&2
+    exit 1
+  fi
   pass failure_receipt_is_sanitized_and_requires_verified_product_off
 }
 
+test_failure_receipt_terminal_preflight_and_orphan_daemon() {
+  local orphan_root orphan_count orphan_receipt preflight_line receipt_gate_line
+  preflight_line=$(grep -nF 'terminal_product_off_preflight' "$CELL" | head -n1 | cut -d: -f1 || true)
+  receipt_gate_line=$(grep -nF 'nbd_failure_receipt_allowed "$rc"' "$CELL" | head -n1 | cut -d: -f1 || true)
+  [[ -n $preflight_line && -n $receipt_gate_line && $preflight_line -lt $receipt_gate_line ]] || {
+    echo 'FAIL failure receipt gate does not require terminal pinned preflight first' >&2
+    exit 1
+  }
+  grep -Fq 'NBD_PRODUCT_STATE=PRODUCT_OFF' "$CELL" || {
+    echo 'FAIL terminal failure receipt path does not prove PRODUCT_OFF' >&2
+    exit 1
+  }
+
+  orphan_root="$TMP/failure-receipt-orphan"
+  mkdir -p "$orphan_root/proc/4242" "$orphan_root/release/bin"
+  printf 'manufactured orphan ramsharedd\n' >"$orphan_root/release/bin/ramsharedd"
+  chmod 0700 "$orphan_root/release/bin/ramsharedd"
+  ln -s "$orphan_root/release/bin/ramsharedd" "$orphan_root/proc/4242/exe"
+  orphan_count=$(nbd_exact_daemon_count "$orphan_root/proc" "$orphan_root/release/bin/ramsharedd")
+  [[ $orphan_count == 1 ]] || {
+    printf 'FAIL exact orphan daemon fixture was not detected: %s\n' "$orphan_count" >&2
+    exit 1
+  }
+
+  orphan_receipt="$orphan_root/failure-receipt.json"
+  if nbd_failure_receipt_allowed 2 1 PRODUCT_OFF 1 "$orphan_count"; then
+    nbd_write_failure_receipt "$orphan_receipt" PRODUCT_OFF ORPHAN_DAEMON release-v1 \
+      pair-1 disk-only idle 1024
+  fi
+  [[ ! -e $orphan_receipt ]] || {
+    echo 'FAIL orphan exact daemon without PID produced a failure receipt' >&2
+    exit 1
+  }
+  pass failure_receipt_requires_pinned_terminal_preflight_and_no_orphan_daemon
+}
+
 test_failure_receipt_contract
+test_failure_receipt_terminal_preflight_and_orphan_daemon
 printf 'PASS Test-NbdBenchmarkCell total=%s\n' "$pass_count"

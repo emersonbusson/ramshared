@@ -65,8 +65,10 @@ ZRAM_RECORD=${RAMSHARED_NBD_ZRAM_RECORD:-/run/ramshared/zram-dev}
 PROC_ROOT=${RAMSHARED_NBD_PROC_ROOT:-/proc}
 DEV_ROOT=${RAMSHARED_NBD_DEV_ROOT:-/dev}
 SYS_BLOCK_ROOT=${RAMSHARED_NBD_SYS_BLOCK_ROOT:-/sys/block}
+FAILURE_REASON=""
 
 refuse() {
+  [[ -n $FAILURE_REASON ]] || FAILURE_REASON=$1
   printf 'NBD_BENCHMARK_STATE=REFUSED\n'
   printf 'NBD_BENCHMARK_REASON=%s\n' "$1"
   exit 2
@@ -650,6 +652,7 @@ WORKER_PID=""
 SCRATCH_SWAP=""
 SCRATCH_IDENTITY=""
 SCRATCH_SWAP_ACTIVE=0
+CLEANUP_OK=1
 
 pinned_preflight() {
   RAMSHARED_NBD_VRAM_MIB=$TIER_MIB "$PREFLIGHT" --check \
@@ -1058,17 +1061,32 @@ safe_product_off() {
   [[ ! -f $PID_FILE ]] || return 1
 }
 
+terminal_product_off_preflight() {
+  local out="$ARTIFACT_DIR/preflight-failure-terminal.txt"
+  local err="$ARTIFACT_DIR/preflight-failure-terminal.err"
+  pinned_preflight >"$out" 2>"$err" || return 1
+  awk -v version="$VERSION" -v manifest="$EXPECTED_MANIFEST_SHA256" '
+    $0 == "NBD_PRODUCT_STATE=PRODUCT_OFF" { state += 1 }
+    $0 == "NBD_BINARY_MATCH=NOT_APPLICABLE" { binary += 1 }
+    $0 == "NBD_RELEASE_VERSION=" version { release += 1 }
+    $0 == "NBD_RELEASE_MANIFEST_SHA256=" manifest { digest += 1 }
+    END { exit(state == 1 && binary == 1 && release == 1 && digest == 1 ? 0 : 1) }
+  ' "$out" || return 1
+  [[ $(nbd_exact_daemon_count "$PROC_ROOT" "$DAEMON") == 0 ]]
+}
+
 cleanup() {
-  local rc=$?
+  local rc=$? terminal_preflight_ok=0 daemon_count=-1
   trap - EXIT INT TERM
   if [[ -n $WORKER_PID ]] && kill -0 "$WORKER_PID" 2>/dev/null; then
     kill -TERM "$WORKER_PID" 2>/dev/null || true
     wait "$WORKER_PID" 2>/dev/null || true
   fi
   if [[ -d $CG ]]; then
-    rmdir "$CG" 2>/dev/null || rc=1
+    rmdir "$CG" 2>/dev/null || { CLEANUP_OK=0; rc=1; }
   fi
   if ! cleanup_disk_scratch; then
+    CLEANUP_OK=0
     printf 'NBD_BENCHMARK_STATE=RED\nNBD_BENCHMARK_REASON=scratch_cleanup_failed\n' >&2
     rc=1
   fi
@@ -1076,6 +1094,24 @@ cleanup() {
     CLEANUP_OK=0
     printf 'NBD_BENCHMARK_STATE=RED\nNBD_BENCHMARK_REASON=terminal_product_off_failed\n' >&2
     rc=1
+  fi
+  if (( rc != 0 && CLEANUP_OK == 1 )); then
+    if terminal_product_off_preflight; then
+      terminal_preflight_ok=1
+      daemon_count=$(nbd_exact_daemon_count "$PROC_ROOT" "$DAEMON")
+    else
+      CLEANUP_OK=0
+      printf 'NBD_BENCHMARK_STATE=RED\nNBD_BENCHMARK_REASON=terminal_preflight_failed\n' >&2
+    fi
+  fi
+  if nbd_failure_receipt_allowed "$rc" "$CLEANUP_OK" PRODUCT_OFF \
+    "$terminal_preflight_ok" "$daemon_count"; then
+    nbd_write_failure_receipt "$ARTIFACT_DIR/failure-receipt.json" PRODUCT_OFF \
+      "$FAILURE_REASON" "$VERSION" "$PAIR_ID" "$MODE" "$CONDITION" "$TIER_MIB" || {
+      CLEANUP_OK=0
+      printf 'NBD_BENCHMARK_STATE=RED\nNBD_BENCHMARK_REASON=failure_receipt_write_failed\n' >&2
+      rc=1
+    }
   fi
   exit "$rc"
 }

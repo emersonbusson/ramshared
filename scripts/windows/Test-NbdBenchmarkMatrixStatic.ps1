@@ -124,6 +124,7 @@ $required = @(
     "sample_timeout_sec",
     "cell_outer_timeout_sec",
     "Assert-CellFailureReceipt",
+    "New-CellControllerFailureExecution",
     "failure-receipt.json",
     "ramshared-nbd-cell-failure/v1",
     "cell_failure_receipt_invalid",
@@ -456,7 +457,11 @@ try {
         @{ Name = "timeout-budget"; Expected = "timeout_budget_refusal=REFUSED" },
         @{ Name = "timeout-budget-property-order"; Expected = "cell_timeout_budget_property_order_is_semantic=PASS" },
         @{ Name = "timeout-budget-property-order"; Expected = "cell_timeout_budget_property_order_mismatch=REFUSED" },
-        @{ Name = "timeout-budget-property-order"; Expected = "cell_timeout_budget_property_order_noncanonical=REFUSED" }
+        @{ Name = "timeout-budget-property-order"; Expected = "cell_timeout_budget_property_order_noncanonical=REFUSED" },
+        @{ Name = "failure-receipt"; Expected = "cell_failure_receipt_product_off=PASS" },
+        @{ Name = "failure-receipt"; Expected = "cell_failure_receipt_failed_start=REFUSED" },
+        @{ Name = "failure-receipt"; Expected = "cell_failure_receipt_non_boolean_timeout=REFUSED" },
+        @{ Name = "failure-receipt"; Expected = "cell_failure_receipt_invalid=REFUSED" }
     )
     foreach ($case in $selfTestCases) {
         $output = @(& $script -ManufacturedSelfTestCase $case.Name -ArtifactRoot $tmp 2>&1)

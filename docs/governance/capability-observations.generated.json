@@ -1007,7 +1007,8 @@
       },
       "documented_surface": {
         "implementation_paths": [
-          "crates/ramshared-wsl2d/src/conn.rs"
+          "crates/ramshared-wsl2d/src/conn.rs",
+          "crates/ramshared-wsl2d/src/main.rs"
         ],
         "test_paths": []
       },
