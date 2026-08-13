@@ -1796,6 +1796,214 @@ test_normal_stubborn_worker_is_bounded_and_non_promotable() {
   pass normal_stubborn_worker_is_bounded_and_non_promotable
 }
 
+test_integrity_finalization_uses_remaining_sample_deadline_and_reaps_before_refusal() {
+  local root library rc
+  root="$TMP/integrity-finalization"
+  mkdir -p "$root"
+  library="$root/functions.sh"
+  : >"$library"
+  extract_cell_function "$library" derive_sample_timeout_sec
+  extract_cell_function "$library" worker_is_live
+  extract_cell_function "$library" stop_worker_bounded
+  extract_cell_function "$library" stop_worker_for_integrity_deadline
+  [[ $(grep -Ec '^stop_worker_for_integrity_deadline\(\)' "$library" || true) == 1 ]] || {
+    echo 'FAIL integrity deadline helper is missing' >&2
+    exit 1
+  }
+  set +e
+  timeout --foreground --kill-after=2s 18s bash -c '
+    set -euo pipefail
+    source "$1"
+    worker=$2
+    root=$3
+    WORKER_TERM_GRACE_SEC=1
+    WORKER_KILL_GRACE_SEC=1
+    for tier in 1024 2048 4096; do
+      expected=$([[ $tier == 1024 ]] && echo 120 || ([[ $tier == 2048 ]] && echo 240 || echo 600))
+      [[ $(derive_sample_timeout_sec "$tier") == "$expected" ]]
+    done
+    body=$(awk "/^stop_worker_for_integrity_deadline\\(\\)/ { on=1 } on { print } on && /^}$/ { exit }" "$1")
+    ! grep -Fq WORKER_TERM_GRACE_SEC <<<"$body"
+    grep -Fq "SECONDS < absolute_deadline" <<<"$body"
+
+    result="$root/slow-result.json"
+    log="$root/slow.log"
+    RAMSHARED_NBD_ALLOW_MANUFACTURED_INTEGRITY_TEST=1 \
+      RAMSHARED_NBD_TEST_INTEGRITY_FINALIZATION_DELAY_SEC=2 \
+      python3 "$worker" --allocate-mib 16 --pattern shake256-v1 --result "$result" >"$log" 2>&1 &
+    slow_pid=$!
+    for _ in $(seq 1 200); do
+      grep -q "^HOLD " "$log" 2>/dev/null && break
+      sleep 0.05
+    done
+    grep -q "^HOLD " "$log"
+    absolute_deadline=$((SECONDS + 4))
+    stop_worker_for_integrity_deadline "$slow_pid" "$absolute_deadline"
+    [[ ${INTEGRITY_WORKER_REAPED:-0} == 1 && ${INTEGRITY_STOP_REASON:-} == GRACEFUL_EXIT &&
+      ${INTEGRITY_WORKER_EXIT_CODE:-} == 0 ]]
+    python3 - "$result" <<"PY"
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    row = json.load(source)
+assert row["status"] == "PASS", row
+assert row["checksum_before"] == row["checksum_after"], row
+PY
+
+    stubborn_log="$root/stubborn.log"
+    python3 -c "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print(\"READY\", flush=True); time.sleep(60)" \
+      >"$stubborn_log" 2>&1 &
+    stubborn_pid=$!
+    for _ in $(seq 1 100); do
+      grep -qx READY "$stubborn_log" 2>/dev/null && break
+      sleep 0.05
+    done
+    grep -qx READY "$stubborn_log"
+    absolute_deadline=$((SECONDS + 1))
+    if stop_worker_for_integrity_deadline "$stubborn_pid" "$absolute_deadline"; then
+      exit 91
+    fi
+    [[ ${INTEGRITY_WORKER_REAPED:-0} == 1 &&
+      ${INTEGRITY_STOP_REASON:-} == SAMPLE_INTEGRITY_DEADLINE_EXCEEDED ]]
+    ! kill -0 "$stubborn_pid" 2>/dev/null
+  ' _ "$library" "$ROOT/scripts/safety/cascade_pressure_integrity_worker.py" "$root" \
+    >/dev/null 2>"$root/stderr"
+  rc=$?
+  set -e
+  [[ $rc == 0 ]] || {
+    printf 'FAIL integrity finalization did not use the remaining sample deadline: rc=%s stderr=%s\n' \
+      "$rc" "$(<"$root/stderr")" >&2
+    exit 1
+  }
+  pass integrity_finalization_uses_remaining_sample_deadline_and_reaps_before_refusal
+}
+
+test_integrity_deadline_reaped_worker_does_not_repeat_cleanup_and_can_seal_receipt() {
+  local root library rc
+  root="$TMP/integrity-reaped-cleanup"
+  mkdir -p "$root/artifacts"
+  library="$root/functions.sh"
+  : >"$library"
+  for name in worker_is_live stop_worker_bounded stop_worker_for_integrity_deadline cleanup; do
+    extract_cell_function "$library" "$name"
+  done
+  [[ $(grep -Ec '^stop_worker_for_integrity_deadline\(\)' "$library" || true) == 1 ]] || {
+    echo 'FAIL integrity deadline helper is missing for cleanup receipt test' >&2
+    exit 1
+  }
+  set +e
+  timeout --foreground --kill-after=2s 12s bash -c '
+    set -euo pipefail
+    source "$1"
+    root=$2
+    ARTIFACT_DIR="$root/artifacts"
+    WORKER_TERM_GRACE_SEC=1
+    WORKER_KILL_GRACE_SEC=1
+    CUSTODY_FRONTIER=0
+    CLEANUP_OK=1
+    FAILURE_REASON=""
+    VERSION=v1
+    PAIR_ID=fixture-pair
+    MODE=disk-only
+    CONDITION=idle
+    TIER_MIB=1024
+    CG="$root/no-cgroup"
+    SCRATCH_SWAP=""
+    SCRATCH_SWAP_ACTIVE=0
+    FINAL_EPOCH_STATE=unattempted
+    rollback_published_inventory() { :; }
+    discard_custody_candidates() { :; }
+    cleanup_cgroup() { :; }
+    cleanup_disk_scratch() { :; }
+    product_off_epoch() { [[ $1 == final ]]; FINAL_EPOCH_STATE=completed; }
+    nbd_failure_receipt_allowed() { [[ $1 -ne 0 && $2 == 1 && $3 == PRODUCT_OFF && $4 == 1 && $5 == 0 ]]; }
+    nbd_write_failure_receipt() { printf "%s\\n" "$3" >"$1"; }
+    stubborn_log="$root/stubborn.log"
+    python3 -c "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print(\"READY\", flush=True); time.sleep(60)" \
+      >"$stubborn_log" 2>&1 &
+    WORKER_PID=$!
+    for _ in $(seq 1 100); do
+      grep -qx READY "$stubborn_log" 2>/dev/null && break
+      sleep 0.05
+    done
+    grep -qx READY "$stubborn_log"
+    trap cleanup EXIT
+    absolute_deadline=$((SECONDS + 1))
+    if stop_worker_for_integrity_deadline "$WORKER_PID" "$absolute_deadline"; then
+      exit 91
+    fi
+    [[ ${INTEGRITY_WORKER_REAPED:-0} == 1 && ${INTEGRITY_STOP_REASON:-} == SAMPLE_INTEGRITY_DEADLINE_EXCEEDED ]]
+    WORKER_PID=""
+    FAILURE_REASON=$INTEGRITY_STOP_REASON
+    stop_worker_bounded() { printf "unexpected-retry\\n" >"$root/retry.log"; return 1; }
+    exit 42
+  ' _ "$library" "$root" >/dev/null 2>"$root/stderr"
+  rc=$?
+  set -e
+  [[ $rc == 42 && ! -e $root/retry.log &&
+    $(<"$root/artifacts/failure-receipt.json") == SAMPLE_INTEGRITY_DEADLINE_EXCEEDED ]] || {
+    printf 'FAIL reaped integrity deadline did not seal one receipt without cleanup retry: rc=%s stderr=%s\n' \
+      "$rc" "$(<"$root/stderr")" >&2
+    exit 1
+  }
+  test_integrity_deadline_preserves_already_exited_worker_status
+  pass integrity_deadline_reaped_worker_does_not_repeat_cleanup_and_can_seal_receipt
+}
+
+test_integrity_deadline_preserves_already_exited_worker_status() {
+  local root library rc
+  root="$TMP/integrity-already-exited"
+  mkdir -p "$root"
+  library="$root/functions.sh"
+  : >"$library"
+  for name in worker_is_live stop_worker_for_integrity_deadline append_integrity_process_receipt; do
+    extract_cell_function "$library" "$name"
+  done
+  set +e
+  timeout --foreground --kill-after=2s 8s bash -c '
+    set -euo pipefail
+    source "$1"
+    root=$2
+    WORKER_TERM_GRACE_SEC=1
+    WORKER_KILL_GRACE_SEC=1
+    wait_calls=0
+    wait() {
+      wait_calls=$((wait_calls + 1))
+      builtin wait "$@"
+    }
+    ready="$root/ready"
+    (printf "ready\n" >"$ready"; exit 37) &
+    worker_pid=$!
+    for _ in $(seq 1 100); do
+      [[ -f $ready && ! -L $ready ]] && break
+      sleep 0.01
+    done
+    [[ -f $ready && ! -L $ready ]]
+    for _ in $(seq 1 100); do
+      ! worker_is_live "$worker_pid" && break
+      sleep 0.01
+    done
+    ! worker_is_live "$worker_pid"
+    if stop_worker_for_integrity_deadline "$worker_pid" "$((SECONDS + 2))"; then
+      exit 91
+    fi
+    [[ ${INTEGRITY_WORKER_REAPED:-0} == 1 &&
+      ${INTEGRITY_WORKER_EXIT_CODE:-} == 37 &&
+      ${INTEGRITY_STOP_REASON:-} == SAMPLE_INTEGRITY_PROCESS_FAILED ]]
+    receipt="$root/process-receipt.txt"
+    printf "worker receipt\n" >"$receipt"
+    append_integrity_process_receipt "$receipt" 1 0 0
+    grep -Fxq INTEGRITY_WORKER_EXIT_CODE=37 "$receipt"
+    [[ $wait_calls == 1 ]]
+  ' _ "$library" "$root" >/dev/null 2>"$root/stderr"
+  rc=$?
+  set -e
+  [[ $rc == 0 ]] || {
+    printf 'FAIL already-exited integrity worker status was not preserved: rc=%s stderr=%s\n' \
+      "$rc" "$(<"$root/stderr")" >&2
+    exit 1
+  }
+}
+
 test_worker_grace_values_are_strictly_bounded() {
   local library value variable rc
   library="$TMP/worker-grace-functions.sh"
@@ -1953,6 +2161,8 @@ test_down_failure_is_single_shot_and_non_promotable() {
 test_product_off_authority_is_unique_and_allowlisted
 test_success_finalization_removes_cgroup_and_faults_keep_cleanup_armed
 test_normal_stubborn_worker_is_bounded_and_non_promotable
+test_integrity_finalization_uses_remaining_sample_deadline_and_reaps_before_refusal
+test_integrity_deadline_reaped_worker_does_not_repeat_cleanup_and_can_seal_receipt
 test_worker_grace_values_are_strictly_bounded
 test_live_refuses_worker_grace_and_failure_receipt_seams
 test_stubborn_worker_fails_closed_without_authority
@@ -2062,10 +2272,22 @@ make_secondary_signal_fixture() {
   cat >"$root/down" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+fixture_root=$(cd -- "$(dirname -- "$0")" && pwd)
+trigger_secondary_signal() {
+  local signal target
+  signal=$(<"$fixture_root/second-signal")
+  target=$(<"$fixture_root/signal-target")
+  [[ $signal == TERM || $signal == INT ]] || return 1
+  [[ $target =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ ! -e $fixture_root/second-signal.log && ! -L $fixture_root/second-signal.log ]] || return 1
+  : >"$fixture_root/marker"
+  printf '%s %s\n' "$signal" "$target" >"$fixture_root/second-signal.log"
+  kill -"$signal" "$target"
+}
 printf '%s\n' "$BASHPID" >>"${SIGNAL_CHILD_LOG:?}"
 printf 'down\n' >>"${SIGNAL_DOWN_LOG:?}"
 if [[ ${SIGNAL_PHASE:?} == down ]]; then
-  : >"${SIGNAL_MARKER:?}"
+  trigger_secondary_signal || exit 1
   sleep 0.8
 fi
 EOF
@@ -2073,6 +2295,17 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 fixture_root=$(cd -- "$(dirname -- "$0")" && pwd)
+trigger_secondary_signal() {
+  local signal target
+  signal=$(<"$fixture_root/second-signal")
+  target=$(<"$fixture_root/signal-target")
+  [[ $signal == TERM || $signal == INT ]] || return 1
+  [[ $target =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ ! -e $fixture_root/second-signal.log && ! -L $fixture_root/second-signal.log ]] || return 1
+  : >"$fixture_root/marker"
+  printf '%s %s\n' "$signal" "$target" >"$fixture_root/second-signal.log"
+  kill -"$signal" "$target"
+}
 printf '%s\n' "$BASHPID" >>"$fixture_root/children.log"
 counter="$fixture_root/preflight.count"
 phase=$(<"$fixture_root/signal-phase")
@@ -2081,7 +2314,7 @@ calls=0
 calls=$((calls + 1))
 printf '%s\n' "$calls" >"$counter"
 if [[ $phase == "preflight-$calls" ]]; then
-  : >"$fixture_root/marker"
+  trigger_secondary_signal || exit 1
   sleep 0.8
 fi
 printf '%s\n' \
@@ -2100,8 +2333,21 @@ EOF
   cat >"$root/worker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+fixture_root=$(cd -- "$(dirname -- "$0")" && pwd)
+trigger_secondary_signal() {
+  local signal target
+  signal=$(<"$fixture_root/second-signal")
+  target=$(<"$fixture_root/signal-target")
+  [[ $signal == TERM || $signal == INT ]] || return 1
+  [[ $target =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ ! -e $fixture_root/second-signal.log && ! -L $fixture_root/second-signal.log ]] || return 1
+  : >"$fixture_root/marker"
+  printf '%s %s\n' "$signal" "$target" >"$fixture_root/second-signal.log"
+  kill -"$signal" "$target"
+}
 printf '%s\n' "$BASHPID" >>"${SIGNAL_CHILD_LOG:?}"
-trap ': >"${SIGNAL_MARKER:?}"; sleep 0.8; exit 0' TERM
+trap 'trigger_secondary_signal || exit 1; sleep 0.8; exit 0' TERM
+: >"$fixture_root/worker.ready"
 while :; do sleep 0.05; done
 EOF
   chmod 0700 "$root/down" "$root/preflight" "$root/worker"
@@ -2146,12 +2392,14 @@ run_secondary_signal_cleanup_fixture() {
     CUSTODY_INVENTORY_CANDIDATE=""
     CUSTODY_ENVELOPE_CANDIDATE=""
     SIGNAL_PHASE=$phase
-    SIGNAL_MARKER="$root/marker"
     SIGNAL_CHILD_LOG="$root/children.log"
     SIGNAL_DOWN_LOG="$root/down.log"
     PREFLIGHT_COUNTER="$root/preflight.count"
-    export SIGNAL_PHASE SIGNAL_MARKER SIGNAL_CHILD_LOG SIGNAL_DOWN_LOG PREFLIGHT_COUNTER
+    target=$BASHPID
+    export SIGNAL_PHASE SIGNAL_CHILD_LOG SIGNAL_DOWN_LOG PREFLIGHT_COUNTER
     printf "%s\n" "$phase" >"$root/signal-phase"
+    printf "%s\n" "$target" >"$root/signal-target"
+    printf "%s\n" "$second_signal" >"$root/second-signal"
     cleanup_disk_scratch() { printf "cleanup\n" >>"$root/cleanup.log"; }
     nbd_failure_receipt_allowed() { [[ $1 -ne 0 && $2 == 1 && $3 == PRODUCT_OFF && $4 == 1 && $5 == 0 ]]; }
     nbd_write_failure_receipt() { printf "receipt\n" >"$1"; }
@@ -2159,17 +2407,13 @@ run_secondary_signal_cleanup_fixture() {
       "$root/worker" &
       WORKER_PID=$!
       printf "%s\n" "$WORKER_PID" >"$root/worker.pid"
-    fi
-    target=$BASHPID
-    (
-      for _ in $(seq 1 500); do
-        [[ -e $SIGNAL_MARKER ]] && break
+      for _ in $(seq 1 200); do
+        [[ -f $root/worker.ready && ! -L $root/worker.ready ]] && break
+        kill -0 "$WORKER_PID" 2>/dev/null || exit 1
         sleep 0.01
       done
-      [[ -e $SIGNAL_MARKER ]] || exit 88
-      printf "%s\n" "$second_signal" >"$root/second-signal.log"
-      kill -"$second_signal" "$target"
-    ) &
+      [[ -f $root/worker.ready && ! -L $root/worker.ready ]] || exit 1
+    fi
     trap cleanup EXIT
     trap on_interrupt INT
     trap on_term TERM
@@ -2179,7 +2423,7 @@ run_secondary_signal_cleanup_fixture() {
 }
 
 test_secondary_signals_preserve_first_status_and_complete_cleanup() {
-  local phase first_signal second_signal root expected rc child cleanup_count down_count preflight_count
+  local phase first_signal second_signal root expected rc child cleanup_count down_count preflight_count signal_record target
   for phase in worker down preflight-1 preflight-2; do
     for first_signal in TERM INT; do
       for second_signal in TERM INT; do
@@ -2196,13 +2440,29 @@ test_secondary_signals_preserve_first_status_and_complete_cleanup() {
         set -e
         cleanup_count=$(grep -cx cleanup "$root/cleanup.log" 2>/dev/null || true)
         down_count=$(grep -cx down "$root/down.log" 2>/dev/null || true)
-        preflight_count=$(<"$root/preflight.count")
+        if [[ -f $root/preflight.count ]]; then
+          preflight_count=$(<"$root/preflight.count")
+        else
+          preflight_count=missing
+        fi
+        if [[ -f $root/second-signal.log && ! -L $root/second-signal.log ]]; then
+          signal_record=$(<"$root/second-signal.log")
+        else
+          signal_record=missing
+        fi
+        if [[ -f $root/signal-target && ! -L $root/signal-target ]]; then
+          target=$(<"$root/signal-target")
+        else
+          target=missing
+        fi
         [[ $rc == "$expected" && $cleanup_count == 1 && $down_count == 1 && $preflight_count == 2 &&
           -f $root/second-signal.log && -f $root/artifacts/final-product-off.json &&
-          -f $root/artifacts/failure-receipt.json ]] || {
-          printf 'FAIL secondary signal cleanup phase=%s first=%s second=%s rc=%s cleanup=%s down=%s preflight=%s stderr=%s\n' \
+          -f $root/artifacts/failure-receipt.json && -f $root/children.log &&
+          $target =~ ^[1-9][0-9]*$ && $signal_record == "$second_signal $target" &&
+          ! -s $root/stderr ]] || {
+          printf 'FAIL secondary signal cleanup phase=%s first=%s second=%s rc=%s cleanup=%s down=%s preflight=%s signal=%s target=%s stderr=%s\n' \
             "$phase" "$first_signal" "$second_signal" "$rc" "$cleanup_count" "$down_count" "$preflight_count" \
-            "$(<"$root/stderr")" >&2
+            "$signal_record" "$target" "$(<"$root/stderr")" >&2
           exit 1
         }
         python3 - "$root/artifacts/final-product-off.json" <<'PY'

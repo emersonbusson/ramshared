@@ -128,8 +128,10 @@ termination action ran during the subsequent correction slice.
   `failed_swapoff_keeps_daemon_and_device_alive`, and
   `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` are
   present and pass in the CLI suite.
-- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 44/44;
-  `bash scripts/safety/test-nbd-product-preflight.sh` → currently verified
+- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → expected 46/46
+  on the current Attempt26 candidate; `bash scripts/safety/Test-CascadePressureIntegrityWorker.sh`
+  → 3 named integrity checks; `bash scripts/safety/test-nbd-product-preflight.sh`
+  → currently verified
   33/33, including exact three-observation userspace-zombie liveness and
   fail-closed live/malformed/race cases.
 - Public evidence: Node 24.15.0 `node --test --experimental-test-coverage
@@ -414,6 +416,27 @@ its matrix and failure hashes are custody references, not public promotion
 evidence.
 
 ## Gaps
+
+## Attempt26 source-only integrity-finalization deadline hardening
+
+The first P1 idle disk-only run on sealed source `4b5f554` reached the complete
+`3584 MiB` HOLD and was stopped while final checksum evidence was still being
+emitted under the old five-second cleanup bound. The receipt is retained as
+RED diagnostic evidence only: it does not establish an NBD, WSL2, or OOM
+failure, and independent cleanup returned to `PRODUCT_OFF`.
+
+The current uncommitted correction gives ordinary integrity finalization the
+absolute remaining sample deadline instead of applying the short abnormal
+cleanup grace. It reaps and clears the worker exactly once, records the exit
+and cgroup OOM counters, and seals a failure receipt only after the process and
+custody state are bounded. A genuinely stuck worker still takes the bounded
+TERM/KILL abnormal path and remains non-promotable. The worker suite has three
+named checks; the integrated cell suite is expected to be 46 checks, and the
+secondary TERM/INT fixture exercises 16 combinations per suite run. The
+48-combination figure is historical total coverage from three prior suite runs,
+not the canonical per-run metric. This is source-only: there has been no live
+revalidation or new sealed release. Gate A, resealing, and the complete live
+matrix remain open.
 
 ## Attempt25 source-only zombie liveness hardening
 

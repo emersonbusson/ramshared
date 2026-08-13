@@ -63,7 +63,7 @@
 **Registered date:** `2026-08-12`.
 **Updated date:** `2026-08-13`.
 **Registered time:** `12:15:54`.
-**Updated time:** `17:55:20`.
+**Updated time:** `19:51:05`.
 **Source revision:** `d4efe596996e6877e26409fb7b1ad8c369c7557f`.
 **Destinations:** branch `feat/wsl2-nbd-benchmark-matrix`, milestone `v0.9.0-beta.1 — WSL2 NBD`, issue `#194`, `docs/specs/no-milestone/wsl2-nbd-product-readiness/`, `scripts/safety/`, `scripts/windows/`, `scripts/p0/`, `tools/ci/`, and the sealed Linux bundle.
 **Scope:** Correct and qualify the paired 1/2/4 GiB disk-versus-NBD benchmark with identical zram topology, cgroup-before-start containment, exact scratch identity, pair-scoped CUDA, bounded Windows-to-WSL calls, source/BINARY_MATCH binding, numeric comparison/regression records, and fail-closed cleanup. Run no live pressure until static/manufactured gates and a fresh independent Sol Gate A pass.
@@ -131,3 +131,19 @@ mutation still refuses before promotion. The focused
 correction; the complete `Test-WindowsCiStatic.ps1 -RepoRoot <repo>` wrapper
 was green before that change and remains pending a same-tree rerun.
 Independent Gate A is still pending for this frozen tree.
+
+Attempt26 is source-only and remains nonpromotable. The first P1 idle
+disk-only run on sealed source `4b5f554` reached the full `3584 MiB` HOLD and
+was then stopped while final checksum evidence was still being emitted under
+the old five-second cleanup bound. This is RED diagnostic evidence for the
+integrity-finalization deadline boundary; it does not prove an NBD, WSL2, or
+OOM failure, and independent cleanup returned to `PRODUCT_OFF`. The current
+dirty correction separates ordinary finalization from abnormal cleanup: normal
+finalization receives the absolute remaining sample deadline, the worker is
+reaped and cleared exactly once, and a failure receipt is sealed only after
+that custody boundary. The manufactured worker suite is 3 checks; the cell
+suite is expected to be 46 checks, and the secondary-signal fixture covers 16
+TERM/INT combinations per suite run. The 48-combination figure is historical
+total coverage from three prior suite runs, not the canonical per-run metric.
+No live revalidation or sealed release exists for this candidate. Fresh
+independent Gate A, resealing, and the complete live matrix remain required.

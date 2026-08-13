@@ -59,8 +59,24 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def manufactured_finalization_delay_seconds() -> int:
+    """Return the explicitly gated local-test delay before final verification."""
+    value = os.environ.get("RAMSHARED_NBD_TEST_INTEGRITY_FINALIZATION_DELAY_SEC", "")
+    if not value:
+        return 0
+    if os.environ.get("RAMSHARED_NBD_ALLOW_MANUFACTURED_INTEGRITY_TEST") != "1":
+        raise ValueError("manufactured integrity finalization delay requires explicit test gate")
+    if not value.isascii() or not value.isdecimal():
+        raise ValueError("manufactured integrity finalization delay is invalid")
+    delay = int(value)
+    if not 1 <= delay <= 30:
+        raise ValueError("manufactured integrity finalization delay is out of range")
+    return delay
+
+
 def main() -> int:
     args = parse_args()
+    finalization_delay_seconds = manufactured_finalization_delay_seconds()
     allocate_mib = (
         args.allocate_mib
         if args.allocate_mib is not None
@@ -120,6 +136,8 @@ def main() -> int:
     while not stop_requested:
         time.sleep(0.2)
 
+    if finalization_delay_seconds:
+        time.sleep(finalization_delay_seconds)
     checksum_after = digest_chunks(chunks)
     status = "PASS" if checksum_after == checksum_before else "FAIL"
     write_result(
