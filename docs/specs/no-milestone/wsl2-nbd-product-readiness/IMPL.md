@@ -5,12 +5,19 @@
 ## Status
 
 `partial` · local static/manufactured gates green · cover ✓ · E2E partial ·
-BINARY_MATCH partial. Attempt 19 is the latest sealed live attempt: all eight
-P1/P2 cells and Q4 idle disk passed, while Q4 idle NBD refused the numeric
-headroom gate (`4311 < 4608`), leaving 9/12 completed PASS cells; the summary
-also contains the REFUSED entry and no two Q4 bounded results. No promotion
-claim is made. Attempt 16 identified a Q4 timeout-budget mismatch; the local
-correction is now sealed and exercised in the latest attempt. Attempt 15
+BINARY_MATCH partial. Attempt 21 is the latest sealed live attempt: every pair
+was admitted and 11/12 cells completed PASS, including Q4 bounded disk 3/3 and
+the first two Q4 bounded NBD samples. The third Q4 bounded NBD sample exposed
+a deterministic daemon recovery self-deadlock and reached `SAMPLE_TIMEOUT`.
+An exact cgroup-only containment intervention prevented the controller's
+last-resort WSL termination and let the worker persist an integrity PASS for
+only the partial 6016/6656 MiB allocation; it did not complete sample three,
+and that intervention invalidated the cell for promotion. CUDA released without
+force. The matrix correctly remained RED/unverified; a separate sealed
+postflight proved `PRODUCT_OFF`, Relay PASS, and zero managed/ghost swap,
+daemon, worker, or cgroup residue. No promotion claim is made. Attempt 16 identified a Q4 timeout-budget
+mismatch; the local correction is now sealed and exercised in the latest
+attempt. Attempt 15
 proved that both corrected 1 GiB idle cells
 completed all three samples with integrity, occupancy, and per-cell
 `PRODUCT_OFF`; the disk/NBD contexts recorded the same `zram0` usable-size
@@ -38,13 +45,44 @@ passed 3/3. The ordered Q4 idle NBD cell refused at
 `gpu_headroom_shortfall` (`4311 < 4608`) before producing a PASS result,
 leaving 9/12 completed PASS cells. The matrix summary contains a tenth,
 REFUSED entry; the two Q4 bounded cells did not run. The post-campaign
-preflight remained `PRODUCT_OFF` with
-Relay clean. An active OBS recording was discovered after the refusal and was
-intentionally not touched; no host-app remediation or retry was performed.
-This is valid refusal/partial evidence, not a complete matrix or promotion
-claim. A fresh approved campaign remains required for the missing Q4 idle NBD
-and both Q4 bounded cells, followed by root validation, Gate B, and hosted PR
-qualification.
+preflight remained `PRODUCT_OFF` with Relay clean. An active OBS recording was
+discovered after the refusal and was intentionally not touched; no host-app
+remediation or retry was performed. This is valid refusal/partial evidence,
+not a complete matrix or promotion claim.
+
+Attempt 20 (2026-08-13, same sealed source and release manifest) completed all
+eight P1/P2 cells and both Q4 idle cells, each with three samples and
+`PRODUCT_OFF`, for 10/12 completed PASS cells. The Q4 bounded pair admitted
+pre-CUDA headroom (`5181 >= 5120`) and reached CUDA ready, then refused at
+`gpu_headroom_shortfall_after_cuda_ready` (`4594 < 4608`); the Q4 bounded NBD
+cell did not run. CUDA released without force. Terminal preflight remained
+`PRODUCT_OFF` with Relay clean. This is valid bounded refusal/partial evidence,
+not a complete matrix or promotion claim; a fresh approved campaign remains
+required for the missing Q4 bounded NBD cell, followed by root validation,
+Gate B, and hosted PR qualification.
+
+Attempt 21 (2026-08-13, same sealed source and release manifest) admitted all
+six pairs and completed 11/12 cells with three-sample PASS results. Q4 bounded
+disk passed 3/3; Q4 bounded NBD passed samples one and two. Before sample three,
+the daemon's free-floor recovery path synchronously executed
+`swapon -p 100 /dev/nbd0` on the same single thread that serves NBD requests.
+The child `swapon` blocked reading `/dev/nbd0`, while the only thread that
+could answer those requests waited for that child. Kernel receipts recorded
+NBD EIO and stuck reads; the third worker could not reach HOLD before the
+600-second sample deadline. To preserve the daily host and avoid the
+controller's documented last-resort `wsl --terminate`, the operator changed
+only that cell's cgroup `memory.high` from 1200 MiB to its already bounded
+7168 MiB `memory.max`. The worker then reached HOLD at only 6016 of the
+required 6656 MiB and wrote checksum integrity PASS for those 6016 MiB; it did
+not complete sample three, and this out-of-band containment makes the cell and
+campaign non-promotable. The cell exited on `SAMPLE_TIMEOUT`, the matrix recorded one
+RED `wsl_controller_failed` result and `unverified_unknown`, and CUDA released
+without force. A separate pinned read-only postflight immediately afterward
+proved the exact release and input manifests, Relay PASS, `PRODUCT_OFF`, and
+no managed/ghost swap, daemon, worker, or cgroup residue; only the pre-existing
+`/dev/sdc` swap remained. No Windows or WSL restart occurred. The synchronous
+recovery activation must be replaced by a bounded asynchronous state machine,
+tested and independently audited, before a new sealed full-matrix attempt.
 
 ## Files
 
@@ -337,17 +375,20 @@ The only live evidence currently tracked in the repository is the supervised
   release. `validation.md` was intentionally not updated in this docs-only
   reconciliation.
 
-Attempt 19 is retained only in the host campaign root while it remains partial
-and noncanonical. It proves the nine completed PASS cells described above but
-is not repository-tracked public evidence and must not be combined with a
+Attempts 19–21 are retained only under their host campaign roots while they
+remain partial/noncanonical. Attempt 21 proves 11 completed PASS cells and the
+recovery self-deadlock described above, but its cgroup containment intervention
+and RED terminal result prohibit repository publication or combination with a
 future campaign for promotion.
 
 ## Gaps
 
-`env-bound (blocker)` — a fresh complete same-run Windows/WSL2 execution for
-all P1/Q2/Q4 idle and bounded pairs. Attempt 19 proved all P1/P2 cells and Q4
-idle disk with n=3, but the ordered Q4 idle NBD refusal stopped promotion and
-the Q4 bounded pair did not run. Complete-matrix median/p99/deviation and
+`env-bound (blocker)` — first close the synchronous NBD recovery self-deadlock
+under TDD and independent Sol Gate A, then run a fresh complete same-run
+Windows/WSL2 execution for all P1/Q2/Q4 idle and bounded pairs. Attempt 21
+proved 11/12 cells with n=3 and isolated the final Q4 bounded NBD defect, but
+its third sample timed out and required non-promotable cgroup containment.
+Complete-matrix median/p99/deviation and
 backend comparisons; final per-cell occupancy, cleanup, Relay, and
 BINARY_MATCH receipts; root `validation.md`; Gate B; PR checks and merge remain.
 No reboot or WSL shutdown is part of this record.
@@ -364,4 +405,4 @@ anything other than `RED/unverified_terminated`; or any live seam/host action.
 
 | RF | ITEM | commit |
 | --- | --- | --- |
-| RF-NBD-1..20 | ITEM-1..8 | partial — Attempt 19 used sealed source `fed085b`, passed 9/12 cells, then refused Q4 idle NBD on headroom; a fresh complete same-run matrix and final gates remain |
+| RF-NBD-1..20 | ITEM-1..8 | partial — Attempt 21 used sealed source `fed085b`, passed 11/12 cells, then exposed the synchronous NBD recovery self-deadlock in Q4 bounded NBD sample three; async recovery, resealing, a fresh complete same-run matrix, and final gates remain |
