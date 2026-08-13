@@ -28,6 +28,9 @@ INPUT_BUNDLE_MANIFEST_SHA256=
 readonly PROC_STAT_PF_KTHREAD=2097152
 declare -a PRODUCT_RELEASE_DAEMON_PATHS=()
 declare -a PRODUCT_RELEASE_DAEMON_IDENTITIES=()
+PROC_STAT_STATE=
+PROC_STAT_FLAGS=
+PROC_STATUS_STATE=
 
 declare -A MANIFEST_HASHES=()
 
@@ -473,20 +476,86 @@ read_proc_status_kthread_flag() {
   printf '%s\n' "$value"
 }
 
-read_proc_stat_kthread_flag() {
-  local proc_dir=$1 line tail state ppid pgrp session tty_nr tpgid flags
-  line=$(cat "$proc_dir/stat" 2>/dev/null) || return 2
-  [[ $line == *') '* ]] || return 2
+read_proc_stat_fields() {
+  local proc_dir=$1 expected_pid=$2 line tail state ppid pgrp session tty_nr tpgid flags
+  PROC_STAT_STATE=
+  PROC_STAT_FLAGS=
+  [[ -r $proc_dir/stat ]] || return 2
+  IFS= read -r line <"$proc_dir/stat" || [[ -n $line ]] || return 2
+  [[ $line == "$expected_pid ("* && $line == *') '* ]] || return 2
   tail=${line##*) }
   read -r state ppid pgrp session tty_nr tpgid flags _ <<<"$tail"
   [[ $state =~ ^[RSDTZWI]$ && $ppid =~ ^[0-9]+$ && $pgrp =~ ^[0-9]+$ \
     && $session =~ ^[0-9]+$ && $tty_nr =~ ^[0-9]+$ && $tpgid =~ ^-?[0-9]+$ \
     && $flags =~ ^[0-9]+$ ]] || return 2
-  if (( flags & PROC_STAT_PF_KTHREAD )); then
+  PROC_STAT_STATE=$state
+  PROC_STAT_FLAGS=$flags
+}
+
+read_proc_stat_kthread_flag() {
+  local proc_dir=$1 expected_pid=${proc_dir##*/}
+  read_proc_stat_fields "$proc_dir" "$expected_pid" || return 2
+  if (( PROC_STAT_FLAGS & PROC_STAT_PF_KTHREAD )); then
     printf '1\n'
   else
     printf '0\n'
   fi
+}
+
+read_proc_status_state() {
+  local proc_dir=$1 expected_pid=$2 line value
+  local state_count=0 pid_count=0 tgid_count=0 kthread_count=0
+  PROC_STATUS_STATE=
+  [[ -r $proc_dir/status ]] || return 2
+  while IFS= read -r line || [[ -n $line ]]; do
+    case $line in
+      State:*)
+        (( state_count += 1 ))
+        value=${line#State:}
+        while [[ $value == [[:space:]]* ]]; do value=${value#?}; done
+        while [[ $value == *[[:space:]] ]]; do value=${value%?}; done
+        [[ $value == 'Z (zombie)' || $value =~ ^[RSDTWI][[:space:]]+\([^()]+\)$ ]] || return 2
+        PROC_STATUS_STATE=${value:0:1}
+        ;;
+      Pid:*)
+        (( pid_count += 1 ))
+        value=${line#Pid:}
+        while [[ $value == [[:space:]]* ]]; do value=${value#?}; done
+        while [[ $value == *[[:space:]] ]]; do value=${value%?}; done
+        [[ $value == "$expected_pid" ]] || return 2
+        ;;
+      Tgid:*)
+        (( tgid_count += 1 ))
+        value=${line#Tgid:}
+        while [[ $value == [[:space:]]* ]]; do value=${value#?}; done
+        while [[ $value == *[[:space:]] ]]; do value=${value%?}; done
+        [[ $value == "$expected_pid" ]] || return 2
+        ;;
+      Kthread:*)
+        (( kthread_count += 1 ))
+        value=${line#Kthread:}
+        while [[ $value == [[:space:]]* ]]; do value=${value#?}; done
+        while [[ $value == *[[:space:]] ]]; do value=${value%?}; done
+        [[ $value == 0 ]] || return 2
+        ;;
+    esac
+  done <"$proc_dir/status" || return 2
+  (( state_count == 1 && pid_count == 1 && tgid_count == 1 && kthread_count == 1 )) || return 2
+  [[ $PROC_STATUS_STATE =~ ^[RSDTZWI]$ ]]
+}
+
+read_proc_stat_state() {
+  read_proc_stat_fields "$1" "$2"
+}
+
+proc_entry_is_verified_userspace_zombie() {
+  local proc_dir=$1 pid=$2
+  read_proc_status_state "$proc_dir" "$pid" || return 1
+  [[ $PROC_STATUS_STATE == Z ]] || return 1
+  read_proc_stat_state "$proc_dir" "$pid" || return 1
+  [[ $PROC_STAT_STATE == Z ]] || return 1
+  read_proc_status_state "$proc_dir" "$pid" || return 1
+  [[ $PROC_STATUS_STATE == Z ]]
 }
 
 proc_entry_is_kernel_thread() {
@@ -549,6 +618,9 @@ find_live_exact_daemon_pids() {
     maybe_disappear_manufactured_proc_entry "$proc_dir" "$pid" || block PROC_ENTRY_MALFORMED
     proc_entry_is_gone "$proc_dir" && continue
     [[ -d $proc_dir && ! -L $proc_dir ]] || block PROC_ENTRY_MALFORMED
+    # A userspace zombie has no executable code and cannot serve NBD. Require
+    # matching status/stat Z observations before omitting it from liveness.
+    proc_entry_is_verified_userspace_zombie "$proc_dir" "$pid" && continue
     if [[ ! -L $proc_dir/exe && -e $proc_dir/exe ]]; then
       block PROC_EXE_MALFORMED
     fi
