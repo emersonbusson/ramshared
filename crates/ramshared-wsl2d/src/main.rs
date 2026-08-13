@@ -3760,6 +3760,69 @@ mod tests {
     }
 
     #[test]
+    fn daemon_nbd_recovery_activation_does_not_block_nbd_jobs() {
+        let (_activation_tx, activation_rx) = std::sync::mpsc::channel();
+        let (job_tx, job_rx) = std::sync::mpsc::channel();
+        let mut activation = RecoveryActivation::default();
+
+        activation
+            .start(activation_rx)
+            .expect("the first recovery activation is owned");
+        job_tx.send(0x5a_u8).expect("queue an NBD job marker");
+
+        assert_eq!(activation.poll(), RecoveryActivationPoll::Pending);
+        assert_eq!(
+            job_rx.try_recv(),
+            Ok(0x5a),
+            "polling a pending swapon child must not block NBD work"
+        );
+    }
+
+    #[test]
+    fn daemon_nbd_recovery_failure_parks_without_relaunch() {
+        let (activation_tx, activation_rx) = std::sync::mpsc::channel();
+        let mut activation = RecoveryActivation::default();
+        activation
+            .start(activation_rx)
+            .expect("the first recovery activation is owned");
+        activation_tx
+            .send(false)
+            .expect("inject terminal swapon failure");
+
+        assert_eq!(activation.poll(), RecoveryActivationPoll::Failed);
+        assert!(
+            !activation.launch_allowed(true, true),
+            "one failed healthy epoch must not relaunch swapon"
+        );
+        assert!(!activation.launch_allowed(false, true));
+        assert!(
+            activation.launch_allowed(true, true),
+            "an unhealthy observation starts a later recovery epoch"
+        );
+    }
+
+    #[test]
+    fn daemon_nbd_shutdown_with_pending_recovery_fails_closed() {
+        let (activation_tx, activation_rx) = std::sync::mpsc::channel();
+        let mut activation = RecoveryActivation::default();
+        activation
+            .start(activation_rx)
+            .expect("the recovery activation is owned");
+        activation.request_shutdown();
+
+        assert_eq!(activation.poll(), RecoveryActivationPoll::Pending);
+        assert!(
+            !activation.backend_release_allowed(),
+            "an unobserved swapon child must retain the backend"
+        );
+        activation_tx
+            .send(false)
+            .expect("inject terminal swapon failure");
+        assert_eq!(activation.poll(), RecoveryActivationPoll::Failed);
+        assert!(activation.backend_release_allowed());
+    }
+
+    #[test]
     fn daemon_nbd_teardown_refuses_until_fake_usage_and_swapoff_confirm() {
         struct TestProvider;
 
