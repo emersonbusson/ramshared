@@ -5,8 +5,12 @@
 ## Status
 
 `partial` · local static/manufactured gates green · cover ✓ · E2E partial ·
-BINARY_MATCH partial. Attempt 16 identified a Q4 timeout-budget mismatch and
-the local correction is green, but it is not sealed or rerun live. Attempt 15
+BINARY_MATCH partial. Attempt 19 is the latest sealed live attempt: all eight
+P1/P2 cells and Q4 idle disk passed, while Q4 idle NBD refused the numeric
+headroom gate (`4311 < 4608`), leaving 9/12 completed PASS cells; the summary
+also contains the REFUSED entry and no two Q4 bounded results. No promotion
+claim is made. Attempt 16 identified a Q4 timeout-budget mismatch; the local
+correction is now sealed and exercised in the latest attempt. Attempt 15
 proved that both corrected 1 GiB idle cells
 completed all three samples with integrity, occupancy, and per-cell
 `PRODUCT_OFF`; the disk/NBD contexts recorded the same `zram0` usable-size
@@ -14,8 +18,9 @@ receipt (`1048572 KiB`), priority, algorithm, and identity. The controller
 then emitted a false `comparison_zram_topology_mismatch` because it compared
 that observed usable size with nominal capacity `1048576 KiB`. DT-NBD-43 now
 accepts only the bounded observed interval and retains exact disk/NBD tuple
-equality, but it has not been sealed or rerun live. The complete ordered 1/2/4
-GiB Windows/WSL2 matrix therefore remains incomplete and this is not DONE.
+equality; Attempt 19 sealed it and exercised the equality in all four complete
+P1/P2 pairs. The complete ordered 1/2/4 GiB Windows/WSL2 matrix therefore
+remains incomplete and this is not DONE.
 Fresh independent Gate A passed the prior frozen connection-preserving
 candidate, the DT-NBD-43 delta, and the frozen DT-NBD-44 seven-file candidate
 before a new sealed campaign. Attempt 17 then reproduced a false
@@ -24,6 +29,22 @@ property order failed the old string comparison. The semantic strict helper
 now canonicalizes the validated tier tuple, while real value/type drift still
 refuses. The focused named test is green, and fresh independent Sol Gate A
 passed this additional frozen five-file delta.
+
+Attempt 19 (2026-08-13, sealed source `fed085b`, release manifest
+`bb2b38e279dcc954c4ff9aed872721d68837a512fb861d0d6cc203cf22858a32`) ran from
+the campaign artifact under the host temporary root. All eight P1/P2 cells
+passed with their three samples and `PRODUCT_OFF`; Q4 idle disk-only also
+passed 3/3. The ordered Q4 idle NBD cell refused at
+`gpu_headroom_shortfall` (`4311 < 4608`) before producing a PASS result,
+leaving 9/12 completed PASS cells. The matrix summary contains a tenth,
+REFUSED entry; the two Q4 bounded cells did not run. The post-campaign
+preflight remained `PRODUCT_OFF` with
+Relay clean. An active OBS recording was discovered after the refusal and was
+intentionally not touched; no host-app remediation or retry was performed.
+This is valid refusal/partial evidence, not a complete matrix or promotion
+claim. A fresh approved campaign remains required for the missing Q4 idle NBD
+and both Q4 bounded cells, followed by root validation, Gate B, and hosted PR
+qualification.
 
 ## Files
 
@@ -188,9 +209,9 @@ passed this additional frozen five-file delta.
   `BASELINE_REPUBLICATION_FAILED`. The kernel receipt shows that
   `swapoff /dev/nbd0` caused `NBD_DISCONNECT`; this is expected for the
   deliberately non-persistent client and proves that generic swapoff/swapon
-  cannot republish NBD. The DT-NBD-41 local correction is not live evidence;
-  cleanup returned to `PRODUCT_OFF`, and a fresh approved rerun remains
-  required.
+  cannot republish NBD. At that revision, the DT-NBD-41 local correction was
+  not live evidence; cleanup returned to `PRODUCT_OFF`, and the next approved
+  attempt supplied the required sealed rerun.
 - Attempt 12b (2026-08-12, reviewed release source `1aaeb5b`): disk-only
   completed 3/3 with integrity, occupancy, and `PRODUCT_OFF`. NBD sample one
   reached HOLD and passed SHAKE256 integrity with zram and NBD each observing
@@ -201,8 +222,9 @@ passed this additional frozen five-file delta.
   connected `/dev/nbd0`, not daemon loss. The Windows controller stopped
   promotion, completed bounded stream drainage, and cleanup left only the
   pre-existing `/dev/sdc` swap with no RamShared process. The connection-
-  preserving DT-NBD-41 correction is local-only and requires a new sealed
-  release plus fresh approved matrix rerun.
+  preserving DT-NBD-41 correction was local-only at that revision and required
+  a new sealed release plus a fresh approved matrix rerun, supplied by the
+  following attempts.
 - Attempt 13 (2026-08-12, reviewed release source `73e1977`): disk-only again
   completed 3/3 with integrity, occupancy, and cleanup. NBD sample one reached
   HOLD and passed integrity, then returned the same generic
@@ -212,8 +234,9 @@ passed this additional frozen five-file delta.
   accepted `mkswap`, and republished at zram/NBD priorities 200/100. This
   isolates the remaining failure to a post-load frontier that the generic
   reason concealed. Checkpoint `7b33d20` now requires stable per-stage
-  republication reasons; its GREEN implementation is diagnostic custody, not
-  completion evidence, and requires sealing plus a fresh run.
+  republication reasons; at that revision its GREEN implementation was
+  diagnostic custody, not completion evidence, and required the sealed fresh
+  run performed by the following attempt.
 - Attempt 14 (2026-08-12, reviewed release source `875fe4b`): disk-only again
   completed 3/3, and NBD sample one again passed HOLD/integrity. The new stage
   custody isolated the refusal to `NBD_REPUBLICATION_ZRAM_RECORD_INVALID`.
@@ -224,7 +247,8 @@ passed this additional frozen five-file delta.
   live evidence. Checkpoint `724ab7f` additionally reproduced that the capture
   must be followed by a full exact zram/NBD pair gate before context, cgroup,
   or worker admission. Fresh independent Gate A passed the frozen local 24/24
-  GREEN with zero findings; sealing and a fresh run remain required.
+  GREEN with zero findings; sealing and a fresh run were required at that
+  revision and were subsequently exercised by later attempts.
 - Attempt 15 (2026-08-12, reviewed release source `033291e`): both 1 GiB idle
   cells completed 3/3 samples with checksum and occupancy `PASS`; the NBD cell
   also retained `BINARY_MATCH=PASS`. Their sealed contexts carried the same
@@ -235,7 +259,8 @@ passed this additional frozen five-file delta.
   kill; no reboot or WSL shutdown occurred. The pair controller nevertheless
   stopped at `comparison_zram_topology_mismatch`, a false RED caused by its
   nominal-size hardcode. This does not qualify the pair or advance 2/4 GiB;
-  DT-NBD-43 is local-only pending sealing and rerun.
+  At that revision, DT-NBD-43 was pending sealing and rerun; Attempt 19 later
+  exercised its exact equality in all four complete P1/P2 pairs.
 - Attempt 16 (2026-08-12, reviewed release source `f9c70fe`): P1/Q2 disk/NBD
   pairs passed their bounded cells in both idle and bounded conditions. Q4 idle disk sample one passed,
   but allocation-to-HOLD was observed at about 335 seconds and Q4 sample two
@@ -248,10 +273,10 @@ passed this additional frozen five-file delta.
   comparison, and public-pair candidate evidence; manufactured internal-envelope
   tuple tamper refuses. TDD RED then GREEN is Bash cell 25/25 and the complete
   Windows PowerShell 5.1 static harness; fresh independent Sol Gate A passed
-  the frozen seven-file candidate. No live pressure, CUDA,
-  reboot, WSL shutdown, or terminate action ran for this correction. Sealing
-  and a fresh Q4 rerun remain required; the matrix remains incomplete and not
-  DONE.
+  the frozen seven-file candidate. No live pressure, CUDA, reboot, WSL
+  shutdown, or terminate action ran during that correction cycle. Attempt 19
+  later sealed the correction and exercised it through Q4 idle disk; the
+  complete same-run matrix remains incomplete and not DONE.
 - Attempt 17 (2026-08-12, unsealed local candidate): the Q4 timeout-budget
   correction exposed a second false RED in the Windows cell controller. The
   summary and controller held the same four strict fields, but PowerShell's
@@ -262,8 +287,8 @@ raw comparison (RED), then passed after `Assert-CellTimeoutBudgetMatch`
 reused `Get-StrictCellTimeoutBudget` plus canonical JSON; it also refuses a
 real value mismatch and a noncanonical numeric type. The focused PowerShell
 5.1 parser/static/docs gates and fresh independent Sol Gate A are green. No
-live pressure, CUDA, reboot, WSL shutdown, or terminate action ran; a sealed
-Attempt 17 rerun remains required.
+  live pressure, CUDA, reboot, WSL shutdown, or terminate action ran during
+  that correction cycle; Attempt 19 later ran the sealed semantic comparison.
 
 Attempt 18 then exposed a separate contract mismatch before CUDA startup:
 the controller's valid Q4 `CudaMaxHoldSec=4320` was rejected by the workload's
@@ -273,7 +298,10 @@ GREEN after the minimal correction: the handshake seam accepts exactly 4320
 seconds and refuses 4321, without allocating CUDA memory or widening the cap
 unboundedly. The focused PowerShell 5.1 static harness and fresh independent
 Sol Gate A pass; no live CUDA, pressure, reboot, WSL shutdown, or terminate
-action ran. Sealing and a fresh Q4 rerun remain required.
+  action ran during that correction cycle. Attempt 19 later ran the sealed
+  cap implementation and exercised the CUDA workload in the P1/P2 bounded
+  pairs; Q4 idle used no CUDA context and Q4 bounded did not run. The complete
+  same-run matrix remains required.
 
 ## SPEC matrix → named tests
 
@@ -292,9 +320,10 @@ names. The live rows
 `nbd_lifecycle_before_action_after`, `relay_gate_before_action_after`, and
 `NBD_BENCHMARK_MATRIX` remain environment-bound.
 
-## E2E (historical pilot only)
+## E2E evidence custody
 
-The only live evidence currently retained is the supervised 1 GiB pilot under
+The only live evidence currently tracked in the repository is the supervised
+1 GiB pilot under
 [`evidence/2026-08-12-live/`](evidence/2026-08-12-live/):
 
 - Before: `before.txt` observed `PRODUCT_OFF`, disk-only lower sink, Relay
@@ -308,13 +337,19 @@ The only live evidence currently retained is the supervised 1 GiB pilot under
   release. `validation.md` was intentionally not updated in this docs-only
   reconciliation.
 
+Attempt 19 is retained only in the host campaign root while it remains partial
+and noncanonical. It proves the nine completed PASS cells described above but
+is not repository-tracked public evidence and must not be combined with a
+future campaign for promotion.
+
 ## Gaps
 
-`env-bound (blocker)` — clean reviewed-release deployment; legitimate
-Windows/WSL2 before/action/after execution for P1/Q2/Q4
-idle and bounded pairs; n=3 median/p99/deviation and backend comparisons;
-per-cell occupancy, cleanup, Relay, and BINARY_MATCH receipts; root
-`validation.md`; Gate B; PR checks and merge.
+`env-bound (blocker)` — a fresh complete same-run Windows/WSL2 execution for
+all P1/Q2/Q4 idle and bounded pairs. Attempt 19 proved all P1/P2 cells and Q4
+idle disk with n=3, but the ordered Q4 idle NBD refusal stopped promotion and
+the Q4 bounded pair did not run. Complete-matrix median/p99/deviation and
+backend comparisons; final per-cell occupancy, cleanup, Relay, and
+BINARY_MATCH receipts; root `validation.md`; Gate B; PR checks and merge remain.
 No reboot or WSL shutdown is part of this record.
 
 ## Rollback trigger
@@ -329,4 +364,4 @@ anything other than `RED/unverified_terminated`; or any live seam/host action.
 
 | RF | ITEM | commit |
 | --- | --- | --- |
-| RF-NBD-1..20 | ITEM-1..8 | pending — Attempt 12b used reviewed source `1aaeb5b`; local checkpoint `1b1739b` replaces the false reattach model and fresh Gate A passed; sealing and a live rerun remain |
+| RF-NBD-1..20 | ITEM-1..8 | partial — Attempt 19 used sealed source `fed085b`, passed 9/12 cells, then refused Q4 idle NBD on headroom; a fresh complete same-run matrix and final gates remain |
