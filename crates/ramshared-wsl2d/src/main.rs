@@ -35,7 +35,7 @@ use ramshared_wsl2d::autotier::{
     AutotierConfig, BudgetInput, RecoveryTracker, backend_release_allowed, commit_allowed,
 };
 use ramshared_wsl2d::broker_srv::{BrokerConfig, EndpointCfg, spawn_broker};
-use ramshared_wsl2d::swap::{activate_swap, spawn_swapoff};
+use ramshared_wsl2d::swap::{spawn_activate_swap, spawn_swapoff};
 use ramshared_wsl2d::{
     CANARY_BYTES, CANARY_EVERY, CHAN_CAP, Cadence, Canary, CanaryProbe, DemoteReason, LiveCount,
     RamBackend, Reply, ResidencyConfig, ResidencySampler, SliceIoCounters, SliceView, Verdict,
@@ -778,7 +778,14 @@ trait NbdRuntimeStarter {
 
     fn spawn_swapoff(&mut self, nbd_dev: &str) -> std::sync::mpsc::Receiver<bool>;
 
-    fn activate_swap(&mut self, nbd_dev: &str, priority: i16) -> bool;
+    /// Starts recovery activation outside the only NBD serving thread. The
+    /// caller owns and polls the returned receiver until it observes a terminal
+    /// result, including during shutdown.
+    fn spawn_recovery_activation(
+        &mut self,
+        nbd_dev: &str,
+        priority: i16,
+    ) -> Result<std::sync::mpsc::Receiver<bool>, Box<dyn std::error::Error>>;
 
     fn startup_budget(
         &mut self,
@@ -803,6 +810,109 @@ struct ProductionNbdRuntimeStarter;
 struct NbdShutdownBridge {
     stop: std::sync::Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
+}
+
+const RECOVERY_ACTIVATION_OBSERVATION_DEADLINE: Duration = Duration::from_secs(30);
+const RECOVERY_ACTIVATION_POLL_TICK: Duration = Duration::from_millis(100);
+
+/// Terminal observation for a recovery `swapon` child. `Pending` intentionally
+/// remains non-terminal after the observation deadline: the child may still be
+/// reading the NBD export, so freeing the backend would recreate the deadlock.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RecoveryActivationPoll {
+    Idle,
+    Pending,
+    Succeeded,
+    Failed,
+}
+
+/// Owns at most one recovery activation child receiver. A failed healthy epoch
+/// remains parked until an unhealthy or nonempty observation begins a new
+/// epoch, preventing retry storms against the same NBD export.
+#[derive(Default)]
+struct RecoveryActivation {
+    result_rx: Option<std::sync::mpsc::Receiver<bool>>,
+    failed_epoch: bool,
+    shutdown_requested: bool,
+    started_at: Option<Instant>,
+    deadline_reported: bool,
+}
+
+impl RecoveryActivation {
+    fn start(&mut self, result_rx: std::sync::mpsc::Receiver<bool>) -> Result<(), &'static str> {
+        if self.result_rx.is_some() {
+            return Err("recovery activation is already pending");
+        }
+        if self.failed_epoch {
+            return Err("recovery activation is parked for this healthy epoch");
+        }
+        self.result_rx = Some(result_rx);
+        self.started_at = Some(Instant::now());
+        self.deadline_reported = false;
+        Ok(())
+    }
+
+    fn poll(&mut self) -> RecoveryActivationPoll {
+        let Some(rx) = self.result_rx.take() else {
+            return RecoveryActivationPoll::Idle;
+        };
+        match rx.try_recv() {
+            Ok(true) => {
+                self.started_at = None;
+                self.deadline_reported = false;
+                self.failed_epoch = false;
+                RecoveryActivationPoll::Succeeded
+            }
+            Ok(false) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.started_at = None;
+                self.deadline_reported = false;
+                self.failed_epoch = true;
+                RecoveryActivationPoll::Failed
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                self.result_rx = Some(rx);
+                RecoveryActivationPoll::Pending
+            }
+        }
+    }
+
+    fn launch_allowed(&mut self, healthy: bool, tier_empty: bool) -> bool {
+        if !healthy || !tier_empty {
+            self.failed_epoch = false;
+            return false;
+        }
+        self.result_rx.is_none() && !self.failed_epoch
+    }
+
+    fn is_pending(&self) -> bool {
+        self.result_rx.is_some()
+    }
+
+    fn mark_dispatch_failure(&mut self) {
+        self.failed_epoch = true;
+        self.started_at = None;
+        self.deadline_reported = false;
+    }
+
+    fn request_shutdown(&mut self) {
+        self.shutdown_requested = true;
+    }
+
+    fn backend_release_allowed(&self) -> bool {
+        !self.shutdown_requested || self.result_rx.is_none()
+    }
+
+    fn take_observation_deadline_exceeded(&mut self) -> bool {
+        let overdue = self.result_rx.is_some()
+            && self.started_at.is_some_and(|started| {
+                started.elapsed() >= RECOVERY_ACTIVATION_OBSERVATION_DEADLINE
+            });
+        if overdue && !self.deadline_reported {
+            self.deadline_reported = true;
+            return true;
+        }
+        false
+    }
 }
 
 impl Drop for NbdShutdownBridge {
@@ -896,8 +1006,12 @@ impl NbdRuntimeStarter for ProductionNbdRuntimeStarter {
         spawn_swapoff(nbd_dev)
     }
 
-    fn activate_swap(&mut self, nbd_dev: &str, priority: i16) -> bool {
-        activate_swap(nbd_dev, priority)
+    fn spawn_recovery_activation(
+        &mut self,
+        nbd_dev: &str,
+        priority: i16,
+    ) -> Result<std::sync::mpsc::Receiver<bool>, Box<dyn std::error::Error>> {
+        Ok(spawn_activate_swap(nbd_dev, priority)?)
     }
 
     fn startup_budget(
@@ -1130,6 +1244,8 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
     let mut swapoff_confirmed = false;
     let mut observed_budget_refuses = 0;
     let mut recovery = RecoveryTracker::new(3);
+    let mut recovery_activation = RecoveryActivation::default();
+    let mut shutdown_requested = false;
     let mut live = LiveCount::new();
     let trace_probe = std::env::var("RAMSHARED_TRACE_PROBE").ok().as_deref() == Some("1");
     let global_probe_interval = Duration::from_secs(1);
@@ -1144,15 +1260,97 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
 
     const RECV_TICK: Duration = Duration::from_secs(5);
 
-    loop {
-        if SHUTDOWN.load(Ordering::SeqCst) {
+    'serve: loop {
+        if SHUTDOWN.load(Ordering::SeqCst) && !shutdown_requested {
+            shutdown_requested = true;
+            recovery_activation.request_shutdown();
+        }
+
+        match recovery_activation.poll() {
+            RecoveryActivationPoll::Succeeded => {
+                demoted = false;
+                swapoff_attempted = false;
+                swapoff_confirmed = false;
+                recovery.reset();
+                eprintln!("[ramsharedd] RECOVERING -> available: swapon {nbd_dev} prio=100");
+                if shutdown_requested {
+                    last_demote_reason = Some("RecoveryShutdown".into());
+                    demote_rx = Some(starter.spawn_swapoff(&nbd_dev));
+                    swapoff_attempted = true;
+                    starter.publish_demote(demotes_total, &last_demote_reason, true);
+                }
+            }
+            RecoveryActivationPoll::Failed => {
+                recovery.reset();
+                eprintln!("[ramsharedd] RECOVERING: swapon {nbd_dev} failed; parked");
+            }
+            RecoveryActivationPoll::Idle | RecoveryActivationPoll::Pending => {}
+        }
+        if let Some(rx) = demote_rx.take() {
+            match rx.try_recv() {
+                Ok(true) => {
+                    demoted = true;
+                    swapoff_confirmed = true;
+                    demotes_total = demotes_total.saturating_add(1);
+                    starter.publish_demote(demotes_total, &last_demote_reason, false);
+                    eprintln!("[ramsharedd] DEMOTE: swapoff {nbd_dev} OK (canario desarmado)");
+                }
+                Ok(false) => {
+                    starter.publish_demote(demotes_total, &last_demote_reason, false);
+                    eprintln!("[ramsharedd] DEMOTE: swapoff {nbd_dev} FALHOU; canario re-armado");
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    demote_rx = Some(rx);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    starter.publish_demote(demotes_total, &last_demote_reason, false);
+                    eprintln!("[ramsharedd] DEMOTE: thread de swapoff sumiu; canario re-armado");
+                }
+            }
+        }
+        if recovery_activation.take_observation_deadline_exceeded() {
+            eprintln!(
+                "[ramsharedd] RECOVERING: swapon {nbd_dev} observation exceeded {}s; \
+                 keeping NBD backend alive",
+                RECOVERY_ACTIVATION_OBSERVATION_DEADLINE.as_secs()
+            );
+        }
+        if shutdown_requested
+            && recovery_activation.backend_release_allowed()
+            && demote_rx.is_none()
+        {
             break;
         }
-        let msg = match jobs_rx.recv_timeout(RECV_TICK) {
+        let recv_tick = if recovery_activation.is_pending() {
+            RECOVERY_ACTIVATION_POLL_TICK
+        } else {
+            RECV_TICK
+        };
+        let msg = match jobs_rx.recv_timeout(recv_tick) {
             Ok(m) => Some(m),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => None,
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                shutdown_requested = true;
+                recovery_activation.request_shutdown();
+                if recovery_activation.backend_release_allowed() {
+                    break 'serve;
+                }
+                // A disconnected producer cannot deliver further NBD jobs. Keep
+                // the backend alive for an owned recovery child, but yield so a
+                // closed channel cannot turn the terminal-observation loop into
+                // a busy spin.
+                std::thread::sleep(recv_tick);
+                None
+            }
         };
+
+        // While the activation child is pending, avoid turning its bounded
+        // observation tick into repeated WDDM/reclaim probes. The next loop
+        // iteration polls the child again, while any real NBD job still wakes
+        // and is served immediately.
+        if msg.is_none() && recovery_activation.is_pending() {
+            continue;
+        }
 
         if let Some(msg) = msg {
             let job = match msg {
@@ -1170,7 +1368,18 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                     }
                     None
                 }
-                WMsg::Shutdown => break,
+                WMsg::Shutdown => {
+                    shutdown_requested = true;
+                    recovery_activation.request_shutdown();
+                    // Preserve the normal immediate teardown path, but do not
+                    // release an NBD backend while an owned `swapon` child can
+                    // still be reading it. The pending path returns to the
+                    // top of the serving loop to observe that child.
+                    if recovery_activation.backend_release_allowed() {
+                        break 'serve;
+                    }
+                    continue 'serve;
+                }
                 WMsg::Job(job) => Some(job),
                 WMsg::ZeroExport { base, len, done } => {
                     let ok = zero_window(&mut backend, base, len).is_ok();
@@ -1189,35 +1398,6 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                     data: out.read_data,
                     disconnect: out.disconnect,
                 });
-
-                if let Some(rx) = demote_rx.take() {
-                    match rx.try_recv() {
-                        Ok(true) => {
-                            demoted = true;
-                            swapoff_confirmed = true;
-                            demotes_total = demotes_total.saturating_add(1);
-                            starter.publish_demote(demotes_total, &last_demote_reason, false);
-                            eprintln!(
-                                "[ramsharedd] DEMOTE: swapoff {nbd_dev} OK (canario desarmado)"
-                            );
-                        }
-                        Ok(false) => {
-                            starter.publish_demote(demotes_total, &last_demote_reason, false);
-                            eprintln!(
-                                "[ramsharedd] DEMOTE: swapoff {nbd_dev} FALHOU; canario re-armado"
-                            );
-                        }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {
-                            demote_rx = Some(rx);
-                        }
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            starter.publish_demote(demotes_total, &last_demote_reason, false);
-                            eprintln!(
-                                "[ramsharedd] DEMOTE: thread de swapoff sumiu; canario re-armado"
-                            );
-                        }
-                    }
-                }
 
                 if touches_vram && !demoted && demote_rx.is_none() {
                     let mut residency_state = ResidencyCheckState {
@@ -1384,23 +1564,40 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
                 demote_rx = Some(starter.spawn_swapoff(&nbd_dev));
                 swapoff_attempted = true;
                 starter.publish_demote(demotes_total, &last_demote_reason, true);
-            } else if demoted
-                && recovery.observe(budget_healthy && global_healthy, sparse.chunks_live() == 0)
-            {
-                if starter.activate_swap(&nbd_dev, 100) {
-                    demoted = false;
-                    swapoff_attempted = false;
-                    swapoff_confirmed = false;
-                    recovery.reset();
-                    eprintln!("[ramsharedd] RECOVERING -> available: swapon {nbd_dev} prio=100");
-                } else {
-                    recovery.reset();
-                    eprintln!("[ramsharedd] RECOVERING: swapon {nbd_dev} falhou; parked");
+            } else if demoted && demote_rx.is_none() {
+                let recovery_healthy = budget_healthy && global_healthy;
+                let tier_empty = sparse.chunks_live() == 0;
+                let recovery_ready = recovery.observe(recovery_healthy, tier_empty);
+                let activation_allowed =
+                    recovery_activation.launch_allowed(recovery_healthy, tier_empty);
+                if !shutdown_requested && recovery_ready && activation_allowed {
+                    match starter.spawn_recovery_activation(&nbd_dev, 100) {
+                        Ok(rx) => match recovery_activation.start(rx) {
+                            Ok(()) => eprintln!(
+                                "[ramsharedd] RECOVERING: swapon {nbd_dev} pending on owned worker"
+                            ),
+                            Err(error) => {
+                                recovery_activation.mark_dispatch_failure();
+                                recovery.reset();
+                                eprintln!(
+                                    "[ramsharedd] RECOVERING: refusing duplicate swapon {nbd_dev}: {error}"
+                                );
+                            }
+                        },
+                        Err(error) => {
+                            recovery_activation.mark_dispatch_failure();
+                            recovery.reset();
+                            eprintln!(
+                                "[ramsharedd] RECOVERING: could not start swapon {nbd_dev}: {error}; parked"
+                            );
+                        }
+                    }
                 }
             }
         }
     }
 
+    recovery_activation.request_shutdown();
     if let Some(rx) = demote_rx.take() {
         match rx.recv_timeout(std::time::Duration::from_secs(5)) {
             Ok(true) => {
@@ -3185,7 +3382,11 @@ mod tests {
                 panic!("the safe prealloc fixture must not request swapoff")
             }
 
-            fn activate_swap(&mut self, _nbd_dev: &str, _priority: i16) -> bool {
+            fn spawn_recovery_activation(
+                &mut self,
+                _nbd_dev: &str,
+                _priority: i16,
+            ) -> Result<std::sync::mpsc::Receiver<bool>, Box<dyn std::error::Error>> {
                 panic!("the safe prealloc fixture must not activate swap")
             }
         }
@@ -3393,7 +3594,11 @@ mod tests {
                 panic!("free-floor refusal must not request swapoff")
             }
 
-            fn activate_swap(&mut self, _nbd_dev: &str, _priority: i16) -> bool {
+            fn spawn_recovery_activation(
+                &mut self,
+                _nbd_dev: &str,
+                _priority: i16,
+            ) -> Result<std::sync::mpsc::Receiver<bool>, Box<dyn std::error::Error>> {
                 panic!("free-floor refusal must not activate swap")
             }
         }
@@ -3534,7 +3739,11 @@ mod tests {
                 panic!("healthy fresh budget must not request swapoff")
             }
 
-            fn activate_swap(&mut self, _nbd_dev: &str, _priority: i16) -> bool {
+            fn spawn_recovery_activation(
+                &mut self,
+                _nbd_dev: &str,
+                _priority: i16,
+            ) -> Result<std::sync::mpsc::Receiver<bool>, Box<dyn std::error::Error>> {
                 panic!("healthy fresh budget must not activate swap")
             }
 
@@ -3688,10 +3897,16 @@ mod tests {
                 rx
             }
 
-            fn activate_swap(&mut self, _nbd_dev: &str, priority: i16) -> bool {
+            fn spawn_recovery_activation(
+                &mut self,
+                _nbd_dev: &str,
+                priority: i16,
+            ) -> Result<std::sync::mpsc::Receiver<bool>, Box<dyn std::error::Error>> {
                 assert_eq!(priority, 100);
                 self.activate_calls += 1;
-                true
+                let (tx, rx) = std::sync::mpsc::channel();
+                tx.send(true).expect("in-memory recovery completion");
+                Ok(rx)
             }
 
             fn startup_budget(
@@ -3761,25 +3976,309 @@ mod tests {
 
     #[test]
     fn daemon_nbd_recovery_activation_does_not_block_nbd_jobs() {
-        let (_activation_tx, activation_rx) = std::sync::mpsc::channel();
-        let (job_tx, job_rx) = std::sync::mpsc::channel();
-        let mut activation = RecoveryActivation::default();
+        fn assert_nbd_ok(reply: Reply, context: &str) {
+            assert!(
+                !reply.disconnect,
+                "{context} must keep the NBD connection open"
+            );
+            assert_eq!(
+                [
+                    reply.reply[4],
+                    reply.reply[5],
+                    reply.reply[6],
+                    reply.reply[7]
+                ],
+                [0; 4],
+                "{context} must return NBD_OK"
+            );
+        }
 
-        activation
-            .start(activation_rx)
-            .expect("the first recovery activation is owned");
-        job_tx.send(0x5a_u8).expect("queue an NBD job marker");
+        struct TestProvider;
 
-        assert_eq!(activation.poll(), RecoveryActivationPoll::Pending);
+        impl VramProvider for TestProvider {
+            type Mem<'a>
+                = TestMemory
+            where
+                Self: 'a;
+
+            fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, ramshared_vram::VramError> {
+                Ok(TestMemory::new(bytes))
+            }
+
+            fn mem_info(&self) -> Result<(u64, u64), ramshared_vram::VramError> {
+                Ok((8 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024))
+            }
+        }
+
+        struct RecoveryBudget {
+            calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        }
+
+        impl NbdBudgetProvider for RecoveryBudget {
+            fn snapshot(&self) -> Result<NbdBudgetSnapshot, String> {
+                if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err("injected initial constrained budget".into());
+                }
+                Ok(NbdBudgetSnapshot {
+                    budget: 4 * 1024 * 1024 * 1024,
+                    current_usage: 0,
+                    sampled_at: Instant::now(),
+                })
+            }
+        }
+
+        struct PendingRecoveryStarter {
+            budget: Option<Box<dyn NbdBudgetProvider>>,
+            jobs_tx: std::sync::mpsc::Sender<std::sync::mpsc::SyncSender<WMsg>>,
+            activation_started: std::sync::mpsc::Sender<()>,
+            activation_rx: Option<std::sync::mpsc::Receiver<bool>>,
+            activation_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+            swapoff_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        }
+
+        struct ActivationOutcomeGuard(Option<std::sync::mpsc::Sender<bool>>);
+
+        impl ActivationOutcomeGuard {
+            fn succeed(&mut self) {
+                self.0
+                    .take()
+                    .expect("the test still owns the activation outcome")
+                    .send(true)
+                    .expect("observe terminal activation success");
+            }
+        }
+
+        impl Drop for ActivationOutcomeGuard {
+            fn drop(&mut self) {
+                if let Some(tx) = self.0.take() {
+                    let _ = tx.send(false);
+                }
+            }
+        }
+
+        impl NbdRuntimeStarter for PendingRecoveryStarter {
+            fn lock_memory(
+                &mut self,
+                _force: bool,
+                _lock_future: bool,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                Ok(())
+            }
+
+            fn start_acceptor(
+                &mut self,
+                _listener: UnixListener,
+                _exports: std::sync::Arc<Vec<ramshared_block::handshake::Export>>,
+                _tx_flags: u16,
+                jobs_tx: std::sync::mpsc::SyncSender<WMsg>,
+            ) -> Result<(), Box<dyn std::error::Error>> {
+                self.jobs_tx.send(jobs_tx)?;
+                Ok(())
+            }
+
+            fn nbd_used_kb(&mut self, _nbd_dev: &str) -> u64 {
+                0
+            }
+
+            fn publish_demote(
+                &mut self,
+                _total: u64,
+                _reason: &Option<String>,
+                _in_progress: bool,
+            ) {
+            }
+
+            fn elapsed_us(&mut self, _started: Instant) -> u64 {
+                10
+            }
+
+            fn spawn_swapoff(&mut self, _nbd_dev: &str) -> std::sync::mpsc::Receiver<bool> {
+                self.swapoff_calls.fetch_add(1, Ordering::SeqCst);
+                let (tx, rx) = std::sync::mpsc::channel();
+                tx.send(true).expect("in-memory demote completion");
+                rx
+            }
+
+            fn spawn_recovery_activation(
+                &mut self,
+                _nbd_dev: &str,
+                priority: i16,
+            ) -> Result<std::sync::mpsc::Receiver<bool>, Box<dyn std::error::Error>> {
+                assert_eq!(priority, 100);
+                self.activation_calls.fetch_add(1, Ordering::SeqCst);
+                self.activation_started.send(())?;
+                self.activation_rx
+                    .take()
+                    .ok_or_else(|| std::io::Error::other("duplicate recovery activation"))
+                    .map_err(Into::into)
+            }
+
+            fn startup_budget(
+                &mut self,
+                requested: bool,
+            ) -> Result<Option<Box<dyn NbdBudgetProvider>>, Box<dyn std::error::Error>>
+            {
+                assert!(requested, "the test drives the bounded recovery path");
+                Ok(self.budget.take())
+            }
+
+            fn global_free_bytes(&mut self, _timeout: Duration) -> Option<u64> {
+                Some(8 * 1024 * 1024 * 1024)
+            }
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "ramshared-daemon-pending-recovery-{}.sock",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let (jobs_tx, jobs_rx) = std::sync::mpsc::channel();
+        let (activation_started_tx, activation_started_rx) = std::sync::mpsc::channel();
+        let (activation_result_tx, activation_result_rx) = std::sync::mpsc::channel();
+        let mut activation_outcome = ActivationOutcomeGuard(Some(activation_result_tx));
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let activation_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let budget_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let thread_path = path.clone();
+        let thread_activation_calls = std::sync::Arc::clone(&activation_calls);
+        let swapoff_calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let thread_swapoff_calls = std::sync::Arc::clone(&swapoff_calls);
+        let runner = std::thread::spawn(move || {
+            let mut starter = PendingRecoveryStarter {
+                budget: Some(Box::new(RecoveryBudget {
+                    calls: budget_calls,
+                })),
+                jobs_tx,
+                activation_started: activation_started_tx,
+                activation_rx: Some(activation_result_rx),
+                activation_calls: thread_activation_calls,
+                swapoff_calls: thread_swapoff_calls,
+            };
+            let result = run_nbd_with_startup(
+                TestProvider,
+                4096,
+                thread_path.to_string_lossy().into_owned(),
+                false,
+                "/dev/ramshared-test-nbd".into(),
+                true,
+                false,
+                &mut starter,
+            )
+            .map_err(|error| error.to_string());
+            let _ = done_tx.send(result);
+        });
+
+        let worker_tx = jobs_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("injected acceptor exposes the live NBD worker");
+        worker_tx.send(WMsg::Opened).expect("open NBD generation");
+        for handle in 0..3 {
+            let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+            worker_tx
+                .send(WMsg::Job(ramshared_wsl2d::conn::Job {
+                    export: 0,
+                    req: ramshared_block::Request {
+                        flags: 0,
+                        cmd: Command::Flush,
+                        handle,
+                        offset: 0,
+                        len: 0,
+                    },
+                    payload: Vec::new(),
+                    reply: reply_tx,
+                }))
+                .expect("drive one bounded recovery sample");
+            assert_nbd_ok(
+                reply_rx
+                    .recv_timeout(Duration::from_secs(1))
+                    .expect("pre-recovery NBD job reply"),
+                "pre-recovery NBD job",
+            );
+        }
+        activation_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("the third healthy sample starts one pending activation");
+
+        worker_tx
+            .send(WMsg::Shutdown)
+            .expect("request shutdown while activation is pending");
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        worker_tx
+            .send(WMsg::Job(ramshared_wsl2d::conn::Job {
+                export: 0,
+                req: ramshared_block::Request {
+                    flags: 0,
+                    cmd: Command::Flush,
+                    handle: 99,
+                    offset: 0,
+                    len: 0,
+                },
+                payload: Vec::new(),
+                reply: reply_tx,
+            }))
+            .expect("queue NBD work after pending shutdown");
+        assert_nbd_ok(
+            reply_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("pending recovery must not block the NBD serve loop"),
+            "post-shutdown pending-recovery NBD job",
+        );
         assert_eq!(
-            job_rx.try_recv(),
-            Ok(0x5a),
-            "polling a pending swapon child must not block NBD work"
+            activation_calls.load(Ordering::SeqCst),
+            1,
+            "a pending activation suppresses duplicate recovery launches"
+        );
+        assert!(
+            path.exists(),
+            "shutdown cannot clean the owned socket while swapon remains unobserved"
+        );
+
+        activation_outcome.succeed();
+        assert_eq!(
+            done_rx
+                .recv_timeout(Duration::from_secs(1))
+                .expect("daemon exits after the terminal activation outcome"),
+            Ok(())
+        );
+        runner
+            .join()
+            .expect("pending-recovery test daemon thread joins");
+        assert_eq!(
+            swapoff_calls.load(Ordering::SeqCst),
+            2,
+            "recovery success during shutdown must start and observe final swapoff"
+        );
+        assert!(
+            !path.exists(),
+            "the owned socket is removed only after terminal recovery observation"
+        );
+
+        let (success_tx, success_rx) = std::sync::mpsc::channel();
+        let mut success = RecoveryActivation::default();
+        success
+            .start(success_rx)
+            .expect("the successful activation receiver is owned");
+        success_tx
+            .send(true)
+            .expect("inject terminal swapon success");
+        assert_eq!(success.poll(), RecoveryActivationPoll::Succeeded);
+        assert!(
+            success.launch_allowed(true, true),
+            "a successful terminal result returns the tier to the available state"
         );
     }
 
     #[test]
     fn daemon_nbd_recovery_failure_parks_without_relaunch() {
+        let mut dispatch_failure = RecoveryActivation::default();
+        dispatch_failure.mark_dispatch_failure();
+        assert!(
+            !dispatch_failure.launch_allowed(true, true),
+            "a failed activation dispatch must park the current healthy epoch"
+        );
+        assert!(!dispatch_failure.launch_allowed(false, true));
+        assert!(dispatch_failure.launch_allowed(true, true));
+
         let (activation_tx, activation_rx) = std::sync::mpsc::channel();
         let mut activation = RecoveryActivation::default();
         activation
@@ -3798,6 +4297,18 @@ mod tests {
         assert!(
             activation.launch_allowed(true, true),
             "an unhealthy observation starts a later recovery epoch"
+        );
+
+        let (disconnected_tx, disconnected_rx) = std::sync::mpsc::channel();
+        drop(disconnected_tx);
+        let mut disconnected = RecoveryActivation::default();
+        disconnected
+            .start(disconnected_rx)
+            .expect("the disconnected activation receiver is owned");
+        assert_eq!(disconnected.poll(), RecoveryActivationPoll::Failed);
+        assert!(
+            !disconnected.launch_allowed(true, true),
+            "a disconnected activation receiver must also park the healthy epoch"
         );
     }
 
@@ -3893,7 +4404,11 @@ mod tests {
                 rx
             }
 
-            fn activate_swap(&mut self, _nbd_dev: &str, _priority: i16) -> bool {
+            fn spawn_recovery_activation(
+                &mut self,
+                _nbd_dev: &str,
+                _priority: i16,
+            ) -> Result<std::sync::mpsc::Receiver<bool>, Box<dyn std::error::Error>> {
                 panic!("teardown refusal must not activate swap")
             }
 
@@ -4019,7 +4534,11 @@ mod tests {
                 rx
             }
 
-            fn activate_swap(&mut self, _nbd_dev: &str, _priority: i16) -> bool {
+            fn spawn_recovery_activation(
+                &mut self,
+                _nbd_dev: &str,
+                _priority: i16,
+            ) -> Result<std::sync::mpsc::Receiver<bool>, Box<dyn std::error::Error>> {
                 panic!("a successful terminal DEMOTE must not attempt recovery")
             }
         }

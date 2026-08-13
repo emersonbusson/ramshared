@@ -386,13 +386,13 @@ names, JSON wire values, and telemetry JSONL schema remain unchanged.
 | `daemon_worker_shutdown_full_queue_is_nonblocking` | a full worker queue returns the explicit full-queue wake result while setting the terminal flag; no shutdown sender can block | #15/#16/#17 |
 | `daemon_worker_shutdown_drains_queued_io_before_stop` | a write queued before the shutdown wake still receives its reply and increments exact counters before the worker joins | #13/#15/#17 |
 | `daemon_command_timeout_terminates_child_without_hang` | harmless child process; success, nonzero, missing executable, and deadline branches | #15/#16 |
-| `daemon_nbd_prealloc_worker_uses_fake_provider_and_injected_acceptor` | heap-backed `VramProvider`, no-op memory lock, and injected worker messages exercise prealloc protocol setup/zero/write/close/teardown without a CUDA context, NBD client/device, swap command, or `/proc` mutation | #13/#15/#16 |
+| `daemon_nbd_serves_two_connection_generations_before_explicit_shutdown` | heap-backed `VramProvider`, no-op memory lock, and injected worker messages exercise two balanced NBD connection generations against one backend before an explicit shutdown, without a CUDA context, NBD client/device, swap command, or `/proc` mutation | #13/#15/#16 |
 | `daemon_nbd_sparse_floor_refusal_reclaims_without_provider_allocation` | zero-free heap provider plus injected write/flush/close proves sparse free-floor refusal and idle reclaim decisions without allocating a sparse chunk, CUDA, NBD device, swap, or `/proc` access | #3/#15/#16 |
 | `daemon_nbd_budget_poll_uses_injected_wddm_snapshot_and_global_probe` | fake fresh WDDM budget and bounded global-free probe exercise sparse budget reconciliation with no `/dev/dxg`, subprocess, CUDA, NBD device, or swap command | #3/#13/#15/#16 |
 | `daemon_nbd_budget_constraint_demotes_then_recovers_with_fake_swap` | injected stale/error then healthy WDDM snapshots and fake swapoff/swapon prove constrained DEMOTE plus hysteretic recovery without `/dev/dxg`, CUDA, NBD device, or swap command | #3/#15/#16 |
-| `daemon_nbd_recovery_activation_does_not_block_nbd_jobs` | an injected pending activation child and a queued NBD request | the simple NBD serve loop replies before the activation result, proving it never waits synchronously for `swapon` | #13/#16/#18 |
-| `daemon_nbd_recovery_failure_parks_without_relaunch` | injected dispatch refusal, false result, and disconnected activation receiver | each terminal activation failure parks and resets hysteresis; one healthy epoch has no duplicate activation/retry | #13/#15/#17 |
-| `daemon_nbd_shutdown_with_pending_recovery_fails_closed` | injected pending activation then explicit shutdown | no backend release or socket cleanup precedes an observed terminal activation outcome | #13/#16/#17 |
+| `daemon_nbd_recovery_activation_does_not_block_nbd_jobs` | an injected pending activation child and queued NBD request make the simple NBD serve loop reply before the activation result, proving it never waits synchronously for `swapon` | #13/#16/#18 |
+| `daemon_nbd_recovery_failure_parks_without_relaunch` | injected dispatch refusal, false result, and disconnected activation receiver prove that each terminal activation failure parks and resets hysteresis; one healthy epoch has no duplicate activation/retry | #13/#15/#17 |
+| `daemon_nbd_shutdown_with_pending_recovery_fails_closed` | injected pending activation then explicit shutdown prove that no backend release or socket cleanup precedes an observed terminal activation outcome | #13/#16/#17 |
 | `daemon_nbd_teardown_refuses_until_fake_usage_and_swapoff_confirm` | injected nonzero usage followed by zero usage and fake swapoff confirmation prove fail-closed teardown retry without a five-second test sleep, NBD device, or swap command | #15/#16/#17 |
 | `daemon_nbd_residency_demote_uses_injected_clock_and_swapoff` | deterministic latency baseline/spike sequence and injected successful swapoff prove DEMOTE state/status/teardown without timing sleeps, CUDA, NBD device, or a real swap command | #3/#15/#16 |
 | `daemon_ublk_runtime_orders_lifecycle_and_rolls_back_without_device` | injected ublk runtime proves guard → lock → create → configure → start → bounded stop/join/delete ordering and refusal-before-runtime; it never opens `/dev/ublk-control` or creates a block device | #15/#16/#17 |
@@ -417,7 +417,7 @@ The canonical coverage owner for this entry point is:
 ```bash
 node tools/ci/check-rust-slice-coverage.mjs \
   -p ramshared-wsl2d \
-  --files crates/ramshared-wsl2d/src/main.rs \
+  --files crates/ramshared-wsl2d/src/main.rs,crates/ramshared-wsl2d/src/swap.rs \
   --min 80 \
   --report-json tmp/memory-broker-wsl2d-daemon-cov.json
 ```

@@ -867,6 +867,125 @@ function New-CellExecution {
     [pscustomobject]@{ result = $Result; context = $Context; evidence = $Evidence }
 }
 
+function Assert-CellFailureReceipt {
+    param(
+        [Parameter(Mandatory = $true)][string]$ReceiptPath,
+        [Parameter(Mandatory = $true)]$Cell,
+        [Parameter(Mandatory = $true)]$SelectedRelease,
+        [Parameter(Mandatory = $true)]$PairContext
+    )
+    if (-not (Test-Path -LiteralPath $ReceiptPath -PathType Leaf)) {
+        throw "cell_failure_receipt_invalid"
+    }
+    $item = Get-Item -LiteralPath $ReceiptPath -Force
+    if ($item.PSIsContainer -or (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -or
+        $item.Length -lt 1 -or $item.Length -gt 16384) {
+        throw "cell_failure_receipt_invalid"
+    }
+    try { $receipt = Get-Content -LiteralPath $ReceiptPath -Raw | ConvertFrom-Json } catch {
+        throw "cell_failure_receipt_invalid"
+    }
+    $allowed = @(
+        "schema_version", "status", "reason", "terminal_state", "release_version",
+        "pair_id", "mode", "condition", "tier_mib"
+    )
+    $properties = @($receipt.PSObject.Properties | ForEach-Object { $_.Name })
+    if ($properties.Count -ne $allowed.Count -or
+        @($properties | Where-Object { $_ -notin $allowed }).Count -ne 0) {
+        throw "cell_failure_receipt_invalid"
+    }
+    foreach ($name in $allowed) {
+        if ($null -eq $receipt.PSObject.Properties[$name]) { throw "cell_failure_receipt_invalid" }
+    }
+    if ([string]$receipt.schema_version -cne "ramshared-nbd-cell-failure/v1" -or
+        [string]$receipt.status -cne "RED" -or
+        [string]$receipt.terminal_state -cne "PRODUCT_OFF") {
+        throw "cell_failure_receipt_product_off"
+    }
+    if ([string]$receipt.reason -notmatch '^[A-Z0-9_]{1,96}$' -or
+        [string]$receipt.reason -in @("WATCHDOG_TIMEOUT_RED", "UNVERIFIED_TERMINATED")) {
+        throw "cell_failure_receipt_invalid"
+    }
+    if ([string]$receipt.release_version -cne [string]$SelectedRelease.version -or
+        [string]$receipt.pair_id -cne [string]$PairContext.pair_id -or
+        [string]$receipt.mode -cne [string]$Cell.mode -or
+        [string]$receipt.condition -cne [string]$Cell.condition) {
+        throw "cell_failure_receipt_invalid"
+    }
+    try {
+        $tier = ConvertTo-StrictInt64 -Value $receipt.tier_mib -Name "failure_receipt_tier_mib"
+    } catch {
+        throw "cell_failure_receipt_invalid"
+    }
+    if ($tier -ne [int64]$Cell.tier_mib) { throw "cell_failure_receipt_invalid" }
+    [pscustomobject]@{
+        schema_version = [string]$receipt.schema_version
+        status = [string]$receipt.status
+        reason = [string]$receipt.reason
+        terminal_state = [string]$receipt.terminal_state
+        release_version = [string]$receipt.release_version
+        pair_id = [string]$receipt.pair_id
+        mode = [string]$receipt.mode
+        condition = [string]$receipt.condition
+        tier_mib = $tier
+        sha256 = Get-Sha256File -Path $ReceiptPath
+    }
+}
+
+function New-CellControllerFailureExecution {
+    param(
+        [Parameter(Mandatory = $true)]$Run,
+        [Parameter(Mandatory = $true)]$Cell,
+        [Parameter(Mandatory = $true)][string]$CellDirectory,
+        [Parameter(Mandatory = $true)]$SelectedRelease,
+        [Parameter(Mandatory = $true)]$PairContext,
+        [Parameter(Mandatory = $true)]$Containment
+    )
+    if ($Run.timed_out -isnot [bool]) {
+        return New-CellExecution -Result (New-CellResult -Cell $Cell -Status "RED" `
+            -Reason "wsl_controller_failed" -TerminalState "unverified_unknown" -Extra @{
+                containment = $Containment; pair_context = $PairContext
+            })
+    }
+    if ($Run.timed_out -eq $true) {
+        return New-CellExecution -Result (New-CellResult -Cell $Cell -Status "RED" `
+            -Reason "watchdog_timeout_red" -TerminalState "unverified_terminated" -Extra @{
+                containment = $Containment; pair_context = $PairContext
+            })
+    }
+    $runIsTerminalFailure = $false
+    if ($Run.completed -is [bool] -and $Run.completed -eq $true -and
+        $Run.timed_out -is [bool] -and $Run.timed_out -eq $false) {
+        try {
+            $failureExitCode = ConvertTo-StrictInt64 -Value $Run.exit_code -Name "cell_failure_exit_code"
+            $runIsTerminalFailure = $failureExitCode -ne 0
+        } catch {
+            $runIsTerminalFailure = $false
+        }
+    }
+    if (-not $runIsTerminalFailure) {
+        return New-CellExecution -Result (New-CellResult -Cell $Cell -Status "RED" `
+            -Reason "wsl_controller_failed" -TerminalState "unverified_unknown" -Extra @{
+                containment = $Containment; pair_context = $PairContext
+            })
+    }
+    $failureReceiptPath = Join-Path $CellDirectory "result\failure-receipt.json"
+    try {
+        $failureReceipt = Assert-CellFailureReceipt -ReceiptPath $failureReceiptPath -Cell $Cell `
+            -SelectedRelease $SelectedRelease -PairContext $PairContext
+        return New-CellExecution -Result (New-CellResult -Cell $Cell -Status "RED" `
+            -Reason $failureReceipt.reason -TerminalState "PRODUCT_OFF" -Extra @{
+                containment = $Containment; pair_context = $PairContext
+                failure_receipt = $failureReceipt
+            })
+    } catch {
+        return New-CellExecution -Result (New-CellResult -Cell $Cell -Status "RED" `
+            -Reason "wsl_controller_failed" -TerminalState "unverified_unknown" -Extra @{
+                containment = $Containment; pair_context = $PairContext
+            })
+    }
+}
+
 function Get-RequiredProperty {
     param(
         [Parameter(Mandatory = $true)]$Object,
@@ -2028,9 +2147,8 @@ function Invoke-NbdBenchmarkCell {
         })
     }
     if (-not $run.completed -or $run.exit_code -ne 0) {
-        return New-CellExecution -Result (New-CellResult -Cell $Cell -Status "RED" -Reason "wsl_controller_failed" -TerminalState "unverified_unknown" -Extra @{
-            containment = $containment; pair_context = $PairContext
-        })
+        return New-CellControllerFailureExecution -Run $run -Cell $Cell -CellDirectory $cellDir `
+            -SelectedRelease $SelectedRelease -PairContext $PairContext -Containment $containment
     }
     $summaryPath = Join-Path $cellDir "result\summary.json"
     if (-not (Test-Path -LiteralPath $summaryPath -PathType Leaf)) {
@@ -2642,6 +2760,89 @@ Write-Output "[cuda-vram-workload] released"
             Write-Output "cell_timeout_budget_property_order_is_semantic=PASS"
             Write-Output "cell_timeout_budget_property_order_mismatch=REFUSED"
             Write-Output "cell_timeout_budget_property_order_noncanonical=REFUSED"
+            return
+        }
+        "failure-receipt" {
+            $dir = Join-Path $ArtifactRoot "failure-receipt-manufactured"
+            $resultDir = Join-Path $dir "result"
+            New-Item -ItemType Directory -Force -Path $resultDir | Out-Null
+            $receiptPath = Join-Path $resultDir "failure-receipt.json"
+            $cell = [pscustomobject]@{ tier_mib = 1024; condition = "bounded"; mode = "disk-only" }
+            $pairContext = [pscustomobject]@{ pair_id = "1024-bounded" }
+            $selectedRelease = [pscustomobject]@{ version = "manufactured-v1" }
+            $valid = [ordered]@{
+                schema_version = "ramshared-nbd-cell-failure/v1"
+                status = "RED"; reason = "SAMPLE_TIMEOUT"; terminal_state = "PRODUCT_OFF"
+                release_version = "manufactured-v1"; pair_id = "1024-bounded"
+                mode = "disk-only"; condition = "bounded"; tier_mib = 1024
+            }
+            Write-JsonNoBom -Value $valid -Path $receiptPath
+            $run = [pscustomobject]@{ completed = $true; timed_out = $false; exit_code = 2 }
+            $containment = [ordered]@{ call = "manufactured" }
+            $execution = New-CellControllerFailureExecution -Run $run -Cell $cell -CellDirectory $dir `
+                -SelectedRelease $selectedRelease -PairContext $pairContext -Containment $containment
+            if ($execution.result.reason -cne "SAMPLE_TIMEOUT" -or
+                $execution.result.terminal_state -cne "PRODUCT_OFF" -or
+                $execution.result.failure_receipt.tier_mib -ne 1024) {
+                throw "manufactured_failure_receipt_positive_invalid"
+            }
+            Write-Output "cell_failure_receipt_product_off=PASS"
+            $failedStart = New-CellControllerFailureExecution -Run ([pscustomobject]@{
+                    completed = $false; timed_out = $false; exit_code = $null
+                }) -Cell $cell -CellDirectory $dir -SelectedRelease $selectedRelease `
+                -PairContext $pairContext -Containment $containment
+            if ($failedStart.result.reason -ne "wsl_controller_failed" -or
+                $failedStart.result.terminal_state -ne "unverified_unknown") {
+                throw "manufactured_failure_receipt_failed_start_accepted"
+            }
+            Write-Output "cell_failure_receipt_failed_start=REFUSED"
+            foreach ($timedOut in @("false", "true", 0, 1, $null)) {
+                Write-JsonNoBom -Value $valid -Path $receiptPath
+                $rawRun = [pscustomobject]@{
+                    completed = $true; timed_out = $timedOut; exit_code = 2
+                }
+                $execution = New-CellControllerFailureExecution -Run $rawRun -Cell $cell -CellDirectory $dir `
+                    -SelectedRelease $selectedRelease -PairContext $pairContext -Containment $containment
+                if ($execution.result.reason -ne "wsl_controller_failed" -or
+                    $execution.result.terminal_state -ne "unverified_unknown") {
+                    $kind = if ($null -eq $timedOut) { "null" } else { $timedOut.GetType().FullName }
+                    throw ("manufactured_failure_receipt_non_boolean_timeout_accepted:" + $kind)
+                }
+            }
+            Write-Output "cell_failure_receipt_non_boolean_timeout=REFUSED"
+            foreach ($mutation in @(
+                @{ Name = "extra"; Value = @{ path = "C:\\private" } },
+                @{ Name = "watchdog"; Value = @{ reason = "WATCHDOG_TIMEOUT_RED" } },
+                @{ Name = "wrong-pair"; Value = @{ pair_id = "2048-bounded" } },
+                @{ Name = "wrong-tier-type"; Value = @{ tier_mib = "1024" } }
+            )) {
+                $mutated = [ordered]@{} + $valid
+                foreach ($key in $mutation.Value.Keys) { $mutated[$key] = $mutation.Value[$key] }
+                if ($mutation.Name -eq "extra") { $mutated["path"] = "C:\\private" }
+                Write-JsonNoBom -Value $mutated -Path $receiptPath
+                $execution = New-CellControllerFailureExecution -Run $run -Cell $cell -CellDirectory $dir `
+                    -SelectedRelease $selectedRelease -PairContext $pairContext -Containment $containment
+                if ($execution.result.reason -ne "wsl_controller_failed" -or
+                    $execution.result.terminal_state -ne "unverified_unknown") {
+                    throw ("manufactured_failure_receipt_mutation_accepted:" + $mutation.Name)
+                }
+            }
+            Remove-Item -LiteralPath $receiptPath -Force
+            $missing = New-CellControllerFailureExecution -Run $run -Cell $cell -CellDirectory $dir `
+                -SelectedRelease $selectedRelease -PairContext $pairContext -Containment $containment
+            if ($missing.result.reason -ne "wsl_controller_failed" -or
+                $missing.result.terminal_state -ne "unverified_unknown") {
+                throw "manufactured_failure_receipt_missing_accepted"
+            }
+            $timeout = New-CellControllerFailureExecution -Run ([pscustomobject]@{
+                    completed = $false; timed_out = $true; exit_code = $null
+                }) -Cell $cell -CellDirectory $dir -SelectedRelease $selectedRelease `
+                -PairContext $pairContext -Containment $containment
+            if ($timeout.result.reason -ne "watchdog_timeout_red" -or
+                $timeout.result.terminal_state -ne "unverified_terminated") {
+                throw "manufactured_failure_receipt_timeout_promoted"
+            }
+            Write-Output "cell_failure_receipt_invalid=REFUSED"
             return
         }
         "comparison" {

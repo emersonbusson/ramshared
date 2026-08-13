@@ -2,6 +2,99 @@
 # Identity predicates and narrow injected swap transactions shared by the live
 # benchmark cell and manufactured tests.
 
+nbd_first_failure_reason() {
+  local current=$1 candidate=$2
+  if [[ -n $current ]]; then
+    printf '%s\n' "$current"
+  else
+    printf '%s\n' "$candidate"
+  fi
+}
+
+nbd_write_failure_receipt() {
+  (( $# == 8 )) || return 1
+  local output=$1 terminal_state=$2 reason=$3 release_version=$4 pair_id=$5 mode=$6 condition=$7 tier_mib=$8
+  [[ $terminal_state == PRODUCT_OFF ]] || return 1
+  [[ ! -e $output && ! -L $output ]] || return 1
+  [[ $reason =~ ^[A-Z0-9_]{1,96}$ ]] || reason=UNCLASSIFIED_FAILURE
+  python3 - "$output" "$reason" "$release_version" "$pair_id" "$mode" "$condition" "$tier_mib" <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+out, reason, version, pair_id, mode, condition, tier = sys.argv[1:]
+if os.path.lexists(out):
+    raise SystemExit("failure_receipt_already_exists")
+record = {
+    "schema_version": "ramshared-nbd-cell-failure/v1",
+    "status": "RED",
+    "reason": reason,
+    "terminal_state": "PRODUCT_OFF",
+    "release_version": version,
+    "pair_id": pair_id,
+    "mode": mode,
+    "condition": condition,
+    "tier_mib": int(tier),
+}
+
+directory = os.path.dirname(out) or "."
+fd, temporary = tempfile.mkstemp(prefix=".failure-receipt.", dir=directory)
+publish_refused = False
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as target:
+        json.dump(record, target, sort_keys=True, separators=(",", ":"))
+        target.write("\n")
+        target.flush()
+        os.fsync(target.fileno())
+    if os.environ.get("RAMSHARED_NBD_TEST_FAILURE_RECEIPT_RACE") == "publish-preexisting":
+        race_fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(race_fd, b"concurrent receipt bytes must survive exactly")
+            os.fsync(race_fd)
+        finally:
+            os.close(race_fd)
+    os.link(temporary, out, follow_symlinks=False)
+except FileExistsError:
+    publish_refused = True
+except BaseException:
+    raise
+finally:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+if publish_refused:
+    raise SystemExit(1)
+PY
+}
+
+nbd_failure_receipt_allowed() {
+  (( $# == 5 )) || return 1
+  local exit_code=$1 cleanup_ok=$2 terminal_state=$3 terminal_preflight_ok=$4 daemon_count=$5
+  (( exit_code != 0 && cleanup_ok == 1 && terminal_preflight_ok == 1 && daemon_count == 0 )) \
+    && [[ $terminal_state == PRODUCT_OFF ]]
+}
+
+nbd_exact_daemon_count() {
+  (( $# == 2 )) || return 1
+  local proc_root=$1 daemon=$2 proc_dir pid raw_exe raw_without_deleted resolved count=0
+  [[ -d $proc_root && ! -L $proc_root ]] || return 1
+  while IFS= read -r proc_dir; do
+    [[ -d $proc_dir && ! -L $proc_dir ]] || continue
+    pid=${proc_dir##*/}
+    [[ $pid =~ ^[1-9][0-9]*$ ]] || continue
+    raw_exe=$(readlink -- "$proc_dir/exe" 2>/dev/null || true)
+    [[ -n $raw_exe ]] || continue
+    raw_without_deleted=${raw_exe% (deleted)}
+    resolved=$(readlink -f -- "$proc_dir/exe" 2>/dev/null || true)
+    if [[ $raw_without_deleted == "$daemon" || $resolved == "$daemon" ]]; then
+      count=$((count + 1))
+    fi
+  done < <(compgen -G "$proc_root"/'[1-9]*' || true)
+  printf '%s\n' "$count"
+}
+
 nbd_scratch_identity() {
   local path=$1
   [[ -f $path && ! -L $path ]] || return 1
