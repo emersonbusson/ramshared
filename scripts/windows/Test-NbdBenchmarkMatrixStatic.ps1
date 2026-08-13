@@ -229,8 +229,8 @@ try {
             $null -ne $cell.PSObject.Properties["queue_depth"]) {
             throw "plan must use allocation rather than I/O labels"
         }
-        $expectedSampleTimeout = if ($cell.tier_mib -eq 4096) { 600 } else { 120 }
-        $expectedOuterTimeout = if ($cell.tier_mib -eq 4096) { 2100 } else { 900 }
+        $expectedSampleTimeout = switch ($cell.tier_mib) { 1024 { 120 }; 2048 { 240 }; 4096 { 600 } }
+        $expectedOuterTimeout = switch ($cell.tier_mib) { 1024 { 900 }; 2048 { 1020 }; 4096 { 2100 } }
         if ($cell.sample_timeout_sec -ne $expectedSampleTimeout -or
             $cell.cell_outer_timeout_sec -ne $expectedOuterTimeout -or
             $cell.setup_cleanup_timeout_sec -ne 300) {
@@ -480,7 +480,8 @@ try {
         @{ Name = "failure-receipt"; Expected = "cell_failure_receipt_product_off=PASS" },
         @{ Name = "failure-receipt"; Expected = "cell_failure_receipt_failed_start=REFUSED" },
         @{ Name = "failure-receipt"; Expected = "cell_failure_receipt_non_boolean_timeout=REFUSED" },
-        @{ Name = "failure-receipt"; Expected = "cell_failure_receipt_invalid=REFUSED" }
+        @{ Name = "failure-receipt"; Expected = "cell_failure_receipt_invalid=REFUSED" },
+        @{ Name = "partial-timeout-sample"; Expected = "partial_timeout_integrity_not_promoted=REFUSED" }
     )
     foreach ($case in $selfTestCases) {
         $output = @(& $script -ManufacturedSelfTestCase $case.Name -ArtifactRoot $tmp 2>&1)

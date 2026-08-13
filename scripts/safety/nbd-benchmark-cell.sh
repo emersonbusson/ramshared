@@ -81,7 +81,8 @@ require_shared_host_approval() {
 
 derive_sample_timeout_sec() {
   case $1 in
-    1024|2048) printf '120\n' ;;
+    1024) printf '120\n' ;;
+    2048) printf '240\n' ;;
     4096) printf '600\n' ;;
     *) return 1 ;;
   esac

@@ -5,19 +5,20 @@
 ## Status
 
 `partial` · local static/manufactured gates green · cover ✓ · E2E partial ·
-BINARY_MATCH partial. Attempt 21 is the latest sealed live attempt: every pair
-was admitted and 11/12 cells completed PASS, including Q4 bounded disk 3/3 and
-the first two Q4 bounded NBD samples. The third Q4 bounded NBD sample exposed
-a deterministic daemon recovery self-deadlock and reached `SAMPLE_TIMEOUT`.
-An exact cgroup-only containment intervention prevented the controller's
-last-resort WSL termination and let the worker persist an integrity PASS for
-only the partial 6016/6656 MiB allocation; it did not complete sample three,
-and that intervention invalidated the cell for promotion. CUDA released without
-force. The matrix correctly remained RED/unverified; a separate sealed
-postflight proved `PRODUCT_OFF`, Relay PASS, and zero managed/ghost swap,
-daemon, worker, or cgroup residue. No promotion claim is made. Attempt 16 identified a Q4 timeout-budget
-mismatch; the local correction is now sealed and exercised in the latest
-attempt. Attempt 15
+BINARY_MATCH partial. Attempt22b is the latest sealed live attempt: source
+`63bd3be04afd5e21e1728eb30ad2acd129b40131`, installed manifest
+`ba1aa8e6e7869ec25e15cb161f71b648d8be6e1d9f8531fbeea99247b954d619`, and
+matrix hash `4088682aa07e6b90d6477f7e1ceaff952ee16fac99967b2b980698460302da14`.
+The four P1 cells passed 3/3; Q2 disk-only was `RED/SAMPLE_TIMEOUT` with a
+verified `PRODUCT_OFF` terminal receipt (failure receipt hash
+`8e2e07918404e6533afb8ed440075ed0a2dff2ba4424a378f38647685596e7e4`). The
+matrix stopped before Q2 NBD and all Q4 cells, so no promotion claim is made.
+Async NBD recovery is completed and audited in `47889e0`; the non-destructive
+watchdog is completed and audited in `63bd3be`. The current blocker is Q2
+timeout calibration plus the fresh complete matrix and final independent gates.
+Attempt 16 identified a Q4 timeout-budget mismatch; later pre-22b attempts
+sealed and exercised the Q4 correction, Attempt 21 exposed the NBD recovery
+self-deadlock, and Attempt 22b stopped at Q2. Attempt 15
 proved that both corrected 1 GiB idle cells
 completed all three samples with integrity, occupancy, and per-cell
 `PRODUCT_OFF`; the disk/NBD contexts recorded the same `zram0` usable-size
@@ -80,9 +81,23 @@ RED `wsl_controller_failed` result and `unverified_unknown`, and CUDA released
 without force. A separate pinned read-only postflight immediately afterward
 proved the exact release and input manifests, Relay PASS, `PRODUCT_OFF`, and
 no managed/ghost swap, daemon, worker, or cgroup residue; only the pre-existing
-`/dev/sdc` swap remained. No Windows or WSL restart occurred. The synchronous
-recovery activation must be replaced by a bounded asynchronous state machine,
-tested and independently audited, before a new sealed full-matrix attempt.
+`/dev/sdc` swap remained. No Windows or WSL restart occurred. At that revision,
+the synchronous recovery activation had to be replaced by a bounded
+asynchronous state machine; `47889e0` later completed and audited that
+correction.
+
+Attempt 22b (2026-08-13, pre-fix source) independently reproduced a Q2
+timeout-calibration defect without running a live workload in this correction
+slice: the controller/cell contract still treated Q2 as `120 s` per sample and
+`900 s` per cell, while the bounded Q2 hold requires `240/1020`. Timeout
+cleanup left partial HOLD/integrity artifacts; those artifacts were not a
+completed sample and were not promoted. This is retained as RED defect
+evidence only. DT-NBD-44 now uses explicit P1 `120/900`, Q2 `240/1020`, and Q4
+`600/2100` tuples. The named manufactured
+`partial_timeout_integrity_not_promoted` regression verifies the completion
+boundary without expanding the result schema. Attempt22b itself was live on
+sealed source `63bd3be`; no live WSL, NBD, swap, CUDA, cgroup, reboot, or
+termination action ran during the subsequent correction slice.
 
 ## Files
 
@@ -304,9 +319,10 @@ tested and independently audited, before a new sealed full-matrix attempt.
   but allocation-to-HOLD was observed at about 335 seconds and Q4 sample two
   reached the former fixed `SAMPLE_TIMEOUT=120` after about 281 seconds.
   Bounded cleanup completed cleanly; this is not a product or cleanup failure.
-  DT-NBD-44 derives P1/Q2 as 120-second samples with a 900-second cell floor,
-  and Q4 as 600-second samples with a 2100-second cell deadline. The hard
-  ceilings remain 600/2100 seconds and Q4 CUDA requires 4320 seconds. The
+  The then-current DT-NBD-44 implementation derived P1/Q2 as 120-second
+  samples with a 900-second cell floor, and Q4 as 600-second samples with a
+  2100-second cell deadline. The hard ceilings remained 600/2100 seconds and
+  Q4 CUDA required 4320 seconds. The
   tuple is recorded in context, summary, exact-allowlist internal custody,
   comparison, and public-pair candidate evidence; manufactured internal-envelope
   tuple tamper refuses. TDD RED then GREEN is Bash cell 28/28 and the complete
@@ -356,6 +372,8 @@ the `watchdog_cuda_composition` primary/secondary failure-preservation test and
 the `watchdog_cuda_serialization_sanitized` full-result private-diagnostic
 redaction test,
 public-pair custody, and
+the `partial_timeout_integrity_not_promoted` timeout/integrity completion
+boundary regression,
 `sealed_bundle_contains_benchmark_runner_and_worker`, and both DT-NBD-40
 names. The live rows
 `nbd_lifecycle_before_action_after`, `relay_gate_before_action_after`, and
@@ -378,19 +396,21 @@ The only live evidence currently tracked in the repository is the supervised
   release. `validation.md` was intentionally not updated in this docs-only
   reconciliation.
 
-Attempts 19–21 are retained only under their host campaign roots while they
-remain partial/noncanonical. Attempt 21 proves 11 completed PASS cells and the
-recovery self-deadlock described above, but its cgroup containment intervention
-and RED terminal result prohibit repository publication or combination with a
-future campaign for promotion.
+Attempts 19–22b are retained only under their host campaign roots while they
+remain partial/noncanonical. Attempt 22b is the latest live result and proves
+only four P1 PASS cells plus the Q2 timeout/refusal and terminal `PRODUCT_OFF`;
+its matrix and failure hashes are custody references, not public promotion
+evidence.
 
 ## Gaps
 
-`env-bound (blocker)` — first close the synchronous NBD recovery self-deadlock
-under TDD and independent Sol Gate A, then run a fresh complete same-run
-Windows/WSL2 execution for all P1/Q2/Q4 idle and bounded pairs. Attempt 21
-proved 11/12 cells with n=3 and isolated the final Q4 bounded NBD defect, but
-its third sample timed out and required non-promotable cgroup containment.
+`env-bound (blocker)` — the async NBD recovery correction (`47889e0`) and
+non-destructive watchdog correction (`63bd3be`) are completed and audited.
+Attempt22b now leaves the Q2 timeout calibration correction awaiting fresh
+independent Sol Gate A, resealing, and a complete same-run Windows/WSL2
+execution for all P1/Q2/Q4 idle and bounded pairs. It recorded four P1 PASS
+cells and one Q2 `SAMPLE_TIMEOUT` with terminal `PRODUCT_OFF`; Q2 NBD and all
+Q4 cells remain unrun in that attempt.
 Complete-matrix median/p99/deviation and
 backend comparisons; final per-cell occupancy, cleanup, Relay, and
 BINARY_MATCH receipts; root `validation.md`; Gate B; PR checks and merge remain.
@@ -409,4 +429,4 @@ seam/host action.
 
 | RF | ITEM | commit |
 | --- | --- | --- |
-| RF-NBD-1..20 | ITEM-1..8 | partial — Attempt 21 used sealed source `fed085b`, passed 11/12 cells, then exposed the synchronous NBD recovery self-deadlock in Q4 bounded NBD sample three; async recovery, resealing, a fresh complete same-run matrix, and final gates remain |
+| RF-NBD-1..20 | ITEM-1..8 | partial — Attempt22b used sealed source `63bd3be`, passed four P1 cells, then recorded Q2 disk `SAMPLE_TIMEOUT` with verified `PRODUCT_OFF`; async recovery `47889e0` and watchdog `63bd3be` are completed/audited, while Q2 calibration, resealing, a fresh complete matrix, and final gates remain |
