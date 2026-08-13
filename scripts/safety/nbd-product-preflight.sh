@@ -25,6 +25,9 @@ EXPECTED_SOURCE_COMMIT=
 EXPECTED_MANIFEST_SHA256=
 EXPLICIT_BINDING=0
 INPUT_BUNDLE_MANIFEST_SHA256=
+readonly PROC_STAT_PF_KTHREAD=2097152
+declare -a PRODUCT_RELEASE_DAEMON_PATHS=()
+declare -a PRODUCT_RELEASE_DAEMON_IDENTITIES=()
 
 declare -A MANIFEST_HASHES=()
 
@@ -48,6 +51,17 @@ is_source_commit() {
 
 is_release_version() {
   [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]]
+}
+
+is_product_release_daemon_path() {
+  local path=$1 relative version
+  [[ $RELEASE_ROOT == /* && $path == "$RELEASE_ROOT"/*/bin/ramsharedd ]] || return 1
+  relative=${path#"$RELEASE_ROOT"/}
+  [[ $relative == */bin/ramsharedd ]] || return 1
+  version=${relative%/bin/ramsharedd}
+  [[ -n $version && $version != */* ]] || return 1
+  is_release_version "$version" || return 1
+  [[ $path == "$RELEASE_ROOT/$version/bin/ramsharedd" ]]
 }
 
 is_decimal() {
@@ -406,6 +420,7 @@ check_relay() {
 
 read_nbd_swap() {
   local line filename suffix found=''
+  MANAGED_ZRAM_PRESENT=0
   [[ -r $SWAPS_FILE ]] || block SWAPS_UNREADABLE
   while IFS= read -r line; do
     read -r filename _ <<<"$line"
@@ -418,42 +433,176 @@ read_nbd_swap() {
       [[ -z $found ]] || block NBD_DEVICE_AMBIGUOUS
       found=$filename
     fi
+    suffix=${filename#"$DEV_ROOT"/zram}
+    if [[ $filename == "$DEV_ROOT"/zram* && $suffix =~ ^[0-9]+$ ]]; then
+      MANAGED_ZRAM_PRESENT=1
+    fi
   done <"$SWAPS_FILE"
   NBD_SWAP_DEVICE=$found
 }
 
-find_live_exact_daemon_pids() {
-  local proc_dir pid raw_exe raw_exe_without_deleted_suffix resolved_exe
-  while IFS= read -r proc_dir; do
-    [[ -d $proc_dir && ! -L $proc_dir ]] || continue
-    pid=${proc_dir##*/}
-    [[ $pid =~ ^[1-9][0-9]*$ ]] || continue
-    raw_exe=$(readlink -- "$proc_dir/exe" 2>/dev/null || true)
-    [[ -n $raw_exe ]] || continue
-    raw_exe_without_deleted_suffix=${raw_exe% (deleted)}
-    resolved_exe=$(readlink -f -- "$proc_dir/exe" 2>/dev/null || true)
-    if [[ $raw_exe_without_deleted_suffix == "$RELEASE/bin/ramsharedd" \
-      || $resolved_exe == "$RELEASE/bin/ramsharedd" ]]; then
-      printf '%s\n' "$pid"
+proc_entry_is_gone() {
+  [[ ! -e $1 && ! -L $1 ]]
+}
+
+maybe_disappear_manufactured_proc_entry() {
+  local proc_dir=$1 pid=$2
+  [[ ${RAMSHARED_NBD_ALLOW_MANUFACTURED_PROC_TEST:-} == 1 &&
+    ${RAMSHARED_NBD_TEST_PROC_DISAPPEAR_AFTER_EXISTS_PID:-} == "$pid" &&
+    $PROC_ROOT != /proc && -d $PROC_ROOT && ! -L $PROC_ROOT ]] || return 0
+  rmdir -- "$proc_dir" 2>/dev/null
+}
+
+read_proc_status_kthread_flag() {
+  local proc_dir=$1 value
+  [[ -r $proc_dir/status ]] || return 2
+  value=$(awk -F: '
+    $1 == "Kthread" {
+      count++
+      candidate = $2
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", candidate)
+      if (candidate !~ /^[01]$/) bad = 1
+      value = candidate
+    }
+    END {
+      if (count != 1 || bad) exit 2
+      print value
+    }
+  ' "$proc_dir/status" 2>/dev/null) || return 2
+  [[ $value == 0 || $value == 1 ]] || return 2
+  printf '%s\n' "$value"
+}
+
+read_proc_stat_kthread_flag() {
+  local proc_dir=$1 line tail state ppid pgrp session tty_nr tpgid flags
+  line=$(cat "$proc_dir/stat" 2>/dev/null) || return 2
+  [[ $line == *') '* ]] || return 2
+  tail=${line##*) }
+  read -r state ppid pgrp session tty_nr tpgid flags _ <<<"$tail"
+  [[ $state =~ ^[RSDTZWI]$ && $ppid =~ ^[0-9]+$ && $pgrp =~ ^[0-9]+$ \
+    && $session =~ ^[0-9]+$ && $tty_nr =~ ^[0-9]+$ && $tpgid =~ ^-?[0-9]+$ \
+    && $flags =~ ^[0-9]+$ ]] || return 2
+  if (( flags & PROC_STAT_PF_KTHREAD )); then
+    printf '1\n'
+  else
+    printf '0\n'
+  fi
+}
+
+proc_entry_is_kernel_thread() {
+  local proc_dir=$1 status_flag stat_flag
+  # Kthread is the kernel's explicit PF_KTHREAD export.  The stat fallback
+  # covers kernels predating that status field and uses stat field 9, whose
+  # PF_KTHREAD bit is stable for this purpose.
+  if status_flag=$(read_proc_status_kthread_flag "$proc_dir"); then
+    [[ $status_flag == 1 ]]
+    return
+  fi
+  if stat_flag=$(read_proc_stat_kthread_flag "$proc_dir"); then
+    [[ $stat_flag == 1 ]]
+    return
+  fi
+  return 1
+}
+
+is_sealed_release_daemon() {
+  local path=$1 metadata mode
+  [[ -f $path && ! -L $path && -x $path ]] || return 1
+  metadata=$(owner_mode "$path")
+  [[ $metadata =~ ^${EXPECTED_UID}:${EXPECTED_GID}:([0-7]{3,4})$ ]] || return 1
+  mode=${BASH_REMATCH[1]}
+  (( (8#$mode & 0222) == 0 ))
+}
+
+collect_product_release_identities() {
+  local candidate version daemon identity
+  PRODUCT_RELEASE_DAEMON_PATHS=()
+  PRODUCT_RELEASE_DAEMON_IDENTITIES=()
+  for candidate in "$RELEASE_ROOT"/*; do
+    [[ -e $candidate || -L $candidate ]] || continue
+    [[ -d $candidate && ! -L $candidate ]] || continue
+    version=${candidate##*/}
+    is_release_version "$version" || continue
+    daemon="$candidate/bin/ramsharedd"
+    [[ $(owner_mode "$candidate") == "$EXPECTED_UID:$EXPECTED_GID:555" ]] || continue
+    PRODUCT_RELEASE_DAEMON_PATHS+=("$daemon")
+    if is_sealed_release_daemon "$daemon"; then
+      identity=$(stat -Lc '%d:%i' -- "$daemon" 2>/dev/null || true)
+      [[ $identity =~ ^[0-9]+:[0-9]+$ ]] || block PROC_EXE_UNREADABLE
+      PRODUCT_RELEASE_DAEMON_IDENTITIES+=("$identity")
+    else
+      PRODUCT_RELEASE_DAEMON_IDENTITIES+=("")
     fi
-  done < <(compgen -G "$PROC_ROOT"/'[1-9]*' || true)
+  done
+  (( ${#PRODUCT_RELEASE_DAEMON_PATHS[@]} > 0 )) || block RELEASE_LAYOUT_INVALID
+}
+
+find_live_exact_daemon_pids() {
+  local proc_dir pid raw_exe raw_exe_without_deleted_suffix executable_identity
+  local index matched
+  EXACT_DAEMON_PIDS=()
+  collect_product_release_identities
+  for proc_dir in "$PROC_ROOT"/[1-9]*; do
+    [[ -e $proc_dir || -L $proc_dir ]] || continue
+    pid=${proc_dir##*/}
+    [[ $pid =~ ^[1-9][0-9]*$ ]] || block PROC_ENTRY_MALFORMED
+    maybe_disappear_manufactured_proc_entry "$proc_dir" "$pid" || block PROC_ENTRY_MALFORMED
+    proc_entry_is_gone "$proc_dir" && continue
+    [[ -d $proc_dir && ! -L $proc_dir ]] || block PROC_ENTRY_MALFORMED
+    if [[ ! -L $proc_dir/exe && -e $proc_dir/exe ]]; then
+      block PROC_EXE_MALFORMED
+    fi
+    if [[ ! -L $proc_dir/exe ]]; then
+      proc_entry_is_kernel_thread "$proc_dir" && continue
+      proc_entry_is_gone "$proc_dir" && continue
+      block PROC_EXE_UNREADABLE
+    fi
+    raw_exe=$(readlink -- "$proc_dir/exe" 2>/dev/null || true)
+    if [[ -z $raw_exe ]]; then
+      proc_entry_is_kernel_thread "$proc_dir" && continue
+      proc_entry_is_gone "$proc_dir" && continue
+      block PROC_EXE_UNREADABLE
+    fi
+    [[ $raw_exe == /* ]] || block PROC_EXE_MALFORMED
+    raw_exe_without_deleted_suffix=${raw_exe% (deleted)}
+    executable_identity=$(stat -Lc '%d:%i' -- "$proc_dir/exe" 2>/dev/null || true)
+    proc_entry_is_gone "$proc_dir" && continue
+    matched=0
+    if is_product_release_daemon_path "$raw_exe_without_deleted_suffix"; then
+      matched=1
+    else
+      for index in "${!PRODUCT_RELEASE_DAEMON_PATHS[@]}"; do
+        if [[ $raw_exe_without_deleted_suffix == "${PRODUCT_RELEASE_DAEMON_PATHS[$index]}" \
+          || ( -n "${PRODUCT_RELEASE_DAEMON_IDENTITIES[$index]}" \
+            && $executable_identity == "${PRODUCT_RELEASE_DAEMON_IDENTITIES[$index]}" ) ]]; then
+          matched=1
+          break
+        fi
+      done
+    fi
+    if (( matched == 1 )); then
+      EXACT_DAEMON_PIDS+=("$pid")
+    fi
+  done
 }
 
 check_binary_match() {
   local pid raw_exe resolved_exe expected_hash actual_hash
-  local -a exact_daemon_pids=()
   BINARY_MATCH=NOT_APPLICABLE
   [[ -d $PROC_ROOT && ! -L $PROC_ROOT ]] || block PROC_ROOT_UNREADABLE
-  mapfile -t exact_daemon_pids < <(find_live_exact_daemon_pids)
+  find_live_exact_daemon_pids
   if [[ ! -f $PID_FILE ]]; then
-    case ${#exact_daemon_pids[@]} in
-      0) [[ -z $NBD_SWAP_DEVICE ]] || block DAEMON_PID_MISSING ;;
+    case ${#EXACT_DAEMON_PIDS[@]} in
+      0)
+        [[ -z $NBD_SWAP_DEVICE ]] || block DAEMON_PID_MISSING
+        (( MANAGED_ZRAM_PRESENT == 0 )) || block MANAGED_ZRAM_PRESENT
+        ;;
       1) block DAEMON_PID_MISSING ;;
       *) block DAEMON_PID_AMBIGUOUS ;;
     esac
     return
   fi
-  (( ${#exact_daemon_pids[@]} <= 1 )) || block DAEMON_PID_AMBIGUOUS
+  (( ${#EXACT_DAEMON_PIDS[@]} <= 1 )) || block DAEMON_PID_AMBIGUOUS
   pid=$(tr -d '[:space:]' <"$PID_FILE")
   [[ $pid =~ ^[1-9][0-9]*$ ]] || block DAEMON_PID_INVALID
   [[ -d $PROC_ROOT/$pid ]] || block DAEMON_PID_STALE
@@ -481,6 +630,7 @@ emit_success() {
     transport=none
   fi
   printf 'NBD_RELEASE_VERSION=%s\n' "$RELEASE_VERSION"
+  printf 'NBD_RELEASE_SOURCE_COMMIT=%s\n' "$SOURCE_COMMIT"
   printf 'NBD_RELEASE_MANIFEST_SHA256=%s\n' "$MANIFEST_DIGEST"
   printf 'NBD_INPUT_BUNDLE_MANIFEST_SHA256=%s\n' "$INPUT_BUNDLE_MANIFEST_SHA256"
   printf 'NBD_INSTALL_PROVENANCE=PASS\n'

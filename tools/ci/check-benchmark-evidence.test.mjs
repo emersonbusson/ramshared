@@ -35,22 +35,63 @@ function wsl2PublicPairFixture() {
   ]
   const directory = path.join(root, ...artifactRoot)
   mkdirSync(directory, { recursive: true })
-  const custody = JSON.stringify({
-    schema_version: 'ramshared-nbd-public-pair-custody/v1',
-    pair_id: '1024-idle',
-    cleanup: { complete: true, terminal_state: 'PRODUCT_OFF' },
-    cells: [
-      { mode: 'disk-only', binary_match: 'N/A', context_sha256: 'c'.repeat(64) },
-      { mode: 'nbd', binary_match: 'PASS', context_sha256: 'd'.repeat(64) },
-    ],
-  })
-  const comparison = JSON.stringify({
+  const cellTimeoutBudget = {
+    sample_timeout_sec: 120,
+    samples: 3,
+    setup_cleanup_timeout_sec: 300,
+    cell_outer_timeout_sec: 900,
+  }
+  const pairTimeoutBudget = {
+    cell: cellTimeoutBudget,
+    cuda_hold_min_sec: 1920,
+  }
+  const comparisonRecord = {
     schema_version: 'ramshared-nbd-public-pair-comparison/v1',
     pair_id: '1024-idle',
+    environment_fingerprint: '3'.repeat(64),
     baseline_verdict: 'BASELINE_CANDIDATE',
-    nbd_vs_disk_median_ratio: 1.05,
-    nbd_vs_disk_p99_ratio: 1.04,
-  })
+    baseline_reason: 'manufactured',
+    nbd_vs_disk_median_ratio: 1.045455,
+    nbd_vs_disk_p99_ratio: 1.041667,
+    nbd_vs_disk_population_stddev_ratio: 1,
+    timeout_budget: pairTimeoutBudget,
+  }
+  const custodyRecord = {
+    schema_version: 'ramshared-nbd-public-pair-custody/v1',
+    pair_id: '1024-idle',
+    release: {
+      version: 'manufactured-v1',
+      source_commit: '1'.repeat(40),
+      installed_manifest_sha256: '2'.repeat(64),
+      input_bundle_manifest_sha256: 'not_exposed',
+    },
+    cells: [
+      {
+        mode: 'disk-only',
+        binary_match: 'N/A',
+        context_sha256: 'c'.repeat(64),
+        summary_sha256: '4'.repeat(64),
+        artifact_inventory_sha256: '5'.repeat(64),
+        internal_envelope_sha256: '6'.repeat(64),
+        timeout_budget: cellTimeoutBudget,
+      },
+      {
+        mode: 'nbd',
+        binary_match: 'PASS',
+        context_sha256: 'd'.repeat(64),
+        summary_sha256: '7'.repeat(64),
+        artifact_inventory_sha256: '8'.repeat(64),
+        internal_envelope_sha256: '9'.repeat(64),
+        timeout_budget: cellTimeoutBudget,
+      },
+    ],
+    timeout_budget: pairTimeoutBudget,
+    comparison_sha256: 'a'.repeat(64),
+    cleanup: { complete: true, terminal_state: 'PRODUCT_OFF' },
+  }
+  const comparison = JSON.stringify(comparisonRecord)
+  custodyRecord.comparison_sha256 = sha256(comparison)
+  const custody = JSON.stringify(custodyRecord)
   const custodyPath = path.join(directory, 'pair-custody.json')
   const comparisonPath = path.join(directory, 'pair-comparison.json')
   writeFileSync(custodyPath, custody)
@@ -94,6 +135,7 @@ function wsl2PublicPairFixture() {
       installed_manifest_sha256: '2'.repeat(64),
       input_bundle_manifest_sha256: 'not_exposed',
       pair_custody_sha256: sha256(custody),
+      pair_comparison_sha256: sha256(comparison),
     },
     workload: {
       profile: 'anonymous_memory_sequential_write',
@@ -104,6 +146,7 @@ function wsl2PublicPairFixture() {
         allocation_chunk_bytes: 67108864,
         worker_threads: 1,
         allocated_mib: 3584,
+        timeout_budget: pairTimeoutBudget,
       },
       warmup_seconds: 0,
       runs: 3,
@@ -143,7 +186,33 @@ function wsl2PublicPairFixture() {
   }
   record.comparison.platform_fingerprint = platformFingerprint(record)
   record.comparison.baseline_fingerprint = record.comparison.platform_fingerprint
-  return { root, record, custodyPath }
+  return { root, record, custodyPath, custodyRecord, comparisonPath, comparisonRecord }
+}
+
+function rewritePublicPairCustody(fixture, custody, { updateCandidate = true } = {}) {
+  const contents = typeof custody === 'string' ? custody : JSON.stringify(custody)
+  writeFileSync(fixture.custodyPath, contents)
+  const artifact = fixture.record.artifacts.find(({ path: artifactPath }) => artifactPath.endsWith('/pair-custody.json'))
+  artifact.bytes = Buffer.byteLength(contents)
+  artifact.sha256 = sha256(contents)
+  if (updateCandidate) fixture.record.candidate.pair_custody_sha256 = artifact.sha256
+}
+
+function rewritePublicPairComparison(fixture, comparison) {
+  const contents = typeof comparison === 'string' ? comparison : JSON.stringify(comparison)
+  writeFileSync(fixture.comparisonPath, contents)
+  const artifact = fixture.record.artifacts.find(({ path: artifactPath }) => artifactPath.endsWith('/pair-comparison.json'))
+  artifact.bytes = Buffer.byteLength(contents)
+  artifact.sha256 = sha256(contents)
+}
+
+function rewriteBoundPublicPairComparison(fixture, comparison) {
+  const contents = typeof comparison === 'string' ? comparison : JSON.stringify(comparison)
+  rewritePublicPairComparison(fixture, contents)
+  const custody = structuredClone(fixture.custodyRecord)
+  custody.comparison_sha256 = sha256(contents)
+  rewritePublicPairCustody(fixture, custody)
+  fixture.record.candidate.pair_comparison_sha256 = sha256(contents)
 }
 
 function validRecord(overrides = {}) {
@@ -347,6 +416,10 @@ test('recomputes_statistics_and_rejects_forgery', () => {
   const forged = validRecord()
   forged.metrics.latency_ms.median = 99
   assert.match(validateRecord(forged, { root: process.cwd() }).join('\n'), /metric-median/)
+
+  const malformed = validRecord()
+  malformed.metrics = { latency_ms: { unit: 'ms', samples: [] } }
+  assert.match(validateRecord(malformed, { root: process.cwd() }).join('\n'), /metric-samples:latency_ms/)
 })
 
 test('incompatible_fingerprint_is_incomparable', () => {
@@ -412,5 +485,425 @@ test('public_pair_evidence_matches_repository_validator_fixture', () => {
     assert.match(validateRecord(invalidPromotion, { root: fixture.root }).join('\n'), /pass-not-qualified/)
   } finally {
     rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('public_pair_custody_requires_exact_schema_and_cross_binding', () => {
+  const cases = [
+    {
+      name: 'empty custody',
+      mutate: () => ({}),
+      finding: /pair-custody-schema/,
+    },
+    {
+      name: 'missing disk cell',
+      mutate: (custody) => ({ ...custody, cells: [custody.cells[1]] }),
+      finding: /pair-custody-cell-count/,
+    },
+    {
+      name: 'missing nbd cell',
+      mutate: (custody) => ({ ...custody, cells: [custody.cells[0]] }),
+      finding: /pair-custody-cell-count/,
+    },
+    {
+      name: 'missing inventory custody marker',
+      mutate: (custody) => {
+        delete custody.cells[0].artifact_inventory_sha256
+        return custody
+      },
+      finding: /pair-custody-cell-schema/,
+    },
+    {
+      name: 'invalid inventory custody marker',
+      mutate: (custody) => {
+        custody.cells[0].artifact_inventory_sha256 = 'A'.repeat(64)
+        return custody
+      },
+      finding: /pair-custody-cell-hash/,
+    },
+    {
+      name: 'missing internal envelope marker',
+      mutate: (custody) => {
+        delete custody.cells[1].internal_envelope_sha256
+        return custody
+      },
+      finding: /pair-custody-cell-schema/,
+    },
+    {
+      name: 'invalid internal envelope marker',
+      mutate: (custody) => {
+        custody.cells[1].internal_envelope_sha256 = 'A'.repeat(64)
+        return custody
+      },
+      finding: /pair-custody-cell-hash/,
+    },
+    {
+      name: 'extra custody property',
+      mutate: (custody) => ({ ...custody, unreviewed: true }),
+      finding: /pair-custody-schema/,
+    },
+    {
+      name: 'wrong pair identifier',
+      mutate: (custody) => ({ ...custody, pair_id: '2048-idle' }),
+      finding: /pair-custody-pair-binding/,
+    },
+    {
+      name: 'wrong nbd mode',
+      mutate: (custody) => {
+        custody.cells[1].mode = 'disk-only'
+        return custody
+      },
+      finding: /pair-custody-cell-contract/,
+    },
+    {
+      name: 'wrong lifecycle context marker',
+      mutate: (custody) => {
+        custody.cells[1].context_sha256 = 'e'.repeat(64)
+        return custody
+      },
+      finding: /pair-custody-lifecycle-binding/,
+    },
+    {
+      name: 'invalid comparison marker',
+      mutate: (custody) => ({ ...custody, comparison_sha256: 'A'.repeat(64) }),
+      finding: /pair-custody-comparison-hash/,
+    },
+  ]
+
+  for (const { name, mutate, finding } of cases) {
+    const fixture = wsl2PublicPairFixture()
+    try {
+      const custody = mutate(structuredClone(fixture.custodyRecord))
+      rewritePublicPairCustody(fixture, custody)
+      assert.match(validateRecord(fixture.record, { root: fixture.root }).join('\n'), finding, name)
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  }
+
+  const duplicateFixture = wsl2PublicPairFixture()
+  try {
+    const duplicate = JSON.stringify(duplicateFixture.custodyRecord)
+      .replace('"pair_id":"1024-idle"', '"pair_id":"1024-idle","pair_id":"1024-idle"')
+    rewritePublicPairCustody(duplicateFixture, duplicate)
+    assert.match(
+      validateRecord(duplicateFixture.record, { root: duplicateFixture.root }).join('\n'),
+      /pair-custody-duplicate-key/,
+      'duplicate custody property',
+    )
+  } finally {
+    rmSync(duplicateFixture.root, { recursive: true, force: true })
+  }
+
+  const candidateFixture = wsl2PublicPairFixture()
+  try {
+    const custody = structuredClone(candidateFixture.custodyRecord)
+    custody.cleanup.terminal_state = 'UNVERIFIED'
+    rewritePublicPairCustody(candidateFixture, custody, { updateCandidate: false })
+    assert.match(
+      validateRecord(candidateFixture.record, { root: candidateFixture.root }).join('\n'),
+      /pair-custody-candidate-hash/,
+      'candidate custody hash mismatch',
+    )
+  } finally {
+    rmSync(candidateFixture.root, { recursive: true, force: true })
+  }
+
+  const comparisonFixture = wsl2PublicPairFixture()
+  try {
+    const comparison = structuredClone(comparisonFixture.comparisonRecord)
+    comparison.pair_id = '2048-idle'
+    rewritePublicPairComparison(comparisonFixture, comparison)
+    assert.match(
+      validateRecord(comparisonFixture.record, { root: comparisonFixture.root }).join('\n'),
+      /pair-comparison-pair-binding/,
+      'comparison pair identifier',
+    )
+  } finally {
+    rmSync(comparisonFixture.root, { recursive: true, force: true })
+  }
+})
+
+test('public_pair_custody_binds_exact_comparison_artifact_and_candidate_hash', () => {
+  const fixture = wsl2PublicPairFixture()
+  try {
+    const comparison = structuredClone(fixture.comparisonRecord)
+    comparison.nbd_vs_disk_median_ratio = 1.2
+    rewritePublicPairComparison(fixture, comparison)
+    assert.match(
+      validateRecord(fixture.record, { root: fixture.root }).join('\n'),
+      /pair-custody-comparison-binding/,
+      'pair custody must bind the exact comparison artifact bytes',
+    )
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+
+  const candidateFixture = wsl2PublicPairFixture()
+  try {
+    candidateFixture.record.candidate.pair_comparison_sha256 = 'b'.repeat(64)
+    assert.match(
+      validateRecord(candidateFixture.record, { root: candidateFixture.root }).join('\n'),
+      /pair-custody-candidate-comparison-binding/,
+      'candidate hash must bind the exact comparison artifact bytes',
+    )
+  } finally {
+    rmSync(candidateFixture.root, { recursive: true, force: true })
+  }
+})
+
+test('public_pair_custody_refuses_missing_and_semantically_invalid_artifact_bindings', () => {
+  const cases = [
+    {
+      name: 'candidate comparison hash format',
+      mutate: (fixture) => { fixture.record.candidate.pair_comparison_sha256 = 'A'.repeat(64) },
+      finding: /pair-custody-candidate-schema/,
+    },
+    {
+      name: 'repository artifact root',
+      mutate: (fixture) => { fixture.record.candidate.repository_artifact_root += '-other' },
+      finding: /pair-custody-artifact-schema/,
+    },
+    {
+      name: 'missing comparison artifact',
+      mutate: (fixture) => { rmSync(fixture.comparisonPath) },
+      finding: /pair-custody-artifact-missing/,
+    },
+    {
+      name: 'release source binding',
+      mutate: (fixture) => {
+        const custody = structuredClone(fixture.custodyRecord)
+        custody.release.source_commit = 'f'.repeat(40)
+        rewritePublicPairCustody(fixture, custody)
+      },
+      finding: /pair-custody-release-binding/,
+    },
+    {
+      name: 'pair timeout budget',
+      mutate: (fixture) => {
+        const custody = structuredClone(fixture.custodyRecord)
+        custody.timeout_budget.cell.sample_timeout_sec = 121
+        rewritePublicPairCustody(fixture, custody)
+      },
+      finding: /pair-custody-timeout-budget/,
+    },
+    {
+      name: 'comparison JSON syntax',
+      mutate: (fixture) => { rewritePublicPairComparison(fixture, '{"truncated":') },
+      finding: /pair-comparison-json/,
+    },
+    {
+      name: 'comparison exact schema',
+      mutate: (fixture) => {
+        rewriteBoundPublicPairComparison(fixture, { ...fixture.comparisonRecord, unreviewed: true })
+      },
+      finding: /pair-comparison-schema/,
+    },
+    {
+      name: 'comparison numeric contract',
+      mutate: (fixture) => {
+        rewriteBoundPublicPairComparison(fixture, {
+          ...fixture.comparisonRecord,
+          nbd_vs_disk_p99_ratio: 0,
+        })
+      },
+      finding: /pair-comparison-schema/,
+    },
+  ]
+
+  for (const { name, mutate, finding } of cases) {
+    const fixture = wsl2PublicPairFixture()
+    try {
+      mutate(fixture)
+      assert.match(validateRecord(fixture.record, { root: fixture.root }).join('\n'), finding, name)
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  }
+})
+
+test('public_pair_comparison_recomputes_exact_rounded_ratios_from_public_metrics', () => {
+  const ratioMutations = [
+    { name: 'median', key: 'nbd_vs_disk_median_ratio', value: 999 },
+    { name: 'p99', key: 'nbd_vs_disk_p99_ratio', value: 999 },
+    { name: 'population stddev', key: 'nbd_vs_disk_population_stddev_ratio', value: 999 },
+  ]
+
+  for (const { name, key, value } of ratioMutations) {
+    const fixture = wsl2PublicPairFixture()
+    try {
+      const comparison = { ...fixture.comparisonRecord, [key]: value }
+      rewriteBoundPublicPairComparison(fixture, comparison)
+      assert.match(
+        validateRecord(fixture.record, { root: fixture.root }).join('\n'),
+        /pair-comparison-ratio/,
+        `${name} ratio forged after exact byte binding`,
+      )
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  }
+
+  const zeroStddev = wsl2PublicPairFixture()
+  try {
+    zeroStddev.record.metrics.disk_allocation_to_hold_ms = publicMetric([100, 100, 100])
+    zeroStddev.record.metrics.nbd_allocation_to_hold_ms = publicMetric([105, 105, 105])
+    rewriteBoundPublicPairComparison(zeroStddev, {
+      ...zeroStddev.comparisonRecord,
+      nbd_vs_disk_median_ratio: 1.05,
+      nbd_vs_disk_p99_ratio: 1.05,
+      nbd_vs_disk_population_stddev_ratio: null,
+    })
+    assert.deepEqual(validateRecord(zeroStddev.record, { root: zeroStddev.root }), [])
+
+    rewriteBoundPublicPairComparison(zeroStddev, {
+      ...zeroStddev.comparisonRecord,
+      nbd_vs_disk_median_ratio: 1.05,
+      nbd_vs_disk_p99_ratio: 1.05,
+      nbd_vs_disk_population_stddev_ratio: 1,
+    })
+    assert.match(
+      validateRecord(zeroStddev.record, { root: zeroStddev.root }).join('\n'),
+      /pair-comparison-ratio/,
+      'zero disk standard deviation requires null comparison ratio',
+    )
+  } finally {
+    rmSync(zeroStddev.root, { recursive: true, force: true })
+  }
+
+  const midpoint = wsl2PublicPairFixture()
+  try {
+    midpoint.record.metrics.disk_allocation_to_hold_ms = publicMetric([1, 1, 1])
+    midpoint.record.metrics.nbd_allocation_to_hold_ms = publicMetric([1.2345665, 1.2345665, 1.2345665])
+    rewriteBoundPublicPairComparison(midpoint, {
+      ...midpoint.comparisonRecord,
+      nbd_vs_disk_median_ratio: 1.234566,
+      nbd_vs_disk_p99_ratio: 1.234566,
+      nbd_vs_disk_population_stddev_ratio: null,
+    })
+    assert.deepEqual(validateRecord(midpoint.record, { root: midpoint.root }), [])
+
+    rewriteBoundPublicPairComparison(midpoint, {
+      ...midpoint.comparisonRecord,
+      nbd_vs_disk_median_ratio: 1.234567,
+      nbd_vs_disk_p99_ratio: 1.234567,
+      nbd_vs_disk_population_stddev_ratio: null,
+    })
+    assert.match(
+      validateRecord(midpoint.record, { root: midpoint.root }).join('\n'),
+      /pair-comparison-ratio/,
+      'six-decimal midpoint uses the controller’s to-even rounding',
+    )
+  } finally {
+    rmSync(midpoint.root, { recursive: true, force: true })
+  }
+})
+
+test('public_pair_comparison_accepts_exact_zero_stddev_ratio_only_when_disk_varies', () => {
+  const fixture = wsl2PublicPairFixture()
+  try {
+    fixture.record.metrics.disk_allocation_to_hold_ms = publicMetric([100, 110, 120])
+    fixture.record.metrics.nbd_allocation_to_hold_ms = publicMetric([105, 105, 105])
+    const validComparison = {
+      ...fixture.comparisonRecord,
+      nbd_vs_disk_median_ratio: 0.954545,
+      nbd_vs_disk_p99_ratio: 0.875,
+      nbd_vs_disk_population_stddev_ratio: 0,
+    }
+    rewriteBoundPublicPairComparison(fixture, validComparison)
+    assert.deepEqual(validateRecord(fixture.record, { root: fixture.root }), [])
+
+    for (const [name, ratio] of [
+      ['null', null],
+      ['negative', -0.1],
+      ['wrong positive', 1],
+    ]) {
+      rewriteBoundPublicPairComparison(fixture, {
+        ...validComparison,
+        nbd_vs_disk_population_stddev_ratio: ratio,
+      })
+      assert.match(
+        validateRecord(fixture.record, { root: fixture.root }).join('\n'),
+        /pair-comparison-(?:schema|ratio)/,
+        `disk variation with ${name} stddev ratio must fail closed`,
+      )
+    }
+
+    const nonfiniteComparison = JSON.stringify(validComparison)
+      .replace('"nbd_vs_disk_population_stddev_ratio":0', '"nbd_vs_disk_population_stddev_ratio":1e999')
+    rewriteBoundPublicPairComparison(fixture, nonfiniteComparison)
+    assert.match(
+      validateRecord(fixture.record, { root: fixture.root }).join('\n'),
+      /pair-comparison-schema/,
+      'nonfinite stddev ratio must fail closed',
+    )
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true })
+  }
+
+  const zeroDisk = wsl2PublicPairFixture()
+  try {
+    zeroDisk.record.metrics.disk_allocation_to_hold_ms = publicMetric([100, 100, 100])
+    zeroDisk.record.metrics.nbd_allocation_to_hold_ms = publicMetric([105, 110, 115])
+    rewriteBoundPublicPairComparison(zeroDisk, {
+      ...zeroDisk.comparisonRecord,
+      nbd_vs_disk_median_ratio: 1.05,
+      nbd_vs_disk_p99_ratio: 1.045455,
+      nbd_vs_disk_population_stddev_ratio: 0,
+    })
+    assert.match(
+      validateRecord(zeroDisk.record, { root: zeroDisk.root }).join('\n'),
+      /pair-comparison-(?:schema|ratio)/,
+      'zero disk standard deviation requires null comparison ratio',
+    )
+  } finally {
+    rmSync(zeroDisk.root, { recursive: true, force: true })
+  }
+})
+
+test('public_pair_baseline_verdict_requires_the_exact_public_decision_mapping', () => {
+  const mappings = {
+    BASELINE_CANDIDATE: { verdict: 'BASELINE', promotable: false, qualified: false, baselineFingerprint: 'platform' },
+    NOT_COMPARABLE: { verdict: 'INCOMPARABLE', promotable: false, qualified: false, baselineFingerprint: 'unavailable' },
+    GREEN: { verdict: 'PASS', promotable: true, qualified: true, baselineFingerprint: 'platform' },
+    YELLOW: { verdict: 'YELLOW', promotable: false, qualified: true, baselineFingerprint: 'platform' },
+    RED: { verdict: 'RED', promotable: false, qualified: true, baselineFingerprint: 'platform' },
+  }
+
+  for (const [baselineVerdict, expected] of Object.entries(mappings)) {
+    const fixture = wsl2PublicPairFixture()
+    try {
+      const comparison = { ...fixture.comparisonRecord, baseline_verdict: baselineVerdict }
+      rewriteBoundPublicPairComparison(fixture, comparison)
+      fixture.record.comparison.baseline_verdict = baselineVerdict
+      fixture.record.comparison.qualified = expected.qualified
+      fixture.record.comparison.baseline_fingerprint = expected.baselineFingerprint === 'unavailable'
+        ? 'unavailable'
+        : fixture.record.comparison.platform_fingerprint
+      fixture.record.decision = {
+        ...fixture.record.decision,
+        verdict: expected.verdict,
+        promotable: expected.promotable,
+      }
+      assert.deepEqual(
+        validateRecord(fixture.record, { root: fixture.root }),
+        [],
+        `${baselineVerdict} valid public decision mapping`,
+      )
+
+      fixture.record.decision = {
+        ...fixture.record.decision,
+        verdict: baselineVerdict === 'GREEN' ? 'RED' : 'PASS',
+        promotable: baselineVerdict === 'GREEN' ? false : true,
+      }
+      fixture.record.comparison.qualified = baselineVerdict === 'GREEN' ? false : true
+      assert.match(
+        validateRecord(fixture.record, { root: fixture.root }).join('\n'),
+        /pair-comparison-decision-mapping/,
+        `${baselineVerdict} cannot forge a promotable PASS`,
+      )
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   }
 })

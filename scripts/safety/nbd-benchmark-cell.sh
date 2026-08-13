@@ -31,6 +31,7 @@ SEALED_RELEASE_ROOT=""
 RELEASE_VERSION=""
 EXPECTED_SOURCE_COMMIT=""
 EXPECTED_MANIFEST_SHA256=""
+EXPECTED_INPUT_BUNDLE_MANIFEST_SHA256=""
 PAIR_ID=""
 UTC_STARTED=""
 LOWER_SINK_CANONICAL=""
@@ -50,13 +51,26 @@ NBD_DAEMON_MANIFEST_SHA256=""
 NBD_SECOND_TIER_IDENTITY_SHA256=""
 IDENTITY_FIXTURE_ROOT=""
 IDENTITY_LOWER_SINK_SHA256=""
+CUSTODY_INVENTORY_CANDIDATE=""
+CUSTODY_ENVELOPE_CANDIDATE=""
+CUSTODY_CANDIDATES_READY=0
+CUSTODY_FRONTIER=0
+CUSTODY_INVENTORY_PUBLISHED=0
+CUSTODY_INVENTORY_IDENTITY=""
+CUSTODY_INVENTORY_SHA256=""
 LIVE_SEAM_PRESENT=0
 for seam in RAMSHARED_PRODUCT_ROOT RAMSHARED_BENCHMARK_CGROUP_ROOT \
-  RAMSHARED_NBD_SWAPS_FILE RAMSHARED_NBD_PID_FILE RAMSHARED_NBD_ZRAM_RECORD \
-  RAMSHARED_NBD_LOWER_SINK RAMSHARED_NBD_VRAM_MIB RAMSHARED_NBD_LIFECYCLE_APPROVAL \
-  RAMSHARED_NBD_PROC_ROOT RAMSHARED_NBD_DEV_ROOT RAMSHARED_NBD_SYS_BLOCK_ROOT; do
+  WORKER_TERM_GRACE_SEC WORKER_KILL_GRACE_SEC; do
   [[ -v $seam ]] && LIVE_SEAM_PRESENT=1
 done
+# The benchmark approval is the only RAMSHARED_NBD_* input admitted to live
+# mode. Every other name is a preflight override or a manufactured-test seam,
+# including names added by later preflight revisions.
+for seam in "${!RAMSHARED_NBD_@}"; do
+  [[ $seam == RAMSHARED_NBD_BENCHMARK_APPROVAL ]] || LIVE_SEAM_PRESENT=1
+done
+WORKER_TERM_GRACE_SEC=${WORKER_TERM_GRACE_SEC:-5}
+WORKER_KILL_GRACE_SEC=${WORKER_KILL_GRACE_SEC:-5}
 PRODUCT_ROOT=${RAMSHARED_PRODUCT_ROOT:-/opt/ramshared}
 CG_ROOT=${RAMSHARED_BENCHMARK_CGROUP_ROOT:-/sys/fs/cgroup}
 SWAPS_FILE=${RAMSHARED_NBD_SWAPS_FILE:-/proc/swaps}
@@ -86,6 +100,14 @@ derive_sample_timeout_sec() {
     4096) printf '600\n' ;;
     *) return 1 ;;
   esac
+}
+
+validate_worker_grace_values() {
+  local variable value
+  for variable in WORKER_TERM_GRACE_SEC WORKER_KILL_GRACE_SEC; do
+    value=${!variable:-}
+    [[ $value =~ ^([1-9]|[12][0-9]|30)$ ]] || return 1
+  done
 }
 
 configure_timeout_budget() {
@@ -274,7 +296,8 @@ PY
 }
 
 validate_artifact_inventory() {
-  python3 - "$ARTIFACT_DIR" <<'PY'
+  local inventory_path=${1:-"$ARTIFACT_DIR/artifact-inventory.json"}
+  python3 - "$ARTIFACT_DIR" "$inventory_path" <<'PY'
 import hashlib
 import json
 import os
@@ -282,12 +305,14 @@ import stat
 import sys
 
 root = os.path.realpath(sys.argv[1])
-inventory_path = os.path.join(root, "artifact-inventory.json")
+inventory_path = os.path.abspath(sys.argv[2])
 required = {
     "before.txt", "action.txt", "after.txt", "context.json", "samples.jsonl", "summary.json",
 }
-excluded = {"artifact-inventory.json", "evidence-envelope.json"}
 try:
+    if os.path.dirname(inventory_path) != root:
+        raise ValueError("inventory_path")
+    excluded = {"artifact-inventory.json", "evidence-envelope.json", os.path.basename(inventory_path)}
     metadata = os.lstat(inventory_path)
     if not stat.S_ISREG(metadata.st_mode):
         raise ValueError("inventory_not_regular")
@@ -333,17 +358,36 @@ PY
 }
 
 validate_evidence_envelope() {
-  python3 - "$ARTIFACT_DIR" <<'PY'
+  local inventory_path=${1:-"$ARTIFACT_DIR/artifact-inventory.json"}
+  local envelope_path=${2:-"$ARTIFACT_DIR/evidence-envelope.json"}
+  python3 - "$ARTIFACT_DIR" "$inventory_path" "$envelope_path" <<'PY'
 import hashlib
 import json
 import os
+import stat
 import sys
 
 root = os.path.realpath(sys.argv[1])
+inventory_path = os.path.abspath(sys.argv[2])
+envelope_path = os.path.abspath(sys.argv[3])
+
+def direct_regular(path):
+    if os.path.dirname(path) != root:
+        raise ValueError("candidate_path")
+    metadata = os.lstat(path)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("candidate_not_regular")
+
+def digest_path(path):
+    with open(path, "rb") as source:
+        return hashlib.sha256(source.read()).hexdigest()
+
 try:
-    with open(os.path.join(root, "artifact-inventory.json"), encoding="utf-8") as source:
+    direct_regular(inventory_path)
+    direct_regular(envelope_path)
+    with open(inventory_path, encoding="utf-8") as source:
         inventory = json.load(source)
-    with open(os.path.join(root, "evidence-envelope.json"), encoding="utf-8") as source:
+    with open(envelope_path, encoding="utf-8") as source:
         envelope = json.load(source)
     with open(os.path.join(root, "context.json"), encoding="utf-8") as source:
         context = json.load(source)
@@ -353,8 +397,7 @@ try:
         summary_bytes = source.read()
     summary_sha = hashlib.sha256(summary_bytes).hexdigest()
     summary = json.loads(summary_bytes.decode("utf-8"))
-    with open(os.path.join(root, "artifact-inventory.json"), "rb") as source:
-        inventory_sha = hashlib.sha256(source.read()).hexdigest()
+    inventory_sha = digest_path(inventory_path)
     required = {
         "schema_version", "pair_id", "mode", "release", "context_sha256", "summary_sha256",
         "artifact_inventory_sha256", "artifacts", "binary_match", "watchdog", "classification", "timeout_budget",
@@ -615,6 +658,7 @@ fi
   && $PID_FILE == /run/ramshared/ramsharedd.pid && $ZRAM_RECORD == /run/ramshared/zram-dev \
   && $PROC_ROOT == /proc && $DEV_ROOT == /dev && $SYS_BLOCK_ROOT == /sys/block ]] \
   || refuse LIVE_TEST_SEAM_FORBIDDEN
+validate_worker_grace_values || refuse WORKER_GRACE_INVALID
 [[ -n $SEALED_RELEASE_ROOT && -n $RELEASE_VERSION && -n $EXPECTED_SOURCE_COMMIT && -n $EXPECTED_MANIFEST_SHA256 && -n $PAIR_ID ]] \
   || refuse REVIEWED_RELEASE_BINDING_REQUIRED
 [[ $RELEASE_VERSION =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ \
@@ -655,6 +699,11 @@ SOURCE_TREE_STATE=$(tr -d '[:space:]' <"$RELEASE/SOURCE_TREE_STATE")
   || refuse RELEASE_SOURCE_IDENTITY_INVALID
 [[ $(sha256sum -- "$RELEASE/SHA256SUMS" | awk '{print $1}') == "$EXPECTED_MANIFEST_SHA256" ]] \
   || refuse REVIEWED_MANIFEST_MISMATCH
+[[ -f $RELEASE/INPUT_BUNDLE_SHA256SUMS && ! -L $RELEASE/INPUT_BUNDLE_SHA256SUMS ]] \
+  || refuse INPUT_BUNDLE_MANIFEST_INVALID
+EXPECTED_INPUT_BUNDLE_MANIFEST_SHA256=$(sha256sum -- "$RELEASE/INPUT_BUNDLE_SHA256SUMS" | awk '{print $1}')
+[[ $EXPECTED_INPUT_BUNDLE_MANIFEST_SHA256 =~ ^[0-9a-f]{64}$ ]] \
+  || refuse INPUT_BUNDLE_MANIFEST_INVALID
 # shellcheck source=nbd-benchmark-lib.sh
 source "$BENCHMARK_LIB"
 mkdir -m 0700 -- "$ARTIFACT_DIR"
@@ -667,9 +716,13 @@ SCRATCH_SWAP=""
 SCRATCH_IDENTITY=""
 SCRATCH_SWAP_ACTIVE=0
 CLEANUP_OK=1
+PRODUCT_OFF_PHASES=""
+INITIAL_EPOCH_STATE=unattempted
+FINAL_EPOCH_STATE=unattempted
+PREFLIGHT_TIMEOUT_SEC=15
 
 pinned_preflight() {
-  RAMSHARED_NBD_VRAM_MIB=$TIER_MIB "$PREFLIGHT" --check \
+  env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin "RAMSHARED_NBD_VRAM_MIB=$TIER_MIB" "$PREFLIGHT" --check \
     --sealed-release-root "$RELEASE" --release-version "$VERSION" \
     --expected-source-commit "$EXPECTED_SOURCE_COMMIT" \
     --expected-manifest-sha256 "$EXPECTED_MANIFEST_SHA256"
@@ -699,10 +752,6 @@ load_bound_lower_sink() {
   LOWER_SINK_CANONICAL=$canonical
   LOWER_SINK_TYPE=directory
   LOWER_SINK_IDENTITY_SHA256=$actual_identity
-}
-
-managed_swap_count() {
-  awk 'NR > 1 && ($1 ~ /\/zram[0-9]+$/ || $1 ~ /\/nbd[0-9]+$/ || $1 ~ /\/ublkb[0-9]+$/) { count += 1 } END { print count + 0 }' "$SWAPS_FILE"
 }
 
 scratch_identity() {
@@ -983,72 +1032,141 @@ PY
 }
 
 write_artifact_inventory() {
-  python3 - "$ARTIFACT_DIR" <<'PY'
-import hashlib, json, os, stat, sys
+  local output=${1:-"$ARTIFACT_DIR/artifact-inventory.json"}
+  local temporary="${output}.tmp"
+  [[ $output == "$ARTIFACT_DIR"/* && ${output#"$ARTIFACT_DIR"/} != */* &&
+    ! -e $output && ! -L $output && ! -e $temporary && ! -L $temporary ]] || return 1
+  python3 - "$ARTIFACT_DIR" "$output" <<'PY'
+import hashlib
+import json
+import os
+import stat
+import sys
 
 root = os.path.realpath(sys.argv[1])
-rows = []
-for name in sorted(os.listdir(root)):
-    if name in {"artifact-inventory.json", "evidence-envelope.json"}:
-        continue
-    path = os.path.join(root, name)
-    metadata = os.lstat(path)
-    if not stat.S_ISREG(metadata.st_mode):
-        raise SystemExit("artifact_inventory_non_regular")
-    with open(path, "rb") as source:
-        rows.append({"name": name, "bytes": metadata.st_size, "sha256": hashlib.sha256(source.read()).hexdigest()})
-out = os.path.join(root, "artifact-inventory.json")
-with open(out + ".tmp", "w", encoding="utf-8") as target:
-    json.dump({"schema": 2, "files": rows}, target, sort_keys=True, separators=(",", ":"))
-    target.write("\n")
-os.replace(out + ".tmp", out)
+out = os.path.abspath(sys.argv[2])
+temporary = out + ".tmp"
+try:
+    if os.path.dirname(out) != root:
+        raise ValueError("inventory_path")
+    excluded = {"artifact-inventory.json", "evidence-envelope.json", os.path.basename(out)}
+    rows = []
+    for name in sorted(os.listdir(root)):
+        if name in excluded:
+            continue
+        path = os.path.join(root, name)
+        metadata = os.lstat(path)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("artifact_inventory_non_regular")
+        with open(path, "rb") as source:
+            rows.append({"name": name, "bytes": metadata.st_size, "sha256": hashlib.sha256(source.read()).hexdigest()})
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as target:
+            json.dump({"schema": 2, "files": rows}, target, sort_keys=True, separators=(",", ":"))
+            target.write("\n")
+            target.flush()
+            os.fsync(target.fileno())
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+except (OSError, ValueError) as exc:
+    raise SystemExit(f"artifact_inventory_write_failed:{exc}")
 PY
-  validate_artifact_inventory || refuse EVIDENCE_INVENTORY_INVALID
+  if ! publish_owned_file "$temporary" "$output"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  validate_artifact_inventory "$output"
 }
 
 write_evidence_envelope() {
-  python3 - "$ARTIFACT_DIR" "$MODE" "$PAIR_ID" <<'PY'
+  local inventory_path=${1:-"$ARTIFACT_DIR/artifact-inventory.json"}
+  local output=${2:-"$ARTIFACT_DIR/evidence-envelope.json"}
+  local temporary="${output}.tmp"
+  [[ $inventory_path == "$ARTIFACT_DIR"/* && ${inventory_path#"$ARTIFACT_DIR"/} != */* &&
+    $output == "$ARTIFACT_DIR"/* && ${output#"$ARTIFACT_DIR"/} != */* &&
+    -f $inventory_path && ! -L $inventory_path && ! -e $output && ! -L $output &&
+    ! -e $temporary && ! -L $temporary ]] || return 1
+  python3 - "$ARTIFACT_DIR" "$MODE" "$PAIR_ID" "$inventory_path" "$output" <<'PY'
 import hashlib
 import json
 import os
 import sys
 
-root, mode, pair_id = sys.argv[1:]
-def digest(name):
-    with open(os.path.join(root, name), "rb") as source:
-        return hashlib.sha256(source.read()).hexdigest()
-with open(os.path.join(root, "context.json"), encoding="utf-8") as source:
-    context = json.load(source)
-with open(os.path.join(root, "artifact-inventory.json"), encoding="utf-8") as source:
-    inventory = json.load(source)
-artifacts = [{"path": row["name"], "bytes": row["bytes"], "sha256": row["sha256"]} for row in inventory["files"]]
-record = {
-    "schema_version": "ramshared-nbd-cell-evidence/v1",
-    "pair_id": pair_id,
-    "mode": mode,
-    "release": {
-        "version": context["release"]["version"],
-        "source_commit": context["release"]["source_commit"],
-        "manifest_sha256": context["release"]["manifest_sha256"],
-        "input_bundle_manifest_sha256": context["release"]["input_bundle_manifest_sha256"],
-    },
-    "context_sha256": digest("context.json"),
-    "summary_sha256": digest("summary.json"),
-    "artifact_inventory_sha256": digest("artifact-inventory.json"),
-    "artifacts": artifacts,
-    "binary_match": context["binary_match"],
-    "watchdog": context["watchdog"],
-    "timeout_budget": context["timeout_budget"],
-    "classification": "INCOMPARABLE",
-}
-out = os.path.join(root, "evidence-envelope.json")
+root, mode, pair_id, inventory_path, out = sys.argv[1:]
+root = os.path.realpath(root)
+inventory_path = os.path.abspath(inventory_path)
+out = os.path.abspath(out)
 temporary = out + ".tmp"
-with open(temporary, "w", encoding="utf-8") as target:
-    json.dump(record, target, sort_keys=True, separators=(",", ":"))
-    target.write("\n")
-os.replace(temporary, out)
+allow_fault = os.environ.get("RAMSHARED_NBD_ALLOW_MANUFACTURED_PRODUCT_OFF_TEST") == "1"
+fault = os.environ.get("RAMSHARED_NBD_TEST_EVIDENCE_ENVELOPE_FAULT", "") if allow_fault else ""
+
+def digest_path(path):
+    with open(path, "rb") as source:
+        return hashlib.sha256(source.read()).hexdigest()
+
+try:
+    if os.path.dirname(inventory_path) != root or os.path.dirname(out) != root:
+        raise ValueError("envelope_path")
+    if fault == "write":
+        raise OSError("injected envelope write failure")
+    with open(os.path.join(root, "context.json"), encoding="utf-8") as source:
+        context = json.load(source)
+    with open(inventory_path, encoding="utf-8") as source:
+        inventory = json.load(source)
+    artifacts = [{"path": row["name"], "bytes": row["bytes"], "sha256": row["sha256"]} for row in inventory["files"]]
+    record = {
+        "schema_version": "ramshared-nbd-cell-evidence/v1",
+        "pair_id": pair_id,
+        "mode": mode,
+        "release": {
+            "version": context["release"]["version"],
+            "source_commit": context["release"]["source_commit"],
+            "manifest_sha256": context["release"]["manifest_sha256"],
+            "input_bundle_manifest_sha256": context["release"]["input_bundle_manifest_sha256"],
+        },
+        "context_sha256": digest_path(os.path.join(root, "context.json")),
+        "summary_sha256": digest_path(os.path.join(root, "summary.json")),
+        "artifact_inventory_sha256": digest_path(inventory_path),
+        "artifacts": artifacts,
+        "binary_match": context["binary_match"],
+        "watchdog": context["watchdog"],
+        "timeout_budget": context["timeout_budget"],
+        "classification": "INCOMPARABLE",
+    }
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as target:
+            json.dump(record, target, sort_keys=True, separators=(",", ":"))
+            target.write("\n")
+            target.flush()
+            if fault == "fsync":
+                raise OSError("injected envelope fsync failure")
+            os.fsync(target.fileno())
+        if fault == "link":
+            raise OSError("injected envelope link failure")
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"evidence_envelope_write_failed:{exc}")
 PY
-  validate_evidence_envelope || refuse EVIDENCE_ENVELOPE_INVALID
+  if ! publish_owned_file "$temporary" "$output"; then
+    rm -f -- "$temporary"
+    return 1
+  fi
+  if [[ ${RAMSHARED_NBD_ALLOW_MANUFACTURED_PRODUCT_OFF_TEST:-} == 1 &&
+    ${RAMSHARED_NBD_TEST_EVIDENCE_ENVELOPE_FAULT:-} == validation ]]; then
+    return 1
+  fi
+  validate_evidence_envelope "$inventory_path" "$output"
 }
 
 cleanup_disk_scratch() {
@@ -1056,85 +1174,391 @@ cleanup_disk_scratch() {
   if (( SCRATCH_SWAP_ACTIVE == 1 )) && [[ $(nbd_swap_exact_count "$SWAPS_FILE" "$SCRATCH_SWAP") != 1 ]]; then
     return 1
   fi
-  nbd_cleanup_scratch "$SCRATCH_SWAP" "$SCRATCH_IDENTITY" "$SWAPS_FILE" /sbin/swapoff \
-    || return 1
+  timeout --foreground --kill-after=5s 30s bash -c 'source "$1"; nbd_cleanup_scratch "$2" "$3" "$4" /sbin/swapoff' _ \
+    "$BENCHMARK_LIB" "$SCRATCH_SWAP" "$SCRATCH_IDENTITY" "$SWAPS_FILE" || return 1
   SCRATCH_SWAP_ACTIVE=0
   SCRATCH_SWAP=""
   SCRATCH_IDENTITY=""
 }
 
-safe_product_off() {
-  local z n d ghost
-  read -r z n d ghost <<<"$(swap_used)"
-  if (( $(managed_swap_count) > 0 )) || [[ -f $PID_FILE ]]; then
-    "$CLI" down \
-      >"$ARTIFACT_DIR/down.out" 2>"$ARTIFACT_DIR/down.err" || return 1
-  fi
-  read -r z n d ghost <<<"$(swap_used)"
-  (( z == 0 && n == 0 && ghost == 0 && $(managed_swap_count) == 0 )) || return 1
-  [[ ! -f $PID_FILE ]] || return 1
+publish_owned_file() {
+  local candidate=$1 destination=$2
+  [[ -f $candidate && ! -L $candidate && ! -e $destination && ! -L $destination ]] || return 1
+  sync -f -- "$candidate" 2>/dev/null || return 1
+  ln -- "$candidate" "$destination" 2>/dev/null || return 1
+  rm -f -- "$candidate"
 }
 
-terminal_product_off_preflight() {
-  local out="$ARTIFACT_DIR/preflight-failure-terminal.txt"
-  local err="$ARTIFACT_DIR/preflight-failure-terminal.err"
-  pinned_preflight >"$out" 2>"$err" || return 1
-  awk -v version="$VERSION" -v manifest="$EXPECTED_MANIFEST_SHA256" '
-    $0 == "NBD_PRODUCT_STATE=PRODUCT_OFF" { state += 1 }
-    $0 == "NBD_BINARY_MATCH=NOT_APPLICABLE" { binary += 1 }
-    $0 == "NBD_RELEASE_VERSION=" version { release += 1 }
-    $0 == "NBD_RELEASE_MANIFEST_SHA256=" manifest { digest += 1 }
-    END { exit(state == 1 && binary == 1 && release == 1 && digest == 1 ? 0 : 1) }
-  ' "$out" || return 1
-  [[ $(nbd_exact_daemon_count "$PROC_ROOT" "$DAEMON") == 0 ]]
+inventory_matches_ownership() {
+  local path=$1 identity digest
+  [[ -f $path && ! -L $path ]] || return 1
+  identity=$(stat -c '%d:%i:%s' -- "$path" 2>/dev/null) || return 1
+  digest=$(sha256sum -- "$path" 2>/dev/null | awk '{print $1}')
+  [[ $identity == "${CUSTODY_INVENTORY_IDENTITY:-}" &&
+    $digest == "${CUSTODY_INVENTORY_SHA256:-}" ]]
+}
+
+rollback_published_inventory() {
+  local destination="$ARTIFACT_DIR/artifact-inventory.json"
+  (( ${CUSTODY_INVENTORY_PUBLISHED:-0} == 1 )) || return 0
+  if [[ ! -e $destination && ! -L $destination ]]; then
+    CUSTODY_INVENTORY_PUBLISHED=0
+    return 0
+  fi
+  inventory_matches_ownership "$destination" || return 1
+  rm -f -- "$destination" || return 1
+  CUSTODY_INVENTORY_PUBLISHED=0
+}
+
+discard_custody_candidates() {
+  local candidate
+  for candidate in "${CUSTODY_INVENTORY_CANDIDATE:-}" "${CUSTODY_ENVELOPE_CANDIDATE:-}"; do
+    [[ -n $candidate && $candidate == "$ARTIFACT_DIR"/.ramshared-custody-* ]] || continue
+    rm -f -- "$candidate" "${candidate}.tmp"
+  done
+  CUSTODY_INVENTORY_CANDIDATE=""
+  CUSTODY_ENVELOPE_CANDIDATE=""
+  CUSTODY_CANDIDATES_READY=0
+}
+
+prepare_custody_candidates() {
+  local inventory_destination="$ARTIFACT_DIR/artifact-inventory.json"
+  local envelope_destination="$ARTIFACT_DIR/evidence-envelope.json"
+  CUSTODY_INVENTORY_CANDIDATE="$ARTIFACT_DIR/.ramshared-custody-inventory-$$.json"
+  CUSTODY_ENVELOPE_CANDIDATE="$ARTIFACT_DIR/.ramshared-custody-envelope-$$.json"
+  CUSTODY_CANDIDATES_READY=0
+  [[ ! -e $inventory_destination && ! -L $inventory_destination &&
+    ! -e $envelope_destination && ! -L $envelope_destination &&
+    ! -e $CUSTODY_INVENTORY_CANDIDATE && ! -L $CUSTODY_INVENTORY_CANDIDATE &&
+    ! -e ${CUSTODY_INVENTORY_CANDIDATE}.tmp && ! -L ${CUSTODY_INVENTORY_CANDIDATE}.tmp &&
+    ! -e $CUSTODY_ENVELOPE_CANDIDATE && ! -L $CUSTODY_ENVELOPE_CANDIDATE &&
+    ! -e ${CUSTODY_ENVELOPE_CANDIDATE}.tmp && ! -L ${CUSTODY_ENVELOPE_CANDIDATE}.tmp ]] || return 1
+  write_artifact_inventory "$CUSTODY_INVENTORY_CANDIDATE" || return 1
+  write_evidence_envelope "$CUSTODY_INVENTORY_CANDIDATE" "$CUSTODY_ENVELOPE_CANDIDATE" || return 1
+  CUSTODY_CANDIDATES_READY=1
+}
+
+publish_custody_candidates() {
+  local inventory_destination="$ARTIFACT_DIR/artifact-inventory.json"
+  local envelope_destination="$ARTIFACT_DIR/evidence-envelope.json"
+  local envelope_rc=0
+  [[ $CUSTODY_CANDIDATES_READY == 1 &&
+    $CUSTODY_INVENTORY_CANDIDATE == "$ARTIFACT_DIR"/.ramshared-custody-inventory-*.json &&
+    $CUSTODY_ENVELOPE_CANDIDATE == "$ARTIFACT_DIR"/.ramshared-custody-envelope-*.json ]] || return 1
+  CUSTODY_INVENTORY_IDENTITY=$(stat -c '%d:%i:%s' -- "$CUSTODY_INVENTORY_CANDIDATE") || return 1
+  CUSTODY_INVENTORY_SHA256=$(sha256sum -- "$CUSTODY_INVENTORY_CANDIDATE" | awk '{print $1}') || return 1
+  if [[ ${RAMSHARED_NBD_ALLOW_MANUFACTURED_PRODUCT_OFF_TEST:-} == 1 &&
+    ${RAMSHARED_NBD_TEST_CUSTODY_INVENTORY_RACE:-} == publish-preexisting ]]; then
+    ( set -o noclobber; printf '%s\n' 'foreign inventory must survive' >"$inventory_destination" ) 2>/dev/null || true
+  fi
+  if ! publish_owned_file "$CUSTODY_INVENTORY_CANDIDATE" "$inventory_destination"; then
+    if inventory_matches_ownership "$inventory_destination"; then
+      CUSTODY_INVENTORY_PUBLISHED=1
+      rollback_published_inventory || true
+    fi
+    return 1
+  fi
+  CUSTODY_INVENTORY_PUBLISHED=1
+  if [[ ${RAMSHARED_NBD_ALLOW_MANUFACTURED_PRODUCT_OFF_TEST:-} == 1 &&
+    ${RAMSHARED_NBD_TEST_CUSTODY_ENVELOPE_RACE:-} == publish-preexisting ]]; then
+    ( set -o noclobber; printf '%s\n' 'foreign envelope must survive' >"$envelope_destination" ) 2>/dev/null || true
+  fi
+  if [[ ${RAMSHARED_NBD_ALLOW_MANUFACTURED_PRODUCT_OFF_TEST:-} == 1 &&
+    ${RAMSHARED_NBD_TEST_CUSTODY_ENVELOPE_FAULT:-} == fail ]]; then
+    envelope_rc=1
+  else
+    publish_owned_file "$CUSTODY_ENVELOPE_CANDIDATE" "$envelope_destination" || envelope_rc=$?
+  fi
+  if (( envelope_rc != 0 )); then
+    rollback_published_inventory || return 1
+    return 1
+  fi
+  # The envelope link is the sole commit marker; cleanup is no longer allowed
+  # to append a receipt or remove either committed artifact.
+  CUSTODY_FRONTIER=1
+  CUSTODY_INVENTORY_CANDIDATE=""
+  CUSTODY_ENVELOPE_CANDIDATE=""
+  CUSTODY_CANDIDATES_READY=0
+}
+
+publish_preflight_output() {
+  local phase=$1 number=$2 content=$3 candidate destination
+  candidate="$ARTIFACT_DIR/.${phase}-preflight-${number}.$$.tmp"
+  destination="$ARTIFACT_DIR/${phase}-preflight-${number}.txt"
+  [[ ! -e $candidate && ! -L $candidate && ! -e $destination && ! -L $destination ]] || return 1
+  ( set -o noclobber; printf '%s\n' "$content" >"$candidate" ) || return 1
+  publish_owned_file "$candidate" "$destination" || return 1
+  if [[ $phase == initial && $number == 1 ]]; then
+    [[ ! -e $ARTIFACT_DIR/preflight-off.txt && ! -L $ARTIFACT_DIR/preflight-off.txt ]] || return 1
+    ln -- "$destination" "$ARTIFACT_DIR/preflight-off.txt" 2>/dev/null || return 1
+  fi
+}
+
+exact_product_off() {
+  local output line key value expected_vram_bytes expected_margin expected_required_bytes
+  local lower_free_bytes lower_required_bytes
+  local -A seen=()
+  local -a required_keys=(
+    NBD_RELEASE_VERSION
+    NBD_RELEASE_SOURCE_COMMIT
+    NBD_RELEASE_MANIFEST_SHA256
+    NBD_INPUT_BUNDLE_MANIFEST_SHA256
+    NBD_INSTALL_PROVENANCE
+    NBD_RELEASE_GATE
+    NBD_SELECTOR
+    NBD_LOWER_FREE_BYTES
+    NBD_LOWER_REQUIRED_BYTES
+    NBD_LOWER_TIER_TYPE
+    NBD_LOWER_TIER_IDENTITY_SHA256
+    NBD_LOWER_TIER_BINDING
+    NBD_LOWER_TIER_CAPACITY
+    NBD_RELAY_GATE
+    NBD_BINARY_MATCH
+    NBD_UBLK_MODULE
+    NBD_TRANSPORT
+    NBD_PRODUCT_STATE
+    NBD_READINESS_REASON
+  )
+  output=$(cat)
+  while IFS= read -r line; do
+    [[ $line =~ ^(NBD_[A-Z0-9_]+)=(.*)$ ]] || return 1
+    key=${BASH_REMATCH[1]}
+    value=${BASH_REMATCH[2]}
+    case $key in
+      NBD_RELEASE_VERSION|NBD_RELEASE_SOURCE_COMMIT|NBD_RELEASE_MANIFEST_SHA256|\
+      NBD_INPUT_BUNDLE_MANIFEST_SHA256|NBD_INSTALL_PROVENANCE|NBD_RELEASE_GATE|\
+      NBD_SELECTOR|NBD_LOWER_FREE_BYTES|NBD_LOWER_REQUIRED_BYTES|NBD_LOWER_TIER_TYPE|\
+      NBD_LOWER_TIER_IDENTITY_SHA256|NBD_LOWER_TIER_BINDING|NBD_LOWER_TIER_CAPACITY|\
+      NBD_RELAY_GATE|NBD_BINARY_MATCH|NBD_UBLK_MODULE|NBD_TRANSPORT|\
+      NBD_PRODUCT_STATE|NBD_READINESS_REASON) ;;
+      *) return 1 ;;
+    esac
+    [[ -z ${seen[$key]+present} ]] || return 1
+    seen[$key]=$value
+  done <<<"$output"
+  for key in "${required_keys[@]}"; do
+    [[ -n ${seen[$key]+present} ]] || return 1
+  done
+  [[ ${#seen[@]} == ${#required_keys[@]} ]] || return 1
+  [[ $TIER_MIB =~ ^(1024|2048|4096)$ ]] || return 1
+  [[ $EXPECTED_INPUT_BUNDLE_MANIFEST_SHA256 =~ ^[0-9a-f]{64}$ &&
+    $LOWER_SINK_IDENTITY_SHA256 =~ ^[0-9a-f]{64}$ ]] || return 1
+  [[ ${seen[NBD_RELEASE_VERSION]} == "$VERSION" &&
+    ${seen[NBD_RELEASE_SOURCE_COMMIT]} == "$EXPECTED_SOURCE_COMMIT" &&
+    ${seen[NBD_RELEASE_MANIFEST_SHA256]} == "$EXPECTED_MANIFEST_SHA256" &&
+    ${seen[NBD_INPUT_BUNDLE_MANIFEST_SHA256]} == "$EXPECTED_INPUT_BUNDLE_MANIFEST_SHA256" &&
+    ${seen[NBD_INSTALL_PROVENANCE]} == PASS &&
+    ${seen[NBD_RELEASE_GATE]} == PASS &&
+    ${seen[NBD_SELECTOR]} == PASS &&
+    ${seen[NBD_LOWER_TIER_TYPE]} == directory &&
+    ${seen[NBD_LOWER_TIER_IDENTITY_SHA256]} == "$LOWER_SINK_IDENTITY_SHA256" &&
+    ${seen[NBD_LOWER_TIER_BINDING]} == bound &&
+    ${seen[NBD_LOWER_TIER_CAPACITY]} == PASS &&
+    ${seen[NBD_RELAY_GATE]} == PASS &&
+    ${seen[NBD_BINARY_MATCH]} == NOT_APPLICABLE &&
+    ${seen[NBD_TRANSPORT]} == none &&
+    ${seen[NBD_PRODUCT_STATE]} == PRODUCT_OFF &&
+    ${seen[NBD_READINESS_REASON]} == product_off ]] || return 1
+  case ${seen[NBD_UBLK_MODULE]} in
+    ABSENT|LOADED_INERT) ;;
+    *) return 1 ;;
+  esac
+  [[ ${seen[NBD_LOWER_FREE_BYTES]} =~ ^[0-9]{1,16}$ &&
+    ${seen[NBD_LOWER_REQUIRED_BYTES]} =~ ^[0-9]{1,16}$ ]] || return 1
+  expected_vram_bytes=$((10#$TIER_MIB * 1024 * 1024))
+  expected_margin=$(((expected_vram_bytes + 9) / 10))
+  (( expected_margin >= 512 * 1024 * 1024 )) || expected_margin=$((512 * 1024 * 1024))
+  expected_required_bytes=$((expected_vram_bytes + expected_margin))
+  lower_free_bytes=$((10#${seen[NBD_LOWER_FREE_BYTES]}))
+  lower_required_bytes=$((10#${seen[NBD_LOWER_REQUIRED_BYTES]}))
+  (( lower_required_bytes == expected_required_bytes && lower_free_bytes >= lower_required_bytes ))
+}
+
+product_off_epoch() {
+  local phase=$1 candidate_out candidate_err destination_out destination_err first second rc=0 down_rc=0 state
+  [[ $phase == initial || $phase == final || $phase == failure ]] || return 1
+  if [[ $phase == initial ]]; then state=$INITIAL_EPOCH_STATE; else state=$FINAL_EPOCH_STATE; fi
+  [[ $state == completed ]] && return 0
+  [[ $state == unattempted ]] || return 1
+  if [[ $phase == initial ]]; then INITIAL_EPOCH_STATE=attempted; else FINAL_EPOCH_STATE=attempted; fi
+  candidate_out="$ARTIFACT_DIR/.${phase}-down.out.$$.tmp"
+  candidate_err="$ARTIFACT_DIR/.${phase}-down.err.$$.tmp"
+  destination_out="$ARTIFACT_DIR/${phase}-down.out"
+  destination_err="$ARTIFACT_DIR/${phase}-down.err"
+  if [[ $PRODUCT_OFF_PHASES != *" $phase "* ]]; then
+    [[ ! -e $candidate_out && ! -L $candidate_out && ! -e $candidate_err && ! -L $candidate_err ]] || return 1
+    ( set -o noclobber; : >"$candidate_out"; : >"$candidate_err" ) || return 1
+    timeout --foreground --kill-after=5s 30s "$CLI" down >"$candidate_out" 2>"$candidate_err" || down_rc=$?
+    publish_owned_file "$candidate_out" "$destination_out" || return 1
+    publish_owned_file "$candidate_err" "$destination_err" || return 1
+    PRODUCT_OFF_PHASES+=" $phase "
+    if (( down_rc != 0 )); then
+      if [[ $phase == initial ]]; then INITIAL_EPOCH_STATE=failed; else FINAL_EPOCH_STATE=failed; fi
+      return 1
+    fi
+  fi
+  first=$(timeout --foreground --kill-after=5s "${PREFLIGHT_TIMEOUT_SEC}s" env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin "RAMSHARED_NBD_VRAM_MIB=$TIER_MIB" "$PREFLIGHT" --check --sealed-release-root "$RELEASE" \
+    --release-version "$VERSION" --expected-source-commit "$EXPECTED_SOURCE_COMMIT" \
+    --expected-manifest-sha256 "$EXPECTED_MANIFEST_SHA256" 2>&1) || rc=1
+  second=$(timeout --foreground --kill-after=5s "${PREFLIGHT_TIMEOUT_SEC}s" env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin "RAMSHARED_NBD_VRAM_MIB=$TIER_MIB" "$PREFLIGHT" --check --sealed-release-root "$RELEASE" \
+    --release-version "$VERSION" --expected-source-commit "$EXPECTED_SOURCE_COMMIT" \
+    --expected-manifest-sha256 "$EXPECTED_MANIFEST_SHA256" 2>&1) || rc=1
+  exact_product_off <<<"$first" && exact_product_off <<<"$second" || rc=1
+  publish_preflight_output "$phase" 1 "$first" || return 1
+  publish_preflight_output "$phase" 2 "$second" || return 1
+  local receipt_rc=0
+  python3 - "$ARTIFACT_DIR/.${phase}-product-off.$$.tmp" "$ARTIFACT_DIR/${phase}-product-off.json" "$phase" "$rc" <<'PY' || receipt_rc=$?
+import json, os, sys
+tmp, out, phase, rc = sys.argv[1:]
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+try:
+    fault = os.environ.get("RAMSHARED_NBD_TEST_PRODUCT_OFF_RECEIPT_FAULT", "") if os.environ.get("RAMSHARED_NBD_ALLOW_MANUFACTURED_PRODUCT_OFF_TEST") == "1" else ""
+    if fault == "dump": raise OSError("injected dump failure")
+    with os.fdopen(fd, "w", encoding="utf-8") as target:
+        json.dump({"schema":"ramshared-nbd-product-off/v1","phase":phase,"preflight_count":2,"preflight_budget_sec":30,"status":"PASS" if rc == "0" else "FAIL"}, target, sort_keys=True, separators=(",",":"))
+        target.write("\n"); target.flush()
+        if fault == "fsync": raise OSError("injected fsync failure")
+        os.fsync(target.fileno())
+    if fault == "link": raise OSError("injected link failure")
+    if os.environ.get("RAMSHARED_NBD_TEST_PRODUCT_OFF_RECEIPT_RACE") == "publish-preexisting" and os.environ.get("RAMSHARED_NBD_ALLOW_MANUFACTURED_PRODUCT_OFF_TEST") == "1":
+        race_fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(race_fd, b"concurrent receipt bytes must survive exactly")
+            os.fsync(race_fd)
+        finally:
+            os.close(race_fd)
+    os.link(tmp, out)
+finally:
+    try: os.unlink(tmp)
+    except FileNotFoundError: pass
+PY
+  if (( receipt_rc != 0 )); then
+    if [[ $phase == initial ]]; then INITIAL_EPOCH_STATE=failed; else FINAL_EPOCH_STATE=failed; fi
+    return 1
+  fi
+  if (( rc == 0 )); then
+    if [[ $phase == initial ]]; then INITIAL_EPOCH_STATE=completed; else FINAL_EPOCH_STATE=completed; fi
+    return 0
+  fi
+  if [[ $phase == initial ]]; then INITIAL_EPOCH_STATE=failed; else FINAL_EPOCH_STATE=failed; fi
+  return 1
+}
+
+worker_is_live() {
+  local pid=$1 state
+  if [[ ${RAMSHARED_NBD_ALLOW_MANUFACTURED_PRODUCT_OFF_TEST:-} == 1 &&
+    ${RAMSHARED_NBD_TEST_WORKER_LIVENESS:-} == always-live ]]; then
+    return 0
+  fi
+  kill -0 "$pid" 2>/dev/null || return 1
+  if [[ -r /proc/$pid/stat ]]; then
+    state=$(awk '{print $3}' "/proc/$pid/stat" 2>/dev/null || true)
+    [[ $state != Z ]] || return 1
+  fi
+  return 0
+}
+
+stop_worker_bounded() {
+  local pid=$1 term_deadline kill_deadline forced_stop=0
+  [[ $pid =~ ^[1-9][0-9]*$ ]] || return 1
+  if worker_is_live "$pid"; then
+    kill -TERM "$pid" 2>/dev/null || true
+    term_deadline=$((SECONDS + WORKER_TERM_GRACE_SEC))
+    while worker_is_live "$pid" && (( SECONDS < term_deadline )); do sleep 0.1; done
+  fi
+  if worker_is_live "$pid"; then
+    forced_stop=1
+    kill -KILL "$pid" 2>/dev/null || true
+    kill_deadline=$((SECONDS + WORKER_KILL_GRACE_SEC))
+    while worker_is_live "$pid" && (( SECONDS < kill_deadline )); do sleep 0.1; done
+  fi
+  worker_is_live "$pid" && return 1
+  # A child which is absent or zombie cannot make this reap wait block.
+  # Waiting still preserves its exit status and prevents zombie accumulation.
+  if ! wait "$pid" 2>/dev/null; then
+    return 1
+  fi
+  (( forced_stop == 0 ))
+}
+
+cleanup_cgroup() {
+  [[ -d $CG ]] || return 0
+  rmdir "$CG" 2>/dev/null
+}
+
+write_terminal_after() {
+  {
+    printf 'NBD_PRODUCT_STATE=PRODUCT_OFF\n'
+    printf 'NBD_TRANSPORT=none\n'
+    printf 'NBD_BINARY_MATCH=%s\n' "$ACTION_BINARY_MATCH"
+  } >"$ARTIFACT_DIR/after.txt"
 }
 
 cleanup() {
-  local rc=$? terminal_preflight_ok=0 daemon_count=-1
-  trap - EXIT INT TERM
-  if [[ -n $WORKER_PID ]] && kill -0 "$WORKER_PID" 2>/dev/null; then
-    kill -TERM "$WORKER_PID" 2>/dev/null || true
-    wait "$WORKER_PID" 2>/dev/null || true
+  local rc=$?
+  # Preserve the first exit status while a second signal cannot interrupt the
+  # only cleanup epoch between worker reaping and terminal PRODUCT_OFF proof.
+  trap '' INT TERM
+  trap - EXIT
+  if [[ ${CUSTODY_FRONTIER:-0} == 0 ]]; then
+    rollback_published_inventory || { CLEANUP_OK=0; (( rc == 0 )) && rc=1; }
+    discard_custody_candidates || { CLEANUP_OK=0; (( rc == 0 )) && rc=1; }
   fi
-  if [[ -d $CG ]]; then
-    rmdir "$CG" 2>/dev/null || { CLEANUP_OK=0; rc=1; }
+  if [[ -n $WORKER_PID ]]; then
+    if ! stop_worker_bounded "$WORKER_PID"; then
+      CLEANUP_OK=0
+      (( rc == 0 )) && rc=1
+    fi
+    WORKER_PID=""
   fi
+  cleanup_cgroup || { CLEANUP_OK=0; (( rc == 0 )) && rc=1; }
   if ! cleanup_disk_scratch; then
     CLEANUP_OK=0
     printf 'NBD_BENCHMARK_STATE=RED\nNBD_BENCHMARK_REASON=scratch_cleanup_failed\n' >&2
-    rc=1
+    (( rc == 0 )) && rc=1
   fi
-  if ! safe_product_off; then
+  if ! product_off_epoch final; then
     CLEANUP_OK=0
     printf 'NBD_BENCHMARK_STATE=RED\nNBD_BENCHMARK_REASON=terminal_product_off_failed\n' >&2
-    rc=1
+    (( rc == 0 )) && rc=1
   fi
-  if (( rc != 0 && CLEANUP_OK == 1 )); then
-    if terminal_product_off_preflight; then
-      terminal_preflight_ok=1
-      daemon_count=$(nbd_exact_daemon_count "$PROC_ROOT" "$DAEMON")
-    else
-      CLEANUP_OK=0
-      printf 'NBD_BENCHMARK_STATE=RED\nNBD_BENCHMARK_REASON=terminal_preflight_failed\n' >&2
-    fi
-  fi
-  if nbd_failure_receipt_allowed "$rc" "$CLEANUP_OK" PRODUCT_OFF \
-    "$terminal_preflight_ok" "$daemon_count"; then
+  if nbd_failure_receipt_allowed "$rc" "$CLEANUP_OK" PRODUCT_OFF 1 0; then
     nbd_write_failure_receipt "$ARTIFACT_DIR/failure-receipt.json" PRODUCT_OFF \
       "$FAILURE_REASON" "$VERSION" "$PAIR_ID" "$MODE" "$CONDITION" "$TIER_MIB" || {
       CLEANUP_OK=0
       printf 'NBD_BENCHMARK_STATE=RED\nNBD_BENCHMARK_REASON=failure_receipt_write_failed\n' >&2
-      rc=1
+      (( rc == 0 )) && rc=1
     }
   fi
   exit "$rc"
 }
-trap cleanup EXIT INT TERM
 
-safe_product_off || refuse INITIAL_PRODUCT_OFF_FAILED
-pinned_preflight >"$ARTIFACT_DIR/preflight-off.txt"
-grep -q '^NBD_PRODUCT_STATE=PRODUCT_OFF$' "$ARTIFACT_DIR/preflight-off.txt" || refuse PRODUCT_OFF_NOT_PROVEN
+finish_success() {
+  cleanup_disk_scratch || refuse FINAL_SCRATCH_OFF_FAILED
+  product_off_epoch final || refuse FINAL_PRODUCT_OFF_FAILED
+  write_terminal_after
+  cleanup_cgroup || refuse FINAL_CGROUP_CLEANUP_FAILED
+  aggregate_samples
+  prepare_custody_candidates || refuse EVIDENCE_CUSTODY_PREPARE_FAILED
+  # Both candidates are validated but unpublished. The envelope publication
+  # sets the frontier; handled publication failures stay under cleanup.
+  publish_custody_candidates || refuse EVIDENCE_CUSTODY_PUBLISH_FAILED
+  trap - EXIT INT TERM
+  printf 'NBD_BENCHMARK_MATRIX=PASS\n'
+}
+
+on_interrupt() {
+  exit 130
+}
+on_term() {
+  exit 143
+}
+trap cleanup EXIT
+trap on_interrupt INT
+trap on_term TERM
+
 load_bound_lower_sink
+product_off_epoch initial || refuse INITIAL_PRODUCT_OFF_FAILED
 cp -- "$ARTIFACT_DIR/preflight-off.txt" "$ARTIFACT_DIR/before.txt"
 python3 - "$ARTIFACT_DIR/action.txt" "$MODE" "$CONDITION" "$TIER_MIB" "$VERSION" "$PAIR_ID" \
   "$SAMPLE_TIMEOUT_SEC" "$CELL_SETUP_CLEANUP_TIMEOUT_SEC" "$CELL_OUTER_TIMEOUT_SEC" <<'PY'
@@ -1247,8 +1671,7 @@ PY
     (( ghost > ghost_seen )) && ghost_seen=$ghost
     sleep 0.1
   done
-  kill -TERM "$WORKER_PID"
-  wait "$WORKER_PID" || refuse SAMPLE_INTEGRITY_PROCESS_FAILED
+  stop_worker_bounded "$WORKER_PID" || refuse SAMPLE_INTEGRITY_PROCESS_FAILED
   WORKER_PID=""
   checksum_match=$(python3 - "$result" "$ALLOCATE_MIB" <<'PY'
 import json, sys
@@ -1318,14 +1741,4 @@ PY
   fi
 done
 
-cleanup_disk_scratch || refuse FINAL_SCRATCH_OFF_FAILED
-safe_product_off || refuse FINAL_PRODUCT_OFF_FAILED
-{
-  printf 'NBD_PRODUCT_STATE=PRODUCT_OFF\n'
-  printf 'NBD_TRANSPORT=none\n'
-  printf 'NBD_BINARY_MATCH=%s\n' "$ACTION_BINARY_MATCH"
-} >"$ARTIFACT_DIR/after.txt"
-aggregate_samples
-write_artifact_inventory
-write_evidence_envelope
-printf 'NBD_BENCHMARK_MATRIX=PASS\n'
+finish_success

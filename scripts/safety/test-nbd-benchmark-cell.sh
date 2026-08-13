@@ -712,7 +712,12 @@ done
 grep -Fq 'PRODUCT_OFF' "$CELL"
 grep -Fq 'BINARY_MATCH' "$CELL"
 grep -Fq 'BASELINE_REPUBLICATION_FAILED' "$CELL"
-grep -Fq 'managed_swap_count' "$CELL"
+! grep -Fq 'managed_swap_count' "$CELL" || {
+  echo 'FAIL cell retained a second managed-swap PRODUCT_OFF parser' >&2
+  exit 1
+}
+grep -Fq 'product_off_epoch' "$CELL"
+grep -Fq 'PREFLIGHT_TIMEOUT_SEC=15' "$CELL"
 grep -Fq 'O_CREAT | os.O_EXCL | os.O_NOFOLLOW' "$CELL"
 grep -Fq 'SCRATCH_IDENTITY' "$CELL"
 grep -Fq '"$swapoff_command" -- "$path"' "$BENCHMARK_LIB"
@@ -1242,10 +1247,10 @@ PY
 
 test_failure_receipt_terminal_preflight_and_orphan_daemon() {
   local orphan_root orphan_count orphan_receipt preflight_line receipt_gate_line
-  preflight_line=$(grep -nF 'terminal_product_off_preflight' "$CELL" | head -n1 | cut -d: -f1 || true)
+  preflight_line=$(grep -nF 'product_off_epoch final' "$CELL" | head -n1 | cut -d: -f1 || true)
   receipt_gate_line=$(grep -nF 'nbd_failure_receipt_allowed "$rc"' "$CELL" | head -n1 | cut -d: -f1 || true)
   [[ -n $preflight_line && -n $receipt_gate_line && $preflight_line -lt $receipt_gate_line ]] || {
-    echo 'FAIL failure receipt gate does not require terminal pinned preflight first' >&2
+    echo 'FAIL failure receipt gate does not require terminal epoch first' >&2
     exit 1
   }
   grep -Fq 'NBD_PRODUCT_STATE=PRODUCT_OFF' "$CELL" || {
@@ -1278,4 +1283,1148 @@ test_failure_receipt_terminal_preflight_and_orphan_daemon() {
 
 test_failure_receipt_contract
 test_failure_receipt_terminal_preflight_and_orphan_daemon
+
+test_production_signal_handlers_bound_worker_and_down_once() {
+  local root fn library rc count
+  for fn in on_term on_interrupt; do
+    root="$TMP/signal-$fn"
+    mkdir -p "$root/artifacts"
+    library="$root/production-functions.sh"
+    for name in publish_owned_file inventory_matches_ownership rollback_published_inventory publish_preflight_output exact_product_off product_off_epoch worker_is_live stop_worker_bounded cleanup_cgroup discard_custody_candidates cleanup "$fn"; do
+      awk -v name="$name" '$0 ~ "^" name "\\(\\)[[:space:]]*\\{" { on=1 } on { print } on && /^}$/ { exit }' "$CELL" >>"$library"
+    done
+    cat >"$root/down" <<'EOF'
+#!/usr/bin/env bash
+trap '' TERM
+printf '%s\n' "$1" >>"${SIGNAL_DOWN_LOG:?}"
+sleep 1
+EOF
+    cat >"$root/preflight" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' \
+  NBD_RELEASE_VERSION=v1 NBD_RELEASE_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  NBD_RELEASE_MANIFEST_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  NBD_INPUT_BUNDLE_MANIFEST_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
+  NBD_INSTALL_PROVENANCE=PASS NBD_RELEASE_GATE=PASS NBD_SELECTOR=PASS \
+  NBD_LOWER_FREE_BYTES=17179869184 NBD_LOWER_REQUIRED_BYTES=1610612736 \
+  NBD_LOWER_TIER_TYPE=directory \
+  NBD_LOWER_TIER_IDENTITY_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd \
+  NBD_LOWER_TIER_BINDING=bound NBD_LOWER_TIER_CAPACITY=PASS NBD_RELAY_GATE=PASS \
+  NBD_BINARY_MATCH=NOT_APPLICABLE NBD_UBLK_MODULE=ABSENT NBD_TRANSPORT=none \
+  NBD_PRODUCT_STATE=PRODUCT_OFF NBD_READINESS_REASON=product_off
+EOF
+    chmod 0700 "$root/down" "$root/preflight"
+    set +e
+    (
+      set -euo pipefail
+      source "$library"
+      ARTIFACT_DIR="$root/artifacts"; CLI="$root/down"; PREFLIGHT="$root/preflight"
+      SIGNAL_DOWN_LOG="$root/down.log"; export SIGNAL_DOWN_LOG
+      RELEASE="$root/release"; VERSION=v1; TIER_MIB=1024
+      EXPECTED_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      EXPECTED_MANIFEST_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      EXPECTED_INPUT_BUNDLE_MANIFEST_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      LOWER_SINK_IDENTITY_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      PREFLIGHT_TIMEOUT_SEC=15; PRODUCT_OFF_PHASES=''; WORKER_PID=''; CG="$root/no-cg"
+      WORKER_TERM_GRACE_SEC=1; WORKER_KILL_GRACE_SEC=1
+      INITIAL_EPOCH_STATE=unattempted; FINAL_EPOCH_STATE=unattempted
+      SCRATCH_SWAP=''; SCRATCH_SWAP_ACTIVE=0; CLEANUP_OK=1; FAILURE_REASON=signal
+      cleanup_disk_scratch() { return 0; }
+      nbd_failure_receipt_allowed() { return 1; }
+      worker() { trap '' TERM; while :; do sleep 1; done; }
+      worker & WORKER_PID=$!
+      trap cleanup EXIT
+      trap "$fn" "$([[ $fn == on_term ]] && echo TERM || echo INT)"
+      kill -"$([[ $fn == on_term ]] && echo TERM || echo INT)" "$BASHPID"
+      sleep 10
+    ) 2>"$TMP/$fn.stderr"
+    rc=$?
+    set -e
+    [[ $rc == $([[ $fn == on_term ]] && echo 143 || echo 130) ]] || {
+      printf 'FAIL production_signal_handler_status_%s rc=%s stderr=%s receipt=%s exact=%s\n' "$fn" "$rc" "$(<"$TMP/$fn.stderr")" "$(<"$root/artifacts/final-product-off.json")" "$(awk -v source=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -v manifest=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb '$0 == "NBD_RELEASE_SOURCE_COMMIT=" source { a++ } $0 == "NBD_RELEASE_MANIFEST_SHA256=" manifest { b++ } END { print a ":" b }' "$root/artifacts/final-preflight-1.txt")" >&2; exit 1; }
+    count=$(wc -l <"$root/down.log")
+    [[ $count == 1 && $(<"$root/down.log") == down ]] || {
+      printf 'FAIL production_signal_handler_down_once_%s count=%s\n' "$fn" "$count" >&2; exit 1; }
+    [[ -f $root/artifacts/final-product-off.json && -f $root/artifacts/final-preflight-1.txt \
+      && -f $root/artifacts/final-preflight-2.txt && ! -e $root/artifacts/summary.json \
+      && ! -e $root/artifacts/evidence-envelope.json ]] || {
+      printf 'FAIL production_signal_handler_receipts_%s\n' "$fn" >&2; exit 1; }
+  done
+  pass production_signal_handlers_preserve_status_bound_owned_children_and_do_not_promote
+}
+
+test_production_signal_handlers_bound_worker_and_down_once
+
+make_product_off_function_fixture() {
+  local root=$1 name library
+  mkdir -p "$root/artifacts"
+  library="$root/functions.sh"
+  for name in publish_owned_file inventory_matches_ownership rollback_published_inventory publish_preflight_output exact_product_off product_off_epoch worker_is_live stop_worker_bounded cleanup_cgroup discard_custody_candidates cleanup; do
+    awk -v name="$name" '$0 ~ "^" name "\\(\\)[[:space:]]*\\{" { on=1 } on { print } on && /^}$/ { exit }' "$CELL" >>"$library"
+  done
+  cat >"$root/down" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' down >"${DOWN_LOG:?}"
+if [[ ${DOWN_BEHAVIOR:-} == fail ]]; then
+  exit 17
+fi
+EOF
+  cat >"$root/preflight" <<'EOF'
+#!/usr/bin/env bash
+fixture_root=$(cd -- "$(dirname -- "$0")" && pwd)
+counter=${PREFLIGHT_COUNTER:-"$fixture_root/count"}
+behavior=${PREFLIGHT_BEHAVIOR:-}
+[[ -f $fixture_root/preflight.behavior ]] && behavior=$(<"$fixture_root/preflight.behavior")
+calls=0
+[[ -f $counter ]] && calls=$(<"$counter")
+printf '%s\n' "$((calls + 1))" >"$counter"
+if [[ $behavior == timeout ]]; then sleep 3; fi
+state=PRODUCT_OFF
+[[ $behavior == tamper ]] && state=PRODUCT_ON
+  printf '%s\n' \
+    NBD_RELEASE_VERSION=v1 \
+    NBD_RELEASE_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    NBD_RELEASE_MANIFEST_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+    NBD_INPUT_BUNDLE_MANIFEST_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
+    NBD_INSTALL_PROVENANCE=PASS \
+    NBD_RELEASE_GATE=PASS \
+    NBD_SELECTOR=PASS \
+    NBD_LOWER_FREE_BYTES=17179869184 \
+    NBD_LOWER_REQUIRED_BYTES=1610612736 \
+    NBD_LOWER_TIER_TYPE=directory \
+    NBD_LOWER_TIER_IDENTITY_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd \
+    NBD_LOWER_TIER_BINDING=bound \
+    NBD_LOWER_TIER_CAPACITY=PASS \
+    NBD_RELAY_GATE=PASS \
+    NBD_BINARY_MATCH=NOT_APPLICABLE \
+    NBD_UBLK_MODULE=ABSENT \
+    NBD_TRANSPORT=none \
+    NBD_PRODUCT_STATE=$state \
+    NBD_READINESS_REASON=product_off
+EOF
+  chmod 0700 "$root/down" "$root/preflight"
+}
+
+run_product_off_function() {
+  local root=$1 fault=${2:-} destination_kind=${3:-}
+  local destination="$root/artifacts/final-product-off.json" rc
+  case $destination_kind in
+    symlink) printf 'symlink target\n' >"$root/target"; ln -s ../target "$destination" ;;
+    fifo) mkfifo "$destination" ;;
+    preexisting) printf 'preexisting receipt\n' >"$destination" ;;
+    '') ;;
+    *) return 1 ;;
+  esac
+  set +e
+  (
+    set -euo pipefail
+    source "$root/functions.sh"
+    ARTIFACT_DIR="$root/artifacts"; CLI="$root/down"; PREFLIGHT="$root/preflight"; RELEASE="$root/release"; VERSION=v1; TIER_MIB=1024
+    EXPECTED_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; EXPECTED_MANIFEST_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    EXPECTED_INPUT_BUNDLE_MANIFEST_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    LOWER_SINK_IDENTITY_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    PREFLIGHT_TIMEOUT_SEC=1; PRODUCT_OFF_PHASES=''; FINAL_EPOCH_STATE=unattempted; INITIAL_EPOCH_STATE=unattempted; DOWN_LOG="$root/down.log"; PREFLIGHT_COUNTER="$root/count"
+    export DOWN_LOG PREFLIGHT_COUNTER
+    if [[ -n $fault ]]; then
+      export RAMSHARED_NBD_ALLOW_MANUFACTURED_PRODUCT_OFF_TEST=1
+      export RAMSHARED_NBD_TEST_PRODUCT_OFF_RECEIPT_FAULT=$fault
+    fi
+    product_off_epoch final
+  )
+  rc=$?
+  set -e
+  return "$rc"
+}
+
+test_product_off_receipt_faults_and_destinations_are_bounded() {
+  local root fault destination
+  for fault in dump fsync link; do
+    root="$TMP/product-off-fault-$fault"
+    make_product_off_function_fixture "$root"
+    if run_product_off_function "$root" "$fault"; then
+      printf 'FAIL product-off receipt fault %s unexpectedly passed\n' "$fault" >&2
+      exit 1
+    fi
+    [[ ! -e $root/artifacts/final-product-off.json && ! -L $root/artifacts/final-product-off.json &&
+      ! -e $root/artifacts/.final-product-off.*.tmp && $(<"$root/count") == 2 ]] || exit 1
+  done
+  for destination in symlink fifo preexisting; do
+    root="$TMP/product-off-destination-$destination"
+    make_product_off_function_fixture "$root"
+    run_product_off_function "$root" '' "$destination" && exit 1 || true
+    case $destination in
+      symlink) [[ -L $root/artifacts/final-product-off.json ]] &&
+        [[ $(<"$root/target") == 'symlink target' ]] ;;
+      fifo) [[ -p $root/artifacts/final-product-off.json ]] ;;
+      preexisting) [[ $(<"$root/artifacts/final-product-off.json") == 'preexisting receipt' ]] ;;
+    esac || exit 1
+    ! compgen -G "$root/artifacts/.final-product-off.*.tmp" >/dev/null || exit 1
+  done
+  root="$TMP/product-off-concurrent"
+  make_product_off_function_fixture "$root"
+  RAMSHARED_NBD_ALLOW_MANUFACTURED_PRODUCT_OFF_TEST=1 \
+    RAMSHARED_NBD_TEST_PRODUCT_OFF_RECEIPT_RACE=publish-preexisting \
+    run_product_off_function "$root" && exit 1 || true
+  [[ $(<"$root/artifacts/final-product-off.json") == 'concurrent receipt bytes must survive exactly' ]] || exit 1
+  ! compgen -G "$root/artifacts/.final-product-off.*.tmp" >/dev/null || exit 1
+  pass product_off_receipt_faults_and_destinations_are_bounded
+}
+
+test_terminal_signal_cleanup_preserves_status_and_epoch_budget() {
+  local root signal behavior expected rc count status
+  for signal in TERM INT; do
+    expected=$([[ $signal == TERM ]] && echo 143 || echo 130)
+    for behavior in tamper timeout; do
+      root="$TMP/terminal-$signal-$behavior"
+      make_product_off_function_fixture "$root"
+      set +e
+      (
+        set -euo pipefail
+        source "$root/functions.sh"
+        ARTIFACT_DIR="$root/artifacts"; CLI="$root/down"; PREFLIGHT="$root/preflight"; RELEASE="$root/release"; VERSION=v1; TIER_MIB=1024
+        EXPECTED_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; EXPECTED_MANIFEST_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        EXPECTED_INPUT_BUNDLE_MANIFEST_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+        LOWER_SINK_IDENTITY_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+        PREFLIGHT_TIMEOUT_SEC=1; PRODUCT_OFF_PHASES=''; FINAL_EPOCH_STATE=unattempted; INITIAL_EPOCH_STATE=unattempted; DOWN_LOG="$root/down.log"; PREFLIGHT_COUNTER="$root/count"; CG="$root/no-cg"; WORKER_PID=''; CLEANUP_OK=1; FAILURE_REASON=signal
+        export DOWN_LOG PREFLIGHT_COUNTER PREFLIGHT_BEHAVIOR
+        PREFLIGHT_BEHAVIOR=$behavior
+        printf "%s\n" "$behavior" >"$root/preflight.behavior"
+        cleanup_disk_scratch() { return 0; }
+        nbd_failure_receipt_allowed() { return 1; }
+        trap cleanup EXIT
+        trap '[[ $signal == TERM ]] && exit 143 || exit 130' "$signal"
+        kill -"$signal" "$BASHPID"
+        sleep 10
+      ) >/dev/null 2>"$root/stderr"
+      rc=$?
+      set -e
+      [[ $rc == "$expected" ]] || exit 1
+      count=$(<"$root/count")
+      [[ $count == 2 ]] || exit 1
+      status=$(python3 - "$root/artifacts/final-product-off.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as source:
+    print(json.load(source)['status'])
+PY
+)
+      [[ $status == FAIL && ! -e $root/artifacts/summary.json &&
+        ! -e $root/artifacts/evidence-envelope.json ]] || exit 1
+      ! compgen -G "$root/artifacts/.final-product-off.*.tmp" >/dev/null || exit 1
+    done
+  done
+  pass terminal_signal_cleanup_preserves_status_and_epoch_budget
+}
+
+test_product_off_authority_is_unique_and_allowlisted() {
+  local library fixture mutation mutated key rc
+  library="$TMP/exact-product-off-functions.sh"
+  awk '/^exact_product_off\(\)/,/^}/ { print }' "$CELL" >"$library"
+  fixture=$(cat <<'EOF'
+NBD_RELEASE_VERSION=v1
+NBD_RELEASE_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+NBD_RELEASE_MANIFEST_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+NBD_INPUT_BUNDLE_MANIFEST_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+NBD_INSTALL_PROVENANCE=PASS
+NBD_RELEASE_GATE=PASS
+NBD_SELECTOR=PASS
+NBD_LOWER_FREE_BYTES=17179869184
+NBD_LOWER_REQUIRED_BYTES=1610612736
+NBD_LOWER_TIER_TYPE=directory
+NBD_LOWER_TIER_IDENTITY_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+NBD_LOWER_TIER_BINDING=bound
+NBD_LOWER_TIER_CAPACITY=PASS
+NBD_RELAY_GATE=PASS
+NBD_BINARY_MATCH=NOT_APPLICABLE
+NBD_UBLK_MODULE=ABSENT
+NBD_TRANSPORT=none
+NBD_PRODUCT_STATE=PRODUCT_OFF
+NBD_READINESS_REASON=product_off
+EOF
+)
+  (
+    set -euo pipefail
+    source "$library"
+    VERSION=v1
+    TIER_MIB=1024
+    EXPECTED_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    EXPECTED_MANIFEST_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    EXPECTED_INPUT_BUNDLE_MANIFEST_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    LOWER_SINK_IDENTITY_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    exact_product_off <<<"$fixture"
+  ) || {
+    echo 'FAIL valid PRODUCT_OFF authority fixture was rejected' >&2
+    exit 1
+  }
+  for mutation in \
+    $'NBD_RELEASE_VERSION=v2' \
+    $'NBD_RELEASE_SOURCE_COMMIT=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
+    $'NBD_RELEASE_MANIFEST_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' \
+    $'NBD_INPUT_BUNDLE_MANIFEST_SHA256=not-a-digest' \
+    $'NBD_INSTALL_PROVENANCE=FAIL' \
+    $'NBD_RELEASE_GATE=FAIL' \
+    $'NBD_SELECTOR=FAIL' \
+    $'NBD_LOWER_FREE_BYTES=1610612735' \
+    $'NBD_LOWER_REQUIRED_BYTES=1' \
+    $'NBD_LOWER_TIER_TYPE=file' \
+    $'NBD_LOWER_TIER_IDENTITY_SHA256=not-a-digest' \
+    $'NBD_LOWER_TIER_BINDING=unbound' \
+    $'NBD_LOWER_TIER_CAPACITY=FAIL' \
+    $'NBD_RELAY_GATE=FAIL' \
+    $'NBD_BINARY_MATCH=PASS' \
+    $'NBD_UBLK_MODULE=ACTIVE' \
+    $'NBD_TRANSPORT=nbd' \
+    $'NBD_PRODUCT_STATE=READY' \
+    $'NBD_READINESS_REASON=all_gates_pass'; do
+    key=${mutation%%=*}
+    mutated=$(awk -v key="$key" -v replacement="$mutation" '
+      index($0, key "=") == 1 { print replacement; replaced += 1; next }
+      { print }
+      END { exit(replaced == 1 ? 0 : 1) }
+    ' <<<"$fixture") || exit 1
+    set +e
+    (
+      set -euo pipefail
+      source "$library"
+      VERSION=v1
+      TIER_MIB=1024
+      EXPECTED_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      EXPECTED_MANIFEST_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      EXPECTED_INPUT_BUNDLE_MANIFEST_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      LOWER_SINK_IDENTITY_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      exact_product_off <<<"$mutated"
+    )
+    rc=$?
+    set -e
+    [[ $rc -ne 0 ]] || {
+      printf 'FAIL contradictory PRODUCT_OFF authority was accepted: %s\n' "$mutation" >&2
+      exit 1
+    }
+  done
+  for mutation in \
+    $'NBD_UNEXPECTED=PASS' \
+    $'NBD_PRODUCT_STATE=PRODUCT_OFF'; do
+    set +e
+    (
+      set -euo pipefail
+      source "$library"
+      VERSION=v1
+      TIER_MIB=1024
+      EXPECTED_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      EXPECTED_MANIFEST_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+      EXPECTED_INPUT_BUNDLE_MANIFEST_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+      LOWER_SINK_IDENTITY_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+      exact_product_off <<<"$fixture
+$mutation"
+    )
+    rc=$?
+    set -e
+    [[ $rc -ne 0 ]] || {
+      printf 'FAIL non-canonical PRODUCT_OFF authority was accepted: %s\n' "$mutation" >&2
+      exit 1
+    }
+  done
+  pass product_off_authority_is_unique_and_allowlisted
+}
+
+extract_cell_function() {
+  local library=$1 name=$2
+  awk -v name="$name" '
+    $0 ~ "^" name "\\(\\)[[:space:]]*\\{" { on=1; print; next }
+    on {
+      if ($0 ~ /<<['"'"']?PY['"'"']?/) { heredoc=1 }
+      if (heredoc && $0 == "PY") { print; heredoc=0; next }
+      print
+      if (!heredoc && $0 ~ /^}$/) { exit }
+    }
+  ' \
+    "$CELL" >>"$library"
+}
+
+make_finalization_function_fixture() {
+  local root=$1 library name
+  mkdir -p "$root/artifacts" "$root/cgroup"
+  library="$root/functions.sh"
+  : >"$library"
+  for name in worker_is_live stop_worker_bounded cleanup_cgroup discard_custody_candidates inventory_matches_ownership rollback_published_inventory cleanup finish_success; do
+    extract_cell_function "$library" "$name"
+  done
+  [[ $(grep -Ec '^finish_success\(\)' "$library" || true) == 1 ]] || return 1
+  [[ $(grep -Ec '^cleanup_cgroup\(\)' "$library" || true) == 1 ]] || return 1
+}
+
+run_finalization_function_fixture() {
+  local root=$1 failure_stage=$2 library="$root/functions.sh" rc
+  set +e
+  timeout --foreground --kill-after=2s 8s bash -c '
+    set -euo pipefail
+    source "$1"
+    root=$2
+    failure_stage=$3
+    ARTIFACT_DIR="$root/artifacts"
+    CG="$root/cgroup"
+    WORKER_PID=""
+    CLEANUP_OK=1
+    FAILURE_REASON="finalization_fault"
+    VERSION=v1
+    PAIR_ID=fixture-pair
+    MODE=disk-only
+    CONDITION=idle
+    TIER_MIB=1024
+    ACTION_BINARY_MATCH=N/A
+    FINAL_EPOCH_STATE=unattempted
+    product_off_epoch() {
+      [[ $1 == final ]] || return 1
+      [[ $FINAL_EPOCH_STATE == completed ]] && return 0
+      FINAL_EPOCH_STATE=completed
+      printf "%s\\n" final >>"$root/product-off.log"
+    }
+    cleanup_disk_scratch() { printf "%s\\n" scratch >>"$root/cleanup.log"; }
+    write_terminal_after() { printf "after\\n" >"$ARTIFACT_DIR/after.txt"; }
+    aggregate_samples() {
+      printf "%s\\n" aggregate >>"$root/stages.log"
+      [[ $failure_stage != aggregate ]] || return 42
+    }
+    write_artifact_inventory() {
+      printf "%s\\n" inventory >>"$root/stages.log"
+      [[ $failure_stage != inventory ]] || return 42
+    }
+    write_evidence_envelope() { printf "%s\\n" evidence >>"$root/stages.log"; }
+    prepare_custody_candidates() {
+      write_artifact_inventory || return 1
+      write_evidence_envelope
+    }
+    publish_custody_candidates() { :; }
+    nbd_failure_receipt_allowed() { [[ $1 -ne 0 && $2 == 1 && $3 == PRODUCT_OFF ]]; }
+    nbd_write_failure_receipt() { printf "receipt\\n" >"$1"; }
+    refuse() { exit 42; }
+    trap cleanup EXIT
+    finish_success
+    [[ ! -e $CG && ! -e $ARTIFACT_DIR/failure-receipt.json ]]
+  ' _ "$library" "$root" "$failure_stage" >/dev/null 2>"$root/stderr"
+  rc=$?
+  set -e
+  return "$rc"
+}
+
+test_success_finalization_removes_cgroup_and_faults_keep_cleanup_armed() {
+  local root stage rc final_count
+  root="$TMP/finalization-success"
+  make_finalization_function_fixture "$root" || {
+    echo 'FAIL finalization helpers are missing' >&2
+    exit 1
+  }
+  run_finalization_function_fixture "$root" none || {
+    printf 'FAIL successful finalization did not complete: %s\n' "$(<"$root/stderr")" >&2
+    exit 1
+  }
+  [[ ! -e $root/cgroup && ! -e $root/artifacts/failure-receipt.json &&
+    $(<"$root/stages.log") == $'aggregate\ninventory\nevidence' ]] || {
+    echo 'FAIL successful finalization leaked cgroup or altered evidence order' >&2
+    exit 1
+  }
+  final_count=$(grep -cx final "$root/product-off.log" || true)
+  [[ $final_count == 1 ]] || {
+    printf 'FAIL successful finalization product-off count=%s\n' "$final_count" >&2
+    exit 1
+  }
+
+  for stage in aggregate inventory; do
+    root="$TMP/finalization-$stage"
+    make_finalization_function_fixture "$root" || exit 1
+    if run_finalization_function_fixture "$root" "$stage"; then
+      rc=0
+    else
+      rc=$?
+    fi
+    [[ $rc == 42 && ! -e $root/cgroup && -f $root/artifacts/failure-receipt.json &&
+      -f $root/artifacts/after.txt ]] || {
+      printf 'FAIL %s fault bypassed cleanup or receipt: rc=%s stderr=%s\n' \
+        "$stage" "$rc" "$(<"$root/stderr")" >&2
+      exit 1
+    }
+    final_count=$(grep -cx final "$root/product-off.log" || true)
+    [[ $final_count == 1 ]] || {
+      printf 'FAIL %s fault repeated terminal product-off: count=%s\n' "$stage" "$final_count" >&2
+      exit 1
+    }
+  done
+  pass success_finalization_removes_cgroup_and_faults_keep_cleanup_armed
+}
+
+test_normal_stubborn_worker_is_bounded_and_non_promotable() {
+  local library root worker_pid rc
+  root="$TMP/normal-stubborn-worker"
+  library="$root/functions.sh"
+  mkdir -p "$root"
+  : >"$library"
+  extract_cell_function "$library" worker_is_live
+  extract_cell_function "$library" stop_worker_bounded
+  [[ $(grep -Ec '^stop_worker_bounded\(\)' "$library" || true) == 1 ]] || {
+    echo 'FAIL bounded normal worker helper is missing' >&2
+    exit 1
+  }
+  set +e
+  timeout --foreground --kill-after=2s 8s bash -c '
+    set -euo pipefail
+    source "$1"
+    pid_file=$2
+    WORKER_TERM_GRACE_SEC=1
+    WORKER_KILL_GRACE_SEC=1
+    python3 -c "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)" &
+    worker_pid=$!
+    printf "%s\\n" "$worker_pid" >"$pid_file"
+    cleanup_inner() {
+      kill -KILL "$worker_pid" 2>/dev/null || true
+      wait "$worker_pid" 2>/dev/null || true
+    }
+    trap cleanup_inner EXIT
+    if stop_worker_bounded "$worker_pid"; then
+      exit 91
+    fi
+    kill -0 "$worker_pid" 2>/dev/null && exit 92
+    exit 0
+  ' _ "$library" "$root/worker.pid" >/dev/null 2>"$root/stderr"
+  rc=$?
+  set -e
+  worker_pid=$(<"$root/worker.pid")
+  kill -KILL "$worker_pid" 2>/dev/null || true
+  [[ $rc == 0 ]] || {
+    printf 'FAIL normal stubborn worker was not bounded/refused: rc=%s stderr=%s\n' \
+      "$rc" "$(<"$root/stderr")" >&2
+    exit 1
+  }
+  pass normal_stubborn_worker_is_bounded_and_non_promotable
+}
+
+test_worker_grace_values_are_strictly_bounded() {
+  local library value variable rc
+  library="$TMP/worker-grace-functions.sh"
+  awk '/^validate_worker_grace_values\(\)/,/^}/ { print }' "$CELL" >"$library"
+  [[ -s $library ]] || {
+    echo 'FAIL worker grace validator is missing' >&2
+    exit 1
+  }
+  for variable in WORKER_TERM_GRACE_SEC WORKER_KILL_GRACE_SEC; do
+    for value in bogus 0 -1 31 999999999999999999999; do
+      set +e
+      (
+        set -euo pipefail
+        source "$library"
+        WORKER_TERM_GRACE_SEC=5
+        WORKER_KILL_GRACE_SEC=5
+        printf -v "$variable" '%s' "$value"
+        validate_worker_grace_values
+      )
+      rc=$?
+      set -e
+      [[ $rc -ne 0 ]] || {
+        printf 'FAIL %s accepted invalid grace=%s\n' "$variable" "$value" >&2
+        exit 1
+      }
+    done
+    for value in 1 5 30; do
+      (
+        set -euo pipefail
+        source "$library"
+        WORKER_TERM_GRACE_SEC=5
+        WORKER_KILL_GRACE_SEC=5
+        printf -v "$variable" '%s' "$value"
+        validate_worker_grace_values
+      ) || {
+        printf 'FAIL %s rejected bounded grace=%s\n' "$variable" "$value" >&2
+        exit 1
+      }
+    done
+  done
+  pass worker_grace_values_are_strictly_bounded
+}
+
+test_live_refuses_worker_grace_and_failure_receipt_seams() {
+  local seam value output rc artifact
+  for seam in WORKER_TERM_GRACE_SEC WORKER_KILL_GRACE_SEC; do
+    value=$([[ $seam == WORKER_TERM_GRACE_SEC ]] && echo 0 || echo 999999999999999999999)
+    artifact="$TMP/live-seam-$seam"
+    set +e
+    output=$(env "$seam=$value" "$CELL" --run --mode disk-only --condition idle \
+      --tier-mib 1024 --artifact-dir "$artifact" 2>&1)
+    rc=$?
+    set -e
+    [[ $rc -ne 0 && $output == *'NBD_BENCHMARK_REASON=LIVE_TEST_SEAM_FORBIDDEN'* &&
+      ! -e $artifact ]] || {
+      printf 'FAIL live accepted %s=%s rc=%s output=%s\n' "$seam" "$value" "$rc" "$output" >&2
+      exit 1
+    }
+  done
+  artifact="$TMP/live-seam-failure-receipt-race"
+  set +e
+  output=$(env RAMSHARED_NBD_TEST_FAILURE_RECEIPT_RACE=publish-preexisting \
+    "$CELL" --run --mode disk-only --condition idle --tier-mib 1024 \
+    --artifact-dir "$artifact" 2>&1)
+  rc=$?
+  set -e
+  [[ $rc -ne 0 && $output == *'NBD_BENCHMARK_REASON=LIVE_TEST_SEAM_FORBIDDEN'* &&
+    ! -e $artifact ]] || {
+    printf 'FAIL live accepted failure-receipt race seam rc=%s output=%s\n' "$rc" "$output" >&2
+    exit 1
+  }
+  pass live_refuses_worker_grace_and_failure_receipt_seams
+}
+
+test_stubborn_worker_fails_closed_without_authority() {
+  local root worker_pid rc status
+  root="$TMP/stubborn-worker"
+  make_product_off_function_fixture "$root"
+  set +e
+  (
+    set -euo pipefail
+    source "$root/functions.sh"
+    ARTIFACT_DIR="$root/artifacts"; CLI="$root/down"; PREFLIGHT="$root/preflight"
+    RELEASE="$root/release"; VERSION=v1; TIER_MIB=1024
+    EXPECTED_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    EXPECTED_MANIFEST_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    EXPECTED_INPUT_BUNDLE_MANIFEST_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    LOWER_SINK_IDENTITY_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    PREFLIGHT_TIMEOUT_SEC=1; PRODUCT_OFF_PHASES=''; FINAL_EPOCH_STATE=unattempted
+    INITIAL_EPOCH_STATE=unattempted; DOWN_LOG="$root/down.log"; PREFLIGHT_COUNTER="$root/count"
+    CG="$root/no-cg"; SCRATCH_SWAP=''; SCRATCH_SWAP_ACTIVE=0; CLEANUP_OK=1; FAILURE_REASON=worker
+    WORKER_TERM_GRACE_SEC=1; WORKER_KILL_GRACE_SEC=1
+    export DOWN_LOG PREFLIGHT_COUNTER RAMSHARED_NBD_ALLOW_MANUFACTURED_PRODUCT_OFF_TEST=1
+    export RAMSHARED_NBD_TEST_WORKER_LIVENESS=always-live
+    cleanup_disk_scratch() { return 0; }
+    nbd_failure_receipt_allowed() { return 1; }
+    sleep 60 & WORKER_PID=$!
+    printf '%s\n' "$WORKER_PID" >"$root/worker.pid"
+    trap cleanup EXIT
+    exit 0
+  ) >/dev/null 2>"$root/stderr"
+  rc=$?
+  set -e
+  worker_pid=$(<"$root/worker.pid")
+  kill -KILL "$worker_pid" 2>/dev/null || true
+  [[ $rc -ne 0 ]] || {
+    echo 'FAIL stubborn worker cleanup returned success' >&2
+    exit 1
+  }
+  status=$(python3 - "$root/artifacts/final-product-off.json" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding='utf-8') as source:
+    print(json.load(source)['status'])
+PY
+)
+  [[ $status == PASS && ! -e $root/artifacts/failure-receipt.json &&
+    ! -e $root/artifacts/summary.json && ! -e $root/artifacts/evidence-envelope.json ]] || {
+    echo 'FAIL stubborn worker cleanup promoted authority or failure evidence' >&2
+    exit 1
+  }
+  pass stubborn_worker_fails_closed_without_authority
+}
+
+test_down_failure_is_single_shot_and_non_promotable() {
+  local root rc count
+  root="$TMP/down-failure"
+  make_product_off_function_fixture "$root"
+  set +e
+  (
+    set -euo pipefail
+    source "$root/functions.sh"
+    ARTIFACT_DIR="$root/artifacts"; CLI="$root/down"; PREFLIGHT="$root/preflight"
+    RELEASE="$root/release"; VERSION=v1; TIER_MIB=1024
+    EXPECTED_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    EXPECTED_MANIFEST_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    PREFLIGHT_TIMEOUT_SEC=1; PRODUCT_OFF_PHASES=''; FINAL_EPOCH_STATE=unattempted
+    INITIAL_EPOCH_STATE=unattempted; DOWN_LOG="$root/down.log"; PREFLIGHT_COUNTER="$root/count"
+    DOWN_BEHAVIOR=fail
+    export DOWN_LOG PREFLIGHT_COUNTER DOWN_BEHAVIOR
+    product_off_epoch final
+  ) >/dev/null 2>"$root/stderr"
+  rc=$?
+  set -e
+  count=$(wc -l <"$root/down.log")
+  [[ $rc -ne 0 && $count == 1 && ! -e $root/count &&
+    ! -e $root/artifacts/final-product-off.json &&
+    ! -e $root/artifacts/final-preflight-1.txt &&
+    ! -e $root/artifacts/final-preflight-2.txt ]] || {
+    printf 'FAIL down failure was retried or promoted: rc=%s count=%s\n' "$rc" "$count" >&2
+    exit 1
+  }
+  pass down_failure_is_single_shot_and_non_promotable
+}
+
+test_product_off_authority_is_unique_and_allowlisted
+test_success_finalization_removes_cgroup_and_faults_keep_cleanup_armed
+test_normal_stubborn_worker_is_bounded_and_non_promotable
+test_worker_grace_values_are_strictly_bounded
+test_live_refuses_worker_grace_and_failure_receipt_seams
+test_stubborn_worker_fails_closed_without_authority
+test_down_failure_is_single_shot_and_non_promotable
+
+test_worker_kill_has_post_kill_deadline_and_reaps_normal_child() {
+  local worker_stop_body cleanup_body
+  worker_stop_body=$(awk '/^stop_worker_bounded\(\)/ { on=1 } on { print } on && /^}/ { exit }' "$CELL")
+  cleanup_body=$(awk '/^cleanup\(\)/ { on=1 } on { print } on && /^}/ { exit }' "$CELL")
+  grep -Fq worker_is_live <<<"$worker_stop_body" &&
+    grep -Fq kill_deadline= <<<"$worker_stop_body" &&
+    grep -Fq 'wait "$pid"' <<<"$worker_stop_body" &&
+    grep -Fq 'stop_worker_bounded "$WORKER_PID"' <<<"$cleanup_body" || exit 1
+  pass worker_kill_has_post_kill_deadline_and_reaps_normal_child
+}
+
+test_all_cleanup_timeouts_are_foreground_and_kill_after() {
+  local bad
+  bad=$(grep -nE '(^|[[:space:]])timeout([[:space:]]|$)' "$CELL" |
+    grep -v -- '--foreground' | head -n1 || true)
+  [[ -z $bad ]] || { echo "FAIL timeout missing --foreground: $bad" >&2; exit 1; }
+  bad=$(grep -nE '(^|[[:space:]])timeout([[:space:]]|$)' "$CELL" |
+    grep -v -- '--kill-after=' | head -n1 || true)
+  [[ -z $bad ]] || { echo "FAIL timeout missing --kill-after: $bad" >&2; exit 1; }
+  pass all_cleanup_timeouts_are_foreground_and_kill_after
+}
+
+test_live_refuses_every_preflight_environment_seam_before_artifacts() {
+  local -a seams=(
+    RAMSHARED_PRODUCT_ROOT
+    RAMSHARED_BENCHMARK_CGROUP_ROOT
+    RAMSHARED_NBD_PROC_ROOT
+    RAMSHARED_NBD_SWAPS_FILE
+    RAMSHARED_NBD_PID_FILE
+    RAMSHARED_NBD_MODULES_FILE
+    RAMSHARED_NBD_DEV_ROOT
+    RAMSHARED_NBD_SYS_BLOCK_ROOT
+    RAMSHARED_NBD_SYSTEMCTL
+    RAMSHARED_NBD_RELAY_HEALTH
+    RAMSHARED_NBD_DF
+    RAMSHARED_NBD_STAT
+    RAMSHARED_NBD_EXPECT_UID
+    RAMSHARED_NBD_EXPECT_GID
+    RAMSHARED_NBD_LOWER_SINK
+    RAMSHARED_NBD_VRAM_MIB
+    RAMSHARED_NBD_ALLOW_MANUFACTURED_PROC_TEST
+    RAMSHARED_NBD_TEST_PROC_DISAPPEAR_AFTER_EXISTS_PID
+    RAMSHARED_NBD_ZRAM_RECORD
+    RAMSHARED_NBD_LIFECYCLE_APPROVAL
+    RAMSHARED_NBD_ALLOW_MANUFACTURED_IDENTITY_TEST
+    RAMSHARED_NBD_ALLOW_MANUFACTURED_SWAP_CLASSIFIER_TEST
+    RAMSHARED_NBD_ALLOW_MANUFACTURED_PRODUCT_OFF_TEST
+    RAMSHARED_NBD_TEST_PRODUCT_OFF_RECEIPT_FAULT
+    RAMSHARED_NBD_TEST_PRODUCT_OFF_RECEIPT_RACE
+    RAMSHARED_NBD_TEST_FAILURE_RECEIPT_RACE
+    RAMSHARED_NBD_TEST_WORKER_LIVENESS
+    RAMSHARED_NBD_TEST_EVIDENCE_ENVELOPE_FAULT
+    WORKER_TERM_GRACE_SEC
+    WORKER_KILL_GRACE_SEC
+  )
+  local -a observed_preflight_seams=()
+  local seam artifact output rc
+
+  mapfile -t observed_preflight_seams < <(
+    rg -o --no-filename 'RAMSHARED_(?:PRODUCT_ROOT|NBD_[A-Z0-9_]+)' \
+      "$ROOT/scripts/safety/nbd-product-preflight.sh" | sort -u
+  )
+  for seam in "${observed_preflight_seams[@]}"; do
+    [[ " ${seams[*]} " == *" $seam "* ]] || {
+      printf 'FAIL live preflight seam table omitted %s\n' "$seam" >&2
+      exit 1
+    }
+  done
+
+  for seam in "${seams[@]}"; do
+    artifact="$TMP/live-preflight-seam-$seam"
+    set +e
+    output=$(timeout --foreground --kill-after=2s 5s env -i \
+      PATH=/usr/sbin:/usr/bin:/sbin:/bin "$seam=fixture" \
+      "$CELL" --run --mode disk-only --condition idle --tier-mib 1024 \
+      --artifact-dir "$artifact" 2>&1)
+    rc=$?
+    set -e
+    [[ $rc -ne 0 && $output == *'NBD_BENCHMARK_REASON=LIVE_TEST_SEAM_FORBIDDEN'* &&
+      ! -e $artifact && ! -L $artifact ]] || {
+      printf 'FAIL live accepted preflight seam %s: rc=%s output=%s\n' \
+        "$seam" "$rc" "$output" >&2
+      exit 1
+    }
+  done
+  pass live_refuses_every_preflight_environment_seam_before_artifacts
+}
+
+make_secondary_signal_fixture() {
+  local root=$1 library name
+  mkdir -p "$root/artifacts"
+  library="$root/functions.sh"
+  : >"$library"
+  for name in publish_owned_file publish_preflight_output exact_product_off product_off_epoch \
+    inventory_matches_ownership rollback_published_inventory worker_is_live stop_worker_bounded \
+    cleanup_cgroup discard_custody_candidates cleanup on_interrupt on_term; do
+    extract_cell_function "$library" "$name"
+  done
+  for name in cleanup on_interrupt on_term; do
+    [[ $(grep -Ec "^${name}\\(\\)" "$library" || true) == 1 ]] || return 1
+  done
+  cat >"$root/down" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$BASHPID" >>"${SIGNAL_CHILD_LOG:?}"
+printf 'down\n' >>"${SIGNAL_DOWN_LOG:?}"
+if [[ ${SIGNAL_PHASE:?} == down ]]; then
+  : >"${SIGNAL_MARKER:?}"
+  sleep 0.8
+fi
+EOF
+  cat >"$root/preflight" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+fixture_root=$(cd -- "$(dirname -- "$0")" && pwd)
+printf '%s\n' "$BASHPID" >>"$fixture_root/children.log"
+counter="$fixture_root/preflight.count"
+phase=$(<"$fixture_root/signal-phase")
+calls=0
+[[ -f $counter ]] && calls=$(<"$counter")
+calls=$((calls + 1))
+printf '%s\n' "$calls" >"$counter"
+if [[ $phase == "preflight-$calls" ]]; then
+  : >"$fixture_root/marker"
+  sleep 0.8
+fi
+printf '%s\n' \
+  NBD_RELEASE_VERSION=v1 \
+  NBD_RELEASE_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  NBD_RELEASE_MANIFEST_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  NBD_INPUT_BUNDLE_MANIFEST_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
+  NBD_INSTALL_PROVENANCE=PASS NBD_RELEASE_GATE=PASS NBD_SELECTOR=PASS \
+  NBD_LOWER_FREE_BYTES=17179869184 NBD_LOWER_REQUIRED_BYTES=1610612736 \
+  NBD_LOWER_TIER_TYPE=directory \
+  NBD_LOWER_TIER_IDENTITY_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd \
+  NBD_LOWER_TIER_BINDING=bound NBD_LOWER_TIER_CAPACITY=PASS NBD_RELAY_GATE=PASS \
+  NBD_BINARY_MATCH=NOT_APPLICABLE NBD_UBLK_MODULE=ABSENT NBD_TRANSPORT=none \
+  NBD_PRODUCT_STATE=PRODUCT_OFF NBD_READINESS_REASON=product_off
+EOF
+  cat >"$root/worker" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$BASHPID" >>"${SIGNAL_CHILD_LOG:?}"
+trap ': >"${SIGNAL_MARKER:?}"; sleep 0.8; exit 0' TERM
+while :; do sleep 0.05; done
+EOF
+  chmod 0700 "$root/down" "$root/preflight" "$root/worker"
+}
+
+run_secondary_signal_cleanup_fixture() {
+  local root=$1 phase=$2 first_signal=$3 second_signal=$4
+  local library="$root/functions.sh"
+  timeout --foreground --kill-after=2s 10s setsid --wait bash -c '
+    set -euo pipefail
+    source "$1"
+    root=$2
+    phase=$3
+    first_signal=$4
+    second_signal=$5
+    ARTIFACT_DIR="$root/artifacts"
+    CLI="$root/down"
+    PREFLIGHT="$root/preflight"
+    RELEASE="$root/release"
+    VERSION=v1
+    PAIR_ID=fixture-pair
+    MODE=disk-only
+    CONDITION=idle
+    TIER_MIB=1024
+    EXPECTED_SOURCE_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    EXPECTED_MANIFEST_SHA256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+    EXPECTED_INPUT_BUNDLE_MANIFEST_SHA256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    LOWER_SINK_IDENTITY_SHA256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+    PREFLIGHT_TIMEOUT_SEC=2
+    PRODUCT_OFF_PHASES=""
+    INITIAL_EPOCH_STATE=unattempted
+    FINAL_EPOCH_STATE=unattempted
+    WORKER_TERM_GRACE_SEC=2
+    WORKER_KILL_GRACE_SEC=2
+    WORKER_PID=""
+    CG="$root/no-cgroup"
+    SCRATCH_SWAP=""
+    SCRATCH_SWAP_ACTIVE=0
+    CLEANUP_OK=1
+    FAILURE_REASON=secondary_signal
+    CUSTODY_FRONTIER=0
+    CUSTODY_INVENTORY_CANDIDATE=""
+    CUSTODY_ENVELOPE_CANDIDATE=""
+    SIGNAL_PHASE=$phase
+    SIGNAL_MARKER="$root/marker"
+    SIGNAL_CHILD_LOG="$root/children.log"
+    SIGNAL_DOWN_LOG="$root/down.log"
+    PREFLIGHT_COUNTER="$root/preflight.count"
+    export SIGNAL_PHASE SIGNAL_MARKER SIGNAL_CHILD_LOG SIGNAL_DOWN_LOG PREFLIGHT_COUNTER
+    printf "%s\n" "$phase" >"$root/signal-phase"
+    cleanup_disk_scratch() { printf "cleanup\n" >>"$root/cleanup.log"; }
+    nbd_failure_receipt_allowed() { [[ $1 -ne 0 && $2 == 1 && $3 == PRODUCT_OFF && $4 == 1 && $5 == 0 ]]; }
+    nbd_write_failure_receipt() { printf "receipt\n" >"$1"; }
+    if [[ $phase == worker ]]; then
+      "$root/worker" &
+      WORKER_PID=$!
+      printf "%s\n" "$WORKER_PID" >"$root/worker.pid"
+    fi
+    target=$BASHPID
+    (
+      for _ in $(seq 1 500); do
+        [[ -e $SIGNAL_MARKER ]] && break
+        sleep 0.01
+      done
+      [[ -e $SIGNAL_MARKER ]] || exit 88
+      printf "%s\n" "$second_signal" >"$root/second-signal.log"
+      kill -"$second_signal" "$target"
+    ) &
+    trap cleanup EXIT
+    trap on_interrupt INT
+    trap on_term TERM
+    kill -"$first_signal" "$target"
+    sleep 5
+  ' _ "$library" "$root" "$phase" "$first_signal" "$second_signal"
+}
+
+test_secondary_signals_preserve_first_status_and_complete_cleanup() {
+  local phase first_signal second_signal root expected rc child cleanup_count down_count preflight_count
+  for phase in worker down preflight-1 preflight-2; do
+    for first_signal in TERM INT; do
+      for second_signal in TERM INT; do
+        root="$TMP/secondary-signal-$phase-$first_signal-$second_signal"
+        make_secondary_signal_fixture "$root" || {
+          echo 'FAIL secondary signal fixture is missing production handlers' >&2
+          exit 1
+        }
+        expected=$([[ $first_signal == TERM ]] && echo 143 || echo 130)
+        set +e
+        run_secondary_signal_cleanup_fixture "$root" "$phase" "$first_signal" "$second_signal" \
+          >/dev/null 2>"$root/stderr"
+        rc=$?
+        set -e
+        cleanup_count=$(grep -cx cleanup "$root/cleanup.log" 2>/dev/null || true)
+        down_count=$(grep -cx down "$root/down.log" 2>/dev/null || true)
+        preflight_count=$(<"$root/preflight.count")
+        [[ $rc == "$expected" && $cleanup_count == 1 && $down_count == 1 && $preflight_count == 2 &&
+          -f $root/second-signal.log && -f $root/artifacts/final-product-off.json &&
+          -f $root/artifacts/failure-receipt.json ]] || {
+          printf 'FAIL secondary signal cleanup phase=%s first=%s second=%s rc=%s cleanup=%s down=%s preflight=%s stderr=%s\n' \
+            "$phase" "$first_signal" "$second_signal" "$rc" "$cleanup_count" "$down_count" "$preflight_count" \
+            "$(<"$root/stderr")" >&2
+          exit 1
+        }
+        python3 - "$root/artifacts/final-product-off.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    receipt = json.load(source)
+assert receipt == {
+    "phase": "final",
+    "preflight_budget_sec": 30,
+    "preflight_count": 2,
+    "schema": "ramshared-nbd-product-off/v1",
+    "status": "PASS",
+}, receipt
+PY
+        while IFS= read -r child; do
+          [[ $child =~ ^[1-9][0-9]*$ ]] || exit 1
+          ! kill -0 "$child" 2>/dev/null || {
+            printf 'FAIL secondary signal left child %s alive\n' "$child" >&2
+            exit 1
+          }
+        done <"$root/children.log"
+      done
+    done
+  done
+  pass secondary_signals_preserve_first_status_and_complete_cleanup
+}
+
+make_custody_frontier_fixture() {
+  local root=$1 library name
+  mkdir -p "$root/artifacts" "$root/cgroup"
+  python3 - "$root/artifacts" <<'PY'
+import json
+import os
+import sys
+
+root = sys.argv[1]
+for name, contents in {
+    "before.txt": "before\n",
+    "action.txt": "action\n",
+    "after.txt": "after\n",
+    "samples.jsonl": "{\"sample\":1}\n",
+}.items():
+    with open(os.path.join(root, name), "w", encoding="utf-8") as target:
+        target.write(contents)
+timeout_budget = {
+    "sample_timeout_sec": 120,
+    "samples": 3,
+    "setup_cleanup_timeout_sec": 300,
+    "cell_outer_timeout_sec": 900,
+}
+context = {
+    "schema": 2,
+    "pair_id": "fixture-pair",
+    "mode": "disk-only",
+    "binary_match": "N/A",
+    "watchdog": {"armed": True, "outcome": "not_fired"},
+    "timeout_budget": timeout_budget,
+    "release": {
+        "version": "v1",
+        "source_commit": "a" * 40,
+        "manifest_sha256": "b" * 64,
+        "input_bundle_manifest_sha256": "c" * 64,
+    },
+}
+with open(os.path.join(root, "context.json"), "w", encoding="utf-8") as target:
+    json.dump(context, target, sort_keys=True, separators=(",", ":"))
+    target.write("\n")
+with open(os.path.join(root, "summary.json"), "w", encoding="utf-8") as target:
+    json.dump({"timeout_budget": timeout_budget}, target, sort_keys=True, separators=(",", ":"))
+    target.write("\n")
+PY
+  library="$root/functions.sh"
+  : >"$library"
+  for name in publish_owned_file inventory_matches_ownership rollback_published_inventory \
+    validate_artifact_inventory validate_evidence_envelope write_artifact_inventory write_evidence_envelope discard_custody_candidates \
+    prepare_custody_candidates publish_custody_candidates cleanup_cgroup cleanup finish_success; do
+    extract_cell_function "$library" "$name"
+  done
+  for name in discard_custody_candidates prepare_custody_candidates publish_custody_candidates; do
+    [[ $(grep -Ec "^${name}\\(\\)" "$library" || true) == 1 ]] || return 1
+  done
+}
+
+run_custody_frontier_fault_fixture() {
+  local root=$1 fault=$2 library="$root/functions.sh"
+  timeout --foreground --kill-after=2s 10s bash -c '
+    set -euo pipefail
+    source "$1"
+    root=$2
+    ARTIFACT_DIR="$root/artifacts"
+    CG="$root/cgroup"
+    WORKER_PID=""
+    SCRATCH_SWAP=""
+    SCRATCH_SWAP_ACTIVE=0
+    CLEANUP_OK=1
+    FAILURE_REASON="custody_frontier_fault"
+    VERSION=v1
+    PAIR_ID=fixture-pair
+    MODE=disk-only
+    CONDITION=idle
+    TIER_MIB=1024
+    ACTION_BINARY_MATCH=N/A
+    FINAL_EPOCH_STATE=unattempted
+    INITIAL_EPOCH_STATE=unattempted
+    CUSTODY_FRONTIER=0
+    CUSTODY_INVENTORY_CANDIDATE=""
+    CUSTODY_ENVELOPE_CANDIDATE=""
+    export RAMSHARED_NBD_ALLOW_MANUFACTURED_PRODUCT_OFF_TEST=1
+    case $3 in
+      write|fsync|link|validation)
+        export RAMSHARED_NBD_TEST_EVIDENCE_ENVELOPE_FAULT=$3 ;;
+      publish-fail)
+        export RAMSHARED_NBD_TEST_CUSTODY_ENVELOPE_FAULT=fail ;;
+      envelope-race)
+        export RAMSHARED_NBD_TEST_CUSTODY_ENVELOPE_RACE=publish-preexisting ;;
+      inventory-race)
+        export RAMSHARED_NBD_TEST_CUSTODY_INVENTORY_RACE=publish-preexisting ;;
+    esac
+    cleanup_disk_scratch() { printf "scratch\n" >>"$root/cleanup.log"; }
+    product_off_epoch() {
+      [[ $1 == final ]] || return 1
+      [[ $FINAL_EPOCH_STATE == completed ]] && return 0
+      FINAL_EPOCH_STATE=completed
+      printf "final\n" >>"$root/product-off.log"
+    }
+    write_terminal_after() { :; }
+    aggregate_samples() { :; }
+    nbd_failure_receipt_allowed() { [[ $1 -ne 0 && $2 == 1 && $3 == PRODUCT_OFF && $4 == 1 && $5 == 0 ]]; }
+    nbd_write_failure_receipt() { printf "receipt\n" >"$1"; }
+    refuse() { [[ -n $FAILURE_REASON ]] || FAILURE_REASON=$1; exit 42; }
+    trap cleanup EXIT
+    finish_success
+  ' _ "$library" "$root" "$fault"
+}
+
+test_custody_frontier_faults_leave_no_published_partial_envelope() {
+  local root fault rc final_count foreign
+  for fault in write fsync link validation publish-fail envelope-race inventory-race; do
+    root="$TMP/custody-frontier-$fault"
+    make_custody_frontier_fixture "$root" || {
+      echo 'FAIL custody frontier helpers are missing' >&2
+      exit 1
+    }
+    set +e
+    run_custody_frontier_fault_fixture "$root" "$fault" >/dev/null 2>"$root/stderr"
+    rc=$?
+    set -e
+    final_count=$(grep -cx final "$root/product-off.log" 2>/dev/null || true)
+    foreign=0
+    if [[ $fault == envelope-race ]]; then
+      [[ -f $root/artifacts/evidence-envelope.json &&
+        $(<"$root/artifacts/evidence-envelope.json") == 'foreign envelope must survive' ]] || {
+        echo 'FAIL custody envelope race clobbered the foreign marker' >&2
+        exit 1
+      }
+      foreign=1
+    elif [[ $fault == inventory-race ]]; then
+      [[ -f $root/artifacts/artifact-inventory.json &&
+        $(<"$root/artifacts/artifact-inventory.json") == 'foreign inventory must survive' ]] || {
+        echo 'FAIL custody inventory race clobbered foreign inventory' >&2
+        exit 1
+      }
+      foreign=1
+    fi
+    [[ $rc == 42 && ! -e $root/cgroup &&
+      ( $foreign == 1 || ! -e $root/artifacts/artifact-inventory.json ) &&
+      ( $foreign == 1 || ! -e $root/artifacts/evidence-envelope.json ) &&
+      -f $root/artifacts/failure-receipt.json && $final_count == 1 ]] || {
+      printf 'FAIL custody fault=%s crossed the public frontier: rc=%s final=%s stderr=%s\n' \
+        "$fault" "$rc" "$final_count" "$(<"$root/stderr")" >&2
+      exit 1
+    }
+    ! compgen -G "$root/artifacts/.ramshared-custody-*" >/dev/null || {
+      printf 'FAIL custody fault=%s left an unpublished candidate\n' "$fault" >&2
+      exit 1
+    }
+  done
+  pass custody_frontier_faults_leave_no_published_partial_envelope
+}
+
+test_custody_commit_marker_and_validator_contract() {
+  local root inventory_saved envelope_saved before after
+  root="$TMP/custody-frontier-success"
+  make_custody_frontier_fixture "$root" || exit 1
+  run_custody_frontier_fault_fixture "$root" none >/dev/null 2>"$root/stderr" || {
+    printf 'FAIL successful custody pair did not publish: %s\n' "$(<"$root/stderr")" >&2
+    exit 1
+  }
+  "$CELL" --validate-evidence --artifact-dir "$root/artifacts" >/dev/null || {
+    echo 'FAIL successful custody pair did not validate' >&2
+    exit 1
+  }
+  before=$(sha256sum -- "$root/artifacts/evidence-envelope.json" | awk '{print $1}')
+  inventory_saved="$root/artifacts/artifact-inventory.saved"
+  envelope_saved="$root/artifacts/evidence-envelope.saved"
+  mv -- "$root/artifacts/evidence-envelope.json" "$envelope_saved"
+  if "$CELL" --validate-evidence --artifact-dir "$root/artifacts" >/dev/null 2>&1; then
+    echo 'FAIL validator accepted inventory without the commit marker' >&2
+    exit 1
+  fi
+  mv -- "$envelope_saved" "$root/artifacts/evidence-envelope.json"
+  mv -- "$root/artifacts/artifact-inventory.json" "$inventory_saved"
+  if "$CELL" --validate-evidence --artifact-dir "$root/artifacts" >/dev/null 2>&1; then
+    echo 'FAIL validator accepted the commit marker without inventory' >&2
+    exit 1
+  fi
+  mv -- "$inventory_saved" "$root/artifacts/artifact-inventory.json"
+  after=$(sha256sum -- "$root/artifacts/evidence-envelope.json" | awk '{print $1}')
+  [[ $before == "$after" && ! -e $root/artifacts/failure-receipt.json ]] || {
+    echo 'FAIL published custody marker was mutated after the frontier' >&2
+    exit 1
+  }
+  pass custody_envelope_is_the_single_commit_marker_and_incomplete_pairs_refuse
+}
+
+test_product_off_receipt_faults_and_destinations_are_bounded
+test_terminal_signal_cleanup_preserves_status_and_epoch_budget
+test_worker_kill_has_post_kill_deadline_and_reaps_normal_child
+test_all_cleanup_timeouts_are_foreground_and_kill_after
+test_live_refuses_every_preflight_environment_seam_before_artifacts
+test_secondary_signals_preserve_first_status_and_complete_cleanup
+test_custody_frontier_faults_leave_no_published_partial_envelope
+test_custody_commit_marker_and_validator_contract
 printf 'PASS Test-NbdBenchmarkCell total=%s\n' "$pass_count"

@@ -1197,7 +1197,8 @@
           "scripts/safety/test-nbd-product-preflight.sh",
           "scripts/windows/Invoke-NbdBenchmarkMatrix.ps1",
           "scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1",
-          "scripts/windows/Test-WindowsCiStatic.ps1"
+          "scripts/windows/Test-WindowsCiStatic.ps1",
+          "tools/ci/check-benchmark-evidence.mjs"
         ],
         "test_paths": [
           "tools/ci/check-benchmark-evidence.test.mjs",
