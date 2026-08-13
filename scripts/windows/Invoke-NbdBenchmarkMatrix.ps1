@@ -338,7 +338,7 @@ function Get-CellTimeoutBudget {
     param([Parameter(Mandatory = $true)][int]$TierMiB)
     $sampleTimeoutSec = switch ($TierMiB) {
         1024 { 120; break }
-        2048 { 120; break }
+        2048 { 240; break }
         4096 { 600; break }
         default { throw "cell_timeout_tier_invalid" }
     }
@@ -2801,8 +2801,8 @@ Write-Output "[cuda-vram-workload] released"
             $observed = @()
             foreach ($tier in @(1024, 2048, 4096)) {
                 $cellBudget = Get-CellTimeoutBudget -TierMiB $tier
-                $expectedSample = if ($tier -eq 4096) { 600 } else { 120 }
-                $expectedOuter = if ($tier -eq 4096) { 2100 } else { 900 }
+                $expectedSample = switch ($tier) { 1024 { 120 }; 2048 { 240 }; 4096 { 600 } }
+                $expectedOuter = switch ($tier) { 1024 { 900 }; 2048 { 1020 }; 4096 { 2100 } }
                 if ($cellBudget.sample_timeout_sec -ne $expectedSample -or $cellBudget.samples -ne 3 -or
                     $cellBudget.setup_cleanup_timeout_sec -ne 300 -or $cellBudget.cell_outer_timeout_sec -ne $expectedOuter) {
                     throw "manufactured_timeout_budget_invalid"
@@ -2956,6 +2956,50 @@ Write-Output "[cuda-vram-workload] released"
                 throw "manufactured_failure_receipt_timeout_promoted"
             }
             Write-Output "cell_failure_receipt_invalid=REFUSED"
+            return
+        }
+        "partial-timeout-sample" {
+            $dir = Join-Path $ArtifactRoot "partial-timeout-sample"
+            $resultDir = Join-Path $dir "result"
+            New-Item -ItemType Directory -Force -Path $resultDir | Out-Null
+            $partialIntegrity = Join-Path $resultDir "run-3-integrity.json"
+            Write-JsonNoBom -Value ([ordered]@{
+                    status = "PASS"; hold = $true; checksum_match = $true
+                    allocated_mib = 6016; required_allocated_mib = 6656
+                    cleanup = "timeout_containment"
+                }) -Path $partialIntegrity
+            Write-JsonNoBom -Value ([ordered]@{
+                    status = "PASS"; terminal_state = "PRODUCT_OFF"
+                    binary_match = "PASS"; public_schema = "ramshared-evidence/v1"
+                }) -Path (Join-Path $resultDir "summary.json")
+            Write-JsonNoBom -Value ([ordered]@{
+                    schema_version = "ramshared-evidence/v1"; lifecycle = [ordered]@{ binary_match = $true }
+                }) -Path (Join-Path $resultDir "public-evidence.json")
+            $receiptPath = Join-Path $resultDir "failure-receipt.json"
+            Write-JsonNoBom -Value ([ordered]@{
+                    schema_version = "ramshared-nbd-cell-failure/v1"; status = "RED"
+                    reason = "SAMPLE_TIMEOUT"; terminal_state = "PRODUCT_OFF"
+                    release_version = "manufactured-v1"; pair_id = "1024-bounded"
+                    mode = "disk-only"; condition = "bounded"; tier_mib = 1024
+                }) -Path $receiptPath
+            $cell = [pscustomobject]@{ tier_mib = 1024; condition = "bounded"; mode = "disk-only" }
+            $pairContext = [pscustomobject]@{ pair_id = "1024-bounded" }
+            $selectedRelease = [pscustomobject]@{ version = "manufactured-v1" }
+            $execution = New-CellControllerFailureExecution -Run ([pscustomobject]@{
+                    completed = $false; timed_out = $true; exit_code = $null
+                }) -Cell $cell -CellDirectory $dir -SelectedRelease $selectedRelease `
+                -PairContext $pairContext -Containment ([ordered]@{ call = "manufactured" })
+            if ($execution.result.status -ne "RED" -or
+                $execution.result.reason -ne "watchdog_timeout_red" -or
+                $execution.result.terminal_state -ne "unverified_unknown" -or
+                $execution.result.promotion -ne "promotion_stopped" -or
+                $execution.result.PSObject.Properties["summary"] -ne $null) {
+                throw "partial_timeout_integrity_was_promoted"
+            }
+            if (Test-Path -LiteralPath (Join-Path $resultDir "public-evidence.json") -PathType Leaf) {
+                Write-Output "partial_timeout_public_evidence_ignored=REFUSED"
+            }
+            Write-Output "partial_timeout_integrity_not_promoted=REFUSED"
             return
         }
         "comparison" {

@@ -489,7 +489,8 @@ test_tier_derived_timeout_budget_contract() {
   local tier expected_sample expected_outer samples summary wrong_sample
   for tier in 1024 2048 4096; do
     case $tier in
-      1024|2048) expected_sample=120; expected_outer=900 ;;
+      1024) expected_sample=120; expected_outer=900 ;;
+      2048) expected_sample=240; expected_outer=1020 ;;
       4096) expected_sample=600; expected_outer=2100 ;;
       *) echo "FAIL unsupported manufactured timeout tier" >&2; exit 1 ;;
     esac
@@ -525,6 +526,8 @@ PY
   grep -Fq 'CELL_SETUP_CLEANUP_TIMEOUT_SEC=300' "$CELL"
   grep -Fq 'CELL_OUTER_TIMEOUT_MIN_SEC=900' "$CELL"
   grep -Fq 'CELL_OUTER_TIMEOUT_MAX_SEC=2100' "$CELL"
+  grep -Fq '2048)' "$CELL"
+  grep -Fq "printf '240\\n'" "$CELL"
   pass tier_derived_timeout_budget_is_bounded_and_refuses_mismatch
 }
 
