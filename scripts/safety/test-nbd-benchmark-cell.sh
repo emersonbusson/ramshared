@@ -1107,4 +1107,26 @@ pass benchmark_cleanup_refuses_ghost_or_residual_swap
 pass benchmark_start_barrier_launcher_is_in_cgroup_before_exec
 pass benchmark_live_seams_are_unavailable_in_approved_mode
 pass reviewed_release_binding_and_evidence_custody_refuse_drift
+
+test_failure_receipt_contract() {
+  local token
+  for token in \
+    'write_failure_receipt()' \
+    'failure-receipt.json' \
+    'ramshared-nbd-cell-failure/v1' \
+    'FAILURE_REASON' \
+    'release_version' \
+    'pair_id' \
+    'terminal_state' \
+    'PRODUCT_OFF'; do
+    if ! grep -Fq -- "$token" "$CELL"; then
+      printf 'FAIL failure_receipt_is_sanitized_and_requires_verified_product_off: missing %s\n' \
+        "$token" >&2
+      exit 1
+    fi
+  done
+  pass failure_receipt_is_sanitized_and_requires_verified_product_off
+}
+
+test_failure_receipt_contract
 printf 'PASS Test-NbdBenchmarkCell total=%s\n' "$pass_count"
