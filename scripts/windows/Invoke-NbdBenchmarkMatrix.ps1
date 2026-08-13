@@ -1406,14 +1406,16 @@ function ConvertTo-StrictInt64 {
         [Parameter(Mandatory = $true)]$Value,
         [Parameter(Mandatory = $true)][string]$Name
     )
-    if ($Value -is [bool] -or $Value -is [string] -or $Value -is [char]) {
+    $canonicalIntegral = $Value -is [sbyte] -or $Value -is [byte] -or
+        $Value -is [int16] -or $Value -is [int32] -or $Value -is [int64]
+    if (-not $canonicalIntegral) {
         throw ("integer_invalid:" + $Name)
     }
-    try { $number = [decimal]$Value } catch { throw ("integer_invalid:" + $Name) }
-    if ([decimal]::Truncate($number) -ne $number -or $number -lt 0 -or $number -gt [decimal][int64]::MaxValue) {
+    $number = [int64]$Value
+    if ($number -lt 0) {
         throw ("integer_invalid:" + $Name)
     }
-    [int64]$number
+    $number
 }
 
 function Get-NbdIdentity {
@@ -1523,14 +1525,19 @@ function Get-ComparisonContract {
     if ([string](Get-RequiredProperty -Object $Context -Name "binary_match") -ne $expectedBinaryMatch) {
         throw "comparison_context_contract_mismatch"
     }
-    $zramTopology = [ordered]@{
-        device = [string](Get-RequiredProperty -Object $zram -Name "device")
-        size_kib = [int](Get-RequiredProperty -Object $zram -Name "size_kib")
-        priority = [int](Get-RequiredProperty -Object $zram -Name "priority")
-        algorithm = [string](Get-RequiredProperty -Object $zram -Name "algorithm")
-        identity_sha256 = Assert-Sha256Value -Value (Get-RequiredProperty -Object $zram -Name "identity_sha256") -Name "zram_identity"
+    try {
+        $zramTopology = [ordered]@{
+            device = [string](Get-RequiredProperty -Object $zram -Name "device")
+            size_kib = ConvertTo-StrictInt64 -Value (Get-RequiredProperty -Object $zram -Name "size_kib") -Name "zram_size_kib"
+            priority = ConvertTo-StrictInt64 -Value (Get-RequiredProperty -Object $zram -Name "priority") -Name "zram_priority"
+            algorithm = [string](Get-RequiredProperty -Object $zram -Name "algorithm")
+            identity_sha256 = Assert-Sha256Value -Value (Get-RequiredProperty -Object $zram -Name "identity_sha256") -Name "zram_identity"
+        }
+    } catch {
+        throw "comparison_zram_topology_mismatch"
     }
-    if ($zramTopology.size_kib -ne 1048576 -or $zramTopology.priority -ne 200 -or
+    if ($zramTopology.size_kib -lt 1048568 -or $zramTopology.size_kib -gt 1048576 -or
+        $zramTopology.priority -ne 200 -or
         $zramTopology.algorithm -notmatch '^[A-Za-z0-9_-]+$') {
         throw "comparison_zram_topology_mismatch"
     }
@@ -2439,7 +2446,7 @@ Write-Output "[cuda-vram-workload] released"
                         schema = 2; pair_id = "1024-idle"; condition = "idle"; tier_mib = 1024; mode = $Mode
                         kernel_release = "manufactured-kernel"; binary_match = $BinaryMatch
                         release = [pscustomobject]@{ root = $selectedRelease.selected; version = "manufactured-v1"; source_commit = $sourceCommit; source_tree_state = "clean"; manifest_sha256 = $manifestSha256 }
-                        zram = [pscustomobject]@{ device = "zram0"; size_kib = 1048576; priority = 200; algorithm = "zstd"; identity_sha256 = $scriptHash }
+                        zram = [pscustomobject]@{ device = "zram0"; size_kib = 1048572; priority = 200; algorithm = "lzo-rle"; identity_sha256 = $scriptHash }
                         lower = [pscustomobject]@{
                             type = if ($Mode -eq "nbd") { "nbd" } else { "scratch" }
                             identity_sha256 = $lowerIdentity
@@ -2491,6 +2498,9 @@ Write-Output "[cuda-vram-workload] released"
                 $candidate = New-PairComparison -DiskSummary $diskSummary -NbdSummary $nbdSummary -DiskContext $diskContext -NbdContext $nbdContext -DiskCell $cellDisk -NbdCell $cellNbd -PairContext $pairContext -SelectedRelease $selectedRelease
                 if ($candidate.baseline_verdict -ne "BASELINE_CANDIDATE" -or $candidate.nbd_vs_disk_median_ratio -ne 1.12 -or $candidate.nbd_vs_disk_p99_ratio -ne 1.2) {
                     throw "manufactured_ratio_or_candidate_invalid"
+                }
+                if ([int64]$candidate.environment_fingerprint_material.environment.zram_topology.size_kib -ne 1048572) {
+                    throw "manufactured_zram_observed_usable_size_not_retained"
                 }
                 $baselinePath = Join-Path $temp "baseline.json"
                 [ordered]@{
@@ -2556,6 +2566,40 @@ Write-Output "[cuda-vram-workload] released"
                     }
                     if (-not $refused) { throw ("manufactured_" + $Name + "_identity_was_accepted") }
                 }
+                $assertZramComparisonAccepted = {
+                    param([string]$Name, [int64]$SizeKib)
+                    $mutatedDisk = $diskContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                    $mutatedNbd = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                    $mutatedDisk.zram.size_kib = $SizeKib
+                    $mutatedNbd.zram.size_kib = $SizeKib
+                    $comparison = New-PairComparison -DiskSummary $diskSummary -NbdSummary $nbdSummary -DiskContext $mutatedDisk -NbdContext $mutatedNbd -DiskCell $cellDisk -NbdCell $cellNbd -PairContext $pairContext -SelectedRelease $selectedRelease
+                    if ([int64]$comparison.environment_fingerprint_material.environment.zram_topology.size_kib -ne $SizeKib) {
+                        throw ("manufactured_" + $Name + "_zram_size_not_retained")
+                    }
+                }
+                $assertZramComparisonRefusal = {
+                    param([string]$Name, $DiskSizeKib, $NbdSizeKib, [string]$ExpectedReason)
+                    $mutatedDisk = $diskContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                    $mutatedNbd = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                    $mutatedDisk.zram.size_kib = $DiskSizeKib
+                    $mutatedNbd.zram.size_kib = $NbdSizeKib
+                    & $assertComparisonRefusal $Name $mutatedDisk $mutatedNbd $ExpectedReason
+                }
+                & $assertZramComparisonAccepted "zram_usable_lower_bound" 1048568
+                & $assertZramComparisonAccepted "zram_usable_observed" 1048572
+                & $assertZramComparisonAccepted "zram_usable_upper_bound" 1048576
+                & $assertZramComparisonRefusal "zram_usable_below_lower_bound" 1048567 1048567 "comparison_zram_topology_mismatch"
+                & $assertZramComparisonRefusal "zram_usable_above_upper_bound" 1048577 1048577 "comparison_zram_topology_mismatch"
+                & $assertZramComparisonRefusal "zram_usable_noncanonical" "1048572.0" "1048572.0" "comparison_zram_topology_mismatch"
+                $rawDecimalZram = ConvertFrom-Json -InputObject '{"size_kib":1048572.0}'
+                $rawExponentZram = ConvertFrom-Json -InputObject '{"size_kib":1.048572e6}'
+                if ($rawDecimalZram.size_kib -isnot [decimal] -or $rawExponentZram.size_kib -isnot [double]) {
+                    throw "manufactured_zram_raw_numeric_fixture_types_invalid"
+                }
+                & $assertZramComparisonRefusal "zram_usable_raw_decimal" $rawDecimalZram.size_kib $rawDecimalZram.size_kib "comparison_zram_topology_mismatch"
+                & $assertZramComparisonRefusal "zram_usable_raw_exponent" $rawExponentZram.size_kib $rawExponentZram.size_kib "comparison_zram_topology_mismatch"
+                & $assertZramComparisonRefusal "zram_usable_overflow" "18446744073710600192" "18446744073710600192" "comparison_zram_topology_mismatch"
+                & $assertZramComparisonRefusal "zram_pair_observed_drift" 1048572 1048576 "comparison_zram_topology_mismatch"
                 $releaseMismatch = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
                 $releaseMismatch.release.source_commit = ("d" * 40) -join ""
                 & $assertComparisonRefusal "release" $diskContext $releaseMismatch "comparison_release_identity_mismatch"
@@ -2602,6 +2646,9 @@ Write-Output "[cuda-vram-workload] released"
                 Write-Output "comparison_thresholds=PASS"
                 Write-Output "baseline_pair_actions=PASS"
                 Write-Output "comparison_identity_contract=PASS"
+                Write-Output "comparison_zram_usable_size_bounds=PASS"
+                Write-Output "comparison_zram_raw_numeric_types=REFUSED"
+                Write-Output "comparison_zram_pair_equality=REFUSED"
                 Write-Output "comparison_lower_mode_binding=REFUSED"
                 Write-Output "comparison_lower_wrong_type=REFUSED"
                 Write-Output "comparison_lower_type_missing=REFUSED"

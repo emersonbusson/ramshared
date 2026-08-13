@@ -5,16 +5,17 @@
 ## Status
 
 `partial` · local static/manufactured gates green · cover ✓ · E2E partial ·
-BINARY_MATCH partial. Attempt 12b proved the corrected 1 GiB disk-only cell
-and NBD sample-one allocation, checksum, and occupancy, but failed while
-republishing the NBD baseline for sample two. The live kernel receipt proved
-that `swapoff` retained the NBD connection; the old helper incorrectly tried
-to attach the already connected device again. The local correction now
-preserves that connection, prohibits attach/detach between samples, and
-revalidates identity plus pinned `BINARY_MATCH`; it has not been deployed or
-rerun live. The complete ordered 1/2/4 GiB Windows/WSL2 matrix has not run on
-the corrected release, so this is not DONE. Fresh independent Gate A passed
-the frozen connection-preserving candidate with zero findings.
+BINARY_MATCH partial. Attempt 15 proved that both corrected 1 GiB idle cells
+completed all three samples with integrity, occupancy, and per-cell
+`PRODUCT_OFF`; the disk/NBD contexts recorded the same `zram0` usable-size
+receipt (`1048572 KiB`), priority, algorithm, and identity. The controller
+then emitted a false `comparison_zram_topology_mismatch` because it compared
+that observed usable size with nominal capacity `1048576 KiB`. DT-NBD-43 now
+accepts only the bounded observed interval and retains exact disk/NBD tuple
+equality, but it has not been sealed or rerun live. The complete ordered 1/2/4
+GiB Windows/WSL2 matrix therefore remains incomplete and this is not DONE.
+Fresh independent Gate A passed both the prior frozen connection-preserving
+candidate and the DT-NBD-43 delta before a new sealed campaign.
 
 ## Files
 
@@ -94,6 +95,17 @@ the frozen connection-preserving candidate with zero findings.
   remains above threshold (`main.rs` 81.7%, `conn.rs` 96.5%). Fresh independent
   Gate A passed both that daemon-runtime revision and the later frozen
   connection-preserving DT-NBD-41 shell candidate.
+- DT-NBD-43 RED→GREEN: Attempt 15 captured equal disk/NBD zram receipts with
+  `size_kib=1048572`, yet the comparison helper hardcoded nominal
+  `1048576` and returned `comparison_zram_topology_mismatch`. The focused
+  PowerShell 5.1 manufactured contract first failed at that hardcoded gate.
+  The minimal correction accepts only canonical PS5 JSON integral CLR types
+  (`SByte`, `Byte`, `Int16`, `Int32`, or `Int64`) in the inclusive observed
+  usable-size interval `[1048568, 1048576]`. It executes accepted
+  lower/observed/upper values, refuses `1048567`, noncanonical, overflowing,
+  raw JSON decimal/exponent values, and otherwise-valid cross-pair zram size
+  drift. Fresh independent Gate A passed the frozen delta; it has not been
+  deployed or rerun live.
 - First live campaign attempt: exited before any benchmark cell because
   PowerShell 5.1 rejected a multi-character `TrimStart` argument in the matrix
   inventory writer. The new exact manufactured test
@@ -205,13 +217,25 @@ the frozen connection-preserving candidate with zero findings.
   must be followed by a full exact zram/NBD pair gate before context, cgroup,
   or worker admission. Fresh independent Gate A passed the frozen local 24/24
   GREEN with zero findings; sealing and a fresh run remain required.
+- Attempt 15 (2026-08-12, reviewed release source `033291e`): both 1 GiB idle
+  cells completed 3/3 samples with checksum and occupancy `PASS`; the NBD cell
+  also retained `BINARY_MATCH=PASS`. Their sealed contexts carried the same
+  zram tuple: `zram0`, `1048572 KiB`, priority `200`, `lzo-rle`, and identity
+  `7a3d17559d1543238daef389ad12b526d314f7452993b64a4319866487dc2fd7`.
+  Each cell reached verified `PRODUCT_OFF`. The NBD teardown receipt shows
+  only the pre-existing `/dev/sdc`, a dead daemon, no ghost swap, and no broad
+  kill; no reboot or WSL shutdown occurred. The pair controller nevertheless
+  stopped at `comparison_zram_topology_mismatch`, a false RED caused by its
+  nominal-size hardcode. This does not qualify the pair or advance 2/4 GiB;
+  DT-NBD-43 is local-only pending sealing and rerun.
 
 ## SPEC matrix → named tests
 
 The corrected implementation has local coverage for its source/static/
 manufactured names, including the 24 cell tests, 26 preflight suites, fresh
 CUDA handshake/refusal checks, bounded WSL controller checks, exact
-ratio/baseline mappings, public-pair custody, and
+ratio/baseline mappings, DT-NBD-43 bounded zram usable-size/equality checks,
+public-pair custody, and
 `sealed_bundle_contains_benchmark_runner_and_worker`, and both DT-NBD-40
 names. The live rows
 `nbd_lifecycle_before_action_after`, `relay_gate_before_action_after`, and
