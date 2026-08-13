@@ -277,7 +277,20 @@ if [[ "${1:-}" == -c && "${2:-}" == %u:%g:%a && "${4:-}" == "${RAMSHARED_NBD_SEL
 fi
 exec /usr/bin/stat "$@"
 EOF
-  chmod 0755 "$root/bin/relay" "$root/bin/systemctl" "$root/bin/df" "$root/bin/stat"
+  cat >"$root/bin/readlink" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ ${RAMSHARED_NBD_ALLOW_MANUFACTURED_PROC_TEST:-} == 1 &&
+  ${RAMSHARED_NBD_TEST_EMPTY_EXE_READLINK_PATH:-} == "${!#}" &&
+  ${1:-} == -- ]]; then
+  if [[ -n ${RAMSHARED_NBD_TEST_EMPTY_EXE_READLINK_HIT:-} ]]; then
+    : >"$RAMSHARED_NBD_TEST_EMPTY_EXE_READLINK_HIT"
+  fi
+  exit 0
+fi
+exec /usr/bin/readlink "$@"
+EOF
+  chmod 0755 "$root/bin/relay" "$root/bin/systemctl" "$root/bin/df" "$root/bin/stat" "$root/bin/readlink"
   printf '%s\n' "$root"
 }
 
@@ -338,12 +351,35 @@ write_proc_stat_metadata() {
   printf '%s (%s) S 0 0 0 0 0 %s\n' "$pid" "$name" "$flags" >"$root/proc/$pid/stat"
 }
 
+write_proc_status_state_metadata() {
+  local root=$1 pid=$2 name=$3 state=$4 kthread=$5 state_label tgid
+  tgid=${6:-$pid}
+  [[ $pid =~ ^[1-9][0-9]*$ && $tgid =~ ^[1-9][0-9]*$ &&
+    $state =~ ^[RSDTZWI]$ && $kthread =~ ^[01]$ ]] || return 1
+  case $state in
+    S) state_label=sleeping ;;
+    Z) state_label=zombie ;;
+    *) state_label=fixture ;;
+  esac
+  mkdir -p "$root/proc/$pid"
+  printf 'Name:\t%s\nState:\t%s (%s)\nTgid:\t%s\nPid:\t%s\nPPid:\t0\nKthread:\t%s\n' \
+    "$name" "$state" "$state_label" "$tgid" "$pid" "$kthread" >"$root/proc/$pid/status"
+}
+
+write_proc_stat_state_metadata() {
+  local root=$1 pid=$2 name=$3 state=$4 flags=$5
+  [[ $pid =~ ^[1-9][0-9]*$ && $state =~ ^[RSDTZWI]$ && $flags =~ ^[0-9]+$ ]] || return 1
+  mkdir -p "$root/proc/$pid"
+  printf '%s (%s) %s 0 0 0 0 0 %s\n' "$pid" "$name" "$state" "$flags" >"$root/proc/$pid/stat"
+}
+
 run_product() {
   local root=$1
   shift
   local product_root="$root/opt/ramshared"
   set +e
   RUN_OUTPUT=$(env \
+    "PATH=$root/bin:$PATH" \
     "RAMSHARED_PRODUCT_ROOT=$product_root" \
     "RAMSHARED_NBD_PROC_ROOT=$root/proc" \
     "RAMSHARED_NBD_SWAPS_FILE=$root/proc/swaps" \
@@ -367,6 +403,216 @@ run_product() {
   RUN_EXIT=$?
   set -e
 }
+
+start_bounded_product_check() {
+  local root=$1 output=$2
+  local product_root="$root/opt/ramshared"
+  shift 2
+  [[ -d $root/state && ! -L $root/state && ! -e $output ]] || return 1
+  : >"$output"
+  timeout --foreground --kill-after=2s 15s env \
+    "PATH=$root/bin:$PATH" \
+    "RAMSHARED_PRODUCT_ROOT=$product_root" \
+    "RAMSHARED_NBD_PROC_ROOT=$root/proc" \
+    "RAMSHARED_NBD_SWAPS_FILE=$root/proc/swaps" \
+    "RAMSHARED_NBD_PID_FILE=$root/run/ramsharedd.pid" \
+    "RAMSHARED_NBD_MODULES_FILE=$root/proc/modules" \
+    "RAMSHARED_NBD_DEV_ROOT=$root/dev" \
+    "RAMSHARED_NBD_SYS_BLOCK_ROOT=$root/sys/block" \
+    "RAMSHARED_NBD_SYSTEMCTL=$root/bin/systemctl" \
+    "RAMSHARED_NBD_RELAY_HEALTH=$root/bin/relay" \
+    "RAMSHARED_NBD_DF=$root/bin/df" \
+    "RAMSHARED_NBD_STAT=$root/bin/stat" \
+    "RAMSHARED_NBD_SELECTOR_PATH=$product_root/current" \
+    "RAMSHARED_NBD_DF_MOUNT_POINT=${RAMSHARED_NBD_DF_MOUNT_POINT:-$root/sink}" \
+    "RAMSHARED_NBD_EXPECT_UID=${RAMSHARED_NBD_EXPECT_UID:-$(id -u)}" \
+    "RAMSHARED_NBD_EXPECT_GID=${RAMSHARED_NBD_EXPECT_GID:-$(id -g)}" \
+    "RAMSHARED_RELAY_ARGS=$root/state/relay.args" \
+    "RAMSHARED_RELAY_FAIL=$root/state/relay.fail" \
+    "RAMSHARED_SYSTEMCTL_STATE=$root/state" \
+    "RAMSHARED_NBD_VRAM_MIB=1024" \
+    "$PRODUCT" "$@" >"$output" 2>&1 &
+  BOUNDED_PRODUCT_PID=$!
+  [[ $BOUNDED_PRODUCT_PID =~ ^[1-9][0-9]*$ ]]
+}
+
+write_proc_status_state_payload() {
+  local target=$1 pid=$2 name=$3 state=$4 kthread=$5 state_label tgid
+  tgid=${6:-$pid}
+  [[ $pid =~ ^[1-9][0-9]*$ && $tgid =~ ^[1-9][0-9]*$ &&
+    $state =~ ^[RSDTZWI]$ && $kthread =~ ^[01]$ && ! -e $target ]] || return 1
+  case $state in
+    S) state_label=sleeping ;;
+    Z) state_label=zombie ;;
+    *) state_label=fixture ;;
+  esac
+  printf 'Name:\t%s\nState:\t%s (%s)\nTgid:\t%s\nPid:\t%s\nPPid:\t0\nKthread:\t%s\n' \
+    "$name" "$state" "$state_label" "$tgid" "$pid" "$kthread" >"$target"
+}
+
+start_status_fifo_writer() {
+  local fifo=$1 payload=$2 marker=$3 pid_file=$4 stage=$5
+  [[ -p $fifo && -f $payload && ! -e $marker && ! -e $pid_file && $stage =~ ^[1-9][0-9]*$ ]] || return 1
+  timeout --foreground --kill-after=1s 5s bash -c '
+    set -euo pipefail
+    fifo=$1
+    payload=$2
+    marker=$3
+    stage=$4
+    exec 3>"$fifo"
+    cat -- "$payload" >&3
+    exec 3>&-
+    printf "stage=%s\\n" "$stage" >"$marker"
+  ' _ "$fifo" "$payload" "$marker" "$stage" &
+  STATUS_FIFO_WRITER_PID=$!
+  [[ $STATUS_FIFO_WRITER_PID =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s\n' "$STATUS_FIFO_WRITER_PID" >"$pid_file"
+}
+
+wait_for_status_fifo_writer() {
+  local stage=$1 pid=$2 marker=$3 pid_file=$4 deadline rc
+  [[ $pid =~ ^[1-9][0-9]*$ && -f $pid_file && $(<"$pid_file") == "$pid" ]] || return 1
+  deadline=$((SECONDS + 6))
+  while [[ ! -f $marker ]]; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      if wait "$pid"; then rc=0; else rc=$?; fi
+      printf 'status FIFO writer exited before marker stage=%s pid=%s rc=%s\n' "$stage" "$pid" "$rc" >&2
+      return 1
+    fi
+    if (( SECONDS >= deadline )); then
+      printf 'status FIFO writer deadline stage=%s pid=%s\n' "$stage" "$pid" >&2
+      return 1
+    fi
+    sleep 0.05
+  done
+  if wait "$pid"; then rc=0; else rc=$?; fi
+  [[ $rc == 0 && $(<"$marker") == "stage=$stage" ]] || {
+    printf 'status FIFO writer failed stage=%s pid=%s rc=%s\n' "$stage" "$pid" "$rc" >&2
+    return 1
+  }
+}
+
+wait_for_status_fifo_quiescence() {
+  local fifo=$1 stage=$2 deadline rc
+  [[ -p $fifo && $stage =~ ^[1-9][0-9]*$ ]] || return 1
+  deadline=$((SECONDS + 3))
+  while :; do
+    if fuser -s "$fifo"; then
+      rc=0
+    else
+      rc=$?
+    fi
+    if (( rc == 1 )); then
+      return 0
+    fi
+    if (( rc != 0 )); then
+      printf 'status FIFO probe failed stage=%s rc=%s\n' "$stage" "$rc" >&2
+      return 1
+    fi
+    if (( SECONDS >= deadline )); then
+      printf 'status FIFO did not quiesce stage=%s\n' "$stage" >&2
+      return 1
+    fi
+    sleep 0.05
+  done
+}
+
+stop_owned_bounded_fixture_child() {
+  local pid=$1 deadline
+  [[ $pid =~ ^[1-9][0-9]*$ ]] || return 0
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" 2>/dev/null || return 0
+    deadline=$((SECONDS + 2))
+    while kill -0 "$pid" 2>/dev/null && (( SECONDS < deadline )); do
+      sleep 0.05
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -KILL "$pid" 2>/dev/null || return 0
+    fi
+  fi
+  if wait "$pid"; then :; else :; fi
+}
+
+exercise_zombie_status_transition_fifo() (
+  set -euo pipefail
+  local root=$1 fifo="$1/proc/4250/status" product_output="$1/state/zombie-status-race.product.out"
+  local stage_one_payload="$1/state/zombie-status-race.stage-1.payload"
+  local stage_two_payload="$1/state/zombie-status-race.stage-2.payload"
+  local stage_three_payload="$1/state/zombie-status-race.stage-3.payload"
+  local stage_one_marker="$1/state/zombie-status-race.stage-1.marker"
+  local stage_two_marker="$1/state/zombie-status-race.stage-2.marker"
+  local stage_three_marker="$1/state/zombie-status-race.stage-3.marker"
+  local stage_one_pid_file="$1/state/zombie-status-race.stage-1.pid"
+  local stage_two_pid_file="$1/state/zombie-status-race.stage-2.pid"
+  local stage_three_pid_file="$1/state/zombie-status-race.stage-3.pid"
+  local product_pid= stage_one_pid= stage_two_pid= stage_three_pid= product_rc
+  cleanup_zombie_status_transition_fifo() {
+    stop_owned_bounded_fixture_child "$stage_three_pid"
+    stop_owned_bounded_fixture_child "$stage_two_pid"
+    stop_owned_bounded_fixture_child "$stage_one_pid"
+    stop_owned_bounded_fixture_child "$product_pid"
+  }
+  trap cleanup_zombie_status_transition_fifo EXIT
+
+  mkdir -p "$root/proc/4250"
+  mkfifo "$fifo"
+  write_proc_stat_state_metadata "$root" 4250 transition-race Z 0
+  write_proc_status_state_payload "$stage_one_payload" 4250 transition-race Z 0
+  write_proc_status_state_payload "$stage_two_payload" 4250 transition-race S 0
+  write_proc_status_state_payload "$stage_three_payload" 4250 transition-race S 0
+
+  start_status_fifo_writer "$fifo" "$stage_one_payload" "$stage_one_marker" "$stage_one_pid_file" 1
+  stage_one_pid=$STATUS_FIFO_WRITER_PID
+  [[ ! -e $stage_one_marker ]] || {
+    printf 'status FIFO stage one did not wait for its reader\n' >&2
+    return 1
+  }
+  kill -0 "$stage_one_pid" 2>/dev/null || {
+    printf 'status FIFO stage one exited before product admission\n' >&2
+    return 1
+  }
+
+  start_bounded_product_check "$root" "$product_output" --check
+  product_pid=$BOUNDED_PRODUCT_PID
+  wait_for_status_fifo_writer 1 "$stage_one_pid" "$stage_one_marker" "$stage_one_pid_file"
+  wait_for_status_fifo_quiescence "$fifo" 1
+
+  start_status_fifo_writer "$fifo" "$stage_two_payload" "$stage_two_marker" "$stage_two_pid_file" 2
+  stage_two_pid=$STATUS_FIFO_WRITER_PID
+  wait_for_status_fifo_writer 2 "$stage_two_pid" "$stage_two_marker" "$stage_two_pid_file"
+  wait_for_status_fifo_quiescence "$fifo" 2
+
+  start_status_fifo_writer "$fifo" "$stage_three_payload" "$stage_three_marker" "$stage_three_pid_file" 3
+  stage_three_pid=$STATUS_FIFO_WRITER_PID
+  wait_for_status_fifo_writer 3 "$stage_three_pid" "$stage_three_marker" "$stage_three_pid_file"
+  wait_for_status_fifo_quiescence "$fifo" 3
+
+  if wait "$product_pid"; then product_rc=0; else product_rc=$?; fi
+  [[ $product_rc == 1 ]] || {
+    printf 'zombie status transition product exit=%s expected=1\n' "$product_rc" >&2
+    return 1
+  }
+  grep -Fqx 'NBD_READINESS_REASON=PROC_EXE_UNREADABLE' "$product_output"
+  grep -Fqx 'NBD_PRODUCT_STATE=BLOCKED' "$product_output"
+  for marker in "$stage_one_marker" "$stage_two_marker" "$stage_three_marker"; do
+    [[ -f $marker ]] || {
+      printf 'zombie status transition missing marker=%s\n' "$marker" >&2
+      return 1
+    }
+  done
+  for pid_file in "$stage_one_pid_file" "$stage_two_pid_file" "$stage_three_pid_file"; do
+    [[ $(<"$pid_file") =~ ^[1-9][0-9]*$ ]] || {
+      printf 'zombie status transition invalid writer pid file=%s\n' "$pid_file" >&2
+      return 1
+    }
+  done
+  for pid in "$stage_one_pid" "$stage_two_pid" "$stage_three_pid" "$product_pid"; do
+    [[ ! -e /proc/$pid ]] || {
+      printf 'zombie status transition retained child pid=%s\n' "$pid" >&2
+      return 1
+    }
+  done
+)
 
 test_release_manifest_and_modes_are_verified() {
   local root release
@@ -507,6 +753,90 @@ test_product_off_tolerates_kernel_thread_and_verified_disappearance() {
   assert_exit product_off_tolerates_kernel_thread_and_verified_disappearance 1 || return
   assert_contains product_off_tolerates_kernel_thread_and_verified_disappearance 'NBD_READINESS_REASON=PROC_EXE_UNREADABLE' || return
   pass product_off_tolerates_kernel_thread_and_verified_disappearance
+}
+
+test_product_off_tolerates_verified_zombies_only() {
+  local root
+
+  root=$(new_fixture product-off-zombie-missing-exe)
+  write_proc_status_state_metadata "$root" 4242 unrelated-zombie Z 0
+  write_proc_stat_state_metadata "$root" 4242 unrelated-zombie Z 0
+  run_product "$root" --check
+  assert_exit product_off_zombie_missing_exe 0 || return
+  assert_contains product_off_zombie_missing_exe 'NBD_PRODUCT_STATE=PRODUCT_OFF' || return
+
+  root=$(new_fixture product-off-live-empty-exe-readlink)
+  write_proc_status_state_metadata "$root" 4243 unrelated-live S 0
+  write_proc_stat_state_metadata "$root" 4243 unrelated-live S 0
+  ln -s /unreadable-zombie-exe "$root/proc/4243/exe"
+  local empty_exe_readlink_hit="$root/state/empty-exe-readlink.hit"
+  RAMSHARED_NBD_ALLOW_MANUFACTURED_PROC_TEST=1 \
+    RAMSHARED_NBD_TEST_EMPTY_EXE_READLINK_PATH="$root/proc/4243/exe" \
+    RAMSHARED_NBD_TEST_EMPTY_EXE_READLINK_HIT="$empty_exe_readlink_hit" \
+    run_product "$root" --check
+  assert_exit product_off_live_empty_exe_readlink 1 || return
+  assert_contains product_off_live_empty_exe_readlink 'NBD_READINESS_REASON=PROC_EXE_UNREADABLE' || return
+  [[ -f $empty_exe_readlink_hit ]] || {
+    fail 'product_off_live_empty_exe_readlink did not execute the empty-exe readlink hook'
+    return 1
+  }
+
+  root=$(new_fixture product-off-live-missing-exe)
+  write_proc_status_state_metadata "$root" 4244 unrelated-live S 0
+  write_proc_stat_state_metadata "$root" 4244 unrelated-live S 0
+  run_product "$root" --check
+  assert_exit product_off_live_missing_exe 1 || return
+  assert_contains product_off_live_missing_exe 'NBD_READINESS_REASON=PROC_EXE_UNREADABLE' || return
+
+  root=$(new_fixture product-off-zombie-race-to-live)
+  write_proc_status_state_metadata "$root" 4245 transition-race Z 0
+  write_proc_stat_state_metadata "$root" 4245 transition-race S 0
+  run_product "$root" --check
+  assert_exit product_off_zombie_race_to_live 1 || return
+  assert_contains product_off_zombie_race_to_live 'NBD_READINESS_REASON=PROC_EXE_UNREADABLE' || return
+
+  root=$(new_fixture product-off-zombie-malformed-status)
+  mkdir -p "$root/proc/4246"
+  printf 'Name:\tmalformed\nState:\tZ (zombie)\nState:\tZ (zombie)\nKthread:\t0\n' >"$root/proc/4246/status"
+  write_proc_stat_state_metadata "$root" 4246 malformed Z 0
+  run_product "$root" --check
+  assert_exit product_off_zombie_malformed_status 1 || return
+  assert_contains product_off_zombie_malformed_status 'NBD_READINESS_REASON=PROC_EXE_UNREADABLE' || return
+
+  root=$(new_fixture product-off-zombie-malformed-stat)
+  write_proc_status_state_metadata "$root" 4247 malformed Z 0
+  printf 'malformed stat\n' >"$root/proc/4247/stat"
+  run_product "$root" --check
+  assert_exit product_off_zombie_malformed_stat 1 || return
+  assert_contains product_off_zombie_malformed_stat 'NBD_READINESS_REASON=PROC_EXE_UNREADABLE' || return
+
+  root=$(new_fixture product-off-zombie-stale-pidfile)
+  write_proc_status_state_metadata "$root" 4248 stale-daemon Z 0
+  write_proc_stat_state_metadata "$root" 4248 stale-daemon Z 0
+  printf '4248\n' >"$root/run/ramsharedd.pid"
+  run_product "$root" --check
+  assert_exit product_off_zombie_stale_pidfile 1 || return
+  assert_contains product_off_zombie_stale_pidfile 'NBD_READINESS_REASON=BINARY_MATCH_FAILED' || return
+
+  root=$(new_fixture product-off-zombie-tgid-mismatch)
+  write_proc_status_state_metadata "$root" 4249 mismatched-zombie Z 0 4248
+  write_proc_stat_state_metadata "$root" 4249 mismatched-zombie Z 0
+  [[ $(awk -F: '$1 == "Tgid" { gsub(/[[:space:]]/, "", $2); print $2 }' \
+    "$root/proc/4249/status") == 4248 ]] || {
+    fail 'product_off_zombie_tgid_mismatch did not create the mismatched Tgid fixture'
+    return 1
+  }
+  run_product "$root" --check
+  assert_exit product_off_zombie_tgid_mismatch 1 || return
+  assert_contains product_off_zombie_tgid_mismatch 'NBD_READINESS_REASON=PROC_EXE_UNREADABLE' || return
+
+  root=$(new_fixture product-off-zombie-status-race)
+  exercise_zombie_status_transition_fifo "$root" || {
+    fail 'product_off_zombie_status_race did not refuse the final Z-to-S status transition through all FIFO stages'
+    return 1
+  }
+
+  pass product_off_tolerates_verified_zombies_only
 }
 
 test_product_off_uses_kernel_thread_metadata_not_comm_names() {
@@ -1448,38 +1778,39 @@ test_legacy_restore_reloads_systemd_after_daemon_reload() {
   pass legacy_restore_reloads_systemd_after_daemon_reload
 }
 
-test_release_manifest_and_modes_are_verified || true
-test_binary_match_rejects_stale_or_deleted_daemon || true
-test_product_off_rejects_exact_daemon_without_pidfile || true
-test_product_off_rejects_managed_zram_and_exact_aliases || true
-test_product_off_refuses_deleted_and_unreadable_stable_proc_entries || true
-test_product_off_tolerates_kernel_thread_and_verified_disappearance || true
-test_product_off_uses_kernel_thread_metadata_not_comm_names || true
-test_product_off_and_ready_reject_other_installed_release_daemons || true
-test_product_off_recognizes_canonical_release_paths_without_fs_identity || true
-test_relay_check_failure_blocks_readiness || true
-test_reboot_and_shutdown_requests_are_refused || true
-test_legacy_ublk_retirement_never_unloads_module || true
-test_product_off_ready_blocked_state_matrix || true
-test_capacity_sink_identity_and_alignment_refusals || true
-test_environment_lower_sink_cannot_override_derived_release || true
-test_n3_or_ublk_capability_does_not_promote_nbd_product || true
-test_space_delimited_swap_rows_are_not_missed || true
-test_capacity_sink_identity_requires_one_bound_df_record || true
-test_selector_lstat_owner_is_verified || true
-test_symlinked_sysfs_ublk_is_detected || true
-test_manifest_special_objects_refuse_without_reading_them || true
-test_sealed_nbd_bundle_and_lifecycle_wiring || true
-test_sealed_bundle_contains_benchmark_runner_and_worker || true
-test_installer_manifest_and_unit_refusals_are_prewrite || true
-test_installer_active_enabled_or_unknown_units_refuse_without_writes || true
-test_installer_every_post_write_phase_rolls_back || true
-test_attended_derived_install_is_bound_and_sealed || true
-test_legacy_unit_migration_requires_exact_hash_and_restores_on_failure || true
-test_corrupt_legacy_backup_is_never_restored || true
-test_corrupt_published_legacy_backup_refuses_before_replacement || true
-test_legacy_backup_root_symlink_is_refused || true
-test_legacy_restore_reloads_systemd_after_daemon_reload || true
+test_release_manifest_and_modes_are_verified
+test_binary_match_rejects_stale_or_deleted_daemon
+test_product_off_rejects_exact_daemon_without_pidfile
+test_product_off_rejects_managed_zram_and_exact_aliases
+test_product_off_refuses_deleted_and_unreadable_stable_proc_entries
+test_product_off_tolerates_kernel_thread_and_verified_disappearance
+test_product_off_tolerates_verified_zombies_only
+test_product_off_uses_kernel_thread_metadata_not_comm_names
+test_product_off_and_ready_reject_other_installed_release_daemons
+test_product_off_recognizes_canonical_release_paths_without_fs_identity
+test_relay_check_failure_blocks_readiness
+test_reboot_and_shutdown_requests_are_refused
+test_legacy_ublk_retirement_never_unloads_module
+test_product_off_ready_blocked_state_matrix
+test_capacity_sink_identity_and_alignment_refusals
+test_environment_lower_sink_cannot_override_derived_release
+test_n3_or_ublk_capability_does_not_promote_nbd_product
+test_space_delimited_swap_rows_are_not_missed
+test_capacity_sink_identity_requires_one_bound_df_record
+test_selector_lstat_owner_is_verified
+test_symlinked_sysfs_ublk_is_detected
+test_manifest_special_objects_refuse_without_reading_them
+test_sealed_nbd_bundle_and_lifecycle_wiring
+test_sealed_bundle_contains_benchmark_runner_and_worker
+test_installer_manifest_and_unit_refusals_are_prewrite
+test_installer_active_enabled_or_unknown_units_refuse_without_writes
+test_installer_every_post_write_phase_rolls_back
+test_attended_derived_install_is_bound_and_sealed
+test_legacy_unit_migration_requires_exact_hash_and_restores_on_failure
+test_corrupt_legacy_backup_is_never_restored
+test_corrupt_published_legacy_backup_refuses_before_replacement
+test_legacy_backup_root_symlink_is_refused
+test_legacy_restore_reloads_systemd_after_daemon_reload
 
 if [[ $fail_count -ne 0 ]]; then
   printf 'FAIL Test-NbdProductPreflight passed=%s failed=%s\n' "$pass_count" "$fail_count" >&2

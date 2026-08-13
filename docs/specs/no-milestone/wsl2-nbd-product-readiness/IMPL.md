@@ -130,8 +130,8 @@ termination action ran during the subsequent correction slice.
   present and pass in the CLI suite.
 - Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 44/44;
   `bash scripts/safety/test-nbd-product-preflight.sh` → currently verified
-  32/32. A separately owned preflight increment is not counted until it is
-  integrated and rerun.
+  33/33, including exact three-observation userspace-zombie liveness and
+  fail-closed live/malformed/race cases.
 - Public evidence: Node 24.15.0 `node --test --experimental-test-coverage
   --test-coverage-include=tools/ci/check-benchmark-evidence.mjs
   --test-coverage-lines=80 --test-coverage-branches=80
@@ -414,6 +414,19 @@ its matrix and failure hashes are custody references, not public promotion
 evidence.
 
 ## Gaps
+
+## Attempt25 source-only zombie liveness hardening
+
+The installed source revision `d4efe59` exposed and refused 171 unrelated
+pre-existing zombie processes as `PROC_EXE_UNREADABLE`; it did not implement
+the exact DT-NBD-47 zombie rule. The current uncommitted successor implements
+that rule: the same PID must report `Z` in `/proc/<pid>/status`, `Z` in
+`/proc/<pid>/stat`, then `Z` again in `status`, with matching `Pid`/`Tgid` and
+`Kthread: 0`. A live, malformed, unreadable, or race-to-live entry is refused
+fail-closed; a stale daemon PID still blocks `PRODUCT_OFF`. The manufactured
+preflight suite is 33/33. The successor is not installed or live-validated;
+resealing and a fresh pinned preflight are required before the WSL2 matrix
+resumes.
 
 ## Attempt24 source-only terminal-authority hardening
 

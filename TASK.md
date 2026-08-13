@@ -63,8 +63,8 @@
 **Registered date:** `2026-08-12`.
 **Updated date:** `2026-08-13`.
 **Registered time:** `12:15:54`.
-**Updated time:** `15:59:48`.
-**Source revision:** `0faf67456f8cfc0e9a726700dc21c4578805049c`.
+**Updated time:** `17:55:20`.
+**Source revision:** `d4efe596996e6877e26409fb7b1ad8c369c7557f`.
 **Destinations:** branch `feat/wsl2-nbd-benchmark-matrix`, milestone `v0.9.0-beta.1 — WSL2 NBD`, issue `#194`, `docs/specs/no-milestone/wsl2-nbd-product-readiness/`, `scripts/safety/`, `scripts/windows/`, `scripts/p0/`, `tools/ci/`, and the sealed Linux bundle.
 **Scope:** Correct and qualify the paired 1/2/4 GiB disk-versus-NBD benchmark with identical zram topology, cgroup-before-start containment, exact scratch identity, pair-scoped CUDA, bounded Windows-to-WSL calls, source/BINARY_MATCH binding, numeric comparison/regression records, and fail-closed cleanup. Run no live pressure until static/manufactured gates and a fresh independent Sol Gate A pass.
 **Evidence / blockers:** Attempt 15 used sealed source `033291e`: both 1 GiB idle cells passed 3/3 with checksum, occupancy, and per-cell `PRODUCT_OFF`; NBD retained `BINARY_MATCH=PASS`. Attempt 16 passed P1/Q2 disk/NBD pairs in both idle and bounded conditions, but Q4 allocation-to-HOLD was about 335 seconds and sample two hit the fixed 120-second `SAMPLE_TIMEOUT` after about 281 seconds; cleanup was clean. The later corrections established the P1/Q2/Q4 tuples `120/900`, `240/1020`, and `600/2100`. Attempt 17 reproduced a false `cell_timeout_budget_mismatch` when equal summary/controller timeout fields were serialized in different property orders. The named `cell_timeout_budget_property_order_is_semantic` test is now green with canonical strict comparison and refuses real mismatch/noncanonical types; fresh independent Sol Gate A passed that frozen correction. Attempt 18 then exposed that the controller's valid Q4 `CudaMaxHoldSec=4320` was rejected by the workload's stale 3600-second parameter cap before CUDA startup; the named handshake test now proves 4320 accepted and 4321 refused. Attempt 19 used sealed source `fed085b` and reached 9/12 PASS cells; Attempt 20 reached 10/12 before Q4 bounded headroom refusal. Attempt 21 reached 11/12 before the synchronous recovery self-deadlock; async recovery completed/audited in `47889e0`, and the non-destructive watchdog completed/audited in `63bd3be`. Attempt22b is the latest live attempt on sealed source `63bd3be`: four P1 cells passed 3/3, Q2 disk-only was `RED/SAMPLE_TIMEOUT`, the matrix hash is `4088682aa07e6b90d6477f7e1ceaff952ee16fac99967b2b980698460302da14`, the failure receipt hash is `8e2e07918404e6533afb8ed440075ed0a2dff2ba4424a378f38647685596e7e4`, and terminal `PRODUCT_OFF` was verified. Q2 NBD and all Q4 cells did not run. The current blockers are fresh independent Gate A, resealing, Q2-calibrated complete matrix, Gate B, PR checks, and merge; no new live claim is made.
@@ -89,10 +89,10 @@ manufactured suites did intentionally create short-lived test subprocesses
 and temporary evidence fixtures; those are local refusal tests, not live
 product activity or promotion evidence.
 
-The current source-only Gate A correction is also nonpromotable: cell
-manufactured/refusal tests are 44/44 and the currently verified preflight
-suite is 32/32. Any independently owned preflight increment must be integrated
-and rerun before this count changes. It bounds
+The prior source-only Gate A correction was nonpromotable: cell
+manufactured/refusal tests were 44/44 and the verified preflight suite was
+32/32. The integrated zombie-liveness increment now makes the preflight suite
+33/33. It bounds
 worker TERM/KILL grace to 1–30 seconds, refuses every inherited preflight and
 manufactured seam in live mode before artifact creation, keeps the first
 TERM/INT status through a single bounded cleanup epoch, requires unique
@@ -103,6 +103,15 @@ preflights, and envelope write/fsync/link/validation faults. A fresh sealed
 release, independent Gate A, and the complete live 1/2/4 GiB matrix remain
 required; no live RamShared/WSL product process, NBD, swap, CUDA, cgroup,
 reboot, termination, or recording action occurred in this correction.
+
+The current DT-NBD-47 liveness correction is source-only and nonpromotable:
+the preflight now ignores a userspace entry only after exact `status: Z`,
+`stat: Z`, `status: Z` observations for the same PID, with matching `Pid`/`Tgid`
+and `Kthread: 0`; live, malformed, unreadable, and race-to-live entries fail
+closed. The integrated preflight suite is 33/33. A postinstall attempt at
+source `d4efe59` was blocked by 171 unrelated pre-existing zombie processes;
+that installed result is not evidence, no live revalidation occurred, and a
+fresh sealed release is required.
 
 The public-pair custody correction is source-only and nonpromotable: Node
 24.15.0 validates 21/21 public-evidence tests at 95.37% lines, 80.60%
