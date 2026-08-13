@@ -485,6 +485,51 @@ PY
 
 test_aggregate_size_occupancy_contract
 
+test_tier_derived_timeout_budget_contract() {
+  local tier expected_sample expected_outer samples summary wrong_sample
+  for tier in 1024 2048 4096; do
+    case $tier in
+      1024|2048) expected_sample=120; expected_outer=900 ;;
+      4096) expected_sample=600; expected_outer=2100 ;;
+      *) echo "FAIL unsupported manufactured timeout tier" >&2; exit 1 ;;
+    esac
+    samples="$TMP/timeout-$tier-samples.jsonl"
+    summary="$TMP/timeout-$tier-summary.json"
+    write_tier_samples "$samples" nbd "$tier"
+    "$CELL" --aggregate --samples "$samples" --out "$summary" \
+      --mode nbd --condition idle --tier-mib "$tier" --sample-timeout-sec "$expected_sample"
+    python3 - "$summary" "$expected_sample" "$expected_outer" <<'PY'
+import json
+import sys
+
+path, sample_text, outer_text = sys.argv[1:]
+with open(path, encoding="utf-8") as source:
+    summary = json.load(source)
+budget = summary["timeout_budget"]
+assert budget == {
+    "sample_timeout_sec": int(sample_text),
+    "samples": 3,
+    "setup_cleanup_timeout_sec": 300,
+    "cell_outer_timeout_sec": int(outer_text),
+}, summary
+PY
+    wrong_sample=600
+    [[ $expected_sample == 600 ]] && wrong_sample=120
+    if "$CELL" --aggregate --samples "$samples" --out "$TMP/timeout-$tier-wrong.json" \
+      --mode nbd --condition idle --tier-mib "$tier" --sample-timeout-sec "$wrong_sample" >/dev/null 2>&1; then
+      printf 'FAIL aggregate accepted mismatched timeout tier=%s sample=%s\n' "$tier" "$wrong_sample" >&2
+      exit 1
+    fi
+  done
+  grep -Fq 'SAMPLE_TIMEOUT_MAX_SEC=600' "$CELL"
+  grep -Fq 'CELL_SETUP_CLEANUP_TIMEOUT_SEC=300' "$CELL"
+  grep -Fq 'CELL_OUTER_TIMEOUT_MIN_SEC=900' "$CELL"
+  grep -Fq 'CELL_OUTER_TIMEOUT_MAX_SEC=2100' "$CELL"
+  pass tier_derived_timeout_budget_is_bounded_and_refuses_mismatch
+}
+
+test_tier_derived_timeout_budget_contract
+
 evidence_dir="$TMP/evidence"
 mkdir -p "$evidence_dir"
 python3 - "$evidence_dir" <<'PY'
@@ -519,12 +564,19 @@ with open(inventory_path, "w", encoding="utf-8") as target:
 def digest(name):
     with open(os.path.join(root, name), "rb") as source:
         return hashlib.sha256(source.read()).hexdigest()
+timeout_budget = {
+    "sample_timeout_sec": 120,
+    "samples": 3,
+    "setup_cleanup_timeout_sec": 300,
+    "cell_outer_timeout_sec": 900,
+}
 context = {
     "schema": 2,
     "pair_id": "manufactured-pair",
     "mode": "disk-only",
     "binary_match": "N/A",
     "watchdog": {"armed": True, "outcome": "not_fired"},
+    "timeout_budget": timeout_budget,
     "release": {
         "version": "manufactured-v1",
         "source_commit": "a" * 40,
@@ -534,6 +586,9 @@ context = {
 }
 with open(os.path.join(root, "context.json"), "w", encoding="utf-8") as target:
     json.dump(context, target, sort_keys=True, separators=(",", ":"))
+    target.write("\n")
+with open(os.path.join(root, "summary.json"), "w", encoding="utf-8") as target:
+    json.dump({"timeout_budget": timeout_budget}, target, sort_keys=True, separators=(",", ":"))
     target.write("\n")
 for row in rows:
     path = os.path.join(root, row["name"])
@@ -560,6 +615,7 @@ envelope = {
     "artifacts": [{"path": row["name"], "bytes": row["bytes"], "sha256": row["sha256"]} for row in rows],
     "binary_match": "N/A",
     "watchdog": {"armed": True, "outcome": "not_fired"},
+    "timeout_budget": timeout_budget,
     "classification": "INCOMPARABLE",
 }
 with open(os.path.join(root, "evidence-envelope.json"), "w", encoding="utf-8") as target:

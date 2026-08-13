@@ -5,7 +5,9 @@
 ## Status
 
 `partial` · local static/manufactured gates green · cover ✓ · E2E partial ·
-BINARY_MATCH partial. Attempt 15 proved that both corrected 1 GiB idle cells
+BINARY_MATCH partial. Attempt 16 identified a Q4 timeout-budget mismatch and
+the local correction is green, but it is not sealed or rerun live. Attempt 15
+proved that both corrected 1 GiB idle cells
 completed all three samples with integrity, occupancy, and per-cell
 `PRODUCT_OFF`; the disk/NBD contexts recorded the same `zram0` usable-size
 receipt (`1048572 KiB`), priority, algorithm, and identity. The controller
@@ -14,8 +16,9 @@ that observed usable size with nominal capacity `1048576 KiB`. DT-NBD-43 now
 accepts only the bounded observed interval and retains exact disk/NBD tuple
 equality, but it has not been sealed or rerun live. The complete ordered 1/2/4
 GiB Windows/WSL2 matrix therefore remains incomplete and this is not DONE.
-Fresh independent Gate A passed both the prior frozen connection-preserving
-candidate and the DT-NBD-43 delta before a new sealed campaign.
+Fresh independent Gate A passed the prior frozen connection-preserving
+candidate, the DT-NBD-43 delta, and the frozen DT-NBD-44 seven-file candidate
+before a new sealed campaign.
 
 ## Files
 
@@ -45,7 +48,7 @@ candidate and the DT-NBD-43 delta before a new sealed campaign.
   `failed_swapoff_keeps_daemon_and_device_alive`, and
   `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` are
   present and pass in the CLI suite.
-- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 24/24;
+- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 25/25;
   `bash scripts/safety/test-nbd-product-preflight.sh` → 26/26.
 - Public evidence: `node --test tools/ci/check-benchmark-evidence.test.mjs`
   → 15/15, including the sanitized pair-envelope fixture and custody rules.
@@ -228,13 +231,30 @@ candidate and the DT-NBD-43 delta before a new sealed campaign.
   stopped at `comparison_zram_topology_mismatch`, a false RED caused by its
   nominal-size hardcode. This does not qualify the pair or advance 2/4 GiB;
   DT-NBD-43 is local-only pending sealing and rerun.
+- Attempt 16 (2026-08-12, reviewed release source `f9c70fe`): P1/Q2 disk/NBD
+  pairs passed their bounded cells in both idle and bounded conditions. Q4 idle disk sample one passed,
+  but allocation-to-HOLD was observed at about 335 seconds and Q4 sample two
+  reached the former fixed `SAMPLE_TIMEOUT=120` after about 281 seconds.
+  Bounded cleanup completed cleanly; this is not a product or cleanup failure.
+  DT-NBD-44 derives P1/Q2 as 120-second samples with a 900-second cell floor,
+  and Q4 as 600-second samples with a 2100-second cell deadline. The hard
+  ceilings remain 600/2100 seconds and Q4 CUDA requires 4320 seconds. The
+  tuple is recorded in context, summary, exact-allowlist internal custody,
+  comparison, and public-pair candidate evidence; manufactured internal-envelope
+  tuple tamper refuses. TDD RED then GREEN is Bash cell 25/25 and the complete
+  Windows PowerShell 5.1 static harness; fresh independent Sol Gate A passed
+  the frozen seven-file candidate. No live pressure, CUDA,
+  reboot, WSL shutdown, or terminate action ran for this correction. Sealing
+  and a fresh Q4 rerun remain required; the matrix remains incomplete and not
+  DONE.
 
 ## SPEC matrix → named tests
 
 The corrected implementation has local coverage for its source/static/
-manufactured names, including the 24 cell tests, 26 preflight suites, fresh
+manufactured names, including the 25 cell tests, 26 preflight suites, fresh
 CUDA handshake/refusal checks, bounded WSL controller checks, exact
 ratio/baseline mappings, DT-NBD-43 bounded zram usable-size/equality checks,
+DT-NBD-44 tier-derived timeout-budget custody and tamper refusals,
 public-pair custody, and
 `sealed_bundle_contains_benchmark_runner_and_worker`, and both DT-NBD-40
 names. The live rows
