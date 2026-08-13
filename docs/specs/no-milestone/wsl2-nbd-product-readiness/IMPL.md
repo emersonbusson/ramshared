@@ -18,7 +18,12 @@ equality, but it has not been sealed or rerun live. The complete ordered 1/2/4
 GiB Windows/WSL2 matrix therefore remains incomplete and this is not DONE.
 Fresh independent Gate A passed the prior frozen connection-preserving
 candidate, the DT-NBD-43 delta, and the frozen DT-NBD-44 seven-file candidate
-before a new sealed campaign.
+before a new sealed campaign. Attempt 17 then reproduced a false
+`cell_timeout_budget_mismatch`: an equal summary budget with a different JSON
+property order failed the old string comparison. The semantic strict helper
+now canonicalizes the validated tier tuple, while real value/type drift still
+refuses. The focused named test is green, and fresh independent Sol Gate A
+passed this additional frozen five-file delta.
 
 ## Files
 
@@ -247,6 +252,18 @@ before a new sealed campaign.
   reboot, WSL shutdown, or terminate action ran for this correction. Sealing
   and a fresh Q4 rerun remain required; the matrix remains incomplete and not
   DONE.
+- Attempt 17 (2026-08-12, unsealed local candidate): the Q4 timeout-budget
+  correction exposed a second false RED in the Windows cell controller. The
+  summary and controller held the same four strict fields, but PowerShell's
+  property-order-preserving JSON differed and returned
+  `cell_timeout_budget_mismatch`. The named manufactured test
+  `cell_timeout_budget_property_order_is_semantic` first failed against that
+  raw comparison (RED), then passed after `Assert-CellTimeoutBudgetMatch`
+  reused `Get-StrictCellTimeoutBudget` plus canonical JSON; it also refuses a
+  real value mismatch and a noncanonical numeric type. The focused PowerShell
+  5.1 parser/static/docs gates and fresh independent Sol Gate A are green. No
+  live pressure, CUDA, reboot, WSL shutdown, or terminate action ran; a sealed
+  Attempt 17 rerun remains required.
 
 ## SPEC matrix → named tests
 
@@ -255,6 +272,8 @@ manufactured names, including the 25 cell tests, 26 preflight suites, fresh
 CUDA handshake/refusal checks, bounded WSL controller checks, exact
 ratio/baseline mappings, DT-NBD-43 bounded zram usable-size/equality checks,
 DT-NBD-44 tier-derived timeout-budget custody and tamper refusals,
+the `cell_timeout_budget_property_order_is_semantic` strict semantic-equality
+refusal test,
 public-pair custody, and
 `sealed_bundle_contains_benchmark_runner_and_worker`, and both DT-NBD-40
 names. The live rows

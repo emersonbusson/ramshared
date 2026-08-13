@@ -399,6 +399,25 @@ function Get-StrictCellTimeoutBudget {
     }
 }
 
+function Assert-CellTimeoutBudgetMatch {
+    param(
+        [Parameter(Mandatory = $true)]$Budget,
+        [Parameter(Mandatory = $true)][int]$TierMiB,
+        [Parameter(Mandatory = $true)][string]$FailureReason
+    )
+    try {
+        $expected = Get-StrictCellTimeoutBudget -Budget (Get-CellTimeoutBudget -TierMiB $TierMiB) `
+            -TierMiB $TierMiB -FailureReason $FailureReason
+        $observed = Get-StrictCellTimeoutBudget -Budget $Budget -TierMiB $TierMiB -FailureReason $FailureReason
+        if ((ConvertTo-CanonicalJson -Value $observed) -cne (ConvertTo-CanonicalJson -Value $expected)) {
+            throw $FailureReason
+        }
+        return $observed
+    } catch {
+        throw $FailureReason
+    }
+}
+
 function New-Plan {
     param(
         [ValidateSet("unobserved_plan_only", "PRODUCT_OFF")]
@@ -2036,7 +2055,10 @@ function Invoke-NbdBenchmarkCell {
         })
     }
     $summary | Add-Member -NotePropertyName "windows_gpu_headroom" -NotePropertyValue $headroom -Force
-    if (($summary.timeout_budget | ConvertTo-Json -Compress -Depth 8) -cne ($timeoutBudget | ConvertTo-Json -Compress -Depth 8)) {
+    try {
+        $null = Assert-CellTimeoutBudgetMatch -Budget (Get-RequiredProperty -Object $summary -Name "timeout_budget") `
+            -TierMiB ([int]$Cell.tier_mib) -FailureReason "cell_timeout_budget_mismatch"
+    } catch {
         return New-CellExecution -Result (New-CellResult -Cell $Cell -Status "RED" -Reason "cell_timeout_budget_mismatch" -TerminalState "unverified_unknown" -Extra @{
             containment = $containment; pair_context = $PairContext
         })
@@ -2563,6 +2585,63 @@ Write-Output "[cuda-vram-workload] released"
             if (-not $refused) { throw "manufactured_timeout_budget_unsupported_tier_accepted" }
             Write-Output "timeout_budget=PASS"
             Write-Output "timeout_budget_refusal=REFUSED"
+            return
+        }
+        "timeout-budget-property-order" {
+            $canonicalOrder = [ordered]@{
+                sample_timeout_sec = 120
+                samples = 3
+                setup_cleanup_timeout_sec = 300
+                cell_outer_timeout_sec = 900
+            }
+            $permutedOrder = [ordered]@{
+                cell_outer_timeout_sec = 900
+                setup_cleanup_timeout_sec = 300
+                samples = 3
+                sample_timeout_sec = 120
+            }
+            $rawJsonDiffers = (($canonicalOrder | ConvertTo-Json -Compress -Depth 8) -cne
+                ($permutedOrder | ConvertTo-Json -Compress -Depth 8))
+            if (-not $rawJsonDiffers) {
+                throw "manufactured_timeout_budget_property_order_fixture_not_distinct"
+            }
+            $semantic = Assert-CellTimeoutBudgetMatch -Budget ([pscustomobject]$permutedOrder) -TierMiB 1024 `
+                -FailureReason "manufactured_timeout_budget_property_order_mismatch"
+            if ($semantic.sample_timeout_sec -ne 120 -or $semantic.samples -ne 3 -or
+                $semantic.setup_cleanup_timeout_sec -ne 300 -or $semantic.cell_outer_timeout_sec -ne 900) {
+                throw "manufactured_timeout_budget_property_order_semantic_values_invalid"
+            }
+            $mismatchRefused = $false
+            $mismatch = [ordered]@{
+                sample_timeout_sec = 121
+                samples = 3
+                setup_cleanup_timeout_sec = 300
+                cell_outer_timeout_sec = 900
+            }
+            try {
+                Assert-CellTimeoutBudgetMatch -Budget ([pscustomobject]$mismatch) -TierMiB 1024 `
+                    -FailureReason "manufactured_timeout_budget_mismatch" | Out-Null
+            } catch {
+                $mismatchRefused = $_.Exception.Message -eq "manufactured_timeout_budget_mismatch"
+            }
+            if (-not $mismatchRefused) { throw "manufactured_timeout_budget_mismatch_was_accepted" }
+            $noncanonicalRefused = $false
+            $noncanonical = [ordered]@{
+                sample_timeout_sec = 120.0
+                samples = 3
+                setup_cleanup_timeout_sec = 300
+                cell_outer_timeout_sec = 900
+            }
+            try {
+                Assert-CellTimeoutBudgetMatch -Budget ([pscustomobject]$noncanonical) -TierMiB 1024 `
+                    -FailureReason "manufactured_timeout_budget_noncanonical" | Out-Null
+            } catch {
+                $noncanonicalRefused = $_.Exception.Message -eq "manufactured_timeout_budget_noncanonical"
+            }
+            if (-not $noncanonicalRefused) { throw "manufactured_timeout_budget_noncanonical_was_accepted" }
+            Write-Output "cell_timeout_budget_property_order_is_semantic=PASS"
+            Write-Output "cell_timeout_budget_property_order_mismatch=REFUSED"
+            Write-Output "cell_timeout_budget_property_order_noncanonical=REFUSED"
             return
         }
         "comparison" {
