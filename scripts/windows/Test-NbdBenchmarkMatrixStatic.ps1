@@ -114,6 +114,13 @@ $required = @(
     "raw_measurement_status",
     "windows_script_sha256",
     "cuda_pair_hold_too_short",
+    "Get-CellTimeoutBudget",
+    "Get-PairTimeoutBudget",
+    "Get-StrictCellTimeoutBudget",
+    "cell_evidence_timeout_budget_mismatch",
+    "timeout_budget",
+    "sample_timeout_sec",
+    "cell_outer_timeout_sec",
     "ManufacturedSelfTestCase",
     "manufactured_self_test_live_approval_conflict",
     "RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_WSL_TERMINATION",
@@ -149,6 +156,9 @@ if ($text -match '(?m)^\s*&\s*wsl\.exe\b' -or $text -match 'Start-Process\s+wsl\
 }
 if ($text.Contains("RAMSHARED_NBD_LOWER_SINK")) {
     throw "approved live WSL arguments must not inject a lower-tier sink seam"
+}
+if ($text -match '\$OuterTimeoutSec') {
+    throw "cell timeout must be tier-derived rather than a global OuterTimeoutSec"
 }
 if ($text -notmatch '\$inventory\.schema -ne 2') {
     throw "cell evidence must require the sealed schema-2 inventory"
@@ -199,8 +209,16 @@ try {
             $null -ne $cell.PSObject.Properties["queue_depth"]) {
             throw "plan must use allocation rather than I/O labels"
         }
+        $expectedSampleTimeout = if ($cell.tier_mib -eq 4096) { 600 } else { 120 }
+        $expectedOuterTimeout = if ($cell.tier_mib -eq 4096) { 2100 } else { 900 }
+        if ($cell.sample_timeout_sec -ne $expectedSampleTimeout -or
+            $cell.cell_outer_timeout_sec -ne $expectedOuterTimeout -or
+            $cell.setup_cleanup_timeout_sec -ne 300) {
+            throw "plan tier-derived timeout budget mismatch"
+        }
     }
     Write-Output "PASS plan_uses_allocation_contract_labels"
+    Write-Output "PASS plan_uses_tier_derived_timeout_budgets"
     $keys = @($plan.cells | ForEach-Object { "{0}:{1}:{2}" -f $_.tier_mib,$_.condition,$_.mode })
     $expected = @(
         "1024:idle:disk-only", "1024:idle:nbd", "1024:bounded:disk-only", "1024:bounded:nbd",
@@ -254,6 +272,7 @@ try {
             schema = 2; pair_id = "1024-idle"; mode = "nbd"; condition = "idle"; tier_mib = 1024
             release = [pscustomobject]@{ version = "manufactured-v1"; source_commit = (("a" * 40) -join ""); source_tree_state = "clean"; manifest_sha256 = (("b" * 64) -join "") }
             binary_match = "PASS"; watchdog = [pscustomobject]@{ armed = $true; outcome = "not_fired" }
+            timeout_budget = [pscustomobject]@{ sample_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 900 }
             lower = [pscustomobject]@{
                 type = "nbd"; identity_sha256 = $lowerIdentity
                 sink_type = "directory"; sink_identity_sha256 = $sinkIdentity
@@ -313,6 +332,7 @@ try {
         $summary = [ordered]@{
             status = "PASS"; terminal_state = "PRODUCT_OFF"; mode = "nbd"; binary_match = "PASS"
             context_sha256 = Get-Sha256File -Path $contextPath
+            timeout_budget = $context.timeout_budget
         }
         Write-JsonNoBom -Value $summary -Path $summaryPath
         $inventory = [ordered]@{ schema = 2; files = @(
@@ -330,6 +350,7 @@ try {
             context_sha256 = Get-Sha256File -Path $contextPath; summary_sha256 = Get-Sha256File -Path $summaryPath
             artifact_inventory_sha256 = Get-Sha256File -Path $inventoryPath; binary_match = "PASS"
             watchdog = [ordered]@{ armed = $true; outcome = "not_fired" }; classification = "INCOMPARABLE"
+            timeout_budget = $context.timeout_budget
             artifacts = @($inventory.files | ForEach-Object { [ordered]@{ path = $_.name; bytes = $_.bytes; sha256 = $_.sha256 } })
         }
         Write-JsonNoBom -Value $envelope -Path $envelopePath
@@ -337,7 +358,7 @@ try {
     }
     $validCapacityEvidence = & $newCapacityEvidence @{} "valid"
     try { Assert-CellEvidence -Summary $validCapacityEvidence.summary -CellResultDirectory $validCapacityEvidence.directory | Out-Null } catch {
-        [void]$capacityCustodyFailures.Add("evidence_valid_context_refused")
+        [void]$capacityCustodyFailures.Add("evidence_valid_context_refused:" + $_.Exception.Message)
     }
     foreach ($mutation in $identityRefusalMutations) {
         $evidence = & $newCapacityEvidence $mutation.overrides $mutation.name
@@ -417,7 +438,9 @@ try {
         @{ Name = "selected-release-direct-argv"; Expected = "selected_release_direct_argv=PASS" },
         @{ Name = "cuda-cleanup"; Expected = "cuda_process_terminated=True" },
         @{ Name = "cuda-post-start-cleanup"; Expected = "cuda_post_start_cleanup=PASS" },
-        @{ Name = "cuda-native-cleanup"; Expected = "cuda_native_cleanup_failure=PASS" }
+        @{ Name = "cuda-native-cleanup"; Expected = "cuda_native_cleanup_failure=PASS" },
+        @{ Name = "timeout-budget"; Expected = "timeout_budget=PASS" },
+        @{ Name = "timeout-budget"; Expected = "timeout_budget_refusal=REFUSED" }
     )
     foreach ($case in $selfTestCases) {
         $output = @(& $script -ManufacturedSelfTestCase $case.Name -ArtifactRoot $tmp 2>&1)
@@ -458,6 +481,8 @@ try {
         @{ Name = "evidence-chain"; Expected = "evidence_chain_envelope=PASS" },
         @{ Name = "evidence-chain"; Expected = "evidence_chain_private_envelope=REFUSED" },
         @{ Name = "evidence-chain"; Expected = "evidence_chain_empty_receipt=REFUSED" },
+        @{ Name = "evidence-chain"; Expected = "evidence_chain_timeout_budget=PASS" },
+        @{ Name = "evidence-chain"; Expected = "evidence_chain_timeout_budget_tamper=REFUSED" },
         @{ Name = "public-pair-evidence"; Expected = "public_pair_evidence=PASS" },
         @{ Name = "public-pair-evidence"; Expected = "public_pair_evidence_mapping=PASS" },
         @{ Name = "public-pair-evidence"; Expected = "public_pair_evidence_nbd_binary_match=REFUSED" },

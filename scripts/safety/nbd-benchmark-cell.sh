@@ -14,7 +14,12 @@ SAMPLES=""
 OUT=""
 SWAP_FIXTURE=""
 RUNS=3
-SAMPLE_TIMEOUT_SEC=120
+SAMPLE_TIMEOUT_SEC=""
+SAMPLE_TIMEOUT_MAX_SEC=600
+CELL_SETUP_CLEANUP_TIMEOUT_SEC=300
+CELL_OUTER_TIMEOUT_MIN_SEC=900
+CELL_OUTER_TIMEOUT_MAX_SEC=2100
+CELL_OUTER_TIMEOUT_SEC=""
 SAMPLE_BASELINE_REASON=""
 SAMPLE_ZRAM_DEVICE=""
 ALLOCATE_MIB=""
@@ -67,6 +72,30 @@ refuse() {
   exit 2
 }
 
+derive_sample_timeout_sec() {
+  case $1 in
+    1024|2048) printf '120\n' ;;
+    4096) printf '600\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+configure_timeout_budget() {
+  local derived_timeout
+  derived_timeout=$(derive_sample_timeout_sec "$TIER_MIB") || refuse SAMPLE_TIMEOUT_TIER_INVALID
+  if [[ -n $SAMPLE_TIMEOUT_SEC ]]; then
+    [[ $SAMPLE_TIMEOUT_SEC =~ ^[1-9][0-9]{0,2}$ ]] || refuse SAMPLE_TIMEOUT_INVALID
+    (( SAMPLE_TIMEOUT_SEC <= SAMPLE_TIMEOUT_MAX_SEC )) || refuse SAMPLE_TIMEOUT_INVALID
+    [[ $SAMPLE_TIMEOUT_SEC == "$derived_timeout" ]] || refuse SAMPLE_TIMEOUT_TIER_MISMATCH
+  else
+    SAMPLE_TIMEOUT_SEC=$derived_timeout
+  fi
+  CELL_OUTER_TIMEOUT_SEC=$((RUNS * SAMPLE_TIMEOUT_SEC + CELL_SETUP_CLEANUP_TIMEOUT_SEC))
+  (( CELL_OUTER_TIMEOUT_SEC < CELL_OUTER_TIMEOUT_MIN_SEC )) && CELL_OUTER_TIMEOUT_SEC=$CELL_OUTER_TIMEOUT_MIN_SEC
+  (( CELL_OUTER_TIMEOUT_SEC > 0 && CELL_OUTER_TIMEOUT_SEC <= CELL_OUTER_TIMEOUT_MAX_SEC )) \
+    || refuse CELL_TIMEOUT_BUDGET_INVALID
+}
+
 while [[ $# -gt 0 ]]; do
   case $1 in
     --aggregate) ACTION=aggregate; shift ;;
@@ -102,6 +131,7 @@ if [[ $ACTION == aggregate || $ACTION == run ]]; then
   [[ $CONDITION == idle || $CONDITION == bounded ]] || refuse CONDITION_INVALID
   [[ $TIER_MIB =~ ^(1024|2048|4096)$ ]] || refuse TIER_SIZE_INVALID
   [[ $RUNS == 3 ]] || refuse RUN_COUNT_INVALID
+  configure_timeout_budget
   ALLOCATE_MIB=$((TIER_MIB + 2560))
   MEMORY_MAX_MIB=$((ALLOCATE_MIB + 512))
 elif [[ $ACTION == validate-nbd-identity-fixture ]]; then
@@ -115,7 +145,8 @@ fi
 
 aggregate_samples() {
   [[ -f $SAMPLES && -n $OUT ]] || refuse AGGREGATE_INPUT_INVALID
-  python3 - "$SAMPLES" "$OUT" "$MODE" "$CONDITION" "$TIER_MIB" <<'PY'
+  python3 - "$SAMPLES" "$OUT" "$MODE" "$CONDITION" "$TIER_MIB" "$SAMPLE_TIMEOUT_SEC" \
+    "$CELL_SETUP_CLEANUP_TIMEOUT_SEC" "$CELL_OUTER_TIMEOUT_SEC" <<'PY'
 import json
 import hashlib
 import math
@@ -123,8 +154,11 @@ import os
 import statistics
 import sys
 
-samples_path, output_path, mode, condition, tier_text = sys.argv[1:]
+samples_path, output_path, mode, condition, tier_text, sample_timeout_text, setup_cleanup_text, outer_timeout_text = sys.argv[1:]
 tier_mib = int(tier_text)
+sample_timeout_sec = int(sample_timeout_text)
+setup_cleanup_timeout_sec = int(setup_cleanup_text)
+cell_outer_timeout_sec = int(outer_timeout_text)
 rows = []
 try:
     with open(samples_path, encoding="utf-8") as source:
@@ -201,6 +235,12 @@ summary = {
     "ghost_swap": False,
     "binary_match": "PASS" if mode == "nbd" else "N/A",
     "terminal_state": "PRODUCT_OFF",
+    "timeout_budget": {
+        "sample_timeout_sec": sample_timeout_sec,
+        "samples": 3,
+        "setup_cleanup_timeout_sec": setup_cleanup_timeout_sec,
+        "cell_outer_timeout_sec": cell_outer_timeout_sec,
+    },
     "samples": rows,
 }
 context_path = os.path.join(os.path.dirname(samples_path), "context.json")
@@ -294,12 +334,14 @@ try:
     with open(os.path.join(root, "context.json"), "rb") as source:
         context_sha = hashlib.sha256(source.read()).hexdigest()
     with open(os.path.join(root, "summary.json"), "rb") as source:
-        summary_sha = hashlib.sha256(source.read()).hexdigest()
+        summary_bytes = source.read()
+    summary_sha = hashlib.sha256(summary_bytes).hexdigest()
+    summary = json.loads(summary_bytes.decode("utf-8"))
     with open(os.path.join(root, "artifact-inventory.json"), "rb") as source:
         inventory_sha = hashlib.sha256(source.read()).hexdigest()
     required = {
         "schema_version", "pair_id", "mode", "release", "context_sha256", "summary_sha256",
-        "artifact_inventory_sha256", "artifacts", "binary_match", "watchdog", "classification",
+        "artifact_inventory_sha256", "artifacts", "binary_match", "watchdog", "classification", "timeout_budget",
     }
     if set(envelope) != required or envelope.get("schema_version") != "ramshared-nbd-cell-evidence/v1":
         raise ValueError("envelope_schema")
@@ -317,6 +359,9 @@ try:
         raise ValueError("envelope_context_mismatch")
     if envelope["binary_match"] != context.get("binary_match") or envelope["watchdog"] != context.get("watchdog"):
         raise ValueError("envelope_context_mismatch")
+    if (envelope["timeout_budget"] != context.get("timeout_budget") or
+            summary.get("timeout_budget") != context.get("timeout_budget")):
+        raise ValueError("timeout_budget_mismatch")
     if envelope["classification"] != "INCOMPARABLE":
         raise ValueError("classification")
     if envelope["context_sha256"] != context_sha or envelope["summary_sha256"] != summary_sha:
@@ -800,7 +845,8 @@ write_live_context_v2() {
     "$LOWER_SINK_TYPE" "$LOWER_SINK_IDENTITY_SHA256" "$binary_match" "$input_bundle_manifest_sha" \
     "$nbd_device" "$nbd_block_major_minor" "$nbd_size_kib" "$nbd_usable_size_kib" \
     "$nbd_capacity_sectors" "$nbd_priority" "$nbd_server_pid" \
-    "$nbd_daemon_manifest_sha" <<'PY'
+    "$nbd_daemon_manifest_sha" "$SAMPLE_TIMEOUT_SEC" "$CELL_SETUP_CLEANUP_TIMEOUT_SEC" \
+    "$CELL_OUTER_TIMEOUT_SEC" <<'PY'
 import hashlib
 import json
 import os
@@ -811,7 +857,7 @@ import sys
  zram_name, zram_algorithm, zram_size_kib, zram_priority, lower_kind, lower_identity,
  sink_type, sink_identity, binary_match, input_bundle_manifest_sha, nbd_device, nbd_block_major_minor,
  nbd_size_kib, nbd_usable_size_kib, nbd_capacity_sectors, nbd_priority, nbd_server_pid,
- nbd_daemon_manifest_sha) = sys.argv[1:]
+ nbd_daemon_manifest_sha, sample_timeout_sec, setup_cleanup_timeout_sec, cell_outer_timeout_sec) = sys.argv[1:]
 fields = {}
 with open(preflight_path, encoding="utf-8") as source:
     for line in source:
@@ -843,7 +889,7 @@ argv = [
     "--expected-source-commit", source_commit,
     "--expected-manifest-sha256", manifest_sha,
     "--pair-id", pair_id,
-    "--runs", 3, "--sample-timeout-sec", 120,
+    "--runs", 3, "--sample-timeout-sec", int(sample_timeout_sec),
 ]
 record = {
     "schema": 2,
@@ -880,6 +926,12 @@ record = {
     },
     "binary_match": binary_match,
     "watchdog": {"armed": True, "outcome": "not_fired"},
+    "timeout_budget": {
+        "sample_timeout_sec": int(sample_timeout_sec),
+        "samples": 3,
+        "setup_cleanup_timeout_sec": int(setup_cleanup_timeout_sec),
+        "cell_outer_timeout_sec": int(cell_outer_timeout_sec),
+    },
     "argv": argv,
     "argv_redactions": ["artifact-dir"],
     "workload": {
@@ -969,6 +1021,7 @@ record = {
     "artifacts": artifacts,
     "binary_match": context["binary_match"],
     "watchdog": context["watchdog"],
+    "timeout_budget": context["timeout_budget"],
     "classification": "INCOMPARABLE",
 }
 out = os.path.join(root, "evidence-envelope.json")
@@ -1033,12 +1086,13 @@ pinned_preflight >"$ARTIFACT_DIR/preflight-off.txt"
 grep -q '^NBD_PRODUCT_STATE=PRODUCT_OFF$' "$ARTIFACT_DIR/preflight-off.txt" || refuse PRODUCT_OFF_NOT_PROVEN
 load_bound_lower_sink
 cp -- "$ARTIFACT_DIR/preflight-off.txt" "$ARTIFACT_DIR/before.txt"
-python3 - "$ARTIFACT_DIR/action.txt" "$MODE" "$CONDITION" "$TIER_MIB" "$VERSION" "$PAIR_ID" <<'PY'
+python3 - "$ARTIFACT_DIR/action.txt" "$MODE" "$CONDITION" "$TIER_MIB" "$VERSION" "$PAIR_ID" \
+  "$SAMPLE_TIMEOUT_SEC" "$CELL_SETUP_CLEANUP_TIMEOUT_SEC" "$CELL_OUTER_TIMEOUT_SEC" <<'PY'
 import json
 import os
 import sys
 
-out, mode, condition, tier, version, pair_id = sys.argv[1:]
+out, mode, condition, tier, version, pair_id, sample_timeout_sec, setup_cleanup_timeout_sec, cell_outer_timeout_sec = sys.argv[1:]
 record = {
     "schema": 1,
     "action": "sealed_nbd_benchmark_cell",
@@ -1047,6 +1101,12 @@ record = {
     "tier_mib": int(tier),
     "release_version": version,
     "pair_id": pair_id,
+    "timeout_budget": {
+        "sample_timeout_sec": int(sample_timeout_sec),
+        "samples": 3,
+        "setup_cleanup_timeout_sec": int(setup_cleanup_timeout_sec),
+        "cell_outer_timeout_sec": int(cell_outer_timeout_sec),
+    },
 }
 temporary = out + ".tmp"
 with open(temporary, "w", encoding="utf-8") as target:
