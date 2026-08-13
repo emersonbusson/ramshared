@@ -27,14 +27,13 @@ reported as an active or ready product. `BLOCKED` is used for a refusal or an
 unmet gate. No state in this PRD authorizes a reboot, WSL shutdown, host
 pressure, or an external write.
 
-The product never terminates a WSL distribution. The Windows benchmark harness
-has a separate, explicitly approved outer watchdog only as a last-resort
-shared-host containment boundary. If that watchdog reaches its deadline, it
-may terminate the selected distro, but the result is recorded as
-`RED/unverified_terminated`: it is not a clean `PRODUCT_OFF` observation, is
-never benchmark evidence, and stops promotion. A watchdog termination must be
-followed by an independent revalidation before any later action; the harness
-must not infer cleanup from the termination exit code.
+The product and benchmark harness never terminate a WSL distribution, shut it
+down, reboot it, or invoke any VM lifecycle operation. The Windows benchmark
+watchdog bounds and may stop only its own launched host child. If that child
+reaches its deadline, the result is `RED/watchdog_timeout_red` with terminal
+state `unverified_unknown`: it is not a clean `PRODUCT_OFF` observation, is
+never benchmark evidence, stops promotion, and has no automatic retry. CUDA
+final cleanup still runs, but no cleanup is inferred from the timeout.
 
 ## Technical context
 
@@ -76,8 +75,8 @@ Ship one NBD-only WSL2 path with these decisions:
 | Status | `PRODUCT_OFF`, `READY`, or `BLOCKED`, with an independent readiness reason. |
 | Capacity | Enforce `L >= V + max(ceil(10% of V), 512 MiB)` before activation and demotion. |
 | Sizes | Promote in order: 1 GiB pilot, then 2 GiB, then 4 GiB. No skipped size. |
-| Product host action | No product-triggered reboot, `wsl --shutdown`, or `wsl --terminate`; refuse if one is needed. |
-| Harness containment | A separately approved Windows outer watchdog may issue `wsl --terminate <selected-distro>` only after its bounded outer deadline; classify the cell `RED/unverified_terminated`, never as success or `PRODUCT_OFF`. |
+| Product host action | No product- or benchmark-triggered reboot, shutdown, WSL termination, or VM lifecycle; refuse if one is needed. |
+| Harness containment | The Windows outer watchdog may stop only its bounded launched host child after the outer deadline; classify the cell `RED/watchdog_timeout_red/unverified_unknown`, never as success or `PRODUCT_OFF`. |
 | Relay | `scripts/safety/wsl-relay-health.sh --check` must pass; no automatic `--reap`. |
 | Identity | A daemon run must satisfy `BINARY_MATCH` against the sealed release. |
 
@@ -106,7 +105,7 @@ to an external communication.
 | RF-NBD-14 | Compare disk-only and NBD under one identical base topology. | Every pair starts a fresh product-owned 1 GiB zram tier at priority 200; disk-only uses one fresh exact 8 GiB scratch swapfile at priority 100, while NBD uses one exact `V`-sized NBD tier at priority 100. The pre-existing host lower sink is untouched and excluded from the second-tier comparison. |
 | RF-NBD-15 | Prove that each size cell exercises its declared tier rather than merely allocating address space. | Each worker is admitted before start to a cgroup with `memory.high=1200 MiB` and emergency `memory.max=V+3072 MiB`, uses `V + 2560 MiB`, waits at a start barrier, holds the allocation, and records zram/second-tier deltas sufficient to prove occupancy. |
 | RF-NBD-16 | Keep the bounded external GPU condition comparable across a pair. | One CUDA context is created and held across the disk-only and NBD cells for the same size/condition pair; the pair records the same ready-time GPU snapshot. |
-| RF-NBD-17 | Bound every Windows-to-WSL process call and every campaign handshake. | Release discovery, cell execution, and watchdog termination have explicit deadlines; every ready/release artifact is fresh and create-once; a timeout is a RED/unverified termination, never an inferred cleanup. |
+| RF-NBD-17 | Bound every Windows-to-WSL process call and every campaign handshake. | Release discovery and cell execution have explicit deadlines; every ready/release artifact is fresh and create-once; a timeout is `RED/watchdog_timeout_red/unverified_unknown`, never inferred cleanup. |
 | RF-NBD-18 | Capture enough context to reproduce and audit each benchmark result. | Evidence records branch/commit and dirty state, sealed release and script hashes, kernel, GPU total/free/utilization/temperature, RAM and swap baselines, lower-tier identity/free capacity, exact command parameters, pair identity, and terminal classification, with a sanitized public envelope. |
 | RF-NBD-19 | Keep test seams out of approved live execution. | Fixture overrides for roots, swap files, PIDs, and lower sinks are accepted only by manufactured tests; an approved live invocation rejects or ignores them and uses the sealed product paths. |
 | RF-NBD-20 | Quantify backend tradeoffs and detect compatible historical regressions. | Every pair reports NBD/disk median and p99 ratios; optional baseline comparisons require an exact environment/workload fingerprint and use the SPEC's numeric GREEN/YELLOW/RED thresholds. |
@@ -119,7 +118,7 @@ to an external communication.
 | NFR-NBD-2 | Mutating operations are bounded, idempotent, and auditable. |
 | NFR-NBD-3 | A missing WSL/GPU/Relay environment is `PARTIAL` or `BLOCKED`, never `DONE`. |
 | NFR-NBD-4 | Benchmark cells use at least three runs and report median, p99, deviation, and units. |
-| NFR-NBD-5 | No unsupervised swap pressure, GPU workload, reboot, shutdown, or termination is permitted. Product code never terminates WSL; only the separately approved outer watchdog may terminate the selected distro after a deadline, and that result is RED/unverified. |
+| NFR-NBD-5 | No unsupervised swap pressure, GPU workload, reboot, shutdown, termination, or VM lifecycle is permitted. Product and benchmark code never terminate WSL. The outer watchdog may stop only its bounded launched host child; a deadline is `RED/watchdog_timeout_red/unverified_unknown`, with no cleanup claim, retry, or promotion. |
 | NFR-NBD-6 | A release selector cannot point at an unsealed, dirty, or partially copied directory. |
 | NFR-NBD-7 | Disk/NBD comparisons use one 1 GiB zram base, one second-tier backend, one workload contract, and one CUDA context per bounded pair. |
 | NFR-NBD-8 | Every WSL process and campaign handshake is bounded, fresh, and independently observable. |
@@ -188,8 +187,9 @@ captures one baseline snapshot. It then:
    state; and
 6. records the pair as one comparable snapshot. Any refusal, timeout,
    checksum mismatch, residual/ghost swap, failed cleanup, or watchdog deadline
-   stops promotion. A watchdog termination is recorded as
-   `RED/unverified_terminated`, not as a clean terminal state.
+   stops promotion. A watchdog timeout is recorded as
+   `RED/watchdog_timeout_red/unverified_unknown`, not as a clean terminal
+   state or cleanup claim.
 
 The worker contract is deliberately size-dependent: it allocates and holds
 `V + 2560 MiB` while a 1200 MiB `memory.high` forces reclaim and a
@@ -216,7 +216,7 @@ The state is a product contract, not a claim about an external environment.
 | `relay_gate` | `pass`, `fail`, `unknown` | Read-only Relay check result. |
 | `binary_match` | `pass`, `fail`, `not_applicable` | Live executable identity result. |
 | `approval` | `not_required`, `present`, `missing` | Scope-limited mutation approval. |
-| `watchdog_outcome` | `not_used`, `completed_clean`, `unverified_terminated` | Whether the separate Windows containment watchdog fired; termination is never a product success state. |
+| `watchdog_outcome` | `not_used`, `completed_clean`, `watchdog_timeout_red` | Whether the separate Windows containment watchdog fired; it may stop only the bounded host child and is never a product success or cleanup state. |
 | `terminal_classification` | `PRODUCT_OFF`, `RED`, `BLOCKED`, `PARTIAL` | Evidence classification after the cell/pair, independent of process exit code. |
 
 `PRODUCT_OFF` requires no active managed swap, no active product daemon, and
@@ -224,8 +224,8 @@ no active product ublk service. A loaded kernel module is allowed. `READY`
 requires all positive gates and means the NBD product may be activated; it does
 not claim that a workload has run. `BLOCKED` is fail-closed and must include a
 stable reason code. `RED` means the harness or product crossed a safety/error
-boundary; `unverified_terminated` specifically means the outer watchdog
-terminated the selected distro before a clean postcondition was observed.
+boundary; `unverified_unknown` specifically means the watchdog deadline
+stopped the bounded child before a clean postcondition was observed.
 
 ## Interfaces
 
@@ -236,7 +236,7 @@ terminated the selected distro before a clean postcondition was observed.
 | `/opt/ramshared/releases/<version>` | Immutable executable/configuration source. |
 | `ramsharedd` | NBD daemon only; live path must pass `BINARY_MATCH`. |
 | Legacy ublk service inventory | Discover, retire under approval, never unload module. |
-| Windows outer watchdog | Separate harness authority; bounded `wsl.exe --terminate` only after deadline, classified `RED/unverified_terminated`, never a product lifecycle operation. |
+| Windows outer watchdog | Separate harness authority; stops only its bounded launched host child after deadline, classified `RED/watchdog_timeout_red/unverified_unknown`, never a WSL/Windows/VM lifecycle operation. |
 | Status JSON | Stable state/reason fields; unknown data is not inferred as ready. |
 
 ## Dependencies/risks
@@ -256,7 +256,7 @@ terminated the selected distro before a clean postcondition was observed.
 | Disk control does not match NBD topology | Start identical 1 GiB zram for both and use only the exact fresh 8 GiB scratch as disk second tier; any topology drift invalidates the pair. |
 | Allocation is too small to exercise a larger tier | Use `V + 2560 MiB` and require size-specific zram/second-tier occupancy deltas; no result is promoted from a fixed-size workload. |
 | Bounded CUDA load changes between controls | One CUDA context spans both cells in a pair; if it cannot be kept ready for both, classify the pair `RED`/`PARTIAL` and stop promotion. |
-| WSL controller hangs before the watchdog | Bound release discovery, each cell, and the termination call; a timeout is `RED/unverified_terminated` and never assumes `PRODUCT_OFF`. |
+| WSL controller hangs before the watchdog | Bound release discovery and each cell; a timeout is `RED/watchdog_timeout_red/unverified_unknown`, never assumes `PRODUCT_OFF` or cleanup, and has no retry. |
 | Test seam reaches live execution | Approved live mode rejects fixture roots, swap/PID overrides, and lower-sink overrides; a seam-bearing run is invalid evidence. |
 | Evidence cannot reproduce a claim | Capture sanitized host/kernel/GPU/RAM/swap/lower-tier context, exact command and hashes, pair identity, and terminal classification before publishing. |
 
@@ -305,9 +305,9 @@ remains untouched without the required live evidence.
 - changes to Microsoft repositories, GitHub issues, pull requests, or releases;
 - direct host WDDM ownership or native VRAM/N3 integration;
 - benchmark claims without the named before/action/after and n≥3 evidence;
-- product-triggered `wsl --terminate`; the only termination exception is the
-  separately approved, deadline-bound Windows outer watchdog, whose result is
-  always `RED/unverified_terminated`;
+- product- or benchmark-triggered WSL termination, shutdown, reboot, or VM
+  lifecycle; the deadline-bound Windows watchdog may stop only its launched
+  host child and is always `RED/watchdog_timeout_red/unverified_unknown`;
 - CI/workflows, release documentation, validation records, or `MEMORY.md` in
   this task.
 
@@ -325,7 +325,7 @@ remains untouched without the required live evidence.
 | A-NBD-8 | The injected teardown contract and every named installer post-write rollback phase have a paired manufactured test. |
 | A-NBD-9 | Disk-only and NBD are paired under identical 1 GiB zram, workload, cgroup, and (when bounded) one CUDA context; only the second tier differs. |
 | A-NBD-10 | Every sample proves cgroup admission before allocation, size-dependent `V + 2560 MiB` occupancy, and uses the declared workload labels. |
-| A-NBD-11 | All WSL calls and handshakes are bounded/fresh, and watchdog termination is `RED/unverified_terminated` rather than inferred cleanup. |
+| A-NBD-11 | All WSL calls and handshakes are bounded/fresh, and a watchdog deadline is `RED/watchdog_timeout_red/unverified_unknown` rather than inferred cleanup. |
 | A-NBD-12 | Evidence carries sanitized execution context, exact command, release/script hashes, capacity/headroom, pair identity, and terminal state. |
 | A-NBD-13 | Fixture seams are demonstrably unavailable in the approved live path. |
 

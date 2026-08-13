@@ -12,13 +12,12 @@
 | NBD-only product boundary, sealed release, state model, capacity formula, Relay, and swapoff-first source contracts | **GO for implementation** against the revised SPEC; local evidence remains source-partial. |
 | Disk/NBD benchmark harness before the Gate A corrections | **NO-GO** — the first revision could race cgroup admission, compare different cascades, under-exercise larger tiers, mislabel measurements, use different CUDA snapshots, lose containment state, and accept live seams. |
 | Corrected harness implementation | **GO FOR REVIEWED-RELEASE DEPLOYMENT** — the locked decisions and named local static/manufactured tests pass, and the final independent Gate A passed on the frozen pre-commit workspace. |
-| Live 1/2/4 GiB matrix or product promotion | **NO-GO** until every pair has legitimate before → action → after evidence, n≥3 statistics, clean terminal observation, and no RED/PARTIAL/unverified-termination result. |
-| Outer watchdog termination | Allowed only as separately approved Windows containment after a bounded deadline. It is always **`RED/unverified_terminated`**, never benchmark evidence, never `PRODUCT_OFF`, and always stops promotion. |
+| Live 1/2/4 GiB matrix or product promotion | **NO-GO** until every pair has legitimate before → action → after evidence, n≥3 statistics, clean terminal observation, and no RED/PARTIAL/unverified result. |
+| Outer watchdog deadline | The bounded host child may be stopped after its deadline; the harness never invokes WSL/Windows/VM lifecycle. It is always **`RED/watchdog_timeout_red/unverified_unknown`**, never benchmark evidence, never `PRODUCT_OFF`, and always stops promotion without retry. |
 
-The product itself never calls `wsl --terminate`, `wsl --shutdown`, reboot, or
-an equivalent host action. The watchdog is a harness authority outside the
-product lifecycle and cannot turn an unverified termination into a clean-state
-claim.
+The product and benchmark harness never call WSL termination, WSL shutdown,
+reboot, or an equivalent VM/host lifecycle action. The watchdog is limited to
+its bounded child and cannot turn a timeout into a clean-state claim.
 
 ## Scope and evidence class
 
@@ -47,13 +46,13 @@ run on the reviewed release.
 | HIGH | Disk and NBD bounded cells started separate CUDA processes/snapshots. | External GPU state is a confounder, not a paired condition. | One CUDA context per size/condition pair, held across disk then NBD and released after NBD terminal evidence. | **Closed in implementation/static/manufactured gates; live re-audit pending**; DT-NBD-26. |
 | HIGH | Results lacked full execution, identity, headroom, and lower-tier context. | A number cannot be reproduced or tied to a release/capacity decision. | Capture branch/commit/dirty state, release/manifest/script hashes, exact command, kernel/GPU/RAM/swap, lower-tier identity/free `L`, pair ID, GPU snapshots, and terminal/watchdog outcome in sanitized form. | **Closed in implementation/static/manufactured gates; live re-audit pending**; DT-NBD-27 and RF-NBD-18. |
 | HIGH | NBD aggregation did not require sufficient zram activity. | A purported NBD sample could avoid the declared cascade. | Require common zram activity and NBD delta at least the declared tier threshold, plus checksum and terminal proof. | **Closed in implementation/static/manufactured gates; live re-audit pending**; DT-NBD-24/25. |
-| HIGH | Selected-release discovery used an unbounded synchronous `wsl.exe` call before the cell watchdog. | The controller can hang before containment is armed. | Bound release discovery, each cell, and watchdog termination; capture start/deadline/exit/stdout/stderr and classify timeout explicitly. | **Closed in implementation/static/manufactured gates; live re-audit pending**; DT-NBD-29. |
+| HIGH | Selected-release discovery used an unbounded synchronous `wsl.exe` call before the cell watchdog. | The controller can hang before containment is armed. | Bound release discovery and each cell; stop only the bounded launched host child after the deadline, capture start/deadline/exit/stdout/stderr, and classify timeout explicitly. | **Closed in implementation/static/manufactured gates; live re-audit pending**; DT-NBD-29. |
 | CRITICAL | CUDA setup/handshake failure could escape cleanup; ready/release paths could be reused. | VRAM/context leak or false readiness can poison later cells. | Put setup and wait in a `try/finally`; always release/force-clean bounded process; use fresh create-once ready/release artifacts and reject existing paths. | **Closed in implementation/static/manufactured gates; live re-audit pending**; DT-NBD-26/30. |
 | HIGH | PowerShell `Start-Process -ArgumentList` could mis-handle paths with spaces or metacharacters. | Wrong command/target or unbounded shell behavior. | Use a bounded process helper with safe argument construction or restrict/validate the live path grammar before launch; record the exact argv. | **Closed in implementation/static/manufactured gates; live re-audit pending**; DT-NBD-29. |
 | HIGH | Headroom was checked in the plan and before cells, but not after CUDA became ready for the paired run. | A GPU allocation can invalidate the preflight between check and action. | Recheck numeric free VRAM immediately before the pair and after the CUDA-ready receipt; refuse before WSL action on shortfall. | **Closed in implementation/static/manufactured gates; live re-audit pending**; DT-NBD-26/27. |
-| CRITICAL | A timeout terminated the distro but the controller unconditionally described the campaign as `PRODUCT_OFF`. | Termination does not prove swapoff, daemon, or ghost absence. | Record `RED/unverified_terminated`; never infer `PRODUCT_OFF`, never retry/promote, and require independent revalidation before any later action. | **Closed in implementation/static/manufactured gates; live re-audit pending**; DT-NBD-9/31. |
+| CRITICAL | Historical watchdog behavior could terminate the distro and then describe the campaign as `PRODUCT_OFF`. | Termination does not prove swapoff, daemon, or ghost absence. | Current code has no WSL lifecycle operation: stop only the bounded launched host child and record `RED/watchdog_timeout_red/unverified_unknown`; never infer cleanup, retry, or promotion. | **Closed in current implementation/static/manufactured gates; live re-audit pending**; DT-NBD-9/31. |
 | MEDIUM | Static tests were mostly token checks and did not prove behavioral refusal branches. | False-green CI can miss safety regressions. | Add manufactured behavior for barrier, topology, occupancy, one-context, timeout classification, seam refusal, cleanup identity, and failure paths; keep live evidence separate. | **Closed in implementation/static/manufactured gates; live re-audit pending**; full matrix below. |
-| HIGH | PRD/SPEC watchdog language and prior risk statements were not aligned. | Product could be read as authorized to terminate WSL or as claiming cleanup. | Product never terminates; only separately approved outer watchdog may terminate selected distro after deadline, always `RED/unverified_terminated`. | **Closed in docs**; PRD/SPEC DT-NBD-9/31 and this audit. |
+| HIGH | PRD/SPEC watchdog language and prior risk statements were not aligned. | Product could be read as authorized to terminate WSL or as claiming cleanup. | Current product and benchmark code never invoke WSL/Windows/VM lifecycle. The outer watchdog stops only its bounded launched host child and records `RED/watchdog_timeout_red/unverified_unknown`; no cleanup, retry, or promotion follows. | **Closed in docs**; PRD/SPEC DT-NBD-9/31 and this audit. |
 | HIGH | Live runner accepted environment-injected fixture seams for roots, swap files, PIDs, or lower sink. | Fake identities can manufacture a pass on the real surface. | Fixture seams are test-only; approved live mode rejects/ignores all such overrides and uses canonical sealed paths. | **Closed in implementation/static/manufactured gates; live re-audit pending**; DT-NBD-28. |
 | MEDIUM | Raw cell numbers had no compatible historical regression contract. | A later build could look faster/slower only because the kernel, GPU driver, or workload changed. | Emit within-pair ratios now; compare history only under an exact environment/workload fingerprint and apply the DT-NBD-32 thresholds. | **Implemented in controller/static fixtures; live matrix and historical baseline remain open**; a first full campaign is only a baseline candidate. |
 
@@ -77,12 +76,12 @@ killing a daemon with active swap, or treating a timeout as cleanup.
    start one 512 MiB CUDA context after the numeric headroom gate and hold it
    across disk-only then NBD; the context is released only after NBD terminal
    evidence. Headroom is rechecked before the pair and after CUDA-ready.
-4. **Containment.** Product code has no WSL termination operation. The outer
-   Windows watchdog alone may terminate the selected distro after its deadline.
-   Its result is `RED/unverified_terminated`; no `PRODUCT_OFF`, PASS, retry, or
-   promotion follows.
+4. **Containment.** Product and benchmark code have no WSL lifecycle operation.
+   The outer Windows watchdog stops only its bounded launched host child after
+   its deadline. Its result is `RED/watchdog_timeout_red/unverified_unknown`;
+   no `PRODUCT_OFF`, cleanup claim, PASS, retry, or promotion follows.
 5. **Freshness and bounds.** Selected-release discovery, every WSL cell, and
-   watchdog termination are bounded. Ready/release artifacts are create-once
+   the bounded host child are deadline-bounded. Ready/release artifacts are create-once
    and unique per pair. Existing handshake files refuse.
 6. **Live seam boundary.** Approved live mode uses the sealed release and
    canonical `/proc`, `/run`, cgroup, and lower-sink paths. Fixture overrides
@@ -105,8 +104,8 @@ killing a daemon with active swap, or treating a timeout as cleanup.
 | T3 | Q2/Q4 run does not occupy its tier | HIGH | `V + 2560 MiB` and per-size delta threshold | Occupancy below declared threshold or fixed allocation observed |
 | T4 | Allocation labels are interpreted as I/O queue parameters | MEDIUM | Explicit measurement names and schema validation | `block_size`/`queue_depth` used for this contract |
 | T5 | CUDA condition differs between controls | HIGH | One context per pair; two headroom checks | Context exits, is recreated, or GPU free shortfall occurs |
-| T6 | Timeout/termination is reported clean | CRITICAL | RED/unverified-termination classification | Any `PRODUCT_OFF` claim after watchdog termination |
-| T7 | WSL call hangs before watchdog | HIGH | Bounded process helper for discovery/cell/terminate | Missing deadline or uncaptured exit/output |
+| T6 | Timeout is reported clean | CRITICAL | `RED/watchdog_timeout_red/unverified_unknown` classification | Any `PRODUCT_OFF` or cleanup claim after a watchdog timeout |
+| T7 | WSL call hangs before watchdog | HIGH | Bounded process helper for discovery/cell/child stop | Missing deadline or uncaptured exit/output |
 | T8 | CUDA/handshake cleanup leaks or reuses state | CRITICAL | `try/finally`, force cleanup, create-once fresh files | Live process/context or pre-existing handshake remains |
 | T9 | Test seam produces fake live pass | HIGH | Reject fixture overrides in approved mode | Any seam-bearing live artifact |
 | T10 | Evidence lacks state/identity | HIGH | Automatic context/hash/headroom/lower-capacity capture | Missing required context or unverifiable hash |
@@ -130,7 +129,7 @@ killing a daemon with active swap, or treating a timeout as cleanup.
 | Check | Status | Required proof |
 | --- | --- | --- |
 | Product lifecycle cannot terminate/reboot/shutdown WSL | PASS in static/manufactured contract; live command audit pending | Static forbidden-action test plus live command audit |
-| Outer watchdog authority is explicit and fail-closed | PASS in static/manufactured gates; live re-audit pending | Deadline, selected-distro identity, `RED/unverified_terminated`, no promotion |
+| Outer watchdog authority is explicit and fail-closed | PASS in static/manufactured gates; live re-audit pending | Deadline, launched-child identity, `RED/watchdog_timeout_red/unverified_unknown`, no cleanup or promotion |
 | Worker cgroup containment | PASS in static/manufactured gates; live occupancy pending | In-cgroup launcher and start barrier, not post-start PID write |
 | Disk scratch identity and deletion | PASS in manufactured gates; live pair pending | `O_EXCL|O_NOFOLLOW`, device/inode/owner/mode, exact swapoff, absence before remove |
 | CUDA lifetime and handshake custody | PASS in static/manufactured gates; bounded CUDA live proof pending | Fresh create-once files, `finally` cleanup, no leaked process/context |
@@ -145,7 +144,7 @@ Every row is contractual. A static/manufactured result does not close its live
 counterpart, and a missing row is a blocker for Step 3 completion.
 
 The corrected local implementation is green for the manufactured/static rows:
-the cell harness reports 13/13, the product-preflight harness reports 26/26, the
+the cell harness reports 28/28, the product-preflight harness reports 26/26, the
 repository public-evidence validator tests report 15/15, and the focused
 PowerShell matrix static harness passes. These results close the implementation
 findings above but do not close the live counterparts. The complete 1/2/4 GiB
@@ -165,7 +164,7 @@ remain pending.
 | `scripts/safety/nbd-benchmark-lib.sh` | `disk_control_scratch_is_exclusive_identity_bound_and_swapoff_first` | Manufactured/refusal | Exact scratch identity, swapoff refusal preservation, and post-absence removal |
 | `scripts/p0/Start-CudaVramWorkload.ps1` | `cuda_workload_uses_fresh_handshakes_and_finally_releases_context` | Static/manufactured plus bounded CUDA | CUDA lifetime gate |
 | `scripts/windows/Invoke-NbdBenchmarkMatrix.ps1` | `matrix_promotes_only_after_complete_prior_pair`; `wsl_release_discovery_and_cells_are_bounded`; `one_cuda_context_covers_one_disk_nbd_pair` | Plan/manufactured/live harness | Pairing, bounds, promotion |
-| `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | `bounded_cell_requires_numeric_gpu_headroom`; `watchdog_timeout_is_red_and_unverified_termination`; CUDA source/handshake/cleanup static checks | Manufactured/static | Headroom/containment |
+| `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | `bounded_cell_requires_numeric_gpu_headroom`; `watchdog_timeout_is_red_and_unverified_unknown`; CUDA source/handshake/cleanup static checks | Manufactured/static | Headroom/containment |
 | `scripts/windows/Test-WindowsCiStatic.ps1` | `windows_static_wrapper_includes_nbd_benchmark_harness` | Static wrapper | Complete PowerShell sweep |
 | `scripts/package/build-linux-bundle.sh` | `sealed_bundle_contains_benchmark_runner_and_worker` | Manufactured package | Release identity/layout |
 | `tools/ci/generate-capability-observations.mjs` + `tools/ci/generate-capability-observations.test.mjs` + `docs/governance/capability-observations.generated.json` | `capability_observations_are_deterministic_and_checked`; `node tools/ci/generate-capability-observations.mjs --check` | Generated/static | Observation facts are deterministic and separate from live proof |
@@ -189,7 +188,7 @@ The final independent implementation audit moved the corrected harness to
 **GO FOR REVIEWED-RELEASE DEPLOYMENT** after confirming the named manufactured
 refusal tests. The real before → action → after matrix remains a separate live
 gate. Any RED, PARTIAL, or
-`unverified_terminated` pair keeps product promotion **NO-GO**.
+`unverified_unknown` pair keeps product promotion **NO-GO**.
 
 ## Final verdict
 

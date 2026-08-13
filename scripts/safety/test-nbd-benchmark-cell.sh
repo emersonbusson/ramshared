@@ -671,7 +671,7 @@ set -e
 # action: it deliberately omits the required reviewed-release binding.
 set +e
 binding_output=$(env \
-  RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_WSL_TERMINATION \
+  RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_BOUNDED_SHARED_HOST_PRESSURE \
   RAMSHARED_WINDOWS_WATCHDOG_ARMED=1 \
   RAMSHARED_NBD_BENCHMARK_APPROVAL='benchmark:unbound:1024:idle:disk-only' \
   "$CELL" --run --mode disk-only --condition idle --tier-mib 1024 \
@@ -682,6 +682,23 @@ set -e
   echo 'FAIL live action did not require reviewed release binding before approval/action' >&2
   exit 1
 }
+
+set +e
+old_approval_output=$(env RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_WSL_TERMINATION \
+  "$CELL" --assert-shared-host-approval 2>&1)
+rc=$?
+set -e
+[[ $rc -ne 0 && $old_approval_output == *'NBD_BENCHMARK_REASON=SHARED_HOST_APPROVAL_MISSING'* ]] || {
+  echo 'FAIL legacy shared-host approval token was accepted' >&2
+  exit 1
+}
+new_approval_output=$(env RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_BOUNDED_SHARED_HOST_PRESSURE \
+  "$CELL" --assert-shared-host-approval)
+[[ $new_approval_output == *'NBD_BENCHMARK_STATE=APPROVED'* ]] || {
+  echo 'FAIL bounded shared-host approval token was not accepted' >&2
+  exit 1
+}
+pass shared_host_approval_token_is_exact
 
 for forbidden in 'shutdown.exe' 'Restart-Computer' 'Stop-Computer' 'rmmod' 'modprobe -r'; do
   ! grep -Fq -- "$forbidden" "$CELL" || {
