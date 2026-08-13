@@ -117,6 +117,8 @@ $required = @(
     "Get-CellTimeoutBudget",
     "Get-PairTimeoutBudget",
     "Get-StrictCellTimeoutBudget",
+    "Assert-CellTimeoutBudgetMatch",
+    "cell_timeout_budget_property_order_is_semantic",
     "cell_evidence_timeout_budget_mismatch",
     "timeout_budget",
     "sample_timeout_sec",
@@ -159,6 +161,10 @@ if ($text.Contains("RAMSHARED_NBD_LOWER_SINK")) {
 }
 if ($text -match '\$OuterTimeoutSec') {
     throw "cell timeout must be tier-derived rather than a global OuterTimeoutSec"
+}
+if ($text -match '\$summary\.timeout_budget\s*\|\s*ConvertTo-Json' -or
+    $text -notmatch 'Assert-CellTimeoutBudgetMatch\s+-Budget') {
+    throw "cell timeout budget comparison must use strict semantic custody"
 }
 if ($text -notmatch '\$inventory\.schema -ne 2') {
     throw "cell evidence must require the sealed schema-2 inventory"
@@ -440,7 +446,10 @@ try {
         @{ Name = "cuda-post-start-cleanup"; Expected = "cuda_post_start_cleanup=PASS" },
         @{ Name = "cuda-native-cleanup"; Expected = "cuda_native_cleanup_failure=PASS" },
         @{ Name = "timeout-budget"; Expected = "timeout_budget=PASS" },
-        @{ Name = "timeout-budget"; Expected = "timeout_budget_refusal=REFUSED" }
+        @{ Name = "timeout-budget"; Expected = "timeout_budget_refusal=REFUSED" },
+        @{ Name = "timeout-budget-property-order"; Expected = "cell_timeout_budget_property_order_is_semantic=PASS" },
+        @{ Name = "timeout-budget-property-order"; Expected = "cell_timeout_budget_property_order_mismatch=REFUSED" },
+        @{ Name = "timeout-budget-property-order"; Expected = "cell_timeout_budget_property_order_noncanonical=REFUSED" }
     )
     foreach ($case in $selfTestCases) {
         $output = @(& $script -ManufacturedSelfTestCase $case.Name -ArtifactRoot $tmp 2>&1)
