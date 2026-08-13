@@ -533,6 +533,28 @@ try {
     }
     Write-Output "PASS one_cuda_context_covers_one_disk_nbd_pair"
 
+    $q4HoldReady = Join-Path $tmp "cuda-q4-hold-ready.txt"
+    $q4HoldAccepted = $false
+    try {
+        & $cudaScript -HandshakeSelfTest -HoldSec 4320 -ReadyFile $q4HoldReady | Out-Null
+        $q4HoldAccepted = $true
+    } catch {
+        $q4HoldAccepted = $false
+    }
+    if (-not $q4HoldAccepted) {
+        throw "cuda_workload_hold_cap_rejected_q4_timeout_budget"
+    }
+    $cudaOverCapRefused = $false
+    try {
+        & $cudaScript -HandshakeSelfTest -HoldSec 4321 -ReadyFile (Join-Path $tmp "cuda-over-cap-ready.txt") | Out-Null
+    } catch {
+        $cudaOverCapRefused = $true
+    }
+    if (-not $cudaOverCapRefused) {
+        throw "cuda_workload_hold_cap_accepted_above_q4_timeout_budget"
+    }
+    Write-Output "PASS cuda_workload_hold_cap_matches_q4_timeout_budget"
+
     $handshake = Join-Path $tmp "cuda-handshake.txt"
     & $cudaScript -HandshakeSelfTest -ReadyFile $handshake | Out-Null
     if ((Get-Content -LiteralPath $handshake -Raw) -notmatch '^cuda_allocation_ready\r?\n$') {

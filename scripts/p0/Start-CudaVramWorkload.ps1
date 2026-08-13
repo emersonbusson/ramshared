@@ -12,7 +12,7 @@
 [CmdletBinding()]
 param(
     [ValidateRange(1, 16384)][int]$MiB = 1024,
-    [ValidateRange(1, 3600)][int]$HoldSec = 30,
+    [ValidateRange(1, 4320)][int]$HoldSec = 30,
     [ValidateRange(0, 32)][int]$Device = 0,
     [string]$ReadyFile = "",
     [string]$ReleaseFile = "",

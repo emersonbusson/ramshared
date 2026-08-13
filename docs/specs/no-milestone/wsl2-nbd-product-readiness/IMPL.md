@@ -256,14 +256,24 @@ passed this additional frozen five-file delta.
   correction exposed a second false RED in the Windows cell controller. The
   summary and controller held the same four strict fields, but PowerShell's
   property-order-preserving JSON differed and returned
-  `cell_timeout_budget_mismatch`. The named manufactured test
-  `cell_timeout_budget_property_order_is_semantic` first failed against that
-  raw comparison (RED), then passed after `Assert-CellTimeoutBudgetMatch`
-  reused `Get-StrictCellTimeoutBudget` plus canonical JSON; it also refuses a
-  real value mismatch and a noncanonical numeric type. The focused PowerShell
-  5.1 parser/static/docs gates and fresh independent Sol Gate A are green. No
-  live pressure, CUDA, reboot, WSL shutdown, or terminate action ran; a sealed
-  Attempt 17 rerun remains required.
+`cell_timeout_budget_mismatch`. The named manufactured test
+`cell_timeout_budget_property_order_is_semantic` first failed against that
+raw comparison (RED), then passed after `Assert-CellTimeoutBudgetMatch`
+reused `Get-StrictCellTimeoutBudget` plus canonical JSON; it also refuses a
+real value mismatch and a noncanonical numeric type. The focused PowerShell
+5.1 parser/static/docs gates and fresh independent Sol Gate A are green. No
+live pressure, CUDA, reboot, WSL shutdown, or terminate action ran; a sealed
+Attempt 17 rerun remains required.
+
+Attempt 18 then exposed a separate contract mismatch before CUDA startup:
+the controller's valid Q4 `CudaMaxHoldSec=4320` was rejected by the workload's
+stale `[ValidateRange(1,3600)]` parameter cap. The new named test
+`cuda_workload_hold_cap_matches_q4_timeout_budget` is RED against that cap and
+GREEN after the minimal correction: the handshake seam accepts exactly 4320
+seconds and refuses 4321, without allocating CUDA memory or widening the cap
+unboundedly. The focused PowerShell 5.1 static harness and fresh independent
+Sol Gate A pass; no live CUDA, pressure, reboot, WSL shutdown, or terminate
+action ran. Sealing and a fresh Q4 rerun remain required.
 
 ## SPEC matrix → named tests
 
@@ -273,7 +283,9 @@ CUDA handshake/refusal checks, bounded WSL controller checks, exact
 ratio/baseline mappings, DT-NBD-43 bounded zram usable-size/equality checks,
 DT-NBD-44 tier-derived timeout-budget custody and tamper refusals,
 the `cell_timeout_budget_property_order_is_semantic` strict semantic-equality
-refusal test,
+refusal test, and the exact bounded
+`cuda_workload_hold_cap_matches_q4_timeout_budget` controller/workload cap
+test,
 public-pair custody, and
 `sealed_bundle_contains_benchmark_runner_and_worker`, and both DT-NBD-40
 names. The live rows
