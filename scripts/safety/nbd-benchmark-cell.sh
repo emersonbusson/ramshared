@@ -74,6 +74,11 @@ refuse() {
   exit 2
 }
 
+require_shared_host_approval() {
+  [[ ${RAMSHARED_SHARED_HOST_APPROVAL:-} == I_ACCEPT_BOUNDED_SHARED_HOST_PRESSURE ]] || \
+    refuse SHARED_HOST_APPROVAL_MISSING
+}
+
 derive_sample_timeout_sec() {
   case $1 in
     1024|2048) printf '120\n' ;;
@@ -102,6 +107,7 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --aggregate) ACTION=aggregate; shift ;;
     --run) ACTION=run; shift ;;
+    --assert-shared-host-approval) ACTION=assert-shared-host-approval; shift ;;
     --mode) MODE=${2:-}; shift 2 ;;
     --condition) CONDITION=${2:-}; shift 2 ;;
     --tier-mib) TIER_MIB=${2:-}; shift 2 ;;
@@ -126,7 +132,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ $ACTION == aggregate || $ACTION == run || $ACTION == validate-evidence || \
-  $ACTION == validate-nbd-identity-fixture || $ACTION == classify-swap-fixture ]] \
+  $ACTION == validate-nbd-identity-fixture || $ACTION == classify-swap-fixture || \
+  $ACTION == assert-shared-host-approval ]] \
   || refuse ACTION_REQUIRED
 if [[ $ACTION == aggregate || $ACTION == run ]]; then
   [[ $MODE == disk-only || $MODE == nbd ]] || refuse MODE_INVALID
@@ -143,6 +150,12 @@ elif [[ $ACTION == classify-swap-fixture ]]; then
     || refuse SWAP_CLASSIFIER_FIXTURE_FORBIDDEN
   [[ $SWAP_FIXTURE == /* && -f $SWAP_FIXTURE && ! -L $SWAP_FIXTURE ]] \
     || refuse SWAP_CLASSIFIER_FIXTURE_INVALID
+fi
+
+if [[ $ACTION == assert-shared-host-approval ]]; then
+  require_shared_host_approval
+  printf 'NBD_BENCHMARK_STATE=APPROVED\n'
+  exit 0
 fi
 
 aggregate_samples() {
@@ -616,7 +629,7 @@ RELEASE=$SEALED_RELEASE_ROOT
 VERSION=$RELEASE_VERSION
 [[ $(id -u) == 0 ]] || refuse ROOT_REQUIRED
 [[ -n $ARTIFACT_DIR && ! -e $ARTIFACT_DIR ]] || refuse ARTIFACT_DIR_MUST_BE_FRESH
-[[ ${RAMSHARED_SHARED_HOST_APPROVAL:-} == I_ACCEPT_WSL_TERMINATION ]] || refuse SHARED_HOST_APPROVAL_MISSING
+require_shared_host_approval
 [[ ${RAMSHARED_WINDOWS_WATCHDOG_ARMED:-} == 1 ]] || refuse WINDOWS_WATCHDOG_NOT_ARMED
 [[ ${RAMSHARED_NBD_BENCHMARK_APPROVAL:-} == "benchmark:$VERSION:$TIER_MIB:$CONDITION:$MODE" ]] || refuse BENCHMARK_APPROVAL_MISSING
 

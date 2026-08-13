@@ -56,7 +56,7 @@ $required = @(
     "source_tree_state",
     "expected_source_commit",
     "selected_release_timeout",
-    "unverified_terminated",
+    "unverified_unknown",
     "immediately_before_cell",
     "gpu_after_cuda_ready",
     "Get-GpuIdentity",
@@ -133,12 +133,15 @@ $required = @(
     "unverified_unknown",
     "ManufacturedSelfTestCase",
     "manufactured_self_test_live_approval_conflict",
-    "RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_WSL_TERMINATION",
+    "RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_BOUNDED_SHARED_HOST_PRESSURE",
     "RAMSHARED_WINDOWS_WATCHDOG_ARMED=1",
     "wsl.exe",
-    "--terminate",
     "watchdog_timeout_red",
     "finally",
+    "Apply-CudaCompletionToPairResult",
+    "cuda_cleanup_secondary",
+    "watchdog_cuda_serialization_sanitized",
+    "C:\secret\cuda.err",
     "promotion_stopped",
     "PRODUCT_OFF",
     "NBD_BENCHMARK_MATRIX"
@@ -150,6 +153,9 @@ foreach ($needle in $required) {
 $forbidden = @("Restart-Computer", "Stop-Computer", "shutdown.exe", "Initialize-Disk", "Format-Volume", "Clear-Disk", "WslRepo")
 foreach ($needle in $forbidden) {
     if ($text.Contains($needle)) { throw "forbidden token: $needle" }
+}
+foreach ($needle in @("--terminate", "I_ACCEPT_WSL_TERMINATION", "wsl --shutdown", "Restart-Computer", "Stop-Computer")) {
+    if ($text.Contains($needle)) { throw "forbidden watchdog lifecycle token: $needle" }
 }
 $getRequiredPropertySource = [regex]::Match(
     $text,
@@ -387,8 +393,18 @@ try {
     if ($source -notmatch 'watchdog_timeout_red[\s\S]*promotion_stopped') {
         throw "watchdog must be RED and stop promotion"
     }
+    $timeoutRun = [pscustomobject]@{ completed = $false; timed_out = $true; exit_code = $null }
+    $timeoutExecution = New-CellControllerFailureExecution -Run $timeoutRun -Cell ([pscustomobject]@{
+            tier_mib = 1024; condition = "idle"; mode = "disk-only"
+        }) -CellDirectory $tmp -SelectedRelease ([pscustomobject]@{ version = "manufactured-v1" }) `
+        -PairContext ([pscustomobject]@{ pair_id = "1024-idle" }) -Containment ([ordered]@{ call = "manufactured" })
+    if ($timeoutExecution.result.reason -cne "watchdog_timeout_red" -or
+        $timeoutExecution.result.terminal_state -cne "unverified_unknown") {
+        throw "watchdog timeout must remain unverified unknown without lifecycle recovery"
+    }
     Write-Output "PASS watchdog_timeout_is_red_and_stops_promotion"
-    Write-Output "PASS watchdog_timeout_is_red_and_unverified_termination"
+    Write-Output "PASS watchdog_timeout_is_red_and_unverified_unknown"
+    Write-Output "PASS watchdog_timeout_never_uses_vm_lifecycle"
 
     $entrypoint = $source.Substring($source.LastIndexOf("Assert-InputContract"))
     if ($entrypoint -notmatch 'if \(\$PlanOnly\)[\s\S]*Assert-LiveConfiguration[\s\S]*Resolve-SelectedRelease[\s\S]*Invoke-CampaignProductOffPreflight[\s\S]*New-Plan') {
@@ -441,7 +457,10 @@ try {
     Write-Output "PASS wsl_release_discovery_and_cells_are_bounded"
 
     $selfTestCases = @(
-        @{ Name = "timeout"; Expected = "terminal_state=unverified_terminated" },
+        @{ Name = "timeout"; Expected = "terminal_state=unverified_unknown" },
+        @{ Name = "timeout"; Expected = "timeout_vm_lifecycle=NOT_INVOKED" },
+        @{ Name = "watchdog-cuda-composition"; Expected = "watchdog_cuda_composition=PASS" },
+        @{ Name = "watchdog-cuda-serialization"; Expected = "watchdog_cuda_serialization_sanitized=PASS" },
         @{ Name = "promotion"; Expected = "next_pair_started=False" },
         @{ Name = "selector-flip"; Expected = "selector_flip_deactivation=PINNED" },
         @{ Name = "nbd-identity"; Expected = "nbd_identity_contract=PASS" },

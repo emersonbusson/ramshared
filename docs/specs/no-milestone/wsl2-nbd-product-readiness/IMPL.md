@@ -95,10 +95,10 @@ tested and independently audited, before a new sealed full-matrix attempt.
 | `scripts/safety/nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14,15,17,18,19,20 | Disk/NBD cell, common zram topology, cgroup-before-start occupancy, exact scratch identity, exact device-name classification, sysfs-derived NBD capacity with bounded mkswap usable-size validation, connection-preserving NBD baseline transaction, cleanup, comparison, and internal custody envelope. |
 | `scripts/safety/nbd-benchmark-cgroup-launch.sh` | ITEM-5 / RF-NBD-15 | In-cgroup launcher and create-once start barrier. |
 | `scripts/safety/nbd-benchmark-lib.sh` | ITEM-5 / RF-NBD-14,17 | Identity-bound scratch, disk republication, and connection-preserving NBD baseline helpers. |
-| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Twenty-seven manufactured/refusal suites for topology, identity, exact device-name classification, all supported sysfs capacities, bounded mkswap usable size, overflow/trailing-field refusal, cgroup bounds, disk and connection-preserving NBD republication, activity receipts, cleanup, failure-receipt create-once publication, seams, custody, and aggregation. |
+| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Twenty-eight manufactured/refusal suites for topology, identity, exact device-name classification, all supported sysfs capacities, bounded mkswap usable size, overflow/trailing-field refusal, cgroup bounds, disk and connection-preserving NBD republication, activity receipts, cleanup, failure-receipt create-once publication, seams, custody, and aggregation. |
 | `scripts/p0/Start-CudaVramWorkload.ps1` | ITEM-5 / RF-NBD-16,17 | Fresh pair-scoped CUDA handshakes and unconditional cleanup. |
 | `scripts/windows/Invoke-NbdBenchmarkMatrix.ps1` | ITEM-5..7 / RF-NBD-6,16..20 | Bounded Windows/WSL controller, numeric headroom, strict NBD capacity/usable-size custody, pair custody, promotion order, watchdog classification, and public pair envelope. |
-| `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | ITEM-5..7 / RF-NBD-16..20 | PowerShell static/manufactured contract and refusal checks, including strict NBD capacity/usable-size custody. |
+| `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | ITEM-5..7 / RF-NBD-16..20 | PowerShell static/manufactured contract and refusal checks, including strict NBD capacity/usable-size custody and watchdog/CUDA failure composition. |
 | `scripts/windows/Test-WindowsCiStatic.ps1` | ITEM-7 / RF-NBD-17..19 | Windows static wrapper includes the matrix harness. |
 | `scripts/package/build-linux-bundle.sh` | ITEM-2,5 / RF-NBD-2,9,18 | Universal unbound input bundle with source identity and input manifest; binding occurs only in attended install. |
 | `tools/ci/check-benchmark-evidence.test.mjs` | ITEM-7 / RF-NBD-11,18,20 | Public pair evidence schema validator fixture, 15/15 tests. |
@@ -112,7 +112,7 @@ tested and independently audited, before a new sealed full-matrix attempt.
   `failed_swapoff_keeps_daemon_and_device_alive`, and
   `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` are
   present and pass in the CLI suite.
-- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 27/27;
+- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 28/28;
   `bash scripts/safety/test-nbd-product-preflight.sh` → 26/26.
 - Public evidence: `node --test tools/ci/check-benchmark-evidence.test.mjs`
   → 15/15, including the sanitized pair-envelope fixture and custody rules.
@@ -309,7 +309,7 @@ tested and independently audited, before a new sealed full-matrix attempt.
   ceilings remain 600/2100 seconds and Q4 CUDA requires 4320 seconds. The
   tuple is recorded in context, summary, exact-allowlist internal custody,
   comparison, and public-pair candidate evidence; manufactured internal-envelope
-  tuple tamper refuses. TDD RED then GREEN is Bash cell 27/27 and the complete
+  tuple tamper refuses. TDD RED then GREEN is Bash cell 28/28 and the complete
   Windows PowerShell 5.1 static harness; fresh independent Sol Gate A passed
   the frozen seven-file candidate. No live pressure, CUDA, reboot, WSL
   shutdown, or terminate action ran during that correction cycle. Attempt 19
@@ -344,7 +344,7 @@ Sol Gate A pass; no live CUDA, pressure, reboot, WSL shutdown, or terminate
 ## SPEC matrix → named tests
 
 The corrected implementation has local coverage for its source/static/
-manufactured names, including the 27 cell tests, 26 preflight suites, fresh
+manufactured names, including the 28 cell tests, 26 preflight suites, fresh
 CUDA handshake/refusal checks, bounded WSL controller checks, exact
 ratio/baseline mappings, DT-NBD-43 bounded zram usable-size/equality checks,
 DT-NBD-44 tier-derived timeout-budget custody and tamper refusals,
@@ -352,6 +352,9 @@ the `cell_timeout_budget_property_order_is_semantic` strict semantic-equality
 refusal test, and the exact bounded
 `cuda_workload_hold_cap_matches_q4_timeout_budget` controller/workload cap
 test,
+the `watchdog_cuda_composition` primary/secondary failure-preservation test and
+the `watchdog_cuda_serialization_sanitized` full-result private-diagnostic
+redaction test,
 public-pair custody, and
 `sealed_bundle_contains_benchmark_runner_and_worker`, and both DT-NBD-40
 names. The live rows
@@ -399,7 +402,8 @@ Rollback/refuse on any one observable failure: `swapoff` error; residual
 managed/ghost swap or daemon; BINARY_MATCH mismatch; lower-tier capacity below
 `V + max(ceil(0.10 × V), 512 MiB)`; any failed installer rollback phase; stale
 selector/provenance/manifest; CUDA cleanup failure; timeout classified as
-anything other than `RED/unverified_terminated`; or any live seam/host action.
+anything other than `RED/watchdog_timeout_red/unverified_unknown`; or any live
+seam/host action.
 
 ## Traceability
 

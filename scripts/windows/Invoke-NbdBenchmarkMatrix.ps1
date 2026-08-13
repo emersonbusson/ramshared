@@ -7,7 +7,8 @@
   Windows owns bounded process execution, the outer watchdog, and the optional
   CUDA condition. A bounded CUDA context covers exactly one disk/NBD pair. A
   watchdog timeout is RED and leaves the terminal product state unverified; it
-  is never evidence that the product is off.
+  stops only the bounded launched host child and is never evidence that the
+  product is off.
 #>
 [CmdletBinding()]
 param(
@@ -867,6 +868,46 @@ function New-CellExecution {
     [pscustomobject]@{ result = $Result; context = $Context; evidence = $Evidence }
 }
 
+function New-SanitizedCudaCompletion {
+    param([Parameter(Mandatory = $true)]$Completion)
+    $exitCode = $null
+    try {
+        if ($null -ne $Completion.exit_code) {
+            $candidate = [int64]$Completion.exit_code
+            $exitCode = $candidate
+        }
+    } catch {
+        $exitCode = $null
+    }
+    [pscustomobject][ordered]@{
+        released = [bool]$Completion.released
+        forced_termination = [bool]$Completion.forced_termination
+        exit_code = $exitCode
+        stream_drain_complete = [bool]$Completion.stream_drain_complete
+        error_present = -not [string]::IsNullOrWhiteSpace([string]$Completion.error)
+    }
+}
+
+function Apply-CudaCompletionToPairResult {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$PairResults,
+        [Parameter(Mandatory = $true)]$Completion
+    )
+    if (@($PairResults).Count -eq 0) { return }
+    $result = $PairResults[@($PairResults).Count - 1].result
+    $secondary = New-SanitizedCudaCompletion -Completion $Completion
+    if ([string]$result.reason -eq "watchdog_timeout_red") {
+        $result | Add-Member -NotePropertyName "cuda_cleanup_secondary" `
+            -NotePropertyValue ([pscustomobject]$secondary) -Force
+        return
+    }
+    $result.status = "RED"
+    $result.reason = "bounded_cuda_workload_failed"
+    $result.terminal_state = "unverified_unknown"
+    $result.promotion = "promotion_stopped"
+    $result | Add-Member -NotePropertyName "cuda_completion" -NotePropertyValue $secondary -Force
+}
+
 function Assert-CellFailureReceipt {
     param(
         [Parameter(Mandatory = $true)][string]$ReceiptPath,
@@ -903,7 +944,7 @@ function Assert-CellFailureReceipt {
         throw "cell_failure_receipt_product_off"
     }
     if ([string]$receipt.reason -notmatch '^[A-Z0-9_]{1,96}$' -or
-        [string]$receipt.reason -in @("WATCHDOG_TIMEOUT_RED", "UNVERIFIED_TERMINATED")) {
+        [string]$receipt.reason -eq "WATCHDOG_TIMEOUT_RED") {
         throw "cell_failure_receipt_invalid"
     }
     if ([string]$receipt.release_version -cne [string]$SelectedRelease.version -or
@@ -949,7 +990,7 @@ function New-CellControllerFailureExecution {
     }
     if ($Run.timed_out -eq $true) {
         return New-CellExecution -Result (New-CellResult -Cell $Cell -Status "RED" `
-            -Reason "watchdog_timeout_red" -TerminalState "unverified_terminated" -Extra @{
+            -Reason "watchdog_timeout_red" -TerminalState "unverified_unknown" -Extra @{
                 containment = $Containment; pair_context = $PairContext
             })
     }
@@ -2109,7 +2150,7 @@ function Invoke-NbdBenchmarkCell {
     $arguments = @(
         "-d", $Distro, "-u", "root", "--", "env", "-i",
         "PATH=/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root",
-        "RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_WSL_TERMINATION",
+        "RAMSHARED_SHARED_HOST_APPROVAL=I_ACCEPT_BOUNDED_SHARED_HOST_PRESSURE",
         "RAMSHARED_WINDOWS_WATCHDOG_ARMED=1",
         "RAMSHARED_NBD_BENCHMARK_APPROVAL=$approval",
         ($SelectedRelease.selected + "/scripts/safety/nbd-benchmark-cell.sh"), "--run",
@@ -2135,16 +2176,13 @@ function Invoke-NbdBenchmarkCell {
         forced_termination = $run.forced_termination
     }
     if ($run.timed_out) {
-        $termination = Invoke-BoundedProcess -FilePath (Get-WslExecutable) -ArgumentValues @("--terminate", $Distro) -TimeoutSec 60
         $containment.watchdog = [ordered]@{
             outcome = "watchdog_timeout_red"
-            terminate_completed = $termination.completed
-            terminate_exit_code = $termination.exit_code
-            terminate_stream_drain_complete = $termination.stream_drain_complete
+            bounded_child_stop_attempted = $run.forced_termination
+            vm_lifecycle_invoked = $false
         }
-        return New-CellExecution -Result (New-CellResult -Cell $Cell -Status "RED" -Reason "watchdog_timeout_red" -TerminalState "unverified_terminated" -Extra @{
-            containment = $containment; pair_context = $PairContext
-        })
+        return New-CellControllerFailureExecution -Run $run -Cell $Cell -CellDirectory $cellDir `
+            -SelectedRelease $SelectedRelease -PairContext $PairContext -Containment $containment
     }
     if (-not $run.completed -or $run.exit_code -ne 0) {
         return New-CellControllerFailureExecution -Run $run -Cell $Cell -CellDirectory $cellDir `
@@ -2297,12 +2335,9 @@ function Invoke-CellPair {
         if ($null -ne $cuda) {
             $completion = Complete-CudaWorkload -Handle $cuda.handle -ReleaseFile $cuda.release_file `
                 -StdoutPath $cuda.stdout_path -StderrPath $cuda.stderr_path
-            $pairContext.cuda_containment.cuda_completion = $completion
+            $pairContext.cuda_containment.cuda_completion = New-SanitizedCudaCompletion -Completion $completion
             if (-not $completion.released -and $pairResults.Count -gt 0) {
-                $pairResults[$pairResults.Count - 1].result.status = "RED"
-                $pairResults[$pairResults.Count - 1].result.reason = "bounded_cuda_workload_failed"
-                $pairResults[$pairResults.Count - 1].result.promotion = "promotion_stopped"
-                $pairResults[$pairResults.Count - 1].result | Add-Member -NotePropertyName "cuda_completion" -NotePropertyValue $completion -Force
+                Apply-CudaCompletionToPairResult -PairResults $pairResults -Completion $completion
             }
         }
         if ($null -ne $comparison -and $pairResults.Count -eq 2 -and
@@ -2357,8 +2392,86 @@ function Invoke-ManufacturedSelfTest {
             $run = Invoke-BoundedProcess -FilePath (Get-CurrentPowerShellExecutable) -ArgumentValues @(
                 "-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 15") -TimeoutSec 1
             if (-not $run.timed_out -or -not $run.forced_termination) { throw "manufactured_timeout_not_contained" }
-            $result = New-CellResult -Cell $cell -Status "RED" -Reason "watchdog_timeout_red" -TerminalState "unverified_terminated"
-            Write-Output "terminal_state=$($result.terminal_state)"
+            $execution = New-CellControllerFailureExecution -Run $run -Cell $cell -CellDirectory $ArtifactRoot `
+                -SelectedRelease ([pscustomobject]@{ version = "manufactured-v1" }) `
+                -PairContext ([pscustomobject]@{ pair_id = "1024-bounded" }) `
+                -Containment ([ordered]@{ call = "manufactured_timeout"; bounded_child_stop_attempted = $run.forced_termination; vm_lifecycle_invoked = $false })
+            if ($execution.result.reason -ne "watchdog_timeout_red" -or
+                $execution.result.terminal_state -ne "unverified_unknown") {
+                throw "manufactured_timeout_classification_invalid"
+            }
+            Write-Output "terminal_state=$($execution.result.terminal_state)"
+            Write-Output "timeout_vm_lifecycle=NOT_INVOKED"
+            return
+        }
+        "watchdog-cuda-composition" {
+            $cell = [pscustomobject]@{ tier_mib = 1024; condition = "bounded"; mode = "nbd" }
+            $pairResults = @(
+                [pscustomobject]@{
+                    result = (New-CellResult -Cell $cell -Status "RED" -Reason "watchdog_timeout_red" `
+                        -TerminalState "unverified_unknown")
+                }
+            )
+            $completion = [pscustomobject]@{
+                released = $false
+                forced_termination = $true
+                exit_code = 137
+                stream_drain_complete = $false
+                error = "private path C:\\campaign\\cuda.err"
+            }
+            Apply-CudaCompletionToPairResult -PairResults $pairResults -Completion $completion
+            $result = $pairResults[0].result
+            if ($result.reason -cne "watchdog_timeout_red" -or
+                $result.terminal_state -cne "unverified_unknown" -or
+                $result.promotion -ne "promotion_stopped") {
+                throw "manufactured_watchdog_cuda_primary_reason_overwritten"
+            }
+            if ($null -eq $result.PSObject.Properties["cuda_cleanup_secondary"] -or
+                $result.cuda_cleanup_secondary.released -ne $false -or
+                $result.cuda_cleanup_secondary.error_present -ne $true -or
+                $result.cuda_cleanup_secondary.PSObject.Properties["error"] -ne $null) {
+                throw "manufactured_watchdog_cuda_secondary_receipt_invalid"
+            }
+            Write-Output "watchdog_cuda_composition=PASS"
+            return
+        }
+        "watchdog-cuda-serialization" {
+            $cell = [pscustomobject]@{ tier_mib = 1024; condition = "bounded"; mode = "nbd" }
+            $completion = [pscustomobject]@{
+                released = $false
+                forced_termination = $true
+                exit_code = 137
+                stream_drain_complete = $false
+                error = 'C:\secret\cuda.err'
+            }
+            $pairContext = [pscustomobject]@{
+                pair_id = "1024-bounded"
+                cuda_containment = [pscustomobject]@{ cuda_completion = $completion }
+            }
+            $pairResults = @(
+                [pscustomobject]@{
+                    result = (New-CellResult -Cell $cell -Status "RED" -Reason "watchdog_timeout_red" `
+                        -TerminalState "unverified_unknown" -Extra @{ pair_context = $pairContext })
+                }
+            )
+            $pairContext.cuda_containment.cuda_completion = New-SanitizedCudaCompletion -Completion $completion
+            Apply-CudaCompletionToPairResult -PairResults $pairResults -Completion $completion
+            $serialized = $pairResults[0].result | ConvertTo-Json -Depth 20
+            if ($serialized.Contains('C:\secret\cuda.err')) {
+                throw "manufactured_watchdog_cuda_private_error_leaked"
+            }
+            $decoded = $serialized | ConvertFrom-Json
+            foreach ($occurrence in @(
+                $decoded.cuda_cleanup_secondary,
+                $decoded.pair_context.cuda_containment.cuda_completion
+            )) {
+                if ($null -eq $occurrence -or $occurrence.PSObject.Properties["error"] -ne $null -or
+                    $occurrence.PSObject.Properties["stderr"] -ne $null -or
+                    $occurrence.PSObject.Properties["stdout"] -ne $null) {
+                    throw "manufactured_watchdog_cuda_serialization_unsanitized"
+                }
+            }
+            Write-Output "watchdog_cuda_serialization_sanitized=PASS"
             return
         }
         "promotion" {
@@ -2839,7 +2952,7 @@ Write-Output "[cuda-vram-workload] released"
                 }) -Cell $cell -CellDirectory $dir -SelectedRelease $selectedRelease `
                 -PairContext $pairContext -Containment $containment
             if ($timeout.result.reason -ne "watchdog_timeout_red" -or
-                $timeout.result.terminal_state -ne "unverified_terminated") {
+                $timeout.result.terminal_state -ne "unverified_unknown") {
                 throw "manufactured_failure_receipt_timeout_promoted"
             }
             Write-Output "cell_failure_receipt_invalid=REFUSED"
@@ -3571,9 +3684,7 @@ foreach ($record in $resultRecords) {
 $pairContexts = @($pairContextsById.GetEnumerator() | Sort-Object Name | ForEach-Object { $_.Value })
 $complete = @($resultRecords).Count -eq 12 -and @($resultRecords | Where-Object { $_.status -eq "PASS" }).Count -eq 12
 $hasRed = @($resultRecords | Where-Object { $_.status -eq "RED" }).Count -gt 0
-$terminalState = if (@($resultRecords | Where-Object { $_.terminal_state -eq "unverified_terminated" }).Count -gt 0) {
-    "unverified_terminated"
-} elseif (@($resultRecords | Where-Object { $_.terminal_state -ne "PRODUCT_OFF" }).Count -gt 0) {
+$terminalState = if (@($resultRecords | Where-Object { $_.terminal_state -ne "PRODUCT_OFF" }).Count -gt 0) {
     "unverified_unknown"
 } else {
     "PRODUCT_OFF"
