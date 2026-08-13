@@ -1255,13 +1255,17 @@ function Assert-CellEvidence {
         $envelopeDeclared[$key] = $true
     }
     if ($envelopeDeclared.Count -ne $declared.Count) { throw "cell_evidence_envelope_artifact_mismatch" }
-    [pscustomobject]@{
+    $evidence = [pscustomobject]@{
+        cell_result_directory = $root
         context = $context
         context_sha256 = $contextHash
         summary_sha256 = $summaryHash
         artifact_inventory_sha256 = $inventoryHash
         internal_envelope_sha256 = Get-Sha256File -Path $envelopePath
     }
+    $evidence | Add-Member -NotePropertyName "custody_fingerprint" `
+        -NotePropertyValue (Get-CellEvidenceCustodyFingerprint -Evidence $evidence) -Force
+    $evidence
 }
 
 function Get-Sha256Text {
@@ -1275,13 +1279,40 @@ function Get-Sha256Text {
     }
 }
 
+function Get-CellEvidenceCustodyFingerprint {
+    param([Parameter(Mandatory = $true)]$Evidence)
+    try {
+        $declaredRoot = Get-RequiredProperty -Object $Evidence -Name "cell_result_directory"
+        if ($declaredRoot -isnot [string] -or [string]::IsNullOrWhiteSpace($declaredRoot) -or
+            -not [IO.Path]::IsPathRooted([string]$declaredRoot)) {
+            throw "invalid_root"
+        }
+        $root = [IO.Path]::GetFullPath([string]$declaredRoot)
+        if ($root -cne [string]$declaredRoot) { throw "noncanonical_root" }
+        $material = [ordered]@{
+            schema_version = "ramshared-nbd-cell-custody-fingerprint/v1"
+            cell_result_directory = $root
+            context_sha256 = Assert-Sha256Value -Value (Get-RequiredProperty -Object $Evidence -Name "context_sha256") -Name "cell_context"
+            summary_sha256 = Assert-Sha256Value -Value (Get-RequiredProperty -Object $Evidence -Name "summary_sha256") -Name "cell_summary"
+            artifact_inventory_sha256 = Assert-Sha256Value -Value (Get-RequiredProperty -Object $Evidence -Name "artifact_inventory_sha256") -Name "cell_inventory"
+            internal_envelope_sha256 = Assert-Sha256Value -Value (Get-RequiredProperty -Object $Evidence -Name "internal_envelope_sha256") -Name "cell_envelope"
+        }
+        Get-Sha256Text -Text (ConvertTo-CanonicalJson -Value $material)
+    } catch {
+        throw "public_pair_evidence_custody_required"
+    }
+}
+
 function ConvertTo-CanonicalJson {
     param([AllowNull()]$Value)
     if ($null -eq $Value) { return "null" }
     if ($Value -is [string] -or $Value -is [char]) {
         return ($Value | ConvertTo-Json -Compress)
     }
-    if ($Value -is [bool]) { return (if ($Value) { "true" } else { "false" }) }
+    if ($Value -is [bool]) {
+        if ($Value) { return "true" }
+        return "false"
+    }
     if ($Value -is [byte] -or $Value -is [sbyte] -or $Value -is [int16] -or $Value -is [uint16] -or
         $Value -is [int32] -or $Value -is [uint32] -or $Value -is [int64] -or $Value -is [uint64] -or
         $Value -is [decimal]) {
@@ -1395,6 +1426,50 @@ function Get-PublicPairDecision {
     }
 }
 
+function Assert-PublicPairEvidenceCustodyCurrent {
+    param([Parameter(Mandatory = $true)][object[]]$PairResults)
+    if ($PairResults.Count -ne 2) { throw "public_pair_evidence_custody_required" }
+    $freshCells = @()
+    foreach ($pairResult in $PairResults) {
+        if ($null -eq $pairResult.Evidence -or $null -eq $pairResult.Context -or $null -eq $pairResult.result) {
+            throw "public_pair_evidence_custody_required"
+        }
+        $cachedFingerprint = Get-CellEvidenceCustodyFingerprint -Evidence $pairResult.Evidence
+        try {
+            $declaredFingerprint = Assert-Sha256Value -Value (Get-RequiredProperty -Object $pairResult.Evidence -Name "custody_fingerprint") `
+                -Name "cached_cell_custody"
+            if ($declaredFingerprint -cne $cachedFingerprint) { throw "cached_fingerprint_mismatch" }
+            $summaryPath = Join-Path ([string](Get-RequiredProperty -Object $pairResult.Evidence -Name "cell_result_directory")) "summary.json"
+            $freshSummary = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json
+            $freshEvidence = Assert-CellEvidence -Summary $freshSummary `
+                -CellResultDirectory ([string]$pairResult.Evidence.cell_result_directory)
+            $freshFingerprint = Get-CellEvidenceCustodyFingerprint -Evidence $freshEvidence
+            if ($freshFingerprint -cne $cachedFingerprint -or
+                (ConvertTo-CanonicalJson -Value $pairResult.Context) -cne (ConvertTo-CanonicalJson -Value $freshEvidence.context) -or
+                [string](Get-RequiredProperty -Object $pairResult.result -Name "context_sha256") -cne $freshEvidence.context_sha256 -or
+                [string](Get-RequiredProperty -Object $pairResult.result -Name "raw_measurement_status") -ne "PASS") {
+                throw "fresh_custody_mismatch"
+            }
+            foreach ($property in @($freshSummary.PSObject.Properties)) {
+                $cachedValue = Get-RequiredProperty -Object $pairResult.result -Name $property.Name
+                if ((ConvertTo-CanonicalJson -Value $cachedValue) -cne (ConvertTo-CanonicalJson -Value $property.Value)) {
+                    throw "fresh_summary_mismatch"
+                }
+            }
+        } catch {
+            throw "public_pair_evidence_custody_stale"
+        }
+        $pairResult.Context = $freshEvidence.context
+        $pairResult.Evidence = $freshEvidence
+        $freshCells += [pscustomobject]@{
+            summary = $freshSummary
+            context = $freshEvidence.context
+            evidence = $freshEvidence
+        }
+    }
+    [pscustomobject]@{ cells = @($freshCells) }
+}
+
 function Assert-PublicPairEvidenceEligibility {
     param(
         [Parameter(Mandatory = $true)][object[]]$PairResults,
@@ -1404,19 +1479,24 @@ function Assert-PublicPairEvidenceEligibility {
         $null -eq $PairResults[0].Context -or $null -eq $PairResults[1].Context) {
         throw "public_pair_evidence_custody_required"
     }
-    if ([string]$PairResults[0].result.mode -ne "disk-only" -or [string]$PairResults[1].result.mode -ne "nbd" -or
-        [string]$PairResults[0].Context.binary_match -ne "N/A" -or [string]$PairResults[1].Context.binary_match -ne "PASS" -or
-        [string]$PairResults[1].result.binary_match -ne "PASS") {
+    $freshPair = Assert-PublicPairEvidenceCustodyCurrent -PairResults $PairResults
+    $freshCells = @($freshPair.cells)
+    if ($freshCells.Count -ne 2) { throw "public_pair_evidence_custody_required" }
+    $diskCell = $freshCells[0]
+    $nbdCell = $freshCells[1]
+    if ([string]$diskCell.summary.mode -ne "disk-only" -or [string]$nbdCell.summary.mode -ne "nbd" -or
+        [string]$diskCell.context.binary_match -ne "N/A" -or [string]$nbdCell.context.binary_match -ne "PASS" -or
+        [string]$nbdCell.summary.binary_match -ne "PASS") {
         throw "public_pair_evidence_nbd_binary_match_required"
     }
-    $diskLowerTopology = Get-ModeBoundLowerTopology -Context $PairResults[0].Context -ExpectedMode "disk-only" -FailurePrefix "public_pair_evidence"
-    $nbdLowerTopology = Get-ModeBoundLowerTopology -Context $PairResults[1].Context -ExpectedMode "nbd" -FailurePrefix "public_pair_evidence"
+    $diskLowerTopology = Get-ModeBoundLowerTopology -Context $diskCell.context -ExpectedMode "disk-only" -FailurePrefix "public_pair_evidence"
+    $nbdLowerTopology = Get-ModeBoundLowerTopology -Context $nbdCell.context -ExpectedMode "nbd" -FailurePrefix "public_pair_evidence"
     try {
-        $nbdTierMiB = ConvertTo-StrictInt64 -Value (Get-RequiredProperty -Object $PairResults[1].Context -Name "tier_mib") -Name "public_nbd_tier_mib"
+        $nbdTierMiB = ConvertTo-StrictInt64 -Value (Get-RequiredProperty -Object $nbdCell.context -Name "tier_mib") -Name "public_nbd_tier_mib"
     } catch {
         throw "public_pair_evidence_nbd_identity_invalid"
     }
-    $null = Get-NbdIdentity -Context $PairResults[1].Context -ExpectedTierMiB $nbdTierMiB -LowerTopology $nbdLowerTopology -FailurePrefix "public_pair_evidence"
+    $null = Get-NbdIdentity -Context $nbdCell.context -ExpectedTierMiB $nbdTierMiB -LowerTopology $nbdLowerTopology -FailurePrefix "public_pair_evidence"
     if ($diskLowerTopology.sink_type -cne $nbdLowerTopology.sink_type -or
         $diskLowerTopology.sink_identity_sha256 -cne $nbdLowerTopology.sink_identity_sha256) {
         throw "public_pair_evidence_lower_sink_binding_mismatch"
@@ -1424,13 +1504,14 @@ function Assert-PublicPairEvidenceEligibility {
     if ($diskLowerTopology.identity_sha256 -ceq $nbdLowerTopology.identity_sha256) {
         throw "public_pair_evidence_second_tier_identity_not_distinct"
     }
-    if ([string]$PairResults[0].result.terminal_state -ne "PRODUCT_OFF" -or
-        [string]$PairResults[1].result.terminal_state -ne "PRODUCT_OFF" -or
-        [string](Get-RequiredProperty -Object $PairResults[0].result -Name "raw_measurement_status") -ne "PASS" -or
-        [string](Get-RequiredProperty -Object $PairResults[1].result -Name "raw_measurement_status") -ne "PASS" -or
+    if ([string]$diskCell.summary.terminal_state -ne "PRODUCT_OFF" -or
+        [string]$nbdCell.summary.terminal_state -ne "PRODUCT_OFF" -or
+        [string]$diskCell.summary.status -ne "PASS" -or
+        [string]$nbdCell.summary.status -ne "PASS" -or
         [string]::IsNullOrWhiteSpace([string]$Comparison.environment_fingerprint)) {
         throw "public_pair_evidence_comparison_required"
     }
+    $freshPair
 }
 
 function New-PublicPairArtifactReference {
@@ -1445,6 +1526,44 @@ function New-PublicPairArtifactReference {
     }
 }
 
+function Assert-PublicPairArtifactBinding {
+    param(
+        [Parameter(Mandatory = $true)]$Record,
+        [Parameter(Mandatory = $true)][string]$PairCustodyPath,
+        [Parameter(Mandatory = $true)][string]$ComparisonPath
+    )
+    try {
+        $candidate = Get-RequiredProperty -Object $Record -Name "candidate"
+        $repositoryArtifactRoot = [string](Get-RequiredProperty -Object $candidate -Name "repository_artifact_root")
+        $custodyHash = Get-Sha256File -Path $PairCustodyPath
+        $comparisonHash = Get-Sha256File -Path $ComparisonPath
+        if ((Assert-Sha256Value -Value (Get-RequiredProperty -Object $candidate -Name "pair_custody_sha256") -Name "candidate_pair_custody") -cne $custodyHash -or
+            (Assert-Sha256Value -Value (Get-RequiredProperty -Object $candidate -Name "pair_comparison_sha256") -Name "candidate_pair_comparison") -cne $comparisonHash) {
+            throw "candidate_hash_mismatch"
+        }
+        $custody = Get-Content -LiteralPath $PairCustodyPath -Raw | ConvertFrom-Json
+        if ((Assert-Sha256Value -Value (Get-RequiredProperty -Object $custody -Name "comparison_sha256") -Name "custody_comparison") -cne $comparisonHash) {
+            throw "custody_comparison_hash_mismatch"
+        }
+        $artifacts = @((Get-RequiredProperty -Object $Record -Name "artifacts"))
+        if ($artifacts.Count -ne 2) { throw "artifact_count" }
+        $expected = @(
+            [ordered]@{ path = $repositoryArtifactRoot.TrimEnd('/') + "/pair-custody.json"; bytes = [int64](Get-Item -LiteralPath $PairCustodyPath -Force).Length; sha256 = $custodyHash },
+            [ordered]@{ path = $repositoryArtifactRoot.TrimEnd('/') + "/pair-comparison.json"; bytes = [int64](Get-Item -LiteralPath $ComparisonPath -Force).Length; sha256 = $comparisonHash }
+        )
+        for ($index = 0; $index -lt $expected.Count; $index++) {
+            $artifact = $artifacts[$index]
+            if ([string](Get-RequiredProperty -Object $artifact -Name "path") -cne [string]$expected[$index].path -or
+                [int64](Get-RequiredProperty -Object $artifact -Name "bytes") -ne [int64]$expected[$index].bytes -or
+                (Assert-Sha256Value -Value (Get-RequiredProperty -Object $artifact -Name "sha256") -Name ("artifact_" + $index)) -cne [string]$expected[$index].sha256) {
+                throw "artifact_reference_mismatch"
+            }
+        }
+    } catch {
+        throw "public_pair_evidence_artifact_binding_invalid"
+    }
+}
+
 function Write-PublicPairEvidence {
     param(
         [Parameter(Mandatory = $true)][object[]]$PairResults,
@@ -1453,14 +1572,22 @@ function Write-PublicPairEvidence {
         [Parameter(Mandatory = $true)]$SelectedRelease,
         [Parameter(Mandatory = $true)][string]$PairDir
     )
-    Assert-PublicPairEvidenceEligibility -PairResults $PairResults -Comparison $Comparison
+    $validatedPair = Assert-PublicPairEvidenceEligibility -PairResults $PairResults -Comparison $Comparison
+    $validatedCells = @($validatedPair.cells)
+    if ($validatedCells.Count -ne 2) { throw "public_pair_evidence_custody_required" }
+    $diskCell = $validatedCells[0]
+    $nbdCell = $validatedCells[1]
+    $diskSummary = $diskCell.summary
+    $nbdSummary = $nbdCell.summary
+    $diskContext = $diskCell.context
+    $nbdContext = $nbdCell.context
     $runId = "wsl2-nbd-" + [string]$PairContext.pair_id + "-" + [guid]::NewGuid().ToString("N")
     $publicDirectory = Join-Path $PairDir "public-evidence"
     if (Test-Path -LiteralPath $publicDirectory -PathType Any) { throw "public_pair_evidence_directory_already_exists" }
     New-Item -ItemType Directory -Path $publicDirectory | Out-Null
     $repositoryArtifactRoot = "docs/specs/no-milestone/wsl2-nbd-product-readiness/evidence/" + $runId
-    $diskEvidence = $PairResults[0].Evidence
-    $nbdEvidence = $PairResults[1].Evidence
+    $diskEvidence = $diskCell.evidence
+    $nbdEvidence = $nbdCell.evidence
     $installedManifest = Assert-Sha256Value -Value (Get-RequiredProperty -Object $SelectedRelease -Name "installed_manifest_sha256") -Name "installed_manifest"
     $inputBundleManifest = [string](Get-RequiredProperty -Object $SelectedRelease -Name "input_bundle_manifest_sha256")
     if ($inputBundleManifest -ne "not_exposed") {
@@ -1468,6 +1595,19 @@ function Write-PublicPairEvidence {
     }
     $pairCustodyPath = Join-Path $publicDirectory "pair-custody.json"
     $comparisonPath = Join-Path $publicDirectory "pair-comparison.json"
+    $publicComparison = [ordered]@{
+        schema_version = "ramshared-nbd-public-pair-comparison/v1"
+        pair_id = [string]$PairContext.pair_id
+        environment_fingerprint = [string]$Comparison.environment_fingerprint
+        baseline_verdict = [string]$Comparison.baseline_verdict
+        baseline_reason = [string]$Comparison.baseline_reason
+        nbd_vs_disk_median_ratio = [double]$Comparison.nbd_vs_disk_median_ratio
+        nbd_vs_disk_p99_ratio = [double]$Comparison.nbd_vs_disk_p99_ratio
+        nbd_vs_disk_population_stddev_ratio = $Comparison.nbd_vs_disk_population_stddev_ratio
+        timeout_budget = $PairContext.timeout_budget
+    }
+    Write-JsonNoBom -Value $publicComparison -Path $comparisonPath
+    $comparisonSha256 = Get-Sha256File -Path $comparisonPath
     $pairCustody = [ordered]@{
         schema_version = "ramshared-nbd-public-pair-custody/v1"
         pair_id = [string]$PairContext.pair_id
@@ -1482,58 +1622,46 @@ function Write-PublicPairEvidence {
                 mode = "disk-only"; binary_match = "N/A"; context_sha256 = $diskEvidence.context_sha256
                 summary_sha256 = $diskEvidence.summary_sha256; artifact_inventory_sha256 = $diskEvidence.artifact_inventory_sha256
                 internal_envelope_sha256 = $diskEvidence.internal_envelope_sha256
-                timeout_budget = $PairResults[0].Context.timeout_budget
+                timeout_budget = $diskContext.timeout_budget
             },
             [ordered]@{
                 mode = "nbd"; binary_match = "PASS"; context_sha256 = $nbdEvidence.context_sha256
                 summary_sha256 = $nbdEvidence.summary_sha256; artifact_inventory_sha256 = $nbdEvidence.artifact_inventory_sha256
                 internal_envelope_sha256 = $nbdEvidence.internal_envelope_sha256
-                timeout_budget = $PairResults[1].Context.timeout_budget
+                timeout_budget = $nbdContext.timeout_budget
             }
         )
         timeout_budget = $PairContext.timeout_budget
-        comparison_sha256 = Get-Sha256Text -Text (ConvertTo-CanonicalJson -Value $Comparison)
+        comparison_sha256 = $comparisonSha256
         cleanup = [ordered]@{ complete = $true; terminal_state = "PRODUCT_OFF" }
     }
-    $publicComparison = [ordered]@{
-        schema_version = "ramshared-nbd-public-pair-comparison/v1"
-        pair_id = [string]$PairContext.pair_id
-        environment_fingerprint = [string]$Comparison.environment_fingerprint
-        baseline_verdict = [string]$Comparison.baseline_verdict
-        baseline_reason = [string]$Comparison.baseline_reason
-        nbd_vs_disk_median_ratio = [double]$Comparison.nbd_vs_disk_median_ratio
-        nbd_vs_disk_p99_ratio = [double]$Comparison.nbd_vs_disk_p99_ratio
-        nbd_vs_disk_population_stddev_ratio = $Comparison.nbd_vs_disk_population_stddev_ratio
-        timeout_budget = $PairContext.timeout_budget
-    }
     Write-JsonNoBom -Value $pairCustody -Path $pairCustodyPath
-    Write-JsonNoBom -Value $publicComparison -Path $comparisonPath
     $platform = [ordered]@{
-        kernel_release = [string]$PairResults[1].Context.kernel_release
+        kernel_release = [string]$nbdContext.kernel_release
         gpu_model = [string]$PairContext.gpu_identity.gpu_model
         gpu_driver = [string]$PairContext.gpu_identity.gpu_driver
         zram = [ordered]@{
-            device = [string]$PairResults[1].Context.zram.device
-            algorithm = [string]$PairResults[1].Context.zram.algorithm
-            size_kib = [int]$PairResults[1].Context.zram.size_kib
-            priority = [int]$PairResults[1].Context.zram.priority
-            identity_sha256 = [string]$PairResults[1].Context.zram.identity_sha256
+            device = [string]$nbdContext.zram.device
+            algorithm = [string]$nbdContext.zram.algorithm
+            size_kib = [int]$nbdContext.zram.size_kib
+            priority = [int]$nbdContext.zram.priority
+            identity_sha256 = [string]$nbdContext.zram.identity_sha256
         }
         lower = [ordered]@{
-            type = [string]$PairResults[1].Context.lower.type
-            sink_type = [string]$PairResults[1].Context.lower.sink_type
-            sink_identity_sha256 = [string]$PairResults[1].Context.lower.sink_identity_sha256
+            type = [string]$nbdContext.lower.type
+            sink_type = [string]$nbdContext.lower.sink_type
+            sink_identity_sha256 = [string]$nbdContext.lower.sink_identity_sha256
         }
     }
     $workload = [ordered]@{
         profile = "anonymous_memory_sequential_write"
         parameters = [ordered]@{
-            tier_mib = [int]$PairResults[1].Context.tier_mib
-            condition = [string]$PairResults[1].Context.condition
-            pattern = [string]$PairResults[1].Context.workload.pattern
-            allocation_chunk_bytes = [int]$PairResults[1].Context.workload.allocation_chunk_bytes
-            worker_threads = [int]$PairResults[1].Context.workload.worker_threads
-            allocated_mib = [int]$PairResults[1].Context.workload.allocated_mib
+            tier_mib = [int]$nbdContext.tier_mib
+            condition = [string]$nbdContext.condition
+            pattern = [string]$nbdContext.workload.pattern
+            allocation_chunk_bytes = [int]$nbdContext.workload.allocation_chunk_bytes
+            worker_threads = [int]$nbdContext.workload.worker_threads
+            allocated_mib = [int]$nbdContext.workload.allocated_mib
             timeout_budget = $PairContext.timeout_budget
         }
         warmup_seconds = 0
@@ -1552,7 +1680,7 @@ function Write-PublicPairEvidence {
         run_id = $runId
         surface = "wsl2-nbd"
         slug = "wsl2-nbd-product-readiness"
-        utc = [ordered]@{ started = [string]$PairResults[0].Context.utc.started; ended = [DateTime]::UtcNow.ToString("o") }
+        utc = [ordered]@{ started = [string]$diskContext.utc.started; ended = [DateTime]::UtcNow.ToString("o") }
         source = [ordered]@{
             commit = [string]$SelectedRelease.source_commit
             dirty = $false
@@ -1569,6 +1697,7 @@ function Write-PublicPairEvidence {
             installed_manifest_sha256 = $installedManifest
             input_bundle_manifest_sha256 = $inputBundleManifest
             pair_custody_sha256 = Get-Sha256File -Path $pairCustodyPath
+            pair_comparison_sha256 = $comparisonSha256
         }
         workload = $workload
         comparison = [ordered]@{
@@ -1580,8 +1709,8 @@ function Write-PublicPairEvidence {
             baseline_verdict = [string]$Comparison.baseline_verdict
         }
         metrics = [ordered]@{
-            disk_allocation_to_hold_ms = New-PublicMetric -Summary $PairResults[0].result -Name "disk_public_metric"
-            nbd_allocation_to_hold_ms = New-PublicMetric -Summary $PairResults[1].result -Name "nbd_public_metric"
+            disk_allocation_to_hold_ms = New-PublicMetric -Summary $diskSummary -Name "disk_public_metric"
+            nbd_allocation_to_hold_ms = New-PublicMetric -Summary $nbdSummary -Name "nbd_public_metric"
         }
         lifecycle = [ordered]@{
             before = [ordered]@{ custody_sha256 = $diskEvidence.context_sha256 }
@@ -1602,7 +1731,9 @@ function Write-PublicPairEvidence {
         }
     }
     $publicEnvelopePath = Join-Path $publicDirectory "public-pair-evidence.json"
+    Assert-PublicPairArtifactBinding -Record $record -PairCustodyPath $pairCustodyPath -ComparisonPath $comparisonPath
     Write-JsonNoBom -Value $record -Path $publicEnvelopePath
+    Assert-PublicPairArtifactBinding -Record $record -PairCustodyPath $pairCustodyPath -ComparisonPath $comparisonPath
     [pscustomobject]@{
         # `public_pair_evidence_noncanonical` is a deliberate custody marker:
         # this host-local record is never a repository publication by itself.
@@ -2226,7 +2357,16 @@ function Invoke-NbdBenchmarkCell {
 
 function Test-PromotionMayAdvance {
     param([Parameter(Mandatory = $true)][object[]]$PairResults)
-    @($PairResults).Count -eq 2 -and @($PairResults | Where-Object { $_.result.status -ne "PASS" }).Count -eq 0
+    if (@($PairResults).Count -ne 2) { return $false }
+    foreach ($pairResult in @($PairResults)) {
+        if ($null -eq $pairResult -or $null -eq $pairResult.result -or [string]$pairResult.result.status -ne "PASS") {
+            return $false
+        }
+        # Cell summaries are immutable custody inputs. A separate pair decision
+        # may stop promotion without rewriting an otherwise valid summary.
+        if ($null -ne $pairResult.result.PSObject.Properties["pair_decision"]) { return $false }
+    }
+    $true
 }
 
 function Apply-BaselineVerdictToPair {
@@ -2235,20 +2375,42 @@ function Apply-BaselineVerdictToPair {
         [Parameter(Mandatory = $true)]$Comparison
     )
     if (@($PairResults).Count -ne 2) { throw "baseline_pair_result_count_invalid" }
-    switch ([string]$Comparison.baseline_verdict) {
+    $pairDecision = switch ([string]$Comparison.baseline_verdict) {
         "RED" {
-            $PairResults[1].result.status = "RED"
-            $PairResults[1].result | Add-Member -NotePropertyName "reason" -NotePropertyValue "baseline_regression_red" -Force
-            $PairResults[1].result | Add-Member -NotePropertyName "promotion" -NotePropertyValue "promotion_stopped" -Force
+            [ordered]@{
+                baseline_verdict = "RED"; verdict = "RED"; reason = "baseline_regression_red"; promotable = $false
+            }
             break
         }
         "YELLOW" {
-            $PairResults[1].result.status = "PARTIAL"
-            $PairResults[1].result | Add-Member -NotePropertyName "reason" -NotePropertyValue "baseline_regression_yellow" -Force
-            $PairResults[1].result | Add-Member -NotePropertyName "promotion" -NotePropertyValue "promotion_stopped" -Force
+            [ordered]@{
+                baseline_verdict = "YELLOW"; verdict = "YELLOW"; reason = "baseline_regression_yellow"; promotable = $false
+            }
             break
         }
+        default { $null }
     }
+    if ($null -eq $pairDecision) { return }
+    $PairResults[1].result | Add-Member -NotePropertyName "pair_decision" -NotePropertyValue ([pscustomobject]$pairDecision) -Force
+    $PairResults[1].result | Add-Member -NotePropertyName "promotion" -NotePropertyValue "promotion_stopped" -Force
+}
+
+function Get-PairDecisionVerdict {
+    param([Parameter(Mandatory = $true)]$PairResult)
+    if ($null -eq $PairResult -or $null -eq $PairResult.result) { return $null }
+    $property = $PairResult.result.PSObject.Properties["pair_decision"]
+    if ($null -eq $property -or $null -eq $property.Value) { return $null }
+    [string]$property.Value.verdict
+}
+
+function Test-PairDecisionIsRed {
+    param([Parameter(Mandatory = $true)][object[]]$PairResults)
+    @($PairResults | Where-Object { (Get-PairDecisionVerdict -PairResult $_) -eq "RED" }).Count -gt 0
+}
+
+function Test-PairHasBaselineDecision {
+    param([Parameter(Mandatory = $true)][object[]]$PairResults)
+    @($PairResults | Where-Object { $null -ne $_.result.PSObject.Properties["pair_decision"] }).Count -gt 0
 }
 
 function Invoke-CellPair {
@@ -3137,8 +3299,10 @@ Write-Output "[cuda-vram-workload] released"
                 )
                 Apply-BaselineVerdictToPair -PairResults $yellowPair -Comparison ([pscustomobject]@{ baseline_verdict = "YELLOW" })
                 Apply-BaselineVerdictToPair -PairResults $redPair -Comparison ([pscustomobject]@{ baseline_verdict = "RED" })
-                if ($yellowPair[1].result.status -ne "PARTIAL" -or $yellowPair[1].result.reason -ne "baseline_regression_yellow" -or
-                    $redPair[1].result.status -ne "RED" -or $redPair[1].result.reason -ne "baseline_regression_red") {
+                if ($yellowPair[1].result.status -ne "PASS" -or $yellowPair[1].result.promotion -ne "promotion_stopped" -or
+                    $yellowPair[1].result.pair_decision.verdict -ne "YELLOW" -or $yellowPair[1].result.pair_decision.reason -ne "baseline_regression_yellow" -or
+                    $redPair[1].result.status -ne "PASS" -or $redPair[1].result.promotion -ne "promotion_stopped" -or
+                    $redPair[1].result.pair_decision.verdict -ne "RED" -or $redPair[1].result.pair_decision.reason -ne "baseline_regression_red") {
                     throw "manufactured_baseline_pair_status_invalid"
                 }
                 if ((Test-PromotionMayAdvance -PairResults $yellowPair) -or (Test-PromotionMayAdvance -PairResults $redPair)) {
@@ -3409,15 +3573,23 @@ Write-Output "[cuda-vram-workload] released"
                     param([string]$Mode, [string]$BinaryMatch, [int[]]$Samples)
                     $lowerType = if ($Mode -eq "nbd") { "nbd" } else { "scratch" }
                     $lowerIdentityHashCharacter = if ($Mode -eq "nbd") { "a" } else { "b" }
-                    $contextHashCharacter = if ($Mode -eq "nbd") { "e" } else { "f" }
-                    $summaryHashCharacter = if ($Mode -eq "nbd") { "1" } else { "2" }
-                    $inventoryHashCharacter = if ($Mode -eq "nbd") { "3" } else { "4" }
-                    $envelopeHashCharacter = if ($Mode -eq "nbd") { "5" } else { "6" }
-                    $context = [pscustomobject]@{
+                    $cellDirectory = Join-Path $dir ("cell-" + [guid]::NewGuid().ToString("N"))
+                    New-Item -ItemType Directory -Path $cellDirectory | Out-Null
+                    $contextPath = Join-Path $cellDirectory "context.json"
+                    $samplesPath = Join-Path $cellDirectory "samples.jsonl"
+                    $summaryPath = Join-Path $cellDirectory "summary.json"
+                    $inventoryPath = Join-Path $cellDirectory "artifact-inventory.json"
+                    $envelopePath = Join-Path $cellDirectory "evidence-envelope.json"
+                    $beforePath = Join-Path $cellDirectory "before.txt"
+                    $actionPath = Join-Path $cellDirectory "action.txt"
+                    $afterPath = Join-Path $cellDirectory "after.txt"
+                    $context = [ordered]@{
                         schema = 2; pair_id = "1024-idle"; mode = $Mode; condition = "idle"; tier_mib = 1024
                         utc = [pscustomobject]@{ started = "2026-08-12T12:00:00Z" }
                         kernel_release = "6.6.0-manufactured"
+                        release = [ordered]@{ version = "manufactured-v1"; source_commit = $sourceCommit; source_tree_state = "clean"; manifest_sha256 = $manifestSha256 }
                         binary_match = $BinaryMatch
+                        watchdog = [ordered]@{ armed = $true; outcome = "not_fired" }
                         timeout_budget = [pscustomobject]@{ sample_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 900 }
                         zram = [pscustomobject]@{
                             device = "zram0"; algorithm = "zstd"; size_kib = 1048576; priority = 200
@@ -3440,17 +3612,40 @@ Write-Output "[cuda-vram-workload] released"
                             daemon_manifest_sha256 = ("8" * 64) -join ""; identity_sha256 = ($lowerIdentityHashCharacter * 64) -join ""
                         })
                     }
-                    $summary = [pscustomobject]@{
+                    Write-JsonNoBom -Value $context -Path $contextPath
+                    [IO.File]::WriteAllText($samplesPath, '{"sample":"manufactured"}' + "`n", [Text.UTF8Encoding]::new($false))
+                    [IO.File]::WriteAllText($beforePath, "before=manufactured`n", [Text.UTF8Encoding]::new($false))
+                    [IO.File]::WriteAllText($actionPath, "action=manufactured`n", [Text.UTF8Encoding]::new($false))
+                    [IO.File]::WriteAllText($afterPath, "after=manufactured`n", [Text.UTF8Encoding]::new($false))
+                    $summary = [ordered]@{
                         mode = $Mode; binary_match = $BinaryMatch; status = "PASS"; terminal_state = "PRODUCT_OFF"
                         raw_measurement_status = "PASS"
+                        context_sha256 = Get-Sha256File -Path $contextPath
+                        timeout_budget = $context.timeout_budget
                         samples = @($Samples | ForEach-Object { [pscustomobject]@{ allocation_to_hold_ms = [double]$_ } })
                     }
-                    New-CellExecution -Result $summary -Context $context -Evidence ([pscustomobject]@{
-                        context_sha256 = ($contextHashCharacter * 64) -join ""
-                        summary_sha256 = ($summaryHashCharacter * 64) -join ""
-                        artifact_inventory_sha256 = ($inventoryHashCharacter * 64) -join ""
-                        internal_envelope_sha256 = ($envelopeHashCharacter * 64) -join ""
-                    })
+                    Write-JsonNoBom -Value $summary -Path $summaryPath
+                    $inventory = [ordered]@{ schema = 2; files = @(
+                        [ordered]@{ name = "before.txt"; bytes = (Get-Item -LiteralPath $beforePath).Length; sha256 = Get-Sha256File -Path $beforePath },
+                        [ordered]@{ name = "action.txt"; bytes = (Get-Item -LiteralPath $actionPath).Length; sha256 = Get-Sha256File -Path $actionPath },
+                        [ordered]@{ name = "after.txt"; bytes = (Get-Item -LiteralPath $afterPath).Length; sha256 = Get-Sha256File -Path $afterPath },
+                        [ordered]@{ name = "context.json"; bytes = (Get-Item -LiteralPath $contextPath).Length; sha256 = Get-Sha256File -Path $contextPath },
+                        [ordered]@{ name = "samples.jsonl"; bytes = (Get-Item -LiteralPath $samplesPath).Length; sha256 = Get-Sha256File -Path $samplesPath },
+                        [ordered]@{ name = "summary.json"; bytes = (Get-Item -LiteralPath $summaryPath).Length; sha256 = Get-Sha256File -Path $summaryPath }
+                    ) }
+                    Write-JsonNoBom -Value $inventory -Path $inventoryPath
+                    $envelope = [ordered]@{
+                        schema_version = "ramshared-nbd-cell-evidence/v1"; pair_id = "1024-idle"; mode = $Mode
+                        release = [ordered]@{ version = "manufactured-v1"; source_commit = $sourceCommit; manifest_sha256 = $manifestSha256 }
+                        context_sha256 = Get-Sha256File -Path $contextPath; summary_sha256 = Get-Sha256File -Path $summaryPath
+                        artifact_inventory_sha256 = Get-Sha256File -Path $inventoryPath; binary_match = $BinaryMatch
+                        watchdog = [ordered]@{ armed = $true; outcome = "not_fired" }
+                        timeout_budget = $context.timeout_budget; classification = "INCOMPARABLE"
+                        artifacts = @($inventory.files | ForEach-Object { [ordered]@{ path = $_.name; bytes = $_.bytes; sha256 = $_.sha256 } })
+                    }
+                    Write-JsonNoBom -Value $envelope -Path $envelopePath
+                    $evidence = Assert-CellEvidence -Summary ([pscustomobject]$summary) -CellResultDirectory $cellDirectory
+                    New-CellExecution -Result ([pscustomobject]$summary) -Context $evidence.context -Evidence $evidence
                 }
                 $pairResults = @(
                     (& $newExecution "disk-only" "N/A" @(100, 110, 120)),
@@ -3500,14 +3695,37 @@ Write-Output "[cuda-vram-workload] released"
                     (Test-Path -LiteralPath (Join-Path $dir "results.jsonl") -PathType Leaf)) {
                     throw "manufactured_public_pair_candidate_invalid"
                 }
+                foreach ($baselineVerdict in @("YELLOW", "RED")) {
+                    $classifiedPair = @(
+                        (& $newExecution "disk-only" "N/A" @(100, 110, 120)),
+                        (& $newExecution "nbd" "PASS" @(105, 115, 125))
+                    )
+                    $classifiedComparison = & $newComparison $baselineVerdict
+                    Apply-BaselineVerdictToPair -PairResults $classifiedPair -Comparison $classifiedComparison
+                    $classifiedPairDirectory = Join-Path $dir ("classified-" + $baselineVerdict.ToLowerInvariant())
+                    New-Item -ItemType Directory -Path $classifiedPairDirectory | Out-Null
+                    $classifiedCandidate = Write-PublicPairEvidence -PairResults $classifiedPair -Comparison $classifiedComparison `
+                        -PairContext $pairContext -SelectedRelease $selectedRelease -PairDir $classifiedPairDirectory
+                    $classifiedCell = $classifiedPair[1].result
+                    if ($classifiedCandidate.record.decision.verdict -ne $baselineVerdict -or
+                        [bool]$classifiedCandidate.record.decision.promotable -or
+                        -not [bool]$classifiedCandidate.record.comparison.qualified -or
+                        $classifiedCell.status -ne "PASS" -or $classifiedCell.promotion -ne "promotion_stopped" -or
+                        $classifiedCell.pair_decision.verdict -ne $baselineVerdict -or
+                        [bool]$classifiedCell.pair_decision.promotable -or
+                        (Test-PromotionMayAdvance -PairResults $classifiedPair)) {
+                        throw ("manufactured_public_pair_baseline_custody_invalid:" + $baselineVerdict)
+                    }
+                }
                 $binaryRefused = $false
                 $badBinaryResults = @(
                     (& $newExecution "disk-only" "N/A" @(100, 110, 120)),
-                    (& $newExecution "nbd" "N/A" @(105, 115, 125))
+                    (& $newExecution "nbd" "PASS" @(105, 115, 125))
                 )
+                $badBinaryResults[1].result.binary_match = "N/A"
                 try {
                     Assert-PublicPairEvidenceEligibility -PairResults $badBinaryResults -Comparison (& $newComparison "GREEN")
-                } catch { $binaryRefused = $_.Exception.Message -eq "public_pair_evidence_nbd_binary_match_required" }
+                } catch { $binaryRefused = $_.Exception.Message -eq "public_pair_evidence_custody_stale" }
                 if (-not $binaryRefused) { throw "manufactured_public_pair_binary_match_was_accepted" }
                 $rawRefused = $false
                 $badRawResults = @(
@@ -3517,7 +3735,7 @@ Write-Output "[cuda-vram-workload] released"
                 $badRawResults[1].result.raw_measurement_status = "RED"
                 try {
                     Assert-PublicPairEvidenceEligibility -PairResults $badRawResults -Comparison (& $newComparison "GREEN")
-                } catch { $rawRefused = $_.Exception.Message -eq "public_pair_evidence_comparison_required" }
+                } catch { $rawRefused = $_.Exception.Message -eq "public_pair_evidence_custody_stale" }
                 if (-not $rawRefused) { throw "manufactured_public_pair_raw_measurement_was_accepted" }
                 $newPairResults = {
                     @(
@@ -3538,28 +3756,29 @@ Write-Output "[cuda-vram-workload] released"
                 $swappedLowerPairResults = & $newPairResults
                 $swappedLowerPairResults[0].Context.lower.type = "nbd"
                 $swappedLowerPairResults[1].Context.lower.type = "scratch"
-                & $assertPublicPairRefusal "lower_mode_binding" $swappedLowerPairResults "public_pair_evidence_lower_topology_mismatch"
+                & $assertPublicPairRefusal "lower_mode_binding" $swappedLowerPairResults "public_pair_evidence_custody_stale"
                 $wrongDiskLowerPairResults = & $newPairResults
                 $wrongDiskLowerPairResults[0].Context.lower.type = "lower_disk"
-                & $assertPublicPairRefusal "lower_wrong_type" $wrongDiskLowerPairResults "public_pair_evidence_lower_topology_mismatch"
+                & $assertPublicPairRefusal "lower_wrong_type" $wrongDiskLowerPairResults "public_pair_evidence_custody_stale"
                 $missingNbdLowerTypePairResults = & $newPairResults
                 $null = $missingNbdLowerTypePairResults[1].Context.lower.PSObject.Properties.Remove("type")
-                & $assertPublicPairRefusal "lower_type_missing" $missingNbdLowerTypePairResults "public_pair_evidence_lower_topology_mismatch"
+                & $assertPublicPairRefusal "lower_type_missing" $missingNbdLowerTypePairResults "public_pair_evidence_custody_stale"
                 $missingNbdLowerIdentityPairResults = & $newPairResults
                 $null = $missingNbdLowerIdentityPairResults[1].Context.lower.PSObject.Properties.Remove("identity_sha256")
-                & $assertPublicPairRefusal "lower_identity_missing" $missingNbdLowerIdentityPairResults "public_pair_evidence_lower_topology_mismatch"
+                & $assertPublicPairRefusal "lower_identity_missing" $missingNbdLowerIdentityPairResults "public_pair_evidence_custody_stale"
                 $sinkIdentityMismatchPairResults = & $newPairResults
                 $sinkIdentityMismatchPairResults[1].Context.lower.sink_identity_sha256 = ("9" * 64) -join ""
-                & $assertPublicPairRefusal "lower_sink_identity" $sinkIdentityMismatchPairResults "public_pair_evidence_lower_sink_binding_mismatch"
+                & $assertPublicPairRefusal "lower_sink_identity" $sinkIdentityMismatchPairResults "public_pair_evidence_custody_stale"
                 $nbdDevicePairResults = & $newPairResults
                 $nbdDevicePairResults[1].Context.nbd.device = "/dev/nvme0n1"
-                & $assertPublicPairRefusal "nbd_device" $nbdDevicePairResults "public_pair_evidence_nbd_identity_invalid"
+                & $assertPublicPairRefusal "nbd_device" $nbdDevicePairResults "public_pair_evidence_custody_stale"
                 $sameSecondTierPairResults = & $newPairResults
                 $sameSecondTierPairResults[1].Context.lower.identity_sha256 = $sameSecondTierPairResults[0].Context.lower.identity_sha256
                 $sameSecondTierPairResults[1].Context.nbd.identity_sha256 = $sameSecondTierPairResults[1].Context.lower.identity_sha256
-                & $assertPublicPairRefusal "second_tier_identity" $sameSecondTierPairResults "public_pair_evidence_second_tier_identity_not_distinct"
+                & $assertPublicPairRefusal "second_tier_identity" $sameSecondTierPairResults "public_pair_evidence_custody_stale"
                 Write-Output "public_pair_evidence=PASS"
                 Write-Output "public_pair_evidence_mapping=PASS"
+                Write-Output "public_pair_evidence_yellow_red_publish_without_mutating_cell_summary=PASS"
                 Write-Output "public_pair_evidence_nbd_binary_match=REFUSED"
                 Write-Output "public_pair_evidence_raw_measurement=REFUSED"
                 Write-Output "public_pair_evidence_lower_mode_binding=REFUSED"
@@ -3726,8 +3945,9 @@ foreach ($record in $resultRecords) {
     }
 }
 $pairContexts = @($pairContextsById.GetEnumerator() | Sort-Object Name | ForEach-Object { $_.Value })
-$complete = @($resultRecords).Count -eq 12 -and @($resultRecords | Where-Object { $_.status -eq "PASS" }).Count -eq 12
-$hasRed = @($resultRecords | Where-Object { $_.status -eq "RED" }).Count -gt 0
+$hasBaselineDecision = Test-PairHasBaselineDecision -PairResults $results
+$complete = @($resultRecords).Count -eq 12 -and @($resultRecords | Where-Object { $_.status -eq "PASS" }).Count -eq 12 -and -not $hasBaselineDecision
+$hasRed = @($resultRecords | Where-Object { $_.status -eq "RED" }).Count -gt 0 -or (Test-PairDecisionIsRed -PairResults $results)
 $terminalState = if (@($resultRecords | Where-Object { $_.terminal_state -ne "PRODUCT_OFF" }).Count -gt 0) {
     "unverified_unknown"
 } else {

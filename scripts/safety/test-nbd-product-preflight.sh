@@ -300,6 +300,44 @@ add_exact_daemon_fixture_process() {
   ln -s "$release/bin/ramsharedd" "$root/proc/$pid/exe"
 }
 
+clone_installed_release_fixture() {
+  local root=$1 version=$2
+  local source="$root/opt/ramshared/releases/v1.2.3"
+  local target="$root/opt/ramshared/releases/$version"
+  [[ $version =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || return 1
+  cp -a -- "$source" "$target"
+}
+
+add_installed_release_daemon_fixture_process() {
+  local root=$1 version=$2 pid=$3
+  local release="$root/opt/ramshared/releases/$version"
+  [[ $pid =~ ^[1-9][0-9]*$ && -x $release/bin/ramsharedd ]] || return 1
+  mkdir -p "$root/proc/$pid"
+  ln -s "$release/bin/ramsharedd" "$root/proc/$pid/exe"
+}
+
+add_raw_exe_fixture_process() {
+  local root=$1 raw_exe=$2 pid=$3
+  [[ $pid =~ ^[1-9][0-9]*$ && $raw_exe == /* ]] || return 1
+  mkdir -p "$root/proc/$pid"
+  ln -s "$raw_exe" "$root/proc/$pid/exe"
+}
+
+write_proc_status_metadata() {
+  local root=$1 pid=$2 name=$3 kthread=$4
+  [[ $pid =~ ^[1-9][0-9]*$ && $kthread =~ ^[01]$ ]] || return 1
+  mkdir -p "$root/proc/$pid"
+  printf 'Name:\t%s\nState:\tS (sleeping)\nTgid:\t%s\nPid:\t%s\nPPid:\t0\nKthread:\t%s\n' \
+    "$name" "$pid" "$pid" "$kthread" >"$root/proc/$pid/status"
+}
+
+write_proc_stat_metadata() {
+  local root=$1 pid=$2 name=$3 flags=$4
+  [[ $pid =~ ^[1-9][0-9]*$ && $flags =~ ^[0-9]+$ ]] || return 1
+  mkdir -p "$root/proc/$pid"
+  printf '%s (%s) S 0 0 0 0 0 %s\n' "$pid" "$name" "$flags" >"$root/proc/$pid/stat"
+}
+
 run_product() {
   local root=$1
   shift
@@ -394,6 +432,220 @@ test_product_off_rejects_exact_daemon_without_pidfile() {
   assert_contains product_off_ambiguous_exact_daemons_without_pidfile 'NBD_PRODUCT_STATE=BLOCKED' || return
   assert_contains product_off_ambiguous_exact_daemons_without_pidfile 'NBD_READINESS_REASON=DAEMON_PID_AMBIGUOUS' || return
   pass product_off_rejects_exact_daemon_without_pidfile
+}
+
+test_product_off_rejects_managed_zram_and_exact_aliases() {
+  local root release alias
+  root=$(new_fixture product-off-zram)
+  printf 'Filename Type Size Used Priority\n%s partition 1048576 0 200\n' "$root/dev/zram0" >"$root/proc/swaps"
+  : >"$root/dev/zram0"
+  run_product "$root" --check
+  assert_exit product_off_rejects_managed_zram_and_exact_aliases 1 || return
+  assert_contains product_off_rejects_managed_zram_and_exact_aliases 'NBD_READINESS_REASON=MANAGED_ZRAM_PRESENT' || return
+
+  root=$(new_fixture product-off-hardlink-alias)
+  release="$root/opt/ramshared/releases/v1.2.3"
+  alias="$root/ramsharedd-alias"
+  ln "$release/bin/ramsharedd" "$alias"
+  mkdir -p "$root/proc/4242"
+  ln -s "$alias" "$root/proc/4242/exe"
+  run_product "$root" --check
+  assert_exit product_off_rejects_managed_zram_and_exact_aliases 1 || return
+  assert_contains product_off_rejects_managed_zram_and_exact_aliases 'NBD_READINESS_REASON=DAEMON_PID_MISSING' || return
+  pass product_off_rejects_managed_zram_and_exact_aliases
+}
+
+test_product_off_refuses_deleted_and_unreadable_stable_proc_entries() {
+  local root release
+  root=$(new_fixture product-off-deleted)
+  release="$root/opt/ramshared/releases/v1.2.3"
+  mkdir -p "$root/proc/4242"
+  ln -s "$release/bin/ramsharedd (deleted)" "$root/proc/4242/exe"
+  run_product "$root" --check
+  assert_exit product_off_refuses_deleted_and_unreadable_stable_proc_entries 1 || return
+  assert_contains product_off_refuses_deleted_and_unreadable_stable_proc_entries 'NBD_READINESS_REASON=DAEMON_PID_MISSING' || return
+
+  root=$(new_fixture product-off-unreadable)
+  write_proc_status_metadata "$root" 4242 user-process 0
+  mkdir -p "$root/proc/4242"
+  printf 'not an exe symlink\n' >"$root/proc/4242/exe"
+  run_product "$root" --check
+  assert_exit product_off_refuses_deleted_and_unreadable_stable_proc_entries 1 || return
+  assert_contains product_off_refuses_deleted_and_unreadable_stable_proc_entries 'NBD_READINESS_REASON=PROC_EXE_MALFORMED' || return
+  pass product_off_refuses_deleted_and_unreadable_stable_proc_entries
+}
+
+test_product_off_tolerates_kernel_thread_and_verified_disappearance() {
+  local root
+  root=$(new_fixture product-off-kthread)
+  write_proc_status_metadata "$root" 2 kthreadd 1
+  run_product "$root" --check
+  assert_exit product_off_tolerates_kernel_thread_and_verified_disappearance 0 || return
+  assert_contains product_off_tolerates_kernel_thread_and_verified_disappearance 'NBD_PRODUCT_STATE=PRODUCT_OFF' || return
+
+  root=$(new_fixture product-off-bracket-user)
+  write_proc_status_metadata "$root" 2 kthreadd 0
+  printf '[kthreadd]\n' >"$root/proc/2/comm"
+  run_product "$root" --check
+  assert_exit product_off_tolerates_kernel_thread_and_verified_disappearance 1 || return
+  assert_contains product_off_tolerates_kernel_thread_and_verified_disappearance 'NBD_READINESS_REASON=PROC_EXE_UNREADABLE' || return
+
+  root=$(new_fixture product-off-disappeared)
+  mkdir -p "$root/proc/4242"
+  RAMSHARED_NBD_ALLOW_MANUFACTURED_PROC_TEST=1 \
+    RAMSHARED_NBD_TEST_PROC_DISAPPEAR_AFTER_EXISTS_PID=4242 \
+    run_product "$root" --check
+  assert_exit product_off_tolerates_kernel_thread_and_verified_disappearance 0 || return
+  [[ ! -e $root/proc/4242 && ! -L $root/proc/4242 ]] || {
+    fail 'product_off_tolerates_kernel_thread_and_verified_disappearance did not exercise a real proc-entry disappearance'
+    return
+  }
+
+  root=$(new_fixture product-off-stable-malformed)
+  mkdir -p "$root/proc/4242"
+  run_product "$root" --check
+  assert_exit product_off_tolerates_kernel_thread_and_verified_disappearance 1 || return
+  assert_contains product_off_tolerates_kernel_thread_and_verified_disappearance 'NBD_READINESS_REASON=PROC_EXE_UNREADABLE' || return
+  pass product_off_tolerates_kernel_thread_and_verified_disappearance
+}
+
+test_product_off_uses_kernel_thread_metadata_not_comm_names() {
+  local root
+  root=$(new_fixture product-off-kthread-metadata)
+  write_proc_status_metadata "$root" 2 kthreadd 1
+  write_proc_status_metadata "$root" 3 'kworker/0:0' 1
+  write_proc_status_metadata "$root" 4 rcu_preempt 1
+  write_proc_status_metadata "$root" 5 migration/0 1
+  run_product "$root" --check
+  assert_exit product_off_uses_kernel_thread_metadata_not_comm_names 0 || return
+  assert_contains product_off_uses_kernel_thread_metadata_not_comm_names 'NBD_PRODUCT_STATE=PRODUCT_OFF' || return
+
+  root=$(new_fixture product-off-forged-kthread-name)
+  write_proc_status_metadata "$root" 4242 kthreadd 0
+  printf 'kthreadd\n' >"$root/proc/4242/comm"
+  run_product "$root" --check
+  assert_exit product_off_uses_kernel_thread_metadata_not_comm_names 1 || return
+  assert_contains product_off_uses_kernel_thread_metadata_not_comm_names 'NBD_READINESS_REASON=PROC_EXE_UNREADABLE' || return
+
+  root=$(new_fixture product-off-kthread-stat-fallback)
+  mkdir -p "$root/proc/7"
+  write_proc_stat_metadata "$root" 7 kworker/1:0 2097152
+  run_product "$root" --check
+  assert_exit product_off_uses_kernel_thread_metadata_not_comm_names 0 || return
+  assert_contains product_off_uses_kernel_thread_metadata_not_comm_names 'NBD_PRODUCT_STATE=PRODUCT_OFF' || return
+
+  root=$(new_fixture product-off-userspace-stat)
+  write_proc_stat_metadata "$root" 8 'kworker/2:0' 0
+  printf 'kworker/2:0\n' >"$root/proc/8/comm"
+  run_product "$root" --check
+  assert_exit product_off_uses_kernel_thread_metadata_not_comm_names 1 || return
+  assert_contains product_off_uses_kernel_thread_metadata_not_comm_names 'NBD_READINESS_REASON=PROC_EXE_UNREADABLE' || return
+
+  root=$(new_fixture product-off-forged-kthread-metadata)
+  write_proc_status_metadata "$root" 9 kworker/3:0 1
+  printf 'fake executable\n' >"$root/proc/9/exe"
+  run_product "$root" --check
+  assert_exit product_off_uses_kernel_thread_metadata_not_comm_names 1 || return
+  assert_contains product_off_uses_kernel_thread_metadata_not_comm_names 'NBD_READINESS_REASON=PROC_EXE_MALFORMED' || return
+  pass product_off_uses_kernel_thread_metadata_not_comm_names
+}
+
+test_product_off_and_ready_reject_other_installed_release_daemons() {
+  local root extra alias foreign
+
+  root=$(new_fixture product-off-extra-installed-release)
+  clone_installed_release_fixture "$root" v1.2.4
+  add_installed_release_daemon_fixture_process "$root" v1.2.4 4343
+  run_product "$root" --check
+  assert_exit product_off_and_ready_reject_other_installed_release_daemons 1 || return
+  assert_contains product_off_and_ready_reject_other_installed_release_daemons 'NBD_READINESS_REASON=DAEMON_PID_MISSING' || return
+
+  root=$(new_fixture ready-extra-installed-release)
+  clone_installed_release_fixture "$root" v1.2.4
+  activate_nbd_fixture "$root"
+  add_installed_release_daemon_fixture_process "$root" v1.2.4 4343
+  run_product "$root" --check
+  assert_exit product_off_and_ready_reject_other_installed_release_daemons 1 || return
+  assert_contains product_off_and_ready_reject_other_installed_release_daemons 'NBD_READINESS_REASON=DAEMON_PID_AMBIGUOUS' || return
+
+  root=$(new_fixture product-off-extra-hardlink)
+  clone_installed_release_fixture "$root" v1.2.4
+  extra="$root/opt/ramshared/releases/v1.2.4"
+  alias="$root/ramsharedd-installed-alias"
+  ln "$extra/bin/ramsharedd" "$alias"
+  mkdir -p "$root/proc/4344"
+  ln -s "$alias" "$root/proc/4344/exe"
+  run_product "$root" --check
+  assert_exit product_off_and_ready_reject_other_installed_release_daemons 1 || return
+  assert_contains product_off_and_ready_reject_other_installed_release_daemons 'NBD_READINESS_REASON=DAEMON_PID_MISSING' || return
+
+  root=$(new_fixture product-off-extra-deleted)
+  clone_installed_release_fixture "$root" v1.2.4
+  extra="$root/opt/ramshared/releases/v1.2.4"
+  mkdir -p "$root/proc/4345"
+  ln -s "$extra/bin/ramsharedd (deleted)" "$root/proc/4345/exe"
+  run_product "$root" --check
+  assert_exit product_off_and_ready_reject_other_installed_release_daemons 1 || return
+  assert_contains product_off_and_ready_reject_other_installed_release_daemons 'NBD_READINESS_REASON=DAEMON_PID_MISSING' || return
+
+  root=$(new_fixture product-off-extra-deleted-binary)
+  clone_installed_release_fixture "$root" v1.2.4
+  extra="$root/opt/ramshared/releases/v1.2.4"
+  chmod 0755 "$extra/bin"
+  rm -- "$extra/bin/ramsharedd"
+  chmod 0555 "$extra/bin"
+  mkdir -p "$root/proc/4347"
+  ln -s "$extra/bin/ramsharedd (deleted)" "$root/proc/4347/exe"
+  run_product "$root" --check
+  assert_exit product_off_and_ready_reject_other_installed_release_daemons 1 || return
+  assert_contains product_off_and_ready_reject_other_installed_release_daemons 'NBD_READINESS_REASON=DAEMON_PID_MISSING' || return
+
+  root=$(new_fixture product-off-foreign-path)
+  foreign="$root/opt/ramshared/releases-foreign/v1.2.4"
+  mkdir -p "$foreign/bin" "$root/proc/4346"
+  cp -- "$root/opt/ramshared/releases/v1.2.3/bin/ramsharedd" "$foreign/bin/ramsharedd"
+  ln -s "$foreign/bin/ramsharedd" "$root/proc/4346/exe"
+  run_product "$root" --check
+  assert_exit product_off_and_ready_reject_other_installed_release_daemons 0 || return
+  assert_contains product_off_and_ready_reject_other_installed_release_daemons 'NBD_PRODUCT_STATE=PRODUCT_OFF' || return
+  pass product_off_and_ready_reject_other_installed_release_daemons
+}
+
+test_product_off_recognizes_canonical_release_paths_without_fs_identity() {
+  local root invalid_mode missing deleted foreign traversal malformed wrong_case bad_version
+
+  root=$(new_fixture product-off-invalid-old-release-mode)
+  clone_installed_release_fixture "$root" v1.2.4
+  invalid_mode="$root/opt/ramshared/releases/v1.2.4"
+  chmod 0755 "$invalid_mode"
+  add_raw_exe_fixture_process "$root" "$invalid_mode/bin/ramsharedd" 4348
+  run_product "$root" --check
+  assert_exit product_off_recognizes_canonical_release_paths_without_fs_identity 1 || return
+  assert_contains product_off_recognizes_canonical_release_paths_without_fs_identity 'NBD_READINESS_REASON=DAEMON_PID_MISSING' || return
+
+  root=$(new_fixture product-off-missing-release-deleted-exe)
+  missing="$root/opt/ramshared/releases/v1.2.4"
+  deleted="$missing/bin/ramsharedd (deleted)"
+  add_raw_exe_fixture_process "$root" "$deleted" 4349
+  run_product "$root" --check
+  assert_exit product_off_recognizes_canonical_release_paths_without_fs_identity 1 || return
+  assert_contains product_off_recognizes_canonical_release_paths_without_fs_identity 'NBD_READINESS_REASON=DAEMON_PID_MISSING' || return
+
+  root=$(new_fixture product-off-release-path-grammar)
+  foreign="$root/opt/ramshared/releases-foreign/v1.2.4/bin/ramsharedd"
+  traversal="$root/opt/ramshared/releases/v1.2.4/../v1.2.3/bin/ramsharedd"
+  malformed="$root/opt/ramshared/releases/v1.2.3/../../bad/bin/ramsharedd"
+  wrong_case="$root/opt/ramshared/releases/v1.2.3/bin/Ramsharedd"
+  bad_version="$root/opt/ramshared/releases/v1.2.3?/bin/ramsharedd"
+  add_raw_exe_fixture_process "$root" "$foreign" 4350
+  add_raw_exe_fixture_process "$root" "$traversal" 4351
+  add_raw_exe_fixture_process "$root" "$malformed" 4352
+  add_raw_exe_fixture_process "$root" "$wrong_case" 4353
+  add_raw_exe_fixture_process "$root" "$bad_version" 4354
+  run_product "$root" --check
+  assert_exit product_off_recognizes_canonical_release_paths_without_fs_identity 0 || return
+  assert_contains product_off_recognizes_canonical_release_paths_without_fs_identity 'NBD_PRODUCT_STATE=PRODUCT_OFF' || return
+  pass product_off_recognizes_canonical_release_paths_without_fs_identity
 }
 
 test_relay_check_failure_blocks_readiness() {
@@ -1199,6 +1451,12 @@ test_legacy_restore_reloads_systemd_after_daemon_reload() {
 test_release_manifest_and_modes_are_verified || true
 test_binary_match_rejects_stale_or_deleted_daemon || true
 test_product_off_rejects_exact_daemon_without_pidfile || true
+test_product_off_rejects_managed_zram_and_exact_aliases || true
+test_product_off_refuses_deleted_and_unreadable_stable_proc_entries || true
+test_product_off_tolerates_kernel_thread_and_verified_disappearance || true
+test_product_off_uses_kernel_thread_metadata_not_comm_names || true
+test_product_off_and_ready_reject_other_installed_release_daemons || true
+test_product_off_recognizes_canonical_release_paths_without_fs_identity || true
 test_relay_check_failure_blocks_readiness || true
 test_reboot_and_shutdown_requests_are_refused || true
 test_legacy_ublk_retirement_never_unloads_module || true

@@ -63,9 +63,9 @@
 **Registered date:** `2026-08-12`.
 **Updated date:** `2026-08-13`.
 **Registered time:** `12:15:54`.
-**Updated time:** `03:58:00`.
-**Source revision:** `fed085bc4906206f6cc49cd702e3195080b46313`.
-**Destinations:** branch `feat/wsl2-nbd-benchmark-matrix`, milestone `v0.9.0-beta.1 — WSL2 NBD`, issue `#194`, `docs/specs/no-milestone/wsl2-nbd-product-readiness/`, `scripts/safety/`, `scripts/windows/`, `scripts/p0/`, and the sealed Linux bundle.
+**Updated time:** `15:59:48`.
+**Source revision:** `0faf67456f8cfc0e9a726700dc21c4578805049c`.
+**Destinations:** branch `feat/wsl2-nbd-benchmark-matrix`, milestone `v0.9.0-beta.1 — WSL2 NBD`, issue `#194`, `docs/specs/no-milestone/wsl2-nbd-product-readiness/`, `scripts/safety/`, `scripts/windows/`, `scripts/p0/`, `tools/ci/`, and the sealed Linux bundle.
 **Scope:** Correct and qualify the paired 1/2/4 GiB disk-versus-NBD benchmark with identical zram topology, cgroup-before-start containment, exact scratch identity, pair-scoped CUDA, bounded Windows-to-WSL calls, source/BINARY_MATCH binding, numeric comparison/regression records, and fail-closed cleanup. Run no live pressure until static/manufactured gates and a fresh independent Sol Gate A pass.
 **Evidence / blockers:** Attempt 15 used sealed source `033291e`: both 1 GiB idle cells passed 3/3 with checksum, occupancy, and per-cell `PRODUCT_OFF`; NBD retained `BINARY_MATCH=PASS`. Attempt 16 passed P1/Q2 disk/NBD pairs in both idle and bounded conditions, but Q4 allocation-to-HOLD was about 335 seconds and sample two hit the fixed 120-second `SAMPLE_TIMEOUT` after about 281 seconds; cleanup was clean. The later corrections established the P1/Q2/Q4 tuples `120/900`, `240/1020`, and `600/2100`. Attempt 17 reproduced a false `cell_timeout_budget_mismatch` when equal summary/controller timeout fields were serialized in different property orders. The named `cell_timeout_budget_property_order_is_semantic` test is now green with canonical strict comparison and refuses real mismatch/noncanonical types; fresh independent Sol Gate A passed that frozen correction. Attempt 18 then exposed that the controller's valid Q4 `CudaMaxHoldSec=4320` was rejected by the workload's stale 3600-second parameter cap before CUDA startup; the named handshake test now proves 4320 accepted and 4321 refused. Attempt 19 used sealed source `fed085b` and reached 9/12 PASS cells; Attempt 20 reached 10/12 before Q4 bounded headroom refusal. Attempt 21 reached 11/12 before the synchronous recovery self-deadlock; async recovery completed/audited in `47889e0`, and the non-destructive watchdog completed/audited in `63bd3be`. Attempt22b is the latest live attempt on sealed source `63bd3be`: four P1 cells passed 3/3, Q2 disk-only was `RED/SAMPLE_TIMEOUT`, the matrix hash is `4088682aa07e6b90d6477f7e1ceaff952ee16fac99967b2b980698460302da14`, the failure receipt hash is `8e2e07918404e6533afb8ed440075ed0a2dff2ba4424a378f38647685596e7e4`, and terminal `PRODUCT_OFF` was verified. Q2 NBD and all Q4 cells did not run. The current blockers are fresh independent Gate A, resealing, Q2-calibrated complete matrix, Gate B, PR checks, and merge; no new live claim is made.
 **Attempt 21 integrity qualification:** The post-containment checksum PASS covered only a partial `6016/6656 MiB` allocation. It did not complete the third sample and is not a valid cell result.
@@ -75,7 +75,50 @@ cells passed 3/3, then Q2 disk-only was `RED/SAMPLE_TIMEOUT`; cleanup produced
 verified `PRODUCT_OFF`. Matrix and failure-receipt hashes are recorded above.
 The partial HOLD/integrity artifacts are diagnostic-only and do not constitute
 a completed sample or promotion evidence. The subsequent Q2 correction slice
-was source-only (no live WSL, NBD, swap, CUDA, cgroup, reboot, termination, or
-recording action): P1/Q2/Q4 are now `120/900`, `240/1020`, and `600/2100`, and
+was source-only (no live RamShared/WSL product process, NBD, swap, CUDA,
+cgroup, reboot, termination, or recording action): P1/Q2/Q4 are now
+`120/900`, `240/1020`, and `600/2100`, and
 the named `partial_timeout_integrity_not_promoted` manufactured regression is
 green. A new sealed build and complete live matrix remain required.
+
+Attempt24 is source-only and nonpromotable: sealed preflight is the sole
+`PRODUCT_OFF` authority, with two bounded 15-second observations (30 seconds
+total) per lifecycle epoch. No live RamShared/WSL product process, NBD, swap,
+CUDA, cgroup, reboot, termination, or recording action occurred. The
+manufactured suites did intentionally create short-lived test subprocesses
+and temporary evidence fixtures; those are local refusal tests, not live
+product activity or promotion evidence.
+
+The current source-only Gate A correction is also nonpromotable: cell
+manufactured/refusal tests are 44/44 and the currently verified preflight
+suite is 32/32. Any independently owned preflight increment must be integrated
+and rerun before this count changes. It bounds
+worker TERM/KILL grace to 1–30 seconds, refuses every inherited preflight and
+manufactured seam in live mode before artifact creation, keeps the first
+TERM/INT status through a single bounded cleanup epoch, requires unique
+allowlisted `PRODUCT_OFF` authority, and prepares/validates custody candidates
+before their no-mutation publication frontier. Dynamic regressions cover
+stubborn workers, nonzero `down`, repeated signals across worker/down/two
+preflights, and envelope write/fsync/link/validation faults. A fresh sealed
+release, independent Gate A, and the complete live 1/2/4 GiB matrix remain
+required; no live RamShared/WSL product process, NBD, swap, CUDA, cgroup,
+reboot, termination, or recording action occurred in this correction.
+
+The public-pair custody correction is source-only and nonpromotable: Node
+24.15.0 validates 21/21 public-evidence tests at 95.37% lines, 80.60%
+branches, and 94.23% functions. The stddev-zero RED→GREEN TDD case now
+requires a `null` ratio when the disk population standard deviation is zero.
+Candidate and custody comparison hashes bind
+the exact emitted `pair-comparison.json` bytes; fresh on-disk summaries, not
+mutable cached results, supply public metrics. The repository validator
+recomputes the median, p99, and population-stddev ratios with the controller's
+six-decimal ToEven rule (and requires `null` when disk stddev is zero), then
+enforces the exact baseline-verdict-to-public-decision mapping. YELLOW/RED
+classification now keeps the immutable PASS cell summaries intact and adds a
+separate nonpromotable pair decision; the focused manufactured writer path
+passes for both. Cached summary, status, receipt, or published-artifact
+mutation still refuses before promotion. The focused
+`Test-NbdBenchmarkMatrixStatic.ps1` suite is green after the stddev-zero
+correction; the complete `Test-WindowsCiStatic.ps1 -RepoRoot <repo>` wrapper
+was green before that change and remains pending a same-tree rerun.
+Independent Gate A is still pending for this frozen tree.

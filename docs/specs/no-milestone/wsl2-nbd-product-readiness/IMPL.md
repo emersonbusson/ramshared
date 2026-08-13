@@ -110,13 +110,14 @@ termination action ran during the subsequent correction slice.
 | `scripts/safety/nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14,15,17,18,19,20 | Disk/NBD cell, common zram topology, cgroup-before-start occupancy, exact scratch identity, exact device-name classification, sysfs-derived NBD capacity with bounded mkswap usable-size validation, connection-preserving NBD baseline transaction, cleanup, comparison, and internal custody envelope. |
 | `scripts/safety/nbd-benchmark-cgroup-launch.sh` | ITEM-5 / RF-NBD-15 | In-cgroup launcher and create-once start barrier. |
 | `scripts/safety/nbd-benchmark-lib.sh` | ITEM-5 / RF-NBD-14,17 | Identity-bound scratch, disk republication, and connection-preserving NBD baseline helpers. |
-| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Twenty-eight manufactured/refusal suites for topology, identity, exact device-name classification, all supported sysfs capacities, bounded mkswap usable size, overflow/trailing-field refusal, cgroup bounds, disk and connection-preserving NBD republication, activity receipts, cleanup, failure-receipt create-once publication, seams, custody, and aggregation. |
+| `scripts/safety/test-nbd-benchmark-cell.sh` | ITEM-5,7 / RF-NBD-14..20 | Forty-four manufactured/refusal suites for topology, identity, exact device-name classification, all supported sysfs capacities, bounded mkswap usable size, overflow/trailing-field refusal, cgroup bounds, disk and connection-preserving NBD republication, activity receipts, repeated-signal cleanup, exhaustive preflight seam denial, custody-frontier faults, failure-receipt create-once publication, and aggregation. |
 | `scripts/p0/Start-CudaVramWorkload.ps1` | ITEM-5 / RF-NBD-16,17 | Fresh pair-scoped CUDA handshakes and unconditional cleanup. |
-| `scripts/windows/Invoke-NbdBenchmarkMatrix.ps1` | ITEM-5..7 / RF-NBD-6,16..20 | Bounded Windows/WSL controller, numeric headroom, strict NBD capacity/usable-size custody, pair custody, promotion order, watchdog classification, and public pair envelope. |
-| `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | ITEM-5..7 / RF-NBD-16..20 | PowerShell static/manufactured contract and refusal checks, including strict NBD capacity/usable-size custody and watchdog/CUDA failure composition. |
+| `scripts/windows/Invoke-NbdBenchmarkMatrix.ps1` | ITEM-5..7 / RF-NBD-6,16..20 | Bounded Windows/WSL controller, numeric headroom, strict NBD capacity/usable-size custody, pair custody, promotion order, watchdog classification, and a public pair envelope that derives metrics from fresh on-disk summaries, binds the exact emitted comparison artifact, and keeps YELLOW/RED pair decisions separate from immutable PASS cell summaries. |
+| `scripts/windows/Test-NbdBenchmarkMatrixStatic.ps1` | ITEM-5..7 / RF-NBD-16..20 | PowerShell static/manufactured contract and refusal checks, including strict NBD capacity/usable-size custody, cached-summary and published-artifact mutation refusal, YELLOW/RED public-writer custody, and watchdog/CUDA failure composition. |
 | `scripts/windows/Test-WindowsCiStatic.ps1` | ITEM-7 / RF-NBD-17..19 | Windows static wrapper includes the matrix harness. |
 | `scripts/package/build-linux-bundle.sh` | ITEM-2,5 / RF-NBD-2,9,18 | Universal unbound input bundle with source identity and input manifest; binding occurs only in attended install. |
-| `tools/ci/check-benchmark-evidence.test.mjs` | ITEM-7 / RF-NBD-11,18,20 | Public pair evidence schema validator fixture, 15/15 tests. |
+| `tools/ci/check-benchmark-evidence.mjs` | ITEM-7 / RF-NBD-11,18,20 | Repository-side public-evidence validator. It binds candidate and custody SHA-256 values to the exact `pair-comparison.json` artifact bytes, recomputes controller-rounded public ratios, and enforces the exact baseline-verdict/public-decision mapping before a copied candidate can qualify. |
+| `tools/ci/check-benchmark-evidence.test.mjs` | ITEM-7 / RF-NBD-11,18,20 | Public pair evidence validator fixtures, 21/21 tests including comparison-content, candidate-hash, missing-artifact, schema, release, timeout, rounded-ratio, zero-disk-stddev, decision-mapping, and numeric refusal coverage. |
 | `docs/governance/capability-observations.generated.json` | ITEM-7 / RF-NBD-11 | Generated capability facts remain separate from live proof. |
 
 ## Validation (numbers)
@@ -127,10 +128,20 @@ termination action ran during the subsequent correction slice.
   `failed_swapoff_keeps_daemon_and_device_alive`, and
   `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` are
   present and pass in the CLI suite.
-- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 28/28;
-  `bash scripts/safety/test-nbd-product-preflight.sh` → 26/26.
-- Public evidence: `node --test tools/ci/check-benchmark-evidence.test.mjs`
-  → 15/15, including the sanitized pair-envelope fixture and custody rules.
+- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → 44/44;
+  `bash scripts/safety/test-nbd-product-preflight.sh` → currently verified
+  32/32. A separately owned preflight increment is not counted until it is
+  integrated and rerun.
+- Public evidence: Node 24.15.0 `node --test --experimental-test-coverage
+  --test-coverage-include=tools/ci/check-benchmark-evidence.mjs
+  --test-coverage-lines=80 --test-coverage-branches=80
+  --test-coverage-functions=80 tools/ci/check-benchmark-evidence.test.mjs`
+  → 21/21, 95.37% lines, 80.60% branches, and 94.23% functions. The fixture
+  covers sanitized pair-envelope schema, duplicate keys, candidate/custody
+  comparison-byte binding, controller-rounded ratios including the zero-disk-
+  stddev `null` case, exact baseline-decision mapping, missing artifacts, and
+  semantic refusal fronts. The stddev-zero case was RED in TDD and is now
+  GREEN.
 - Format/lint: `cargo fmt --all -- --check` → pass; `cargo clippy -p
   ramshared-cli -p ramshared-tier --all-targets -- -D warnings` → pass.
 - Cover: `crates/ramshared-tier/src/nbd_readiness.rs` → 83.9% (251/299);
@@ -138,11 +149,11 @@ termination action ran during the subsequent correction slice.
   above the 80% per-file gate. The report JSON is local-only under `tmp/`.
 - Generated/docs hygiene: capability-observation `--check`, `./scripts/docs-check.sh`,
   and `git diff --check` → pass in the current static slice.
-- PowerShell: focused `Test-NbdBenchmarkMatrixStatic.ps1` → pass; complete
-  `Test-WindowsCiStatic.ps1 -RepoRoot <repo>` → pass, including
-  `windows_static_wrapper_includes_nbd_benchmark_harness` and
-  `windows_static_suite_runs_named_static_harnesses`. No live CUDA or
-  Windows/WSL matrix is claimed here.
+- PowerShell: focused `Test-NbdBenchmarkMatrixStatic.ps1` → pass after the
+  stddev-zero correction, including YELLOW/RED publication without summary
+  mutation. The complete `Test-WindowsCiStatic.ps1 -RepoRoot <repo>` wrapper
+  was green before that Node change and is pending a same-tree rerun. No live
+  CUDA or RamShared/WSL product matrix is claimed here.
 - DT-NBD-40 RED→GREEN: the shell reproducer first proved that
   `18446744073710600192` wrapped to a valid size in Bash; the Windows
   reproducer independently showed missing, malformed, wrong, and overflowing
@@ -360,7 +371,7 @@ Sol Gate A pass; no live CUDA, pressure, reboot, WSL shutdown, or terminate
 ## SPEC matrix → named tests
 
 The corrected implementation has local coverage for its source/static/
-manufactured names, including the 28 cell tests, 26 preflight suites, fresh
+manufactured names, including the 44 cell tests, 32 preflight suites, fresh
 CUDA handshake/refusal checks, bounded WSL controller checks, exact
 ratio/baseline mappings, DT-NBD-43 bounded zram usable-size/equality checks,
 DT-NBD-44 tier-derived timeout-budget custody and tamper refusals,
@@ -403,6 +414,42 @@ its matrix and failure hashes are custody references, not public promotion
 evidence.
 
 ## Gaps
+
+## Attempt24 source-only terminal-authority hardening
+
+RED added manufactured zram, hard-link alias, deleted executable, unreadable
+proc, kernel-thread, and disappearance cases. GREEN makes preflight the only
+`PRODUCT_OFF` authority, records two 15-second exact preflights per epoch, and
+publishes owned no-replace logs plus an fsync/hard-link receipt before sealing.
+TERM/INT preserve 143/130 through common cleanup. The source-only closure also
+keeps worker TERM/KILL grace intervals within 1–30 seconds, denies those
+configuration seams (and the failure-receipt race seam) in live mode, rejects
+ambiguous or contradictory `PRODUCT_OFF` authority lines, and exercises
+stubborn-worker and nonzero-`down` cleanup through the production control flow.
+The local cell suite is 44/44 and no live product command ran; the manufactured
+tests did create short-lived subprocesses and temporary fixtures. Step 3
+remains partial.
+
+Before public-pair eligibility, the Windows controller reopens both exact
+cell-result roots and compares fresh context, summary, inventory, and internal
+envelope fingerprints with the cached pair inputs. It derives public metrics
+from those returned fresh summaries and rejects a cached summary field, status,
+or receipt mutation. A deleted or replaced custody artifact rejects the direct
+writer before it creates `public-evidence`.
+
+The public writer emits its sanitized `pair-comparison.json` first, hashes its
+exact on-disk bytes, and carries that one digest in both `pair-custody.json`
+and the candidate record. Its final local artifact binding rejects a changed
+comparison artifact; the repository validator independently repeats the same
+raw-byte cross-binding after a candidate is copied into the repository.
+
+The custody publication frontier now treats `evidence-envelope.json` as the
+single atomic commit marker. `artifact-inventory.json` is preliminary until
+that no-clobber envelope link exists; inventory-only or envelope-only debris,
+including an inventory left by SIGKILL, is rejected by the validator. A
+handled envelope publication failure or race removes only the inventory inode
+whose device/inode/size/hash was recorded by this transaction and preserves
+foreign artifacts before cleanup writes its diagnostic receipt.
 
 `env-bound (blocker)` — the async NBD recovery correction (`47889e0`) and
 non-destructive watchdog correction (`63bd3be`) are completed and audited.
