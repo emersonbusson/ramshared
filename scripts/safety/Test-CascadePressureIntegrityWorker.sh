@@ -96,6 +96,52 @@ assert result["pattern"] == "shake256-v1", result
 assert result["checksum_before"] == result["checksum_after"], result
 PY
 
+# A bounded cell must be able to distinguish an ordinary checksum finalization
+# from a stuck cleanup child. This manufactured delay is accepted only behind
+# its explicit test gate; the live cell rejects every RAMSHARED_NBD_* seam.
+rm -f -- "$RESULT" "$LOG"
+RAMSHARED_NBD_ALLOW_MANUFACTURED_INTEGRITY_TEST=1 \
+  RAMSHARED_NBD_TEST_INTEGRITY_FINALIZATION_DELAY_SEC=2 \
+  python3 "$WORKER" --allocate-mib 16 --pattern shake256-v1 --result "$RESULT" >"$LOG" 2>&1 &
+PID=$!
+for _ in $(seq 1 200); do
+	grep -q '^HOLD ' "$LOG" 2>/dev/null && break
+	sleep 0.05
+done
+grep -q '^HOLD ' "$LOG"
+kill -TERM "$PID"
+sleep 1
+kill -0 "$PID" 2>/dev/null || {
+	echo "FAIL manufactured integrity finalization did not outlive one-second cleanup grace" >&2
+	exit 1
+}
+wait "$PID"
+PID=""
+python3 - "$RESULT" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    result = json.load(source)
+assert result["status"] == "PASS", result
+assert result["pattern"] == "shake256-v1", result
+assert result["checksum_before"] == result["checksum_after"], result
+PY
+echo "PASS manufactured_integrity_finalization_delay_is_gated_and_preserves_checksum"
+
+rm -f -- "$RESULT" "$LOG"
+set +e
+ungated_output=$(timeout --foreground --kill-after=1s 3s env \
+  RAMSHARED_NBD_TEST_INTEGRITY_FINALIZATION_DELAY_SEC=2 \
+  python3 "$WORKER" --allocate-mib 1 --result "$RESULT" 2>&1)
+ungated_rc=$?
+set -e
+[[ $ungated_rc -ne 0 && $ungated_output == *"manufactured integrity finalization delay requires explicit test gate"* ]] || {
+	printf 'FAIL ungated integrity delay was accepted rc=%s output=%s\n' "$ungated_rc" "$ungated_output" >&2
+	exit 1
+}
+echo "PASS manufactured_integrity_finalization_delay_refuses_without_gate"
+
 rm -f -- "$RESULT" "$LOG"
 python3 "$WORKER" --allocate-mib 128 --chunk-mib 16 --chunk-delay-ms 50 --result "$RESULT" >"$LOG" 2>&1 &
 PID=$!

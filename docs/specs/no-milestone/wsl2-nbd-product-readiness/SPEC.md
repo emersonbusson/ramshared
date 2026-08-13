@@ -392,7 +392,7 @@ environment-bound and are not inferred from a manufactured test.
 | --- | --- | --- | --- |
 | `nbd_lifecycle_before_action_after` | Injected ordering/refusal plus live pilot | `PASS` at 1 GiB | Live before/action/after exists; larger-size lifecycle remains coupled to the matrix. |
 | `relay_gate_before_action_after` | Manufactured refusals plus live read-only gate | `PASS` for the pilot | Relay was clean before/after without automatic reap. |
-| `NBD_BENCHMARK_MATRIX` | Corrected cell/preflight/controller implementation; cell 44/44 including exact initial-pair admission, connection-preserving NBD republication, repeated terminal-signal cleanup, exhaustive preflight seam denial, unpublished custody candidates, create-once failure-receipt publication, bounded worker cleanup, and exact `PRODUCT_OFF` authority validation; currently verified preflight 33/33, including the DT-NBD-47 exact three-observation zombie rule; public-evidence validator 21/21 on Node 24.15.0 at 95.37% line, 80.60% branch, and 94.23% function coverage with exact comparison-artifact cross-binding, controller-rounded ratio recomputation, zero-disk-stddev `null` handling, and baseline-decision mapping. The focused PowerShell static suite passes after the stddev-zero correction; the complete Windows static wrapper was green before that change and requires a same-tree rerun. Reconnect-capable simple daemon runtime and bounded asynchronous recovery remain present. Frozen-tree Gate A remains pending independent review. | `PARTIAL` / `NO-GO` | DT-NBD-44 requires sealed deployment and a fresh Q4 rerun; no complete 1/2/4 GiB disk-only/NBD n=3 matrix has run on that reviewed release. |
+| `NBD_BENCHMARK_MATRIX` | Current candidate extends the corrected cell contract to an integrity-finalization deadline: expected cell suite 46/46, worker integrity suite 3 checks, and 16 secondary TERM/INT fixture combinations per suite run; the 48-combination figure is historical total coverage from three prior suite runs, not the canonical per-run metric. Preflight remains 33/33, including the DT-NBD-47 exact three-observation zombie rule; public-evidence validator 21/21 on Node 24.15.0 at 95.37% line, 80.60% branch, and 94.23% function coverage with exact comparison-artifact cross-binding, controller-rounded ratio recomputation, zero-disk-stddev `null` handling, and baseline-decision mapping. The first Attempt26 P1 idle disk-only run reached 3584 MiB HOLD but was stopped during checksum finalization under the old five-second bound; it is RED diagnostic evidence only, not proof of NBD/WSL2/OOM failure, and cleanup independently returned PRODUCT_OFF. No live revalidation or sealed release exists for this candidate; frozen-tree Gate A remains pending independent review. | `PARTIAL` / `NO-GO` | The integrity-deadline candidate requires Gate A, resealing, and a fresh complete 1/2/4 GiB disk-only/NBD n=3 matrix. |
 | `BINARY_MATCH` | Static refusals plus live selected release | `PASS` for the pilot | Each matrix NBD cell must repeat the identity proof. |
 
 ### Benchmark matrix
@@ -516,6 +516,28 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-tier --files crates/ram
   2 GiB, and 2 GiB before 4 GiB, with n≥3 per pair.
 - [x] `IMPL.md` is `partial` with current local numbers; no new root validation
   record is created without live evidence.
+
+## Attempt26 source-only integrity-finalization deadline hardening
+
+The first P1 idle disk-only run on sealed source `4b5f554` reached the full
+`3584 MiB` HOLD and was stopped while checksum finalization was still running
+under the old five-second cleanup bound. This is RED diagnostic evidence only:
+it does not prove an NBD, WSL2, or OOM failure, and independent cleanup
+returned to `PRODUCT_OFF`.
+
+The current candidate gives normal integrity finalization the absolute
+remaining sample deadline, while retaining a short bounded TERM/KILL path for
+abnormal cleanup. It reaps and clears the worker exactly once, captures exit
+and cgroup OOM counters, and seals a failure receipt only after the custody
+boundary is complete. The named local decisions are
+`integrity_finalization_uses_remaining_sample_deadline_and_reaps_before_refusal`,
+`integrity_deadline_reaped_worker_does_not_repeat_cleanup_and_can_seal_receipt`,
+and the worker's gated finalization-delay checks. The secondary-signal fixture
+covers 16 TERM/INT combinations per suite run across the cleanup phases. The
+48-combination figure is historical total coverage from three prior suite runs,
+not the canonical per-run metric. This is source-only and nonpromotable: no
+live revalidation or sealed release exists;
+Gate A, resealing, and the complete 1/2/4 GiB matrix remain open.
 
 ## Attempt25 source-only zombie liveness hardening
 

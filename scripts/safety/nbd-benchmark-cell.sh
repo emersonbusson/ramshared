@@ -1481,6 +1481,79 @@ stop_worker_bounded() {
   (( forced_stop == 0 ))
 }
 
+stop_worker_for_integrity_deadline() {
+  local pid=$1 absolute_deadline=$2 kill_deadline wait_rc=0
+  INTEGRITY_STOP_REASON=""
+  INTEGRITY_WORKER_REAPED=0
+  INTEGRITY_WORKER_EXIT_CODE=""
+  [[ $pid =~ ^[1-9][0-9]*$ && $absolute_deadline =~ ^[0-9]+$ ]] || {
+    INTEGRITY_STOP_REASON=SAMPLE_INTEGRITY_PROCESS_FAILED
+    return 1
+  }
+  if worker_is_live "$pid"; then
+    kill -TERM "$pid" 2>/dev/null || true
+    while worker_is_live "$pid" && (( SECONDS < absolute_deadline )); do sleep 0.1; done
+  fi
+  if worker_is_live "$pid"; then
+    INTEGRITY_STOP_REASON=SAMPLE_INTEGRITY_DEADLINE_EXCEEDED
+    kill -KILL "$pid" 2>/dev/null || true
+    kill_deadline=$((SECONDS + WORKER_KILL_GRACE_SEC))
+    while worker_is_live "$pid" && (( SECONDS < kill_deadline )); do sleep 0.1; done
+    if worker_is_live "$pid"; then
+      INTEGRITY_STOP_REASON=SAMPLE_INTEGRITY_KILL_TIMEOUT
+      return 1
+    fi
+    if wait "$pid" 2>/dev/null; then wait_rc=0; else wait_rc=$?; fi
+    INTEGRITY_WORKER_REAPED=1
+    INTEGRITY_WORKER_EXIT_CODE=$wait_rc
+    return 1
+  fi
+  if wait "$pid" 2>/dev/null; then
+    INTEGRITY_WORKER_REAPED=1
+    INTEGRITY_WORKER_EXIT_CODE=0
+    INTEGRITY_STOP_REASON=GRACEFUL_EXIT
+    return 0
+  else
+    wait_rc=$?
+  fi
+  INTEGRITY_WORKER_REAPED=1
+  INTEGRITY_WORKER_EXIT_CODE=$wait_rc
+  INTEGRITY_STOP_REASON=SAMPLE_INTEGRITY_PROCESS_FAILED
+  return 1
+}
+
+read_cgroup_oom_kill_count() {
+  local events=$1
+  [[ -f $events && ! -L $events ]] || return 1
+  awk '
+    NF != 2 || $1 !~ /^[a-z_]+$/ || $2 !~ /^[0-9]+$/ { invalid = 1 }
+    $1 == "oom_kill" { value = $2; count += 1 }
+    END {
+      if (!invalid && count == 1) { print value; exit 0 }
+      exit 1
+    }
+  ' "$events"
+}
+
+append_integrity_process_receipt() {
+  local path=$1 deadline_remaining_sec=$2 oom_kill_before=$3 oom_kill_after=$4
+  [[ -f $path && ! -L $path && $deadline_remaining_sec =~ ^[0-9]+$ &&
+    $oom_kill_before =~ ^[0-9]+$ && $oom_kill_after =~ ^[0-9]+$ &&
+    ${INTEGRITY_WORKER_REAPED:-0} == 1 && ${INTEGRITY_WORKER_EXIT_CODE:-} =~ ^[0-9]+$ ]] || return 1
+  case ${INTEGRITY_STOP_REASON:-} in
+    GRACEFUL_EXIT|SAMPLE_INTEGRITY_DEADLINE_EXCEEDED|SAMPLE_INTEGRITY_PROCESS_FAILED) ;;
+    *) return 1 ;;
+  esac
+  {
+    printf 'INTEGRITY_STOP_REASON=%s\n' "$INTEGRITY_STOP_REASON"
+    printf 'INTEGRITY_WORKER_REAPED=PASS\n'
+    printf 'INTEGRITY_WORKER_EXIT_CODE=%s\n' "$INTEGRITY_WORKER_EXIT_CODE"
+    printf 'INTEGRITY_DEADLINE_REMAINING_SEC=%s\n' "$deadline_remaining_sec"
+    printf 'CGROUP_OOM_KILL_BEFORE=%s\n' "$oom_kill_before"
+    printf 'CGROUP_OOM_KILL_AFTER=%s\n' "$oom_kill_after"
+  } >>"$path"
+}
+
 cleanup_cgroup() {
   [[ -d $CG ]] || return 0
   rmdir "$CG" 2>/dev/null
@@ -1624,6 +1697,9 @@ printf '%s\n' $((MEMORY_MAX_MIB * 1024 * 1024)) >"$CG/memory.max"
 
 for run in 1 2 3; do
   read -r z0 n0 d0 ghost0 <<<"$(swap_used)"
+  oom_kill_before=""
+  oom_kill_after=""
+  integrity_deadline_remaining_sec=""
   s0=$(scratch_used_kib)
   (( ghost0 == 0 )) || refuse GHOST_SWAP_BEFORE_SAMPLE
   result="$ARTIFACT_DIR/run-$run-integrity.json"
@@ -1671,8 +1747,26 @@ PY
     (( ghost > ghost_seen )) && ghost_seen=$ghost
     sleep 0.1
   done
-  stop_worker_bounded "$WORKER_PID" || refuse SAMPLE_INTEGRITY_PROCESS_FAILED
+  oom_kill_before=$(read_cgroup_oom_kill_count "$CG/memory.events") || refuse CGROUP_OOM_RECEIPT_INVALID
+  if ! stop_worker_for_integrity_deadline "$WORKER_PID" "$deadline"; then
+    if [[ ${INTEGRITY_WORKER_REAPED:-0} == 1 ]]; then
+      WORKER_PID=""
+      oom_kill_after=$(read_cgroup_oom_kill_count "$CG/memory.events") || refuse CGROUP_OOM_RECEIPT_INVALID
+      integrity_deadline_remaining_sec=$((deadline - SECONDS))
+      (( integrity_deadline_remaining_sec >= 0 )) || integrity_deadline_remaining_sec=0
+      append_integrity_process_receipt "$ARTIFACT_DIR/run-$run-process.txt" \
+        "$integrity_deadline_remaining_sec" "$oom_kill_before" "$oom_kill_after" \
+        || refuse INTEGRITY_PROCESS_RECEIPT_INVALID
+    fi
+    refuse "$INTEGRITY_STOP_REASON"
+  fi
   WORKER_PID=""
+  oom_kill_after=$(read_cgroup_oom_kill_count "$CG/memory.events") || refuse CGROUP_OOM_RECEIPT_INVALID
+  integrity_deadline_remaining_sec=$((deadline - SECONDS))
+  (( integrity_deadline_remaining_sec >= 0 )) || integrity_deadline_remaining_sec=0
+  append_integrity_process_receipt "$ARTIFACT_DIR/run-$run-process.txt" \
+    "$integrity_deadline_remaining_sec" "$oom_kill_before" "$oom_kill_after" \
+    || refuse INTEGRITY_PROCESS_RECEIPT_INVALID
   checksum_match=$(python3 - "$result" "$ALLOCATE_MIB" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as source:
