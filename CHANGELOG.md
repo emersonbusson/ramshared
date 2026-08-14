@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.9.0-beta.1](https://github.com/emersonbusson/ramshared/compare/v0.8.0...v0.9.0-beta.1) (2026-08-14)
+
+
+### Features
+
+* **tier:** add NBD and native host readiness models ([f0e5db6](https://github.com/emersonbusson/ramshared/commit/f0e5db6419ff983edbb594a836a071f4730a8da9))
+* **wsl2:** add NBD and native readiness gates ([8f32baa](https://github.com/emersonbusson/ramshared/commit/8f32baa7c4f59b8cab97a92b7e1538e69aa8f462))
+* **wsl2:** qualify complete NBD benchmark matrix ([3aa0c1d](https://github.com/emersonbusson/ramshared/commit/3aa0c1d6c278b823b70d2cc638b87d7477ea1c0d))
+* **wsl2:** qualify the NBD benchmark matrix ([edab692](https://github.com/emersonbusson/ramshared/commit/edab692da28691e724e90b2143b44b01d6a91413))
+
+
+### Bug Fixes
+
+* **ci:** accept stable module export projection ([bad4109](https://github.com/emersonbusson/ramshared/commit/bad410972213a9bb873b1f36788d69781d9b3ba6))
+* **ci:** accept stable module export projection ([65a7794](https://github.com/emersonbusson/ramshared/commit/65a77946d3728dd37abd97a90157f02eee62bbb0))
+* **ci:** admit exact release manifest transition ([52b42d1](https://github.com/emersonbusson/ramshared/commit/52b42d1083150dfe6ee823771851e428972b607b))
+* **ci:** admit exact release manifest transition ([349a9b2](https://github.com/emersonbusson/ramshared/commit/349a9b2baa61cda483ab1b9058c14b473fe458c8))
+* **scripts:** extend P1 allocation timeout ([a365bda](https://github.com/emersonbusson/ramshared/commit/a365bda0daf89a9707159b86efca8c1ba1ac760b))
+* **scripts:** migrate legacy cascade unit safely ([0b09518](https://github.com/emersonbusson/ramshared/commit/0b09518c530253a3219326ae3c0fe006e60ef99c))
+* **scripts:** migrate legacy cascade unit safely ([be78d2a](https://github.com/emersonbusson/ramshared/commit/be78d2a46603fd23249c6c2d22add5fd04309d96))
+* **scripts:** preserve JSON timestamps in PowerShell 7 ([2c0b3b9](https://github.com/emersonbusson/ramshared/commit/2c0b3b9241b7f4e84b60c9f334ad919481e4eb2c))
+* **scripts:** unthrottle integrity finalization ([a60c898](https://github.com/emersonbusson/ramshared/commit/a60c898ec6d938e6828d879d41a4b2ea0c7b6b21))
+* **windows:** accept bounded zram usable size ([f9c70fe](https://github.com/emersonbusson/ramshared/commit/f9c70fea6552c0632476ef7e2af4d460c603b68d))
+* **windows:** align CUDA hold with Q4 budget ([fed085b](https://github.com/emersonbusson/ramshared/commit/fed085bc4906206f6cc49cd702e3195080b46313))
+* **windows:** compare timeout budgets semantically ([c00c5c3](https://github.com/emersonbusson/ramshared/commit/c00c5c36d50806999f0af6f15cab31511a160c67))
+* **windows:** discover releases with direct argv ([e8b0e62](https://github.com/emersonbusson/ramshared/commit/e8b0e62a4e39c8c015436e3c922df402c65457c0))
+* **windows:** make matrix inventory PS5.1 safe ([6c3453e](https://github.com/emersonbusson/ramshared/commit/6c3453e822168ff3dc5869bbe88d238ab88eed3d))
+* **windows:** preserve exact WSL arguments ([60cd499](https://github.com/emersonbusson/ramshared/commit/60cd4991efc058d498c053e77cb8c2baaa7f2868))
+* **wsl2:** bind exact NBD capacity custody ([d1e270d](https://github.com/emersonbusson/ramshared/commit/d1e270dbf5c45d83f33b346482f1250e35f0896e))
+* **wsl2:** bound integrity finalization ([4ae8d58](https://github.com/emersonbusson/ramshared/commit/4ae8d58f07b69afa61e6ba0b06da844820e1cb1d))
+* **wsl2:** calibrate Q2 benchmark timeout ([0faf674](https://github.com/emersonbusson/ramshared/commit/0faf67456f8cfc0e9a726700dc21c4578805049c))
+* **wsl2:** classify exact swap devices ([38e49ff](https://github.com/emersonbusson/ramshared/commit/38e49ffc24bce0632bddc03e20a5720aefc800bf))
+* **wsl2:** derive bounded Q4 timeout budget ([3816b11](https://github.com/emersonbusson/ramshared/commit/3816b11145d551c8c570212201711fde30cf0245))
+* **wsl2:** harden terminal benchmark evidence ([d4efe59](https://github.com/emersonbusson/ramshared/commit/d4efe596996e6877e26409fb7b1ad8c369c7557f))
+* **wsl2:** keep benchmark watchdog non-destructive ([63bd3be](https://github.com/emersonbusson/ramshared/commit/63bd3be04afd5e21e1728eb30ad2acd129b40131))
+* **wsl2:** preserve NBD connection between samples ([73e1977](https://github.com/emersonbusson/ramshared/commit/73e1977d747370d28d8fe49b11bcd5e626f6db72))
+* **wsl2:** preserve NBD daemon across reconnects ([1aaeb5b](https://github.com/emersonbusson/ramshared/commit/1aaeb5b3c369ffbee83b3abbd0af6e594e73e25d))
+* **wsl2:** preserve NBD republication stage reason ([875fe4b](https://github.com/emersonbusson/ramshared/commit/875fe4b61d626cf9b9f3dc60db04cc930e5d1edb))
+* **wsl2:** prevent NBD recovery deadlocks ([47889e0](https://github.com/emersonbusson/ramshared/commit/47889e0ed05ff10338c24e18aeee2323c31e80ed))
+* **wsl2:** republish exact sample baseline ([c466f2b](https://github.com/emersonbusson/ramshared/commit/c466f2b3c3be28ab605a56c08f520632105e362e))
+* **wsl2:** retain occupancy refusal metrics ([6c83be7](https://github.com/emersonbusson/ramshared/commit/6c83be734834bca26bedafb9ccd7629720f81e89))
+* **wsl2:** separate integrity finalization timeout ([3794a30](https://github.com/emersonbusson/ramshared/commit/3794a30100bdd3ae4be430f58447a343fb43cf10))
+* **wsl2:** separate reclaim and OOM limits ([57293a4](https://github.com/emersonbusson/ramshared/commit/57293a487c8300a50dec9f8f6308de1e7f61a562))
+* **wsl2:** stabilize scratch identity ([1303ed0](https://github.com/emersonbusson/ramshared/commit/1303ed02ea229fd33dcb6cd90f66aae48e53d8e4))
+* **wsl2:** tolerate verified zombie processes ([4b5f554](https://github.com/emersonbusson/ramshared/commit/4b5f55454dacbaacd91e23b59da4b04a7ab18ccf))
+* **wsl2:** validate fresh disk topology ([4c7315d](https://github.com/emersonbusson/ramshared/commit/4c7315d35ee21446234b1243084575aa2301d6e5))
+* **wsl2:** validate initial NBD swap pair ([033291e](https://github.com/emersonbusson/ramshared/commit/033291e992ca436042043b4485df35de5f353368))
+
+
+### Documentation
+
+* **benchmarks:** publish complete WSL2 NBD matrix ([73b5a73](https://github.com/emersonbusson/ramshared/commit/73b5a734f8b3861b3ffbcfcf3abb831a74c2ab36))
+* link readiness packs to tracking issues ([7a3694d](https://github.com/emersonbusson/ramshared/commit/7a3694d36c3dc6fe3c9f268002b133875974245c))
+* refresh generated documentation records ([bd22df9](https://github.com/emersonbusson/ramshared/commit/bd22df9a3c46fdc9bf8bd6e609ed1c67eaaf3a3d))
+* **validation:** record WSL2 NBD pilot ([88077b1](https://github.com/emersonbusson/ramshared/commit/88077b159ca521acaed6f3fc1ad9c713cfce58da))
+* **validation:** record WSL2 NBD pilot ([5d8683c](https://github.com/emersonbusson/ramshared/commit/5d8683c03beacaa99a74e0875f7b11a68bd7a6c8))
+* **wsl2:** define upstream native contribution route ([21f6a6d](https://github.com/emersonbusson/ramshared/commit/21f6a6db44dc0f171989737eb172b22112d2fed2))
+* **wsl2:** record Attempt 21 recovery deadlock ([4873281](https://github.com/emersonbusson/ramshared/commit/487328156e62ac7cf96a7984da734f96f4c575f2))
+* **wsl2:** record bounded Attempt 19 refusal ([e5bc896](https://github.com/emersonbusson/ramshared/commit/e5bc89686f73fb58e9c78592e9405a154e1415b0))
+
+
+### CI
+
+* **release:** add protected beta promotion ([c6323ed](https://github.com/emersonbusson/ramshared/commit/c6323ede237f77a0af83a4a1cd8f9be946105831))
+
 ## [0.8.0](https://github.com/emersonbusson/ramshared/compare/v0.7.4...v0.8.0) (2026-08-11)
 
 
