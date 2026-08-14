@@ -791,7 +791,8 @@
       "context": "release-publication",
       "trust": "release",
       "triggers": [
-        "workflow_dispatch"
+        "workflow_dispatch",
+        "repository_dispatch"
       ],
       "selection": {
         "mode": "never",
@@ -800,6 +801,7 @@
       "policy": {
         "timeout_minutes": 45,
         "permissions": {
+          "actions": "read",
           "contents": "read"
         },
         "permissions_scope": "job",
@@ -816,7 +818,7 @@
           "manual_only": true,
           "credential": "github-app-required",
           "draft_only": true,
-          "request_stage": "github-app-dispatch",
+          "request_stage": "github-app-repository-dispatch",
           "delegated_actor": "emersonbusson-ramshared-release[bot]"
         }
       },
