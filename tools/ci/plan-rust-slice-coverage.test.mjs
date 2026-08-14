@@ -636,6 +636,36 @@ test('microsoft_native_vram_n3_module_export_glue_accepts_exact_projection_and_a
   }])
 })
 
+test('main_all_accepts_unchanged_exact_module_export_glue_projection', () => {
+  const entry = MICROSOFT_NATIVE_VRAM_N3_MODULE_EXPORT_GLUE_ENTRY
+  const stableSource = 'pub mod cascade;\npub mod priority;\npub mod n3_state;\npub mod nbd_readiness;\n'
+  const selected = selectCoverageEntries(
+    { schema_version: 2, entries: [entry] },
+    entry.files,
+    moduleExportGlueRoot(entry, stableSource),
+    {
+      baseRevision: 'e'.repeat(40),
+      readBaseFile: () => stableSource,
+    },
+  )
+  assert.equal(selected.ok, true)
+  assert.equal(selected.state, 'READY')
+  assert.deepEqual(selected.entries.map((item) => item.id), [entry.id])
+
+  const incompleteSource = 'pub mod cascade;\npub mod priority;\npub mod n3_state;\n'
+  const incomplete = selectCoverageEntries(
+    { schema_version: 2, entries: [entry] },
+    entry.files,
+    moduleExportGlueRoot(entry, incompleteSource),
+    {
+      baseRevision: 'f'.repeat(40),
+      readBaseFile: () => incompleteSource,
+    },
+  )
+  assert.equal(incomplete.ok, false)
+  assert.equal(incomplete.errors.some((item) => item.rule === 'module-export-glue-differential-not-proven'), true)
+})
+
 test('microsoft_native_vram_n3_module_export_glue_rejects_non_glue_changes_and_wrong_scope', () => {
   const entry = MICROSOFT_NATIVE_VRAM_N3_MODULE_EXPORT_GLUE_ENTRY
   const base = 'pub mod cascade;\npub mod priority;\n'
