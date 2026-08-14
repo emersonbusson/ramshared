@@ -16,7 +16,6 @@ jobs:
     name: release-integrity
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    environment: protected-release
     permissions:
       contents: read
     env:

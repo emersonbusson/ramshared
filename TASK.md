@@ -206,11 +206,11 @@ merge remain open.
 ## TASK-0005 — Exact release manifest transition
 
 **Schema:** `ramshared.task.v1`.
-**Status:** `in_progress`.
+**Status:** `completed`.
 **Owner role:** `ci-governance`.
 **Date:** `2026-08-14`.
 **Registered time:** `05:10:06`.
-**Updated time:** `05:36:39`.
+**Updated time:** `05:58:51`.
 **Source revision:** `52b42d1083150dfe6ee823771851e428972b607b`.
 **Destinations:** issue `#207`, `docs/governance/ci-contract.json`,
 `docs/specs/no-milestone/release-promotion-publication/`, and
@@ -231,8 +231,8 @@ required checks passed and PR `#208` merged as `52b42d1`; issue `#207` closed.
 **Owner role:** `ci-governance`.
 **Date:** `2026-08-14`.
 **Registered time:** `05:36:39`.
-**Updated time:** `05:36:39`.
-**Source revision:** `1db667670139778423eb5cc9a3778b87ebfa26e9`.
+**Updated time:** `05:58:51`.
+**Source revision:** `361427a63cbeb2a8b0ecafb224adeecb0539af9b`.
 **Destinations:** issue `#211`, PR `#210`, `release-please-config.json`,
 `docs/governance/ci-contract.json`,
 `docs/specs/no-milestone/release-promotion-publication/`, and
@@ -244,6 +244,31 @@ Release Please header without replacing its release notes.
 **Evidence / blockers:** The post-merge Release workflow `31784058119` passed
 at the Actions level but its log proves `Pull request body did not match`; no
 tag or release was created. It opened oversized PR `#210` from 507 commits.
-TDD now requires exact `last-release-sha` and all seven generated headings.
-Local full gates, hosted checks, PR update/merge, tag/draft verification, and
-removal of the temporary recovery key remain pending.
+TDD requires exact `last-release-sha` and all seven generated headings. PR
+`#212` merged the recovery as `920e7a1`; Release Please reduced PR `#210` to
+the bounded changelog, preserved its machine-readable body, and created the
+exact tag and draft prerelease at `361427a`. Removal of the temporary recovery
+key remains pending after integrity is repaired.
+
+## TASK-0007 — Keep read-only release integrity outside publication approval
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `in_progress`.
+**Owner role:** `ci-governance`.
+**Date:** `2026-08-14`.
+**Registered time:** `05:58:51`.
+**Updated time:** `05:58:51`.
+**Source revision:** `361427a63cbeb2a8b0ecafb224adeecb0539af9b`.
+**Destinations:** issue `#213`, `.github/workflows/release-integrity.yml`,
+`docs/governance/ci-contract.json`,
+`docs/specs/no-milestone/release-promotion-publication/`, and
+`tools/ci/check-ci-contract*`.
+**Scope:** Remove the publication-only `protected-release` environment from
+the exact-tag read-only integrity job and make the contract reject any future
+integrity deployment environment.
+**Evidence / blockers:** Tag and draft creation succeeded, but integrity run
+`31785964576` was rejected before checkout because the environment branch
+policy does not admit tags. TDD reproduced the stale environment contract.
+Local Green, hosted checks, merge, exact-tag integrity artifact, protected
+publication, and removal of the temporary Release Please recovery key remain
+pending.

@@ -141,6 +141,11 @@ The exact lifecycle is:
    calling Release Please, so this fixed configuration cannot produce a later
    target accidentally.
 
+The tag-triggered integrity workflow is read-only and does not declare a
+deployment environment. `protected-release` belongs only to the separate
+manual publication job; attaching it to integrity makes an exact tag fail
+before checkout when the environment admits protected branches only.
+
 The one-shot recovery from the merged-but-unrecognized release PR is bounded
 by top-level `last-release-sha` at the exact `v0.8.0` merge
 `568e7b42b78b3c9edb8ea390cb4297142a37e412`. The generated header contains the

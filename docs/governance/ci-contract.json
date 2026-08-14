@@ -759,7 +759,6 @@
           "cancel_in_progress": false
         },
         "release_integrity": {
-          "environment": "protected-release",
           "sbom_generator": {
             "name": "cargo-cyclonedx",
             "version": "0.5.9",
