@@ -1559,7 +1559,7 @@ read_cgroup_oom_kill_count() {
   local events=$1
   [[ -f $events && ! -L $events ]] || return 1
   awk '
-    NF != 2 || $1 !~ /^[a-z_]+$/ || $2 !~ /^[0-9]+$/ { invalid = 1 }
+    NF != 2 || $1 !~ /^[a-z_]+$/ || $2 !~ /^(0|[1-9][0-9]*)$/ { invalid = 1 }
     $1 == "oom_kill" { value = $2; count += 1 }
     END {
       if (!invalid && count == 1) { print value; exit 0 }
@@ -1568,11 +1568,88 @@ read_cgroup_oom_kill_count() {
   ' "$events"
 }
 
+cgroup_oom_kill_counts_monotonic() {
+  local before=$1 after=$2
+  [[ $before =~ ^(0|[1-9][0-9]*)$ && $after =~ ^(0|[1-9][0-9]*)$ ]] || return 1
+  (( ${#after} > ${#before} )) && return 0
+  (( ${#after} < ${#before} )) && return 1
+  [[ $after == "$before" || $after > "$before" ]]
+}
+
+read_cgroup_limit_bytes() {
+  local path=$1 value limit_fd parser_path
+  [[ -f $path && ! -L $path && -r $path ]] || return 1
+  exec {limit_fd}<"$path" || return 1
+  # The parser duplicates this already-open descriptor through procfs; it never
+  # reopens the mutable cgroup path after the regular-file/non-symlink check.
+  parser_path="/proc/$BASHPID/fd/$limit_fd"
+  value=$(python3 - "$parser_path" <<'PY'
+import os
+import re
+import sys
+
+fd = os.open(sys.argv[1], os.O_RDONLY | os.O_CLOEXEC)
+try:
+    value = os.read(fd, 21)
+finally:
+    os.close(fd)
+
+if re.fullmatch(rb"[1-9][0-9]{0,18}\n", value) is None:
+    raise SystemExit(1)
+digits = value[:-1]
+if len(digits) == 19 and digits > b"9223372036854775807":
+    raise SystemExit(1)
+sys.stdout.buffer.write(digits + b"\n")
+PY
+  ) || {
+    exec {limit_fd}<&-
+    return 1
+  }
+  exec {limit_fd}<&-
+  printf '%s\n' "$value"
+}
+
+write_cgroup_limit_bytes() {
+  local path=$1 value=$2
+  [[ -f $path && ! -L $path && -w $path && $value =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s\n' "$value" >"$path"
+}
+
+reset_cgroup_memory_high_for_run() {
+  local expected_high_bytes=$1 expected_max_bytes=$2 observed_high observed_max
+  [[ $expected_high_bytes =~ ^[1-9][0-9]*$ && $expected_max_bytes =~ ^[1-9][0-9]*$ ]] || return 1
+  write_cgroup_limit_bytes "$CG/memory.high" "$expected_high_bytes" || return 1
+  observed_high=$(read_cgroup_limit_bytes "$CG/memory.high") || return 1
+  observed_max=$(read_cgroup_limit_bytes "$CG/memory.max") || return 1
+  [[ $observed_high == "$expected_high_bytes" && $observed_max == "$expected_max_bytes" ]]
+}
+
+relax_cgroup_memory_high_for_finalization() {
+  local expected_high_bytes=$1 expected_max_bytes=$2 observed_high observed_max
+  [[ $expected_high_bytes =~ ^[1-9][0-9]*$ && $expected_max_bytes =~ ^[1-9][0-9]*$ ]] || return 1
+  observed_high=$(read_cgroup_limit_bytes "$CG/memory.high") || return 1
+  observed_max=$(read_cgroup_limit_bytes "$CG/memory.max") || return 1
+  [[ $observed_high == "$expected_high_bytes" && $observed_max == "$expected_max_bytes" ]] || return 1
+  write_cgroup_limit_bytes "$CG/memory.high" "$observed_max" || return 1
+  observed_high=$(read_cgroup_limit_bytes "$CG/memory.high") || return 1
+  observed_max=$(read_cgroup_limit_bytes "$CG/memory.max") || return 1
+  [[ $observed_high == "$expected_max_bytes" && $observed_max == "$expected_max_bytes" ]] || return 1
+  CGROUP_MEMORY_HIGH_INITIAL_BYTES=$expected_high_bytes
+  CGROUP_MEMORY_HIGH_FINALIZATION_BYTES=$observed_high
+  CGROUP_MEMORY_MAX_BYTES=$observed_max
+  CGROUP_MEMORY_HIGH_RELAXATION=PASS
+}
+
 append_integrity_process_receipt() {
   local path=$1 deadline_remaining_sec=$2 oom_kill_before=$3 oom_kill_after=$4
   [[ -f $path && ! -L $path && $deadline_remaining_sec =~ ^[0-9]+$ &&
     $oom_kill_before =~ ^[0-9]+$ && $oom_kill_after =~ ^[0-9]+$ &&
+    ${CGROUP_MEMORY_HIGH_INITIAL_BYTES:-} =~ ^[1-9][0-9]*$ &&
+    ${CGROUP_MEMORY_HIGH_FINALIZATION_BYTES:-} =~ ^[1-9][0-9]*$ &&
+    ${CGROUP_MEMORY_MAX_BYTES:-} =~ ^[1-9][0-9]*$ &&
+    ${CGROUP_MEMORY_HIGH_RELAXATION:-} == PASS &&
     ${INTEGRITY_WORKER_REAPED:-0} == 1 && ${INTEGRITY_WORKER_EXIT_CODE:-} =~ ^[0-9]+$ ]] || return 1
+  cgroup_oom_kill_counts_monotonic "$oom_kill_before" "$oom_kill_after" || return 1
   case ${INTEGRITY_STOP_REASON:-} in
     GRACEFUL_EXIT|SAMPLE_INTEGRITY_DEADLINE_EXCEEDED|SAMPLE_INTEGRITY_PROCESS_FAILED) ;;
     *) return 1 ;;
@@ -1584,11 +1661,20 @@ append_integrity_process_receipt() {
     printf 'INTEGRITY_DEADLINE_REMAINING_SEC=%s\n' "$deadline_remaining_sec"
     printf 'CGROUP_OOM_KILL_BEFORE=%s\n' "$oom_kill_before"
     printf 'CGROUP_OOM_KILL_AFTER=%s\n' "$oom_kill_after"
+    printf 'CGROUP_MEMORY_HIGH_INITIAL_BYTES=%s\n' "$CGROUP_MEMORY_HIGH_INITIAL_BYTES"
+    printf 'CGROUP_MEMORY_HIGH_FINALIZATION_BYTES=%s\n' "$CGROUP_MEMORY_HIGH_FINALIZATION_BYTES"
+    printf 'CGROUP_MEMORY_MAX_BYTES=%s\n' "$CGROUP_MEMORY_MAX_BYTES"
+    printf 'CGROUP_MEMORY_HIGH_RELAXATION=PASS\n'
   } >>"$path"
 }
 
 finalize_integrity_worker_after_hold() {
-  local process_receipt_path=$1 oom_kill_before=$2 oom_kill_after integrity_deadline_remaining_sec=0
+  local process_receipt_path=$1 oom_kill_before=$2 oom_kill_after integrity_deadline_remaining_sec=0 \
+    expected_high_bytes expected_max_bytes
+  expected_high_bytes=$((MEMORY_HIGH_MIB * 1024 * 1024))
+  expected_max_bytes=$((MEMORY_MAX_MIB * 1024 * 1024))
+  relax_cgroup_memory_high_for_finalization "$expected_high_bytes" "$expected_max_bytes" || \
+    refuse CGROUP_FINALIZATION_LIMIT_INVALID
   if ! stop_worker_for_integrity_deadline "$WORKER_PID" "$INTEGRITY_FINALIZATION_TIMEOUT_SEC"; then
     if [[ ${INTEGRITY_WORKER_REAPED:-0} == 1 ]]; then
       WORKER_PID=""
@@ -1763,6 +1849,8 @@ printf '%s\n' $((MEMORY_MAX_MIB * 1024 * 1024)) >"$CG/memory.max"
 [[ -f $CG/memory.swap.max ]] && printf 'max\n' >"$CG/memory.swap.max"
 
 for run in 1 2 3; do
+  reset_cgroup_memory_high_for_run "$((MEMORY_HIGH_MIB * 1024 * 1024))" \
+    "$((MEMORY_MAX_MIB * 1024 * 1024))" || refuse CGROUP_RUN_LIMIT_RESET_INVALID
   read -r z0 n0 d0 ghost0 <<<"$(swap_used)"
   oom_kill_before=""
   oom_kill_after=""

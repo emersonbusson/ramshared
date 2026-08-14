@@ -30,8 +30,16 @@ def chunk_pattern(index: int, size: int, pattern: str = "repeated-sha256-v1") ->
 
 def digest_chunks(chunks: list[bytearray]) -> str:
     digest = hashlib.sha256()
+    verified_mib = 0
+    next_progress_mib = 512
     for chunk in chunks:
         digest.update(chunk)
+        verified_mib += len(chunk) // (1024 * 1024)
+        while verified_mib >= next_progress_mib:
+            print(f"VERIFY {next_progress_mib} MiB", flush=True)
+            next_progress_mib += 512
+    if verified_mib % 512:
+        print(f"VERIFY {verified_mib} MiB", flush=True)
     return digest.hexdigest()
 
 
