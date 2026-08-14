@@ -184,12 +184,15 @@ const MEMORY_BROKER_WSL2D_DAEMON_COVERAGE_ENTRY = {
   command: [
     'node', 'tools/ci/check-rust-slice-coverage.mjs',
     '-p', 'ramshared-wsl2d',
-    '--files', 'crates/ramshared-wsl2d/src/main.rs',
+    '--files', 'crates/ramshared-wsl2d/src/main.rs,crates/ramshared-wsl2d/src/swap.rs',
     '--min', '80',
     '--report-json', 'tmp/memory-broker-wsl2d-daemon-cov.json',
   ],
   packages: ['ramshared-wsl2d'],
-  files: ['crates/ramshared-wsl2d/src/main.rs'],
+  files: [
+    'crates/ramshared-wsl2d/src/main.rs',
+    'crates/ramshared-wsl2d/src/swap.rs',
+  ],
   min: 80,
 }
 const MEMORY_BROKER_WSL2D_DAEMON_MAIN_TESTS = [
@@ -209,10 +212,13 @@ const MEMORY_BROKER_WSL2D_DAEMON_MAIN_TESTS = [
   'daemon_worker_shutdown_full_queue_is_nonblocking',
   'daemon_worker_shutdown_drains_queued_io_before_stop',
   'daemon_command_timeout_terminates_child_without_hang',
-  'daemon_nbd_prealloc_worker_uses_fake_provider_and_injected_acceptor',
+  'daemon_nbd_serves_two_connection_generations_before_explicit_shutdown',
   'daemon_nbd_sparse_floor_refusal_reclaims_without_provider_allocation',
   'daemon_nbd_budget_poll_uses_injected_wddm_snapshot_and_global_probe',
   'daemon_nbd_budget_constraint_demotes_then_recovers_with_fake_swap',
+  'daemon_nbd_recovery_activation_does_not_block_nbd_jobs',
+  'daemon_nbd_recovery_failure_parks_without_relaunch',
+  'daemon_nbd_shutdown_with_pending_recovery_fails_closed',
   'daemon_nbd_teardown_refuses_until_fake_usage_and_swapoff_confirm',
   'daemon_nbd_residency_demote_uses_injected_clock_and_swapoff',
   'daemon_ublk_runtime_orders_lifecycle_and_rolls_back_without_device',

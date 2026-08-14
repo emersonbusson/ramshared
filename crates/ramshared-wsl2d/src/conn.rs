@@ -5,7 +5,8 @@
 //!
 //! SPEC: `docs/specs/no-milestone/wsl2-cascade-swap/SPEC.md` (DT-7/DT-8/DT-15/DT-16). Deterministic design:
 //! `Opened` comes from the acceptor (before spawning the reader), `Closed` comes from the reader (upon exit) —
-//! the worker counts `live` connections and terminates when all open connections close.
+//! the worker counts `live` connections and reports the transition to zero. The simple NBD
+//! runtime remains quiescent at zero until explicit shutdown so it can accept a later generation.
 
 use std::io::{BufReader, Read, Write};
 use std::net::TcpListener;
@@ -59,8 +60,9 @@ pub enum WMsg {
 }
 
 /// Count of live connections in the worker (DT-15). `Opened` (from acceptor) always precedes
-/// `Closed` (from reader) per connection, so `live` stays balanced; the worker stops when
-/// all open connections have closed. Pure logic (testable without GPU/sockets).
+/// `Closed` (from reader) per connection, so `live` stays balanced. Reaching zero is a
+/// transition signal; the owning runtime decides whether zero is terminal. Pure logic
+/// (testable without GPU/sockets).
 #[derive(Default)]
 pub struct LiveCount {
     live: u32,
@@ -77,8 +79,8 @@ impl LiveCount {
         self.opened = true;
     }
 
-    /// Registers the closing of a connection; returns `true` when **all** open
-    /// connections have closed (the worker should terminate). An unbalanced
+    /// Registers the closing of a connection; returns `true` once when **all** open
+    /// connections have closed. An unbalanced
     /// `Closed` is ignored so it cannot emit a second terminal transition.
     pub fn on_close(&mut self) -> bool {
         if self.live == 0 {
@@ -463,14 +465,14 @@ mod tests {
         );
     }
 
-    // DT-18 / F-3/F-5: deterministic termination — stops exactly when live==0.
+    // DT-18 / F-3/F-5: deterministic zero-live transition.
     #[test]
-    fn live_count_terminates_on_all_closed() {
+    fn live_count_reports_zero_after_all_closed() {
         let mut lc = LiveCount::new();
         lc.on_open(); // live=1
         lc.on_open(); // live=2
         assert!(!lc.on_close(), "live=1 still"); // live=1
-        assert!(lc.on_close(), "live=0 + opened -> stops"); // live=0
+        assert!(lc.on_close(), "live=0 emits the quiescent transition"); // live=0
     }
 
     // DT-18 / F-6: failed handshake = immediate Opened (acceptor) + Closed (reader); balanced.
@@ -478,13 +480,16 @@ mod tests {
     fn live_count_balanced_open_then_close() {
         let mut lc = LiveCount::new();
         lc.on_open();
-        assert!(lc.on_close(), "1 connection opened and closed -> stops");
+        assert!(lc.on_close(), "1 connection opened and closed -> zero live");
     }
 
     #[test]
     fn live_count_never_stops_before_any_open() {
         let mut lc = LiveCount::new();
-        assert!(!lc.on_close(), "without Opened does not stop spuriously");
+        assert!(
+            !lc.on_close(),
+            "without Opened does not transition spuriously"
+        );
         assert_eq!(lc.live(), 0);
     }
 
@@ -492,10 +497,10 @@ mod tests {
     fn live_count_refuses_duplicate_closed() {
         let mut lc = LiveCount::new();
         lc.on_open();
-        assert!(lc.on_close(), "the balanced close is terminal");
+        assert!(lc.on_close(), "the balanced close reaches zero live");
         assert!(
             !lc.on_close(),
-            "a duplicate Closed must not emit another terminal transition"
+            "a duplicate Closed must not emit another zero-live transition"
         );
         assert_eq!(lc.live(), 0);
     }

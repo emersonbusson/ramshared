@@ -207,6 +207,49 @@ Data survives (hash OK); 4K latency → 1.18 s under full VRAM. Confirms (a) as 
 ### 9.4 Dedicated Content/Free-Floor Canary — implemented (issue #8)
 Triggers (b)/(c) from §9.1 are probed by a dedicated canary region (separate from swap, not NBD-addressable) + sampler with hysteresis (`ResidencySampler`): content corruption triggers immediate demotion; free-floor and transient errors require `consecutive` samples (anti-false-positive, DT-9/DT-11). Per-request latency (a) remains the primary trigger. Spec/Impl: `docs/008-vram-residency-canary/`.
 
+### 9.5 DT-NBD-Recovery-1 — asynchronous reactivation owns its child
+
+`swapon -p 100 <nbd_dev>` reads the NBD export while it validates the swap
+header. Therefore the simple NBD worker MUST NOT call it synchronously: that
+would make the only request-serving thread wait for a child which is itself
+waiting for that thread. The recovery owner is the simple NBD runtime in
+`crates/ramshared-wsl2d/src/main.rs`; neither the benchmark controller nor a
+sleep/retry wrapper may compensate for this class.
+
+After a successful DEMOTE and three healthy, empty-tier samples, the runtime
+uses the following bounded state machine:
+
+```text
+Parked --3 healthy + empty samples--> ActivationPending
+ActivationPending --success--> Available
+ActivationPending --false/disconnected--> ParkedFailed
+ParkedFailed --unhealthy or nonempty observation--> Parked
+```
+
+- The runtime starts one bounded child supervisor and retains its receiver.
+  It polls that receiver without blocking the NBD loop; NBD jobs continue to
+  be served while `ActivationPending`.
+- A pending receiver suppresses another activation. A dispatch/start failure,
+  `false`, or a disconnected receiver resets the healthy streak and parks the
+  tier. It must not relaunch during the same healthy epoch; only a later
+  unhealthy-or-nonempty observation creates a new epoch.
+- A 30-second observation deadline emits a stable deadline-exceeded diagnostic
+  but cannot turn an unobserved child into a terminal outcome. The runtime
+  remains `ActivationPending`, continues serving, and keeps the backend owned;
+  it never retries or pretends teardown is safe while `swapon` may still be
+  reading the export.
+- A shutdown requested while activation is pending defers backend release and
+  Unix-socket cleanup until that child has a terminal observed outcome. This
+  preserves swapoff-first/`used_kb == 0`: CUDA memory is never freed while a
+  `swapon` child might still be reading the exported NBD device.
+
+This is #13 (a pending child and a successful child are distinct), #15 (no
+blind retry), #16 (keep the serving resource alive while the cure needs it),
+#17 (one attempt per recovery epoch), and #18 (fix the NBD runtime that owns
+the deadlock). Roll back this change if any bounded test observes a blocked
+NBD job during `ActivationPending`, more than one activation in one healthy
+epoch, or backend release before the activation outcome is observed.
+
 ## 10. Tiers and Backends
 
 - **zram:** `ramshared-tier/zram.rs` (create, size, mkswap, swapon 200, teardown). lzo-rle. No writeback (current kernel).
@@ -220,10 +263,28 @@ Triggers (b)/(c) from §9.1 are probed by a dedicated canary region (separate fr
 The acceptor emits one `Opened` before it starts a reader; every reader terminal
 path (handshake refusal, EOF, malformed request, oversized WRITE, and
 worker-channel closure) emits at most one balancing `Closed`. A duplicate or
-otherwise unbalanced `Closed` must not produce a second worker-termination
-signal. The writer sends the exact reply header, then reply data, then flushes;
-it stops after a disconnect reply or any write/flush error. Diagnostic prose is
+otherwise unbalanced `Closed` must not produce a second zero-live transition.
+The writer sends the exact reply header, then reply data, then flushes; it stops
+after a disconnect reply or any write/flush error. Diagnostic prose is
 English-only and never changes request, reply, handshake, or control bytes.
+
+#### DT-Conn-1a — simple NBD listener lifetime (supersedes terminal `Closed`)
+
+For the simple single-export `run_nbd` runtime only, a balanced `Closed` that
+makes the live count zero is a quiescent transition, not worker termination.
+The same listener, backend, and daemon identity remain available to accept a
+later connection generation. The simple runtime terminates only on an explicit
+shutdown request or fatal worker error. Its SIGINT/SIGTERM handler performs
+only an async-signal-safe atomic store; one owned bounded bridge attempts a
+nonblocking `WMsg::Shutdown` wake. If the bounded queue is full or already
+disconnected, the worker observes that same terminal atomic before its next
+receive instead of blocking a signal thread. The bridge is canceled and joined
+on every return; it does not poll-spin, retry, or alter broker semantics.
+Normal terminal cleanup then removes only the owned Unix socket.
+
+This narrowly supersedes the old terminal interpretation of `Closed` in
+DT-Conn-1. It does not change the balancing contract in `conn.rs`, wire
+protocol, broker worker behavior, or swapoff-first lifecycle ordering.
 
 The named tests use only `Cursor`, channel, Unix-pair, or loopback listener
 fixtures with a bounded receive/join deadline. They do not allocate CUDA,
@@ -286,7 +347,7 @@ Acceptance: canary detects (a) §9.1; daemon enters `Demoted`; swapoff of VRAM c
 
 | Test name | Fixture / evidence | Required result | Discipline |
 |---|---|---|---|
-| `live_count_refuses_duplicate_closed` | pure counter | a second unbalanced `Closed` never returns a terminal signal | #13/#17 |
+| `live_count_refuses_duplicate_closed` | pure counter | a second unbalanced `Closed` never returns a second zero-live transition | #13/#17 |
 | `writer_writes_header_data_and_flushes` | in-memory writer | exact header/data order and one flush | #13 |
 | `writer_stops_on_disconnect_or_io_error` | deterministic error writer | no write after disconnect; write/flush error exits | #15/#16 |
 | `reader_enqueues_write_payload_then_closed` | in-memory valid handshake/request | negotiated export, exact payload, then one `Closed` | #13/#17 |
@@ -295,6 +356,12 @@ Acceptance: canary detects (a) §9.1; daemon enters `Demoted`; swapoff of VRAM c
 | `reader_stops_when_worker_is_closed` | disconnected bounded worker channel | reader exits within its test deadline | #15/#16 |
 | `wire_conn_balances_opened_and_closed` | Unix stream pair | `Opened` precedes exactly one `Closed` | #13/#17 |
 | `acceptors_stop_when_worker_is_closed` | Unix and TCP loopback listeners | acceptors stop after the worker refusal without a retry loop | #15/#16 |
+| `daemon_nbd_serves_two_connection_generations_before_explicit_shutdown` | injected simple NBD runtime | first balanced close reaches quiescence, a second generation is served, and only explicit `Shutdown` removes the owned socket | #13/#16/#17 |
+| `daemon_nbd_explicit_shutdown_wakes_idle_runtime_without_timer_dependence` | injected simple NBD runtime | explicit shutdown returns before the receive tick and removes the owned socket | #13/#16 |
+| `daemon_nbd_shutdown_bridge_full_or_disconnected_queue_is_nonblocking` | bounded channel + owned bridge | a full or disconnected worker queue cannot block the signal bridge or retain its sender thread | #13/#15/#16 |
+| `daemon_nbd_recovery_activation_does_not_block_nbd_jobs` | injected NBD runtime with a deliberately pending activation child | a post-recovery NBD job replies within the test deadline while activation is pending; no CUDA, swap command, or NBD device is used | #13/#16/#18 |
+| `daemon_nbd_recovery_failure_parks_without_relaunch` | injected dispatch error, false result, and disconnected activation receiver | each terminal failure parks and resets hysteresis; one healthy epoch emits at most one activation and no retry storm | #13/#15/#17 |
+| `daemon_nbd_shutdown_with_pending_recovery_fails_closed` | injected pending activation plus explicit shutdown | the owned socket/backend remain until the activation outcome is observed, then teardown is bounded and clean | #13/#16/#17 |
 
 The DT-Conn-1 canonical per-file gate is the command in §10.1; a package or
 workspace average cannot substitute for its 80% line threshold.

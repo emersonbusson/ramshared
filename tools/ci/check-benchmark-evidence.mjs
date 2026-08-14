@@ -121,6 +121,338 @@ function almostEqual(a, b) {
   return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b))
 }
 
+function roundControllerRatio(value, allowZero = false) {
+  if (!Number.isFinite(value) || value < 0 || (!allowZero && value === 0)) return null
+  const scale = 1_000_000
+  const scaled = value * scale
+  if (!Number.isFinite(scaled)) return null
+  const lower = Math.floor(scaled)
+  const fractional = scaled - lower
+  const rounded = fractional > 0.5
+    ? lower + 1
+    : fractional < 0.5
+      ? lower
+      : lower % 2 === 0
+        ? lower
+        : lower + 1
+  return rounded / scale
+}
+
+function expectedPublicPairRatios(metrics) {
+  const disk = metrics?.disk_allocation_to_hold_ms
+  const nbd = metrics?.nbd_allocation_to_hold_ms
+  const diskMedian = disk?.median
+  const diskP99 = disk?.p99_nearest_rank
+  const diskStddev = disk?.stddev
+  const nbdMedian = nbd?.median
+  const nbdP99 = nbd?.p99_nearest_rank
+  const nbdStddev = nbd?.stddev
+  if (![diskMedian, diskP99, nbdMedian, nbdP99].every((value) => Number.isFinite(value) && value > 0) ||
+      ![diskStddev, nbdStddev].every((value) => Number.isFinite(value) && value >= 0)) return null
+  const median = roundControllerRatio(nbdMedian / diskMedian)
+  const p99 = roundControllerRatio(nbdP99 / diskP99)
+  const stddev = diskStddev > 0 ? roundControllerRatio(nbdStddev / diskStddev, true) : null
+  if (median === null || p99 === null || (diskStddev > 0 && stddev === null)) return null
+  return {
+    nbd_vs_disk_median_ratio: median,
+    nbd_vs_disk_p99_ratio: p99,
+    nbd_vs_disk_population_stddev_ratio: stddev,
+  }
+}
+
+const PAIR_CUSTODY_KEYS = [
+  'schema_version', 'pair_id', 'release', 'cells', 'timeout_budget', 'cuda_hold_sec', 'comparison_sha256', 'cleanup',
+]
+const PAIR_CELL_KEYS = [
+  'mode', 'binary_match', 'context_sha256', 'summary_sha256', 'artifact_inventory_sha256',
+  'internal_envelope_sha256', 'timeout_budget',
+]
+const PAIR_RELEASE_KEYS = [
+  'version', 'source_commit', 'installed_manifest_sha256', 'input_bundle_manifest_sha256',
+]
+const PAIR_CLEANUP_KEYS = ['complete', 'terminal_state']
+const PAIR_TIMEOUT_KEYS = ['cell', 'cuda_hold_min_sec']
+const CELL_TIMEOUT_KEYS = [
+  'sample_timeout_sec', 'integrity_finalization_timeout_sec', 'samples',
+  'setup_cleanup_timeout_sec', 'cell_outer_timeout_sec',
+]
+const PAIR_COMPARISON_KEYS = [
+  'schema_version', 'pair_id', 'environment_fingerprint', 'baseline_verdict', 'baseline_reason',
+  'nbd_vs_disk_median_ratio', 'nbd_vs_disk_p99_ratio', 'nbd_vs_disk_population_stddev_ratio',
+  'timeout_budget',
+]
+const PAIR_CANDIDATE_KEYS = [
+  'classification', 'canonical', 'publication_state', 'repository_artifact_root',
+  'installed_manifest_sha256', 'input_bundle_manifest_sha256', 'pair_custody_sha256',
+  'pair_comparison_sha256',
+]
+const LOWER_SHA256_RE = /^[0-9a-f]{64}$/
+const LOWER_COMMIT_RE = /^[0-9a-f]{40}$/
+const PAIR_BASELINE_VERDICTS = new Set(['BASELINE_CANDIDATE', 'NOT_COMPARABLE', 'GREEN', 'YELLOW', 'RED'])
+const PAIR_PUBLIC_DECISIONS = {
+  BASELINE_CANDIDATE: { verdict: 'BASELINE', promotable: false, qualified: false },
+  NOT_COMPARABLE: { verdict: 'INCOMPARABLE', promotable: false, qualified: false },
+  GREEN: { verdict: 'PASS', promotable: true, qualified: true },
+  YELLOW: { verdict: 'YELLOW', promotable: false, qualified: true },
+  RED: { verdict: 'RED', promotable: false, qualified: true },
+}
+
+function plainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function exactObject(value, keys) {
+  if (!plainObject(value)) return false
+  const actual = Object.keys(value)
+  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+}
+
+function lowerSha256(value) {
+  return typeof value === 'string' && LOWER_SHA256_RE.test(value)
+}
+
+function safeArtifactRoot(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/.test(value)
+}
+
+function pairBudgetForTier(tierMiB) {
+  const cells = {
+    1024: { sample_timeout_sec: 240, integrity_finalization_timeout_sec: 120, samples: 3, setup_cleanup_timeout_sec: 300, cell_outer_timeout_sec: 1380 },
+    2048: { sample_timeout_sec: 240, integrity_finalization_timeout_sec: 240, samples: 3, setup_cleanup_timeout_sec: 300, cell_outer_timeout_sec: 1740 },
+    4096: { sample_timeout_sec: 600, integrity_finalization_timeout_sec: 600, samples: 3, setup_cleanup_timeout_sec: 300, cell_outer_timeout_sec: 3900 },
+  }
+  const cell = cells[tierMiB]
+  return cell ? { cell, cuda_hold_min_sec: (2 * cell.cell_outer_timeout_sec) + 120 } : null
+}
+
+function matchesBudget(value, expected) {
+  if (!exactObject(value, PAIR_TIMEOUT_KEYS) || !exactObject(value.cell, CELL_TIMEOUT_KEYS) ||
+      !Number.isSafeInteger(value.cuda_hold_min_sec) || value.cuda_hold_min_sec !== expected.cuda_hold_min_sec) return false
+  return CELL_TIMEOUT_KEYS.every((key) => Number.isSafeInteger(value.cell[key]) && value.cell[key] === expected.cell[key])
+}
+
+function parseStringToken(text, state) {
+  const start = state.index
+  state.index += 1
+  while (state.index < text.length) {
+    const character = text[state.index]
+    state.index += 1
+    if (character === '\\') {
+      state.index += 1
+    } else if (character === '"') {
+      return JSON.parse(text.slice(start, state.index))
+    }
+  }
+  throw new Error('unterminated JSON string')
+}
+
+function containsDuplicateJsonObjectKey(text) {
+  const state = { index: 0, duplicate: false }
+  const skipWhitespace = () => {
+    while (state.index < text.length && /\s/.test(text[state.index])) state.index += 1
+  }
+  const parseValue = () => {
+    skipWhitespace()
+    const character = text[state.index]
+    if (character === '{') return parseObject()
+    if (character === '[') return parseArray()
+    if (character === '"') { parseStringToken(text, state); return }
+    while (state.index < text.length && !/[\s,\]}]/.test(text[state.index])) state.index += 1
+  }
+  const parseArray = () => {
+    state.index += 1
+    skipWhitespace()
+    if (text[state.index] === ']') { state.index += 1; return }
+    while (state.index < text.length) {
+      parseValue()
+      skipWhitespace()
+      if (text[state.index] === ']') { state.index += 1; return }
+      if (text[state.index] !== ',') throw new Error('invalid JSON array')
+      state.index += 1
+    }
+    throw new Error('unterminated JSON array')
+  }
+  const parseObject = () => {
+    const keys = new Set()
+    state.index += 1
+    skipWhitespace()
+    if (text[state.index] === '}') { state.index += 1; return }
+    while (state.index < text.length) {
+      if (text[state.index] !== '"') throw new Error('invalid JSON object key')
+      const key = parseStringToken(text, state)
+      if (keys.has(key)) state.duplicate = true
+      keys.add(key)
+      skipWhitespace()
+      if (text[state.index] !== ':') throw new Error('invalid JSON object separator')
+      state.index += 1
+      parseValue()
+      skipWhitespace()
+      if (text[state.index] === '}') { state.index += 1; return }
+      if (text[state.index] !== ',') throw new Error('invalid JSON object')
+      state.index += 1
+      skipWhitespace()
+    }
+    throw new Error('unterminated JSON object')
+  }
+  parseValue()
+  skipWhitespace()
+  if (state.index !== text.length) throw new Error('trailing JSON input')
+  return state.duplicate
+}
+
+function parsePairArtifact(bytes, findings, label) {
+  const contents = bytes.toString('utf8')
+  let value
+  try {
+    value = JSON.parse(contents)
+  } catch {
+    findings.push(`${label}-json`)
+    return null
+  }
+  try {
+    if (containsDuplicateJsonObjectKey(contents)) findings.push(`${label}-duplicate-key`)
+  } catch {
+    findings.push(`${label}-json`)
+    return null
+  }
+  return value
+}
+
+function expectedWsl2Pair(record) {
+  const parameters = record.workload?.parameters
+  const tierMiB = parameters?.tier_mib
+  const condition = parameters?.condition
+  const budget = pairBudgetForTier(tierMiB)
+  if (!budget || !Number.isSafeInteger(tierMiB) || !['idle', 'bounded'].includes(condition)) return null
+  return { id: `${tierMiB}-${condition}`, budget }
+}
+
+function validatePairCell(cell, expectedMode, expectedBinaryMatch, expectedBudget, findings) {
+  if (!exactObject(cell, PAIR_CELL_KEYS)) {
+    findings.push('pair-custody-cell-schema')
+    return
+  }
+  if (cell.mode !== expectedMode || cell.binary_match !== expectedBinaryMatch) findings.push('pair-custody-cell-contract')
+  for (const name of ['context_sha256', 'summary_sha256', 'artifact_inventory_sha256', 'internal_envelope_sha256']) {
+    if (!lowerSha256(cell[name])) findings.push('pair-custody-cell-hash')
+  }
+  if (!exactObject(cell.timeout_budget, CELL_TIMEOUT_KEYS) || !CELL_TIMEOUT_KEYS.every((key) =>
+    Number.isSafeInteger(cell.timeout_budget[key]) && cell.timeout_budget[key] === expectedBudget.cell[key])) {
+    findings.push('pair-custody-timeout-budget')
+  }
+}
+
+function validateWsl2PairCustody(record, artifactContents, findings) {
+  const expectedPair = expectedWsl2Pair(record)
+  const candidate = record.candidate
+  if (!expectedPair || !exactObject(candidate, PAIR_CANDIDATE_KEYS) ||
+      candidate.classification !== 'candidate/noncanonical' || candidate.canonical !== false ||
+      candidate.publication_state !== 'campaign-root-pending-repository-copy' ||
+      !safeArtifactRoot(candidate.repository_artifact_root) || !lowerSha256(candidate.installed_manifest_sha256) ||
+      !(candidate.input_bundle_manifest_sha256 === 'not_exposed' || lowerSha256(candidate.input_bundle_manifest_sha256)) ||
+      !lowerSha256(candidate.pair_custody_sha256) || !lowerSha256(candidate.pair_comparison_sha256)) {
+    findings.push('pair-custody-candidate-schema')
+    return
+  }
+
+  const expectedRoot = `docs/specs/no-milestone/wsl2-nbd-product-readiness/evidence/${record.run_id}`
+  const custodyPath = `${candidate.repository_artifact_root}/pair-custody.json`
+  const comparisonPath = `${candidate.repository_artifact_root}/pair-comparison.json`
+  if (candidate.repository_artifact_root !== expectedRoot || record.artifacts.length !== 2 ||
+      record.artifacts[0]?.path !== custodyPath || record.artifacts[1]?.path !== comparisonPath) {
+    findings.push('pair-custody-artifact-schema')
+    return
+  }
+
+  const custodyBytes = artifactContents.get(custodyPath)
+  const comparisonBytes = artifactContents.get(comparisonPath)
+  if (!custodyBytes || !comparisonBytes) {
+    findings.push('pair-custody-artifact-missing')
+    return
+  }
+  if (sha256(custodyBytes) !== candidate.pair_custody_sha256) findings.push('pair-custody-candidate-hash')
+  const comparisonHash = sha256(comparisonBytes)
+  if (comparisonHash !== candidate.pair_comparison_sha256) findings.push('pair-custody-candidate-comparison-binding')
+
+  const custody = parsePairArtifact(custodyBytes, findings, 'pair-custody')
+  const comparison = parsePairArtifact(comparisonBytes, findings, 'pair-comparison')
+  if (!custody || !comparison) return
+  if (!exactObject(custody, PAIR_CUSTODY_KEYS) || custody.schema_version !== 'ramshared-nbd-public-pair-custody/v1') {
+    findings.push('pair-custody-schema')
+    return
+  }
+  if (custody.pair_id !== expectedPair.id) findings.push('pair-custody-pair-binding')
+  if (!exactObject(custody.release, PAIR_RELEASE_KEYS) || typeof custody.release.version !== 'string' || !custody.release.version ||
+      !LOWER_COMMIT_RE.test(custody.release.source_commit) || !lowerSha256(custody.release.installed_manifest_sha256) ||
+      !(custody.release.input_bundle_manifest_sha256 === 'not_exposed' || lowerSha256(custody.release.input_bundle_manifest_sha256)) ||
+      custody.release.source_commit !== record.source.commit ||
+      custody.release.installed_manifest_sha256 !== candidate.installed_manifest_sha256 ||
+      custody.release.input_bundle_manifest_sha256 !== candidate.input_bundle_manifest_sha256) {
+    findings.push('pair-custody-release-binding')
+  }
+  if (!Array.isArray(custody.cells) || custody.cells.length !== 2) {
+    findings.push('pair-custody-cell-count')
+  } else {
+    validatePairCell(custody.cells[0], 'disk-only', 'N/A', expectedPair.budget, findings)
+    validatePairCell(custody.cells[1], 'nbd', 'PASS', expectedPair.budget, findings)
+  }
+  if (!matchesBudget(custody.timeout_budget, expectedPair.budget) || !matchesBudget(record.workload.parameters.timeout_budget, expectedPair.budget)) {
+    findings.push('pair-custody-timeout-budget')
+  }
+  const expectedCudaHoldSec = record.workload.parameters.condition === 'bounded'
+    ? expectedPair.budget.cuda_hold_min_sec
+    : 0
+  if (!Number.isSafeInteger(custody.cuda_hold_sec) || custody.cuda_hold_sec !== expectedCudaHoldSec) {
+    findings.push('pair-custody-cuda-hold')
+  }
+  if (!lowerSha256(custody.comparison_sha256)) findings.push('pair-custody-comparison-hash')
+  if (custody.comparison_sha256 !== comparisonHash) findings.push('pair-custody-comparison-binding')
+  if (!exactObject(custody.cleanup, PAIR_CLEANUP_KEYS) || custody.cleanup.complete !== true || custody.cleanup.terminal_state !== 'PRODUCT_OFF') {
+    findings.push('pair-custody-cleanup')
+  }
+  if (Array.isArray(custody.cells) && custody.cells.length === 2 &&
+      (record.lifecycle.before?.custody_sha256 !== custody.cells[0].context_sha256 ||
+       record.lifecycle.after?.custody_sha256 !== custody.cells[1].context_sha256 ||
+       record.lifecycle.after?.terminal_state !== 'PRODUCT_OFF' ||
+       record.lifecycle.action?.pair_id !== expectedPair.id ||
+       canonical(record.lifecycle.action?.mode_order) !== canonical(['disk-only', 'nbd']))) {
+    findings.push('pair-custody-lifecycle-binding')
+  }
+
+  if (!exactObject(comparison, PAIR_COMPARISON_KEYS) || comparison.schema_version !== 'ramshared-nbd-public-pair-comparison/v1') {
+    findings.push('pair-comparison-schema')
+    return
+  }
+  if (comparison.pair_id !== expectedPair.id || comparison.environment_fingerprint !== record.comparison.pair_environment_fingerprint ||
+      comparison.baseline_verdict !== record.comparison.baseline_verdict) {
+    findings.push('pair-comparison-pair-binding')
+  }
+  const diskStddev = record.metrics.disk_allocation_to_hold_ms?.stddev
+  const stddevRatioShape = diskStddev > 0
+    ? Number.isFinite(comparison.nbd_vs_disk_population_stddev_ratio) && comparison.nbd_vs_disk_population_stddev_ratio >= 0
+    : comparison.nbd_vs_disk_population_stddev_ratio === null
+  if (!lowerSha256(comparison.environment_fingerprint) || !PAIR_BASELINE_VERDICTS.has(comparison.baseline_verdict) ||
+      typeof comparison.baseline_reason !== 'string' || !comparison.baseline_reason ||
+      !Number.isFinite(comparison.nbd_vs_disk_median_ratio) || comparison.nbd_vs_disk_median_ratio <= 0 ||
+      !Number.isFinite(comparison.nbd_vs_disk_p99_ratio) || comparison.nbd_vs_disk_p99_ratio <= 0 ||
+      !stddevRatioShape ||
+      !matchesBudget(comparison.timeout_budget, expectedPair.budget)) {
+    findings.push('pair-comparison-schema')
+  }
+  const expectedRatios = expectedPublicPairRatios(record.metrics)
+  if (!expectedRatios || comparison.nbd_vs_disk_median_ratio !== expectedRatios.nbd_vs_disk_median_ratio ||
+      comparison.nbd_vs_disk_p99_ratio !== expectedRatios.nbd_vs_disk_p99_ratio ||
+      comparison.nbd_vs_disk_population_stddev_ratio !== expectedRatios.nbd_vs_disk_population_stddev_ratio) {
+    findings.push('pair-comparison-ratio')
+  }
+  const expectedDecision = PAIR_PUBLIC_DECISIONS[comparison.baseline_verdict]
+  if (!expectedDecision || record.comparison.baseline_verdict !== comparison.baseline_verdict ||
+      record.decision.verdict !== expectedDecision.verdict || record.decision.promotable !== expectedDecision.promotable ||
+      record.comparison.qualified !== expectedDecision.qualified) {
+    findings.push('pair-comparison-decision-mapping')
+  }
+}
+
 export function validateRecord(record, { root = ROOT } = {}) {
   const findings = []
   if (!record || typeof record !== 'object' || Array.isArray(record)) return ['record-type']
@@ -167,6 +499,7 @@ export function validateRecord(record, { root = ROOT } = {}) {
   if (record.lifecycle.binary_match !== true || record.lifecycle.legitimate?.verdict !== 'PASS' || !Array.isArray(record.lifecycle.refusals) || record.lifecycle.refusals.length < 1 || record.lifecycle.cleanup?.complete !== true || record.lifecycle.residue !== 0) findings.push('lifecycle-incomplete')
 
   if (record.artifacts.length > MAX_ARTIFACTS) findings.push('artifact-count-limit')
+  const artifactContents = new Map()
   let artifactTotalBytes = 0
   for (const artifact of record.artifacts.slice(0, MAX_ARTIFACTS)) {
     const file = resolveRepositoryFile(root, artifact?.path, findings, 'artifact')
@@ -176,8 +509,13 @@ export function validateRecord(record, { root = ROOT } = {}) {
     if (artifactTotalBytes > MAX_ARTIFACT_TOTAL_BYTES) findings.push('artifact-total-byte-limit')
     const bytes = readArtifact(file, findings)
     if (!bytes) continue
+    artifactContents.set(artifact.path, bytes)
     if (!SHA256_RE.test(artifact.sha256 ?? '') || sha256(bytes) !== artifact.sha256.toLowerCase()) findings.push('artifact-hash')
     if (sensitiveRule(bytes.toString('utf8'))) findings.push('artifact-sensitive-content')
+  }
+
+  if (record.surface === 'wsl2-nbd' && record.slug === 'wsl2-nbd-product-readiness') {
+    validateWsl2PairCustody(record, artifactContents, findings)
   }
 
   if (sensitiveRule(record)) findings.push('sensitive-content')

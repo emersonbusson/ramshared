@@ -3738,3 +3738,86 @@ second activation.
 **Verdict:** 🟡 The real 1 GiB WSL2 NBD activation and identity checks passed.
 The required 1/2/4 GiB benchmark matrix with n>=3 and median/p99/deviation is
 not yet run, so this does not claim index-quality DONE.
+
+## 2026-08-14 00:59 -03 — WSL2 NBD Attempt29 P1 timeout refusal
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0008`.
+**Owner role:** `wsl2-nbd-operator`.
+**Observed at:** `2026-08-14T00:54:32-03:00`.
+**Verified at:** `2026-08-14T00:59:39-03:00`.
+**Source revision:** `a60c898ec6d938e6828d879d41a4b2ea0c7b6b21`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the host-private campaign root and the two committed
+SHA-256 identities below; do not promote partial cell artifacts.
+**Freshness:** Revalidate after any timeout-budget, worker-integrity, cgroup,
+controller, CUDA, NBD, or cleanup change.
+**What:** Ran the approved canonical Windows/WSL2 matrix with stop-first-RED
+against the exact sealed release. The first P1 idle disk-only cell refused on
+its second sample before NBD or any bounded/CUDA condition ran.
+**Category:** `wsl2-nbd-live`.
+**How to measure:** Canonical controller PlanOnly followed by the approved live
+controller; inventory byte/hash verification; exact terminal pinned preflight;
+and read-only process, cgroup, swap, NBD, and service residue inspection.
+**Measured data:** Run one completed `3584 MiB`, HOLD, occupancy, and checksum;
+allocation-to-HOLD was `114056 ms`, the integrity worker exited zero, and no
+cgroup `oom_kill` increment was observed. Run two reached only `2048/3584 MiB`
+before the 120-second HOLD deadline and emitted `SAMPLE_TIMEOUT`. The matrix
+stopped `RED/failed_pair`; NBD and bounded cells did not run, so no CUDA VRAM
+allocation was expected. All 36 inventory records verified. Matrix-summary
+SHA-256 is `3f85c9948dc8c733b06351c029bc7a2a1512574cdc1ee8fdd8abfe41b78ef33e`;
+inventory SHA-256 is
+`e1d62c1c7a0d349624a8b68a309830495b67b2a2aa3c5efdd24b20a55b558fa9`.
+**Refusals:** No completed pair or public evidence was produced. Terminal
+pinned preflight returned `PRODUCT_OFF`; no managed swap, worker, daemon,
+CUDA process, benchmark cgroup, or NBD attachment remained. The pre-existing
+`/dev/sdc` swap was not changed.
+**Rollback trigger:** Any timeout promotion, public evidence from this partial
+cell, terminal state other than exact `PRODUCT_OFF`, residual managed resource,
+or mutation of `/dev/sdc` invalidates the campaign and blocks another run.
+**Verdict:** 🟡 The refusal and cleanup are valid diagnostic evidence. The
+source-only P1 policy successor (`240 s` HOLD, independent `120 s` integrity)
+must be committed, resealed, and exercised by a fresh complete matrix before
+qualification or PR promotion.
+
+## 2026-08-14 02:52 -03 — WSL2 NBD Attempt30 complete matrix
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0009`.
+**Owner role:** `wsl2-nbd-operator`.
+**Observed at:** `2026-08-14T01:17:39-03:00`.
+**Verified at:** `2026-08-14T02:52:22-03:00`.
+**Source revision:** `a365bda0daf89a9707159b86efca8c1ba1ac760b`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the host-private 551-entry campaign and the six copied
+repository pair-custody/comparison records; the compact public records remain
+in `docs/benchmarks/results.jsonl`.
+**Freshness:** Revalidate after any benchmark policy, worker-integrity, cgroup,
+controller, CUDA, NBD, evidence-custody, or cleanup change.
+**What:** Ran the approved canonical Windows/WSL2 matrix against the exact
+sealed release. All 12 P1/P2/P4 idle/bounded disk-only/NBD cells and all 36
+samples completed with integrity, occupancy, and cleanup.
+**Category:** `wsl2-nbd-live`.
+**How to measure:** Canonical PlanOnly followed by the approved live controller;
+per-cell `BINARY_MATCH`; pair-scoped CUDA custody; inventory byte/hash
+verification; repository public-evidence validation; terminal pinned preflight;
+and read-only process, cgroup, swap, NBD, service, and VRAM residue inspection.
+**Measured data:** Every NBD cell retained `BINARY_MATCH=PASS`; every bounded
+pair held one CUDA context across disk-only then NBD and released it without
+force. Matrix-summary SHA-256 is
+`42fa3e1a00dd7e7c16f0c92196f69622ac9212c9fb889e858f6e40769af292af`.
+The 551-entry inventory SHA-256 is
+`58a959fd82d29b6c503382a98d82a4bbf57bb90dc94ffaf2fdc2dfa6e985aece`,
+and every listed byte count and hash verified. All six public pair records pass
+the repository validator as `BASELINE`/nonpromotable because no prior canonical
+baseline exists.
+**Refusals:** No timeout, integrity, identity, cleanup, or evidence refusal
+occurred. The absence of a prior canonical baseline prevents promotion of the
+six baseline records but does not invalidate the completed live matrix.
+**Rollback trigger:** Any matrix/inventory hash mismatch, NBD identity drift,
+failed public custody record, cell or terminal state other than exact
+`PRODUCT_OFF`, residual managed resource, forced CUDA release, or mutation of
+the pre-existing `/dev/sdc` invalidates this evidence.
+**Verdict:** 🟢 The complete sealed 1/2/4 GiB idle/bounded disk-only/NBD
+matrix passed with n=3 per cell. Live qualification is complete; Gate B,
+hosted required checks, PR review, and merge remain open.

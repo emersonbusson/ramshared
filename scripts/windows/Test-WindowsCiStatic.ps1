@@ -58,6 +58,7 @@ function Invoke-WindowsCiStaticSuite {
         @{ Name = "Test-Win11LabReadyStatic.ps1"; Arguments = @{} },
         @{ Name = "Test-Win11LabReadyBaseStatic.ps1"; Arguments = @{} },
         @{ Name = "Test-Win11LabReadyCloneStatic.ps1"; Arguments = @{} },
+        @{ Name = "Test-NbdBenchmarkMatrixStatic.ps1"; Arguments = @{} },
         @{ Name = "Test-Win11LabDriverTestFirmwareStatic.ps1"; Arguments = @{} },
         @{ Name = "Test-WinDriveIoctlValidationStatic.ps1"; Arguments = @{} },
         @{ Name = "Test-HostAutonomousLifecycleStatic.ps1"; Arguments = @{} },
@@ -74,6 +75,7 @@ function Invoke-WindowsCiStaticSuite {
         & $path @harnessArguments
     }
 
+    Write-Output "PASS windows_static_wrapper_includes_nbd_benchmark_harness"
     Write-Output "PASS windows_static_suite_runs_named_static_harnesses"
 }
 

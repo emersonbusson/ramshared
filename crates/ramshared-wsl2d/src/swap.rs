@@ -35,6 +35,21 @@ pub fn activate_swap(dev: &str, priority: i16) -> bool {
         .unwrap_or(false)
 }
 
+/// Starts `swapon` outside the NBD serving thread and returns only its terminal
+/// result. `swapon` reads the exported device while checking its header, so the
+/// single NBD worker must keep serving requests until this receiver completes.
+pub fn spawn_activate_swap(dev: &str, priority: i16) -> std::io::Result<Receiver<bool>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let dev = dev.to_string();
+    std::thread::Builder::new()
+        .name("ramshared-nbd-swapon".into())
+        .spawn(move || {
+            let ok = activate_swap(&dev, priority);
+            let _ = tx.send(ok);
+        })?;
+    Ok(rx)
+}
+
 /// Spawns `swapoff <dev>` in a separate thread (does not block the server) and returns the
 /// channel confirming the outcome (`true` = success). Unified DEMOTE path (DT-8):
 /// used by per-request latency and cadence probe.
@@ -75,6 +90,16 @@ mod tests {
             "/dev/invalid_device_that_does_not_exist",
             10
         ));
+    }
+
+    #[test]
+    fn test_spawn_activate_swap_invalid_dev() {
+        let rx = spawn_activate_swap("/dev/invalid_device_that_does_not_exist", 10)
+            .expect("bounded activation supervisor starts");
+        assert!(
+            !rx.recv()
+                .expect("activation worker reports terminal result")
+        );
     }
 
     #[test]

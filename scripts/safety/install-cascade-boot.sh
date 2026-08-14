@@ -10,6 +10,13 @@ UNIT_PATH=/etc/systemd/system/ramshared-cascade.service
 CURRENT_SELECTOR="$PRODUCT_ROOT/current"
 APPROVED_VERSION=
 LEGACY_UNIT_APPROVED_HASH=
+LOWER_SINK=
+INPUT_BUNDLE_MANIFEST_SHA256=
+INSTALLED_MANIFEST_SHA256=
+BOUND_LOWER_SINK=
+BOUND_LOWER_SINK_IDENTITY_SHA256=
+BOUND_LOWER_SINK_FS_BLOCK_BYTES=
+BOUND_LOWER_SINK_AVAILABLE_KIB=
 declare -A INSTALL_MANIFEST_HASHES=()
 DESTINATION=
 STAGING=
@@ -36,14 +43,16 @@ usage() {
   cat <<'EOF'
 Usage:
   install-cascade-boot.sh [--plan]
-  install-cascade-boot.sh --approve-nbd-product-install <version>
+  install-cascade-boot.sh --approve-nbd-product-install <version> \
+    --lower-sink <safe-absolute-directory>
   install-cascade-boot.sh --approve-nbd-product-install <version> \\
     --approve-legacy-unit-replacement <sha256>
 
 The default is a read-only plan. Approval must name exactly the sealed release
-version in this bundle. This source-only slice installs its unit disabled: a
-separate scoped lifecycle approval is required before it can activate or
-deactivate a cascade.
+version in this bundle. An attended installation must bind one existing,
+canonical non-symlink lower sink. This source-only slice installs its unit
+disabled: a separate scoped lifecycle approval is required before it can
+activate or deactivate a cascade.
 EOF
 }
 
@@ -56,8 +65,226 @@ read_release_version() {
   RELEASE_VERSION=$version
 }
 
+release_config_value() {
+  local root=$1 key=$2
+  awk -F= -v key="$key" '$0 !~ /^[[:space:]]*#/ && $1 == key { print $2; exit }' \
+    "$root/scripts/safety/cascade.conf.example"
+}
+
+is_sha256() {
+  [[ $1 =~ ^[[:xdigit:]]{64}$ ]]
+}
+
+is_source_commit() {
+  [[ $1 =~ ^[[:xdigit:]]{40}$ ]]
+}
+
+verify_source_identity() {
+  local root=$1 commit branch tree_state
+  commit=$(tr -d '[:space:]' <"$root/SOURCE_COMMIT")
+  branch=$(tr -d '[:space:]' <"$root/SOURCE_BRANCH")
+  tree_state=$(tr -d '[:space:]' <"$root/SOURCE_TREE_STATE")
+  is_source_commit "$commit" || refuse RELEASE_SOURCE_IDENTITY_INVALID
+  [[ $branch =~ ^[A-Za-z0-9._/-]{1,200}$ && ( $tree_state == clean || $tree_state == dirty ) ]] \
+    || refuse RELEASE_SOURCE_IDENTITY_INVALID
+}
+
+verify_generic_bundle_config() {
+  local root=$1
+  [[ $(release_config_value "$root" NBD_LOWER_SINK) == '' ]] || refuse GENERIC_BUNDLE_LOWER_SINK_BOUND
+  [[ $(release_config_value "$root" NBD_LOWER_SINK_TYPE) == directory ]] || refuse GENERIC_BUNDLE_LOWER_SINK_INVALID
+  [[ $(release_config_value "$root" NBD_LOWER_SINK_IDENTITY_SHA256) == '' ]] || refuse GENERIC_BUNDLE_LOWER_SINK_BOUND
+  [[ $(release_config_value "$root" NBD_LOWER_SINK_FS_BLOCK_BYTES) == '' ]] || refuse GENERIC_BUNDLE_LOWER_SINK_BOUND
+  [[ $(release_config_value "$root" NBD_LOWER_SINK_BINDING) == unbound ]] || refuse GENERIC_BUNDLE_LOWER_SINK_INVALID
+}
+
+inspect_lower_sink() {
+  local sink=$1 canonical metadata fs_block identity df_records available
+  [[ $sink == /* && $sink =~ ^/[A-Za-z0-9._/-]{1,480}$ ]] || refuse LOWER_SINK_INVALID
+  [[ ! -L $sink && -d $sink ]] || refuse LOWER_SINK_INVALID
+  canonical=$(readlink -f -- "$sink" 2>/dev/null || true)
+  [[ $canonical == "$sink" && -d $canonical && ! -L $canonical ]] || refuse LOWER_SINK_INVALID
+  metadata=$(stat -c '%d:%i:%u:%g:%a:%F' -- "$canonical" 2>/dev/null || true)
+  [[ $metadata =~ ^[0-9]+:[0-9]+:[0-9]+:[0-9]+:[0-7]{3,4}:directory$ ]] || refuse LOWER_SINK_METADATA_INVALID
+  fs_block=$(stat -fc '%s' -- "$canonical" 2>/dev/null || true)
+  [[ $fs_block =~ ^[0-9]+$ && $fs_block -ge 512 && $fs_block -le 1048576 ]] || refuse LOWER_SINK_CAPACITY_METADATA_INVALID
+  set +e
+  df_records=$(df -Pk -- "$canonical" 2>/dev/null | awk 'NR > 1 && $4 ~ /^[0-9]+$/ && NF >= 6 { print $4 }')
+  local df_status=$?
+  set -e
+  (( df_status == 0 )) || refuse LOWER_SINK_CAPACITY_METADATA_INVALID
+  [[ $(printf '%s\n' "$df_records" | sed '/^$/d' | wc -l | tr -d '[:space:]') == 1 ]] || refuse LOWER_SINK_CAPACITY_METADATA_INVALID
+  available=${df_records//$'\n'/}
+  [[ $available =~ ^[0-9]+$ ]] || refuse LOWER_SINK_CAPACITY_METADATA_INVALID
+  identity=$(printf '%s\0%s\0%s' "$canonical" directory "$metadata" | sha256sum | awk '{print $1}')
+
+  BOUND_LOWER_SINK=$canonical
+  BOUND_LOWER_SINK_IDENTITY_SHA256=$identity
+  BOUND_LOWER_SINK_FS_BLOCK_BYTES=$fs_block
+  BOUND_LOWER_SINK_AVAILABLE_KIB=$available
+}
+
+bind_staged_lower_sink() {
+  local root=$1
+  [[ -n $BOUND_LOWER_SINK && $BOUND_LOWER_SINK_IDENTITY_SHA256 =~ ^[[:xdigit:]]{64}$ ]] \
+    || refuse LOWER_SINK_BINDING_MISSING
+  python3 - "$root/scripts/safety/cascade.conf.example" "$BOUND_LOWER_SINK" \
+    "$BOUND_LOWER_SINK_IDENTITY_SHA256" "$BOUND_LOWER_SINK_FS_BLOCK_BYTES" <<'PY'
+import os
+import sys
+
+path, sink, identity, fs_block = sys.argv[1:]
+values = {
+    "NBD_LOWER_SINK": sink,
+    "NBD_LOWER_SINK_TYPE": "directory",
+    "NBD_LOWER_SINK_IDENTITY_SHA256": identity,
+    "NBD_LOWER_SINK_FS_BLOCK_BYTES": fs_block,
+    "NBD_LOWER_SINK_BINDING": "bound",
+}
+seen = set()
+temporary = path + ".tmp"
+with open(path, encoding="utf-8") as source, open(temporary, "w", encoding="utf-8") as target:
+    for line in source:
+        key, sep, _ = line.partition("=")
+        if sep and key in values:
+            target.write(key + "=" + values[key] + "\n")
+            seen.add(key)
+        else:
+            target.write(line)
+if seen != set(values):
+    os.unlink(temporary)
+    raise SystemExit("lower sink configuration template is incomplete")
+os.replace(temporary, path)
+PY
+}
+
+record_installed_provenance() {
+  local root=$1
+  python3 - "$root/INSTALL_PROVENANCE.json" "$INPUT_BUNDLE_MANIFEST_SHA256" \
+    "$(tr -d '[:space:]' <"$root/SOURCE_COMMIT")" \
+    "$(tr -d '[:space:]' <"$root/SOURCE_BRANCH")" \
+    "$(tr -d '[:space:]' <"$root/SOURCE_TREE_STATE")" \
+    "$BOUND_LOWER_SINK" "$BOUND_LOWER_SINK_IDENTITY_SHA256" \
+    "$BOUND_LOWER_SINK_FS_BLOCK_BYTES" "$BOUND_LOWER_SINK_AVAILABLE_KIB" <<'PY'
+import json
+import os
+import sys
+
+out, input_digest, commit, branch, tree_state, sink, identity, fs_block, available = sys.argv[1:]
+record = {
+    "schema_version": "ramshared-installed-release-provenance/v1",
+    "input_bundle_manifest_sha256": input_digest,
+    "source_commit": commit,
+    "source_branch": branch,
+    "source_tree_state": tree_state,
+    "lower_sink": {
+        "canonical_path": sink,
+        "identity_sha256": identity,
+        "filesystem_block_bytes": int(fs_block),
+        "available_kib_at_bind": int(available),
+    },
+}
+temporary = out + ".tmp"
+with open(temporary, "w", encoding="utf-8") as target:
+    json.dump(record, target, sort_keys=True, separators=(",", ":"))
+    target.write("\n")
+os.replace(temporary, out)
+PY
+}
+
+regenerate_installed_manifest() {
+  local root=$1
+  (
+    cd "$root"
+    find . -type f ! -name SHA256SUMS ! -name INSTALLED_MANIFEST_SHA256 -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+  )
+  chmod 0644 "$root/SHA256SUMS"
+  INSTALLED_MANIFEST_SHA256=$(sha256sum -- "$root/SHA256SUMS" | awk '{print $1}')
+}
+
+record_installed_manifest_receipt() {
+  local root=$1
+  is_sha256 "$INSTALLED_MANIFEST_SHA256" || refuse INSTALLED_MANIFEST_DIGEST_INVALID
+  printf '%s\n' "$INSTALLED_MANIFEST_SHA256" >"$root/INSTALLED_MANIFEST_SHA256"
+  chmod 0644 "$root/INSTALLED_MANIFEST_SHA256"
+}
+
+verify_installed_provenance() {
+  local root=$1 values input_digest commit branch tree_state sink identity fs_block available
+  [[ -n ${INSTALL_MANIFEST_HASHES[INSTALL_PROVENANCE.json]+x} ]] || refuse INSTALL_PROVENANCE_UNMANIFESTED
+  [[ -n ${INSTALL_MANIFEST_HASHES[INPUT_BUNDLE_SHA256SUMS]+x} ]] || refuse INPUT_BUNDLE_MANIFEST_UNMANIFESTED
+  [[ -f $root/INSTALL_PROVENANCE.json && ! -L $root/INSTALL_PROVENANCE.json ]] || refuse INSTALL_PROVENANCE_MISSING
+  [[ -f $root/INPUT_BUNDLE_SHA256SUMS && ! -L $root/INPUT_BUNDLE_SHA256SUMS ]] || refuse INPUT_BUNDLE_MANIFEST_MISSING
+
+  values=$(python3 - "$root/INSTALL_PROVENANCE.json" <<'PY'
+import json
+import re
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as source:
+        record = json.load(source)
+    expected = {
+        "schema_version", "input_bundle_manifest_sha256", "source_commit",
+        "source_branch", "source_tree_state", "lower_sink",
+    }
+    if set(record) != expected or record["schema_version"] != "ramshared-installed-release-provenance/v1":
+        raise ValueError("schema")
+    lower = record["lower_sink"]
+    lower_expected = {
+        "canonical_path", "identity_sha256", "filesystem_block_bytes", "available_kib_at_bind",
+    }
+    if not isinstance(lower, dict) or set(lower) != lower_expected:
+        raise ValueError("lower_schema")
+    digest = record["input_bundle_manifest_sha256"]
+    commit = record["source_commit"]
+    branch = record["source_branch"]
+    tree_state = record["source_tree_state"]
+    sink = lower["canonical_path"]
+    identity = lower["identity_sha256"]
+    fs_block = lower["filesystem_block_bytes"]
+    available = lower["available_kib_at_bind"]
+    if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+        raise ValueError("input_digest")
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+        raise ValueError("source_commit")
+    if not isinstance(branch, str) or not re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", branch):
+        raise ValueError("source_branch")
+    if tree_state not in ("clean", "dirty"):
+        raise ValueError("source_tree_state")
+    if not isinstance(sink, str) or not re.fullmatch(r"/[A-Za-z0-9._/-]{1,480}", sink):
+        raise ValueError("sink")
+    if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", identity):
+        raise ValueError("identity")
+    if type(fs_block) is not int or fs_block < 512 or fs_block > 1048576:
+        raise ValueError("fs_block")
+    if type(available) is not int or available < 0:
+        raise ValueError("available")
+    print("\t".join((digest.lower(), commit.lower(), branch, tree_state, sink, identity.lower(), str(fs_block), str(available))))
+except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"invalid installed provenance: {exc}")
+PY
+  ) || refuse INSTALL_PROVENANCE_INVALID
+  IFS=$'\t' read -r input_digest commit branch tree_state sink identity fs_block available <<<"$values"
+  [[ -n $input_digest && -n $commit && -n $branch && -n $tree_state && -n $sink && -n $identity ]] \
+    || refuse INSTALL_PROVENANCE_INVALID
+  [[ $(sha256sum -- "$root/INPUT_BUNDLE_SHA256SUMS" | awk '{print $1}') == "$input_digest" ]] \
+    || refuse INPUT_BUNDLE_MANIFEST_DIGEST_MISMATCH
+  [[ $(tr -d '[:space:]' <"$root/SOURCE_COMMIT") == "$commit" \
+    && $(tr -d '[:space:]' <"$root/SOURCE_BRANCH") == "$branch" \
+    && $(tr -d '[:space:]' <"$root/SOURCE_TREE_STATE") == "$tree_state" ]] \
+    || refuse INSTALL_PROVENANCE_SOURCE_IDENTITY_MISMATCH
+  [[ $(release_config_value "$root" NBD_LOWER_SINK) == "$sink" \
+    && $(release_config_value "$root" NBD_LOWER_SINK_TYPE) == directory \
+    && $(release_config_value "$root" NBD_LOWER_SINK_IDENTITY_SHA256) == "$identity" \
+    && $(release_config_value "$root" NBD_LOWER_SINK_FS_BLOCK_BYTES) == "$fs_block" \
+    && $(release_config_value "$root" NBD_LOWER_SINK_BINDING) == bound ]] \
+    || refuse INSTALL_PROVENANCE_BINDING_MISMATCH
+}
+
 verify_release_tree() {
-  local root=$1 manifest line digest relative actual listed required
+  local root=$1 kind=${2:-generic} manifest line digest relative actual listed required receipt
   [[ -f $root/SHA256SUMS && ! -L $root/SHA256SUMS ]] || refuse RELEASE_MANIFEST_MISSING
   [[ -z $(find "$root" -type l -print -quit) ]] || refuse RELEASE_SYMLINK_FORBIDDEN
   [[ -z $(find "$root" \( -type p -o -type b -o -type c -o -type s \) -print -quit) ]] || refuse RELEASE_NON_REGULAR_OBJECT
@@ -78,21 +305,43 @@ verify_release_tree() {
   while IFS= read -r -d '' listed; do
     relative=${listed#"$root"/}
     [[ -n ${INSTALL_MANIFEST_HASHES[$relative]+x} ]] || refuse RELEASE_MANIFEST_INCOMPLETE
-  done < <(find "$root" -type f ! -name SHA256SUMS -print0)
+  done < <(find "$root" -type f ! -name SHA256SUMS ! -name INSTALLED_MANIFEST_SHA256 -print0)
   for required in \
     bin/ramshared \
     bin/ramsharedd \
     scripts/safety/install-cascade-boot.sh \
     scripts/safety/nbd-product-preflight.sh \
+    scripts/safety/nbd-benchmark-cell.sh \
+    scripts/safety/nbd-benchmark-cgroup-launch.sh \
+    scripts/safety/nbd-benchmark-lib.sh \
+    scripts/safety/cascade_pressure_integrity_worker.py \
     scripts/safety/cascade-up.sh \
     scripts/safety/cascade-down.sh \
     scripts/safety/wsl-relay-health.sh \
     scripts/safety/cascade.conf.example \
+    SOURCE_COMMIT \
+    SOURCE_BRANCH \
+    SOURCE_TREE_STATE \
     systemd/ramshared-cascade.service; do
     [[ -f $root/$required && ! -L $root/$required ]] || refuse RELEASE_LAYOUT_INVALID
   done
   [[ -x $root/bin/ramshared && -x $root/bin/ramsharedd ]] || refuse RELEASE_LAYOUT_INVALID
   (cd "$root" && sha256sum -c --status SHA256SUMS) || refuse RELEASE_MANIFEST_HASH_MISMATCH
+  verify_source_identity "$root"
+  if [[ $kind == generic ]]; then
+    verify_generic_bundle_config "$root"
+    [[ ! -e $root/INSTALL_PROVENANCE.json && ! -e $root/INSTALLED_MANIFEST_SHA256 ]] || refuse GENERIC_BUNDLE_DERIVATION_PRESENT
+  elif [[ $kind == installed ]]; then
+    [[ -f $root/INSTALL_PROVENANCE.json && ! -L $root/INSTALL_PROVENANCE.json ]] || refuse INSTALL_PROVENANCE_MISSING
+    [[ -f $root/INPUT_BUNDLE_SHA256SUMS && ! -L $root/INPUT_BUNDLE_SHA256SUMS ]] || refuse INPUT_BUNDLE_MANIFEST_MISSING
+    [[ -f $root/INSTALLED_MANIFEST_SHA256 && ! -L $root/INSTALLED_MANIFEST_SHA256 ]] || refuse INSTALLED_MANIFEST_RECEIPT_MISSING
+    receipt=$(tr -d '[:space:]' <"$root/INSTALLED_MANIFEST_SHA256")
+    [[ $receipt == "$(sha256sum -- "$root/SHA256SUMS" | awk '{print $1}')" ]] || refuse INSTALLED_MANIFEST_RECEIPT_MISMATCH
+    is_sha256 "$receipt" || refuse INSTALLED_MANIFEST_RECEIPT_MISMATCH
+    verify_installed_provenance "$root"
+  else
+    refuse RELEASE_KIND_INVALID
+  fi
 }
 
 require_sealed_node() {
@@ -344,6 +593,11 @@ while (($# > 0)); do
       APPROVED_VERSION=$2
       shift 2
       ;;
+    --lower-sink)
+      (($# >= 2)) || refuse LOWER_SINK_APPROVAL_REQUIRED
+      LOWER_SINK=$2
+      shift 2
+      ;;
     --approve-legacy-unit-replacement)
       (($# >= 2)) || refuse LEGACY_UNIT_APPROVAL_MISSING
       LEGACY_UNIT_APPROVED_HASH=$2
@@ -361,7 +615,7 @@ while (($# > 0)); do
 done
 
 read_release_version
-verify_release_tree "$SOURCE_RELEASE"
+verify_release_tree "$SOURCE_RELEASE" generic
 
 if [[ -z $APPROVED_VERSION ]]; then
   printf 'NBD_INSTALL_STATE=PLAN\n'
@@ -372,7 +626,9 @@ if [[ -z $APPROVED_VERSION ]]; then
 fi
 
 [[ $APPROVED_VERSION == "$RELEASE_VERSION" ]] || refuse APPROVAL_SCOPE_INVALID
+[[ -n $LOWER_SINK ]] || refuse LOWER_SINK_APPROVAL_REQUIRED
 [[ -z $LEGACY_UNIT_APPROVED_HASH || $LEGACY_UNIT_APPROVED_HASH =~ ^[[:xdigit:]]{64}$ ]] || refuse LEGACY_UNIT_APPROVAL_INVALID
+inspect_lower_sink "$LOWER_SINK"
 [[ $(id -u) -eq 0 ]] || refuse ROOT_REQUIRED
 command -v systemctl >/dev/null 2>&1 || refuse SYSTEMD_UNAVAILABLE
 check_unit_inert ramshared-cascade.service
@@ -397,6 +653,19 @@ install -d -m 0755 "$STAGING"
 # NBD_INSTALL_POST_WRITE_PHASE=staging-directory-created
 cp -a "$SOURCE_RELEASE/." "$STAGING/"
 # NBD_INSTALL_POST_WRITE_PHASE=release-copied
+INPUT_BUNDLE_MANIFEST_SHA256=$(sha256sum -- "$SOURCE_RELEASE/SHA256SUMS" | awk '{print $1}')
+is_sha256 "$INPUT_BUNDLE_MANIFEST_SHA256" || refuse INPUT_BUNDLE_MANIFEST_DIGEST_INVALID
+install -m 0644 "$SOURCE_RELEASE/SHA256SUMS" "$STAGING/INPUT_BUNDLE_SHA256SUMS"
+# NBD_INSTALL_POST_WRITE_PHASE=input-bundle-manifest-copied
+inspect_lower_sink "$LOWER_SINK"
+bind_staged_lower_sink "$STAGING"
+# NBD_INSTALL_POST_WRITE_PHASE=lower-sink-bound
+record_installed_provenance "$STAGING"
+# NBD_INSTALL_POST_WRITE_PHASE=installed-provenance-recorded
+regenerate_installed_manifest "$STAGING"
+# NBD_INSTALL_POST_WRITE_PHASE=installed-manifest-regenerated
+record_installed_manifest_receipt "$STAGING"
+# NBD_INSTALL_POST_WRITE_PHASE=installed-manifest-receipt-recorded
 chown -R root:root "$STAGING"
 # NBD_INSTALL_POST_WRITE_PHASE=staging-owner-normalized
 find "$STAGING" -type d -exec chmod 0555 {} +
@@ -405,7 +674,7 @@ find "$STAGING" -type f -perm /111 -exec chmod 0555 {} +
 # NBD_INSTALL_POST_WRITE_PHASE=staging-executables-sealed
 find "$STAGING" -type f ! -perm /111 -exec chmod 0444 {} +
 # NBD_INSTALL_POST_WRITE_PHASE=staging-files-sealed
-verify_release_tree "$STAGING"
+verify_release_tree "$STAGING" installed
 # NBD_INSTALL_POST_WRITE_PHASE=staging-manifest-verified
 verify_sealed_release_tree "$STAGING"
 # NBD_INSTALL_POST_WRITE_PHASE=staging-seal-verified
