@@ -4,19 +4,17 @@
 
 ## Status
 
-`partial` · local static/manufactured gates green · cover ✓ · E2E partial ·
-BINARY_MATCH partial. Attempt29 is the latest sealed live attempt, on source
-`a60c898ec6d938e6828d879d41a4b2ea0c7b6b21` and installed manifest
-`5804cf18956e9652dc8cc4eeac613e12376c2bd2a112846a9ddfa1eef2ccf240`.
-Its first P1 idle disk-only sample completed 3584 MiB HOLD and integrity with
-allocation-to-HOLD `114056 ms`; sample two reached only 2048 MiB before the
-120-second HOLD cap. The matrix stopped `RED/SAMPLE_TIMEOUT` before NBD or any
-bounded cell. Therefore CUDA did not run and low Task Manager VRAM was the
-expected idle state, not a CUDA failure. Terminal preflight was `PRODUCT_OFF`,
-the 36-entry inventory verified, and no public pair evidence was produced.
-The source-only successor changes only P1 to `240/120/1380 s`; P2/P4 remain
-unchanged. The current blocker is committing and resealing that correction,
-then completing the fresh matrix and final gates.
+`partial` · local static/manufactured gates green · cover ✓ · E2E complete ·
+BINARY_MATCH complete for this matrix. Attempt30 is the latest sealed live
+attempt, on source `a365bda0daf89a9707159b86efca8c1ba1ac760b` and installed
+manifest `a848034f99da1a5205d84a4b844ac071ed91303a190172b8f1208c0ca5d6bb3a`.
+All 12 P1/P2/P4 idle/bounded disk-only/NBD cells and all 36 samples passed.
+Every NBD cell retained `BINARY_MATCH=PASS`; each bounded pair held one CUDA
+context across disk then NBD and released it without force. All cells and the
+terminal preflight returned `PRODUCT_OFF`. Six public pair records validate as
+`BASELINE` candidates; they remain nonpromotable only because a prior canonical
+baseline is absent. The implementation remains `partial` until Gate B, hosted
+required checks, PR review, and merge complete.
 Attempt 16 identified a Q4 timeout-budget mismatch; later pre-22b attempts
 sealed and exercised the Q4 correction, Attempt 21 exposed the NBD recovery
 self-deadlock, and Attempt 22b stopped at Q2. Attempt 15
@@ -28,8 +26,9 @@ then emitted a false `comparison_zram_topology_mismatch` because it compared
 that observed usable size with nominal capacity `1048576 KiB`. DT-NBD-43 now
 accepts only the bounded observed interval and retains exact disk/NBD tuple
 equality; Attempt 19 sealed it and exercised the equality in all four complete
-P1/P2 pairs. The complete ordered 1/2/4 GiB Windows/WSL2 matrix therefore
-remains incomplete and this is not DONE.
+P1/P2 pairs. Attempt30 subsequently completed the ordered 1/2/4 GiB
+Windows/WSL2 matrix; the remaining work is repository/PR governance rather
+than live qualification.
 Fresh independent Gate A passed the prior frozen connection-preserving
 candidate, the DT-NBD-43 delta, and the frozen DT-NBD-44 seven-file candidate
 before a new sealed campaign. Attempt 17 then reproduced a false
@@ -59,9 +58,9 @@ pre-CUDA headroom (`5181 >= 5120`) and reached CUDA ready, then refused at
 `gpu_headroom_shortfall_after_cuda_ready` (`4594 < 4608`); the Q4 bounded NBD
 cell did not run. CUDA released without force. Terminal preflight remained
 `PRODUCT_OFF` with Relay clean. This is valid bounded refusal/partial evidence,
-not a complete matrix or promotion claim; a fresh approved campaign remains
-required for the missing Q4 bounded NBD cell, followed by root validation,
-Gate B, and hosted PR qualification.
+not a complete matrix or promotion claim; at that revision a fresh approved
+campaign remained required for the missing Q4 bounded NBD cell. Attempt30
+later supplied the complete matrix and root validation.
 
 Attempt 21 (2026-08-13, same sealed source and release manifest) admitted all
 six pairs and completed 11/12 cells with three-sample PASS results. Q4 bounded
@@ -345,7 +344,8 @@ termination action ran during the subsequent correction slice.
   the frozen seven-file candidate. No live pressure, CUDA, reboot, WSL
   shutdown, or terminate action ran during that correction cycle. Attempt 19
   later sealed the correction and exercised it through Q4 idle disk; the
-  complete same-run matrix remains incomplete and not DONE.
+  complete same-run matrix remained incomplete at that revision. Attempt30
+  later supplied it.
 - Attempt 17 (2026-08-12, unsealed local candidate): the Q4 timeout-budget
   correction exposed a second false RED in the Windows cell controller. The
   summary and controller held the same four strict fields, but PowerShell's
@@ -487,22 +487,48 @@ The TDD successor raises only P1 allocation-to-HOLD from 120 to 240 seconds,
 retains P1 finalization at 120 seconds, and derives P1 cell/CUDA bounds of
 `1380/2880 s`. P2 remains `240/240/1740/3600`; P4 remains
 `600/600/3900/7920`. Shell 48/48, the PowerShell static suite, and the Node
-public-evidence suite 22/22 pass locally. This successor is source-only and
-nonpromotable until committed, resealed, and exercised by a fresh complete
-matrix.
+public-evidence suite 22/22 passed locally. Attempt30 then committed, sealed,
+installed, and exercised this exact policy through the complete matrix below.
+
+## Attempt30 complete sealed matrix
+
+Attempt30 (2026-08-14, sealed source
+`a365bda0daf89a9707159b86efca8c1ba1ac760b`) completed the canonical Windows/
+WSL2 matrix without retries or manual runtime intervention. All 12 P1/P2/P4
+idle/bounded disk-only/NBD cells and all 36 samples passed integrity,
+occupancy, and cleanup. Every NBD cell retained `BINARY_MATCH=PASS`. Each
+bounded pair held one CUDA context across its disk-only and NBD cells and
+released it without force; the Q4 bounded NBD cell visibly used about
+`5.1/6.1 GiB` dedicated VRAM before release.
+
+The matrix summary SHA-256 is
+`42fa3e1a00dd7e7c16f0c92196f69622ac9212c9fb889e858f6e40769af292af`.
+The 551-entry inventory SHA-256 is
+`58a959fd82d29b6c503382a98d82a4bbf57bb90dc94ffaf2fdc2dfa6e985aece`;
+all listed byte counts and hashes verified. All six copied public pair records
+pass the repository validator and are published as `BASELINE` candidates with
+`promotable=false`, because no earlier canonical baseline exists. This is a
+baseline-availability limitation, not a live qualification failure.
+
+Every cell and the terminal pinned preflight returned `PRODUCT_OFF`. The
+terminal preflight artifact SHA-256 is
+`1c65c0ac0e645c8062ca99addd740dbd444ddb6ce28bbc14e8aa61ebe6b88e3c`.
+Both product services are inactive and disabled; no managed swap, daemon,
+worker, CUDA process, benchmark cgroup, or NBD attachment remains. The
+pre-existing `/dev/sdc` swap was not modified. Live qualification is complete;
+Gate B, hosted required checks, PR review, and merge remain open.
 
 ## Attempt25 source-only zombie liveness hardening
 
 The installed source revision `d4efe59` exposed and refused 171 unrelated
 pre-existing zombie processes as `PROC_EXE_UNREADABLE`; it did not implement
-the exact DT-NBD-47 zombie rule. The current uncommitted successor implements
-that rule: the same PID must report `Z` in `/proc/<pid>/status`, `Z` in
+the exact DT-NBD-47 zombie rule. The source-only successor at that revision
+implemented that rule: the same PID must report `Z` in `/proc/<pid>/status`, `Z` in
 `/proc/<pid>/stat`, then `Z` again in `status`, with matching `Pid`/`Tgid` and
 `Kthread: 0`. A live, malformed, unreadable, or race-to-live entry is refused
 fail-closed; a stale daemon PID still blocks `PRODUCT_OFF`. The manufactured
-preflight suite is 33/33. The successor is not installed or live-validated;
-resealing and a fresh pinned preflight are required before the WSL2 matrix
-resumes.
+preflight suite was 33/33. Later sealed releases integrated the rule, and
+Attempt30 passed the pinned preflight and complete matrix.
 
 ## Attempt24 source-only terminal-authority hardening
 
@@ -540,16 +566,12 @@ handled envelope publication failure or race removes only the inventory inode
 whose device/inode/size/hash was recorded by this transaction and preserves
 foreign artifacts before cleanup writes its diagnostic receipt.
 
-`env-bound (blocker)` — the async NBD recovery correction (`47889e0`) and
-non-destructive watchdog correction (`63bd3be`) are completed and audited.
-Attempt22b now leaves the Q2 timeout calibration correction awaiting fresh
-independent Sol Gate A, resealing, and a complete same-run Windows/WSL2
-execution for all P1/Q2/Q4 idle and bounded pairs. It recorded four P1 PASS
-cells and one Q2 `SAMPLE_TIMEOUT` with terminal `PRODUCT_OFF`; Q2 NBD and all
-Q4 cells remain unrun in that attempt.
-Complete-matrix median/p99/deviation and
-backend comparisons; final per-cell occupancy, cleanup, Relay, and
-BINARY_MATCH receipts; root `validation.md`; Gate B; PR checks and merge remain.
+`repository-governance (blocker)` — the async NBD recovery correction
+(`47889e0`), non-destructive watchdog correction (`63bd3be`), later timeout
+calibrations, and complete live matrix are implemented and evidenced.
+Attempt30 supplies complete-matrix median/p99/deviation and backend
+comparisons; final per-cell occupancy, cleanup, Relay, BINARY_MATCH receipts,
+and root `validation.md`. Gate B, hosted PR checks, review, and merge remain.
 No reboot or WSL shutdown is part of this record.
 
 ## Rollback trigger
@@ -565,4 +587,4 @@ seam/host action.
 
 | RF | ITEM | commit |
 | --- | --- | --- |
-| RF-NBD-1..20 | ITEM-1..8 | partial — Attempt22b used sealed source `63bd3be`, passed four P1 cells, then recorded Q2 disk `SAMPLE_TIMEOUT` with verified `PRODUCT_OFF`; async recovery `47889e0` and watchdog `63bd3be` are completed/audited, while Q2 calibration, resealing, a fresh complete matrix, and final gates remain |
+| RF-NBD-1..20 | ITEM-1..8 | partial — Attempt30 on sealed source `a365bda` completed 12/12 cells and 36/36 samples with exact BINARY_MATCH, custody, CUDA, and PRODUCT_OFF evidence; Gate B, hosted checks, PR review, and merge remain |

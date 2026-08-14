@@ -3779,3 +3779,45 @@ or mutation of `/dev/sdc` invalidates the campaign and blocks another run.
 source-only P1 policy successor (`240 s` HOLD, independent `120 s` integrity)
 must be committed, resealed, and exercised by a fresh complete matrix before
 qualification or PR promotion.
+
+## 2026-08-14 02:52 -03 — WSL2 NBD Attempt30 complete matrix
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0009`.
+**Owner role:** `wsl2-nbd-operator`.
+**Observed at:** `2026-08-14T01:17:39-03:00`.
+**Verified at:** `2026-08-14T02:52:22-03:00`.
+**Source revision:** `a365bda0daf89a9707159b86efca8c1ba1ac760b`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the host-private 551-entry campaign and the six copied
+repository pair-custody/comparison records; the compact public records remain
+in `docs/benchmarks/results.jsonl`.
+**Freshness:** Revalidate after any benchmark policy, worker-integrity, cgroup,
+controller, CUDA, NBD, evidence-custody, or cleanup change.
+**What:** Ran the approved canonical Windows/WSL2 matrix against the exact
+sealed release. All 12 P1/P2/P4 idle/bounded disk-only/NBD cells and all 36
+samples completed with integrity, occupancy, and cleanup.
+**Category:** `wsl2-nbd-live`.
+**How to measure:** Canonical PlanOnly followed by the approved live controller;
+per-cell `BINARY_MATCH`; pair-scoped CUDA custody; inventory byte/hash
+verification; repository public-evidence validation; terminal pinned preflight;
+and read-only process, cgroup, swap, NBD, service, and VRAM residue inspection.
+**Measured data:** Every NBD cell retained `BINARY_MATCH=PASS`; every bounded
+pair held one CUDA context across disk-only then NBD and released it without
+force. Matrix-summary SHA-256 is
+`42fa3e1a00dd7e7c16f0c92196f69622ac9212c9fb889e858f6e40769af292af`.
+The 551-entry inventory SHA-256 is
+`58a959fd82d29b6c503382a98d82a4bbf57bb90dc94ffaf2fdc2dfa6e985aece`,
+and every listed byte count and hash verified. All six public pair records pass
+the repository validator as `BASELINE`/nonpromotable because no prior canonical
+baseline exists.
+**Refusals:** No timeout, integrity, identity, cleanup, or evidence refusal
+occurred. The absence of a prior canonical baseline prevents promotion of the
+six baseline records but does not invalidate the completed live matrix.
+**Rollback trigger:** Any matrix/inventory hash mismatch, NBD identity drift,
+failed public custody record, cell or terminal state other than exact
+`PRODUCT_OFF`, residual managed resource, forced CUDA release, or mutation of
+the pre-existing `/dev/sdc` invalidates this evidence.
+**Verdict:** 🟢 The complete sealed 1/2/4 GiB idle/bounded disk-only/NBD
+matrix passed with n=3 per cell. Live qualification is complete; Gate B,
+hosted required checks, PR review, and merge remain open.
