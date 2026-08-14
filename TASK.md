@@ -281,9 +281,9 @@ not invalidate the completed environment-boundary correction.
 **Owner role:** `ci-governance`.
 **Date:** `2026-08-14`.
 **Registered time:** `09:18:00`.
-**Updated time:** `09:57:00`.
+**Updated time:** `10:12:00`.
 **Source revision:** `361427a63cbeb2a8b0ecafb224adeecb0539af9b`.
-**Destinations:** issues `#215`, `#217`, and `#219`,
+**Destinations:** issues `#215`, `#217`, `#219`, and `#221`,
 `.github/workflows/release-integrity.yml`,
 `.github/workflows/release-publication.yml`, `docs/governance/ci-contract.json`,
 `docs/specs/no-milestone/{ci-trust-and-release-integrity,release-promotion-publication}/`,
@@ -305,9 +305,14 @@ manifest validation of both roots plus tag/SHA properties. PR `#218` merged
 the correction as `a1ca095`, and recovery run `31789473586` emitted the exact
 four-file artifact; independent download revalidation passed the archive
 checksum, manifest, source binding, and deterministic two-root SBOM contract.
-The protected environment correctly prevents self-review. Issue `#219` now
-tracks an exact two-stage publication request: the maintainer request validates
-tag/SHA/run before a GitHub App dispatch, and only the exact App actor can
-enter the unchanged `protected-release` approval boundary. Local Green, hosted
-checks, merge, protected publication, and removal of the temporary Release
-Please recovery key remain pending.
+The protected environment correctly prevents self-review. PR `#220` merged the
+two-stage App admission as `614ca72`. Exact request run `31790968940` passed
+admission, tag/SHA/run validation, and secret presence, then failed before
+delegation because the installation does not grant `Actions: write`; no asset
+or release mutation occurred. Issue `#221` replaces that excessive permission
+with an exact App-authored `repository_dispatch` using the already proven
+`Contents: write` permission. Only the App actor can enter the unchanged
+`protected-release` approval boundary; the protected job uses its read-only
+`GITHUB_TOKEN` for integrity-run/artifact reads and the App token for release
+mutation. Local Green is complete. Hosted checks, merge, protected publication,
+and removal of the temporary Release Please recovery key remain pending.
