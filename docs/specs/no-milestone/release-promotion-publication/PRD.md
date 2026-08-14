@@ -141,10 +141,13 @@ The exact lifecycle is:
    calling Release Please, so this fixed configuration cannot produce a later
    target accidentally.
 
-The local source test parses every listed configuration value, preserves
-`.release-please-manifest.json` at historical `0.8.0`, and rejects fallback
-credentials. A live release PR/tag remains external, environment-bound
-evidence and is not created by this work.
+The local source test parses every listed configuration value and admits only
+the exact manifest transition from historical `0.8.0` to target
+`0.9.0-beta.1`. The baseline checkout and the generated release PR are both
+valid states; every intermediate, later, malformed, or multi-package manifest
+is refused. The same gate rejects fallback credentials. A live release PR/tag
+remains external, environment-bound evidence and is not created by source
+validation.
 
 GitHub's [release response example](https://docs.github.com/en/enterprise-cloud%40latest/rest/releases/releases)
 shows `target_commitish` may be a branch name. Publication therefore does not
