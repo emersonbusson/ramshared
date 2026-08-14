@@ -281,9 +281,9 @@ not invalidate the completed environment-boundary correction.
 **Owner role:** `ci-governance`.
 **Date:** `2026-08-14`.
 **Registered time:** `09:18:00`.
-**Updated time:** `10:12:00`.
+**Updated time:** `10:23:16`.
 **Source revision:** `361427a63cbeb2a8b0ecafb224adeecb0539af9b`.
-**Destinations:** issues `#215`, `#217`, `#219`, and `#221`,
+**Destinations:** issues `#215`, `#217`, `#219`, `#221`, and `#223`,
 `.github/workflows/release-integrity.yml`,
 `.github/workflows/release-publication.yml`, `docs/governance/ci-contract.json`,
 `docs/specs/no-milestone/{ci-trust-and-release-integrity,release-promotion-publication}/`,
@@ -314,5 +314,13 @@ with an exact App-authored `repository_dispatch` using the already proven
 `Contents: write` permission. Only the App actor can enter the unchanged
 `protected-release` approval boundary; the protected job uses its read-only
 `GITHUB_TOKEN` for integrity-run/artifact reads and the App token for release
-mutation. Local Green is complete. Hosted checks, merge, protected publication,
-and removal of the temporary Release Please recovery key remain pending.
+mutation. PR `#222` merged that correction as `3e0778d` after hosted CI run
+`31791416515` passed. Request run `31791832156` then delegated successfully;
+App-authored run `31791853476` passed admission and human environment approval,
+but refused before artifact download because the Actions API reports the
+parameterized recovery `run-name` in both `name` and `display_title`, while the
+publication predicate still required static `name=Release Integrity`. No asset
+or release mutation occurred. Issue `#223` binds both recovery fields exactly
+while preserving the static name plus exact `head_sha` rule for normal tag
+runs. Hosted checks, merge, protected publication, and removal of the temporary
+Release Please recovery key remain pending.

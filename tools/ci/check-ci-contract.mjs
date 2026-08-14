@@ -1123,6 +1123,7 @@ function releasePublicationWorkflowFindings(gate, text, block) {
     'run-id: ${{ env.INTEGRITY_RUN_ID }}',
     '.path == ".github/workflows/release-integrity.yml"',
     '.event == "workflow_dispatch"',
+    '.name == $recovery_title',
     '.display_title == $recovery_title',
     '.head_branch == "main"',
     'gh release upload "$RELEASE_TAG" "artifacts/release/$asset"',
