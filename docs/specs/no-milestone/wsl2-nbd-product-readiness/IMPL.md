@@ -129,7 +129,7 @@ termination action ran during the subsequent correction slice.
   `failed_swapoff_keeps_daemon_and_device_alive`, and
   `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` are
   present and pass in the CLI suite.
-- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → expected 47/47
+- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → expected 48/48
   on the current Attempt26 candidate; `bash scripts/safety/Test-CascadePressureIntegrityWorker.sh`
   → 3 named integrity checks; `bash scripts/safety/test-nbd-product-preflight.sh`
   → currently verified
@@ -440,11 +440,33 @@ tuple. A finalization timeout is RED, nonpromotable, stop-first, and can
 record `PRODUCT_OFF` only after exact cleanup custody. A genuinely stuck worker
 still takes the bounded TERM/KILL abnormal path and remains non-promotable. The
 worker suite has three named checks; the integrated cell suite is expected to
-be 47 checks, and the secondary TERM/INT fixture exercises
+be 48 checks, and the secondary TERM/INT fixture exercises
 16 combinations per suite run. The 48-combination figure is historical total
 coverage from three prior suite runs, not the canonical per-run metric. This
 is source-only: there has been no live revalidation or new sealed release.
 Gate A, resealing, and the complete live matrix remain open.
+
+## Attempt28 finalization-only cgroup-high correction
+
+Attempt28 (2026-08-13, sealed source `3794a30`) is the first P1 idle
+disk-only RED after the finalization deadline policy. Its sole run allocated
+and held `3584 MiB`, then ended `SAMPLE_INTEGRITY_DEADLINE_EXCEEDED` after the
+120-second finalization cap. The sealed process receipt records cgroup
+`oom_kill` `0→0`; no cgroup `oom_kill` increment was observed in that run. No NBD cell ran, so
+the attempt makes no NBD claim. Because the worker log ends at HOLD with no
+final scan progress, a slow final SHA-256 scan while `memory.high=1200 MiB` is
+a strong inference, not a calibrated duration or a proven sole cause.
+
+The source-only correction validates regular, non-symlink numeric cgroup limit
+files after occupancy and before TERM; it requires the exact 1200 MiB high and
+tier hard maximum, raises only high to that existing maximum, re-reads high
+and max, and records the sanitized per-run high/max, relaxation PASS, and
+monotonic OOM context. It does not change timeouts or `memory.max`. Each next run explicitly
+restores and re-reads high before allocation. The worker logs bounded 512 MiB
+verification progress without publishing a result early. The 48-check local
+cell suite covers valid transition, refusal, drift, reset, ordering, timeout
+nonpromotion, and cleanup preservation; live revalidation, resealing, and the
+complete matrix remain pending.
 
 ## Attempt25 source-only zombie liveness hardening
 

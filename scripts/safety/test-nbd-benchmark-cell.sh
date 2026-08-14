@@ -1935,6 +1935,176 @@ test_integrity_finalization_clock_starts_after_term_issuance() {
   pass integrity_finalization_clock_starts_after_term_issuance
 }
 
+test_cgroup_finalization_relaxation_is_exact_ordered_and_nonpromotable() {
+  local root library fixture_dir rc
+  root="$TMP/cgroup-finalization-relaxation"
+  mkdir -p "$root/cgroup" "$root/artifacts"
+  fixture_dir="$root/nul-fixtures"
+  python3 - "$fixture_dir" <<'PY'
+import os
+import sys
+
+root = sys.argv[1]
+os.mkdir(root)
+for name, value in (("high", b"1258291200"), ("max", b"4294967296")):
+    for kind, suffix in (("embedded", b"\0\n"), ("trailing", b"\n\0")):
+        with open(os.path.join(root, f"{name}-{kind}"), "wb") as target:
+            target.write(value + suffix)
+    with open(os.path.join(root, f"{name}-nul-only"), "wb") as target:
+        target.write(b"\0")
+PY
+  library="$root/functions.sh"
+  : >"$library"
+  for name in read_cgroup_limit_bytes write_cgroup_limit_bytes \
+    reset_cgroup_memory_high_for_run relax_cgroup_memory_high_for_finalization \
+    read_cgroup_oom_kill_count cgroup_oom_kill_counts_monotonic append_integrity_process_receipt \
+    finalize_integrity_worker_after_hold; do
+    extract_cell_function "$library" "$name"
+  done
+  set +e
+  timeout --foreground --kill-after=2s 12s bash -c '
+    set -euo pipefail
+    source "$1"
+    root=$2
+    fixtures=$3
+    CG="$root/cgroup"
+    high=1258291200
+    maximum=4294967296
+    MEMORY_HIGH_MIB=1200
+    MEMORY_MAX_MIB=4096
+    printf "%s\\n" "$high" >"$CG/memory.high"
+    printf "%s\\n" "$maximum" >"$CG/memory.max"
+    printf "oom_kill 0\\n" >"$CG/memory.events"
+    cgroup_oom_kill_counts_monotonic 0 0
+    cgroup_oom_kill_counts_monotonic 9 10
+    if cgroup_oom_kill_counts_monotonic 10 9; then exit 20; fi
+    printf "%s\\ntrailing-malformed" "$high" >"$CG/memory.high"
+    if read_cgroup_limit_bytes "$CG/memory.high" >/dev/null; then exit 201; fi
+    printf "%s\\n" "$high" >"$CG/memory.high"
+    printf "%s\\ntrailing-malformed" "$maximum" >"$CG/memory.max"
+    if read_cgroup_limit_bytes "$CG/memory.max" >/dev/null; then exit 202; fi
+    printf "%s\\n" "$maximum" >"$CG/memory.max"
+    : >"$CG/memory.high"
+    if read_cgroup_limit_bytes "$CG/memory.high" >/dev/null; then exit 203; fi
+    printf "%s\\n" "$high" >"$CG/memory.high"
+    : >"$CG/memory.max"
+    if read_cgroup_limit_bytes "$CG/memory.max" >/dev/null; then exit 204; fi
+    printf "%s\\n" "$maximum" >"$CG/memory.max"
+    printf "9223372036854775808\\n" >"$CG/memory.high"
+    if read_cgroup_limit_bytes "$CG/memory.high" >/dev/null; then exit 205; fi
+    printf "%s\\n" "$high" >"$CG/memory.high"
+    assert_nul_fixture_refuses_without_mutation() {
+      local fixture=$1 destination=$2 expected=$3 before after
+      python3 - "$fixture" "$expected" <<"PY" || return 1
+import sys
+
+path, expected = sys.argv[1:]
+with open(path, "rb") as source:
+    value = source.read()
+digits = b"1258291200" if expected == "high" else b"4294967296"
+if path.endswith("-embedded"):
+    assert value == digits + b"\0\n", value
+    assert value.index(b"\0") == len(digits), value
+elif path.endswith("-trailing"):
+    assert value == digits + b"\n\0", value
+    assert value.index(b"\0") == len(digits) + 1, value
+else:
+    assert path.endswith("-nul-only") and value == b"\0", value
+PY
+      cp -- "$fixture" "$destination" || return 1
+      before=$(sha256sum -- "$destination" | awk "{print \$1}") || return 1
+      if read_cgroup_limit_bytes "$destination" >/dev/null; then return 1; fi
+      after=$(sha256sum -- "$destination" | awk "{print \$1}") || return 1
+      [[ $before == "$after" ]] || return 1
+    }
+    printf "%s\\n" "$high" >"$CG/memory.high"
+    before_mismatch=$(sha256sum -- "$CG/memory.high" | awk "{print \$1}") || exit 211
+    if assert_nul_fixture_refuses_without_mutation "$fixtures/high-embedded" "$CG/memory.high" max; then exit 212; fi
+    after_mismatch=$(sha256sum -- "$CG/memory.high" | awk "{print \$1}") || exit 213
+    [[ $before_mismatch == "$after_mismatch" ]] || exit 214
+    for kind in embedded trailing nul-only; do
+      assert_nul_fixture_refuses_without_mutation "$fixtures/high-$kind" "$CG/memory.high" high || exit 206
+      assert_nul_fixture_refuses_without_mutation "$fixtures/max-$kind" "$CG/memory.max" max || exit 207
+    done
+    printf "%s\\n" "$high" >"$CG/memory.high"
+    printf "%s\\n" "$maximum" >"$CG/memory.max"
+    reset_cgroup_memory_high_for_run "$high" "$maximum"
+    relax_cgroup_memory_high_for_finalization "$high" "$maximum"
+    [[ $(<"$CG/memory.high") == "$maximum" && $(<"$CG/memory.max") == "$maximum" ]]
+    [[ ${CGROUP_MEMORY_HIGH_INITIAL_BYTES:-} == "$high" &&
+      ${CGROUP_MEMORY_HIGH_FINALIZATION_BYTES:-} == "$maximum" &&
+      ${CGROUP_MEMORY_MAX_BYTES:-} == "$maximum" &&
+      ${CGROUP_MEMORY_HIGH_RELAXATION:-} == PASS ]]
+    reset_cgroup_memory_high_for_run "$high" "$maximum"
+    [[ $(<"$CG/memory.high") == "$high" ]] || exit 21
+
+    printf "wrong\\n" >"$CG/memory.high"
+    if relax_cgroup_memory_high_for_finalization "$high" "$maximum"; then exit 22; fi
+    printf "%s\\n" "$high" >"$CG/memory.high"
+    printf "malformed\\n" >"$CG/memory.max"
+    if relax_cgroup_memory_high_for_finalization "$high" "$maximum"; then exit 23; fi
+    printf "%s\\n" "$maximum" >"$CG/memory.max"
+    mv "$CG/memory.high" "$CG/real-high"
+    ln -s "$CG/real-high" "$CG/memory.high"
+    if reset_cgroup_memory_high_for_run "$high" "$maximum"; then exit 24; fi
+    rm "$CG/memory.high"
+    mv "$CG/real-high" "$CG/memory.high"
+    mv "$CG/memory.max" "$CG/real-max"
+    ln -s "$CG/real-max" "$CG/memory.max"
+    if relax_cgroup_memory_high_for_finalization "$high" "$maximum"; then exit 25; fi
+    rm "$CG/memory.max"
+    mv "$CG/real-max" "$CG/memory.max"
+
+    write_cgroup_limit_bytes() { printf "%s\\n" 7 >"$1"; }
+    if relax_cgroup_memory_high_for_finalization "$high" "$maximum"; then exit 26; fi
+    unset -f write_cgroup_limit_bytes
+    source "$1"
+    printf "%s\\n" "$high" >"$CG/memory.high"
+    printf "%s\\n" "$maximum" >"$CG/memory.max"
+    printf "OCCUPANCY\\n" >"$root/order"
+    WORKER_PID=123
+    INTEGRITY_FINALIZATION_TIMEOUT_SEC=1
+    stop_worker_for_integrity_deadline() {
+      [[ $(<"$CG/memory.high") == "$maximum" ]] || return 1
+      printf "TERM\\n" >>"$root/order"
+      INTEGRITY_WORKER_REAPED=1
+      INTEGRITY_WORKER_EXIT_CODE=0
+      INTEGRITY_STOP_REASON=GRACEFUL_EXIT
+      INTEGRITY_FINALIZATION_DEADLINE_SEC=$SECONDS
+    }
+    : >"$root/artifacts/process.txt"
+    finalize_integrity_worker_after_hold "$root/artifacts/process.txt" 0
+    [[ $(<"$root/order") == $'"'"'OCCUPANCY\nTERM'"'"' ]]
+    grep -qx "CGROUP_MEMORY_HIGH_INITIAL_BYTES=$high" "$root/artifacts/process.txt"
+    grep -qx "CGROUP_MEMORY_HIGH_FINALIZATION_BYTES=$maximum" "$root/artifacts/process.txt"
+    grep -qx "CGROUP_MEMORY_MAX_BYTES=$maximum" "$root/artifacts/process.txt"
+    grep -qx "CGROUP_MEMORY_HIGH_RELAXATION=PASS" "$root/artifacts/process.txt"
+
+    printf "%s\\n" "$high" >"$CG/memory.high"
+    printf "%s\\n" "$maximum" >"$CG/memory.max"
+    : >"$root/no-promotion"
+    WORKER_PID=124
+    stop_worker_for_integrity_deadline() {
+      INTEGRITY_WORKER_REAPED=1
+      INTEGRITY_WORKER_EXIT_CODE=137
+      INTEGRITY_STOP_REASON=SAMPLE_INTEGRITY_DEADLINE_EXCEEDED
+      return 1
+    }
+    refuse() { printf "RED:%s\\n" "$1" >>"$root/no-promotion"; return 1; }
+    if finalize_integrity_worker_after_hold "$root/artifacts/timeout-process.txt" 0; then exit 27; fi
+    grep -qx "RED:SAMPLE_INTEGRITY_DEADLINE_EXCEEDED" "$root/no-promotion"
+    ! grep -q "PASS" "$root/no-promotion"
+  ' _ "$library" "$root" "$fixture_dir" >"$root/stdout" 2>"$root/stderr"
+  rc=$?
+  set -e
+  [[ $rc == 0 ]] || {
+    printf 'FAIL cgroup finalization transition/order/nonpromotion contract: rc=%s stderr=%s\n' \
+      "$rc" "$(<"$root/stderr")" >&2
+    exit 1
+  }
+  pass cgroup_finalization_relaxation_is_exact_ordered_and_nonpromotable
+}
+
 test_integrity_deadline_reaped_worker_does_not_repeat_cleanup_and_can_seal_receipt() {
   local root library rc
   root="$TMP/integrity-reaped-cleanup"
@@ -2011,9 +2181,11 @@ test_integrity_finalization_caller_preserves_already_exited_worker_status() {
   root="$TMP/integrity-already-exited"
   mkdir -p "$root/artifacts" "$root/cgroup"
   printf 'oom_kill 0\n' >"$root/cgroup/memory.events"
+  printf '1258291200\n' >"$root/cgroup/memory.high"
+  printf '4294967296\n' >"$root/cgroup/memory.max"
   library="$root/functions.sh"
   : >"$library"
-  for name in worker_is_live capture_integrity_finalization_deadline stop_worker_for_integrity_deadline read_cgroup_oom_kill_count append_integrity_process_receipt finalize_integrity_worker_after_hold cleanup; do
+  for name in worker_is_live capture_integrity_finalization_deadline stop_worker_for_integrity_deadline read_cgroup_oom_kill_count cgroup_oom_kill_counts_monotonic read_cgroup_limit_bytes write_cgroup_limit_bytes relax_cgroup_memory_high_for_finalization append_integrity_process_receipt finalize_integrity_worker_after_hold cleanup; do
     extract_cell_function "$library" "$name"
   done
   set +e
@@ -2028,6 +2200,8 @@ test_integrity_finalization_caller_preserves_already_exited_worker_status() {
     MODE=disk-only
     CONDITION=idle
     TIER_MIB=1024
+    MEMORY_HIGH_MIB=1200
+    MEMORY_MAX_MIB=4096
     CUSTODY_FRONTIER=0
     CLEANUP_OK=1
     FAILURE_REASON=""
@@ -2260,6 +2434,7 @@ test_success_finalization_removes_cgroup_and_faults_keep_cleanup_armed
 test_normal_stubborn_worker_is_bounded_and_non_promotable
 test_integrity_finalization_uses_tier_policy_after_hold_and_reaps_before_refusal
 test_integrity_finalization_clock_starts_after_term_issuance
+test_cgroup_finalization_relaxation_is_exact_ordered_and_nonpromotable
 test_integrity_deadline_reaped_worker_does_not_repeat_cleanup_and_can_seal_receipt
 test_worker_grace_values_are_strictly_bounded
 test_live_refuses_worker_grace_and_failure_receipt_seams

@@ -152,9 +152,25 @@ bounded P1/P2/P4 pair passes and seals its own exact CUDA hold
 summary, internal envelope, public custody, and checker synchronize the exact
 fields. A timeout is `RED`, nonpromotable, stop-first, and can claim
 `PRODUCT_OFF` only after exact cleanup custody. The manufactured worker suite
-is 3 checks; the cell suite is expected to be 47 checks, and the secondary
+is 3 checks; the cell suite is expected to be 48 checks, and the secondary
 signal fixture covers 16 TERM/INT combinations per suite run. The
 48-combination figure is historical total coverage from three prior suite
 runs, not the canonical per-run metric. No live revalidation or sealed release
 exists for this candidate. Fresh independent Gate A, resealing, and the
 complete live matrix remain required.
+
+Attempt28 (2026-08-13, sealed source `3794a30`) is the first P1 idle
+disk-only RED after that policy. Its only run reached the required `3584 MiB`
+`HOLD`, then the 120-second finalization deadline expired with exit `137`.
+The sealed receipt records `CGROUP_OOM_KILL_BEFORE=0` and
+`CGROUP_OOM_KILL_AFTER=0`, so no cgroup `oom_kill` increment was observed for
+that run. It contains no NBD cell or NBD result. The worker log ends at `HOLD`, so
+a slow final checksum scan while `memory.high=1200 MiB` is a strong inference,
+not a calibrated duration or a proven sole cause. The source-only correction
+keeps the hard `memory.max` unchanged, resets `memory.high` to 1200 MiB before
+every allocation, and only after occupancy sampling validates exact non-symlink
+cgroup values, temporarily sets `memory.high` to that existing hard cap,
+re-reads it, then issues TERM. It records sanitized limits and monotonic OOM
+receipts plus
+bounded 512 MiB verification progress. Timeout remains RED and nonpromotable;
+no live rerun, reseal, NBD claim, or promotion is made.

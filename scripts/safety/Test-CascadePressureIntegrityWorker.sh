@@ -115,6 +115,10 @@ kill -0 "$PID" 2>/dev/null || {
 	echo "FAIL manufactured integrity finalization did not outlive one-second cleanup grace" >&2
 	exit 1
 }
+[[ ! -e $RESULT ]] || {
+	echo "FAIL manufactured integrity finalization wrote a result before verification completed" >&2
+	exit 1
+}
 wait "$PID"
 PID=""
 python3 - "$RESULT" <<'PY'
@@ -127,6 +131,7 @@ assert result["status"] == "PASS", result
 assert result["pattern"] == "shake256-v1", result
 assert result["checksum_before"] == result["checksum_after"], result
 PY
+grep -qx 'VERIFY 16 MiB' "$LOG"
 echo "PASS manufactured_integrity_finalization_delay_is_gated_and_preserves_checksum"
 
 rm -f -- "$RESULT" "$LOG"
