@@ -10,7 +10,7 @@ import {
   classifyRetry,
   main,
   readRemoteControlObservation,
-  releaseProducerManifestMatchesTransition,
+  releaseProducerManifestMatchesPublishedTarget,
   run,
   selectWholePullRequestGates,
   validateAggregate,
@@ -879,47 +879,55 @@ test('release_producer_requires_github_app_token_without_fallback', () => {
   assert.equal(config.draft, true)
   assert.equal(config['force-tag-creation'], true)
   assert.equal(config['skip-github-release'], false)
-  assert.equal(config['release-as'], '0.9.0-beta.1')
-  assert.equal(releaseProducerManifestMatchesTransition(manifest, {
-    baseline_version: '0.8.0',
-    release_as: '0.9.0-beta.1',
+  assert.equal(Object.hasOwn(config, 'release-as'), false)
+  assert.equal(Object.hasOwn(config, 'last-release-sha'), false)
+  assert.equal(releaseProducerManifestMatchesPublishedTarget(manifest, {
+    target_tag: 'v0.9.0-beta.1',
   }), true)
   assert.match(config['pull-request-header'], /draft prerelease/i)
 })
 
-test('release_producer_accepts_only_exact_manifest_transition', () => {
+test('release_producer_accepts_only_exact_released_manifest', () => {
   const policy = {
-    baseline_version: '0.8.0',
-    release_as: '0.9.0-beta.1',
+    target_tag: 'v0.9.0-beta.1',
   }
 
-  assert.equal(releaseProducerManifestMatchesTransition({ '.': '0.8.0' }, policy), true)
-  assert.equal(releaseProducerManifestMatchesTransition({ '.': '0.9.0-beta.1' }, policy), true)
+  assert.equal(releaseProducerManifestMatchesPublishedTarget({ '.': '0.9.0-beta.1' }, policy), true)
 
-  for (const version of ['0.8.1', '0.9.0', '0.9.0-beta.2', '', null]) {
-    assert.equal(releaseProducerManifestMatchesTransition({ '.': version }, policy), false)
+  for (const version of ['0.8.0', '0.8.1', '0.9.0', '0.9.0-beta.2', '', null]) {
+    assert.equal(releaseProducerManifestMatchesPublishedTarget({ '.': version }, policy), false)
   }
-  assert.equal(releaseProducerManifestMatchesTransition({ '.': '0.8.0', other: '0.8.0' }, policy), false)
-  assert.equal(releaseProducerManifestMatchesTransition({}, policy), false)
-  assert.equal(releaseProducerManifestMatchesTransition(null, policy), false)
+  assert.equal(releaseProducerManifestMatchesPublishedTarget({ '.': '0.8.0', other: '0.8.0' }, policy), false)
+  assert.equal(releaseProducerManifestMatchesPublishedTarget({}, policy), false)
+  assert.equal(releaseProducerManifestMatchesPublishedTarget(null, policy), false)
 
   const contract = JSON.parse(readFileSync(path.join(ROOT, 'docs', 'governance', 'ci-contract.json'), 'utf8'))
   const producer = contract.gates.find((gate) => gate.id === 'release-automation').policy.release_producer
-  assert.equal(producer.baseline_version, '0.8.0')
-  delete producer.baseline_version
-  const result = validateContract(contract)
-  assert.equal(result.ok, false)
-  assert.equal(result.errors.some((item) => item.rule === 'release-producer-policy-invalid'), true)
+  assert.equal(Object.hasOwn(producer, 'release_as'), false)
+  assert.equal(Object.hasOwn(producer, 'baseline_version'), false)
+  assert.equal(Object.hasOwn(producer, 'last_release_sha'), false)
+  for (const [key, value] of [
+    ['release_as', '0.9.0-beta.1'],
+    ['baseline_version', '0.8.0'],
+    ['last_release_sha', '568e7b42b78b3c9edb8ea390cb4297142a37e412'],
+  ]) {
+    const mutated = structuredClone(contract)
+    mutated.gates.find((gate) => gate.id === 'release-automation').policy.release_producer[key] = value
+    const result = validateContract(mutated)
+    assert.equal(result.ok, false)
+    assert.equal(result.errors.some((item) => item.rule === 'release-producer-policy-invalid'), true)
+  }
 })
 
-test('release_producer_preserves_machine_body_and_bounds_recovery', () => {
+test('release_producer_removes_one_shot_recovery_after_publication', () => {
   const config = JSON.parse(readFileSync(path.join(ROOT, 'release-please-config.json'), 'utf8'))
   const contract = JSON.parse(readFileSync(path.join(ROOT, 'docs', 'governance', 'ci-contract.json'), 'utf8'))
   const producer = contract.gates.find((gate) => gate.id === 'release-automation').policy.release_producer
-  const releaseV080Merge = '568e7b42b78b3c9edb8ea390cb4297142a37e412'
-
-  assert.equal(config['last-release-sha'], releaseV080Merge)
-  assert.equal(producer.last_release_sha, releaseV080Merge)
+  assert.equal(Object.hasOwn(config, 'release-as'), false)
+  assert.equal(Object.hasOwn(config, 'last-release-sha'), false)
+  assert.equal(Object.hasOwn(producer, 'release_as'), false)
+  assert.equal(Object.hasOwn(producer, 'baseline_version'), false)
+  assert.equal(Object.hasOwn(producer, 'last_release_sha'), false)
   for (const heading of ['Resumo', 'Commits', 'Issue', 'Responsavel', 'Labels', 'Validacao', 'Rollback trigger']) {
     assert.match(config['pull-request-header'], new RegExp(`^## ${heading}$`, 'm'))
   }

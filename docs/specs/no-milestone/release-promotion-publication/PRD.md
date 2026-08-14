@@ -9,6 +9,7 @@ issues:
   - 223
   - 225
   - 227
+  - 229
 ---
 
 # PRD — Protected beta release promotion and publication
@@ -132,25 +133,22 @@ trigger, or independently scheduled run polling.
 
 `release-please-config.json` uses the upstream
 [manifest configuration schema](https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json).
-Its supported `release-as` configuration field is marked deprecated upstream,
-but remains a typed string field; this one-shot use is therefore explicit and
-source-tested rather than an assumed action input. The value is the semantic
-version `0.9.0-beta.1`, while `include-v-in-tag: true` yields the repository
-tag `v0.9.0-beta.1`.
+The one-shot `release-as` and `last-release-sha` recovery controls were used to
+create the exact beta tag/draft and were removed after protected publication.
+The current configuration retains the App-only prerelease shape but cannot
+replay either recovery control.
 
 The exact lifecycle is:
 
-1. While the target tag is absent, the App-only producer invokes Release
-   Please with `versioning: prerelease`, `prerelease-type: beta`,
-   `release-as: 0.9.0-beta.1`, `draft: true`, `prerelease: true`,
-   `force-tag-creation: true`, and `skip-github-release: false`.
-2. Release Please opens or updates its release PR. When that PR is merged, it
-   creates the `v0.9.0-beta.1` tag and a draft prerelease. Forced tag creation
-   is necessary because a draft otherwise permits lazy tag creation.
+1. While the target tag was absent, the App-only producer invoked Release
+   Please with the reviewed one-shot target and recovery boundary.
+2. Release Please opened or updated its release PR. When that PR was merged,
+   it created the `v0.9.0-beta.1` tag and a draft prerelease. Forced tag
+   creation was necessary because a draft otherwise permits lazy tag creation.
 3. The tag starts read-only integrity. Publication does not create a release:
    it requires the exact existing draft and only changes visibility after the
    verified quartet is present.
-4. Once the exact target tag exists, `release.yml` reports `NO_CHANGE` before
+4. Now that the exact target tag exists, `release.yml` reports `NO_CHANGE` before
    calling Release Please, so this fixed configuration cannot produce a later
    target accidentally.
 
@@ -159,21 +157,17 @@ deployment environment. `protected-release` belongs only to the separate
 manual publication job; attaching it to integrity makes an exact tag fail
 before checkout when the environment admits protected branches only.
 
-The one-shot recovery from the merged-but-unrecognized release PR is bounded
-by top-level `last-release-sha` at the exact `v0.8.0` merge
-`568e7b42b78b3c9edb8ea390cb4297142a37e412`. The generated header contains the
-seven repository PR sections before Release Please's separator; its
-machine-readable release notes below that separator are never replaced. This
-recovery key is removed after the exact beta tag/draft is independently
-verified.
+The one-shot recovery from the merged-but-unrecognized release PR was bounded
+to the exact `v0.8.0` merge
+`568e7b42b78b3c9edb8ea390cb4297142a37e412`. The generated header still contains
+the seven repository PR sections before Release Please's separator; its
+machine-readable release notes below that separator are never replaced. Both
+`last-release-sha` and `release-as` are absent after publication.
 
-The local source test parses every listed configuration value and admits only
-the exact manifest transition from historical `0.8.0` to target
-`0.9.0-beta.1`. The baseline checkout and the generated release PR are both
-valid states; every intermediate, later, malformed, or multi-package manifest
-is refused. The same gate rejects fallback credentials. A live release PR/tag
-remains external, environment-bound evidence and is not created by source
-validation.
+The local source test parses every listed configuration value, requires the
+published manifest state `0.9.0-beta.1`, and rejects the two retired recovery
+keys. Historical, later, malformed, or multi-package manifests are refused.
+The same gate rejects fallback credentials.
 
 GitHub's [release response example](https://docs.github.com/en/enterprise-cloud%40latest/rest/releases/releases)
 shows `target_commitish` may be a branch name. Publication therefore does not

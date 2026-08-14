@@ -59,8 +59,8 @@
 | --- | --- | --- |
 | DT-1 | `ci.yml` stays `workflow_call`-only and `ci-contract.yml` is its sole automatic pull-request/main caller. Contract inspection rejects a child workflow that declares any direct `pull_request` or `push` trigger in addition to reusable invocation. | Direct and reusable scheduling produces duplicate test runs and breaks same-run aggregate ownership. |
 | DT-2 | `release.yml` requires `RELEASE_APP_ID` and `RELEASE_APP_PRIVATE_KEY`; it creates an installation token unconditionally and passes only `steps.release-app-token.outputs.token` to Release Please. The producer token expression may not reference `GITHUB_TOKEN`, `RELEASE_PLEASE_TOKEN`, `PAT`, `||`, or a conditional credential fallback. | A fallback changes the tag producer identity and can create releases outside the App policy. |
-| DT-2a | Release Please uses schema-supported, deprecated `release-as: 0.9.0-beta.1` together with `include-v-in-tag: true`, `versioning: prerelease`, `prerelease-type: beta`, `draft: true`, `prerelease: true`, `force-tag-creation: true`, and `skip-github-release: false`. The contract declares baseline manifest `0.8.0` and admits exactly that baseline or the generated target manifest `0.9.0-beta.1`; every other version, malformed object, or extra package entry is refused. The producer exits `NO_CHANGE` before Release Please when `v0.9.0-beta.1` already exists. | The checked-in baseline and generated release PR are consecutive authorized states of one exact transition. Binding both endpoints avoids rejecting the release PR while preventing an intermediate or future manifest from widening the one-shot target. |
-| DT-2b | Recovery from a merged release PR whose body lost Release Please metadata uses top-level `last-release-sha` pinned to exact `v0.8.0` merge `568e7b42b78b3c9edb8ea390cb4297142a37e412`. The configured generated header contains all seven mandatory repository PR headings and an explicit instruction that the machine-readable release notes below Release Please's separator remain intact. The checker rejects any other recovery SHA or incomplete header. Remove the recovery key after the exact beta tag/draft is verified. Named test: `release_producer_preserves_machine_body_and_bounds_recovery`. | The upstream recovery control bounds changelog collection after an accidentally merged bad release PR. Keeping governance metadata inside the configured header lets Release Please parse its own body after merge; replacing the whole body produced a false successful workflow with no tag and an oversized successor PR. |
+| DT-2a | After protected publication, Release Please retains `include-v-in-tag: true`, `versioning: prerelease`, `prerelease-type: beta`, `draft: true`, `prerelease: true`, `force-tag-creation: true`, and `skip-github-release: false`, but contains neither `release-as` nor `last-release-sha`. The contract admits only the published target manifest `0.9.0-beta.1`; every historical, later, malformed, or extra package entry is refused. The producer exits `NO_CHANGE` before Release Please because `v0.9.0-beta.1` already exists. | The one-shot target fulfilled its purpose. Removing both recovery controls prevents accidental replay while the exact tag guard freezes this producer target. |
+| DT-2b | The historical merged-PR recovery was pinned to exact `v0.8.0` merge `568e7b42b78b3c9edb8ea390cb4297142a37e412` and preserved all seven mandatory PR headings plus Release Please's machine-readable notes. After the exact beta became public, both one-shot keys were removed while the generated header remains machine-readable. Named test: `release_producer_removes_one_shot_recovery_after_publication`. | Recovery provenance remains documented without leaving an active override in the producer configuration. |
 | DT-3 | `docs/governance/release-promotion.json` is schema version 1 and pins `target_tag` to `v0.9.0-beta.1`, channel `beta`, and the exact ordered public filenames: archive, detached archive SHA-256, SBOM, manifest. `v0.8.0` is not accepted. A future target changes this policy deliberately. | One concrete beta prevents historic or future tags from entering a new unreviewed path. |
 | DT-4 | `.github/workflows/release-integrity.yml` normally runs from the exact target tag and also admits a bounded manual recovery from `main` with required exact tag and 40-hex source SHA inputs. Both paths have `contents: read`, declare no deployment environment, check out the tag SHA, prove tag/SHA equality, build the candidate, merge exactly the two packaged cargo-cyclonedx roots into one deterministic path-free SBOM, write/validate the detached checksum and manifest, and upload the same named integrity artifact. The recovery run has an exact display title that binds both inputs; its merger tooling is copied from trusted `main` into `RUNNER_TEMP` before the immutable tag checkout. Integrity has no `workflow_run`, `gh release`, release-creation action, asset-upload action, or write permission. `.github/workflows/release-publication.yml` is the only publication path. A maintainer-authored `workflow_dispatch` request validates the exact tag/SHA/run tuple before using a Contents-write GitHub App token to emit `repository_dispatch` type `release-publication-app` with the same tuple. A dedicated admission job requires that exact event type, payload stage, and actor `emersonbusson-ramshared-release[bot]` before `environment: protected-release`, preserving required human review with `prevent_self_review`. The protected job uses its read-only `GITHUB_TOKEN` for Actions metadata/artifact reads and the contents-write App token for release mutation. Publication accepts a successful normal tag run whose workflow name is `Release Integrity` and whose `head_sha` is exact, or a successful recovery run from `main` whose API `name` and `display_title` both equal the exact tag/SHA-bound recovery title; the downloaded manifest and four assets are validated identically. Named test: `release_publication_request_delegates_only_to_exact_app_actor`. | A deterministic defect in an immutable tag's workflow must be recoverable without deleting or moving the tag. Repository dispatch uses an already proven App permission, separates the run initiator from the human environment reviewer, and does not expose the private key or require Actions-write authority. GitHub exposes a parameterized recovery `run-name` in both the Actions API `name` and `display_title` fields, so both values are bound instead of falsely requiring the static workflow name. |
 | DT-5 | Publication inputs are exact `tag`, 40-lowercase-hex `source_sha`, and decimal `integrity_run_id`. It downloads only `release-integrity-<tag>-<sha>`, verifies the Git tag resolves to `source_sha`, and requires the selected successful run to come from `.github/workflows/release-integrity.yml`. A normal push run must bind the static workflow name and `head_sha` directly; a recovery run must be a `workflow_dispatch` from `main` whose API `name` and `display_title` both equal the exact title binding the tag and source SHA. It then checks the manifest and all four local assets before classifying the remote release inventory. Because GitHub's tag endpoint does not expose drafts, the App reads the authenticated release list with bounded pagination, selects by exact tag, and requires cardinality one before the classifier runs. Every later read and the visibility PATCH reuse only the positive numeric ID from that selected release; no later tag lookup can select another object. An exact published beta returns `NO_CHANGE`; an exact draft can advance; any absent/duplicate tag, wrong SHA/channel/draft mode, missing/mismatched/extra asset, or ambiguous inventory is a refusal before mutation. It never deletes or overwrites assets. GitHub's release response `target_commitish` is not used as a SHA because it can be a branch name; a manufactured branch-value fixture proves it does not false-refuse. | Replay safety (#17) requires explicit matching, not an overwrite shortcut or a mutable branch field. Draft discovery must use the authenticated collection without weakening exact-tag cardinality, and subsequent actions remain bound to the discovered immutable release ID. |
@@ -99,7 +99,7 @@
 | ITEM / stage | # | Question | Min evidence | Abort |
 | --- | --- | --- | --- | --- |
 | ITEM-1 topology | #13/#16 | Can a direct child trigger coexist with its canonical reusable call? | `ci_topology_rejects_duplicate_direct_and_reusable_invocation` | Any duplicate trigger finding. |
-| ITEM-2 producer | #13/#16/#17/#18 | Does missing App material stop before Release Please, are only the exact baseline/target manifest states admitted, and does recovery retain the machine-readable body? | `release_producer_requires_github_app_token_without_fallback`; `release_producer_accepts_only_exact_manifest_transition`; `release_producer_preserves_machine_body_and_bounds_recovery` | Any fallback token reference, conditional App token, foreign manifest version, unbounded recovery SHA, or incomplete generated header. |
+| ITEM-2 producer | #13/#16/#17/#18 | Does missing App material stop before Release Please, is only the exact published manifest admitted, and are both one-shot recovery controls absent? | `release_producer_requires_github_app_token_without_fallback`; `release_producer_accepts_only_exact_released_manifest`; `release_producer_removes_one_shot_recovery_after_publication` | Any fallback token reference, conditional App token, foreign manifest version, retained recovery control, or incomplete generated header. |
 | ITEM-3 integrity | #9/#13 | Do tag, SHA, archive, detached checksum, SBOM, and manifest agree exactly? | `release_manifest_requires_exact_four_public_assets` | One missing/mismatched name, bytes, or hash. |
 | ITEM-4 publication | #16/#17 | Does a replay preserve a verified completed beta and refuse a mixed inventory? | `publication_plan_is_idempotent_and_refuses_mismatched_remote_assets` | Extra/missing/mismatched asset or nonbeta state. |
 | ITEM-5 workflow admission | #15/#18 | Is publication only explicit protected dispatch, not a retry/loop workaround? | static workflow/contract refusal tests and actionlint | `workflow_run`, direct publish in integrity, unbounded retry, or wrong token authority. |
@@ -170,8 +170,8 @@
 - RF / DT: RF-4 through RF-8; DT-2 through DT-6.
 - Required tests: `publication_workflow_is_protected_manual_exact_sha_only`
   and `release_publication_request_delegates_only_to_exact_app_actor`.
-- Cover target: N/A — protected orchestration; live dispatch remains
-  environment-bound.
+- Cover target: N/A — protected orchestration; completed dispatch and public
+  verification are recorded as `EVD-0010` in `validation.md`.
 - Kahneman: #16/#17.
 
 ## Files to MODIFY
@@ -203,8 +203,8 @@
 - RF / DT: RF-1, RF-2, RF-4; DT-1, DT-2, DT-4, DT-5.
 - Required tests: `ci_topology_rejects_duplicate_direct_and_reusable_invocation`,
   `release_producer_requires_github_app_token_without_fallback`,
-  `release_producer_accepts_only_exact_manifest_transition`,
-  `release_producer_preserves_machine_body_and_bounds_recovery`, and
+  `release_producer_accepts_only_exact_released_manifest`,
+  `release_producer_removes_one_shot_recovery_after_publication`, and
   `publication_workflow_is_protected_manual_exact_sha_only`.
 - Cover target: ≥80% Node line, branch, and function coverage.
 - Kahneman: #13/#16/#17.
@@ -295,8 +295,8 @@ retained.
 | --- | --- | --- | --- | --- |
 | `tools/ci/check-ci-contract.mjs` | `tools/ci/check-ci-contract.test.mjs` :: `ci_topology_rejects_duplicate_direct_and_reusable_invocation` | refusal | #13/#16/#17 | ≥80% Node |
 | same | same :: `release_producer_requires_github_app_token_without_fallback` | refusal | #13/#16 | ≥80% Node |
-| same | same :: `release_producer_accepts_only_exact_manifest_transition` | unit/refusal | #13/#16/#17 | ≥80% Node |
-| same | same :: `release_producer_preserves_machine_body_and_bounds_recovery` | static/refusal | #13/#16/#17/#18 | ≥80% Node |
+| same | same :: `release_producer_accepts_only_exact_released_manifest` | unit/refusal | #13/#16/#17 | ≥80% Node |
+| same | same :: `release_producer_removes_one_shot_recovery_after_publication` | static/refusal | #13/#16/#17/#18 | ≥80% Node |
 | same | same :: `release_integrity_refuses_any_deployment_environment` | static/refusal | #13/#16/#18 | ≥80% Node |
 | same | same :: `publication_workflow_is_protected_manual_exact_sha_only` | static/refusal | #16/#17 | ≥80% Node |
 | `tools/ci/write-release-manifest.mjs` | `tools/ci/write-release-manifest.test.mjs` :: `release_manifest_writer_binds_exact_four_public_assets` | unit | #9/#13 | ≥80% Node |
@@ -330,10 +330,10 @@ retained.
 - [x] `node tools/generate-docs-index.mjs --check`, `./scripts/docs-check.sh`,
   and `git diff --check` admit the synchronized issue/frontmatter index and
   current contract documentation.
-- [x] Request run `31790968940` passed admission and tuple validation, then
-  failed before delegation when the App refused ungranted Actions-write
-  authority. It produced no repository dispatch, asset upload, or release
-  mutation; the replacement repository-dispatch path remains unexecuted until
-  its hosted checks and merge pass.
+- [x] Request run `31793772726` delegated the exact tuple to App-authored run
+  `31793790581`; the manually approved protected job validated integrity run
+  `31789473586`, published release ID `370457260`, and verified the terminal
+  idempotent `NO_CHANGE` state. Independent public download verification is
+  recorded as `EVD-0010`.
 - [x] The pinned App-token action and required encrypted App secrets are
   configured; secret contents were not copied into source, logs, or artifacts.
