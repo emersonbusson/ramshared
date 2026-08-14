@@ -5,6 +5,7 @@ milestone: v0.9.0-beta.1 — WSL2 NBD
 issues:
   - 195
   - 219
+  - 221
 ---
 
 # PRD — Protected beta release promotion and publication
@@ -96,9 +97,10 @@ Use one Day-0 release path with three stages and no `workflow_run` handoff.
    cannot publish a release asset.
 3. **Publication:** a maintainer explicitly dispatches a bounded request with
    the exact target tag, exact 40-hex source SHA, and integrity run ID. That
-   stage validates the tuple before minting an Actions-write App token and
-   delegates the tuple to the same workflow. An admission job rejects a direct
-   user-selected App stage; only the exact App bot actor reaches the unchanged
+   stage validates the tuple before minting a Contents-write App token and
+   emits an exact `repository_dispatch` payload to the same workflow. An
+   admission job rejects a direct internal event from any non-App actor; only
+   the exact App bot actor reaches the unchanged
    `protected-release` environment, where the human reviewer approves the
    deployment. The protected job downloads only the named integrity artifact,
    validates every binding, requires the existing Release Please draft,
@@ -194,7 +196,7 @@ accepted only after those stronger bindings pass.
 
 | ID | Requirement | Acceptance |
 | --- | --- |
-| NFR-1 | Least authority | Read-only integrity uses `contents: read`; publication receives write authority only through a protected GitHub App token. |
+| NFR-1 | Least authority | Read-only integrity uses `contents: read`; the request uses App `contents: write` only for exact repository dispatch; protected publication reads Actions with its read-only job token and receives release write authority only through the App token. |
 | NFR-2 | Boundedness | Every job has a finite timeout; deterministic identity, asset, test, or command errors never retry. |
 | NFR-3 | Observability | Stable rule codes identify refusal without echoing secrets, private paths, or token values. |
 | NFR-4 | Determinism | The public asset ordering and manifest serialization are stable; a target policy binds one tag and SHA-shaped input. |
@@ -213,7 +215,8 @@ accepted only after those stronger bindings pass.
    stores the candidate as an integrity artifact.
 3. A maintainer explicitly dispatches publication with the target tag, source
    SHA, and integrity run ID. The request validates that tuple, then delegates
-   it with an Actions-write App token. Only the App-authored run reaches
+   it through an exact `repository_dispatch` created with a Contents-write App
+   token. Only the App-authored run reaches
    `protected-release`; the maintainer reviews that distinct run and approves
    it there. The protected job fetches the exact tag revision and named
    artifact, validates it, then requires and resumes the matching beta draft
@@ -260,7 +263,7 @@ Only matching `draft-empty`/`draft-partial` can advance; a matching
 | `node tools/ci/check-release-integrity.mjs --check …` | Validates tag/SHA, detached checksum, four-file contract, hashes, SBOM, and manifest without publication. |
 | `node tools/ci/check-release-publication.mjs …` | Classifies local candidate and remote release inventory as advance, no-change, or refusal without network mutation. |
 | `.github/workflows/release-integrity.yml` | Tag-triggered read-only candidate producer; uploads only the bounded integrity artifact. |
-| `.github/workflows/release-publication.yml` | Two-stage `workflow_dispatch` consumer; a read-only maintainer request validates and delegates the exact tuple, while only the App-authored run can enter protected publication. |
+| `.github/workflows/release-publication.yml` | Two-stage consumer; human `workflow_dispatch` validates the tuple, an App-authored `repository_dispatch` carries it internally, and only that exact App event can enter protected publication. |
 | `.github/workflows/release.yml` | GitHub-App-only Release Please tag/draft producer. |
 
 ## 9. Dependencies and risks
