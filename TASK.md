@@ -202,3 +202,25 @@ and comparison artifacts pass the repository validator. They are valid
 baseline exists. Terminal inspection found no managed product residue and left
 the pre-existing `/dev/sdc` unchanged. Gate B, hosted checks, PR review, and
 merge remain open.
+
+## TASK-0005 — Exact release manifest transition
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `in_progress`.
+**Owner role:** `ci-governance`.
+**Date:** `2026-08-14`.
+**Registered time:** `05:10:06`.
+**Updated time:** `05:10:06`.
+**Source revision:** `bad410972213a9bb873b1f36788d69781d9b3ba6`.
+**Destinations:** issue `#207`, `docs/governance/ci-contract.json`,
+`docs/specs/no-milestone/release-promotion-publication/`, and
+`tools/ci/check-ci-contract*`.
+**Scope:** Admit only the exact Release Please manifest transition from the
+historical `0.8.0` baseline to target `0.9.0-beta.1`, without accepting an
+intermediate, future, malformed, or multi-package manifest.
+**Evidence / blockers:** TDD reproduced the release-PR false refusal before the
+checker change. The focused 61-test contract suite passes; Node coverage is
+91.76% lines, 85.04% branches, and 98.67% functions. The local contract,
+capability observations, documentation checks, and diff check pass. Hosted
+required checks and merge remain pending; release PR `#206` remains blocked
+until this correction reaches `main` and Release Please refreshes it.

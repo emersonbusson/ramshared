@@ -10,6 +10,7 @@ import {
   classifyRetry,
   main,
   readRemoteControlObservation,
+  releaseProducerManifestMatchesTransition,
   run,
   selectWholePullRequestGates,
   validateAggregate,
@@ -846,8 +847,36 @@ test('release_producer_requires_github_app_token_without_fallback', () => {
   assert.equal(config['force-tag-creation'], true)
   assert.equal(config['skip-github-release'], false)
   assert.equal(config['release-as'], '0.9.0-beta.1')
-  assert.equal(manifest['.'], '0.8.0')
+  assert.equal(releaseProducerManifestMatchesTransition(manifest, {
+    baseline_version: '0.8.0',
+    release_as: '0.9.0-beta.1',
+  }), true)
   assert.match(config['pull-request-header'], /draft prerelease/i)
+})
+
+test('release_producer_accepts_only_exact_manifest_transition', () => {
+  const policy = {
+    baseline_version: '0.8.0',
+    release_as: '0.9.0-beta.1',
+  }
+
+  assert.equal(releaseProducerManifestMatchesTransition({ '.': '0.8.0' }, policy), true)
+  assert.equal(releaseProducerManifestMatchesTransition({ '.': '0.9.0-beta.1' }, policy), true)
+
+  for (const version of ['0.8.1', '0.9.0', '0.9.0-beta.2', '', null]) {
+    assert.equal(releaseProducerManifestMatchesTransition({ '.': version }, policy), false)
+  }
+  assert.equal(releaseProducerManifestMatchesTransition({ '.': '0.8.0', other: '0.8.0' }, policy), false)
+  assert.equal(releaseProducerManifestMatchesTransition({}, policy), false)
+  assert.equal(releaseProducerManifestMatchesTransition(null, policy), false)
+
+  const contract = JSON.parse(readFileSync(path.join(ROOT, 'docs', 'governance', 'ci-contract.json'), 'utf8'))
+  const producer = contract.gates.find((gate) => gate.id === 'release-automation').policy.release_producer
+  assert.equal(producer.baseline_version, '0.8.0')
+  delete producer.baseline_version
+  const result = validateContract(contract)
+  assert.equal(result.ok, false)
+  assert.equal(result.errors.some((item) => item.rule === 'release-producer-policy-invalid'), true)
 })
 
 test('publication_workflow_is_protected_manual_exact_sha_only', () => {
