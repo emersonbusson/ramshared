@@ -257,7 +257,7 @@ function validateReleasePublicationPolicy(gate, policy, errors) {
   if (!isObject(publication) || publication.environment !== RELEASE_ENVIRONMENT ||
       publication.promotion_policy !== RELEASE_PROMOTION_POLICY || publication.target_tag !== RELEASE_TARGET_TAG ||
       publication.manual_only !== true || publication.credential !== 'github-app-required' ||
-      publication.draft_only !== true || publication.request_stage !== 'github-app-dispatch' ||
+      publication.draft_only !== true || publication.request_stage !== 'github-app-repository-dispatch' ||
       publication.delegated_actor !== 'emersonbusson-ramshared-release[bot]') {
     errors.push(finding(gate.id, 'release-publication-policy-invalid'))
   }
@@ -575,6 +575,7 @@ function hasTrigger(text, trigger) {
   if (trigger === 'pull_request-closed') return /^\s*pull_request:\s*$/m.test(text) && /^\s*types:\s*\[closed\]\s*$/m.test(text)
   if (trigger === 'push-main') return /^\s*push:\s*(?:#.*)?$/m.test(text) && /^\s*branches:\s*\[main\]\s*$/m.test(text)
   if (trigger === 'workflow_dispatch') return /^\s*workflow_dispatch:\s*(?:#.*)?$/m.test(text)
+  if (trigger === 'repository_dispatch') return /^\s*repository_dispatch:\s*(?:#.*)?$/m.test(text)
   if (trigger === 'workflow_call') return workflowTriggerNames(text).includes('workflow_call')
   if (trigger === 'release') return /^\s*release:\s*(?:#.*)?$/m.test(text)
   if (trigger === 'push-tag') {
@@ -722,6 +723,7 @@ function directEventNames(triggers) {
     if (trigger === 'pull_request' || trigger === 'pull_request-closed') events.add('pull_request')
     else if (trigger === 'push-main' || trigger === 'push-tag') events.add('push')
     else if (trigger === 'workflow_dispatch') events.add('workflow_dispatch')
+    else if (trigger === 'repository_dispatch') events.add('repository_dispatch')
     else if (trigger === 'release') events.add('release')
   }
   return events.size > 0 ? events : null
@@ -1093,30 +1095,32 @@ function releasePublicationWorkflowFindings(gate, text, block) {
     observed.push('release-publication-runner-invalid')
   }
   if (fieldValue(block, 'environment') !== policy.environment) observed.push('release-publication-environment-mismatch')
-  if (!['tag', 'source_sha', 'integrity_run_id', 'authorization']
+  if (!['tag', 'source_sha', 'integrity_run_id']
     .every((input) => workflowDispatchStringInput(text, input))) {
     observed.push('release-publication-dispatch-input-invalid')
   }
   const markers = [
     "if: github.ref == 'refs/heads/main'",
-    "inputs.authorization == 'app'",
+    "github.event_name == 'repository_dispatch'",
+    "github.event.action == 'release-publication-app'",
     `github.actor == '${policy.delegated_actor}'`,
     'ref: ${{ github.event.repository.default_branch }}',
-    'RELEASE_TAG: ${{ inputs.tag }}',
-    'SOURCE_SHA: ${{ inputs.source_sha }}',
-    'INTEGRITY_RUN_ID: ${{ inputs.integrity_run_id }}',
+    'RELEASE_TAG: ${{ github.event.client_payload.tag }}',
+    'SOURCE_SHA: ${{ github.event.client_payload.source_sha }}',
+    'INTEGRITY_RUN_ID: ${{ github.event.client_payload.integrity_run_id }}',
     'node tools/ci/check-release-publication.mjs',
     `--policy ${policy.promotion_policy}`,
     'node tools/ci/check-release-integrity.mjs',
     '--check artifacts/release/release-manifest.json',
     'name: Require publication GitHub App credentials',
+    'actions: read',
     'permission-contents: write',
-    'permission-actions: read',
-    'ref: ${{ inputs.source_sha }}',
+    'GH_TOKEN: ${{ github.token }}',
+    'ref: ${{ env.SOURCE_SHA }}',
     'refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG',
     'actions/download-artifact@',
-    'name: release-integrity-${{ inputs.tag }}-${{ inputs.source_sha }}',
-    'run-id: ${{ inputs.integrity_run_id }}',
+    'name: release-integrity-${{ env.RELEASE_TAG }}-${{ env.SOURCE_SHA }}',
+    'run-id: ${{ env.INTEGRITY_RUN_ID }}',
     '.path == ".github/workflows/release-integrity.yml"',
     '.event == "workflow_dispatch"',
     '.display_title == $recovery_title',
@@ -1125,25 +1129,31 @@ function releasePublicationWorkflowFindings(gate, text, block) {
     'gh release edit "$RELEASE_TAG" --draft=false --prerelease',
   ]
   const delegationMarkers = [
+    'repository_dispatch:',
+    'types: [release-publication-app]',
     'release-publication-admission:',
     'needs: release-publication-admission',
     'case "$AUTHORIZATION_STAGE" in',
     '*) exit 1 ;;',
+    'test "$DISPATCH_EVENT" = workflow_dispatch',
+    'test "$DISPATCH_EVENT" = repository_dispatch',
+    'test "$DISPATCH_ACTION" = release-publication-app',
     "test \"$DISPATCH_ACTOR\" = 'emersonbusson-ramshared-release[bot]'",
     'release-publication-request:',
-    "inputs.authorization == 'request'",
-    'default: request',
-    'permission-actions: write',
-    'gh workflow run release-publication.yml',
-    '-f authorization=app',
+    "github.event_name == 'workflow_dispatch'",
+    'permission-contents: write',
+    'gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches"',
+    'event_type=release-publication-app',
+    'client_payload[authorization]=app',
   ]
   if (!markers.every((marker) => joined.includes(marker)) ||
       !delegationMarkers.every((marker) => text.includes(marker)) ||
       joined.indexOf('Validate exact protected dispatch identity') > joined.indexOf('Create publication GitHub App token')) {
     observed.push('release-publication-command-mismatch')
   }
+  const mutationScan = text.replace('gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches"', '')
   const forbidden = /workflow_run|^\s*push:|^\s*pull_request:|--clobber|gh\s+release\s+create|gh\s+api\s+--method\s+POST/i
-  if (forbidden.test(text)) observed.push('release-publication-mutation-topology-invalid')
+  if (forbidden.test(mutationScan)) observed.push('release-publication-mutation-topology-invalid')
   return observed
 }
 
