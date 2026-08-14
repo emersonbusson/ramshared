@@ -255,7 +255,14 @@ jobs:
           GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > tmp/release-publication/remote-release.json
+          gh api --paginate --slurp \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            > tmp/release-publication/remote-release-pages.json
+          jq -e --arg tag "$RELEASE_TAG" '
+            [.[][] | select(.tag_name == $tag)] |
+            if length == 1 then .[0] else error("release-tag-cardinality") end
+          ' tmp/release-publication/remote-release-pages.json \
+            > tmp/release-publication/remote-release.json
 
       - name: Plan idempotent publication
         id: publication-plan
