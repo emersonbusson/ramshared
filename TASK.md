@@ -63,11 +63,11 @@
 **Registered date:** `2026-08-12`.
 **Updated date:** `2026-08-14`.
 **Registered time:** `12:15:54`.
-**Updated time:** `01:07:35`.
-**Source revision:** `a60c898ec6d938e6828d879d41a4b2ea0c7b6b21`.
+**Updated time:** `02:52:22`.
+**Source revision:** `a365bda0daf89a9707159b86efca8c1ba1ac760b`.
 **Destinations:** branch `feat/wsl2-nbd-benchmark-matrix`, milestone `v0.9.0-beta.1 — WSL2 NBD`, issue `#194`, `docs/specs/no-milestone/wsl2-nbd-product-readiness/`, `scripts/safety/`, `scripts/windows/`, `scripts/p0/`, `tools/ci/`, and the sealed Linux bundle.
 **Scope:** Correct and qualify the paired 1/2/4 GiB disk-versus-NBD benchmark with identical zram topology, cgroup-before-start containment, exact scratch identity, pair-scoped CUDA, bounded Windows-to-WSL calls, source/BINARY_MATCH binding, numeric comparison/regression records, and fail-closed cleanup. Run no live pressure until static/manufactured gates and a fresh independent Sol Gate A pass.
-**Evidence / blockers:** Attempt 29 is the latest sealed live attempt, on source `a60c898ec6d938e6828d879d41a4b2ea0c7b6b21`. The first P1 idle disk-only sample completed `3584 MiB`, HOLD, integrity, occupancy, and cleanup; allocation-to-HOLD took `114056 ms` and the independent finalization receipt retained `86 s`. The second sample reached only `2048/3584 MiB` before the 120-second allocation-to-HOLD deadline, so the matrix stopped `RED/SAMPLE_TIMEOUT` before NBD or any bounded cell. Terminal pinned preflight returned `PRODUCT_OFF`, the 36-entry inventory verified, no public pair evidence was emitted, and the pre-existing `/dev/sdc` remained untouched. Because the failed cell was `idle`, no CUDA workload was supposed to run; the low Task Manager VRAM reading is expected, not evidence of a CUDA failure. The source-only successor changes only the P1 hold/finalization/cell tuple to `240/120/1380 s`; P2 and P4 remain `240/240/1740 s` and `600/600/3900 s`, with exact bounded-pair CUDA `2880/3600/7920 s`. Local TDD is green, but this successor is not sealed or live-qualified. The current blockers are committing and resealing this correction, a fresh complete matrix, Gate B, hosted checks, and merge.
+**Evidence / blockers:** Attempt30 is the latest sealed live attempt, on source `a365bda0daf89a9707159b86efca8c1ba1ac760b`. The canonical matrix completed all 12 P1/P2/P4 idle/bounded disk-only/NBD cells and all 36 samples with integrity, occupancy, per-NBD-cell `BINARY_MATCH=PASS`, pair-scoped CUDA, and per-cell `PRODUCT_OFF`. Matrix SHA-256 is `42fa3e1a00dd7e7c16f0c92196f69622ac9212c9fb889e858f6e40769af292af`; its 551-entry inventory SHA-256 is `58a959fd82d29b6c503382a98d82a4bbf57bb90dc94ffaf2fdc2dfa6e985aece`, and every entry verified. All six public pair records passed the repository validator and were appended as `BASELINE`/nonpromotable because no prior canonical baseline exists. Terminal preflight returned `PRODUCT_OFF`; services are inactive/disabled, no managed swap, daemon, worker, CUDA process, benchmark cgroup, or NBD attachment remains, and `/dev/sdc` was untouched. The live matrix qualification is complete; remaining blockers are Gate B, hosted required checks, PR evidence/metadata review, and merge.
 **Attempt 21 integrity qualification:** The post-containment checksum PASS covered only a partial `6016/6656 MiB` allocation. It did not complete the third sample and is not a valid cell result.
 
 Attempt22b (2026-08-13) was a live run on sealed source `63bd3be`: four P1
@@ -188,3 +188,17 @@ source-only successor raises only the P1 allocation-to-HOLD cap to 240 seconds,
 retains its independent 120-second integrity cap, and derives cell/CUDA bounds
 of `1380/2880 s`. It remains nonpromotable until committed, resealed, and
 exercised by a complete fresh matrix.
+
+Attempt30 (2026-08-14, sealed source `a365bda`) completed the canonical matrix:
+12/12 cells and 36/36 samples passed across P1/P2/P4, idle/bounded, and
+disk-only/NBD. Every NBD sample retained `BINARY_MATCH=PASS`; bounded pairs
+held one 512 MiB CUDA context across disk then NBD and released it without
+force. All cells returned `PRODUCT_OFF`. The matrix and 551-entry inventory
+SHA-256 values are `42fa3e1a00dd7e7c16f0c92196f69622ac9212c9fb889e858f6e40769af292af`
+and `58a959fd82d29b6c503382a98d82a4bbf57bb90dc94ffaf2fdc2dfa6e985aece`;
+every inventory entry verified. Six public pair records and their exact custody
+and comparison artifacts pass the repository validator. They are valid
+`BASELINE` candidates and remain nonpromotable because no prior canonical
+baseline exists. Terminal inspection found no managed product residue and left
+the pre-existing `/dev/sdc` unchanged. Gate B, hosted checks, PR review, and
+merge remain open.

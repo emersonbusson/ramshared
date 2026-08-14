@@ -393,8 +393,8 @@ environment-bound and are not inferred from a manufactured test.
 | --- | --- | --- | --- |
 | `nbd_lifecycle_before_action_after` | Injected ordering/refusal plus live pilot | `PASS` at 1 GiB | Live before/action/after exists; larger-size lifecycle remains coupled to the matrix. |
 | `relay_gate_before_action_after` | Manufactured refusals plus live read-only gate | `PASS` for the pilot | Relay was clean before/after without automatic reap. |
-| `NBD_BENCHMARK_MATRIX` | Attempt29 on sealed `a60c898` stopped at the first P1 idle disk-only cell: run one completed 3584 MiB HOLD and integrity at `114.056 s` allocation-to-HOLD; run two reached only 2048 MiB before the prior 120-second HOLD cap. No NBD or bounded cell ran, no CUDA allocation was expected, terminal preflight was `PRODUCT_OFF`, and the 36-entry inventory verified. The source-only successor uses P1 `240/120/1380` while retaining P2/P4. Local cell 48/48, Windows static, and public-validator 22/22 gates pass; no sealed live validation exists for this successor. | `PARTIAL` / `NO-GO` | Commit, reseal, and run a fresh complete 1/2/4 GiB disk-only/NBD n=3 matrix; then validate public evidence and terminal cleanup. |
-| `BINARY_MATCH` | Static refusals plus live selected release | `PASS` for the pilot | Each matrix NBD cell must repeat the identity proof. |
+| `NBD_BENCHMARK_MATRIX` | Attempt30 on sealed `a365bda` completed all 12 P1/P2/P4 idle/bounded disk-only/NBD cells and all 36 samples. The 551-entry inventory verified, all six public pair records pass the repository validator as nonpromotable `BASELINE` candidates, every cell and terminal preflight returned `PRODUCT_OFF`, and terminal residue inspection was clean. | `PASS` | Live qualification is complete; Gate B, hosted required checks, PR review, and merge remain repository-governance work. |
+| `BINARY_MATCH` | Static refusals plus the complete Attempt30 selected-release matrix | `PASS` | Every NBD cell repeated and retained the exact identity proof. |
 
 ### Benchmark matrix
 
