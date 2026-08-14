@@ -385,6 +385,18 @@ try {
         throw "matrix function source extraction failed"
     }
     . ([scriptblock]::Create($source.Substring($functionSourceStart, $functionSourceEndMatch.Index - $functionSourceStart)))
+    $utcScalar = (ConvertFrom-JsonPreservingDateStrings `
+        -Json '{"started":"2026-08-12T12:00:00Z"}').started
+    $utcDateScalar = [datetimeoffset]::Parse(
+        "2026-08-12T12:00:00Z",
+        [Globalization.CultureInfo]::InvariantCulture
+    ).UtcDateTime
+    if ($utcScalar -isnot [string] -or
+        (ConvertTo-CanonicalJson -Value $utcScalar) -cne '"2026-08-12T12:00:00Z"' -or
+        (ConvertTo-CanonicalJson -Value $utcDateScalar) -cne '"2026-08-12T12:00:00Z"') {
+        throw "canonical JSON must preserve an ISO-8601 UTC scalar across PowerShell runtimes"
+    }
+    Write-Output "PASS canonical_json_utc_scalar_is_runtime_stable"
     $lowerIdentity = ("c" * 64) -join ""
     $sinkIdentity = ("d" * 64) -join ""
     $daemonManifestSha256 = ("e" * 64) -join ""

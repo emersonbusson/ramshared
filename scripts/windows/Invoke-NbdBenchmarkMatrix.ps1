@@ -42,6 +42,16 @@ function Write-JsonNoBom {
     [IO.File]::WriteAllText($Path, $json + "`n", [Text.UTF8Encoding]::new($false))
 }
 
+function ConvertFrom-JsonPreservingDateStrings {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Json)
+    $parameters = @{ InputObject = $Json; ErrorAction = "Stop" }
+    $convertCommand = Get-Command ConvertFrom-Json -ErrorAction Stop
+    if ($convertCommand.Parameters.ContainsKey("DateKind")) {
+        $parameters["DateKind"] = "String"
+    }
+    ConvertFrom-Json @parameters
+}
+
 function Convert-ToWslPath {
     param([Parameter(Mandatory = $true)][string]$Path)
     if ($Path -match '^([A-Za-z]):\\(.*)$') {
@@ -538,7 +548,7 @@ function Assert-SelectedReleaseRecords {
     if (-not $inputMatch.Success) { throw "selected_release_input_bundle_manifest_invalid" }
     $inputBundleManifestSha256 = $inputMatch.Groups[1].Value
     try {
-        $provenance = $ProvenanceJson | ConvertFrom-Json -ErrorAction Stop
+        $provenance = ConvertFrom-JsonPreservingDateStrings -Json $ProvenanceJson
     } catch {
         throw "selected_release_provenance_invalid"
     }
@@ -933,7 +943,7 @@ function Assert-CellFailureReceipt {
         $item.Length -lt 1 -or $item.Length -gt 16384) {
         throw "cell_failure_receipt_invalid"
     }
-    try { $receipt = Get-Content -LiteralPath $ReceiptPath -Raw | ConvertFrom-Json } catch {
+    try { $receipt = ConvertFrom-JsonPreservingDateStrings -Json (Get-Content -LiteralPath $ReceiptPath -Raw) } catch {
         throw "cell_failure_receipt_invalid"
     }
     $allowed = @(
@@ -1127,10 +1137,10 @@ function Assert-CellEvidence {
     $summaryContextHash = Assert-Sha256Value -Value (Get-RequiredProperty -Object $Summary -Name "context_sha256") -Name "summary_context"
     if ($summaryContextHash -cne $contextHash) { throw "cell_evidence_context_sha256_mismatch" }
     try {
-        $context = Get-Content -LiteralPath $contextPath -Raw | ConvertFrom-Json
-        $summaryArtifact = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json
-        $inventory = Get-Content -LiteralPath $inventoryPath -Raw | ConvertFrom-Json
-        $envelope = Get-Content -LiteralPath $envelopePath -Raw | ConvertFrom-Json
+        $context = ConvertFrom-JsonPreservingDateStrings -Json (Get-Content -LiteralPath $contextPath -Raw)
+        $summaryArtifact = ConvertFrom-JsonPreservingDateStrings -Json (Get-Content -LiteralPath $summaryPath -Raw)
+        $inventory = ConvertFrom-JsonPreservingDateStrings -Json (Get-Content -LiteralPath $inventoryPath -Raw)
+        $envelope = ConvertFrom-JsonPreservingDateStrings -Json (Get-Content -LiteralPath $envelopePath -Raw)
     } catch {
         throw "cell_evidence_json_invalid"
     }
@@ -1316,6 +1326,20 @@ function Get-CellEvidenceCustodyFingerprint {
 function ConvertTo-CanonicalJson {
     param([AllowNull()]$Value)
     if ($null -eq $Value) { return "null" }
+    if ($Value -is [datetime] -or $Value -is [datetimeoffset]) {
+        $utc = if ($Value -is [datetimeoffset]) {
+            ([datetimeoffset]$Value).UtcDateTime
+        } else {
+            ([datetime]$Value).ToUniversalTime()
+        }
+        $iso8601 = $utc.ToString(
+            "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'",
+            [Globalization.CultureInfo]::InvariantCulture
+        )
+        $iso8601 = $iso8601 -replace '(\.\d*?[1-9])0+Z$', '$1Z'
+        $iso8601 = $iso8601 -replace '\.0+Z$', 'Z'
+        return ($iso8601 | ConvertTo-Json -Compress)
+    }
     if ($Value -is [string] -or $Value -is [char]) {
         return ($Value | ConvertTo-Json -Compress)
     }
@@ -1450,7 +1474,7 @@ function Assert-PublicPairEvidenceCustodyCurrent {
                 -Name "cached_cell_custody"
             if ($declaredFingerprint -cne $cachedFingerprint) { throw "cached_fingerprint_mismatch" }
             $summaryPath = Join-Path ([string](Get-RequiredProperty -Object $pairResult.Evidence -Name "cell_result_directory")) "summary.json"
-            $freshSummary = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json
+            $freshSummary = ConvertFrom-JsonPreservingDateStrings -Json (Get-Content -LiteralPath $summaryPath -Raw)
             $freshEvidence = Assert-CellEvidence -Summary $freshSummary `
                 -CellResultDirectory ([string]$pairResult.Evidence.cell_result_directory)
             $freshFingerprint = Get-CellEvidenceCustodyFingerprint -Evidence $freshEvidence
@@ -1551,7 +1575,7 @@ function Assert-PublicPairArtifactBinding {
             (Assert-Sha256Value -Value (Get-RequiredProperty -Object $candidate -Name "pair_comparison_sha256") -Name "candidate_pair_comparison") -cne $comparisonHash) {
             throw "candidate_hash_mismatch"
         }
-        $custody = Get-Content -LiteralPath $PairCustodyPath -Raw | ConvertFrom-Json
+        $custody = ConvertFrom-JsonPreservingDateStrings -Json (Get-Content -LiteralPath $PairCustodyPath -Raw)
         if ((Assert-Sha256Value -Value (Get-RequiredProperty -Object $custody -Name "comparison_sha256") -Name "custody_comparison") -cne $comparisonHash) {
             throw "custody_comparison_hash_mismatch"
         }
@@ -2027,7 +2051,7 @@ function Get-BaselineVerdict {
         return [pscustomobject]@{ verdict = "BASELINE_CANDIDATE"; reason = "baseline_absent" }
     }
     try {
-        $baseline = Get-Content -LiteralPath $BaselineFile -Raw | ConvertFrom-Json
+        $baseline = ConvertFrom-JsonPreservingDateStrings -Json (Get-Content -LiteralPath $BaselineFile -Raw)
         if ($baseline.schema -ne 1 -or $baseline.workload_schema -ne "ramshared-nbd-pair/v1" -or
             $baseline.environment_fingerprint -cne $Comparison.environment_fingerprint) {
             return [pscustomobject]@{ verdict = "NOT_COMPARABLE"; reason = "baseline_fingerprint_mismatch" }
@@ -2339,7 +2363,7 @@ function Invoke-NbdBenchmarkCell {
             containment = $containment; pair_context = $PairContext
         })
     }
-    try { $summary = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json } catch {
+    try { $summary = ConvertFrom-JsonPreservingDateStrings -Json (Get-Content -LiteralPath $summaryPath -Raw) } catch {
         return New-CellExecution -Result (New-CellResult -Cell $Cell -Status "RED" -Reason "cell_summary_invalid" -TerminalState "unverified_unknown" -Extra @{
             containment = $containment; pair_context = $PairContext
         })
@@ -2639,7 +2663,7 @@ function Invoke-ManufacturedSelfTest {
             if ($serialized.Contains('C:\secret\cuda.err')) {
                 throw "manufactured_watchdog_cuda_private_error_leaked"
             }
-            $decoded = $serialized | ConvertFrom-Json
+            $decoded = ConvertFrom-JsonPreservingDateStrings -Json $serialized
             foreach ($occurrence in @(
                 $decoded.cuda_cleanup_secondary,
                 $decoded.pair_context.cuda_containment.cuda_completion
@@ -2699,7 +2723,8 @@ function Invoke-ManufacturedSelfTest {
             New-Item -ItemType Directory -Force -Path $nested | Out-Null
             [IO.File]::WriteAllText((Join-Path $nested "file.txt"), "fixture`n", [Text.UTF8Encoding]::new($false))
             Write-MatrixArtifactInventory -CampaignRoot $root
-            $record = Get-Content -LiteralPath (Join-Path $root "matrix-artifact-inventory.json") -Raw | ConvertFrom-Json
+            $record = ConvertFrom-JsonPreservingDateStrings -Json `
+                (Get-Content -LiteralPath (Join-Path $root "matrix-artifact-inventory.json") -Raw)
             if (@($record.files).Count -ne 1 -or [string]$record.files[0].path -cne "nested/file.txt") {
                 throw "manufactured_matrix_inventory_invalid"
             }
@@ -3308,7 +3333,7 @@ Write-Output "[cuda-vram-workload] released"
                 $null = & $assertVerdict "yellow_stddev" 110 115 20.001 "YELLOW"
                 $null = & $assertVerdict "red_median" 115.001 115 20 "RED"
                 $null = & $assertVerdict "red_p99" 110 125.001 20 "RED"
-                $mismatch = Get-Content -LiteralPath $baselinePath -Raw | ConvertFrom-Json
+                $mismatch = ConvertFrom-JsonPreservingDateStrings -Json (Get-Content -LiteralPath $baselinePath -Raw)
                 $mismatch.environment_fingerprint = "mismatch"
                 Write-JsonNoBom -Value $mismatch -Path $baselinePath
                 $comparisonArguments["NbdSummary"] = & $newNbdSummary 112 120 10
@@ -3345,8 +3370,8 @@ Write-Output "[cuda-vram-workload] released"
                 }
                 $assertZramComparisonAccepted = {
                     param([string]$Name, [int64]$SizeKib)
-                    $mutatedDisk = $diskContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
-                    $mutatedNbd = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                    $mutatedDisk = ConvertFrom-JsonPreservingDateStrings -Json ($diskContext | ConvertTo-Json -Depth 16)
+                    $mutatedNbd = ConvertFrom-JsonPreservingDateStrings -Json ($nbdContext | ConvertTo-Json -Depth 16)
                     $mutatedDisk.zram.size_kib = $SizeKib
                     $mutatedNbd.zram.size_kib = $SizeKib
                     $comparison = New-PairComparison -DiskSummary $diskSummary -NbdSummary $nbdSummary -DiskContext $mutatedDisk -NbdContext $mutatedNbd -DiskCell $cellDisk -NbdCell $cellNbd -PairContext $pairContext -SelectedRelease $selectedRelease
@@ -3356,8 +3381,8 @@ Write-Output "[cuda-vram-workload] released"
                 }
                 $assertZramComparisonRefusal = {
                     param([string]$Name, $DiskSizeKib, $NbdSizeKib, [string]$ExpectedReason)
-                    $mutatedDisk = $diskContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
-                    $mutatedNbd = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                    $mutatedDisk = ConvertFrom-JsonPreservingDateStrings -Json ($diskContext | ConvertTo-Json -Depth 16)
+                    $mutatedNbd = ConvertFrom-JsonPreservingDateStrings -Json ($nbdContext | ConvertTo-Json -Depth 16)
                     $mutatedDisk.zram.size_kib = $DiskSizeKib
                     $mutatedNbd.zram.size_kib = $NbdSizeKib
                     & $assertComparisonRefusal $Name $mutatedDisk $mutatedNbd $ExpectedReason
@@ -3370,52 +3395,53 @@ Write-Output "[cuda-vram-workload] released"
                 & $assertZramComparisonRefusal "zram_usable_noncanonical" "1048572.0" "1048572.0" "comparison_zram_topology_mismatch"
                 $rawDecimalZram = ConvertFrom-Json -InputObject '{"size_kib":1048572.0}'
                 $rawExponentZram = ConvertFrom-Json -InputObject '{"size_kib":1.048572e6}'
-                if ($rawDecimalZram.size_kib -isnot [decimal] -or $rawExponentZram.size_kib -isnot [double]) {
+                if (($rawDecimalZram.size_kib -isnot [decimal] -and $rawDecimalZram.size_kib -isnot [double]) -or
+                    $rawExponentZram.size_kib -isnot [double]) {
                     throw "manufactured_zram_raw_numeric_fixture_types_invalid"
                 }
                 & $assertZramComparisonRefusal "zram_usable_raw_decimal" $rawDecimalZram.size_kib $rawDecimalZram.size_kib "comparison_zram_topology_mismatch"
                 & $assertZramComparisonRefusal "zram_usable_raw_exponent" $rawExponentZram.size_kib $rawExponentZram.size_kib "comparison_zram_topology_mismatch"
                 & $assertZramComparisonRefusal "zram_usable_overflow" "18446744073710600192" "18446744073710600192" "comparison_zram_topology_mismatch"
                 & $assertZramComparisonRefusal "zram_pair_observed_drift" 1048572 1048576 "comparison_zram_topology_mismatch"
-                $releaseMismatch = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                $releaseMismatch = ConvertFrom-JsonPreservingDateStrings -Json ($nbdContext | ConvertTo-Json -Depth 16)
                 $releaseMismatch.release.source_commit = ("d" * 40) -join ""
                 & $assertComparisonRefusal "release" $diskContext $releaseMismatch "comparison_release_identity_mismatch"
-                $scriptMismatch = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                $scriptMismatch = ConvertFrom-JsonPreservingDateStrings -Json ($nbdContext | ConvertTo-Json -Depth 16)
                 $scriptMismatch.script_sha256."cascade-down.sh" = ("d" * 64) -join ""
                 & $assertComparisonRefusal "script" $diskContext $scriptMismatch "comparison_script_hash_mismatch"
-                $zramMismatch = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                $zramMismatch = ConvertFrom-JsonPreservingDateStrings -Json ($nbdContext | ConvertTo-Json -Depth 16)
                 $zramMismatch.zram.algorithm = "lz4"
                 & $assertComparisonRefusal "zram" $diskContext $zramMismatch "comparison_zram_topology_mismatch"
-                $sinkMismatch = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                $sinkMismatch = ConvertFrom-JsonPreservingDateStrings -Json ($nbdContext | ConvertTo-Json -Depth 16)
                 $sinkMismatch.lower.sink_identity_sha256 = ("d" * 64) -join ""
                 & $assertComparisonRefusal "sink" $diskContext $sinkMismatch "comparison_lower_sink_binding_mismatch"
-                $argvMismatch = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                $argvMismatch = ConvertFrom-JsonPreservingDateStrings -Json ($nbdContext | ConvertTo-Json -Depth 16)
                 $argvMismatch.argv[15] = ("d" * 40) -join ""
                 & $assertComparisonRefusal "argv" $diskContext $argvMismatch "comparison_release_identity_mismatch"
-                $swappedDiskLower = $diskContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
-                $swappedNbdLower = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                $swappedDiskLower = ConvertFrom-JsonPreservingDateStrings -Json ($diskContext | ConvertTo-Json -Depth 16)
+                $swappedNbdLower = ConvertFrom-JsonPreservingDateStrings -Json ($nbdContext | ConvertTo-Json -Depth 16)
                 $swappedDiskLower.lower.type = "nbd"
                 $swappedNbdLower.lower.type = "scratch"
                 & $assertComparisonRefusal "lower_mode_binding" $swappedDiskLower $swappedNbdLower "comparison_lower_topology_mismatch"
-                $wrongDiskLower = $diskContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                $wrongDiskLower = ConvertFrom-JsonPreservingDateStrings -Json ($diskContext | ConvertTo-Json -Depth 16)
                 $wrongDiskLower.lower.type = "lower_disk"
                 & $assertComparisonRefusal "lower_wrong_type" $wrongDiskLower $nbdContext "comparison_lower_topology_mismatch"
-                $missingNbdLowerType = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                $missingNbdLowerType = ConvertFrom-JsonPreservingDateStrings -Json ($nbdContext | ConvertTo-Json -Depth 16)
                 $null = $missingNbdLowerType.lower.PSObject.Properties.Remove("type")
                 & $assertComparisonRefusal "lower_type_missing" $diskContext $missingNbdLowerType "comparison_lower_topology_mismatch"
-                $missingNbdLowerIdentity = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                $missingNbdLowerIdentity = ConvertFrom-JsonPreservingDateStrings -Json ($nbdContext | ConvertTo-Json -Depth 16)
                 $null = $missingNbdLowerIdentity.lower.PSObject.Properties.Remove("identity_sha256")
                 & $assertComparisonRefusal "lower_identity_missing" $diskContext $missingNbdLowerIdentity "comparison_lower_topology_mismatch"
-                $nbdDeviceMismatch = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                $nbdDeviceMismatch = ConvertFrom-JsonPreservingDateStrings -Json ($nbdContext | ConvertTo-Json -Depth 16)
                 $nbdDeviceMismatch.nbd.device = "/dev/nvme0n1"
                 & $assertComparisonRefusal "nbd_device" $diskContext $nbdDeviceMismatch "comparison_nbd_identity_invalid"
-                $nbdIdentityMismatch = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                $nbdIdentityMismatch = ConvertFrom-JsonPreservingDateStrings -Json ($nbdContext | ConvertTo-Json -Depth 16)
                 $nbdIdentityMismatch.nbd.identity_sha256 = ("d" * 64) -join ""
                 & $assertComparisonRefusal "nbd_identity" $diskContext $nbdIdentityMismatch "comparison_nbd_identity_lower_mismatch"
-                $nbdSinkAlias = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                $nbdSinkAlias = ConvertFrom-JsonPreservingDateStrings -Json ($nbdContext | ConvertTo-Json -Depth 16)
                 $nbdSinkAlias.lower.sink_identity_sha256 = $nbdSinkAlias.lower.identity_sha256
                 & $assertComparisonRefusal "nbd_sink_alias" $diskContext $nbdSinkAlias "comparison_nbd_identity_sink_alias"
-                $sameSecondTier = $nbdContext | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+                $sameSecondTier = ConvertFrom-JsonPreservingDateStrings -Json ($nbdContext | ConvertTo-Json -Depth 16)
                 $sameSecondTier.lower.identity_sha256 = $diskContext.lower.identity_sha256
                 $sameSecondTier.nbd.identity_sha256 = $sameSecondTier.lower.identity_sha256
                 & $assertComparisonRefusal "second_tier_identity" $diskContext $sameSecondTier "comparison_second_tier_identity_not_distinct"
@@ -3510,7 +3536,7 @@ Write-Output "[cuda-vram-workload] released"
                 . $writeEvidence
                 $evidence = Assert-CellEvidence -Summary ([pscustomobject]$summary) -CellResultDirectory $dir
                 if ($evidence.context_sha256 -ne $summary.context_sha256) { throw "manufactured_evidence_chain_invalid" }
-                $timeoutBudgetEnvelope = Get-Content -LiteralPath $envelopePath -Raw | ConvertFrom-Json
+                $timeoutBudgetEnvelope = ConvertFrom-JsonPreservingDateStrings -Json (Get-Content -LiteralPath $envelopePath -Raw)
                 $timeoutBudgetEnvelope.timeout_budget.sample_timeout_sec = 600
                 Write-JsonNoBom -Value $timeoutBudgetEnvelope -Path $envelopePath
                 $timeoutBudgetTamperRefused = $false
@@ -3542,7 +3568,7 @@ Write-Output "[cuda-vram-workload] released"
                 if (-not $tamperedInventoryRefused) { throw "manufactured_evidence_inventory_tamper_was_accepted" }
                 [IO.File]::WriteAllText($samplesPath, '{"sample":"manufactured"}' + "`n", [Text.UTF8Encoding]::new($false))
                 . $writeEvidence
-                $unsafeInventory = Get-Content -LiteralPath $inventoryPath -Raw | ConvertFrom-Json
+                $unsafeInventory = ConvertFrom-JsonPreservingDateStrings -Json (Get-Content -LiteralPath $inventoryPath -Raw)
                 $unsafeInventory.files[0].name = "../unsafe.txt"
                 Write-JsonNoBom -Value $unsafeInventory -Path $inventoryPath
                 $unsafePathRefused = $false
@@ -3559,7 +3585,7 @@ Write-Output "[cuda-vram-workload] released"
                 if (-not $unlistedRefused) { throw "manufactured_evidence_unlisted_file_was_accepted" }
                 Remove-Item -LiteralPath (Join-Path $dir "unlisted.txt") -Force
                 . $writeEvidence
-                $leakyEnvelope = Get-Content -LiteralPath $envelopePath -Raw | ConvertFrom-Json
+                $leakyEnvelope = ConvertFrom-JsonPreservingDateStrings -Json (Get-Content -LiteralPath $envelopePath -Raw)
                 $leakyEnvelope | Add-Member -NotePropertyName "hostname" -NotePropertyValue "private-host" -Force
                 Write-JsonNoBom -Value $leakyEnvelope -Path $envelopePath
                 $privateEnvelopeRefused = $false
