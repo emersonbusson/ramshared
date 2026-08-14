@@ -32,6 +32,7 @@ const RELEASE_SBOM_GENERATOR = { name: 'cargo-cyclonedx', version: '0.5.9', spec
 const RELEASE_PROMOTION_POLICY = 'docs/governance/release-promotion.json'
 const RELEASE_TARGET_TAG = 'v0.9.0-beta.1'
 const RELEASE_BASELINE_VERSION = '0.8.0'
+const RELEASE_LAST_RELEASE_SHA = '568e7b42b78b3c9edb8ea390cb4297142a37e412'
 const RELEASE_INTEGRITY_ARTIFACT_RETENTION_DAYS = 14
 const LOCAL_REUSABLE_AGGREGATE_KIND = 'local-reusable-needs-v1'
 const RUST_SLICE_COVERAGE_MAP = 'docs/governance/rust-slice-coverage.json'
@@ -222,7 +223,8 @@ function validateReleaseProducerPolicy(gate, policy, errors) {
       producer.credential !== 'github-app-required' || producer.release_config !== 'release-please-config.json' ||
       producer.draft !== true || producer.prerelease !== true || producer.force_tag_creation !== true ||
       producer.skip_github_release !== false || producer.release_as !== RELEASE_TARGET_TAG.slice(1) ||
-      producer.baseline_version !== RELEASE_BASELINE_VERSION) {
+      producer.baseline_version !== RELEASE_BASELINE_VERSION ||
+      producer.last_release_sha !== RELEASE_LAST_RELEASE_SHA) {
     errors.push(finding(gate.id, 'release-producer-policy-invalid'))
   }
 }
@@ -1003,6 +1005,12 @@ export function releaseProducerManifestMatchesTransition(manifest, policy) {
     (version === policy.baseline_version || version === policy.release_as)
 }
 
+function releaseProducerHeaderHasRequiredSections(header) {
+  if (typeof header !== 'string' || !/machine-readable release notes/i.test(header)) return false
+  return ['Resumo', 'Commits', 'Issue', 'Responsavel', 'Labels', 'Validacao', 'Rollback trigger']
+    .every((heading) => new RegExp(`^## ${heading}$`, 'm').test(header))
+}
+
 function releaseProducerWorkflowFindings(gate, text, block, root) {
   const policy = gate.policy.release_producer
   if (!policy) return []
@@ -1025,6 +1033,8 @@ function releaseProducerWorkflowFindings(gate, text, block, root) {
     if (config['release-type'] !== 'simple' || config.versioning !== 'prerelease' ||
         config['prerelease-type'] !== 'beta' || config.prerelease !== true || config.draft !== true ||
         config['force-tag-creation'] !== true || config['skip-github-release'] !== false ||
+        config['last-release-sha'] !== policy.last_release_sha ||
+        !releaseProducerHeaderHasRequiredSections(config['pull-request-header']) ||
         config['release-as'] !== policy.target_tag.slice(1) ||
         !releaseProducerManifestMatchesTransition(manifest, policy)) {
       observed.push('release-producer-config-invalid')
