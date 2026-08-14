@@ -4,30 +4,44 @@ on:
   push:
     tags:
       - 'v0.9.0-beta.1'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact beta tag to recover
+        required: true
+        type: string
+      source_sha:
+        description: Exact 40-character tag source SHA
+        required: true
+        type: string
+
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Release Integrity recovery {0} @ {1}', inputs.tag, inputs.source_sha) || format('Release Integrity {0} @ {1}', github.ref_name, github.sha) }}
 
 permissions: {}
 
 concurrency:
-  group: release-integrity-${{ github.ref }}
+  group: release-integrity-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
   release-integrity:
     name: release-integrity
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
     env:
       RELEASE_TARGET_TAG: v0.9.0-beta.1
-      RELEASE_TAG: ${{ github.ref_name }}
-      RELEASE_EVENT_SHA: ${{ github.sha }}
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      RELEASE_EVENT_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}
       RAMSHARED_PACKAGE_OUT: artifacts/release
-      RAMSHARED_PACKAGE_VERSION: ${{ github.ref_name }}
+      RAMSHARED_PACKAGE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Checkout tag source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}
           fetch-depth: 0
 
       - name: Set up Rust
@@ -43,10 +57,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            test "$GITHUB_REF" = refs/heads/main
+          fi
           test "$RELEASE_TAG" = "$RELEASE_TARGET_TAG"
+          case "$RELEASE_EVENT_SHA" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+            *) exit 1 ;;
+          esac
           git diff --quiet
           git diff --cached --quiet
           test -z "$(git status --porcelain)"
+          git fetch --no-tags origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
           tag_revision="$(git rev-list -n 1 "$RELEASE_TAG")"
           event_revision="$(git rev-parse "${RELEASE_EVENT_SHA}^{commit}")"
           test "$event_revision" = "$tag_revision"
@@ -63,7 +85,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo install cargo-cyclonedx --locked --version 0.5.9
-          cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --override-filename ramshared-sbom
+          cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --override-filename ramshared-sbom.cdx
           mv ramshared-sbom.cdx.json artifacts/release/ramshared-sbom.cdx.json
 
       - name: Write and verify detached archive checksum
