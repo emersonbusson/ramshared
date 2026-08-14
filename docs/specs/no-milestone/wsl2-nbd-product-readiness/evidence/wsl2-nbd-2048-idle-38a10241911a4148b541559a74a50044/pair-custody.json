@@ -1,0 +1,58 @@
+{
+    "schema_version":  "ramshared-nbd-public-pair-custody/v1",
+    "pair_id":  "2048-idle",
+    "release":  {
+                    "version":  "v0.9.0-beta.1-a365bda",
+                    "source_commit":  "a365bda0daf89a9707159b86efca8c1ba1ac760b",
+                    "installed_manifest_sha256":  "a848034f99da1a5205d84a4b844ac071ed91303a190172b8f1208c0ca5d6bb3a",
+                    "input_bundle_manifest_sha256":  "acf9a05eb3222b543bc38101a7170ec875c76e068fcba445e7cb18e4efc7e969"
+                },
+    "cells":  [
+                  {
+                      "mode":  "disk-only",
+                      "binary_match":  "N/A",
+                      "context_sha256":  "486f27a0aaccbfadaf0e74b52a7dfb66e3d44d6346fd071eefe63437e7fac935",
+                      "summary_sha256":  "eda7fc33a9c20733806a93376a098ade542c787d68078948ab12fa022aa42f23",
+                      "artifact_inventory_sha256":  "2175eacce0af222c2de4c7a464eefd527416e8736915f554c800c943efd33c41",
+                      "internal_envelope_sha256":  "6e3d6b7fd893dfe7bb5fe3cd4bc70e4f3b322859502f1c62c5daddefaf109562",
+                      "timeout_budget":  {
+                                             "cell_outer_timeout_sec":  1740,
+                                             "integrity_finalization_timeout_sec":  240,
+                                             "sample_timeout_sec":  240,
+                                             "samples":  3,
+                                             "setup_cleanup_timeout_sec":  300
+                                         }
+                  },
+                  {
+                      "mode":  "nbd",
+                      "binary_match":  "PASS",
+                      "context_sha256":  "6c5d76a8432afb0d87eedaf87183c13ddd989cd784271a256e523257e2396935",
+                      "summary_sha256":  "4691a0aa045eb796d4573dcdedf624bb43bd4f0d8a530557eb3a6bcfeb616cc9",
+                      "artifact_inventory_sha256":  "f814064eb9b00d999285550f5ee5e1c9ef19c58cf57313a8990b64138e10f103",
+                      "internal_envelope_sha256":  "c425efa7d58683f388c24418c3f57f5b5695fd3d0e0da19db24f00f2b049c864",
+                      "timeout_budget":  {
+                                             "cell_outer_timeout_sec":  1740,
+                                             "integrity_finalization_timeout_sec":  240,
+                                             "sample_timeout_sec":  240,
+                                             "samples":  3,
+                                             "setup_cleanup_timeout_sec":  300
+                                         }
+                  }
+              ],
+    "timeout_budget":  {
+                           "cell":  {
+                                        "sample_timeout_sec":  240,
+                                        "integrity_finalization_timeout_sec":  240,
+                                        "samples":  3,
+                                        "setup_cleanup_timeout_sec":  300,
+                                        "cell_outer_timeout_sec":  1740
+                                    },
+                           "cuda_hold_min_sec":  3600
+                       },
+    "cuda_hold_sec":  0,
+    "comparison_sha256":  "4fc6c565c0ba629135af60f6501720216f7e1f22899f1954e4f89109ff1ae9bf",
+    "cleanup":  {
+                    "complete":  true,
+                    "terminal_state":  "PRODUCT_OFF"
+                }
+}

@@ -1,0 +1,20 @@
+{
+    "schema_version":  "ramshared-nbd-public-pair-comparison/v1",
+    "pair_id":  "1024-idle",
+    "environment_fingerprint":  "3ea0bea088719352a9ff0e105d13d3ba6c078d6f39bb7744f746bb7fe576915d",
+    "baseline_verdict":  "BASELINE_CANDIDATE",
+    "baseline_reason":  "baseline_absent",
+    "nbd_vs_disk_median_ratio":  0.724281,
+    "nbd_vs_disk_p99_ratio":  0.280541,
+    "nbd_vs_disk_population_stddev_ratio":  0.103783,
+    "timeout_budget":  {
+                           "cell":  {
+                                        "sample_timeout_sec":  240,
+                                        "integrity_finalization_timeout_sec":  120,
+                                        "samples":  3,
+                                        "setup_cleanup_timeout_sec":  300,
+                                        "cell_outer_timeout_sec":  1380
+                                    },
+                           "cuda_hold_min_sec":  2880
+                       }
+}

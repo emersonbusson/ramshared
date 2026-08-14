@@ -336,7 +336,7 @@
         "-p",
         "ramshared-wsl2d",
         "--files",
-        "crates/ramshared-wsl2d/src/main.rs",
+        "crates/ramshared-wsl2d/src/main.rs,crates/ramshared-wsl2d/src/swap.rs",
         "--min",
         "80",
         "--report-json",
@@ -346,7 +346,8 @@
         "ramshared-wsl2d"
       ],
       "files": [
-        "crates/ramshared-wsl2d/src/main.rs"
+        "crates/ramshared-wsl2d/src/main.rs",
+        "crates/ramshared-wsl2d/src/swap.rs"
       ],
       "min": 80
     },
