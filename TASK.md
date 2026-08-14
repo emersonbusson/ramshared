@@ -281,20 +281,27 @@ not invalidate the completed environment-boundary correction.
 **Owner role:** `ci-governance`.
 **Date:** `2026-08-14`.
 **Registered time:** `09:18:00`.
-**Updated time:** `09:18:00`.
+**Updated time:** `09:40:00`.
 **Source revision:** `361427a63cbeb2a8b0ecafb224adeecb0539af9b`.
-**Destinations:** issue `#215`, `.github/workflows/release-integrity.yml`,
+**Destinations:** issues `#215` and `#217`,
+`.github/workflows/release-integrity.yml`,
 `.github/workflows/release-publication.yml`, `docs/governance/ci-contract.json`,
 `docs/specs/no-milestone/{ci-trust-and-release-integrity,release-promotion-publication}/`,
 and `tools/ci/check-ci-contract*`.
-**Scope:** Correct the pinned cargo-cyclonedx output name and recover the exact
-immutable beta tag through a manual read-only tag/SHA-bound integrity run. Do
-not delete or move the tag, upload an unvalidated asset, or bypass protected
-publication.
+**Scope:** Merge the packaged cargo-cyclonedx workspace roots and recover the
+exact immutable beta tag through a manual read-only tag/SHA-bound integrity
+run. Do not delete or move the tag, upload an unvalidated asset, or bypass
+protected publication.
 **Evidence / blockers:** Integrity run `31785964576` attempt 2 checked out and
 built exact source `361427a`, installed `cargo-cyclonedx 0.5.9`, then failed
-because `--override-filename ramshared-sbom` emits `ramshared-sbom.json` while
-the workflow required `ramshared-sbom.cdx.json`. TDD reproduces the wrong
-literal and the missing exact recovery identity. Local Green, hosted checks,
-merge, recovered four-file integrity artifact, protected publication, and
-removal of the temporary Release Please recovery key remain pending.
+because the workflow assumed one root-level output. PR `#216` merged the exact
+read-only recovery topology as `0198ed4`; recovery run `31787939790` then
+proved the deeper generator behavior: version 0.5.9 emitted one overridden
+file inside each of the 15 workspace crates. No artifact or asset was
+published. Follow-up issue `#217` and TDD now require a deterministic,
+path-free merge of exactly the two packaged roots (`ramshared-cli` and
+`ramshared-wsl2d`) and independent
+manifest validation of both roots plus tag/SHA properties. Local Green,
+hosted checks, merge, recovered four-file integrity artifact, protected
+publication, and removal of the temporary Release Please recovery key remain
+pending.
