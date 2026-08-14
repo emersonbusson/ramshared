@@ -5,17 +5,18 @@
 ## Status
 
 `partial` · local static/manufactured gates green · cover ✓ · E2E partial ·
-BINARY_MATCH partial. Attempt22b is the latest sealed live attempt: source
-`63bd3be04afd5e21e1728eb30ad2acd129b40131`, installed manifest
-`ba1aa8e6e7869ec25e15cb161f71b648d8be6e1d9f8531fbeea99247b954d619`, and
-matrix hash `4088682aa07e6b90d6477f7e1ceaff952ee16fac99967b2b980698460302da14`.
-The four P1 cells passed 3/3; Q2 disk-only was `RED/SAMPLE_TIMEOUT` with a
-verified `PRODUCT_OFF` terminal receipt (failure receipt hash
-`8e2e07918404e6533afb8ed440075ed0a2dff2ba4424a378f38647685596e7e4`). The
-matrix stopped before Q2 NBD and all Q4 cells, so no promotion claim is made.
-Async NBD recovery is completed and audited in `47889e0`; the non-destructive
-watchdog is completed and audited in `63bd3be`. The current blocker is Q2
-timeout calibration plus the fresh complete matrix and final independent gates.
+BINARY_MATCH partial. Attempt29 is the latest sealed live attempt, on source
+`a60c898ec6d938e6828d879d41a4b2ea0c7b6b21` and installed manifest
+`5804cf18956e9652dc8cc4eeac613e12376c2bd2a112846a9ddfa1eef2ccf240`.
+Its first P1 idle disk-only sample completed 3584 MiB HOLD and integrity with
+allocation-to-HOLD `114056 ms`; sample two reached only 2048 MiB before the
+120-second HOLD cap. The matrix stopped `RED/SAMPLE_TIMEOUT` before NBD or any
+bounded cell. Therefore CUDA did not run and low Task Manager VRAM was the
+expected idle state, not a CUDA failure. Terminal preflight was `PRODUCT_OFF`,
+the 36-entry inventory verified, and no public pair evidence was produced.
+The source-only successor changes only P1 to `240/120/1380 s`; P2/P4 remain
+unchanged. The current blocker is committing and resealing that correction,
+then completing the fresh matrix and final gates.
 Attempt 16 identified a Q4 timeout-budget mismatch; later pre-22b attempts
 sealed and exercised the Q4 correction, Attempt 21 exposed the NBD recovery
 self-deadlock, and Attempt 22b stopped at Q2. Attempt 15
@@ -467,6 +468,28 @@ verification progress without publishing a result early. The 48-check local
 cell suite covers valid transition, refusal, drift, reset, ordering, timeout
 nonpromotion, and cleanup preservation; live revalidation, resealing, and the
 complete matrix remain pending.
+
+## Attempt29 P1 allocation-to-HOLD correction
+
+Attempt29 (2026-08-14, sealed source `a60c898`) stopped on the first P1 idle
+disk-only cell. Run one completed all `3584 MiB`, HOLD, checksum, occupancy,
+and cleanup; allocation-to-HOLD took `114056 ms` and the independent integrity
+window retained 86 seconds. Run two reached only `2048/3584 MiB` before the
+120-second HOLD deadline and emitted no completed sample. The matrix stopped
+before NBD or any bounded condition, so CUDA was neither launched nor expected.
+The matrix summary and inventory SHA-256 values are
+`3f85c9948dc8c733b06351c029bc7a2a1512574cdc1ee8fdd8abfe41b78ef33e` and
+`e1d62c1c7a0d349624a8b68a309830495b67b2a2aa3c5efdd24b20a55b558fa9`;
+all 36 inventory records verified. Terminal pinned preflight returned
+`PRODUCT_OFF`, no public evidence was emitted, and `/dev/sdc` was untouched.
+
+The TDD successor raises only P1 allocation-to-HOLD from 120 to 240 seconds,
+retains P1 finalization at 120 seconds, and derives P1 cell/CUDA bounds of
+`1380/2880 s`. P2 remains `240/240/1740/3600`; P4 remains
+`600/600/3900/7920`. Shell 48/48, the PowerShell static suite, and the Node
+public-evidence suite 22/22 pass locally. This successor is source-only and
+nonpromotable until committed, resealed, and exercised by a fresh complete
+matrix.
 
 ## Attempt25 source-only zombie liveness hardening
 

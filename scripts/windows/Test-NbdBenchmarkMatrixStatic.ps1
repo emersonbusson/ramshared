@@ -308,9 +308,9 @@ try {
             $null -ne $cell.PSObject.Properties["queue_depth"]) {
             throw "plan must use allocation rather than I/O labels"
         }
-        $expectedSampleTimeout = switch ($cell.tier_mib) { 1024 { 120 }; 2048 { 240 }; 4096 { 600 } }
+        $expectedSampleTimeout = switch ($cell.tier_mib) { 1024 { 240 }; 2048 { 240 }; 4096 { 600 } }
         $expectedFinalizationTimeout = switch ($cell.tier_mib) { 1024 { 120 }; 2048 { 240 }; 4096 { 600 } }
-        $expectedOuterTimeout = switch ($cell.tier_mib) { 1024 { 1020 }; 2048 { 1740 }; 4096 { 3900 } }
+        $expectedOuterTimeout = switch ($cell.tier_mib) { 1024 { 1380 }; 2048 { 1740 }; 4096 { 3900 } }
         if ($cell.sample_timeout_sec -ne $expectedSampleTimeout -or
             $cell.integrity_finalization_timeout_sec -ne $expectedFinalizationTimeout -or
             $cell.cell_outer_timeout_sec -ne $expectedOuterTimeout -or
@@ -335,7 +335,7 @@ try {
     Invoke-Expression $cellBudgetFunctionSource
     Invoke-Expression $pairBudgetFunctionSource
     foreach ($cudaTuple in @(
-        @{ tier = 1024; outer = 1020; hold = 2160 },
+        @{ tier = 1024; outer = 1380; hold = 2880 },
         @{ tier = 2048; outer = 1740; hold = 3600 },
         @{ tier = 4096; outer = 3900; hold = 7920 }
     )) {
@@ -403,7 +403,7 @@ try {
             schema = 2; pair_id = "1024-idle"; mode = "nbd"; condition = "idle"; tier_mib = 1024
             release = [pscustomobject]@{ version = "manufactured-v1"; source_commit = (("a" * 40) -join ""); source_tree_state = "clean"; manifest_sha256 = (("b" * 64) -join "") }
             binary_match = "PASS"; watchdog = [pscustomobject]@{ armed = $true; outcome = "not_fired" }
-            timeout_budget = [pscustomobject]@{ sample_timeout_sec = 120; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1020 }
+            timeout_budget = [pscustomobject]@{ sample_timeout_sec = 240; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1380 }
             lower = [pscustomobject]@{
                 type = "nbd"; identity_sha256 = $lowerIdentity
                 sink_type = "directory"; sink_identity_sha256 = $sinkIdentity
@@ -520,7 +520,7 @@ try {
         $actionPath = Join-Path $dir "action.txt"
         $afterPath = Join-Path $dir "after.txt"
         $timeoutBudget = [ordered]@{
-            sample_timeout_sec = 120; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1020
+            sample_timeout_sec = 240; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1380
         }
         $context = [ordered]@{
             schema = 2; pair_id = "1024-idle"; mode = $Mode; condition = "idle"; tier_mib = 1024

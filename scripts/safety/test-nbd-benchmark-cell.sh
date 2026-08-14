@@ -489,7 +489,7 @@ test_tier_derived_timeout_budget_contract() {
   local tier expected_sample expected_finalization expected_outer samples summary wrong_sample
   for tier in 1024 2048 4096; do
     case $tier in
-      1024) expected_sample=120; expected_finalization=120; expected_outer=1020 ;;
+      1024) expected_sample=240; expected_finalization=120; expected_outer=1380 ;;
       2048) expected_sample=240; expected_finalization=240; expected_outer=1740 ;;
       4096) expected_sample=600; expected_finalization=600; expected_outer=3900 ;;
       *) echo "FAIL unsupported manufactured timeout tier" >&2; exit 1 ;;
@@ -569,11 +569,11 @@ def digest(name):
     with open(os.path.join(root, name), "rb") as source:
         return hashlib.sha256(source.read()).hexdigest()
 timeout_budget = {
-    "sample_timeout_sec": 120,
+    "sample_timeout_sec": 240,
     "integrity_finalization_timeout_sec": 120,
     "samples": 3,
     "setup_cleanup_timeout_sec": 300,
-    "cell_outer_timeout_sec": 1020,
+    "cell_outer_timeout_sec": 1380,
 }
 context = {
     "schema": 2,
@@ -1823,9 +1823,10 @@ test_integrity_finalization_uses_tier_policy_after_hold_and_reaps_before_refusal
     WORKER_TERM_GRACE_SEC=1
     WORKER_KILL_GRACE_SEC=1
     for tier in 1024 2048 4096; do
-      expected=$([[ $tier == 1024 ]] && echo 120 || ([[ $tier == 2048 ]] && echo 240 || echo 600))
-      [[ $(derive_sample_timeout_sec "$tier") == "$expected" ]]
-      [[ $(derive_integrity_finalization_timeout_sec "$tier") == "$expected" ]]
+      expected_sample=$([[ $tier == 1024 || $tier == 2048 ]] && echo 240 || echo 600)
+      expected_finalization=$([[ $tier == 1024 ]] && echo 120 || ([[ $tier == 2048 ]] && echo 240 || echo 600))
+      [[ $(derive_sample_timeout_sec "$tier") == "$expected_sample" ]]
+      [[ $(derive_integrity_finalization_timeout_sec "$tier") == "$expected_finalization" ]]
     done
     body=$(awk "/^stop_worker_for_integrity_deadline\\(\\)/ { on=1 } on { print } on && /^}$/ { exit }" "$1")
     ! grep -Fq WORKER_TERM_GRACE_SEC <<<"$body"
@@ -2782,11 +2783,11 @@ for name, contents in {
     with open(os.path.join(root, name), "w", encoding="utf-8") as target:
         target.write(contents)
 timeout_budget = {
-    "sample_timeout_sec": 120,
+    "sample_timeout_sec": 240,
     "integrity_finalization_timeout_sec": 120,
     "samples": 3,
     "setup_cleanup_timeout_sec": 300,
-    "cell_outer_timeout_sec": 1020,
+    "cell_outer_timeout_sec": 1380,
 }
 context = {
     "schema": 2,

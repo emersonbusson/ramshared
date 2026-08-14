@@ -217,7 +217,7 @@ function safeArtifactRoot(value) {
 
 function pairBudgetForTier(tierMiB) {
   const cells = {
-    1024: { sample_timeout_sec: 120, integrity_finalization_timeout_sec: 120, samples: 3, setup_cleanup_timeout_sec: 300, cell_outer_timeout_sec: 1020 },
+    1024: { sample_timeout_sec: 240, integrity_finalization_timeout_sec: 120, samples: 3, setup_cleanup_timeout_sec: 300, cell_outer_timeout_sec: 1380 },
     2048: { sample_timeout_sec: 240, integrity_finalization_timeout_sec: 240, samples: 3, setup_cleanup_timeout_sec: 300, cell_outer_timeout_sec: 1740 },
     4096: { sample_timeout_sec: 600, integrity_finalization_timeout_sec: 600, samples: 3, setup_cleanup_timeout_sec: 300, cell_outer_timeout_sec: 3900 },
   }

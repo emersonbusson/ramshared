@@ -3738,3 +3738,44 @@ second activation.
 **Verdict:** 🟡 The real 1 GiB WSL2 NBD activation and identity checks passed.
 The required 1/2/4 GiB benchmark matrix with n>=3 and median/p99/deviation is
 not yet run, so this does not claim index-quality DONE.
+
+## 2026-08-14 00:59 -03 — WSL2 NBD Attempt29 P1 timeout refusal
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0008`.
+**Owner role:** `wsl2-nbd-operator`.
+**Observed at:** `2026-08-14T00:54:32-03:00`.
+**Verified at:** `2026-08-14T00:59:39-03:00`.
+**Source revision:** `a60c898ec6d938e6828d879d41a4b2ea0c7b6b21`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the host-private campaign root and the two committed
+SHA-256 identities below; do not promote partial cell artifacts.
+**Freshness:** Revalidate after any timeout-budget, worker-integrity, cgroup,
+controller, CUDA, NBD, or cleanup change.
+**What:** Ran the approved canonical Windows/WSL2 matrix with stop-first-RED
+against the exact sealed release. The first P1 idle disk-only cell refused on
+its second sample before NBD or any bounded/CUDA condition ran.
+**Category:** `wsl2-nbd-live`.
+**How to measure:** Canonical controller PlanOnly followed by the approved live
+controller; inventory byte/hash verification; exact terminal pinned preflight;
+and read-only process, cgroup, swap, NBD, and service residue inspection.
+**Measured data:** Run one completed `3584 MiB`, HOLD, occupancy, and checksum;
+allocation-to-HOLD was `114056 ms`, the integrity worker exited zero, and no
+cgroup `oom_kill` increment was observed. Run two reached only `2048/3584 MiB`
+before the 120-second HOLD deadline and emitted `SAMPLE_TIMEOUT`. The matrix
+stopped `RED/failed_pair`; NBD and bounded cells did not run, so no CUDA VRAM
+allocation was expected. All 36 inventory records verified. Matrix-summary
+SHA-256 is `3f85c9948dc8c733b06351c029bc7a2a1512574cdc1ee8fdd8abfe41b78ef33e`;
+inventory SHA-256 is
+`e1d62c1c7a0d349624a8b68a309830495b67b2a2aa3c5efdd24b20a55b558fa9`.
+**Refusals:** No completed pair or public evidence was produced. Terminal
+pinned preflight returned `PRODUCT_OFF`; no managed swap, worker, daemon,
+CUDA process, benchmark cgroup, or NBD attachment remained. The pre-existing
+`/dev/sdc` swap was not changed.
+**Rollback trigger:** Any timeout promotion, public evidence from this partial
+cell, terminal state other than exact `PRODUCT_OFF`, residual managed resource,
+or mutation of `/dev/sdc` invalidates the campaign and blocks another run.
+**Verdict:** 🟡 The refusal and cleanup are valid diagnostic evidence. The
+source-only P1 policy successor (`240 s` HOLD, independent `120 s` integrity)
+must be committed, resealed, and exercised by a fresh complete matrix before
+qualification or PR promotion.

@@ -29,9 +29,9 @@ function publicMetric(samples) {
 
 function wsl2PublicPairFixture({ tierMiB = 1024, condition = 'idle' } = {}) {
   const policy = {
-    1024: { sampleTimeoutSec: 120, cellOuterTimeoutSec: 1020, cudaHoldSec: 2160 },
-    2048: { sampleTimeoutSec: 240, cellOuterTimeoutSec: 1740, cudaHoldSec: 3600 },
-    4096: { sampleTimeoutSec: 600, cellOuterTimeoutSec: 3900, cudaHoldSec: 7920 },
+    1024: { sampleTimeoutSec: 240, finalizationTimeoutSec: 120, cellOuterTimeoutSec: 1380, cudaHoldSec: 2880 },
+    2048: { sampleTimeoutSec: 240, finalizationTimeoutSec: 240, cellOuterTimeoutSec: 1740, cudaHoldSec: 3600 },
+    4096: { sampleTimeoutSec: 600, finalizationTimeoutSec: 600, cellOuterTimeoutSec: 3900, cudaHoldSec: 7920 },
   }[tierMiB]
   if (!policy) throw new Error(`unsupported fixture tier: ${tierMiB}`)
   const pairId = `${tierMiB}-${condition}`
@@ -45,7 +45,7 @@ function wsl2PublicPairFixture({ tierMiB = 1024, condition = 'idle' } = {}) {
   mkdirSync(directory, { recursive: true })
   const cellTimeoutBudget = {
     sample_timeout_sec: policy.sampleTimeoutSec,
-    integrity_finalization_timeout_sec: policy.sampleTimeoutSec,
+    integrity_finalization_timeout_sec: policy.finalizationTimeoutSec,
     samples: 3,
     setup_cleanup_timeout_sec: 300,
     cell_outer_timeout_sec: policy.cellOuterTimeoutSec,
@@ -227,7 +227,7 @@ function rewriteBoundPublicPairComparison(fixture, comparison) {
 
 test('bounded_pair_custody_requires_the_current_tier_cuda_hold', () => {
   for (const { tierMiB, cudaHoldSec } of [
-    { tierMiB: 1024, cudaHoldSec: 2160 },
+    { tierMiB: 1024, cudaHoldSec: 2880 },
     { tierMiB: 2048, cudaHoldSec: 3600 },
     { tierMiB: 4096, cudaHoldSec: 7920 },
   ]) {

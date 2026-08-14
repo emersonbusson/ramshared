@@ -337,14 +337,19 @@ function Assert-LiveConfiguration {
 function Get-CellTimeoutBudget {
     param([Parameter(Mandatory = $true)][int]$TierMiB)
     $sampleTimeoutSec = switch ($TierMiB) {
-        1024 { 120; break }
+        1024 { 240; break }
         2048 { 240; break }
         4096 { 600; break }
         default { throw "cell_timeout_tier_invalid" }
     }
     # Finalization begins only after HOLD has been observed and TERM starts.
-    # It is a tier policy equal to the allocation-to-HOLD containment cap.
-    $integrityFinalizationTimeoutSec = $sampleTimeoutSec
+    # It remains independent from the allocation-to-HOLD containment cap.
+    $integrityFinalizationTimeoutSec = switch ($TierMiB) {
+        1024 { 120; break }
+        2048 { 240; break }
+        4096 { 600; break }
+        default { throw "cell_timeout_tier_invalid" }
+    }
     $setupCleanupTimeoutSec = 300
     $cellOuterTimeoutMinSec = 900
     $cellOuterTimeoutMaxSec = 3900
@@ -2975,9 +2980,9 @@ Write-Output "[cuda-vram-workload] released"
             $observed = @()
             foreach ($tier in @(1024, 2048, 4096)) {
                 $cellBudget = Get-CellTimeoutBudget -TierMiB $tier
-                $expectedSample = switch ($tier) { 1024 { 120 }; 2048 { 240 }; 4096 { 600 } }
-                $expectedFinalization = $expectedSample
-                $expectedOuter = switch ($tier) { 1024 { 1020 }; 2048 { 1740 }; 4096 { 3900 } }
+                $expectedSample = switch ($tier) { 1024 { 240 }; 2048 { 240 }; 4096 { 600 } }
+                $expectedFinalization = switch ($tier) { 1024 { 120 }; 2048 { 240 }; 4096 { 600 } }
+                $expectedOuter = switch ($tier) { 1024 { 1380 }; 2048 { 1740 }; 4096 { 3900 } }
                 if ($cellBudget.sample_timeout_sec -ne $expectedSample -or $cellBudget.samples -ne 3 -or
                     $cellBudget.integrity_finalization_timeout_sec -ne $expectedFinalization -or
                     $cellBudget.setup_cleanup_timeout_sec -ne 300 -or $cellBudget.cell_outer_timeout_sec -ne $expectedOuter) {
@@ -2996,18 +3001,18 @@ Write-Output "[cuda-vram-workload] released"
         }
         "timeout-budget-property-order" {
             $canonicalOrder = [ordered]@{
-                sample_timeout_sec = 120
+                sample_timeout_sec = 240
                 integrity_finalization_timeout_sec = 120
                 samples = 3
                 setup_cleanup_timeout_sec = 300
-                cell_outer_timeout_sec = 1020
+                cell_outer_timeout_sec = 1380
             }
             $permutedOrder = [ordered]@{
-                cell_outer_timeout_sec = 1020
+                cell_outer_timeout_sec = 1380
                 setup_cleanup_timeout_sec = 300
                 samples = 3
                 integrity_finalization_timeout_sec = 120
-                sample_timeout_sec = 120
+                sample_timeout_sec = 240
             }
             $rawJsonDiffers = (($canonicalOrder | ConvertTo-Json -Compress -Depth 8) -cne
                 ($permutedOrder | ConvertTo-Json -Compress -Depth 8))
@@ -3016,18 +3021,18 @@ Write-Output "[cuda-vram-workload] released"
             }
             $semantic = Assert-CellTimeoutBudgetMatch -Budget ([pscustomobject]$permutedOrder) -TierMiB 1024 `
                 -FailureReason "manufactured_timeout_budget_property_order_mismatch"
-            if ($semantic.sample_timeout_sec -ne 120 -or $semantic.samples -ne 3 -or
+            if ($semantic.sample_timeout_sec -ne 240 -or $semantic.samples -ne 3 -or
                 $semantic.integrity_finalization_timeout_sec -ne 120 -or
-                $semantic.setup_cleanup_timeout_sec -ne 300 -or $semantic.cell_outer_timeout_sec -ne 1020) {
+                $semantic.setup_cleanup_timeout_sec -ne 300 -or $semantic.cell_outer_timeout_sec -ne 1380) {
                 throw "manufactured_timeout_budget_property_order_semantic_values_invalid"
             }
             $mismatchRefused = $false
             $mismatch = [ordered]@{
-                sample_timeout_sec = 121
+                sample_timeout_sec = 241
                 integrity_finalization_timeout_sec = 120
                 samples = 3
                 setup_cleanup_timeout_sec = 300
-                cell_outer_timeout_sec = 1020
+                cell_outer_timeout_sec = 1380
             }
             try {
                 Assert-CellTimeoutBudgetMatch -Budget ([pscustomobject]$mismatch) -TierMiB 1024 `
@@ -3038,11 +3043,11 @@ Write-Output "[cuda-vram-workload] released"
             if (-not $mismatchRefused) { throw "manufactured_timeout_budget_mismatch_was_accepted" }
             $noncanonicalRefused = $false
             $noncanonical = [ordered]@{
-                sample_timeout_sec = 120.0
+                sample_timeout_sec = 240.0
                 integrity_finalization_timeout_sec = 120
                 samples = 3
                 setup_cleanup_timeout_sec = 300
-                cell_outer_timeout_sec = 1020
+                cell_outer_timeout_sec = 1380
             }
             try {
                 Assert-CellTimeoutBudgetMatch -Budget ([pscustomobject]$noncanonical) -TierMiB 1024 `
@@ -3222,12 +3227,12 @@ Write-Output "[cuda-vram-workload] released"
                         }
                         utc = [pscustomobject]@{ started = "2026-08-12T00:00:00Z" }
                         watchdog = [pscustomobject]@{ armed = $true; outcome = "not_fired" }
-                        timeout_budget = [pscustomobject]@{ sample_timeout_sec = 120; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1020 }
+                        timeout_budget = [pscustomobject]@{ sample_timeout_sec = 240; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1380 }
                         argv = @(
                             "nbd-benchmark-cell.sh", "--run", "--mode", $Mode, "--condition", "idle", "--tier-mib", "1024",
                             "--artifact-dir", "<campaign-artifact-dir>", "--sealed-release-root", $selectedRelease.selected,
                             "--release-version", "manufactured-v1", "--expected-source-commit", $sourceCommit,
-                            "--expected-manifest-sha256", $manifestSha256, "--pair-id", "1024-idle", "--runs", "3", "--sample-timeout-sec", "120"
+                            "--expected-manifest-sha256", $manifestSha256, "--pair-id", "1024-idle", "--runs", "3", "--sample-timeout-sec", "240"
                         )
                         script_sha256 = [pscustomobject]$scriptHashes
                         workload = [pscustomobject]@{ name = "anonymous_memory_sequential_write"; pattern = "shake256-v1"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = 1 }
@@ -3454,7 +3459,7 @@ Write-Output "[cuda-vram-workload] released"
                     schema = 2; pair_id = "1024-idle"; mode = "nbd"; condition = "idle"; tier_mib = 1024
                     release = [ordered]@{ version = "manufactured-v1"; source_commit = $sourceCommit; source_tree_state = "clean"; manifest_sha256 = $manifestSha256 }
                     binary_match = "PASS"; watchdog = [ordered]@{ armed = $true; outcome = "not_fired" }
-                    timeout_budget = [ordered]@{ sample_timeout_sec = 120; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1020 }
+                    timeout_budget = [ordered]@{ sample_timeout_sec = 240; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1380 }
                     lower = [ordered]@{
                         type = "nbd"; identity_sha256 = ("c" * 64) -join ""
                         sink_type = "directory"; sink_identity_sha256 = ("d" * 64) -join ""
@@ -3610,7 +3615,7 @@ Write-Output "[cuda-vram-workload] released"
                         release = [ordered]@{ version = "manufactured-v1"; source_commit = $sourceCommit; source_tree_state = "clean"; manifest_sha256 = $manifestSha256 }
                         binary_match = $BinaryMatch
                         watchdog = [ordered]@{ armed = $true; outcome = "not_fired" }
-                        timeout_budget = [pscustomobject]@{ sample_timeout_sec = 120; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1020 }
+                        timeout_budget = [pscustomobject]@{ sample_timeout_sec = 240; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1380 }
                         zram = [pscustomobject]@{
                             device = "zram0"; algorithm = "zstd"; size_kib = 1048576; priority = 200
                             identity_sha256 = ("c" * 64) -join ""

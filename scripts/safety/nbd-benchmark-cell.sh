@@ -96,7 +96,7 @@ require_shared_host_approval() {
 
 derive_sample_timeout_sec() {
   case $1 in
-    1024) printf '120\n' ;;
+    1024) printf '240\n' ;;
     2048) printf '240\n' ;;
     4096) printf '600\n' ;;
     *) return 1 ;;
@@ -106,7 +106,12 @@ derive_sample_timeout_sec() {
 # Integrity finalization starts only after the HOLD receipt/TERM boundary.
 # This is an explicit tier policy, not a measured performance allowance.
 derive_integrity_finalization_timeout_sec() {
-  derive_sample_timeout_sec "$1"
+  case $1 in
+    1024) printf '120\n' ;;
+    2048) printf '240\n' ;;
+    4096) printf '600\n' ;;
+    *) return 1 ;;
+  esac
 }
 
 validate_worker_grace_values() {
