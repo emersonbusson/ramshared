@@ -127,6 +127,7 @@ $required = @(
     "cell_evidence_timeout_budget_mismatch",
     "timeout_budget",
     "sample_timeout_sec",
+    "integrity_finalization_timeout_sec",
     "cell_outer_timeout_sec",
     "Assert-CellFailureReceipt",
     "New-CellControllerFailureExecution",
@@ -308,8 +309,10 @@ try {
             throw "plan must use allocation rather than I/O labels"
         }
         $expectedSampleTimeout = switch ($cell.tier_mib) { 1024 { 120 }; 2048 { 240 }; 4096 { 600 } }
-        $expectedOuterTimeout = switch ($cell.tier_mib) { 1024 { 900 }; 2048 { 1020 }; 4096 { 2100 } }
+        $expectedFinalizationTimeout = switch ($cell.tier_mib) { 1024 { 120 }; 2048 { 240 }; 4096 { 600 } }
+        $expectedOuterTimeout = switch ($cell.tier_mib) { 1024 { 1020 }; 2048 { 1740 }; 4096 { 3900 } }
         if ($cell.sample_timeout_sec -ne $expectedSampleTimeout -or
+            $cell.integrity_finalization_timeout_sec -ne $expectedFinalizationTimeout -or
             $cell.cell_outer_timeout_sec -ne $expectedOuterTimeout -or
             $cell.setup_cleanup_timeout_sec -ne 300) {
             throw "plan tier-derived timeout budget mismatch"
@@ -317,6 +320,36 @@ try {
     }
     Write-Output "PASS plan_uses_allocation_contract_labels"
     Write-Output "PASS plan_uses_tier_derived_timeout_budgets"
+    $cellBudgetFunctionSource = [regex]::Match(
+        $text,
+        '(?ms)^function Get-CellTimeoutBudget \{.*?(?=^function Get-PairTimeoutBudget \{)'
+    ).Value
+    $pairBudgetFunctionSource = [regex]::Match(
+        $text,
+        '(?ms)^function Get-PairTimeoutBudget \{.*?(?=^function Get-StrictCellTimeoutBudget \{)'
+    ).Value
+    if ([string]::IsNullOrWhiteSpace($cellBudgetFunctionSource) -or
+        [string]::IsNullOrWhiteSpace($pairBudgetFunctionSource)) {
+        throw "pair timeout budget functions are missing"
+    }
+    Invoke-Expression $cellBudgetFunctionSource
+    Invoke-Expression $pairBudgetFunctionSource
+    foreach ($cudaTuple in @(
+        @{ tier = 1024; outer = 1020; hold = 2160 },
+        @{ tier = 2048; outer = 1740; hold = 3600 },
+        @{ tier = 4096; outer = 3900; hold = 7920 }
+    )) {
+        $budget = Get-PairTimeoutBudget -TierMiB $cudaTuple.tier
+        if ($budget.cell.cell_outer_timeout_sec -ne $cudaTuple.outer -or
+            $budget.cuda_hold_min_sec -ne $cudaTuple.hold) {
+            throw "pair CUDA hold policy mismatch for tier $($cudaTuple.tier)"
+        }
+        if (($cudaTuple.hold - 1) -ge $budget.cuda_hold_min_sec -or
+            ($cudaTuple.hold + 1) -le $budget.cuda_hold_min_sec) {
+            throw "pair CUDA hold tamper boundary was accepted for tier $($cudaTuple.tier)"
+        }
+    }
+    Write-Output "PASS pair_cuda_hold_policy_and_tamper_boundaries"
     $keys = @($plan.cells | ForEach-Object { "{0}:{1}:{2}" -f $_.tier_mib,$_.condition,$_.mode })
     $expected = @(
         "1024:idle:disk-only", "1024:idle:nbd", "1024:bounded:disk-only", "1024:bounded:nbd",
@@ -370,7 +403,7 @@ try {
             schema = 2; pair_id = "1024-idle"; mode = "nbd"; condition = "idle"; tier_mib = 1024
             release = [pscustomobject]@{ version = "manufactured-v1"; source_commit = (("a" * 40) -join ""); source_tree_state = "clean"; manifest_sha256 = (("b" * 64) -join "") }
             binary_match = "PASS"; watchdog = [pscustomobject]@{ armed = $true; outcome = "not_fired" }
-            timeout_budget = [pscustomobject]@{ sample_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 900 }
+            timeout_budget = [pscustomobject]@{ sample_timeout_sec = 120; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1020 }
             lower = [pscustomobject]@{
                 type = "nbd"; identity_sha256 = $lowerIdentity
                 sink_type = "directory"; sink_identity_sha256 = $sinkIdentity
@@ -487,7 +520,7 @@ try {
         $actionPath = Join-Path $dir "action.txt"
         $afterPath = Join-Path $dir "after.txt"
         $timeoutBudget = [ordered]@{
-            sample_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 900
+            sample_timeout_sec = 120; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1020
         }
         $context = [ordered]@{
             schema = 2; pair_id = "1024-idle"; mode = $Mode; condition = "idle"; tier_mib = 1024
@@ -560,6 +593,7 @@ try {
     }
     $publicPairContext = [pscustomobject]@{
         pair_id = "1024-idle"; timeout_budget = Get-PairTimeoutBudget -TierMiB 1024
+        cuda_hold_sec = 0
         gpu_identity = [pscustomobject]@{ gpu_model = "Manufactured GPU"; gpu_driver = "1.2.3" }
         windows_script_sha256 = [pscustomobject]@{
             "Invoke-NbdBenchmarkMatrix.ps1" = Get-Sha256File -Path $script
@@ -782,7 +816,10 @@ try {
     ).Value
     if ([string]::IsNullOrWhiteSpace($pairFunctionSource) -or
         $pairFunctionSource -notmatch 'raw_measurement_status[\s\S]*Apply-BaselineVerdictToPair' -or
-        $pairFunctionSource -notmatch 'finally\s*\{[\s\S]*Complete-CudaWorkload[\s\S]*Write-PublicPairEvidence') {
+        $pairFunctionSource -notmatch 'finally\s*\{[\s\S]*Complete-CudaWorkload[\s\S]*Write-PublicPairEvidence' -or
+        $pairFunctionSource -notmatch '\$pairCudaHoldSec\s*=\s*\[int\]\$pairContext\.timeout_budget\.cuda_hold_min_sec' -or
+        $pairFunctionSource -notmatch 'Start-CudaWorkload\s+-PairDir\s+\$pairDir\s+-CudaHoldSec\s+\$pairCudaHoldSec' -or
+        $pairFunctionSource -notmatch 'cuda_hold_sec\s*=\s+\$pairCudaHoldSec') {
         throw "public pair evidence must bind raw PASS cells and wait for CUDA cleanup"
     }
     $publicPairWriterSource = [regex]::Match(
@@ -793,6 +830,7 @@ try {
         $publicPairWriterSource -notmatch '\$validatedPair\s*=\s*Assert-PublicPairEvidenceEligibility' -or
         $publicPairWriterSource -notmatch 'Write-JsonNoBom\s+-Value\s+\$publicComparison\s+-Path\s+\$comparisonPath[\s\S]*?\$comparisonSha256\s*=\s*Get-Sha256File\s+-Path\s+\$comparisonPath' -or
         $publicPairWriterSource -notmatch 'comparison_sha256\s*=\s+\$comparisonSha256' -or
+        $publicPairWriterSource -notmatch 'cuda_hold_sec\s*=\s+\[int\]\$PairContext\.cuda_hold_sec' -or
         $publicPairWriterSource -notmatch 'pair_comparison_sha256\s*=\s+\$comparisonSha256' -or
         $publicPairWriterSource -notmatch 'New-PublicMetric\s+-Summary\s+\$diskSummary' -or
         $publicPairWriterSource -notmatch 'New-PublicMetric\s+-Summary\s+\$nbdSummary' -or
@@ -918,7 +956,7 @@ try {
     $q4HoldReady = Join-Path $tmp "cuda-q4-hold-ready.txt"
     $q4HoldAccepted = $false
     try {
-        & $cudaScript -HandshakeSelfTest -HoldSec 4320 -ReadyFile $q4HoldReady | Out-Null
+        & $cudaScript -HandshakeSelfTest -HoldSec 7920 -ReadyFile $q4HoldReady | Out-Null
         $q4HoldAccepted = $true
     } catch {
         $q4HoldAccepted = $false
@@ -928,7 +966,7 @@ try {
     }
     $cudaOverCapRefused = $false
     try {
-        & $cudaScript -HandshakeSelfTest -HoldSec 4321 -ReadyFile (Join-Path $tmp "cuda-over-cap-ready.txt") | Out-Null
+        & $cudaScript -HandshakeSelfTest -HoldSec 7921 -ReadyFile (Join-Path $tmp "cuda-over-cap-ready.txt") | Out-Null
     } catch {
         $cudaOverCapRefused = $true
     }

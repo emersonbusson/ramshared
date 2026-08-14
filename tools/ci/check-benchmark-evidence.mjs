@@ -161,7 +161,7 @@ function expectedPublicPairRatios(metrics) {
 }
 
 const PAIR_CUSTODY_KEYS = [
-  'schema_version', 'pair_id', 'release', 'cells', 'timeout_budget', 'comparison_sha256', 'cleanup',
+  'schema_version', 'pair_id', 'release', 'cells', 'timeout_budget', 'cuda_hold_sec', 'comparison_sha256', 'cleanup',
 ]
 const PAIR_CELL_KEYS = [
   'mode', 'binary_match', 'context_sha256', 'summary_sha256', 'artifact_inventory_sha256',
@@ -172,7 +172,10 @@ const PAIR_RELEASE_KEYS = [
 ]
 const PAIR_CLEANUP_KEYS = ['complete', 'terminal_state']
 const PAIR_TIMEOUT_KEYS = ['cell', 'cuda_hold_min_sec']
-const CELL_TIMEOUT_KEYS = ['sample_timeout_sec', 'samples', 'setup_cleanup_timeout_sec', 'cell_outer_timeout_sec']
+const CELL_TIMEOUT_KEYS = [
+  'sample_timeout_sec', 'integrity_finalization_timeout_sec', 'samples',
+  'setup_cleanup_timeout_sec', 'cell_outer_timeout_sec',
+]
 const PAIR_COMPARISON_KEYS = [
   'schema_version', 'pair_id', 'environment_fingerprint', 'baseline_verdict', 'baseline_reason',
   'nbd_vs_disk_median_ratio', 'nbd_vs_disk_p99_ratio', 'nbd_vs_disk_population_stddev_ratio',
@@ -214,9 +217,9 @@ function safeArtifactRoot(value) {
 
 function pairBudgetForTier(tierMiB) {
   const cells = {
-    1024: { sample_timeout_sec: 120, samples: 3, setup_cleanup_timeout_sec: 300, cell_outer_timeout_sec: 900 },
-    2048: { sample_timeout_sec: 240, samples: 3, setup_cleanup_timeout_sec: 300, cell_outer_timeout_sec: 1020 },
-    4096: { sample_timeout_sec: 600, samples: 3, setup_cleanup_timeout_sec: 300, cell_outer_timeout_sec: 2100 },
+    1024: { sample_timeout_sec: 120, integrity_finalization_timeout_sec: 120, samples: 3, setup_cleanup_timeout_sec: 300, cell_outer_timeout_sec: 1020 },
+    2048: { sample_timeout_sec: 240, integrity_finalization_timeout_sec: 240, samples: 3, setup_cleanup_timeout_sec: 300, cell_outer_timeout_sec: 1740 },
+    4096: { sample_timeout_sec: 600, integrity_finalization_timeout_sec: 600, samples: 3, setup_cleanup_timeout_sec: 300, cell_outer_timeout_sec: 3900 },
   }
   const cell = cells[tierMiB]
   return cell ? { cell, cuda_hold_min_sec: (2 * cell.cell_outer_timeout_sec) + 120 } : null
@@ -395,6 +398,12 @@ function validateWsl2PairCustody(record, artifactContents, findings) {
   }
   if (!matchesBudget(custody.timeout_budget, expectedPair.budget) || !matchesBudget(record.workload.parameters.timeout_budget, expectedPair.budget)) {
     findings.push('pair-custody-timeout-budget')
+  }
+  const expectedCudaHoldSec = record.workload.parameters.condition === 'bounded'
+    ? expectedPair.budget.cuda_hold_min_sec
+    : 0
+  if (!Number.isSafeInteger(custody.cuda_hold_sec) || custody.cuda_hold_sec !== expectedCudaHoldSec) {
+    findings.push('pair-custody-cuda-hold')
   }
   if (!lowerSha256(custody.comparison_sha256)) findings.push('pair-custody-comparison-hash')
   if (custody.comparison_sha256 !== comparisonHash) findings.push('pair-custody-comparison-binding')

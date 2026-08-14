@@ -63,11 +63,11 @@
 **Registered date:** `2026-08-12`.
 **Updated date:** `2026-08-13`.
 **Registered time:** `12:15:54`.
-**Updated time:** `19:51:05`.
-**Source revision:** `d4efe596996e6877e26409fb7b1ad8c369c7557f`.
+**Updated time:** `21:43:24`.
+**Source revision:** `4ae8d58f07b69afa61e6ba0b06da844820e1cb1d`.
 **Destinations:** branch `feat/wsl2-nbd-benchmark-matrix`, milestone `v0.9.0-beta.1 — WSL2 NBD`, issue `#194`, `docs/specs/no-milestone/wsl2-nbd-product-readiness/`, `scripts/safety/`, `scripts/windows/`, `scripts/p0/`, `tools/ci/`, and the sealed Linux bundle.
 **Scope:** Correct and qualify the paired 1/2/4 GiB disk-versus-NBD benchmark with identical zram topology, cgroup-before-start containment, exact scratch identity, pair-scoped CUDA, bounded Windows-to-WSL calls, source/BINARY_MATCH binding, numeric comparison/regression records, and fail-closed cleanup. Run no live pressure until static/manufactured gates and a fresh independent Sol Gate A pass.
-**Evidence / blockers:** Attempt 15 used sealed source `033291e`: both 1 GiB idle cells passed 3/3 with checksum, occupancy, and per-cell `PRODUCT_OFF`; NBD retained `BINARY_MATCH=PASS`. Attempt 16 passed P1/Q2 disk/NBD pairs in both idle and bounded conditions, but Q4 allocation-to-HOLD was about 335 seconds and sample two hit the fixed 120-second `SAMPLE_TIMEOUT` after about 281 seconds; cleanup was clean. The later corrections established the P1/Q2/Q4 tuples `120/900`, `240/1020`, and `600/2100`. Attempt 17 reproduced a false `cell_timeout_budget_mismatch` when equal summary/controller timeout fields were serialized in different property orders. The named `cell_timeout_budget_property_order_is_semantic` test is now green with canonical strict comparison and refuses real mismatch/noncanonical types; fresh independent Sol Gate A passed that frozen correction. Attempt 18 then exposed that the controller's valid Q4 `CudaMaxHoldSec=4320` was rejected by the workload's stale 3600-second parameter cap before CUDA startup; the named handshake test now proves 4320 accepted and 4321 refused. Attempt 19 used sealed source `fed085b` and reached 9/12 PASS cells; Attempt 20 reached 10/12 before Q4 bounded headroom refusal. Attempt 21 reached 11/12 before the synchronous recovery self-deadlock; async recovery completed/audited in `47889e0`, and the non-destructive watchdog completed/audited in `63bd3be`. Attempt22b is the latest live attempt on sealed source `63bd3be`: four P1 cells passed 3/3, Q2 disk-only was `RED/SAMPLE_TIMEOUT`, the matrix hash is `4088682aa07e6b90d6477f7e1ceaff952ee16fac99967b2b980698460302da14`, the failure receipt hash is `8e2e07918404e6533afb8ed440075ed0a2dff2ba4424a378f38647685596e7e4`, and terminal `PRODUCT_OFF` was verified. Q2 NBD and all Q4 cells did not run. The current blockers are fresh independent Gate A, resealing, Q2-calibrated complete matrix, Gate B, PR checks, and merge; no new live claim is made.
+**Evidence / blockers:** Attempt 15 used sealed source `033291e`: both 1 GiB idle cells passed 3/3 with checksum, occupancy, and per-cell `PRODUCT_OFF`; NBD retained `BINARY_MATCH=PASS`. Attempt 16 passed P1/Q2 disk/NBD pairs in both idle and bounded conditions, but Q4 allocation-to-HOLD was about 335 seconds and sample two hit the fixed 120-second `SAMPLE_TIMEOUT` after about 281 seconds; cleanup was clean. The historical correction used P1/Q2/Q4 tuples `120/900`, `240/1020`, and `600/2100`; Attempt27 supersedes them with separate hold/finalization/cell tuples `120/120/1020`, `240/240/1740`, and `600/600/3900`, with exact pair CUDA `2160/3600/7920`. Attempt 17 reproduced a false `cell_timeout_budget_mismatch` when equal summary/controller timeout fields were serialized in different property orders. The named `cell_timeout_budget_property_order_is_semantic` test is now green with canonical strict comparison and refuses real mismatch/noncanonical types; fresh independent Sol Gate A passed that frozen correction. Attempt 18 then exposed that the controller's valid Q4 `CudaMaxHoldSec=4320` was rejected by the workload's stale 3600-second parameter cap before CUDA startup; the named handshake test now proves 4320 accepted and 4321 refused. Attempt 19 used sealed source `fed085b` and reached 9/12 PASS cells; Attempt 20 reached 10/12 before Q4 bounded headroom refusal. Attempt 21 reached 11/12 before the synchronous recovery self-deadlock; async recovery completed/audited in `47889e0`, and the non-destructive watchdog completed/audited in `63bd3be`. Attempt22b is the latest live attempt on sealed source `63bd3be`: four P1 cells passed 3/3, Q2 disk-only was `RED/SAMPLE_TIMEOUT`, the matrix hash is `4088682aa07e6b90d6477f7e1ceaff952ee16fac99967b2b980698460302da14`, the failure receipt hash is `8e2e07918404e6533afb8ed440075ed0a2dff2ba4424a378f38647685596e7e4`, and terminal `PRODUCT_OFF` was verified. Q2 NBD and all Q4 cells did not run. The current blockers are fresh independent Gate A, resealing, Q2-calibrated complete matrix, Gate B, PR checks, and merge; no new live claim is made.
 **Attempt 21 integrity qualification:** The post-containment checksum PASS covered only a partial `6016/6656 MiB` allocation. It did not complete the third sample and is not a valid cell result.
 
 Attempt22b (2026-08-13) was a live run on sealed source `63bd3be`: four P1
@@ -76,8 +76,9 @@ verified `PRODUCT_OFF`. Matrix and failure-receipt hashes are recorded above.
 The partial HOLD/integrity artifacts are diagnostic-only and do not constitute
 a completed sample or promotion evidence. The subsequent Q2 correction slice
 was source-only (no live RamShared/WSL product process, NBD, swap, CUDA,
-cgroup, reboot, termination, or recording action): P1/Q2/Q4 are now
-`120/900`, `240/1020`, and `600/2100`, and
+cgroup, reboot, termination, or recording action): P1/Q2/Q4 then used
+`120/900`, `240/1020`, and `600/2100`; Attempt27 supersedes those single
+deadline tuples, and
 the named `partial_timeout_integrity_not_promoted` manufactured regression is
 green. A new sealed build and complete live matrix remain required.
 
@@ -137,13 +138,23 @@ disk-only run on sealed source `4b5f554` reached the full `3584 MiB` HOLD and
 was then stopped while final checksum evidence was still being emitted under
 the old five-second cleanup bound. This is RED diagnostic evidence for the
 integrity-finalization deadline boundary; it does not prove an NBD, WSL2, or
-OOM failure, and independent cleanup returned to `PRODUCT_OFF`. The current
-dirty correction separates ordinary finalization from abnormal cleanup: normal
-finalization receives the absolute remaining sample deadline, the worker is
-reaped and cleared exactly once, and a failure receipt is sealed only after
-that custody boundary. The manufactured worker suite is 3 checks; the cell
-suite is expected to be 46 checks, and the secondary-signal fixture covers 16
-TERM/INT combinations per suite run. The 48-combination figure is historical
-total coverage from three prior suite runs, not the canonical per-run metric.
-No live revalidation or sealed release exists for this candidate. Fresh
-independent Gate A, resealing, and the complete live matrix remain required.
+OOM failure, and independent cleanup returned to `PRODUCT_OFF`.
+
+Attempt27 is source-only and nonpromotable. It records `85.149780 s` from
+allocation to HOLD and a right-censored integrity-finalization observation of
+`>34.044357 s`; the latter is diagnostic-only and not a performance claim.
+The correction adopts Design B: HOLD containment remains P1/P2/P4
+`120/240/600 s`; finalization starts only after TERM has been issued at the
+observed HOLD boundary and has the same explicit tier-policy cap; outer cells
+are `1020/1740/3900 s`. `CudaMaxHoldSec=7920` is an admission cap only; each
+bounded P1/P2/P4 pair passes and seals its own exact CUDA hold
+`2160/3600/7920 s` (`idle=0`). Runtime, controller, workload, context,
+summary, internal envelope, public custody, and checker synchronize the exact
+fields. A timeout is `RED`, nonpromotable, stop-first, and can claim
+`PRODUCT_OFF` only after exact cleanup custody. The manufactured worker suite
+is 3 checks; the cell suite is expected to be 47 checks, and the secondary
+signal fixture covers 16 TERM/INT combinations per suite run. The
+48-combination figure is historical total coverage from three prior suite
+runs, not the canonical per-run metric. No live revalidation or sealed release
+exists for this candidate. Fresh independent Gate A, resealing, and the
+complete live matrix remain required.

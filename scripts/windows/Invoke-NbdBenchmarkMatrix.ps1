@@ -18,7 +18,7 @@ param(
     [Parameter(Mandatory = $true)][string]$ArtifactRoot,
     [string]$PlanFileName = "nbd-benchmark-plan.json",
     [string]$NvidiaSmiPath = "nvidia-smi.exe",
-    [ValidateRange(360, 4320)][int]$CudaMaxHoldSec = 4320,
+    [ValidateRange(360, 7920)][int]$CudaMaxHoldSec = 7920,
     [string]$ExpectedSourceCommit = "",
     [string]$BaselineFile = "",
     [string]$ManufacturedSelfTestCase = ""
@@ -34,7 +34,7 @@ $reserve_mib = 512
 $sample_timeout_max_sec = 600
 $cell_setup_cleanup_timeout_sec = 300
 $cell_outer_timeout_min_sec = 900
-$cell_outer_timeout_max_sec = 2100
+$cell_outer_timeout_max_sec = 3900
 
 function Write-JsonNoBom {
     param([Parameter(Mandatory = $true)]$Value, [Parameter(Mandatory = $true)][string]$Path)
@@ -153,7 +153,7 @@ function Invoke-BoundedProcess {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
         [Parameter(Mandatory = $true)][string[]]$ArgumentValues,
-        [ValidateRange(1, 2100)][int]$TimeoutSec
+        [ValidateRange(1, 3900)][int]$TimeoutSec
     )
     $handle = $null
     try {
@@ -342,11 +342,14 @@ function Get-CellTimeoutBudget {
         4096 { 600; break }
         default { throw "cell_timeout_tier_invalid" }
     }
+    # Finalization begins only after HOLD has been observed and TERM starts.
+    # It is a tier policy equal to the allocation-to-HOLD containment cap.
+    $integrityFinalizationTimeoutSec = $sampleTimeoutSec
     $setupCleanupTimeoutSec = 300
     $cellOuterTimeoutMinSec = 900
-    $cellOuterTimeoutMaxSec = 2100
+    $cellOuterTimeoutMaxSec = 3900
     $sampleTimeoutMaxSec = 600
-    $derivedOuterTimeoutSec = (3 * $sampleTimeoutSec) + $setupCleanupTimeoutSec
+    $derivedOuterTimeoutSec = 3 * ($sampleTimeoutSec + $integrityFinalizationTimeoutSec) + $setupCleanupTimeoutSec
     $cellOuterTimeoutSec = [Math]::Max($cellOuterTimeoutMinSec, $derivedOuterTimeoutSec)
     if ($sampleTimeoutSec -lt 1 -or $sampleTimeoutSec -gt $sampleTimeoutMaxSec -or
         $cellOuterTimeoutSec -lt $cellOuterTimeoutMinSec -or $cellOuterTimeoutSec -gt $cellOuterTimeoutMaxSec) {
@@ -354,6 +357,7 @@ function Get-CellTimeoutBudget {
     }
     [pscustomobject]@{
         sample_timeout_sec = $sampleTimeoutSec
+        integrity_finalization_timeout_sec = $integrityFinalizationTimeoutSec
         samples = 3
         setup_cleanup_timeout_sec = $setupCleanupTimeoutSec
         cell_outer_timeout_sec = $cellOuterTimeoutSec
@@ -364,7 +368,7 @@ function Get-PairTimeoutBudget {
     param([Parameter(Mandatory = $true)][int]$TierMiB)
     $cell = Get-CellTimeoutBudget -TierMiB $TierMiB
     $cudaHoldMinSec = (2 * [int]$cell.cell_outer_timeout_sec) + 120
-    if ($cudaHoldMinSec -lt 1 -or $cudaHoldMinSec -gt 4320) { throw "pair_timeout_budget_invalid" }
+    if ($cudaHoldMinSec -lt 1 -or $cudaHoldMinSec -gt 7920) { throw "pair_timeout_budget_invalid" }
     [pscustomobject]@{
         cell = $cell
         cuda_hold_min_sec = $cudaHoldMinSec
@@ -377,7 +381,7 @@ function Get-StrictCellTimeoutBudget {
         [Parameter(Mandatory = $true)][int]$TierMiB,
         [Parameter(Mandatory = $true)][string]$FailureReason
     )
-    $fields = @("sample_timeout_sec", "samples", "setup_cleanup_timeout_sec", "cell_outer_timeout_sec")
+    $fields = @("sample_timeout_sec", "integrity_finalization_timeout_sec", "samples", "setup_cleanup_timeout_sec", "cell_outer_timeout_sec")
     $propertyNames = if ($Budget -is [Collections.IDictionary]) {
         @($Budget.Keys | ForEach-Object { [string]$_ })
     } else {
@@ -455,6 +459,7 @@ function New-Plan {
                     bounded_pair_required_free_vram_mib = if ($condition -eq "bounded") { $boundedPairRequired } else { $tier + $reserve_mib }
                     plan_free_vram_mib = $gpu.free_vram_mib
                     sample_timeout_sec = $timeoutBudget.sample_timeout_sec
+                    integrity_finalization_timeout_sec = $timeoutBudget.integrity_finalization_timeout_sec
                     setup_cleanup_timeout_sec = $timeoutBudget.setup_cleanup_timeout_sec
                     cell_outer_timeout_sec = $timeoutBudget.cell_outer_timeout_sec
                 }
@@ -1632,6 +1637,7 @@ function Write-PublicPairEvidence {
             }
         )
         timeout_budget = $PairContext.timeout_budget
+        cuda_hold_sec = [int]$PairContext.cuda_hold_sec
         comparison_sha256 = $comparisonSha256
         cleanup = [ordered]@{ complete = $true; terminal_state = "PRODUCT_OFF" }
     }
@@ -1902,6 +1908,7 @@ function Get-ComparisonContract {
     try {
         $expectedTimeoutBudget = Get-CellTimeoutBudget -TierMiB ([int]$Cell.tier_mib)
         $observedSampleTimeout = ConvertTo-StrictInt64 -Value (Get-RequiredProperty -Object $timeoutBudget -Name "sample_timeout_sec") -Name "sample_timeout_sec"
+        $observedFinalizationTimeout = ConvertTo-StrictInt64 -Value (Get-RequiredProperty -Object $timeoutBudget -Name "integrity_finalization_timeout_sec") -Name "integrity_finalization_timeout_sec"
         $observedSamples = ConvertTo-StrictInt64 -Value (Get-RequiredProperty -Object $timeoutBudget -Name "samples") -Name "timeout_samples"
         $observedSetupCleanup = ConvertTo-StrictInt64 -Value (Get-RequiredProperty -Object $timeoutBudget -Name "setup_cleanup_timeout_sec") -Name "setup_cleanup_timeout_sec"
         $observedCellOuter = ConvertTo-StrictInt64 -Value (Get-RequiredProperty -Object $timeoutBudget -Name "cell_outer_timeout_sec") -Name "cell_outer_timeout_sec"
@@ -1909,6 +1916,7 @@ function Get-ComparisonContract {
         throw "comparison_timeout_budget_mismatch"
     }
     if ($observedSampleTimeout -ne [int64]$expectedTimeoutBudget.sample_timeout_sec -or
+        $observedFinalizationTimeout -ne [int64]$expectedTimeoutBudget.integrity_finalization_timeout_sec -or
         $observedSamples -ne [int64]$expectedTimeoutBudget.samples -or
         $observedSetupCleanup -ne [int64]$expectedTimeoutBudget.setup_cleanup_timeout_sec -or
         $observedCellOuter -ne [int64]$expectedTimeoutBudget.cell_outer_timeout_sec -or
@@ -2107,8 +2115,8 @@ function New-PairComparison {
         $null -eq $PairContext.gpu_identity) {
         throw "comparison_pair_contract_mismatch"
     }
-    if (($diskContract.timeout_budget | ConvertTo-Json -Compress -Depth 8) -cne
-        ($nbdContract.timeout_budget | ConvertTo-Json -Compress -Depth 8)) {
+    if ((ConvertTo-CanonicalJson -Value $diskContract.timeout_budget) -cne
+        (ConvertTo-CanonicalJson -Value $nbdContract.timeout_budget)) {
         throw "comparison_timeout_budget_mismatch"
     }
     $fingerprintMaterial = [ordered]@{
@@ -2187,7 +2195,7 @@ function Test-CellGpuHeadroom {
 function Start-CudaWorkload {
     param(
         [Parameter(Mandatory = $true)][string]$PairDir,
-        [Parameter(Mandatory = $true)][ValidateRange(1, 4320)][int]$CudaHoldSec,
+        [Parameter(Mandatory = $true)][ValidateRange(1, 7920)][int]$CudaHoldSec,
         [string]$TestCudaSource = "",
         [switch]$InjectFailureAfterChildStart
     )
@@ -2262,6 +2270,7 @@ function Invoke-NbdBenchmarkCell {
     )
     $timeoutBudget = Get-CellTimeoutBudget -TierMiB ([int]$Cell.tier_mib)
     if ([int]$Cell.sample_timeout_sec -ne [int]$timeoutBudget.sample_timeout_sec -or
+        [int]$Cell.integrity_finalization_timeout_sec -ne [int]$timeoutBudget.integrity_finalization_timeout_sec -or
         [int]$Cell.setup_cleanup_timeout_sec -ne [int]$timeoutBudget.setup_cleanup_timeout_sec -or
         [int]$Cell.cell_outer_timeout_sec -ne [int]$timeoutBudget.cell_outer_timeout_sec) {
         throw "cell_timeout_budget_mismatch"
@@ -2435,6 +2444,7 @@ function Invoke-CellPair {
         pair_id = $pairId
         timeout_budget = Get-PairTimeoutBudget -TierMiB ([int]$first.tier_mib)
         cuda_context = "none"
+        cuda_hold_sec = 0
         windows_script_sha256 = Get-WindowsPairScriptHashes -Condition ([string]$first.condition)
         gpu_identity = $null
         gpu_before_pair = $null
@@ -2459,8 +2469,10 @@ function Invoke-CellPair {
             if ($CudaMaxHoldSec -lt [int]$pairContext.timeout_budget.cuda_hold_min_sec) {
                 throw "cuda_pair_hold_too_short required_sec=$($pairContext.timeout_budget.cuda_hold_min_sec) configured_sec=$CudaMaxHoldSec"
             }
-            $cuda = Start-CudaWorkload -PairDir $pairDir -CudaHoldSec $CudaMaxHoldSec
+            $pairCudaHoldSec = [int]$pairContext.timeout_budget.cuda_hold_min_sec
+            $cuda = Start-CudaWorkload -PairDir $pairDir -CudaHoldSec $pairCudaHoldSec
             $pairContext.cuda_context = "one_context_for_disk_then_nbd"
+            $pairContext.cuda_hold_sec = $pairCudaHoldSec
             $pairContext.cuda_containment.startup = $cuda.startup_containment
             $afterReady = Get-GpuMemory
             $pairContext.gpu_after_cuda_ready = $afterReady
@@ -2964,15 +2976,17 @@ Write-Output "[cuda-vram-workload] released"
             foreach ($tier in @(1024, 2048, 4096)) {
                 $cellBudget = Get-CellTimeoutBudget -TierMiB $tier
                 $expectedSample = switch ($tier) { 1024 { 120 }; 2048 { 240 }; 4096 { 600 } }
-                $expectedOuter = switch ($tier) { 1024 { 900 }; 2048 { 1020 }; 4096 { 2100 } }
+                $expectedFinalization = $expectedSample
+                $expectedOuter = switch ($tier) { 1024 { 1020 }; 2048 { 1740 }; 4096 { 3900 } }
                 if ($cellBudget.sample_timeout_sec -ne $expectedSample -or $cellBudget.samples -ne 3 -or
+                    $cellBudget.integrity_finalization_timeout_sec -ne $expectedFinalization -or
                     $cellBudget.setup_cleanup_timeout_sec -ne 300 -or $cellBudget.cell_outer_timeout_sec -ne $expectedOuter) {
                     throw "manufactured_timeout_budget_invalid"
                 }
                 $observed += $cellBudget
             }
             $q4PairBudget = Get-PairTimeoutBudget -TierMiB 4096
-            if ($q4PairBudget.cuda_hold_min_sec -ne 4320) { throw "manufactured_q4_cuda_budget_invalid" }
+            if ($q4PairBudget.cuda_hold_min_sec -ne 7920) { throw "manufactured_q4_cuda_budget_invalid" }
             $refused = $false
             try { Get-CellTimeoutBudget -TierMiB 8192 | Out-Null } catch { $refused = $_.Exception.Message -eq "cell_timeout_tier_invalid" }
             if (-not $refused) { throw "manufactured_timeout_budget_unsupported_tier_accepted" }
@@ -2983,14 +2997,16 @@ Write-Output "[cuda-vram-workload] released"
         "timeout-budget-property-order" {
             $canonicalOrder = [ordered]@{
                 sample_timeout_sec = 120
+                integrity_finalization_timeout_sec = 120
                 samples = 3
                 setup_cleanup_timeout_sec = 300
-                cell_outer_timeout_sec = 900
+                cell_outer_timeout_sec = 1020
             }
             $permutedOrder = [ordered]@{
-                cell_outer_timeout_sec = 900
+                cell_outer_timeout_sec = 1020
                 setup_cleanup_timeout_sec = 300
                 samples = 3
+                integrity_finalization_timeout_sec = 120
                 sample_timeout_sec = 120
             }
             $rawJsonDiffers = (($canonicalOrder | ConvertTo-Json -Compress -Depth 8) -cne
@@ -3001,15 +3017,17 @@ Write-Output "[cuda-vram-workload] released"
             $semantic = Assert-CellTimeoutBudgetMatch -Budget ([pscustomobject]$permutedOrder) -TierMiB 1024 `
                 -FailureReason "manufactured_timeout_budget_property_order_mismatch"
             if ($semantic.sample_timeout_sec -ne 120 -or $semantic.samples -ne 3 -or
-                $semantic.setup_cleanup_timeout_sec -ne 300 -or $semantic.cell_outer_timeout_sec -ne 900) {
+                $semantic.integrity_finalization_timeout_sec -ne 120 -or
+                $semantic.setup_cleanup_timeout_sec -ne 300 -or $semantic.cell_outer_timeout_sec -ne 1020) {
                 throw "manufactured_timeout_budget_property_order_semantic_values_invalid"
             }
             $mismatchRefused = $false
             $mismatch = [ordered]@{
                 sample_timeout_sec = 121
+                integrity_finalization_timeout_sec = 120
                 samples = 3
                 setup_cleanup_timeout_sec = 300
-                cell_outer_timeout_sec = 900
+                cell_outer_timeout_sec = 1020
             }
             try {
                 Assert-CellTimeoutBudgetMatch -Budget ([pscustomobject]$mismatch) -TierMiB 1024 `
@@ -3021,9 +3039,10 @@ Write-Output "[cuda-vram-workload] released"
             $noncanonicalRefused = $false
             $noncanonical = [ordered]@{
                 sample_timeout_sec = 120.0
+                integrity_finalization_timeout_sec = 120
                 samples = 3
                 setup_cleanup_timeout_sec = 300
-                cell_outer_timeout_sec = 900
+                cell_outer_timeout_sec = 1020
             }
             try {
                 Assert-CellTimeoutBudgetMatch -Budget ([pscustomobject]$noncanonical) -TierMiB 1024 `
@@ -3203,7 +3222,7 @@ Write-Output "[cuda-vram-workload] released"
                         }
                         utc = [pscustomobject]@{ started = "2026-08-12T00:00:00Z" }
                         watchdog = [pscustomobject]@{ armed = $true; outcome = "not_fired" }
-                        timeout_budget = [pscustomobject]@{ sample_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 900 }
+                        timeout_budget = [pscustomobject]@{ sample_timeout_sec = 120; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1020 }
                         argv = @(
                             "nbd-benchmark-cell.sh", "--run", "--mode", $Mode, "--condition", "idle", "--tier-mib", "1024",
                             "--artifact-dir", "<campaign-artifact-dir>", "--sealed-release-root", $selectedRelease.selected,
@@ -3238,6 +3257,7 @@ Write-Output "[cuda-vram-workload] released"
                 $pairContext = [pscustomobject]@{
                     pair_id = "1024-idle"
                     timeout_budget = Get-PairTimeoutBudget -TierMiB 1024
+                    cuda_hold_sec = 0
                     gpu_identity = [pscustomobject]@{ gpu_model = "Manufactured GPU"; gpu_driver = "1.2.3" }
                     windows_script_sha256 = [pscustomobject]@{
                         "Invoke-NbdBenchmarkMatrix.ps1" = $scriptHash
@@ -3434,7 +3454,7 @@ Write-Output "[cuda-vram-workload] released"
                     schema = 2; pair_id = "1024-idle"; mode = "nbd"; condition = "idle"; tier_mib = 1024
                     release = [ordered]@{ version = "manufactured-v1"; source_commit = $sourceCommit; source_tree_state = "clean"; manifest_sha256 = $manifestSha256 }
                     binary_match = "PASS"; watchdog = [ordered]@{ armed = $true; outcome = "not_fired" }
-                    timeout_budget = [ordered]@{ sample_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 900 }
+                    timeout_budget = [ordered]@{ sample_timeout_sec = 120; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1020 }
                     lower = [ordered]@{
                         type = "nbd"; identity_sha256 = ("c" * 64) -join ""
                         sink_type = "directory"; sink_identity_sha256 = ("d" * 64) -join ""
@@ -3590,7 +3610,7 @@ Write-Output "[cuda-vram-workload] released"
                         release = [ordered]@{ version = "manufactured-v1"; source_commit = $sourceCommit; source_tree_state = "clean"; manifest_sha256 = $manifestSha256 }
                         binary_match = $BinaryMatch
                         watchdog = [ordered]@{ armed = $true; outcome = "not_fired" }
-                        timeout_budget = [pscustomobject]@{ sample_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 900 }
+                        timeout_budget = [pscustomobject]@{ sample_timeout_sec = 120; integrity_finalization_timeout_sec = 120; samples = 3; setup_cleanup_timeout_sec = 300; cell_outer_timeout_sec = 1020 }
                         zram = [pscustomobject]@{
                             device = "zram0"; algorithm = "zstd"; size_kib = 1048576; priority = 200
                             identity_sha256 = ("c" * 64) -join ""
@@ -3654,6 +3674,7 @@ Write-Output "[cuda-vram-workload] released"
                 $pairContext = [pscustomobject]@{
                     pair_id = "1024-idle"
                     timeout_budget = Get-PairTimeoutBudget -TierMiB 1024
+                    cuda_hold_sec = 0
                     gpu_identity = [pscustomobject]@{ gpu_model = "Manufactured GPU"; gpu_driver = "1.2.3" }
                     windows_script_sha256 = Get-WindowsPairScriptHashes -Condition "idle"
                 }
