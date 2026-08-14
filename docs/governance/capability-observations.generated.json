@@ -240,6 +240,7 @@
           "tools/ci/check-release-integrity.mjs",
           "tools/ci/check-rust-slice-coverage.mjs",
           "tools/ci/check-spec-evidence.mjs",
+          "tools/ci/merge-release-sboms.mjs",
           "tools/ci/plan-isolated-lab.mjs",
           "tools/ci/plan-rust-slice-coverage.mjs",
           "tools/ci/write-release-manifest.mjs"
@@ -664,12 +665,14 @@
           "tools/ci/check-ci-contract.mjs",
           "tools/ci/check-release-integrity.mjs",
           "tools/ci/check-release-publication.mjs",
+          "tools/ci/merge-release-sboms.mjs",
           "tools/ci/write-release-manifest.mjs"
         ],
         "test_paths": [
           "tools/ci/check-ci-contract.test.mjs",
           "tools/ci/check-release-integrity.test.mjs",
           "tools/ci/check-release-publication.test.mjs",
+          "tools/ci/merge-release-sboms.test.mjs",
           "tools/ci/write-release-manifest.test.mjs"
         ]
       },

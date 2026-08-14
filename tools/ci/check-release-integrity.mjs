@@ -97,6 +97,19 @@ function sbomTools(value) {
   return []
 }
 
+function exactSbomMetadata(parsed, manifest) {
+  const component = parsed?.metadata?.component
+  const roots = component?.components
+  const properties = parsed?.metadata?.properties
+  return isObject(component) && component.type === 'application' && component.name === 'ramshared' &&
+    component.version === manifest.source.tag.slice(1) &&
+    Array.isArray(roots) && roots.length === 2 &&
+    roots[0]?.name === 'ramshared-cli' && roots[1]?.name === 'ramshared-wsl2d' &&
+    Array.isArray(properties) && properties.length === 2 &&
+    properties[0]?.name === 'ramshared:release:tag' && properties[0]?.value === manifest.source.tag &&
+    properties[1]?.name === 'ramshared:source:revision' && properties[1]?.value === manifest.source.sha
+}
+
 function validateSbom(manifest, root, errors) {
   const sbom = manifest.sbom
   if (!isObject(sbom)) {
@@ -115,7 +128,9 @@ function validateSbom(manifest, root, errors) {
     const hasGenerator = sbomTools(parsed).some((tool) =>
       tool?.name === SBOM_GENERATOR.name && tool?.version === SBOM_GENERATOR.version
     )
-    if (parsed.bomFormat !== 'CycloneDX' || parsed.specVersion !== SBOM_GENERATOR.spec_version || !hasGenerator) {
+    const serialized = JSON.stringify(parsed)
+    if (parsed.bomFormat !== 'CycloneDX' || parsed.specVersion !== SBOM_GENERATOR.spec_version || !hasGenerator ||
+        !exactSbomMetadata(parsed, manifest) || serialized.includes('file://') || serialized.includes('path+file:')) {
       add(errors, 'sbom-content-invalid')
     }
   } catch {

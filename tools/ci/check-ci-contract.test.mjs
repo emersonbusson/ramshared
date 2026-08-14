@@ -811,7 +811,9 @@ test('item6_release_integrity_workflow_is_current_and_nonpublishing', () => {
   assert.match(workflow, /git diff --quiet/)
   assert.match(workflow, /cargo install cargo-cyclonedx --locked --version 0\.5\.9/)
   assert.match(workflow, /cargo cyclonedx --manifest-path Cargo\.toml --format json --spec-version 1\.5 --override-filename ramshared-sbom\.cdx/)
-  assert.match(workflow, /mv ramshared-sbom\.cdx\.json artifacts\/release\/ramshared-sbom\.cdx\.json/)
+  assert.match(workflow, /--input crates\/ramshared-cli\/ramshared-sbom\.cdx\.json/)
+  assert.match(workflow, /--input crates\/ramshared-wsl2d\/ramshared-sbom\.cdx\.json/)
+  assert.match(workflow, /--out artifacts\/release\/ramshared-sbom\.cdx\.json/)
   assert.match(workflow, /sha256sum "\$archive" > "\$archive\.sha256"/)
   assert.match(workflow, /--checksum "artifacts\/release\/ramshared-linux-\$RELEASE_TAG\.tar\.gz\.sha256"/)
   assert.match(workflow, /write-release-manifest\.mjs/)
@@ -837,6 +839,9 @@ test('release_integrity_recovery_is_exact_tag_sha_read_only', () => {
   assert.match(workflow, /test "\$GITHUB_REF" = refs\/heads\/main/)
   assert.match(workflow, /test "\$RELEASE_TAG" = "\$RELEASE_TARGET_TAG"/)
   assert.match(workflow, /test "\$event_revision" = "\$tag_revision"/)
+  assert.match(workflow, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/)
+  assert.match(workflow, /tmp\/recovery-policy\/tools\/ci\/merge-release-sboms\.mjs/)
+  assert.match(workflow, /\$RUNNER_TEMP\/release-policy\/merge-release-sboms\.mjs/)
   assert.doesNotMatch(workflow, /environment:|contents:\s*write|gh release|upload-release-asset|create-release/i)
 })
 
@@ -948,6 +953,7 @@ test('publication_workflow_is_protected_manual_exact_sha_only', () => {
 test('release_promotion_node_coverage_is_wired_into_the_canonical_pr_caller', () => {
   const workflow = readFileSync(path.join(ROOT, '.github', 'workflows', 'ci-contract.yml'), 'utf8')
   for (const module of [
+    'tools/ci/merge-release-sboms.mjs',
     'tools/ci/check-release-integrity.mjs',
     'tools/ci/write-release-manifest.mjs',
     'tools/ci/check-release-publication.mjs',

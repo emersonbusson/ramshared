@@ -33,6 +33,30 @@ function evidenceRecord(record) {
   }
 }
 
+function validSbomContent(tools = [{ name: 'cargo-cyclonedx', version: '0.5.9' }]) {
+  return {
+    bomFormat: 'CycloneDX',
+    specVersion: '1.5',
+    metadata: {
+      tools,
+      component: {
+        type: 'application',
+        'bom-ref': 'pkg:generic/ramshared@0.9.0-beta.1',
+        name: 'ramshared',
+        version: '0.9.0-beta.1',
+        components: [
+          { type: 'application', 'bom-ref': 'pkg:cargo/ramshared-cli@0.1.0', name: 'ramshared-cli', version: '0.1.0' },
+          { type: 'application', 'bom-ref': 'pkg:cargo/ramshared-wsl2d@0.1.0', name: 'ramshared-wsl2d', version: '0.1.0' },
+        ],
+      },
+      properties: [
+        { name: 'ramshared:release:tag', value: TARGET_TAG },
+        { name: 'ramshared:source:revision', value: SOURCE_SHA },
+      ],
+    },
+  }
+}
+
 function fixture({ manifest: manifestOverrides = {}, sbomContent } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'ramshared-release-integrity-'))
   const releaseDir = path.join(root, 'artifacts', 'release')
@@ -47,11 +71,7 @@ function fixture({ manifest: manifestOverrides = {}, sbomContent } = {}) {
   const checksumBytes = Buffer.from(`${sha256(bundleBytes)}  ${path.basename(bundlePath)}\n`)
   writeFileSync(path.join(root, checksumPath), checksumBytes)
   const sbomPath = 'artifacts/release/ramshared-sbom.cdx.json'
-  const sbomBytes = Buffer.from(sbomContent ?? JSON.stringify({
-    bomFormat: 'CycloneDX',
-    specVersion: '1.5',
-    metadata: { tools: [{ name: 'cargo-cyclonedx', version: '0.5.9' }] },
-  }, null, 2) + '\n')
+  const sbomBytes = Buffer.from(sbomContent ?? `${JSON.stringify(validSbomContent(), null, 2)}\n`)
   writeFileSync(path.join(root, sbomPath), sbomBytes)
 
   const bundle = {
@@ -239,11 +259,8 @@ test('release_manifest_rejects_invalid_sbom_evidence_and_driver_shapes', () => {
 })
 
 test('release_manifest_checks_expected_identity_and_accepted_sbom_tool_shapes', () => {
-  const withComponents = fixture({ sbomContent: JSON.stringify({
-    bomFormat: 'CycloneDX',
-    specVersion: '1.5',
-    metadata: { tools: { components: [{ name: 'cargo-cyclonedx', version: '0.5.9' }] } },
-  }) })
+  const content = validSbomContent({ components: [{ name: 'cargo-cyclonedx', version: '0.5.9' }] })
+  const withComponents = fixture({ sbomContent: JSON.stringify(content) })
   const record = withComponents.manifest.sbom
   const bytes = readFileSync(path.join(withComponents.root, withComponents.sbomPath))
   record.bytes = bytes.length
@@ -260,6 +277,31 @@ test('release_manifest_checks_expected_identity_and_accepted_sbom_tool_shapes', 
   assert.equal(mismatch.errors.includes('source-tag-mismatch'), true)
   assert.equal(mismatch.errors.includes('source-revision-mismatch'), true)
   assert.deepEqual(validateReleaseManifest(withComponents.manifest), { ok: true, errors: [] })
+})
+
+test('release_sbom_requires_exact_release_roots_and_path_free_source_binding', () => {
+  const wrongRoot = validSbomContent()
+  wrongRoot.metadata.component.components[1].name = 'ramshared-agent'
+  const wrongRootFixture = fixture({ sbomContent: JSON.stringify(wrongRoot) })
+  assert.equal(validateReleaseManifest(wrongRootFixture.manifest, { root: wrongRootFixture.root })
+    .errors.includes('sbom-content-invalid'), true)
+
+  const wrongRevision = validSbomContent()
+  wrongRevision.metadata.properties[1].value = 'fedcba9876543210fedcba9876543210fedcba98'
+  const wrongRevisionFixture = fixture({ sbomContent: JSON.stringify(wrongRevision) })
+  assert.equal(validateReleaseManifest(wrongRevisionFixture.manifest, { root: wrongRevisionFixture.root })
+    .errors.includes('sbom-content-invalid'), true)
+
+  const leakedPath = validSbomContent()
+  leakedPath.components = [{
+    type: 'library',
+    'bom-ref': 'path+file:///workspace/ramshared/crates/ramshared-tier#0.1.0',
+    name: 'ramshared-tier',
+    version: '0.1.0',
+  }]
+  const leakedPathFixture = fixture({ sbomContent: JSON.stringify(leakedPath) })
+  assert.equal(validateReleaseManifest(leakedPathFixture.manifest, { root: leakedPathFixture.root })
+    .errors.includes('sbom-content-invalid'), true)
 })
 
 test('release_manifest_cli_uses_stable_errors_without_echoing_values', () => {

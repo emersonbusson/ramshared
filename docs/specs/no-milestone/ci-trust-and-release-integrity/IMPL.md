@@ -23,6 +23,7 @@ aggregate is required before this IMPL can again claim hosted qualification.
 | `.github/workflows/ci-contract.yml` and reusable workflows | ITEM-1–ITEM-4 / RF-1–RF-6 | Add the same-run fail-closed aggregate, explicit permissions/timeouts, pinned Actions, Rust supply-chain checks, and hosted Windows static checks. |
 | `.github/workflows/{windows-lab,wsl2-lab}.yml` | ITEM-5 / RF-6 | Add protected plan-only isolated-lab entrypoints with no host execution. |
 | `.github/workflows/release-integrity.yml` | ITEM-6 / RF-7 | Add nonpublishing bundle/SBOM validation plus an exact tag/SHA read-only recovery path for immutable-tag workflow defects. |
+| `tools/ci/merge-release-sboms.mjs` | ITEM-6 / RF-7 | Merge exactly the CLI and WSL2 daemon cargo-cyclonedx roots into one deterministic, path-free, tag/SHA-bound public SBOM. |
 | `tools/ci/check-ci-contract.mjs` | ITEM-1–ITEM-8 / RF-1–RF-11 | Validate source and observed remote controls, aggregate same-run results, and fail closed on missing, unsafe, or stale evidence. |
 | `tools/ci/plan-rust-slice-coverage.mjs` | ITEM-6.6 / RF-10 | Map every changed Rust production file to exact line, platform, localization, test-only, or whole-file structural ownership and execute only tokenized commands. |
 | `tools/ci/check-rust-slice-coverage.mjs` | ITEM-6.6 / RF-10 | Isolate coverage target state and enforce a terminal 15-minute process-tree deadline with a five-second TERM-to-KILL grace period. |
