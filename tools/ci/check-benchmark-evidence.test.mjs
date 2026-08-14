@@ -27,27 +27,36 @@ function publicMetric(samples) {
   }
 }
 
-function wsl2PublicPairFixture() {
+function wsl2PublicPairFixture({ tierMiB = 1024, condition = 'idle' } = {}) {
+  const policy = {
+    1024: { sampleTimeoutSec: 120, cellOuterTimeoutSec: 1020, cudaHoldSec: 2160 },
+    2048: { sampleTimeoutSec: 240, cellOuterTimeoutSec: 1740, cudaHoldSec: 3600 },
+    4096: { sampleTimeoutSec: 600, cellOuterTimeoutSec: 3900, cudaHoldSec: 7920 },
+  }[tierMiB]
+  if (!policy) throw new Error(`unsupported fixture tier: ${tierMiB}`)
+  const pairId = `${tierMiB}-${condition}`
+  const runId = `wsl2-nbd-${pairId}-fixture`
   const root = mkdtempSync(path.join(tmpdir(), 'ramshared-wsl2-public-pair-'))
   const artifactRoot = [
     'docs', 'specs', 'no-milestone', 'wsl2-nbd-product-readiness', 'evidence',
-    'wsl2-nbd-1024-idle-fixture',
+    runId,
   ]
   const directory = path.join(root, ...artifactRoot)
   mkdirSync(directory, { recursive: true })
   const cellTimeoutBudget = {
-    sample_timeout_sec: 120,
+    sample_timeout_sec: policy.sampleTimeoutSec,
+    integrity_finalization_timeout_sec: policy.sampleTimeoutSec,
     samples: 3,
     setup_cleanup_timeout_sec: 300,
-    cell_outer_timeout_sec: 900,
+    cell_outer_timeout_sec: policy.cellOuterTimeoutSec,
   }
   const pairTimeoutBudget = {
     cell: cellTimeoutBudget,
-    cuda_hold_min_sec: 1920,
+    cuda_hold_min_sec: policy.cudaHoldSec,
   }
   const comparisonRecord = {
     schema_version: 'ramshared-nbd-public-pair-comparison/v1',
-    pair_id: '1024-idle',
+    pair_id: pairId,
     environment_fingerprint: '3'.repeat(64),
     baseline_verdict: 'BASELINE_CANDIDATE',
     baseline_reason: 'manufactured',
@@ -58,7 +67,7 @@ function wsl2PublicPairFixture() {
   }
   const custodyRecord = {
     schema_version: 'ramshared-nbd-public-pair-custody/v1',
-    pair_id: '1024-idle',
+    pair_id: pairId,
     release: {
       version: 'manufactured-v1',
       source_commit: '1'.repeat(40),
@@ -86,6 +95,7 @@ function wsl2PublicPairFixture() {
       },
     ],
     timeout_budget: pairTimeoutBudget,
+    cuda_hold_sec: condition === 'bounded' ? policy.cudaHoldSec : 0,
     comparison_sha256: 'a'.repeat(64),
     cleanup: { complete: true, terminal_state: 'PRODUCT_OFF' },
   }
@@ -103,7 +113,7 @@ function wsl2PublicPairFixture() {
   })
   const record = {
     schema_version: 'ramshared-evidence/v1',
-    run_id: 'wsl2-nbd-1024-idle-fixture',
+    run_id: runId,
     surface: 'wsl2-nbd',
     slug: 'wsl2-nbd-product-readiness',
     utc: { started: '2026-08-12T12:00:00.000Z', ended: '2026-08-12T12:02:00.000Z' },
@@ -111,7 +121,7 @@ function wsl2PublicPairFixture() {
       commit: '1'.repeat(40),
       dirty: false,
       dirty_entry_count: 0,
-      invocation: 'Invoke-NbdBenchmarkMatrix.ps1 approved pair 1024-idle',
+      invocation: `Invoke-NbdBenchmarkMatrix.ps1 approved pair ${pairId}`,
       harness_revision: 'b'.repeat(64),
     },
     platform: {
@@ -140,12 +150,12 @@ function wsl2PublicPairFixture() {
     workload: {
       profile: 'anonymous_memory_sequential_write',
       parameters: {
-        tier_mib: 1024,
-        condition: 'idle',
+        tier_mib: tierMiB,
+        condition,
         pattern: 'shake256-v1',
         allocation_chunk_bytes: 67108864,
         worker_threads: 1,
-        allocated_mib: 3584,
+        allocated_mib: tierMiB + 2560,
         timeout_budget: pairTimeoutBudget,
       },
       warmup_seconds: 0,
@@ -165,7 +175,7 @@ function wsl2PublicPairFixture() {
     },
     lifecycle: {
       before: { custody_sha256: 'c'.repeat(64) },
-      action: { pair_id: '1024-idle', mode_order: ['disk-only', 'nbd'] },
+      action: { pair_id: pairId, mode_order: ['disk-only', 'nbd'] },
       after: { terminal_state: 'PRODUCT_OFF', custody_sha256: 'd'.repeat(64) },
       binary_match: true,
       legitimate: { verdict: 'PASS' },
@@ -214,6 +224,29 @@ function rewriteBoundPublicPairComparison(fixture, comparison) {
   rewritePublicPairCustody(fixture, custody)
   fixture.record.candidate.pair_comparison_sha256 = sha256(contents)
 }
+
+test('bounded_pair_custody_requires_the_current_tier_cuda_hold', () => {
+  for (const { tierMiB, cudaHoldSec } of [
+    { tierMiB: 1024, cudaHoldSec: 2160 },
+    { tierMiB: 2048, cudaHoldSec: 3600 },
+    { tierMiB: 4096, cudaHoldSec: 7920 },
+  ]) {
+    const fixture = wsl2PublicPairFixture({ tierMiB, condition: 'bounded' })
+    try {
+      assert.deepEqual(validateRecord(fixture.record, { root: fixture.root }), [], `P${tierMiB} exact CUDA hold passes`)
+      const custody = structuredClone(fixture.custodyRecord)
+      custody.cuda_hold_sec = cudaHoldSec - 1
+      rewritePublicPairCustody(fixture, custody)
+      assert.match(
+        validateRecord(fixture.record, { root: fixture.root }).join('\n'),
+        /pair-custody-cuda-hold/,
+        `P${tierMiB} tampered CUDA hold is refused`,
+      )
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
+  }
+})
 
 function validRecord(overrides = {}) {
   const record = {
@@ -686,6 +719,15 @@ test('public_pair_custody_refuses_missing_and_semantically_invalid_artifact_bind
         rewritePublicPairCustody(fixture, custody)
       },
       finding: /pair-custody-timeout-budget/,
+    },
+    {
+      name: 'idle pair cuda hold custody',
+      mutate: (fixture) => {
+        const custody = structuredClone(fixture.custodyRecord)
+        custody.cuda_hold_sec = 2160
+        rewritePublicPairCustody(fixture, custody)
+      },
+      finding: /pair-custody-cuda-hold/,
     },
     {
       name: 'comparison JSON syntax',

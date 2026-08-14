@@ -92,8 +92,9 @@ slice: the controller/cell contract still treated Q2 as `120 s` per sample and
 `900 s` per cell, while the bounded Q2 hold requires `240/1020`. Timeout
 cleanup left partial HOLD/integrity artifacts; those artifacts were not a
 completed sample and were not promoted. This is retained as RED defect
-evidence only. DT-NBD-44 now uses explicit P1 `120/900`, Q2 `240/1020`, and Q4
-`600/2100` tuples. The named manufactured
+evidence only. That historical correction used P1 `120/900`, Q2 `240/1020`,
+and Q4 `600/2100` tuples; Attempt27 supersedes it with distinct HOLD and
+integrity-finalization policy caps. The named manufactured
 `partial_timeout_integrity_not_promoted` regression verifies the completion
 boundary without expanding the result schema. Attempt22b itself was live on
 sealed source `63bd3be`; no live WSL, NBD, swap, CUDA, cgroup, reboot, or
@@ -128,7 +129,7 @@ termination action ran during the subsequent correction slice.
   `failed_swapoff_keeps_daemon_and_device_alive`, and
   `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` are
   present and pass in the CLI suite.
-- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → expected 46/46
+- Harnesses: `bash scripts/safety/test-nbd-benchmark-cell.sh` → expected 47/47
   on the current Attempt26 candidate; `bash scripts/safety/Test-CascadePressureIntegrityWorker.sh`
   → 3 named integrity checks; `bash scripts/safety/test-nbd-product-preflight.sh`
   → currently verified
@@ -417,7 +418,7 @@ evidence.
 
 ## Gaps
 
-## Attempt26 source-only integrity-finalization deadline hardening
+## Attempt26/Attempt27 integrity-finalization policy hardening
 
 The first P1 idle disk-only run on sealed source `4b5f554` reached the complete
 `3584 MiB` HOLD and was stopped while final checksum evidence was still being
@@ -425,18 +426,25 @@ emitted under the old five-second cleanup bound. The receipt is retained as
 RED diagnostic evidence only: it does not establish an NBD, WSL2, or OOM
 failure, and independent cleanup returned to `PRODUCT_OFF`.
 
-The current uncommitted correction gives ordinary integrity finalization the
-absolute remaining sample deadline instead of applying the short abnormal
-cleanup grace. It reaps and clears the worker exactly once, records the exit
-and cgroup OOM counters, and seals a failure receipt only after the process and
-custody state are bounded. A genuinely stuck worker still takes the bounded
-TERM/KILL abnormal path and remains non-promotable. The worker suite has three
-named checks; the integrated cell suite is expected to be 46 checks, and the
-secondary TERM/INT fixture exercises 16 combinations per suite run. The
-48-combination figure is historical total coverage from three prior suite runs,
-not the canonical per-run metric. This is source-only: there has been no live
-revalidation or new sealed release. Gate A, resealing, and the complete live
-matrix remain open.
+Attempt27 observed allocation-to-HOLD at `85.149780 s`; its integrity
+finalization is right-censored at `>34.044357 s`. It remains RED diagnostic
+evidence, not a finalization performance claim. The source-only correction
+separates HOLD containment from a finalization policy that starts only after
+TERM has been issued at the observed HOLD boundary: P1/P2/P4 use
+`120/120/1020`, `240/240/1740`, and `600/600/3900`
+(hold/finalization/cell) seconds. `CudaMaxHoldSec=7920` is an admission cap;
+each bounded pair passes and seals its own exact CUDA hold `2160/3600/7920`
+(`idle=0`), while the workload refuses `7921`. Runtime, controller, context,
+summary, internal envelope, public custody, and checker carry the same strict
+tuple. A finalization timeout is RED, nonpromotable, stop-first, and can
+record `PRODUCT_OFF` only after exact cleanup custody. A genuinely stuck worker
+still takes the bounded TERM/KILL abnormal path and remains non-promotable. The
+worker suite has three named checks; the integrated cell suite is expected to
+be 47 checks, and the secondary TERM/INT fixture exercises
+16 combinations per suite run. The 48-combination figure is historical total
+coverage from three prior suite runs, not the canonical per-run metric. This
+is source-only: there has been no live revalidation or new sealed release.
+Gate A, resealing, and the complete live matrix remain open.
 
 ## Attempt25 source-only zombie liveness hardening
 

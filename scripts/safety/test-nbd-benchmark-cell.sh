@@ -486,12 +486,12 @@ PY
 test_aggregate_size_occupancy_contract
 
 test_tier_derived_timeout_budget_contract() {
-  local tier expected_sample expected_outer samples summary wrong_sample
+  local tier expected_sample expected_finalization expected_outer samples summary wrong_sample
   for tier in 1024 2048 4096; do
     case $tier in
-      1024) expected_sample=120; expected_outer=900 ;;
-      2048) expected_sample=240; expected_outer=1020 ;;
-      4096) expected_sample=600; expected_outer=2100 ;;
+      1024) expected_sample=120; expected_finalization=120; expected_outer=1020 ;;
+      2048) expected_sample=240; expected_finalization=240; expected_outer=1740 ;;
+      4096) expected_sample=600; expected_finalization=600; expected_outer=3900 ;;
       *) echo "FAIL unsupported manufactured timeout tier" >&2; exit 1 ;;
     esac
     samples="$TMP/timeout-$tier-samples.jsonl"
@@ -499,16 +499,17 @@ test_tier_derived_timeout_budget_contract() {
     write_tier_samples "$samples" nbd "$tier"
     "$CELL" --aggregate --samples "$samples" --out "$summary" \
       --mode nbd --condition idle --tier-mib "$tier" --sample-timeout-sec "$expected_sample"
-    python3 - "$summary" "$expected_sample" "$expected_outer" <<'PY'
+    python3 - "$summary" "$expected_sample" "$expected_finalization" "$expected_outer" <<'PY'
 import json
 import sys
 
-path, sample_text, outer_text = sys.argv[1:]
+path, sample_text, finalization_text, outer_text = sys.argv[1:]
 with open(path, encoding="utf-8") as source:
     summary = json.load(source)
 budget = summary["timeout_budget"]
 assert budget == {
     "sample_timeout_sec": int(sample_text),
+    "integrity_finalization_timeout_sec": int(finalization_text),
     "samples": 3,
     "setup_cleanup_timeout_sec": 300,
     "cell_outer_timeout_sec": int(outer_text),
@@ -525,7 +526,7 @@ PY
   grep -Fq 'SAMPLE_TIMEOUT_MAX_SEC=600' "$CELL"
   grep -Fq 'CELL_SETUP_CLEANUP_TIMEOUT_SEC=300' "$CELL"
   grep -Fq 'CELL_OUTER_TIMEOUT_MIN_SEC=900' "$CELL"
-  grep -Fq 'CELL_OUTER_TIMEOUT_MAX_SEC=2100' "$CELL"
+  grep -Fq 'CELL_OUTER_TIMEOUT_MAX_SEC=3900' "$CELL"
   grep -Fq '2048)' "$CELL"
   grep -Fq "printf '240\\n'" "$CELL"
   pass tier_derived_timeout_budget_is_bounded_and_refuses_mismatch
@@ -569,9 +570,10 @@ def digest(name):
         return hashlib.sha256(source.read()).hexdigest()
 timeout_budget = {
     "sample_timeout_sec": 120,
+    "integrity_finalization_timeout_sec": 120,
     "samples": 3,
     "setup_cleanup_timeout_sec": 300,
-    "cell_outer_timeout_sec": 900,
+    "cell_outer_timeout_sec": 1020,
 }
 context = {
     "schema": 2,
@@ -1796,14 +1798,16 @@ test_normal_stubborn_worker_is_bounded_and_non_promotable() {
   pass normal_stubborn_worker_is_bounded_and_non_promotable
 }
 
-test_integrity_finalization_uses_remaining_sample_deadline_and_reaps_before_refusal() {
+test_integrity_finalization_uses_tier_policy_after_hold_and_reaps_before_refusal() {
   local root library rc
   root="$TMP/integrity-finalization"
   mkdir -p "$root"
   library="$root/functions.sh"
   : >"$library"
   extract_cell_function "$library" derive_sample_timeout_sec
+  extract_cell_function "$library" derive_integrity_finalization_timeout_sec
   extract_cell_function "$library" worker_is_live
+  extract_cell_function "$library" capture_integrity_finalization_deadline
   extract_cell_function "$library" stop_worker_bounded
   extract_cell_function "$library" stop_worker_for_integrity_deadline
   [[ $(grep -Ec '^stop_worker_for_integrity_deadline\(\)' "$library" || true) == 1 ]] || {
@@ -1821,10 +1825,11 @@ test_integrity_finalization_uses_remaining_sample_deadline_and_reaps_before_refu
     for tier in 1024 2048 4096; do
       expected=$([[ $tier == 1024 ]] && echo 120 || ([[ $tier == 2048 ]] && echo 240 || echo 600))
       [[ $(derive_sample_timeout_sec "$tier") == "$expected" ]]
+      [[ $(derive_integrity_finalization_timeout_sec "$tier") == "$expected" ]]
     done
     body=$(awk "/^stop_worker_for_integrity_deadline\\(\\)/ { on=1 } on { print } on && /^}$/ { exit }" "$1")
     ! grep -Fq WORKER_TERM_GRACE_SEC <<<"$body"
-    grep -Fq "SECONDS < absolute_deadline" <<<"$body"
+    grep -Fq "capture_integrity_finalization_deadline" <<<"$body"
 
     result="$root/slow-result.json"
     log="$root/slow.log"
@@ -1837,8 +1842,7 @@ test_integrity_finalization_uses_remaining_sample_deadline_and_reaps_before_refu
       sleep 0.05
     done
     grep -q "^HOLD " "$log"
-    absolute_deadline=$((SECONDS + 4))
-    stop_worker_for_integrity_deadline "$slow_pid" "$absolute_deadline"
+    stop_worker_for_integrity_deadline "$slow_pid" 4
     [[ ${INTEGRITY_WORKER_REAPED:-0} == 1 && ${INTEGRITY_STOP_REASON:-} == GRACEFUL_EXIT &&
       ${INTEGRITY_WORKER_EXIT_CODE:-} == 0 ]]
     python3 - "$result" <<"PY"
@@ -1858,8 +1862,7 @@ PY
       sleep 0.05
     done
     grep -qx READY "$stubborn_log"
-    absolute_deadline=$((SECONDS + 1))
-    if stop_worker_for_integrity_deadline "$stubborn_pid" "$absolute_deadline"; then
+    if stop_worker_for_integrity_deadline "$stubborn_pid" 1; then
       exit 91
     fi
     [[ ${INTEGRITY_WORKER_REAPED:-0} == 1 &&
@@ -1870,11 +1873,66 @@ PY
   rc=$?
   set -e
   [[ $rc == 0 ]] || {
-    printf 'FAIL integrity finalization did not use the remaining sample deadline: rc=%s stderr=%s\n' \
+    printf 'FAIL integrity finalization did not use the tier policy after HOLD: rc=%s stderr=%s\n' \
       "$rc" "$(<"$root/stderr")" >&2
     exit 1
   }
-  pass integrity_finalization_uses_remaining_sample_deadline_and_reaps_before_refusal
+  pass integrity_finalization_uses_tier_policy_after_hold_and_reaps_before_refusal
+}
+
+test_integrity_finalization_clock_starts_after_term_issuance() {
+  local root library rc
+  root="$TMP/integrity-term-boundary"
+  mkdir -p "$root"
+  library="$root/functions.sh"
+  : >"$library"
+  for name in worker_is_live capture_integrity_finalization_deadline stop_worker_for_integrity_deadline; do
+    extract_cell_function "$library" "$name"
+  done
+  set +e
+  timeout --foreground --kill-after=2s 10s bash -c '
+    set -euo pipefail
+    source "$1"
+    root=$2
+    WORKER_KILL_GRACE_SEC=1
+    python3 -c "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)" &
+    worker_pid=$!
+    cleanup_inner() { command kill -KILL "$worker_pid" 2>/dev/null || true; wait "$worker_pid" 2>/dev/null || true; }
+    trap cleanup_inner EXIT
+    kill() {
+      if [[ $1 == -TERM ]]; then
+        printf entered >"$root/term-entered"
+        while [[ ! -f $root/term-release ]]; do sleep 0.02; done
+        command kill "$@"
+        date +%s%N >"$root/term-returned-ns"
+        return 0
+      fi
+      command kill "$@"
+    }
+    capture_integrity_finalization_deadline() {
+      local timeout_sec=$1 now
+      now=$(date +%s%N)
+      printf "%s\\n" "$now" >"$root/finalization-started-ns"
+      INTEGRITY_FINALIZATION_STARTED_SEC=$SECONDS
+      INTEGRITY_FINALIZATION_DEADLINE_SEC=$((SECONDS + timeout_sec))
+    }
+    stop_worker_for_integrity_deadline "$worker_pid" 1 &
+    helper_pid=$!
+    for _ in $(seq 1 100); do [[ -f $root/term-entered ]] && break; sleep 0.02; done
+    [[ -f $root/term-entered && ! -e $root/finalization-started-ns ]]
+    : >"$root/term-release"
+    wait "$helper_pid" || true
+    [[ -f $root/term-returned-ns && -f $root/finalization-started-ns ]]
+    (( $(<"$root/finalization-started-ns") >= $(<"$root/term-returned-ns") ))
+  ' _ "$library" "$root" >/dev/null 2>"$root/stderr"
+  rc=$?
+  set -e
+  [[ $rc == 0 ]] || {
+    printf 'FAIL integrity finalization clock started before TERM issuance completed: rc=%s stderr=%s\n' \
+      "$rc" "$(<"$root/stderr")" >&2
+    exit 1
+  }
+  pass integrity_finalization_clock_starts_after_term_issuance
 }
 
 test_integrity_deadline_reaped_worker_does_not_repeat_cleanup_and_can_seal_receipt() {
@@ -1883,7 +1941,7 @@ test_integrity_deadline_reaped_worker_does_not_repeat_cleanup_and_can_seal_recei
   mkdir -p "$root/artifacts"
   library="$root/functions.sh"
   : >"$library"
-  for name in worker_is_live stop_worker_bounded stop_worker_for_integrity_deadline cleanup; do
+  for name in worker_is_live stop_worker_bounded capture_integrity_finalization_deadline stop_worker_for_integrity_deadline cleanup; do
     extract_cell_function "$library" "$name"
   done
   [[ $(grep -Ec '^stop_worker_for_integrity_deadline\(\)' "$library" || true) == 1 ]] || {
@@ -1927,8 +1985,7 @@ test_integrity_deadline_reaped_worker_does_not_repeat_cleanup_and_can_seal_recei
     done
     grep -qx READY "$stubborn_log"
     trap cleanup EXIT
-    absolute_deadline=$((SECONDS + 1))
-    if stop_worker_for_integrity_deadline "$WORKER_PID" "$absolute_deadline"; then
+    if stop_worker_for_integrity_deadline "$WORKER_PID" 1; then
       exit 91
     fi
     [[ ${INTEGRITY_WORKER_REAPED:-0} == 1 && ${INTEGRITY_STOP_REASON:-} == SAMPLE_INTEGRITY_DEADLINE_EXCEEDED ]]
@@ -1945,17 +2002,18 @@ test_integrity_deadline_reaped_worker_does_not_repeat_cleanup_and_can_seal_recei
       "$rc" "$(<"$root/stderr")" >&2
     exit 1
   }
-  test_integrity_deadline_preserves_already_exited_worker_status
+  test_integrity_finalization_caller_preserves_already_exited_worker_status
   pass integrity_deadline_reaped_worker_does_not_repeat_cleanup_and_can_seal_receipt
 }
 
-test_integrity_deadline_preserves_already_exited_worker_status() {
+test_integrity_finalization_caller_preserves_already_exited_worker_status() {
   local root library rc
   root="$TMP/integrity-already-exited"
-  mkdir -p "$root"
+  mkdir -p "$root/artifacts" "$root/cgroup"
+  printf 'oom_kill 0\n' >"$root/cgroup/memory.events"
   library="$root/functions.sh"
   : >"$library"
-  for name in worker_is_live stop_worker_for_integrity_deadline append_integrity_process_receipt; do
+  for name in worker_is_live capture_integrity_finalization_deadline stop_worker_for_integrity_deadline read_cgroup_oom_kill_count append_integrity_process_receipt finalize_integrity_worker_after_hold cleanup; do
     extract_cell_function "$library" "$name"
   done
   set +e
@@ -1963,8 +2021,22 @@ test_integrity_deadline_preserves_already_exited_worker_status() {
     set -euo pipefail
     source "$1"
     root=$2
+    ARTIFACT_DIR="$root/artifacts"
+    CG="$root/cgroup"
+    VERSION=v1
+    PAIR_ID=fixture-pair
+    MODE=disk-only
+    CONDITION=idle
+    TIER_MIB=1024
+    CUSTODY_FRONTIER=0
+    CLEANUP_OK=1
+    FAILURE_REASON=""
+    FINAL_EPOCH_STATE=unattempted
+    SCRATCH_SWAP=""
+    SCRATCH_SWAP_ACTIVE=0
     WORKER_TERM_GRACE_SEC=1
     WORKER_KILL_GRACE_SEC=1
+    INTEGRITY_FINALIZATION_TIMEOUT_SEC=2
     wait_calls=0
     wait() {
       wait_calls=$((wait_calls + 1))
@@ -1983,23 +2055,48 @@ test_integrity_deadline_preserves_already_exited_worker_status() {
       sleep 0.01
     done
     ! worker_is_live "$worker_pid"
-    if stop_worker_for_integrity_deadline "$worker_pid" "$((SECONDS + 2))"; then
+    WORKER_PID=$worker_pid
+    INTEGRITY_FINALIZATION_STARTED_SEC=7
+    INTEGRITY_FINALIZATION_DEADLINE_SEC=999999
+    rollback_published_inventory() { :; }
+    discard_custody_candidates() { :; }
+    cleanup_cgroup() { :; }
+    cleanup_disk_scratch() { :; }
+    product_off_epoch() {
+      [[ $1 == final ]] || return 1
+      printf "PRODUCT_OFF\n" >"$root/product-off.txt"
+      FINAL_EPOCH_STATE=completed
+    }
+    nbd_failure_receipt_allowed() { [[ $1 -ne 0 && $2 == 1 && $3 == PRODUCT_OFF && $4 == 1 && $5 == 0 ]]; }
+    nbd_write_failure_receipt() {
+      [[ $3 == SAMPLE_INTEGRITY_PROCESS_FAILED ]] || return 1
+      printf "%s\n" "$3" >"$1"
+    }
+    refuse() { FAILURE_REASON=${FAILURE_REASON:-$1}; return 2; }
+    stop_worker_bounded() { printf "unexpected-retry\n" >"$root/retry.log"; return 1; }
+    printf "CGROUP_MEMBERSHIP=PASS\n" >"$root/process-receipt.txt"
+    trap cleanup EXIT
+    if finalize_integrity_worker_after_hold "$root/process-receipt.txt" 0; then
       exit 91
     fi
     [[ ${INTEGRITY_WORKER_REAPED:-0} == 1 &&
       ${INTEGRITY_WORKER_EXIT_CODE:-} == 37 &&
-      ${INTEGRITY_STOP_REASON:-} == SAMPLE_INTEGRITY_PROCESS_FAILED ]]
-    receipt="$root/process-receipt.txt"
-    printf "worker receipt\n" >"$receipt"
-    append_integrity_process_receipt "$receipt" 1 0 0
-    grep -Fxq INTEGRITY_WORKER_EXIT_CODE=37 "$receipt"
+      ${INTEGRITY_STOP_REASON:-} == SAMPLE_INTEGRITY_PROCESS_FAILED &&
+      $WORKER_PID == "" && ! -v INTEGRITY_FINALIZATION_STARTED_SEC &&
+      ! -v INTEGRITY_FINALIZATION_DEADLINE_SEC &&
+      $FAILURE_REASON == SAMPLE_INTEGRITY_PROCESS_FAILED ]]
+    grep -Fxq INTEGRITY_STOP_REASON=SAMPLE_INTEGRITY_PROCESS_FAILED "$root/process-receipt.txt"
+    grep -Fxq INTEGRITY_WORKER_EXIT_CODE=37 "$root/process-receipt.txt"
+    grep -Fxq INTEGRITY_DEADLINE_REMAINING_SEC=0 "$root/process-receipt.txt"
+    ! grep -Fq UNCLASSIFIED_FAILURE "$root/process-receipt.txt"
     [[ $wait_calls == 1 ]]
+    exit 2
   ' _ "$library" "$root" >/dev/null 2>"$root/stderr"
   rc=$?
   set -e
-  [[ $rc == 0 ]] || {
-    printf 'FAIL already-exited integrity worker status was not preserved: rc=%s stderr=%s\n' \
-      "$rc" "$(<"$root/stderr")" >&2
+  [[ $rc == 2 && ! -e $root/retry.log && $(<"$root/product-off.txt") == PRODUCT_OFF ]] || {
+    printf 'FAIL already-exited caller path was not stable or PRODUCT_OFF-safe: rc=%s stderr=%s product_off=%s\n' \
+      "$rc" "$(<"$root/stderr")" "$(<"$root/product-off.txt" 2>/dev/null || printf absent)" >&2
     exit 1
   }
 }
@@ -2161,7 +2258,8 @@ test_down_failure_is_single_shot_and_non_promotable() {
 test_product_off_authority_is_unique_and_allowlisted
 test_success_finalization_removes_cgroup_and_faults_keep_cleanup_armed
 test_normal_stubborn_worker_is_bounded_and_non_promotable
-test_integrity_finalization_uses_remaining_sample_deadline_and_reaps_before_refusal
+test_integrity_finalization_uses_tier_policy_after_hold_and_reaps_before_refusal
+test_integrity_finalization_clock_starts_after_term_issuance
 test_integrity_deadline_reaped_worker_does_not_repeat_cleanup_and_can_seal_receipt
 test_worker_grace_values_are_strictly_bounded
 test_live_refuses_worker_grace_and_failure_receipt_seams
@@ -2510,9 +2608,10 @@ for name, contents in {
         target.write(contents)
 timeout_budget = {
     "sample_timeout_sec": 120,
+    "integrity_finalization_timeout_sec": 120,
     "samples": 3,
     "setup_cleanup_timeout_sec": 300,
-    "cell_outer_timeout_sec": 900,
+    "cell_outer_timeout_sec": 1020,
 }
 context = {
     "schema": 2,

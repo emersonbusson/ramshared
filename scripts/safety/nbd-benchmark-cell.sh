@@ -16,9 +16,10 @@ SWAP_FIXTURE=""
 RUNS=3
 SAMPLE_TIMEOUT_SEC=""
 SAMPLE_TIMEOUT_MAX_SEC=600
+INTEGRITY_FINALIZATION_TIMEOUT_SEC=""
 CELL_SETUP_CLEANUP_TIMEOUT_SEC=300
 CELL_OUTER_TIMEOUT_MIN_SEC=900
-CELL_OUTER_TIMEOUT_MAX_SEC=2100
+CELL_OUTER_TIMEOUT_MAX_SEC=3900
 CELL_OUTER_TIMEOUT_SEC=""
 SAMPLE_BASELINE_REASON=""
 SAMPLE_ZRAM_DEVICE=""
@@ -102,6 +103,12 @@ derive_sample_timeout_sec() {
   esac
 }
 
+# Integrity finalization starts only after the HOLD receipt/TERM boundary.
+# This is an explicit tier policy, not a measured performance allowance.
+derive_integrity_finalization_timeout_sec() {
+  derive_sample_timeout_sec "$1"
+}
+
 validate_worker_grace_values() {
   local variable value
   for variable in WORKER_TERM_GRACE_SEC WORKER_KILL_GRACE_SEC; do
@@ -111,8 +118,10 @@ validate_worker_grace_values() {
 }
 
 configure_timeout_budget() {
-  local derived_timeout
+  local derived_timeout derived_finalization_timeout
   derived_timeout=$(derive_sample_timeout_sec "$TIER_MIB") || refuse SAMPLE_TIMEOUT_TIER_INVALID
+  derived_finalization_timeout=$(derive_integrity_finalization_timeout_sec "$TIER_MIB") || \
+    refuse INTEGRITY_FINALIZATION_TIMEOUT_TIER_INVALID
   if [[ -n $SAMPLE_TIMEOUT_SEC ]]; then
     [[ $SAMPLE_TIMEOUT_SEC =~ ^[1-9][0-9]{0,2}$ ]] || refuse SAMPLE_TIMEOUT_INVALID
     (( SAMPLE_TIMEOUT_SEC <= SAMPLE_TIMEOUT_MAX_SEC )) || refuse SAMPLE_TIMEOUT_INVALID
@@ -120,7 +129,8 @@ configure_timeout_budget() {
   else
     SAMPLE_TIMEOUT_SEC=$derived_timeout
   fi
-  CELL_OUTER_TIMEOUT_SEC=$((RUNS * SAMPLE_TIMEOUT_SEC + CELL_SETUP_CLEANUP_TIMEOUT_SEC))
+  INTEGRITY_FINALIZATION_TIMEOUT_SEC=$derived_finalization_timeout
+  CELL_OUTER_TIMEOUT_SEC=$((RUNS * (SAMPLE_TIMEOUT_SEC + INTEGRITY_FINALIZATION_TIMEOUT_SEC) + CELL_SETUP_CLEANUP_TIMEOUT_SEC))
   (( CELL_OUTER_TIMEOUT_SEC < CELL_OUTER_TIMEOUT_MIN_SEC )) && CELL_OUTER_TIMEOUT_SEC=$CELL_OUTER_TIMEOUT_MIN_SEC
   (( CELL_OUTER_TIMEOUT_SEC > 0 && CELL_OUTER_TIMEOUT_SEC <= CELL_OUTER_TIMEOUT_MAX_SEC )) \
     || refuse CELL_TIMEOUT_BUDGET_INVALID
@@ -184,6 +194,7 @@ fi
 aggregate_samples() {
   [[ -f $SAMPLES && -n $OUT ]] || refuse AGGREGATE_INPUT_INVALID
   python3 - "$SAMPLES" "$OUT" "$MODE" "$CONDITION" "$TIER_MIB" "$SAMPLE_TIMEOUT_SEC" \
+    "$INTEGRITY_FINALIZATION_TIMEOUT_SEC" \
     "$CELL_SETUP_CLEANUP_TIMEOUT_SEC" "$CELL_OUTER_TIMEOUT_SEC" <<'PY'
 import json
 import hashlib
@@ -192,9 +203,10 @@ import os
 import statistics
 import sys
 
-samples_path, output_path, mode, condition, tier_text, sample_timeout_text, setup_cleanup_text, outer_timeout_text = sys.argv[1:]
+samples_path, output_path, mode, condition, tier_text, sample_timeout_text, finalization_timeout_text, setup_cleanup_text, outer_timeout_text = sys.argv[1:]
 tier_mib = int(tier_text)
 sample_timeout_sec = int(sample_timeout_text)
+integrity_finalization_timeout_sec = int(finalization_timeout_text)
 setup_cleanup_timeout_sec = int(setup_cleanup_text)
 cell_outer_timeout_sec = int(outer_timeout_text)
 rows = []
@@ -275,6 +287,7 @@ summary = {
     "terminal_state": "PRODUCT_OFF",
     "timeout_budget": {
         "sample_timeout_sec": sample_timeout_sec,
+        "integrity_finalization_timeout_sec": integrity_finalization_timeout_sec,
         "samples": 3,
         "setup_cleanup_timeout_sec": setup_cleanup_timeout_sec,
         "cell_outer_timeout_sec": cell_outer_timeout_sec,
@@ -911,7 +924,8 @@ write_live_context_v2() {
     "$LOWER_SINK_TYPE" "$LOWER_SINK_IDENTITY_SHA256" "$binary_match" "$input_bundle_manifest_sha" \
     "$nbd_device" "$nbd_block_major_minor" "$nbd_size_kib" "$nbd_usable_size_kib" \
     "$nbd_capacity_sectors" "$nbd_priority" "$nbd_server_pid" \
-    "$nbd_daemon_manifest_sha" "$SAMPLE_TIMEOUT_SEC" "$CELL_SETUP_CLEANUP_TIMEOUT_SEC" \
+    "$nbd_daemon_manifest_sha" "$SAMPLE_TIMEOUT_SEC" "$INTEGRITY_FINALIZATION_TIMEOUT_SEC" \
+    "$CELL_SETUP_CLEANUP_TIMEOUT_SEC" \
     "$CELL_OUTER_TIMEOUT_SEC" <<'PY'
 import hashlib
 import json
@@ -923,7 +937,7 @@ import sys
  zram_name, zram_algorithm, zram_size_kib, zram_priority, lower_kind, lower_identity,
  sink_type, sink_identity, binary_match, input_bundle_manifest_sha, nbd_device, nbd_block_major_minor,
  nbd_size_kib, nbd_usable_size_kib, nbd_capacity_sectors, nbd_priority, nbd_server_pid,
- nbd_daemon_manifest_sha, sample_timeout_sec, setup_cleanup_timeout_sec, cell_outer_timeout_sec) = sys.argv[1:]
+ nbd_daemon_manifest_sha, sample_timeout_sec, integrity_finalization_timeout_sec, setup_cleanup_timeout_sec, cell_outer_timeout_sec) = sys.argv[1:]
 fields = {}
 with open(preflight_path, encoding="utf-8") as source:
     for line in source:
@@ -994,6 +1008,7 @@ record = {
     "watchdog": {"armed": True, "outcome": "not_fired"},
     "timeout_budget": {
         "sample_timeout_sec": int(sample_timeout_sec),
+        "integrity_finalization_timeout_sec": int(integrity_finalization_timeout_sec),
         "samples": 3,
         "setup_cleanup_timeout_sec": int(setup_cleanup_timeout_sec),
         "cell_outer_timeout_sec": int(cell_outer_timeout_sec),
@@ -1481,18 +1496,32 @@ stop_worker_bounded() {
   (( forced_stop == 0 ))
 }
 
+capture_integrity_finalization_deadline() {
+  local timeout_sec=$1
+  [[ $timeout_sec =~ ^[1-9][0-9]{0,2}$ ]] || return 1
+  INTEGRITY_FINALIZATION_STARTED_SEC=$SECONDS
+  INTEGRITY_FINALIZATION_DEADLINE_SEC=$((INTEGRITY_FINALIZATION_STARTED_SEC + timeout_sec))
+}
+
 stop_worker_for_integrity_deadline() {
-  local pid=$1 absolute_deadline=$2 kill_deadline wait_rc=0
+  local pid=$1 integrity_finalization_timeout_sec=$2 integrity_finalization_deadline kill_deadline wait_rc=0 term_issued=0
   INTEGRITY_STOP_REASON=""
   INTEGRITY_WORKER_REAPED=0
   INTEGRITY_WORKER_EXIT_CODE=""
-  [[ $pid =~ ^[1-9][0-9]*$ && $absolute_deadline =~ ^[0-9]+$ ]] || {
+  unset INTEGRITY_FINALIZATION_STARTED_SEC INTEGRITY_FINALIZATION_DEADLINE_SEC
+  [[ $pid =~ ^[1-9][0-9]*$ && $integrity_finalization_timeout_sec =~ ^[1-9][0-9]{0,2}$ ]] || {
     INTEGRITY_STOP_REASON=SAMPLE_INTEGRITY_PROCESS_FAILED
     return 1
   }
   if worker_is_live "$pid"; then
     kill -TERM "$pid" 2>/dev/null || true
-    while worker_is_live "$pid" && (( SECONDS < absolute_deadline )); do sleep 0.1; done
+    term_issued=1
+    capture_integrity_finalization_deadline "$integrity_finalization_timeout_sec" || {
+      INTEGRITY_STOP_REASON=SAMPLE_INTEGRITY_PROCESS_FAILED
+      return 1
+    }
+    integrity_finalization_deadline=$INTEGRITY_FINALIZATION_DEADLINE_SEC
+    while worker_is_live "$pid" && (( SECONDS < integrity_finalization_deadline )); do sleep 0.1; done
   fi
   if worker_is_live "$pid"; then
     INTEGRITY_STOP_REASON=SAMPLE_INTEGRITY_DEADLINE_EXCEEDED
@@ -1511,6 +1540,10 @@ stop_worker_for_integrity_deadline() {
   if wait "$pid" 2>/dev/null; then
     INTEGRITY_WORKER_REAPED=1
     INTEGRITY_WORKER_EXIT_CODE=0
+    if (( term_issued == 0 )); then
+      INTEGRITY_STOP_REASON=SAMPLE_INTEGRITY_PROCESS_FAILED
+      return 1
+    fi
     INTEGRITY_STOP_REASON=GRACEFUL_EXIT
     return 0
   else
@@ -1552,6 +1585,38 @@ append_integrity_process_receipt() {
     printf 'CGROUP_OOM_KILL_BEFORE=%s\n' "$oom_kill_before"
     printf 'CGROUP_OOM_KILL_AFTER=%s\n' "$oom_kill_after"
   } >>"$path"
+}
+
+finalize_integrity_worker_after_hold() {
+  local process_receipt_path=$1 oom_kill_before=$2 oom_kill_after integrity_deadline_remaining_sec=0
+  if ! stop_worker_for_integrity_deadline "$WORKER_PID" "$INTEGRITY_FINALIZATION_TIMEOUT_SEC"; then
+    if [[ ${INTEGRITY_WORKER_REAPED:-0} == 1 ]]; then
+      WORKER_PID=""
+      oom_kill_after=$(read_cgroup_oom_kill_count "$CG/memory.events") || refuse CGROUP_OOM_RECEIPT_INVALID
+      # An already-exited worker never received TERM, so it has no finalization
+      # deadline. Preserve its exit code and record zero remaining policy time.
+      if [[ -v INTEGRITY_FINALIZATION_DEADLINE_SEC ]]; then
+        integrity_deadline_remaining_sec=$((INTEGRITY_FINALIZATION_DEADLINE_SEC - SECONDS))
+        (( integrity_deadline_remaining_sec >= 0 )) || integrity_deadline_remaining_sec=0
+      fi
+      append_integrity_process_receipt "$process_receipt_path" \
+        "$integrity_deadline_remaining_sec" "$oom_kill_before" "$oom_kill_after" \
+        || refuse INTEGRITY_PROCESS_RECEIPT_INVALID
+    fi
+    refuse "${INTEGRITY_STOP_REASON:-SAMPLE_INTEGRITY_PROCESS_FAILED}"
+    return 1
+  fi
+  WORKER_PID=""
+  oom_kill_after=$(read_cgroup_oom_kill_count "$CG/memory.events") || refuse CGROUP_OOM_RECEIPT_INVALID
+  [[ -v INTEGRITY_FINALIZATION_DEADLINE_SEC ]] || {
+    refuse SAMPLE_INTEGRITY_PROCESS_FAILED
+    return 1
+  }
+  integrity_deadline_remaining_sec=$((INTEGRITY_FINALIZATION_DEADLINE_SEC - SECONDS))
+  (( integrity_deadline_remaining_sec >= 0 )) || integrity_deadline_remaining_sec=0
+  append_integrity_process_receipt "$process_receipt_path" \
+    "$integrity_deadline_remaining_sec" "$oom_kill_before" "$oom_kill_after" \
+    || refuse INTEGRITY_PROCESS_RECEIPT_INVALID
 }
 
 cleanup_cgroup() {
@@ -1634,12 +1699,13 @@ load_bound_lower_sink
 product_off_epoch initial || refuse INITIAL_PRODUCT_OFF_FAILED
 cp -- "$ARTIFACT_DIR/preflight-off.txt" "$ARTIFACT_DIR/before.txt"
 python3 - "$ARTIFACT_DIR/action.txt" "$MODE" "$CONDITION" "$TIER_MIB" "$VERSION" "$PAIR_ID" \
-  "$SAMPLE_TIMEOUT_SEC" "$CELL_SETUP_CLEANUP_TIMEOUT_SEC" "$CELL_OUTER_TIMEOUT_SEC" <<'PY'
+  "$SAMPLE_TIMEOUT_SEC" "$INTEGRITY_FINALIZATION_TIMEOUT_SEC" "$CELL_SETUP_CLEANUP_TIMEOUT_SEC" \
+  "$CELL_OUTER_TIMEOUT_SEC" <<'PY'
 import json
 import os
 import sys
 
-out, mode, condition, tier, version, pair_id, sample_timeout_sec, setup_cleanup_timeout_sec, cell_outer_timeout_sec = sys.argv[1:]
+out, mode, condition, tier, version, pair_id, sample_timeout_sec, integrity_finalization_timeout_sec, setup_cleanup_timeout_sec, cell_outer_timeout_sec = sys.argv[1:]
 record = {
     "schema": 1,
     "action": "sealed_nbd_benchmark_cell",
@@ -1650,6 +1716,7 @@ record = {
     "pair_id": pair_id,
     "timeout_budget": {
         "sample_timeout_sec": int(sample_timeout_sec),
+        "integrity_finalization_timeout_sec": int(integrity_finalization_timeout_sec),
         "samples": 3,
         "setup_cleanup_timeout_sec": int(setup_cleanup_timeout_sec),
         "cell_outer_timeout_sec": int(cell_outer_timeout_sec),
@@ -1724,10 +1791,10 @@ import os, sys
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
 os.close(fd)
 PY
-  deadline=$((SECONDS + SAMPLE_TIMEOUT_SEC))
+  hold_deadline=$((SECONDS + SAMPLE_TIMEOUT_SEC))
   max_z=$z0 max_n=$n0 max_d=$d0 max_s=$s0 ghost_seen=$ghost0
   while kill -0 "$WORKER_PID" 2>/dev/null && ! grep -q '^HOLD ' "$log" 2>/dev/null; do
-    (( SECONDS < deadline )) || refuse SAMPLE_TIMEOUT
+    (( SECONDS < hold_deadline )) || refuse SAMPLE_TIMEOUT
     read -r z n d ghost <<<"$(swap_used)"
     (( z > max_z )) && max_z=$z
     (( n > max_n )) && max_n=$n
@@ -1748,25 +1815,9 @@ PY
     sleep 0.1
   done
   oom_kill_before=$(read_cgroup_oom_kill_count "$CG/memory.events") || refuse CGROUP_OOM_RECEIPT_INVALID
-  if ! stop_worker_for_integrity_deadline "$WORKER_PID" "$deadline"; then
-    if [[ ${INTEGRITY_WORKER_REAPED:-0} == 1 ]]; then
-      WORKER_PID=""
-      oom_kill_after=$(read_cgroup_oom_kill_count "$CG/memory.events") || refuse CGROUP_OOM_RECEIPT_INVALID
-      integrity_deadline_remaining_sec=$((deadline - SECONDS))
-      (( integrity_deadline_remaining_sec >= 0 )) || integrity_deadline_remaining_sec=0
-      append_integrity_process_receipt "$ARTIFACT_DIR/run-$run-process.txt" \
-        "$integrity_deadline_remaining_sec" "$oom_kill_before" "$oom_kill_after" \
-        || refuse INTEGRITY_PROCESS_RECEIPT_INVALID
-    fi
-    refuse "$INTEGRITY_STOP_REASON"
-  fi
-  WORKER_PID=""
-  oom_kill_after=$(read_cgroup_oom_kill_count "$CG/memory.events") || refuse CGROUP_OOM_RECEIPT_INVALID
-  integrity_deadline_remaining_sec=$((deadline - SECONDS))
-  (( integrity_deadline_remaining_sec >= 0 )) || integrity_deadline_remaining_sec=0
-  append_integrity_process_receipt "$ARTIFACT_DIR/run-$run-process.txt" \
-    "$integrity_deadline_remaining_sec" "$oom_kill_before" "$oom_kill_after" \
-    || refuse INTEGRITY_PROCESS_RECEIPT_INVALID
+  # The HOLD deadline contains allocation only. The independent policy window
+  # begins only after TERM is issued at observed HOLD and remains non-promotable on any timeout.
+  finalize_integrity_worker_after_hold "$ARTIFACT_DIR/run-$run-process.txt" "$oom_kill_before"
   checksum_match=$(python3 - "$result" "$ALLOCATE_MIB" <<'PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as source:
