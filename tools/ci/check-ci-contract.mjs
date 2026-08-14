@@ -1057,7 +1057,10 @@ function releaseIntegrityWorkflowFindings(gate, text, block) {
   const markers = [
     'git diff --quiet',
     'cargo install cargo-cyclonedx --locked --version 0.5.9',
-    'cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --override-filename ramshared-sbom',
+    'cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --override-filename ramshared-sbom.cdx',
+    "if: github.event_name == 'push' || github.ref == 'refs/heads/main'",
+    'test "$GITHUB_REF" = refs/heads/main',
+    'ref: ${{ github.event_name == \'workflow_dispatch\' && inputs.source_sha || github.sha }}',
     'test "$RELEASE_TAG" = "$RELEASE_TARGET_TAG"',
     'sha256sum "$archive" > "$archive.sha256"',
     'node tools/ci/write-release-manifest.mjs',
@@ -1070,7 +1073,7 @@ function releaseIntegrityWorkflowFindings(gate, text, block) {
   if (!markers.every((marker) => joined.includes(marker)) || !text.includes(`- '${policy.target_tag}'`)) {
     observed.push('release-integrity-command-mismatch')
   }
-  const publishing = /workflow_dispatch|gh\s+release|upload-release-asset|action-gh-release|create-release|release-please/i
+  const publishing = /gh\s+release|upload-release-asset|action-gh-release|create-release|release-please/i
   if (publishing.test(text)) observed.push('release-integrity-publication-reachable')
   return observed
 }
@@ -1105,6 +1108,10 @@ function releasePublicationWorkflowFindings(gate, text, block) {
     'actions/download-artifact@',
     'name: release-integrity-${{ inputs.tag }}-${{ inputs.source_sha }}',
     'run-id: ${{ inputs.integrity_run_id }}',
+    '.path == ".github/workflows/release-integrity.yml"',
+    '.event == "workflow_dispatch"',
+    '.display_title == $recovery_title',
+    '.head_branch == "main"',
     'gh release upload "$RELEASE_TAG" "artifacts/release/$asset"',
     'gh release edit "$RELEASE_TAG" --draft=false --prerelease',
   ]
