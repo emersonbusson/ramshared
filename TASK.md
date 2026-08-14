@@ -58,16 +58,16 @@
 ## TASK-0004 — WSL2 NBD benchmark qualification
 
 **Schema:** `ramshared.task.v1`.
-**Status:** `in_progress`.
+**Status:** `completed`.
 **Owner role:** `wsl2-reliability`.
 **Registered date:** `2026-08-12`.
 **Updated date:** `2026-08-14`.
 **Registered time:** `12:15:54`.
-**Updated time:** `02:52:22`.
+**Updated time:** `05:42:15`.
 **Source revision:** `a365bda0daf89a9707159b86efca8c1ba1ac760b`.
 **Destinations:** branch `feat/wsl2-nbd-benchmark-matrix`, milestone `v0.9.0-beta.1 — WSL2 NBD`, issue `#194`, `docs/specs/no-milestone/wsl2-nbd-product-readiness/`, `scripts/safety/`, `scripts/windows/`, `scripts/p0/`, `tools/ci/`, and the sealed Linux bundle.
 **Scope:** Correct and qualify the paired 1/2/4 GiB disk-versus-NBD benchmark with identical zram topology, cgroup-before-start containment, exact scratch identity, pair-scoped CUDA, bounded Windows-to-WSL calls, source/BINARY_MATCH binding, numeric comparison/regression records, and fail-closed cleanup. Run no live pressure until static/manufactured gates and a fresh independent Sol Gate A pass.
-**Evidence / blockers:** Attempt30 is the latest sealed live attempt, on source `a365bda0daf89a9707159b86efca8c1ba1ac760b`. The canonical matrix completed all 12 P1/P2/P4 idle/bounded disk-only/NBD cells and all 36 samples with integrity, occupancy, per-NBD-cell `BINARY_MATCH=PASS`, pair-scoped CUDA, and per-cell `PRODUCT_OFF`. Matrix SHA-256 is `42fa3e1a00dd7e7c16f0c92196f69622ac9212c9fb889e858f6e40769af292af`; its 551-entry inventory SHA-256 is `58a959fd82d29b6c503382a98d82a4bbf57bb90dc94ffaf2fdc2dfa6e985aece`, and every entry verified. All six public pair records passed the repository validator and were appended as `BASELINE`/nonpromotable because no prior canonical baseline exists. Terminal preflight returned `PRODUCT_OFF`; services are inactive/disabled, no managed swap, daemon, worker, CUDA process, benchmark cgroup, or NBD attachment remains, and `/dev/sdc` was untouched. The live matrix qualification is complete; remaining blockers are Gate B, hosted required checks, PR evidence/metadata review, and merge.
+**Evidence / blockers:** Attempt30 is the latest sealed live attempt, on source `a365bda0daf89a9707159b86efca8c1ba1ac760b`. The canonical matrix completed all 12 P1/P2/P4 idle/bounded disk-only/NBD cells and all 36 samples with integrity, occupancy, per-NBD-cell `BINARY_MATCH=PASS`, pair-scoped CUDA, and per-cell `PRODUCT_OFF`. Matrix SHA-256 is `42fa3e1a00dd7e7c16f0c92196f69622ac9212c9fb889e858f6e40769af292af`; its 551-entry inventory SHA-256 is `58a959fd82d29b6c503382a98d82a4bbf57bb90dc94ffaf2fdc2dfa6e985aece`, and every entry verified. All six public pair records passed the repository validator and were appended as `BASELINE`/nonpromotable because no prior canonical baseline exists. Terminal preflight returned `PRODUCT_OFF`; services are inactive/disabled, no managed swap, daemon, worker, CUDA process, benchmark cgroup, or NBD attachment remains, and `/dev/sdc` was untouched. Gate B, hosted required checks, and PR evidence/metadata review passed; PR `#202` merged as `3aa0c1d6c278b823b70d2cc638b87d7477ea1c0d` and issue `#194` closed.
 **Attempt 21 integrity qualification:** The post-containment checksum PASS covered only a partial `6016/6656 MiB` allocation. It did not complete the third sample and is not a valid cell result.
 
 Attempt22b (2026-08-13) was a live run on sealed source `63bd3be`: four P1
@@ -210,8 +210,8 @@ merge remain open.
 **Owner role:** `ci-governance`.
 **Date:** `2026-08-14`.
 **Registered time:** `05:10:06`.
-**Updated time:** `05:10:06`.
-**Source revision:** `bad410972213a9bb873b1f36788d69781d9b3ba6`.
+**Updated time:** `05:36:39`.
+**Source revision:** `52b42d1083150dfe6ee823771851e428972b607b`.
 **Destinations:** issue `#207`, `docs/governance/ci-contract.json`,
 `docs/specs/no-milestone/release-promotion-publication/`, and
 `tools/ci/check-ci-contract*`.
@@ -221,6 +221,29 @@ intermediate, future, malformed, or multi-package manifest.
 **Evidence / blockers:** TDD reproduced the release-PR false refusal before the
 checker change. The focused 61-test contract suite passes; Node coverage is
 91.76% lines, 85.04% branches, and 98.67% functions. The local contract,
-capability observations, documentation checks, and diff check pass. Hosted
-required checks and merge remain pending; release PR `#206` remains blocked
-until this correction reaches `main` and Release Please refreshes it.
+capability observations, documentation checks, and diff check passed. Hosted
+required checks passed and PR `#208` merged as `52b42d1`; issue `#207` closed.
+
+## TASK-0006 — Release Please machine-body recovery
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `in_progress`.
+**Owner role:** `ci-governance`.
+**Date:** `2026-08-14`.
+**Registered time:** `05:36:39`.
+**Updated time:** `05:36:39`.
+**Source revision:** `1db667670139778423eb5cc9a3778b87ebfa26e9`.
+**Destinations:** issue `#211`, PR `#210`, `release-please-config.json`,
+`docs/governance/ci-contract.json`,
+`docs/specs/no-milestone/release-promotion-publication/`, and
+`tools/ci/check-ci-contract*`.
+**Scope:** Recover the App-only beta producer after release PR `#206` was
+merged with its machine-readable body replaced. Bound changelog discovery to
+the exact `v0.8.0` merge and generate all mandatory PR headings inside the
+Release Please header without replacing its release notes.
+**Evidence / blockers:** The post-merge Release workflow `31784058119` passed
+at the Actions level but its log proves `Pull request body did not match`; no
+tag or release was created. It opened oversized PR `#210` from 507 commits.
+TDD now requires exact `last-release-sha` and all seven generated headings.
+Local full gates, hosted checks, PR update/merge, tag/draft verification, and
+removal of the temporary recovery key remain pending.
