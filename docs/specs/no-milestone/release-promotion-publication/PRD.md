@@ -4,6 +4,7 @@ title: Protected beta release promotion and publication
 milestone: v0.9.0-beta.1 — WSL2 NBD
 issues:
   - 195
+  - 219
 ---
 
 # PRD — Protected beta release promotion and publication
@@ -70,8 +71,10 @@ remain unchanged. This PRD authorizes no publication while it is implemented.
 
 ### Inference / proposal
 
-- A protected manual dispatch can receive a tag, full source SHA, and an
-  integrity-run identifier, then verify them before it mutates a draft release.
+- A maintainer request can receive a tag, full source SHA, and integrity-run
+  identifier, validate them, and delegate the same immutable tuple to the
+  GitHub App. Only the App-authored run can enter protected publication, so
+  `prevent_self_review` retains a distinct human approval boundary.
 - A pinned GitHub App installation token is the appropriate authority for
   Release Please tag production and for the explicitly protected publication
   job. A missing App credential must stop before either producer executes.
@@ -91,11 +94,16 @@ Use one Day-0 release path with three stages and no `workflow_run` handoff.
    `v0.9.0-beta.1`, resolves the tag to its full commit SHA, builds and verifies
    the four-file candidate set, and uploads a bounded integrity artifact. It
    cannot publish a release asset.
-3. **Publication:** a maintainer explicitly dispatches a protected workflow
-   with the exact target tag, exact 40-hex source SHA, and integrity run ID.
-   It downloads only that named integrity artifact, validates every binding,
-   requires the existing Release Please draft, uploads only missing matching
-   files, and publishes the beta only after the exact set is complete.
+3. **Publication:** a maintainer explicitly dispatches a bounded request with
+   the exact target tag, exact 40-hex source SHA, and integrity run ID. That
+   stage validates the tuple before minting an Actions-write App token and
+   delegates the tuple to the same workflow. An admission job rejects a direct
+   user-selected App stage; only the exact App bot actor reaches the unchanged
+   `protected-release` environment, where the human reviewer approves the
+   deployment. The protected job downloads only the named integrity artifact,
+   validates every binding, requires the existing Release Please draft,
+   uploads only missing matching files, and publishes the beta only after the
+   exact set is complete.
 
 The manual action is idempotent: a completed matching beta returns `NO_CHANGE`
 or `PASS`; a wrong tag, SHA, asset name, byte count, hash, release mode, or
@@ -176,7 +184,7 @@ accepted only after those stronger bindings pass.
 | RF-1 | Keep one canonical PR entrypoint. | `ci.yml` remains `workflow_call`-only, `ci-contract.yml` remains the only pull-request caller, and a manufactured direct-plus-reusable topology fails. |
 | RF-2 | Require a GitHub App for tag production. | The release producer fails before Release Please when App credentials/token output are absent; source contains no PAT or `GITHUB_TOKEN` fallback for that token. |
 | RF-3 | Define the beta candidate exactly. | The policy accepts only `v0.9.0-beta.1`, a full 40-hex source SHA, and exactly the four listed public filenames. |
-| RF-4 | Separate integrity from publication. | Tag integrity has read-only permissions and no publish command; publication is `workflow_dispatch`, protected, and has no `workflow_run` trigger. |
+| RF-4 | Separate integrity from publication. | Tag integrity has read-only permissions and no publish command; publication is `workflow_dispatch`, the request delegates only after tuple validation, only the exact App actor reaches the protected job, and there is no `workflow_run` trigger. |
 | RF-5 | Bind artifact bytes to the exact tag SHA. | The manifest, detached checksum, SBOM, archive, dispatch SHA, checked-out tag, and integrity artifact agree or the workflow exits before release mutation. |
 | RF-6 | Publish idempotently. | Empty/matching draft state can advance; an already complete matching beta does not overwrite; mismatched, missing, or extra assets fail closed. |
 | RF-7 | Keep public asset scope exact. | A public beta contains only the four contract names; an internal bundle `SHA256SUMS` never becomes a separate public upload. |
@@ -203,10 +211,13 @@ accepted only after those stronger bindings pass.
    one full commit SHA, checks out that revision, builds the archive/SBOM,
    writes the detached checksum and manifest, validates all four files, and
    stores the candidate as an integrity artifact.
-3. A maintainer explicitly dispatches publication with the target tag, the
-   source SHA, and that integrity run ID. The protected job fetches the exact
-   tag revision and named artifact, validates it, then requires and resumes
-   the matching beta draft created by Release Please.
+3. A maintainer explicitly dispatches publication with the target tag, source
+   SHA, and integrity run ID. The request validates that tuple, then delegates
+   it with an Actions-write App token. Only the App-authored run reaches
+   `protected-release`; the maintainer reviews that distinct run and approves
+   it there. The protected job fetches the exact tag revision and named
+   artifact, validates it, then requires and resumes the matching beta draft
+   created by Release Please.
 4. It uploads only absent verified assets, verifies the remote inventory equals
    the four-file contract, and changes the draft to the public beta state.
 5. A repeat sees the same full inventory and exits without replacement.
@@ -249,20 +260,20 @@ Only matching `draft-empty`/`draft-partial` can advance; a matching
 | `node tools/ci/check-release-integrity.mjs --check …` | Validates tag/SHA, detached checksum, four-file contract, hashes, SBOM, and manifest without publication. |
 | `node tools/ci/check-release-publication.mjs …` | Classifies local candidate and remote release inventory as advance, no-change, or refusal without network mutation. |
 | `.github/workflows/release-integrity.yml` | Tag-triggered read-only candidate producer; uploads only the bounded integrity artifact. |
-| `.github/workflows/release-publication.yml` | Protected `workflow_dispatch` consumer; requires target tag, source SHA, and integrity run ID. |
+| `.github/workflows/release-publication.yml` | Two-stage `workflow_dispatch` consumer; a read-only maintainer request validates and delegates the exact tuple, while only the App-authored run can enter protected publication. |
 | `.github/workflows/release.yml` | GitHub-App-only Release Please tag/draft producer. |
 
 ## 9. Dependencies and risks
 
 | Dependency or risk | Mitigation |
 | --- | --- |
-| App credentials are not configured | Fail before producer side effects and record no fallback. |
+| App credentials are absent, rotated, or lack requested permissions | Fail before delegation or producer side effects and record no fallback. |
 | Tag can move after integrity | Dispatch supplies full SHA; both tag resolution and manifest binding must match it. |
 | Artifact transfer can select another run | Require an explicit numeric run ID and deterministic artifact name containing tag/SHA. |
 | Remote release already contains unknown data | Refuse rather than overwrite or delete it. |
 | Bundle build has an internal checksum | Generate and validate a detached archive checksum separately; upload only the contract quartet. |
 | Protected environment is remote configuration | Local source validation remains partial if its dated remote observation is absent or unsafe. |
-| GitHub Actions selected-action allowlist excludes `actions/create-github-app-token@*` | Production producer/publication is an explicit NO-GO even if the App secrets later exist. A repository administrator must allow the pinned GitHub-owned action; this task does not mutate remote settings. |
+| GitHub Actions selected-action allowlist later excludes the pinned App-token action | Producer/delegation fails before mutation; there is no token or workflow fallback. |
 
 ## 10. Implementation strategy
 
@@ -304,7 +315,8 @@ Only matching `draft-empty`/`draft-partial` can advance; a matching
    topology regression.
 3. Release Please cannot use a PAT or repository-token fallback.
 4. Read-only integrity and manual protected publication are separate, use no
-   `workflow_run`, and bind exact tag/SHA/artifact identity.
+   `workflow_run`, bind exact tag/SHA/artifact identity, and admit the protected
+   stage only when the exact App bot authored the delegated run.
 5. Candidate and release inventory logic accept only the exact asset quartet
    and are idempotent without overwrite.
 6. The target policy refuses historical `v0.8.0` and targets
