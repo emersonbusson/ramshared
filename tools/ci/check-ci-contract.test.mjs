@@ -950,6 +950,26 @@ test('publication_workflow_is_protected_manual_exact_sha_only', () => {
   assert.doesNotMatch(workflow, /workflow_run|pull_request|^  push:|--clobber/i)
 })
 
+test('release_publication_request_delegates_only_to_exact_app_actor', () => {
+  const publicationPath = path.join(ROOT, '.github', 'workflows', 'release-publication.yml')
+  const workflow = readFileSync(publicationPath, 'utf8')
+  assert.match(workflow, /^      authorization:\s*$/m)
+  assert.match(workflow, /^        default: request\s*$/m)
+  assert.match(workflow, /^  release-publication-admission:\s*$/m)
+  assert.match(workflow, /case "\$AUTHORIZATION_STAGE" in/)
+  assert.match(workflow, /\*\) exit 1 ;;/)
+  assert.match(workflow, /test "\$DISPATCH_ACTOR" = 'emersonbusson-ramshared-release\[bot\]'/)
+  assert.match(workflow, /^  release-publication-request:\s*$/m)
+  assert.equal(workflow.match(/needs: release-publication-admission/g)?.length, 2)
+  assert.match(workflow, /inputs\.authorization == 'request'/)
+  assert.match(workflow, /permission-actions: write/)
+  assert.match(workflow, /gh workflow run release-publication\.yml/)
+  assert.match(workflow, /-f authorization=app/)
+  assert.match(workflow, /inputs\.authorization == 'app'/)
+  assert.match(workflow, /github\.actor == 'emersonbusson-ramshared-release\[bot\]'/)
+  assert.equal(workflow.match(/environment: protected-release/g)?.length, 1)
+})
+
 test('release_promotion_node_coverage_is_wired_into_the_canonical_pr_caller', () => {
   const workflow = readFileSync(path.join(ROOT, '.github', 'workflows', 'ci-contract.yml'), 'utf8')
   for (const module of [

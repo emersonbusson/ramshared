@@ -815,7 +815,9 @@
           "target_tag": "v0.9.0-beta.1",
           "manual_only": true,
           "credential": "github-app-required",
-          "draft_only": true
+          "draft_only": true,
+          "request_stage": "github-app-dispatch",
+          "delegated_actor": "emersonbusson-ramshared-release[bot]"
         }
       },
       "required_commands": [
