@@ -257,7 +257,8 @@ function validateReleasePublicationPolicy(gate, policy, errors) {
   if (!isObject(publication) || publication.environment !== RELEASE_ENVIRONMENT ||
       publication.promotion_policy !== RELEASE_PROMOTION_POLICY || publication.target_tag !== RELEASE_TARGET_TAG ||
       publication.manual_only !== true || publication.credential !== 'github-app-required' ||
-      publication.draft_only !== true) {
+      publication.draft_only !== true || publication.request_stage !== 'github-app-dispatch' ||
+      publication.delegated_actor !== 'emersonbusson-ramshared-release[bot]') {
     errors.push(finding(gate.id, 'release-publication-policy-invalid'))
   }
 }
@@ -1092,11 +1093,14 @@ function releasePublicationWorkflowFindings(gate, text, block) {
     observed.push('release-publication-runner-invalid')
   }
   if (fieldValue(block, 'environment') !== policy.environment) observed.push('release-publication-environment-mismatch')
-  if (!['tag', 'source_sha', 'integrity_run_id'].every((input) => workflowDispatchStringInput(text, input))) {
+  if (!['tag', 'source_sha', 'integrity_run_id', 'authorization']
+    .every((input) => workflowDispatchStringInput(text, input))) {
     observed.push('release-publication-dispatch-input-invalid')
   }
   const markers = [
     "if: github.ref == 'refs/heads/main'",
+    "inputs.authorization == 'app'",
+    `github.actor == '${policy.delegated_actor}'`,
     'ref: ${{ github.event.repository.default_branch }}',
     'RELEASE_TAG: ${{ inputs.tag }}',
     'SOURCE_SHA: ${{ inputs.source_sha }}',
@@ -1120,7 +1124,21 @@ function releasePublicationWorkflowFindings(gate, text, block) {
     'gh release upload "$RELEASE_TAG" "artifacts/release/$asset"',
     'gh release edit "$RELEASE_TAG" --draft=false --prerelease',
   ]
+  const delegationMarkers = [
+    'release-publication-admission:',
+    'needs: release-publication-admission',
+    'case "$AUTHORIZATION_STAGE" in',
+    '*) exit 1 ;;',
+    "test \"$DISPATCH_ACTOR\" = 'emersonbusson-ramshared-release[bot]'",
+    'release-publication-request:',
+    "inputs.authorization == 'request'",
+    'default: request',
+    'permission-actions: write',
+    'gh workflow run release-publication.yml',
+    '-f authorization=app',
+  ]
   if (!markers.every((marker) => joined.includes(marker)) ||
+      !delegationMarkers.every((marker) => text.includes(marker)) ||
       joined.indexOf('Validate exact protected dispatch identity') > joined.indexOf('Create publication GitHub App token')) {
     observed.push('release-publication-command-mismatch')
   }

@@ -281,9 +281,9 @@ not invalidate the completed environment-boundary correction.
 **Owner role:** `ci-governance`.
 **Date:** `2026-08-14`.
 **Registered time:** `09:18:00`.
-**Updated time:** `09:40:00`.
+**Updated time:** `09:57:00`.
 **Source revision:** `361427a63cbeb2a8b0ecafb224adeecb0539af9b`.
-**Destinations:** issues `#215` and `#217`,
+**Destinations:** issues `#215`, `#217`, and `#219`,
 `.github/workflows/release-integrity.yml`,
 `.github/workflows/release-publication.yml`, `docs/governance/ci-contract.json`,
 `docs/specs/no-milestone/{ci-trust-and-release-integrity,release-promotion-publication}/`,
@@ -301,7 +301,13 @@ file inside each of the 15 workspace crates. No artifact or asset was
 published. Follow-up issue `#217` and TDD now require a deterministic,
 path-free merge of exactly the two packaged roots (`ramshared-cli` and
 `ramshared-wsl2d`) and independent
-manifest validation of both roots plus tag/SHA properties. Local Green,
-hosted checks, merge, recovered four-file integrity artifact, protected
-publication, and removal of the temporary Release Please recovery key remain
-pending.
+manifest validation of both roots plus tag/SHA properties. PR `#218` merged
+the correction as `a1ca095`, and recovery run `31789473586` emitted the exact
+four-file artifact; independent download revalidation passed the archive
+checksum, manifest, source binding, and deterministic two-root SBOM contract.
+The protected environment correctly prevents self-review. Issue `#219` now
+tracks an exact two-stage publication request: the maintainer request validates
+tag/SHA/run before a GitHub App dispatch, and only the exact App actor can
+enter the unchanged `protected-release` approval boundary. Local Green, hosted
+checks, merge, protected publication, and removal of the temporary Release
+Please recovery key remain pending.

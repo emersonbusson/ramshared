@@ -15,6 +15,11 @@ on:
         description: Successful Release Integrity workflow run ID
         required: true
         type: string
+      authorization:
+        description: Internal GitHub App delegation stage
+        required: true
+        default: request
+        type: string
 
 permissions: {}
 
@@ -23,9 +28,97 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-publication-admission:
+    name: release-publication-admission
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      AUTHORIZATION_STAGE: ${{ inputs.authorization }}
+      DISPATCH_ACTOR: ${{ github.actor }}
+    steps:
+      - name: Admit only maintainer request or exact App delegation
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$AUTHORIZATION_STAGE" in
+            request) ;;
+            app)
+              test "$DISPATCH_ACTOR" = 'emersonbusson-ramshared-release[bot]'
+              ;;
+            *) exit 1 ;;
+          esac
+
+  release-publication-request:
+    name: release-publication-request
+    needs: release-publication-admission
+    if: github.ref == 'refs/heads/main' && inputs.authorization == 'request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      INTEGRITY_RUN_ID: ${{ inputs.integrity_run_id }}
+    steps:
+      - name: Checkout trusted policy tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+
+      - name: Validate exact publication request identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/ci/check-release-publication.mjs \
+            --policy docs/governance/release-promotion.json \
+            --tag "$RELEASE_TAG" \
+            --source-sha "$SOURCE_SHA" \
+            --integrity-run-id "$INTEGRITY_RUN_ID"
+
+      - name: Require publication GitHub App credentials
+        shell: bash
+        env:
+          RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}
+          RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_APP_ID"
+          test -n "$RELEASE_APP_PRIVATE_KEY"
+
+      - name: Create publication request GitHub App token
+        id: request-app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ramshared
+          permission-actions: write
+          permission-metadata: read
+
+      - name: Delegate exact protected publication to GitHub App
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.request-app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run release-publication.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref "${{ github.event.repository.default_branch }}" \
+            -f tag="$RELEASE_TAG" \
+            -f source_sha="$SOURCE_SHA" \
+            -f integrity_run_id="$INTEGRITY_RUN_ID" \
+            -f authorization=app
+
   release-publication:
     name: release-publication
-    if: github.ref == 'refs/heads/main'
+    needs: release-publication-admission
+    if: github.ref == 'refs/heads/main' && inputs.authorization == 'app' && github.actor == 'emersonbusson-ramshared-release[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: protected-release
