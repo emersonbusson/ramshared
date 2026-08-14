@@ -826,7 +826,7 @@
         "node tools/ci/check-release-integrity.mjs",
         "node tools/ci/check-release-publication.mjs",
         "gh release upload \"$RELEASE_TAG\" \"artifacts/release/$asset\"",
-        "gh release edit \"$RELEASE_TAG\" --draft=false --prerelease"
+        "gh api --method PATCH \"repos/$GITHUB_REPOSITORY/releases/$release_id\""
       ],
       "open_gaps": []
     },
