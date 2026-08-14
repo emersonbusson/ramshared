@@ -281,7 +281,7 @@ not invalidate the completed environment-boundary correction.
 **Owner role:** `ci-governance`.
 **Date:** `2026-08-14`.
 **Registered time:** `09:18:00`.
-**Updated time:** `09:18:00`.
+**Updated time:** `09:40:00`.
 **Source revision:** `361427a63cbeb2a8b0ecafb224adeecb0539af9b`.
 **Destinations:** issues `#215` and `#217`,
 `.github/workflows/release-integrity.yml`,
