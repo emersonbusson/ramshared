@@ -795,7 +795,6 @@ test('item6_release_integrity_workflow_is_current_and_nonpublishing', () => {
   assert.equal(gate.policy.permissions_scope, 'job')
   assert.deepEqual(gate.policy.permissions, { contents: 'read' })
   assert.deepEqual(gate.policy.release_integrity, {
-    environment: 'protected-release',
     sbom_generator: { name: 'cargo-cyclonedx', version: '0.5.9', spec_version: '1.5' },
     publication: 'forbidden',
     promotion_policy: 'docs/governance/release-promotion.json',
@@ -807,7 +806,7 @@ test('item6_release_integrity_workflow_is_current_and_nonpublishing', () => {
   const workflow = readFileSync(path.join(ROOT, gate.workflow), 'utf8')
   assert.match(workflow, /push:/)
   assert.match(workflow, /- 'v0\.9\.0-beta\.1'/)
-  assert.match(workflow, /environment: protected-release/)
+  assert.doesNotMatch(workflow, /^\s*environment:/m)
   assert.match(workflow, /git diff --quiet/)
   assert.match(workflow, /cargo install cargo-cyclonedx --locked --version 0\.5\.9/)
   assert.match(workflow, /cargo cyclonedx --manifest-path Cargo\.toml --format json --spec-version 1\.5 --override-filename ramshared-sbom/)
@@ -823,6 +822,19 @@ test('item6_release_integrity_workflow_is_current_and_nonpublishing', () => {
   const result = run({ root: ROOT })
   assert.equal(result.errors.some((item) => item.gate === 'release-integrity'), false)
   assert.equal(result.gaps.some((item) => item.startsWith('release-integrity:')), false)
+})
+
+test('release_integrity_refuses_any_deployment_environment', () => {
+  const contract = JSON.parse(readFileSync(path.join(ROOT, 'docs', 'governance', 'ci-contract.json'), 'utf8'))
+  const gate = contract.gates.find((item) => item.id === 'release-integrity')
+  const workflow = readFileSync(path.join(ROOT, gate.workflow), 'utf8')
+    .replace('    timeout-minutes: 45\n', '    timeout-minutes: 45\n    environment: protected-release\n')
+  const isolated = currentOnlyContract(gate)
+  const root = fixtureRoot(null, isolated)
+  writeFileSync(path.join(root, gate.workflow), workflow)
+
+  const result = validateWorkflowPolicy(isolated, root)
+  assert.equal(result.errors.some((item) => item.rule === 'release-integrity-environment-mismatch'), true)
 })
 
 test('release_producer_requires_github_app_token_without_fallback', () => {

@@ -236,7 +236,7 @@ function validateReleaseIntegrityPolicy(gate, policy, errors) {
     if (requiresReleasePolicy) errors.push(finding(gate.id, 'release-integrity-policy-missing'))
     return
   }
-  if (!isObject(release) || release.environment !== RELEASE_ENVIRONMENT ||
+  if (!isObject(release) || Object.hasOwn(release, 'environment') ||
       !isObject(release.sbom_generator) || release.sbom_generator.name !== RELEASE_SBOM_GENERATOR.name ||
       release.sbom_generator.version !== RELEASE_SBOM_GENERATOR.version ||
       release.sbom_generator.spec_version !== RELEASE_SBOM_GENERATOR.spec_version ||
@@ -1053,7 +1053,7 @@ function releaseIntegrityWorkflowFindings(gate, text, block) {
   if (fieldValue(block, 'runs-on') !== 'ubuntu-latest' || /runs-on:\s*self-hosted/i.test(joined)) {
     observed.push('release-integrity-runner-invalid')
   }
-  if (fieldValue(block, 'environment') !== policy.environment) observed.push('release-integrity-environment-mismatch')
+  if (fieldValue(block, 'environment') !== null) observed.push('release-integrity-environment-mismatch')
   const markers = [
     'git diff --quiet',
     'cargo install cargo-cyclonedx --locked --version 0.5.9',
