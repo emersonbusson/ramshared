@@ -61,13 +61,13 @@
 **Status:** `in_progress`.
 **Owner role:** `wsl2-reliability`.
 **Registered date:** `2026-08-12`.
-**Updated date:** `2026-08-13`.
+**Updated date:** `2026-08-14`.
 **Registered time:** `12:15:54`.
-**Updated time:** `21:43:24`.
-**Source revision:** `4ae8d58f07b69afa61e6ba0b06da844820e1cb1d`.
+**Updated time:** `01:07:35`.
+**Source revision:** `a60c898ec6d938e6828d879d41a4b2ea0c7b6b21`.
 **Destinations:** branch `feat/wsl2-nbd-benchmark-matrix`, milestone `v0.9.0-beta.1 — WSL2 NBD`, issue `#194`, `docs/specs/no-milestone/wsl2-nbd-product-readiness/`, `scripts/safety/`, `scripts/windows/`, `scripts/p0/`, `tools/ci/`, and the sealed Linux bundle.
 **Scope:** Correct and qualify the paired 1/2/4 GiB disk-versus-NBD benchmark with identical zram topology, cgroup-before-start containment, exact scratch identity, pair-scoped CUDA, bounded Windows-to-WSL calls, source/BINARY_MATCH binding, numeric comparison/regression records, and fail-closed cleanup. Run no live pressure until static/manufactured gates and a fresh independent Sol Gate A pass.
-**Evidence / blockers:** Attempt 15 used sealed source `033291e`: both 1 GiB idle cells passed 3/3 with checksum, occupancy, and per-cell `PRODUCT_OFF`; NBD retained `BINARY_MATCH=PASS`. Attempt 16 passed P1/Q2 disk/NBD pairs in both idle and bounded conditions, but Q4 allocation-to-HOLD was about 335 seconds and sample two hit the fixed 120-second `SAMPLE_TIMEOUT` after about 281 seconds; cleanup was clean. The historical correction used P1/Q2/Q4 tuples `120/900`, `240/1020`, and `600/2100`; Attempt27 supersedes them with separate hold/finalization/cell tuples `120/120/1020`, `240/240/1740`, and `600/600/3900`, with exact pair CUDA `2160/3600/7920`. Attempt 17 reproduced a false `cell_timeout_budget_mismatch` when equal summary/controller timeout fields were serialized in different property orders. The named `cell_timeout_budget_property_order_is_semantic` test is now green with canonical strict comparison and refuses real mismatch/noncanonical types; fresh independent Sol Gate A passed that frozen correction. Attempt 18 then exposed that the controller's valid Q4 `CudaMaxHoldSec=4320` was rejected by the workload's stale 3600-second parameter cap before CUDA startup; the named handshake test now proves 4320 accepted and 4321 refused. Attempt 19 used sealed source `fed085b` and reached 9/12 PASS cells; Attempt 20 reached 10/12 before Q4 bounded headroom refusal. Attempt 21 reached 11/12 before the synchronous recovery self-deadlock; async recovery completed/audited in `47889e0`, and the non-destructive watchdog completed/audited in `63bd3be`. Attempt22b is the latest live attempt on sealed source `63bd3be`: four P1 cells passed 3/3, Q2 disk-only was `RED/SAMPLE_TIMEOUT`, the matrix hash is `4088682aa07e6b90d6477f7e1ceaff952ee16fac99967b2b980698460302da14`, the failure receipt hash is `8e2e07918404e6533afb8ed440075ed0a2dff2ba4424a378f38647685596e7e4`, and terminal `PRODUCT_OFF` was verified. Q2 NBD and all Q4 cells did not run. The current blockers are fresh independent Gate A, resealing, Q2-calibrated complete matrix, Gate B, PR checks, and merge; no new live claim is made.
+**Evidence / blockers:** Attempt 29 is the latest sealed live attempt, on source `a60c898ec6d938e6828d879d41a4b2ea0c7b6b21`. The first P1 idle disk-only sample completed `3584 MiB`, HOLD, integrity, occupancy, and cleanup; allocation-to-HOLD took `114056 ms` and the independent finalization receipt retained `86 s`. The second sample reached only `2048/3584 MiB` before the 120-second allocation-to-HOLD deadline, so the matrix stopped `RED/SAMPLE_TIMEOUT` before NBD or any bounded cell. Terminal pinned preflight returned `PRODUCT_OFF`, the 36-entry inventory verified, no public pair evidence was emitted, and the pre-existing `/dev/sdc` remained untouched. Because the failed cell was `idle`, no CUDA workload was supposed to run; the low Task Manager VRAM reading is expected, not evidence of a CUDA failure. The source-only successor changes only the P1 hold/finalization/cell tuple to `240/120/1380 s`; P2 and P4 remain `240/240/1740 s` and `600/600/3900 s`, with exact bounded-pair CUDA `2880/3600/7920 s`. Local TDD is green, but this successor is not sealed or live-qualified. The current blockers are committing and resealing this correction, a fresh complete matrix, Gate B, hosted checks, and merge.
 **Attempt 21 integrity qualification:** The post-containment checksum PASS covered only a partial `6016/6656 MiB` allocation. It did not complete the third sample and is not a valid cell result.
 
 Attempt22b (2026-08-13) was a live run on sealed source `63bd3be`: four P1
@@ -174,3 +174,17 @@ re-reads it, then issues TERM. It records sanitized limits and monotonic OOM
 receipts plus
 bounded 512 MiB verification progress. Timeout remains RED and nonpromotable;
 no live rerun, reseal, NBD claim, or promotion is made.
+
+Attempt29 (2026-08-14, sealed source `a60c898`) stopped at the first P1 idle
+disk-only cell. Run one completed all `3584 MiB`, HOLD, final checksum, and
+occupancy; allocation-to-HOLD took `114056 ms`. Run two reached only
+`2048/3584 MiB` before the 120-second HOLD deadline and correctly refused
+`SAMPLE_TIMEOUT`. No NBD or bounded cell ran, so no CUDA allocation was
+expected or claimed. The matrix and inventory SHA-256 values are
+`3f85c9948dc8c733b06351c029bc7a2a1512574cdc1ee8fdd8abfe41b78ef33e`
+and `e1d62c1c7a0d349624a8b68a309830495b67b2a2aa3c5efdd24b20a55b558fa9`.
+Terminal preflight proved `PRODUCT_OFF`; no public evidence was emitted. The
+source-only successor raises only the P1 allocation-to-HOLD cap to 240 seconds,
+retains its independent 120-second integrity cap, and derives cell/CUDA bounds
+of `1380/2880 s`. It remains nonpromotable until committed, resealed, and
+exercised by a complete fresh matrix.
