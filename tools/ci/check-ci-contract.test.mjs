@@ -947,6 +947,8 @@ test('publication_workflow_is_protected_manual_exact_sha_only', () => {
   assert.match(workflow, /\.event == "workflow_dispatch" and \.name == \$recovery_title/)
   assert.match(workflow, /\.display_title == \$recovery_title/)
   assert.match(workflow, /\.head_branch == "main"/)
+  assert.match(workflow, /gh api --paginate --slurp/)
+  assert.match(workflow, /release-tag-cardinality/)
   assert.match(workflow, /gh release upload "\$RELEASE_TAG" "artifacts\/release\/\$asset"/)
   assert.match(workflow, /gh release edit "\$RELEASE_TAG" --draft=false --prerelease/)
   assert.doesNotMatch(workflow, /workflow_run|pull_request|^  push:|--clobber/i)

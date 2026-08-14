@@ -281,9 +281,9 @@ not invalidate the completed environment-boundary correction.
 **Owner role:** `ci-governance`.
 **Date:** `2026-08-14`.
 **Registered time:** `09:18:00`.
-**Updated time:** `10:23:16`.
+**Updated time:** `10:32:30`.
 **Source revision:** `361427a63cbeb2a8b0ecafb224adeecb0539af9b`.
-**Destinations:** issues `#215`, `#217`, `#219`, `#221`, and `#223`,
+**Destinations:** issues `#215`, `#217`, `#219`, `#221`, `#223`, and `#225`,
 `.github/workflows/release-integrity.yml`,
 `.github/workflows/release-publication.yml`, `docs/governance/ci-contract.json`,
 `docs/specs/no-milestone/{ci-trust-and-release-integrity,release-promotion-publication}/`,
@@ -322,5 +322,12 @@ parameterized recovery `run-name` in both `name` and `display_title`, while the
 publication predicate still required static `name=Release Integrity`. No asset
 or release mutation occurred. Issue `#223` binds both recovery fields exactly
 while preserving the static name plus exact `head_sha` rule for normal tag
-runs. Hosted checks, merge, protected publication, and removal of the temporary
-Release Please recovery key remain pending.
+runs. PR `#224` merged that identity correction as `bc39585`. Request run
+`31792507222` delegated successfully; App-authored run `31792525304` then
+validated the run and exact four-file artifact before refusing its first remote
+read. GitHub returns `404` for a draft through the tag endpoint even though the
+authenticated paginated release list contains it; no upload or release edit
+occurred. Issue `#225` replaces the tag endpoint with paginated authenticated
+discovery and requires exactly one matching tag before classification. Hosted
+checks, merge, protected publication, and removal of the temporary Release
+Please recovery key remain pending.

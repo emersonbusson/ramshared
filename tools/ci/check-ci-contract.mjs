@@ -1126,6 +1126,8 @@ function releasePublicationWorkflowFindings(gate, text, block) {
     '.name == $recovery_title',
     '.display_title == $recovery_title',
     '.head_branch == "main"',
+    'gh api --paginate --slurp',
+    'release-tag-cardinality',
     'gh release upload "$RELEASE_TAG" "artifacts/release/$asset"',
     'gh release edit "$RELEASE_TAG" --draft=false --prerelease',
   ]
