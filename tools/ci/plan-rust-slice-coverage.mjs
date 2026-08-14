@@ -840,6 +840,7 @@ export function isExactModuleExportGlueDifferential(
   const base = decodeUtf8(baseSource)
   const head = decodeUtf8(headSource)
   if (base === null || head === null || !isStructuralRustModule(base)) return false
+  if (base === head) return projectModuleExportGlue(head, declaration) !== null
   if (moduleExportGlueSpans(base, declaration)?.length !== 0) return false
   const projection = projectModuleExportGlue(head, declaration)
   return projection !== null && projection === base
