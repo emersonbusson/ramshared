@@ -43,6 +43,17 @@
 - Do not create `IMPL.md` until protected before → action → after evidence
   exists and a human has explicitly authorized the external publication.
 
+## Closure evidence (2026-08-14)
+
+The external blockers recorded above were closed after source implementation.
+The selected-action policy and App secrets were configured without exposing
+secret material; the App-authored protected run `31793790581` published release
+ID `370457260` and ended in the idempotent state. Public download and all four
+SHA-256 values were independently verified as `EVD-0010` in `validation.md`.
+The deprecated `release-as` and exact `last-release-sha` were one-shot recovery
+controls; both are removed in the post-publication configuration and the
+contract now admits only the published manifest state.
+
 ## Re-audit trigger
 
 Re-open this audit if the target tag changes, a stable channel is added,

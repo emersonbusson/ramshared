@@ -227,11 +227,11 @@ required checks passed and PR `#208` merged as `52b42d1`; issue `#207` closed.
 ## TASK-0006 — Release Please machine-body recovery
 
 **Schema:** `ramshared.task.v1`.
-**Status:** `in_progress`.
+**Status:** `completed`.
 **Owner role:** `ci-governance`.
 **Date:** `2026-08-14`.
 **Registered time:** `05:36:39`.
-**Updated time:** `05:58:51`.
+**Updated time:** `10:54:33`.
 **Source revision:** `361427a63cbeb2a8b0ecafb224adeecb0539af9b`.
 **Destinations:** issue `#211`, PR `#210`, `release-please-config.json`,
 `docs/governance/ci-contract.json`,
@@ -247,8 +247,9 @@ tag or release was created. It opened oversized PR `#210` from 507 commits.
 TDD requires exact `last-release-sha` and all seven generated headings. PR
 `#212` merged the recovery as `920e7a1`; Release Please reduced PR `#210` to
 the bounded changelog, preserved its machine-readable body, and created the
-exact tag and draft prerelease at `361427a`. Removal of the temporary recovery
-key remains pending after integrity is repaired.
+exact tag and draft prerelease at `361427a`. Protected publication run
+`31793790581` made that exact beta public, and issue `#229` removes both
+one-shot recovery keys after the published state was independently verified.
 
 ## TASK-0007 — Keep read-only release integrity outside publication approval
 
@@ -277,14 +278,14 @@ not invalidate the completed environment-boundary correction.
 ## TASK-0008 — Recover immutable-tag SBOM integrity
 
 **Schema:** `ramshared.task.v1`.
-**Status:** `in_progress`.
+**Status:** `completed`.
 **Owner role:** `ci-governance`.
 **Date:** `2026-08-14`.
 **Registered time:** `09:18:00`.
-**Updated time:** `10:41:46`.
+**Updated time:** `10:54:33`.
 **Source revision:** `361427a63cbeb2a8b0ecafb224adeecb0539af9b`.
-**Destinations:** issues `#215`, `#217`, `#219`, `#221`, `#223`, `#225`, and
-`#227`,
+**Destinations:** issues `#215`, `#217`, `#219`, `#221`, `#223`, `#225`,
+`#227`, and `#229`,
 `.github/workflows/release-integrity.yml`,
 `.github/workflows/release-publication.yml`, `docs/governance/ci-contract.json`,
 `docs/specs/no-milestone/{ci-trust-and-release-integrity,release-promotion-publication}/`,
@@ -336,6 +337,11 @@ the four exact assets, then refused before visibility change because the
 post-upload verifier repeated the draft-incompatible tag endpoint. Draft
 `370457260` remains non-public with exactly those four assets. Issue `#227`
 reuses that cardinally selected numeric release ID for post-upload verification,
-the visibility PATCH, and final idempotence verification. Hosted checks, merge,
-protected publication, and removal of the temporary Release Please recovery key
-remain pending.
+the visibility PATCH, and final idempotence verification. PR `#228` merged that
+binding as `f03f4e7`. Request run `31793772726` delegated successfully, and
+App-authored protected run `31793790581` completed every gate, published release
+ID `370457260`, and verified the final `NO_CHANGE` state. Independent download
+revalidation proved tag SHA `361427a63cbeb2a8b0ecafb224adeecb0539af9b`,
+exact four-name cardinality, detached checksum, manifest, source lock, and asset
+SHA-256 values. Issue `#229` removes the two fulfilled one-shot Release Please
+recovery controls and records the immutable publication evidence.

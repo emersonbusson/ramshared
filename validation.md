@@ -3821,3 +3821,49 @@ the pre-existing `/dev/sdc` invalidates this evidence.
 **Verdict:** 🟢 The complete sealed 1/2/4 GiB idle/bounded disk-only/NBD
 matrix passed with n=3 per cell. Live qualification is complete; Gate B,
 hosted required checks, PR review, and merge remain open.
+
+## 2026-08-14 07:54 -03 — Protected beta publication
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0010`.
+**Owner role:** `release-operator`.
+**Observed at:** `2026-08-14T10:50:48Z`.
+**Verified at:** `2026-08-14T10:54:33Z`.
+**Source revision:** `f03f4e7a33cd64e8614532916294ab9628ce1aba`.
+**Lifecycle:** `immutable`.
+**Immutability reason:** Public release ID `370457260`, tag
+`v0.9.0-beta.1`, immutable tag commit, and public asset digests are retained by
+GitHub; the exact protected run and integrity run IDs remain auditable.
+**What:** Published the exact RamShared beta through the GitHub App-authored
+repository dispatch and the manually approved `protected-release` environment,
+then independently downloaded and revalidated the public asset quartet.
+**Category:** `ci-gate release-publication`.
+**How to measure:** `gh run view 31793790581`; `gh api
+repos/emersonbusson/ramshared/releases/tags/v0.9.0-beta.1`; `gh release download
+v0.9.0-beta.1 -R emersonbusson/ramshared`; detached `sha256sum -c`; and
+`node tools/ci/check-release-integrity.mjs --check` with the exact tag source
+lock.
+**Measured data:** Human request run `31793772726` delegated to App-authored
+run `31793790581`; every protected step passed. Release ID `370457260` is
+`draft=false`, `prerelease=true`, published at `2026-08-14T10:50:48Z`, and its
+tag resolves to `361427a63cbeb2a8b0ecafb224adeecb0539af9b`. Exactly four assets
+exist: archive `1169645` bytes / SHA-256
+`f525f04ec536d52c57ea7708e0324152e931d2ee30d3885496a639f959972b3b`;
+detached checksum `103` bytes /
+`d2d1e2042fad0dd87035f9c6cee7d8ed14fe7909c7236fb9f2820ecfd8c4b2bb`;
+SBOM `30233` bytes /
+`d3ea9c0add12c6103be7cef6d43431b16cd2928c53b9d78d2420792fbdc044b8`;
+manifest `3101` bytes /
+`73bab87773a39304053364c77e70192cd45a653f32c91502e4716ddd1013aed6`.
+The detached checksum and complete manifest/source-lock validation passed.
+**Refusals:** Runs `31791853476` and `31792525304` stopped before upload;
+run `31793116494` uploaded the exact quartet but stopped before visibility.
+The successful replay found no missing asset, patched only the cardinally
+selected release ID, and ended in the idempotent `NO_CHANGE` state.
+**Rollback trigger:** Any tag SHA other than the exact 40-hex revision, release
+ID other than `370457260`, asset count other than `4`, digest mismatch,
+`draft=true`, `prerelease=false`, or non-App protected publisher invalidates
+this evidence and requires a new target rather than overwrite or tag movement.
+**Verdict:** ✅ The exact beta is publicly published with four independently
+verified assets, App-only mutation authority, human environment approval, and
+an idempotent terminal state.
