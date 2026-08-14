@@ -253,11 +253,11 @@ key remains pending after integrity is repaired.
 ## TASK-0007 — Keep read-only release integrity outside publication approval
 
 **Schema:** `ramshared.task.v1`.
-**Status:** `in_progress`.
+**Status:** `completed`.
 **Owner role:** `ci-governance`.
 **Date:** `2026-08-14`.
 **Registered time:** `05:58:51`.
-**Updated time:** `05:58:51`.
+**Updated time:** `09:18:00`.
 **Source revision:** `361427a63cbeb2a8b0ecafb224adeecb0539af9b`.
 **Destinations:** issue `#213`, `.github/workflows/release-integrity.yml`,
 `docs/governance/ci-contract.json`,
@@ -269,6 +269,32 @@ integrity deployment environment.
 **Evidence / blockers:** Tag and draft creation succeeded, but integrity run
 `31785964576` was rejected before checkout because the environment branch
 policy does not admit tags. TDD reproduced the stale environment contract.
-Local Green, hosted checks, merge, exact-tag integrity artifact, protected
-publication, and removal of the temporary Release Please recovery key remain
-pending.
+PR `#214` merged the environment correction as `c47727a` after the hosted
+aggregate passed. The exact-tag rerun then checked out and built the target
+successfully; its later SBOM filename defect is tracked separately and does
+not invalidate the completed environment-boundary correction.
+
+## TASK-0008 — Recover immutable-tag SBOM integrity
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `in_progress`.
+**Owner role:** `ci-governance`.
+**Date:** `2026-08-14`.
+**Registered time:** `09:18:00`.
+**Updated time:** `09:18:00`.
+**Source revision:** `361427a63cbeb2a8b0ecafb224adeecb0539af9b`.
+**Destinations:** issue `#215`, `.github/workflows/release-integrity.yml`,
+`.github/workflows/release-publication.yml`, `docs/governance/ci-contract.json`,
+`docs/specs/no-milestone/{ci-trust-and-release-integrity,release-promotion-publication}/`,
+and `tools/ci/check-ci-contract*`.
+**Scope:** Correct the pinned cargo-cyclonedx output name and recover the exact
+immutable beta tag through a manual read-only tag/SHA-bound integrity run. Do
+not delete or move the tag, upload an unvalidated asset, or bypass protected
+publication.
+**Evidence / blockers:** Integrity run `31785964576` attempt 2 checked out and
+built exact source `361427a`, installed `cargo-cyclonedx 0.5.9`, then failed
+because `--override-filename ramshared-sbom` emits `ramshared-sbom.json` while
+the workflow required `ramshared-sbom.cdx.json`. TDD reproduces the wrong
+literal and the missing exact recovery identity. Local Green, hosted checks,
+merge, recovered four-file integrity artifact, protected publication, and
+removal of the temporary Release Please recovery key remain pending.
