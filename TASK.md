@@ -281,9 +281,10 @@ not invalidate the completed environment-boundary correction.
 **Owner role:** `ci-governance`.
 **Date:** `2026-08-14`.
 **Registered time:** `09:18:00`.
-**Updated time:** `10:32:30`.
+**Updated time:** `10:41:46`.
 **Source revision:** `361427a63cbeb2a8b0ecafb224adeecb0539af9b`.
-**Destinations:** issues `#215`, `#217`, `#219`, `#221`, `#223`, and `#225`,
+**Destinations:** issues `#215`, `#217`, `#219`, `#221`, `#223`, `#225`, and
+`#227`,
 `.github/workflows/release-integrity.yml`,
 `.github/workflows/release-publication.yml`, `docs/governance/ci-contract.json`,
 `docs/specs/no-milestone/{ci-trust-and-release-integrity,release-promotion-publication}/`,
@@ -328,6 +329,13 @@ validated the run and exact four-file artifact before refusing its first remote
 read. GitHub returns `404` for a draft through the tag endpoint even though the
 authenticated paginated release list contains it; no upload or release edit
 occurred. Issue `#225` replaces the tag endpoint with paginated authenticated
-discovery and requires exactly one matching tag before classification. Hosted
-checks, merge, protected publication, and removal of the temporary Release
-Please recovery key remain pending.
+discovery and requires exactly one matching tag before classification. PR
+`#226` merged the discovery correction as `28ec5b5`. Request run `31793085569`
+delegated successfully; App-authored run `31793116494` validated and uploaded
+the four exact assets, then refused before visibility change because the
+post-upload verifier repeated the draft-incompatible tag endpoint. Draft
+`370457260` remains non-public with exactly those four assets. Issue `#227`
+reuses that cardinally selected numeric release ID for post-upload verification,
+the visibility PATCH, and final idempotence verification. Hosted checks, merge,
+protected publication, and removal of the temporary Release Please recovery key
+remain pending.

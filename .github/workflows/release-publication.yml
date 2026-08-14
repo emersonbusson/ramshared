@@ -300,7 +300,8 @@ jobs:
           GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > tmp/release-publication/remote-release-after-upload.json
+          release_id="$(jq -er '.id | select(type == "number" and . > 0)' tmp/release-publication/remote-release.json)"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > tmp/release-publication/remote-release-after-upload.json
           node tools/ci/check-release-publication.mjs \
             --policy docs/governance/release-promotion.json \
             --candidate tmp/release-publication/candidate.json \
@@ -316,7 +317,10 @@ jobs:
           GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
         run: |
           set -euo pipefail
-          gh release edit "$RELEASE_TAG" --draft=false --prerelease
+          release_id="$(jq -er '.id | select(type == "number" and . > 0)' tmp/release-publication/remote-release.json)"
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$release_id" \
+            --field draft=false --field prerelease=true \
+            > tmp/release-publication/publication-response.json
 
       - name: Verify idempotent published state
         if: ${{ steps.publication-plan.outputs.status == 'ADVANCE' }}
@@ -325,7 +329,8 @@ jobs:
           GH_TOKEN: ${{ steps.release-app-token.outputs.token }}
         run: |
           set -euo pipefail
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > tmp/release-publication/remote-release-published.json
+          release_id="$(jq -er '.id | select(type == "number" and . > 0)' tmp/release-publication/remote-release.json)"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$release_id" > tmp/release-publication/remote-release-published.json
           node tools/ci/check-release-publication.mjs \
             --policy docs/governance/release-promotion.json \
             --candidate tmp/release-publication/candidate.json \

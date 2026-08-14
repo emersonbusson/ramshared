@@ -29,7 +29,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`memory-broker`](specs/no-milestone/memory-broker/) | RamShared Memory Broker (Unified Final) | — | — | UNQUALIFIED |
 | [`microsoft-native-vram-memory-tier`](specs/no-milestone/microsoft-native-vram-memory-tier/) | Microsoft-native VRAM memory tier — host-authoritative N3 RFC | Microsoft-native N3 — Design | #196 | UNQUALIFIED |
 | [`public-repository-hygiene`](specs/no-milestone/public-repository-hygiene/) | Public repository candidate integrity | — | — | DONE |
-| [`release-promotion-publication`](specs/no-milestone/release-promotion-publication/) | Protected beta release promotion and publication | v0.9.0-beta.1 — WSL2 NBD | #195, #219, #221, #223, #225 | SPEC |
+| [`release-promotion-publication`](specs/no-milestone/release-promotion-publication/) | Protected beta release promotion and publication | v0.9.0-beta.1 — WSL2 NBD | #195, #219, #221, #223, #225, #227 | SPEC |
 | [`vram-reclaim-pressure-matrix`](specs/no-milestone/vram-reclaim-pressure-matrix/) | PRD - VRAM reclaim pressure matrix | — | — | UNQUALIFIED |
 | [`windows-autonomous-broker-service`](specs/no-milestone/windows-autonomous-broker-service/) | Autonomous Windows broker service packaging and supervision | — | #156 | UNQUALIFIED |
 | [`windows-storport-cuda-vram`](specs/no-milestone/windows-storport-cuda-vram/) | Windows StorPort I/O backed by CUDA VRAM | — | #28 | UNQUALIFIED |
