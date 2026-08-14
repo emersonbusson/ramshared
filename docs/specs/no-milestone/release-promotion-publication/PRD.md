@@ -8,6 +8,7 @@ issues:
   - 221
   - 223
   - 225
+  - 227
 ---
 
 # PRD — Protected beta release promotion and publication

@@ -1128,8 +1128,10 @@ function releasePublicationWorkflowFindings(gate, text, block) {
     '.head_branch == "main"',
     'gh api --paginate --slurp',
     'release-tag-cardinality',
+    'releases/$release_id',
+    'gh api --method PATCH',
+    '--field draft=false',
     'gh release upload "$RELEASE_TAG" "artifacts/release/$asset"',
-    'gh release edit "$RELEASE_TAG" --draft=false --prerelease',
   ]
   const delegationMarkers = [
     'repository_dispatch:',
