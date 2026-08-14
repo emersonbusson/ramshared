@@ -879,6 +879,20 @@ test('release_producer_accepts_only_exact_manifest_transition', () => {
   assert.equal(result.errors.some((item) => item.rule === 'release-producer-policy-invalid'), true)
 })
 
+test('release_producer_preserves_machine_body_and_bounds_recovery', () => {
+  const config = JSON.parse(readFileSync(path.join(ROOT, 'release-please-config.json'), 'utf8'))
+  const contract = JSON.parse(readFileSync(path.join(ROOT, 'docs', 'governance', 'ci-contract.json'), 'utf8'))
+  const producer = contract.gates.find((gate) => gate.id === 'release-automation').policy.release_producer
+  const releaseV080Merge = '568e7b42b78b3c9edb8ea390cb4297142a37e412'
+
+  assert.equal(config['last-release-sha'], releaseV080Merge)
+  assert.equal(producer.last_release_sha, releaseV080Merge)
+  for (const heading of ['Resumo', 'Commits', 'Issue', 'Responsavel', 'Labels', 'Validacao', 'Rollback trigger']) {
+    assert.match(config['pull-request-header'], new RegExp(`^## ${heading}$`, 'm'))
+  }
+  assert.match(config['pull-request-header'], /machine-readable release notes/i)
+})
+
 test('publication_workflow_is_protected_manual_exact_sha_only', () => {
   const publicationPath = path.join(ROOT, '.github', 'workflows', 'release-publication.yml')
   assert.equal(existsSync(publicationPath), true)

@@ -141,6 +141,14 @@ The exact lifecycle is:
    calling Release Please, so this fixed configuration cannot produce a later
    target accidentally.
 
+The one-shot recovery from the merged-but-unrecognized release PR is bounded
+by top-level `last-release-sha` at the exact `v0.8.0` merge
+`568e7b42b78b3c9edb8ea390cb4297142a37e412`. The generated header contains the
+seven repository PR sections before Release Please's separator; its
+machine-readable release notes below that separator are never replaced. This
+recovery key is removed after the exact beta tag/draft is independently
+verified.
+
 The local source test parses every listed configuration value and admits only
 the exact manifest transition from historical `0.8.0` to target
 `0.9.0-beta.1`. The baseline checkout and the generated release PR are both
