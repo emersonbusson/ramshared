@@ -100,12 +100,16 @@ jobs:
           set -euo pipefail
           mkdir -p tmp/release-publication
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$INTEGRITY_RUN_ID" > tmp/release-publication/integrity-run.json
-          jq -e --arg sha "$SOURCE_SHA" '
+          recovery_title="Release Integrity recovery $RELEASE_TAG @ $SOURCE_SHA"
+          jq -e --arg sha "$SOURCE_SHA" --arg recovery_title "$recovery_title" '
             .name == "Release Integrity" and
-            .event == "push" and
+            .path == ".github/workflows/release-integrity.yml" and
             .status == "completed" and
             .conclusion == "success" and
-            .head_sha == $sha
+            (
+              (.event == "push" and .head_sha == $sha) or
+              (.event == "workflow_dispatch" and .display_title == $recovery_title and .head_branch == "main")
+            )
           ' tmp/release-publication/integrity-run.json > /dev/null
 
       - name: Download exact integrity candidate
