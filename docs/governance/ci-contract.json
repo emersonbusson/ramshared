@@ -425,7 +425,8 @@
           "prerelease": true,
           "force_tag_creation": true,
           "skip_github_release": false,
-          "release_as": "0.9.0-beta.1"
+          "release_as": "0.9.0-beta.1",
+          "baseline_version": "0.8.0"
         }
       },
       "required_commands": [],
