@@ -32,7 +32,17 @@ function fixture() {
   writeFileSync(path.join(releaseDir, 'ramshared-sbom.cdx.json'), `${JSON.stringify({
     bomFormat: 'CycloneDX',
     specVersion: '1.5',
-    metadata: { tools: [{ name: 'cargo-cyclonedx', version: '0.5.9' }] },
+    metadata: {
+      tools: [{ name: 'cargo-cyclonedx', version: '0.5.9' }],
+      component: {
+        type: 'application', name: 'ramshared', version: '0.9.0-beta.1',
+        components: [{ name: 'ramshared-cli' }, { name: 'ramshared-wsl2d' }],
+      },
+      properties: [
+        { name: 'ramshared:release:tag', value: TARGET_TAG },
+        { name: 'ramshared:source:revision', value: SOURCE_SHA },
+      ],
+    },
   })}\n`)
   return {
     root,

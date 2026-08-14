@@ -43,6 +43,11 @@ jobs:
       - name: Release promotion checker coverage
         run: |
           node --test --experimental-test-coverage \
+            --test-coverage-include=tools/ci/merge-release-sboms.mjs \
+            --test-coverage-lines=80 --test-coverage-branches=80 \
+            --test-coverage-functions=80 \
+            tools/ci/merge-release-sboms.test.mjs
+          node --test --experimental-test-coverage \
             --test-coverage-include=tools/ci/check-release-integrity.mjs \
             --test-coverage-lines=80 --test-coverage-branches=80 \
             --test-coverage-functions=80 \

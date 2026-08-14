@@ -776,6 +776,7 @@
         "scripts/package/build-linux-bundle.sh",
         "cargo install cargo-cyclonedx --locked --version 0.5.9",
         "cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --override-filename ramshared-sbom.cdx",
+        "node \"$merger\"",
         "node tools/ci/write-release-manifest.mjs",
         "node tools/ci/check-release-integrity.mjs --check"
       ],
