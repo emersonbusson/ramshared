@@ -207,7 +207,12 @@ pub fn verify_staged_files(
             }
             digest.update(&buffer[..count]);
         }
-        if format!("{:X}", digest.finalize()) != artifact.sha256 {
+        let hash_hex: String = digest
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect();
+        if hash_hex != artifact.sha256 {
             return Err(format!("{} hash mismatch", path.display()));
         }
     }
@@ -376,7 +381,10 @@ mod tests {
         for artifact in &mut candidate.artifacts {
             let bytes = artifact.relative_path.as_bytes();
             std::fs::write(root.join(&artifact.relative_path), bytes).unwrap();
-            artifact.sha256 = format!("{:X}", Sha256::digest(bytes));
+            artifact.sha256 = Sha256::digest(bytes)
+                .iter()
+                .map(|b| format!("{b:02X}"))
+                .collect();
         }
         assert!(verify_staged_files(&root, &candidate).is_ok());
         std::fs::write(
