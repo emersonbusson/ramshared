@@ -1,8 +1,9 @@
 # Public-safe contribution checklist — WSL #41054 config-only request
 
-> Preparation only. This file renders a local human-review packet. It must not
-> post an issue, comment, pull request, patch, email, branch, tag, or milestone
-> change. All material is English and public-safe.
+> Issue-first contribution packet. A reviewed fork branch and one evidence
+> update to #41054 are allowed after all mandatory gates pass. An unsolicited
+> pull request to the Microsoft kernel repository remains forbidden. All
+> material is English and public-safe.
 
 ## 1. Safety envelope
 
@@ -23,7 +24,9 @@
       `CONFIG_ZRAM_WRITEBACK=y` is already on; no duplicate writeback request.
 - [ ] Confirm no driver code, UAPI, native VRAM, NBD product, ublk product,
       or N3 host-contract request appears in the packet.
-- [ ] Confirm no community PR to `microsoft/WSL2-Linux-Kernel` is proposed.
+- [ ] Confirm no unsolicited PR to `microsoft/WSL2-Linux-Kernel` is proposed.
+- [ ] Confirm [`RESEARCH.md`](RESEARCH.md) remains current
+      and no maintainer has explicitly requested a PR.
 - [ ] Confirm no private path, username, machine/account identifier, IP,
       token, dump, screenshot, raw log, or internal Microsoft route appears.
 - [ ] Confirm missing build/boot/host evidence is `PARTIAL`, `REFUSED`, or
@@ -50,6 +53,11 @@ Passing this section is `UPSTREAM_CONFIG_PUBLIC_REDACTION` plus
 | x86 | `not set` at the pinned SHA | `not set` at the pinned SHA | Request `m` and `y`, respectively. |
 | arm64 | `not set` at the pinned SHA | `y` at the pinned SHA | Keep ublk as candidate; request no writeback delta. |
 
+Generated `olddefconfig` evidence must also record
+`CONFIG_BLKDEV_UBLK_LEGACY_OPCODES=y`, the upstream default selected by
+enabling ublk. It is a disclosed compatibility/security review point, not a
+third source-line request.
+
 Use the exact target files, not a generated distro config or an older branch.
 Any branch/tag/SHA/path/Kconfig dependency change invalidates this sheet.
 
@@ -69,14 +77,16 @@ Any branch/tag/SHA/path/Kconfig dependency change invalidates this sheet.
 | `UPSTREAM_CONFIG_UBLK_CAPABILITY_NO_PRODUCT` | `REFUSED` unless approved | `<isolated capability result>` |
 | `UPSTREAM_CONFIG_WRITEBACK_CAPABILITY` | `REFUSED` unless approved | `<architecture result>` |
 | `UPSTREAM_CONFIG_PUBLIC_REDACTION` | `UNVERIFIED` | `<manual review>` |
-| `NO_EXTERNAL_KERNEL_PR_REFUSAL` | `PASS` for this local packet | `No external action performed` |
+| `NO_EXTERNAL_KERNEL_PR_REFUSAL` | `PASS` when route is respected | `No unsolicited Microsoft PR` |
 | `N3_SCOPE_REFUSAL` | `PASS` for this local packet | `N3 is separate` |
+| `UPSTREAM_PR_ROUTE_AUDIT` | `PASS` at 2026-08-14 snapshot | `RESEARCH.md` |
+| `MAINTAINER_REQUESTED_PR_GATE` | `REFUSED` until requested | `<maintainer request URL or NONE>` |
 
 The result is `READY_FOR_HUMAN_REVIEW` only when source/path/config evidence
 passes and all unavailable environment rows are explicitly accepted as
 `PARTIAL`; it is never an adoption or product-ready result.
 
-## 4. #41054 configuration packet — do not post automatically
+## 4. #41054 configuration packet — post once after mandatory gates
 
 ```markdown
 Title: Request WSL x86 kernel configuration support for ublk and zram writeback
@@ -101,11 +111,17 @@ the WSL2-Linux-Kernel repository. RamShared continues to use its NBD product
 path independently of Microsoft adoption.
 
 Sanitized evidence: `<named test IDs and statuses>`.
+
+Would the WSL kernel team consider these two independently reviewable config
+changes for the stock kernel? If so, should they be integrated internally, or
+would you like the prepared two-commit patch series submitted as a pull
+request against `linux-msft-wsl-6.18.y`?
 ```
 
-If Microsoft requests patch-ready material, a human may prepare one logical
-config commit per x86 symbol in the exact target tree. That is a separate,
-explicit decision; this checklist never creates it.
+The approved campaign prepares one logical config commit per independently
+reviewable decision and may publish them in the author's fork. A PR from that
+branch to Microsoft remains a separate decision that requires an explicit
+maintainer request.
 
 ## 5. Capability boundary — do not promote
 
@@ -125,16 +141,16 @@ Do not use `READY`, `ADOPTED`, or `DONE` for a symbol observation.
 
 These local records reconcile existing open trackers with the milestone labels
 recorded in the corresponding PRD frontmatter. They do not edit or close an
-issue or milestone, and this packet has not created or submitted a comment,
-branch, tag, or pull request. The actual upstream discussion remains
-`microsoft/WSL#41054`; no external PR is proposed.
+issue or milestone. The approved campaign may publish the tested fork branch
+and one evidence comment, but not a tag or unsolicited pull request. The actual
+upstream discussion remains `microsoft/WSL#41054`.
 
 | Tracker item | Required state | Scope owner | Current milestone | Boundary |
 | --- | --- | --- | --- | --- |
 | `emersonbusson/ramshared#194` | `OPEN_PARTIAL` | WSL2 NBD product readiness | `v0.9.0-beta.1 — WSL2 NBD` | Tracked readiness work; no live completion or `READY` claim. |
 | `emersonbusson/ramshared#196` | `OPEN_PARTIAL` | Microsoft-native N3 public host contract | `Microsoft-native N3 — Design` | Host-authoritative RFC; no adoption, live host, or product claim. |
 | `emersonbusson/ramshared#197` | `OPEN_PARTIAL` | WSL upstream config tracker | `Microsoft-native N3 — Design` | Local tracker only; upstream discussion remains `microsoft/WSL#41054`. |
-| `microsoft/WSL#41054` | `HUMAN_REVIEW_ONLY` | WSL feature/config request | External issue; no local milestone | Config-only; no community kernel PR. |
+| `microsoft/WSL#41054` | `ISSUE_UPDATE_READY` | WSL feature/config request | External issue; no local milestone | Config-only; no unsolicited community kernel PR. |
 | `emersonbusson/ramshared#145` | `KEEP_OPEN_PARTIAL` | Post-NBD ublk research/retirement evidence | `M-UBLK-POST-NBD` | Must not own or block NBD readiness. |
 | `emersonbusson/ramshared#156` | `KEEP_OPEN_PARTIAL` | Windows production signing + packaged supervised broker | `M-WINDOWS-PRODUCT-GATES` | External release gates; not NBD or N3. |
 
@@ -161,9 +177,10 @@ native VRAM adoption or live host validation.
 `#197` is the current local tracker for the upstream configuration lane and is
 mapped to `Microsoft-native N3 — Design`. It tracks the narrow x86/arm64
 configuration evidence packet only. The actual upstream discussion is
-`microsoft/WSL#41054`; no comment, issue mutation, patch, or external pull
-request is performed by this checklist. Missing build, boot, and capability
-evidence remains `PARTIAL`, `REFUSED`, or `NEEDS_REVALIDATION`.
+`microsoft/WSL#41054`; one reviewed evidence update and the tested fork branch
+are allowed, while an external pull request remains maintainer-gated. Missing
+build, boot, and capability evidence remains `PARTIAL`, `REFUSED`, or
+`NEEDS_REVALIDATION`.
 
 ### #145 status note — keep open partial
 
@@ -190,10 +207,11 @@ the N3 host contract. Existing physical evidence does not close those gates.
 - [ ] #197 is mapped to `Microsoft-native N3 — Design`; the actual upstream
       discussion remains `microsoft/WSL#41054`.
 - [ ] No milestone mutation was performed.
-- [ ] No external pull request is proposed or submitted.
+- [ ] No unsolicited Microsoft pull request is proposed or submitted.
 - [ ] All target-sensitive rows have a current full-SHA revalidation or
       `NEEDS_REVALIDATION`.
 - [ ] A human chooses `HOLD`, `READY_FOR_HUMAN_REVIEW`, or `REJECTED`.
 
-The checklist never sends material itself. Any external action requires a new
-explicit decision and must not be inferred from a green local check.
+The checklist allows only the external actions authorized in the PRD: a tested
+fork branch, a RamShared evidence PR, and one reviewed #41054 update. Any
+Microsoft-repository PR still requires a new explicit maintainer request.

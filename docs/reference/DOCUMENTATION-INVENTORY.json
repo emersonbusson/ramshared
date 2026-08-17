@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Markdown paths visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 235,
-    "classified": 224,
+    "total": 237,
+    "classified": 226,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -2712,6 +2712,18 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/specs/no-milestone/wsl2-upstream-native-contribution/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
       "path": "docs/specs/no-milestone/wsl2-upstream-native-contribution/PRD.md",
       "disposition": "classified",
       "ruleId": "ssdv3-stages",
@@ -2722,6 +2734,18 @@
       "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-upstream-native-contribution/RESEARCH.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-research-and-preflight",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
     },
     {
       "path": "docs/specs/no-milestone/wsl2-upstream-native-contribution/SPEC.md",

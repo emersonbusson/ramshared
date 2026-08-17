@@ -1256,11 +1256,15 @@
         "registry_state": null
       },
       "documented_surface": {
-        "implementation_paths": [],
+        "implementation_paths": [
+          "scripts/kernel/qemu-wsl-config-capability-init.sh",
+          "scripts/kernel/qemu-wsl-config-capability.sh",
+          "scripts/kernel/test-wsl-upstream-config-contribution.sh"
+        ],
         "test_paths": []
       },
       "documents": {
-        "implementation": null,
+        "implementation": "docs/specs/no-milestone/wsl2-upstream-native-contribution/IMPL.md",
         "prd": "docs/specs/no-milestone/wsl2-upstream-native-contribution/PRD.md",
         "spec": "docs/specs/no-milestone/wsl2-upstream-native-contribution/SPEC.md"
       },
