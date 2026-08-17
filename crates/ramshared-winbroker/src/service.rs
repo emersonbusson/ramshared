@@ -103,7 +103,11 @@ fn verify_active_config(
     if std::fs::canonicalize(path)? != std::fs::canonicalize(expected)? {
         return Err("broker config does not match active manifest path".into());
     }
-    if format!("{:X}", Sha256::digest(bytes)) != artifact.sha256 {
+    let hash_hex: String = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02X}"))
+        .collect();
+    if hash_hex != artifact.sha256 {
         return Err("broker config does not match active manifest hash".into());
     }
     Ok(())
