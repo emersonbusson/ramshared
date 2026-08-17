@@ -1,8 +1,8 @@
 # SPEC — WSL #41054 config-only contribution boundary
 
-> SSDV3 Step 2. Implements [`PRD.md`](PRD.md). This SPEC prepares local,
-> public-safe evidence only. It does not build, boot, patch, post, push, or
-> submit an external kernel/WSL surface.
+> SSDV3 Steps 2–3. Implements [`PRD.md`](PRD.md). This SPEC prepares and
+> validates a public-safe config-only patch series, publishes reviewed evidence
+> through the issue-first route, and refuses an unsolicited Microsoft PR.
 
 ## Closed scope
 
@@ -11,18 +11,21 @@
 - Exact source-pinned #41054 configuration evidence.
 - Canonical x86 and arm64 path/value matrix.
 - Config-only request, no-external-PR route, and product/N3 separation.
-- Public-safe English issue draft and human handoff contract.
+- Public-safe English issue update and human handoff contract.
+- Isolated external-tree config, build, package, Sparse, and QEMU capability
+  evidence.
+- A two-commit branch in the author's fork after all mandatory gates pass.
 - Named source, build, package, capability, refusal, and revalidation tests.
 
 ### Out now
 
-- Any external issue/comment/PR/patch/email/branch/tag or Microsoft internal
-  communication.
+- Any unsolicited PR to `microsoft/WSL2-Linux-Kernel`, email, tag, or claim of
+  Microsoft internal adoption.
 - Kernel source changes, dxgkrnl/FORTIFY work, uAPI, driver, host memory tier,
   N3 implementation, swap, GPU pressure, WSL shutdown, reboot, or custom-kernel
   boot.
-- RamShared code/CI/configuration, NBD product readiness, release docs,
-  `IMPL.md`, validation records, or `MEMORY.md`.
+- RamShared product code/CI/configuration, NBD product readiness, release docs,
+  or validation records.
 
 ### Source pin
 
@@ -48,6 +51,8 @@ to `NEEDS_REVALIDATION`.
 | RF-U-5..8 | ITEM-2 — config-only route and separation refusals |
 | RF-U-9, NFR-U-2..6 | ITEM-3 — revalidation and maintenance |
 | RF-U-10, NFR-U-1/3/4 | ITEM-4 — public-safe evidence and human handoff |
+| RF-U-11 | ITEM-5 — maintainer-routed patch/PR decision |
+| RF-U-12 | ITEM-3 — generated-config dependency disclosure |
 
 ## Technical decisions
 
@@ -58,11 +63,13 @@ to `NEEDS_REVALIDATION`.
 | DT-U-3 | `arch/x86/configs/config-wsl` and `arch/arm64/configs/config-wsl-arm64` are canonical facts. | Avoids copying an architecture value from a generic or generated config. |
 | DT-U-4 | x86 requests exactly ublk=m and zram writeback=y. | Matches the two missing x86 symbols at the pinned source. |
 | DT-U-5 | arm64 is independent: ublk is a candidate; writeback is already y. | Prevents a redundant or inaccurate arm64 request. |
-| DT-U-6 | The route is config-only and no community kernel PR is prepared. | The WSL README routes feature requests to WSL and code to normal upstream. |
+| DT-U-6 | The route is config-only and issue-first; an unsolicited community kernel PR is refused. | The WSL README and maintainer comments route feature requests to WSL and integration to Microsoft. |
 | DT-U-7 | Capability does not promote NBD/ublk product status. | Kernel symbols and product lifecycle proof are different contracts. |
 | DT-U-8 | N3 is a separate host-authority RFC. | Native VRAM ownership cannot be created by this config request. |
 | DT-U-9 | A source mismatch refuses before any build or packet update. | Prevents stale evidence and accidental target drift. |
-| DT-U-10 | Human handoff is the terminal state of this pack. | No external network write is authorized. |
+| DT-U-10 | One reviewed #41054 update is the terminal outbound action before maintainer response. | Prevents comment churn and unsolicited PR submission. |
+| DT-U-11 | Patch readiness and PR authorization are separate states. | Public history shows technically accepted work can be applied internally while the external PR is closed. |
+| DT-U-12 | `CONFIG_BLKDEV_UBLK_LEGACY_OPCODES=y` is recorded as an upstream-derived default, not a requested source line. | Prevents a two-line source claim from hiding a generated compatibility/security value. |
 
 ## Atomicity/rollback
 
@@ -72,7 +79,7 @@ to `NEEDS_REVALIDATION`.
 | Config delta | Two x86 symbol values only; arm64 recorded separately. | Unexpected symbol/dependency/path change → refuse. |
 | Build evidence | Later target-tree build in an isolated worktree. | Build/package/check failure → `PARTIAL`/`REFUSED`; no retry theater. |
 | Capability | Later approved custom-kernel capability only, without swap/pressure. | Capability failure → retain NBD product; no adoption claim. |
-| External route | No write in this SPEC; local packet only. | Any attempted issue/PR/push → hard stop and discard outbound action. |
+| External route | Reviewed fork branch plus one #41054 evidence update; Microsoft PR only on explicit maintainer request. | Any broader write or unsolicited PR → hard stop. |
 | Product policy | NBD/N3 owners unchanged. | Any transport or native-memory change → scope refusal. |
 
 No module unload, host restart, or external rollback is hidden in this pack.
@@ -94,8 +101,8 @@ recovery path and mark the row `PARTIAL`; this SPEC does not authorize the boot.
 
 ## Security checklist
 
-- [x] No external write, secret, credential, private host path, username, IP,
-  raw log, dump, account ID, or internal route is included.
+- [x] No secret, credential, private host path, username, IP, raw log, dump,
+  account ID, or internal route is included in public material.
 - [x] Full SHA and canonical file paths are captured before interpreting values.
 - [x] Config parser/build inputs are bounded and source-pinned.
 - [x] No generic defconfig, guessed maintainer, mailing list, or target branch
@@ -109,20 +116,26 @@ recovery path and mark the row `PARTIAL`; this SPEC does not authorize the boot.
 
 ## Files create/modify/delete
 
-The following paths are future campaign anchors. None is changed by this docs
-revision except the three documents in this folder.
+The following paths are campaign anchors. External target-tree files live only
+in the isolated candidate branch; RamShared changes remain in this folder and
+the generated documentation inventory.
 
 | Path | Action | Contract / test owner |
 | --- | --- | --- |
 | `docs/specs/no-milestone/wsl2-upstream-native-contribution/PRD.md` | Modify | Source-pinned decision. |
 | `docs/specs/no-milestone/wsl2-upstream-native-contribution/SPEC.md` | Modify | This executable matrix. |
 | `docs/specs/no-milestone/wsl2-upstream-native-contribution/CONTRIBUTION-CHECKLIST.md` | Modify | Human packet, issue drafts, milestone mapping. |
+| `docs/specs/no-milestone/wsl2-upstream-native-contribution/RESEARCH.md` | Create | Current PR/issue route evidence and maintained decision. |
 | `scripts/kernel/` in the exact external target tree | Future read-only/build context | Official target-tree commands only; no RamShared code. |
 | `Microsoft/config-wsl*` in the exact external target tree | Read-only target input | Build entry point resolves to canonical architecture files. |
-| `docs/specs/no-milestone/wsl2-upstream-native-contribution/IMPL.md` | Create later | Only after approved campaign and evidence. |
+| `docs/specs/no-milestone/wsl2-upstream-native-contribution/IMPL.md` | Create | Exact campaign and public-action evidence. |
+| `docs/specs/no-milestone/wsl2-upstream-native-contribution/EVIDENCE.json` | Create | Public-safe machine-readable source, patch, build, capability, and route receipts. |
+| `scripts/kernel/test-wsl-upstream-config-contribution.sh` | Create | Source, architecture, scope, DCO, checkpatch, and apply refusal gates. |
+| `scripts/kernel/qemu-wsl-config-capability.sh` | Create | Isolated QEMU boot, module, writeback I/O, and teardown gate. |
+| `scripts/kernel/qemu-wsl-config-capability-init.sh` | Create | Minimal public-safe capability guest. |
 | `validation.md` | Append later | Only for authorized live evidence; not this task. |
 
-No file in the RamShared code, CI/workflow, release, validation, or MEMORY
+No file in the RamShared product code, CI/workflow, release, or validation
 surfaces is created, modified, or deleted by this SPEC.
 
 ## Observability
@@ -134,7 +147,7 @@ surfaces is created, modified, or deleted by this SPEC.
 | Values | ublk/writeback state per architecture | x86 pair is exact; arm64 writeback is already y. |
 | Build | target-tree command class, toolchain, exit, warning/error summary | Official gate result is recorded or partial. |
 | Capability | module/control-node observation without workload | Capability only, never product ready. |
-| Route | issue draft state and external action | `HUMAN_REVIEW_ONLY`; no network write. |
+| Route | issue update, fork branch, and PR gate | One reviewed issue update; no unsolicited Microsoft PR. |
 | Revalidation | trigger and reason | Branch/SHA/Kconfig/30-day drift → `NEEDS_REVALIDATION`. |
 
 ## Living docs
@@ -145,7 +158,8 @@ surfaces is created, modified, or deleted by this SPEC.
 | `microsoft-native-vram-memory-tier/` | N3 RFC owner; no config adoption imported. |
 | `docs/labs/WSL2-UPSTREAM-CONFIG-PR.md` | Historical research; do not rewrite it as an external PR plan. |
 | `docs/INDEX.md` | Regenerate as a generated index after pack updates. |
-| `IMPL.md`, `validation.md`, release docs | N/A in this docs-only revision. |
+| `IMPL.md` | Create with exact campaign evidence and residuals. |
+| `validation.md`, release docs | N/A; this campaign is not product validation. |
 | `AGENTS.md`, `CLAUDE.md`, `.claude/rules/*` | N/A — no convention change. |
 
 ## Implementation order
@@ -153,39 +167,44 @@ surfaces is created, modified, or deleted by this SPEC.
 1. **ITEM-1:** resolve the exact target SHA and canonical architecture files.
 2. **ITEM-2:** record the x86 pair, arm64 independent state, and config-only refusal boundaries.
 3. **ITEM-3:** run later official source/build/package/capability gates on an approved isolated surface.
-4. **ITEM-4:** render the English human-review draft and milestone mapping; do not post.
-5. **ITEM-5:** revalidate at every trigger and hand off to a human decision.
+4. **ITEM-4:** render and post one reviewed English #41054 evidence update after all gates pass.
+5. **ITEM-5:** revalidate at every trigger and ask for the maintainer-owned
+   integration route; a PR remains refused until explicitly requested.
 
 ## Required tests matrix
 
-These are contractual names for a future target-tree campaign. They have not
-run in this documentation-only revision.
+These are the contractual names for the approved target-tree campaign. Exact
+results are recorded in `IMPL.md`.
 
 | Production path | Test (`file` :: `name`) | Kind | Kahneman | Cover / pass condition |
 | --- | --- | --- | --- | --- |
 | Target repository | `UPSTREAM_SOURCE_SHA_REVALIDATION` | source/static | #3 | Full SHA equals `14794180686c2fb6307fbe359c359bec765249f3`. |
 | Target repository | `UPSTREAM_CANONICAL_ARCH_PATHS` | source/static | #3/#13 | Both exact arch config files exist and are the reviewed inputs. |
+| `scripts/kernel/test-wsl-upstream-config-contribution.sh` | `UPSTREAM_PATCH_SERIES_SCOPE` | source/static | #3/#13 | Exactly two commits change only the two canonical config files. |
+| `scripts/kernel/test-wsl-upstream-config-contribution.sh` | `UPSTREAM_PATCH_DCO_AND_CHECKPATCH` | source/static | #13 | Canonical author/sign-off, strict checkpatch, and clean apply all pass. |
 | `arch/x86/configs/config-wsl` | `X86_CONFIG_PAIR` | config/static | #13 | x86 current values are not set; candidate delta is exactly ublk=m + writeback=y. |
 | `arch/arm64/configs/config-wsl-arm64` | `ARM64_INDEPENDENT_PAIR` | config/static | #13 | ublk is candidate; writeback is already y; no duplicate request. |
 | Target Kconfig | `UPSTREAM_CONFIG_OLDDEFCONFIG_X86` | build | #3 | Both x86 deltas survive official `olddefconfig`. |
 | Target Kconfig | `UPSTREAM_CONFIG_OLDDEFCONFIG_ARM64` | build | #3 | Arm64 is independently evaluated; no copied x86 result. |
+| Target Kconfig | `UPSTREAM_CONFIG_DERIVED_DEFAULTS` | config/static | #2/#3 | Both generated configs disclose `CONFIG_BLKDEV_UBLK_LEGACY_OPCODES=y`. |
 | Target build | `UPSTREAM_CONFIG_BUILD_W1` | build | #3 | Official target-tree build result is recorded. |
 | Target build | `UPSTREAM_CONFIG_SPARSE_C1` | sparse | #13 | No new relevant sparse diagnostic, or explicit partial/refusal. |
 | Target package | `UPSTREAM_CONFIG_MODULE_PACKAGE` | package | #16 | Expected ublk module/package state is recorded without swap. |
 | Approved custom kernel | `UPSTREAM_CONFIG_UBLK_CAPABILITY_NO_PRODUCT` | drill/E2E | #2/#18 | Capability is observed but product remains NBD-only. |
 | Approved custom kernel | `UPSTREAM_CONFIG_WRITEBACK_CAPABILITY` | drill/E2E | #2 | Writeback capability is recorded per architecture; no pressure workload. |
 | Human packet | `UPSTREAM_CONFIG_PUBLIC_REDACTION` | static/manual | #13 | No private/secret/raw host material. |
-| Human packet | `NO_EXTERNAL_KERNEL_PR_REFUSAL` | refusal | #13/#18 | No branch, patch, PR, push, or auto-post action. |
+| Human packet | `NO_EXTERNAL_KERNEL_PR_REFUSAL` | refusal | #13/#18 | No unsolicited Microsoft-repository PR or auto-post action. |
 | Human packet | `UPSTREAM_OWNER_ROUTE` | static/manual | #18 | #41054 stays WSL feature request; code route is normal upstream, not community PR. |
+| Route audit | `UPSTREAM_PR_ROUTE_AUDIT` | source/static | #3/#18 | Public PR population and decisive maintainer comments support the selected route. |
+| Human packet | `MAINTAINER_REQUESTED_PR_GATE` | refusal | #13/#18 | A patch-ready state without an explicit maintainer request cannot open a PR. |
 | N3 boundary | `N3_SCOPE_REFUSAL` | refusal | #2/#18 | N3 host RFC remains a separate pack. |
-| Evidence process | `UPSTREAM_EVIDENCE_REPLAY_IDEMPOTENCY` | process | #17 | Replaying a packet creates no external or host effect. |
+| Evidence process | `UPSTREAM_EVIDENCE_REPLAY_IDEMPOTENCY` | process | #17 | Revalidation creates no duplicate issue comment or host effect. |
 | Maintenance | `UPSTREAM_REVALIDATION_TRIGGER` | process | #3/#15 | SHA/path/branch/Kconfig/build/30-day drift yields `NEEDS_REVALIDATION`. |
 
 ### Platform-correct future gates
 
-When explicitly authorized on the exact external target tree, use the target
-tree’s own commands. The following are examples of command classes, not an
-authorization to run them in this task:
+The user explicitly authorized this campaign on the exact external target
+tree. Use the target tree's own commands in isolated build directories:
 
 ```bash
 make KCONFIG_CONFIG=Microsoft/config-wsl olddefconfig
@@ -196,12 +215,12 @@ make INSTALL_MOD_PATH="$PWD/modules" modules_install
 
 For arm64, resolve `Microsoft/config-wsl-arm64` and
 `arch/arm64/configs/config-wsl-arm64` from the exact target tree. Do not use a
-generic distro defconfig. Do not run `modprobe`, swap, pressure, or a boot as
-part of this documentation task.
+generic distro defconfig. Capability boots must be isolated QEMU guests and
+must not run host swap or pressure.
 
 ## Validation checklist
 
-Future campaign only:
+Approved campaign:
 
 - [ ] Read the exact external target README and source at the pinned SHA.
 - [ ] Verify both canonical architecture paths and all four symbol values.
@@ -217,8 +236,8 @@ Future campaign only:
 
 ## Out of SPEC
 
-- Any kernel code, dxgkrnl/FORTIFY patch, external kernel PR, GitHub action,
-  issue/comment, mailing-list submission, branch push, or internal route;
+- Any kernel code, dxgkrnl/FORTIFY patch, unsolicited external kernel PR,
+  mailing-list submission, tag, or claim of internal adoption;
 - any NBD/ublk product implementation, native VRAM/N3 implementation, custom
   kernel promotion, swap/pressure/GPU workload, reboot, or WSL shutdown;
-- any release, code, CI/workflow, `IMPL.md`, validation, or `MEMORY.md` edit.
+- any release, product code, CI/workflow, validation, or `MEMORY.md` edit.
