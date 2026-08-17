@@ -44,4 +44,4 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`wsl2-native-vram-tier`](specs/no-milestone/wsl2-native-vram-tier/) | Native VRAM memory tier on WSL2 kernel and/or Ubuntu — decision PRD | — | — | PRD |
 | [`wsl2-nbd-product-readiness`](specs/no-milestone/wsl2-nbd-product-readiness/) | WSL2 NBD-only product readiness | v0.9.0-beta.1 — WSL2 NBD | #194 | UNQUALIFIED |
 | [`wsl2-relay-lifecycle-reliability`](specs/no-milestone/wsl2-relay-lifecycle-reliability/) | WSL2 Relay lifecycle reliability | — | microsoft/WSL#41242, microsoft/WSL#41286 | UNQUALIFIED |
-| [`wsl2-upstream-native-contribution`](specs/no-milestone/wsl2-upstream-native-contribution/) | WSL #41054 config-only contribution boundary | Microsoft-native N3 — Design | microsoft/WSL#41054, #197 | SPEC |
+| [`wsl2-upstream-native-contribution`](specs/no-milestone/wsl2-upstream-native-contribution/) | WSL #41054 config-only contribution boundary | Microsoft-native N3 — Design | microsoft/WSL#41054, #197 | UNQUALIFIED |
