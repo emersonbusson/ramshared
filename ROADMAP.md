@@ -38,6 +38,13 @@ Phase 0 on real GPU-PV: eviction keeps data intact but can make a tiny read take
 - Record: [docs/specs/no-milestone/kernel-vram-as-memory/PASSO0-INVENTORY.md](docs/specs/no-milestone/kernel-vram-as-memory/PASSO0-INVENTORY.md)  
 - LKM/HMM/NUMA **blocked here**; product path remains cascade + app
 
+### WSL2 Upstream Kernel Contribution (2026-08)
+
+- Formal evidence and candidate branch prepared for Microsoft WSL kernel ([microsoft/WSL#41054](https://github.com/microsoft/WSL/issues/41054))
+- Dual-architecture validation: x86_64 and ARM64 compiled cleanly with zero W=1 diagnostics
+- Sparse C=2 static analysis and QEMU capability test with 1,024 pages written
+- Public candidate branch published at [emersonbusson/WSL2-Linux-Kernel](https://github.com/emersonbusson/WSL2-Linux-Kernel/tree/config/ublk-zram-writeback-6.18)
+
 ### Windows Host Driver (MVP)
 
 Format, pagefile residency, kernel-page drill, ordered teardown (DT-9), and SCM service are validated on the guest VM. The driver is now in open beta / MVP for physical host integration (requires Secure Boot disabled and testsigning).
@@ -50,7 +57,7 @@ Format, pagefile residency, kernel-page drill, ordered teardown (DT-9), and SCM 
 | --- | --- |
 | Product polish | Keep cascade boot + demote healthy on real daily WSL |
 | Windows | Product CUDA path + MSVC service on physical host, telemetry collection under budget pressure |
-| Phase B (optional) | Custom WSL kernel: zram writeback, ublk — only if it earns its keep |
+| Upstream WSL2 | Track Microsoft triage on #41054 and promote ublk transport to standard product upon kernel release |
 
 ---
 
