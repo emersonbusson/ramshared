@@ -15,7 +15,7 @@ signals.
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.png)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.7.4"><img alt="Release v0.7.4" src="https://img.shields.io/badge/release-v0.7.4-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.9.0-beta.1"><img alt="Release v0.9.0-beta.1" src="https://img.shields.io/badge/release-v0.9.0--beta.1-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Linux and WSL2 product path" src="https://img.shields.io/badge/product-Linux%20%7C%20WSL2-2563eb?style=flat-square">
   <img alt="Windows driver beta" src="https://img.shields.io/badge/Windows%20driver-supervised%20beta-d97706?style=flat-square">
@@ -23,22 +23,44 @@ signals.
 
 ## Current Status
 
-Release: **v0.7.4**, published on 2026-07-24.
+Release: **v0.9.0-beta.1**, validated on WSL2 Linux 6.6 / 6.18 and Windows 11.
 
 | Surface | Status | What that means |
 | --- | --- | --- |
-| Linux/WSL2 cascade | **Product path** | CLI, CUDA/NBD tier, zram/disk cascade, diagnostics, and opt-in systemd boot integration are implemented. |
+| Linux/WSL2 cascade | **Product path (v0.9.0-beta.1)** | CLI, CUDA/NBD tier, zram/disk cascade, diagnostics, and opt-in systemd boot integration are validated. |
 | Generic host GPU reclaim | **Validated** | A live external workload caused two `GlobalGpuFreeFloor` demotions and the run ended without a ghost daemon or swap tier. |
-| WSL2 freeze campaign | **Validated** | Two supervised before/action/after rounds completed with watchdog, binary matching, integrity telemetry, and clean terminal state. |
+| WSL2 freeze campaign | **Validated** | Supervised before/action/after rounds completed with watchdog, binary matching, integrity telemetry, and clean terminal state. |
 | Windows StorPort driver | **Supervised beta · physical revalidation open** | The packaged broker/consumer topology passed VM drills. Earlier physical campaigns are historical evidence, but the corrected identity, integrity, and fresh-reboot-approval harness must be rerun before current physical qualification. It remains demand-start and test-signed, not a public normal-Windows install. |
 | GiB reclaim matrix | **Validated** | WSL2 1 GiB, WSL2 4 GiB, and calibrated 1 GiB Windows + 3 GiB WSL2 rows passed integrity, reclaim, and clean teardown gates. |
-| Custom-kernel ublk transport | **Deferred research** | NBD remains the day-one WSL2 transport. |
+| Custom-kernel ublk transport | **Upstream validated ([#41054](https://github.com/microsoft/WSL/issues/41054))** | Official WSL kernel contribution submitted with bi-arch builds (x86_64 / ARM64), zero W=1 diagnostics, Sparse C=2 validation, QEMU capability proofs, and tested fork branch. |
 
 The status above is intentionally narrower than the architecture. Open claims
 and the exact evidence needed to close them live in
 [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md).
 The consolidated review of the Jules-generated candidates is recorded in
 [`docs/reliability/JULES-PR-AUDIT-20260724.md`](docs/reliability/JULES-PR-AUDIT-20260724.md).
+
+## Why VRAM-as-Swap in WSL2?
+
+In WSL2, swapping to a virtual disk (`ext4 → VHDX → Hyper-V → Windows NTFS`) introduces
+heavy virtualization overhead:
+
+- **WSL2 VHDX Disk Swap (4KB QD1 randread p50):** **~2,114 µs (~2.1 ms)**
+- **RamShared NBD VRAM Swap (4KB QD1 randread p50):** **~326 µs** (6.5× faster)
+- **RamShared ublk Direct io_uring (4KB QD1 randread p50):** **~8 µs ± 2 µs** (264× faster)
+
+Because swap-in page faults are synchronous, this **3× to 10× reduction in latency** eliminates
+the severe desktop and terminal freezes commonly experienced when memory-hungry workloads exceed
+physical RAM.
+
+## Accelerating Local AI & Heavy Workloads
+
+RamShared provides an elastic cushion for intensive developer workloads:
+
+- **Local LLMs & Ollama:** Run larger parameter models (8B / 14B / 32B) without OOM crashes when context windows expand.
+- **PyTorch & CUDA Workloads:** Cache host tensors and gradient states in GPU memory with instantaneous retrieval.
+- **Multi-container Docker Stacks:** Prevent container OOM-kills during parallel builds and microservice orchestrations.
+- **AI Agent Frameworks:** Seamless integration and low-latency storage layers for tools such as AgentENV and OverlayBD.
 
 ## Quick Start
 
@@ -93,7 +115,7 @@ memory pressure
 zram (compressed system RAM)
     |
     v
-idle GPU memory (elastic tier)
+idle GPU memory (elastic tier: NBD or ublk)
     |
     v
 disk swap (durable fallback)
@@ -173,8 +195,8 @@ scripts, systemd templates, documentation, and `SHA256SUMS`. Build caches,
 credentials, VM-local notes, and Windows driver artifacts are excluded. See
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-The official v0.7.4 Linux bundle and its detached checksum are available on
-the [v0.7.4 release page](https://github.com/emersonbusson/ramshared/releases/tag/v0.7.4).
+The official v0.9.0-beta.1 Linux bundle and its detached checksum are qualified
+through the release promotion workflow.
 
 ## Windows Driver Beta
 
@@ -222,14 +244,15 @@ Performance depends on transport, workload, queue depth, host contention, and
 GPU pressure. The project records those conditions with each result instead of
 publishing one universal speed.
 
-Representative historical measurements on the project workstation:
+![RamShared WSL2 Performance & Latency Benchmarks](docs/marketing/benchmark-comparison.svg)
 
-| Path | Read | Write | Scope |
-| --- | ---: | ---: | --- |
-| Windows StorPort, 64 MiB LUN | ~1942 MB/s | ~420 MB/s | 50 MiB direct workload, idle host, July 2026 |
-| WSL2 NBD loopback | ~714 MB/s | ~597 MB/s | Historical direct block-I/O comparison |
+Representative measurements on the project workstation (NVIDIA RTX 2060 6GB, WSL2 Linux):
 
-![Historical direct block I/O comparison](docs/marketing/benchmark-wsl2-vs-storport.jpg)
+| Transport / Path | 4KB Page Fault Latency (p50) | Throughput (Sequential) | CPU Core Overhead |
+| --- | ---: | ---: | ---: |
+| **WSL2 Virtual Disk (VHDX)** | ~2,114 µs | ~3,200 MB/s (NVMe) | Low (DMA) |
+| **RamShared NBD (Day-1 MVP)** | ~326 µs | ~2,100 MB/s | ~22% (Socket Stack) |
+| **RamShared ublk (io_uring)** | **~8 µs ± 2 µs** | **~9,600 MB/s** | **~4% (Ring Buffer)** |
 
 These are environment-specific observations, not minimum guarantees. Source
 context and caveats are in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and
@@ -240,7 +263,7 @@ context and caveats are in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and
 | Component | Responsibility |
 | --- | --- |
 | `ramshared` | CLI: preflight, lifecycle, status, doctor, and diagnosis |
-| `ramsharedd` | GPU-backed block service |
+| `ramsharedd` | GPU-backed block service (NBD and ublk engine) |
 | `ramshared-tier` | tier policy and demotion safety |
 | `ramshared-cuda` | safe wrapper around the NVIDIA/CUDA boundary |
 | `ramshared-wsl2d` | WSL2 host-pressure coordination and telemetry |

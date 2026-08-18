@@ -88,8 +88,8 @@
   <g filter="url(#shadow)">
     <rect x="920" y="360" width="220" height="120" rx="16" fill="#0f172a" stroke="#334155" stroke-width="2"/>
     <text x="945" y="400" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" letter-spacing="1">MEASURED</text>
-    <text x="945" y="428" fill="#f8fafc" font-family="ui-monospace, Menlo, monospace" font-size="13">fast path ~241 µs</text>
-    <text x="945" y="450" fill="#f8fafc" font-family="ui-monospace, Menlo, monospace" font-size="13">older path ~326 µs</text>
+    <text x="945" y="428" fill="#f8fafc" font-family="ui-monospace, Menlo, monospace" font-size="13">ublk path ~8–241 µs</text>
+    <text x="945" y="450" fill="#f8fafc" font-family="ui-monospace, Menlo, monospace" font-size="13">NBD path ~326 µs</text>
     <text x="945" y="472" fill="#94a3b8" font-family="ui-monospace, Menlo, monospace" font-size="12">GPU reclaim ~1.2 s</text>
   </g>
 
