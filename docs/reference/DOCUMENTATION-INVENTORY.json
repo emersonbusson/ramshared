@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Markdown paths visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 237,
-    "classified": 226,
+    "total": 242,
+    "classified": 231,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -922,6 +922,18 @@
       "canonicalSource": "docs/reliability/GAP-REGISTER.md",
       "lifecycle": "immutable",
       "freshnessDays": null
+    },
+    {
+      "path": "docs/reliability/incidents/2026-08-20-wsl2-control-plane-timeout.md",
+      "disposition": "classified",
+      "ruleId": "reliability-incidents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/postmortems/TEMPLATE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
     },
     {
       "path": "docs/reliability/memory-broker-p0-results.md",
@@ -2424,6 +2436,42 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/specs/no-milestone/wsl2-control-plane-pressure-incident/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-control-plane-pressure-incident/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-control-plane-pressure-incident/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
       "path": "docs/specs/no-milestone/wsl2-custom-kernel-p1/AUDIT-2.5.md",
       "disposition": "classified",
       "ruleId": "ssdv3-audits",
@@ -2758,6 +2806,18 @@
       "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
+    },
+    {
+      "path": "docs/upstream/microsoft-wsl-40795-comment-draft.md",
+      "disposition": "classified",
+      "ruleId": "upstream-drafts",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "release-engineering",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 30
     },
     {
       "path": "drivers/windows/README.md",

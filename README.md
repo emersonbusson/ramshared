@@ -17,22 +17,24 @@ signals.
 <p align="center">
   <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.9.0-beta.1"><img alt="Release v0.9.0-beta.1" src="https://img.shields.io/badge/release-v0.9.0--beta.1-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
-  <img alt="Linux and WSL2 product path" src="https://img.shields.io/badge/product-Linux%20%7C%20WSL2-2563eb?style=flat-square">
+  <img alt="Linux and WSL2 beta" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-incident%20gate-d97706?style=flat-square">
   <img alt="Windows driver beta" src="https://img.shields.io/badge/Windows%20driver-supervised%20beta-d97706?style=flat-square">
 </p>
 
 ## Current Status
 
-Release: **v0.9.0-beta.1**, validated on WSL2 Linux 6.6 / 6.18 and Windows 11.
+Release: **v0.9.0-beta.1**. The installed WSL2 cascade is temporarily gated
+after the 2026-08-20 control-plane timeout incident; historical results remain
+evidence for their exact builds, not proof for the current candidate.
 
 | Surface | Status | What that means |
 | --- | --- | --- |
-| Linux/WSL2 cascade | **Product path (v0.9.0-beta.1)** | CLI, CUDA/NBD tier, zram/disk cascade, diagnostics, and opt-in systemd boot integration are validated. |
+| Linux/WSL2 cascade | **Beta · incident remediation open** | Ordered teardown remains valid, but protection effectiveness, guaranteed capacity, and external heartbeat gates must be requalified. Boot activation is disabled by default. |
 | Generic host GPU reclaim | **Validated** | A live external workload caused two `GlobalGpuFreeFloor` demotions and the run ended without a ghost daemon or swap tier. |
-| WSL2 freeze campaign | **Validated** | Supervised before/action/after rounds completed with watchdog, binary matching, integrity telemetry, and clean terminal state. |
+| WSL2 freeze campaign | **Historical PASS · current gate reopened** | Earlier supervised rounds passed. Two 2026-08-20 VM timeouts showed that the prior health model could remain green without exercising the VRAM tier. |
 | Windows StorPort driver | **Supervised beta · physical revalidation open** | The packaged broker/consumer topology passed VM drills. Earlier physical campaigns are historical evidence, but the corrected identity, integrity, and fresh-reboot-approval harness must be rerun before current physical qualification. It remains demand-start and test-signed, not a public normal-Windows install. |
-| GiB reclaim matrix | **Validated** | WSL2 1 GiB, WSL2 4 GiB, and calibrated 1 GiB Windows + 3 GiB WSL2 rows passed integrity, reclaim, and clean teardown gates. |
-| Custom-kernel ublk transport | **Upstream validated ([#41054](https://github.com/microsoft/WSL/issues/41054))** | Official WSL kernel contribution submitted with bi-arch builds (x86_64 / ARM64), zero W=1 diagnostics, Sparse C=2 validation, QEMU capability proofs, and tested fork branch. |
+| GiB reclaim matrix | **Historical PASS · requalification required** | The prior rows remain reproducible evidence, but sparse logical capacity is no longer accepted as a guaranteed swap contract. |
+| Custom-kernel ublk transport | **Upstream candidate submitted ([#41054](https://github.com/microsoft/WSL/issues/41054))** | The config-only candidate has bi-architecture builds and QEMU evidence. Microsoft triage and acceptance are still pending. |
 
 The status above is intentionally narrower than the architecture. Open claims
 and the exact evidence needed to close them live in
@@ -49,18 +51,22 @@ heavy virtualization overhead:
 - **RamShared NBD VRAM Swap (4KB QD1 randread p50):** **~326 µs** (6.5× faster)
 - **RamShared ublk Direct io_uring (4KB QD1 randread p50):** **~8 µs ± 2 µs** (264× faster)
 
-Because swap-in page faults are synchronous, this **3× to 10× reduction in latency** eliminates
-the severe desktop and terminal freezes commonly experienced when memory-hungry workloads exceed
-physical RAM.
+Because swap-in page faults are synchronous, lower measured latency can reduce
+stall duration on the tested path. It does not guarantee that WSL2, VMBus, or a
+workload remains responsive under arbitrary memory pressure.
 
 ## Accelerating Local AI & Heavy Workloads
 
 RamShared provides an elastic cushion for intensive developer workloads:
 
-- **Local LLMs & Ollama:** Run larger parameter models (8B / 14B / 32B) without OOM crashes when context windows expand.
-- **PyTorch & CUDA Workloads:** Cache host tensors and gradient states in GPU memory with instantaneous retrieval.
-- **Multi-container Docker Stacks:** Prevent container OOM-kills during parallel builds and microservice orchestrations.
-- **AI Agent Frameworks:** Seamless integration and low-latency storage layers for tools such as AgentENV and OverlayBD.
+- **Local inference:** Add a bounded lower memory tier when the selected model
+  and GPU budget fit; application OOM remains possible.
+- **CUDA workloads:** Use only capacity that has been committed before the swap
+  device is activated.
+- **Builds and containers:** Launch managed work through
+  `ramshared run --profile safe -- ...` so the WSL control plane retains memory.
+- **Agent workflows:** Serialize heavy phases or place them in the same managed
+  slice; RamShared does not control arbitrary processes outside that boundary.
 
 ## Quick Start
 
@@ -77,6 +83,8 @@ sudo ./target/release/ramshared check
 sudo ./target/release/ramshared up --vram 1024 --zram 1024
 swapon --show
 ./target/release/ramshared status
+./target/release/ramshared monitor
+sudo ./target/release/ramshared run --profile safe -- make test
 ```
 
 Start with a bounded allocation such as 1024 MiB. Keep enough VRAM available
@@ -106,6 +114,20 @@ external service:
 ./target/release/ramshared diagnose --events /path/to/telemetry.jsonl --json
 ```
 
+`ramshared monitor` is a read-only terminal dashboard. It samples every two
+seconds and keeps five minutes of RAM history. The physical GPU panel reports
+all NVIDIA VRAM use; the `vram` swap tier reports only pages attributable to
+RamShared. Press `q`, `Esc`, or `Ctrl-C` to exit.
+
+For automation or a host-visible heartbeat:
+
+```bash
+./target/release/ramshared monitor --jsonl --once
+./target/release/ramshared monitor --jsonl \
+  --output /var/log/ramshared/cascade-health.jsonl \
+  --heartbeat /mnt/c/wsl-forensics/ramshared-heartbeat.json
+```
+
 ## Memory Cascade
 
 ```text
@@ -122,13 +144,13 @@ disk swap (durable fallback)
 ```
 
 The control plane watches GPU headroom and operation latency. When the Windows
-host or another GPU workload reduces available budget, RamShared:
+host or another GPU workload reduces available budget, RamShared attempts to:
 
-1. stops promoting pages to the GPU tier;
-2. performs a bounded drain of GPU-backed swap;
-3. leaves pages in zram or disk swap;
-4. releases the CUDA allocation;
-5. records the transition and reason in telemetry.
+1. refuse new VRAM commits;
+2. perform an ordered, bounded `swapoff` drain;
+3. keep the backend allocated if the drain cannot be proven complete;
+4. release CUDA memory only after the tier is empty;
+5. record the transition and terminal result.
 
 Windows WDDM remains authoritative in WSL2. RamShared reacts to host-visible
 pressure; it does not promise that opening a particular application instantly
@@ -138,8 +160,9 @@ or risklessly frees a fixed amount of VRAM.
 
 - Use `ramshared up` and `ramshared down`; do not force-kill `ramsharedd` while
   its swap device is active.
-- Do not allocate the GPU's full physical capacity. A 6 GiB card cannot safely
-  host 4 GiB + 1 GiB owners plus a 1 GiB reserve and normal desktop usage.
+- A requested 4 GiB profile on a 6 GiB card is a maximum, not a promise. The
+  product falls back to 2 or 1 GiB unless the complete allocation plus
+  `max(1 GiB, 20% of total VRAM)` is available.
 - Run destructive pressure campaigns only through the supervised watchdog
   harnesses with explicit approval and artifact capture.
 - Treat `PARTIAL` as an evidence state, not a test failure and not a release
@@ -171,15 +194,19 @@ Root authorization is required only at the device and swap boundary.
 WSL2 needs systemd enabled in `/etc/wsl.conf`. After changing that setting, run
 `wsl --shutdown` once from Windows.
 
-```bash
-sudo bash scripts/safety/install-cascade-boot.sh --enable
-```
+The sealed installer is plan-only without exact version, lower-sink, and
+legacy-unit approvals. It installs the cascade service, health sampler, and
+workload-slice definitions without enabling any of them. Do not add a
+persistent activation override while the incident gate is open.
 
-The unit performs preflight before startup and uses the ordered `down` path on
-stop. Remove it with:
+After requalification, an attended enablement may arm the unit; startup still
+requires a fresh watchdog heartbeat and all fail-closed preflight gates. Remove
+the installed integration with the sealed uninstaller. It removes a unit only
+after an exact content match and never stops managed workloads merely to remove
+the workload-slice definition:
 
 ```bash
-sudo bash scripts/safety/uninstall-cascade-boot.sh
+sudo /opt/ramshared/current/scripts/safety/uninstall-cascade-boot.sh
 ```
 
 ## Installable Bundle

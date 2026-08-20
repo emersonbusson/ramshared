@@ -2,6 +2,30 @@
   "schema_version": 2,
   "entries": [
     {
+      "id": "wsl2-dual-plane-monitor",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/wsl2-control-plane-pressure-incident/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-cli",
+        "--files",
+        "crates/ramshared-cli/src/monitor.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/dual-plane-monitor-cov.json"
+      ],
+      "packages": [
+        "ramshared-cli"
+      ],
+      "files": [
+        "crates/ramshared-cli/src/monitor.rs"
+      ],
+      "min": 80
+    },
+    {
       "id": "cascade-lifecycle-observability",
       "kind": "rust-line-coverage",
       "spec": "docs/specs/no-milestone/cascade-lifecycle-observability/SPEC.md",

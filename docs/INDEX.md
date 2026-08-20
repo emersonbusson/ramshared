@@ -38,6 +38,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`wsl2-cascade-boot`](specs/no-milestone/wsl2-cascade-boot/) | WSL2 cascade auto-start on boot with fail-closed anti-hang | — | — | UNQUALIFIED |
 | [`wsl2-cascade-orphan-recover`](specs/no-milestone/wsl2-cascade-orphan-recover/) | WSL2 cascade orphan recover — auto-heal after terminate without stacking | — | — | UNQUALIFIED |
 | [`wsl2-cascade-swap`](specs/no-milestone/wsl2-cascade-swap/) | Product Requirements Document — VRAM as a Cold Tier in WSL2 Swap Cascade (zram → VRAM → VHDX) | M01 | — | SPEC |
+| [`wsl2-control-plane-pressure-incident`](specs/no-milestone/wsl2-control-plane-pressure-incident/) | WSL2 control-plane pressure incident hardening | — | — | UNQUALIFIED |
 | [`wsl2-custom-kernel-p1`](specs/no-milestone/wsl2-custom-kernel-p1/) | Custom WSL2 kernel P1 — official-tree base + ublk + zram writeback (definitive) | — | microsoft/WSL#41054 | UNQUALIFIED |
 | [`wsl2-freeze-elimination-campaign`](specs/no-milestone/wsl2-freeze-elimination-campaign/) | WSL2 freeze-elimination campaign evidence gate | — | — | UNQUALIFIED |
 | [`wsl2-native-vram-autotier`](specs/no-milestone/wsl2-native-vram-autotier/) | PRD — WSL2-native VRAM autotier | — | — | UNQUALIFIED |

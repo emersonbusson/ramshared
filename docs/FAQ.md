@@ -83,6 +83,8 @@ Run:
 ./target/release/ramshared status
 # or machine-readable:
 ./target/release/ramshared status --json
+# live read-only dashboard:
+./target/release/ramshared monitor
 ```
 
 | Phase | Meaning |
@@ -95,7 +97,22 @@ Run:
 | **Degraded** | Ghost swap, bad priority order, or VRAM swap without daemon — fix before relying on the cushion. |
 | **Off** | Product cascade not present. |
 
-`cascade-health.sh` includes the same `phase` when the CLI binary is available.
+The status schema separates physical GPU use, guaranteed RamShared capacity,
+and actual pages in the GPU-backed swap tier. Disk use is attributed to
+RamShared only as growth above the baseline recorded at activation; disk swap
+pages that existed while the product was off do not produce `UsingDisk`.
+
+`cascade-health.sh` is a compatibility wrapper for the same typed monitor. To
+make the GPU box visible in `btop`, first inspect the reversible plan:
+
+```bash
+./scripts/safety/configure-btop-observability.sh
+./scripts/safety/configure-btop-observability.sh --apply
+```
+
+The apply command prints the exact backup path. Pass that path to `--rollback`
+if btop's NVML polling stalls. btop shows total physical GPU memory; use
+`ramshared monitor` for RamShared tier attribution.
 
 ## How do I know it worked?
 

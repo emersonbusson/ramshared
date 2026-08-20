@@ -21,22 +21,23 @@ agregados de orçamento da GPU, memória livre e latência.
 <p align="center">
   <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.9.0-beta.1"><img alt="Versão v0.9.0-beta.1" src="https://img.shields.io/badge/release-v0.9.0--beta.1-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
-  <img alt="Caminho de produto Linux e WSL2" src="https://img.shields.io/badge/product-Linux%20%7C%20WSL2-2563eb?style=flat-square">
+  <img alt="Beta Linux e WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-incident%20gate-d97706?style=flat-square">
   <img alt="Beta supervisionado do driver Windows" src="https://img.shields.io/badge/Windows%20driver-supervised%20beta-d97706?style=flat-square">
 </p>
 
 ## Status atual
 
-Versão: **v0.9.0-beta.1**, validada em WSL2 Linux 6.6 / 6.18 e Windows 11.
+Versão: **v0.9.0-beta.1**. A cascata instalada no WSL2 está temporariamente
+bloqueada após o incidente de timeout do plano de controle de 20/08/2026.
 
 | Superfície | Status | O que isso significa |
 | --- | --- | --- |
-| Cascata Linux/WSL2 | **Caminho de produto (v0.9.0-beta.1)** | CLI, camada CUDA/NBD, cascata zram/disco, diagnósticos e integração opcional de boot com systemd estão validados. |
+| Cascata Linux/WSL2 | **Beta · correção de incidente aberta** | A desmontagem ordenada continua válida, mas capacidade garantida, efetividade e heartbeat externo precisam ser requalificados. O boot automático está desabilitado. |
 | Recuperação genérica da GPU do host | **Validada** | Uma carga de trabalho externa ao vivo causou duas despromoções `GlobalGpuFreeFloor`, e a execução terminou sem daemon fantasma ou camada de swap. |
-| Campanha de congelamento do WSL2 | **Validada** | Rodadas supervisionadas antes/ação/depois terminaram com watchdog, correspondência binária, telemetria de integridade e estado final limpo. |
+| Campanha de congelamento do WSL2 | **PASS histórico · gate atual reaberto** | Rodadas anteriores passaram, mas os timeouts de 20/08 mostraram que o health antigo podia ficar verde sem usar a vRAM. |
 | Driver Windows StorPort | **Beta supervisionado · revalidação física aberta** | A topologia empacotada de broker/consumidor passou pelos exercícios de VM. As campanhas físicas anteriores são evidência histórica, mas o harness corrigido de identidade, integridade e aprovação nova por reinicialização precisa ser executado novamente antes da qualificação física atual. Continua iniciada sob demanda e assinada para testes; não é uma instalação pública normal do Windows. |
-| Matriz de recuperação em GiB | **Validada** | As linhas WSL2 de 1 GiB e 4 GiB e a linha calibrada Windows de 1 GiB + WSL2 de 3 GiB passaram pelos gates de integridade, recuperação e desmontagem limpa. |
-| Transporte ublk de kernel personalizado | **Validado no upstream ([#41054](https://github.com/microsoft/WSL/issues/41054))** | Contribuição oficial para o kernel WSL submetida com compilações bi-arquitetura (x86_64 / ARM64), zero diagnósticos W=1, validação Sparse C=2, provas em QEMU e branch de fork testada. |
+| Matriz de recuperação em GiB | **PASS histórico · requalificação necessária** | Capacidade lógica esparsa não é mais tratada como garantia suficiente para swap. |
+| Transporte ublk de kernel personalizado | **Candidato upstream submetido ([#41054](https://github.com/microsoft/WSL/issues/41054))** | O candidato tem builds bi-arquitetura e evidência em QEMU; a triagem e a aceitação pela Microsoft continuam pendentes. |
 
 O status acima é intencionalmente mais restrito que a arquitetura. As
 alegações abertas e a evidência exata necessária para fechá-las estão em
@@ -53,18 +54,20 @@ alto overhead de virtualização:
 - **Swap em VRAM RamShared NBD (4KB QD1 randread p50):** **~326 µs** (6,5× mais rápido)
 - **Swap em VRAM RamShared ublk direto io_uring (4KB QD1 randread p50):** **~8 µs ± 2 µs** (264× mais rápido)
 
-Como as faltas de página (*page faults*) de swap-in são síncronas, essa **redução de 3× a 10× na latência**
-elimina os travamentos severos de desktop e terminal que ocorrem quando cargas pesadas de memória
-ultrapassam a RAM física do computador.
+Como as faltas de página de swap-in são síncronas, a menor latência medida pode
+reduzir a duração de stalls no caminho testado. Ela não garante que WSL2,
+VMBus ou uma carga permaneçam responsivos sob pressão arbitrária.
 
 ## Acelerando IA Local e Cargas Pesadas
 
 O RamShared fornece um colchão elástico de memória para fluxos de desenvolvimento intensivos:
 
-- **LLMs Locais e Ollama:** Execute modelos com maior número de parâmetros (8B / 14B / 32B) sem erros de falta de memória (OOM) quando o contexto se expande.
-- **Cargas em PyTorch e CUDA:** Mantenha tensores e estados de gradiente em memória GPU com recuperação instantânea.
-- **Stacks Multi-container no Docker:** Evite que containers sejam mortos por OOM-killer durante compilações paralelas e orquestrações de microsserviços.
-- **Frameworks de Agentes de IA:** Integração nativa e camadas de armazenamento de baixíssima latência para ferramentas como AgentENV e OverlayBD.
+- **Inferência local:** oferece uma camada inferior limitada quando modelo e
+  orçamento da GPU cabem; OOM da aplicação continua possível.
+- **Cargas CUDA:** usa somente capacidade comprometida antes da ativação do swap.
+- **Builds e containers:** execute por
+  `ramshared run --profile safe -- ...` para preservar o plano de controle.
+- **Agentes:** serialize fases pesadas ou coloque-as na mesma slice gerenciada.
 
 ## Início rápido
 
@@ -81,6 +84,8 @@ sudo ./target/release/ramshared check
 sudo ./target/release/ramshared up --vram 1024 --zram 1024
 swapon --show
 ./target/release/ramshared status
+./target/release/ramshared monitor
+sudo ./target/release/ramshared run --profile safe -- make test
 ```
 
 Comece com uma alocação limitada, como 1024 MiB. Mantenha VRAM suficiente
@@ -108,6 +113,20 @@ um serviço externo:
 ```bash
 ./target/release/ramshared diagnose --events /path/to/telemetry.jsonl
 ./target/release/ramshared diagnose --events /path/to/telemetry.jsonl --json
+```
+
+`ramshared monitor` é um painel de terminal somente leitura. Ele coleta a cada
+dois segundos e mantém cinco minutos de histórico da RAM. O painel da GPU
+física mostra todo o uso da VRAM NVIDIA; a camada de swap `vram` mostra apenas
+as páginas atribuíveis ao RamShared. Pressione `q`, `Esc` ou `Ctrl-C` para sair.
+
+Para automação ou heartbeat visível pelo host:
+
+```bash
+./target/release/ramshared monitor --jsonl --once
+./target/release/ramshared monitor --jsonl \
+  --output /var/log/ramshared/cascade-health.jsonl \
+  --heartbeat /mnt/c/wsl-forensics/ramshared-heartbeat.json
 ```
 
 ## Cascata de memória
@@ -177,15 +196,18 @@ A autorização root é necessária apenas na fronteira do dispositivo e do swap
 O WSL2 precisa do systemd habilitado em `/etc/wsl.conf`. Depois de alterar essa
 configuração, execute `wsl --shutdown` uma vez a partir do Windows.
 
-```bash
-sudo bash scripts/safety/install-cascade-boot.sh --enable
-```
+O instalador selado apenas apresenta o plano sem aprovações exatas de versão,
+lower sink e unidade legada. Ele instala a unidade da cascata, o coletor de
+saúde e a definição do slice de workloads sem habilitar nenhum deles enquanto
+o gate do incidente estiver aberto.
 
 A unidade executa o preflight antes da inicialização e usa o caminho ordenado
-`down` na parada. Remova-a com:
+`down` na parada. Remova a integração com o desinstalador selado: ele só
+remove uma unidade após comparar seu conteúdo exatamente e nunca interrompe
+workloads gerenciados apenas para remover a definição do slice:
 
 ```bash
-sudo bash scripts/safety/uninstall-cascade-boot.sh
+sudo /opt/ramshared/current/scripts/safety/uninstall-cascade-boot.sh
 ```
 
 ## Pacote instalável

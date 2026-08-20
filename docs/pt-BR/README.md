@@ -15,6 +15,9 @@ Para requisitos, pré-requisitos e o primeiro ciclo `check` → `up` → `status
 consulte o [início rápido do README](../../README.md#quick-start) ou leia a
 [tradução completa do README](../../README.pt-BR.md).
 
+Para distinguir RAM, VRAM física e páginas efetivamente usadas pela camada de
+swap do RamShared, execute `ramshared monitor`. O painel é somente leitura.
+
 ## Instalação
 
 O [guia do pacote instalável](../packaging/INSTALLABLES.md) explica como

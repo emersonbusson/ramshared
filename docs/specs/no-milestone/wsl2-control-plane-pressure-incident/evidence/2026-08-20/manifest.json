@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-20T11:31:47-03:00",
+  "privacy": {
+    "raw_artifacts_committed": false,
+    "raw_artifacts_retained_local_only": true,
+    "host_paths_redacted": true
+  },
+  "environment": {
+    "incident_wsl_version": "2.7.11.0",
+    "post_incident_wsl_version": "2.7.12.0",
+    "active_kernel": "6.18.35.2-microsoft-standard-WSL2+",
+    "memory_cap_gib": 16
+  },
+  "artifacts": [
+    {
+      "source_type": "ramshared_beta_health_jsonl",
+      "basename": "beta-health.jsonl",
+      "bytes": 14646096,
+      "sha256": "78acf5fb7263ecb3d14c5f02d0453eca677fe6a75f0dda2052673f078465a9fe",
+      "retained_local_only": true
+    },
+    {
+      "source_type": "interactive_development_session_transcript",
+      "session_id": "01a01d6c-d58c-7163-afcb-8f8eb79ed8d7",
+      "mutable_source": true,
+      "retained_local_only": true
+    }
+  ],
+  "observations": {
+    "linux_oom_killer_recorded": false,
+    "nbd_io_error_recorded": false,
+    "vram_swap_used_kib_max": 0,
+    "disk_swap_used_kib_max": 0,
+    "first_boot_last_sample": "2026-08-20T03:45:36-03:00",
+    "first_boot_zram_used_kib": 1041436,
+    "first_boot_zram_size_kib": 1048572,
+    "second_boot_telemetry_gap_seconds": 392,
+    "second_boot_hv_sock_worker_storm_observed": true
+  },
+  "limitations": [
+    "Guest-only evidence cannot identify the Windows host root cause.",
+    "The interactive development session transcript remains mutable and is intentionally not hashed here.",
+    "No pressure reproduction was run on the daily host after containment."
+  ]
+}

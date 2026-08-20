@@ -1036,6 +1036,30 @@
         "registry_state": null
       },
       "documented_surface": {
+        "implementation_paths": [],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-control-plane-pressure-incident/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-control-plane-pressure-incident/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-control-plane-pressure-incident/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-control-plane-pressure-incident"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
         "implementation_paths": [
           "scripts/kernel/boot-kernel-logged.ps1",
           "scripts/kernel/boot-kernel-safe.ps1",

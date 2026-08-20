@@ -11,5 +11,14 @@
 | `Invoke-DriverSoak.ps1` | 10 | Driver Verifier soak 3×24h (DT-12) |
 | `Build-Sign-Install.ps1` | 11 | Build / attestation package / install (Partner Center flow) |
 | `Get-WinDrivePreflight.ps1` | preflight | Host/VM readiness checklist (no driver load) |
+| `Show-RamSharedWslStatus.ps1` | WSL observer | Plan-first, heartbeat-only status view that remains available when the guest is unresponsive |
+
+The WSL status viewer performs no guest call:
+
+```powershell
+.\scripts\windows\Show-RamSharedWslStatus.ps1
+.\scripts\windows\Show-RamSharedWslStatus.ps1 -Run
+.\scripts\windows\Show-RamSharedWslStatus.ps1 -Run -Json
+```
 
 Stubs print the planned surface and exit non-zero until ITEM implementation fills them in.
