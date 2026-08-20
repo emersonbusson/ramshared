@@ -7,6 +7,8 @@ SOURCE_RELEASE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 PRODUCT_ROOT=/opt/ramshared
 RELEASE_ROOT="$PRODUCT_ROOT/releases"
 UNIT_PATH=/etc/systemd/system/ramshared-cascade.service
+HEALTH_UNIT_PATH=/etc/systemd/system/ramshared-cascade-health.service
+WORKLOADS_SLICE_PATH=/etc/systemd/system/ramshared-workloads.slice
 CURRENT_SELECTOR="$PRODUCT_ROOT/current"
 APPROVED_VERSION=
 LEGACY_UNIT_APPROVED_HASH=
@@ -32,6 +34,9 @@ PUBLISHED_DESTINATION=0
 UNIT_CREATED=0
 LEGACY_UNIT_REPLACED=0
 LEGACY_UNIT_RELOAD_REQUIRED=0
+declare -a AUXILIARY_UNIT_STAGING_PATHS=()
+declare -a AUXILIARY_UNIT_CREATED_PATHS=()
+declare -a AUXILIARY_UNIT_CREATED_SOURCES=()
 
 refuse() {
   printf 'NBD_INSTALL_STATE=REFUSED\n'
@@ -310,6 +315,7 @@ verify_release_tree() {
     bin/ramshared \
     bin/ramsharedd \
     scripts/safety/install-cascade-boot.sh \
+    scripts/safety/uninstall-cascade-boot.sh \
     scripts/safety/nbd-product-preflight.sh \
     scripts/safety/nbd-benchmark-cell.sh \
     scripts/safety/nbd-benchmark-cgroup-launch.sh \
@@ -317,12 +323,15 @@ verify_release_tree() {
     scripts/safety/cascade_pressure_integrity_worker.py \
     scripts/safety/cascade-up.sh \
     scripts/safety/cascade-down.sh \
+    scripts/safety/cascade-health.sh \
     scripts/safety/wsl-relay-health.sh \
     scripts/safety/cascade.conf.example \
     SOURCE_COMMIT \
     SOURCE_BRANCH \
     SOURCE_TREE_STATE \
-    systemd/ramshared-cascade.service; do
+    systemd/ramshared-cascade.service \
+    systemd/ramshared-cascade-health.service \
+    systemd/ramshared-workloads.slice; do
     [[ -f $root/$required && ! -L $root/$required ]] || refuse RELEASE_LAYOUT_INVALID
   done
   [[ -x $root/bin/ramshared && -x $root/bin/ramsharedd ]] || refuse RELEASE_LAYOUT_INVALID
@@ -514,6 +523,25 @@ remove_created_unit_if_owned() {
   UNIT_CREATED=0
 }
 
+remove_created_auxiliary_units_if_owned() {
+  local index target expected staging
+  for staging in "${AUXILIARY_UNIT_STAGING_PATHS[@]}"; do
+    remove_path_if_present "$staging"
+  done
+  for index in "${!AUXILIARY_UNIT_CREATED_PATHS[@]}"; do
+    target=${AUXILIARY_UNIT_CREATED_PATHS[$index]}
+    expected=${AUXILIARY_UNIT_CREATED_SOURCES[$index]}
+    if [[ -f $target && ! -L $target ]] && cmp -s "$expected" "$target"; then
+      rm -f -- "$target"
+    else
+      printf 'NBD_INSTALL_ROLLBACK=AUXILIARY_UNIT_REMOVE_FAILED target=%s\n' "$target" >&2
+    fi
+  done
+  AUXILIARY_UNIT_STAGING_PATHS=()
+  AUXILIARY_UNIT_CREATED_PATHS=()
+  AUXILIARY_UNIT_CREATED_SOURCES=()
+}
+
 restore_legacy_unit_if_replaced() {
   (( LEGACY_UNIT_REPLACED )) || return 0
   [[ -n $LEGACY_BACKUP && -f $LEGACY_BACKUP && ! -L $LEGACY_BACKUP ]] || return 1
@@ -542,6 +570,7 @@ rollback_after_failure() {
       restore_prior_selector || printf 'NBD_INSTALL_ROLLBACK=SELECTOR_RESTORE_FAILED\n' >&2
     fi
     restore_legacy_unit_if_replaced || printf 'NBD_INSTALL_ROLLBACK=LEGACY_UNIT_RESTORE_FAILED\n' >&2
+    remove_created_auxiliary_units_if_owned
     remove_created_unit_if_owned
     remove_path_if_present "$UNIT_STAGING"
     remove_path_if_present "$ROLLBACK_UNIT_STAGING"
@@ -581,6 +610,35 @@ install_unit_if_absent() {
   # NBD_INSTALL_POST_WRITE_PHASE=unit-linked
   rm -f -- "$UNIT_STAGING"
   # NBD_INSTALL_POST_WRITE_PHASE=unit-staging-removed
+}
+
+check_auxiliary_unit_file() {
+  local expected=$1 target=$2
+  [[ -f $expected && ! -L $expected ]] || refuse RELEASE_LAYOUT_INVALID
+  [[ ! -L $target ]] || refuse AUXILIARY_UNIT_CONFLICT
+  if [[ -e $target ]]; then
+    [[ -f $target ]] || refuse AUXILIARY_UNIT_CONFLICT
+    [[ $(stat -c '%u:%g:%a' -- "$target" 2>/dev/null || true) == '0:0:644' ]] \
+      || refuse AUXILIARY_UNIT_METADATA_INVALID
+    cmp -s "$expected" "$target" || refuse AUXILIARY_UNIT_CONFLICT
+  fi
+}
+
+install_auxiliary_unit_if_absent() {
+  local expected=$1 target=$2 label=$3 staging target_dir
+  check_auxiliary_unit_file "$expected" "$target"
+  path_exists_or_link "$target" && return 0
+  target_dir=$(dirname -- "$target")
+  [[ -d $target_dir && ! -L $target_dir ]] || refuse AUXILIARY_UNIT_DIRECTORY_INVALID
+  staging="$target_dir/.${label}.${RELEASE_VERSION}.$$"
+  path_exists_or_link "$staging" && refuse INSTALL_STAGING_EXISTS
+  AUXILIARY_UNIT_STAGING_PATHS+=("$staging")
+  install -m 0644 "$expected" "$staging"
+  chown root:root "$staging"
+  ln "$staging" "$target" || refuse AUXILIARY_UNIT_CONFLICT
+  AUXILIARY_UNIT_CREATED_PATHS+=("$target")
+  AUXILIARY_UNIT_CREATED_SOURCES+=("$expected")
+  rm -f -- "$staging"
 }
 
 while (($# > 0)); do
@@ -685,6 +743,16 @@ mv -T "$STAGING" "$DESTINATION"
 PUBLISHED_DESTINATION=1
 # NBD_INSTALL_POST_WRITE_PHASE=destination-published
 install_unit_if_absent
+install_auxiliary_unit_if_absent \
+  "$DESTINATION/systemd/ramshared-cascade-health.service" \
+  "$HEALTH_UNIT_PATH" \
+  ramshared-cascade-health
+# NBD_INSTALL_POST_WRITE_PHASE=health-unit-installed
+install_auxiliary_unit_if_absent \
+  "$DESTINATION/systemd/ramshared-workloads.slice" \
+  "$WORKLOADS_SLICE_PATH" \
+  ramshared-workloads
+# NBD_INSTALL_POST_WRITE_PHASE=workloads-slice-installed
 ln -s "releases/$RELEASE_VERSION" "$SELECTOR_STAGING"
 # NBD_INSTALL_POST_WRITE_PHASE=selector-staged
 chown -h root:root "$SELECTOR_STAGING"

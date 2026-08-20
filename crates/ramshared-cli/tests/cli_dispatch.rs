@@ -89,6 +89,12 @@ fn cli_status_flags_are_exact_and_read_only() {
     let status_json = run_cli(&["status", "--json"]);
     assert_eq!(status_json.status.code(), Some(0));
     let value: serde_json::Value = serde_json::from_slice(&status_json.stdout).unwrap();
+    assert_eq!(
+        value
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64),
+        Some(3)
+    );
     assert!(
         value
             .get("phase")
@@ -111,6 +117,19 @@ fn cli_status_flags_are_exact_and_read_only() {
         assert!(stderr(&refusal).contains("invalid status option"));
         assert!(refusal.stdout.is_empty());
     }
+}
+
+#[test]
+fn cli_monitor_once_emits_typed_read_only_observation() {
+    let output = run_cli(&["monitor", "--jsonl", "--once"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["schema_version"], 3);
+    assert_eq!(value["sample_age_ms"], 0);
+    assert!(value["mem"]["available_kib"].as_u64().is_some());
+    assert!(value["control_plane"]["memory_psi_full_avg10"].is_number());
+    assert!(value["tiers"]["vram"]["used_kib"].as_u64().is_some());
+    assert!(value["activation"].get("disk_growth_kib").is_some());
 }
 
 #[test]

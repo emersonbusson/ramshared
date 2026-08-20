@@ -63,7 +63,10 @@ function Invoke-WindowsCiStaticSuite {
         @{ Name = "Test-WinDriveIoctlValidationStatic.ps1"; Arguments = @{} },
         @{ Name = "Test-HostAutonomousLifecycleStatic.ps1"; Arguments = @{} },
         @{ Name = "Test-GuestExhaustiveStatic.ps1"; Arguments = @{} },
-        @{ Name = "Test-RecoverGuestVerifierExactRunStatic.ps1"; Arguments = @{} }
+        @{ Name = "Test-RecoverGuestVerifierExactRunStatic.ps1"; Arguments = @{} },
+        @{ Name = "Test-RamSharedWslWatchdogStatic.ps1"; Arguments = @{} },
+        @{ Name = "Test-RamSharedWslStatusStatic.ps1"; Arguments = @{} },
+        @{ Name = "Test-WslIncidentSnapshotStatic.ps1"; Arguments = @{} }
     )
 
     foreach ($harness in $harnesses) {

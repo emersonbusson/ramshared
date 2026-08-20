@@ -247,13 +247,15 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
             && let Err(message) = gate.allow_commit(self.committed_bytes(), self.chunk_bytes)
         {
             self.budget_refuses = self.budget_refuses.saturating_add(1);
-            eprintln!("sparse host budget constrained: {message}");
+            return Err(IoError(format!(
+                "sparse host budget constrained before allocation: {message}"
+            )));
         }
         if next_commit > self.commit_cap_bytes {
             self.floor_refuses = self.floor_refuses.saturating_add(1);
             return Err(IoError(format!(
-                "sparse commit_cap: committed would be {} MiB > cap {} MiB (capacity {} MiB) — \
-                 refuse chunk; kernel may use lower swap tier",
+                "sparse commit_cap: committed would be {} MiB > cap {} MiB (capacity {} MiB); \
+                 refusing the write because swap fallback is not guaranteed",
                 next_commit >> 20,
                 self.commit_cap_bytes >> 20,
                 self.capacity >> 20
@@ -402,10 +404,12 @@ pub fn chunk_bytes_from_env() -> u64 {
     mib.saturating_mul(1024 * 1024)
 }
 
-/// True when full Day-1 prealloc is forced.
+/// Product default: commit the complete advertised block capacity. Sparse
+/// allocation is an explicit lab-only experiment because a late allocation
+/// refusal cannot be represented as a safe swap fallback.
 pub fn prealloc_enabled() -> bool {
-    matches!(
-        std::env::var("RAMSHARED_VRAM_PREALLOC")
+    !matches!(
+        std::env::var("RAMSHARED_VRAM_SPARSE_EXPERIMENTAL")
             .map(|s| s.to_ascii_lowercase())
             .as_deref(),
         Ok("1") | Ok("true") | Ok("yes") | Ok("on")
@@ -630,7 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn host_budget_gate_blocks_before_cuda_allocation() {
+    fn host_budget_denial_prevents_cuda_allocation() {
         struct Deny;
         impl CommitBudgetGate for Deny {
             fn allow_commit(&self, _committed: u64, _next_chunk: u64) -> Result<(), String> {
@@ -648,8 +652,9 @@ mod tests {
             Some(&Deny),
         )
         .unwrap();
-        be.write_at(0, &[1u8; 4096]).unwrap();
-        assert_eq!(p.allocs.get(), 1);
+        let error = be.write_at(0, &[1u8; 4096]).unwrap_err();
+        assert!(error.0.contains("WDDM constrained"), "{error:?}");
+        assert_eq!(p.allocs.get(), 0);
         assert_eq!(be.budget_refuses, 1);
     }
 
@@ -765,8 +770,10 @@ mod tests {
             let b = chunk_bytes_from_env();
             assert!(b >= 16 * 1024 * 1024);
         }
-        if std::env::var("RAMSHARED_VRAM_PREALLOC").is_err() {
-            assert!(!prealloc_enabled());
+        if std::env::var("RAMSHARED_VRAM_PREALLOC").is_err()
+            && std::env::var("RAMSHARED_VRAM_SPARSE_EXPERIMENTAL").is_err()
+        {
+            assert!(prealloc_enabled());
         }
         if std::env::var("RAMSHARED_VRAM_IDLE_FREE_SEC").is_err() {
             assert_eq!(idle_free_secs_from_env(), 30);

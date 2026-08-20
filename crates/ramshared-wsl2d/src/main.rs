@@ -56,8 +56,23 @@ const SIGINT: c_int = 2;
 const SIGTERM: c_int = 15;
 
 const DEFAULT_SIZE: u64 = 256 * 1024 * 1024;
+const GIB: u64 = 1024 * 1024 * 1024;
+const GUARANTEED_PROFILES: [u64; 3] = [4 * GIB, 2 * GIB, GIB];
 const BLOCK_SIZE: u32 = 4096;
 const UBLK_CONTROL: &str = "/dev/ublk-control";
+
+/// Product capacity is a physical guarantee, not a sparse address-space claim.
+/// Keep at least 1 GiB or 20% of the adapter, whichever is larger, outside the
+/// block export. The caller tries candidates in order and advertises only the
+/// allocation that was successfully committed and zeroed.
+fn guaranteed_profile_candidates(requested: u64, free: u64, total: u64) -> Vec<u64> {
+    let reserve = GIB.max(total.div_ceil(5));
+    GUARANTEED_PROFILES
+        .into_iter()
+        .filter(|profile| *profile <= requested)
+        .filter(|profile| free >= profile.saturating_add(reserve))
+        .collect()
+}
 const SECTOR: u64 = 512;
 
 /// VRAM tier transport: NBD (Unix socket) or ublk (direct block device).
@@ -383,11 +398,6 @@ struct AppArgs {
 }
 
 impl AppArgs {
-    fn parse() -> Result<Self, Box<dyn std::error::Error>> {
-        let args: Vec<String> = std::env::args().collect();
-        Self::parse_from(&args)
-    }
-
     /// Parses an explicit argv vector before any backend selection or side effect.
     /// Keeping this boundary injectable makes all public refusals testable without
     /// loading CUDA/Vulkan or touching swap, NBD, or ublk state (memory-broker DT-46).
@@ -567,6 +577,10 @@ impl AppArgs {
     }
 }
 
+fn daemon_version_requested(args: &[String]) -> bool {
+    matches!(args, [_, flag] if flag == "--version" || flag == "-V" || flag == "version")
+}
+
 /// A validated daemon action. The parser and selector decide this before any
 /// driver, swap, NBD-client, or ublk side effect (memory-broker DT-46).
 enum DaemonAction {
@@ -582,7 +596,12 @@ trait DaemonActionRunner {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let args = AppArgs::parse()?;
+    let raw_args = std::env::args().collect::<Vec<_>>();
+    if daemon_version_requested(&raw_args) {
+        println!("ramsharedd {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    let args = AppArgs::parse_from(&raw_args)?;
     let mut runner = ProductionDaemonRunner;
     run_with(args, &mut runner)
 }
@@ -1084,10 +1103,27 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (free, total) = provider.mem_info()?;
     eprintln!(
-        "[ramsharedd] VRAM livre={} MiB total={} MiB",
+        "[ramsharedd] VRAM free={} MiB total={} MiB",
         free >> 20,
         total >> 20
     );
+    let guaranteed_profiles = if use_prealloc && size >= GIB {
+        let profiles = guaranteed_profile_candidates(size, free, total);
+        if profiles.is_empty() {
+            let reserve = GIB.max(total.div_ceil(5));
+            return Err(format!(
+                "no guaranteed VRAM profile fits: requested={} MiB free={} MiB reserve={} MiB; \
+                 product remains off",
+                size >> 20,
+                free >> 20,
+                reserve >> 20
+            )
+            .into());
+        }
+        profiles
+    } else {
+        vec![size]
+    };
 
     let dxg = starter.startup_budget(use_dxg_budget)?;
     struct NbdBudgetGate<'a> {
@@ -1169,15 +1205,43 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
     }
 
     let mut backend: Be<'_, P> = if use_prealloc {
-        if let Some(gate) = budget_gate {
-            gate.allow_commit(0, size)
-                .map_err(|message| format!("WDDM prealloc refused: {message}"))?;
+        let mut committed = None;
+        let mut refusals = Vec::new();
+        for profile in guaranteed_profiles {
+            if let Some(gate) = budget_gate
+                && let Err(message) = gate.allow_commit(0, profile)
+            {
+                refusals.push(format!(
+                    "{} MiB: WDDM budget refused: {message}",
+                    profile >> 20
+                ));
+                continue;
+            }
+            match provider.alloc(profile as usize) {
+                Ok(mut memory) => match memory.zero() {
+                    Ok(()) => {
+                        committed = Some((profile, memory));
+                        break;
+                    }
+                    Err(error) => {
+                        refusals.push(format!("{} MiB: zero failed: {error}", profile >> 20))
+                    }
+                },
+                Err(error) => {
+                    refusals.push(format!("{} MiB: allocation failed: {error}", profile >> 20))
+                }
+            }
         }
-        let mut mem = provider.alloc(size as usize)?;
-        mem.zero()?;
+        let (committed_size, mem) = committed.ok_or_else(|| {
+            format!(
+                "all guaranteed VRAM profiles refused before NBD activation: {}",
+                refusals.join("; ")
+            )
+        })?;
         eprintln!(
-            "[ramsharedd] VRAM mode=prealloc capacity={} MiB (RAMSHARED_VRAM_PREALLOC)",
-            size >> 20
+            "[ramsharedd] VRAM mode=guaranteed requested={} MiB committed={} MiB",
+            size >> 20,
+            committed_size >> 20
         );
         Be::Pre(VramBackend::new(mem, BLOCK_SIZE))
     } else {
@@ -1213,7 +1277,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
     let path = Path::new(&sock);
     prepare_unix_socket_path(path)?;
     let listener = UnixListener::bind(path)?;
-    eprintln!("[ramsharedd] escutando em {sock}");
+    eprintln!("[ramsharedd] listening on {sock}");
     eprintln!("[ramsharedd] conecte: sudo nbd-client -C <N> -unix {sock} {nbd_dev}");
 
     let tx_flags = NBD_FLAG_HAS_FLAGS | NBD_FLAG_SEND_FLUSH | NBD_FLAG_CAN_MULTI_CONN;
@@ -1635,12 +1699,12 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
     match &mut backend {
         Be::Pre(b) => {
             b.zero()?;
-            eprintln!("[ramsharedd] encerrado (VRAM zerada prealloc)");
+            eprintln!("[ramsharedd] stopped (preallocated VRAM zeroed)");
         }
         Be::Sparse(b) => {
             let n = b.free_all_live();
             eprintln!(
-                "[ramsharedd] encerrado (sparse free {} MiB + canary)",
+                "[ramsharedd] stopped (freed {} MiB sparse VRAM plus canary)",
                 n >> 20
             );
         }
@@ -2111,13 +2175,13 @@ fn serve_broker_jobs_with_poll<B: BlockBackend>(
         poll_interval
     };
     let mut demoted = false;
-    eprintln!("[ramsharedd] em transmissão (worker único; multi-slice/broker)");
+    eprintln!("[ramsharedd] serving (single worker; multi-slice broker)");
     loop {
         let msg = match rt.jobs_rx.recv_timeout(poll_interval) {
             Ok(m) => m,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                 if rt.shutdown.load(Ordering::SeqCst) {
-                    break; // DT-28: encerra só no SIGINT/SIGTERM
+                    break; // DT-28: stop only after SIGINT or SIGTERM.
                 }
                 continue;
             }
@@ -4688,6 +4752,33 @@ mod tests {
         )
         .expect("heap RAM broker lifecycle");
         assert!(!ram_path.exists(), "RAM lifecycle cleans its owned socket");
+    }
+
+    #[test]
+    fn adaptive_profile_falls_back_4_2_1_before_swapon() {
+        let gib = 1024 * 1024 * 1024;
+        assert_eq!(
+            guaranteed_profile_candidates(4 * gib, 5 * gib, 6 * gib),
+            vec![2 * gib, gib]
+        );
+        assert_eq!(
+            guaranteed_profile_candidates(4 * gib, 6 * gib, 6 * gib),
+            vec![4 * gib, 2 * gib, gib]
+        );
+        assert!(guaranteed_profile_candidates(4 * gib, 2 * gib, 6 * gib).is_empty());
+    }
+
+    #[test]
+    fn daemon_version_flag_is_side_effect_free() {
+        assert!(daemon_version_requested(&[
+            "ramsharedd".to_string(),
+            "--version".to_string()
+        ]));
+        assert!(!daemon_version_requested(&[
+            "ramsharedd".to_string(),
+            "--size".to_string(),
+            "1024".to_string()
+        ]));
     }
 
     #[test]

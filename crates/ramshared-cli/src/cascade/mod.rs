@@ -41,6 +41,7 @@ const SWAP_DEV_FILE: &str = "/run/ramshared/swap-dev";
 const PID_FILE: &str = "/run/ramshared/ramsharedd.pid";
 /// Daemon demote counters for status --json (written by ramsharedd).
 const DEMOTE_STATUS_FILE: &str = "/run/ramshared/demote-status.json";
+const CAPACITY_STATUS_FILE: &str = "/run/ramshared/capacity-guaranteed";
 /// Forensic "armed" marker (survives WSL death if under /mnt/c).
 const ARMED_MARKER_CANDIDATES: &[&str] = &["/mnt/c/wsl-forensics/.armed", "/run/ramshared/.armed"];
 
@@ -59,8 +60,8 @@ pub enum CascadeError {
 impl fmt::Display for CascadeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CascadeError::Shell { cmd, msg } => write!(f, "comando `{cmd}` falhou: {msg}"),
-            CascadeError::Arg(m) => write!(f, "argumento inválido: {m}"),
+            CascadeError::Shell { cmd, msg } => write!(f, "command `{cmd}` failed: {msg}"),
+            CascadeError::Arg(m) => write!(f, "invalid argument: {m}"),
             CascadeError::Io(m) => write!(f, "I/O: {m}"),
             CascadeError::Precondition(m) => write!(f, "{m}"),
         }
@@ -457,7 +458,7 @@ fn swapoff_all(paths: &[String], entries: &[SwapEntry]) -> Vec<(String, String)>
                     if still {
                         fails.push((p.clone(), msg));
                     } else {
-                        eprintln!("[down] swapoff skip (ausente): {p_canon}");
+                        eprintln!("[down] swapoff skipped (absent): {p_canon}");
                     }
                 } else {
                     fails.push((p.clone(), msg));
@@ -543,6 +544,19 @@ fn clear_run_ramshared_state() {
     cascade_io::remove_runtime_file(SWAP_DEV_FILE);
     cascade_io::remove_runtime_file(PID_FILE);
     cascade_io::remove_runtime_file("/run/ramshared/.armed");
+}
+
+fn disk_swap_used_kib(entries: &[SwapEntry]) -> u64 {
+    entries
+        .iter()
+        .filter(|entry| {
+            !entry.is_ghost()
+                && !is_zram_device_path(&entry.filename)
+                && !is_nbd_device_path(&entry.filename)
+                && !is_ublk_device_path(&entry.filename)
+        })
+        .map(|entry| entry.used_kb)
+        .sum()
 }
 
 /// Auto-heal zero-used managed orphans (WSL terminate class). Single pass.
@@ -643,6 +657,7 @@ struct UpArgs {
     connections: u32,
     transport: Transport,
     swap_dev: String,
+    disk_baseline_kib: u64,
 }
 
 /// True when running under Microsoft WSL2 (shared kernel VM).
@@ -669,7 +684,7 @@ fn resolve_transport(t: Transport) -> Result<Transport, CascadeError> {
                 return Ok(Transport::Nbd);
             }
             if Path::new("/dev/ublk-control").exists() {
-                eprintln!("[up] transport=auto → ublk (/dev/ublk-control presente, host nao-WSL2)");
+                eprintln!("[up] transport=auto -> ublk (/dev/ublk-control present, non-WSL2 host)");
                 Ok(Transport::Ublk)
             } else {
                 eprintln!("[up] transport=auto → nbd (sem /dev/ublk-control)");
@@ -758,6 +773,7 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
         // Default auto: on WSL2 resolves to NBD (Day-1); ublk only off-WSL2 when control node exists.
         transport: Transport::Auto,
         swap_dev: NBD.to_string(),
+        disk_baseline_kib: 0,
     };
     let mut i = 0;
     while i < args.len() {
@@ -768,7 +784,7 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
                     .get(i)
                     .ok_or_else(|| CascadeError::Arg("--vram requer MiB".into()))?
                     .parse()
-                    .map_err(|_| CascadeError::Arg("vram invalido".into()))?;
+                    .map_err(|_| CascadeError::Arg("invalid vram value".into()))?;
             }
             "--zram" => {
                 i += 1;
@@ -776,7 +792,7 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
                     .get(i)
                     .ok_or_else(|| CascadeError::Arg("--zram requer MiB".into()))?
                     .parse()
-                    .map_err(|_| CascadeError::Arg("zram invalido".into()))?;
+                    .map_err(|_| CascadeError::Arg("invalid zram value".into()))?;
             }
             "--daemon" => {
                 i += 1;
@@ -791,7 +807,7 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
                     .get(i)
                     .ok_or_else(|| CascadeError::Arg("--connections requer N".into()))?
                     .parse()
-                    .map_err(|_| CascadeError::Arg("connections invalido".into()))?;
+                    .map_err(|_| CascadeError::Arg("invalid connections value".into()))?;
                 if a.connections == 0 {
                     return Err(CascadeError::Arg("--connections deve ser >= 1".into()));
                 }
@@ -808,7 +824,7 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
                     "ublk" => Transport::Ublk,
                     other => {
                         return Err(CascadeError::Arg(format!(
-                            "--transport invalido: {other} (use auto|nbd|ublk)"
+                            "invalid --transport: {other} (use auto|nbd|ublk)"
                         )));
                     }
                 };
@@ -835,14 +851,14 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
     }
     if a.transport == Transport::Ublk && a.connections != 1 {
         return Err(CascadeError::Arg(
-            "--connections > 1 e invalido com --transport ublk (ring unico)".into(),
+            "--connections > 1 is invalid with --transport ublk (single ring)".into(),
         ));
     }
     // Resolve Auto after parse so env/flag still work.
     a.transport = resolve_transport(a.transport)?;
     if a.transport == Transport::Ublk && a.connections != 1 {
         return Err(CascadeError::Arg(
-            "--connections > 1 e invalido com --transport ublk (ring unico)".into(),
+            "--connections > 1 is invalid with --transport ublk (single ring)".into(),
         ));
     }
     Ok(a)
@@ -851,7 +867,7 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
 mod lifecycle;
 use lifecycle::{
     CascadeSnapshot, DemoteSnapshot, TierSample, active_threshold_kib_from_env, derive_lifecycle,
-    render_status_json,
+    protection_reason, protection_state, render_status_json,
 };
 
 /// Build lifecycle snapshot from live swaps + daemon (read-only).
@@ -872,9 +888,19 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
         order_ok,
         daemon_alive,
         daemon_pid,
+        capacity_guaranteed: Path::new(CAPACITY_STATUS_FILE).is_file(),
+        disk_baseline_kib: read_capacity_disk_baseline(),
         demote: read_demote_snapshot(),
         active_kib: active_threshold_kib_from_env(),
     }
+}
+
+fn read_capacity_disk_baseline() -> Option<u64> {
+    let text = fs::read_to_string(CAPACITY_STATUS_FILE).ok()?;
+    text.lines().find_map(|line| {
+        line.strip_prefix("disk_baseline_kib=")
+            .and_then(|value| value.trim().parse::<u64>().ok())
+    })
 }
 
 /// Read `/run/ramshared/demote-status.json` if present (daemon ITEM-3).
@@ -995,8 +1021,12 @@ pub fn status(as_json: bool) -> Result<(), CascadeError> {
     }
 
     // Human text (SPEC ITEM-2)
+    let protection = protection_state(&view, &snap);
+    let protection_reason = protection_reason(&view, &snap);
     println!("phase: {} ({})", view.phase.as_str(), view.phase_reason);
-    println!("ok: {}", view.ok);
+    println!("protection: {} ({protection_reason})", protection.as_str());
+    println!("ok: {}", view.ok && protection.is_ok());
+    println!("topology_ok: {}", view.ok);
     if !view.reasons.is_empty() {
         println!("reasons: {}", view.reasons.join(", "));
     }
@@ -1043,6 +1073,13 @@ pub fn status(as_json: bool) -> Result<(), CascadeError> {
         eprintln!("  action: wsl --shutdown on Windows, then ramshared down/up");
     }
     Ok(())
+}
+
+pub(crate) fn status_json_document() -> String {
+    let entries = read_swaps();
+    let snap = build_cascade_snapshot(&entries);
+    let view = derive_lifecycle(&snap);
+    render_status_json(&view, &snap, &status_timestamp())
 }
 
 fn print_tier(name: &str, t: &TierSample) {

@@ -187,6 +187,7 @@ struct RuntimePaths {
     zram_dev_file: PathBuf,
     swap_dev_file: PathBuf,
     pid_file: PathBuf,
+    capacity_status_file: PathBuf,
     forensics_markers: Vec<PathBuf>,
     zram_sysfs: PathBuf,
     zram_device: PathBuf,
@@ -200,6 +201,7 @@ impl RuntimePaths {
             zram_dev_file: PathBuf::from(ZRAM_DEV_FILE),
             swap_dev_file: PathBuf::from(SWAP_DEV_FILE),
             pid_file: PathBuf::from(PID_FILE),
+            capacity_status_file: PathBuf::from(CAPACITY_STATUS_FILE),
             forensics_markers: ARMED_MARKER_CANDIDATES.iter().map(PathBuf::from).collect(),
             zram_sysfs: PathBuf::from("/sys/block/zram0"),
             zram_device: PathBuf::from("/dev/zram0"),
@@ -215,6 +217,7 @@ impl RuntimePaths {
             zram_dev_file: runtime_dir.join("zram-dev"),
             swap_dev_file: runtime_dir.join("swap-dev"),
             pid_file: runtime_dir.join("ramsharedd.pid"),
+            capacity_status_file: runtime_dir.join("capacity-guaranteed"),
             runtime_dir,
             forensics_markers: vec![forensics.join(".armed")],
             zram_sysfs: root.join("sys/block/zram0"),
@@ -547,6 +550,25 @@ fn check_safety_net(vram_mb: u64, force: bool, prios: &TierPriorities) -> Result
     Ok(())
 }
 
+fn build_daemon_command(daemon_path: &str, vram_mb: u64, socket: &str, swap_dev: &str) -> Command {
+    let mut command = Command::new(daemon_path);
+    command
+        .args([
+            "--size",
+            &vram_mb.to_string(),
+            "--sock",
+            socket,
+            "--nbd",
+            swap_dev,
+        ])
+        // A swap block export must be backed by committed storage. Sparse
+        // capacity remains available only to explicitly invoked lab daemons.
+        .env("RAMSHARED_VRAM_PREALLOC", "1")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
 fn spawn_daemon_with_deadline(
     daemon_path: &str,
     vram_mb: u64,
@@ -556,12 +578,8 @@ fn spawn_daemon_with_deadline(
 ) -> Result<std::process::Child, CascadeError> {
     fs::create_dir_all(&paths.runtime_dir).map_err(|error| CascadeError::Io(error.to_string()))?;
     remove_runtime_file(&paths.socket);
-    let size = vram_mb.to_string();
     let socket = paths.socket.to_string_lossy().into_owned();
-    let mut child = Command::new(daemon_path)
-        .args(["--size", &size, "--sock", &socket, "--nbd", swap_dev])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+    let mut child = build_daemon_command(daemon_path, vram_mb, &socket, swap_dev)
         .spawn()
         .map_err(|error| CascadeError::Shell {
             cmd: daemon_path.to_string(),
@@ -611,6 +629,7 @@ fn rollback_nbd_attach<R: CommandRunner>(
     if record_written {
         remove_runtime_file(&paths.swap_dev_file);
     }
+    remove_runtime_file(&paths.capacity_status_file);
     remove_runtime_file(&paths.pid_file);
     disarm_forensics_at(paths);
 }
@@ -622,6 +641,7 @@ fn connect_nbd_with<R: CommandRunner>(
     vram_prio: i32,
     daemon: &mut std::process::Child,
     paths: &RuntimePaths,
+    disk_baseline_kib: u64,
 ) -> Result<(), CascadeError> {
     if let Err(error) = validate_nbd_swap_device(swap_dev) {
         rollback_nbd_attach(runner, false, false, swap_dev, daemon, paths);
@@ -646,6 +666,16 @@ fn connect_nbd_with<R: CommandRunner>(
     if let Err(error) = runner.run("mkswap", &["-L", "RAMSHARED", swap_dev]) {
         rollback_nbd_attach(runner, true, false, swap_dev, daemon, paths);
         return Err(error);
+    }
+    if let Err(error) = fs::write(
+        &paths.capacity_status_file,
+        format!(
+            "schema_version=2\nmode=guaranteed\ndisk_baseline_kib={}\n",
+            disk_baseline_kib
+        ),
+    ) {
+        rollback_nbd_attach(runner, true, false, swap_dev, daemon, paths);
+        return Err(CascadeError::Io(error.to_string()));
     }
     if let Err(error) = fs::write(&paths.swap_dev_file, swap_dev) {
         rollback_nbd_attach(runner, true, true, swap_dev, daemon, paths);
@@ -702,6 +732,7 @@ fn setup_new_cascade<R: CommandRunner>(
             prios.vram,
             &mut daemon,
             paths,
+            args.disk_baseline_kib,
         )?;
         Ok(daemon)
     })();
@@ -734,7 +765,7 @@ fn setup_new_cascade<R: CommandRunner>(
     Ok(daemon)
 }
 
-fn up_with_config(a: UpArgs) -> Result<(), CascadeError> {
+fn up_with_config(mut a: UpArgs) -> Result<(), CascadeError> {
     let prios = TierPriorities::default();
     let runner = SystemCommandRunner;
     let paths = RuntimePaths::system();
@@ -763,6 +794,7 @@ fn up_with_config(a: UpArgs) -> Result<(), CascadeError> {
     refuse_half_cascade(&entries_after)?;
 
     check_safety_net(a.vram_mb, a.force, &prios)?;
+    a.disk_baseline_kib = disk_swap_used_kib(&entries_after);
     let _daemon = setup_new_cascade(&runner, &paths, &a, &prios)?;
     status(false)
 }
@@ -958,6 +990,7 @@ fn down_with_runtime<R: CommandRunner>(
     remove_runtime_file(&paths.socket);
     remove_runtime_file(&paths.zram_dev_file);
     remove_runtime_file(&paths.swap_dev_file);
+    remove_runtime_file(&paths.capacity_status_file);
     remove_runtime_file(&paths.pid_file);
     disarm_forensics_at(paths);
     eprintln!("[down] cascade unmounted (swapoff-first, no broad kill)");
@@ -1196,6 +1229,28 @@ mod tests {
     }
 
     #[test]
+    fn product_daemon_command_forces_guaranteed_capacity() {
+        let command = build_daemon_command(
+            "/opt/ramshared/current/bin/ramsharedd",
+            4096,
+            "/run/ramshared/wsl2d.sock",
+            "/dev/nbd0",
+        );
+        let environment = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|item| item.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            environment.contains(&("RAMSHARED_VRAM_PREALLOC".to_string(), Some("1".to_string())))
+        );
+    }
+
+    #[test]
     fn failed_readiness_terminates_only_spawned_child() {
         let fixture = TestDir::new();
         let daemon = fixture.program(
@@ -1256,7 +1311,7 @@ mod tests {
         ]);
 
         let error = error_from(
-            connect_nbd_with(&runner, 1, "/dev/nbd0", 100, &mut daemon, &paths),
+            connect_nbd_with(&runner, 1, "/dev/nbd0", 100, &mut daemon, &paths, 0),
             "mkswap error must be returned after rollback",
         );
         assert!(
@@ -1299,7 +1354,7 @@ mod tests {
         let mut daemon = controlled_child();
 
         let error = error_from(
-            connect_nbd_with(&runner, 0, "/dev/nbd0", 100, &mut daemon, &paths),
+            connect_nbd_with(&runner, 0, "/dev/nbd0", 100, &mut daemon, &paths, 0),
             "invalid connection count must stop the exact spawned daemon",
         );
         assert!(error.to_string().contains("connections"));
@@ -1340,7 +1395,7 @@ mod tests {
         ]);
 
         let error = error_from(
-            connect_nbd_with(&runner, 1, "/dev/nbd0", 100, &mut daemon, &paths),
+            connect_nbd_with(&runner, 1, "/dev/nbd0", 100, &mut daemon, &paths, 0),
             "swapon failure must roll back attach",
         );
         assert!(
@@ -1540,6 +1595,7 @@ mod tests {
             connections: 1,
             transport: Transport::Nbd,
             swap_dev: "/dev/nbd0".into(),
+            disk_baseline_kib: 0,
         };
 
         let mut daemon = setup_new_cascade(&runner, &paths, &args, &TierPriorities::default())
@@ -1551,6 +1607,12 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&paths.swap_dev_file).ok().as_deref(),
             Some("/dev/nbd0")
+        );
+        assert_eq!(
+            fs::read_to_string(&paths.capacity_status_file)
+                .ok()
+                .as_deref(),
+            Some("schema_version=2\nmode=guaranteed\ndisk_baseline_kib=0\n")
         );
         assert!(
             paths.socket.exists(),
@@ -1619,6 +1681,7 @@ mod tests {
             connections: 1,
             transport: Transport::Nbd,
             swap_dev: "/dev/nbd0".into(),
+            disk_baseline_kib: 0,
         };
 
         let error = error_from(
@@ -1697,6 +1760,7 @@ mod tests {
             connections: 1,
             transport: Transport::Nbd,
             swap_dev: "/dev/nbd0".into(),
+            disk_baseline_kib: 0,
         };
 
         let error = error_from(

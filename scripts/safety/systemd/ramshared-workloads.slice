@@ -1,0 +1,9 @@
+[Unit]
+Description=RamShared managed workload scopes
+Documentation=file:///opt/ramshared/current/README.md
+Before=shutdown.target
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+TasksAccounting=yes

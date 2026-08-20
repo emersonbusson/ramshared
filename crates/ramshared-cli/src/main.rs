@@ -13,10 +13,15 @@ use ramshared_cuda::Cuda;
 
 mod cascade;
 mod diagnose;
+mod monitor;
+mod workload;
+
+use monitor::MonitorOptions;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Status {
     Ok,
+    RequiresPrivilege,
     Fail,
 }
 
@@ -24,6 +29,7 @@ impl Status {
     fn as_str(self) -> &'static str {
         match self {
             Status::Ok => "ok",
+            Status::RequiresPrivilege => "requires-root",
             Status::Fail => "fail",
         }
     }
@@ -171,11 +177,14 @@ impl CheckReport {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum CliCommand {
+    Version,
+    Run { args: Vec<String> },
     Check { json: bool },
     Doctor { json: bool },
     Up { args: Vec<String> },
     Down,
     Status { json: bool },
+    Monitor { options: MonitorOptions },
     Diagnose { args: Vec<String> },
     Help,
 }
@@ -219,8 +228,21 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
     };
 
     match command.as_str() {
+        "version" | "-V" | "--version" => {
+            if options.is_empty() {
+                Ok(CliCommand::Version)
+            } else {
+                Err(CliParseError::InvalidOption {
+                    command: "version",
+                    options: options.to_vec(),
+                })
+            }
+        }
         "check" => Ok(CliCommand::Check {
             json: parse_json_option("check", options)?,
+        }),
+        "run" => Ok(CliCommand::Run {
+            args: options.to_vec(),
         }),
         "doctor" => Ok(CliCommand::Doctor {
             json: parse_json_option("doctor", options)?,
@@ -241,6 +263,12 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
         "status" => Ok(CliCommand::Status {
             json: parse_json_option("status", options)?,
         }),
+        "monitor" => Ok(CliCommand::Monitor {
+            options: MonitorOptions::parse(options).map_err(|_| CliParseError::InvalidOption {
+                command: "monitor",
+                options: options.to_vec(),
+            })?,
+        }),
         "diagnose" => Ok(CliCommand::Diagnose {
             args: options.to_vec(),
         }),
@@ -255,7 +283,19 @@ trait CliActionRunner {
     fn up(&mut self, args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
     fn down(&mut self, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
     fn status(&mut self, json: bool, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
+    fn monitor(
+        &mut self,
+        options: &MonitorOptions,
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
     fn diagnose(
+        &mut self,
+        args: &[String],
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
+    fn run_workload(
         &mut self,
         args: &[String],
         stdout: &mut dyn Write,
@@ -314,6 +354,15 @@ impl CliActionRunner for SystemCliActions {
         to_exit(cascade::status(json), stderr)
     }
 
+    fn monitor(
+        &mut self,
+        options: &MonitorOptions,
+        _stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        to_exit(monitor::run(options), stderr)
+    }
+
     fn diagnose(
         &mut self,
         args: &[String],
@@ -321,6 +370,15 @@ impl CliActionRunner for SystemCliActions {
         stderr: &mut dyn Write,
     ) -> ExitCode {
         to_exit(diagnose::run(args), stderr)
+    }
+
+    fn run_workload(
+        &mut self,
+        args: &[String],
+        _stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        to_exit(workload::run(args), stderr)
     }
 }
 
@@ -341,11 +399,17 @@ fn run_from_args<R: CliActionRunner>(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     match parse_cli_command(args) {
+        Ok(CliCommand::Version) => {
+            let _ = writeln!(stdout, "ramshared {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Ok(CliCommand::Run { args }) => actions.run_workload(&args, stdout, stderr),
         Ok(CliCommand::Check { json }) => actions.check(json, stdout, stderr),
         Ok(CliCommand::Doctor { json }) => actions.doctor(json, stdout, stderr),
         Ok(CliCommand::Up { args }) => actions.up(&args, stdout, stderr),
         Ok(CliCommand::Down) => actions.down(stdout, stderr),
         Ok(CliCommand::Status { json }) => actions.status(json, stdout, stderr),
+        Ok(CliCommand::Monitor { options }) => actions.monitor(&options, stdout, stderr),
         Ok(CliCommand::Diagnose { args }) => actions.diagnose(&args, stdout, stderr),
         Ok(CliCommand::Help) => {
             print_usage(stderr);
@@ -371,6 +435,11 @@ fn to_exit<E: fmt::Display>(r: Result<(), E>, stderr: &mut dyn Write) -> ExitCod
 
 fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(stderr, "usage:");
+    let _ = writeln!(stderr, "  ramshared --version");
+    let _ = writeln!(
+        stderr,
+        "  ramshared run --profile safe -- <command> [args...]"
+    );
     let _ = writeln!(stderr, "  ramshared check [--json]");
     let _ = writeln!(stderr, "  ramshared doctor [--json]");
     let _ = writeln!(stderr, "  ramshared diagnose --events PATH [--json]");
@@ -386,6 +455,10 @@ fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(
         stderr,
         "  ramshared status [--json]   # phase Armed/UsingVram/… + tiers"
+    );
+    let _ = writeln!(
+        stderr,
+        "  ramshared monitor [--jsonl] [--once] [--interval-ms N] [--history-seconds N]"
     );
     let _ = writeln!(
         stderr,
@@ -419,7 +492,7 @@ fn run_check() -> CheckReport {
     if cuda.status == Status::Fail {
         blockers.push(format!("CUDA unavailable: {}", cuda.detail));
     }
-    if backends.nbd_status == Status::Fail && backends.ublk_status == Status::Fail {
+    if backends.nbd_status != Status::Ok && backends.ublk_status != Status::Ok {
         blockers.push("no block backend is available without a custom kernel".to_string());
     }
     if kernel.swap != Some(KernelConfig::BuiltIn) {
@@ -615,6 +688,13 @@ fn probe_backends_with_env(kernel: &KernelFeatures, env: BackendEnv) -> BackendP
         && io_uring_runtime_enabled
     {
         Status::Ok
+    } else if ublk_enabled
+        && env.ublk_control_present
+        && !env.ublk_control_openable
+        && io_uring_enabled
+        && io_uring_runtime_enabled
+    {
+        Status::RequiresPrivilege
     } else {
         Status::Fail
     };
@@ -623,7 +703,7 @@ fn probe_backends_with_env(kernel: &KernelFeatures, env: BackendEnv) -> BackendP
     } else if !env.ublk_control_present {
         "/dev/ublk-control missing".to_string()
     } else if !env.ublk_control_openable {
-        "/dev/ublk-control not openable; run check as root".to_string()
+        "/dev/ublk-control present; elevated capability probe required".to_string()
     } else if !io_uring_enabled {
         "CONFIG_IO_URING disabled or unknown".to_string()
     } else if !io_uring_runtime_enabled {
@@ -1024,7 +1104,7 @@ fn recommendations_for(report: &CheckReport) -> Vec<String> {
 
     if report.decision() == Decision::Ready {
         recommendations.push(
-            "Environment ready for the next safe step: implement and run a CUDA smoke test without swap and with a small allocation"
+            "Environment ready for the bounded NBD preflight; keep pressure and boot activation disabled until status reports a guaranteed READY profile"
                 .to_string(),
         );
     } else {
@@ -1224,7 +1304,7 @@ impl fmt::Display for KernelConfig {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
 
@@ -1299,6 +1379,18 @@ mod tests {
             self.result()
         }
 
+        fn monitor(
+            &mut self,
+            options: &MonitorOptions,
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Monitor {
+                options: options.clone(),
+            });
+            self.result()
+        }
+
         fn diagnose(
             &mut self,
             args: &[String],
@@ -1306,6 +1398,18 @@ mod tests {
             _stderr: &mut dyn std::io::Write,
         ) -> ExitCode {
             self.calls.push(CliCommand::Diagnose {
+                args: args.to_vec(),
+            });
+            self.result()
+        }
+
+        fn run_workload(
+            &mut self,
+            args: &[String],
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Run {
                 args: args.to_vec(),
             });
             self.result()
@@ -1341,6 +1445,79 @@ mod tests {
                 "{args:?} must explain the refusal"
             );
         }
+    }
+
+    #[test]
+    fn version_is_public_and_side_effect_free() {
+        let mut actions = RecordingCliActions::default();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = run_from_args(
+            &cli_args(&["--version"]),
+            &mut actions,
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert!(actions.calls.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).expect("version output is UTF-8"),
+            format!("ramshared {}\n", env!("CARGO_PKG_VERSION"))
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn monitor_defaults_are_read_only_and_bounded() {
+        let command = parse_cli_command(&cli_args(&["monitor"])).expect("monitor parses");
+        assert_eq!(
+            command,
+            CliCommand::Monitor {
+                options: MonitorOptions {
+                    jsonl: false,
+                    interval_ms: 2_000,
+                    history_seconds: 300,
+                    output: None,
+                    heartbeat: None,
+                    once: false,
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn monitor_parses_machine_stream_outputs_without_mutation_flags() {
+        let command = parse_cli_command(&cli_args(&[
+            "monitor",
+            "--jsonl",
+            "--interval-ms",
+            "2500",
+            "--history-seconds",
+            "600",
+            "--output",
+            "/tmp/health.jsonl",
+            "--heartbeat",
+            "/tmp/heartbeat.json",
+            "--once",
+        ]))
+        .expect("monitor stream parses");
+        assert_eq!(
+            command,
+            CliCommand::Monitor {
+                options: MonitorOptions {
+                    jsonl: true,
+                    interval_ms: 2_500,
+                    history_seconds: 600,
+                    output: Some(PathBuf::from("/tmp/health.jsonl")),
+                    heartbeat: Some(PathBuf::from("/tmp/heartbeat.json")),
+                    once: true,
+                }
+            }
+        );
+
+        let error = parse_cli_command(&cli_args(&["monitor", "--activate"]))
+            .expect_err("monitor has no mutation controls");
+        assert!(matches!(error, CliParseError::InvalidOption { .. }));
     }
 
     #[test]
@@ -1491,10 +1668,10 @@ CONFIG_BLK_DEV_NBD=m\n\
             },
         );
 
-        assert_eq!(backends.ublk_status, Status::Fail);
+        assert_eq!(backends.ublk_status, Status::RequiresPrivilege);
         assert_eq!(
             backends.ublk_detail,
-            "/dev/ublk-control not openable; run check as root"
+            "/dev/ublk-control present; elevated capability probe required"
         );
     }
 
@@ -1508,7 +1685,7 @@ CONFIG_BLK_DEV_NBD=m\n\
 
     #[test]
     fn recommends_wsl_gpu_recovery_when_dxg_is_missing() {
-        let report = CheckReport {
+        let mut report = CheckReport {
             wsl: WslProbe {
                 status: Status::Ok,
                 release: "6.6.87.2-microsoft-standard-WSL2".to_string(),
@@ -1563,6 +1740,15 @@ CONFIG_BLK_DEV_NBD=m\n\
             recommendations
                 .iter()
                 .any(|item| item.contains("Do not run `ramshared start`"))
+        );
+
+        report.blockers.clear();
+        let ready = recommendations_for(&report);
+        assert!(ready.iter().all(|item| !item.contains("implement and run")));
+        assert!(
+            ready
+                .iter()
+                .any(|item| item.contains("bounded NBD preflight"))
         );
     }
 }
