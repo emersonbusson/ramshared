@@ -16,7 +16,7 @@
       "canonical_source": "README.md",
       "localized_path": "README.pt-BR.md",
       "source_sha256": "054fd07eb0e27db85a89fb9084a32ec80059ac058c532c6ff2261448b3ac407b",
-      "translation_sha256": "a2a59227ce5b2f9f5dd6b7c8d352db7c60dc3d1b780e145420c234c4af73cda1",
+      "translation_sha256": "e59c67d59373cdc1f7ec9fd28ff8595dc2faa81686db6da10f9b99a8601a5823",
       "state": "stale",
       "state_reason": "The canonical README changed after the last recorded review; no current human review receipt exists.",
       "policy": "informational-non-normative",
