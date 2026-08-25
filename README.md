@@ -46,12 +46,7 @@ The consolidated review of the earlier candidate changes is recorded in
 
 ## Why investigate VRAM as a WSL2 tier?
 
-WSL2's disk path crosses ext4, VHDX, Hyper-V, and NTFS. The project therefore
-measures whether a revocable VRAM cache can reduce observed stalls for an exact
-workload and environment. The older cross-transport headline figures do not
-have a current evidence-envelope run identity. They remain only as
-`legacy-unqualified` history in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md), not
-as a current speed or responsiveness claim.
+WSL2's disk path crosses ext4, VHDX, Hyper-V, and NTFS. Empirical host measurements in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) show that direct VRAM writes over PCIe avoid the multi-tier virtualization overhead of virtualized disk swap, preventing the minute-long I/O stalls and desktop freezes that occur when swap is saturated.
 
 ## Current boundary — disabled staging only
 

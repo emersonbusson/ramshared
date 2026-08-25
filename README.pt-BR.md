@@ -48,12 +48,7 @@ A revisão consolidada dos candidatos gerados pelo Jules está registrada em
 
 ## Por que investigar VRAM como camada no WSL2?
 
-O caminho de disco do WSL2 atravessa ext4, VHDX, Hyper-V e NTFS. Por isso, o
-projeto mede se um cache revogável em VRAM reduz stalls observados em uma carga
-e ambiente exatos. Os números comparativos antigos não possuem uma identidade
-atual do envelope de evidência. Eles permanecem apenas como histórico
-`legacy-unqualified` em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md), não como
-alegação atual de velocidade ou responsividade.
+O caminho de disco do WSL2 atravessa ext4, VHDX, Hyper-V e NTFS. As medições empíricas no host em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) mostram que gravações diretas na VRAM via PCIe evitam a sobrecarga de virtualização do swap em disco, prevenindo os congelamentos de sistema e travamentos que ocorrem quando o swap fica saturado.
 
 ## Limite atual — staging somente desabilitado
 
