@@ -2131,4 +2131,131 @@ CONFIG_BLK_DEV_NBD=m\n\
         stderr.clear();
         let _ = actions.doctor(false, &mut stdout, &mut stderr);
     }
+
+    #[test]
+    fn probe_backends_permutations_cover_all_branches() {
+        let kernel_none = KernelFeatures {
+            config_source: None,
+            swap: None,
+            io_uring: None,
+            io_uring_runtime: None,
+            nbd: None,
+            ublk: None,
+            zram: None,
+        };
+        let probe = probe_backends_with_env(
+            &kernel_none,
+            BackendEnv {
+                nbd_device_present: false,
+                nbd_module_loaded: false,
+                ublk_control_present: false,
+                ublk_control_openable: false,
+            },
+        );
+        assert_eq!(probe.nbd_status, Status::Fail);
+        assert_eq!(probe.ublk_status, Status::Fail);
+
+        let kernel_all = KernelFeatures {
+            config_source: Some("/boot/config".to_string()),
+            swap: Some(KernelConfig::BuiltIn),
+            io_uring: Some(KernelConfig::BuiltIn),
+            io_uring_runtime: Some(IoUringRuntime::Enabled),
+            nbd: Some(KernelConfig::BuiltIn),
+            ublk: Some(KernelConfig::BuiltIn),
+            zram: Some(KernelConfig::BuiltIn),
+        };
+        let probe_loaded = probe_backends_with_env(
+            &kernel_all,
+            BackendEnv {
+                nbd_device_present: false,
+                nbd_module_loaded: true,
+                ublk_control_present: true,
+                ublk_control_openable: true,
+            },
+        );
+        assert_eq!(probe_loaded.nbd_status, Status::Ok);
+        assert_eq!(probe_loaded.nbd_detail, "module-loaded-no-device");
+        assert_eq!(probe_loaded.ublk_status, Status::Ok);
+
+        let probe_missing_dev = probe_backends_with_env(
+            &kernel_all,
+            BackendEnv {
+                nbd_device_present: false,
+                nbd_module_loaded: false,
+                ublk_control_present: false,
+                ublk_control_openable: false,
+            },
+        );
+        assert_eq!(probe_missing_dev.nbd_detail, "module-not-loaded");
+        assert_eq!(probe_missing_dev.ublk_detail, "/dev/ublk-control missing");
+    }
+
+    #[test]
+    fn text_and_json_report_edge_cases_render_without_panics() {
+        let minimal_report = CheckReport {
+            wsl: WslProbe {
+                status: Status::Fail,
+                release: String::new(),
+                version: String::new(),
+            },
+            swaps: Vec::new(),
+            kernel: KernelFeatures {
+                config_source: None,
+                swap: None,
+                io_uring: None,
+                io_uring_runtime: None,
+                nbd: None,
+                ublk: None,
+                zram: None,
+            },
+            cuda: CudaProbe {
+                status: Status::Fail,
+                libcuda_path: None,
+                dxg_present: false,
+                nvidia_smi_path: None,
+                nvidia_smi_status: None,
+                nvidia_smi_output: None,
+                gpu: None,
+                detail: "cuda missing".to_string(),
+            },
+            backends: BackendProbe {
+                nbd_status: Status::Fail,
+                nbd_detail: "none".to_string(),
+                ublk_status: Status::Fail,
+                ublk_detail: "none".to_string(),
+            },
+            blockers: vec!["blocker 1".to_string()],
+            warnings: vec!["warning 1".to_string()],
+        };
+
+        let mut buf = Vec::new();
+        print_text_report(&minimal_report, &mut buf).expect("minimal text report renders");
+        let json = render_json(&minimal_report);
+        assert!(json.contains("\"decision\":\"blocked\""));
+
+        let recs = recommendations_for(&minimal_report);
+        assert!(recs.iter().any(|r| r.contains("bare-metal Linux")));
+        assert!(recs.iter().any(|r| r.contains("wsl --update")));
+    }
+
+    #[test]
+    fn format_and_command_helpers_execute_correctly() {
+        assert_eq!(bytes_to_mib(2 * 1024 * 1024), 2);
+        assert_eq!(kib_to_mib(4 * 1024), 4);
+        assert_eq!(config_text(None), "unknown");
+        assert_eq!(config_text(Some(KernelConfig::Module)), "m");
+        assert_eq!(io_uring_runtime_text(None), "unknown");
+        assert_eq!(io_uring_runtime_text(Some(IoUringRuntime::Restricted)), "1");
+        assert_eq!(json_io_uring_runtime(None), "null");
+        assert_eq!(json_io_uring_runtime(Some(IoUringRuntime::Enabled)), "0");
+        assert_eq!(one_line("  hello \n \t world  "), "hello world");
+        assert_eq!(format!("{}", KernelConfig::BuiltIn), "y");
+
+        let out = command_stdout("echo", &["test_probe_cmd"]);
+        assert!(out.is_some_and(|s| s.contains("test_probe_cmd")));
+        let fail_out = command_stdout("false", &[]);
+        assert!(fail_out.is_none());
+
+        let _ = run_check();
+    }
 }
