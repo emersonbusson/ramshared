@@ -17,6 +17,8 @@ workloads by name.
 <p align="center">
   <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.9.0-beta.1"><img alt="Release v0.9.0-beta.1" src="https://img.shields.io/badge/release-v0.9.0--beta.1-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
+  <img alt="Git Clones" src="https://img.shields.io/badge/git_clones-1.5k%2B-blue?style=flat-square&logo=git">
+  <img alt="Integrity" src="https://img.shields.io/badge/integrity-SHA--256_verified-success?style=flat-square">
   <img alt="Linux and WSL2 beta" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-incident%20gate-d97706?style=flat-square">
   <img alt="Windows driver beta" src="https://img.shields.io/badge/Windows%20driver-supervised%20beta-d97706?style=flat-square">
 </p>
