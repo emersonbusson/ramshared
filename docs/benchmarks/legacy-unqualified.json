@@ -33,6 +33,12 @@
       "run_id": "windows-autonomous-product-20260725-0928",
       "qualified": false,
       "reason": "The old JSONL row predates v1 source, fingerprint, artifact-hash, refusal, and cleanup fields."
+    },
+    {
+      "id": "legacy-2026-08-25-pcie-bandwidth-vs-ssd-and-host-pressure",
+      "benchmark_id": "2026-08-25-pcie-bandwidth-vs-ssd-and-host-pressure",
+      "qualified": false,
+      "reason": "Direct live host memory and PCIe/SSD exploratory benchmark; formal regression comparison requires an attended sealed matrix."
     }
   ]
 }
