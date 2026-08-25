@@ -30,6 +30,15 @@ PRDs, SPECs, ADRs, and agent rules describe the **final** primary path, not comp
 - Mark backfill / dual-path as exception with reason, removal deadline, rollback, evidence
 - Do not document shims as first-class implementation tasks without that exception
 
+## Objective engineering prose
+
+Current product and architecture documentation describes behavior, contracts,
+risks, evidence, and residual gaps. It does not advertise which assistant or
+authoring process produced a change. Agent names belong only in orchestration
+rules or immutable historical provenance where identity is itself evidence.
+Prefer exact test names, revisions, measurements, and failure conditions over
+promotional claims or process narration.
+
 ## Change → document map
 
 | Change | Update in the same commit/PR |

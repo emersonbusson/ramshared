@@ -97,7 +97,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         )
     }
 
-    /// Compatibility wrapper for callers that supply every safety boundary.
+    /// Convenience constructor for callers that supply every safety boundary.
     pub fn new_with_limits_and_gate(
         provider: &'p P,
         capacity: u64,
@@ -315,7 +315,7 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
         self.block_size
     }
 
-    fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
+    fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
         if buf.is_empty() {
             return Ok(());
         }
@@ -402,18 +402,6 @@ pub fn chunk_bytes_from_env() -> u64 {
         .unwrap_or(DEFAULT_CHUNK_MIB)
         .clamp(16, 512);
     mib.saturating_mul(1024 * 1024)
-}
-
-/// Product default: commit the complete advertised block capacity. Sparse
-/// allocation is an explicit lab-only experiment because a late allocation
-/// refusal cannot be represented as a safe swap fallback.
-pub fn prealloc_enabled() -> bool {
-    !matches!(
-        std::env::var("RAMSHARED_VRAM_SPARSE_EXPERIMENTAL")
-            .map(|s| s.to_ascii_lowercase())
-            .as_deref(),
-        Ok("1") | Ok("true") | Ok("yes") | Ok("on")
-    )
 }
 
 /// Idle free hysteresis seconds.
@@ -535,7 +523,7 @@ mod tests {
     #[test]
     fn read_empty_is_zeros_without_alloc() {
         let p = FakeProvider::new();
-        let be = SparseVramBackend::new(&p, 1024 * 1024, 256 * 1024, 4096).unwrap();
+        let mut be = SparseVramBackend::new(&p, 1024 * 1024, 256 * 1024, 4096).unwrap();
         let mut buf = [0xAAu8; 8192];
         be.read_at(0, &mut buf).unwrap();
         assert_eq!(buf, [0u8; 8192]);
@@ -769,11 +757,6 @@ mod tests {
         if std::env::var("RAMSHARED_VRAM_CHUNK_MIB").is_err() {
             let b = chunk_bytes_from_env();
             assert!(b >= 16 * 1024 * 1024);
-        }
-        if std::env::var("RAMSHARED_VRAM_PREALLOC").is_err()
-            && std::env::var("RAMSHARED_VRAM_SPARSE_EXPERIMENTAL").is_err()
-        {
-            assert!(prealloc_enabled());
         }
         if std::env::var("RAMSHARED_VRAM_IDLE_FREE_SEC").is_err() {
             assert_eq!(idle_free_secs_from_env(), 30);

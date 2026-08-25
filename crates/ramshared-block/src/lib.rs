@@ -11,6 +11,8 @@
 
 pub mod handshake;
 pub mod inflight;
+pub mod isolated_origin;
+pub mod origin_cache;
 pub mod protocol;
 pub mod request;
 pub mod sparse_vram;
@@ -18,11 +20,21 @@ pub mod vram_backend;
 
 pub use handshake::{HandshakeError, server_handshake};
 pub use inflight::Inflight;
+pub use isolated_origin::{
+    AuthoritativeOriginBackend, BestEffortCache, BoundedCacheClient, CacheMutation, CacheRead,
+    DisabledCache, IsolatedCacheControl, IsolatedCacheRequest, IsolatedCacheWorker,
+    isolated_cache_channel,
+};
+pub use origin_cache::{
+    CachePolicyOutcome, CacheState, CacheTelemetry, FileOrigin, GpuSample,
+    ORIGIN_CACHE_CHUNK_BYTES, OriginState, OriginStorage, WriteThroughCacheBackend,
+    physical_target_bytes,
+};
 pub use protocol::{Command, ProtocolError, Request, encode_simple_reply, parse_request};
-pub use request::{BlockBackend, IoError, ServeOutcome, serve};
+pub use request::{BlockBackend, IoError, ServeOutcome, WriteOptions, serve};
 pub use sparse_vram::{
     CommitBudgetGate, DEFAULT_CHUNK_MIB, SparseVramBackend, chunk_bytes_from_env,
-    commit_cap_bytes_from_env, idle_free_secs_from_env, prealloc_enabled,
-    reserve_floor_bytes_from_env, safe_commit_cap,
+    commit_cap_bytes_from_env, idle_free_secs_from_env, reserve_floor_bytes_from_env,
+    safe_commit_cap,
 };
 pub use vram_backend::VramBackend;

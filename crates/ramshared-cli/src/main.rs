@@ -11,12 +11,18 @@ use std::process::{Command, ExitCode};
 
 use ramshared_cuda::Cuda;
 
+mod bounded_process;
 mod cascade;
 mod diagnose;
 mod monitor;
+mod supervisor;
 mod workload;
 
 use monitor::MonitorOptions;
+
+const PROBE_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const KERNEL_CONFIG_OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
+const NVIDIA_SMI_OUTPUT_LIMIT: usize = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Status {
@@ -179,6 +185,9 @@ impl CheckReport {
 enum CliCommand {
     Version,
     Run { args: Vec<String> },
+    Session { args: Vec<String> },
+    Supervise { args: Vec<String> },
+    Recover { resume: bool },
     Check { json: bool },
     Doctor { json: bool },
     Up { args: Vec<String> },
@@ -244,6 +253,29 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
         "run" => Ok(CliCommand::Run {
             args: options.to_vec(),
         }),
+        "session" => Ok(CliCommand::Session {
+            args: options.to_vec(),
+        }),
+        "supervise" => {
+            if options.is_empty() || matches!(options, [option] if option == "--once") {
+                Ok(CliCommand::Supervise {
+                    args: options.to_vec(),
+                })
+            } else {
+                Err(CliParseError::InvalidOption {
+                    command: "supervise",
+                    options: options.to_vec(),
+                })
+            }
+        }
+        "recover" => match options {
+            [option] if option == "--status" => Ok(CliCommand::Recover { resume: false }),
+            [option] if option == "--resume" => Ok(CliCommand::Recover { resume: true }),
+            _ => Err(CliParseError::InvalidOption {
+                command: "recover",
+                options: options.to_vec(),
+            }),
+        },
         "doctor" => Ok(CliCommand::Doctor {
             json: parse_json_option("doctor", options)?,
         }),
@@ -301,6 +333,20 @@ trait CliActionRunner {
         stdout: &mut dyn Write,
         stderr: &mut dyn Write,
     ) -> ExitCode;
+    fn session(
+        &mut self,
+        args: &[String],
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
+    fn supervise(
+        &mut self,
+        args: &[String],
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
+    fn recover(&mut self, resume: bool, stdout: &mut dyn Write, stderr: &mut dyn Write)
+    -> ExitCode;
 }
 
 struct SystemCliActions;
@@ -380,6 +426,45 @@ impl CliActionRunner for SystemCliActions {
     ) -> ExitCode {
         to_exit(workload::run(args), stderr)
     }
+
+    fn session(
+        &mut self,
+        args: &[String],
+        _stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        to_exit(workload::session(args), stderr)
+    }
+
+    fn supervise(
+        &mut self,
+        args: &[String],
+        _stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        to_exit(supervisor::run(args), stderr)
+    }
+
+    fn recover(
+        &mut self,
+        resume: bool,
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        if resume {
+            return to_exit(workload::recover_resume(), stderr);
+        }
+        match workload::recover_status() {
+            Ok(status) => match writeln!(stdout, "{status}") {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    let _ = writeln!(stderr, "failed to write recovery status: {error}");
+                    ExitCode::from(1)
+                }
+            },
+            Err(error) => to_exit::<String>(Err(error), stderr),
+        }
+    }
 }
 
 fn main() -> ExitCode {
@@ -404,6 +489,9 @@ fn run_from_args<R: CliActionRunner>(
             ExitCode::SUCCESS
         }
         Ok(CliCommand::Run { args }) => actions.run_workload(&args, stdout, stderr),
+        Ok(CliCommand::Session { args }) => actions.session(&args, stdout, stderr),
+        Ok(CliCommand::Supervise { args }) => actions.supervise(&args, stdout, stderr),
+        Ok(CliCommand::Recover { resume }) => actions.recover(resume, stdout, stderr),
         Ok(CliCommand::Check { json }) => actions.check(json, stdout, stderr),
         Ok(CliCommand::Doctor { json }) => actions.doctor(json, stdout, stderr),
         Ok(CliCommand::Up { args }) => actions.up(&args, stdout, stderr),
@@ -438,8 +526,14 @@ fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(stderr, "  ramshared --version");
     let _ = writeln!(
         stderr,
-        "  ramshared run --profile safe -- <command> [args...]"
+        "  ramshared run --class <interactive|build|browser-test|batch> [--memory-max MiB] -- <command> [args...]"
     );
+    let _ = writeln!(
+        stderr,
+        "  ramshared session --class <class> [--memory-max MiB]"
+    );
+    let _ = writeln!(stderr, "  ramshared supervise [--once]");
+    let _ = writeln!(stderr, "  ramshared recover --status|--resume");
     let _ = writeln!(stderr, "  ramshared check [--json]");
     let _ = writeln!(stderr, "  ramshared doctor [--json]");
     let _ = writeln!(stderr, "  ramshared diagnose --events PATH [--json]");
@@ -580,7 +674,15 @@ fn read_kernel_config(release: &str) -> (Option<String>, Option<String>) {
 
     let proc_config = Path::new("/proc/config.gz");
     if proc_config.exists() {
-        match Command::new("zcat").arg("--").arg(proc_config).output() {
+        let mut command = Command::new("zcat");
+        command.arg("--").arg(proc_config);
+        match bounded_process::run_capture_command(
+            &mut command,
+            "zcat /proc/config.gz",
+            PROBE_COMMAND_TIMEOUT,
+            KERNEL_CONFIG_OUTPUT_LIMIT,
+            |_| {},
+        ) {
             Ok(output) if output.status.success() => {
                 let text = String::from_utf8_lossy(&output.stdout).into_owned();
                 return (Some("/proc/config.gz".to_string()), Some(text));
@@ -843,7 +945,14 @@ fn run_nvidia_smi() -> (Option<PathBuf>, Option<i32>, Option<String>) {
             continue;
         }
 
-        if let Ok(output) = Command::new(&candidate).output() {
+        let mut command = Command::new(&candidate);
+        if let Ok(output) = bounded_process::run_capture_command(
+            &mut command,
+            &format!("{} probe", candidate.display()),
+            PROBE_COMMAND_TIMEOUT,
+            NVIDIA_SMI_OUTPUT_LIMIT,
+            |_| {},
+        ) {
             let mut combined = String::new();
             combined.push_str(&String::from_utf8_lossy(&output.stdout));
             combined.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -1056,7 +1165,7 @@ fn recommendations_for(report: &CheckReport) -> Vec<String> {
 
     if !report.cuda.dxg_present {
         recommendations.push(
-            "On Windows, update WSL with `wsl --update`; then run `wsl --shutdown` when you can interrupt the distro"
+            "On Windows, update WSL with `wsl --update`; then use `wsl --terminate Ubuntu-24.04` when you can interrupt this distro"
                 .to_string(),
         );
         recommendations.push(
@@ -1254,7 +1363,16 @@ fn read_to_string(path: impl AsRef<Path>) -> Option<String> {
 }
 
 fn command_stdout(command: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(command).args(args).output().ok()?;
+    let mut command = Command::new(command);
+    command.args(args);
+    let output = bounded_process::run_capture_command(
+        &mut command,
+        "CLI probe",
+        PROBE_COMMAND_TIMEOUT,
+        bounded_process::DEFAULT_OUTPUT_LIMIT,
+        |_| {},
+    )
+    .ok()?;
     if output.status.success() {
         Some(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
@@ -1414,10 +1532,59 @@ mod tests {
             });
             self.result()
         }
+
+        fn session(
+            &mut self,
+            args: &[String],
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Session {
+                args: args.to_vec(),
+            });
+            self.result()
+        }
+
+        fn supervise(
+            &mut self,
+            args: &[String],
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Supervise {
+                args: args.to_vec(),
+            });
+            self.result()
+        }
+
+        fn recover(
+            &mut self,
+            resume: bool,
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Recover { resume });
+            self.result()
+        }
     }
 
     fn cli_args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
+    }
+
+    #[test]
+    fn parser_and_state_variants_cover_fail_closed_edges() {
+        assert_eq!(Status::Fail.as_str(), "fail");
+        assert_eq!(Decision::Blocked.as_str(), "blocked");
+        assert_eq!(KernelConfig::Disabled.as_str(), "n");
+        assert_eq!(IoUringRuntime::Restricted.as_sysctl_value(), 1);
+        assert_eq!(parse_cli_command(&[]).unwrap(), CliCommand::Help);
+        assert!(parse_cli_command(&cli_args(&["version", "extra"])).is_err());
+        assert!(parse_cli_command(&cli_args(&["supervise", "--bad"])).is_err());
+        assert_eq!(
+            parse_cli_command(&cli_args(&["down"])).unwrap(),
+            CliCommand::Down
+        );
     }
 
     #[test]
@@ -1475,7 +1642,8 @@ mod tests {
             CliCommand::Monitor {
                 options: MonitorOptions {
                     jsonl: false,
-                    interval_ms: 2_000,
+                    compact: false,
+                    interval_ms: 1_000,
                     history_seconds: 300,
                     output: None,
                     heartbeat: None,
@@ -1506,6 +1674,7 @@ mod tests {
             CliCommand::Monitor {
                 options: MonitorOptions {
                     jsonl: true,
+                    compact: false,
                     interval_ms: 2_500,
                     history_seconds: 600,
                     output: Some(PathBuf::from("/tmp/health.jsonl")),
@@ -1566,6 +1735,46 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn public_control_commands_parse_exactly() {
+        assert_eq!(
+            parse_cli_command(&cli_args(&[
+                "run",
+                "--class",
+                "build",
+                "--memory-max",
+                "4096",
+                "--",
+                "make"
+            ]))
+            .unwrap(),
+            CliCommand::Run {
+                args: cli_args(&["--class", "build", "--memory-max", "4096", "--", "make"])
+            }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&["session", "--class", "interactive"])).unwrap(),
+            CliCommand::Session {
+                args: cli_args(&["--class", "interactive"])
+            }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&["supervise", "--once"])).unwrap(),
+            CliCommand::Supervise {
+                args: cli_args(&["--once"])
+            }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&["recover", "--status"])).unwrap(),
+            CliCommand::Recover { resume: false }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&["recover", "--resume"])).unwrap(),
+            CliCommand::Recover { resume: true }
+        );
+        assert!(parse_cli_command(&cli_args(&["recover", "--force"])).is_err());
     }
 
     #[test]

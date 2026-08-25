@@ -1,7 +1,7 @@
 //! NBD request dispatch → [`BlockBackend`], with §8 validation
 //! (block size alignment, range check) and error mapping → NBD errno.
 
-use crate::protocol::{Command, Request, SIMPLE_REPLY_LEN, encode_simple_reply};
+use crate::protocol::{Command, NBD_CMD_FLAG_FUA, Request, SIMPLE_REPLY_LEN, encode_simple_reply};
 
 // errno in simple reply (error field).
 pub const NBD_OK: u32 = 0;
@@ -12,13 +12,30 @@ pub const NBD_EINVAL: u32 = 22;
 #[derive(Debug)]
 pub struct IoError(pub String);
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WriteOptions {
+    pub fua: bool,
+}
+
 /// Storage behind the NBD device (VRAM, in our case).
 pub trait BlockBackend {
     fn size_bytes(&self) -> u64;
     /// Logical block size (multiple of 512; 4096 in the MVP — SPEC §8).
     fn block_size(&self) -> u32;
-    fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<(), IoError>;
+    fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError>;
     fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError>;
+    fn write_at_with_options(
+        &mut self,
+        off: u64,
+        data: &[u8],
+        options: WriteOptions,
+    ) -> Result<(), IoError> {
+        self.write_at(off, data)?;
+        if options.fua {
+            self.flush()?;
+        }
+        Ok(())
+    }
     fn flush(&mut self) -> Result<(), IoError>;
 }
 
@@ -50,6 +67,17 @@ fn validate<B: BlockBackend + ?Sized>(req: &Request, backend: &B) -> Result<(), 
     }
 }
 
+fn validate_command_flags(req: &Request) -> Result<WriteOptions, u32> {
+    match req.cmd {
+        Command::Write if req.flags & !NBD_CMD_FLAG_FUA == 0 => Ok(WriteOptions {
+            fua: req.flags & NBD_CMD_FLAG_FUA != 0,
+        }),
+        Command::Write => Err(NBD_EINVAL),
+        _ if req.flags == 0 => Ok(WriteOptions::default()),
+        _ => Err(NBD_EINVAL),
+    }
+}
+
 /// Dispatches an already parsed request. `payload` is the WRITE data (empty for
 /// others). Does no socket I/O — only logic (testable without root).
 pub fn serve<B: BlockBackend + ?Sized>(
@@ -62,6 +90,11 @@ pub fn serve<B: BlockBackend + ?Sized>(
         reply: reply(error),
         read_data: Vec::new(),
         disconnect: false,
+    };
+
+    let options = match validate_command_flags(req) {
+        Ok(options) => options,
+        Err(error) => return plain(error),
     };
 
     match req.cmd {
@@ -94,7 +127,9 @@ pub fn serve<B: BlockBackend + ?Sized>(
             if payload.len() != req.len as usize {
                 return plain(NBD_EINVAL);
             }
-            plain(errno_of(backend.write_at(req.offset, payload)))
+            plain(errno_of(
+                backend.write_at_with_options(req.offset, payload, options),
+            ))
         }
     }
 }
@@ -116,7 +151,7 @@ mod tests {
         fn block_size(&self) -> u32 {
             self.bs
         }
-        fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
+        fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
             let o = off as usize;
             buf.copy_from_slice(&self.data[o..o + buf.len()]);
             Ok(())
@@ -127,6 +162,36 @@ mod tests {
             Ok(())
         }
         fn flush(&mut self) -> Result<(), IoError> {
+            Ok(())
+        }
+    }
+
+    struct CountingBackend {
+        writes: usize,
+        flushes: usize,
+    }
+
+    impl BlockBackend for CountingBackend {
+        fn size_bytes(&self) -> u64 {
+            4096
+        }
+
+        fn block_size(&self) -> u32 {
+            4096
+        }
+
+        fn read_at(&mut self, _off: u64, buf: &mut [u8]) -> Result<(), IoError> {
+            buf.fill(0);
+            Ok(())
+        }
+
+        fn write_at(&mut self, _off: u64, _data: &[u8]) -> Result<(), IoError> {
+            self.writes += 1;
+            Ok(())
+        }
+
+        fn flush(&mut self) -> Result<(), IoError> {
+            self.flushes += 1;
             Ok(())
         }
     }
@@ -207,5 +272,53 @@ mod tests {
         };
         let r = serve(&req(Command::Disc, 0, 0), &[], &mut b);
         assert!(r.disconnect);
+    }
+
+    #[test]
+    fn unknown_write_flags_refuse_before_mutation() {
+        let mut backend = CountingBackend {
+            writes: 0,
+            flushes: 0,
+        };
+        let mut request = req(Command::Write, 0, 4096);
+        request.flags = 1 << 15;
+
+        let outcome = serve(&request, &[0; 4096], &mut backend);
+
+        assert_eq!(
+            u32::from_be_bytes([
+                outcome.reply[4],
+                outcome.reply[5],
+                outcome.reply[6],
+                outcome.reply[7],
+            ]),
+            NBD_EINVAL
+        );
+        assert_eq!(backend.writes, 0);
+        assert_eq!(backend.flushes, 0);
+    }
+
+    #[test]
+    fn fua_write_reaches_backend_flush_before_success() {
+        let mut backend = CountingBackend {
+            writes: 0,
+            flushes: 0,
+        };
+        let mut request = req(Command::Write, 0, 4096);
+        request.flags = NBD_CMD_FLAG_FUA;
+
+        let outcome = serve(&request, &[0; 4096], &mut backend);
+
+        assert_eq!(
+            u32::from_be_bytes([
+                outcome.reply[4],
+                outcome.reply[5],
+                outcome.reply[6],
+                outcome.reply[7],
+            ]),
+            NBD_OK
+        );
+        assert_eq!(backend.writes, 1);
+        assert_eq!(backend.flushes, 1);
     }
 }
