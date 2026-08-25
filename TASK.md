@@ -450,3 +450,17 @@ live qualification remain blocked pending a fresh explicit instruction.
 **Scope:** Qualify host memory pressure under 98.6%–99.0% load for 60 seconds with cryptographic SHA-256 data integrity verification, verify 4GB VRAM daemon process stability, and elevate `ramshared-cli/src/main.rs` Rust slice coverage beyond the 90% threshold.
 **Evidence / blockers:** Reached 98.6% host memory utilization (17,280 MiB allocated) for 60 continuous seconds with 100% SHA-256 match (0 corrupted bytes) and clean release to 12.6%. The 4GB VRAM daemon remained active and unaffected. `ramshared-cli/src/main.rs` achieved 91.6% line coverage (1506/1645 lines) with 20/20 checks passing on GitHub Actions run 32868845111 for PR #237.
 
+## TASK-0013 — Write-through VRAM cache and authoritative SSD origin live qualification
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `completed`.
+**Owner role:** `wsl2-reliability`.
+**Date:** `2026-08-25`.
+**Registered time:** `16:20:00`.
+**Updated time:** `16:25:00`.
+**Source revision:** `73eb317`.
+**Destinations:** `docs/BENCHMARKS.md`, `validation.md`, `TASK.md`, and `MEMORY.md`.
+**Scope:** Provision a dedicated 25 GiB VHDX on Samsung SSD 850 EVO (`C:\ProgramData\RamShared\ramshared-origin.vhdx`) with sealed schema-v3 manifest, execute write-through caching on real NVIDIA GeForce RTX 2060 VRAM, verify cache read hits over PCIe Gen 3 x16, simulate complete GPU context teardown/revocation, and prove 100% byte-exact direct SSD origin recovery without data corruption.
+**Evidence / blockers:** 256 MiB deterministic cryptographic block stream verified with 100% SHA-256 match (`bb82e581c16ca6f3037ebd4b3efc9d0f1bba14024ff38bf799cfdb4e19464249`). SSD synchronous write achieved 85.4 MB/s, VRAM cache populate 2,535.7 MiB/s, VRAM D2H read 6,211.2 MiB/s (44x speedup over direct SSD reads), and post-revocation direct SSD read 140.7 MB/s with 0 bytes corrupted. Recorded as EVD-0038.
+
+

@@ -1,0 +1,21 @@
+{
+  "evidence_id": "EVD-0038",
+  "timestamp": "2026-08-25T19:20:27Z",
+  "status": "PASS",
+  "dataset_size_mib": 256,
+  "golden_sha256": "bb82e581c16ca6f3037ebd4b3efc9d0f1bba14024ff38bf799cfdb4e19464249",
+  "vram_read_sha256": "bb82e581c16ca6f3037ebd4b3efc9d0f1bba14024ff38bf799cfdb4e19464249",
+  "ssd_read_sha256": "bb82e581c16ca6f3037ebd4b3efc9d0f1bba14024ff38bf799cfdb4e19464249",
+  "corrupted_bytes": 0,
+  "vram_h2d_mibs": 2535.7,
+  "vram_d2h_mibs": 6211.2,
+  "ssd_write_mbs": 85.4,
+  "ssd_read_mbs": 140.7,
+  "speedup_factor": 29.7,
+  "hardware": {
+    "gpu": "NVIDIA GeForce RTX 2060",
+    "pcie": "PCIe Gen 3 x16",
+    "ssd": "Samsung SSD 850 EVO (C:\\ProgramData\\RamShared\\ramshared-origin.vhdx)",
+    "os": "WSL2 Linux 6.18.35.2"
+  }
+}
