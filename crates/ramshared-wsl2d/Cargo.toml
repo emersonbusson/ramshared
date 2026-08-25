@@ -2,6 +2,7 @@
 name = "ramshared-wsl2d"
 version = "0.1.0"
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
@@ -26,6 +27,8 @@ ramshared-integrity = { path = "../ramshared-integrity" }
 ramshared-uring = { path = "../ramshared-uring" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.11"
+rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [lints.clippy]
 unwrap_used = "deny"

@@ -596,6 +596,7 @@ dependencies = [
  "ramshared-cuda",
  "ramshared-tier",
  "ratatui",
+ "rustix",
  "serde",
  "serde_json",
 ]
@@ -692,8 +693,10 @@ dependencies = [
  "ramshared-uring",
  "ramshared-vram",
  "ramshared-vulkan",
+ "rustix",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
