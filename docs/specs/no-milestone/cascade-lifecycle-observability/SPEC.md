@@ -318,6 +318,11 @@ Exception: `RAMSHARED_STATUS_LEGACY=1` only as temporary kill-switch with remova
 
 **Cover gate (canonical):**
 
+This is the single pure-line owner for `cascade/lifecycle.rs`, `cascade/mod.rs`,
+and the CLI dispatch in `main.rs`. Later incident SPECs may require additional
+named tests on those sources as evidence, but do not duplicate their line
+coverage ownership.
+
 ```bash
 node tools/ci/check-rust-slice-coverage.mjs \
   -p ramshared-cli \

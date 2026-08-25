@@ -2,6 +2,10 @@
 
 Terse summary for Codex/aider/Jules-style CLIs. For full guidance, read `CLAUDE.md` and `README.md`.
 
+## Global resource contract
+
+Obey the workspace-level resource contract in the parent workspace `AGENTS.md`: at most one heavy build may run at a time through GuardWSL; tests/checks always run directly and are never blocked by the build lock; disk cleanup remains independent of build admission.
+
 ## Repo purpose
 
 `ramshared` is the main R&D repository for hardware acceleration, vRAM-as-RAM (NUMA), and low-level kernel drivers.
@@ -28,7 +32,9 @@ The source of truth for architecture and coding rules is:
 
 ### Language
 
-- **English** across the project: source (`.rs`, `.h`, `.c`), comments, structural docs (`README.md`, `ARCHITECTURE.md`, `docs/**` except locale-specific marketing posts), commit titles, and pull requests.
+- **English** across the project: source (`.rs`, `.h`, `.c`), comments,
+  structural docs (`README.md`, `ARCHITECTURE.md`, `docs/**` except
+  locale-specific marketing posts), commits, pull requests, and issues.
 
 ### Scope
 

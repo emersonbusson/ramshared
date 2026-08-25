@@ -27,7 +27,7 @@ Transport for VRAM tier on WSL2 remains **NBD** (Day-1). **ublk** is available i
 | --- | --- |
 | Priorities in `ramshared_tier` / `up` | Confirmed codebase |
 | `ramsharedd --transport ublk` exists | Confirmed codebase |
-| `guard_not_wsl2()` blocks ublk on WSL2 unless `RAMSHARED_ALLOW_UBLK_ON_WSL2=1` | Confirmed codebase |
+| `guard_not_wsl2()` blocks standalone ublk on WSL2 without an override path | Confirmed codebase |
 | Freeze risk on bad ublk teardown | Confirmed docs / incident |
 | Custom kernel has UBLK=m + modules.vhdx live | Confirmed environment |
 | Boot unit `install-cascade-boot.sh --enable` | Confirmed codebase |
@@ -38,7 +38,7 @@ Transport for VRAM tier on WSL2 remains **NBD** (Day-1). **ublk** is available i
 | --- | --- |
 | Product VRAM tier = **NBD** on WSL2 | **GO** |
 | `transport=auto` → NBD on WSL2, log why | **GO** |
-| Wire full ublk into `ramshared up` on WSL2 now | **NO-GO** without new AUDIT-2.5 proving teardown |
+| Wire full ublk into `ramshared up` on WSL2 | **NO-GO permanente; sem override** |
 | Enable cascade on boot (systemd) | **GO** |
 | Prefer ublk on bare-metal/non-WSL when control present | **Future** (SPEC when implementing) |
 
@@ -51,10 +51,11 @@ Transport for VRAM tier on WSL2 remains **NBD** (Day-1). **ublk** is available i
 | RF-T3 | `up --transport auto` (default): WSL2 → nbd; never silent ublk on WSL2 |
 | RF-T4 | Explicit `--transport ublk` on WSL2 fails closed with clear message (no freeze) |
 | RF-T5 | `up` idempotent if cascade already healthy |
+| RF-T6 | Every short helper and pre-attach daemon cleanup uses exact private-process-group custody, finite capture, bounded direct-child reap, and fatal controller containment when reap cannot be proven |
 
 ## 5. Out of scope
 
-- Lifting `guard_not_wsl2` without dedicated AUDIT-2.5 + drill  
+- Any override or bypass of `guard_not_wsl2`
 - HMM / VRAM-as-RAM  
 - Changing MS stock kernel  
 
@@ -64,3 +65,5 @@ Transport for VRAM tier on WSL2 remains **NBD** (Day-1). **ublk** is available i
 - Manual up: VRAM nbd prio 100, zram 200, disk lower  
 - down: clean managed swaps  
 - auto transport message on WSL2 mentions nbd + ublk policy  
+- adversarial descendant-inherited-output and timeout fixtures leave no owned
+  child or descendant running; legitimate short commands remain accepted

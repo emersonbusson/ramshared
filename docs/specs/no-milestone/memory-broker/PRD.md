@@ -1,23 +1,40 @@
 ---
 slug: memory-broker
-title: RamShared Memory Broker (Unified Final)
+title: RamShared Memory Broker
 milestone: —
 issues: []
 ---
 
-# PRD — RamShared Memory Broker (Unified Final)
+# PRD — RamShared Memory Broker
 
-> SSDV3 STEP 1 **consolidated**. Slug: `memory-broker`. This is the **single PRD** from which the SPEC will be generated. It absorbs and replaces the following as sources: `docs/vram-arbiter/PRD.md`, `docs/dcc-out-of-core/PRD.md`, and `docs/memory-broker/VISION.md`. Critical evaluation of source documents is in Annex A.
+> **Document stage:** SSDV3 Step 1 (`PRD`), consolidated requirements source for
+> the `memory-broker` slug. Annex A records how earlier design documents were
+> reconciled.
+> **Design decision:** continue with the protocol-first option through SPEC and
+> the phase gates in this document.
+> **Product qualification:** `UNQUALIFIED`. This PRD does not prove current
+> implementation, hardware validation, packaging, installability, or activation.
 > Disciplines: SSDV3 (fact vs. inference per item) + Kahneman (counterfactuals and rollback triggers in §14; anti-halo gates between phases in §10).
 
 ## 1. Summary
 
-**A memory tiering platform for a single physical host with a GPU**: a **broker** (arbiter) + **agents** per environment + a **revocable VRAM lease** primitive, serving N consumers using each consumer's native mechanism — the Linux kernel consumes VRAM as **swap** (ublk/NBD, Phase B, ready); Windows GPU workloads consume VRAM through their native engines; the arbitration moves capacity to **whoever needs it most** (PSI/pressure), on **any GPU with VRAM** (backend trait: CUDA ready, Vulkan next). **Installable** product: Windows service (`.exe`/winget) + Linux binary (`.deb`/systemd).
+The proposed platform combines a **broker** (arbiter), **agents** per
+environment, and a **revocable VRAM lease** for consumers that use their native
+mechanisms. Linux would consume a block tier through ublk or NBD; Windows GPU
+workloads would keep their native engines; the broker would arbitrate capacity
+from measured pressure. Packaging as a Windows service and Linux package is an
+acceptance target, not a current product capability.
 
 ## 2. Technical Context
 
-- **Confirmed in the codebase (Phase B validated in hardware):** VRAM served as a block device via **ublk** (p50 241µs, ~26% faster than NBD 326µs); multi-connection **NBD** (currently Unix socket); **DEMOTE** engine ready (canary §9 latency, probe §9.4 content/free, `ResidencySampler` with hysteresis, `spawn_swapoff`); CUDA via **dlopen** (binary has no libcuda dependency); `BlockBackend` is the bridge — the swap tier has nothing CUDA-specific.
-- **Confirmed in docs (civm):** Hyper-V VM `gha-ubuntu-2404` (GitHub Actions runner, label `civm`) on the **same physical host** (`dev-host`) as WSL2 + RTX 2060; reachable via SSH/Tailscale; no GPU.
+- **Observed source/design input, not current product qualification:** the tree
+  contains ublk and multi-connection NBD surfaces, demotion components,
+  `ResidencySampler`, `spawn_swapoff`, CUDA loading through `dlopen`, and the
+  transport-neutral `BlockBackend`. Historical measurements remain separate
+  records and do not qualify this PRD.
+- **Historical environment input:** one approved Hyper-V CI VM and the WSL2
+  distro shared a physical host; the VM had no GPU. Exact host and VM
+  identities are intentionally omitted and do not qualify the proposed path.
 - **Confirmed in docs (CUDA/native Windows):** UVM oversubscription via page faults is **Linux-only** (`cudaMallocManaged` WDDM does not have demand paging); native application fallback behavior varies by engine and version and must be measured, not assumed.
 - **Confirmed (tester report):** Windows GPU workloads can lose significant time to manual memory reduction when scenes/projects do not fit in VRAM, while RAM is idle; real workloads are available for measurement.
 - **Two personas** *(Confirmed in conversations)*:
@@ -31,8 +48,14 @@ issues: []
 
 - **A single protocol** (agent ↔ broker): register tenant, report pressure, receive commands (swapon/swapoff of slice, lease release/grant, demote-all). The brain becomes a deployment detail: WSL2 on the dev host; Windows service on the artist's host.
 - **Revocable VRAM lease** as a universal primitive: all VRAM usage by the swap tier is borrowed; revocation is the already built DEMOTE engine. This is what joins the two worlds: the host agent **requests** the VRAM that the swap tier **returns**.
-- **Mechanisms per consumer (irreducible, OS/physics constraint):** Linux = block device (local ublk, remote NBD — both ready); DCC = native out-of-core configuration (MVP) and, gated, interposer (v2); Windows-as-swap-consumer = out of scope (would require a Windows disk driver).
-- **GPU via trait** (`VramProvider`: alloc/free/read_at/write_at/budget): CUDA (ready) → Vulkan (any card on native Windows/Linux; the tier does not use shaders, only alloc+copy) → D3D12/dxg (research; only plausible path for non-NVIDIA inside WSL2).
+- **Mechanisms per consumer (irreducible, OS/physics constraint):** Linux =
+  block device (local ublk or remote NBD); DCC = native out-of-core
+  configuration (MVP) and, gated, interposer (v2); Windows-as-swap-consumer =
+  out of scope (would require a Windows disk driver). Each path still requires
+  its own phase evidence.
+- **GPU via trait** (`VramProvider`: alloc/free/read_at/write_at/budget): CUDA
+  is the first source backend; Vulkan is proposed for native Windows/Linux;
+  D3D12/dxg remains research for non-NVIDIA WSL2.
 
 **Rejected options:** identical single binary everywhere (mechanisms diverge by OS); UVM-only (does not cover Windows); GPU-P/passthrough on civm (poor consumer GPU support); broker on Windows host for the dev persona (stack is Linux/Day-0; WSL2 is the place on the dev host); static partitioning (does not address "whoever needs it most").
 
@@ -62,25 +85,25 @@ issues: []
 - **RF-G3** *(research)* D3D12/`/dev/dxg` for non-NVIDIA inside WSL2.
 
 **Product**
-- **RF-P1** Installables: `ramshared-setup.exe`/winget (Windows service + CLI) and `.deb` + systemd (Linux/WSL2/civm). Native Rust binaries; GPU APIs via dlopen/driver (zero extra dependencies).
-- **RF-P2** Transport with fallback: ublk where the kernel supports it (`CONFIG_BLK_DEV_UBLK`); **NBD as universal fallback** (measured: ~26% slower — acceptable).
+- **RF-P1** Packaging target: `ramshared-setup.exe`/winget (Windows service + CLI) and `.deb` + systemd (Linux/WSL2/civm). Native Rust binaries; GPU APIs via dlopen/driver (zero extra dependencies).
+- **RF-P2** Transport with fallback: ublk where the kernel supports it (`CONFIG_BLK_DEV_UBLK`); **NBD as universal fallback**. Any transport comparison requires separately qualified evidence.
 - **RF-P3** Single configuration file (TOML) per host: tenants, slices, binds, arbiter policy.
 
 ## 5. Non-Functional Requirements
 
-- **RNF-1 Anti-D-state (risk #1, which has already bitten us):** remote tenant with swap on a dead broker device = D-state. Mandatory mitigations: remote slices with **lower swap priority** than local swap; **watchdog in the agent** (broker disappeared → immediate best-effort swapoff); removal runbook; validated orderly teardown (QEMU harness — already PASS in Phase B/F2).
+- **RNF-1 Anti-D-state (risk #1, which has already bitten us):** remote tenant with swap on a dead broker device = D-state. Mandatory mitigations: remote slices with **lower swap priority** than local swap; **watchdog in the agent** (broker disappeared → immediate best-effort swapoff); removal runbook; separately qualified orderly teardown. Historical QEMU results are design input, not qualification of this PRD.
 - **RNF-2 Security:** NBD/TCP and broker protocol **without native auth** → bind only to private network/Tailscale, never `0.0.0.0`; local-only addon; **zero external telemetry**.
 - **RNF-3 Anti-flapping:** hysteresis + cooldown; rare and cheap rebalancing (small slice, bounded swapoff, outside the hot path).
 - **RNF-4 Zero regression:** Phase B (single-tenant ublk, NBD Unix) continues passing smoke tests.
 - **RNF-5** `unsafe` restricted to FFI crates (`ramshared-uring`, `ramshared-cuda`, future `ramshared-vulkan`); daemon library has `#![forbid(unsafe_code)]`.
-- **RNF-6 Day-0:** no shims; each phase delivers the final form of its interface.
+- **RNF-6 Day-0:** no shims; each phase delivers one primary form of its interface.
 
 ## 6. Workflows
 
 1. **CI vs. build (dev persona):** Actions on civm (PSI rises) + `cargo build` on WSL2 → arbiter sees `psi_civm ≫ psi_wsl2` over N samples → swapoff slice on WSL2 → swapon on civm via NBD → invert when pressure inverts.
 2. **Windows GPU workload:** host agent observes or receives a generic headroom request → `LeaseRequest` to broker → broker demotes swap slices (revokes lease) → workload runs with reclaimed VRAM → end of workload window → `LeaseRelease` → broker re-leases to swap tier.
 3. **Broker dies:** agents detect (watchdog) → best-effort swapoff of remote slices → tenants continue with local swap (RNF-1).
-4. **Orderly shutdown:** demote-all → agents confirm swapoff → STOP/DEL (ublk) + close NBD → zero VRAM (reusing validated teardown).
+4. **Orderly shutdown:** demote-all → agents confirm swapoff → STOP/DEL (ublk) + close NBD → zero VRAM. The prior teardown design may be reused, but this phase requires current evidence.
 
 ## 7. Data Model
 
@@ -130,7 +153,7 @@ DCC adapter business model (pricing/licensing); custom auth/encryption (private 
 2. P2: a real Windows GPU workload that previously exhausted VRAM completes or shows improved headroom without app-specific assumptions; lease revokes the swap tier and returns VRAM.
 3. P3: functional swap tier on native non-NVIDIA GPU (Vulkan).
 4. RNF-4: Phase B smokes remain green in all phases.
-5. Installable product: Windows setup + Linux `.deb` with a single TOML config.
+5. Packaging acceptance: Windows setup + Linux `.deb` with a single TOML config, qualified on their declared surfaces.
 
 ## 14. Validation (Kahneman)
 

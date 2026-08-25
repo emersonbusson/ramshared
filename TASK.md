@@ -345,3 +345,93 @@ revalidation proved tag SHA `361427a63cbeb2a8b0ecafb224adeecb0539af9b`,
 exact four-name cardinality, detached checksum, manifest, source lock, and asset
 SHA-256 values. Issue `#229` removes the two fulfilled one-shot Release Please
 recovery controls and records the immutable publication evidence.
+
+## TASK-0009 — Fail-closed WSL2 stabilization corrections
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `completed`.
+**Owner role:** `wsl2-reliability`.
+**Date:** `2026-08-23`.
+**Registered time:** `05:12:18`.
+**Updated time:** `06:18:15`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Destinations:** `docs/specs/no-milestone/wsl2-revocable-vram-origin/`,
+`docs/specs/no-milestone/wsl2-control-plane-pressure-incident/`, Rust workspace
+and workflows, `scripts/safety/`, `scripts/windows/`, and `validation.md`.
+**Scope:** Correct the audited P0/P1 source contracts for post-initialization
+memory locking, origin-versus-GPU isolation, durable NBD FLUSH/FUA semantics,
+strong manifest/FD/device identity, provisioning separation, swapoff-first
+service ownership, systemd invocation identity, physical-volume discovery,
+live-DXG opt-in, exact Rust 1.98.0 provenance, and objective documentation.
+Preserve all pre-existing WIP and keep every runtime/device path inactive.
+**Evidence / blockers:** The verified external pre-change snapshot is
+`E:\\WSL-Work-Snapshots\\ramshared-20260823T080303Z.tar.zst`, SHA-256
+`7FA94C0F162C4012A26D7CE7C0A20951B882D3197A80EC359CF5F8B65CE61539`,
+with zstd validation PASS and 8293 entries. Only static checks, formatting
+checks, and small single-process unit tests were used. All six P0 and four P1
+source/static contracts are closed by `validation.md` EVD-0033. Activation
+remains blocked until a separately approved progressive host qualification
+proves real identity, swapoff-first teardown, process-isolated GPU timeout,
+durable live NBD I/O, and terminal `PRODUCT_OFF`.
+
+## TASK-0010 — Close lifecycle ownership and custom-kernel promotion gaps
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `completed`.
+**Owner role:** `wsl2-reliability`.
+**Date:** `2026-08-23`.
+**Registered time:** `11:38:54`.
+**Updated time:** `12:00:39`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Destinations:** `crates/ramshared-cli/src/cascade/cascade_io.rs`,
+`scripts/kernel/`, `docs/reliability/`,
+`docs/specs/no-milestone/wsl2-custom-kernel-p1/`, and `validation.md`.
+**Scope:** Require exact stage-by-stage live-device cardinality and recorded
+zram ownership before mutation; classify the observed DXG FORTIFY warning and
+failed RamShared-Kernel boot attempts; make custom-kernel promotion fail closed
+on an exact-distro systemd/DXG canary. Do not apply an unaccepted upstream
+patch, activate RamShared, restart WSL, or mutate any live device or host
+configuration.
+**Evidence / blockers:** The exact DXG signature is independently reported on
+Microsoft kernels 6.18.26.1, bundled 6.18.33.2-2, and the local 6.18.35.2
+artifact, so attribution to RamShared is rejected. The lifecycle-focused suite
+passed 49/49; complete `ramshared-cli` validation passed 191 unit plus 6
+dispatch tests; single-job `cargo check` and the hermetic kernel-canary static
+harness passed. `validation.md` EVD-0034 records the exact limits. Live
+promotion remains NO-GO until a same-host bundled/custom A/B canary proves the
+fresh boot without the FORTIFY warning, systemd/init timeout, unclean journal,
+p9 cancellation, or a worse DXG query-error count.
+
+## TASK-0011 — Remediate independent kernel and lifecycle safety gate
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `in_progress`.
+**Owner role:** `wsl2-reliability-mutator`.
+**Date:** `2026-08-23`.
+**Registered time:** `12:29:21`.
+**Updated time:** `13:59:17`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Destinations:** `scripts/kernel/`,
+`crates/ramshared-cli/src/cascade/cascade_io.rs`,
+`crates/ramshared-wsl2d/src/main.rs`,
+`docs/specs/no-milestone/wsl2-custom-kernel-p1/`, `docs/reliability/`,
+`docs/runbooks/`, `validation.md`, and focused source-only tests.
+**Scope:** Correct every P0/P1/P2 finding from the failed independent
+`SOL-GATE-PRE-COMMIT`: immutable host launcher and kernel/modules pair
+admission, Windows PowerShell 5.1 compatibility, atomic `.wslconfig` pair
+rollback, strict same-host bundled/custom receipts, bounded WSLg exercise,
+uncertain NBD attach containment, effect-point device identity, malformed zram
+allocation reconciliation, and English documentation. Preserve all unrelated
+dirty WIP and keep every live host, WSL lifecycle, kernel, service, swap,
+device, GPU, VM, Docker, and pressure action disabled.
+**Evidence / blockers:** All listed P0/P1/P2 findings are addressed in the
+dirty source candidate. Windows PowerShell 5.1 executed the installed
+wrapper-to-launcher chain and its strict runtime/layout, WSLg/getty, external
+failure/timeout-tree, config-pair, deployment-hash, and exact rollback fixtures.
+The shell pair parser, immutable sealer, arm/disarm, READY parser, and per-file
+Bash parsing passed. Direct `rustfmt --check --edition 2024` parsed both changed
+Rust files. Structural documentation gates and `git diff --check` pass; the
+localization gate remains honestly `PARTIAL` with zero findings. No Cargo
+build/check/test/Clippy or live action ran. Status is `READY_FOR_HEAVY_TEST`,
+not task completion: focused Rust tests, affected-package check/Clippy, and all
+live qualification remain blocked pending a fresh explicit instruction.

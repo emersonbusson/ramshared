@@ -1,344 +1,200 @@
-# Hyper-V VM access runbook
+# Hyper-V lab evidence register
 
-This file documents how agents access the RamShared lab VMs without storing
-or exposing secrets in git.
+## Current boundary — disabled staging only
 
-## Scope
+This is a sanitized historical evidence register, not an access runbook. The
+current candidate authorizes no VM lifecycle, guest login, guest repair,
+storage/VHDX action, GPU/device action, formatting, pressure campaign, WSL
+operation, or host action. Lab names, guest principals, host paths, addresses,
+device nodes, VM identifiers, and artifact locations are intentionally replaced
+with context-preserving `SANITIZED_*` placeholders.
 
-| VM | Role | Non-interactive access |
+Historical measurements and verdicts below remain evidence for their exact
+recorded builds only. They do not qualify the current candidate or authorize a
+repeat. A future attended campaign needs a separately approved scope and its
+own sealed identity record outside the public repository.
+
+## Historical lab roles
+
+| Sanitized surface | Historical role | Evidence boundary |
 | --- | --- | --- |
-| `win11-drill` | Isolated Windows StorPort/CUDA lab | PowerShell Direct |
-| `win11-wsl2-lab` | Disposable Windows lab for WSL2 freeze campaigns | PowerShell Direct after install |
-| `linux-kernel-lab` | Generic Ubuntu/kernel build Hyper-V lab | SSH from Windows host (`<lab-user>@<ip>`) |
+| `SANITIZED_VM_DRIVER_LAB` | Isolated Windows StorPort/CUDA lab | PowerShell Direct results only |
+| `SANITIZED_VM_WSL2_LAB` | Disposable Windows WSL2/freeze lab | Bounded readiness and campaign receipts |
+| `SANITIZED_VM_KERNEL_LAB` | Generic Linux/kernel build lab | SSH/capability observations |
 
-Do not use `gha-ubuntu-2404` for RamShared lab validation unless a task
-explicitly names it.
+The inventory was deliberately closed: one driver lab, one Windows WSL2 lab,
+and one kernel lab. No historical record permits a substitute daily host,
+additional VM, clone, host disk, daily WSL storage, or foreign VHDX. The
+Windows WSL2 lab's historical VM-owned disk is represented here as
+`SANITIZED_VM_OWNED_VHDX`; it never identifies a public host path.
 
-## VM inventory policy
+## Retained Windows driver/WSL evidence
 
-The approved RamShared lab inventory is closed:
+> **Historical non-current / no execution:** The dated ledger below preserves
+> command categories, outcomes, and measurements from closed lab records. It is
+> not an access runbook and authorizes no VM, guest, storage, WSL, or pressure
+> operation.
 
-- `win11-drill`
-- `win11-wsl2-lab`
-- `linux-kernel-lab`
+### 2026-07-18 — access and runtime diagnosis
 
-Do not create additional VMs for RamShared validation without explicit user
-approval in the current conversation. Prefer repairing or using one of the
-existing lab VMs. If a disposable Windows WSL2 surface is needed, use the
-existing `win11-wsl2-lab`; do not create `win11-wsl2-lab-2`, clones, or
-replacement VMs.
+- The driver lab's bounded PowerShell Direct probe initially returned
+  `STATUS=PARTIAL` because its local credential was rejected. The local secret
+  remained outside version control.
+- Subsequent guest-only WSL runtime repair observations retained the official
+  WSL `2.7.10` package/version category, `REGDB_E_CLASSNOTREG`, and a
+  runtime-unavailable result. An earlier no-output highest-privilege probe
+  recorded `last_task_result=267009`; the repaired bounded probe later recorded
+  `last_task_result=0`, but neither result made the WSL runtime usable. A
+  packaged-update observation also recorded guest DNS resolution failure.
+- The single disposable Windows WSL2 lab began with no heartbeat or PowerShell
+  Direct during its unattended boot window and ended in an inert state. No
+  second VM, daily-host storage action, or pressure campaign was used.
+- Historical media inspection found the required no-prompt EFI image and an
+  answer file. A later installer-media result remained non-authoritative; the
+  retained conclusion is that media preparation was insufficient by itself to
+  prove guest readiness.
 
-The reason `win11-wsl2-lab` exists is historical and specific: `win11-drill`
-already existed, but its guest WSL runtime was not usable for the freeze
-campaign, while `linux-kernel-lab` is a Linux VM and cannot prove Windows guest
-WSL2 behavior. `win11-wsl2-lab` was created as the one disposable Windows WSL2
-lab so agents can run destructive WSL2 freeze/reclaim campaigns away from the
-real Windows desktop and the real daily WSL2 instance.
+### 2026-07-18 and 2026-07-21 — disposable lab recovery attempts
 
-Lab VM state is not protected product data. It is acceptable to reinstall,
-reset, format, or otherwise mutate the guest OS inside `win11-drill`,
-`win11-wsl2-lab`, or `linux-kernel-lab` when that is the selected test surface.
-The boundary is the VM ownership boundary: never format, replace, or attach a
-host disk, the real Windows system volume, the real WSL2 storage, or a VHD owned
-by a different VM as a workaround. Only operate on the VHD already owned by the
-selected lab VM, and record the action/artifacts.
+- A same-lab storage relocation and vTPM setup were recorded. The guest runtime
+  package could report a version while its status/list probes still exceeded a
+  30-second deadline; the result remained `PARTIAL`.
+- Follow-up repair observations found an absent runtime service registration.
+  A temporary service experiment did not restore bounded runtime status/list
+  success. The lab was returned to an inert state; the record expressly rejects
+  treating that repair path as untried.
+- The historical Linux kernel lab lacked the GPU and ublk device surfaces at
+  first. After a guest-only module capability repair, SSH, non-interactive
+  privilege, and the ublk capability were recorded as `PASS`. This was
+  capability evidence only, never proof of WSL2 GPU reclaim or product
+  lifecycle safety.
 
-These lab VMs live on slower host storage than an SSD-backed lab. Treat install,
-first boot, Windows Update, WSL install, and PowerShell Direct readiness as
-slow-path operations. Do not classify a lab boot as failed from a short wait:
-use long bounded waits, progress logs, and the harness defaults before marking a
-campaign `PARTIAL`.
+### 2026-08-20 — bounded recovery and readiness
 
-Exception: `win11-wsl2-lab` now uses the host SSD path
-`C:\ramshared-hyperv\win11-wsl2-lab\Virtual Hard Disks\win11-wsl2-lab.vhdx`
-for its VM-owned VHD. The earlier HDD-backed VHD was too slow for Windows setup
-and WSL registration. This exception does not authorize creating more VMs or
-touching the real Windows/WSL storage.
+- A plan-first readiness probe first exposed a cleanup defect after a failed
+  PowerShell Direct attempt. The bounded fallback restored the exact disposable
+  lab to its inert state without a forced power path; a later receipt retained
+  `powershell_direct_auth_failed` and `restored_off_host_fallback`.
+- An approved offline credential diagnosis was limited to the exact
+  `SANITIZED_VM_OWNED_VHDX`. Its original account database was restored with an
+  exact hash check. The blank-credential path was still rejected, so it did not
+  produce guest WSL evidence.
+- A reimage followed one byte-for-byte, SHA-256-verified backup of the
+  VM-owned disk. It did not involve a host disk, daily WSL storage, a new VM,
+  or a checkpoint. The lab-only persistent console-login setting is historical
+  and must never be applied to a daily host.
+- The resulting bounded readiness record observed terminal setup completion,
+  interactive guest access, and WSL status/list completion with exit `0`.
+  Verdict: `PASS / wsl_runtime_ready` for access/readiness only.
 
-## Secrets policy
+The readiness result closes neither guardian, origin, GPU/WDDM, freeze,
+pressure, nor attended-rollout qualification. Those matrices remain
+`PARTIAL`; the daily host is not a substitute surface.
 
-- The Windows guest password is not documented here and must not be committed.
-- Preferred source: host environment variable `RAMSHARED_DRILL_PASSWORD`.
-- Local password files such as `.drill-pw` are ignored by git and are
-  local-only. Do not print their contents in logs, docs, or chat.
-- Use the VM-qualified Windows lab identity, for example
-  `WIN11-DRILL\drilladmin` or `WIN11-WSL2-LAB\drilladmin`. Do not rely on
-  `.\drilladmin`; PowerShell Direct can reject that shorthand on these images.
+## Detailed historical temporal ledger
 
-## Elevated host PowerShell from WSL
+### 2026-07-18 — driver-lab runtime diagnosis
 
-Use the repository wrapper:
+**Category:** bounded PowerShell Direct, guest WSL runtime, and artifact review.
 
-```bash
-./scripts/windows/wsl-elevated-ps.sh -NoProfile -ExecutionPolicy Bypass -Command \
-  "Get-VM -Name win11-drill,linux-kernel-lab | Select Name,State"
-```
+- A read-only guest-access probe returned `STATUS=PARTIAL` when the local
+  credential was rejected. The credential source remained local-only and no
+  secret was recorded.
+- The dated guest-runtime repair category covered the official runtime package,
+  Appx registration observation, status/list probes, and a bounded
+  highest-privilege task probe. The task later recorded `last_task_result=0`,
+  but the runtime still returned `REGDB_E_CLASSNOTREG`; that is a failed
+  runtime-registration result, not a repair instruction.
+- The current result category is `guest_wsl_runtime_unavailable`: WSL/VMP
+  feature presence and a package version were insufficient when bounded status
+  and list probes did not complete. This driver-lab result remains `PARTIAL`.
 
-## `win11-drill` smoke access
+### 2026-07-18 — disposable WSL2-lab creation and media evidence
 
-This is a read-only PowerShell Direct probe. It starts the VM if needed and
-turns it off at the end.
+**Category:** disposable-VM creation, first-boot readiness, media inspection,
+and VM-owned-disk evidence.
 
-```bash
-./scripts/windows/wsl-elevated-ps.sh -NoProfile -ExecutionPolicy Bypass -Command '
-$vm = "win11-drill"
-Start-VM -Name $vm -ErrorAction Stop
-try {
-  $sec = ConvertTo-SecureString $env:RAMSHARED_DRILL_PASSWORD -AsPlainText -Force
-  $cred = [pscredential]::new("WIN11-DRILL\drilladmin", $sec)
-  Invoke-Command -VMName $vm -Credential $cred -ScriptBlock {
-    [pscustomobject]@{ hostname=$env:COMPUTERNAME; whoami=(whoami) }
-  }
-} finally {
-  Stop-VM -Name $vm -TurnOff -Force -ErrorAction SilentlyContinue
-}
-'
-```
+- The historical creation receipt recorded one disposable Windows VM, a dynamic
+  VM-owned VHD, Windows and answer media, nested virtualization, and disabled
+  checkpoints. Its first unattended boot had neither heartbeat nor PowerShell
+  Direct, so it was returned to the inert state; no second VM was created.
+- Media inspection recorded a no-prompt EFI image plus an answer file. A later
+  remastered-media path reached a storage-driver prompt, so media preparation
+  alone was explicitly classified as non-authoritative for readiness.
+- The same-lab relocation receipt recorded an SSD-backed **VM-owned** disk,
+  vTPM/local-key-protector evidence, and a four-GiB fixed-memory configuration.
+  The VM configuration and host paths are intentionally not public. No host
+  disk, daily WSL storage, foreign VHDX, clone, or checkpoint entered the
+  historical scope.
+- Runtime measurements remained bounded and partial: package status `Ok`,
+  then status/list probes exceeding 30 seconds with empty stdout/stderr. A
+  follow-up service-registration observation found the service absent; a
+  temporary experiment did not restore the official registration. The VM was
+  returned to `Off` after each closed attempt.
 
-Expected identity:
+### 2026-07-18 — kernel-lab access and capability sequence
 
-```text
-hostname = WIN11-DRILL
-whoami   = win11-drill\drilladmin
-```
+**Category:** Hyper-V network observation, SSH access, kernel capability, and
+guest-only module observation.
 
-## `win11-drill` product campaign
+- The primary adapter address field was empty; the dated neighbor-table fallback
+  resolved `SANITIZED_IP_ADDRESS`. SSH, non-interactive privilege, and
+  `cloud-init=done` were observed. The guest reported kernel
+  `SANITIZED_KERNEL_RELEASE`.
+- When the historical kernel-lab start reported insufficient host memory, its
+  disabled-staging record used startup 2 GiB, minimum 1 GiB, and maximum 8 GiB
+  as VM-only bounds. This is historical/no-execution evidence, not a setting to
+  apply on any current host or VM.
+- The first capability receipt was `STATUS=PARTIAL`: GPU device nodes,
+  `ublk-control`, and the required module surface were absent. This explicitly
+  excluded WSL2 GPU reclaim, GPU-PV reclaim, and product-transport claims.
+- After a guest-only module-package repair category, the refreshed receipt was
+  `STATUS=PASS` for SSH, passwordless privilege, `ublk_drv`, and the ublk
+  control capability. It still did not establish lifecycle, ordered detach,
+  crash/drain, or no-ghost product evidence.
 
-Run the isolated product Online campaign with the canonical user:
+### 2026-08-20 — bounded readiness, rollback, and reimage results
 
-```bash
-PS1_PATH=$(wslpath -w scripts/windows/Run-GuestProductOnline.ps1)
-./scripts/windows/wsl-elevated-ps.sh -NoProfile -ExecutionPolicy Bypass -Command \
-  "& '$PS1_PATH' -VMName win11-drill -User 'WIN11-DRILL\drilladmin'"
-```
+**Category:** plan-first VM readiness, fallback cleanup, offline credential
+diagnosis, backup/reimage, and readiness readback.
 
-The harness starts the VM, deploys the current Windows package, runs three
-SHA I/O lifecycle rounds, performs graceful teardown, and stops the VM.
+- The first plan-first readiness receipt exposed a cleanup defect after a failed
+  guest connection. Its bounded fallback produced
+  `restored_off_host_fallback`; no forced power path, checkpoint, host-disk
+  action, or pressure action was recorded.
+- The bounded offline diagnosis retained three private hash checks: backup,
+  repair copy-back, and original-account-database restoration. The blank
+  credential remained rejected; it did not establish guest WSL readiness.
+- A byte-for-byte SHA-256-verified VM-owned-disk backup preceded the reimage.
+  The dated recovery receipt retained four GiB assigned memory, zero
+  checkpoints, one VM-owned VHD, and a successful terminal setup/readiness
+  result. The later WSL status/list probes exited `0` within their deadlines.
+- This is an **access/readiness-only** `PASS / wsl_runtime_ready`. It does not
+  promote driver, guardian, origin, GPU, freeze, pressure, or attended-rollout
+  matrices, all of which remain `PARTIAL` or blocked.
 
-## `win11-drill` WSL2 freeze campaign
+## Retained kernel-lab capability evidence
 
-Use this path for WSL2 freeze-elimination proof instead of the daily desktop WSL:
+On 2026-07-18, a neighbor-table fallback resolved a sanitized guest address
+(`SANITIZED_IP_ADDRESS`) after the primary adapter observation was empty. The
+guest reported a sanitized kernel release, successful SSH and non-interactive
+privilege, and no GPU or ublk device surfaces. The first capability receipt was
+`STATUS=PARTIAL`.
 
-```bash
-pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \
-  "& 'C:\Windows\System32\sudo.exe' powershell.exe -NoProfile -ExecutionPolicy Bypass -File '<repo-root>\scripts\windows\Invoke-Win11Wsl2FreezeCampaign.ps1' -Start -Run"
-```
+After the historical guest-only module repair, the ublk capability node became
+available and the refreshed capability receipt was `STATUS=PASS`. That result
+does not establish a product transport: lifecycle, swapoff-first detach,
+crash/drain, and no-ghost evidence were still required.
 
-2026-07-18 attempt:
-`C:\ramshared\artifacts\win11-wsl2-freeze-campaign-20260718-115419` returned
-`STATUS=PARTIAL` because PowerShell Direct rejected the current local
-credential. Do not reset the VM password in git or document it here; refresh the
-local ignored credential source, then rerun the harness.
+## Evidence handling
 
-2026-07-18 follow-up:
-
-- The local Machine `RAMSHARED_DRILL_PASSWORD` works for
-  `WIN11-DRILL\drilladmin`; do not print it and do not commit it.
-- `scripts/windows/Invoke-Win11Wsl2FreezeCampaign.ps1` now waits for
-  PowerShell Direct readiness and reads Machine/User/process/local ignored
-  credential sources without persisting the secret.
-- WSL and VirtualMachinePlatform optional features were enabled inside
-  `win11-drill`.
-- A tracked-source tarball was copied to `C:\ramshared\src` in the guest.
-- The official Microsoft WSL 2.7.10 MSI from `microsoft/WSL` releases installed
-  the Appx package, but guest `wsl.exe` still returned
-  `Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG`; removing the Appx made the stub
-  return "WSL is not installed" again. The MSIXBundle has the same package
-  identity as the MSI and was not installed over it.
-- A later `wsl.exe --install --web-download --no-distribution` and
-  `wsl.exe --update --web-download` attempt still returned "WSL is not
-  installed" from the inbox stub.
-- Latest campaign artifact:
-  `C:\ramshared\artifacts\win11-wsl2-freeze-campaign-20260718-123613`,
-  `STATUS=PARTIAL`, `REASON=powershell_direct_failed` after WSL runtime repair
-  attempts.
-- Runtime probe artifact:
-  `C:\ramshared\artifacts\win11-wsl-runtime-probe-20260718-130619`.
-  It confirmed WSL/VMP features enabled, no WSL Appx package, inbox
-  `C:\Windows\System32\wsl.exe` returning "WSL is not installed", and a
-  highest-privilege scheduled-task probe with no output
-  (`last_task_result=267009`).
-- 2026-07-18 repaired the probe harness so the highest-privilege scheduled task
-  waits for completion and writes its own output file. New artifact
-  `C:\ramshared\artifacts\win11-wsl-runtime-probe-20260718-151127` reached the
-  guest, confirmed the scheduled task completed (`last_task_result=0`), and
-  proved the runtime is still unavailable:
-  `Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG`.
-- Additional guest-only repair attempts on `win11-drill`: MSI 2.7.10 repair
-  returned exit code 0, `Add-AppxPackage -Register` completed for the installed
-  WSL Appx manifest, `C:\Program Files\WSL\wsl.exe --install --no-distribution`
-  returned success, and the VM was rebooted. `wsl.exe --status` still reports
-  `REGDB_E_CLASSNOTREG`. The packaged WSL update path also reported DNS
-  resolution failure in the guest. This VM remains unsuitable for the WSL2
-  freeze campaign until WSL runtime registration is repaired or the guest is
-  reimaged.
-
-Next WSL2-freeze unblock is guest WSL runtime repair or reimage to a Windows lab
-image with WSL already functional, then rerun the harness. Do not run pressure
-on the daily WSL2 desktop as a substitute.
-
-## `win11-wsl2-lab` disposable Windows WSL2 lab
-
-Historical creation command for context only. Do not run this again unless the
-user explicitly approves creating a new VM in the current conversation. When
-`win11-drill` is not recoverable as a WSL2 guest, use the already-created
-`win11-wsl2-lab` for destructive Windows WSL2 campaigns instead of touching the
-real desktop WSL2 instance:
-
-```bash
-pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \
-  "& 'C:\Windows\System32\sudo.exe' powershell.exe -NoProfile -ExecutionPolicy Bypass -File '<repo-root>\scripts\windows\New-Win11Wsl2LabVm.ps1' -Start"
-```
-
-2026-07-18: `New-Win11Wsl2LabVm.ps1` created the single disposable VM
-`win11-wsl2-lab` with a new dynamic VHD on the original HDD-backed lab path,
-attached the Windows 25H2 ISO and autounattend ISO, enabled nested
-virtualization, disabled checkpoints, and did not modify existing lab disks.
-The VM did not expose heartbeat/PowerShell Direct during the initial unattended
-boot window and was turned Off. Next step is console/boot-media inspection or a
-no-prompt Windows installer ISO on this same VM; do not create another VM, and
-do not touch host disks or real WSL2 storage. Reinstalling this VM's own guest
-disk is allowed when needed for the isolated campaign.
-
-No-prompt ISO path:
-
-```bash
-pwsh.exe -NoProfile -ExecutionPolicy Bypass -Command \
-  "& 'C:\Windows\System32\sudo.exe' powershell.exe -NoProfile -ExecutionPolicy Bypass -File '<repo-root>\scripts\windows\New-WindowsNoPromptIso.ps1'"
-```
-
-2026-07-18 inspection found both Windows ISOs contain
-`efi\microsoft\boot\efisys_noprompt.bin`, and the small
-`win11-autounattend.iso` contains `Autounattend.xml`. `New-WindowsNoPromptIso.ps1`
-is ready. Later the host installed official Windows ADK Deployment Tools and
-generated `E:\Hyper-V\iso\Win11_25H2_English_x64_v2_noprompt_unattend.iso`;
-the existing `win11-wsl2-lab` DVD now points at that ISO. All three approved lab
-VMs were returned to Off after the audit.
-
-2026-07-18 SSD recreation on the same VM:
-
-- No new VM was created. The existing `win11-wsl2-lab` VM was reused.
-- The active VM-owned VHD is now
-  `C:\ramshared-hyperv\win11-wsl2-lab\Virtual Hard Disks\win11-wsl2-lab.vhdx`.
-  The VM configuration path may still be under the original Hyper-V folder; the
-  hard disk path is authoritative.
-- Verify the active disk with:
-
-```powershell
-Get-VMHardDiskDrive -VMName win11-wsl2-lab | Select VMName,Path
-```
-
-- Windows setup required vTPM for this Windows 11 image. The VM has a local key
-  protector and `TpmEnabled=True`.
-- The working install path used the original Windows ISO plus an answer ISO.
-  The no-prompt remastered ISO previously reached an installer state that asked
-  for a storage driver, so do not assume remastering is the preferred path.
-- PowerShell Direct works with `WIN11-WSL2-LAB\drilladmin` and the local-only
-  `RAMSHARED_DRILL_PASSWORD` secret source.
-- Official WSL 2.7.10 is installed and AppX package status is `Ok`.
-  `C:\Program Files\WSL\wsl.exe --version` returns version information, but
-  `--status` and `-l -v` still timeout even after `vmcompute` is started.
-  Direct command probe artifact:
-  `C:\ramshared\artifacts\wsl-probe-vmcompute-20260718-193703`.
-  Harness probe artifact after timeout hardening:
-  `C:\ramshared\artifacts\win11-wsl-runtime-probe-20260718-194130`,
-  `STATUS=PARTIAL`, `REASON=guest_wsl_runtime_unavailable`.
-- Follow-up repair attempt: the existing VM was changed to 4 GiB fixed memory
-  with nested virtualization still exposed, `Microsoft-Hyper-V-All` was enabled
-  inside the guest, and WSL 2.7.10 was removed/reinstalled from a verified
-  MSIXBundle. The package installed cleanly, but the next runtime probe still
-  did not complete normally and PowerShell Direct broke during cleanup. The VM
-  was turned Off from the host. Do not repeat this as if it were untried.
-- 2026-07-21 follow-up on the same SSD-backed VM confirmed nested
-  virtualization, healthy heartbeat, PowerShell Direct, enabled WSL/VMP/Hyper-V
-  features, and a running `vmcompute`. The AppX payload and
-  `C:\Program Files\WSL\wslservice.exe` existed, but the `WslService` SCM entry
-  was absent. A temporary service entry started successfully and survived one
-  reboot, but `wsl.exe --status` and `wsl.exe -l -v` still timed out after 30
-  seconds with empty stdout/stderr. Removing that temporary entry and trying a
-  verified MSI repair did not restore the official service registration. The
-  VM was returned to Off. The runtime probe now refuses immediately with
-  `guest_wsl_service_missing` or `guest_wsl_service_not_running` before running
-  the elevated WSL commands.
-
-Current unblock for the WSL2 freeze campaign is WSL runtime initialization
-inside this existing guest, not VM creation, not HDD speed, and not daily WSL2
-pressure. Until `wsl --status` and `wsl -l -v` return normally inside
-`win11-wsl2-lab`, the campaign remains `PARTIAL`.
-
-## `linux-kernel-lab` access
-
-The lab image is an Ubuntu cloud image with local user `emedev`, SSH keys
-installed, passwordless sudo, and console auto-login. Hyper-V can control the
-VM power state from WSL:
-
-```bash
-./scripts/windows/wsl-elevated-ps.sh -NoProfile -ExecutionPolicy Bypass -Command \
-  "Start-VM linux-kernel-lab; Get-VM linux-kernel-lab; Stop-VM linux-kernel-lab -TurnOff -Force"
-```
-
-Linux guests do not support PowerShell Direct. Use SSH from the Windows host.
-`Get-VMNetworkAdapter.IPAddresses` may be empty even when DHCP succeeded; in
-that case, resolve the IP from the Windows ARP/neighbor table by VM MAC.
-
-Probe from WSL:
-
-```bash
-PS1_PATH=$(wslpath -w scripts/windows/Get-LinuxKernelLabAccess.ps1)
-./scripts/windows/wsl-elevated-ps.sh -NoProfile -ExecutionPolicy Bypass -Command \
-  "& '$PS1_PATH' -Start -Smoke"
-```
-
-Manual fallback:
-
-```powershell
-$adapter = Get-VMNetworkAdapter -VMName linux-kernel-lab
-$mac = ($adapter.MacAddress -replace "(.{2})(?=.)", '$1-').ToUpperInvariant()
-Get-NetNeighbor -AddressFamily IPv4 |
-  ? { $_.LinkLayerAddress -and $_.LinkLayerAddress.ToUpperInvariant() -eq $mac }
-ssh.exe <lab-user>@<ip>
-```
-
-2026-07-18 live probe: `Get-VMNetworkAdapter.IPAddresses` was empty, but ARP
-resolved the VM MAC through `Get-NetNeighbor` to `172.29.50.143`; SSH from the
-Windows host returned hostname `linux-kernel-lab`, kernel `6.8.0-134-generic`,
-`cloud-init` status `done`, and `sudo -n` succeeded. The same probe found
-`/dev/dxg`, `/dev/nvidiactl`, and `/dev/ublk-control` absent; `nvidia-smi` is
-not installed; `sudo -n modprobe -n -v ublk_drv` failed because the module is
-not present under `/lib/modules/6.8.0-134-generic`. This VM is currently an
-access/build lab, not proof of WSL2 GPU reclaim, GPU-PV reclaim, or the
-custom-kernel/ublk product transport.
-
-2026-07-18 refreshed capability audit:
-`C:\ramshared\artifacts\linux-kernel-lab-capability-20260718-112539` returned
-`STATUS=PARTIAL` with SSH and `sudo -n` OK, kernel `6.8.0-134-generic`,
-`/dev/ublk-control` absent, `modprobe ublk_drv` missing, and no GPU surface. The
-VM was returned to Off after the probe.
-
-2026-07-18 ublk capability repair:
-`linux-modules-extra-6.8.0-134-generic` was installed inside the lab, then
-`sudo -n modprobe ublk_drv` created `/dev/ublk-control`. Refreshed audit
-`C:\ramshared\artifacts\linux-kernel-lab-capability-20260718-131502` returned
-`STATUS=PASS` for SSH, passwordless sudo, `ublk_drv`, and `/dev/ublk-control`.
-This is only lab capability proof; product ublk transport still needs lifecycle,
-swapoff-first teardown, crash/drain, and no-ghost evidence.
-
-If Hyper-V reports insufficient host memory when starting `linux-kernel-lab`,
-run `scripts/windows/Harden-LabVms.ps1` elevated. It sets the lab startup memory
-to 2 GiB, minimum to 1 GiB, and maximum to 8 GiB without changing disks.
-
-Documented GUI fallback:
-
-```powershell
-vmconnect.exe localhost linux-kernel-lab
-```
-
-## Safe terminal state
-
-After every campaign, confirm both lab VMs are off unless the task explicitly
-requires leaving one running:
-
-```bash
-./scripts/windows/wsl-elevated-ps.sh -NoProfile -ExecutionPolicy Bypass -Command \
-  "Get-VM -Name win11-drill,win11-wsl2-lab,linux-kernel-lab | Select Name,State"
-```
+- Secrets remain in local approved secret storage only; none is reproduced in
+  source, logs, documentation, or chat.
+- Public records retain semantic verdicts, deadlines, dates, hashes, and
+  measured outcomes, but refer to `SANITIZED_ARTIFACT_REF` rather than a
+  host-local artifact path.
+- An absent or inaccessible lab is a `PARTIAL`/environment-bound result, never
+  an invitation to repair, recreate, boot, stop, reimage, or pressure a host.
+- A future approval must bind exact identities in a protected, private receipt
+  and retain before/action/after evidence. This document supplies no command,
+  approval token, identity, or activation route.

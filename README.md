@@ -2,15 +2,15 @@
 
 Language: [Portuguese (Brazil)](README.pt-BR.md)
 
-RamShared turns idle NVIDIA VRAM into an elastic memory tier for Linux and
-WSL2. It places compressed RAM first, GPU-backed swap second, and disk swap
-last. When the GPU needs its budget back, RamShared stops promotion, drains the
-GPU tier, and releases the allocation.
-
-It is not extra VRAM for games and it does not inspect application names. A
-game, renderer, browser, video editor, or compute job is simply an external GPU
-workload. Reclaim decisions use aggregate GPU budget, free-memory, and latency
-signals.
+RamShared is an R&D candidate for using idle NVIDIA VRAM as a revocable cache
+in a Linux and WSL2 memory tier. Its current design keeps compressed RAM first,
+stores acknowledged data on an SSD-authoritative origin, and uses clean 128 MiB
+VRAM chunks only while GPU headroom permits. The existing WSL swap VHDX remains
+the final fallback. The current source tree is not qualified for installation
+or activation: Rust verification and the live guardian, origin, pressure, and
+attended-rollout gates remain open. Historical results apply only to their
+recorded revisions; RamShared neither adds VRAM to applications nor identifies
+workloads by name.
 
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.png)
 
@@ -29,9 +29,9 @@ evidence for their exact builds, not proof for the current candidate.
 
 | Surface | Status | What that means |
 | --- | --- | --- |
-| Linux/WSL2 cascade | **Beta · incident remediation open** | Ordered teardown remains valid, but protection effectiveness, guaranteed capacity, and external heartbeat gates must be requalified. Boot activation is disabled by default. |
+| Linux/WSL2 cascade | **Source-removal gate closed · live qualification blocked** | Removal of the full-VRAM NBD legacy composition passes its named Node/static governance gate. Affected Rust regression gates for this exact worktree await the external Guard repair. Destructive guardian/origin/pressure matrices and the attended 24-hour rollout remain open. Boot activation stays disabled. |
 | Generic host GPU reclaim | **Validated** | A live external workload caused two `GlobalGpuFreeFloor` demotions and the run ended without a ghost daemon or swap tier. |
-| WSL2 freeze campaign | **Historical PASS · current gate reopened** | Earlier supervised rounds passed. Two 2026-08-20 VM timeouts showed that the prior health model could remain green without exercising the VRAM tier. |
+| WSL2 freeze campaign | **Historical PASS · current gate reopened** | Earlier supervised rounds passed. Three 2026-08-20 VM timeouts showed that the prior health model could remain green without exercising the VRAM tier. |
 | Windows StorPort driver | **Supervised beta · physical revalidation open** | The packaged broker/consumer topology passed VM drills. Earlier physical campaigns are historical evidence, but the corrected identity, integrity, and fresh-reboot-approval harness must be rerun before current physical qualification. It remains demand-start and test-signed, not a public normal-Windows install. |
 | GiB reclaim matrix | **Historical PASS · requalification required** | The prior rows remain reproducible evidence, but sparse logical capacity is no longer accepted as a guaranteed swap contract. |
 | Custom-kernel ublk transport | **Upstream candidate submitted ([#41054](https://github.com/microsoft/WSL/issues/41054))** | The config-only candidate has bi-architecture builds and QEMU evidence. Microsoft triage and acceptance are still pending. |
@@ -39,94 +39,53 @@ evidence for their exact builds, not proof for the current candidate.
 The status above is intentionally narrower than the architecture. Open claims
 and the exact evidence needed to close them live in
 [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md).
-The consolidated review of the Jules-generated candidates is recorded in
+The consolidated review of the earlier candidate changes is recorded in
 [`docs/reliability/JULES-PR-AUDIT-20260724.md`](docs/reliability/JULES-PR-AUDIT-20260724.md).
 
-## Why VRAM-as-Swap in WSL2?
+## Why investigate VRAM as a WSL2 tier?
 
-In WSL2, swapping to a virtual disk (`ext4 → VHDX → Hyper-V → Windows NTFS`) introduces
-heavy virtualization overhead:
+WSL2's disk path crosses ext4, VHDX, Hyper-V, and NTFS. The project therefore
+measures whether a revocable VRAM cache can reduce observed stalls for an exact
+workload and environment. The older cross-transport headline figures do not
+have a current evidence-envelope run identity. They remain only as
+`legacy-unqualified` history in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md), not
+as a current speed or responsiveness claim.
 
-- **WSL2 VHDX Disk Swap (4KB QD1 randread p50):** **~2,114 µs (~2.1 ms)**
-- **RamShared NBD VRAM Swap (4KB QD1 randread p50):** **~326 µs** (6.5× faster)
-- **RamShared ublk Direct io_uring (4KB QD1 randread p50):** **~8 µs ± 2 µs** (264× faster)
+## Current boundary — disabled staging only
 
-Because swap-in page faults are synchronous, lower measured latency can reduce
-stall duration on the tested path. It does not guarantee that WSL2, VMBus, or a
-workload remains responsive under arbitrary memory pressure.
+There is no quick start for the current candidate. It authorizes no package or
+boot installation, lifecycle transition, WSL configuration/application, VM
+operation, storage/VHDX/GPU/device action, or pressure run. Source/static test
+results and historical measurements are not activation approval.
 
-## Accelerating Local AI & Heavy Workloads
+The candidate's proposed source default is 4 GiB logical capacity with a 1 GiB
+initial physical cache cap. Its future canonical origin identity is
+`/dev/disk/by-partuuid/<uuid>`; the placeholder is not an instruction to
+provision or open a device. Logical capacity may be configured from 1 through
+24 GiB without preallocating that amount of VRAM.
 
-RamShared provides an elastic cushion for intensive developer workloads:
+### Source prerequisite closed: legacy preallocation removed
 
-- **Local inference:** Add a bounded lower memory tier when the selected model
-  and GPU budget fit; application OOM remains possible.
-- **CUDA workloads:** Use only capacity that has been committed before the swap
-  device is activated.
-- **Builds and containers:** Launch managed work through
-  `ramshared run --profile safe -- ...` so the WSL control plane retains memory.
-- **Agent workflows:** Serialize heavy phases or place them in the same managed
-  slice; RamShared does not control arbitrary processes outside that boundary.
+The `RAMSHARED_VRAM_PREALLOC_LEGACY` selector and its full-VRAM NBD composition
+were removed from executable source. The named
+`legacy_preallocation_removed_before_day0_deadline` test, active-source scan,
+thresholded checker coverage, and documentation-governance check close only
+this source-governance prerequisite. Focused Rust tests, rustfmt, and Clippy for
+this exact worktree remain pending on the external Guard repair. The generic
+`VramBackend` remains for broker, ublk, and Windows consumers; it is no longer
+selectable as the single NBD product backend.
 
-## Quick Start
+Live qualification, release promotion, and activation remain `BLOCKED` on the
+incident-specific guardian/origin/pressure matrices and attended rollout. Every
+manager remains disabled/plan-only. Historical append-only validation records
+may describe the removed path, but they are evidence for old builds, not an
+available selector. Restoring it is not a rollback option.
 
-Requirements:
-
-- Linux or WSL2 with an NVIDIA GPU visible through `nvidia-smi`
-- Rust toolchain
-- `sudo` access for block-device and swap lifecycle operations
-
-```bash
-./scripts/quickstart.sh
-
-sudo ./target/release/ramshared check
-sudo ./target/release/ramshared up --vram 1024 --zram 1024
-swapon --show
-./target/release/ramshared status
-./target/release/ramshared monitor
-sudo ./target/release/ramshared run --profile safe -- make test
-```
-
-Start with a bounded allocation such as 1024 MiB. Keep enough VRAM available
-for the desktop and other GPU workloads.
-
-Stop through the product lifecycle, never by killing the daemon:
-
-```bash
-sudo ./target/release/ramshared down
-```
-
-`down` disables GPU-backed swap before stopping its daemon. This ordering is a
-data-integrity boundary.
-
-If preflight blocks startup:
-
-```bash
-sudo ./target/release/ramshared doctor
-./target/release/ramshared status --json
-```
-
-Captured JSONL telemetry can be explained locally without sending it to an
-external service:
-
-```bash
-./target/release/ramshared diagnose --events /path/to/telemetry.jsonl
-./target/release/ramshared diagnose --events /path/to/telemetry.jsonl --json
-```
-
-`ramshared monitor` is a read-only terminal dashboard. It samples every two
-seconds and keeps five minutes of RAM history. The physical GPU panel reports
-all NVIDIA VRAM use; the `vram` swap tier reports only pages attributable to
-RamShared. Press `q`, `Esc`, or `Ctrl-C` to exit.
-
-For automation or a host-visible heartbeat:
-
-```bash
-./target/release/ramshared monitor --jsonl --once
-./target/release/ramshared monitor --jsonl \
-  --output /var/log/ramshared/cascade-health.jsonl \
-  --heartbeat /mnt/c/wsl-forensics/ramshared-heartbeat.json
-```
+Historical read-only monitor and telemetry material is retained only as an
+interface description: schema v4 separates logical capacity, VRAM cached, GPU
+headroom, authoritative SSD writes, fallback swap use, memory pressure, and
+guardian/control states. It does not authorize collecting, writing, or routing
+telemetry on a host.
 
 ## Memory Cascade
 
@@ -137,20 +96,23 @@ memory pressure
 zram (compressed system RAM)
     |
     v
-idle GPU memory (elastic tier: NBD or ublk)
+RamShared logical device
+    |-- authoritative SSD origin
+    `-- clean, revocable VRAM cache
     |
     v
-disk swap (durable fallback)
+existing WSL swap VHDX (last resort)
 ```
 
-The control plane watches GPU headroom and operation latency. When the Windows
-host or another GPU workload reduces available budget, RamShared attempts to:
+Every acknowledged RamShared write is durable on the origin before cache work.
+Reads use VRAM only when generation and page validity match. When Windows WDDM
+or another GPU workload reduces the available budget, RamShared:
 
 1. refuse new VRAM commits;
-2. perform an ordered, bounded `swapoff` drain;
-3. keep the backend allocated if the drain cannot be proven complete;
-4. release CUDA memory only after the tier is empty;
-5. record the transition and terminal result.
+2. invalidate or immediately release clean cache chunks;
+3. continue I/O through the SSD origin if GPU allocation or measurement fails;
+4. reserve `max(2 GiB, 20% of physical VRAM)` for the GPU;
+5. require swapoff-first ordering only when detaching the authoritative origin.
 
 Windows WDDM remains authoritative in WSL2. RamShared reacts to host-visible
 pressure; it does not promise that opening a particular application instantly
@@ -158,132 +120,96 @@ or risklessly frees a fixed amount of VRAM.
 
 ## Safe Operation
 
-- Use `ramshared up` and `ramshared down`; do not force-kill `ramsharedd` while
-  its swap device is active.
-- A requested 4 GiB profile on a 6 GiB card is a maximum, not a promise. The
-  product falls back to 2 or 1 GiB unless the complete allocation plus
-  `max(1 GiB, 20% of total VRAM)` is available.
-- Run destructive pressure campaigns only through the supervised watchdog
-  harnesses with explicit approval and artifact capture.
+- Keep the current candidate off. The retained lifecycle contract requires an
+  ordered, identity-checked detach; never force-kill `ramsharedd` while a swap
+  device could be active.
+- A 4 GiB logical device on a 6 GiB card is not a 4 GiB physical reservation.
+  The cache target is bounded by the sealed physical cap and by WDDM headroom;
+  unknown GPU measurement sets the target to zero and keeps the SSD path alive.
+- Keep heavy work inside `ramshared-workloads.slice`. Large processes outside
+  that hierarchy are reported as `UNMANAGED_PRESSURE` and are not silently
+  counted as managed capacity.
+- Historical pressure evidence used supervised watchdog harnesses with explicit
+  approval and artifact capture. That is a non-current record, not a runnable
+  campaign path for this disabled candidate.
 - Treat `PARTIAL` as an evidence state, not a test failure and not a release
   claim.
 - Never initialize, clear, repartition, or format a disk based only on disk
   number, size, or drive letter.
 
-## Desktop Control
+## Desktop and boot staging
 
-On WSLg or desktop Linux:
+No desktop-control, package-install, boot-integration, recovery-resume, or
+uninstall action is currently documented as runnable. The candidate may retain
+disabled definitions for a protected control slice, aggregate workload slices,
+supervisor, host gate, Docker/containerd/cron drop-ins, guardian, and origin
+manifest, but none is installed, enabled, or applied by this document.
 
-```bash
-bash scripts/safety/install-cascade-app.sh
-./scripts/safety/cascade-app.sh --gui
-```
+The source-removal prerequisite above is closed. Any future approval still
+requires fresh incident-specific qualification, a sealed origin identity, a
+fresh watchdog heartbeat, and exact attended authorization. It must remain
+targeted and fail-closed: no broad WSL shutdown or automatic Windows reboot is
+in scope.
 
-The same lifecycle is available without the GUI:
+## Historical release bundle
 
-```bash
-./scripts/safety/cascade-app.sh status
-sudo ./scripts/safety/cascade-app.sh start
-sudo ./scripts/safety/cascade-app.sh stop
-```
-
-Root authorization is required only at the device and swap boundary.
-
-## Opt-in Boot Integration
-
-WSL2 needs systemd enabled in `/etc/wsl.conf`. After changing that setting, run
-`wsl --shutdown` once from Windows.
-
-The sealed installer is plan-only without exact version, lower-sink, and
-legacy-unit approvals. It installs the cascade service, health sampler, and
-workload-slice definitions without enabling any of them. Do not add a
-persistent activation override while the incident gate is open.
-
-After requalification, an attended enablement may arm the unit; startup still
-requires a fresh watchdog heartbeat and all fail-closed preflight gates. Remove
-the installed integration with the sealed uninstaller. It removes a unit only
-after an exact content match and never stops managed workloads merely to remove
-the workload-slice definition:
-
-```bash
-sudo /opt/ramshared/current/scripts/safety/uninstall-cascade-boot.sh
-```
-
-## Installable Bundle
-
-Build the release bundle with:
+The repository retains the bundle builder used by the published beta:
 
 ```bash
 scripts/package/build-linux-bundle.sh
 ```
 
-The output under `artifacts/packages/` contains release binaries, safety
-scripts, systemd templates, documentation, and `SHA256SUMS`. Build caches,
+Its output under `artifacts/packages/` contains release binaries, safety
+scripts, systemd templates, documentation, and `SHA256SUMS`. Running the
+builder does not qualify or install the current worktree. Build caches,
 credentials, VM-local notes, and Windows driver artifacts are excluded. See
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
 The official v0.9.0-beta.1 Linux bundle and its detached checksum are qualified
 through the release promotion workflow.
 
-## Windows Driver Beta
+## Windows Driver candidate
 
-The Windows path is a StorPort virtual miniport backed by GPU memory. Its VM
-drills pass; corrected physical-host qualification is pending a newly approved
-campaign. Deployment remains an elevated, supervised beta workflow.
+The Windows candidate is a StorPort virtual miniport backed by GPU memory.
+Historical VM drills passed; corrected physical-host qualification remains open.
+The candidate is disabled and this document provides no deployment workflow.
 
-The installed topology has two SCM services:
+The candidate topology models two SCM services:
 
-- `RamSharedBroker` runs as `NT SERVICE\RamSharedBroker` and owns logical
-  lease arbitration only;
-- `RamSharedWinSvc` runs as LocalSystem, depends on the broker, and owns
-  CUDA, queue, LUN and safe teardown;
-- their daily boundary is the authenticated local named pipe
-  `\\.\pipe\RamSharedBroker.v1`; no daily TCP listener is installed;
-- both are demand-start by default and are switched as one immutable,
-  SHA-256-validated product manifest.
+- a least-privilege broker owns logical lease arbitration only;
+- a consumer depends on that broker and owns CUDA, queue, LUN, and safe
+  teardown;
+- their boundary is an authenticated local named pipe; no TCP listener is part
+  of the candidate;
+- both are disabled pending a single immutable, SHA-256-validated product
+  manifest and current qualification.
 
 Important boundaries:
 
-- use a disposable VM for routine driver development;
-- use a physical host only for an explicitly approved campaign;
-- verify the signed package and running binary match before collecting proof;
-- refuse installation if the manifest-owned temporary volume letter is
-  already present; never remap an existing host volume;
-- mount the temporary LUN under a private directory when possible, not a
-  persistent Explorer drive letter;
-- format only an exact `RAMSHARE VRAMDISK` identity that also matches the
-  expected size and current campaign owner;
-- never use `Clear-Disk`, broad disk-number selection, or physical-disk
-  fallback logic;
-- drain any pagefile before backend teardown; surprise removal can cause
+- disposable-lab evidence is historical only;
+- a future physical-host campaign needs explicit approval and an exact signed
+  binary/manifest match;
+- any future storage operation must bind exact ownership, never a drive letter,
+  disk number, size-only match, or physical-disk fallback;
+- an active pagefile must block backend teardown; surprise removal can cause
   Windows bugcheck `0x7A`.
 
-The calibrated GiB reclaim matrix is closed on the tested RTX 2060 host. Public
-Windows distribution remains gated on a production-trusted or
+The calibrated GiB reclaim matrix is historical evidence from a sanitized
+project workstation. Public Windows distribution remains gated on a production-trusted or
 Microsoft-attested package. Test-signed lab packages are not public releases;
 see [`docs/packaging/WINDOWS-DRIVER-DISTRIBUTION.md`](docs/packaging/WINDOWS-DRIVER-DISTRIBUTION.md).
-Operational install, rollback and recovery steps are in
-[`docs/runbooks/windows-autonomous-broker.md`](docs/runbooks/windows-autonomous-broker.md).
+Operational install, rollback, and recovery are not authorized while the
+candidate remains disabled.
 
-## Performance Evidence
+## Performance evidence
 
-Performance depends on transport, workload, queue depth, host contention, and
-GPU pressure. The project records those conditions with each result instead of
-publishing one universal speed.
-
-![RamShared WSL2 Performance & Latency Benchmarks](docs/marketing/benchmark-comparison.svg)
-
-Representative measurements on the project workstation (NVIDIA RTX 2060 6GB, WSL2 Linux):
-
-| Transport / Path | 4KB Page Fault Latency (p50) | Throughput (Sequential) | CPU Core Overhead |
-| --- | ---: | ---: | ---: |
-| **WSL2 Virtual Disk (VHDX)** | ~2,114 µs | ~3,200 MB/s (NVMe) | Low (DMA) |
-| **RamShared NBD (Day-1 MVP)** | ~326 µs | ~2,100 MB/s | ~22% (Socket Stack) |
-| **RamShared ublk (io_uring)** | **~8 µs ± 2 µs** | **~9,600 MB/s** | **~4% (Ring Buffer)** |
-
-These are environment-specific observations, not minimum guarantees. Source
-context and caveats are in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and
-[`validation.md`](validation.md).
+No representative performance table is currently qualified for this source
+candidate. Older charts and log entries remain in the repository for audit,
+but pre-envelope figures are `legacy-unqualified` and are not presented here
+as current product evidence. A future public comparison must bind a run ID,
+source revision, same-load parameters, at least three rounds, median, p99,
+deviation, and verifiable sanitized artifacts. See
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and [`validation.md`](validation.md).
 
 ## Architecture
 
@@ -305,7 +231,7 @@ specification and named evidence under `docs/specs/`.
 
 | Need | Document |
 | --- | --- |
-| Installation and common questions | [`docs/FAQ.md`](docs/FAQ.md) |
+| Current status and common questions | [`docs/FAQ.md`](docs/FAQ.md) |
 | Architecture | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | Current roadmap | [`ROADMAP.md`](ROADMAP.md) |
 | Empirical validation log | [`validation.md`](validation.md) |

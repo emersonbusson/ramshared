@@ -1,191 +1,119 @@
-# FAQ — short answers
+# FAQ — current candidate
 
-## What is this?
+## Current boundary — disabled staging only
 
-When RAM is full, Linux starts using the **disk**. That feels bad.  
-RamShared adds a **middle cushion**: idle **GPU** memory. If the GPU gets busy, that cushion is **given back** and data goes to disk again. Apps keep running.
+RamShared is not currently installable or activatable from this documentation.
+Do not use it as a quick-start, desktop-control, boot-integration, WSL
+configuration/application, VM lifecycle, guest-formatting, storage/VHDX/GPU
+action, or pressure-campaign guide. Historical command transcripts are omitted
+on purpose; retained figures and verdicts apply only to their recorded builds.
 
-## Will it break / freeze my PC?
+The legacy full-VRAM NBD backend composition and
+`RAMSHARED_VRAM_PREALLOC_LEGACY` selector were removed from executable source.
+The named sunset test, thresholded checker coverage, clean active-source/current
+document scan, and documentation-governance check close only that source
+governance prerequisite. Focused Rust tests, rustfmt, and Clippy for this exact
+worktree remain pending on the external Guard repair. Qualification, release
+promotion, and activation remain `BLOCKED` on live incident-specific evidence,
+and managers remain disabled/plan-only.
 
-**Designed so normal use shouldn’t freeze WSL2.**
+## What is RamShared intended to model?
 
-Past freezes came from turning things off the wrong way (killing the GPU swap daemon while pages were still on that device). Today `ramshared down` always turns swap off **first**.
+The source candidate models compressed RAM first, an SSD-authoritative logical
+device with a clean revocable VRAM cache second, and existing disk/VHDX swap
+last. Acknowledged data belongs to the origin, not VRAM. If GPU measurement or
+allocation fails, cache capacity becomes zero while the origin path remains the
+correctness boundary.
 
-What you *might* notice:
+## Will it freeze a PC?
 
-- A **short slowdown** when a game on Windows reclaims VRAM (we measured up to ~1.2 s for a tiny read under hard reclaim; a full demote of hundreds of MB can take on the order of **tens of seconds**).
-- That is **not** the same as “WSL dead forever.”
+The candidate's retained safety contract requires identity-checked,
+swapoff-first origin detach; it must never detach a daemon while its device can
+still be used for swap. Historical hard-reclaim evidence measured a roughly
+**1.2 s** tiny-read stall and full demotions of hundreds of MiB on the order of
+**tens of seconds**. Those are observations, not responsiveness guarantees.
 
-Heavy thrash tests: we don’t run those on the WSL you work in every day.
+The current candidate does not authorize any thrash or pressure test, especially
+not on a daily WSL2 host. A `PARTIAL` result is evidence of an open gate, not a
+failed test and not a release claim.
 
-## Is it free RAM for games?
+## Is this free RAM for games?
 
-**No.** If a game already fills the GPU, there’s little idle memory to borrow. This is for **workstation pressure** (builds, containers, browsers) while the GPU is often idle.
+No. A game or other external workload has priority for the GPU budget. The
+candidate reserves `max(2 GiB, 20% of total VRAM)` and treats unknown WDDM/GPU
+measurement as zero cache target. It neither promises a fixed amount of VRAM
+nor identifies applications by name.
 
-## What do I need?
+## Why did Task Manager show an unusual virtual disk?
 
-- Linux or **WSL2**
-- NVIDIA GPU + working `nvidia-smi`
-- Rust to build
-- sudo
+This is retained historical lab evidence, not a current lab procedure. A
+64 MiB virtual LUN could appear fully busy with zero throughput or latency when
+class-driver polling and a miniport readiness condition disagreed. The Day-0
+driver correction changed the not-ready result to a standards-compliant
+not-ready condition rather than an indefinitely busy response.
 
-```bash
-./scripts/quickstart.sh
-sudo ./target/release/ramshared check
-sudo ./target/release/ramshared doctor   # if check fails
-```
+The retained live record used a sanitized product LUN, generated **304 MiB** of
+write/read traffic during sampling, and matched a direct **8 MiB** checksum
+probe. It observed non-zero busy/write/queue counters and recorded
+`DISK_IO_MEASURE_OK=true`. The verdict is that Task Manager alone was not a
+correctness gate; the historical measurement path passed for its exact build.
 
-## Why does Task Manager show RamShared disk at 100% with 0 KB/s and 0 ms?
+## What do the candidate status terms mean?
 
-That is a **Windows UI limitation + common virtual miniport footgun**, not “infinite speed”.
-
-What you usually see on **Disco N — RAMSHARE VRAMDISK**:
-
-| Field | Meaning |
+| State | Intended meaning |
 | --- | --- |
-| **Tempo de atividade 100%** | Class driver is polling / queue looks “busy” |
-| **0 KB/s read/write** | No (or few) completed transfers counted as user data |
-| **0 ms** | Latency counters not meaningful for that path |
-| **Formatado: 0 MB** | LUN is still **RAW** (no NTFS partition) — Task Manager has no volume |
+| `Armed` | The SSD-authoritative logical tier would be present; cache use may still be near zero. |
+| `UsingZram` | Pressure is primarily in compressed RAM. |
+| `UsingVram` | The cache would contain attributable data. |
+| `UsingDisk` | The existing lower disk/VHDX tier would be in use. |
+| `Demoting` | The cache would be releasing capacity under a restricted budget. |
+| `Degraded` | Identity, origin, control, guardian, or cache evidence is not safe to rely on. |
+| `Off` | No product cascade is present. |
 
-Important:
+Schema v4 distinguishes physical GPU use, logical capacity, cached VRAM,
+authoritative-origin writes, fallback swap use, memory pressure, and control or
+guardian state. The interface description does not authorize inspecting or
+changing a host.
 
-1. **Letter `V: RAMSHARED` may be a physical SSD** that was labeled earlier — **not** the 64 MiB virtual LUN. Always check `Get-Disk` name + size (lab LUN is usually 64 MiB / Fibre Channel / `RAMSHARE VRAMDISK`).
-2. **Backend must be alive** (`WinDriveBackend` / winsvc). A ghost RAW disk after backend exit makes `Initialize-Disk` fail with StorageWMI **40004** (writes never complete).
-3. Prefer real metrics (do **not** trust Task Manager alone). The measure script samples
-   locale-safe PerfDisk counters and, when a drive letter is provided, runs direct I/O
-   during the sampling window plus a checksum probe:
+## Can the desktop control or boot integration be used?
 
-```powershell
-# Elevated from WSL: ./scripts/windows/wsl-elevated-ps.sh -File C:\ramshared\bin\...
-# Start backend if needed, then format only the RamShared LUN (free letter, not V: if V: is physical):
-.\scripts\windows\Start-RamSharedLab.ps1 -SizeBytes 67108864 -HoldSeconds 3600
-.\scripts\windows\Format-RamSharedLun.ps1 -ExpectedSizeBytes 67108864 -DriveLetter S -Force
-# Locale-safe PerfDisk (CIM) + direct I/O load/checksum probe:
-.\scripts\windows\Measure-RamSharedDiskIo.ps1 -Seconds 10 -DriveLetter S
-```
+No. Disabled definitions may exist in source for future review, but no current
+desktop-control, package-install, boot, resume, uninstall, or systemd action is
+authorized. The source-removal prerequisite is closed; a future attended
+rollout still requires fresh incident-specific qualification, exact sealed
+origin identity, fresh watchdog proof, and a separate approval.
 
-4. Day-0 driver fix: **TEST UNIT READY no longer returns `SRB_STATUS_BUSY`** when the LUN is not ready (that made StorPort requeue forever → stuck 100%). It returns CHECK CONDITION **NOT READY** with autosense instead. Rebuild/reload `ramshared.sys` to pick that up.
+## What about WSL configuration paths?
 
-**Live lab (host 2026-07-18):** `C:\ramshared\artifacts\exhaustive-20260718-004215`
-mounted Disk5 `RAMSHARE VRAMDISK` as `S:` and passed `DISK_IO_MEASURE_OK=true`.
-The measure script matched PerfDisk instance `5 S:`, generated 304 MiB write/read
-during sampling with `match=True`, observed non-zero busy/write/queue counters, and
-the direct 8 MiB checksum probe matched. Task Manager can still show odd % busy on
-StorPort. This is not a RamShared correctness gate; use the measure script for
-supported evidence.
+Historical evidence found that Windows-style backslashes can be interpreted as
+escapes in WSL configuration. The public record deliberately uses placeholders
+instead of a host-observed path. No configuration rewrite or WSL apply action is
+authorized by this FAQ.
 
-## Is RamShared using my VRAM right now?
+## What happens under external GPU pressure?
 
-Run:
+The intended candidate policy stops new cache commits, drops clean chunks, and
+continues through the authoritative origin. A future guardian would require
+independent failed-health evidence, safe-mode persistence, exact sealed-distro
+identity, and a bounded recovery proof before any targeted action. It has no
+broad WSL shutdown or automatic Windows reboot path.
 
-```bash
-./target/release/ramshared status
-# or machine-readable:
-./target/release/ramshared status --json
-# live read-only dashboard:
-./target/release/ramshared monitor
-```
+## Can the Windows driver be installed on a physical host?
 
-| Phase | Meaning |
-| --- | --- |
-| **Armed** | VRAM tier is on as swap (`nbd`), daemon is up, but **almost no pages** there yet (idle cushion). |
-| **UsingZram** | Guest pressure is mostly on compressed RAM. |
-| **UsingVram** | Real use of the GPU-backed tier (used ≥ ~1 MiB). |
-| **UsingDisk** | Spilled past VRAM to disk/VHDX. |
-| **Demoting** | Giving VRAM back (host GPU pressure / canary) — only when the daemon reports it. |
-| **Degraded** | Ghost swap, bad priority order, or VRAM swap without daemon — fix before relying on the cushion. |
-| **Off** | Product cascade not present. |
+No. Physical-host qualification is open. Historical test-signed lab evidence is
+not public distribution evidence. A future physical campaign would require a
+production-trusted package, exact identity/integrity checks, explicit fresh
+reboot approval, supported teardown, and rollback evidence. A pagefile-active
+backend teardown can cause Windows bugcheck **0x7A**.
 
-The status schema separates physical GPU use, guaranteed RamShared capacity,
-and actual pages in the GPU-backed swap tier. Disk use is attributed to
-RamShared only as growth above the baseline recorded at activation; disk swap
-pages that existed while the product was off do not produce `UsingDisk`.
+## Does GDDR6 mix directly with DDR4?
 
-`cascade-health.sh` is a compatibility wrapper for the same typed monitor. To
-make the GPU box visible in `btop`, first inspect the reversible plan:
+No. GPU and system memory are managed by different controllers; data crosses
+PCIe. Historical bandwidth/latency figures are transport observations, not a
+promise of memory compatibility or performance.
 
-```bash
-./scripts/safety/configure-btop-observability.sh
-./scripts/safety/configure-btop-observability.sh --apply
-```
+## Where are the verified records?
 
-The apply command prints the exact backup path. Pass that path to `--rollback`
-if btop's NVML polling stalls. btop shows total physical GPU memory; use
-`ramshared monitor` for RamShared tier attribution.
-
-## How do I know it worked?
-
-```bash
-swapon --show
-```
-
-Aim for three lines: **zram** (first), **GPU-backed** device (second), **disk** (last). Names vary; **order** matters.
-
-## Is there a simple app / menu?
-
-Yes — a small control panel (not a fancy store app):
-
-```bash
-bash scripts/safety/install-cascade-app.sh
-./scripts/safety/cascade-app.sh --gui
-```
-
-Same actions as the CLI: start, stop, status, check, boot on/off.  
-Under the hood it still calls the safe `ramshared up` / `down` paths.
-
-## Turn on at WSL boot?
-
-Yes, if you want — from the control app (**Enable boot**) or:
-
-```bash
-sudo bash scripts/safety/install-cascade-boot.sh --enable
-```
-
-Needs systemd in the distro. Config: `/etc/ramshared/cascade.conf`.  
-Undo: **Disable boot** in the app, or `sudo bash scripts/safety/uninstall-cascade-boot.sh`.
-
-## WSL says “invalid escape character” in `.wslconfig`?
-
-`.wslconfig` is **not** a dumb ini: `\` starts an escape. A Windows path like `I:\wsl_swap\...` becomes invalid (`\w`).
-
-**Rule:** path values use **forward slashes** only (`I:/wsl_swap/swap.vhdx`, `C:/wsl/kernel-ramshared`).
-
-```bash
-# diagnose + rewrite (safe, keeps backup)
-bash scripts/safety/wslconfig-ctl.sh check
-bash scripts/safety/wslconfig-ctl.sh apply
-# unit tests for this failure class:
-bash scripts/safety/wslconfig-ctl.sh selftest
-```
-
-Do **not** hand-edit paths with raw backslashes. `scripts/kernel/wsl-kernel.sh arm` and the safe boot scripts emit the same encoding.
-
-## What happens when I open a game?
-
-The daemon watches free GPU memory and latency. If the card is under pressure, it **stops using GPU as swap** (DEMOTE). Pages move to disk. Processes in WSL are **not** killed on purpose.
-
-You may feel WSL get sluggish for a while. If it’s stuck for a long time, check `swapon --show` and logs (`journalctl -u ramshared-cascade -b` if you used boot). As a last resort on Windows: `wsl --shutdown` (only after you’ve tried `ramshared down` when you can).
-
-## Can I install the Windows kernel driver on my physical host?
-
-**Yes, for development and testing (MVP/Beta).** You can compile and load the driver on a physical machine, but it requires two prerequisites:
-1. **Disable Secure Boot** in your motherboard UEFI/BIOS settings.
-2. Enable Windows Test Mode by running:
-   ```powershell
-   bcdedit.exe /set "{current}" testsigning yes
-   bcdedit.exe /set "{current}" nointegritychecks yes
-   ```
-3. Reboot your PC and compile/sign the drivers using the provided scripts.
-
-*Note:* Force-killing the backend while the virtual disk contains active pagefile pages will cause a bluescreen (**0x7A**). Ensure you stop the pagefile usage before stopping the backend.
-
-## Does mixing GDDR6 and DDR4 memory cause compatibility or latency issues?
-
-No. GDDR6 (on the GPU) and DDR4 (on the motherboard) never communicate directly; each is managed by its own physical memory controller. All data transfers between them go through the PCI-Express (PCIe) bus, which standardizes the communication.
-
-While the GPU's internal GDDR6 bandwidth is massive (e.g., 336 GB/s), the transfer speed is bounded by the PCIe bus bandwidth (e.g., PCIe Gen3 x16 is limited to ~15.8 GB/s). However, even at ~15.8 GB/s, this is **several times faster** than high-end NVMe SSD write speeds, and the access latency is in the microsecond range (µs) compared to milliseconds (ms) for SSDs and HDDs. Data integrity is fully protected by hardware-level PCIe CRC and parity checks.
-
-## Where are the real numbers?
-
-[validation.md](../validation.md) and [docs/reliability/](reliability/). If a number isn’t written there, treat marketing claims as suspect.
+[validation.md](../validation.md) is the append-only empirical log and
+[reliability evidence](reliability/) records open gates. If a number is not
+recorded there with context and a verdict, treat it as unverified.

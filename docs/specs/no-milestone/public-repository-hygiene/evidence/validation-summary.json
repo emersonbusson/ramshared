@@ -1,26 +1,127 @@
 {
   "schema_version": "ramshared-validation-summary/v1",
   "slug": "public-repository-hygiene",
+  "observed_at_utc": "2026-08-24T05:34:16Z",
   "before": {
-    "candidate_mode_available": false,
-    "staged_index_blob_mode_available": false,
-    "portable_default_policy_complete": false
+    "immutable_git_snapshot_policy": false,
+    "jpeg_strict_metadata_profile": false,
+    "png_raw_itxt_language_validation": false,
+    "png_indexed_background_bound": false,
+    "png_two_zlib_stream_fixture": false,
+    "png_ancillary_privacy_policy": false,
+    "jpeg_committed_authority_policy": false,
+    "global_line_owner_uniqueness": false,
+    "planner_input_confinement": false,
+    "raw_changed_path_validation": false
   },
   "action": {
-    "named_tests": 12,
-    "docs_check_repetitions": 2,
-    "windows_static_harnesses": 24,
-    "powershell_scripts_parsed": 80
+    "focused_findings_red": 5,
+    "focused_regressions_red": 6,
+    "focused_regressions_green": 6,
+    "public_hygiene_tests_passed": 45,
+    "public_hygiene_tests_failed": 0,
+    "prior_r5_planner_tests_passed": 43,
+    "prior_r5_planner_tests_failed_external": 1,
+    "planner_or_full_node_rerun_in_this_dispatch": false
   },
   "after": {
-    "candidate_files": 681,
+    "immutable_git_snapshot_policy": true,
+    "jpeg_strict_metadata_profile": true,
+    "png_raw_itxt_language_validation": true,
+    "png_indexed_background_bound": true,
+    "png_two_zlib_stream_fixture": true,
+    "png_ancillary_privacy_policy": true,
+    "jpeg_committed_authority_policy": true,
+    "global_line_owner_uniqueness": true,
+    "planner_input_confinement": true,
+    "raw_changed_path_validation": true,
+    "candidate_files": 909,
     "candidate_findings": 0,
-    "line_coverage_percent": 94.38,
-    "branch_coverage_percent": 85.29,
-    "function_coverage_percent": 100.0,
-    "test_failures": 0,
-    "docs_check_exit": 0,
-    "deterministic_output": true
+    "candidate_exit_code": 0,
+    "planner_all_status": "BLOCKED",
+    "planner_all_exit_code": 1,
+    "planner_duplicate_line_owners": 5,
+    "public_hygiene_line_coverage_percent": 93.55,
+    "public_hygiene_branch_coverage_percent": 81.74,
+    "public_hygiene_function_coverage_percent": 99.14,
+    "planner_line_coverage_percent": 89.95,
+    "planner_branch_coverage_percent": 82.42,
+    "planner_function_coverage_percent": 98.63
   },
-  "verdict": "PASS"
+  "refusals": [
+    {
+      "surface": "Git authority snapshot",
+      "cases": [
+        "symbolic HEAD moves after immutable commit selection",
+        "index bytes move after staged path/mode/blob selection"
+      ],
+      "verdict": "PASS"
+    },
+    {
+      "surface": "PNG ancillary metadata",
+      "cases": [
+        "two concatenated zlib streams",
+        "indexed bKGD outside PLTE",
+        "high-bit iTXt language byte",
+        "private marker in tEXt",
+        "private marker in zTXt",
+        "private marker in iTXt",
+        "unsupported ancillary chunk",
+        "compressed metadata output limit"
+      ],
+      "verdict": "PASS"
+    },
+    {
+      "surface": "JPEG committed authority",
+      "cases": [
+        "changed tracked JPEG with unchanged manifest",
+        "changed tracked JPEG and manifest in one candidate",
+        "committed unreviewed JPEG and manifest change",
+        "private marker in Latin-1, UTF-16LE, or UTF-16BE metadata",
+        "malformed C2PA APP11 including raw UUID",
+        "private marker inside a structurally valid C2PA CBOR leaf",
+        "unsupported APPn or COM metadata"
+      ],
+      "verdict": "PASS"
+    },
+    {
+      "surface": "Rust coverage planner",
+      "cases": [
+        "duplicate pure line owners",
+        "external symlink production source and SPEC",
+        "symlinked map and changed-path list",
+        "BOM, Cc, and Cf anywhere in changed paths",
+        "CLI --all never prints READY for an invalid map"
+      ],
+      "verdict": "PASS"
+    }
+  ],
+  "residuals": [
+    {
+      "path": "docs/governance/rust-slice-coverage.json",
+      "rule": "line-coverage-production-owner-duplicate",
+      "count": 5,
+      "sources": [
+        "crates/ramshared-cli/src/cascade/lifecycle.rs",
+        "crates/ramshared-cli/src/main.rs",
+        "crates/ramshared-winsvc/src/config.rs",
+        "crates/ramshared-winsvc/src/evidence.rs",
+        "crates/ramshared-winsvc/src/runtime.rs"
+      ],
+      "ownership": "coverage-map-outside-dispatch"
+    },
+    {
+      "path": "docs/reference/DOCUMENTATION-INVENTORY.json",
+      "rule": "inventory-out-of-sync",
+      "ownership": "generated-state-outside-dispatch"
+    },
+    {
+      "path": "crates/ramshared-wsl2d/src/main.rs",
+      "rule": "named-test-missing:daemon_worker_shutdown_drains_queued_io_before_stop",
+      "ownership": "rust-source-outside-dispatch",
+      "coverage_map": "docs/governance/rust-slice-coverage.json#memory-broker-wsl2d-daemon",
+      "spec": "docs/specs/no-milestone/memory-broker/SPEC.md"
+    }
+  ],
+  "verdict": "PARTIAL"
 }

@@ -1,9 +1,9 @@
 {
   "schemaVersion": "ramshared.documentation-inventory.v1",
-  "source": "Markdown paths visible in the repository worktree; classification is not content verification",
+  "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 242,
-    "classified": 231,
+    "total": 251,
+    "classified": 240,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -936,6 +936,18 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/reliability/incidents/2026-08-23-wsl2-dxg-fortify-systemd-no-go.md",
+      "disposition": "classified",
+      "ruleId": "reliability-incidents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/postmortems/TEMPLATE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
       "path": "docs/reliability/memory-broker-p0-results.md",
       "disposition": "classified",
       "ruleId": "reliability-documents",
@@ -1021,6 +1033,18 @@
     },
     {
       "path": "docs/runbooks/WORKSTATION-SPACE-RECOVERY.md",
+      "disposition": "classified",
+      "ruleId": "operation-runbooks",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "operations",
+      "canonicalSource": "docs/runbooks/windows-autonomous-broker.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/runbooks/WSL-STORAGE-RECLAIM.md",
       "disposition": "classified",
       "ruleId": "operation-runbooks",
       "verification": {
@@ -1716,6 +1740,18 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/specs/no-milestone/public-repository-hygiene/AUDIT.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
       "path": "docs/specs/no-milestone/public-repository-hygiene/IMPL.md",
       "disposition": "classified",
       "ruleId": "ssdv3-implementation-records",
@@ -1992,7 +2028,7 @@
       "freshnessDays": null
     },
     {
-      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260716-224913.md",
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/SANITIZED_RUN_REF_EC5591438C2B.md",
       "disposition": "classified",
       "ruleId": "ssdv3-evidence-records",
       "verification": {
@@ -2016,7 +2052,7 @@
       "freshnessDays": null
     },
     {
-      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-145248.md",
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/SANITIZED_RUN_REF_5D38441F41F9.md",
       "disposition": "classified",
       "ruleId": "ssdv3-evidence-records",
       "verification": {
@@ -2028,7 +2064,7 @@
       "freshnessDays": null
     },
     {
-      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-151304.md",
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/SANITIZED_RUN_REF_310E83B6D4B9.md",
       "disposition": "classified",
       "ruleId": "ssdv3-evidence-records",
       "verification": {
@@ -2040,7 +2076,7 @@
       "freshnessDays": null
     },
     {
-      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-174238.md",
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/SANITIZED_RUN_REF_266F386F8BC7.md",
       "disposition": "classified",
       "ruleId": "ssdv3-evidence-records",
       "verification": {
@@ -2052,7 +2088,7 @@
       "freshnessDays": null
     },
     {
-      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-201130.md",
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/SANITIZED_RUN_REF_51563D2A4C3B.md",
       "disposition": "classified",
       "ruleId": "ssdv3-evidence-records",
       "verification": {
@@ -2064,7 +2100,7 @@
       "freshnessDays": null
     },
     {
-      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-product-online-20260716-220848.md",
+      "path": "docs/specs/no-milestone/windows-storport-cuda-vram/evidence/SANITIZED_RUN_REF_AB745E527880.md",
       "disposition": "classified",
       "ruleId": "ssdv3-evidence-records",
       "verification": {
@@ -2436,6 +2472,18 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/specs/no-milestone/wsl2-control-plane-pressure-incident/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
       "path": "docs/specs/no-milestone/wsl2-control-plane-pressure-incident/IMPL.md",
       "disposition": "classified",
       "ruleId": "ssdv3-implementation-records",
@@ -2748,6 +2796,54 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/specs/no-milestone/wsl2-revocable-vram-origin/AUDIT-2.5.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-audits",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-revocable-vram-origin/IMPL.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-implementation-records",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-revocable-vram-origin/PRD.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-stages",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/wsl2-revocable-vram-origin/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
       "path": "docs/specs/no-milestone/wsl2-upstream-native-contribution/CONTRIBUTION-CHECKLIST.md",
       "disposition": "classified",
       "ruleId": "ssdv3-contribution-checklists",
@@ -2809,6 +2905,18 @@
     },
     {
       "path": "docs/upstream/microsoft-wsl-40795-comment-draft.md",
+      "disposition": "classified",
+      "ruleId": "upstream-drafts",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "release-engineering",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 30
+    },
+    {
+      "path": "docs/upstream/wsl-40795-sanitized-evidence-checklist.md",
       "disposition": "classified",
       "ruleId": "upstream-drafts",
       "verification": {
