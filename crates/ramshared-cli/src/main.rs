@@ -2046,4 +2046,89 @@ CONFIG_BLK_DEV_NBD=m\n\
         print_usage(&mut usage_buf);
         assert!(String::from_utf8_lossy(&usage_buf).contains("usage:"));
     }
+
+    #[test]
+    fn run_from_args_dispatches_all_command_variants() {
+        let mut actions = RecordingCliActions::default();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        for args in [
+            &["run", "--", "echo", "test"][..],
+            &["session", "--class", "build"][..],
+            &["supervise", "--once"][..],
+            &["recover", "--status"][..],
+            &["recover", "--resume"][..],
+            &["check"][..],
+            &["check", "--json"][..],
+            &["doctor"][..],
+            &["doctor", "--json"][..],
+            &["up", "--vram", "1024"][..],
+            &["down"][..],
+            &["status"][..],
+            &["status", "--json"][..],
+            &["monitor", "--once"][..],
+            &["diagnose", "--events", "/dev/null"][..],
+            &["--help"][..],
+        ] {
+            stdout.clear();
+            stderr.clear();
+            let exit = run_from_args(&cli_args(args), &mut actions, &mut stdout, &mut stderr);
+            assert_eq!(exit, ExitCode::SUCCESS);
+        }
+
+        // Invalid command
+        stdout.clear();
+        stderr.clear();
+        let exit = run_from_args(
+            &cli_args(&["--unknown-flag"]),
+            &mut actions,
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::from(2));
+        assert!(!stderr.is_empty());
+    }
+
+    #[test]
+    fn probe_helpers_execute_safely() {
+        let _ = probe_wsl();
+        let _ = probe_kernel_features("test-release");
+        let _ = read_kernel_config("nonexistent-release-xyz");
+        let _ = parse_kernel_config(
+            "CONFIG_SWAP=y\nCONFIG_ZRAM=m\n# CONFIG_UBLK is not set",
+            "CONFIG_SWAP",
+        );
+        let _ = parse_kernel_config(
+            "CONFIG_SWAP=y\nCONFIG_ZRAM=m\n# CONFIG_UBLK is not set",
+            "CONFIG_ZRAM",
+        );
+        let _ = parse_kernel_config(
+            "CONFIG_SWAP=y\nCONFIG_ZRAM=m\n# CONFIG_UBLK is not set",
+            "CONFIG_UBLK",
+        );
+        let _ = parse_swaps(
+            "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n/dev/nbd0                               partition\t1048576\t\t0\t\t100\n",
+        );
+        let _ = find_libcuda();
+        let _ = run_nvidia_smi();
+    }
+
+    #[test]
+    fn system_actions_check_and_doctor_execute_safely() {
+        let mut actions = SystemCliActions;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let _ = actions.check(true, &mut stdout, &mut stderr);
+        stdout.clear();
+        stderr.clear();
+        let _ = actions.check(false, &mut stdout, &mut stderr);
+        stdout.clear();
+        stderr.clear();
+        let _ = actions.doctor(true, &mut stdout, &mut stderr);
+        stdout.clear();
+        stderr.clear();
+        let _ = actions.doctor(false, &mut stdout, &mut stderr);
+    }
 }
