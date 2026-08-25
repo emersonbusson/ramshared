@@ -1,0 +1,11 @@
+[Unit]
+Description=RamShared bounded cron workload %i
+Requires=ramshared-host-gate.service
+After=ramshared-host-gate.service
+ConditionPathExists=!/var/lib/ramshared/safe-mode.json
+ConditionPathExists=/run/ramshared/host-resume-lease.json
+
+[Service]
+Type=oneshot
+Slice=ramshared-workloads-cron.slice
+ExecStart=@COMMAND@

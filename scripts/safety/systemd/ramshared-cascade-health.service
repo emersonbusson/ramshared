@@ -5,9 +5,10 @@ After=local-fs.target
 
 [Service]
 Type=simple
+Slice=ramshared-control.slice
 User=root
 # Typed read-only observer. It cannot change swap or create pressure.
-ExecStart=/opt/ramshared/current/bin/ramshared monitor --jsonl --output /var/log/ramshared/cascade-health.jsonl --heartbeat /mnt/c/wsl-forensics/ramshared-heartbeat.json --interval-ms 2000
+ExecStart=/opt/ramshared/current/bin/ramshared monitor --jsonl --output /var/log/ramshared/cascade-health.jsonl --heartbeat /mnt/c/wsl-forensics/ramshared-heartbeat.json --interval-ms 1000
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal

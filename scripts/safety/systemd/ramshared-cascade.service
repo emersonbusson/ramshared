@@ -1,20 +1,28 @@
 [Unit]
+Requires=ramshared-host-gate.service
+After=ramshared-host-gate.service
 Description=RamShared sealed NBD-only cascade (scoped approval required)
 Documentation=file:///opt/ramshared/current/scripts/safety/nbd-product-preflight.sh
 After=local-fs.target
+ConditionPathExists=!/var/lib/ramshared/safe-mode.json
+ConditionPathExists=/run/ramshared/host-resume-lease.json
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
+Type=simple
+Slice=ramshared-control.slice
 User=root
-# No approval is embedded here. Without a version-scoped systemd override the
-# lifecycle scripts plan/refuse and cannot start a cascade unattended.
+# No approval is embedded here. A version-scoped override supplies only
+# RAMSHARED_NBD_CONTROLLER_APPROVAL=lifecycle:<version>.
 ExecStartPre=/opt/ramshared/current/scripts/safety/nbd-product-preflight.sh --check
-ExecStart=/opt/ramshared/current/scripts/safety/cascade-up.sh --execute
-ExecStop=/opt/ramshared/current/scripts/safety/cascade-down.sh --execute
+ExecStart=/opt/ramshared/current/scripts/safety/cascade-controller.sh --execute
+# systemd signals only the controller. The controller retries swapoff and
+# detach forever; systemd never escalates to the backend process.
+KillMode=process
+SendSIGKILL=no
 TimeoutStartSec=120
-TimeoutStopSec=600
-Restart=no
+TimeoutStopSec=infinity
+Restart=on-failure
+RestartSec=5
 StandardOutput=journal
 StandardError=journal
 

@@ -42,6 +42,19 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
+if [[ -n ${RAMSHARED_PACKAGE_TARGET_DIR:-} ]]; then
+  [[ ${RAMSHARED_PACKAGE_TEST_MODE:-} == 1 && $SKIP_BUILD -eq 1 ]] || {
+    printf 'custom package target is test-only and requires --skip-build\n' >&2
+    exit 2
+  }
+  [[ $RAMSHARED_PACKAGE_TARGET_DIR == /* && -d $RAMSHARED_PACKAGE_TARGET_DIR \
+    && ! -L $RAMSHARED_PACKAGE_TARGET_DIR ]] || {
+    printf 'invalid package test target directory\n' >&2
+    exit 2
+  }
+  TARGET_DIR=$RAMSHARED_PACKAGE_TARGET_DIR
+fi
+
 [[ $VERSION =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
   printf 'invalid package version: %s\n' "$VERSION" >&2
   exit 2
@@ -62,13 +75,18 @@ for binary in ramshared ramsharedd; do
   }
 done
 
-install -d -m 0755 "$STAGE_RELEASE/bin" "$STAGE_RELEASE/scripts/safety" "$STAGE_RELEASE/systemd"
+install -d -m 0755 "$STAGE_RELEASE/bin" "$STAGE_RELEASE/scripts/safety" "$STAGE_RELEASE/systemd" \
+  "$STAGE_RELEASE/systemd/docker.service.d" "$STAGE_RELEASE/systemd/containerd.service.d" \
+  "$STAGE_RELEASE/systemd/cron.service.d"
 install -m 0755 "$TARGET_DIR/ramshared" "$STAGE_RELEASE/bin/ramshared"
 install -m 0755 "$TARGET_DIR/ramsharedd" "$STAGE_RELEASE/bin/ramsharedd"
 install -m 0755 "$ROOT/scripts/safety/install-cascade-boot.sh" "$STAGE_RELEASE/scripts/safety/"
 install -m 0755 "$ROOT/scripts/safety/uninstall-cascade-boot.sh" "$STAGE_RELEASE/scripts/safety/"
 install -m 0755 "$ROOT/scripts/safety/cascade-up.sh" "$STAGE_RELEASE/scripts/safety/"
 install -m 0755 "$ROOT/scripts/safety/cascade-down.sh" "$STAGE_RELEASE/scripts/safety/"
+install -m 0755 "$ROOT/scripts/safety/cascade-controller.sh" "$STAGE_RELEASE/scripts/safety/"
+install -m 0755 "$ROOT/scripts/safety/provision-origin-swap.sh" "$STAGE_RELEASE/scripts/safety/"
+install -m 0755 "$ROOT/scripts/safety/lifecycle-recovery-status.sh" "$STAGE_RELEASE/scripts/safety/"
 install -m 0755 "$ROOT/scripts/safety/cascade-health.sh" "$STAGE_RELEASE/scripts/safety/"
 install -m 0755 "$ROOT/scripts/safety/configure-btop-observability.sh" "$STAGE_RELEASE/scripts/safety/"
 install -m 0755 "$ROOT/scripts/safety/nbd-product-preflight.sh" "$STAGE_RELEASE/scripts/safety/"
@@ -77,10 +95,24 @@ install -m 0755 "$ROOT/scripts/safety/nbd-benchmark-cgroup-launch.sh" "$STAGE_RE
 install -m 0644 "$ROOT/scripts/safety/nbd-benchmark-lib.sh" "$STAGE_RELEASE/scripts/safety/"
 install -m 0755 "$ROOT/scripts/safety/cascade_pressure_integrity_worker.py" "$STAGE_RELEASE/scripts/safety/"
 install -m 0755 "$ROOT/scripts/safety/wsl-relay-health.sh" "$STAGE_RELEASE/scripts/safety/"
+install -m 0755 "$ROOT/scripts/safety/manage-control-plane.sh" "$STAGE_RELEASE/scripts/safety/"
+install -m 0755 "$ROOT/scripts/safety/ramshared-host-gate.sh" "$STAGE_RELEASE/scripts/safety/"
+install -m 0755 "$ROOT/scripts/safety/ramshared-session-launcher.sh" "$STAGE_RELEASE/scripts/safety/"
+install -m 0644 "$ROOT/scripts/safety/docker-daemon-ramshared.json" "$STAGE_RELEASE/scripts/safety/"
 install -m 0644 "$ROOT/scripts/safety/cascade.conf.example" "$STAGE_RELEASE/scripts/safety/"
 install -m 0644 "$ROOT/scripts/safety/systemd/ramshared-cascade.service" "$STAGE_RELEASE/systemd/"
 install -m 0644 "$ROOT/scripts/safety/systemd/ramshared-cascade-health.service" "$STAGE_RELEASE/systemd/"
 install -m 0644 "$ROOT/scripts/safety/systemd/ramshared-workloads.slice" "$STAGE_RELEASE/systemd/"
+for unit in ramshared-control.slice ramshared-workloads-docker.slice ramshared-workloads-cron.slice \
+  ramshared-host-gate.service ramshared-supervisor.service ramshared-cron-workload.service.in; do
+  install -m 0644 "$ROOT/scripts/safety/systemd/$unit" "$STAGE_RELEASE/systemd/"
+done
+install -m 0644 "$ROOT/scripts/safety/systemd/docker.service.d/10-ramshared-control.conf" \
+  "$STAGE_RELEASE/systemd/docker.service.d/"
+install -m 0644 "$ROOT/scripts/safety/systemd/containerd.service.d/10-ramshared-control.conf" \
+  "$STAGE_RELEASE/systemd/containerd.service.d/"
+install -m 0644 "$ROOT/scripts/safety/systemd/cron.service.d/10-ramshared-control.conf" \
+  "$STAGE_RELEASE/systemd/cron.service.d/"
 printf '%s\n' "$VERSION" >"$STAGE_RELEASE/RELEASE_VERSION"
 chmod 0644 "$STAGE_RELEASE/RELEASE_VERSION"
 [[ $SOURCE_COMMIT =~ ^[0-9a-f]{40}$ ]] || {

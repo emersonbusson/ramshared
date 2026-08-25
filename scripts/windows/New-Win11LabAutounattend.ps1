@@ -6,8 +6,9 @@
 .DESCRIPTION
   The generated file is local lab material and may contain a lab password. Keep
   it outside the repository, normally under E:\Hyper-V\iso\unattend-staging.
-  The XML creates the lab administrator during the OOBE pass and binds one
-  automatic logon so the guest reaches a manageable terminal setup state.
+  The XML creates the lab administrator during the OOBE pass and keeps
+  automatic logon enabled for the lifetime of this disposable lab image.
+  PowerShell Direct still uses the same non-empty local lab credential.
 #>
 [CmdletBinding()]
 param(
@@ -20,6 +21,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+$mediaContractPath = Join-Path $PSScriptRoot "Win11LabMediaContract.ps1"
+if (-not (Test-Path -LiteralPath $mediaContractPath -PathType Leaf)) {
+    throw "Win11 lab media contract helper is missing"
+}
+. $mediaContractPath
 
 function Get-LocalDrillPassword {
     param(
@@ -57,6 +64,10 @@ if ([string]::IsNullOrEmpty($Password)) {
 $escapedPassword = Escape-Xml -Value $Password
 $escapedComputerName = Escape-Xml -Value $ComputerName
 $escapedUser = Escape-Xml -Value $LabUser
+$persistentAutologonCommand = New-Win11LabPersistentAutologonCommand `
+    -ComputerName $ComputerName `
+    -LabUser $LabUser `
+    -Password $Password
 
 $xml = @"
 <?xml version="1.0" encoding="utf-8"?>
@@ -162,8 +173,8 @@ $xml = @"
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <Description>Disable automatic logon after the first lab sign-in</Description>
-          <CommandLine>reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoLogonCount /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>Seal persistent disposable-lab autologon</Description>
+          <CommandLine>$persistentAutologonCommand</CommandLine>
         </SynchronousCommand>
       </FirstLogonCommands>
       <OOBE>

@@ -7,3 +7,11 @@ Before=shutdown.target
 CPUAccounting=yes
 MemoryAccounting=yes
 TasksAccounting=yes
+IOAccounting=yes
+CPUWeight=50
+IOWeight=50
+TasksMax=8192
+# Disabled control-plane staging writes a MemTotal-bound drop-in before this
+# slice is ever enabled. The sealed source must not assume a 16 GiB guest.
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=10%

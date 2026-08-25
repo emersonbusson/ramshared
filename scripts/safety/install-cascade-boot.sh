@@ -323,15 +323,31 @@ verify_release_tree() {
     scripts/safety/cascade_pressure_integrity_worker.py \
     scripts/safety/cascade-up.sh \
     scripts/safety/cascade-down.sh \
+    scripts/safety/cascade-controller.sh \
+    scripts/safety/provision-origin-swap.sh \
+    scripts/safety/lifecycle-recovery-status.sh \
     scripts/safety/cascade-health.sh \
     scripts/safety/wsl-relay-health.sh \
+    scripts/safety/manage-control-plane.sh \
+    scripts/safety/ramshared-host-gate.sh \
+    scripts/safety/ramshared-session-launcher.sh \
+    scripts/safety/docker-daemon-ramshared.json \
     scripts/safety/cascade.conf.example \
     SOURCE_COMMIT \
     SOURCE_BRANCH \
     SOURCE_TREE_STATE \
     systemd/ramshared-cascade.service \
     systemd/ramshared-cascade-health.service \
-    systemd/ramshared-workloads.slice; do
+    systemd/ramshared-workloads.slice \
+    systemd/ramshared-control.slice \
+    systemd/ramshared-workloads-docker.slice \
+    systemd/ramshared-workloads-cron.slice \
+    systemd/ramshared-host-gate.service \
+    systemd/ramshared-supervisor.service \
+    systemd/ramshared-cron-workload.service.in \
+    systemd/docker.service.d/10-ramshared-control.conf \
+    systemd/containerd.service.d/10-ramshared-control.conf \
+    systemd/cron.service.d/10-ramshared-control.conf; do
     [[ -f $root/$required && ! -L $root/$required ]] || refuse RELEASE_LAYOUT_INVALID
   done
   [[ -x $root/bin/ramshared && -x $root/bin/ramsharedd ]] || refuse RELEASE_LAYOUT_INVALID

@@ -11,12 +11,21 @@
 # shellcheck disable=SC2034
 WSLCONFIG_LIB_LOADED=1
 
-# Defaults for this host class (override via env).
+# Defaults for this host class (override via env). An empty swap-file override
+# means: preserve an existing configured path, otherwise let WSL choose its
+# per-user default. No drive letter is synthesized here.
 WSLCONFIG_MEMORY_BYTES="${WSLCONFIG_MEMORY_BYTES:-17179869184}"   # 16 GiB
 WSLCONFIG_SWAP_BYTES="${WSLCONFIG_SWAP_BYTES:-4294967296}"       # 4 GiB
-WSLCONFIG_SWAPFILE="${WSLCONFIG_SWAPFILE:-I:/wsl_swap/swap.vhdx}"
+WSLCONFIG_SWAPFILE="${WSLCONFIG_SWAPFILE:-}"
 WSLCONFIG_KERNEL="${WSLCONFIG_KERNEL:-C:/wsl/kernel-ramshared}"
 WSLCONFIG_KERNEL_MODULES="${WSLCONFIG_KERNEL_MODULES:-C:/wsl/modules-ramshared.vhdx}"
+WSLCONFIG_UNSAFE_LAB_MODE="${WSLCONFIG_UNSAFE_LAB_MODE:-0}"
+WSLCONFIG_UNSAFE_LAB_SPARSE_APPROVAL="${WSLCONFIG_UNSAFE_LAB_SPARSE_APPROVAL:-}"
+
+wslconfig_unsafe_lab_sparse_enabled() {
+	[[ "$WSLCONFIG_UNSAFE_LAB_MODE" == 1 \
+		&& "$WSLCONFIG_UNSAFE_LAB_SPARSE_APPROVAL" == I_ACCEPT_WSL_SPARSE_VHD_DATA_CORRUPTION_RISK ]]
+}
 
 # --- path encode (Day-0: one format only) -----------------------------------
 
@@ -93,7 +102,7 @@ wslconfig_path() {
 wslconfig_validate_file() {
 	local cfg="$1"
 	local err=0
-	local line n=0 key val
+	local line n=0 key val section=""
 	if [[ ! -f "$cfg" ]]; then
 		echo "MISSING $cfg"
 		return 1
@@ -104,7 +113,10 @@ wslconfig_validate_file() {
 		# skip comments and blanks
 		[[ -z "${line//[[:space:]]/}" ]] && continue
 		[[ "$line" =~ ^[[:space:]]*# ]] && continue
-		[[ "$line" =~ ^[[:space:]]*\[ ]] && continue
+		if [[ "$line" =~ ^[[:space:]]*\[([^]]+)\][[:space:]]*$ ]]; then
+			section="${BASH_REMATCH[1],,}"
+			continue
+		fi
 		if [[ "$line" =~ ^[[:space:]]*([A-Za-z][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
 			key="${BASH_REMATCH[1]}"
 			val="${BASH_REMATCH[2]}"
@@ -117,6 +129,14 @@ wslconfig_validate_file() {
 					err=1
 				fi
 				;;
+			sparseVhd)
+				if [[ "$section" == experimental && "${val,,}" == true ]] \
+					&& ! wslconfig_unsafe_lab_sparse_enabled; then
+					echo "L${n}: UNSAFE_SPARSE_VHD sparseVhd=true is refused on production WSL"
+					echo "     migrate by omitting sparseVhd; never use --allow-unsafe on the daily host"
+					err=1
+				fi
+				;;
 			esac
 		fi
 	done <"$cfg"
@@ -125,24 +145,49 @@ wslconfig_validate_file() {
 
 # --- render canonical body --------------------------------------------------
 
+wslconfig_existing_swapfile() {
+	local cfg=${1:-} line value=""
+	[[ -n $cfg && -f $cfg ]] || return 0
+	while IFS= read -r line || [[ -n $line ]]; do
+		line="${line//$'\r'/}"
+		if [[ $line =~ ^[[:space:]]*swapFile[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+			value=${BASH_REMATCH[1]}
+			value="${value%"${value##*[![:space:]]}"}"
+			printf '%s' "$value"
+			return 0
+		fi
+	done <"$cfg"
+}
+
 wslconfig_render_host() {
-	local mem swap sf kern mods
+	local cfg=${1:-} mem swap sf kern mods swapfile_line="" sparse_line=""
 	mem="$(wslconfig_encode_path "${WSLCONFIG_MEMORY_BYTES}")"
 	# memory/swap are integers — encode_path is no-op for digits
 	mem="${WSLCONFIG_MEMORY_BYTES}"
 	swap="${WSLCONFIG_SWAP_BYTES}"
-	sf="$(wslconfig_encode_path "${WSLCONFIG_SWAPFILE}")"
+	sf=${WSLCONFIG_SWAPFILE:-$(wslconfig_existing_swapfile "$cfg")}
+	if [[ -n $sf ]]; then
+		sf="$(wslconfig_encode_path "$sf")"
+		swapfile_line="swapFile=${sf}"
+	fi
 	kern="$(wslconfig_encode_path "${WSLCONFIG_KERNEL}")"
 	mods="$(wslconfig_encode_path "${WSLCONFIG_KERNEL_MODULES}")"
 
 	# Refuse to emit unsafe paths (defense in depth)
 	local p
-	for p in "$sf" "$kern" "$mods"; do
+	for p in "$kern" "$mods"; do
 		if wslconfig_path_is_unsafe "$p"; then
 			echo "wslconfig_render_host: internal error unsafe path: $p" >&2
 			return 1
 		fi
 	done
+	if [[ -n $sf ]] && wslconfig_path_is_unsafe "$sf"; then
+		echo "wslconfig_render_host: internal error unsafe path: $sf" >&2
+		return 1
+	fi
+	if wslconfig_unsafe_lab_sparse_enabled; then
+		sparse_line=$'# UNSAFE LAB ONLY: WSL 2.7.12 requires an explicit corruption-risk override.\nsparseVhd=true'
+	fi
 
 	cat <<EOF
 # Managed by scripts/safety/wslconfig-ctl.sh — do not hand-edit path backslashes.
@@ -151,15 +196,17 @@ wslconfig_render_host() {
 [wsl2]
 # 16 GiB WSL hard cap; host residual for Windows + Hyper-V (civm, win11-drill).
 memory=${mem}
-# 4 GiB pagefile on I: (product cascade adds zram/nbd separately).
+# 4 GiB WSL fallback; preserve an existing swapFile path or use WSL's default.
 swap=${swap}
-swapFile=${sf}
+${swapfile_line}
 kernel=${kern}
 kernelModules=${mods}
 
 [experimental]
 autoMemoryReclaim=Gradual
-sparseVhd=true
+# sparseVhd is intentionally omitted in production. Reclaim memory pages only;
+# compact virtual disks offline after a full WSL shutdown.
+${sparse_line}
 EOF
 }
 
@@ -175,7 +222,7 @@ wslconfig_write_host() {
 	local dir body tmp bak
 	dir="$(dirname "$cfg")"
 	mkdir -p "$dir" 2>/dev/null || true
-	body="$(wslconfig_render_host)" || return 1
+	body="$(wslconfig_render_host "$cfg")" || return 1
 	tmp="${cfg}.tmp.$$"
 	bak="${cfg}.ramshared.bak.$(date +%Y%m%d%H%M%S)"
 	if [[ -f "$cfg" ]]; then
