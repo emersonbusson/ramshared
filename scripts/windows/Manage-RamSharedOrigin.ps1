@@ -265,15 +265,18 @@ function Get-OriginFileSha256 {
 
 function New-OriginUninstallTransaction {
     param([Parameter(Mandatory = $true)][object]$Manifest)
-    if (-not (Test-Path -LiteralPath $OriginVhdx -PathType Leaf) -or
-        -not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+    $originExists = Test-Path -LiteralPath $OriginVhdx -PathType Leaf
+    $manifestExists = Test-Path -LiteralPath $ManifestPath -PathType Leaf
+    if (-not $originExists -or -not $manifestExists) {
         throw "origin uninstall requires owned VHDX and sealed manifest"
     }
     New-Item -ItemType Directory -Force -Path $BackupRoot | Out-Null
     $id = [Guid]::NewGuid().ToString("N")
     $manifestBackup = Join-Path $BackupRoot ("origin-uninstall-" + $id + ".manifest.json")
     $stagingVhdx = $OriginVhdx + "." + $id + ".uninstall-staging"
-    if (Test-Path -LiteralPath $manifestBackup -PathType Any -or Test-Path -LiteralPath $stagingVhdx -PathType Any) {
+    $backupExists = Test-Path -LiteralPath $manifestBackup -PathType Any
+    $stagingExists = Test-Path -LiteralPath $stagingVhdx -PathType Any
+    if ($backupExists -or $stagingExists) {
         throw "origin uninstall transaction path collision"
     }
     Copy-Item -LiteralPath $ManifestPath -Destination $manifestBackup -ErrorAction Stop
@@ -304,8 +307,9 @@ function Rollback-OriginUninstallTransaction {
     $errors = @()
     if ($targets.restore_manifest) {
         try {
-            if ((-not (Test-Path -LiteralPath $Transaction.manifest_backup -PathType Leaf)) -or
-                (Test-Path -LiteralPath $ManifestPath -PathType Any)) {
+            $backupExists = Test-Path -LiteralPath $Transaction.manifest_backup -PathType Leaf
+            $manifestExists = Test-Path -LiteralPath $ManifestPath -PathType Any
+            if (-not $backupExists -or $manifestExists) {
                 throw "origin uninstall manifest authority cannot be restored"
             }
             Copy-Item -LiteralPath $Transaction.manifest_backup -Destination $ManifestPath -ErrorAction Stop
@@ -317,8 +321,9 @@ function Rollback-OriginUninstallTransaction {
     }
     if ($targets.restore_origin) {
         try {
-            if ((-not (Test-Path -LiteralPath $Transaction.staging_vhdx -PathType Leaf)) -or
-                (Test-Path -LiteralPath $OriginVhdx -PathType Any)) {
+            $stagingExists = Test-Path -LiteralPath $Transaction.staging_vhdx -PathType Leaf
+            $originExists = Test-Path -LiteralPath $OriginVhdx -PathType Any
+            if (-not $stagingExists -or $originExists) {
                 throw "origin uninstall VHDX authority cannot be restored"
             }
             Move-Item -LiteralPath $Transaction.staging_vhdx -Destination $OriginVhdx -ErrorAction Stop

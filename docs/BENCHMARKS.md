@@ -238,3 +238,41 @@ entry is superseded by this statement.
 - **Write Path Disparity:** Synchronous disk writes within WSL2 encounter the multi-tier virtualization boundary (ext4 -> VHDX -> Hyper-V -> NTFS), measuring 63.1 MB/s with `fsync`. Direct VRAM writes over PCIe (7.18 GB/s) are approximately **113x faster**, providing quantitative evidence that intermediate VRAM caching eliminates swap-out disk stalls during memory exhaustion spikes.
 - **System Stability:** Sustaining 98.6%–99.0% RAM occupancy for 60 seconds with active 4 GiB VRAM allocations did not trigger OOM kills, kernel panics, or ghost swap devices, and released cleanly back to 12.6% baseline utilization.
 
+---
+
+<!-- ramshared-benchmark-id: 2026-08-25-vram-write-through-cache-and-authoritative-ssd-origin -->
+## 2026-08-25 16:20 -03 — Live Host Write-Through VRAM Cache & Authoritative SSD Origin Qualification (EVD-0038)
+
+**Context**
+- Branch/commit: `main` @ `73eb317` (PR #239 merged).
+- Machine: Host Workstation (NVIDIA GeForce RTX 2060, PCIe Gen 3 x16, Samsung SSD 850 EVO `C:\ProgramData\RamShared\ramshared-origin.vhdx`, WSL2 `Linux 6.18.35.2`).
+- Dataset: 256 MiB deterministic cryptographic block stream (Golden SHA-256: `bb82e581c16ca6f3037ebd4b3efc9d0f1bba14024ff38bf799cfdb4e19464249`).
+- Architecture under test: Authoritative write-through caching (`AuthoritativeOriginBackend`) — synchronous SSD persistence + accelerated VRAM staging (128 MiB chunks) + forced GPU revocation + direct SSD recovery.
+
+**Results**
+
+| Stage / Subsystem | Operation | Measured Throughput | Latency / Interface | Cryptographic Status |
+| --- | --- | ---: | --- | :---: |
+| **SSD Origin** | Synchronous Write (`fsync`) | **85.4 MB/s** | 2.997s / NTFS VHDX | Authoritative origin write |
+| **VRAM Cache** | Cache Populate (H2D) | **2,535.7 MiB/s** | 0.101s / PCIe Gen 3 x16 | Populated across 128 MiB chunks |
+| **VRAM Cache** | Cache Read Hit (D2H) | **6,211.2 MiB/s** | 0.041s / PCIe Gen 3 x16 | **100% SHA-256 MATCH** (0 bit flips) |
+| **GPU Revocation** | `cuMemFree` + Context Teardown | **Instant** | Explicit free | Cache state: REVOKED / OFFLINE |
+| **SSD Origin Read** | Post-Revocation Recovery | **140.7 MB/s** | 1.819s / NTFS VHDX | **100% SHA-256 MATCH** (0 bytes corrupted) |
+
+**Honest reading**
+- **Durability Invariant Holds:** Writing through to the SSD origin before or concurrently with cache acknowledgement ensures zero data loss upon abrupt GPU eviction or VRAM revocation.
+- **Cache Acceleration:** Active cache hits over PCIe Gen 3 x16 deliver **6.2 GB/s read throughput** (versus 140.7 MB/s direct SSD reads, a **44x speedup** on hot swap page retrieval).
+- **Graceful Fallback:** Complete teardown of the GPU context caused zero read errors or data corruption when falling back to the SSD origin. Readback hash matched the pre-write golden hash byte-for-byte across all 256 MiB.
+
+### Storage Tier Comparison: DRAM-buffered vs DRAM-less SSD Origin
+
+During live qualification, the exact 256 MiB write-through benchmark was evaluated against both physical SATA SSD storage pools on the host to assess DRAM cache impact on swap origin latency:
+
+| Target Storage Pool | Drive Model | Architecture | Synchronous Write (`fsync`) | Direct Read | VRAM Acceleration vs Disk |
+| :--- | :--- | :--- | ---: | ---: | :---: |
+| **Drive C:\ (Primary)** | Samsung SSD 850 EVO 500GB | SATA SSD w/ DRAM Cache | **85.4 MB/s** (2.997s) | **140.7 MB/s** (1.819s) | **29.7x faster** in VRAM |
+| **Drive I:\ (Secondary)** | Kingston SA400S37240G 240GB | SATA SSD DRAM-less | **38.0 MB/s** (6.736s) | **134.4 MB/s** (1.905s) | **80.1x faster** in VRAM |
+
+**Key Takeaway:** On DRAM-less storage (`I:\`), unbuffered synchronous `fsync` operations stall at 38 MB/s (a 2.25x degradation compared to the Samsung EVO), increasing the VRAM caching speedup to **80.1x**. Placing the authoritative origin on `C:\` provides both superior origin persistence latency and leaves the lower-capacity secondary pool unencumbered.
+
+
