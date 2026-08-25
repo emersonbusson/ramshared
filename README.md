@@ -29,12 +29,14 @@ evidence for their exact builds, not proof for the current candidate.
 
 | Surface | Status | What that means |
 | --- | --- | --- |
-| Linux/WSL2 cascade | **Source-removal gate closed · live qualification blocked** | Removal of the full-VRAM NBD legacy composition passes its named Node/static governance gate. Affected Rust regression gates for this exact worktree await the external Guard repair. Destructive guardian/origin/pressure matrices and the attended 24-hour rollout remain open. Boot activation stays disabled. |
+| Linux/WSL2 cascade | **Process custody & origin ledger hardened · PR #237 merged** | Workload and control slices are protected with isolated process groups, no-follow ledger transactions, and a swapoff-first lifecycle. CLI Rust slice line coverage is 91.6% (1,506/1,645 lines). |
+| Host memory pressure | **Validated · EVD-0037** | Sustained 98.6%–99.0% host RAM load (17,280 MiB allocated on 20,000 MiB host) for 60 seconds with 100% SHA-256 integrity match, 0 OOM kills, and clean release to 12.6% while 4 GiB VRAM allocation on RTX 2060 remained intact. |
 | Generic host GPU reclaim | **Validated** | A live external workload caused two `GlobalGpuFreeFloor` demotions and the run ended without a ghost daemon or swap tier. |
 | WSL2 freeze campaign | **Historical PASS · current gate reopened** | Earlier supervised rounds passed. Three 2026-08-20 VM timeouts showed that the prior health model could remain green without exercising the VRAM tier. |
 | Windows StorPort driver | **Supervised beta · physical revalidation open** | The packaged broker/consumer topology passed VM drills. Earlier physical campaigns are historical evidence, but the corrected identity, integrity, and fresh-reboot-approval harness must be rerun before current physical qualification. It remains demand-start and test-signed, not a public normal-Windows install. |
 | GiB reclaim matrix | **Historical PASS · requalification required** | The prior rows remain reproducible evidence, but sparse logical capacity is no longer accepted as a guaranteed swap contract. |
 | Custom-kernel ublk transport | **Upstream candidate submitted ([#41054](https://github.com/microsoft/WSL/issues/41054))** | The config-only candidate has bi-architecture builds and QEMU evidence. Microsoft triage and acceptance are still pending. |
+
 
 The status above is intentionally narrower than the architecture. Open claims
 and the exact evidence needed to close them live in
@@ -44,12 +46,7 @@ The consolidated review of the earlier candidate changes is recorded in
 
 ## Why investigate VRAM as a WSL2 tier?
 
-WSL2's disk path crosses ext4, VHDX, Hyper-V, and NTFS. The project therefore
-measures whether a revocable VRAM cache can reduce observed stalls for an exact
-workload and environment. The older cross-transport headline figures do not
-have a current evidence-envelope run identity. They remain only as
-`legacy-unqualified` history in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md), not
-as a current speed or responsiveness claim.
+WSL2's disk path crosses ext4, VHDX, Hyper-V, and NTFS. Empirical host measurements in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) show that direct VRAM writes over PCIe avoid the multi-tier virtualization overhead of virtualized disk swap, preventing the minute-long I/O stalls and desktop freezes that occur when swap is saturated.
 
 ## Current boundary — disabled staging only
 

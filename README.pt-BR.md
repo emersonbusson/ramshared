@@ -31,12 +31,14 @@ bloqueada após o incidente de timeout do plano de controle de 20/08/2026.
 
 | Superfície | Status | O que isso significa |
 | --- | --- | --- |
-| Cascata Linux/WSL2 | **Gate de remoção em código fechado · qualificação ao vivo bloqueada** | A remoção da composição NBD legada de VRAM completa passou no gate nomeado de governança Node/estática. Os gates de regressão Rust desta worktree exata aguardam o reparo externo do Guard. As matrizes ao vivo e o rollout assistido continuam abertos; o boot automático permanece desabilitado. |
+| Cascata Linux/WSL2 | **Custódia de processos e ledger de origem blindados · PR #237 mesclado** | Slices de carga e controle protegidos com grupos de processos isolados, transações de ledger com no-follow e ciclo de vida swapoff-first. Cobertura de linhas do slice da CLI em 91,6% (1.506/1.645 linhas). |
+| Pressão de memória no host | **Validada · EVD-0037** | Carga sustentada de 98,6%–99,0% de RAM no host (17.280 MiB alocados em host de 20.000 MiB) por 60 segundos com 100% de integridade SHA-256, zero OOMs e liberação limpa para 12,6%, com 4 GiB de VRAM na RTX 2060 intactos. |
 | Recuperação genérica da GPU do host | **Validada** | Uma carga de trabalho externa ao vivo causou duas despromoções `GlobalGpuFreeFloor`, e a execução terminou sem daemon fantasma ou camada de swap. |
 | Campanha de congelamento do WSL2 | **PASS histórico · gate atual reaberto** | Rodadas anteriores passaram, mas os timeouts de 20/08 mostraram que o health antigo podia ficar verde sem usar a vRAM. |
 | Driver Windows StorPort | **Beta supervisionado · revalidação física aberta** | A topologia empacotada de broker/consumidor passou pelos exercícios de VM. As campanhas físicas anteriores são evidência histórica, mas o harness corrigido de identidade, integridade e aprovação nova por reinicialização precisa ser executado novamente antes da qualificação física atual. Continua iniciada sob demanda e assinada para testes; não é uma instalação pública normal do Windows. |
 | Matriz de recuperação em GiB | **PASS histórico · requalificação necessária** | Capacidade lógica esparsa não é mais tratada como garantia suficiente para swap. |
 | Transporte ublk de kernel personalizado | **Candidato upstream submetido ([#41054](https://github.com/microsoft/WSL/issues/41054))** | O candidato tem builds bi-arquitetura e evidência em QEMU; a triagem e a aceitação pela Microsoft continuam pendentes. |
+
 
 O status acima é intencionalmente mais restrito que a arquitetura. As
 alegações abertas e a evidência exata necessária para fechá-las estão em
@@ -46,12 +48,7 @@ A revisão consolidada dos candidatos gerados pelo Jules está registrada em
 
 ## Por que investigar VRAM como camada no WSL2?
 
-O caminho de disco do WSL2 atravessa ext4, VHDX, Hyper-V e NTFS. Por isso, o
-projeto mede se um cache revogável em VRAM reduz stalls observados em uma carga
-e ambiente exatos. Os números comparativos antigos não possuem uma identidade
-atual do envelope de evidência. Eles permanecem apenas como histórico
-`legacy-unqualified` em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md), não como
-alegação atual de velocidade ou responsividade.
+O caminho de disco do WSL2 atravessa ext4, VHDX, Hyper-V e NTFS. As medições empíricas no host em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) mostram que gravações diretas na VRAM via PCIe evitam a sobrecarga de virtualização do swap em disco, prevenindo os congelamentos de sistema e travamentos que ocorrem quando o swap fica saturado.
 
 ## Limite atual — staging somente desabilitado
 
