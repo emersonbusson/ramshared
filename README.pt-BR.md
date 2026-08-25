@@ -19,7 +19,7 @@ VRAM aos aplicativos nem identifica cargas pelo nome.
 ![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram-pt.png)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.9.0-beta.1"><img alt="Versão v0.9.0-beta.1" src="https://img.shields.io/badge/release-v0.9.0--beta.1-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.9.0-beta.2"><img alt="Versão v0.9.0-beta.2" src="https://img.shields.io/badge/release-v0.9.0--beta.2-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Clones Git" src="https://img.shields.io/badge/git_clones-1.5k%2B-blue?style=flat-square&logo=git">
   <img alt="Integridade" src="https://img.shields.io/badge/integridade-SHA--256_verificado-success?style=flat-square">
@@ -29,7 +29,7 @@ VRAM aos aplicativos nem identifica cargas pelo nome.
 
 ## Status atual
 
-Versão: **v0.9.0-beta.1**. A cascata instalada no WSL2 está temporariamente
+Versão: **v0.9.0-beta.2**. A cascata instalada no WSL2 está temporariamente
 bloqueada após o incidente de timeout do plano de controle de 20/08/2026.
 
 | Superfície | Status | O que isso significa |

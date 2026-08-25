@@ -15,7 +15,7 @@ adds VRAM to applications nor identifies workloads by name.
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.png)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.9.0-beta.1"><img alt="Release v0.9.0-beta.1" src="https://img.shields.io/badge/release-v0.9.0--beta.1-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.9.0-beta.2"><img alt="Release v0.9.0-beta.2" src="https://img.shields.io/badge/release-v0.9.0--beta.2-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Git Clones" src="https://img.shields.io/badge/git_clones-1.5k%2B-blue?style=flat-square&logo=git">
   <img alt="Integrity" src="https://img.shields.io/badge/integrity-SHA--256_verified-success?style=flat-square">
@@ -25,7 +25,7 @@ adds VRAM to applications nor identifies workloads by name.
 
 ## Current Status
 
-Release: **v0.9.0-beta.1**. The installed WSL2 cascade is temporarily gated
+Release: **v0.9.0-beta.2**. The installed WSL2 cascade is temporarily gated
 after the 2026-08-20 control-plane timeout incident; historical results remain
 evidence for their exact builds, not proof for the current candidate.
 
