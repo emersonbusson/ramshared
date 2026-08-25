@@ -35,6 +35,120 @@ impl CascadePhase {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProtectionState {
+    Off,
+    Ready,
+    Active,
+    AtRisk,
+    Blocked,
+}
+
+impl ProtectionState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "OFF",
+            Self::Ready => "READY",
+            Self::Active => "ACTIVE",
+            Self::AtRisk => "AT_RISK",
+            Self::Blocked => "BLOCKED",
+        }
+    }
+
+    pub fn is_ok(self) -> bool {
+        matches!(self, Self::Ready | Self::Active)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ControlState {
+    Healthy,
+    Guarded,
+    Critical,
+    Emergency,
+    SafeMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OriginState {
+    Off,
+    Ready,
+    Degraded,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CacheState {
+    Off,
+    Active,
+    Restricted,
+    Unavailable,
+    Stuck,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GuardianState {
+    Healthy,
+    SafeMode,
+    Blocked,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OverallState {
+    Healthy,
+    Guarded,
+    Critical,
+    Blocked,
+    SafeMode,
+    Emergency,
+}
+
+macro_rules! state_text {
+    ($type:ty, {$($variant:ident => $text:literal),+ $(,)?}) => {
+        impl $type {
+            pub fn as_str(self) -> &'static str {
+                match self { $(Self::$variant => $text),+ }
+            }
+        }
+    };
+}
+
+state_text!(ControlState, {
+    Healthy => "HEALTHY", Guarded => "GUARDED", Critical => "CRITICAL",
+    Emergency => "EMERGENCY", SafeMode => "SAFE_MODE"
+});
+state_text!(OriginState, {
+    Off => "OFF", Ready => "READY", Degraded => "DEGRADED", Failed => "FAILED"
+});
+state_text!(CacheState, {
+    Off => "OFF", Active => "ACTIVE", Restricted => "RESTRICTED",
+    Unavailable => "UNAVAILABLE", Stuck => "STUCK"
+});
+state_text!(GuardianState, {
+    Healthy => "HEALTHY", SafeMode => "SAFE_MODE", Blocked => "BLOCKED"
+});
+state_text!(OverallState, {
+    Healthy => "HEALTHY", Guarded => "GUARDED", Critical => "CRITICAL",
+    Blocked => "BLOCKED", SafeMode => "SAFE_MODE", Emergency => "EMERGENCY"
+});
+
+impl OverallState {
+    pub fn is_ok(self) -> bool {
+        self == Self::Healthy
+    }
+
+    fn rank(self) -> u8 {
+        match self {
+            Self::Healthy => 0,
+            Self::Guarded => 1,
+            Self::Critical => 2,
+            Self::Blocked => 3,
+            Self::SafeMode => 4,
+            Self::Emergency => 5,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct TierSample {
     pub present: bool,
@@ -59,8 +173,27 @@ pub struct CascadeSnapshot {
     pub order_ok: bool,
     pub daemon_alive: bool,
     pub daemon_pid: Option<u32>,
+    pub capacity_guaranteed: bool,
+    /// Disk swap pages already present when the current RamShared activation began.
+    /// `None` means no attributable product activation baseline exists.
+    pub disk_baseline_kib: Option<u64>,
     pub demote: DemoteSnapshot,
     pub active_kib: u64,
+    pub control_state: ControlState,
+    pub origin_state: OriginState,
+    pub cache_state: CacheState,
+    pub guardian_state: GuardianState,
+    pub logical_capacity_kib: Option<u64>,
+    pub vram_cached_kib: Option<u64>,
+    pub gpu_headroom_kib: Option<u64>,
+    pub ssd_origin_written_kib: Option<u64>,
+    pub fallback_swap_used_kib: Option<u64>,
+    pub measurement_errors: Vec<String>,
+}
+
+pub fn disk_growth_kib(s: &CascadeSnapshot) -> Option<u64> {
+    s.disk_baseline_kib
+        .map(|baseline| s.disk.used_kib.saturating_sub(baseline))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,6 +202,46 @@ pub struct LifecycleView {
     pub phase_reason: &'static str,
     pub ok: bool,
     pub reasons: Vec<String>,
+}
+
+pub fn overall_state(view: &LifecycleView, snap: &CascadeSnapshot) -> OverallState {
+    let product_active = snap.daemon_alive || snap.vram.present;
+    let mut states = vec![if view.ok {
+        OverallState::Healthy
+    } else {
+        OverallState::Blocked
+    }];
+    states.push(match snap.control_state {
+        ControlState::Healthy => OverallState::Healthy,
+        ControlState::Guarded => OverallState::Guarded,
+        ControlState::Critical => OverallState::Critical,
+        ControlState::Emergency => OverallState::Emergency,
+        ControlState::SafeMode => OverallState::SafeMode,
+    });
+    states.push(match snap.guardian_state {
+        GuardianState::Healthy => OverallState::Healthy,
+        GuardianState::SafeMode => OverallState::SafeMode,
+        GuardianState::Blocked => OverallState::Blocked,
+    });
+    states.push(match snap.origin_state {
+        OriginState::Off if !product_active => OverallState::Healthy,
+        OriginState::Ready => OverallState::Healthy,
+        OriginState::Degraded => OverallState::Critical,
+        OriginState::Failed | OriginState::Off => OverallState::Blocked,
+    });
+    states.push(match snap.cache_state {
+        CacheState::Off if !product_active => OverallState::Healthy,
+        CacheState::Active => OverallState::Healthy,
+        CacheState::Restricted => OverallState::Guarded,
+        CacheState::Unavailable | CacheState::Stuck | CacheState::Off => OverallState::Blocked,
+    });
+    if !snap.measurement_errors.is_empty() {
+        states.push(OverallState::Blocked);
+    }
+    states
+        .into_iter()
+        .max_by_key(|state| state.rank())
+        .unwrap_or(OverallState::Blocked)
 }
 
 /// Parse `RAMSHARED_STATUS_ACTIVE_KIB`; invalid or missing → default.
@@ -131,10 +304,10 @@ pub fn derive_lifecycle(s: &CascadeSnapshot) -> LifecycleView {
         };
     }
 
-    if s.disk.present && s.disk.used_kib >= thr {
+    if s.disk.present && disk_growth_kib(s).is_some_and(|growth| growth >= thr) {
         return LifecycleView {
             phase: CascadePhase::UsingDisk,
-            phase_reason: "disk_used_ge_threshold",
+            phase_reason: "disk_growth_ge_threshold",
             ok: true,
             reasons,
         };
@@ -253,8 +426,79 @@ fn tier_json(t: &TierSample) -> String {
     )
 }
 
+pub fn zram_utilization_pct(snap: &CascadeSnapshot) -> u64 {
+    if !snap.zram.present || snap.zram.size_kib == 0 {
+        return 0;
+    }
+    snap.zram
+        .used_kib
+        .saturating_mul(100)
+        .saturating_add(snap.zram.size_kib / 2)
+        .checked_div(snap.zram.size_kib)
+        .unwrap_or(0)
+        .min(100)
+}
+
+pub fn protection_state(view: &LifecycleView, snap: &CascadeSnapshot) -> ProtectionState {
+    if !view.ok || view.phase == CascadePhase::Degraded {
+        return ProtectionState::Blocked;
+    }
+    if snap.vram.present && !snap.capacity_guaranteed {
+        return ProtectionState::Blocked;
+    }
+    if snap.daemon_alive && snap.vram.present && snap.disk_baseline_kib.is_none() {
+        return ProtectionState::Blocked;
+    }
+    match view.phase {
+        CascadePhase::Off => ProtectionState::Off,
+        CascadePhase::UsingVram => ProtectionState::Active,
+        CascadePhase::UsingDisk | CascadePhase::Demoting => ProtectionState::AtRisk,
+        CascadePhase::UsingZram
+            if snap.vram.used_kib < snap.active_kib && zram_utilization_pct(snap) >= 80 =>
+        {
+            ProtectionState::AtRisk
+        }
+        CascadePhase::Armed | CascadePhase::UsingZram => ProtectionState::Ready,
+        CascadePhase::Degraded => ProtectionState::Blocked,
+    }
+}
+
+pub fn protection_reason(view: &LifecycleView, snap: &CascadeSnapshot) -> &'static str {
+    if !view.ok || view.phase == CascadePhase::Degraded {
+        return view.phase_reason;
+    }
+    if snap.vram.present && !snap.capacity_guaranteed {
+        return "capacity_not_guaranteed";
+    }
+    if snap.daemon_alive && snap.vram.present && snap.disk_baseline_kib.is_none() {
+        return "disk_baseline_unavailable";
+    }
+    match view.phase {
+        CascadePhase::Off => "product_cascade_off",
+        CascadePhase::Armed => "guaranteed_vram_tier_armed",
+        CascadePhase::UsingVram => "guaranteed_vram_tier_active",
+        CascadePhase::UsingDisk => "disk_tier_in_use",
+        CascadePhase::Demoting => "vram_demotion_in_progress",
+        CascadePhase::UsingZram if zram_utilization_pct(snap) >= 80 => {
+            "zram_utilization_ge_80_without_vram_use"
+        }
+        CascadePhase::UsingZram => "guaranteed_vram_tier_ready",
+        CascadePhase::Degraded => view.phase_reason,
+    }
+}
+
 /// Serialize lifecycle + snapshot to one JSON object (SPEC schema).
 pub fn render_status_json(view: &LifecycleView, snap: &CascadeSnapshot, ts: &str) -> String {
+    let protection = protection_state(view, snap);
+    let protection_reason = protection_reason(view, snap);
+    let overall = overall_state(view, snap);
+    let status_ok = view.ok && protection.is_ok() && overall.is_ok();
+    let guaranteed_kib = if snap.daemon_alive && snap.vram.present && snap.capacity_guaranteed {
+        snap.vram.size_kib.to_string()
+    } else {
+        "null".into()
+    };
+    let zram_utilization = zram_utilization_pct(snap);
     let reasons = if view.reasons.is_empty() {
         "[]".into()
     } else {
@@ -273,9 +517,34 @@ pub fn render_status_json(view: &LifecycleView, snap: &CascadeSnapshot, ts: &str
         Some(p) => p.to_string(),
         None => "null".into(),
     };
+    let activation_active = snap.daemon_alive && snap.vram.present && snap.capacity_guaranteed;
+    let disk_baseline_kib = snap
+        .disk_baseline_kib
+        .map_or_else(|| "null".to_string(), |value| value.to_string());
+    let disk_growth_kib =
+        disk_growth_kib(snap).map_or_else(|| "null".to_string(), |value| value.to_string());
+    let number_or_null =
+        |value: Option<u64>| value.map_or_else(|| "null".to_string(), |number| number.to_string());
+    let measurement_errors = format!(
+        "[{}]",
+        snap.measurement_errors
+            .iter()
+            .map(|error| json_escape(error))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
     format!(
-        "{{\"phase\":{phase},\"phase_reason\":{reason},\"ok\":{ok},\"reasons\":{reasons},\
+        "{{\"schema_version\":4,\"phase\":{phase},\"phase_reason\":{reason},\
+\"protection_state\":{protection},\"protection_reason\":{protection_reason},\
+\"control_state\":{control_state},\"cache_state\":{cache_state},\
+\"origin_state\":{origin_state},\"guardian_state\":{guardian_state},\
+\"overall_state\":{overall_state},\
+\"ok\":{ok},\"topology_ok\":{topology_ok},\"reasons\":{reasons},\
 \"tiers\":{{\"zram\":{z},\"vram\":{v},\"disk\":{d}}},\
+\"capacity\":{{\"guaranteed_kib\":{guaranteed_kib},\"logical_capacity_kib\":{logical_capacity_kib},\"vram_cached_kib\":{vram_cached_kib},\"gpu_headroom_kib\":{gpu_headroom_kib},\"ssd_origin_written_kib\":{ssd_origin_written_kib},\"fallback_swap_used_kib\":{fallback_swap_used_kib}}},\
+\"activation\":{{\"active\":{activation_active},\"binary_version\":{binary_version},\"disk_baseline_kib\":{disk_baseline_kib},\"disk_growth_kib\":{disk_growth_kib}}},\
+\"pressure\":{{\"zram_utilization_pct\":{zram_utilization}}},\
+\"measurement_errors\":{measurement_errors},\
 \"order_ok\":{order},\"ghost\":{ghost},\
 \"daemon\":{{\"alive\":{alive},\"pid\":{pid}}},\
 \"demote\":{{\"total\":{dt},\"last_reason\":{dr},\"in_progress\":{di}}},\
@@ -283,11 +552,31 @@ pub fn render_status_json(view: &LifecycleView, snap: &CascadeSnapshot, ts: &str
 \"ts\":{ts}}}",
         phase = json_escape(view.phase.as_str()),
         reason = json_escape(view.phase_reason),
-        ok = if view.ok { "true" } else { "false" },
+        protection = json_escape(protection.as_str()),
+        protection_reason = json_escape(protection_reason),
+        control_state = json_escape(snap.control_state.as_str()),
+        cache_state = json_escape(snap.cache_state.as_str()),
+        origin_state = json_escape(snap.origin_state.as_str()),
+        guardian_state = json_escape(snap.guardian_state.as_str()),
+        overall_state = json_escape(overall.as_str()),
+        ok = if status_ok { "true" } else { "false" },
+        topology_ok = if view.ok { "true" } else { "false" },
         reasons = reasons,
         z = tier_json(&snap.zram),
         v = tier_json(&snap.vram),
         d = tier_json(&snap.disk),
+        guaranteed_kib = guaranteed_kib,
+        logical_capacity_kib = number_or_null(snap.logical_capacity_kib),
+        vram_cached_kib = number_or_null(snap.vram_cached_kib),
+        gpu_headroom_kib = number_or_null(snap.gpu_headroom_kib),
+        ssd_origin_written_kib = number_or_null(snap.ssd_origin_written_kib),
+        fallback_swap_used_kib = number_or_null(snap.fallback_swap_used_kib),
+        activation_active = if activation_active { "true" } else { "false" },
+        binary_version = json_escape(env!("CARGO_PKG_VERSION")),
+        disk_baseline_kib = disk_baseline_kib,
+        disk_growth_kib = disk_growth_kib,
+        zram_utilization = zram_utilization,
+        measurement_errors = measurement_errors,
         order = if snap.order_ok { "true" } else { "false" },
         ghost = if snap.ghost { "true" } else { "false" },
         alive = if snap.daemon_alive { "true" } else { "false" },
@@ -333,8 +622,20 @@ mod tests {
             order_ok: true,
             daemon_alive: true,
             daemon_pid: Some(1),
+            capacity_guaranteed: true,
+            disk_baseline_kib: Some(0),
             demote: DemoteSnapshot::default(),
             active_kib: DEFAULT_ACTIVE_KIB,
+            control_state: ControlState::Healthy,
+            origin_state: OriginState::Ready,
+            cache_state: CacheState::Active,
+            guardian_state: GuardianState::Healthy,
+            logical_capacity_kib: Some(2_097_148),
+            vram_cached_kib: Some(0),
+            gpu_headroom_kib: Some(2_097_152),
+            ssd_origin_written_kib: Some(0),
+            fallback_swap_used_kib: Some(0),
+            measurement_errors: Vec::new(),
         }
     }
 
@@ -348,8 +649,20 @@ mod tests {
             order_ok: true,
             daemon_alive: false,
             daemon_pid: None,
+            capacity_guaranteed: false,
+            disk_baseline_kib: None,
             demote: DemoteSnapshot::default(),
             active_kib: DEFAULT_ACTIVE_KIB,
+            control_state: ControlState::Healthy,
+            origin_state: OriginState::Off,
+            cache_state: CacheState::Off,
+            guardian_state: GuardianState::Healthy,
+            logical_capacity_kib: None,
+            vram_cached_kib: None,
+            gpu_headroom_kib: None,
+            ssd_origin_written_kib: None,
+            fallback_swap_used_kib: Some(5_000),
+            measurement_errors: Vec::new(),
         };
         let v = derive_lifecycle(&s);
         assert_eq!(v.phase, CascadePhase::Off);
@@ -392,6 +705,37 @@ mod tests {
         s.vram.used_kib = 10_000;
         let v = derive_lifecycle(&s);
         assert_eq!(v.phase, CascadePhase::UsingDisk);
+    }
+
+    #[test]
+    fn status_off_does_not_attribute_preexisting_disk_pages_to_ramshared() {
+        let mut s = base();
+        s.zram = TierSample::default();
+        s.vram = TierSample::default();
+        s.daemon_alive = false;
+        s.daemon_pid = None;
+        s.capacity_guaranteed = false;
+        s.disk.used_kib = 5_000;
+        s.disk_baseline_kib = None;
+
+        let view = derive_lifecycle(&s);
+
+        assert_eq!(view.phase, CascadePhase::Off);
+        assert_eq!(disk_growth_kib(&s), None);
+        assert_eq!(protection_state(&view, &s), ProtectionState::Off);
+    }
+
+    #[test]
+    fn disk_growth_after_activation_is_at_risk() {
+        let mut s = base();
+        s.disk_baseline_kib = Some(3_500);
+        s.disk.used_kib = 5_000;
+
+        let view = derive_lifecycle(&s);
+
+        assert_eq!(disk_growth_kib(&s), Some(1_500));
+        assert_eq!(view.phase, CascadePhase::UsingDisk);
+        assert_eq!(protection_state(&view, &s), ProtectionState::AtRisk);
     }
 
     #[test]
@@ -467,6 +811,13 @@ mod tests {
         let v = derive_lifecycle(&s);
         let j = render_status_json(&v, &s, "2026-07-14T00:00:00-03:00");
         assert!(j.contains("\"phase\":\"Armed\""));
+        assert!(j.contains("\"schema_version\":4"));
+        assert!(j.contains("\"disk_baseline_kib\":0"));
+        assert!(j.contains("\"disk_growth_kib\":0"));
+        assert!(j.contains("\"activation\":{\"active\":true"));
+        assert!(j.contains("\"protection_state\":\"READY\""));
+        assert!(j.contains("\"topology_ok\":true"));
+        assert!(j.contains("\"guaranteed_kib\":2097148"));
         assert!(j.contains("\"phase_reason\":\"armed_low_vram_used\""));
         assert!(j.contains("\"ok\":true"));
         assert!(j.contains("\"order_ok\":true"));
@@ -474,6 +825,30 @@ mod tests {
         assert!(j.contains("\"thresholds_kib\":{\"active\":1024}"));
         assert!(j.contains("\"in_progress\":false"));
         assert!(j.starts_with('{') && j.ends_with('}'));
+    }
+
+    #[test]
+    fn status_blocks_ineffective_tier_before_control_plane_exhaustion() {
+        let mut snapshot = base();
+        snapshot.zram.used_kib = snapshot.zram.size_kib * 85 / 100;
+        let view = derive_lifecycle(&snapshot);
+        let json = render_status_json(&view, &snapshot, "2026-08-20T00:00:00Z");
+        assert!(json.contains("\"protection_state\":\"AT_RISK\""));
+        assert!(json.contains("\"protection_reason\":\"zram_utilization_ge_80_without_vram_use\""));
+        assert!(json.contains("\"ok\":false"));
+        assert!(json.contains("\"zram_utilization_pct\":85"));
+    }
+
+    #[test]
+    fn status_blocks_unverified_capacity() {
+        let mut snapshot = base();
+        snapshot.capacity_guaranteed = false;
+        let view = derive_lifecycle(&snapshot);
+        let json = render_status_json(&view, &snapshot, "2026-08-20T00:00:00Z");
+        assert!(json.contains("\"protection_state\":\"BLOCKED\""));
+        assert!(json.contains("\"protection_reason\":\"capacity_not_guaranteed\""));
+        assert!(json.contains("\"guaranteed_kib\":null"));
+        assert!(json.contains("\"ok\":false"));
     }
 
     #[test]
@@ -508,5 +883,56 @@ mod tests {
         let v = derive_lifecycle(&s);
         assert_eq!(v.phase, CascadePhase::Degraded);
         assert_eq!(v.phase_reason, "vram_tier_without_daemon");
+    }
+
+    #[test]
+    fn schema_v4_worst_plane_controls_ok() {
+        let mut snapshot = base();
+        snapshot.control_state = ControlState::Critical;
+        let view = derive_lifecycle(&snapshot);
+        let json = render_status_json(&view, &snapshot, "2026-08-20T00:00:00Z");
+        assert!(json.contains("\"schema_version\":4"));
+        assert!(json.contains("\"control_state\":\"CRITICAL\""));
+        assert!(json.contains("\"overall_state\":\"CRITICAL\""));
+        assert!(json.contains("\"ok\":false"));
+    }
+
+    #[test]
+    fn using_vram_never_masks_critical_pressure() {
+        let mut snapshot = base();
+        snapshot.vram.used_kib = 32_768;
+        snapshot.control_state = ControlState::Emergency;
+        let view = derive_lifecycle(&snapshot);
+        assert_eq!(view.phase, CascadePhase::UsingVram);
+        assert_eq!(overall_state(&view, &snapshot), OverallState::Emergency);
+    }
+
+    #[test]
+    fn origin_failure_and_stuck_cache_are_never_green() {
+        let mut snapshot = base();
+        snapshot.origin_state = OriginState::Failed;
+        snapshot.cache_state = CacheState::Stuck;
+        let view = derive_lifecycle(&snapshot);
+        assert_eq!(overall_state(&view, &snapshot), OverallState::Blocked);
+        assert!(!overall_state(&view, &snapshot).is_ok());
+    }
+
+    #[test]
+    fn schema_v4_distinguishes_logical_cache_origin_and_fallback_swap() {
+        let mut snapshot = base();
+        snapshot.logical_capacity_kib = Some(4 * 1024 * 1024);
+        snapshot.vram_cached_kib = Some(128 * 1024);
+        snapshot.ssd_origin_written_kib = Some(256 * 1024);
+        snapshot.fallback_swap_used_kib = Some(64 * 1024);
+        let view = derive_lifecycle(&snapshot);
+        let json = render_status_json(&view, &snapshot, "2026-08-20T00:00:00Z");
+        for field in [
+            "\"logical_capacity_kib\":4194304",
+            "\"vram_cached_kib\":131072",
+            "\"ssd_origin_written_kib\":262144",
+            "\"fallback_swap_used_kib\":65536",
+        ] {
+            assert!(json.contains(field), "missing {field}: {json}");
+        }
     }
 }

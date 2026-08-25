@@ -1,49 +1,38 @@
-# IMPL — wsl2-cascade-orphan-recover
+# IMPL — Orphan Detection and Fail-Closed Lifecycle
 
-> Passo 3 SSDV3. Implements [`SPEC.md`](SPEC.md). AUDIT-2.5: **GO**.  
-> **Date:** 2026-07-10  
-> **Status:** **GREEN**
+Status: **source corrected; hermetic serial validation complete; live blocked**.
 
-## Status gates
+## Implemented
 
-| Gate | Result | Evidence |
-| --- | --- | --- |
-| cargo test -p ramshared-cli | **GREEN** | 23 passed |
-| Live orphan sim used=0 → up | **GREEN** | recover log + healthy cascade |
-| Disk sdc never removed | **GREEN** | still prio -2 after recover |
-| used>0 refuse (unit) | **GREEN** | `orphan_plan_dirty_nbd_is_refuse` |
-| Ghost still refused | **GREEN** | `refuse_ghost_swap_state` unchanged |
-| Kill-switch env | **GREEN** | `RAMSHARED_NO_ORPHAN_RECOVER=1` in code |
+- Strict `/proc/swaps` parser with explicit errors and temporal seams.
+- NBD/ublk/zram enumeration for detection only.
+- Atomic, sealed binding with complete daemon identity, socket, origin, and
+  devices, plus exact cardinality.
+- Fresh authorization and revalidation before each action.
+- Exact live cardinality per stage; missing bound device is NO-GO,
+  not a reason to skip mutation and proceed.
+- All `swapoff` operations before reset/disconnect/daemon stop.
+- Strict absence required before reset/disconnect/delete.
+- Preservation of binding, records, daemon, and forensics on any NO-GO.
+- Standalone ublk permanently refused on WSL2 and swapoff-first on isolated Linux.
+- zram registered/revalidated before `mkswap`; rollback requires the exact record,
+  and unowned sysfs fallback was removed.
 
-## RF / ITEM → files
+## Current Evidence
 
-| ID | Files |
-| --- | --- |
-| ITEM-1 | `canonicalize_swap_path`, `SwapEntry::canonical_path`, allowlist |
-| ITEM-2 | `plan_orphan_action`, `try_recover_zero_used_orphans`, `up()` order |
-| ITEM-3 | `swapoff_try`, `down()` nbd/zram canonical |
-| ITEM-4 | `[up] orphan recover:` logs; single pass |
-| ITEM-5 | refuse matrix + env kill-switch |
+With Rust 1.98 and single-threaded execution, the focused lifecycle suite passed 49/49.
+The complete validation of `ramshared-cli` passed 191 unit tests and 6 dispatch
+tests without failure. `cargo check -p ramshared-cli` also passed. Hermetic
+fixtures cover foreign device, missing bound device, stage cardinality,
+active zero-use swap, unreadable/malformed snapshot, uncertain swapon/swapoff outcome,
+zram rollback without record, and NBD detach post-check failure. No test called `mkswap` on a real device.
 
-## Live numbers (orphan sim)
+Legacy live results from 2026-07-10 belong to the old implementation. They do not
+qualify the current lifecycle and do not authorize restoring zero-use auto-recovery.
 
-| Metric | Value |
-| --- | --- |
-| Before | zram0+nbd0 prio 200/100; `/run` wiped; daemon none |
-| Recover | swapoff `/dev/zram0`, `/dev/nbd0`; nbd disconnect |
-| After | zram1 prio 200, nbd0 prio 100, sdc -2; daemon pid alive; unit active |
-| up exit | 0 |
+## Remaining Live Gates
 
-## Small decisions
-
-1. Log lines reuse `[down] swapoff ok` from shared `swapoff_all` (acceptable noise).  
-2. zram may renumber (`zram0` → `zram1`) after recover — expected.  
-3. No systemd unit change; boot inherits via `cascade-up.sh` → `up`.
-
-## Rollback trigger
-
-WSL hard freeze or swapoff hang > 30s after recover → set `RAMSHARED_NO_ORPHAN_RECOVER=1` in unit Environment and revert commit; note validation.md.
-
-## Traceability
-
-PRD RF-R1..R8 → SPEC ITEM-1..5 → this IMPL.
+- None in this source patch is executed automatically.
+- Future isolated validation must prove real identity, terminal detach,
+  and absence of ghost without using the daily host.
+- WSL2 standalone ublk remains NO-GO regardless of QEMU tests.

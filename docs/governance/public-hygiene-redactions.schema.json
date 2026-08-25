@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ramshared.dev/schemas/public-hygiene-redactions.schema.json",
+  "title": "RamShared public hygiene redaction record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "redaction_id", "applied_at", "source_revision", "path", "source_line", "replacement_line", "rule", "replacement_class", "supersedes_line_sha256", "replacement_line_sha256", "reason"],
+  "properties": {
+    "schema_version": { "const": "ramshared-public-redaction/v1" },
+    "redaction_id": { "type": "string", "pattern": "^PHR-[0-9]{4,}$" },
+    "applied_at": { "type": "string", "format": "date-time" },
+    "source_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "path": { "type": "string", "pattern": "^(?:README(?:\\.pt-BR)?\\.md|validation\\.md|docs/[A-Za-z0-9._/-]+)$" },
+    "source_line": { "type": "integer", "minimum": 1 },
+    "replacement_line": { "type": "integer", "minimum": 1 },
+    "rule": { "enum": ["RAW_LAB_VM", "PRIVATE_WINDOWS_ARTIFACT_RUN", "RAW_ARTIFACT_RUN_PATH", "RAW_TIMESTAMP_RUN_ID", "RAW_UUID", "RAW_DEVICE", "RAW_PRINCIPAL", "PRIVATE_IP"] },
+    "replacement_class": { "type": "string", "pattern": "^SANITIZED_[A-Z0-9_]+$" },
+    "supersedes_line_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "replacement_line_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "reason": { "type": "string", "minLength": 20 }
+  }
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto'
-import { lstatSync, readFileSync } from 'node:fs'
+import { lstatSync, readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -12,6 +12,8 @@ const MAX_ARTIFACTS = 128
 const MAX_ARTIFACT_TOTAL_BYTES = 64 * 1024 * 1024
 const SHA256_RE = /^[0-9a-f]{64}$/i
 const VERDICTS = new Set(['RED', 'YELLOW', 'INCOMPARABLE', 'BASELINE', 'PASS'])
+const PUBLIC_CLAIMS_SCHEMA = 'ramshared-public-benchmark-claims/v1'
+const PUBLIC_ENTRY_KEYS = ['id', 'path', 'file_sha256', 'disposition', 'benchmark_id', 'claims', 'reason']
 
 function canonical(value) {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
@@ -558,6 +560,143 @@ function benchmarkIds(markdown) {
   return ids
 }
 
+function decodeXmlText(value) {
+  return value
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&#(\d+);/g, (_, number) => String.fromCodePoint(Number(number)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, number) => String.fromCodePoint(Number.parseInt(number, 16)))
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function normalizedClaimText(text) {
+  return text
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+}
+
+function contextualCpuPercentageClaim(text) {
+  const normalized = normalizedClaimText(text)
+  const cpuContext = /\b(?:cpu|processors?|processadores?|nucleos?(?:\s+(?:de|da|do)\s+(?:cpu|processador))?)\b/
+  const outcome = /\b(?:available|availability|free|freed|idle|overhead|reduced|reduction|savings?|usage|utilization|disponivel|disponiveis|economia|economizado|economizados|livre|livres|poupanca|reducao|sobrecarga|uso|utilizacao)\b/
+  for (const match of normalized.matchAll(/\d+(?:[.,]\d+)?\s*(?:%|percent(?:age)?|per\s+cent|por\s+cento)/g)) {
+    const start = Math.max(0, match.index - 64)
+    const end = Math.min(normalized.length, match.index + match[0].length + 64)
+    const window = normalized.slice(start, end)
+    if (cpuContext.test(window) && outcome.test(window)) return true
+  }
+  return false
+}
+
+function numericCpuCoreAvailabilityClaim(text) {
+  const normalized = normalizedClaimText(text)
+  return /\b(?:leaves?|keeps?|preserves?|frees?|maintains?|deixa|mantem|preserva|libera)\b[^.\n]{0,64}\b(?:all|todos?|todas?|os|as)?\s*\d{1,3}\s+(?:host\s+)?(?:cpu\s+cores?|cores?\s+(?:of\s+)?(?:the\s+)?cpu|nucleos?\s+(?:de|da|do)\s+(?:cpu|processador))\b[^.\n]{0,40}\b(?:available|free|idle|disponivel|disponiveis|livre|livres)\b/.test(normalized)
+}
+
+function numericPerformanceClaim(text) {
+  const directUnit = /(?:~?\d[\d.,]*(?:\s*[–-]\s*\d[\d.,]*)?\s*(?:ns|µs|us|ms|MB\/s|GB\/s|GiB\/s|IOPS|%\s*CPU)\b|\d+(?:[.,]\d+)?\s*[×x]\s*(?:faster|mais\s+r[aá]pid[oa]))/i
+  const secondsWithContext = /(?:GPU|reclaim|pressure|latency|elapsed|tempo|lat[eê]ncia|sob\s+press[aã]o)[^\n]{0,80}~?\d+(?:[.,]\d+)?\s*s\b/i
+  const wordMultiplier = /\b\d+(?:[.,]\d+)?\s*(?:times?\s+faster|vez(?:es)?\s+mais\s+r[aá]pid[oa]s?)\b/i
+  return directUnit.test(text) || secondsWithContext.test(text) || wordMultiplier.test(text) ||
+    contextualCpuPercentageClaim(text) || numericCpuCoreAvailabilityClaim(text)
+}
+
+function markdownPublicClaims(text) {
+  const claims = []
+  let fenced = false
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*```/.test(line)) { fenced = !fenced; continue }
+    if (fenced) continue
+    const visible = line.replace(/<!--.*?-->/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+    if (visible && numericPerformanceClaim(visible)) claims.push(visible)
+  }
+  return claims
+}
+
+function svgPublicClaims(text) {
+  const claims = []
+  for (const match of text.matchAll(/<text\b[^>]*>([\s\S]*?)<\/text>/gi)) {
+    const visible = decodeXmlText(match[1])
+    if (visible && numericPerformanceClaim(visible)) claims.push(visible)
+  }
+  return claims
+}
+
+function publicSurfacePaths(root, findings) {
+  const paths = ['README.md', 'README.pt-BR.md']
+  const marketing = path.join(root, 'docs', 'marketing')
+  let entries = []
+  try { entries = readdirSync(marketing, { withFileTypes: true }) } catch { findings.push('public-surface-marketing-missing') }
+  for (const entry of entries) if (entry.isFile() && entry.name.toLowerCase().endsWith('.svg')) paths.push(`docs/marketing/${entry.name}`)
+  return paths.sort((a, b) => a.localeCompare(b))
+}
+
+function exactStringArray(values) {
+  return Array.isArray(values) && values.length > 0 && values.every((value) => typeof value === 'string' && value.trim() === value && value.length > 0) &&
+    new Set(values).size === values.length
+}
+
+export function scanPublicBenchmarkClaims({ root = ROOT, registry, mappings = [], records = [] } = {}) {
+  const findings = []
+  const surfaces = new Map()
+  for (const relative of publicSurfacePaths(root, findings)) {
+    const text = readRepositoryFile(path.join(root, relative), findings, `public-surface:${relative}`)
+    if (text === null) continue
+    const claims = relative.endsWith('.svg') ? svgPublicClaims(text) : markdownPublicClaims(text)
+    surfaces.set(relative, { text, claims })
+  }
+  if (!exactObject(registry, ['schema_version', 'entries']) || registry.schema_version !== PUBLIC_CLAIMS_SCHEMA || !Array.isArray(registry.entries)) {
+    findings.push('public-claims-schema')
+    return { findings: [...new Set(findings)].sort(), counts: { surfaces: surfaces.size, claims: 0 } }
+  }
+
+  const qualifiedRuns = new Set(records.filter((record) => record.schema_version === 'ramshared-evidence/v1' &&
+    record.decision?.verdict === 'PASS' && record.decision?.promotable === true && record.comparison?.qualified === true)
+    .map((record) => record.run_id))
+  const qualifiedBenchmarkIds = new Set(mappings.filter((entry) => entry.run_id && qualifiedRuns.has(entry.run_id)).map((entry) => entry.benchmark_id))
+  const registered = new Map()
+  for (const entry of registry.entries) {
+    const id = entry?.id ?? 'missing'
+    if (!exactObject(entry, PUBLIC_ENTRY_KEYS) || typeof entry.id !== 'string' || !entry.id ||
+        typeof entry.path !== 'string' || !entry.path || !SHA256_RE.test(entry.file_sha256 ?? '') ||
+        !['qualified', 'legacy-unqualified'].includes(entry.disposition) || !exactStringArray(entry.claims) ||
+        typeof entry.reason !== 'string' || entry.reason.length < 12) {
+      findings.push(`public-claim-entry-schema:${id}`)
+      continue
+    }
+    const surface = surfaces.get(entry.path)
+    if (!surface) { findings.push(`public-claim-surface:${id}`); continue }
+    if (sha256(surface.text) !== entry.file_sha256.toLowerCase()) findings.push(`public-claim-surface-hash:${id}`)
+    if (entry.disposition === 'qualified') {
+      if (typeof entry.benchmark_id !== 'string' || !qualifiedBenchmarkIds.has(entry.benchmark_id)) findings.push(`public-claim-benchmark-identity:${id}`)
+    } else if (entry.benchmark_id !== null) {
+      findings.push(`public-claim-legacy-identity:${id}`)
+    }
+    for (const claim of entry.claims) {
+      const key = `${entry.path}\u0000${claim}`
+      if (registered.has(key)) findings.push(`public-claim-duplicate:${id}`)
+      registered.set(key, id)
+      if (!surface.claims.includes(claim)) findings.push(`public-claim-stale-entry:${id}`)
+    }
+  }
+  let claimCount = 0
+  for (const [relative, surface] of surfaces) {
+    for (const claim of surface.claims) {
+      claimCount += 1
+      if (!registered.has(`${relative}\u0000${claim}`)) findings.push(`public-claim-unqualified:${relative}:${claimCount}`)
+    }
+  }
+  return { findings: [...new Set(findings)].sort(), counts: { surfaces: surfaces.size, claims: claimCount } }
+}
+
 export function validateRepository({ root = ROOT } = {}) {
   const findings = []
   const docs = path.join(root, 'docs')
@@ -567,6 +706,7 @@ export function validateRepository({ root = ROOT } = {}) {
     results: path.join(bench, 'results.jsonl'),
     legacy: path.join(bench, 'legacy-unqualified.json'),
     map: path.join(bench, 'benchmark-map.json'),
+    publicClaims: path.join(bench, 'public-claims.json'),
   }
   const source = {}
   for (const [key, file] of Object.entries(required)) source[key] = readRepositoryFile(file, findings, key)
@@ -575,6 +715,7 @@ export function validateRepository({ root = ROOT } = {}) {
   const records = parseJsonl(source.results, findings)
   const legacyDoc = parseJson(source.legacy, findings, 'legacy-parse', required.legacy)
   const mapDoc = parseJson(source.map, findings, 'map-parse', required.map)
+  const publicClaimsDoc = parseJson(source.publicClaims, findings, 'public-claims-parse', required.publicClaims)
   const legacyEntries = Array.isArray(legacyDoc?.entries) ? legacyDoc.entries : []
   const mappings = Array.isArray(mapDoc?.entries) ? mapDoc.entries : []
   if (legacyDoc?.schema_version !== 'ramshared-legacy-benchmarks/v1') findings.push('legacy-schema')
@@ -615,7 +756,9 @@ export function validateRepository({ root = ROOT } = {}) {
     const hasLegacy = mapping.legacy_id && legacyIds.has(mapping.legacy_id)
     if (!hasRun && !hasLegacy) findings.push(`map-target:${mapping.benchmark_id ?? 'missing'}`)
   }
-  return { ok: findings.length === 0, findings: [...new Set(findings)].sort(), counts: { sections: ids.length, records: records.length, legacy: legacyEntries.length } }
+  const publicClaims = scanPublicBenchmarkClaims({ root, registry: publicClaimsDoc, mappings, records })
+  findings.push(...publicClaims.findings)
+  return { ok: findings.length === 0, findings: [...new Set(findings)].sort(), counts: { sections: ids.length, records: records.length, legacy: legacyEntries.length, public_surfaces: publicClaims.counts.surfaces, public_claims: publicClaims.counts.claims } }
 }
 
 function main() {
@@ -628,7 +771,7 @@ function main() {
     for (const finding of result.findings) console.error(`benchmark-evidence — ${finding}`)
     return 1
   }
-  console.log(`✓ benchmark evidence OK (sections=${result.counts.sections} records=${result.counts.records} legacy=${result.counts.legacy})`)
+  console.log(`✓ benchmark evidence OK (sections=${result.counts.sections} records=${result.counts.records} legacy=${result.counts.legacy} public_surfaces=${result.counts.public_surfaces} public_claims=${result.counts.public_claims})`)
   return 0
 }
 

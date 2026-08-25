@@ -1,77 +1,77 @@
-# AUDIT-2.5 — Security & fail-safe audit — wsl2-cascade-orphan-recover
+# AUDIT-2.5 — Cascade Fail-Closed Lifecycle
 
-> Passo 2.5 SSDV3 + **security general** on privileged cascade surface.  
-> Date: 2026-07-10  
-> Scope: proposed SPEC + existing `cascade.rs` / boot unit / NBD path.
+> Step 2.5 SSDV3 + privileged surface safety review.
+> Revision: 2026-08-23.
+> Scope: enumeration, swapoff, reset, disconnect, and backend stop.
 
 ## Decision
 
 | Path | Verdict |
 | --- | --- |
-| Auto-recover **used_kb == 0** managed orphans | **GO** |
-| Auto-recover **used_kb > 0** nbd/ublk | **NO-GO** |
-| Kill -9 / kill daemon before swapoff | **NO-GO** (existing, keep) |
-| Touch non-managed swap (disk VHDX) | **NO-GO** |
-| Ship without env kill-switch | Accept **GO** only with `RAMSHARED_NO_ORPHAN_RECOVER=1` kill-switch in SPEC |
+| Live enumeration of NBD/ublk/zram | **GO for detection only** |
+| Mutation by name, shape, allowlist, or `used_kb == 0` | **NO-GO** |
+| Mutation with exact, sealed, and revalidated lifecycle binding | **Source GO; live gates pending** |
+| Swapoff with unreadable, malformed, or uncertain snapshot | **NO-GO** |
+| Reset/disconnect/delete without fresh proof of absence | **NO-GO** |
+| Standalone ublk on WSL2, with or without override variable | **Permanent NO-GO** |
 
-**Overall: GO** for IMPL as SPEC written.
+The audit of 2026-07-10 was superseded. Zero usage does not imply inactivity:
+a row present in `/proc/swaps` remains an active swap.
 
----
+## Threat Model
 
-## 1. Threat / abuse model (privileged surface)
-
-| ID | Abuse / failure | Risk | Control in SPEC |
+| ID | Failure | Risk | Mandatory Control |
 | --- | --- | --- | --- |
-| A1 | swapoff wrong device → data loss on disk swap | **CRITICAL** | Allowlist nbd/ublk/zram only; never sdc |
-| A2 | Auto swapoff dead nbd with dirty pages → host hang | **CRITICAL** | Refuse if nbd/ublk used_kb > 0 |
-| A3 | Stack second cascade on half-state | **HIGH** | Recover clears then single up; refuse if recover incomplete |
-| A4 | kill -9 ramsharedd with live nbd → ghost/freeze | **CRITICAL** | Existing daemon_kill_allowed; recover reuses |
-| A5 | Unprivileged caller | **LOW** | `up` already requires root for swapon/modprobe |
-| A6 | TOCTOU /proc/swaps vs action | **MED** | Re-read after swapoff; fail if nbd remains |
-| A7 | Infinite retry hide root cause | **MED** | Single pass #15 |
-| A8 | Log injection / path with spaces | **LOW** | Paths from kernel swap list; ghost handled separately |
-| A9 | ublk force product via recover | **MED** | Recover only cleans; up still NBD Day-1 / ublk fail-closed |
-| A10 | Env kill-switch missing → no rollback | **MED** | `RAMSHARED_NO_ORPHAN_RECOVER=1` |
+| A1 | Foreign device reuses an expected name | Critical | Exact binding + cardinality + kernel identity |
+| A2 | Parser interprets uncertainty as absence | Critical | Strict parser returns `Result`; error preserves all |
+| A3 | State changes between plan and action | Critical | Reauthorization immediately before each mutation |
+| A4 | `swapoff` fails or yields ambiguous outcome | Critical | Fresh strict snapshot; absence not presumed |
+| A5 | Backend dies with active swap, including zero usage | Critical | Swapoff-first under lifecycle owner responsibility |
+| A6 | Auxiliary record diverges from binding | High | Divergence blocks entire operation |
+| A7 | Duplicate or unexpected cardinality | High | Refuse all and execute zero commands |
+| A8 | Evidence erased on partial failure | High | Binding, records, and backend remain recoverable |
 
-## 2. Security checklist (`.claude/rules/security.md` adapted)
+## Minimum Authority for Mutation
 
-| Check | Status |
+An action requires, simultaneously:
+
+1. Exact schema binding and sealed file;
+2. Daemon boot ID, InvocationID, PID, and start identity;
+3. Socket/export identity;
+4. Origin PARTUUID, PTUUID, `dev_t`, swap UUID, and hashes;
+5. Exact set and cardinality of devices;
+6. Equality with stable auxiliary records;
+7. Live enumeration free of foreign or ambiguous devices;
+8. Fresh revalidation immediately before action;
+9. Before reset/disconnect/delete, strict snapshot proving exact absence.
+
+Failure of any single item invalidates the entire authority. There is no
+partial recovery based solely on items that passed.
+
+## Kahneman
+
+| # | Application |
 | --- | --- |
-| Capabilities: privileged ops as root only | **OK** (existing) |
-| No user-controlled path into swapoff without allowlist | **OK** if allowlist enforced |
-| No kernel address leak in new logs | **OK** (device names only) |
-| Lifetime: map/unmap N/A; nbd disconnect after swapoff | **OK** order in SPEC |
-| Hot-unplug / terminate class | **OK** — this feature |
-| Host safety: no thrash | **OK** |
-| Secrets | N/A |
+| #13 | Fixtures prove refusal and zero commands, not only happy path |
+| #15 | First error terminates sequence; no retry hiding uncertainty |
+| #16 | Safe default is preserving foreign, ambiguous, and active zero-use swap |
+| #17 | State is removed only after complete terminal success |
+| #18 | Controller owning the lifecycle also owns swapoff-first |
 
-## 3. Kahneman map
+## Mandatory Hermetic Evidence
 
-| # | Finding |
-| --- | --- |
-| #2 | Rollback: freeze/hang > 30s → env disable + revert |
-| #13 | Must test refuse path used>0, not only happy recover |
-| #15 | No retry loop |
-| #16 | Safe default = refuse dirty backend; auto only zero-used |
-| #17 | 2× up after recover = healthy idempotent |
-| #18 | Fix in cascade orchestration (owns swap lifecycle) |
+- Foreign, duplicate, ambiguous cardinality, and divergent record execute zero commands;
+- Unreadable or malformed snapshot refuses before mutation;
+- Active zero-use swap and swapoff failure preserve backend and evidence;
+- Uncertain swapoff outcome requires fresh strict proof of absence;
+- Valid order is swapoff, fresh absence, reset/disconnect/delete;
+- Standalone ublk TERM/Ctrl-C preserves backend when swapoff is not proven;
+- No test invokes real mkswap, swapoff, NBD, ublk, or zram.
 
-## 4. Findings on current code (pre-IMPL)
+## Residual Risk and Gate
 
-| Sev | Finding | Disposition |
-| --- | --- | --- |
-| HIGH | Orphan refuse breaks boot after `wsl --terminate` | Fixed by this feature |
-| HIGH | `swapoff` candidates may use `/nbd0` without `/dev/` → false "ausente" | ITEM-1 normalize |
-| MED | Soak script accepted swap lines without daemon | Not this SPEC; note in validation |
-| MED | `down` skip left orphans | ITEM-3 |
-| LOW | journal noise from bash `set` in soak WslBash | soak script only; optional later |
-
-## 5. Open questions
-
-None blocking. Residual risk: zero-used race (page-in between check and swapoff) — accepted; re-read after swapoff fails closed if nbd remains.
-
-## 6. Go / no-go
-
-**GO** — implement SPEC ITEM-1..5.  
-Blockers: none.  
-Do **not** expand to used>0 nbd auto-recover without new audit + isolated drill.
+Source review does not prove kernel behavior or real hot-unplug. The
+live gate may only occur in a disposable, isolated environment with a
+fixture device crafted for the trial and terminal detach evidence. The daily host
+and production WSL2 remain out of scope. Until that gate, the status is
+**Source GO / Live Activation NO-GO**.

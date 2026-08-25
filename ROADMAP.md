@@ -1,6 +1,8 @@
 # Roadmap
 
-Shippable product today: **Linux / WSL2 cascade** (borrow idle GPU memory, give it back under pressure).  
+Current release posture: **Linux / WSL2 beta, incident gate open**. Ordered
+teardown is retained; guaranteed capacity, control-plane headroom, and external
+heartbeat must pass requalification before the cascade is called shippable.
 Windows StorPort is a **lab** track. Bare metal / CXL is later. No fake dates.
 
 Evidence lives in [validation.md](validation.md) and feature IMPL files. We don’t invent “host-real PASS.”
@@ -55,7 +57,7 @@ Format, pagefile residency, kernel-page drill, ordered teardown (DT-9), and SCM 
 
 | Priority | Work |
 | --- | --- |
-| Product polish | Keep cascade boot + demote healthy on real daily WSL |
+| WSL2 incident | Requalify guaranteed 1/2/4 GiB profiles, managed workload containment, external heartbeat, and the VMBus control-plane reserve |
 | Windows | Product CUDA path + MSVC service on physical host, telemetry collection under budget pressure |
 | Upstream WSL2 | Track Microsoft triage on #41054 and promote ublk transport to standard product upon kernel release |
 
@@ -74,7 +76,8 @@ Format, pagefile residency, kernel-page drill, ordered teardown (DT-9), and SCM 
 | Bare-metal Linux + BAR/HMM | **Research GO / implement NO-GO** until measurement gates pass |
 | Next SSD step | Lab inventory + Passo 0 numbers → only then `SPEC.md` |
 
-Cascade remains the shippable product while that track is gated.
+Cascade remains the product candidate while that track and the current
+stability incident are gated.
 
 ---
 

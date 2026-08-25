@@ -266,8 +266,8 @@ else
   echo "KTEST-INSMOD=fail: $($BB cat /tmp/e)"
 fi
 
-# 2) RAM-backend daemon, 64 MiB device (identical to E1)
-RAMSHARED_ALLOW_UBLK_ON_WSL2=1 /ramsharedd --transport ublk --backend ram \
+# 2) RAM-backend daemon in the isolated generic-Linux QEMU guest, 64 MiB (identical to E1)
+/ramsharedd --transport ublk --backend ram \
   --size 64 --queue-depth 4 --force >/tmp/daemon.log 2>&1 &
 DPID=$!
 echo "KTEST-DAEMON-PID=$DPID"

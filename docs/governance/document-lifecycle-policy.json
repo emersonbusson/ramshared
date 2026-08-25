@@ -384,6 +384,16 @@
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
+      "id": "reliability-incidents",
+      "pattern": "docs/reliability/incidents/**/*.md",
+      "owner": "reliability",
+      "canonicalSource": "docs/postmortems/TEMPLATE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-20T14:49:00Z"
+    },
+    {
       "id": "reliability-documents",
       "pattern": "docs/reliability/*.md",
       "owner": "reliability",
@@ -392,6 +402,16 @@
       "freshnessDays": 90,
       "verification": { "state": "unverified" },
       "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "upstream-drafts",
+      "pattern": "docs/upstream/**/*.md",
+      "owner": "release-engineering",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 30,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-20T14:49:00Z"
     },
     {
       "id": "review-documents",

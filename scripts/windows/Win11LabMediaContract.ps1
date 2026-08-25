@@ -82,6 +82,57 @@ function Get-Win11LabSingleXmlNode {
     return $nodes[0]
 }
 
+function New-Win11LabPersistentAutologonCommand {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ComputerName,
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$LabUser,
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Password
+    )
+
+    $escapedUser = $LabUser.Replace("'", "''")
+    $escapedPassword = $Password.Replace("'", "''")
+    $scriptText = @"
+`$ErrorActionPreference = 'Stop'
+`$winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+Remove-ItemProperty -LiteralPath `$winlogon -Name AutoLogonSID -ErrorAction SilentlyContinue
+Remove-ItemProperty -LiteralPath `$winlogon -Name AutoLogonCount -ErrorAction SilentlyContinue
+Set-ItemProperty -LiteralPath `$winlogon -Name AutoAdminLogon -Type String -Value '1'
+Set-ItemProperty -LiteralPath `$winlogon -Name ForceAutoLogon -Type String -Value '1'
+Set-ItemProperty -LiteralPath `$winlogon -Name DefaultUserName -Type String -Value '$escapedUser'
+Set-ItemProperty -LiteralPath `$winlogon -Name DefaultDomainName -Type String -Value ''
+Set-ItemProperty -LiteralPath `$winlogon -Name DefaultPassword -Type String -Value '$escapedPassword'
+Set-ItemProperty -LiteralPath `$winlogon -Name DisableCAD -Type DWord -Value 1
+Set-LocalUser -Name '$escapedUser' -PasswordNeverExpires `$true
+`$personalization = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Personalization'
+New-Item -Path `$personalization -Force | Out-Null
+Set-ItemProperty -LiteralPath `$personalization -Name NoLockScreen -Type DWord -Value 1
+`$desktop = 'HKCU:\Control Panel\Desktop'
+New-Item -Path `$desktop -Force | Out-Null
+Set-ItemProperty -LiteralPath `$desktop -Name ScreenSaveActive -Type String -Value '0'
+Set-ItemProperty -LiteralPath `$desktop -Name ScreenSaverIsSecure -Type String -Value '0'
+Set-ItemProperty -LiteralPath `$desktop -Name ScreenSaveTimeOut -Type String -Value '0'
+Remove-ItemProperty -LiteralPath `$desktop -Name 'SCRNSAVE.EXE' -ErrorAction SilentlyContinue
+`$userSystemPolicy = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\System'
+New-Item -Path `$userSystemPolicy -Force | Out-Null
+Set-ItemProperty -LiteralPath `$userSystemPolicy -Name DisableLockWorkstation -Type DWord -Value 1
+`$machineSystemPolicy = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+Set-ItemProperty -LiteralPath `$machineSystemPolicy -Name InactivityTimeoutSecs -Type DWord -Value 0
+foreach (`$arguments in @(@('/change','monitor-timeout-ac','0'),@('/change','monitor-timeout-dc','0'),@('/change','standby-timeout-ac','0'),@('/change','standby-timeout-dc','0'),@('/SETACVALUEINDEX','SCHEME_CURRENT','SUB_NONE','CONSOLELOCK','0'),@('/SETDCVALUEINDEX','SCHEME_CURRENT','SUB_NONE','CONSOLELOCK','0'),@('/SETACTIVE','SCHEME_CURRENT'))) {
+    `$process = Start-Process -FilePath powercfg.exe -ArgumentList `$arguments -Wait -PassThru -WindowStyle Hidden
+    if (`$process.ExitCode -ne 0) { throw 'persistent_autologon_power_policy_failed' }
+}
+"@
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($scriptText))
+    return "powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand $encoded"
+}
+
 function Get-Win11LabAutounattendContract {
     [CmdletBinding()]
     param(
@@ -308,28 +359,30 @@ function Get-Win11LabAutounattendContract {
         -Context $oobeShellSetupComponents[0] `
         -XPath 'u:FirstLogonCommands/u:SynchronousCommand' `
         -NamespaceManager $namespaceManager `
-        -FailureCode "autologon_count_workaround_count_invalid"
+        -FailureCode "post_oobe_autologon_command_count_invalid"
     $firstLogonOrderNode = Get-Win11LabSingleXmlNode `
         -Context $firstLogonCommandNode `
         -XPath 'u:Order' `
         -NamespaceManager $namespaceManager `
-        -FailureCode "autologon_count_workaround_order_count_invalid"
+        -FailureCode "post_oobe_autologon_order_count_invalid"
     $firstLogonDescriptionNode = Get-Win11LabSingleXmlNode `
         -Context $firstLogonCommandNode `
         -XPath 'u:Description' `
         -NamespaceManager $namespaceManager `
-        -FailureCode "autologon_count_workaround_description_count_invalid"
+        -FailureCode "post_oobe_autologon_description_count_invalid"
     $firstLogonCommandLineNode = Get-Win11LabSingleXmlNode `
         -Context $firstLogonCommandNode `
         -XPath 'u:CommandLine' `
         -NamespaceManager $namespaceManager `
-        -FailureCode "autologon_count_workaround_command_count_invalid"
-    $expectedAutoLogonCountCommand = 'reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoLogonCount /t REG_DWORD /d 0 /f'
+        -FailureCode "post_oobe_autologon_commandline_count_invalid"
+    $expectedPersistentAutologonCommand = New-Win11LabPersistentAutologonCommand `
+        -ComputerName $computerName `
+        -LabUser $autoLogonUsername `
+        -Password $autoLogonPasswordNode.InnerText
     if ($firstLogonOrderNode.InnerText.Trim() -cne "1" -or
-        [string]::IsNullOrWhiteSpace($firstLogonDescriptionNode.InnerText) -or
-        $firstLogonDescriptionNode.InnerText -cne $firstLogonDescriptionNode.InnerText.Trim() -or
-        $firstLogonCommandLineNode.InnerText -cne $expectedAutoLogonCountCommand) {
-        throw "win11_lab_media_contract_autologon_count_workaround_invalid"
+        $firstLogonDescriptionNode.InnerText -cne "Seal persistent disposable-lab autologon" -or
+        $firstLogonCommandLineNode.InnerText -cne $expectedPersistentAutologonCommand) {
+        throw "win11_lab_media_contract_post_oobe_autologon_invalid"
     }
 
     return [pscustomobject][ordered]@{
@@ -342,7 +395,7 @@ function Get-Win11LabAutounattendContract {
         autologon_complete = $true
         autologon_logon_count = [int]1
         autologon_domain_bound = $true
-        autologon_count_workaround_exact = $true
+        post_oobe_autologon_bound = $true
         local_admin_account_count = [int]1
     }
 }
@@ -389,7 +442,7 @@ function Assert-Win11LabAutounattendContractReceipt {
     $autoLogonComplete = Get-Win11LabContractReceiptProperty -Contract $Contract -Name "autologon_complete" -Role $Role
     $autoLogonCount = Get-Win11LabContractReceiptProperty -Contract $Contract -Name "autologon_logon_count" -Role $Role
     $autoLogonDomainBound = Get-Win11LabContractReceiptProperty -Contract $Contract -Name "autologon_domain_bound" -Role $Role
-    $autoLogonCountWorkaroundExact = Get-Win11LabContractReceiptProperty -Contract $Contract -Name "autologon_count_workaround_exact" -Role $Role
+    $postOobeAutologonBound = Get-Win11LabContractReceiptProperty -Contract $Contract -Name "post_oobe_autologon_bound" -Role $Role
     $localAdminCount = Get-Win11LabContractReceiptProperty -Contract $Contract -Name "local_admin_account_count" -Role $Role
 
     if ([int]$windowsPeCount -ne 1 -or $productKeyPresent -isnot [bool] -or -not $productKeyPresent -or
@@ -397,7 +450,7 @@ function Assert-Win11LabAutounattendContractReceipt {
         $autoLogonComplete -isnot [bool] -or -not $autoLogonComplete -or
         [int]$autoLogonCount -ne 1 -or
         $autoLogonDomainBound -isnot [bool] -or -not $autoLogonDomainBound -or
-        $autoLogonCountWorkaroundExact -isnot [bool] -or -not $autoLogonCountWorkaroundExact -or
+        $postOobeAutologonBound -isnot [bool] -or -not $postOobeAutologonBound -or
         [int]$localAdminCount -ne 1) {
         throw ("win11_lab_media_contract_" + $Role + "_receipt_contract_invalid")
     }
@@ -1019,7 +1072,7 @@ function Invoke-Win11LabMediaWorkerMode {
                     autologon_complete = $embeddedContract.autologon_complete
                     autologon_logon_count = $embeddedContract.autologon_logon_count
                     autologon_domain_bound = $embeddedContract.autologon_domain_bound
-                    autologon_count_workaround_exact = $embeddedContract.autologon_count_workaround_exact
+                    post_oobe_autologon_bound = $embeddedContract.post_oobe_autologon_bound
                     local_admin_account_count = $embeddedContract.local_admin_account_count
                     efi_noprompt_present = [bool](Test-Path -LiteralPath $efiNoPromptPath -PathType Leaf)
                 })

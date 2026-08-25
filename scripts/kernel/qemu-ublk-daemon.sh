@@ -61,8 +61,8 @@ else
 fi
 [ -e /dev/ublk-control ] && echo "KTEST-UBLK-CONTROL=present" || echo "KTEST-UBLK-CONTROL=absent"
 
-# 2) starts the daemon (RAM backend, WSL2 lockout override, --force for best-effort mlockall)
-RAMSHARED_ALLOW_UBLK_ON_WSL2=1 /ramsharedd --transport ublk --backend ram \
+# 2) starts the daemon in the isolated generic-Linux QEMU guest (--force for best-effort mlockall)
+/ramsharedd --transport ublk --backend ram \
   --size 8 --queue-depth 1 --force >/tmp/daemon.log 2>&1 &
 DPID=$!
 echo "KTEST-DAEMON-PID=$DPID"

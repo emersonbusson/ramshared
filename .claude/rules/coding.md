@@ -17,7 +17,7 @@ Rules:
 - Code comments (inline, block, doc): **English** — strictly enforced. No Portuguese comments are allowed in new code.
 - Root documentation files (`README.md`, `ROADMAP.md`, `CLAUDE.md`, etc.) and docs: **English** (optionally with localized summaries in `<details>` blocks).
 - Commit messages and PR titles: **English** (Conventional Commits format)
-- PR descriptions (body) and Issues: **English** or **Portuguese** (as long as it meets PR template guidelines)
+- PR descriptions (body) and Issues: **English**
 
 ## Commit Conventions
 
@@ -111,5 +111,5 @@ make modules
 3. **Labels** — must reflect the code actually changed, not just the topic. Example: `fix`, `mm`, `test`.
 
 **Language:**
-- Issue title: **Portuguese (BR)**
-- Issue body: **Portuguese (BR)**
+- Issue title: **English**
+- Issue body: **English**

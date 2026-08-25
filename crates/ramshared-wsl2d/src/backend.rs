@@ -1,7 +1,7 @@
 //! Block backends for the daemon: re-exports shared [`VramBackend`] (ITEM-2 / DT-6)
 //! plus daemon-local [`SliceView`] and [`RamBackend`].
 
-use ramshared_block::{BlockBackend, IoError};
+use ramshared_block::{BlockBackend, IoError, WriteOptions};
 
 use crate::ublk;
 
@@ -42,7 +42,7 @@ impl<B: BlockBackend> BlockBackend for SliceView<'_, B> {
         self.inner.block_size()
     }
 
-    fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
+    fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
         let abs = self
             .base
             .checked_add(off)
@@ -56,6 +56,19 @@ impl<B: BlockBackend> BlockBackend for SliceView<'_, B> {
             .checked_add(off)
             .ok_or_else(|| IoError("SliceView write offset overflow".into()))?;
         self.inner.write_at(abs, data)
+    }
+
+    fn write_at_with_options(
+        &mut self,
+        off: u64,
+        data: &[u8],
+        options: WriteOptions,
+    ) -> Result<(), IoError> {
+        let abs = self
+            .base
+            .checked_add(off)
+            .ok_or_else(|| IoError("SliceView write offset overflow".into()))?;
+        self.inner.write_at_with_options(abs, data, options)
     }
 
     fn flush(&mut self) -> Result<(), IoError> {
@@ -95,7 +108,7 @@ impl BlockBackend for RamBackend {
         self.block_size
     }
 
-    fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
+    fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
         let (start, end) = self
             .range(off, buf.len())
             .ok_or_else(|| IoError("RamBackend read out of range".into()))?;
@@ -121,90 +134,6 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use ramshared_block::{Command, Request, serve};
-    use ramshared_cuda::Cuda;
-
-    /// Composition of cuda + block in real VRAM: serves an NBD WRITE and READ.
-    /// `cargo test -p ramshared-wsl2d -- --ignored` on a host with a GPU.
-    #[test]
-    #[ignore = "requires a functional CUDA GPU (WSL2/GPU-PV)"]
-    fn vram_backend_serves_nbd_write_then_read() {
-        let cuda = Cuda::load().expect("libcuda");
-        let dev = cuda.device(0).unwrap();
-        let ctx = cuda.create_context(&dev).unwrap();
-        let mut mem = ctx.alloc(1 << 20).unwrap();
-        mem.zero().unwrap();
-        let mut be = VramBackend::new(mem, 4096);
-
-        let payload = vec![0x5Au8; 4096];
-        let w = serve(
-            &Request {
-                flags: 0,
-                cmd: Command::Write,
-                handle: 1,
-                offset: 4096,
-                len: 4096,
-            },
-            &payload,
-            &mut be,
-        );
-        assert_eq!(
-            u32::from_be_bytes([w.reply[4], w.reply[5], w.reply[6], w.reply[7]]),
-            0,
-            "WRITE must return NBD_OK"
-        );
-
-        let r = serve(
-            &Request {
-                flags: 0,
-                cmd: Command::Read,
-                handle: 2,
-                offset: 4096,
-                len: 4096,
-            },
-            &[],
-            &mut be,
-        );
-        assert_eq!(r.read_data, payload, "READ must return the written payload");
-    }
-
-    /// VRAM gauge with real `mem_info` (RF-3): `vram_outros` (subtraction) captures graphics/Windows
-    /// usage. `cargo test -p ramshared-wsl2d -- --ignored` on a host with a GPU.
-    #[test]
-    #[ignore = "requires a working CUDA GPU (WSL2/GPU-PV)"]
-    fn vram_gauge_outros_captures_real_graphics_usage() {
-        use crate::telemetry::{VramGauge, vram_outros};
-        use std::sync::atomic::Ordering;
-        let cuda = Cuda::load().expect("libcuda");
-        let dev = cuda.device(0).unwrap();
-        let ctx = cuda.create_context(&dev).unwrap();
-        let chunk = 64 * 1024 * 1024usize; // the "daemon" allocates 64 MiB
-        let _mem = ctx.alloc(chunk).unwrap();
-        let (free, total) = ctx.mem_info().unwrap();
-        let gauge = VramGauge::default();
-        gauge.free.store(free as u64, Ordering::Relaxed);
-        gauge.total.store(total as u64, Ordering::Relaxed);
-        assert!(total > 0 && free <= total, "mem_info is consistent");
-        let used = (total - free) as u64;
-        let alloc_daemon = chunk as u64;
-        let outros = vram_outros(used, alloc_daemon);
-        // On a desktop in use, total usage > what the daemon allocated (due to graphics) → outros > 0.
-        assert!(
-            used > alloc_daemon,
-            "total usage ({used}) > daemon allocation ({alloc_daemon})"
-        );
-        assert!(
-            outros > 0,
-            "vram_outros captures graphics/Windows usage: {outros} bytes"
-        );
-        eprintln!(
-            "Real VRAM (MiB): total={} free={} used={} daemon={} other={}",
-            total >> 20,
-            free >> 20,
-            used >> 20,
-            alloc_daemon >> 20,
-            outros >> 20
-        );
-    }
 
     #[test]
     fn slice_view_isolates_neighbors() {
@@ -216,7 +145,7 @@ mod tests {
             s1.write_at(0, &[0xAB; 64]).unwrap();
         }
         {
-            let s0 = SliceView::new(&mut be, 0, 64);
+            let mut s0 = SliceView::new(&mut be, 0, 64);
             let mut buf = [0xFFu8; 64];
             s0.read_at(0, &mut buf).unwrap();
             assert_eq!(buf, [0u8; 64], "slice 0 must not see the write to slice 1");

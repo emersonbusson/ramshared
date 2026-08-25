@@ -1,0 +1,14 @@
+[Unit]
+Description=RamShared protected control plane
+Before=ramshared-workloads.slice
+
+[Slice]
+ManagedOOMPreference=avoid
+CPUAccounting=yes
+MemoryAccounting=yes
+IOAccounting=yes
+TasksAccounting=yes
+MemoryLow=1G
+MemoryMin=512M
+CPUWeight=1000
+IOWeight=1000

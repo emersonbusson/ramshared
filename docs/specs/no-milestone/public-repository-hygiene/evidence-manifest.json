@@ -1,65 +1,230 @@
 {
   "schema_version": "ramshared-spec-evidence/v1",
   "slug": "public-repository-hygiene",
-  "status": "DONE",
+  "status": "PARTIAL",
   "spec": {
     "path": "docs/specs/no-milestone/public-repository-hygiene/SPEC.md",
-    "sha256": "4ee5e9efb4d1ee593eda95b01f8853447d319e940a3585624a3527c542d30749"
+    "sha256": "a5f11f68fb75a1e7cbd6aed19836b056edbbb5bce87d780ad8d239fb698f1e23"
   },
   "tests": [
     {
-      "name": "candidate_scans_nonignored_untracked_file",
+      "name": "candidate_binds_one_head_oid_when_symbolic_head_moves_mid_run",
       "path": "tools/ci/check-public-hygiene.test.mjs",
       "kind": "integration",
       "exit_code": 0
     },
     {
-      "name": "staged_reads_index_blob_not_worktree",
+      "name": "staged_index_snapshot_refuses_mid_run_index_move",
       "path": "tools/ci/check-public-hygiene.test.mjs",
       "kind": "integration",
       "exit_code": 0
     },
     {
-      "name": "full_repository_candidate_is_clean",
+      "name": "candidate_staged_and_tracked_symlinks_scan_publishable_link_text_without_following_targets",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "integration",
+      "exit_code": 0
+    },
+    {
+      "name": "clean_checkout_committed_public_text_extensions_fail_closed_on_encoding_bidi_and_c0_controls",
       "path": "tools/ci/check-public-hygiene.test.mjs",
       "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "candidate_public_binary_assets_require_bounded_extension_and_magic_contracts",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "png_requires_bounded_zlib_exact_scanlines_filters_and_consecutive_idat",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "png_two_zlib_stream_fixture_is_explicit_and_refused",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "png_refuses_illegal_ihdr_palette_chunk_order_duplicates_and_huge_dimensions",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "png_indexed_background_requires_existing_palette_entry",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "png_ancillary_metadata_is_bounded_parsed_and_privacy_scanned",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "png_itxt_language_requires_exact_raw_ascii_bytes",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "jpeg_requires_reviewed_digest_and_strict_baseline_standalone_entropy",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "jpeg_digest_contract_refuses_unlisted_digest_duplicate_path_schema_and_symlink_tamper",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "jpeg_candidate_refuses_changed_bytes_mutable_manifest_and_private_metadata",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "integration",
+      "exit_code": 0
+    },
+    {
+      "name": "jpeg_metadata_profiles_refuse_utf16_and_malformed_c2pa_app11",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "integration",
+      "exit_code": 0
+    },
+    {
+      "name": "contact_allowlist_is_scoped_owned_and_expiring",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "policy",
+      "exit_code": 0
+    },
+    {
+      "name": "repository_candidate_is_clean",
+      "path": "tools/ci/check-public-hygiene.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "docs_check_uses_candidate_public_hygiene",
+      "path": "tools/ci/check-docs-check.test.mjs",
+      "kind": "contract",
+      "exit_code": 0
+    },
+    {
+      "name": "ignored_test_relocation_global_owner_relation_allows_one_line_owner_and_one_proof",
+      "path": "tools/ci/plan-rust-slice-coverage.test.mjs",
+      "kind": "policy",
+      "exit_code": 0
+    },
+    {
+      "name": "global_line_coverage_ownership_refuses_duplicate_pure_owners_including_cli_all",
+      "path": "tools/ci/plan-rust-slice-coverage.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "planner_trust_inputs_require_confined_non_symlink_regular_files",
+      "path": "tools/ci/plan-rust-slice-coverage.test.mjs",
+      "kind": "integration",
+      "exit_code": 0
+    },
+    {
+      "name": "planner_cli_rejects_bom_or_control_changed_paths_without_trimming",
+      "path": "tools/ci/plan-rust-slice-coverage.test.mjs",
+      "kind": "integration",
+      "exit_code": 0
+    },
+    {
+      "name": "ignored_test_relocation_global_validation_refuses_duplicate_production_and_integration_owners",
+      "path": "tools/ci/plan-rust-slice-coverage.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "ignored_test_relocation_global_validation_refuses_wrong_cross_owner_overlap",
+      "path": "tools/ci/plan-rust-slice-coverage.test.mjs",
+      "kind": "E2E",
+      "exit_code": 0
+    },
+    {
+      "name": "ignored_test_relocation_duplicate_owner_cli_all_is_blocked_and_never_ready",
+      "path": "tools/ci/plan-rust-slice-coverage.test.mjs",
+      "kind": "integration",
       "exit_code": 0
     }
   ],
   "cover": [
     {
       "path": "tools/ci/check-public-hygiene.mjs",
-      "line_percent": 94.38,
-      "branch_percent": 85.29,
-      "function_percent": 100.0,
+      "line_percent": 93.55,
+      "branch_percent": 81.74,
+      "function_percent": 99.14,
       "classification": "Node per-file coverage",
-      "justification": "94.38% lines, 85.29% branches, and 100.00% functions exceed the SPEC 80% thresholds."
+      "justification": "93.55% lines, 81.74% branches, and 99.14% functions exceed every 80% threshold."
+    },
+    {
+      "path": "tools/ci/plan-rust-slice-coverage.mjs",
+      "line_percent": 89.95,
+      "branch_percent": 82.42,
+      "function_percent": 98.63,
+      "classification": "Node per-file coverage",
+      "justification": "89.95% lines, 82.42% branches, and 98.63% functions exceed every 80% threshold."
     }
   ],
   "live": {
     "required": true,
     "before": {
-      "candidate_mode_available": false,
-      "staged_index_blob_mode_available": false
+      "immutable_git_snapshot_policy": false,
+      "jpeg_strict_metadata_profile": false,
+      "png_raw_itxt_language_validation": false,
+      "png_indexed_background_bound": false,
+      "png_two_zlib_stream_fixture": false,
+      "png_ancillary_privacy_policy": false,
+      "jpeg_committed_authority_policy": false,
+      "global_line_owner_uniqueness": false,
+      "planner_input_confinement": false,
+      "raw_changed_path_validation": false
     },
     "action": {
-      "command": "node tools/ci/check-public-hygiene.mjs --candidate"
+      "public_hygiene_command": "node tools/ci/check-public-hygiene.mjs --candidate",
+      "planner_command": "node tools/ci/plan-rust-slice-coverage.mjs --all"
     },
     "after": {
-      "candidate_files": 681,
-      "findings": 0,
-      "exit_code": 0
+      "immutable_git_snapshot_policy": true,
+      "jpeg_strict_metadata_profile": true,
+      "png_raw_itxt_language_validation": true,
+      "png_indexed_background_bound": true,
+      "png_two_zlib_stream_fixture": true,
+      "candidate_files": 909,
+      "candidate_findings": 0,
+      "candidate_exit_code": 0,
+      "planner_status": "BLOCKED",
+      "planner_exit_code": 1,
+      "planner_duplicate_line_owners": 5
     },
     "legitimate": {
       "verdict": "PASS"
     },
     "refusals": [
       {
-        "name": "staged index differs from working tree",
+        "name": "symbolic HEAD move or index snapshot inconsistency",
         "verdict": "PASS"
       },
       {
-        "name": "sensitive candidate content",
+        "name": "two-stream zlib, invalid bKGD/iTXt, or unsupported, sensitive, malformed, or over-limit PNG ancillary metadata",
+        "verdict": "PASS"
+      },
+      {
+        "name": "same-candidate JPEG/manifest changes, UTF-16 or structured-C2PA private metadata, malformed C2PA, or unsupported APPn/COM metadata",
+        "verdict": "PASS"
+      },
+      {
+        "name": "duplicate pure line owner, external symlink trust input, or BOM/Cc/Cf changed path",
         "verdict": "PASS"
       }
     ],
@@ -79,15 +244,21 @@
   "artifacts": [
     {
       "path": "docs/specs/no-milestone/public-repository-hygiene/evidence/validation-summary.json",
-      "bytes": 688,
-      "sha256": "7b2f1bba81035aa6e6e92326958f7228b9e774fab4c867f1d3318d9ebaca6034"
+      "bytes": 4450,
+      "sha256": "294b1994eca9a14140cec128b89e117eef3f7a27201c9c67ec6d7fee79266def"
     }
   ],
   "validation_path": "validation.md",
   "impl_path": "docs/specs/no-milestone/public-repository-hygiene/IMPL.md",
   "gaps": {
-    "open": [],
+    "open": [
+      "docs/governance/rust-slice-coverage.json has five line-coverage-production-owner-duplicate findings for crates/ramshared-cli/src/cascade/lifecycle.rs, crates/ramshared-cli/src/main.rs, crates/ramshared-winsvc/src/config.rs, crates/ramshared-winsvc/src/evidence.rs, and crates/ramshared-winsvc/src/runtime.rs; the shared map is outside this dispatch",
+      "docs/reference/DOCUMENTATION-INVENTORY.json is out of sync with its deterministic generator; generated state is outside this dispatch",
+      "docs/governance/capability-observations.generated.json is out of sync; generated state is outside this dispatch",
+      "docs/governance/campaign-evidence-catalog.generated.json reports catalog-stale; generated state is outside this dispatch",
+      "docs/governance/rust-slice-coverage.json entry memory-broker-wsl2d-daemon and docs/specs/no-milestone/memory-broker/SPEC.md require daemon_worker_shutdown_drains_queued_io_before_stop, which is absent from crates/ramshared-wsl2d/src/main.rs; all referenced paths are outside this dispatch"
+    ],
     "env_bound": []
   },
-  "rollback_trigger": "one staged blob bypass, skipped public candidate, or sensitive diagnostic"
+  "rollback_trigger": "one run reuses symbolic HEAD or accepts a moved index; one PNG zlib or ancillary payload bypasses strict parsing, bounds, or privacy checks; one JPEG bypasses committed authority or its exact metadata profile; one duplicate line or relocation owner reaches READY; one planner input escapes through a symlink; one BOM/Cc/Cf path is normalized into authority; or an owned checker falls below 80% lines, branches, or functions"
 }

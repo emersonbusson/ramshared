@@ -137,7 +137,7 @@ $out
 "
   if [[ "$ghosts" -eq 1 ]]; then
     summary+="WARNING: ghost swap detected (deleted device).
-Do not kill processes by hand. On Windows run: wsl --shutdown
+Do not kill processes by hand. Capture evidence, then run: wsl --terminate Ubuntu-24.04
 Then reopen the distro and: sudo $0 stop"
   elif echo "$out" | grep -qiE 'nbd|zram|ublk'; then
     summary+="Looks like the cushion is (at least partly) on."
@@ -180,27 +180,17 @@ $doc" || true
 }
 
 cmd_start() {
-  ensure_root start
-  need_bins
-  if [[ -x "$SCRIPTS/cascade-preflight.sh" ]]; then
-    if ! "$SCRIPTS/cascade-preflight.sh"; then
-      die_gui "Preflight refused to start (safe).
-See terminal / journal for details.
-Common fixes: free some GPU memory, or lower VRAM_MIB in /etc/ramshared/cascade.conf"
-      return 1
-    fi
-  fi
-  if "$CLI" up; then
-    notify "RamShared" "Cushion is on."
-    info_gui "Cushion is on.
+  # Legacy direct start is deliberately inert.  It must not become an
+  # alternative activation path that bypasses the sealed host-gate and its
+  # attended transaction.  In particular, do not even invoke preflight here:
+  # a root preflight may modprobe and therefore is not plan-only.
+  echo 'CASCADE_APP=STAGING_REFUSED'
+  echo 'CASCADE_APP_REASON=direct_start_disabled_requires_sealed_host_gate_transaction'
+  die_gui "Direct cascade start is disabled staging.
 
-Run Status anytime to see zram / GPU / disk lines."
-    cmd_status || true
-  else
-    die_gui "Failed to start cushion.
-Try: sudo $CLI doctor"
-    return 1
-  fi
+No preflight, module load, or ramshared up was attempted. Use the separately
+approved sealed host-gate activation transaction when it is available."
+  return 2
 }
 
 cmd_stop() {
@@ -213,7 +203,7 @@ cmd_stop() {
 Shutdown used the safe path (swap off before stopping the daemon)."
   else
     die_gui "Stop failed.
-If you see ghost swap, on Windows: wsl --shutdown"
+If you see ghost swap, capture evidence and run: wsl --terminate Ubuntu-24.04"
     return 1
   fi
 }

@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Benchmark fixture metric mistaken for a generic API key"
+regexTarget = "line"
+paths = ['''^tools/ci/check-benchmark-evidence\.test\.mjs$''']
+regexes = ['''^\s*\{ name: 'p99', key: 'nbd_vs_disk_p99_ratio', value: 999 \},\s*$''']

@@ -1,0 +1,13 @@
+[Unit]
+Description=RamShared control-plane supervisor
+After=local-fs.target
+
+[Service]
+Type=simple
+Slice=ramshared-control.slice
+ExecStart=/opt/ramshared/current/bin/ramshared supervise
+Restart=on-failure
+RestartSec=1s
+
+[Install]
+WantedBy=multi-user.target

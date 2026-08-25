@@ -548,7 +548,7 @@ mod tests {
         fn block_size(&self) -> u32 {
             self.bs
         }
-        fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
+        fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
             let o = off as usize;
             buf.copy_from_slice(&self.data[o..o + buf.len()]);
             Ok(())

@@ -1,7 +1,6 @@
 # CLAUDE.md — RamShared
 
 > **ATTENTION:** Keep this filename lowercase. All project-specific rules are located in [`.claude/rules/*.md`](.claude/rules/*.md). Do not copy long dossiers here.
-
 ## Agent Source Of Truth
 
 [`.claude/rules/*.md`](.claude/rules/*.md) are the authoritative code rules. `AGENTS.md` mirrors these guidelines.

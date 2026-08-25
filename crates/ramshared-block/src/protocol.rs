@@ -12,11 +12,15 @@ pub const NBD_FLAG_NO_ZEROES: u16 = 1 << 1;
 // Transmission flags (export).
 pub const NBD_FLAG_HAS_FLAGS: u16 = 1 << 0;
 pub const NBD_FLAG_SEND_FLUSH: u16 = 1 << 2;
-/// Safe multi-connection (H1). It is only safe to announce because WRITE is durable upon ack
-/// (synchronous `cuMemcpyHtoD`) + the single CUDA worker serializes: a FLUSH on any
-/// connection covers all already acked WRITEs. Do NOT change to asynchronous copy without
-/// reviewing this contract. SPEC: docs/specs/no-milestone/wsl2-cascade-swap/SPEC.md DT-10.
+pub const NBD_FLAG_SEND_FUA: u16 = 1 << 3;
+/// Safe multi-connection (H1). The single backend worker serializes requests,
+/// so a FLUSH covers all previously acknowledged writes and a FUA write reaches
+/// its durability frontier before reply. Do not add parallel backend mutation
+/// without revisiting this contract.
 pub const NBD_FLAG_CAN_MULTI_CONN: u16 = 1 << 8;
+
+/// Valid in the request flags field only for `NBD_CMD_WRITE`.
+pub const NBD_CMD_FLAG_FUA: u16 = 1 << 0;
 
 // Transmission.
 pub const NBD_REQUEST_MAGIC: u32 = 0x2560_9513;

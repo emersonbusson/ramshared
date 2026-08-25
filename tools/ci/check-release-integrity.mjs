@@ -11,7 +11,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const SOURCE_SHA_RE = /^[0-9a-f]{40}$/
 const SHA256_RE = /^[0-9a-f]{64}$/
 const TAG_RE = /^v[0-9][0-9A-Za-z.+-]*$/
-const RUST_VERSION_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
+const RUST_VERSION = '1.98.0'
+const RUST_COMMIT_RE = /^[0-9a-f]{40}$/
 const SBOM_GENERATOR = { name: 'cargo-cyclonedx', version: '0.5.9', spec_version: '1.5' }
 const DRIVER_SIGNING = new Set(['test-signed', 'unknown', 'untrusted', 'production-trusted'])
 const TARGET_TAG = 'v0.9.0-beta.1'
@@ -70,7 +71,7 @@ export function validateSourceBinding(manifest, {
   const source = manifest?.source
   if (!isObject(source) || !TAG_RE.test(source.tag) || !SOURCE_SHA_RE.test(source.sha) ||
       typeof source.clean_tree !== 'boolean' || !SHA256_RE.test(source.cargo_lock_sha256) ||
-      !RUST_VERSION_RE.test(source.rust_version)) {
+      source.rust_version !== RUST_VERSION || !RUST_COMMIT_RE.test(source.rust_commit)) {
     add(errors, 'source-binding-invalid')
     return { ok: false, errors }
   }

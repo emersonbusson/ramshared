@@ -9,13 +9,14 @@
 | RF-T1 | ITEM-1 priorities already in cascade.rs — assert logs |
 | RF-T2 | ITEM-2 install-cascade-boot --enable |
 | RF-T3, RF-T4 | ITEM-3 transport auto / ublk refuse on WSL2 |
-| RF-T3, RF-T4 | ITEM-5 bounded transport orchestration refusal boundary |
+| RF-T3, RF-T4, RF-T6 | ITEM-5 bounded transport orchestration refusal boundary |
 | RF-T5 | ITEM-4 existing idempotent up; ITEM-5 preserves its safe setup order |
 
 ## ITEM-1 — Priority order (no code change required)
 
 Keep `TierPriorities::default()`: zram=200, vram=100, disk≈−2.  
-`up` must log the order once. Disk tier is pre-existing WSL swap (e.g. `/dev/sdc`).
+`up` must log the order once. The disk tier is a pre-existing lower-tier swap
+selected outside this cascade transport policy.
 
 ## ITEM-2 — Boot enable
 
@@ -51,45 +52,51 @@ bounded and every daemon cleanup target is an exact child or a verified PID.
 
 ### DT-T1 — Direct child command boundary
 
-`cascade_io` uses one direct-argv bounded runner for its short-lived commands
-(`modprobe`, `zramctl`, `mkswap`, `swapon`, `swapoff`, `nbd-client`, and the exact-PID
-signal helper). It does not invoke a shell, a process-name glob, or a process
-group. The runner captures at most 64 KiB of stdout and stderr per command,
-returns trimmed stdout on success, and returns the command identity plus its
-exit/timeout reason on failure.
+`cascade_io` uses the shared direct-argv bounded runner for short-lived commands
+(`modprobe`, `zramctl`, `swapon`, `swapoff`, `nbd-client`, and identity probes).
+Production does not invoke a shell or select a process by name. Each child is
+the leader of a new invocation-private process group. The runner concurrently
+captures at most 64 KiB from each output stream, returns trimmed stdout on
+success, and returns the command identity plus its exit/timeout reason on
+failure.
 
-The production timeout is 5 seconds per short-lived command. At expiry, the
-runner may force-stop and reap **only the direct child handle it created**.
-It must not use `pkill`, `pgrep`, a name match, or a group-wide signal as a
-timeout cleanup mechanism. Tests use a smaller injected deadline only; they
-do not change the production timeout.
+The production timeout is 5 seconds per short-lived command. Timeout, wait
+error, and a pipe kept open by an owned descendant signal exactly the private
+group with SIGKILL and bound the direct-child reap and capture-worker close.
+The runner never uses `pkill`, `pgrep`, or a name match. If group SIGKILL plus
+the fixed grace cannot prove the direct child reaped, production exits the
+controller with status 125 rather than returning to normal cascade control.
+An injected fatal seam proves that branch without killing the test process.
 
 ### DT-T2 — Daemon identity and readiness
 
-`spawn_daemon` retains the `Child` it created until the NBD attach succeeds.
+`spawn_daemon` starts the retained daemon as the leader of its own exact process
+group and retains the `Child` until the NBD attach succeeds.
 Readiness is bounded to 6 seconds waiting for the configured socket path. A
-failed readiness check terminates and reaps that exact child before any NBD
+failed readiness check kills that exact group and reaps the direct child before any NBD
 attach and removes only this invocation's runtime PID record/forensics
 marker.
 
-After startup, `down` reads only its runtime PID record. It sends `TERM` only
-when `/proc/<pid>/comm` is exactly `ramsharedd`; a missing, malformed, stale,
-or differently named PID record is removed without selecting any other
-process. `down` never falls back to `pgrep` or `pkill`, and never sends a
-name-wide signal. This preserves the existing no-broad-kill rule while making
-the normal daemon identity reviewable.
+After startup, `down` reads only its runtime PID and cache identity records. It
+opens a pidfd for that exact positive PID, revalidates its boot/start-time/
+invocation identity immediately before signaling, and sends `TERM` through the
+pidfd only after exact managed-swap absence. A missing, malformed, stale, or
+changed record is retained as containment evidence. `down` never falls back to
+`pgrep`, `pkill`, or a name-wide signal.
 
 ### DT-T3 — Attach rollback and primary error
 
-`connect_nbd` is ordered as `nbd-client` → `mkswap` → `swapon`. It preserves
+`connect_nbd` is ordered as `nbd-client` → sealed swap signature verification
+→ lifecycle/receipt publication → `swapon`. Normal startup never runs
+`mkswap`. It preserves
 the original failing error and performs each rollback action at most once:
 
 | Failure point | Required rollback | Forbidden action |
 | --- | --- | --- |
 | post-spawn pre-attach refusal (invalid managed device or connection count) | terminate/reap the exact spawned daemon; disarm invocation marker | NBD detach without attach, broad kill |
-| `nbd-client` | terminate/reap the exact spawned daemon; disarm invocation marker | `pkill`, retry loop |
-| `mkswap` | one `nbd-client -d <exact allowlisted swap_dev>`; terminate/reap exact daemon; disarm | broad detach/kill |
-| `swapon` | the same one detach, then exact daemon cleanup and disarm | a second `swapon` or daemon name match |
+| `nbd-client` with two stable no-effect proofs | terminate/reap the exact spawned daemon group; disarm invocation marker | `pkill`, retry loop |
+| signature/record failure after a proven attach | one exact `nbd-client -d <allowlisted swap_dev>` after identity/absence proof; terminate/reap exact daemon group | broad detach/kill or formatting |
+| uncertain `swapon` | preserve exact backend, daemon, lifecycle binding, runtime records, and forensics | detach, second `swapon`, or daemon name match |
 
 The exact `swap_dev` must satisfy the existing managed-device allowlist before
 the attach sequence begins. The rollback itself does not call `swapoff`,
@@ -113,9 +120,11 @@ failure.
 
 `zramctl --find` output is accepted only as an exact trimmed `/dev/zram<decimal>`
 device identity. Empty output, a suffix, a path outside `/dev`, or non-decimal
-digits is refused before `mkswap`/`swapon`. The sysfs fallback retains its
-existing block-device check and has the same bounded command runner for its
-child commands.
+digits is refused before `mkswap`/`swapon`. The returned block identity is
+observed, sealed in the lifecycle runtime record, and freshly revalidated
+before `mkswap`. The former direct `zram0` sysfs fallback is prohibited because
+it could reset a foreign device before RamShared had recorded ownership. If
+`zramctl --find` cannot allocate a device, zram setup fails closed.
 
 ### DT-T5 — Test-only isolation
 
@@ -175,7 +184,7 @@ revert this ITEM and keep the cascade disabled pending investigation.
 
 | Stage | Discipline | Question | Executable evidence | Abort |
 | --- | --- | --- | --- | --- |
-| bounded runner | #15 | Could a short-lived helper wait forever or be retried blindly? | `bounded_command_times_out_and_reaps_its_direct_child` | timeout does not return within test deadline |
+| bounded runner | #15/#16 | Could a helper, capture worker, or descendant-held pipe outlive the deadline? | `bounded_command_times_out_and_reaps_its_direct_child`; `bounded_command_contains_descendant_that_inherits_output`; `unreaped_group_selects_fatal_controller_containment` | timeout exceeds the deadline, an owned descendant survives, or failed reap returns normally |
 | identity/refusal | #13/#16 | Could a malformed PID, invalid zram output, or pre-attach argument select a different process/device? | `daemon_pid_requires_positive_pid_and_exact_identity`, `zram_output_requires_exact_block_identity`, `connect_nbd_refusal_terminates_exact_daemon_without_detach` | any non-exact identity reaches a command or leaves the spawned child alive |
 | attach rollback | #16/#17 | Does one failure detach/clean up exactly once and preserve the first error? | `connect_nbd_preserves_primary_error_and_rolls_back_once` | duplicate/broad rollback or changed primary error |
 | cross-tier rollback | #13/#16/#17 | Could a failed NBD setup leave its newly-created zram tier active or reset it after swapoff refusal? | `setup_new_cascade_rolls_back_zram_after_nbd_failure`, `setup_new_cascade_keeps_zram_record_on_swapoff_refusal` | zram record/device persists after successful cleanup, or reset follows refusal, or primary error changes |
@@ -184,7 +193,8 @@ revert this ITEM and keep the cascade disabled pending investigation.
 
 | Path | Change | RF / DT | Tests / cover |
 | --- | --- | --- | --- |
-| `crates/ramshared-cli/src/cascade/cascade_io.rs` | bounded direct child runner, exact daemon identity/cleanup, strict zram output parse, transactional tier records and rollback, English diagnostics | RF-T3..RF-T5; DT-T1..DT-T6 | named matrix below; ≥80% line coverage |
+| `crates/ramshared-cli/src/bounded_process.rs` | private process groups, finite capture, bounded reap, fatal containment seam | RF-T6; DT-T1 | named matrix below; ≥80% line coverage |
+| `crates/ramshared-cli/src/cascade/cascade_io.rs` | shared bounded runner integration, exact daemon identity/cleanup, strict zram output parse, transactional tier records and rollback, English diagnostics | RF-T3..RF-T6; DT-T1..DT-T6 | named matrix below; ≥80% line coverage |
 | `docs/governance/rust-slice-coverage.json` | exact `cascade-transport-orchestration` owner | DT-T1..DT-T6 | canonical command below |
 | `tools/ci/plan-rust-slice-coverage.test.mjs` | exact owner and named-test assertion | DT-T5/DT-T6 | Node planner test |
 | `docs/specs/no-milestone/comment-language-integrity/SPEC.md` | move this path from residual language-only block to its feature owner once the gate is green | DT-T1..DT-T6 | documentation assertion only |
@@ -195,21 +205,25 @@ revert this ITEM and keep the cascade disabled pending investigation.
 | --- | --- | --- | --- | --- |
 | `crates/ramshared-cli/src/cascade/cascade_io.rs` | `cascade_io.rs` :: `bounded_command_captures_stdout_and_rejects_nonzero` | process/unit | #9 | ≥80% |
 | same | `cascade_io.rs` :: `bounded_command_times_out_and_reaps_its_direct_child` | process/timeout | #15 | ≥80% |
+| same | `cascade_io.rs` :: `bounded_command_contains_descendant_that_inherits_output` | adversarial process/pipe | #15/#16 | ≥80% |
 | same | `cascade_io.rs` :: `zram_output_requires_exact_block_identity` | unit/refusal | #13/#16 | ≥80% |
 | same | `cascade_io.rs` :: `daemon_pid_requires_positive_pid_and_exact_identity` | unit/refusal | #13/#16 | ≥80% |
 | same | `cascade_io.rs` :: `failed_readiness_terminates_only_spawned_child` | process/cleanup | #15/#16 | ≥80% |
 | same | `cascade_io.rs` :: `connect_nbd_preserves_primary_error_and_rolls_back_once` | unit/rollback | #16/#17 | ≥80% |
 | same | `cascade_io.rs` :: `connect_nbd_refusal_terminates_exact_daemon_without_detach` | unit/refusal | #13/#16 | ≥80% |
-| same | `cascade_io.rs` :: `connect_nbd_rolls_back_in_reverse_order_on_swapon_failure` | unit/rollback | #16/#17 | ≥80% |
+| same | `cascade_io.rs` :: `connect_nbd_uncertain_swapon_preserves_backend_and_daemon` | unit/containment | #16/#17 | ≥80% |
 | same | `cascade_io.rs` :: `zram_fallback_refuses_unexpected_device_without_swapon` | unit/refusal | #13/#16 | ≥80% |
-| same | `cascade_io.rs` :: `zram_activation_failure_removes_pending_runtime_record` | unit/rollback | #16/#17 | ≥80% |
-| same | `cascade_io.rs` :: `sysfs_fallback_refuses_non_block_device_and_safety_checks_fail_closed` | unit/refusal | #13/#16 | ≥80% |
+| same | `cascade_io.rs` :: `malformed_zram_success_resets_exact_new_device_without_leak` | unit/rollback | #16/#17 | ≥80% |
+| same | `cascade_io.rs` :: `zram_setup_never_mutates_unbound_sysfs_fallback` | unit/refusal | #13/#16 | ≥80% |
 | same | `cascade_io.rs` :: `runtime_marker_and_pid_record_refuse_unsafe_identity` | unit/identity | #13/#16 | ≥80% |
 | same | `cascade_io.rs` :: `setup_new_cascade_uses_only_temp_runtime_and_direct_child_fixture` | process/orchestration | #15/#16 | ≥80% |
 | same | `cascade_io.rs` :: `setup_new_cascade_rolls_back_zram_after_nbd_failure` | process/rollback | #16/#17 | ≥80% |
 | same | `cascade_io.rs` :: `setup_new_cascade_keeps_zram_record_on_swapoff_refusal` | process/refusal | #13/#16 | ≥80% |
 | same | `cascade_io.rs` :: `down_with_runtime_preserves_swapoff_first_and_cleans_temp_state` | unit/cleanup | #16/#17 | ≥80% |
 | same | `cascade_io.rs` :: `transport_refusal_is_fail_closed_before_command` | unit/refusal | #13/#16 | ≥80% |
+| shared runner | `bounded_process.rs` :: `capture_runner_keeps_legitimate_success_and_nonzero_status_typed` | process/unit | #9 | ≥80% |
+| shared runner | `bounded_process.rs` :: `capture_runner_rejects_bounded_output_overflow` | process/bound | #15 | ≥80% |
+| shared runner | `bounded_process.rs` :: `unreaped_group_selects_fatal_controller_containment` | injected fatal seam | #15/#16 | ≥80% |
 | package | `cargo test -p ramshared-cli` | package | #9 | all pass |
 
 **Canonical cover gate:**
@@ -217,7 +231,7 @@ revert this ITEM and keep the cascade disabled pending investigation.
 ```bash
 node tools/ci/check-rust-slice-coverage.mjs \
   -p ramshared-cli \
-  --files crates/ramshared-cli/src/cascade/cascade_io.rs \
+  --files crates/ramshared-cli/src/bounded_process.rs,crates/ramshared-cli/src/cascade/cascade_io.rs \
   --min 80 \
   --report-json tmp/cascade-transport-orchestration-cov.json
 ```
@@ -248,7 +262,7 @@ gap, not a completed deployment claim.
 | V3 | down leaves only non-managed disk swap |
 | V4 | transport auto on WSL2 does not attempt ublk product path |
 | V5 | systemd unit enabled after install --enable |
-| V6 | every `cascade_io` short-lived helper is bounded and no timeout uses a broad process name |
+| V6 | every `cascade_io` short-lived helper is group-bounded, no timeout uses a broad process name, and failed reap selects fatal containment |
 | V7 | failed NBD attach preserves its first error and cleans up only the invocation-owned daemon/device |
 
 ## Kahneman

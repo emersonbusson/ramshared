@@ -61,6 +61,7 @@ if ($WorkerMode -cne $mediaContractModeSentinel -or
 Write-Output "PASS media_contract_dot_source_preserves_caller_worker_variables"
 
 foreach ($functionName in @(
+    "New-Win11LabPersistentAutologonCommand",
     "Get-Win11LabAutounattendContract",
     "Assert-Win11LabSealedAutounattendContract",
     "Assert-Win11LabPrimaryIsoContract",
@@ -74,11 +75,39 @@ foreach ($functionName in @(
     }
 }
 
+$manufacturedUnlockCommand = New-Win11LabPersistentAutologonCommand `
+    -ComputerName "MANUFACTURED-LAB" `
+    -LabUser "manufactured-admin" `
+    -Password "manufactured-password-must-not-appear"
+if ($manufacturedUnlockCommand -notmatch '-EncodedCommand\s+(?<payload>[A-Za-z0-9+/=]+)$') {
+    throw "win11_lab_media_static: persistent unlock command is not encoded"
+}
+$manufacturedUnlockScript = [Text.Encoding]::Unicode.GetString(
+    [Convert]::FromBase64String($Matches.payload)
+)
+foreach ($unlockNeedle in @(
+    'ScreenSaveActive',
+    'ScreenSaverIsSecure',
+    'ScreenSaveTimeOut',
+    'DisableLockWorkstation',
+    'InactivityTimeoutSecs'
+)) {
+    if ($manufacturedUnlockScript -notmatch [regex]::Escape($unlockNeedle)) {
+        throw ("win11_lab_media_static: persistent unlock command missing " + $unlockNeedle)
+    }
+}
+Write-Output "PASS persistent_unlock_disables_interactive_auth_surfaces"
+
 function New-ValidWin11LabAutounattendXml {
     param(
         [int]$ImageIndex = 6,
         [string]$PasswordMarker = "manufactured-password-must-not-appear"
     )
+
+    $persistentAutologonCommand = New-Win11LabPersistentAutologonCommand `
+        -ComputerName "MANUFACTURED-LAB" `
+        -LabUser "manufactured-admin" `
+        -Password $PasswordMarker
 
     return @"
 <?xml version="1.0" encoding="utf-8"?>
@@ -123,8 +152,8 @@ function New-ValidWin11LabAutounattendXml {
       <FirstLogonCommands>
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <Description>Disable automatic logon after the first lab sign-in</Description>
-          <CommandLine>reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoLogonCount /t REG_DWORD /d 0 /f</CommandLine>
+          <Description>Seal persistent disposable-lab autologon</Description>
+          <CommandLine>$persistentAutologonCommand</CommandLine>
         </SynchronousCommand>
       </FirstLogonCommands>
       <OOBE>
@@ -306,17 +335,18 @@ try {
     }
     Write-Output "PASS autologon_domain_binds_exact_local_computer"
 
-    $missingAutoLogonWorkaroundPath = Join-Path $tempRoot "missing-autologon-workaround.xml"
-    Set-ManufacturedXml -Path $missingAutoLogonWorkaroundPath -Content ((New-ValidWin11LabAutounattendXml) -replace '(?s)<FirstLogonCommands>.*?</FirstLogonCommands>', '')
-    Assert-RefusalWithoutSecret -ExpectedCode "autologon_count_workaround" -Action {
-        Get-Win11LabAutounattendContract -Path $missingAutoLogonWorkaroundPath | Out-Null
+    $inflatedOobeLogonPath = Join-Path $tempRoot "inflated-oobe-autologon.xml"
+    Set-ManufacturedXml -Path $inflatedOobeLogonPath -Content ((New-ValidWin11LabAutounattendXml) -replace '<LogonCount>1</LogonCount>', '<LogonCount>9999</LogonCount>')
+    Assert-RefusalWithoutSecret -ExpectedCode "autologon_logoncount" -Action {
+        Get-Win11LabAutounattendContract -Path $inflatedOobeLogonPath | Out-Null
     }
-    $changedAutoLogonWorkaroundPath = Join-Path $tempRoot "changed-autologon-workaround.xml"
-    Set-ManufacturedXml -Path $changedAutoLogonWorkaroundPath -Content ((New-ValidWin11LabAutounattendXml) -replace 'AutoLogonCount /t REG_DWORD /d 0 /f', 'AutoLogonCount /t REG_DWORD /d 2 /f')
-    Assert-RefusalWithoutSecret -ExpectedCode "autologon_count_workaround" -Action {
-        Get-Win11LabAutounattendContract -Path $changedAutoLogonWorkaroundPath | Out-Null
+    $disablingFirstLogonPath = Join-Path $tempRoot "disabling-first-logon.xml"
+    $disablingFirstLogon = (New-ValidWin11LabAutounattendXml) -replace '(?s)<CommandLine>.*?</CommandLine>', '<CommandLine>reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" /v AutoLogonCount /t REG_DWORD /d 0 /f</CommandLine>'
+    Set-ManufacturedXml -Path $disablingFirstLogonPath -Content $disablingFirstLogon
+    Assert-RefusalWithoutSecret -ExpectedCode "post_oobe_autologon" -Action {
+        Get-Win11LabAutounattendContract -Path $disablingFirstLogonPath | Out-Null
     }
-    Write-Output "PASS autologon_count_workaround_is_required"
+    Write-Output "PASS post_oobe_autologon_is_bound_to_disposable_lab_lifetime"
 
     $generatedPath = Join-Path $tempRoot "generated-autounattend.xml"
     $generatorOutput = @(& $AutounattendGeneratorPath `
@@ -333,7 +363,7 @@ try {
         [int]$generatedContract.autologon_logon_count -ne 1 -or
         [int]$generatedContract.local_admin_account_count -ne 1 -or
         -not [bool]$generatedContract.autologon_domain_bound -or
-        -not [bool]$generatedContract.autologon_count_workaround_exact) {
+        -not [bool]$generatedContract.post_oobe_autologon_bound) {
         throw "win11_lab_media_static: generator account binding receipt is incomplete"
     }
     Write-Output "PASS autounattend_generator_emits_exact_account_binding"
@@ -561,7 +591,7 @@ foreach ($needle in @(
 
 foreach ($receiptBinding in @(
     'autologon_domain_bound = $embeddedContract.autologon_domain_bound',
-    'autologon_count_workaround_exact = $embeddedContract.autologon_count_workaround_exact'
+    'post_oobe_autologon_bound = $embeddedContract.post_oobe_autologon_bound'
 )) {
     if ($contractText -notmatch [regex]::Escape($receiptBinding)) {
         throw ("embedded_probe_receipt_preserves_autologon_contract failed: missing " + $receiptBinding)

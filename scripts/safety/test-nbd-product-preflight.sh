@@ -4,6 +4,7 @@ set -euo pipefail
 
 REPO_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 PRODUCT="$REPO_ROOT/scripts/safety/nbd-product-preflight.sh"
+SWAP_SANITIZE="$REPO_ROOT/scripts/safety/swap-sanitize.sh"
 TEST_ROOT=$(mktemp -d)
 
 cleanup_test_root() {
@@ -37,6 +38,8 @@ readonly ROLLBACK_POST_WRITE_PHASES=(
   unit-staged
   unit-linked
   unit-staging-removed
+  health-unit-installed
+  workloads-slice-installed
   legacy-unit-backed-up
   legacy-unit-staged
   legacy-unit-replaced
@@ -204,7 +207,9 @@ new_fixture() {
   printf '#!/usr/bin/env bash\nexit 0\n' >"$release/bin/ramshared"
   printf '#!/usr/bin/env bash\nexit 0\n' >"$release/bin/ramsharedd"
   chmod 0755 "$release/bin/ramshared" "$release/bin/ramsharedd"
-  for script in cascade-up.sh cascade-down.sh nbd-benchmark-cell.sh \
+  for script in cascade-up.sh cascade-down.sh cascade-controller.sh lifecycle-recovery-status.sh \
+    provision-origin-swap.sh cascade-health.sh install-cascade-boot.sh \
+    uninstall-cascade-boot.sh nbd-benchmark-cell.sh \
     nbd-benchmark-cgroup-launch.sh cascade_pressure_integrity_worker.py wsl-relay-health.sh; do
     printf '#!/usr/bin/env bash\nexit 0\n' >"$release/scripts/safety/$script"
     chmod 0755 "$release/scripts/safety/$script"
@@ -218,7 +223,11 @@ new_fixture() {
     chmod 0755 "$release/scripts/safety/nbd-product-preflight.sh"
   fi
   printf '[Service]\n' >"$release/systemd/ramshared-cascade.service"
+  printf '[Service]\n' >"$release/systemd/ramshared-cascade-health.service"
+  printf '[Slice]\nMemoryAccounting=yes\n' >"$release/systemd/ramshared-workloads.slice"
   chmod 0644 "$release/systemd/ramshared-cascade.service"
+  chmod 0644 "$release/systemd/ramshared-cascade-health.service"
+  chmod 0644 "$release/systemd/ramshared-workloads.slice"
   write_generic_config "$release"
   printf '0123456789abcdef0123456789abcdef01234567\n' >"$release/SOURCE_COMMIT"
   printf 'fixture/main\n' >"$release/SOURCE_BRANCH"
@@ -292,6 +301,33 @@ exec /usr/bin/readlink "$@"
 EOF
   chmod 0755 "$root/bin/relay" "$root/bin/systemctl" "$root/bin/df" "$root/bin/stat" "$root/bin/readlink"
   printf '%s\n' "$root"
+}
+
+populate_control_plane_fixture() {
+  local release=$1 script unit dropin
+  install -d -m 0755 \
+    "$release/systemd/docker.service.d" \
+    "$release/systemd/containerd.service.d" \
+    "$release/systemd/cron.service.d"
+  for script in manage-control-plane.sh ramshared-host-gate.sh ramshared-session-launcher.sh; do
+    install -m 0755 "$REPO_ROOT/scripts/safety/$script" "$release/scripts/safety/"
+  done
+  install -m 0644 "$REPO_ROOT/scripts/safety/docker-daemon-ramshared.json" "$release/scripts/safety/"
+  for unit in \
+    ramshared-control.slice \
+    ramshared-workloads-docker.slice \
+    ramshared-workloads-cron.slice \
+    ramshared-host-gate.service \
+    ramshared-supervisor.service \
+    ramshared-cron-workload.service.in; do
+    install -m 0644 "$REPO_ROOT/scripts/safety/systemd/$unit" "$release/systemd/"
+  done
+  for dropin in \
+    docker.service.d/10-ramshared-control.conf \
+    containerd.service.d/10-ramshared-control.conf \
+    cron.service.d/10-ramshared-control.conf; do
+    install -m 0644 "$REPO_ROOT/scripts/safety/systemd/$dropin" "$release/systemd/$dropin"
+  done
 }
 
 activate_nbd_fixture() {
@@ -1175,25 +1211,29 @@ test_manifest_special_objects_refuse_without_reading_them() {
 }
 
 test_sealed_nbd_bundle_and_lifecycle_wiring() {
-  local up down benchmark launcher benchmark_lib worker install bundle service config source failures=0
+  local up down controller provision recovery_status benchmark launcher benchmark_lib worker install uninstall bundle service config source failures=0
   up="$REPO_ROOT/scripts/safety/cascade-up.sh"
   down="$REPO_ROOT/scripts/safety/cascade-down.sh"
+  controller="$REPO_ROOT/scripts/safety/cascade-controller.sh"
+  provision="$REPO_ROOT/scripts/safety/provision-origin-swap.sh"
+  recovery_status="$REPO_ROOT/scripts/safety/lifecycle-recovery-status.sh"
   benchmark="$REPO_ROOT/scripts/safety/nbd-benchmark-cell.sh"
   launcher="$REPO_ROOT/scripts/safety/nbd-benchmark-cgroup-launch.sh"
   benchmark_lib="$REPO_ROOT/scripts/safety/nbd-benchmark-lib.sh"
   worker="$REPO_ROOT/scripts/safety/cascade_pressure_integrity_worker.py"
   install="$REPO_ROOT/scripts/safety/install-cascade-boot.sh"
+  uninstall="$REPO_ROOT/scripts/safety/uninstall-cascade-boot.sh"
   bundle="$REPO_ROOT/scripts/package/build-linux-bundle.sh"
   service="$REPO_ROOT/scripts/safety/systemd/ramshared-cascade.service"
   config="$REPO_ROOT/scripts/safety/cascade.conf.example"
 
-  for source in "$up" "$down" "$benchmark" "$launcher" "$benchmark_lib" "$worker" "$install" "$bundle" "$service" "$config"; do
+  for source in "$up" "$down" "$controller" "$provision" "$recovery_status" "$benchmark" "$launcher" "$benchmark_lib" "$worker" "$install" "$uninstall" "$bundle" "$service" "$config"; do
     if [[ ! -f $source ]]; then
       fail "sealed_nbd_bundle_and_lifecycle_wiring missing=$source"
       failures=1
     fi
   done
-  for source in "$up" "$down" "$benchmark" "$launcher" "$worker" "$install" "$bundle" "$PRODUCT" "$0"; do
+  for source in "$up" "$down" "$controller" "$provision" "$recovery_status" "$benchmark" "$launcher" "$worker" "$install" "$uninstall" "$bundle" "$PRODUCT" "$0"; do
     if [[ ! -x $source ]]; then
       fail "sealed_nbd_bundle_and_lifecycle_wiring entrypoint_not_executable=$source"
       failures=1
@@ -1215,6 +1255,15 @@ test_sealed_nbd_bundle_and_lifecycle_wiring() {
     ! grep -Fq 'NBD_LIFECYCLE_STATE=PLAN' "$down" ||
     ! grep -Fq 'exec "$CLI" down' "$down"; then
     fail 'sealed_nbd_bundle_and_lifecycle_wiring deactivation does not preserve sealed swapoff owner'
+    failures=1
+  fi
+  if ! grep -Fq 'RAMSHARED_NBD_CONTROLLER_APPROVAL' "$controller" ||
+    ! grep -Fq 'recover:$version' "$controller" ||
+    ! grep -Fq 'while ! clean_shutdown_proven' "$controller" ||
+    ! grep -Fq 'LIFECYCLE_RECOVERY_STATE=CLEAN' "$recovery_status" ||
+    ! grep -Fq 'RAMSHARED_ORIGIN_PROVISION_APPROVAL' "$provision" ||
+    ! grep -Fq '/sbin/mkswap' "$provision"; then
+    fail 'sealed_nbd_bundle_and_lifecycle_wiring controller recovery or explicit provisioning contract is missing'
     failures=1
   fi
   if ! grep -Fq -- '--approve-nbd-product-install' "$install" ||
@@ -1241,6 +1290,13 @@ test_sealed_nbd_bundle_and_lifecycle_wiring() {
     ! grep -Fq 'nbd-benchmark-cgroup-launch.sh' "$bundle" ||
     ! grep -Fq 'nbd-benchmark-lib.sh' "$bundle" ||
     ! grep -Fq 'cascade_pressure_integrity_worker.py' "$bundle" ||
+    ! grep -Fq 'cascade-health.sh' "$bundle" ||
+    ! grep -Fq 'cascade-controller.sh' "$bundle" ||
+    ! grep -Fq 'lifecycle-recovery-status.sh' "$bundle" ||
+    ! grep -Fq 'provision-origin-swap.sh' "$bundle" ||
+    ! grep -Fq 'uninstall-cascade-boot.sh' "$bundle" ||
+    ! grep -Fq 'ramshared-cascade-health.service' "$bundle" ||
+    ! grep -Fq 'ramshared-workloads.slice' "$bundle" ||
     ! grep -Fq 'SOURCE_COMMIT' "$bundle" ||
     ! grep -Fq 'SOURCE_TREE_STATE' "$bundle" ||
     ! grep -Fq 'wsl-relay-health.sh' "$bundle" ||
@@ -1251,7 +1307,10 @@ test_sealed_nbd_bundle_and_lifecycle_wiring() {
     failures=1
   fi
   if ! grep -Fq '/opt/ramshared/current/scripts/safety/nbd-product-preflight.sh --check' "$service" ||
-    ! grep -Fq '/opt/ramshared/current/scripts/safety/cascade-up.sh --execute' "$service" ||
+    ! grep -Fq '/opt/ramshared/current/scripts/safety/cascade-controller.sh --execute' "$service" ||
+    ! grep -Fq 'KillMode=process' "$service" ||
+    ! grep -Fq 'SendSIGKILL=no' "$service" ||
+    ! grep -Fq 'TimeoutStopSec=infinity' "$service" ||
     grep -Fq '/etc/ramshared/cascade.conf' "$service" ||
     grep -Fq 'ramsharedd.service' "$service"; then
     fail 'sealed_nbd_bundle_and_lifecycle_wiring service is not current-selector NBD-only'
@@ -1267,14 +1326,22 @@ test_sealed_nbd_bundle_and_lifecycle_wiring() {
 }
 
 test_sealed_bundle_contains_benchmark_runner_and_worker() {
-  local root bundle_root generic_version generic_release sink
+  local root bundle_root generic_version generic_release sink fixture_target
   root=$(new_fixture produced-bundle)
   bundle_root="$root/packages"
   generic_version="generic-fixture-$(date +%s)-$$"
   sink="$root/sink"
+  fixture_target="$root/package-target"
+  mkdir -p "$fixture_target"
+  for binary in ramshared ramsharedd; do
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$fixture_target/$binary"
+    chmod 0755 "$fixture_target/$binary"
+  done
 
   set +e
-  RUN_OUTPUT=$(RAMSHARED_PACKAGE_OUT="$bundle_root" \
+  RUN_OUTPUT=$(RAMSHARED_PACKAGE_TEST_MODE=1 \
+    RAMSHARED_PACKAGE_TARGET_DIR="$fixture_target" \
+    RAMSHARED_PACKAGE_OUT="$bundle_root" \
     RAMSHARED_PACKAGE_VERSION="$generic_version" \
     "$REPO_ROOT/scripts/package/build-linux-bundle.sh" --skip-build 2>&1)
   RUN_EXIT=$?
@@ -1299,11 +1366,28 @@ test_sealed_bundle_contains_benchmark_runner_and_worker() {
     return
   }
   for required in \
+    scripts/safety/cascade-controller.sh \
+    scripts/safety/lifecycle-recovery-status.sh \
+    scripts/safety/provision-origin-swap.sh \
     scripts/safety/nbd-benchmark-cell.sh \
     scripts/safety/nbd-benchmark-cgroup-launch.sh \
     scripts/safety/nbd-benchmark-lib.sh \
     scripts/safety/cascade_pressure_integrity_worker.py \
     scripts/safety/nbd-product-preflight.sh \
+    scripts/safety/uninstall-cascade-boot.sh \
+    scripts/safety/manage-control-plane.sh \
+    scripts/safety/ramshared-host-gate.sh \
+    scripts/safety/ramshared-session-launcher.sh \
+    scripts/safety/docker-daemon-ramshared.json \
+    systemd/ramshared-control.slice \
+    systemd/ramshared-workloads-docker.slice \
+    systemd/ramshared-workloads-cron.slice \
+    systemd/ramshared-host-gate.service \
+    systemd/ramshared-supervisor.service \
+    systemd/ramshared-cron-workload.service.in \
+    systemd/docker.service.d/10-ramshared-control.conf \
+    systemd/containerd.service.d/10-ramshared-control.conf \
+    systemd/cron.service.d/10-ramshared-control.conf \
     SOURCE_COMMIT SOURCE_BRANCH SOURCE_TREE_STATE; do
     [[ -f $generic_release/$required && ! -L $generic_release/$required ]] || {
       fail "sealed_bundle_contains_benchmark_runner_and_worker missing=$required"
@@ -1329,6 +1413,7 @@ new_installer_fixture() {
   release="$root/opt/ramshared/releases/v1.2.3"
   unseal_fixture_release "$release"
   make_generic_bundle_fixture "$release"
+  populate_control_plane_fixture "$release"
   install -m 0755 "$REPO_ROOT/scripts/safety/install-cascade-boot.sh" "$release/scripts/safety/"
   install -m 0755 "$REPO_ROOT/scripts/safety/wsl-relay-health.sh" "$release/scripts/safety/"
   printf 'v1.2.3\n' >"$release/RELEASE_VERSION"
@@ -1399,10 +1484,13 @@ new_rollback_installer_fixture() {
   unit="$root/systemd/ramshared-cascade.service"
   unseal_fixture_release "$source"
   make_generic_bundle_fixture "$source"
+  populate_control_plane_fixture "$source"
   install -m 0755 "$REPO_ROOT/scripts/safety/wsl-relay-health.sh" "$source/scripts/safety/"
   sed \
     -e "s|^PRODUCT_ROOT=/opt/ramshared$|PRODUCT_ROOT=$target|" \
     -e "s|^UNIT_PATH=/etc/systemd/system/ramshared-cascade.service$|UNIT_PATH=$unit|" \
+    -e "s|^HEALTH_UNIT_PATH=/etc/systemd/system/ramshared-cascade-health.service$|HEALTH_UNIT_PATH=$root/systemd/ramshared-cascade-health.service|" \
+    -e "s|^WORKLOADS_SLICE_PATH=/etc/systemd/system/ramshared-workloads.slice$|WORKLOADS_SLICE_PATH=$root/systemd/ramshared-workloads.slice|" \
     "$REPO_ROOT/scripts/safety/install-cascade-boot.sh" >"$source/scripts/safety/install-cascade-boot.sh"
   inject_rollback_failure_after_phase "$phase" "$source/scripts/safety/install-cascade-boot.sh" "$injection" || return 1
   chmod 0755 "$source/scripts/safety/install-cascade-boot.sh"
@@ -1445,9 +1533,10 @@ EOF
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ ${1:-} == -c && ${2:-} == %u:%g:%a ]]; then
-  path=${4:-}
-  if [[ $path == "${RAMSHARED_ROLLBACK_PRODUCT_ROOT:?}"/* || $path == "${RAMSHARED_ROLLBACK_UNIT_PATH:?}" ]]; then
-    mode=$(/usr/bin/stat -c '%a' -- "$path")
+  probe_path=${4:-}
+  systemd_dir=$(dirname -- "${RAMSHARED_ROLLBACK_UNIT_PATH:?}")
+  if [[ $probe_path == "${RAMSHARED_ROLLBACK_PRODUCT_ROOT:?}"/* || $probe_path == "$systemd_dir"/* ]]; then
+    mode=$(/usr/bin/stat -c '%a' -- "$probe_path")
     printf '0:0:%s\n' "$mode"
     exit 0
   fi
@@ -1515,6 +1604,12 @@ assert_rollback_preserves_prior_selector_and_unit() {
     fail "$name published_destination_remained"
     return 1
   fi
+  for auxiliary in ramshared-cascade-health.service ramshared-workloads.slice; do
+    if [[ -e $root/systemd/$auxiliary || -L $root/systemd/$auxiliary ]]; then
+      fail "$name auxiliary_unit_remained=$auxiliary"
+      return 1
+    fi
+  done
 }
 
 test_installer_every_post_write_phase_rolls_back() {
@@ -1556,6 +1651,8 @@ test_attended_derived_install_is_bound_and_sealed() {
   sed \
     -e "s|^PRODUCT_ROOT=/opt/ramshared$|PRODUCT_ROOT=$root/product|" \
     -e "s|^UNIT_PATH=/etc/systemd/system/ramshared-cascade.service$|UNIT_PATH=$root/systemd/ramshared-cascade.service|" \
+    -e "s|^HEALTH_UNIT_PATH=/etc/systemd/system/ramshared-cascade-health.service$|HEALTH_UNIT_PATH=$root/systemd/ramshared-cascade-health.service|" \
+    -e "s|^WORKLOADS_SLICE_PATH=/etc/systemd/system/ramshared-workloads.slice$|WORKLOADS_SLICE_PATH=$root/systemd/ramshared-workloads.slice|" \
     "$REPO_ROOT/scripts/safety/install-cascade-boot.sh" >"$source/scripts/safety/install-cascade-boot.sh"
   chmod 0755 "$source/scripts/safety/install-cascade-boot.sh"
   write_manifest "$source"
@@ -1580,8 +1677,162 @@ assert record["lower_sink"]["canonical_path"].startswith("/")
 PY
   [[ $(find "$installed" -type d -perm /0222 -print -quit) == '' ]] || { fail 'attended_derived_install_is_bound_and_sealed directory not sealed'; return; }
   [[ $(find "$installed" -type f -perm /0222 -print -quit) == '' ]] || { fail 'attended_derived_install_is_bound_and_sealed file not sealed'; return; }
+  for auxiliary in ramshared-cascade-health.service ramshared-workloads.slice; do
+    [[ -f $root/systemd/$auxiliary && ! -L $root/systemd/$auxiliary ]] || {
+      fail "attended_derived_install_is_bound_and_sealed auxiliary unit missing=$auxiliary"
+      return
+    }
+    cmp -s "$installed/systemd/$auxiliary" "$root/systemd/$auxiliary" || {
+      fail "attended_derived_install_is_bound_and_sealed auxiliary unit differs=$auxiliary"
+      return
+    }
+  done
   printf 'PASS installed_release_and_input_bundle_manifests_are_distinct\n'
   pass attended_derived_install_is_bound_and_sealed
+}
+
+test_auxiliary_unit_conflict_refuses_and_rolls_back() {
+  local root source selector_before health_unit health_before
+  root=$(new_rollback_installer_fixture auxiliary-unit-conflict daemon-reloaded existing)
+  source="$root/opt/ramshared/releases/v1.2.3"
+  sed \
+    -e "s|^PRODUCT_ROOT=/opt/ramshared$|PRODUCT_ROOT=$root/product|" \
+    -e "s|^UNIT_PATH=/etc/systemd/system/ramshared-cascade.service$|UNIT_PATH=$root/systemd/ramshared-cascade.service|" \
+    -e "s|^HEALTH_UNIT_PATH=/etc/systemd/system/ramshared-cascade-health.service$|HEALTH_UNIT_PATH=$root/systemd/ramshared-cascade-health.service|" \
+    -e "s|^WORKLOADS_SLICE_PATH=/etc/systemd/system/ramshared-workloads.slice$|WORKLOADS_SLICE_PATH=$root/systemd/ramshared-workloads.slice|" \
+    "$REPO_ROOT/scripts/safety/install-cascade-boot.sh" >"$source/scripts/safety/install-cascade-boot.sh"
+  chmod 0755 "$source/scripts/safety/install-cascade-boot.sh"
+  write_manifest "$source"
+  selector_before=$(readlink -- "$root/product/current")
+  health_unit="$root/systemd/ramshared-cascade-health.service"
+  printf '[Unit]\nDescription=foreign health service\n' >"$health_unit"
+  chmod 0644 "$health_unit"
+  health_before=$(sha256sum -- "$health_unit" | awk '{print $1}')
+  run_rollback_installer "$root" no-injection
+  if ! assert_exit auxiliary_unit_conflict_refuses_and_rolls_back 1 ||
+    ! assert_contains auxiliary_unit_conflict_refuses_and_rolls_back 'NBD_INSTALL_REASON=AUXILIARY_UNIT_CONFLICT' ||
+    [[ $(sha256sum -- "$health_unit" | awk '{print $1}') != "$health_before" ]] ||
+    [[ $(readlink -- "$root/product/current") != "$selector_before" ]] ||
+    [[ -e $root/systemd/ramshared-workloads.slice ]] ||
+    [[ -e $root/product/releases/v1.2.3 ]]; then
+    fail 'auxiliary_unit_conflict_refuses_and_rolls_back mutated an existing unit or published a release'
+    return
+  fi
+  pass auxiliary_unit_conflict_refuses_and_rolls_back
+}
+
+test_uninstaller_removes_auxiliary_units_without_stopping_workloads() {
+  local uninstall="$REPO_ROOT/scripts/safety/uninstall-cascade-boot.sh"
+  if ! grep -Fq 'ramshared-cascade-health.service' "$uninstall" ||
+    ! grep -Fq 'ramshared-workloads.slice' "$uninstall" ||
+    ! grep -Fq 'remove_sealed_unit_if_owned' "$uninstall" ||
+    ! grep -Fq 'DEFAULT_BIN_DIR="$REPO/bin"' "$uninstall" ||
+    grep -Fq 'systemctl stop ramshared-workloads.slice' "$uninstall"; then
+    fail 'uninstaller_removes_auxiliary_units_without_stopping_workloads lifecycle contract missing'
+    return
+  fi
+  pass uninstaller_removes_auxiliary_units_without_stopping_workloads
+}
+
+test_uninstaller_preserves_foreign_unit_definitions() {
+  local root release uninstall output health_before
+  root=$(new_fixture uninstaller-foreign-unit)
+  release="$root/opt/ramshared/releases/v1.2.3"
+  unseal_fixture_release "$release"
+  for unit in ramshared-cascade.service ramshared-cascade-health.service ramshared-workloads.slice; do
+    install -m 0644 "$REPO_ROOT/scripts/safety/systemd/$unit" "$release/systemd/$unit"
+  done
+  mkdir -p "$root/systemd"
+  install -m 0644 "$release/systemd/ramshared-cascade.service" "$root/systemd/ramshared-cascade.service"
+  install -m 0644 "$release/systemd/ramshared-workloads.slice" "$root/systemd/ramshared-workloads.slice"
+  printf '[Unit]\nDescription=foreign health service\n' >"$root/systemd/ramshared-cascade-health.service"
+  chmod 0644 "$root/systemd/ramshared-cascade-health.service"
+  health_before=$(sha256sum -- "$root/systemd/ramshared-cascade-health.service" | awk '{print $1}')
+  sed "s|/etc/systemd/system|$root/systemd|g" "$REPO_ROOT/scripts/safety/uninstall-cascade-boot.sh" >"$release/scripts/safety/uninstall-cascade-boot.sh"
+  chmod 0755 "$release/scripts/safety/uninstall-cascade-boot.sh"
+  cat >"$root/bin/id" <<'EOF'
+#!/usr/bin/env bash
+[[ ${1:-} == -u ]] && { printf '0\n'; exit 0; }
+exit 1
+EOF
+  cat >"$root/bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${RAMSHARED_UNINSTALL_SYSTEMCTL_LOG:?}"
+exit 0
+EOF
+  chmod 0755 "$root/bin/id" "$root/bin/systemctl"
+  set +e
+  output=$(env \
+    "PATH=$root/bin:$PATH" \
+    "RAMSHARED_UNINSTALL_SYSTEMCTL_LOG=$root/state/systemctl.log" \
+    "$release/scripts/safety/uninstall-cascade-boot.sh" 2>&1)
+  RUN_EXIT=$?
+  set -e
+  if ! assert_exit uninstaller_preserves_foreign_unit_definitions 0 ||
+    [[ -e $root/systemd/ramshared-cascade.service ]] ||
+    [[ -e $root/systemd/ramshared-workloads.slice ]] ||
+    [[ ! -f $root/systemd/ramshared-cascade-health.service ]] ||
+    [[ $(sha256sum -- "$root/systemd/ramshared-cascade-health.service" | awk '{print $1}') != "$health_before" ]] ||
+    grep -Fq 'ramshared-cascade-health.service' "$root/state/systemctl.log"; then
+    fail "uninstaller_preserves_foreign_unit_definitions output=$output"
+    return
+  fi
+  pass uninstaller_preserves_foreign_unit_definitions
+}
+
+test_packaged_uninstaller_uses_sealed_binary_and_removes_units() {
+  local root release output
+  root=$(new_fixture packaged-uninstaller)
+  release="$root/opt/ramshared/releases/v1.2.3"
+  unseal_fixture_release "$release"
+  install -m 0755 "$REPO_ROOT/scripts/safety/uninstall-cascade-boot.sh" \
+    "$release/scripts/safety/uninstall-cascade-boot.sh"
+  for unit in ramshared-cascade.service ramshared-cascade-health.service ramshared-workloads.slice; do
+    install -m 0644 "$REPO_ROOT/scripts/safety/systemd/$unit" "$release/systemd/$unit"
+  done
+  mkdir -p "$root/systemd"
+  for unit in ramshared-cascade.service ramshared-cascade-health.service ramshared-workloads.slice; do
+    install -m 0644 "$release/systemd/$unit" "$root/systemd/$unit"
+  done
+  sed "s|^SYSTEMD_UNIT_DIR=/etc/systemd/system$|SYSTEMD_UNIT_DIR=$root/systemd|" \
+    "$release/scripts/safety/uninstall-cascade-boot.sh" >"$release/scripts/safety/uninstall-cascade-boot.sh.patched"
+  mv -f "$release/scripts/safety/uninstall-cascade-boot.sh.patched" \
+    "$release/scripts/safety/uninstall-cascade-boot.sh"
+  chmod 0755 "$release/scripts/safety/uninstall-cascade-boot.sh"
+  cat >"$release/bin/ramshared" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${RAMSHARED_UNINSTALL_BINARY_LOG:?}"
+EOF
+  cat >"$root/bin/id" <<'EOF'
+#!/usr/bin/env bash
+[[ ${1:-} == -u ]] && { printf '0\n'; exit 0; }
+exit 1
+EOF
+  cat >"$root/bin/systemctl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${RAMSHARED_UNINSTALL_SYSTEMCTL_LOG:?}"
+exit 0
+EOF
+  chmod 0755 "$release/bin/ramshared" "$root/bin/id" "$root/bin/systemctl"
+  set +e
+  output=$(env \
+    "PATH=$root/bin:$PATH" \
+    "RAMSHARED_UNINSTALL_BINARY_LOG=$root/state/binary.log" \
+    "RAMSHARED_UNINSTALL_SYSTEMCTL_LOG=$root/state/systemctl.log" \
+    "$release/scripts/safety/uninstall-cascade-boot.sh" 2>&1)
+  RUN_EXIT=$?
+  set -e
+  if ! assert_exit packaged_uninstaller_uses_sealed_binary_and_removes_units 0 ||
+    ! grep -Fxq down "$root/state/binary.log" ||
+    ! grep -Fq 'ramshared-cascade-health.service' "$root/state/systemctl.log" ||
+    grep -Fq 'ramshared-workloads.slice' "$root/state/systemctl.log" ||
+    [[ -e $root/systemd/ramshared-cascade.service ]] ||
+    [[ -e $root/systemd/ramshared-cascade-health.service ]] ||
+    [[ -e $root/systemd/ramshared-workloads.slice ]]; then
+    fail "packaged_uninstaller_uses_sealed_binary_and_removes_units output=$output"
+    return
+  fi
+  pass packaged_uninstaller_uses_sealed_binary_and_removes_units
 }
 
 run_installer() {
@@ -1628,6 +1879,22 @@ test_installer_manifest_and_unit_refusals_are_prewrite() {
 
   (( failures == 0 )) || return
   pass installer_manifest_and_unit_refusals_are_prewrite
+}
+
+test_installer_requires_control_plane_payload() {
+  local root release
+  root=$(new_installer_fixture control-plane-payload)
+  release="$root/opt/ramshared/releases/v1.2.3"
+  rm -f -- "$release/systemd/ramshared-control.slice"
+  write_manifest "$release"
+  run_installer "$root" inactive --plan
+  if ! assert_exit installer_requires_control_plane_payload 1 ||
+    ! assert_contains installer_requires_control_plane_payload 'NBD_INSTALL_REASON=RELEASE_LAYOUT_INVALID' ||
+    ! assert_installer_was_read_only installer_requires_control_plane_payload "$root/state/installer-writes"; then
+    fail "installer_requires_control_plane_payload output=$RUN_OUTPUT"
+    return
+  fi
+  pass installer_requires_control_plane_payload
 }
 
 test_installer_active_enabled_or_unknown_units_refuse_without_writes() {
@@ -1778,6 +2045,136 @@ test_legacy_restore_reloads_systemd_after_daemon_reload() {
   pass legacy_restore_reloads_systemd_after_daemon_reload
 }
 
+# R4-HOST-11: this manufactured fixture is intentionally isolated from
+# /proc, /run, and device nodes.  The sanitizer must require a sealed
+# RamShared runtime ownership record before it can invoke the fixture swapoff.
+test_swap_sanitize_requires_owned_runtime_evidence() {
+  local root owned output status calls
+  [[ -x $SWAP_SANITIZE ]] || { fail 'swap_sanitize_missing_or_not_executable'; return; }
+  root="$TEST_ROOT/swap-sanitize"
+  mkdir -p "$root/proc" "$root/run/ramshared" "$root/bin"
+  printf 'Filename\tType\tSize\tUsed\tPriority\n/dev/nbd9 partition 1024 0 -2\n/dev/zram1 partition 1024 0 -2\n/dev/ublk2 partition 1024 0 -2\n' >"$root/proc/swaps"
+  cat >"$root/bin/swapoff" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$1" >>"${RAMSHARED_SWAPOFF_LOG:?}"
+[[ ${RAMSHARED_SWAPOFF_FAIL:-0} != 1 ]]
+EOF
+  chmod 0755 "$root/bin/swapoff"
+  owned=/dev/nbd9
+  printf '%s\n' "$owned" >"$root/run/ramshared/swap-dev"
+  python3 - "$root/run/ramshared/ramshared-swap-ownership.json" "$root/run/ramshared/swap-dev" "$owned" <<'PY'
+import hashlib
+import json
+import sys
+manifest_path, runtime_path, device = sys.argv[1:]
+with open(runtime_path, "rb") as stream:
+    digest = hashlib.sha256(stream.read()).hexdigest()
+with open(manifest_path, "w", encoding="utf-8") as stream:
+    json.dump({"schema_version": 1, "devices": [{"path": device, "kind": "ramshared_nbd", "runtime_file": "swap-dev", "runtime_value_sha256": digest}]}, stream)
+PY
+  calls="$root/swapoff.log"
+  set +e
+  output=$(RAMSHARED_SWAP_SANITIZE_TEST_ROOT="$root" RAMSHARED_SWAPOFF_LOG="$calls" bash "$SWAP_SANITIZE" --fix 2>&1)
+  status=$?
+  set -e
+  if [[ $status -ne 0 || $(cat "$calls") != /dev/nbd9 || $output != *'CLEANUP=sealed_owned_swapoff_complete count=1'* ]]; then
+    fail "swap_sanitize_owned_device_not_exact status=$status output=$output"
+    return
+  fi
+  pass swap_sanitize_owned_device_only
+
+  : >"$calls"
+  python3 - "$root/run/ramshared/ramshared-swap-ownership.json" "$root/run/ramshared/swap-dev" <<'PY'
+import hashlib
+import json
+import sys
+path, runtime = sys.argv[1:]
+with open(runtime, "wb") as stream:
+    stream.write(b"/dev/nbd0\n")
+with open(runtime, "rb") as stream:
+    digest = hashlib.sha256(stream.read()).hexdigest()
+with open(path, "w", encoding="utf-8") as stream:
+    json.dump({"schema_version": 1, "devices": [{"path": "/dev/nbd0", "kind": "ramshared_nbd", "runtime_file": "swap-dev", "runtime_value_sha256": digest}]}, stream)
+PY
+  set +e
+  output=$(RAMSHARED_SWAP_SANITIZE_TEST_ROOT="$root" RAMSHARED_SWAPOFF_LOG="$calls" bash "$SWAP_SANITIZE" --fix 2>&1)
+  status=$?
+  set -e
+  if [[ $status -ne 0 || -s $calls || $output == *'swapoff /dev/zram1'* || $output == *'swapoff /dev/ublk2'* || $output == *'swapoff /dev/nbd9'* ]]; then
+    fail "swap_sanitize_foreign_devices_were_touched status=$status output=$output"
+    return
+  fi
+  pass swap_sanitize_foreign_nbd_zram_ublk_never_touched
+
+  # A producer that emits a valid owned row before discovering malformed
+  # evidence must not leak that partial row into swapoff consumption.
+  printf '%s\n' /dev/nbd9 >"$root/run/ramshared/swap-dev"
+  python3 - "$root/run/ramshared/ramshared-swap-ownership.json" "$root/run/ramshared/swap-dev" <<'PY'
+import hashlib
+import json
+import sys
+path, runtime = sys.argv[1:]
+with open(runtime, "rb") as stream:
+    digest = hashlib.sha256(stream.read()).hexdigest()
+records = [
+    {"path": "/dev/nbd9", "kind": "ramshared_nbd", "runtime_file": "swap-dev", "runtime_value_sha256": digest},
+    {"path": "/dev/not-a-device", "kind": "ramshared_nbd", "runtime_file": "swap-dev", "runtime_value_sha256": digest},
+]
+with open(path, "w", encoding="utf-8") as stream:
+    json.dump({"schema_version": 1, "devices": records}, stream)
+PY
+  : >"$calls"
+  set +e
+  output=$(RAMSHARED_SWAP_SANITIZE_TEST_ROOT="$root" RAMSHARED_SWAPOFF_LOG="$calls" bash "$SWAP_SANITIZE" --fix 2>&1)
+  status=$?
+  set -e
+  if [[ $status -eq 0 || -s $calls || $output == *'CLEANUP=sealed_owned_swapoff_complete'* ]]; then
+    fail "swap_sanitize_mixed_valid_invalid_evidence_reached_swapoff status=$status output=$output"
+    return
+  fi
+  pass swap_sanitize_mixed_valid_invalid_evidence_is_atomic
+
+  printf '%s\n' /dev/nbd9 >"$root/run/ramshared/swap-dev"
+  python3 - "$root/run/ramshared/ramshared-swap-ownership.json" "$root/run/ramshared/swap-dev" <<'PY'
+import hashlib
+import json
+import sys
+path, runtime = sys.argv[1:]
+with open(runtime, "rb") as stream:
+    digest = hashlib.sha256(stream.read()).hexdigest()
+with open(path, "w", encoding="utf-8") as stream:
+    json.dump({"schema_version": 1, "devices": [{"path": "/dev/nbd9", "kind": "ramshared_nbd", "runtime_file": "swap-dev", "runtime_value_sha256": digest}]}, stream)
+PY
+  : >"$calls"
+  set +e
+  output=$(RAMSHARED_SWAP_SANITIZE_TEST_ROOT="$root" RAMSHARED_SWAPOFF_LOG="$calls" RAMSHARED_SWAPOFF_FAIL=1 bash "$SWAP_SANITIZE" --fix 2>&1)
+  status=$?
+  set -e
+  if [[ $status -eq 0 || $(cat "$calls") != /dev/nbd9 || $output != *'swapoff_failed=/dev/nbd9'* || $output == *'CLEANUP=sealed_owned_swapoff_complete'* ]]; then
+    fail "swap_sanitize_swapoff_failure_was_suppressed status=$status output=$output"
+    return
+  fi
+  pass swap_sanitize_swapoff_failure_is_terminal_without_cleanup_claim
+}
+
+# The aggregate Windows runner normally gives static children two minutes. The
+# isolated NBD matrix fixture has its own bounded manufactured CUDA cleanup
+# path and empirically needs just over that. Its exception must remain local,
+# explicit, and capped rather than weakening every static child deadline.
+test_windows_ci_nbd_matrix_deadline_is_specific_and_bounded() {
+  local ci
+  ci="$REPO_ROOT/scripts/windows/Test-WindowsCiStatic.ps1"
+  if [[ ! -f $ci ]] ||
+    ! grep -Fq '@{ Name = "Test-NbdBenchmarkMatrixStatic.ps1"; Arguments = @{}; TimeoutSec = 180 }' "$ci" ||
+    ! grep -Fq '[ValidateRange(120, 180)][int]$TimeoutSec = 120' "$ci" ||
+    ! grep -Fq 'WaitForExit($TimeoutSec * 1000)' "$ci"; then
+    fail 'windows_ci_nbd_matrix_deadline_is_not_specific_bounded_or_enforced'
+    return
+  fi
+  pass windows_ci_nbd_matrix_deadline_is_specific_and_bounded
+}
+
 test_release_manifest_and_modes_are_verified
 test_binary_match_rejects_stale_or_deleted_daemon
 test_product_off_rejects_exact_daemon_without_pidfile
@@ -1803,14 +2200,21 @@ test_manifest_special_objects_refuse_without_reading_them
 test_sealed_nbd_bundle_and_lifecycle_wiring
 test_sealed_bundle_contains_benchmark_runner_and_worker
 test_installer_manifest_and_unit_refusals_are_prewrite
+test_installer_requires_control_plane_payload
 test_installer_active_enabled_or_unknown_units_refuse_without_writes
 test_installer_every_post_write_phase_rolls_back
 test_attended_derived_install_is_bound_and_sealed
+test_auxiliary_unit_conflict_refuses_and_rolls_back
+test_uninstaller_removes_auxiliary_units_without_stopping_workloads
+test_uninstaller_preserves_foreign_unit_definitions
+test_packaged_uninstaller_uses_sealed_binary_and_removes_units
 test_legacy_unit_migration_requires_exact_hash_and_restores_on_failure
 test_corrupt_legacy_backup_is_never_restored
 test_corrupt_published_legacy_backup_refuses_before_replacement
 test_legacy_backup_root_symlink_is_refused
 test_legacy_restore_reloads_systemd_after_daemon_reload
+test_swap_sanitize_requires_owned_runtime_evidence
+test_windows_ci_nbd_matrix_deadline_is_specific_and_bounded
 
 if [[ $fail_count -ne 0 ]]; then
   printf 'FAIL Test-NbdProductPreflight passed=%s failed=%s\n' "$pass_count" "$fail_count" >&2

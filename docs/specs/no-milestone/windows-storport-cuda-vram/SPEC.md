@@ -480,6 +480,11 @@ the product binary and product installer.
 
 ## Validation checklist
 
+This SPEC is the single pure-line owner for the shared storage-product
+`config.rs`, `evidence.rs`, and `runtime.rs` modules, in addition to its
+storport-specific modules. Later product SPECs may require extra named tests on
+those shared sources as evidence without creating a second coverage owner.
+
 - [x] `cargo fmt --all -- --check`
 - [x] `cargo clippy -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets -- -D warnings`
 - [x] `cargo test -p ramshared-cuda -p ramshared-block -p ramshared-winsvc`

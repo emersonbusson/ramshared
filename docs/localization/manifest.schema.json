@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ramshared.dev/schemas/localization-manifest.schema.json",
+  "title": "RamShared localization manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "canonical_language", "current_policy", "protected_document_classes", "entries"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "canonical_language": { "const": "en" },
+    "current_policy": { "const": "informational-non-normative" },
+    "protected_document_classes": { "type": "array", "uniqueItems": true, "items": { "type": "string" } },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["canonical_source", "localized_path", "source_sha256", "translation_sha256", "state", "state_reason", "policy", "reviewer", "review_receipt", "reviewed_at"],
+        "properties": {
+          "canonical_source": { "type": "string", "minLength": 1 },
+          "localized_path": { "type": "string", "minLength": 1 },
+          "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "translation_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "state": { "enum": ["current", "stale", "partial"] },
+          "state_reason": { "type": ["string", "null"] },
+          "policy": { "const": "informational-non-normative" },
+          "reviewer": { "type": ["string", "null"] },
+          "review_receipt": { "type": ["string", "null"] },
+          "reviewed_at": { "type": ["string", "null"] }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "state": { "const": "current" } } },
+            "then": {
+              "properties": {
+                "state_reason": { "type": "null" },
+                "reviewer": { "type": "string", "minLength": 1 },
+                "review_receipt": { "type": "string", "minLength": 1 },
+                "reviewed_at": { "type": "string", "format": "date-time" }
+              }
+            },
+            "else": {
+              "properties": {
+                "state_reason": { "type": "string", "minLength": 1 },
+                "reviewer": { "type": "null" },
+                "review_receipt": { "type": "null" },
+                "reviewed_at": { "type": "null" }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -2,6 +2,32 @@
   "schema_version": 2,
   "entries": [
     {
+      "id": "wsl2-dual-plane-monitor",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/wsl2-control-plane-pressure-incident/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-cli",
+        "--files",
+        "crates/ramshared-cli/src/workload.rs,crates/ramshared-cli/src/supervisor.rs,crates/ramshared-cli/src/monitor.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/wsl2-control-plane-pressure-incident-cov.json"
+      ],
+      "packages": [
+        "ramshared-cli"
+      ],
+      "files": [
+        "crates/ramshared-cli/src/workload.rs",
+        "crates/ramshared-cli/src/supervisor.rs",
+        "crates/ramshared-cli/src/monitor.rs"
+      ],
+      "min": 80
+    },
+    {
       "id": "cascade-lifecycle-observability",
       "kind": "rust-line-coverage",
       "spec": "docs/specs/no-milestone/cascade-lifecycle-observability/SPEC.md",
@@ -37,7 +63,7 @@
         "-p",
         "ramshared-cli",
         "--files",
-        "crates/ramshared-cli/src/cascade/cascade_io.rs",
+        "crates/ramshared-cli/src/bounded_process.rs,crates/ramshared-cli/src/cascade/cascade_io.rs",
         "--min",
         "80",
         "--report-json",
@@ -47,6 +73,7 @@
         "ramshared-cli"
       ],
       "files": [
+        "crates/ramshared-cli/src/bounded_process.rs",
         "crates/ramshared-cli/src/cascade/cascade_io.rs"
       ],
       "min": 80
@@ -105,7 +132,7 @@
         "-p",
         "ramshared-winsvc",
         "--files",
-        "crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/ipc.rs,crates/ramshared-winsvc/src/package.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/evidence.rs",
+        "crates/ramshared-winsvc/src/ipc.rs,crates/ramshared-winsvc/src/package.rs",
         "--min",
         "80"
       ],
@@ -113,11 +140,8 @@
         "ramshared-winsvc"
       ],
       "files": [
-        "crates/ramshared-winsvc/src/config.rs",
         "crates/ramshared-winsvc/src/ipc.rs",
-        "crates/ramshared-winsvc/src/package.rs",
-        "crates/ramshared-winsvc/src/runtime.rs",
-        "crates/ramshared-winsvc/src/evidence.rs"
+        "crates/ramshared-winsvc/src/package.rs"
       ],
       "min": 80
     },
@@ -186,8 +210,7 @@
       "kind": "rust-test-only-localization-differential",
       "spec": "docs/specs/no-milestone/comment-language-integrity/SPEC.md",
       "files": [
-        "crates/ramshared-cuda/src/lib.rs",
-        "crates/ramshared-wsl2d/src/backend.rs"
+        "crates/ramshared-cuda/src/lib.rs"
       ],
       "verifications": [
         {
@@ -202,26 +225,69 @@
               "evidence": "validation.md"
             }
           ]
-        },
-        {
-          "source": "crates/ramshared-wsl2d/src/backend.rs",
-          "package": "ramshared-wsl2d",
-          "test_module": "tests",
-          "cargo_test": ["cargo", "test", "-p", "ramshared-wsl2d", "--lib"],
-          "ignored_gpu_tests": [
-            {
-              "name": "vram_backend_serves_nbd_write_then_read",
-              "command": ["cargo", "test", "-p", "ramshared-wsl2d", "backend::tests::vram_backend_serves_nbd_write_then_read", "--", "--ignored", "--test-threads=1"],
-              "evidence": "validation.md"
-            },
-            {
-              "name": "vram_gauge_outros_captures_real_graphics_usage",
-              "command": ["cargo", "test", "-p", "ramshared-wsl2d", "backend::tests::vram_gauge_outros_captures_real_graphics_usage", "--", "--ignored", "--test-threads=1"],
-              "evidence": "validation.md"
-            }
-          ]
         }
       ]
+    },
+    {
+      "id": "memory-broker-wsl2d-backend",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/memory-broker/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-wsl2d",
+        "--files",
+        "crates/ramshared-wsl2d/src/backend.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/memory-broker-wsl2d-backend-cov.json"
+      ],
+      "packages": ["ramshared-wsl2d"],
+      "files": ["crates/ramshared-wsl2d/src/backend.rs"],
+      "min": 80
+    },
+    {
+      "id": "memory-broker-wsl2d-backend-gpu-test-relocation",
+      "kind": "rust-ignored-test-relocation",
+      "spec": "docs/specs/no-milestone/memory-broker/SPEC.md",
+      "files": ["crates/ramshared-wsl2d/src/backend.rs"],
+      "base_revision": "69f7469fa999b7d079341ee6bf8ebb006d517b51",
+      "base_source_sha256": "b58d99366164b7e898baa42492fead82416a6169ec06ce16fb274b06b6d99663",
+      "verification": {
+        "source": "crates/ramshared-wsl2d/src/backend.rs",
+        "package": "ramshared-wsl2d",
+        "test_module": "tests",
+        "ignored_test_source": "crates/ramshared-wsl2d/tests/backend_gpu.rs",
+        "ignored_test_target": "backend_gpu",
+        "relocation_imports": {
+          "base": [
+            "use super::*;",
+            "use ramshared_block::{Command, Request, serve};",
+            "use ramshared_cuda::Cuda;"
+          ],
+          "head": [
+            "use ramshared_block::{Command, Request, serve};",
+            "use ramshared_cuda::Cuda;",
+            "use ramshared_wsl2d::VramBackend;"
+          ]
+        },
+        "ignored_gpu_tests": [
+          {
+            "name": "vram_backend_serves_nbd_write_then_read",
+            "command": ["cargo", "test", "-p", "ramshared-wsl2d", "--test", "backend_gpu", "vram_backend_serves_nbd_write_then_read", "--", "--ignored", "--test-threads=1"],
+            "historical_command": ["cargo", "test", "-p", "ramshared-wsl2d", "backend::tests::vram_backend_serves_nbd_write_then_read", "--", "--ignored", "--test-threads=1"],
+            "evidence": "validation.md"
+          },
+          {
+            "name": "vram_gauge_outros_captures_real_graphics_usage",
+            "command": ["cargo", "test", "-p", "ramshared-wsl2d", "--test", "backend_gpu", "vram_gauge_outros_captures_real_graphics_usage", "--", "--ignored", "--test-threads=1"],
+            "historical_command": ["cargo", "test", "-p", "ramshared-wsl2d", "backend::tests::vram_gauge_outros_captures_real_graphics_usage", "--", "--ignored", "--test-threads=1"],
+            "evidence": "validation.md"
+          }
+        ]
+      }
     },
     {
       "id": "memory-broker-agent-cli",
@@ -586,6 +652,60 @@
         "ramshared-tier",
         "--all-targets"
       ]
+    },
+    {
+      "id": "wsl2-revocable-vram-origin-block",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/wsl2-revocable-vram-origin/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-block",
+        "--files",
+        "crates/ramshared-block/src/isolated_origin.rs,crates/ramshared-block/src/lib.rs,crates/ramshared-block/src/origin_cache.rs,crates/ramshared-block/src/request.rs,crates/ramshared-block/src/vram_backend.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/wsl2-revocable-vram-origin-block-cov.json"
+      ],
+      "packages": [
+        "ramshared-block"
+      ],
+      "files": [
+        "crates/ramshared-block/src/isolated_origin.rs",
+        "crates/ramshared-block/src/lib.rs",
+        "crates/ramshared-block/src/origin_cache.rs",
+        "crates/ramshared-block/src/request.rs",
+        "crates/ramshared-block/src/vram_backend.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "wsl2-native-vram-autotier",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/wsl2-native-vram-autotier/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-wsl2d,ramshared-dxg",
+        "--files",
+        "crates/ramshared-wsl2d/src/autotier.rs,crates/ramshared-dxg/src/lib.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/wsl2-native-vram-autotier-cov.json"
+      ],
+      "packages": [
+        "ramshared-wsl2d",
+        "ramshared-dxg"
+      ],
+      "files": [
+        "crates/ramshared-wsl2d/src/autotier.rs",
+        "crates/ramshared-dxg/src/lib.rs"
+      ],
+      "min": 80
     }
   ]
 }

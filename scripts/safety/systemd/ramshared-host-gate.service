@@ -1,0 +1,13 @@
+[Unit]
+Description=RamShared durable host safe-mode gate importer
+After=local-fs.target
+Before=ramshared-cascade.service docker.service containerd.service cron.service
+
+[Service]
+Type=oneshot
+Slice=ramshared-control.slice
+ExecStart=/opt/ramshared/current/scripts/safety/ramshared-host-gate.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

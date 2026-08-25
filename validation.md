@@ -3867,3 +3867,1634 @@ this evidence and requires a new target rather than overwrite or tag movement.
 **Verdict:** ✅ The exact beta is publicly published with four independently
 verified assets, App-only mutation authority, human environment approval, and
 an idempotent terminal state.
+
+## 2026-08-12 10:58 -03 — WSL2 NBD 1 GiB supervised activation
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0007`.
+**Owner role:** `wsl2-nbd-operator`.
+**Observed at:** `2026-08-12T13:56:34Z`.
+**Verified at:** `2026-08-12T13:58:08Z`.
+**Source revision:** `0b09518c530253a3219326ae3c0fe006e60ef99c`.
+**Lifecycle:** `reviewable`.
+**Retention:** Preserve the sanitized before/action/after receipts under
+`docs/specs/no-milestone/wsl2-nbd-product-readiness/evidence/2026-08-12-live/`.
+**Freshness:** Revalidate after any NBD lifecycle, sealed-release, daemon,
+Relay, or swap-order change.
+**What:** Installed the sealed WSL2 NBD release with explicit approval,
+migrated the inactive legacy unit by exact SHA-256, and activated the approved
+1 GiB NBD pilot without a reboot.
+**Historical/non-current activation boundary:** This activation is retained as
+dated evidence only. It is superseded and does not authorize execution on the
+current disabled candidate.
+**Category:** `wsl2-nbd-live`.
+**How to measure:** `ramshared status`; `/proc/swaps`; `wsl-relay-health.sh
+--check`; `nbd-product-preflight.sh --check`; the approved `cascade-up.sh
+--execute`; and `readlink /proc/<ramsharedd-pid>/exe` under `sudo`.
+**Measured data:** Before activation, only `SANITIZED_EXISTING_WSL_SWAP_DEVICE` swap was present
+(4,194,304 KiB, priority -2, 3,518,416 KiB used), Relay reported zero
+candidates, and product preflight reported `PRODUCT_OFF`. The unprivileged
+action refused with `I/O: Permission denied` before device creation. The
+approved `sudo` action created `/dev/zram0` and `/dev/nbd0`, each 1,048,572
+KiB, at priorities 200 and 100 respectively; `SANITIZED_EXISTING_WSL_SWAP_DEVICE` remained at -2.
+After activation the daemon PID was 2062165 and both executable paths resolved
+to the sealed `v0.8.0-8-g0b09518` binary; preflight reported
+`NBD_BINARY_MATCH=PASS`, `NBD_TRANSPORT=nbd`, `NBD_PRODUCT_STATE=READY`, and
+Relay remained `CLEAN` with zero candidates. The unit remained inactive and
+disabled; no reboot occurred.
+**Refusals:** Missing operator privilege produced `I/O: Permission denied`
+without creating an NBD device or daemon. The initial installer path had also
+refused the mismatched legacy unit before the exact SHA-scoped migration
+approval was supplied.
+**Rollback trigger:** Any failed `swapoff`, remaining managed NBD/ublk swap,
+Relay candidate, binary mismatch, ghost state, or priority ordering other than
+zram 200 > NBD 100 > disk -2 requires the named safe teardown rather than a
+second activation.
+**Verdict:** 🟡 The real 1 GiB WSL2 NBD activation and identity checks passed.
+The required 1/2/4 GiB benchmark matrix with n>=3 and median/p99/deviation is
+not yet run, so this does not claim index-quality DONE.
+
+## 2026-08-14 00:59 -03 — WSL2 NBD Attempt29 P1 timeout refusal
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0008`.
+**Owner role:** `wsl2-nbd-operator`.
+**Observed at:** `2026-08-14T00:54:32-03:00`.
+**Verified at:** `2026-08-14T00:59:39-03:00`.
+**Source revision:** `a60c898ec6d938e6828d879d41a4b2ea0c7b6b21`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the host-private campaign root and the two committed
+SHA-256 identities below; do not promote partial cell artifacts.
+**Freshness:** Revalidate after any timeout-budget, worker-integrity, cgroup,
+controller, CUDA, NBD, or cleanup change.
+**What:** Ran the approved canonical Windows/WSL2 matrix with stop-first-RED
+against the exact sealed release. The first P1 idle disk-only cell refused on
+its second sample before NBD or any bounded/CUDA condition ran.
+**Category:** `wsl2-nbd-live`.
+**How to measure:** Canonical controller PlanOnly followed by the approved live
+controller; inventory byte/hash verification; exact terminal pinned preflight;
+and read-only process, cgroup, swap, NBD, and service residue inspection.
+**Measured data:** Run one completed `3584 MiB`, HOLD, occupancy, and checksum;
+allocation-to-HOLD was `114056 ms`, the integrity worker exited zero, and no
+cgroup `oom_kill` increment was observed. Run two reached only `2048/3584 MiB`
+before the 120-second HOLD deadline and emitted `SAMPLE_TIMEOUT`. The matrix
+stopped `RED/failed_pair`; NBD and bounded cells did not run, so no CUDA VRAM
+allocation was expected. All 36 inventory records verified. Matrix-summary
+SHA-256 is `3f85c9948dc8c733b06351c029bc7a2a1512574cdc1ee8fdd8abfe41b78ef33e`;
+inventory SHA-256 is
+`e1d62c1c7a0d349624a8b68a309830495b67b2a2aa3c5efdd24b20a55b558fa9`.
+**Refusals:** No completed pair or public evidence was produced. Terminal
+pinned preflight returned `PRODUCT_OFF`; no managed swap, worker, daemon,
+CUDA process, benchmark cgroup, or NBD attachment remained. The pre-existing
+`SANITIZED_EXISTING_WSL_SWAP_DEVICE` swap was not changed.
+**Rollback trigger:** Any timeout promotion, public evidence from this partial
+cell, terminal state other than exact `PRODUCT_OFF`, residual managed resource,
+or mutation of `SANITIZED_EXISTING_WSL_SWAP_DEVICE` invalidates the campaign and blocks another run.
+**Verdict:** 🟡 The refusal and cleanup are valid diagnostic evidence. The
+source-only P1 policy successor (`240 s` HOLD, independent `120 s` integrity)
+must be committed, resealed, and exercised by a fresh complete matrix before
+qualification or PR promotion.
+
+## 2026-08-14 02:52 -03 — WSL2 NBD Attempt30 complete matrix
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0009`.
+**Owner role:** `wsl2-nbd-operator`.
+**Observed at:** `2026-08-14T01:17:39-03:00`.
+**Verified at:** `2026-08-14T02:52:22-03:00`.
+**Source revision:** `a365bda0daf89a9707159b86efca8c1ba1ac760b`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the host-private 551-entry campaign and the six copied
+repository pair-custody/comparison records; the compact public records remain
+in `docs/benchmarks/results.jsonl`.
+**Freshness:** Revalidate after any benchmark policy, worker-integrity, cgroup,
+controller, CUDA, NBD, evidence-custody, or cleanup change.
+**What:** Ran the approved canonical Windows/WSL2 matrix against the exact
+sealed release. All 12 P1/P2/P4 idle/bounded disk-only/NBD cells and all 36
+samples completed with integrity, occupancy, and cleanup.
+**Category:** `wsl2-nbd-live`.
+**How to measure:** Canonical PlanOnly followed by the approved live controller;
+per-cell `BINARY_MATCH`; pair-scoped CUDA custody; inventory byte/hash
+verification; repository public-evidence validation; terminal pinned preflight;
+and read-only process, cgroup, swap, NBD, service, and VRAM residue inspection.
+**Measured data:** Every NBD cell retained `BINARY_MATCH=PASS`; every bounded
+pair held one CUDA context across disk-only then NBD and released it without
+force. Matrix-summary SHA-256 is
+`42fa3e1a00dd7e7c16f0c92196f69622ac9212c9fb889e858f6e40769af292af`.
+The 551-entry inventory SHA-256 is
+`58a959fd82d29b6c503382a98d82a4bbf57bb90dc94ffaf2fdc2dfa6e985aece`,
+and every listed byte count and hash verified. All six public pair records pass
+the repository validator as `BASELINE`/nonpromotable because no prior canonical
+baseline exists.
+**Refusals:** No timeout, integrity, identity, cleanup, or evidence refusal
+occurred. The absence of a prior canonical baseline prevents promotion of the
+six baseline records but does not invalidate the completed live matrix.
+**Rollback trigger:** Any matrix/inventory hash mismatch, NBD identity drift,
+failed public custody record, cell or terminal state other than exact
+`PRODUCT_OFF`, residual managed resource, forced CUDA release, or mutation of
+the pre-existing `SANITIZED_EXISTING_WSL_SWAP_DEVICE` invalidates this evidence.
+**Verdict:** 🟢 The complete sealed 1/2/4 GiB idle/bounded disk-only/NBD
+matrix passed with n=3 per cell. Live qualification is complete; Gate B,
+hosted required checks, PR review, and merge remain open.
+
+## 2026-08-14 07:54 -03 — Protected beta publication
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0010`.
+**Owner role:** `release-operator`.
+**Observed at:** `2026-08-14T10:50:48Z`.
+**Verified at:** `2026-08-14T10:54:33Z`.
+**Source revision:** `f03f4e7a33cd64e8614532916294ab9628ce1aba`.
+**Lifecycle:** `immutable`.
+**Immutability reason:** Public release ID `370457260`, tag
+`v0.9.0-beta.1`, immutable tag commit, and public asset digests are retained by
+GitHub; the exact protected run and integrity run IDs remain auditable.
+**What:** Published the exact RamShared beta through the GitHub App-authored
+repository dispatch and the manually approved `protected-release` environment,
+then independently downloaded and revalidated the public asset quartet.
+**Category:** `ci-gate release-publication`.
+**How to measure:** `gh run view 31793790581`; `gh api
+repos/emersonbusson/ramshared/releases/tags/v0.9.0-beta.1`; `gh release download
+v0.9.0-beta.1 -R emersonbusson/ramshared`; detached `sha256sum -c`; and
+`node tools/ci/check-release-integrity.mjs --check` with the exact tag source
+lock.
+**Measured data:** Human request run `31793772726` delegated to App-authored
+run `31793790581`; every protected step passed. Release ID `370457260` is
+`draft=false`, `prerelease=true`, published at `2026-08-14T10:50:48Z`, and its
+tag resolves to `361427a63cbeb2a8b0ecafb224adeecb0539af9b`. Exactly four assets
+exist: archive `1169645` bytes / SHA-256
+`f525f04ec536d52c57ea7708e0324152e931d2ee30d3885496a639f959972b3b`;
+detached checksum `103` bytes /
+`d2d1e2042fad0dd87035f9c6cee7d8ed14fe7909c7236fb9f2820ecfd8c4b2bb`;
+SBOM `30233` bytes /
+`d3ea9c0add12c6103be7cef6d43431b16cd2928c53b9d78d2420792fbdc044b8`;
+manifest `3101` bytes /
+`73bab87773a39304053364c77e70192cd45a653f32c91502e4716ddd1013aed6`.
+The detached checksum and complete manifest/source-lock validation passed.
+**Refusals:** Runs `31791853476` and `31792525304` stopped before upload;
+run `31793116494` uploaded the exact quartet but stopped before visibility.
+The successful replay found no missing asset, patched only the cardinally
+selected release ID, and ended in the idempotent `NO_CHANGE` state.
+**Rollback trigger:** Any tag SHA other than the exact 40-hex revision, release
+ID other than `370457260`, asset count other than `4`, digest mismatch,
+`draft=true`, `prerelease=false`, or non-App protected publisher invalidates
+this evidence and requires a new target rather than overwrite or tag movement.
+**Verdict:** ✅ The exact beta is publicly published with four independently
+verified assets, App-only mutation authority, human environment approval, and
+an idempotent terminal state.
+
+## 2026-08-20 17:03 -03 — Control containment and revocable-origin source candidate
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0011`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-20T17:03:32-03:00`.
+**Verified at:** `2026-08-20T17:03:32-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only summary, the uncommitted working-tree
+diff based on the stated revision until review, and the ignored local coverage
+JSON under `tmp/`. This entry does not claim the unchanged base revision
+contains the candidate.
+**Freshness:** Revalidate after any control threshold, reservation/recovery,
+guardian proof gate, origin durability/cache policy, systemd hierarchy, or
+daemon identity change; replace with committed same-revision evidence before
+promotion.
+**What:** Validated the source/static candidate for aggregate WSL2 control-plane
+containment, schema v4, the independent Windows guardian, safe-mode recovery,
+and the SSD-authoritative revocable VRAM cache. No host installation, VHDX,
+device, swap, GPU, pressure, Docker restart, WSL lifecycle, or publication
+action ran.
+**Category:** `local-check`.
+**How to measure:** Run `cargo test --workspace --no-fail-fast`; selected
+Clippy with warnings denied; the two canonical Rust slice-coverage commands in
+the control/origin SPECs; the four safety shell suites; and
+`scripts/windows/Test-WindowsCiStatic.ps1` under PowerShell 5.1.
+**Measured data:** Workspace tests exited 0; the CLI candidate passed 135 unit
+and 6 dispatch tests. Control line coverage was main 80.5%, workload 88.9%,
+supervisor 92.0%, lifecycle 95.1%, and monitor 87.9%. Origin line coverage was
+origin cache 94.2%, request 93.8%, sparse VRAM 93.3%, VRAM backend 91.6%,
+cascade I/O 86.6%, lifecycle 95.1%, daemon backend 94.1%, and daemon main
+80.1%. The NBD static preflight passed 37 cases; control-unit, reversible
+manager, postmortem, guardian, origin, launcher, and full Windows static suites
+all exited 0. Guardian/origin status commands returned plan-only state.
+**Refusals:** CUDA/root/ublk/live-device tests remained ignored; the physical
+origin was not opened; the guardian was not installed; no terminate or reboot
+route executed. Missing/stale guardian and supervisor observations are
+non-green, an old dxg boot warning is not classified as a crash, and the
+static contracts reject broad WSL shutdown and Windows reboot routes.
+**Rollback trigger:** Any acknowledged write absent from origin, GPU failure
+becoming I/O error while origin succeeds, aggregate reservation above
+`MemoryMax`, destructive supervisor replay during healthy hysteresis, guardian
+terminate before all four proofs, or automatic host reboot invalidates this
+candidate.
+**Verdict:** 🟡 Source/static and exact coverage gates pass. Disposable-VM
+VHDX/NBD/GPU/terminate matrices, attended installation, Docker/cron ancestry,
+and the staged 24-hour daily-host rollout remain open; no live qualification is
+claimed.
+
+## 2026-08-20 17:47 -03 — Control-plane closure regression audit
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0012`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-20T17:47:00-03:00`.
+**Verified at:** `2026-08-20T17:47:00-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only record and the uncommitted candidate
+worktree with EVD-0011 until the source changes receive review; no temporary
+fixture or package directory is promotion evidence.
+**Freshness:** Revalidate after any guardian child-process timeout, control
+plane installer/rollback, bundle payload, or localized README change.
+**What:** Closed two source-only safety regressions found during integration:
+a timeout cleanup in the Windows guardian could wait without a bound, and the
+disabled control-plane manager could change Docker configuration metadata or
+overwrite an operator edit during rollback. The sealed cascade installer now
+also requires the complete control-plane payload before a write-capable path.
+**Category:** `local-check`.
+**How to measure:** Run the named guardian static harness; the isolated
+user-namespace manager fixture; `test-nbd-product-preflight.sh`; the full
+PowerShell static suite; `docs-check`; Rust formatting, selected Clippy, and
+`cargo test --workspace --no-fail-fast`.
+**Measured data:** The guardian test was RED against its previous unbounded
+`WaitForExit()` cleanup and GREEN after it disposed the timed-out process
+without a second unbounded wait. The manager fixture preserved a `0600` Docker
+configuration, refused an operator-modified replacement, then restored the
+exact original configuration and removed only its own units. The NBD preflight
+suite passed `38` cases, including
+`installer_requires_control_plane_payload`; the temporary bundle audit verified
+all new control-plane files and `SHA256SUMS`. PowerShell parser/full static,
+docs-check, `cargo fmt --all -- --check`, selected warnings-denied Clippy, and
+the workspace tests all exited zero.
+**Refusals:** No scheduled task, VHDX, disk, Docker configuration, unit,
+swap, GPU pressure, WSL lifecycle, reboot, or external publication action ran.
+CUDA/root/ublk live tests remained environment-gated.
+**Rollback trigger:** Any guardian child cleanup that blocks beyond its declared
+deadline, manager rollback that overwrites changed configuration, or installer
+acceptance of a bundle missing a required control-plane file invalidates this
+source-only result.
+**Verdict:** 🟡 Local safety and packaging contracts are green. Disposable-VM
+and attended daily-host rollout evidence remains required before installation,
+activation, or release qualification.
+
+## 2026-08-20 18:17 -03 — Nested WSL lab readiness and cleanup requalification
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0013`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-20T21:09:57Z`.
+**Verified at:** `2026-08-20T21:17:47Z`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only summary and the sanitized local
+host-private probe receipts until the guest credential is restored and a fresh
+readiness probe supersedes them. Do not publish their filesystem paths.
+**Freshness:** Revalidate after any guest credential, VM identity/VHD,
+checkpoint, PowerShell Direct helper, WSL installation/service, or probe
+cleanup change.
+**What:** Requalified the existing approved `SANITIZED_VM_WSL2_LAB` boundary without
+repairing or pressuring it, then hardened its readiness probe after a live
+cleanup counterexample. The probe is now plan-first, exact-VM-ID bound, zero-
+checkpoint and VM-owned-VHD gated, uses the shared bounded PowerShell Direct
+transport, emits sanitized probe/cleanup reasons, and restores a VM it started
+through a separately bounded graceful host fallback when guest transport is
+unavailable.
+**Category:** `local-check`.
+**How to measure:** Run the probe in `plan` mode; run one explicitly approved
+`probe -Start -Run` against the exact observed VM ID; observe the exact VM state
+and checkpoint count afterward; execute
+`Test-Win11WslRuntimeProbeStatic.ps1`, the PowerShell parser, and the full
+`Test-WindowsCiStatic.ps1` suite.
+**Measured data:** Host preflight observed one Off Generation-2 VM with four
+vCPUs, 4 GiB startup memory, nested virtualization exposed, automatic
+checkpoints disabled, zero snapshots, and one contract-matching VM-owned VHDX.
+The first probe could not establish PowerShell Direct and also could not use
+that same transport for cleanup; a normal Hyper-V graceful stop restored Off.
+After the RED test and fix, the second probe returned
+`powershell_direct_auth_failed` plus `restored_off_host_fallback`; an independent
+after-observation reported Off and zero snapshots. The full Windows static
+suite and parser exited zero. Both probe records report
+`DISK_MUTATION=false`.
+**Refusals:** The authenticated guest probe never began, so this evidence does
+not claim current WSL service state, nested WSL readiness, distro readiness, or
+resolution of the historical WSL command timeouts. No credential reset,
+reimage, WSL repair/install, forced VM power-off, checkpoint, disk operation,
+pressure, terminate, Docker restart, daily-host WSL lifecycle, or Windows
+reboot occurred.
+**Rollback trigger:** Any probe that starts a VM before exact identity and
+approval gates, leaks a started VM without a typed cleanup failure, uses the
+forbidden `Stop-VM -TurnOff`/`-Force` route, persists a secret/raw authentication error, changes
+a guest disk, or reports WSL readiness without successful authenticated
+bounded commands invalidates this evidence.
+**Verdict:** 🟡 The lab lifecycle boundary and graceful cleanup fallback are
+live-proven, but the current guest credential is rejected. Nested WSL readiness
+and every destructive control-plane/origin matrix remain open.
+
+## 2026-08-20 19:23 -03 — Reversible nested-lab credential diagnosis
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0014`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-20T19:04:45-03:00`.
+**Verified at:** `2026-08-20T19:23:26-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** The bounded-probe and offline-recovery changes remain
+an uncommitted candidate.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the private host-side SAM backup/restore receipts and
+sanitized probe summaries under the local artifact root. Do not commit an
+artifact path, VHD hash, guest password, account material, or raw authentication
+error.
+**Freshness:** Revalidate after any lab credential, VM/VHD identity, offline
+recovery helper, PowerShell Direct helper, guest WSL installation, or cleanup
+policy change.
+**What:** Diagnosed whether the existing approved nested Windows lab could
+reach its WSL runtime through a reversible credential recovery path. The path
+used only the exact VM-owned VHD while the VM was Off, saved the original SAM,
+reset a working copy to a temporary empty password, ran a bounded probe, and
+restored the original SAM before closing the attempt.
+**Category:** `local-check`.
+**How to measure:** Require exact VM ID and VHD hash preflight, VM Off, zero
+checkpoints, one matching VHD, and detached state; use the plan-first offline
+recovery helper with explicit repair/blank-password approvals; run the
+bounded nested WSL probe; restore the recorded original SAM; then observe VM
+Off, VHD detached, and zero checkpoints. Run the named blank-credential,
+probe, and full Windows static suites.
+**Measured data:** The preflight observed 1 approved VM, 1 matching detached
+VHD, and 0 checkpoints. Three private hash checks (backup, repair copy-back,
+and restore) were distinct and verified. The first empty-password probe
+exposed a local helper defect: an empty string was passed to the text-password
+conversion before PowerShell Direct. After the helper changed to construct an
+explicit empty secure credential only behind the opt-in, the guest returned
+`powershell_direct_auth_failed`. The retrying graceful fallback returned the
+VM to Off. The original SAM then restored with a matching verification hash.
+A separate intentionally rejected-credential regression also returned
+`restored_off_host_fallback`; final host observation was Off, VHD detached,
+and 0 snapshots.
+**Refusals:** The guest did not authenticate, so no guest WSL command, WSL
+service observation, distro observation, guardian install, origin VHDX action,
+swap action, GPU action, Docker action, pressure campaign, targeted WSL
+terminate, broad WSL shutdown, forced VM power action, or Windows reboot ran.
+The temporary blank password was not retained.
+**Rollback trigger:** Any SAM backup/restore hash mismatch, VM left Running,
+attached VHD, checkpoint residue, the forbidden `Stop-VM -TurnOff`/`-Force` route, secret or
+raw authentication persistence, or readiness claim without an authenticated
+guest command invalidates this evidence.
+**Verdict:** 🟡 Nested virtualization is exposed, but it does not establish
+nested WSL2 readiness. The current Windows image rejects both available
+PowerShell Direct credential paths, so a console-supported repair, a managed
+reimage of this same approved lab, or a physical Windows surface is required
+before WSL2/GPU/guardian qualification can continue.
+
+## 2026-08-20 19:47 -03 — Final origin-detach and guardian child-bound audit
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0015`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-20T19:34:00-03:00`.
+**Verified at:** `2026-08-20T19:47:17-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** The origin provisioner and guardian improvements remain
+an uncommitted source candidate.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only result, the source diff, and the local
+static-suite transcript. Do not retain or publish VM identity, disk identity,
+credential, or raw child-process diagnostics.
+**Freshness:** Revalidate after any origin provisioner, Windows child-process
+deadline, guardian task, or static-test change.
+**What:** Closed two source-only lifecycle gaps: the origin VHDX provisioner
+now detaches the VHDX in an install `finally` block, leaving runtime attachment
+to the guardian; the guardian now drains redirected client output under a
+deadline and terminates only the timed-out client process tree.
+**Category:** `local-check`.
+**How to measure:** Run `Test-RamSharedOriginStatic.ps1` and
+`Test-RamSharedWslWatchdogStatic.ps1` before and after the source change; then
+run `Test-WindowsCiStatic.ps1` and parse both changed scripts under PowerShell
+5.1.
+**Historical non-current / no execution:** The dated source/static receipt below
+is evidence only; it does not authorize a VHD or driver operation.
+**Measured data:** The new origin assertion was RED with 0 `Dismount-VHD`
+install-finally paths, then GREEN with 1 bounded detach path. The guardian
+contract was RED without asynchronous pipe drain/tree cleanup, then GREEN with
+2 redirected-stream drains, 1 bounded `taskkill` child-tree path, and no
+unbounded `WaitForExit()`. The full Windows static suite exited 0.
+**Refusals:** No guardian task, VHDX, disk, swap, GPU action, Docker action,
+guest command, WSL terminate, broad WSL shutdown, VM power action, or Windows
+reboot ran for this source audit.
+**Rollback trigger:** Any provisioner path that leaves a newly mounted origin
+VHDX attached after install, or any guardian timeout path that can block on an
+undrained pipe or leave its own child tree running, invalidates this evidence.
+**Verdict:** 🟡 The source contracts are stronger and green. This does not
+qualify an origin VHDX or a guardian termination on live hardware.
+
+## 2026-08-20 21:13 -03 — Disposable lab autologon and WSL readiness recovery
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0016`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-20T20:35:00-03:00`.
+**Verified at:** `2026-08-20T21:13:01-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** The persistent-autologon and UTF-16LE probe corrections
+remain an uncommitted source candidate.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the private verified pre-reimage VHD backup, the sealed
+local installer media, and sanitized readiness artifacts on the Windows host.
+Do not commit their paths, hashes, VM identity, account material, or password.
+**Freshness:** Revalidate after any lab image, unattended-media contract,
+credential, Winlogon policy, WSL package/distro, PowerShell Direct helper, or
+runtime-probe change.
+**What:** Recoverably reimaged the existing approved `SANITIZED_VM_WSL2_LAB`, made its
+console non-interactive for the life of the disposable image, restored bounded
+PowerShell Direct, installed current WSL through the official web-download
+path, and revalidated the nested WSL runtime.
+**Category:** `local-check`.
+**How to measure:** Require the exact Off Generation-2 VM, zero checkpoints,
+one exact VM-owned VHD, nested virtualization, vTPM, a local credential source,
+and a byte-count/SHA-256-verified rollback copy. Build and validate no-prompt
+media with an embedded sealed answer file; prove VHD activity and return the
+next boot to the exact VHD. After `IMAGE_STATE_COMPLETE`, configure persistent
+lab-only Winlogon without `AutoLogonCount` or `AutoLogonSID`, reboot, and require
+the `SANITIZED_LAB_USER` interactive user plus Explorer. Install WSL under a transient
+highest-run-level task, then run bounded `wsl --status` and `wsl -l -v` through
+the exact-ID runtime probe.
+**Measured data:** The first 4 GiB VM start refused with host error
+`0x800705AA`; a clean WSL page-cache reclaim raised Windows free memory without
+terminating the distro, and the retry started normally. Setup completed with
+zero checkpoints. Live evidence disproved `LogonCount=9999`: OOBE selected
+`defaultuser0` and consumed the count. A post-OOBE Winlogon configuration with
+no count/SID survived a proved reboot, produced the interactive
+`SANITIZED_PRINCIPAL_WSL2_LAB` Explorer session, and allowed removal of the
+temporary OOBE account. The WSL install task returned zero and was unregistered.
+An initial runtime probe missed the installed distro because redirected
+`wsl.exe` output was UTF-16LE; the named static test was RED, then GREEN after
+setting both redirected stream encodings to Unicode. The final live probe was
+`PASS / wsl_runtime_ready`; service, status, list, and exact distro gates passed
+within their deadlines.
+**Refusals:** No new VM, checkpoint, host disk, daily-host WSL lifecycle,
+artificial pressure, Docker restart, origin VHDX, RamShared swap, guardian
+termination, broad WSL shutdown, Windows-host reboot, commit, or publication
+occurred. The destructive scope was only the disposable VM-owned guest disk;
+the prior VHD remains recoverable from its verified private backup.
+**Rollback trigger:** Any backup mismatch, foreign disk, checkpoint residue,
+secret leakage, autologon on the daily host, consumable/identity-confused
+Winlogon state, missing interactive-user proof, unbounded WSL child, NUL-bearing
+probe evidence, or readiness result without successful bounded status/list and
+exact distro presence invalidates this result.
+**Verdict:** ✅ The existing isolated Windows lab is unlocked and WSL-runtime
+ready. 🟡 Destructive guardian, origin, GPU, and pressure matrices remain open.
+
+## 2026-08-20 21:42 -03 — Interactive-auth suppression and final media seal
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0017`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-20T21:22:00-03:00`.
+**Verified at:** `2026-08-20T21:42:38-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** The complete disposable-lab unlock contract remains an
+uncommitted source candidate.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the sealed private installer, its private answer file,
+the verified rollback VHD, and sanitized probe receipt. Do not publish their
+paths, hashes, VM identity, or credential material.
+**Freshness:** Revalidate after any unattended-media, Winlogon, screen-saver,
+power-policy, guest account, or runtime-probe change.
+**What:** Extended the lab-only post-OOBE contract so a future clean install
+reproduces the live unlocked console state instead of relying on manual repair.
+**Category:** `local-check`.
+**How to measure:** Decode the manufactured canonical post-OOBE command and
+require screen-saver disablement, non-secure screen saver, zero screen-saver
+timeout, disabled workstation lock, and zero machine inactivity timeout. Seal
+that exact command into no-prompt media, require matching external/embedded
+answer hashes and the EFI no-prompt boot image, then mount only the validated
+media on the exact snapshot-free VM. Re-read the live user/policies and rerun
+the exact-ID bounded WSL runtime probe.
+**Measured data:** The named media test was RED at missing `ScreenSaveActive`,
+then GREEN after all 5 interactive-auth surfaces were added. Live policy
+readback returned zero for screen-saver active/secure/timeout and inactivity,
+no screen-saver executable, and disabled workstation lock. The interactive
+user remained `SANITIZED_LAB_USER` with Explorer, persistent count-free Winlogon, and a
+non-expiring password. The rebuilt media matched its sealed answer hash, used
+the no-prompt EFI image, and was mounted with Windows Boot Manager still first,
+one exact VM-owned VHD, and zero checkpoints. The final bounded WSL probe passed
+`wsl_runtime_ready` without starting or stopping the already-running VM.
+**Cleanup:** Removed only two superseded private ISOs, their two answer files,
+and three exact staging trees. They are not directly recoverable but are fully
+regenerable from the retained source ISO and repository scripts. The rollback
+VHD was preserved.
+**Refusals:** No pressure, origin VHDX, RamShared swap, Docker restart,
+guardian termination, broad WSL shutdown, host reboot, commit, or publication
+occurred.
+**Rollback trigger:** Any interactive authentication prompt, reappearance of a
+consumable Winlogon count/SID, media hash mismatch, non-VHD first boot, snapshot
+residue, or failed bounded WSL status/list gate invalidates this evidence.
+**Verdict:** ✅ The existing disposable Windows lab and its retained reinstall
+media are fully unlocked and WSL-runtime ready. 🟡 Destructive matrices remain
+open.
+
+## 2026-08-20 22:35 -03 — Isolated pressure-campaign execution preflight
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0018`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-20T22:29:00-03:00`.
+**Verified at:** `2026-08-20T22:35:37-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** The isolated campaign was authorized but did not pass its
+runtime execution gate; no pressure claim is made.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the sanitized host-private partial receipt. Do not publish
+its path, VM identity, credentials, raw command output, or private media.
+**Freshness:** Revalidate after any nested WSL runtime repair, WSL service
+change, guest reboot, source deployment, or pressure-harness change.
+**What:** Attempted the first approved isolated-only campaign gate on the
+existing disposable Windows lab, before source copy, storage setup, or pressure.
+**Category:** `local-check`.
+**How to measure:** Require one exact running Generation-2 VM, 0 checkpoints,
+one approved VHD, nested virtualization, and bounded PowerShell Direct. Require
+bounded WSL `--status` and `-l -v` queries plus one 15-second direct guest
+execution before preparing the campaign. On timeout, kill only the bounded WSL
+client, preserve a partial receipt, and do not run pressure or repair.
+**Measured data:** The VM had 0 checkpoints, one VHD, 4,096 MiB assigned, and
+4,403 MiB host free. WSL status and list each completed with exit 0; an initial
+direct `/bin/true` execution completed with exit 0. A subsequent read-only
+guest command exceeded its 15-second deadline. `WslService` and `vmcompute`
+remained `Running`, 0 WSL client processes remained after bounded cleanup, and
+the partial receipt records `pressure_attempted=false`, no storage mutation,
+no targeted termination, and no host reboot.
+**Refusals:** No repository copy, origin VHDX, zram, NBD, RamShared swap,
+GPU pressure, cgroup pressure, watchdog installation, WSL termination, broad
+WSL shutdown, host reboot, commit, or publication occurred.
+**Rollback trigger:** Any direct guest-execution timeout, nonzero bounded WSL
+query, checkpoint residue, foreign VHD, remaining client process, or attempted
+pressure without a complete execution gate keeps the campaign `PARTIAL`.
+**Verdict:** 🟡 The isolated VM remains intact but is not yet a stable pressure
+surface. Repair/reimage decisions require a new explicit authorization; the
+daily host remains out of scope.
+
+## 2026-08-20 23:22 -03 — Isolated campaign preparation and fail-closed pressure attempt
+
+**Historical non-current / no execution:** This dated VM-only preparation and
+campaign record is evidence only; it authorizes no current VM, WSL, swap, or pressure action.
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0019`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-20T23:18:44-03:00`.
+**Verified at:** `2026-08-20T23:22:17-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** The guest preparation and bounded isolated campaign
+attempt remain an uncommitted source candidate; no pressure result is claimed.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the sanitized guest-private baseline and campaign
+receipts. Do not publish their paths, VM identity, credentials, or raw child
+diagnostics.
+**Freshness:** Revalidate after any CUDA/WSL driver exposure, RamShared
+activation, kernel module change, swap topology change, guest reboot, or
+pressure-harness change.
+**What:** Prepared the exact disposable `SANITIZED_VM_WSL2_LAB` /
+`SANITIZED_WSL_DISTRO`
+surface by transferring only the seven required campaign files, verifying
+their guest SHA-256 values against the source, and restoring executable bits.
+The read-only baseline then ran with the explicit isolated-lab override. A
+bounded two-round campaign invocation was allowed to reach the pressure probe;
+the probe refused before cgroup creation or worker allocation because the
+required cascade was absent.
+**Category:** `local-check`.
+**Historical non-current / no execution:** The dated VM-only measurement recipe
+below is retained evidence only. It does not authorize a campaign, VM, WSL,
+swap, device, storage, or pressure action.
+**How to measure:** Require the already-recorded exact VM identity,
+Generation-2/zero-checkpoint/VM-owned-VHD gates and bounded PowerShell Direct;
+**Historical non-current / no execution:** The following dated campaign recipe
+is evidence only; do not run it on the current disabled candidate.
+verify all seven deployed file hashes and executability; run
+`wsl2-freeze-campaign.sh --dry-run --json`; run `ramshared check --json`; then
+**Historical non-current / no execution:** The following isolated-run flags are
+dated evidence only; do not execute them on the current disabled candidate.
+run `--allow-isolated-lab --run-isolated --rounds 2` with a 30-second
+watchdog. Validate the typed campaign receipt and post-run swap/process state.
+**Measured data:** The baseline classified the guest as isolated with
+`gates_ok=true`, no ghost daemon, no deleted swap, zero blocked processes,
+zero recent hung-task/OOM hits, and only the 1 GiB disk swap at priority `-2`.
+the read-only candidate check returned WSL2 `6.18.33.2`,
+`SANITIZED_GPU_DEVICE_NODE` present but
+CUDA blocked (`libcuda.so not found`), NBD support present but its module not
+loaded, and ublk disabled; the product decision was `blocked`. The campaign
+entered round 1 and stopped with `action_rc=1` at the explicit probe refusal:
+`need live zram + nbd + disk`. Post-run verification
+found the same disk-only swap with `0` used KiB, cascade health `OFF`, no
+`ramsharedd` process, and no pressure worker or cgroup residue. WSL emitted a
+systemd root-session warning on bounded invocations, but each requested command
+returned within its deadline.
+**Refusals:** No `ramshared up`, zram/NBD/origin VHDX, GPU allocation, cgroup
+pressure, Docker action, broad WSL shutdown, host reboot, or daily-host action
+ran. The campaign therefore provides fail-closed refusal evidence only, not a
+freeze-elimination or tier-order result.
+**Rollback trigger:** Any report of a successful pressure round without live
+zram + NBD + disk, any worker allocation before the probe gate, any ghost swap
+or daemon after cleanup, or any action on the daily host invalidates this
+evidence.
+**Verdict:** 🟡 The isolated guest source surface is prepared and the harness
+refuses safely, but the requested pressure campaign is blocked by the VM's
+missing CUDA/NBD/zram product surface. A future GPU-backed or separately
+qualified product-activation setup is required; the daily host remains out of
+scope.
+
+## 2026-08-20 23:31 -03 — GPU-PV and RamShared activation follow-up
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0020`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-20T23:24:00-03:00`.
+**Verified at:** `2026-08-20T23:31:00-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** The follow-up remains an uncommitted live candidate and
+does not promote the pressure matrix.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain sanitized VM-private receipts only; do not publish host
+GPU identity, credentials, or raw PowerShell/WSL diagnostics.
+**Freshness:** Revalidate after any GPU-PV adapter change, guest NVIDIA/CUDA
+installation, RamShared daemon change, or WSL kernel/module change.
+**What:** Checked whether the existing VM could supply the missing GPU-PV
+surface without changing the daily host. The host reported one partitionable
+GPU, but the exact `SANITIZED_VM_WSL2_LAB` had zero `VMGpuPartitionAdapter` entries.
+**Historical/non-current activation boundary:** The following failed VM-only
+activation attempt is retained as evidence of rollback. It is superseded and
+must not be repeated on the current disabled candidate.
+The historical product activation interface was then attempted inside the VM.
+**Measured data:** The historical interface created a sanitized zram device
+briefly and armed its forensics marker, then failed with `daemon did not start
+(socket missing)` and returned `UP_RC=1`. Its rollback left only
+`SANITIZED_EXISTING_WSL_SWAP_DEVICE` at priority `-2`; zram, NBD, daemon,
+runtime files, and the forensics marker were absent on the following read-only
+verification. No GPU-PV adapter was attached, no host GPU partition was
+reserved, and no VM power transition was needed.
+**Refusals:** No synthetic NBD, fake CUDA library, GPU-PV attachment, origin
+VHDX, Docker action, host-daily pressure, host reboot, or commit ran. A real
+campaign still requires a GPU-PV-qualified guest driver/daemon and live
+zram→NBD→disk topology.
+**Rollback trigger:** Any activation attempt that leaves zram, NBD, a daemon,
+or a forensics marker after a failed start, or any GPU-PV change without a
+bounded Off-state transition and readback, invalidates this evidence.
+**Verdict:** 🟡 The activation code rolls back correctly, but the VM has no
+GPU-PV adapter and its daemon cannot start. The isolated pressure campaign
+remains blocked; the daily host was untouched.
+
+## 2026-08-20 23:48 -03 — Reversible GPU-PV qualification attempt
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0021`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-20T23:35:00-03:00`.
+**Verified at:** `2026-08-20T23:48:00-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** The reversible GPU-PV qualification attempt remains an
+uncommitted live candidate and does not close CUDA or pressure gates.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain only sanitized transition receipts. Do not publish GPU
+partition identifiers, VM credentials, or raw PowerShell/guest diagnostics.
+**Freshness:** Revalidate after any VM firmware, GPU-PV, NVIDIA guest driver,
+WSL kernel, or Hyper-V resource change.
+**What:** Tested one bounded GPU-PV assignment on the exact disposable VM.
+The VM was shut down through the guest, one 1 GiB-minimum/1 GiB-optimal GPU
+partition was added while Off, and the VM was restarted for a single bounded
+`ramshared check --json`. Because the guest still had no CUDA runtime, the
+partition was removed through another graceful shutdown and the VM restarted.
+**Measured data:** Hyper-V accepted one adapter with VRAM/encode/decode/compute
+minimum `1` and maximum/optimal `1,000,000,000`. The guest remained WSL2
+`6.18.33.2` with `SANITIZED_GPU_DEVICE_NODE`, but `libcuda.so`, `nvidia-smi`, and a CUDA device
+were still absent; `ramshared check` remained `decision=blocked` with the
+CUDA blocker. Rollback readback reported adapter count `0`, VM `Running`, and
+normal status. No DDA device was assigned and no host reboot occurred.
+**Refusals:** No GPU pressure, cgroup pressure, RamShared activation, NBD,
+origin VHDX, Docker action, daily-host WSL lifecycle, or publication ran. The
+temporary GPU partition was fully returned before completion.
+**Rollback trigger:** Any GPU-PV attempt that leaves an adapter attached after
+CUDA refusal, leaves the VM Off, assigns DDA, or lacks exact pre/post adapter
+readback invalidates this evidence.
+**Verdict:** 🟡 Hyper-V GPU-PV assignment is technically accepted, but the
+guest image lacks the NVIDIA/CUDA stack required by RamShared. The adapter was
+removed cleanly; the pressure campaign remains blocked and the daily host was
+not pressured.
+
+## 2026-08-20 23:55 -03 — Guest/host GPU driver compatibility boundary
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0022`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-20T23:52:00-03:00`.
+**Verified at:** `2026-08-20T23:55:00-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** Read-only compatibility evidence; no guest driver
+installation was attempted.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain sanitized device/version observations only. Do not
+publish host paths, credentials, or raw driver-store diagnostics.
+**Freshness:** Revalidate after any host NVIDIA driver update, GPU-PV adapter
+change, guest image change, or Windows/WSL kernel update.
+**What:** Compared the host GPU stack with the exact guest after the adapter
+rollback to determine whether a supported userspace-only fix remained.
+**Measured data:** The host exposes `SANITIZED_GPU_MODEL` with
+`SANITIZED_HOST_DRIVER_VERSION` and private DriverStore packages. The guest
+enumerates only `SANITIZED_GUEST_DISPLAY_ADAPTER` with
+`SANITIZED_GUEST_DRIVER_VERSION`; `nvcuda.dll`, `nvml.dll`, and
+`nvidia-smi.exe` are absent. The final Hyper-V readback is `Running` with `0`
+GPU-PV adapters. This is a
+driver/device-stack boundary, not a missing RamShared file.
+**Refusals:** No driver package was copied or installed, no Windows PnP state
+was changed, no guest reboot beyond the already rolled-back GPU-PV transition
+was added, and no host-daily GPU or WSL pressure ran.
+**Rollback trigger:** Treating host DriverStore files or a CUDA userspace stub
+as guest CUDA proof, or installing an unqualified guest driver without a
+separate signed-package/rollback plan, invalidates this evidence.
+**Verdict:** 🟡 The remaining blocker is the guest NVIDIA/GPU-PV driver stack.
+The current VM cannot produce a valid CUDA-backed NBD tier; the isolated
+pressure campaign must remain blocked until a supported GPU-qualified image or
+separate lab surface is supplied.
+
+## 2026-08-21 01:14 -03 — Shared-host admission refusal after source validation
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0023`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-21T01:14:21-03:00`.
+**Verified at:** `2026-08-21T01:14:21-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** Source-qualified only; the live admission refusal does
+not promote the freeze-elimination campaign or claim a pressure result.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain only the sanitized artifact summary and host-memory
+admission data. Do not persist secrets, private process arguments, or raw
+elevation diagnostics.
+**Freshness:** Revalidate after any harness/module, Windows elevation, VM
+state, selected-distro, or host-memory change.
+**What:** Completed the source TDD and attempted the explicitly authorized R4
+target `SANITIZED_HOST_NAME` / `SANITIZED_WSL_DISTRO` admission. The source RED sequence exposed a
+missing module, then null-headroom misclassification plus a missing post-launch
+cleanup owner, then a normal-PASS path that could swallow a summary-write
+failure; all were corrected.
+**Category:** `fail-safe`.
+> **Historical non-current / no execution:** The dated verification list below is
+> retained evidence only; it does not authorize a current pressure campaign.
+**How to measure:** Run `Test-SharedWslPressureCampaignMemoryGate.ps1`,
+`Test-SharedWslPressureCampaignStatic.ps1`, the shell artifact static test,
+the PowerShell parser, `./scripts/docs-check.sh`, and
+`git diff --check -- validation.md
+docs/specs/no-milestone/wsl2-freeze-elimination-campaign/IMPL.md`.
+**Measured data:** The added module/harness contract reserves `4096` MiB and
+requires `ceil(2.92*1024)+4096 = 7087` MiB, with three one-second minimum
+samples, a runtime guardian, exact selected-distro termination, no OOM
+override/reboot/shutdown/disk/VM path, and a mandatory PASS summary. The named
+PowerShell tests, shell artifact static test, PowerShell parser, full
+`docs-check.sh`, and diff-check were GREEN; an independent R3 source review
+was PASS. PowerShell harness coverage is N/A per SPEC, with manufactured
+branches complete. Read-only module samples were `[4566,4562,4563]` MiB
+(`min=4562`); exact harness samples were `[4494,4479,4482]` MiB
+(`min=4479`) versus `required=7087`. Non-interactive elevation was unavailable:
+Windows `sudo` required UAC and no pre-existing elevated RamShared channel was
+available. The harness exited `2` with `STATUS=REFUSED`
+`REASON=host_commit_headroom_insufficient`.
+**Artifact:** A sanitized host-private receipt contains only
+`host-memory.jsonl`, `host-memory-admission.json`, and `summary.json`. It
+contains no disk telemetry, WSL campaign action,
+candidate lifecycle activation, pressure, watchdog/guardian execution, or live
+validator PASS. A VM-stop action was **not** run; no bypass or force path was
+used.
+**Cleanup:** Two bounded read-only WSL `/bin/true` probes returned PASS;
+`ramsharedd` was dead, campaign phase was `Off`, zram/NBD were absent, only
+`SANITIZED_EXISTING_WSL_SWAP_DEVICE` remained at priority `-2`, `ghost=false`, and no recent OOM,
+hung-task, D-state, or I/O findings were present. C/I checks were healthy.
+**Refusals:** No live pressure, WSL cascade action, VM shutdown, reboot,
+Windows shutdown, disk mutation, or automatic retry ran. The refusal reason
+was retained and the campaign stayed fail-closed.
+**Rollback trigger:** Any PASS/live qualification claim, missing refusal
+reason, raw secret/private process argv, rewrite of prior evidence, or claim
+that VM shutdown or pressure occurred invalidates this record.
+**Verdict:** 🟡 Status remains `PARTIAL` / source-qualified only. A fresh
+approved run requires non-interactive elevation and post-VM-off host headroom
+`>=7087` MiB; no automatic retry is authorized.
+
+## 2026-08-21 08:06 -03 — Audited lab stop and shared-host re-admission refusal
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0024`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-21T08:06:40-03:00`.
+**Verified at:** `2026-08-21T08:06:47-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** Live lifecycle and admission evidence only; the
+freeze-elimination campaign remains `PARTIAL` and no pressure result is
+claimed.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain only the sanitized transition and admission summaries.
+Do not publish VM credentials, private process arguments, or raw elevation
+diagnostics.
+**Freshness:** Revalidate after any VM state, Windows host-memory, selected
+distro, harness, CUDA/WSL, or RamShared product-surface change.
+**What:** After exact identity validation of the approved disposable lab, it
+was taken from
+`Running` to `Off` through the repository's audited normal graceful
+normal graceful Hyper-V path. The transition completed in 6.8 seconds. No
+force, turn-off, or save path was used, and no checkpoint or VM configuration
+change was made.
+**How to measure:** Preserve the sanitized before/after receipts in the
+host-private artifact store; do not publish their filesystem paths or VM
+identity. Apply the shared-host memory gate after the mandatory post-stop
+interval:
+three one-second samples, with required commit headroom
+`ceil(2.92*1024)+4096 = 7087` MiB.
+**Measured data:** The post-stop samples were `[6681,6682,6679]` MiB, with
+`min=6679` MiB and a 408 MiB shortfall. Later read-only samples remained below
+the threshold: `[6439,6486,6914]` and `[6837,6588,6548]` MiB. The host
+campaign harness therefore did not launch.
+**Hygiene boundary:** A sanitized canonical dry-run receipt captured phase
+`Off`, no daemon, `ghost=false`, no deleted swap, only the
+disk swap `SANITIZED_EXISTING_WSL_SWAP_DEVICE` at priority `-2` using
+approximately `2,037,512` KiB,
+`hung_task=0`, `oom=0`, and `d_state=14`; its claim was `NOT_CLAIMED`. This
+is hygiene capture only, not campaign or cleanup proof. An earlier ad-hoc
+guest collector had an `awk` error and is not valid evidence.
+**Refusals:** The host campaign never ran: no `ramshared up/down`, watchdog or
+guardian, WSL terminate/shutdown, pressure, disk telemetry, GPU/configuration
+mutation, or user-process action occurred. The VM remains `Off`. The
+temporary guest collector is not used to certify cleanup.
+**Rollback trigger:** Any campaign PASS/live qualification claim, guest
+cleanup certification from the invalid collector, VM restoration claim, or
+claim that pressure/watchdog/RamShared action ran invalidates this record;
+preserve prior evidence verbatim and report `PARTIAL`.
+**Verdict:** 🟡 The exact lab stop was safely completed, but shared-host
+admission remains refused because post-stop commit headroom is below `7087`
+MiB. This is fail-closed partial evidence only; a later approved attempt must
+re-run the complete preflight after the gate passes.
+
+## 2026-08-21 08:07 -03 — Public evidence retention correction
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0025`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-21T08:07:00-03:00`.
+**Verified at:** `2026-08-21T08:07:00-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** Sanitized documentation correction; no qualification claim.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this sanitized correction and semantic evidence only. Keep
+private VM identifiers, local artifact paths, credentials, and raw diagnostics
+outside the public repository.
+**Freshness:** Reapply this redaction policy whenever a later validation entry
+references a disposable VM or host-private artifact.
+**What:** Corrected the current candidate's later validation entries so public
+retention names only sanitized receipts and semantic lab state. Exact VM
+identifiers and local filesystem paths were removed; timing, admission refusal,
+cleanup state, and the `PARTIAL` verdict remain unchanged.
+**Measured data:** `3` affected later evidence references were sanitized;
+`0` VM GUIDs and `0` host-local artifact paths remain in those references.
+**Refusals:** No VM, WSL, disk, pressure, activation, cleanup, or publication
+action ran while applying this documentation correction.
+**Rollback trigger:** Any reintroduction of an exact VM identifier, local path,
+credential, raw diagnostic, or live qualification claim invalidates the public
+record and requires another sanitized correction.
+**Verdict:** 🟡 The semantic evidence remains reviewable and the public record
+is sanitized; all live qualification gates remain `PARTIAL`.
+
+## 2026-08-22 00:00 -03 — Origin candidate source/static traceability correction
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0026`.
+**Owner role:** `documentation-governance`.
+**Observed at:** `2026-08-22T00:00:00-03:00`.
+**Verified at:** `2026-08-22T00:00:00-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** Documentation/source-static traceability only; no live
+origin, device, WSL, VM, GPU, or pressure result is claimed.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the named-test map and sanitized evidence references only.
+Do not add host paths, device nodes, VM/user identifiers, secrets, or raw
+diagnostics to public validation.
+**Freshness:** Revalidate after any origin-cache, daemon, CLI lifecycle, static
+origin-plan, legacy-preallocation, or evidence-matrix change.
+**What:** Reconciled the origin SPEC's complete critical named-test matrix with
+the implementation record. `origin_cache.rs`, `request.rs`, `wsl2d/main.rs`,
+`cascade_io.rs`, and `lifecycle.rs` map each named unit test to source evidence;
+the five Windows-origin markers map to static/manufactured evidence. The exact
+one-to-one rows are in the Required tests matrix in
+`docs/specs/no-milestone/wsl2-revocable-vram-origin/SPEC.md` and the matching
+table in its `IMPL.md`.
+**Category:** `source-static`.
+**How to measure:** Use the named unit/static suites and their per-file coverage
+record; verify documentation with `./scripts/docs-check.sh`,
+`node tools/ci/check-validation-schema.mjs --all`,
+`node tools/ci/check-documentation-governance.mjs --all`,
+`node tools/generate-docs-index.mjs --check`,
+`node tools/check-broken-links.mjs --check`, and
+`node tools/ci/check-spec-evidence.mjs --check`. These are source/documentation
+checks only and do not authorize a host action.
+**Measured data:** Recorded source line coverage is origin cache `94.2%`,
+request `93.8%`, sparse VRAM `93.3%`, VRAM backend `91.6%`, cascade I/O
+`86.6%`, lifecycle `95.1%`, daemon backend `94.1%`, and daemon main `80.1%`.
+The live VHDX/NBD/GPU matrix has no result in this record. The named
+`legacy_preallocation_removed_before_day0_deadline` sunset test and removal
+evidence are also unavailable, so qualification, release promotion, and
+activation remain `BLOCKED`.
+**Refusals:** No quickstart, package/boot installation, WSL application, VM
+lifecycle, storage/VHDX/GPU/device operation, formatting, or pressure campaign
+ran while correcting this documentation.
+**Rollback trigger:** Any mapping that omits a named critical test, calls a
+source/static result live qualification, restores a legacy-preallocation
+fallback, or reintroduces a raw private identity invalidates this record.
+**Verdict:** 🟡 `PARTIAL`. Source/static traceability is explicit; live evidence
+and legacy-preallocation removal remain open hard gates.
+
+## 2026-08-22 00:10 -03 — Origin named-test one-to-one validation index
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0027`.
+**Owner role:** `documentation-governance`.
+**Observed at:** `2026-08-22T00:10:00-03:00`.
+**Verified at:** `2026-08-22T00:10:00-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** Source/static traceability only. This index neither opens a
+device nor promotes the environment-bound live origin/NBD/GPU matrix.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this sanitized, one-to-one named-test map with
+`EVD-0026`, the origin SPEC, and the matching IMPL table. Do not add machine,
+principal, device, run, or artifact identifiers.
+**Freshness:** Reconcile this index after any required-test, source-path,
+coverage, origin-plan, or legacy-preallocation change.
+**What:** Made the validation record itself one-to-one with every named row in
+the origin SPEC's required-test matrix. Each source/static test below has one
+explicit production-path and evidence mapping; the sunset row remains open.
+**Category:** `source-static`.
+**How to measure:** Compare each row below with
+`docs/specs/no-milestone/wsl2-revocable-vram-origin/SPEC.md` and `IMPL.md`, run
+the named source/static suites and documentation checks recorded in `EVD-0026`.
+These documentation/source checks do not authorize a host action.
+
+| Named test | Production path | Exact evidence state |
+| --- | --- | --- |
+| `origin_write_precedes_cache_update` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `write_release_vram_read_origin_hash_matches` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `gpu_allocation_failure_continues_on_origin` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `cache_growth_and_reclaim_hysteresis_is_exact` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `configured_physical_cap_bounds_an_ample_gpu_budget` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `origin_failure_returns_io_error` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `partial_origin_write_is_completed_before_ack` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `zero_progress_origin_write_is_never_acknowledged` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `origin_flush_failure_does_not_ack_or_validate_cache` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `partial_origin_failure_invalidates_cached_data_before_recovery_read` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `sync_origin_failure_invalidates_cached_data_before_recovery_read` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `durable_origin_write_legitimate_path_passes` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `exact_target_formula_and_missing_measurement_fail_safe` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `cache_io_failures_invalidate_and_fall_back_without_eio` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `origin_failure_is_sticky_until_three_read_sync_probes` | `origin_cache.rs` | source unit; 94.2% recorded line coverage |
+| `write_then_read_round_trips` | `request.rs` | source unit; 93.8% recorded line coverage |
+| `product_origin_mode_does_not_preallocate_logical_capacity` | `wsl2d/main.rs` | source unit; 80.1% recorded main coverage |
+| `missing_gpu_measurement_sets_zero_cache_target` | `wsl2d/main.rs` | source unit; 80.1% recorded main coverage |
+| `critical_supervisor_request_is_consumed_and_reclaims_daemon_cache_to_zero` | `wsl2d/main.rs` | source unit; 80.1% recorded main coverage |
+| `origin_and_cache_failures_are_sticky_until_exact_recovery` | `wsl2d/main.rs` | source unit; 80.1% recorded main coverage |
+| `origin_identity_pairs_refusal_with_legitimate_path` | `wsl2d/main.rs` | source unit; 80.1% recorded main coverage |
+| `product_origin_requires_a_block_device_after_partuuid_resolution` | `wsl2d/main.rs` | source unit; 80.1% recorded main coverage |
+| `origin_args_default_to_four_gib_and_enforce_one_to_twenty_four_gib` | `wsl2d/main.rs` | source unit; 80.1% recorded main coverage |
+| `physical_cache_cap_is_explicit_bounded_and_defaults_to_one_gib` | `wsl2d/main.rs` | source unit; 80.1% recorded main coverage |
+| `origin_mode_refuses_to_start_without_a_valid_daemon_identity` | `wsl2d/main.rs` | source unit; 80.1% recorded main coverage |
+| `product_daemon_command_requires_origin_cache` | `cascade_io.rs` | source unit; 86.6% recorded line coverage |
+| `origin_mode_refuses_missing_daemon_cache_identity_before_nbd_attach` | `cascade_io.rs` | source unit; 86.6% recorded line coverage |
+| `schema_v4_distinguishes_logical_cache_origin_and_fallback_swap` | `lifecycle.rs` | source unit; 95.1% recorded line coverage |
+| `origin_failure_and_stuck_cache_are_never_green` | `lifecycle.rs` | source unit; 95.1% recorded line coverage |
+| `origin_plan_is_separate_fixed_and_identity_bound` | Windows origin static contract | named static/manufactured PASS; no VHDX action |
+| `origin_install_failure_rolls_back_current_run_only` | Windows origin static contract | named static/manufactured PASS; no VHDX action |
+| `origin_preexisting_or_foreign_vhdx_is_never_removed` | Windows origin static contract | named static/manufactured PASS; no VHDX action |
+| `origin_uninstall_requires_exact_sealed_ownership` | Windows origin static contract | named static/manufactured PASS; no VHDX action |
+| `malformed_or_foreign_origin_identity_is_refused` | Windows origin static contract | named static/manufactured PASS; no VHDX action |
+| `legacy_preallocation_removed_before_day0_deadline` | Product sunset | **OPEN**; no clean removal scan, named test, and governance evidence |
+
+**Measured data:** The index contains 35/35 named SPEC rows: 29 source-unit,
+5 Windows static/manufactured, and 1 open sunset row. Recorded source coverage
+is at least 80.1% for every mapped source path. The live matrix count is `0`;
+it remains `PARTIAL` rather than a live qualification result.
+**Refusals:** No package/boot installation, WSL action, VM lifecycle, storage,
+VHDX, device, swap, GPU, pressure, or activation action ran for this index.
+**Rollback trigger:** A missing/duplicated named row, evidence mapped to the
+wrong production path, a source/static row presented as live proof, or a closed
+sunset row without all named removal evidence invalidates this index.
+**Verdict:** 🟡 `PARTIAL`. The map is complete and local; live proof and the
+legacy-preallocation removal prerequisite remain `BLOCKED`.
+
+## 2026-08-22 00:20 -03 — Public hygiene final regression hardening
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0028`.
+**Owner role:** `documentation-governance`.
+**Observed at:** `2026-08-22T00:20:00-03:00`.
+**Verified at:** `2026-08-22T00:20:00-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** Repository/documentation hygiene only; no product or host
+state is qualified.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain sanitized checker diagnostics, test names, coverage, and
+the candidate result. Do not retain the raw fixture values used by the tests.
+**Freshness:** Re-run after a public-hygiene rule, fixture, changed-public-doc
+selection, or scanner path-handling change.
+**What:** Hardened the public-hygiene candidate scan for every changed public
+artifact under the public documentation surface, including Markdown, JSON, and
+their candidate filenames. It evaluates every matching public identity
+independently: historical/no-execution language never suppresses a concrete
+identity. The tested rules cover the known bare lab labels, host/artifact and
+temporary run paths, timestamped run forms, UUIDs, `sd`/`nvme`/`mapper` device
+nodes, case-insensitive qualified lab principals, and private IPv4 addresses.
+`SANITIZED_*` placeholders remain allowed. Git paths reject Cc controls,
+format/bidi characters, DEL, and literal backslashes before any filesystem read
+or diagnostic path rendering. Current activation instructions in prose, inline
+code, bullets, emphasis, or fences require a local warning before the command;
+a historical marker never suppresses a raw identity.
+**Category:** `source-static`.
+**How to measure:** Run `node --test tools/ci/check-public-hygiene.test.mjs`,
+then the CI-equivalent coverage command and
+`node tools/ci/check-public-hygiene.mjs --candidate`. These are read-only
+repository checks and do not authorize a host action.
+**Measured data:** The 17/17 Node tests covered every-match reporting,
+historical-raw refusal and sanitized control, changed JSON and filename
+identities, fenced/inline/prose/bullet activation, warning-after refusal,
+candidate symlink escape without an external read, C0/C1/DEL/backslash/bidi
+Git-path rejection, structural allowlist scope/strict calendar expiry, and
+staged-allowlist blob divergence. Coverage was 97.30% lines, 88.02% branches,
+and 100.00% functions. The candidate scan inspected 877 files and returned 0
+findings.
+**Refusals:** Raw identity classes remain `NO-GO` even beside a historical
+warning. Candidate filesystem reads use a canonical repository-contained
+realpath; an escaping or inaccessible candidate path is diagnosed without
+reading it. Staged content and a staged allowlist are read from Git index blobs.
+These guarantees apply only to the tested changed-public surface, checked modes,
+and named rules; they do not claim detection of every identity encoding or an
+operational gate.
+**Rollback trigger:** One changed public document with an unredacted tested
+identity class passes, one unguarded activation instruction passes, a
+sanitized control fails, a historical warning suppresses a raw identity, or any
+candidate filesystem read resolves outside the repository root.
+**Verdict:** 🟡 `PARTIAL`. The documentation checker is green; this does not
+qualify any VM, WSL, storage, swap, device, service, GPU, or activation state.
+
+## 2026-08-22 06:16 -03 — Public hygiene Unicode-content refusal correction
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0029`.
+**Owner role:** `documentation-governance`.
+**Observed at:** `2026-08-22T06:16:44-03:00`.
+**Verified at:** `2026-08-22T06:16:44-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** Repository/documentation hygiene only; no product or host
+state is qualified.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain rule IDs, ASCII-encoded code-point reasons, test names,
+coverage, and candidate result. Do not retain raw fixture values or nonprinting
+characters in diagnostics.
+**Freshness:** Re-run after a public-text decoder, Unicode rule, public-artifact
+selection, fixture, or scanner path-handling change.
+**What:** `EVD-0028`'s Git-path Cc/Cf/bidi refusal did not cover file content.
+The corrected checker strictly decodes changed public Markdown/JSON, then, before
+identity or activation matching, emits `UNSAFE_UNICODE_CONTENT` for every Cc
+except normalized CR/LF/tab and for every Cf/bidi format character. Reasons use
+only ASCII `u+XXXX` code-point notation and the existing line location; an
+invalid public-text UTF-8 sequence is separately refused. This does not claim
+detection of every obfuscation or identity encoding outside the named rules.
+**Category:** `source-static`.
+**How to measure:** First run the isolated temporary-Git candidate fixture tests
+in `tools/ci/check-public-hygiene.test.mjs`, then run the Node coverage command
+and `node tools/ci/check-public-hygiene.mjs --candidate`. These are repository
+checks only and do not authorize a host action.
+**Measured data:** RED on the prior checker: actual candidate-mode fixtures for
+a bidi-split raw identity, a bell-appended raw identity, a bidi-split activation,
+and a JSON content variant returned zero findings. GREEN after the correction:
+21/21 Node tests passed; the named fixtures now return four deterministic
+Unicode-content findings, while normal CR/LF/tab and sanitized ordinary content
+pass. The CLI diagnostic showed the rule, line, and ASCII `u+202e` reason without
+rendering the control. Coverage was 97.65% lines, 89.01% branches, and 100.00%
+functions. Candidate mode inspected 877 files and returned 0 findings.
+**Refusals:** The content rule is evaluated before public identity/activation
+rules; a control cannot make the candidate look binary and cannot silently
+suppress an identity or command scan. Candidate path containment and staged
+allowlist/index behavior remain separately covered.
+**Rollback trigger:** One changed public Markdown/JSON file containing an
+unnormalized Cc or Cf/bidi character passes, one Unicode diagnostic renders the
+control, one normal CR/LF/tab or sanitized control fails, a raw identity or
+activation is silently skipped through content classification, or any required
+test/coverage/candidate gate fails.
+**Verdict:** 🟡 `PARTIAL`. This source-only refusal closes the named checker
+bypass; it does not qualify VM, WSL, service, storage, swap, device, GPU,
+pressure, or activation state.
+
+## 2026-08-22 21:01 -03 — Legacy NBD preallocation source-removal governance
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0030`.
+**Owner role:** `source-governance`.
+**Observed at:** `2026-08-22T21:01:43-03:00`.
+**Verified at:** `2026-08-22T21:01:43-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** `PARTIAL`. The executable-source/current-document
+removal gate passes; Rust verification and live qualification do not.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the named Node result, aggregate coverage, governed-path
+policy, sanitized command result, and residual gate list. Historical validation
+and exact superseded design records remain readable; do not rewrite them as
+current availability.
+**Freshness:** Re-run after any NBD composition, backend selection, origin
+boundary, broker/ublk/Windows consumer, governed documentation, or checker
+policy change. Run the pending Rust gates only after the Guard self-deadlock fix
+is independently proven and the root explicitly authorizes a retry.
+**What:** Removed the executable legacy NBD full-VRAM selector/composition while
+retaining the generic `VramBackend` used by broker, ublk, and Windows paths.
+The checker scans Git candidates in `crates/`, `drivers/`, `scripts/`, and
+`tools/`, plus the exact current governed documents. It excludes append-only
+`validation.md`/`MEMORY.md`, evidence directories, historical document roots,
+and the exact superseded cascade PRD/IMPL; the cascade SPEC and audit remain
+governed. A regression proves historical records may describe the old design
+while a current governed document that advertises the selector/backend fails.
+**Category:** `source-static`.
+**How to measure:** Run the named test with
+`node --test --test-name-pattern='legacy_preallocation_removed_before_day0_deadline' tools/ci/check-legacy-preallocation-removal.test.mjs`, the thresholded Node
+coverage suite, `node tools/ci/check-legacy-preallocation-removal.mjs
+--candidate`, and the candidate public/documentation governance checks. The
+candidate enumeration uses `git ls-files -co --exclude-standard`; `.git`,
+ignored build outputs such as `target`/`tmp`, and explicitly historical evidence
+are not active-source candidates.
+**Measured data:** The named test passed `1/1`; the complete checker suite
+passed `2/2`. Checker coverage was `93.73%` lines, `84.62%` branches, and
+`95.65%` functions. The candidate removal scan and public-hygiene candidate
+scan returned zero findings; documentation governance reported `371` files and
+zero findings. Document lifecycle, documentation inventory, task log, cleanup
+receipts, campaign evidence, ADR index, docs index, broken links, gap register,
+benchmark evidence, and SPEC evidence passed. The aggregate docs check remains
+`NO-GO` because the out-of-scope localization manifest has a stale README hash;
+the out-of-scope capability-observations catalog is also out of sync. Global
+`git diff --check` remains nonzero only for trailing whitespace in the
+out-of-scope superseded cascade PRD/IMPL.
+**Refusals:** The queued command
+`guard exec -- cargo test -p ramshared-block` produced no test result and its
+exact queued process was terminated by the root after a confirmed reentrant
+Guard-to-cargo-shim self-deadlock. It was not retried. No
+further Cargo, Guard, Rust test/build/check, Clippy, or rustfmt command ran.
+Focused Rust tests, `cargo fmt --all -- --check`, and affected-package
+all-target Clippy with `-D warnings` remain pending. No service, `/opt`, WSL,
+Windows, device, swap, GPU, pressure, activation, commit, or publication action
+occurred.
+**Rollback trigger:** Any executable selector/profile chooser/full-VRAM NBD
+composition reappears; any current governed document presents it as available
+or pending removal; or any origin-backed NBD, broker, ublk, Windows consumer, or
+existing test breaks. Repair the origin-capable path without restoring the
+removed selector.
+**Verdict:** 🟡 `PARTIAL`. The named source-governance removal gate is green,
+but Rust fmt/test/Clippy verification is externally blocked and all live
+guardian/origin/pressure qualification, release promotion, and activation
+remain `BLOCKED`.
+
+## 2026-08-22 21:04 -03 — Legacy NBD preallocation source-removal closeout
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0031`.
+**Owner role:** `terra-legacy-prealloc-mutator`.
+**Observed at:** `2026-08-22T21:04:03-03:00`.
+**Verified at:** `2026-08-22T21:04:03-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Reported provenance:** Uncommitted, source-only candidate.
+**Candidate status:** `PARTIAL`. The legacy-preallocation source gate is
+`CLOSED`; live qualification, release promotion, and activation remain
+`BLOCKED`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the named checker result, thresholded coverage,
+candidate/static results, and guarded-Cargo residual. Historical append-only
+records remain evidence for old builds and do not describe an available path.
+**Freshness:** Re-run after a product NBD action boundary, legacy token,
+generic `VramBackend` consumer, governed document, checker policy, or
+documentation generator changes.
+**What:** Product NBD now refuses without `--origin`; the executable
+selector/profile/backend fallback was removed while generic `VramBackend`
+consumers for broker, ublk, and Windows remain. The Windows campaign no longer
+has the obsolete full-capacity selector. The candidate-aware checker scans
+tracked and untracked executable surfaces plus exact current governed documents,
+while immutable historical records and artifacts are excluded.
+**Category:** `source-static`.
+**How to measure:** Run the named Node test, its thresholded coverage command,
+the candidate scan, both affected PowerShell static tests, `cargo fmt --all --
+--check`, and `scripts/docs-check.sh`. Any Cargo build/test/Clippy command must
+execute directly through the standard toolchain.
+**Measured data:** `legacy_preallocation_removed_before_day0_deadline` passed;
+the complete Node checker suite passed `2/2` with `91.14%` line, `82.26%`
+branch, and `95.65%` function coverage. The candidate scan passed. Both
+affected PowerShell static suites passed. `cargo fmt --all -- --check` passed.
+`scripts/docs-check.sh` passed after the localization manifest and generated
+capability observations were synchronized. The targeted `git diff --check`
+passed.
+**Refusals:** cargo test produced no unverified claim. No service, WSL,
+VM, device, GPU, pressure, activation, commit, push, PR, or host action
+occurred.
+**Rollback trigger:** Any executable selector/profile chooser/full-VRAM NBD
+composition reappears; a product NBD action no longer requires `--origin`; a
+generic broker/ublk/Windows consumer breaks; a current governed document
+advertises the removed path; or a named static check fails. Keep the candidate
+disabled and repair the origin-capable source path without restoring a legacy
+selector.
+**Verdict:** 🟡 `PARTIAL`. The source-removal prerequisite is closed only.
+Rust build/test/Clippy verification has no result, and all live guardian,
+origin, pressure, release, and activation gates remain `BLOCKED`.
+
+## 2026-08-22 21:20 -03 — Sol-owned legacy preallocation evidence supersession
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0032`.
+**Owner role:** `sol-legacy-preallocation-mutator`.
+**Observed at:** `2026-08-22T21:20:08-03:00`.
+**Verified at:** `2026-08-22T21:20:08-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** `PARTIAL`. The source-governance removal prerequisite
+passes independently; Rust verification and every live qualification,
+promotion, and activation gate remain pending or `BLOCKED`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the Sol-owned commands, named results, coverage metrics,
+governed-path policy, environmental refusals, and pending Rust gates.
+`EVD-0031` remains append-only historical text, but its Terra-owned assertions,
+PASS results, and evidence are rejected and non-authoritative.
+**Freshness:** Re-run after any product NBD boundary, origin requirement,
+generic `VramBackend` consumer, governed document, checker policy, or
+documentation generator change. Run Rust gates only after the root explicitly
+reports that the Goodall-installed Guard fix is validated and releases the
+embargo.
+**What:** Independently reviewed every changed line and its relevant source
+context in the dispatch allowlist. Product NBD has only the origin-backed path;
+the executable legacy full-VRAM selector/composition is absent. The generic
+`VramBackend` remains for broker, ublk, and Windows consumers, and the private
+sparse test seam is not exposed as a product selector. The candidate-aware
+checker governs executable candidates and exact current documents, excludes
+ignored build/evidence output, and leaves the two exact superseded cascade
+PRD/IMPL records readable without treating them as current governed documents.
+**Category:** `source-static`.
+**How to measure:** Run the exact named Node regression, the complete checker
+suite with 80% line/branch/function thresholds, the candidate scan, validation
+schema, documentation governance/localization/lifecycle/inventory/index/links/
+gap/SPEC/public-hygiene checks, docs-check components, and non-mutating Windows
+static harnesses. Candidate enumeration uses
+`git ls-files -co --exclude-standard`; `.git`, ignored `target`/`tmp`, and the
+explicit historical evidence/documents are not active-source candidates.
+**Measured data:** The Sol-owned named regression passed `1/1`; the complete
+checker suite passed `2/2` with `94.46%` line, `82.35%` branch, and `100.00%`
+function coverage. The candidate removal scan passed. Documentation governance
+reported `371` files; lifecycle, inventory, capability observations, task-log,
+cleanup-receipt, campaign-evidence, ADR-index, docs-index, link, gap-register,
+public-hygiene, benchmark-evidence, and SPEC-evidence checks passed. The two
+directly affected PowerShell static harnesses passed. The aggregate Windows
+static harness stopped in the unrelated storage-matrix harness because this
+Windows PowerShell environment does not provide `Get-FileHash`; this is not a
+PASS. The aggregate docs check is `NO-GO` because the out-of-scope localization
+manifest contains stale README hashes; the remaining independently invoked
+docs-check components pass.
+**Refusals:** The root confirmed that PID `558934` was exactly the queued
+`<HOME>/.local/bin/guard exec -- cargo test -p ramshared-block` command and
+terminated only that PID with `TERM` after confirming the reentrant
+Guard-to-cargo-shim self-deadlock. It produced no Rust test result and was not
+retried. No later Cargo, Guard execution, rustc, rustfmt, Clippy, or Rust
+test/build/check command ran. Focused affected-crate Rust tests,
+`cargo fmt --all -- --check`, and affected-package all-target Clippy with
+`-D warnings` remain pending. No service, `/opt`, WSL, Windows host, device,
+storage, swap, GPU, pressure, activation, commit, push, PR, or publication
+mutation occurred.
+**Rollback trigger:** Any executable selector/profile chooser/full-VRAM NBD
+composition reappears; any product NBD action can run without an authoritative
+origin; any current governed document advertises the removed path; or any
+origin-backed NBD, broker, ublk, Windows consumer, or existing test breaks.
+Repair the affected path without restoring the removed selector.
+**Verdict:** 🟡 `PARTIAL`. The Sol-owned source-governance gate passes, but the
+external Guard blocker leaves Rust fmt/test/Clippy without results. Live
+guardian/origin/pressure qualification, release promotion, and activation
+remain `BLOCKED`.
+
+## 2026-08-23 06:18 -03 — Fail-closed WSL2 P0/P1 source closeout
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0033`.
+**Owner role:** `wsl2-reliability-mutator`.
+**Observed at:** `2026-08-23T05:12:18-03:00`.
+**Verified at:** `2026-08-23T06:18:15-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Reported provenance:** Uncommitted dirty candidate with pre-existing WIP
+preserved.
+**Candidate status:** `PARTIAL`. The six P0 and four P1 source/static contracts
+are closed. Every live storage, systemd, GPU, WSL, and host rollout gate remains
+`BLOCKED`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the external snapshot identity, exact test counts,
+source/static commands, refusal boundaries, and live residuals. Do not treat
+this record as permission to activate a service or device.
+**Freshness:** Re-run after any origin identity, durability, cache isolation,
+memory-lock, InvocationID, lifecycle controller, telemetry, Rust pin, or DXG
+test-boundary change.
+**What:** Removed `MCL_FUTURE` from the runtime contract and proved base GPU
+allocation before current-only locking. Added an origin-first durable backend
+with bounded cache timeout/disconnect fallback; product origin mode uses no GPU
+provider. Replaced path-only origin authority with a sealed schema-v3 manifest,
+FD/dev_t/PARTUUID/PTUUID identity, dynamic root/swap-parent exclusions, and a
+separate plan-first provisioner. Added FLUSH/FUA-aware batching. Persisted and
+revalidated systemd `InvocationID` before freeze, thaw, TERM, and KILL. Added a
+swapoff-first controller with a durable host recovery marker and a plan-first
+host recovery client that cannot terminate WSL. Telemetry now discovers the
+physical volume from the sealed VHDX manifest. Live DXG tests require explicit
+opt-in. Rust 1.98.0 is pinned through workspace, workflows, and release
+provenance. Engineering-language rules now prefer behavior, evidence, and
+residual gaps over assistant/process narration.
+**Category:** `source-static`.
+**How to measure:** Use one Cargo job and one test thread. Run
+`cargo test -p ramshared-block --lib -- --test-threads=1`,
+`cargo test -p ramshared-wsl2d --bin ramsharedd -- --test-threads=1`, focused
+`ramshared-cli` InvocationID/provisioning/lifecycle filters,
+`cargo test -p ramshared-dxg --lib -- --test-threads=1`, targeted package
+Clippy with `-D warnings`, and `cargo fmt --all -- --check`. Run
+`scripts/safety/test-control-plane-units.sh`, the hermetic NBD product
+preflight, `wslconfig-ctl.sh selftest`, relevant PowerShell static harnesses,
+release-manifest Node tests, shell/PowerShell parsers, and `git diff --check`.
+**Measured data:** The user-provided pre-change snapshot
+`E:\\WSL-Work-Snapshots\\ramshared-20260823T080303Z.tar.zst` has SHA-256
+`7FA94C0F162C4012A26D7CE7C0A20951B882D3197A80EC359CF5F8B65CE61539`, zstd
+PASS, and 8293 entries. `ramshared-block --lib` passed 69/69. The daemon passed
+66/66 after two fail-closed fixtures found by the first broad run were corrected
+and revalidated. Focused CLI evidence passed 2 InvocationID and 6
+provisioning/lifecycle/NBD rollback tests. DXG passed 8 hermetic tests and
+ignored exactly 2 live tests. Targeted `ramshared-block`, `ramshared-wsl2d`,
+and `ramshared-cli` Clippy passed with `-D warnings`; rustfmt passed. The control
+suite passed 12 named fixtures; packaged NBD preflight passed 43/43;
+`.wslconfig` selftest passed. Origin, watchdog telemetry, and lifecycle recovery
+PowerShell static tests passed. Release-manifest tests passed 6/6 through the
+bundled Windows Node runtime because WSL had no Node executable. Shell syntax,
+PowerShell parsing, and final `git diff --check` passed.
+**Refusals:** The machine-wide Guard cargo shim had no broker, so it produced no
+Cargo result. No service was started or installed; after proving no Cargo/rustc
+process was active, the installed Rust toolchain was invoked directly with one
+job. WSL Node was absent and no package was installed. No coverage campaign,
+workspace test, live DXG/CUDA, GPU mapping, NBD, swap, `mkswap`, VHDX, systemd,
+Docker, WSL lifecycle, kernel/module, pressure, commit, push, or publication
+action occurred.
+**Residual blockers:** Product origin serving remains intentionally
+origin-only; a process-isolated GPU cache worker and driver-hang teardown need
+live qualification. Real VHDX/manifest/device identity, swapoff-first systemd
+teardown/recovery, NBD FLUSH/FUA durability, host-volume telemetry, and terminal
+`PRODUCT_OFF` require a separately approved progressive host campaign. Current
+coverage percentages were not recalculated.
+> **Historical non-current / no execution:** the following dated rollback
+> criteria are inert review evidence only and do not authorize activation.
+
+**Rollback trigger:** Any `MCL_FUTURE` runtime request; cache/GPU failure that
+blocks or changes origin acknowledgement; ordinary startup formatting storage;
+origin identity accepting root/swap aliases; backend death before proven
+swap-tier deactivation and detach; stale InvocationID receiving an action; fixed production
+drive-letter telemetry; unguarded live DXG test; or Rust provenance other than
+1.98.0. Keep RamShared disabled and revert only the exact offending source
+slice without disturbing unrelated WIP.
+**Verdict:** 🟡 `PARTIAL`. TASK-0009 source/static implementation is complete;
+activation and every live qualification remain `BLOCKED`.
+
+## 2026-08-23 12:00 -03 — Exact lifecycle ownership and kernel-canary closeout
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0034`.
+**Owner role:** `wsl2-reliability-mutator`.
+**Observed at:** `2026-08-23T11:38:54-03:00`.
+**Verified at:** `2026-08-23T12:00:39-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Reported provenance:** Uncommitted dirty candidate; all pre-existing and
+unrelated WIP was preserved.
+**Candidate status:** `PARTIAL`. Ownership, cardinality, fail-closed swap, and
+the promotion canary are closed in source/hermetic tests. Every live promotion
+and qualification remains `BLOCKED`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the external snapshot identity, test counts, documented
+NO-GO decisions, aggregate documentation blockers, and causal separation
+between host storage and upstream DXG. This record does not authorize
+activation.
+**Freshness:** Re-run after any `/proc/swaps` parser, device binding/cardinality,
+NBD/zram/ublk rollback, origin provisioning, kernel launcher, canary payload,
+or sparse-VHD policy change.
+**What:** Live enumeration is detection-only; each mutation requires the exact
+lifecycle binding, sealed identity, and a fresh expected-cardinality check for
+that stage. An unreadable, malformed, or uncertain swap snapshot refuses
+teardown; active swap with zero use remains active. zram has no unowned sysfs
+fallback, and uncertain swapon/swapoff outcomes preserve the backend, daemon,
+records, and recoverable state. The kernel launcher confirms only after a
+canary bounded to the exact distro proves systemd, DXG/Xwayland/NVIDIA, module
+metadata, and readable logs; any hard signal or missing baseline disarms. The
+unaccepted patch proposed in microsoft/WSL#41093 was not applied.
+**Category:** `source-static`.
+**How to measure:** With no compiler or broad suite active in WSL or Windows,
+use Rust 1.98.0, `CARGO_BUILD_JOBS=1`, and one test thread. Run the focused
+lifecycle suite, complete `ramshared-cli` package suite, package check,
+hermetic PowerShell canary harness, shell-controller syntax, and static
+documentation gates through the bundled host Node runtime. Do not use real
+devices or live lifecycle commands.
+**Measured data:** The pre-change snapshot
+`E:\\WSL-Work-Snapshots\\ramshared-20260823T080303Z.tar.zst` remains bound to
+SHA-256
+`7FA94C0F162C4012A26D7CE7C0A20951B882D3197A80EC359CF5F8B65CE61539`.
+The focused suite passed 49/49. The complete suite passed 191 unit and 6
+dispatch tests, 197/197 total with no failure. The single-job
+`ramshared-cli` check passed. `Test-BootKernelSafeStatic.ps1` passed positive,
+FORTIFY, degraded-systemd, init-timeout, query-regression, and missing-DXG
+fixtures; both shell scripts passed `bash -n`. Documentation governance
+reported 381 files and zero findings; localization retained an honest
+`PARTIAL` state with zero findings; lifecycle reported 250 Markdown files in
+the worktree, 239 classified, 11 excluded, and zero unclassified. Inventory,
+index, links, and gap register passed after deterministic regeneration.
+**Development evidence:** The first broad suite exposed 5 stale temporal
+fixtures (184/189); the next focused run exposed 1 residual timeline (46/47).
+The fixtures were corrected for the stricter contract without relaxing
+authorization; final results were 49/49 and 197/197.
+**Refusals:** The documentation aggregate does not receive PASS: candidate
+public hygiene found issues outside this slice, including historical artifacts,
+and 5 symlink-creating security-test groups failed with `EPERM` under Windows
+Node; the aggregate test also lacked its temporary log in that environment.
+The new incident file was not among the findings. The generated capability
+observations artifact was synchronized, but independent blockers were neither
+masked nor changed. No package was installed. No service, systemd, NBD, ublk,
+zram, swap, GPU, live DXG/CUDA, VHDX, kernel, module, Docker, pressure, WSL
+restart, commit, push, or publication action occurred. The existing `target`
+directory contained mixed WIP and was not cleaned because its artifacts could
+not safely be attributed only to this validation.
+**Causal classification:** The 2026-08-22 incident trigger remains
+`host_volume_exhausted`, supported by NTFS Event ID 137 and
+`0xC000007F`/`STATUS_DISK_FULL`; absence of a Resource Exhaustion Detector event
+does not prove absence of historical pressure. The DXG warning is a real live
+risk and an open upstream confounder on the 6.18 line, also reproduced on older
+Microsoft/bundled kernels; there is no evidence to attribute it to RamShared or
+causally connect it to full storage.
+**Residual blockers:** Kernel promotion requires a separately approved and
+attended same-host bundled/custom A/B campaign with zero hard signals and a DXG
+count no worse than the sealed baseline. Identity, teardown, and durability on
+real devices plus systemd, ublk, NBD, swap, and GPU remain live-unqualified.
+The documentation aggregate must be rerun in an environment capable of
+creating symlinks and after the owner resolves historical public-hygiene WIP.
+**Rollback trigger:** Any mutation without exact binding; a foreign or absent
+device treated as success; uncertain swap evidence allowing teardown; backend
+termination after uncertain swapon/swapoff; zram reset without a record; NBD
+detach without post-proof; or kernel retention after version mismatch, timeout,
+systemd failure, missing DXG probe, non-zero FORTIFY/init/unclean/p9/fatal
+signal, query count above baseline, or unreadable evidence. Keep RamShared and
+the kernel candidate disabled and revert only the offending slice.
+**Verdict:** 🟡 `PARTIAL`. TASK-0010 is complete in source/static scope. Every
+live gate and the independent documentation aggregate remain `BLOCKED`.
+
+## 2026-08-23 13:59 -03 — Kernel promotion and lifecycle gate remediation
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0035`.
+**Owner role:** `wsl2-reliability-mutator`.
+**Observed at:** `2026-08-23T12:29:21-03:00`.
+**Verified at:** `2026-08-23T13:59:17-03:00`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Reported provenance:** Uncommitted dirty candidate; every pre-existing and
+unrelated worktree change was preserved.
+**Candidate status:** `PARTIAL`, with the requested source lane at
+`READY_FOR_HEAVY_TEST`. No Rust compile/test/Clippy result or live
+qualification is claimed.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain the exact lightweight commands, fail-closed boundaries,
+runtime/layout refusal, immutable pair/deployment contract, uncertainty
+containment, and pending heavy/live gates. This record is not activation
+authority.
+**Freshness:** Re-run after any launcher deployment, kernel-pair manifest,
+`.wslconfig`, canary/receipt, NBD attach reconciliation, zram allocation,
+origin identity, or affected documentation-governance change.
+**What:** Replaced the stale host launcher path with an atomically installed,
+versioned, hash-bound wrapper/launcher/kernel/modules/layout/QEMU bundle that
+survives repository UNC loss after shutdown. The launcher parses and executes
+under Windows PowerShell 5.1, checks external exit codes, kills the complete
+process tree on deadline, performs bundled/candidate A/B, exercises WSLg with
+`xdpyinfo`, rejects unapproved getty degradation, and proves rollback only by
+a third fresh boot matching the valid bundled baseline. Kernel and modules are
+one strict immutable pair; WSL 2.7.12, unified 6.18.40.1 artifacts, and double
+nesting remain refused. `.wslconfig` snapshots and pair writes are fresh,
+atomic, and hash-read back. Failed or timed-out NBD attach now preserves the
+backend unless repeated exact kernel-state absence is proved; effect-before-
+timeout seals exact ownership evidence. Device effects use FD/`dev_t` binding
+where tool ABIs permit it, and malformed successful zram allocation reconciles
+and resets only one exact new inactive device.
+**Category:** `source-static`.
+**How to measure:** Run
+`powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/kernel/Test-BootKernelSafeStatic.ps1`
+through the Windows PowerShell 5.1 executable; parse each changed shell file
+separately with `bash -n`; run `bash scripts/kernel/test-wsl-kernel-static.sh`;
+run the stable toolchain `rustfmt --check --edition 2024` directly against
+`cascade_io.rs` and `main.rs`; run the all-scope validation/task/documentation,
+lifecycle/localization/link/gap/SPEC/orchestration gates plus inventory/index/
+capability checks; and run `git diff --check`. Do not run Cargo or any live
+kernel, WSL, service, device, swap, GPU, VM, Docker, or pressure command in this
+lane.
+**Measured data:** `Test-BootKernelSafeStatic.ps1` passed under Windows
+PowerShell 5.1, including the actual installed wrapper-to-launcher chain,
+deployment tamper refusal, localized runtime parsing, layout/runtime refusal,
+pair rollback, external-command failure, full descendant termination, WSLg,
+getty, and exact bundled rollback identity fixtures. Four shell files passed
+individual Bash parsing; `test-wsl-kernel-static.sh` passed immutable sealing,
+non-overwrite, strict pair/READY parsing, layout mismatch, atomic pair
+arm/disarm, duplicate-section refusal, and install-receipt parsing. Direct
+rustfmt parsing/format checking passed for both changed Rust files.
+Documentation governance reported 381 files and zero findings; lifecycle
+reported 242 tracked and 250 worktree Markdown files, 239 classified, 11
+excluded, and zero unclassified. Inventory and index were in sync; repo-wide
+links, gap register, four SPEC evidence manifests, orchestration, and 38
+capability observations passed. Localization remained `PARTIAL` with two files
+and zero findings. Final `git diff --check` passed.
+**Refusals:** No Cargo build, check, test, Clippy, workspace suite, package
+installation, host deployment, `C:\wsl` mutation, `.wslconfig` live write,
+WSL shutdown/start, kernel/module use, service, NBD, ublk, zram, swap, GPU, VM,
+Docker, pressure, commit, push, PR, or publication action occurred. The
+6.18.40.1 artifact was not downloaded, built, or used. Existing unrelated
+dirty WIP was not reset, stashed, cleaned, or checked out.
+**Residual blockers:** The four new CLI lifecycle tests and the daemon origin
+identity test have parser/format evidence only; focused Rust tests,
+affected-package all-target check, and Clippy with `-D warnings` await explicit
+authorization. A later, separate attended campaign must prove the real Windows
+host bundle, stopped-state and boot identities, baseline/candidate/rollback,
+real device identity/durability, and terminal safe state. `LIVE-NO-GO` remains
+absolute.
+**Rollback trigger:** Any 1 stale or mutable launcher/artifact path; only one
+of `kernel=` or `kernelModules=` changes; a malformed/unknown receipt is
+accepted; WSL 2.7.12 accepts unified or double-nested modules; rollback does
+not match a fresh bundled-baseline boot; an uncertain NBD attach terminates its
+backend; malformed zram output leaks or guesses a device; named-path/FD
+`dev_t` differs; any listed lightweight or pending heavy test fails. Revert
+only the offending remediation slice and preserve unrelated WIP.
+**Verdict:** 🟡 `PARTIAL`. The candidate is `READY_FOR_HEAVY_TEST` and may be a
+`COMMIT-GO` candidate only after the explicitly authorized heavy gate passes.
+It is `LIVE-NO-GO` regardless of source or test results in this lane.
+
+## 2026-08-24 00:18 -03 — Public candidate and append-only CI remediation
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0036`.
+**Owner role:** `docs-ci-security`.
+**Observed at:** `2026-08-24T03:18:06Z`.
+**Verified at:** `2026-08-24T03:18:06Z`.
+**Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
+**Candidate status:** Working-tree source and hermetic fixture evidence; no
+commit, hosted run, publication, or live qualification claim.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only summary, the sanitized evidence summary,
+and the digest-bound redaction ledger. Do not restate a private historical
+value in a later correction.
+**Freshness:** Revalidate after any public-scope classifier, Git topology,
+symlink, image parser, CI contract, release recovery, validation schema, or
+evidence digest change.
+**What:** Closed the public-text encoding, clean committed-candidate, BOM,
+symlink-blob, structural PNG/JPEG, CI contract, historical release-parser, and
+append-only validation gaps using read-only Node/Git fixtures.
+**Category:** `ci-gate`.
+**How to measure:** `node --test tools/ci/check-public-hygiene.test.mjs`; the
+two per-file Node coverage commands; `node tools/ci/check-ci-contract.mjs
+--check-local`; `node --test tools/ci/check-ci-aggregate.test.mjs`; `node
+tools/ci/check-public-hygiene.mjs --candidate`; and `node
+tools/ci/check-validation-schema.mjs --diff HEAD` plus `--all`.
+**Measured data:** Public hygiene passed 33/33 with 95.09% lines, 81.49%
+branches, and 98.36% functions. CI contract passed 60/60 with 91.56% lines,
+84.11% branches, and 98.69% functions; local admission passed, and aggregate
+topology passed 7/7. Candidate mode scanned 907 files with zero findings.
+Validation retained the exact 3,869-line HEAD prefix and was append-only; both
+schema modes passed. The current manifest writer/checker accepted an exact
+historical beta source fixture with immutable Rust version/commit provenance,
+and the recovery workflow remains read-only and nonpublishing.
+**Refusals:** Invalid UTF-8, U+202E, C0, leading/interior BOM, a BOM-prefixed
+Git path, external symlink text, malformed/bookended/oversized images, unsafe
+rename source or target, and Git topology failure all returned nonzero in
+hermetic repositories. No host, WSL, VM, device, storage, swap, GPU, driver,
+service, pressure, publication, commit, push, merge, or remote-write action ran.
+**Residual blockers:** Three generated documentation catalogs outside this
+dispatch are stale. Five Rust coverage-owner planner assertions remain red in
+out-of-scope maps, feature SPECs, or Rust named tests. These residuals keep the
+aggregate claim `PARTIAL`; no assertion or append-only rule was weakened.
+**Rollback trigger:** Any clean commit reports zero files without proving its
+delta, a BOM or invalid UTF-8 sequence is normalized away, a final symlink
+target is followed, a malformed image passes the structural contract, recovery
+changes provenance or gains publication authority, or validation rewrites its
+historical prefix.
+**Verdict:** 🟡 `PARTIAL`. All owned source, fixture, coverage, contract,
+candidate, and validation gates pass; externally owned generated-state and
+Rust topology residuals remain explicit.
+
+## 2026-08-25 13:17 -03 — Host 99% memory pressure qualification and 91.6% slice coverage
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0037`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-25T16:17:00Z`.
+**Verified at:** `2026-08-25T16:17:00Z`.
+**Source revision:** `12924354c0e668c6792da025cb8aa083818eeb67`.
+**Candidate status:** Live host memory pressure verified at 98.6%–99.0% for 60 seconds; 91.6% Rust slice line coverage on `ramshared-cli/src/main.rs`; 20/20 green checks on PR #237.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only evidence summary and test receipts.
+**Freshness:** Revalidate after any lifecycle, memory management, or CLI parser changes.
+**What:** Verified high-load memory pressure on host WSL2 environment up to 98.6%–99.0% utilization (17,280 MiB allocated) for 60 continuous seconds with byte-by-byte SHA-256 data integrity verification (digest `7d2fdb57ad7dcd0eefdb3a1f5fd780a749d8ce428da0981d6de58aa1d0bef388`), verified 4GB VRAM daemon process stability, and elevated `main.rs` slice line coverage to 91.6%.
+**Category:** `reliability-stress`.
+**How to measure:** `python3 scratch/test_host_pressure_99.py`; `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs,crates/ramshared-cli/src/main.rs --min 80`; `gh run view 32868845111`.
+**Measured data:** Host memory allocated 17,280 MiB (16.88 GiB) reaching 19,716 / 20,000 MiB (98.6% peak utilization). Sustained 60 seconds HOLD. Verified 100% SHA-256 match with 0 corrupted bytes. Clean post-test release returned memory to 2,511 MiB (12.6%). RTX 2060 VRAM process `ramsharedd` PID 1077120 holding 4096 MiB remained active and stable without fault. `crates/ramshared-cli/src/main.rs` achieved 91.6% (1506/1645 lines) coverage. GitHub Actions run 32868845111 passed 20/20 checks.
+**Refusals:** No OOM-killer activation occurred; no unhandled kernel panics or process hangs; no ghost swap; no memory leakage detected.
+**Residual blockers:** None for this code and pressure candidate.
+**Rollback trigger:** Any SHA-256 digest mismatch under memory pressure, OOM termination of critical control services, or regression of slice coverage below 80%.
+**Verdict:** ✅ `PASS`. Host memory pressure resilience and code coverage gates are satisfied.
+

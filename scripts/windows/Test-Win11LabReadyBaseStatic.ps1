@@ -52,11 +52,23 @@ if (-not (Test-Path -LiteralPath $boundedHelperPath -PathType Leaf)) {
     throw "ready_base_static: bounded helper missing"
 }
 $boundedHelperText = Get-Content -LiteralPath $boundedHelperPath -Raw -ErrorAction Stop
-foreach ($boundedNeedle in @("ProcessStartInfo", "ReadToEndAsync", "taskkill.exe")) {
+foreach ($boundedNeedle in @(
+    "ProcessStartInfo",
+    "ReadToEndAsync",
+    "Stop-GuestProcessInstanceSafely",
+    '$Process.Handle',
+    "StartTime",
+    '$Process.Kill()'
+)) {
     if ($boundedHelperText -notmatch [regex]::Escape($boundedNeedle)) {
         throw ("ready_base_static: bounded helper contract missing " + $boundedNeedle)
     }
 }
+if ($boundedHelperText -match '(?im)^\s*taskkill\.exe\b' -or
+    $boundedHelperText -match '(?im)^\s*Stop-Process\s+-Id\b') {
+    throw "ready_base_static: numeric PID termination is forbidden; require process-instance identity"
+}
+Write-Output "PASS ready_base_bounded_helper_uses_process_instance_identity_not_numeric_pid_kill"
 Write-Output "PASS ready_base_requires_exact_sealed_receipt"
 Write-Output "PASS ready_base_guest_shutdown_is_graceful_and_bounded"
 Write-Output "PASS ready_base_copy_is_deadline_bounded_and_hash_exact"
