@@ -264,3 +264,15 @@ entry is superseded by this statement.
 - **Cache Acceleration:** Active cache hits over PCIe Gen 3 x16 deliver **6.2 GB/s read throughput** (versus 140.7 MB/s direct SSD reads, a **44x speedup** on hot swap page retrieval).
 - **Graceful Fallback:** Complete teardown of the GPU context caused zero read errors or data corruption when falling back to the SSD origin. Readback hash matched the pre-write golden hash byte-for-byte across all 256 MiB.
 
+### Storage Tier Comparison: DRAM-buffered vs DRAM-less SSD Origin
+
+During live qualification, the exact 256 MiB write-through benchmark was evaluated against both physical SATA SSD storage pools on the host to assess DRAM cache impact on swap origin latency:
+
+| Target Storage Pool | Drive Model | Architecture | Synchronous Write (`fsync`) | Direct Read | VRAM Acceleration vs Disk |
+| :--- | :--- | :--- | ---: | ---: | :---: |
+| **Drive C:\ (Primary)** | Samsung SSD 850 EVO 500GB | SATA SSD w/ DRAM Cache | **85.4 MB/s** (2.997s) | **140.7 MB/s** (1.819s) | **29.7x faster** in VRAM |
+| **Drive I:\ (Secondary)** | Kingston SA400S37240G 240GB | SATA SSD DRAM-less | **38.0 MB/s** (6.736s) | **134.4 MB/s** (1.905s) | **80.1x faster** in VRAM |
+
+**Key Takeaway:** On DRAM-less storage (`I:\`), unbuffered synchronous `fsync` operations stall at 38 MB/s (a 2.25x degradation compared to the Samsung EVO), increasing the VRAM caching speedup to **80.1x**. Placing the authoritative origin on `C:\` provides both superior origin persistence latency and leaves the lower-capacity secondary pool unencumbered.
+
+
