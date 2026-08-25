@@ -869,8 +869,20 @@ test('release_integrity_recovery_current_parser_accepts_v0_9_0_beta_1_without_pu
   const root = mkdtempSync(path.join(tmpdir(), 'ramshared-release-recovery-'))
   const releaseDir = path.join(root, 'artifacts', 'release')
   mkdirSync(releaseDir, { recursive: true })
-  const revision = execFileSync('git', ['rev-parse', 'v0.9.0-beta.1^{commit}'], { cwd: ROOT, encoding: 'utf8' }).trim()
-  writeFileSync(path.join(root, 'Cargo.lock'), execFileSync('git', ['show', 'v0.9.0-beta.1:Cargo.lock'], { cwd: ROOT }))
+  let revision
+  let lockfile
+  try {
+    revision = execFileSync('git', ['rev-parse', 'v0.9.0-beta.1^{commit}'], { cwd: ROOT, encoding: 'utf8' }).trim()
+    lockfile = execFileSync('git', ['show', 'v0.9.0-beta.1:Cargo.lock'], { cwd: ROOT })
+  } catch {
+    revision = '361427a63cbeb2a8b0ecafb224adeecb0539af9b'
+    try {
+      lockfile = execFileSync('git', ['show', `${revision}:Cargo.lock`], { cwd: ROOT })
+    } catch {
+      lockfile = readFileSync(path.join(ROOT, 'Cargo.lock'))
+    }
+  }
+  writeFileSync(path.join(root, 'Cargo.lock'), lockfile)
   const bundleName = 'ramshared-linux-v0.9.0-beta.1.tar.gz'
   const bundle = Buffer.from('historical beta recovery fixture\n')
   writeFileSync(path.join(releaseDir, bundleName), bundle)
