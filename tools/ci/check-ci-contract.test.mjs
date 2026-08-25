@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -21,8 +23,8 @@ import {
 } from './check-ci-contract.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
-const RUSTSEC_SNAPSHOT_COMMIT = '69f93e1d081d8b6fbee010e48f0b5e0d13661415'
-const RUSTSEC_SNAPSHOT_UTC = '2026-08-12T10:42:29Z'
+const RUSTSEC_SNAPSHOT_COMMIT = 'bf5c0d245a92671908518d7e765914d437954ed6'
+const RUSTSEC_SNAPSHOT_UTC = '2026-08-21T06:28:40Z'
 const REMOTE_OBSERVATION_NOW = Date.parse('2026-08-09T16:00:00Z')
 
 function compliantRemoteObservation(overrides = {}) {
@@ -359,7 +361,7 @@ test('ci_specific_policies_reject_malformed_coverage_and_cancellation_rules', ()
 
 test('ci_contract_rejects_stale_advisory_snapshot', () => {
   const result = validateContract(currentOnlyContract(cargoAuditGate()), {
-    now: Date.parse('2026-08-19T10:42:30Z'),
+    now: Date.parse('2026-08-28T06:28:41Z'),
   })
   assert.equal(result.ok, false)
   assert.equal(result.errors.some((item) => item.rule === 'advisory-db-snapshot-stale'), true)
@@ -817,7 +819,7 @@ test('item6_release_integrity_workflow_is_current_and_nonpublishing', () => {
   assert.match(workflow, /sha256sum "\$archive" > "\$archive\.sha256"/)
   assert.match(workflow, /--checksum "artifacts\/release\/ramshared-linux-\$RELEASE_TAG\.tar\.gz\.sha256"/)
   assert.match(workflow, /write-release-manifest\.mjs/)
-  assert.match(workflow, /check-release-integrity\.mjs --check/)
+  assert.match(workflow, /node "\$integrity_checker" --check/)
   assert.match(workflow, /actions\/upload-artifact@[0-9a-f]{40}/)
   assert.match(workflow, /name: release-integrity-\$\{\{ env\.RELEASE_TAG \}\}-\$\{\{ steps\.identity\.outputs\.revision \}\}/)
   assert.match(workflow, /retention-days: 14/)
@@ -826,6 +828,17 @@ test('item6_release_integrity_workflow_is_current_and_nonpublishing', () => {
   const result = run({ root: ROOT })
   assert.equal(result.errors.some((item) => item.gate === 'release-integrity'), false)
   assert.equal(result.gaps.some((item) => item.startsWith('release-integrity:')), false)
+})
+
+test('clean_checkout_ci_enforces_committed_candidate_public_hygiene', () => {
+  const workflow = readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8')
+  const docsCheck = readFileSync(path.join(ROOT, 'scripts', 'docs-check.sh'), 'utf8')
+  const contract = JSON.parse(readFileSync(path.join(ROOT, 'docs', 'governance', 'ci-contract.json'), 'utf8'))
+  const gate = contract.gates.find((item) => item.id === 'docs-integrity')
+  assert.match(workflow, /name: Committed public artifact hygiene[\s\S]*node tools\/ci\/check-public-hygiene\.mjs --candidate/)
+  assert.match(docsCheck, /^run_gate public-hygiene node tools\/ci\/check-public-hygiene\.mjs --candidate$/m)
+  assert.ok(gate.required_commands.includes('node tools/ci/check-public-hygiene.mjs --candidate'))
+  assert.match(readFileSync(path.join(ROOT, 'tools', 'ci', 'check-public-hygiene.test.mjs'), 'utf8'), /clean_checkout_committed_public_text_extensions_fail_closed/)
 })
 
 test('release_integrity_recovery_is_exact_tag_sha_read_only', () => {
@@ -842,7 +855,72 @@ test('release_integrity_recovery_is_exact_tag_sha_read_only', () => {
   assert.match(workflow, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/)
   assert.match(workflow, /tmp\/recovery-policy\/tools\/ci\/merge-release-sboms\.mjs/)
   assert.match(workflow, /\$RUNNER_TEMP\/release-policy\/merge-release-sboms\.mjs/)
+  for (const helper of ['write-release-manifest.mjs', 'check-release-integrity.mjs', 'check-ci-artifacts.mjs']) {
+    const escaped = helper.replaceAll('.', '\\.')
+    assert.match(workflow, new RegExp(`tmp/recovery-policy/tools/ci/${escaped}`))
+    assert.match(workflow, new RegExp(`\\$RUNNER_TEMP/release-policy/${escaped}`))
+  }
+  assert.match(workflow, /manifest_writer="\$RUNNER_TEMP\/release-policy\/write-release-manifest\.mjs"/)
+  assert.match(workflow, /integrity_checker="\$RUNNER_TEMP\/release-policy\/check-release-integrity\.mjs"/)
   assert.doesNotMatch(workflow, /environment:|contents:\s*write|gh release|upload-release-asset|create-release/i)
+})
+
+test('release_integrity_recovery_current_parser_accepts_v0_9_0_beta_1_without_publication', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'ramshared-release-recovery-'))
+  const releaseDir = path.join(root, 'artifacts', 'release')
+  mkdirSync(releaseDir, { recursive: true })
+  const revision = execFileSync('git', ['rev-parse', 'v0.9.0-beta.1^{commit}'], { cwd: ROOT, encoding: 'utf8' }).trim()
+  writeFileSync(path.join(root, 'Cargo.lock'), execFileSync('git', ['show', 'v0.9.0-beta.1:Cargo.lock'], { cwd: ROOT }))
+  const bundleName = 'ramshared-linux-v0.9.0-beta.1.tar.gz'
+  const bundle = Buffer.from('historical beta recovery fixture\n')
+  writeFileSync(path.join(releaseDir, bundleName), bundle)
+  const bundleHash = createHash('sha256').update(bundle).digest('hex')
+  writeFileSync(path.join(releaseDir, `${bundleName}.sha256`), `${bundleHash}  ${bundleName}\n`)
+  writeFileSync(path.join(releaseDir, 'ramshared-sbom.cdx.json'), `${JSON.stringify({
+    bomFormat: 'CycloneDX',
+    specVersion: '1.5',
+    metadata: {
+      tools: { components: [{ name: 'cargo-cyclonedx', version: '0.5.9' }] },
+      component: {
+        type: 'application',
+        name: 'ramshared',
+        version: '0.9.0-beta.1',
+        components: [{ name: 'ramshared-cli' }, { name: 'ramshared-wsl2d' }],
+      },
+      properties: [
+        { name: 'ramshared:release:tag', value: 'v0.9.0-beta.1' },
+        { name: 'ramshared:source:revision', value: revision },
+      ],
+    },
+  })}\n`)
+
+  const manifestPath = 'artifacts/release/release-manifest.json'
+  const writer = spawnSync(process.execPath, [
+    path.join(ROOT, 'tools', 'ci', 'write-release-manifest.mjs'),
+    '--tag', 'v0.9.0-beta.1',
+    '--revision', revision,
+    '--rust-version', '1.98.0',
+    '--rust-commit', '1'.repeat(40),
+    '--bundle', `artifacts/release/${bundleName}`,
+    '--checksum', `artifacts/release/${bundleName}.sha256`,
+    '--sbom', 'artifacts/release/ramshared-sbom.cdx.json',
+    '--prior-release', 'none',
+    '--rollback-trigger', 'bundle checksum mismatch',
+    '--out', manifestPath,
+    '--clean-tree',
+  ], { cwd: root, encoding: 'utf8' })
+  assert.equal(writer.status, 0, `${writer.stdout}${writer.stderr}`)
+  const checker = spawnSync(process.execPath, [
+    path.join(ROOT, 'tools', 'ci', 'check-release-integrity.mjs'),
+    '--check', manifestPath,
+    '--root', root,
+    '--tag', 'v0.9.0-beta.1',
+    '--revision', revision,
+  ], { cwd: root, encoding: 'utf8' })
+  assert.equal(checker.status, 0, `${checker.stdout}${checker.stderr}`)
+
+  const workflow = readFileSync(path.join(ROOT, '.github', 'workflows', 'release-integrity.yml'), 'utf8')
+  assert.doesNotMatch(workflow, /gh release|upload-release-asset|create-release|contents:\s*write/i)
 })
 
 test('release_integrity_refuses_any_deployment_environment', () => {

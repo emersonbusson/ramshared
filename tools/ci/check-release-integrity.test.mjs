@@ -106,7 +106,8 @@ function fixture({ manifest: manifestOverrides = {}, sbomContent } = {}) {
       sha: SOURCE_SHA,
       clean_tree: true,
       cargo_lock_sha256: sha256(cargoLock),
-      rust_version: '1.88.0',
+      rust_version: '1.98.0',
+      rust_commit: 'a'.repeat(40),
     },
     sbom_generator: SBOM_GENERATOR,
     linux_bundle: bundle,
@@ -181,7 +182,8 @@ test('release_manifest_rejects_invalid_detached_checksum_or_historical_target', 
 test('release_manifest_rejects_dirty_source', () => {
   const invalid = fixture({ manifest: { source: {
     tag: TARGET_TAG, sha: SOURCE_SHA, clean_tree: false,
-    cargo_lock_sha256: '0'.repeat(64), rust_version: '1.88.0',
+    cargo_lock_sha256: '0'.repeat(64), rust_version: '1.98.0',
+    rust_commit: 'a'.repeat(40),
   } } })
   const result = validateReleaseManifest(invalid.manifest, { root: invalid.root })
   assert.equal(result.ok, false)
@@ -307,7 +309,8 @@ test('release_sbom_requires_exact_release_roots_and_path_free_source_binding', (
 test('release_manifest_cli_uses_stable_errors_without_echoing_values', () => {
   const invalid = fixture({ manifest: { source: {
     tag: 'private-user/release', sha: SOURCE_SHA, clean_tree: true,
-    cargo_lock_sha256: '0'.repeat(64), rust_version: '1.88.0',
+    cargo_lock_sha256: '0'.repeat(64), rust_version: '1.98.0',
+    rust_commit: 'a'.repeat(40),
   } } })
   writeFileSync(invalid.manifestPath, `${JSON.stringify(invalid.manifest, null, 2)}\n`)
   const output = []

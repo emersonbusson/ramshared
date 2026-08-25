@@ -6,6 +6,14 @@ objective router in [`REFERENCE-INDEX.md`](../reference/REFERENCE-INDEX.md).
 Capability state is explicit in [`claims.json`](claims.json); an `IMPL.md`
 without a qualified claim is `UNQUALIFIED`, not `DONE`.
 
+Each record in [`claim-closures.json`](claim-closures.json) binds the complete
+claim object through `claim_sha256`. Canonical JSON recursively sorts object
+keys by UTF-16 code-unit order, preserves array order, serializes JSON
+primitives without whitespace, and hashes the resulting UTF-8 bytes with
+SHA-256. Owner, state, rollback, and evidence changes therefore invalidate a
+stale or replayed closure. The exact shape is defined by
+[`claim-closures.schema.json`](claim-closures.schema.json).
+
 The repository also keeps a bounded lifecycle policy for every Markdown file
 in [`DOCUMENT-LIFECYCLE.md`](DOCUMENT-LIFECYCLE.md), a passive
 [`../reference/DOCUMENTATION-INVENTORY.json`](../reference/DOCUMENTATION-INVENTORY.json),

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -9,6 +10,12 @@ import { classifyDocument, listDocumentPaths } from './check-document-lifecycle.
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const POLICY_PATH = 'docs/governance/document-lifecycle-policy.json'
 const OUTPUT_PATH = 'docs/reference/DOCUMENTATION-INVENTORY.json'
+const TIMESTAMPED_RUN_LABEL = /\b(?!SANITIZED_)[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*-\d{8}(?:[-T_]\d{6})\b/g
+
+/** Render public-safe references without exposing a dated run identity. */
+export function publicDocumentReference(value) {
+  return value.replace(TIMESTAMPED_RUN_LABEL, (label) => `SANITIZED_RUN_REF_${createHash('sha256').update(label).digest('hex').slice(0, 12).toUpperCase()}`)
+}
 
 function loadPolicy(root) {
   return JSON.parse(readFileSync(path.join(root, POLICY_PATH), 'utf8'))
@@ -19,7 +26,7 @@ export function buildInventory({ root = ROOT, paths = null, policy = null } = {}
   const activePolicy = policy ?? loadPolicy(root)
   const entries = [...documentPaths].sort().map((pathname) => {
     const result = classifyDocument(pathname, activePolicy)
-    const common = { path: pathname, disposition: result.disposition, ruleId: result.ruleId ?? null, verification: { state: result.verificationState ?? 'unverified' } }
+    const common = { path: publicDocumentReference(pathname), disposition: result.disposition, ruleId: result.ruleId ?? null, verification: { state: result.verificationState ?? 'unverified' } }
     if (result.disposition === 'classified') return { ...common, owner: result.owner, canonicalSource: result.canonicalSource, lifecycle: result.lifecycle, freshnessDays: result.freshnessDays }
     if (result.disposition === 'excluded') return { ...common, owner: result.owner, reason: result.reason }
     return common
@@ -27,7 +34,7 @@ export function buildInventory({ root = ROOT, paths = null, policy = null } = {}
   const count = (predicate) => entries.filter(predicate).length
   return {
     schemaVersion: 'ramshared.documentation-inventory.v1',
-    source: 'Markdown paths visible in the repository worktree; classification is not content verification',
+    source: 'Public-safe Markdown references visible in the repository worktree; classification is not content verification',
     counts: { total: entries.length, classified: count((entry) => entry.disposition === 'classified'), excluded: count((entry) => entry.disposition === 'excluded'), unclassified: count((entry) => entry.disposition === 'unclassified'), ambiguous: count((entry) => entry.disposition === 'ambiguous') },
     entries,
   }

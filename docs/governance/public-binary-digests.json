@@ -1,0 +1,16 @@
+{
+  "$schema": "./public-binary-digests.schema.json",
+  "schema_version": "ramshared-public-binary-digests/v1",
+  "entries": [
+    {
+      "path": "docs/marketing/benchmark-comparison.jpg",
+      "size": 572788,
+      "sha256": "0137ee6a751986fc2b349dcb5f4fb6a9abaf81c7a515517cf7f6b07e3ab992a9"
+    },
+    {
+      "path": "docs/marketing/benchmark-wsl2-vs-storport.jpg",
+      "size": 116268,
+      "sha256": "967f2b0c2e7f7e8215b778978630ff410d3192daeb31083809748961c4758dd9"
+    }
+  ]
+}

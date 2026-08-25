@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "public-binary-digests.schema.json",
+  "title": "RamShared reviewed public JPEG digest manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "schema_version",
+    "entries"
+  ],
+  "properties": {
+    "$schema": {
+      "const": "./public-binary-digests.schema.json"
+    },
+    "schema_version": {
+      "const": "ramshared-public-binary-digests/v1"
+    },
+    "entries": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "size",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^docs/.+\\.jpe?g$"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8388608
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
+  }
+}

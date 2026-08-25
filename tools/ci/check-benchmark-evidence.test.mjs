@@ -328,6 +328,9 @@ function validRecord(overrides = {}) {
 function fixtureRepo() {
   const root = mkdtempSync(path.join(tmpdir(), 'ramshared-benchmark-evidence-'))
   mkdirSync(path.join(root, 'docs', 'benchmarks'), { recursive: true })
+  mkdirSync(path.join(root, 'docs', 'marketing'), { recursive: true })
+  writeFileSync(path.join(root, 'README.md'), '# RamShared\n')
+  writeFileSync(path.join(root, 'README.pt-BR.md'), '# RamShared\n')
   writeFileSync(
     path.join(root, 'docs', 'BENCHMARKS.md'),
     '<!-- ramshared-benchmark-id: fixture-benchmark -->\n## 2026-08-09 12:00 UTC — fixture\n',
@@ -343,6 +346,10 @@ function fixtureRepo() {
   writeFileSync(
     path.join(root, 'docs', 'benchmarks', 'benchmark-map.json'),
     `${JSON.stringify({ schema_version: 'ramshared-benchmark-map/v1', entries: [{ benchmark_id: 'fixture-benchmark', run_id: 'fixture-run-001' }] })}\n`,
+  )
+  writeFileSync(
+    path.join(root, 'docs', 'benchmarks', 'public-claims.json'),
+    `${JSON.stringify({ schema_version: 'ramshared-public-benchmark-claims/v1', entries: [] })}\n`,
   )
   return root
 }
@@ -499,6 +506,116 @@ test('legacy_marker_cannot_promote', () => {
   const legacy = JSON.parse(readFileSync(legacyPath, 'utf8'))
   assert.equal(legacy.entries[0].qualified, true)
   assert.match(validateRepository({ root }).findings.join('\n'), /legacy-qualified/)
+})
+
+test('public_numeric_claim_requires_benchmark_identity', () => {
+  const root = fixtureRepo()
+  const claim = '# Performance\np99 ~9 ms\n'
+  writeFileSync(path.join(root, 'README.md'), claim)
+  assert.match(validateRepository({ root }).findings.join('\n'), /public-claim-unqualified/)
+
+  writeFileSync(path.join(root, 'docs', 'benchmarks', 'public-claims.json'), JSON.stringify({
+    schema_version: 'ramshared-public-benchmark-claims/v1',
+    entries: [{
+      id: 'qualified-readme-fixture', path: 'README.md', file_sha256: sha256(claim),
+      disposition: 'qualified', benchmark_id: 'fixture-benchmark', claims: ['p99 ~9 ms'],
+      reason: 'Fixture claim is bound to the qualified benchmark record.',
+    }],
+  }))
+  assert.deepEqual(validateRepository({ root }).findings, [])
+})
+
+test('legacy_unqualified_public_claim_is_exactly_bound', () => {
+  const root = fixtureRepo()
+  const claim = '# Historical\nlegacy p99 ~9 ms\n'
+  writeFileSync(path.join(root, 'README.pt-BR.md'), claim)
+  writeFileSync(path.join(root, 'docs', 'benchmarks', 'public-claims.json'), JSON.stringify({
+    schema_version: 'ramshared-public-benchmark-claims/v1',
+    entries: [{
+      id: 'legacy-readme-fixture', path: 'README.pt-BR.md', file_sha256: sha256(claim),
+      disposition: 'legacy-unqualified', benchmark_id: null, claims: ['legacy p99 ~9 ms'],
+      reason: 'Fixture is explicitly historical and cannot promote a benchmark.',
+    }],
+  }))
+  assert.deepEqual(validateRepository({ root }).findings, [])
+})
+
+test('changed_legacy_surface_hash_fails', () => {
+  const root = fixtureRepo()
+  const claim = '# Historical\nlegacy p99 ~9 ms\n'
+  writeFileSync(path.join(root, 'README.md'), claim)
+  writeFileSync(path.join(root, 'docs', 'benchmarks', 'public-claims.json'), JSON.stringify({
+    schema_version: 'ramshared-public-benchmark-claims/v1',
+    entries: [{
+      id: 'legacy-readme-fixture', path: 'README.md', file_sha256: sha256(claim),
+      disposition: 'legacy-unqualified', benchmark_id: null, claims: ['legacy p99 ~9 ms'],
+      reason: 'Fixture is explicitly historical and cannot promote a benchmark.',
+    }],
+  }))
+  writeFileSync(path.join(root, 'README.md'), `${claim}Editorial change.\n`)
+  assert.match(validateRepository({ root }).findings.join('\n'), /public-claim-surface-hash/)
+})
+
+test('public_scanner_detects_contextual_numeric_claims_in_english_portuguese_and_svg', () => {
+  const root = fixtureRepo()
+  const surfaces = [
+    {
+      id: 'english-contextual-claims',
+      path: 'README.md',
+      text: '# Efficiency\nLeaves all 8 host CPU cores available.\n6.5 times faster.\n',
+      claims: ['Leaves all 8 host CPU cores available.', '6.5 times faster.'],
+    },
+    {
+      id: 'portuguese-contextual-claims',
+      path: 'README.pt-BR.md',
+      text: '# Eficiência\nMantém os 8 núcleos da CPU disponíveis.\n6,5 vezes mais rápido.\nEconomia de CPU de 81 por cento.\n',
+      claims: ['Mantém os 8 núcleos da CPU disponíveis.', '6,5 vezes mais rápido.', 'Economia de CPU de 81 por cento.'],
+    },
+    {
+      id: 'svg-contextual-claims',
+      path: 'docs/marketing/efficiency.svg',
+      text: '<svg><text><tspan>81 percent CPU savings</tspan></text><text>Leaves host CPU cores 100% available</text></svg>\n',
+      claims: ['81 percent CPU savings', 'Leaves host CPU cores 100% available'],
+    },
+  ]
+  for (const surface of surfaces) writeFileSync(path.join(root, surface.path), surface.text)
+  writeFileSync(path.join(root, 'docs', 'benchmarks', 'public-claims.json'), JSON.stringify({
+    schema_version: 'ramshared-public-benchmark-claims/v1',
+    entries: surfaces.map((surface) => ({
+      id: surface.id,
+      path: surface.path,
+      file_sha256: sha256(surface.text),
+      disposition: 'legacy-unqualified',
+      benchmark_id: null,
+      claims: surface.claims,
+      reason: 'Contextual numeric fixture has no qualified benchmark identity and cannot promote.',
+    })),
+  }))
+  assert.deepEqual(validateRepository({ root }).findings, [])
+})
+
+test('public_scanner_does_not_treat_inventory_versions_or_repeat_counts_as_performance_claims', () => {
+  const root = fixtureRepo()
+  writeFileSync(path.join(root, 'README.md'), '# Inventory\nWindows 11 on RTX 2060 with 6 GB VRAM.\nThe host has 8 CPU cores and 32 GiB RAM.\nRun the probe 3 times.\n')
+  writeFileSync(path.join(root, 'README.pt-BR.md'), '# Inventário\nHost com 8 núcleos de CPU e 32 GiB de RAM.\nExecute o teste 3 vezes.\n')
+  writeFileSync(path.join(root, 'docs', 'marketing', 'inventory.svg'), '<svg><text>Build 26200 · 4 logical CPUs · GPU 0</text></svg>\n')
+  assert.deepEqual(validateRepository({ root }).findings, [])
+})
+
+test('repository_cpu_efficiency_artwork_is_explicitly_legacy_unqualified', () => {
+  const registry = JSON.parse(readFileSync(new URL('../../docs/benchmarks/public-claims.json', import.meta.url), 'utf8'))
+  const entry = registry.entries.find((item) => item.path === 'docs/marketing/benchmark-comparison.svg')
+  assert.equal(entry.disposition, 'legacy-unqualified')
+  assert.equal(entry.benchmark_id, null)
+  assert.ok(entry.claims.includes('81% CPU Savings'))
+  assert.ok(entry.claims.includes('Leaves host CPU cores 100% available'))
+})
+
+test('repository_public_scanner_covers_readmes_and_svg_surfaces', () => {
+  const result = validateRepository({ root: process.cwd() })
+  assert.equal(result.ok, true, result.findings.join('\n'))
+  assert.ok(result.counts.public_surfaces >= 5)
+  assert.ok(result.counts.public_claims >= 18)
 })
 
 test('public_pair_evidence_matches_repository_validator_fixture', () => {

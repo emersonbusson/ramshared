@@ -31,9 +31,18 @@ const LIFECYCLES = new Set(['writing', 'complete', 'failed', 'blocked'])
 const CLAIM_STATES = new Set(['PASS', 'PARTIAL', 'FAIL', 'BLOCKED'])
 const SURFACES = new Set(['wsl2-freeze', 'windows-storage', 'kernel-lab', 'benchmark', 'other'])
 const ENVIRONMENT_TIERS = new Set(['isolated', 'shared', 'physical'])
+const TIMESTAMPED_RUN_LABEL = /\b(?!SANITIZED_)[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*-\d{8}(?:[-T_]\d{6})\b/g
 
 function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex')
+}
+
+// Catalogs are public summaries. They retain stable, non-reversible references
+// rather than copying timestamped run labels from custody paths or manifests.
+function publicCatalogReference(value) {
+  return typeof value === 'string'
+    ? value.replace(TIMESTAMPED_RUN_LABEL, (label) => `SANITIZED_RUN_REF_${sha256(label).slice(0, 12).toUpperCase()}`)
+    : value
 }
 
 function canonicalJson(value) {
@@ -434,10 +443,10 @@ export function buildEvidenceCatalog({ root = ROOT, policy, trackedPaths = null 
       const containing = [...manifests.keys()].find((run) => relative === run || relative.startsWith(`${run}/`))
       if (containing) continue
       if (item.stat.size > normalized.policy.limits.max_artifact_bytes) {
-        catalogFindings.push(`legacy-artifact-size-limit:${relative}`)
+        catalogFindings.push(`legacy-artifact-size-limit:${publicCatalogReference(relative)}`)
         entries.push({
           kind: 'artifact-observation',
-          path: relative,
+          path: publicCatalogReference(relative),
           owner_role: configured.owner_role,
           surface: configured.surface,
           classification: normalized.policy.legacy.classification,
@@ -453,7 +462,7 @@ export function buildEvidenceCatalog({ root = ROOT, policy, trackedPaths = null 
       }
       entries.push({
         kind: 'artifact-observation',
-        path: relative,
+        path: publicCatalogReference(relative),
         owner_role: configured.owner_role,
         surface: configured.surface,
         classification: normalized.policy.legacy.classification,
@@ -471,9 +480,9 @@ export function buildEvidenceCatalog({ root = ROOT, policy, trackedPaths = null 
     const manifest = item.manifest
     entries.push({
       kind: 'campaign-run',
-      path: runRelative,
-      manifest_path: item.manifest_path,
-      run_id: manifest?.run_id ?? null,
+      path: publicCatalogReference(runRelative),
+      manifest_path: publicCatalogReference(item.manifest_path),
+      run_id: publicCatalogReference(manifest?.run_id ?? null),
       owner_role: manifest?.owner_role ?? null,
       surface: manifest?.surface ?? null,
       lifecycle: manifest?.lifecycle ?? null,
