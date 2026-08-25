@@ -1960,4 +1960,90 @@ CONFIG_BLK_DEV_NBD=m\n\
                 .any(|item| item.contains("bounded NBD preflight"))
         );
     }
+
+    #[test]
+    fn check_and_doctor_report_rendering_are_deterministic() {
+        let report = CheckReport {
+            wsl: WslProbe {
+                status: Status::Ok,
+                release: "6.6.87.2-microsoft-standard-WSL2".to_string(),
+                version: "Linux version test".to_string(),
+            },
+            swaps: vec![SwapEntry {
+                filename: "/dev/nbd0".to_string(),
+                kind: "partition".to_string(),
+                size_kib: 1024 * 1024,
+                used_kib: 256 * 1024,
+                priority: 10,
+            }],
+            kernel: KernelFeatures {
+                config_source: Some("/boot/config-test".to_string()),
+                swap: Some(KernelConfig::BuiltIn),
+                io_uring: Some(KernelConfig::BuiltIn),
+                io_uring_runtime: Some(IoUringRuntime::Enabled),
+                nbd: Some(KernelConfig::BuiltIn),
+                ublk: Some(KernelConfig::Module),
+                zram: Some(KernelConfig::Module),
+            },
+            cuda: CudaProbe {
+                status: Status::Ok,
+                libcuda_path: Some("/usr/lib/wsl/lib/libcuda.so.1".to_string()),
+                dxg_present: true,
+                nvidia_smi_path: Some("/usr/lib/wsl/lib/nvidia-smi".to_string()),
+                nvidia_smi_status: Some(0),
+                nvidia_smi_output: Some("NVIDIA-SMI 570.00".to_string()),
+                gpu: Some(GpuInfo {
+                    name: "NVIDIA RTX 4090".to_string(),
+                    total_bytes: 24 * 1024 * 1024 * 1024,
+                    free_bytes: 20 * 1024 * 1024 * 1024,
+                }),
+                detail: "ready".to_string(),
+            },
+            backends: BackendProbe {
+                nbd_status: Status::Ok,
+                nbd_detail: "device-present".to_string(),
+                ublk_status: Status::Ok,
+                ublk_detail: "ready".to_string(),
+            },
+            blockers: Vec::new(),
+            warnings: vec!["minor warning".to_string()],
+        };
+
+        let mut text_buf = Vec::new();
+        print_text_report(&report, &mut text_buf).expect("text report renders");
+        let text_out = String::from_utf8(text_buf).expect("text is UTF-8");
+        assert!(text_out.contains("WSL2: ok"));
+        assert!(text_out.contains("NVIDIA RTX 4090"));
+        assert!(text_out.contains("Current swap: /dev/nbd0"));
+        assert!(text_out.contains("Decision: ready"));
+        assert!(text_out.contains("Warnings:"));
+
+        let json_out = render_json(&report);
+        assert!(json_out.contains("\"decision\":\"ready\""));
+
+        let recs = recommendations_for(&report);
+        let mut rec_buf = Vec::new();
+        print_recommendations(&recs, &mut rec_buf).expect("recommendations render");
+        let rec_text = String::from_utf8(rec_buf).expect("rec text is UTF-8");
+        assert!(rec_text.contains("Recommendations:"));
+
+        let doc_json = render_doctor_json(&report, &recs);
+        assert!(doc_json.contains("\"decision\":\"ready\""));
+    }
+
+    #[test]
+    fn exit_helper_and_usage_cover_all_branches() {
+        let mut err_buf = Vec::new();
+        let ok_exit = to_exit::<&str>(Ok(()), &mut err_buf);
+        assert_eq!(ok_exit, ExitCode::SUCCESS);
+        assert!(err_buf.is_empty());
+
+        let err_exit = to_exit(Err("forced failure"), &mut err_buf);
+        assert_ne!(err_exit, ExitCode::SUCCESS);
+        assert!(String::from_utf8_lossy(&err_buf).contains("forced failure"));
+
+        let mut usage_buf = Vec::new();
+        print_usage(&mut usage_buf);
+        assert!(String::from_utf8_lossy(&usage_buf).contains("usage:"));
+    }
 }
