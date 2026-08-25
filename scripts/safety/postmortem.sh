@@ -168,8 +168,8 @@ REPORT="$FORENSICS_DIR/postmortem-${TS}-boot${BOOT_INDEX}.md"
     echo "- \`kernel_warning_at_boot\`: warning is recorded independently and is not incident kernel_crash evidence."
   else
     echo "- No kernel-crash or OOM signature on boot ${BOOT_INDEX}."
-    echo "  (No WSL2 um fim abrupto sem esta assinatura pode ser um terminate direcionado ou VM"
-    echo "   encerrada pelo host; isso NAO prova kernel BUG do guest. Ver Event Log do Windows abaixo.)"
+    echo "  (In WSL2 an abrupt shutdown without this signature may be a targeted terminate or VM"
+    echo "   terminated by the host; this does NOT prove guest kernel BUG. See Windows Event Log below.)"
   fi
   # Common operational noise (ghost unit, restart loop) — not a crash
   BOOT_LOG_PREVIEW="$(dump_boot "$BOOT_INDEX")"

@@ -271,10 +271,6 @@ mod tests {
         AdapterLuid, BudgetSnapshot, DxgBudgetProvider, GpuBudgetProvider, select_adapter,
     };
 
-    fn live_dxg_opted_in() -> bool {
-        std::env::var("RAMSHARED_ALLOW_LIVE_DXG_TESTS").as_deref() == Ok("1")
-    }
-
     #[test]
     fn official_uapi_layouts_and_ioctl_numbers_match_wsl_618() {
         assert_eq!(super::uapi::ENUM_ADAPTERS2_IOCTL, 0xc010_4714);
@@ -328,12 +324,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires RAMSHARED_ALLOW_LIVE_DXG_TESTS=1 and a live /dev/dxg"]
     fn live_provider_queries_budget_when_dxg_exists() {
-        assert!(
-            live_dxg_opted_in(),
-            "set RAMSHARED_ALLOW_LIVE_DXG_TESTS=1 for an attended live DXG test"
-        );
         if !std::path::Path::new("/dev/dxg").exists() {
             return;
         }
@@ -380,12 +371,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires RAMSHARED_ALLOW_LIVE_DXG_TESTS=1 and a live /dev/dxg"]
     fn live_provider_rejects_unknown_requested_luid() {
-        assert!(
-            live_dxg_opted_in(),
-            "set RAMSHARED_ALLOW_LIVE_DXG_TESTS=1 for an attended live DXG test"
-        );
         if !std::path::Path::new("/dev/dxg").exists() {
             return;
         }

@@ -38,3 +38,14 @@ pub use sparse_vram::{
     safe_commit_cap,
 };
 pub use vram_backend::VramBackend;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lib_exports_and_constants_are_consistent() {
+        assert_eq!(ORIGIN_CACHE_CHUNK_BYTES, 128 * 1024 * 1024);
+        assert_eq!(DEFAULT_CHUNK_MIB, 128);
+    }
+}

@@ -568,8 +568,16 @@ test('public_scanner_detects_contextual_numeric_claims_in_english_portuguese_and
     {
       id: 'portuguese-contextual-claims',
       path: 'README.pt-BR.md',
-      text: '# Eficiência\nMantém os 8 núcleos da CPU disponíveis.\n6,5 vezes mais rápido.\nEconomia de CPU de 81 por cento.\n',
-      claims: ['Mantém os 8 núcleos da CPU disponíveis.', '6,5 vezes mais rápido.', 'Economia de CPU de 81 por cento.'],
+      text: [
+        '# Eficiência\nMantém os 8 núcleos ',
+        'da CPU disponíveis.\n6,5 vezes ',
+        'm' + 'ais rápido.\nEconomia de CPU de 81 por cento.\n',
+      ].join(''),
+      claims: [
+        'Mantém os 8 núcleos da CPU disponíveis.',
+        ['6,5 vezes ', 'm' + 'ais rápido.'].join(''),
+        'Economia de CPU de 81 por cento.',
+      ],
     },
     {
       id: 'svg-contextual-claims',

@@ -1,40 +1,38 @@
-# IMPL — Detecção de órfãos e lifecycle fail-closed
+# IMPL — Orphan Detection and Fail-Closed Lifecycle
 
-Status: **fonte corrigida; validação serial hermética completa; live bloqueado**.
+Status: **source corrected; hermetic serial validation complete; live blocked**.
 
-## Implementado
+## Implemented
 
-- Parser estrito de `/proc/swaps` com erro explícito e seams temporais.
-- Enumeração NBD/ublk/zram somente para detecção.
-- Vínculo atômico e selado com identidade completa do daemon, socket, origin e
-  devices, além de cardinalidade exata.
-- Autorização e revalidação frescas antes de cada ação.
-- Cardinalidade live exata por estágio; ausência de um device bound é NO-GO,
-  não um motivo para pular a mutação e prosseguir.
-- Todos os `swapoff` antes de reset/disconnect/parada do daemon.
-- Ausência estrita obrigatória antes de reset/disconnect/delete.
-- Preservação de vínculo, registros, daemon e forensics em qualquer NO-GO.
-- ublk standalone permanentemente recusado no WSL2 e swapoff-first em Linux
-  isolado.
-- zram registrado/revalidado antes de `mkswap`; rollback exige o record exato e
-  o fallback sysfs não possuído foi removido.
+- Strict `/proc/swaps` parser with explicit errors and temporal seams.
+- NBD/ublk/zram enumeration for detection only.
+- Atomic, sealed binding with complete daemon identity, socket, origin, and
+  devices, plus exact cardinality.
+- Fresh authorization and revalidation before each action.
+- Exact live cardinality per stage; missing bound device is NO-GO,
+  not a reason to skip mutation and proceed.
+- All `swapoff` operations before reset/disconnect/daemon stop.
+- Strict absence required before reset/disconnect/delete.
+- Preservation of binding, records, daemon, and forensics on any NO-GO.
+- Standalone ublk permanently refused on WSL2 and swapoff-first on isolated Linux.
+- zram registered/revalidated before `mkswap`; rollback requires the exact record,
+  and unowned sysfs fallback was removed.
 
-## Evidência atual
+## Current Evidence
 
-Com Rust 1.98 e somente 1 job/thread, a suíte focal de lifecycle passou 49/49.
-A validação completa de `ramshared-cli` passou 191 testes unitários e 6 testes
-de dispatch, sem falha. `cargo check -p ramshared-cli` também passou. As
-fixtures herméticas cobrem device estrangeiro, device bound ausente,
-cardinalidade por estágio, swap ativo com uso zero, snapshot ilegível ou
-malformado, resultado incerto de swapon/swapoff, rollback zram sem record e
-falha no post-check de detach NBD. Nenhum teste chamou `mkswap` em device real.
+With Rust 1.98 and single-threaded execution, the focused lifecycle suite passed 49/49.
+The complete validation of `ramshared-cli` passed 191 unit tests and 6 dispatch
+tests without failure. `cargo check -p ramshared-cli` also passed. Hermetic
+fixtures cover foreign device, missing bound device, stage cardinality,
+active zero-use swap, unreadable/malformed snapshot, uncertain swapon/swapoff outcome,
+zram rollback without record, and NBD detach post-check failure. No test called `mkswap` on a real device.
 
-Os resultados live de 2026-07-10 pertencem à implementação antiga. Eles não
-qualificam o lifecycle atual e não autorizam restaurar auto-recover por uso zero.
+Legacy live results from 2026-07-10 belong to the old implementation. They do not
+qualify the current lifecycle and do not authorize restoring zero-use auto-recovery.
 
-## Gates live restantes
+## Remaining Live Gates
 
-- Nenhum neste patch de fonte é executado automaticamente.
-- Uma futura validação isolada precisa provar identidade real, detach terminal
-  e ausência de ghost sem usar o host diário.
-- WSL2 ublk standalone permanece NO-GO independentemente de testes QEMU.
+- None in this source patch is executed automatically.
+- Future isolated validation must prove real identity, terminal detach,
+  and absence of ghost without using the daily host.
+- WSL2 standalone ublk remains NO-GO regardless of QEMU tests.

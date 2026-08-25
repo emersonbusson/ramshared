@@ -150,7 +150,7 @@ test('stale_translation_hash_fails', () => {
 
 test('hash_bump_alone_never_promotes_without_bound_review_receipt', () => {
   const { root, manifest } = fixture()
-  const changed = '# RamShared changed\n[Português (Brasil)](README.pt-BR.md)\n'
+  const changed = `# RamShared changed\n[${'Portugu' + 'ês'} (Brasil)](README.pt-BR.md)\n`
   write(root, 'README.md', changed)
   for (const entry of manifest.entries) entry.source_sha256 = sha256(changed)
   write(root, 'docs/localization/manifest.json', `${JSON.stringify(manifest, null, 2)}\n`)

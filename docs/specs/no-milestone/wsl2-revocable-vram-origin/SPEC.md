@@ -257,6 +257,16 @@ source/static evidence and leaves unavailable live evidence `PARTIAL`.
 | Cascade provisioning | `provisioner_mkswap_is_fd_bound_and_never_executed_by_tests` | static | #13/#16 | source-only scan; zero device execution |
 | Product sunset | `legacy_preallocation_removed_before_day0_deadline` | static | #18 | clean active-source/current-doc scan + named test + governance evidence |
 
+The canonical coverage owner for the origin block backend is:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs \
+  -p ramshared-block \
+  --files crates/ramshared-block/src/isolated_origin.rs,crates/ramshared-block/src/lib.rs,crates/ramshared-block/src/origin_cache.rs,crates/ramshared-block/src/request.rs,crates/ramshared-block/src/vram_backend.rs \
+  --min 80 \
+  --report-json tmp/wsl2-revocable-vram-origin-block-cov.json
+```
+
 ## Validation checklist
 
 - [x] Source/static evidence mapped in `IMPL.md` and `validation.md` for each

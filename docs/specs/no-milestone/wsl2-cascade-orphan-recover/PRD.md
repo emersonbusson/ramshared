@@ -5,73 +5,71 @@ milestone: —
 issues: []
 ---
 
-# PRD — Detecção de órfãos e recuperação vinculada
+# PRD — Orphan Detection and Bound Recovery
 
-Status: **supersedes o auto-recover de 2026-07-10**. A enumeração live é
-somente detecção. Nenhum dispositivo sem vínculo exato é alterado, inclusive
-quando `/proc/swaps` informa `Used=0`.
+Status: **supersedes the legacy auto-recover from 2026-07-10**. Live enumeration is
+detection-only. No device without an exact binding is modified, including
+when `/proc/swaps` reports `Used=0`.
 
-## Problema
+## Problem
 
-Um término abrupto do WSL pode deixar NBD, ublk ou zram visível sem os registros
-de userspace esperados. O contrato antigo tratava `used_kb == 0` como autorização
-para `swapoff`, reset e disconnect. Isso é insuficiente: a entrada ainda está
-ativa, o nome pode ter sido reutilizado e a enumeração não prova propriedade.
+An abrupt termination of WSL can leave NBD, ublk, or zram visible without the expected
+userspace runtime records. The legacy contract treated `used_kb == 0` as authorization
+for `swapoff`, reset, and disconnect. That is insufficient: the entry is still
+active, the name could have been reused, and enumeration does not prove ownership.
 
-## Requisitos
+## Requirements
 
-- **RF-R1:** Ler `/proc/swaps` com parser estrito que retorna `Result`. Cabeçalho,
-  todas as linhas, tipos, números e unicidade são obrigatórios.
-- **RF-R2:** Tratar qualquer entrada presente como swap ativo, mesmo com uso
-  zero. Leitura ausente, malformada ou ambígua preserva backend e evidências.
-- **RF-R3:** NBD/ublk/zram descoberto sem vínculo RamShared exato gera recusa e
-  zero comandos de mutação.
-- **RF-R4:** Uma mutação de lifecycle exige vínculo selado com boot ID, PID e
-  início do daemon, InvocationID, socket/export, identidade do origin
-  (PARTUUID/PTUUID/`dev_t`/UUID/hashes), identidade de cada device e cardinalidade
-  exata.
-- **RF-R5:** Antes de cada `swapoff`, reset, disconnect, delete ou parada do
-  backend, reler e revalidar toda a autoridade. Reset/disconnect/delete exigem
-  uma nova prova estrita de ausência do device em `/proc/swaps`.
-- **RF-R6:** Device estrangeiro, duplicado, retargeted ou registro auxiliar
-  divergente permanece intocado e bloqueia todo o teardown.
-- **RF-R7:** Falha ou resultado incerto de `swapoff` preserva daemon, backend,
-  vínculo e marcadores forenses. Mensagens “not found” só podem avançar após
-  nova prova estrita de ausência.
-- **RF-R8:** O caminho standalone ublk é proibido no WSL2 sem qualquer override. Em Linux
-  isolado ele próprio executa swapoff-first e preserva tudo em NO-GO recuperável.
+- **RF-R1:** Read `/proc/swaps` with a strict parser returning `Result`. Header,
+  all rows, types, numbers, and uniqueness are mandatory.
+- **RF-R2:** Treat any present entry as an active swap, even with zero usage.
+  Missing, malformed, or ambiguous reads preserve backend and evidence.
+- **RF-R3:** NBD/ublk/zram discovered without an exact RamShared binding generates refusal and
+  zero mutating commands.
+- **RF-R4:** A lifecycle mutation requires a sealed binding with boot ID, daemon PID and
+  start time, InvocationID, socket/export, origin identity
+  (PARTUUID/PTUUID/`dev_t`/UUID/hashes), identity of each device, and exact cardinality.
+- **RF-R5:** Before each `swapoff`, reset, disconnect, delete, or backend stop,
+  re-read and revalidate all authority. Reset/disconnect/delete require
+  fresh strict proof of device absence in `/proc/swaps`.
+- **RF-R6:** Foreign, duplicate, retargeted, or mismatched auxiliary records
+  remain untouched and block the entire teardown.
+- **RF-R7:** Failure or uncertain outcome of `swapoff` preserves daemon, backend,
+  binding, and forensic markers. "Not found" messages may only advance after
+  fresh strict proof of absence.
+- **RF-R8:** The standalone ublk path is forbidden on WSL2 without any override. On isolated
+  Linux, it executes swapoff-first and preserves everything in recoverable NO-GO.
 
-## Fluxos
+## Flows
 
-### Órfão sem vínculo
+### Orphan Without Binding
 
-1. Ler snapshot estrito.
-2. Detectar device managed-looking sem vínculo selado.
-3. Retornar recusa; não chamar `swapoff`, `zramctl`, `nbd-client`, STOP_DEV,
-   DELETE_DEV ou sinal de daemon.
+1. Read strict snapshot.
+2. Detect managed-looking device without sealed binding.
+3. Return refusal; never call swapoff, zramctl, nbd-client, STOP_DEV,
+   DELETE_DEV, or daemon signals.
 
-### Lifecycle vinculado
+### Bound Lifecycle
 
-1. Abrir vínculo selado e revalidar daemon, InvocationID, socket, origin,
-   registros e devices live.
-2. Executar todos os `swapoff` necessários.
-3. Antes de cada reset/disconnect, obter snapshot estrito fresco e provar a
-   ausência exata.
-4. Comprovar desaparecimento do device antes de parar o daemon.
-5. Remover evidência somente depois do sucesso terminal completo.
+1. Open sealed binding and revalidate daemon, InvocationID, socket, origin,
+   records, and live devices.
+2. Execute all required `swapoff` invocations.
+3. Before each reset/disconnect, obtain a fresh strict snapshot and prove exact absence.
+4. Prove device disappearance before stopping daemon.
+5. Remove evidence only after complete terminal success.
 
-## Fora de escopo
+## Out of Scope
 
-- Recuperação automática por forma/nome do device.
-- `wsl --shutdown`, terminate ou restart como efeito do CLI.
-- ublk standalone no WSL2.
-- Testes em devices reais; as provas de fonte são herméticas.
+- Automatic recovery by device shape/name.
+- `wsl --shutdown`, terminate, or restart as a CLI side effect.
+- Standalone ublk on WSL2.
+- Testing on real devices; source proofs are hermetic.
 
-## Aceitação
+## Acceptance
 
-- Fixtures estrangeira, ambígua, retargeted, duplicada e sem vínculo executam
-  zero comandos.
-- Swap ativo com uso zero e falha de `swapoff` preserva backend/evidência.
-- Snapshot ilegível/malformado recusa antes de qualquer mutação.
-- Teardown válido prova swapoff-first e revalidação fresca por ação.
-- Nenhum override de ublk no WSL2 permanece em fonte, template ou teste.
+- Foreign, ambiguous, retargeted, duplicate, and unbound fixtures execute
+  zero commands.
+- Active swap with zero usage and `swapoff` failure preserves backend/evidence.
+- Unreadable/malformed snapshot refuses before any mutation.
+- Valid teardown proves swapoff-first and fresh revalidation per action.
+- No ublk override on WSL2 remains in source, template, or test.

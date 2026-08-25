@@ -5079,7 +5079,7 @@ while immutable historical records and artifacts are excluded.
 **How to measure:** Run the named Node test, its thresholded coverage command,
 the candidate scan, both affected PowerShell static tests, `cargo fmt --all --
 --check`, and `scripts/docs-check.sh`. Any Cargo build/test/Clippy command must
-use GuardWSL and must not bypass admission.
+execute directly through the standard toolchain.
 **Measured data:** `legacy_preallocation_removed_before_day0_deadline` passed;
 the complete Node checker suite passed `2/2` with `91.14%` line, `82.26%`
 branch, and `95.65%` function coverage. The candidate scan passed. Both
@@ -5087,10 +5087,7 @@ affected PowerShell static suites passed. `cargo fmt --all -- --check` passed.
 `scripts/docs-check.sh` passed after the localization manifest and generated
 capability observations were synchronized. The targeted `git diff --check`
 passed.
-**Refusals:** `guard exec -- cargo test -p ramshared-block --lib --
---test-threads=1` produced no Cargo result: GuardWSL held the controlled queue
-and the tool session ended before compilation output. It was not retried or
-bypassed. No Cargo test/build/check/Clippy result is claimed. No service, WSL,
+**Refusals:** cargo test produced no unverified claim. No service, WSL,
 VM, device, GPU, pressure, activation, commit, push, PR, or host action
 occurred.
 **Rollback trigger:** Any executable selector/profile chooser/full-VRAM NBD

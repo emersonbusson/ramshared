@@ -2,7 +2,10 @@
 use std::cmp;
 use std::fs::File;
 use std::io;
+#[cfg(unix)]
 use std::os::unix::fs::FileExt;
+#[cfg(windows)]
+use std::os::windows::fs::FileExt;
 use std::path::Path;
 use std::time::Duration;
 
@@ -72,15 +75,43 @@ impl FileOrigin {
 }
 impl OriginStorage for FileOrigin {
     fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<usize, IoError> {
-        self.file
-            .read_at(buf, off)
-            .map_err(|error| IoError(error.to_string()))
+        #[cfg(unix)]
+        {
+            self.file
+                .read_at(buf, off)
+                .map_err(|error| IoError(error.to_string()))
+        }
+        #[cfg(windows)]
+        {
+            self.file
+                .seek_read(buf, off)
+                .map_err(|error| IoError(error.to_string()))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (off, buf);
+            Err(IoError("unsupported platform for FileOrigin".into()))
+        }
     }
 
     fn write_at(&mut self, off: u64, data: &[u8]) -> Result<usize, IoError> {
-        self.file
-            .write_at(data, off)
-            .map_err(|error| IoError(error.to_string()))
+        #[cfg(unix)]
+        {
+            self.file
+                .write_at(data, off)
+                .map_err(|error| IoError(error.to_string()))
+        }
+        #[cfg(windows)]
+        {
+            self.file
+                .seek_write(data, off)
+                .map_err(|error| IoError(error.to_string()))
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            let _ = (off, data);
+            Err(IoError("unsupported platform for FileOrigin".into()))
+        }
     }
 
     fn sync_data(&mut self) -> Result<(), IoError> {

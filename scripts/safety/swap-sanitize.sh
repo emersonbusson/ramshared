@@ -43,7 +43,7 @@ while read -r line; do
 done <"$proc_swaps"
 
 if [[ $GHOST -eq 1 ]]; then
-  echo 'ACAO: ghost swap com device deleted; preserve evidence and use attended recovery.'
+  echo 'ACTION: ghost swap with device deleted; preserve evidence and use attended recovery.'
   exit 2
 fi
 

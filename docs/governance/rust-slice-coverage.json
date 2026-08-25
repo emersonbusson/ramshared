@@ -652,6 +652,60 @@
         "ramshared-tier",
         "--all-targets"
       ]
+    },
+    {
+      "id": "wsl2-revocable-vram-origin-block",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/wsl2-revocable-vram-origin/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-block",
+        "--files",
+        "crates/ramshared-block/src/isolated_origin.rs,crates/ramshared-block/src/lib.rs,crates/ramshared-block/src/origin_cache.rs,crates/ramshared-block/src/request.rs,crates/ramshared-block/src/vram_backend.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/wsl2-revocable-vram-origin-block-cov.json"
+      ],
+      "packages": [
+        "ramshared-block"
+      ],
+      "files": [
+        "crates/ramshared-block/src/isolated_origin.rs",
+        "crates/ramshared-block/src/lib.rs",
+        "crates/ramshared-block/src/origin_cache.rs",
+        "crates/ramshared-block/src/request.rs",
+        "crates/ramshared-block/src/vram_backend.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "wsl2-native-vram-autotier",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/wsl2-native-vram-autotier/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-wsl2d,ramshared-dxg",
+        "--files",
+        "crates/ramshared-wsl2d/src/autotier.rs,crates/ramshared-dxg/src/lib.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/wsl2-native-vram-autotier-cov.json"
+      ],
+      "packages": [
+        "ramshared-wsl2d",
+        "ramshared-dxg"
+      ],
+      "files": [
+        "crates/ramshared-wsl2d/src/autotier.rs",
+        "crates/ramshared-dxg/src/lib.rs"
+      ],
+      "min": 80
     }
   ]
 }

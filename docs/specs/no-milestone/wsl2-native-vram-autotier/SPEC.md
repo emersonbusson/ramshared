@@ -69,6 +69,16 @@ All uAPI arrays are bounded to 64, layouts are fixed-width, pointers reference o
 - DT-8: constrained commit completes without NBD EIO and schedules demote.
 - DT-9: only device-unavailable open errors permit startup CUDA fallback.
 
+The canonical coverage owner for native autotier is:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs \
+  -p ramshared-wsl2d,ramshared-dxg \
+  --files crates/ramshared-wsl2d/src/autotier.rs,crates/ramshared-dxg/src/lib.rs \
+  --min 80 \
+  --report-json tmp/wsl2-native-vram-autotier-cov.json
+```
+
 ## Rollback trigger
 
 Rollback if any path releases chunks with `used_kb > 0`, if one invalid/stale sample permits a commit, or if hardware validation observes corruption, ghost swap, kernel Oops, or forced daemon termination.

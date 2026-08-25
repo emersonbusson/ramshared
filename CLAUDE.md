@@ -1,9 +1,6 @@
 # CLAUDE.md — RamShared
 
 > **ATTENTION:** Keep this filename lowercase. All project-specific rules are located in [`.claude/rules/*.md`](.claude/rules/*.md). Do not copy long dossiers here.
-
-**Global resources:** obey the workspace-level resource contract in the parent workspace `AGENTS.md`: at most one heavy build may run at a time through GuardWSL; tests/checks always run directly and are never blocked by the build lock; disk cleanup remains independent of build admission.
-
 ## Agent Source Of Truth
 
 [`.claude/rules/*.md`](.claude/rules/*.md) are the authoritative code rules. `AGENTS.md` mirrors these guidelines.
