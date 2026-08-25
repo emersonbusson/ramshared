@@ -15,7 +15,7 @@ Rust e os gates ao vivo de guardião, origem, pressão e rollout assistido segue
 abertos. Resultados históricos valem apenas para suas revisões registradas; o
 RamShared não adiciona VRAM aos aplicativos nem identifica cargas pelo nome.
 
-![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram.png)
+![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram-pt.png)
 
 <p align="center">
   <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.9.0-beta.1"><img alt="Versão v0.9.0-beta.1" src="https://img.shields.io/badge/release-v0.9.0--beta.1-2f855a?style=flat-square"></a>
