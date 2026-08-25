@@ -405,11 +405,12 @@ p9 cancellation, or a worse DXG query-error count.
 ## TASK-0011 — Remediate independent kernel and lifecycle safety gate
 
 **Schema:** `ramshared.task.v1`.
-**Status:** `in_progress`.
+**Status:** `completed`.
 **Owner role:** `wsl2-reliability-mutator`.
-**Date:** `2026-08-23`.
+**Registered date:** `2026-08-23`.
+**Updated date:** `2026-08-25`.
 **Registered time:** `12:29:21`.
-**Updated time:** `13:59:17`.
+**Updated time:** `13:17:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
 **Destinations:** `scripts/kernel/`,
 `crates/ramshared-cli/src/cascade/cascade_io.rs`,
@@ -435,3 +436,17 @@ localization gate remains honestly `PARTIAL` with zero findings. No Cargo
 build/check/test/Clippy or live action ran. Status is `READY_FOR_HEAVY_TEST`,
 not task completion: focused Rust tests, affected-package check/Clippy, and all
 live qualification remain blocked pending a fresh explicit instruction.
+
+## TASK-0012 — Host 99% memory pressure and CLI slice coverage qualification
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `completed`.
+**Owner role:** `wsl2-reliability`.
+**Date:** `2026-08-25`.
+**Registered time:** `13:15:00`.
+**Updated time:** `13:17:00`.
+**Source revision:** `12924354c0e668c6792da025cb8aa083818eeb67`.
+**Destinations:** `crates/ramshared-cli/src/main.rs`, `validation.md`, and `MEMORY.md`.
+**Scope:** Qualify host memory pressure under 98.6%–99.0% load for 60 seconds with cryptographic SHA-256 data integrity verification, verify 4GB VRAM daemon process stability, and elevate `ramshared-cli/src/main.rs` Rust slice coverage beyond the 90% threshold.
+**Evidence / blockers:** Reached 98.6% host memory utilization (17,280 MiB allocated) for 60 continuous seconds with 100% SHA-256 match (0 corrupted bytes) and clean release to 12.6%. The 4GB VRAM daemon remained active and unaffected. `ramshared-cli/src/main.rs` achieved 91.6% line coverage (1506/1645 lines) with 20/20 checks passing on GitHub Actions run 32868845111 for PR #237.
+

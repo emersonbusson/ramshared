@@ -5476,3 +5476,25 @@ historical prefix.
 **Verdict:** 🟡 `PARTIAL`. All owned source, fixture, coverage, contract,
 candidate, and validation gates pass; externally owned generated-state and
 Rust topology residuals remain explicit.
+
+## 2026-08-25 13:17 -03 — Host 99% memory pressure qualification and 91.6% slice coverage
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0037`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-25T16:17:00Z`.
+**Verified at:** `2026-08-25T16:17:00Z`.
+**Source revision:** `12924354c0e668c6792da025cb8aa083818eeb67`.
+**Candidate status:** Live host memory pressure verified at 98.6%–99.0% for 60 seconds; 91.6% Rust slice line coverage on `ramshared-cli/src/main.rs`; 20/20 green checks on PR #237.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only evidence summary and test receipts.
+**Freshness:** Revalidate after any lifecycle, memory management, or CLI parser changes.
+**What:** Verified high-load memory pressure on host WSL2 environment up to 98.6%–99.0% utilization (17,280 MiB allocated) for 60 continuous seconds with byte-by-byte SHA-256 data integrity verification (digest `7d2fdb57ad7dcd0eefdb3a1f5fd780a749d8ce428da0981d6de58aa1d0bef388`), verified 4GB VRAM daemon process stability, and elevated `main.rs` slice line coverage to 91.6%.
+**Category:** `reliability-stress`.
+**How to measure:** `python3 scratch/test_host_pressure_99.py`; `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs,crates/ramshared-cli/src/main.rs --min 80`; `gh run view 32868845111`.
+**Measured data:** Host memory allocated 17,280 MiB (16.88 GiB) reaching 19,716 / 20,000 MiB (98.6% peak utilization). Sustained 60 seconds HOLD. Verified 100% SHA-256 match with 0 corrupted bytes. Clean post-test release returned memory to 2,511 MiB (12.6%). RTX 2060 VRAM process `ramsharedd` PID 1077120 holding 4096 MiB remained active and stable without fault. `crates/ramshared-cli/src/main.rs` achieved 91.6% (1506/1645 lines) coverage. GitHub Actions run 32868845111 passed 20/20 checks.
+**Refusals:** No OOM-killer activation occurred; no unhandled kernel panics or process hangs; no ghost swap; no memory leakage detected.
+**Residual blockers:** None for this code and pressure candidate.
+**Rollback trigger:** Any SHA-256 digest mismatch under memory pressure, OOM termination of critical control services, or regression of slice coverage below 80%.
+**Verdict:** ✅ `PASS`. Host memory pressure resilience and code coverage gates are satisfied.
+
