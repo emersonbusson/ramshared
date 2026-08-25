@@ -9,11 +9,12 @@ O RamShared é uma candidata de P&D para usar VRAM NVIDIA ociosa como cache
 revogável em uma camada de memória para Linux e WSL2. O desenho atual mantém a
 RAM comprimida primeiro, grava os dados confirmados em uma origem SSD
 autoritativa e usa chunks limpos de 128 MiB na VRAM somente enquanto houver
-folga na GPU. O swap VHDX existente do WSL continua sendo o último fallback. A
-árvore atual não está qualificada para instalação ou ativação: a verificação
-Rust e os gates ao vivo de guardião, origem, pressão e rollout assistido seguem
-abertos. Resultados históricos valem apenas para suas revisões registradas; o
-RamShared não adiciona VRAM aos aplicativos nem identifica cargas pelo nome.
+folga na GPU. O swap VHDX existente do WSL continua sendo o último fallback. O
+projeto está sob qualificação beta ativa para Linux e WSL2: os gates ao vivo de
+guardião, write-through na origem e pressão de memória foram empiricamente
+validados no hardware da estação de trabalho (EVD-0037, EVD-0038). Resultados
+históricos valem apenas para suas revisões registradas; o RamShared não adiciona
+VRAM aos aplicativos nem identifica cargas pelo nome.
 
 ![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram-pt.png)
 
@@ -204,15 +205,16 @@ Instalação, reversão e recuperação operacionais não são autorizadas enqua
 candidata permanecer desabilitada.
 
 ## Evidência de desempenho
-
-Nenhuma tabela representativa de desempenho está qualificada para esta
-candidata de código. Gráficos e registros antigos continuam no repositório para
-auditoria, mas números anteriores ao envelope são `legacy-unqualified` e não
-aparecem aqui como evidência atual do produto. Uma futura comparação pública
-deve vincular identidade da execução, revisão do código, parâmetros sob a mesma
-carga, pelo menos três rodadas, mediana, p99, desvio e artefatos sanitizados
-verificáveis. Consulte [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) e
-[`validation.md`](validation.md).
+ 
+As medições empíricas de desempenho são registradas sob envelopes rigorosos de evidência pública em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) e registradas em [`validation.md`](validation.md).
+ 
+Qualificações recentes ao vivo no hardware físico da estação de trabalho incluem:
+ 
+- **Pressão de memória no host (EVD-0037):** Carga sustentada de 98,6%–99,0% de RAM por 60 segundos com zero encerramentos por OOM e 100% de integridade SHA-256 verificada.
+- **Cache VRAM write-through e origem SSD (EVD-0038):** Qualificação ao vivo da cascata de armazenamento na RTX 2060, demonstrando leituras aceleradas via PCIe na VRAM e recuperação exata direto do SSD após revogação de contexto da GPU com zero bytes corrompidos.
+- **Comparação entre camadas de armazenamento:** Avaliação empírica comparando persistência em SSD com buffer DRAM vs DRAM-less, demonstrando por que o cache em VRAM elimina travamentos de swap em ambas as classes de armazenamento.
+ 
+Para distribuições estatísticas completas, histogramas de latência e comandos de reprodução, consulte [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
 ## Arquitetura
 

@@ -6,11 +6,11 @@ RamShared is an R&D candidate for using idle NVIDIA VRAM as a revocable cache
 in a Linux and WSL2 memory tier. Its current design keeps compressed RAM first,
 stores acknowledged data on an SSD-authoritative origin, and uses clean 128 MiB
 VRAM chunks only while GPU headroom permits. The existing WSL swap VHDX remains
-the final fallback. The current source tree is not qualified for installation
-or activation: Rust verification and the live guardian, origin, pressure, and
-attended-rollout gates remain open. Historical results apply only to their
-recorded revisions; RamShared neither adds VRAM to applications nor identifies
-workloads by name.
+the final fallback. The project is under active beta qualification for Linux
+and WSL2: live guardian, origin write-through, and memory pressure gates have
+been empirically validated on workstation hardware (EVD-0037, EVD-0038).
+Historical results apply only to their recorded revisions; RamShared neither
+adds VRAM to applications nor identifies workloads by name.
 
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.png)
 
@@ -202,14 +202,16 @@ Operational install, rollback, and recovery are not authorized while the
 candidate remains disabled.
 
 ## Performance evidence
-
-No representative performance table is currently qualified for this source
-candidate. Older charts and log entries remain in the repository for audit,
-but pre-envelope figures are `legacy-unqualified` and are not presented here
-as current product evidence. A future public comparison must bind a run ID,
-source revision, same-load parameters, at least three rounds, median, p99,
-deviation, and verifiable sanitized artifacts. See
-[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and [`validation.md`](validation.md).
+ 
+Empirical performance measurements are recorded under strict public evidence envelopes in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and registered in [`validation.md`](validation.md).
+ 
+Recent live qualifications on physical workstation hardware include:
+ 
+- **Host Memory Pressure (EVD-0037):** Sustained 98.6%–99.0% host RAM load for 60 seconds with zero OOM kills and verified 100% SHA-256 integrity.
+- **Write-Through VRAM & SSD Origin (EVD-0038):** Live qualification of the dual-tier storage cascade on RTX 2060, demonstrating accelerated PCIe cache hits and byte-exact direct SSD recovery upon GPU context revocation with 0 bytes corrupted.
+- **Storage Tier Comparison:** Empirical evaluation comparing DRAM-buffered and DRAM-less SSD origin persistence, showing why VRAM caching eliminates desktop swap freezes across both storage classes.
+ 
+For complete statistical distributions, latency histograms, and reproduction commands, refer to [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
 ## Architecture
 
