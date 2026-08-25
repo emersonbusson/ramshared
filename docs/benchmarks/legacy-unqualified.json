@@ -39,6 +39,12 @@
       "benchmark_id": "2026-08-25-pcie-bandwidth-vs-ssd-and-host-pressure",
       "qualified": false,
       "reason": "Direct live host memory and PCIe/SSD exploratory benchmark; formal regression comparison requires an attended sealed matrix."
+    },
+    {
+      "id": "legacy-2026-08-25-vram-write-through-cache-and-authoritative-ssd-origin",
+      "benchmark_id": "2026-08-25-vram-write-through-cache-and-authoritative-ssd-origin",
+      "qualified": false,
+      "reason": "Direct live host VRAM write-through cache and authoritative SSD origin qualification; formal regression comparison requires an attended sealed matrix."
     }
   ]
 }
