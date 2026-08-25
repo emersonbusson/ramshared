@@ -165,6 +165,7 @@
         "node tools/ci/check-task-log.mjs --diff",
         "node tools/ci/check-document-lifecycle.mjs --all --base",
         "node tools/ci/check-campaign-evidence-lifecycle.mjs --check --base",
+        "node tools/ci/check-public-hygiene.mjs --candidate",
         "--test-coverage-include=tools/ci/check-campaign-evidence-lifecycle.mjs",
         "tools/ci/check-campaign-evidence-lifecycle.test.mjs",
         "--test-coverage-include=tools/ci/generate-capability-observations.mjs",
@@ -336,8 +337,8 @@
         },
         "advisory_db": {
           "url": "https://github.com/RustSec/advisory-db.git",
-          "commit": "69f93e1d081d8b6fbee010e48f0b5e0d13661415",
-          "commit_utc": "2026-08-12T10:42:29Z",
+          "commit": "bf5c0d245a92671908518d7e765914d437954ed6",
+          "commit_utc": "2026-08-21T06:28:40Z",
           "max_age_days": 7,
           "upstream_head_health": {
             "mode": "scheduled-curator",
@@ -774,8 +775,8 @@
         "cargo install cargo-cyclonedx --locked --version 0.5.9",
         "cargo cyclonedx --manifest-path Cargo.toml --format json --spec-version 1.5 --override-filename ramshared-sbom.cdx",
         "node \"$merger\"",
-        "node tools/ci/write-release-manifest.mjs",
-        "node tools/ci/check-release-integrity.mjs --check"
+        "node \"$manifest_writer\"",
+        "node \"$integrity_checker\" --check"
       ],
       "open_gaps": []
     },

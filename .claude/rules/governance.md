@@ -16,7 +16,7 @@ These rules exist so that every PR (Patch/Pull Request) carries reviewable conte
 
 Every PR uses `.github/pull_request_template.md`. Mandatory sections:
 
-1. `## Summary` — PT-BR, sufficient for someone outside the conversation.
+1. `## Summary` — English, sufficient for someone outside the conversation.
 2. `## Commits` — table with `Commit | What was done | Why it was done | Details`. Each line has hash + clickable `<details>` with context, impact, files, validation, and risk/rollback. **Every commit line is visible in the table**, even in PRs with 20+ commits — forbidden to wrap multiple lines inside a grouping `<details>` that hides commits from the initial preview. Per-row `<details>` in the `Details` field remains mandatory and serves the role of hiding deep context. Grouping by editorial category goes in the line's `summary` or in short text in `Details`, never in a `<details>` that hides commits.
 3. `## Issue` — `Closes #NNN`, `Fixes #NNN`, or `Resolves #NNN`.
 4. `## Assignee` — `@user`. PR and linked issue share assignee.

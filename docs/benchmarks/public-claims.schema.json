@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ramshared.dev/schemas/public-benchmark-claims.schema.json",
+  "title": "RamShared public benchmark claim registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "entries"],
+  "properties": {
+    "schema_version": { "const": "ramshared-public-benchmark-claims/v1" },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path", "file_sha256", "disposition", "benchmark_id", "claims", "reason"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "minLength": 1 },
+          "file_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "disposition": { "enum": ["qualified", "legacy-unqualified"] },
+          "benchmark_id": { "type": ["string", "null"] },
+          "claims": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+          "reason": { "type": "string", "minLength": 12 }
+        }
+      }
+    }
+  }
+}

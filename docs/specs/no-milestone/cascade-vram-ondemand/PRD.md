@@ -9,11 +9,17 @@ parents:
   - mainline-vram-tiering
 ---
 
-# PRD — On-demand VRAM capacity for Day-1 cascade (lazy alloc + return)
+# PRD — Historical on-demand VRAM capacity design
 
-> **Status:** PRD + SPEC written; AUDIT-2.5 in folder. **IMPL not started** until AUDIT GO.  
-> **Does not replace** Day-1 NBD product path; **evolves** it so “3 GiB VRAM tier” means *capacity*, not *always-hold 3 GiB on the GPU*.  
-> Kahneman **#16** (fail-safe reclaim), **#18** (right layer), **#5** (worst case: game needs VRAM).
+> **Status (2026-08-22):** **SUPERSEDED for product NBD.** The Day-0
+> legacy-preallocation source gate is **CLOSED**: product NBD requires an
+> authoritative origin and has no full-capacity allocation selector or fallback.
+> This PRD retains the 2026-07-11 design record only. Live qualification, release
+> promotion, and activation remain **BLOCKED**; it authorizes no host, GPU, WSL,
+> device, or pressure action.
+>
+> Kahneman **#16** (fail-safe reclaim), **#18** (right layer), **#5** (worst
+> case: game needs VRAM).
 
 ## 1. Summary
 
@@ -24,7 +30,7 @@ parents:
 3. **If it needed it and later no longer does** (or the GPU needs free VRAM), **return** GPU memory.  
 4. Keep kernel spill order: **zram → VRAM → SSD** (already shipped).
 
-### Problem with Day-1 today
+### Historical problem statement (2026-07-11)
 
 | Layer | Behaviour now | User expectation |
 | --- | --- | --- |
@@ -45,7 +51,7 @@ Sources: local clone `~/WSL2-Linux-Kernel` (MS tree + `Microsoft/config-wsl`), [
 | Pattern | What MS does | Class |
 | --- | --- | --- |
 | **Host RAM reclaim** | `autoMemoryReclaim` = `dropCache` / `gradual` / `disabled` — **experimental → default-bound**; reclaim **unused** guest cache to Windows | Confirmed docs |
-| **Sparse disks** | `sparseVhd=true` — VHD grows with use, not full provision | Confirmed docs |
+| **Sparse disks** | Production default omits `sparseVhd`. WSL 2.7.12 refuses live sparse enablement because of potential data corruption unless an unsafe override is forced; RamShared never forces it. | Confirmed host/runtime evidence |
 | **Balloon** | `drivers/hv/hv_balloon.c` in MS kernel — give pages back to Hyper-V host under pressure | Confirmed codebase (MS tree) |
 | **Swap** | `.wslconfig` `swap` + `swapFile` on **disk VHDX** — cold tier, not pre-filled with content | Confirmed docs |
 | **GPU** | GPU-PV + `dxgkrnl`; GPU for **compute/graphics**, **not** first-class “system RAM tier” in product WSL | Confirmed docs + tree (`drivers/hv/dxgkrnl`) |
@@ -75,7 +81,7 @@ This feature is **L0→L1 bridge polish**: make userspace cascade **behave more 
 | Full size alloc at daemon start | Confirmed `ramsharedd` NBD path |
 | Residency canary + DEMOTE verdict | Confirmed `residency.rs` |
 | Swap priorities zram > nbd > disk | Confirmed `ramshared-tier` + live |
-| Orphan recover zero-used | Confirmed `wsl2-cascade-orphan-recover` |
+| Orphan live enumeration | Detection-only; recovery exige lifecycle binding exato |
 | ublk product on WSL2 | NO-GO (`cascade-transport-policy`) |
 
 ## 3. Recommended option
@@ -114,8 +120,8 @@ This feature is **L0→L1 bridge polish**: make userspace cascade **behave more 
 | RF-L6 | When chunk has no resident swap pages and is idle past hysteresis, free chunk (bounded reclaim) |
 | RF-L7 | `down` still frees **all** chunks + canary (existing anti-hang order) |
 | RF-L8 | Telemetry: `vram_committed_bytes`, `vram_capacity_bytes`, `chunks_live`, demote/free counters |
-| RF-L9 | Kill-switch: `RAMSHARED_VRAM_PREALLOC=1` restores Day-1 full alloc (rollback behaviour) |
-| RF-L10 | Preflight **sparse**: free ≥ headroom + canary + one chunk (start gate). Preflight **prealloc**: free ≥ VRAM_MIB + headroom. Optional later: `VRAM_COMMIT_CAP_MIB` |
+| RF-L9 | **Superseded:** no full-allocation environment selector exists. Rollback keeps the candidate disabled and repairs the origin-backed source path. |
+| RF-L10 | **Superseded for product NBD:** origin identity and a bounded physical cache cap replace the historical sparse/full allocation preflight split. |
 
 ## 5. Non-functional
 
@@ -166,27 +172,28 @@ committed_bytes    = sum(Committed)
 
 - **No** new uAPI for kernel.  
 - Daemon: internal `SparseVramBackend` implementing `BlockBackend`.  
-- Env: `RAMSHARED_VRAM_PREALLOC`, `RAMSHARED_VRAM_CHUNK_MIB`, optional `RAMSHARED_VRAM_COMMIT_CAP_MIB`.  
+- The reusable sparse component may retain its own bounded configuration, but it
+  does not select or fall back the product NBD backend.
 - Telemetry JSONL fields (extend existing).
 
 ## 9. Dependencies and risks
 
 | Risk | Mitigation |
 | --- | --- |
-| Sparse read/write bugs → corruption | Chunk CRC optional lab; property tests; kill-switch prealloc |
+| Sparse read/write bugs → corruption | Chunk CRC optional lab; property tests; keep product NBD disabled until the origin path is corrected |
 | Alloc under write fails mid-I/O | Fail I/O; trigger demote; never partial silent |
 | Fragmentation of CUDA allocs | Fixed chunk size; free list |
-| Latency spike on first write | Accept cold-start cost; document vs prealloc |
+| Latency spike on first write | Historical cold-start trade-off; no full-allocation fallback exists |
 | WSL dxgkrnl + many alloc/free | Rate-limit free; reuse pools |
 
 ## 10. Implementation strategy
 
 1. PRD (this) → SPEC → AUDIT-2.5 **GO**.  
 2. Implement `SparseVramBackend` behind trait; unit tests with `FakeVram`.  
-3. Wire NBD path; keep prealloc kill-switch.  
-4. Live: nvidia-smi free after `up` with USED=0 must be **near** free-after-down (minus canary).  
-5. Pressure probe: order unchanged; committed grows only with nbd USED.  
-6. DEMOTE drill: free rises after demote (lab GPU).  
+3. Product NBD now requires the authoritative origin before backend selection;
+   there is no legacy fallback selector.
+4. Future isolated qualification must prove the source contract under a separate
+   attended approval; it is **BLOCKED** in this record.
 
 ## 11. Documents to update
 
@@ -208,26 +215,29 @@ committed_bytes    = sum(Committed)
 - [ ] `up` with VRAM_MIB=3072: GPU free drop ≤ canary + O(chunk) slack, **not** ≈3072 MiB  
 - [ ] After pressure: nbd USED &gt; 0 ⇒ committed ≥ used (accounting)  
 - [ ] After demote/reclaim idle: committed falls; GPU free rises (measured)  
-- [ ] `RAMSHARED_VRAM_PREALLOC=1` restores old full alloc  
+- [x] The historical full-allocation selector is removed and cannot restore a
+  product path.
 - [ ] Pressure order still zram → nbd → disk  
 - [ ] No ghost swap; down clean  
 
-## 14. Validation
+## 14. Historical validation plan (not current authorization)
+
+The commands and live measurements below describe the original proposal only.
+They do not close the current source gate and must not be executed from this
+document. Current live qualification, release, and activation remain **BLOCKED**.
 
 - Unit: sparse map pure logic.  
 - Integration: daemon + nbd with FakeVram or CUDA.  
-- Live:
-  - `nvidia-smi` before/after `up` (idle: GPU free must **not** drop by full `VRAM_MIB`).  
-  - `sudo bash scripts/safety/cascade-pressure-probe.sh [--prove-disk]` — **exists in repo** (`scripts/safety/`; cgroup-limited, host-safe). Proves zram → nbd → disk order.  
-  - journal / canary demote logs when free-floor hit with `used_kb==0` → committed drops.  
-- **Not** full-VM thrash on live WSL2.
+- Historical live proposal: compare idle GPU free, pressure order, and demotion
+  telemetry only on a separately approved isolated surface.
+- **Not** a full-VM thrash instruction for a live WSL2 host.
 
 ## 15. Microsoft alignment summary (one screen)
 
 | MS principle | Our RF |
 | --- | --- |
 | Reclaim unused resources (`autoMemoryReclaim`) | RF-L5, RF-L6 |
-| Sparse provision (`sparseVhd`) | RF-L1–L4 |
+| Sparse provision (`sparseVhd`) | Unsafe-lab-only opt-in; excluded from RF-L1–L4 production behavior |
 | Balloon / return under pressure | RF-L5 + free chunks |
 | Opt-in experimental → default | RF-L9 kill-switch; feature flag in conf |
 | Don’t freeze host | NFR-L1, NFR-L4 |

@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
+import { TextDecoder } from 'node:util'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -13,11 +15,13 @@ const LINE_COVERAGE_KIND = 'rust-line-coverage'
 const WINDOWS_PLATFORM_KIND = 'windows-platform-e2e'
 const LOCALIZATION_KIND = 'rust-localization-comment-differential'
 const TEST_ONLY_LOCALIZATION_KIND = 'rust-test-only-localization-differential'
+const IGNORED_TEST_RELOCATION_KIND = 'rust-ignored-test-relocation'
 const MODULE_EXPORT_GLUE_KIND = 'rust-module-export-glue-differential'
 const STRUCTURAL_KIND = 'rust-structural-contract'
 const PLATFORM_MARKER = 'rust-slice-platform-e2e-v1'
 const LOCALIZATION_MARKER = 'rust-slice-localization-comment-differential-v1'
 const TEST_ONLY_LOCALIZATION_MARKER = 'rust-slice-test-only-localization-differential-v1'
+const IGNORED_TEST_RELOCATION_MARKER = 'rust-slice-ignored-test-relocation-v1'
 const MODULE_EXPORT_GLUE_MARKER = 'rust-slice-module-export-glue-differential-v1'
 const STRUCTURAL_MARKER = 'rust-slice-structural-contract-v1'
 const WINDOWS_STATIC_WRAPPER = 'scripts/windows/Test-WindowsCiStatic.ps1'
@@ -27,7 +31,11 @@ const MODULE_EXPORT_GLUE_PACKAGE = 'ramshared-tier'
 const MODULE_EXPORT_GLUE_DECLARATION = 'pub mod n3_state;\npub mod nbd_readiness;'
 const MODULE_EXPORT_GLUE_CARGO_TEST = ['cargo', 'test', '-p', MODULE_EXPORT_GLUE_PACKAGE, '--all-targets']
 const FULL_SHA = /^[0-9a-f]{40}$/i
+const SHA256 = /^[0-9a-f]{64}$/i
 const TEST_NAME = /^[a-z][a-z0-9_]*$/
+const MAX_TRUSTED_FILE_BYTES = 2 * 1024 * 1024
+const UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+const UNSAFE_PATH_CHARACTER = /[\p{Cc}\p{Cf}\\]/u
 
 function finding(rule, detail = '') {
   return { rule, detail }
@@ -42,9 +50,10 @@ function isObject(value) {
 }
 
 function safeRelative(value) {
-  return typeof value === 'string' && value.length > 0 && !value.includes('\0') &&
-    !value.includes('\\') && !path.isAbsolute(value) && !/^[A-Za-z]:[\\/]/.test(value) &&
-    !value.split('/').includes('..') && !value.split('/').includes('.')
+  return typeof value === 'string' && value.length > 0 && !UNSAFE_PATH_CHARACTER.test(value) &&
+    !path.isAbsolute(value) && !/^[A-Za-z]:[\\/]/.test(value) && !value.startsWith('-') &&
+    !value.startsWith(':') && value.normalize('NFC') === value &&
+    value.split('/').every((segment) => segment && segment !== '..' && segment !== '.')
 }
 
 function normalizedText(value) {
@@ -107,12 +116,10 @@ function sameJson(left, right) {
   return JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right))
 }
 
-function readText(file) {
-  try {
-    return readFileSync(file, 'utf8')
-  } catch {
-    return null
-  }
+function readTextInsideRoot(root, relative) {
+  const buffer = readRegularFileInsideRoot(root, relative)
+  if (buffer === null) return null
+  try { return UTF8.decode(buffer) } catch { return null }
 }
 
 function parseSpecDeclaration(specText, marker) {
@@ -157,6 +164,18 @@ function expectedTestOnlyLocalizationDeclaration(entry) {
     kind: entry.kind,
     files: entry.files,
     verifications: entry.verifications,
+  }
+}
+
+function expectedIgnoredTestRelocationDeclaration(entry) {
+  return {
+    schema_version: 1,
+    id: entry.id,
+    kind: entry.kind,
+    files: entry.files,
+    base_revision: entry.base_revision,
+    base_source_sha256: entry.base_source_sha256,
+    verification: entry.verification,
   }
 }
 
@@ -208,6 +227,7 @@ function validateCommonEntry(entry, root, errors, ids) {
   if (ids.has(entry.id)) errors.push(finding('coverage-entry-duplicate', entry.id))
   ids.add(entry.id)
   if (![LINE_COVERAGE_KIND, WINDOWS_PLATFORM_KIND, LOCALIZATION_KIND, TEST_ONLY_LOCALIZATION_KIND,
+    IGNORED_TEST_RELOCATION_KIND,
     MODULE_EXPORT_GLUE_KIND, STRUCTURAL_KIND].includes(entry.kind)) {
     errors.push(finding('coverage-kind-invalid', entry.id))
     return null
@@ -220,13 +240,13 @@ function validateCommonEntry(entry, root, errors, ids) {
     errors.push(finding('coverage-files-invalid', entry.id))
     return null
   }
-  if (entry.files.some((file) => !existsSync(path.join(root, file)))) {
-    errors.push(finding('coverage-file-missing', entry.id))
+  for (const file of entry.files) {
+    if (readRegularFileInsideRoot(root, file) !== null) continue
+    errors.push(finding(existsSync(path.join(root, file)) ? 'coverage-file-untrusted' : 'coverage-file-missing', entry.id))
   }
-  const specPath = path.join(root, entry.spec)
-  const specText = readText(specPath)
+  const specText = readTextInsideRoot(root, entry.spec)
   if (specText === null) {
-    errors.push(finding(existsSync(specPath) ? 'coverage-spec-read-failed' : 'coverage-spec-missing', entry.id))
+    errors.push(finding(existsSync(path.join(root, entry.spec)) ? 'coverage-spec-untrusted' : 'coverage-spec-missing', entry.id))
     return null
   }
   return specText
@@ -270,20 +290,19 @@ function validatePlatformEntry(entry, root, specText, errors) {
       continue
     }
     observedSources.push(verification.source)
-    const staticPath = path.join(root, verification.static.path)
-    const staticSource = readText(staticPath)
+    const staticSource = readTextInsideRoot(root, verification.static.path)
     if (staticSource === null) {
       errors.push(finding('platform-static-file-missing', entry.id))
     } else if (!namedStaticTestExists(staticSource, verification.static.test)) {
       errors.push(finding('platform-static-test-missing', entry.id))
     }
-    const liveSource = readText(path.join(root, verification.live.path))
+    const liveSource = readTextInsideRoot(root, verification.live.path)
     if (liveSource === null) {
       errors.push(finding('platform-live-file-missing', entry.id))
     } else if (!namedLiveTestExists(liveSource, verification.live.test)) {
       errors.push(finding('platform-live-test-missing', entry.id))
     }
-    const wrapper = readText(path.join(root, WINDOWS_STATIC_WRAPPER))
+    const wrapper = readTextInsideRoot(root, WINDOWS_STATIC_WRAPPER)
     if (wrapper === null) {
       errors.push(finding('platform-static-wrapper-missing', entry.id))
     } else {
@@ -341,21 +360,76 @@ function validIgnoredGpuCommand(command, packageName, name) {
     command[index + 1] === '--ignored' && command[index + 2] === '--test-threads=1'
 }
 
-function validIgnoredGpuTest(value, packageName) {
-  return exactKeys(value, ['name', 'command', 'evidence']) && typeof value.name === 'string' &&
-    TEST_NAME.test(value.name) && value.evidence === VALIDATION_EVIDENCE_PATH &&
-    validIgnoredGpuCommand(value.command, packageName, value.name)
+function exactCommand(observed, expected) {
+  return Array.isArray(observed) && observed.every((item) => typeof item === 'string') &&
+    JSON.stringify(observed) === JSON.stringify(expected)
+}
+
+function validIgnoredGpuTest(value, verification, relocated) {
+  const keys = relocated ? ['name', 'command', 'historical_command', 'evidence'] : ['name', 'command', 'evidence']
+  if (!exactKeys(value, keys) || typeof value.name !== 'string' || !TEST_NAME.test(value.name) ||
+      value.evidence !== VALIDATION_EVIDENCE_PATH) return false
+  if (!relocated) return validIgnoredGpuCommand(value.command, verification.package, value.name)
+
+  const current = [
+    'cargo', 'test', '-p', verification.package,
+    '--test', verification.ignored_test_target, value.name,
+    '--', '--ignored', '--test-threads=1',
+  ]
+  const sourceModule = path.posix.basename(verification.source, '.rs')
+  const historical = [
+    'cargo', 'test', '-p', verification.package,
+    `${sourceModule}::${verification.test_module}::${value.name}`,
+    '--', '--ignored', '--test-threads=1',
+  ]
+  return exactCommand(value.command, current) && exactCommand(value.historical_command, historical)
 }
 
 function validTestOnlyVerification(value) {
   return exactKeys(value, ['source', 'package', 'test_module', 'cargo_test', 'ignored_gpu_tests']) &&
     isRustProductionPath(value.source) && typeof value.package === 'string' &&
     /^[a-z0-9][a-z0-9-]*$/.test(value.package) && typeof value.test_module === 'string' &&
-    value.source.startsWith(`crates/${value.package}/src/`) &&
-    TEST_NAME.test(value.test_module) && validCargoTestCommand(value.cargo_test, value.package) &&
+    value.source.startsWith(`crates/${value.package}/src/`) && TEST_NAME.test(value.test_module) &&
+    validCargoTestCommand(value.cargo_test, value.package) &&
     Array.isArray(value.ignored_gpu_tests) && value.ignored_gpu_tests.length > 0 &&
-    value.ignored_gpu_tests.every((item) => validIgnoredGpuTest(item, value.package)) &&
+    value.ignored_gpu_tests.every((item) => validIgnoredGpuTest(item, value, false)) &&
     new Set(value.ignored_gpu_tests.map((item) => item.name)).size === value.ignored_gpu_tests.length
+}
+
+function validRelocationImports(value) {
+  return exactKeys(value, ['base', 'head']) && uniqueStrings(value.base) && uniqueStrings(value.head) &&
+    value.base.every((statement) => rustUseProjection(statement) !== null) &&
+    value.head.every((statement) => rustUseProjection(statement) !== null)
+}
+
+function validIgnoredTestRelocationVerification(value) {
+  return exactKeys(value, [
+    'source', 'package', 'test_module', 'ignored_test_source', 'ignored_test_target',
+    'relocation_imports', 'ignored_gpu_tests',
+  ]) && isRustProductionPath(value.source) && typeof value.package === 'string' &&
+    /^[a-z0-9][a-z0-9-]*$/.test(value.package) && typeof value.test_module === 'string' &&
+    value.source.startsWith(`crates/${value.package}/src/`) && TEST_NAME.test(value.test_module) &&
+    typeof value.ignored_test_target === 'string' && TEST_NAME.test(value.ignored_test_target) &&
+    value.ignored_test_source === `crates/${value.package}/tests/${value.ignored_test_target}.rs` &&
+    validRelocationImports(value.relocation_imports) &&
+    Array.isArray(value.ignored_gpu_tests) && value.ignored_gpu_tests.length > 0 &&
+    value.ignored_gpu_tests.every((item) => validIgnoredGpuTest(item, value, true)) &&
+    new Set(value.ignored_gpu_tests.map((item) => item.name)).size === value.ignored_gpu_tests.length
+}
+
+function readRegularFileInsideRoot(root, relative) {
+  if (!safeRelative(relative)) return null
+  try {
+    const canonicalRoot = realpathSync(root)
+    const candidate = path.resolve(canonicalRoot, relative)
+    if (candidate !== canonicalRoot && !candidate.startsWith(`${canonicalRoot}${path.sep}`)) return null
+    const metadata = lstatSync(candidate)
+    if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > MAX_TRUSTED_FILE_BYTES ||
+        realpathSync(candidate) !== candidate) return null
+    return readFileSync(candidate)
+  } catch {
+    return null
+  }
 }
 
 function validateTestOnlyLocalizationEntry(entry, root, specText, errors) {
@@ -373,7 +447,7 @@ function validateTestOnlyLocalizationEntry(entry, root, specText, errors) {
       continue
     }
     observedSources.push(verification.source)
-    const source = readText(path.join(root, verification.source))
+    const source = readTextInsideRoot(root, verification.source)
     const analysis = testOnlyModuleAnalysis(source, verification.test_module)
     if (analysis === null) {
       errors.push(finding('test-only-rust-source-invalid', verification.source))
@@ -399,6 +473,53 @@ function validateTestOnlyLocalizationEntry(entry, root, specText, errors) {
     errors.push(finding('test-only-spec-contract-invalid', entry.id))
   } else if (!sameJson(declaration.value, expectedTestOnlyLocalizationDeclaration(entry))) {
     errors.push(finding('test-only-spec-contract-mismatch', entry.id))
+  }
+}
+
+function validateIgnoredTestRelocationEntry(entry, root, specText, errors) {
+  if (!exactKeys(entry, [
+    'id', 'kind', 'spec', 'files', 'base_revision', 'base_source_sha256', 'verification',
+  ])) {
+    errors.push(finding('ignored-test-relocation-entry-fields-invalid', entry.id))
+  }
+  if (typeof entry.base_revision !== 'string' || !FULL_SHA.test(entry.base_revision) ||
+      entry.base_revision !== entry.base_revision.toLowerCase() ||
+      typeof entry.base_source_sha256 !== 'string' || !SHA256.test(entry.base_source_sha256) ||
+      entry.base_source_sha256 !== entry.base_source_sha256.toLowerCase() ||
+      !validIgnoredTestRelocationVerification(entry.verification)) {
+    errors.push(finding('ignored-test-relocation-verification-invalid', entry.id))
+    return
+  }
+  if (JSON.stringify(entry.files) !== JSON.stringify([entry.verification.source])) {
+    errors.push(finding('ignored-test-relocation-source-files-mismatch', entry.id))
+  }
+
+  const source = readRegularFileInsideRoot(root, entry.verification.ignored_test_source)
+  const analysis = integrationTestAnalysis(source)
+  if (analysis === null) {
+    errors.push(finding('ignored-test-relocation-head-source-invalid', entry.verification.ignored_test_source))
+  } else {
+    const projections = entry.verification.ignored_gpu_tests
+      .map((ignored) => ignoredGpuTestProjection(analysis, ignored.name))
+    if (projections.some((projection) => projection === null)) {
+      errors.push(finding('ignored-test-relocation-head-test-missing', entry.verification.ignored_test_source))
+    } else if (!integrationSourceContainsOnlyImportsAndTests(analysis, projections)) {
+      errors.push(finding('ignored-test-relocation-head-source-invalid', entry.verification.ignored_test_source))
+    }
+    const headImports = directUseProjections(analysis)
+    const declaredHead = entry.verification.relocation_imports.head.map(rustUseProjection)
+    if (headImports === null || JSON.stringify(headImports) !== JSON.stringify(declaredHead)) {
+      errors.push(finding('ignored-test-relocation-imports-mismatch', entry.verification.ignored_test_source))
+    }
+  }
+
+  const declaration = parseSpecDeclaration(specText, IGNORED_TEST_RELOCATION_MARKER)
+  if (declaration.state === 'missing') {
+    errors.push(finding('ignored-test-relocation-spec-contract-missing', entry.id))
+  } else if (declaration.state !== 'ok') {
+    errors.push(finding('ignored-test-relocation-spec-contract-invalid', entry.id))
+  } else if (!sameJson(declaration.value, expectedIgnoredTestRelocationDeclaration(entry))) {
+    errors.push(finding('ignored-test-relocation-spec-contract-mismatch', entry.id))
   }
 }
 
@@ -451,7 +572,7 @@ function validateStructuralEntry(entry, root, specText, errors) {
       continue
     }
     observedSources.push(verification.source)
-    const source = readText(path.join(root, verification.source))
+    const source = readTextInsideRoot(root, verification.source)
     if (!isStructuralRustModule(source)) {
       errors.push(finding('structural-rust-source-invalid', verification.source))
     }
@@ -476,8 +597,86 @@ function validEntry(entry, root, errors, ids) {
   else if (entry.kind === WINDOWS_PLATFORM_KIND) validatePlatformEntry(entry, root, specText, errors)
   else if (entry.kind === LOCALIZATION_KIND) validateLocalizationEntry(entry, specText, errors)
   else if (entry.kind === TEST_ONLY_LOCALIZATION_KIND) validateTestOnlyLocalizationEntry(entry, root, specText, errors)
+  else if (entry.kind === IGNORED_TEST_RELOCATION_KIND) validateIgnoredTestRelocationEntry(entry, root, specText, errors)
   else if (entry.kind === MODULE_EXPORT_GLUE_KIND) validateModuleExportGlueEntry(entry, specText, errors)
   else validateStructuralEntry(entry, root, specText, errors)
+}
+
+function validateIgnoredTestRelocationOwnership(entries, errors) {
+  const relocations = entries.filter((entry) =>
+    isObject(entry) && entry.kind === IGNORED_TEST_RELOCATION_KIND && isObject(entry.verification))
+  const byLineCoverageSource = new Map()
+  const byProductionSource = new Map()
+  const byIntegration = new Map()
+  const byIntegrationTest = new Map()
+
+  for (const entry of entries) {
+    if (!isObject(entry) || entry.kind !== LINE_COVERAGE_KIND || !Array.isArray(entry.files)) continue
+    for (const source of entry.files) {
+      if (!isRustProductionPath(source)) continue
+      const owners = byLineCoverageSource.get(source) ?? []
+      owners.push(entry)
+      byLineCoverageSource.set(source, owners)
+    }
+  }
+  for (const [source, owners] of byLineCoverageSource) {
+    if (owners.length > 1) errors.push(finding('line-coverage-production-owner-duplicate', source))
+  }
+
+  for (const entry of relocations) {
+    const { verification } = entry
+    if (isRustProductionPath(verification.source)) {
+      const owners = byProductionSource.get(verification.source) ?? []
+      owners.push(entry)
+      byProductionSource.set(verification.source, owners)
+    }
+    if (typeof verification.ignored_test_source !== 'string' ||
+        typeof verification.ignored_test_target !== 'string') continue
+    const integrationKey = JSON.stringify([
+      verification.ignored_test_source,
+      verification.ignored_test_target,
+    ])
+    const integrationOwners = byIntegration.get(integrationKey) ?? []
+    integrationOwners.push(entry)
+    byIntegration.set(integrationKey, integrationOwners)
+    if (!Array.isArray(verification.ignored_gpu_tests)) continue
+    for (const ignored of verification.ignored_gpu_tests) {
+      if (!isObject(ignored) || typeof ignored.name !== 'string') continue
+      const testKey = JSON.stringify([
+        verification.ignored_test_source,
+        verification.ignored_test_target,
+        ignored.name,
+      ])
+      const testOwners = byIntegrationTest.get(testKey) ?? []
+      testOwners.push(entry)
+      byIntegrationTest.set(testKey, testOwners)
+    }
+  }
+
+  for (const [source, relocationOwners] of byProductionSource) {
+    if (relocationOwners.length > 1) {
+      errors.push(finding('ignored-test-relocation-production-owner-duplicate', source))
+    }
+    const allOwners = entries.filter((entry) => Array.isArray(entry?.files) && entry.files.includes(source))
+    const lineOwners = allOwners.filter((entry) => entry.kind === LINE_COVERAGE_KIND)
+    const proofOwners = allOwners.filter((entry) => entry.kind === IGNORED_TEST_RELOCATION_KIND)
+    if (lineOwners.length > 1 || proofOwners.length > 1 ||
+        allOwners.some((entry) => ![LINE_COVERAGE_KIND, IGNORED_TEST_RELOCATION_KIND].includes(entry.kind))) {
+      errors.push(finding('ignored-test-relocation-production-owner-conflict', source))
+    }
+  }
+  for (const [key, owners] of byIntegration) {
+    if (owners.length > 1) {
+      const [source, target] = JSON.parse(key)
+      errors.push(finding('ignored-test-relocation-integration-owner-duplicate', `${source}#${target}`))
+    }
+  }
+  for (const [key, owners] of byIntegrationTest) {
+    if (owners.length > 1) {
+      const [source, target, name] = JSON.parse(key)
+      errors.push(finding('ignored-test-relocation-integration-test-owner-duplicate', `${source}#${target}#${name}`))
+    }
+  }
 }
 
 export function validateCoverageMap(map, root = ROOT) {
@@ -487,6 +686,7 @@ export function validateCoverageMap(map, root = ROOT) {
   }
   const ids = new Set()
   for (const entry of map.entries) validEntry(entry, root, errors, ids)
+  validateIgnoredTestRelocationOwnership(map.entries, errors)
   return { ok: errors.length === 0, errors: sortFindings(errors) }
 }
 
@@ -755,31 +955,159 @@ function testOnlyModuleAnalysis(source, testModule) {
   }
 }
 
-function ignoredGpuTestExists(analysis, name) {
-  if (analysis?.region === null || analysis === null) return false
+function exactRustToken(analysis, token) {
+  return token.value === '<literal>' || token.value === '<number>'
+    ? analysis.text.slice(token.start, token.end)
+    : token.value
+}
+
+function integrationTestAnalysis(source) {
+  const analysis = lexRustForTestOnly(source)
+  if (analysis === null) return null
+  return {
+    ...analysis,
+    region: { openIndex: -1, closeIndex: analysis.tokens.length },
+  }
+}
+
+function rustUseProjection(statement) {
+  const analysis = lexRustForTestOnly(statement)
+  if (analysis === null || analysis.tokens[0]?.value !== 'use' ||
+      analysis.tokens.at(-1)?.value !== ';' || analysis.tokens.at(-1)?.depth !== 0) return null
+  const firstSemicolon = analysis.tokens.findIndex((token) => token.value === ';' && token.depth === 0)
+  if (firstSemicolon !== analysis.tokens.length - 1) return null
+  return analysis.tokens.map((token) => exactRustToken(analysis, token))
+}
+
+function directUseProjections(analysis) {
+  if (analysis === null || analysis?.region === null) return null
+  const expectedDepth = analysis.region.openIndex < 0
+    ? 0
+    : analysis.tokens[analysis.region.openIndex].depth + 1
+  const projections = []
+  for (let index = analysis.region.openIndex + 1; index < analysis.region.closeIndex;) {
+    if (analysis.tokens[index]?.value !== 'use' || analysis.tokens[index].depth !== expectedDepth) {
+      index++
+      continue
+    }
+    const start = index
+    while (index < analysis.region.closeIndex &&
+           !(analysis.tokens[index].value === ';' && analysis.tokens[index].depth === expectedDepth)) index++
+    if (index >= analysis.region.closeIndex) return null
+    projections.push(analysis.tokens.slice(start, index + 1)
+      .map((token) => exactRustToken(analysis, token)))
+    index++
+  }
+  return projections
+}
+
+function ignoredGpuTestProjection(analysis, name) {
+  if (analysis === null || analysis?.region === null) return null
   const { tokens, pairs, region } = analysis
-  for (let index = region.openIndex + 1; index < region.closeIndex - 2; index++) {
-    if (tokens[index].value !== '#' || tokens[index + 1]?.value !== '[' || tokens[index + 2]?.value !== 'ignore') continue
-    const attributeEnd = pairs.get(index + 1)
-    if (attributeEnd === undefined || attributeEnd >= region.closeIndex) return false
-    let hasTestAttribute = false
-    let before = index - 1
+  const expectedDepth = region.openIndex < 0 ? 0 : tokens[region.openIndex].depth + 1
+  const matches = []
+
+  for (let functionIndex = region.openIndex + 1; functionIndex < region.closeIndex - 2; functionIndex++) {
+    if (tokens[functionIndex].depth !== expectedDepth || tokens[functionIndex].value !== 'fn' ||
+        tokens[functionIndex + 1]?.value !== name) continue
+
+    const attributes = []
+    let before = functionIndex - 1
     while (tokens[before]?.value === ']') {
       const opening = pairs.get(before)
-      if (opening === undefined || tokens[opening - 1]?.value !== '#') return false
-      if (tokens[opening + 1]?.value === 'test') hasTestAttribute = true
+      if (opening === undefined || tokens[opening - 1]?.value !== '#' || tokens[opening - 1]?.depth !== expectedDepth) break
+      attributes.unshift({ start: opening - 1, open: opening, end: before })
       before = opening - 2
     }
-    let cursor = attributeEnd + 1
-    while (tokens[cursor]?.value === '#' && tokens[cursor + 1]?.value === '[') {
-      const nextAttributeEnd = pairs.get(cursor + 1)
-      if (nextAttributeEnd === undefined || nextAttributeEnd >= region.closeIndex) return false
-      if (tokens[cursor + 2]?.value === 'test') hasTestAttribute = true
-      cursor = nextAttributeEnd + 1
+    const hasTest = attributes.some(({ open, end }) =>
+      end === open + 2 && tokens[open + 1]?.value === 'test')
+    const hasIgnore = attributes.some(({ open, end }) =>
+      end === open + 4 && tokens[open + 1]?.value === 'ignore' &&
+      tokens[open + 2]?.value === '=' && tokens[open + 3]?.value === '<literal>')
+    if (!hasTest || !hasIgnore) continue
+
+    let bodyOpen = functionIndex + 2
+    while (bodyOpen < region.closeIndex &&
+           !(tokens[bodyOpen].value === '{' && tokens[bodyOpen].depth === expectedDepth)) bodyOpen++
+    const bodyClose = pairs.get(bodyOpen)
+    if (bodyOpen >= region.closeIndex || bodyClose === undefined || bodyClose >= region.closeIndex) continue
+
+    const importSpans = []
+    let cursor = bodyOpen + 1
+    while (tokens[cursor]?.value === 'use' && tokens[cursor].depth === expectedDepth + 1) {
+      const importStart = cursor
+      while (cursor < bodyClose && !(tokens[cursor].value === ';' && tokens[cursor].depth === expectedDepth + 1)) cursor++
+      if (cursor >= bodyClose) return null
+      importSpans.push({ start: importStart, end: cursor })
+      cursor++
     }
-    if (hasTestAttribute && tokens[cursor]?.value === 'fn' && tokens[cursor + 1]?.value === name) return true
+
+    const startIndex = attributes[0].start
+    const ignoredIndexes = new Set(importSpans.flatMap(({ start, end }) =>
+      Array.from({ length: end - start + 1 }, (_, offset) => start + offset)))
+    matches.push({
+      startIndex,
+      endIndex: bodyClose,
+      imports: importSpans.map(({ start, end }) =>
+        tokens.slice(start, end + 1).map((token) => exactRustToken(analysis, token))),
+      tokens: tokens.slice(startIndex, bodyClose + 1)
+        .filter((_token, offset) => !ignoredIndexes.has(startIndex + offset))
+        .map((token) => exactRustToken(analysis, token)),
+    })
   }
-  return false
+  return matches.length === 1 ? matches[0] : null
+}
+
+function ignoredGpuTestExists(analysis, name) {
+  return ignoredGpuTestProjection(analysis, name) !== null
+}
+
+function integrationSourceContainsOnlyImportsAndTests(analysis, projections) {
+  const consumed = new Set(projections.flatMap(({ startIndex, endIndex }) =>
+    Array.from({ length: endIndex - startIndex + 1 }, (_, offset) => startIndex + offset)))
+  const { tokens, pairs } = analysis
+  let allowedLintAttribute = false
+  for (let index = 0; index < tokens.length;) {
+    if (consumed.has(index)) {
+      index++
+      continue
+    }
+    if (tokens[index].depth !== 0) return false
+    if (tokens[index].value === '#' && tokens[index + 1]?.value === '!' && tokens[index + 2]?.value === '[') {
+      const end = pairs.get(index + 2)
+      if (end === undefined) return false
+      const values = tokens.slice(index, end + 1).map((token) => token.value)
+      const expected = [
+        '#', '!', '[', 'allow', '(', 'clippy', ':', ':', 'expect_used', ',',
+        'clippy', ':', ':', 'unwrap_used', ')', ']',
+      ]
+      if (allowedLintAttribute || JSON.stringify(values) !== JSON.stringify(expected)) return false
+      allowedLintAttribute = true
+      index = end + 1
+      continue
+    }
+    if (tokens[index].value === 'use') {
+      while (index < tokens.length && !(tokens[index].value === ';' && tokens[index].depth === 0)) index++
+      if (index >= tokens.length) return false
+      index++
+      continue
+    }
+    return false
+  }
+  return true
+}
+
+function normalizedRelocationImports(imports, packageName, fromProductionModule) {
+  const crateName = packageName.replaceAll('-', '_')
+  return imports.map((statement) => statement.map((token, index) =>
+    fromProductionModule && index === 1 && token === 'crate' ? crateName : token))
+}
+
+function exactIgnoredTestRelocation(base, head, packageName) {
+  return base !== null && head !== null &&
+    JSON.stringify(base.tokens) === JSON.stringify(head.tokens) &&
+    JSON.stringify(normalizedRelocationImports(base.imports, packageName, true)) ===
+      JSON.stringify(normalizedRelocationImports(head.imports, packageName, false))
 }
 
 function projectTestOnlyModule(source, testModule) {
@@ -919,12 +1247,7 @@ function validateLocalizationDifferential(entry, root, options, errors) {
     } catch {
       baseSource = null
     }
-    let headSource
-    try {
-      headSource = readFileSync(path.join(root, file))
-    } catch {
-      headSource = null
-    }
+    const headSource = readRegularFileInsideRoot(root, file)
     if (baseSource === null || baseSource === undefined) {
       errors.push(finding('localization-differential-base-read-failed', file))
     } else if (headSource === null) {
@@ -970,12 +1293,7 @@ function validateTestOnlyLocalizationDifferential(entry, root, options, errors) 
   let evidenceRead = false
   for (const verification of entry.verifications) {
     const baseSource = readBaseFileSafely(readBaseFile, options.baseRevision, verification.source)
-    let headSource
-    try {
-      headSource = readFileSync(path.join(root, verification.source))
-    } catch {
-      headSource = null
-    }
+    const headSource = readRegularFileInsideRoot(root, verification.source)
     if (baseSource === null || baseSource === undefined) {
       errors.push(finding('test-only-differential-base-read-failed', verification.source))
       continue
@@ -1017,6 +1335,71 @@ function validateTestOnlyLocalizationDifferential(entry, root, options, errors) 
   }
 }
 
+function sha256(value) {
+  try {
+    return createHash('sha256').update(value).digest('hex')
+  } catch {
+    return null
+  }
+}
+
+function validateIgnoredTestRelocationDifferential(entry, root, options, errors) {
+  const readBaseFile = baseFileReader(root, options)
+  const verification = entry.verification
+  const baseSource = readBaseFileSafely(readBaseFile, entry.base_revision, verification.source)
+  if (baseSource === null || baseSource === undefined) {
+    errors.push(finding('ignored-test-relocation-base-read-failed', verification.source))
+    return
+  }
+  if (sha256(baseSource) !== entry.base_source_sha256) {
+    errors.push(finding('ignored-test-relocation-base-sha-mismatch', verification.source))
+    return
+  }
+  const baseAnalysis = testOnlyModuleAnalysis(baseSource, verification.test_module)
+  if (baseAnalysis === null) {
+    errors.push(finding('ignored-test-relocation-base-source-invalid', verification.source))
+    return
+  }
+  if (baseAnalysis.region === null) {
+    errors.push(finding('ignored-test-relocation-base-module-missing', verification.source))
+    return
+  }
+  const declaredBase = verification.relocation_imports.base.map(rustUseProjection)
+  const baseImports = directUseProjections(baseAnalysis)
+  if (baseImports === null || JSON.stringify(baseImports) !== JSON.stringify(declaredBase)) {
+    errors.push(finding('ignored-test-relocation-imports-mismatch', verification.source))
+  }
+
+  const headSource = readRegularFileInsideRoot(root, verification.ignored_test_source)
+  const headAnalysis = integrationTestAnalysis(headSource)
+  if (headAnalysis === null) {
+    errors.push(finding('ignored-test-relocation-head-source-invalid', verification.ignored_test_source))
+    return
+  }
+  for (const ignored of verification.ignored_gpu_tests) {
+    const base = ignoredGpuTestProjection(baseAnalysis, ignored.name)
+    const head = ignoredGpuTestProjection(headAnalysis, ignored.name)
+    if (base === null) {
+      errors.push(finding('ignored-test-relocation-base-test-missing', ignored.name))
+    }
+    if (head === null) {
+      errors.push(finding('ignored-test-relocation-head-test-missing', ignored.name))
+    } else if (base !== null && !exactIgnoredTestRelocation(base, head, verification.package)) {
+      errors.push(finding('ignored-test-relocation-not-proven', ignored.name))
+    }
+    const baseEvidence = readBaseFileSafely(
+      readBaseFile,
+      entry.base_revision,
+      ignored.evidence,
+    )
+    if (baseEvidence === null || baseEvidence === undefined) {
+      errors.push(finding('ignored-test-relocation-evidence-read-failed', ignored.name))
+    } else if (!ignoredGpuEvidenceExists(baseEvidence, ignored.historical_command)) {
+      errors.push(finding('ignored-test-relocation-evidence-missing', ignored.name))
+    }
+  }
+}
+
 function validateModuleExportGlueDifferential(entry, root, options, errors) {
   if (options.baseRevision === null || options.baseRevision === undefined) {
     errors.push(finding('module-export-glue-differential-base-required', entry.id))
@@ -1029,12 +1412,7 @@ function validateModuleExportGlueDifferential(entry, root, options, errors) {
   const readBaseFile = baseFileReader(root, options)
   for (const file of entry.files) {
     const baseSource = readBaseFileSafely(readBaseFile, options.baseRevision, file)
-    let headSource
-    try {
-      headSource = readFileSync(path.join(root, file))
-    } catch {
-      headSource = null
-    }
+    const headSource = readRegularFileInsideRoot(root, file)
     if (baseSource === null || baseSource === undefined) {
       errors.push(finding('module-export-glue-differential-base-read-failed', file))
     } else if (headSource === null) {
@@ -1067,15 +1445,30 @@ export function selectCoverageEntries(map, changedPaths, root = ROOT, options = 
   if (!Array.isArray(changedPaths)) return { ok: false, state: 'BLOCKED', entries: [], errors: [finding('changed-paths-invalid')] }
   const errors = []
   const businessFiles = []
+  const integrationFiles = []
   for (const file of changedPaths) {
     if (!safeRelative(file)) {
       errors.push(finding('changed-path-unsafe'))
       continue
     }
     if (isBusinessRustPath(file)) businessFiles.push(file)
+    else if (map.entries.some((entry) =>
+      entry.kind === IGNORED_TEST_RELOCATION_KIND && entry.verification.ignored_test_source === file)) {
+      integrationFiles.push(file)
+    }
   }
   const selected = new Map()
   const validatedSpecialOwners = new Set()
+  const validateSpecialOwner = (owner) => {
+    if (validatedSpecialOwners.has(owner.id)) return
+    if (owner.kind === LOCALIZATION_KIND) validateLocalizationDifferential(owner, root, options, errors)
+    if (owner.kind === TEST_ONLY_LOCALIZATION_KIND) validateTestOnlyLocalizationDifferential(owner, root, options, errors)
+    if (owner.kind === IGNORED_TEST_RELOCATION_KIND) {
+      validateIgnoredTestRelocationDifferential(owner, root, options, errors)
+    }
+    if (owner.kind === MODULE_EXPORT_GLUE_KIND) validateModuleExportGlueDifferential(owner, root, options, errors)
+    validatedSpecialOwners.add(owner.id)
+  }
   for (const file of businessFiles) {
     const owners = map.entries.filter((entry) => entry.files.includes(file))
     if (owners.length === 0) {
@@ -1083,19 +1476,27 @@ export function selectCoverageEntries(map, changedPaths, root = ROOT, options = 
       continue
     }
     const specialOwners = owners.filter((entry) => entry.kind !== LINE_COVERAGE_KIND)
-    if (specialOwners.length > 0 && owners.length !== 1) {
+    const exactRelocationAndCoverage = owners.length === 2 && specialOwners.length === 1 &&
+      specialOwners[0].kind === IGNORED_TEST_RELOCATION_KIND &&
+      owners.filter((entry) => entry.kind === LINE_COVERAGE_KIND).length === 1
+    if (specialOwners.length > 0 && owners.length !== 1 && !exactRelocationAndCoverage) {
       errors.push(finding('changed-rust-file-ambiguous-ownership', file))
       continue
     }
-    const owner = owners[0]
-    if (!validatedSpecialOwners.has(owner.id)) {
-      if (owner.kind === LOCALIZATION_KIND) validateLocalizationDifferential(owner, root, options, errors)
-      if (owner.kind === TEST_ONLY_LOCALIZATION_KIND) validateTestOnlyLocalizationDifferential(owner, root, options, errors)
-      if (owner.kind === MODULE_EXPORT_GLUE_KIND) validateModuleExportGlueDifferential(owner, root, options, errors)
-      validatedSpecialOwners.add(owner.id)
+    for (const owner of owners) {
+      if (owner.kind !== LINE_COVERAGE_KIND) validateSpecialOwner(owner)
+      selected.set(owner.id, owner)
     }
-    selected.set(owner.id, owner)
-    for (const entry of owners.slice(1)) selected.set(entry.id, entry)
+  }
+  for (const file of integrationFiles) {
+    const owners = map.entries.filter((entry) =>
+      entry.kind === IGNORED_TEST_RELOCATION_KIND && entry.verification.ignored_test_source === file)
+    if (owners.length !== 1) {
+      errors.push(finding('changed-rust-file-ambiguous-ownership', file))
+      continue
+    }
+    validateSpecialOwner(owners[0])
+    selected.set(owners[0].id, owners[0])
   }
   if (errors.length > 0) return { ok: false, state: 'BLOCKED', entries: [], errors: sortFindings(errors) }
   const entries = [...selected.values()].sort((left, right) => left.id.localeCompare(right.id))
@@ -1171,16 +1572,22 @@ function parseArgs(argv) {
 }
 
 function loadJson(file, root) {
+  const buffer = readRegularFileInsideRoot(root, file)
+  if (buffer === null) return null
   try {
-    return JSON.parse(readFileSync(path.join(root, file), 'utf8'))
+    return JSON.parse(UTF8.decode(buffer))
   } catch {
     return null
   }
 }
 
 function loadChangedPaths(file, root) {
+  const buffer = readRegularFileInsideRoot(root, file)
+  if (buffer === null) return null
   try {
-    return readFileSync(path.join(root, file), 'utf8').split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
+    const lines = UTF8.decode(buffer).split('\n')
+    if (lines.at(-1) === '') lines.pop()
+    return lines.map((item) => item.endsWith('\r') ? item.slice(0, -1) : item)
   } catch {
     return null
   }
@@ -1218,6 +1625,9 @@ export function main(argv = process.argv.slice(2), { root = ROOT, print = consol
     if (entry.kind === TEST_ONLY_LOCALIZATION_KIND) {
       print(`RUST_SLICE_TEST_ONLY_LOCALIZATION_REQUIRED=${entry.id}`)
       if (staticTestOnlyInspection) print(`RUST_SLICE_TEST_ONLY_LOCALIZATION_BASE_PROOF_DEFERRED=${entry.id}`)
+    }
+    if (entry.kind === IGNORED_TEST_RELOCATION_KIND) {
+      print(`RUST_SLICE_IGNORED_TEST_RELOCATION_REQUIRED=${entry.id}`)
     }
     if (entry.kind === MODULE_EXPORT_GLUE_KIND) print(`RUST_SLICE_MODULE_EXPORT_GLUE_DIFFERENTIAL_REQUIRED=${entry.id}`)
     if (entry.kind === STRUCTURAL_KIND) print(`RUST_SLICE_STRUCTURAL_CONTRACT_REQUIRED=${entry.id}`)

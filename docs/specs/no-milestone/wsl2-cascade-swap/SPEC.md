@@ -39,7 +39,7 @@ reference_impl: c0deJedi/nbd-vram (MIT) — blueprint/benchmark only, NOT includ
 ```text
 memory pressure ──►  zram   (compressed RAM, lzo-rle)   Priority 200   HOT
                    └─►  VRAM   (nbd-vram, CUDA+NBD)         Priority 100   COLD
-                   └─►  VHDX   (/dev/sdc, WSL2 swap disk)   Priority −2    LAST
+                   └─►  VHDX   (SANITIZED_DEVICE_WSL2_SWAP) Priority −2    LAST
 ```
 
 **Why (Phase 0 evidence, `wsl2-fase0-final.md`):**
@@ -56,7 +56,7 @@ memory pressure ──►  zram   (compressed RAM, lzo-rle)   Priority 200   HOT
 ```text
 kernel:  6.6.114.1-microsoft-standard-WSL2
 GPU:     RTX 2060, 6144 MiB (cuInit/cuMemAlloc OK — confirmed by nbd-vram)
-RAM:     15.6 GiB | swap VHDX /dev/sdc 8 GiB prio −2
+RAM:     15.6 GiB | swap VHDX SANITIZED_DEVICE_WSL2_SWAP 8 GiB prio −2
 zram:    CONFIG_ZRAM=m, CONFIG_ZSMALLOC=m, zramctl present, lzo-rle default
          CONFIG_ZRAM_WRITEBACK not set
 nbd:     CONFIG_BLK_DEV_NBD=m (requires modprobe; /dev/nbd* on demand)
@@ -89,6 +89,9 @@ Two binaries (same as v2 §4, adjusted roles):
 **Language: Rust (decision CLOSED — Phase 0 is over).** All production implementation is Rust (crates in §5): CUDA via FFI over `libcuda.so`, NBD protocol in Rust, `Result<T, Error>` without `.unwrap()/.expect()` (coding.md rule), unsafe isolated in `ramshared-cuda` with documented invariants. `c0deJedi/nbd-vram` (C, MIT) served only as (a) the measurement yardstick for Phase 0 and (b) the architectural and NBD fixed-newstyle protocol blueprint — it is not forked nor included in the binary. Day-0: clean rewrite in Rust, without C shims/forks.
 
 Manual usage (no auto-start):
+
+> **Disabled staging only / no execution:** the following command spellings are
+> inert interface examples and are not a current activation.
 
 ```sh
 sudo ramshared check
@@ -140,7 +143,11 @@ Flags: `--zram-size` (default `25%` of RAM, **OQ-zram**), `--vram-size` (default
 
 Sequence (each step is idempotent; abort does not leave a partial cascade — rolls back what was mounted):
 1. Preflight (`check`). Abort if `blocked`.
-2. **zram Tier (HOT):** `modprobe zram`; `zramctl --find --size <N> --algorithm lzo-rle`; `mkswap -L RAMSHARED_ZRAM`; `swapon -p 200`.
+2. **zram Tier (HOT):** `modprobe zram`; ownership-creating `zramctl --find --size <N> --algorithm lzo-rle`; seal and revalidate exact device identity; `mkswap`; `swapon -p 200`. No direct sysfs reset of a pre-existing `zram0` is allowed.
+
+> **Disabled staging only / no execution:** the lifecycle sequence below is an
+> inert specification contract and is not a current activation.
+
 3. **VRAM Tier (COLD):** start `ramshared-wsl2d` (CUDA alloc with backoff §6.2-v2; `mlockall`+`oom_score_adj=-1000`; staging; **residency canary armed** §9); connect `nbd` (§10); `mkswap -L RAMSHARED_VRAM`; `swapon -p 100`.
 4. **VHDX Tier (DEMOTE safety net — A1):** **do not touch** (already at -2). **Safety Invariant:** the VRAM tier is only armed if there is a target of priority LOWER than VRAM for the DEMOTE (§9.2) to drain pages into — that is, VHDX swap present **OR** `MemAvailable ≥ vram_size`. If `.wslconfig swap=0` (no VHDX) **and** RAM is insufficient, `up` **rejects** the VRAM tier (exit != 0) unless `--force-no-safety-net` is specified. Warn if VHDX priority ≥ 100 (collides with VRAM).
 5. Publish `/run/ramshared/cascade.json` (tiers, priorities, devices, PID, sizes).
@@ -326,6 +333,10 @@ Escalated: `swapoff` (timeout) → `nbd -d`/ublk delete → free CUDA → only t
 ### 14.1 Detection — check reports 3 tiers; `ready`/`blocked` paired (v2 §14.1).
 ### 14.2 VRAM Integrity — `up --no-zram` + `test --integrity 30m` with overlapping concurrent blocks; hash without divergence (v2 §14.2).
 ### 14.3 Cascade Under Pressure (NEW, confined in cgroup — Phase 0 Part C method):
+
+> **Disabled staging only / no execution:** this acceptance recipe is retained
+> as an inert test contract and is not a current activation.
+
 ```sh
 sudo ramshared up
 # confined INCOMPRESSIBLE hog: systemd-run --scope -p MemoryMax=400M memhog 2400 45
@@ -334,6 +345,10 @@ sudo ramshared up
 Acceptance: `zram.Used` saturates **before** `vram.Used` increases; `vhdx.Used` unchanged while zram+VRAM have space; no OOM kills. (Replicates result already obtained: zram 1024M, VRAM 983M, VHDX untouched.)
 
 ### 14.4 DEMOTE Under Latency (NEW — the core of v3):
+
+> **Disabled staging only / no execution:** this acceptance recipe is retained
+> as an inert test contract and is not a current activation.
+
 ```sh
 sudo ramshared up
 # vramhog CUDA fills VRAM (oversubscription) -> canary latency spikes

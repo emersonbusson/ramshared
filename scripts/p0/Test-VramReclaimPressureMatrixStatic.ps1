@@ -36,8 +36,7 @@ foreach ($needle in @(
     "campaignSummary.PASS",
     "*>&1",
     "matrix_row_close",
-    "shared_wsl_matrix_row_not_closed",
-    "-PreallocateVram"
+    "shared_wsl_matrix_row_not_closed"
 )) {
     if ($text -notmatch [regex]::Escape($needle)) {
         throw ("vram_reclaim_matrix_static: missing " + $needle)

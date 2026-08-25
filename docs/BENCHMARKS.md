@@ -8,6 +8,12 @@
 > **Append-only:** every run is a new entry at the end; do not rewrite older
 > entries. Consolidated go/no-go decisions belong in
 > [`memory-broker/P0-RESULTS.md`](reliability/memory-broker-p0-results.md).
+>
+> **Publication status:** entries without a current `ramshared-evidence/v1`
+> envelope are historical `legacy-unqualified` records. Their measurements are
+> retained for audit but are not current baselines, promotion evidence, or
+> product claims. The 2026-07-13 interpretation is explicitly superseded by the
+> append-only correction at the end of this log.
 
 ## Entry template
 
@@ -111,7 +117,7 @@ Referência VRAM-swap (P0-RESULTS §3, mesma op 4K p50): **ublk 241 µs / NBD-Un
   RAM available 14.1 GiB; WSL swap used 185 MiB.
 - Load: idle snapshot; no swap or device mutation. Three independent runs, each profile 3 s
   plus 2 s ramp, 64 MiB temporary file, direct I/O, `fio`, `iodepth=1` and `8`.
-- Raw output: `/tmp/ramshared-bench-20260724/fio-round-{1,2,3}.txt`.
+- Raw output: `SANITIZED_ARTIFACT_PATH_DISK_IO_BASELINE/fio-round-{1,2,3}.txt`.
 
 **Results** (median across n=3; latency in microseconds)
 
@@ -132,7 +138,7 @@ pressure was introduced.
 
 **Context**
 - Base commit: `72845a0`; uncommitted SSDV3 Step 3 implementation under validation.
-- Machine: Hyper-V `win11-drill`, Windows build 26200.8037, 4 logical CPUs,
+- Machine: Hyper-V `SANITIZED_VM_DRIVER_LAB`, Windows build 26200.8037, 4 logical CPUs,
   2047 MiB visible RAM (805 MiB free after the runs).
 - Load: idle; median CPU sample 0.54%; both RamShared services stopped and zero
   RamShared disks before/after.
@@ -141,7 +147,7 @@ pressure was introduced.
   each `BROKER_BINARY_MATCH` evidence row).
 - Runs: three independent demand-start → pipe-ready → supported stop cycles.
 - Raw evidence:
-  `C:\ramshared\artifacts\autonomous-broker-20260725-{061504,061509,061514}\results.json`.
+  `SANITIZED_ARTIFACT_PATH_AUTONOMOUS_BROKER/results.json`.
 
 **Results** (milliseconds, nearest-rank p99 for n=3)
 
@@ -161,7 +167,7 @@ transactions, cold boot, or the physical host.
 
 **Context**
 - Base commit: `72845a0`; Step 3 implementation under final validation.
-- VM: Hyper-V `win11-drill`, Windows 26200.8037, 2 GiB visible RAM.
+- VM: Hyper-V `SANITIZED_VM_DRIVER_LAB`, Windows 26200.8037, 2 GiB visible RAM.
 - Physical: Windows 11 build 26200, RTX 2060, Test Mode, idle supervised host.
 - Workload: demand-start product, 64 MiB LUN, three independent cold boots,
   three random 8 MiB write/read/SHA rounds, supported consumer-first stop.
@@ -184,3 +190,23 @@ small VM. Physical readiness is also substantially more repeatable. This is a
 lifecycle benchmark, not a throughput benchmark; n=3 makes p99 the maximum
 sample and does not justify a production percentile claim. Both environments
 had all SHA rounds match and zero terminal residue.
+
+## Interpretation supersession
+
+**Recorded:** 2026-08-22. **Scope:** editorial correction; no new benchmark.
+
+**Qualification:** `legacy-unqualified`. This correction records no new
+measurement and does not alter the historical result rows. The 2026-07-13 run
+predates the current public evidence envelope and therefore cannot serve as a
+current performance baseline or promotion claim.
+
+**Exact supported statement:** in the recorded ten consecutive 50 MiB
+write/read rounds, the SHA-256 value read back matched the value written in all
+ten rounds. That proves byte equality for those ten completed round trips on
+the recorded build and environment only.
+
+**Withdrawn interpretation:** those ten matches do not establish general
+absence of corruption, SCSI queue correctness, physical paging correctness,
+crash recovery, production reliability, or performance of the current source
+candidate. The broader queue-and-paging conclusion in the retained historical
+entry is superseded by this statement.

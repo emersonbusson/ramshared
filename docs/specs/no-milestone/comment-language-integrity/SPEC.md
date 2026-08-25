@@ -138,7 +138,7 @@ Until then, a missing base record is a configuration error and the active
 | DT-9 | Define exactly one eventual aggregate-only ratchet record at `tools/ci/comment-language-baseline.json`, constrained by the adjacent strict schema and no-dependency parser. The record declares the `repository-maintainer` pull-request-review protocol, has no suppression-capable field, and is compared with the record from the validated PR base by `--ratchet <base>`. No record is materialized while protected inventory is changing; after stabilization, every update must match the current scan, preserve protected digest/counts, and be a strict decrease of at most 10 files or 100 lines. | A base-anchored, aggregate-only record makes progress reviewable without turning legacy findings into permanent per-path permissions. |
 | DT-10 | In `--all`, an invalid-UTF-8 body under the exact protected-history/evidence classes is treated as opaque historical evidence and excluded from content inventory. Invalid UTF-8 outside that exact class, an over-limit/read/path error anywhere, or an invalid protected file selected by `--diff` returns exit 2. | Immutable binary evidence is explicitly not a language input, while changed or mutable text must fail closed rather than becoming an unreviewed exception. |
 | DT-11 | The seven measured Rust paths listed in the canonical coverage-owner section receive exactly one `rust-line-coverage` owner at 80%, with the command and package/file argv tokens aligned between this SPEC and `docs/governance/rust-slice-coverage.json`. The former lower-coverage production paths listed there have exact feature-SPEC owners; zero paths from this historical set remain low-coverage or unmapped, and neither set receives a localization exemption. | Measured per-file line coverage can close only the paths that meet the canonical threshold, while preserving DT-18's fail-closed ownership rule for every future unmapped business path. |
-| DT-12 | `crates/ramshared-cuda/src/lib.rs` and `crates/ramshared-wsl2d/src/backend.rs` may receive the one exact DT-24 `rust-test-only-localization-differential` owner declared below, but only if the planner proves from a full immutable base that every non-comment difference is inside the declared root `#[cfg(test)] mod tests` region and the projected production text is otherwise identical. The owner runs each exact package `cargo test --lib` command and requires the already-recorded ignored GPU test evidence from the immutable base; it is never a line-coverage or N/A exemption. | These two measured-low files changed only test diagnostics, so a fail-closed test-boundary proof preserves the production coverage rule without treating test text as production behavior. |
+| DT-12 | `crates/ramshared-cuda/src/lib.rs` may receive the one exact DT-24 `rust-test-only-localization-differential` owner declared below, but only if the planner proves from a full immutable base that every non-comment difference is inside the declared root `#[cfg(test)] mod tests` region and the projected production text is otherwise identical. The owner runs the exact package `cargo test -p ramshared-cuda --lib` command and requires the already-recorded ignored GPU test evidence from the immutable base; it is never a line-coverage or N/A exemption. The WSL2 backend is intentionally absent from this no-behavior-change owner and remains owned by memory-broker. | This measured-low CUDA file changed only test diagnostics, so a fail-closed test-boundary proof preserves the production coverage rule without treating test text as production behavior. |
 | DT-13 | `--diff` permits one opaque protected-file public-provenance redaction only when the current first line is exactly the ASCII placeholder `'<repo-root>'`, the base first line is a private WSL repository root, and every byte after the first line is identical between base and current. Any second-line change, different placeholder, non-private base line, missing base blob, or invalid UTF-8 protected change remains exit 2. The exception produces no language finding because it validates bytes rather than decoding historical text. | A public repository must remove a private root from legacy OEM-encoded evidence without translating or re-encoding the historical payload. A byte-exact suffix proof keeps DT-10 fail-closed for every broader rewrite. |
 
 ## Scanner contract
@@ -387,7 +387,7 @@ leave protected bytes untouched.
   DT-11 and the exact DT-12 test-only ownership entry; neither is a generic
   exemption and neither owns the separately feature-owned production paths.
 - Required validation: `tools/ci/plan-rust-slice-coverage.test.mjs` ::
-  `comment_language_measured_rust_files_require_exact_canonical_coverage`.
+  `comment_language_measured_rust_files_keep_exact_ownership_boundaries`.
 - Cover target: N/A — declarative map; the canonical command gates each named
   production file at ≥80% line coverage.
 
@@ -626,7 +626,7 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block,ramshared-broker,
 
 ### Strict test-only Rust localization owner
 
-DT-12 covers only the two exact files below. Its owner is not line coverage:
+DT-12 covers only the exact CUDA file below. Its owner is not line coverage:
 it must lex the immutable-base and working-tree Rust source, recognize only the
 declared root `#[cfg(test)] mod tests` spans, and prove that the production
 projection differs only in comments. A malformed source, spoofed attribute,
@@ -637,7 +637,9 @@ The package tests are executable local checks. Each named GPU function must
 carry adjacent `#[test]` and `#[ignore]` attributes. The ignored GPU commands
 are historical live evidence already recorded as terminal `**PASS**` commands
 in the immutable base's `validation.md`; the planner validates that record but
-never reruns them.
+never reruns them. The WSL2 backend is intentionally absent from this
+no-behavior-change owner; its production behavior and one-time ignored-test
+relocation have independent memory-broker contracts.
 
 <!-- rust-slice-test-only-localization-differential-v1
 {
@@ -645,8 +647,7 @@ never reruns them.
   "id": "comment-language-rust-test-only-localization",
   "kind": "rust-test-only-localization-differential",
   "files": [
-    "crates/ramshared-cuda/src/lib.rs",
-    "crates/ramshared-wsl2d/src/backend.rs"
+    "crates/ramshared-cuda/src/lib.rs"
   ],
   "verifications": [
     {
@@ -661,24 +662,6 @@ never reruns them.
           "evidence": "validation.md"
         }
       ]
-    },
-    {
-      "source": "crates/ramshared-wsl2d/src/backend.rs",
-      "package": "ramshared-wsl2d",
-      "test_module": "tests",
-      "cargo_test": ["cargo", "test", "-p", "ramshared-wsl2d", "--lib"],
-      "ignored_gpu_tests": [
-        {
-          "name": "vram_backend_serves_nbd_write_then_read",
-          "command": ["cargo", "test", "-p", "ramshared-wsl2d", "backend::tests::vram_backend_serves_nbd_write_then_read", "--", "--ignored", "--test-threads=1"],
-          "evidence": "validation.md"
-        },
-        {
-          "name": "vram_gauge_outros_captures_real_graphics_usage",
-          "command": ["cargo", "test", "-p", "ramshared-wsl2d", "backend::tests::vram_gauge_outros_captures_real_graphics_usage", "--", "--ignored", "--test-threads=1"],
-          "evidence": "validation.md"
-        }
-      ]
     }
   ]
 }
@@ -686,7 +669,6 @@ never reruns them.
 
 ```bash
 cargo test -p ramshared-cuda --lib
-cargo test -p ramshared-wsl2d --lib
 ```
 
 No business path from this historical localization set remains outside a
@@ -783,7 +765,7 @@ the checker never writes it.
 | same | `batch_limit_rejects_more_than_ten_files_or_hundred_lines` | integration | #18 | ≥80% |
 | same | `zero_mutable_findings_is_terminal_state` | integration | #18 | ≥80% |
 | same | `ratchet_requires_anchored_base_record_before_activation` | integration | #13 | ≥80% |
-| `tools/ci/plan-rust-slice-coverage.mjs` | `plan-rust-slice-coverage.test.mjs` :: `comment_language_measured_rust_files_require_exact_canonical_coverage` | unit/refusal | #13/#16 | ≥80% |
+| `tools/ci/plan-rust-slice-coverage.mjs` | `plan-rust-slice-coverage.test.mjs` :: `comment_language_measured_rust_files_keep_exact_ownership_boundaries` | unit/refusal | #13/#16 | ≥80% |
 | same | same :: `comment_language_test_only_localization_requires_immutable_base_proof` | unit/refusal | #13/#16 | ≥80% |
 | same | same :: `test_only_localization_differential_accepts_declared_cfg_test_change` | unit | #13/#16 | ≥80% |
 | same | same :: `test_only_localization_differential_refuses_spoofed_or_production_change` | refusal | #13/#16 | ≥80% |

@@ -1,5 +1,10 @@
 # SPEC ↔ code confrontation — cascade boot + orphan recover
 
+> **Registro histórico supersedido.** A conclusão sobre recuperação automática
+> por `used_kb == 0` deixou de ser válida. O contrato atual está em
+> `docs/specs/no-milestone/wsl2-cascade-orphan-recover/`: enumeração live é
+> somente detecção e qualquer mutação exige lifecycle binding exato e fresco.
+
 **Date:** 2026-07-13  
 **Method:** read SPEC/IMPL ITEMs → `test -f` / `rg fn` → `cargo test -p ramshared-cli` → live preflight/health/BINARY_MATCH  
 **Specs:** `docs/specs/no-milestone/wsl2-cascade-boot/`, `wsl2-cascade-orphan-recover/`  

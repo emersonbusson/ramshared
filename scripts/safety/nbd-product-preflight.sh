@@ -166,8 +166,10 @@ verify_manifest() {
 
   [[ -n ${MANIFEST_HASHES[bin/ramshared]+x} ]] || block RELEASE_LAYOUT_INVALID
   [[ -n ${MANIFEST_HASHES[bin/ramsharedd]+x} ]] || block RELEASE_LAYOUT_INVALID
+  [[ -n ${MANIFEST_HASHES[scripts/safety/uninstall-cascade-boot.sh]+x} ]] || block RELEASE_LAYOUT_INVALID
   [[ -n ${MANIFEST_HASHES[scripts/safety/cascade-up.sh]+x} ]] || block RELEASE_LAYOUT_INVALID
   [[ -n ${MANIFEST_HASHES[scripts/safety/cascade-down.sh]+x} ]] || block RELEASE_LAYOUT_INVALID
+  [[ -n ${MANIFEST_HASHES[scripts/safety/cascade-health.sh]+x} ]] || block RELEASE_LAYOUT_INVALID
   [[ -n ${MANIFEST_HASHES[scripts/safety/nbd-product-preflight.sh]+x} ]] || block RELEASE_LAYOUT_INVALID
   [[ -n ${MANIFEST_HASHES[scripts/safety/nbd-benchmark-cell.sh]+x} ]] || block RELEASE_LAYOUT_INVALID
   [[ -n ${MANIFEST_HASHES[scripts/safety/nbd-benchmark-cgroup-launch.sh]+x} ]] || block RELEASE_LAYOUT_INVALID
@@ -175,6 +177,8 @@ verify_manifest() {
   [[ -n ${MANIFEST_HASHES[scripts/safety/cascade_pressure_integrity_worker.py]+x} ]] || block RELEASE_LAYOUT_INVALID
   [[ -n ${MANIFEST_HASHES[scripts/safety/cascade.conf.example]+x} ]] || block RELEASE_LAYOUT_INVALID
   [[ -n ${MANIFEST_HASHES[systemd/ramshared-cascade.service]+x} ]] || block RELEASE_LAYOUT_INVALID
+  [[ -n ${MANIFEST_HASHES[systemd/ramshared-cascade-health.service]+x} ]] || block RELEASE_LAYOUT_INVALID
+  [[ -n ${MANIFEST_HASHES[systemd/ramshared-workloads.slice]+x} ]] || block RELEASE_LAYOUT_INVALID
   [[ -n ${MANIFEST_HASHES[SOURCE_COMMIT]+x} ]] || block RELEASE_LAYOUT_INVALID
   [[ -n ${MANIFEST_HASHES[SOURCE_BRANCH]+x} ]] || block RELEASE_LAYOUT_INVALID
   [[ -n ${MANIFEST_HASHES[SOURCE_TREE_STATE]+x} ]] || block RELEASE_LAYOUT_INVALID

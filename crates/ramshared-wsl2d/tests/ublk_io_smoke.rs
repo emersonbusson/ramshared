@@ -104,7 +104,7 @@ fn serves_write_into_ram_backend_over_block_device() {
 
     // Teardown: the thread returns the backend for direct inspection (without page cache).
     ublk_control::stop_dev(UBLK_CONTROL, report.dev_id).expect("ublk STOP_DEV");
-    let backend = server.join().expect("server loop terminated ok");
+    let mut backend = server.join().expect("server loop terminated ok");
 
     let mut got = vec![0u8; SECTOR as usize];
     backend
@@ -930,7 +930,7 @@ impl Drop for DeviceGuard {
 }
 
 #[test]
-#[ignore = "DANGEROUS on WSL2: starts standalone ublk daemon; unsuccessful teardown orphans device and FREEZES WSL2. Gated by RAMSHARED_DANGEROUS_DAEMON_SMOKE=1. Prefer validating in VM/QEMU."]
+#[ignore = "requires an isolated non-WSL Linux host and RAMSHARED_DANGEROUS_DAEMON_SMOKE=1; prefer VM/QEMU"]
 fn daemon_ublk_serves_and_terminates_on_signal() {
     // SAFETY GUARD: this smoke starts the ublk daemon as a separate process and
     // depends on SIGTERM for teardown. If teardown fails, `/dev/ublkbN` is left without
@@ -944,13 +944,21 @@ fn daemon_ublk_serves_and_terminates_on_signal() {
         return;
     }
 
+    let osrelease = fs::read_to_string("/proc/sys/kernel/osrelease")
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if osrelease.contains("microsoft") || osrelease.contains("wsl") {
+        eprintln!(
+            "[skip] daemon_ublk_serves_and_terminates_on_signal: standalone ublk smoke is permanently disabled on WSL2"
+        );
+        return;
+    }
+
     let before = ublk_nodes();
-    // Starts the daemon in ublk mode as a subprocess (inherits test root). Whoever opened the
-    // gate of this smoke accepted the risk, so passes the daemon's WSL2 lock override
-    // (otherwise `run_ublk` would refuse via guard_not_wsl2 and the device would not appear).
+    // Starts the daemon in ublk mode only after proving this is not WSL. The daemon repeats
+    // that fail-closed platform check, so this ignored smoke cannot override the WSL lockout.
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_ramsharedd"))
         .args(["--transport", "ublk", "--size", "8", "--queue-depth", "1"])
-        .env("RAMSHARED_ALLOW_UBLK_ON_WSL2", "1")
         .spawn()
         .expect("spawn daemon ublk");
 

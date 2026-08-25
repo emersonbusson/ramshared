@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+
+import { evaluateClaimClosures, loadClaimClosures } from './documentation-claim-closure.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const MAX_FILE_BYTES = 512 * 1024
@@ -74,6 +75,79 @@ export function validateParityDocument(text, root = ROOT) {
 
 export function validateReferenceIndex(text, root = ROOT) {
   return validateRouting(text, root, REQUIRED_REFERENCE, 'docs/reference/REFERENCE-INDEX.md', 0)
+}
+
+const ROUTER_PAIRS = [
+  ['architecture', 'architecture and topology', 'architecture decisions'],
+  ['linux-operation', 'operation', 'linux or wsl2 lifecycle'],
+  ['campaign-evidence', 'campaign evidence custody', 'publish or inspect campaign evidence'],
+  ['space-recovery', 'workstation-space recovery', 'recover workstation disk space'],
+  ['document-lifecycle', 'document lifecycle coverage', 'document owners and freshness'],
+  ['threat-model', 'governance threat model', 'governance threat boundaries'],
+  ['timestamps', 'task and evidence timestamps', 'task and validation timestamps'],
+  ['benchmarks', 'benchmark comparison', 'register or compare a benchmark'],
+  ['reliability-gaps', 'reliability gaps', 'reliability gaps remain open'],
+  ['ssdv3', 'prd and spec requirements', 'make an ssdv3 change'],
+  ['postmortems', 'postmortem closure', 'investigate and close an incident'],
+]
+
+function extractPaths(value, { allowParent = false } = {}) {
+  const paths = []
+  for (const match of value.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) paths.push(match[1].split('#')[0])
+  for (const match of value.matchAll(/`([^`]+)`/g)) paths.push(match[1])
+  return [...new Set(allowParent ? paths : paths.filter(safeRelative))]
+}
+
+function routerRows(text, sourcePath) {
+  return parseMarkdownTable(text, sourcePath).map((row) => ({
+    key: row.cells[0]?.toLowerCase() ?? '',
+    sources: extractPaths(row.cells[1] ?? ''),
+    line: row.line,
+  }))
+}
+
+function compatibleSources(left, right) {
+  return left.some((a) => right.some((b) => a === b ||
+    (a.endsWith('/') && b.startsWith(a)) || (b.endsWith('/') && a.startsWith(b))))
+}
+
+function landingTarget(value) {
+  if (typeof value !== 'string' || value.length === 0 || path.posix.isAbsolute(value) ||
+      /^[A-Za-z]:[\\/]/.test(value) || value.includes('://')) return null
+  const normalized = path.posix.normalize(path.posix.join('docs/governance', value))
+  return safeRelative(normalized) ? normalized : null
+}
+
+export function validateRouterConsistency(parityText, referenceText, governanceText) {
+  const findings = []
+  const parityRows = routerRows(parityText, 'docs/DOCUMENTATION-PARITY.md')
+  const referenceRows = routerRows(referenceText, 'docs/reference/REFERENCE-INDEX.md')
+  for (const [topic, parityNeedle, referenceNeedle] of ROUTER_PAIRS) {
+    const parity = parityRows.find((row) => row.key.includes(parityNeedle))
+    const reference = referenceRows.find((row) => row.key.includes(referenceNeedle))
+    if (!parity || !reference) {
+      findings.push(finding('docs/governance/README.md', 1, 'ROUTER_PAIR_MISSING', topic))
+    } else if (!compatibleSources(parity.sources, reference.sources)) {
+      findings.push(finding('docs/governance/README.md', 1, 'ROUTER_SOURCE_MISMATCH', topic))
+    }
+  }
+  const landingLinks = []
+  for (const rawTarget of extractPaths(governanceText, { allowParent: true })) {
+    const target = landingTarget(rawTarget)
+    if (target) landingLinks.push(target)
+    else findings.push(finding('docs/governance/README.md', 1, 'ROUTER_LANDING_UNSAFE', 'unsafe-target'))
+  }
+  for (const required of [
+    'docs/DOCUMENTATION-PARITY.md',
+    'docs/reference/REFERENCE-INDEX.md',
+    'docs/governance/claims.json',
+  ]) {
+    if (!landingLinks.includes(required)) findings.push(finding('docs/governance/README.md', 1, 'ROUTER_LANDING_LINK', required))
+  }
+  if (parseMarkdownTable(governanceText, 'docs/governance/README.md').length > 0) {
+    findings.push(finding('docs/governance/README.md', 1, 'ROUTER_DUPLICATION', 'landing-page-must-not-copy-router-tables'))
+  }
+  return sorted(findings)
 }
 
 function pathExists(root, rel, findings, rule, line = 1) {
@@ -238,8 +312,13 @@ export function run({ root = ROOT } = {}) {
   const findings = []
   const parity = readFileSync(path.join(root, 'docs/DOCUMENTATION-PARITY.md'), 'utf8')
   const reference = readFileSync(path.join(root, 'docs/reference/REFERENCE-INDEX.md'), 'utf8')
+  const governance = readFileSync(path.join(root, 'docs/governance/README.md'), 'utf8')
   findings.push(...validateParityDocument(parity, root), ...validateReferenceIndex(reference, root))
-  findings.push(...validateClaims(readJson(root, 'docs/governance/claims.json'), root))
+  findings.push(...validateRouterConsistency(parity, reference, governance))
+  const claims = readJson(root, 'docs/governance/claims.json')
+  findings.push(...validateClaims(claims, root))
+  const closureResult = evaluateClaimClosures(claims, loadClaimClosures(root), { root })
+  for (const reason of closureResult.findings) findings.push(finding('docs/governance/claim-closures.json', 1, 'CLAIM_CLOSURE', reason))
   const files = structuralFiles(root)
   for (const file of files.filter((item) => item.oversize)) findings.push(finding(file.path, 1, 'FILE_LIMIT', 'file-size-limit'))
   findings.push(...scanProvenance(files, readJson(root, 'docs/governance/provenance-allowlist.json'), readJson(root, 'docs/governance/provenance-baseline.json')))
@@ -251,8 +330,8 @@ export function run({ root = ROOT } = {}) {
 
 /* node:coverage disable */
 function main(argv = process.argv.slice(2)) {
-  if (!(argv.length === 1 && argv[0] === '--all')) {
-    console.error('usage: check-documentation-governance.mjs --all')
+  if (!(argv.length === 1 && ['--all', '--check'].includes(argv[0]))) {
+    console.error('usage: check-documentation-governance.mjs --all|--check')
     return 2
   }
   const result = run({ root: ROOT })

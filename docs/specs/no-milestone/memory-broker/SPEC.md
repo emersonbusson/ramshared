@@ -167,7 +167,7 @@
 | **DT-47** | A ublk descriptor is copied into an owned fixed-size array after the CQE; Rust never creates or returns `&[u8]` over the kernel-mutated shared mapping. | The kernel is an external writer. A borrowed Rust slice would express immutability that the mapping cannot guarantee and can become aliasing UB. The copy is bounds-checked and decoding uses only the owned snapshot. |
 | **DT-48** | Every ublk composite handle joins both the ring owner and the backend worker before returning; the ring result has deterministic precedence only after both attempts complete. | An early `?` on the ring result can abandon an unjoined worker and leave teardown incomplete. Joining both preserves ownership cleanup without inventing recovery. |
 | **DT-49** | Every ublk descriptor, buffer, and completion operation validates `tag < queue_depth` before accessing the rounded shared mapping or buffer vector. | Page-rounded mappings can contain bytes beyond the declared queue. Mapping bounds alone do not prove tag ownership, and unchecked vector indexing can panic on a kernel-supplied tag. An invalid tag is a terminal `InvalidInput` refusal. |
-| **DT-50** | Broker worker shutdown uses a dedicated `WMsg::Shutdown` control-plane wake paired with the atomic terminal flag; it never depends only on `recv_timeout` expiring and never abandons earlier FIFO work. | The shutdown requester stores the flag before a nonblocking `try_send`. A queued wake releases an idle receiver immediately. On a full queue, the requester returns after handing a cloned sender to a dedicated notifier, which waits for capacity and appends the wake after already queued I/O; a disconnected queue is already terminal. The worker exits on the control message (with the atomic timeout check retained only as fallback), so shutdown does not block the signal bridge, change NBD wire values, or drop earlier replies. |
+| **DT-50** | Broker worker shutdown pairs a dedicated `WMsg::Shutdown` control-plane wake with an atomic terminal flag and checks that flag at every iteration boundary before receiving more work. | The shutdown requester stores the flag before a nonblocking `try_send`. A queued wake releases an idle receiver immediately. A full queue sets an owned pending bit and returns without spawning a notifier thread; the worker's next top-of-iteration terminal check preempts queued I/O, while an I/O operation already executing may finish at its bounded completion barrier. A disconnected queue is already terminal. This prevents continuous queue refill from starving shutdown, does not depend on `recv_timeout`, and does not change NBD wire values. |
 
 ---
 
@@ -358,7 +358,12 @@ endpoint consistency before it can select a backend. A bounded test runtime may
 use only a loopback TCP listener, a temporary Unix-socket pathname, heap-backed
 `RamBackend`, and an in-process broker. It must have an explicit stop signal
 and join deadline; timeout is a refusal and its cleanup removes only the socket
-that it created. It must never load CUDA/Vulkan, invoke `swapon`/`swapoff`,
+that it created.
+
+> **Disabled staging only / no execution:** this bounded test contract is inert,
+> never authorizes host activation, and is not a current activation.
+
+It must never load CUDA/Vulkan, invoke `swapon`/`swapoff`,
 touch `/dev/nbd*` or `/dev/ublk*`, or mutate a host/VM.
 
 The production shell remains responsible for CUDA/Vulkan construction,
@@ -381,10 +386,13 @@ names, JSON wire values, and telemetry JSONL schema remain unchanged.
 | `daemon_broker_setup_failure_zeroes_allocated_vram_before_return` | an injected broker-setup refusal after backend and canary allocation must explicitly zero both allocations and remove only its owned temporary Unix socket before returning the refusal; no CUDA, swap, NBD client, or device | #13/#15/#16 |
 | `daemon_broker_lock_refusal_zeroes_allocated_vram_before_return` | an injected memory-lock refusal after backend allocation must explicitly zero that allocation and return before canary allocation or broker setup; no CUDA, swap, NBD client, or device | #13/#15/#16 |
 | `daemon_broker_bind_conflict_refuses_and_preserves_existing_listener` | occupied loopback port; no worker is started and the pre-existing listener remains usable | #16/#17 |
-| `daemon_worker_serves_job_counts_io_and_stops_on_shutdown` | heap `RamBackend`, channel job, bounded reply/join; exact counters and terminal shutdown | #13/#15 |
+| `daemon_broker_panic_propagates_after_bounded_worker_cleanup` | injected broker panic ensures worker cleanup completes boundedly before propagating the panic | #15/#16 |
+| `daemon_worker_reply_is_io_accounting_barrier_and_shutdown_is_bounded` | heap `RamBackend`, channel job, bounded reply/join; the reply is the exact accounting barrier before terminal shutdown | #13/#15 |
 | `daemon_worker_shutdown_wake_is_not_timer_dependent` | a 30 s receive interval plus the dedicated nonblocking wake must join within 1 s, proving shutdown does not wait for the timer | #15/#16 |
 | `daemon_worker_shutdown_full_queue_is_nonblocking` | a full worker queue returns the explicit full-queue wake result while setting the terminal flag; no shutdown sender can block | #15/#16/#17 |
-| `daemon_worker_shutdown_drains_queued_io_before_stop` | a write queued before the shutdown wake still receives its reply and increments exact counters before the worker joins | #13/#15/#17 |
+| `daemon_worker_parallel_full_queue_shutdowns_reap_without_notifier_threads` | parallel full-queue fixtures all join within their bounded scopes and leave no detached shutdown notifier | #15/#16/#17 |
+| `daemon_worker_shutdown_preempts_queued_io_at_iteration_boundary` | a write queued before the shutdown wake is not executed after the terminal flag is observed at the next iteration boundary | #13/#15/#17 |
+| `daemon_worker_terminal_flag_wins_over_512_continuous_queue_refills` | a deterministic producer restores a full queue for 512 completion barriers, then the terminal flag wins without another queued I/O or an unbounded sender | #15/#16/#17 |
 | `daemon_command_timeout_terminates_child_without_hang` | harmless child process; success, nonzero, missing executable, and deadline branches | #15/#16 |
 | `daemon_nbd_serves_two_connection_generations_before_explicit_shutdown` | heap-backed `VramProvider`, no-op memory lock, and injected worker messages exercise two balanced NBD connection generations against one backend before an explicit shutdown, without a CUDA context, NBD client/device, swap command, or `/proc` mutation | #13/#15/#16 |
 | `daemon_nbd_sparse_floor_refusal_reclaims_without_provider_allocation` | zero-free heap provider plus injected write/flush/close proves sparse free-floor refusal and idle reclaim decisions without allocating a sparse chunk, CUDA, NBD device, swap, or `/proc` access | #3/#15/#16 |
@@ -396,10 +404,10 @@ names, JSON wire values, and telemetry JSONL schema remain unchanged.
 | `daemon_nbd_teardown_refuses_until_fake_usage_and_swapoff_confirm` | injected nonzero usage followed by zero usage and fake swapoff confirmation prove fail-closed teardown retry without a five-second test sleep, NBD device, or swap command | #15/#16/#17 |
 | `daemon_nbd_residency_demote_uses_injected_clock_and_swapoff` | deterministic latency baseline/spike sequence and injected successful swapoff prove DEMOTE state/status/teardown without timing sleeps, CUDA, NBD device, or a real swap command | #3/#15/#16 |
 | `daemon_ublk_runtime_orders_lifecycle_and_rolls_back_without_device` | injected ublk runtime proves guard → lock → create → configure → start → bounded stop/join/delete ordering and refusal-before-runtime; it never opens `/dev/ublk-control` or creates a block device | #15/#16/#17 |
-| `daemon_ublk_runtime_failures_delete_candidate_before_return` | injected set-params/server/start/wait failures prove cleanup attempts remain ordered and terminal before error return, without a ublk device | #15/#16/#17 |
+| `daemon_ublk_runtime_failures_delete_only_after_fresh_absence_proof` | injected set-params/server/start/wait failures prove delete follows a fresh absence proof and cleanup remains ordered and terminal before error return, without a ublk device | #15/#16/#17 |
 | `daemon_ublk_vulkan_refuses_before_device_mutation` | unsupported ublk/Vulkan combination returns before `/dev/ublk-control` | #16 |
 | `daemon_production_runner_refuses_safe_terminal_actions_before_platform_load` | production runner receives synthetic RAM-NBD and Vulkan-ublk terminal actions plus a broker-RAM regular-file socket conflict; every case refuses before CUDA/Vulkan loading, swap, NBD client/device, or acceptor startup, preserving the existing file | #16/#17 |
-| `daemon_ublk_wsl_guard_and_memory_lock_policy_are_pure_and_fail_closed` | pure os-release/override and lock-result matrices prove WSL2 refusal plus protected-memory refusal without inspecting host state, setting OOM score, or opening a device | #16/#17 |
+| `daemon_ublk_wsl_guard_and_memory_lock_policy_are_pure_and_fail_closed` | pure os-release and lock-result matrices prove permanent WSL2 refusal plus protected-memory refusal without inspecting host state, setting OOM score, or opening a device | #16/#17 |
 | `mmap_descriptor_snapshot_is_owned_and_bounds_checked` | a regular-file mapping proves descriptor reads return an owned array, preserve an earlier snapshot after mapped bytes change, and reject an out-of-range offset | #13/#16 |
 | `regular_file_ublk_adapters_refuse_without_a_device` | page-aligned regular-file and invalid-descriptor fixtures cover mmap, queue construction, queue-depth tag refusal, and every control command; they may observe only deterministic kernel refusal and never open `/dev/ublk*` | #13/#16 |
 | `regular_file_descriptor_queue_decodes_owned_snapshot` | a page-sized regular file carries one manufactured io descriptor; queue decoding returns the exact owned values and rejects an out-of-range tag without submitting a device request | #13/#16 |
@@ -421,6 +429,72 @@ node tools/ci/check-rust-slice-coverage.mjs \
   --min 80 \
   --report-json tmp/memory-broker-wsl2d-daemon-cov.json
 ```
+
+The backend production path has an independent line-coverage owner because its
+non-test behavior changed and must not be represented as a localization-only
+differential:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs \
+  -p ramshared-wsl2d \
+  --files crates/ramshared-wsl2d/src/backend.rs \
+  --min 80 \
+  --report-json tmp/memory-broker-wsl2d-backend-cov.json
+```
+
+The two environment-bound GPU checks were moved from that production module to
+the exact `backend_gpu` integration target. This is static provenance only: the
+pinned base revision and source hash must contain each historical ignored test,
+the integration file must be a non-symlink regular file inside the repository,
+and normalized attributes, literals, identifiers, assertions, messages, side
+effects, and execution order must match. Only comments, whitespace, and the
+exact declared base/head import sets may differ. Historical `validation.md`
+evidence is checked against the historical command; the current integration
+commands below are declarations and are never executed by the planner.
+
+<!-- rust-slice-ignored-test-relocation-v1
+{
+  "schema_version": 1,
+  "id": "memory-broker-wsl2d-backend-gpu-test-relocation",
+  "kind": "rust-ignored-test-relocation",
+  "files": ["crates/ramshared-wsl2d/src/backend.rs"],
+  "base_revision": "69f7469fa999b7d079341ee6bf8ebb006d517b51",
+  "base_source_sha256": "b58d99366164b7e898baa42492fead82416a6169ec06ce16fb274b06b6d99663",
+  "verification": {
+    "source": "crates/ramshared-wsl2d/src/backend.rs",
+    "package": "ramshared-wsl2d",
+    "test_module": "tests",
+    "ignored_test_source": "crates/ramshared-wsl2d/tests/backend_gpu.rs",
+    "ignored_test_target": "backend_gpu",
+    "relocation_imports": {
+      "base": [
+        "use super::*;",
+        "use ramshared_block::{Command, Request, serve};",
+        "use ramshared_cuda::Cuda;"
+      ],
+      "head": [
+        "use ramshared_block::{Command, Request, serve};",
+        "use ramshared_cuda::Cuda;",
+        "use ramshared_wsl2d::VramBackend;"
+      ]
+    },
+    "ignored_gpu_tests": [
+      {
+        "name": "vram_backend_serves_nbd_write_then_read",
+        "command": ["cargo", "test", "-p", "ramshared-wsl2d", "--test", "backend_gpu", "vram_backend_serves_nbd_write_then_read", "--", "--ignored", "--test-threads=1"],
+        "historical_command": ["cargo", "test", "-p", "ramshared-wsl2d", "backend::tests::vram_backend_serves_nbd_write_then_read", "--", "--ignored", "--test-threads=1"],
+        "evidence": "validation.md"
+      },
+      {
+        "name": "vram_gauge_outros_captures_real_graphics_usage",
+        "command": ["cargo", "test", "-p", "ramshared-wsl2d", "--test", "backend_gpu", "vram_gauge_outros_captures_real_graphics_usage", "--", "--ignored", "--test-threads=1"],
+        "historical_command": ["cargo", "test", "-p", "ramshared-wsl2d", "backend::tests::vram_gauge_outros_captures_real_graphics_usage", "--", "--ignored", "--test-threads=1"],
+        "evidence": "validation.md"
+      }
+    ]
+  }
+}
+-->
 
 The ublk shared-memory and composite-teardown business paths use this separate
 canonical slice gate:

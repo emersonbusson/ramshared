@@ -27,6 +27,8 @@ Usage: wslconfig-ctl.sh <check|apply|show|selftest|render>
 
 Env: WSL_CONFIG WIN_USER WSLCONFIG_MEMORY_BYTES WSLCONFIG_SWAP_BYTES
      WSLCONFIG_SWAPFILE WSLCONFIG_KERNEL WSLCONFIG_KERNEL_MODULES
+Unsafe lab only: WSLCONFIG_UNSAFE_LAB_MODE=1 plus
+  WSLCONFIG_UNSAFE_LAB_SPARSE_APPROVAL=I_ACCEPT_WSL_SPARSE_VHD_DATA_CORRUPTION_RISK
 EOF
 }
 
@@ -42,7 +44,7 @@ cmd_check() {
 		exit 1
 	fi
 	if wslconfig_validate_file "$cfg"; then
-		echo "CHECK: OK (no unsafe escapes)"
+		echo "CHECK: OK (no unsafe escapes or unapproved sparse VHD)"
 		# soft hints
 		if ! grep -qE '^[[:space:]]*memory[[:space:]]*=' "$cfg"; then
 			echo "CHECK: WARN missing memory= (WSL default may over-allocate)"
@@ -98,17 +100,17 @@ cmd_selftest() {
 		echo "FAIL encode doubled → $t"
 		fail=1
 	}
-	t="$(wslconfig_encode_path 'I:/wsl_swap/swap.vhdx')"
-	[[ "$t" == "I:/wsl_swap/swap.vhdx" ]] || {
+	t="$(wslconfig_encode_path 'R:/wsl_swap/swap.vhdx')"
+	[[ "$t" == "R:/wsl_swap/swap.vhdx" ]] || {
 		echo "FAIL encode already-safe → $t"
 		fail=1
 	}
 
 	# unsafe detection (the production bug)
-	if wslconfig_path_is_unsafe 'I:\wsl_swap\swap.vhdx'; then
-		echo "OK detect I:\\wsl_swap unsafe"
+	if wslconfig_path_is_unsafe 'R:\wsl_swap\swap.vhdx'; then
+		echo "OK detect R:\\wsl_swap unsafe"
 	else
-		echo "FAIL did not detect I:\\wsl_swap as unsafe"
+		echo "FAIL did not detect R:\\wsl_swap as unsafe"
 		fail=1
 	fi
 	if wslconfig_path_is_unsafe 'C:\wsl\kernel-ramshared'; then
@@ -117,7 +119,7 @@ cmd_selftest() {
 		echo "FAIL did not detect C:\\wsl as unsafe"
 		fail=1
 	fi
-	if wslconfig_path_is_unsafe 'I:/wsl_swap/swap.vhdx'; then
+	if wslconfig_path_is_unsafe 'R:/wsl_swap/swap.vhdx'; then
 		echo "FAIL false positive on forward slash"
 		fail=1
 	else
@@ -155,7 +157,7 @@ cmd_selftest() {
 
 	# render must be safe
 	local rendered
-	rendered="$(wslconfig_render_host)"
+	rendered="$(WSLCONFIG_SWAPFILE= wslconfig_render_host)"
 	printf '%s\n' "$rendered" >"$td/rendered.wslconfig"
 	if wslconfig_validate_file "$td/rendered.wslconfig"; then
 		echo "OK render validates"
@@ -167,6 +169,47 @@ cmd_selftest() {
 		echo "WARN render still contains backslashes (prefer / only)"
 	else
 		echo "OK render has zero backslashes"
+	fi
+	if printf '%s\n' "$rendered" | grep -qE '^[[:space:]]*swapFile[[:space:]]*='; then
+		echo "FAIL render synthesized a swapFile drive"
+		fail=1
+	else
+		echo "OK render leaves absent swapFile discovery to WSL"
+	fi
+	if printf '%s\n' "$rendered" | grep -qE '^[[:space:]]*sparseVhd[[:space:]]*=[[:space:]]*true'; then
+		echo "FAIL production render enabled sparseVhd"
+		fail=1
+	else
+		echo "OK production render omits sparseVhd"
+	fi
+	printf '%s\n' '[experimental]' 'sparseVhd=true' >"$td/unsafe-sparse.wslconfig"
+	if wslconfig_validate_file "$td/unsafe-sparse.wslconfig" >/dev/null 2>&1; then
+		echo "FAIL production validation accepted sparseVhd=true"
+		fail=1
+	else
+		echo "OK production validation refuses sparseVhd=true"
+	fi
+	local lab_rendered
+	lab_rendered="$(WSLCONFIG_UNSAFE_LAB_MODE=1 \
+		WSLCONFIG_UNSAFE_LAB_SPARSE_APPROVAL=I_ACCEPT_WSL_SPARSE_VHD_DATA_CORRUPTION_RISK \
+		WSLCONFIG_SWAPFILE= wslconfig_render_host)"
+	printf '%s\n' "$lab_rendered" >"$td/unsafe-lab-rendered.wslconfig"
+	if printf '%s\n' "$lab_rendered" | grep -Fqx 'sparseVhd=true' \
+		&& WSLCONFIG_UNSAFE_LAB_MODE=1 \
+			WSLCONFIG_UNSAFE_LAB_SPARSE_APPROVAL=I_ACCEPT_WSL_SPARSE_VHD_DATA_CORRUPTION_RISK \
+			wslconfig_validate_file "$td/unsafe-lab-rendered.wslconfig" >/dev/null; then
+		echo "OK exact unsafe-lab opt-in can render sparseVhd"
+	else
+		echo "FAIL exact unsafe-lab opt-in contract"
+		fail=1
+	fi
+	printf '%s\n' '[wsl2]' 'swapFile=E:/existing/swap.vhdx' >"$td/existing.wslconfig"
+	rendered="$(WSLCONFIG_SWAPFILE= wslconfig_render_host "$td/existing.wslconfig")"
+	if printf '%s\n' "$rendered" | grep -Fqx 'swapFile=E:/existing/swap.vhdx'; then
+		echo "OK render preserves the discovered existing swapFile"
+	else
+		echo "FAIL render lost the discovered existing swapFile"
+		fail=1
 	fi
 
 	rm -rf "$td"

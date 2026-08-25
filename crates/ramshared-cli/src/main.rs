@@ -11,12 +11,23 @@ use std::process::{Command, ExitCode};
 
 use ramshared_cuda::Cuda;
 
+mod bounded_process;
 mod cascade;
 mod diagnose;
+mod monitor;
+mod supervisor;
+mod workload;
+
+use monitor::MonitorOptions;
+
+const PROBE_COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const KERNEL_CONFIG_OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
+const NVIDIA_SMI_OUTPUT_LIMIT: usize = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Status {
     Ok,
+    RequiresPrivilege,
     Fail,
 }
 
@@ -24,6 +35,7 @@ impl Status {
     fn as_str(self) -> &'static str {
         match self {
             Status::Ok => "ok",
+            Status::RequiresPrivilege => "requires-root",
             Status::Fail => "fail",
         }
     }
@@ -171,11 +183,17 @@ impl CheckReport {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum CliCommand {
+    Version,
+    Run { args: Vec<String> },
+    Session { args: Vec<String> },
+    Supervise { args: Vec<String> },
+    Recover { resume: bool },
     Check { json: bool },
     Doctor { json: bool },
     Up { args: Vec<String> },
     Down,
     Status { json: bool },
+    Monitor { options: MonitorOptions },
     Diagnose { args: Vec<String> },
     Help,
 }
@@ -219,9 +237,45 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
     };
 
     match command.as_str() {
+        "version" | "-V" | "--version" => {
+            if options.is_empty() {
+                Ok(CliCommand::Version)
+            } else {
+                Err(CliParseError::InvalidOption {
+                    command: "version",
+                    options: options.to_vec(),
+                })
+            }
+        }
         "check" => Ok(CliCommand::Check {
             json: parse_json_option("check", options)?,
         }),
+        "run" => Ok(CliCommand::Run {
+            args: options.to_vec(),
+        }),
+        "session" => Ok(CliCommand::Session {
+            args: options.to_vec(),
+        }),
+        "supervise" => {
+            if options.is_empty() || matches!(options, [option] if option == "--once") {
+                Ok(CliCommand::Supervise {
+                    args: options.to_vec(),
+                })
+            } else {
+                Err(CliParseError::InvalidOption {
+                    command: "supervise",
+                    options: options.to_vec(),
+                })
+            }
+        }
+        "recover" => match options {
+            [option] if option == "--status" => Ok(CliCommand::Recover { resume: false }),
+            [option] if option == "--resume" => Ok(CliCommand::Recover { resume: true }),
+            _ => Err(CliParseError::InvalidOption {
+                command: "recover",
+                options: options.to_vec(),
+            }),
+        },
         "doctor" => Ok(CliCommand::Doctor {
             json: parse_json_option("doctor", options)?,
         }),
@@ -241,6 +295,12 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
         "status" => Ok(CliCommand::Status {
             json: parse_json_option("status", options)?,
         }),
+        "monitor" => Ok(CliCommand::Monitor {
+            options: MonitorOptions::parse(options).map_err(|_| CliParseError::InvalidOption {
+                command: "monitor",
+                options: options.to_vec(),
+            })?,
+        }),
         "diagnose" => Ok(CliCommand::Diagnose {
             args: options.to_vec(),
         }),
@@ -255,12 +315,38 @@ trait CliActionRunner {
     fn up(&mut self, args: &[String], stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
     fn down(&mut self, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
     fn status(&mut self, json: bool, stdout: &mut dyn Write, stderr: &mut dyn Write) -> ExitCode;
+    fn monitor(
+        &mut self,
+        options: &MonitorOptions,
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
     fn diagnose(
         &mut self,
         args: &[String],
         stdout: &mut dyn Write,
         stderr: &mut dyn Write,
     ) -> ExitCode;
+    fn run_workload(
+        &mut self,
+        args: &[String],
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
+    fn session(
+        &mut self,
+        args: &[String],
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
+    fn supervise(
+        &mut self,
+        args: &[String],
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
+    fn recover(&mut self, resume: bool, stdout: &mut dyn Write, stderr: &mut dyn Write)
+    -> ExitCode;
 }
 
 struct SystemCliActions;
@@ -314,6 +400,15 @@ impl CliActionRunner for SystemCliActions {
         to_exit(cascade::status(json), stderr)
     }
 
+    fn monitor(
+        &mut self,
+        options: &MonitorOptions,
+        _stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        to_exit(monitor::run(options), stderr)
+    }
+
     fn diagnose(
         &mut self,
         args: &[String],
@@ -321,6 +416,54 @@ impl CliActionRunner for SystemCliActions {
         stderr: &mut dyn Write,
     ) -> ExitCode {
         to_exit(diagnose::run(args), stderr)
+    }
+
+    fn run_workload(
+        &mut self,
+        args: &[String],
+        _stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        to_exit(workload::run(args), stderr)
+    }
+
+    fn session(
+        &mut self,
+        args: &[String],
+        _stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        to_exit(workload::session(args), stderr)
+    }
+
+    fn supervise(
+        &mut self,
+        args: &[String],
+        _stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        to_exit(supervisor::run(args), stderr)
+    }
+
+    fn recover(
+        &mut self,
+        resume: bool,
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        if resume {
+            return to_exit(workload::recover_resume(), stderr);
+        }
+        match workload::recover_status() {
+            Ok(status) => match writeln!(stdout, "{status}") {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    let _ = writeln!(stderr, "failed to write recovery status: {error}");
+                    ExitCode::from(1)
+                }
+            },
+            Err(error) => to_exit::<String>(Err(error), stderr),
+        }
     }
 }
 
@@ -341,11 +484,20 @@ fn run_from_args<R: CliActionRunner>(
     stderr: &mut dyn Write,
 ) -> ExitCode {
     match parse_cli_command(args) {
+        Ok(CliCommand::Version) => {
+            let _ = writeln!(stdout, "ramshared {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        Ok(CliCommand::Run { args }) => actions.run_workload(&args, stdout, stderr),
+        Ok(CliCommand::Session { args }) => actions.session(&args, stdout, stderr),
+        Ok(CliCommand::Supervise { args }) => actions.supervise(&args, stdout, stderr),
+        Ok(CliCommand::Recover { resume }) => actions.recover(resume, stdout, stderr),
         Ok(CliCommand::Check { json }) => actions.check(json, stdout, stderr),
         Ok(CliCommand::Doctor { json }) => actions.doctor(json, stdout, stderr),
         Ok(CliCommand::Up { args }) => actions.up(&args, stdout, stderr),
         Ok(CliCommand::Down) => actions.down(stdout, stderr),
         Ok(CliCommand::Status { json }) => actions.status(json, stdout, stderr),
+        Ok(CliCommand::Monitor { options }) => actions.monitor(&options, stdout, stderr),
         Ok(CliCommand::Diagnose { args }) => actions.diagnose(&args, stdout, stderr),
         Ok(CliCommand::Help) => {
             print_usage(stderr);
@@ -371,6 +523,17 @@ fn to_exit<E: fmt::Display>(r: Result<(), E>, stderr: &mut dyn Write) -> ExitCod
 
 fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(stderr, "usage:");
+    let _ = writeln!(stderr, "  ramshared --version");
+    let _ = writeln!(
+        stderr,
+        "  ramshared run --class <interactive|build|browser-test|batch> [--memory-max MiB] -- <command> [args...]"
+    );
+    let _ = writeln!(
+        stderr,
+        "  ramshared session --class <class> [--memory-max MiB]"
+    );
+    let _ = writeln!(stderr, "  ramshared supervise [--once]");
+    let _ = writeln!(stderr, "  ramshared recover --status|--resume");
     let _ = writeln!(stderr, "  ramshared check [--json]");
     let _ = writeln!(stderr, "  ramshared doctor [--json]");
     let _ = writeln!(stderr, "  ramshared diagnose --events PATH [--json]");
@@ -386,6 +549,10 @@ fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(
         stderr,
         "  ramshared status [--json]   # phase Armed/UsingVram/… + tiers"
+    );
+    let _ = writeln!(
+        stderr,
+        "  ramshared monitor [--jsonl] [--once] [--interval-ms N] [--history-seconds N]"
     );
     let _ = writeln!(
         stderr,
@@ -419,7 +586,7 @@ fn run_check() -> CheckReport {
     if cuda.status == Status::Fail {
         blockers.push(format!("CUDA unavailable: {}", cuda.detail));
     }
-    if backends.nbd_status == Status::Fail && backends.ublk_status == Status::Fail {
+    if backends.nbd_status != Status::Ok && backends.ublk_status != Status::Ok {
         blockers.push("no block backend is available without a custom kernel".to_string());
     }
     if kernel.swap != Some(KernelConfig::BuiltIn) {
@@ -507,7 +674,15 @@ fn read_kernel_config(release: &str) -> (Option<String>, Option<String>) {
 
     let proc_config = Path::new("/proc/config.gz");
     if proc_config.exists() {
-        match Command::new("zcat").arg("--").arg(proc_config).output() {
+        let mut command = Command::new("zcat");
+        command.arg("--").arg(proc_config);
+        match bounded_process::run_capture_command(
+            &mut command,
+            "zcat /proc/config.gz",
+            PROBE_COMMAND_TIMEOUT,
+            KERNEL_CONFIG_OUTPUT_LIMIT,
+            |_| {},
+        ) {
             Ok(output) if output.status.success() => {
                 let text = String::from_utf8_lossy(&output.stdout).into_owned();
                 return (Some("/proc/config.gz".to_string()), Some(text));
@@ -615,6 +790,13 @@ fn probe_backends_with_env(kernel: &KernelFeatures, env: BackendEnv) -> BackendP
         && io_uring_runtime_enabled
     {
         Status::Ok
+    } else if ublk_enabled
+        && env.ublk_control_present
+        && !env.ublk_control_openable
+        && io_uring_enabled
+        && io_uring_runtime_enabled
+    {
+        Status::RequiresPrivilege
     } else {
         Status::Fail
     };
@@ -623,7 +805,7 @@ fn probe_backends_with_env(kernel: &KernelFeatures, env: BackendEnv) -> BackendP
     } else if !env.ublk_control_present {
         "/dev/ublk-control missing".to_string()
     } else if !env.ublk_control_openable {
-        "/dev/ublk-control not openable; run check as root".to_string()
+        "/dev/ublk-control present; elevated capability probe required".to_string()
     } else if !io_uring_enabled {
         "CONFIG_IO_URING disabled or unknown".to_string()
     } else if !io_uring_runtime_enabled {
@@ -763,7 +945,14 @@ fn run_nvidia_smi() -> (Option<PathBuf>, Option<i32>, Option<String>) {
             continue;
         }
 
-        if let Ok(output) = Command::new(&candidate).output() {
+        let mut command = Command::new(&candidate);
+        if let Ok(output) = bounded_process::run_capture_command(
+            &mut command,
+            &format!("{} probe", candidate.display()),
+            PROBE_COMMAND_TIMEOUT,
+            NVIDIA_SMI_OUTPUT_LIMIT,
+            |_| {},
+        ) {
             let mut combined = String::new();
             combined.push_str(&String::from_utf8_lossy(&output.stdout));
             combined.push_str(&String::from_utf8_lossy(&output.stderr));
@@ -976,7 +1165,7 @@ fn recommendations_for(report: &CheckReport) -> Vec<String> {
 
     if !report.cuda.dxg_present {
         recommendations.push(
-            "On Windows, update WSL with `wsl --update`; then run `wsl --shutdown` when you can interrupt the distro"
+            "On Windows, update WSL with `wsl --update`; then use `wsl --terminate Ubuntu-24.04` when you can interrupt this distro"
                 .to_string(),
         );
         recommendations.push(
@@ -1024,7 +1213,7 @@ fn recommendations_for(report: &CheckReport) -> Vec<String> {
 
     if report.decision() == Decision::Ready {
         recommendations.push(
-            "Environment ready for the next safe step: implement and run a CUDA smoke test without swap and with a small allocation"
+            "Environment ready for the bounded NBD preflight; keep pressure and boot activation disabled until status reports a guaranteed READY profile"
                 .to_string(),
         );
     } else {
@@ -1174,7 +1363,16 @@ fn read_to_string(path: impl AsRef<Path>) -> Option<String> {
 }
 
 fn command_stdout(command: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(command).args(args).output().ok()?;
+    let mut command = Command::new(command);
+    command.args(args);
+    let output = bounded_process::run_capture_command(
+        &mut command,
+        "CLI probe",
+        PROBE_COMMAND_TIMEOUT,
+        bounded_process::DEFAULT_OUTPUT_LIMIT,
+        |_| {},
+    )
+    .ok()?;
     if output.status.success() {
         Some(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
@@ -1224,7 +1422,7 @@ impl fmt::Display for KernelConfig {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::expect_used, clippy::unwrap_used)]
 
     use super::*;
 
@@ -1299,6 +1497,18 @@ mod tests {
             self.result()
         }
 
+        fn monitor(
+            &mut self,
+            options: &MonitorOptions,
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Monitor {
+                options: options.clone(),
+            });
+            self.result()
+        }
+
         fn diagnose(
             &mut self,
             args: &[String],
@@ -1310,10 +1520,71 @@ mod tests {
             });
             self.result()
         }
+
+        fn run_workload(
+            &mut self,
+            args: &[String],
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Run {
+                args: args.to_vec(),
+            });
+            self.result()
+        }
+
+        fn session(
+            &mut self,
+            args: &[String],
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Session {
+                args: args.to_vec(),
+            });
+            self.result()
+        }
+
+        fn supervise(
+            &mut self,
+            args: &[String],
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Supervise {
+                args: args.to_vec(),
+            });
+            self.result()
+        }
+
+        fn recover(
+            &mut self,
+            resume: bool,
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Recover { resume });
+            self.result()
+        }
     }
 
     fn cli_args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
+    }
+
+    #[test]
+    fn parser_and_state_variants_cover_fail_closed_edges() {
+        assert_eq!(Status::Fail.as_str(), "fail");
+        assert_eq!(Decision::Blocked.as_str(), "blocked");
+        assert_eq!(KernelConfig::Disabled.as_str(), "n");
+        assert_eq!(IoUringRuntime::Restricted.as_sysctl_value(), 1);
+        assert_eq!(parse_cli_command(&[]).unwrap(), CliCommand::Help);
+        assert!(parse_cli_command(&cli_args(&["version", "extra"])).is_err());
+        assert!(parse_cli_command(&cli_args(&["supervise", "--bad"])).is_err());
+        assert_eq!(
+            parse_cli_command(&cli_args(&["down"])).unwrap(),
+            CliCommand::Down
+        );
     }
 
     #[test]
@@ -1341,6 +1612,81 @@ mod tests {
                 "{args:?} must explain the refusal"
             );
         }
+    }
+
+    #[test]
+    fn version_is_public_and_side_effect_free() {
+        let mut actions = RecordingCliActions::default();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let exit = run_from_args(
+            &cli_args(&["--version"]),
+            &mut actions,
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert!(actions.calls.is_empty());
+        assert_eq!(
+            String::from_utf8(stdout).expect("version output is UTF-8"),
+            format!("ramshared {}\n", env!("CARGO_PKG_VERSION"))
+        );
+        assert!(stderr.is_empty());
+    }
+
+    #[test]
+    fn monitor_defaults_are_read_only_and_bounded() {
+        let command = parse_cli_command(&cli_args(&["monitor"])).expect("monitor parses");
+        assert_eq!(
+            command,
+            CliCommand::Monitor {
+                options: MonitorOptions {
+                    jsonl: false,
+                    compact: false,
+                    interval_ms: 1_000,
+                    history_seconds: 300,
+                    output: None,
+                    heartbeat: None,
+                    once: false,
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn monitor_parses_machine_stream_outputs_without_mutation_flags() {
+        let command = parse_cli_command(&cli_args(&[
+            "monitor",
+            "--jsonl",
+            "--interval-ms",
+            "2500",
+            "--history-seconds",
+            "600",
+            "--output",
+            "/tmp/health.jsonl",
+            "--heartbeat",
+            "/tmp/heartbeat.json",
+            "--once",
+        ]))
+        .expect("monitor stream parses");
+        assert_eq!(
+            command,
+            CliCommand::Monitor {
+                options: MonitorOptions {
+                    jsonl: true,
+                    compact: false,
+                    interval_ms: 2_500,
+                    history_seconds: 600,
+                    output: Some(PathBuf::from("/tmp/health.jsonl")),
+                    heartbeat: Some(PathBuf::from("/tmp/heartbeat.json")),
+                    once: true,
+                }
+            }
+        );
+
+        let error = parse_cli_command(&cli_args(&["monitor", "--activate"]))
+            .expect_err("monitor has no mutation controls");
+        assert!(matches!(error, CliParseError::InvalidOption { .. }));
     }
 
     #[test]
@@ -1389,6 +1735,46 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn public_control_commands_parse_exactly() {
+        assert_eq!(
+            parse_cli_command(&cli_args(&[
+                "run",
+                "--class",
+                "build",
+                "--memory-max",
+                "4096",
+                "--",
+                "make"
+            ]))
+            .unwrap(),
+            CliCommand::Run {
+                args: cli_args(&["--class", "build", "--memory-max", "4096", "--", "make"])
+            }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&["session", "--class", "interactive"])).unwrap(),
+            CliCommand::Session {
+                args: cli_args(&["--class", "interactive"])
+            }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&["supervise", "--once"])).unwrap(),
+            CliCommand::Supervise {
+                args: cli_args(&["--once"])
+            }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&["recover", "--status"])).unwrap(),
+            CliCommand::Recover { resume: false }
+        );
+        assert_eq!(
+            parse_cli_command(&cli_args(&["recover", "--resume"])).unwrap(),
+            CliCommand::Recover { resume: true }
+        );
+        assert!(parse_cli_command(&cli_args(&["recover", "--force"])).is_err());
     }
 
     #[test]
@@ -1491,10 +1877,10 @@ CONFIG_BLK_DEV_NBD=m\n\
             },
         );
 
-        assert_eq!(backends.ublk_status, Status::Fail);
+        assert_eq!(backends.ublk_status, Status::RequiresPrivilege);
         assert_eq!(
             backends.ublk_detail,
-            "/dev/ublk-control not openable; run check as root"
+            "/dev/ublk-control present; elevated capability probe required"
         );
     }
 
@@ -1508,7 +1894,7 @@ CONFIG_BLK_DEV_NBD=m\n\
 
     #[test]
     fn recommends_wsl_gpu_recovery_when_dxg_is_missing() {
-        let report = CheckReport {
+        let mut report = CheckReport {
             wsl: WslProbe {
                 status: Status::Ok,
                 release: "6.6.87.2-microsoft-standard-WSL2".to_string(),
@@ -1564,5 +1950,312 @@ CONFIG_BLK_DEV_NBD=m\n\
                 .iter()
                 .any(|item| item.contains("Do not run `ramshared start`"))
         );
+
+        report.blockers.clear();
+        let ready = recommendations_for(&report);
+        assert!(ready.iter().all(|item| !item.contains("implement and run")));
+        assert!(
+            ready
+                .iter()
+                .any(|item| item.contains("bounded NBD preflight"))
+        );
+    }
+
+    #[test]
+    fn check_and_doctor_report_rendering_are_deterministic() {
+        let report = CheckReport {
+            wsl: WslProbe {
+                status: Status::Ok,
+                release: "6.6.87.2-microsoft-standard-WSL2".to_string(),
+                version: "Linux version test".to_string(),
+            },
+            swaps: vec![SwapEntry {
+                filename: "/dev/nbd0".to_string(),
+                kind: "partition".to_string(),
+                size_kib: 1024 * 1024,
+                used_kib: 256 * 1024,
+                priority: 10,
+            }],
+            kernel: KernelFeatures {
+                config_source: Some("/boot/config-test".to_string()),
+                swap: Some(KernelConfig::BuiltIn),
+                io_uring: Some(KernelConfig::BuiltIn),
+                io_uring_runtime: Some(IoUringRuntime::Enabled),
+                nbd: Some(KernelConfig::BuiltIn),
+                ublk: Some(KernelConfig::Module),
+                zram: Some(KernelConfig::Module),
+            },
+            cuda: CudaProbe {
+                status: Status::Ok,
+                libcuda_path: Some("/usr/lib/wsl/lib/libcuda.so.1".to_string()),
+                dxg_present: true,
+                nvidia_smi_path: Some("/usr/lib/wsl/lib/nvidia-smi".to_string()),
+                nvidia_smi_status: Some(0),
+                nvidia_smi_output: Some("NVIDIA-SMI 570.00".to_string()),
+                gpu: Some(GpuInfo {
+                    name: "NVIDIA RTX 4090".to_string(),
+                    total_bytes: 24 * 1024 * 1024 * 1024,
+                    free_bytes: 20 * 1024 * 1024 * 1024,
+                }),
+                detail: "ready".to_string(),
+            },
+            backends: BackendProbe {
+                nbd_status: Status::Ok,
+                nbd_detail: "device-present".to_string(),
+                ublk_status: Status::Ok,
+                ublk_detail: "ready".to_string(),
+            },
+            blockers: Vec::new(),
+            warnings: vec!["minor warning".to_string()],
+        };
+
+        let mut text_buf = Vec::new();
+        print_text_report(&report, &mut text_buf).expect("text report renders");
+        let text_out = String::from_utf8(text_buf).expect("text is UTF-8");
+        assert!(text_out.contains("WSL2: ok"));
+        assert!(text_out.contains("NVIDIA RTX 4090"));
+        assert!(text_out.contains("Current swap: /dev/nbd0"));
+        assert!(text_out.contains("Decision: ready"));
+        assert!(text_out.contains("Warnings:"));
+
+        let json_out = render_json(&report);
+        assert!(json_out.contains("\"decision\":\"ready\""));
+
+        let recs = recommendations_for(&report);
+        let mut rec_buf = Vec::new();
+        print_recommendations(&recs, &mut rec_buf).expect("recommendations render");
+        let rec_text = String::from_utf8(rec_buf).expect("rec text is UTF-8");
+        assert!(rec_text.contains("Recommendations:"));
+
+        let doc_json = render_doctor_json(&report, &recs);
+        assert!(doc_json.contains("\"decision\":\"ready\""));
+    }
+
+    #[test]
+    fn exit_helper_and_usage_cover_all_branches() {
+        let mut err_buf = Vec::new();
+        let ok_exit = to_exit::<&str>(Ok(()), &mut err_buf);
+        assert_eq!(ok_exit, ExitCode::SUCCESS);
+        assert!(err_buf.is_empty());
+
+        let err_exit = to_exit(Err("forced failure"), &mut err_buf);
+        assert_ne!(err_exit, ExitCode::SUCCESS);
+        assert!(String::from_utf8_lossy(&err_buf).contains("forced failure"));
+
+        let mut usage_buf = Vec::new();
+        print_usage(&mut usage_buf);
+        assert!(String::from_utf8_lossy(&usage_buf).contains("usage:"));
+    }
+
+    #[test]
+    fn run_from_args_dispatches_all_command_variants() {
+        let mut actions = RecordingCliActions::default();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        for args in [
+            &["run", "--", "echo", "test"][..],
+            &["session", "--class", "build"][..],
+            &["supervise", "--once"][..],
+            &["recover", "--status"][..],
+            &["recover", "--resume"][..],
+            &["check"][..],
+            &["check", "--json"][..],
+            &["doctor"][..],
+            &["doctor", "--json"][..],
+            &["up", "--vram", "1024"][..],
+            &["down"][..],
+            &["status"][..],
+            &["status", "--json"][..],
+            &["monitor", "--once"][..],
+            &["diagnose", "--events", "/dev/null"][..],
+            &["--help"][..],
+        ] {
+            stdout.clear();
+            stderr.clear();
+            let exit = run_from_args(&cli_args(args), &mut actions, &mut stdout, &mut stderr);
+            assert_eq!(exit, ExitCode::SUCCESS);
+        }
+
+        // Invalid command
+        stdout.clear();
+        stderr.clear();
+        let exit = run_from_args(
+            &cli_args(&["--unknown-flag"]),
+            &mut actions,
+            &mut stdout,
+            &mut stderr,
+        );
+        assert_eq!(exit, ExitCode::from(2));
+        assert!(!stderr.is_empty());
+    }
+
+    #[test]
+    fn probe_helpers_execute_safely() {
+        let _ = probe_wsl();
+        let _ = probe_kernel_features("test-release");
+        let _ = read_kernel_config("nonexistent-release-xyz");
+        let _ = parse_kernel_config(
+            "CONFIG_SWAP=y\nCONFIG_ZRAM=m\n# CONFIG_UBLK is not set",
+            "CONFIG_SWAP",
+        );
+        let _ = parse_kernel_config(
+            "CONFIG_SWAP=y\nCONFIG_ZRAM=m\n# CONFIG_UBLK is not set",
+            "CONFIG_ZRAM",
+        );
+        let _ = parse_kernel_config(
+            "CONFIG_SWAP=y\nCONFIG_ZRAM=m\n# CONFIG_UBLK is not set",
+            "CONFIG_UBLK",
+        );
+        let _ = parse_swaps(
+            "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n/dev/nbd0                               partition\t1048576\t\t0\t\t100\n",
+        );
+        let _ = find_libcuda();
+        let _ = run_nvidia_smi();
+    }
+
+    #[test]
+    fn system_actions_check_and_doctor_execute_safely() {
+        let mut actions = SystemCliActions;
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+
+        let _ = actions.check(true, &mut stdout, &mut stderr);
+        stdout.clear();
+        stderr.clear();
+        let _ = actions.check(false, &mut stdout, &mut stderr);
+        stdout.clear();
+        stderr.clear();
+        let _ = actions.doctor(true, &mut stdout, &mut stderr);
+        stdout.clear();
+        stderr.clear();
+        let _ = actions.doctor(false, &mut stdout, &mut stderr);
+    }
+
+    #[test]
+    fn probe_backends_permutations_cover_all_branches() {
+        let kernel_none = KernelFeatures {
+            config_source: None,
+            swap: None,
+            io_uring: None,
+            io_uring_runtime: None,
+            nbd: None,
+            ublk: None,
+            zram: None,
+        };
+        let probe = probe_backends_with_env(
+            &kernel_none,
+            BackendEnv {
+                nbd_device_present: false,
+                nbd_module_loaded: false,
+                ublk_control_present: false,
+                ublk_control_openable: false,
+            },
+        );
+        assert_eq!(probe.nbd_status, Status::Fail);
+        assert_eq!(probe.ublk_status, Status::Fail);
+
+        let kernel_all = KernelFeatures {
+            config_source: Some("/boot/config".to_string()),
+            swap: Some(KernelConfig::BuiltIn),
+            io_uring: Some(KernelConfig::BuiltIn),
+            io_uring_runtime: Some(IoUringRuntime::Enabled),
+            nbd: Some(KernelConfig::BuiltIn),
+            ublk: Some(KernelConfig::BuiltIn),
+            zram: Some(KernelConfig::BuiltIn),
+        };
+        let probe_loaded = probe_backends_with_env(
+            &kernel_all,
+            BackendEnv {
+                nbd_device_present: false,
+                nbd_module_loaded: true,
+                ublk_control_present: true,
+                ublk_control_openable: true,
+            },
+        );
+        assert_eq!(probe_loaded.nbd_status, Status::Ok);
+        assert_eq!(probe_loaded.nbd_detail, "module-loaded-no-device");
+        assert_eq!(probe_loaded.ublk_status, Status::Ok);
+
+        let probe_missing_dev = probe_backends_with_env(
+            &kernel_all,
+            BackendEnv {
+                nbd_device_present: false,
+                nbd_module_loaded: false,
+                ublk_control_present: false,
+                ublk_control_openable: false,
+            },
+        );
+        assert_eq!(probe_missing_dev.nbd_detail, "module-not-loaded");
+        assert_eq!(probe_missing_dev.ublk_detail, "/dev/ublk-control missing");
+    }
+
+    #[test]
+    fn text_and_json_report_edge_cases_render_without_panics() {
+        let minimal_report = CheckReport {
+            wsl: WslProbe {
+                status: Status::Fail,
+                release: String::new(),
+                version: String::new(),
+            },
+            swaps: Vec::new(),
+            kernel: KernelFeatures {
+                config_source: None,
+                swap: None,
+                io_uring: None,
+                io_uring_runtime: None,
+                nbd: None,
+                ublk: None,
+                zram: None,
+            },
+            cuda: CudaProbe {
+                status: Status::Fail,
+                libcuda_path: None,
+                dxg_present: false,
+                nvidia_smi_path: None,
+                nvidia_smi_status: None,
+                nvidia_smi_output: None,
+                gpu: None,
+                detail: "cuda missing".to_string(),
+            },
+            backends: BackendProbe {
+                nbd_status: Status::Fail,
+                nbd_detail: "none".to_string(),
+                ublk_status: Status::Fail,
+                ublk_detail: "none".to_string(),
+            },
+            blockers: vec!["blocker 1".to_string()],
+            warnings: vec!["warning 1".to_string()],
+        };
+
+        let mut buf = Vec::new();
+        print_text_report(&minimal_report, &mut buf).expect("minimal text report renders");
+        let json = render_json(&minimal_report);
+        assert!(json.contains("\"decision\":\"blocked\""));
+
+        let recs = recommendations_for(&minimal_report);
+        assert!(recs.iter().any(|r| r.contains("bare-metal Linux")));
+        assert!(recs.iter().any(|r| r.contains("wsl --update")));
+    }
+
+    #[test]
+    fn format_and_command_helpers_execute_correctly() {
+        assert_eq!(bytes_to_mib(2 * 1024 * 1024), 2);
+        assert_eq!(kib_to_mib(4 * 1024), 4);
+        assert_eq!(config_text(None), "unknown");
+        assert_eq!(config_text(Some(KernelConfig::Module)), "m");
+        assert_eq!(io_uring_runtime_text(None), "unknown");
+        assert_eq!(io_uring_runtime_text(Some(IoUringRuntime::Restricted)), "1");
+        assert_eq!(json_io_uring_runtime(None), "null");
+        assert_eq!(json_io_uring_runtime(Some(IoUringRuntime::Enabled)), "0");
+        assert_eq!(one_line("  hello \n \t world  "), "hello world");
+        assert_eq!(format!("{}", KernelConfig::BuiltIn), "y");
+
+        let out = command_stdout("echo", &["test_probe_cmd"]);
+        assert!(out.is_some_and(|s| s.contains("test_probe_cmd")));
+        let fail_out = command_stdout("false", &[]);
+        assert!(fail_out.is_none());
+
+        let _ = run_check();
     }
 }

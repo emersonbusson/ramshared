@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ramshared.dev/schemas/localization-review-receipt.schema.json",
+  "title": "RamShared localization review receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "canonical_source", "localized_path", "source_sha256", "translation_sha256", "reviewer", "reviewed_at", "verdict"],
+  "properties": {
+    "schema_version": { "const": "ramshared-localization-review/v1" },
+    "canonical_source": { "type": "string", "minLength": 1 },
+    "localized_path": { "type": "string", "minLength": 1 },
+    "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "translation_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "reviewer": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$" },
+    "reviewed_at": { "type": "string", "format": "date-time" },
+    "verdict": { "const": "approved" }
+  }
+}

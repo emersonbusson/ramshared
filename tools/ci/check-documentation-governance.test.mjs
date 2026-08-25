@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import {
   findDuplicateNormativeBlocks,
@@ -12,6 +14,7 @@ import {
   validateParityDocument,
   validatePostmortemEffectiveness,
   validateReferenceIndex,
+  validateRouterConsistency,
   run as runGovernance,
 } from './check-documentation-governance.mjs'
 import { deriveStatus } from '../generate-docs-index.mjs'
@@ -57,6 +60,48 @@ function referenceText() {
   return '| Question | Canonical source | Next-depth references | Boundary |\n| --- | --- | --- | --- |\n' + rows.map(([a, b]) => `| ${a} | \`${b}\` | \`README.md\` | boundary |`).join('\n')
 }
 
+function governanceLanding() {
+  return [
+    '[Parity](../DOCUMENTATION-PARITY.md)',
+    '[Reference](../reference/REFERENCE-INDEX.md)',
+    '[Claims](claims.json)',
+  ].join('\n')
+}
+
+function routerParityText() {
+  const rows = [
+    ['Architecture and topology', '`ARCHITECTURE.md`'],
+    ['Operation', '`docs/runbooks/README.md`'],
+    ['Campaign evidence custody', '`docs/governance/campaign-evidence-lifecycle.json`'],
+    ['Workstation-space recovery', '`docs/runbooks/WORKSTATION-SPACE-RECOVERY.md`'],
+    ['Document lifecycle coverage', '`docs/governance/document-lifecycle-policy.json`'],
+    ['Governance threat model', '`docs/security/THREAT-MODEL.md`'],
+    ['Task and evidence timestamps', '`TASK.md` and `docs/governance/RECORD-SCHEMAS.md`'],
+    ['Benchmark comparison', '`docs/BENCHMARKS.md`'],
+    ['Reliability gaps', '`docs/reliability/GAP-REGISTER.md`'],
+    ['PRD and SPEC requirements', '`docs/SSDV3-PROMPTS.md`'],
+    ['Postmortem closure', '`docs/postmortems/`'],
+  ]
+  return '| Objective | Canonical source |\n| --- | --- |\n' + rows.map(([key, source]) => `| ${key} | ${source} |`).join('\n')
+}
+
+function routerReferenceText() {
+  const rows = [
+    ['architecture decisions', '`ARCHITECTURE.md`'],
+    ['Linux or WSL2 lifecycle', '`docs/runbooks/README.md`'],
+    ['publish or inspect campaign evidence', '`docs/governance/campaign-evidence-lifecycle.json`'],
+    ['recover workstation disk space', '`docs/runbooks/WORKSTATION-SPACE-RECOVERY.md`'],
+    ['document owners and freshness', '`docs/governance/document-lifecycle-policy.json`'],
+    ['governance threat boundaries', '`docs/security/THREAT-MODEL.md`'],
+    ['task and validation timestamps', '`docs/governance/RECORD-SCHEMAS.md`'],
+    ['register or compare a benchmark', '`docs/BENCHMARKS.md`'],
+    ['reliability gaps remain open', '`docs/reliability/GAP-REGISTER.md`'],
+    ['make an SSDV3 change', '`docs/SSDV3-PROMPTS.md`'],
+    ['investigate and close an incident', '`docs/postmortems/TEMPLATE.md`'],
+  ]
+  return '| Question | Canonical source |\n| --- | --- |\n' + rows.map(([key, source]) => `| ${key} | ${source} |`).join('\n')
+}
+
 function validClaim(root, state = 'DONE') {
   const spec = 'docs/specs/no-milestone/fixture/SPEC.md'
   const impl = 'docs/specs/no-milestone/fixture/IMPL.md'
@@ -84,6 +129,18 @@ test('parity_rejects_duplicate_objective', () => { const root = rootFixture(); a
 test('parity_rejects_missing_target', () => { const root = rootFixture(); assert.match(JSON.stringify(validateParityDocument(parityText().replace('ARCHITECTURE.md', 'docs/missing.md'), root)), /missing-target/) })
 test('reference_index_routes_required_objectives', () => { const root = rootFixture(); assert.deepEqual(validateReferenceIndex(referenceText(), root), []) })
 test('reference_index_rejects_private_or_missing_target', () => { const root = rootFixture(); const privatePath = ['', 'home', 'private', 'repo.md'].join('/'); assert.match(JSON.stringify(validateReferenceIndex(referenceText().replace('README.md', privatePath), root)), /unsafe-target/) })
+test('routers_cross_consistency_accepts_shared_canonical_sources', () => {
+  assert.deepEqual(validateRouterConsistency(routerParityText(), routerReferenceText(), governanceLanding()), [])
+})
+test('routers_cross_consistency_rejects_divergent_benchmark_source', () => {
+  const reference = routerReferenceText().replace('docs/BENCHMARKS.md', 'README.md')
+  assert.match(JSON.stringify(validateRouterConsistency(routerParityText(), reference, governanceLanding())), /ROUTER_SOURCE_MISMATCH.*benchmarks/)
+})
+test('router_landing_requires_both_routers_and_claims_without_copying_tables', () => {
+  assert.match(JSON.stringify(validateRouterConsistency(routerParityText(), routerReferenceText(), '[Claims](claims.json)')), /ROUTER_LANDING_LINK/)
+  assert.match(JSON.stringify(validateRouterConsistency(routerParityText(), routerReferenceText(), `${governanceLanding()}\n[Escape](../../../outside.md)`)), /ROUTER_LANDING_UNSAFE/)
+  assert.match(JSON.stringify(validateRouterConsistency(routerParityText(), routerReferenceText(), `${governanceLanding()}\n${routerParityText()}`)), /ROUTER_DUPLICATION/)
+})
 
 test('claims_done_requires_all_evidence', () => { const root = rootFixture(); const claim = validClaim(root); assert.deepEqual(validateClaims({ schema_version: 1, claims: [claim] }, root), []) })
 test('claims_partial_requires_blocker_and_next_proof', () => { const root = rootFixture(); const claim = validClaim(root, 'PARTIAL'); assert.match(JSON.stringify(validateClaims({ schema_version: 1, claims: [claim] }, root)), /partial-blocker/) })
@@ -92,7 +149,7 @@ test('claims_rejects_stale_artifact_and_missing_binary_match', () => { const roo
 test('claims_rejects_unknown_state_and_placeholder_rollback', () => { const root = rootFixture(); const claim = validClaim(root); claim.state = 'GREEN'; claim.rollback_trigger = 'TBD'; assert.match(JSON.stringify(validateClaims({ schema_version: 1, claims: [claim] }, root)), /claim-state/); assert.match(JSON.stringify(validateClaims({ schema_version: 1, claims: [claim] }, root)), /rollback-trigger/) })
 
 test('unqualified_impl_is_not_done', () => { const root = rootFixture(); const dir = path.join(root, 'docs/specs/no-milestone/unclaimed'); mkdirSync(dir, { recursive: true }); writeFileSync(path.join(dir, 'PRD.md'), '---\nslug: unclaimed\n---'); writeFileSync(path.join(dir, 'SPEC.md'), '# SPEC'); writeFileSync(path.join(dir, 'IMPL.md'), '# IMPL'); assert.equal(deriveStatus(dir, new Map()), 'UNQUALIFIED') })
-test('qualified_claim_is_the_only_done_path', () => { const root = rootFixture(); const dir = path.join(root, 'docs/specs/no-milestone/fixture'); mkdirSync(dir, { recursive: true }); writeFileSync(path.join(dir, 'IMPL.md'), '# IMPL'); assert.equal(deriveStatus(dir, new Map([['fixture', { state: 'DONE' }]])), 'DONE') })
+test('qualified_claim_is_the_only_done_path', () => { const root = rootFixture(); const dir = path.join(root, 'docs/specs/no-milestone/fixture'); mkdirSync(dir, { recursive: true }); writeFileSync(path.join(dir, 'IMPL.md'), '# IMPL'); assert.equal(deriveStatus(dir, new Map([['fixture', { status: 'DONE', qualified: true }]])), 'DONE') })
 
 test('provenance_rejects_private_path_without_echoing_match', () => { const privateValue = '/home/' + 'private-user/repo'; const out = scanProvenance([{ path: 'docs/a.md', text: `path ${privateValue}` }], { entries: [] }, {}); assert.match(JSON.stringify(out), /PRIVATE_PATH/); assert.doesNotMatch(JSON.stringify(out), new RegExp(privateValue)) })
 test('provenance_rejects_secret_without_echoing_match', () => { const secret = 'api_' + 'secret_value'; const out = scanProvenance([{ path: 'docs/a.md', text: `password=${secret}` }], { entries: [] }, {}); assert.match(JSON.stringify(out), /SECRET/); assert.doesNotMatch(JSON.stringify(out), new RegExp(secret)) })
@@ -118,6 +175,15 @@ test('postmortem_effective_action_requires_both_paths', () => { const text = '**
 
 test('governance_check_is_deterministic', () => { const privatePath = ['', 'home', 'private', 'x'].join('/'); const files = [{ path: 'docs/z.md', text: privatePath }, { path: 'docs/a.md', text: 'ok' }]; assert.equal(JSON.stringify(scanProvenance(files, { entries: [] }, {})), JSON.stringify(scanProvenance([...files].reverse(), { entries: [] }, {}))) })
 test('repository_governance_run_passes', () => { const result = runGovernance({ root: process.cwd() }); assert.equal(result.ok, true); assert.equal(result.counts.findings, 0); assert.ok(result.counts.files > 100) })
+test('governance_cli_check_aliases_all_and_unknown_options_refuse', () => {
+  const cli = fileURLToPath(new URL('./check-documentation-governance.mjs', import.meta.url))
+  const all = spawnSync(process.execPath, [cli, '--all'], { encoding: 'utf8' })
+  const check = spawnSync(process.execPath, [cli, '--check'], { encoding: 'utf8' })
+  assert.equal(check.status, all.status)
+  assert.equal(check.stdout, all.stdout)
+  assert.equal(check.stderr, all.stderr)
+  assert.equal(spawnSync(process.execPath, [cli, '--not-a-mode'], { encoding: 'utf8' }).status, 2)
+})
 test('governance_cli_is_read_only', () => { const src = readFileSync(new URL('./check-documentation-governance.mjs', import.meta.url), 'utf8'); assert.doesNotMatch(src, /\b(?:writeFile|rmSync|unlinkSync|execSync|spawnSync)\b/) })
 test('docs_check_includes_governance_gate', () => { const text = readFileSync(new URL('../../scripts/docs-check.sh', import.meta.url), 'utf8'); assert.match(text, /check-documentation-governance\.mjs --all/) })
 test('docs_check_keeps_temporal_custody_and_observation_gates', () => {

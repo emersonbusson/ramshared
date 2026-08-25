@@ -5,6 +5,12 @@
 > **Auditor role:** adversarial + security + Kahneman #13/#16.  
 > **Inputs:** [`PRD.md`](PRD.md), [`SPEC.md`](SPEC.md), codebase (`ramsharedd` NBD path, `VramProvider`, canary), live cascade behaviour, MS WSL reclaim patterns.
 
+**2026-08-22 sunset note:** this audit preserves the 2026-07-11 risk record.
+Its full-allocation rollback decision is superseded: the executable selector
+and NBD full-VRAM composition were removed, and the SSD-authoritative origin
+cache is the only product NBD path. No live result is inferred from that source
+closure.
+
 ---
 
 ## Decision (top)
@@ -16,12 +22,13 @@
 | Free CUDA while `used_kb > 0` | **NO-GO** (MVP) |
 | ITEM-2b mid-flight spill | **NO-GO** (needs new PRD/SPEC/2.5) |
 | Product ublk on WSL2 | **NO-GO** (unchanged parent) |
-| Kill-switch full prealloc | **GO** (`RAMSHARED_VRAM_PREALLOC=1`) |
+| Historical full-allocation kill-switch | **SUPERSEDED** — no environment selector can restore the removed NBD composition. |
 
 ### Overall
 
-**GO** for Passo 3 (IMPL) of SPEC MVP **as revised in this audit** (preflight + worker-thread reclaim).  
-**Blockers:** none remaining after SPEC in-place edits below.
+The original verdict was **GO** for Passo 3 of the sparse MVP. The current
+source-removal verdict is **PASS** for the named static gate only. Live
+origin/NBD/GPU qualification remains `PARTIAL`.
 
 ---
 
@@ -45,7 +52,7 @@
 | T3 | TOCTOU: `used_kb==0` then page-in before free | **HIGH** | Same thread as I/O; re-read after free; no concurrent writers |
 | T4 | Alloc-on-write fails mid pressure → silent data loss | **HIGH** | Return `IoError` to NBD; no retry storm (#15) |
 | T5 | Preflight requires full 3 GiB free → defeats sparse product | **HIGH** | **FIXED:** sparse gate = headroom + canary + 1 chunk |
-| T6 | Prealloc kill-switch missing → no rollback | **MED** | `RAMSHARED_VRAM_PREALLOC=1` |
+| T6 | Historical full-allocation rollback becomes a permanent second path | **MED** | The selector was removed; rollback keeps the product off and repairs the origin path. |
 | T7 | Host thrash “to prove reclaim” | **MED** | `cascade-pressure-probe.sh` cgroup only |
 | T8 | Cross-chunk I/O bug → wrong data | **HIGH** | Unit tests cross-chunk; split I/O mandatory |
 | T9 | Zero-fill path skips alloc but returns garbage | **HIGH** | Empty read → explicit zeros |
@@ -73,7 +80,7 @@
 
 | Sev | Finding | Disposition |
 | --- | --- | --- |
-| **HIGH** | Preflight `free >= VRAM_MIB + headroom` forces full free at boot and **contradicts** RF-L1 / user “3 GiB capacity without holding 3 GiB” | **SPEC ITEM-4 revised:** sparse gate = headroom + canary + one chunk; prealloc keeps legacy gate |
+| **HIGH** | Preflight `free >= VRAM_MIB + headroom` forced full free at boot and **contradicted** RF-L1 / user “3 GiB capacity without holding 3 GiB” | The 2026-07-11 sparse gate fixed that issue; the later origin-cache design removed the full-allocation mode entirely. |
 | **HIGH** | ITEM-2 “demote content” ambiguous; reclaim thread not specified → race with I/O | **SPEC ITEM-2 revised:** worker-thread only; algorithm steps; demote telemetry without free when used>0 |
 | **MED** | Canary size not numeric in SPEC | **SPEC:** `CANARY_BYTES = 4096` (confirmed `canary_probe.rs`) |
 | **MED** | Live free-delta budget vague vs full size | **SPEC:** idle `up` Δ free ≤ 64 MiB slack |
@@ -88,7 +95,7 @@ No remaining **CRITICAL** open after SPEC edit.
 
 | Fact | Evidence | Class |
 | --- | --- | --- |
-| Full prealloc today | `main.rs`: `provider.alloc(size)?; mem.zero()?` | Confirmed codebase |
+| Full allocation at audit time | Historical `main.rs`: `provider.alloc(size)?; mem.zero()?`; removed from current NBD composition | Confirmed historical codebase |
 | Canary separate alloc | `CANARY_BYTES = 4096` | Confirmed codebase |
 | Single CUDA worker | `jobs_rx` loop owns backend | Confirmed codebase |
 | DEMOTE sampler exists | `residency.rs` / canary path | Confirmed codebase |
@@ -102,10 +109,10 @@ No remaining **CRITICAL** open after SPEC edit.
 | MS behaviour | Class | SPEC mapping |
 | --- | --- | --- |
 | `autoMemoryReclaim` returns unused guest RAM | Confirmed docs | Idle free when `used_kb==0` |
-| `sparseVhd` logical ≠ provisioned | Confirmed docs | Capacity vs committed chunks |
+| `sparseVhd` logical ≠ provisioned | Unsafe-lab-only hypothesis; production omits it because WSL 2.7.12 requires a data-corruption-risk override | Capacity vs committed chunks without live sparse conversion |
 | `hv_balloon` under host pressure | Confirmed MS kernel tree | Free chunks when free-floor + empty device |
 | GPU = GPU-PV / dxgkrnl, not system RAM | Confirmed docs/tree | Userspace only; no MS kernel PR |
-| Features: experimental → default | Confirmed docs | Kill-switch prealloc; sparse default after live green |
+| Features: experimental → default | Confirmed docs | Historical sparse rollout only; current product selection is origin-cache without a full-allocation switch |
 
 **Inference (labelled):** MS would not merge CUDA-NBD into stock `config-wsl`; they would ship **sparse commit + reclaim** style policy in userspace/service if at all — matches our layering.
 
@@ -115,7 +122,7 @@ No remaining **CRITICAL** open after SPEC edit.
 
 | # | Question | Evidence required at IMPL | Abort |
 | --- | --- | --- | --- |
-| #2 | What makes us revert sparse default? | Idle `up` Δ free ≈ VRAM_MIB | `PREALLOC=1` + revert default |
+| #2 | What invalidates the current source removal? | Named scan finds a selector/composition or a retained consumer breaks | Keep product off; repair origin path without restoring the selector |
 | #13 | Did we test refuse free when used>0? | Unit/integration must force used>0 mock or live | Missing test → no DONE |
 | #15 | Alloc fail retry? | Code review: single fail path | Loop found → no-go merge |
 | #16 | Safe default when unsure? | used>0 → no free | Free anyway → CRITICAL |
@@ -128,15 +135,18 @@ No remaining **CRITICAL** open after SPEC edit.
 
 | Kind | Behaviour |
 | --- | --- |
-| Code | Revert commit; or env `RAMSHARED_VRAM_PREALLOC=1` without revert |
+| Code | Restore only an exact reviewed origin-capable source snapshot; no removed environment selector is a rollback. |
 | Contract | NBD size still `VRAM_MIB` (capacity stable) |
 | State | Partial chunk set OK; Empty reads zeros; down frees all |
 | Live host | No thrash drills; pressure via cgroup probe only |
 
 **Rollback trigger (numeric):**
 
-1. After idle sparse `up`, `nvidia-smi` free drop **> 64 MiB** attributable to daemon (excluding other apps) → treat as fail; enable PREALLOC or revert.  
-2. Any ghost nbd/ublk or WSL freeze after sparse reclaim → PREALLOC + validation entry; stop sparse default.
+1. Any active-source scan hit for a selector, profile chooser, or full-VRAM NBD
+   composition invalidates the removal gate.
+2. Any origin-backed NBD, broker, ublk, Windows, or existing-test regression
+   keeps activation disabled and requires a corrected source change; it does
+   not justify restoring the removed path.
 
 ---
 
@@ -146,10 +156,10 @@ No remaining **CRITICAL** open after SPEC edit.
 | --- | --- | --- |
 | V1 | `cargo test -p ramshared-block` (sparse unit) | all green |
 | V2 | `cargo test -p ramshared-wsl2d` | all green |
-| V3 | Idle `up` VRAM_MIB=3072; `nvidia-smi` Δ | Δ free ≤ 64 MiB (not ~3072) |
-| V4 | `sudo bash scripts/safety/cascade-pressure-probe.sh --prove-disk` | order zram→nbd→disk |
-| V5 | After V4 release + idle free | committed↓; free_GPU↑ |
-| V6 | PREALLOC=1 `up` | Δ free ≈ size (legacy) |
+| V3 | Historical isolated-lab idle observation | Recorded idle delta only; current execution is **BLOCKED** |
+| V4 | Historical isolated-lab pressure observation | Recorded order only; current execution is **BLOCKED** |
+| V5 | Historical isolated-lab reclaim observation | Recorded release only; current execution is **BLOCKED** |
+| V6 | `node --test --test-name-pattern=legacy_preallocation_removed_before_day0_deadline tools/ci/check-legacy-preallocation-removal.test.mjs` plus candidate scan | Named test and scan pass; no host action |
 
 Harness **`scripts/safety/cascade-pressure-probe.sh` is real** (not fictional).
 
@@ -174,7 +184,7 @@ Harness **`scripts/safety/cascade-pressure-probe.sh` is real** (not fictional).
 
 | | |
 | --- | --- |
-| **Verdict** | **GO** |
-| **May IMPL start?** | **Yes** — Passo 3 against revised SPEC only |
-| **Must not IMPL** | ITEM-2b, free-when-used>0, ublk product, MS kernel PR |
-| **Next** | Passo 3: tests first → `SparseVramBackend` → wire `ramsharedd` → live V3–V6 → `IMPL.md` |
+| **Historical verdict** | **GO (superseded)** |
+| **May new product IMPL start?** | **No** — product NBD follows the origin-only source boundary |
+| **Must not IMPL** | ITEM-2b, free-when-used>0, ublk product, MS kernel PR, or a restored full-allocation selector |
+| **Current status** | Source sunset is **CLOSED**; live qualification, release, and activation remain **BLOCKED** pending separate attended approval. |

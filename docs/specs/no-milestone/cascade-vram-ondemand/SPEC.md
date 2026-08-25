@@ -2,7 +2,12 @@
 
 > Implements [`PRD.md`](PRD.md). Zero creativity out of scope.  
 > **Does not** change swap priorities or transport policy (NBD Day-1 on WSL2).  
-> Parent kill-switch behaviour is mandatory for rollback.
+> **2026-08-22 Day-0 update:** the full-VRAM NBD selector and composition were
+> removed. The original PRD/IMPL remain historical records; this living SPEC
+> supersedes their availability and rollback language. The source-removal gate
+> is **CLOSED** only: live qualification, release promotion, and activation
+> remain **BLOCKED**, and this document authorizes no host, GPU, WSL, device, or
+> pressure action.
 
 ## Traceability
 
@@ -11,7 +16,7 @@
 | RF-L1, RF-L2, RF-L3, RF-L4 | ITEM-1 SparseVramBackend |
 | RF-L5, RF-L6, RF-L7 | ITEM-2 Reclaim / demote free |
 | RF-L8 | ITEM-3 Telemetry |
-| RF-L9, RF-L10 | ITEM-4 Flags + preflight |
+| RF-L9 (superseded), RF-L10 | ITEM-4 selector removal + origin-only product boundary |
 | NFR-L1..L5 | ITEM-5 Safety + tests |
 
 ## Files
@@ -20,10 +25,10 @@
 | --- | --- |
 | `crates/ramshared-block/src/sparse_vram.rs` (or `vram_sparse.rs`) | **create** — chunk map + `BlockBackend` |
 | `crates/ramshared-block/src/lib.rs` | export |
-| `crates/ramshared-wsl2d/src/main.rs` | use sparse by default; prealloc if env |
+| `crates/ramshared-wsl2d/src/main.rs` | require origin-cache for product NBD; remove the full-VRAM composition |
 | `crates/ramshared-vram/src/lib.rs` | no trait break unless `free` helper needed (Drop already frees) |
-| `scripts/safety/cascade.conf.example` | document chunk + prealloc env |
-| `docs/specs/.../IMPL.md` | Passo 3 after code |
+| `tools/ci/check-legacy-preallocation-removal.mjs` | reject executable selectors/composition and current-doc availability claims |
+| `docs/specs/.../IMPL.md` | retain historical Passo 3 measurements; current closure is recorded in origin IMPL/validation |
 
 ## ITEM-1 — SparseVramBackend
 
@@ -54,7 +59,7 @@ struct Chunk {
 
 Construction uses one typed `SparseVramConfig` for capacity, chunk geometry,
 reserve floor, commit cap, and optional host budget gate. Existing convenience
-constructors remain as compatibility wrappers. The daemon uses the named
+constructors remain as convenience constructors. The daemon uses the named
 configuration so safety limits cannot be silently transposed among positional
 integer arguments.
 
@@ -120,11 +125,14 @@ Mid-flight spill while `used_kb > 0`: mirror Live chunks to RAM/file, free CUDA,
 
 ## ITEM-3 — Telemetry
 
-**Product path (Day-0, confirmed in code):**
+**Current boundary (Day-0, confirmed in code):**
 
-- Startup stderr: `VRAM mode=sparse|prealloc` with capacity / chunk / commit_cap / reserve / committed.
-- On reclaim: stderr with freed MiB + `live=` chunk count.
-- In-process counters on `SparseVramBackend`: `alloc_fails`, `reclaim_frees`, `chunks_live()`, committed bytes via live×chunk.
+- `SparseVramBackend` retains its focused on-demand allocation and reclaim
+  tests as a reusable block component.
+- Product NBD startup requires an authoritative origin and reports
+  `mode=origin-cache`; it has no sparse/full-allocation selector.
+- Historical sparse tests still cover stderr reclaim counts and in-process
+  `alloc_fails`, `reclaim_frees`, `chunks_live()`, and committed bytes.
 
 Optional daemon `--telemetry-jsonl` is the **residency/canary** stream (broader than sparse-only). It is **not** required to emit the exact field names below as a separate sparse schema.
 
@@ -137,28 +145,25 @@ vram_chunks_live
 vram_chunks_total
 vram_reclaim_frees
 vram_alloc_fails
-vram_mode=sparse|prealloc
+vram_mode=sparse
 ```
 
-## ITEM-4 — Flags + preflight
+## ITEM-4 — Day-0 selector removal and product boundary
 
-| Env / conf | Default | Effect |
+| Surface | Current state |
 | --- | --- | --- |
-| `RAMSHARED_VRAM_PREALLOC` | unset/0 | sparse (new default) |
-| `=1` / `true` | — | full `alloc(size)` Day-1 path |
-| `RAMSHARED_VRAM_CHUNK_MIB` | 128 | chunk size (16..512) |
-| `RAMSHARED_VRAM_IDLE_FREE_SEC` | 30 | idle free when used_kb==0 |
+| `RAMSHARED_VRAM_PREALLOC`, `RAMSHARED_VRAM_PREALLOC_LEGACY`, and `RAMSHARED_VRAM_SPARSE_EXPERIMENTAL` | These selectors were removed from executable source. |
+| Single NBD startup | Requires `--origin /dev/disk/by-partuuid/<uuid>` before backend or device work. |
+| `RAMSHARED_VRAM_CHUNK_MIB` / `RAMSHARED_VRAM_IDLE_FREE_SEC` | Retained only for the reusable sparse component; they do not select the product NBD backend. |
 
-### Preflight (sparse default) — **revised AUDIT-2.5**
+### Product preflight
 
-| Mode | Gate |
-| --- | --- |
-| **sparse** (default) | `free_vram >= MIN_VRAM_HEADROOM_MIB + ceil(CANARY_BYTES) + CHUNK_MIB` — enough to **start** and take first write. Log: `preflight sparse: capacity=VRAM_MIB MiB commit_gate=… (not full prealloc)`. |
-| **prealloc** (`RAMSHARED_VRAM_PREALLOC=1`) | keep legacy: `free >= VRAM_MIB + MIN_VRAM_HEADROOM_MIB` |
-
-- `VRAM_MIB` remains **max advertised capacity** (NBD size), not “must be free at boot”.  
-- Filling the full tier under pressure still needs free VRAM at write time; alloc fail → I/O error (ITEM-1).  
-- Optional phase 2: `VRAM_COMMIT_CAP_MIB` soft cap on simultaneous commit.
+- Logical capacity remains independent from physical VRAM commitment.
+- The product path opens and validates the authoritative origin before NBD
+  selection; unavailable GPU measurement yields a zero cache target while the
+  origin remains the correctness boundary.
+- Reintroducing a full-capacity NBD allocation selector is a Day-0 failure, not
+  a rollback or preflight mode.
 
 ## ITEM-5 — Safety + tests
 
@@ -167,12 +172,12 @@ vram_mode=sparse|prealloc
 | Unit: read empty → zeros, no alloc | Fake provider alloc count 0 |
 | Unit: write then read | data roundtrip; alloc count 1 |
 | Unit: cross-chunk write | 2 allocs |
-| Unit: prealloc flag path still compiles | feature flag |
+| Static: `legacy_preallocation_removed_before_day0_deadline` | selector aliases, profile chooser, and NBD full-VRAM composition absent |
 | Live: `up` VRAM_MIB=3072, used_kb=0 | `Δ free_GPU` ≤ canary + CUDA context slack **≤ 256 MiB** (driver overhead) — **not** ≈3072 |
 | Live: sparse preflight | boot OK with free_vram &lt; VRAM_MIB+headroom if free ≥ sparse gate |
 | Live: pressure order | `sudo bash scripts/safety/cascade-pressure-probe.sh --prove-disk` → zram → nbd → disk |
 | Live: after pressure release used_kb→0 + idle | committed falls; free_GPU rises |
-| Kill-switch | PREALLOC=1 → Δ free ≈ size |
+| Product selection | originless NBD refuses before backend/device mutation; origin-backed NBD remains legitimate |
 | Safe daemon wiring: `daemon_args_refuse_invalid_or_unsafe_combinations_before_backend`, `daemon_command_timeout_terminates_child_without_hang` | injected argv and harmless child process; unsafe plans fail before CUDA, swap, NBD client, or ublk setup |
 
 **Note:** `scripts/safety/cascade-pressure-probe.sh` is a **real** host-safe harness (cgroup MemoryMax; in git since `06957fe`). Not a placeholder.
@@ -183,8 +188,11 @@ vram_mode=sparse|prealloc
 
 ### Rollback trigger
 
-- GPU free after idle `up` still drops by ≈ VRAM_MIB → bug; set `RAMSHARED_VRAM_PREALLOC=1` and revert sparse default.  
-- Any WSL freeze / ghost swap after sparse → prealloc + orphan recover path; open validation entry.
+- Any reappearance of an executable selector or full-VRAM NBD composition
+  fails the named checker and blocks the source gate.
+- Any origin-backed NBD, broker, ublk, Windows, or existing-test regression
+  keeps the candidate off and restores only the exact reviewed origin-capable
+  source snapshot. The removed selector is never restored.
 
 ## Kahneman map
 
@@ -206,21 +214,22 @@ vram_mode=sparse|prealloc
 
 ## Implementation order
 
-1. Fake-backed unit tests RED  
-2. SparseVramBackend GREEN  
-3. Wire daemon + env  
-4. Live gates  
-5. IMPL.md
+1. Add the named removal checker test and observe RED.
+2. Remove selector aliases, profile selection, and the NBD full-VRAM
+   `VramBackend` composition while retaining generic consumers.
+3. Require origin-backed NBD at the parsed action boundary.
+4. Run focused source/static, formatting, lint, and documentation gates.
+5. Record source closure without promoting any live gate.
 
 ### Entry-point boundary (shared with memory-broker DT-46)
 
-`crates/ramshared-wsl2d/src/main.rs` must keep sparse/prealloc and hardware
-selection behind a parsed, validated plan. The only safe local coverage fixture
-is broker-RAM with temporary sockets and a bounded stop/join. It cannot stand
-in for the required live sparse GPU gate above; `BINARY_MATCH` and live E2E
-remain explicitly deferred until an approved disposable environment is used.
+`crates/ramshared-wsl2d/src/main.rs` keeps origin-cache and hardware selection
+behind a parsed, validated plan. Originless product NBD refuses before CUDA,
+swap, NBD-client, or ublk work. Safe local fixtures cannot stand in for live
+GPU/NBD evidence; `BINARY_MATCH` and live E2E remain explicitly deferred until
+an approved disposable environment is used.
 
-The named sparse-policy construction and compatibility wrappers are covered by:
+The named sparse-policy construction and convenience constructors are covered by:
 
 ```bash
 node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block --files crates/ramshared-block/src/sparse_vram.rs --min 80 --report-json tmp/cascade-vram-ondemand-policy-cov.json

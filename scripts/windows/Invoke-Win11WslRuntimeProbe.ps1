@@ -1,347 +1,499 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Probe WSL runtime readiness inside the isolated win11-drill VM.
+  Inspect or probe WSL readiness inside one approved Windows lab VM.
 
 .DESCRIPTION
-  This helper starts the lab VM if requested, reaches it through PowerShell
-  Direct, and runs a highest-privilege scheduled-task probe for wsl.exe. It does
-  not initialize, format, resize, or attach disks. It emits an artifact with the
-  regular PowerShell Direct view and the elevated scheduled-task view so WSL
-  runtime failures are not misclassified as credential failures.
+  The default action is plan-only. Status reads Hyper-V state without starting
+  the VM. Probe requires -Run, -ApproveGuestWslProbe, and the exact observed VM
+  ID. All guest work uses the shared bounded PowerShell Direct helper. If this
+  harness starts the VM, it requests a guest-only graceful shutdown and proves
+  that the VM returns to Off. It never formats or changes a disk, creates a
+  checkpoint, repairs WSL, or force-powers off a VM.
 #>
 [CmdletBinding()]
 param(
-    [string]$VMName = "win11-drill",
-    [string]$User = "WIN11-DRILL\drilladmin",
+    [ValidateSet("plan", "status", "probe")]
+    [string]$Action = "plan",
+    [ValidateSet("win11-drill", "win11-wsl2-lab")]
+    [string]$VMName = "win11-wsl2-lab",
+    [string]$ExpectedVMId = "",
+    [string]$ExpectedDistro = "Ubuntu-24.04",
+    [string]$User = "",
     [string]$Password = "",
     [string]$PasswordFile = "C:\ramshared\bin\.drill-pw",
     [string]$ArtifactRoot = "C:\ramshared\artifacts",
-    [int]$PsDirectReadyTimeoutSec = 900,
-    [int]$PsDirectRetrySec = 10,
-    [int]$ScheduledTaskTimeoutSec = 300,
-    [int]$ScheduledTaskPollSec = 5,
-    [switch]$Start
+    [ValidateRange(5, 120)]
+    [int]$GuestCommandTimeoutSeconds = 15,
+    [ValidateRange(2, 600)]
+    [int]$PsDirectTimeoutSeconds = 120,
+    [ValidateRange(1, 180)]
+    [int]$PsDirectConnectTimeoutSeconds = 60,
+    [ValidateRange(10, 300)]
+    [int]$VmShutdownTimeoutSeconds = 120,
+    [switch]$Start,
+    [switch]$Run,
+    [switch]$ApproveGuestWslProbe,
+    [switch]$UseBlankPassword
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-function New-ArtifactDir {
-    param([string]$Root)
-    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $dir = Join-Path $Root "win11-wsl-runtime-probe-$stamp"
-    New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    return $dir
-}
+. (Join-Path $PSScriptRoot "Invoke-GuestPsDirectBounded.ps1")
 
 function Get-LocalDrillPassword {
-    param(
-        [string]$InitialPassword,
-        [string]$LocalPasswordFile
-    )
-    if (-not [string]::IsNullOrEmpty($InitialPassword)) {
-        return $InitialPassword
-    }
+    param([string]$InitialPassword, [string]$LocalPasswordFile)
+    if (-not [string]::IsNullOrEmpty($InitialPassword)) { return $InitialPassword }
     foreach ($scope in @("Machine", "User")) {
         $value = [Environment]::GetEnvironmentVariable("RAMSHARED_DRILL_PASSWORD", $scope)
-        if (-not [string]::IsNullOrEmpty($value)) {
-            return $value
-        }
+        if (-not [string]::IsNullOrEmpty($value)) { return $value }
     }
     if (-not [string]::IsNullOrEmpty($env:RAMSHARED_DRILL_PASSWORD)) {
         return $env:RAMSHARED_DRILL_PASSWORD
     }
-    if (Test-Path -LiteralPath $LocalPasswordFile) {
+    if (Test-Path -LiteralPath $LocalPasswordFile -PathType Leaf) {
         return (Get-Content -LiteralPath $LocalPasswordFile -Raw).Trim()
     }
     return ""
 }
 
-function Invoke-GuestWithRetry {
-    param(
-        [pscredential]$Credential,
-        [scriptblock]$ScriptBlock,
-        [object[]]$ArgumentList = @()
-    )
-    $deadline = (Get-Date).AddSeconds($PsDirectReadyTimeoutSec)
-    $attempt = 0
-    $lastError = ""
-    do {
-        $attempt += 1
-        try {
-            return Invoke-Command -VMName $VMName -Credential $Credential -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList -ErrorAction Stop
-        } catch {
-            $lastError = $_.Exception.Message
-            if ($lastError -match "credencial.*inv|credential.*invalid|logon failure|senha.*incorreta") {
-                throw
-            }
-            Start-Sleep -Seconds $PsDirectRetrySec
-        }
-    } while ((Get-Date) -lt $deadline)
-
-    throw "PowerShell Direct did not become ready after $attempt attempts over ${PsDirectReadyTimeoutSec}s. Last error: $lastError"
-}
-
-function Get-GuestWslExe {
-    $packaged = "C:\Program Files\WSL\wsl.exe"
-    if (Test-Path -LiteralPath $packaged) {
-        return $packaged
+function Get-ApprovedGuestUser {
+    param([string]$Name, [string]$RequestedUser)
+    $expected = if ($Name -ceq "win11-wsl2-lab") {
+        "WIN11-WSL2-LAB\drilladmin"
+    } else {
+        "WIN11-DRILL\drilladmin"
     }
-    return "wsl.exe"
+    if ([string]::IsNullOrWhiteSpace($RequestedUser)) { return $expected }
+    if ($RequestedUser -cne $expected) { throw "guest_user_identity_mismatch" }
+    return $expected
 }
 
-function Write-Summary {
-    param(
-        [string]$Dir,
-        [string]$Status,
-        [string]$Reason,
-        [hashtable]$Extra = @{}
-    )
-    $summary = [ordered]@{
-        STATUS = $Status
-        PASS = ($Status -eq "PASS")
-        REASON = $Reason
-        VM = $VMName
-        USER = $User
-        ARTIFACT = $Dir
+function Get-LabObservation {
+    param([string]$Name)
+    $vmRows = @(Get-VM -Name $Name -ErrorAction Stop)
+    if ($vmRows.Count -ne 1 -or [string]$vmRows[0].Name -cne $Name) {
+        throw "vm_identity_ambiguous"
+    }
+    $vm = $vmRows[0]
+    $processors = @(Get-VMProcessor -VMName $Name -ErrorAction Stop)
+    $snapshots = @(Get-VMSnapshot -VMName $Name -ErrorAction Stop)
+    $disks = @(Get-VMHardDiskDrive -VMName $Name -ErrorAction Stop)
+    if ($processors.Count -ne 1) { throw "vm_processor_identity_ambiguous" }
+
+    $diskContractOk = $false
+    if ($disks.Count -eq 1 -and -not [string]::IsNullOrWhiteSpace([string]$disks[0].Path)) {
+        $diskPath = [IO.Path]::GetFullPath([string]$disks[0].Path)
+        $diskContractOk = [IO.Path]::GetExtension($diskPath) -ceq ".vhdx" -and
+            $diskPath.IndexOf($Name, [StringComparison]::OrdinalIgnoreCase) -ge 0
+        if ($Name -ceq "win11-wsl2-lab") {
+            $approvedRoot = "C:\ramshared-hyperv\win11-wsl2-lab\"
+            $diskContractOk = $diskContractOk -and
+                $diskPath.StartsWith($approvedRoot, [StringComparison]::OrdinalIgnoreCase)
+        }
+    }
+
+    [pscustomobject]@{
+        vm_name = [string]$vm.Name
+        vm_id = ([guid]$vm.Id).ToString("D").ToUpperInvariant()
+        state = [string]$vm.State
+        generation = [int]$vm.Generation
+        processor_count = [int]$processors[0].Count
+        nested_virtualization = [bool]$processors[0].ExposeVirtualizationExtensions
+        automatic_checkpoints_enabled = [bool]$vm.AutomaticCheckpointsEnabled
+        checkpoint_type = [string]$vm.CheckpointType
+        snapshot_count = [int]$snapshots.Count
+        disk_count = [int]$disks.Count
+        disk_contract_ok = [bool]$diskContractOk
+    }
+}
+
+function Write-TypedResult {
+    param([string]$Status, [string]$Reason, [hashtable]$Extra = @{}, [int]$Depth = 8)
+    $record = [ordered]@{
+        schema = 1
+        status = $Status
+        reason = $Reason
+        action = $Action
+        vm_name = $VMName
+        expected_distro = $ExpectedDistro
         DISK_MUTATION = $false
     }
-    foreach ($k in $Extra.Keys) {
-        $summary[$k] = $Extra[$k]
-    }
-    $summary | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $Dir "summary.json")
-    Write-Host "STATUS=$Status"
-    Write-Host "REASON=$Reason"
-    Write-Host "ARTIFACT_DIR=$Dir"
+    foreach ($key in @($Extra.Keys)) { $record[$key] = $Extra[$key] }
+    $record | ConvertTo-Json -Depth $Depth
 }
 
-$artifactDir = New-ArtifactDir -Root $ArtifactRoot
-$Password = Get-LocalDrillPassword -InitialPassword $Password -LocalPasswordFile $PasswordFile
-if ([string]::IsNullOrEmpty($Password)) {
-    Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "missing_guest_credential"
-    exit 2
+function Wait-LabVmOff {
+    param([DateTime]$DeadlineUtc)
+    do {
+        $rows = @(Get-VM -Name $VMName -ErrorAction Stop)
+        if ($rows.Count -ne 1) { throw "vm_identity_ambiguous_during_shutdown" }
+        if ([string]$rows[0].State -ceq "Off") { return $true }
+        Start-Sleep -Seconds 2
+    } while ([DateTime]::UtcNow -lt $DeadlineUtc)
+    return $false
 }
 
-try {
-    if ($Start) {
-        Start-VM -Name $VMName -ErrorAction Stop
-    }
-
-    $sec = ConvertTo-SecureString $Password -AsPlainText -Force
-    $cred = [pscredential]::new($User, $sec)
-    $probe = Invoke-GuestWithRetry -Credential $cred -ScriptBlock {
-        $ErrorActionPreference = "Continue"
-        function Get-GuestWslExe {
-            $packaged = "C:\Program Files\WSL\wsl.exe"
-            if (Test-Path -LiteralPath $packaged) {
-                return $packaged
-            }
-            return "wsl.exe"
+function Invoke-GracefulHostShutdownFallback {
+    param([string]$ExpectedId)
+    $worker = @'
+$ErrorActionPreference = "Stop"
+$name = [Environment]::GetEnvironmentVariable("RAMSHARED_LAB_VM_NAME")
+$expected = [Environment]::GetEnvironmentVariable("RAMSHARED_LAB_VM_ID")
+if ([string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($expected)) {
+    throw "bounded host shutdown identity is incomplete"
+}
+$rows = @(Get-VM -Name $name -ErrorAction Stop)
+if ($rows.Count -ne 1 -or ([guid]$rows[0].Id).ToString("D").ToUpperInvariant() -cne $expected) {
+    throw "bounded host shutdown VM identity mismatch"
+}
+Stop-VM -VM $rows[0] -Confirm:$false -ErrorAction Stop
+'@
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($worker))
+    $deadlineUtc = [DateTime]::UtcNow.AddSeconds($VmShutdownTimeoutSeconds)
+    do {
+        # The integration shutdown channel can lag a just-started VM. If it is
+        # already off, or becomes ready during the deadline, do not escalate.
+        if (Wait-LabVmOff -DeadlineUtc ([DateTime]::UtcNow)) {
+            return "restored_off_host_fallback"
         }
-        $features = @(
-            foreach ($name in @("Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform")) {
-                $feature = Get-WindowsOptionalFeature -Online -FeatureName $name
+        $execution = $null
+        try {
+            $remainingSeconds = [Math]::Max(1, [int][Math]::Ceiling(
+                ($deadlineUtc - [DateTime]::UtcNow).TotalSeconds))
+            $attemptTimeoutSeconds = [Math]::Min(20, $remainingSeconds)
+            $execution = Invoke-BoundedGuestProcess -FilePath (Join-Path $PSHOME "powershell.exe") `
+                -Arguments ("-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + $encoded) `
+                -TimeoutSeconds $attemptTimeoutSeconds -Environment @{
+                    RAMSHARED_LAB_VM_NAME = $VMName
+                    RAMSHARED_LAB_VM_ID = $ExpectedId
+                }
+        }
+        catch {
+            $execution = $null
+        }
+        if ($null -ne $execution -and $execution.completed -and $execution.exit_code -eq 0) {
+            if (Wait-LabVmOff -DeadlineUtc $deadlineUtc) {
+                return "restored_off_host_fallback"
+            }
+            return "host_graceful_shutdown_timeout"
+        }
+        if ([DateTime]::UtcNow -lt $deadlineUtc) {
+            Start-Sleep -Seconds 3
+        }
+    } while ([DateTime]::UtcNow -lt $deadlineUtc)
+    return "host_graceful_shutdown_timeout"
+}
+
+function Restore-StartedLabVmOff {
+    param(
+        [string]$ExpectedId,
+        [string]$GuestUser,
+        [AllowEmptyString()]
+        [string]$GuestPassword,
+        [switch]$GuestPasswordMayBeEmpty
+    )
+    $guestOutcome = "guest_shutdown_failed"
+    try {
+        $shutdownRows = Invoke-GuestPsDirectBounded -VMName $VMName -User $GuestUser `
+            -Password $GuestPassword -AllowEmptyPassword:$GuestPasswordMayBeEmpty `
+            -Operation invoke -TimeoutSeconds 45 `
+            -ConnectTimeoutSeconds 20 -ScriptBlock {
+                $output = & shutdown.exe /s /t 5 /d p:4:1 `
+                    /c "RamShared bounded WSL readiness probe complete" 2>&1 | Out-String
+                if ([int]$LASTEXITCODE -ne 0) { throw "guest shutdown scheduling failed" }
                 [pscustomobject]@{
-                    FeatureName = $name
-                    State = $feature.State.ToString()
-                    RestartNeeded = $feature.RestartNeeded
+                    shutdown_scheduled=$true
+                    output_present=(-not [string]::IsNullOrWhiteSpace($output))
                 }
             }
-        )
-        $appx = Get-AppxPackage -AllUsers *WindowsSubsystemForLinux* |
-            Select-Object Name, PackageFullName, Version, InstallLocation
-        $wslExe = Get-GuestWslExe
-        $wslCommand = Get-Command $wslExe -ErrorAction SilentlyContinue |
-            Select-Object Source, Version
-        $wslService = Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -eq "WslService" } |
-            Select-Object Name, State, StartMode, PathName, ExitCode
-        function Invoke-WslWithTimeout {
-            param(
-                [string]$Exe,
-                [string]$Arguments,
-                [int]$TimeoutSec = 30
-            )
-            $safeName = ($Arguments -replace '[^A-Za-z0-9]+', '_').Trim('_')
-            if ([string]::IsNullOrWhiteSpace($safeName)) {
-                $safeName = "wsl"
-            }
-            $stdout = "C:\ramshared\artifacts\wsl-psdirect-$safeName.out"
-            $stderr = "C:\ramshared\artifacts\wsl-psdirect-$safeName.err"
-            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $stdout) | Out-Null
-            $p = Start-Process -FilePath $Exe -ArgumentList $Arguments -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
-            $done = $p.WaitForExit($TimeoutSec * 1000)
-            if (-not $done) {
-                try { $p.Kill() } catch {}
-            }
-            [pscustomobject]@{
-                done = $done
-                exit = if ($done) { $p.ExitCode } else { $null }
-                stdout = if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout -Raw } else { "" }
-                stderr = if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr -Raw } else { "" }
-            }
-        }
-        $wslStatus = if ($null -ne $wslService -and $wslService.State -eq "Running") {
-            Invoke-WslWithTimeout -Exe $wslExe -Arguments "--status"
+        if (@($shutdownRows).Count -ne 1 -or -not [bool]@($shutdownRows)[0].shutdown_scheduled) {
+            $guestOutcome = "guest_shutdown_receipt_invalid"
+        } elseif (Wait-LabVmOff -DeadlineUtc ([DateTime]::UtcNow.AddSeconds($VmShutdownTimeoutSeconds))) {
+            return "restored_off_guest"
         } else {
-            [pscustomobject]@{
-                done = $false
-                exit = $null
-                stdout = ""
-                stderr = ""
-            }
+            $guestOutcome = "guest_shutdown_timeout"
         }
-        [pscustomobject]@{
-            host = $env:COMPUTERNAME
-            whoami = (whoami)
-            features = $features
-            appx = $appx
-            wsl_command = $wslCommand
-            wsl_service = $wslService
-            wsl_status = $wslStatus.stdout
-            wsl_status_stderr = $wslStatus.stderr
-            wsl_status_exit = $wslStatus.exit
-            wsl_status_timeout = (-not $wslStatus.done)
-        }
-    }
-    $probe | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $artifactDir "psdirect-probe.json")
-
-    if ($null -eq $probe.wsl_service) {
-        Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "guest_wsl_service_missing"
-        exit 2
-    }
-    if ($probe.wsl_service.State -ne "Running") {
-        Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "guest_wsl_service_not_running" -Extra @{
-            service_state = $probe.wsl_service.State
-        }
-        exit 2
+    } catch {
+        $guestOutcome = "guest_shutdown_failed"
     }
 
-    $taskProbe = Invoke-GuestWithRetry -Credential $cred -ScriptBlock {
-        param($TaskPassword)
-        $ErrorActionPreference = "Continue"
-        New-Item -ItemType Directory -Force -Path "C:\ramshared\artifacts" | Out-Null
-        $script = "C:\ramshared\wsl-high-probe.ps1"
-        $out = "C:\ramshared\artifacts\wsl-high-probe.out"
-@'
-$ErrorActionPreference = "Continue"
-$out = "C:\ramshared\artifacts\wsl-high-probe.out"
-$lines = New-Object System.Collections.Generic.List[string]
-function Get-GuestWslExe {
-    $packaged = "C:\Program Files\WSL\wsl.exe"
-    if (Test-Path -LiteralPath $packaged) {
-        return $packaged
+    try {
+        return Invoke-GracefulHostShutdownFallback -ExpectedId $ExpectedId
+    } catch {
+        return "host_graceful_shutdown_failed"
     }
-    return "wsl.exe"
-}
-function Add-ProbeLine {
-    param([object]$Value)
-    if ($null -eq $Value) {
-        return
-    }
-    foreach ($line in ($Value | Out-String) -split "`r?`n") {
-        if ($line.Length -gt 0) {
-            $script:lines.Add($line)
-        }
-    }
-}
-function Invoke-WslWithTimeout {
-    param(
-        [string]$Exe,
-        [string]$Arguments,
-        [int]$TimeoutSec = 30
-    )
-    $safeName = ($Arguments -replace '[^A-Za-z0-9]+', '_').Trim('_')
-    if ([string]::IsNullOrWhiteSpace($safeName)) {
-        $safeName = "wsl"
-    }
-    $stdout = "C:\ramshared\artifacts\wsl-high-$safeName.out"
-    $stderr = "C:\ramshared\artifacts\wsl-high-$safeName.err"
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $stdout) | Out-Null
-    $p = Start-Process -FilePath $Exe -ArgumentList $Arguments -NoNewWindow -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
-    $done = $p.WaitForExit($TimeoutSec * 1000)
-    if (-not $done) {
-        try { $p.Kill() } catch {}
-    }
-    [pscustomobject]@{
-        done = $done
-        exit = if ($done) { $p.ExitCode } else { $null }
-        stdout = if (Test-Path -LiteralPath $stdout) { Get-Content -LiteralPath $stdout -Raw } else { "" }
-        stderr = if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr -Raw } else { "" }
-    }
-}
-try {
-    Add-ProbeLine "whoami=$(whoami)"
-    $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
-    $wslExe = Get-GuestWslExe
-    Add-ProbeLine "is_admin=$($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
-    Add-ProbeLine "wsl_exe=$wslExe"
-    Add-ProbeLine "status_start"
-    $status = Invoke-WslWithTimeout -Exe $wslExe -Arguments "--status"
-    Add-ProbeLine $status.stdout
-    Add-ProbeLine $status.stderr
-    Add-ProbeLine "status_timeout=$(-not $status.done)"
-    Add-ProbeLine "status_exit=$($status.exit)"
-    Add-ProbeLine "list_start"
-    $list = Invoke-WslWithTimeout -Exe $wslExe -Arguments "-l -v"
-    Add-ProbeLine $list.stdout
-    Add-ProbeLine $list.stderr
-    Add-ProbeLine "list_timeout=$(-not $list.done)"
-    Add-ProbeLine "list_exit=$($list.exit)"
-} finally {
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $out) | Out-Null
-    $lines | Set-Content -Encoding UTF8 -LiteralPath $out
-}
-'@ | Set-Content -Encoding UTF8 -LiteralPath $script
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument ('-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $script)
-        $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
-        $principal = New-ScheduledTaskPrincipal -UserId $using:User -RunLevel Highest -LogonType Password
-        $task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal
-        Register-ScheduledTask -TaskName "RamSharedWslHighProbe" -InputObject $task -User $using:User -Password $TaskPassword -Force | Out-Null
-        Start-ScheduledTask -TaskName "RamSharedWslHighProbe"
-        $deadline = (Get-Date).AddSeconds($using:ScheduledTaskTimeoutSec)
-        do {
-            Start-Sleep -Seconds $using:ScheduledTaskPollSec
-            $state = (Get-ScheduledTask -TaskName "RamSharedWslHighProbe").State
-            $info = Get-ScheduledTaskInfo -TaskName "RamSharedWslHighProbe"
-        } while ($state -eq "Running" -and (Get-Date) -lt $deadline)
-        $content = if (Test-Path -LiteralPath $out) {
-            Get-Content -LiteralPath $out -Raw
-        } else {
-            "NO_OUTPUT"
-        }
-        Unregister-ScheduledTask -TaskName "RamSharedWslHighProbe" -Confirm:$false
-        [pscustomobject]@{
-            last_task_result = $info.LastTaskResult
-            final_state = $state.ToString()
-            output = $content
-        }
-    } -ArgumentList @($Password)
-    $taskProbe | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 (Join-Path $artifactDir "scheduled-task-probe.json")
-} catch {
-    Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "probe_failed" -Extra @{
-        error = $_.Exception.Message
-    }
-    exit 2
 }
 
-$taskOutput = $taskProbe.output | Out-String
-$taskNoOutput = ($taskOutput -match "NO_OUTPUT")
-$runtimeReady = ($taskOutput -notmatch "not installed|REGDB_E_CLASSNOTREG|Wsl/CallMsi|CLASSNOTREG") -and
-    (-not $taskNoOutput) -and
-    ($taskOutput -notmatch "status_timeout=True|list_timeout=True") -and
-    ($taskOutput -match "status_exit=0|list_exit=0")
-if ($runtimeReady) {
-    Write-Summary -Dir $artifactDir -Status "PASS" -Reason "wsl_runtime_ready_in_elevated_guest"
+$observation = Get-LabObservation -Name $VMName
+if ($Action -ceq "status") {
+    Write-TypedResult -Status "STATUS" -Reason "host_observation_complete" -Extra @{
+        observation = $observation
+    }
+    exit 0
+}
+if ($Action -ceq "plan" -or ($Action -ceq "probe" -and -not $Run)) {
+    Write-TypedResult -Status "PLAN" -Reason "no_guest_or_vm_mutation" -Extra @{
+        observation = $observation
+        would_start_vm = [bool]($Start -and $observation.state -ceq "Off")
+        requires_run = $true
+        requires_approval = "ApproveGuestWslProbe"
+        requires_expected_vm_id = $true
+        remote_transport = "bounded PowerShell Direct"
+    }
     exit 0
 }
 
-if ($taskNoOutput) {
-    Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "guest_wsl_elevated_task_no_output" -Extra @{
-        last_task_result = $taskProbe.last_task_result
-    }
+if (-not $ApproveGuestWslProbe) {
+    Write-TypedResult -Status "PARTIAL" -Reason "guest_probe_approval_required"
+    exit 2
+}
+if ([string]::IsNullOrWhiteSpace($ExpectedVMId)) {
+    Write-TypedResult -Status "PARTIAL" -Reason "expected_vm_id_required"
+    exit 2
+}
+try {
+    $expectedCanonical = ([guid]$ExpectedVMId).ToString("D").ToUpperInvariant()
+} catch {
+    Write-TypedResult -Status "PARTIAL" -Reason "expected_vm_id_invalid"
+    exit 2
+}
+if ($observation.vm_id -cne $expectedCanonical) {
+    Write-TypedResult -Status "PARTIAL" -Reason "vm_identity_mismatch"
+    exit 2
+}
+if ($observation.generation -ne 2) {
+    Write-TypedResult -Status "PARTIAL" -Reason "vm_generation_mismatch"
+    exit 2
+}
+if ($observation.snapshot_count -ne 0 -or $observation.automatic_checkpoints_enabled -or
+    $observation.checkpoint_type -cne "Disabled") {
+    Write-TypedResult -Status "PARTIAL" -Reason "snapshot_residue"
+    exit 2
+}
+if (-not $observation.nested_virtualization) {
+    Write-TypedResult -Status "PARTIAL" -Reason "nested_virtualization_unavailable"
+    exit 2
+}
+if ($observation.disk_count -ne 1 -or -not $observation.disk_contract_ok) {
+    Write-TypedResult -Status "PARTIAL" -Reason "guest_disk_identity_mismatch"
+    exit 2
+}
+if ($PsDirectTimeoutSeconds -le $PsDirectConnectTimeoutSeconds) {
+    Write-TypedResult -Status "PARTIAL" -Reason "psdirect_deadline_invalid"
+    exit 2
+}
+if ($observation.state -cnotin @("Off", "Running")) {
+    Write-TypedResult -Status "PARTIAL" -Reason "vm_state_ineligible"
+    exit 2
+}
+if ($observation.state -ceq "Off" -and -not $Start) {
+    Write-TypedResult -Status "PARTIAL" -Reason "vm_is_off_and_start_not_approved"
     exit 2
 }
 
-Write-Summary -Dir $artifactDir -Status "PARTIAL" -Reason "guest_wsl_runtime_unavailable"
+try {
+    $User = Get-ApprovedGuestUser -Name $VMName -RequestedUser $User
+} catch {
+    Write-TypedResult -Status "PARTIAL" -Reason "guest_user_identity_mismatch"
+    exit 2
+}
+if ($UseBlankPassword -and $VMName -cne "win11-wsl2-lab") {
+    Write-TypedResult -Status "PARTIAL" -Reason "blank_password_probe_not_approved_vm"
+    exit 2
+}
+if ($UseBlankPassword -and -not [string]::IsNullOrEmpty($Password)) {
+    Write-TypedResult -Status "PARTIAL" -Reason "blank_password_probe_explicit_password_forbidden"
+    exit 2
+}
+if ($UseBlankPassword) {
+    $Password = ""
+} else {
+    $Password = Get-LocalDrillPassword -InitialPassword $Password -LocalPasswordFile $PasswordFile
+    if ([string]::IsNullOrEmpty($Password)) {
+        Write-TypedResult -Status "PARTIAL" -Reason "missing_guest_credential"
+        exit 2
+    }
+}
+
+$artifactDir = Join-Path $ArtifactRoot ("win11-wsl-runtime-probe-" +
+    [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ") + "-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $artifactDir -ErrorAction Stop | Out-Null
+$startedHere = $false
+$probe = $null
+$failureReason = ""
+$shutdownReason = "not_required"
+
+try {
+    if ($observation.state -ceq "Off") {
+        Start-VM -Name $VMName -ErrorAction Stop | Out-Null
+        $startedHere = $true
+    }
+    $rows = Invoke-GuestPsDirectBounded -VMName $VMName -User $User -Password $Password `
+        -AllowEmptyPassword:$UseBlankPassword -Operation invoke -TimeoutSeconds $PsDirectTimeoutSeconds `
+        -ConnectTimeoutSeconds $PsDirectConnectTimeoutSeconds -ArgumentList @(
+            $GuestCommandTimeoutSeconds, $ExpectedDistro
+        ) -ScriptBlock {
+            param($TimeoutSec, $DistroName)
+            $ErrorActionPreference = "Stop"
+
+            function Invoke-WslWithTimeout {
+                param([string]$Exe, [string]$Arguments, [int]$TimeoutSec)
+                $info = New-Object System.Diagnostics.ProcessStartInfo
+                $info.FileName = $Exe
+                $info.Arguments = $Arguments
+                $info.UseShellExecute = $false
+                $info.CreateNoWindow = $true
+                $info.RedirectStandardOutput = $true
+                $info.RedirectStandardError = $true
+                # wsl.exe emits UTF-16LE when its streams are redirected.
+                $info.StandardOutputEncoding = [Text.Encoding]::Unicode
+                $info.StandardErrorEncoding = [Text.Encoding]::Unicode
+                $process = New-Object System.Diagnostics.Process
+                $process.StartInfo = $info
+                try {
+                    if (-not $process.Start()) {
+                        return [pscustomobject]@{ done=$false; exit=$null; outcome="start_failed"; stdout="" }
+                    }
+                    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+                    $stderrTask = $process.StandardError.ReadToEndAsync()
+                    $done = $process.WaitForExit($TimeoutSec * 1000)
+                    $outcome = "completed"
+                    if (-not $done) {
+                        $outcome = "timeout"
+                        try { $process.Kill() } catch { $outcome = "timeout_kill_failed" }
+                        if (-not $process.WaitForExit(5000)) { $outcome = "timeout_process_still_running" }
+                    }
+                    $streamsDone = [Threading.Tasks.Task]::WaitAll(
+                        [Threading.Tasks.Task[]]@($stdoutTask, $stderrTask), 5000)
+                    if (-not $streamsDone) { $outcome = "stream_drain_timeout" }
+                    [pscustomobject]@{
+                        done = [bool]$done
+                        exit = if ($done) { [int]$process.ExitCode } else { $null }
+                        outcome = $outcome
+                        stdout = if ($streamsDone) { [string]$stdoutTask.Result } else { "" }
+                    }
+                } finally {
+                    $process.Dispose()
+                }
+            }
+
+            $features = @{}
+            foreach ($featureName in @("Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform")) {
+                try {
+                    $feature = Get-WindowsOptionalFeature -Online -FeatureName $featureName -ErrorAction Stop
+                    $features[$featureName] = [string]$feature.State
+                } catch {
+                    $features[$featureName] = "provider_error"
+                }
+            }
+            $wslService = Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -eq "WslService" } | Select-Object -First 1
+            $wslExe = if (Test-Path -LiteralPath "C:\Program Files\WSL\wsl.exe" -PathType Leaf) {
+                "C:\Program Files\WSL\wsl.exe"
+            } else {
+                "wsl.exe"
+            }
+            $status = if ($null -ne $wslService -and [string]$wslService.State -ceq "Running") {
+                Invoke-WslWithTimeout -Exe $wslExe -Arguments "--status" -TimeoutSec $TimeoutSec
+            } else {
+                [pscustomobject]@{ done=$false; exit=$null; outcome="service_unavailable"; stdout="" }
+            }
+            $list = if ($null -ne $wslService -and [string]$wslService.State -ceq "Running") {
+                Invoke-WslWithTimeout -Exe $wslExe -Arguments "-l -v" -TimeoutSec $TimeoutSec
+            } else {
+                [pscustomobject]@{ done=$false; exit=$null; outcome="service_unavailable"; stdout="" }
+            }
+            [pscustomobject]@{
+                host = [string]$env:COMPUTERNAME
+                feature_wsl = [string]$features["Microsoft-Windows-Subsystem-Linux"]
+                feature_vmp = [string]$features["VirtualMachinePlatform"]
+                service_present = [bool]($null -ne $wslService)
+                service_state = if ($null -ne $wslService) { [string]$wslService.State } else { "missing" }
+                status_timeout = [bool](-not $status.done)
+                status_exit = $status.exit
+                status_outcome = [string]$status.outcome
+                list_timeout = [bool](-not $list.done)
+                list_exit = $list.exit
+                list_outcome = [string]$list.outcome
+                expected_distro_present = [bool]($list.stdout -match [regex]::Escape($DistroName))
+            }
+        }
+    $probeRows = @($rows)
+    if ($probeRows.Count -ne 1) {
+        $failureReason = "guest_probe_result_ambiguous"
+    } else {
+        $probe = $probeRows[0]
+    }
+} catch {
+    $failureText = [string]$_.Exception.Message
+    if ($failureText -match "credential|logon failure|user name or password|usu.rio ou senha|credencial") {
+        $failureReason = "powershell_direct_auth_failed"
+    } elseif ($failureText -match "deadline|PowerShell Direct unavailable|timed out|timeout|process_tree_terminated") {
+        $failureReason = "powershell_direct_unavailable"
+    } else {
+        $failureReason = "guest_probe_failed"
+    }
+} finally {
+    if ($startedHere) {
+        $shutdownReason = Restore-StartedLabVmOff -ExpectedId $observation.vm_id `
+            -GuestUser $User -GuestPassword $Password `
+            -GuestPasswordMayBeEmpty:$UseBlankPassword
+    }
+}
+
+$probeReason = $failureReason
+if ([string]::IsNullOrWhiteSpace($probeReason)) {
+    if ($null -eq $probe) {
+        $probeReason = "guest_probe_result_missing"
+    } elseif (-not [bool]$probe.service_present) {
+        $probeReason = "guest_wsl_service_missing"
+    } elseif ([string]$probe.service_state -cne "Running") {
+        $probeReason = "guest_wsl_service_not_running"
+    } elseif ([bool]$probe.status_timeout -or [bool]$probe.list_timeout -or
+        [int]$probe.status_exit -ne 0 -or [int]$probe.list_exit -ne 0 -or
+        -not [bool]$probe.expected_distro_present) {
+        $probeReason = "guest_wsl_runtime_unavailable"
+    } else {
+        $probeReason = "wsl_runtime_ready"
+    }
+}
+
+$cleanupComplete = -not $startedHere -or $shutdownReason -cin @(
+    "restored_off_guest", "restored_off_host_fallback"
+)
+$reason = if ($cleanupComplete) { $probeReason } else { "cleanup_incomplete" }
+
+$probeRecord = [ordered]@{
+    schema = 1
+    vm_id = $observation.vm_id
+    started_here = [bool]$startedHere
+    probe_reason = $probeReason
+    cleanup_reason = $shutdownReason
+    probe = $probe
+}
+$probeRecord | ConvertTo-Json -Depth 8 |
+    Set-Content -LiteralPath (Join-Path $artifactDir "probe.json") -Encoding UTF8
+
+$finalStatus = if ($reason -ceq "wsl_runtime_ready") { "PASS" } else { "PARTIAL" }
+$summary = [ordered]@{
+    schema = 1
+    status = $finalStatus
+    reason = $reason
+    action = $Action
+    vm_name = $VMName
+    vm_id = $observation.vm_id
+    expected_distro = $ExpectedDistro
+    artifact = $artifactDir
+    started_here = [bool]$startedHere
+    shutdown = $shutdownReason
+    probe_reason = $probeReason
+    cleanup_reason = $shutdownReason
+    DISK_MUTATION = $false
+}
+$summary | ConvertTo-Json -Depth 6 |
+    Set-Content -LiteralPath (Join-Path $artifactDir "summary.json") -Encoding UTF8
+$summary | ConvertTo-Json -Depth 6
+if ($finalStatus -ceq "PASS") { exit 0 }
 exit 2

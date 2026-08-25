@@ -66,7 +66,7 @@ fn ublk_worker_serves_read_and_write_over_channels() {
 
     // Closing the work channel terminates the worker, which returns the backend.
     drop(work_tx);
-    let backend = worker.join().expect("worker terminated ok");
+    let mut backend = worker.join().expect("worker terminated ok");
     let mut got = vec![0u8; 512];
     backend
         .read_at(2048, &mut got)

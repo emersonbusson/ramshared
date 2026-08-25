@@ -8,6 +8,7 @@ import {
   buildRows,
   deriveStatus,
   loadClaimsRegistry,
+  loadValidatedClaims,
   renderIndex,
 } from './generate-docs-index.mjs'
 
@@ -79,8 +80,27 @@ test('build_rows_fails_closed_to_unqualified_without_done_claim', () => {
   write(root, 'docs/specs/no-milestone/implemented/IMPL.md', '# IMPL\n')
   assert.equal(buildRows(root)[0].status, 'UNQUALIFIED')
   write(root, 'docs/governance/claims.json', JSON.stringify({ schema_version: 1, claims: [{ slug: 'implemented', state: 'DONE' }] }))
-  assert.equal(buildRows(root)[0].status, 'DONE')
-  assert.equal(deriveStatus(dir, new Map([['implemented', { state: 'PARTIAL' }]])), 'PARTIAL')
+  write(root, 'docs/governance/claim-closures.json', JSON.stringify({ schema_version: 'ramshared-claim-closures/v1', closures: [] }))
+  assert.equal(buildRows(root)[0].status, 'UNQUALIFIED')
+  assert.equal(deriveStatus(dir, new Map([['implemented', { status: 'PARTIAL' }]])), 'PARTIAL')
+  assert.equal(loadValidatedClaims(root).get('implemented').qualified, false)
+})
+
+test('index_never_promotes_raw_done_and_marks_invalid_closure_stale', () => {
+  const root = rootFixture()
+  write(root, 'docs/specs/no-milestone/implemented/PRD.md', '# Implemented\n')
+  write(root, 'docs/specs/no-milestone/implemented/IMPL.md', '# IMPL\n')
+  write(root, 'docs/governance/claims.json', JSON.stringify({
+    schema_version: 1,
+    claims: [{ slug: 'implemented', state: 'DONE', validation: { source_commit: 'f'.repeat(40), evidence_paths: [] } }],
+  }))
+  write(root, 'docs/governance/claim-closures.json', JSON.stringify({
+    schema_version: 'ramshared-claim-closures/v1',
+    closures: [{ slug: 'implemented', state: 'DONE' }],
+  }))
+  const row = buildRows(root)[0]
+  assert.equal(row.status, 'STALE')
+  assert.equal(row.revision, '—')
 })
 
 test('derive_status_distinguishes_prd_and_spec', () => {
@@ -101,12 +121,13 @@ test('load_claims_rejects_missing_invalid_and_wrong_schema', () => {
   assert.equal(loadClaimsRegistry(root).size, 0)
 })
 
-test('render_index_handles_empty_rows_escaping_and_issues', () => {
+test('render_index_handles_empty_rows_escaping_issues_and_qualified_revision', () => {
   assert.match(renderIndex([], '/repo/docs/INDEX.md'), /No specs yet/)
-  const rendered = renderIndex([{ slug: 'alpha', title: 'A | B', milestone: '—', issues: [7, 9], status: 'DONE', dir: '/repo/docs/specs/no-milestone/alpha' }], '/repo/docs/INDEX.md')
+  const rendered = renderIndex([{ slug: 'alpha', title: 'A | B', milestone: '—', issues: [7, 9], status: 'DONE', revision: '123456789abc', dir: '/repo/docs/specs/no-milestone/alpha' }], '/repo/docs/INDEX.md')
   assert.match(rendered, /A \\| B/)
   assert.match(rendered, /#7, #9/)
   assert.match(rendered, /\(specs\/no-milestone\/alpha\/\)/)
+  assert.match(rendered, /123456789abc/)
 })
 
 test('index_output_is_deterministic', () => {

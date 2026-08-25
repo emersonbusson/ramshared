@@ -1,0 +1,9 @@
+[Unit]
+Description=RamShared Docker and BuildKit workload budget
+Before=docker.service containerd.service
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+IOAccounting=yes
+TasksAccounting=yes

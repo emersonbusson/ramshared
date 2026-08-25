@@ -175,7 +175,7 @@ foreach ($c in $cases) {
         }
         $sharedHarness = Join-Path $PSScriptRoot "..\windows\Invoke-SharedWslPressureCampaign.ps1"
         $caseOut = & $sharedHarness -ApproveSharedDailyHost -VramMiB ([int]$c.wsl2_vram_mib) `
-            -PreallocateVram -ExternalWorkloadMiB ([int]$c.external_gpu_workload_mib) *>&1 |
+            -ExternalWorkloadMiB ([int]$c.external_gpu_workload_mib) *>&1 |
             ForEach-Object { $_.ToString() }
         $caseOut | Set-Content -Encoding utf8 (Join-Path $OutDir ($c.case + ".out"))
         $campaignSummary = Read-SharedCampaignSummary -OutputLines $caseOut

@@ -50,7 +50,7 @@ impl<M: VramMemory> BlockBackend for VramBackend<M> {
         self.block_size
     }
 
-    fn read_at(&self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
+    fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
         self.mem
             .read_at(off, buf)
             .map_err(|e| IoError(e.to_string()))

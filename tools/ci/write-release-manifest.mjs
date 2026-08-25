@@ -6,7 +6,8 @@ import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
 const SOURCE_SHA_RE = /^[0-9a-f]{40}$/
-const RUST_VERSION_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
+const RUST_VERSION = '1.98.0'
+const RUST_COMMIT_RE = /^[0-9a-f]{40}$/
 const SBOM_GENERATOR = { name: 'cargo-cyclonedx', version: '0.5.9', spec_version: '1.5' }
 const TARGET_TAG = 'v0.9.0-beta.1'
 
@@ -25,7 +26,8 @@ function isObject(value) {
 
 function inputIsValid(input) {
   return isObject(input) && input.tag === TARGET_TAG && SOURCE_SHA_RE.test(input.revision) &&
-    input.clean_tree === true && RUST_VERSION_RE.test(input.rust_version) &&
+    input.clean_tree === true && input.rust_version === RUST_VERSION &&
+    RUST_COMMIT_RE.test(input.rust_commit) &&
     safeRelative(input.bundle_path) && safeRelative(input.checksum_path) && safeRelative(input.sbom_path) &&
     input.checksum_path === `${input.bundle_path}.sha256` &&
     (input.prior_release === 'none' || /^v[0-9][0-9A-Za-z.+-]*$/.test(input.prior_release)) &&
@@ -105,6 +107,7 @@ export function buildReleaseManifest(input, { root = process.cwd() } = {}) {
       clean_tree: true,
       cargo_lock_sha256: lock.sha256,
       rust_version: input.rust_version,
+      rust_commit: input.rust_commit,
     },
     sbom_generator: SBOM_GENERATOR,
     linux_bundle: {
@@ -178,12 +181,12 @@ function parseArguments(argv) {
       continue
     }
     const value = argv[index + 1]
-    if (!['--tag', '--revision', '--rust-version', '--bundle', '--checksum', '--sbom', '--prior-release', '--rollback-trigger', '--out'].includes(key) ||
+    if (!['--tag', '--revision', '--rust-version', '--rust-commit', '--bundle', '--checksum', '--sbom', '--prior-release', '--rollback-trigger', '--out'].includes(key) ||
         typeof value !== 'string' || values.has(key)) return null
     values.set(key, value)
     index += 2
   }
-  const required = ['--tag', '--revision', '--rust-version', '--bundle', '--checksum', '--sbom', '--prior-release', '--rollback-trigger', '--out']
+  const required = ['--tag', '--revision', '--rust-version', '--rust-commit', '--bundle', '--checksum', '--sbom', '--prior-release', '--rollback-trigger', '--out']
   if (!cleanTree || required.some((key) => !values.has(key))) return null
   return {
     input: {
@@ -191,6 +194,7 @@ function parseArguments(argv) {
       revision: values.get('--revision'),
       clean_tree: true,
       rust_version: values.get('--rust-version'),
+      rust_commit: values.get('--rust-commit'),
       bundle_path: values.get('--bundle'),
       checksum_path: values.get('--checksum'),
       sbom_path: values.get('--sbom'),
@@ -208,7 +212,7 @@ export function main(argv = process.argv.slice(2), {
 } = {}) {
   const args = parseArguments(argv)
   if (!args) {
-    error('usage: write-release-manifest.mjs --tag <tag> --revision <sha> --rust-version <version> --bundle <path> --checksum <path> --sbom <path> --prior-release <tag|none> --rollback-trigger <text> --out <path> --clean-tree')
+    error('usage: write-release-manifest.mjs --tag <tag> --revision <sha> --rust-version 1.98.0 --rust-commit <sha> --bundle <path> --checksum <path> --sbom <path> --prior-release <tag|none> --rollback-trigger <text> --out <path> --clean-tree')
     return 2
   }
   if (!resolveOutput(cwd, args.out_path)) {

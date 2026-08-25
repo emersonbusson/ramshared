@@ -1,0 +1,53 @@
+{
+  "schema_version": "ramshared-public-benchmark-claims/v1",
+  "entries": [
+    {
+      "id": "legacy-marketing-benchmark-comparison",
+      "path": "docs/marketing/benchmark-comparison.svg",
+      "file_sha256": "9996dd1292a58109e99bf18ea3aa9365d5981d96fa421c1b1354e927667131b8",
+      "disposition": "legacy-unqualified",
+      "benchmark_id": null,
+      "claims": [
+        "~2,114 µs",
+        "~326 µs",
+        "6.5× faster",
+        "~8 µs",
+        "264× faster than VHDX",
+        "~2,100 MB/s",
+        "~3,200 MB/s",
+        "~9,600 MB/s",
+        "~22% CPU",
+        "~4% CPU",
+        "81% CPU Savings",
+        "Leaves host CPU cores 100% available"
+      ],
+      "reason": "Historical marketing artwork, including its CPU savings and availability statements, predates the evidence envelope, has no qualified benchmark identity, and is non-promotable."
+    },
+    {
+      "id": "legacy-marketing-cascade-en",
+      "path": "docs/marketing/cascade-diagram.svg",
+      "file_sha256": "1cce785e682cfddb6d6b91f153ab6af80cffdb3fe7bf84fb720638c16f8739c9",
+      "disposition": "legacy-unqualified",
+      "benchmark_id": null,
+      "claims": [
+        "ublk path ~8–241 µs",
+        "NBD path ~326 µs",
+        "GPU reclaim ~1.2 s"
+      ],
+      "reason": "Historical diagram values have no qualified evidence identity and remain non-promotable."
+    },
+    {
+      "id": "legacy-marketing-cascade-pt",
+      "path": "docs/marketing/cascade-diagram-pt.svg",
+      "file_sha256": "28bfb66062efeae7316589b5af7c2f2dbdbe3e13918e7afddc90d63ce921fde5",
+      "disposition": "legacy-unqualified",
+      "benchmark_id": null,
+      "claims": [
+        "ublk direto ~8–241 µs",
+        "caminho antigo ~326 µs",
+        "GPU sob pressão ~1,2 s"
+      ],
+      "reason": "Historical translated diagram values have no qualified evidence identity and remain non-promotable."
+    }
+  ]
+}

@@ -1,6 +1,10 @@
 # Benchmark machine-readable results
 
 Append-only JSONL. One object per run. Human log: [`../BENCHMARKS.md`](../BENCHMARKS.md).
+Numeric statements on public README and marketing SVG surfaces are bound by
+[`public-claims.json`](public-claims.json). A `legacy-unqualified` entry keeps
+historical wording auditable but cannot act as a baseline, PASS, or promotion
+claim.
 
 Rules: [`.claude/rules/benchmarks.md`](../../.claude/rules/benchmarks.md).
 

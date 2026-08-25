@@ -13,10 +13,16 @@ const REQUIRED_MANIFEST_KEYS = new Set([
   'protected_document_classes', 'entries',
 ])
 const ENTRY_KEYS = new Set([
-  'canonical_source', 'localized_path', 'source_sha256', 'state', 'policy',
+  'canonical_source', 'localized_path', 'source_sha256', 'translation_sha256',
+  'state', 'state_reason', 'policy', 'reviewer', 'review_receipt', 'reviewed_at',
+])
+const RECEIPT_KEYS = new Set([
+  'schema_version', 'canonical_source', 'localized_path', 'source_sha256',
+  'translation_sha256', 'reviewer', 'reviewed_at', 'verdict',
 ])
 const PROTECTED_CLASSES = new Set(['prd', 'spec', 'impl', 'adr', 'ci', 'evidence', 'benchmark'])
 const POLICY = 'informational-non-normative'
+const LOCALIZATION_STATES = new Set(['current', 'stale', 'partial'])
 const MAX_FILE_BYTES = 512 * 1024
 const MAX_FILES = 2000
 const OBJECTIVES = [
@@ -90,6 +96,16 @@ function entryKeysAreExact(entry) {
   return entry && Object.keys(entry).sort().join(',') === [...ENTRY_KEYS].sort().join(',')
 }
 
+function receiptKeysAreExact(receipt) {
+  return receipt && Object.keys(receipt).sort().join(',') === [...RECEIPT_KEYS].sort().join(',')
+}
+
+function reviewedAt(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(value)) return false
+  const instant = Date.parse(value)
+  return Number.isFinite(instant) && new Date(instant).toISOString() === value.replace(/Z$/, '.000Z')
+}
+
 function protectedPath(relative) {
   const lower = relative.toLowerCase()
   if (lower.startsWith('docs/specs/') || lower.startsWith('docs/decisions/') ||
@@ -116,7 +132,7 @@ export function validateManifest(manifest, root = ROOT) {
   if (!manifest || !manifestKeysAreExact(manifest)) {
     return [finding(MANIFEST_PATH, 1, 'MANIFEST_SCHEMA', 'invalid-manifest-shape')]
   }
-  if (manifest.schema_version !== 1) findings.push(finding(MANIFEST_PATH, 1, 'MANIFEST_SCHEMA', 'unsupported-version'))
+  if (manifest.schema_version !== 2) findings.push(finding(MANIFEST_PATH, 1, 'MANIFEST_SCHEMA', 'unsupported-version'))
   if (manifest.canonical_language !== 'en') findings.push(finding(MANIFEST_PATH, 1, 'MANIFEST_LANGUAGE', 'canonical-language-must-be-en'))
   if (manifest.current_policy !== POLICY) findings.push(finding(MANIFEST_PATH, 1, 'MANIFEST_POLICY', 'unsupported-current-policy'))
   if (!Array.isArray(manifest.protected_document_classes) ||
@@ -145,7 +161,17 @@ export function validateManifest(manifest, root = ROOT) {
     if (!REQUIRED_LOCALIZED.has(entry.localized_path)) findings.push(finding(MANIFEST_PATH, line, 'UNEXPECTED_LOCALIZATION', 'path-is-not-required'))
     if (protectedPath(entry.localized_path)) findings.push(finding(MANIFEST_PATH, line, 'PROTECTED_PATH', 'normative-document-class-is-not-localized'))
     if (!/^[a-f0-9]{64}$/.test(entry.source_sha256)) findings.push(finding(MANIFEST_PATH, line, 'SOURCE_HASH', 'source-sha256-must-be-lowercase-hex'))
-    if (entry.state !== 'current') findings.push(finding(MANIFEST_PATH, line, 'STATE', 'required-localization-is-not-current'))
+    if (!/^[a-f0-9]{64}$/.test(entry.translation_sha256)) findings.push(finding(MANIFEST_PATH, line, 'TRANSLATION_HASH', 'translation-sha256-must-be-lowercase-hex'))
+    if (!LOCALIZATION_STATES.has(entry.state)) findings.push(finding(MANIFEST_PATH, line, 'STATE', 'unsupported-localization-state'))
+    if (entry.state === 'current') {
+      if (typeof entry.reviewer !== 'string' || !/^[a-z0-9][a-z0-9._-]{2,63}$/.test(entry.reviewer)) findings.push(finding(MANIFEST_PATH, line, 'REVIEWER', 'current-localization-requires-nonidentifying-reviewer-role'))
+      if (!safeRelative(entry.review_receipt) || !entry.review_receipt.startsWith('docs/localization/reviews/')) findings.push(finding(MANIFEST_PATH, line, 'REVIEW_RECEIPT', 'current-localization-requires-scoped-receipt'))
+      if (!reviewedAt(entry.reviewed_at)) findings.push(finding(MANIFEST_PATH, line, 'REVIEWED_AT', 'current-localization-requires-review-time'))
+      if (entry.state_reason !== null) findings.push(finding(MANIFEST_PATH, line, 'STATE_REASON', 'current-localization-must-not-have-incomplete-reason'))
+    } else {
+      if (typeof entry.state_reason !== 'string' || !entry.state_reason.trim()) findings.push(finding(MANIFEST_PATH, line, 'STATE_REASON', 'incomplete-localization-requires-reason'))
+      if (entry.reviewer !== null || entry.review_receipt !== null || entry.reviewed_at !== null) findings.push(finding(MANIFEST_PATH, line, 'REVIEW_STATE', 'incomplete-localization-cannot-claim-review'))
+    }
     if (entry.policy !== POLICY) findings.push(finding(MANIFEST_PATH, line, 'POLICY', 'localized-policy-must-be-informational'))
     if (safeRelative(entry.canonical_source) && !existsSync(path.join(root, entry.canonical_source))) {
       findings.push(finding(MANIFEST_PATH, line, 'MISSING_CANONICAL', 'canonical-source-is-missing'))
@@ -155,6 +181,31 @@ export function validateManifest(manifest, root = ROOT) {
     if (!localized.has(required)) findings.push(finding(MANIFEST_PATH, 1, 'MISSING_ENTRY', 'required-localization-entry-is-missing'))
   }
   return sorted(findings)
+}
+
+function validateReviewReceipt(entry, root) {
+  if (entry.state !== 'current' || !safeRelative(entry.review_receipt)) return []
+  const findings = []
+  const text = fileText(root, entry.review_receipt)
+  let receipt
+  try { receipt = text === null ? null : JSON.parse(text) } catch { receipt = null }
+  if (!receipt || !receiptKeysAreExact(receipt)) {
+    return [finding(entry.review_receipt, 1, 'REVIEW_RECEIPT', 'missing-or-invalid-review-receipt')]
+  }
+  const expected = {
+    schema_version: 'ramshared-localization-review/v1',
+    canonical_source: entry.canonical_source,
+    localized_path: entry.localized_path,
+    source_sha256: entry.source_sha256,
+    translation_sha256: entry.translation_sha256,
+    reviewer: entry.reviewer,
+    reviewed_at: entry.reviewed_at,
+    verdict: 'approved',
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    if (receipt[key] !== value) findings.push(finding(entry.review_receipt, 1, 'REVIEW_BINDING', key))
+  }
+  return findings
 }
 
 export function scanMarkdownLinks(text, sourcePath) {
@@ -246,6 +297,9 @@ export function validateLocalizations(manifest, root = ROOT) {
     }
     const expectedHash = hashFile(root, entry.canonical_source)
     if (expectedHash === null || expectedHash !== entry.source_sha256) findings.push(finding(MANIFEST_PATH, 1, 'STALE_HASH', 'canonical-source-hash-does-not-match'))
+    const translationHash = hashFile(root, entry.localized_path)
+    if (translationHash === null || translationHash !== entry.translation_sha256) findings.push(finding(MANIFEST_PATH, 1, 'STALE_TRANSLATION_HASH', 'localized-content-hash-does-not-match'))
+    findings.push(...validateReviewReceipt(entry, root))
   }
   const english = fileText(root, 'README.md')
   if (english === null) {
@@ -263,7 +317,9 @@ export function run({ root = ROOT } = {}) {
   const manifest = loadManifest(root)
   const findings = validateLocalizations(manifest, root)
   const files = manifest?.entries?.length ?? 0
-  return { ok: findings.length === 0, findings, counts: { files, findings: findings.length } }
+  const incomplete = (manifest?.entries ?? []).some((entry) => entry?.state !== 'current')
+  const status = findings.length > 0 ? 'NO-GO' : incomplete ? 'PARTIAL' : 'PASS'
+  return { ok: findings.length === 0, status, findings, counts: { files, findings: findings.length } }
 }
 
 export function main(argv = process.argv.slice(2)) {
@@ -276,7 +332,7 @@ export function main(argv = process.argv.slice(2)) {
   console.log(`FILES=${result.counts.files}`)
   for (const item of result.findings) console.error(`${item.path}:${item.line} — ${item.rule} — ${item.reason}`)
   console.log(`FINDINGS=${result.counts.findings}`)
-  console.log(`LOCALIZATION_STATUS=${result.ok ? 'PASS' : 'NO-GO'}`)
+  console.log(`LOCALIZATION_STATUS=${result.status}`)
   return result.ok ? 0 : 1
 }
 

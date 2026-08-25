@@ -53,6 +53,9 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/release-policy"
           cp -- tmp/recovery-policy/tools/ci/merge-release-sboms.mjs "$RUNNER_TEMP/release-policy/merge-release-sboms.mjs"
+          cp -- tmp/recovery-policy/tools/ci/write-release-manifest.mjs "$RUNNER_TEMP/release-policy/write-release-manifest.mjs"
+          cp -- tmp/recovery-policy/tools/ci/check-release-integrity.mjs "$RUNNER_TEMP/release-policy/check-release-integrity.mjs"
+          cp -- tmp/recovery-policy/tools/ci/check-ci-artifacts.mjs "$RUNNER_TEMP/release-policy/check-ci-artifacts.mjs"
 
       - name: Checkout tag source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -60,8 +63,10 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}
           fetch-depth: 0
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Set up Rust 1.98.0
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # action pinned
+        with:
+          toolchain: 1.98.0
 
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
@@ -129,11 +134,20 @@ jobs:
           set -euo pipefail
           prior_release="$(git tag --merged "$RELEASE_REVISION" --list 'v*' --sort=-version:refname | awk -v current="$RELEASE_TAG" '$0 != current { print; exit }')"
           if [ -z "$prior_release" ]; then prior_release=none; fi
-          rust_version="$(rustc --version | awk '{print $2}')"
-          node tools/ci/write-release-manifest.mjs \
+          rust_verbose="$(rustc -vV)"
+          rust_version="$(printf '%s\n' "$rust_verbose" | awk '$1 == "release:" {print $2}')"
+          rust_commit="$(printf '%s\n' "$rust_verbose" | awk '$1 == "commit-hash:" {print $2}')"
+          test "$rust_version" = 1.98.0
+          printf '%s\n' "$rust_commit" | grep -Eq '^[0-9a-f]{40}$'
+          manifest_writer=tools/ci/write-release-manifest.mjs
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            manifest_writer="$RUNNER_TEMP/release-policy/write-release-manifest.mjs"
+          fi
+          node "$manifest_writer" \
             --tag "$RELEASE_TAG" \
             --revision "$RELEASE_REVISION" \
             --rust-version "$rust_version" \
+            --rust-commit "$rust_commit" \
             --bundle "artifacts/release/ramshared-linux-$RELEASE_TAG.tar.gz" \
             --checksum "artifacts/release/ramshared-linux-$RELEASE_TAG.tar.gz.sha256" \
             --sbom artifacts/release/ramshared-sbom.cdx.json \
@@ -144,7 +158,13 @@ jobs:
 
       - name: Validate release manifest
         shell: bash
-        run: node tools/ci/check-release-integrity.mjs --check artifacts/release/release-manifest.json --root . --tag "$RELEASE_TAG" --revision "$RELEASE_REVISION"
+        run: |
+          set -euo pipefail
+          integrity_checker=tools/ci/check-release-integrity.mjs
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            integrity_checker="$RUNNER_TEMP/release-policy/check-release-integrity.mjs"
+          fi
+          node "$integrity_checker" --check artifacts/release/release-manifest.json --root . --tag "$RELEASE_TAG" --revision "$RELEASE_REVISION"
 
       - name: Stage exact integrity candidate
         shell: bash

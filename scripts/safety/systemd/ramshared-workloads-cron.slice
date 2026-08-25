@@ -1,0 +1,8 @@
+[Unit]
+Description=RamShared cron workload budget
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+IOAccounting=yes
+TasksAccounting=yes

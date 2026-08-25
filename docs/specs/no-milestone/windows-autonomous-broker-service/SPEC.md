@@ -455,7 +455,7 @@
 - Before → after: user-configurable socket address → fixed authenticated local transport selector.
 - Callers/docs: `product_online.rs`, example TOML, guest/host campaigns.
 - Tests: `accept_named_pipe_v1`, `reject_tcp_daily_transport`, `reject_ready_timeout_over_30`, `reject_unknown_broker_fields`.
-- Cover: ≥80%.
+- Cover: ≥80% through the canonical `windows-storport-cuda-vram` owner.
 - Kahneman: #13.
 
 **`crates/ramshared-winsvc/src/product_online.rs`**
@@ -476,7 +476,7 @@
 - Symbols: `RuntimePhase`, `RuntimeErrorClass`, `ProductCommand`, `parse_product_cli`, `run_runtime`.
 - Before → after: install/uninstall mutation embedded in `main.rs` and generic broker error → explicit product lifecycle/status/error states.
 - Tests: `status_json_parses`, `start_stop_commands_are_explicit`, `online_broker_loss_is_not_replayed`, `unsafe_uninstall_plan_refuses`, existing runtime tests.
-- Cover: ≥80%.
+- Cover: ≥80% through the canonical `windows-storport-cuda-vram` owner.
 - Kahneman: #13/#17.
 
 **`crates/ramshared-winsvc/src/evidence.rs`**
@@ -485,7 +485,7 @@
 - RF / DT: RF-6; DT-10, DT-12.
 - Symbols: `RuntimeEvidence`, `EvidenceWriter::append`, evidence reader/summary.
 - Tests: `lifecycle_row_has_broker_identity`, `oversized_lifecycle_row_is_refused`, `status_uses_last_complete_row`.
-- Cover: ≥80%.
+- Cover: ≥80% through the canonical `windows-storport-cuda-vram` owner.
 
 **`crates/ramshared-winsvc/src/main.rs`**
 
@@ -695,24 +695,30 @@ No tracked file is deleted at SPEC time. During ITEM-6, delete
 | Production path | Test (`file` :: `name`) | Kind | Kahneman | Cover |
 | --- | --- | --- | --- | --- |
 | Shared logical lease | `crates/ramshared-broker/src/lease.rs` :: `zero_and_over_capacity_are_denied`, `request_stays_pending_until_explicit_grant`, `grant_may_round_to_slice_capacity`, `second_holder_is_denied`, `wrong_holder_cannot_release`, `lease_book_release_twice_is_one_transition`, `disconnect_cancels_or_releases_only_holder`, `lease_id_wrap_is_refused` | unit | #13/#17 | ≥80% |
-| Linux broker equivalence and release authorization | `crates/ramshared-wsl2d/src/broker_srv.rs` :: `register_assigns_stable_id_and_acks_psi`, `duplicate_register_is_rejected`, `proto_mismatch_rejected`, `lease_granted_from_free_slices`, `lease_denied_when_in_progress`, `lease_denied_over_capacity`, `lease_release_returns_slices`, `lease_revokes_active_then_grants_after_zero`, `lease_released_when_holder_disconnects`, `windrive_nao_recebe_swap`, `windrive_pode_lease`, `foreign_tenant_cannot_release_lease`, `shared_lease_book_preserves_linux_wire_effects` | unit/regression | #13/#17 | Touched lease business logic ≥80% |
+| Linux broker equivalence and release authorization | `crates/ramshared-wsl2d/src/broker_srv.rs` :: `register_assigns_stable_id_and_acks_psi`, `duplicate_register_is_rejected`, `proto_mismatch_rejected`, `lease_granted_from_free_slices`, `lease_denied_when_in_progress`, `lease_denied_over_capacity`, `lease_release_returns_slices`, `lease_revokes_active_then_grants_after_zero`, `lease_released_when_holder_disconnects`, `windrive_does_not_receive_swap`, `windrive_can_lease`, `foreign_tenant_cannot_release_lease`, `shared_lease_book_preserves_linux_wire_effects` | unit/regression | #13/#17 | Touched lease business logic ≥80% |
 | Windows broker pure core | `crates/ramshared-winbroker/src/lib.rs` :: `register_is_readiness_without_lease`, `message_before_register_is_refused`, `tenant_mismatch_is_refused`, `one_live_session_only`, `exact_lease_grant_and_release`, `disconnect_releases_server_state_and_audits_ambiguous`, `status_has_instance_and_lease_state` | unit | #13/#17 | ≥80% |
 | Broker/config CLI | `crates/ramshared-winbroker/src/main.rs` :: `cli_rejects_relative_config`, `cli_has_no_tcp_listen_option`, `cli_has_no_install_mutation` | unit | #13 | ≥80% parser |
-| Product config boundary | `crates/ramshared-winsvc/src/config.rs` :: `accept_named_pipe_v1`, `reject_tcp_daily_transport`, `reject_ready_timeout_over_30`, `reject_unknown_broker_fields` | unit | #13 | ≥80% |
+| Product config boundary | `crates/ramshared-winsvc/src/config.rs` :: `accept_named_pipe_v1`, `reject_tcp_daily_transport`, `reject_ready_timeout_over_30`, `reject_unknown_broker_fields` | unit | #13 | ≥80% via canonical storport owner |
 | Pipe retry policy | `crates/ramshared-winsvc/src/ipc.rs` :: `only_not_found_and_busy_retry`, `deadline_stops_retry` | unit | #15 | ≥80% helper |
 | Manifest/package planning | `crates/ramshared-winsvc/src/package.rs` :: `manifest_rejects_unknown_and_over_64k`, `artifact_path_cannot_escape`, `hash_must_be_sha256_hex`, `mixed_commit_is_refused`, `broker_capacity_must_equal_lun_size`, `broker_tenant_must_equal_winsvc_tenant`, `same_version_repair_is_idempotent`, `half_registered_candidate_rolls_back_old_definitions`, `uninstall_refuses_owned_storage` | unit | #2/#13/#17 | ≥80% |
-| Runtime containment | `crates/ramshared-winsvc/src/runtime.rs` :: `failure_after_lease_releases_once`, `failure_after_cuda_frees_before_release`, `failure_after_create_destroys_before_free`, `failure_after_register_unwinds_reverse`, `deterministic_failure_is_not_retried`, `busy_observation_is_bounded`, `stop_twice_has_one_effect`, `ambiguous_crash_state_is_not_replayed`, `cuda_watchdog_does_not_destroy_stuck_context`, `online_broker_loss_is_not_replayed`, `unsafe_uninstall_plan_refuses` | unit | #13/#16/#17 | ≥80% |
-| Evidence/status | `crates/ramshared-winsvc/src/evidence.rs` :: `append_preserves_prior_rows`, `schema_has_no_pointer_or_payload_fields`, `stable_error_redacts_payload`, `each_phase_transition_gets_a_fresh_event_identity_and_timestamp`, `read_all_rows_missing_file_yields_not_found`, `read_all_rows_invalid_json_yields_invalid_data`, `lifecycle_row_has_broker_identity`, `oversized_lifecycle_row_is_refused`, `status_uses_last_complete_row`, `status_never_promotes_stale_evidence_to_current_health` | unit | #9/#13 | ≥80% |
+| Runtime containment | `crates/ramshared-winsvc/src/runtime.rs` :: `failure_after_lease_releases_once`, `failure_after_cuda_frees_before_release`, `failure_after_create_destroys_before_free`, `failure_after_register_unwinds_reverse`, `deterministic_failure_is_not_retried`, `busy_observation_is_bounded`, `stop_twice_has_one_effect`, `ambiguous_crash_state_is_not_replayed`, `cuda_watchdog_does_not_destroy_stuck_context`, `online_broker_loss_is_not_replayed`, `unsafe_uninstall_plan_refuses` | unit | #13/#16/#17 | ≥80% via canonical storport owner |
+| Evidence/status | `crates/ramshared-winsvc/src/evidence.rs` :: `append_preserves_prior_rows`, `schema_has_no_pointer_or_payload_fields`, `stable_error_discards_free_form_detail`, `each_phase_transition_gets_a_fresh_event_identity_and_timestamp`, `read_all_rows_missing_file_yields_not_found`, `read_all_rows_invalid_json_yields_invalid_data`, `lifecycle_row_has_broker_identity`, `oversized_lifecycle_row_is_refused`, `status_uses_last_complete_row`, `status_never_promotes_stale_evidence_to_current_health` | unit | #9/#13 | ≥80% via canonical storport owner |
 | SCM/IPC peer boundary | `scripts/windows/Run-GuestBrokerService.ps1` :: `legitimate_service_sid_connects`, `administrator_protocol_connect_is_refused`, `unrelated_service_is_refused`, `deny_only_service_sid_is_refused`, `oversized_line_is_refused`, `partial_frame_times_out`, `stop_cancels_blocked_accept`, `stop_cancels_blocked_read`, `status_pipe_rejects_mutation`, `scm_start_ready_stop`, `broker_event_log_transition`, `fourth_failure_remains_stopped`, `deterministic_failure_does_not_restart` | isolated VM | #13/#15/#16 | N/A — Windows E2E |
 | Package transactions | `scripts/windows/Run-GuestProductPackage.ps1` :: `FreshInstall`, `Repair`, `ManufacturedRollback`, `UninstallRefusal`, `CleanUninstall` | isolated VM | #2/#17 | N/A — Windows E2E |
 | Online broker loss | `scripts/windows/Run-GuestBrokerService.ps1` :: `BrokerLossOnline` | isolated VM | #16 | N/A — Windows E2E |
-| Autonomous VM lifecycle | `scripts/windows/Run-GuestAutonomousLifecycle.ps1` :: `cold_boot_no_login`, `three_round_sha`, `consumer_first_stop`, `lease_release`, `zero_residue`, `current_online_evidence_failure_is_red`, `event153_query_failure_is_red`, `recovery_volume_query_failure_is_red`, `guest_lifecycle_forwards_explicit_host_bin_dir`, `psdirect_outer_deadline_is_enforced`, `psdirect_redirected_streams_are_drained`, `psdirect_timeout_terminates_child_tree`, `psdirect_nonzero_child_is_red`, `psdirect_calls_are_session_finally_cleaned`, `deferred_guest_shutdown_preserves_psdirect_result` | isolated VM/static | #9/#13/#15/#16 | N/A — Windows E2E |
-| VM PowerShell Direct deadline seam | `scripts/windows/Test-GuestPsDirectDeadlineStatic.ps1` :: `psdirect_outer_deadline_is_enforced`, `psdirect_redirected_streams_are_drained`, `psdirect_timeout_terminates_child_tree`, `psdirect_nonzero_child_is_red`, `psdirect_calls_are_session_finally_cleaned`, `deferred_guest_shutdown_preserves_psdirect_result`, `psdirect_runner_uses_current_host_executable` | manufactured | #13/#15/#16/#17 | N/A — PowerShell seam |
-| Static product boundary | `scripts/windows/Test-AutonomousBrokerStatic.ps1` :: `BROKER_BINARY_MATCH`, `SCM_DEPENDENCY_MATCH`, `SERVICE_SID_MATCH`, `DAILY_TCP_LISTENER_ABSENT`, `NO_LAB_BROKER_REFERENCE`; `scripts/windows/Test-HostExhaustiveStatic.ps1` :: `package_broker_required`, `consumer_first_stop_required`, `complete_pass_gate` | static | #13 | N/A — harness |
+| Autonomous VM lifecycle | `scripts/windows/Run-GuestAutonomousLifecycle.ps1` :: `cold_boot_no_login`, `three_round_sha`, `consumer_first_stop`, `lease_release`, `zero_residue`, `current_online_evidence_failure_is_red`, `event153_query_failure_is_red`, `recovery_volume_query_failure_is_red`, `guest_lifecycle_forwards_explicit_host_bin_dir`, `psdirect_outer_deadline_is_enforced`, `psdirect_redirected_streams_are_deadline_bounded`, `psdirect_timeout_fails_closed_without_numeric_pid_kill`, `psdirect_nonzero_child_is_red`, `psdirect_calls_are_session_finally_cleaned`, `deferred_guest_shutdown_preserves_psdirect_result` | isolated VM/static | #9/#13/#15/#16 | N/A — Windows E2E |
+| VM PowerShell Direct deadline seam | `scripts/windows/Test-GuestPsDirectDeadlineStatic.ps1` :: `psdirect_outer_deadline_is_enforced`, `psdirect_redirected_streams_are_deadline_bounded`, `psdirect_timeout_fails_closed_without_numeric_pid_kill`, `psdirect_nonzero_child_is_red`, `psdirect_calls_are_session_finally_cleaned`, `deferred_guest_shutdown_preserves_psdirect_result`, `psdirect_runner_uses_current_host_executable` | manufactured | #13/#15/#16/#17 | N/A — PowerShell seam |
+| Static product boundary | `scripts/windows/Test-AutonomousBrokerStatic.ps1` :: `BROKER_BINARY_MATCH`, `SCM_DEPENDENCY_MATCH`, `SERVICE_SID_MATCH`, `DAILY_TCP_LISTENER_ABSENT`, `NO_LAB_BROKER_REFERENCE`; `scripts/windows/Test-HostExhaustiveStatic.ps1` :: `Test-HostExhaustiveStatic` | static | #13 | N/A — harness |
 | Physical immutable package | `scripts/windows/Run-HostAutonomousLifecycle.ps1` :: `three_cold_boots_same_manifest`, `final_preflight_clean`, `resume_marker_is_monotonic`, `cleanup_artifacts_complete`, `intended_payload_corruption_is_red`, `exact_online_identity_required_before_format`, `non_raw_lun_refuses_before_mutation`, `active_pagefile_refuses_before_install`, `configured_pagefile_refuses_before_install`, `pagefile_query_failure_refuses_before_install`, `stop_request_error_is_red`, `bounded_child_terminates_process_tree`, `resume_task_has_one_time_token_without_approval_switch`, `stale_or_replayed_resume_token_is_refused`, `watchdog_shutdown_requires_separate_approval`, `failure_cleanup_disarms_watchdog_and_task` | manufactured + physical supervised | #5/#9/#16/#17 | N/A — environment-bound |
 | Physical harness manufactured safety | `scripts/windows/Test-HostAutonomousLifecycleStatic.ps1` :: `intended_payload_corruption_is_red`, `exact_online_identity_required_before_format`, `non_raw_lun_refuses_before_mutation`, `active_pagefile_refuses_before_install`, `configured_pagefile_refuses_before_install`, `pagefile_query_failure_refuses_before_install`, `stop_request_error_is_red`, `bounded_child_terminates_process_tree`, `static_child_uses_current_host_executable`, `resume_task_has_one_time_token_without_approval_switch`, `stale_or_replayed_resume_token_is_refused`, `watchdog_shutdown_requires_separate_approval`, `failure_cleanup_disarms_watchdog_and_task` | manufactured | #13/#15/#16/#17 | N/A — PowerShell seam |
 
 Required command gates before ITEM-8 can close:
+
+The autonomous winsvc slice owns pure-line coverage only for its unique
+authenticated-pipe helper (`ipc.rs`) and transactional package planner
+(`package.rs`). Its required config/runtime/evidence tests remain feature
+evidence, while `windows-storport-cuda-vram` is the single pure-line owner for
+those three shared storage-product modules.
 
 ```text
 cargo fmt --all -- --check
@@ -725,7 +731,7 @@ cargo check -p ramshared-winbroker --target x86_64-pc-windows-msvc
 cargo check -p ramshared-winsvc --target x86_64-pc-windows-msvc
 node tools/ci/check-rust-slice-coverage.mjs -p ramshared-broker --files crates/ramshared-broker/src/lease.rs --min 80
 node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winbroker --files crates/ramshared-winbroker/src/lib.rs --min 80
-node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/ipc.rs,crates/ramshared-winsvc/src/package.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/evidence.rs --min 80
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/ipc.rs,crates/ramshared-winsvc/src/package.rs --min 80
 pwsh -NoProfile -File scripts/windows/Test-AutonomousBrokerStatic.ps1
 pwsh -NoProfile -File scripts/windows/Test-HostExhaustiveStatic.ps1
 ./scripts/docs-check.sh

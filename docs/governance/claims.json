@@ -3,7 +3,7 @@
   "claims": [
     {
       "slug": "benchmark-evidence-integrity",
-      "state": "DONE",
+      "state": "PARTIAL",
       "owner_role": "documentation-governance",
       "canonical_spec": "docs/specs/no-milestone/benchmark-evidence-integrity/SPEC.md",
       "implementation_paths": [
@@ -27,16 +27,16 @@
       },
       "validation": {
         "record_path": "validation.md",
-        "verdict": "✅",
+        "verdict": "🟡",
         "source_commit": "95739d1f972bcefe7eb5df8861cf8c526503e074",
         "evidence_paths": [
           "docs/specs/no-milestone/benchmark-evidence-integrity/evidence-manifest.json"
         ]
       },
       "binary_match_required": false,
-      "environment_blocker": null,
-      "missing_gate": null,
-      "next_proof": null,
+      "environment_blocker": "The recorded source revision does not contain the canonical SPEC, declared evidence manifest, or checker closure referenced by this claim.",
+      "missing_gate": "same-revision benchmark-evidence claim closure",
+      "next_proof": "Create a fresh validation record on a revision that contains the SPEC, implementation, named tests, coverage evidence, and evidence manifest; then re-evaluate the claim without rewriting historical records.",
       "rollback_trigger": "one invalid evidence record or false DONE passes"
     },
     {
@@ -46,8 +46,10 @@
       "canonical_spec": "docs/specs/no-milestone/documentation-governance-integrity/SPEC.md",
       "implementation_paths": [
         "tools/ci/check-documentation-governance.mjs",
+        "tools/ci/documentation-claim-closure.mjs",
         "tools/ci/check-validation-schema.mjs",
-        "tools/generate-docs-index.mjs"
+        "tools/generate-docs-index.mjs",
+        "docs/governance/claim-closures.schema.json"
       ],
       "named_tests": [
         {
@@ -61,6 +63,14 @@
         {
           "path": "tools/generate-docs-index.test.mjs",
           "name": "build_rows_fails_closed_to_unqualified_without_done_claim"
+        },
+        {
+          "path": "tools/ci/documentation-claim-closure.test.mjs",
+          "name": "valid_same_revision_claim_closure_passes"
+        },
+        {
+          "path": "tools/ci/documentation-claim-closure.test.mjs",
+          "name": "claim_digest_rejects_owner_rollback_status_and_evidence_tamper"
         }
       ],
       "cover": {
@@ -84,7 +94,7 @@
     },
     {
       "slug": "documentation-localization-integrity",
-      "state": "DONE",
+      "state": "PARTIAL",
       "owner_role": "documentation-governance",
       "canonical_spec": "docs/specs/no-milestone/documentation-localization-integrity/SPEC.md",
       "implementation_paths": [
@@ -108,21 +118,21 @@
       },
       "validation": {
         "record_path": "validation.md",
-        "verdict": "✅",
+        "verdict": "🟡",
         "source_commit": "95739d1f972bcefe7eb5df8861cf8c526503e074",
         "evidence_paths": [
           "docs/specs/no-milestone/documentation-localization-integrity/evidence-manifest.json"
         ]
       },
       "binary_match_required": false,
-      "environment_blocker": null,
-      "missing_gate": null,
-      "next_proof": null,
+      "environment_blocker": "The manifest marks both translations current against a source hash that does not match the present README, and the recorded source revision lacks the declared evidence closure.",
+      "missing_gate": "same-revision reviewed localization receipt for canonical and localized content",
+      "next_proof": "Review both translations against the current README, record canonical and localized digests plus reviewer evidence, and only then update the manifest and claim on the same revision.",
       "rollback_trigger": "one stale hash, broken switch, or authority claim passes"
     },
     {
       "slug": "public-repository-hygiene",
-      "state": "DONE",
+      "state": "PARTIAL",
       "owner_role": "documentation-governance",
       "canonical_spec": "docs/specs/no-milestone/public-repository-hygiene/SPEC.md",
       "implementation_paths": [
@@ -146,16 +156,16 @@
       },
       "validation": {
         "record_path": "validation.md",
-        "verdict": "✅",
+        "verdict": "🟡",
         "source_commit": "95739d1f972bcefe7eb5df8861cf8c526503e074",
         "evidence_paths": [
           "docs/specs/no-milestone/public-repository-hygiene/evidence-manifest.json"
         ]
       },
       "binary_match_required": false,
-      "environment_blocker": null,
-      "missing_gate": null,
-      "next_proof": null,
+      "environment_blocker": "The recorded source revision contains only part of the declared implementation surface and does not contain the canonical SPEC, named-test file, or evidence manifests required by this claim.",
+      "missing_gate": "same-revision public-hygiene claim closure",
+      "next_proof": "Create a fresh validation record on one revision that contains the SPEC, implementation, named tests, coverage evidence, and evidence manifest; keep prior validation entries historical.",
       "rollback_trigger": "one candidate bypass or sensitive diagnostic passes"
     }
   ]

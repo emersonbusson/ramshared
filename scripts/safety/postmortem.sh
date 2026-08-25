@@ -41,11 +41,59 @@ TMPDIR_PM="$(mktemp -d)"; trap 'rm -rf "$TMPDIR_PM"' EXIT
 # Kahneman #13: bare "Call Trace:" and Docker memcg OOM are NOT kernel BUG.
 # \b avoids false positives: "kernelOOPSie"/"wh-OOPS-ie" miss \bOops:, "deBUG:" misses \bBUG.
 # hung_task / blocked (ghost ublk swap) and panics stay kernel-class.
-CRASH_RE_KERNEL='kernel BUG|\bBUG:|\[ cut here \]|\bOops[:# ]|hung_task|blocked for more than [0-9]|general protection fault|kernel panic|stack segment|kernel NULL pointer|task .* blocked for more than'
+CRASH_RE_KERNEL='kernel BUG|\bBUG:|\bOops[:# ]|hung_task|blocked for more than [0-9]|general protection fault|kernel panic|stack segment|kernel NULL pointer|task .* blocked for more than'
+WARNING_RE_BOOT='\[ cut here \]|dxg warning'
 # OOM / pressure: report in a separate section; do not label as kernel CRASH alone.
 CRASH_RE_OOM='Out of memory:|oom-kill:|Memory cgroup out of memory'
 # Union for evidence grep (kernel + OOM); verdict uses classification.
 CRASH_RE="${CRASH_RE_KERNEL}|${CRASH_RE_OOM}"
+
+if [[ ${1:-} == --classify ]]; then
+  [[ $# == 4 && -f $2 ]] || { echo "usage: postmortem.sh --classify JOURNAL START_ISO END_ISO" >&2; exit 2; }
+  python3 - "$2" "$3" "$4" <<'PY'
+import json
+import re
+import sys
+
+path, start, end = sys.argv[1:]
+timestamp_re = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z)")
+patterns = {
+    "host_volume_exhausted": re.compile(r"(?=.*(?:NTFS|Ntfs|Event(?: ID)? 137))(?=.*(?:0xC000007F|STATUS_DISK_FULL))", re.I),
+    "guest_pressure_unresponsive": re.compile(r"heartbeat_stale|supervisor_delay|PSI full", re.I),
+    "guest_oom": re.compile(r"Out of memory:|oom-kill:|Memory cgroup out of memory", re.I),
+    "kernel_warning_at_boot": re.compile(r"\[ cut here \]|dxg warning", re.I),
+    "kernel_crash": re.compile(r"kernel BUG|\bBUG:|\bOops[:# ]|kernel panic|general protection fault|blocked for more than", re.I),
+    "host_reboot": re.compile(r"Kernel-Power.*(?:41|6008)|host_reboot", re.I),
+    "wsl_terminate": re.compile(r"targeted_terminate|wsl_terminate", re.I),
+}
+evidence = {key: [] for key in patterns}
+with open(path, encoding="utf-8", errors="replace") as stream:
+    for line in stream:
+        match = timestamp_re.search(line)
+        timestamp = match.group(1) if match else None
+        in_window = timestamp is not None and start <= timestamp <= end
+        for name, pattern in patterns.items():
+            if not pattern.search(line):
+                continue
+            if name == "kernel_warning_at_boot":
+                if not in_window:
+                    evidence[name].append({"timestamp": timestamp, "relation": "outside_incident_window"})
+            elif in_window:
+                evidence[name].append({"timestamp": timestamp, "relation": "inside_incident_window"})
+
+records = []
+for name in patterns:
+    found = evidence[name]
+    records.append({
+        "classification": name,
+        "present": bool(found),
+        "evidence": found,
+        "counterevidence": [] if found else ["no matching event inside the required temporal relation"],
+    })
+print(json.dumps({"schema_version": 1, "incident_window": {"start": start, "end": end}, "classifications": records}, sort_keys=True, separators=(",", ":")))
+PY
+  exit $?
+fi
 
 # Materializes the boot journal once (prevents calling journalctl N times AND avoids
 # the pipefail+grep-q+SIGPIPE gotcha that caused false "no crash" reports).
@@ -61,6 +109,10 @@ boot_has_kernel_crash() { # $1 = boot index
 
 boot_has_oom() { # $1 = boot index
   grep -qiE "$CRASH_RE_OOM" "$(dump_boot "$1")"
+}
+
+boot_has_warning_at_boot() { # $1 = boot index
+  grep -qiE "$WARNING_RE_BOOT" "$(dump_boot "$1")"
 }
 
 # --auto: coleta se kernel crash OU OOM (ainda relevante forense) OU armed
@@ -108,14 +160,16 @@ REPORT="$FORENSICS_DIR/postmortem-${TS}-boot${BOOT_INDEX}.md"
 
   echo "## 1. Veredito rapido"
   if boot_has_kernel_crash "$BOOT_INDEX"; then
-    echo "- **KERNEL CRASH / hang-class** on boot ${BOOT_INDEX} (BUG/Oops/panic/hung_task/blocked)."
+    echo "- \`kernel_crash\`: BUG/Oops/panic/hung_task/blocked evidence on boot ${BOOT_INDEX}."
   elif boot_has_oom "$BOOT_INDEX"; then
-    echo "- **OOM / memory pressure** on boot ${BOOT_INDEX} (process or memcg) — **not** labeled kernel CRASH."
+    echo "- \`guest_oom\`: process or memcg OOM on boot ${BOOT_INDEX}; not kernel crash."
     echo "  (e.g. Docker container memcg OOM ≠ RamShared cascade BUG; see section 2b.)"
+  elif boot_has_warning_at_boot "$BOOT_INDEX"; then
+    echo "- \`kernel_warning_at_boot\`: warning is recorded independently and is not incident kernel_crash evidence."
   else
     echo "- No kernel-crash or OOM signature on boot ${BOOT_INDEX}."
-    echo "  (No WSL2 um fim abrupto sem esta assinatura geralmente = \`wsl --shutdown\` ou VM"
-    echo "   morta pelo host, NAO um kernel BUG do guest. Ver Event Log do Windows abaixo.)"
+    echo "  (In WSL2 an abrupt shutdown without this signature may be a targeted terminate or VM"
+    echo "   terminated by the host; this does NOT prove guest kernel BUG. See Windows Event Log below.)"
   fi
   # Common operational noise (ghost unit, restart loop) — not a crash
   BOOT_LOG_PREVIEW="$(dump_boot "$BOOT_INDEX")"
@@ -172,6 +226,14 @@ REPORT="$FORENSICS_DIR/postmortem-${TS}-boot${BOOT_INDEX}.md"
       Write-Output '--- Hyper-V-VmSwitch (teardown/recriacao de VM = restart do WSL), ultimos 10 ---'
       Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Hyper-V-VmSwitch'} -MaxEvents 10 |
         Select-Object TimeCreated, Id, @{N='Msg';E={(\$_.Message -split \"\`n\")[0]}} |
+        Format-Table -AutoSize -Wrap | Out-String -Width 200
+      Write-Output '--- NTFS Event 137 (XML/status diferencia disco cheio), ultimos 10 ---'
+      Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Ntfs'; Id=137} -MaxEvents 10 |
+        Select-Object TimeCreated, Id, ProviderName, Message, @{N='Xml';E={\$_.ToXml()}} |
+        Format-List | Out-String -Width 240
+      Write-Output '--- Resource Exhaustion Detector, ultimos 10 ---'
+      Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Resource-Exhaustion-Detector'} -MaxEvents 10 |
+        Select-Object TimeCreated, Id, ProviderName, @{N='Msg';E={(\$_.Message -split \"\`n\")[0]}} |
         Format-Table -AutoSize -Wrap | Out-String -Width 200
     " 2>&1 | tr -d '\r' | iconv -f UTF-8 -t UTF-8//TRANSLIT 2>/dev/null || true
     echo '```'

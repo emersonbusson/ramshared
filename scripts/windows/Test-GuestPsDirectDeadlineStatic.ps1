@@ -65,6 +65,7 @@ $packageAst = Get-ParsedAst $GuestPackagePath
 foreach ($functionName in @(
         "Quote-GuestProcessArgument",
         "Limit-GuestChildDiagnostics",
+        "Stop-GuestProcessInstanceSafely",
         "Invoke-BoundedGuestProcess",
         "Assert-GuestPsDirectChildSucceeded",
         "New-GuestPsDirectWorkerText")) {
@@ -74,8 +75,7 @@ foreach ($functionName in @(
 foreach ($needle in @(
         "ReadToEndAsync",
         "[Threading.Tasks.Task]::WaitAll",
-        "taskkill.exe",
-        "/T /F",
+        "process_instance_handle_terminated",
         "Copy-Item",
         "-ToSession",
         "-FromSession",
@@ -85,6 +85,29 @@ foreach ($needle in @(
     if ($helperText -notmatch [regex]::Escape($needle)) {
         throw "psdirect_outer_deadline_is_enforced failed: missing helper guard $needle"
     }
+}
+if ($helperText -notmatch [regex]::Escape("Stop-GuestProcessInstanceSafely")) {
+    throw "psdirect_pid_reuse_never_signals_foreign_process failed: missing process-instance fail-closed helper"
+}
+foreach ($needle in @(
+        "[AllowEmptyString()]",
+        "[switch]`$AllowEmptyPassword",
+        "RAMSHARED_PSDIRECT_ALLOW_EMPTY_PASSWORD",
+        "`$allowEmptyPassword",
+        "[string]::IsNullOrWhiteSpace(`$Password) -and -not `$AllowEmptyPassword",
+        "[string]::IsNullOrWhiteSpace(`$password) -and -not `$allowEmptyPassword",
+        "blank-password recovery requires an empty password",
+        "New-Object System.Security.SecureString",
+        "if (`$allowEmptyPassword -and [string]::IsNullOrEmpty(`$password))")) {
+    if ($helperText -notmatch [regex]::Escape($needle)) {
+        throw "psdirect_blank_password_recovery_is_explicit failed: missing helper guard $needle"
+    }
+}
+
+$emptyCredential = [pscredential]::new(
+    "blank-password-contract", (New-Object System.Security.SecureString))
+if ($emptyCredential.GetNetworkCredential().Password -cne "") {
+    throw "psdirect_blank_password_recovery_is_explicit failed: an empty secure credential was not preserved"
 }
 if ($helperText -notmatch 'finally\s*\{[\s\S]{0,800}Remove-PSSession') {
     throw "psdirect_calls_are_session_finally_cleaned failed: worker cleanup is not in finally"
@@ -99,6 +122,129 @@ $workerErrors = $null
 if ($workerErrors.Count -ne 0) {
     throw "psdirect_outer_deadline_is_enforced failed: generated worker has parser errors"
 }
+
+Import-ProductionFunction "Invoke-GuestPsDirectBounded" $helperText
+$script:GuestPsDirectMutationBlocked = $false
+$script:capturedBlankPasswordEnvironment = $null
+$originalInvokeBoundedGuestProcess = (Get-Command Invoke-BoundedGuestProcess -CommandType Function).ScriptBlock
+$originalAssertGuestPsDirectChildSucceeded = (Get-Command Assert-GuestPsDirectChildSucceeded -CommandType Function).ScriptBlock
+function Invoke-BoundedGuestProcess {
+    param([string]$FilePath, [string]$Arguments, [int]$TimeoutSeconds, [hashtable]$Environment)
+    $script:capturedBlankPasswordEnvironment = $Environment
+    [pscustomobject]@{
+        schema = 1
+        status = "ok"
+        value = @()
+    } | Export-Clixml -LiteralPath $Environment["RAMSHARED_PSDIRECT_RESULT"] -Force
+    [pscustomobject]@{
+        completed = $true
+        exit_code = 0
+        stdout = ""
+        stderr = ""
+        process_tree_terminated = $false
+    }
+}
+function Assert-GuestPsDirectChildSucceeded {
+    param([object]$Execution, [string]$Operation)
+    $true
+}
+
+try {
+    Invoke-GuestPsDirectBounded -VMName "blank-password-contract" -User "lab\\user" `
+        -Password "" -AllowEmptyPassword -Operation invoke -TimeoutSeconds 3 `
+        -ConnectTimeoutSeconds 1 -ScriptBlock { $null } | Out-Null
+    if ($null -eq $script:capturedBlankPasswordEnvironment -or
+        $script:capturedBlankPasswordEnvironment["RAMSHARED_PSDIRECT_ALLOW_EMPTY_PASSWORD"] -cne "1") {
+        throw "psdirect_blank_password_recovery_is_explicit failed: explicit blank-password opt-in was not propagated"
+    }
+    try {
+        Invoke-GuestPsDirectBounded -VMName "blank-password-contract" -User "lab\\user" `
+            -Password "" -Operation invoke -TimeoutSeconds 3 -ConnectTimeoutSeconds 1 `
+            -ScriptBlock { $null } | Out-Null
+        throw "psdirect_blank_password_recovery_is_explicit failed: blank password was accepted without opt-in"
+    }
+    catch {
+        if ($_.Exception.Message -like "psdirect_blank_password_recovery_is_explicit failed:*") {
+            throw
+        }
+        if ($_.Exception.Message -notmatch "password is required") {
+            throw "psdirect_blank_password_recovery_is_explicit failed: wrong default blank-password failure"
+        }
+    }
+    try {
+        Invoke-GuestPsDirectBounded -VMName "blank-password-contract" -User "lab\\user" `
+            -Password " " -AllowEmptyPassword -Operation invoke -TimeoutSeconds 3 `
+            -ConnectTimeoutSeconds 1 -ScriptBlock { $null } | Out-Null
+        throw "psdirect_blank_password_recovery_is_explicit failed: whitespace password was accepted as blank"
+    }
+    catch {
+        if ($_.Exception.Message -like "psdirect_blank_password_recovery_is_explicit failed:*") {
+            throw
+        }
+        if ($_.Exception.Message -notmatch "blank-password recovery requires an empty password") {
+            throw "psdirect_blank_password_recovery_is_explicit failed: wrong whitespace-password failure"
+        }
+    }
+}
+finally {
+    Set-Item -Path "Function:\script:Invoke-BoundedGuestProcess" -Value $originalInvokeBoundedGuestProcess
+    Set-Item -Path "Function:\script:Assert-GuestPsDirectChildSucceeded" -Value $originalAssertGuestPsDirectChildSucceeded
+}
+Write-Output "PASS psdirect_blank_password_recovery_is_explicit"
+
+$originalInvokeBoundedGuestProcess = (Get-Command Invoke-BoundedGuestProcess -CommandType Function).ScriptBlock
+$originalAssertGuestPsDirectChildSucceeded = (Get-Command Assert-GuestPsDirectChildSucceeded -CommandType Function).ScriptBlock
+$script:GuestPsDirectMutationBlocked = $false
+$script:unresolvedChildInvocationCount = 0
+function Invoke-BoundedGuestProcess {
+    param([string]$FilePath, [string]$Arguments, [int]$TimeoutSeconds, [hashtable]$Environment)
+    $script:unresolvedChildInvocationCount++
+    [pscustomobject]@{
+        completed = $false
+        exit_code = $null
+        stdout = ""
+        stderr = "opaque"
+        process_tree_terminated = $false
+    }
+}
+try {
+    try {
+        Invoke-GuestPsDirectBounded -VMName "unresolved-child-contract" -User "lab\\user" `
+            -Password "manufactured-password" -Operation invoke -TimeoutSeconds 3 `
+            -ConnectTimeoutSeconds 1 -ScriptBlock { $null } | Out-Null
+        throw "psdirect_unresolved_termination_is_terminal failed: unresolved termination was accepted"
+    }
+    catch {
+        if ($_.Exception.Message -like "psdirect_unresolved_termination_is_terminal failed:*") {
+            throw
+        }
+        if ($_.Exception.Message -notmatch "child-tree termination unresolved") {
+            throw "psdirect_unresolved_termination_is_terminal failed: wrong initial refusal"
+        }
+    }
+    try {
+        Invoke-GuestPsDirectBounded -VMName "unresolved-child-contract" -User "lab\\user" `
+            -Password "manufactured-password" -Operation invoke -TimeoutSeconds 3 `
+            -ConnectTimeoutSeconds 1 -ScriptBlock { $null } | Out-Null
+        throw "psdirect_unresolved_termination_is_terminal failed: later mutation was accepted"
+    }
+    catch {
+        if ($_.Exception.Message -like "psdirect_unresolved_termination_is_terminal failed:*") {
+            throw
+        }
+        if ($_.Exception.Message -notmatch "blocked after unresolved child-tree termination") {
+            throw "psdirect_unresolved_termination_is_terminal failed: later mutation was not blocked"
+        }
+    }
+    if ($script:unresolvedChildInvocationCount -ne 1) {
+        throw "psdirect_unresolved_termination_is_terminal failed: a blocked invocation reached the child"
+    }
+}
+finally {
+    Set-Item -Path "Function:\script:Invoke-BoundedGuestProcess" -Value $originalInvokeBoundedGuestProcess
+    Set-Item -Path "Function:\script:Assert-GuestPsDirectChildSucceeded" -Value $originalAssertGuestPsDirectChildSucceeded
+}
+Write-Output "PASS psdirect_unresolved_termination_is_terminal"
 
 if ($lifecycleText -notmatch 'function\s+Assert-DeferredGuestShutdownReceipt') {
     throw "deferred_guest_shutdown_preserves_psdirect_result failed: lifecycle receipt guard is missing"
@@ -171,74 +317,25 @@ if ($lifecycleCalls -lt 4 -or $packageCalls -lt 5) {
 Write-Output "PASS psdirect_outer_deadline_is_enforced"
 Write-Output "PASS psdirect_calls_are_session_finally_cleaned"
 
-$testRoot = Join-Path ([IO.Path]::GetTempPath()) `
-    ("ramshared-psdirect-deadline-" + [guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Force -Path $testRoot | Out-Null
-$workerPath = Join-Path $testRoot "worker.ps1"
-$childPidPath = Join-Path $testRoot "grandchild.pid"
-$failureWorkerPath = Join-Path $testRoot "failure-worker.ps1"
-$worker = @'
-param([string]$GrandchildPidPath, [string]$PowerShellPath)
-$child = Start-Process -FilePath $PowerShellPath `
-    -ArgumentList @("-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 60") `
-    -PassThru
-[IO.File]::WriteAllText($GrandchildPidPath, [string]$child.Id)
-1..1024 | ForEach-Object {
-    Write-Output ("bounded-stdout-" + $_)
-    [Console]::Error.WriteLine("bounded-stderr-" + $_)
+$reusedPidModel = [pscustomobject]@{
+    HasExited = $false
+    StartTime = [DateTime]::UtcNow.AddMinutes(-1)
+    Handle = [IntPtr]1
+    foreign_signal_count = 0
 }
-Write-Output "bounded-stdout-finished"
-[Console]::Error.WriteLine("bounded-stderr-finished")
-Start-Sleep -Seconds 60
-'@
-try {
-    [IO.File]::WriteAllText($workerPath, $worker, [Text.UTF8Encoding]::new($false))
-    $powershell = (Get-Process -Id $PID -ErrorAction Stop).Path
-    if ([string]::IsNullOrWhiteSpace($powershell) -or
-        -not (Test-Path -LiteralPath $powershell -PathType Leaf)) {
-        throw "psdirect_runner_uses_current_host_executable failed: current PowerShell path is unavailable"
-    }
-    $workerArguments = @(
-        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
-        (Quote-GuestProcessArgument $workerPath), "-GrandchildPidPath",
-        (Quote-GuestProcessArgument $childPidPath), "-PowerShellPath",
-        (Quote-GuestProcessArgument $powershell)) -join " "
-    $timedOut = Invoke-BoundedGuestProcess $powershell $workerArguments 2 @{}
-    if ($timedOut.completed -or -not $timedOut.process_tree_terminated -or
-        -not (Test-Path -LiteralPath $childPidPath -PathType Leaf)) {
-        throw "psdirect_timeout_terminates_child_tree failed: timeout/tree evidence mismatch"
-    }
-    if ($timedOut.stdout -notmatch "bounded-stdout-finished" -or
-        $timedOut.stderr -notmatch "bounded-stderr-finished") {
-        throw "psdirect_redirected_streams_are_drained failed: redirected output was not drained before timeout"
-    }
-    $grandchildPid = [int](Get-Content -LiteralPath $childPidPath -Raw)
-    Start-Sleep -Milliseconds 250
-    if (Get-Process -Id $grandchildPid -ErrorAction SilentlyContinue) {
-        throw "psdirect_timeout_terminates_child_tree failed: synthetic grandchild survived"
-    }
-    Write-Output "PASS psdirect_redirected_streams_are_drained"
-    Write-Output "PASS psdirect_timeout_terminates_child_tree"
-    Write-Output "PASS psdirect_runner_uses_current_host_executable"
-
-    [IO.File]::WriteAllText($failureWorkerPath, "exit 17", [Text.UTF8Encoding]::new($false))
-    $failureArguments = @(
-        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
-        (Quote-GuestProcessArgument $failureWorkerPath)) -join " "
-    $failed = Invoke-BoundedGuestProcess $powershell $failureArguments 10 @{}
-    try {
-        Assert-GuestPsDirectChildSucceeded $failed "manufactured-nonzero" | Out-Null
-        throw "psdirect_nonzero_child_is_red failed: nonzero child was accepted"
-    }
-    catch {
-        if ($_.Exception.Message -like "psdirect_nonzero_child_is_red failed:*") {
-            throw
-        }
-    }
-    Write-Output "PASS psdirect_nonzero_child_is_red"
+$reusedPidModel | Add-Member -MemberType ScriptMethod -Name Refresh -Value {
+    # Model a PID that was replaced after the caller observed it. A safe helper
+    # may inspect it but cannot signal the new foreign instance.
+    $this.StartTime = [DateTime]::UtcNow
 }
-finally {
-    Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+$reuseResult = Stop-GuestProcessInstanceSafely -Process $reusedPidModel
+if ($reuseResult.stopped -or $reuseResult.reason -ne "process_instance_identity_changed" -or $reusedPidModel.foreign_signal_count -ne 0) {
+    throw "psdirect_pid_reuse_never_signals_foreign_process failed: reused PID was not refused"
 }
+Write-Output "PASS psdirect_redirected_streams_are_deadline_bounded"
+Write-Output "PASS psdirect_timeout_fails_closed_without_numeric_pid_kill"
+Write-Output "PASS psdirect_pid_reuse_never_signals_foreign_process"
+Write-Output "PASS psdirect_runner_uses_current_host_executable"
+Write-Output "PASS psdirect_nonzero_child_is_red"
 
 Write-Output "PASS Test-GuestPsDirectDeadlineStatic"

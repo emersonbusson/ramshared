@@ -4,10 +4,9 @@
 //! 1. **Never** kill `ramsharedd` while any managed swap (nbd/ublk/zram) is still
 //!    listed in `/proc/swaps` — that creates ghost `(deleted)` swap entries and freezes WSL.
 //! 2. **Always** `swapoff` managed devices **before** NBD disconnect / daemon stop.
-//! 3. **Refuse** `up` if ghost/deleted swap is present. Zero-used managed orphans
-//!    (typical after `wsl --terminate`) are **auto-recovered** once (swapoff → disconnect)
-//!    before setup; nbd/ublk with `used_kb > 0` still refuse (dead-backend hang class).
-//!    Kill-switch: `RAMSHARED_NO_ORPHAN_RECOVER=1`.
+//! 3. **Refuse** `up` if ghost/deleted or unbound managed swap is present.
+//!    Live enumeration is detection-only: zero-used devices are still active and
+//!    never authorize recovery without an exact sealed lifecycle binding.
 //! 4. **zram** algorithm is best-effort with fallbacks (WSL kernels disagree on `lzo-rle`).
 //!
 //! Mounts tiers by `swapon` priority and unmounts in reverse order.
@@ -17,6 +16,7 @@ use std::fmt;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::time::{Duration, SystemTime};
 
 #[cfg(test)]
 use std::cell::RefCell;
@@ -29,8 +29,11 @@ thread_local! {
     static SH_SCRIPT: RefCell<VecDeque<(String, Result<String, String>)>> =
         const { RefCell::new(VecDeque::new()) };
     static TEST_SWAPS: RefCell<Option<String>> = const { RefCell::new(None) };
+    static TEST_SWAPS_SEQUENCE: RefCell<VecDeque<Result<String, String>>> =
+        const { RefCell::new(VecDeque::new()) };
+    static TEST_SWAPS_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+    static TEST_ORIGIN_CONFIG: RefCell<Option<Result<String, String>>> = const { RefCell::new(None) };
     static TEST_MEM_AVAILABLE: RefCell<Option<u64>> = const { RefCell::new(None) };
-    static TEST_NO_ORPHAN_RECOVER: RefCell<Option<bool>> = const { RefCell::new(None) };
     static TEST_ENV_MB: RefCell<Option<(String, u64)>> = const { RefCell::new(None) };
 }
 
@@ -41,6 +44,16 @@ const SWAP_DEV_FILE: &str = "/run/ramshared/swap-dev";
 const PID_FILE: &str = "/run/ramshared/ramsharedd.pid";
 /// Daemon demote counters for status --json (written by ramsharedd).
 const DEMOTE_STATUS_FILE: &str = "/run/ramshared/demote-status.json";
+const CAPACITY_STATUS_FILE: &str = "/run/ramshared/capacity-guaranteed";
+const ORIGIN_CONFIG_FILE: &str = "/etc/ramshared/origin.conf";
+const DEFAULT_PHYSICAL_CACHE_CAP_MIB: u64 = 1024;
+const CACHE_STATUS_FILE: &str = "/run/ramshared/cache-status.json";
+const SUPERVISOR_STATUS_FILE: &str = "/run/ramshared/supervisor-state.json";
+const CONTROL_STATUS_MAX_AGE_MS: u64 = 15_000;
+const SUPERVISOR_ACTION_ERROR_MAX_BYTES: usize = 128 * 1024;
+const SAFE_MODE_FILE: &str = "/var/lib/ramshared/safe-mode.json";
+const GUARDIAN_HEALTH_FILE: &str =
+    "/mnt/c/ProgramData/RamShared/guardian-state/Ubuntu-24.04.health.json";
 /// Forensic "armed" marker (survives WSL death if under /mnt/c).
 const ARMED_MARKER_CANDIDATES: &[&str] = &["/mnt/c/wsl-forensics/.armed", "/run/ramshared/.armed"];
 
@@ -54,15 +67,17 @@ pub enum CascadeError {
     Arg(String),
     Io(String),
     Precondition(String),
+    UnsafeContainment(String),
 }
 
 impl fmt::Display for CascadeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CascadeError::Shell { cmd, msg } => write!(f, "comando `{cmd}` falhou: {msg}"),
-            CascadeError::Arg(m) => write!(f, "argumento inválido: {m}"),
+            CascadeError::Shell { cmd, msg } => write!(f, "command `{cmd}` failed: {msg}"),
+            CascadeError::Arg(m) => write!(f, "invalid argument: {m}"),
             CascadeError::Io(m) => write!(f, "I/O: {m}"),
             CascadeError::Precondition(m) => write!(f, "{m}"),
+            CascadeError::UnsafeContainment(m) => write!(f, "unsafe containment: {m}"),
         }
     }
 }
@@ -254,46 +269,107 @@ fn is_allowlisted_managed_path(path: &str) -> bool {
             })
 }
 
-/// Parse full `/proc/swaps` text into entries (skips header).
-pub fn parse_proc_swaps(text: &str) -> Vec<SwapEntry> {
-    text.lines()
-        .skip(1)
-        .filter_map(|line| {
-            let cols: Vec<&str> = line.split_whitespace().collect();
-            // Filename can contain spaces when deleted: "/dev/ublkb0 (deleted)"
-            // Kernel usually writes: `/dev/ublkb0\040(deleted)` as one field, OR
-            // with a real space then Type is shifted — handle both.
-            if cols.len() < 5 {
-                return None;
-            }
-            // Heuristic: last 3 numeric fields are Size Used Priority
-            let n = cols.len();
-            let priority = cols[n - 1].parse::<i32>().ok()?;
-            let used_kb = cols[n - 2].parse::<u64>().ok()?;
-            let size_kb = cols[n - 3].parse::<u64>().ok()?;
-            // Type is cols[n-4] (partition|file)
-            let filename = cols[..n - 4].join(" ");
-            if filename.is_empty() {
-                return None;
-            }
-            Some(SwapEntry {
-                filename,
-                size_kb,
-                used_kb,
-                priority,
-            })
-        })
-        .collect()
+/// Parse a complete `/proc/swaps` snapshot. Any malformed or duplicate row
+/// invalidates the whole snapshot: absence is a safety proof, not a best-effort
+/// observation.
+pub fn parse_proc_swaps(text: &str) -> Result<Vec<SwapEntry>, CascadeError> {
+    let mut lines = text.lines();
+    let header = lines
+        .next()
+        .ok_or_else(|| CascadeError::Precondition("/proc/swaps is empty".into()))?;
+    let header_fields = header.split_whitespace().collect::<Vec<_>>();
+    if header_fields != ["Filename", "Type", "Size", "Used", "Priority"] {
+        return Err(CascadeError::Precondition(
+            "/proc/swaps header is malformed or unsupported".into(),
+        ));
+    }
+
+    let mut entries = Vec::new();
+    let mut identities = std::collections::BTreeSet::new();
+    for (index, line) in lines.enumerate() {
+        if line.trim().is_empty() {
+            return Err(CascadeError::Precondition(format!(
+                "/proc/swaps row {} is empty",
+                index + 2
+            )));
+        }
+        let cols = line.split_whitespace().collect::<Vec<_>>();
+        if cols.len() < 5 {
+            return Err(CascadeError::Precondition(format!(
+                "/proc/swaps row {} is malformed",
+                index + 2
+            )));
+        }
+        let n = cols.len();
+        if !matches!(cols[n - 4], "file" | "partition") {
+            return Err(CascadeError::Precondition(format!(
+                "/proc/swaps row {} has an unsupported type",
+                index + 2
+            )));
+        }
+        let priority = cols[n - 1].parse::<i32>().map_err(|_| {
+            CascadeError::Precondition(format!(
+                "/proc/swaps row {} has an invalid priority",
+                index + 2
+            ))
+        })?;
+        let used_kb = cols[n - 2].parse::<u64>().map_err(|_| {
+            CascadeError::Precondition(format!(
+                "/proc/swaps row {} has an invalid used count",
+                index + 2
+            ))
+        })?;
+        let size_kb = cols[n - 3].parse::<u64>().map_err(|_| {
+            CascadeError::Precondition(format!("/proc/swaps row {} has an invalid size", index + 2))
+        })?;
+        let filename = cols[..n - 4].join(" ");
+        if filename.is_empty() {
+            return Err(CascadeError::Precondition(format!(
+                "/proc/swaps row {} has no device path",
+                index + 2
+            )));
+        }
+        let identity = canonicalize_swap_path(
+            filename
+                .replace("\\040(deleted)", " (deleted)")
+                .split_whitespace()
+                .next()
+                .unwrap_or_default(),
+        );
+        if identity.is_empty() || !identities.insert(identity) {
+            return Err(CascadeError::Precondition(format!(
+                "/proc/swaps row {} repeats or omits a device identity",
+                index + 2
+            )));
+        }
+        entries.push(SwapEntry {
+            filename,
+            size_kb,
+            used_kb,
+            priority,
+        });
+    }
+    Ok(entries)
 }
 
-fn read_swaps() -> Vec<SwapEntry> {
+fn read_swaps() -> Result<Vec<SwapEntry>, CascadeError> {
+    #[cfg(test)]
+    if let Some(message) = TEST_SWAPS_ERROR.with(|cell| cell.borrow().clone()) {
+        return Err(CascadeError::Io(message));
+    }
+    #[cfg(test)]
+    if let Some(snapshot) = TEST_SWAPS_SEQUENCE.with(|queue| queue.borrow_mut().pop_front()) {
+        return snapshot
+            .map_err(CascadeError::Io)
+            .and_then(|text| parse_proc_swaps(&text));
+    }
     #[cfg(test)]
     if let Some(s) = TEST_SWAPS.with(|c| c.borrow().clone()) {
         return parse_proc_swaps(&s);
     }
     fs::read_to_string("/proc/swaps")
-        .map(|s| parse_proc_swaps(&s))
-        .unwrap_or_default()
+        .map_err(|error| CascadeError::Io(format!("read /proc/swaps: {error}")))
+        .and_then(|text| parse_proc_swaps(&text))
 }
 
 /// Ghost VRAM/zram entries that will hang `swapoff` / page-in if left alone.
@@ -311,9 +387,9 @@ pub fn active_vram_block_swap(entries: &[SwapEntry]) -> bool {
     })
 }
 
-fn lower_tier_present() -> bool {
+fn lower_tier_present() -> Result<bool, CascadeError> {
     let vram_prio = TierPriorities::default().vram;
-    read_swaps().iter().any(|e| {
+    Ok(read_swaps()?.iter().any(|e| {
         // Ignore our managed tiers when looking for DEMOTE sink.
         if is_zram_device_path(&e.filename)
             || is_nbd_device_path(&e.filename)
@@ -322,7 +398,7 @@ fn lower_tier_present() -> bool {
             return false;
         }
         e.priority < vram_prio
-    })
+    }))
 }
 
 fn default_daemon() -> String {
@@ -342,139 +418,13 @@ fn chrono_like_now() -> String {
         .unwrap_or_else(|_| "0".into())
 }
 
-/// Pure candidate builder (unit-tested). Live `swapoff_candidates` feeds `/proc/swaps`.
-fn swapoff_candidates_from(
-    recorded_swap: Option<&str>,
-    recorded_zram: Option<&str>,
-    entries: &[SwapEntry],
-) -> Vec<String> {
-    let mut out = Vec::new();
-    let push_unique = |out: &mut Vec<String>, p: String| {
-        if p.is_empty() || !is_allowlisted_managed_path(&p) {
-            return;
-        }
-        let canon = canonicalize_swap_path(&p);
-        if !out.iter().any(|x| x == &canon || x == &p) {
-            out.push(canon);
-        }
-    };
-    if let Some(s) = recorded_swap
-        && !s.is_empty()
-    {
-        push_unique(&mut out, s.to_string());
-    }
-    if let Some(z) = recorded_zram
-        && !z.is_empty()
-    {
-        push_unique(&mut out, z.to_string());
-    }
-    for e in entries {
-        if e.is_managed_or_orphan_vram_tier() {
-            // Prefer canonical live path; keep ghost string for messaging.
-            let p = if e.is_ghost() {
-                e.filename.replace("\\040(deleted)", " (deleted)")
-            } else {
-                e.canonical_path()
-            };
-            push_unique(&mut out, p);
-        }
-    }
-    out
-}
-
-/// Paths we will try to `swapoff` during down (recorded + live scan).
-fn swapoff_candidates(recorded_swap: Option<&str>, recorded_zram: Option<&str>) -> Vec<String> {
-    swapoff_candidates_from(recorded_swap, recorded_zram, &read_swaps())
-}
-
-/// Pure: should this candidate be refused as unrecoverable ghost-with-pages?
-fn ghost_used_blocks_swapoff(entries: &[SwapEntry], path: &str) -> Option<String> {
-    let p_canon = canonicalize_swap_path(path);
-    entries.iter().find_map(|e| {
-        let matches = e.canonical_path() == p_canon;
-        if matches && e.is_ghost() && e.used_kb > 0 {
-            Some(format!(
-                "ghost swap used_kb={} — NAO e recuperavel com swapoff; \
-                 rode `wsl --shutdown` no Windows e suba de novo. \
-                 NUNCA kill -9 ramsharedd com ublk/nbd em /proc/swaps.",
-                e.used_kb
-            ))
-        } else {
-            None
-        }
-    })
-}
-
-/// Try swapoff on canonical path, then bare (kernel may list either form).
-fn swapoff_try(path: &str) -> Result<(), CascadeError> {
-    let canon = canonicalize_swap_path(path);
-    let tries: &[&str] = if canon == path {
-        &[path]
-    } else {
-        &[canon.as_str(), path]
-    };
-    let mut last = CascadeError::Shell {
-        cmd: "swapoff".into(),
-        msg: "no path tried".into(),
-    };
-    for p in tries {
-        if p.is_empty() {
-            continue;
-        }
-        match sh("swapoff", &["--", p]) {
-            Ok(_) => return Ok(()),
-            Err(e) => last = e,
-        }
-    }
-    Err(last)
-}
-
-/// Swapoff every candidate. Returns list of failures.
-/// **Never** kills the daemon from here.
-fn swapoff_all(paths: &[String], entries: &[SwapEntry]) -> Vec<(String, String)> {
-    let mut fails = Vec::new();
-    for p in paths {
-        if !is_allowlisted_managed_path(p) {
-            eprintln!("[down] swapoff skip (not allowlisted): {p}");
-            continue;
-        }
-        // Ghost with used>0 cannot be recovered without reboot — report loudly.
-        let p_canon = canonicalize_swap_path(p);
-        if let Some(msg) = ghost_used_blocks_swapoff(entries, p) {
-            fails.push((p.clone(), msg));
-            continue;
-        }
-        match swapoff_try(p) {
-            Ok(_) => eprintln!("[down] swapoff ok: {p_canon}"),
-            Err(e) => {
-                let msg = e.to_string();
-                if msg.contains("No such file") || msg.contains("Invalid argument") {
-                    // Fresh read: path may have left swaps since the start-of-batch snapshot.
-                    let live = read_swaps();
-                    let still = live
-                        .iter()
-                        .any(|e| e.canonical_path() == p_canon && e.used_kb > 0);
-                    if still {
-                        fails.push((p.clone(), msg));
-                    } else {
-                        eprintln!("[down] swapoff skip (ausente): {p_canon}");
-                    }
-                } else {
-                    fails.push((p.clone(), msg));
-                }
-            }
-        }
-    }
-    fails
-}
-
 /// True if daemon process may be stopped (no active block VRAM swap).
 pub fn daemon_kill_allowed(entries: &[SwapEntry]) -> bool {
     !active_vram_block_swap(entries) && ghost_vram_swaps(entries).is_empty()
 }
 
 fn refuse_ghost_swap_state() -> Result<(), CascadeError> {
-    let entries = read_swaps();
+    let entries = read_swaps()?;
     let ghosts = ghost_vram_swaps(&entries);
     if ghosts.is_empty() {
         return Ok(());
@@ -485,24 +435,12 @@ fn refuse_ghost_swap_state() -> Result<(), CascadeError> {
         .collect();
     Err(CascadeError::Precondition(format!(
         "estado sujo: swap fantasma (device deleted) em /proc/swaps: {}. \
-         NAO e seguro continuar. No Windows: `wsl --shutdown`, reabra a distro, \
+         NAO e seguro continuar. No Windows: capture evidencias, rode \
+         `wsl --terminate Ubuntu-24.04`, reabra a distro, \
          depois `sudo ramshared down` e `sudo ramshared up ...`. \
          Nunca mate o daemon com ublk/nbd ativo.",
         detail.join("; ")
     )))
-}
-
-fn orphan_recover_disabled() -> bool {
-    #[cfg(test)]
-    if let Some(v) = TEST_NO_ORPHAN_RECOVER.with(|c| *c.borrow()) {
-        return v;
-    }
-    matches!(
-        std::env::var("RAMSHARED_NO_ORPHAN_RECOVER")
-            .map(|s| s.to_ascii_lowercase())
-            .as_deref(),
-        Ok("1") | Ok("true") | Ok("yes") | Ok("on")
-    )
 }
 
 /// Pure plan for orphan handling (unit-tested).
@@ -511,8 +449,8 @@ fn orphan_recover_disabled() -> bool {
 enum OrphanPlan {
     /// No managed orphan context.
     None,
-    /// Safe: all managed orphans have used_kb == 0 (or only zram dirty is separate).
-    RecoverZeroUsed,
+    /// Unbound live devices were detected. Enumeration is detection-only.
+    DetectedUnboundZeroUsed,
     /// Dangerous: nbd/ublk with pages — no auto swapoff.
     RefuseDirtyBackend,
 }
@@ -534,95 +472,43 @@ fn plan_orphan_action(entries: &[SwapEntry], cascade_healthy: bool) -> OrphanPla
     if dirty_block {
         return OrphanPlan::RefuseDirtyBackend;
     }
-    OrphanPlan::RecoverZeroUsed
+    OrphanPlan::DetectedUnboundZeroUsed
 }
 
-fn clear_run_ramshared_state() {
-    cascade_io::remove_runtime_file(SOCK);
-    cascade_io::remove_runtime_file(ZRAM_DEV_FILE);
-    cascade_io::remove_runtime_file(SWAP_DEV_FILE);
-    cascade_io::remove_runtime_file(PID_FILE);
-    cascade_io::remove_runtime_file("/run/ramshared/.armed");
+fn disk_swap_used_kib(entries: &[SwapEntry]) -> u64 {
+    entries
+        .iter()
+        .filter(|entry| {
+            !entry.is_ghost()
+                && !is_zram_device_path(&entry.filename)
+                && !is_nbd_device_path(&entry.filename)
+                && !is_ublk_device_path(&entry.filename)
+        })
+        .map(|entry| entry.used_kb)
+        .sum()
 }
 
-/// Auto-heal zero-used managed orphans (WSL terminate class). Single pass.
-/// SPEC: docs/specs/no-milestone/wsl2-cascade-orphan-recover/SPEC.md ITEM-2
-fn try_recover_zero_used_orphans() -> Result<(), CascadeError> {
-    let entries = read_swaps();
+/// Detect unbound managed devices without mutating them. Even used_kb == 0 is
+/// active swap and therefore requires an exact sealed lifecycle binding.
+fn refuse_unbound_managed_devices() -> Result<(), CascadeError> {
+    let entries = read_swaps()?;
     if cascade_already_healthy(&entries) {
         return Ok(());
     }
 
     let plan = plan_orphan_action(&entries, false);
     match plan {
-        OrphanPlan::None => {
-            // Legacy: nbd orphan without records still needs message if recover disabled path
-            // handled below only for Refuse / Recover.
-            Ok(())
-        }
+        OrphanPlan::None => Ok(()),
         OrphanPlan::RefuseDirtyBackend => Err(CascadeError::Precondition(
-            "orphan nbd/ublk com used_kb>0 — recusa auto-recover (risco hang em backend morto). \
-             No Windows: `wsl --shutdown`, reabra a distro; ou swapoff manual se souber o que faz. \
+            "unbound nbd/ublk com used_kb>0 — dispositivo preservado: enumeração live não autoriza recovery (risco de hang em backend morto). \
+             No Windows: capture evidencias e use apenas `wsl --terminate Ubuntu-24.04`; \
              Nunca kill -9 ramsharedd com nbd/ublk em /proc/swaps."
                 .into(),
         )),
-        OrphanPlan::RecoverZeroUsed => {
-            if orphan_recover_disabled() {
-                return Err(CascadeError::Precondition(
-                    "ha swap nbd/ublk/zram gerido orfao e RAMSHARED_NO_ORPHAN_RECOVER=1. \
-                     Rode `sudo ramshared down` ou remova o kill-switch, depois up."
-                        .into(),
-                ));
-            }
-            eprintln!(
-                "[up] orphan recover: managed swap zero-used (pos-terminate WSL?) — \
-                 swapoff allowlist + nbd disconnect (single pass)"
-            );
-            let candidates = swapoff_candidates(None, None);
-            eprintln!("[up] orphan recover candidatos: {candidates:?}");
-            // Use the already fetched `entries` for `swapoff_all`
-            let fails = swapoff_all(&candidates, &entries);
-            for (p, msg) in &fails {
-                eprintln!("[up] orphan recover swapoff fail {p}: {msg}");
-            }
-            // Disconnect any nbd still visible or known allowlist devices.
-            for e in read_swaps() {
-                if is_nbd_device_path(&e.filename) && !e.is_ghost() {
-                    let dev = e.canonical_path();
-                    let _ = sh("nbd-client", &["-d", "--", &dev]);
-                }
-            }
-            // Also disconnect default product nbd even if already off swaps.
-            let _ = sh("nbd-client", &["-d", "--", NBD]);
-
-            if daemon_kill_allowed(&read_swaps()) {
-                cascade_io::stop_daemon_gracefully();
-            } else {
-                return Err(CascadeError::Precondition(
-                    "orphan recover: ainda ha nbd/ublk em /proc/swaps apos swapoff — \
-                     NAO mate o daemon. Intervenha manualmente ou `wsl --shutdown`."
-                        .into(),
-                ));
-            }
-            clear_run_ramshared_state();
-
-            let after = read_swaps();
-            if active_vram_block_swap(&after) {
-                return Err(CascadeError::Precondition(
-                    "orphan recover incompleto: nbd/ublk ainda em /proc/swaps. \
-                     `wsl --shutdown` no Windows e tente de novo."
-                        .into(),
-                ));
-            }
-            // Leftover zero-used zram: swapoff again
-            for e in &after {
-                if is_zram_device_path(&e.filename) && !e.is_ghost() {
-                    let _ = swapoff_try(&e.canonical_path());
-                }
-            }
-            eprintln!("[up] orphan recover: limpo — a seguir setup normal");
-            Ok(())
-        }
+        OrphanPlan::DetectedUnboundZeroUsed => Err(CascadeError::Precondition(
+            "unbound managed swap detected; live discovery is detection-only. Preserve every device and use the exact sealed lifecycle binding for recovery"
+                .into(),
+        )),
     }
 }
 
@@ -643,6 +529,16 @@ struct UpArgs {
     connections: u32,
     transport: Transport,
     swap_dev: String,
+    origin_path: String,
+    origin_partuuid: String,
+    origin_ptuuid: String,
+    origin_partition_dev_t: String,
+    origin_parent_dev_t: String,
+    expected_swap_uuid: String,
+    host_manifest_sha256: String,
+    configuration_sha256: String,
+    cache_cap_mib: u64,
+    disk_baseline_kib: u64,
 }
 
 /// True when running under Microsoft WSL2 (shared kernel VM).
@@ -664,12 +560,12 @@ fn resolve_transport(t: Transport) -> Result<Transport, CascadeError> {
                 eprintln!(
                     "[up] transport=auto → nbd \
                      (ublk disponivel no kernel mas recusado no WSL2: teardown pode congelar — 2026-06-09; \
-                     override so no daemon com RAMSHARED_ALLOW_UBLK_ON_WSL2=1, lab-only)"
+                     recusa permanente, sem caminho de override)"
                 );
                 return Ok(Transport::Nbd);
             }
             if Path::new("/dev/ublk-control").exists() {
-                eprintln!("[up] transport=auto → ublk (/dev/ublk-control presente, host nao-WSL2)");
+                eprintln!("[up] transport=auto -> ublk (/dev/ublk-control present, non-WSL2 host)");
                 Ok(Transport::Ublk)
             } else {
                 eprintln!("[up] transport=auto → nbd (sem /dev/ublk-control)");
@@ -679,7 +575,7 @@ fn resolve_transport(t: Transport) -> Result<Transport, CascadeError> {
     }
 }
 
-/// Default MiB from env (`RAMSHARED_VRAM_MIB` / `RAMSHARED_ZRAM_MIB`) or 1024.
+/// Default MiB from env (`RAMSHARED_VRAM_MIB` / `RAMSHARED_ZRAM_MIB`).
 /// SPEC: docs/specs/no-milestone/wsl2-cascade-boot/SPEC.md ITEM-4
 fn default_mb_from_env(var: &str, fallback: u64) -> u64 {
     #[cfg(test)]
@@ -749,8 +645,9 @@ fn refuse_half_cascade(entries: &[SwapEntry]) -> Result<(), CascadeError> {
 }
 
 fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, CascadeError> {
+    let sealed = read_sealed_origin_config()?;
     let mut a = UpArgs {
-        vram_mb: default_mb_from_env("RAMSHARED_VRAM_MIB", 1024),
+        vram_mb: sealed.logical_capacity_mib,
         zram_mb: default_mb_from_env("RAMSHARED_ZRAM_MIB", 1024),
         daemon,
         force: false,
@@ -758,6 +655,16 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
         // Default auto: on WSL2 resolves to NBD (Day-1); ublk only off-WSL2 when control node exists.
         transport: Transport::Auto,
         swap_dev: NBD.to_string(),
+        origin_path: sealed.origin_path,
+        origin_partuuid: sealed.partuuid,
+        origin_ptuuid: sealed.ptuuid,
+        origin_partition_dev_t: sealed.partition_dev_t,
+        origin_parent_dev_t: sealed.parent_dev_t,
+        expected_swap_uuid: sealed.expected_swap_uuid,
+        host_manifest_sha256: sealed.host_manifest_sha256,
+        configuration_sha256: sealed.configuration_sha256,
+        cache_cap_mib: sealed.physical_cache_cap_mib,
+        disk_baseline_kib: 0,
     };
     let mut i = 0;
     while i < args.len() {
@@ -768,7 +675,7 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
                     .get(i)
                     .ok_or_else(|| CascadeError::Arg("--vram requer MiB".into()))?
                     .parse()
-                    .map_err(|_| CascadeError::Arg("vram invalido".into()))?;
+                    .map_err(|_| CascadeError::Arg("invalid vram value".into()))?;
             }
             "--zram" => {
                 i += 1;
@@ -776,7 +683,7 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
                     .get(i)
                     .ok_or_else(|| CascadeError::Arg("--zram requer MiB".into()))?
                     .parse()
-                    .map_err(|_| CascadeError::Arg("zram invalido".into()))?;
+                    .map_err(|_| CascadeError::Arg("invalid zram value".into()))?;
             }
             "--daemon" => {
                 i += 1;
@@ -791,7 +698,7 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
                     .get(i)
                     .ok_or_else(|| CascadeError::Arg("--connections requer N".into()))?
                     .parse()
-                    .map_err(|_| CascadeError::Arg("connections invalido".into()))?;
+                    .map_err(|_| CascadeError::Arg("invalid connections value".into()))?;
                 if a.connections == 0 {
                     return Err(CascadeError::Arg("--connections deve ser >= 1".into()));
                 }
@@ -808,7 +715,7 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
                     "ublk" => Transport::Ublk,
                     other => {
                         return Err(CascadeError::Arg(format!(
-                            "--transport invalido: {other} (use auto|nbd|ublk)"
+                            "invalid --transport: {other} (use auto|nbd|ublk)"
                         )));
                     }
                 };
@@ -819,6 +726,11 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
                     .get(i)
                     .ok_or_else(|| CascadeError::Arg("--swap-dev requer caminho".into()))?
                     .clone();
+            }
+            "--origin" | "--origin-manifest" => {
+                return Err(CascadeError::Arg(
+                    "origin identity is sealed by the host gate and cannot be overridden".into(),
+                ));
             }
             "--nbd" => {
                 i += 1;
@@ -835,23 +747,585 @@ fn parse_up_args_from(args: &[String], daemon: String) -> Result<UpArgs, Cascade
     }
     if a.transport == Transport::Ublk && a.connections != 1 {
         return Err(CascadeError::Arg(
-            "--connections > 1 e invalido com --transport ublk (ring unico)".into(),
+            "--connections > 1 is invalid with --transport ublk (single ring)".into(),
         ));
     }
     // Resolve Auto after parse so env/flag still work.
     a.transport = resolve_transport(a.transport)?;
     if a.transport == Transport::Ublk && a.connections != 1 {
         return Err(CascadeError::Arg(
-            "--connections > 1 e invalido com --transport ublk (ring unico)".into(),
+            "--connections > 1 is invalid with --transport ublk (single ring)".into(),
+        ));
+    }
+    if a.cache_cap_mib < DEFAULT_PHYSICAL_CACHE_CAP_MIB || a.cache_cap_mib > a.vram_mb {
+        return Err(CascadeError::Precondition(
+            "physical cache cap must be between 1024 MiB and logical capacity".into(),
+        ));
+    }
+    if !canonical_origin_uuid(&a.expected_swap_uuid) {
+        return Err(CascadeError::Precondition(
+            "sealed origin swap UUID is missing or invalid".into(),
         ));
     }
     Ok(a)
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SealedOriginConfig {
+    host_manifest_sha256: String,
+    configuration_sha256: String,
+    origin_path: String,
+    partuuid: String,
+    ptuuid: String,
+    partition_dev_t: String,
+    parent_dev_t: String,
+    expected_swap_uuid: String,
+    logical_capacity_mib: u64,
+    physical_cache_cap_mib: u64,
+}
+
+fn canonical_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn canonical_device_number(value: &str) -> bool {
+    let Some((major, minor)) = value.split_once(':') else {
+        return false;
+    };
+    major.parse::<u64>().is_ok()
+        && minor.parse::<u64>().is_ok()
+        && !major.starts_with('+')
+        && !minor.starts_with('+')
+}
+
+fn parse_sealed_origin_config(text: &str) -> Result<SealedOriginConfig, CascadeError> {
+    let mut values = std::collections::BTreeMap::new();
+    for line in text.lines() {
+        if line.is_empty() {
+            return Err(CascadeError::Precondition(
+                "sealed origin manifest contains an empty line".into(),
+            ));
+        }
+        let (key, value) = line.split_once('=').ok_or_else(|| {
+            CascadeError::Precondition("sealed origin manifest contains a malformed line".into())
+        })?;
+        if key.trim() != key || value.trim() != value || key.is_empty() || value.is_empty() {
+            return Err(CascadeError::Precondition(
+                "sealed origin manifest is not canonical".into(),
+            ));
+        }
+        if values.insert(key, value).is_some() {
+            return Err(CascadeError::Precondition(format!(
+                "sealed origin manifest repeats key {key}"
+            )));
+        }
+    }
+    const KEYS: &[&str] = &[
+        "schema_version",
+        "host_manifest_sha256",
+        "configuration_sha256",
+        "origin_path",
+        "partuuid",
+        "ptuuid",
+        "partition_dev_t",
+        "parent_dev_t",
+        "expected_swap_uuid",
+        "swap_type",
+        "logical_capacity_mib",
+        "physical_cache_cap_mib",
+    ];
+    if values.len() != KEYS.len() || KEYS.iter().any(|key| !values.contains_key(key)) {
+        return Err(CascadeError::Precondition(
+            "sealed origin manifest schema is incomplete or contains unknown keys".into(),
+        ));
+    }
+    if values["schema_version"] != "3" || values["swap_type"] != "swap" {
+        return Err(CascadeError::Precondition(
+            "sealed origin manifest schema or swap type is invalid".into(),
+        ));
+    }
+    let origin_path = values["origin_path"].to_string();
+    let partuuid = origin_partuuid(&origin_path)?.to_ascii_lowercase();
+    if !values["partuuid"].eq_ignore_ascii_case(&partuuid)
+        || !canonical_origin_uuid(values["ptuuid"])
+        || !canonical_origin_uuid(values["expected_swap_uuid"])
+        || !canonical_device_number(values["partition_dev_t"])
+        || !canonical_device_number(values["parent_dev_t"])
+        || !canonical_sha256(values["host_manifest_sha256"])
+        || !canonical_sha256(values["configuration_sha256"])
+    {
+        return Err(CascadeError::Precondition(
+            "sealed origin manifest identity or hash is invalid".into(),
+        ));
+    }
+    let logical_capacity_mib = values["logical_capacity_mib"]
+        .parse::<u64>()
+        .map_err(|_| CascadeError::Precondition("sealed logical capacity is invalid".into()))?;
+    validate_origin_logical_capacity(logical_capacity_mib)?;
+    let physical_cache_cap_mib = values["physical_cache_cap_mib"]
+        .parse::<u64>()
+        .map_err(|_| CascadeError::Precondition("sealed physical cache cap is invalid".into()))?;
+    if physical_cache_cap_mib < DEFAULT_PHYSICAL_CACHE_CAP_MIB
+        || physical_cache_cap_mib > logical_capacity_mib
+    {
+        return Err(CascadeError::Precondition(
+            "sealed physical cache cap is outside product policy".into(),
+        ));
+    }
+    Ok(SealedOriginConfig {
+        host_manifest_sha256: values["host_manifest_sha256"].to_ascii_lowercase(),
+        configuration_sha256: values["configuration_sha256"].to_ascii_lowercase(),
+        origin_path,
+        partuuid,
+        ptuuid: values["ptuuid"].to_ascii_lowercase(),
+        partition_dev_t: values["partition_dev_t"].to_string(),
+        parent_dev_t: values["parent_dev_t"].to_string(),
+        expected_swap_uuid: values["expected_swap_uuid"].to_ascii_lowercase(),
+        logical_capacity_mib,
+        physical_cache_cap_mib,
+    })
+}
+
+#[cfg(test)]
+fn sealed_origin_test_fixture() -> String {
+    "schema_version=3\n\
+host_manifest_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\
+configuration_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n\
+origin_path=/dev/disk/by-partuuid/11111111-2222-4333-8444-555555555555\n\
+partuuid=11111111-2222-4333-8444-555555555555\n\
+ptuuid=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee\n\
+partition_dev_t=8:33\n\
+parent_dev_t=8:32\n\
+expected_swap_uuid=99999999-8888-4777-8666-555555555555\n\
+swap_type=swap\n\
+logical_capacity_mib=4096\n\
+physical_cache_cap_mib=1024"
+        .into()
+}
+
+fn read_sealed_origin_config() -> Result<SealedOriginConfig, CascadeError> {
+    #[cfg(test)]
+    {
+        let configured = TEST_ORIGIN_CONFIG.with(|cell| cell.borrow().clone());
+        let text = match configured {
+            Some(Ok(text)) => text,
+            Some(Err(message)) => return Err(CascadeError::Io(message)),
+            None => sealed_origin_test_fixture(),
+        };
+        parse_sealed_origin_config(&text)
+    }
+    #[cfg(not(test))]
+    {
+        let metadata = fs::symlink_metadata(ORIGIN_CONFIG_FILE)
+            .map_err(|error| CascadeError::Io(format!("stat sealed origin manifest: {error}")))?;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if !metadata.file_type().is_file()
+            || metadata.file_type().is_symlink()
+            || metadata.uid() != 0
+            || metadata.permissions().mode() & 0o022 != 0
+            || metadata.len() == 0
+            || metadata.len() > 65_536
+        {
+            return Err(CascadeError::Precondition(
+                "sealed origin manifest is not a bounded root-owned regular file".into(),
+            ));
+        }
+        let text = fs::read_to_string(ORIGIN_CONFIG_FILE)
+            .map_err(|error| CascadeError::Io(format!("read sealed origin manifest: {error}")))?;
+        parse_sealed_origin_config(&text)
+    }
+}
+
+fn origin_partuuid(path: &str) -> Result<&str, CascadeError> {
+    let uuid = path.strip_prefix("/dev/disk/by-partuuid/").ok_or_else(|| {
+        CascadeError::Precondition(
+            "origin must use the sealed /dev/disk/by-partuuid/<uuid> identity".into(),
+        )
+    })?;
+    let valid = uuid.len() == 36
+        && uuid.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        });
+    if !valid {
+        return Err(CascadeError::Precondition(
+            "origin PARTUUID identity is invalid or aliases the WSL fallback swap".into(),
+        ));
+    }
+    Ok(uuid)
+}
+
+fn canonical_origin_uuid(value: &str) -> bool {
+    value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| match index {
+            8 | 13 | 18 | 23 => byte == b'-',
+            _ => byte.is_ascii_hexdigit(),
+        })
+}
+
+fn validate_origin_logical_capacity(value_mib: u64) -> Result<(), CascadeError> {
+    if (1024..=24 * 1024).contains(&value_mib) {
+        Ok(())
+    } else {
+        Err(CascadeError::Precondition(
+            "origin logical capacity must be between 1024 and 24576 MiB".into(),
+        ))
+    }
+}
+
+fn unix_time_ms() -> Option<u64> {
+    use std::time::UNIX_EPOCH;
+
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+}
+
+fn process_start_ticks(stat: &str) -> Option<&str> {
+    stat.rsplit_once(") ")?.1.split_whitespace().nth(19)
+}
+
+fn daemon_instance_id_from_pid(pid: u32) -> Option<String> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let start_ticks = process_start_ticks(&stat)?;
+    (!start_ticks.is_empty()).then(|| format!("{pid}-{start_ticks}"))
+}
+
+fn cache_status_shape_is_valid(value: &serde_json::Value) -> bool {
+    value
+        .get("ok")
+        .and_then(serde_json::Value::as_bool)
+        .is_some()
+        && matches!(
+            value
+                .get("origin_state")
+                .and_then(serde_json::Value::as_str),
+            Some("OFF") | Some("READY") | Some("DEGRADED") | Some("FAILED")
+        )
+        && matches!(
+            value.get("cache_state").and_then(serde_json::Value::as_str),
+            Some("OFF") | Some("ACTIVE") | Some("RESTRICTED") | Some("UNAVAILABLE") | Some("STUCK")
+        )
+}
+
+fn supervisor_status_shape_is_valid(value: &serde_json::Value) -> bool {
+    let Some(status) = value.as_object() else {
+        return false;
+    };
+    const STATUS_KEYS: &[&str] = &[
+        "schema_version",
+        "control_state",
+        "healthy_samples",
+        "action_results",
+        "daemon_instance_id",
+        "supervisor_identity",
+        "written_at_unix_ms",
+    ];
+    if status.len() != STATUS_KEYS.len()
+        || STATUS_KEYS.iter().any(|key| !status.contains_key(*key))
+        || status
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            != Some(3)
+        || status
+            .get("healthy_samples")
+            .and_then(serde_json::Value::as_u64)
+            .is_none_or(|samples| samples > u64::from(u32::MAX))
+        || status
+            .get("written_at_unix_ms")
+            .and_then(serde_json::Value::as_u64)
+            .is_none()
+    {
+        return false;
+    }
+
+    let daemon_identity_is_valid = match status.get("daemon_instance_id") {
+        Some(serde_json::Value::Null) => true,
+        Some(serde_json::Value::String(value)) => {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        }
+        _ => false,
+    };
+    if !daemon_identity_is_valid {
+        return false;
+    }
+
+    let Some(identity) = status
+        .get("supervisor_identity")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return false;
+    };
+    const IDENTITY_KEYS: &[&str] = &["boot_id", "pid", "start_time", "nonce"];
+    if identity.len() != IDENTITY_KEYS.len()
+        || IDENTITY_KEYS.iter().any(|key| !identity.contains_key(*key))
+        || identity
+            .get("boot_id")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(str::is_empty)
+        || identity
+            .get("pid")
+            .and_then(serde_json::Value::as_u64)
+            .is_none_or(|pid| pid == 0 || pid > u64::from(u32::MAX))
+        || identity
+            .get("start_time")
+            .and_then(serde_json::Value::as_u64)
+            .is_none_or(|start_time| start_time == 0)
+        || identity
+            .get("nonce")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        return false;
+    }
+
+    let Some(control_state) = status
+        .get("control_state")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    if !matches!(
+        control_state,
+        "HEALTHY" | "GUARDED" | "CRITICAL" | "EMERGENCY" | "SAFE_MODE"
+    ) {
+        return false;
+    }
+
+    let Some(results) = status
+        .get("action_results")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return false;
+    };
+    if results.len() > 7 {
+        return false;
+    }
+    let mut actions = Vec::with_capacity(results.len());
+    for result in results {
+        let Some(result) = result.as_object() else {
+            return false;
+        };
+        const RESULT_KEYS: &[&str] = &["action", "status", "error"];
+        if result.len() != RESULT_KEYS.len()
+            || RESULT_KEYS.iter().any(|key| !result.contains_key(*key))
+        {
+            return false;
+        }
+        let Some(action) = result.get("action").and_then(serde_json::Value::as_str) else {
+            return false;
+        };
+        if !matches!(
+            action,
+            "close_admission"
+                | "reduce_vram_cache"
+                | "freeze_discardable"
+                | "thaw_discardable"
+                | "request_reclaim"
+                | "terminate_discardable"
+                | "kill_discardable"
+        ) || actions.contains(&action)
+        {
+            return false;
+        }
+        let valid_outcome = match result.get("status").and_then(serde_json::Value::as_str) {
+            Some("succeeded") => result.get("error").is_some_and(serde_json::Value::is_null),
+            Some("failed") => result
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|error| {
+                    !error.is_empty() && error.len() <= SUPERVISOR_ACTION_ERROR_MAX_BYTES
+                }),
+            _ => false,
+        };
+        if !valid_outcome {
+            return false;
+        }
+        actions.push(action);
+    }
+
+    match control_state {
+        "HEALTHY" => actions.is_empty(),
+        "GUARDED" => {
+            actions == ["close_admission"] || actions == ["thaw_discardable", "close_admission"]
+        }
+        "CRITICAL" => {
+            actions
+                == [
+                    "close_admission",
+                    "reduce_vram_cache",
+                    "freeze_discardable",
+                    "request_reclaim",
+                ]
+        }
+        "EMERGENCY" => {
+            matches!(
+                actions.as_slice(),
+                ["close_admission", "reduce_vram_cache", "request_reclaim"]
+                    | [
+                        "close_admission",
+                        "reduce_vram_cache",
+                        "request_reclaim",
+                        "terminate_discardable"
+                    ]
+                    | [
+                        "close_admission",
+                        "reduce_vram_cache",
+                        "request_reclaim",
+                        "kill_discardable"
+                    ]
+                    | [
+                        "thaw_discardable",
+                        "close_admission",
+                        "reduce_vram_cache",
+                        "request_reclaim"
+                    ]
+                    | [
+                        "thaw_discardable",
+                        "close_admission",
+                        "reduce_vram_cache",
+                        "request_reclaim",
+                        "terminate_discardable"
+                    ]
+                    | [
+                        "thaw_discardable",
+                        "close_admission",
+                        "reduce_vram_cache",
+                        "request_reclaim",
+                        "kill_discardable"
+                    ]
+            )
+        }
+        "SAFE_MODE" => actions.is_empty(),
+        _ => false,
+    }
+}
+
+fn cache_status_matches_current_daemon(
+    value: &serde_json::Value,
+    daemon_instance_id: &str,
+    now_unix_ms: u64,
+) -> bool {
+    value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        == Some(1)
+        && value
+            .get("daemon_instance_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(daemon_instance_id)
+        && value
+            .get("written_at_unix_ms")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|written_at| {
+                now_unix_ms >= written_at
+                    && now_unix_ms.saturating_sub(written_at) <= CONTROL_STATUS_MAX_AGE_MS
+            })
+}
+
+fn supervisor_status_matches_current_daemon(
+    value: &serde_json::Value,
+    daemon_instance_id: &str,
+    now_unix_ms: u64,
+) -> bool {
+    value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        == Some(3)
+        && value
+            .get("daemon_instance_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(daemon_instance_id)
+        && value
+            .get("written_at_unix_ms")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|written_at| {
+                now_unix_ms >= written_at
+                    && now_unix_ms.saturating_sub(written_at) <= CONTROL_STATUS_MAX_AGE_MS
+            })
+}
+
+fn control_plane_status_is_current(
+    cache_status: &serde_json::Value,
+    supervisor_status: &serde_json::Value,
+    daemon_instance_id: &str,
+    now_unix_ms: u64,
+) -> bool {
+    cache_status_shape_is_valid(cache_status)
+        && supervisor_status_shape_is_valid(supervisor_status)
+        && cache_status_matches_current_daemon(cache_status, daemon_instance_id, now_unix_ms)
+        && supervisor_status_matches_current_daemon(
+            supervisor_status,
+            daemon_instance_id,
+            now_unix_ms,
+        )
+}
+
+fn guardian_state_from_files(
+    safe_mode: &Path,
+    health: &Path,
+    max_age: Duration,
+) -> (GuardianState, Option<String>) {
+    match fs::read_to_string(safe_mode) {
+        Ok(text) if serde_json::from_str::<serde_json::Value>(&text).is_ok() => {
+            return (GuardianState::SafeMode, None);
+        }
+        Ok(_) => return (GuardianState::Blocked, Some("safe_mode_invalid".into())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return (GuardianState::Blocked, Some("safe_mode_unreadable".into())),
+    }
+    let text = match fs::read_to_string(health) {
+        Ok(text) => text,
+        Err(_) => {
+            return (
+                GuardianState::Blocked,
+                Some("guardian_state_unavailable".into()),
+            );
+        }
+    };
+    let fresh = fs::metadata(health)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        .is_some_and(|age| age <= max_age);
+    if !fresh {
+        return (GuardianState::Blocked, Some("guardian_state_stale".into()));
+    }
+    let value = match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(value) => value,
+        Err(_) => {
+            return (
+                GuardianState::Blocked,
+                Some("guardian_state_invalid".into()),
+            );
+        }
+    };
+    if value.get("distro").and_then(serde_json::Value::as_str) != Some("Ubuntu-24.04") {
+        return (
+            GuardianState::Blocked,
+            Some("guardian_state_identity_mismatch".into()),
+        );
+    }
+    match value.get("state").and_then(serde_json::Value::as_str) {
+        Some("HEALTHY") => (GuardianState::Healthy, None),
+        Some("SAFE_MODE") => (GuardianState::SafeMode, None),
+        _ => (
+            GuardianState::Blocked,
+            Some("guardian_reported_blocked".into()),
+        ),
+    }
+}
+
 mod lifecycle;
 use lifecycle::{
-    CascadeSnapshot, DemoteSnapshot, TierSample, active_threshold_kib_from_env, derive_lifecycle,
-    render_status_json,
+    CacheState, CascadeSnapshot, ControlState, DemoteSnapshot, GuardianState, OriginState,
+    TierSample, active_threshold_kib_from_env, derive_lifecycle, protection_reason,
+    protection_state, render_status_json,
 };
 
 /// Build lifecycle snapshot from live swaps + daemon (read-only).
@@ -864,6 +1338,93 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
     let (zram, vram, disk, order_ok) = lifecycle::tiers_from_swap_names(&pairs);
     let ghosts = ghost_vram_swaps(entries);
     let (daemon_alive, daemon_pid) = daemon_alive_pid();
+    let product_active = daemon_alive || vram.present;
+    let cache_status = fs::read_to_string(CACHE_STATUS_FILE)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let supervisor_status = fs::read_to_string(SUPERVISOR_STATUS_FILE)
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+    let daemon_instance_id = daemon_pid.and_then(daemon_instance_id_from_pid);
+    let control_plane_current = daemon_instance_id
+        .as_deref()
+        .zip(unix_time_ms())
+        .zip(cache_status.as_ref())
+        .zip(supervisor_status.as_ref())
+        .is_some_and(
+            |(((daemon_instance_id, now_unix_ms), cache_status), supervisor_status)| {
+                control_plane_status_is_current(
+                    cache_status,
+                    supervisor_status,
+                    daemon_instance_id,
+                    now_unix_ms,
+                )
+            },
+        );
+    let cache_status = control_plane_current.then_some(cache_status).flatten();
+    let supervisor_status = control_plane_current.then_some(supervisor_status).flatten();
+    let status_text = |key: &str| {
+        cache_status
+            .as_ref()
+            .and_then(|value| value.get(key))
+            .and_then(serde_json::Value::as_str)
+    };
+    let status_number = |key: &str| {
+        cache_status
+            .as_ref()
+            .and_then(|value| value.get(key))
+            .and_then(serde_json::Value::as_u64)
+    };
+    let cache_status_ok = cache_status
+        .as_ref()
+        .and_then(|value| value.get("ok"))
+        .and_then(serde_json::Value::as_bool)
+        == Some(true);
+    let origin_state = match status_text("origin_state") {
+        Some("READY") => OriginState::Ready,
+        Some("DEGRADED") => OriginState::Degraded,
+        Some("FAILED") => OriginState::Failed,
+        _ if product_active && capacity_field("mode").as_deref() == Some("origin-cache") => {
+            OriginState::Degraded
+        }
+        _ => OriginState::Off,
+    };
+    let cache_state = match status_text("cache_state") {
+        _ if product_active && !cache_status_ok => CacheState::Unavailable,
+        Some("ACTIVE") => CacheState::Active,
+        Some("RESTRICTED") => CacheState::Restricted,
+        Some("STUCK") => CacheState::Stuck,
+        Some("OFF") if !product_active => CacheState::Off,
+        _ if product_active => CacheState::Unavailable,
+        _ => CacheState::Off,
+    };
+    let control_state = supervisor_status
+        .as_ref()
+        .and_then(|value| value.get("control_state")?.as_str())
+        .map_or(ControlState::Guarded, |state| match state {
+            "GUARDED" => ControlState::Guarded,
+            "CRITICAL" => ControlState::Critical,
+            "EMERGENCY" => ControlState::Emergency,
+            "SAFE_MODE" => ControlState::SafeMode,
+            "HEALTHY" => ControlState::Healthy,
+            _ => ControlState::Guarded,
+        });
+    let (guardian_state, guardian_error) = guardian_state_from_files(
+        Path::new(SAFE_MODE_FILE),
+        Path::new(GUARDIAN_HEALTH_FILE),
+        Duration::from_secs(15),
+    );
+    let mut measurement_errors = Vec::new();
+    if product_active && !control_plane_current {
+        measurement_errors.push("cache_status_not_current".to_string());
+    }
+    if product_active && !control_plane_current {
+        measurement_errors.push("supervisor_status_not_current".to_string());
+    }
+    if let Some(error) = guardian_error {
+        measurement_errors.push(error);
+    }
+    let fallback_swap_used_kib = disk.used_kib;
     CascadeSnapshot {
         zram,
         vram,
@@ -872,9 +1433,41 @@ pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
         order_ok,
         daemon_alive,
         daemon_pid,
+        capacity_guaranteed: Path::new(CAPACITY_STATUS_FILE).is_file(),
+        disk_baseline_kib: read_capacity_disk_baseline(),
         demote: read_demote_snapshot(),
         active_kib: active_threshold_kib_from_env(),
+        control_state,
+        origin_state,
+        cache_state,
+        guardian_state,
+        logical_capacity_kib: capacity_field_u64("logical_capacity_kib"),
+        vram_cached_kib: status_number("vram_cached_kib"),
+        gpu_headroom_kib: status_number("gpu_headroom_kib"),
+        ssd_origin_written_kib: status_number("ssd_origin_written_kib"),
+        fallback_swap_used_kib: Some(fallback_swap_used_kib),
+        measurement_errors,
     }
+}
+
+fn capacity_field(key: &str) -> Option<String> {
+    let text = fs::read_to_string(CAPACITY_STATUS_FILE).ok()?;
+    text.lines().find_map(|line| {
+        let (name, value) = line.split_once('=')?;
+        (name.trim() == key).then(|| value.trim().to_string())
+    })
+}
+
+fn capacity_field_u64(key: &str) -> Option<u64> {
+    capacity_field(key)?.parse().ok()
+}
+
+fn read_capacity_disk_baseline() -> Option<u64> {
+    let text = fs::read_to_string(CAPACITY_STATUS_FILE).ok()?;
+    text.lines().find_map(|line| {
+        line.strip_prefix("disk_baseline_kib=")
+            .and_then(|value| value.trim().parse::<u64>().ok())
+    })
 }
 
 /// Read `/run/ramshared/demote-status.json` if present (daemon ITEM-3).
@@ -984,7 +1577,7 @@ pub fn status(as_json: bool) -> Result<(), CascadeError> {
         return Ok(());
     }
 
-    let entries = read_swaps();
+    let entries = read_swaps()?;
     let snap = build_cascade_snapshot(&entries);
     let view = derive_lifecycle(&snap);
     let ts = status_timestamp();
@@ -995,8 +1588,12 @@ pub fn status(as_json: bool) -> Result<(), CascadeError> {
     }
 
     // Human text (SPEC ITEM-2)
+    let protection = protection_state(&view, &snap);
+    let protection_reason = protection_reason(&view, &snap);
     println!("phase: {} ({})", view.phase.as_str(), view.phase_reason);
-    println!("ok: {}", view.ok);
+    println!("protection: {} ({protection_reason})", protection.as_str());
+    println!("ok: {}", view.ok && protection.is_ok());
+    println!("topology_ok: {}", view.ok);
     if !view.reasons.is_empty() {
         println!("reasons: {}", view.reasons.join(", "));
     }
@@ -1040,9 +1637,18 @@ pub fn status(as_json: bool) -> Result<(), CascadeError> {
                 g.filename, g.size_kb, g.used_kb, g.priority
             );
         }
-        eprintln!("  action: wsl --shutdown on Windows, then ramshared down/up");
+        eprintln!(
+            "  action: capture evidence, run `wsl --terminate Ubuntu-24.04`, then ramshared down/up"
+        );
     }
     Ok(())
+}
+
+pub(crate) fn status_json_document() -> Result<String, CascadeError> {
+    let entries = read_swaps()?;
+    let snap = build_cascade_snapshot(&entries);
+    let view = derive_lifecycle(&snap);
+    Ok(render_status_json(&view, &snap, &status_timestamp()))
 }
 
 fn print_tier(name: &str, t: &TierSample) {
@@ -1065,9 +1671,35 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
+    fn parse_proc_swaps(text: &str) -> Vec<SwapEntry> {
+        super::parse_proc_swaps(text).expect("strict /proc/swaps fixture")
+    }
+
     fn parse(args: &[&str]) -> Result<UpArgs, CascadeError> {
         let args = args.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
         parse_up_args_from(&args, "ramsharedd".to_string())
+    }
+
+    fn valid_supervisor_status_v3() -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": 3,
+            "control_state": "CRITICAL",
+            "healthy_samples": 0,
+            "action_results": [
+                {"action": "close_admission", "status": "succeeded", "error": null},
+                {"action": "reduce_vram_cache", "status": "failed", "error": "fixture refusal"},
+                {"action": "freeze_discardable", "status": "succeeded", "error": null},
+                {"action": "request_reclaim", "status": "succeeded", "error": null},
+            ],
+            "daemon_instance_id": "daemon-1",
+            "supervisor_identity": {
+                "boot_id": "fixture-boot",
+                "pid": 1,
+                "start_time": 1,
+                "nonce": "fixture-nonce",
+            },
+            "written_at_unix_ms": 1_000,
+        })
     }
 
     #[test]
@@ -1143,22 +1775,22 @@ mod tests {
         assert!(!entries[0].is_managed_or_orphan_vram_tier());
         assert!(entries[1].is_managed_or_orphan_vram_tier());
         assert!(!active_vram_block_swap(&entries[..1]));
-        assert!(swapoff_candidates_from(None, None, &entries[..1]).is_empty());
-        assert!(
-            ghost_used_blocks_swapoff(&entries, "/dev/nbd0").is_none(),
-            "nbd0 must not match nbd01 or a similarly named swap file"
-        );
+        assert!(!is_nbd_device_path("/swap/nbd0-backup"));
+        assert_ne!(entries[1].canonical_path(), "/dev/nbd0");
     }
 
     #[test]
-    fn orphan_plan_zero_used_is_recover() {
+    fn orphan_plan_zero_used_is_detected_without_recovery() {
         let e = parse_proc_swaps(
             "Filename Type Size Used Priority\n\
              /dev/sdc partition 8388608 100 -2\n\
              /zram0 partition 1048576 0 200\n\
              /nbd0 partition 1048576 0 100\n",
         );
-        assert_eq!(plan_orphan_action(&e, false), OrphanPlan::RecoverZeroUsed);
+        assert_eq!(
+            plan_orphan_action(&e, false),
+            OrphanPlan::DetectedUnboundZeroUsed
+        );
         assert_eq!(plan_orphan_action(&e, true), OrphanPlan::None);
     }
 
@@ -1337,10 +1969,6 @@ Filename Type Size Used Priority
         TEST_MEM_AVAILABLE.with(|c| *c.borrow_mut() = n);
     }
 
-    fn set_no_orphan(v: Option<bool>) {
-        TEST_NO_ORPHAN_RECOVER.with(|c| *c.borrow_mut() = v);
-    }
-
     fn set_test_mb(v: Option<(&str, u64)>) {
         TEST_ENV_MB.with(|c| *c.borrow_mut() = v.map(|(k, n)| (k.to_string(), n)));
     }
@@ -1348,8 +1976,9 @@ Filename Type Size Used Priority
     fn clear_test_seams() {
         clear_sh_script();
         set_test_swaps(None);
+        TEST_SWAPS_SEQUENCE.with(|queue| queue.borrow_mut().clear());
+        TEST_SWAPS_ERROR.with(|cell| *cell.borrow_mut() = None);
         set_test_mem(None);
-        set_no_orphan(None);
         set_test_mb(None);
     }
 
@@ -1391,97 +2020,8 @@ Filename Type Size Used Priority
     }
 
     #[test]
-    fn parse_swaps_skips_short_lines() {
-        let e = parse_proc_swaps("Filename Type Size Used Priority\nbadline\n");
-        assert!(e.is_empty());
-    }
-
-    #[test]
-    fn swapoff_candidates_from_merges_records_and_live() {
-        let live = parse_proc_swaps(
-            "Filename Type Size Used Priority\n\
-             /dev/nbd0 partition 1024 0 100\n\
-             /dev/sdc partition 999 0 -2\n\
-             /dev/zram0 partition 512 0 200\n",
-        );
-        let c = swapoff_candidates_from(Some("/nbd0"), Some("zram0"), &live);
-        assert!(c.iter().any(|p| p.contains("nbd0")));
-        assert!(c.iter().any(|p| p.contains("zram0")));
-        assert!(!c.iter().any(|p| p.contains("sdc")));
-    }
-
-    #[test]
-    fn swapoff_candidates_from_includes_ghost_string() {
-        let live = parse_proc_swaps(
-            "Filename Type Size Used Priority\n\
-             /dev/ublkb0\\040(deleted) partition 1024 50 -3\n",
-        );
-        let c = swapoff_candidates_from(None, None, &live);
-        assert!(!c.is_empty());
-        assert!(c[0].contains("ublkb") || c[0].contains("deleted"));
-    }
-
-    #[test]
-    fn ghost_used_blocks_swapoff_message() {
-        let live = parse_proc_swaps(
-            "Filename Type Size Used Priority\n\
-             /dev/nbd0\\040(deleted) partition 1024 99 100\n",
-        );
-        let msg = ghost_used_blocks_swapoff(&live, "/dev/nbd0").expect("block");
-        assert!(msg.contains("used_kb=99"));
-        assert!(ghost_used_blocks_swapoff(&live, "/dev/zram0").is_none());
-    }
-
-    #[test]
-    fn swapoff_all_ghost_used_fails_without_shell() {
-        clear_test_seams();
-        set_test_swaps(Some(
-            "Filename Type Size Used Priority\n\
-             /dev/nbd0\\040(deleted) partition 1024 50 100\n",
-        ));
-        let e = read_swaps();
-        let fails = swapoff_all(&["/dev/nbd0".to_string()], &e);
-        clear_test_seams();
-        assert_eq!(fails.len(), 1);
-        assert!(fails[0].1.contains("ghost"));
-    }
-
-    #[test]
-    fn swapoff_all_skips_disk_and_succeeds_on_mock() {
-        clear_test_seams();
-        push_sh("swapoff", Ok(""));
-        set_test_swaps(Some(
-            "Filename Type Size Used Priority\n\
-             /dev/sdc partition 999 0 -2\n",
-        ));
-        let e = read_swaps();
-        let fails = swapoff_all(&["/dev/sdc".to_string(), "/dev/nbd0".to_string()], &e);
-        clear_test_seams();
-        assert!(fails.is_empty(), "{fails:?}");
-    }
-
-    #[test]
-    fn swapoff_all_absent_device_is_not_fail() {
-        clear_test_seams();
-        push_sh("swapoff", Err("swapoff: No such file or directory"));
-        set_test_swaps(Some(
-            "Filename Type Size Used Priority\n\
-             /dev/sdc partition 999 0 -2\n",
-        ));
-        let e = read_swaps();
-        let fails = swapoff_all(&["/dev/nbd0".to_string()], &e);
-        clear_test_seams();
-        assert!(fails.is_empty(), "{fails:?}");
-    }
-
-    #[test]
-    fn swapoff_try_prefers_canonical_then_bare() {
-        clear_test_seams();
-        push_sh("swapoff -- /dev/nbd0", Err("first fail"));
-        push_sh("swapoff", Ok(""));
-        let r = swapoff_try("nbd0");
-        clear_test_seams();
-        assert!(r.is_ok());
+    fn parse_swaps_rejects_short_lines() {
+        assert!(super::parse_proc_swaps("Filename Type Size Used Priority\nbadline\n").is_err());
     }
 
     #[test]
@@ -1495,7 +2035,7 @@ Filename Type Size Used Priority
         assert!(parse(&["--unknown"]).is_err());
         let a = parse(&[
             "--vram",
-            "512",
+            "1024",
             "--zram",
             "256",
             "--daemon",
@@ -1505,11 +2045,204 @@ Filename Type Size Used Priority
             "nbd",
         ])
         .unwrap();
-        assert_eq!(a.vram_mb, 512);
+        assert_eq!(a.vram_mb, 1024);
         assert_eq!(a.zram_mb, 256);
         assert_eq!(a.daemon, "/tmp/d");
         assert!(a.force);
         assert_eq!(a.transport, Transport::Nbd);
+    }
+
+    #[test]
+    fn origin_logical_capacity_is_bounded_before_lifecycle_actions() {
+        assert!(validate_origin_logical_capacity(1024).is_ok());
+        assert!(validate_origin_logical_capacity(24 * 1024).is_ok());
+        assert!(validate_origin_logical_capacity(1023).is_err());
+        assert!(validate_origin_logical_capacity(24 * 1024 + 1).is_err());
+    }
+
+    #[test]
+    fn origin_cache_cap_defaults_to_one_gib_without_widening_to_logical_capacity() {
+        let default_capacity = parse(&["--vram", "4096"])
+            .unwrap_or_else(|error| panic!("default origin-cache arguments: {error}"));
+        assert_eq!(default_capacity.cache_cap_mib, 1024);
+
+        let minimum_capacity = parse(&["--vram", "1024"])
+            .unwrap_or_else(|error| panic!("minimum origin-cache arguments: {error}"));
+        assert_eq!(minimum_capacity.cache_cap_mib, 1024);
+    }
+
+    #[test]
+    fn stale_or_missing_guardian_is_never_reported_healthy() {
+        let root =
+            std::env::temp_dir().join(format!("ramshared-guardian-state-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let safe = root.join("safe.json");
+        let health = root.join("health.json");
+        let (state, error) = guardian_state_from_files(&safe, &health, Duration::from_secs(15));
+        assert_eq!(state, GuardianState::Blocked);
+        assert_eq!(error.as_deref(), Some("guardian_state_unavailable"));
+
+        fs::write(
+            &health,
+            r#"{"schema_version":1,"distro":"Ubuntu-24.04","state":"HEALTHY"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            guardian_state_from_files(&safe, &health, Duration::from_secs(15)),
+            (GuardianState::Healthy, None)
+        );
+        fs::write(&safe, "{}").unwrap();
+        assert_eq!(
+            guardian_state_from_files(&safe, &health, Duration::from_secs(15)),
+            (GuardianState::SafeMode, None)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stale_foreign_or_malformed_cache_or_supervisor_status_is_never_green() {
+        let fresh_cache = serde_json::json!({
+            "schema_version": 1,
+            "daemon_instance_id": "daemon-1",
+            "written_at_unix_ms": 1_000,
+            "ok": true,
+            "origin_state": "READY",
+            "cache_state": "ACTIVE",
+        });
+        let mut fresh_supervisor = valid_supervisor_status_v3();
+        fresh_supervisor["control_state"] = serde_json::json!("HEALTHY");
+        fresh_supervisor["healthy_samples"] = serde_json::json!(60);
+        fresh_supervisor["action_results"] = serde_json::json!([]);
+        assert!(control_plane_status_is_current(
+            &fresh_cache,
+            &fresh_supervisor,
+            "daemon-1",
+            1_001,
+        ));
+
+        for (cache, supervisor, now_unix_ms) in [
+            (
+                serde_json::json!({"origin_state":"READY","cache_state":"ACTIVE"}),
+                fresh_supervisor.clone(),
+                1_001,
+            ),
+            (
+                fresh_cache.clone(),
+                {
+                    let mut foreign = fresh_supervisor.clone();
+                    foreign["daemon_instance_id"] = serde_json::json!("foreign-daemon");
+                    foreign
+                },
+                1_001,
+            ),
+            (
+                serde_json::json!({
+                    "schema_version": 1,
+                    "daemon_instance_id": "daemon-1",
+                    "written_at_unix_ms": 0,
+                    "ok": true,
+                    "origin_state": "READY",
+                    "cache_state": "ACTIVE",
+                }),
+                fresh_supervisor.clone(),
+                16_001,
+            ),
+        ] {
+            assert!(
+                !control_plane_status_is_current(&cache, &supervisor, "daemon-1", now_unix_ms),
+                "stale, foreign, or malformed status was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn supervisor_status_v3_with_ordered_action_results_is_current() {
+        let supervisor = valid_supervisor_status_v3();
+        assert!(supervisor_status_shape_is_valid(&supervisor));
+        assert!(supervisor_status_matches_current_daemon(
+            &supervisor,
+            "daemon-1",
+            1_001,
+        ));
+    }
+
+    #[test]
+    fn supervisor_status_v2_or_missing_action_results_is_refused() {
+        let mut legacy = valid_supervisor_status_v3();
+        legacy["schema_version"] = serde_json::json!(2);
+        assert!(!supervisor_status_shape_is_valid(&legacy));
+        assert!(!supervisor_status_matches_current_daemon(
+            &legacy, "daemon-1", 1_001,
+        ));
+
+        let mut missing = valid_supervisor_status_v3();
+        missing.as_object_mut().unwrap().remove("action_results");
+        assert!(!supervisor_status_shape_is_valid(&missing));
+    }
+
+    #[test]
+    fn supervisor_status_malformed_foreign_and_stale_states_are_refused() {
+        let mut malformed = valid_supervisor_status_v3();
+        malformed["action_results"][0]["error"] = serde_json::json!("unexpected");
+        assert!(!supervisor_status_shape_is_valid(&malformed));
+
+        let mut failed_without_error = valid_supervisor_status_v3();
+        failed_without_error["action_results"][1]["error"] = serde_json::Value::Null;
+        assert!(!supervisor_status_shape_is_valid(&failed_without_error));
+
+        let mut failed_with_empty_error = valid_supervisor_status_v3();
+        failed_with_empty_error["action_results"][1]["error"] = serde_json::json!("");
+        assert!(!supervisor_status_shape_is_valid(&failed_with_empty_error));
+
+        let mut failed_with_unbounded_error = valid_supervisor_status_v3();
+        failed_with_unbounded_error["action_results"][1]["error"] =
+            serde_json::json!("x".repeat(SUPERVISOR_ACTION_ERROR_MAX_BYTES + 1));
+        assert!(!supervisor_status_shape_is_valid(
+            &failed_with_unbounded_error
+        ));
+
+        let foreign = valid_supervisor_status_v3();
+        assert!(!supervisor_status_matches_current_daemon(
+            &foreign,
+            "foreign-daemon",
+            1_001,
+        ));
+
+        let stale = valid_supervisor_status_v3();
+        assert!(!supervisor_status_matches_current_daemon(
+            &stale, "daemon-1", 16_001,
+        ));
+    }
+
+    #[test]
+    fn supervisor_status_unknown_duplicate_reordered_or_legacy_actions_are_refused() {
+        let mut unknown = valid_supervisor_status_v3();
+        unknown["action_results"][0]["action"] = serde_json::json!("foreign_action");
+        assert!(!supervisor_status_shape_is_valid(&unknown));
+
+        let mut duplicate = valid_supervisor_status_v3();
+        duplicate["action_results"][1]["action"] = serde_json::json!("close_admission");
+        assert!(!supervisor_status_shape_is_valid(&duplicate));
+
+        let mut reordered = valid_supervisor_status_v3();
+        reordered["action_results"]
+            .as_array_mut()
+            .unwrap()
+            .swap(0, 1);
+        assert!(!supervisor_status_shape_is_valid(&reordered));
+
+        let mut legacy = valid_supervisor_status_v3();
+        legacy["last_action"] = serde_json::json!("request_reclaim");
+        assert!(!supervisor_status_shape_is_valid(&legacy));
+
+        let mut extra_result_field = valid_supervisor_status_v3();
+        extra_result_field["action_results"][0]["detail"] = serde_json::json!("foreign");
+        assert!(!supervisor_status_shape_is_valid(&extra_result_field));
+
+        let mut extra_status_field = valid_supervisor_status_v3();
+        extra_status_field["foreign"] = serde_json::json!(true);
+        assert!(!supervisor_status_shape_is_valid(&extra_status_field));
     }
 
     #[test]
@@ -1522,17 +2255,11 @@ Filename Type Size Used Priority
     }
 
     #[test]
-    fn default_mb_from_env_and_orphan_kill_switch() {
+    fn default_mb_from_env_uses_injected_value_or_fallback() {
         set_test_mb(Some(("RAMSHARED_TEST_MB", 333)));
         assert_eq!(default_mb_from_env("RAMSHARED_TEST_MB", 1), 333);
         set_test_mb(None);
         assert_eq!(default_mb_from_env("RAMSHARED_TEST_MB_MISSING", 9), 9);
-
-        set_no_orphan(Some(true));
-        assert!(orphan_recover_disabled());
-        set_no_orphan(Some(false));
-        assert!(!orphan_recover_disabled());
-        set_no_orphan(None);
     }
 
     #[test]
@@ -1554,7 +2281,7 @@ Filename Type Size Used Priority
             "Filename Type Size Used Priority\n\
              /dev/nbd0 partition 1024 0 100\n",
         ));
-        let e = read_swaps();
+        let e = read_swaps().expect("strict injected swaps");
         if !cascade_already_healthy(&e) {
             let err = refuse_half_cascade(&e).unwrap_err();
             assert!(err.to_string().contains("metade") || err.to_string().contains("down"));
@@ -1569,7 +2296,7 @@ Filename Type Size Used Priority
             "Filename Type Size Used Priority\n\
              /dev/nbd0 partition 1024 500 100\n",
         ));
-        let err = try_recover_zero_used_orphans().unwrap_err();
+        let err = refuse_unbound_managed_devices().unwrap_err();
         clear_test_seams();
         assert!(
             err.to_string().contains("used_kb") || err.to_string().contains("orphan"),
@@ -1578,33 +2305,34 @@ Filename Type Size Used Priority
     }
 
     #[test]
-    fn try_recover_kill_switch_on_zero_used() {
+    fn try_recover_zero_used_unbound_device_refuses_without_mutation() {
         clear_test_seams();
         set_test_swaps(Some(
             "Filename Type Size Used Priority\n\
              /dev/nbd0 partition 1024 0 100\n",
         ));
-        set_no_orphan(Some(true));
-        let err = try_recover_zero_used_orphans().unwrap_err();
+        let err = refuse_unbound_managed_devices().unwrap_err();
         clear_test_seams();
-        assert!(err.to_string().contains("ORPHAN") || err.to_string().contains("recover"));
+        assert!(
+            err.to_string().contains("detection-only")
+                || err.to_string().contains("lifecycle binding")
+        );
     }
 
     #[test]
-    fn try_recover_zero_used_with_mocked_swapoff() {
+    fn try_recover_zero_used_never_consumes_shell_mutations() {
         clear_test_seams();
-        for _ in 0..20 {
-            push_sh("*", Ok(""));
-        }
+        push_sh("*", Err("shell mutation must not run"));
         set_test_swaps(Some(
             "Filename Type Size Used Priority\n\
              /dev/nbd0 partition 1024 0 100\n\
              /dev/sdc partition 999 0 -2\n",
         ));
-        set_no_orphan(Some(false));
-        let r = try_recover_zero_used_orphans();
+        let error = refuse_unbound_managed_devices().unwrap_err();
+        let remaining = SH_SCRIPT.with(|queue| queue.borrow().len());
         clear_test_seams();
-        let _ = r;
+        assert!(error.to_string().contains("detection-only"));
+        assert_eq!(remaining, 1, "unbound recovery consumed a shell mutation");
     }
 
     #[test]
@@ -1662,12 +2390,12 @@ Filename Type Size Used Priority
             "Filename Type Size Used Priority\n\
              /dev/sdc partition 8388608 0 -2\n",
         ));
-        assert!(lower_tier_present());
+        assert!(lower_tier_present().expect("strict injected swaps"));
         set_test_swaps(Some(
             "Filename Type Size Used Priority\n\
              /dev/zram0 partition 1024 0 200\n",
         ));
-        assert!(!lower_tier_present());
+        assert!(!lower_tier_present().expect("strict injected swaps"));
         clear_test_seams();
     }
 

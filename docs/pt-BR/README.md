@@ -11,9 +11,12 @@ documentos em inglês indicados pelos links.
 
 ## Início rápido
 
-Para requisitos, pré-requisitos e o primeiro ciclo `check` → `up` → `status`,
+Para requisitos, pré-requisitos e o fluxo `check` → `status` → `monitor`,
 consulte o [início rápido do README](../../README.md#quick-start) ou leia a
 [tradução completa do README](../../README.pt-BR.md).
+
+Para distinguir RAM, capacidade lógica, VRAM física em cache e a origem SSD
+autoritativa, execute `ramshared monitor --compact`. O painel é somente leitura.
 
 ## Instalação
 

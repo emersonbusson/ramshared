@@ -1,0 +1,25 @@
+{
+  "schema_version": "ramshared.redaction-ledger.v1",
+  "recorded_at": "2026-08-24T03:06:31Z",
+  "artifact": "validation.md",
+  "base": {
+    "revision": "69f7469fa999b7d079341ee6bf8ebb006d517b51",
+    "retained_prefix_lines": 3869,
+    "retained_prefix_sha256": "0ff5d7285b1f770664647b56089c40bdc75bb057ac38e1a3c7051d30229e3777",
+    "disposition": "retained-byte-for-byte"
+  },
+  "corrections": [
+    {
+      "evidence_id": "EVD-0025",
+      "title": "Public evidence retention correction",
+      "entry_lines": 29,
+      "entry_sha256": "09aa597d24a25fa395bed2d15db4f648fc309353be741fac76a068f5ac51d1ba",
+      "disposition": "append-only-sanitized-correction"
+    }
+  ],
+  "policy": {
+    "historical_prefix_rewrite": "forbidden",
+    "raw_value_restatement": "forbidden",
+    "future_corrections": "append-only-and-digest-bound"
+  }
+}

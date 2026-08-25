@@ -59,8 +59,12 @@ pub fn backend_release_allowed(
     swapoff_attempted: bool,
     swapoff_confirmed: bool,
     used_kb: u64,
+    explicitly_absent: bool,
 ) -> bool {
-    used_kb == 0 && (!swapoff_attempted || swapoff_confirmed)
+    // `used_kb == 0` is ambiguous: the NBD row may be absent, may have been
+    // sampled before publication, or may be an active zero-used swap. Release
+    // only after this daemon has attempted and independently observed swapoff.
+    used_kb == 0 && (explicitly_absent || (swapoff_attempted && swapoff_confirmed))
 }
 
 pub struct RecoveryTracker {
@@ -273,11 +277,12 @@ mod tests {
 
     #[test]
     fn backend_release_requires_zero_used_and_confirmed_swapoff() {
-        assert!(super::backend_release_allowed(false, false, 0));
-        assert!(super::backend_release_allowed(true, true, 0));
-        assert!(!super::backend_release_allowed(true, false, 0));
-        assert!(!super::backend_release_allowed(true, true, 1));
-        assert!(!super::backend_release_allowed(false, false, 1));
+        assert!(!super::backend_release_allowed(false, false, 0, false));
+        assert!(super::backend_release_allowed(true, true, 0, false));
+        assert!(super::backend_release_allowed(false, false, 0, true));
+        assert!(!super::backend_release_allowed(true, false, 0, false));
+        assert!(!super::backend_release_allowed(true, true, 1, false));
+        assert!(!super::backend_release_allowed(false, false, 1, true));
     }
 
     #[test]

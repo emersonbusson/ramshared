@@ -28,7 +28,9 @@ The source of truth for architecture and coding rules is:
 
 ### Language
 
-- **English** across the project: source (`.rs`, `.h`, `.c`), comments, structural docs (`README.md`, `ARCHITECTURE.md`, `docs/**` except locale-specific marketing posts), commit titles, and pull requests.
+- **English** across the project: source (`.rs`, `.h`, `.c`), comments,
+  structural docs (`README.md`, `ARCHITECTURE.md`, `docs/**` except
+  locale-specific marketing posts), commits, pull requests, and issues.
 
 ### Scope
 

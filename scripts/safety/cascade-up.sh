@@ -58,7 +58,7 @@ case $# in
   *) refuse UNSUPPORTED_ARGUMENT ;;
 esac
 
-VRAM_MIB=$(read_config_integer VRAM_MIB 1024)
+VRAM_MIB=$(read_config_integer VRAM_MIB 4096)
 ZRAM_MIB=$(read_config_integer ZRAM_MIB 1024)
 EXPECTED_APPROVAL="activate:$RELEASE_VERSION"
 if [[ -n $VRAM_OVERRIDE ]]; then

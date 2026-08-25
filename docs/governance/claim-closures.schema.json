@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ramshared.dev/schemas/claim-closures.schema.json",
+  "title": "RamShared documentation claim closures",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "closures"],
+  "properties": {
+    "schema_version": { "const": "ramshared-claim-closures/v1" },
+    "closures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["slug", "state", "base_revision", "source_revision", "files", "evidence_manifests", "claim_sha256", "closure_sha256"],
+        "properties": {
+          "slug": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+          "state": { "enum": ["PARTIAL", "BLOCKED", "DONE"] },
+          "base_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "source_revision": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "files": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "sha256"],
+              "properties": {
+                "path": { "type": "string", "minLength": 1 },
+                "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+              }
+            }
+          },
+          "evidence_manifests": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "claim_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 of the UTF-8 canonical JSON for the complete claim object: object keys sorted by UTF-16 code-unit order, array order preserved, JSON primitives serialized without whitespace."
+          },
+          "closure_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    }
+  }
+}

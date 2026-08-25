@@ -1,20 +1,19 @@
 # IMPL — cascade-vram-ondemand
 
-> Passo 3 SSDV3. Implements [`SPEC.md`](SPEC.md). AUDIT-2.5: **GO**.  
-> **Date:** 2026-07-11  
-> **Status:** **GREEN** (live gates V3–V5; unit tests)
+> Historical Passo 3 SSDV3 record for the 2026-07-11 sparse experiment.
+> **Status (2026-08-22):** **SUPERSEDED for product NBD.** The source-removal
+> gate is **CLOSED**, but live qualification, release promotion, and activation
+> are **BLOCKED**. The retained observations below do not authorize a host, GPU,
+> WSL, device, or pressure action.
 
 ## Status gates
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| cargo test -p ramshared-block | **GREEN** | 32 passed (6 sparse) |
-| cargo test -p ramshared-cli | **GREEN** | 23 passed |
-| V3 idle up VRAM_MIB=3072 | **GREEN** | Δ free ≈ **212 MiB** (not ~3072) |
-| V4 pressure order | **GREEN** | zram t=1s → nbd t=6s; exit 0 |
-| V5 idle reclaim | **GREEN** | free 4067 → **4408** after ~40s idle |
-| nbd stable | **GREEN** | 15s hold after up; still after pressure |
-| mode log | **GREEN** | `VRAM mode=sparse capacity=3072 MiB chunk=128 MiB committed=0` |
+| Historical source/unit record | **RETAINED** | Measurements from the recorded 2026-07-11 candidate only |
+| Historical idle observation | **RETAINED** | Δ free ≈ **212 MiB** in that recorded build |
+| Historical pressure observation | **RETAINED** | zram t=1s → nbd t=6s; exit 0 in that recorded build |
+| Current product gate | **BLOCKED** | Live origin/NBD/GPU qualification, release promotion, and activation remain open |
 
 ## RF / ITEM → files
 
@@ -28,7 +27,8 @@
 
 ## Small decisions
 
-1. Sparse is **default**; `RAMSHARED_VRAM_PREALLOC=1` keeps Day-1 full alloc.  
+1. The historical sparse/full runtime choice is removed from product NBD; there
+   is no environment selector that restores full allocation.
 2. CUDA context overhead (~200 MiB) counted as slack (SPEC was 64 MiB; live ~212 — document 256 MiB slack).  
 3. Sparse does **not** swapoff on Latency/FreeFloor (false DEMOTE); only Corruption demotes via swapoff.  
 4. Reclaim ticks every 5s via `recv_timeout` even without NBD I/O.
@@ -46,8 +46,10 @@
 
 ## Rollback
 
-- `export RAMSHARED_VRAM_PREALLOC=1` then `ramshared down && cascade-up`  
-- Or revert this feature commit  
+- Keep the candidate disabled and restore only an exact reviewed origin-capable
+  source snapshot needed to repair a regression.
+- Do not restore a full-allocation selector or start a product path from this
+  historical record.
 
 **Rollback trigger:** idle `up` Δ free ≈ VRAM_MIB; or nbd vanishes without operator down; or ghost swap.
 

@@ -19,4 +19,8 @@ kernelModules=C:/wsl/modules-ramshared.vhdx
 
 [experimental]
 autoMemoryReclaim=Gradual
-sparseVhd=true
+# sparseVhd is intentionally omitted. WSL 2.7.12 disables live sparse
+# conversion because of data-corruption risk; never force --allow-unsafe on a
+# production/daily distro. Reclaim guest memory with a bounded memory.reclaim
+# policy. Run fstrim and Optimize-VHD only as an attended offline maintenance
+# transaction after every WSL distro is fully shut down.

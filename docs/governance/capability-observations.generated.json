@@ -7,7 +7,7 @@
         "claim_present": true,
         "observation_is_not_a_claim": true,
         "registry_path": "docs/governance/claims.json",
-        "registry_state": "DONE"
+        "registry_state": "PARTIAL"
       },
       "documented_surface": {
         "implementation_paths": [
@@ -168,6 +168,7 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-cli/src/bounded_process.rs",
           "crates/ramshared-cli/src/cascade/cascade_io.rs"
         ],
         "test_paths": [
@@ -201,7 +202,7 @@
           "crates/ramshared-vram/src/lib.rs",
           "crates/ramshared-wsl2d/src/main.rs",
           "scripts/safety/cascade-pressure-probe.sh",
-          "scripts/safety/cascade.conf.example"
+          "tools/ci/check-legacy-preallocation-removal.mjs"
         ],
         "test_paths": []
       },
@@ -402,7 +403,7 @@
         "claim_present": true,
         "observation_is_not_a_claim": true,
         "registry_path": "docs/governance/claims.json",
-        "registry_state": "DONE"
+        "registry_state": "PARTIAL"
       },
       "documented_surface": {
         "implementation_paths": [
@@ -616,10 +617,16 @@
         "claim_present": true,
         "observation_is_not_a_claim": true,
         "registry_path": "docs/governance/claims.json",
-        "registry_state": "DONE"
+        "registry_state": "PARTIAL"
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-cli/src/cascade/lifecycle.rs",
+          "crates/ramshared-cli/src/main.rs",
+          "crates/ramshared-winsvc/src/config.rs",
+          "crates/ramshared-winsvc/src/evidence.rs",
+          "crates/ramshared-winsvc/src/runtime.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
           "scripts/docs-check.sh",
           "scripts/p0/measure-cascade-demote.sh",
           "scripts/windows/Build-Drivers.ps1",
@@ -632,10 +639,13 @@
           "scripts/windows/Run-StorportCudaPartial.ps1",
           "scripts/windows/Sign-Drivers.ps1",
           "scripts/windows/build-winsvc.bat",
-          "tools/ci/check-public-hygiene.mjs"
+          "tools/ci/check-ci-contract.mjs",
+          "tools/ci/check-public-hygiene.mjs",
+          "tools/ci/plan-rust-slice-coverage.mjs"
         ],
         "test_paths": [
-          "tools/ci/check-public-hygiene.test.mjs"
+          "tools/ci/check-public-hygiene.test.mjs",
+          "tools/ci/plan-rust-slice-coverage.test.mjs"
         ]
       },
       "documents": {
@@ -1037,10 +1047,54 @@
       },
       "documented_surface": {
         "implementation_paths": [
+          "crates/ramshared-cli/src/bounded_process.rs",
+          "crates/ramshared-cli/src/cascade/lifecycle.rs",
+          "crates/ramshared-cli/src/main.rs",
+          "crates/ramshared-cli/src/monitor.rs",
+          "crates/ramshared-cli/src/supervisor.rs",
+          "crates/ramshared-cli/src/workload.rs",
+          "scripts/safety/cascade-controller.sh",
+          "scripts/safety/lifecycle-recovery-status.sh",
+          "scripts/safety/postmortem.sh",
+          "scripts/safety/systemd/ramshared-control.slice",
+          "scripts/safety/test-control-plane-units.sh",
+          "scripts/safety/test-postmortem-classification.sh",
+          "scripts/windows/Recover-RamSharedWslLifecycle.ps1",
+          "scripts/windows/Test-RamSharedWslWatchdogStatic.ps1",
+          "scripts/windows/Watch-RamSharedWsl.ps1"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-control-plane-pressure-incident/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-control-plane-pressure-incident/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-control-plane-pressure-incident/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-control-plane-pressure-incident"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "scripts/kernel/Install-BootKernelLaunchers.ps1",
+          "scripts/kernel/Test-BootKernelSafeStatic.ps1",
           "scripts/kernel/boot-kernel-logged.ps1",
           "scripts/kernel/boot-kernel-safe.ps1",
           "scripts/kernel/build-wsl-kernel.sh",
           "scripts/kernel/qemu-validate.sh",
+          "scripts/kernel/seal-kernel-pair.sh",
+          "scripts/kernel/test-wsl-kernel-static.sh",
           "scripts/kernel/wsl-kernel-lib.sh",
           "scripts/kernel/wsl-kernel.sh"
         ],
@@ -1099,6 +1153,8 @@
           "scripts/safety/wsl2-freeze-campaign.sh",
           "scripts/windows/Invoke-SharedWslPressureCampaign.ps1",
           "scripts/windows/Invoke-Win11Wsl2FreezeCampaign.ps1",
+          "scripts/windows/SharedWslHostMemoryGate.psm1",
+          "scripts/windows/Test-SharedWslPressureCampaignMemoryGate.ps1",
           "scripts/windows/Test-SharedWslPressureCampaignStatic.ps1",
           "scripts/windows/Test-Win11Wsl2FreezeCampaignStatic.ps1"
         ],
@@ -1247,6 +1303,36 @@
         "reason": "Only the qualified claims registry may publish capability state."
       },
       "slug": "wsl2-relay-lifecycle-reliability"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
+        "implementation_paths": [
+          "crates/ramshared-block/src/origin_cache.rs",
+          "crates/ramshared-block/src/request.rs",
+          "crates/ramshared-cli/src/cascade/cascade_io.rs",
+          "crates/ramshared-wsl2d/src/main.rs",
+          "scripts/windows/Manage-RamSharedOrigin.ps1"
+        ],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": "docs/specs/no-milestone/wsl2-revocable-vram-origin/IMPL.md",
+        "prd": "docs/specs/no-milestone/wsl2-revocable-vram-origin/PRD.md",
+        "spec": "docs/specs/no-milestone/wsl2-revocable-vram-origin/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "wsl2-revocable-vram-origin"
     },
     {
       "claim_reconciliation": {

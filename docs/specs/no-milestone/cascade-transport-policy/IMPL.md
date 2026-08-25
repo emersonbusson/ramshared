@@ -2,7 +2,10 @@
 
 > Passo 3 SSDV3. Implements [`SPEC.md`](SPEC.md). AUDIT-2.5: **GO** (NBD Day-1).  
 > **Date:** 2026-07-10  
-> **Status:** **GREEN** on product WSL2 (custom kernel 6.18.35.2 + cascade boot unit).
+> **Status:** **HISTORICAL NBD CAPABILITY EVIDENCE; CURRENT AUTOMATIC BOOT
+> DISABLED.** The 2026-07-10 custom-kernel smoke remains evidence for that
+> exact run only. The 2026-08-23 DXG/systemd finding makes current live kernel
+> promotion NO-GO; NBD remains the independent Day-1 transport decision.
 
 ## Status gates
 
@@ -15,6 +18,24 @@
 | V5 unit enabled | **GREEN** | `systemctl is-enabled ramshared-cascade` = enabled |
 | ublk fail-closed | **GREEN** | explicit `--transport ublk` errors before mutate |
 | cargo test -p ramshared-cli | **GREEN** | see validation entry |
+
+## 2026-08-23 bounded-custody remediation
+
+- Every short-lived cascade command now uses the shared bounded runner: a new
+  invocation-private process group, 64 KiB per-stream storage, concurrent
+  capture, exact group SIGKILL on timeout or inherited output, and bounded
+  direct-child reap.
+- Pre-attach daemon children also lead private groups. Failed readiness and
+  proven-no-effect rollback terminate the exact group and reap the direct
+  child; uncertain NBD/swapon effects still preserve the identity-bound daemon
+  and forensics instead of guessing cleanup.
+- `bounded_command_contains_descendant_that_inherits_output` pairs the
+  adversarial inherited-pipe case with legitimate success/nonzero cases.
+  `unreaped_group_selects_fatal_controller_containment` injects an unreapable
+  target and proves stable exit-125 containment is selected without exiting
+  the test process.
+- No live cascade, module, swap, NBD, daemon, WSL, device, or systemd action was
+  performed by this source remediation.
 
 ## RF / ITEM → files
 
@@ -49,11 +70,15 @@
 | Soak reboot 2× after enable | **Hygiene** — human/lab; no new SPEC (covers existing boot SPEC) |
 | Full ublk `up` wire | Future SPEC + AUDIT-2.5 |
 | Pressure thrash | Host-unsafe on live WSL2 — only qemu/civm |
+| Custom-kernel DXG/systemd requalification | **NO-GO** until the exact-distro bundled/custom A/B canary passes; see the [2026-08-23 finding](../../../reliability/incidents/2026-08-23-wsl2-dxg-fortify-systemd-no-go.md) |
 
 ## Rollback trigger
 
 - Ghost nbd/ublk in `/proc/swaps` after boot → `ramshared down` then investigate; if unit loops, `uninstall-cascade-boot.sh`.  
 - Host freeze after any ublk experiment → never re-enable product ublk; keep NBD.
+- Any custom-boot FORTIFY/init-timeout/unclean/p9/fatal signal, failed DXG probe,
+  systemd non-running state, or query-error regression → disarm to bundled and
+  keep all RamShared device activation off.
 
 ## Traceability
 

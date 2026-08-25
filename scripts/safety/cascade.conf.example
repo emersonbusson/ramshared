@@ -4,8 +4,9 @@
 # sourced as shell code. Change a setting by publishing and selecting another
 # sealed version; never edit a selected release in place.
 
-# The current source-only gate permits the 1 GiB pilot configuration only.
-VRAM_MIB=1024
+# The source candidate defaults to 4 GiB logical capacity. Physical VRAM is a
+# revocable cache and starts capped at 1 GiB during the attended rollout.
+VRAM_MIB=4096
 ZRAM_MIB=1024
 
 # The package builder replaces these three values together. They bind one

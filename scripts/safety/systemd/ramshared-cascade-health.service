@@ -1,14 +1,14 @@
 [Unit]
 Description=RamShared cascade health sampler (JSONL append-only)
-Documentation=file://@REPO_PATH@/scripts/safety/cascade-health.sh
+Documentation=file:///opt/ramshared/current/README.md
 After=local-fs.target
 
 [Service]
 Type=simple
+Slice=ramshared-control.slice
 User=root
-# Read-only health loop: /proc + nvidia-smi + pgrep. No swap thrash.
-Environment=INTERVAL_S=30
-ExecStart=@SCRIPTS_PATH@/cascade-health.sh --loop --out /var/log/ramshared/cascade-health.jsonl --interval 30
+# Typed read-only observer. It cannot change swap or create pressure.
+ExecStart=/opt/ramshared/current/bin/ramshared monitor --jsonl --output /var/log/ramshared/cascade-health.jsonl --heartbeat /mnt/c/wsl-forensics/ramshared-heartbeat.json --interval-ms 1000
 Restart=on-failure
 RestartSec=10
 StandardOutput=journal
