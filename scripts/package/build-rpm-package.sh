@@ -62,6 +62,9 @@ install -m 0755 ${DAEMON_BIN} %{buildroot}/usr/bin/ramsharedd
 if [ -f ${ROOT}/packaging/systemd/60-ramshared.rules ]; then
   install -m 0644 ${ROOT}/packaging/systemd/60-ramshared.rules %{buildroot}/lib/udev/rules.d/60-ramshared.rules
 fi
+if [ -f ${ROOT}/packaging/systemd/65-ramshared-observability.rules ]; then
+  install -m 0644 ${ROOT}/packaging/systemd/65-ramshared-observability.rules %{buildroot}/lib/udev/rules.d/65-ramshared-observability.rules
+fi
 
 %files
 /usr/bin/ramshared
@@ -69,6 +72,7 @@ fi
 /usr/share/ramshared
 /etc/ramshared
 /lib/udev/rules.d/60-ramshared.rules
+/lib/udev/rules.d/65-ramshared-observability.rules
 
 %changelog
 * Wed Aug 26 2026 Emerson Busson - ${RPM_VERSION}-1

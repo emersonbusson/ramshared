@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# RamShared - Linux Observability, UDisks2, and btop/htop Auto-Discovery Rules
+
+# In-Tree RamShared Kernel Block Driver (/dev/ramshared*)
+KERNEL=="ramshared[0-9]*", SUBSYSTEM=="block", ACTION=="add|change", \
+    ENV{ID_VENDOR}="RamShared", \
+    ENV{ID_MODEL}="GPU_VRAM_Tier", \
+    ENV{ID_BUS}="pci", \
+    ENV{ID_TYPE}="disk", \
+    ENV{UDISKS_PRESENTATION_NAME}="RamShared GPU VRAM", \
+    ENV{UDISKS_PRESENTATION_ICON_NAME}="drive-harddisk-solidstate", \
+    ENV{UDISKS_SYSTEM}="1", \
+    SYMLINK+="disk/by-id/ramshared-vram", \
+    SYMLINK+="ramshared-vram"
+
+# User-Space UBLK Daemon (/dev/ublkb*)
+KERNEL=="ublkb*", SUBSYSTEM=="block", ACTION=="add|change", \
+    ENV{ID_VENDOR}="RamShared", \
+    ENV{ID_MODEL}="UBLK_VRAM_Tier", \
+    ENV{ID_BUS}="virtual", \
+    ENV{ID_TYPE}="disk", \
+    ENV{UDISKS_PRESENTATION_NAME}="RamShared GPU VRAM (ublk)", \
+    ENV{UDISKS_PRESENTATION_ICON_NAME}="drive-harddisk-solidstate", \
+    ENV{UDISKS_SYSTEM}="1", \
+    SYMLINK+="disk/by-id/ramshared-vram"
+
+# NBD Swap Tier (/dev/nbd*)
+KERNEL=="nbd[0-9]*", SUBSYSTEM=="block", ACTION=="add|change", \
+    ENV{ID_VENDOR}="RamShared", \
+    ENV{ID_MODEL}="NBD_VRAM_Tier", \
+    ENV{ID_BUS}="virtual", \
+    ENV{ID_TYPE}="disk", \
+    ENV{UDISKS_PRESENTATION_NAME}="RamShared GPU VRAM (nbd)", \
+    ENV{UDISKS_PRESENTATION_ICON_NAME}="drive-harddisk-solidstate", \
+    ENV{UDISKS_SYSTEM}="1", \
+    SYMLINK+="disk/by-id/ramshared-vram"
+
+# Synchronous VRAM Block Queue Tuning (Zero-Seek, None Scheduler)
+ACTION=="add", KERNEL=="ramshared[0-9]*|ublkb*|nbd[0-9]*", SUBSYSTEM=="block", \
+    ATTR{queue/rotational}="0", \
+    ATTR{queue/nomerges}="2", \
+    ATTR{queue/read_ahead_kb}="0", \
+    ATTR{queue/add_random}="0", \
+    ATTR{queue/scheduler}="none"

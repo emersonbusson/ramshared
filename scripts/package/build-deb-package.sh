@@ -82,6 +82,10 @@ if [[ -f "$ROOT/packaging/systemd/60-ramshared.rules" ]]; then
   mkdir -p "$STAGE_DIR/lib/udev/rules.d"
   install -m 0644 "$ROOT/packaging/systemd/60-ramshared.rules" "$STAGE_DIR/lib/udev/rules.d/"
 fi
+if [[ -f "$ROOT/packaging/systemd/65-ramshared-observability.rules" ]]; then
+  mkdir -p "$STAGE_DIR/lib/udev/rules.d"
+  install -m 0644 "$ROOT/packaging/systemd/65-ramshared-observability.rules" "$STAGE_DIR/lib/udev/rules.d/"
+fi
 
 # Install documentation & licenses
 install -m 0644 "$ROOT/README.md" "$STAGE_DIR/usr/share/doc/ramshared/README.md"
