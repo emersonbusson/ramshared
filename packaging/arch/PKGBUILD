@@ -1,0 +1,31 @@
+# Maintainer: Emerson Busson
+pkgname=ramshared
+pkgver=0.9.0.beta.2
+pkgrel=1
+pkgdesc="Hardware-accelerated VRAM memory tiering & low-level kernel block drivers"
+arch=('x86_64' 'aarch64')
+url="https://github.com/emersonbusson/ramshared"
+license=('GPL2')
+depends=('systemd' 'glibc')
+optdepends=(
+    'cuda: NVIDIA GPU hardware DMA acceleration'
+    'vulkan-icd-loader: Vulkan Memory Allocator backend'
+)
+install=ramshared.install
+source=("$pkgname-$pkgver.tar.gz::https://github.com/emersonbusson/ramshared/archive/refs/tags/v0.9.0-beta.2.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$srcdir/$pkgname-${pkgver//./-}" 2>/dev/null || cd "$srcdir"
+    if command -v cargo >/dev/null 2>&1; then
+        cargo build --release --locked -p ramshared-cli -p ramshared-wsl2d
+    fi
+}
+
+package() {
+    cd "$srcdir/$pkgname-${pkgver//./-}" 2>/dev/null || cd "$srcdir"
+    install -Dm755 target/release/ramshared "$pkgdir/usr/bin/ramshared"
+    install -Dm755 target/release/ramsharedd "$pkgdir/usr/bin/ramsharedd"
+    install -Dm644 packaging/systemd/99-ramshared.rules "$pkgdir/usr/lib/udev/rules.d/99-ramshared.rules"
+    install -Dm644 packaging/systemd/ramshared-vram.service "$pkgdir/usr/lib/systemd/system/ramshared-vram.service"
+}

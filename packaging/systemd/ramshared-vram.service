@@ -1,0 +1,18 @@
+[Unit]
+Description=RamShared Zero-Copy GPU VRAM Memory Tier Service
+Documentation=https://github.com/emersonbusson/ramshared
+After=systemd-udev-settle.service local-fs.target
+ConditionPathExists=/dev/dri/renderD128
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ramsharedd --daemon --origin-ssd
+ExecStop=/usr/bin/ramshared cascade down
+Restart=on-failure
+RestartSec=5s
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

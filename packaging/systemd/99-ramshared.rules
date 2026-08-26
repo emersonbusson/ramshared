@@ -1,0 +1,12 @@
+# /lib/udev/rules.d/99-ramshared.rules
+# Auto-detect discrete GPU devices and trigger RamShared VRAM memory tiering
+
+# NVIDIA discrete GPUs (DRM render node or nvidia device)
+SUBSYSTEM=="drm", KERNEL=="renderD*", ATTRS{vendor}=="0x10de", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+SUBSYSTEM=="module", KERNEL=="nvidia", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+
+# AMD Radeon discrete GPUs (vendor 0x1002)
+SUBSYSTEM=="drm", KERNEL=="renderD*", ATTRS{vendor}=="0x1002", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+
+# Intel Arc discrete GPUs (vendor 0x8086)
+SUBSYSTEM=="drm", KERNEL=="renderD*", ATTRS{vendor}=="0x8086", TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
