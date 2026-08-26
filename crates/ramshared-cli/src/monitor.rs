@@ -137,6 +137,10 @@ pub struct ControlPlaneObservation {
     pub memory_psi_full_avg300: f64,
     pub swap_in_pages: u64,
     pub swap_out_pages: u64,
+    pub swap_read_bytes: u64,
+    pub swap_write_bytes: u64,
+    pub swap_read_mbs: f64,
+    pub swap_write_mbs: f64,
     pub memory_events: MemoryEvents,
     pub active_scopes: u64,
     pub docker_memory_current_bytes: u64,
@@ -211,6 +215,7 @@ pub fn collect_observation() -> Result<Observation, MonitorError> {
     let meminfo = fs::read_to_string("/proc/meminfo").unwrap_or_default();
     let pressure = fs::read_to_string("/proc/pressure/memory").unwrap_or_default();
     let vmstat = fs::read_to_string("/proc/vmstat").unwrap_or_default();
+    let diskstats = fs::read_to_string("/proc/diskstats").unwrap_or_default();
     let events = fs::read_to_string("/sys/fs/cgroup/ramshared-workloads.slice/memory.events")
         .unwrap_or_default();
     let mut errors = Vec::new();
@@ -224,8 +229,11 @@ pub fn collect_observation() -> Result<Observation, MonitorError> {
     };
     let mut control_plane = parse_memory_pressure(&pressure);
     let (swap_in_pages, swap_out_pages) = parse_vmstat(&vmstat);
+    let (swap_read_bytes, swap_write_bytes) = parse_swap_diskstats(&diskstats);
     control_plane.swap_in_pages = swap_in_pages;
     control_plane.swap_out_pages = swap_out_pages;
+    control_plane.swap_read_bytes = swap_read_bytes;
+    control_plane.swap_write_bytes = swap_write_bytes;
     control_plane.memory_events = parse_memory_events(&events);
     control_plane.active_scopes =
         count_scope_dirs(Path::new("/sys/fs/cgroup/ramshared-workloads.slice"));
@@ -315,6 +323,30 @@ fn parse_vmstat(text: &str) -> (u64, u64) {
         })
     };
     (value("pswpin").unwrap_or(0), value("pswpout").unwrap_or(0))
+}
+
+fn parse_swap_diskstats(text: &str) -> (u64, u64) {
+    let mut read_bytes = 0u64;
+    let mut write_bytes = 0u64;
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() >= 10 {
+            let dev = fields[2];
+            if dev.starts_with("nbd")
+                || dev.starts_with("zram")
+                || dev == "sdc"
+                || dev.starts_with("ramshared")
+            {
+                if let (Ok(read_sectors), Ok(write_sectors)) =
+                    (fields[5].parse::<u64>(), fields[9].parse::<u64>())
+                {
+                    read_bytes = read_bytes.saturating_add(read_sectors.saturating_mul(512));
+                    write_bytes = write_bytes.saturating_add(write_sectors.saturating_mul(512));
+                }
+            }
+        }
+    }
+    (read_bytes, write_bytes)
 }
 
 fn parse_memory_events(text: &str) -> MemoryEvents {
@@ -674,10 +706,32 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
     let interval = Duration::from_millis(options.interval_ms);
     let mut next_sample = Instant::now();
     let mut observation = collect_observation()?;
+    let mut last_io_sample = Some((
+        observation.control_plane.swap_read_bytes,
+        observation.control_plane.swap_write_bytes,
+        Instant::now(),
+    ));
 
     loop {
         if Instant::now() >= next_sample {
             observation = collect_observation()?;
+            let now = Instant::now();
+            if let Some((last_rb, last_wb, last_t)) = last_io_sample {
+                let dt = now.duration_since(last_t).as_secs_f64();
+                if dt > 0.05 {
+                    observation.control_plane.swap_read_mbs =
+                        (observation.control_plane.swap_read_bytes.saturating_sub(last_rb) as f64)
+                            / (dt * 1_048_576.0);
+                    observation.control_plane.swap_write_mbs =
+                        (observation.control_plane.swap_write_bytes.saturating_sub(last_wb) as f64)
+                            / (dt * 1_048_576.0);
+                }
+            }
+            last_io_sample = Some((
+                observation.control_plane.swap_read_bytes,
+                observation.control_plane.swap_write_bytes,
+                now,
+            ));
             history.push_back(memory_used_pct(&observation.mem));
             while history.len() > history_limit {
                 history.pop_front();
