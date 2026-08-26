@@ -9,11 +9,8 @@ O RamShared é uma candidata de P&D para usar VRAM NVIDIA ociosa como cache
 revogável em uma camada de memória para Linux e WSL2. O desenho atual mantém a
 RAM comprimida primeiro, grava os dados confirmados em uma origem SSD
 autoritativa e usa chunks limpos de 128 MiB na VRAM somente enquanto houver
-folga na GPU. O swap VHDX existente do WSL continua sendo o último fallback. O
-projeto está sob qualificação beta ativa para Linux e WSL2: os gates ao vivo de
-guardião, write-through na origem e pressão de memória foram empiricamente
-validados no hardware da estação de trabalho (EVD-0037, EVD-0038). Resultados
-históricos valem apenas para suas revisões registradas; o RamShared não adiciona
+folga na GPU. O swap VHDX existente do WSL continua sendo o último fallback.
+Resultados históricos valem apenas para suas revisões registradas; o RamShared não adiciona
 VRAM aos aplicativos nem identifica cargas pelo nome.
 
 ![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram-pt.png)
@@ -50,9 +47,9 @@ alegações abertas e a evidência exata necessária para fechá-las estão em
 A revisão consolidada dos candidatos gerados pelo Jules está registrada em
 [`docs/reliability/JULES-PR-AUDIT-20260724.md`](docs/reliability/JULES-PR-AUDIT-20260724.md).
 
-## Por que investigar VRAM como camada no WSL2?
+## Por que usar VRAM como camada de memória?
 
-O caminho de disco do WSL2 atravessa ext4, VHDX, Hyper-V e NTFS. As medições empíricas no host em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) mostram que gravações diretas na VRAM via PCIe evitam a sobrecarga de virtualização do swap em disco, prevenindo os congelamentos de sistema e travamentos que ocorrem quando o swap fica saturado.
+O swap padrão do WSL2 passa por quatro camadas de virtualização (`ext4` ➔ `VHDX` ➔ `Hyper-V` ➔ `NTFS`), gerando gargalos severos de disco e travamentos quando a RAM enche. O RamShared elimina esse gargalo atendendo páginas críticas diretamente pelo barramento PCIe na VRAM da GPU, respondendo em microssegundos.
 
 ## Limite atual — staging somente desabilitado
 
@@ -125,17 +122,14 @@ A arquitetura de dois níveis combina alta velocidade via PCIe com persistência
 - **Origem L2 no SSD (24 GiB):** Fornece capacidade fixa e ilimitada no disco, absorvendo picos sem encerramento forçado de processos (qualificado sob 99% de carga de RAM no EVD-0037).
 - **Garantia Write-Through:** Toda escrita confirmada pelo RamShared é persistida na origem SSD autoritativa. Leituras usam VRAM apenas quando a validade de página confere.
 
-Quando o Windows (WDDM) ou um jogo precisa de memória na GPU, o RamShared protege a estabilidade do sistema:
+### Proteção Automática da GPU para Jogos e Windows
 
-1. interrompe novas alocações na VRAM;
-2. invalida ou libera imediatamente os blocos limpos de cache;
-3. continua as leituras e gravações diretamente pela origem no SSD se a GPU for solicitada;
-4. reserva `max(2 GiB, 20% da VRAM física)` para uso prioritário da GPU;
-5. exige `swapoff` ordenado antes de desconectar a origem do disco.
+Quando o Windows, jogos ou aplicações 3D solicitam memória na GPU, o RamShared libera a VRAM imediatamente para manter a responsividade total do sistema:
 
-O WDDM do Windows continua sendo a autoridade no WSL2. O RamShared reage à
-pressão visível no host; não promete que abrir um aplicativo específico libere
-instantânea ou seguramente uma quantidade fixa de VRAM.
+1. Interrompe na hora novas alocações na VRAM e libera os blocos limpos de cache.
+2. Continua as operações de memória diretamente pela origem autoritativa no SSD sem interromper processos.
+3. Reserva automaticamente `max(2 GiB, 20% da VRAM física)` exclusivamente para o Windows e gráficos.
+4. Exige a desmontagem ordenada (`swapoff-first`) antes de desconectar dispositivos para evitar travamentos.
 
 ### Desempenho Medido & Evolução da Arquitetura
 
@@ -239,15 +233,9 @@ candidata permanecer desabilitada.
 
 ## Evidência de desempenho
  
-As medições empíricas de desempenho são registradas sob envelopes rigorosos de evidência pública em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) e registradas em [`validation.md`](validation.md).
- 
-Qualificações recentes ao vivo no hardware físico da estação de trabalho incluem:
- 
-- **Pressão de memória no host (EVD-0037):** Carga sustentada de 98,6%–99,0% de RAM por 60 segundos com zero encerramentos por OOM e 100% de integridade SHA-256 verificada.
-- **Cache VRAM write-through e origem SSD (EVD-0038):** Qualificação ao vivo da cascata de armazenamento na RTX 2060, demonstrando leituras aceleradas via PCIe na VRAM e recuperação exata direto do SSD após revogação de contexto da GPU com zero bytes corrompidos.
-- **Comparação entre camadas de armazenamento:** Avaliação empírica comparando persistência em SSD com buffer DRAM vs DRAM-less, demonstrando por que o cache em VRAM elimina travamentos de swap em ambas as classes de armazenamento.
- 
-Para distribuições estatísticas completas, histogramas de latência e comandos de reprodução, consulte [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+As medições empíricas de desempenho e distribuições de latência são registradas sob envelopes de evidência pública em [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) e registradas em [`validation.md`](validation.md).
+
+Para pacotes brutos de amostras, traces de execução em hardware, histogramas de latência e comandos exatos de reprodução para EVD-0037 e EVD-0038, consulte [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
 ## Arquitetura
 

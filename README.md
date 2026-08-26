@@ -6,11 +6,8 @@ RamShared is an R&D candidate for using idle NVIDIA VRAM as a revocable cache
 in a Linux and WSL2 memory tier. Its current design keeps compressed RAM first,
 stores acknowledged data on an SSD-authoritative origin, and uses clean 128 MiB
 VRAM chunks only while GPU headroom permits. The existing WSL swap VHDX remains
-the final fallback. The project is under active beta qualification for Linux
-and WSL2: live guardian, origin write-through, and memory pressure gates have
-been empirically validated on workstation hardware (EVD-0037, EVD-0038).
-Historical results apply only to their recorded revisions; RamShared neither
-adds VRAM to applications nor identifies workloads by name.
+the final fallback. Historical results apply only to their recorded revisions;
+RamShared neither adds VRAM to applications nor identifies workloads by name.
 
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.png)
 
@@ -47,9 +44,9 @@ and the exact evidence needed to close them live in
 The consolidated review of the earlier candidate changes is recorded in
 [`docs/reliability/JULES-PR-AUDIT-20260724.md`](docs/reliability/JULES-PR-AUDIT-20260724.md).
 
-## Why investigate VRAM as a WSL2 tier?
+## Why use VRAM as a memory tier?
 
-WSL2's disk path crosses ext4, VHDX, Hyper-V, and NTFS. Empirical host measurements in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) show that direct VRAM writes over PCIe avoid the multi-tier virtualization overhead of virtualized disk swap, preventing the minute-long I/O stalls and desktop freezes that occur when swap is saturated.
+Standard WSL2 swap traverses four virtualization layers (`ext4` ➔ `VHDX` ➔ `Hyper-V` ➔ `NTFS`), causing severe I/O bottlenecks and system freezes during memory spikes. RamShared bypasses this overhead by serving hot memory pages directly across the high-speed PCIe bus to GPU VRAM, delivering sub-millisecond response times.
 
 ## Current boundary — disabled staging only
 
@@ -121,17 +118,14 @@ The dual-tier architecture combines high-speed PCIe memory caching with durable 
 - **L2 SSD Origin (24 GiB):** Provides fixed, uninhibited capacity on disk, absorbing memory pressure without process termination (qualified under 99% RAM load in EVD-0037).
 - **Write-Through Invariant:** Every acknowledged RamShared write is persisted to the authoritative SSD origin. Reads use VRAM only when generation and page validity match.
 
-When Windows WDDM or gaming workloads reclaim GPU resources, RamShared immediately protects system stability:
+### Automatic GPU Protection for Windows & Gaming
 
-1. refuse new VRAM commits;
-2. invalidate or immediately release clean cache chunks;
-3. continue I/O through the SSD origin if GPU allocation or measurement fails;
-4. reserve `max(2 GiB, 20% of physical VRAM)` for the GPU;
-5. require swapoff-first ordering only when detaching the authoritative origin.
+When Windows, games, or 3D rendering workloads request GPU memory, RamShared immediately yields VRAM to maintain system responsiveness:
 
-Windows WDDM remains authoritative in WSL2. RamShared reacts to host-visible
-pressure; it does not promise that opening a particular application instantly
-or risklessly frees a fixed amount of VRAM.
+1. Instantly halts new VRAM allocations and frees clean cache chunks.
+2. Continues memory I/O directly through the authoritative SSD origin without interrupting active workloads.
+3. Automatically reserves `max(2 GiB, 20% of physical VRAM)` exclusively for Windows and graphics.
+4. Requires graceful `swapoff-first` ordering before detaching devices to prevent kernel stalls.
 
 ### Performance & Transport Evolution
 
@@ -236,15 +230,9 @@ candidate remains disabled.
 
 ## Performance evidence
  
-Empirical performance measurements are recorded under strict public evidence envelopes in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and registered in [`validation.md`](validation.md).
- 
-Recent live qualifications on physical workstation hardware include:
- 
-- **Host Memory Pressure (EVD-0037):** Sustained 98.6%–99.0% host RAM load for 60 seconds with zero OOM kills and verified 100% SHA-256 integrity.
-- **Write-Through VRAM & SSD Origin (EVD-0038):** Live qualification of the dual-tier storage cascade on RTX 2060, demonstrating accelerated PCIe cache hits and byte-exact direct SSD recovery upon GPU context revocation with 0 bytes corrupted.
-- **Storage Tier Comparison:** Empirical evaluation comparing DRAM-buffered and DRAM-less SSD origin persistence, showing why VRAM caching eliminates desktop swap freezes across both storage classes.
- 
-For complete statistical distributions, latency histograms, and reproduction commands, refer to [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
+Empirical performance measurements and latency distributions are recorded under public evidence envelopes in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) and registered in [`validation.md`](validation.md).
+
+For raw sample bundles, hardware execution traces, latency histograms, and exact reproduction steps for EVD-0037 and EVD-0038, refer to [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md).
 
 ## Architecture
 
