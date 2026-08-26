@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 254,
-    "classified": 243,
+    "total": 255,
+    "classified": 244,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -1009,6 +1009,18 @@
     },
     {
       "path": "docs/reviews/README.md",
+      "disposition": "classified",
+      "ruleId": "review-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/reviews/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/reviews/UPSTREAM-ANTI-FRAGILITY-FORMS.md",
       "disposition": "classified",
       "ruleId": "review-documents",
       "verification": {

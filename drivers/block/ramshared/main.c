@@ -119,6 +119,34 @@ static void ramshared_pci_remove(struct pci_dev *pdev)
 	dev_info(&pdev->dev, "RamShared device removed successfully\n");
 }
 
+/* PCIe AER & Link Drop Error Handlers */
+static pci_ers_result_t ramshared_pci_error_detected(struct pci_dev *pdev,
+						     pci_channel_state_t state)
+{
+	dev_err(&pdev->dev, "PCIe error detected (state=%d)\n", state);
+	if (state == pci_channel_io_frozen)
+		return PCI_ERS_RESULT_NEED_RESET;
+	return PCI_ERS_RESULT_CAN_RECOVER;
+}
+
+static pci_ers_result_t ramshared_pci_slot_reset(struct pci_dev *pdev)
+{
+	dev_info(&pdev->dev, "PCIe slot reset recovery initiated\n");
+	pci_restore_state(pdev);
+	return PCI_ERS_RESULT_RECOVERED;
+}
+
+static void ramshared_pci_resume(struct pci_dev *pdev)
+{
+	dev_info(&pdev->dev, "PCIe link resumed\n");
+}
+
+static const struct pci_error_handlers ramshared_pci_err_handler = {
+	.error_detected = ramshared_pci_error_detected,
+	.slot_reset     = ramshared_pci_slot_reset,
+	.resume         = ramshared_pci_resume,
+};
+
 static const struct pci_device_id ramshared_pci_tbl[] = {
 	{ PCI_DEVICE_CLASS(PCI_CLASS_DISPLAY_VGA << 8, 0xffff00) },
 	{ PCI_DEVICE_CLASS(PCI_CLASS_DISPLAY_OTHER << 8, 0xffff00) },
@@ -132,6 +160,7 @@ static struct pci_driver ramshared_pci_driver = {
 	.id_table	= ramshared_pci_tbl,
 	.probe		= ramshared_pci_probe,
 	.remove		= ramshared_pci_remove,
+	.err_handler	= &ramshared_pci_err_handler,
 };
 
 module_pci_driver(ramshared_pci_driver);

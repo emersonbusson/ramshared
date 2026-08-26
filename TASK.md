@@ -488,3 +488,17 @@ live qualification remain blocked pending a fresh explicit instruction.
 **Destinations:** `.github/workflows/kernel-ci.yml`, `scripts/ci/`, `scripts/package/`, `packaging/`, `trovaldo.md`, `docs/cioficial.md`, `docs/reviews/ADVERSARIAL-KERNEL-CI-AUDIT.md`, `TASK.md`, and `MEMORY.md`.
 **Scope:** Implement full parity with official Linux Kernel (`torvalds/linux`) and Microsoft WSL2 CI pipelines: automated `checkpatch.pl` style checking, `sparse`/`smatch` semantic memory analysis, multi-compiler cross-compilation matrices (GCC 14 + Clang 18), headless QEMU `dmesg` zero-splat console auditing, multi-distribution Linux packaging (`.deb`, `.rpm`, `PKGBUILD`), `udev` zero-config GPU discovery, and 6-point automated adversarial invariant verification.
 **Evidence / blockers:** `scripts/ci/check-adversarial-invariants.sh` executes and passes 6/6 invariant checks. `scripts/ci/check-kernel-style.sh`, `scripts/ci/check-kernel-sparse.sh`, and `scripts/ci/check-kernel-qemu-smoke.sh` verified. RPM builder (`build-rpm-package.sh`), Arch `PKGBUILD`, and `udev` rule `99-ramshared.rules` generated and syntax-validated. All 29 `./scripts/docs-check.sh` suites and 700+ workspace tests pass with 0 errors.
+
+## TASK-0016 — Upstream Linux kernel block driver, MM swap fast-path, and multi-arch anti-fragility qualification
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `completed`.
+**Owner role:** `kernel-coder`.
+**Date:** `2026-08-26`.
+**Registered time:** `12:30:00`.
+**Updated time:** `12:45:00`.
+**Source revision:** `20f7521`.
+**Destinations:** `drivers/block/ramshared/`, `packaging/`, `docs/reviews/UPSTREAM-ANTI-FRAGILITY-FORMS.md`, `trovaldo.md`, and `TASK.md`.
+**Scope:** Deep upstream qualification and anti-fragility hardening across 5 core subsystems: in-tree `gendisk` refcounted lifecycle and atomic queue limits (`blk_mq_alloc_disk`), zero-allocation `.rw_page` fast-path in `block_device_operations` for synchronous direct reclaim swapout, dynamic multi-kernel compatibility abstraction (`compat.h`) spanning Linux 5.15 LTS through 6.13+, ARM64 PCIe SError exception containment with `pci_error_handlers`, automated DKMS module signing with MOK enrollment (`ramshared-mok-setup.sh`), and strict udev PCI class filtering (`0x030000|0x030200`) preventing recursive iGPU swap allocations.
+**Evidence / blockers:** 27 structured qualification forms created in `docs/reviews/UPSTREAM-ANTI-FRAGILITY-FORMS.md`. Verified with `scripts/ci/check-kernel-style.sh` (5/5 C files clean), `scripts/ci/check-kernel-sparse.sh`, `scripts/ci/check-adversarial-invariants.sh` (6/6 PASS), and all 29 `./scripts/docs-check.sh` governance suites passing.
+

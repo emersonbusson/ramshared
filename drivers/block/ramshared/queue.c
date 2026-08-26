@@ -12,6 +12,7 @@
 #include <linux/highmem.h>
 #include <linux/io.h>
 #include "ramshared.h"
+#include "compat.h"
 
 static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 					  struct bio *bio, loff_t pos)
@@ -22,20 +23,20 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 	void __iomem *vram_ptr = rs_dev->dma.cpu_addr + pos;
 
 	bio_for_each_segment(bvec, bio, iter) {
-		void *mem = kmap_local_page(bvec.bv_page);
-		void *src_or_dst = mem + bvec.bv_offset;
+		void *src_or_dst = bvec_kmap_local(&bvec);
 		size_t len = bvec.bv_len;
 
 		if (op == REQ_OP_READ) {
 			dma_rmb();
 			memcpy_fromio(src_or_dst, vram_ptr, len);
+			flush_dcache_page(bvec.bv_page);
 			atomic64_add(len, &rs_dev->read_bytes);
 		} else if (op == REQ_OP_WRITE) {
 			memcpy_toio(vram_ptr, src_or_dst, len);
 			dma_wmb();
 			atomic64_add(len, &rs_dev->write_bytes);
 		}
-		kunmap_local(mem);
+		kunmap_local(src_or_dst);
 		vram_ptr += len;
 	}
 
@@ -98,8 +99,46 @@ static const struct blk_mq_ops ramshared_mq_ops = {
 	.queue_rq = ramshared_queue_rq,
 };
 
+/* Synchronous Zero-Allocation Swap Fast-Path */
+static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
+				  struct page *page, enum req_op op)
+{
+	struct ramshared_device *rs_dev = bdev->bd_disk->private_data;
+	loff_t pos = (loff_t)sector << RAMSHARED_SECTOR_SHIFT;
+	size_t len = PAGE_SIZE;
+	void __iomem *vram_ptr;
+	void *mem;
+	int is_write = op_is_write(op);
+
+	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
+		return -EIO;
+
+	if (unlikely(pos + len > rs_dev->capacity_bytes))
+		return -EIO;
+
+	vram_ptr = rs_dev->dma.cpu_addr + pos;
+	mem = kmap_local_page(page);
+
+	if (is_write) {
+		memcpy_toio(vram_ptr, mem, len);
+		dma_wmb();
+		atomic64_add(len, &rs_dev->write_bytes);
+	} else {
+		dma_rmb();
+		memcpy_fromio(mem, vram_ptr, len);
+		flush_dcache_page(page);
+		atomic64_add(len, &rs_dev->read_bytes);
+	}
+
+	kunmap_local(mem);
+	atomic64_inc(&rs_dev->dma_transfers_total);
+	page_endio(page, is_write, 0);
+	return 0;
+}
+
 static const struct block_device_operations ramshared_fops = {
-	.owner = THIS_MODULE,
+	.owner		= THIS_MODULE,
+	.rw_page	= ramshared_bdev_rw_page,
 };
 
 /* Sysfs Attributes Group (Race-free via disk_groups) */
@@ -142,7 +181,6 @@ static const struct attribute_group *ramshared_attr_groups[] = {
 int ramshared_queue_init(struct ramshared_device *rs_dev,
 			 struct device *parent_dev, unsigned int q_depth)
 {
-	struct request_queue *q;
 	unsigned int valid_depth;
 	int ret;
 
@@ -162,32 +200,16 @@ int ramshared_queue_init(struct ramshared_device *rs_dev,
 	if (ret)
 		return ret;
 
-	rs_dev->disk = blk_mq_alloc_disk(&rs_dev->tag_set, rs_dev);
+	/* Allocate disk with backward & forward kernel compatibility */
+	rs_dev->disk = ramshared_alloc_disk(&rs_dev->tag_set, rs_dev,
+					    RAMSHARED_SECTOR_SIZE, 2048);
 	if (IS_ERR(rs_dev->disk)) {
 		ret = PTR_ERR(rs_dev->disk);
 		blk_mq_free_tag_set(&rs_dev->tag_set);
 		return ret;
 	}
 
-	q = rs_dev->disk->queue;
-	q->queuedata = rs_dev;
-
-	/* Configure Queue Flags */
-	blk_queue_flag_set(QUEUE_FLAG_NONROT, q);
-	blk_queue_flag_set(QUEUE_FLAG_SYNCHRONOUS, q);
-	blk_queue_flag_set(QUEUE_FLAG_NOWAIT, q);
-
-	/* Configure Hardware & DMA Limits */
-	blk_queue_logical_block_size(q, RAMSHARED_SECTOR_SIZE);
-	blk_queue_physical_block_size(q, PAGE_SIZE);
-	blk_queue_io_min(q, PAGE_SIZE);
-	blk_queue_io_opt(q, 64 * 1024);
-	blk_queue_max_hw_sectors(q, 2048);
-	blk_queue_max_segments(q, USHRT_MAX);
-	blk_queue_max_segment_size(q, UINT_MAX);
-	blk_queue_dma_alignment(q, 511);
-	blk_queue_max_discard_sectors(q, UINT_MAX);
-	q->limits.discard_granularity = PAGE_SIZE;
+	rs_dev->disk->queue->queuedata = rs_dev;
 
 	/* Setup gendisk descriptor */
 	rs_dev->disk->major = 0;
