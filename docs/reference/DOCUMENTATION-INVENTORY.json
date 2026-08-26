@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 252,
-    "classified": 241,
+    "total": 254,
+    "classified": 243,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -994,6 +994,18 @@
       "canonicalSource": "docs/reliability/GAP-REGISTER.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
+    },
+    {
+      "path": "docs/reviews/ADVERSARIAL-KERNEL-CI-AUDIT.md",
+      "disposition": "classified",
+      "ruleId": "review-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/reviews/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
     },
     {
       "path": "docs/reviews/README.md",
@@ -2996,6 +3008,18 @@
       },
       "owner": "reliability",
       "canonicalSource": "superprompt.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "trovaldo.md",
+      "disposition": "classified",
+      "ruleId": "root-upstream-torvalds-roadmap",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "trovaldo.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
     },
