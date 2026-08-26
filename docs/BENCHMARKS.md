@@ -276,3 +276,28 @@ During live qualification, the exact 256 MiB write-through benchmark was evaluat
 **Key Takeaway:** On DRAM-less storage (`I:\`), unbuffered synchronous `fsync` operations stall at 38 MB/s (a 2.25x degradation compared to the Samsung EVO), increasing the VRAM caching speedup to **80.1x**. Placing the authoritative origin on `C:\` provides both superior origin persistence latency and leaves the lower-capacity secondary pool unencumbered.
 
 
+
+---
+
+<!-- ramshared-benchmark-id: 2026-08-25-hardware-dma-and-ublk-vs-ssd -->
+## 2026-08-25 23:55 -03 — Hardware Direct DMA & Native Linux ublk/io_uring vs WSL2 Stock Swap
+
+**Context**
+- Branch/commit: `main` @ `f3c71aa` (PR #251 merged).
+- Machine: Host Workstation (NVIDIA GeForce RTX 2060, PCIe Gen 3 x16, WSL2 `Linux 6.18.35.2-microsoft-standard-WSL2+`, 20,000 MiB total RAM).
+- Load (snapshot): 3,584 MiB active VRAM tier; ZRAM 1,024 MiB; fallback swap 4,096 MiB.
+- Active Windows GUI: Explorer, Terminal, VS Code, Windows Subsystem for Linux.
+- Tool/parameters: Pure C hardware benchmark (`tools/benchmarks/kernel_vram_bench.c`, 256 MiB page-locked pinned memory, `cuMemHostAlloc` + `cuMemcpyDtoH_v2` / `cuMemcpyHtoD_v2`) and native Linux `ublk` + `io_uring` test suite (`tests/ublk_io_smoke.rs`, 4,000 random 4KB O_DIRECT reads + fio randread).
+
+**Results**
+
+| Architectural Stage | Technology / Transport | Read Throughput | Write Throughput | 4KB Random Latency | 256 MiB Transfer Time |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **1. Stock WSL2 Swap** | Virtualized VHDX on SSD | **0.06 GB/s (63 MB/s)** | **0.08 GB/s (85 MB/s)** | ~30,000 µs (30 ms) | ~4,000 ms (4.0s) |
+| **2. Early RamShared** | Unix Socket NBD + Standard Buffers | **3.71 GB/s (3,798 MB/s)** | **5.58 GB/s (5,714 MB/s)** | ~326–550 µs | 67.4 ms (0.067s) |
+| **3. Latest Update** | **Hardware Pinned DMA + `ublk` / `io_uring`** | **6.38 GB/s (6,530 MB/s)** | **8.74 GB/s (8,947 MB/s)** | **231 µs (0.23 ms)** | **28.6–39.2 ms (0.028s)** |
+
+**Honest reading**
+- **PCIe Direct DMA Efficiency:** Utilizing page-locked host memory (`cuMemHostAlloc`) enables zero-copy PCIe DMA directly between host physical memory and GPU GDDR6 VRAM, elevating write throughput to 8.74 GB/s (8,947 MB/s) and read throughput to 6.38 GB/s (6,530 MB/s).
+- **Sub-Millisecond Kernel Latency:** Native `ublk` + `io_uring` block integration reduces 4KB random page-in latency to a p50 median of 231 µs (0.23 ms), eliminating socket context switches and preventing WSL2 desktop thrashing stalls.
+- **Data Integrity Verification:** Byte-by-byte comparison (`memcmp`) across the entire 256 MiB pinned payload confirmed 100% bit-exact reproduction with 0 corruptions.
