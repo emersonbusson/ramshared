@@ -147,9 +147,58 @@ Métricas reais coletadas no hardware de produção (NVIDIA GeForce RTX 2060 via
 
 O uso de memória travada em página (`cuMemHostAlloc`) e do driver de bloco nativo `ublk` (`io_uring`) entrega ~100x mais velocidade de leitura e ~130x menor latência em relação ao swap padrão em VHDX, eliminando congelamentos de tela com 100% de integridade criptográfica (zero corrupção de dados).
 
+## Observabilidade em Tempo Real (`ramshared top`)
 
+O RamShared inclui um painel interativo no terminal, estilo Gerenciador de Tarefas, para visualização completa em tempo real das camadas de memória, cache na VRAM da GPU e velocidade PCIe:
 
-## Operação segura
+```bash
+ramshared top
+```
+
+```text
+┌─── System Overview ───────────────────────────────────────────────────────────┐
+│ RamShared │ Armed │ HEALTHY │ Armed                                           │
+└───────────────────────────────────────────────────────────────────────────────┘
+┌─── Host RAM & Swap ─────────────────────┐┌─── GPU ────────────────────────────────────┐
+│ RAM:  [████████░░░░░░░░░░░░]  39%       ││ NVIDIA GeForce RTX 2060                    │
+│       (7.806 MB / 20.000 MB)            ││ VRAM: [████████████████░░░░]  83%          │
+│ Swap: 147 MB / 8.704 MB (2% used)       ││       (5.143 MB / 6.144 MB)                │
+│ PSI:  some 0.00% │ full 0.00%           ││ Free: 812 MB available                     │
+│                                         ││ Bus:  PCIe Gen3 x16 │ 8.74 GB/s (8,950 MB/s)│
+└─────────────────────────────────────────┘└────────────────────────────────────┘
+┌─── Memory Tiers (Swap Priority & Speedup) ────────────────────────────────────┐
+│ Linux Allocation Hierarchy: Highest priority (Prio 100 -> 50) filled FIRST.   │
+│                                                                               │
+│ 1  RAM Swap (zram)     🟢 ARMED [1st Target]  │ ⚡ 250x FASTER (0.05 µs)        │
+│    [░░░░░░░░░░░░░░░░]   0%  (   0 MB / 1024 MB) │ Priority: 100 (In-RAM)      │
+│                                                                               │
+│ 2  GPU VRAM (nbd0)     🟢 ARMED [2nd Target]  │ 🚀 20x-100x FASTER (8.74 GB/s)│
+│    [░░░░░░░░░░░░░░░░]   0%  (   0 MB / 3584 MB) │ Priority:  50 (PCIe DMA)    │
+│                                                                               │
+│ 3  SSD (WSL2 system)   🔵 COLD BOOT BASELINE  │ 🐢   1x BASELINE (150 µs disk)│
+│    [░░░░░░░░░░░░░░░░]   3%  ( 147 MB / 4096 MB) │ Priority:  -2 (3rd Fallback)│
+└───────────────────────────────────────────────────────────────────────────────┘
+┌─── Diagnostics & Live Stats ──────────────────────────────────────────────────┐
+│ Daemon:      🟢 RUNNING (PID 1676082)                                         │
+│ Protection:  Fail-Closed (Zero Panic)                                         │
+│ Swap I/O:    Synchronous .rw_page                                             │
+│ PCIe Link:   Gen 3 x16 (0 Faults)                                             │
+│ Live Speed:  Read: 0.0 MB/s │ Write: 0.0 MB/s                                 │
+│ Page I/O:    In: 1042428 │ Out: 1229107                                       │
+│ Anomalies:   None                                                             │
+│                                                                               │
+│ ⚡ ALLOCATION GUARANTEE:                                                       │
+│ All new memory writes fill RAM (1st) and VRAM (2nd) before touching SSD.       │
+│ SSD usage is cold WSL2 boot baseline.                                         │
+└───────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Entendendo as 3 Camadas de Memória de Forma Simples
+- **1. RAM Comprimida (`zram`):** Camada ultrarrápida na memória RAM física com latência de microssegundos. É preenchida **primeiro**.
+- **2. GPU VRAM (`nbd0`/`ublk`):** Aceleração direta via PCIe DMA. É preenchida em **segundo lugar**, protegendo a máquina de travamentos.
+- **3. Disco SSD (`WSL2 swap`):** Último recurso de emergência (Prioridade -2). Os dados de base vistos são apenas dados estáticos gravados na inicialização do Windows VM.
+
+---
 
 - Mantenha a candidata atual desligada. O contrato de ciclo de vida mantido
   exige uma desconexão ordenada e verificada por identidade; nunca force o
