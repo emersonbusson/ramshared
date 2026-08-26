@@ -119,7 +119,9 @@ The dual-tier architecture combines high-speed PCIe memory caching with durable 
 
 - **L1 GPU VRAM Cache (4 GiB):** Serves active, latency-critical memory pages over PCIe (measured up to 6,211.2 MiB/s in qualified run EVD-0038).
 - **L2 SSD Origin (24 GiB):** Provides fixed, uninhibited capacity on disk, absorbing memory pressure without process termination (qualified under 99% RAM load in EVD-0037).
-- **Write-Through Invariant:** Every acknowledged RamShared write is persisted to the authoritative SSD origin. Reads use VRAM only when generation and page validity match. When Windows WDDM or gaming workloads reclaim GPU resources, clean VRAM chunks are instantly released and reads seamlessly fall back to the SSD origin with zero data loss.
+- **Write-Through Invariant:** Every acknowledged RamShared write is persisted to the authoritative SSD origin. Reads use VRAM only when generation and page validity match.
+
+When Windows WDDM or gaming workloads reclaim GPU resources, RamShared immediately protects system stability:
 
 1. refuse new VRAM commits;
 2. invalidate or immediately release clean cache chunks;

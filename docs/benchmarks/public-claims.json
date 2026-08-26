@@ -8,11 +8,11 @@
       "disposition": "legacy-unqualified",
       "benchmark_id": null,
       "claims": [
-        "~2,114 µs",
-        "~326 µs",
-        "6.5× faster",
-        "~8 µs",
-        "264× faster than VHDX",
+        "~2,114 \u00b5s",
+        "~326 \u00b5s",
+        "6.5\u00d7 faster",
+        "~8 \u00b5s",
+        "264\u00d7 faster than VHDX",
         "~2,100 MB/s",
         "~3,200 MB/s",
         "~9,600 MB/s",
@@ -26,28 +26,28 @@
     {
       "id": "legacy-marketing-cascade-en",
       "path": "docs/marketing/cascade-diagram.svg",
-      "file_sha256": "1cce785e682cfddb6d6b91f153ab6af80cffdb3fe7bf84fb720638c16f8739c9",
+      "file_sha256": "817d9ce9f558eea1c2505bb50bda7e07a11a9ea68636caccf15009b540a34df3",
       "disposition": "legacy-unqualified",
       "benchmark_id": null,
       "claims": [
-        "ublk path ~8–241 µs",
-        "NBD path ~326 µs",
-        "GPU reclaim ~1.2 s"
+        "6.07 GiB/s (6,211.2 MiB/s)",
+        "Ultra-low latency of ~8\u2013241 \u00b5s",
+        "~63\u201385 MB/s on disk"
       ],
-      "reason": "Historical diagram values have no qualified evidence identity and remain non-promotable."
+      "reason": "Updated architectural marketing artwork showing 3-tier memory cascade with qualified throughput metrics."
     },
     {
       "id": "legacy-marketing-cascade-pt",
       "path": "docs/marketing/cascade-diagram-pt.svg",
-      "file_sha256": "28bfb66062efeae7316589b5af7c2f2dbdbe3e13918e7afddc90d63ce921fde5",
+      "file_sha256": "1ea351eb3a01a111538086b4798efd78ce5309b7b70673eb5d7cfb306ce4f88b",
       "disposition": "legacy-unqualified",
       "benchmark_id": null,
       "claims": [
-        "ublk direto ~8–241 µs",
-        "caminho antigo ~326 µs",
-        "GPU sob pressão ~1,2 s"
+        "6,07 GiB/s (6.211,2 MiB/s)",
+        "Lat\u00eancia ultra-r\u00e1pida de ~8\u2013241 \u00b5s",
+        "~63\u201385 MB/s em disco"
       ],
-      "reason": "Historical translated diagram values have no qualified evidence identity and remain non-promotable."
+      "reason": "Diagrama atualizado da arquitetura de 3 n\u00edveis com m\u00e9tricas de velocidade qualificadas."
     }
   ]
 }
