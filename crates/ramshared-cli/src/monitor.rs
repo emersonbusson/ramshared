@@ -829,7 +829,7 @@ fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 "░".repeat(empty as usize)
             );
             format!(
-                "Model:       {}\nVRAM Usage:  {bar} {used_pct:>3}% ({} MiB / {} MiB)\nVRAM Free:   ({} MiB dedicated available)\nPCIe Link:   PCIe Gen 3 x16 │ DMA Bandwidth: 8.74 GB/s",
+                "Model:       {}\nVRAM Usage:  {bar} {used_pct:>3}% ({} MiB / {} MiB)\nVRAM Free:   ({} MiB dedicated available)\nPCIe Link:   PCIe Gen 3 x16 │ DMA Bandwidth: 8.74 GB/s (8,950 MB/s)",
                 gpu.name, gpu.used_mib, gpu.total_mib, gpu.free_mib
             )
         },
@@ -852,9 +852,9 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         .and_then(Value::as_object)
         .map(|tiers| {
             let tier_order = [
-                ("zram", "TIER 1 (RAM) ", "Prio 100", "[Fastest / RAM Compression]"),
-                ("vram", "TIER 2 (VRAM)", "Prio  50", "[PCIe DMA / 8.74 GB/s]     "),
-                ("disk", "TIER 3 (SSD) ", "Prio  -2", "[Authoritative Origin / Cold]"),
+                ("zram", "TIER 1 (RAM) ", "Prio 100", "[Fastest / RAM Compression]        "),
+                ("vram", "TIER 2 (VRAM)", "Prio  50", "[PCIe DMA / 8.74 GB/s (8,950 MB/s)]"),
+                ("disk", "TIER 3 (SSD) ", "Prio  -2", "[Authoritative Origin / Cold]      "),
             ];
 
             let lines: Vec<String> = tier_order
