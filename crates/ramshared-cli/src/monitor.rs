@@ -348,17 +348,15 @@ fn parse_swap_diskstats(text: &str) -> (u64, u64) {
         let fields: Vec<&str> = line.split_whitespace().collect();
         if fields.len() >= 10 {
             let dev = fields[2];
-            if dev.starts_with("nbd")
+            if (dev.starts_with("nbd")
                 || dev.starts_with("zram")
                 || dev == "sdc"
-                || dev.starts_with("ramshared")
-            {
-                if let (Ok(read_sectors), Ok(write_sectors)) =
+                || dev.starts_with("ramshared"))
+                && let (Ok(read_sectors), Ok(write_sectors)) =
                     (fields[5].parse::<u64>(), fields[9].parse::<u64>())
-                {
-                    read_bytes = read_bytes.saturating_add(read_sectors.saturating_mul(512));
-                    write_bytes = write_bytes.saturating_add(write_sectors.saturating_mul(512));
-                }
+            {
+                read_bytes = read_bytes.saturating_add(read_sectors.saturating_mul(512));
+                write_bytes = write_bytes.saturating_add(write_sectors.saturating_mul(512));
             }
         }
     }
@@ -371,10 +369,11 @@ pub fn parse_unit_startup_ms(show_output: &str) -> Option<u64> {
 
     for line in show_output.lines() {
         if line.is_empty() {
-            if let (Some(start), Some(end)) = (inactive_exit, active_enter) {
-                if end > start && start > 0 {
-                    return Some((end - start) / 1000);
-                }
+            if let (Some(start), Some(end)) = (inactive_exit, active_enter)
+                && end > start
+                && start > 0
+            {
+                return Some((end - start) / 1000);
             }
             inactive_exit = None;
             active_enter = None;
@@ -387,10 +386,11 @@ pub fn parse_unit_startup_ms(show_output: &str) -> Option<u64> {
         }
     }
 
-    if let (Some(start), Some(end)) = (inactive_exit, active_enter) {
-        if end > start && start > 0 {
-            return Some((end - start) / 1000);
-        }
+    if let (Some(start), Some(end)) = (inactive_exit, active_enter)
+        && end > start
+        && start > 0
+    {
+        return Some((end - start) / 1000);
     }
     None
 }
@@ -796,17 +796,31 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
             if let Some((last_rb, last_wb, last_t)) = last_io_sample {
                 let dt = now.duration_since(last_t).as_secs_f64();
                 if dt > 0.05 {
-                    observation.control_plane.swap_read_mbs =
-                        (observation.control_plane.swap_read_bytes.saturating_sub(last_rb) as f64)
-                            / (dt * 1_048_576.0);
-                    observation.control_plane.swap_write_mbs =
-                        (observation.control_plane.swap_write_bytes.saturating_sub(last_wb) as f64)
-                            / (dt * 1_048_576.0);
+                    observation.control_plane.swap_read_mbs = (observation
+                        .control_plane
+                        .swap_read_bytes
+                        .saturating_sub(last_rb)
+                        as f64)
+                        / (dt * 1_048_576.0);
+                    observation.control_plane.swap_write_mbs = (observation
+                        .control_plane
+                        .swap_write_bytes
+                        .saturating_sub(last_wb)
+                        as f64)
+                        / (dt * 1_048_576.0);
                     if let Some((last_pf, last_mpf)) = last_faults_sample {
                         observation.control_plane.pgfault_per_sec =
-                            (observation.control_plane.pgfault_total.saturating_sub(last_pf) as f64 / dt) as u64;
+                            (observation
+                                .control_plane
+                                .pgfault_total
+                                .saturating_sub(last_pf) as f64
+                                / dt) as u64;
                         observation.control_plane.pgmajfault_per_sec =
-                            (observation.control_plane.pgmajfault_total.saturating_sub(last_mpf) as f64 / dt) as u64;
+                            (observation
+                                .control_plane
+                                .pgmajfault_total
+                                .saturating_sub(last_mpf) as f64
+                                / dt) as u64;
                     }
                 }
             }
@@ -887,11 +901,19 @@ fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &Ve
     let header = Paragraph::new(Line::from(format!(
         " RamShared │ {} │ {} │ {}",
         observation.string("phase"),
-        if ok == Some(true) { "HEALTHY" } else { "ATTENTION" },
+        if ok == Some(true) {
+            "HEALTHY"
+        } else {
+            "ATTENTION"
+        },
         observation.string("protection_state"),
     )))
     .style(Style::default().fg(state_color))
-    .block(Block::default().borders(Borders::ALL).title("System Overview"));
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("System Overview"),
+    );
     frame.render_widget(header, rows[0]);
 
     draw_memory(frame, top[0], observation, history);
@@ -918,33 +940,37 @@ fn draw_memory(
     let total_mb = (memory.total_kib + 512) / 1024;
     let avail_mb = (memory.available_kib + 512) / 1024;
     let used_mb = total_mb.saturating_sub(avail_mb);
-    let used_pct = if total_mb > 0 { (used_mb * 100) / total_mb } else { 0 };
+    let used_pct = (used_mb * 100).checked_div(total_mb).unwrap_or(0);
 
     let bar_len: u64 = 20;
     let filled = (used_pct * bar_len / 100).min(bar_len);
     let empty = bar_len.saturating_sub(filled);
-    let bar = format!("[{}{}]", "█".repeat(filled as usize), "░".repeat(empty as usize));
+    let bar = format!(
+        "[{}{}]",
+        "█".repeat(filled as usize),
+        "░".repeat(empty as usize)
+    );
 
     let swap_used = (memory.swap_total_kib.saturating_sub(memory.swap_free_kib) + 512) / 1024;
     let swap_total = (memory.swap_total_kib + 512) / 1024;
-    let swap_pct = if swap_total > 0 { (swap_used * 100) / swap_total } else { 0 };
+    let swap_pct = (swap_used * 100).checked_div(swap_total).unwrap_or(0);
     let text = format!(
         " RAM:  {bar}  {used_pct}% ({used_mb} MB / {total_mb} MB)\n Swap: {swap_used} MB / {swap_total} MB ({swap_pct}% used)\n PSI:  some {psi_some:.2}% │ full {psi_full:.2}%",
         psi_some = observation.control_plane.memory_psi_some_avg10,
         psi_full = observation.control_plane.memory_psi_full_avg10,
     );
     frame.render_widget(
-        Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Host RAM & Swap")),
+        Paragraph::new(text).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Host RAM & Swap"),
+        ),
         chunks[0],
     );
     let values: Vec<u64> = history.iter().copied().collect();
     frame.render_widget(
         Sparkline::default()
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("RAM History"),
-            )
+            .block(Block::default().borders(Borders::ALL).title("RAM History"))
             .data(&values)
             .max(100),
         chunks[1],
@@ -976,11 +1002,7 @@ fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     );
     frame.render_widget(
         Paragraph::new(text)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("GPU"),
-            )
+            .block(Block::default().borders(Borders::ALL).title("GPU"))
             .wrap(Wrap { trim: true }),
         area,
     );
@@ -989,7 +1011,11 @@ fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
 fn make_bar(pct: u64, len: u64) -> String {
     let filled = (pct.saturating_mul(len) / 100).min(len);
     let empty = len.saturating_sub(filled);
-    format!("[{}{}]", "█".repeat(filled as usize), "░".repeat(empty as usize))
+    format!(
+        "[{}{}]",
+        "█".repeat(filled as usize),
+        "░".repeat(empty as usize)
+    )
 }
 
 fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
@@ -1073,7 +1099,11 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         .unwrap_or_else(|| " Swap Tiers: not available".to_string());
 
     frame.render_widget(
-        Paragraph::new(tiers).block(Block::default().borders(Borders::ALL).title("Memory Tiers (Swap Priority & Speedup)")),
+        Paragraph::new(tiers).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Memory Tiers (Swap Priority & Speedup)"),
+        ),
         area,
     );
 }
@@ -1308,7 +1338,8 @@ mod tests {
 
     #[test]
     fn parses_unit_startup_ms_and_uptime() {
-        let show_out = "InactiveExitTimestampMonotonic=157379553\nActiveEnterTimestampMonotonic=160268125\n";
+        let show_out =
+            "InactiveExitTimestampMonotonic=157379553\nActiveEnterTimestampMonotonic=160268125\n";
         let ms = parse_unit_startup_ms(show_out);
         assert_eq!(ms, Some(2888));
 
