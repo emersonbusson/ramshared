@@ -2,7 +2,7 @@
 Description=RamShared Zero-Copy GPU VRAM Memory Tier Service
 Documentation=https://github.com/emersonbusson/ramshared
 After=systemd-udev-settle.service local-fs.target
-ConditionPathExists=/dev/dri/renderD128
+ConditionPathExistsGlob=/dev/dri/renderD*
 
 [Service]
 Type=simple

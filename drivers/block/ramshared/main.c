@@ -18,6 +18,14 @@ MODULE_DESCRIPTION("Hardware-Accelerated VRAM Block Driver");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(RAMSHARED_DRIVER_VERSION);
 
+static unsigned long capacity_mb = 1024;
+module_param(capacity_mb, ulong, 0444);
+MODULE_PARM_DESC(capacity_mb, "Initial VRAM block device capacity in MiB (default: 1024)");
+
+static unsigned int queue_depth = RAMSHARED_DEFAULT_QUEUE_DEPTH;
+module_param(queue_depth, uint, 0444);
+MODULE_PARM_DESC(queue_depth, "Hardware queue depth (default: 128)");
+
 static struct ramshared_device g_ramshared_dev;
 static int g_major;
 
@@ -27,10 +35,18 @@ static const struct block_device_operations ramshared_fops = {
 
 static int __init ramshared_init(void)
 {
+	size_t cap_bytes;
 	int ret;
 
-	pr_info("%s: loading version %s\n",
-		RAMSHARED_DRIVER_NAME, RAMSHARED_DRIVER_VERSION);
+	pr_info("%s: loading version %s (capacity=%lu MiB, queue_depth=%u)\n",
+		RAMSHARED_DRIVER_NAME, RAMSHARED_DRIVER_VERSION,
+		capacity_mb, queue_depth);
+
+	if (capacity_mb == 0 || capacity_mb > (1UL << 20)) {
+		pr_err("%s: invalid capacity_mb parameter: %lu\n",
+			RAMSHARED_DRIVER_NAME, capacity_mb);
+		return -EINVAL;
+	}
 
 	mutex_init(&g_ramshared_dev.lock);
 
@@ -40,11 +56,12 @@ static int __init ramshared_init(void)
 		return g_major;
 	}
 
-	ret = ramshared_dma_init(&g_ramshared_dev, 1ULL << 30); /* 1 GiB default */
+	cap_bytes = (size_t)capacity_mb * 1024 * 1024;
+	ret = ramshared_dma_init(&g_ramshared_dev, cap_bytes);
 	if (ret)
 		goto err_blkdev;
 
-	ret = ramshared_queue_init(&g_ramshared_dev);
+	ret = ramshared_queue_init(&g_ramshared_dev, queue_depth);
 	if (ret)
 		goto err_dma;
 

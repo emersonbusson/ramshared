@@ -35,15 +35,19 @@ static const struct blk_mq_ops ramshared_mq_ops = {
 	.queue_rq = ramshared_queue_rq,
 };
 
-int ramshared_queue_init(struct ramshared_device *rs_dev)
+int ramshared_queue_init(struct ramshared_device *rs_dev, unsigned int q_depth)
 {
+	unsigned int valid_depth;
+
 	if (!rs_dev)
 		return -EINVAL;
+
+	valid_depth = clamp_t(unsigned int, q_depth, 16U, 2048U);
 
 	memset(&rs_dev->tag_set, 0, sizeof(rs_dev->tag_set));
 	rs_dev->tag_set.ops = &ramshared_mq_ops;
 	rs_dev->tag_set.nr_hw_queues = num_online_cpus();
-	rs_dev->tag_set.queue_depth = RAMSHARED_DEFAULT_QUEUE_DEPTH;
+	rs_dev->tag_set.queue_depth = valid_depth;
 	rs_dev->tag_set.numa_node = NUMA_NO_NODE;
 	rs_dev->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
 
