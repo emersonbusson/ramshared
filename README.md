@@ -22,7 +22,7 @@ RamShared neither adds VRAM to applications nor identifies workloads by name.
 
 ## Current Status
 
-Release: **v0.9.0-beta.2**. The installed WSL2 cascade is temporarily gated
+Release: **v0.9.0-beta.2 (Hardware Pinned DMA & Native Linux ublk)**. The installed WSL2 cascade is temporarily gated
 after the 2026-08-20 control-plane timeout incident; historical results remain
 evidence for their exact builds, not proof for the current candidate.
 
@@ -192,8 +192,8 @@ builder does not qualify or install the current worktree. Build caches,
 credentials, VM-local notes, and Windows driver artifacts are excluded. See
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-The official v0.9.0-beta.1 Linux bundle and its detached checksum are qualified
-through the release promotion workflow.
+The official Linux releases (v0.9.0-beta.1 and the upcoming v0.9.0-beta.2) and
+their detached checksums are qualified through the release promotion workflow.
 
 ## Windows Driver candidate
 

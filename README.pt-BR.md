@@ -26,7 +26,7 @@ VRAM aos aplicativos nem identifica cargas pelo nome.
 
 ## Status atual
 
-Versão: **v0.9.0-beta.2**. A cascata instalada no WSL2 está temporariamente
+Versão: **v0.9.0-beta.2 (Hardware Pinned DMA & ublk Nativo do Linux)**. A cascata instalada no WSL2 está temporariamente
 bloqueada após o incidente de timeout do plano de controle de 20/08/2026.
 
 | Superfície | Status | O que isso significa |
@@ -193,8 +193,8 @@ não qualifica nem instala a worktree atual. Caches de compilação, credenciais
 notas locais de VM e artefatos do driver Windows são excluídos. Consulte
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-O pacote Linux oficial da v0.9.0-beta.1 e seu checksum desanexado são qualificados
-pelo fluxo de promoção de release.
+Os pacotes Linux oficiais de release (v0.9.0-beta.1 e a candidata v0.9.0-beta.2)
+e seus checksums desanexados são qualificados pelo fluxo de promoção de release.
 
 ## Candidata do driver Windows
 
