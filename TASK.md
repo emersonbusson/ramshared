@@ -502,3 +502,17 @@ live qualification remain blocked pending a fresh explicit instruction.
 **Scope:** Deep upstream qualification and anti-fragility hardening across 5 core subsystems: in-tree `gendisk` refcounted lifecycle and atomic queue limits (`blk_mq_alloc_disk`), zero-allocation `.rw_page` fast-path in `block_device_operations` for synchronous direct reclaim swapout, dynamic multi-kernel compatibility abstraction (`compat.h`) spanning Linux 5.15 LTS through 6.13+, ARM64 PCIe SError exception containment with `pci_error_handlers`, automated DKMS module signing with MOK enrollment (`ramshared-mok-setup.sh`), and strict udev PCI class filtering (`0x030000|0x030200`) preventing recursive iGPU swap allocations.
 **Evidence / blockers:** 27 structured qualification forms created in `docs/reviews/UPSTREAM-ANTI-FRAGILITY-FORMS.md`. Verified with `scripts/ci/check-kernel-style.sh` (5/5 C files clean), `scripts/ci/check-kernel-sparse.sh`, `scripts/ci/check-adversarial-invariants.sh` (6/6 PASS), and all 29 `./scripts/docs-check.sh` governance suites passing.
 
+## TASK-0017 — Automated release packaging pipeline, swap stress test suite, and LKML patchset generation
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `completed`.
+**Owner role:** `ci-governance`.
+**Date:** `2026-08-26`.
+**Registered time:** `12:50:00`.
+**Updated time:** `12:55:00`.
+**Source revision:** `0a4cf4b`.
+**Destinations:** `.github/workflows/release-packaging.yml`, `scripts/safety/test-rw-page-swap-stress.sh`, `scripts/package/generate-kernel-patchset.sh`, `docs/upstream/LKML-PATCHSET.md`, `trovaldo.md`, and `TASK.md`.
+**Scope:** Establish the complete multi-distro release packaging CI workflow (`.deb`, `.rpm`, `PKGBUILD` tarball) with automated SHA-256 checksums, develop the direct `.rw_page` swap fast-path simulation and stress validation suite (`test-rw-page-swap-stress.sh`), and generate the official LKML patchset series and guide (`generate-kernel-patchset.sh` / `LKML-PATCHSET.md`).
+**Evidence / blockers:** `.github/workflows/release-packaging.yml` validated. `scripts/safety/test-rw-page-swap-stress.sh` executes 4/4 checks successfully. `scripts/package/generate-kernel-patchset.sh` generates patch directory with Signed-off-by maintainer tag. All 29 `./scripts/docs-check.sh` suites and 700+ workspace tests pass with 0 errors.
+
+

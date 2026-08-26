@@ -1,0 +1,62 @@
+name: Release Packaging & Distribution
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g. v0.9.0-beta.2)'
+        required: false
+        default: 'v0.9.0-beta.2'
+
+permissions:
+  contents: read
+
+jobs:
+  build-packages:
+    name: Build Distro Packages (Ubuntu, Fedora, Arch)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            rpm dpkg-dev binutils build-essential
+
+      - name: Set up Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Release Binaries
+        run: cargo build --release --locked
+
+      - name: Build Debian/Ubuntu Package (.deb)
+        run: ./scripts/package/build-deb-package.sh
+
+      - name: Build Fedora/RHEL Package (.rpm)
+        run: ./scripts/package/build-rpm-package.sh
+
+      - name: Package Arch Linux AUR Tarball
+        run: |
+          mkdir -p artifacts/packages/arch
+          tar -czf artifacts/packages/arch/ramshared-arch.tar.gz \
+            packaging/arch/PKGBUILD \
+            packaging/arch/ramshared.install \
+            packaging/systemd/60-ramshared.rules \
+            packaging/systemd/ramshared-vram.service
+
+      - name: Generate Checksums
+        working-directory: artifacts/packages
+        run: |
+          find . -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.tar.gz" \) -exec sha256sum {} + > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload Package Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: distribution-packages
+          path: artifacts/packages/

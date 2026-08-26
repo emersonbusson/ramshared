@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 255,
-    "classified": 244,
+    "total": 256,
+    "classified": 245,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -2938,6 +2938,18 @@
       "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
+    },
+    {
+      "path": "docs/upstream/LKML-PATCHSET.md",
+      "disposition": "classified",
+      "ruleId": "upstream-drafts",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "release-engineering",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 30
     },
     {
       "path": "docs/upstream/microsoft-wsl-40795-comment-draft.md",
