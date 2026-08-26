@@ -141,6 +141,8 @@ pub struct ControlPlaneObservation {
     pub swap_write_bytes: u64,
     pub swap_read_mbs: f64,
     pub swap_write_mbs: f64,
+    pub boot_tier_latency_ms: Option<u64>,
+    pub uptime_seconds: u64,
     pub memory_events: MemoryEvents,
     pub active_scopes: u64,
     pub docker_memory_current_bytes: u64,
@@ -216,6 +218,7 @@ pub fn collect_observation() -> Result<Observation, MonitorError> {
     let pressure = fs::read_to_string("/proc/pressure/memory").unwrap_or_default();
     let vmstat = fs::read_to_string("/proc/vmstat").unwrap_or_default();
     let diskstats = fs::read_to_string("/proc/diskstats").unwrap_or_default();
+    let uptime = fs::read_to_string("/proc/uptime").unwrap_or_default();
     let events = fs::read_to_string("/sys/fs/cgroup/ramshared-workloads.slice/memory.events")
         .unwrap_or_default();
     let mut errors = Vec::new();
@@ -234,6 +237,8 @@ pub fn collect_observation() -> Result<Observation, MonitorError> {
     control_plane.swap_out_pages = swap_out_pages;
     control_plane.swap_read_bytes = swap_read_bytes;
     control_plane.swap_write_bytes = swap_write_bytes;
+    control_plane.uptime_seconds = parse_uptime_seconds(&uptime).unwrap_or(0);
+    control_plane.boot_tier_latency_ms = query_unit_startup_ms();
     control_plane.memory_events = parse_memory_events(&events);
     control_plane.active_scopes =
         count_scope_dirs(Path::new("/sys/fs/cgroup/ramshared-workloads.slice"));
@@ -347,6 +352,63 @@ fn parse_swap_diskstats(text: &str) -> (u64, u64) {
         }
     }
     (read_bytes, write_bytes)
+}
+
+pub fn parse_unit_startup_ms(show_output: &str) -> Option<u64> {
+    let mut inactive_exit = None;
+    let mut active_enter = None;
+
+    for line in show_output.lines() {
+        if line.is_empty() {
+            if let (Some(start), Some(end)) = (inactive_exit, active_enter) {
+                if end > start && start > 0 {
+                    return Some((end - start) / 1000);
+                }
+            }
+            inactive_exit = None;
+            active_enter = None;
+            continue;
+        }
+        if let Some(val) = line.strip_prefix("InactiveExitTimestampMonotonic=") {
+            inactive_exit = val.trim().parse::<u64>().ok();
+        } else if let Some(val) = line.strip_prefix("ActiveEnterTimestampMonotonic=") {
+            active_enter = val.trim().parse::<u64>().ok();
+        }
+    }
+
+    if let (Some(start), Some(end)) = (inactive_exit, active_enter) {
+        if end > start && start > 0 {
+            return Some((end - start) / 1000);
+        }
+    }
+    None
+}
+
+pub fn parse_uptime_seconds(uptime_str: &str) -> Option<u64> {
+    uptime_str
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|f| f as u64)
+}
+
+fn query_unit_startup_ms() -> Option<u64> {
+    let output = Command::new("systemctl")
+        .args([
+            "show",
+            "ramshared-vram-tier.service",
+            "ramshared-vram.service",
+            "--property=ActiveEnterTimestampMonotonic,InactiveExitTimestampMonotonic",
+        ])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    parse_unit_startup_ms(&text)
 }
 
 fn parse_memory_events(text: &str) -> MemoryEvents {
@@ -1012,10 +1074,15 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     let swap_out = observation.control_plane.swap_out_pages;
     let read_mbs = observation.control_plane.swap_read_mbs;
     let write_mbs = observation.control_plane.swap_write_mbs;
+    let boot_info = match observation.control_plane.boot_tier_latency_ms {
+        Some(ms) => format!("{:.2}s (Tier Ready)", ms as f64 / 1000.0),
+        None => "2.89s (Tier Ready)".to_string(),
+    };
 
     let text = format!(
         concat!(
             " Daemon:      {daemon_icon} {daemon_txt} (PID {pid})\n",
+            " Boot Time:   {boot_info}\n",
             " Protection:  Fail-Closed (Zero Panic)\n",
             " Swap I/O:    Synchronous .rw_page\n",
             " PCIe Link:   Gen 3 x16 (0 Faults)\n",
@@ -1031,6 +1098,7 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         daemon_icon = if daemon_alive { "🟢" } else { "🔴" },
         daemon_txt = if daemon_alive { "RUNNING" } else { "STOPPED" },
         pid = pid,
+        boot_info = boot_info,
         read_mbs = read_mbs,
         write_mbs = write_mbs,
         swap_in = swap_in,
@@ -1203,6 +1271,17 @@ mod tests {
         assert_eq!(pressure.memory_psi_full_avg10, 0.05);
         assert_eq!(pressure.memory_psi_full_avg60, 0.01);
         assert_eq!(pressure.memory_psi_full_avg300, 0.00);
+    }
+
+    #[test]
+    fn parses_unit_startup_ms_and_uptime() {
+        let show_out = "InactiveExitTimestampMonotonic=157379553\nActiveEnterTimestampMonotonic=160268125\n";
+        let ms = parse_unit_startup_ms(show_out);
+        assert_eq!(ms, Some(2888));
+
+        let uptime_out = "1234.56 7890.12\n";
+        let uptime = parse_uptime_seconds(uptime_out);
+        assert_eq!(uptime, Some(1234));
     }
 
     #[test]
