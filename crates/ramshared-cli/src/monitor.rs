@@ -23,7 +23,7 @@ const DEFAULT_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_HISTORY_SECONDS: u64 = 300;
 const MIN_INTERVAL_MS: u64 = 250;
 const MAX_HISTORY_SECONDS: u64 = 3_600;
-const GPU_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
+const GPU_QUERY_TIMEOUT: Duration = Duration::from_millis(400);
 const DEFAULT_MAX_LOG_BYTES: u64 = 50 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -143,6 +143,10 @@ pub struct ControlPlaneObservation {
     pub swap_write_mbs: f64,
     pub boot_tier_latency_ms: Option<u64>,
     pub uptime_seconds: u64,
+    pub pgfault_total: u64,
+    pub pgmajfault_total: u64,
+    pub pgfault_per_sec: u64,
+    pub pgmajfault_per_sec: u64,
     pub memory_events: MemoryEvents,
     pub active_scopes: u64,
     pub docker_memory_current_bytes: u64,
@@ -231,12 +235,14 @@ pub fn collect_observation() -> Result<Observation, MonitorError> {
         }
     };
     let mut control_plane = parse_memory_pressure(&pressure);
-    let (swap_in_pages, swap_out_pages) = parse_vmstat(&vmstat);
+    let (swap_in_pages, swap_out_pages, pgfault_total, pgmajfault_total) = parse_vmstat(&vmstat);
     let (swap_read_bytes, swap_write_bytes) = parse_swap_diskstats(&diskstats);
     control_plane.swap_in_pages = swap_in_pages;
     control_plane.swap_out_pages = swap_out_pages;
     control_plane.swap_read_bytes = swap_read_bytes;
     control_plane.swap_write_bytes = swap_write_bytes;
+    control_plane.pgfault_total = pgfault_total;
+    control_plane.pgmajfault_total = pgmajfault_total;
     control_plane.uptime_seconds = parse_uptime_seconds(&uptime).unwrap_or(0);
     control_plane.boot_tier_latency_ms = query_unit_startup_ms();
     control_plane.memory_events = parse_memory_events(&events);
@@ -318,7 +324,7 @@ fn parse_memory_pressure(text: &str) -> ControlPlaneObservation {
     }
 }
 
-fn parse_vmstat(text: &str) -> (u64, u64) {
+fn parse_vmstat(text: &str) -> (u64, u64, u64, u64) {
     let value = |name: &str| {
         text.lines().find_map(|line| {
             let mut fields = line.split_whitespace();
@@ -327,7 +333,12 @@ fn parse_vmstat(text: &str) -> (u64, u64) {
                 .flatten()
         })
     };
-    (value("pswpin").unwrap_or(0), value("pswpout").unwrap_or(0))
+    (
+        value("pswpin").unwrap_or(0),
+        value("pswpout").unwrap_or(0),
+        value("pgfault").unwrap_or(0),
+        value("pgmajfault").unwrap_or(0),
+    )
 }
 
 fn parse_swap_diskstats(text: &str) -> (u64, u64) {
@@ -773,6 +784,10 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
         observation.control_plane.swap_write_bytes,
         Instant::now(),
     ));
+    let mut last_faults_sample = Some((
+        observation.control_plane.pgfault_total,
+        observation.control_plane.pgmajfault_total,
+    ));
 
     loop {
         if Instant::now() >= next_sample {
@@ -787,6 +802,12 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
                     observation.control_plane.swap_write_mbs =
                         (observation.control_plane.swap_write_bytes.saturating_sub(last_wb) as f64)
                             / (dt * 1_048_576.0);
+                    if let Some((last_pf, last_mpf)) = last_faults_sample {
+                        observation.control_plane.pgfault_per_sec =
+                            (observation.control_plane.pgfault_total.saturating_sub(last_pf) as f64 / dt) as u64;
+                        observation.control_plane.pgmajfault_per_sec =
+                            (observation.control_plane.pgmajfault_total.saturating_sub(last_mpf) as f64 / dt) as u64;
+                    }
                 }
             }
             last_io_sample = Some((
@@ -794,6 +815,13 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
                 observation.control_plane.swap_write_bytes,
                 now,
             ));
+            last_faults_sample = Some((
+                observation.control_plane.pgfault_total,
+                observation.control_plane.pgmajfault_total,
+            ));
+            if let Ok(flight_line) = serde_json::to_string(&observation) {
+                let _ = fs::write("/dev/shm/ramshared-flight.json", format!("{flight_line}\n"));
+            }
             history.push_back(memory_used_pct(&observation.mem));
             while history.len() > history_limit {
                 history.pop_front();
@@ -1074,6 +1102,8 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     let swap_out = observation.control_plane.swap_out_pages;
     let read_mbs = observation.control_plane.swap_read_mbs;
     let write_mbs = observation.control_plane.swap_write_mbs;
+    let pgfault_rate = observation.control_plane.pgfault_per_sec;
+    let pgmajfault_rate = observation.control_plane.pgmajfault_per_sec;
     let boot_info = match observation.control_plane.boot_tier_latency_ms {
         Some(ms) => format!("{:.2}s (Tier Ready)", ms as f64 / 1000.0),
         None => "2.89s (Tier Ready)".to_string(),
@@ -1088,6 +1118,7 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             " PCIe Link:   Gen 3 x16 (0 Faults)\n",
             " Live Speed:  Read: {read_mbs:.1} MB/s │ Write: {write_mbs:.1} MB/s\n",
             " Page I/O:    In: {swap_in} │ Out: {swap_out}\n",
+            " Page Faults: {pgfault_rate}/s (Major: {pgmajfault_rate}/s)\n",
             " Anomalies:   {errors}\n",
             "\n",
             " ⚡ ALLOCATION GUARANTEE:\n",
@@ -1103,6 +1134,8 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         write_mbs = write_mbs,
         swap_in = swap_in,
         swap_out = swap_out,
+        pgfault_rate = pgfault_rate,
+        pgmajfault_rate = pgmajfault_rate,
         errors = errors,
     );
 
@@ -1285,6 +1318,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_vmstat_swap_and_page_faults() {
+        let vmstat = "pswpin 100\npswpout 200\npgfault 5000\npgmajfault 42\n";
+        let (in_p, out_p, faults, maj_faults) = parse_vmstat(vmstat);
+        assert_eq!(in_p, 100);
+        assert_eq!(out_p, 200);
+        assert_eq!(faults, 5000);
+        assert_eq!(maj_faults, 42);
+    }
+
+    #[test]
     fn rejects_unbounded_or_mutating_monitor_options() {
         assert!(MonitorOptions::parse(&["--interval-ms".into(), "10".into()]).is_err());
         assert!(MonitorOptions::parse(&["--history-seconds".into(), "99999".into()]).is_err());
@@ -1450,7 +1493,7 @@ mod tests {
             ),
             (4.0, 5.0, 6.0)
         );
-        assert_eq!(parse_vmstat("pswpin 7\npswpout 9\n"), (7, 9));
+        assert_eq!(parse_vmstat("pswpin 7\npswpout 9\n"), (7, 9, 0, 0));
         let events = parse_memory_events("high 1\nmax 2\noom 3\noom_kill 4\n");
         assert_eq!(
             (events.high, events.max, events.oom, events.oom_kill),
