@@ -28,6 +28,10 @@
     {
       "benchmark_id": "2026-08-25-vram-write-through-cache-and-authoritative-ssd-origin",
       "legacy_id": "legacy-2026-08-25-vram-write-through-cache-and-authoritative-ssd-origin"
+    },
+    {
+      "benchmark_id": "2026-08-25-hardware-dma-and-ublk-vs-ssd",
+      "legacy_id": "legacy-2026-08-25-hardware-dma-and-ublk-vs-ssd"
     }
   ]
 }

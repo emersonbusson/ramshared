@@ -45,6 +45,12 @@
       "benchmark_id": "2026-08-25-vram-write-through-cache-and-authoritative-ssd-origin",
       "qualified": false,
       "reason": "Direct live host VRAM write-through cache and authoritative SSD origin qualification; formal regression comparison requires an attended sealed matrix."
+    },
+    {
+      "id": "legacy-2026-08-25-hardware-dma-and-ublk-vs-ssd",
+      "benchmark_id": "2026-08-25-hardware-dma-and-ublk-vs-ssd",
+      "qualified": false,
+      "reason": "Direct live host hardware DMA and native ublk io_uring benchmark; formal regression comparison requires an attended sealed matrix."
     }
   ]
 }
