@@ -8,9 +8,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/blkdev.h>
-#include <linux/blk-mq.h>
-#include <linux/mutex.h>
+#include <linux/pci.h>
 #include "ramshared.h"
 
 MODULE_AUTHOR("Emerson Busson");
@@ -24,65 +22,116 @@ MODULE_PARM_DESC(capacity_mb, "Initial VRAM block device capacity in MiB (defaul
 
 static unsigned int queue_depth = RAMSHARED_DEFAULT_QUEUE_DEPTH;
 module_param(queue_depth, uint, 0444);
-MODULE_PARM_DESC(queue_depth, "Hardware queue depth (default: 128)");
+MODULE_PARM_DESC(queue_depth, "Hardware queue depth (default: 256)");
 
-static struct ramshared_device g_ramshared_dev;
-static int g_major;
-
-static const struct block_device_operations ramshared_fops = {
-	.owner = THIS_MODULE,
-};
-
-static int __init ramshared_init(void)
+static int ramshared_pci_probe(struct pci_dev *pdev,
+			       const struct pci_device_id *id)
 {
-	size_t cap_bytes;
+	struct ramshared_device *rs_dev;
 	int ret;
 
-	pr_info("%s: loading version %s (capacity=%lu MiB, queue_depth=%u)\n",
-		RAMSHARED_DRIVER_NAME, RAMSHARED_DRIVER_VERSION,
-		capacity_mb, queue_depth);
+	dev_info(&pdev->dev, "probing RamShared hardware (capacity=%lu MiB)\n",
+		 capacity_mb);
 
 	if (capacity_mb == 0 || capacity_mb > (1UL << 20)) {
-		pr_err("%s: invalid capacity_mb parameter: %lu\n",
-			RAMSHARED_DRIVER_NAME, capacity_mb);
+		dev_err(&pdev->dev, "invalid capacity_mb parameter: %lu\n",
+			capacity_mb);
 		return -EINVAL;
 	}
 
-	mutex_init(&g_ramshared_dev.lock);
+	rs_dev = devm_kzalloc(&pdev->dev, sizeof(*rs_dev), GFP_KERNEL);
+	if (!rs_dev)
+		return -ENOMEM;
 
-	g_major = register_blkdev(0, RAMSHARED_DRIVER_NAME);
-	if (g_major < 0) {
-		pr_err("%s: failed to register blkdev\n", RAMSHARED_DRIVER_NAME);
-		return g_major;
+	rs_dev->dev = &pdev->dev;
+	rs_dev->capacity_bytes = (u64)capacity_mb * 1024 * 1024;
+	mutex_init(&rs_dev->lock);
+	atomic64_set(&rs_dev->dma_transfers_total, 0);
+	atomic64_set(&rs_dev->read_bytes, 0);
+	atomic64_set(&rs_dev->write_bytes, 0);
+
+	ret = pci_enable_device_mem(pdev);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to enable PCIe memory device\n");
+		return ret;
 	}
 
-	cap_bytes = (size_t)capacity_mb * 1024 * 1024;
-	ret = ramshared_dma_init(&g_ramshared_dev, cap_bytes);
-	if (ret)
-		goto err_blkdev;
+	pci_set_master(pdev);
 
-	ret = ramshared_queue_init(&g_ramshared_dev, queue_depth);
-	if (ret)
-		goto err_dma;
+	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+	if (ret) {
+		dev_warn(&pdev->dev, "64-bit DMA failed, attempting 32-bit DMA\n");
+		ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+		if (ret) {
+			dev_err(&pdev->dev, "no usable DMA configuration\n");
+			goto err_disable_pci;
+		}
+	}
 
-	pr_info("%s: block device initialized successfully (major %d)\n",
-		RAMSHARED_DRIVER_NAME, g_major);
+	ret = pci_request_mem_regions(pdev, RAMSHARED_DRIVER_NAME);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to claim PCIe memory regions\n");
+		goto err_disable_pci;
+	}
+
+	ret = ramshared_dma_init(rs_dev, pdev);
+	if (ret)
+		goto err_release_regions;
+
+	ret = ramshared_queue_init(rs_dev, &pdev->dev, queue_depth);
+	if (ret)
+		goto err_dma_cleanup;
+
+	ret = add_disk(rs_dev->disk);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to add block disk (err=%d)\n", ret);
+		goto err_queue_cleanup;
+	}
+
+	pci_set_drvdata(pdev, rs_dev);
+	dev_info(&pdev->dev, "block device /dev/%s registered successfully\n",
+		 rs_dev->disk->disk_name);
 	return 0;
 
-err_dma:
-	ramshared_dma_cleanup(&g_ramshared_dev);
-err_blkdev:
-	unregister_blkdev(g_major, RAMSHARED_DRIVER_NAME);
+err_queue_cleanup:
+	ramshared_queue_cleanup(rs_dev);
+err_dma_cleanup:
+	ramshared_dma_cleanup(rs_dev);
+err_release_regions:
+	pci_release_mem_regions(pdev);
+err_disable_pci:
+	pci_disable_device(pdev);
 	return ret;
 }
 
-static void __exit ramshared_exit(void)
+static void ramshared_pci_remove(struct pci_dev *pdev)
 {
-	ramshared_queue_cleanup(&g_ramshared_dev);
-	ramshared_dma_cleanup(&g_ramshared_dev);
-	unregister_blkdev(g_major, RAMSHARED_DRIVER_NAME);
-	pr_info("%s: driver unloaded\n", RAMSHARED_DRIVER_NAME);
+	struct ramshared_device *rs_dev = pci_get_drvdata(pdev);
+
+	if (!rs_dev)
+		return;
+
+	ramshared_queue_cleanup(rs_dev);
+	ramshared_dma_cleanup(rs_dev);
+	pci_release_mem_regions(pdev);
+	pci_disable_device(pdev);
+
+	dev_info(&pdev->dev, "RamShared device removed successfully\n");
 }
 
-module_init(ramshared_init);
-module_exit(ramshared_exit);
+static const struct pci_device_id ramshared_pci_tbl[] = {
+	{ PCI_DEVICE_CLASS(PCI_CLASS_DISPLAY_VGA << 8, 0xffff00) },
+	{ PCI_DEVICE_CLASS(PCI_CLASS_DISPLAY_OTHER << 8, 0xffff00) },
+	{ PCI_DEVICE_CLASS(PCI_CLASS_ACCELERATOR_PROCESSING << 8, 0xffff00) },
+	{ 0, }
+};
+MODULE_DEVICE_TABLE(pci, ramshared_pci_tbl);
+
+static struct pci_driver ramshared_pci_driver = {
+	.name		= RAMSHARED_DRIVER_NAME,
+	.id_table	= ramshared_pci_tbl,
+	.probe		= ramshared_pci_probe,
+	.remove		= ramshared_pci_remove,
+};
+
+module_pci_driver(ramshared_pci_driver);

@@ -26,6 +26,6 @@ package() {
     cd "$srcdir/$pkgname-${pkgver//./-}" 2>/dev/null || cd "$srcdir"
     install -Dm755 target/release/ramshared "$pkgdir/usr/bin/ramshared"
     install -Dm755 target/release/ramsharedd "$pkgdir/usr/bin/ramsharedd"
-    install -Dm644 packaging/systemd/99-ramshared.rules "$pkgdir/usr/lib/udev/rules.d/99-ramshared.rules"
+    install -Dm644 packaging/systemd/60-ramshared.rules "$pkgdir/usr/lib/udev/rules.d/60-ramshared.rules"
     install -Dm644 packaging/systemd/ramshared-vram.service "$pkgdir/usr/lib/systemd/system/ramshared-vram.service"
 }

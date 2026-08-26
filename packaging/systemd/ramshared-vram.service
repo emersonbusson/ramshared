@@ -1,8 +1,8 @@
 [Unit]
 Description=RamShared Zero-Copy GPU VRAM Memory Tier Service
 Documentation=https://github.com/emersonbusson/ramshared
-After=systemd-udev-settle.service local-fs.target
-ConditionPathExistsGlob=/dev/dri/renderD*
+After=systemd-udevd.service local-fs.target
+StopWhenUnneeded=yes
 
 [Service]
 Type=simple
@@ -11,8 +11,30 @@ ExecStop=/usr/bin/ramshared cascade down
 Restart=on-failure
 RestartSec=5s
 KillMode=process
+SendSIGKILL=no
+TimeoutStartSec=60s
+TimeoutStopSec=30s
 StandardOutput=journal
 StandardError=journal
+
+# Sandboxing & Security Hardening
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+NoNewPrivileges=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SYS_RAWIO CAP_DAC_OVERRIDE
+MemoryDenyWriteExecute=no
+LockPersonality=yes
+ProtectHostname=yes
+ProtectClock=yes
+DeviceAllow=/dev/ublk-control rw
+DeviceAllow=char-drm rw
+DeviceAllow=char-nvidia-uvm rw
+DeviceAllow=block-* rw
 
 [Install]
 WantedBy=multi-user.target

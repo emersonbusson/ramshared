@@ -59,8 +59,8 @@ mkdir -p %{buildroot}/etc/ramshared
 install -m 0755 ${CLI_BIN} %{buildroot}/usr/bin/ramshared
 install -m 0755 ${DAEMON_BIN} %{buildroot}/usr/bin/ramsharedd
 
-if [ -f ${ROOT}/packaging/systemd/99-ramshared.rules ]; then
-  install -m 0644 ${ROOT}/packaging/systemd/99-ramshared.rules %{buildroot}/lib/udev/rules.d/99-ramshared.rules
+if [ -f ${ROOT}/packaging/systemd/60-ramshared.rules ]; then
+  install -m 0644 ${ROOT}/packaging/systemd/60-ramshared.rules %{buildroot}/lib/udev/rules.d/60-ramshared.rules
 fi
 
 %files
@@ -68,7 +68,7 @@ fi
 /usr/bin/ramsharedd
 /usr/share/ramshared
 /etc/ramshared
-/lib/udev/rules.d/99-ramshared.rules
+/lib/udev/rules.d/60-ramshared.rules
 
 %changelog
 * Wed Aug 26 2026 Emerson Busson - ${RPM_VERSION}-1
