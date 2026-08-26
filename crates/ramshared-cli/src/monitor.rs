@@ -806,9 +806,14 @@ fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     let text = observation.gpu.as_ref().map_or_else(
         || "GPU telemetry unavailable".to_string(),
         |gpu| {
+            let used_pct = gpu
+                .used_mib
+                .saturating_mul(100)
+                .checked_div(gpu.total_mib)
+                .unwrap_or(0);
             format!(
-                "{}\ntotal: {} MiB\nused: {} MiB\nfree: {} MiB",
-                gpu.name, gpu.total_mib, gpu.used_mib, gpu.free_mib
+                "{}\nTotal:  ({} MB)\nUsed:   ({} MB) [{}%]\nFree:   ({} MB)",
+                gpu.name, gpu.total_mib, gpu.used_mib, used_pct, gpu.free_mib
             )
         },
     );
@@ -817,7 +822,7 @@ fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Physical GPU / VRAM"),
+                    .title("Physical GPU / VRAM (Task Manager View)"),
             )
             .wrap(Wrap { trim: true }),
         area,
@@ -837,18 +842,22 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                         .and_then(|value| value.get("present"))
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
-                    let used = tier
+                    let used_kib = tier
                         .and_then(|value| value.get("used_kib"))
                         .and_then(Value::as_u64)
                         .unwrap_or(0);
-                    let size = tier
+                    let size_kib = tier
                         .and_then(|value| value.get("size_kib"))
                         .and_then(Value::as_u64)
                         .unwrap_or(0);
+                    let used_mb = used_kib / 1024;
+                    let size_mb = size_kib / 1024;
+                    let pct = used_mb
+                        .saturating_mul(100)
+                        .checked_div(size_mb)
+                        .unwrap_or(0);
                     format!(
-                        "{name}: present={present} used={} / {} MiB",
-                        used / 1024,
-                        size / 1024
+                        "{name}: present={present} used=({used_mb} MB / {size_mb} MB) [{pct}%]"
                     )
                 })
                 .collect::<Vec<_>>()
