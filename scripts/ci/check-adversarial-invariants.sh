@@ -29,7 +29,7 @@ while IFS= read -r f; do
     echo "ERROR: Unsafe string function found in $f" >&2
     UNSAFE_HITS=$((UNSAFE_HITS + 1))
   fi
-done < <(git ls-files "*.c" "*.h" | grep -v -E '^(target/|artifacts/|build/|drivers/windows/)')
+done < <(git ls-files --cached --others --exclude-standard "*.c" "*.h" | grep -v -E '^(target/|artifacts/|build/|drivers/windows/)')
 
 if [[ $UNSAFE_HITS -gt 0 ]]; then
   echo "FAIL: $UNSAFE_HITS banned unsafe API occurrences found." >&2
@@ -46,7 +46,7 @@ while IFS= read -r f; do
     echo "ERROR: Trailing whitespace found in $f" >&2
     WS_HITS=$((WS_HITS + 1))
   fi
-done < <(git ls-files "*.c" "*.h" "*.rs" | grep -v -E '^(target/|artifacts/|build/)')
+done < <(git ls-files --cached --others --exclude-standard "*.c" "*.h" "*.rs" | grep -v -E '^(target/|artifacts/|build/)')
 
 if [[ $WS_HITS -gt 0 ]]; then
   echo "FAIL: Trailing whitespace violations found in source code." >&2

@@ -11,7 +11,7 @@ echo "==> Running Linux Kernel style checks on C and header files..."
 TARGET_FILES=()
 while IFS= read -r file; do
   [[ -f "$file" ]] && TARGET_FILES+=("$file")
-done < <(git ls-files "*.c" "*.h" | grep -v -E '^(target/|artifacts/|build/|drivers/windows/)')
+done < <(git ls-files --cached --others --exclude-standard "*.c" "*.h" | grep -v -E '^(target/|artifacts/|build/|drivers/windows/)')
 
 if [[ ${#TARGET_FILES[@]} -eq 0 ]]; then
   echo "✓ No active Linux C/H driver files to check. PASS."
