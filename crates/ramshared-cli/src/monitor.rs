@@ -812,7 +812,7 @@ fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 .checked_div(gpu.total_mib)
                 .unwrap_or(0);
             format!(
-                "{}\nTotal:  ({} MB)\nUsed:   ({} MB) [{}%]\nFree:   ({} MB)",
+                "{}\nTotal:  ({} MiB)\nUsed:   ({} MiB) [{}%]\nFree:   ({} MiB)",
                 gpu.name, gpu.total_mib, gpu.used_mib, used_pct, gpu.free_mib
             )
         },
@@ -822,7 +822,7 @@ fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Physical GPU / VRAM (Task Manager View)"),
+                    .title("Physical GPU / VRAM (Host Metrics)"),
             )
             .wrap(Wrap { trim: true }),
         area,
@@ -850,14 +850,14 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                         .and_then(|value| value.get("size_kib"))
                         .and_then(Value::as_u64)
                         .unwrap_or(0);
-                    let used_mb = used_kib / 1024;
-                    let size_mb = size_kib / 1024;
-                    let pct = used_mb
+                    let used_mib = used_kib / 1024;
+                    let size_mib = size_kib / 1024;
+                    let pct = used_mib
                         .saturating_mul(100)
-                        .checked_div(size_mb)
+                        .checked_div(size_mib)
                         .unwrap_or(0);
                     format!(
-                        "{name}: present={present} used=({used_mb} MB / {size_mb} MB) [{pct}%]"
+                        "{name}: present={present} used=({used_mib} MiB / {size_mib} MiB) [{pct}%]"
                     )
                 })
                 .collect::<Vec<_>>()

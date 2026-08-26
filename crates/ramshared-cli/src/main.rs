@@ -295,9 +295,12 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
         "status" => Ok(CliCommand::Status {
             json: parse_json_option("status", options)?,
         }),
-        "monitor" | "top" => Ok(CliCommand::Monitor {
+        cmd @ ("monitor" | "top") => Ok(CliCommand::Monitor {
             options: MonitorOptions::parse(options).map_err(|_| CliParseError::InvalidOption {
-                command: "monitor",
+                command: match cmd {
+                    "top" => "top",
+                    _ => "monitor",
+                },
                 options: options.to_vec(),
             })?,
         }),
@@ -552,7 +555,7 @@ fn print_usage(stderr: &mut dyn Write) {
     );
     let _ = writeln!(
         stderr,
-        "  ramshared top               # interactive real-time dashboard (Task Manager view)"
+        "  ramshared top               # interactive real-time dashboard (TUI monitor)"
     );
     let _ = writeln!(
         stderr,

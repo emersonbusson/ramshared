@@ -183,3 +183,14 @@ fn cli_up_and_down_refuse_before_mutation() {
     assert_eq!(down_refusal.status.code(), Some(2));
     assert!(stderr(&down_refusal).contains("invalid down option"));
 }
+
+#[test]
+fn cli_top_alias_and_refusals() {
+    let top_once = run_cli(&["top", "--once", "--jsonl"]);
+    assert_eq!(top_once.status.code(), Some(0));
+    assert!(!stdout(&top_once).is_empty());
+
+    let top_refusal = run_cli(&["top", "--bad-option"]);
+    assert_eq!(top_refusal.status.code(), Some(2));
+    assert!(stderr(&top_refusal).contains("invalid top option"));
+}
