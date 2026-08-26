@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 251,
-    "classified": 240,
+    "total": 252,
+    "classified": 241,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -362,6 +362,18 @@
       },
       "owner": "release-engineering",
       "canonicalSource": "docs/ci/CI-TOPOLOGY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/cioficial.md",
+      "disposition": "classified",
+      "ruleId": "top-level-docs",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
     },

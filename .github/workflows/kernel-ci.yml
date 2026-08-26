@@ -1,0 +1,67 @@
+name: Kernel CI
+
+on:
+  workflow_call:
+
+permissions: {}
+
+concurrency:
+  group: kernel-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kernel-static:
+    name: kernel static + invariants
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+
+      - name: Kernel Style Check
+        run: ./scripts/ci/check-kernel-style.sh
+
+      - name: Kernel Sparse Semantic Check
+        run: ./scripts/ci/check-kernel-sparse.sh
+
+      - name: Adversarial Invariants Verification
+        run: ./scripts/ci/check-adversarial-invariants.sh
+
+  kernel-build-matrix:
+    name: kernel build matrix (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Compile Benchmark Tools (${{ matrix.compiler }})
+        run: |
+          if [ "${{ matrix.compiler }}" = "gcc" ]; then
+            gcc -Wall -Wextra -Werror -D_GNU_SOURCE tools/benchmarks/kernel_vram_bench.c -o /tmp/kernel_vram_bench_gcc
+          elif [ "${{ matrix.compiler }}" = "clang" ]; then
+            clang -Wall -Wextra -Werror -D_GNU_SOURCE tools/benchmarks/kernel_vram_bench.c -o /tmp/kernel_vram_bench_clang
+          fi
+
+  kernel-qemu-smoke:
+    name: kernel qemu console audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Audit QEMU Console Logs
+        run: ./scripts/ci/check-kernel-qemu-smoke.sh
