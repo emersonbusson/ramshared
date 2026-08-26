@@ -39,11 +39,15 @@ if command -v nvidia-smi >/dev/null 2>&1; then
   GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1 || echo "NVIDIA GPU")
   echo "  [+] GPU detected: ${GPU_NAME}"
 else
-  echo "  [!] Warning: nvidia-smi not found. Ensure NVIDIA drivers are installed."
+  echo "  [!] Info: nvidia-smi not in current PATH (GPU detected via runtime driver or WSL2 relay)."
 fi
 
 # Determine source: local directory or GitHub download
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+fi
+
 LOCAL_SRC=""
 if [[ -n "$SCRIPT_DIR" && -d "${SCRIPT_DIR}/../target/release" ]]; then
   LOCAL_SRC="${SCRIPT_DIR}/.."
@@ -82,13 +86,27 @@ else
 
   echo "  [+] Extracting release bundle..."
   tar -xzf "${TMP_DIR}/${TARBALL}" -C "${TMP_DIR}"
-  RELEASE_DIR="${TMP_DIR}/ramshared-linux-${VERSION}"
+  
+  # Release layout search (handles release/bin or bin/)
+  FOUND_CLI=$(find "${TMP_DIR}" -name "ramshared" -type f -perm /111 | head -n 1)
+  FOUND_DAEMON=$(find "${TMP_DIR}" -name "ramsharedd" -type f -perm /111 | head -n 1)
+  
+  if [[ -z "$FOUND_CLI" || -z "$FOUND_DAEMON" ]]; then
+    echo "Error: Binaries not found inside release tarball." >&2
+    exit 1
+  fi
 
-  cp "${RELEASE_DIR}/bin/ramshared" "${TMP_DIR}/ramshared"
-  cp "${RELEASE_DIR}/bin/ramsharedd" "${TMP_DIR}/ramsharedd"
-  cp -r "${RELEASE_DIR}/scripts/safety" "${TMP_DIR}/safety"
-  if [[ -d "${RELEASE_DIR}/systemd" ]]; then
-    cp -r "${RELEASE_DIR}/systemd" "${TMP_DIR}/systemd"
+  cp "$FOUND_CLI" "${TMP_DIR}/ramshared"
+  cp "$FOUND_DAEMON" "${TMP_DIR}/ramsharedd"
+
+  FOUND_SAFETY=$(find "${TMP_DIR}" -type d -name "safety" | head -n 1)
+  if [[ -n "$FOUND_SAFETY" ]]; then
+    cp -r "$FOUND_SAFETY" "${TMP_DIR}/safety"
+  fi
+
+  FOUND_SYSTEMD=$(find "${TMP_DIR}" -type d -name "systemd" | head -n 1)
+  if [[ -n "$FOUND_SYSTEMD" ]]; then
+    cp -r "$FOUND_SYSTEMD" "${TMP_DIR}/systemd"
   fi
 fi
 
@@ -98,7 +116,7 @@ mkdir -p "${BIN_DIR}" "${SHARE_DIR}/scripts" "${CONF_DIR}" "${SYSTEMD_DIR}"
 # Install binaries
 install -m 0755 "${TMP_DIR}/ramshared" "${BIN_DIR}/ramshared"
 install -m 0755 "${TMP_DIR}/ramsharedd" "${BIN_DIR}/ramsharedd"
-echo "  [+] Installed binaries to ${BIN_DIR}/"
+echo "  [+] Installed binaries to ${BIN_DIR}/ (ramshared, ramsharedd)"
 
 # Install safety scripts
 if [[ -d "${TMP_DIR}/safety" ]]; then
@@ -109,8 +127,8 @@ fi
 
 # Install systemd units
 if [[ -d "${TMP_DIR}/systemd" ]]; then
-  cp -r "${TMP_DIR}/systemd/"*.service "${SYSTEMD_DIR}/" 2>/dev/null || true
-  cp -r "${TMP_DIR}/systemd/"*.slice "${SYSTEMD_DIR}/" 2>/dev/null || true
+  find "${TMP_DIR}/systemd" -maxdepth 1 -name "*.service" -exec cp {} "${SYSTEMD_DIR}/" \; 2>/dev/null || true
+  find "${TMP_DIR}/systemd" -maxdepth 1 -name "*.slice" -exec cp {} "${SYSTEMD_DIR}/" \; 2>/dev/null || true
   if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload || true
   fi
