@@ -94,23 +94,36 @@ ou encaminhar telemetria em um host.
 ## Cascata de memória
 
 ```text
-pressão de memória
-    |
-    v
-zram (RAM do sistema comprimida)
-    |
-    v
-dispositivo lógico RamShared
-    |-- origem SSD autoritativa
-    `-- cache VRAM limpo e revogável
-    |
-    v
-swap VHDX existente do WSL (último recurso)
+                          [ Pressão de Memória Linux ]
+                                       │
+                                       ▼
+                    ┌─────────────────────────────────┐
+                    │ Tier 0: ZRAM (Compressão CPU)   │ (Prioridade 100)
+                    └────────────────┬────────────────┘
+                                     │
+                                     ▼
+      ┌─────────────────────────────────────────────────────────────┐
+      │ Tier 1: Dispositivo Lógico Acelerado de 2 Níveis RamShared  │ (Prioridade 50)
+      │                                                             │
+      │   ┌──────────────────────────┐   ┌───────────────────────┐  │
+      │   │ GPU VRAM (Cache Tier)    │   │ SSD VHDX (Origem)     │  │
+      │   │ 4 GiB @ 6,07 GiB/s       │──►│ 24 GiB Fixos no Disco │  │
+      │   │ (6.211,2 MiB/s via PCIe) │   │ (Write-Through Store) │  │
+      │   └──────────────────────────┘   └───────────────────────┘  │
+      └──────────────────────────────┬──────────────────────────────┘
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────┐
+                    │ Tier 2: Swap Padrão WSL2 (VHDX) │ (Prioridade -2, Último Recurso)
+                    │ 4 GiB @ ~63–85 MB/s em Disco    │
+                    └─────────────────────────────────┘
 ```
 
-O plano de controle observa a folga da GPU e a latência das operações. Quando
-o host Windows ou outra carga de trabalho da GPU reduz o orçamento disponível,
-o RamShared:
+A arquitetura de dois níveis combina alta velocidade via PCIe com persistência durável no disco:
+
+- **Cache L1 em VRAM da GPU (4 GiB):** Atende páginas de memória ativas e críticas via PCIe (medido em até 6.211,2 MiB/s na execução qualificada EVD-0038).
+- **Origem L2 no SSD (24 GiB):** Fornece capacidade fixa e ilimitada no disco, absorvendo picos sem encerramento forçado de processos (qualificado sob 99% de carga de RAM no EVD-0037).
+- **Garantia Write-Through:** Toda escrita confirmada pelo RamShared é persistida na origem SSD autoritativa. Leituras usam VRAM apenas quando a validade de página confere. Quando o WDDM do Windows ou jogos requisitam a GPU de volta, chunks limpos de VRAM são liberados instantaneamente e as leituras caem na origem SSD com zero perda de dados.
 
 1. interrompe novos commits na VRAM;
 2. invalida ou libera imediatamente chunks limpos;
