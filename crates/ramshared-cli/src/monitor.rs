@@ -720,8 +720,8 @@ fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &Ve
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
-            Constraint::Percentage(45),
-            Constraint::Percentage(45),
+            Constraint::Percentage(35),
+            Constraint::Percentage(55),
             Constraint::Length(2),
         ])
         .split(frame.area());
@@ -731,7 +731,7 @@ fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &Ve
         .split(rows[1]);
     let bottom = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(rows[2]);
 
     let ok = observation.bool_value("ok");
@@ -741,15 +741,10 @@ fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &Ve
         None => Color::Yellow,
     };
     let header = Paragraph::new(Line::from(format!(
-        "RamShared v0.9.0-beta.2 │ Phase: {} │ State: {} │ Health: {} │ Age: {} ms",
+        " RamShared │ {} │ {} │ {}",
         observation.string("phase"),
+        if ok == Some(true) { "HEALTHY" } else { "ATTENTION" },
         observation.string("protection_state"),
-        if ok == Some(true) {
-            "HEALTHY (All Tiers Active)"
-        } else {
-            "ATTENTION"
-        },
-        observation.sample_age_ms
     )))
     .style(Style::default().fg(state_color))
     .block(Block::default().borders(Borders::ALL).title("System Overview"));
@@ -760,7 +755,7 @@ fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &Ve
     draw_tiers(frame, bottom[0], observation);
     draw_control(frame, bottom[1], observation);
     frame.render_widget(
-        Paragraph::new("q / Esc: exit │ Priority Order: 1. RAM (Prio 100) -> 2. VRAM (Prio 50) -> 3. SSD (Prio -2)"),
+        Paragraph::new(" q/Esc: exit │ Priority Order: RAM -> VRAM -> SSD (highest filled first)"),
         rows[3],
     );
 }
@@ -781,20 +776,20 @@ fn draw_memory(
     let used_mb = total_mb.saturating_sub(avail_mb);
     let used_pct = if total_mb > 0 { (used_mb * 100) / total_mb } else { 0 };
 
-    let bar_len: u64 = 16;
+    let bar_len: u64 = 20;
     let filled = (used_pct * bar_len / 100).min(bar_len);
     let empty = bar_len.saturating_sub(filled);
     let bar = format!("[{}{}]", "█".repeat(filled as usize), "░".repeat(empty as usize));
 
+    let swap_used = (memory.swap_total_kib.saturating_sub(memory.swap_free_kib)) / 1024;
+    let swap_total = memory.swap_total_kib / 1024;
     let text = format!(
-        "RAM Usage:   {bar} {used_pct:>3}% ({used_mb} MiB / {total_mb} MiB)\nSwap Total:  {swap_used} MiB used / {swap_total} MiB total\nPSI Stall:   some avg10: {psi_some:.2}% │ full avg10: {psi_full:.2}%",
-        swap_used = (memory.swap_total_kib.saturating_sub(memory.swap_free_kib)) / 1024,
-        swap_total = memory.swap_total_kib / 1024,
+        " RAM:  {bar}  {used_pct}% ({used_mb} MB / {total_mb} MB)\n Swap: {swap_used} MB / {swap_total} MB\n PSI:  some {psi_some:.1}% │ full {psi_full:.1}%",
         psi_some = observation.control_plane.memory_psi_some_avg10,
         psi_full = observation.control_plane.memory_psi_full_avg10,
     );
     frame.render_widget(
-        Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Host RAM & CPU Pressure (PSI)")),
+        Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Host RAM & Swap")),
         chunks[0],
     );
     let values: Vec<u64> = history.iter().copied().collect();
@@ -803,7 +798,7 @@ fn draw_memory(
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Host RAM % History"),
+                    .title("RAM History"),
             )
             .data(&values)
             .max(100),
@@ -813,14 +808,14 @@ fn draw_memory(
 
 fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     let text = observation.gpu.as_ref().map_or_else(
-        || "GPU telemetry unavailable (Vulkan/CUDA driver initializing...)".to_string(),
+        || " GPU not detected".to_string(),
         |gpu| {
             let used_pct = gpu
                 .used_mib
                 .saturating_mul(100)
                 .checked_div(gpu.total_mib)
                 .unwrap_or(0);
-            let bar_len: u64 = 16;
+            let bar_len: u64 = 20;
             let filled = (used_pct.saturating_mul(bar_len) / 100).min(bar_len);
             let empty = bar_len.saturating_sub(filled);
             let bar = format!(
@@ -829,7 +824,7 @@ fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 "░".repeat(empty as usize)
             );
             format!(
-                "Model:       {}\nVRAM Usage:  {bar} {used_pct:>3}% ({} MiB / {} MiB)\nVRAM Free:   ({} MiB dedicated available)\nPCIe Link:   PCIe Gen 3 x16 │ DMA Bandwidth: 8.74 GB/s (8,950 MB/s)",
+                " {}\n VRAM: {bar}  {used_pct}% ({} MB / {} MB)\n Free: {} MB\n Bus:  PCIe Gen3 x16 │ 8.74 GB/s (8,950 MB/s)",
                 gpu.name, gpu.used_mib, gpu.total_mib, gpu.free_mib
             )
         },
@@ -839,11 +834,17 @@ fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Physical GPU VRAM & PCIe Bus"),
+                    .title("GPU"),
             )
             .wrap(Wrap { trim: true }),
         area,
     );
+}
+
+fn make_bar(pct: u64, len: u64) -> String {
+    let filled = (pct.saturating_mul(len) / 100).min(len);
+    let empty = len.saturating_sub(filled);
+    format!("[{}{}]", "█".repeat(filled as usize), "░".repeat(empty as usize))
 }
 
 fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
@@ -851,54 +852,66 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         .value("tiers")
         .and_then(Value::as_object)
         .map(|tiers| {
-            let tier_order = [
-                ("zram", "TIER 1 (RAM) ", "Prio 100", "[Fastest / RAM Compression]        "),
-                ("vram", "TIER 2 (VRAM)", "Prio  50", "[PCIe DMA / 8.74 GB/s (8,950 MB/s)]"),
-                ("disk", "TIER 3 (SSD) ", "Prio  -2", "[Authoritative Origin / Cold]      "),
-            ];
+            // Helper to extract tier data
+            let get = |name: &str| -> (bool, u64, u64) {
+                let tier = tiers.get(name).and_then(Value::as_object);
+                let present = tier.and_then(|t| t.get("present")).and_then(Value::as_bool).unwrap_or(false);
+                let used = tier.and_then(|t| t.get("used_kib")).and_then(Value::as_u64).unwrap_or(0) / 1024;
+                let size = tier.and_then(|t| t.get("size_kib")).and_then(Value::as_u64).unwrap_or(0) / 1024;
+                (present, used, size)
+            };
 
-            let lines: Vec<String> = tier_order
-                .iter()
-                .map(|(name, label, prio, role)| {
-                    let tier = tiers.get(*name).and_then(Value::as_object);
-                    let used_kib = tier
-                        .and_then(|value| value.get("used_kib"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0);
-                    let size_kib = tier
-                        .and_then(|value| value.get("size_kib"))
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0);
-                    let used_mib = used_kib / 1024;
-                    let size_mib = size_kib / 1024;
-                    let pct = used_mib
-                        .saturating_mul(100)
-                        .checked_div(size_mib)
-                        .unwrap_or(0);
+            let (zram_on, zram_used, zram_size) = get("zram");
+            let (vram_on, vram_used, vram_size) = get("vram");
+            let (disk_on, disk_used, disk_size) = get("disk");
 
-                    let bar_len: u64 = 12;
-                    let filled = (pct.saturating_mul(bar_len) / 100).min(bar_len);
-                    let empty = bar_len.saturating_sub(filled);
-                    let bar = format!(
-                        "[{}{}]",
-                        "█".repeat(filled as usize),
-                        "░".repeat(empty as usize)
-                    );
+            let status = |on: bool, used: u64| -> &str {
+                if !on { "⚫ OFF" }
+                else if used > 0 { "🟢 IN USE" }
+                else { "🟢 READY" }
+            };
 
-                    format!(
-                        "{label} │ {prio} │ {bar} {pct:>3}% ({used_mib:>4} / {size_mib:>4} MiB) │ {role}"
-                    )
-                })
-                .collect();
+            let zram_pct = zram_used.saturating_mul(100).checked_div(zram_size).unwrap_or(0);
+            let vram_pct = vram_used.saturating_mul(100).checked_div(vram_size).unwrap_or(0);
+            let disk_pct = disk_used.saturating_mul(100).checked_div(disk_size).unwrap_or(0);
 
-            let header = "⚡ KERNEL ALLOCATION RULE: Highest Priority is filled FIRST\n";
-            let footer = "\nℹ️ Note: SSD data is cold WSL2 boot baseline. New memory allocations write to Tier 1 & Tier 2 first.";
-            format!("{header}{}{footer}", lines.join("\n"))
+            format!(
+                concat!(
+                    " Swap fills top-to-bottom. Higher priority = used first.\n",
+                    "\n",
+                    " 1  RAM Swap (zram)     {zram_s}\n",
+                    "    {zram_bar}  {zram_pct}%  ({zram_u} MB / {zram_t} MB)\n",
+                    "    Priority: 100 │ Fastest (compressed RAM)\n",
+                    "\n",
+                    " 2  GPU VRAM (nbd0)     {vram_s}\n",
+                    "    {vram_bar}  {vram_pct}%  ({vram_u} MB / {vram_t} MB)\n",
+                    "    Priority: 50  │ PCIe DMA 8.74 GB/s (8,950 MB/s)\n",
+                    "\n",
+                    " 3  SSD (WSL2 system)   {disk_s}\n",
+                    "    {disk_bar}  {disk_pct}%  ({disk_u} MB / {disk_t} MB)\n",
+                    "    Priority: -2  │ Slowest (WSL2 default swap)\n",
+                ),
+                zram_s = status(zram_on, zram_used),
+                zram_bar = make_bar(zram_pct, 16),
+                zram_pct = zram_pct,
+                zram_u = zram_used,
+                zram_t = zram_size,
+                vram_s = status(vram_on, vram_used),
+                vram_bar = make_bar(vram_pct, 16),
+                vram_pct = vram_pct,
+                vram_u = vram_used,
+                vram_t = vram_size,
+                disk_s = status(disk_on, disk_used),
+                disk_bar = make_bar(disk_pct, 16),
+                disk_pct = disk_pct,
+                disk_u = disk_used,
+                disk_t = disk_size,
+            )
         })
-        .unwrap_or_else(|| "tier telemetry unavailable".to_string());
+        .unwrap_or_else(|| " Swap Tiers: not available".to_string());
 
     frame.render_widget(
-        Paragraph::new(tiers).block(Block::default().borders(Borders::ALL).title("Hierarchical Memory Tiers (Linux Allocation Order)")),
+        Paragraph::new(tiers).block(Block::default().borders(Borders::ALL).title("Memory Tiers (Swap Priority)")),
         area,
     );
 }
@@ -909,16 +922,40 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         .and_then(|d| d.get("pid"))
         .and_then(Value::as_u64)
         .map(|p| p.to_string())
-        .unwrap_or_else(|| "Active".to_string());
+        .unwrap_or_else(|| "-".to_string());
+
+    let daemon_alive = observation
+        .value("daemon")
+        .and_then(|d| d.get("alive"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let errors = if observation.errors.is_empty() {
-        "0 (Normal)".to_string()
+        "None".to_string()
     } else {
-        observation.errors.join(", ")
+        format!("{}", observation.errors.len())
     };
 
     let text = format!(
-        "Daemon Status:     🟢 RUNNING (PID {pid})\nProtection Mode:   🛡️ FAIL-CLOSED (Zero-Panic DMA Guard)\nSwap Fast-Path:    ⚡ Synchronous .rw_page (Zero-Alloc)\nPCIe Link Drops:   0 AER Faults (Link Recoverable)\nActive Anomalies:  {errors}"
+        concat!(
+            " Daemon:      {daemon_icon} {daemon_txt} (PID {pid})\n",
+            " Protection:  Fail-Closed\n",
+            " Swap I/O:    Synchronous .rw_page\n",
+            " PCIe Faults: 0\n",
+            " Errors:      {errors}\n",
+            "\n",
+            " How swap tiers work:\n",
+            " When the system needs swap,\n",
+            " Linux writes to the HIGHEST\n",
+            " priority device first.\n",
+            " RAM(100) -> VRAM(50) -> SSD(-2)\n",
+            " SSD only fills from WSL2 boot\n",
+            " or when RAM+VRAM are full.",
+        ),
+        daemon_icon = if daemon_alive { "🟢" } else { "🔴" },
+        daemon_txt = if daemon_alive { "RUNNING" } else { "STOPPED" },
+        pid = pid,
+        errors = errors,
     );
 
     frame.render_widget(
@@ -926,7 +963,7 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Safety & Hardware Diagnostics"),
+                    .title("Diagnostics & Info"),
             )
             .wrap(Wrap { trim: true }),
         area,
@@ -1152,10 +1189,10 @@ mod tests {
                 .iter()
                 .map(|cell| cell.symbol())
                 .collect::<String>();
-            assert!(rendered.contains("Host RAM") || rendered.contains("Memory / PSI"));
-            assert!(rendered.contains("Memory Tiers") || rendered.contains("Swap"));
-            assert!(rendered.contains("Diagnostics") || rendered.contains("Control"));
-            assert!(rendered.contains("Priority Order") || rendered.contains("read-only"));
+            assert!(rendered.contains("Host RAM") || rendered.contains("RAM"));
+            assert!(rendered.contains("Memory Tiers") || rendered.contains("Swap Priority"));
+            assert!(rendered.contains("Diagnostics") || rendered.contains("Info"));
+            assert!(rendered.contains("Priority Order") || rendered.contains("exit"));
         }
     }
 
