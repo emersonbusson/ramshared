@@ -515,4 +515,15 @@ live qualification remain blocked pending a fresh explicit instruction.
 **Scope:** Establish the complete multi-distro release packaging CI workflow (`.deb`, `.rpm`, `PKGBUILD` tarball) with automated SHA-256 checksums, develop the direct `.rw_page` swap fast-path simulation and stress validation suite (`test-rw-page-swap-stress.sh`), and generate the official LKML patchset series and guide (`generate-kernel-patchset.sh` / `LKML-PATCHSET.md`).
 **Evidence / blockers:** `.github/workflows/release-packaging.yml` validated. `scripts/safety/test-rw-page-swap-stress.sh` executes 4/4 checks successfully. `scripts/package/generate-kernel-patchset.sh` generates patch directory with Signed-off-by maintainer tag. All 29 `./scripts/docs-check.sh` suites and 700+ workspace tests pass with 0 errors.
 
+## TASK-0018 — Linux kernel telemetry architecture specification and per-CPU hardware accounting
 
+**Schema:** `ramshared.task.v1`.
+**Status:** `completed`.
+**Owner role:** `kernel-coder`.
+**Date:** `2026-08-26`.
+**Registered time:** `13:15:00`.
+**Updated time:** `13:16:00`.
+**Source revision:** `85ef51a`.
+**Destinations:** `docs/architecture/LINUX-KERNEL-TELEMETRY-SPEC.md`, `drivers/block/ramshared/queue.c`, `trovaldo.md`, and `TASK.md`.
+**Scope:** Author the canonical Linux kernel telemetry specification (`LINUX-KERNEL-TELEMETRY-SPEC.md`) formalizing parity with the 5 core upstream telemetry pillars (blk-mq lockless hardware accumulators, scheduler PSI pressure stall metrics, MM vmscan swap counters, DRM client fdinfo memory residency, and tracepoint/eBPF infrastructure). Extend the in-tree kernel driver with lockless read_bytes and write_bytes sysfs attributes under `/sys/block/ramshared0/ramshared/`.
+**Evidence / blockers:** `docs/architecture/LINUX-KERNEL-TELEMETRY-SPEC.md` authored and registered. Verified with `scripts/ci/check-kernel-style.sh` (6/6 C files clean), `check-adversarial-invariants.sh` (6/6 PASS), and all 29 `./scripts/docs-check.sh` governance suites passing.

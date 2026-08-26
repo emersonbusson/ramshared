@@ -107,3 +107,4 @@ EVD-0039: Hardware PCIe DMA & Native ublk/io_uring Qualification
 | 2026-08-26 | Anti-Fragility | Integrated DKMS auto-signing, UEFI MOK enrollment, and multi-kernel `compat.h` (5.15–6.13+) | `UPSTREAM-ANTI-FRAGILITY-FORMS.md` |
 | 2026-08-26 | Packaging CI | Created release packaging workflow (`.deb`, `.rpm`, `PKGBUILD`, SHA256) | `.github/workflows/` |
 | 2026-08-26 | LKML Upstream | Formatted patchset series for linux-block subsystem & submission guide | `docs/upstream/` |
+| 2026-08-26 | Kernel Telemetry | Authored 5-pillar telemetry spec & sysfs lockless per-CPU accounting | `LINUX-KERNEL-TELEMETRY-SPEC.md` |

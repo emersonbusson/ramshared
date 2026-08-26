@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 256,
-    "classified": 245,
+    "total": 257,
+    "classified": 246,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -314,6 +314,18 @@
       },
       "owner": "documentation-governance",
       "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/architecture/LINUX-KERNEL-TELEMETRY-SPEC.md",
+      "disposition": "classified",
+      "ruleId": "architecture-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
     },

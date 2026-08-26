@@ -152,19 +152,31 @@ static ssize_t capacity_bytes_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(capacity_bytes);
 
-static ssize_t dma_transfers_total_show(struct device *dev,
-					struct device_attribute *attr, char *buf)
+static ssize_t read_bytes_show(struct device *dev,
+				struct device_attribute *attr, char *buf)
 {
 	struct gendisk *disk = dev_to_disk(dev);
 	struct ramshared_device *rs_dev = disk->private_data;
 
-	return sysfs_emit(buf, "%lld\n", atomic64_read(&rs_dev->dma_transfers_total));
+	return sysfs_emit(buf, "%lld\n", atomic64_read(&rs_dev->read_bytes));
 }
-static DEVICE_ATTR_RO(dma_transfers_total);
+static DEVICE_ATTR_RO(read_bytes);
+
+static ssize_t write_bytes_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	struct gendisk *disk = dev_to_disk(dev);
+	struct ramshared_device *rs_dev = disk->private_data;
+
+	return sysfs_emit(buf, "%lld\n", atomic64_read(&rs_dev->write_bytes));
+}
+static DEVICE_ATTR_RO(write_bytes);
 
 static struct attribute *ramshared_attrs[] = {
 	&dev_attr_capacity_bytes.attr,
 	&dev_attr_dma_transfers_total.attr,
+	&dev_attr_read_bytes.attr,
+	&dev_attr_write_bytes.attr,
 	NULL,
 };
 

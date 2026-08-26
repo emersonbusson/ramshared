@@ -424,6 +424,16 @@
       "registeredAt": "2026-08-20T14:49:00Z"
     },
     {
+      "id": "architecture-documents",
+      "pattern": "docs/architecture/**/*.md",
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-26T13:15:00Z"
+    },
+    {
       "id": "review-documents",
       "pattern": "docs/reviews/**/*.md",
       "owner": "documentation-governance",
