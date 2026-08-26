@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# RamShared VRAM Accelerated Block Driver Configuration
+#
+
+config BLK_DEV_RAMSHARED
+	tristate "RamShared VRAM Accelerated Block Driver"
+	depends on PCI && HAS_DMA && BLOCK
+	help
+	  RamShared is an in-kernel block driver that utilizes idle GPU
+	  VRAM over PCIe as a high-throughput, revocable cache tier for
+	  memory pressure relief and system swap offloading.
+
+	  The driver creates a logical block device (/dev/ramshared<N>)
+	  capable of achieving multi-gigabyte-per-second I/O throughput
+	  by staging pages in GPU VRAM (mapped via PCIe BAR / P2PDMA)
+	  with write-through persistence to a designated authoritative
+	  origin backing device.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ramshared.
+
+	  If unsure, say N.
+
+config BLK_DEV_RAMSHARED_STATS
+	bool "RamShared Detailed Latency and Throughput Statistics"
+	depends on BLK_DEV_RAMSHARED
+	default y
+	help
+	  Enables per-device nanosecond-precision latency histograms and
+	  PCIe throughput accounting exported via sysfs under
+	  /sys/block/ramshared<N>/ramshared/.

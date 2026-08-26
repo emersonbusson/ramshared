@@ -1,0 +1,58 @@
+From: Emerson Busson 
+Subject: [PATCH v1] block: add ramshared VRAM-accelerated memory tier driver
+Date: Tue, 25 Aug 2026 21:40:00 -0300
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Add the RamShared in-kernel block driver to drivers/block/ramshared/.
+
+RamShared is an accelerated memory tier block driver that maps idle GPU
+VRAM over PCIe BAR apertures using Write-Combining memory attributes to
+provide high-throughput, low-latency block I/O under memory pressure.
+
+Key highlights:
+- Native blk-mq multiqueue integration with per-CPU hardware queues
+- PCIe BAR discovery and WC aperture mapping for multi-GB/s throughput
+- Dual-tier write-through storage invariant for seamless GPU eviction
+- Sysfs metrics accounting for hit/miss ratios and transfer bandwidth
+
+Signed-off-by: Emerson Busson 
+---
+ Documentation/block/index.rst       |   1 +
+ Documentation/block/ramshared.rst   |  70 +++++++++
+ drivers/block/Kconfig               |   2 +
+ drivers/block/Makefile              |   1 +
+ drivers/block/ramshared/Kconfig     |  28 ++++
+ drivers/block/ramshared/Makefile    |   8 +
+ drivers/block/ramshared/ramshared_driver.h |  75 +++++++++
+ drivers/block/ramshared/ramshared_main.c   | 185 ++++++++++++++++++++++
+ drivers/block/ramshared/ramshared_tier.c   |  78 +++++++++
+ drivers/block/ramshared/ramshared_vram.c   | 135 ++++++++++++++++
+ 10 files changed, 583 insertions(+)
+ create mode 100644 Documentation/block/ramshared.rst
+ create mode 100644 drivers/block/ramshared/Kconfig
+ create mode 100644 drivers/block/ramshared/Makefile
+ create mode 100644 drivers/block/ramshared/ramshared_driver.h
+ create mode 100644 drivers/block/ramshared/ramshared_main.c
+ create mode 100644 drivers/block/ramshared/ramshared_tier.c
+ create mode 100644 drivers/block/ramshared/ramshared_vram.c
+
+diff --git a/drivers/block/Kconfig b/drivers/block/Kconfig
+index 8c9d0e1..a1b2c3d 100644
+--- a/drivers/block/Kconfig
++++ b/drivers/block/Kconfig
+@@ -350,4 +350,6 @@ config BLK_DEV_UBLK
+ 
++source "drivers/block/ramshared/Kconfig"
++
+ endif # BLK_DEV
+diff --git a/drivers/block/Makefile b/drivers/block/Makefile
+index 7a8b9c0..d1e2f3a 100644
+--- a/drivers/block/Makefile
++++ b/drivers/block/Makefile
+@@ -38,3 +38,4 @@ obj-$(CONFIG_BLK_DEV_NULL_BLK)	+= null_blk.o
+ obj-$(CONFIG_BLK_DEV_UBLK)	+= ublk_drv.o
++obj-$(CONFIG_BLK_DEV_RAMSHARED)	+= ramshared/
+-- 
+2.43.0
