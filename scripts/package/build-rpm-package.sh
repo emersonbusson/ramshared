@@ -12,7 +12,7 @@ ARCH="x86_64"
 
 OUT_DIR="$ROOT/artifacts/packages"
 RPM_ROOT="$OUT_DIR/rpmbuild"
-SPEC_FILE="$ROOT/packaging/rpm/ramshared.spec"
+SPEC_FILE="$RPM_ROOT/SPECS/ramshared.spec"
 
 echo "==> Building RPM package for RamShared ${VERSION} (${ARCH})..."
 

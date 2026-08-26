@@ -1,8 +1,8 @@
 # Linux Kernel Telemetry Architecture & Implementation Specification
 
-**Canonical Reference:** `docs/architecture/LINUX-KERNEL-TELEMETRY-SPEC.md`  
-**Subsystems:** Linux Block Layer (`blk-mq`), Memory Management (`mm`), Scheduler PSI (`kernel/sched/psi.c`), DRM GPU fdinfo (`drivers/gpu/drm/`).  
-**Author:** Emerson Busson  
+**Canonical Reference:** `docs/architecture/LINUX-KERNEL-TELEMETRY-SPEC.md`
+**Subsystems:** Linux Block Layer (`blk-mq`), Memory Management (`mm`), Scheduler PSI (`kernel/sched/psi.c`), DRM GPU fdinfo (`drivers/gpu/drm/`).
+**Author:** Emerson Busson
 **Status:** Canonical Engineering Specification
 
 ---
