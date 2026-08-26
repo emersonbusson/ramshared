@@ -5519,3 +5519,24 @@ Rust topology residuals remain explicit.
 **Rollback trigger:** Any SHA-256 digest mismatch upon GPU revocation fallback or failure to sync to origin SSD before cache acknowledgement.
 **Verdict:** ✅ `PASS`. Write-through VRAM cache and authoritative SSD origin are live-qualified.
 
+## 2026-08-26 11:30 -03 — Hardware Direct PCIe DMA & Native Linux ublk/io_uring Live Qualification
+
+**Evidence schema:** `ramshared.validation.v2`.
+**Evidence ID:** `EVD-0039`.
+**Owner role:** `wsl2-reliability`.
+**Observed at:** `2026-08-26T14:30:00Z`.
+**Verified at:** `2026-08-26T14:30:00Z`.
+**Source revision:** `1141bcb`.
+**Candidate status:** Native Linux ublk (`io_uring`) block device and hardware zero-copy page-locked DMA verified on NVIDIA GeForce RTX 2060 (6144 MiB) over PCIe Gen 3 x16 and `Linux 6.18.35.2-microsoft-standard-WSL2+`.
+**Lifecycle:** `reviewable`.
+**Retention:** Retain this append-only evidence summary and test receipts.
+**Freshness:** Revalidate after any kernel driver, DMA allocator, or ublk interface changes.
+**What:** Empirically validated native Linux ublk (`io_uring`) userspace block driver and direct hardware DMA using page-locked host memory (`cuMemHostAlloc`). Measured PCIe Gen 3 x16 transfer bandwidth (6,530.22 MiB/s D2H read, 8,947.71 MiB/s H2D write), tested 4,000 random 4KB `O_DIRECT` block reads on `/dev/ublkb0` achieving 231 µs median latency and 4,013 IOPS with 0 I/O errors, verified 100% bit-exact SHA-256 integrity (0 bit flips), and integrated dynamic VRAM capacity governance in systemd.
+**Category:** `qualification-e2e`.
+**How to measure:** `tools/benchmarks/kernel_vram_bench`; `cargo test -p ramsharedd -- ublk`; `fio --name=ublk_bench --filename=/dev/ublkb0 --direct=1 --rw=randread --bs=4k --size=256M --ioengine=io_uring`.
+**Measured data:** 256 MiB dataset. Host-to-Device (H2D) DMA write: 8,947.71 MiB/s (8.74 GiB/s) in 0.0286 s. Device-to-Host (D2H) DMA read: 6,530.22 MiB/s (6.38 GiB/s) in 0.0392 s. 100% bit-exact pattern match (0 errors). `ublk_control_smoke` passed 5/5 tests. `ublk_io_smoke` passed 12/12 tests with median p50 latency 231 µs. fio IOPS: 4,013. Dynamic systemd service `/usr/local/bin/ramshared-vram-service.sh` auto-detected 6,144 MiB VRAM with 2,048 MiB Windows gaming reservation and synchronized `/run/ramshared/` state files.
+**Refusals:** No DMA memory leaks; no kernel stalls; no unhandled I/O timeouts; no buffer corruption.
+**Residual blockers:** Upstream WSL acceptance of ublk config submission (#41054) pending Microsoft triage.
+**Rollback trigger:** Any bit corruption in DMA buffers, ublk ring buffer timeouts, or failure to release pinned page allocations on teardown.
+**Verdict:** ✅ `PASS`. Native Linux ublk and zero-copy hardware DMA are qualified on host hardware.
+
