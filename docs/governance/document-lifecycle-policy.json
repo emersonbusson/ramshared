@@ -64,6 +64,16 @@
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
+      "id": "root-upstream-torvalds-roadmap",
+      "pattern": "trovaldo.md",
+      "owner": "architecture",
+      "canonicalSource": "trovaldo.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
       "id": "root-security-document",
       "pattern": "SECURITY.md",
       "owner": "security",
