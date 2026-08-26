@@ -1,7 +1,7 @@
 # Upstream Linux Anti-Fragility Qualification Forms & Invariant Registry
 
-**Canonical Reference:** `docs/reviews/UPSTREAM-ANTI-FRAGILITY-FORMS.md`  
-**Governance Scope:** `ramshared` Upstream Linux Kernel, Memory Management (`mm`), Hardware Security, and Multi-Distro Packaging.  
+**Canonical Reference:** `docs/reviews/UPSTREAM-ANTI-FRAGILITY-FORMS.md`
+**Governance Scope:** `ramshared` Upstream Linux Kernel, Memory Management (`mm`), Hardware Security, and Multi-Distro Packaging.
 **Auditors:** Kernel Driver Upstream Auditor, Linux MM/Swap Specialist, Hardware Security & IOMMU Auditor, Multi-Arch Matrix Auditor, Distro Packaging Specialist.
 
 ---

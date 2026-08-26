@@ -147,4 +147,3 @@ executes [`scripts/ci/check-adversarial-invariants.sh`](../../scripts/ci/check-a
 - [x] **Invariant 4 (Language Standard):** 100% English comments across all git diffs.
 - [x] **Invariant 5 (Kahneman #13):** Append-only validation log integrity verified against schema v2.
 - [x] **Invariant 6 (Documentation Rigor):** Complete adversarial audit and defense documentation.
-

@@ -105,4 +105,3 @@ EVD-0039: Hardware PCIe DMA & Native ublk/io_uring Qualification
 | 2026-08-26 | Cross-GPU | Verified `ramshared-vulkan` backend for AMD Radeon & Intel Arc GPUs | `crates/ramshared-vulkan` |
 | 2026-08-26 | In-Tree Driver | Built `drivers/block/ramshared/` with `gendisk` and synchronous `.rw_page` swap fast-path | `drivers/block/` |
 | 2026-08-26 | Anti-Fragility | Integrated DKMS auto-signing, UEFI MOK enrollment, and multi-kernel `compat.h` (5.15–6.13+) | `UPSTREAM-ANTI-FRAGILITY-FORMS.md` |
-
