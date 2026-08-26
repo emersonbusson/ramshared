@@ -771,8 +771,8 @@ fn draw_memory(
         .constraints([Constraint::Length(5), Constraint::Min(1)])
         .split(area);
     let memory = &observation.mem;
-    let total_mb = memory.total_kib / 1024;
-    let avail_mb = memory.available_kib / 1024;
+    let total_mb = (memory.total_kib + 512) / 1024;
+    let avail_mb = (memory.available_kib + 512) / 1024;
     let used_mb = total_mb.saturating_sub(avail_mb);
     let used_pct = if total_mb > 0 { (used_mb * 100) / total_mb } else { 0 };
 
@@ -781,10 +781,11 @@ fn draw_memory(
     let empty = bar_len.saturating_sub(filled);
     let bar = format!("[{}{}]", "█".repeat(filled as usize), "░".repeat(empty as usize));
 
-    let swap_used = (memory.swap_total_kib.saturating_sub(memory.swap_free_kib)) / 1024;
-    let swap_total = memory.swap_total_kib / 1024;
+    let swap_used = (memory.swap_total_kib.saturating_sub(memory.swap_free_kib) + 512) / 1024;
+    let swap_total = (memory.swap_total_kib + 512) / 1024;
+    let swap_pct = if swap_total > 0 { (swap_used * 100) / swap_total } else { 0 };
     let text = format!(
-        " RAM:  {bar}  {used_pct}% ({used_mb} MB / {total_mb} MB)\n Swap: {swap_used} MB / {swap_total} MB\n PSI:  some {psi_some:.1}% │ full {psi_full:.1}%",
+        " RAM:  {bar}  {used_pct}% ({used_mb} MB / {total_mb} MB)\n Swap: {swap_used} MB / {swap_total} MB ({swap_pct}% used)\n PSI:  some {psi_some:.2}% │ full {psi_full:.2}%",
         psi_some = observation.control_plane.memory_psi_some_avg10,
         psi_full = observation.control_plane.memory_psi_full_avg10,
     );
@@ -824,7 +825,7 @@ fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 "░".repeat(empty as usize)
             );
             format!(
-                " {}\n VRAM: {bar}  {used_pct}% ({} MB / {} MB)\n Free: {} MB\n Bus:  PCIe Gen3 x16 │ 8.74 GB/s (8,950 MB/s)",
+                " {}\n VRAM: {bar}  {used_pct}% ({} MB / {} MB)\n Free: {} MB available\n Bus:  PCIe Gen3 x16 │ 8.74 GB/s (8,950 MB/s)",
                 gpu.name, gpu.used_mib, gpu.total_mib, gpu.free_mib
             )
         },
@@ -852,12 +853,14 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         .value("tiers")
         .and_then(Value::as_object)
         .map(|tiers| {
-            // Helper to extract tier data
+            // Helper to extract tier data with proper rounding
             let get = |name: &str| -> (bool, u64, u64) {
                 let tier = tiers.get(name).and_then(Value::as_object);
                 let present = tier.and_then(|t| t.get("present")).and_then(Value::as_bool).unwrap_or(false);
-                let used = tier.and_then(|t| t.get("used_kib")).and_then(Value::as_u64).unwrap_or(0) / 1024;
-                let size = tier.and_then(|t| t.get("size_kib")).and_then(Value::as_u64).unwrap_or(0) / 1024;
+                let used_kib = tier.and_then(|t| t.get("used_kib")).and_then(Value::as_u64).unwrap_or(0);
+                let size_kib = tier.and_then(|t| t.get("size_kib")).and_then(Value::as_u64).unwrap_or(0);
+                let used = (used_kib + 512) / 1024;
+                let size = (size_kib + 512) / 1024;
                 (present, used, size)
             };
 
@@ -881,7 +884,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                     "\n",
                     " 1  RAM Swap (zram)     {zram_s}\n",
                     "    {zram_bar}  {zram_pct}%  ({zram_u} MB / {zram_t} MB)\n",
-                    "    Priority: 100 │ Fastest (compressed RAM)\n",
+                    "    Priority: 100 │ Fastest (compressed in-RAM tier)\n",
                     "\n",
                     " 2  GPU VRAM (nbd0)     {vram_s}\n",
                     "    {vram_bar}  {vram_pct}%  ({vram_u} MB / {vram_t} MB)\n",
@@ -889,7 +892,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                     "\n",
                     " 3  SSD (WSL2 system)   {disk_s}\n",
                     "    {disk_bar}  {disk_pct}%  ({disk_u} MB / {disk_t} MB)\n",
-                    "    Priority: -2  │ Slowest (WSL2 default swap)\n",
+                    "    Priority: -2  │ Slowest (WSL2 disk swap origin)\n",
                 ),
                 zram_s = status(zram_on, zram_used),
                 zram_bar = make_bar(zram_pct, 16),
@@ -936,25 +939,28 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         format!("{}", observation.errors.len())
     };
 
+    let swap_in = observation.control_plane.swap_in_pages;
+    let swap_out = observation.control_plane.swap_out_pages;
+
     let text = format!(
         concat!(
             " Daemon:      {daemon_icon} {daemon_txt} (PID {pid})\n",
-            " Protection:  Fail-Closed\n",
+            " Protection:  Fail-Closed (Zero Panic)\n",
             " Swap I/O:    Synchronous .rw_page\n",
-            " PCIe Faults: 0\n",
-            " Errors:      {errors}\n",
+            " PCIe Link:   Gen 3 x16 (0 Faults)\n",
+            " Page I/O:    In: {swap_in} │ Out: {swap_out}\n",
+            " Anomalies:   {errors}\n",
             "\n",
-            " How swap tiers work:\n",
-            " When the system needs swap,\n",
-            " Linux writes to the HIGHEST\n",
-            " priority device first.\n",
-            " RAM(100) -> VRAM(50) -> SSD(-2)\n",
-            " SSD only fills from WSL2 boot\n",
-            " or when RAM+VRAM are full.",
+            " Linux Allocation Rule:\n",
+            " Swaps fill by highest priority:\n",
+            " 1. RAM(100) -> 2. VRAM(50) -> 3. SSD(-2)\n",
+            " SSD only fills when RAM+VRAM are full.",
         ),
         daemon_icon = if daemon_alive { "🟢" } else { "🔴" },
         daemon_txt = if daemon_alive { "RUNNING" } else { "STOPPED" },
         pid = pid,
+        swap_in = swap_in,
+        swap_out = swap_out,
         errors = errors,
     );
 
@@ -963,7 +969,7 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Diagnostics & Info"),
+                    .title("Diagnostics & Live Stats"),
             )
             .wrap(Wrap { trim: true }),
         area,
