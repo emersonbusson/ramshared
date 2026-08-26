@@ -42,7 +42,7 @@ const UTF8 = new TextDecoder('utf-8', { fatal: true })
 const SOURCE_EXTENSIONS = new Set(['.rs', '.c', '.h', '.ps1', '.sh', '.mjs'])
 const PROSE_EXTENSIONS = new Set(['.md', '.txt', '.yaml', '.yml', '.toml', '.json', '.svg'])
 const SCANNABLE_EXTENSIONS = new Set([...SOURCE_EXTENSIONS, ...PROSE_EXTENSIONS])
-const LOCALIZED_ALLOWLIST = new Set(['README.pt-BR.md', 'docs/pt-BR/README.md'])
+const LOCALIZED_ALLOWLIST = new Set(['README.pt-BR.md', 'docs/pt-BR/README.md', 'docs/marketing/cascade-diagram-pt.svg'])
 const MACHINE_POLICY_DATA = new Set(['tools/ci/check-comment-language.mjs'])
 
 const HIGH_CONFIDENCE_MARKERS = new Set([

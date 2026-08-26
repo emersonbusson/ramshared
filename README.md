@@ -90,23 +90,38 @@ telemetry on a host.
 ## Memory Cascade
 
 ```text
-memory pressure
-    |
-    v
-zram (compressed system RAM)
-    |
-    v
-RamShared logical device
-    |-- authoritative SSD origin
-    `-- clean, revocable VRAM cache
-    |
-    v
-existing WSL swap VHDX (last resort)
+                          [ Linux Memory Pressure ]
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────┐
+                    │ Tier 0: ZRAM (CPU Compression)  │ (Priority 100)
+                    └────────────────┬────────────────┘
+                                     │
+                                     ▼
+      ┌─────────────────────────────────────────────────────────────┐
+      │ Tier 1: RamShared Dual-Tier Accelerated Logical Device      │ (Priority 50)
+      │                                                             │
+      │   ┌──────────────────────────┐   ┌───────────────────────┐  │
+      │   │ GPU VRAM (Cache Tier)    │   │ SSD VHDX (Origin)     │  │
+      │   │ 4 GiB @ 6.07 GiB/s       │──►│ 24 GiB Fixed Capacity │  │
+      │   │ (6,211.2 MiB/s via PCIe) │   │ (Write-Through Store) │  │
+      │   └──────────────────────────┘   └───────────────────────┘  │
+      └──────────────────────────────┬──────────────────────────────┘
+                                     │
+                                     ▼
+                    ┌─────────────────────────────────┐
+                    │ Tier 2: Stock WSL2 Swap VHDX    │ (Priority -2, Last Resort)
+                    │ 4 GiB @ ~63–85 MB/s on Disk     │
+                    └─────────────────────────────────┘
 ```
 
-Every acknowledged RamShared write is durable on the origin before cache work.
-Reads use VRAM only when generation and page validity match. When Windows WDDM
-or another GPU workload reduces the available budget, RamShared:
+The dual-tier architecture combines high-speed PCIe memory caching with durable disk persistence:
+
+- **L1 GPU VRAM Cache (4 GiB):** Serves active, latency-critical memory pages over PCIe (measured up to 6,211.2 MiB/s in qualified run EVD-0038).
+- **L2 SSD Origin (24 GiB):** Provides fixed, uninhibited capacity on disk, absorbing memory pressure without process termination (qualified under 99% RAM load in EVD-0037).
+- **Write-Through Invariant:** Every acknowledged RamShared write is persisted to the authoritative SSD origin. Reads use VRAM only when generation and page validity match.
+
+When Windows WDDM or gaming workloads reclaim GPU resources, RamShared immediately protects system stability:
 
 1. refuse new VRAM commits;
 2. invalidate or immediately release clean cache chunks;

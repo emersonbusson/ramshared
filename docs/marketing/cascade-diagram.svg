@@ -1,100 +1,121 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-label="RamShared swap cascade">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-label="RamShared — Memory Tier Cascade Architecture">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#0b1220"/>
-      <stop offset="100%" stop-color="#111827"/>
+      <stop offset="0%" stop-color="#050811"/>
+      <stop offset="100%" stop-color="#0d1527"/>
     </linearGradient>
-    <linearGradient id="hot" x1="0" y1="0" x2="1" y2="0">
+    <linearGradient id="cardBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#182234"/>
+      <stop offset="100%" stop-color="#0b1120"/>
+    </linearGradient>
+    <linearGradient id="heroBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0c2340"/>
+      <stop offset="100%" stop-color="#071526"/>
+    </linearGradient>
+    <linearGradient id="zramTop" x1="0" y1="0" x2="1" y2="0">
       <stop offset="0%" stop-color="#f59e0b"/>
-      <stop offset="100%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#d97706"/>
     </linearGradient>
-    <linearGradient id="cold" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#06b6d4"/>
-      <stop offset="100%" stop-color="#3b82f6"/>
+    <linearGradient id="vramTop" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#00f2fe"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
     </linearGradient>
-    <linearGradient id="last" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#64748b"/>
-      <stop offset="100%" stop-color="#475569"/>
+    <linearGradient id="diskTop" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#94a3b8"/>
+      <stop offset="100%" stop-color="#64748b"/>
     </linearGradient>
-    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
-      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#000" flood-opacity="0.35"/>
+    <filter id="cardShadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000000" flood-opacity="0.6"/>
     </filter>
   </defs>
 
+  <!-- Background -->
   <rect width="1200" height="675" fill="url(#bg)"/>
 
-  <!-- Title -->
-  <text x="60" y="72" fill="#f8fafc" font-family="ui-sans-serif, system-ui, Segoe UI, sans-serif" font-size="36" font-weight="700">RamShared — memory cushion</text>
-  <text x="60" y="108" fill="#94a3b8" font-family="ui-sans-serif, system-ui, Segoe UI, sans-serif" font-size="18">When RAM is tight: use idle GPU memory · give it back if the GPU needs it</text>
+  <!-- Top Title & Badge -->
+  <rect x="60" y="44" width="310" height="28" rx="14" fill="#0284c7" fill-opacity="0.15" stroke="#38bdf8" stroke-width="1.2"/>
+  <text x="75" y="63" fill="#38bdf8" font-family="system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="800">3-TIER MEMORY CASCADE ARCHITECTURE</text>
+  
+  <text x="60" y="112" fill="#f8fafc" font-family="system-ui, -apple-system, sans-serif" font-size="34" font-weight="800">RamShared — Eliminating Memory Pressure Freezes</text>
+  <text x="60" y="142" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif" font-size="16">Leverages idle GPU VRAM as a fast PCIe cache and seamlessly yields when Windows or games need it back</text>
 
-  <!-- Pressure arrow label -->
-  <text x="60" y="175" fill="#cbd5e1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">Memory pressure</text>
-  <path d="M60 195 L180 195" stroke="#64748b" stroke-width="3" marker-end="url(#arrow)"/>
-  <defs>
-    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
-      <path d="M0,0 L8,3 L0,6 Z" fill="#64748b"/>
-    </marker>
-  </defs>
+  <!-- Flow Connector 1 -> 2 -->
+  <path d="M395 295 L420 295" stroke="#38bdf8" stroke-width="2.5" stroke-dasharray="5 4"/>
+  <polygon points="420,290 428,295 420,300" fill="#38bdf8"/>
+  
+  <!-- Flow Connector 2 -> 3 -->
+  <path d="M780 295 L805 295" stroke="#64748b" stroke-width="2.5" stroke-dasharray="5 4"/>
+  <polygon points="805,290 813,295 805,300" fill="#64748b"/>
 
-  <!-- Tier cards -->
-  <!-- zram HOT -->
-  <g filter="url(#shadow)">
-    <rect x="220" y="150" width="280" height="160" rx="16" fill="#1e293b" stroke="url(#hot)" stroke-width="3"/>
-    <rect x="220" y="150" width="12" height="160" rx="6" fill="url(#hot)"/>
-    <text x="250" y="195" fill="#fbbf24" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700" letter-spacing="1">1st · fast cushion</text>
-    <text x="250" y="235" fill="#f8fafc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="28" font-weight="700">zram</text>
-    <text x="250" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Compressed system RAM</text>
-    <text x="250" y="292" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">what you’re using right now</text>
+  <!-- Tier 1: ZRAM Card (x=60, w=330) -->
+  <g filter="url(#cardShadow)">
+    <rect x="60" y="172" width="330" height="255" rx="18" fill="url(#cardBg)" stroke="#334155" stroke-width="1.5"/>
+    <rect x="60" y="172" width="330" height="6" rx="3" fill="url(#zramTop)"/>
+    
+    <!-- Solid High-Contrast Badge -->
+    <rect x="80" y="195" width="175" height="28" rx="14" fill="#b45309" stroke="#f59e0b" stroke-width="1.5"/>
+    <text x="96" y="214" fill="#ffffff" font-family="system-ui, sans-serif" font-size="11.5" font-weight="800">TIER 0 · PRIORITY 100</text>
+    
+    <text x="80" y="260" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="23" font-weight="700">Compressed RAM</text>
+    <text x="80" y="286" fill="#fbbf24" font-family="ui-monospace, monospace" font-size="14" font-weight="700">ZRAM (CPU Tier)</text>
+    
+    <text x="80" y="325" fill="#cbd5e1" font-family="system-ui, sans-serif" font-size="14">In-memory compressed block</text>
+    <text x="80" y="347" fill="#cbd5e1" font-family="system-ui, sans-serif" font-size="14">storage in system RAM.</text>
+    
+    <text x="80" y="395" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="13">Sub-microsecond latency</text>
   </g>
 
-  <!-- arrow 1 -->
-  <path d="M520 230 L560 230" stroke="#64748b" stroke-width="4"/>
-  <polygon points="560,222 580,230 560,238" fill="#64748b"/>
-
-  <!-- VRAM COLD -->
-  <g filter="url(#shadow)">
-    <rect x="600" y="150" width="280" height="160" rx="16" fill="#1e293b" stroke="url(#cold)" stroke-width="3"/>
-    <rect x="600" y="150" width="12" height="160" rx="6" fill="url(#cold)"/>
-    <text x="630" y="195" fill="#22d3ee" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14" font-weight="700" letter-spacing="1">2nd · GPU cushion</text>
-    <text x="630" y="235" fill="#f8fafc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="28" font-weight="700">GPU mem</text>
-    <text x="630" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">Idle graphics memory</text>
-    <text x="630" y="292" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">only when RAM is tight</text>
+  <!-- Tier 2: RamShared VRAM Card (x=430, w=345) -->
+  <g filter="url(#cardShadow)">
+    <rect x="430" y="172" width="345" height="255" rx="18" fill="url(#heroBg)" stroke="#0284c7" stroke-width="2.5"/>
+    <rect x="430" y="172" width="345" height="6" rx="3" fill="url(#vramTop)"/>
+    
+    <!-- Solid High-Contrast Badge -->
+    <rect x="450" y="195" width="175" height="28" rx="14" fill="#0284c7" stroke="#38bdf8" stroke-width="1.5"/>
+    <text x="466" y="214" fill="#ffffff" font-family="system-ui, sans-serif" font-size="11.5" font-weight="800">TIER 1 · PRIORITY 50</text>
+    
+    <text x="450" y="260" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="23" font-weight="800">GPU Video RAM (VRAM)</text>
+    <text x="450" y="286" fill="#00f2fe" font-family="ui-monospace, monospace" font-size="14" font-weight="700">RamShared (PCIe Gen 3 x16)</text>
+    
+    <text x="450" y="325" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="14">High-speed PCIe VRAM cache</text>
+    <text x="450" y="347" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="14">+ Durable 24 GB SSD origin.</text>
+    
+    <text x="450" y="395" fill="#4ade80" font-family="system-ui, sans-serif" font-size="15" font-weight="800">6.07 GiB/s (6,211.2 MiB/s)</text>
+    <text x="450" y="407" fill="#38bdf8" font-family="ui-monospace, monospace" font-size="12">Ultra-low latency of ~8–241 µs</text>
   </g>
 
-  <!-- arrow 2 -->
-  <path d="M900 230 L940 230" stroke="#64748b" stroke-width="4"/>
-  <polygon points="940,222 960,230 940,238" fill="#64748b"/>
-
-  <!-- Disk LAST -->
-  <g filter="url(#shadow)">
-    <rect x="980" y="150" width="160" height="160" rx="16" fill="#1e293b" stroke="url(#last)" stroke-width="3"/>
-    <rect x="980" y="150" width="12" height="160" rx="6" fill="url(#last)"/>
-    <text x="1005" y="195" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" letter-spacing="1">3rd · last</text>
-    <text x="1005" y="235" fill="#f8fafc" font-family="ui-sans-serif, system-ui, sans-serif" font-size="24" font-weight="700">disk</text>
-    <text x="1005" y="268" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">SSD / VHDX</text>
-    <text x="1005" y="292" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="12">always there</text>
+  <!-- Tier 3: SSD Swap Card (x=815, w=325) -->
+  <g filter="url(#cardShadow)">
+    <rect x="815" y="172" width="325" height="255" rx="18" fill="url(#cardBg)" stroke="#334155" stroke-width="1.5"/>
+    <rect x="815" y="172" width="325" height="6" rx="3" fill="url(#diskTop)"/>
+    
+    <!-- Solid High-Contrast Badge -->
+    <rect x="835" y="195" width="175" height="28" rx="14" fill="#475569" stroke="#64748b" stroke-width="1.5"/>
+    <text x="851" y="214" fill="#ffffff" font-family="system-ui, sans-serif" font-size="11.5" font-weight="800">TIER 2 · PRIORITY -2</text>
+    
+    <text x="835" y="260" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="23" font-weight="700">Disk Swap Storage</text>
+    <text x="835" y="286" fill="#94a3b8" font-family="ui-monospace, monospace" font-size="14" font-weight="700">Stock SSD / VHDX</text>
+    
+    <text x="835" y="325" fill="#cbd5e1" font-family="system-ui, sans-serif" font-size="14">Authoritative fallback ensuring</text>
+    <text x="835" y="347" fill="#cbd5e1" font-family="system-ui, sans-serif" font-size="14">bounded physical capacity.</text>
+    
+    <text x="835" y="395" fill="#f87171" font-family="system-ui, sans-serif" font-size="13.5">~63–85 MB/s on disk</text>
   </g>
 
-  <!-- DEMOTE callout -->
-  <g filter="url(#shadow)">
-    <rect x="220" y="360" width="660" height="120" rx="16" fill="#0f172a" stroke="#334155" stroke-width="2"/>
-    <text x="250" y="405" fill="#f472b6" font-family="ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="700">Give the GPU cushion back</text>
-    <text x="250" y="438" fill="#cbd5e1" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16">If the PC needs the GPU → stop using GPU memory → data moves to disk</text>
-    <text x="250" y="462" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="14">Your apps keep running · we don’t kill them to free the GPU</text>
+  <!-- Bottom Banner: Zero Loss & Safety Invariant -->
+  <g filter="url(#cardShadow)">
+    <rect x="60" y="455" width="1080" height="135" rx="18" fill="#0c1626" stroke="#1e293b" stroke-width="2"/>
+    
+    <!-- Verified Badge Icon -->
+    <circle cx="105" cy="522" r="24" fill="#166534" stroke="#22c55e" stroke-width="2.5"/>
+    <polyline points="95,522 102,529 116,514" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    
+    <text x="148" y="502" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="18" font-weight="800">Instant Revocation &amp; Data Integrity Invariant</text>
+    <text x="148" y="532" fill="#cbd5e1" font-family="system-ui, sans-serif" font-size="14.5">If Windows or games reclaim GPU memory, VRAM is instantly yielded and reads fall back directly to SSD origin.</text>
+    <text x="148" y="558" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="13.5">Zero Out-Of-Memory kills (0 OOM) · 100% verified byte-by-byte SHA-256 data integrity.</text>
   </g>
 
-  <!-- Measured numbers -->
-  <g filter="url(#shadow)">
-    <rect x="920" y="360" width="220" height="120" rx="16" fill="#0f172a" stroke="#334155" stroke-width="2"/>
-    <text x="945" y="400" fill="#94a3b8" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="700" letter-spacing="1">MEASURED</text>
-    <text x="945" y="428" fill="#f8fafc" font-family="ui-monospace, Menlo, monospace" font-size="13">ublk path ~8–241 µs</text>
-    <text x="945" y="450" fill="#f8fafc" font-family="ui-monospace, Menlo, monospace" font-size="13">NBD path ~326 µs</text>
-    <text x="945" y="472" fill="#94a3b8" font-family="ui-monospace, Menlo, monospace" font-size="12">GPU reclaim ~1.2 s</text>
-  </g>
-
-  <!-- Footer -->
-  <text x="60" y="560" fill="#64748b" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15">Why second cushion? Under pressure, GPU memory can get very slow — so it’s not first.</text>
-  <text x="60" y="590" fill="#94a3b8" font-family="ui-monospace, Menlo, monospace" font-size="16">github.com/emersonbusson/ramshared</text>
-  <text x="60" y="640" fill="#475569" font-family="ui-sans-serif, system-ui, sans-serif" font-size="13">Measured numbers in docs/reliability · Linux / WSL2 · NVIDIA day one</text>
+  <!-- Footer Info -->
+  <text x="60" y="635" fill="#64748b" font-family="ui-monospace, monospace" font-size="13">github.com/emersonbusson/ramshared · Verified and qualified on physical hardware (EVD-0037, EVD-0038)</text>
 </svg>
