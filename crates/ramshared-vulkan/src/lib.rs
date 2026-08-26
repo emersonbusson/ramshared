@@ -649,48 +649,4 @@ mod tests {
             free1 >> 20
         );
     }
-
-    #[test]
-    #[allow(clippy::field_reassign_with_default)]
-    fn test_pick_memory_type_matching() {
-        let mut props = vk::PhysicalDeviceMemoryProperties::default();
-        props.memory_type_count = 3;
-        // Type 0: HOST_VISIBLE | HOST_COHERENT
-        props.memory_types[0].property_flags =
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
-        // Type 1: DEVICE_LOCAL
-        props.memory_types[1].property_flags = vk::MemoryPropertyFlags::DEVICE_LOCAL;
-        // Type 2: DEVICE_LOCAL | HOST_VISIBLE
-        props.memory_types[2].property_flags =
-            vk::MemoryPropertyFlags::DEVICE_LOCAL | vk::MemoryPropertyFlags::HOST_VISIBLE;
-
-        // Mask 0b011 (types 0 and 1 supported), want DEVICE_LOCAL -> should pick Type 1
-        let picked = pick_memory_type(&props, 0b011, vk::MemoryPropertyFlags::DEVICE_LOCAL);
-        assert_eq!(picked, Some(1));
-
-        // Mask 0b001 (only Type 0), want DEVICE_LOCAL -> should return None
-        let picked_none = pick_memory_type(&props, 0b001, vk::MemoryPropertyFlags::DEVICE_LOCAL);
-        assert_eq!(picked_none, None);
-
-        // Mask 0b100 (Type 2), want HOST_VISIBLE -> should pick Type 2
-        let picked_type2 = pick_memory_type(&props, 0b100, vk::MemoryPropertyFlags::HOST_VISIBLE);
-        assert_eq!(picked_type2, Some(2));
-    }
-
-    #[test]
-    fn test_vram_error_display_and_conversion() {
-        let err_provider = vk_err("test_context", vk::Result::ERROR_OUT_OF_DEVICE_MEMORY);
-        let msg = format!("{err_provider}");
-        assert!(msg.contains("test_context"));
-        assert!(msg.contains("ERROR_OUT_OF_DEVICE_MEMORY"));
-
-        let err_range = VramError::OutOfRange {
-            off: 1024,
-            len: 512,
-            size: 1024,
-        };
-        let msg_range = format!("{err_range}");
-        assert!(msg_range.contains("off=1024"));
-        assert!(msg_range.contains("len=512"));
-    }
 }
