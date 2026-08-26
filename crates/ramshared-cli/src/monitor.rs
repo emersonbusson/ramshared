@@ -811,9 +811,17 @@ fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 .saturating_mul(100)
                 .checked_div(gpu.total_mib)
                 .unwrap_or(0);
+            let bar_len: u64 = 18;
+            let filled = (used_pct.saturating_mul(bar_len) / 100).min(bar_len);
+            let empty = bar_len.saturating_sub(filled);
+            let bar = format!(
+                "[{}{}]",
+                "█".repeat(filled as usize),
+                "░".repeat(empty as usize)
+            );
             format!(
-                "{}\nTotal:  ({} MiB)\nUsed:   ({} MiB) [{}%]\nFree:   ({} MiB)",
-                gpu.name, gpu.total_mib, gpu.used_mib, used_pct, gpu.free_mib
+                "{}\nUsage:  {bar} {used_pct:>3}% ({} MiB / {} MiB)\nFree:   ({} MiB)",
+                gpu.name, gpu.used_mib, gpu.total_mib, gpu.free_mib
             )
         },
     );
@@ -838,7 +846,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 .iter()
                 .map(|name| {
                     let tier = tiers.get(*name).and_then(Value::as_object);
-                    let present = tier
+                    let _present = tier
                         .and_then(|value| value.get("present"))
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
@@ -856,8 +864,25 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                         .saturating_mul(100)
                         .checked_div(size_mib)
                         .unwrap_or(0);
+
+                    let bar_len: u64 = 14;
+                    let filled = (pct.saturating_mul(bar_len) / 100).min(bar_len);
+                    let empty = bar_len.saturating_sub(filled);
+                    let bar = format!(
+                        "[{}{}]",
+                        "█".repeat(filled as usize),
+                        "░".repeat(empty as usize)
+                    );
+
+                    let (label, role) = match *name {
+                        "zram" => ("1. RAM (zram)", "[Fastest / Compression]"),
+                        "vram" => ("2. GPU (VRAM)", "[PCIe DMA / 8.74 GB/s]"),
+                        "disk" => ("3. SSD (Disk)", "[Authoritative Origin]"),
+                        _ => (*name, ""),
+                    };
+
                     format!(
-                        "{name}: present={present} used=({used_mib} MiB / {size_mib} MiB) [{pct}%]"
+                        "{label:<14} {bar} {pct:>3}% ({used_mib} MiB / {size_mib} MiB) {role}"
                     )
                 })
                 .collect::<Vec<_>>()
@@ -865,7 +890,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         })
         .unwrap_or_else(|| "tier telemetry unavailable".to_string());
     frame.render_widget(
-        Paragraph::new(tiers).block(Block::default().borders(Borders::ALL).title("Swap tiers")),
+        Paragraph::new(tiers).block(Block::default().borders(Borders::ALL).title("Swap Tiers Breakdown (RAM vs VRAM vs SSD)")),
         area,
     );
 }
