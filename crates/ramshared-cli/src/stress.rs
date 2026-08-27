@@ -614,6 +614,12 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         for i in (0..num_bytes).step_by(4096) {
             slice[i] = (current_target as u8).wrapping_add((i & 0xFF) as u8);
         }
+
+        if opts.cascade || opts.tier3_target_pct.is_some() {
+            // Instruct kernel to flush dirty chunk out to swap tiers (Tier 1 -> Tier 2 -> Tier 3)
+            ramshared_cuda::pageout_slice(&mut slice);
+        }
+
         if let Ok(mut guard) = chunks.lock() {
             guard.push(slice);
         }
