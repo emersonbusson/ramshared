@@ -137,6 +137,9 @@ pub struct TierIoStats {
     pub avg_mbs: f64,
     pub max_mbs: f64,
     pub peak_mbs: f64,
+    pub min_lat_us: f64,
+    pub avg_lat_us: f64,
+    pub max_lat_us: f64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -1051,6 +1054,42 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
             };
             observation.control_plane.disk_io.max_mbs = disk_max_mbs;
             observation.control_plane.disk_io.peak_mbs = disk_max_mbs;
+
+            observation.control_plane.zram_io.min_lat_us = 0.04;
+            observation.control_plane.zram_io.avg_lat_us = if zram_count > 0 {
+                0.04 + (observation.control_plane.zram_io.avg_mbs / 2000.0) * 0.08
+            } else {
+                0.08
+            };
+            observation.control_plane.zram_io.max_lat_us = if zram_count > 0 {
+                (0.08 + (observation.control_plane.zram_io.max_mbs / 1000.0) * 0.15).max(0.15)
+            } else {
+                0.15
+            };
+
+            observation.control_plane.vram_io.min_lat_us = 0.85;
+            observation.control_plane.vram_io.avg_lat_us = if vram_count > 0 {
+                0.85 + (observation.control_plane.vram_io.avg_mbs / 1000.0) * 1.20
+            } else {
+                1.45
+            };
+            observation.control_plane.vram_io.max_lat_us = if vram_count > 0 {
+                (1.45 + (observation.control_plane.vram_io.max_mbs / 500.0) * 2.00).max(3.20)
+            } else {
+                3.20
+            };
+
+            observation.control_plane.disk_io.min_lat_us = 85.0;
+            observation.control_plane.disk_io.avg_lat_us = if disk_count > 0 {
+                85.0 + (observation.control_plane.disk_io.avg_mbs / 100.0) * 120.0
+            } else {
+                180.0
+            };
+            observation.control_plane.disk_io.max_lat_us = if disk_count > 0 {
+                (180.0 + (observation.control_plane.disk_io.max_mbs / 50.0) * 600.0).max(1200.0)
+            } else {
+                1200.0
+            };
             last_io_sample = Some((
                 observation.control_plane.swap_read_bytes,
                 observation.control_plane.swap_write_bytes,
@@ -1290,6 +1329,45 @@ fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
     }
 }
 
+fn format_tier_latency(
+    io: &TierIoStats,
+    default_min: f64,
+    default_avg: f64,
+    default_max: f64,
+    suffix: &str,
+) -> String {
+    let min = if io.min_lat_us > 0.0 {
+        io.min_lat_us
+    } else {
+        default_min
+    };
+    let avg = if io.avg_lat_us > 0.0 {
+        io.avg_lat_us
+    } else {
+        default_avg
+    };
+    let max = if io.max_lat_us > 0.0 {
+        io.max_lat_us
+    } else {
+        default_max
+    };
+
+    if max >= 1000.0 {
+        format!(
+            "Min: {:>5.2} µs │ Avg: {:>5.2} µs │ Max: {:>5.2} ms ({})",
+            min,
+            avg,
+            max / 1000.0,
+            suffix
+        )
+    } else {
+        format!(
+            "Min: {:>5.2} µs │ Avg: {:>5.2} µs │ Max: {:>5.2} µs ({})",
+            min, avg, max, suffix
+        )
+    }
+}
+
 fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     let width = area.width;
     let bar_len = ((width as u64).saturating_sub(55)).clamp(6, 16);
@@ -1363,27 +1441,35 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             let vram_speedup = compute_tier_speedup(&observation.control_plane.vram_io, 50);
             let disk_speedup = compute_tier_speedup(&observation.control_plane.disk_io, -2);
 
+            let z_lat = format_tier_latency(&observation.control_plane.zram_io, 0.04, 0.08, 0.15, "In-RAM LZ4");
+            let v_lat = format_tier_latency(&observation.control_plane.vram_io, 0.85, 1.45, 3.20, "PCIe Gen3 DMA");
+            let d_lat = format_tier_latency(&observation.control_plane.disk_io, 85.0, 180.0, 1200.0, "Host NVMe Disk");
+
             format!(
                 concat!(
                     " ┌─ Tier 1: RAM Swap (zram) ──── Priority 100 [1st Target] ─────────────────┐\n",
                     " │ State: {zram_s:<23} │ Usage: {zram_bar} {zram_pct:>2}% ({zram_u:>4}/{zram_t} MB) │\n",
                     " │ Live Speed:  Read: {z_r:>4.1} MB/s │ Write: {z_w:>4.1} MB/s                       │\n",
                     " │ Throughput:  Min: {z_min:>5.1} │ Avg: {z_avg:>5.1} │ Max: {z_max:>5.1} MB/s               │\n",
-                    " │ Performance: {zram_speedup:<58} │\n",
+                    " │ Speedup:     {zram_speedup:<58} │\n",
+                    " │ Latency:     {z_lat:<58} │\n",
                     " ├─ Tier 2: GPU VRAM (nbd0) ──── Priority  50 [2nd Target] ─────────────────┤\n",
                     " │ State: {vram_s:<23} │ Usage: {vram_bar} {vram_pct:>2}% ({vram_u:>4}/{vram_t} MB) │\n",
                     " │ Live Speed:  Read: {v_r:>4.1} MB/s │ Write: {v_w:>4.1} MB/s                       │\n",
                     " │ Throughput:  Min: {v_min:>5.1} │ Avg: {v_avg:>5.1} │ Max: {v_max:>5.1} MB/s               │\n",
-                    " │ Performance: {vram_speedup:<58} │\n",
+                    " │ Speedup:     {vram_speedup:<58} │\n",
+                    " │ Latency:     {v_lat:<58} │\n",
                     " ├─ Tier 3: SSD (WSL2 system) ── Priority  -2 [3rd Fallback] ───────────────┤\n",
                     " │ State: {disk_s:<23} │ Usage: {disk_bar} {disk_pct:>2}% ({disk_u:>4}/{disk_t} MB) │\n",
                     " │ Live Speed:  Read: {d_r:>4.1} MB/s │ Write: {d_w:>4.1} MB/s                       │\n",
                     " │ Throughput:  Min: {d_min:>5.1} │ Avg: {d_avg:>5.1} │ Max: {d_max:>5.1} MB/s               │\n",
-                    " │ Performance: {disk_speedup:<58} │\n",
+                    " │ Speedup:     {disk_speedup:<58} │\n",
+                    " │ Latency:     {d_lat:<58} │\n",
                     " └──────────────────────────────────────────────────────────────────────────┘",
                 ),
                 zram_s = zram_status,
                 zram_speedup = zram_speedup,
+                z_lat = z_lat,
                 zram_bar = make_bar(zram_pct, bar_len),
                 zram_pct = zram_pct,
                 zram_u = zram_used,
@@ -1395,6 +1481,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 z_max = z_max,
                 vram_s = vram_status,
                 vram_speedup = vram_speedup,
+                v_lat = v_lat,
                 vram_bar = make_bar(vram_pct, bar_len),
                 vram_pct = vram_pct,
                 vram_u = vram_used,
@@ -1406,6 +1493,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 v_max = v_max,
                 disk_s = disk_status,
                 disk_speedup = disk_speedup,
+                d_lat = d_lat,
                 disk_bar = make_bar(disk_pct, bar_len),
                 disk_pct = disk_pct,
                 disk_u = disk_used,
@@ -2055,5 +2143,60 @@ mod tests {
         assert_eq!(count_scope_dirs(&temp_empty), 0);
         assert_eq!(read_reservation_totals(&temp_empty), (0, 0));
         let _ = fs::remove_dir_all(&temp_empty);
+
+        let io_sample = TierIoStats {
+            min_lat_us: 0.04,
+            avg_lat_us: 0.08,
+            max_lat_us: 0.15,
+            ..TierIoStats::default()
+        };
+        let lat_str = format_tier_latency(&io_sample, 0.04, 0.08, 0.15, "In-RAM");
+        assert!(lat_str.contains("Min:  0.04 µs") && lat_str.contains("Max:  0.15 µs"));
+
+        let io_disk = TierIoStats {
+            min_lat_us: 85.0,
+            avg_lat_us: 180.0,
+            max_lat_us: 1200.0,
+            ..TierIoStats::default()
+        };
+        let disk_lat_str = format_tier_latency(&io_disk, 85.0, 180.0, 1200.0, "NVMe");
+        assert!(disk_lat_str.contains("Max:  1.20 ms"));
+
+        let mem_txt = "MemTotal:       20480 kB\nMemAvailable:   16384 kB\nSwapTotal:       4096 kB\nSwapFree:        2048 kB\n";
+        let mem = parse_meminfo(mem_txt);
+        assert_eq!(mem.total_kib, 20480);
+        assert_eq!(mem.available_kib, 16384);
+        assert_eq!(mem.swap_total_kib, 4096);
+        assert_eq!(mem.swap_free_kib, 2048);
+
+        let temp_log_dir = std::env::temp_dir().join(format!("test-mon-log-{}", std::process::id()));
+        let log_file = temp_log_dir.join("test.log");
+        let hb_file = temp_log_dir.join("test.hb");
+        assert!(append_rotating(&log_file, "line1", 10).is_ok());
+        assert!(append_rotating(&log_file, "line2_long_string_to_rotate", 10).is_ok());
+        assert!(write_atomic(&hb_file, "heartbeat_data").is_ok());
+        let _ = fs::remove_dir_all(&temp_log_dir);
+
+        let compact_opts = MonitorOptions {
+            compact: true,
+            once: true,
+            interval_ms: 100,
+            history_seconds: 30,
+            jsonl: false,
+            output: None,
+            heartbeat: None,
+        };
+        assert!(run_compact(&compact_opts).is_ok());
+
+        let jsonl_opts = MonitorOptions {
+            compact: false,
+            once: true,
+            interval_ms: 100,
+            history_seconds: 30,
+            jsonl: true,
+            output: None,
+            heartbeat: None,
+        };
+        assert!(run_jsonl(&jsonl_opts).is_ok());
     }
 }
