@@ -1303,7 +1303,7 @@ fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
                     min_mult, avg_mult, max_mult
                 )
             } else {
-                "⚡ Speedup: 250x CAPABLE (0.05 µs)".to_string()
+                "⚡ 250x In-RAM Capable (0.05 µs)".to_string()
             }
         }
         50 => {
@@ -1316,14 +1316,14 @@ fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
                     min_mult, avg_mult, max_mult
                 )
             } else {
-                "🚀 Speedup: 20x-100x CAPABLE (8.74 GB/s)".to_string()
+                "🚀 20x-100x PCIe DMA Capable (8.74 GB/s)".to_string()
             }
         }
         _ => {
             if io.max_mbs > 0.1 {
                 "🐢 Speedup: Min: 1.0x │ Avg: 1.0x │ Max: 1.0x (WSL2 Disk)".to_string()
             } else {
-                "🐢 Speedup: 1x BASELINE (WSL2 System Disk / Host VHDX)".to_string()
+                "🐢 1.0x Host VHDX Baseline (WSL2 System Disk)".to_string()
             }
         }
     }
@@ -1361,7 +1361,7 @@ fn format_tier_latency(
 
 fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     let width = area.width;
-    let bar_len = ((width as u64) / 7).clamp(8, 24);
+    let bar_len = ((width as u64) / 8).clamp(8, 20);
     let sep_len = (width.saturating_sub(4) as usize).max(20);
     let sep = "─".repeat(sep_len);
 
@@ -1439,59 +1439,56 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             let v_lat = format_tier_latency(&observation.control_plane.vram_io, 0.85, 1.45, 3.20, "PCIe DMA");
             let d_lat = format_tier_latency(&observation.control_plane.disk_io, 85.0, 180.0, 1200.0, "Host VHDX");
 
+            let z_bar = make_bar(zram_pct, bar_len);
+            let v_bar = make_bar(vram_pct, bar_len);
+            let d_bar = make_bar(disk_pct, bar_len);
+
+            let z_use = format!("{z_bar} {zram_pct:>2}% ({zram_u:>4}/{zram_t} MB)", z_bar=z_bar, zram_pct=zram_pct, zram_u=zram_used, zram_t=zram_size);
+            let v_use = format!("{v_bar} {vram_pct:>2}% ({vram_u:>4}/{vram_t} MB)", v_bar=v_bar, vram_pct=vram_pct, vram_u=vram_used, vram_t=vram_size);
+            let d_use = format!("{d_bar} {disk_pct:>2}% ({disk_u:>4}/{disk_t} MB)", d_bar=d_bar, disk_pct=disk_pct, disk_u=disk_used, disk_t=disk_size);
+
+            let z_rate = format!("Min:{z_min:>4.0} │ Avg:{z_avg:>4.0} │ Max:{z_max:>4.0} MB/s", z_min=z_min, z_avg=z_avg, z_max=z_max);
+            let v_rate = format!("Min:{v_min:>4.0} │ Avg:{v_avg:>4.0} │ Max:{v_max:>4.0} MB/s", v_min=v_min, v_avg=v_avg, v_max=v_max);
+            let d_rate = format!("Min:{d_min:>4.0} │ Avg:{d_avg:>4.0} │ Max:{d_max:>4.0} MB/s", d_min=d_min, d_avg=d_avg, d_max=d_max);
+
             format!(
                 concat!(
                     " ┌── Tier 1: RAM Swap (zram) ── [Prio 100] ── {zram_s}\n",
-                    " │   Usage:      {zram_bar} {zram_pct:>2}% ({zram_u:>4}/{zram_t} MB) │ Speed: R:{z_r:>4.1} W:{z_w:>4.1} MB/s\n",
-                    " │   Rate Stats: Min: {z_min:>4.0} │ Avg: {z_avg:>4.0} │ Max: {z_max:>4.0} MB/s │ Latency: {z_lat}\n",
+                    " │   Usage:      {z_use:<35} │ Speed:   R:{z_r:>5.1} W:{z_w:>5.1} MB/s\n",
+                    " │   Rate Stats: {z_rate:<35} │ Latency: {z_lat}\n",
                     " │   Speedup:    {zram_speedup}\n",
                     " ├── Tier 2: GPU VRAM (nbd0) ── [Prio  50] ── {vram_s}\n",
-                    " │   Usage:      {vram_bar} {vram_pct:>2}% ({vram_u:>4}/{vram_t} MB) │ Speed: R:{v_r:>4.1} W:{v_w:>4.1} MB/s\n",
-                    " │   Rate Stats: Min: {v_min:>4.0} │ Avg: {v_avg:>4.0} │ Max: {v_max:>4.0} MB/s │ Latency: {v_lat}\n",
+                    " │   Usage:      {v_use:<35} │ Speed:   R:{v_r:>5.1} W:{v_w:>5.1} MB/s\n",
+                    " │   Rate Stats: {v_rate:<35} │ Latency: {v_lat}\n",
                     " │   Speedup:    {vram_speedup}\n",
                     " ├── Tier 3: WSL2 System Disk ── [Prio  -2] ── {disk_s}\n",
-                    " │   Usage:      {disk_bar} {disk_pct:>2}% ({disk_u:>4}/{disk_t} MB) │ Speed: R:{d_r:>4.1} W:{d_w:>4.1} MB/s\n",
-                    " │   Rate Stats: Min: {d_min:>4.0} │ Avg: {d_avg:>4.0} │ Max: {d_max:>4.0} MB/s │ Latency: {d_lat}\n",
+                    " │   Usage:      {d_use:<35} │ Speed:   R:{d_r:>5.1} W:{d_w:>5.1} MB/s\n",
+                    " │   Rate Stats: {d_rate:<35} │ Latency: {d_lat}\n",
                     " │   Speedup:    {disk_speedup}\n",
                     " └{sep}",
                 ),
                 zram_s = zram_status,
-                zram_speedup = zram_speedup,
-                z_lat = z_lat,
-                zram_bar = make_bar(zram_pct, bar_len),
-                zram_pct = zram_pct,
-                zram_u = zram_used,
-                zram_t = zram_size,
+                z_use = z_use,
                 z_r = z_r,
                 z_w = z_w,
-                z_min = z_min,
-                z_avg = z_avg,
-                z_max = z_max,
+                z_rate = z_rate,
+                z_lat = z_lat,
+                zram_speedup = zram_speedup,
                 sep = sep,
                 vram_s = vram_status,
-                vram_speedup = vram_speedup,
-                v_lat = v_lat,
-                vram_bar = make_bar(vram_pct, bar_len),
-                vram_pct = vram_pct,
-                vram_u = vram_used,
-                vram_t = vram_size,
+                v_use = v_use,
                 v_r = v_r,
                 v_w = v_w,
-                v_min = v_min,
-                v_avg = v_avg,
-                v_max = v_max,
+                v_rate = v_rate,
+                v_lat = v_lat,
+                vram_speedup = vram_speedup,
                 disk_s = disk_status,
-                disk_speedup = disk_speedup,
-                d_lat = d_lat,
-                disk_bar = make_bar(disk_pct, bar_len),
-                disk_pct = disk_pct,
-                disk_u = disk_used,
-                disk_t = disk_size,
+                d_use = d_use,
                 d_r = d_r,
                 d_w = d_w,
-                d_min = d_min,
-                d_avg = d_avg,
-                d_max = d_max,
+                d_rate = d_rate,
+                d_lat = d_lat,
+                disk_speedup = disk_speedup,
             )
         })
         .unwrap_or_else(|| " Swap Tiers: not available".to_string());
@@ -2000,15 +1997,15 @@ mod tests {
         let idle_io = TierIoStats::default();
         assert_eq!(
             compute_tier_speedup(&idle_io, 100),
-            "⚡ Speedup: 250x CAPABLE (0.05 µs)"
+            "⚡ 250x In-RAM Capable (0.05 µs)"
         );
         assert_eq!(
             compute_tier_speedup(&idle_io, 50),
-            "🚀 Speedup: 20x-100x CAPABLE (8.74 GB/s)"
+            "🚀 20x-100x PCIe DMA Capable (8.74 GB/s)"
         );
         assert_eq!(
             compute_tier_speedup(&idle_io, -2),
-            "🐢 Speedup: 1x BASELINE (WSL2 System Disk / Host VHDX)"
+            "🐢 1.0x Host VHDX Baseline (WSL2 System Disk)"
         );
 
         let zram_active = TierIoStats {
