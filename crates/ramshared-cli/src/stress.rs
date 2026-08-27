@@ -29,6 +29,7 @@ pub struct StressOptions {
     pub min_ram_mb: u64,
     pub max_psi_full: f64,
     pub max_latency_ms: f64,
+    pub tier3_target_pct: Option<u64>,
     pub battery: bool,
     pub cascade: bool,
     pub telemetry_log: String,
@@ -46,6 +47,7 @@ impl Default for StressOptions {
             min_ram_mb: 600,
             max_psi_full: 20.0,
             max_latency_ms: 8.0,
+            tier3_target_pct: None,
             battery: false,
             cascade: false,
             telemetry_log: "/tmp/ramshared-stress-telemetry.log".to_string(),
@@ -152,6 +154,17 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
                 opts.battery = true;
             }
             "--cascade" => {
+                opts.cascade = true;
+                opts.battery = true;
+            }
+            "--tier3-target-pct" => {
+                i += 1;
+                let val: u64 = args
+                    .get(i)
+                    .ok_or_else(|| "--tier3-target-pct requires a value (1-99)".to_string())?
+                    .parse()
+                    .map_err(|_| "invalid --tier3-target-pct value")?;
+                opts.tier3_target_pct = Some(val.clamp(1, 99));
                 opts.cascade = true;
                 opts.battery = true;
             }
@@ -463,7 +476,13 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         readings_count += 1;
         append_telemetry_log(&opts.telemetry_log, &reading);
 
-        if avail_mb <= opts.min_ram_mb {
+        let hard_floor = if opts.tier3_target_pct.is_some() {
+            opts.min_ram_mb.min(250)
+        } else {
+            opts.min_ram_mb
+        };
+
+        if avail_mb <= hard_floor {
             if !opts.json {
                 println!(
                     "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ 🛑 RAM FLOOR REACHED      │",
@@ -479,7 +498,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 );
                 println!(
                     "\n[🛑 SAFETY FLOOR REACHED] Available RAM reached floor ({} MB <= {} MB). Halted at {}% (Zero Hang Protection).",
-                    avail_mb, opts.min_ram_mb, max_safe_pct
+                    avail_mb, hard_floor, max_safe_pct
                 );
             }
             break;
@@ -529,8 +548,21 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             break;
         }
 
+        let (_, _, cap3) = read_swap_tier_capacities();
+        if let Some(t3_target) = opts.tier3_target_pct
+            && cap3.pct >= t3_target
+        {
+            if !opts.json {
+                println!(
+                    "\n[🎯 TARGET REACHED] Tier 3 (SSD) reached target ({}% >= {}%).",
+                    cap3.pct, t3_target
+                );
+            }
+            break;
+        }
+
         let one_pct_mb = ((ram_total_mb * opts.step_pct) / 100).max(50);
-        let safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(opts.min_ram_mb));
+        let safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(hard_floor));
         if safe_alloc_mb == 0 {
             break;
         }
