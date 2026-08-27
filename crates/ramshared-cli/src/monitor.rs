@@ -127,6 +127,14 @@ pub struct MemoryObservation {
     pub swap_free_kib: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+pub struct TierIoStats {
+    pub read_bytes: u64,
+    pub write_bytes: u64,
+    pub read_mbs: f64,
+    pub write_mbs: f64,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct ControlPlaneObservation {
     pub memory_psi_some_avg10: f64,
@@ -141,6 +149,9 @@ pub struct ControlPlaneObservation {
     pub swap_write_bytes: u64,
     pub swap_read_mbs: f64,
     pub swap_write_mbs: f64,
+    pub zram_io: TierIoStats,
+    pub vram_io: TierIoStats,
+    pub disk_io: TierIoStats,
     pub boot_tier_latency_ms: Option<u64>,
     pub uptime_seconds: u64,
     pub pgfault_total: u64,
@@ -237,10 +248,14 @@ pub fn collect_observation() -> Result<Observation, MonitorError> {
     let mut control_plane = parse_memory_pressure(&pressure);
     let (swap_in_pages, swap_out_pages, pgfault_total, pgmajfault_total) = parse_vmstat(&vmstat);
     let (swap_read_bytes, swap_write_bytes) = parse_swap_diskstats(&diskstats);
+    let (zram_io, vram_io, disk_io) = parse_per_tier_diskstats(&diskstats);
     control_plane.swap_in_pages = swap_in_pages;
     control_plane.swap_out_pages = swap_out_pages;
     control_plane.swap_read_bytes = swap_read_bytes;
     control_plane.swap_write_bytes = swap_write_bytes;
+    control_plane.zram_io = zram_io;
+    control_plane.vram_io = vram_io;
+    control_plane.disk_io = disk_io;
     control_plane.pgfault_total = pgfault_total;
     control_plane.pgmajfault_total = pgmajfault_total;
     control_plane.uptime_seconds = parse_uptime_seconds(&uptime).unwrap_or(0);
@@ -361,6 +376,35 @@ fn parse_swap_diskstats(text: &str) -> (u64, u64) {
         }
     }
     (read_bytes, write_bytes)
+}
+
+fn parse_per_tier_diskstats(text: &str) -> (TierIoStats, TierIoStats, TierIoStats) {
+    let mut zram = TierIoStats::default();
+    let mut vram = TierIoStats::default();
+    let mut disk = TierIoStats::default();
+
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() >= 10
+            && let (Ok(read_sectors), Ok(write_sectors)) =
+                (fields[5].parse::<u64>(), fields[9].parse::<u64>())
+        {
+            let dev = fields[2];
+            let rb = read_sectors.saturating_mul(512);
+            let wb = write_sectors.saturating_mul(512);
+            if dev.starts_with("zram") {
+                zram.read_bytes = zram.read_bytes.saturating_add(rb);
+                zram.write_bytes = zram.write_bytes.saturating_add(wb);
+            } else if dev.starts_with("nbd") || dev.starts_with("ramshared") {
+                vram.read_bytes = vram.read_bytes.saturating_add(rb);
+                vram.write_bytes = vram.write_bytes.saturating_add(wb);
+            } else if dev == "sdc" {
+                disk.read_bytes = disk.read_bytes.saturating_add(rb);
+                disk.write_bytes = disk.write_bytes.saturating_add(wb);
+            }
+        }
+    }
+    (zram, vram, disk)
 }
 
 pub fn parse_unit_startup_ms(show_output: &str) -> Option<u64> {
@@ -782,6 +826,12 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
     let mut last_io_sample = Some((
         observation.control_plane.swap_read_bytes,
         observation.control_plane.swap_write_bytes,
+        observation.control_plane.zram_io.read_bytes,
+        observation.control_plane.zram_io.write_bytes,
+        observation.control_plane.vram_io.read_bytes,
+        observation.control_plane.vram_io.write_bytes,
+        observation.control_plane.disk_io.read_bytes,
+        observation.control_plane.disk_io.write_bytes,
         Instant::now(),
     ));
     let mut last_faults_sample = Some((
@@ -793,7 +843,18 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
         if Instant::now() >= next_sample {
             observation = collect_observation()?;
             let now = Instant::now();
-            if let Some((last_rb, last_wb, last_t)) = last_io_sample {
+            if let Some((
+                last_rb,
+                last_wb,
+                last_z_rb,
+                last_z_wb,
+                last_v_rb,
+                last_v_wb,
+                last_d_rb,
+                last_d_wb,
+                last_t,
+            )) = last_io_sample
+            {
                 let dt = now.duration_since(last_t).as_secs_f64();
                 if dt > 0.05 {
                     observation.control_plane.swap_read_mbs = (observation
@@ -808,6 +869,52 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
                         .saturating_sub(last_wb)
                         as f64)
                         / (dt * 1_048_576.0);
+
+                    observation.control_plane.zram_io.read_mbs = (observation
+                        .control_plane
+                        .zram_io
+                        .read_bytes
+                        .saturating_sub(last_z_rb)
+                        as f64)
+                        / (dt * 1_048_576.0);
+                    observation.control_plane.zram_io.write_mbs = (observation
+                        .control_plane
+                        .zram_io
+                        .write_bytes
+                        .saturating_sub(last_z_wb)
+                        as f64)
+                        / (dt * 1_048_576.0);
+
+                    observation.control_plane.vram_io.read_mbs = (observation
+                        .control_plane
+                        .vram_io
+                        .read_bytes
+                        .saturating_sub(last_v_rb)
+                        as f64)
+                        / (dt * 1_048_576.0);
+                    observation.control_plane.vram_io.write_mbs = (observation
+                        .control_plane
+                        .vram_io
+                        .write_bytes
+                        .saturating_sub(last_v_wb)
+                        as f64)
+                        / (dt * 1_048_576.0);
+
+                    observation.control_plane.disk_io.read_mbs = (observation
+                        .control_plane
+                        .disk_io
+                        .read_bytes
+                        .saturating_sub(last_d_rb)
+                        as f64)
+                        / (dt * 1_048_576.0);
+                    observation.control_plane.disk_io.write_mbs = (observation
+                        .control_plane
+                        .disk_io
+                        .write_bytes
+                        .saturating_sub(last_d_wb)
+                        as f64)
+                        / (dt * 1_048_576.0);
+
                     if let Some((last_pf, last_mpf)) = last_faults_sample {
                         observation.control_plane.pgfault_per_sec =
                             (observation
@@ -827,6 +934,12 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
             last_io_sample = Some((
                 observation.control_plane.swap_read_bytes,
                 observation.control_plane.swap_write_bytes,
+                observation.control_plane.zram_io.read_bytes,
+                observation.control_plane.zram_io.write_bytes,
+                observation.control_plane.vram_io.read_bytes,
+                observation.control_plane.vram_io.write_bytes,
+                observation.control_plane.disk_io.read_bytes,
+                observation.control_plane.disk_io.write_bytes,
                 now,
             ));
             last_faults_sample = Some((
@@ -1066,34 +1179,47 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             let vram_pct = vram_used.saturating_mul(100).checked_div(vram_size).unwrap_or(0);
             let disk_pct = disk_used.saturating_mul(100).checked_div(disk_size).unwrap_or(0);
 
+            let z_r = observation.control_plane.zram_io.read_mbs;
+            let z_w = observation.control_plane.zram_io.write_mbs;
+            let v_r = observation.control_plane.vram_io.read_mbs;
+            let v_w = observation.control_plane.vram_io.write_mbs;
+            let d_r = observation.control_plane.disk_io.read_mbs;
+            let d_w = observation.control_plane.disk_io.write_mbs;
+
             format!(
                 concat!(
                     " Linux Allocation Hierarchy: Highest priority (Prio 100 -> 50) filled FIRST.\n",
                     "\n",
                     " 1  RAM Swap (zram)     {zram_s}  │ ⚡ 250x FASTER (0.05 µs)\n",
-                    "    {zram_bar}  {zram_pct:>2}%  ({zram_u:>4} MB / {zram_t} MB) │ Priority: 100 (In-RAM)\n",
+                    "    {zram_bar}  {zram_pct:>2}%  ({zram_u:>4} MB / {zram_t} MB) │ Speed: R: {z_r:>4.1} MB/s │ W: {z_w:>4.1} MB/s (Prio 100)\n",
                     "\n",
                     " 2  GPU VRAM (nbd0)     {vram_s}  │ 🚀 20x-100x FASTER (8.74 GB/s)\n",
-                    "    {vram_bar}  {vram_pct:>2}%  ({vram_u:>4} MB / {vram_t} MB) │ Priority:  50 (PCIe DMA)\n",
+                    "    {vram_bar}  {vram_pct:>2}%  ({vram_u:>4} MB / {vram_t} MB) │ Speed: R: {v_r:>4.1} MB/s │ W: {v_w:>4.1} MB/s (Prio  50)\n",
                     "\n",
                     " 3  SSD (WSL2 system)   {disk_s}  │ 🐢   1x BASELINE (150 µs disk)\n",
-                    "    {disk_bar}  {disk_pct:>2}%  ({disk_u:>4} MB / {disk_t} MB) │ Priority:  -2 (3rd Fallback)\n",
+                    "    {disk_bar}  {disk_pct:>2}%  ({disk_u:>4} MB / {disk_t} MB) │ Speed: R: {d_r:>4.1} MB/s │ W: {d_w:>4.1} MB/s (Prio  -2)\n",
                 ),
                 zram_s = zram_status,
                 zram_bar = make_bar(zram_pct, 16),
                 zram_pct = zram_pct,
                 zram_u = zram_used,
                 zram_t = zram_size,
+                z_r = z_r,
+                z_w = z_w,
                 vram_s = vram_status,
                 vram_bar = make_bar(vram_pct, 16),
                 vram_pct = vram_pct,
                 vram_u = vram_used,
                 vram_t = vram_size,
+                v_r = v_r,
+                v_w = v_w,
                 disk_s = disk_status,
                 disk_bar = make_bar(disk_pct, 16),
                 disk_pct = disk_pct,
                 disk_u = disk_used,
                 disk_t = disk_size,
+                d_r = d_r,
+                d_w = d_w,
             )
         })
         .unwrap_or_else(|| " Swap Tiers: not available".to_string());
