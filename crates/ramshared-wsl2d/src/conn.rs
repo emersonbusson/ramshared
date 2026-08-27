@@ -755,11 +755,12 @@ mod tests {
             served
         });
 
+        let req = dummy_req();
         for _ in 0..10 {
             jobs_tx
                 .send(WMsg::Job(Job {
                     export: 0,
-                    req: dummy_req(),
+                    req,
                     payload: Vec::new(),
                     reply: reply_tx.clone(),
                 }))
