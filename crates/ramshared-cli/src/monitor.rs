@@ -1353,24 +1353,18 @@ fn format_tier_latency(
     };
 
     if max >= 1000.0 {
-        format!(
-            "Min: {:>5.2} µs │ Avg: {:>5.2} µs │ Max: {:>5.2} ms ({})",
-            min,
-            avg,
-            max / 1000.0,
-            suffix
-        )
+        format!("{min:.0}..{avg:.0}..{:.1}ms ({suffix})", max / 1000.0)
     } else {
-        format!(
-            "Min: {:>5.2} µs │ Avg: {:>5.2} µs │ Max: {:>5.2} µs ({})",
-            min, avg, max, suffix
-        )
+        format!("{min:.2}..{avg:.2}..{max:.2}µs ({suffix})")
     }
 }
 
 fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     let width = area.width;
-    let bar_len = ((width as u64).saturating_sub(55)).clamp(6, 16);
+    let bar_len = ((width as u64).saturating_sub(45)).clamp(6, 12);
+    let sep_len = (width.saturating_sub(4) as usize).clamp(20, 68);
+    let sep = "─".repeat(sep_len);
+
     let tiers = observation
         .value("tiers")
         .and_then(Value::as_object)
@@ -1441,31 +1435,26 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             let vram_speedup = compute_tier_speedup(&observation.control_plane.vram_io, 50);
             let disk_speedup = compute_tier_speedup(&observation.control_plane.disk_io, -2);
 
-            let z_lat = format_tier_latency(&observation.control_plane.zram_io, 0.04, 0.08, 0.15, "In-RAM LZ4");
-            let v_lat = format_tier_latency(&observation.control_plane.vram_io, 0.85, 1.45, 3.20, "PCIe Gen3 DMA");
-            let d_lat = format_tier_latency(&observation.control_plane.disk_io, 85.0, 180.0, 1200.0, "Host NVMe Disk");
+            let z_lat = format_tier_latency(&observation.control_plane.zram_io, 0.04, 0.08, 0.15, "In-RAM");
+            let v_lat = format_tier_latency(&observation.control_plane.vram_io, 0.85, 1.45, 3.20, "PCIe DMA");
+            let d_lat = format_tier_latency(&observation.control_plane.disk_io, 85.0, 180.0, 1200.0, "NVMe");
 
             format!(
                 concat!(
-                    " ┌─ Tier 1: RAM Swap (zram) ──── Priority 100 [1st Target] ─────────────────┐\n",
-                    " │ State: {zram_s:<23} │ Usage: {zram_bar} {zram_pct:>2}% ({zram_u:>4}/{zram_t} MB) │\n",
-                    " │ Live Speed:  Read: {z_r:>4.1} MB/s │ Write: {z_w:>4.1} MB/s                       │\n",
-                    " │ Throughput:  Min: {z_min:>5.1} │ Avg: {z_avg:>5.1} │ Max: {z_max:>5.1} MB/s               │\n",
-                    " │ Speedup:     {zram_speedup:<58} │\n",
-                    " │ Latency:     {z_lat:<58} │\n",
-                    " ├─ Tier 2: GPU VRAM (nbd0) ──── Priority  50 [2nd Target] ─────────────────┤\n",
-                    " │ State: {vram_s:<23} │ Usage: {vram_bar} {vram_pct:>2}% ({vram_u:>4}/{vram_t} MB) │\n",
-                    " │ Live Speed:  Read: {v_r:>4.1} MB/s │ Write: {v_w:>4.1} MB/s                       │\n",
-                    " │ Throughput:  Min: {v_min:>5.1} │ Avg: {v_avg:>5.1} │ Max: {v_max:>5.1} MB/s               │\n",
-                    " │ Speedup:     {vram_speedup:<58} │\n",
-                    " │ Latency:     {v_lat:<58} │\n",
-                    " ├─ Tier 3: SSD (WSL2 system) ── Priority  -2 [3rd Fallback] ───────────────┤\n",
-                    " │ State: {disk_s:<23} │ Usage: {disk_bar} {disk_pct:>2}% ({disk_u:>4}/{disk_t} MB) │\n",
-                    " │ Live Speed:  Read: {d_r:>4.1} MB/s │ Write: {d_w:>4.1} MB/s                       │\n",
-                    " │ Throughput:  Min: {d_min:>5.1} │ Avg: {d_avg:>5.1} │ Max: {d_max:>5.1} MB/s               │\n",
-                    " │ Speedup:     {disk_speedup:<58} │\n",
-                    " │ Latency:     {d_lat:<58} │\n",
-                    " └──────────────────────────────────────────────────────────────────────────┘",
+                    " 1. RAM Swap (zram) ── {zram_s} (Prio 100)\n",
+                    "    Usage: {zram_bar} {zram_pct:>2}% ({zram_u:>4}/{zram_t} MB) │ Speed: R:{z_r:>4.1} W:{z_w:>4.1} MB/s\n",
+                    "    Rate: Min:{z_min:>4.0} Avg:{z_avg:>4.0} Max:{z_max:>4.0} MB/s │ Latency: {z_lat}\n",
+                    "    {zram_speedup}\n",
+                    " {sep}\n",
+                    " 2. GPU VRAM (nbd0) ── {vram_s} (Prio  50)\n",
+                    "    Usage: {vram_bar} {vram_pct:>2}% ({vram_u:>4}/{vram_t} MB) │ Speed: R:{v_r:>4.1} W:{v_w:>4.1} MB/s\n",
+                    "    Rate: Min:{v_min:>4.0} Avg:{v_avg:>4.0} Max:{v_max:>4.0} MB/s │ Latency: {v_lat}\n",
+                    "    {vram_speedup}\n",
+                    " {sep}\n",
+                    " 3. SSD System ─────── {disk_s} (Prio  -2)\n",
+                    "    Usage: {disk_bar} {disk_pct:>2}% ({disk_u:>4}/{disk_t} MB) │ Speed: R:{d_r:>4.1} W:{d_w:>4.1} MB/s\n",
+                    "    Rate: Min:{d_min:>4.0} Avg:{d_avg:>4.0} Max:{d_max:>4.0} MB/s │ Latency: {d_lat}\n",
+                    "    {disk_speedup}",
                 ),
                 zram_s = zram_status,
                 zram_speedup = zram_speedup,
@@ -1479,6 +1468,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 z_min = z_min,
                 z_avg = z_avg,
                 z_max = z_max,
+                sep = sep,
                 vram_s = vram_status,
                 vram_speedup = vram_speedup,
                 v_lat = v_lat,
@@ -2151,7 +2141,7 @@ mod tests {
             ..TierIoStats::default()
         };
         let lat_str = format_tier_latency(&io_sample, 0.04, 0.08, 0.15, "In-RAM");
-        assert!(lat_str.contains("Min:  0.04 µs") && lat_str.contains("Max:  0.15 µs"));
+        assert_eq!(lat_str, "0.04..0.08..0.15µs (In-RAM)");
 
         let io_disk = TierIoStats {
             min_lat_us: 85.0,
@@ -2160,7 +2150,7 @@ mod tests {
             ..TierIoStats::default()
         };
         let disk_lat_str = format_tier_latency(&io_disk, 85.0, 180.0, 1200.0, "NVMe");
-        assert!(disk_lat_str.contains("Max:  1.20 ms"));
+        assert_eq!(disk_lat_str, "85..180..1.2ms (NVMe)");
 
         let mem_txt = "MemTotal:       20480 kB\nMemAvailable:   16384 kB\nSwapTotal:       4096 kB\nSwapFree:        2048 kB\n";
         let mem = parse_meminfo(mem_txt);
@@ -2169,7 +2159,8 @@ mod tests {
         assert_eq!(mem.swap_total_kib, 4096);
         assert_eq!(mem.swap_free_kib, 2048);
 
-        let temp_log_dir = std::env::temp_dir().join(format!("test-mon-log-{}", std::process::id()));
+        let temp_log_dir =
+            std::env::temp_dir().join(format!("test-mon-log-{}", std::process::id()));
         let log_file = temp_log_dir.join("test.log");
         let hb_file = temp_log_dir.join("test.hb");
         assert!(append_rotating(&log_file, "line1", 10).is_ok());
