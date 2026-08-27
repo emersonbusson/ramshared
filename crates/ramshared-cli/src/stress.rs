@@ -182,8 +182,8 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
         }
         i += 1;
     }
-    opts.start_pct = opts.start_pct.clamp(1, 99);
-    opts.target_pct = opts.target_pct.clamp(opts.start_pct, 99);
+    opts.start_pct = opts.start_pct.clamp(1, 200);
+    opts.target_pct = opts.target_pct.clamp(opts.start_pct, 200);
     opts.step_pct = opts.step_pct.clamp(1, 25);
     Ok(opts)
 }
