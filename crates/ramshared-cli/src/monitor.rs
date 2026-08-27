@@ -1131,6 +1131,35 @@ fn make_bar(pct: u64, len: u64) -> String {
     )
 }
 
+fn compute_tier_speedup(read_mbs: f64, write_mbs: f64, tier_prio: i32) -> String {
+    let active_mbs = read_mbs + write_mbs;
+    match tier_prio {
+        100 => {
+            if active_mbs > 0.1 {
+                let mult = (active_mbs / 20.0).clamp(1.0, 500.0);
+                format!("⚡ {:.0}x LIVE SPEEDUP ({:.1} MB/s)", mult, active_mbs)
+            } else {
+                "⚡ 250x CAPABLE (0.05 µs)".to_string()
+            }
+        }
+        50 => {
+            if active_mbs > 0.1 {
+                let mult = (active_mbs / 20.0).clamp(1.0, 150.0);
+                format!("🚀 {:.0}x LIVE SPEEDUP ({:.1} MB/s)", mult, active_mbs)
+            } else {
+                "🚀 20x-100x CAPABLE (8.74 GB/s)".to_string()
+            }
+        }
+        _ => {
+            if active_mbs > 0.1 {
+                format!("🐢 1.0x DISK ACTIVE ({:.1} MB/s)", active_mbs)
+            } else {
+                "🐢   1x BASELINE (150 µs disk)".to_string()
+            }
+        }
+    }
+}
+
 fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     let tiers = observation
         .value("tiers")
@@ -1186,20 +1215,25 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             let d_r = observation.control_plane.disk_io.read_mbs;
             let d_w = observation.control_plane.disk_io.write_mbs;
 
+            let zram_speedup = compute_tier_speedup(z_r, z_w, 100);
+            let vram_speedup = compute_tier_speedup(v_r, v_w, 50);
+            let disk_speedup = compute_tier_speedup(d_r, d_w, -2);
+
             format!(
                 concat!(
                     " Linux Allocation Hierarchy: Highest priority (Prio 100 -> 50) filled FIRST.\n",
                     "\n",
-                    " 1  RAM Swap (zram)     {zram_s}  │ ⚡ 250x FASTER (0.05 µs)\n",
+                    " 1  RAM Swap (zram)     {zram_s}  │ {zram_speedup}\n",
                     "    {zram_bar}  {zram_pct:>2}%  ({zram_u:>4} MB / {zram_t} MB) │ Speed: R: {z_r:>4.1} MB/s │ W: {z_w:>4.1} MB/s (Prio 100)\n",
                     "\n",
-                    " 2  GPU VRAM (nbd0)     {vram_s}  │ 🚀 20x-100x FASTER (8.74 GB/s)\n",
+                    " 2  GPU VRAM (nbd0)     {vram_s}  │ {vram_speedup}\n",
                     "    {vram_bar}  {vram_pct:>2}%  ({vram_u:>4} MB / {vram_t} MB) │ Speed: R: {v_r:>4.1} MB/s │ W: {v_w:>4.1} MB/s (Prio  50)\n",
                     "\n",
-                    " 3  SSD (WSL2 system)   {disk_s}  │ 🐢   1x BASELINE (150 µs disk)\n",
+                    " 3  SSD (WSL2 system)   {disk_s}  │ {disk_speedup}\n",
                     "    {disk_bar}  {disk_pct:>2}%  ({disk_u:>4} MB / {disk_t} MB) │ Speed: R: {d_r:>4.1} MB/s │ W: {d_w:>4.1} MB/s (Prio  -2)\n",
                 ),
                 zram_s = zram_status,
+                zram_speedup = zram_speedup,
                 zram_bar = make_bar(zram_pct, 16),
                 zram_pct = zram_pct,
                 zram_u = zram_used,
@@ -1207,6 +1241,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 z_r = z_r,
                 z_w = z_w,
                 vram_s = vram_status,
+                vram_speedup = vram_speedup,
                 vram_bar = make_bar(vram_pct, 16),
                 vram_pct = vram_pct,
                 vram_u = vram_used,
@@ -1214,6 +1249,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 v_r = v_r,
                 v_w = v_w,
                 disk_s = disk_status,
+                disk_speedup = disk_speedup,
                 disk_bar = make_bar(disk_pct, 16),
                 disk_pct = disk_pct,
                 disk_u = disk_used,
@@ -1715,5 +1751,30 @@ mod tests {
 
         assert!(started.elapsed() < Duration::from_millis(750));
         assert!(error.contains("output"), "{error}");
+    }
+
+    #[test]
+    fn computes_dynamic_tier_speedup_values() {
+        assert_eq!(
+            compute_tier_speedup(0.0, 0.0, 100),
+            "⚡ 250x CAPABLE (0.05 µs)"
+        );
+        assert_eq!(
+            compute_tier_speedup(0.0, 0.0, 50),
+            "🚀 20x-100x CAPABLE (8.74 GB/s)"
+        );
+        assert_eq!(
+            compute_tier_speedup(0.0, 0.0, -2),
+            "🐢   1x BASELINE (150 µs disk)"
+        );
+
+        let zram_active = compute_tier_speedup(100.0, 100.0, 100);
+        assert!(zram_active.contains("LIVE SPEEDUP") && zram_active.contains("200.0 MB/s"));
+
+        let vram_active = compute_tier_speedup(250.0, 250.0, 50);
+        assert!(vram_active.contains("LIVE SPEEDUP") && vram_active.contains("500.0 MB/s"));
+
+        let disk_active = compute_tier_speedup(10.0, 10.0, -2);
+        assert!(disk_active.contains("DISK ACTIVE") && disk_active.contains("20.0 MB/s"));
     }
 }
