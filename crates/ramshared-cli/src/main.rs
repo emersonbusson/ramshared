@@ -15,6 +15,7 @@ mod bounded_process;
 mod cascade;
 mod diagnose;
 mod monitor;
+mod stress;
 mod supervisor;
 mod workload;
 
@@ -195,6 +196,7 @@ enum CliCommand {
     Status { json: bool },
     Monitor { options: MonitorOptions },
     Diagnose { args: Vec<String> },
+    Stress { args: Vec<String> },
     Help,
 }
 
@@ -307,6 +309,9 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
         "diagnose" => Ok(CliCommand::Diagnose {
             args: options.to_vec(),
         }),
+        "stress" | "bench" => Ok(CliCommand::Stress {
+            args: options.to_vec(),
+        }),
         "-h" | "--help" => Ok(CliCommand::Help),
         other => Err(CliParseError::UnsupportedCommand(other.to_string())),
     }
@@ -325,6 +330,12 @@ trait CliActionRunner {
         stderr: &mut dyn Write,
     ) -> ExitCode;
     fn diagnose(
+        &mut self,
+        args: &[String],
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
+    fn stress(
         &mut self,
         args: &[String],
         stdout: &mut dyn Write,
@@ -421,6 +432,21 @@ impl CliActionRunner for SystemCliActions {
         to_exit(diagnose::run(args), stderr)
     }
 
+    fn stress(
+        &mut self,
+        args: &[String],
+        _stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        match stress::parse_stress_args(args) {
+            Ok(opts) => to_exit(stress::run(&opts), stderr),
+            Err(e) => {
+                let _ = writeln!(stderr, "error: {e}");
+                ExitCode::from(2)
+            }
+        }
+    }
+
     fn run_workload(
         &mut self,
         args: &[String],
@@ -502,6 +528,7 @@ fn run_from_args<R: CliActionRunner>(
         Ok(CliCommand::Status { json }) => actions.status(json, stdout, stderr),
         Ok(CliCommand::Monitor { options }) => actions.monitor(&options, stdout, stderr),
         Ok(CliCommand::Diagnose { args }) => actions.diagnose(&args, stdout, stderr),
+        Ok(CliCommand::Stress { args }) => actions.stress(&args, stdout, stderr),
         Ok(CliCommand::Help) => {
             print_usage(stderr);
             ExitCode::SUCCESS
@@ -560,6 +587,10 @@ fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(
         stderr,
         "  ramshared monitor [--jsonl] [--once] [--interval-ms N] [--history-seconds N]"
+    );
+    let _ = writeln!(
+        stderr,
+        "  ramshared stress [--start %] [--target %] [--step %] [--interval-ms N] [--hold-sec N] [--min-ram-mb N] [--json]"
     );
     let _ = writeln!(
         stderr,
@@ -1523,6 +1554,18 @@ mod tests {
             _stderr: &mut dyn std::io::Write,
         ) -> ExitCode {
             self.calls.push(CliCommand::Diagnose {
+                args: args.to_vec(),
+            });
+            self.result()
+        }
+
+        fn stress(
+            &mut self,
+            args: &[String],
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Stress {
                 args: args.to_vec(),
             });
             self.result()

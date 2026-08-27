@@ -194,3 +194,31 @@ fn cli_top_alias_and_refusals() {
     assert_eq!(top_refusal.status.code(), Some(2));
     assert!(stderr(&top_refusal).contains("invalid top option"));
 }
+
+#[test]
+fn cli_stress_subcommand_and_json_report() {
+    let output = run_cli(&[
+        "stress",
+        "--start",
+        "1",
+        "--target",
+        "2",
+        "--step",
+        "1",
+        "--interval-ms",
+        "50",
+        "--hold-sec",
+        "0",
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    let val: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid json output");
+    assert_eq!(
+        val.get("status").and_then(serde_json::Value::as_str),
+        Some("PASS_ZERO_PANIC")
+    );
+    assert!(val.get("reclaim_speed_gbs").is_some());
+
+    let refusal = run_cli(&["stress", "--invalid-flag"]);
+    assert_eq!(refusal.status.code(), Some(2));
+}
