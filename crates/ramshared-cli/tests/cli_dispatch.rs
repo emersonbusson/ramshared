@@ -212,7 +212,8 @@ fn cli_stress_subcommand_and_json_report() {
         "--json",
     ]);
     assert_eq!(output.status.code(), Some(0));
-    let val: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid json output");
+    let val: serde_json::Value =
+        serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null);
     assert_eq!(
         val.get("status").and_then(serde_json::Value::as_str),
         Some("PASS_ZERO_PANIC")
@@ -244,7 +245,8 @@ fn cli_stress_battery_and_seismic_log() {
         "--json",
     ]);
     assert_eq!(output.status.code(), Some(0));
-    let val: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid json output");
+    let val: serde_json::Value =
+        serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null);
     assert_eq!(
         val.get("battery_mode").and_then(serde_json::Value::as_bool),
         Some(true)

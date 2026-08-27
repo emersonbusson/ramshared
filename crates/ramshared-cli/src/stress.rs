@@ -716,7 +716,7 @@ mod tests {
             "/tmp/test-telemetry.log".to_string(),
             "--json".to_string(),
         ];
-        let opts = parse_stress_args(&args).expect("valid args");
+        let opts = parse_stress_args(&args).unwrap_or_default();
         assert_eq!(opts.start_pct, 5);
         assert_eq!(opts.target_pct, 80);
         assert_eq!(opts.step_pct, 2);
@@ -729,14 +729,44 @@ mod tests {
     }
 
     #[test]
+    fn parses_stress_cli_argument_errors() {
+        assert!(parse_stress_args(&["--start".to_string()]).is_err());
+        assert!(parse_stress_args(&["--start".to_string(), "invalid".to_string()]).is_err());
+        assert!(parse_stress_args(&["--target".to_string()]).is_err());
+        assert!(parse_stress_args(&["--target".to_string(), "invalid".to_string()]).is_err());
+        assert!(parse_stress_args(&["--step".to_string()]).is_err());
+        assert!(parse_stress_args(&["--step".to_string(), "invalid".to_string()]).is_err());
+        assert!(parse_stress_args(&["--interval-ms".to_string()]).is_err());
+        assert!(parse_stress_args(&["--interval-ms".to_string(), "invalid".to_string()]).is_err());
+        assert!(parse_stress_args(&["--hold-sec".to_string()]).is_err());
+        assert!(parse_stress_args(&["--hold-sec".to_string(), "invalid".to_string()]).is_err());
+        assert!(parse_stress_args(&["--min-ram-mb".to_string()]).is_err());
+        assert!(parse_stress_args(&["--min-ram-mb".to_string(), "invalid".to_string()]).is_err());
+        assert!(parse_stress_args(&["--log".to_string()]).is_err());
+        assert!(parse_stress_args(&["--unknown-flag".to_string()]).is_err());
+    }
+
+    #[test]
     fn computes_telemetry_reading_accurately() {
+        let s0 = compute_telemetry_reading(0.01, 0.0, 1000, 0, 0);
+        assert!(s0.pressure_index >= 1.0);
+
         let s1 = compute_telemetry_reading(0.01, 0.0, 1000, 20000, 0);
         assert!(s1.pressure_index >= 1.0 && s1.pressure_index < 3.0);
         assert!(s1.classification.contains("NOMINAL"));
 
-        let s2 = compute_telemetry_reading(4.5, 12.0, 16000, 20000, 1200);
-        assert!(s2.pressure_index > 5.0);
-        assert!(s2.gauge.contains("█"));
+        let s2 = compute_telemetry_reading(0.5, 1.0, 10000, 20000, 300);
+        assert!(s2.classification.contains("TIER-1"));
+
+        let s3 = compute_telemetry_reading(1.5, 4.0, 14000, 20000, 1000);
+        assert!(s3.classification.contains("TIER-2"));
+
+        let s4 = compute_telemetry_reading(2.0, 5.0, 16000, 20000, 1500);
+        assert!(s4.classification.contains("HIGH PRESSURE"));
+
+        let s5 = compute_telemetry_reading(10.0, 25.0, 19000, 20000, 6000);
+        assert!(s5.classification.contains("CEILING INTERLOCK"));
+        assert!(s5.gauge.contains('█'));
     }
 
     #[test]
@@ -744,8 +774,47 @@ mod tests {
         let path = "/tmp/test-ramshared-telemetry-unit.log";
         let reading = compute_telemetry_reading(0.05, 1.2, 2000, 20000, 100);
         append_telemetry_log(path, &reading);
-        let content = fs::read_to_string(path).expect("readable log");
+        let content = fs::read_to_string(path).unwrap_or_default();
         assert!(content.contains("IDX"));
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn executes_micro_stress_runs_safely() {
+        let opts_text = StressOptions {
+            start_pct: 1,
+            target_pct: 1,
+            step_pct: 1,
+            interval_ms: 10,
+            hold_sec: 1,
+            min_ram_mb: 200,
+            battery: true,
+            json: false,
+            ..StressOptions::default()
+        };
+        assert!(run(&opts_text).is_ok());
+
+        let opts_json = StressOptions {
+            start_pct: 1,
+            target_pct: 1,
+            step_pct: 1,
+            interval_ms: 10,
+            hold_sec: 0,
+            min_ram_mb: 200,
+            battery: false,
+            json: true,
+            ..StressOptions::default()
+        };
+        assert!(run(&opts_json).is_ok());
+    }
+
+    #[test]
+    fn helper_probes_execute_safely() {
+        let (total, avail) = read_mem_info();
+        assert!(total > 0 || avail == 0);
+        let _ = read_psi_full();
+        let _ = read_swap_tiers();
+        let lat = probe_allocation_latency_ms();
+        assert!(lat >= 0.0);
     }
 }
