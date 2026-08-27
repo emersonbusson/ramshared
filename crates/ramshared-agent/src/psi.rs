@@ -13,8 +13,13 @@ use ramshared_broker::protocol::SwapEntry;
 
 /// Core logic for `read_psi` with dependency injection for the file path.
 fn read_psi_impl(path: &str) -> Result<PsiSample> {
-    let raw = std::fs::read_to_string(path)?;
-    parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))
+    match std::fs::read_to_string(path) {
+        Ok(raw) => {
+            parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "unreadable PSI"))
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(PsiSample::default()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Reads and parses `/proc/pressure/memory`.
@@ -47,7 +52,11 @@ pub fn parse_psi(content: &str) -> Option<PsiSample> {
 
 /// Core logic for `read_swaps` with dependency injection.
 fn read_swaps_impl(path: &str) -> Result<Vec<SwapEntry>> {
-    Ok(parse_swaps(&std::fs::read_to_string(path)?))
+    match std::fs::read_to_string(path) {
+        Ok(raw) => Ok(parse_swaps(&raw)),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Reads and parses `/proc/swaps`.
@@ -222,7 +231,7 @@ mod tests {
     #[test]
     fn parse_memcg_swap_max_or_garbage_is_none() {
         assert_eq!(parse_memcg_swap("max\n"), None);
-        assert_eq!(parse_memcg_swap("lixo"), None);
+        assert_eq!(parse_memcg_swap("garbage"), None);
     }
 
     #[test]
@@ -293,7 +302,10 @@ mod tests {
 
     #[test]
     fn read_psi_impl_not_found() {
-        assert!(read_psi_impl("/proc/nonexistent_psi_file_12345").is_err());
+        assert_eq!(
+            read_psi_impl("/proc/nonexistent_psi_file_12345").unwrap(),
+            PsiSample::default()
+        );
     }
 
     #[test]
@@ -317,7 +329,11 @@ mod tests {
 
     #[test]
     fn read_swaps_impl_not_found() {
-        assert!(read_swaps_impl("/proc/nonexistent_swaps_file_12345").is_err());
+        assert!(
+            read_swaps_impl("/proc/nonexistent_swaps_file_12345")
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

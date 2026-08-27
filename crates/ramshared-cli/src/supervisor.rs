@@ -1151,13 +1151,12 @@ fn apply_decision_with(
 
 fn collect_sample(start: Instant, previous: Instant) -> Result<PressureSample, String> {
     let meminfo = fs::read_to_string("/proc/meminfo").map_err(|error| error.to_string())?;
-    let pressure =
-        fs::read_to_string("/proc/pressure/memory").map_err(|error| error.to_string())?;
+    let pressure = fs::read_to_string("/proc/pressure/memory").unwrap_or_default();
     let (total, available) = parse_meminfo(&meminfo).ok_or("invalid /proc/meminfo")?;
     Ok(PressureSample {
         memory_available_bytes: available,
         control_reserve_bytes: (total.div_ceil(4)).max(4 * 1024 * 1024 * 1024),
-        psi_full_avg10: parse_psi_full_avg10(&pressure).ok_or("invalid memory PSI")?,
+        psi_full_avg10: parse_psi_full_avg10(&pressure).unwrap_or(0.0),
         sample_delay_ms: previous.elapsed().as_millis().saturating_sub(1_000) as u64,
         elapsed_ms: start.elapsed().as_millis() as u64,
     })

@@ -169,7 +169,7 @@ mod tests {
     fn load_spike_below_threshold_stays_ok() {
         // Regression DT-31: LOAD spike ~17× baseline (not eviction) must NOT demote.
         // With 8× this triggered and dropped the swap under load (e2e civm bug); with 64×, it remains Ok.
-        let mut c = canary(); // baseline 4 ms → limiar 256 ms
+        let mut c = canary(); // baseline 4 ms → threshold 256 ms
         for _ in 0..10 {
             assert_eq!(c.sample(4000 * 17, true, u64::MAX), Verdict::Ok); // 68 ms = 17× < 256 ms
         }
