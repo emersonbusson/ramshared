@@ -881,7 +881,7 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
             )) = last_io_sample
             {
                 let dt = now.duration_since(last_t).as_secs_f64();
-                if dt > 0.05 {
+                if (0.05..=10.0).contains(&dt) {
                     observation.control_plane.swap_read_mbs = (observation
                         .control_plane
                         .swap_read_bytes

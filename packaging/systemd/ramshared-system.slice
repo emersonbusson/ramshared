@@ -1,0 +1,16 @@
+[Unit]
+Description=RamShared System Core & Control Plane Resource Slice (Protected Memory Guarantee)
+Documentation=https://github.com/emersonbusson/ramshared
+Before=shutdown.target
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+TasksAccounting=yes
+IOAccounting=yes
+CPUWeight=200
+IOWeight=200
+
+# Physical memory protection to guarantee interactive responsiveness (never evicted)
+MemoryMin=512M
+MemoryLow=1G
