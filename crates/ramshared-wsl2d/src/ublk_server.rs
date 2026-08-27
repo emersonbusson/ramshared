@@ -917,6 +917,51 @@ mod join_tests {
         residency.join().expect("residency success");
     }
 
+    struct ErrorBackend;
+
+    impl BlockBackend for ErrorBackend {
+        fn size_bytes(&self) -> u64 {
+            4096
+        }
+
+        fn block_size(&self) -> u32 {
+            4096
+        }
+
+        fn read_at(&mut self, _off: u64, _buf: &mut [u8]) -> Result<(), ramshared_block::IoError> {
+            Err(ramshared_block::IoError("simulated read error".into()))
+        }
+
+        fn write_at(&mut self, _off: u64, _data: &[u8]) -> Result<(), ramshared_block::IoError> {
+            Err(ramshared_block::IoError("simulated write error".into()))
+        }
+
+        fn flush(&mut self) -> Result<(), ramshared_block::IoError> {
+            Err(ramshared_block::IoError("simulated flush error".into()))
+        }
+    }
+
+    #[test]
+    fn serve_request_propagates_backend_errors() {
+        let mut backend = ErrorBackend;
+        let mut buffer = vec![0u8; 4096];
+
+        for cmd in [Command::Read, Command::Write, Command::Flush] {
+            let request = Request {
+                flags: 0,
+                cmd,
+                handle: 1,
+                offset: 0,
+                len: 4096,
+            };
+            assert_eq!(
+                serve_request(&request, &mut backend, &mut buffer),
+                EIO,
+                "expected EIO for cmd {cmd:?}"
+            );
+        }
+    }
+
     #[test]
     fn serve_request_refuses_unsupported_commands_and_covers_trim() {
         let mut backend = RamBackend::new(4096);
