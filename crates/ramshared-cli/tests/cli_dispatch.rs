@@ -222,3 +222,37 @@ fn cli_stress_subcommand_and_json_report() {
     let refusal = run_cli(&["stress", "--invalid-flag"]);
     assert_eq!(refusal.status.code(), Some(2));
 }
+
+#[test]
+fn cli_stress_battery_and_seismic_log() {
+    let log_path = "/tmp/ramshared-seismic-battery-test.log";
+    let output = run_cli(&[
+        "stress",
+        "--battery",
+        "--start",
+        "1",
+        "--target",
+        "2",
+        "--step",
+        "1",
+        "--interval-ms",
+        "50",
+        "--hold-sec",
+        "1",
+        "--log",
+        log_path,
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    let val: serde_json::Value = serde_json::from_slice(&output.stdout).expect("valid json output");
+    assert_eq!(
+        val.get("battery_mode").and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    assert!(val.get("peak_pressure_index").is_some());
+
+    if let Ok(content) = fs::read_to_string(log_path) {
+        assert!(content.contains("IDX"));
+        let _ = fs::remove_file(log_path);
+    }
+}

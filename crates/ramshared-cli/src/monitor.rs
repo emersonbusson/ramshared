@@ -1290,6 +1290,22 @@ fn make_bar(pct: u64, len: u64) -> String {
     )
 }
 
+fn make_tier_bar(used: u64, size: u64, len: u64) -> String {
+    if size == 0 {
+        return make_bar(0, len);
+    }
+    let mut filled = (used.saturating_mul(len) / size).min(len);
+    if filled == 0 && used > 0 {
+        filled = 1;
+    }
+    let empty = len.saturating_sub(filled);
+    format!(
+        "[{}{}]",
+        "█".repeat(filled as usize),
+        "░".repeat(empty as usize)
+    )
+}
+
 fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
     let ssd_baseline = 20.0f64;
     match tier_prio {
@@ -1299,7 +1315,7 @@ fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
                 let avg_mult = (io.avg_mbs / ssd_baseline).clamp(1.0, 500.0);
                 let max_mult = (io.max_mbs / ssd_baseline).clamp(1.0, 500.0);
                 format!(
-                    "⚡ Speedup: Min: {:.0}x │ Avg: {:.0}x │ Max: {:.0}x",
+                    "⚡ Min: {:.0}x │ Avg: {:.0}x │ Max: {:.0}x (Active vs Host VHDX)",
                     min_mult, avg_mult, max_mult
                 )
             } else {
@@ -1312,7 +1328,7 @@ fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
                 let avg_mult = (io.avg_mbs / ssd_baseline).clamp(1.0, 150.0);
                 let max_mult = (io.max_mbs / ssd_baseline).clamp(1.0, 150.0);
                 format!(
-                    "🚀 Speedup: Min: {:.0}x │ Avg: {:.0}x │ Max: {:.0}x",
+                    "🚀 Min: {:.0}x │ Avg: {:.0}x │ Max: {:.0}x (Active vs Host VHDX)",
                     min_mult, avg_mult, max_mult
                 )
             } else {
@@ -1321,7 +1337,7 @@ fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
         }
         _ => {
             if io.max_mbs > 0.1 {
-                "🐢 Speedup: Min: 1.0x │ Avg: 1.0x │ Max: 1.0x (WSL2 Disk)".to_string()
+                "🐢 Min: 1.0x │ Avg: 1.0x │ Max: 1.0x (WSL2 System Disk)".to_string()
             } else {
                 "🐢 1.0x Host VHDX Baseline (WSL2 System Disk)".to_string()
             }
@@ -1372,9 +1388,18 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             // Helper to extract tier data with proper rounding
             let get = |name: &str| -> (bool, u64, u64) {
                 let tier = tiers.get(name).and_then(Value::as_object);
-                let present = tier.and_then(|t| t.get("present")).and_then(Value::as_bool).unwrap_or(false);
-                let used_kib = tier.and_then(|t| t.get("used_kib")).and_then(Value::as_u64).unwrap_or(0);
-                let size_kib = tier.and_then(|t| t.get("size_kib")).and_then(Value::as_u64).unwrap_or(0);
+                let present = tier
+                    .and_then(|t| t.get("present"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let used_kib = tier
+                    .and_then(|t| t.get("used_kib"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let size_kib = tier
+                    .and_then(|t| t.get("size_kib"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
                 let used = (used_kib + 512) / 1024;
                 let size = (size_kib + 512) / 1024;
                 (present, used, size)
@@ -1408,9 +1433,18 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 "🔵 STANDBY [3rd Fallback]"
             };
 
-            let zram_pct = zram_used.saturating_mul(100).checked_div(zram_size).unwrap_or(0);
-            let vram_pct = vram_used.saturating_mul(100).checked_div(vram_size).unwrap_or(0);
-            let disk_pct = disk_used.saturating_mul(100).checked_div(disk_size).unwrap_or(0);
+            let zram_pct = zram_used
+                .saturating_mul(100)
+                .checked_div(zram_size)
+                .unwrap_or(0);
+            let vram_pct = vram_used
+                .saturating_mul(100)
+                .checked_div(vram_size)
+                .unwrap_or(0);
+            let disk_pct = disk_used
+                .saturating_mul(100)
+                .checked_div(disk_size)
+                .unwrap_or(0);
 
             let z_r = observation.control_plane.zram_io.read_mbs;
             let z_w = observation.control_plane.zram_io.write_mbs;
@@ -1435,21 +1469,88 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             let vram_speedup = compute_tier_speedup(&observation.control_plane.vram_io, 50);
             let disk_speedup = compute_tier_speedup(&observation.control_plane.disk_io, -2);
 
-            let z_lat = format_tier_latency(&observation.control_plane.zram_io, 0.04, 0.08, 0.15, "In-RAM LZ4");
-            let v_lat = format_tier_latency(&observation.control_plane.vram_io, 0.85, 1.45, 3.20, "PCIe DMA");
-            let d_lat = format_tier_latency(&observation.control_plane.disk_io, 85.0, 180.0, 1200.0, "Host VHDX");
+            let z_lat = format_tier_latency(
+                &observation.control_plane.zram_io,
+                0.04,
+                0.08,
+                0.15,
+                "In-RAM LZ4",
+            );
+            let v_lat = format_tier_latency(
+                &observation.control_plane.vram_io,
+                0.85,
+                1.45,
+                3.20,
+                "PCIe DMA",
+            );
+            let d_lat = format_tier_latency(
+                &observation.control_plane.disk_io,
+                85.0,
+                180.0,
+                1200.0,
+                "Host VHDX",
+            );
 
-            let z_bar = make_bar(zram_pct, bar_len);
-            let v_bar = make_bar(vram_pct, bar_len);
-            let d_bar = make_bar(disk_pct, bar_len);
+            let z_bar = make_tier_bar(zram_used, zram_size, bar_len);
+            let v_bar = make_tier_bar(vram_used, vram_size, bar_len);
+            let d_bar = make_tier_bar(disk_used, disk_size, bar_len);
 
-            let z_use = format!("{z_bar} {zram_pct:>2}% ({zram_u:>4}/{zram_t} MB)", z_bar=z_bar, zram_pct=zram_pct, zram_u=zram_used, zram_t=zram_size);
-            let v_use = format!("{v_bar} {vram_pct:>2}% ({vram_u:>4}/{vram_t} MB)", v_bar=v_bar, vram_pct=vram_pct, vram_u=vram_used, vram_t=vram_size);
-            let d_use = format!("{d_bar} {disk_pct:>2}% ({disk_u:>4}/{disk_t} MB)", d_bar=d_bar, disk_pct=disk_pct, disk_u=disk_used, disk_t=disk_size);
+            let z_pct_str = if zram_used > 0 && zram_pct == 0 {
+                "<1%".to_string()
+            } else {
+                format!("{zram_pct:>2}%")
+            };
+            let v_pct_str = if vram_used > 0 && vram_pct == 0 {
+                "<1%".to_string()
+            } else {
+                format!("{vram_pct:>2}%")
+            };
+            let d_pct_str = if disk_used > 0 && disk_pct == 0 {
+                "<1%".to_string()
+            } else {
+                format!("{disk_pct:>2}%")
+            };
 
-            let z_rate = format!("Min:{z_min:>4.0} │ Avg:{z_avg:>4.0} │ Max:{z_max:>4.0} MB/s", z_min=z_min, z_avg=z_avg, z_max=z_max);
-            let v_rate = format!("Min:{v_min:>4.0} │ Avg:{v_avg:>4.0} │ Max:{v_max:>4.0} MB/s", v_min=v_min, v_avg=v_avg, v_max=v_max);
-            let d_rate = format!("Min:{d_min:>4.0} │ Avg:{d_avg:>4.0} │ Max:{d_max:>4.0} MB/s", d_min=d_min, d_avg=d_avg, d_max=d_max);
+            let z_use = format!(
+                "{z_bar} {z_pct_str} ({zram_u:>4}/{zram_t} MB)",
+                z_bar = z_bar,
+                z_pct_str = z_pct_str,
+                zram_u = zram_used,
+                zram_t = zram_size
+            );
+            let v_use = format!(
+                "{v_bar} {v_pct_str} ({vram_u:>4}/{vram_t} MB)",
+                v_bar = v_bar,
+                v_pct_str = v_pct_str,
+                vram_u = vram_used,
+                vram_t = vram_size
+            );
+            let d_use = format!(
+                "{d_bar} {d_pct_str} ({disk_u:>4}/{disk_t} MB)",
+                d_bar = d_bar,
+                d_pct_str = d_pct_str,
+                disk_u = disk_used,
+                disk_t = disk_size
+            );
+
+            let z_rate = format!(
+                "Min:{z_min:>4.0} │ Avg:{z_avg:>4.0} │ Max:{z_max:>4.0} MB/s",
+                z_min = z_min,
+                z_avg = z_avg,
+                z_max = z_max
+            );
+            let v_rate = format!(
+                "Min:{v_min:>4.0} │ Avg:{v_avg:>4.0} │ Max:{v_max:>4.0} MB/s",
+                v_min = v_min,
+                v_avg = v_avg,
+                v_max = v_max
+            );
+            let d_rate = format!(
+                "Min:{d_min:>4.0} │ Avg:{d_avg:>4.0} │ Max:{d_max:>4.0} MB/s",
+                d_min = d_min,
+                d_avg = d_avg,
+                d_max = d_max
+            );
 
             format!(
                 concat!(
