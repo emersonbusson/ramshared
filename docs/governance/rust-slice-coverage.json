@@ -299,7 +299,7 @@
         "-p",
         "ramshared-agent",
         "--files",
-        "crates/ramshared-agent/src/main.rs",
+        "crates/ramshared-agent/src/main.rs,crates/ramshared-agent/src/psi.rs",
         "--min",
         "80",
         "--report-json",
@@ -309,7 +309,8 @@
         "ramshared-agent"
       ],
       "files": [
-        "crates/ramshared-agent/src/main.rs"
+        "crates/ramshared-agent/src/main.rs",
+        "crates/ramshared-agent/src/psi.rs"
       ],
       "min": 80
     },
@@ -402,7 +403,7 @@
         "-p",
         "ramshared-wsl2d",
         "--files",
-        "crates/ramshared-wsl2d/src/main.rs,crates/ramshared-wsl2d/src/swap.rs",
+        "crates/ramshared-wsl2d/src/main.rs,crates/ramshared-wsl2d/src/residency.rs,crates/ramshared-wsl2d/src/swap.rs",
         "--min",
         "80",
         "--report-json",
@@ -413,6 +414,7 @@
       ],
       "files": [
         "crates/ramshared-wsl2d/src/main.rs",
+        "crates/ramshared-wsl2d/src/residency.rs",
         "crates/ramshared-wsl2d/src/swap.rs"
       ],
       "min": 80
