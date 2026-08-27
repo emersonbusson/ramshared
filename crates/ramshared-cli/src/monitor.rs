@@ -106,6 +106,7 @@ fn parse_path(value: Option<&String>) -> Result<PathBuf, ()> {
 pub enum MonitorError {
     Io(String),
     Json(String),
+    #[allow(dead_code)]
     Terminal(String),
 }
 
@@ -866,7 +867,9 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
 
     loop {
         if Instant::now() >= next_sample {
-            observation = collect_observation()?;
+            if let Ok(new_obs) = collect_observation() {
+                observation = new_obs;
+            }
             let now = Instant::now();
             if let Some((
                 last_rb,
@@ -1114,22 +1117,21 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
             }
             next_sample = Instant::now() + interval;
         }
-        terminal
-            .draw(|frame| draw_dashboard(frame, &observation, &history))
-            .map_err(|error| MonitorError::Terminal(error.to_string()))?;
+        let _ = terminal.draw(|frame| draw_dashboard(frame, &observation, &history));
 
         let wait = next_sample
             .saturating_duration_since(Instant::now())
             .min(Duration::from_millis(100));
-        if event::poll(wait).map_err(|error| MonitorError::Terminal(error.to_string()))?
-            && let Event::Key(key) =
-                event::read().map_err(|error| MonitorError::Terminal(error.to_string()))?
-            && key.kind == KeyEventKind::Press
-            && (matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
-                || (key.code == KeyCode::Char('c')
-                    && key.modifiers.contains(KeyModifiers::CONTROL)))
-        {
-            return Ok(());
+        if let Ok(true) = event::poll(wait) {
+            if let Ok(Event::Key(key)) = event::read() {
+                if key.kind == KeyEventKind::Press
+                    && (matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
+                        || (key.code == KeyCode::Char('c')
+                            && key.modifiers.contains(KeyModifiers::CONTROL)))
+                {
+                    return Ok(());
+                }
+            }
         }
     }
 }
