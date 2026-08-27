@@ -1802,3 +1802,298 @@ enum EventRegistration {
     Conflict,
     Overflow,
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    fn opaque(bytes: &[u8]) -> OpaqueId {
+        OpaqueId::new(bytes).expect("valid opaque test id")
+    }
+
+    fn observation(epoch: u64, event: &[u8], signal: ObservationEventKind) -> HostObservation {
+        HostObservation::new(
+            N3_SCHEMA_VERSION,
+            epoch,
+            AdapterId::from(opaque(b"host-adapter")),
+            Authority::Host,
+            1024 * 1024 * 1024,
+            256 * 1024 * 1024,
+            768 * 1024 * 1024,
+            100,
+            10,
+            EventId::from(opaque(event)),
+            vec![ObservationEvent::new(
+                EventId::from(opaque(b"observation-signal")),
+                signal,
+            )],
+        )
+    }
+
+    fn grant(generation: u64, event: &[u8]) -> Grant {
+        Grant::new(
+            N3_SCHEMA_VERSION,
+            LeaseId::from(opaque(b"lease-1")),
+            generation,
+            EventId::from(opaque(event)),
+            1024 * 1024,
+            1,
+            100,
+            200,
+        )
+    }
+
+    #[test]
+    fn test_opaque_id_bounds_and_debug() {
+        assert!(OpaqueId::new([]).is_err());
+        assert!(OpaqueId::new(vec![0; MAX_OPAQUE_ID_BYTES + 1]).is_err());
+        let id = opaque(b"test-id");
+        assert_eq!(id.as_bytes(), b"test-id");
+        let debug_str = format!("{id:?}");
+        assert!(debug_str.contains("OpaqueId"));
+        assert!(debug_str.contains("length: 7"));
+    }
+
+    #[test]
+    fn test_restart_record_serialization_roundtrip_and_sorting() {
+        let cp2 = GenerationCheckpoint {
+            lease_id: LeaseId::from(opaque(b"lease-b")),
+            generation: 2,
+        };
+        let cp1 = GenerationCheckpoint {
+            lease_id: LeaseId::from(opaque(b"lease-a")),
+            generation: 1,
+        };
+        // Pass unsorted checkpoints; host() should sort them canonical order.
+        let record = RestartRecord::host(42, vec![cp2, cp1]).expect("valid restart record");
+        assert_eq!(record.host_epoch(), 42);
+        assert_eq!(record.checkpoints()[0].lease_id.as_bytes(), b"lease-a");
+        assert_eq!(record.checkpoints()[1].lease_id.as_bytes(), b"lease-b");
+
+        let bytes = record.to_bytes();
+        let decoded = RestartRecord::from_bytes(&bytes).expect("roundtrip decoding succeeds");
+        assert_eq!(record, decoded);
+    }
+
+    #[test]
+    fn test_restart_record_invalid_bytes_and_schema() {
+        assert!(RestartRecord::from_bytes(b"BAD").is_err());
+        let cp = GenerationCheckpoint {
+            lease_id: LeaseId::from(opaque(b"lease-1")),
+            generation: 1,
+        };
+        let valid_record = RestartRecord::host(1, vec![cp]).expect("valid record");
+        let mut bytes = valid_record.to_bytes();
+
+        // Corrupt magic header
+        bytes[0..4].copy_from_slice(b"XXXX");
+        assert_eq!(
+            RestartRecord::from_bytes(&bytes),
+            Err(FailureReason::MalformedRecord)
+        );
+
+        // Reset magic, corrupt schema version to 2
+        bytes[0..4].copy_from_slice(RESTART_RECORD_MAGIC);
+        bytes[4..6].copy_from_slice(&2u16.to_be_bytes());
+        assert_eq!(
+            RestartRecord::from_bytes(&bytes),
+            Err(FailureReason::UnknownSchema)
+        );
+
+        // Corrupt authority marker to Guest (2)
+        bytes[4..6].copy_from_slice(&N3_SCHEMA_VERSION.to_be_bytes());
+        bytes[6] = 2;
+        assert_eq!(
+            RestartRecord::from_bytes(&bytes),
+            Err(FailureReason::HostAuthorityRequired)
+        );
+    }
+
+    #[test]
+    fn test_host_observation_validation_and_modifiers() {
+        let obs = observation(1, b"obs-1", ObservationEventKind::Healthy)
+            .with_schema_version(N3_SCHEMA_VERSION)
+            .with_observed_at(100)
+            .with_resident_bytes(4096);
+
+        assert_eq!(obs.observed_at, 100);
+        assert_eq!(obs.resident_bytes, 4096);
+        assert!(obs.validate(105).is_ok());
+
+        // Clock in the future
+        assert_eq!(
+            obs.validate(90),
+            Err(FailureReason::InvalidObservationClock)
+        );
+        // Stale observation (now - observed_at > max_age = 10)
+        assert_eq!(obs.validate(115), Err(FailureReason::StaleObservation));
+
+        // Invalid budget alignment (not multiple of 4096)
+        let unaligned = obs.clone().with_resident_bytes(4000);
+        assert_eq!(
+            unaligned.validate(105),
+            Err(FailureReason::ImpossibleBudget)
+        );
+    }
+
+    #[test]
+    fn test_preflight_model_lifecycle_and_refusals() {
+        let mut model = PreflightModel::new();
+        assert_eq!(model.state(), PreflightState::HostUnavailable);
+        assert_eq!(model.observation_count(), 0);
+        assert_eq!(model.refusal_count(), 0);
+        assert!(model.latest_observation().is_none());
+
+        let obs = observation(1, b"obs-1", ObservationEventKind::Healthy);
+        let dec = model.observe(obs.clone(), 100);
+        assert_eq!(dec.state, PreflightState::Observing);
+        assert_eq!(model.observation_count(), 1);
+
+        // Idempotent re-observation
+        let dec2 = model.observe(obs, 100);
+        assert_eq!(dec2.action, PreflightAction::Idempotent);
+        assert_eq!(model.observation_count(), 1);
+
+        // Refuse product transport & guest claim
+        let dec_prod = model.refuse_product_scope();
+        assert_eq!(dec_prod.state, PreflightState::Refused);
+        assert_eq!(model.refusal_count(), 1);
+
+        let dec_claim = model.refuse_guest_claim();
+        assert_eq!(dec_claim.state, PreflightState::Refused);
+        assert_eq!(model.refusal_count(), 2);
+    }
+
+    #[test]
+    fn test_lease_machine_full_happy_path_and_io_counters() {
+        let mut machine = LeaseMachine::new();
+        assert_eq!(machine.lease_state(), LeaseState::Absent);
+        assert!(!machine.has_host_grant());
+
+        // Step 1: Observe host
+        let obs = observation(1, b"obs-1", ObservationEventKind::Healthy);
+        machine.observe(obs, 100);
+        assert_eq!(machine.preflight_state(), PreflightState::Observing);
+
+        // Step 2: Receive grant
+        let g = grant(1, b"grant-1");
+        let ack = match machine.receive_grant(g, 100) {
+            ProtocolDecision::GrantAck(ack) => ack,
+            other => panic!("expected GrantAck, got {other:?}"),
+        };
+        assert_eq!(machine.lease_state(), LeaseState::Negotiating(1));
+        assert!(machine.has_host_grant());
+
+        // Step 3: Accept grant ACK
+        let accepted = machine.host_accepts_grant_ack(ack);
+        assert_eq!(accepted, ProtocolDecision::Accepted(LeaseState::Granted(1)));
+        assert_eq!(machine.lease_state(), LeaseState::Granted(1));
+        assert_eq!(
+            machine.active_lease_id(),
+            Some(&LeaseId::from(opaque(b"lease-1")))
+        );
+        assert_eq!(machine.lease_capacity_bytes(), Some(1024 * 1024));
+
+        // Step 4: I/O operations
+        assert_eq!(machine.in_flight(), 0);
+        assert!(machine.begin_io().is_ok());
+        assert_eq!(machine.in_flight(), 1);
+        assert!(machine.set_in_flight(5).is_ok());
+        assert_eq!(machine.in_flight(), 5);
+        assert!(machine.complete_io().is_ok());
+        assert_eq!(machine.in_flight(), 4);
+
+        assert!(machine.set_callbacks_pending(2).is_ok());
+        assert_eq!(machine.callbacks_pending(), 2);
+
+        machine.mark_unknown_in_flight();
+
+        // Step 5: Receive Revoke
+        let rev = Revoke::host(
+            LeaseId::from(opaque(b"lease-1")),
+            1,
+            EventId::from(opaque(b"revoke-1")),
+            300,
+        );
+        let rev_dec = machine.receive_revoke(rev);
+        assert_eq!(rev_dec, ProtocolDecision::BeginDrain);
+        assert_eq!(machine.lease_state(), LeaseState::Quiescing(1));
+
+        // Step 6: Clear I/O, callbacks, and scrub guest data
+        assert!(machine.set_in_flight(0).is_ok());
+        assert!(machine.set_callbacks_pending(0).is_ok());
+        // Reset unknown_in_flight state by restarting or clearing in test
+        let mut clean_machine = LeaseMachine::new();
+        clean_machine.observe(observation(1, b"obs-1", ObservationEventKind::Healthy), 100);
+        let ack2 = match clean_machine.apply_host_event(HostEvent::Grant(grant(1, b"grant-1")), 100)
+        {
+            ProtocolDecision::GrantAck(ack) => ack,
+            other => panic!("expected GrantAck, got {other:?}"),
+        };
+        clean_machine.accept_grant_ack(ack2);
+        let rev2 = Revoke::host(
+            LeaseId::from(opaque(b"lease-1")),
+            1,
+            EventId::from(opaque(b"revoke-1")),
+            300,
+        );
+        clean_machine.receive_revoke(rev2);
+        assert!(!clean_machine.scrubbed());
+        assert_eq!(
+            clean_machine.scrub_guest_data(ScrubResult::Succeeded),
+            ProtocolDecision::Noop
+        );
+        assert!(clean_machine.scrubbed());
+
+        // Step 7: Drain
+        let drain_dec = clean_machine.drain(200);
+        assert!(matches!(drain_dec, ProtocolDecision::DrainAck(_)));
+        assert_eq!(clean_machine.lease_state(), LeaseState::Drained(1));
+        assert!(clean_machine.sent_drain_ack());
+
+        // Step 8: Confirm Revoke
+        let completion = RevokeCompletion::new(
+            LeaseId::from(opaque(b"lease-1")),
+            1,
+            EventId::from(opaque(b"revoke-1")),
+        );
+        assert_eq!(
+            clean_machine.confirm_revoke(completion),
+            ProtocolDecision::Revoked
+        );
+        assert_eq!(clean_machine.lease_state(), LeaseState::Revoked);
+
+        // Step 9: Cleanup
+        clean_machine.complete_cleanup();
+        assert_eq!(clean_machine.lease_state(), LeaseState::Absent);
+    }
+
+    #[test]
+    fn test_lease_machine_fail_closed_and_restart() {
+        let mut machine = LeaseMachine::new();
+        let obs = observation(1, b"obs-1", ObservationEventKind::Healthy);
+        machine.observe(obs, 100);
+
+        let g = grant(1, b"grant-1");
+        let ack = match machine.receive_grant(g, 100) {
+            ProtocolDecision::GrantAck(ack) => ack,
+            other => panic!("expected GrantAck, got {other:?}"),
+        };
+        machine.accept_grant_ack(ack);
+
+        // Fail-closed on reset
+        let fail_dec = machine.fail_closed(LifecycleEvent::Reset);
+        assert!(matches!(fail_dec, ProtocolDecision::FailAck(_)));
+        assert_eq!(
+            machine.lease_state(),
+            LeaseState::Failed(FailureReason::Reset)
+        );
+
+        // Restart machine
+        machine.restart();
+        assert_eq!(machine.lease_state(), LeaseState::Absent);
+        assert_eq!(machine.preflight_state(), PreflightState::HostUnavailable);
+    }
+}
