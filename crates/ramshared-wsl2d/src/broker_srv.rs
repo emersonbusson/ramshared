@@ -968,7 +968,7 @@ fn session_reader(sock: TcpStream, sid: usize, io_tx: &Sender<IoEvent>) {
     let _ = io_tx.send(IoEvent::Core(CoreEvent::Disconnected(sid)));
 }
 
-#[allow(clippy::too_many_arguments)] // casca de IO do core: canais + tick + shutdown + sink
+#[allow(clippy::too_many_arguments)] // core IO shell: channels + tick + shutdown + sink
 fn core_loop(
     mut core: BrokerCore,
     io_rx: &Receiver<IoEvent>,
@@ -981,7 +981,7 @@ fn core_loop(
     let mut sessions: HashMap<usize, SyncSender<Msg>> = HashMap::new();
     // Wall-clock deadline for the next Tick. CRITICAL: the Arbiter's Tick MUST NOT be starved
     // by messages. Pure `recv_timeout(tick)` never expires under normal `Psi` flow
-    // (~1/s per tenant) → the arbiter would never run `AssignFree`/rebalance. Here the wait shrinks
+    // (~1/s per tenant) -> the arbiter would never run `AssignFree`/rebalance. Here the wait shrinks
     // as messages arrive, and the Tick fires when the deadline passes, regardless of
     // message rate. (Bug caught in e2e cross-host civm; the QEMU drill passed by luck of timing.)
     let mut next_tick = Instant::now() + tick;
