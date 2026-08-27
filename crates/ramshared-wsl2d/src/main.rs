@@ -1665,11 +1665,26 @@ struct AppArgs {
     telemetry_jsonl: Option<std::path::PathBuf>,
 }
 
-impl AppArgs {
-    /// Parses an explicit argv vector before any backend selection or side effect.
-    /// Keeping this boundary injectable makes all public refusals testable without
-    /// loading CUDA/Vulkan or touching swap, NBD, or ublk state (memory-broker DT-46).
-    fn parse_from(args: &[String]) -> Result<Self, Box<dyn std::error::Error>> {
+struct RawAppArgs {
+    size: u64,
+    size_explicit: bool,
+    origin: Option<String>,
+    sock: String,
+    force: bool,
+    nbd_dev: String,
+    transport: Transport,
+    queue_depth: u16,
+    backend: BackendKind,
+    slices: u16,
+    slice_mb: u64,
+    listen_nbd: Option<String>,
+    arbiter: Option<String>,
+    advertise_nbd: Option<String>,
+    telemetry_jsonl: Option<String>,
+}
+
+impl RawAppArgs {
+    fn parse(args: &[String]) -> Result<Self, Box<dyn std::error::Error>> {
         let mut size = DEFAULT_SIZE;
         let mut size_explicit = false;
         let mut origin = None;
@@ -1797,67 +1812,10 @@ impl AppArgs {
             }
             i += 1;
         }
-        if origin.is_some() && !size_explicit {
-            size = DEFAULT_ORIGIN_SIZE;
-        }
-        size -= size % BLOCK_SIZE as u64; // align to the block size
-        if origin.is_some() && !(MIN_ORIGIN_LOGICAL_SIZE..=MAX_ORIGIN_LOGICAL_SIZE).contains(&size)
-        {
-            return Err("origin-cache logical size must be between 1024 and 24576 MiB".into());
-        }
-        if let Some(path) = origin.as_deref()
-            && path != ORIGIN_MANIFEST_PATH
-        {
-            return Err(format!(
-                "--origin-manifest must use the sealed {ORIGIN_MANIFEST_PATH} path"
-            )
-            .into());
-        }
-
-        if let Err(e) = validate_slice_flags(slices, slice_mb, matches!(transport, Transport::Ublk))
-        {
-            return Err(e.into());
-        }
-
-        let listen_nbd_addr = listen_nbd
-            .as_deref()
-            .map(parse_private_listen)
-            .transpose()?;
-        let arbiter_addr = arbiter.as_deref().map(parse_private_listen).transpose()?;
-        let advertise_nbd_addr = advertise_nbd
-            .as_deref()
-            .map(parse_private_listen)
-            .transpose()?;
-
-        if advertise_nbd_addr.is_some() && listen_nbd_addr.is_none() {
-            return Err(
-                "--advertise-nbd requires --listen-nbd (cannot advertise an unserved endpoint)"
-                    .into(),
-            );
-        }
-
-        if slices > 0 && arbiter_addr.is_none() {
-            return Err("--slices requires --arbiter-listen IP:PORT (broker control point)".into());
-        }
-        if slices == 0 && (arbiter_addr.is_some() || listen_nbd_addr.is_some()) {
-            return Err("--arbiter-listen/--listen-nbd require --slices N (N > 0)".into());
-        }
-
-        let advertise_tcp = advertise_nbd_addr
-            .or(listen_nbd_addr)
-            .map(|a| (a.ip().to_string(), a.port()));
-        let telemetry_jsonl = telemetry_jsonl.map(std::path::PathBuf::from);
-
-        let slice_bytes = if slices > 0 {
-            slice_mb
-                .checked_mul(1024 * 1024)
-                .ok_or("--slice-mb: MiB value overflow")?
-        } else {
-            0
-        };
 
         Ok(Self {
             size,
+            size_explicit,
             origin,
             sock,
             force,
@@ -1866,10 +1824,129 @@ impl AppArgs {
             queue_depth,
             backend,
             slices,
+            slice_mb,
+            listen_nbd,
+            arbiter,
+            advertise_nbd,
+            telemetry_jsonl,
+        })
+    }
+}
+
+fn validate_origin_and_size(
+    raw_size: u64,
+    size_explicit: bool,
+    origin: Option<&str>,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let mut size = if origin.is_some() && !size_explicit {
+        DEFAULT_ORIGIN_SIZE
+    } else {
+        raw_size
+    };
+    size -= size % BLOCK_SIZE as u64; // align to the block size
+    if origin.is_some() && !(MIN_ORIGIN_LOGICAL_SIZE..=MAX_ORIGIN_LOGICAL_SIZE).contains(&size) {
+        return Err("origin-cache logical size must be between 1024 and 24576 MiB".into());
+    }
+    if let Some(path) = origin
+        && path != ORIGIN_MANIFEST_PATH
+    {
+        return Err(
+            format!("--origin-manifest must use the sealed {ORIGIN_MANIFEST_PATH} path").into(),
+        );
+    }
+    Ok(size)
+}
+
+struct ParsedNetworkConfig {
+    listen_nbd_addr: Option<std::net::SocketAddr>,
+    arbiter_addr: Option<std::net::SocketAddr>,
+    advertise_tcp: Option<(String, u16)>,
+}
+
+fn validate_network_and_slices(
+    raw: &RawAppArgs,
+) -> Result<ParsedNetworkConfig, Box<dyn std::error::Error>> {
+    if let Err(e) = validate_slice_flags(
+        raw.slices,
+        raw.slice_mb,
+        matches!(raw.transport, Transport::Ublk),
+    ) {
+        return Err(e.into());
+    }
+
+    let listen_nbd_addr = raw
+        .listen_nbd
+        .as_deref()
+        .map(parse_private_listen)
+        .transpose()?;
+    let arbiter_addr = raw
+        .arbiter
+        .as_deref()
+        .map(parse_private_listen)
+        .transpose()?;
+    let advertise_nbd_addr = raw
+        .advertise_nbd
+        .as_deref()
+        .map(parse_private_listen)
+        .transpose()?;
+
+    if advertise_nbd_addr.is_some() && listen_nbd_addr.is_none() {
+        return Err(
+            "--advertise-nbd requires --listen-nbd (cannot advertise an unserved endpoint)".into(),
+        );
+    }
+
+    if raw.slices > 0 && arbiter_addr.is_none() {
+        return Err("--slices requires --arbiter-listen IP:PORT (broker control point)".into());
+    }
+    if raw.slices == 0 && (arbiter_addr.is_some() || listen_nbd_addr.is_some()) {
+        return Err("--arbiter-listen/--listen-nbd require --slices N (N > 0)".into());
+    }
+
+    let advertise_tcp = advertise_nbd_addr
+        .or(listen_nbd_addr)
+        .map(|a| (a.ip().to_string(), a.port()));
+
+    Ok(ParsedNetworkConfig {
+        listen_nbd_addr,
+        arbiter_addr,
+        advertise_tcp,
+    })
+}
+
+impl AppArgs {
+    /// Parses an explicit argv vector before any backend selection or side effect.
+    /// Keeping this boundary injectable makes all public refusals testable without
+    /// loading CUDA/Vulkan or touching swap, NBD, or ublk state (memory-broker DT-46).
+    fn parse_from(args: &[String]) -> Result<Self, Box<dyn std::error::Error>> {
+        let raw = RawAppArgs::parse(args)?;
+        let size = validate_origin_and_size(raw.size, raw.size_explicit, raw.origin.as_deref())?;
+        let net = validate_network_and_slices(&raw)?;
+
+        let telemetry_jsonl = raw.telemetry_jsonl.map(std::path::PathBuf::from);
+
+        let slice_bytes = if raw.slices > 0 {
+            raw.slice_mb
+                .checked_mul(1024 * 1024)
+                .ok_or("--slice-mb: MiB value overflow")?
+        } else {
+            0
+        };
+
+        Ok(Self {
+            size,
+            origin: raw.origin,
+            sock: raw.sock,
+            force: raw.force,
+            nbd_dev: raw.nbd_dev,
+            transport: raw.transport,
+            queue_depth: raw.queue_depth,
+            backend: raw.backend,
+            slices: raw.slices,
             slice_bytes,
-            listen_nbd_addr,
-            arbiter_addr,
-            advertise_tcp,
+            listen_nbd_addr: net.listen_nbd_addr,
+            arbiter_addr: net.arbiter_addr,
+            advertise_tcp: net.advertise_tcp,
             telemetry_jsonl,
         })
     }
