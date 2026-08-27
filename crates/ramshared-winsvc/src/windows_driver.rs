@@ -703,7 +703,7 @@ mod tests {
             Err(IoctlError::Invalid(msg)) if msg == "block_size"
         ));
         assert!(matches!(
-            WindowsMappedQueue::try_new(1024, 1024 * 1024, 512),
+            WindowsMappedQueue::try_new(256, 65536, 512),
             Err(IoctlError::Invalid(msg)) if msg == "data area > 4 MiB"
         ));
     }
