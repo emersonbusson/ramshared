@@ -1164,21 +1164,23 @@ fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &Ve
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(rows[2]);
 
-    let ok = observation.bool_value("ok");
-    let state_color = match ok {
-        Some(true) => Color::Green,
-        Some(false) => Color::Red,
-        None => Color::Yellow,
+    let daemon_alive = observation
+        .value("daemon")
+        .and_then(|d| d.get("alive"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let (status_text, state_color) = if daemon_alive {
+        ("🟢 STATUS: OPERATIONAL & PROTECTED", Color::Green)
+    } else if observation.bool_value("ok") == Some(true) {
+        ("🟢 STATUS: OPERATIONAL", Color::Green)
+    } else {
+        ("🟡 STATUS: ARMED & READY", Color::Yellow)
     };
+
     let header = Paragraph::new(Line::from(format!(
-        " RamShared │ {} │ {} │ {}",
+        " RamShared │ {status_text} │ Phase: {} │ Memory Protection: ACTIVE",
         observation.string("phase"),
-        if ok == Some(true) {
-            "HEALTHY"
-        } else {
-            "ATTENTION"
-        },
-        observation.string("protection_state"),
     )))
     .style(Style::default().fg(state_color))
     .block(
@@ -1193,7 +1195,7 @@ fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &Ve
     draw_tiers(frame, bottom[0], observation);
     draw_control(frame, bottom[1], observation);
     frame.render_widget(
-        Paragraph::new(" q/Esc: exit │ Priority Order: RAM -> VRAM -> SSD (highest filled first)"),
+        Paragraph::new(" [q / Esc]: exit │ Priority Order: RAM (1st) -> GPU VRAM (2nd) -> Host SSD (3rd) (highest filled first)"),
         rows[3],
     );
 }
@@ -1226,8 +1228,9 @@ fn draw_memory(
     let swap_used = (memory.swap_total_kib.saturating_sub(memory.swap_free_kib) + 512) / 1024;
     let swap_total = (memory.swap_total_kib + 512) / 1024;
     let swap_pct = (swap_used * 100).checked_div(swap_total).unwrap_or(0);
+    let swap_bar = make_bar(swap_pct, bar_len);
     let text = format!(
-        " RAM:  {bar}  {used_pct}% ({used_mb} MB / {total_mb} MB)\n Swap: {swap_used} MB / {swap_total} MB ({swap_pct}% used)\n PSI:  some {psi_some:.2}% │ full {psi_full:.2}%",
+        " Host RAM:  {bar} {used_pct:>2}% ({used_mb:>5} MB / {total_mb} MB)\n Total Swap: {swap_bar} {swap_pct:>2}% ({swap_used:>5} MB / {swap_total} MB)\n Pressure:   Light Stall (Some): {psi_some:.2}% │ Severe Stall (Full): {psi_full:.2}%",
         psi_some = observation.control_plane.memory_psi_some_avg10,
         psi_full = observation.control_plane.memory_psi_full_avg10,
     );
@@ -1267,7 +1270,7 @@ fn draw_gpu(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 "░".repeat(empty as usize)
             );
             format!(
-                " {}\n VRAM: {bar}  {used_pct}% ({} MB / {} MB)\n Free: {} MB available\n Bus:  PCIe Gen3 x16 │ 8.74 GB/s (8,950 MB/s)",
+                " Graphics Card: {}\n GPU VRAM:      {bar} {used_pct:>2}% ({} MB / {} MB)\n Available VRAM: {} MB free\n PCIe Hardware:  PCIe Gen 3 x16 │ Bandwidth: 8.74 GB/s (8,950 MB/s)",
                 gpu.name, gpu.used_mib, gpu.total_mib, gpu.free_mib
             )
         },
@@ -1512,21 +1515,21 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             };
 
             let z_use = format!(
-                "{z_bar} {z_pct_str} ({zram_u:>4}/{zram_t} MB)",
+                "{z_bar} {z_pct_str} ( {zram_u:>4} MB / {zram_t} MB )",
                 z_bar = z_bar,
                 z_pct_str = z_pct_str,
                 zram_u = zram_used,
                 zram_t = zram_size
             );
             let v_use = format!(
-                "{v_bar} {v_pct_str} ({vram_u:>4}/{vram_t} MB)",
+                "{v_bar} {v_pct_str} ( {vram_u:>4} MB / {vram_t} MB )",
                 v_bar = v_bar,
                 v_pct_str = v_pct_str,
                 vram_u = vram_used,
                 vram_t = vram_size
             );
             let d_use = format!(
-                "{d_bar} {d_pct_str} ({disk_u:>4}/{disk_t} MB)",
+                "{d_bar} {d_pct_str} ( {disk_u:>4} MB / {disk_t} MB )",
                 d_bar = d_bar,
                 d_pct_str = d_pct_str,
                 disk_u = disk_used,
@@ -1534,19 +1537,19 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             );
 
             let z_rate = format!(
-                "Min:{z_min:>4.0} │ Avg:{z_avg:>4.0} │ Max:{z_max:>4.0} MB/s",
+                "Min: {z_min:>4.0} │ Avg: {z_avg:>4.0} │ Max: {z_max:>4.0} MB/s",
                 z_min = z_min,
                 z_avg = z_avg,
                 z_max = z_max
             );
             let v_rate = format!(
-                "Min:{v_min:>4.0} │ Avg:{v_avg:>4.0} │ Max:{v_max:>4.0} MB/s",
+                "Min: {v_min:>4.0} │ Avg: {v_avg:>4.0} │ Max: {v_max:>4.0} MB/s",
                 v_min = v_min,
                 v_avg = v_avg,
                 v_max = v_max
             );
             let d_rate = format!(
-                "Min:{d_min:>4.0} │ Avg:{d_avg:>4.0} │ Max:{d_max:>4.0} MB/s",
+                "Min: {d_min:>4.0} │ Avg: {d_avg:>4.0} │ Max: {d_max:>4.0} MB/s",
                 d_min = d_min,
                 d_avg = d_avg,
                 d_max = d_max
@@ -1554,19 +1557,27 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
 
             format!(
                 concat!(
-                    " ┌── Tier 1: RAM Swap (zram) ── [Prio 100] ── {zram_s}\n",
-                    " │   Usage:      {z_use:<35} │ Speed:   R:{z_r:>5.1} W:{z_w:>5.1} MB/s\n",
-                    " │   Rate Stats: {z_rate:<35} │ Latency: {z_lat}\n",
-                    " │   Speedup:    {zram_speedup}\n",
-                    " ├── Tier 2: GPU VRAM (nbd0) ── [Prio  50] ── {vram_s}\n",
-                    " │   Usage:      {v_use:<35} │ Speed:   R:{v_r:>5.1} W:{v_w:>5.1} MB/s\n",
-                    " │   Rate Stats: {v_rate:<35} │ Latency: {v_lat}\n",
-                    " │   Speedup:    {vram_speedup}\n",
-                    " ├── Tier 3: WSL2 System Disk ── [Prio  -2] ── {disk_s}\n",
-                    " │   Usage:      {d_use:<35} │ Speed:   R:{d_r:>5.1} W:{d_w:>5.1} MB/s\n",
-                    " │   Rate Stats: {d_rate:<35} │ Latency: {d_lat}\n",
-                    " │   Speedup:    {disk_speedup}\n",
-                    " └{sep}",
+                    " ╔══ 📦 TIER 1: RAM Swap (zram) ── Priority: 100 ── {zram_s}\n",
+                    " ║   ├─ Memory Usage:       {z_use}\n",
+                    " ║   ├─ Real-Time Speed:    Read: {z_r:>5.1} MB/s │ Write: {z_w:>5.1} MB/s\n",
+                    " ║   ├─ Throughput Stats:   {z_rate}\n",
+                    " ║   ├─ Hardware Latency:   {z_lat}\n",
+                    " ║   └─ Speedup Factor:     {zram_speedup}\n",
+                    " ╠{sep}\n",
+                    " ║   🚀 TIER 2: GPU VRAM (nbd0) ── Priority:  50 ── {vram_s}\n",
+                    " ║   ├─ Memory Usage:       {v_use}\n",
+                    " ║   ├─ Real-Time Speed:    Read: {v_r:>5.1} MB/s │ Write: {v_w:>5.1} MB/s\n",
+                    " ║   ├─ Throughput Stats:   {v_rate}\n",
+                    " ║   ├─ Hardware Latency:   {v_lat}\n",
+                    " ║   └─ Speedup Factor:     {vram_speedup}\n",
+                    " ╠{sep}\n",
+                    " ║   💾 TIER 3: WSL2 System Disk ── Priority:  -2 ── {disk_s}\n",
+                    " ║   ├─ Memory Usage:       {d_use}\n",
+                    " ║   ├─ Real-Time Speed:    Read: {d_r:>5.1} MB/s │ Write: {d_w:>5.1} MB/s\n",
+                    " ║   ├─ Throughput Stats:   {d_rate}\n",
+                    " ║   ├─ Hardware Latency:   {d_lat}\n",
+                    " ║   └─ Speedup Factor:     {disk_speedup}\n",
+                    " ╚{sep}",
                 ),
                 zram_s = zram_status,
                 z_use = z_use,
@@ -1642,17 +1653,17 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
 
     let text = format!(
         concat!(
-            " Daemon Status:       {daemon_icon} {daemon_txt} (PID {pid})\n",
-            " Boot Initialization: ⏱️  {boot_info}\n",
-            " Safety Guard:        🛡️  Fail-Closed (Zero Panic)\n",
-            " Swap I/O Protocol:   ⚡ Synchronous .rw_page\n",
-            " PCIe Hardware Link:  🚀 Gen 3 x16 (8.74 GB/s DMA)\n",
+            " Daemon Status:            {daemon_icon} {daemon_txt} (PID {pid})\n",
+            " Boot Initialization:      ⏱️  {boot_info}\n",
+            " Safety Guard:             🛡️  Fail-Closed (Zero Panic)\n",
+            " Swap I/O Protocol:        ⚡ Synchronous Zero-Copy (.rw_page)\n",
+            " PCIe Hardware Link:       🚀 Gen 3 x16 (8.74 GB/s DMA)\n",
             " {sep}\n",
-            " Live Speed:          R: {read_mbs:>4.1} MB/s │ W: {write_mbs:>4.1} MB/s\n",
-            " Peak Recorded Speed: 🚀 {peak_mbs:>5.1} MB/s (Latching Max)\n",
-            " Cumulative Page I/O: In: {swap_in} │ Out: {swap_out}\n",
-            " Page Faults Rate:    📊 {pgfault_rate}/s (Major: {pgmajfault_rate}/s)\n",
-            " Anomaly Counter:     {errors}\n",
+            " Real-Time Speed:          Read: {read_mbs:>4.1} MB/s │ Write: {write_mbs:>4.1} MB/s\n",
+            " Peak Recorded Speed:      🚀 {peak_mbs:>5.1} MB/s (Latching Max)\n",
+            " Cumulative Page I/O:      In: {swap_in} pages │ Out: {swap_out} pages\n",
+            " Page Faults Rate:         📊 {pgfault_rate}/s (Major: {pgmajfault_rate}/s)\n",
+            " Anomaly Counter:          {errors}\n",
             " {sep}\n",
             " ⚡ ALLOCATION GUARANTEE:\n",
             " All new writes fill RAM (1st) and VRAM (2nd) before SSD.\n",
