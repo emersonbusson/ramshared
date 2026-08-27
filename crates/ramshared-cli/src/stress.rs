@@ -482,6 +482,31 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             opts.min_ram_mb
         };
 
+        let mut avail_mb = avail_mb;
+        if avail_mb <= hard_floor && opts.tier3_target_pct.is_some() {
+            // Touch existing chunks to encourage kswapd to flush cold pages to swap
+            for _ in 0..4 {
+                if let Ok(mut guard) = chunks.lock()
+                    && !guard.is_empty()
+                {
+                    let len = guard.len();
+                    for step in 0..4 {
+                        let idx = (step * 7) % len;
+                        let target = &mut guard[idx];
+                        for offset in (0..target.len()).step_by(4096) {
+                            target[offset] = target[offset].wrapping_add(1);
+                        }
+                    }
+                }
+                thread::sleep(Duration::from_millis(150));
+                let (_, new_avail) = read_mem_info();
+                avail_mb = new_avail;
+                if avail_mb > hard_floor + 50 {
+                    break;
+                }
+            }
+        }
+
         if avail_mb <= hard_floor {
             if !opts.json {
                 println!(
