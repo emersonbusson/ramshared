@@ -902,19 +902,18 @@ mod windows_svc {
             root.join(&manifest.artifact(ArtifactRole::WinsvcConfig)?.relative_path),
         )?)?;
         let letter = config.volume_letter.to_ascii_uppercase();
-        let script = format!(
-            concat!(
-                "$ErrorActionPreference='Stop';",
-                "$d=@(Get-CimInstance Win32_DiskDrive|?{{",
-                "$_.Model -match 'RAMSHARE|VRAMDISK' -or $_.Caption -match 'RAMSHARE|VRAMDISK'}});",
-                "$p=@(Get-CimInstance Win32_PageFileUsage|?{{",
-                "$_.Name -match '^{letter}:\\\\'}});",
-                "Write-Output ($d.Count.ToString()+'|'+$p.Count.ToString())"
-            ),
-            letter = letter
+        let script = concat!(
+            "$ErrorActionPreference='Stop';",
+            "$letter=$env:RAMSHARED_LETTER;",
+            "$d=@(Get-CimInstance Win32_DiskDrive|?{",
+            "$_.Model -match 'RAMSHARE|VRAMDISK' -or $_.Caption -match 'RAMSHARE|VRAMDISK'});",
+            "$p=@(Get-CimInstance Win32_PageFileUsage|?{",
+            "$_.Name -match ('^'+[regex]::Escape($letter)+':\\\\')});",
+            "Write-Output ($d.Count.ToString()+'|'+$p.Count.ToString())"
         );
         let mut child = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .args(["-NoProfile", "-NonInteractive", "-Command", script])
+            .env("RAMSHARED_LETTER", &letter.to_string())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()?;
