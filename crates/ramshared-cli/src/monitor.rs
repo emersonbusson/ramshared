@@ -1321,9 +1321,9 @@ fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
         }
         _ => {
             if io.max_mbs > 0.1 {
-                "🐢 Speedup: Min: 1.0x │ Avg: 1.0x │ Max: 1.0x (Disk)".to_string()
+                "🐢 Speedup: Min: 1.0x │ Avg: 1.0x │ Max: 1.0x (WSL2 Disk)".to_string()
             } else {
-                "🐢 Speedup: 1x BASELINE (150 µs disk)".to_string()
+                "🐢 Speedup: 1x BASELINE (WSL2 System Disk / Host VHDX)".to_string()
             }
         }
     }
@@ -1435,26 +1435,25 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             let vram_speedup = compute_tier_speedup(&observation.control_plane.vram_io, 50);
             let disk_speedup = compute_tier_speedup(&observation.control_plane.disk_io, -2);
 
-            let z_lat = format_tier_latency(&observation.control_plane.zram_io, 0.04, 0.08, 0.15, "In-RAM");
+            let z_lat = format_tier_latency(&observation.control_plane.zram_io, 0.04, 0.08, 0.15, "In-RAM LZ4");
             let v_lat = format_tier_latency(&observation.control_plane.vram_io, 0.85, 1.45, 3.20, "PCIe DMA");
-            let d_lat = format_tier_latency(&observation.control_plane.disk_io, 85.0, 180.0, 1200.0, "NVMe");
+            let d_lat = format_tier_latency(&observation.control_plane.disk_io, 85.0, 180.0, 1200.0, "Host VHDX");
 
             format!(
                 concat!(
-                    " 1. RAM Swap (zram) ── {zram_s} (Prio 100)\n",
-                    "    Usage: {zram_bar} {zram_pct:>2}% ({zram_u:>4}/{zram_t} MB) │ Speed: R:{z_r:>4.1} W:{z_w:>4.1} MB/s\n",
-                    "    Rate: Min:{z_min:>4.0} Avg:{z_avg:>4.0} Max:{z_max:>4.0} MB/s │ Latency: {z_lat}\n",
-                    "    {zram_speedup}\n",
-                    " {sep}\n",
-                    " 2. GPU VRAM (nbd0) ── {vram_s} (Prio  50)\n",
-                    "    Usage: {vram_bar} {vram_pct:>2}% ({vram_u:>4}/{vram_t} MB) │ Speed: R:{v_r:>4.1} W:{v_w:>4.1} MB/s\n",
-                    "    Rate: Min:{v_min:>4.0} Avg:{v_avg:>4.0} Max:{v_max:>4.0} MB/s │ Latency: {v_lat}\n",
-                    "    {vram_speedup}\n",
-                    " {sep}\n",
-                    " 3. SSD System ─────── {disk_s} (Prio  -2)\n",
-                    "    Usage: {disk_bar} {disk_pct:>2}% ({disk_u:>4}/{disk_t} MB) │ Speed: R:{d_r:>4.1} W:{d_w:>4.1} MB/s\n",
-                    "    Rate: Min:{d_min:>4.0} Avg:{d_avg:>4.0} Max:{d_max:>4.0} MB/s │ Latency: {d_lat}\n",
-                    "    {disk_speedup}",
+                    " ┌── Tier 1: RAM Swap (zram) ── [Prio 100] ── {zram_s}\n",
+                    " │   Usage:      {zram_bar} {zram_pct:>2}% ({zram_u:>4}/{zram_t} MB) │ Speed: R:{z_r:>4.1} W:{z_w:>4.1} MB/s\n",
+                    " │   Rate Stats: Min: {z_min:>4.0} │ Avg: {z_avg:>4.0} │ Max: {z_max:>4.0} MB/s │ Latency: {z_lat}\n",
+                    " │   Speedup:    {zram_speedup}\n",
+                    " ├── Tier 2: GPU VRAM (nbd0) ── [Prio  50] ── {vram_s}\n",
+                    " │   Usage:      {vram_bar} {vram_pct:>2}% ({vram_u:>4}/{vram_t} MB) │ Speed: R:{v_r:>4.1} W:{v_w:>4.1} MB/s\n",
+                    " │   Rate Stats: Min: {v_min:>4.0} │ Avg: {v_avg:>4.0} │ Max: {v_max:>4.0} MB/s │ Latency: {v_lat}\n",
+                    " │   Speedup:    {vram_speedup}\n",
+                    " ├── Tier 3: WSL2 System Disk ── [Prio  -2] ── {disk_s}\n",
+                    " │   Usage:      {disk_bar} {disk_pct:>2}% ({disk_u:>4}/{disk_t} MB) │ Speed: R:{d_r:>4.1} W:{d_w:>4.1} MB/s\n",
+                    " │   Rate Stats: Min: {d_min:>4.0} │ Avg: {d_avg:>4.0} │ Max: {d_max:>4.0} MB/s │ Latency: {d_lat}\n",
+                    " │   Speedup:    {disk_speedup}\n",
+                    " └{sep}",
                 ),
                 zram_s = zram_status,
                 zram_speedup = zram_speedup,
@@ -2009,7 +2008,7 @@ mod tests {
         );
         assert_eq!(
             compute_tier_speedup(&idle_io, -2),
-            "🐢 Speedup: 1x BASELINE (150 µs disk)"
+            "🐢 Speedup: 1x BASELINE (WSL2 System Disk / Host VHDX)"
         );
 
         let zram_active = TierIoStats {
@@ -2143,8 +2142,8 @@ mod tests {
             max_lat_us: 0.15,
             ..TierIoStats::default()
         };
-        let lat_str = format_tier_latency(&io_sample, 0.04, 0.08, 0.15, "In-RAM");
-        assert_eq!(lat_str, "0.04..0.08..0.15µs (In-RAM)");
+        let lat_str = format_tier_latency(&io_sample, 0.04, 0.08, 0.15, "In-RAM LZ4");
+        assert_eq!(lat_str, "0.04..0.08..0.15µs (In-RAM LZ4)");
 
         let io_disk = TierIoStats {
             min_lat_us: 85.0,
@@ -2152,8 +2151,8 @@ mod tests {
             max_lat_us: 1200.0,
             ..TierIoStats::default()
         };
-        let disk_lat_str = format_tier_latency(&io_disk, 85.0, 180.0, 1200.0, "NVMe");
-        assert_eq!(disk_lat_str, "85..180..1.2ms (NVMe)");
+        let disk_lat_str = format_tier_latency(&io_disk, 85.0, 180.0, 1200.0, "Host VHDX");
+        assert_eq!(disk_lat_str, "85..180..1.2ms (Host VHDX)");
 
         let mem_txt = "MemTotal:       20480 kB\nMemAvailable:   16384 kB\nSwapTotal:       4096 kB\nSwapFree:        2048 kB\n";
         let mem = parse_meminfo(mem_txt);
