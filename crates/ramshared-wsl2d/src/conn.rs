@@ -738,11 +738,12 @@ mod tests {
 
         let worker = std::thread::spawn(move || {
             let mut served = 0u32;
+            let zero_reply = [0u8; SIMPLE_REPLY_LEN];
             for m in jobs_rx.iter() {
                 if let WMsg::Job(job) = m {
                     // worker never blocks: unbounded replica
                     let _ = job.reply.send(Reply {
-                        reply: [0u8; SIMPLE_REPLY_LEN],
+                        reply: zero_reply,
                         data: Vec::new(),
                         disconnect: false,
                     });
