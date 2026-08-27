@@ -168,6 +168,22 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
                 opts.cascade = true;
                 opts.battery = true;
             }
+            "--max-psi-full" => {
+                i += 1;
+                opts.max_psi_full = args
+                    .get(i)
+                    .ok_or_else(|| "--max-psi-full requires a value".to_string())?
+                    .parse()
+                    .map_err(|_| "invalid --max-psi-full value")?;
+            }
+            "--max-latency-ms" => {
+                i += 1;
+                opts.max_latency_ms = args
+                    .get(i)
+                    .ok_or_else(|| "--max-latency-ms requires a value".to_string())?
+                    .parse()
+                    .map_err(|_| "invalid --max-latency-ms value")?;
+            }
             "--log" => {
                 i += 1;
                 opts.telemetry_log = args
