@@ -800,7 +800,7 @@ impl BrokerCore {
         // Hysteresis (DT-12) for SUSTAINED flags (Unaccounted/StuckSlice/Partial): confirms after
         // `recon_streak` consecutive identical ticks. `Eviction` is a canary EVENT (DT-6;
         // `demotes_delta` is per-tick, lasts 1 tick) → immediate confirmation; otherwise hysteresis would swallow
-        // a transient eviction (1-2 DEMOTEs) and the eviction signal would never appear (bug C1).
+        // a transient eviction (1-2 DEMOTEs) and the eviction signal would never appear.
         if candidate == self.recon_flag {
             self.recon_count = self.recon_count.saturating_add(1);
         } else {
@@ -808,7 +808,7 @@ impl BrokerCore {
             self.recon_count = 1;
         }
         let confirmed = match candidate {
-            ReconcileFlag::Eviction => ReconcileFlag::Eviction, // evento: sem histerese
+            ReconcileFlag::Eviction => ReconcileFlag::Eviction, // event: no hysteresis
             ReconcileFlag::None => ReconcileFlag::None,
             sustained if self.recon_count >= self.recon_streak => sustained,
             _ => ReconcileFlag::None,
@@ -1481,8 +1481,8 @@ mod tests {
 
     #[test]
     fn eviction_confirmed_immediately_despite_streak() {
-        // C1: Eviction is an EVENT (canary) → confirms in 1 tick even with recon_streak=3 (production).
-        // Without the fix, the hysteresis would swallow transient eviction.
+        // Eviction is an EVENT (canary) → confirms in 1 tick even with recon_streak=3 (production).
+        // Without immediate confirmation, hysteresis would swallow transient eviction.
         let mut c = core_streak(1, 3);
         reg(&mut c, 10, "a");
         c.vram.total.store(1 << 30, Ordering::Relaxed); // has_vram (senão Partial)
