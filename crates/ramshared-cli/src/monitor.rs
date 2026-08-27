@@ -1251,36 +1251,48 @@ fn make_bar(pct: u64, len: u64) -> String {
     )
 }
 
-fn compute_tier_speedup(read_mbs: f64, write_mbs: f64, tier_prio: i32) -> String {
-    let active_mbs = read_mbs + write_mbs;
+fn compute_tier_speedup(io: &TierIoStats, tier_prio: i32) -> String {
+    let ssd_baseline = 20.0f64;
     match tier_prio {
         100 => {
-            if active_mbs > 0.1 {
-                let mult = (active_mbs / 20.0).clamp(1.0, 500.0);
-                format!("⚡ {:.0}x LIVE SPEEDUP ({:.1} MB/s)", mult, active_mbs)
+            if io.max_mbs > 0.1 {
+                let min_mult = (io.min_mbs / ssd_baseline).clamp(1.0, 500.0);
+                let avg_mult = (io.avg_mbs / ssd_baseline).clamp(1.0, 500.0);
+                let max_mult = (io.max_mbs / ssd_baseline).clamp(1.0, 500.0);
+                format!(
+                    "⚡ Speedup: Min: {:.0}x │ Avg: {:.0}x │ Max: {:.0}x",
+                    min_mult, avg_mult, max_mult
+                )
             } else {
-                "⚡ 250x CAPABLE (0.05 µs)".to_string()
+                "⚡ Speedup: 250x CAPABLE (0.05 µs)".to_string()
             }
         }
         50 => {
-            if active_mbs > 0.1 {
-                let mult = (active_mbs / 20.0).clamp(1.0, 150.0);
-                format!("🚀 {:.0}x LIVE SPEEDUP ({:.1} MB/s)", mult, active_mbs)
+            if io.max_mbs > 0.1 {
+                let min_mult = (io.min_mbs / ssd_baseline).clamp(1.0, 150.0);
+                let avg_mult = (io.avg_mbs / ssd_baseline).clamp(1.0, 150.0);
+                let max_mult = (io.max_mbs / ssd_baseline).clamp(1.0, 150.0);
+                format!(
+                    "🚀 Speedup: Min: {:.0}x │ Avg: {:.0}x │ Max: {:.0}x",
+                    min_mult, avg_mult, max_mult
+                )
             } else {
-                "🚀 20x-100x CAPABLE (8.74 GB/s)".to_string()
+                "🚀 Speedup: 20x-100x CAPABLE (8.74 GB/s)".to_string()
             }
         }
         _ => {
-            if active_mbs > 0.1 {
-                format!("🐢 1.0x DISK ACTIVE ({:.1} MB/s)", active_mbs)
+            if io.max_mbs > 0.1 {
+                "🐢 Speedup: Min: 1.0x │ Avg: 1.0x │ Max: 1.0x (Disk)".to_string()
             } else {
-                "🐢   1x BASELINE (150 µs disk)".to_string()
+                "🐢 Speedup: 1x BASELINE (150 µs disk)".to_string()
             }
         }
     }
 }
 
 fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
+    let width = area.width;
+    let bar_len = ((width as u64).saturating_sub(55)).clamp(6, 16);
     let tiers = observation
         .value("tiers")
         .and_then(Value::as_object)
@@ -1347,9 +1359,9 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             let d_avg = observation.control_plane.disk_io.avg_mbs;
             let d_max = observation.control_plane.disk_io.max_mbs;
 
-            let zram_speedup = compute_tier_speedup(z_r, z_w, 100);
-            let vram_speedup = compute_tier_speedup(v_r, v_w, 50);
-            let disk_speedup = compute_tier_speedup(d_r, d_w, -2);
+            let zram_speedup = compute_tier_speedup(&observation.control_plane.zram_io, 100);
+            let vram_speedup = compute_tier_speedup(&observation.control_plane.vram_io, 50);
+            let disk_speedup = compute_tier_speedup(&observation.control_plane.disk_io, -2);
 
             format!(
                 concat!(
@@ -1369,7 +1381,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 ),
                 zram_s = zram_status,
                 zram_speedup = zram_speedup,
-                zram_bar = make_bar(zram_pct, 16),
+                zram_bar = make_bar(zram_pct, bar_len),
                 zram_pct = zram_pct,
                 zram_u = zram_used,
                 zram_t = zram_size,
@@ -1380,7 +1392,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 z_max = z_max,
                 vram_s = vram_status,
                 vram_speedup = vram_speedup,
-                vram_bar = make_bar(vram_pct, 16),
+                vram_bar = make_bar(vram_pct, bar_len),
                 vram_pct = vram_pct,
                 vram_u = vram_used,
                 vram_t = vram_size,
@@ -1391,7 +1403,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 v_max = v_max,
                 disk_s = disk_status,
                 disk_speedup = disk_speedup,
-                disk_bar = make_bar(disk_pct, 16),
+                disk_bar = make_bar(disk_pct, bar_len),
                 disk_pct = disk_pct,
                 disk_u = disk_used,
                 disk_t = disk_size,
@@ -1902,26 +1914,139 @@ mod tests {
 
     #[test]
     fn computes_dynamic_tier_speedup_values() {
+        let idle_io = TierIoStats::default();
         assert_eq!(
-            compute_tier_speedup(0.0, 0.0, 100),
-            "⚡ 250x CAPABLE (0.05 µs)"
+            compute_tier_speedup(&idle_io, 100),
+            "⚡ Speedup: 250x CAPABLE (0.05 µs)"
         );
         assert_eq!(
-            compute_tier_speedup(0.0, 0.0, 50),
-            "🚀 20x-100x CAPABLE (8.74 GB/s)"
+            compute_tier_speedup(&idle_io, 50),
+            "🚀 Speedup: 20x-100x CAPABLE (8.74 GB/s)"
         );
         assert_eq!(
-            compute_tier_speedup(0.0, 0.0, -2),
-            "🐢   1x BASELINE (150 µs disk)"
+            compute_tier_speedup(&idle_io, -2),
+            "🐢 Speedup: 1x BASELINE (150 µs disk)"
         );
 
-        let zram_active = compute_tier_speedup(100.0, 100.0, 100);
-        assert!(zram_active.contains("LIVE SPEEDUP") && zram_active.contains("200.0 MB/s"));
+        let zram_active = TierIoStats {
+            min_mbs: 100.0,
+            avg_mbs: 460.0,
+            max_mbs: 860.0,
+            ..TierIoStats::default()
+        };
+        let z_txt = compute_tier_speedup(&zram_active, 100);
+        assert!(
+            z_txt.contains("Min: 5x") && z_txt.contains("Avg: 23x") && z_txt.contains("Max: 43x")
+        );
 
-        let vram_active = compute_tier_speedup(250.0, 250.0, 50);
-        assert!(vram_active.contains("LIVE SPEEDUP") && vram_active.contains("500.0 MB/s"));
+        let vram_active = TierIoStats {
+            min_mbs: 40.0,
+            avg_mbs: 200.0,
+            max_mbs: 600.0,
+            ..TierIoStats::default()
+        };
+        let v_txt = compute_tier_speedup(&vram_active, 50);
+        assert!(
+            v_txt.contains("Min: 2x") && v_txt.contains("Avg: 10x") && v_txt.contains("Max: 30x")
+        );
 
-        let disk_active = compute_tier_speedup(10.0, 10.0, -2);
-        assert!(disk_active.contains("DISK ACTIVE") && disk_active.contains("20.0 MB/s"));
+        let disk_active = TierIoStats {
+            min_mbs: 15.0,
+            avg_mbs: 85.0,
+            max_mbs: 120.0,
+            ..TierIoStats::default()
+        };
+        let d_txt = compute_tier_speedup(&disk_active, -2);
+        assert!(d_txt.contains("Min: 1.0x"));
+    }
+
+    #[test]
+    fn dashboard_renders_cleanly_across_multiple_terminal_resolutions() {
+        let mut sample = observation(true, true);
+        sample.errors = vec!["gpu_dropped".to_string()];
+        sample.control_plane.boot_tier_latency_ms = Some(2890);
+        let history = VecDeque::from(vec![25, 30, 45, 60, 55]);
+        let resolutions = [(80, 24), (100, 30), (140, 40), (200, 50), (240, 60)];
+
+        for (w, h) in resolutions {
+            let backend = ratatui::backend::TestBackend::new(w, h);
+            let mut terminal = ratatui::Terminal::new(backend).unwrap();
+            terminal
+                .draw(|frame| draw_dashboard(frame, &sample, &history))
+                .unwrap();
+            let rendered = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(
+                rendered.contains("Host RAM") || rendered.contains("RAM"),
+                "Failed at {w}x{h}"
+            );
+            assert!(
+                rendered.contains("Memory Tiers") || rendered.contains("Swap"),
+                "Failed at {w}x{h}"
+            );
+        }
+    }
+
+    #[test]
+    fn edge_case_draw_and_pct_helpers() {
+        assert_eq!(memory_used_pct(&MemoryObservation::default()), 0);
+        assert_eq!(make_bar(0, 10), "[░░░░░░░░░░]");
+        assert_eq!(make_bar(100, 10), "[██████████]");
+
+        let mut sample_no_gpu = observation(false, false);
+        sample_no_gpu.gpu = None;
+        sample_no_gpu.status.remove("tiers");
+
+        let backend = ratatui::backend::TestBackend::new(120, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let history = VecDeque::new();
+        terminal
+            .draw(|frame| draw_dashboard(frame, &sample_no_gpu, &history))
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("GPU not detected"));
+        assert!(rendered.contains("Swap Tiers: not available"));
+    }
+
+    #[test]
+    fn parses_diskstats_and_startup_ms() {
+        let stats = " 252       0 zram0 10 0 200 0 20 0 400 0 0 0 0\n  43       0 nbd0 5 0 100 0 15 0 300 0 0 0 0\n   8      32 sdc 2 0 40 0 4 0 80 0 0 0 0\n";
+        let (tot_r, tot_w) = parse_swap_diskstats(stats);
+        assert_eq!(tot_r, (200 + 100 + 40) * 512);
+        assert_eq!(tot_w, (400 + 300 + 80) * 512);
+
+        let (z, v, d) = parse_per_tier_diskstats(stats);
+        assert_eq!(z.read_bytes, 200 * 512);
+        assert_eq!(z.write_bytes, 400 * 512);
+        assert_eq!(v.read_bytes, 100 * 512);
+        assert_eq!(v.write_bytes, 300 * 512);
+        assert_eq!(d.read_bytes, 40 * 512);
+        assert_eq!(d.write_bytes, 80 * 512);
+
+        let show_out = "InactiveExitTimestampMonotonic=1000000\nActiveEnterTimestampMonotonic=3890000\n";
+        assert_eq!(parse_unit_startup_ms(show_out), Some(2890));
+        assert_eq!(parse_unit_startup_ms(""), None);
+
+        assert_eq!(parse_uptime_seconds("1540.25 3080.50"), Some(1540));
+        assert_eq!(parse_uptime_seconds("invalid"), None);
+
+        assert_eq!(sanitize_label("my-app_1.0@daemon!", 10), "my-app_1.0");
+        assert_eq!(sanitize_cgroup("/system.slice/test.service", 20), "/system.slice/test.s");
+        let temp_empty = std::env::temp_dir().join(format!("test-scopes-{}", std::process::id()));
+        let _ = fs::create_dir_all(&temp_empty);
+        assert_eq!(count_scope_dirs(&temp_empty), 0);
+        assert_eq!(read_reservation_totals(&temp_empty), (0, 0));
+        let _ = fs::remove_dir_all(&temp_empty);
     }
 }
