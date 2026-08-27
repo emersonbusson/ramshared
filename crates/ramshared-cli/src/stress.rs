@@ -14,6 +14,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -75,7 +76,7 @@ pub struct TelemetryReading {
     pub classification: String,
 }
 
-#[derive(Clone, Debug, Default, serde::Serialize)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct StressReport {
     pub battery_mode: bool,
     pub cascade_mode: bool,
@@ -831,7 +832,96 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         println!("{}", "═".repeat(105));
     }
 
+    archive_and_compare_benchmark(&report);
+
     Ok(())
+}
+
+fn format_system_time(st: SystemTime) -> String {
+    let dur = st.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let days = dur / 86400;
+    let rem_sec = dur % 86400;
+    let hours = rem_sec / 3600;
+    let minutes = (rem_sec % 3600) / 60;
+    let seconds = rem_sec % 60;
+    let mut y = 1970;
+    let mut d = days;
+    loop {
+        let leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+        let days_in_year = if leap { 366 } else { 365 };
+        if d < days_in_year {
+            break;
+        }
+        d -= days_in_year;
+        y += 1;
+    }
+    let leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+    let days_in_months = [
+        31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
+    let mut m = 1;
+    for &dim in &days_in_months {
+        if d < dim {
+            break;
+        }
+        d -= dim;
+        m += 1;
+    }
+    let day = d + 1;
+    format!("{y:04}-{m:02}-{day:02}_{hours:02}-{minutes:02}-{seconds:02}")
+}
+
+fn archive_and_compare_benchmark(report: &StressReport) {
+    let history_dir = Path::new("docs/benchmarks/history");
+    let _ = fs::create_dir_all(history_dir);
+    let latest_path = history_dir.join("latest.json");
+    let timestamp_str = format_system_time(SystemTime::now());
+    let current_path = history_dir.join(format!("benchmark-{timestamp_str}.json"));
+
+    // Check if previous benchmark exists to print comparison diff
+    if let Ok(prev_content) = fs::read_to_string(&latest_path) {
+        if let Ok(prev) = serde_json::from_str::<StressReport>(&prev_content) {
+            println!("{}", "-".repeat(105));
+            println!(" 🔄 HISTORICAL BENCHMARK COMPARISON (Diff vs Previous Run):");
+            println!("  ┌─────────────────────────────────┬──────────────────┬──────────────────┬──────────────┐");
+            println!("  │ Benchmark Metric                │ Previous Run     │ Current Run      │ Comparison   │");
+            println!("  ├─────────────────────────────────┼──────────────────┼──────────────────┼──────────────┤");
+            println!(
+                "  │ 💾 Tier 3 SSD Storage Peak      │ {:>8} MB ({:>2}%) │ {:>8} MB ({:>2}%) │ {:>+10} MB │",
+                prev.tier3_ssd_mb, prev.tier3_ssd_pct,
+                report.tier3_ssd_mb, report.tier3_ssd_pct,
+                (report.tier3_ssd_mb as i64) - (prev.tier3_ssd_mb as i64)
+            );
+            println!(
+                "  │ 🟡 Tier 2 GPU VRAM Swap Peak    │ {:>8} MB ({:>2}%) │ {:>8} MB ({:>2}%) │ {:>+10} MB │",
+                prev.tier2_vram_mb, prev.tier2_vram_pct,
+                report.tier2_vram_mb, report.tier2_vram_pct,
+                (report.tier2_vram_mb as i64) - (prev.tier2_vram_mb as i64)
+            );
+            println!(
+                "  │ 🟢 Tier 1 ZRAM Swap Peak        │ {:>8} MB ({:>2}%) │ {:>8} MB ({:>2}%) │ {:>+10} MB │",
+                prev.tier1_zram_mb, prev.tier1_zram_pct,
+                report.tier1_zram_mb, report.tier1_zram_pct,
+                (report.tier1_zram_mb as i64) - (prev.tier1_zram_mb as i64)
+            );
+            println!(
+                "  │ 📦 Peak Total Swap Used         │ {:>13} MB │ {:>13} MB │ {:>+10} MB │",
+                prev.peak_swap_mb, report.peak_swap_mb,
+                (report.peak_swap_mb as i64) - (prev.peak_swap_mb as i64)
+            );
+            println!(
+                "  │ 🧹 Reclaim Speed (Return)       │ {:>10.2} GB/s │ {:>10.2} GB/s │ {:>+8.2} GB/s │",
+                prev.reclaim_speed_gbs, report.reclaim_speed_gbs,
+                report.reclaim_speed_gbs - prev.reclaim_speed_gbs
+            );
+            println!("  └─────────────────────────────────┴──────────────────┴──────────────────┴──────────────┘");
+        }
+    }
+
+    if let Ok(json_str) = serde_json::to_string_pretty(report) {
+        let _ = fs::write(&current_path, &json_str);
+        let _ = fs::write(&latest_path, &json_str);
+    }
 }
 
 #[cfg(test)]
