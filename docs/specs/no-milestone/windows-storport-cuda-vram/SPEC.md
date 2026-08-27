@@ -489,7 +489,7 @@ those shared sources as evidence without creating a second coverage owner.
 - [x] `cargo clippy -p ramshared-cuda -p ramshared-block -p ramshared-winsvc --all-targets -- -D warnings`
 - [x] `cargo test -p ramshared-cuda -p ramshared-block -p ramshared-winsvc`
 - [x] `cargo build -p ramshared-winsvc --target x86_64-pc-windows-msvc`
-- [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs,crates/ramshared-winsvc/src/host_safety.rs,crates/ramshared-winsvc/src/windows_driver.rs --min 80`
+- [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-winsvc --files crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs,crates/ramshared-winsvc/src/host_safety.rs --min 80`
   (also CUDA probe cover ≥80% when `crates/ramshared-cuda/src/probe.rs` is in the gate set)
 - [ ] If pure planning logic changes in `crates/ramshared-cuda/src/driver.rs`, include that file in a
   separate `ramshared-cuda` cover gate at >=80%; hardware-only lines remain live-E2E evidence.
