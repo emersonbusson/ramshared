@@ -110,6 +110,14 @@ impl WinDriveConfig {
 
     /// Validate invariants before provision (DT-2).
     pub fn validate(&self) -> Result<(), ConfigError> {
+        self.validate_block_size_and_size()?;
+        self.validate_queue_depth_and_io()?;
+        self.validate_paths_and_letter()?;
+        self.validate_service_parameters()?;
+        Ok(())
+    }
+
+    fn validate_block_size_and_size(&self) -> Result<(), ConfigError> {
         if self.block_size != 512 && self.block_size != 4096 {
             return Err(ConfigError::Invalid {
                 field: "block_size",
@@ -134,6 +142,10 @@ impl WinDriveConfig {
                 detail: "must be multiple of block_size".into(),
             });
         }
+        Ok(())
+    }
+
+    fn validate_queue_depth_and_io(&self) -> Result<(), ConfigError> {
         if self.queue_depth == 0
             || self.queue_depth > MAX_QUEUE_DEPTH
             || !self.queue_depth.is_power_of_two()
@@ -175,6 +187,10 @@ impl WinDriveConfig {
                 ),
             });
         }
+        Ok(())
+    }
+
+    fn validate_paths_and_letter(&self) -> Result<(), ConfigError> {
         if !is_absolute_path(&self.evidence_path) {
             return Err(ConfigError::Invalid {
                 field: "evidence_path",
@@ -204,6 +220,10 @@ impl WinDriveConfig {
                 });
             }
         }
+        Ok(())
+    }
+
+    fn validate_service_parameters(&self) -> Result<(), ConfigError> {
         if self.tenant.is_empty() {
             return Err(ConfigError::Invalid {
                 field: "tenant",
