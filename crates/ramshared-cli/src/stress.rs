@@ -485,12 +485,12 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let mut avail_mb = avail_mb;
         if avail_mb <= hard_floor && opts.tier3_target_pct.is_some() {
             // Touch existing chunks to encourage kswapd to flush cold pages to swap
-            for _ in 0..4 {
+            for _ in 0..12 {
                 if let Ok(mut guard) = chunks.lock()
                     && !guard.is_empty()
                 {
                     let len = guard.len();
-                    for step in 0..4 {
+                    for step in 0..8 {
                         let idx = (step * 7) % len;
                         let target = &mut guard[idx];
                         for offset in (0..target.len()).step_by(4096) {
@@ -498,7 +498,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                         }
                     }
                 }
-                thread::sleep(Duration::from_millis(150));
+                thread::sleep(Duration::from_millis(250));
                 let (_, new_avail) = read_mem_info();
                 avail_mb = new_avail;
                 if avail_mb > hard_floor + 50 {
