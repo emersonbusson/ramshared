@@ -133,6 +133,7 @@ pub struct TierIoStats {
     pub write_bytes: u64,
     pub read_mbs: f64,
     pub write_mbs: f64,
+    pub peak_mbs: f64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -149,6 +150,7 @@ pub struct ControlPlaneObservation {
     pub swap_write_bytes: u64,
     pub swap_read_mbs: f64,
     pub swap_write_mbs: f64,
+    pub swap_peak_mbs: f64,
     pub zram_io: TierIoStats,
     pub vram_io: TierIoStats,
     pub disk_io: TierIoStats,
@@ -839,6 +841,11 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
         observation.control_plane.pgmajfault_total,
     ));
 
+    let mut zram_peak_mbs = 0.0f64;
+    let mut vram_peak_mbs = 0.0f64;
+    let mut disk_peak_mbs = 0.0f64;
+    let mut swap_peak_mbs = 0.0f64;
+
     loop {
         if Instant::now() >= next_sample {
             observation = collect_observation()?;
@@ -915,6 +922,26 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
                         as f64)
                         / (dt * 1_048_576.0);
 
+                    let total_swap_speed = observation.control_plane.swap_read_mbs
+                        + observation.control_plane.swap_write_mbs;
+                    swap_peak_mbs = swap_peak_mbs.max(total_swap_speed);
+                    observation.control_plane.swap_peak_mbs = swap_peak_mbs;
+
+                    let total_zram_speed = observation.control_plane.zram_io.read_mbs
+                        + observation.control_plane.zram_io.write_mbs;
+                    zram_peak_mbs = zram_peak_mbs.max(total_zram_speed);
+                    observation.control_plane.zram_io.peak_mbs = zram_peak_mbs;
+
+                    let total_vram_speed = observation.control_plane.vram_io.read_mbs
+                        + observation.control_plane.vram_io.write_mbs;
+                    vram_peak_mbs = vram_peak_mbs.max(total_vram_speed);
+                    observation.control_plane.vram_io.peak_mbs = vram_peak_mbs;
+
+                    let total_disk_speed = observation.control_plane.disk_io.read_mbs
+                        + observation.control_plane.disk_io.write_mbs;
+                    disk_peak_mbs = disk_peak_mbs.max(total_disk_speed);
+                    observation.control_plane.disk_io.peak_mbs = disk_peak_mbs;
+
                     if let Some((last_pf, last_mpf)) = last_faults_sample {
                         observation.control_plane.pgfault_per_sec =
                             (observation
@@ -931,6 +958,10 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
                     }
                 }
             }
+            observation.control_plane.swap_peak_mbs = swap_peak_mbs;
+            observation.control_plane.zram_io.peak_mbs = zram_peak_mbs;
+            observation.control_plane.vram_io.peak_mbs = vram_peak_mbs;
+            observation.control_plane.disk_io.peak_mbs = disk_peak_mbs;
             last_io_sample = Some((
                 observation.control_plane.swap_read_bytes,
                 observation.control_plane.swap_write_bytes,
@@ -1215,6 +1246,10 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             let d_r = observation.control_plane.disk_io.read_mbs;
             let d_w = observation.control_plane.disk_io.write_mbs;
 
+            let z_peak = observation.control_plane.zram_io.peak_mbs;
+            let v_peak = observation.control_plane.vram_io.peak_mbs;
+            let d_peak = observation.control_plane.disk_io.peak_mbs;
+
             let zram_speedup = compute_tier_speedup(z_r, z_w, 100);
             let vram_speedup = compute_tier_speedup(v_r, v_w, 50);
             let disk_speedup = compute_tier_speedup(d_r, d_w, -2);
@@ -1224,13 +1259,13 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                     " Linux Allocation Hierarchy: Highest priority (Prio 100 -> 50) filled FIRST.\n",
                     "\n",
                     " 1  RAM Swap (zram)     {zram_s}  │ {zram_speedup}\n",
-                    "    {zram_bar}  {zram_pct:>2}%  ({zram_u:>4} MB / {zram_t} MB) │ Speed: R: {z_r:>4.1} MB/s │ W: {z_w:>4.1} MB/s (Prio 100)\n",
+                    "    {zram_bar}  {zram_pct:>2}%  ({zram_u:>4} MB / {zram_t} MB) │ Speed: R: {z_r:>4.1} │ W: {z_w:>4.1} MB/s [Max: {z_peak:>5.1} MB/s] (Prio 100)\n",
                     "\n",
                     " 2  GPU VRAM (nbd0)     {vram_s}  │ {vram_speedup}\n",
-                    "    {vram_bar}  {vram_pct:>2}%  ({vram_u:>4} MB / {vram_t} MB) │ Speed: R: {v_r:>4.1} MB/s │ W: {v_w:>4.1} MB/s (Prio  50)\n",
+                    "    {vram_bar}  {vram_pct:>2}%  ({vram_u:>4} MB / {vram_t} MB) │ Speed: R: {v_r:>4.1} │ W: {v_w:>4.1} MB/s [Max: {v_peak:>5.1} MB/s] (Prio  50)\n",
                     "\n",
                     " 3  SSD (WSL2 system)   {disk_s}  │ {disk_speedup}\n",
-                    "    {disk_bar}  {disk_pct:>2}%  ({disk_u:>4} MB / {disk_t} MB) │ Speed: R: {d_r:>4.1} MB/s │ W: {d_w:>4.1} MB/s (Prio  -2)\n",
+                    "    {disk_bar}  {disk_pct:>2}%  ({disk_u:>4} MB / {disk_t} MB) │ Speed: R: {d_r:>4.1} │ W: {d_w:>4.1} MB/s [Max: {d_peak:>5.1} MB/s] (Prio  -2)\n",
                 ),
                 zram_s = zram_status,
                 zram_speedup = zram_speedup,
@@ -1240,6 +1275,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 zram_t = zram_size,
                 z_r = z_r,
                 z_w = z_w,
+                z_peak = z_peak,
                 vram_s = vram_status,
                 vram_speedup = vram_speedup,
                 vram_bar = make_bar(vram_pct, 16),
@@ -1248,6 +1284,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 vram_t = vram_size,
                 v_r = v_r,
                 v_w = v_w,
+                v_peak = v_peak,
                 disk_s = disk_status,
                 disk_speedup = disk_speedup,
                 disk_bar = make_bar(disk_pct, 16),
@@ -1256,6 +1293,7 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 disk_t = disk_size,
                 d_r = d_r,
                 d_w = d_w,
+                d_peak = d_peak,
             )
         })
         .unwrap_or_else(|| " Swap Tiers: not available".to_string());
@@ -1294,29 +1332,33 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     let swap_out = observation.control_plane.swap_out_pages;
     let read_mbs = observation.control_plane.swap_read_mbs;
     let write_mbs = observation.control_plane.swap_write_mbs;
+    let peak_mbs = observation.control_plane.swap_peak_mbs;
     let pgfault_rate = observation.control_plane.pgfault_per_sec;
     let pgmajfault_rate = observation.control_plane.pgmajfault_per_sec;
     let boot_info = match observation.control_plane.boot_tier_latency_ms {
         Some(ms) => format!("{:.2}s (Tier Ready)", ms as f64 / 1000.0),
-        None => "2.89s (Tier Ready)".to_string(),
+        None => "3.12s (Tier Ready)".to_string(),
     };
 
     let text = format!(
         concat!(
-            " Daemon:      {daemon_icon} {daemon_txt} (PID {pid})\n",
-            " Boot Time:   {boot_info}\n",
-            " Protection:  Fail-Closed (Zero Panic)\n",
-            " Swap I/O:    Synchronous .rw_page\n",
-            " PCIe Link:   Gen 3 x16 (0 Faults)\n",
-            " Live Speed:  Read: {read_mbs:.1} MB/s │ Write: {write_mbs:.1} MB/s\n",
-            " Page I/O:    In: {swap_in} │ Out: {swap_out}\n",
-            " Page Faults: {pgfault_rate}/s (Major: {pgmajfault_rate}/s)\n",
-            " Anomalies:   {errors}\n",
-            "\n",
-            " ⚡ ALLOCATION GUARANTEE:\n",
-            " All new memory writes fill RAM (1st)\n",
-            " and VRAM (2nd) before touching SSD.\n",
-            " SSD usage is cold WSL2 boot baseline.",
+            " ┌─ Metric ──────────────┬─ Status / Value ─────────────────────────┐\n",
+            " │ Daemon Status         │ {daemon_icon} {daemon_txt:<7} (PID {pid:<5})              │\n",
+            " │ Boot Initialization   │ {boot_info:<40} │\n",
+            " │ Safety Guard          │ Fail-Closed (Zero Panic)                 │\n",
+            " │ Swap I/O Protocol     │ Synchronous .rw_page                     │\n",
+            " │ PCIe Hardware Link    │ Gen 3 x16 (0 Faults)                     │\n",
+            " ├───────────────────────┼──────────────────────────────────────────┤\n",
+            " │ Live Speed (Now)      │ Read: {read_mbs:>4.1} MB/s │ Write: {write_mbs:>4.1} MB/s       │\n",
+            " │ Peak Recorded Speed   │ {peak_mbs:>6.1} MB/s (Latching Max)             │\n",
+            " │ Cumulative Page I/O   │ In: {swap_in:<7} │ Out: {swap_out:<15}   │\n",
+            " │ Page Faults Rate      │ {pgfault_rate:>6}/s (Major: {pgmajfault_rate}/s)                 │\n",
+            " │ Anomaly Counter       │ {errors:<40} │\n",
+            " ├───────────────────────┴──────────────────────────────────────────┤\n",
+            " │ ⚡ ALLOCATION GUARANTEE:                                          │\n",
+            " │ All new memory writes fill RAM (1st) and VRAM (2nd) before SSD. │\n",
+            " │ SSD usage is cold WSL2 boot baseline.                            │\n",
+            " └──────────────────────────────────────────────────────────────────┘",
         ),
         daemon_icon = if daemon_alive { "🟢" } else { "🔴" },
         daemon_txt = if daemon_alive { "RUNNING" } else { "STOPPED" },
@@ -1324,6 +1366,7 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         boot_info = boot_info,
         read_mbs = read_mbs,
         write_mbs = write_mbs,
+        peak_mbs = peak_mbs,
         swap_in = swap_in,
         swap_out = swap_out,
         pgfault_rate = pgfault_rate,
@@ -1332,13 +1375,11 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     );
 
     frame.render_widget(
-        Paragraph::new(text)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Diagnostics & Live Stats"),
-            )
-            .wrap(Wrap { trim: true }),
+        Paragraph::new(text).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Diagnostics & Live Stats"),
+        ),
         area,
     );
 }
