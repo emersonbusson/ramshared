@@ -23,7 +23,7 @@ const DEFAULT_INTERVAL_MS: u64 = 1_000;
 const DEFAULT_HISTORY_SECONDS: u64 = 300;
 const MIN_INTERVAL_MS: u64 = 250;
 const MAX_HISTORY_SECONDS: u64 = 3_600;
-const GPU_QUERY_TIMEOUT: Duration = Duration::from_millis(400);
+const GPU_QUERY_TIMEOUT: Duration = Duration::from_millis(2_500);
 const DEFAULT_MAX_LOG_BYTES: u64 = 50 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -538,6 +538,25 @@ fn gpu_query_candidates() -> [&'static str; 2] {
 }
 
 fn query_gpu_bounded(timeout: Duration) -> Result<Option<GpuObservation>, String> {
+    if let Ok(cuda) = ramshared_cuda::Cuda::load() {
+        if let Ok(dev) = cuda.device(0) {
+            if let Ok(ctx) = cuda.create_context(&dev) {
+                if let Ok((free_b, total_b)) = ctx.mem_info() {
+                    let total_mib = (total_b / 1_048_576) as u64;
+                    let free_mib = (free_b / 1_048_576) as u64;
+                    let used_mib = total_mib.saturating_sub(free_mib);
+                    let name = dev.name().to_string();
+                    return Ok(Some(GpuObservation {
+                        name,
+                        total_mib,
+                        used_mib,
+                        free_mib,
+                    }));
+                }
+            }
+        }
+    }
+
     let mut last_error = "gpu_query_unavailable".to_string();
     for candidate in gpu_query_candidates() {
         match query_gpu_command(candidate, timeout) {
