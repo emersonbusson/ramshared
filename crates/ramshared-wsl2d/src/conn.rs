@@ -755,7 +755,7 @@ mod tests {
             served
         });
 
-        for _ in 0..10 {
+        for _ in 0..9 {
             jobs_tx
                 .send(WMsg::Job(Job {
                     export: 0,
@@ -765,6 +765,14 @@ mod tests {
                 }))
                 .unwrap();
         }
+        jobs_tx
+            .send(WMsg::Job(Job {
+                export: 0,
+                req: dummy_req(),
+                payload: Vec::new(),
+                reply: reply_tx,
+            }))
+            .unwrap();
         assert_eq!(
             worker.join().unwrap(),
             10,
