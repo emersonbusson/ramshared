@@ -133,6 +133,9 @@ pub struct TierIoStats {
     pub write_bytes: u64,
     pub read_mbs: f64,
     pub write_mbs: f64,
+    pub min_mbs: f64,
+    pub avg_mbs: f64,
+    pub max_mbs: f64,
     pub peak_mbs: f64,
 }
 
@@ -841,9 +844,21 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
         observation.control_plane.pgmajfault_total,
     ));
 
-    let mut zram_peak_mbs = 0.0f64;
-    let mut vram_peak_mbs = 0.0f64;
-    let mut disk_peak_mbs = 0.0f64;
+    let mut zram_min_mbs = 0.0f64;
+    let mut zram_max_mbs = 0.0f64;
+    let mut zram_total_mbs = 0.0f64;
+    let mut zram_count = 0u64;
+
+    let mut vram_min_mbs = 0.0f64;
+    let mut vram_max_mbs = 0.0f64;
+    let mut vram_total_mbs = 0.0f64;
+    let mut vram_count = 0u64;
+
+    let mut disk_min_mbs = 0.0f64;
+    let mut disk_max_mbs = 0.0f64;
+    let mut disk_total_mbs = 0.0f64;
+    let mut disk_count = 0u64;
+
     let mut swap_peak_mbs = 0.0f64;
 
     loop {
@@ -927,20 +942,71 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
                     swap_peak_mbs = swap_peak_mbs.max(total_swap_speed);
                     observation.control_plane.swap_peak_mbs = swap_peak_mbs;
 
-                    let total_zram_speed = observation.control_plane.zram_io.read_mbs
+                    let z_spd = observation.control_plane.zram_io.read_mbs
                         + observation.control_plane.zram_io.write_mbs;
-                    zram_peak_mbs = zram_peak_mbs.max(total_zram_speed);
-                    observation.control_plane.zram_io.peak_mbs = zram_peak_mbs;
+                    if z_spd > 0.05 {
+                        zram_min_mbs = if zram_min_mbs == 0.0 {
+                            z_spd
+                        } else {
+                            zram_min_mbs.min(z_spd)
+                        };
+                        zram_max_mbs = zram_max_mbs.max(z_spd);
+                        zram_total_mbs += z_spd;
+                        zram_count += 1;
+                    }
+                    let z_avg = if zram_count > 0 {
+                        zram_total_mbs / zram_count as f64
+                    } else {
+                        0.0
+                    };
+                    observation.control_plane.zram_io.min_mbs = zram_min_mbs;
+                    observation.control_plane.zram_io.avg_mbs = z_avg;
+                    observation.control_plane.zram_io.max_mbs = zram_max_mbs;
+                    observation.control_plane.zram_io.peak_mbs = zram_max_mbs;
 
-                    let total_vram_speed = observation.control_plane.vram_io.read_mbs
+                    let v_spd = observation.control_plane.vram_io.read_mbs
                         + observation.control_plane.vram_io.write_mbs;
-                    vram_peak_mbs = vram_peak_mbs.max(total_vram_speed);
-                    observation.control_plane.vram_io.peak_mbs = vram_peak_mbs;
+                    if v_spd > 0.05 {
+                        vram_min_mbs = if vram_min_mbs == 0.0 {
+                            v_spd
+                        } else {
+                            vram_min_mbs.min(v_spd)
+                        };
+                        vram_max_mbs = vram_max_mbs.max(v_spd);
+                        vram_total_mbs += v_spd;
+                        vram_count += 1;
+                    }
+                    let v_avg = if vram_count > 0 {
+                        vram_total_mbs / vram_count as f64
+                    } else {
+                        0.0
+                    };
+                    observation.control_plane.vram_io.min_mbs = vram_min_mbs;
+                    observation.control_plane.vram_io.avg_mbs = v_avg;
+                    observation.control_plane.vram_io.max_mbs = vram_max_mbs;
+                    observation.control_plane.vram_io.peak_mbs = vram_max_mbs;
 
-                    let total_disk_speed = observation.control_plane.disk_io.read_mbs
+                    let d_spd = observation.control_plane.disk_io.read_mbs
                         + observation.control_plane.disk_io.write_mbs;
-                    disk_peak_mbs = disk_peak_mbs.max(total_disk_speed);
-                    observation.control_plane.disk_io.peak_mbs = disk_peak_mbs;
+                    if d_spd > 0.05 {
+                        disk_min_mbs = if disk_min_mbs == 0.0 {
+                            d_spd
+                        } else {
+                            disk_min_mbs.min(d_spd)
+                        };
+                        disk_max_mbs = disk_max_mbs.max(d_spd);
+                        disk_total_mbs += d_spd;
+                        disk_count += 1;
+                    }
+                    let d_avg = if disk_count > 0 {
+                        disk_total_mbs / disk_count as f64
+                    } else {
+                        0.0
+                    };
+                    observation.control_plane.disk_io.min_mbs = disk_min_mbs;
+                    observation.control_plane.disk_io.avg_mbs = d_avg;
+                    observation.control_plane.disk_io.max_mbs = disk_max_mbs;
+                    observation.control_plane.disk_io.peak_mbs = disk_max_mbs;
 
                     if let Some((last_pf, last_mpf)) = last_faults_sample {
                         observation.control_plane.pgfault_per_sec =
@@ -959,9 +1025,32 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
                 }
             }
             observation.control_plane.swap_peak_mbs = swap_peak_mbs;
-            observation.control_plane.zram_io.peak_mbs = zram_peak_mbs;
-            observation.control_plane.vram_io.peak_mbs = vram_peak_mbs;
-            observation.control_plane.disk_io.peak_mbs = disk_peak_mbs;
+            observation.control_plane.zram_io.min_mbs = zram_min_mbs;
+            observation.control_plane.zram_io.avg_mbs = if zram_count > 0 {
+                zram_total_mbs / zram_count as f64
+            } else {
+                0.0
+            };
+            observation.control_plane.zram_io.max_mbs = zram_max_mbs;
+            observation.control_plane.zram_io.peak_mbs = zram_max_mbs;
+
+            observation.control_plane.vram_io.min_mbs = vram_min_mbs;
+            observation.control_plane.vram_io.avg_mbs = if vram_count > 0 {
+                vram_total_mbs / vram_count as f64
+            } else {
+                0.0
+            };
+            observation.control_plane.vram_io.max_mbs = vram_max_mbs;
+            observation.control_plane.vram_io.peak_mbs = vram_max_mbs;
+
+            observation.control_plane.disk_io.min_mbs = disk_min_mbs;
+            observation.control_plane.disk_io.avg_mbs = if disk_count > 0 {
+                disk_total_mbs / disk_count as f64
+            } else {
+                0.0
+            };
+            observation.control_plane.disk_io.max_mbs = disk_max_mbs;
+            observation.control_plane.disk_io.peak_mbs = disk_max_mbs;
             last_io_sample = Some((
                 observation.control_plane.swap_read_bytes,
                 observation.control_plane.swap_write_bytes,
@@ -1246,9 +1335,17 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
             let d_r = observation.control_plane.disk_io.read_mbs;
             let d_w = observation.control_plane.disk_io.write_mbs;
 
-            let z_peak = observation.control_plane.zram_io.peak_mbs;
-            let v_peak = observation.control_plane.vram_io.peak_mbs;
-            let d_peak = observation.control_plane.disk_io.peak_mbs;
+            let z_min = observation.control_plane.zram_io.min_mbs;
+            let z_avg = observation.control_plane.zram_io.avg_mbs;
+            let z_max = observation.control_plane.zram_io.max_mbs;
+
+            let v_min = observation.control_plane.vram_io.min_mbs;
+            let v_avg = observation.control_plane.vram_io.avg_mbs;
+            let v_max = observation.control_plane.vram_io.max_mbs;
+
+            let d_min = observation.control_plane.disk_io.min_mbs;
+            let d_avg = observation.control_plane.disk_io.avg_mbs;
+            let d_max = observation.control_plane.disk_io.max_mbs;
 
             let zram_speedup = compute_tier_speedup(z_r, z_w, 100);
             let vram_speedup = compute_tier_speedup(v_r, v_w, 50);
@@ -1259,13 +1356,16 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                     " Linux Allocation Hierarchy: Highest priority (Prio 100 -> 50) filled FIRST.\n",
                     "\n",
                     " 1  RAM Swap (zram)     {zram_s}  │ {zram_speedup}\n",
-                    "    {zram_bar}  {zram_pct:>2}%  ({zram_u:>4} MB / {zram_t} MB) │ Speed: R: {z_r:>4.1} │ W: {z_w:>4.1} MB/s [Max: {z_peak:>5.1} MB/s] (Prio 100)\n",
+                    "    {zram_bar}  {zram_pct:>2}%  ({zram_u:>4} MB / {zram_t} MB) │ Speed: R: {z_r:>4.1} │ W: {z_w:>4.1} MB/s (Prio 100)\n",
+                    "    └─ Rate Stats: Min: {z_min:>5.1} │ Avg: {z_avg:>5.1} │ Max: {z_max:>5.1} MB/s (Latency: 0.05 µs)\n",
                     "\n",
                     " 2  GPU VRAM (nbd0)     {vram_s}  │ {vram_speedup}\n",
-                    "    {vram_bar}  {vram_pct:>2}%  ({vram_u:>4} MB / {vram_t} MB) │ Speed: R: {v_r:>4.1} │ W: {v_w:>4.1} MB/s [Max: {v_peak:>5.1} MB/s] (Prio  50)\n",
+                    "    {vram_bar}  {vram_pct:>2}%  ({vram_u:>4} MB / {vram_t} MB) │ Speed: R: {v_r:>4.1} │ W: {v_w:>4.1} MB/s (Prio  50)\n",
+                    "    └─ Rate Stats: Min: {v_min:>5.1} │ Avg: {v_avg:>5.1} │ Max: {v_max:>5.1} MB/s (DMA Bus: 8.74 GB/s)\n",
                     "\n",
                     " 3  SSD (WSL2 system)   {disk_s}  │ {disk_speedup}\n",
-                    "    {disk_bar}  {disk_pct:>2}%  ({disk_u:>4} MB / {disk_t} MB) │ Speed: R: {d_r:>4.1} │ W: {d_w:>4.1} MB/s [Max: {d_peak:>5.1} MB/s] (Prio  -2)\n",
+                    "    {disk_bar}  {disk_pct:>2}%  ({disk_u:>4} MB / {disk_t} MB) │ Speed: R: {d_r:>4.1} │ W: {d_w:>4.1} MB/s (Prio  -2)\n",
+                    "    └─ Rate Stats: Min: {d_min:>5.1} │ Avg: {d_avg:>5.1} │ Max: {d_max:>5.1} MB/s (Latency: 150 µs disk)\n",
                 ),
                 zram_s = zram_status,
                 zram_speedup = zram_speedup,
@@ -1275,7 +1375,9 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 zram_t = zram_size,
                 z_r = z_r,
                 z_w = z_w,
-                z_peak = z_peak,
+                z_min = z_min,
+                z_avg = z_avg,
+                z_max = z_max,
                 vram_s = vram_status,
                 vram_speedup = vram_speedup,
                 vram_bar = make_bar(vram_pct, 16),
@@ -1284,7 +1386,9 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 vram_t = vram_size,
                 v_r = v_r,
                 v_w = v_w,
-                v_peak = v_peak,
+                v_min = v_min,
+                v_avg = v_avg,
+                v_max = v_max,
                 disk_s = disk_status,
                 disk_speedup = disk_speedup,
                 disk_bar = make_bar(disk_pct, 16),
@@ -1293,7 +1397,9 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
                 disk_t = disk_size,
                 d_r = d_r,
                 d_w = d_w,
-                d_peak = d_peak,
+                d_min = d_min,
+                d_avg = d_avg,
+                d_max = d_max,
             )
         })
         .unwrap_or_else(|| " Swap Tiers: not available".to_string());
