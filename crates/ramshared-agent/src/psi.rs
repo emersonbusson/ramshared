@@ -19,11 +19,7 @@ fn read_psi_impl(path: &str) -> Result<PsiSample> {
 
 /// Reads and parses `/proc/pressure/memory`.
 pub fn read_psi() -> Result<PsiSample> {
-    match read_psi_impl("/proc/pressure/memory") {
-        Ok(s) => Ok(s),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(PsiSample::default()),
-        Err(e) => Err(e),
-    }
+    read_psi_impl("/proc/pressure/memory")
 }
 
 /// Parses the content of `/proc/pressure/memory`. Uses the `some` line (partial stall), which is
@@ -56,11 +52,7 @@ fn read_swaps_impl(path: &str) -> Result<Vec<SwapEntry>> {
 
 /// Reads and parses `/proc/swaps`.
 pub fn read_swaps() -> Result<Vec<SwapEntry>> {
-    match read_swaps_impl("/proc/swaps") {
-        Ok(sw) => Ok(sw),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(e),
-    }
+    read_swaps_impl("/proc/swaps")
 }
 
 /// Parses `/proc/swaps`. The first line is the header; each subsequent line is
