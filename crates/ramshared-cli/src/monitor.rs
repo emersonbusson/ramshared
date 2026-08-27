@@ -1361,8 +1361,8 @@ fn format_tier_latency(
 
 fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
     let width = area.width;
-    let bar_len = ((width as u64).saturating_sub(45)).clamp(6, 12);
-    let sep_len = (width.saturating_sub(4) as usize).clamp(20, 68);
+    let bar_len = ((width as u64) / 7).clamp(8, 24);
+    let sep_len = (width.saturating_sub(4) as usize).max(20);
     let sep = "─".repeat(sep_len);
 
     let tiers = observation
@@ -1508,6 +1508,10 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
 }
 
 fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
+    let width = area.width;
+    let sep_len = (width.saturating_sub(4) as usize).max(20);
+    let sep = "─".repeat(sep_len);
+
     let pid = observation
         .value("daemon")
         .and_then(|d| d.get("pid"))
@@ -1541,23 +1545,21 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
 
     let text = format!(
         concat!(
-            " ┌─ Metric ──────────────┬─ Status / Value ─────────────────────────┐\n",
-            " │ Daemon Status         │ {daemon_icon} {daemon_txt:<7} (PID {pid:<5})              │\n",
-            " │ Boot Initialization   │ {boot_info:<40} │\n",
-            " │ Safety Guard          │ Fail-Closed (Zero Panic)                 │\n",
-            " │ Swap I/O Protocol     │ Synchronous .rw_page                     │\n",
-            " │ PCIe Hardware Link    │ Gen 3 x16 (0 Faults)                     │\n",
-            " ├───────────────────────┼──────────────────────────────────────────┤\n",
-            " │ Live Speed (Now)      │ Read: {read_mbs:>4.1} MB/s │ Write: {write_mbs:>4.1} MB/s       │\n",
-            " │ Peak Recorded Speed   │ {peak_mbs:>6.1} MB/s (Latching Max)             │\n",
-            " │ Cumulative Page I/O   │ In: {swap_in:<7} │ Out: {swap_out:<15}   │\n",
-            " │ Page Faults Rate      │ {pgfault_rate:>6}/s (Major: {pgmajfault_rate}/s)                 │\n",
-            " │ Anomaly Counter       │ {errors:<40} │\n",
-            " ├───────────────────────┴──────────────────────────────────────────┤\n",
-            " │ ⚡ ALLOCATION GUARANTEE:                                          │\n",
-            " │ All new memory writes fill RAM (1st) and VRAM (2nd) before SSD. │\n",
-            " │ SSD usage is cold WSL2 boot baseline.                            │\n",
-            " └──────────────────────────────────────────────────────────────────┘",
+            " Daemon Status:       {daemon_icon} {daemon_txt} (PID {pid})\n",
+            " Boot Initialization: ⏱️  {boot_info}\n",
+            " Safety Guard:        🛡️  Fail-Closed (Zero Panic)\n",
+            " Swap I/O Protocol:   ⚡ Synchronous .rw_page\n",
+            " PCIe Hardware Link:  🚀 Gen 3 x16 (8.74 GB/s DMA)\n",
+            " {sep}\n",
+            " Live Speed:          R: {read_mbs:>4.1} MB/s │ W: {write_mbs:>4.1} MB/s\n",
+            " Peak Recorded Speed: 🚀 {peak_mbs:>5.1} MB/s (Latching Max)\n",
+            " Cumulative Page I/O: In: {swap_in} │ Out: {swap_out}\n",
+            " Page Faults Rate:    📊 {pgfault_rate}/s (Major: {pgmajfault_rate}/s)\n",
+            " Anomaly Counter:     {errors}\n",
+            " {sep}\n",
+            " ⚡ ALLOCATION GUARANTEE:\n",
+            " All new writes fill RAM (1st) and VRAM (2nd) before SSD.\n",
+            " SSD usage is cold WSL2 boot baseline.",
         ),
         daemon_icon = if daemon_alive { "🟢" } else { "🔴" },
         daemon_txt = if daemon_alive { "RUNNING" } else { "STOPPED" },
@@ -1571,6 +1573,7 @@ fn draw_control(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
         pgfault_rate = pgfault_rate,
         pgmajfault_rate = pgmajfault_rate,
         errors = errors,
+        sep = sep,
     );
 
     frame.render_widget(
