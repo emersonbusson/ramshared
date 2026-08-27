@@ -214,12 +214,15 @@ const MEMORY_BROKER_AGENT_CLI_COVERAGE_ENTRY = {
   command: [
     'node', 'tools/ci/check-rust-slice-coverage.mjs',
     '-p', 'ramshared-agent',
-    '--files', 'crates/ramshared-agent/src/main.rs',
+    '--files', 'crates/ramshared-agent/src/main.rs,crates/ramshared-agent/src/psi.rs',
     '--min', '80',
     '--report-json', 'tmp/memory-broker-agent-cli-cov.json',
   ],
   packages: ['ramshared-agent'],
-  files: ['crates/ramshared-agent/src/main.rs'],
+  files: [
+    'crates/ramshared-agent/src/main.rs',
+    'crates/ramshared-agent/src/psi.rs',
+  ],
   min: 80,
 }
 const MEMORY_BROKER_AGENT_CLI_PROCESS_TESTS = [
@@ -247,13 +250,14 @@ const MEMORY_BROKER_WSL2D_DAEMON_COVERAGE_ENTRY = {
   command: [
     'node', 'tools/ci/check-rust-slice-coverage.mjs',
     '-p', 'ramshared-wsl2d',
-    '--files', 'crates/ramshared-wsl2d/src/main.rs,crates/ramshared-wsl2d/src/swap.rs',
+    '--files', 'crates/ramshared-wsl2d/src/main.rs,crates/ramshared-wsl2d/src/residency.rs,crates/ramshared-wsl2d/src/swap.rs',
     '--min', '80',
     '--report-json', 'tmp/memory-broker-wsl2d-daemon-cov.json',
   ],
   packages: ['ramshared-wsl2d'],
   files: [
     'crates/ramshared-wsl2d/src/main.rs',
+    'crates/ramshared-wsl2d/src/residency.rs',
     'crates/ramshared-wsl2d/src/swap.rs',
   ],
   min: 80,
