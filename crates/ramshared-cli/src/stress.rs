@@ -511,7 +511,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             avail_mb = new_avail;
         }
 
-        if avail_mb <= hard_floor {
+        if avail_mb <= hard_floor && opts.tier3_target_pct.is_none() && !opts.cascade {
             if !opts.json {
                 println!(
                     "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ 🛑 RAM FLOOR REACHED      │",
@@ -591,9 +591,13 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         }
 
         let one_pct_mb = ((ram_total_mb * opts.step_pct) / 100).max(50);
-        let safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(hard_floor));
+        let mut safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(hard_floor));
         if safe_alloc_mb == 0 {
-            break;
+            if (opts.cascade || opts.tier3_target_pct.is_some()) && psi_full < opts.max_psi_full {
+                safe_alloc_mb = 64;
+            } else {
+                break;
+            }
         }
 
         // Allocate and dirty pages
