@@ -2632,7 +2632,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
     });
     let budget_gate = dxg_gate.as_ref().map(|gate| gate as &dyn CommitBudgetGate);
     let autotier_config = AutotierConfig::default();
-    // Discipline 3: mlock host pages; for sparse, CUDA commit is on-demand (SPEC).
+    // Discipline 3: mlock host pages (incident 2026-07-03: kernel BUG due to collision with dxgkrnl); for sparse, CUDA commit is on-demand (SPEC).
     starter.lock_memory(force, false)?;
 
     // The origin-cache starts with zero VRAM. The non-product sparse test seam
