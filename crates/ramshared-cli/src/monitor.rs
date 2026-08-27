@@ -1365,19 +1365,22 @@ fn draw_tiers(frame: &mut Frame<'_>, area: Rect, observation: &Observation) {
 
             format!(
                 concat!(
-                    " Linux Allocation Hierarchy: Highest priority (Prio 100 -> 50) filled FIRST.\n",
-                    "\n",
-                    " 1  RAM Swap (zram)     {zram_s}  │ {zram_speedup}\n",
-                    "    {zram_bar}  {zram_pct:>2}%  ({zram_u:>4} MB / {zram_t} MB) │ Speed: R: {z_r:>4.1} │ W: {z_w:>4.1} MB/s (Prio 100)\n",
-                    "    └─ Rate Stats: Min: {z_min:>5.1} │ Avg: {z_avg:>5.1} │ Max: {z_max:>5.1} MB/s (Latency: 0.05 µs)\n",
-                    "\n",
-                    " 2  GPU VRAM (nbd0)     {vram_s}  │ {vram_speedup}\n",
-                    "    {vram_bar}  {vram_pct:>2}%  ({vram_u:>4} MB / {vram_t} MB) │ Speed: R: {v_r:>4.1} │ W: {v_w:>4.1} MB/s (Prio  50)\n",
-                    "    └─ Rate Stats: Min: {v_min:>5.1} │ Avg: {v_avg:>5.1} │ Max: {v_max:>5.1} MB/s (DMA Bus: 8.74 GB/s)\n",
-                    "\n",
-                    " 3  SSD (WSL2 system)   {disk_s}  │ {disk_speedup}\n",
-                    "    {disk_bar}  {disk_pct:>2}%  ({disk_u:>4} MB / {disk_t} MB) │ Speed: R: {d_r:>4.1} │ W: {d_w:>4.1} MB/s (Prio  -2)\n",
-                    "    └─ Rate Stats: Min: {d_min:>5.1} │ Avg: {d_avg:>5.1} │ Max: {d_max:>5.1} MB/s (Latency: 150 µs disk)\n",
+                    " ┌─ Tier 1: RAM Swap (zram) ──── Priority 100 [1st Target] ─────────────────┐\n",
+                    " │ State: {zram_s:<23} │ Usage: {zram_bar} {zram_pct:>2}% ({zram_u:>4}/{zram_t} MB) │\n",
+                    " │ Live Speed:  Read: {z_r:>4.1} MB/s │ Write: {z_w:>4.1} MB/s                       │\n",
+                    " │ Throughput:  Min: {z_min:>5.1} │ Avg: {z_avg:>5.1} │ Max: {z_max:>5.1} MB/s               │\n",
+                    " │ Performance: {zram_speedup:<58} │\n",
+                    " ├─ Tier 2: GPU VRAM (nbd0) ──── Priority  50 [2nd Target] ─────────────────┤\n",
+                    " │ State: {vram_s:<23} │ Usage: {vram_bar} {vram_pct:>2}% ({vram_u:>4}/{vram_t} MB) │\n",
+                    " │ Live Speed:  Read: {v_r:>4.1} MB/s │ Write: {v_w:>4.1} MB/s                       │\n",
+                    " │ Throughput:  Min: {v_min:>5.1} │ Avg: {v_avg:>5.1} │ Max: {v_max:>5.1} MB/s               │\n",
+                    " │ Performance: {vram_speedup:<58} │\n",
+                    " ├─ Tier 3: SSD (WSL2 system) ── Priority  -2 [3rd Fallback] ───────────────┤\n",
+                    " │ State: {disk_s:<23} │ Usage: {disk_bar} {disk_pct:>2}% ({disk_u:>4}/{disk_t} MB) │\n",
+                    " │ Live Speed:  Read: {d_r:>4.1} MB/s │ Write: {d_w:>4.1} MB/s                       │\n",
+                    " │ Throughput:  Min: {d_min:>5.1} │ Avg: {d_avg:>5.1} │ Max: {d_max:>5.1} MB/s               │\n",
+                    " │ Performance: {disk_speedup:<58} │\n",
+                    " └──────────────────────────────────────────────────────────────────────────┘",
                 ),
                 zram_s = zram_status,
                 zram_speedup = zram_speedup,
@@ -2034,7 +2037,8 @@ mod tests {
         assert_eq!(d.read_bytes, 40 * 512);
         assert_eq!(d.write_bytes, 80 * 512);
 
-        let show_out = "InactiveExitTimestampMonotonic=1000000\nActiveEnterTimestampMonotonic=3890000\n";
+        let show_out =
+            "InactiveExitTimestampMonotonic=1000000\nActiveEnterTimestampMonotonic=3890000\n";
         assert_eq!(parse_unit_startup_ms(show_out), Some(2890));
         assert_eq!(parse_unit_startup_ms(""), None);
 
@@ -2042,7 +2046,10 @@ mod tests {
         assert_eq!(parse_uptime_seconds("invalid"), None);
 
         assert_eq!(sanitize_label("my-app_1.0@daemon!", 10), "my-app_1.0");
-        assert_eq!(sanitize_cgroup("/system.slice/test.service", 20), "/system.slice/test.s");
+        assert_eq!(
+            sanitize_cgroup("/system.slice/test.service", 20),
+            "/system.slice/test.s"
+        );
         let temp_empty = std::env::temp_dir().join(format!("test-scopes-{}", std::process::id()));
         let _ = fs::create_dir_all(&temp_empty);
         assert_eq!(count_scope_dirs(&temp_empty), 0);
