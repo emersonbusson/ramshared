@@ -3370,6 +3370,7 @@ mod tests {
             SH_SCRIPT.with(|queue| {
                 let mut queue = queue.borrow_mut();
                 queue.clear();
+                queue.reserve(shell_responses);
                 for _ in 0..shell_responses {
                     queue.push_back(("*".into(), Ok(String::new())));
                 }
