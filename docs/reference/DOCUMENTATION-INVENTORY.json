@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 257,
-    "classified": 246,
+    "total": 258,
+    "classified": 247,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -331,6 +331,18 @@
     },
     {
       "path": "docs/benchmarks/README.md",
+      "disposition": "classified",
+      "ruleId": "benchmark-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "benchmarking",
+      "canonicalSource": "docs/BENCHMARKS.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/benchmarks/STRESS-TELEMETRY-REPORT.md",
       "disposition": "classified",
       "ruleId": "benchmark-documents",
       "verification": {
