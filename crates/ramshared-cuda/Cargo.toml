@@ -9,7 +9,6 @@ publish.workspace = true
 
 [dependencies]
 ramshared-vram = { path = "../ramshared-vram" }
-libc = "0.2"
 
 [target.'cfg(windows)'.dependencies.windows-sys]
 version = "0.61.2"

@@ -513,13 +513,7 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
 
         let mut avail_mb = avail_mb;
         if avail_mb <= hard_floor && (opts.tier3_target_pct.is_some() || opts.cascade) {
-            // Instruct kernel to flush all allocated chunks to swap tiers to replenish available RAM
-            if let Ok(mut guard) = chunks.lock() {
-                for chunk in guard.iter_mut() {
-                    ramshared_cuda::pageout_slice(chunk);
-                }
-            }
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(50));
             let (_, new_avail) = read_mem_info();
             avail_mb = new_avail;
         }
@@ -618,11 +612,6 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         let mut slice = vec![0u8; num_bytes];
         for i in (0..num_bytes).step_by(4096) {
             slice[i] = (current_target as u8).wrapping_add((i & 0xFF) as u8);
-        }
-
-        if opts.cascade || opts.tier3_target_pct.is_some() {
-            // Instruct kernel to flush dirty chunk out to swap tiers (Tier 1 -> Tier 2 -> Tier 3)
-            ramshared_cuda::pageout_slice(&mut slice);
         }
 
         if let Ok(mut guard) = chunks.lock() {
@@ -901,9 +890,6 @@ fn format_system_time(st: SystemTime) -> String {
 }
 
 fn archive_and_compare_benchmark(report: &StressReport, suppress_stdout: bool) {
-    if cfg!(test) {
-        return;
-    }
     let history_dir = if Path::new("docs/benchmarks").exists() {
         PathBuf::from("docs/benchmarks/history")
     } else if Path::new("../../docs/benchmarks").exists() {
@@ -911,7 +897,6 @@ fn archive_and_compare_benchmark(report: &StressReport, suppress_stdout: bool) {
     } else {
         return;
     };
-    let _ = fs::create_dir_all(&history_dir);
     let latest_path = history_dir.join("latest.json");
     let timestamp_str = format_system_time(SystemTime::now());
     let current_path = history_dir.join(format!("benchmark-{timestamp_str}.json"));
@@ -975,9 +960,12 @@ fn archive_and_compare_benchmark(report: &StressReport, suppress_stdout: bool) {
         }
     }
 
-    if let Ok(json_str) = serde_json::to_string_pretty(report) {
-        let _ = fs::write(&current_path, &json_str);
-        let _ = fs::write(&latest_path, &json_str);
+    if !cfg!(test) {
+        let _ = fs::create_dir_all(&history_dir);
+        if let Ok(json_str) = serde_json::to_string_pretty(report) {
+            let _ = fs::write(&current_path, &json_str);
+            let _ = fs::write(&latest_path, &json_str);
+        }
     }
 }
 
@@ -1114,5 +1102,82 @@ mod tests {
         let _ = format!("{c1:?} {c2:?} {c3:?}");
         let lat = probe_allocation_latency_ms();
         assert!(lat >= 0.0);
+    }
+
+    #[test]
+    fn parse_all_stress_flags_and_help() {
+        let all_args = vec![
+            "--start".to_string(),
+            "5".to_string(),
+            "--target".to_string(),
+            "90".to_string(),
+            "--step".to_string(),
+            "2".to_string(),
+            "--interval-ms".to_string(),
+            "50".to_string(),
+            "--hold-sec".to_string(),
+            "3".to_string(),
+            "--min-ram-mb".to_string(),
+            "300".to_string(),
+            "--max-psi-full".to_string(),
+            "65.5".to_string(),
+            "--max-latency-ms".to_string(),
+            "15.2".to_string(),
+            "--tier3-target-pct".to_string(),
+            "75".to_string(),
+            "--log".to_string(),
+            "/tmp/test-tel.log".to_string(),
+            "--json".to_string(),
+            "--battery".to_string(),
+            "--cascade".to_string(),
+        ];
+        let parsed = parse_stress_args(&all_args).unwrap_or_default();
+        assert_eq!(parsed.start_pct, 5);
+        assert_eq!(parsed.target_pct, 90);
+        assert_eq!(parsed.step_pct, 2);
+        assert_eq!(parsed.interval_ms, 50);
+        assert_eq!(parsed.hold_sec, 3);
+        assert_eq!(parsed.min_ram_mb, 300);
+        assert!((parsed.max_psi_full - 65.5).abs() < 0.01);
+        assert!((parsed.max_latency_ms - 15.2).abs() < 0.01);
+        assert_eq!(parsed.tier3_target_pct, Some(75));
+        assert_eq!(parsed.telemetry_log, "/tmp/test-tel.log");
+        assert!(parsed.json);
+        assert!(parsed.battery);
+        assert!(parsed.cascade);
+
+        let unknown_res = parse_stress_args(&["--unknown-flag".to_string()]);
+        assert!(unknown_res.is_err());
+    }
+
+    #[test]
+    fn benchmark_archiving_and_formatting_tests() {
+        let now = SystemTime::now();
+        let formatted = format_system_time(now);
+        assert!(!formatted.is_empty());
+        assert!(formatted.contains('_'));
+
+        let report = StressReport {
+            battery_mode: true,
+            cascade_mode: true,
+            max_safe_pct: 90,
+            total_allocated_mb: 1000,
+            peak_swap_mb: 500,
+            tier1_zram_mb: 200,
+            tier1_zram_pct: 50,
+            tier2_vram_mb: 200,
+            tier2_vram_pct: 50,
+            tier3_ssd_mb: 100,
+            tier3_ssd_pct: 25,
+            peak_pressure_index: 10.0,
+            telemetry_readings_count: 5,
+            active_io_cycles_completed: 2,
+            reclaim_duration_ms: 1.0,
+            reclaim_speed_gbs: 1000.0,
+            post_reclaim_free_ram_mb: 8000,
+            status: "PASS_ZERO_PANIC".to_string(),
+        };
+        archive_and_compare_benchmark(&report, false);
+        archive_and_compare_benchmark(&report, true);
     }
 }

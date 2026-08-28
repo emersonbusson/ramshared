@@ -79,24 +79,6 @@ impl std::fmt::Display for ProbePlanError {
 
 impl std::error::Error for ProbePlanError {}
 
-/// Advise the OS kernel to flush a dirty slice to swap tiers (Tier 1 -> Tier 2 -> Tier 3).
-#[cfg(target_os = "linux")]
-pub fn pageout_slice(slice: &mut [u8]) {
-    // SAFETY: madvise MADV_PAGEOUT (21) is a standard Linux kernel syscall (Linux 5.4+)
-    // that hints the kernel to flush pages to swap. The slice pointer and length are valid.
-    unsafe {
-        libc::madvise(
-            slice.as_mut_ptr() as *mut libc::c_void,
-            slice.len(),
-            libc::MADV_PAGEOUT,
-        );
-    }
-}
-
-/// No-op on non-Linux platforms.
-#[cfg(not(target_os = "linux"))]
-pub fn pageout_slice(_slice: &mut [u8]) {}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
