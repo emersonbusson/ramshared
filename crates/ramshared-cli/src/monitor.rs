@@ -539,20 +539,20 @@ fn gpu_query_candidates() -> [&'static str; 2] {
 
 fn query_gpu_bounded(timeout: Duration) -> Result<Option<GpuObservation>, String> {
     if let Ok(cuda) = ramshared_cuda::Cuda::load() {
-        if let Ok(dev) = cuda.device(0) {
-            if let Ok(ctx) = cuda.create_context(&dev) {
-                if let Ok((free_b, total_b)) = ctx.mem_info() {
-                    let total_mib = (total_b / 1_048_576) as u64;
-                    let free_mib = (free_b / 1_048_576) as u64;
-                    let used_mib = total_mib.saturating_sub(free_mib);
-                    let name = dev.name().to_string();
-                    return Ok(Some(GpuObservation {
-                        name,
-                        total_mib,
-                        used_mib,
-                        free_mib,
-                    }));
-                }
+        let dev_opt = cuda.device(0).ok();
+        if let Some(dev) = dev_opt {
+            let res = cuda.create_context(&dev).and_then(|ctx| ctx.mem_info());
+            if let Ok((free_b, total_b)) = res {
+                let total_mib = (total_b / 1_048_576) as u64;
+                let free_mib = (free_b / 1_048_576) as u64;
+                let used_mib = total_mib.saturating_sub(free_mib);
+                let name = dev.name().to_string();
+                return Ok(Some(GpuObservation {
+                    name,
+                    total_mib,
+                    used_mib,
+                    free_mib,
+                }));
             }
         }
     }
@@ -1141,15 +1141,18 @@ fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<
         let wait = next_sample
             .saturating_duration_since(Instant::now())
             .min(Duration::from_millis(100));
-        if let Ok(true) = event::poll(wait) {
-            if let Ok(Event::Key(key)) = event::read() {
-                if key.kind == KeyEventKind::Press
-                    && (matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
-                        || (key.code == KeyCode::Char('c')
-                            && key.modifiers.contains(KeyModifiers::CONTROL)))
-                {
-                    return Ok(());
-                }
+        let event_opt = if event::poll(wait).unwrap_or(false) {
+            event::read().ok()
+        } else {
+            None
+        };
+        if let Some(Event::Key(key)) = event_opt {
+            let is_exit = key.kind == KeyEventKind::Press
+                && (matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
+                    || (key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)));
+            if is_exit {
+                return Ok(());
             }
         }
     }

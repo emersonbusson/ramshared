@@ -14,7 +14,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -296,27 +296,15 @@ pub fn read_swap_tier_capacities() -> (TierCapacityStats, TierCapacityStats, Tie
 
     let z_tot_mb = (z_tot + 512) / 1024;
     let z_use_mb = (z_use + 512) / 1024;
-    let z_pct = if z_tot_mb > 0 {
-        (z_use_mb * 100) / z_tot_mb
-    } else {
-        0
-    };
+    let z_pct = (z_use_mb * 100).checked_div(z_tot_mb).unwrap_or(0);
 
     let v_tot_mb = (v_tot + 512) / 1024;
     let v_use_mb = (v_use + 512) / 1024;
-    let v_pct = if v_tot_mb > 0 {
-        (v_use_mb * 100) / v_tot_mb
-    } else {
-        0
-    };
+    let v_pct = (v_use_mb * 100).checked_div(v_tot_mb).unwrap_or(0);
 
     let s_tot_mb = (s_tot + 512) / 1024;
     let s_use_mb = (s_use + 512) / 1024;
-    let s_pct = if s_tot_mb > 0 {
-        (s_use_mb * 100) / s_tot_mb
-    } else {
-        0
-    };
+    let s_pct = (s_use_mb * 100).checked_div(s_tot_mb).unwrap_or(0);
 
     (
         TierCapacityStats {
@@ -772,23 +760,17 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         total_allocated_mb,
         peak_swap_mb: peak_total_swap,
         tier1_zram_mb: peak_zram,
-        tier1_zram_pct: if cap1.total_mb > 0 {
-            (peak_zram * 100) / cap1.total_mb
-        } else {
-            cap1.pct
-        },
+        tier1_zram_pct: (peak_zram * 100)
+            .checked_div(cap1.total_mb)
+            .unwrap_or(cap1.pct),
         tier2_vram_mb: peak_vram,
-        tier2_vram_pct: if cap2.total_mb > 0 {
-            (peak_vram * 100) / cap2.total_mb
-        } else {
-            cap2.pct
-        },
+        tier2_vram_pct: (peak_vram * 100)
+            .checked_div(cap2.total_mb)
+            .unwrap_or(cap2.pct),
         tier3_ssd_mb: peak_ssd,
-        tier3_ssd_pct: if cap3.total_mb > 0 {
-            (peak_ssd * 100) / cap3.total_mb
-        } else {
-            cap3.pct
-        },
+        tier3_ssd_pct: (peak_ssd * 100)
+            .checked_div(cap3.total_mb)
+            .unwrap_or(cap3.pct),
         peak_pressure_index: peak_pressure,
         telemetry_readings_count: readings_count,
         active_io_cycles_completed: active_cycles_done,
@@ -919,6 +901,9 @@ fn format_system_time(st: SystemTime) -> String {
 }
 
 fn archive_and_compare_benchmark(report: &StressReport, suppress_stdout: bool) {
+    if cfg!(test) {
+        return;
+    }
     let history_dir = if Path::new("docs/benchmarks").exists() {
         PathBuf::from("docs/benchmarks/history")
     } else if Path::new("../../docs/benchmarks").exists() {
@@ -933,59 +918,60 @@ fn archive_and_compare_benchmark(report: &StressReport, suppress_stdout: bool) {
 
     // Check if previous benchmark exists to print comparison diff
     if !suppress_stdout {
-        if let Ok(prev_content) = fs::read_to_string(&latest_path) {
-            if let Ok(prev) = serde_json::from_str::<StressReport>(&prev_content) {
-                println!("{}", "-".repeat(105));
-                println!(" 🔄 HISTORICAL BENCHMARK COMPARISON (Diff vs Previous Run):");
-                println!(
-                    "  ┌─────────────────────────────────┬──────────────────┬──────────────────┬──────────────┐"
-                );
-                println!(
-                    "  │ Benchmark Metric                │ Previous Run     │ Current Run      │ Comparison   │"
-                );
-                println!(
-                    "  ├─────────────────────────────────┼──────────────────┼──────────────────┼──────────────┤"
-                );
-                println!(
-                    "  │ 💾 Tier 3 SSD Storage Peak      │ {:>8} MB ({:>2}%) │ {:>8} MB ({:>2}%) │ {:>+10} MB │",
-                    prev.tier3_ssd_mb,
-                    prev.tier3_ssd_pct,
-                    report.tier3_ssd_mb,
-                    report.tier3_ssd_pct,
-                    (report.tier3_ssd_mb as i64) - (prev.tier3_ssd_mb as i64)
-                );
-                println!(
-                    "  │ 🟡 Tier 2 GPU VRAM Swap Peak    │ {:>8} MB ({:>2}%) │ {:>8} MB ({:>2}%) │ {:>+10} MB │",
-                    prev.tier2_vram_mb,
-                    prev.tier2_vram_pct,
-                    report.tier2_vram_mb,
-                    report.tier2_vram_pct,
-                    (report.tier2_vram_mb as i64) - (prev.tier2_vram_mb as i64)
-                );
-                println!(
-                    "  │ 🟢 Tier 1 ZRAM Swap Peak        │ {:>8} MB ({:>2}%) │ {:>8} MB ({:>2}%) │ {:>+10} MB │",
-                    prev.tier1_zram_mb,
-                    prev.tier1_zram_pct,
-                    report.tier1_zram_mb,
-                    report.tier1_zram_pct,
-                    (report.tier1_zram_mb as i64) - (prev.tier1_zram_mb as i64)
-                );
-                println!(
-                    "  │ 📦 Peak Total Swap Used         │ {:>13} MB │ {:>13} MB │ {:>+10} MB │",
-                    prev.peak_swap_mb,
-                    report.peak_swap_mb,
-                    (report.peak_swap_mb as i64) - (prev.peak_swap_mb as i64)
-                );
-                println!(
-                    "  │ 🧹 Reclaim Speed (Return)       │ {:>10.2} GB/s │ {:>10.2} GB/s │ {:>+8.2} GB/s │",
-                    prev.reclaim_speed_gbs,
-                    report.reclaim_speed_gbs,
-                    report.reclaim_speed_gbs - prev.reclaim_speed_gbs
-                );
-                println!(
-                    "  └─────────────────────────────────┴──────────────────┴──────────────────┴──────────────┘"
-                );
-            }
+        let prev_opt = fs::read_to_string(&latest_path)
+            .ok()
+            .and_then(|c| serde_json::from_str::<StressReport>(&c).ok());
+        if let Some(prev) = prev_opt {
+            println!("{}", "-".repeat(105));
+            println!(" 🔄 HISTORICAL BENCHMARK COMPARISON (Diff vs Previous Run):");
+            println!(
+                "  ┌─────────────────────────────────┬──────────────────┬──────────────────┬──────────────┐"
+            );
+            println!(
+                "  │ Benchmark Metric                │ Previous Run     │ Current Run      │ Comparison   │"
+            );
+            println!(
+                "  ├─────────────────────────────────┼──────────────────┼──────────────────┼──────────────┤"
+            );
+            println!(
+                "  │ 💾 Tier 3 SSD Storage Peak      │ {:>8} MB ({:>2}%) │ {:>8} MB ({:>2}%) │ {:>+10} MB │",
+                prev.tier3_ssd_mb,
+                prev.tier3_ssd_pct,
+                report.tier3_ssd_mb,
+                report.tier3_ssd_pct,
+                (report.tier3_ssd_mb as i64) - (prev.tier3_ssd_mb as i64)
+            );
+            println!(
+                "  │ 🟡 Tier 2 GPU VRAM Swap Peak    │ {:>8} MB ({:>2}%) │ {:>8} MB ({:>2}%) │ {:>+10} MB │",
+                prev.tier2_vram_mb,
+                prev.tier2_vram_pct,
+                report.tier2_vram_mb,
+                report.tier2_vram_pct,
+                (report.tier2_vram_mb as i64) - (prev.tier2_vram_mb as i64)
+            );
+            println!(
+                "  │ 🟢 Tier 1 ZRAM Swap Peak        │ {:>8} MB ({:>2}%) │ {:>8} MB ({:>2}%) │ {:>+10} MB │",
+                prev.tier1_zram_mb,
+                prev.tier1_zram_pct,
+                report.tier1_zram_mb,
+                report.tier1_zram_pct,
+                (report.tier1_zram_mb as i64) - (prev.tier1_zram_mb as i64)
+            );
+            println!(
+                "  │ 📦 Peak Total Swap Used         │ {:>13} MB │ {:>13} MB │ {:>+10} MB │",
+                prev.peak_swap_mb,
+                report.peak_swap_mb,
+                (report.peak_swap_mb as i64) - (prev.peak_swap_mb as i64)
+            );
+            println!(
+                "  │ 🧹 Reclaim Speed (Return)       │ {:>10.2} GB/s │ {:>10.2} GB/s │ {:>+8.2} GB/s │",
+                prev.reclaim_speed_gbs,
+                report.reclaim_speed_gbs,
+                report.reclaim_speed_gbs - prev.reclaim_speed_gbs
+            );
+            println!(
+                "  └─────────────────────────────────┴──────────────────┴──────────────────┴──────────────┘"
+            );
         }
     }
 
@@ -1111,7 +1097,9 @@ mod tests {
         };
         assert!(run(&opts_cascade).is_ok());
 
-        let parsed_cascade = parse_stress_args(&["--cascade".to_string()]).unwrap();
+        let parsed_res = parse_stress_args(&["--cascade".to_string()]);
+        assert!(parsed_res.is_ok());
+        let parsed_cascade = parsed_res.unwrap_or_default();
         assert!(parsed_cascade.cascade);
         assert!(parsed_cascade.battery);
     }
