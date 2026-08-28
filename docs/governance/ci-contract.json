@@ -337,8 +337,8 @@
         },
         "advisory_db": {
           "url": "https://github.com/RustSec/advisory-db.git",
-          "commit": "bf5c0d245a92671908518d7e765914d437954ed6",
-          "commit_utc": "2026-08-21T06:28:40Z",
+          "commit": "6420e39260b3d771b049954cf5d52b57e2118da4",
+          "commit_utc": "2026-08-27T12:01:44Z",
           "max_age_days": 7,
           "upstream_head_health": {
             "mode": "scheduled-curator",

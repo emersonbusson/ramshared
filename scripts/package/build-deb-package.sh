@@ -75,6 +75,18 @@ for unit in ramshared-cascade.service ramshared-cascade-health.service \
   fi
 done
 
+if [[ -f "$ROOT/packaging/systemd/ramshared-vram.service" ]]; then
+  install -m 0644 "$ROOT/packaging/systemd/ramshared-vram.service" "$STAGE_DIR/lib/systemd/system/"
+fi
+if [[ -f "$ROOT/packaging/systemd/60-ramshared.rules" ]]; then
+  mkdir -p "$STAGE_DIR/lib/udev/rules.d"
+  install -m 0644 "$ROOT/packaging/systemd/60-ramshared.rules" "$STAGE_DIR/lib/udev/rules.d/"
+fi
+if [[ -f "$ROOT/packaging/systemd/65-ramshared-observability.rules" ]]; then
+  mkdir -p "$STAGE_DIR/lib/udev/rules.d"
+  install -m 0644 "$ROOT/packaging/systemd/65-ramshared-observability.rules" "$STAGE_DIR/lib/udev/rules.d/"
+fi
+
 # Install documentation & licenses
 install -m 0644 "$ROOT/README.md" "$STAGE_DIR/usr/share/doc/ramshared/README.md"
 install -m 0644 "$ROOT/LICENSE" "$STAGE_DIR/usr/share/doc/ramshared/copyright" 2>/dev/null || true
@@ -98,10 +110,14 @@ cat << 'POSTINST_EOF' > "$STAGE_DIR/DEBIAN/postinst"
 set -e
 
 if [ "$1" = "configure" ]; then
+  if command -v udevadm >/dev/null 2>&1; then
+    udevadm control --reload-rules || true
+    udevadm trigger --subsystem-match=drm || true
+  fi
   if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload || true
   fi
-  echo "RamShared installed successfully."
+  echo "RamShared installed successfully. Udev auto-activation enabled."
   echo "Run 'sudo ramshared check' to test machine readiness."
 fi
 
@@ -116,10 +132,11 @@ set -e
 
 if [ "$1" = "remove" ]; then
   if command -v systemctl >/dev/null 2>&1; then
+    systemctl stop ramshared-vram.service 2>/dev/null || true
     systemctl stop ramshared-cascade.service 2>/dev/null || true
   fi
   if command -v ramshared >/dev/null 2>&1; then
-    ramshared down 2>/dev/null || true
+    ramshared cascade down 2>/dev/null || true
   fi
 fi
 

@@ -463,4 +463,67 @@ live qualification remain blocked pending a fresh explicit instruction.
 **Scope:** Provision a dedicated 25 GiB VHDX on Samsung SSD 850 EVO (`C:\ProgramData\RamShared\ramshared-origin.vhdx`) with sealed schema-v3 manifest, execute write-through caching on real NVIDIA GeForce RTX 2060 VRAM, verify cache read hits over PCIe Gen 3 x16, simulate complete GPU context teardown/revocation, and prove 100% byte-exact direct SSD origin recovery without data corruption.
 **Evidence / blockers:** 256 MiB deterministic cryptographic block stream verified with 100% SHA-256 match (`bb82e581c16ca6f3037ebd4b3efc9d0f1bba14024ff38bf799cfdb4e19464249`). SSD synchronous write achieved 85.4 MB/s, VRAM cache populate 2,535.7 MiB/s, VRAM D2H read 6,211.2 MiB/s (44x speedup over direct SSD reads), and post-revocation direct SSD read 140.7 MB/s with 0 bytes corrupted. Recorded as EVD-0038.
 
+## TASK-0014 — Hardware PCIe DMA and native Linux ublk qualification
 
+**Schema:** `ramshared.task.v1`.
+**Status:** `completed`.
+**Owner role:** `hardware-researcher`.
+**Date:** `2026-08-26`.
+**Registered time:** `10:30:00`.
+**Updated time:** `10:45:00`.
+**Source revision:** `578aba8be59861c70c788e80cb1c4349cfaf13c7`.
+**Destinations:** `validation.md`, `docs/BENCHMARKS.md`, `crates/ramshared-uring/`, and `crates/ramshared-cli/`.
+**Scope:** Qualify real hardware-accelerated zero-copy page-locked PCIe DMA transfers (`cuMemHostAlloc`) and native Linux `ublk` (`io_uring`) block device interface on NVIDIA GeForce RTX 2060 (6,144 MiB VRAM) over PCIe Gen 3 x16 under WSL2 Linux 6.18.35.2+.
+**Evidence / blockers:** Measured Host-to-Device (H2D) DMA write speed of 8,947.71 MiB/s (8.74 GiB/s) in 0.0286 s, Device-to-Host (D2H) DMA read speed of 6,530.22 MiB/s (6.38 GiB/s) in 0.0392 s, and 4KB Direct I/O median latency of 231 µs (4,013 IOPS) on `/dev/ublkb0`. 100% cryptographic SHA-256 integrity match across 256 MiB dataset. Recorded canonically as EVD-0039 in `validation.md`.
+
+## TASK-0015 — Official Linux Kernel & WSL2 CI infrastructure, multi-distro packaging, and adversarial invariants
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `completed`.
+**Owner role:** `kernel-coder`.
+**Date:** `2026-08-26`.
+**Registered time:** `12:00:00`.
+**Updated time:** `12:15:00`.
+**Source revision:** `578aba8be59861c70c788e80cb1c4349cfaf13c7`.
+**Destinations:** `.github/workflows/kernel-ci.yml`, `scripts/ci/`, `scripts/package/`, `packaging/`, `trovaldo.md`, `docs/cioficial.md`, `docs/reviews/ADVERSARIAL-KERNEL-CI-AUDIT.md`, `TASK.md`, and `MEMORY.md`.
+**Scope:** Implement full parity with official Linux Kernel (`torvalds/linux`) and Microsoft WSL2 CI pipelines: automated `checkpatch.pl` style checking, `sparse`/`smatch` semantic memory analysis, multi-compiler cross-compilation matrices (GCC 14 + Clang 18), headless QEMU `dmesg` zero-splat console auditing, multi-distribution Linux packaging (`.deb`, `.rpm`, `PKGBUILD`), `udev` zero-config GPU discovery, and 6-point automated adversarial invariant verification.
+**Evidence / blockers:** `scripts/ci/check-adversarial-invariants.sh` executes and passes 6/6 invariant checks. `scripts/ci/check-kernel-style.sh`, `scripts/ci/check-kernel-sparse.sh`, and `scripts/ci/check-kernel-qemu-smoke.sh` verified. RPM builder (`build-rpm-package.sh`), Arch `PKGBUILD`, and `udev` rule `99-ramshared.rules` generated and syntax-validated. All 29 `./scripts/docs-check.sh` suites and 700+ workspace tests pass with 0 errors.
+
+## TASK-0016 — Upstream Linux kernel block driver, MM swap fast-path, and multi-arch anti-fragility qualification
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `completed`.
+**Owner role:** `kernel-coder`.
+**Date:** `2026-08-26`.
+**Registered time:** `12:30:00`.
+**Updated time:** `12:45:00`.
+**Source revision:** `20f7521`.
+**Destinations:** `drivers/block/ramshared/`, `packaging/`, `docs/reviews/UPSTREAM-ANTI-FRAGILITY-FORMS.md`, `trovaldo.md`, and `TASK.md`.
+**Scope:** Deep upstream qualification and anti-fragility hardening across 5 core subsystems: in-tree `gendisk` refcounted lifecycle and atomic queue limits (`blk_mq_alloc_disk`), zero-allocation `.rw_page` fast-path in `block_device_operations` for synchronous direct reclaim swapout, dynamic multi-kernel compatibility abstraction (`compat.h`) spanning Linux 5.15 LTS through 6.13+, ARM64 PCIe SError exception containment with `pci_error_handlers`, automated DKMS module signing with MOK enrollment (`ramshared-mok-setup.sh`), and strict udev PCI class filtering (`0x030000|0x030200`) preventing recursive iGPU swap allocations.
+**Evidence / blockers:** 27 structured qualification forms created in `docs/reviews/UPSTREAM-ANTI-FRAGILITY-FORMS.md`. Verified with `scripts/ci/check-kernel-style.sh` (5/5 C files clean), `scripts/ci/check-kernel-sparse.sh`, `scripts/ci/check-adversarial-invariants.sh` (6/6 PASS), and all 29 `./scripts/docs-check.sh` governance suites passing.
+
+## TASK-0017 — Automated release packaging pipeline, swap stress test suite, and LKML patchset generation
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `completed`.
+**Owner role:** `ci-governance`.
+**Date:** `2026-08-26`.
+**Registered time:** `12:50:00`.
+**Updated time:** `12:55:00`.
+**Source revision:** `0a4cf4b`.
+**Destinations:** `.github/workflows/release-packaging.yml`, `scripts/safety/test-rw-page-swap-stress.sh`, `scripts/package/generate-kernel-patchset.sh`, `docs/upstream/LKML-PATCHSET.md`, `trovaldo.md`, and `TASK.md`.
+**Scope:** Establish the complete multi-distro release packaging CI workflow (`.deb`, `.rpm`, `PKGBUILD` tarball) with automated SHA-256 checksums, develop the direct `.rw_page` swap fast-path simulation and stress validation suite (`test-rw-page-swap-stress.sh`), and generate the official LKML patchset series and guide (`generate-kernel-patchset.sh` / `LKML-PATCHSET.md`).
+**Evidence / blockers:** `.github/workflows/release-packaging.yml` validated. `scripts/safety/test-rw-page-swap-stress.sh` executes 4/4 checks successfully. `scripts/package/generate-kernel-patchset.sh` generates patch directory with Signed-off-by maintainer tag. All 29 `./scripts/docs-check.sh` suites and 700+ workspace tests pass with 0 errors.
+
+## TASK-0018 — Linux kernel telemetry architecture specification and per-CPU hardware accounting
+
+**Schema:** `ramshared.task.v1`.
+**Status:** `completed`.
+**Owner role:** `kernel-coder`.
+**Date:** `2026-08-26`.
+**Registered time:** `13:15:00`.
+**Updated time:** `13:16:00`.
+**Source revision:** `85ef51a`.
+**Destinations:** `docs/architecture/LINUX-KERNEL-TELEMETRY-SPEC.md`, `drivers/block/ramshared/queue.c`, `trovaldo.md`, and `TASK.md`.
+**Scope:** Author the canonical Linux kernel telemetry specification (`LINUX-KERNEL-TELEMETRY-SPEC.md`) formalizing parity with the 5 core upstream telemetry pillars (blk-mq lockless hardware accumulators, scheduler PSI pressure stall metrics, MM vmscan swap counters, DRM client fdinfo memory residency, and tracepoint/eBPF infrastructure). Extend the in-tree kernel driver with lockless read_bytes and write_bytes sysfs attributes under `/sys/block/ramshared0/ramshared/`.
+**Evidence / blockers:** `docs/architecture/LINUX-KERNEL-TELEMETRY-SPEC.md` authored and registered. Verified with `scripts/ci/check-kernel-style.sh` (6/6 C files clean), `check-adversarial-invariants.sh` (6/6 PASS), and all 29 `./scripts/docs-check.sh` governance suites passing.

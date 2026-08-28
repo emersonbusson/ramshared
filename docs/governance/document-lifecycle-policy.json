@@ -64,6 +64,16 @@
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
+      "id": "root-upstream-torvalds-roadmap",
+      "pattern": "trovaldo.md",
+      "owner": "architecture",
+      "canonicalSource": "trovaldo.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
       "id": "root-security-document",
       "pattern": "SECURITY.md",
       "owner": "security",
@@ -412,6 +422,16 @@
       "freshnessDays": 30,
       "verification": { "state": "unverified" },
       "registeredAt": "2026-08-20T14:49:00Z"
+    },
+    {
+      "id": "architecture-documents",
+      "pattern": "docs/architecture/**/*.md",
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-26T13:15:00Z"
     },
     {
       "id": "review-documents",

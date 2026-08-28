@@ -1,0 +1,109 @@
+name: Kernel CI
+
+on:
+  workflow_call:
+
+permissions: {}
+
+concurrency:
+  group: kernel-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kernel-static:
+    name: kernel static analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+
+      - name: Install static analysis tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq perl curl
+
+      - name: Kernel Style Check
+        run: ./scripts/ci/check-kernel-style.sh
+
+      - name: Kernel Sparse Semantic Check
+        run: ./scripts/ci/check-kernel-sparse.sh
+
+      - name: Kernel checkpatch.pl Validation
+        run: ./scripts/ci/check-kernel-checkpatch.sh
+
+      - name: Kernel ABI & Symbol Export Guard
+        run: ./scripts/ci/check-kernel-abi-guard.sh
+
+      - name: Adversarial Invariants Verification
+        run: ./scripts/ci/check-adversarial-invariants.sh
+
+  kernel-build-matrix:
+    name: kernel build (${{ matrix.compiler }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - compiler: gcc
+            arch: x86_64
+          - compiler: clang
+            arch: x86_64
+          - compiler: aarch64-gcc
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install cross-compilation toolchain
+        if: matrix.compiler == 'aarch64-gcc'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu
+
+      - name: Install clang
+        if: matrix.compiler == 'clang'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang
+
+      - name: Run build matrix (${{ matrix.compiler }} / ${{ matrix.arch }})
+        run: ./scripts/ci/check-kernel-build-matrix.sh "${{ matrix.compiler }}" "${{ matrix.arch }}"
+
+  kernel-qemu-smoke:
+    name: kernel qemu console audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Validate audit tool with clean console log
+        run: |
+          CLEAN_LOG=$(mktemp)
+          echo "[    0.000000] Linux version 6.8.0-ramshared" > "$CLEAN_LOG"
+          echo "[    0.100000] ramshared: block device registered" >> "$CLEAN_LOG"
+          echo "[    1.000000] systemd[1]: Reached target graphical.target" >> "$CLEAN_LOG"
+          ./scripts/ci/check-kernel-qemu-smoke.sh "$CLEAN_LOG"
+          rm -f "$CLEAN_LOG"
+
+      - name: Validate audit tool catches kernel splats
+        run: |
+          BAD_LOG=$(mktemp)
+          echo "[    0.000000] Linux version 6.8.0-ramshared" > "$BAD_LOG"
+          echo "[    0.500000] BUG: kernel NULL pointer dereference at 0x0000" >> "$BAD_LOG"
+          echo "[    0.500001] Oops: 0002 [#1] SMP" >> "$BAD_LOG"
+          if ./scripts/ci/check-kernel-qemu-smoke.sh "$BAD_LOG" 2>/dev/null; then
+            echo "FAIL: Audit tool should have caught kernel splat but did not!" >&2
+            rm -f "$BAD_LOG"
+            exit 1
+          else
+            echo "✓ Audit tool correctly detected kernel splats in synthetic log."
+          fi
+          rm -f "$BAD_LOG"
+
+      - name: Audit QEMU Console Logs (if provided)
+        run: ./scripts/ci/check-kernel-qemu-smoke.sh

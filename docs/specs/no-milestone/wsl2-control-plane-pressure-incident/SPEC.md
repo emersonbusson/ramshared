@@ -273,7 +273,7 @@ source under two active SPECs.
 - [x] `cargo fmt --all -- --check`
 - [x] `cargo clippy -p ramshared-cli --all-targets -- -D warnings`
 - [x] `cargo test -p ramshared-cli`
-- [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/workload.rs,crates/ramshared-cli/src/supervisor.rs,crates/ramshared-cli/src/monitor.rs --min 80 --report-json tmp/wsl2-control-plane-pressure-incident-cov.json`
+- [x] `node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cli --files crates/ramshared-cli/src/workload.rs,crates/ramshared-cli/src/supervisor.rs,crates/ramshared-cli/src/monitor.rs,crates/ramshared-cli/src/stress.rs --min 80 --report-json tmp/wsl2-control-plane-pressure-incident-cov.json`
 - [x] PowerShell parser and full Windows static suite
 - [x] systemd shell static tests and docs-check
 - [ ] source-only `/bin/true` before/action/after where authorization permits

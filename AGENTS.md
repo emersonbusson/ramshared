@@ -25,6 +25,7 @@ The source of truth for architecture and coding rules is:
 2. Read relevant [`.claude/rules/*.md`](.claude/rules/*.md).
 3. Read `MEMORY.md` bottom-up (append-only temporal context). **`MEMORY.md` is local-only** (listed in `.gitignore`) — absent on a clean clone; proceed without it if missing.
 4. Read `conversa.md` if present (active context).
+5. Read [`trovaldo.md`](trovaldo.md) when working on Linux upstreaming, distro packaging, or kernel drivers, and append progress upon qualification.
 
 ### Language
 

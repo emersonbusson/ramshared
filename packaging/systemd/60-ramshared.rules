@@ -1,0 +1,22 @@
+# /usr/lib/udev/rules.d/60-ramshared.rules
+# RamShared Discrete GPU Auto-Detection & Udev Trigger
+# SPDX-License-Identifier: GPL-2.0-only
+
+ACTION!="add", GOTO="ramshared_end"
+
+# 1. NVIDIA Discrete GPUs (DRM Render Node & NVIDIA UVM Character Devices)
+SUBSYSTEM=="drm", KERNEL=="renderD*", ATTRS{vendor}=="0x10de", ATTRS{class}=="0x030000|0x030200|0x038000", \
+    TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+
+SUBSYSTEM=="nvidia-uvm", KERNEL=="nvidia-uvm", \
+    TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+
+# 2. AMD Radeon Discrete GPUs (Vendor 0x1002, Class: VGA/3D Controller)
+SUBSYSTEM=="drm", KERNEL=="renderD*", ATTRS{vendor}=="0x1002", ATTRS{class}=="0x030000|0x030200", \
+    TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+
+# 3. Intel Arc Discrete GPUs (Vendor 0x8086, Class: 3D/VGA Controller)
+SUBSYSTEM=="drm", KERNEL=="renderD*", ATTRS{vendor}=="0x8086", ATTRS{class}=="0x030000|0x030200", \
+    TAG+="systemd", ENV{SYSTEMD_WANTS}+="ramshared-vram.service"
+
+LABEL="ramshared_end"

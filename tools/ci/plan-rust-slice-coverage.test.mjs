@@ -42,7 +42,7 @@ const WSL2_CONTROL_PLANE_COVERAGE_ENTRY = {
   command: [
     'node', 'tools/ci/check-rust-slice-coverage.mjs',
     '-p', 'ramshared-cli',
-    '--files', 'crates/ramshared-cli/src/workload.rs,crates/ramshared-cli/src/supervisor.rs,crates/ramshared-cli/src/monitor.rs',
+    '--files', 'crates/ramshared-cli/src/workload.rs,crates/ramshared-cli/src/supervisor.rs,crates/ramshared-cli/src/monitor.rs,crates/ramshared-cli/src/stress.rs',
     '--min', '80',
     '--report-json', 'tmp/wsl2-control-plane-pressure-incident-cov.json',
   ],
@@ -51,6 +51,7 @@ const WSL2_CONTROL_PLANE_COVERAGE_ENTRY = {
     'crates/ramshared-cli/src/workload.rs',
     'crates/ramshared-cli/src/supervisor.rs',
     'crates/ramshared-cli/src/monitor.rs',
+    'crates/ramshared-cli/src/stress.rs',
   ],
   min: 80,
 }
@@ -1038,7 +1039,7 @@ test('comment_language_measured_rust_files_keep_exact_ownership_boundaries', () 
   )
 })
 
-test('wsl2_control_plane_requires_exact_three_file_coverage_owner', () => {
+test('wsl2_control_plane_requires_exact_four_file_coverage_owner', () => {
   const map = JSON.parse(readFileSync(path.join(REPOSITORY_ROOT, 'docs', 'governance', 'rust-slice-coverage.json'), 'utf8'))
   const entry = map.entries.find((item) => item.id === WSL2_CONTROL_PLANE_COVERAGE_ENTRY.id)
   assert.deepEqual(entry, WSL2_CONTROL_PLANE_COVERAGE_ENTRY)

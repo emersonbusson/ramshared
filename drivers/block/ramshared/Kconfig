@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# RamShared block driver configuration
+#
+
+config BLK_DEV_RAMSHARED
+	tristate "RamShared Hardware-Accelerated VRAM Block Device"
+	depends on BLOCK && PCI && MMU
+	select BLK_MQ_PCI
+	help
+	  This driver provides a high-performance block device backed by
+	  discrete GPU video memory (VRAM) via direct PCIe DMA transfers.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called ramshared.

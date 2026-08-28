@@ -1,0 +1,19 @@
+[Unit]
+Description=RamShared Managed Workloads Resource Slice (Anti-Freeze Bounded Cgroup)
+Documentation=https://github.com/emersonbusson/ramshared
+Before=shutdown.target
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+TasksAccounting=yes
+IOAccounting=yes
+CPUWeight=50
+IOWeight=50
+TasksMax=8192
+
+# Memory bounds to prevent host Hyper-V vCPU freeze
+MemoryHigh=80%
+MemoryMax=85%
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=50%
