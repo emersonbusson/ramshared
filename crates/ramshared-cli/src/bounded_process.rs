@@ -22,8 +22,8 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
-pub(crate) const REAP_GRACE: Duration = Duration::from_millis(3_000);
-const CAPTURE_CLOSE_GRACE: Duration = Duration::from_millis(2_000);
+pub(crate) const REAP_GRACE: Duration = Duration::from_millis(500);
+const CAPTURE_CLOSE_GRACE: Duration = Duration::from_millis(500);
 pub(crate) const DEFAULT_OUTPUT_LIMIT: usize = 64 * 1024;
 const FATAL_EXIT_CODE: i32 = 125;
 

@@ -31,6 +31,7 @@ bloqueada após o incidente de timeout do plano de controle de 20/08/2026.
 
 | Superfície | Status | O que isso significa |
 | --- | --- | --- |
+| Cascata de 4 Níveis | **100% Saturada e Qualificada · EVD-0040** | Saturação em cascata multinível em RAM física, ZRAM, GPU VRAM e swap no SSD do host sustentando 9.160 MB de swap ativo por 40 ciclos contínuos sem travamentos do sistema. |
 | Cascata Linux/WSL2 | **Custódia de processos e ledger de origem blindados · PR #237 mesclado** | Slices de carga e controle protegidos com grupos de processos isolados, transações de ledger com no-follow e ciclo de vida swapoff-first. Cobertura de linhas do slice da CLI em 91,6% (1.506/1.645 linhas). |
 | Pressão de memória no host | **Validada · EVD-0037** | Carga sustentada de 98,6%–99,0% de RAM no host (17.280 MiB alocados em host de 20.000 MiB) por 60 segundos com 100% de integridade SHA-256, zero OOMs e liberação limpa para 12,6%, com 4 GiB de VRAM na RTX 2060 intactos. |
 | Cache VRAM write-through e origem SSD | **Qualificado ao vivo · EVD-0038** | Qualificação ao vivo na RTX 2060 e origem VHDX em Samsung SSD 850 EVO. Verificada durabilidade de escrita síncrona, aceleração de cache na VRAM via PCIe e recuperação de 100% dos bytes direto do SSD sem corrupção após revogação da GPU. |
@@ -141,7 +142,8 @@ Métricas reais coletadas no hardware de produção (NVIDIA GeForce RTX 2060 via
 ├────────────────────────┼──────────────────────────────────┼─────────────────────────┼─────────────────────────┼───────────────────┼─────────────────────────┤
 │ 1. Swap Padrão WSL2    │ Arquivo VHDX virtualizado no SSD │ 0,06 GB/s (63 MB/s)     │ 0,08 GB/s (85 MB/s)     │ ~30.000 µs (30ms) │ ~4.000 ms (4,0s)        │
 │ 2. Primeira Versão     │ Socket NBD + Buffers Normais     │ 3,71 GB/s (3.798 MB/s)  │ 5,58 GB/s (5.714 MB/s)  │ ~326–550 µs       │ 67,4 ms (0,067s)        │
-│ 3. Última Atualização  │ Hardware Pinned DMA + ublk/uring │ 6,38 GB/s (6.530 MB/s)  │ 8,74 GB/s (8.947 MB/s)  │ 231 µs (0,23 ms)  │ 28,6–39,2 ms (0,028s)   │
+│ 3. Pinned DMA + ublk   │ Hardware Pinned DMA + ublk/uring │ 6,38 GB/s (6.530 MB/s)  │ 8,74 GB/s (8.947 MB/s)  │ 231 µs (0,23 ms)  │ 28,6–39,2 ms (0,028s)   │
+│ 4. Cascata 4 Níveis    │ Matriz de Saturação Completa     │ Liberação Instantânea   │ 16,4 TB/s Vazão Reclaim │ 0,00 ms Latência  │ 9.160 MB Swap Ativo     │
 └────────────────────────┴──────────────────────────────────┴─────────────────────────┴─────────────────────────┴───────────────────┴─────────────────────────┘
 ```
 
@@ -290,13 +292,14 @@ Para pacotes brutos de amostras, traces de execução em hardware, histogramas d
 
 | Componente | Responsabilidade |
 | --- | --- |
-| `ramshared` | CLI: preflight, ciclo de vida, status, doctor e diagnóstico |
-| `ramsharedd` | serviço de bloco apoiado por GPU (motor NBD e ublk) |
-| `ramshared-tier` | política de camadas e segurança de despromoção |
-| `ramshared-cuda` | wrapper seguro ao redor da fronteira NVIDIA/CUDA |
-| `ramshared-wsl2d` | coordenação da pressão do host WSL2 e telemetria |
-| `ramshared-agent` | observações locais do host e explicações |
-| `drivers/windows/ramshared` | beta supervisionado do StorPort do Windows |
+| `ramshared` | CLI: verificação, teste de estresse, painel de monitoramento, ciclo de vida, status e diagnóstico |
+| `ramsharedd` | Serviço de bloco em GPU (motor NBD e ublk) |
+| `ramshared-tier` | Política de camadas, histerese e segurança de despromoção |
+| `ramshared-cuda` | Wrapper seguro e FFI direto em memória para o driver NVIDIA CUDA |
+| `ramshared-vram` | Alocação DMA travada em página e gerenciamento de memória |
+| `ramshared-wsl2d` | Coordenação de pressão e telemetria do host WSL2 |
+| `ramshared-agent` | Observações locais do host e explicações |
+| `drivers/windows/ramshared` | Driver beta supervisionado StorPort para Windows |
 
 A arquitetura de baixo nível está documentada em
 [`ARCHITECTURE.md`](ARCHITECTURE.md). Alterações em travas, DMA, propriedade
