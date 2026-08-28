@@ -15,6 +15,7 @@ mod bounded_process;
 mod cascade;
 mod diagnose;
 mod monitor;
+mod stress;
 mod supervisor;
 mod workload;
 
@@ -160,6 +161,16 @@ struct GpuInfo {
     free_bytes: u64,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct SysctlTuning {
+    min_free_kbytes: Option<u64>,
+    swappiness: Option<u32>,
+    vfs_cache_pressure: Option<u32>,
+    watermark_boost_factor: Option<u32>,
+    watermark_scale_factor: Option<u32>,
+    page_lock_unfairness: Option<u32>,
+}
+
 #[derive(Debug)]
 struct CheckReport {
     wsl: WslProbe,
@@ -167,6 +178,7 @@ struct CheckReport {
     kernel: KernelFeatures,
     cuda: CudaProbe,
     backends: BackendProbe,
+    sysctl: SysctlTuning,
     blockers: Vec<String>,
     warnings: Vec<String>,
 }
@@ -195,6 +207,7 @@ enum CliCommand {
     Status { json: bool },
     Monitor { options: MonitorOptions },
     Diagnose { args: Vec<String> },
+    Stress { args: Vec<String> },
     Help,
 }
 
@@ -295,13 +308,19 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
         "status" => Ok(CliCommand::Status {
             json: parse_json_option("status", options)?,
         }),
-        "monitor" => Ok(CliCommand::Monitor {
+        cmd @ ("monitor" | "top") => Ok(CliCommand::Monitor {
             options: MonitorOptions::parse(options).map_err(|_| CliParseError::InvalidOption {
-                command: "monitor",
+                command: match cmd {
+                    "top" => "top",
+                    _ => "monitor",
+                },
                 options: options.to_vec(),
             })?,
         }),
         "diagnose" => Ok(CliCommand::Diagnose {
+            args: options.to_vec(),
+        }),
+        "stress" | "bench" => Ok(CliCommand::Stress {
             args: options.to_vec(),
         }),
         "-h" | "--help" => Ok(CliCommand::Help),
@@ -322,6 +341,12 @@ trait CliActionRunner {
         stderr: &mut dyn Write,
     ) -> ExitCode;
     fn diagnose(
+        &mut self,
+        args: &[String],
+        stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode;
+    fn stress(
         &mut self,
         args: &[String],
         stdout: &mut dyn Write,
@@ -418,6 +443,21 @@ impl CliActionRunner for SystemCliActions {
         to_exit(diagnose::run(args), stderr)
     }
 
+    fn stress(
+        &mut self,
+        args: &[String],
+        _stdout: &mut dyn Write,
+        stderr: &mut dyn Write,
+    ) -> ExitCode {
+        match stress::parse_stress_args(args) {
+            Ok(opts) => to_exit(stress::run(&opts), stderr),
+            Err(e) => {
+                let _ = writeln!(stderr, "error: {e}");
+                ExitCode::from(2)
+            }
+        }
+    }
+
     fn run_workload(
         &mut self,
         args: &[String],
@@ -499,6 +539,7 @@ fn run_from_args<R: CliActionRunner>(
         Ok(CliCommand::Status { json }) => actions.status(json, stdout, stderr),
         Ok(CliCommand::Monitor { options }) => actions.monitor(&options, stdout, stderr),
         Ok(CliCommand::Diagnose { args }) => actions.diagnose(&args, stdout, stderr),
+        Ok(CliCommand::Stress { args }) => actions.stress(&args, stdout, stderr),
         Ok(CliCommand::Help) => {
             print_usage(stderr);
             ExitCode::SUCCESS
@@ -552,7 +593,15 @@ fn print_usage(stderr: &mut dyn Write) {
     );
     let _ = writeln!(
         stderr,
+        "  ramshared top               # interactive real-time dashboard (TUI monitor)"
+    );
+    let _ = writeln!(
+        stderr,
         "  ramshared monitor [--jsonl] [--once] [--interval-ms N] [--history-seconds N]"
+    );
+    let _ = writeln!(
+        stderr,
+        "  ramshared stress [--start %] [--target %] [--step %] [--interval-ms N] [--hold-sec N] [--min-ram-mb N] [--json]"
     );
     let _ = writeln!(
         stderr,
@@ -603,11 +652,13 @@ fn run_check() -> CheckReport {
             None => warnings.push("could not confirm CONFIG_IO_URING".to_string()),
         }
     }
-    if backends.nbd_detail.contains("module-not-loaded") {
-        warnings.push(
-            "CONFIG_BLK_DEV_NBD exists, but /dev/nbd* is not present; start may require modprobe nbd"
-                .to_string(),
-        );
+    let sysctl = probe_sysctl_tuning();
+    if let Some(mfk) = sysctl.min_free_kbytes
+        && mfk < 131072
+    {
+        warnings.push(format!(
+            "vm.min_free_kbytes is low ({mfk} KiB < 128 MiB); recommended >= 524288 KiB (512 MiB) to prevent Direct Reclaim stalls"
+        ));
     }
 
     CheckReport {
@@ -616,8 +667,27 @@ fn run_check() -> CheckReport {
         kernel,
         cuda,
         backends,
+        sysctl,
         blockers,
         warnings,
+    }
+}
+
+fn probe_sysctl_tuning() -> SysctlTuning {
+    let parse_u64 = |path: &str| -> Option<u64> {
+        read_to_string(path).and_then(|s| s.trim().parse::<u64>().ok())
+    };
+    let parse_u32 = |path: &str| -> Option<u32> {
+        read_to_string(path).and_then(|s| s.trim().parse::<u32>().ok())
+    };
+
+    SysctlTuning {
+        min_free_kbytes: parse_u64("/proc/sys/vm/min_free_kbytes"),
+        swappiness: parse_u32("/proc/sys/vm/swappiness"),
+        vfs_cache_pressure: parse_u32("/proc/sys/vm/vfs_cache_pressure"),
+        watermark_boost_factor: parse_u32("/proc/sys/vm/watermark_boost_factor"),
+        watermark_scale_factor: parse_u32("/proc/sys/vm/watermark_scale_factor"),
+        page_lock_unfairness: parse_u32("/proc/sys/vm/page_lock_unfairness"),
     }
 }
 
@@ -1133,6 +1203,23 @@ fn print_details<W: Write + ?Sized>(report: &CheckReport, output: &mut W) -> std
             one_line(nvidia_smi_output)
         )?;
     }
+    if let Some(mfk) = report.sysctl.min_free_kbytes {
+        writeln!(
+            output,
+            "  vm.min_free_kbytes: {mfk} ({})",
+            if mfk >= 262144 {
+                "optimal"
+            } else {
+                "suboptimal"
+            }
+        )?;
+    }
+    if let Some(sw) = report.sysctl.swappiness {
+        writeln!(output, "  vm.swappiness: {sw}")?;
+    }
+    if let Some(vfs) = report.sysctl.vfs_cache_pressure {
+        writeln!(output, "  vm.vfs_cache_pressure: {vfs}")?;
+    }
     Ok(())
 }
 
@@ -1211,6 +1298,15 @@ fn recommendations_for(report: &CheckReport) -> Vec<String> {
         );
     }
 
+    if let Some(mfk) = report.sysctl.min_free_kbytes
+        && mfk < 262144
+    {
+        recommendations.push(
+            "Apply `packaging/systemd/99-ramshared-performance.conf` to set vm.min_free_kbytes=524288 and prevent Hyper-V vCPU Direct Reclaim freezes"
+                .to_string(),
+        );
+    }
+
     if report.decision() == Decision::Ready {
         recommendations.push(
             "Environment ready for the bounded NBD preflight; keep pressure and boot activation disabled until status reports a guaranteed READY profile"
@@ -1272,6 +1368,34 @@ fn render_json(report: &CheckReport) -> String {
         None => "null".to_string(),
     };
 
+    let sysctl_json = format!(
+        "{{\"min_free_kbytes\":{},\"swappiness\":{},\"vfs_cache_pressure\":{},\"watermark_boost_factor\":{},\"watermark_scale_factor\":{},\"page_lock_unfairness\":{}}}",
+        report
+            .sysctl
+            .min_free_kbytes
+            .map_or_else(|| "null".to_string(), |v| v.to_string()),
+        report
+            .sysctl
+            .swappiness
+            .map_or_else(|| "null".to_string(), |v| v.to_string()),
+        report
+            .sysctl
+            .vfs_cache_pressure
+            .map_or_else(|| "null".to_string(), |v| v.to_string()),
+        report
+            .sysctl
+            .watermark_boost_factor
+            .map_or_else(|| "null".to_string(), |v| v.to_string()),
+        report
+            .sysctl
+            .watermark_scale_factor
+            .map_or_else(|| "null".to_string(), |v| v.to_string()),
+        report
+            .sysctl
+            .page_lock_unfairness
+            .map_or_else(|| "null".to_string(), |v| v.to_string()),
+    );
+
     format!(
         concat!(
             "{{",
@@ -1285,6 +1409,7 @@ fn render_json(report: &CheckReport) -> String {
             "\"CONFIG_BLK_DEV_UBLK\":{},\"CONFIG_ZRAM\":{}}},",
             "\"backends\":{{\"nbd\":\"{}\",\"nbd_detail\":\"{}\",",
             "\"ublk\":\"{}\",\"ublk_detail\":\"{}\"}},",
+            "\"sysctl\":{},",
             "\"decision\":\"{}\",",
             "\"blockers\":[{}],",
             "\"warnings\":[{}]",
@@ -1316,6 +1441,7 @@ fn render_json(report: &CheckReport) -> String {
         json_escape(&report.backends.nbd_detail),
         report.backends.ublk_status.as_str(),
         json_escape(&report.backends.ublk_detail),
+        sysctl_json,
         report.decision().as_str(),
         json_array(&report.blockers),
         json_array(&report.warnings)
@@ -1516,6 +1642,18 @@ mod tests {
             _stderr: &mut dyn std::io::Write,
         ) -> ExitCode {
             self.calls.push(CliCommand::Diagnose {
+                args: args.to_vec(),
+            });
+            self.result()
+        }
+
+        fn stress(
+            &mut self,
+            args: &[String],
+            _stdout: &mut dyn std::io::Write,
+            _stderr: &mut dyn std::io::Write,
+        ) -> ExitCode {
+            self.calls.push(CliCommand::Stress {
                 args: args.to_vec(),
             });
             self.result()
@@ -1929,6 +2067,7 @@ CONFIG_BLK_DEV_NBD=m\n\
                 ublk_status: Status::Fail,
                 ublk_detail: "CONFIG_BLK_DEV_UBLK disabled or unknown".to_string(),
             },
+            sysctl: SysctlTuning::default(),
             blockers: vec!["CUDA unavailable: /dev/dxg is absent".to_string()],
             warnings: Vec::new(),
         };
@@ -2004,6 +2143,14 @@ CONFIG_BLK_DEV_NBD=m\n\
                 nbd_detail: "device-present".to_string(),
                 ublk_status: Status::Ok,
                 ublk_detail: "ready".to_string(),
+            },
+            sysctl: SysctlTuning {
+                min_free_kbytes: Some(524288),
+                swappiness: Some(100),
+                vfs_cache_pressure: Some(50),
+                watermark_boost_factor: Some(0),
+                watermark_scale_factor: Some(125),
+                page_lock_unfairness: Some(1),
             },
             blockers: Vec::new(),
             warnings: vec!["minor warning".to_string()],
@@ -2224,6 +2371,7 @@ CONFIG_BLK_DEV_NBD=m\n\
                 ublk_status: Status::Fail,
                 ublk_detail: "none".to_string(),
             },
+            sysctl: SysctlTuning::default(),
             blockers: vec!["blocker 1".to_string()],
             warnings: vec!["warning 1".to_string()],
         };
@@ -2257,5 +2405,70 @@ CONFIG_BLK_DEV_NBD=m\n\
         assert!(fail_out.is_none());
 
         let _ = run_check();
+    }
+
+    #[test]
+    fn sysctl_probe_and_recommendations_cover_all_branches() {
+        let tuning = probe_sysctl_tuning();
+        let _ = format!("{tuning:?}");
+
+        let low_report = CheckReport {
+            wsl: WslProbe {
+                status: Status::Ok,
+                release: "6.6.87.2-microsoft-standard-WSL2".to_string(),
+                version: "Linux version test".to_string(),
+            },
+            swaps: Vec::new(),
+            kernel: KernelFeatures {
+                config_source: None,
+                swap: Some(KernelConfig::BuiltIn),
+                io_uring: Some(KernelConfig::BuiltIn),
+                io_uring_runtime: Some(IoUringRuntime::Enabled),
+                nbd: Some(KernelConfig::BuiltIn),
+                ublk: Some(KernelConfig::Module),
+                zram: Some(KernelConfig::Module),
+            },
+            cuda: CudaProbe {
+                status: Status::Ok,
+                libcuda_path: Some("/usr/lib/wsl/lib/libcuda.so.1".to_string()),
+                dxg_present: true,
+                nvidia_smi_path: None,
+                nvidia_smi_status: None,
+                nvidia_smi_output: None,
+                gpu: None,
+                detail: "ready".to_string(),
+            },
+            backends: BackendProbe {
+                nbd_status: Status::Ok,
+                nbd_detail: "device-present".to_string(),
+                ublk_status: Status::Ok,
+                ublk_detail: "ready".to_string(),
+            },
+            sysctl: SysctlTuning {
+                min_free_kbytes: Some(32768),
+                swappiness: Some(40),
+                vfs_cache_pressure: Some(120),
+                watermark_boost_factor: Some(15000),
+                watermark_scale_factor: Some(10),
+                page_lock_unfairness: Some(5),
+            },
+            blockers: Vec::new(),
+            warnings: Vec::new(),
+        };
+
+        let recs = recommendations_for(&low_report);
+        assert!(
+            recs.iter()
+                .any(|r| r.contains("99-ramshared-performance.conf"))
+        );
+
+        let mut buf = Vec::new();
+        let _ = print_details(&low_report, &mut buf);
+        let details_str = String::from_utf8_lossy(&buf);
+        assert!(details_str.contains("suboptimal"));
+        assert!(details_str.contains("vm.swappiness: 40"));
+
+        let json = render_json(&low_report);
+        assert!(json.contains("\"min_free_kbytes\":32768"));
     }
 }

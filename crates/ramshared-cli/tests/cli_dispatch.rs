@@ -183,3 +183,78 @@ fn cli_up_and_down_refuse_before_mutation() {
     assert_eq!(down_refusal.status.code(), Some(2));
     assert!(stderr(&down_refusal).contains("invalid down option"));
 }
+
+#[test]
+fn cli_top_alias_and_refusals() {
+    let top_once = run_cli(&["top", "--once", "--jsonl"]);
+    assert_eq!(top_once.status.code(), Some(0));
+    assert!(!stdout(&top_once).is_empty());
+
+    let top_refusal = run_cli(&["top", "--bad-option"]);
+    assert_eq!(top_refusal.status.code(), Some(2));
+    assert!(stderr(&top_refusal).contains("invalid top option"));
+}
+
+#[test]
+fn cli_stress_subcommand_and_json_report() {
+    let output = run_cli(&[
+        "stress",
+        "--start",
+        "1",
+        "--target",
+        "2",
+        "--step",
+        "1",
+        "--interval-ms",
+        "50",
+        "--hold-sec",
+        "0",
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    let val: serde_json::Value =
+        serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null);
+    assert_eq!(
+        val.get("status").and_then(serde_json::Value::as_str),
+        Some("PASS_ZERO_PANIC")
+    );
+    assert!(val.get("reclaim_speed_gbs").is_some());
+
+    let refusal = run_cli(&["stress", "--invalid-flag"]);
+    assert_eq!(refusal.status.code(), Some(2));
+}
+
+#[test]
+fn cli_stress_battery_and_seismic_log() {
+    let log_path = "/tmp/ramshared-seismic-battery-test.log";
+    let output = run_cli(&[
+        "stress",
+        "--battery",
+        "--start",
+        "1",
+        "--target",
+        "2",
+        "--step",
+        "1",
+        "--interval-ms",
+        "50",
+        "--hold-sec",
+        "1",
+        "--log",
+        log_path,
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    let val: serde_json::Value =
+        serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null);
+    assert_eq!(
+        val.get("battery_mode").and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    assert!(val.get("peak_pressure_index").is_some());
+
+    if let Ok(content) = fs::read_to_string(log_path) {
+        assert!(content.contains("IDX"));
+        let _ = fs::remove_file(log_path);
+    }
+}

@@ -11,7 +11,7 @@
         "-p",
         "ramshared-cli",
         "--files",
-        "crates/ramshared-cli/src/workload.rs,crates/ramshared-cli/src/supervisor.rs,crates/ramshared-cli/src/monitor.rs",
+        "crates/ramshared-cli/src/workload.rs,crates/ramshared-cli/src/supervisor.rs,crates/ramshared-cli/src/monitor.rs,crates/ramshared-cli/src/stress.rs",
         "--min",
         "80",
         "--report-json",
@@ -23,7 +23,8 @@
       "files": [
         "crates/ramshared-cli/src/workload.rs",
         "crates/ramshared-cli/src/supervisor.rs",
-        "crates/ramshared-cli/src/monitor.rs"
+        "crates/ramshared-cli/src/monitor.rs",
+        "crates/ramshared-cli/src/stress.rs"
       ],
       "min": 80
     },

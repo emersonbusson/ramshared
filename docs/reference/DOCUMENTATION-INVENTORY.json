@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 251,
-    "classified": 240,
+    "total": 258,
+    "classified": 247,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -318,7 +318,31 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/architecture/LINUX-KERNEL-TELEMETRY-SPEC.md",
+      "disposition": "classified",
+      "ruleId": "architecture-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
       "path": "docs/benchmarks/README.md",
+      "disposition": "classified",
+      "ruleId": "benchmark-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "benchmarking",
+      "canonicalSource": "docs/BENCHMARKS.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/benchmarks/STRESS-TELEMETRY-REPORT.md",
       "disposition": "classified",
       "ruleId": "benchmark-documents",
       "verification": {
@@ -362,6 +386,18 @@
       },
       "owner": "release-engineering",
       "canonicalSource": "docs/ci/CI-TOPOLOGY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/cioficial.md",
+      "disposition": "classified",
+      "ruleId": "top-level-docs",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
     },
@@ -984,7 +1020,31 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/reviews/ADVERSARIAL-KERNEL-CI-AUDIT.md",
+      "disposition": "classified",
+      "ruleId": "review-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/reviews/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
       "path": "docs/reviews/README.md",
+      "disposition": "classified",
+      "ruleId": "review-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/reviews/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/reviews/UPSTREAM-ANTI-FRAGILITY-FORMS.md",
       "disposition": "classified",
       "ruleId": "review-documents",
       "verification": {
@@ -2904,6 +2964,18 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/upstream/LKML-PATCHSET.md",
+      "disposition": "classified",
+      "ruleId": "upstream-drafts",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "release-engineering",
+      "canonicalSource": "README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 30
+    },
+    {
       "path": "docs/upstream/microsoft-wsl-40795-comment-draft.md",
       "disposition": "classified",
       "ruleId": "upstream-drafts",
@@ -2984,6 +3056,18 @@
       },
       "owner": "reliability",
       "canonicalSource": "superprompt.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "trovaldo.md",
+      "disposition": "classified",
+      "ruleId": "root-upstream-torvalds-roadmap",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "trovaldo.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
     },

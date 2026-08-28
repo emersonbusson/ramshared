@@ -33,6 +33,7 @@ MEMORY.md
 # Temporary directories
 /tmp/
 /temp/
+/scratch/
 
 # Temporary validation media
 /vm_screen.png
