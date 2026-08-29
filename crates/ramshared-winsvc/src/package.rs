@@ -268,6 +268,25 @@ pub fn plan_uninstall(status: &ProductStatus) -> Result<(), String> {
     }
 }
 
+pub fn build_residue_script(letter: char) -> Result<String, Box<dyn std::error::Error>> {
+    let uppercase_letter = letter.to_ascii_uppercase();
+    if !uppercase_letter.is_ascii_uppercase() {
+        return Err("invalid volume letter for host residue query".into());
+    }
+    let escaped_letter = uppercase_letter.to_string().replace('\'', "''");
+    Ok(format!(
+        concat!(
+            "$ErrorActionPreference='Stop';",
+            "$d=@(Get-CimInstance Win32_DiskDrive|?{{",
+            "$_.Model -match 'RAMSHARE|VRAMDISK' -or $_.Caption -match 'RAMSHARE|VRAMDISK'}});",
+            "$p=@(Get-CimInstance Win32_PageFileUsage|?{{",
+            "$_.Name -match '^{letter}:\\\\'}});",
+            "Write-Output ($d.Count.ToString()+'|'+$p.Count.ToString())"
+        ),
+        letter = escaped_letter
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
@@ -466,23 +485,4 @@ mod tests {
         let injected_char = build_residue_script('\'');
         assert!(injected_char.is_err());
     }
-}
-
-pub fn build_residue_script(letter: char) -> Result<String, Box<dyn std::error::Error>> {
-    let uppercase_letter = letter.to_ascii_uppercase();
-    if !uppercase_letter.is_ascii_uppercase() {
-        return Err("invalid volume letter for host residue query".into());
-    }
-    let escaped_letter = uppercase_letter.to_string().replace('\'', "''");
-    Ok(format!(
-        concat!(
-            "$ErrorActionPreference='Stop';",
-            "$d=@(Get-CimInstance Win32_DiskDrive|?{{",
-            "$_.Model -match 'RAMSHARE|VRAMDISK' -or $_.Caption -match 'RAMSHARE|VRAMDISK'}});",
-            "$p=@(Get-CimInstance Win32_PageFileUsage|?{{",
-            "$_.Name -match '^{letter}:\\\\'}});",
-            "Write-Output ($d.Count.ToString()+'|'+$p.Count.ToString())"
-        ),
-        letter = escaped_letter
-    ))
 }
