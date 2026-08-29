@@ -97,6 +97,35 @@ pub enum BrokerStatusRequestV1 {
     Status,
 }
 
+pub struct IpcRingBuffer {
+    buffers: Vec<Vec<u8>>,
+    index: usize,
+}
+
+impl IpcRingBuffer {
+    pub fn new(capacity: usize) -> Self {
+        let actual_capacity = std::cmp::max(1, capacity);
+        Self {
+            buffers: (0..actual_capacity).map(|_| Vec::with_capacity(4096)).collect(),
+            index: 0,
+        }
+    }
+
+    pub fn serialize_msg(&mut self, msg: &Msg) -> Result<&[u8], std::io::Error> {
+        let index = self.index;
+        let buffer = &mut self.buffers[index];
+        buffer.clear();
+        serde_json::to_writer(&mut *buffer, msg)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        buffer.push(b'\n');
+
+        let len = self.buffers.len();
+        self.index = (index + 1) % len;
+
+        Ok(&self.buffers[index])
+    }
+}
+
 pub struct BrokerSessionCore {
     allowed_tenant: String,
     broker_instance_id: String,
@@ -453,5 +482,28 @@ mod tests {
             include_str!("../broker.example.toml")
         );
         assert!(BrokerConfigV1::from_toml(text.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn ipc_ring_buffer_recycles_and_serializes() {
+        let mut pool = super::IpcRingBuffer::new(3);
+        let msg1 = Msg::LeaseRequest { bytes: 1024 };
+        let msg2 = Msg::LeaseRelease { lease: 1 };
+
+        let buf1 = pool.serialize_msg(&msg1).unwrap();
+        assert!(buf1.ends_with(b"\n"));
+        let p1 = buf1.as_ptr();
+
+        let buf2 = pool.serialize_msg(&msg2).unwrap();
+        assert!(buf2.ends_with(b"\n"));
+        let p2 = buf2.as_ptr();
+
+        assert_ne!(p1, p2, "different buffers should be used");
+
+        let _ = pool.serialize_msg(&msg1).unwrap(); // 3rd buffer
+
+        let buf4 = pool.serialize_msg(&msg1).unwrap(); // Back to 1st buffer
+        let p4 = buf4.as_ptr();
+        assert_eq!(p1, p4, "buffer should be recycled");
     }
 }
