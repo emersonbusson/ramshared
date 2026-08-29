@@ -1,0 +1,1 @@
+FINDING_ONLY: The target file `crates/ramshared-agent/src/lib.rs` strictly acts as a module root exposing other modules. It does not contain any "public agent types", "orphan structs", or "legacy methods" to document or clean up. Modification would introduce hallucinated code or violate the strictly defined module structure.
