@@ -1,0 +1,1 @@
+echo "* When writing tests for invalid ELF loading, ensure the test properly creates a dummy file with non-ELF data, attempts to open it via \`dlopen\`, asserts graceful failure (null pointer), asserts non-empty error message, and safely cleans up the dummy file avoiding TOCTOU." >> MEMORY.md

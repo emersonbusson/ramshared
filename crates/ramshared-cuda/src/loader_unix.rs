@@ -82,4 +82,35 @@ mod tests {
         let err_msg2 = error();
         assert_eq!(err_msg2, "unknown dlopen error");
     }
+
+    #[test]
+    fn test_invalid_elf_version_incompatible() {
+        use std::io::Write;
+        let mut tmp = std::env::temp_dir();
+        tmp.push("invalid_libcuda.so");
+
+        {
+            let mut f = std::fs::File::create(&tmp).unwrap();
+            f.write_all(b"not an elf file, invalid version/format").unwrap();
+            f.sync_all().unwrap();
+        }
+
+        let path_str = tmp.to_str().unwrap();
+        let c_path = std::ffi::CString::new(path_str).unwrap();
+
+        let _ = error(); // clear preexisting error
+        let handle = unsafe { open(c_path.as_ptr()) };
+        assert!(handle.is_null(), "Opening an invalid ELF should fail gracefully");
+
+        let err_msg = error();
+        assert!(!err_msg.is_empty());
+        assert_ne!(err_msg, "unknown dlopen error");
+
+        // Cleanup safely avoiding TOCTOU
+        let canon_tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap_or_default();
+        let canon_target = std::fs::canonicalize(&tmp).unwrap_or_default();
+        if canon_target.starts_with(&canon_tmp) && !canon_target.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
 }
