@@ -386,6 +386,21 @@ mod tests {
     }
 
     #[test]
+    fn client_disconnect_clears_live_session_allowing_reconnect() {
+        let mut core = BrokerSessionCore::new(1024, "winsvc", "01");
+        core.on_authenticated_msg(1, register("winsvc"));
+        assert!(core.status().registered);
+
+        let effects = core.on_disconnect(1);
+        assert!(effects.contains(&BrokerEffect::Audit("session_disconnected".into())));
+        assert!(!core.status().registered);
+
+        let reconnect_effects = core.on_authenticated_msg(2, register("winsvc"));
+        assert!(reconnect_effects.contains(&BrokerEffect::Reply(Msg::Registered { tenant_id: 1 })));
+        assert!(core.status().registered);
+    }
+
+    #[test]
     fn status_has_instance_and_lease_state() {
         let mut core = BrokerSessionCore::new(1024, "winsvc", "0123456789abcdef0123456789abcdef");
         core.on_authenticated_msg(1, register("winsvc"));
