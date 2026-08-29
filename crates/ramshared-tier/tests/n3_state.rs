@@ -742,3 +742,28 @@ fn revoke_identity_completion_and_cleanup_fail_closed() {
     machine.restart();
     assert_eq!(machine.lease_state(), LeaseState::Absent);
 }
+
+#[test]
+fn test_restore_restart_record_into_checkpoints() {
+    let checkpoint = GenerationCheckpoint {
+        lease_id: LeaseId::from(opaque(b"lease-checkpoint-1")),
+        generation: 42,
+    };
+    let record = RestartRecord::host(10, vec![checkpoint.clone()])
+        .unwrap_or_else(|error| panic!("bounded host restart record: {error:?}"));
+
+    assert_eq!(record.checkpoints(), &[checkpoint]);
+    let checkpoints = record.clone().into_checkpoints();
+    assert_eq!(checkpoints.len(), 1);
+    assert_eq!(
+        checkpoints[0].lease_id,
+        LeaseId::from(opaque(b"lease-checkpoint-1"))
+    );
+    assert_eq!(checkpoints[0].generation, 42);
+
+    let mut machine = LeaseMachine::new();
+    machine
+        .restore_restart_record(record)
+        .unwrap_or_else(|error| panic!("restore_restart_record failed: {error:?}"));
+    assert_eq!(machine.restored_restart_epoch(), Some(10));
+}
