@@ -14,6 +14,12 @@ unsafe extern "C" {
 }
 
 pub mod uapi {
+    // ANTI-BUG: dxgkrnl expects exact padding and alignment across the kernel driver
+    // boundary. Do not remove #[repr(C)] or alter field ordering on any struct.
+    // Incident Context: Altering the layout causes a silent ABI mismatch,
+    // sending a corrupted memory payload to the undocumented dxgkrnl ioctl,
+    // which leads to undefined behavior or system crashes.
+
     pub const ENUM_ADAPTERS2_IOCTL: u64 = 0xc010_4714;
     pub const QUERY_VIDEO_MEMORY_INFO_IOCTL: u64 = 0xc038_470a;
     pub const CLOSE_ADAPTER_IOCTL: u64 = 0xc004_4715;
@@ -279,6 +285,31 @@ mod tests {
         assert_eq!(size_of::<super::uapi::EnumAdapters2>(), 16);
         assert_eq!(size_of::<super::uapi::AdapterInfo>(), 20);
         assert_eq!(size_of::<super::uapi::QueryVideoMemoryInfo>(), 56);
+    }
+
+    #[test]
+    fn dxgkrnl_anti_bug_invariants_and_documentation_present() {
+        // Enforce structural ABI invariants across the driver boundary.
+        // These are exact kernel ioctl expectations.
+        assert_eq!(align_of::<super::uapi::EnumAdapters2>(), 8);
+        assert_eq!(align_of::<super::uapi::AdapterInfo>(), 4);
+        assert_eq!(align_of::<super::uapi::QueryVideoMemoryInfo>(), 8);
+
+        // Ensure ANTI-BUG comments exist to prevent accidental ABI breakage.
+        // We use split to avoid this test's own string literals matching the assertion.
+        let source_code = include_str!("lib.rs");
+        assert!(
+            source_code.contains(&format!("ANTI-BUG: {}", "dxgkrnl expects exact padding and alignment")),
+            "Missing dxgkrnl ANTI-BUG documentation to prevent ABI breakage."
+        );
+        assert!(
+            source_code.contains(&format!("Do not remove #[repr(C)] {}", "or alter field ordering")),
+            "Missing explicit warning against altering field ordering."
+        );
+        assert!(
+            source_code.contains(&format!("Incident {}", "Context:")),
+            "Missing Incident Context documentation for kernel driver boundary collisions."
+        );
     }
 
     #[test]
