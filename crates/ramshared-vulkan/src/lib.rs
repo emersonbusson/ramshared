@@ -670,7 +670,7 @@ mod tests {
                 "--",
                 "tests::open_fails_cleanly_without_icd_internal",
                 "--exact",
-                "--ignored"
+                "--ignored",
             ])
             .env("VK_ICD_FILENAMES", "/dev/null")
             .output()
@@ -684,7 +684,8 @@ mod tests {
         assert!(
             output.status.success(),
             "internal test failed, meaning it didn't get the correct error string. stdout: {}\nstderr: {}",
-            stdout, stderr
+            stdout,
+            stderr
         );
     }
 
