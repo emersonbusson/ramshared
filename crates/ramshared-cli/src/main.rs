@@ -250,7 +250,7 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
     };
 
     match command.as_str() {
-        "version" | "-V" | "--version" => {
+        "version" | "--version" => {
             if options.is_empty() {
                 Ok(CliCommand::Version)
             } else {
@@ -308,19 +308,16 @@ fn parse_cli_command(args: &[String]) -> Result<CliCommand, CliParseError> {
         "status" => Ok(CliCommand::Status {
             json: parse_json_option("status", options)?,
         }),
-        cmd @ ("monitor" | "top") => Ok(CliCommand::Monitor {
+        "monitor" => Ok(CliCommand::Monitor {
             options: MonitorOptions::parse(options).map_err(|_| CliParseError::InvalidOption {
-                command: match cmd {
-                    "top" => "top",
-                    _ => "monitor",
-                },
+                command: "monitor",
                 options: options.to_vec(),
             })?,
         }),
         "diagnose" => Ok(CliCommand::Diagnose {
             args: options.to_vec(),
         }),
-        "stress" | "bench" => Ok(CliCommand::Stress {
+        "stress" => Ok(CliCommand::Stress {
             args: options.to_vec(),
         }),
         "-h" | "--help" => Ok(CliCommand::Help),
@@ -590,10 +587,6 @@ fn print_usage(stderr: &mut dyn Write) {
     let _ = writeln!(
         stderr,
         "  ramshared status [--json]   # phase Armed/UsingVram/… + tiers"
-    );
-    let _ = writeln!(
-        stderr,
-        "  ramshared top               # interactive real-time dashboard (TUI monitor)"
     );
     let _ = writeln!(
         stderr,
@@ -1723,6 +1716,13 @@ mod tests {
             parse_cli_command(&cli_args(&["down"])).unwrap(),
             CliCommand::Down
         );
+    }
+
+    #[test]
+    fn obsolete_aliases_are_rejected() {
+        assert!(parse_cli_command(&cli_args(&["-V"])).is_err(), "-V should be rejected");
+        assert!(parse_cli_command(&cli_args(&["top"])).is_err(), "top should be rejected");
+        assert!(parse_cli_command(&cli_args(&["bench"])).is_err(), "bench should be rejected");
     }
 
     #[test]
