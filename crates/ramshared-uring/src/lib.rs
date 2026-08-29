@@ -623,7 +623,11 @@ mod tests {
 
         // SAFETY: The timespec struct outlives the kernel submission, and the server ring is local.
         unsafe {
-            server.ring.submission().push(&timeout_entry).expect("push timeout");
+            server
+                .ring
+                .submission()
+                .push(&timeout_entry)
+                .expect("push timeout");
         }
 
         // Use wait_and_drain which should block and then return the timeout CQE
@@ -634,7 +638,9 @@ mod tests {
 
         // Simulate Cancellation
         let ts_long = types::Timespec::new().sec(10).nsec(0);
-        let entry2 = opcode::Timeout::new(&ts_long as *const _).build().user_data(100);
+        let entry2 = opcode::Timeout::new(&ts_long as *const _)
+            .build()
+            .user_data(100);
         let timeout_entry2: squeue::Entry128 = entry2.into();
 
         let centry = opcode::AsyncCancel::new(100).build().user_data(101);
@@ -642,8 +648,16 @@ mod tests {
 
         // SAFETY: The timespec lives in the same frame, we wait before drop.
         unsafe {
-            server.ring.submission().push(&timeout_entry2).expect("push long timeout");
-            server.ring.submission().push(&cancel_entry).expect("push cancel");
+            server
+                .ring
+                .submission()
+                .push(&timeout_entry2)
+                .expect("push long timeout");
+            server
+                .ring
+                .submission()
+                .push(&cancel_entry)
+                .expect("push cancel");
         }
 
         // Wait for both the cancellation and the cancelled timeout
@@ -665,8 +679,8 @@ mod tests {
 
     #[test]
     fn server_wait_and_drain_retries_on_eintr() {
-        use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
 
         extern "C" fn dummy_handler(_: libc::c_int) {}
 
@@ -688,7 +702,11 @@ mod tests {
 
         // SAFETY: ts lives through the join.
         unsafe {
-            server.ring.submission().push(&timeout_entry).expect("push eintr timeout");
+            server
+                .ring
+                .submission()
+                .push(&timeout_entry)
+                .expect("push eintr timeout");
         }
 
         let ready = Arc::new(AtomicBool::new(false));
@@ -704,7 +722,10 @@ mod tests {
             // wait_and_drain will block in io_uring_enter. The SIGUSR1 will interrupt it,
             // causing EINTR. wait_and_drain will catch EINTR, loop, and re-enter.
             // Finally, the timeout will complete, causing it to return with the ETIME CQE.
-            let _completions = send_server.0.wait_and_drain().expect("wait and drain eintr");
+            let _completions = send_server
+                .0
+                .wait_and_drain()
+                .expect("wait and drain eintr");
             send_server.0
         });
 
