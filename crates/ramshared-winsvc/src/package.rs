@@ -165,20 +165,25 @@ fn validate_hash(hash: &str) -> Result<(), String> {
 }
 
 pub fn validate_artifact_path(value: &str) -> Result<(), String> {
+    if value.is_empty() || value.starts_with(['/', '\\']) || value.contains(':') {
+        return Err("artifact path must be a normalized relative child".into());
+    }
+    if value
+        .split(['/', '\\'])
+        .any(|component| component.is_empty() || matches!(component, "." | ".."))
+    {
+        return Err("artifact path must be a normalized relative child".into());
+    }
+
     let path = Path::new(value);
-    if value.is_empty()
-        || value.starts_with(['/', '\\'])
-        || value.contains(':')
-        || value
-            .split(['/', '\\'])
-            .any(|component| component.is_empty() || matches!(component, "." | ".."))
-        || path.is_absolute()
+    if path.is_absolute()
         || path
             .components()
             .any(|component| !matches!(component, Component::Normal(_)))
     {
         return Err("artifact path must be a normalized relative child".into());
     }
+
     Ok(())
 }
 
