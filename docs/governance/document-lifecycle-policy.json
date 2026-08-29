@@ -464,6 +464,16 @@
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
+      "id": "jules-findings",
+      "pattern": "docs/jules/**/*.md",
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/reference/REFERENCE-INDEX.md",
+      "lifecycle": "historical",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-29T00:00:00Z"
+    },
+    {
       "id": "windows-script-documents",
       "pattern": "scripts/windows/**/*.md",
       "owner": "windows-driver",
