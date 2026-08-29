@@ -1110,51 +1110,48 @@ mod windows_svc {
             }
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    #[cfg(windows)]
-    use super::windows_svc::build_host_residue_command;
-    #[cfg(windows)]
-    use std::ffi::OsStr;
+    #[cfg(test)]
+    mod tests {
+        use super::build_host_residue_command;
+        use std::ffi::OsStr;
 
-    #[cfg(windows)]
-    #[test]
-    fn test_build_host_residue_command_uses_env_var() {
-        let cmd = build_host_residue_command("X");
+        #[test]
+        fn test_build_host_residue_command_uses_env_var() {
+            let cmd = build_host_residue_command("X");
 
-        let mut has_env_var = false;
-        for (k, v) in cmd.get_envs() {
-            if k == OsStr::new("RAMSHARED_LETTER") {
-                if let Some(val) = v {
-                    if val == OsStr::new("X") {
-                        has_env_var = true;
+            let mut has_env_var = false;
+            for (k, v) in cmd.get_envs() {
+                if k == OsStr::new("RAMSHARED_LETTER") {
+                    if let Some(val) = v {
+                        if val == OsStr::new("X") {
+                            has_env_var = true;
+                        }
                     }
                 }
             }
+
+            assert!(
+                has_env_var,
+                "Command should pass letter via RAMSHARED_LETTER env var to prevent injection"
+            );
+
+            let args: Vec<&OsStr> = cmd.get_args().collect();
+            let cmd_arg = args.last().expect("missing -Command arg");
+            let cmd_str = cmd_arg.to_string_lossy();
+            assert!(
+                cmd_str.contains("$env:RAMSHARED_LETTER"),
+                "Script should reference $env:RAMSHARED_LETTER"
+            );
+            assert!(
+                !cmd_str.contains("^{letter}:\\\\"),
+                "Script should NOT format letter directly"
+            );
+            assert!(
+                !cmd_str.contains("^X:\\\\"),
+                "Script should NOT format letter directly"
+            );
         }
-
-        assert!(
-            has_env_var,
-            "Command should pass letter via RAMSHARED_LETTER env var to prevent injection"
-        );
-
-        let args: Vec<&OsStr> = cmd.get_args().collect();
-        let cmd_arg = args.last().expect("missing -Command arg");
-        let cmd_str = cmd_arg.to_string_lossy();
-        assert!(
-            cmd_str.contains("$env:RAMSHARED_LETTER"),
-            "Script should reference $env:RAMSHARED_LETTER"
-        );
-        assert!(
-            !cmd_str.contains("^{letter}:\\\\"),
-            "Script should NOT format letter directly"
-        );
-        assert!(
-            !cmd_str.contains("^X:\\\\"),
-            "Script should NOT format letter directly"
-        );
     }
 }
 
