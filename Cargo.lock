@@ -614,7 +614,6 @@ dependencies = [
 name = "ramshared-cuda"
 version = "0.1.0"
 dependencies = [
- "libc",
  "ramshared-vram",
  "windows-sys",
 ]
