@@ -901,18 +901,7 @@ mod windows_svc {
         let config = WinDriveConfig::from_reader(&std::fs::read(
             root.join(&manifest.artifact(ArtifactRole::WinsvcConfig)?.relative_path),
         )?)?;
-        let letter = config.volume_letter.to_ascii_uppercase();
-        let script = format!(
-            concat!(
-                "$ErrorActionPreference='Stop';",
-                "$d=@(Get-CimInstance Win32_DiskDrive|?{{",
-                "$_.Model -match 'RAMSHARE|VRAMDISK' -or $_.Caption -match 'RAMSHARE|VRAMDISK'}});",
-                "$p=@(Get-CimInstance Win32_PageFileUsage|?{{",
-                "$_.Name -match '^{letter}:\\\\'}});",
-                "Write-Output ($d.Count.ToString()+'|'+$p.Count.ToString())"
-            ),
-            letter = letter
-        );
+        let script = ramshared_winsvc::package::build_residue_script(config.volume_letter)?;
         let mut child = std::process::Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .stdout(std::process::Stdio::piped())

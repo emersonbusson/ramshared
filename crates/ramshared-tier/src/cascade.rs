@@ -65,6 +65,37 @@ pub fn vram_safety_net(vhdx_present: bool, mem_available: u64, vram_size: u64) -
     }
 }
 
+/// Errors that can occur during tier resizing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResizeError {
+    /// The requested tier capacity exceeds the physical hardware capacity limit.
+    ExceedsPhysicalLimit,
+}
+
+impl core::fmt::Display for ResizeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ResizeError::ExceedsPhysicalLimit => {
+                f.write_str("requested tier capacity exceeds the physical hardware limit")
+            }
+        }
+    }
+}
+
+impl core::error::Error for ResizeError {}
+
+/// Validates that a requested tier resize is within physical hardware limits.
+pub fn validate_tier_resize(
+    requested_bytes: u64,
+    physical_limit_bytes: u64,
+) -> Result<(), ResizeError> {
+    if requested_bytes > physical_limit_bytes {
+        Err(ResizeError::ExceedsPhysicalLimit)
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,5 +145,24 @@ mod tests {
         assert_eq!(Tier::Vram.product_transport(), Some(ProductTransport::Nbd));
         assert_eq!(Tier::Zram.product_transport(), None);
         assert_eq!(Tier::Vhdx.product_transport(), None);
+    }
+
+    #[test]
+    fn tier_resize_within_physical_limits_is_ok() {
+        assert_eq!(validate_tier_resize(0, GIB), Ok(()));
+        assert_eq!(validate_tier_resize(GIB, GIB), Ok(()));
+        assert_eq!(validate_tier_resize(GIB / 2, GIB), Ok(()));
+    }
+
+    #[test]
+    fn tier_resize_exceeding_physical_limits_fails() {
+        assert_eq!(
+            validate_tier_resize(GIB + 1, GIB),
+            Err(ResizeError::ExceedsPhysicalLimit)
+        );
+        assert_eq!(
+            validate_tier_resize(2 * GIB, GIB),
+            Err(ResizeError::ExceedsPhysicalLimit)
+        );
     }
 }
