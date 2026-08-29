@@ -1802,3 +1802,92 @@ enum EventRegistration {
     Conflict,
     Overflow,
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn test_initial_state() {
+        let machine = LeaseMachine::new();
+        assert_eq!(machine.lease_state(), LeaseState::Absent);
+        assert_eq!(machine.preflight_state(), PreflightState::HostUnavailable);
+    }
+
+    #[test]
+    fn test_request_demotion() {
+        let mut model = PreflightModel::new();
+        // Requesting demotion when not constrained should be an invalid transition
+        let decision = model.request_demotion();
+        assert_eq!(decision.action, PreflightAction::Unavailable(FailureReason::InvalidTransition));
+
+        // Let's create a constrained state by observing an empty budget
+        let event_id = EventId::new(b"event-1").unwrap();
+        let adapter_id = AdapterId::new(b"adapter-1").unwrap();
+
+        let observation = HostObservation::new(
+            N3_SCHEMA_VERSION,
+            1,
+            adapter_id,
+            Authority::Host,
+            0, // Budget 0 -> Constrained
+            0,
+            0,
+            100,
+            MAX_OBSERVATION_AGE,
+            event_id,
+            Vec::new()
+        );
+
+        let decision = model.observe(observation, 100);
+        assert_eq!(decision.state, PreflightState::Constrained);
+
+        // Now request demotion should succeed
+        let decision = model.request_demotion();
+        assert_eq!(decision.state, PreflightState::DemotionRequested);
+        assert_eq!(decision.action, PreflightAction::DemotionRequested);
+    }
+
+    #[test]
+    fn test_restart_record_serialization() {
+        let lease_id = LeaseId::new(b"lease-abc").unwrap();
+        let checkpoint = GenerationCheckpoint {
+            lease_id: lease_id.clone(),
+            generation: 42,
+        };
+
+        let record = RestartRecord::host(10, vec![checkpoint.clone()]).unwrap();
+        let bytes = record.to_bytes();
+
+        let decoded = RestartRecord::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.host_epoch(), 10);
+
+        let checkpoints = decoded.checkpoints();
+        assert_eq!(checkpoints.len(), 1);
+        assert_eq!(checkpoints[0].lease_id, lease_id);
+        assert_eq!(checkpoints[0].generation, 42);
+    }
+
+    #[test]
+    fn test_invalid_revoke_transition() {
+        let mut machine = LeaseMachine::new();
+        let lease_id = LeaseId::new(b"lease-1").unwrap();
+        let event_id = EventId::new(b"event-1").unwrap();
+
+        let revoke = Revoke::host(lease_id, 1, event_id, 200);
+
+        // Applying Revoke to an Absent state should result in an invalid transition error
+        let decision = machine.receive_revoke(revoke);
+        match decision {
+            ProtocolDecision::FailAck(fail_ack) => {
+                assert_eq!(fail_ack.reason, FailureReason::InvalidTransition);
+            },
+            _ => panic!("Expected FailAck"),
+        }
+
+        // The machine's state should now be Failed(InvalidTransition)
+        assert_eq!(machine.lease_state(), LeaseState::Failed(FailureReason::InvalidTransition));
+    }
+}
