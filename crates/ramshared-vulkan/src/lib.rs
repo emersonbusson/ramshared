@@ -672,6 +672,5 @@ mod tests {
         // This test ensures the pipeline barrier and mapping fixes introduced
         // in submit_wait and map_memory correctly compile and adhere to safety invariants.
         // The actual runtime execution is covered by vulkan_roundtrip_write_then_read.
-        assert!(true);
     }
 }
