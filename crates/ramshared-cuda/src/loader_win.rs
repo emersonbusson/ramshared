@@ -85,4 +85,50 @@ mod tests {
         unsafe { SetLastError(0) };
         assert_eq!(error(), "Windows error code: 0x00000000");
     }
+
+    #[test]
+    fn test_invalid_library_handling() {
+        use std::fs;
+        use std::ffi::CString;
+
+        let dummy_path = "test_invalid_format_12345.dll";
+        // Create a dummy file with invalid PE data to test loader failure handling.
+        fs::write(dummy_path, b"invalid pe data").unwrap();
+
+        let c_path = CString::new(dummy_path).unwrap();
+
+        // SAFETY: c_path is a valid null-terminated string pointing to the dummy file.
+        let handle = unsafe { open(c_path.as_ptr()) };
+        assert!(handle.is_null(), "Loading an invalid library format should return a null pointer");
+
+        let err_msg = error();
+        assert!(!err_msg.is_empty(), "Error message should not be empty");
+
+        // Clean up safely
+        if fs::metadata(dummy_path).is_ok() {
+            let _ = fs::remove_file(dummy_path);
+        }
+    }
+
+    #[test]
+    fn test_missing_symbol_handling() {
+        use std::ffi::CString;
+
+        // Use a universally present system library on Windows to ensure consistent test execution.
+        let valid_lib = CString::new("kernel32.dll").unwrap();
+
+        // SAFETY: valid_lib is a valid null-terminated string pointing to a known system library.
+        let handle = unsafe { open(valid_lib.as_ptr()) };
+        assert!(!handle.is_null(), "kernel32.dll should load successfully on Windows/Wine");
+
+        let missing_symbol = CString::new("ThisSymbolDoesNotExistInKernel32").unwrap();
+
+        // SAFETY: handle is valid and missing_symbol is a valid null-terminated string.
+        let sym_ptr = unsafe { sym(handle, missing_symbol.as_ptr()) };
+        assert!(sym_ptr.is_null(), "Loading a nonexistent symbol should return a null pointer");
+
+        // SAFETY: handle was opened successfully and has not been closed yet.
+        let close_result = unsafe { close(handle) };
+        assert_eq!(close_result, 0, "Closing the valid library should succeed");
+    }
 }
