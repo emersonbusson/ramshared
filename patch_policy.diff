@@ -1,0 +1,19 @@
+--- docs/governance/document-lifecycle-policy.json
++++ docs/governance/document-lifecycle-policy.json
+@@ -475,6 +475,16 @@
+       "verification": { "state": "unverified" },
+       "registeredAt": "2026-08-11T15:15:12Z"
+     },
++    {
++      "id": "jules-findings-documents",
++      "pattern": "docs/jules/findings/**/*.md",
++      "owner": "agent-orchestration",
++      "canonicalSource": "AGENTS.md",
++      "lifecycle": "historical",
++      "freshnessDays": null,
++      "verification": { "state": "unverified" },
++      "registeredAt": "2026-08-29T00:00:00Z"
++    }
+   ],
+   "exclusions": [
+     {
