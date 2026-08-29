@@ -561,3 +561,138 @@ fn struct_bytes<T>(v: &T) -> Vec<u8> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn ioctl_codes_calculation() {
+        // FILE_DEVICE_MASS_STORAGE (0x2d) << 16 = 0x002D0000
+        // (FILE_READ_ACCESS | FILE_WRITE_ACCESS) (3) << 14 = 0x0000C000
+        // METHOD_BUFFERED = 0
+        // Base prefix: 0x002DC000
+        // Function 0 (REGISTER): (0x800 + 0) << 2 = 0x2000 => 0x002DE000
+        // Function 1 (UNREGISTER): (0x801) << 2 = 0x2004 => 0x002DE004
+        // Function 2 (COMMIT): (0x802) << 2 = 0x2008 => 0x002DE008
+        // Function 3 (CREATE): (0x803) << 2 = 0x200C => 0x002DE00C
+        // Function 4 (DESTROY): (0x804) << 2 = 0x2010 => 0x002DE010
+        assert_eq!(IOCTL_REGISTER, 0x002D_E000);
+        assert_eq!(IOCTL_UNREGISTER, 0x002D_E004);
+        assert_eq!(IOCTL_COMMIT, 0x002D_E008);
+        assert_eq!(IOCTL_CREATE, 0x002D_E00C);
+        assert_eq!(IOCTL_DESTROY, 0x002D_E010);
+    }
+
+    #[test]
+    fn struct_bytes_serialization() {
+        let params = DiskParams {
+            size_bytes: 1024 * 1024,
+            block_size: 512,
+            max_io_bytes: 65536,
+            reserved: 0,
+        };
+        let bytes = struct_bytes(&params);
+        assert_eq!(bytes.len(), size_of::<DiskParams>());
+        assert_eq!(
+            &bytes[0..8],
+            &(1024 * 1024u64).to_le_bytes()
+        );
+        assert_eq!(&bytes[8..12], &512u32.to_le_bytes());
+        assert_eq!(&bytes[12..16], &65536u32.to_le_bytes());
+        assert_eq!(&bytes[16..20], &0u32.to_le_bytes());
+    }
+
+    #[test]
+    fn ioctl_error_display_and_error() {
+        let err_open = IoctlError::Open("handle fail".into());
+        let err_ioctl = IoctlError::Ioctl("win32=5".into());
+        let err_map = IoctlError::Map("VirtualAlloc fail".into());
+        let err_timeout = IoctlError::Timeout;
+        let err_cancelled = IoctlError::Cancelled;
+        let err_invalid = IoctlError::Invalid("bad params".into());
+
+        assert_eq!(format!("{err_open}"), "open: handle fail");
+        assert_eq!(format!("{err_ioctl}"), "ioctl: win32=5");
+        assert_eq!(format!("{err_map}"), "map: VirtualAlloc fail");
+        assert_eq!(format!("{err_timeout}"), "timeout");
+        assert_eq!(format!("{err_cancelled}"), "cancelled");
+        assert_eq!(format!("{err_invalid}"), "invalid: bad params");
+
+        assert!(err_open.source().is_none());
+    }
+
+    #[test]
+    fn driver_link_validation_checks() {
+        let mut link = WindowsDriverLink {
+            handle: INVALID_HANDLE_VALUE,
+            event: ptr::null_mut(),
+            pending: false,
+        };
+
+        // DiskParams with non-zero reserved must fail
+        let bad_params = DiskParams {
+            size_bytes: 1024,
+            block_size: 512,
+            max_io_bytes: 512,
+            reserved: 1,
+        };
+        let err = link.create_disk(&bad_params).unwrap_err();
+        assert!(matches!(err, IoctlError::Invalid(msg) if msg.contains("disk reserved non-zero")));
+
+        // Register with non-zero reserved must fail
+        let bad_reg_res = Register {
+            abi_version: ABI_VERSION,
+            disk_id: 0,
+            queue_depth: 16,
+            block_size: 512,
+            max_io_bytes: 4096,
+            reserved: 1,
+            sq_ring_va: 0x1000,
+            cq_ring_va: 0x2000,
+            data_area_va: 0x3000,
+            data_area_len: 65536,
+            sq_event_handle: 0,
+            cq_event_handle: 0,
+        };
+        let err = link.register_queue(&bad_reg_res).unwrap_err();
+        assert!(matches!(err, IoctlError::Invalid(msg) if msg.contains("register reserved non-zero")));
+
+        // Register with disk_id != 0 must fail
+        let bad_reg_disk = Register {
+            abi_version: ABI_VERSION,
+            disk_id: 1,
+            queue_depth: 16,
+            block_size: 512,
+            max_io_bytes: 4096,
+            reserved: 0,
+            sq_ring_va: 0x1000,
+            cq_ring_va: 0x2000,
+            data_area_va: 0x3000,
+            data_area_len: 65536,
+            sq_event_handle: 0,
+            cq_event_handle: 0,
+        };
+        let err = link.register_queue(&bad_reg_disk).unwrap_err();
+        assert!(matches!(err, IoctlError::Invalid(msg) if msg.contains("disk_id must be 0")));
+
+        // Commit and fetch when already pending must fail
+        link.pending = true;
+        let err = link.commit_and_fetch(Duration::from_millis(100)).unwrap_err();
+        assert!(matches!(err, IoctlError::Invalid(msg) if msg.contains("commit already pending")));
+
+        // Cancel fetch without pending is Ok(())
+        link.pending = false;
+        assert!(link.cancel_fetch().is_ok());
+
+        // Cancel fetch with pending returns Invalid
+        link.pending = true;
+        let err = link.cancel_fetch().unwrap_err();
+        assert!(matches!(err, IoctlError::Invalid(msg) if msg.contains("pending fetch cannot be cancelled")));
+
+        // Reset pending so drop doesn't attempt cancel_fetch
+        link.pending = false;
+    }
+}
