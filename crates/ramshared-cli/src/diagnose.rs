@@ -286,4 +286,45 @@ mod tests {
         assert_eq!(d.samples, 0);
         assert!(d.recommendations[0].contains("--telemetry-jsonl"));
     }
+
+    #[test]
+    fn diagnose_cli_invalid_args_returns_error() {
+        let cargo = env!("CARGO");
+
+        let output_no_args = std::process::Command::new(cargo)
+            .args(["run", "-q", "-p", "ramshared-cli", "--bin", "ramshared", "--", "diagnose"])
+            .output()
+            .expect("failed to execute ramshared diagnose");
+
+        assert_eq!(output_no_args.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output_no_args.stderr);
+        assert!(stderr.contains("usage: ramshared diagnose --events PATH [--json]"));
+
+        let output_missing_path = std::process::Command::new(cargo)
+            .args(["run", "-q", "-p", "ramshared-cli", "--bin", "ramshared", "--", "diagnose", "--events"])
+            .output()
+            .expect("failed to execute ramshared diagnose");
+
+        assert_eq!(output_missing_path.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output_missing_path.stderr);
+        assert!(stderr.contains("--events requires a path"));
+
+        let output_unknown_arg = std::process::Command::new(cargo)
+            .args(["run", "-q", "-p", "ramshared-cli", "--bin", "ramshared", "--", "diagnose", "--unknown"])
+            .output()
+            .expect("failed to execute ramshared diagnose");
+
+        assert_eq!(output_unknown_arg.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output_unknown_arg.stderr);
+        assert!(stderr.contains("unsupported diagnose argument: --unknown"));
+
+        let output_invalid_file = std::process::Command::new(cargo)
+            .args(["run", "-q", "-p", "ramshared-cli", "--bin", "ramshared", "--", "diagnose", "--events", "nonexistent_file_for_test.jsonl"])
+            .output()
+            .expect("failed to execute ramshared diagnose");
+
+        assert_eq!(output_invalid_file.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&output_invalid_file.stderr);
+        assert!(stderr.contains("read nonexistent_file_for_test.jsonl"));
+    }
 }
