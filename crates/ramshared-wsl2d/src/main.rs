@@ -9758,4 +9758,54 @@ Filename Type Size Used Priority
         assert!(!path.exists(), "exact owned socket was not cleaned");
         std::fs::remove_dir_all(&dir).unwrap();
     }
+
+    struct ErrorBackend;
+
+    impl ramshared_block::BlockBackend for ErrorBackend {
+        fn size_bytes(&self) -> u64 { 4096 }
+        fn block_size(&self) -> u32 { 4096 }
+        fn read_at(&mut self, _off: u64, _buf: &mut [u8]) -> Result<(), ramshared_block::IoError> {
+            Err(ramshared_block::IoError("read failed".into()))
+        }
+        fn write_at(&mut self, _off: u64, _data: &[u8]) -> Result<(), ramshared_block::IoError> {
+            Err(ramshared_block::IoError("write failed".into()))
+        }
+        fn flush(&mut self) -> Result<(), ramshared_block::IoError> {
+            Err(ramshared_block::IoError("flush failed".into()))
+        }
+    }
+
+    #[test]
+    fn serve_request_propagates_backend_errors() {
+        let mut backend = ErrorBackend;
+        let mut buffer = vec![0u8; 4096];
+        let eio = -5; // defined in ublk::EIO originally but private maybe, EIO is -5 in ublk_server
+
+        let read_req = ramshared_block::protocol::Request {
+            flags: 0,
+            cmd: ramshared_block::protocol::Command::Read,
+            handle: 1,
+            offset: 0,
+            len: 4096,
+        };
+        assert_eq!(crate::ublk_server::serve_request(&read_req, &mut backend, &mut buffer), eio);
+
+        let write_req = ramshared_block::protocol::Request {
+            flags: 0,
+            cmd: ramshared_block::protocol::Command::Write,
+            handle: 2,
+            offset: 0,
+            len: 4096,
+        };
+        assert_eq!(crate::ublk_server::serve_request(&write_req, &mut backend, &mut buffer), eio);
+
+        let flush_req = ramshared_block::protocol::Request {
+            flags: 0,
+            cmd: ramshared_block::protocol::Command::Flush,
+            handle: 3,
+            offset: 0,
+            len: 4096,
+        };
+        assert_eq!(crate::ublk_server::serve_request(&flush_req, &mut backend, &mut buffer), eio);
+    }
 }
