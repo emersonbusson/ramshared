@@ -32,6 +32,73 @@ impl Tier {
     }
 }
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
+/// State of a swap tier during fast-path memory transitions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+pub enum TierState {
+    /// Tier is offline and not participating in the cascade.
+    Offline = 0,
+    /// Tier is armed and ready but not currently active.
+    Armed = 1,
+    /// Tier is active and accepting memory pages.
+    Active = 2,
+    /// Tier is demoting resident pages to a lower tier.
+    Demoting = 3,
+}
+
+impl TierState {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            0 => Self::Offline,
+            1 => Self::Armed,
+            2 => Self::Active,
+            3 => Self::Demoting,
+            _ => unreachable!("invalid TierState value"),
+        }
+    }
+}
+
+/// Lock-free state tracker for fast-path tier transitions.
+pub struct AtomicTierState {
+    state: AtomicU8,
+}
+
+impl AtomicTierState {
+    /// Creates a new `AtomicTierState` initialized to the given state.
+    pub const fn new(initial: TierState) -> Self {
+        Self {
+            state: AtomicU8::new(initial as u8),
+        }
+    }
+
+    /// Loads the current state.
+    pub fn load(&self, order: Ordering) -> TierState {
+        TierState::from_u8(self.state.load(order))
+    }
+
+    /// Stores a new state.
+    pub fn store(&self, state: TierState, order: Ordering) {
+        self.state.store(state as u8, order);
+    }
+
+    /// Atomically compares the current state with `current` and, if they match,
+    /// replaces it with `new`.
+    pub fn compare_exchange(
+        &self,
+        current: TierState,
+        new: TierState,
+        success: Ordering,
+        failure: Ordering,
+    ) -> Result<TierState, TierState> {
+        self.state
+            .compare_exchange(current as u8, new as u8, success, failure)
+            .map(|_| current)
+            .map_err(TierState::from_u8)
+    }
+}
+
 /// Safety net status for the VRAM demotion path (Invariant A1).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SafetyNet {
@@ -114,5 +181,41 @@ mod tests {
         assert_eq!(Tier::Vram.product_transport(), Some(ProductTransport::Nbd));
         assert_eq!(Tier::Zram.product_transport(), None);
         assert_eq!(Tier::Vhdx.product_transport(), None);
+    }
+
+    #[test]
+    fn atomic_tier_state_transitions() {
+        use std::sync::atomic::Ordering;
+
+        let atomic_state = AtomicTierState::new(TierState::Offline);
+        assert_eq!(atomic_state.load(Ordering::SeqCst), TierState::Offline);
+
+        // Transition: Offline -> Armed
+        assert_eq!(
+            atomic_state.compare_exchange(
+                TierState::Offline,
+                TierState::Armed,
+                Ordering::SeqCst,
+                Ordering::SeqCst
+            ),
+            Ok(TierState::Offline)
+        );
+        assert_eq!(atomic_state.load(Ordering::SeqCst), TierState::Armed);
+
+        // Failed transition: expect Armed, try Armed -> Active, but pass Offline
+        assert_eq!(
+            atomic_state.compare_exchange(
+                TierState::Offline,
+                TierState::Active,
+                Ordering::SeqCst,
+                Ordering::SeqCst
+            ),
+            Err(TierState::Armed)
+        );
+        assert_eq!(atomic_state.load(Ordering::SeqCst), TierState::Armed);
+
+        // Store directly
+        atomic_state.store(TierState::Demoting, Ordering::SeqCst);
+        assert_eq!(atomic_state.load(Ordering::SeqCst), TierState::Demoting);
     }
 }
