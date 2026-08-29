@@ -4594,8 +4594,8 @@ fn run_ublk_with_runtime(
     let block_path = format!("/dev/ublkb{}", device.id);
     let sectors = size / SECTOR;
     if let Err(error) = runtime.set_params(device, sectors) {
-        prove_ublk_swap_absent(runtime, &block_path)?;
-        runtime.delete_device(device)?;
+        let _ = prove_ublk_swap_absent(runtime, &block_path);
+        let _ = runtime.delete_device(device);
         return Err(error);
     }
     let char_path = format!("/dev/ublkc{}", device.id);
@@ -4603,17 +4603,17 @@ fn run_ublk_with_runtime(
         match runtime.start_server(backend, &char_path, &block_path, device.queue_depth, size) {
             Ok(server) => server,
             Err(error) => {
-                prove_ublk_swap_absent(runtime, &block_path)?;
-                runtime.delete_device(device)?;
+                let _ = prove_ublk_swap_absent(runtime, &block_path);
+                let _ = runtime.delete_device(device);
                 return Err(error);
             }
         };
     if let Err(error) = runtime.start_device(device) {
-        prove_ublk_swap_absent(runtime, &block_path)?;
-        runtime.stop_device(device)?;
+        let _ = prove_ublk_swap_absent(runtime, &block_path);
+        let _ = runtime.stop_device(device);
         let _ = server.join();
-        prove_ublk_swap_absent(runtime, &block_path)?;
-        runtime.delete_device(device)?;
+        let _ = prove_ublk_swap_absent(runtime, &block_path);
+        let _ = runtime.delete_device(device);
         return Err(error);
     }
 
@@ -4626,17 +4626,43 @@ fn run_ublk_with_runtime(
     eprintln!("[ramsharedd] swapon: sudo swapon {block_path}");
     eprintln!("[ramsharedd] Ctrl-C / SIGTERM to exit");
 
-    runtime.wait_for_shutdown().map_err(|error| {
-        format!(
+    if let Err(error) = runtime.wait_for_shutdown() {
+        return Err(format!(
             "recoverable NO-GO while waiting for ublk shutdown ({error}); device and backend preserved"
         )
-    })?;
+        .into());
+    }
     deactivate_ublk_swap(runtime, &block_path)?;
     prove_ublk_swap_absent(runtime, &block_path)?;
-    runtime.stop_device(device)?;
-    server.join()?;
-    prove_ublk_swap_absent(runtime, &block_path)?;
-    runtime.delete_device(device)?;
+
+    // Once swap absence is proven, we MUST join everything, even if stopping the device fails.
+    let mut teardown_error = None;
+    if let Err(error) = runtime.stop_device(device) {
+        teardown_error = Some(error);
+    }
+    #[allow(clippy::collapsible_if)]
+    if let Err(error) = server.join() {
+        if teardown_error.is_none() {
+            teardown_error = Some(error.into());
+        }
+    }
+    #[allow(clippy::collapsible_if)]
+    if let Err(error) = prove_ublk_swap_absent(runtime, &block_path) {
+        if teardown_error.is_none() {
+            teardown_error = Some(error);
+        }
+    }
+    #[allow(clippy::collapsible_if)]
+    if let Err(error) = runtime.delete_device(device) {
+        if teardown_error.is_none() {
+            teardown_error = Some(error);
+        }
+    }
+
+    if let Some(error) = teardown_error {
+        return Err(error);
+    }
+
     eprintln!("[ramsharedd] ublk device removed");
     Ok(())
 }
@@ -7962,6 +7988,7 @@ mod tests {
             Server,
             Start,
             Wait,
+            Stop,
         }
 
         struct Server(std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>);
@@ -8084,7 +8111,11 @@ mod tests {
                 _device: UblkDevice,
             ) -> Result<(), Box<dyn std::error::Error>> {
                 self.mark("stop");
-                Ok(())
+                if self.fail(Failure::Stop) {
+                    Err(std::io::Error::other("stop failure").into())
+                } else {
+                    Ok(())
+                }
             }
 
             fn delete_device(
@@ -8143,6 +8174,13 @@ mod tests {
                 Failure::Wait,
                 vec![
                     "guard", "lock", "signal", "add", "params", "server", "start", "wait",
+                ],
+            ),
+            (
+                Failure::Stop,
+                vec![
+                    "guard", "lock", "signal", "add", "params", "server", "start", "wait",
+                    "swap-state", "swap-state", "stop", "join", "swap-state", "delete",
                 ],
             ),
         ] {
@@ -8302,17 +8340,29 @@ mod tests {
             [
                 Ok(ExactSwapState::Active { used_kb: 0 }),
                 Ok(ExactSwapState::Active { used_kb: 0 }),
+                Ok(ExactSwapState::Active { used_kb: 0 }),
+                Ok(ExactSwapState::Active { used_kb: 0 }),
             ],
             true,
         );
         assert!(run_ublk_with_runtime(4096, false, 1, BackendKind::Ram, &mut active_zero).is_err());
         let mut expected = prefix.clone();
-        expected.extend(["swap-state", "swapoff", "swap-state"]);
+        expected.extend([
+            "swap-state",
+            "swapoff",
+            "swap-state",
+            "swap-state",
+            "stop",
+            "join",
+            "swap-state",
+            "delete",
+        ]);
         assert_eq!(active_zero.calls(), expected);
 
         let mut active_used = Runtime::new(
             [
                 Ok(ExactSwapState::Active { used_kb: 12 }),
+                Ok(ExactSwapState::Absent),
                 Ok(ExactSwapState::Absent),
                 Ok(ExactSwapState::Absent),
                 Ok(ExactSwapState::Absent),
@@ -8334,10 +8384,24 @@ mod tests {
         ]);
         assert_eq!(active_used.calls(), expected);
 
-        let mut unreadable = Runtime::new([Err("unreadable /proc/swaps")], false);
+        let mut unreadable = Runtime::new(
+            [
+                Err("unreadable /proc/swaps"),
+                Err("unreadable /proc/swaps"),
+                Err("unreadable /proc/swaps"),
+            ],
+            false,
+        );
         assert!(run_ublk_with_runtime(4096, false, 1, BackendKind::Ram, &mut unreadable).is_err());
         let mut expected = prefix;
-        expected.push("swap-state");
+        expected.extend([
+            "swap-state",
+            "swap-state",
+            "stop",
+            "join",
+            "swap-state",
+            "delete",
+        ]);
         assert_eq!(unreadable.calls(), expected);
     }
 
