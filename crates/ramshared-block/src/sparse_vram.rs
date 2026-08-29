@@ -752,6 +752,33 @@ mod tests {
     }
 
     #[test]
+    fn write_fail_returns_io_error() {
+        struct FailWriteMem;
+        impl VramMemory for FailWriteMem {
+            fn len(&self) -> usize { 4096 }
+            fn zero(&mut self) -> Result<(), VramError> { Ok(()) }
+            fn read_at(&self, _off: u64, _dst: &mut [u8]) -> Result<(), VramError> { Ok(()) }
+            fn write_at(&mut self, _off: u64, _src: &[u8]) -> Result<(), VramError> {
+                Err(VramError::Provider("simulated write failure".into()))
+            }
+        }
+        struct FailProvider;
+        impl VramProvider for FailProvider {
+            type Mem<'a> = FailWriteMem;
+            fn alloc(&self, _bytes: usize) -> Result<Self::Mem<'_>, VramError> {
+                Ok(FailWriteMem)
+            }
+            fn mem_info(&self) -> Result<(u64, u64), VramError> {
+                Ok((8 << 30, 8 << 30))
+            }
+        }
+        let p = FailProvider;
+        let mut be = SparseVramBackend::new(&p, 1024 * 1024, 256 * 1024, 4096).unwrap();
+        let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
+        assert!(err.0.contains("simulated write failure"));
+    }
+
+    #[test]
     fn env_helpers_have_sane_defaults() {
         // Do not clobber user env permanently — only assert defaults when unset
         if std::env::var("RAMSHARED_VRAM_CHUNK_MIB").is_err() {
