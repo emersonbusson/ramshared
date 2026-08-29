@@ -149,8 +149,17 @@ impl VulkanProvider {
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
         let ci = vk::InstanceCreateInfo::default().application_info(&app);
         // SAFETY: `ci`/`app` valid during call; `None` = default allocator.
-        let instance = unsafe { entry.create_instance(&ci, None) }
-            .map_err(|e| vk_err("create_instance", e))?;
+        let instance = unsafe { entry.create_instance(&ci, None) }.map_err(|e| {
+            let es = format!("{:?}", e);
+            if es.contains("ERROR_INCOMPATIBLE_DRIVER") {
+                VramError::Provider(format!(
+                    "vulkan create_instance: {} (missing ICD drivers or required extensions)",
+                    es
+                ))
+            } else {
+                vk_err("create_instance", e)
+            }
+        })?;
 
         // From this point on, any error must destroy the instance (goto out_err idiom).
         match Self::after_instance(&instance, ordinal) {
@@ -648,5 +657,53 @@ mod tests {
             free0 >> 20,
             free1 >> 20
         );
+    }
+
+    #[test]
+    fn open_fails_cleanly_without_icd_subprocess() {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+        let output = std::process::Command::new(cargo)
+            .args([
+                "test",
+                "-p",
+                "ramshared-vulkan",
+                "--",
+                "tests::open_fails_cleanly_without_icd_internal",
+                "--exact",
+                "--ignored"
+            ])
+            .env("VK_ICD_FILENAMES", "/dev/null")
+            .output()
+            .expect("failed to execute cargo test");
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // The internal test expects the error message to be correct and panics if not.
+        // It succeeds if the error message is correctly detailed.
+        assert!(
+            output.status.success(),
+            "internal test failed, meaning it didn't get the correct error string. stdout: {}\nstderr: {}",
+            stdout, stderr
+        );
+    }
+
+    #[test]
+    #[ignore = "run via open_fails_cleanly_without_icd_subprocess"]
+    fn open_fails_cleanly_without_icd_internal() {
+        let res = VulkanProvider::open(0);
+        let err = match res {
+            Err(e) => e,
+            Ok(_) => panic!("should fail to open Vulkan without ICD"),
+        };
+        if let VramError::Provider(msg) = err {
+            assert!(
+                msg.contains("missing ICD drivers or required extensions"),
+                "expected detailed ICD error message, got: {}",
+                msg
+            );
+        } else {
+            panic!("expected VramError::Provider, got {:?}", err);
+        }
     }
 }
