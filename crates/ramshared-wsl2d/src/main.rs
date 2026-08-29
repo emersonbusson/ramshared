@@ -9762,8 +9762,12 @@ Filename Type Size Used Priority
     struct ErrorBackend;
 
     impl ramshared_block::BlockBackend for ErrorBackend {
-        fn size_bytes(&self) -> u64 { 4096 }
-        fn block_size(&self) -> u32 { 4096 }
+        fn size_bytes(&self) -> u64 {
+            4096
+        }
+        fn block_size(&self) -> u32 {
+            4096
+        }
         fn read_at(&mut self, _off: u64, _buf: &mut [u8]) -> Result<(), ramshared_block::IoError> {
             Err(ramshared_block::IoError("read failed".into()))
         }
@@ -9788,7 +9792,10 @@ Filename Type Size Used Priority
             offset: 0,
             len: 4096,
         };
-        assert_eq!(crate::ublk_server::serve_request(&read_req, &mut backend, &mut buffer), eio);
+        assert_eq!(
+            crate::ublk_server::serve_request(&read_req, &mut backend, &mut buffer),
+            eio
+        );
 
         let write_req = ramshared_block::protocol::Request {
             flags: 0,
@@ -9797,7 +9804,10 @@ Filename Type Size Used Priority
             offset: 0,
             len: 4096,
         };
-        assert_eq!(crate::ublk_server::serve_request(&write_req, &mut backend, &mut buffer), eio);
+        assert_eq!(
+            crate::ublk_server::serve_request(&write_req, &mut backend, &mut buffer),
+            eio
+        );
 
         let flush_req = ramshared_block::protocol::Request {
             flags: 0,
@@ -9806,6 +9816,9 @@ Filename Type Size Used Priority
             offset: 0,
             len: 4096,
         };
-        assert_eq!(crate::ublk_server::serve_request(&flush_req, &mut backend, &mut buffer), eio);
+        assert_eq!(
+            crate::ublk_server::serve_request(&flush_req, &mut backend, &mut buffer),
+            eio
+        );
     }
 }
