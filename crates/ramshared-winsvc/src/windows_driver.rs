@@ -30,7 +30,9 @@ use windows_sys::Win32::System::Threading::{
 
 use crate::driver_link::{DriverLinkError, QueueAccess};
 use crate::proto::{
-    ABI_VERSION, Cqe, DiskParams, MAX_IO, MAX_QD, RING_MAGIC, Register, RingHdr, Sqe,
+    ABI_VERSION, Cqe, DiskParams, IOCTL_FN_COMMIT_AND_FETCH, IOCTL_FN_CREATE_DISK,
+    IOCTL_FN_DESTROY_DISK, IOCTL_FN_REGISTER_QUEUE, IOCTL_FN_UNREGISTER_QUEUE, MAX_IO, MAX_QD,
+    RING_MAGIC, Register, RingHdr, Sqe,
 };
 
 /// CTL_CODE(FILE_DEVICE_MASS_STORAGE=0x2d, 0x800|N, METHOD_BUFFERED, FILE_READ|FILE_WRITE).
@@ -43,11 +45,11 @@ const fn ioctl_code(fn_n: u32) -> u32 {
     (FILE_DEVICE_MASS_STORAGE << 16) | (ACCESS << 14) | ((0x800 + fn_n) << 2) | METHOD_BUFFERED
 }
 
-const IOCTL_REGISTER: u32 = ioctl_code(0);
-const IOCTL_UNREGISTER: u32 = ioctl_code(1);
-const IOCTL_COMMIT: u32 = ioctl_code(2);
-const IOCTL_CREATE: u32 = ioctl_code(3);
-const IOCTL_DESTROY: u32 = ioctl_code(4);
+const IOCTL_REGISTER: u32 = ioctl_code(IOCTL_FN_REGISTER_QUEUE);
+const IOCTL_UNREGISTER: u32 = ioctl_code(IOCTL_FN_UNREGISTER_QUEUE);
+const IOCTL_COMMIT: u32 = ioctl_code(IOCTL_FN_COMMIT_AND_FETCH);
+const IOCTL_CREATE: u32 = ioctl_code(IOCTL_FN_CREATE_DISK);
+const IOCTL_DESTROY: u32 = ioctl_code(IOCTL_FN_DESTROY_DISK);
 
 const GENERIC_READ: u32 = 0x8000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;

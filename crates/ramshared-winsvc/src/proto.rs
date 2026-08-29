@@ -2,8 +2,6 @@
 //!
 //! Sizes and golden layouts must match the C header. Change **both** in one commit.
 
-#![allow(dead_code)]
-
 pub const ABI_VERSION: u32 = 1;
 pub const MAX_QD: u32 = 256;
 pub const MAX_IO: u32 = 1 << 20;
@@ -131,5 +129,16 @@ mod tests {
         assert_eq!(MAX_QD, 256);
         assert_eq!(MAX_IO, 1 << 20);
         assert_eq!(RING_MAGIC, 0x5253_5244);
+        assert_eq!(OP_READ, 0);
+        assert_eq!(OP_WRITE, 1);
+        assert_eq!(OP_FLUSH, 2);
+        assert_eq!(ST_OK, 0);
+        assert_eq!(ST_EIO, 5);
+        assert_eq!(ST_EINVAL, 22);
+        assert_eq!(IOCTL_FN_REGISTER_QUEUE, 0);
+        assert_eq!(IOCTL_FN_UNREGISTER_QUEUE, 1);
+        assert_eq!(IOCTL_FN_COMMIT_AND_FETCH, 2);
+        assert_eq!(IOCTL_FN_CREATE_DISK, 3);
+        assert_eq!(IOCTL_FN_DESTROY_DISK, 4);
     }
 }
