@@ -289,11 +289,12 @@ impl UblkFetchRing {
 
         for tag in 0..queue_depth {
             let addr = buffers[usize::from(tag)].as_mut_ptr() as u64;
-            let cmd = fetch_cmd80(QUEUE_ID_ZERO, tag, addr);
-            let entry = opcode::UringCmd80::new(types::Fd(fd), UBLK_U_IO_FETCH_REQ)
+            let cmd = fetch_cmd16(QUEUE_ID_ZERO, tag, addr);
+            let entry: squeue::Entry128 = opcode::UringCmd16::new(types::Fd(fd), UBLK_U_IO_FETCH_REQ)
                 .cmd(cmd)
                 .build()
-                .user_data(u64::from(tag));
+                .user_data(u64::from(tag))
+                .into();
 
             // SAFETY: `cmd` (including `addr`) is copied into the SQE during `push`.
             // The `addr` points to `buffers[tag]`, which remains valid inside this struct
@@ -327,10 +328,10 @@ impl UblkFetchRing {
     }
 }
 
-/// Packs a `struct ublksrv_io_cmd` (16 B: q_id, tag, result, addr) into the
-/// first bytes of the SQE's 80 B `UringCmd80` buffer; the remaining bytes are zeroed.
-fn io_cmd80(q_id: u16, tag: u16, result: i32, addr: u64) -> [u8; 80] {
-    let mut cmd = [0u8; 80];
+/// Packs a `struct ublksrv_io_cmd` (16 B: q_id, tag, result, addr) into a 16 B array.
+/// When built with `UringCmd16` and cast to `Entry128`, the kernel receives it zero-extended.
+fn io_cmd16(q_id: u16, tag: u16, result: i32, addr: u64) -> [u8; 16] {
+    let mut cmd = [0u8; 16];
     cmd[0..2].copy_from_slice(&q_id.to_ne_bytes());
     cmd[2..4].copy_from_slice(&tag.to_ne_bytes());
     cmd[4..8].copy_from_slice(&result.to_ne_bytes());
@@ -339,8 +340,8 @@ fn io_cmd80(q_id: u16, tag: u16, result: i32, addr: u64) -> [u8; 80] {
 }
 
 /// `ublksrv_io_cmd` structure for a `FETCH_REQ` (result initialized to zero).
-fn fetch_cmd80(q_id: u16, tag: u16, addr: u64) -> [u8; 80] {
-    io_cmd80(q_id, tag, 0, addr)
+fn fetch_cmd16(q_id: u16, tag: u16, addr: u64) -> [u8; 16] {
+    io_cmd16(q_id, tag, 0, addr)
 }
 
 /// Persistent ublk queue server: manages a persistent `Entry128` ring, performs a
@@ -451,11 +452,12 @@ impl UblkServer {
     }
 
     fn push(&mut self, cmd_op: u32, tag: u16, result: i32, addr: u64) -> io::Result<()> {
-        let cmd = io_cmd80(0, tag, result, addr);
-        let entry = opcode::UringCmd80::new(types::Fd(self.fd), cmd_op)
+        let cmd = io_cmd16(0, tag, result, addr);
+        let entry: squeue::Entry128 = opcode::UringCmd16::new(types::Fd(self.fd), cmd_op)
             .cmd(cmd)
             .build()
-            .user_data(u64::from(tag));
+            .user_data(u64::from(tag))
+            .into();
 
         // SAFETY: `cmd` (carrying `addr`) is copied into the SQE in `push`. `addr` points
         // to `self.buffers[tag]`, which remains valid for the server's lifetime; `self.fd`
@@ -497,8 +499,8 @@ mod tests {
     }
 
     #[test]
-    fn fetch_cmd80_packs_ublksrv_io_cmd_in_first_16_bytes() {
-        let cmd = fetch_cmd80(0, 7, 0xdead_beef);
+    fn fetch_cmd16_packs_ublksrv_io_cmd_in_first_16_bytes() {
+        let cmd = fetch_cmd16(0, 7, 0xdead_beef);
 
         assert_eq!(u16::from_ne_bytes([cmd[0], cmd[1]]), 0);
         assert_eq!(u16::from_ne_bytes([cmd[2], cmd[3]]), 7);
@@ -509,7 +511,6 @@ mod tests {
             ]),
             0xdead_beef
         );
-        assert!(cmd[16..].iter().all(|&b| b == 0));
     }
 
     #[test]
