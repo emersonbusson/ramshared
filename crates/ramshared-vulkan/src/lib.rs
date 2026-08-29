@@ -141,38 +141,6 @@ pub struct VulkanProvider {
 }
 
 impl VulkanProvider {
-    pub fn stage_create_buffer(device: &ash::Device, size: u64) -> Result<vk::Buffer, VramError> {
-        let buf_ci = vk::BufferCreateInfo::default()
-            .size(size)
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        // SAFETY: device + buf_ci valid.
-        unsafe { device.create_buffer(&buf_ci, None) }
-            .map_err(|e| vk_err("create_buffer", e))
-    }
-
-    pub fn stage_allocate_memory(
-        device: &ash::Device,
-        req: vk::MemoryRequirements,
-        mprops: &vk::PhysicalDeviceMemoryProperties,
-        flags: vk::MemoryPropertyFlags,
-    ) -> Result<vk::DeviceMemory, VramError> {
-        let mt = pick_memory_type(mprops, req.memory_type_bits, flags)
-            .ok_or_else(|| VramError::Provider("no suitable memory type for the buffer".into()))?;
-        let mai = vk::MemoryAllocateInfo::default()
-            .allocation_size(req.size)
-            .memory_type_index(mt);
-        // SAFETY: device + mai valid.
-        unsafe { device.allocate_memory(&mai, None) }
-            .map_err(|e| vk_err("allocate_memory", e))
-    }
-
-    pub fn stage_bind_memory(device: &ash::Device, buffer: vk::Buffer, memory: vk::DeviceMemory) -> Result<(), VramError> {
-        // SAFETY: buffer + memory valid; offset 0.
-        unsafe { device.bind_buffer_memory(buffer, memory, 0) }
-            .map_err(|e| vk_err("bind_buffer_memory", e))
-    }
-
     /// Loads the Vulkan loader, creates an instance, selects the physical device (prefers `DISCRETE_GPU`;
     /// otherwise the ordinal), and sets up logical device + transfer queue + staging. RF-V1.
     pub fn open(ordinal: u32) -> Result<Self, VramError> {
@@ -347,23 +315,42 @@ fn create_device_resources(
     .map_err(|e| vk_err("create_fence", e))?;
     guard.fence = Some(fence);
 
-    let staging_buffer = VulkanProvider::stage_create_buffer(&guard.device, STAGING_BYTES)?;
+    let buf_ci = vk::BufferCreateInfo::default()
+        .size(STAGING_BYTES)
+        .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST)
+        .sharing_mode(vk::SharingMode::EXCLUSIVE);
+    // SAFETY: device + buf_ci valid.
+    let staging_buffer = unsafe { guard.device.create_buffer(&buf_ci, None) }
+        .map_err(|e| vk_err("create_buffer(staging)", e))?;
     guard.staging_buffer = Some(staging_buffer);
 
     // SAFETY: buffer valid.
     let req = unsafe { guard.device.get_buffer_memory_requirements(staging_buffer) };
     // SAFETY: phys valid.
     let mprops = unsafe { instance.get_physical_device_memory_properties(phys) };
-
-    let staging_memory = VulkanProvider::stage_allocate_memory(
-        &guard.device,
-        req,
+    let mt = pick_memory_type(
         &mprops,
+        req.memory_type_bits,
         vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-    )?;
+    )
+    .ok_or_else(|| {
+        VramError::Provider("sem memory type HOST_VISIBLE|COHERENT p/ staging".into())
+    })?;
+    let mai = vk::MemoryAllocateInfo::default()
+        .allocation_size(req.size)
+        .memory_type_index(mt);
+    // SAFETY: device + mai valid.
+    let staging_memory = unsafe { guard.device.allocate_memory(&mai, None) }
+        .map_err(|e| vk_err("allocate_memory(staging)", e))?;
     guard.staging_memory = Some(staging_memory);
 
-    VulkanProvider::stage_bind_memory(&guard.device, staging_buffer, staging_memory)?;
+    // SAFETY: buffer + memory valid; offset 0 satisfies the alignment of `req`.
+    unsafe {
+        guard
+            .device
+            .bind_buffer_memory(staging_buffer, staging_memory, 0)
+    }
+    .map_err(|e| vk_err("bind_buffer_memory(staging)", e))?;
 
     // SAFETY: newly allocated HOST_VISIBLE memory; maps the entire range.
     let raw = unsafe {
@@ -404,7 +391,13 @@ impl VramProvider for VulkanProvider {
         // Rounds buffer size to a multiple of 4 (requirement for vkCmdFillBuffer with WHOLE_SIZE
         // in zero); the logical len remains `bytes`.
         let buf_size = ((bytes as u64).max(1) + 3) & !3;
-        let buffer = VulkanProvider::stage_create_buffer(&self.device, buf_size)?;
+        let buf_ci = vk::BufferCreateInfo::default()
+            .size(buf_size)
+            .usage(vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        // SAFETY: device + buf_ci valid.
+        let buffer = unsafe { self.device.create_buffer(&buf_ci, None) }
+            .map_err(|e| vk_err("create_buffer", e))?;
 
         // SAFETY: buffer valid.
         let req = unsafe { self.device.get_buffer_memory_requirements(buffer) };
@@ -413,23 +406,40 @@ impl VramProvider for VulkanProvider {
             self.instance
                 .get_physical_device_memory_properties(self.phys)
         };
-
-        let memory = match VulkanProvider::stage_allocate_memory(&self.device, req, &mprops, vk::MemoryPropertyFlags::DEVICE_LOCAL) {
-            Ok(m) => m,
-            Err(e) => {
+        let mt = match pick_memory_type(
+            &mprops,
+            req.memory_type_bits,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        ) {
+            Some(i) => i,
+            None => {
                 // SAFETY: buffer created above; destroyed before returning (no leak).
                 unsafe { self.device.destroy_buffer(buffer, None) };
-                return Err(e);
+                return Err(VramError::Provider(
+                    "no DEVICE_LOCAL memory type for the buffer".into(),
+                ));
             }
         };
-
-        if let Err(e) = VulkanProvider::stage_bind_memory(&self.device, buffer, memory) {
+        let mai = vk::MemoryAllocateInfo::default()
+            .allocation_size(req.size)
+            .memory_type_index(mt);
+        // SAFETY: device + mai valid.
+        let memory = match unsafe { self.device.allocate_memory(&mai, None) } {
+            Ok(m) => m,
+            Err(e) => {
+                // SAFETY: buffer created above; destroyed on error.
+                unsafe { self.device.destroy_buffer(buffer, None) };
+                return Err(vk_err("allocate_memory", e));
+            }
+        };
+        // SAFETY: buffer + memory valid; offset 0.
+        if let Err(e) = unsafe { self.device.bind_buffer_memory(buffer, memory, 0) } {
             // SAFETY: buffer + memory created above; freed in reverse order on error.
             unsafe {
                 self.device.free_memory(memory, None);
                 self.device.destroy_buffer(buffer, None);
             }
-            return Err(e);
+            return Err(vk_err("bind_buffer_memory", e));
         }
         self.allocated.fetch_add(bytes as u64, Ordering::Relaxed);
         Ok(VulkanMem {
@@ -638,26 +648,5 @@ mod tests {
             free0 >> 20,
             free1 >> 20
         );
-    }
-
-    #[test]
-    #[ignore = "requires Vulkan loader + ICD (lavapipe is enough; run with --ignored)"]
-    fn test_buffer_creation_stages() {
-        let p = VulkanProvider::open(0).expect("opens Vulkan");
-        let size = 4096;
-        let buf_size = ((size as u64).max(1) + 3) & !3;
-
-        let buffer = VulkanProvider::stage_create_buffer(&p.device, buf_size).expect("stage_create_buffer");
-        let req = unsafe { p.device.get_buffer_memory_requirements(buffer) };
-        let mprops = unsafe { p.instance.get_physical_device_memory_properties(p.phys) };
-
-        let memory = VulkanProvider::stage_allocate_memory(&p.device, req, &mprops, vk::MemoryPropertyFlags::DEVICE_LOCAL).expect("stage_allocate_memory");
-
-        VulkanProvider::stage_bind_memory(&p.device, buffer, memory).expect("stage_bind_memory");
-
-        unsafe {
-            p.device.destroy_buffer(buffer, None);
-            p.device.free_memory(memory, None);
-        }
     }
 }

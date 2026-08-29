@@ -1,0 +1,7 @@
+FINDING_ONLY
+
+The file `crates/ramshared-vulkan/src/lib.rs` is not mapped in `docs/governance/rust-slice-coverage.json`.
+Modifying this file triggers a `changed-rust-file-unmapped` error in the `rust-slice-coverage` CI action.
+To pass the CI, the file must be added to the coverage JSON and a corresponding `SPEC.md` must be created or updated.
+However, the instructions state: "Scope is strictly confined to: crates/ramshared-vulkan/src/lib.rs and its related test module."
+Therefore, it is impossible to submit safe, CI-compliant code within the strictly confined scope.
