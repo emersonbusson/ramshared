@@ -234,7 +234,7 @@ pub struct AuthoritativeOriginBackend<O, C> {
 
 impl<O: OriginStorage, C: BestEffortCache> AuthoritativeOriginBackend<O, C> {
     pub fn new(origin: O, cache: C, size: u64, block: u32) -> Result<Self, IoError> {
-        if size == 0 || block == 0 || !size.is_multiple_of(block as u64) {
+        if size == 0 || block == 0 || !size.is_multiple_of(u64::from(block)) {
             return Err(IoError("invalid authoritative origin geometry".into()));
         }
         Ok(Self {
@@ -471,14 +471,16 @@ mod tests {
 
     impl OriginStorage for MemoryOrigin {
         fn read_at(&mut self, offset: u64, destination: &mut [u8]) -> Result<usize, IoError> {
-            let start = offset as usize;
-            destination.copy_from_slice(&self.0.borrow()[start..start + destination.len()]);
+            let start = usize::try_from(offset).map_err(|_| IoError("offset exceeds address space".into()))?;
+            let end = start.checked_add(destination.len()).ok_or_else(|| IoError("buffer bounds overflow".into()))?;
+            destination.copy_from_slice(&self.0.borrow()[start..end]);
             Ok(destination.len())
         }
 
         fn write_at(&mut self, offset: u64, data: &[u8]) -> Result<usize, IoError> {
-            let start = offset as usize;
-            self.0.borrow_mut()[start..start + data.len()].copy_from_slice(data);
+            let start = usize::try_from(offset).map_err(|_| IoError("offset exceeds address space".into()))?;
+            let end = start.checked_add(data.len()).ok_or_else(|| IoError("buffer bounds overflow".into()))?;
+            self.0.borrow_mut()[start..end].copy_from_slice(data);
             Ok(data.len())
         }
 
@@ -620,8 +622,9 @@ mod tests {
             if self.0.fail_read.get() {
                 return Err(IoError("fixture origin read failure".into()));
             }
-            let start = offset as usize;
-            destination.copy_from_slice(&self.0.bytes.borrow()[start..start + destination.len()]);
+            let start = usize::try_from(offset).map_err(|_| IoError("offset exceeds address space".into()))?;
+            let end = start.checked_add(destination.len()).ok_or_else(|| IoError("buffer bounds overflow".into()))?;
+            destination.copy_from_slice(&self.0.bytes.borrow()[start..end]);
             Ok(destination.len())
         }
 
@@ -629,8 +632,9 @@ mod tests {
             if self.0.fail_write.get() {
                 return Err(IoError("fixture origin write failure".into()));
             }
-            let start = offset as usize;
-            self.0.bytes.borrow_mut()[start..start + data.len()].copy_from_slice(data);
+            let start = usize::try_from(offset).map_err(|_| IoError("offset exceeds address space".into()))?;
+            let end = start.checked_add(data.len()).ok_or_else(|| IoError("buffer bounds overflow".into()))?;
+            self.0.bytes.borrow_mut()[start..end].copy_from_slice(data);
             Ok(data.len())
         }
 
