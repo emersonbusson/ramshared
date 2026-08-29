@@ -476,6 +476,13 @@
   ],
   "exclusions": [
     {
+      "id": "audit-findings",
+      "pattern": "docs/jules/findings/*.md",
+      "owner": "adversarial-audit",
+      "reason": "Audit findings are generated dynamically during auditing.",
+      "registeredAt": "2026-08-29T00:00:00Z"
+    },
+    {
       "id": "localized-root-readme",
       "pattern": "README.pt-BR.md",
       "owner": "product-documentation",
