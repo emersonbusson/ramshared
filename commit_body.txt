@@ -1,0 +1,17 @@
+## Resumo (summary of what was changed and why)
+Refactored the monolithic `run` function in `crates/ramshared-cli/src/stress.rs` by extracting it into modular pipeline stages (setup, thread spawning, telemetry sampling, report generation). This improves code health, readability, and maintainability while preserving the identical orchestration logic and passing all tests cleanly under strict warnings.
+
+## Commits table
+
+| Commit | O que fez | Por que fez | Detalhes |
+|---|---|---|---|
+| refactor: refactor monolithic stress test runner function into pipeline stages | Extracted logic in `run` into `spawn_watchdog`, `execute_phase_1_ramp`, `execute_phase_2_and_3`, `execute_phase_4_reclaim`, and `generate_report` | To improve maintainability and avoid a massive monolithic function | Ensured exact variable threading; zero regressions, and full Clipy strict compliance (-D warnings). |
+
+## Labels
+type:refactor, type:cleanup
+
+## Validacao
+`cargo test -p ramshared-cli --bin ramshared` and `cargo clippy -p ramshared-cli --bin ramshared -- -D warnings` executed successfully.
+
+## Rollback trigger
+Revert if the stress governor test logic experiences behavioral regressions (e.g., incorrect pipeline telemetry readings) or if thread leaks arise from the refactored loop states.

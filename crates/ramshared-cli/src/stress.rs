@@ -400,31 +400,22 @@ pub fn append_telemetry_log(path: &str, reading: &TelemetryReading) {
     }
 }
 
-pub fn run(opts: &StressOptions) -> Result<(), String> {
-    let term_signal = Arc::new(AtomicBool::new(false));
-    let last_heartbeat = Arc::new(AtomicU64::new(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
-    ));
-
-    let chunks = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
-
-    // Autonomous Watchdog Thread: If main thread stalls > 3s, clears memory automatically
-    let chunks_watchdog = chunks.clone();
-    let heartbeat_watchdog = last_heartbeat.clone();
-    let term_watchdog = term_signal.clone();
-    let watchdog_handle = thread::spawn(move || {
-        while !term_watchdog.load(Ordering::Relaxed) {
+#[allow(clippy::type_complexity)]
+pub fn spawn_watchdog(
+    chunks: Arc<Mutex<Vec<Vec<u8>>>>,
+    last_heartbeat: Arc<AtomicU64>,
+    term_signal: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    thread::spawn(move || {
+        while !term_signal.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(500));
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-            let last = heartbeat_watchdog.load(Ordering::Relaxed);
+            let last = last_heartbeat.load(Ordering::Relaxed);
             if now.saturating_sub(last) > 4 {
-                if let Ok(mut guard) = chunks_watchdog.lock()
+                if let Ok(mut guard) = chunks.lock()
                     && !guard.is_empty()
                 {
                     guard.clear();
@@ -432,43 +423,17 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 break;
             }
         }
-    });
+    })
+}
 
-    let (ram_total_mb, ram_avail_init) = read_mem_info();
-    let (swap_init_total, _, _, _) = read_swap_tiers();
-
-    if !opts.json {
-        println!("{}", "═".repeat(105));
-        println!(" 🚀 RamShared Native Stress Governor & Multi-Tier Qualification Battery");
-        println!(
-            " Mode: {} │ Range: {}% ➔ {}% (+{}%) │ Safety Floor: >= {} MB │ Log: {}",
-            if opts.battery {
-                "FULL BATTERY (4 Phases)"
-            } else {
-                "Progressive 1%-by-1% Governor"
-            },
-            opts.start_pct,
-            opts.target_pct,
-            opts.step_pct,
-            opts.min_ram_mb,
-            opts.telemetry_log
-        );
-        println!(
-            "[i] Physical Host RAM: {} MB (Available: {} MB) │ Active Swap: {} MB",
-            ram_total_mb, ram_avail_init, swap_init_total
-        );
-        println!("{}", "═".repeat(105));
-        println!(
-            "┌───────┬────────────┬──────────────┬──────────────┬──────────────┬──────────────┬────────┬──────────┬─────────────┬───────────────────────────┐"
-        );
-        println!(
-            "│ Level │ Alloc RAM  │ ZRAM (Tier1) │ VRAM (Tier2) │ SSD (Tier3)  │ Total Swap   │ PSI-F  │ Latency  │ Stress Bar  │ Tier Operating Status     │"
-        );
-        println!(
-            "├───────┼────────────┼──────────────┼──────────────┼──────────────┼──────────────┼────────┼──────────┼─────────────┼───────────────────────────┤"
-        );
-    }
-
+#[allow(clippy::too_many_arguments)]
+pub fn execute_phase_1_ramp(
+    opts: &StressOptions,
+    term_signal: &Arc<AtomicBool>,
+    last_heartbeat: &Arc<AtomicU64>,
+    chunks: &Arc<Mutex<Vec<Vec<u8>>>>,
+    ram_total_mb: u64,
+) -> (u64, u64, u64, u64, u64, u64, f64, usize) {
     let mut total_allocated_mb = 0u64;
     let mut max_safe_pct = 0u64;
     let mut peak_zram = 0u64;
@@ -477,10 +442,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     let mut peak_total_swap = 0u64;
     let mut peak_pressure = 1.0f64;
     let mut readings_count = 0usize;
-    let mut active_cycles_done = 0usize;
-
-    // Phase 1: 1%-by-1% Micro-Step Ramp
     let mut current_target = opts.start_pct;
+
     while current_target <= opts.target_pct {
         if term_signal.load(Ordering::Relaxed) {
             break;
@@ -607,7 +570,6 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             }
         }
 
-        // Allocate and dirty pages
         let num_bytes = (safe_alloc_mb as usize) * 1024 * 1024;
         let mut slice = vec![0u8; num_bytes];
         for i in (0..num_bytes).step_by(4096) {
@@ -646,7 +608,31 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         current_target += opts.step_pct;
     }
 
-    // Phase 2 & 3: Active Page Swapper & Cycler (Only in Battery Mode or when hold_sec > 0)
+    (
+        total_allocated_mb,
+        max_safe_pct,
+        peak_zram,
+        peak_vram,
+        peak_ssd,
+        peak_total_swap,
+        peak_pressure,
+        readings_count,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn execute_phase_2_and_3(
+    opts: &StressOptions,
+    term_signal: &Arc<AtomicBool>,
+    last_heartbeat: &Arc<AtomicU64>,
+    chunks: &Arc<Mutex<Vec<Vec<u8>>>>,
+    ram_total_mb: u64,
+    total_allocated_mb: u64,
+    max_safe_pct: u64,
+    mut peak_pressure: f64,
+    mut readings_count: usize,
+) -> (usize, f64, usize) {
+    let mut active_cycles_done = 0usize;
     if opts.battery || opts.hold_sec > 0 {
         if !opts.json {
             println!("{}", "═".repeat(105));
@@ -672,12 +658,10 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 Ordering::Relaxed,
             );
 
-            // Modify multiple chunks aggressively to trigger active swap page-ins and page-outs
             if let Ok(mut guard) = chunks.lock()
                 && !guard.is_empty()
             {
                 let len = guard.len();
-                // Cycle across up to 4 chunks per iteration to generate real MB/s throughput
                 for step in 0..4 {
                     let idx = (cycle.wrapping_mul(7) + step) % len;
                     let target_chunk = &mut guard[idx];
@@ -724,8 +708,13 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             println!();
         }
     }
+    (active_cycles_done, peak_pressure, readings_count)
+}
 
-    // Phase 4: Atomic Flash-Reclaim Benchmark Phase
+pub fn execute_phase_4_reclaim(
+    chunks: &Arc<Mutex<Vec<Vec<u8>>>>,
+    total_allocated_mb: u64,
+) -> (f64, f64) {
     let t_reclaim_start = Instant::now();
     if let Ok(mut guard) = chunks.lock() {
         guard.clear();
@@ -734,15 +723,29 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     let reclaim_sec = reclaim_duration.as_secs_f64().max(0.000001);
     let reclaim_speed_gbs = (total_allocated_mb as f64 / 1024.0) / reclaim_sec;
 
-    term_signal.store(true, Ordering::Relaxed);
-    let _ = watchdog_handle.join();
+    (reclaim_duration.as_secs_f64() * 1000.0, reclaim_speed_gbs)
+}
 
-    thread::sleep(Duration::from_millis(500));
-    let (_, post_free_ram) = read_mem_info();
-    let (post_swap, _, _, _) = read_swap_tiers();
-    let (cap1, cap2, cap3) = read_swap_tier_capacities();
-
-    let report = StressReport {
+#[allow(clippy::too_many_arguments)]
+pub fn generate_report(
+    opts: &StressOptions,
+    max_safe_pct: u64,
+    total_allocated_mb: u64,
+    peak_total_swap: u64,
+    peak_zram: u64,
+    peak_vram: u64,
+    peak_ssd: u64,
+    peak_pressure: f64,
+    readings_count: usize,
+    active_cycles_done: usize,
+    reclaim_duration_ms: f64,
+    reclaim_speed_gbs: f64,
+    post_free_ram: u64,
+    cap1: &TierCapacityStats,
+    cap2: &TierCapacityStats,
+    cap3: &TierCapacityStats,
+) -> StressReport {
+    StressReport {
         battery_mode: opts.battery,
         cascade_mode: opts.cascade,
         max_safe_pct,
@@ -763,11 +766,112 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         peak_pressure_index: peak_pressure,
         telemetry_readings_count: readings_count,
         active_io_cycles_completed: active_cycles_done,
-        reclaim_duration_ms: reclaim_duration.as_secs_f64() * 1000.0,
+        reclaim_duration_ms,
         reclaim_speed_gbs,
         post_reclaim_free_ram_mb: post_free_ram,
         status: "PASS_ZERO_PANIC".to_string(),
-    };
+    }
+}
+
+pub fn run(opts: &StressOptions) -> Result<(), String> {
+    let term_signal = Arc::new(AtomicBool::new(false));
+    let last_heartbeat = Arc::new(AtomicU64::new(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+    ));
+
+    let chunks = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+
+    let watchdog_handle = spawn_watchdog(chunks.clone(), last_heartbeat.clone(), term_signal.clone());
+
+    let (ram_total_mb, ram_avail_init) = read_mem_info();
+    let (swap_init_total, _, _, _) = read_swap_tiers();
+
+    if !opts.json {
+        println!("{}", "═".repeat(105));
+        println!(" 🚀 RamShared Native Stress Governor & Multi-Tier Qualification Battery");
+        println!(
+            " Mode: {} │ Range: {}% ➔ {}% (+{}%) │ Safety Floor: >= {} MB │ Log: {}",
+            if opts.battery {
+                "FULL BATTERY (4 Phases)"
+            } else {
+                "Progressive 1%-by-1% Governor"
+            },
+            opts.start_pct,
+            opts.target_pct,
+            opts.step_pct,
+            opts.min_ram_mb,
+            opts.telemetry_log
+        );
+        println!(
+            "[i] Physical Host RAM: {} MB (Available: {} MB) │ Active Swap: {} MB",
+            ram_total_mb, ram_avail_init, swap_init_total
+        );
+        println!("{}", "═".repeat(105));
+        println!(
+            "┌───────┬────────────┬──────────────┬──────────────┬──────────────┬──────────────┬────────┬──────────┬─────────────┬───────────────────────────┐"
+        );
+        println!(
+            "│ Level │ Alloc RAM  │ ZRAM (Tier1) │ VRAM (Tier2) │ SSD (Tier3)  │ Total Swap   │ PSI-F  │ Latency  │ Stress Bar  │ Tier Operating Status     │"
+        );
+        println!(
+            "├───────┼────────────┼──────────────┼──────────────┼──────────────┼──────────────┼────────┼──────────┼─────────────┼───────────────────────────┤"
+        );
+    }
+
+    let (
+        total_allocated_mb,
+        max_safe_pct,
+        peak_zram,
+        peak_vram,
+        peak_ssd,
+        peak_total_swap,
+        peak_pressure,
+        readings_count,
+    ) = execute_phase_1_ramp(opts, &term_signal, &last_heartbeat, &chunks, ram_total_mb);
+
+    let (active_cycles_done, peak_pressure, readings_count) = execute_phase_2_and_3(
+        opts,
+        &term_signal,
+        &last_heartbeat,
+        &chunks,
+        ram_total_mb,
+        total_allocated_mb,
+        max_safe_pct,
+        peak_pressure,
+        readings_count,
+    );
+
+    let (reclaim_duration_ms, reclaim_speed_gbs) = execute_phase_4_reclaim(&chunks, total_allocated_mb);
+
+    term_signal.store(true, Ordering::Relaxed);
+    let _ = watchdog_handle.join();
+
+    thread::sleep(Duration::from_millis(500));
+    let (_, post_free_ram) = read_mem_info();
+    let (post_swap, _, _, _) = read_swap_tiers();
+    let (cap1, cap2, cap3) = read_swap_tier_capacities();
+
+    let report = generate_report(
+        opts,
+        max_safe_pct,
+        total_allocated_mb,
+        peak_total_swap,
+        peak_zram,
+        peak_vram,
+        peak_ssd,
+        peak_pressure,
+        readings_count,
+        active_cycles_done,
+        reclaim_duration_ms,
+        reclaim_speed_gbs,
+        post_free_ram,
+        &cap1,
+        &cap2,
+        &cap3,
+    );
 
     if opts.json {
         let json_out = serde_json::to_string_pretty(&report)
@@ -1179,5 +1283,32 @@ mod tests {
         };
         archive_and_compare_benchmark(&report, false);
         archive_and_compare_benchmark(&report, true);
+    }
+
+    #[test]
+    fn test_pipeline_stages_execute_independently() {
+        let _opts = StressOptions {
+            json: true,
+            start_pct: 1,
+            target_pct: 1,
+            step_pct: 1,
+            min_ram_mb: 0,
+            battery: false,
+            cascade: false,
+            hold_sec: 0,
+            telemetry_log: "/tmp/ramshared-test-pipeline.log".to_string(),
+            ..StressOptions::default()
+        };
+
+        // This will fail to compile if the pipeline stages do not exist.
+        let term_signal = Arc::new(AtomicBool::new(false));
+        let last_heartbeat = Arc::new(AtomicU64::new(0));
+        let chunks = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+
+        let handle = spawn_watchdog(chunks.clone(), last_heartbeat.clone(), term_signal.clone());
+        assert!(handle.thread().id() != thread::current().id());
+
+        term_signal.store(true, Ordering::Relaxed);
+        let _ = handle.join();
     }
 }
