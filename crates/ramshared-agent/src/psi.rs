@@ -6,15 +6,20 @@
 //! Parsing is separated from file reading to be testable with fixtures (Discipline 13:
 //! the test exercises the parser, not the machine's `/proc`).
 
-use std::io::{Error, ErrorKind, Result};
+use std::io::{Error, ErrorKind, Read, Result};
+use std::fs::File;
 
 use ramshared_broker::model::PsiSample;
 use ramshared_broker::protocol::SwapEntry;
 
 /// Core logic for `read_psi` with dependency injection for the file path.
 fn read_psi_impl(path: &str) -> Result<PsiSample> {
-    let raw = std::fs::read_to_string(path)?;
-    parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))
+    let mut file = File::open(path)?;
+    let mut buf = [0u8; 256];
+    let n = file.read(&mut buf)?;
+    let raw = std::str::from_utf8(&buf[..n])
+        .map_err(|_| Error::new(ErrorKind::InvalidData, "PSI is not valid UTF-8"))?;
+    parse_psi(raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI unreadable"))
 }
 
 /// Reads and parses `/proc/pressure/memory`.
@@ -426,6 +431,16 @@ mod tests {
         let err = read_euid_impl(&path).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
 
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn read_psi_impl_rejects_oversized_file() {
+        let mut content = "A".repeat(300);
+        content.push_str("\nsome avg10=1.23 avg60=4.56 avg300=7.89 total=999\n");
+        let path = write_temp_file(&content);
+        let err = read_psi_impl(&path).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
         std::fs::remove_file(path).unwrap();
     }
 }
