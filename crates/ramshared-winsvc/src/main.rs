@@ -901,20 +901,8 @@ mod windows_svc {
         let config = WinDriveConfig::from_reader(&std::fs::read(
             root.join(&manifest.artifact(ArtifactRole::WinsvcConfig)?.relative_path),
         )?)?;
-        let letter = config.volume_letter.to_ascii_uppercase();
-        let script = format!(
-            concat!(
-                "$ErrorActionPreference='Stop';",
-                "$d=@(Get-CimInstance Win32_DiskDrive|?{{",
-                "$_.Model -match 'RAMSHARE|VRAMDISK' -or $_.Caption -match 'RAMSHARE|VRAMDISK'}});",
-                "$p=@(Get-CimInstance Win32_PageFileUsage|?{{",
-                "$_.Name -match '^{letter}:\\\\'}});",
-                "Write-Output ($d.Count.ToString()+'|'+$p.Count.ToString())"
-            ),
-            letter = letter
-        );
-        let mut child = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        let letter = config.volume_letter.to_ascii_uppercase().to_string();
+        let mut child = build_host_residue_command(&letter)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()?;
@@ -1025,6 +1013,21 @@ mod windows_svc {
         Ok(())
     }
 
+    pub(super) fn build_host_residue_command(letter: &str) -> std::process::Command {
+        let script = concat!(
+            "$ErrorActionPreference='Stop';",
+            "$d=@(Get-CimInstance Win32_DiskDrive|?{",
+            "$_.Model -match 'RAMSHARE|VRAMDISK' -or $_.Caption -match 'RAMSHARE|VRAMDISK'});",
+            "$p=@(Get-CimInstance Win32_PageFileUsage|?{",
+            "$_.Name -match \"^$env:RAMSHARED_LETTER:\\\\\"});",
+            "Write-Output ($d.Count.ToString()+'|'+$p.Count.ToString())"
+        );
+        let mut child = std::process::Command::new("powershell.exe");
+        child.env("RAMSHARED_LETTER", letter);
+        child.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+        child
+    }
+
     fn delete_service_if_present(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
         if let Ok(service) =
@@ -1106,6 +1109,52 @@ mod windows_svc {
                 CloseHandle(self.handle);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(windows)]
+    use super::windows_svc::build_host_residue_command;
+    #[cfg(windows)]
+    use std::ffi::OsStr;
+
+    #[cfg(windows)]
+    #[test]
+    fn test_build_host_residue_command_uses_env_var() {
+        let cmd = build_host_residue_command("X");
+
+        let mut has_env_var = false;
+        for (k, v) in cmd.get_envs() {
+            if k == OsStr::new("RAMSHARED_LETTER") {
+                if let Some(val) = v {
+                    if val == OsStr::new("X") {
+                        has_env_var = true;
+                    }
+                }
+            }
+        }
+
+        assert!(
+            has_env_var,
+            "Command should pass letter via RAMSHARED_LETTER env var to prevent injection"
+        );
+
+        let args: Vec<&OsStr> = cmd.get_args().collect();
+        let cmd_arg = args.last().expect("missing -Command arg");
+        let cmd_str = cmd_arg.to_string_lossy();
+        assert!(
+            cmd_str.contains("$env:RAMSHARED_LETTER"),
+            "Script should reference $env:RAMSHARED_LETTER"
+        );
+        assert!(
+            !cmd_str.contains("^{letter}:\\\\"),
+            "Script should NOT format letter directly"
+        );
+        assert!(
+            !cmd_str.contains("^X:\\\\"),
+            "Script should NOT format letter directly"
+        );
     }
 }
 
