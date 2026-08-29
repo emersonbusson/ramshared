@@ -486,4 +486,3 @@ pub fn build_residue_script(letter: char) -> Result<String, Box<dyn std::error::
         letter = escaped_letter
     ))
 }
-
