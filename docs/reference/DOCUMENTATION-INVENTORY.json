@@ -2,9 +2,9 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 258,
+    "total": 259,
     "classified": 247,
-    "excluded": 11,
+    "excluded": 12,
     "unclassified": 0,
     "ambiguous": 0
   },
@@ -568,6 +568,16 @@
       "canonicalSource": "docs/governance/README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
+    },
+    {
+      "path": "docs/jules/findings/FINDING_ONLY.md",
+      "disposition": "excluded",
+      "ruleId": "findings-reports",
+      "verification": {
+        "state": "not-applicable"
+      },
+      "owner": "security",
+      "reason": "Agent-generated finding reports for out-of-scope architectural issues."
     },
     {
       "path": "docs/labs/DUALBOOT-KERNEL-TRUE.md",
