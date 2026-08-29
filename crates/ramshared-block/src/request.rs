@@ -54,17 +54,45 @@ fn errno_of(r: Result<(), IoError>) -> u32 {
     }
 }
 
+/// Validates block alignment of offset and length.
+pub fn validate_alignment(offset: u64, len: u64, block_size: u64) -> Result<(), String> {
+    if block_size == 0 {
+        return Err("Block size cannot be zero".to_string());
+    }
+    if !offset.is_multiple_of(block_size) {
+        return Err(format!(
+            "Offset {} is not aligned to block size {}",
+            offset, block_size
+        ));
+    }
+    if !len.is_multiple_of(block_size) {
+        return Err(format!(
+            "Length {} is not a multiple of block size {}",
+            len, block_size
+        ));
+    }
+    Ok(())
+}
+
+/// Validates that the extent fits within the backend capacity without overflowing.
+pub fn validate_extent(offset: u64, len: u64, capacity: u64) -> Result<(), String> {
+    match offset.checked_add(len) {
+        Some(end) if end <= capacity => Ok(()),
+        Some(end) => Err(format!(
+            "Extent ends at {}, which exceeds capacity {}",
+            end, capacity
+        )),
+        None => Err("Extent offset and length overflow".to_string()),
+    }
+}
+
 /// Validates alignment and range (SPEC §8): unaligned or out of range = EINVAL,
 /// **before** touching the backend.
 fn validate<B: BlockBackend + ?Sized>(req: &Request, backend: &B) -> Result<(), u32> {
-    let bs = backend.block_size() as u64;
-    if bs == 0 || !req.offset.is_multiple_of(bs) || !(req.len as u64).is_multiple_of(bs) {
-        return Err(NBD_EINVAL);
-    }
-    match req.offset.checked_add(req.len as u64) {
-        Some(end) if end <= backend.size_bytes() => Ok(()),
-        _ => Err(NBD_EINVAL),
-    }
+    validate_alignment(req.offset, req.len as u64, backend.block_size() as u64)
+        .map_err(|_| NBD_EINVAL)?;
+    validate_extent(req.offset, req.len as u64, backend.size_bytes()).map_err(|_| NBD_EINVAL)?;
+    Ok(())
 }
 
 fn validate_command_flags(req: &Request) -> Result<WriteOptions, u32> {
@@ -320,5 +348,47 @@ mod tests {
         );
         assert_eq!(backend.writes, 1);
         assert_eq!(backend.flushes, 1);
+    }
+
+    #[test]
+    fn validator_alignment_rejects_unaligned_offset_with_message() {
+        let err = validate_alignment(100, 4096, 4096).unwrap_err();
+        assert_eq!(err, "Offset 100 is not aligned to block size 4096");
+    }
+
+    #[test]
+    fn validator_alignment_rejects_unaligned_len_with_message() {
+        let err = validate_alignment(4096, 100, 4096).unwrap_err();
+        assert_eq!(err, "Length 100 is not a multiple of block size 4096");
+    }
+
+    #[test]
+    fn validator_alignment_rejects_zero_block_size_with_message() {
+        let err = validate_alignment(4096, 4096, 0).unwrap_err();
+        assert_eq!(err, "Block size cannot be zero");
+    }
+
+    #[test]
+    fn validator_alignment_accepts_aligned_with_ok() {
+        assert!(validate_alignment(4096, 4096, 4096).is_ok());
+        assert!(validate_alignment(0, 8192, 4096).is_ok());
+    }
+
+    #[test]
+    fn validator_extent_rejects_overflow_with_message() {
+        let err = validate_extent(u64::MAX, 4096, 8192).unwrap_err();
+        assert_eq!(err, "Extent offset and length overflow");
+    }
+
+    #[test]
+    fn validator_extent_rejects_out_of_range_with_message() {
+        let err = validate_extent(4096, 8192, 8192).unwrap_err();
+        assert_eq!(err, "Extent ends at 12288, which exceeds capacity 8192");
+    }
+
+    #[test]
+    fn validator_extent_accepts_in_range_with_ok() {
+        assert!(validate_extent(0, 8192, 8192).is_ok());
+        assert!(validate_extent(4096, 4096, 8192).is_ok());
     }
 }
