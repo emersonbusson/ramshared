@@ -330,6 +330,16 @@ mod tests {
     }
 
     #[test]
+    fn oversize_line_with_newline_is_err() {
+        // If a line is exactly MAX_LINE_BYTES + 1, ending with a newline.
+        // It must be rejected, because it exceeds MAX_LINE_BYTES.
+        let mut data = vec![b'x'; MAX_LINE_BYTES + 1];
+        data[MAX_LINE_BYTES] = b'\n';
+        let mut cur = Cursor::new(data);
+        assert!(read_msg(&mut cur).is_err());
+    }
+
+    #[test]
     fn two_messages_one_stream() {
         let mut buf = Vec::new();
         write_msg(&mut buf, &Msg::Ack).unwrap();
