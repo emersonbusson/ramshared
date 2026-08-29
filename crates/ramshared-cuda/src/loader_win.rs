@@ -88,8 +88,8 @@ mod tests {
 
     #[test]
     fn test_invalid_library_handling() {
-        use std::fs;
         use std::ffi::CString;
+        use std::fs;
 
         let dummy_path = "test_invalid_format_12345.dll";
         // Create a dummy file with invalid PE data to test loader failure handling.
@@ -99,7 +99,10 @@ mod tests {
 
         // SAFETY: c_path is a valid null-terminated string pointing to the dummy file.
         let handle = unsafe { open(c_path.as_ptr()) };
-        assert!(handle.is_null(), "Loading an invalid library format should return a null pointer");
+        assert!(
+            handle.is_null(),
+            "Loading an invalid library format should return a null pointer"
+        );
 
         let err_msg = error();
         assert!(!err_msg.is_empty(), "Error message should not be empty");
@@ -119,13 +122,19 @@ mod tests {
 
         // SAFETY: valid_lib is a valid null-terminated string pointing to a known system library.
         let handle = unsafe { open(valid_lib.as_ptr()) };
-        assert!(!handle.is_null(), "kernel32.dll should load successfully on Windows/Wine");
+        assert!(
+            !handle.is_null(),
+            "kernel32.dll should load successfully on Windows/Wine"
+        );
 
         let missing_symbol = CString::new("ThisSymbolDoesNotExistInKernel32").unwrap();
 
         // SAFETY: handle is valid and missing_symbol is a valid null-terminated string.
         let sym_ptr = unsafe { sym(handle, missing_symbol.as_ptr()) };
-        assert!(sym_ptr.is_null(), "Loading a nonexistent symbol should return a null pointer");
+        assert!(
+            sym_ptr.is_null(),
+            "Loading a nonexistent symbol should return a null pointer"
+        );
 
         // SAFETY: handle was opened successfully and has not been closed yet.
         let close_result = unsafe { close(handle) };
