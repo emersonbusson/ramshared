@@ -34,6 +34,20 @@ impl Default for TierPriorities {
     }
 }
 
+impl TierPriorities {
+    /// Returns `true` if zram priority is strictly greater than VRAM priority.
+    #[must_use]
+    pub fn promotes_zram_before_vram(&self) -> bool {
+        self.zram > self.vram
+    }
+
+    /// Returns `true` if VRAM priority is strictly greater than VHDX priority.
+    #[must_use]
+    pub fn promotes_vram_before_vhdx(&self) -> bool {
+        self.vram > self.vhdx
+    }
+}
+
 /// Violations of the strict cascade priority hierarchy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OrderError {
@@ -63,10 +77,10 @@ impl core::error::Error for OrderError {}
 /// Rejects configurations violating this order, preventing v2 anti-patterns
 /// (VRAM configured as max-priority hot swap) which Phase 0 proved to be latency-unsafe.
 pub fn validate_order(p: TierPriorities) -> Result<(), OrderError> {
-    if p.zram <= p.vram {
+    if !p.promotes_zram_before_vram() {
         return Err(OrderError::ZramNotAboveVram);
     }
-    if p.vram <= p.vhdx {
+    if !p.promotes_vram_before_vhdx() {
         return Err(OrderError::VramNotAboveVhdx);
     }
     Ok(())
@@ -113,5 +127,28 @@ mod tests {
             vhdx: -2,
         };
         assert_eq!(validate_order(p), Err(OrderError::ZramNotAboveVram));
+    }
+
+    #[test]
+    fn promotion_predicates_evaluate_correctly() {
+        let valid = TierPriorities::default();
+        assert!(valid.promotes_zram_before_vram());
+        assert!(valid.promotes_vram_before_vhdx());
+
+        let invalid_zram = TierPriorities {
+            zram: 100,
+            vram: 100,
+            vhdx: -2,
+        };
+        assert!(!invalid_zram.promotes_zram_before_vram());
+        assert!(invalid_zram.promotes_vram_before_vhdx());
+
+        let invalid_vram = TierPriorities {
+            zram: 200,
+            vram: -2,
+            vhdx: -2,
+        };
+        assert!(invalid_vram.promotes_zram_before_vram());
+        assert!(!invalid_vram.promotes_vram_before_vhdx());
     }
 }
