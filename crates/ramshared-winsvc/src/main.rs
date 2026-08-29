@@ -1117,26 +1117,6 @@ pub fn build_residue_script(letter: char) -> Result<String, Box<dyn std::error::
     ))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn observe_host_residue_script_escaping() {
-        let valid_script = build_residue_script('D').unwrap();
-        assert!(valid_script.contains("$_.Name -match '^D:\\\\'"));
-
-        let lowercase_script = build_residue_script('z').unwrap();
-        assert!(lowercase_script.contains("$_.Name -match '^Z:\\\\'"));
-
-        let invalid_char = build_residue_script('1');
-        assert!(invalid_char.is_err());
-
-        let injected_char = build_residue_script('\'');
-        assert!(injected_char.is_err());
-    }
-}
-
 #[cfg(windows)]
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -1197,5 +1177,26 @@ fn main() {
             };
             std::process::exit(code);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    #[test]
+    fn observe_host_residue_script_escaping() {
+        let valid_script = build_residue_script('D').unwrap();
+        assert!(valid_script.contains("$_.Name -match '^D:\\\\'"));
+
+        let lowercase_script = build_residue_script('z').unwrap();
+        assert!(lowercase_script.contains("$_.Name -match '^Z:\\\\'"));
+
+        let invalid_char = build_residue_script('1');
+        assert!(invalid_char.is_err());
+
+        let injected_char = build_residue_script('\'');
+        assert!(injected_char.is_err());
     }
 }
