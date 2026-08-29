@@ -1319,15 +1319,15 @@ mod tests {
             assert_eq!(first.parent(), Some(std::path::Path::new("/dev/shm")));
             assert_eq!(second.parent(), Some(std::path::Path::new("/dev/shm")));
         }
-        fs::remove_dir_all(first).unwrap();
-        fs::remove_dir_all(second).unwrap();
+        fs::remove_dir_all(first).expect("failed to remove first fixture directory");
+        fs::remove_dir_all(second).expect("failed to remove second fixture directory");
     }
 
     fn run_isolated_guarded_transition_fixture() {
         let root = fixture();
         let state_path = root.join("supervisor-state.json");
         let ledger_root = root.join("admission");
-        let identity = OwnerIdentity::current().unwrap();
+        let identity = OwnerIdentity::current().expect("failed to get current owner identity");
         let decision = SupervisorDecision {
             state: SupervisorState::Guarded,
             actions: vec![SupervisorAction::CloseAdmission],
