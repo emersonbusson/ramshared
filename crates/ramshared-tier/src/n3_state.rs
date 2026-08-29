@@ -1802,3 +1802,122 @@ enum EventRegistration {
     Conflict,
     Overflow,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_opaque_id_creation_and_bounds() {
+        assert_eq!(OpaqueId::new(b""), Err(FailureReason::MalformedRecord));
+        let max_bytes = vec![0xAB; MAX_OPAQUE_ID_BYTES];
+        let id = OpaqueId::new(&max_bytes).expect("valid opaque id");
+        assert_eq!(id.as_bytes(), max_bytes.as_slice());
+
+        let too_long = vec![0xAB; MAX_OPAQUE_ID_BYTES + 1];
+        assert_eq!(OpaqueId::new(&too_long), Err(FailureReason::MalformedRecord));
+
+        let dbg_str = format!("{id:?}");
+        assert!(dbg_str.contains("OpaqueId"));
+        assert!(dbg_str.contains("length"));
+    }
+
+    #[test]
+    fn test_restart_record_serde_roundtrip_and_errors() {
+        let lease1 = LeaseId::new(b"lease-1").unwrap();
+        let lease2 = LeaseId::new(b"lease-2").unwrap();
+        let checkpoints = vec![
+            GenerationCheckpoint {
+                lease_id: lease2.clone(),
+                generation: 2,
+            },
+            GenerationCheckpoint {
+                lease_id: lease1.clone(),
+                generation: 1,
+            },
+        ];
+
+        let record = RestartRecord::host(10, checkpoints).expect("valid host restart record");
+        assert_eq!(record.host_epoch(), 10);
+        assert_eq!(record.checkpoints().len(), 2);
+        // Should be sorted by lease_id
+        assert_eq!(record.checkpoints()[0].lease_id, lease1);
+        assert_eq!(record.checkpoints()[1].lease_id, lease2);
+
+        let bytes = record.to_bytes();
+        let restored = RestartRecord::from_bytes(&bytes).expect("roundtrip succeeds");
+        assert_eq!(record, restored);
+
+        // Invalid magic bytes
+        let mut bad_bytes = bytes.clone();
+        bad_bytes[0..4].copy_from_slice(b"BADM");
+        assert_eq!(RestartRecord::from_bytes(&bad_bytes), Err(FailureReason::MalformedRecord));
+
+        // Truncated bytes
+        assert_eq!(RestartRecord::from_bytes(&bytes[..10]), Err(FailureReason::MalformedRecord));
+
+        // Invalid authority (guest authority marker = 2)
+        let mut guest_record_bytes = bytes.clone();
+        guest_record_bytes[6] = GUEST_AUTHORITY_MARKER;
+        assert_eq!(RestartRecord::from_bytes(&guest_record_bytes), Err(FailureReason::HostAuthorityRequired));
+
+        // Invalid zero epoch
+        assert_eq!(
+            RestartRecord::host(0, vec![GenerationCheckpoint { lease_id: lease1.clone(), generation: 1 }]),
+            Err(FailureReason::MalformedRecord)
+        );
+    }
+
+    #[test]
+    fn test_lease_machine_basic_lifecycle() {
+        let mut machine = LeaseMachine::new();
+        assert_eq!(machine.state(), LeaseState::Absent);
+
+        let obs = HostObservation::new(
+            1,
+            1,
+            AdapterId::new(b"adapter").unwrap(),
+            Authority::Host,
+            1024 * 1024 * 1024,
+            256 * 1024 * 1024,
+            768 * 1024 * 1024,
+            100,
+            10,
+            EventId::new(b"evt-1").unwrap(),
+            vec![],
+        );
+
+        let decision = machine.observe(obs, 100);
+        assert_eq!(decision.state, PreflightState::Observing);
+
+        let grant_evt = Grant::new(
+            1,
+            LeaseId::new(b"lease-1").unwrap(),
+            1,
+            EventId::new(b"grant-1").unwrap(),
+            1024 * 1024,
+            1,
+            100,
+            200,
+        );
+
+        let decision = machine.receive_grant(grant_evt, 100);
+        let ack = match decision {
+            ProtocolDecision::GrantAck(ack) => ack,
+            other => panic!("expected GrantAck, got {other:?}"),
+        };
+
+        let accept_decision = machine.accept_grant_ack(ack);
+        assert!(matches!(accept_decision, ProtocolDecision::Accepted(_)));
+
+        let revoke_evt = Revoke::new(
+            LeaseId::new(b"lease-1").unwrap(),
+            1,
+            EventId::new(b"revoke-1").unwrap(),
+            200,
+        );
+
+        let decision = machine.receive_revoke(revoke_evt);
+        assert_eq!(decision, ProtocolDecision::BeginDrain);
+    }
+}
