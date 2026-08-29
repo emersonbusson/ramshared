@@ -74,10 +74,10 @@ fn write_opt_reply<W: Write>(w: &mut W, opt: u32, rep: u32, data: &[u8]) -> io::
 }
 
 fn write_export_info<W: Write>(w: &mut W, opt: u32, size: u64, tx_flags: u16) -> io::Result<()> {
-    let mut info = Vec::with_capacity(12);
-    info.extend_from_slice(&NBD_INFO_EXPORT.to_be_bytes());
-    info.extend_from_slice(&size.to_be_bytes());
-    info.extend_from_slice(&tx_flags.to_be_bytes());
+    let mut info = [0u8; 12];
+    info[0..2].copy_from_slice(&NBD_INFO_EXPORT.to_be_bytes());
+    info[2..10].copy_from_slice(&size.to_be_bytes());
+    info[10..12].copy_from_slice(&tx_flags.to_be_bytes());
     write_opt_reply(w, opt, NBD_REP_INFO, &info)?;
     write_opt_reply(w, opt, NBD_REP_ACK, &[])
 }
@@ -141,14 +141,15 @@ pub fn server_handshake<R: Read, W: Write>(
         if len > MAX_OPT_LEN {
             return Err(bad("NBD option with excessive length"));
         }
-        let mut data = vec![0u8; len];
-        r.read_exact(&mut data)?;
+        let mut data_buf = [0u8; MAX_OPT_LEN];
+        let data = &mut data_buf[..len];
+        r.read_exact(data)?;
 
         match opt {
             NBD_OPT_EXPORT_NAME => {
                 // entire payload is the name (empty = default). EXPORT_NAME has no error reply:
                 // unknown export ⇒ closes the connection (Io).
-                let name = name_utf8(&data)?;
+                let name = name_utf8(data)?;
                 let idx = find_export(exports, name).ok_or_else(|| bad("unknown export"))?;
                 w.write_all(&exports[idx].size.to_be_bytes())?;
                 w.write_all(&tx_flags.to_be_bytes())?;
@@ -159,7 +160,7 @@ pub fn server_handshake<R: Read, W: Write>(
                 return Ok(idx);
             }
             NBD_OPT_GO | NBD_OPT_INFO => {
-                let name = name_utf8(go_export_name(&data)?)?;
+                let name = name_utf8(go_export_name(data)?)?;
                 match find_export(exports, name) {
                     Some(idx) => {
                         write_export_info(w, opt, exports[idx].size, tx_flags)?;
@@ -297,6 +298,23 @@ mod tests {
         let mut out = Vec::new();
         let res = server_handshake(&mut r, &mut out, &one(4096), 1);
         assert!(matches!(res, Err(HandshakeError::Io(_))));
+    }
+
+    #[test]
+    fn accepts_max_opt_len() {
+        let mut v = Vec::new();
+        v.extend_from_slice(&0u32.to_be_bytes()); // client_flags
+        v.extend_from_slice(&IHAVEOPT.to_be_bytes()); // opt magic
+        v.extend_from_slice(&999u32.to_be_bytes()); // opt unknown
+        v.extend_from_slice(&(MAX_OPT_LEN as u32).to_be_bytes());
+        v.extend_from_slice(&vec![0u8; MAX_OPT_LEN]);
+        v.extend_from_slice(&IHAVEOPT.to_be_bytes()); // opt magic
+        v.extend_from_slice(&NBD_OPT_ABORT.to_be_bytes()); // opt abort
+        v.extend_from_slice(&0u32.to_be_bytes()); // len 0
+        let mut r = Cursor::new(v);
+        let mut out = Vec::new();
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        assert!(matches!(res, Err(HandshakeError::Aborted)));
     }
 
     #[test]
