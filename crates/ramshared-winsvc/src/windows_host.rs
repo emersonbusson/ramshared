@@ -378,7 +378,7 @@ impl WindowsHostState {
         }
         // MULTI_SZ is UTF-16LE double-null terminated.
         let wide: Vec<u16> = buf
-            .chunks_exact(2)
+            .as_chunks::<2>().0.iter()
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();
         if wide.last().copied() != Some(0) {
@@ -1070,7 +1070,7 @@ mod tests {
             .decode(encode_powershell_command(script))
             .unwrap();
         let words = decoded
-            .chunks_exact(2)
+            .as_chunks::<2>().0.iter()
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
             .collect::<Vec<_>>();
         assert_eq!(String::from_utf16(&words).unwrap(), script);
