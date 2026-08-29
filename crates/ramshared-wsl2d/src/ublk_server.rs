@@ -946,6 +946,63 @@ mod join_tests {
         assert_eq!(serve_request(&oversized, &mut backend, &mut buffer), EINVAL);
     }
 
+    struct FailingBackend;
+
+    impl BlockBackend for FailingBackend {
+        fn size_bytes(&self) -> u64 {
+            4096
+        }
+
+        fn block_size(&self) -> u32 {
+            512
+        }
+
+        fn read_at(&mut self, _off: u64, _buf: &mut [u8]) -> Result<(), ramshared_block::IoError> {
+            Err(ramshared_block::IoError("simulated read failure".into()))
+        }
+
+        fn write_at(&mut self, _off: u64, _data: &[u8]) -> Result<(), ramshared_block::IoError> {
+            Err(ramshared_block::IoError("simulated write failure".into()))
+        }
+
+        fn flush(&mut self) -> Result<(), ramshared_block::IoError> {
+            Err(ramshared_block::IoError("simulated flush failure".into()))
+        }
+    }
+
+    #[test]
+    fn serve_request_propagates_io_error_on_backend_failures() {
+        let mut backend = FailingBackend;
+        let mut buffer = vec![0u8; 4096];
+
+        let read_req = Request {
+            flags: 0,
+            cmd: Command::Read,
+            handle: 1,
+            offset: 0,
+            len: 512,
+        };
+        assert_eq!(serve_request(&read_req, &mut backend, &mut buffer), EIO);
+
+        let write_req = Request {
+            flags: 0,
+            cmd: Command::Write,
+            handle: 2,
+            offset: 0,
+            len: 512,
+        };
+        assert_eq!(serve_request(&write_req, &mut backend, &mut buffer), EIO);
+
+        let flush_req = Request {
+            flags: 0,
+            cmd: Command::Flush,
+            handle: 3,
+            offset: 0,
+            len: 0,
+        };
+        assert_eq!(serve_request(&flush_req, &mut backend, &mut buffer), EIO);
+    }
+
     #[test]
     fn dt3_join_attempts_worker_after_ring_error() {
         let completed = Arc::new(AtomicBool::new(false));
