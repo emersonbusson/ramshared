@@ -30,10 +30,20 @@ impl VramMemory for DeviceMem<'_, '_> {
         DeviceMem::zero(self).map_err(Into::into)
     }
     fn read_at(&self, off: u64, dst: &mut [u8]) -> Result<(), VramError> {
-        DeviceMem::read_at(self, off as usize, dst).map_err(Into::into)
+        let safe_off = usize::try_from(off).map_err(|_| VramError::OutOfRange {
+            off,
+            len: dst.len() as u64,
+            size: self.len() as u64,
+        })?;
+        DeviceMem::read_at(self, safe_off, dst).map_err(Into::into)
     }
     fn write_at(&mut self, off: u64, src: &[u8]) -> Result<(), VramError> {
-        DeviceMem::write_at(self, off as usize, src).map_err(Into::into)
+        let safe_off = usize::try_from(off).map_err(|_| VramError::OutOfRange {
+            off,
+            len: src.len() as u64,
+            size: self.len() as u64,
+        })?;
+        DeviceMem::write_at(self, safe_off, src).map_err(Into::into)
     }
 }
 
@@ -135,6 +145,15 @@ mod tests {
         assert!(free > 0);
         assert!(free <= total);
     }
+
+    #[test]
+    fn test_no_silent_truncation_in_vram_impl() {
+        let src = include_str!("vram_impl.rs");
+        let forbidden = format!("{} {}", "off as", "usize");
+        assert!(
+            !src.contains(&forbidden),
+            "CRITICAL: Found silent offset truncation ('{}') in vram_impl.rs.",
+            forbidden
+        );
+    }
 }
-// dummy comment to force push
-// dummy 2
