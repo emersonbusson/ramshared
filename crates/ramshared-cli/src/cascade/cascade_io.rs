@@ -5539,4 +5539,19 @@ mod tests {
         assert!(!daemon_pid_matches(42, "ramsharedd-helper\n"));
         assert!(!daemon_pid_matches(42, "other\n"));
     }
+
+    #[test]
+    fn parent_seams_install_reserves_capacity() {
+        let shell_responses = 100;
+        let _seams = ParentSeams::install("Filename Type Size Used Priority\n", shell_responses);
+        SH_SCRIPT.with(|queue| {
+            let q = queue.borrow();
+            assert!(
+                q.capacity() >= shell_responses,
+                "SH_SCRIPT queue capacity {} is less than reserved {}",
+                q.capacity(),
+                shell_responses
+            );
+        });
+    }
 }
