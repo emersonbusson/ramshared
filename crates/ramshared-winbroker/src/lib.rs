@@ -106,7 +106,9 @@ impl IpcRingBuffer {
     pub fn new(capacity: usize) -> Self {
         let actual_capacity = std::cmp::max(1, capacity);
         Self {
-            buffers: (0..actual_capacity).map(|_| Vec::with_capacity(4096)).collect(),
+            buffers: (0..actual_capacity)
+                .map(|_| Vec::with_capacity(4096))
+                .collect(),
             index: 0,
         }
     }
