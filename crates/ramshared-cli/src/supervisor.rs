@@ -749,6 +749,24 @@ fn run_systemctl_bounded(args: &[&str]) -> Result<(), String> {
     run_systemctl_bounded_for(Path::new("systemctl"), args, Duration::from_secs(1))
 }
 
+fn parse_command_output(
+    label: &str,
+    status: std::process::ExitStatus,
+    stdout: Vec<u8>,
+    stderr: &[u8],
+) -> Result<Vec<u8>, String> {
+    if status.success() {
+        Ok(stdout)
+    } else {
+        let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+        if stderr.is_empty() {
+            Err(format!("{label} exited with {status}"))
+        } else {
+            Err(format!("{label} exited with {status}: {stderr}"))
+        }
+    }
+}
+
 fn run_systemctl_bounded_for(
     command: &Path,
     args: &[&str],
@@ -764,16 +782,7 @@ fn run_systemctl_bounded_for(
         |_| {},
     )
     .map_err(|error| format!("bounded systemctl action failed: {error}"))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if stderr.is_empty() {
-            Err(format!("systemctl exited with {}", output.status))
-        } else {
-            Err(format!("systemctl exited with {}: {stderr}", output.status))
-        }
-    }
+    parse_command_output("systemctl", output.status, output.stdout, &output.stderr).map(|_| ())
 }
 
 trait UnitActionRunner {
@@ -831,13 +840,8 @@ fn query_unit_invocation_id(unit: &str) -> Result<String, String> {
         |_| {},
     )
     .map_err(|error| format!("bounded systemd identity query failed: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "systemd identity query exited with {}",
-            output.status
-        ));
-    }
-    let output = String::from_utf8(output.stdout)
+    let stdout = parse_command_output("systemd identity query", output.status, output.stdout, &output.stderr)?;
+    let output = String::from_utf8(stdout)
         .map_err(|error| format!("systemd identity query returned non-UTF-8 output: {error}"))?;
     parse_unit_invocation_id(unit, &output)
 }
@@ -2781,5 +2785,46 @@ mod tests {
             let error = timeout.join().unwrap().unwrap_err();
             assert!(error.contains("timed out"), "{error}");
         });
+    }
+
+    #[test]
+    // TestName: parse_command_output_handles_success_and_failures
+    fn parse_command_output_handles_success_and_failures() {
+        let success_output = Command::new("echo")
+            .arg("hello")
+            .output()
+            .expect("run echo command");
+        let parsed = parse_command_output(
+            "test_cmd",
+            success_output.status,
+            success_output.stdout,
+            &success_output.stderr,
+        );
+        assert!(parsed.is_ok());
+        assert_eq!(String::from_utf8_lossy(&parsed.unwrap()).trim(), "hello");
+
+        let failure_no_stderr = Command::new("false").output().expect("run false command");
+        let err_no_stderr = parse_command_output(
+            "test_cmd",
+            failure_no_stderr.status,
+            failure_no_stderr.stdout,
+            &failure_no_stderr.stderr,
+        )
+        .unwrap_err();
+        assert!(err_no_stderr.contains("test_cmd exited with"));
+
+        let failure_with_stderr = Command::new("sh")
+            .args(["-c", "echo 'something went wrong' >&2; exit 1"])
+            .output()
+            .expect("run sh failure command");
+        let err_with_stderr = parse_command_output(
+            "test_cmd",
+            failure_with_stderr.status,
+            failure_with_stderr.stdout,
+            &failure_with_stderr.stderr,
+        )
+        .unwrap_err();
+        assert!(err_with_stderr.contains("test_cmd exited with"));
+        assert!(err_with_stderr.contains("something went wrong"));
     }
 }
