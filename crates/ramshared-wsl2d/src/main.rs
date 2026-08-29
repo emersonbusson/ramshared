@@ -4586,7 +4586,7 @@ fn run_ublk_with_runtime(
             .into());
     }
     runtime.guard_not_wsl2()?;
-    // MCL_CURRENT only: MCL_FUTURE races dxgkrnl mapping and can hang the host.
+    // dxgkrnl ANTI-BUG: MCL_CURRENT only: MCL_FUTURE races dxgkrnl mapping and can hang the host.
     runtime.lock_memory(force, false)?;
     runtime.install_shutdown_handler()?;
 
