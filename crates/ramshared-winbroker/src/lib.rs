@@ -123,29 +123,8 @@ impl BrokerSessionCore {
             return self.on_unregistered_msg(session_id, message);
         }
         match message {
-            Msg::LeaseRequest { bytes } => match self.lease_book.begin_request(1, bytes) {
-                LeaseDecision::Pending(_) => match self.lease_book.grant_pending(bytes) {
-                    Ok(lease) => vec![
-                        BrokerEffect::Audit("lease_granted".into()),
-                        BrokerEffect::Reply(Msg::LeaseGranted {
-                            lease: lease.id,
-                            bytes: lease.bytes,
-                        }),
-                    ],
-                    Err(reason) => vec![Self::denied(reason)],
-                },
-                LeaseDecision::Denied(reason) => vec![Self::denied(reason)],
-            },
-            Msg::LeaseRelease { lease } => match self.lease_book.release(1, lease) {
-                Ok(true) => vec![
-                    BrokerEffect::Audit("lease_released_explicit".into()),
-                    BrokerEffect::LeaseReleased(lease),
-                ],
-                Ok(false) | Err(LeaseDeny::WrongLease) => {
-                    vec![BrokerEffect::Audit("lease_release_idempotent".into())]
-                }
-                Err(reason) => vec![Self::error_and_close(reason), BrokerEffect::Close],
-            },
+            Msg::LeaseRequest { bytes } => self.handle_lease_request(bytes),
+            Msg::LeaseRelease { lease } => self.handle_lease_release(lease),
             // WinDrive PSI is a liveness heartbeat only. It is deliberately
             // excluded from local arbitration, but it must keep the
             // authoritative lease session open.
@@ -156,6 +135,35 @@ impl BrokerSessionCore {
                 }),
                 BrokerEffect::Close,
             ],
+        }
+    }
+
+    pub fn handle_lease_request(&mut self, bytes: u64) -> Vec<BrokerEffect> {
+        match self.lease_book.begin_request(1, bytes) {
+            LeaseDecision::Pending(_) => match self.lease_book.grant_pending(bytes) {
+                Ok(lease) => vec![
+                    BrokerEffect::Audit("lease_granted".into()),
+                    BrokerEffect::Reply(Msg::LeaseGranted {
+                        lease: lease.id,
+                        bytes: lease.bytes,
+                    }),
+                ],
+                Err(reason) => vec![Self::denied(reason)],
+            },
+            LeaseDecision::Denied(reason) => vec![Self::denied(reason)],
+        }
+    }
+
+    pub fn handle_lease_release(&mut self, lease: u32) -> Vec<BrokerEffect> {
+        match self.lease_book.release(1, lease) {
+            Ok(true) => vec![
+                BrokerEffect::Audit("lease_released_explicit".into()),
+                BrokerEffect::LeaseReleased(lease),
+            ],
+            Ok(false) | Err(LeaseDeny::WrongLease) => {
+                vec![BrokerEffect::Audit("lease_release_idempotent".into())]
+            }
+            Err(reason) => vec![Self::error_and_close(reason), BrokerEffect::Close],
         }
     }
 
@@ -453,5 +461,20 @@ mod tests {
             include_str!("../broker.example.toml")
         );
         assert!(BrokerConfigV1::from_toml(text.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn discrete_state_handlers_behave_equivalently() {
+        let mut core = BrokerSessionCore::new(1024, "winsvc", "01");
+        core.on_authenticated_msg(1, register("winsvc"));
+
+        let granted = core.handle_lease_request(1024);
+        assert!(granted.contains(&BrokerEffect::Reply(Msg::LeaseGranted {
+            lease: 1,
+            bytes: 1024
+        })));
+
+        let released = core.handle_lease_release(1);
+        assert!(released.contains(&BrokerEffect::LeaseReleased(1)));
     }
 }
