@@ -306,7 +306,10 @@ mod tests {
     #[test]
     fn manifest_rejects_unknown_and_over_64k() -> Result<(), Box<dyn std::error::Error>> {
         let mut value = serde_json::to_value(manifest())?;
-        value["unknown"] = serde_json::json!(1);
+        value
+            .as_object_mut()
+            .ok_or("expected json object")?
+            .insert("unknown".into(), serde_json::Value::String("x".repeat(65536)));
         assert!(parse_manifest(&serde_json::to_vec(&value)?).is_err());
         assert!(parse_manifest(&vec![b'x'; MAX_MANIFEST_BYTES + 1]).is_err());
         Ok(())
