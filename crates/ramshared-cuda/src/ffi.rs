@@ -19,36 +19,20 @@ pub type CuDevice = c_int;
 pub type CuContext = *mut c_void;
 pub type CuDevicePtr = u64;
 
-// Driver API signatures (ABI _v2 where applicable — matching `nbd-vram`).
-pub type FnInit = unsafe extern "C" fn(c_uint) -> CuResult;
-pub type FnDeviceGetCount = unsafe extern "C" fn(*mut c_int) -> CuResult;
-pub type FnDeviceGet = unsafe extern "C" fn(*mut CuDevice, c_int) -> CuResult;
-pub type FnDeviceGetName = unsafe extern "C" fn(*mut c_char, c_int, CuDevice) -> CuResult;
-pub type FnCtxCreate = unsafe extern "C" fn(*mut CuContext, c_uint, CuDevice) -> CuResult;
-pub type FnCtxDestroy = unsafe extern "C" fn(CuContext) -> CuResult;
-pub type FnCtxSynchronize = unsafe extern "C" fn() -> CuResult;
-pub type FnMemAlloc = unsafe extern "C" fn(*mut CuDevicePtr, usize) -> CuResult;
-pub type FnMemFree = unsafe extern "C" fn(CuDevicePtr) -> CuResult;
-pub type FnMemcpyHtoD = unsafe extern "C" fn(CuDevicePtr, *const c_void, usize) -> CuResult;
-pub type FnMemcpyDtoH = unsafe extern "C" fn(*mut c_void, CuDevicePtr, usize) -> CuResult;
-pub type FnMemsetD8 = unsafe extern "C" fn(CuDevicePtr, u8, usize) -> CuResult;
-pub type FnMemGetInfo = unsafe extern "C" fn(*mut usize, *mut usize) -> CuResult;
-pub type FnGetErrorString = unsafe extern "C" fn(CuResult, *mut *const c_char) -> CuResult;
-
 /// Table of resolved symbols from the CUDA driver library.
 pub struct Syms {
-    pub init: FnInit,
-    pub device_get_count: FnDeviceGetCount,
-    pub device_get: FnDeviceGet,
-    pub device_get_name: FnDeviceGetName,
-    pub ctx_create: FnCtxCreate,
-    pub ctx_destroy: FnCtxDestroy,
-    pub ctx_synchronize: FnCtxSynchronize,
-    pub mem_alloc: FnMemAlloc,
-    pub mem_free: FnMemFree,
-    pub memcpy_htod: FnMemcpyHtoD,
-    pub memcpy_dtoh: FnMemcpyDtoH,
-    pub memset_d8: FnMemsetD8,
-    pub mem_get_info: FnMemGetInfo,
-    pub get_error_string: Option<FnGetErrorString>,
+    pub init: unsafe extern "C" fn(c_uint) -> CuResult,
+    pub device_get_count: unsafe extern "C" fn(*mut c_int) -> CuResult,
+    pub device_get: unsafe extern "C" fn(*mut CuDevice, c_int) -> CuResult,
+    pub device_get_name: unsafe extern "C" fn(*mut c_char, c_int, CuDevice) -> CuResult,
+    pub ctx_create: unsafe extern "C" fn(*mut CuContext, c_uint, CuDevice) -> CuResult,
+    pub ctx_destroy: unsafe extern "C" fn(CuContext) -> CuResult,
+    pub ctx_synchronize: unsafe extern "C" fn() -> CuResult,
+    pub mem_alloc: unsafe extern "C" fn(*mut CuDevicePtr, usize) -> CuResult,
+    pub mem_free: unsafe extern "C" fn(CuDevicePtr) -> CuResult,
+    pub memcpy_htod: unsafe extern "C" fn(CuDevicePtr, *const c_void, usize) -> CuResult,
+    pub memcpy_dtoh: unsafe extern "C" fn(*mut c_void, CuDevicePtr, usize) -> CuResult,
+    pub memset_d8: unsafe extern "C" fn(CuDevicePtr, u8, usize) -> CuResult,
+    pub mem_get_info: unsafe extern "C" fn(*mut usize, *mut usize) -> CuResult,
+    pub get_error_string: Option<unsafe extern "C" fn(CuResult, *mut *const c_char) -> CuResult>,
 }
