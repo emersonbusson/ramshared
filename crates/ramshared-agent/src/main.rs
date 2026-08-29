@@ -322,7 +322,11 @@ impl<'a> SessionDispatcher<'a> {
                 (Ok(sample), Ok(swaps)) => {
                     let mem = Some(TenantMem {
                         swap_current: psi::read_memcg_swap(),
-                        diskstats_io: self.active.values().filter_map(|d| psi::read_diskstats(d)).sum(),
+                        diskstats_io: self
+                            .active
+                            .values()
+                            .filter_map(|d| psi::read_diskstats(d))
+                            .sum(),
                     });
                     if let Err(e) = write_msg(w, &Msg::Psi { sample, swaps, mem }) {
                         *self.session_err = Some(e.into());
