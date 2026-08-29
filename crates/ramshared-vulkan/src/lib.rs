@@ -660,7 +660,9 @@ mod tests {
                     let mut m = p.alloc(64 * 1024).expect("alloc 64 KiB");
                     for i in 0..10 {
                         let n = 64 * 1024;
-                        let pattern: Vec<u8> = (0..n).map(|x: usize| (x.wrapping_add(i as usize).wrapping_add(id)) as u8).collect();
+                        let pattern: Vec<u8> = (0..n)
+                            .map(|x: usize| (x.wrapping_add(i as usize).wrapping_add(id)) as u8)
+                            .collect();
                         m.write_at(0, &pattern).expect("write");
                         let mut back = vec![0u8; n];
                         m.read_at(0, &mut back).expect("read");
