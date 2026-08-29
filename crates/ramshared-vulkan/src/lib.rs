@@ -649,4 +649,29 @@ mod tests {
             free1 >> 20
         );
     }
+
+    #[test]
+    #[ignore = "requires Vulkan loader + ICD (lavapipe is enough; run with --ignored)"]
+    fn vulkan_concurrent_cmd_pool_recycling() {
+        let threads: Vec<_> = (0..4)
+            .map(|id| {
+                std::thread::spawn(move || {
+                    let p = VulkanProvider::open(0).expect("opens Vulkan");
+                    let mut m = p.alloc(64 * 1024).expect("alloc 64 KiB");
+                    for i in 0..10 {
+                        let n = 64 * 1024;
+                        let pattern: Vec<u8> = (0..n).map(|x: usize| (x.wrapping_add(i as usize).wrapping_add(id)) as u8).collect();
+                        m.write_at(0, &pattern).expect("write");
+                        let mut back = vec![0u8; n];
+                        m.read_at(0, &mut back).expect("read");
+                        assert_eq!(back, pattern, "thread {} iteration {} round-trip", id, i);
+                        m.zero().expect("zero");
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().expect("thread joined");
+        }
+    }
 }
