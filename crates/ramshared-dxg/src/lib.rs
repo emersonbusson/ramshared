@@ -255,6 +255,10 @@ fn close_adapter(file: &File, handle: u32) {
 }
 
 fn ioctl_mut<T>(file: &File, request: u64, value: &mut T) -> Result<(), DxgError> {
+    let encoded_size = (request >> 16) & 0x3FFF;
+    if std::mem::size_of::<T>() < encoded_size as usize {
+        return Err(DxgError::Io("buffer smaller than ioctl encoded size".to_string()));
+    }
     // SAFETY: `value` points to the exact repr(C) layout for `request` and stays
     // alive for the synchronous ioctl. The kernel validates nested pointers.
     let result = unsafe { ioctl(file.as_raw_fd(), request, value as *mut T) };
@@ -452,5 +456,25 @@ mod tests {
         );
         query.process = 0;
         assert_eq!(super::validate_query(&query), Ok(()));
+    }
+
+    #[test]
+    fn ioctl_mut_rejects_buffer_smaller_than_encoded_size() {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/null")
+            .unwrap_or_else(|error| panic!("open /dev/null: {error}"));
+
+        let mut small_buffer: u8 = 0;
+        // Construct a request with encoded size of 2 (larger than size_of::<u8>())
+        // Size is encoded in bits 16-29.
+        let request: u64 = 2 << 16;
+
+        let result = super::ioctl_mut(&file, request, &mut small_buffer);
+        assert!(
+            matches!(result, Err(super::DxgError::Io(ref msg)) if msg.contains("smaller than ioctl encoded size")),
+            "Expected Io error about buffer size, got {:?}", result
+        );
     }
 }
