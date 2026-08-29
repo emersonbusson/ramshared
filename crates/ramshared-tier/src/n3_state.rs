@@ -1821,7 +1821,10 @@ mod tests {
         let mut model = PreflightModel::new();
         // Requesting demotion when not constrained should be an invalid transition
         let decision = model.request_demotion();
-        assert_eq!(decision.action, PreflightAction::Unavailable(FailureReason::InvalidTransition));
+        assert_eq!(
+            decision.action,
+            PreflightAction::Unavailable(FailureReason::InvalidTransition)
+        );
 
         // Let's create a constrained state by observing an empty budget
         let event_id = EventId::new(b"event-1").unwrap();
@@ -1838,7 +1841,7 @@ mod tests {
             100,
             MAX_OBSERVATION_AGE,
             event_id,
-            Vec::new()
+            Vec::new(),
         );
 
         let decision = model.observe(observation, 100);
@@ -1883,11 +1886,14 @@ mod tests {
         match decision {
             ProtocolDecision::FailAck(fail_ack) => {
                 assert_eq!(fail_ack.reason, FailureReason::InvalidTransition);
-            },
+            }
             _ => panic!("Expected FailAck"),
         }
 
         // The machine's state should now be Failed(InvalidTransition)
-        assert_eq!(machine.lease_state(), LeaseState::Failed(FailureReason::InvalidTransition));
+        assert_eq!(
+            machine.lease_state(),
+            LeaseState::Failed(FailureReason::InvalidTransition)
+        );
     }
 }
