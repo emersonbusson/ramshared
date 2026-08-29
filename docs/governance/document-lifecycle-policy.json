@@ -10,7 +10,9 @@
       "canonicalSource": "README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -20,7 +22,9 @@
       "canonicalSource": "ARCHITECTURE.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -30,7 +34,9 @@
       "canonicalSource": "CHANGELOG.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -40,7 +46,9 @@
       "canonicalSource": "CONTRIBUTING.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -50,7 +58,9 @@
       "canonicalSource": "MANIFESTO.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -60,7 +70,9 @@
       "canonicalSource": "ROADMAP.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -70,7 +82,9 @@
       "canonicalSource": "trovaldo.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -80,7 +94,9 @@
       "canonicalSource": "SECURITY.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -90,7 +106,9 @@
       "canonicalSource": "validation.md",
       "lifecycle": "immutable",
       "freshnessDays": null,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -100,7 +118,9 @@
       "canonicalSource": "TASK.md",
       "lifecycle": "immutable",
       "freshnessDays": null,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -110,7 +130,9 @@
       "canonicalSource": "superprompt.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -120,7 +142,9 @@
       "canonicalSource": "AGENTS.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -130,7 +154,9 @@
       "canonicalSource": "CLAUDE.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -140,7 +166,9 @@
       "canonicalSource": ".claude/rules/documentation.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -150,7 +178,9 @@
       "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -160,7 +190,9 @@
       "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -170,7 +202,9 @@
       "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -180,7 +214,9 @@
       "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -190,7 +226,9 @@
       "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "immutable",
       "freshnessDays": null,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -200,7 +238,9 @@
       "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "historical",
       "freshnessDays": null,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -210,7 +250,9 @@
       "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "historical",
       "freshnessDays": null,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -220,7 +262,9 @@
       "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "historical",
       "freshnessDays": null,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -230,7 +274,9 @@
       "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -240,7 +286,9 @@
       "canonicalSource": "validation.md",
       "lifecycle": "immutable",
       "freshnessDays": null,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -250,7 +298,9 @@
       "canonicalSource": "validation.md",
       "lifecycle": "immutable",
       "freshnessDays": null,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -260,7 +310,9 @@
       "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -270,7 +322,9 @@
       "canonicalSource": "docs/BENCHMARKS.md",
       "lifecycle": "historical",
       "freshnessDays": null,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -280,7 +334,9 @@
       "canonicalSource": "docs/reliability/GAP-REGISTER.md",
       "lifecycle": "historical",
       "freshnessDays": null,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -290,7 +346,9 @@
       "canonicalSource": "docs/ci/CI-TOPOLOGY.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -300,7 +358,9 @@
       "canonicalSource": "docs/decisions/README.md",
       "lifecycle": "immutable",
       "freshnessDays": null,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -310,7 +370,9 @@
       "canonicalSource": "docs/governance/README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -320,7 +382,9 @@
       "canonicalSource": "docs/labs/LAB-DISK-GUARD.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -330,7 +394,9 @@
       "canonicalSource": "README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -340,7 +406,9 @@
       "canonicalSource": "docs/methodology/kahneman-disciplines.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -350,7 +418,9 @@
       "canonicalSource": "docs/packaging/INSTALLABLES.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -360,7 +430,9 @@
       "canonicalSource": "docs/postmortems/TEMPLATE.md",
       "lifecycle": "immutable",
       "freshnessDays": null,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -370,7 +442,9 @@
       "canonicalSource": "docs/reference/REFERENCE-INDEX.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -380,7 +454,9 @@
       "canonicalSource": "docs/security/THREAT-MODEL.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:25:34Z"
     },
     {
@@ -390,7 +466,9 @@
       "canonicalSource": "docs/reliability/GAP-REGISTER.md",
       "lifecycle": "immutable",
       "freshnessDays": null,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -400,7 +478,9 @@
       "canonicalSource": "docs/postmortems/TEMPLATE.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-20T14:49:00Z"
     },
     {
@@ -410,7 +490,9 @@
       "canonicalSource": "docs/reliability/GAP-REGISTER.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -420,7 +502,9 @@
       "canonicalSource": "README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 30,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-20T14:49:00Z"
     },
     {
@@ -430,7 +514,9 @@
       "canonicalSource": "ARCHITECTURE.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-26T13:15:00Z"
     },
     {
@@ -440,7 +526,9 @@
       "canonicalSource": "docs/reviews/README.md",
       "lifecycle": "historical",
       "freshnessDays": null,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -450,7 +538,9 @@
       "canonicalSource": "docs/runbooks/windows-autonomous-broker.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -460,7 +550,9 @@
       "canonicalSource": "drivers/windows/README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
@@ -470,8 +562,22 @@
       "canonicalSource": "scripts/windows/README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
-      "verification": { "state": "unverified" },
+      "verification": {
+        "state": "unverified"
+      },
       "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "jules-findings",
+      "pattern": "docs/jules/findings/**/*.md",
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/reference/REFERENCE-INDEX.md",
+      "lifecycle": "historical",
+      "freshnessDays": null,
+      "verification": {
+        "state": "unverified"
+      },
+      "registeredAt": "2026-08-29T04:30:00Z"
     }
   ],
   "exclusions": [
