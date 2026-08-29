@@ -893,7 +893,6 @@ mod windows_svc {
         Ok(())
     }
 
-
     fn observe_host_residue(
         root: &std::path::Path,
         manifest: &ramshared_winsvc::package::ProductManifestV1,
@@ -902,7 +901,7 @@ mod windows_svc {
         let config = WinDriveConfig::from_reader(&std::fs::read(
             root.join(&manifest.artifact(ArtifactRole::WinsvcConfig)?.relative_path),
         )?)?;
-        let script = build_residue_script(config.volume_letter)?;
+        let script = crate::build_residue_script(config.volume_letter)?;
         let mut child = std::process::Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
             .stdout(std::process::Stdio::piped())
