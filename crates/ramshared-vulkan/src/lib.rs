@@ -211,6 +211,31 @@ impl VulkanProvider {
         &self.name
     }
 
+    /// Validates an image extent dimension against the physical device limits.
+    pub fn check_image_extent(&self, width: u32, height: u32) -> Result<(), VramError> {
+        // SAFETY: `phys` valid.
+        let props = unsafe { self.instance.get_physical_device_properties(self.phys) };
+        let max_dim = props.limits.max_image_dimension2_d;
+
+        if width == 0 || width > max_dim {
+            return Err(VramError::OutOfRange {
+                off: 0,
+                len: width as u64,
+                size: max_dim as u64,
+            });
+        }
+
+        if height == 0 || height > max_dim {
+            return Err(VramError::OutOfRange {
+                off: 0,
+                len: height as u64,
+                size: max_dim as u64,
+            });
+        }
+
+        Ok(())
+    }
+
     /// Size of the largest heap `DEVICE_LOCAL` (bytes) — base of the `total` in `mem_info` (DT-10). Fallback
     /// to the largest heap if there is no DEVICE_LOCAL (case of software/unified memory).
     pub fn device_local_total(&self) -> u64 {
@@ -647,6 +672,30 @@ mod tests {
             total >> 20,
             free0 >> 20,
             free1 >> 20
+        );
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan loader + ICD (lavapipe is enough; run with --ignored)"]
+    fn check_image_extent_validates_physical_limits() {
+        let p = VulkanProvider::open(0).expect("opens Vulkan");
+
+        // 1. Happy path: valid dimensions
+        assert!(p.check_image_extent(100, 100).is_ok(), "valid extent should pass");
+
+        // 2. Physical limit check: invalid width
+        let max = u32::MAX;
+        let res_width = p.check_image_extent(max, 1);
+        assert!(
+            matches!(res_width, Err(VramError::OutOfRange { .. })),
+            "width exceeding maxImageDimension2D should fail with OutOfRange, got: {:?}", res_width
+        );
+
+        // 3. Physical limit check: invalid height
+        let res_height = p.check_image_extent(1, max);
+        assert!(
+            matches!(res_height, Err(VramError::OutOfRange { .. })),
+            "height exceeding maxImageDimension2D should fail with OutOfRange, got: {:?}", res_height
         );
     }
 }
