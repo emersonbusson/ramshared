@@ -10,6 +10,30 @@ use ramshared_vram::{VramError, VramMemory, VramProvider};
 
 use crate::{BlockBackend, IoError};
 
+#[derive(Debug)]
+pub enum SparseVramError {
+    PageFault(String),
+    TableFull(String),
+    UnalignedAccess(String),
+    InvalidInput(String),
+    OutOfRange(String),
+}
+
+impl std::error::Error for SparseVramError {}
+
+impl std::fmt::Display for SparseVramError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PageFault(msg) => write!(f, "sparse page fault: {msg}"),
+            Self::TableFull(msg) => write!(f, "sparse table full: {msg}"),
+            Self::UnalignedAccess(msg) => write!(f, "sparse unaligned access: {msg}"),
+            Self::InvalidInput(msg) => write!(f, "sparse invalid input: {msg}"),
+            Self::OutOfRange(msg) => write!(f, "sparse out of range: {msg}"),
+        }
+    }
+}
+
+
 /// Default chunk size (MiB) — SPEC `RAMSHARED_VRAM_CHUNK_MIB` default 128.
 pub const DEFAULT_CHUNK_MIB: u64 = 128;
 
@@ -61,7 +85,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         capacity: u64,
         chunk_bytes: u64,
         block_size: u32,
-    ) -> Result<Self, IoError> {
+    ) -> Result<Self, SparseVramError> {
         Self::new_with_config(
             provider,
             SparseVramConfig {
@@ -83,7 +107,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         block_size: u32,
         reserve_floor_bytes: u64,
         commit_cap_bytes: Option<u64>,
-    ) -> Result<Self, IoError> {
+    ) -> Result<Self, SparseVramError> {
         Self::new_with_config(
             provider,
             SparseVramConfig {
@@ -106,7 +130,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         reserve_floor_bytes: u64,
         commit_cap_bytes: Option<u64>,
         budget_gate: Option<&'p dyn CommitBudgetGate>,
-    ) -> Result<Self, IoError> {
+    ) -> Result<Self, SparseVramError> {
         Self::new_with_config(
             provider,
             SparseVramConfig {
@@ -120,23 +144,23 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         )
     }
 
-    pub fn new_with_config(provider: &'p P, config: SparseVramConfig<'p>) -> Result<Self, IoError> {
+    pub fn new_with_config(provider: &'p P, config: SparseVramConfig<'p>) -> Result<Self, SparseVramError> {
         if config.capacity == 0 {
-            return Err(IoError("sparse: capacity 0".into()));
+            return Err(SparseVramError::InvalidInput("sparse: capacity 0".into()));
         }
         if config.chunk_bytes == 0
             || !config
                 .chunk_bytes
                 .is_multiple_of(u64::from(config.block_size))
         {
-            return Err(IoError(format!(
+            return Err(SparseVramError::UnalignedAccess(format!(
                 "sparse: chunk_bytes={} must be >0 and multiple of block_size={}",
                 config.chunk_bytes, config.block_size
             )));
         }
         let n = config.capacity.div_ceil(config.chunk_bytes);
         if n > 1_000_000 {
-            return Err(IoError(format!("sparse: too many chunks ({n})")));
+            return Err(SparseVramError::InvalidInput(format!("sparse: too many chunks ({n})")));
         }
         // Cap commit to capacity; optional env can lower further.
         let commit_cap = config
@@ -219,7 +243,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         free_vram_bytes: Option<u64>,
         free_floor_bytes: u64,
         idle: Duration,
-    ) -> Result<u64, IoError> {
+    ) -> Result<u64, SparseVramError> {
         if nbd_used_kb > 0 {
             return Ok(0);
         }
@@ -237,7 +261,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         Ok(0)
     }
 
-    fn ensure_live(&mut self, idx: usize) -> Result<(), IoError> {
+    fn ensure_live(&mut self, idx: usize) -> Result<(), SparseVramError> {
         if self.chunks[idx].mem.is_some() {
             return Ok(());
         }
@@ -247,13 +271,13 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
             && let Err(message) = gate.allow_commit(self.committed_bytes(), self.chunk_bytes)
         {
             self.budget_refuses = self.budget_refuses.saturating_add(1);
-            return Err(IoError(format!(
+            return Err(SparseVramError::TableFull(format!(
                 "sparse host budget constrained before allocation: {message}"
             )));
         }
         if next_commit > self.commit_cap_bytes {
             self.floor_refuses = self.floor_refuses.saturating_add(1);
-            return Err(IoError(format!(
+            return Err(SparseVramError::TableFull(format!(
                 "sparse commit_cap: committed would be {} MiB > cap {} MiB (capacity {} MiB); \
                  refusing the write because swap fallback is not guaranteed",
                 next_commit >> 20,
@@ -267,7 +291,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
                 let need = self.reserve_floor_bytes.saturating_add(self.chunk_bytes);
                 if free < need {
                     self.floor_refuses = self.floor_refuses.saturating_add(1);
-                    return Err(IoError(format!(
+                    return Err(SparseVramError::TableFull(format!(
                         "sparse free-floor: free {} MiB < reserve+chunk {} MiB — refuse alloc \
                          (protect GPU)",
                         free >> 20,
@@ -277,27 +301,27 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
             }
             Err(e) => {
                 self.alloc_fails = self.alloc_fails.saturating_add(1);
-                return Err(IoError(format!("sparse mem_info: {e}")));
+                return Err(SparseVramError::PageFault(format!("sparse mem_info: {e}")));
             }
         }
         let len = self.chunk_bytes as usize;
         // Last chunk may be partial capacity — still alloc full chunk_bytes (simpler MVP).
         match self.provider.alloc(len) {
             Ok(mut m) => {
-                m.zero().map_err(|e| IoError(e.to_string()))?;
+                m.zero().map_err(|e| SparseVramError::PageFault(e.to_string()))?;
                 self.chunks[idx].mem = Some(m);
                 Ok(())
             }
             Err(e) => {
                 self.alloc_fails = self.alloc_fails.saturating_add(1);
-                Err(IoError(format!("sparse alloc chunk {idx}: {e}")))
+                Err(SparseVramError::PageFault(format!("sparse alloc chunk {idx}: {e}")))
             }
         }
     }
 
-    fn chunk_index(&self, off: u64) -> Result<usize, IoError> {
+    fn chunk_index(&self, off: u64) -> Result<usize, SparseVramError> {
         if off >= self.capacity {
-            return Err(IoError(format!(
+            return Err(SparseVramError::OutOfRange(format!(
                 "sparse oob off={off} capacity={}",
                 self.capacity
             )));
@@ -333,7 +357,7 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
         let mut done = 0usize;
         while done < buf.len() {
             let abs = off + done as u64;
-            let idx = self.chunk_index(abs)?;
+            let idx = self.chunk_index(abs).map_err(|e| IoError(e.to_string()))?;
             let chunk_base = idx as u64 * self.chunk_bytes;
             let rel = (abs - chunk_base) as usize;
             let room = (self.chunk_bytes as usize).saturating_sub(rel);
@@ -368,8 +392,8 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
         let now = Instant::now();
         while done < data.len() {
             let abs = off + done as u64;
-            let idx = self.chunk_index(abs)?;
-            self.ensure_live(idx)?;
+            let idx = self.chunk_index(abs).map_err(|e| IoError(e.to_string()))?;
+            self.ensure_live(idx).map_err(|e| IoError(e.to_string()))?;
             let chunk_base = idx as u64 * self.chunk_bytes;
             let rel = (abs - chunk_base) as usize;
             let room = (self.chunk_bytes as usize).saturating_sub(rel);
@@ -596,7 +620,7 @@ mod tests {
         p.fail_next.set(true);
         let mut be = SparseVramBackend::new(&p, 1024 * 1024, 256 * 1024, 4096).unwrap();
         let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
-        assert!(err.0.contains("alloc") || err.0.contains("fail"));
+        assert!(err.0.contains("sparse page fault: ") || err.0.contains("fail"));
         assert_eq!(be.alloc_fails, 1);
     }
 
@@ -616,7 +640,7 @@ mod tests {
         .unwrap();
         be.write_at(0, &[1u8; 4096]).unwrap();
         let err = be.write_at(chunk, &[2u8; 4096]).unwrap_err();
-        assert!(err.0.contains("commit_cap"), "{err:?}");
+        assert!(err.0.contains("sparse table full:"), "{err:?}");
         assert_eq!(be.chunks_live(), 1);
         assert!(be.floor_refuses >= 1);
     }
@@ -641,7 +665,7 @@ mod tests {
         )
         .unwrap();
         let error = be.write_at(0, &[1u8; 4096]).unwrap_err();
-        assert!(error.0.contains("WDDM constrained"), "{error:?}");
+        assert!(error.0.contains("sparse table full:"), "{error:?}");
         assert_eq!(p.allocs.get(), 0);
         assert_eq!(be.budget_refuses, 1);
     }
@@ -720,7 +744,7 @@ mod tests {
         .unwrap();
         let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
         assert!(
-            err.0.contains("free-floor") || err.0.contains("floor"),
+            err.0.contains("sparse table full:"),
             "{err:?}"
         );
     }
@@ -745,7 +769,7 @@ mod tests {
             SparseVramBackend::new_with_limits(&p, 1024 * 1024, 256 * 1024, 4096, 0, None).unwrap();
         let err = be.write_at(0, &[1u8; 4096]).unwrap_err();
         assert!(
-            err.0.contains("mem_info") || err.0.contains("no gpu"),
+            err.0.contains("sparse page fault:"),
             "{err:?}"
         );
         assert_eq!(be.alloc_fails, 1);
