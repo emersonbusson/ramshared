@@ -29,6 +29,9 @@ impl ChecksumTable {
 
     /// Records the hash of a written block. Returns `false` if `idx` is out of bounds.
     pub fn record(&mut self, idx: usize, data: &[u8]) -> bool {
+        if data.len() != 4096 && data.len() != 65536 {
+            return false;
+        }
         match self.sums.get_mut(idx) {
             Some(slot) => {
                 *slot = Some(block_hash(data));
@@ -42,6 +45,9 @@ impl ChecksumTable {
     /// `None` = never written (ok); `Some(true)` = matches; `Some(false)` =
     /// mismatch (corruption/torn read) -> the caller returns an I/O error.
     pub fn verify(&self, idx: usize, data: &[u8]) -> Option<bool> {
+        if data.len() != 4096 && data.len() != 65536 {
+            return Some(false);
+        }
         match self.sums.get(idx) {
             Some(Some(expected)) => Some(*expected == block_hash(data)),
             Some(None) => None,
@@ -87,5 +93,20 @@ mod tests {
         assert_eq!(t.verify(0, &[0u8; 4096]), None); // never written
         assert_eq!(t.verify(99, &[0u8; 4096]), Some(false)); // out of bounds
         assert!(!t.record(99, &[0u8; 4096]));
+    }
+
+    #[test]
+    fn reject_invalid_buffer_length() {
+        let mut t = ChecksumTable::new(2);
+        let data_1024 = vec![0xABu8; 1024];
+        let data_8192 = vec![0xABu8; 8192];
+
+        // record should return false
+        assert!(!t.record(0, &data_1024));
+        assert!(!t.record(0, &data_8192));
+
+        // verify should return Some(false)
+        assert_eq!(t.verify(0, &data_1024), Some(false));
+        assert_eq!(t.verify(0, &data_8192), Some(false));
     }
 }
