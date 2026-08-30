@@ -52,37 +52,6 @@ const IOCTL_DESTROY: u32 = ioctl_code(4);
 const GENERIC_READ: u32 = 0x8000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
 
-/// IOCTL / mapping errors (stable classes only — no pointers in Display).
-#[derive(Debug)]
-pub enum IoctlError {
-    Open(String),
-    Ioctl(String),
-    Map(String),
-    Timeout,
-    Cancelled,
-    Invalid(String),
-}
-
-impl std::fmt::Display for IoctlError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            IoctlError::Open(s) => write!(f, "open: {s}"),
-            IoctlError::Ioctl(s) => write!(f, "ioctl: {s}"),
-            IoctlError::Map(s) => write!(f, "map: {s}"),
-            IoctlError::Timeout => write!(f, "timeout"),
-            IoctlError::Cancelled => write!(f, "cancelled"),
-            IoctlError::Invalid(s) => write!(f, "invalid: {s}"),
-        }
-    }
-}
-
-impl std::error::Error for IoctlError {}
-
-fn last_error_string(op: &str) -> String {
-    let e = unsafe { windows_sys::Win32::Foundation::GetLastError() };
-    format!("{op} win32={e}")
-}
-
 /// Contiguous page-aligned SQ/CQ/data regions for REGISTER (DT-4).
 ///
 /// Shared headers use aligned 32-bit words with Rust Release/Acquire publication.
@@ -107,21 +76,21 @@ impl WindowsMappedQueue {
         queue_depth: u32,
         max_io_bytes: u32,
         block_size: u32,
-    ) -> Result<Self, IoctlError> {
+    ) -> std::io::Result<Self> {
         if queue_depth == 0 || queue_depth > MAX_QD || !queue_depth.is_power_of_two() {
-            return Err(IoctlError::Invalid("queue_depth".into()));
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "queue_depth"));
         }
         if max_io_bytes == 0 || max_io_bytes > MAX_IO {
-            return Err(IoctlError::Invalid("max_io_bytes".into()));
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "max_io_bytes"));
         }
         if block_size != 512 && block_size != 4096 {
-            return Err(IoctlError::Invalid("block_size".into()));
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "block_size"));
         }
         let data_bytes = (queue_depth as usize)
             .checked_mul(max_io_bytes as usize)
-            .ok_or_else(|| IoctlError::Invalid("data area overflow".into()))?;
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "data area overflow"))?;
         if data_bytes > 4 * 1024 * 1024 {
-            return Err(IoctlError::Invalid("data area > 4 MiB".into()));
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "data area > 4 MiB"));
         }
         let sq_bytes = size_of::<RingHdr>() + (queue_depth as usize) * size_of::<Sqe>();
         let cq_bytes = size_of::<RingHdr>() + (queue_depth as usize) * size_of::<Cqe>();
@@ -313,14 +282,14 @@ unsafe fn init_ring_hdr(base: *mut u8, entries: u32) {
     }
 }
 
-fn alloc_region(bytes: usize) -> Result<*mut u8, IoctlError> {
+fn alloc_region(bytes: usize) -> std::io::Result<*mut u8> {
     if bytes == 0 {
-        return Err(IoctlError::Invalid("zero alloc".into()));
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "zero alloc"));
     }
     // SAFETY: VirtualAlloc returns page-aligned RW region or null.
     let p = unsafe { VirtualAlloc(ptr::null(), bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
     if p.is_null() {
-        return Err(IoctlError::Map(last_error_string("VirtualAlloc")));
+        return Err(std::io::Error::last_os_error());
     }
     // Best-effort lock to reduce page-out during MDL probe.
     unsafe {
@@ -347,7 +316,7 @@ pub struct WindowsDriverLink {
 }
 
 impl WindowsDriverLink {
-    pub fn open() -> Result<Self, IoctlError> {
+    pub fn open() -> std::io::Result<Self> {
         let path: Vec<u16> = "\\\\.\\RamSharedCtl\0".encode_utf16().collect();
         // SAFETY: path is NUL-terminated wide string.
         let handle = unsafe {
@@ -362,16 +331,15 @@ impl WindowsDriverLink {
             )
         };
         if handle == INVALID_HANDLE_VALUE {
-            return Err(IoctlError::Open(last_error_string(
-                "CreateFile RamSharedCtl",
-            )));
+            return Err(std::io::Error::last_os_error());
         }
         let event = unsafe { CreateEventW(ptr::null(), 1, 0, ptr::null()) };
         if event.is_null() {
+            let err = std::io::Error::last_os_error();
             unsafe {
                 CloseHandle(handle);
             }
-            return Err(IoctlError::Open(last_error_string("CreateEvent")));
+            return Err(err);
         }
         Ok(Self {
             handle,
@@ -380,29 +348,29 @@ impl WindowsDriverLink {
         })
     }
 
-    pub fn create_disk(&mut self, params: &DiskParams) -> Result<(), IoctlError> {
+    pub fn create_disk(&mut self, params: &DiskParams) -> std::io::Result<()> {
         if params.reserved != 0 {
-            return Err(IoctlError::Invalid("disk reserved non-zero".into()));
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "disk reserved non-zero"));
         }
         let bytes = struct_bytes(params);
         self.ioctl_sync(IOCTL_CREATE, Some(&bytes), None)
     }
 
-    pub fn register_queue(&mut self, reg: &Register) -> Result<(), IoctlError> {
+    pub fn register_queue(&mut self, reg: &Register) -> std::io::Result<()> {
         if reg.reserved != 0 {
-            return Err(IoctlError::Invalid("register reserved non-zero".into()));
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "register reserved non-zero"));
         }
         if reg.disk_id != 0 {
-            return Err(IoctlError::Invalid("disk_id must be 0".into()));
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "disk_id must be 0"));
         }
         let bytes = struct_bytes(reg);
         self.ioctl_sync(IOCTL_REGISTER, Some(&bytes), None)
     }
 
     /// One pending COMMIT_AND_FETCH only (DT-4). Timeout uses CancelIoEx + GetOverlappedResult.
-    pub fn commit_and_fetch(&mut self, timeout: Duration) -> Result<(), IoctlError> {
+    pub fn commit_and_fetch(&mut self, timeout: Duration) -> std::io::Result<()> {
         if self.pending {
-            return Err(IoctlError::Invalid("commit already pending".into()));
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "commit already pending"));
         }
         unsafe {
             let _ = ResetEvent(self.event);
@@ -426,7 +394,7 @@ impl WindowsDriverLink {
         if ok == FALSE {
             let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
             if err != ERROR_IO_PENDING {
-                return Err(IoctlError::Ioctl(format!("COMMIT win32={err}")));
+                return Err(std::io::Error::from_raw_os_error(err as i32));
             }
             self.pending = true;
             let ms = timeout.as_millis().min(u32::MAX as u128) as u32;
@@ -434,17 +402,17 @@ impl WindowsDriverLink {
                 unsafe { WaitForSingleObject(self.event, if ms == 0 { INFINITE } else { ms }) };
             if wr == WAIT_TIMEOUT {
                 self.cancel_and_drain(&ov);
-                return Err(IoctlError::Timeout);
+                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"));
             }
             if wr != WAIT_OBJECT_0 {
                 self.cancel_and_drain(&ov);
-                return Err(IoctlError::Ioctl(format!("WaitForSingleObject={wr}")));
+                return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("WaitForSingleObject={wr}")));
             }
             let mut xfer = 0u32;
             let gor = unsafe { GetOverlappedResult(self.handle, &ov, &mut xfer, 0) };
             self.pending = false;
             if gor == FALSE {
-                return Err(IoctlError::Ioctl(last_error_string("GetOverlappedResult")));
+                return Err(std::io::Error::last_os_error());
             }
             Ok(())
         } else {
@@ -454,22 +422,22 @@ impl WindowsDriverLink {
         }
     }
 
-    pub fn cancel_fetch(&mut self) -> Result<(), IoctlError> {
+    pub fn cancel_fetch(&mut self) -> std::io::Result<()> {
         if !self.pending {
             return Ok(());
         }
         // A pending operation must only be cancelled by its owner while its
         // OVERLAPPED remains in scope. commit_and_fetch drains before return.
-        Err(IoctlError::Invalid(
-            "pending fetch cannot be cancelled without its OVERLAPPED owner".into(),
+        Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,
+            "pending fetch cannot be cancelled without its OVERLAPPED owner",
         ))
     }
 
-    pub fn unregister_queue(&mut self) -> Result<(), IoctlError> {
+    pub fn unregister_queue(&mut self) -> std::io::Result<()> {
         self.ioctl_sync(IOCTL_UNREGISTER, None, None)
     }
 
-    pub fn destroy_disk(&mut self) -> Result<(), IoctlError> {
+    pub fn destroy_disk(&mut self) -> std::io::Result<()> {
         self.ioctl_sync(IOCTL_DESTROY, None, None)
     }
 
@@ -478,7 +446,7 @@ impl WindowsDriverLink {
         code: u32,
         input: Option<&[u8]>,
         _output: Option<&mut [u8]>,
-    ) -> Result<(), IoctlError> {
+    ) -> std::io::Result<()> {
         unsafe {
             let _ = ResetEvent(self.event);
         }
@@ -506,17 +474,17 @@ impl WindowsDriverLink {
         }
         let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
         if err != ERROR_IO_PENDING {
-            return Err(IoctlError::Ioctl(format!("ioctl win32={err}")));
+            return Err(std::io::Error::from_raw_os_error(err as i32));
         }
         let wr = unsafe { WaitForSingleObject(self.event, 30_000) };
         if wr != WAIT_OBJECT_0 {
             self.cancel_and_drain(&ov);
-            return Err(IoctlError::Timeout);
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"));
         }
         let mut xfer = 0u32;
         let gor = unsafe { GetOverlappedResult(self.handle, &ov, &mut xfer, 0) };
         if gor == FALSE {
-            return Err(IoctlError::Ioctl(last_error_string("GetOverlappedResult")));
+            return Err(std::io::Error::last_os_error());
         }
         Ok(())
     }
