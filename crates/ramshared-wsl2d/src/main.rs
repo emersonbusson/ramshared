@@ -5090,7 +5090,7 @@ mod tests {
 
     #[test]
     fn missing_gpu_measurement_sets_zero_cache_target() {
-        assert_eq!(ramshared_block::physical_target_bytes(4 * GIB, None), 0);
+        assert_eq!(ramshared_block::physical_target_bytes(4 * GIB, u64::MAX, None), 0);
     }
 
     #[test]
@@ -5114,7 +5114,7 @@ mod tests {
             fail: std::rc::Rc::new(std::cell::Cell::new(false)),
         };
         let mut cache =
-            WriteThroughCacheBackend::with_chunk_bytes(&provider, origin, 32, 4, 8).unwrap();
+            WriteThroughCacheBackend::with_chunk_bytes(&provider, origin, 32, u64::MAX, 4, 8).unwrap();
         cache.set_physical_cap_bytes(8);
         let sample = Some(GpuSample {
             budget_bytes: 16 * GIB,
@@ -5199,7 +5199,7 @@ mod tests {
             fail: std::rc::Rc::clone(&fail),
         };
         let provider = RefusingProvider;
-        let mut backend = WriteThroughCacheBackend::new(&provider, origin, GIB, BLOCK_SIZE)
+        let mut backend = WriteThroughCacheBackend::new(&provider, origin, GIB, u64::MAX, BLOCK_SIZE)
             .expect("valid origin-cache fixture");
         assert!(backend.write_at(0, &[0; BLOCK_SIZE as usize]).is_err());
         assert_eq!(backend.origin_state(), DurableOriginState::Failed);

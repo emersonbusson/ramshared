@@ -128,7 +128,7 @@ pub struct GpuSample {
     pub total_vram_bytes: u64,
 }
 
-pub fn physical_target_bytes(logical_bytes: u64, sample: Option<GpuSample>) -> u64 {
+pub fn physical_target_bytes(logical_bytes: u64, host_ram_bytes: u64, sample: Option<GpuSample>) -> u64 {
     let Some(sample) = sample else {
         return 0;
     };
@@ -138,6 +138,7 @@ pub fn physical_target_bytes(logical_bytes: u64, sample: Option<GpuSample>) -> u
         .saturating_sub(sample.external_usage_bytes)
         .saturating_sub(reserve)
         .min(logical_bytes)
+        .min(host_ram_bytes)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -215,6 +216,7 @@ pub struct WriteThroughCacheBackend<'p, P: VramProvider + 'p, O> {
     provider: &'p P,
     origin: O,
     size: u64,
+    host_ram_bytes: u64,
     block: u32,
     chunk_bytes: u64,
     chunks: Vec<CacheChunk<P::Mem<'p>>>,
@@ -233,8 +235,8 @@ pub struct WriteThroughCacheBackend<'p, P: VramProvider + 'p, O> {
 }
 
 impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P, O> {
-    pub fn new(provider: &'p P, origin: O, size: u64, block: u32) -> Result<Self, IoError> {
-        Self::with_chunk_bytes(provider, origin, size, block, ORIGIN_CACHE_CHUNK_BYTES)
+    pub fn new(provider: &'p P, origin: O, size: u64, host_ram_bytes: u64, block: u32) -> Result<Self, IoError> {
+        Self::with_chunk_bytes(provider, origin, size, host_ram_bytes, block, ORIGIN_CACHE_CHUNK_BYTES)
     }
 
     #[doc(hidden)]
@@ -242,6 +244,7 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
         provider: &'p P,
         origin: O,
         size: u64,
+        host_ram_bytes: u64,
         block: u32,
         chunk_bytes: u64,
     ) -> Result<Self, IoError> {
@@ -252,6 +255,9 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
             || !chunk_bytes.is_multiple_of(block as u64)
         {
             return Err(IoError("invalid origin cache geometry".into()));
+        }
+        if size > host_ram_bytes {
+            return Err(IoError("origin cache capacity exceeds available physical host RAM".into()));
         }
         let chunk_count = size.div_ceil(chunk_bytes);
         let mut chunks = Vec::with_capacity(chunk_count as usize);
@@ -270,6 +276,7 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
             provider,
             origin,
             size,
+            host_ram_bytes,
             block,
             chunk_bytes,
             chunks,
@@ -328,7 +335,7 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
     }
 
     pub fn observe_gpu(&mut self, sample: Option<GpuSample>, now: Duration) -> CachePolicyOutcome {
-        let target = physical_target_bytes(self.physical_cap_bytes, sample);
+        let target = physical_target_bytes(self.physical_cap_bytes, self.host_ram_bytes, sample);
         self.target_bytes = target;
         let cached_before = self.cached_bytes();
         let missing = sample.is_none();
@@ -900,7 +907,7 @@ mod tests {
         provider: &'a FakeProvider,
         origin: ScriptedOrigin,
     ) -> WriteThroughCacheBackend<'a, FakeProvider, ScriptedOrigin> {
-        WriteThroughCacheBackend::with_chunk_bytes(provider, origin, 32, 4, 8).unwrap()
+        WriteThroughCacheBackend::with_chunk_bytes(provider, origin, 32, u64::MAX, 4, 8).unwrap()
     }
 
     fn grow_one<O: OriginStorage>(backend: &mut WriteThroughCacheBackend<'_, FakeProvider, O>) {
@@ -1257,10 +1264,11 @@ mod tests {
 
     #[test]
     fn exact_target_formula_and_missing_measurement_fail_safe() {
-        assert_eq!(physical_target_bytes(4 * GIB, None), 0);
+        assert_eq!(physical_target_bytes(4 * GIB, u64::MAX, None), 0);
         assert_eq!(
             physical_target_bytes(
                 24 * GIB,
+                u64::MAX,
                 Some(GpuSample {
                     budget_bytes: 10 * GIB,
                     external_usage_bytes: 2 * GIB,
@@ -1272,6 +1280,7 @@ mod tests {
         assert_eq!(
             physical_target_bytes(
                 GIB,
+                u64::MAX,
                 Some(GpuSample {
                     budget_bytes: 8 * GIB,
                     external_usage_bytes: 0,
@@ -1279,6 +1288,18 @@ mod tests {
                 })
             ),
             GIB
+        );
+        assert_eq!(
+            physical_target_bytes(
+                8 * GIB,
+                2 * GIB,
+                Some(GpuSample {
+                    budget_bytes: 10 * GIB,
+                    external_usage_bytes: 2 * GIB,
+                    total_vram_bytes: 20 * GIB,
+                })
+            ),
+            2 * GIB
         );
     }
 
@@ -1387,7 +1408,7 @@ mod tests {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(8, events);
-        let backend = WriteThroughCacheBackend::new(&provider, origin, 8, 4).unwrap();
+        let backend = WriteThroughCacheBackend::new(&provider, origin, 8, u64::MAX, 4).unwrap();
         assert_eq!(backend.chunk_bytes(), ORIGIN_CACHE_CHUNK_BYTES);
     }
 }

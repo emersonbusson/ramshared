@@ -30,6 +30,7 @@ impl Tier {
             Self::Zram | Self::Vhdx => None,
         }
     }
+
 }
 
 /// Safety net status for the VRAM demotion path (Invariant A1).
@@ -48,6 +49,7 @@ impl SafetyNet {
     pub fn is_safe(self) -> bool {
         !matches!(self, SafetyNet::None)
     }
+
 }
 
 /// Determines the safety net availability for the VRAM tier (A1).
@@ -63,37 +65,48 @@ pub fn vram_safety_net(vhdx_present: bool, mem_available: u64, vram_size: u64) -
     } else {
         SafetyNet::None
     }
+
 }
 
 /// Errors that can occur during tier resizing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResizeError {
-    /// The requested tier capacity exceeds the physical hardware capacity limit.
-    ExceedsPhysicalLimit,
+    /// The requested tier capacity exceeds total detected host RAM.
+    ExceedsHostRamCapacity,
+    /// The requested tier capacity exceeds available VRAM.
+    ExceedsVramCapacity,
 }
 
 impl core::fmt::Display for ResizeError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            ResizeError::ExceedsPhysicalLimit => {
-                f.write_str("requested tier capacity exceeds the physical hardware limit")
+            ResizeError::ExceedsHostRamCapacity => {
+                f.write_str("requested tier capacity exceeds total detected host RAM")
+            }
+            ResizeError::ExceedsVramCapacity => {
+                f.write_str("requested tier capacity exceeds available VRAM")
             }
         }
     }
+
 }
 
 impl core::error::Error for ResizeError {}
 
 /// Validates that a requested tier resize is within physical hardware limits.
 pub fn validate_tier_resize(
+    tier: Tier,
     requested_bytes: u64,
-    physical_limit_bytes: u64,
+    host_ram_bytes: u64,
+    vram_capacity_bytes: u64,
 ) -> Result<(), ResizeError> {
-    if requested_bytes > physical_limit_bytes {
-        Err(ResizeError::ExceedsPhysicalLimit)
-    } else {
-        Ok(())
+    if requested_bytes > host_ram_bytes {
+        return Err(ResizeError::ExceedsHostRamCapacity);
     }
+    if matches!(tier, Tier::Vram) && requested_bytes > vram_capacity_bytes {
+        return Err(ResizeError::ExceedsVramCapacity);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -149,20 +162,28 @@ mod tests {
 
     #[test]
     fn tier_resize_within_physical_limits_is_ok() {
-        assert_eq!(validate_tier_resize(0, GIB), Ok(()));
-        assert_eq!(validate_tier_resize(GIB, GIB), Ok(()));
-        assert_eq!(validate_tier_resize(GIB / 2, GIB), Ok(()));
+        assert_eq!(validate_tier_resize(Tier::Vram, 0, GIB, GIB), Ok(()));
+        assert_eq!(validate_tier_resize(Tier::Vram, GIB, GIB, GIB), Ok(()));
+        assert_eq!(validate_tier_resize(Tier::Vram, GIB / 2, GIB, GIB), Ok(()));
     }
 
     #[test]
     fn tier_resize_exceeding_physical_limits_fails() {
         assert_eq!(
-            validate_tier_resize(GIB + 1, GIB),
-            Err(ResizeError::ExceedsPhysicalLimit)
+            validate_tier_resize(Tier::Vram, GIB + 1, GIB, GIB),
+            Err(ResizeError::ExceedsHostRamCapacity)
         );
         assert_eq!(
-            validate_tier_resize(2 * GIB, GIB),
-            Err(ResizeError::ExceedsPhysicalLimit)
+            validate_tier_resize(Tier::Vram, 2 * GIB, GIB, GIB),
+            Err(ResizeError::ExceedsHostRamCapacity)
+        );
+    }
+
+    #[test]
+    fn tier_resize_exceeding_vram_capacity_fails() {
+        assert_eq!(
+            validate_tier_resize(Tier::Vram, GIB, 2 * GIB, GIB / 2),
+            Err(ResizeError::ExceedsVramCapacity)
         );
     }
 }

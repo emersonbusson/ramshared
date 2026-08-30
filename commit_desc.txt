@@ -1,0 +1,17 @@
+## Resumo
+Add physical hardware limit checks to the origin cache, specifically enforcing that the cache capacity requested does not exceed the physically available host RAM. This ensures that the system will not inadvertently over-allocate VRAM caching limits beyond what the host is physically capable of sustaining in case of fallback, conforming to the Physical Limits Sanity Checks principle.
+
+## Commits table
+| Commit | O que fez | Por que fez | Detalhes |
+|---|---|---|---|
+| feat(block): sanity check cache capacity against physical memory budget | Adicionado check de host RAM capacity durante a inicializacao de WriteThroughCacheBackend. E adicionado limite de `host_ram_bytes` no target bytes da GPU | Necessário para evitar estourar o limite fisico de RAM para os VRAM caches, alinhando com a regra de sanity checks em recursos físicos | Parametro `host_ram_bytes` foi adicionado em `WriteThroughCacheBackend::new`, `with_chunk_bytes`, em `open_cache` em `isolated_origin`, e `physical_target_bytes` usa `min(host_ram_bytes)`. |
+
+## Labels
+type:refactor, type:security, type:test
+
+## Validacao
+`cargo test --workspace`
+`cargo clippy --workspace -- -D warnings`
+
+## Rollback trigger
+Se ocorrem falhas ou regressions de initialization de `WriteThroughCacheBackend` com erros reportados na nova guard clause ("origin cache capacity exceeds available physical host RAM") incorretamente ou crashes de allocation.
