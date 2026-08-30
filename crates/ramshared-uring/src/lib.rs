@@ -264,6 +264,30 @@ pub struct UblkCompletion {
     pub result: i32,
 }
 
+/// Validates that fixed buffer parameters are aligned to 4096 bytes and that the
+/// total allocation (`queue_depth * buf_size`) does not exceed `RLIMIT_MEMLOCK`.
+pub fn validate_fixed_buffer_params(queue_depth: u16, buf_size: usize) -> io::Result<()> {
+    if buf_size == 0 || !buf_size.is_multiple_of(4096) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "buffer size must be > 0 and a multiple of 4096 bytes",
+        ));
+    }
+
+    let total_bytes = (queue_depth as usize).checked_mul(buf_size).ok_or_else(|| {
+        io::Error::from_raw_os_error(libc::ERANGE)
+    })?;
+
+    let mut rlim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: Calling `getrlimit` with a valid mutable reference to a `rlimit` struct is safe.
+    let res = unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut rlim) };
+    if res == 0 && rlim.rlim_cur != libc::RLIM_INFINITY && (total_bytes as u64) > rlim.rlim_cur {
+        return Err(io::Error::from_raw_os_error(libc::ERANGE));
+    }
+
+    Ok(())
+}
+
 /// Persistent io_uring instance that submits `UBLK_U_IO_FETCH_REQ` for ublk queue tags
 /// **without waiting for CQE** (the driver parks each command with `-EIOCBQUEUED` until
 /// I/O is ready or aborted). It owns the data buffers while FETCH calls are pending.
@@ -280,6 +304,7 @@ impl UblkFetchRing {
     /// a buffer of `buf_size` bytes. Does not wait for CQE (`submit()` with want=0).
     /// The `fd` must remain open for the lifetime of this ring.
     pub fn submit_fetch_all(fd: RawFd, queue_depth: u16, buf_size: usize) -> io::Result<Self> {
+        validate_fixed_buffer_params(queue_depth, buf_size)?;
         const UBLK_U_IO_FETCH_REQ: u32 = 0xc010_7520;
         const QUEUE_ID_ZERO: u16 = 0;
 
@@ -362,6 +387,7 @@ impl UblkServer {
 
     /// Creates the ring and maps the io-desc buffer for queue 0; does NOT submit FETCH commands.
     pub fn new(fd: RawFd, queue_depth: u16, buf_size: usize) -> io::Result<Self> {
+        validate_fixed_buffer_params(queue_depth, buf_size)?;
         let entries = u32::from(queue_depth).max(1).next_power_of_two();
         let ring = IoUring::<squeue::Entry128>::builder().build(entries)?;
         let iodesc_len = round_up_to_page(usize::from(queue_depth) * Self::IO_DESC_SIZE);
@@ -473,6 +499,33 @@ impl UblkServer {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
+
+    #[test]
+    fn test_validate_fixed_buffer_alignment_and_limits() {
+        // Test invalid alignment
+        let err = validate_fixed_buffer_params(2, 4095).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+
+        // Test valid alignment
+        assert!(validate_fixed_buffer_params(2, 4096).is_ok());
+
+        // Test buffer size 0
+        let err_zero = validate_fixed_buffer_params(2, 0).unwrap_err();
+        assert_eq!(err_zero.kind(), io::ErrorKind::InvalidInput);
+
+        // Test huge limit exceeding
+        let mut rlim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        // SAFETY: getrlimit is safe here.
+        let res = unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut rlim) };
+        if res == 0 && rlim.rlim_cur != libc::RLIM_INFINITY {
+            // we create a massive buffer
+            // wait, if we pass u16::MAX for queue depth and rlim_cur for buf size...
+            let massive_buf_size = (((rlim.rlim_cur / 4096) + 2) * 4096) as usize;
+            let huge_err = validate_fixed_buffer_params(2, massive_buf_size).unwrap_err();
+            assert_eq!(huge_err.raw_os_error(), Some(libc::ERANGE));
+        }
+    }
+
     use super::*;
     use std::fs::{self, OpenOptions};
     use std::io::{Seek, SeekFrom, Write};
