@@ -6,6 +6,29 @@
 
 use std::time::{Duration, Instant};
 
+use std::fmt;
+
+/// Errors that can occur when initializing a Watchdog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WatchdogError {
+    /// The deadline is too short (less than the baseline timer resolution of 10ms).
+    TooShort,
+    /// The deadline is too long (exceeds practical limit of 1 day).
+    TooLong,
+}
+
+impl fmt::Display for WatchdogError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooShort => write!(f, "watchdog deadline too short (< 10ms)"),
+            Self::TooLong => write!(f, "watchdog deadline too long (> 1 day)"),
+        }
+    }
+}
+
+impl std::error::Error for WatchdogError {}
+
+
 /// Tracks the last signal coming from the broker. `expired(now)` indicates the session is dead.
 #[derive(Debug, Clone, Copy)]
 pub struct Watchdog {
@@ -14,12 +37,19 @@ pub struct Watchdog {
 }
 
 impl Watchdog {
+
     /// Creates the watchdog "touched" at `now` (session start counts as a fresh signal).
-    pub fn new(deadline: Duration, now: Instant) -> Self {
-        Self {
+    pub fn new(deadline: Duration, now: Instant) -> Result<Self, WatchdogError> {
+        if deadline < Duration::from_millis(10) {
+            return Err(WatchdogError::TooShort);
+        }
+        if deadline > Duration::from_secs(86400) {
+            return Err(WatchdogError::TooLong);
+        }
+        Ok(Self {
             deadline,
             last: now,
-        }
+        })
     }
 
     /// Registers a signal from the broker (any message, including `Ack`).
@@ -38,10 +68,11 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
 
+
     #[test]
     fn fresh_watchdog_not_expired() {
         let t0 = Instant::now();
-        let wd = Watchdog::new(Duration::from_secs(90), t0);
+        let wd = Watchdog::new(Duration::from_secs(90), t0).expect("valid");
         assert!(!wd.expired(t0));
         assert!(!wd.expired(t0 + Duration::from_secs(89)));
     }
@@ -49,7 +80,7 @@ mod tests {
     #[test]
     fn expires_after_deadline() {
         let t0 = Instant::now();
-        let wd = Watchdog::new(Duration::from_secs(90), t0);
+        let wd = Watchdog::new(Duration::from_secs(90), t0).expect("valid");
         assert!(wd.expired(t0 + Duration::from_secs(90)));
         assert!(wd.expired(t0 + Duration::from_secs(120)));
     }
@@ -57,11 +88,31 @@ mod tests {
     #[test]
     fn touch_resets_the_clock() {
         let t0 = Instant::now();
-        let mut wd = Watchdog::new(Duration::from_secs(90), t0);
+        let mut wd = Watchdog::new(Duration::from_secs(90), t0).expect("valid");
         let t1 = t0 + Duration::from_secs(80);
         wd.touch(t1);
         // 80s + 89s = 169s from start, but only 89s since last touch → still alive.
         assert!(!wd.expired(t1 + Duration::from_secs(89)));
         assert!(wd.expired(t1 + Duration::from_secs(90)));
+    }
+
+    #[test]
+    fn new_rejects_too_short_deadline() {
+        let t0 = Instant::now();
+        let res = Watchdog::new(Duration::from_millis(5), t0);
+        match res {
+            Err(WatchdogError::TooShort) => (),
+            _ => panic!("Expected WatchdogError::TooShort, got {:?}", res),
+        }
+    }
+
+    #[test]
+    fn new_rejects_too_long_deadline() {
+        let t0 = Instant::now();
+        let res = Watchdog::new(Duration::from_secs(1_000_000), t0);
+        match res {
+            Err(WatchdogError::TooLong) => (),
+            _ => panic!("Expected WatchdogError::TooLong, got {:?}", res),
+        }
     }
 }

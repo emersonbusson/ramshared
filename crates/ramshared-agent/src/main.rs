@@ -330,7 +330,7 @@ fn session(
     )?;
 
     let mut active: HashMap<SliceId, String> = HashMap::new();
-    let mut wd = Watchdog::new(cfg.watchdog, Instant::now());
+    let mut wd = Watchdog::new(cfg.watchdog, Instant::now())?;
     let mut next_psi = Instant::now();
     let mut session_err: Option<Box<dyn std::error::Error>> = None;
 
@@ -881,7 +881,7 @@ mod tests {
         });
         let (cmd_tx, _cmd_rx) = mpsc::channel();
         let (_res_tx, res_rx) = mpsc::channel();
-        let cfg = test_config(broker, Duration::from_millis(1));
+        let cfg = test_config(broker, Duration::from_millis(20));
         let started = Instant::now();
 
         assert!(session(&cfg, &cmd_tx, &res_rx).is_ok());
