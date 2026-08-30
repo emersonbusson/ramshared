@@ -308,13 +308,6 @@ impl DeviceMem<'_, '_> {
     }
 
     fn bounds(&self, off: usize, len: usize) -> Result<(), CudaError> {
-        if !off.is_multiple_of(256) || !len.is_multiple_of(256) {
-            return Err(CudaError::InvalidAlignment {
-                off,
-                len,
-                align: 256,
-            });
-        }
         match off.checked_add(len) {
             Some(end) if end <= self.len => Ok(()),
             _ => Err(CudaError::OutOfRange {
