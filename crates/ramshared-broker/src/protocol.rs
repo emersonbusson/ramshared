@@ -215,10 +215,7 @@ mod tests {
         let e = super::ProtocolError::PayloadTooLarge;
         assert_eq!(e.to_string(), "payload too large (exceeds MAX_LINE_BYTES)");
 
-        let e = super::ProtocolError::ConnectionClosed(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "foo",
-        ));
+        let e = super::ProtocolError::ConnectionClosed(std::io::Error::other("foo"));
         assert_eq!(e.to_string(), "connection closed: foo");
     }
 
