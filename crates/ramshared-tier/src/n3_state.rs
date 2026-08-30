@@ -1553,7 +1553,7 @@ impl LeaseMachine {
     /// Attempts to finish a revoke drain before its host deadline.
     pub fn drain(&mut self, now: u64) -> ProtocolDecision {
         let Some(active) = self.active_lease.as_ref() else {
-            return self.fail_for_event(None, None, None, FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Quiescing), actual: self.lease_state.tag() }));
+            return self.fail_for_event(None, None, None, FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Granted), actual: self.lease_state.tag() }));
         };
         let Some(revoke) = active.revoke.as_ref() else {
             return self.fail_for_active(FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Quiescing), actual: self.lease_state.tag() }));
