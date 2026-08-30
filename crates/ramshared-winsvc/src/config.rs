@@ -188,22 +188,6 @@ impl WinDriveConfig {
                 detail: format!("must be D..=Z, got {:?}", self.volume_letter),
             });
         }
-        if let Some(path) = &self.volume_mount_path {
-            let value = path.to_string_lossy().replace('/', "\\");
-            let prefix = r"C:\ProgramData\RamShared\mounts\";
-            if !value
-                .to_ascii_lowercase()
-                .starts_with(&prefix.to_ascii_lowercase())
-                || value[prefix.len()..].is_empty()
-                || value.contains("..")
-                || value.contains(['\'', ';', '\r', '\n'])
-            {
-                return Err(ConfigError::Invalid {
-                    field: "volume_mount_path",
-                    detail: format!("must be a child of {prefix}"),
-                });
-            }
-        }
         if self.tenant.is_empty() {
             return Err(ConfigError::Invalid {
                 field: "tenant",
@@ -216,6 +200,26 @@ impl WinDriveConfig {
                 detail: "must be in 1..=30".into(),
             });
         }
+
+        let Some(path) = &self.volume_mount_path else {
+            return Ok(());
+        };
+
+        let value = path.to_string_lossy().replace('/', "\\");
+        let prefix = r"C:\ProgramData\RamShared\mounts\";
+        if !value
+            .to_ascii_lowercase()
+            .starts_with(&prefix.to_ascii_lowercase())
+            || value[prefix.len()..].is_empty()
+            || value.contains("..")
+            || value.contains(['\'', ';', '\r', '\n'])
+        {
+            return Err(ConfigError::Invalid {
+                field: "volume_mount_path",
+                detail: format!("must be a child of {prefix}"),
+            });
+        }
+
         Ok(())
     }
 
