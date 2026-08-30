@@ -64,35 +64,39 @@ where
     let label = command_label(command, args);
     let mut command = Command::new(command);
     command.args(args);
-    let output = bounded_process::run_capture_command(
+    match bounded_process::run_capture_command(
         &mut command,
         &label,
         timeout,
         COMMAND_OUTPUT_LIMIT,
         on_spawn,
-    )
-    .map_err(|error| CascadeError::Shell {
-        cmd: label.clone(),
-        msg: error.to_string(),
-    })?;
-    if output.status.success() {
-        return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+    ) {
+        Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).trim().to_string()),
+        Err(crate::bounded_process::ProcessSpawnError::NonZeroExit { exit_code, stderr, .. }) => {
+            Err(CascadeError::Shell {
+                cmd: label,
+                msg: if stderr.is_empty() {
+                    format!("exit {exit_code}")
+                } else {
+                    format!("exit {exit_code}: {stderr}")
+                },
+            })
+        }
+        Err(error) => {
+            let msg = error.to_string();
+            if msg.contains("terminated by signal") {
+                Err(CascadeError::Shell {
+                    cmd: label,
+                    msg: "terminated by signal".to_string(),
+                })
+            } else {
+                Err(CascadeError::Shell {
+                    cmd: label,
+                    msg,
+                })
+            }
+        }
     }
-
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    let status = output
-        .status
-        .code()
-        .map(|code| format!("exit {code}"))
-        .unwrap_or_else(|| "terminated by signal".into());
-    Err(CascadeError::Shell {
-        cmd: label,
-        msg: if stderr.is_empty() {
-            status
-        } else {
-            format!("{status}: {stderr}")
-        },
-    })
 }
 
 fn run_command_bounded(command: &str, args: &[&str]) -> Result<String, CascadeError> {
@@ -3485,7 +3489,7 @@ mod tests {
             "non-zero child must fail",
         );
         let message = error.to_string();
-        assert!(message.contains("exited with 12"), "{message}");
+        assert!(message.contains("exit 12"), "{message}");
         assert!(message.contains("fixture failure"), "{message}");
 
         let signal = fixture.program("signal", "#!/bin/sh\nkill -TERM $$\n");
