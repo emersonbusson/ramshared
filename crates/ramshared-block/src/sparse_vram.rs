@@ -238,6 +238,12 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
     }
 
     fn ensure_live(&mut self, idx: usize) -> Result<(), IoError> {
+        if idx >= self.chunks.len() {
+            return Err(IoError(format!(
+                "sparse chunk idx={idx} exceeds physical map len={}",
+                self.chunks.len()
+            )));
+        }
         if self.chunks[idx].mem.is_some() {
             return Ok(());
         }
@@ -660,6 +666,14 @@ mod tests {
         assert!(SparseVramBackend::new(&p, 0, 256 * 1024, 4096).is_err());
         assert!(SparseVramBackend::new(&p, 1024 * 1024, 0, 4096).is_err());
         assert!(SparseVramBackend::new(&p, 1024 * 1024, 1000, 4096).is_err());
+    }
+
+    #[test]
+    fn ensure_live_out_of_bounds_returns_io_error() {
+        let p = FakeProvider::new();
+        let mut be = SparseVramBackend::new(&p, 1024 * 1024, 256 * 1024, 4096).unwrap();
+        let err = be.ensure_live(9999).expect_err("should return IoError");
+        assert!(err.0.contains("exceeds physical map len"));
     }
 
     #[test]
