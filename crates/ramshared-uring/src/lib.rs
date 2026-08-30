@@ -234,12 +234,14 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
 
     {
         let mut sq = ring.submission();
+        if sq.is_full() {
+            return Err(io::Error::other("io_uring submission queue is full"));
+        }
         // SAFETY: `cmd` is copied into the SQE before submission. Public wrappers
         // in this module pass null pointers, local stack pointers, or borrowed mutable
         // buffers, and this function awaits the CQE before returning.
         unsafe {
-            sq.push(&entry)
-                .map_err(|_| io::Error::other("io_uring submission queue is full"))?;
+            let _ = sq.push(&entry);
         }
     }
 
@@ -299,10 +301,12 @@ impl UblkFetchRing {
             // The `addr` points to `buffers[tag]`, which remains valid inside this struct
             // while the FETCH calls are parked; the kernel only accesses the buffer when
             // serving I/O, which requires `START_DEV` (not invoked in this path).
+            let mut sq = ring.submission();
+            if sq.is_full() {
+                return Err(io::Error::other("io_uring submission queue is full"));
+            }
             unsafe {
-                ring.submission()
-                    .push(&entry)
-                    .map_err(|_| io::Error::other("io_uring submission queue is full"))?;
+                let _ = sq.push(&entry);
             }
         }
 
@@ -460,11 +464,12 @@ impl UblkServer {
         // SAFETY: `cmd` (carrying `addr`) is copied into the SQE in `push`. `addr` points
         // to `self.buffers[tag]`, which remains valid for the server's lifetime; `self.fd`
         // remains open. The kernel only accesses the buffer to serve I/O on this thread.
+        let mut sq = self.ring.submission();
+        if sq.is_full() {
+            return Err(io::Error::other("io_uring submission queue is full"));
+        }
         unsafe {
-            self.ring
-                .submission()
-                .push(&entry)
-                .map_err(|_| io::Error::other("io_uring submission queue is full"))?;
+            let _ = sq.push(&entry);
         }
         Ok(())
     }
@@ -671,6 +676,22 @@ mod tests {
 
         assert_eq!(results[1].tag, 101);
         assert!(results[1].result == 0 || results[1].result == -libc::EALREADY);
+
+        drop(server);
+        drop(file);
+        fs::remove_file(path).expect("remove fixture");
+    }
+    #[test]
+    fn ublk_server_push_guard_clause_rejects_full_ring() {
+        let (path, file) = regular_file_fixture("ublk-full-ring", page_size());
+        let mut server = UblkServer::new(file.as_raw_fd(), 2, 4096).expect("server fixture");
+
+        // Ring capacity is 2. Push 2 items, 3rd should fail.
+        assert!(server.push(0, 0, 0, 0).is_ok());
+        assert!(server.push(0, 1, 0, 0).is_ok());
+        let err = server.push(0, 2, 0, 0).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert_eq!(err.to_string(), "io_uring submission queue is full");
 
         drop(server);
         drop(file);
