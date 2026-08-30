@@ -160,19 +160,17 @@ pub fn server_handshake<R: Read, W: Write>(
             }
             NBD_OPT_GO | NBD_OPT_INFO => {
                 let name = name_utf8(go_export_name(&data)?)?;
-                match find_export(exports, name) {
-                    Some(idx) => {
-                        write_export_info(w, opt, exports[idx].size, tx_flags)?;
-                        w.flush()?;
-                        if opt == NBD_OPT_GO {
-                            return Ok(idx); // GO transitions; INFO continues negotiating.
-                        }
-                    }
-                    None => {
-                        // GO/INFO have an error reply: unknown name ⇒ ERR_UNKNOWN, continue.
-                        write_opt_reply(w, opt, NBD_REP_ERR_UNKNOWN, &[])?;
-                        w.flush()?;
-                    }
+                let Some(idx) = find_export(exports, name) else {
+                    // GO/INFO have an error reply: unknown name ⇒ ERR_UNKNOWN, continue.
+                    write_opt_reply(w, opt, NBD_REP_ERR_UNKNOWN, &[])?;
+                    w.flush()?;
+                    continue;
+                };
+
+                write_export_info(w, opt, exports[idx].size, tx_flags)?;
+                w.flush()?;
+                if opt == NBD_OPT_GO {
+                    return Ok(idx); // GO transitions; INFO continues negotiating.
                 }
             }
             NBD_OPT_ABORT => {
@@ -263,6 +261,32 @@ mod tests {
         let mut out = Vec::new();
         server_handshake(&mut r, &mut out, &one(4096), 1).unwrap();
         assert_eq!(out.len(), 18 + 8 + 2 + 124);
+    }
+
+    #[test]
+    fn info_known_name_replies_info_and_continues() {
+        let exports = vec![Export {
+            name: "s1".to_string(),
+            size: 8192,
+        }];
+        // Send INFO followed by ABORT to correctly terminate the connection (since INFO continues).
+        let mut r = stream_opts(
+            NBD_FLAG_C_NO_ZEROES,
+            &[(NBD_OPT_INFO, go_data(b"s1")), (NBD_OPT_ABORT, vec![])],
+        );
+        let mut out = Vec::new();
+        let res = server_handshake(&mut r, &mut out, &exports, 1);
+
+        assert!(matches!(res, Err(HandshakeError::Aborted)));
+        assert!(has_rep(&out, NBD_REP_INFO));
+
+        // Ensure the INFO reply has the correct size
+        // greeting (18) + rep header (16) + INFO_EXPORT u16 (2) = offset 36 for the payload size.
+        // Wait, info reply:
+        // write_opt_reply: magic(8) + opt(4) + rep(4) + len(4) = 20
+        // total before info payload: 18 + 20 = 38.
+        // info payload: NBD_INFO_EXPORT(2) + size(8) + tx_flags(2) = 12
+        assert_eq!(u64::from_be_bytes(out[40..48].try_into().unwrap()), 8192);
     }
 
     #[test]
