@@ -574,12 +574,15 @@ mod tests {
             pending: false,
         };
         let params = DiskParams {
-            capacity_bytes: 1024 * 1024,
+            size_bytes: 1024 * 1024,
             block_size: 512,
             reserved: 1,
+            serial: [0u8; 16],
         };
         let res = link.create_disk(&params);
-        assert!(matches!(res, Err(IoctlError::Invalid(msg)) if msg.contains("disk reserved non-zero")));
+        assert!(
+            matches!(res, Err(IoctlError::Invalid(msg)) if msg.contains("disk reserved non-zero"))
+        );
     }
 
     #[test]
@@ -605,7 +608,9 @@ mod tests {
             cq_event_handle: 0,
         };
         let res1 = link.register_queue(&reg);
-        assert!(matches!(res1, Err(IoctlError::Invalid(msg)) if msg.contains("register reserved non-zero")));
+        assert!(
+            matches!(res1, Err(IoctlError::Invalid(msg)) if msg.contains("register reserved non-zero"))
+        );
 
         reg.reserved = 0;
         reg.disk_id = 1;
@@ -621,7 +626,9 @@ mod tests {
             pending: true,
         };
         let res = link.commit_and_fetch(Duration::from_millis(100));
-        assert!(matches!(res, Err(IoctlError::Invalid(msg)) if msg.contains("commit already pending")));
+        assert!(
+            matches!(res, Err(IoctlError::Invalid(msg)) if msg.contains("commit already pending"))
+        );
     }
 
     #[test]
@@ -639,6 +646,8 @@ mod tests {
             pending: true,
         };
         let res = link_pending.cancel_fetch();
-        assert!(matches!(res, Err(IoctlError::Invalid(msg)) if msg.contains("pending fetch cannot be cancelled")));
+        assert!(
+            matches!(res, Err(IoctlError::Invalid(msg)) if msg.contains("pending fetch cannot be cancelled"))
+        );
     }
 }
