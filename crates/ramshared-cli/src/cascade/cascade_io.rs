@@ -3485,7 +3485,7 @@ mod tests {
             "non-zero child must fail",
         );
         let message = error.to_string();
-        assert!(message.contains("exit 12"), "{message}");
+        assert!(message.contains("exited with 12"), "{message}");
         assert!(message.contains("fixture failure"), "{message}");
 
         let signal = fixture.program("signal", "#!/bin/sh\nkill -TERM $$\n");
