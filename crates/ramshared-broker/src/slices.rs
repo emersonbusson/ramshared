@@ -14,8 +14,9 @@ pub struct SliceMap {
 /// Slice transition/lookup error.
 #[derive(Debug, PartialEq, Eq)]
 pub enum SliceError {
-    UnknownSlice,
+    IndexOutOfRange,
     BadState { have: SliceState },
+    AlreadyAllocated,
 }
 
 impl SliceMap {
@@ -50,14 +51,14 @@ impl SliceMap {
         self.slices
             .iter_mut()
             .find(|s| s.id == id)
-            .ok_or(SliceError::UnknownSlice)
+            .ok_or(SliceError::IndexOutOfRange)
     }
 
     /// `Free → Active(tenant)`. Err if non-`Free` (atomicity invariant; `Leased` rejects).
     pub fn assign(&mut self, id: SliceId, tenant: TenantId) -> Result<(), SliceError> {
         let s = self.get_mut(id)?;
         if s.state != SliceState::Free {
-            return Err(SliceError::BadState { have: s.state });
+            return Err(SliceError::AlreadyAllocated);
         }
         s.state = SliceState::Active;
         s.tenant = Some(tenant);
@@ -89,7 +90,7 @@ impl SliceMap {
     pub fn lease(&mut self, id: SliceId) -> Result<(), SliceError> {
         let s = self.get_mut(id)?;
         if s.state != SliceState::Free {
-            return Err(SliceError::BadState { have: s.state });
+            return Err(SliceError::AlreadyAllocated);
         }
         s.state = SliceState::Leased;
         Ok(())
@@ -162,9 +163,7 @@ mod tests {
         m.assign(0, 1).unwrap();
         assert_eq!(
             m.assign(0, 2),
-            Err(SliceError::BadState {
-                have: SliceState::Active
-            })
+            Err(SliceError::AlreadyAllocated)
         );
     }
 
@@ -175,9 +174,7 @@ mod tests {
         m.lease(0).unwrap();
         assert_eq!(
             m.assign(0, 1),
-            Err(SliceError::BadState {
-                have: SliceState::Leased
-            })
+            Err(SliceError::AlreadyAllocated)
         );
     }
 
@@ -205,8 +202,8 @@ mod tests {
     #[test]
     fn unknown_slice_is_error() {
         let mut m = SliceMap::new(1, 64);
-        assert_eq!(m.assign(9, 1), Err(SliceError::UnknownSlice));
-        assert_eq!(m.drain(9), Err(SliceError::UnknownSlice));
+        assert_eq!(m.assign(9, 1), Err(SliceError::IndexOutOfRange));
+        assert_eq!(m.drain(9), Err(SliceError::IndexOutOfRange));
         assert!(m.get(9).is_none());
     }
 }
