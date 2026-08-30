@@ -18,7 +18,10 @@ use crate::ffi::{CUDA_SUCCESS, CuContext, CuDevice, CuDevicePtr, CuResult, Syms}
 #[derive(Debug)]
 pub enum CudaError {
     /// Dynamic library loading failed to find a candidate library.
-    Load(String),
+    #[cfg(unix)]
+    UnixLoad(String),
+    #[cfg(windows)]
+    WinLoad(crate::loader::CudaLoaderError),
     /// Symbol resolution failed for a required symbol.
     Symbol(String),
     /// A CUDA Driver API call returned an error code.
@@ -34,7 +37,10 @@ pub enum CudaError {
 impl fmt::Display for CudaError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CudaError::Load(s) => write!(f, "failed to load CUDA library: {s}"),
+            #[cfg(unix)]
+            CudaError::UnixLoad(s) => write!(f, "failed to load CUDA library: {s}"),
+            #[cfg(windows)]
+            CudaError::WinLoad(e) => write!(f, "failed to load CUDA library: {e}"),
             CudaError::Symbol(s) => write!(f, "required CUDA symbol missing: {s}"),
             CudaError::Driver { op, code, msg } => {
                 write!(f, "{op} failed (CUresult={code}): {msg}")
@@ -91,7 +97,10 @@ impl Cuda {
             }
         }
         if handle.is_null() {
-            return Err(CudaError::Load(crate::loader::error()));
+            #[cfg(windows)]
+            return Err(CudaError::WinLoad(crate::loader::error()));
+            #[cfg(unix)]
+            return Err(CudaError::UnixLoad(crate::loader::error()));
         }
         let lib = Lib(handle);
 
