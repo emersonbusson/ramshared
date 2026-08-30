@@ -605,6 +605,7 @@ fn validate_record_victim(unit: String, invocation_id: String) -> Result<VictimI
     })
 }
 
+/// Reads the frozen scope target record from runtime storage if present.
 fn read_frozen_target(runtime: &Path) -> Result<Option<(FrozenPhase, VictimIdentity)>, String> {
     let Some(record) = read_runtime_record_at::<FrozenTargetRecord>(runtime, "frozen-scope.json")?
     else {
