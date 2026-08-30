@@ -5,8 +5,11 @@ use crate::protocol::{Command, NBD_CMD_FLAG_FUA, Request, SIMPLE_REPLY_LEN, enco
 
 // errno in simple reply (error field).
 pub const NBD_OK: u32 = 0;
+pub const NBD_EPERM: u32 = 1;
 pub const NBD_EIO: u32 = 5;
+pub const NBD_EACCES: u32 = 13;
 pub const NBD_EINVAL: u32 = 22;
+pub const NBD_ERANGE: u32 = 34;
 
 /// Storage backend error (e.g., CUDA failure in the hot path).
 #[derive(Debug)]
@@ -22,6 +25,9 @@ pub trait BlockBackend {
     fn size_bytes(&self) -> u64;
     /// Logical block size (multiple of 512; 4096 in the MVP — SPEC §8).
     fn block_size(&self) -> u32;
+    fn is_read_only(&self) -> bool {
+        false
+    }
     fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError>;
     fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError>;
     fn write_at_with_options(
@@ -62,9 +68,15 @@ fn validate<B: BlockBackend + ?Sized>(req: &Request, backend: &B) -> Result<(), 
         return Err(NBD_EINVAL);
     }
     match req.offset.checked_add(req.len as u64) {
-        Some(end) if end <= backend.size_bytes() => Ok(()),
-        _ => Err(NBD_EINVAL),
+        Some(end) if end <= backend.size_bytes() => (),
+        _ => return Err(NBD_ERANGE),
     }
+
+    if req.cmd == Command::Write && backend.is_read_only() {
+        return Err(NBD_EACCES);
+    }
+
+    Ok(())
 }
 
 fn validate_command_flags(req: &Request) -> Result<WriteOptions, u32> {
@@ -224,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn out_of_range_is_einval_not_corruption() {
+    fn out_of_range_is_erange_not_corruption() {
         let mut b = MemBackend {
             data: vec![0u8; 8192],
             bs: 4096,
@@ -232,9 +244,43 @@ mod tests {
         let r = serve(&req(Command::Read, 8192, 4096), &[], &mut b);
         assert_eq!(
             u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
-            NBD_EINVAL
+            NBD_ERANGE
         );
         assert!(r.read_data.is_empty());
+    }
+
+    struct ReadOnlyBackend;
+
+    impl BlockBackend for ReadOnlyBackend {
+        fn size_bytes(&self) -> u64 {
+            4096
+        }
+        fn block_size(&self) -> u32 {
+            4096
+        }
+        fn is_read_only(&self) -> bool {
+            true
+        }
+        fn read_at(&mut self, _off: u64, buf: &mut [u8]) -> Result<(), IoError> {
+            buf.fill(0);
+            Ok(())
+        }
+        fn write_at(&mut self, _off: u64, _data: &[u8]) -> Result<(), IoError> {
+            Ok(())
+        }
+        fn flush(&mut self) -> Result<(), IoError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn read_only_backend_rejects_write_with_eacces() {
+        let mut b = ReadOnlyBackend;
+        let r = serve(&req(Command::Write, 0, 4096), &vec![0u8; 4096], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_EACCES
+        );
     }
 
     #[test]
