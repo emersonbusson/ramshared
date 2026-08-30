@@ -166,6 +166,14 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
                 );
                 break;
             }
+            // Anti-DoS: a WRITE can never exceed the physical IPC buffer upper bound (16 MiB).
+            if req.cmd == Command::Write && req.len > 16 * 1024 * 1024 {
+                eprintln!(
+                    "[ramsharedd] conn: WRITE len {} exceeds 16 MiB IPC limit; disconnecting",
+                    req.len
+                );
+                break;
+            }
             let payload = if req.cmd == Command::Write {
                 let mut p = vec![0u8; req.len as usize];
                 if reader.read_exact(&mut p).is_err() {
@@ -660,6 +668,22 @@ mod tests {
         );
         join_with_deadline(oversized_reader);
         assert_only_closed(&oversized_rx);
+
+        let mut over_ipc_limit_wire = export_name_handshake(b"");
+        // 16 MiB + 1
+        over_ipc_limit_wire.extend_from_slice(&request_bytes(1, 2, 16 * 1024 * 1024 + 1, NBD_REQUEST_MAGIC));
+        let (over_ipc_tx, over_ipc_rx) = sync_channel(1);
+        let (reply_tx, _reply_rx) = channel();
+        let over_ipc_reader = spawn_reader(
+            Cursor::new(over_ipc_limit_wire),
+            TestWriter::new(Arc::new(WriterState::default()), WriterFailure::Never),
+            one_export(32 * 1024 * 1024), // Export size is 32 MiB, so it doesn't fail the export size check
+            0,
+            over_ipc_tx,
+            reply_tx,
+        );
+        join_with_deadline(over_ipc_reader);
+        assert_only_closed(&over_ipc_rx);
     }
 
     #[test]
