@@ -123,29 +123,38 @@ impl BrokerSessionCore {
             return self.on_unregistered_msg(session_id, message);
         }
         match message {
-            Msg::LeaseRequest { bytes } => match self.lease_book.begin_request(1, bytes) {
-                LeaseDecision::Pending(_) => match self.lease_book.grant_pending(bytes) {
-                    Ok(lease) => vec![
-                        BrokerEffect::Audit("lease_granted".into()),
-                        BrokerEffect::Reply(Msg::LeaseGranted {
-                            lease: lease.id,
-                            bytes: lease.bytes,
-                        }),
-                    ],
-                    Err(reason) => vec![Self::denied(reason)],
-                },
-                LeaseDecision::Denied(reason) => vec![Self::denied(reason)],
-            },
-            Msg::LeaseRelease { lease } => match self.lease_book.release(1, lease) {
-                Ok(true) => vec![
-                    BrokerEffect::Audit("lease_released_explicit".into()),
-                    BrokerEffect::LeaseReleased(lease),
-                ],
-                Ok(false) | Err(LeaseDeny::WrongLease) => {
+            Msg::LeaseRequest { bytes } => {
+                match self.lease_book.begin_request(1, bytes) {
+                    LeaseDecision::Pending(_) => {}
+                    LeaseDecision::Denied(reason) => return vec![Self::denied(reason)],
+                }
+                let lease = match self.lease_book.grant_pending(bytes) {
+                    Ok(l) => l,
+                    Err(reason) => return vec![Self::denied(reason)],
+                };
+                vec![
+                    BrokerEffect::Audit("lease_granted".into()),
+                    BrokerEffect::Reply(Msg::LeaseGranted {
+                        lease: lease.id,
+                        bytes: lease.bytes,
+                    }),
+                ]
+            }
+            Msg::LeaseRelease { lease } => {
+                let released = match self.lease_book.release(1, lease) {
+                    Ok(r) => r,
+                    Err(LeaseDeny::WrongLease) => return vec![BrokerEffect::Audit("lease_release_idempotent".into())],
+                    Err(reason) => return vec![Self::error_and_close(reason), BrokerEffect::Close],
+                };
+                if released {
+                    vec![
+                        BrokerEffect::Audit("lease_released_explicit".into()),
+                        BrokerEffect::LeaseReleased(lease),
+                    ]
+                } else {
                     vec![BrokerEffect::Audit("lease_release_idempotent".into())]
                 }
-                Err(reason) => vec![Self::error_and_close(reason), BrokerEffect::Close],
-            },
+            }
             // WinDrive PSI is a liveness heartbeat only. It is deliberately
             // excluded from local arbitration, but it must keep the
             // authoritative lease session open.
@@ -173,11 +182,31 @@ impl BrokerSessionCore {
                 BrokerEffect::Close,
             ];
         };
-        if self.live_session.is_some()
-            || proto != PROTO_VERSION
-            || tenant != self.allowed_tenant
-            || transport != TransportKind::WinDrive
-        {
+        if self.live_session.is_some() {
+            return vec![
+                BrokerEffect::Reply(Msg::Error {
+                    reason: "registration_refused".into(),
+                }),
+                BrokerEffect::Close,
+            ];
+        }
+        if proto != PROTO_VERSION {
+            return vec![
+                BrokerEffect::Reply(Msg::Error {
+                    reason: "registration_refused".into(),
+                }),
+                BrokerEffect::Close,
+            ];
+        }
+        if tenant != self.allowed_tenant {
+            return vec![
+                BrokerEffect::Reply(Msg::Error {
+                    reason: "registration_refused".into(),
+                }),
+                BrokerEffect::Close,
+            ];
+        }
+        if transport != TransportKind::WinDrive {
             return vec![
                 BrokerEffect::Reply(Msg::Error {
                     reason: "registration_refused".into(),
