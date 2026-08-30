@@ -149,32 +149,36 @@ impl VulkanProvider {
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
         let ci = vk::InstanceCreateInfo::default().application_info(&app);
         // SAFETY: `ci`/`app` valid during call; `None` = default allocator.
-        let instance = unsafe { entry.create_instance(&ci, None) }
-            .map_err(|e| vk_err("create_instance", e))?;
+        let instance = unsafe { entry.create_instance(&ci, None) }.map_err(|e| {
+            if format!("{:?}", e).contains("ERROR_INCOMPATIBLE_DRIVER") {
+                VramError::Provider("vulkan create_instance: ERROR_INCOMPATIBLE_DRIVER".into())
+            } else if format!("{:?}", e).contains("ERROR_EXTENSION_NOT_PRESENT") {
+                VramError::Provider("vulkan create_instance: ERROR_EXTENSION_NOT_PRESENT".into())
+            } else {
+                vk_err("create_instance", e)
+            }
+        })?;
 
         // From this point on, any error must destroy the instance (goto out_err idiom).
-        match Self::after_instance(&instance, ordinal) {
-            Ok((phys, name, bits)) => Ok(Self {
-                instance,
-                _entry: entry,
-                phys,
-                device: bits.device,
-                queue: bits.queue,
-                cmd_pool: bits.cmd_pool,
-                cmd_buf: bits.cmd_buf,
-                fence: bits.fence,
-                staging_buffer: bits.staging_buffer,
-                staging_memory: bits.staging_memory,
-                staging_mapped: bits.staging_mapped,
-                allocated: AtomicU64::new(0),
-                name,
-            }),
-            Err(e) => {
-                // SAFETY: `instance` created above and destroyed exactly once here.
-                unsafe { instance.destroy_instance(None) };
-                Err(e)
-            }
-        }
+        let (phys, name, bits) = Self::after_instance(&instance, ordinal).inspect_err(|_| {
+            // SAFETY: `instance` created above and destroyed exactly once here.
+            unsafe { instance.destroy_instance(None) };
+        })?;
+        Ok(Self {
+            instance,
+            _entry: entry,
+            phys,
+            device: bits.device,
+            queue: bits.queue,
+            cmd_pool: bits.cmd_pool,
+            cmd_buf: bits.cmd_buf,
+            fence: bits.fence,
+            staging_buffer: bits.staging_buffer,
+            staging_memory: bits.staging_memory,
+            staging_mapped: bits.staging_mapped,
+            allocated: AtomicU64::new(0),
+            name,
+        })
     }
 
     /// Device selection + name + creation of device resources (with its own cleanup on error).
@@ -209,6 +213,31 @@ impl VulkanProvider {
     /// Name of the selected device (e.g., \"NVIDIA GeForce RTX 2060\" or \"llvmpipe\" in software).
     pub fn device_name(&self) -> &str {
         &self.name
+    }
+
+    /// Validates an image extent dimension against the physical device limits.
+    pub fn check_image_extent(&self, width: u32, height: u32) -> Result<(), VramError> {
+        // SAFETY: `phys` valid.
+        let props = unsafe { self.instance.get_physical_device_properties(self.phys) };
+        let max_dim = props.limits.max_image_dimension2_d;
+
+        if width == 0 || width > max_dim {
+            return Err(VramError::OutOfRange {
+                off: 0,
+                len: width as u64,
+                size: max_dim as u64,
+            });
+        }
+
+        if height == 0 || height > max_dim {
+            return Err(VramError::OutOfRange {
+                off: 0,
+                len: height as u64,
+                size: max_dim as u64,
+            });
+        }
+
+        Ok(())
     }
 
     /// Size of the largest heap `DEVICE_LOCAL` (bytes) — base of the `total` in `mem_info` (DT-10). Fallback
@@ -388,6 +417,14 @@ impl VramProvider for VulkanProvider {
         Self: 'p;
 
     fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
+        let heap_size = self.device_local_total();
+        if bytes as u64 > heap_size {
+            return Err(VramError::OutOfRange {
+                off: 0,
+                len: bytes as u64,
+                size: heap_size,
+            });
+        }
         // Rounds buffer size to a multiple of 4 (requirement for vkCmdFillBuffer with WHOLE_SIZE
         // in zero); the logical len remains `bytes`.
         let buf_size = ((bytes as u64).max(1) + 3) & !3;
@@ -406,41 +443,35 @@ impl VramProvider for VulkanProvider {
             self.instance
                 .get_physical_device_memory_properties(self.phys)
         };
-        let mt = match pick_memory_type(
+        let Some(mt) = pick_memory_type(
             &mprops,
             req.memory_type_bits,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        ) {
-            Some(i) => i,
-            None => {
-                // SAFETY: buffer created above; destroyed before returning (no leak).
-                unsafe { self.device.destroy_buffer(buffer, None) };
-                return Err(VramError::Provider(
-                    "no DEVICE_LOCAL memory type for the buffer".into(),
-                ));
-            }
+        ) else {
+            // SAFETY: buffer created above; destroyed before returning (no leak).
+            unsafe { self.device.destroy_buffer(buffer, None) };
+            return Err(VramError::Provider(
+                "no DEVICE_LOCAL memory type for the buffer".into(),
+            ));
         };
         let mai = vk::MemoryAllocateInfo::default()
             .allocation_size(req.size)
             .memory_type_index(mt);
         // SAFETY: device + mai valid.
-        let memory = match unsafe { self.device.allocate_memory(&mai, None) } {
-            Ok(m) => m,
-            Err(e) => {
-                // SAFETY: buffer created above; destroyed on error.
-                unsafe { self.device.destroy_buffer(buffer, None) };
-                return Err(vk_err("allocate_memory", e));
-            }
-        };
+        let memory = unsafe { self.device.allocate_memory(&mai, None) }.map_err(|e| {
+            // SAFETY: buffer created above; destroyed on error.
+            unsafe { self.device.destroy_buffer(buffer, None) };
+            vk_err("allocate_memory", e)
+        })?;
         // SAFETY: buffer + memory valid; offset 0.
-        if let Err(e) = unsafe { self.device.bind_buffer_memory(buffer, memory, 0) } {
+        unsafe { self.device.bind_buffer_memory(buffer, memory, 0) }.map_err(|e| {
             // SAFETY: buffer + memory created above; freed in reverse order on error.
             unsafe {
                 self.device.free_memory(memory, None);
                 self.device.destroy_buffer(buffer, None);
             }
-            return Err(vk_err("bind_buffer_memory", e));
-        }
+            vk_err("bind_buffer_memory", e)
+        })?;
         self.allocated.fetch_add(bytes as u64, Ordering::Relaxed);
         Ok(VulkanMem {
             provider: self,
@@ -488,14 +519,13 @@ pub struct VulkanMem<'p> {
 impl VulkanMem<'_> {
     /// `off + len <= self.len`, otherwise `OutOfRange` (mirrors CUDA's bounds check).
     fn check_bounds(&self, off: u64, len: usize) -> Result<(), VramError> {
-        match off.checked_add(len as u64) {
-            Some(end) if end <= self.len as u64 => Ok(()),
-            _ => Err(VramError::OutOfRange {
-                off,
-                len: len as u64,
-                size: self.len as u64,
-            }),
+        let Some(end) = off.checked_add(len as u64) else {
+            return Err(VramError::OutOfRange { off, len: len as u64, size: self.len as u64 });
+        };
+        if end > self.len as u64 {
+            return Err(VramError::OutOfRange { off, len: len as u64, size: self.len as u64 });
         }
+        Ok(())
     }
 }
 
@@ -590,6 +620,17 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires Vulkan loader + ICD"]
+    fn test_alloc_out_of_bounds_guard() {
+        let p = VulkanProvider::open(0).expect("opens Vulkan");
+        let m = p.alloc(10).expect("alloc");
+        assert!(matches!(m.check_bounds(5, 6), Err(VramError::OutOfRange { .. })));
+        assert!(matches!(m.check_bounds(10, 1), Err(VramError::OutOfRange { .. })));
+        assert!(matches!(m.check_bounds(u64::MAX, 1), Err(VramError::OutOfRange { .. })));
+        assert!(m.check_bounds(5, 5).is_ok());
+    }
+
+    #[test]
     #[ignore = "requires Vulkan loader + ICD (lavapipe/llvmpipe is enough; run with --ignored)"]
     fn open_enumerates_device_and_heap() {
         let p = VulkanProvider::open(0).expect("opens Vulkan");
@@ -638,6 +679,10 @@ mod tests {
             "read beyond the end -> OutOfRange"
         );
 
+        // RED_TEST: test_alloc_out_of_bounds_guard: Validates the OutOfRange bounds check early return in check_bounds.
+        assert!(matches!(m.check_bounds(size as u64, 1), Err(VramError::OutOfRange { .. })));
+        assert!(matches!(m.check_bounds(u64::MAX, 1), Err(VramError::OutOfRange { .. })));
+
         // free decreased after alloc (fallback DT-10).
         let (free1, _) = p.mem_info().expect("mem_info 2");
         assert!(free1 <= free0, "free did not increase after alloc");
@@ -647,6 +692,41 @@ mod tests {
             total >> 20,
             free0 >> 20,
             free1 >> 20
+        );
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan loader + ICD (lavapipe is enough; run with --ignored)"]
+    fn alloc_exceeds_physical_heap_returns_out_of_range() {
+        let p = VulkanProvider::open(0).expect("opens Vulkan");
+        let heap = p.device_local_total();
+        assert!(heap > 0, "heap > 0");
+        let result = p.alloc((heap + 1) as usize);
+        match result {
+            Err(VramError::OutOfRange { off: 0, len, size }) => {
+                assert_eq!(len, heap + 1);
+                assert_eq!(size, heap);
+            }
+            Ok(_) => panic!("Expected OutOfRange for allocation exceeding heap, got Ok(_)"),
+            Err(e) => panic!("Expected OutOfRange for allocation exceeding heap, got Err({:?})", e),
+        }
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan loader + ICD (lavapipe is enough; run with --ignored)"]
+    fn check_image_extent_validates_physical_limits() {
+        let p = VulkanProvider::open(0).expect("opens Vulkan");
+        assert!(p.check_image_extent(100, 100).is_ok(), "valid extent should pass");
+        let max = u32::MAX;
+        let res_width = p.check_image_extent(max, 1);
+        assert!(
+            matches!(res_width, Err(VramError::OutOfRange { .. })),
+            "width exceeding maxImageDimension2D should fail with OutOfRange, got: {:?}", res_width
+        );
+        let res_height = p.check_image_extent(1, max);
+        assert!(
+            matches!(res_height, Err(VramError::OutOfRange { .. })),
+            "height exceeding maxImageDimension2D should fail with OutOfRange, got: {:?}", res_height
         );
     }
 }

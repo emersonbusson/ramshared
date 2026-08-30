@@ -29,6 +29,12 @@ pub enum CudaError {
     },
     /// VRAM memory region access out of bounds (offset + len > size).
     OutOfRange { off: usize, len: usize, size: usize },
+    /// Invalid alignment for pitch / hardware transfer constraints.
+    InvalidAlignment { off: usize, len: usize, align: usize },
+    /// Invalid device ordinal provided.
+    InvalidDevice { ordinal: i32, count: i32 },
+    /// Driver API returned a null context handle.
+    InvalidContext,
 }
 
 impl fmt::Display for CudaError {
@@ -39,9 +45,16 @@ impl fmt::Display for CudaError {
             CudaError::Driver { op, code, msg } => {
                 write!(f, "{op} failed (CUresult={code}): {msg}")
             }
+            CudaError::InvalidAlignment { off, len, align } => {
+                write!(f, "vram invalid alignment: off={off} len={len} requires {align}-byte pitch")
+            }
             CudaError::OutOfRange { off, len, size } => {
                 write!(f, "out of bounds access: off={off} len={len} > size={size}")
             }
+            CudaError::InvalidDevice { ordinal, count } => {
+                write!(f, "invalid device ordinal: {ordinal} (count={count})")
+            }
+            CudaError::InvalidContext => write!(f, "driver API returned a null context handle"),
         }
     }
 }
@@ -134,6 +147,11 @@ impl Cuda {
 
     /// Gets the device handle for the specified `ordinal` index, resolving its name.
     pub fn device(&self, ordinal: i32) -> Result<Device, CudaError> {
+        let count = self.device_count()?;
+        if ordinal < 0 || ordinal >= count {
+            return Err(CudaError::InvalidDevice { ordinal, count });
+        }
+
         let mut raw: CuDevice = 0;
         // SAFETY: raw points to a valid local memory location.
         let r = unsafe { (self.syms.device_get)(&mut raw, ordinal) };
@@ -160,6 +178,11 @@ impl Cuda {
         // SAFETY: raw points to a valid local; device.raw is a valid CUdevice handle.
         let r = unsafe { (self.syms.ctx_create)(&mut raw, 0, device.raw) };
         check(&self.syms, r, "cuCtxCreate")?;
+
+        if raw.is_null() {
+            return Err(CudaError::InvalidContext);
+        }
+
         Ok(Context { cuda: self, raw })
     }
 }
@@ -285,6 +308,13 @@ impl DeviceMem<'_, '_> {
     }
 
     fn bounds(&self, off: usize, len: usize) -> Result<(), CudaError> {
+        if !off.is_multiple_of(256) || !len.is_multiple_of(256) {
+            return Err(CudaError::InvalidAlignment {
+                off,
+                len,
+                align: 256,
+            });
+        }
         match off.checked_add(len) {
             Some(end) if end <= self.len => Ok(()),
             _ => Err(CudaError::OutOfRange {

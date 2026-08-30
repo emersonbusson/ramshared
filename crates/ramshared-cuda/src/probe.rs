@@ -5,6 +5,9 @@
 /// Probe pattern size (4 KiB).
 pub const PROBE_PATTERN_LEN: usize = 4096;
 
+/// Maximum plausible total GPU memory (1 TiB).
+pub const MAX_TOTAL_MEMORY_BYTES: usize = 1024 * 1024 * 1024 * 1024;
+
 /// Plan three 4 KiB-aligned offsets: `0`, `align_down(size/2, 4096)`, `size-4096`.
 ///
 /// Requires `size >= 3 * 4096` so the three positions are distinct on the 64 MiB floor.
@@ -42,6 +45,18 @@ fn align_down(v: usize, align: usize) -> usize {
     v / align * align
 }
 
+/// Validates GPU hardware capabilities and total memory against physical sanity limits.
+pub fn validate_hardware_specs(major: i32, minor: i32, total_memory: usize) -> Result<(), ProbePlanError> {
+    if !(1..=99).contains(&major) || !(0..=99).contains(&minor) {
+        return Err(ProbePlanError::InvalidComputeCapability { major, minor });
+    }
+    if total_memory == 0 || total_memory > MAX_TOTAL_MEMORY_BYTES {
+        return Err(ProbePlanError::InvalidTotalMemory { size: total_memory });
+    }
+    Ok(())
+}
+
+
 /// Errors from pure probe planning (no CUDA).
 #[derive(Debug, PartialEq, Eq)]
 pub enum ProbePlanError {
@@ -55,6 +70,13 @@ pub enum ProbePlanError {
         size: usize,
         mid: usize,
         last: usize,
+    },
+    InvalidComputeCapability {
+        major: i32,
+        minor: i32,
+    },
+    InvalidTotalMemory {
+        size: usize,
     },
 }
 
@@ -72,6 +94,15 @@ impl std::fmt::Display for ProbePlanError {
                     f,
                     "probe offsets not distinct size={size} mid={mid} last={last}"
                 )
+            }
+            ProbePlanError::InvalidComputeCapability { major, minor } => {
+                write!(
+                    f,
+                    "invalid compute capability major={major} minor={minor}"
+                )
+            }
+            ProbePlanError::InvalidTotalMemory { size } => {
+                write!(f, "invalid total memory size {size}")
             }
         }
     }
@@ -111,5 +142,35 @@ mod tests {
             plan_probe_offsets(4096),
             Err(ProbePlanError::TooSmall { .. })
         ));
+    }
+
+    #[test]
+    fn reject_invalid_compute_capability() {
+        assert!(matches!(
+            validate_hardware_specs(0, 0, 1024),
+            Err(ProbePlanError::InvalidComputeCapability { major: 0, minor: 0 })
+        ));
+        assert!(matches!(
+            validate_hardware_specs(100, 0, 1024),
+            Err(ProbePlanError::InvalidComputeCapability { major: 100, minor: 0 })
+        ));
+        assert!(matches!(
+            validate_hardware_specs(1, -1, 1024),
+            Err(ProbePlanError::InvalidComputeCapability { major: 1, minor: -1 })
+        ));
+        assert!(validate_hardware_specs(8, 9, 1024).is_ok());
+    }
+
+    #[test]
+    fn reject_invalid_total_memory() {
+        assert!(matches!(
+            validate_hardware_specs(8, 9, 0),
+            Err(ProbePlanError::InvalidTotalMemory { size: 0 })
+        ));
+        assert!(matches!(
+            validate_hardware_specs(8, 9, MAX_TOTAL_MEMORY_BYTES + 1),
+            Err(ProbePlanError::InvalidTotalMemory { size: _ })
+        ));
+        assert!(validate_hardware_specs(8, 9, 1024).is_ok());
     }
 }
