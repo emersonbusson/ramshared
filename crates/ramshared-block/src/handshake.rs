@@ -52,6 +52,7 @@ impl core::error::Error for HandshakeError {}
 pub struct Export {
     pub name: String,
     pub size: u64,
+    pub block_size: u32,
 }
 
 fn read_u32<R: Read>(r: &mut R) -> io::Result<u32> {
@@ -125,6 +126,17 @@ pub fn server_handshake<R: Read, W: Write>(
     exports: &[Export],
     tx_flags: u16,
 ) -> Result<usize, HandshakeError> {
+
+    // GUARD: Ensure all exports have valid hardware-aligned block sizes.
+    for export in exports {
+        if !export.block_size.is_power_of_two() || export.block_size < 512 || export.block_size > 65536 {
+            return Err(HandshakeError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "peer block size out of bounds",
+            )));
+        }
+    }
+
     // Greeting: NBDMAGIC + IHAVEOPT + handshake flags.
     w.write_all(&NBDMAGIC.to_be_bytes())?;
     w.write_all(&IHAVEOPT.to_be_bytes())?;
@@ -232,6 +244,7 @@ mod tests {
         vec![Export {
             name: "default".to_string(),
             size,
+            block_size: 4096,
         }]
     }
 
@@ -305,10 +318,12 @@ mod tests {
             Export {
                 name: "s0".to_string(),
                 size: 4096,
+                block_size: 4096,
             },
             Export {
                 name: "s1".to_string(),
                 size: 8192,
+                block_size: 4096,
             },
         ];
         let mut r = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_GO, &go_data(b"s1"));
@@ -355,10 +370,12 @@ mod tests {
             Export {
                 name: "s0".to_string(),
                 size: 4096,
+                block_size: 4096,
             },
             Export {
                 name: "s1".to_string(),
                 size: 8192,
+                block_size: 4096,
             },
         ];
         let mut r = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_EXPORT_NAME, b"");
@@ -366,5 +383,23 @@ mod tests {
         let idx = server_handshake(&mut r, &mut out, &exports, 1).unwrap();
         assert_eq!(idx, 0);
         assert_eq!(u64::from_be_bytes(out[18..26].try_into().unwrap()), 4096);
+    }
+
+    #[test]
+    fn invalid_block_size_returns_err() {
+        let mut r = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_EXPORT_NAME, b"");
+        let mut out = Vec::new();
+
+        let invalid_exports = vec![
+            Export { name: "default".to_string(), size: 4096, block_size: 511 }, // Too small
+            Export { name: "default".to_string(), size: 4096, block_size: 65537 }, // Too large
+            Export { name: "default".to_string(), size: 4096, block_size: 1000 }, // Not power of two
+            Export { name: "default".to_string(), size: 4096, block_size: 0 }, // Zero
+        ];
+
+        for invalid_export in invalid_exports {
+            let res = server_handshake(&mut r, &mut out, &[invalid_export], 1);
+            assert!(matches!(res, Err(HandshakeError::Io(e)) if e.kind() == std::io::ErrorKind::InvalidInput));
+        }
     }
 }

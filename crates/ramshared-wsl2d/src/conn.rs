@@ -384,6 +384,7 @@ mod tests {
         Arc::new(vec![Export {
             name: "default".to_string(),
             size,
+            block_size: 4096,
         }])
     }
 

@@ -2747,6 +2747,7 @@ fn run_nbd_with_startup<P: VramProvider, S: NbdRuntimeStarter>(
     let exports = std::sync::Arc::new(vec![ramshared_block::handshake::Export {
         name: "default".to_string(),
         size: device_size,
+        block_size: 4096,
     }]);
     let (jobs_tx, jobs_rx) = std::sync::mpsc::sync_channel::<WMsg>(CHAN_CAP);
     starter.start_acceptor(listener, exports, tx_flags, jobs_tx.clone())?;
@@ -3994,7 +3995,7 @@ fn broker_setup_with_acceptors(
         slice_map
             .exports()
             .into_iter()
-            .map(|(name, size)| ramshared_block::handshake::Export { name, size })
+            .map(|(name, size)| ramshared_block::handshake::Export { name, size, block_size: 4096 })
             .collect::<Vec<_>>(),
     );
 
