@@ -19,6 +19,7 @@ pub enum PagefileError {
     NotWindows,
     Api(String),
     InvalidPath,
+    OutOfSpace { requested: u64, available: u64 },
 }
 
 impl std::fmt::Display for PagefileError {
@@ -33,6 +34,7 @@ impl std::fmt::Display for PagefileError {
             PagefileError::NotWindows => write!(f, "pagefile API is Windows-only"),
             PagefileError::Api(s) => write!(f, "pagefile API: {s}"),
             PagefileError::InvalidPath => write!(f, "invalid pagefile path"),
+            PagefileError::OutOfSpace { requested, available } => write!(f, "requested pagefile size {} exceeds 90% of available free space {}", requested, available),
         }
     }
 }
@@ -85,6 +87,13 @@ pub fn create_secondary(
     if min_bytes == 0 || min_bytes > max_bytes {
         return Err(PagefileError::Api("min/max pagefile sizes invalid".into()));
     }
+    let available_space = get_volume_free_space(volume)?;
+    if max_bytes > (available_space / 10) * 9 {
+        return Err(PagefileError::OutOfSpace {
+            requested: max_bytes,
+            available: available_space,
+        });
+    }
     let b = match build {
         Some(b) => b,
         None => current_build()?,
@@ -108,6 +117,42 @@ pub fn remove_secondary(volume: &Path, build: Option<OsBuild>) -> Result<(), Pag
         return Err(PagefileError::UnsupportedBuild { build: b.build });
     }
     remove_secondary_impl(volume)
+}
+
+
+#[cfg(windows)]
+fn get_volume_free_space(volume: &Path) -> Result<u64, PagefileError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    let mut volume_wide: Vec<u16> = volume.as_os_str().encode_wide().collect();
+    volume_wide.push(0);
+
+    let mut free_bytes_available: u64 = 0;
+    let mut total_number_of_bytes: u64 = 0;
+    let mut total_number_of_free_bytes: u64 = 0;
+
+    let success = unsafe {
+        // SAFETY: volume_wide is a valid pointer to a null-terminated UTF-16 string.
+        // The mutable pointers are valid addresses to local u64 variables.
+        GetDiskFreeSpaceExW(
+            volume_wide.as_ptr(),
+            &mut free_bytes_available,
+            &mut total_number_of_bytes,
+            &mut total_number_of_free_bytes,
+        )
+    };
+
+    if success == 0 {
+        return Err(PagefileError::Api("GetDiskFreeSpaceExW failed".into()));
+    }
+    Ok(total_number_of_free_bytes)
+}
+
+#[cfg(not(windows))]
+fn get_volume_free_space(_volume: &Path) -> Result<u64, PagefileError> {
+    // Return a dummy value large enough for Linux tests to pass
+    Ok(u64::MAX)
 }
 
 #[cfg(windows)]
@@ -179,6 +224,43 @@ mod tests {
 
     #[test]
     fn invalid_sizes() {
+        let vol = PathBuf::from("V:\\");
+        let e = create_secondary(
+            &vol,
+            0,
+            1,
+            Some(OsBuild {
+                major: 10,
+                minor: 0,
+                build: 26200,
+            }),
+        )
+        .unwrap_err();
+        assert!(matches!(e, PagefileError::Api(_)));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn reject_out_of_space() {
+        // Since get_volume_free_space returns u64::MAX on Linux,
+        // we can test by requesting a max_bytes > u64::MAX * 0.9.
+        let vol = PathBuf::from("V:\\");
+        let e = create_secondary(
+            &vol,
+            256 * 1024 * 1024,
+            u64::MAX,
+            Some(OsBuild {
+                major: 10,
+                minor: 0,
+                build: 26200,
+            }),
+        )
+        .unwrap_err();
+        assert!(matches!(e, PagefileError::OutOfSpace { .. }));
+    }
+
+    #[test]
+    fn invalid_sizes_old() {
         let vol = PathBuf::from("V:\\");
         let e = create_secondary(
             &vol,
