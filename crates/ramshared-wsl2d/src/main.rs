@@ -1913,13 +1913,13 @@ fn run_with<R: DaemonActionRunner>(
 }
 
 fn select_daemon_action(args: AppArgs) -> Result<DaemonAction, Box<dyn std::error::Error>> {
+    if args.slices > 0 && args.origin.is_some() {
+        return Err("--origin-manifest is valid only for the single NBD product path".into());
+    }
+    if args.slices > 0 && args.arbiter_addr.is_none() {
+        return Err("--slices requires --arbiter-listen IP:PORT (broker control point)".into());
+    }
     if args.slices > 0 {
-        if args.origin.is_some() {
-            return Err("--origin-manifest is valid only for the single NBD product path".into());
-        }
-        if args.arbiter_addr.is_none() {
-            return Err("--slices requires --arbiter-listen IP:PORT (broker control point)".into());
-        }
         return Ok(DaemonAction::Broker(args));
     }
     if args.arbiter_addr.is_some() || args.listen_nbd_addr.is_some() {
