@@ -14,7 +14,7 @@ use ramshared_broker::protocol::SwapEntry;
 /// Core logic for `read_psi` with dependency injection for the file path.
 fn read_psi_impl(path: &str) -> Result<PsiSample> {
     let raw = std::fs::read_to_string(path)?;
-    parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))
+    parse_psi(&raw)
 }
 
 /// Reads and parses `/proc/pressure/memory`.
@@ -26,22 +26,42 @@ pub fn read_psi() -> Result<PsiSample> {
 /// the relevant pressure signal for swap. `None` if the line/fields do not match.
 ///
 /// Format: `some avg10=0.00 avg60=0.00 avg300=0.00 total=12345`.
-pub fn parse_psi(content: &str) -> Option<PsiSample> {
-    let line = content.lines().find(|l| l.starts_with("some "))?;
-    let (mut avg10, mut avg60, mut total) = (None, None, None);
+pub fn parse_psi(content: &str) -> Result<PsiSample> {
+    let line = content.lines().find(|l| l.starts_with("some ")).ok_or_else(|| Error::new(ErrorKind::InvalidData, "linha some não encontrada"))?;
+    let (mut avg10, mut avg60, mut avg300, mut total) = (None, None, None, None);
     for tok in line.split_whitespace() {
         if let Some(v) = tok.strip_prefix("avg10=") {
             avg10 = v.parse::<f32>().ok();
         } else if let Some(v) = tok.strip_prefix("avg60=") {
             avg60 = v.parse::<f32>().ok();
+        } else if let Some(v) = tok.strip_prefix("avg300=") {
+            avg300 = v.parse::<f32>().ok();
         } else if let Some(v) = tok.strip_prefix("total=") {
             total = v.parse::<u64>().ok();
         }
     }
-    Some(PsiSample {
-        avg10: avg10?,
-        avg60: avg60?,
-        stall_us: total?,
+
+    let a10 = avg10.ok_or_else(|| Error::new(ErrorKind::InvalidData, "avg10 invalido"))?;
+    if !(0.0..=100.0).contains(&a10) {
+        return Err(Error::other("ERANGE: avg10 out of range"));
+    }
+
+    let a60 = avg60.ok_or_else(|| Error::new(ErrorKind::InvalidData, "avg60 invalido"))?;
+    if !(0.0..=100.0).contains(&a60) {
+        return Err(Error::other("ERANGE: avg60 out of range"));
+    }
+
+    let a300 = avg300.ok_or_else(|| Error::new(ErrorKind::InvalidData, "avg300 invalido"))?;
+    if !(0.0..=100.0).contains(&a300) {
+        return Err(Error::other("ERANGE: avg300 out of range"));
+    }
+
+    let stall_us = total.ok_or_else(|| Error::new(ErrorKind::InvalidData, "total invalido"))?;
+
+    Ok(PsiSample {
+        avg10: a10,
+        avg60: a60,
+        stall_us,
     })
 }
 
@@ -173,14 +193,22 @@ mod tests {
     }
 
     #[test]
-    fn parse_psi_missing_field_is_none() {
+    fn parse_psi_missing_field_is_err() {
         // Without total= → cannot assemble the sample.
-        assert!(parse_psi("some avg10=1.0 avg60=2.0 avg300=3.0\n").is_none());
+        assert!(parse_psi("some avg10=1.0 avg60=2.0 avg300=3.0\n").is_err());
     }
 
     #[test]
-    fn parse_psi_no_some_line_is_none() {
-        assert!(parse_psi("full avg10=1.0 avg60=2.0 avg300=3.0 total=5\n").is_none());
+    fn parse_psi_no_some_line_is_err() {
+        assert!(parse_psi("full avg10=1.0 avg60=2.0 avg300=3.0 total=5\n").is_err());
+    }
+
+    #[test]
+    fn parse_psi_out_of_bounds_is_err() {
+        assert!(parse_psi("some avg10=101.0 avg60=50.0 avg300=0.0 total=100\n").is_err());
+        assert!(parse_psi("some avg10=-1.0 avg60=50.0 avg300=0.0 total=100\n").is_err());
+        assert!(parse_psi("some avg10=50.0 avg60=101.0 avg300=0.0 total=100\n").is_err());
+        assert!(parse_psi("some avg10=50.0 avg60=-1.0 avg300=0.0 total=100\n").is_err());
     }
 
     #[test]
