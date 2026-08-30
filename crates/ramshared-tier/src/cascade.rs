@@ -57,12 +57,14 @@ impl SafetyNet {
 /// (`mem_available >= vram_size`).
 pub fn vram_safety_net(vhdx_present: bool, mem_available: u64, vram_size: u64) -> SafetyNet {
     if vhdx_present {
-        SafetyNet::VhdxBelow
-    } else if mem_available >= vram_size {
-        SafetyNet::RamHeadroom
-    } else {
-        SafetyNet::None
+        return SafetyNet::VhdxBelow;
     }
+
+    if mem_available >= vram_size {
+        return SafetyNet::RamHeadroom;
+    }
+
+    SafetyNet::None
 }
 
 /// Errors that can occur during tier resizing.
@@ -90,10 +92,10 @@ pub fn validate_tier_resize(
     physical_limit_bytes: u64,
 ) -> Result<(), ResizeError> {
     if requested_bytes > physical_limit_bytes {
-        Err(ResizeError::ExceedsPhysicalLimit)
-    } else {
-        Ok(())
+        return Err(ResizeError::ExceedsPhysicalLimit);
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -164,5 +166,12 @@ mod tests {
             validate_tier_resize(2 * GIB, GIB),
             Err(ResizeError::ExceedsPhysicalLimit)
         );
+    }
+
+    #[test]
+    fn vhdx_present_returns_early_ignoring_ram() {
+        // Even with insufficient RAM, vhdx_present triggers an early return.
+        let net = vram_safety_net(true, 0, GIB);
+        assert_eq!(net, SafetyNet::VhdxBelow);
     }
 }
