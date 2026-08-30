@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 258,
-    "classified": 247,
+    "total": 259,
+    "classified": 248,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -1873,6 +1873,18 @@
     },
     {
       "path": "docs/specs/no-milestone/release-promotion-publication/SPEC.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-specifications",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/no-milestone/vram-provider/SPEC.md",
       "disposition": "classified",
       "ruleId": "ssdv3-specifications",
       "verification": {

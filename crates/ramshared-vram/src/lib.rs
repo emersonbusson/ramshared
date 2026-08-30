@@ -87,6 +87,11 @@ mod tests {
 
     #[test]
     fn test_vram_error_display() {
+        assert_eq!(VramError::Provider("test".to_string()).to_string(), "vram provider: test");
+        assert_eq!(
+            VramError::OutOfRange { off: 0, len: 10, size: 5 }.to_string(),
+            "vram out-of-range: off=0 len=10 size=5"
+        );
         assert_eq!(VramError::OutOfMemory.to_string(), "vram out of memory");
         assert_eq!(
             VramError::InvalidAlignment.to_string(),
