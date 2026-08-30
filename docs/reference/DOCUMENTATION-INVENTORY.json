@@ -578,8 +578,8 @@
       },
       "owner": "jules",
       "canonicalSource": "docs/jules/findings/",
-      "lifecycle": "archived",
-      "freshnessDays": 365
+      "lifecycle": "historical",
+      "freshnessDays": null
     },
     {
       "path": "docs/labs/DUALBOOT-KERNEL-TRUE.md",

@@ -572,8 +572,8 @@
       "pattern": "docs/jules/findings/*.md",
       "owner": "jules",
       "canonicalSource": "docs/jules/findings/",
-      "lifecycle": "archived",
-      "freshnessDays": 365,
+      "lifecycle": "historical",
+      "freshnessDays": null,
       "verification": {
         "state": "unverified"
       },
