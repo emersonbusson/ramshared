@@ -29,6 +29,7 @@ pub enum CudaError {
     },
     /// VRAM memory region access out of bounds (offset + len > size).
     OutOfRange { off: usize, len: usize, size: usize },
+    InvalidAlignment { off: usize, len: usize, align: usize },
 }
 
 impl fmt::Display for CudaError {
@@ -38,6 +39,9 @@ impl fmt::Display for CudaError {
             CudaError::Symbol(s) => write!(f, "required CUDA symbol missing: {s}"),
             CudaError::Driver { op, code, msg } => {
                 write!(f, "{op} failed (CUresult={code}): {msg}")
+            }
+            CudaError::InvalidAlignment { off, len, align } => {
+                write!(f, "vram invalid alignment: off={off} len={len} requires {align}-byte pitch")
             }
             CudaError::OutOfRange { off, len, size } => {
                 write!(f, "out of bounds access: off={off} len={len} > size={size}")
@@ -285,6 +289,13 @@ impl DeviceMem<'_, '_> {
     }
 
     fn bounds(&self, off: usize, len: usize) -> Result<(), CudaError> {
+        if !off.is_multiple_of(256) || !len.is_multiple_of(256) {
+            return Err(CudaError::InvalidAlignment {
+                off,
+                len,
+                align: 256,
+            });
+        }
         match off.checked_add(len) {
             Some(end) if end <= self.len => Ok(()),
             _ => Err(CudaError::OutOfRange {
