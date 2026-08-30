@@ -72,6 +72,36 @@ pub fn validate_order(p: TierPriorities) -> Result<(), OrderError> {
     Ok(())
 }
 
+/// Errors related to purging aged memory regions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PurgeAgeError {
+    /// Attempted to purge data older than system uptime, which is physically impossible.
+    AgeExceedsUptime,
+}
+
+impl fmt::Display for PurgeAgeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PurgeAgeError::AgeExceedsUptime => {
+                f.write_str("invalid purge age: cannot exceed system uptime")
+            }
+        }
+    }
+}
+
+impl core::error::Error for PurgeAgeError {}
+
+/// Validates that a requested purge age is physically possible given the system uptime.
+///
+/// Enforces physical bounds: one cannot purge data that claims to be older than the system
+/// has been alive.
+pub fn validate_purge_age(purge_age_seconds: u64, uptime_seconds: u64) -> Result<(), PurgeAgeError> {
+    if purge_age_seconds > uptime_seconds {
+        return Err(PurgeAgeError::AgeExceedsUptime);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,5 +143,16 @@ mod tests {
             vhdx: -2,
         };
         assert_eq!(validate_order(p), Err(OrderError::ZramNotAboveVram));
+    }
+
+    #[test]
+    fn rejects_purge_age_exceeding_uptime() {
+        assert_eq!(validate_purge_age(100, 50), Err(PurgeAgeError::AgeExceedsUptime));
+    }
+
+    #[test]
+    fn accepts_valid_purge_age() {
+        assert!(validate_purge_age(50, 100).is_ok());
+        assert!(validate_purge_age(100, 100).is_ok());
     }
 }
