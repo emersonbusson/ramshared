@@ -23,7 +23,19 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            const body = context.payload.pull_request?.body ?? '';
+            let body = context.payload.pull_request?.body ?? '';
+            if (!body.trim() && context.payload.pull_request) {
+              try {
+                const commit = await github.rest.repos.getCommit({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: context.payload.pull_request.head.sha
+                });
+                body = commit.data.commit.message || '';
+              } catch (e) {
+                core.warning(`Could not fetch head commit message: ${e.message}`);
+              }
+            }
             const requiredSections = [
               { name: 'Resumo', pattern: /^##\s+Resumo\s*$/im },
               { name: 'Commits', pattern: /^##\s+Commits\s*$/im },
