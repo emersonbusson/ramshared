@@ -1,4 +1,5 @@
 use ramshared_tier::n3_state::{
+    StateTransitionError, StateTag,
     AdapterId, Authority, DrainAck, EventId, FailAck, FailureReason, GenerationCheckpoint, Grant,
     GrantAck, GuestClaim, HostObservation, LeaseId, LeaseMachine, LeaseState, LifecycleEvent,
     ObservationEvent, ObservationEventKind, OpaqueId, PreflightAction, PreflightState,
@@ -355,7 +356,7 @@ fn n3_rust_durable_restart_generation_refusal() {
     assert!(matches!(
         old_generation.receive_grant(grant(1, b"restart-old-generation"), 100),
         ProtocolDecision::FailAck(FailAck {
-            reason: FailureReason::StaleGeneration,
+            reason: FailureReason::StateTransition(StateTransitionError::StaleGeneration { provided: 1, expected: 1 }),
             ..
         })
     ));
@@ -527,7 +528,7 @@ fn observation_replay_conflicts_and_offline_are_safe() {
     let mut fresh = LeaseMachine::new();
     assert!(matches!(
         fresh.request_demotion().action,
-        PreflightAction::Unavailable(FailureReason::InvalidTransition)
+        PreflightAction::Unavailable(FailureReason::StateTransition(StateTransitionError::IllegalPreflight { expected: Some(PreflightState::Constrained), actual: PreflightState::HostUnavailable }))
     ));
     assert!(matches!(
         fresh
@@ -587,7 +588,8 @@ fn invalid_capacity_and_grant_identity_never_install() {
 
 #[test]
 fn protocol_event_dispatch_and_state_helpers_are_exercised() {
-    use ramshared_tier::n3_state::{HostEvent, N3State, PreflightModel, StateTag};
+    use ramshared_tier::n3_state::{
+    HostEvent, N3State, PreflightModel};
 
     let preflight = PreflightModel::default();
     assert_eq!(preflight.state(), PreflightState::HostUnavailable);
