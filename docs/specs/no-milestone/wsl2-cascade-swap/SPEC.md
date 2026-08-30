@@ -422,3 +422,15 @@ PRD-2 is a historical record (describing VRAM as hot swap via ublk); Phase 0 (`w
 | **RNF-estab** | mlockall anti-deadlock | **maintained** | §6.2, §11 |
 
 Revised requirements do not go back to PRD-2 (preserving history) — they are reconciled here. Step 3 commits cite the SPEC section + RF covered (e.g., `feat(core): cascade priority — SPEC §1 / revises RF-3`).
+
+<!-- rust-slice-line-coverage-v1
+{"schema_version":1,"id":"wsl2-cascade-swap-priority","kind":"rust-line-coverage","files":["crates/ramshared-tier/src/priority.rs"],"packages":["ramshared-tier"],"min":80,"command":["node","tools/ci/check-rust-slice-coverage.mjs","-p","ramshared-tier","--files","crates/ramshared-tier/src/priority.rs","--min","80","--report-json","tmp/wsl2-cascade-swap-priority-cov.json"]}
+-->
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs \
+  -p ramshared-tier \
+  --files crates/ramshared-tier/src/priority.rs \
+  --min 80 \
+  --report-json tmp/wsl2-cascade-swap-priority-cov.json
+```
