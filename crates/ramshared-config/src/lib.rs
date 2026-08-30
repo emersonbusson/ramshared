@@ -76,24 +76,70 @@ impl Default for AgentConfig {
     }
 }
 
+
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConfigError {
+    InvalidInput(String),
+    OutOfRange(String),
+    UnsupportedBackend(String),
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigError::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
+            ConfigError::OutOfRange(msg) => write!(f, "Out of range: {}", msg),
+            ConfigError::UnsupportedBackend(msg) => write!(f, "Unsupported backend: {}", msg),
+        }
+    }
+}
+
+impl std::error::Error for ConfigError {}
+
+fn parse_meminfo(text: &str) -> Option<u64> {
+    for line in text.lines() {
+        if !line.starts_with("MemTotal:") {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let _ = parts.next(); // MemTotal:
+        let kb_str = parts.next()?;
+        let kb = kb_str.parse::<u64>().ok()?;
+        return Some(kb * 1024); // return bytes
+    }
+    None
+}
+
 impl Config {
     pub fn parse(text: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(text)
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), ConfigError> {
         if self.broker.slices == 0 {
-            return Err("broker.slices must be > 0".into());
+            return Err(ConfigError::InvalidInput("broker.slices must be > 0".into()));
         }
-        if self.broker.slice_mib == 0 {
-            return Err("broker.slice_mib must be > 0".into());
+        if self.broker.slice_mib < 16 {
+            return Err(ConfigError::OutOfRange(format!("broker.slice_mib must be >= 16 (got {})", self.broker.slice_mib)));
         }
         if self.agent.watchdog_secs == 0 {
-            return Err("agent.watchdog_secs must be > 0".into());
+            return Err(ConfigError::InvalidInput("agent.watchdog_secs must be > 0".into()));
         }
+
+        let total_mib = (self.broker.slices as u64).saturating_mul(self.broker.slice_mib);
+        let total_bytes = total_mib.saturating_mul(1024 * 1024);
+
+        if let Some(host_ram) = std::fs::read_to_string("/proc/meminfo").ok().and_then(|m| parse_meminfo(&m)) {
+            let limit_exceeded = total_bytes > host_ram;
+            if limit_exceeded {
+                return Err(ConfigError::OutOfRange(format!("configured memory ({total_bytes} bytes) exceeds host RAM ({host_ram} bytes)")));
+            }
+        }
+
         match self.broker.backend.as_str() {
             "cuda" | "vulkan" => Ok(()),
-            other => Err(format!("unsupported backend: {other}")),
+            other => Err(ConfigError::UnsupportedBackend(other.to_string())),
         }
     }
 }
@@ -125,5 +171,25 @@ mod tests {
         cfg.broker.listen = "0.0.0.0:7777".into();
         cfg.broker.backend = "unknown".into();
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_small_slice() {
+        let mut cfg = Config::parse("").expect("parse");
+        cfg.broker.slice_mib = 15;
+        let err = cfg.validate().unwrap_err();
+        assert!(matches!(err, ConfigError::OutOfRange(_)));
+    }
+
+    #[test]
+    fn rejects_excessive_ram() {
+        let mut cfg = Config::parse("").expect("parse");
+        // this will exceed any reasonable test machine's RAM
+        cfg.broker.slices = 1000;
+        cfg.broker.slice_mib = 1024 * 1024 * 1024; // 1 PB slice
+        if std::fs::read_to_string("/proc/meminfo").is_ok() {
+            let err = cfg.validate().unwrap_err();
+            assert!(matches!(err, ConfigError::OutOfRange(_)));
+        }
     }
 }
