@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 281,
-    "classified": 270,
+    "total": 286,
+    "classified": 275,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -811,6 +811,66 @@
     },
     {
       "path": "docs/jules/findings/21-cuda-error-mapping-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/22-pr482-winsvc-handle-cleanup.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/23-pr487-wsl2d-dxgkrnl-anti-bug.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/24-pr489-broker-cross-host-civm-historical-note.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/25-pr493-cli-read-frozen-target-error-handling.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/26-pr497-wsl2d-dxgkrnl-mlockall-invariants.md",
       "disposition": "classified",
       "ruleId": "jules-findings",
       "verification": {
