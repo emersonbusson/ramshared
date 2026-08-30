@@ -3557,7 +3557,6 @@ impl Drop for OwnedUnixSocketPath {
     }
 }
 
-
 /// Retorna o menor entre somaxconn e tcp_max_syn_backlog, fallback 128.
 fn system_max_backlog() -> i32 {
     let somaxconn: i32 = std::fs::read_to_string("/proc/sys/net/core/somaxconn")
@@ -3582,7 +3581,6 @@ fn apply_listen_backlog<Fd: std::os::fd::AsFd>(fd: Fd) -> std::io::Result<()> {
 }
 
 fn bind_owned_unix_listener(path: &Path) -> std::io::Result<(UnixListener, OwnedUnixSocketPath)> {
-
     let target = prepare_unix_socket_path(path)?;
     let listener = UnixListener::bind(path)?;
     apply_listen_backlog(&listener)?;
@@ -9792,10 +9790,14 @@ Filename Type Size Used Priority
     #[test]
     fn daemon_listener_backlog_is_capped_to_system_limits() {
         let max = system_max_backlog();
-        assert!(max >= 128, "system_max_backlog fallback should be at least 128");
+        assert!(
+            max >= 128,
+            "system_max_backlog fallback should be at least 128"
+        );
 
         // The socket is bound and we can apply backlog up to min(4096, max)
-        let path = std::env::temp_dir().join(format!("ramshared-backlog-{}.sock", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("ramshared-backlog-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
 
@@ -9803,5 +9805,4 @@ Filename Type Size Used Priority
         assert!(apply_result.is_ok(), "apply_listen_backlog should succeed");
         let _ = std::fs::remove_file(&path);
     }
-
 }
