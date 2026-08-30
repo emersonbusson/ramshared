@@ -745,7 +745,9 @@ mod tests {
         let worker = std::thread::spawn(move || {
             let mut served = 0u32;
             for m in jobs_rx.iter() {
-                let WMsg::Job(job) = m else { continue; }; // Guard clause
+                let WMsg::Job(job) = m else {
+                    continue;
+                }; // Guard clause
                 let _ = job.reply.send(Reply {
                     reply: [0u8; SIMPLE_REPLY_LEN],
                     data: Vec::new(),
@@ -794,7 +796,9 @@ mod tests {
         let worker = std::thread::spawn(move || {
             let mut served = 0u32;
             for m in jobs_rx.iter() {
-                let WMsg::Job(job) = m else { continue; }; // Guard clause
+                let WMsg::Job(job) = m else {
+                    continue;
+                }; // Guard clause
                 // worker never blocks: unbounded replica
                 let _ = job.reply.send(Reply {
                     reply: [0u8; SIMPLE_REPLY_LEN],
