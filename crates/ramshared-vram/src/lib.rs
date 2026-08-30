@@ -47,7 +47,6 @@ impl std::fmt::Display for VulkanError {
 
 impl std::error::Error for VulkanError {}
 
-
 impl fmt::Display for VramError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

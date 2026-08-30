@@ -22,19 +22,18 @@ use ramshared_vram::{VramError, VramMemory, VramProvider};
 /// Single staging buffer per provider (no alloc on hot path, DT-8): 1 MiB. Larger I/O is sliced.
 const STAGING_BYTES: u64 = 1 << 20;
 
+use ramshared_vram::VulkanError;
+
 fn vk_err(ctx: &str, e: ash::vk::Result) -> VramError {
-    match e {
+    let err = match e {
         ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY | ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
-            VramError::Provider("vulkan out of memory (-ENOMEM)".into())
+            VulkanError::OutOfMemory
         }
-        ash::vk::Result::ERROR_DEVICE_LOST => {
-            VramError::Provider("vulkan device lost (-ENODEV)".into())
-        }
-        ash::vk::Result::ERROR_EXTENSION_NOT_PRESENT => {
-            VramError::Provider("vulkan extension not present (-EINVAL)".into())
-        }
-        _ => VramError::Provider(format!("vulkan {ctx}: {e:?}")),
-    }
+        ash::vk::Result::ERROR_DEVICE_LOST => VulkanError::DeviceLost,
+        ash::vk::Result::ERROR_EXTENSION_NOT_PRESENT => VulkanError::ExtensionNotPresent,
+        _ => VulkanError::Other(format!("vulkan {ctx}: {e:?}")),
+    };
+    VramError::Provider(err.to_string())
 }
 
 /// Selects a transfer queue family (prefers explicit `TRANSFER`; falls back to `GRAPHICS`/`COMPUTE`, which imply transfer per spec). Returns the family index.
@@ -156,7 +155,8 @@ impl VulkanProvider {
     /// otherwise the ordinal), and sets up logical device + transfer queue + staging. RF-V1.
     pub fn open(ordinal: u32) -> Result<Self, VramError> {
         // SAFETY: loads libvulkan.so.1 via libloading; symbols remain valid as long as `entry` lives.
-        let entry = unsafe { ash::Entry::load() }.map_err(|e| VramError::Provider(format!("vulkan load: {e:?}")))?;
+        let entry = unsafe { ash::Entry::load() }
+            .map_err(|e| VramError::Provider(format!("vulkan load: {e:?}")))?;
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
         let ci = vk::InstanceCreateInfo::default().application_info(&app);
         // SAFETY: `ci`/`app` valid during call; `None` = default allocator.
