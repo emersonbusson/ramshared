@@ -29,6 +29,7 @@ use crate::{
 
 const EIO: i32 = -5;
 const EINVAL: i32 = -22;
+const ERANGE: i32 = -34;
 
 trait QueueServer {
     fn submit_initial_fetch(&mut self) -> io::Result<()>;
@@ -76,6 +77,12 @@ pub fn serve_request<B: BlockBackend + ?Sized>(
     let len = req.len as usize;
     if len > buf.len() {
         return EINVAL; // request larger than the available buffer
+    }
+
+    if matches!(req.cmd, Command::Read | Command::Write)
+        && req.offset.checked_add(req.len as u64).is_none_or(|end| end > backend.size_bytes())
+    {
+        return ERANGE;
     }
 
     let served = match req.cmd {

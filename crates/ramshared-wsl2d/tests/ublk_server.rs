@@ -1,3 +1,4 @@
+
 use ramshared_block::{Command, Request};
 use ramshared_wsl2d::{RamBackend, ublk_server};
 
@@ -48,9 +49,9 @@ fn serve_request_handles_flush_and_rejects_oversized_or_oob() {
         -22
     );
 
-    // READ outside the backend => -EIO.
+    // READ outside the backend => -ERANGE.
     assert_eq!(
         ublk_server::serve_request(&req(Command::Read, 51200, 512), &mut backend, &mut buf),
-        -5
+        -34 // -ERANGE
     );
 }
