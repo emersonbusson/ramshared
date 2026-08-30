@@ -221,7 +221,9 @@ fn run_status(cfg: &Config) -> Result<(), Box<dyn std::error::Error>> {
     for _ in 0..50 {
         let response = match read_msg(&mut r) {
             Ok(response) => response,
-            Err(ramshared_broker::protocol::ProtocolError::ConnectionClosed(error)) if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => {
+            Err(ramshared_broker::protocol::ProtocolError::ConnectionClosed(error))
+                if matches!(error.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) =>
+            {
                 return Err(format!(
                     "broker status timed out after {}s",
                     STATUS_IO_TIMEOUT.as_secs()

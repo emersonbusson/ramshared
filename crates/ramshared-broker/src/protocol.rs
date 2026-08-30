@@ -158,10 +158,10 @@ impl std::error::Error for ProtocolError {
 }
 
 pub fn write_msg<W: Write>(w: &mut W, msg: &Msg) -> Result<(), ProtocolError> {
-    let mut line = serde_json::to_vec(msg)
-        .map_err(|e| ProtocolError::BadMagic(e.to_string()))?;
+    let mut line = serde_json::to_vec(msg).map_err(|e| ProtocolError::BadMagic(e.to_string()))?;
     line.push(b'\n');
-    w.write_all(&line).map_err(ProtocolError::ConnectionClosed)?;
+    w.write_all(&line)
+        .map_err(ProtocolError::ConnectionClosed)?;
     w.flush().map_err(ProtocolError::ConnectionClosed)
 }
 
@@ -184,8 +184,8 @@ pub fn read_msg<R: BufRead>(r: &mut R) -> Result<Option<Msg>, ProtocolError> {
         return Err(ProtocolError::PayloadTooLarge);
     }
     let line = buf.strip_suffix(b"\n").unwrap_or(&buf);
-    let msg = serde_json::from_slice::<Msg>(line)
-        .map_err(|e| ProtocolError::BadMagic(e.to_string()))?;
+    let msg =
+        serde_json::from_slice::<Msg>(line).map_err(|e| ProtocolError::BadMagic(e.to_string()))?;
     Ok(Some(msg))
 }
 
@@ -215,7 +215,10 @@ mod tests {
         let e = super::ProtocolError::PayloadTooLarge;
         assert_eq!(e.to_string(), "payload too large (exceeds MAX_LINE_BYTES)");
 
-        let e = super::ProtocolError::ConnectionClosed(std::io::Error::new(std::io::ErrorKind::Other, "foo"));
+        let e = super::ProtocolError::ConnectionClosed(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "foo",
+        ));
         assert_eq!(e.to_string(), "connection closed: foo");
     }
 
