@@ -76,8 +76,6 @@ impl Default for AgentConfig {
     }
 }
 
-
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConfigError {
     InvalidInput(String),
@@ -118,22 +116,34 @@ impl Config {
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.broker.slices == 0 {
-            return Err(ConfigError::InvalidInput("broker.slices must be > 0".into()));
+            return Err(ConfigError::InvalidInput(
+                "broker.slices must be > 0".into(),
+            ));
         }
         if self.broker.slice_mib < 16 {
-            return Err(ConfigError::OutOfRange(format!("broker.slice_mib must be >= 16 (got {})", self.broker.slice_mib)));
+            return Err(ConfigError::OutOfRange(format!(
+                "broker.slice_mib must be >= 16 (got {})",
+                self.broker.slice_mib
+            )));
         }
         if self.agent.watchdog_secs == 0 {
-            return Err(ConfigError::InvalidInput("agent.watchdog_secs must be > 0".into()));
+            return Err(ConfigError::InvalidInput(
+                "agent.watchdog_secs must be > 0".into(),
+            ));
         }
 
         let total_mib = (self.broker.slices as u64).saturating_mul(self.broker.slice_mib);
         let total_bytes = total_mib.saturating_mul(1024 * 1024);
 
-        if let Some(host_ram) = std::fs::read_to_string("/proc/meminfo").ok().and_then(|m| parse_meminfo(&m)) {
+        if let Some(host_ram) = std::fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|m| parse_meminfo(&m))
+        {
             let limit_exceeded = total_bytes > host_ram;
             if limit_exceeded {
-                return Err(ConfigError::OutOfRange(format!("configured memory ({total_bytes} bytes) exceeds host RAM ({host_ram} bytes)")));
+                return Err(ConfigError::OutOfRange(format!(
+                    "configured memory ({total_bytes} bytes) exceeds host RAM ({host_ram} bytes)"
+                )));
             }
         }
 
