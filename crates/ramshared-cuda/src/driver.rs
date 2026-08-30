@@ -18,7 +18,7 @@ use crate::ffi::{CUDA_SUCCESS, CuContext, CuDevice, CuDevicePtr, CuResult, Syms}
 #[derive(Debug)]
 pub enum CudaError {
     /// Dynamic library loading failed to find a candidate library.
-    Load(String),
+    Load(crate::loader::CudaLoaderError),
     /// Symbol resolution failed for a required symbol.
     Symbol(String),
     /// A CUDA Driver API call returned an error code.
