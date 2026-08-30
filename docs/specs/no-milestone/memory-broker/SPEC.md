@@ -266,7 +266,7 @@
 
 ## Files to MODIFY
 
-### ITEM-9 — `crates/ramshared-agent/src/main.rs`
+### ITEM-9 — `crates/ramshared-agent/src/main.rs,crates/ramshared-agent/src/watchdog.rs`
 - Keep the `Msg` wire protocol and agent-mode swap behavior unchanged.
 - Make the public CLI termination contract from DT-45 explicit: help is a
   successful stdout response; malformed input is a stderr refusal with exit 2;
@@ -329,18 +329,18 @@ fixtures issue only `Msg::Status`/reply frames; they never invoke `SwapOn`,
 | `cli_status_reply_prints_public_status_and_exits_zero` | same | Local `StatusReply` is printed and exits 0. |
 | `cli_status_broker_refusal_exits_one` | same | Local broker `Msg::Error` reason is surfaced; exit 1. |
 | `cli_status_timeout_exits_one_within_six_seconds` | same | A local silent peer produces the DT-45 timeout diagnostic and exits 1 within six seconds. |
-| `help_is_a_parse_outcome` | `crates/ramshared-agent/src/main.rs` :: `tests` | Parser distinguishes help from a malformed argument. |
+| `help_is_a_parse_outcome` | `crates/ramshared-agent/src/main.rs,crates/ramshared-agent/src/watchdog.rs` :: `tests` | Parser distinguishes help from a malformed argument. |
 | `usage_diagnostic_adds_usage_once` | same | Every malformed-input diagnostic gains one English usage block. |
 | `swap_on_prefers_broker_priority_without_running_swap` | same | `SwapOn` dispatch preserves broker priority without invoking the executor. |
 | `demote_all_dispatches_release_without_running_swap` | same | `DemoteAll` queues releases without invoking the executor. |
-| `session_registers_dispatches_commands_and_stops_on_refusal` | `crates/ramshared-agent/src/main.rs` :: `tests` | Real local agent session registers, reports PSI, dispatches command messages to its execution channel, and stops on a broker refusal without executing swap commands. |
+| `session_registers_dispatches_commands_and_stops_on_refusal` | `crates/ramshared-agent/src/main.rs,crates/ramshared-agent/src/watchdog.rs` :: `tests` | Real local agent session registers, reports PSI, dispatches command messages to its execution channel, and stops on a broker refusal without executing swap commands. |
 | `session_reports_execution_results_without_running_swap` | same | Real local session emits queued execution results through its sole writer without running a swap command. |
 | `session_watchdog_terminates_silent_broker_without_swap` | same | A real local silent session terminates at the watchdog deadline with no active swap command. |
 
 The canonical per-file coverage owner for this business path is:
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent --files crates/ramshared-agent/src/main.rs --min 80 --report-json tmp/memory-broker-agent-cli-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent --files crates/ramshared-agent/src/main.rs,crates/ramshared-agent/src/watchdog.rs --min 80 --report-json tmp/memory-broker-agent-cli-cov.json
 ```
 
 The process tests provide the public-surface validity/refusal evidence (#13),
