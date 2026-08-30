@@ -1,0 +1,26 @@
+refactor: semantic error codes for block boundary and extent violations
+
+## Resumo
+Adiciona erros semânticos precisos para as violações de limite e de permissão no backend de bloco (BlockBackend), eliminando o retorno genérico `-EINVAL` para falhas fora de limite e adicionando uma proteção de bloqueio de escrita para backends que operam em estado "somente leitura", retornando a indicação correta de permissão negada.
+
+## Commits
+| Commit | O que fez | Por que fez | Detalhes |
+|---|---|---|---|
+| hash | Adicionou a checagem NBD_ERANGE e NBD_EACCES | Para retornar erros semânticos corretos na validação da interface | <details><summary>detalhes</summary>**Arquivos:** crates/ramshared-block/src/request.rs<br>**Validacao:** cargo test e cargo clippy<br>**Risco/rollback:** Baixo risco, se quebrar reverter.</details> |
+
+## Issue
+N/A
+
+## Responsavel
+@jules
+
+## Labels
+type:refactor, type:test
+
+## Validacao
+- [x] Gates de build/test do escopo tocado
+- [ ] `./scripts/docs-check.sh` (se tocou docs/specs ou gerou PRD/SPEC/IMPL)
+- [ ] SSDV3: SPEC/IMPL atualizados e citados (ou N/A — mudança não estrutural / só scripts)
+
+## Rollback trigger
+Se integrações consumidoras do trait BlockBackend começarem a falhar a compilação de modo incorreto ou clientes relatarem uma quebra semântica no código de erro ERANGE/EACCES.
