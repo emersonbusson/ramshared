@@ -422,3 +422,7 @@ PRD-2 is a historical record (describing VRAM as hot swap via ublk); Phase 0 (`w
 | **RNF-estab** | mlockall anti-deadlock | **maintained** | §6.2, §11 |
 
 Revised requirements do not go back to PRD-2 (preserving history) — they are reconciled here. Step 3 commits cite the SPEC section + RF covered (e.g., `feat(core): cascade priority — SPEC §1 / revises RF-3`).
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-wsl2d --files crates/ramshared-wsl2d/src/residency.rs --min 80 --report-json tmp/wsl2d-residency-cov.json
+```
