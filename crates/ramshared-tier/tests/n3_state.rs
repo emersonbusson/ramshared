@@ -1,5 +1,5 @@
 use ramshared_tier::n3_state::{
-    StateTransitionError, StateTag,
+    StateTag, StateTransitionError,
     AdapterId, Authority, DrainAck, EventId, FailAck, FailureReason, GenerationCheckpoint, Grant,
     GrantAck, GuestClaim, HostObservation, LeaseId, LeaseMachine, LeaseState, LifecycleEvent,
     ObservationEvent, ObservationEventKind, OpaqueId, PreflightAction, PreflightState,
