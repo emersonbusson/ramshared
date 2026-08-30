@@ -75,7 +75,9 @@ impl fmt::Display for ProtocolError {
             ProtocolError::TruncatedPayload { got, need } => {
                 write!(f, "truncated payload: {got} < {need}")
             }
-            ProtocolError::InvalidHeader(m) => write!(f, "invalid request magic (header): {m:#010x}"),
+            ProtocolError::InvalidHeader(m) => {
+                write!(f, "invalid request magic (header): {m:#010x}")
+            }
             ProtocolError::ChecksumMismatch => write!(f, "checksum mismatch"),
         }
     }
