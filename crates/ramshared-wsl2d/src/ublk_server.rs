@@ -78,6 +78,14 @@ pub fn serve_request<B: BlockBackend + ?Sized>(
         return EINVAL; // request larger than the available buffer
     }
 
+    let bs = backend.block_size() as u64;
+    if bs == 0 || !req.offset.is_multiple_of(bs) || !(req.len as u64).is_multiple_of(bs) {
+        return EINVAL;
+    }
+    if req.offset.checked_add(req.len as u64).is_none_or(|end| end > backend.size_bytes()) {
+        return EINVAL;
+    }
+
     let served = match req.cmd {
         Command::Read => backend.read_at(req.offset, &mut buf[..len]).map(|()| len),
         Command::Write => backend.write_at(req.offset, &buf[..len]).map(|()| len),
@@ -915,6 +923,31 @@ mod join_tests {
         };
         assert_eq!(residency.demote_count(), 3);
         residency.join().expect("residency success");
+    }
+
+    #[test]
+    fn serve_request_refuses_unaligned_and_out_of_bounds() {
+        let mut backend = RamBackend::new(4096);
+        let mut buffer = vec![0u8; 8192];
+        let mut request = Request {
+            flags: 0,
+            cmd: Command::Read,
+            handle: 1,
+            offset: 0,
+            len: 4096,
+        };
+        assert_eq!(serve_request(&request, &mut backend, &mut buffer), 4096);
+
+        request.offset = 100; // Unaligned to 512
+        assert_eq!(serve_request(&request, &mut backend, &mut buffer), EINVAL);
+
+        request.offset = 0;
+        request.len = 100; // Length unaligned
+        assert_eq!(serve_request(&request, &mut backend, &mut buffer), EINVAL);
+
+        request.len = 4096;
+        request.offset = 4096; // Out of bounds (backend is 4096, offset 4096 + len 4096 = 8192 > 4096)
+        assert_eq!(serve_request(&request, &mut backend, &mut buffer), EINVAL);
     }
 
     #[test]

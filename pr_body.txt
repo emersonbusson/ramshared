@@ -1,0 +1,16 @@
+## Resumo
+Enforce physical sector alignment and max device capacity bounds in the ublk server. The changes apply strict physical limits sanity checks by ensuring I/O requests are aligned to the backend block size and do not exceed the backend capacity, returning -EINVAL on violation.
+
+## Commits table
+| Commit | O que fez | Por que fez | Detalhes |
+|---|---|---|---|
+| feat: enforce physical limits sanity checks in serve_request | Added strict block size alignment and bounds checks returning EINVAL. | Prevent OOB or misaligned operations from reaching the VRAM backend. | Modified `serve_request` and updated test cases in `ublk_server.rs` to expect EINVAL for such violations. |
+
+## Labels
+type:security, type:refactor
+
+## Validacao
+Ran `cargo test -p ramshared-wsl2d` and `cargo clippy -- -D warnings` successfully.
+
+## Rollback trigger
+Revert commit if any I/O regressions or unexpected failures occur during ublk operations.
