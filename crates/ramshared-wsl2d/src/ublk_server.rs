@@ -946,6 +946,65 @@ mod join_tests {
         assert_eq!(serve_request(&oversized, &mut backend, &mut buffer), EINVAL);
     }
 
+    use ramshared_block::IoError;
+
+    struct ErrBackend;
+
+    impl BlockBackend for ErrBackend {
+        fn size_bytes(&self) -> u64 {
+            4096
+        }
+
+        fn block_size(&self) -> u32 {
+            512
+        }
+
+        fn read_at(&mut self, _offset: u64, _dst: &mut [u8]) -> Result<(), IoError> {
+            Err(IoError("mock read error".to_string()))
+        }
+
+        fn write_at(&mut self, _offset: u64, _src: &[u8]) -> Result<(), IoError> {
+            Err(IoError("mock write error".to_string()))
+        }
+
+        fn flush(&mut self) -> Result<(), IoError> {
+            Err(IoError("mock flush error".to_string()))
+        }
+    }
+
+    #[test]
+    fn serve_request_returns_eio_on_backend_errors() {
+        let mut backend = ErrBackend;
+        let mut buffer = vec![0u8; 512];
+
+        let read_req = Request {
+            flags: 0,
+            cmd: Command::Read,
+            handle: 1,
+            offset: 0,
+            len: 512,
+        };
+        assert_eq!(serve_request(&read_req, &mut backend, &mut buffer), EIO);
+
+        let write_req = Request {
+            flags: 0,
+            cmd: Command::Write,
+            handle: 2,
+            offset: 0,
+            len: 512,
+        };
+        assert_eq!(serve_request(&write_req, &mut backend, &mut buffer), EIO);
+
+        let flush_req = Request {
+            flags: 0,
+            cmd: Command::Flush,
+            handle: 3,
+            offset: 0,
+            len: 0,
+        };
+        assert_eq!(serve_request(&flush_req, &mut backend, &mut buffer), EIO);
+    }
+
     #[test]
     fn dt3_join_attempts_worker_after_ring_error() {
         let completed = Arc::new(AtomicBool::new(false));
