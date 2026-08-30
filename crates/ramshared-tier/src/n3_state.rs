@@ -1896,4 +1896,78 @@ mod tests {
             LeaseState::Failed(FailureReason::InvalidTransition)
         );
     }
+
+    #[test]
+    fn test_opaque_id_validation() {
+        assert_eq!(OpaqueId::new(b"").unwrap_err(), FailureReason::MalformedRecord);
+        let valid = OpaqueId::new(b"valid-id").unwrap();
+        assert_eq!(valid.as_bytes(), b"valid-id");
+
+        let oversized = vec![0u8; MAX_OPAQUE_ID_BYTES + 1];
+        assert_eq!(OpaqueId::new(&oversized).unwrap_err(), FailureReason::MalformedRecord);
+    }
+
+    #[test]
+    fn test_restart_record_deserialization_failures() {
+        // Truncated header
+        assert_eq!(
+            RestartRecord::from_bytes(&[0u8; 10]).unwrap_err(),
+            FailureReason::MalformedRecord
+        );
+
+        // Valid bytes for reference
+        let lease_id = LeaseId::new(b"lease-1").unwrap();
+        let checkpoint = GenerationCheckpoint {
+            lease_id: lease_id.clone(),
+            generation: 1,
+        };
+        let valid_record = RestartRecord::host(100, vec![checkpoint]).unwrap();
+        let valid_bytes = valid_record.to_bytes();
+
+        // Invalid magic
+        let mut invalid_magic = valid_bytes.clone();
+        invalid_magic[0..4].copy_from_slice(b"BADM");
+        assert_eq!(
+            RestartRecord::from_bytes(&invalid_magic).unwrap_err(),
+            FailureReason::MalformedRecord
+        );
+
+        // Unknown schema
+        let mut invalid_schema = valid_bytes.clone();
+        invalid_schema[4..6].copy_from_slice(&99u16.to_le_bytes());
+        assert_eq!(
+            RestartRecord::from_bytes(&invalid_schema).unwrap_err(),
+            FailureReason::UnknownSchema
+        );
+
+        // Guest authority marker
+        let mut guest_auth = valid_bytes.clone();
+        guest_auth[6] = GUEST_AUTHORITY_MARKER;
+        assert_eq!(
+            RestartRecord::from_bytes(&guest_auth).unwrap_err(),
+            FailureReason::HostAuthorityRequired
+        );
+    }
+
+    #[test]
+    fn test_grant_and_revoke_constructors() {
+        let lease_id = LeaseId::new(b"lease-1").unwrap();
+        let event_id = EventId::new(b"event-1").unwrap();
+
+        let grant = Grant::host(
+            lease_id.clone(),
+            1,
+            event_id.clone(),
+            4096,
+            1,
+            100,
+            200,
+        );
+        assert_eq!(grant.lease_id, lease_id);
+        assert_eq!(grant.capacity_bytes, 4096);
+
+        let revoke = Revoke::host(lease_id.clone(), 1, event_id.clone(), 200);
+        assert_eq!(revoke.lease_id, lease_id);
+        assert_eq!(revoke.deadline, 200);
+    }
 }
