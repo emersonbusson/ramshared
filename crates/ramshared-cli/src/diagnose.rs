@@ -109,14 +109,16 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, bool), DiagnoseError> {
             other => {
                 return Err(DiagnoseError::InvalidArgs(format!(
                     "unsupported diagnose argument: {other}"
-                )))
+                )));
             }
         }
         i += 1;
     }
     Ok((
         path.ok_or_else(|| {
-            DiagnoseError::InvalidArgs("usage: ramshared diagnose --events PATH [--json]".to_string())
+            DiagnoseError::InvalidArgs(
+                "usage: ramshared diagnose --events PATH [--json]".to_string(),
+            )
         })?,
         json,
     ))
