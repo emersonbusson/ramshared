@@ -96,6 +96,37 @@ pub fn validate_tier_resize(
     }
 }
 
+/// Errors that can occur during tier migration speed validation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MigrationSpeedError {
+    /// The requested migration speed exceeds the physical bus bandwidth limit.
+    ExceedsBusBandwidth,
+}
+
+impl core::fmt::Display for MigrationSpeedError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            MigrationSpeedError::ExceedsBusBandwidth => {
+                f.write_str("requested migration speed exceeds the physical bus bandwidth limit")
+            }
+        }
+    }
+}
+
+impl core::error::Error for MigrationSpeedError {}
+
+/// Validates that a requested dynamic tier migration speed is within bus bandwidth limits.
+pub fn validate_migration_speed(
+    speed_bytes_per_sec: u64,
+    bus_bandwidth_bytes_per_sec: u64,
+) -> Result<(), MigrationSpeedError> {
+    if speed_bytes_per_sec > bus_bandwidth_bytes_per_sec {
+        Err(MigrationSpeedError::ExceedsBusBandwidth)
+    } else {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,6 +194,25 @@ mod tests {
         assert_eq!(
             validate_tier_resize(2 * GIB, GIB),
             Err(ResizeError::ExceedsPhysicalLimit)
+        );
+    }
+
+    #[test]
+    fn migration_speed_within_bus_bandwidth_is_ok() {
+        assert_eq!(validate_migration_speed(0, GIB), Ok(()));
+        assert_eq!(validate_migration_speed(GIB, GIB), Ok(()));
+        assert_eq!(validate_migration_speed(GIB / 2, GIB), Ok(()));
+    }
+
+    #[test]
+    fn migration_speed_exceeding_bus_bandwidth_fails() {
+        assert_eq!(
+            validate_migration_speed(GIB + 1, GIB),
+            Err(MigrationSpeedError::ExceedsBusBandwidth)
+        );
+        assert_eq!(
+            validate_migration_speed(2 * GIB, GIB),
+            Err(MigrationSpeedError::ExceedsBusBandwidth)
         );
     }
 }
