@@ -82,13 +82,18 @@ pub fn error() -> CudaLoaderError {
     }
 
     // SAFETY: err is guaranteed by the system to be a valid static C-string.
-    let msg = unsafe { CStr::from_ptr(err) }.to_string_lossy().into_owned();
+    let msg = unsafe { CStr::from_ptr(err) }
+        .to_string_lossy()
+        .into_owned();
 
     if msg.contains("cannot open shared object file") || msg.contains("No such file or directory") {
         CudaLoaderError::LibraryNotFound(msg)
     } else if msg.contains("undefined symbol") {
         CudaLoaderError::SymbolMissing(msg)
-    } else if msg.contains("wrong ELF class") || msg.contains("invalid ELF header") || msg.contains("incompatible") {
+    } else if msg.contains("wrong ELF class")
+        || msg.contains("invalid ELF header")
+        || msg.contains("incompatible")
+    {
         CudaLoaderError::IncompatibleDriverVersion(msg)
     } else {
         CudaLoaderError::Unknown(msg)
