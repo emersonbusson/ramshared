@@ -187,7 +187,7 @@ mod tests {
     fn rejects_small_slice() {
         let mut cfg = Config::parse("").expect("parse");
         cfg.broker.slice_mib = 15;
-        let err = cfg.validate().unwrap_err();
+        let err = cfg.validate().expect_err("should reject small slice");
         assert!(matches!(err, ConfigError::OutOfRange(_)));
     }
 
@@ -198,7 +198,7 @@ mod tests {
         cfg.broker.slices = 1000;
         cfg.broker.slice_mib = 1024 * 1024 * 1024; // 1 PB slice
         if std::fs::read_to_string("/proc/meminfo").is_ok() {
-            let err = cfg.validate().unwrap_err();
+            let err = cfg.validate().expect_err("should reject excessive ram");
             assert!(matches!(err, ConfigError::OutOfRange(_)));
         }
     }
