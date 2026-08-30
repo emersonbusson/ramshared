@@ -243,6 +243,14 @@ pub fn read_mem_info() -> (u64, u64) {
     ((total_kib + 512) / 1024, (avail_kib + 512) / 1024)
 }
 
+pub fn read_sysctl_min_free_mb() -> u64 {
+    fs::read_to_string("/proc/sys/vm/min_free_kbytes")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(|kib| (kib + 512) / 1024)
+        .unwrap_or(512)
+}
+
 pub fn read_psi_full() -> f64 {
     let text = fs::read_to_string("/proc/pressure/memory").unwrap_or_default();
     for line in text.lines() {
@@ -521,17 +529,17 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         readings_count += 1;
         append_telemetry_log(&opts.telemetry_log, &reading);
 
-        let hard_floor = if opts.tier3_target_pct.is_some() {
-            opts.min_ram_mb.min(250)
-        } else {
-            opts.min_ram_mb
-        };
+        let sysctl_min_free_mb = read_sysctl_min_free_mb();
+        let dynamic_kernel_floor = sysctl_min_free_mb.saturating_add(128).max(512);
+        let hard_floor = opts.min_ram_mb.max(dynamic_kernel_floor);
 
         let mut avail_mb = avail_mb;
-        if avail_mb <= hard_floor && (opts.tier3_target_pct.is_some() || opts.cascade) {
+        let mut retries = 0;
+        while avail_mb <= hard_floor && (opts.tier3_target_pct.is_some() || opts.cascade) && retries < 20 {
             thread::sleep(Duration::from_millis(50));
             let (_, new_avail) = read_mem_info();
             avail_mb = new_avail;
+            retries += 1;
         }
 
         if avail_mb <= hard_floor && opts.tier3_target_pct.is_none() && !opts.cascade {
@@ -614,10 +622,14 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         }
 
         let one_pct_mb = ((ram_total_mb * opts.step_pct) / 100).max(50);
-        let mut safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(hard_floor));
+        let safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(hard_floor));
         if safe_alloc_mb == 0 {
             if (opts.cascade || opts.tier3_target_pct.is_some()) && psi_full < opts.max_psi_full {
-                safe_alloc_mb = 64;
+                thread::sleep(Duration::from_millis(100));
+                let (_, fresh_avail) = read_mem_info();
+                if fresh_avail <= hard_floor {
+                    break;
+                }
             } else {
                 break;
             }
