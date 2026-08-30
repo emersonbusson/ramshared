@@ -1,0 +1,339 @@
+RULES
+1. Read README.md, AGENTS.md, CLAUDE.md, etc.
+2. Baseline git SHA is f5aa010e62d4a65b9fc078e47087614d9b9322c3.
+3. Implement smallest safe orthogonal slice. TDD, run cargo test, clippy, open 1 PR to jules/inbox.
+4. Unsafe not possible.
+5. Do not read, write, print credentials.
+6. PR to jules/inbox only.
+7. English only.
+8. Conventional Commits.
+9. Format PR body.
+10. Generate all 10 contractual blocks.
+
+MAIN_DIFF
+The goal is to flatten the lease conflict resolution logic with guard clauses in `crates/ramshared-broker/src/arbiter.rs`.
+Currently, the `tick` method has a nested `if let Some((holder, bytes)) = pending_lease` and then an `if / else` based on `leased.len() + free.len() >= need`.
+
+```rust
+        // (1) Pending LEASE has priority; suppresses rebalancing (2/4) and round-robin (5) — R9.
+        if let Some((holder, bytes)) = pending_lease {
+            let need = if slice_len == 0 {
+                0
+            } else {
+                bytes.div_ceil(slice_len) as usize
+            };
+            if need == 0 {
+                return actions;
+            }
+            let leased: Vec<SliceId> = slices
+                .iter()
+                .filter(|s| s.state == SliceState::Leased)
+                .map(|s| s.id)
+                .collect();
+            let free: Vec<SliceId> = slices
+                .iter()
+                .filter(|s| s.state == SliceState::Free)
+                .map(|s| s.id)
+                .collect();
+            if leased.len() + free.len() >= need {
+                let grant: Vec<SliceId> = leased
+                    .iter()
+                    .chain(free.iter())
+                    .take(need)
+                    .copied()
+                    .collect();
+                actions.push(Action::GrantLease {
+                    holder,
+                    slices: grant,
+                });
+            } else {
+                // Revokes Active from the least pressured first (proxy by owner's psi; DT-8: the
+                // lease drains beyond never-zero). `lease` id stable until grant (does not increment).
+                let deficit = need - (leased.len() + free.len());
+                let mut active: Vec<(SliceId, TenantId, f32)> = slices
+                    .iter()
+                    .filter(|s| s.state == SliceState::Active)
+                    .filter_map(|s| {
+                        s.tenant
+                            .map(|t| (s.id, t, owner_psi(tenants, t).unwrap_or(0.0)))
+                    })
+                    .collect();
+                active.sort_by(|a, b| by_psi(a.2, b.2).then(a.0.cmp(&b.0)));
+                for (slice, from, _) in active.into_iter().take(deficit) {
+                    actions.push(Action::RevokeForLease { slice, from });
+                }
+            }
+            return actions;
+        }
+```
+
+We will refactor this to:
+
+```rust
+        // (1) Pending LEASE has priority; suppresses rebalancing (2/4) and round-robin (5) — R9.
+        if let Some((holder, bytes)) = pending_lease {
+            let need = if slice_len == 0 {
+                0
+            } else {
+                bytes.div_ceil(slice_len) as usize
+            };
+            if need == 0 {
+                return actions;
+            }
+            let leased: Vec<SliceId> = slices
+                .iter()
+                .filter(|s| s.state == SliceState::Leased)
+                .map(|s| s.id)
+                .collect();
+            let free: Vec<SliceId> = slices
+                .iter()
+                .filter(|s| s.state == SliceState::Free)
+                .map(|s| s.id)
+                .collect();
+
+            let available = leased.len() + free.len();
+
+            if available < need {
+                // Revokes Active from the least pressured first (proxy by owner's psi; DT-8: the
+                // lease drains beyond never-zero). `lease` id stable until grant (does not increment).
+                let deficit = need - available;
+                let mut active: Vec<(SliceId, TenantId, f32)> = slices
+                    .iter()
+                    .filter(|s| s.state == SliceState::Active)
+                    .filter_map(|s| {
+                        s.tenant
+                            .map(|t| (s.id, t, owner_psi(tenants, t).unwrap_or(0.0)))
+                    })
+                    .collect();
+                active.sort_by(|a, b| by_psi(a.2, b.2).then(a.0.cmp(&b.0)));
+                for (slice, from, _) in active.into_iter().take(deficit) {
+                    actions.push(Action::RevokeForLease { slice, from });
+                }
+                return actions;
+            }
+
+            let grant: Vec<SliceId> = leased
+                .iter()
+                .chain(free.iter())
+                .take(need)
+                .copied()
+                .collect();
+            actions.push(Action::GrantLease {
+                holder,
+                slices: grant,
+            });
+            return actions;
+        }
+```
+Wait, we need to flatten `if let Some((holder, bytes)) = pending_lease` too? No, it's just `pending_lease` blocks the rest of `tick`, returning early.
+However, if we flatten `if let Some((holder, bytes)) = pending_lease`, we can do an early return if `pending_lease` is Some, but we can't easily jump out without running `return actions`.
+Actually, if `pending_lease` is Some, the whole function returns `actions`. The rest of the function (Counterfactual, etc.) only runs if `pending_lease` is None.
+
+Wait, is there any other place to flatten? Let's check `if let Some((holder, bytes)) = pending_lease`.
+If we just early return `if let Some`, then the rest of the method loses nesting.
+
+```rust
+        if let Some((holder, bytes)) = pending_lease {
+            let need = if slice_len == 0 {
+                0
+            } else {
+                bytes.div_ceil(slice_len) as usize
+            };
+            if need == 0 {
+                return actions; // actions is empty here
+            }
+
+            // calculate leased/free
+            // ...
+
+            // if deficit
+            // ... return actions
+
+            // if grant
+            // ... return actions
+        }
+
+        // (2) COUNTERFACTUAL
+```
+
+Is there anything else?
+The objective: "flatten lease conflict resolution logic with guard clauses"
+Target Scope: crates/ramshared-broker/src/arbiter.rs and associated test files.
+"Convert nested if/else branches into early-return guard clauses checking conditions upfront. Ensure the happy path remains at root indentation without deep nesting."
+
+Let's look at what "lease conflict resolution logic" exactly means.
+Inside `pending_lease`:
+```rust
+            if leased.len() + free.len() >= need {
+                let grant: Vec<SliceId> = leased
+                    .iter()
+                    .chain(free.iter())
+                    .take(need)
+                    .copied()
+                    .collect();
+                actions.push(Action::GrantLease {
+                    holder,
+                    slices: grant,
+                });
+            } else {
+                // Revokes Active from the least pressured first (proxy by owner's psi; DT-8: the
+                // lease drains beyond never-zero). `lease` id stable until grant (does not increment).
+                let deficit = need - (leased.len() + free.len());
+                let mut active: Vec<(SliceId, TenantId, f32)> = slices
+                    .iter()
+                    .filter(|s| s.state == SliceState::Active)
+                    .filter_map(|s| {
+                        s.tenant
+                            .map(|t| (s.id, t, owner_psi(tenants, t).unwrap_or(0.0)))
+                    })
+                    .collect();
+                active.sort_by(|a, b| by_psi(a.2, b.2).then(a.0.cmp(&b.0)));
+                for (slice, from, _) in active.into_iter().take(deficit) {
+                    actions.push(Action::RevokeForLease { slice, from });
+                }
+            }
+```
+
+Wait, if we can just early return `if leased.len() + free.len() < need` it would be a guard clause.
+But also, we can write a test for it. Wait, the prompt says "Ensure the happy path remains at root indentation without deep nesting".
+If the happy path of `pending_lease` is granting the lease, the unhappy path is revoking active slices.
+
+Let's look at the instruction again:
+```
+1. Apply the principle with precision:
+   - Convert nested if/else branches into early-return guard clauses checking conditions upfront.
+   - Ensure the happy path remains at root indentation without deep nesting.
+2. Implement using TDD:
+   - Identify or write failing unit test (RED_TEST).
+```
+Wait, we need a RED_TEST. Let's add a test for a guard clause behavior? But refactoring doesn't typically require a *new* test unless there's a missing test case. We can just add a new test that asserts the exact same behavior but maybe names it something specific, or tests a corner case (e.g. `slice_len == 0`, or exact deficit).
+Wait, "Identify or write failing unit test (RED_TEST)". We can identify an existing one and say it passes, or write a new one that initially fails if the logic is broken, but wait, if it's a refactoring, the test should pass before and after. The prompt says "simply identifying an existing test is insufficient; you must explicitly add or modify a test in the test module (even if it's an ignored, compile-only visibility test) to satisfy code review."
+
+So I will add a new test case:
+```rust
+    #[test]
+    fn lease_returns_empty_actions_when_slice_len_is_zero_or_need_is_zero() {
+        let mut arb = Arbiter::new(cfg());
+        let t0 = Instant::now();
+        let tenants = [tv(1, 0.0, 0)];
+        let slices = [
+            Slice { id: 0, offset: 0, len: 0, tenant: None, state: SliceState::Free } // len 0
+        ];
+        // need = 0 because slice_len = 0
+        let a = arb.tick(t0, &tenants, &slices, Some((9, 64)));
+        assert!(a.is_empty());
+
+        let slices2 = [slice(0, None, SliceState::Free)]; // len 64
+        // bytes = 0 -> need = 0
+        let a2 = arb.tick(t0, &tenants, &slices2, Some((9, 0)));
+        assert!(a2.is_empty());
+    }
+```
+This satisfies adding a test.
+
+Let's refine the refactoring:
+```rust
+        // (1) Pending LEASE has priority; suppresses rebalancing (2/4) and round-robin (5) — R9.
+        if let Some((holder, bytes)) = pending_lease {
+            let need = if slice_len == 0 {
+                0
+            } else {
+                bytes.div_ceil(slice_len) as usize
+            };
+            if need == 0 {
+                return actions;
+            }
+            let leased: Vec<SliceId> = slices
+                .iter()
+                .filter(|s| s.state == SliceState::Leased)
+                .map(|s| s.id)
+                .collect();
+            let free: Vec<SliceId> = slices
+                .iter()
+                .filter(|s| s.state == SliceState::Free)
+                .map(|s| s.id)
+                .collect();
+
+            let available = leased.len() + free.len();
+
+            // GUARD CLAUSE: Not enough available slices, must revoke Active slices
+            if available < need {
+                let deficit = need - available;
+                let mut active: Vec<(SliceId, TenantId, f32)> = slices
+                    .iter()
+                    .filter(|s| s.state == SliceState::Active)
+                    .filter_map(|s| {
+                        s.tenant
+                            .map(|t| (s.id, t, owner_psi(tenants, t).unwrap_or(0.0)))
+                    })
+                    .collect();
+                active.sort_by(|a, b| by_psi(a.2, b.2).then(a.0.cmp(&b.0)));
+                for (slice, from, _) in active.into_iter().take(deficit) {
+                    actions.push(Action::RevokeForLease { slice, from });
+                }
+                return actions;
+            }
+
+            // HAPPY PATH: Grant lease
+            let grant: Vec<SliceId> = leased
+                .iter()
+                .chain(free.iter())
+                .take(need)
+                .copied()
+                .collect();
+            actions.push(Action::GrantLease {
+                holder,
+                slices: grant,
+            });
+            return actions;
+        }
+```
+
+Wait, `Action::GrantLease` takes `holder` and `slices: grant`.
+Is this what the prompt wants? Yes.
+
+Let's double check if there are other places. "flatten lease conflict resolution logic with guard clauses"
+Lease conflict resolution refers precisely to this part.
+
+Let's check if there's any other "lease conflict resolution logic" in other files.
+Wait, the prompt explicitly says: `crates/ramshared-broker/src/arbiter.rs and associated test files.`
+
+FILES
+crates/ramshared-broker/src/arbiter.rs
+
+INVARIANTS
+The logic must remain functionally identical. Tests must pass.
+
+COUNTERFACTUAL
+If we nested it further, it would violate Principle 1.
+
+RED_TEST
+```rust
+    #[test]
+    fn lease_returns_empty_actions_when_slice_len_is_zero_or_need_is_zero() {
+        let mut arb = Arbiter::new(cfg());
+        let t0 = Instant::now();
+        let tenants = [tv(1, 0.0, 0)];
+        let slices = [
+            Slice { id: 0, offset: 0, len: 0, tenant: None, state: SliceState::Free }
+        ];
+        let a = arb.tick(t0, &tenants, &slices, Some((9, 64)));
+        assert!(a.is_empty());
+
+        let slices2 = [slice(0, None, SliceState::Free)];
+        let a2 = arb.tick(t0, &tenants, &slices2, Some((9, 0)));
+        assert!(a2.is_empty());
+    }
+```
+
+COVERAGE
+Only touches arbiter.rs.
+
+REAL_PROOF
+Will use `cargo test -p ramshared-broker` and `cargo clippy -p ramshared-broker -- -D warnings`.
+
+ROLLBACK
+If tests fail, rollback.
+
+PR_BOUNDARY
+Do not merge, submit to jules/inbox.
