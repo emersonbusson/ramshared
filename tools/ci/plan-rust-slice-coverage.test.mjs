@@ -215,12 +215,12 @@ const MEMORY_BROKER_AGENT_CLI_COVERAGE_ENTRY = {
   command: [
     'node', 'tools/ci/check-rust-slice-coverage.mjs',
     '-p', 'ramshared-agent',
-    '--files', 'crates/ramshared-agent/src/main.rs',
+    '--files', 'crates/ramshared-agent/src/main.rs,crates/ramshared-agent/src/psi.rs',
     '--min', '80',
     '--report-json', 'tmp/memory-broker-agent-cli-cov.json',
   ],
   packages: ['ramshared-agent'],
-  files: ['crates/ramshared-agent/src/main.rs'],
+  files: ['crates/ramshared-agent/src/main.rs', 'crates/ramshared-agent/src/psi.rs'],
   min: 80,
 }
 const MEMORY_BROKER_AGENT_CLI_PROCESS_TESTS = [
