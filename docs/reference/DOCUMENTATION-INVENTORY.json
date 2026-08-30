@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 258,
-    "classified": 247,
+    "total": 281,
+    "classified": 270,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -570,6 +570,270 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/jules/findings/01-vram-dispatcher-scope-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/02-diagnose-procfs-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/03-n3-state-transition-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/04-broker-lock-free-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/05-ipc-framing-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/06-dxg-capabilities-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/07-agent-watchdog-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/08-swap-tier-guard-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/09-config-parser-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/10-block-alignment-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/11-cuda-vram-impl-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/12-vulkan-driver-guard-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/13-nbd-readiness-socket-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/14-config-worker-threads-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/15-dxg-bar-aperture-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/16-vram-allocation-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/17-diagnose-pipeline-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/18-broker-lease-ttl-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/19-cuda-stream-priority-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/20-broker-arbiter-error-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/21-cuda-error-mapping-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/README.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
       "path": "docs/labs/DUALBOOT-KERNEL-TRUE.md",
       "disposition": "classified",
       "ruleId": "lab-runbooks",
@@ -925,6 +1189,18 @@
     },
     {
       "path": "docs/reliability/JULES-PR-AUDIT-20260810.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/JULES-PR-AUDIT-20260830.md",
       "disposition": "classified",
       "ruleId": "reliability-documents",
       "verification": {
