@@ -19,6 +19,7 @@ Process: [`SSDV3-PROMPTS.md`](SSDV3-PROMPTS.md) · rules: [`.claude/rules/ssdv3.
 | [`cascade-vram-ondemand`](specs/no-milestone/cascade-vram-ondemand/) | Cascade VRAM on-demand — capacity without full CUDA pre-alloc; return under reclaim | — | — | UNQUALIFIED | — |
 | [`ci-trust-and-release-integrity`](specs/no-milestone/ci-trust-and-release-integrity/) | CI trust and release integrity | — | — | UNQUALIFIED | — |
 | [`comment-language-integrity`](specs/no-milestone/comment-language-integrity/) | Canonical English and comment-language integrity | — | — | SPEC | — |
+| [`config-bounds`](specs/no-milestone/config-bounds/) | (no title) | — | — | SPEC | — |
 | [`custom-kernel-ublk-product-transport`](specs/no-milestone/custom-kernel-ublk-product-transport/) | Custom-kernel ublk product transport gate | — | — | UNQUALIFIED | — |
 | [`documentation-governance-integrity`](specs/no-milestone/documentation-governance-integrity/) | Documentation governance and evidence integrity | — | — | PARTIAL | — |
 | [`documentation-localization-integrity`](specs/no-milestone/documentation-localization-integrity/) | Documentation localization integrity | — | — | PARTIAL | — |
