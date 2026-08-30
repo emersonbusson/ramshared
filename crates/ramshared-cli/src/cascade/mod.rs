@@ -1330,10 +1330,10 @@ use lifecycle::{
 
 /// Build lifecycle snapshot from live swaps + daemon (read-only).
 pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
-    let pairs: Vec<(String, u64, u64, i32)> = entries
+    let pairs: Vec<(&str, u64, u64, i32)> = entries
         .iter()
         .filter(|e| !e.is_ghost())
-        .map(|e| (e.filename.clone(), e.size_kb, e.used_kb, e.priority))
+        .map(|e| (e.filename.as_str(), e.size_kb, e.used_kb, e.priority))
         .collect();
     let (zram, vram, disk, order_ok) = lifecycle::tiers_from_swap_names(&pairs);
     let ghosts = ghost_vram_swaps(entries);
