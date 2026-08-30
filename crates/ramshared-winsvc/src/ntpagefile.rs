@@ -94,19 +94,19 @@ pub fn create_secondary(
     if min_bytes == 0 || min_bytes > max_bytes {
         return Err(PagefileError::Api("min/max pagefile sizes invalid".into()));
     }
-    let available_space = get_volume_free_space(volume)?;
-    if max_bytes > (available_space / 10) * 9 {
-        return Err(PagefileError::OutOfSpace {
-            requested: max_bytes,
-            available: available_space,
-        });
-    }
     let b = match build {
         Some(b) => b,
         None => current_build()?,
     };
     if !is_supported_build(b.build) {
         return Err(PagefileError::UnsupportedBuild { build: b.build });
+    }
+    let available_space = get_volume_free_space(volume)?;
+    if max_bytes > (available_space / 10) * 9 {
+        return Err(PagefileError::OutOfSpace {
+            requested: max_bytes,
+            available: available_space,
+        });
     }
     create_secondary_impl(volume, min_bytes, max_bytes)
 }
