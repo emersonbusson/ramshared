@@ -776,7 +776,12 @@ mod tests {
             let bytes = self.bytes.borrow();
             let start = off as usize;
             let count = buf.len().min(bytes.len().saturating_sub(start));
-            buf[..count].copy_from_slice(&bytes[start..start.checked_add(count).ok_or_else(|| IoError("offset overflow".into()))?]);
+            buf[..count].copy_from_slice(
+                &bytes[start
+                    ..start
+                        .checked_add(count)
+                        .ok_or_else(|| IoError("offset overflow".into()))?],
+            );
             Ok(count)
         }
 
@@ -794,7 +799,11 @@ mod tests {
             }
             let count = data.len().min(self.max_write);
             let start = off as usize;
-            self.bytes.borrow_mut()[start..start.checked_add(count).ok_or_else(|| IoError("offset overflow".into()))?].copy_from_slice(&data[..count]);
+            self.bytes.borrow_mut()[start
+                ..start
+                    .checked_add(count)
+                    .ok_or_else(|| IoError("offset overflow".into()))?]
+                .copy_from_slice(&data[..count]);
             self.writes_before_failure
                 .set(writes_before_failure.saturating_sub(1));
             Ok(count)

@@ -332,7 +332,9 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
         let _ = end;
         let mut done = 0usize;
         while done < buf.len() {
-            let abs = off.checked_add(done as u64).ok_or_else(|| IoError("offset overflow".into()))?;
+            let abs = off
+                .checked_add(done as u64)
+                .ok_or_else(|| IoError("offset overflow".into()))?;
             let idx = self.chunk_index(abs)?;
             let chunk_base = idx as u64 * self.chunk_bytes;
             let rel = (abs - chunk_base) as usize;
@@ -367,7 +369,9 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
         let mut done = 0usize;
         let now = Instant::now();
         while done < data.len() {
-            let abs = off.checked_add(done as u64).ok_or_else(|| IoError("offset overflow".into()))?;
+            let abs = off
+                .checked_add(done as u64)
+                .ok_or_else(|| IoError("offset overflow".into()))?;
             let idx = self.chunk_index(abs)?;
             self.ensure_live(idx)?;
             let chunk_base = idx as u64 * self.chunk_bytes;

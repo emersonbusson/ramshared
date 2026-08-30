@@ -111,7 +111,9 @@ pub fn serve<B: BlockBackend + ?Sized>(
                 return plain(e);
             }
             let len_usize = usize::try_from(req.len).unwrap_or(0);
-            if len_usize == 0 && req.len != 0 { return plain(NBD_EINVAL); }
+            if len_usize == 0 && req.len != 0 {
+                return plain(NBD_EINVAL);
+            }
             let mut buf = vec![0u8; len_usize];
             match backend.read_at(req.offset, &mut buf) {
                 Ok(()) => ServeOutcome {
@@ -156,12 +158,19 @@ mod tests {
         }
         fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
             let o = off as usize;
-            buf.copy_from_slice(&self.data[o..o.checked_add(buf.len()).ok_or_else(|| IoError("offset overflow".into()))?]);
+            buf.copy_from_slice(
+                &self.data[o..o
+                    .checked_add(buf.len())
+                    .ok_or_else(|| IoError("offset overflow".into()))?],
+            );
             Ok(())
         }
         fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
             let o = off as usize;
-            self.data[o..o.checked_add(data.len()).ok_or_else(|| IoError("offset overflow".into()))?].copy_from_slice(data);
+            self.data[o..o
+                .checked_add(data.len())
+                .ok_or_else(|| IoError("offset overflow".into()))?]
+                .copy_from_slice(data);
             Ok(())
         }
         fn flush(&mut self) -> Result<(), IoError> {
