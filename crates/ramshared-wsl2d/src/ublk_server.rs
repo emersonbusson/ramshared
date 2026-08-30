@@ -79,12 +79,19 @@ pub fn serve_request<B: BlockBackend + ?Sized>(
     }
 
     // Physical bounds guard
-    if req.offset.checked_add(req.len as u64).is_none_or(|end| end > backend.size_bytes()) {
+    if req
+        .offset
+        .checked_add(req.len as u64)
+        .is_none_or(|end| end > backend.size_bytes())
+    {
         return EIO;
     }
 
     // Command guard
-    if !matches!(req.cmd, Command::Read | Command::Write | Command::Flush | Command::Trim) {
+    if !matches!(
+        req.cmd,
+        Command::Read | Command::Write | Command::Flush | Command::Trim
+    ) {
         return EINVAL;
     }
 
