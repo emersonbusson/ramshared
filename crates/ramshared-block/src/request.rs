@@ -58,13 +58,24 @@ fn errno_of(r: Result<(), IoError>) -> u32 {
 /// **before** touching the backend.
 fn validate<B: BlockBackend + ?Sized>(req: &Request, backend: &B) -> Result<(), u32> {
     let bs = backend.block_size() as u64;
-    if bs == 0 || !req.offset.is_multiple_of(bs) || !(req.len as u64).is_multiple_of(bs) {
+    if bs == 0 {
         return Err(NBD_EINVAL);
     }
-    match req.offset.checked_add(req.len as u64) {
-        Some(end) if end <= backend.size_bytes() => Ok(()),
-        _ => Err(NBD_EINVAL),
+    if !req.offset.is_multiple_of(bs) {
+        return Err(NBD_EINVAL);
     }
+    if !(req.len as u64).is_multiple_of(bs) {
+        return Err(NBD_EINVAL);
+    }
+
+    let Some(end) = req.offset.checked_add(req.len as u64) else {
+        return Err(NBD_EINVAL);
+    };
+    if end > backend.size_bytes() {
+        return Err(NBD_EINVAL);
+    }
+
+    Ok(())
 }
 
 fn validate_command_flags(req: &Request) -> Result<WriteOptions, u32> {
@@ -320,5 +331,44 @@ mod tests {
         );
         assert_eq!(backend.writes, 1);
         assert_eq!(backend.flushes, 1);
+    }
+
+    #[test]
+    fn zero_block_size_is_einval() {
+        let mut b = MemBackend {
+            data: vec![0u8; 4096],
+            bs: 0,
+        };
+        let r = serve(&req(Command::Read, 0, 0), &[], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_EINVAL
+        );
+    }
+
+    #[test]
+    fn unaligned_length_is_einval() {
+        let mut b = MemBackend {
+            data: vec![0u8; 8192],
+            bs: 4096,
+        };
+        let r = serve(&req(Command::Read, 0, 100), &[], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_EINVAL
+        );
+    }
+
+    #[test]
+    fn extent_overflow_is_einval() {
+        let mut b = MemBackend {
+            data: vec![0u8; 4096],
+            bs: 4096,
+        };
+        let r = serve(&req(Command::Read, u64::MAX - 4095, 8192), &[], &mut b);
+        assert_eq!(
+            u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
+            NBD_EINVAL
+        );
     }
 }
