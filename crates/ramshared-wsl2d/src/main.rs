@@ -3995,7 +3995,11 @@ fn broker_setup_with_acceptors(
         slice_map
             .exports()
             .into_iter()
-            .map(|(name, size)| ramshared_block::handshake::Export { name, size, block_size: 4096 })
+            .map(|(name, size)| ramshared_block::handshake::Export {
+                name,
+                size,
+                block_size: 4096,
+            })
             .collect::<Vec<_>>(),
     );
 

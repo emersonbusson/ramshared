@@ -126,10 +126,12 @@ pub fn server_handshake<R: Read, W: Write>(
     exports: &[Export],
     tx_flags: u16,
 ) -> Result<usize, HandshakeError> {
-
     // GUARD: Ensure all exports have valid hardware-aligned block sizes.
     for export in exports {
-        if !export.block_size.is_power_of_two() || export.block_size < 512 || export.block_size > 65536 {
+        if !export.block_size.is_power_of_two()
+            || export.block_size < 512
+            || export.block_size > 65536
+        {
             return Err(HandshakeError::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "peer block size out of bounds",
@@ -391,15 +393,33 @@ mod tests {
         let mut out = Vec::new();
 
         let invalid_exports = vec![
-            Export { name: "default".to_string(), size: 4096, block_size: 511 }, // Too small
-            Export { name: "default".to_string(), size: 4096, block_size: 65537 }, // Too large
-            Export { name: "default".to_string(), size: 4096, block_size: 1000 }, // Not power of two
-            Export { name: "default".to_string(), size: 4096, block_size: 0 }, // Zero
+            Export {
+                name: "default".to_string(),
+                size: 4096,
+                block_size: 511,
+            }, // Too small
+            Export {
+                name: "default".to_string(),
+                size: 4096,
+                block_size: 65537,
+            }, // Too large
+            Export {
+                name: "default".to_string(),
+                size: 4096,
+                block_size: 1000,
+            }, // Not power of two
+            Export {
+                name: "default".to_string(),
+                size: 4096,
+                block_size: 0,
+            }, // Zero
         ];
 
         for invalid_export in invalid_exports {
             let res = server_handshake(&mut r, &mut out, &[invalid_export], 1);
-            assert!(matches!(res, Err(HandshakeError::Io(e)) if e.kind() == std::io::ErrorKind::InvalidInput));
+            assert!(
+                matches!(res, Err(HandshakeError::Io(e)) if e.kind() == std::io::ErrorKind::InvalidInput)
+            );
         }
     }
 }
