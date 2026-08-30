@@ -52,6 +52,37 @@ const IOCTL_DESTROY: u32 = ioctl_code(4);
 const GENERIC_READ: u32 = 0x8000_0000;
 const GENERIC_WRITE: u32 = 0x4000_0000;
 
+/// IOCTL / mapping errors (stable classes only — no pointers in Display).
+#[derive(Debug)]
+pub enum IoctlError {
+    Open(String),
+    Ioctl(String),
+    Map(String),
+    Timeout,
+    Cancelled,
+    Invalid(String),
+}
+
+impl std::fmt::Display for IoctlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IoctlError::Open(s) => write!(f, "open: {s}"),
+            IoctlError::Ioctl(s) => write!(f, "ioctl: {s}"),
+            IoctlError::Map(s) => write!(f, "map: {s}"),
+            IoctlError::Timeout => write!(f, "timeout"),
+            IoctlError::Cancelled => write!(f, "cancelled"),
+            IoctlError::Invalid(s) => write!(f, "invalid: {s}"),
+        }
+    }
+}
+
+impl std::error::Error for IoctlError {}
+
+fn last_error_string(op: &str) -> String {
+    let e = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+    format!("{op} win32={e}")
+}
+
 /// Contiguous page-aligned SQ/CQ/data regions for REGISTER (DT-4).
 ///
 /// Shared headers use aligned 32-bit words with Rust Release/Acquire publication.
@@ -451,23 +482,22 @@ impl WindowsDriverLink {
         Ok(())
     }
 
-    pub fn cancel_fetch(&mut self) -> std::io::Result<()> {
+    pub fn cancel_fetch(&mut self) -> Result<(), IoctlError> {
         if !self.pending {
             return Ok(());
         }
         // A pending operation must only be cancelled by its owner while its
         // OVERLAPPED remains in scope. commit_and_fetch drains before return.
-        Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "pending fetch cannot be cancelled without its OVERLAPPED owner",
+        Err(IoctlError::Invalid(
+            "pending fetch cannot be cancelled without its OVERLAPPED owner".into(),
         ))
     }
 
-    pub fn unregister_queue(&mut self) -> std::io::Result<()> {
+    pub fn unregister_queue(&mut self) -> Result<(), IoctlError> {
         self.ioctl_sync(IOCTL_UNREGISTER, None, None)
     }
 
-    pub fn destroy_disk(&mut self) -> std::io::Result<()> {
+    pub fn destroy_disk(&mut self) -> Result<(), IoctlError> {
         self.ioctl_sync(IOCTL_DESTROY, None, None)
     }
 
@@ -516,17 +546,17 @@ impl WindowsDriverLink {
         }
         let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
         if err != ERROR_IO_PENDING {
-            return Err(std::io::Error::from_raw_os_error(err as i32));
+            return Err(IoctlError::Ioctl(format!("ioctl win32={err}")));
         }
         let wr = unsafe { WaitForSingleObject(self.event, 30_000) };
         if wr != WAIT_OBJECT_0 {
             self.cancel_and_drain(&ov);
-            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout"));
+            return Err(IoctlError::Timeout);
         }
         let mut xfer = 0u32;
         let gor = unsafe { GetOverlappedResult(self.handle, &ov, &mut xfer, 0) };
         if gor == FALSE {
-            return Err(std::io::Error::last_os_error());
+            return Err(IoctlError::Ioctl(last_error_string("GetOverlappedResult")));
         }
         Ok(())
     }
@@ -702,6 +732,8 @@ mod tests {
             pending: true,
         };
         let res = link_pending.cancel_fetch();
-        assert!(res.is_err());
+        assert!(
+            matches!(res, Err(IoctlError::Invalid(msg)) if msg.contains("pending fetch cannot be cancelled"))
+        );
     }
 }
