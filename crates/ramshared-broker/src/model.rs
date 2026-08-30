@@ -35,6 +35,43 @@ pub struct Slice {
     pub state: SliceState,
 }
 
+impl Slice {
+    /// Validates physical hardware limits, bounds, and layout overlaps (PRD §7).
+    pub fn validate_layout(slices: &[Slice], max_capacity: u64) -> Result<(), std::io::Error> {
+        for s in slices {
+            if s.len == 0 {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Slice length cannot be zero"));
+            }
+            if !(s.offset as usize).is_multiple_of(4096) {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Slice offset not 4096-byte aligned"));
+            }
+            if !(s.len as usize).is_multiple_of(4096) {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Slice length not 4096-byte aligned"));
+            }
+            let end = s.offset.checked_add(s.len).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "Slice offset and length overflow")
+            })?;
+            if end > max_capacity {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Slice exceeds physical VRAM capacity"));
+            }
+        }
+
+        for i in 0..slices.len() {
+            for j in (i + 1)..slices.len() {
+                let a = &slices[i];
+                let b = &slices[j];
+                let a_end = a.offset + a.len;
+                let b_end = b.offset + b.len;
+                if std::cmp::max(a.offset, b.offset) < std::cmp::min(a_end, b_end) {
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Slices overlap"));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// Memory pressure sample (`/proc/pressure/memory`, `some` line — DT-15).
 #[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PsiSample {
@@ -143,5 +180,60 @@ mod tests {
                 serde_json::from_str(&serde_json::to_string(&tk).unwrap()).unwrap();
             assert_eq!(tk, back);
         }
+    }
+
+    #[test]
+    fn validate_slice_layout_rejects_overlaps_and_bounds() {
+        let max_cap = 8192;
+        let base_slice = Slice {
+            id: 0,
+            offset: 0,
+            len: 4096,
+            tenant: None,
+            state: SliceState::Free,
+        };
+
+        let ok_slices = [
+            base_slice.clone(),
+            Slice {
+                id: 1,
+                offset: 4096,
+                len: 4096,
+                tenant: None,
+                state: SliceState::Free,
+            }
+        ];
+        assert!(Slice::validate_layout(&ok_slices, max_cap).is_ok());
+
+        let mut zero_len = ok_slices.clone();
+        zero_len[0].len = 0;
+        let Err(e) = Slice::validate_layout(&zero_len, max_cap) else { panic!() };
+        assert_eq!(e.to_string(), "Slice length cannot be zero");
+
+        let mut bad_align_offset = ok_slices.clone();
+        bad_align_offset[0].offset = 1;
+        let Err(e) = Slice::validate_layout(&bad_align_offset, max_cap) else { panic!() };
+        assert_eq!(e.to_string(), "Slice offset not 4096-byte aligned");
+
+        let mut bad_align_len = ok_slices.clone();
+        bad_align_len[0].len = 4095;
+        let Err(e) = Slice::validate_layout(&bad_align_len, max_cap) else { panic!() };
+        assert_eq!(e.to_string(), "Slice length not 4096-byte aligned");
+
+        let mut out_of_bounds = ok_slices.clone();
+        out_of_bounds[1].offset = 8192;
+        let Err(e) = Slice::validate_layout(&out_of_bounds, max_cap) else { panic!() };
+        assert_eq!(e.to_string(), "Slice exceeds physical VRAM capacity");
+
+        let mut overflow = ok_slices.clone();
+        overflow[1].offset = u64::MAX - 4095;
+        let Err(e) = Slice::validate_layout(&overflow, max_cap) else { panic!() };
+        assert_eq!(e.to_string(), "Slice offset and length overflow");
+
+        let mut overlap = ok_slices.clone();
+        overlap[1].offset = 4096;
+        overlap[0].len = 8192;
+        let Err(e) = Slice::validate_layout(&overlap, max_cap) else { panic!() };
+        assert_eq!(e.to_string(), "Slices overlap");
     }
 }
