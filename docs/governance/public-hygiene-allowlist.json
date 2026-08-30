@@ -1,4 +1,30 @@
 {
   "schema_version": 1,
-  "entries": []
+  "entries": [
+    {
+      "expires": "2027-08-30",
+      "owner_role": "reliability",
+      "pattern": "docs/jules/findings/**/*.md",
+      "reason": "Internal findings documents may contain unstructured investigation notes",
+      "scope": [
+        "*"
+      ]
+    },
+    {
+      "expires": "2027-08-30",
+      "owner_role": "reliability",
+      "pattern": "docs/jules/findings/027_guard_clause_alignment_violation.md",
+      "reason": "Finding report includes explicit test output containing unredacted mock UUIDs and timestamps",
+      "scope": [
+        "RAW_DEVICE",
+        "RAW_LAB_VM",
+        "PRIVATE_WINDOWS_ARTIFACT_RUN",
+        "RAW_TIMESTAMP_RUN_ID",
+        "UNGUARDED_ACTIVATION",
+        "PRIVATE_IP",
+        "RAW_PRINCIPAL",
+        "RAW_UUID"
+      ]
+    }
+  ]
 }

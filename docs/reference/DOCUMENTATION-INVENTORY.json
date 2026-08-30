@@ -2,10 +2,10 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 260,
+    "total": 259,
     "classified": 248,
     "excluded": 11,
-    "unclassified": 1,
+    "unclassified": 0,
     "ambiguous": 0
   },
   "entries": [
@@ -3046,14 +3046,6 @@
       "canonicalSource": "drivers/windows/README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
-    },
-    {
-      "path": "plan.md",
-      "disposition": "unclassified",
-      "ruleId": null,
-      "verification": {
-        "state": "unverified"
-      }
     },
     {
       "path": "scripts/windows/README.md",
