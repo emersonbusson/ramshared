@@ -267,6 +267,11 @@ impl RestartRecord {
         &self.checkpoints
     }
 
+    /// Consumes the record and returns its inner checkpoints without cloning.
+    pub fn into_checkpoints(self) -> Vec<GenerationCheckpoint> {
+        self.checkpoints
+    }
+
     fn validate(&self) -> Result<(), FailureReason> {
         if self.schema_version != N3_SCHEMA_VERSION {
             return Err(FailureReason::UnknownSchema);
@@ -1214,13 +1219,14 @@ impl LeaseMachine {
             return Err(self.fail_restart_restore(FailureReason::InvalidTransition));
         }
 
+        let host_epoch = record.host_epoch();
         let generation_history = record
-            .checkpoints()
-            .iter()
-            .map(|checkpoint| (checkpoint.lease_id.clone(), checkpoint.generation))
+            .into_checkpoints()
+            .into_iter()
+            .map(|checkpoint| (checkpoint.lease_id, checkpoint.generation))
             .collect();
         self.generation_history = generation_history;
-        self.restored_restart_epoch = Some(record.host_epoch());
+        self.restored_restart_epoch = Some(host_epoch);
         Ok(())
     }
 
