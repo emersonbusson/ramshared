@@ -174,21 +174,11 @@ impl Arbiter {
                 .filter(|s| s.state == SliceState::Free)
                 .map(|s| s.id)
                 .collect();
-            if leased.len() + free.len() >= need {
-                let grant: Vec<SliceId> = leased
-                    .iter()
-                    .chain(free.iter())
-                    .take(need)
-                    .copied()
-                    .collect();
-                actions.push(Action::GrantLease {
-                    holder,
-                    slices: grant,
-                });
-            } else {
+            let available = leased.len() + free.len();
+            if available < need {
                 // Revokes Active from the least pressured first (proxy by owner's psi; DT-8: the
                 // lease drains beyond never-zero). `lease` id stable until grant (does not increment).
-                let deficit = need - (leased.len() + free.len());
+                let deficit = need - available;
                 let mut active: Vec<(SliceId, TenantId, f32)> = slices
                     .iter()
                     .filter(|s| s.state == SliceState::Active)
@@ -201,7 +191,19 @@ impl Arbiter {
                 for (slice, from, _) in active.into_iter().take(deficit) {
                     actions.push(Action::RevokeForLease { slice, from });
                 }
+                return actions;
             }
+
+            let grant: Vec<SliceId> = leased
+                .iter()
+                .chain(free.iter())
+                .take(need)
+                .copied()
+                .collect();
+            actions.push(Action::GrantLease {
+                holder,
+                slices: grant,
+            });
             return actions;
         }
 
@@ -510,6 +512,26 @@ mod tests {
         // round-robin: s0→t1, s1→t2 (cursor advances)
         assert_eq!(assigns[0], &Action::AssignFree { slice: 0, to: 1 });
         assert_eq!(assigns[1], &Action::AssignFree { slice: 1, to: 2 });
+    }
+
+    #[test]
+    fn lease_returns_empty_actions_when_slice_len_is_zero_or_need_is_zero() {
+        let mut arb = Arbiter::new(cfg());
+        let t0 = Instant::now();
+        let tenants = [tv(1, 0.0, 0)];
+        let slices = [Slice {
+            id: 0,
+            offset: 0,
+            len: 0,
+            tenant: None,
+            state: SliceState::Free,
+        }];
+        let a = arb.tick(t0, &tenants, &slices, Some((9, 64)));
+        assert!(a.is_empty());
+
+        let slices2 = [slice(0, None, SliceState::Free)];
+        let a2 = arb.tick(t0, &tenants, &slices2, Some((9, 0)));
+        assert!(a2.is_empty());
     }
 
     #[test]

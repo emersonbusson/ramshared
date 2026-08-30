@@ -20,6 +20,46 @@ pub enum BrokerPhase {
     Failed,
 }
 
+#[derive(Debug)]
+pub enum WinBrokerError {
+    PipeBusy,
+    NoData,
+    BrokenPipe,
+    Other(std::io::Error),
+}
+
+impl std::error::Error for WinBrokerError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Other(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for WinBrokerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PipeBusy => write!(f, "Pipe is busy (-EBUSY)"),
+            Self::NoData => write!(f, "No data available (-ENODATA)"),
+            Self::BrokenPipe => write!(f, "Broken pipe (-EPIPE)"),
+            Self::Other(error) => write!(f, "Broker I/O error: {}", error),
+        }
+    }
+}
+
+impl From<std::io::Error> for WinBrokerError {
+    fn from(error: std::io::Error) -> Self {
+        match error.raw_os_error() {
+            Some(231) => Self::PipeBusy,     // ERROR_PIPE_BUSY
+            Some(232) => Self::NoData,       // ERROR_NO_DATA
+            Some(109) => Self::BrokenPipe,   // ERROR_BROKEN_PIPE
+            _ => Self::Other(error),
+        }
+    }
+}
+
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct BrokerConfigV1 {
@@ -123,29 +163,38 @@ impl BrokerSessionCore {
             return self.on_unregistered_msg(session_id, message);
         }
         match message {
-            Msg::LeaseRequest { bytes } => match self.lease_book.begin_request(1, bytes) {
-                LeaseDecision::Pending(_) => match self.lease_book.grant_pending(bytes) {
-                    Ok(lease) => vec![
-                        BrokerEffect::Audit("lease_granted".into()),
-                        BrokerEffect::Reply(Msg::LeaseGranted {
-                            lease: lease.id,
-                            bytes: lease.bytes,
-                        }),
-                    ],
-                    Err(reason) => vec![Self::denied(reason)],
-                },
-                LeaseDecision::Denied(reason) => vec![Self::denied(reason)],
-            },
-            Msg::LeaseRelease { lease } => match self.lease_book.release(1, lease) {
-                Ok(true) => vec![
-                    BrokerEffect::Audit("lease_released_explicit".into()),
-                    BrokerEffect::LeaseReleased(lease),
-                ],
-                Ok(false) | Err(LeaseDeny::WrongLease) => {
+            Msg::LeaseRequest { bytes } => {
+                match self.lease_book.begin_request(1, bytes) {
+                    LeaseDecision::Pending(_) => {}
+                    LeaseDecision::Denied(reason) => return vec![Self::denied(reason)],
+                }
+                let lease = match self.lease_book.grant_pending(bytes) {
+                    Ok(l) => l,
+                    Err(reason) => return vec![Self::denied(reason)],
+                };
+                vec![
+                    BrokerEffect::Audit("lease_granted".into()),
+                    BrokerEffect::Reply(Msg::LeaseGranted {
+                        lease: lease.id,
+                        bytes: lease.bytes,
+                    }),
+                ]
+            }
+            Msg::LeaseRelease { lease } => {
+                let released = match self.lease_book.release(1, lease) {
+                    Ok(r) => r,
+                    Err(LeaseDeny::WrongLease) => return vec![BrokerEffect::Audit("lease_release_idempotent".into())],
+                    Err(reason) => return vec![Self::error_and_close(reason), BrokerEffect::Close],
+                };
+                if released {
+                    vec![
+                        BrokerEffect::Audit("lease_released_explicit".into()),
+                        BrokerEffect::LeaseReleased(lease),
+                    ]
+                } else {
                     vec![BrokerEffect::Audit("lease_release_idempotent".into())]
                 }
-                Err(reason) => vec![Self::error_and_close(reason), BrokerEffect::Close],
-            },
+            }
             // WinDrive PSI is a liveness heartbeat only. It is deliberately
             // excluded from local arbitration, but it must keep the
             // authoritative lease session open.
@@ -173,11 +222,31 @@ impl BrokerSessionCore {
                 BrokerEffect::Close,
             ];
         };
-        if self.live_session.is_some()
-            || proto != PROTO_VERSION
-            || tenant != self.allowed_tenant
-            || transport != TransportKind::WinDrive
-        {
+        if self.live_session.is_some() {
+            return vec![
+                BrokerEffect::Reply(Msg::Error {
+                    reason: "registration_refused".into(),
+                }),
+                BrokerEffect::Close,
+            ];
+        }
+        if proto != PROTO_VERSION {
+            return vec![
+                BrokerEffect::Reply(Msg::Error {
+                    reason: "registration_refused".into(),
+                }),
+                BrokerEffect::Close,
+            ];
+        }
+        if tenant != self.allowed_tenant {
+            return vec![
+                BrokerEffect::Reply(Msg::Error {
+                    reason: "registration_refused".into(),
+                }),
+                BrokerEffect::Close,
+            ];
+        }
+        if transport != TransportKind::WinDrive {
             return vec![
                 BrokerEffect::Reply(Msg::Error {
                     reason: "registration_refused".into(),
@@ -243,6 +312,24 @@ mod tests {
             tenant: tenant.into(),
             transport: TransportKind::WinDrive,
         }
+    }
+
+    #[test]
+    fn winbrokererror_mapping() {
+        use super::WinBrokerError;
+        use std::io;
+
+        let e = io::Error::from_raw_os_error(231);
+        assert!(matches!(WinBrokerError::from(e), WinBrokerError::PipeBusy));
+
+        let e = io::Error::from_raw_os_error(232);
+        assert!(matches!(WinBrokerError::from(e), WinBrokerError::NoData));
+
+        let e = io::Error::from_raw_os_error(109);
+        assert!(matches!(WinBrokerError::from(e), WinBrokerError::BrokenPipe));
+
+        let e = io::Error::from_raw_os_error(5); // Access denied
+        assert!(matches!(WinBrokerError::from(e), WinBrokerError::Other(_)));
     }
 
     #[test]
