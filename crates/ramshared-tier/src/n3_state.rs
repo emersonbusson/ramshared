@@ -1911,9 +1911,18 @@ mod additional_tests {
         let lease_id = LeaseId::new(b"lease-1").unwrap();
         machine.remember_generation(lease_id.clone(), 10);
 
-        assert_eq!(machine.validate_generation(&lease_id, 10), Err(FailureReason::StaleGeneration));
-        assert_eq!(machine.validate_generation(&lease_id, 9), Err(FailureReason::StaleGeneration));
-        assert_eq!(machine.validate_generation(&lease_id, 12), Err(FailureReason::GenerationGap));
+        assert_eq!(
+            machine.validate_generation(&lease_id, 10),
+            Err(FailureReason::StaleGeneration)
+        );
+        assert_eq!(
+            machine.validate_generation(&lease_id, 9),
+            Err(FailureReason::StaleGeneration)
+        );
+        assert_eq!(
+            machine.validate_generation(&lease_id, 12),
+            Err(FailureReason::GenerationGap)
+        );
         assert_eq!(machine.validate_generation(&lease_id, 11), Ok(()));
     }
 }
