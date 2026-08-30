@@ -472,13 +472,13 @@ mod tests {
     impl OriginStorage for MemoryOrigin {
         fn read_at(&mut self, offset: u64, destination: &mut [u8]) -> Result<usize, IoError> {
             let start = offset as usize;
-            destination.copy_from_slice(&self.0.borrow()[start..start + destination.len()]);
+            destination.copy_from_slice(&self.0.borrow()[start..start.checked_add(destination.len()).ok_or_else(|| IoError("offset overflow".into()))?]);
             Ok(destination.len())
         }
 
         fn write_at(&mut self, offset: u64, data: &[u8]) -> Result<usize, IoError> {
             let start = offset as usize;
-            self.0.borrow_mut()[start..start + data.len()].copy_from_slice(data);
+            self.0.borrow_mut()[start..start.checked_add(data.len()).ok_or_else(|| IoError("offset overflow".into()))?].copy_from_slice(data);
             Ok(data.len())
         }
 
@@ -621,7 +621,7 @@ mod tests {
                 return Err(IoError("fixture origin read failure".into()));
             }
             let start = offset as usize;
-            destination.copy_from_slice(&self.0.bytes.borrow()[start..start + destination.len()]);
+            destination.copy_from_slice(&self.0.bytes.borrow()[start..start.checked_add(destination.len()).ok_or_else(|| IoError("offset overflow".into()))?]);
             Ok(destination.len())
         }
 
@@ -630,7 +630,7 @@ mod tests {
                 return Err(IoError("fixture origin write failure".into()));
             }
             let start = offset as usize;
-            self.0.bytes.borrow_mut()[start..start + data.len()].copy_from_slice(data);
+            self.0.bytes.borrow_mut()[start..start.checked_add(data.len()).ok_or_else(|| IoError("offset overflow".into()))?].copy_from_slice(data);
             Ok(data.len())
         }
 
