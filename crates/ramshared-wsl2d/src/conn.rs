@@ -22,6 +22,23 @@ use ramshared_block::{Command, Request, parse_request, protocol::REQUEST_LEN, se
 /// Capacity of the worker message channel (`WMsg`): the **single** point of backpressure.
 /// The replica channel per connection is unbounded (DT-7), so the worker never blocks when
 /// responding — only the readers apply backpressure when enqueuing `Job`s.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConnectionError {
+    VersionMismatch,
+    PayloadTooLarge,
+}
+
+impl std::fmt::Display for ConnectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConnectionError::VersionMismatch => f.write_str("version mismatch"),
+            ConnectionError::PayloadTooLarge => f.write_str("payload too large"),
+        }
+    }
+}
+
+impl std::error::Error for ConnectionError {}
+
 pub const CHAN_CAP: usize = 64;
 
 /// A request to be processed by the CUDA worker, with the replica route of the source connection.
@@ -132,15 +149,14 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
     tx_flags: u16,
     jobs: SyncSender<WMsg>,
     reply_tx: Sender<Reply>,
-) -> JoinHandle<()> {
+) -> JoinHandle<Result<(), ConnectionError>> {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stream);
         let idx = match server_handshake(&mut reader, &mut hs_writer, &exports, tx_flags) {
             Ok(i) => i,
-            Err(e) => {
-                eprintln!("[ramsharedd] conn: handshake failed: {e}");
+            Err(_) => {
                 let _ = jobs.send(WMsg::Closed);
-                return;
+                return Err(ConnectionError::VersionMismatch);
             }
         };
         drop(hs_writer); // handshake completed; from here on only the writer thread writes replies.
@@ -153,18 +169,15 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
             }
             let req = match parse_request(&hdr) {
                 Ok(r) => r,
-                Err(e) => {
-                    eprintln!("[ramsharedd] conn: malformed request: {e}; disconnecting");
-                    break;
+                Err(_) => {
+                    let _ = jobs.send(WMsg::Closed);
+                    return Err(ConnectionError::VersionMismatch);
                 }
             };
             // Anti-DoS: a WRITE can never exceed the negotiated export (prevents allocating gigabytes).
             if req.cmd == Command::Write && req.len as u64 > export_size {
-                eprintln!(
-                    "[ramsharedd] conn: WRITE len {} exceeds export; disconnecting",
-                    req.len
-                );
-                break;
+                let _ = jobs.send(WMsg::Closed);
+                return Err(ConnectionError::PayloadTooLarge);
             }
             let payload = if req.cmd == Command::Write {
                 let mut p = vec![0u8; req.len as usize];
@@ -186,6 +199,7 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
             }
         }
         let _ = jobs.send(WMsg::Closed);
+        Ok(())
     })
 }
 
@@ -353,7 +367,7 @@ mod tests {
         }
     }
 
-    fn join_with_deadline(handle: JoinHandle<()>) {
+    fn join_with_deadline<T: Send + 'static>(handle: JoinHandle<T>) {
         let (done_tx, done_rx) = sync_channel(1);
         std::thread::spawn(move || {
             let _ = done_tx.send(handle.join().is_ok());
