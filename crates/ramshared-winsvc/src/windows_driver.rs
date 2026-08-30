@@ -72,25 +72,35 @@ pub struct WindowsMappedQueue {
 unsafe impl Send for WindowsMappedQueue {}
 
 impl WindowsMappedQueue {
-    pub fn try_new(
-        queue_depth: u32,
-        max_io_bytes: u32,
-        block_size: u32,
-    ) -> std::io::Result<Self> {
+    pub fn try_new(queue_depth: u32, max_io_bytes: u32, block_size: u32) -> std::io::Result<Self> {
         if queue_depth == 0 || queue_depth > MAX_QD || !queue_depth.is_power_of_two() {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "queue_depth"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "queue_depth",
+            ));
         }
         if max_io_bytes == 0 || max_io_bytes > MAX_IO {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "max_io_bytes"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "max_io_bytes",
+            ));
         }
         if block_size != 512 && block_size != 4096 {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "block_size"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "block_size",
+            ));
         }
         let data_bytes = (queue_depth as usize)
             .checked_mul(max_io_bytes as usize)
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "data area overflow"))?;
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidInput, "data area overflow")
+            })?;
         if data_bytes > 4 * 1024 * 1024 {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "data area > 4 MiB"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "data area > 4 MiB",
+            ));
         }
         let sq_bytes = size_of::<RingHdr>() + (queue_depth as usize) * size_of::<Sqe>();
         let cq_bytes = size_of::<RingHdr>() + (queue_depth as usize) * size_of::<Cqe>();
@@ -284,7 +294,10 @@ unsafe fn init_ring_hdr(base: *mut u8, entries: u32) {
 
 fn alloc_region(bytes: usize) -> std::io::Result<*mut u8> {
     if bytes == 0 {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "zero alloc"));
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "zero alloc",
+        ));
     }
     // SAFETY: VirtualAlloc returns page-aligned RW region or null.
     let p = unsafe { VirtualAlloc(ptr::null(), bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE) };
@@ -350,7 +363,10 @@ impl WindowsDriverLink {
 
     pub fn create_disk(&mut self, params: &DiskParams) -> std::io::Result<()> {
         if params.reserved != 0 {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "disk reserved non-zero"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "disk reserved non-zero",
+            ));
         }
         let bytes = struct_bytes(params);
         self.ioctl_sync(IOCTL_CREATE, Some(&bytes), None)
@@ -358,10 +374,16 @@ impl WindowsDriverLink {
 
     pub fn register_queue(&mut self, reg: &Register) -> std::io::Result<()> {
         if reg.reserved != 0 {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "register reserved non-zero"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "register reserved non-zero",
+            ));
         }
         if reg.disk_id != 0 {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "disk_id must be 0"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "disk_id must be 0",
+            ));
         }
         let bytes = struct_bytes(reg);
         self.ioctl_sync(IOCTL_REGISTER, Some(&bytes), None)
@@ -370,7 +392,10 @@ impl WindowsDriverLink {
     /// One pending COMMIT_AND_FETCH only (DT-4). Timeout uses CancelIoEx + GetOverlappedResult.
     pub fn commit_and_fetch(&mut self, timeout: Duration) -> std::io::Result<()> {
         if self.pending {
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "commit already pending"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "commit already pending",
+            ));
         }
         unsafe {
             let _ = ResetEvent(self.event);
@@ -406,7 +431,10 @@ impl WindowsDriverLink {
             }
             if wr != WAIT_OBJECT_0 {
                 self.cancel_and_drain(&ov);
-                return Err(std::io::Error::new(std::io::ErrorKind::Other, format!("WaitForSingleObject={wr}")));
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("WaitForSingleObject={wr}"),
+                ));
             }
             let mut xfer = 0u32;
             let gor = unsafe { GetOverlappedResult(self.handle, &ov, &mut xfer, 0) };
@@ -428,7 +456,8 @@ impl WindowsDriverLink {
         }
         // A pending operation must only be cancelled by its owner while its
         // OVERLAPPED remains in scope. commit_and_fetch drains before return.
-        Err(std::io::Error::new(std::io::ErrorKind::InvalidInput,
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
             "pending fetch cannot be cancelled without its OVERLAPPED owner",
         ))
     }
