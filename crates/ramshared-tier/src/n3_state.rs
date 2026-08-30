@@ -1830,7 +1830,7 @@ mod tests {
         );
 
         // Let's create a constrained state by observing an empty budget
-        let event_id = EventId::new(b"event-1").unwrap();
+        let event_id = EventId::new(b"event-1").unwrap_or_else(|_| panic!("failed to create event_id"));
         let adapter_id = AdapterId::new(b"adapter-1").unwrap();
 
         let observation = HostObservation::new(
@@ -1879,8 +1879,8 @@ mod tests {
     #[test]
     fn test_invalid_revoke_transition() {
         let mut machine = LeaseMachine::new();
-        let lease_id = LeaseId::new(b"lease-1").unwrap();
-        let event_id = EventId::new(b"event-1").unwrap();
+        let lease_id = LeaseId::new(b"lease-1").unwrap_or_else(|_| panic!("failed to create lease_id"));
+        let event_id = EventId::new(b"event-1").unwrap_or_else(|_| panic!("failed to create event_id"));
 
         let revoke = Revoke::host(lease_id, 1, event_id, 200);
 
@@ -1908,7 +1908,7 @@ mod additional_tests {
     #[test]
     fn test_guard_clauses_generation_validation() {
         let mut machine = LeaseMachine::new();
-        let lease_id = LeaseId::new(b"lease-1").unwrap();
+        let lease_id = LeaseId::new(b"lease-1").unwrap_or_else(|_| panic!("failed to create lease_id"));
         machine.remember_generation(lease_id.clone(), 10);
 
         assert_eq!(
