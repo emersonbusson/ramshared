@@ -1,0 +1,10 @@
+1. RULES: English only, use TDD, no nested pyramids of if/else (Guard pattern).
+2. MAIN_DIFF: Modify `conn.rs` spawn_acceptor, spawn_acceptor_tcp, and spawn_reader to use let-else guard clauses for match and if blocks. Replace test `if let` blocks with `let ... else { continue; }`.
+3. FILES: crates/ramshared-wsl2d/src/conn.rs
+4. INVARIANTS: Happy path remains at root indentation level without nesting. Early error returns (guard pattern).
+5. COUNTERFACTUAL: If we don't do this, we get nested pyramids of if/else logic which violates CleanArchitecture-100 guard clauses principle.
+6. RED_TEST: Add `test_worker_guard_clause_skips_non_jobs` in `conn.rs` that explicitly verifies that non-job messages are skipped by a guard clause, proving the guard pattern works correctly.
+7. COVERAGE: Handshake connection loops and test loops.
+8. REAL_PROOF: Compile check and test check (`cargo clippy`, `cargo test`).
+9. ROLLBACK: If this change introduces regressions or failures in connection handling.
+10. PR_BOUNDARY: do not merge (jules/inbox target only).
