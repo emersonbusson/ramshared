@@ -72,9 +72,72 @@ pub fn validate_order(p: TierPriorities) -> Result<(), OrderError> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PriorityError {
+    /// -EINVAL equivalent: The provided weight is fundamentally invalid or malformed.
+    InvalidWeight(i32),
+    /// -ERANGE equivalent: The priority threshold exceeds physical or contextual bounds.
+    ThresholdOutOfRange { val: i32, min: i32, max: i32 },
+}
+
+impl fmt::Display for PriorityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PriorityError::InvalidWeight(w) => {
+                write!(f, "invalid input: priority weight {} is malformed (EINVAL)", w)
+            }
+            PriorityError::ThresholdOutOfRange { val, min, max } => {
+                write!(f, "out of range: priority threshold {} exceeds bounds [{}..{}] (ERANGE)", val, min, max)
+            }
+        }
+    }
+}
+
+impl core::error::Error for PriorityError {}
+
+/// Validates that a priority weight is structurally valid (e.g., non-negative).
+pub fn validate_weight(weight: i32) -> Result<(), PriorityError> {
+    if weight < 0 {
+        return Err(PriorityError::InvalidWeight(weight));
+    }
+    Ok(())
+}
+
+/// Validates that a priority threshold is within the allowed physical/contextual bounds.
+pub fn validate_threshold(val: i32, min: i32, max: i32) -> Result<(), PriorityError> {
+    if val < min || val > max {
+        return Err(PriorityError::ThresholdOutOfRange { val, min, max });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_weight_rejects_negative() {
+        assert_eq!(validate_weight(-1), Err(PriorityError::InvalidWeight(-1)));
+    }
+
+    #[test]
+    fn validate_weight_accepts_valid() {
+        assert!(validate_weight(0).is_ok());
+        assert!(validate_weight(100).is_ok());
+    }
+
+    #[test]
+    fn validate_threshold_rejects_out_of_bounds() {
+        assert_eq!(validate_threshold(5, 10, 50), Err(PriorityError::ThresholdOutOfRange { val: 5, min: 10, max: 50 }));
+        assert_eq!(validate_threshold(100, 10, 50), Err(PriorityError::ThresholdOutOfRange { val: 100, min: 10, max: 50 }));
+    }
+
+    #[test]
+    fn validate_threshold_accepts_valid() {
+        assert!(validate_threshold(10, 10, 50).is_ok());
+        assert!(validate_threshold(50, 10, 50).is_ok());
+        assert!(validate_threshold(25, 10, 50).is_ok());
+    }
 
     #[test]
     fn default_priorities_follow_spec_order() {

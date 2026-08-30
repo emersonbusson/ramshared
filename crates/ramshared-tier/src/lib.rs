@@ -21,4 +21,4 @@ pub mod nbd_readiness;
 pub mod priority;
 
 pub use cascade::{SafetyNet, Tier, vram_safety_net};
-pub use priority::{OrderError, TierPriorities, VRAM_PRIO, ZRAM_PRIO, validate_order};
+pub use priority::{OrderError, PriorityError, TierPriorities, VRAM_PRIO, ZRAM_PRIO, validate_order, validate_threshold, validate_weight};
