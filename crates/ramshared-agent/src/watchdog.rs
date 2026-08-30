@@ -24,12 +24,18 @@ impl Watchdog {
 
     /// Registers a signal from the broker (any message, including `Ack`).
     pub fn touch(&mut self, now: Instant) {
+        if now < self.last {
+            return;
+        }
         self.last = now;
     }
 
     /// `true` if `deadline` has passed since the last signal.
     pub fn expired(&self, now: Instant) -> bool {
-        now.duration_since(self.last) >= self.deadline
+        if now < self.last {
+            return false;
+        }
+        now.saturating_duration_since(self.last) >= self.deadline
     }
 }
 
@@ -52,6 +58,20 @@ mod tests {
         let wd = Watchdog::new(Duration::from_secs(90), t0);
         assert!(wd.expired(t0 + Duration::from_secs(90)));
         assert!(wd.expired(t0 + Duration::from_secs(120)));
+    }
+
+    #[test]
+    fn backward_clock_drift_does_not_panic() {
+        let t0 = Instant::now();
+        let mut wd = Watchdog::new(Duration::from_secs(90), t0);
+        let t_past = t0.checked_sub(Duration::from_secs(10)).unwrap_or(t0);
+
+        // Guard clause in expired should return false instead of panicking
+        assert!(!wd.expired(t_past));
+
+        // Guard clause in touch should ignore the past timestamp instead of panicking
+        wd.touch(t_past);
+        assert_eq!(wd.last, t0);
     }
 
     #[test]
