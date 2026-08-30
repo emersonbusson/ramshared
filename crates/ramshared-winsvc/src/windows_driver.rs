@@ -490,7 +490,9 @@ impl WindowsDriverLink {
         let (in_ptr, in_len) = match input {
             Some(b) => {
                 if !(b.as_ptr() as usize).is_multiple_of(8) {
-                    return Err(IoctlError::Invalid("input buffer not 8-byte aligned".into()));
+                    return Err(IoctlError::Invalid(
+                        "input buffer not 8-byte aligned".into(),
+                    ));
                 }
                 (b.as_ptr() as *const _, b.len() as u32)
             }
@@ -615,7 +617,9 @@ mod tests {
         let unaligned_slice = &buf[1..9];
         assert!(!(unaligned_slice.as_ptr() as usize).is_multiple_of(8));
 
-        let err = link.ioctl_sync(IOCTL_REGISTER, Some(unaligned_slice), None).unwrap_err();
+        let err = link
+            .ioctl_sync(IOCTL_REGISTER, Some(unaligned_slice), None)
+            .unwrap_err();
         match err {
             IoctlError::Invalid(msg) => assert!(msg.contains("aligned")),
             _ => panic!("Expected IoctlError::Invalid, got {:?}", err),
