@@ -88,7 +88,10 @@ mod tests {
     #[test]
     fn test_vram_error_display() {
         assert_eq!(VramError::OutOfMemory.to_string(), "vram out of memory");
-        assert_eq!(VramError::InvalidAlignment.to_string(), "vram invalid alignment");
+        assert_eq!(
+            VramError::InvalidAlignment.to_string(),
+            "vram invalid alignment"
+        );
         assert_eq!(VramError::Busy.to_string(), "vram busy");
     }
 }
