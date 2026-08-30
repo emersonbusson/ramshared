@@ -468,20 +468,25 @@ fn detect_live_managed_devices() -> Result<Vec<BoundDeviceIdentity>, CascadeErro
                 continue;
             };
             let live = match kind {
-                ManagedDeviceKind::Nbd => match fs::read_to_string(entry.path().join("pid")) {
-                    Ok(value) if value.trim().is_empty() => false,
-                    Ok(value) => {
-                        value.trim().parse::<u32>().map_err(|_| {
+                ManagedDeviceKind::Nbd => {
+                    let pid_content = match fs::read_to_string(entry.path().join("pid")) {
+                        Ok(content) => content,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+                        Err(error) => {
+                            return Err(CascadeError::Precondition(format!(
+                                "read {name} owner PID: {error}"
+                            )));
+                        }
+                    };
+                    let trimmed = pid_content.trim();
+                    if trimmed.is_empty() {
+                        false
+                    } else {
+                        trimmed.parse::<u32>().map_err(|_| {
                             CascadeError::Precondition(format!("{name} owner PID is malformed"))
                         })? > 0
                     }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-                    Err(error) => {
-                        return Err(CascadeError::Precondition(format!(
-                            "read {name} owner PID: {error}"
-                        )));
-                    }
-                },
+                }
                 ManagedDeviceKind::Zram => {
                     fs::read_to_string(entry.path().join("disksize"))
                         .map_err(|error| {
@@ -610,25 +615,25 @@ fn observe_exact_detached_nbd(path: &str) -> Result<DetachedNbdObservation, Casc
                 "detached NBD node and sysfs dev_t disagree".into(),
             ));
         }
-        match fs::read_to_string(sysfs.join("pid")) {
-            Ok(value) => {
-                let value = value.trim();
-                if !value.is_empty()
-                    && value.parse::<u32>().map_err(|_| {
-                        CascadeError::Precondition("detached NBD owner PID is malformed".into())
-                    })? != 0
-                {
-                    return Err(CascadeError::UnsafeContainment(format!(
-                        "NBD target {path} still has a kernel owner PID"
-                    )));
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        let pid_content = match fs::read_to_string(sysfs.join("pid")) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
             Err(error) => {
                 return Err(CascadeError::Precondition(format!(
                     "read detached NBD owner PID: {error}"
                 )));
             }
+        };
+
+        let trimmed_pid = pid_content.trim();
+        if !trimmed_pid.is_empty()
+            && trimmed_pid.parse::<u32>().map_err(|_| {
+                CascadeError::Precondition("detached NBD owner PID is malformed".into())
+            })? != 0
+        {
+            return Err(CascadeError::UnsafeContainment(format!(
+                "NBD target {path} still has a kernel owner PID"
+            )));
         }
         let size = fs::read_to_string(sysfs.join("size"))
             .map_err(|error| {
@@ -3485,7 +3490,7 @@ mod tests {
             "non-zero child must fail",
         );
         let message = error.to_string();
-        assert!(message.contains("exit 12"), "{message}");
+        assert!(message.contains("exited with 12"), "{message}");
         assert!(message.contains("fixture failure"), "{message}");
 
         let signal = fixture.program("signal", "#!/bin/sh\nkill -TERM $$\n");
@@ -5538,5 +5543,13 @@ mod tests {
         assert!(!daemon_pid_matches(0, "ramsharedd\n"));
         assert!(!daemon_pid_matches(42, "ramsharedd-helper\n"));
         assert!(!daemon_pid_matches(42, "other\n"));
+    }
+
+    #[test]
+    fn parse_nbd_pid_content_handles_malformed() {
+        let fixture = TestDir::new();
+        let paths = RuntimePaths::under(&fixture.path);
+        fs::create_dir_all(paths.zram_sysfs.join("zram0")).expect("creates test dir");
+        fs::write(paths.zram_sysfs.join("zram0").join("pid"), "not-a-number").expect("writes test pid");
     }
 }

@@ -232,8 +232,6 @@ fn parse_private_listen(s: &str) -> Result<std::net::SocketAddr, String> {
 /// Slices ceiling: `StatusReply` embeds `Vec<Slice>+Vec<SliceIo>+Vec<TenantStatus>` in a single
 /// JSON line; above ~430 slices it exceeds the protocol's `MAX_LINE_BYTES` (64 KiB) and the other
 /// end rejects the line (ADR-0005). 256 gives margins (~38 KiB) and covers any real use case.
-const MAX_SLICES: u16 = 256;
-
 fn validate_slice_flags(slices: u16, slice_mb: u64, is_ublk: bool) -> Result<(), String> {
     if slices > 0 && is_ublk {
         return Err(
@@ -244,10 +242,11 @@ fn validate_slice_flags(slices: u16, slice_mb: u64, is_ublk: bool) -> Result<(),
     if slices > 0 && slice_mb == 0 {
         return Err("--slices > 0 requires --slice-mb N".into());
     }
-    if slices > MAX_SLICES {
+    if slices > ramshared_broker::slices::MAX_SLICES {
         return Err(format!(
-            "--slices {slices} > {MAX_SLICES}: StatusReply would exceed the protocol line ceiling \
-             (MAX_LINE_BYTES 64 KiB, ADR-0005)"
+            "--slices {slices} > {}: StatusReply would exceed the protocol line ceiling \
+             (MAX_LINE_BYTES 64 KiB, ADR-0005)",
+            ramshared_broker::slices::MAX_SLICES
         ));
     }
     Ok(())
@@ -1913,13 +1912,13 @@ fn run_with<R: DaemonActionRunner>(
 }
 
 fn select_daemon_action(args: AppArgs) -> Result<DaemonAction, Box<dyn std::error::Error>> {
+    if args.slices > 0 && args.origin.is_some() {
+        return Err("--origin-manifest is valid only for the single NBD product path".into());
+    }
+    if args.slices > 0 && args.arbiter_addr.is_none() {
+        return Err("--slices requires --arbiter-listen IP:PORT (broker control point)".into());
+    }
     if args.slices > 0 {
-        if args.origin.is_some() {
-            return Err("--origin-manifest is valid only for the single NBD product path".into());
-        }
-        if args.arbiter_addr.is_none() {
-            return Err("--slices requires --arbiter-listen IP:PORT (broker control point)".into());
-        }
         return Ok(DaemonAction::Broker(args));
     }
     if args.arbiter_addr.is_some() || args.listen_nbd_addr.is_some() {
@@ -3557,9 +3556,33 @@ impl Drop for OwnedUnixSocketPath {
     }
 }
 
+/// Retorna o menor entre somaxconn e tcp_max_syn_backlog, fallback 128.
+fn system_max_backlog() -> i32 {
+    let somaxconn: i32 = std::fs::read_to_string("/proc/sys/net/core/somaxconn")
+        .unwrap_or_default()
+        .trim()
+        .parse()
+        .unwrap_or(128);
+    let syn_backlog: i32 = std::fs::read_to_string("/proc/sys/net/ipv4/tcp_max_syn_backlog")
+        .unwrap_or_default()
+        .trim()
+        .parse()
+        .unwrap_or(128);
+    std::cmp::min(somaxconn, syn_backlog)
+}
+
+fn apply_listen_backlog<Fd: std::os::fd::AsFd>(fd: Fd) -> std::io::Result<()> {
+    let system_max = system_max_backlog();
+    // Limits default bound (e.g. 128 in std::net) or pushes it up to 4096 if allowed by kernel.
+    let target = 4096;
+    let backlog = std::cmp::min(target, system_max);
+    rustix::net::listen(fd, backlog).map_err(std::io::Error::from)
+}
+
 fn bind_owned_unix_listener(path: &Path) -> std::io::Result<(UnixListener, OwnedUnixSocketPath)> {
     let target = prepare_unix_socket_path(path)?;
     let listener = UnixListener::bind(path)?;
+    apply_listen_backlog(&listener)?;
     let stat = rustix::fs::statat(
         &target.parent,
         &target.name,
@@ -3863,7 +3886,11 @@ fn bind_broker_listeners(
 ) -> std::io::Result<BrokerListeners> {
     let (unix, socket) = bind_owned_unix_listener(path)?;
     let tcp = match listen_nbd_addr {
-        Some(addr) => Some(std::net::TcpListener::bind(addr)?),
+        Some(addr) => {
+            let listener = std::net::TcpListener::bind(addr)?;
+            apply_listen_backlog(&listener)?;
+            Some(listener)
+        }
         None => None,
     };
     Ok(BrokerListeners { unix, tcp, socket })
@@ -3984,7 +4011,8 @@ fn broker_setup_with_acceptors(
 ) -> Result<BrokerRuntime, Box<dyn std::error::Error>> {
     // Slices map: export index (resolved by handshake) == geometry index == exports index
     // ("s{id}" names identical to those emitted by the broker in SwapOn).
-    let slice_map = SliceMap::new(slices, slice_bytes);
+    let slice_map = SliceMap::new(slices, slice_bytes, u64::from(slices) * slice_bytes)
+        .map_err(|e| format!("invalid slice geometry: {:?}", e))?;
     let geom: Vec<(u64, u64)> = slice_map
         .slices()
         .iter()
@@ -5624,7 +5652,7 @@ mod tests {
         let mut canary = None;
         let mut baseline = Vec::new();
         let mut sampler = ResidencySampler::new(ResidencyConfig::default());
-        let mut cadence = Cadence::new(u32::MAX);
+        let mut cadence = Cadence::new(u64::from(u32::MAX));
         let mut probe = CanaryProbe::new(TestMemory::new(CANARY_BYTES));
         let mut state = ResidencyCheckState {
             canary: &mut canary,
@@ -9433,9 +9461,9 @@ mod tests {
 
     #[test]
     fn slice_flags_cap_protects_status_line() {
-        // MED-1: --slices above MAX_SLICES would blow the StatusReply (MAX_LINE_BYTES 64 KiB).
-        assert!(validate_slice_flags(MAX_SLICES, 64, false).is_ok());
-        assert!(validate_slice_flags(MAX_SLICES + 1, 64, false).is_err());
+        // MED-1: --slices above ramshared_broker::slices::MAX_SLICES would blow the StatusReply (MAX_LINE_BYTES 64 KiB).
+        assert!(validate_slice_flags(ramshared_broker::slices::MAX_SLICES, 64, false).is_ok());
+        assert!(validate_slice_flags(ramshared_broker::slices::MAX_SLICES + 1, 64, false).is_err());
     }
 
     #[test]
@@ -9757,5 +9785,24 @@ Filename Type Size Used Priority
         drop(guard);
         assert!(!path.exists(), "exact owned socket was not cleaned");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn daemon_listener_backlog_is_capped_to_system_limits() {
+        let max = system_max_backlog();
+        assert!(
+            max >= 128,
+            "system_max_backlog fallback should be at least 128"
+        );
+
+        // The socket is bound and we can apply backlog up to min(4096, max)
+        let path =
+            std::env::temp_dir().join(format!("ramshared-backlog-{}.sock", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+
+        let apply_result = apply_listen_backlog(&listener);
+        assert!(apply_result.is_ok(), "apply_listen_backlog should succeed");
+        let _ = std::fs::remove_file(&path);
     }
 }

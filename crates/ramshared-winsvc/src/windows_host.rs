@@ -377,6 +377,7 @@ impl WindowsHostState {
             )));
         }
         // MULTI_SZ is UTF-16LE double-null terminated.
+        #[allow(clippy::chunks_exact_to_as_chunks)]
         let wide: Vec<u16> = buf
             .chunks_exact(2)
             .map(|c| u16::from_le_bytes([c[0], c[1]]))

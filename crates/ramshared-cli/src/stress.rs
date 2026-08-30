@@ -35,6 +35,7 @@ pub struct StressOptions {
     pub cascade: bool,
     pub telemetry_log: String,
     pub json: bool,
+    pub threads: u64,
 }
 
 impl Default for StressOptions {
@@ -53,6 +54,7 @@ impl Default for StressOptions {
             cascade: false,
             telemetry_log: "/tmp/ramshared-stress-telemetry.log".to_string(),
             json: false,
+            threads: 1,
         }
     }
 }
@@ -195,10 +197,24 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
             "--json" => {
                 opts.json = true;
             }
+            "--threads" => {
+                i += 1;
+                opts.threads = args
+                    .get(i)
+                    .ok_or_else(|| "--threads requires a value".to_string())?
+                    .parse()
+                    .map_err(|_| "invalid --threads value")?;
+            }
             other => return Err(format!("unknown stress argument: {other}")),
         }
         i += 1;
     }
+
+    let max_threads = std::thread::available_parallelism()
+        .map(|n| n.get() as u64)
+        .unwrap_or(1);
+
+    opts.threads = opts.threads.clamp(1, max_threads);
     opts.start_pct = opts.start_pct.clamp(1, 200);
     opts.target_pct = opts.target_pct.clamp(opts.start_pct, 200);
     opts.step_pct = opts.step_pct.clamp(1, 25);
@@ -1003,6 +1019,16 @@ mod tests {
         assert!(opts.battery);
         assert_eq!(opts.telemetry_log, "/tmp/test-telemetry.log");
         assert!(opts.json);
+    }
+
+    #[test]
+    fn clamps_thread_count_to_physical_limits() {
+        let args = vec!["--threads".to_string(), "999999".to_string()];
+        let opts = parse_stress_args(&args).unwrap_or_default();
+        let max_threads = std::thread::available_parallelism()
+            .map(|n| n.get() as u64)
+            .unwrap_or(1);
+        assert_eq!(opts.threads, max_threads);
     }
 
     #[test]

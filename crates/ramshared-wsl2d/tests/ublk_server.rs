@@ -48,9 +48,41 @@ fn serve_request_handles_flush_and_rejects_oversized_or_oob() {
         -22
     );
 
-    // READ outside the backend => -EIO.
+    // READ outside the backend => -EINVAL.
     assert_eq!(
         ublk_server::serve_request(&req(Command::Read, 51200, 512), &mut backend, &mut buf),
-        -5
+        -22
+    );
+}
+
+#[test]
+fn serve_request_guards_against_out_of_bounds_upfront() {
+    let mut backend = RamBackend::new(4096);
+    let mut buf = vec![0u8; 4096];
+
+    // Exact fit
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Read, 0, 4096), &mut backend, &mut buf),
+        4096
+    );
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Write, 2048, 2048), &mut backend, &mut buf),
+        2048
+    );
+
+    // Overflow offset + len
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Read, u64::MAX, 1024), &mut backend, &mut buf),
+        -22 // EINVAL
+    );
+
+    // Exceeds backend size bytes
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Read, 4096, 512), &mut backend, &mut buf),
+        -22 // EINVAL
+    );
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Write, 2048, 4096), &mut backend, &mut buf),
+        -22 // EINVAL
     );
 }

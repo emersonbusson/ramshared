@@ -371,7 +371,7 @@ pub fn run_product_online(
                         }
                     }
                 }
-                Err(crate::windows_driver::IoctlError::Timeout) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
                 Err(e) => {
                     eprintln!("commit_and_fetch: {e}");
                     if last_progress.elapsed() > commit_watchdog {
@@ -595,7 +595,7 @@ pub fn run_product_online(
                     Ok(()) => {
                         let _ = dlink.commit_and_fetch(&mut backend);
                     }
-                    Err(crate::windows_driver::IoctlError::Timeout) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
                     Err(e) => {
                         teardown_diag(&format!("I/O pump during lock: {e}"));
                     }
@@ -1005,7 +1005,7 @@ where
                 .commit_and_fetch(backend)
                 .map(|_| ())
                 .map_err(|e| format!("I/O pump during host observation: {e}"))?,
-            Err(crate::windows_driver::IoctlError::Timeout) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(e) => return Err(format!("I/O pump during host observation: {e}")),
         }
     }
@@ -1050,7 +1050,7 @@ where
                     teardown_diag(&format!("FailedSafe I/O pump error: {e}"));
                 }
             }
-            Err(crate::windows_driver::IoctlError::Timeout) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
             Err(e) => teardown_diag(&format!("FailedSafe COMMIT error: {e}")),
         }
         if last_heartbeat.elapsed() >= Duration::from_secs(1) {

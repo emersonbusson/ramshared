@@ -1126,7 +1126,7 @@ mod tests {
             ..ArbiterConfig::default()
         };
         BrokerCore::new(
-            SliceMap::new(k, 64 * 1024 * 1024),
+            SliceMap::new(k, 64 * 1024 * 1024, u64::from(k) * 64 * 1024 * 1024).unwrap(),
             BrokerCoreConfig {
                 arbiter_cfg: cfg,
                 endpoints: EndpointCfg {
