@@ -13,6 +13,7 @@
 
 use rustix::io::Errno;
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
+use std::os::unix::ffi::OsStrExt;
 use std::fmt;
 use std::io::{self, Read};
 use std::os::unix::process::CommandExt;
@@ -519,6 +520,41 @@ pub(crate) fn run_capture_command<F>(
 where
     F: FnOnce(u32),
 {
+    let program = command.get_program();
+    if program.is_empty() {
+        return Err(BoundedProcessError::spawn(
+            label,
+            io::Error::new(io::ErrorKind::InvalidInput, "empty program"),
+        ));
+    }
+    if program.as_bytes().contains(&0) {
+        return Err(BoundedProcessError::spawn(
+            label,
+            io::Error::new(io::ErrorKind::InvalidInput, "null byte in program"),
+        ));
+    }
+    let program_path = std::path::Path::new(program);
+    if program_path.is_absolute() && !program_path.exists() {
+        return Err(BoundedProcessError::spawn(
+            label,
+            io::Error::new(io::ErrorKind::NotFound, "binary path does not exist"),
+        ));
+    }
+    for arg in command.get_args() {
+        if arg.is_empty() {
+            return Err(BoundedProcessError::spawn(
+                label,
+                io::Error::new(io::ErrorKind::InvalidInput, "empty argument"),
+            ));
+        }
+        if arg.as_bytes().contains(&0) {
+            return Err(BoundedProcessError::spawn(
+                label,
+                io::Error::new(io::ErrorKind::InvalidInput, "nul byte"),
+            ));
+        }
+    }
+
     configure_process_group(command)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -965,6 +1001,63 @@ mod tests {
         )
         .expect_err("capture storage must remain bounded");
         assert!(error.to_string().contains("output exceeded"), "{error}");
+    }
+
+    #[test]
+    fn capture_runner_rejects_empty_program() {
+        let mut command = Command::new("");
+        let error = run_capture_command(
+            &mut command,
+            "empty program fixture",
+            Duration::from_secs(1),
+            1024,
+            |_| {},
+        ).expect_err("should reject empty program");
+        assert!(error.to_string().contains("empty program"));
+    }
+
+    #[test]
+    fn capture_runner_rejects_non_existent_binary() {
+        let mut command = Command::new("/path/to/nowhere/does/not/exist");
+        let error = run_capture_command(
+            &mut command,
+            "non existent fixture",
+            Duration::from_secs(1),
+            1024,
+            |_| {},
+        ).expect_err("should reject non existent binary");
+        assert!(error.to_string().contains("binary path does not exist"));
+    }
+
+    #[test]
+    fn capture_runner_rejects_null_bytes_in_args() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let mut command = Command::new("/bin/sh");
+        let arg = OsStr::from_bytes(b"hello\0world");
+        command.arg(arg);
+        let error = run_capture_command(
+            &mut command,
+            "null bytes fixture",
+            Duration::from_secs(1),
+            1024,
+            |_| {},
+        ).expect_err("should reject null bytes in arguments");
+        assert!(error.to_string().contains("nul byte"));
+    }
+
+    #[test]
+    fn capture_runner_rejects_empty_argument() {
+        let mut command = Command::new("/bin/sh");
+        command.arg("");
+        let error = run_capture_command(
+            &mut command,
+            "empty argument fixture",
+            Duration::from_secs(1),
+            1024,
+            |_| {},
+        ).expect_err("should reject empty arguments");
+        assert!(error.to_string().contains("empty argument"));
     }
 
     #[test]
