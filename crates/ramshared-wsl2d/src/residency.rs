@@ -43,6 +43,28 @@ pub enum Verdict {
     Demote(DemoteReason),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResidencyError {
+    ProcfsMissing,
+    MalformedMetric,
+}
+
+impl std::fmt::Display for ResidencyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ProcfsMissing => write!(f, "procfs missing (-ENOENT)"),
+            Self::MalformedMetric => write!(f, "malformed metric (-EINVAL)"),
+        }
+    }
+}
+
+impl std::error::Error for ResidencyError {}
+
+pub fn parse_cgroup_metric(content: Option<&str>) -> Result<u64, ResidencyError> {
+    let s = content.ok_or(ResidencyError::ProcfsMissing)?;
+    s.trim().parse::<u64>().map_err(|_| ResidencyError::MalformedMetric)
+}
+
 /// Canary state: baseline (median right after `VramAllocated`) + streak of
 /// consecutive samples above the latency threshold.
 pub struct Canary {
@@ -267,5 +289,27 @@ mod sampler_tests {
         assert_eq!(s.sample(Some(true), low), Verdict::Ok); // 1
         assert_eq!(s.sample(Some(true), low), Verdict::Ok); // 2
         assert_eq!(s.bad_streak(), 2);
+    }
+
+    #[test]
+    fn parse_cgroup_metric_missing() {
+        assert_eq!(parse_cgroup_metric(None), Err(ResidencyError::ProcfsMissing));
+    }
+
+    #[test]
+    fn parse_cgroup_metric_malformed() {
+        assert_eq!(parse_cgroup_metric(Some("")), Err(ResidencyError::MalformedMetric));
+        assert_eq!(parse_cgroup_metric(Some("abc")), Err(ResidencyError::MalformedMetric));
+    }
+
+    #[test]
+    fn parse_cgroup_metric_valid() {
+        assert_eq!(parse_cgroup_metric(Some("1234")), Ok(1234));
+    }
+
+    #[test]
+    fn residency_error_display() {
+        assert_eq!(ResidencyError::ProcfsMissing.to_string(), "procfs missing (-ENOENT)");
+        assert_eq!(ResidencyError::MalformedMetric.to_string(), "malformed metric (-EINVAL)");
     }
 }
