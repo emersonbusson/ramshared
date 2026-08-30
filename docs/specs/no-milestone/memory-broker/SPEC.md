@@ -529,3 +529,11 @@ slice has an explicit `BINARY_MATCH/E2E` gap and is not a live-daemon DONE.
 4. **Agent Integration:** Refactor agent main loop, implement Windows target code and metrics.
 5. **Generic DCC/workload telemetry:** Implement app-agnostic local bridge and aggregate workload measurement.
 6. **E2E Validation:** Run isolated QEMU crash tests and E2E remote VM simulations.
+
+### ITEM-X — Crate `ramshared-config` coverage
+
+The `ramshared-config` crate requires coverage for its validation logic:
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-config --files crates/ramshared-config/src/lib.rs,crates/ramshared-config/src/error.rs --min 80 --report-json tmp/ramshared-config-lib-cov.json
+```

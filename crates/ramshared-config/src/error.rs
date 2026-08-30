@@ -16,7 +16,11 @@ pub enum ConfigError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Parse { message, line: Some(l), column: Some(c) } => {
+            Self::Parse {
+                message,
+                line: Some(l),
+                column: Some(c),
+            } => {
                 write!(f, "parse error at line {}, col {}: {}", l, c, message)
             }
             Self::Parse { message, .. } => {
