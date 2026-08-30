@@ -80,7 +80,10 @@ pub fn serve_request<B: BlockBackend + ?Sized>(
     }
 
     if matches!(req.cmd, Command::Read | Command::Write)
-        && req.offset.checked_add(req.len as u64).is_none_or(|end| end > backend.size_bytes())
+        && req
+            .offset
+            .checked_add(req.len as u64)
+            .is_none_or(|end| end > backend.size_bytes())
     {
         return ERANGE;
     }
