@@ -1682,11 +1682,13 @@ impl LeaseMachine {
             (
                 Some(active.lease_id.clone()),
                 Some(active.generation),
-                active
-                    .revoke
-                    .as_ref()
-                    .map(|revoke| revoke.event_id.clone())
-                    .or_else(|| Some(active.grant_event_id.clone())),
+                Some(
+                    active
+                        .revoke
+                        .as_ref()
+                        .map_or(&active.grant_event_id, |revoke| &revoke.event_id)
+                        .clone(),
+                ),
             )
         } else if let Some(grant) = &self.pending_grant {
             (
