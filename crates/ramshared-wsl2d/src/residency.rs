@@ -30,6 +30,28 @@ impl Default for ResidencyConfig {
     }
 }
 
+impl ResidencyConfig {
+    pub fn validate_limits(&self, system_total_bytes: u64, cgroup_max_bytes: Option<u64>) -> std::io::Result<()> {
+        let max_limit = cgroup_max_bytes.unwrap_or(u64::MAX).min(system_total_bytes);
+
+        if self.free_floor_bytes == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "free_floor_bytes cannot be zero",
+            ));
+        }
+
+        if self.free_floor_bytes > max_limit {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("free_floor_bytes ({}) exceeds physical memory limit ({})", self.free_floor_bytes, max_limit),
+            ));
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DemoteReason {
     Latency,
@@ -137,6 +159,32 @@ impl ResidencySampler {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn validate_limits_rejects_zero() {
+        let cfg = ResidencyConfig {
+            free_floor_bytes: 0,
+            ..Default::default()
+        };
+        let err = cfg.validate_limits(1024, None).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn validate_limits_rejects_exceeding_bounds() {
+        let cfg = ResidencyConfig {
+            free_floor_bytes: 2048,
+            ..Default::default()
+        };
+        // Exceeds system total
+        let err1 = cfg.validate_limits(1024, None).unwrap_err();
+        assert_eq!(err1.kind(), std::io::ErrorKind::InvalidInput);
+
+        // Exceeds cgroup max
+        let err2 = cfg.validate_limits(4096, Some(1024)).unwrap_err();
+        assert_eq!(err2.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
     use super::*;
 
     fn canary() -> Canary {
