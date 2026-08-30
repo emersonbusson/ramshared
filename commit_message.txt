@@ -1,0 +1,19 @@
+refactor(cli): semantic ProcessSpawnError with command path and exit status
+
+## Resumo
+Replace string-based BoundedProcessError with a typed ProcessSpawnError enum. Add variants for BinaryNotFound, ExecutionTimeout, and NonZeroExit to enforce semantic errors during process creation. Avoid catching generic PipeErrors instead of real string ones.
+
+## Commits table
+| Commit | O que fez | Por que fez | Detalhes |
+|---|---|---|---|
+| refactor(cli): semantic ProcessSpawnError with command path and exit status | Replaced BoundedProcessError with ProcessSpawnError. | To enforce specific semantic errors over string-based generic wrappers. | Mapped IO NotFound to BinaryNotFound and preserved FatalContainment strings. |
+
+## Labels
+type:refactor
+
+## Validacao
+cargo clippy -p ramshared-cli -- -D warnings
+cargo test -p ramshared-cli
+
+## Rollback trigger
+Any compilation failures or regressions in bounded process tests.
