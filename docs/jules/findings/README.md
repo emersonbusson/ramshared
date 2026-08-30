@@ -35,3 +35,8 @@ These findings serve as an immutable record of architectural invariants in RamSh
 | 19 | [`19-cuda-stream-priority-trap.md`](19-cuda-stream-priority-trap.md) | `ramshared-cuda` | Stream priorities are managed by dynamic scheduler. |
 | 20 | [`20-broker-arbiter-error-trap.md`](20-broker-arbiter-error-trap.md) | `ramshared-broker` | Arbiter is decoupled from slice leases. |
 | 21 | [`21-cuda-error-mapping-trap.md`](21-cuda-error-mapping-trap.md) | `ramshared-cuda` | Driver errors map to strongly typed CudaError enum. |
+| 22 | [`22-pr482-winsvc-handle-cleanup.md`](22-pr482-winsvc-handle-cleanup.md) | `ramshared-winsvc` | Windows driver link handle cleanup is managed by RAII Drop. |
+| 23 | [`23-pr487-wsl2d-dxgkrnl-anti-bug.md`](23-pr487-wsl2d-dxgkrnl-anti-bug.md) | `ramshared-wsl2d` | WSL2 dxgkrnl anti-bug verified with MCL_CURRENT. |
+| 24 | [`24-pr489-broker-cross-host-civm-historical-note.md`](24-pr489-broker-cross-host-civm-historical-note.md) | `ramshared-wsl2d` | Cross-host CIVM historical race note verified. |
+| 25 | [`25-pr493-cli-read-frozen-target-error-handling.md`](25-pr493-cli-read-frozen-target-error-handling.md) | `ramshared-cli` | `read_frozen_target` uses structured Result propagation. |
+| 26 | [`26-pr497-wsl2d-dxgkrnl-mlockall-invariants.md`](26-pr497-wsl2d-dxgkrnl-mlockall-invariants.md) | `ramshared-wsl2d` | Memory locking invariants protect against dxgkrnl collisions. |

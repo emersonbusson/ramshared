@@ -282,6 +282,11 @@ impl RestartRecord {
         &self.checkpoints
     }
 
+    /// Consumes the record and returns its inner checkpoints without cloning.
+    pub fn into_checkpoints(self) -> Vec<GenerationCheckpoint> {
+        self.checkpoints
+    }
+
     fn validate(&self) -> Result<(), FailureReason> {
         if self.schema_version != N3_SCHEMA_VERSION {
             return Err(FailureReason::UnknownSchema);
@@ -1229,13 +1234,14 @@ impl LeaseMachine {
             return Err(self.fail_restart_restore(FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Absent), actual: self.lease_state.tag() })));
         }
 
+        let host_epoch = record.host_epoch();
         let generation_history = record
-            .checkpoints()
-            .iter()
-            .map(|checkpoint| (checkpoint.lease_id.clone(), checkpoint.generation))
+            .into_checkpoints()
+            .into_iter()
+            .map(|checkpoint| (checkpoint.lease_id, checkpoint.generation))
             .collect();
         self.generation_history = generation_history;
-        self.restored_restart_epoch = Some(record.host_epoch());
+        self.restored_restart_epoch = Some(host_epoch);
         Ok(())
     }
 
@@ -1697,11 +1703,13 @@ impl LeaseMachine {
             (
                 Some(active.lease_id.clone()),
                 Some(active.generation),
-                active
-                    .revoke
-                    .as_ref()
-                    .map(|revoke| revoke.event_id.clone())
-                    .or_else(|| Some(active.grant_event_id.clone())),
+                Some(
+                    active
+                        .revoke
+                        .as_ref()
+                        .map_or(&active.grant_event_id, |revoke| &revoke.event_id)
+                        .clone(),
+                ),
             )
         } else if let Some(grant) = &self.pending_grant {
             (
@@ -1939,5 +1947,64 @@ mod additional_tests {
             Err(FailureReason::GenerationGap)
         );
         assert_eq!(machine.validate_generation(&lease_id, 11), Ok(()));
+    }
+
+    #[test]
+    fn test_opaque_id_validation() -> Result<(), FailureReason> {
+        assert_eq!(
+            LeaseId::new(b""),
+            Err(FailureReason::MalformedRecord)
+        );
+        let long_id = vec![b'a'; 65];
+        assert_eq!(
+            LeaseId::new(&long_id),
+            Err(FailureReason::MalformedRecord)
+        );
+        let valid = LeaseId::new(b"valid-lease-id")?;
+        assert_eq!(valid.as_bytes(), b"valid-lease-id");
+        Ok(())
+    }
+
+    #[test]
+    fn test_restart_record_deserialization_errors() -> Result<(), FailureReason> {
+        // Less than 17 bytes (header size)
+        assert_eq!(
+            RestartRecord::from_bytes(&[0u8; 13]),
+            Err(FailureReason::MalformedRecord)
+        );
+
+        let valid_bytes = RestartRecord::host(1, Vec::new())?.to_bytes();
+
+        // Unknown schema (bytes 4..6 is schema_version)
+        let mut bad_schema = valid_bytes.clone();
+        bad_schema[5] = 0x99;
+        assert_eq!(
+            RestartRecord::from_bytes(&bad_schema),
+            Err(FailureReason::UnknownSchema)
+        );
+
+        // Guest authority marker (byte 6 is authority)
+        let mut guest_auth = valid_bytes.clone();
+        guest_auth[6] = GUEST_AUTHORITY_MARKER;
+        assert_eq!(
+            RestartRecord::from_bytes(&guest_auth),
+            Err(FailureReason::HostAuthorityRequired)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_grant_and_revoke_constructors() -> Result<(), FailureReason> {
+        let lease_id = LeaseId::new(b"lease-1")?;
+        let event_id = EventId::new(b"event-1")?;
+
+        let grant = Grant::host(lease_id.clone(), 1, event_id.clone(), 4096, 1, 100, 200);
+        assert_eq!(grant.lease_id, lease_id);
+        assert_eq!(grant.capacity_bytes, 4096);
+
+        let revoke = Revoke::host(lease_id.clone(), 1, event_id.clone(), 200);
+        assert_eq!(revoke.lease_id, lease_id);
+        assert_eq!(revoke.deadline, 200);
+        Ok(())
     }
 }

@@ -619,4 +619,89 @@ mod tests {
             _ => panic!("Expected IoctlError::Invalid, got {:?}", err),
         }
     }
+
+    #[test]
+    fn create_disk_rejects_non_zero_reserved() {
+        let mut link = WindowsDriverLink {
+            handle: ptr::null_mut(),
+            event: ptr::null_mut(),
+            pending: false,
+        };
+        let params = DiskParams {
+            size_bytes: 1024 * 1024,
+            block_size: 512,
+            reserved: 1,
+            serial: [0u8; 16],
+        };
+        let res = link.create_disk(&params);
+        assert!(
+            matches!(res, Err(IoctlError::Invalid(msg)) if msg.contains("disk reserved non-zero"))
+        );
+    }
+
+    #[test]
+    fn register_queue_rejects_invalid_params() {
+        let mut link = WindowsDriverLink {
+            handle: ptr::null_mut(),
+            event: ptr::null_mut(),
+            pending: false,
+        };
+
+        let mut reg = Register {
+            abi_version: ABI_VERSION,
+            disk_id: 0,
+            queue_depth: 32,
+            block_size: 512,
+            max_io_bytes: 65536,
+            reserved: 1,
+            sq_ring_va: 0,
+            cq_ring_va: 0,
+            data_area_va: 0,
+            data_area_len: 0,
+            sq_event_handle: 0,
+            cq_event_handle: 0,
+        };
+        let res1 = link.register_queue(&reg);
+        assert!(
+            matches!(res1, Err(IoctlError::Invalid(msg)) if msg.contains("register reserved non-zero"))
+        );
+
+        reg.reserved = 0;
+        reg.disk_id = 1;
+        let res2 = link.register_queue(&reg);
+        assert!(matches!(res2, Err(IoctlError::Invalid(msg)) if msg.contains("disk_id must be 0")));
+    }
+
+    #[test]
+    fn commit_and_fetch_rejects_already_pending() {
+        let mut link = WindowsDriverLink {
+            handle: ptr::null_mut(),
+            event: ptr::null_mut(),
+            pending: true,
+        };
+        let res = link.commit_and_fetch(Duration::from_millis(100));
+        assert!(
+            matches!(res, Err(IoctlError::Invalid(msg)) if msg.contains("commit already pending"))
+        );
+    }
+
+    #[test]
+    fn cancel_fetch_state_transitions() {
+        let mut link_idle = WindowsDriverLink {
+            handle: ptr::null_mut(),
+            event: ptr::null_mut(),
+            pending: false,
+        };
+        assert!(link_idle.cancel_fetch().is_ok());
+
+        let mut link_pending = WindowsDriverLink {
+            handle: ptr::null_mut(),
+            event: ptr::null_mut(),
+            pending: true,
+        };
+        let res = link_pending.cancel_fetch();
+        assert!(
+            matches!(res, Err(IoctlError::Invalid(msg)) if msg.contains("pending fetch cannot be cancelled"))
+        );
+    }
 }

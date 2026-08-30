@@ -876,3 +876,140 @@ A análise foi conduzida sob as políticas de confiabilidade do projeto (RamShar
 - **O que a alteração faz:** Enum WatchdogError semântico, mas introduziu mock com #[cfg(test)] dentro de código de produção.
 - **Análise Técnica:** A criação de `WatchdogError` é ótima, mas Jules inseriu `#[cfg(test)] let (psi_res, swaps_res) = ...` diretamente no meio da função de produção `session()`, violando regras de arquitetura.
 - **Como tornar Válido (Como Fazer da Maneira Correta):** Mover a injeção de dependência de métricas para a struct de configuração ou trait de telemetria, mantendo a função de produção limpa.
+
+### PR #481: fix(block): normalize child paths in manifest
+- **Branch:** `jules/inbox-14268620857317772091`
+- **Subsistema:** `ramshared-winsvc`
+- **Veredito:** **ACCEPT (Válido)**
+- **O que a alteração faz:** Garante que caminhos de artefatos sejam relativos e normalizados (`Component::Normal`) em `package.rs`.
+- **Análise Técnica:** Protege contra manipulação de caminhos de arquivos em manifestos.
+- **Ação Recomendada:** Consolidado na branch de consolidação.
+
+### PR #482: 🧹 refactor(winsvc): clean up handles
+- **Branch:** `jules/inbox-15311467645163901416`
+- **Subsistema:** `ramshared-winsvc`
+- **Veredito:** **FINDING_ONLY (Válido como Documentação)**
+- **O que a alteração faz:** Documenta que o `WindowsDriverLink` já gerencia handles via RAII Drop.
+- **Análise Técnica:** Registrado como Finding 22 em `docs/jules/findings/22-pr482-winsvc-handle-cleanup.md`.
+- **Ação Recomendada:** Documentado.
+
+### PR #483: ⚡ perf(tier): eliminate cloning in n3_state
+- **Branch:** `jules/inbox-12490961314488319692`
+- **Subsistema:** `ramshared-tier`
+- **Veredito:** **ACCEPT (Válido)**
+- **O que a alteração faz:** Substitui `clone()` por `map_or` e referências diretas em `LeaseMachine`.
+- **Análise Técnica:** Reduz alocações na máquina de estados N3.
+- **Ação Recomendada:** Consolidado na branch de consolidação.
+
+### PR #484: 🧪 test(winsvc): unit tests for driver link
+- **Branch:** `jules-3895012826955502598-a6b10705`
+- **Subsistema:** `ramshared-winsvc`
+- **Veredito:** **ACCEPT (Válido)**
+- **O que a alteração faz:** Adiciona testes para `create_disk`, `register_queue` e `commit_and_fetch`.
+- **Análise Técnica:** Fortalece cobertura de testes unitários em `windows_driver.rs`.
+- **Ação Recomendada:** Consolidado na branch de consolidação.
+
+### PR #485: 🧹 refactor(winsvc): replace unwrap with ?
+- **Branch:** `jules/inbox-393327633215886915`
+- **Subsistema:** `ramshared-winsvc`
+- **Veredito:** **ACCEPT (Válido)**
+- **O que a alteração faz:** Remove `.unwrap()` em testes de manifesto em conformidade com as regras Day-0.
+- **Análise Técnica:** Higiene de código e conformidade com clippy.
+- **Ação Recomendada:** Consolidado na branch de consolidação.
+
+### PR #486: ⚡ perf(tier): into_checkpoints consumption
+- **Branch:** `jules/inbox-810684386965151080`
+- **Subsistema:** `ramshared-tier`
+- **Veredito:** **ACCEPT (Válido)**
+- **O que a alteração faz:** Implementa `into_checkpoints(self)` consumindo por valor sem clonar vetores.
+- **Análise Técnica:** Elimina clone de `Vec<GenerationCheckpoint>` na restauração de restart record.
+- **Ação Recomendada:** Consolidado na branch de consolidação.
+
+### PR #487: docs(wsl2d): verify dxgkrnl anti-bug
+- **Branch:** `jules-16446279796668819549-107dfb27`
+- **Subsistema:** `ramshared-wsl2d`
+- **Veredito:** **FINDING_ONLY (Válido como Documentação)**
+- **O que a alteração faz:** Relatório confirmando que `MCL_CURRENT` previne conflito no `dxgkrnl`.
+- **Análise Técnica:** Registrado como Finding 23 em `docs/jules/findings/23-pr487-wsl2d-dxgkrnl-anti-bug.md`.
+- **Ação Recomendada:** Documentado.
+
+### PR #488: 🧪 feat(tier): unit tests for n3_state
+- **Branch:** `jules-11952252111541279778-74f968a0`
+- **Subsistema:** `ramshared-tier`
+- **Veredito:** **ACCEPT (Válido)**
+- **O que a alteração faz:** Testes para `OpaqueId`, `RestartRecord` e construtores de `Grant`/`Revoke`.
+- **Análise Técnica:** Testes adaptados para regras estritas de clippy (`deny(unwrap_used)`).
+- **Ação Recomendada:** Consolidado na branch de consolidação.
+
+### PR #489: docs(broker): verify cross-host note
+- **Branch:** `jules/inbox-11601729578341755777`
+- **Subsistema:** `ramshared-wsl2d`
+- **Veredito:** **FINDING_ONLY (Válido como Documentação)**
+- **O que a alteração faz:** Relatório de validação de nota histórica em `broker_srv.rs`.
+- **Análise Técnica:** Registrado como Finding 24 em `docs/jules/findings/24-pr489-broker-cross-host-civm-historical-note.md`.
+- **Ação Recomendada:** Documentado.
+
+### PR #490: 🧪 test(wsl2d): io error in serve_request
+- **Branch:** `jules/inbox-6540979825710063523`
+- **Subsistema:** `ramshared-wsl2d`
+- **Veredito:** **ACCEPT (Válido)**
+- **O que a alteração faz:** Testa que `serve_request` retorna `-EIO` (-5) quando o backend falha.
+- **Análise Técnica:** Cobertura de caminhos de erro em `ublk_server.rs`.
+- **Ação Recomendada:** Consolidado na branch de consolidação.
+
+### PR #491: 🧪 test(wsl2d): duplicate of #490
+- **Branch:** `jules/inbox-10978500393919967893`
+- **Subsistema:** `ramshared-wsl2d`
+- **Veredito:** **REWORKED (Duplicata)**
+- **O que a alteração faz:** Mesma proposta do PR #490.
+- **Análise Técnica:** Incorporado na suíte canônica de testes de `ublk_server.rs`.
+- **Ação Recomendada:** Consolidado via #490.
+
+### PR #492: 🔒 fix(winsvc): validate volume letter
+- **Branch:** `jules/inbox-2271296830551868345`
+- **Subsistema:** `ramshared-winsvc`
+- **Veredito:** **ACCEPT (Válido)**
+- **O que a alteração faz:** Valida que a letra de volume seja `[A-Z]` contra injeção PowerShell.
+- **Análise Técnica:** Prevenção de injeção de scripts no Windows.
+- **Ação Recomendada:** Consolidado na branch de consolidação.
+
+### PR #493: 🧹 [code health] verify read_frozen_target
+- **Branch:** `jules-10615838065293275318-a7dba800`
+- **Subsistema:** `ramshared-cli`
+- **Veredito:** **FINDING_ONLY (Válido como Documentação)**
+- **O que a alteração faz:** Confirma que `read_frozen_target` já usa `Result` sem `unwrap()`.
+- **Análise Técnica:** Registrado como Finding 25 em `docs/jules/findings/25-pr493-cli-read-frozen-target-error-handling.md`.
+- **Ação Recomendada:** Documentado.
+
+### PR #494: 🧹 standardize systemctl error handling
+- **Branch:** `jules-13990776372976090291-e94bf577`
+- **Subsistema:** `ramshared-cli`
+- **Veredito:** **ACCEPT (Válido)**
+- **O que a alteração faz:** Padroniza formato de erro de `systemctl` no `supervisor.rs`.
+- **Análise Técnica:** Mensagens de erro limpas e consistentes.
+- **Ação Recomendada:** Consolidado na branch de consolidação.
+
+### PR #495: ⚡ perf(cli): avoid string clone in swap pairs
+- **Branch:** `jules/inbox-13465504454586479029`
+- **Subsistema:** `ramshared-cli`
+- **Veredito:** **ACCEPT (Válido)**
+- **O que a alteração faz:** `tiers_from_swap_names` passa a aceitar `&[(&str, ...)]` sem alocações.
+- **Análise Técnica:** Elimina clonagem desnecessária de strings na amostragem periódica de swap.
+- **Ação Recomendada:** Consolidado na branch de consolidação.
+
+### PR #496: 🧹 Remove dead_code allow in proto
+- **Branch:** `jules/inbox-9255600882759723479`
+- **Subsistema:** `ramshared-winsvc`
+- **Veredito:** **ACCEPT (Válido)**
+- **O que a alteração faz:** Remove `#![allow(dead_code)]` desnecessário em `proto.rs`.
+- **Análise Técnica:** Limpeza de código e validação de constantes C/Win32.
+- **Ação Recomendada:** Consolidado na branch de consolidação.
+
+### PR #497: fix(wsl2d): verify dxgkrnl invariants
+- **Branch:** `jules/inbox-5705408869219380236`
+- **Subsistema:** `ramshared-wsl2d`
+- **Veredito:** **FINDING_ONLY (Válido como Documentação)**
+- **O que a alteração faz:** Documenta segurança do `mlockall` contra incidentes do `dxgkrnl`.
+- **Análise Técnica:** Registrado como Finding 26 em `docs/jules/findings/26-pr497-wsl2d-dxgkrnl-mlockall-invariants.md`.
+- **Ação Recomendada:** Documentado.
+
