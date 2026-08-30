@@ -4,6 +4,9 @@
 //! validation can be tested without sockets, root, or a GPU.
 #![forbid(unsafe_code)]
 
+pub mod error;
+pub use error::ConfigError;
+
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -77,23 +80,61 @@ impl Default for AgentConfig {
 }
 
 impl Config {
-    pub fn parse(text: &str) -> Result<Self, toml::de::Error> {
-        toml::from_str(text)
+    pub fn parse(text: &str) -> Result<Self, ConfigError> {
+        toml::from_str(text).map_err(|err| {
+            let message = err.message().to_string();
+            let mut line = None;
+            let mut column = None;
+            if let Some(span) = err.span() {
+                let mut l = 1;
+                let mut c = 1;
+                for (i, ch) in text.chars().enumerate() {
+                    if i == span.start {
+                        line = Some(l);
+                        column = Some(c);
+                        break;
+                    }
+                    if ch == '\n' {
+                        l += 1;
+                        c = 1;
+                    } else {
+                        c += 1;
+                    }
+                }
+            }
+            ConfigError::Parse {
+                message,
+                line,
+                column,
+            }
+        })
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), ConfigError> {
         if self.broker.slices == 0 {
-            return Err("broker.slices must be > 0".into());
+            return Err(ConfigError::Invalid {
+                key_path: "broker.slices".into(),
+                reason: "must be > 0".into(),
+            });
         }
         if self.broker.slice_mib == 0 {
-            return Err("broker.slice_mib must be > 0".into());
+            return Err(ConfigError::Invalid {
+                key_path: "broker.slice_mib".into(),
+                reason: "must be > 0".into(),
+            });
         }
         if self.agent.watchdog_secs == 0 {
-            return Err("agent.watchdog_secs must be > 0".into());
+            return Err(ConfigError::Invalid {
+                key_path: "agent.watchdog_secs".into(),
+                reason: "must be > 0".into(),
+            });
         }
         match self.broker.backend.as_str() {
             "cuda" | "vulkan" => Ok(()),
-            other => Err(format!("unsupported backend: {other}")),
+            other => Err(ConfigError::Invalid {
+                key_path: "broker.backend".into(),
+                reason: format!("unsupported backend: {other}"),
+            }),
         }
     }
 }
@@ -124,6 +165,26 @@ mod tests {
         let mut cfg = Config::parse("").expect("parse");
         cfg.broker.listen = "0.0.0.0:7777".into();
         cfg.broker.backend = "unknown".into();
-        assert!(cfg.validate().is_err());
+        let err = cfg.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                ref key_path,
+                ref reason,
+            } if key_path == "broker.backend" && reason == "unsupported backend: unknown"
+        ));
+    }
+
+    #[test]
+    fn parses_error_captures_location() {
+        let err = Config::parse("[broker]\nslice_mib = 'hello'").unwrap_err();
+        assert!(matches!(
+            err,
+            ConfigError::Parse {
+                line: Some(2),
+                column: Some(13),
+                ..
+            }
+        ));
     }
 }
