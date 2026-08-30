@@ -1750,7 +1750,9 @@ impl LeaseMachine {
             if generation != previous.saturating_add(1) {
                 return Err(FailureReason::GenerationGap);
             }
-        } else if self.generation_history.len() >= MAX_GENERATION_HISTORY {
+            return Ok(());
+        }
+        if self.generation_history.len() >= MAX_GENERATION_HISTORY {
             return Err(FailureReason::MalformedRecord);
         }
         Ok(())
@@ -1763,7 +1765,9 @@ impl LeaseMachine {
             .find(|(known_lease, _)| known_lease == &lease_id)
         {
             *previous = generation;
-        } else if self.generation_history.len() < MAX_GENERATION_HISTORY {
+            return;
+        }
+        if self.generation_history.len() < MAX_GENERATION_HISTORY {
             self.generation_history.push((lease_id, generation));
         }
     }
@@ -1779,19 +1783,18 @@ impl LeaseMachine {
             .find(|seen| seen.event_id == event_id)
         {
             if seen.fingerprint == fingerprint {
-                EventRegistration::Duplicate
-            } else {
-                EventRegistration::Conflict
+                return EventRegistration::Duplicate;
             }
-        } else if self.seen_events.len() >= MAX_PROTOCOL_EVENT_HISTORY {
-            EventRegistration::Overflow
-        } else {
-            self.seen_events.push(SeenEvent {
-                event_id,
-                fingerprint,
-            });
-            EventRegistration::New
+            return EventRegistration::Conflict;
         }
+        if self.seen_events.len() >= MAX_PROTOCOL_EVENT_HISTORY {
+            return EventRegistration::Overflow;
+        }
+        self.seen_events.push(SeenEvent {
+            event_id,
+            fingerprint,
+        });
+        EventRegistration::New
     }
 }
 
@@ -1895,5 +1898,22 @@ mod tests {
             machine.lease_state(),
             LeaseState::Failed(FailureReason::InvalidTransition)
         );
+    }
+}
+
+#[cfg(test)]
+mod additional_tests {
+    use super::*;
+
+    #[test]
+    fn test_guard_clauses_generation_validation() {
+        let mut machine = LeaseMachine::new();
+        let lease_id = LeaseId::new(b"lease-1").unwrap();
+        machine.remember_generation(lease_id.clone(), 10);
+
+        assert_eq!(machine.validate_generation(&lease_id, 10), Err(FailureReason::StaleGeneration));
+        assert_eq!(machine.validate_generation(&lease_id, 9), Err(FailureReason::StaleGeneration));
+        assert_eq!(machine.validate_generation(&lease_id, 12), Err(FailureReason::GenerationGap));
+        assert_eq!(machine.validate_generation(&lease_id, 11), Ok(()));
     }
 }
