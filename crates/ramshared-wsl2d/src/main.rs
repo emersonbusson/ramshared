@@ -232,8 +232,6 @@ fn parse_private_listen(s: &str) -> Result<std::net::SocketAddr, String> {
 /// Slices ceiling: `StatusReply` embeds `Vec<Slice>+Vec<SliceIo>+Vec<TenantStatus>` in a single
 /// JSON line; above ~430 slices it exceeds the protocol's `MAX_LINE_BYTES` (64 KiB) and the other
 /// end rejects the line (ADR-0005). 256 gives margins (~38 KiB) and covers any real use case.
-const MAX_SLICES: u16 = 256;
-
 fn validate_slice_flags(slices: u16, slice_mb: u64, is_ublk: bool) -> Result<(), String> {
     if slices > 0 && is_ublk {
         return Err(
@@ -244,10 +242,11 @@ fn validate_slice_flags(slices: u16, slice_mb: u64, is_ublk: bool) -> Result<(),
     if slices > 0 && slice_mb == 0 {
         return Err("--slices > 0 requires --slice-mb N".into());
     }
-    if slices > MAX_SLICES {
+    if slices > ramshared_broker::slices::MAX_SLICES {
         return Err(format!(
-            "--slices {slices} > {MAX_SLICES}: StatusReply would exceed the protocol line ceiling \
-             (MAX_LINE_BYTES 64 KiB, ADR-0005)"
+            "--slices {slices} > {}: StatusReply would exceed the protocol line ceiling \
+             (MAX_LINE_BYTES 64 KiB, ADR-0005)",
+            ramshared_broker::slices::MAX_SLICES
         ));
     }
     Ok(())
@@ -3984,7 +3983,8 @@ fn broker_setup_with_acceptors(
 ) -> Result<BrokerRuntime, Box<dyn std::error::Error>> {
     // Slices map: export index (resolved by handshake) == geometry index == exports index
     // ("s{id}" names identical to those emitted by the broker in SwapOn).
-    let slice_map = SliceMap::new(slices, slice_bytes);
+    let slice_map = SliceMap::new(slices, slice_bytes, u64::from(slices) * slice_bytes)
+        .map_err(|e| format!("invalid slice geometry: {:?}", e))?;
     let geom: Vec<(u64, u64)> = slice_map
         .slices()
         .iter()
@@ -9433,9 +9433,9 @@ mod tests {
 
     #[test]
     fn slice_flags_cap_protects_status_line() {
-        // MED-1: --slices above MAX_SLICES would blow the StatusReply (MAX_LINE_BYTES 64 KiB).
-        assert!(validate_slice_flags(MAX_SLICES, 64, false).is_ok());
-        assert!(validate_slice_flags(MAX_SLICES + 1, 64, false).is_err());
+        // MED-1: --slices above ramshared_broker::slices::MAX_SLICES would blow the StatusReply (MAX_LINE_BYTES 64 KiB).
+        assert!(validate_slice_flags(ramshared_broker::slices::MAX_SLICES, 64, false).is_ok());
+        assert!(validate_slice_flags(ramshared_broker::slices::MAX_SLICES + 1, 64, false).is_err());
     }
 
     #[test]
