@@ -19,7 +19,11 @@ impl std::error::Error for WatchdogError {}
 impl fmt::Display for WatchdogError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::HeartbeatTimeout(d) => write!(f, "watchdog: broker silent for {}s; closing session", d.as_secs()),
+            Self::HeartbeatTimeout(d) => write!(
+                f,
+                "watchdog: broker silent for {}s; closing session",
+                d.as_secs()
+            ),
             Self::SupervisorTerminated => write!(f, "watchdog: supervisor terminated"),
             Self::TooShort(d) => write!(f, "watchdog: deadline too short ({}ms)", d.as_millis()),
         }
@@ -77,8 +81,14 @@ mod tests {
     fn expires_after_deadline() {
         let t0 = Instant::now();
         let wd = Watchdog::new(Duration::from_secs(90), t0).expect("valid deadline");
-        assert_eq!(wd.check(t0 + Duration::from_secs(90)), Err(WatchdogError::HeartbeatTimeout(Duration::from_secs(90))));
-        assert_eq!(wd.check(t0 + Duration::from_secs(120)), Err(WatchdogError::HeartbeatTimeout(Duration::from_secs(90))));
+        assert_eq!(
+            wd.check(t0 + Duration::from_secs(90)),
+            Err(WatchdogError::HeartbeatTimeout(Duration::from_secs(90)))
+        );
+        assert_eq!(
+            wd.check(t0 + Duration::from_secs(120)),
+            Err(WatchdogError::HeartbeatTimeout(Duration::from_secs(90)))
+        );
     }
 
     #[test]
@@ -89,7 +99,10 @@ mod tests {
         wd.touch(t1);
         // 80s + 89s = 169s from start, but only 89s since last touch → still alive.
         assert_eq!(wd.check(t1 + Duration::from_secs(89)), Ok(()));
-        assert_eq!(wd.check(t1 + Duration::from_secs(90)), Err(WatchdogError::HeartbeatTimeout(Duration::from_secs(90))));
+        assert_eq!(
+            wd.check(t1 + Duration::from_secs(90)),
+            Err(WatchdogError::HeartbeatTimeout(Duration::from_secs(90)))
+        );
     }
 
     #[test]
