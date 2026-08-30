@@ -323,11 +323,12 @@ mod tests {
     }
 
     #[test]
-    fn manifest_rejects_unknown_and_over_64k() {
-        let mut value = serde_json::to_value(manifest()).unwrap();
+    fn manifest_rejects_unknown_and_over_64k() -> Result<(), Box<dyn std::error::Error>> {
+        let mut value = serde_json::to_value(manifest())?;
         value["unknown"] = serde_json::json!(1);
-        assert!(parse_manifest(&serde_json::to_vec(&value).unwrap()).is_err());
+        assert!(parse_manifest(&serde_json::to_vec(&value)?).is_err());
         assert!(parse_manifest(&vec![b'x'; MAX_MANIFEST_BYTES + 1]).is_err());
+        Ok(())
     }
 
     #[test]
@@ -338,17 +339,19 @@ mod tests {
     }
 
     #[test]
-    fn hash_must_be_sha256_hex() {
+    fn hash_must_be_sha256_hex() -> Result<(), Box<dyn std::error::Error>> {
         let mut candidate = manifest();
         candidate.artifacts[0].sha256 = "a".repeat(64);
-        assert!(parse_manifest(&serde_json::to_vec(&candidate).unwrap()).is_err());
+        assert!(parse_manifest(&serde_json::to_vec(&candidate)?).is_err());
+        Ok(())
     }
 
     #[test]
-    fn mixed_commit_is_refused() {
+    fn mixed_commit_is_refused() -> Result<(), Box<dyn std::error::Error>> {
         let mut candidate = manifest();
         candidate.commit = "short".into();
-        assert!(parse_manifest(&serde_json::to_vec(&candidate).unwrap()).is_err());
+        assert!(parse_manifest(&serde_json::to_vec(&candidate)?).is_err());
+        Ok(())
     }
 
     #[test]
