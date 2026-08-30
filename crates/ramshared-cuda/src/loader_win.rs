@@ -7,6 +7,40 @@ use std::ffi::CStr;
 use windows_sys::Win32::Foundation::{FreeLibrary, GetLastError, HMODULE};
 use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum CudaLoaderError {
+    LibraryNotFound(String),
+    SymbolMissing(String),
+    IncompatibleDriverVersion(String),
+    Unknown(String),
+}
+
+impl std::fmt::Display for CudaLoaderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LibraryNotFound(msg) => write!(f, "{msg}"),
+            Self::SymbolMissing(msg) => write!(f, "{msg}"),
+            Self::IncompatibleDriverVersion(msg) => write!(f, "{msg}"),
+            Self::Unknown(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+impl std::error::Error for CudaLoaderError {}
+
+impl CudaLoaderError {
+    /// Helper to bridge to std::io::Error conceptually.
+    pub fn into_io_error(self) -> std::io::Error {
+        let kind = match &self {
+            Self::LibraryNotFound(_) => std::io::ErrorKind::NotFound,
+            Self::SymbolMissing(_) => std::io::ErrorKind::NotFound,
+            Self::IncompatibleDriverVersion(_) => std::io::ErrorKind::InvalidInput,
+            Self::Unknown(_) => std::io::ErrorKind::Other,
+        };
+        std::io::Error::new(kind, self.to_string())
+    }
+}
+
 /// Opens the specified dynamic library (converts CStr to UTF-16).
 ///
 /// # Safety
@@ -58,40 +92,6 @@ pub unsafe fn close(handle: *mut c_void) -> c_int {
         0 // Returns 0 for success, matching dlclose behavior
     } else {
         -1 // Failure
-    }
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum CudaLoaderError {
-    LibraryNotFound(String),
-    SymbolMissing(String),
-    IncompatibleDriverVersion(String),
-    Unknown(String),
-}
-
-impl std::fmt::Display for CudaLoaderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LibraryNotFound(msg) => write!(f, "{msg}"),
-            Self::SymbolMissing(msg) => write!(f, "{msg}"),
-            Self::IncompatibleDriverVersion(msg) => write!(f, "{msg}"),
-            Self::Unknown(msg) => write!(f, "{msg}"),
-        }
-    }
-}
-
-impl std::error::Error for CudaLoaderError {}
-
-impl CudaLoaderError {
-    /// Helper to bridge to std::io::Error conceptually.
-    pub fn into_io_error(self) -> std::io::Error {
-        let kind = match &self {
-            Self::LibraryNotFound(_) => std::io::ErrorKind::NotFound,
-            Self::SymbolMissing(_) => std::io::ErrorKind::NotFound,
-            Self::IncompatibleDriverVersion(_) => std::io::ErrorKind::InvalidInput,
-            Self::Unknown(_) => std::io::ErrorKind::Other,
-        };
-        std::io::Error::new(kind, self.to_string())
     }
 }
 
