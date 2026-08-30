@@ -165,7 +165,7 @@ mod tests {
         let mut cfg = Config::parse("").expect("parse");
         cfg.broker.listen = "0.0.0.0:7777".into();
         cfg.broker.backend = "unknown".into();
-        let err = cfg.validate().unwrap_err();
+        let err = cfg.validate().expect_err("expected error");
         assert!(matches!(
             err,
             ConfigError::Invalid {
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn parses_error_captures_location() {
-        let err = Config::parse("[broker]\nslice_mib = 'hello'").unwrap_err();
+        let err = Config::parse("[broker]\nslice_mib = 'hello'").expect_err("expected error");
         assert!(matches!(
             err,
             ConfigError::Parse {
@@ -186,5 +186,28 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn display_errors() {
+        let p1 = ConfigError::Parse {
+            message: "msg".into(),
+            line: Some(1),
+            column: Some(2),
+        };
+        assert_eq!(p1.to_string(), "parse error at line 1, col 2: msg");
+
+        let p2 = ConfigError::Parse {
+            message: "msg".into(),
+            line: None,
+            column: None,
+        };
+        assert_eq!(p2.to_string(), "parse error: msg");
+
+        let i = ConfigError::Invalid {
+            key_path: "k".into(),
+            reason: "r".into(),
+        };
+        assert_eq!(i.to_string(), "invalid configuration at 'k': r");
     }
 }
