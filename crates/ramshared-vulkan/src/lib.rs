@@ -22,8 +22,19 @@ use ramshared_vram::{VramError, VramMemory, VramProvider};
 /// Single staging buffer per provider (no alloc on hot path, DT-8): 1 MiB. Larger I/O is sliced.
 const STAGING_BYTES: u64 = 1 << 20;
 
-fn vk_err(ctx: &str, e: impl std::fmt::Debug) -> VramError {
-    VramError::Provider(format!("vulkan {ctx}: {e:?}"))
+fn vk_err(ctx: &str, e: ash::vk::Result) -> VramError {
+    match e {
+        ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY | ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+            VramError::Provider("vulkan out of memory (-ENOMEM)".into())
+        }
+        ash::vk::Result::ERROR_DEVICE_LOST => {
+            VramError::Provider("vulkan device lost (-ENODEV)".into())
+        }
+        ash::vk::Result::ERROR_EXTENSION_NOT_PRESENT => {
+            VramError::Provider("vulkan extension not present (-EINVAL)".into())
+        }
+        _ => VramError::Provider(format!("vulkan {ctx}: {e:?}")),
+    }
 }
 
 /// Selects a transfer queue family (prefers explicit `TRANSFER`; falls back to `GRAPHICS`/`COMPUTE`, which imply transfer per spec). Returns the family index.
@@ -145,7 +156,7 @@ impl VulkanProvider {
     /// otherwise the ordinal), and sets up logical device + transfer queue + staging. RF-V1.
     pub fn open(ordinal: u32) -> Result<Self, VramError> {
         // SAFETY: loads libvulkan.so.1 via libloading; symbols remain valid as long as `entry` lives.
-        let entry = unsafe { ash::Entry::load() }.map_err(|e| vk_err("load", e))?;
+        let entry = unsafe { ash::Entry::load() }.map_err(|e| VramError::Provider(format!("vulkan load: {e:?}")))?;
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
         let ci = vk::InstanceCreateInfo::default().application_info(&app);
         // SAFETY: `ci`/`app` valid during call; `None` = default allocator.
@@ -588,6 +599,24 @@ impl Drop for VulkanMem<'_> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_vk_err_semantic_mapping() {
+        let err = vk_err("alloc", ash::vk::Result::ERROR_OUT_OF_HOST_MEMORY);
+        assert!(matches!(err, VramError::Provider(s) if s.contains("-ENOMEM")));
+
+        let err2 = vk_err("alloc", ash::vk::Result::ERROR_OUT_OF_DEVICE_MEMORY);
+        assert!(matches!(err2, VramError::Provider(s) if s.contains("-ENOMEM")));
+
+        let err3 = vk_err("queue", ash::vk::Result::ERROR_DEVICE_LOST);
+        assert!(matches!(err3, VramError::Provider(s) if s.contains("-ENODEV")));
+
+        let err4 = vk_err("ext", ash::vk::Result::ERROR_EXTENSION_NOT_PRESENT);
+        assert!(matches!(err4, VramError::Provider(s) if s.contains("-EINVAL")));
+
+        let err5 = vk_err("unknown", ash::vk::Result::ERROR_UNKNOWN);
+        assert!(matches!(err5, VramError::Provider(s) if s.contains("ERROR_UNKNOWN")));
+    }
 
     #[test]
     #[ignore = "requires Vulkan loader + ICD (lavapipe/llvmpipe is enough; run with --ignored)"]
