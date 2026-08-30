@@ -38,6 +38,33 @@ struct Event {
     flag: Option<String>,
 }
 
+#[derive(Debug)]
+pub enum DiagnoseError {
+    InvalidArgs(String),
+    Io(String),
+    ParseJson(String),
+}
+
+impl std::fmt::Display for DiagnoseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidArgs(msg) => write!(f, "{msg}"),
+            Self::Io(msg) => write!(f, "{msg}"),
+            Self::ParseJson(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+impl DiagnoseError {
+    pub fn exit_code(&self) -> u8 {
+        match self {
+            Self::InvalidArgs(_) => 22, // EINVAL
+            Self::Io(_) => 2,           // ENOENT
+            Self::ParseJson(_) => 22,   // EINVAL for malformed json
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Diagnosis {
     samples: usize,
@@ -52,9 +79,10 @@ struct Diagnosis {
     recommendations: Vec<String>,
 }
 
-pub fn run(args: &[String]) -> Result<(), String> {
+pub fn run(args: &[String]) -> Result<(), DiagnoseError> {
     let (path, json) = parse_args(args)?;
-    let text = fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let text = fs::read_to_string(&path)
+        .map_err(|e| DiagnoseError::Io(format!("read {}: {e}", path.display())))?;
     let diagnosis = diagnose_jsonl(&text)?;
     if json {
         println!("{}", render_json(&diagnosis));
@@ -64,7 +92,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_args(args: &[String]) -> Result<(PathBuf, bool), String> {
+fn parse_args(args: &[String]) -> Result<(PathBuf, bool), DiagnoseError> {
     let mut path = None;
     let mut json = false;
     let mut i = 0;
@@ -73,30 +101,36 @@ fn parse_args(args: &[String]) -> Result<(PathBuf, bool), String> {
             "--json" => json = true,
             "--events" => {
                 i += 1;
-                let value = args
-                    .get(i)
-                    .ok_or_else(|| "--events requires a path".to_string())?;
+                let value = args.get(i).ok_or_else(|| {
+                    DiagnoseError::InvalidArgs("--events requires a path".to_string())
+                })?;
                 path = Some(PathBuf::from(value));
             }
-            other => return Err(format!("unsupported diagnose argument: {other}")),
+            other => {
+                return Err(DiagnoseError::InvalidArgs(format!(
+                    "unsupported diagnose argument: {other}"
+                )))
+            }
         }
         i += 1;
     }
     Ok((
-        path.ok_or_else(|| "usage: ramshared diagnose --events PATH [--json]".to_string())?,
+        path.ok_or_else(|| {
+            DiagnoseError::InvalidArgs("usage: ramshared diagnose --events PATH [--json]".to_string())
+        })?,
         json,
     ))
 }
 
-fn diagnose_jsonl(text: &str) -> Result<Diagnosis, String> {
+fn diagnose_jsonl(text: &str) -> Result<Diagnosis, DiagnoseError> {
     let mut events = Vec::new();
     for (idx, line) in text.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let event: Event =
-            serde_json::from_str(line).map_err(|e| format!("line {}: {e}", idx + 1))?;
+        let event: Event = serde_json::from_str(line)
+            .map_err(|e| DiagnoseError::ParseJson(format!("line {}: {e}", idx + 1)))?;
         events.push(event);
     }
     Ok(diagnose_events(&events))
