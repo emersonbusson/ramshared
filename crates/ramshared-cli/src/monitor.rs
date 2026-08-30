@@ -1202,8 +1202,9 @@ fn draw_dashboard(frame: &mut Frame<'_>, observation: &Observation, history: &Ve
         ("🟡 STATUS: ARMED & READY", Color::Yellow)
     };
 
+    let version = env!("CARGO_PKG_VERSION");
     let header = Paragraph::new(Line::from(format!(
-        " RamShared │ {status_text} │ Phase: {} │ Memory Protection: ACTIVE",
+        " RamShared v{version} │ {status_text} │ Phase: {} │ Memory Protection: ACTIVE",
         observation.string("phase"),
     )))
     .style(Style::default().fg(state_color))
