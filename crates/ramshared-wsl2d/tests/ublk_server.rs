@@ -54,3 +54,35 @@ fn serve_request_handles_flush_and_rejects_oversized_or_oob() {
         -5
     );
 }
+
+#[test]
+fn serve_request_guards_against_out_of_bounds_upfront() {
+    let mut backend = RamBackend::new(4096);
+    let mut buf = vec![0u8; 4096];
+
+    // Exact fit
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Read, 0, 4096), &mut backend, &mut buf),
+        4096
+    );
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Write, 2048, 2048), &mut backend, &mut buf),
+        2048
+    );
+
+    // Overflow offset + len
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Read, u64::MAX, 1024), &mut backend, &mut buf),
+        -5 // EIO
+    );
+
+    // Exceeds backend size bytes
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Read, 4096, 512), &mut backend, &mut buf),
+        -5 // EIO
+    );
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Write, 2048, 4096), &mut backend, &mut buf),
+        -5 // EIO
+    );
+}

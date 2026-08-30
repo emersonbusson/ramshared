@@ -78,12 +78,25 @@ pub fn serve_request<B: BlockBackend + ?Sized>(
         return EINVAL; // request larger than the available buffer
     }
 
+    // Physical bounds guard
+    if req.offset.checked_add(req.len as u64).is_none_or(|end| end > backend.size_bytes()) {
+        return EIO;
+    }
+
+    // Command guard
+    if !matches!(req.cmd, Command::Read | Command::Write | Command::Flush | Command::Trim) {
+        return EINVAL;
+    }
+
+    if req.cmd == Command::Trim {
+        return 0; // discard: safe no-op in the MVP
+    }
+
     let served = match req.cmd {
         Command::Read => backend.read_at(req.offset, &mut buf[..len]).map(|()| len),
         Command::Write => backend.write_at(req.offset, &buf[..len]).map(|()| len),
         Command::Flush => backend.flush().map(|()| 0),
-        Command::Trim => return 0, // discard: safe no-op in the MVP
-        Command::Disc | Command::Unknown(_) => return EINVAL,
+        _ => unreachable!(),
     };
 
     match served {
@@ -387,13 +400,12 @@ fn dispatch_request<S: QueueServer>(
     // WRITE: kernel already copied bio->tag buffer; passes it in the yielded buffer.
     if req.cmd == Command::Write {
         let tag_buf = server.buffer_mut(tag)?;
-        if len <= tag_buf.len() {
-            buf.copy_from_slice(&tag_buf[..len]);
-        } else {
+        if len > tag_buf.len() {
             buf_pool.push(buf); // returns to pool before rejecting
             server.commit_and_fetch(tag, -22)?; // EINVAL
             return Ok(false);
         }
+        buf.copy_from_slice(&tag_buf[..len]);
     }
 
     let work = ublk::IoWork {
