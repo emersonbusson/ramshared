@@ -32,6 +32,19 @@ impl Tier {
     }
 }
 
+impl TryFrom<u32> for Tier {
+    type Error = TierError;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Tier::Zram),
+            1 => Ok(Tier::Vram),
+            2 => Ok(Tier::Vhdx),
+            _ => Err(TierError::InvalidTier),
+        }
+    }
+}
+
 /// Safety net status for the VRAM demotion path (Invariant A1).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SafetyNet {
@@ -67,30 +80,35 @@ pub fn vram_safety_net(vhdx_present: bool, mem_available: u64, vram_size: u64) -
 
 /// Errors that can occur during tier resizing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ResizeError {
+pub enum TierError {
     /// The requested tier capacity exceeds the physical hardware capacity limit.
-    ExceedsPhysicalLimit,
+    OutOfRange,
+    /// The provided tier identifier is invalid.
+    InvalidTier,
 }
 
-impl core::fmt::Display for ResizeError {
+impl core::fmt::Display for TierError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            ResizeError::ExceedsPhysicalLimit => {
+            TierError::OutOfRange => {
                 f.write_str("requested tier capacity exceeds the physical hardware limit")
+            }
+            TierError::InvalidTier => {
+                f.write_str("invalid tier identifier")
             }
         }
     }
 }
 
-impl core::error::Error for ResizeError {}
+impl core::error::Error for TierError {}
 
 /// Validates that a requested tier resize is within physical hardware limits.
 pub fn validate_tier_resize(
     requested_bytes: u64,
     physical_limit_bytes: u64,
-) -> Result<(), ResizeError> {
+) -> Result<(), TierError> {
     if requested_bytes > physical_limit_bytes {
-        Err(ResizeError::ExceedsPhysicalLimit)
+        Err(TierError::OutOfRange)
     } else {
         Ok(())
     }
@@ -158,11 +176,24 @@ mod tests {
     fn tier_resize_exceeding_physical_limits_fails() {
         assert_eq!(
             validate_tier_resize(GIB + 1, GIB),
-            Err(ResizeError::ExceedsPhysicalLimit)
+            Err(TierError::OutOfRange)
         );
         assert_eq!(
             validate_tier_resize(2 * GIB, GIB),
-            Err(ResizeError::ExceedsPhysicalLimit)
+            Err(TierError::OutOfRange)
         );
+    }
+
+    #[test]
+    fn try_from_valid_tiers() {
+        assert_eq!(Tier::try_from(0), Ok(Tier::Zram));
+        assert_eq!(Tier::try_from(1), Ok(Tier::Vram));
+        assert_eq!(Tier::try_from(2), Ok(Tier::Vhdx));
+    }
+
+    #[test]
+    fn try_from_invalid_tier() {
+        assert_eq!(Tier::try_from(3), Err(TierError::InvalidTier));
+        assert_eq!(Tier::try_from(42), Err(TierError::InvalidTier));
     }
 }
