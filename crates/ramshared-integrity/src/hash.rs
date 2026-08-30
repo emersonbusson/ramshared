@@ -27,15 +27,17 @@ pub enum ChecksumMismatchError {
         computed: u64,
     },
     /// The block index is out of physical bounds.
-    OutOfBounds {
-        idx: usize,
-    },
+    OutOfBounds { idx: usize },
 }
 
 impl fmt::Display for ChecksumMismatchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Mismatch { idx, expected, computed } => {
+            Self::Mismatch {
+                idx,
+                expected,
+                computed,
+            } => {
                 write!(
                     f,
                     "checksum mismatch at block {idx}: expected {expected:#x}, got {computed:#x}"
