@@ -689,7 +689,7 @@ mod tests {
         // Ring capacity is 2. Push 2 items, 3rd should fail.
         assert!(server.push(0, 0, 0, 0).is_ok());
         assert!(server.push(0, 1, 0, 0).is_ok());
-        let err = server.push(0, 2, 0, 0).unwrap_err();
+        let err = server.push(0, 2, 0, 0).expect_err("expected ring full error");
         assert_eq!(err.kind(), io::ErrorKind::Other);
         assert_eq!(err.to_string(), "io_uring submission queue is full");
 
