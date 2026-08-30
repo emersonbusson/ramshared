@@ -1,1 +1,1 @@
-echo "Doing nothing, will fix via submit"
+echo "Fixing via submit"
