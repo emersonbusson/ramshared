@@ -1,6 +1,8 @@
 //! Block hashing (FNV-1a 64) + pre-allocated checksum table (SPEC §8.1).
 //! **Not cryptographic** — meant for detecting memory corruption and torn reads, not security.
 
+pub const EXPECTED_BLOCK_SIZE: usize = 4096;
+
 const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
@@ -29,29 +31,51 @@ impl ChecksumTable {
 
     /// Records the hash of a written block. Returns `false` if `idx` is out of bounds.
     pub fn record(&mut self, idx: usize, data: &[u8]) -> bool {
-        match self.sums.get_mut(idx) {
-            Some(slot) => {
-                *slot = Some(block_hash(data));
-                true
-            }
-            None => false,
+        if data.is_empty() {
+            return false;
         }
+        if data.len() != EXPECTED_BLOCK_SIZE {
+            return false;
+        }
+        let Some(slot) = self.sums.get_mut(idx) else {
+            return false;
+        };
+        *slot = Some(block_hash(data));
+        true
     }
 
     /// Verifies the read block against the recorded hash.
     /// `None` = never written (ok); `Some(true)` = matches; `Some(false)` =
     /// mismatch (corruption/torn read) -> the caller returns an I/O error.
     pub fn verify(&self, idx: usize, data: &[u8]) -> Option<bool> {
-        match self.sums.get(idx) {
-            Some(Some(expected)) => Some(*expected == block_hash(data)),
-            Some(None) => None,
-            None => Some(false), // out of bounds = invalid
+        if data.is_empty() {
+            return Some(false);
         }
+        if data.len() != EXPECTED_BLOCK_SIZE {
+            return Some(false);
+        }
+        let Some(slot) = self.sums.get(idx) else {
+            return Some(false); // out of bounds = invalid
+        };
+        let Some(expected) = slot else {
+            return None;
+        };
+        Some(*expected == block_hash(data))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn table_rejects_empty_and_wrong_length_data() {
+        let mut t = ChecksumTable::new(8);
+        assert!(!t.record(3, &[])); // empty
+        assert!(!t.record(3, &[0u8; 123])); // wrong length
+
+        assert_eq!(t.verify(3, &[]), Some(false));
+        assert_eq!(t.verify(3, &[0u8; 123]), Some(false));
+    }
+
     use super::*;
 
     #[test]
