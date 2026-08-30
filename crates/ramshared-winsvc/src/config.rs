@@ -59,14 +59,22 @@ fn default_heartbeat_secs() -> u64 {
 #[derive(Debug, PartialEq)]
 pub enum ConfigError {
     Parse(String),
-    Invalid { field: &'static str, value: String, expected: String },
+    Invalid {
+        field: &'static str,
+        value: String,
+        expected: String,
+    },
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConfigError::Parse(s) => write!(f, "config parse: {s}"),
-            ConfigError::Invalid { field, value, expected } => {
+            ConfigError::Invalid {
+                field,
+                value,
+                expected,
+            } => {
                 write!(f, "config invalid {field}: {value} (expected {expected})")
             }
         }

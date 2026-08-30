@@ -95,7 +95,10 @@ impl core::error::Error for PurgeAgeError {}
 ///
 /// Enforces physical bounds: one cannot purge data that claims to be older than the system
 /// has been alive.
-pub fn validate_purge_age(purge_age_seconds: u64, uptime_seconds: u64) -> Result<(), PurgeAgeError> {
+pub fn validate_purge_age(
+    purge_age_seconds: u64,
+    uptime_seconds: u64,
+) -> Result<(), PurgeAgeError> {
     if purge_age_seconds > uptime_seconds {
         return Err(PurgeAgeError::AgeExceedsUptime);
     }
@@ -152,8 +155,22 @@ mod tests {
 
     #[test]
     fn validate_threshold_rejects_out_of_bounds() {
-        assert_eq!(validate_threshold(5, 10, 50), Err(PriorityError::ThresholdOutOfRange { val: 5, min: 10, max: 50 }));
-        assert_eq!(validate_threshold(100, 10, 50), Err(PriorityError::ThresholdOutOfRange { val: 100, min: 10, max: 50 }));
+        assert_eq!(
+            validate_threshold(5, 10, 50),
+            Err(PriorityError::ThresholdOutOfRange {
+                val: 5,
+                min: 10,
+                max: 50
+            })
+        );
+        assert_eq!(
+            validate_threshold(100, 10, 50),
+            Err(PriorityError::ThresholdOutOfRange {
+                val: 100,
+                min: 10,
+                max: 50
+            })
+        );
     }
 
     #[test]
@@ -215,6 +232,9 @@ mod tests {
     fn validate_purge_age_enforces_uptime() {
         assert!(validate_purge_age(100, 200).is_ok());
         assert!(validate_purge_age(200, 200).is_ok());
-        assert_eq!(validate_purge_age(201, 200), Err(PurgeAgeError::AgeExceedsUptime));
+        assert_eq!(
+            validate_purge_age(201, 200),
+            Err(PurgeAgeError::AgeExceedsUptime)
+        );
     }
 }

@@ -51,14 +51,13 @@ impl std::fmt::Display for WinBrokerError {
 impl From<std::io::Error> for WinBrokerError {
     fn from(error: std::io::Error) -> Self {
         match error.raw_os_error() {
-            Some(231) => Self::PipeBusy,     // ERROR_PIPE_BUSY
-            Some(232) => Self::NoData,       // ERROR_NO_DATA
-            Some(109) => Self::BrokenPipe,   // ERROR_BROKEN_PIPE
+            Some(231) => Self::PipeBusy,   // ERROR_PIPE_BUSY
+            Some(232) => Self::NoData,     // ERROR_NO_DATA
+            Some(109) => Self::BrokenPipe, // ERROR_BROKEN_PIPE
             _ => Self::Other(error),
         }
     }
 }
-
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -183,7 +182,9 @@ impl BrokerSessionCore {
             Msg::LeaseRelease { lease } => {
                 let released = match self.lease_book.release(1, lease) {
                     Ok(r) => r,
-                    Err(LeaseDeny::WrongLease) => return vec![BrokerEffect::Audit("lease_release_idempotent".into())],
+                    Err(LeaseDeny::WrongLease) => {
+                        return vec![BrokerEffect::Audit("lease_release_idempotent".into())];
+                    }
                     Err(reason) => return vec![Self::error_and_close(reason), BrokerEffect::Close],
                 };
                 if released {
@@ -326,7 +327,10 @@ mod tests {
         assert!(matches!(WinBrokerError::from(e), WinBrokerError::NoData));
 
         let e = io::Error::from_raw_os_error(109);
-        assert!(matches!(WinBrokerError::from(e), WinBrokerError::BrokenPipe));
+        assert!(matches!(
+            WinBrokerError::from(e),
+            WinBrokerError::BrokenPipe
+        ));
 
         let e = io::Error::from_raw_os_error(5); // Access denied
         assert!(matches!(WinBrokerError::from(e), WinBrokerError::Other(_)));

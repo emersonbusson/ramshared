@@ -673,7 +673,12 @@ mod tests {
 
         let mut over_ipc_limit_wire = export_name_handshake(b"");
         // 16 MiB + 1
-        over_ipc_limit_wire.extend_from_slice(&request_bytes(1, 2, 16 * 1024 * 1024 + 1, NBD_REQUEST_MAGIC));
+        over_ipc_limit_wire.extend_from_slice(&request_bytes(
+            1,
+            2,
+            16 * 1024 * 1024 + 1,
+            NBD_REQUEST_MAGIC,
+        ));
         let (over_ipc_tx, over_ipc_rx) = sync_channel(1);
         let (reply_tx, _reply_rx) = channel();
         let over_ipc_reader = spawn_reader(

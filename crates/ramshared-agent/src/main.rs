@@ -364,14 +364,21 @@ fn session(
                     #[cfg(test)]
                     {
                         // In tests, if PSI fails we still send a dummy PSI message so that expect_register_and_psi doesn't block/panic.
-                        let _ = write_msg(&mut w, &Msg::Psi {
-                            sample: ramshared_broker::model::PsiSample { avg10: 0.0, avg60: 0.0, stall_us: 0 },
-                            swaps: vec![],
-                            mem: Some(ramshared_broker::protocol::TenantMem {
-                                swap_current: None,
-                                diskstats_io: 0,
-                            }),
-                        });
+                        let _ = write_msg(
+                            &mut w,
+                            &Msg::Psi {
+                                sample: ramshared_broker::model::PsiSample {
+                                    avg10: 0.0,
+                                    avg60: 0.0,
+                                    stall_us: 0,
+                                },
+                                swaps: vec![],
+                                mem: Some(ramshared_broker::protocol::TenantMem {
+                                    swap_current: None,
+                                    diskstats_io: 0,
+                                }),
+                            },
+                        );
                     }
                 }
             }

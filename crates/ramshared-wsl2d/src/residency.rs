@@ -31,7 +31,11 @@ impl Default for ResidencyConfig {
 }
 
 impl ResidencyConfig {
-    pub fn validate_limits(&self, system_total_bytes: u64, cgroup_max_bytes: Option<u64>) -> std::io::Result<()> {
+    pub fn validate_limits(
+        &self,
+        system_total_bytes: u64,
+        cgroup_max_bytes: Option<u64>,
+    ) -> std::io::Result<()> {
         let max_limit = cgroup_max_bytes.unwrap_or(u64::MAX).min(system_total_bytes);
 
         if self.free_floor_bytes == 0 {
@@ -44,7 +48,10 @@ impl ResidencyConfig {
         if self.free_floor_bytes > max_limit {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("free_floor_bytes ({}) exceeds physical memory limit ({})", self.free_floor_bytes, max_limit),
+                format!(
+                    "free_floor_bytes ({}) exceeds physical memory limit ({})",
+                    self.free_floor_bytes, max_limit
+                ),
             ));
         }
 
@@ -84,7 +91,9 @@ impl std::error::Error for ResidencyError {}
 
 pub fn parse_cgroup_metric(content: Option<&str>) -> Result<u64, ResidencyError> {
     let s = content.ok_or(ResidencyError::ProcfsMissing)?;
-    s.trim().parse::<u64>().map_err(|_| ResidencyError::MalformedMetric)
+    s.trim()
+        .parse::<u64>()
+        .map_err(|_| ResidencyError::MalformedMetric)
 }
 
 /// Canary state: baseline (median right after `VramAllocated`) + streak of
@@ -188,7 +197,9 @@ mod tests {
             free_floor_bytes: 0,
             ..Default::default()
         };
-        assert!(matches!(cfg.validate_limits(1024, None), Err(err) if err.kind() == std::io::ErrorKind::InvalidInput));
+        assert!(
+            matches!(cfg.validate_limits(1024, None), Err(err) if err.kind() == std::io::ErrorKind::InvalidInput)
+        );
     }
 
     #[test]
@@ -198,10 +209,14 @@ mod tests {
             ..Default::default()
         };
         // Exceeds system total
-        assert!(matches!(cfg.validate_limits(1024, None), Err(err) if err.kind() == std::io::ErrorKind::InvalidInput));
+        assert!(
+            matches!(cfg.validate_limits(1024, None), Err(err) if err.kind() == std::io::ErrorKind::InvalidInput)
+        );
 
         // Exceeds cgroup max
-        assert!(matches!(cfg.validate_limits(4096, Some(1024)), Err(err) if err.kind() == std::io::ErrorKind::InvalidInput));
+        assert!(
+            matches!(cfg.validate_limits(4096, Some(1024)), Err(err) if err.kind() == std::io::ErrorKind::InvalidInput)
+        );
     }
 
     use super::*;
@@ -338,13 +353,22 @@ mod sampler_tests {
 
     #[test]
     fn parse_cgroup_metric_missing() {
-        assert_eq!(parse_cgroup_metric(None), Err(ResidencyError::ProcfsMissing));
+        assert_eq!(
+            parse_cgroup_metric(None),
+            Err(ResidencyError::ProcfsMissing)
+        );
     }
 
     #[test]
     fn parse_cgroup_metric_malformed() {
-        assert_eq!(parse_cgroup_metric(Some("")), Err(ResidencyError::MalformedMetric));
-        assert_eq!(parse_cgroup_metric(Some("abc")), Err(ResidencyError::MalformedMetric));
+        assert_eq!(
+            parse_cgroup_metric(Some("")),
+            Err(ResidencyError::MalformedMetric)
+        );
+        assert_eq!(
+            parse_cgroup_metric(Some("abc")),
+            Err(ResidencyError::MalformedMetric)
+        );
     }
 
     #[test]
@@ -354,7 +378,13 @@ mod sampler_tests {
 
     #[test]
     fn residency_error_display() {
-        assert_eq!(ResidencyError::ProcfsMissing.to_string(), "procfs missing (-ENOENT)");
-        assert_eq!(ResidencyError::MalformedMetric.to_string(), "malformed metric (-EINVAL)");
+        assert_eq!(
+            ResidencyError::ProcfsMissing.to_string(),
+            "procfs missing (-ENOENT)"
+        );
+        assert_eq!(
+            ResidencyError::MalformedMetric.to_string(),
+            "malformed metric (-EINVAL)"
+        );
     }
 }

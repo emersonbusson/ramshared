@@ -13,9 +13,9 @@
 
 use rustix::io::Errno;
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
-use std::os::unix::ffi::OsStrExt;
 use std::fmt;
 use std::io::{self, Read};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -30,13 +30,32 @@ const FATAL_EXIT_CODE: i32 = 125;
 
 #[derive(Debug)]
 pub(crate) enum ProcessSpawnError {
-    BinaryNotFound { command: String },
-    ExecutionTimeout { command: String, timeout: Duration },
-    NonZeroExit { command: String, exit_code: i32, stderr: String },
-    SpawnFailed { command: String, kind: io::ErrorKind, detail: String },
-    FatalContainment { detail: String },
-    PipeError { detail: String },
-    GenericError { detail: String },
+    BinaryNotFound {
+        command: String,
+    },
+    ExecutionTimeout {
+        command: String,
+        timeout: Duration,
+    },
+    NonZeroExit {
+        command: String,
+        exit_code: i32,
+        stderr: String,
+    },
+    SpawnFailed {
+        command: String,
+        kind: io::ErrorKind,
+        detail: String,
+    },
+    FatalContainment {
+        detail: String,
+    },
+    PipeError {
+        detail: String,
+    },
+    GenericError {
+        detail: String,
+    },
 }
 
 impl ProcessSpawnError {
@@ -51,7 +70,9 @@ impl ProcessSpawnError {
 
     fn spawn(label: &str, error: io::Error) -> Self {
         if error.kind() == io::ErrorKind::NotFound {
-            ProcessSpawnError::BinaryNotFound { command: label.to_string() }
+            ProcessSpawnError::BinaryNotFound {
+                command: label.to_string(),
+            }
         } else {
             ProcessSpawnError::SpawnFailed {
                 command: label.to_string(),
@@ -66,7 +87,9 @@ impl ProcessSpawnError {
     }
 
     fn fatal(detail: impl Into<String>) -> Self {
-        ProcessSpawnError::FatalContainment { detail: detail.into() }
+        ProcessSpawnError::FatalContainment {
+            detail: detail.into(),
+        }
     }
 
     fn is_fatal(&self) -> bool {
@@ -77,17 +100,33 @@ impl ProcessSpawnError {
 impl fmt::Display for ProcessSpawnError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ProcessSpawnError::BinaryNotFound { command } => write!(f, "spawn {command}: binary not found"),
-            ProcessSpawnError::ExecutionTimeout { command, timeout } => write!(f, "{command} timed out after {} ms; process group killed and direct child reaped", timeout.as_millis()),
-            ProcessSpawnError::NonZeroExit { command, exit_code, stderr } => {
+            ProcessSpawnError::BinaryNotFound { command } => {
+                write!(f, "spawn {command}: binary not found")
+            }
+            ProcessSpawnError::ExecutionTimeout { command, timeout } => write!(
+                f,
+                "{command} timed out after {} ms; process group killed and direct child reaped",
+                timeout.as_millis()
+            ),
+            ProcessSpawnError::NonZeroExit {
+                command,
+                exit_code,
+                stderr,
+            } => {
                 if stderr.is_empty() {
                     write!(f, "{command} exited with {exit_code}")
                 } else {
                     write!(f, "{command} exited with {exit_code}: {stderr}")
                 }
             }
-            ProcessSpawnError::SpawnFailed { command, kind, detail } => write!(f, "spawn {command} ({kind}): {detail}"),
-            ProcessSpawnError::FatalContainment { detail } => write!(f, "fatal containment selected: {detail}"),
+            ProcessSpawnError::SpawnFailed {
+                command,
+                kind,
+                detail,
+            } => write!(f, "spawn {command} ({kind}): {detail}"),
+            ProcessSpawnError::FatalContainment { detail } => {
+                write!(f, "fatal containment selected: {detail}")
+            }
             ProcessSpawnError::PipeError { detail } => write!(f, "{detail}"),
             ProcessSpawnError::GenericError { detail } => write!(f, "{detail}"),
         }
@@ -313,7 +352,10 @@ pub(crate) fn wait_grouped_child(
             Ok(false) if Instant::now() < deadline => std::thread::sleep(POLL_INTERVAL),
             Ok(false) => {
                 terminate_group_and_reap(child, label)?;
-                return Err(ProcessSpawnError::ExecutionTimeout { command: label.to_string(), timeout });
+                return Err(ProcessSpawnError::ExecutionTimeout {
+                    command: label.to_string(),
+                    timeout,
+                });
             }
             Err(error) => {
                 return Err(fatal_error(
@@ -373,9 +415,7 @@ impl CaptureWorker {
             .take()
             .ok_or_else(|| ProcessSpawnError::new("capture worker joined twice"))?
             .join()
-            .map_err(|_| {
-                ProcessSpawnError::new(format!("{} capture worker panicked", self.stream))
-            })
+            .map_err(|_| ProcessSpawnError::new(format!("{} capture worker panicked", self.stream)))
     }
 }
 
@@ -642,7 +682,10 @@ where
                 let proof =
                     force_exit_observed(child.child_mut(), label, REAP_GRACE, &ExitController)?;
                 break (
-                    Some(ProcessSpawnError::ExecutionTimeout { command: label.to_string(), timeout }),
+                    Some(ProcessSpawnError::ExecutionTimeout {
+                        command: label.to_string(),
+                        timeout,
+                    }),
                     proof,
                     None,
                 );
@@ -1007,7 +1050,11 @@ mod tests {
         .expect_err("nonzero status must return NonZeroExit");
 
         match error {
-            ProcessSpawnError::NonZeroExit { command: _, exit_code, stderr } => {
+            ProcessSpawnError::NonZeroExit {
+                command: _,
+                exit_code,
+                stderr,
+            } => {
                 assert_eq!(exit_code, 7);
                 assert_eq!(stderr, "failed");
             }
@@ -1039,7 +1086,8 @@ mod tests {
             Duration::from_secs(1),
             1024,
             |_| {},
-        ).expect_err("should reject empty program");
+        )
+        .expect_err("should reject empty program");
         assert!(error.to_string().contains("empty program"));
     }
 
@@ -1052,8 +1100,12 @@ mod tests {
             Duration::from_secs(1),
             1024,
             |_| {},
-        ).expect_err("should reject non existent binary");
-        assert!(error.to_string().contains("binary not found") || error.to_string().contains("binary path does not exist"));
+        )
+        .expect_err("should reject non existent binary");
+        assert!(
+            error.to_string().contains("binary not found")
+                || error.to_string().contains("binary path does not exist")
+        );
     }
 
     #[test]
@@ -1069,7 +1121,8 @@ mod tests {
             Duration::from_secs(1),
             1024,
             |_| {},
-        ).expect_err("should reject null bytes in arguments");
+        )
+        .expect_err("should reject null bytes in arguments");
         assert!(error.to_string().contains("nul byte"));
     }
 
@@ -1083,7 +1136,8 @@ mod tests {
             Duration::from_secs(1),
             1024,
             |_| {},
-        ).expect_err("should reject empty arguments");
+        )
+        .expect_err("should reject empty arguments");
         assert!(error.to_string().contains("empty argument"));
     }
 

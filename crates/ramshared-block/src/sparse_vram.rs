@@ -239,7 +239,10 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
 
     fn ensure_live(&mut self, idx: usize) -> Result<(), IoError> {
         let Some(chunk) = self.chunks.get(idx) else {
-            return Err(IoError(format!("sparse page table oob idx={idx} len={}", self.chunks.len())));
+            return Err(IoError(format!(
+                "sparse page table oob idx={idx} len={}",
+                self.chunks.len()
+            )));
         };
         if chunk.mem.is_some() {
             return Ok(());
@@ -294,7 +297,10 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         };
         m.zero().map_err(|e| IoError(e.to_string()))?;
         let Some(chunk) = self.chunks.get_mut(idx) else {
-            return Err(IoError(format!("sparse page table oob idx={idx} len={}", self.chunks.len())));
+            return Err(IoError(format!(
+                "sparse page table oob idx={idx} len={}",
+                self.chunks.len()
+            )));
         };
         chunk.mem = Some(m);
         Ok(())
@@ -344,7 +350,10 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
             let room = (self.chunk_bytes as usize).saturating_sub(rel);
             let n = (buf.len() - done).min(room);
             let Some(chunk) = self.chunks.get(idx) else {
-                return Err(IoError(format!("sparse page table oob idx={idx} len={}", self.chunks.len())));
+                return Err(IoError(format!(
+                    "sparse page table oob idx={idx} len={}",
+                    self.chunks.len()
+                )));
             };
             if let Some(m) = &chunk.mem {
                 m.read_at(rel as u64, &mut buf[done..done + n])
@@ -383,9 +392,15 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
             let room = (self.chunk_bytes as usize).saturating_sub(rel);
             let n = (data.len() - done).min(room);
             let Some(chunk) = self.chunks.get_mut(idx) else {
-                return Err(IoError(format!("sparse page table oob idx={idx} len={}", self.chunks.len())));
+                return Err(IoError(format!(
+                    "sparse page table oob idx={idx} len={}",
+                    self.chunks.len()
+                )));
             };
-            let m = chunk.mem.as_mut().ok_or_else(|| IoError("sparse: mem missing after ensure".into()))?;
+            let m = chunk
+                .mem
+                .as_mut()
+                .ok_or_else(|| IoError("sparse: mem missing after ensure".into()))?;
             m.write_at(rel as u64, &data[done..done + n])
                 .map_err(|e: VramError| IoError(e.to_string()))?;
 
@@ -688,7 +703,10 @@ mod tests {
         let p = FakeProvider::new();
         let mut be = SparseVramBackend::new(&p, 1024 * 1024, 256 * 1024, 4096).unwrap();
         let err = be.ensure_live(9999).expect_err("should return IoError");
-        assert!(err.0.contains("sparse page table oob idx=9999") || err.0.contains("exceeds physical map len"));
+        assert!(
+            err.0.contains("sparse page table oob idx=9999")
+                || err.0.contains("exceeds physical map len")
+        );
     }
 
     #[test]

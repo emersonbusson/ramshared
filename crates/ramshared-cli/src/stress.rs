@@ -535,7 +535,10 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
 
         let mut avail_mb = avail_mb;
         let mut retries = 0;
-        while avail_mb <= hard_floor && (opts.tier3_target_pct.is_some() || opts.cascade) && retries < 20 {
+        while avail_mb <= hard_floor
+            && (opts.tier3_target_pct.is_some() || opts.cascade)
+            && retries < 20
+        {
             thread::sleep(Duration::from_millis(50));
             let (_, new_avail) = read_mem_info();
             avail_mb = new_avail;

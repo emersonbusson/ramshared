@@ -743,7 +743,12 @@ impl PreflightModel {
         }
         PreflightDecision {
             state: self.state,
-            action: PreflightAction::Unavailable(FailureReason::StateTransition(StateTransitionError::IllegalPreflight { expected: Some(PreflightState::Constrained), actual: self.state })),
+            action: PreflightAction::Unavailable(FailureReason::StateTransition(
+                StateTransitionError::IllegalPreflight {
+                    expected: Some(PreflightState::Constrained),
+                    actual: self.state,
+                },
+            )),
             retry_allowed: true,
         }
     }
@@ -1231,7 +1236,12 @@ impl LeaseMachine {
             || self.restored_restart_epoch.is_some()
             || self.preflight.observation_count() != 0
         {
-            return Err(self.fail_restart_restore(FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Absent), actual: self.lease_state.tag() })));
+            return Err(self.fail_restart_restore(FailureReason::StateTransition(
+                StateTransitionError::IllegalTransition {
+                    expected: Some(StateTag::Absent),
+                    actual: self.lease_state.tag(),
+                },
+            )));
         }
 
         let host_epoch = record.host_epoch();
@@ -1297,7 +1307,10 @@ impl LeaseMachine {
                 Some(grant.lease_id),
                 Some(grant.generation),
                 Some(grant.event_id),
-                FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Absent), actual: self.lease_state.tag() }),
+                FailureReason::StateTransition(StateTransitionError::IllegalTransition {
+                    expected: Some(StateTag::Absent),
+                    actual: self.lease_state.tag(),
+                }),
             );
         }
         if grant
@@ -1308,7 +1321,10 @@ impl LeaseMachine {
                 Some(grant.lease_id),
                 Some(grant.generation),
                 Some(grant.event_id),
-                FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Absent), actual: self.lease_state.tag() }),
+                FailureReason::StateTransition(StateTransitionError::IllegalTransition {
+                    expected: Some(StateTag::Absent),
+                    actual: self.lease_state.tag(),
+                }),
             );
         }
         if grant.contract_version != N3_SCHEMA_VERSION
@@ -1335,7 +1351,10 @@ impl LeaseMachine {
                 Some(grant.lease_id),
                 Some(grant.generation),
                 Some(grant.event_id),
-                FailureReason::StateTransition(StateTransitionError::StaleGeneration { provided: grant.host_epoch, expected: self.restored_restart_epoch.unwrap_or(0) }),
+                FailureReason::StateTransition(StateTransitionError::StaleGeneration {
+                    provided: grant.host_epoch,
+                    expected: self.restored_restart_epoch.unwrap_or(0),
+                }),
             );
         }
         let Some(observation) = self.preflight.latest_observation() else {
@@ -1404,7 +1423,10 @@ impl LeaseMachine {
                 Some(ack.lease_id),
                 Some(ack.generation),
                 Some(ack.event_id),
-                FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Negotiating), actual: self.lease_state.tag() }),
+                FailureReason::StateTransition(StateTransitionError::IllegalTransition {
+                    expected: Some(StateTag::Negotiating),
+                    actual: self.lease_state.tag(),
+                }),
             );
         };
         if self.lease_state != LeaseState::Negotiating(grant.generation)
@@ -1468,7 +1490,10 @@ impl LeaseMachine {
                 Some(revoke.lease_id),
                 Some(revoke.generation),
                 Some(revoke.event_id),
-                FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Granted), actual: self.lease_state.tag() }),
+                FailureReason::StateTransition(StateTransitionError::IllegalTransition {
+                    expected: Some(StateTag::Granted),
+                    actual: self.lease_state.tag(),
+                }),
             );
         };
         if self.lease_state != LeaseState::Granted(active.generation)
@@ -1491,7 +1516,10 @@ impl LeaseMachine {
                 Some(revoke.lease_id),
                 Some(revoke.generation),
                 Some(revoke.event_id),
-                FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Granted), actual: self.lease_state.tag() }),
+                FailureReason::StateTransition(StateTransitionError::IllegalTransition {
+                    expected: Some(StateTag::Granted),
+                    actual: self.lease_state.tag(),
+                }),
             );
         }
         active.revoke = Some(revoke);
@@ -1559,13 +1587,31 @@ impl LeaseMachine {
     /// Attempts to finish a revoke drain before its host deadline.
     pub fn drain(&mut self, now: u64) -> ProtocolDecision {
         let Some(active) = self.active_lease.as_ref() else {
-            return self.fail_for_event(None, None, None, FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Granted), actual: self.lease_state.tag() }));
+            return self.fail_for_event(
+                None,
+                None,
+                None,
+                FailureReason::StateTransition(StateTransitionError::IllegalTransition {
+                    expected: Some(StateTag::Granted),
+                    actual: self.lease_state.tag(),
+                }),
+            );
         };
         let Some(revoke) = active.revoke.as_ref() else {
-            return self.fail_for_active(FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Quiescing), actual: self.lease_state.tag() }));
+            return self.fail_for_active(FailureReason::StateTransition(
+                StateTransitionError::IllegalTransition {
+                    expected: Some(StateTag::Quiescing),
+                    actual: self.lease_state.tag(),
+                },
+            ));
         };
         if self.lease_state != LeaseState::Quiescing(active.generation) {
-            return self.fail_for_active(FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Quiescing), actual: self.lease_state.tag() }));
+            return self.fail_for_active(FailureReason::StateTransition(
+                StateTransitionError::IllegalTransition {
+                    expected: Some(StateTag::Quiescing),
+                    actual: self.lease_state.tag(),
+                },
+            ));
         }
         if now >= revoke.deadline {
             return self.fail_for_active(FailureReason::DrainTimeout);
@@ -1768,7 +1814,12 @@ impl LeaseMachine {
             .find(|(known_lease, _)| known_lease == lease_id)
         {
             if generation <= *previous {
-                return Err(FailureReason::StateTransition(StateTransitionError::StaleGeneration { provided: generation, expected: *previous }));
+                return Err(FailureReason::StateTransition(
+                    StateTransitionError::StaleGeneration {
+                        provided: generation,
+                        expected: *previous,
+                    },
+                ));
             }
             if generation != previous.saturating_add(1) {
                 return Err(FailureReason::GenerationGap);
@@ -1849,11 +1900,17 @@ mod tests {
         let decision = model.request_demotion();
         assert_eq!(
             decision.action,
-            PreflightAction::Unavailable(FailureReason::StateTransition(StateTransitionError::IllegalPreflight { expected: Some(PreflightState::Constrained), actual: model.state }))
+            PreflightAction::Unavailable(FailureReason::StateTransition(
+                StateTransitionError::IllegalPreflight {
+                    expected: Some(PreflightState::Constrained),
+                    actual: model.state
+                }
+            ))
         );
 
         // Let's create a constrained state by observing an empty budget
-        let event_id = EventId::new(b"event-1").unwrap_or_else(|_| panic!("failed to create event_id"));
+        let event_id =
+            EventId::new(b"event-1").unwrap_or_else(|_| panic!("failed to create event_id"));
         let adapter_id = AdapterId::new(b"adapter-1").unwrap();
 
         let observation = HostObservation::new(
@@ -1902,8 +1959,10 @@ mod tests {
     #[test]
     fn test_invalid_revoke_transition() {
         let mut machine = LeaseMachine::new();
-        let lease_id = LeaseId::new(b"lease-1").unwrap_or_else(|_| panic!("failed to create lease_id"));
-        let event_id = EventId::new(b"event-1").unwrap_or_else(|_| panic!("failed to create event_id"));
+        let lease_id =
+            LeaseId::new(b"lease-1").unwrap_or_else(|_| panic!("failed to create lease_id"));
+        let event_id =
+            EventId::new(b"event-1").unwrap_or_else(|_| panic!("failed to create event_id"));
 
         let revoke = Revoke::host(lease_id, 1, event_id, 200);
 
@@ -1911,7 +1970,13 @@ mod tests {
         let decision = machine.receive_revoke(revoke);
         match decision {
             ProtocolDecision::FailAck(fail_ack) => {
-                assert_eq!(fail_ack.reason, FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Granted), actual: StateTag::Absent }));
+                assert_eq!(
+                    fail_ack.reason,
+                    FailureReason::StateTransition(StateTransitionError::IllegalTransition {
+                        expected: Some(StateTag::Granted),
+                        actual: StateTag::Absent
+                    })
+                );
             }
             _ => panic!("Expected FailAck"),
         }
@@ -1919,7 +1984,12 @@ mod tests {
         // The machine's state should now be Failed(InvalidTransition)
         assert_eq!(
             machine.lease_state(),
-            LeaseState::Failed(FailureReason::StateTransition(StateTransitionError::IllegalTransition { expected: Some(StateTag::Granted), actual: StateTag::Absent }))
+            LeaseState::Failed(FailureReason::StateTransition(
+                StateTransitionError::IllegalTransition {
+                    expected: Some(StateTag::Granted),
+                    actual: StateTag::Absent
+                }
+            ))
         );
     }
 }
@@ -1931,16 +2001,27 @@ mod additional_tests {
     #[test]
     fn test_guard_clauses_generation_validation() {
         let mut machine = LeaseMachine::new();
-        let lease_id = LeaseId::new(b"lease-1").unwrap_or_else(|_| panic!("failed to create lease_id"));
+        let lease_id =
+            LeaseId::new(b"lease-1").unwrap_or_else(|_| panic!("failed to create lease_id"));
         machine.remember_generation(lease_id.clone(), 10);
 
         assert_eq!(
             machine.validate_generation(&lease_id, 10),
-            Err(FailureReason::StateTransition(StateTransitionError::StaleGeneration { provided: 10, expected: 10 }))
+            Err(FailureReason::StateTransition(
+                StateTransitionError::StaleGeneration {
+                    provided: 10,
+                    expected: 10
+                }
+            ))
         );
         assert_eq!(
             machine.validate_generation(&lease_id, 9),
-            Err(FailureReason::StateTransition(StateTransitionError::StaleGeneration { provided: 9, expected: 10 }))
+            Err(FailureReason::StateTransition(
+                StateTransitionError::StaleGeneration {
+                    provided: 9,
+                    expected: 10
+                }
+            ))
         );
         assert_eq!(
             machine.validate_generation(&lease_id, 12),
@@ -1951,15 +2032,9 @@ mod additional_tests {
 
     #[test]
     fn test_opaque_id_validation() -> Result<(), FailureReason> {
-        assert_eq!(
-            LeaseId::new(b""),
-            Err(FailureReason::MalformedRecord)
-        );
+        assert_eq!(LeaseId::new(b""), Err(FailureReason::MalformedRecord));
         let long_id = vec![b'a'; 65];
-        assert_eq!(
-            LeaseId::new(&long_id),
-            Err(FailureReason::MalformedRecord)
-        );
+        assert_eq!(LeaseId::new(&long_id), Err(FailureReason::MalformedRecord));
         let valid = LeaseId::new(b"valid-lease-id")?;
         assert_eq!(valid.as_bytes(), b"valid-lease-id");
         Ok(())

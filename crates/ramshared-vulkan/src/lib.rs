@@ -520,10 +520,18 @@ impl VulkanMem<'_> {
     /// `off + len <= self.len`, otherwise `OutOfRange` (mirrors CUDA's bounds check).
     fn check_bounds(&self, off: u64, len: usize) -> Result<(), VramError> {
         let Some(end) = off.checked_add(len as u64) else {
-            return Err(VramError::OutOfRange { off, len: len as u64, size: self.len as u64 });
+            return Err(VramError::OutOfRange {
+                off,
+                len: len as u64,
+                size: self.len as u64,
+            });
         };
         if end > self.len as u64 {
-            return Err(VramError::OutOfRange { off, len: len as u64, size: self.len as u64 });
+            return Err(VramError::OutOfRange {
+                off,
+                len: len as u64,
+                size: self.len as u64,
+            });
         }
         Ok(())
     }
@@ -624,9 +632,18 @@ mod tests {
     fn test_alloc_out_of_bounds_guard() {
         let p = VulkanProvider::open(0).expect("opens Vulkan");
         let m = p.alloc(10).expect("alloc");
-        assert!(matches!(m.check_bounds(5, 6), Err(VramError::OutOfRange { .. })));
-        assert!(matches!(m.check_bounds(10, 1), Err(VramError::OutOfRange { .. })));
-        assert!(matches!(m.check_bounds(u64::MAX, 1), Err(VramError::OutOfRange { .. })));
+        assert!(matches!(
+            m.check_bounds(5, 6),
+            Err(VramError::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            m.check_bounds(10, 1),
+            Err(VramError::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            m.check_bounds(u64::MAX, 1),
+            Err(VramError::OutOfRange { .. })
+        ));
         assert!(m.check_bounds(5, 5).is_ok());
     }
 
@@ -680,8 +697,14 @@ mod tests {
         );
 
         // RED_TEST: test_alloc_out_of_bounds_guard: Validates the OutOfRange bounds check early return in check_bounds.
-        assert!(matches!(m.check_bounds(size as u64, 1), Err(VramError::OutOfRange { .. })));
-        assert!(matches!(m.check_bounds(u64::MAX, 1), Err(VramError::OutOfRange { .. })));
+        assert!(matches!(
+            m.check_bounds(size as u64, 1),
+            Err(VramError::OutOfRange { .. })
+        ));
+        assert!(matches!(
+            m.check_bounds(u64::MAX, 1),
+            Err(VramError::OutOfRange { .. })
+        ));
 
         // free decreased after alloc (fallback DT-10).
         let (free1, _) = p.mem_info().expect("mem_info 2");
@@ -708,7 +731,10 @@ mod tests {
                 assert_eq!(size, heap);
             }
             Ok(_) => panic!("Expected OutOfRange for allocation exceeding heap, got Ok(_)"),
-            Err(e) => panic!("Expected OutOfRange for allocation exceeding heap, got Err({:?})", e),
+            Err(e) => panic!(
+                "Expected OutOfRange for allocation exceeding heap, got Err({:?})",
+                e
+            ),
         }
     }
 
@@ -716,17 +742,22 @@ mod tests {
     #[ignore = "requires Vulkan loader + ICD (lavapipe is enough; run with --ignored)"]
     fn check_image_extent_validates_physical_limits() {
         let p = VulkanProvider::open(0).expect("opens Vulkan");
-        assert!(p.check_image_extent(100, 100).is_ok(), "valid extent should pass");
+        assert!(
+            p.check_image_extent(100, 100).is_ok(),
+            "valid extent should pass"
+        );
         let max = u32::MAX;
         let res_width = p.check_image_extent(max, 1);
         assert!(
             matches!(res_width, Err(VramError::OutOfRange { .. })),
-            "width exceeding maxImageDimension2D should fail with OutOfRange, got: {:?}", res_width
+            "width exceeding maxImageDimension2D should fail with OutOfRange, got: {:?}",
+            res_width
         );
         let res_height = p.check_image_extent(1, max);
         assert!(
             matches!(res_height, Err(VramError::OutOfRange { .. })),
-            "height exceeding maxImageDimension2D should fail with OutOfRange, got: {:?}", res_height
+            "height exceeding maxImageDimension2D should fail with OutOfRange, got: {:?}",
+            res_height
         );
     }
 }

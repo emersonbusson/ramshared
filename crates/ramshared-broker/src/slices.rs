@@ -34,7 +34,10 @@ impl std::fmt::Display for SliceError {
             Self::TooManySlices { requested, max } => {
                 write!(f, "too many slices requested ({requested} > {max})")
             }
-            Self::CapacityExceeded { required, available } => {
+            Self::CapacityExceeded {
+                required,
+                available,
+            } => {
                 write!(
                     f,
                     "slice capacity exceeded (required {required} > available {available})"
@@ -56,12 +59,13 @@ impl SliceMap {
                 max: MAX_SLICES,
             });
         }
-        let required = u64::from(k)
-            .checked_mul(slice_bytes)
-            .ok_or(SliceError::CapacityExceeded {
-                required: u64::MAX,
-                available: backing_bytes,
-            })?;
+        let required =
+            u64::from(k)
+                .checked_mul(slice_bytes)
+                .ok_or(SliceError::CapacityExceeded {
+                    required: u64::MAX,
+                    available: backing_bytes,
+                })?;
         if required > backing_bytes {
             return Err(SliceError::CapacityExceeded {
                 required,
@@ -169,7 +173,7 @@ mod tests {
 
     #[test]
     fn new_rejects_exceeding_max_slices() {
-                assert!(matches!(
+        assert!(matches!(
             SliceMap::new(MAX_SLICES + 1, 64, u64::MAX),
             Err(SliceError::TooManySlices {
                 requested: x,
@@ -180,7 +184,7 @@ mod tests {
 
     #[test]
     fn new_rejects_exceeding_capacity() {
-                assert!(matches!(
+        assert!(matches!(
             SliceMap::new(2, 64, 127),
             Err(SliceError::CapacityExceeded {
                 required: 128,
@@ -230,10 +234,7 @@ mod tests {
         // Atomicity boundary: an Active slice cannot be re-assigned.
         let mut m = SliceMap::new(1, 64, 64).unwrap();
         m.assign(0, 1).unwrap();
-        assert_eq!(
-            m.assign(0, 2),
-            Err(SliceError::AlreadyAllocated)
-        );
+        assert_eq!(m.assign(0, 2), Err(SliceError::AlreadyAllocated));
     }
 
     #[test]
@@ -241,10 +242,7 @@ mod tests {
         // DT-19: slice reserved for lease does not return to round-robin via assign.
         let mut m = SliceMap::new(1, 64, 64).unwrap();
         m.lease(0).unwrap();
-        assert_eq!(
-            m.assign(0, 1),
-            Err(SliceError::AlreadyAllocated)
-        );
+        assert_eq!(m.assign(0, 1), Err(SliceError::AlreadyAllocated));
     }
 
     #[test]

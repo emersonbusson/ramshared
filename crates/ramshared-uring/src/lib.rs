@@ -276,11 +276,14 @@ pub fn validate_fixed_buffer_params(queue_depth: u16, buf_size: usize) -> io::Re
         ));
     }
 
-    let total_bytes = (queue_depth as usize).checked_mul(buf_size).ok_or_else(|| {
-        io::Error::from_raw_os_error(libc::ERANGE)
-    })?;
+    let total_bytes = (queue_depth as usize)
+        .checked_mul(buf_size)
+        .ok_or_else(|| io::Error::from_raw_os_error(libc::ERANGE))?;
 
-    let mut rlim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    let mut rlim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
     // SAFETY: Calling `getrlimit` with a valid mutable reference to a `rlimit` struct is safe.
     let res = unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut rlim) };
     if res == 0 && rlim.rlim_cur != libc::RLIM_INFINITY && (total_bytes as u64) > rlim.rlim_cur {
@@ -519,14 +522,18 @@ mod tests {
         assert_eq!(err_zero.kind(), io::ErrorKind::InvalidInput);
 
         // Test huge limit exceeding
-        let mut rlim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
         // SAFETY: getrlimit is safe here.
         let res = unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut rlim) };
         if res == 0 && rlim.rlim_cur != libc::RLIM_INFINITY {
             // we create a massive buffer
             // wait, if we pass u16::MAX for queue depth and rlim_cur for buf size...
             let massive_buf_size = (((rlim.rlim_cur / 4096) + 2) * 4096) as usize;
-            let huge_err = validate_fixed_buffer_params(2, massive_buf_size).expect_err("massive buffer should fail");
+            let huge_err = validate_fixed_buffer_params(2, massive_buf_size)
+                .expect_err("massive buffer should fail");
             assert_eq!(huge_err.raw_os_error(), Some(libc::ERANGE));
         }
     }
@@ -742,7 +749,9 @@ mod tests {
         // Ring capacity is 2. Push 2 items, 3rd should fail.
         assert!(server.push(0, 0, 0, 0).is_ok());
         assert!(server.push(0, 1, 0, 0).is_ok());
-        let err = server.push(0, 2, 0, 0).expect_err("expected ring full error");
+        let err = server
+            .push(0, 2, 0, 0)
+            .expect_err("expected ring full error");
         assert_eq!(err.kind(), io::ErrorKind::Other);
         assert_eq!(err.to_string(), "io_uring submission queue is full");
 

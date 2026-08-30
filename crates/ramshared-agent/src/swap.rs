@@ -36,7 +36,10 @@ impl std::fmt::Display for ResizeError {
 
 impl std::error::Error for ResizeError {}
 
-pub fn validate_swap_resize(size_bytes: u64, disk_space_bytes: u64) -> std::result::Result<(), ResizeError> {
+pub fn validate_swap_resize(
+    size_bytes: u64,
+    disk_space_bytes: u64,
+) -> std::result::Result<(), ResizeError> {
     const MIN_SWAP_BYTES: u64 = 64 * 1024 * 1024;
     if size_bytes < MIN_SWAP_BYTES {
         return Err(ResizeError::TooSmall(size_bytes));
@@ -260,13 +263,15 @@ mod tests {
 
     #[test]
     fn validate_swap_resize_too_small() {
-        let err = validate_swap_resize(63 * 1024 * 1024, 1024 * 1024 * 1024).expect_err("should fail below 64 MiB");
+        let err = validate_swap_resize(63 * 1024 * 1024, 1024 * 1024 * 1024)
+            .expect_err("should fail below 64 MiB");
         assert_eq!(err, ResizeError::TooSmall(63 * 1024 * 1024));
     }
 
     #[test]
     fn validate_swap_resize_exceeds_disk() {
-        let err = validate_swap_resize(128 * 1024 * 1024, 64 * 1024 * 1024).expect_err("should fail if size exceeds disk");
+        let err = validate_swap_resize(128 * 1024 * 1024, 64 * 1024 * 1024)
+            .expect_err("should fail if size exceeds disk");
         assert_eq!(
             err,
             ResizeError::ExceedsDiskSpace {
@@ -278,7 +283,9 @@ mod tests {
 
     #[test]
     fn validate_swap_resize_success() {
-        validate_swap_resize(128 * 1024 * 1024, 1024 * 1024 * 1024).expect("should succeed within bounds");
-        validate_swap_resize(64 * 1024 * 1024, 64 * 1024 * 1024).expect("should succeed at exact bounds");
+        validate_swap_resize(128 * 1024 * 1024, 1024 * 1024 * 1024)
+            .expect("should succeed within bounds");
+        validate_swap_resize(64 * 1024 * 1024, 64 * 1024 * 1024)
+            .expect("should succeed at exact bounds");
     }
 }

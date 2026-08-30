@@ -19,11 +19,20 @@ pub enum IntegrityError {
 impl fmt::Display for IntegrityError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            IntegrityError::CorruptedMemory { offset, bit_flip_mask } => {
-                write!(f, "corrupted memory at offset {offset}: bit flip mask {bit_flip_mask:#04x}")
+            IntegrityError::CorruptedMemory {
+                offset,
+                bit_flip_mask,
+            } => {
+                write!(
+                    f,
+                    "corrupted memory at offset {offset}: bit flip mask {bit_flip_mask:#04x}"
+                )
             }
             IntegrityError::InvalidStride { stride, page_size } => {
-                write!(f, "pattern scanning stride ({stride}) does not evenly divide memory page size ({page_size})")
+                write!(
+                    f,
+                    "pattern scanning stride ({stride}) does not evenly divide memory page size ({page_size})"
+                )
             }
         }
     }

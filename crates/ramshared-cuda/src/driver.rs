@@ -30,7 +30,11 @@ pub enum CudaError {
     /// VRAM memory region access out of bounds (offset + len > size).
     OutOfRange { off: usize, len: usize, size: usize },
     /// Invalid alignment for pitch / hardware transfer constraints.
-    InvalidAlignment { off: usize, len: usize, align: usize },
+    InvalidAlignment {
+        off: usize,
+        len: usize,
+        align: usize,
+    },
     /// Invalid device ordinal provided.
     InvalidDevice { ordinal: i32, count: i32 },
     /// Driver API returned a null context handle.
@@ -46,7 +50,10 @@ impl fmt::Display for CudaError {
                 write!(f, "{op} failed (CUresult={code}): {msg}")
             }
             CudaError::InvalidAlignment { off, len, align } => {
-                write!(f, "vram invalid alignment: off={off} len={len} requires {align}-byte pitch")
+                write!(
+                    f,
+                    "vram invalid alignment: off={off} len={len} requires {align}-byte pitch"
+                )
             }
             CudaError::OutOfRange { off, len, size } => {
                 write!(f, "out of bounds access: off={off} len={len} > size={size}")

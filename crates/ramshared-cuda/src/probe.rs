@@ -46,7 +46,11 @@ fn align_down(v: usize, align: usize) -> usize {
 }
 
 /// Validates GPU hardware capabilities and total memory against physical sanity limits.
-pub fn validate_hardware_specs(major: i32, minor: i32, total_memory: usize) -> Result<(), ProbePlanError> {
+pub fn validate_hardware_specs(
+    major: i32,
+    minor: i32,
+    total_memory: usize,
+) -> Result<(), ProbePlanError> {
     if !(1..=99).contains(&major) || !(0..=99).contains(&minor) {
         return Err(ProbePlanError::InvalidComputeCapability { major, minor });
     }
@@ -55,7 +59,6 @@ pub fn validate_hardware_specs(major: i32, minor: i32, total_memory: usize) -> R
     }
     Ok(())
 }
-
 
 /// Errors from pure probe planning (no CUDA).
 #[derive(Debug, PartialEq, Eq)]
@@ -96,10 +99,7 @@ impl std::fmt::Display for ProbePlanError {
                 )
             }
             ProbePlanError::InvalidComputeCapability { major, minor } => {
-                write!(
-                    f,
-                    "invalid compute capability major={major} minor={minor}"
-                )
+                write!(f, "invalid compute capability major={major} minor={minor}")
             }
             ProbePlanError::InvalidTotalMemory { size } => {
                 write!(f, "invalid total memory size {size}")
@@ -152,11 +152,17 @@ mod tests {
         ));
         assert!(matches!(
             validate_hardware_specs(100, 0, 1024),
-            Err(ProbePlanError::InvalidComputeCapability { major: 100, minor: 0 })
+            Err(ProbePlanError::InvalidComputeCapability {
+                major: 100,
+                minor: 0
+            })
         ));
         assert!(matches!(
             validate_hardware_specs(1, -1, 1024),
-            Err(ProbePlanError::InvalidComputeCapability { major: 1, minor: -1 })
+            Err(ProbePlanError::InvalidComputeCapability {
+                major: 1,
+                minor: -1
+            })
         ));
         assert!(validate_hardware_specs(8, 9, 1024).is_ok());
     }

@@ -71,7 +71,10 @@ mod tests {
 
     #[test]
     fn invalid_device_error_display() {
-        let e = CudaError::InvalidDevice { ordinal: -1, count: 2 };
+        let e = CudaError::InvalidDevice {
+            ordinal: -1,
+            count: 2,
+        };
         let s = e.to_string();
         assert!(s.contains("invalid device ordinal: -1"));
         assert!(s.contains("count=2"));

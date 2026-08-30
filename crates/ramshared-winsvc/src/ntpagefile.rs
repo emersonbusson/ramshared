@@ -34,7 +34,14 @@ impl std::fmt::Display for PagefileError {
             PagefileError::NotWindows => write!(f, "pagefile API is Windows-only"),
             PagefileError::Api(s) => write!(f, "pagefile API: {s}"),
             PagefileError::InvalidPath => write!(f, "invalid pagefile path"),
-            PagefileError::OutOfSpace { requested, available } => write!(f, "requested pagefile size {} exceeds 90% of available free space {}", requested, available),
+            PagefileError::OutOfSpace {
+                requested,
+                available,
+            } => write!(
+                f,
+                "requested pagefile size {} exceeds 90% of available free space {}",
+                requested, available
+            ),
         }
     }
 }
@@ -118,7 +125,6 @@ pub fn remove_secondary(volume: &Path, build: Option<OsBuild>) -> Result<(), Pag
     }
     remove_secondary_impl(volume)
 }
-
 
 #[cfg(windows)]
 fn get_volume_free_space(volume: &Path) -> Result<u64, PagefileError> {

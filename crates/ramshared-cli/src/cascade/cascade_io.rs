@@ -5550,6 +5550,7 @@ mod tests {
         let fixture = TestDir::new();
         let paths = RuntimePaths::under(&fixture.path);
         fs::create_dir_all(paths.zram_sysfs.join("zram0")).expect("creates test dir");
-        fs::write(paths.zram_sysfs.join("zram0").join("pid"), "not-a-number").expect("writes test pid");
+        fs::write(paths.zram_sysfs.join("zram0").join("pid"), "not-a-number")
+            .expect("writes test pid");
     }
 }

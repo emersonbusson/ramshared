@@ -21,7 +21,11 @@ impl fmt::Display for WatchdogError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::HeartbeatTimeout(d) => {
-                write!(f, "watchdog: broker silent for {}s; closing session", d.as_secs())
+                write!(
+                    f,
+                    "watchdog: broker silent for {}s; closing session",
+                    d.as_secs()
+                )
             }
             Self::SupervisorTerminated => write!(f, "watchdog: supervisor terminated"),
             Self::TooShort => write!(f, "watchdog deadline too short (< 10ms)"),
@@ -94,8 +98,14 @@ mod tests {
     #[test]
     fn new_rejects_extremes() {
         let t0 = Instant::now();
-        assert_eq!(Watchdog::new(Duration::from_millis(5), t0), Err(WatchdogError::TooShort));
-        assert_eq!(Watchdog::new(Duration::from_secs(100_000), t0), Err(WatchdogError::TooLong));
+        assert_eq!(
+            Watchdog::new(Duration::from_millis(5), t0),
+            Err(WatchdogError::TooShort)
+        );
+        assert_eq!(
+            Watchdog::new(Duration::from_secs(100_000), t0),
+            Err(WatchdogError::TooLong)
+        );
         assert!(Watchdog::new(Duration::from_millis(20), t0).is_ok());
     }
 
@@ -115,7 +125,10 @@ mod tests {
         let wd = Watchdog::new(Duration::from_secs(90), t0).expect("valid");
         assert!(wd.expired(t0 + Duration::from_secs(90)));
         assert!(wd.expired(t0 + Duration::from_secs(120)));
-        assert_eq!(wd.check(t0 + Duration::from_secs(90)), Err(WatchdogError::HeartbeatTimeout(Duration::from_secs(90))));
+        assert_eq!(
+            wd.check(t0 + Duration::from_secs(90)),
+            Err(WatchdogError::HeartbeatTimeout(Duration::from_secs(90)))
+        );
     }
 
     #[test]
