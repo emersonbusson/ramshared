@@ -1899,12 +1899,18 @@ mod tests {
 
     #[test]
     fn test_opaque_id_validation() {
-        assert_eq!(OpaqueId::new(b"").unwrap_err(), FailureReason::MalformedRecord);
+        assert_eq!(
+            OpaqueId::new(b"").unwrap_err(),
+            FailureReason::MalformedRecord
+        );
         let valid = OpaqueId::new(b"valid-id").unwrap();
         assert_eq!(valid.as_bytes(), b"valid-id");
 
         let oversized = vec![0u8; MAX_OPAQUE_ID_BYTES + 1];
-        assert_eq!(OpaqueId::new(&oversized).unwrap_err(), FailureReason::MalformedRecord);
+        assert_eq!(
+            OpaqueId::new(&oversized).unwrap_err(),
+            FailureReason::MalformedRecord
+        );
     }
 
     #[test]
@@ -1954,15 +1960,7 @@ mod tests {
         let lease_id = LeaseId::new(b"lease-1").unwrap();
         let event_id = EventId::new(b"event-1").unwrap();
 
-        let grant = Grant::host(
-            lease_id.clone(),
-            1,
-            event_id.clone(),
-            4096,
-            1,
-            100,
-            200,
-        );
+        let grant = Grant::host(lease_id.clone(), 1, event_id.clone(), 4096, 1, 100, 200);
         assert_eq!(grant.lease_id, lease_id);
         assert_eq!(grant.capacity_bytes, 4096);
 
