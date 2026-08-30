@@ -93,9 +93,7 @@ impl core::fmt::Display for TierError {
             TierError::OutOfRange => {
                 f.write_str("requested tier capacity exceeds the physical hardware limit")
             }
-            TierError::InvalidTier => {
-                f.write_str("invalid tier identifier")
-            }
+            TierError::InvalidTier => f.write_str("invalid tier identifier"),
         }
     }
 }
