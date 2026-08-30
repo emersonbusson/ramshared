@@ -214,6 +214,16 @@
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
+      "id": "jules-findings",
+      "pattern": "docs/jules/findings/**/*.md",
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-30T00:00:00Z"
+    },
+    {
       "id": "ssdv3-inventory-and-checklists",
       "pattern": "docs/specs/**/PASSO0-*.md",
       "owner": "ssdv3",

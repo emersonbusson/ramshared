@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 258,
-    "classified": 247,
+    "total": 259,
+    "classified": 248,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -568,6 +568,18 @@
       "canonicalSource": "docs/governance/README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
+    },
+    {
+      "path": "docs/jules/findings/guard_clause_trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "validation",
+      "canonicalSource": "validation.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
     },
     {
       "path": "docs/labs/DUALBOOT-KERNEL-TRUE.md",
