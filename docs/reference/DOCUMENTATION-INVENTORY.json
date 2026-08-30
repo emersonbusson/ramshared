@@ -2,10 +2,10 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 258,
-    "classified": 247,
+    "total": 260,
+    "classified": 248,
     "excluded": 11,
-    "unclassified": 0,
+    "unclassified": 1,
     "ambiguous": 0
   },
   "entries": [
@@ -568,6 +568,18 @@
       "canonicalSource": "docs/governance/README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
+    },
+    {
+      "path": "docs/jules/findings/027_guard_clause_alignment_violation.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/jules/findings/",
+      "lifecycle": "historical",
+      "freshnessDays": null
     },
     {
       "path": "docs/labs/DUALBOOT-KERNEL-TRUE.md",
@@ -3034,6 +3046,14 @@
       "canonicalSource": "drivers/windows/README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
+    },
+    {
+      "path": "plan.md",
+      "disposition": "unclassified",
+      "ruleId": null,
+      "verification": {
+        "state": "unverified"
+      }
     },
     {
       "path": "scripts/windows/README.md",
