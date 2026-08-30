@@ -8,6 +8,27 @@ pub enum Pattern {
     Random,
 }
 
+/// Represents failures in block integrity verification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IntegrityError {
+    /// A mismatch was found at a specific offset.
+    CorruptedMemory { offset: usize, bit_flip_mask: u8 },
+}
+
+impl std::fmt::Display for IntegrityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CorruptedMemory { offset, bit_flip_mask } => write!(
+                f,
+                "memory corrupted at offset {}: bit flip mask {:#04x}",
+                offset, bit_flip_mask
+            ),
+        }
+    }
+}
+
+impl std::error::Error for IntegrityError {}
+
 /// Fills `buf` with the deterministic pattern matching block index `idx`.
 pub fn fill_block(buf: &mut [u8], idx: u64, kind: Pattern) {
     match kind {
@@ -30,11 +51,19 @@ pub fn fill_block(buf: &mut [u8], idx: u64, kind: Pattern) {
     }
 }
 
-/// Returns `true` if `buf` matches the expected pattern for block index `idx`.
-pub fn verify_block(buf: &[u8], idx: u64, kind: Pattern) -> bool {
+/// Returns `Ok(())` if `buf` matches the expected pattern for block index `idx`, or an `IntegrityError` otherwise.
+pub fn verify_block(buf: &[u8], idx: u64, kind: Pattern) -> Result<(), IntegrityError> {
     let mut expected = vec![0u8; buf.len()];
     fill_block(&mut expected, idx, kind);
-    expected == buf
+    for (offset, (&actual, &exp)) in buf.iter().zip(expected.iter()).enumerate() {
+        if actual != exp {
+            return Err(IntegrityError::CorruptedMemory {
+                offset,
+                bit_flip_mask: actual ^ exp,
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -46,7 +75,7 @@ mod tests {
         for kind in [Pattern::Zero, Pattern::Sequential, Pattern::Random] {
             let mut buf = vec![0u8; 4096];
             fill_block(&mut buf, 42, kind);
-            assert!(verify_block(&buf, 42, kind), "{kind:?}");
+            assert!(verify_block(&buf, 42, kind).is_ok(), "{kind:?}");
         }
     }
 
@@ -55,7 +84,16 @@ mod tests {
         let mut buf = vec![0u8; 4096];
         fill_block(&mut buf, 7, Pattern::Random);
         buf[1234] ^= 0x01;
-        assert!(!verify_block(&buf, 7, Pattern::Random));
+        let Err(err) = verify_block(&buf, 7, Pattern::Random) else {
+            panic!("Expected an error for corrupted buffer");
+        };
+        assert_eq!(
+            err,
+            IntegrityError::CorruptedMemory {
+                offset: 1234,
+                bit_flip_mask: 0x01,
+            }
+        );
     }
 
     #[test]
@@ -65,6 +103,6 @@ mod tests {
         fill_block(&mut a, 1, Pattern::Random);
         fill_block(&mut b, 2, Pattern::Random);
         assert_ne!(a, b); // pattern differs by block index
-        assert!(!verify_block(&a, 2, Pattern::Random)); // wrong index verification fails
+        assert!(verify_block(&a, 2, Pattern::Random).is_err()); // wrong index verification fails
     }
 }

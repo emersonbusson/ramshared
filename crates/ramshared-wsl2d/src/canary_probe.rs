@@ -68,7 +68,7 @@ impl<M: VramMemory> CanaryProbe<M> {
         fill_block(&mut self.wbuf, self.seq, Pattern::Random);
         self.region.write_at(0, &self.wbuf)?;
         self.region.read_at(0, &mut self.rbuf)?;
-        Ok(verify_block(&self.rbuf, self.seq, Pattern::Random))
+        Ok(verify_block(&self.rbuf, self.seq, Pattern::Random).is_ok())
     }
 
     /// Zeroes the canary-region (teardown §11, DT-12). The region is encapsulated
