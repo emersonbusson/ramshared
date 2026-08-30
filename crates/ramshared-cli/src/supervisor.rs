@@ -763,7 +763,7 @@ fn run_systemctl_bounded_for(
         bounded_process::DEFAULT_OUTPUT_LIMIT,
         |_| {},
     )
-    .map_err(|error| format!("bounded systemctl action failed: {error}"))?;
+    .map_err(|error| format!("systemctl action failed: {error}"))?;
     if output.status.success() {
         Ok(())
     } else {
