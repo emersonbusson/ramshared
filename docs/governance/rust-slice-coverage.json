@@ -300,7 +300,7 @@
         "-p",
         "ramshared-agent",
         "--files",
-        "crates/ramshared-agent/src/main.rs",
+        "crates/ramshared-agent/src/main.rs,crates/ramshared-agent/src/psi.rs",
         "--min",
         "80",
         "--report-json",
@@ -310,7 +310,8 @@
         "ramshared-agent"
       ],
       "files": [
-        "crates/ramshared-agent/src/main.rs"
+        "crates/ramshared-agent/src/main.rs",
+        "crates/ramshared-agent/src/psi.rs"
       ],
       "min": 80
     },

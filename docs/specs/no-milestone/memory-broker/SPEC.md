@@ -340,7 +340,7 @@ fixtures issue only `Msg::Status`/reply frames; they never invoke `SwapOn`,
 The canonical per-file coverage owner for this business path is:
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent --files crates/ramshared-agent/src/main.rs --min 80 --report-json tmp/memory-broker-agent-cli-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent --files crates/ramshared-agent/src/main.rs,crates/ramshared-agent/src/psi.rs --min 80 --report-json tmp/memory-broker-agent-cli-cov.json
 ```
 
 The process tests provide the public-surface validity/refusal evidence (#13),
