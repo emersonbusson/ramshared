@@ -65,10 +65,12 @@ impl<M: VramMemory> CanaryProbe<M> {
     /// detection is done per-request in the daemon).
     pub fn check_content(&mut self) -> Result<bool, VramError> {
         self.seq += 1;
-        fill_block(&mut self.wbuf, self.seq, Pattern::Random);
+        fill_block(&mut self.wbuf, self.seq, Pattern::Random)
+            .map_err(|e| VramError::Provider(e.to_string()))?;
         self.region.write_at(0, &self.wbuf)?;
         self.region.read_at(0, &mut self.rbuf)?;
-        Ok(verify_block(&self.rbuf, self.seq, Pattern::Random))
+        verify_block(&self.rbuf, self.seq, Pattern::Random)
+            .map_err(|e| VramError::Provider(e.to_string()))
     }
 
     /// Zeroes the canary-region (teardown §11, DT-12). The region is encapsulated
