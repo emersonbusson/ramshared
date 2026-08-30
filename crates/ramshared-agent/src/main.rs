@@ -573,11 +573,13 @@ mod tests {
                 transport: TransportKind::NbdTcp,
             }) if tenant == "test-tenant"
         ));
-        // The sandbox environment lacks PSI, which causes `read_msg` to block and tests to timeout.
-        // On GitHub CI, PSI is available and `Msg::Psi` will be sent.
-        // To allow local tests to pass, we do not strictly assert `Msg::Psi` here.
-        // It is perfectly safe because `Msg::Register` was already successfully received.
-        let _ = read_msg(reader);
+        // Only consume the PSI report if the agent was able to read it (CI environment).
+        if std::path::Path::new("/proc/pressure/memory").exists() {
+            assert!(matches!(
+                read_msg(reader).expect("PSI report must decode"),
+                Some(Msg::Psi { mem: Some(_), .. })
+            ));
+        }
     }
 
     #[test]
@@ -791,15 +793,19 @@ mod tests {
         let (_res_tx, res_rx) = mpsc::channel();
         let cfg = test_config(broker, Duration::from_secs(1));
 
-        let err = session(&cfg, &cmd_tx, &res_rx).unwrap_err();
-        assert!(
-            err.to_string().starts_with("watchdog: broker silent")
-                || err.to_string().starts_with("watchdog: supervisor")
-        );
-        let _ = server.join();
-        // The sandbox environment lacks PSI, which causes `read_msg` to block and tests to timeout.
-        // We catch the error and skip assertion so local tests don't panic.
-        let _ = cmd_rx.recv_timeout(Duration::from_secs(1));
+        assert!(session(&cfg, &cmd_tx, &res_rx).is_ok());
+        server.join().expect("broker fixture must finish");
+        match cmd_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("broker command must dispatch")
+        {
+            ExecCmd::Off { slice, dev } => {
+                assert_eq!(slice, 7);
+                assert_eq!(dev, "/dev/ramshared-test-nbd7");
+            }
+            ExecCmd::On { .. } => panic!("SwapOff frame must not attach swap"),
+        }
+        assert!(cmd_rx.try_recv().is_err());
     }
 
     #[test]
@@ -855,12 +861,8 @@ mod tests {
             .expect("test result must queue");
         let cfg = test_config(broker, Duration::from_secs(1));
 
-        let err = session(&cfg, &cmd_tx, &res_rx).unwrap_err();
-        assert!(
-            err.to_string().starts_with("watchdog: broker silent")
-                || err.to_string().starts_with("watchdog: supervisor")
-        );
-        let _ = server.join();
+        assert!(session(&cfg, &cmd_tx, &res_rx).is_ok());
+        server.join().expect("broker fixture must finish");
     }
 
     #[test]
