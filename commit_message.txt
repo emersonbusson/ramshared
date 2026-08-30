@@ -1,0 +1,26 @@
+refactor: semantic IntegrityError for bit-flip detection and corrupt spans
+
+Introduces semantic IntegrityError with bit_flip_mask to provide precise corruption context.
+
+## Resumo
+Adiciona `IntegrityError::CorruptedMemory` para capturar detalhes exatos de corrupção, removendo a validação por booleano cega.
+
+## Commits
+| Commit | O que fez | Por que fez | Detalhes |
+|---|---|---|---|
+| HEAD | Substituiu `verify_block` retorno de `bool` para `Result<(), IntegrityError>` | Retornos semânticos são exigidos pelo princípio de arquitetura | Captura offset exato e máscara de flip bit a bit |
+
+## Issue
+None
+
+## Responsavel
+Jules
+
+## Labels
+type:refactor, type:integrity
+
+## Validacao
+cargo test -p ramshared-integrity && cargo clippy -p ramshared-integrity -- -D warnings
+
+## Rollback trigger
+Se quebrar a compilação de pacotes dependentes ou causar falha em testes de integração.

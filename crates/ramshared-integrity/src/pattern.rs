@@ -18,7 +18,10 @@ pub enum IntegrityError {
 impl std::fmt::Display for IntegrityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::CorruptedMemory { offset, bit_flip_mask } => write!(
+            Self::CorruptedMemory {
+                offset,
+                bit_flip_mask,
+            } => write!(
                 f,
                 "memory corrupted at offset {}: bit flip mask {:#04x}",
                 offset, bit_flip_mask
