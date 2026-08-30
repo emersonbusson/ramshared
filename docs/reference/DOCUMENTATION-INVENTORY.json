@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 258,
-    "classified": 247,
+    "total": 260,
+    "classified": 249,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -566,6 +566,30 @@
       },
       "owner": "documentation-governance",
       "canonicalSource": "docs/governance/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/jules/README.md",
+      "disposition": "classified",
+      "ruleId": "jules-root-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/jules/findings/081-arbiter-error.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
     },
