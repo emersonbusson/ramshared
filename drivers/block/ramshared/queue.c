@@ -14,6 +14,13 @@
 #include "ramshared.h"
 #include "compat.h"
 
+#ifndef check_mul_overflow
+#define check_mul_overflow(a, b, d) __builtin_mul_overflow(a, b, d)
+#endif
+#ifndef check_add_overflow
+#define check_add_overflow(a, b, d) __builtin_add_overflow(a, b, d)
+#endif
+
 static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 					  struct bio *bio, loff_t pos)
 {
@@ -49,7 +56,8 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 {
 	struct request *rq = bd->rq;
 	struct ramshared_device *rs_dev = rq->q->queuedata;
-	loff_t pos = (loff_t)blk_rq_pos(rq) << RAMSHARED_SECTOR_SHIFT;
+	loff_t pos;
+	loff_t end_pos;
 	size_t len = blk_rq_bytes(rq);
 	blk_status_t status = BLK_STS_OK;
 	struct bio *bio;
@@ -57,7 +65,13 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
 		return BLK_STS_IOERR;
 
-	if (unlikely(pos + len > rs_dev->capacity_bytes)) {
+	if (unlikely(check_mul_overflow((loff_t)blk_rq_pos(rq), (loff_t)(1ULL << RAMSHARED_SECTOR_SHIFT), &pos)))
+		return BLK_STS_IOERR;
+
+	if (unlikely(check_add_overflow(pos, (loff_t)len, &end_pos)))
+		return BLK_STS_IOERR;
+
+	if (unlikely(end_pos > rs_dev->capacity_bytes)) {
 		dev_err_ratelimited(rs_dev->dev,
 			"I/O bounds violation: pos=%lld, len=%zu, cap=%llu\n",
 			pos, len, rs_dev->capacity_bytes);
@@ -104,17 +118,24 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 				  struct page *page, enum req_op op)
 {
 	struct ramshared_device *rs_dev = bdev->bd_disk->private_data;
-	loff_t pos = (loff_t)sector << RAMSHARED_SECTOR_SHIFT;
+	loff_t pos;
+	loff_t end_pos;
 	size_t len = PAGE_SIZE;
 	void __iomem *vram_ptr;
 	void *mem;
 	int is_write = op_is_write(op);
 
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
-		return -EIO;
+		return -ENODEV;
 
-	if (unlikely(pos + len > rs_dev->capacity_bytes))
-		return -EIO;
+	if (unlikely(check_mul_overflow((loff_t)sector, (loff_t)(1ULL << RAMSHARED_SECTOR_SHIFT), &pos)))
+		return -ERANGE;
+
+	if (unlikely(check_add_overflow(pos, (loff_t)len, &end_pos)))
+		return -ERANGE;
+
+	if (unlikely(end_pos > rs_dev->capacity_bytes))
+		return -ERANGE;
 
 	vram_ptr = rs_dev->dma.cpu_addr + pos;
 	mem = kmap_local_page(page);
