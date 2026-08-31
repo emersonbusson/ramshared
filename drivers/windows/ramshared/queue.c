@@ -303,13 +303,13 @@ QSubmit(
 
 	/* DT-6: hold IoRundown for every mapped ring/data touch in this path. */
 	if (!ExAcquireRundownProtection(&Q->IoRundown))
-		return STATUS_DEVICE_NOT_CONNECTED;
+		return STATUS_CANCELLED;
 
 	qs = InterlockedOr(&Q->QState, 0);
 	if (!Q->Registered || Q->Sq == NULL ||
 	    qs == (LONG)RamQFailed || qs == (LONG)RamQClosing) {
 		ExReleaseRundownProtection(&Q->IoRundown);
-		return STATUS_DEVICE_NOT_CONNECTED;
+		return STATUS_CANCELLED;
 	}
 	if (Len > Q->MaxIoBytes) {
 		ExReleaseRundownProtection(&Q->IoRundown);
@@ -443,13 +443,13 @@ QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 
 	/* DT-6: hold IoRundown across mapped CQ/data access; release before pend. */
 	if (!ExAcquireRundownProtection(&Q->IoRundown))
-		return STATUS_DEVICE_NOT_CONNECTED;
+		return STATUS_CANCELLED;
 
 	qs = InterlockedOr(&Q->QState, 0);
 	if (!Q->Registered || Q->Cq == NULL ||
 	    qs == (LONG)RamQFailed || qs == (LONG)RamQClosing) {
 		ExReleaseRundownProtection(&Q->IoRundown);
-		return STATUS_DEVICE_NOT_CONNECTED;
+		return STATUS_CANCELLED;
 	}
 
 	KeAcquireSpinLock(&Q->Lock, &old);
@@ -621,7 +621,7 @@ QTeardownOnCrash(_Inout_ PRAMSHARED_QUEUE Q)
 	 * not hang waiting for a dead userspace backend.
 	 *
 	 * Discipline:
-	 * - Registered=FALSE first so new QSubmit fails fast (STATUS_DEVICE_NOT_CONNECTED).
+	 * - Registered=FALSE first so new QSubmit fails fast (STATUS_CANCELLED).
 	 * - Snapshot SRB pointers under the lock; RequestComplete **outside** the lock
 	 *   (StorPort may re-enter StartIo — deadlock if we hold Q->Lock).
 	 * - Never pass NULL DeviceExtension (ignored → hang). Use VdGetAdapterExt().
@@ -658,7 +658,7 @@ QTeardownOnCrash(_Inout_ PRAMSHARED_QUEUE Q)
 
 	if (pending) {
 		if (IoSetCancelRoutine(pending, NULL) != NULL) {
-			pending->IoStatus.Status = STATUS_DEVICE_NOT_CONNECTED;
+			pending->IoStatus.Status = STATUS_CANCELLED;
 			pending->IoStatus.Information = 0;
 			IoCompleteRequest(pending, IO_NO_INCREMENT);
 		}
