@@ -116,7 +116,7 @@ fn fetch_req_parks_until_delete_aborts_without_starting_device() {
     for completion in &aborts {
         assert_eq!(
             completion.result,
-            ublk::UBLK_IO_RES_ABORT,
+            Ok(ublk::UBLK_IO_RES_ABORT),
             "parked FETCH must complete with -ENODEV"
         );
     }
