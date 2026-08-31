@@ -13,6 +13,46 @@
 #include <linux/version.h>
 #include <linux/blkdev.h>
 #include <linux/blk-mq.h>
+#include <linux/io.h>
+#include <linux/overflow.h>
+#include <linux/err.h>
+
+/**
+ * ramshared_compat_ioremap_wc - Version-compatible write-combining I/O remap
+ * @dev: Device to allocate memory for
+ * @offset: Physical address of the resource
+ * @size: Size of the region
+ *
+ * Applies guard clauses, physical limits (4096 alignment, overflow check),
+ * and semantic errors via IOMEM_ERR_PTR.
+ */
+static inline void __iomem *ramshared_compat_ioremap_wc(struct device *dev,
+							resource_size_t offset,
+							resource_size_t size)
+{
+	resource_size_t end;
+	void __iomem *ptr;
+
+	if (!dev)
+		return IOMEM_ERR_PTR(-EINVAL);
+	if (size == 0)
+		return IOMEM_ERR_PTR(-EINVAL);
+	if (!IS_ALIGNED(offset, 4096))
+		return IOMEM_ERR_PTR(-EINVAL);
+	if (check_add_overflow(offset, size, &end))
+		return IOMEM_ERR_PTR(-ERANGE);
+
+#if defined(devm_ioremap_wc) || LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+	ptr = devm_ioremap_wc(dev, offset, size);
+#else
+	ptr = devm_ioremap(dev, offset, size);
+#endif
+
+	if (!ptr)
+		return IOMEM_ERR_PTR(-ENOMEM);
+
+	return ptr;
+}
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
 /* Linux 6.11+ Paradigm: Features embedded in struct queue_limits */

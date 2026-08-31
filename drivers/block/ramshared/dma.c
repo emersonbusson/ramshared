@@ -11,6 +11,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/io.h>
 #include "ramshared.h"
+#include "compat.h"
 
 int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 {
@@ -32,12 +33,14 @@ int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 	rs_dev->dma.size = min_t(size_t, bar_len, rs_dev->capacity_bytes);
 
 	/* Map PCIe VRAM BAR using Write-Combining for peak throughput */
-	rs_dev->dma.cpu_addr = devm_ioremap_wc(&pdev->dev, rs_dev->dma.pci_addr,
-					       rs_dev->dma.size);
-	if (!rs_dev->dma.cpu_addr) {
-		dev_err(&pdev->dev, "failed to ioremap_wc VRAM BAR0 (%zu bytes)\n",
-			rs_dev->dma.size);
-		return -ENOMEM;
+	rs_dev->dma.cpu_addr = ramshared_compat_ioremap_wc(&pdev->dev, rs_dev->dma.pci_addr,
+							   rs_dev->dma.size);
+	if (IS_ERR(rs_dev->dma.cpu_addr)) {
+		int err = PTR_ERR(rs_dev->dma.cpu_addr);
+		rs_dev->dma.cpu_addr = NULL;
+		dev_err(&pdev->dev, "failed to ioremap_wc VRAM BAR0 (%zu bytes), err: %d\n",
+			rs_dev->dma.size, err);
+		return err;
 	}
 
 	dev_info(&pdev->dev, "DMA engine mapped %zu MB VRAM at %pa\n",
