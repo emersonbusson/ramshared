@@ -46,13 +46,23 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	rs_dev->dev = &pdev->dev;
 	rs_dev->capacity_bytes = (u64)capacity_mb * 1024 * 1024;
 	mutex_init(&rs_dev->lock);
-	atomic64_set(&rs_dev->dma_transfers_total, 0);
-	atomic64_set(&rs_dev->read_bytes, 0);
-	atomic64_set(&rs_dev->write_bytes, 0);
+
+	rs_dev->stats = alloc_percpu(struct ramshared_stats);
+	if (!rs_dev->stats)
+		return -ENOMEM;
+
+	{
+		int cpu;
+		for_each_possible_cpu(cpu) {
+			struct ramshared_stats *stats = per_cpu_ptr(rs_dev->stats, cpu);
+			u64_stats_init(&stats->syncp);
+		}
+	}
 
 	ret = pci_enable_device_mem(pdev);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to enable PCIe memory device\n");
+		free_percpu(rs_dev->stats);
 		return ret;
 	}
 
@@ -101,6 +111,7 @@ err_release_regions:
 	pci_release_mem_regions(pdev);
 err_disable_pci:
 	pci_disable_device(pdev);
+	free_percpu(rs_dev->stats);
 	return ret;
 }
 
@@ -115,6 +126,7 @@ static void ramshared_pci_remove(struct pci_dev *pdev)
 	ramshared_dma_cleanup(rs_dev);
 	pci_release_mem_regions(pdev);
 	pci_disable_device(pdev);
+	free_percpu(rs_dev->stats);
 
 	dev_info(&pdev->dev, "RamShared device removed successfully\n");
 }

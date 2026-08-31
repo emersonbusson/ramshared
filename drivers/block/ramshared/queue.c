@@ -30,17 +30,28 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 			dma_rmb();
 			memcpy_fromio(src_or_dst, vram_ptr, len);
 			flush_dcache_page(bvec.bv_page);
-			atomic64_add(len, &rs_dev->read_bytes);
 		} else if (op == REQ_OP_WRITE) {
 			memcpy_toio(vram_ptr, src_or_dst, len);
 			dma_wmb();
-			atomic64_add(len, &rs_dev->write_bytes);
 		}
 		kunmap_local(src_or_dst);
 		vram_ptr += len;
 	}
 
-	atomic64_inc(&rs_dev->dma_transfers_total);
+	{
+		unsigned long flags;
+		struct ramshared_stats *stats = get_cpu_ptr(rs_dev->stats);
+
+		flags = u64_stats_update_begin_irqsave(&stats->syncp);
+		if (op == REQ_OP_READ)
+			stats->read_bytes += bio->bi_iter.bi_size;
+		else if (op == REQ_OP_WRITE)
+			stats->write_bytes += bio->bi_iter.bi_size;
+		stats->dma_transfers_total++;
+		u64_stats_update_end_irqrestore(&stats->syncp, flags);
+		put_cpu_ptr(rs_dev->stats);
+	}
+
 	return BLK_STS_OK;
 }
 
@@ -122,16 +133,28 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 	if (is_write) {
 		memcpy_toio(vram_ptr, mem, len);
 		dma_wmb();
-		atomic64_add(len, &rs_dev->write_bytes);
 	} else {
 		dma_rmb();
 		memcpy_fromio(mem, vram_ptr, len);
 		flush_dcache_page(page);
-		atomic64_add(len, &rs_dev->read_bytes);
 	}
 
 	kunmap_local(mem);
-	atomic64_inc(&rs_dev->dma_transfers_total);
+
+	{
+		unsigned long flags;
+		struct ramshared_stats *stats = get_cpu_ptr(rs_dev->stats);
+
+		flags = u64_stats_update_begin_irqsave(&stats->syncp);
+		if (is_write)
+			stats->write_bytes += len;
+		else
+			stats->read_bytes += len;
+		stats->dma_transfers_total++;
+		u64_stats_update_end_irqrestore(&stats->syncp, flags);
+		put_cpu_ptr(rs_dev->stats);
+	}
+
 	page_endio(page, is_write, 0);
 	return 0;
 }
@@ -152,13 +175,37 @@ static ssize_t capacity_bytes_show(struct device *dev,
 }
 static DEVICE_ATTR_RO(capacity_bytes);
 
+static u64 ramshared_get_stat(struct ramshared_device *rs_dev, int stat_idx)
+{
+	u64 total = 0;
+	int cpu;
+
+	for_each_possible_cpu(cpu) {
+		struct ramshared_stats *stats = per_cpu_ptr(rs_dev->stats, cpu);
+		unsigned int start;
+		u64 val;
+
+		do {
+			start = u64_stats_fetch_begin(&stats->syncp);
+			if (stat_idx == 0)
+				val = stats->read_bytes;
+			else if (stat_idx == 1)
+				val = stats->write_bytes;
+			else
+				val = stats->dma_transfers_total;
+		} while (u64_stats_fetch_retry(&stats->syncp, start));
+		total += val;
+	}
+	return total;
+}
+
 static ssize_t read_bytes_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
 	struct gendisk *disk = dev_to_disk(dev);
 	struct ramshared_device *rs_dev = disk->private_data;
 
-	return sysfs_emit(buf, "%lld\n", atomic64_read(&rs_dev->read_bytes));
+	return sysfs_emit(buf, "%llu\n", ramshared_get_stat(rs_dev, 0));
 }
 static DEVICE_ATTR_RO(read_bytes);
 
@@ -168,9 +215,19 @@ static ssize_t write_bytes_show(struct device *dev,
 	struct gendisk *disk = dev_to_disk(dev);
 	struct ramshared_device *rs_dev = disk->private_data;
 
-	return sysfs_emit(buf, "%lld\n", atomic64_read(&rs_dev->write_bytes));
+	return sysfs_emit(buf, "%llu\n", ramshared_get_stat(rs_dev, 1));
 }
 static DEVICE_ATTR_RO(write_bytes);
+
+static ssize_t dma_transfers_total_show(struct device *dev,
+					struct device_attribute *attr, char *buf)
+{
+	struct gendisk *disk = dev_to_disk(dev);
+	struct ramshared_device *rs_dev = disk->private_data;
+
+	return sysfs_emit(buf, "%llu\n", ramshared_get_stat(rs_dev, 2));
+}
+static DEVICE_ATTR_RO(dma_transfers_total);
 
 static struct attribute *ramshared_attrs[] = {
 	&dev_attr_capacity_bytes.attr,

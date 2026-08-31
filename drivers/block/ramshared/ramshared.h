@@ -7,7 +7,8 @@
 #include <linux/blk-mq.h>
 #include <linux/pci.h>
 #include <linux/mutex.h>
-#include <linux/atomic.h>
+#include <linux/percpu.h>
+#include <linux/u64_stats_sync.h>
 
 #define RAMSHARED_DRIVER_NAME		"ramshared"
 #define RAMSHARED_DRIVER_VERSION	"0.9.0-beta.2"
@@ -30,6 +31,13 @@ struct ramshared_dma_region {
 	dma_addr_t	dma_handle;
 };
 
+struct ramshared_stats {
+	u64			read_bytes;
+	u64			write_bytes;
+	u64			dma_transfers_total;
+	struct u64_stats_sync	syncp;
+};
+
 /**
  * struct ramshared_device - Main in-tree block device state
  * @disk: gendisk descriptor
@@ -49,9 +57,7 @@ struct ramshared_device {
 	u64				capacity_bytes;
 	struct device			*dev;
 	struct mutex			lock;
-	atomic64_t			dma_transfers_total;
-	atomic64_t			read_bytes;
-	atomic64_t			write_bytes;
+	struct ramshared_stats __percpu	*stats;
 };
 
 int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev);
