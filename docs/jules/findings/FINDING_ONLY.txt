@@ -1,0 +1,14 @@
+FINDING_ONLY: Architectural Mismatch - WDF Object Hierarchy in StorPort Driver
+
+The task requests an audit of the WDF (Windows Driver Framework) object hierarchy and parent-child cleanup relationships in `drivers/windows/ramshared/driver.c`.
+
+However, upon auditing `driver.c` and the associated headers, it is evident that the RamShared Windows driver is a StorPort virtual miniport driver, not a KMDF (WDF) driver.
+
+Evidence:
+1. The driver initializes via `StorPortInitialize` in `DriverEntry`, not `WdfDriverCreate`.
+2. It uses WDM/StorPort callbacks (e.g., `HwStorFindAdapter`, `HwStorInitialize`, `HwStorStartIo`), not WDF callbacks (e.g., `EvtDeviceAdd`).
+3. The codebase includes `<ntddk.h>` and `<storport.h>`, and there are no inclusions of `<wdf.h>` or usages of `WDFOBJECT`, `WDFDEVICE`, or other WDF constructs.
+4. An independent WDM control device is created manually via `IoCreateDeviceSecure` (`CtlCreateControlDevice` in `control.c`), which is typical for StorPort miniports exposing a sideband control interface.
+
+Conclusion:
+Safe code modification is not possible due to this architectural mismatch. There are no WDF objects to allocate or hierarchy to audit. The driver's memory management and cleanup must follow WDM and StorPort paradigms (e.g., `HwStorFreeAdapterResources` and manual `IoDeleteDevice` for the control device). No WDF-related code changes can be applied.
