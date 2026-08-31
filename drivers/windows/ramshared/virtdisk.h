@@ -6,6 +6,28 @@
 #include "protocol.h"
 #include "queue.h"
 
+#define VD_SECTOR_SIZE_512  512u
+#define VD_SECTOR_SIZE_4096 4096u
+
+/*
+ * Type-safe helper for LBA to byte offset conversion with 64-bit overflow prevention.
+ * Returns STATUS_SUCCESS on success, or STATUS_INVALID_PARAMETER on overflow.
+ */
+static inline NTSTATUS VdLbaToByteOffset(UINT64 Lba, UINT32 BlockSize, UINT64 *ByteOffset)
+{
+	if (!ByteOffset)
+		return STATUS_INVALID_PARAMETER;
+
+	if (BlockSize == 0)
+		return STATUS_INVALID_PARAMETER;
+
+	if (Lba > (~0ULL) / BlockSize)
+		return STATUS_INVALID_PARAMETER;
+
+	*ByteOffset = Lba * BlockSize;
+	return STATUS_SUCCESS;
+}
+
 typedef enum _VD_STATE {
 	VdStateNone = 0,
 	VdStateCreated,
