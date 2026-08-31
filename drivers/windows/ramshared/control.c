@@ -98,6 +98,110 @@ CtlDispatchCleanup(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 }
 
 static NTSTATUS
+CtlHandleRegisterQueue(
+	_In_ PIRP Irp,
+	_In_ ULONG inLen,
+	_In_ PVOID buf)
+{
+	NTSTATUS status;
+
+	if (inLen != sizeof(RAMSHARED_REGISTER) || buf == NULL) {
+		return STATUS_INVALID_PARAMETER;
+	}
+	if (!VdIsActive()) {
+		return STATUS_DEVICE_NOT_READY;
+	}
+	/* DT-5: REGISTER owner must match CREATE owner. */
+	if (!VdOwnerMatches(IoGetCurrentProcess())) {
+		return STATUS_ACCESS_DENIED; /* REFUSE_FOREIGN_OWNER */
+	}
+
+	status = QRegister(&VdGetActive()->queue,
+			   (const RAMSHARED_REGISTER *)buf,
+			   Irp->RequestorMode,
+			   IoGetCurrentProcess());
+
+	if (NT_SUCCESS(status) &&
+	    !VdApplyRegisteredQueueDepth(VdGetActive(), VdGetAdapterExt())) {
+		QUnregister(&VdGetActive()->queue);
+		return STATUS_DEVICE_CONFIGURATION_ERROR;
+	}
+
+	return status;
+}
+
+static NTSTATUS
+CtlHandleUnregisterQueue(
+	_In_ ULONG inLen)
+{
+	/* Zero-input IOCTL: reject non-zero input length (DT-5). */
+	if (inLen != 0) {
+		return STATUS_INVALID_PARAMETER;
+	}
+	if (VdIsActive()) {
+		if (!QOwnerMatches(&VdGetActive()->queue, IoGetCurrentProcess()) &&
+		    !VdOwnerMatches(IoGetCurrentProcess())) {
+			return STATUS_ACCESS_DENIED;
+		}
+		QUnregister(&VdGetActive()->queue);
+	}
+	return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+CtlHandleCommitAndFetch(
+	_In_ PIRP Irp,
+	_In_ ULONG inLen,
+	_Out_ ULONG_PTR *info)
+{
+	NTSTATUS status;
+
+	if (inLen != 0) {
+		return STATUS_INVALID_PARAMETER;
+	}
+	if (!VdIsActive()) {
+		return STATUS_DEVICE_NOT_READY;
+	}
+	if (!QOwnerMatches(&VdGetActive()->queue, IoGetCurrentProcess())) {
+		return STATUS_ACCESS_DENIED;
+	}
+
+	status = QCommitAndFetch(&VdGetActive()->queue, Irp);
+	if (status == STATUS_PENDING) {
+		return STATUS_PENDING;
+	}
+
+	*info = Irp->IoStatus.Information;
+	return status;
+}
+
+static NTSTATUS
+CtlHandleCreateDisk(
+	_In_ ULONG inLen,
+	_In_ PVOID buf)
+{
+	if (inLen != sizeof(RAMSHARED_DISK_PARAMS) || buf == NULL) {
+		return STATUS_INVALID_PARAMETER;
+	}
+	return VdActivate((const RAMSHARED_DISK_PARAMS *)buf);
+}
+
+static NTSTATUS
+CtlHandleDestroyDisk(
+	_In_ ULONG inLen)
+{
+	if (inLen != 0) {
+		return STATUS_INVALID_PARAMETER;
+	}
+	if (VdIsActive() && !VdOwnerMatches(IoGetCurrentProcess()) &&
+	    !VdOwnerExited()) {
+		return STATUS_ACCESS_DENIED;
+	}
+	VdDeactivate();
+	return STATUS_SUCCESS;
+}
+
+static NTSTATUS
 CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 {
 	PIO_STACK_LOCATION irpSp;
@@ -118,88 +222,26 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 
 	switch (code) {
 	case IOCTL_RAMSHARED_REGISTER_QUEUE:
-		if (inLen != sizeof(RAMSHARED_REGISTER) || buf == NULL) {
-			status = STATUS_INVALID_PARAMETER;
-			break;
-		}
-		if (!VdIsActive()) {
-			status = STATUS_DEVICE_NOT_READY;
-			break;
-		}
-		/* DT-5: REGISTER owner must match CREATE owner. */
-		if (!VdOwnerMatches(IoGetCurrentProcess())) {
-			status = STATUS_ACCESS_DENIED; /* REFUSE_FOREIGN_OWNER */
-			break;
-		}
-		status = QRegister(&VdGetActive()->queue,
-				   (const RAMSHARED_REGISTER *)buf,
-				   Irp->RequestorMode,
-				   IoGetCurrentProcess());
-		if (NT_SUCCESS(status) &&
-		    !VdApplyRegisteredQueueDepth(VdGetActive(), VdGetAdapterExt())) {
-			QUnregister(&VdGetActive()->queue);
-			status = STATUS_DEVICE_CONFIGURATION_ERROR;
-		}
+		status = CtlHandleRegisterQueue(Irp, inLen, buf);
 		break;
 
 	case IOCTL_RAMSHARED_UNREGISTER_QUEUE:
-		/* Zero-input IOCTL: reject non-zero input length (DT-5). */
-		if (inLen != 0) {
-			status = STATUS_INVALID_PARAMETER;
-			break;
-		}
-		if (VdIsActive()) {
-			if (!QOwnerMatches(&VdGetActive()->queue,
-					   IoGetCurrentProcess()) &&
-			    !VdOwnerMatches(IoGetCurrentProcess())) {
-				status = STATUS_ACCESS_DENIED;
-				break;
-			}
-			QUnregister(&VdGetActive()->queue);
-		}
-		status = STATUS_SUCCESS;
+		status = CtlHandleUnregisterQueue(inLen);
 		break;
 
 	case IOCTL_RAMSHARED_COMMIT_AND_FETCH:
-		if (inLen != 0) {
-			status = STATUS_INVALID_PARAMETER;
-			break;
-		}
-		if (!VdIsActive()) {
-			status = STATUS_DEVICE_NOT_READY;
-			break;
-		}
-		if (!QOwnerMatches(&VdGetActive()->queue, IoGetCurrentProcess())) {
-			status = STATUS_ACCESS_DENIED;
-			break;
-		}
-		status = QCommitAndFetch(&VdGetActive()->queue, Irp);
+		status = CtlHandleCommitAndFetch(Irp, inLen, &info);
 		if (status == STATUS_PENDING) {
 			return STATUS_PENDING;
 		}
-		info = Irp->IoStatus.Information;
 		break;
 
 	case IOCTL_RAMSHARED_CREATE_DISK:
-		if (inLen != sizeof(RAMSHARED_DISK_PARAMS) || buf == NULL) {
-			status = STATUS_INVALID_PARAMETER;
-			break;
-		}
-		status = VdActivate((const RAMSHARED_DISK_PARAMS *)buf);
+		status = CtlHandleCreateDisk(inLen, buf);
 		break;
 
 	case IOCTL_RAMSHARED_DESTROY_DISK:
-		if (inLen != 0) {
-			status = STATUS_INVALID_PARAMETER;
-			break;
-		}
-		if (VdIsActive() && !VdOwnerMatches(IoGetCurrentProcess()) &&
-		    !VdOwnerExited()) {
-			status = STATUS_ACCESS_DENIED;
-			break;
-		}
-		VdDeactivate();
-		status = STATUS_SUCCESS;
+		status = CtlHandleDestroyDisk(inLen);
 		break;
 
 	default:
