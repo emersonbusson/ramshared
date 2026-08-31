@@ -9,6 +9,7 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/pci.h>
+#include <linux/overflow.h>
 #include "ramshared.h"
 
 MODULE_AUTHOR("Emerson Busson");
@@ -44,7 +45,12 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 		return -ENOMEM;
 
 	rs_dev->dev = &pdev->dev;
-	rs_dev->capacity_bytes = (u64)capacity_mb * 1024 * 1024;
+
+	if (check_mul_overflow((u64)capacity_mb, 1048576ULL, &rs_dev->capacity_bytes)) {
+		dev_err(&pdev->dev, "capacity calculation overflowed\n");
+		return -ERANGE;
+	}
+
 	mutex_init(&rs_dev->lock);
 	atomic64_set(&rs_dev->dma_transfers_total, 0);
 	atomic64_set(&rs_dev->read_bytes, 0);
