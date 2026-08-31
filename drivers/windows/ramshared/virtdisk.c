@@ -440,11 +440,39 @@ VdTranslateSrb(
 	_In_ PVOID DevExt,
 	_Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
-	UCHAR op = Srb->Cdb[0];
+	UCHAR op;
 	NTSTATUS st;
 	UINT64 offset;
 	UINT32 len;
 	enum ramshared_op rop;
+
+	if (Srb == NULL)
+		return;
+
+	if (Disk == NULL || DevExt == NULL) {
+		Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+		VdComplete(DevExt, Srb, Srb->SrbStatus);
+		return;
+	}
+
+	op = Srb->Cdb[0];
+	if (op != SCSIOP_TEST_UNIT_READY &&
+	    op != SCSIOP_INQUIRY &&
+	    op != SCSIOP_READ_CAPACITY &&
+	    op != 0x9E && /* READ CAPACITY(16) */
+	    op != SCSIOP_MODE_SENSE &&
+	    op != SCSIOP_MODE_SENSE10 &&
+	    op != SCSIOP_READ &&
+	    op != SCSIOP_READ16 &&
+	    op != SCSIOP_WRITE &&
+	    op != SCSIOP_WRITE16 &&
+	    op != SCSIOP_SYNCHRONIZE_CACHE &&
+	    op != 0x91 && /* SYNCHRONIZE CACHE(16) */
+	    op != 0xA0) { /* REPORT LUNS */
+		Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+		VdComplete(DevExt, Srb, Srb->SrbStatus);
+		return;
+	}
 
 	switch (op) {
 	case SCSIOP_TEST_UNIT_READY:
