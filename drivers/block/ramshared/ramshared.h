@@ -19,39 +19,39 @@
 /**
  * struct ramshared_dma_region - PCIe DMA memory descriptor
  * @pci_addr: Physical PCIe bus address
- * @cpu_addr: Kernel virtual address mapped with write-combining
- * @size: Size of the allocated region in bytes
  * @dma_handle: DMA bus address mapping
+ * @size: Size of the allocated region in bytes
+ * @cpu_addr: Kernel virtual address mapped with write-combining
  */
 struct ramshared_dma_region {
 	phys_addr_t	pci_addr;
-	void __iomem	*cpu_addr;
-	size_t		size;
 	dma_addr_t	dma_handle;
+	size_t		size;
+	void __iomem	*cpu_addr;
 };
 
 /**
  * struct ramshared_device - Main in-tree block device state
- * @disk: gendisk descriptor
- * @tag_set: blk-mq tag set
- * @dma: DMA memory region
  * @capacity_bytes: Total available VRAM capacity in bytes
- * @dev: Pointer to underlying struct device
- * @lock: Mutex protecting device state transitions
  * @dma_transfers_total: Diagnostic counter for completed transfers
  * @read_bytes: Total bytes read
  * @write_bytes: Total bytes written
+ * @tag_set: blk-mq tag set
+ * @dma: DMA memory region
+ * @lock: Mutex protecting device state transitions
+ * @disk: gendisk descriptor
+ * @dev: Pointer to underlying struct device
  */
 struct ramshared_device {
-	struct gendisk			*disk;
-	struct blk_mq_tag_set		tag_set;
-	struct ramshared_dma_region	dma;
 	u64				capacity_bytes;
-	struct device			*dev;
-	struct mutex			lock;
 	atomic64_t			dma_transfers_total;
 	atomic64_t			read_bytes;
 	atomic64_t			write_bytes;
+	struct blk_mq_tag_set		tag_set;
+	struct ramshared_dma_region	dma;
+	struct mutex			lock;
+	struct gendisk			*disk;
+	struct device			*dev;
 };
 
 int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev);
