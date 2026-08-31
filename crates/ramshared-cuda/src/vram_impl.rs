@@ -14,6 +14,8 @@ impl From<CudaError> for VramError {
                 len: len as u64,
                 size: size as u64,
             },
+            CudaError::OutOfMemory { .. } => VramError::OutOfMemory,
+            CudaError::InvalidValue { .. } => VramError::InvalidAlignment,
             other => VramError::Provider(other.to_string()),
         }
     }
