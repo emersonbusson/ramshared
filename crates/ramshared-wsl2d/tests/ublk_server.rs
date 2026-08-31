@@ -48,10 +48,10 @@ fn serve_request_handles_flush_and_rejects_oversized_or_oob() {
         -22
     );
 
-    // READ outside the backend => -EINVAL.
+    // READ outside the backend => -ERANGE.
     assert_eq!(
         ublk_server::serve_request(&req(Command::Read, 51200, 512), &mut backend, &mut buf),
-        -22
+        -34
     );
 }
 
@@ -79,11 +79,11 @@ fn serve_request_guards_against_out_of_bounds_upfront() {
     // Exceeds backend size bytes
     assert_eq!(
         ublk_server::serve_request(&req(Command::Read, 4096, 512), &mut backend, &mut buf),
-        -22 // EINVAL
+        -34 // ERANGE
     );
     assert_eq!(
         ublk_server::serve_request(&req(Command::Write, 2048, 4096), &mut backend, &mut buf),
-        -22 // EINVAL
+        -34 // ERANGE
     );
 }
 
