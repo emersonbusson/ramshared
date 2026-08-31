@@ -85,6 +85,7 @@ pub enum DxgError {
     UnsupportedHardware,
     BufferOverflow,
     PermissionDenied,
+    InvalidPointer,
     NoAdapters,
     AmbiguousAdapters(usize),
     AdapterNotFound(AdapterLuid),
@@ -101,6 +102,7 @@ impl fmt::Display for DxgError {
             Self::UnsupportedHardware => write!(f, "dxg unsupported hardware"),
             Self::BufferOverflow => write!(f, "dxg buffer overflow"),
             Self::PermissionDenied => write!(f, "dxg permission denied"),
+            Self::InvalidPointer => write!(f, "dxg invalid pointer"),
             Self::NoAdapters => write!(f, "dxg returned no adapters"),
             Self::AmbiguousAdapters(count) => {
                 write!(f, "dxg returned {count} adapters; explicit LUID required")
@@ -117,6 +119,7 @@ impl std::error::Error for DxgError {}
 impl DxgError {
     pub fn from_sys_error(error: std::io::Error) -> Self {
         match error.raw_os_error() {
+            Some(libc::EFAULT) => Self::InvalidPointer,
             Some(libc::ENODEV) => Self::DeviceNotFound,
             Some(libc::ENOTTY) => Self::UnsupportedHardware,
             Some(libc::EOVERFLOW) => Self::BufferOverflow,
@@ -389,6 +392,10 @@ mod tests {
             super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(1)),
             super::DxgError::PermissionDenied
         );
+        assert_eq!(
+            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(14)),
+            super::DxgError::InvalidPointer
+        );
         let unknown = super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(9999));
         assert!(matches!(unknown, super::DxgError::Io(_)));
     }
@@ -412,6 +419,7 @@ mod tests {
             super::DxgError::UnsupportedHardware,
             super::DxgError::BufferOverflow,
             super::DxgError::PermissionDenied,
+            super::DxgError::InvalidPointer,
         ];
         for error in cases {
             assert!(!error.to_string().is_empty());
