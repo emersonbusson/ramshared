@@ -22,8 +22,8 @@ pub enum BrokerPhase {
 
 #[derive(Debug)]
 pub enum WinBrokerError {
-    PipeBusy,
     NoData,
+    PipeBusy,
     BrokenPipe,
     Other(std::io::Error),
 }
@@ -40,8 +40,8 @@ impl std::error::Error for WinBrokerError {
 impl std::fmt::Display for WinBrokerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::PipeBusy => write!(f, "Pipe is busy (-EBUSY)"),
             Self::NoData => write!(f, "No data available (-ENODATA)"),
+            Self::PipeBusy => write!(f, "Pipe is busy (-EBUSY)"),
             Self::BrokenPipe => write!(f, "Broken pipe (-EPIPE)"),
             Self::Other(error) => write!(f, "Broker I/O error: {}", error),
         }
@@ -51,8 +51,8 @@ impl std::fmt::Display for WinBrokerError {
 impl From<std::io::Error> for WinBrokerError {
     fn from(error: std::io::Error) -> Self {
         match error.raw_os_error() {
-            Some(231) => Self::PipeBusy,   // ERROR_PIPE_BUSY
             Some(232) => Self::NoData,     // ERROR_NO_DATA
+            Some(231) => Self::PipeBusy,   // ERROR_PIPE_BUSY
             Some(109) => Self::BrokenPipe, // ERROR_BROKEN_PIPE
             _ => Self::Other(error),
         }
@@ -320,11 +320,11 @@ mod tests {
         use super::WinBrokerError;
         use std::io;
 
-        let e = io::Error::from_raw_os_error(231);
-        assert!(matches!(WinBrokerError::from(e), WinBrokerError::PipeBusy));
-
         let e = io::Error::from_raw_os_error(232);
         assert!(matches!(WinBrokerError::from(e), WinBrokerError::NoData));
+
+        let e = io::Error::from_raw_os_error(231);
+        assert!(matches!(WinBrokerError::from(e), WinBrokerError::PipeBusy));
 
         let e = io::Error::from_raw_os_error(109);
         assert!(matches!(
