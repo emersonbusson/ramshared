@@ -1,0 +1,12 @@
+FINDING_ONLY: WDF vs StorPort Architecture Mismatch
+
+The task requests adding defensive validation for `WdfRequestRetrieveInputBuffer` to memory descriptors in `drivers/windows/ramshared/queue.c`.
+
+However, as per memory context:
+"In the RamShared repository, Windows drivers (e.g., `drivers/windows/ramshared/driver.c`) are StorPort virtual miniport drivers utilizing `StorPortInitialize` and WDM/StorPort callbacks (like `HwStorFindAdapter`). They are not KMDF drivers and do not contain WDF callbacks such as `EvtDeviceAdd`."
+
+We verified this by searching the entire `drivers/windows` directory for `WdfRequest` and `WdfRequestRetrieveInputBuffer` and found absolutely no occurrences. The driver uses WDM `IRP` for control IOCTLs (in `control.c`) and `SCSI_REQUEST_BLOCK` (`Srb`) for storage queues (in `queue.c`).
+
+Therefore, it is impossible to add validation for `WdfRequestRetrieveInputBuffer` because this function does not exist and is not part of the driver's architecture (StorPort vs KMDF).
+
+Per instruction: "If safe code modification is not possible due to an architectural mismatch (e.g., being asked to modify a KMDF callback in a StorPort driver), you must produce a FINDING_ONLY report with evidence in `docs/jules/findings/` instead of attempting unsafe modifications."
