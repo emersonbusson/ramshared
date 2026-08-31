@@ -25,6 +25,9 @@ const COMMENT_LANGUAGE_HIGH_COVERAGE_FILES = [
   'crates/ramshared-wsl2d/src/broker_srv.rs',
   'crates/ramshared-wsl2d/src/canary_probe.rs',
   'crates/ramshared-wsl2d/src/telemetry.rs',
+  'crates/ramshared-broker/src/model.rs',
+  'crates/ramshared-broker/src/slices.rs',
+  'crates/ramshared-wsl2d/src/residency.rs',
 ]
 const COMMENT_LANGUAGE_BLOCKED_FILES = [
   'crates/ramshared-wsl2d/src/main.rs',
@@ -319,7 +322,7 @@ const CASCADE_LIFECYCLE_CLI_COVERAGE_ENTRY = {
   command: [
     'node', 'tools/ci/check-rust-slice-coverage.mjs',
     '-p', 'ramshared-cli',
-    '--files', 'crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs,crates/ramshared-cli/src/main.rs',
+    '--files', 'crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs,crates/ramshared-cli/src/main.rs,crates/ramshared-cli/src/diagnose.rs',
     '--min', '80',
     '--report-json', 'tmp/cascade-lifecycle-cov.json',
   ],
@@ -328,6 +331,7 @@ const CASCADE_LIFECYCLE_CLI_COVERAGE_ENTRY = {
     'crates/ramshared-cli/src/cascade/lifecycle.rs',
     'crates/ramshared-cli/src/cascade/mod.rs',
     'crates/ramshared-cli/src/main.rs',
+    'crates/ramshared-cli/src/diagnose.rs',
   ],
   min: 80,
 }
