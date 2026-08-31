@@ -234,12 +234,14 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
 
     {
         let mut sq = ring.submission();
+        if sq.is_full() {
+            return Err(io::Error::other("io_uring submission queue is full"));
+        }
         // SAFETY: `cmd` is copied into the SQE before submission. Public wrappers
         // in this module pass null pointers, local stack pointers, or borrowed mutable
         // buffers, and this function awaits the CQE before returning.
         unsafe {
-            sq.push(&entry)
-                .map_err(|_| io::Error::other("io_uring submission queue is full"))?;
+            let _ = sq.push(&entry);
         }
     }
 
@@ -264,6 +266,33 @@ pub struct UblkCompletion {
     pub result: i32,
 }
 
+/// Validates that fixed buffer parameters are aligned to 4096 bytes and that the
+/// total allocation (`queue_depth * buf_size`) does not exceed `RLIMIT_MEMLOCK`.
+pub fn validate_fixed_buffer_params(queue_depth: u16, buf_size: usize) -> io::Result<()> {
+    if buf_size == 0 || !buf_size.is_multiple_of(4096) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "buffer size must be > 0 and a multiple of 4096 bytes",
+        ));
+    }
+
+    let total_bytes = (queue_depth as usize)
+        .checked_mul(buf_size)
+        .ok_or_else(|| io::Error::from_raw_os_error(libc::ERANGE))?;
+
+    let mut rlim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: Calling `getrlimit` with a valid mutable reference to a `rlimit` struct is safe.
+    let res = unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut rlim) };
+    if res == 0 && rlim.rlim_cur != libc::RLIM_INFINITY && (total_bytes as u64) > rlim.rlim_cur {
+        return Err(io::Error::from_raw_os_error(libc::ERANGE));
+    }
+
+    Ok(())
+}
+
 /// Persistent io_uring instance that submits `UBLK_U_IO_FETCH_REQ` for ublk queue tags
 /// **without waiting for CQE** (the driver parks each command with `-EIOCBQUEUED` until
 /// I/O is ready or aborted). It owns the data buffers while FETCH calls are pending.
@@ -280,6 +309,7 @@ impl UblkFetchRing {
     /// a buffer of `buf_size` bytes. Does not wait for CQE (`submit()` with want=0).
     /// The `fd` must remain open for the lifetime of this ring.
     pub fn submit_fetch_all(fd: RawFd, queue_depth: u16, buf_size: usize) -> io::Result<Self> {
+        validate_fixed_buffer_params(queue_depth, buf_size)?;
         const UBLK_U_IO_FETCH_REQ: u32 = 0xc010_7520;
         const QUEUE_ID_ZERO: u16 = 0;
 
@@ -299,10 +329,12 @@ impl UblkFetchRing {
             // The `addr` points to `buffers[tag]`, which remains valid inside this struct
             // while the FETCH calls are parked; the kernel only accesses the buffer when
             // serving I/O, which requires `START_DEV` (not invoked in this path).
+            let mut sq = ring.submission();
+            if sq.is_full() {
+                return Err(io::Error::other("io_uring submission queue is full"));
+            }
             unsafe {
-                ring.submission()
-                    .push(&entry)
-                    .map_err(|_| io::Error::other("io_uring submission queue is full"))?;
+                let _ = sq.push(&entry);
             }
         }
 
@@ -362,6 +394,7 @@ impl UblkServer {
 
     /// Creates the ring and maps the io-desc buffer for queue 0; does NOT submit FETCH commands.
     pub fn new(fd: RawFd, queue_depth: u16, buf_size: usize) -> io::Result<Self> {
+        validate_fixed_buffer_params(queue_depth, buf_size)?;
         let entries = u32::from(queue_depth).max(1).next_power_of_two();
         let ring = IoUring::<squeue::Entry128>::builder().build(entries)?;
         let iodesc_len = round_up_to_page(usize::from(queue_depth) * Self::IO_DESC_SIZE);
@@ -460,11 +493,12 @@ impl UblkServer {
         // SAFETY: `cmd` (carrying `addr`) is copied into the SQE in `push`. `addr` points
         // to `self.buffers[tag]`, which remains valid for the server's lifetime; `self.fd`
         // remains open. The kernel only accesses the buffer to serve I/O on this thread.
+        let mut sq = self.ring.submission();
+        if sq.is_full() {
+            return Err(io::Error::other("io_uring submission queue is full"));
+        }
         unsafe {
-            self.ring
-                .submission()
-                .push(&entry)
-                .map_err(|_| io::Error::other("io_uring submission queue is full"))?;
+            let _ = sq.push(&entry);
         }
         Ok(())
     }
@@ -473,6 +507,37 @@ impl UblkServer {
 #[cfg(test)]
 #[allow(clippy::expect_used)]
 mod tests {
+
+    #[test]
+    fn test_validate_fixed_buffer_alignment_and_limits() {
+        // Test invalid alignment
+        let err = validate_fixed_buffer_params(2, 4095).expect_err("invalid alignment should fail");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+
+        // Test valid alignment
+        assert!(validate_fixed_buffer_params(2, 4096).is_ok());
+
+        // Test buffer size 0
+        let err_zero = validate_fixed_buffer_params(2, 0).expect_err("zero size should fail");
+        assert_eq!(err_zero.kind(), io::ErrorKind::InvalidInput);
+
+        // Test huge limit exceeding
+        let mut rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: getrlimit is safe here.
+        let res = unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut rlim) };
+        if res == 0 && rlim.rlim_cur != libc::RLIM_INFINITY {
+            // we create a massive buffer
+            // wait, if we pass u16::MAX for queue depth and rlim_cur for buf size...
+            let massive_buf_size = (((rlim.rlim_cur / 4096) + 2) * 4096) as usize;
+            let huge_err = validate_fixed_buffer_params(2, massive_buf_size)
+                .expect_err("massive buffer should fail");
+            assert_eq!(huge_err.raw_os_error(), Some(libc::ERANGE));
+        }
+    }
+
     use super::*;
     use std::fs::{self, OpenOptions};
     use std::io::{Seek, SeekFrom, Write};
@@ -671,6 +736,24 @@ mod tests {
 
         assert_eq!(results[1].tag, 101);
         assert!(results[1].result == 0 || results[1].result == -libc::EALREADY);
+
+        drop(server);
+        drop(file);
+        fs::remove_file(path).expect("remove fixture");
+    }
+    #[test]
+    fn ublk_server_push_guard_clause_rejects_full_ring() {
+        let (path, file) = regular_file_fixture("ublk-full-ring", page_size());
+        let mut server = UblkServer::new(file.as_raw_fd(), 2, 4096).expect("server fixture");
+
+        // Ring capacity is 2. Push 2 items, 3rd should fail.
+        assert!(server.push(0, 0, 0, 0).is_ok());
+        assert!(server.push(0, 1, 0, 0).is_ok());
+        let err = server
+            .push(0, 2, 0, 0)
+            .expect_err("expected ring full error");
+        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert_eq!(err.to_string(), "io_uring submission queue is full");
 
         drop(server);
         drop(file);

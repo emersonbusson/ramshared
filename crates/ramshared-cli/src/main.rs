@@ -440,7 +440,13 @@ impl CliActionRunner for SystemCliActions {
         _stdout: &mut dyn Write,
         stderr: &mut dyn Write,
     ) -> ExitCode {
-        to_exit(diagnose::run(args), stderr)
+        match diagnose::run(args) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                let _ = writeln!(stderr, "{e}");
+                ExitCode::from(e.exit_code())
+            }
+        }
     }
 
     fn stress(

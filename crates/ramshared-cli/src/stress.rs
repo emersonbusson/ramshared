@@ -35,6 +35,7 @@ pub struct StressOptions {
     pub cascade: bool,
     pub telemetry_log: String,
     pub json: bool,
+    pub threads: u64,
 }
 
 impl Default for StressOptions {
@@ -53,6 +54,7 @@ impl Default for StressOptions {
             cascade: false,
             telemetry_log: "/tmp/ramshared-stress-telemetry.log".to_string(),
             json: false,
+            threads: 1,
         }
     }
 }
@@ -195,10 +197,24 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
             "--json" => {
                 opts.json = true;
             }
+            "--threads" => {
+                i += 1;
+                opts.threads = args
+                    .get(i)
+                    .ok_or_else(|| "--threads requires a value".to_string())?
+                    .parse()
+                    .map_err(|_| "invalid --threads value")?;
+            }
             other => return Err(format!("unknown stress argument: {other}")),
         }
         i += 1;
     }
+
+    let max_threads = std::thread::available_parallelism()
+        .map(|n| n.get() as u64)
+        .unwrap_or(1);
+
+    opts.threads = opts.threads.clamp(1, max_threads);
     opts.start_pct = opts.start_pct.clamp(1, 200);
     opts.target_pct = opts.target_pct.clamp(opts.start_pct, 200);
     opts.step_pct = opts.step_pct.clamp(1, 25);
@@ -225,6 +241,14 @@ pub fn read_mem_info() -> (u64, u64) {
         }
     }
     ((total_kib + 512) / 1024, (avail_kib + 512) / 1024)
+}
+
+pub fn read_sysctl_min_free_mb() -> u64 {
+    fs::read_to_string("/proc/sys/vm/min_free_kbytes")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(|kib| (kib + 512) / 1024)
+        .unwrap_or(512)
 }
 
 pub fn read_psi_full() -> f64 {
@@ -505,17 +529,20 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         readings_count += 1;
         append_telemetry_log(&opts.telemetry_log, &reading);
 
-        let hard_floor = if opts.tier3_target_pct.is_some() {
-            opts.min_ram_mb.min(250)
-        } else {
-            opts.min_ram_mb
-        };
+        let sysctl_min_free_mb = read_sysctl_min_free_mb();
+        let dynamic_kernel_floor = sysctl_min_free_mb.saturating_add(128).max(512);
+        let hard_floor = opts.min_ram_mb.max(dynamic_kernel_floor);
 
         let mut avail_mb = avail_mb;
-        if avail_mb <= hard_floor && (opts.tier3_target_pct.is_some() || opts.cascade) {
+        let mut retries = 0;
+        while avail_mb <= hard_floor
+            && (opts.tier3_target_pct.is_some() || opts.cascade)
+            && retries < 20
+        {
             thread::sleep(Duration::from_millis(50));
             let (_, new_avail) = read_mem_info();
             avail_mb = new_avail;
+            retries += 1;
         }
 
         if avail_mb <= hard_floor && opts.tier3_target_pct.is_none() && !opts.cascade {
@@ -598,10 +625,14 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         }
 
         let one_pct_mb = ((ram_total_mb * opts.step_pct) / 100).max(50);
-        let mut safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(hard_floor));
+        let safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(hard_floor));
         if safe_alloc_mb == 0 {
             if (opts.cascade || opts.tier3_target_pct.is_some()) && psi_full < opts.max_psi_full {
-                safe_alloc_mb = 64;
+                thread::sleep(Duration::from_millis(100));
+                let (_, fresh_avail) = read_mem_info();
+                if fresh_avail <= hard_floor {
+                    break;
+                }
             } else {
                 break;
             }
@@ -1003,6 +1034,16 @@ mod tests {
         assert!(opts.battery);
         assert_eq!(opts.telemetry_log, "/tmp/test-telemetry.log");
         assert!(opts.json);
+    }
+
+    #[test]
+    fn clamps_thread_count_to_physical_limits() {
+        let args = vec!["--threads".to_string(), "999999".to_string()];
+        let opts = parse_stress_args(&args).unwrap_or_default();
+        let max_threads = std::thread::available_parallelism()
+            .map(|n| n.get() as u64)
+            .unwrap_or(1);
+        assert_eq!(opts.threads, max_threads);
     }
 
     #[test]

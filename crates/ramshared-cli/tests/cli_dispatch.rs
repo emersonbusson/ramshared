@@ -258,3 +258,15 @@ fn cli_stress_battery_and_seismic_log() {
         let _ = fs::remove_file(log_path);
     }
 }
+
+#[test]
+fn cli_diagnose_errors_semantic_codes() {
+    let missing_args = run_cli(&["diagnose"]);
+    assert_eq!(missing_args.status.code(), Some(22)); // EINVAL
+
+    let missing_file = run_cli(&["diagnose", "--events", "/does/not/exist.jsonl"]);
+    assert_eq!(missing_file.status.code(), Some(2)); // ENOENT
+
+    let invalid_flag = run_cli(&["diagnose", "--invalid-flag"]);
+    assert_eq!(invalid_flag.status.code(), Some(22)); // EINVAL
+}

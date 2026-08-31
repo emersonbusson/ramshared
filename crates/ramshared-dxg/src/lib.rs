@@ -81,6 +81,10 @@ pub trait GpuBudgetProvider {
 pub enum DxgError {
     Unavailable(String),
     Io(String),
+    DeviceNotFound,
+    UnsupportedHardware,
+    BufferOverflow,
+    PermissionDenied,
     NoAdapters,
     AmbiguousAdapters(usize),
     AdapterNotFound(AdapterLuid),
@@ -93,6 +97,10 @@ impl fmt::Display for DxgError {
         match self {
             Self::Unavailable(message) => write!(f, "dxg unavailable: {message}"),
             Self::Io(message) => write!(f, "dxg ioctl failed: {message}"),
+            Self::DeviceNotFound => write!(f, "dxg device not found"),
+            Self::UnsupportedHardware => write!(f, "dxg unsupported hardware"),
+            Self::BufferOverflow => write!(f, "dxg buffer overflow"),
+            Self::PermissionDenied => write!(f, "dxg permission denied"),
             Self::NoAdapters => write!(f, "dxg returned no adapters"),
             Self::AmbiguousAdapters(count) => {
                 write!(f, "dxg returned {count} adapters; explicit LUID required")
@@ -107,6 +115,16 @@ impl fmt::Display for DxgError {
 impl std::error::Error for DxgError {}
 
 impl DxgError {
+    pub fn from_sys_error(error: std::io::Error) -> Self {
+        match error.raw_os_error() {
+            Some(libc::ENODEV) => Self::DeviceNotFound,
+            Some(libc::ENOTTY) => Self::UnsupportedHardware,
+            Some(libc::EOVERFLOW) => Self::BufferOverflow,
+            Some(libc::EPERM) | Some(libc::EACCES) => Self::PermissionDenied,
+            _ => Self::Io(error.to_string()),
+        }
+    }
+
     pub fn permits_startup_fallback(&self) -> bool {
         matches!(self, Self::Unavailable(_))
     }
@@ -259,7 +277,7 @@ fn ioctl_mut<T>(file: &File, request: u64, value: &mut T) -> Result<(), DxgError
     // alive for the synchronous ioctl. The kernel validates nested pointers.
     let result = unsafe { ioctl(file.as_raw_fd(), request, value as *mut T) };
     if result < 0 {
-        Err(DxgError::Io(std::io::Error::last_os_error().to_string()))
+        Err(DxgError::from_sys_error(std::io::Error::last_os_error()))
     } else {
         Ok(())
     }
@@ -350,6 +368,32 @@ mod tests {
     }
 
     #[test]
+    fn ioctl_maps_kernel_errors_to_typed_variants() {
+        assert_eq!(
+            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(19)),
+            super::DxgError::DeviceNotFound
+        );
+        assert_eq!(
+            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(25)),
+            super::DxgError::UnsupportedHardware
+        );
+        assert_eq!(
+            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(75)),
+            super::DxgError::BufferOverflow
+        );
+        assert_eq!(
+            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(13)),
+            super::DxgError::PermissionDenied
+        );
+        assert_eq!(
+            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(1)),
+            super::DxgError::PermissionDenied
+        );
+        let unknown = super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(9999));
+        assert!(matches!(unknown, super::DxgError::Io(_)));
+    }
+
+    #[test]
     fn all_error_messages_and_luid_are_stable() {
         let luid = AdapterLuid {
             low: 0x12,
@@ -364,6 +408,10 @@ mod tests {
             super::DxgError::AdapterNotFound(luid),
             super::DxgError::TooManyAdapters(65),
             super::DxgError::Malformed("field"),
+            super::DxgError::DeviceNotFound,
+            super::DxgError::UnsupportedHardware,
+            super::DxgError::BufferOverflow,
+            super::DxgError::PermissionDenied,
         ];
         for error in cases {
             assert!(!error.to_string().is_empty());

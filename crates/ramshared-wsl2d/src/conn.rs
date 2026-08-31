@@ -143,6 +143,7 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
                 return;
             }
         };
+
         drop(hs_writer); // handshake completed; from here on only the writer thread writes replies.
         let export_size = exports[idx].size; // anti-DoS based on negotiated export (RF-L1)
 
@@ -166,15 +167,15 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
                 );
                 break;
             }
-            let payload = if req.cmd == Command::Write {
-                let mut p = vec![0u8; req.len as usize];
-                if reader.read_exact(&mut p).is_err() {
+
+            let mut payload = Vec::new();
+            if req.cmd == Command::Write {
+                payload.resize(req.len as usize, 0);
+                if reader.read_exact(&mut payload).is_err() {
                     break;
                 }
-                p
-            } else {
-                Vec::new()
-            };
+            }
+
             let job = Job {
                 export: idx,
                 req,
@@ -238,13 +239,17 @@ pub fn spawn_acceptor(
                     break;
                 }
             };
-            let (wstream, hs_writer) = match (stream.try_clone(), stream.try_clone()) {
-                (Ok(w), Ok(h)) => (w, h),
-                _ => {
-                    eprintln!("[ramsharedd] try_clone (unix) failed; skipping connection");
-                    continue;
-                }
+
+            let Ok(wstream) = stream.try_clone() else {
+                eprintln!("[ramsharedd] try_clone (unix) wstream failed; skipping connection");
+                continue;
             };
+
+            let Ok(hs_writer) = stream.try_clone() else {
+                eprintln!("[ramsharedd] try_clone (unix) hs_writer failed; skipping connection");
+                continue;
+            };
+
             if !wire_conn(stream, wstream, hs_writer, &exports, tx_flags, &jobs) {
                 break;
             }
@@ -269,14 +274,19 @@ pub fn spawn_acceptor_tcp(
                     break;
                 }
             };
+
             let _ = stream.set_nodelay(true); // TCP_NODELAY: swap latency
-            let (wstream, hs_writer) = match (stream.try_clone(), stream.try_clone()) {
-                (Ok(w), Ok(h)) => (w, h),
-                _ => {
-                    eprintln!("[ramsharedd] try_clone (tcp) failed; skipping connection");
-                    continue;
-                }
+
+            let Ok(wstream) = stream.try_clone() else {
+                eprintln!("[ramsharedd] try_clone (tcp) wstream failed; skipping connection");
+                continue;
             };
+
+            let Ok(hs_writer) = stream.try_clone() else {
+                eprintln!("[ramsharedd] try_clone (tcp) hs_writer failed; skipping connection");
+                continue;
+            };
+
             if !wire_conn(stream, wstream, hs_writer, &exports, tx_flags, &jobs) {
                 break;
             }
@@ -532,7 +542,7 @@ mod tests {
             disconnect_rx,
         );
         disconnect_tx.send(reply(0x44, &[0x55], true)).unwrap();
-        disconnect_tx.send(reply(0x66, &[0x77], false)).unwrap();
+        let _ = disconnect_tx.send(reply(0x66, &[0x77], false));
         drop(disconnect_tx);
         join_with_deadline(disconnect_writer);
         let mut disconnect_expected = vec![0x44; SIMPLE_REPLY_LEN];
@@ -660,6 +670,27 @@ mod tests {
         );
         join_with_deadline(oversized_reader);
         assert_only_closed(&oversized_rx);
+
+        let mut over_ipc_limit_wire = export_name_handshake(b"");
+        // 16 MiB + 1
+        over_ipc_limit_wire.extend_from_slice(&request_bytes(
+            1,
+            2,
+            16 * 1024 * 1024 + 1,
+            NBD_REQUEST_MAGIC,
+        ));
+        let (over_ipc_tx, over_ipc_rx) = sync_channel(1);
+        let (reply_tx, _reply_rx) = channel();
+        let over_ipc_reader = spawn_reader(
+            Cursor::new(over_ipc_limit_wire),
+            TestWriter::new(Arc::new(WriterState::default()), WriterFailure::Never),
+            one_export(32 * 1024 * 1024), // Export size is 32 MiB, so it doesn't fail the export size check
+            0,
+            over_ipc_tx,
+            reply_tx,
+        );
+        join_with_deadline(over_ipc_reader);
+        assert_only_closed(&over_ipc_rx);
     }
 
     #[test]
@@ -727,6 +758,53 @@ mod tests {
         drop(tcp_client);
     }
 
+    #[test]
+    fn test_worker_guard_clause_skips_non_jobs() {
+        let (jobs_tx, jobs_rx) = sync_channel::<WMsg>(5);
+        let (reply_tx, _reply_rx) = channel::<Reply>();
+
+        let worker = std::thread::spawn(move || {
+            let mut served = 0u32;
+            for m in jobs_rx.iter() {
+                let WMsg::Job(job) = m else {
+                    continue;
+                }; // Guard clause
+                let _ = job.reply.send(Reply {
+                    reply: [0u8; SIMPLE_REPLY_LEN],
+                    data: Vec::new(),
+                    disconnect: false,
+                });
+                served += 1;
+                if served >= 2 {
+                    break;
+                }
+            }
+            served
+        });
+
+        // Send non-job messages first; the worker should skip them without crashing or hanging.
+        jobs_tx.send(WMsg::Opened).unwrap();
+        jobs_tx.send(WMsg::Closed).unwrap();
+
+        // Send actual jobs
+        for _ in 0..2 {
+            jobs_tx
+                .send(WMsg::Job(Job {
+                    export: 0,
+                    req: dummy_req(),
+                    payload: Vec::new(),
+                    reply: reply_tx.clone(),
+                }))
+                .unwrap();
+        }
+
+        assert_eq!(
+            worker.join().unwrap(),
+            2,
+            "worker skipped non-jobs correctly using let-else guard clause"
+        );
+    }
+
     // DT-7 / DT-18: unbounded replica — worker progresses even with the writer stopped.
     // If the replica were bounded and the writer did not drain, the worker would block →
     // Jobs channel would fill up → reader would block → deadlock (this test would hang).
@@ -739,17 +817,18 @@ mod tests {
         let worker = std::thread::spawn(move || {
             let mut served = 0u32;
             for m in jobs_rx.iter() {
-                if let WMsg::Job(job) = m {
-                    // worker never blocks: unbounded replica
-                    let _ = job.reply.send(Reply {
-                        reply: [0u8; SIMPLE_REPLY_LEN],
-                        data: Vec::new(),
-                        disconnect: false,
-                    });
-                    served += 1;
-                    if served >= 10 {
-                        break;
-                    }
+                let WMsg::Job(job) = m else {
+                    continue;
+                }; // Guard clause
+                // worker never blocks: unbounded replica
+                let _ = job.reply.send(Reply {
+                    reply: [0u8; SIMPLE_REPLY_LEN],
+                    data: Vec::new(),
+                    disconnect: false,
+                });
+                served += 1;
+                if served >= 10 {
+                    break;
                 }
             }
             served

@@ -347,7 +347,7 @@ pub fn derive_lifecycle(s: &CascadeSnapshot) -> LifecycleView {
 
 /// Build tier samples + order_ok from swap lines (filename lowercase match).
 pub fn tiers_from_swap_names(
-    entries: &[(String, u64, u64, i32)],
+    entries: &[(&str, u64, u64, i32)],
 ) -> (TierSample, TierSample, TierSample, bool) {
     let mut zram = TierSample::default();
     let mut vram = TierSample::default();
@@ -854,17 +854,17 @@ mod tests {
     #[test]
     fn tiers_from_swap_names_order() {
         let entries = vec![
-            ("/dev/zram0".into(), 100u64, 10u64, 200i32),
-            ("/dev/nbd0".into(), 200, 5, 100),
-            ("/dev/sdc".into(), 300, 0, -2),
+            ("/dev/zram0", 100u64, 10u64, 200i32),
+            ("/dev/nbd0", 200, 5, 100),
+            ("/dev/sdc", 300, 0, -2),
         ];
         let (z, v, d, ok) = tiers_from_swap_names(&entries);
         assert!(z.present && v.present && d.present);
         assert!(ok);
         assert_eq!(z.prio, Some(200));
         let bad = vec![
-            ("/dev/zram0".into(), 100u64, 0u64, 50i32),
-            ("/dev/nbd0".into(), 200, 0, 100),
+            ("/dev/zram0", 100u64, 0u64, 50i32),
+            ("/dev/nbd0", 200, 0, 100),
         ];
         let (_, _, _, ok2) = tiers_from_swap_names(&bad);
         assert!(!ok2);

@@ -617,3 +617,57 @@ mod tests {
         );
     }
 }
+
+/// Semantic error for NBD probe connection failures.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NbdReadinessError {
+    /// Connection was refused (ECONNREFUSED).
+    ConnectionRefused,
+    /// Connection timed out (ETIMEDOUT).
+    Timeout,
+    /// Any other IO error kind.
+    Other(std::io::ErrorKind),
+}
+
+impl core::fmt::Display for NbdReadinessError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ConnectionRefused => f.write_str("NBD connection refused"),
+            Self::Timeout => f.write_str("NBD connection timed out"),
+            Self::Other(kind) => write!(f, "NBD IO error: {:?}", kind),
+        }
+    }
+}
+
+impl core::error::Error for NbdReadinessError {}
+
+impl From<std::io::ErrorKind> for NbdReadinessError {
+    fn from(kind: std::io::ErrorKind) -> Self {
+        match kind {
+            std::io::ErrorKind::ConnectionRefused => Self::ConnectionRefused,
+            std::io::ErrorKind::TimedOut => Self::Timeout,
+            _ => Self::Other(kind),
+        }
+    }
+}
+
+#[cfg(test)]
+mod nbd_readiness_error_tests {
+    use super::*;
+
+    #[test]
+    fn nbd_readiness_error_mappings() {
+        assert_eq!(
+            NbdReadinessError::from(std::io::ErrorKind::ConnectionRefused),
+            NbdReadinessError::ConnectionRefused
+        );
+        assert_eq!(
+            NbdReadinessError::from(std::io::ErrorKind::TimedOut),
+            NbdReadinessError::Timeout
+        );
+        assert_eq!(
+            NbdReadinessError::from(std::io::ErrorKind::InvalidData),
+            NbdReadinessError::Other(std::io::ErrorKind::InvalidData)
+        );
+    }
+}

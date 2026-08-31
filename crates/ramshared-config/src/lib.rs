@@ -4,6 +4,9 @@
 //! validation can be tested without sockets, root, or a GPU.
 #![forbid(unsafe_code)]
 
+pub mod error;
+pub use error::ConfigError;
+
 use serde::Deserialize;
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -76,24 +79,98 @@ impl Default for AgentConfig {
     }
 }
 
+fn parse_meminfo(text: &str) -> Option<u64> {
+    for line in text.lines() {
+        if !line.starts_with("MemTotal:") {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let _ = parts.next(); // MemTotal:
+        let kb_str = parts.next()?;
+        let kb = kb_str.parse::<u64>().ok()?;
+        return Some(kb * 1024); // return bytes
+    }
+    None
+}
+
 impl Config {
-    pub fn parse(text: &str) -> Result<Self, toml::de::Error> {
-        toml::from_str(text)
+    pub fn parse(text: &str) -> Result<Self, ConfigError> {
+        toml::from_str(text).map_err(|err| {
+            let message = err.message().to_string();
+            let mut line = None;
+            let mut column = None;
+            if let Some(span) = err.span() {
+                let mut l = 1;
+                let mut c = 1;
+                for (i, ch) in text.chars().enumerate() {
+                    if i == span.start {
+                        line = Some(l);
+                        column = Some(c);
+                        break;
+                    }
+                    if ch == '\n' {
+                        l += 1;
+                        c = 1;
+                    } else {
+                        c += 1;
+                    }
+                }
+            }
+            ConfigError::Parse {
+                message,
+                line,
+                column,
+            }
+        })
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), ConfigError> {
         if self.broker.slices == 0 {
-            return Err("broker.slices must be > 0".into());
+            return Err(ConfigError::Invalid {
+                key_path: "broker.slices".into(),
+                reason: "must be > 0".into(),
+            });
         }
         if self.broker.slice_mib == 0 {
-            return Err("broker.slice_mib must be > 0".into());
+            return Err(ConfigError::Invalid {
+                key_path: "broker.slice_mib".into(),
+                reason: "must be > 0".into(),
+            });
+        }
+        if self.broker.slice_mib < 16 {
+            return Err(ConfigError::OutOfRange(format!(
+                "broker.slice_mib must be >= 16 (got {})",
+                self.broker.slice_mib
+            )));
         }
         if self.agent.watchdog_secs == 0 {
-            return Err("agent.watchdog_secs must be > 0".into());
+            return Err(ConfigError::Invalid {
+                key_path: "agent.watchdog_secs".into(),
+                reason: "must be > 0".into(),
+            });
         }
+
+        let total_mib = (self.broker.slices as u64).saturating_mul(self.broker.slice_mib);
+        let total_bytes = total_mib.saturating_mul(1024 * 1024);
+
+        if let Some(host_ram) = std::fs::read_to_string("/proc/meminfo")
+            .ok()
+            .and_then(|m| parse_meminfo(&m))
+        {
+            let limit_exceeded = total_bytes > host_ram;
+            if limit_exceeded {
+                return Err(ConfigError::OutOfRange(format!(
+                    "configured memory ({total_bytes} bytes) exceeds host RAM ({host_ram} bytes)"
+                )));
+            }
+        }
+
         match self.broker.backend.as_str() {
             "cuda" | "vulkan" => Ok(()),
-            other => Err(format!("unsupported backend: {other}")),
+            other => Err(ConfigError::Invalid {
+                key_path: "broker.backend".into(),
+                reason: format!("unsupported backend: {other}"),
+            }),
         }
     }
 }
@@ -124,6 +201,68 @@ mod tests {
         let mut cfg = Config::parse("").expect("parse");
         cfg.broker.listen = "0.0.0.0:7777".into();
         cfg.broker.backend = "unknown".into();
-        assert!(cfg.validate().is_err());
+        let err = cfg.validate().expect_err("expected error");
+        assert!(matches!(
+            err,
+            ConfigError::Invalid {
+                ref key_path,
+                ref reason,
+            } if key_path == "broker.backend" && reason == "unsupported backend: unknown"
+        ));
+    }
+
+    #[test]
+    fn parses_error_captures_location() {
+        let err = Config::parse("[broker]\nslice_mib = 'hello'").expect_err("expected error");
+        assert!(matches!(
+            err,
+            ConfigError::Parse {
+                line: Some(2),
+                column: Some(13),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn display_errors() {
+        let p1 = ConfigError::Parse {
+            message: "msg".into(),
+            line: Some(1),
+            column: Some(2),
+        };
+        assert_eq!(p1.to_string(), "parse error at line 1, col 2: msg");
+
+        let p2 = ConfigError::Parse {
+            message: "msg".into(),
+            line: None,
+            column: None,
+        };
+        assert_eq!(p2.to_string(), "parse error: msg");
+
+        let i = ConfigError::Invalid {
+            key_path: "k".into(),
+            reason: "r".into(),
+        };
+        assert_eq!(i.to_string(), "invalid configuration at 'k': r");
+    }
+
+    #[test]
+    fn rejects_small_slice() {
+        let mut cfg = Config::parse("").expect("parse");
+        cfg.broker.slice_mib = 15;
+        let err = cfg.validate().expect_err("should reject small slice");
+        assert!(matches!(err, ConfigError::OutOfRange(_)));
+    }
+
+    #[test]
+    fn rejects_excessive_ram() {
+        let mut cfg = Config::parse("").expect("parse");
+        cfg.broker.slices = 1000;
+        cfg.broker.slice_mib = 1024 * 1024 * 1024; // 1 PB slice
+        if std::fs::read_to_string("/proc/meminfo").is_ok() {
+            let err = cfg.validate().expect_err("should reject excessive ram");
+            assert!(matches!(err, ConfigError::OutOfRange(_)));
+        }
     }
 }

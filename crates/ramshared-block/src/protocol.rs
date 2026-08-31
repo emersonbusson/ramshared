@@ -64,17 +64,21 @@ pub struct Request {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProtocolError {
-    ShortBuffer { got: usize, need: usize },
-    BadMagic(u32),
+    TruncatedPayload { got: usize, need: usize },
+    InvalidHeader(u32),
+    ChecksumMismatch,
 }
 
 impl fmt::Display for ProtocolError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ProtocolError::ShortBuffer { got, need } => {
-                write!(f, "short buffer: {got} < {need}")
+            ProtocolError::TruncatedPayload { got, need } => {
+                write!(f, "truncated payload: {got} < {need}")
             }
-            ProtocolError::BadMagic(m) => write!(f, "invalid request magic: {m:#010x}"),
+            ProtocolError::InvalidHeader(m) => {
+                write!(f, "invalid request magic (header): {m:#010x}")
+            }
+            ProtocolError::ChecksumMismatch => write!(f, "checksum mismatch"),
         }
     }
 }
@@ -94,14 +98,14 @@ fn be64(b: &[u8]) -> u64 {
 /// Parses the 28-byte header. Validates size and magic.
 pub fn parse_request(buf: &[u8]) -> Result<Request, ProtocolError> {
     if buf.len() < REQUEST_LEN {
-        return Err(ProtocolError::ShortBuffer {
+        return Err(ProtocolError::TruncatedPayload {
             got: buf.len(),
             need: REQUEST_LEN,
         });
     }
     let magic = be32(&buf[0..4]);
     if magic != NBD_REQUEST_MAGIC {
-        return Err(ProtocolError::BadMagic(magic));
+        return Err(ProtocolError::InvalidHeader(magic));
     }
     Ok(Request {
         flags: be16(&buf[4..6]),
@@ -153,7 +157,7 @@ mod tests {
         raw[0] = 0xff;
         assert!(matches!(
             parse_request(&raw),
-            Err(ProtocolError::BadMagic(_))
+            Err(ProtocolError::InvalidHeader(_))
         ));
     }
 
@@ -161,7 +165,7 @@ mod tests {
     fn rejects_short_buffer() {
         assert!(matches!(
             parse_request(&[0u8; 10]),
-            Err(ProtocolError::ShortBuffer { need: 28, .. })
+            Err(ProtocolError::TruncatedPayload { need: 28, .. })
         ));
     }
 

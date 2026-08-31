@@ -19,6 +19,12 @@ pub enum VramError {
     Provider(String),
     /// Attempted access out of the allocated memory range.
     OutOfRange { off: u64, len: u64, size: u64 },
+    /// Allocation failed due to out-of-memory.
+    OutOfMemory,
+    /// Invalid alignment for VRAM operation.
+    InvalidAlignment,
+    /// VRAM operation failed because resource is busy.
+    Busy,
 }
 
 impl fmt::Display for VramError {
@@ -28,6 +34,9 @@ impl fmt::Display for VramError {
             VramError::OutOfRange { off, len, size } => {
                 write!(f, "vram out-of-range: off={off} len={len} size={size}")
             }
+            VramError::OutOfMemory => write!(f, "vram out of memory"),
+            VramError::InvalidAlignment => write!(f, "vram invalid alignment"),
+            VramError::Busy => write!(f, "vram busy"),
         }
     }
 }
@@ -70,4 +79,32 @@ pub trait VramProvider {
 
     /// Returns free and total VRAM capacities in bytes (used by the residency canary — DT-3/9/11).
     fn mem_info(&self) -> Result<(u64, u64), VramError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vram_error_display() {
+        assert_eq!(
+            VramError::Provider("test".to_string()).to_string(),
+            "vram provider: test"
+        );
+        assert_eq!(
+            VramError::OutOfRange {
+                off: 0,
+                len: 10,
+                size: 5
+            }
+            .to_string(),
+            "vram out-of-range: off=0 len=10 size=5"
+        );
+        assert_eq!(VramError::OutOfMemory.to_string(), "vram out of memory");
+        assert_eq!(
+            VramError::InvalidAlignment.to_string(),
+            "vram invalid alignment"
+        );
+        assert_eq!(VramError::Busy.to_string(), "vram busy");
+    }
 }

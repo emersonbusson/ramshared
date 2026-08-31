@@ -48,9 +48,121 @@ fn serve_request_handles_flush_and_rejects_oversized_or_oob() {
         -22
     );
 
-    // READ outside the backend => -EIO.
+    // READ outside the backend => -EINVAL.
     assert_eq!(
         ublk_server::serve_request(&req(Command::Read, 51200, 512), &mut backend, &mut buf),
+        -22
+    );
+}
+
+#[test]
+fn serve_request_guards_against_out_of_bounds_upfront() {
+    let mut backend = RamBackend::new(4096);
+    let mut buf = vec![0u8; 4096];
+
+    // Exact fit
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Read, 0, 4096), &mut backend, &mut buf),
+        4096
+    );
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Write, 2048, 2048), &mut backend, &mut buf),
+        2048
+    );
+
+    // Overflow offset + len
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Read, u64::MAX, 1024), &mut backend, &mut buf),
+        -22 // EINVAL
+    );
+
+    // Exceeds backend size bytes
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Read, 4096, 512), &mut backend, &mut buf),
+        -22 // EINVAL
+    );
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Write, 2048, 4096), &mut backend, &mut buf),
+        -22 // EINVAL
+    );
+}
+
+use ramshared_block::{BlockBackend, IoError};
+
+struct FailingBackend {
+    fail_read: bool,
+    fail_write: bool,
+    fail_flush: bool,
+}
+
+impl BlockBackend for FailingBackend {
+    fn size_bytes(&self) -> u64 {
+        4096
+    }
+
+    fn block_size(&self) -> u32 {
+        512
+    }
+
+    fn read_at(&mut self, _off: u64, _buf: &mut [u8]) -> Result<(), IoError> {
+        if self.fail_read {
+            Err(IoError("simulated read failure".into()))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn write_at(&mut self, _off: u64, _data: &[u8]) -> Result<(), IoError> {
+        if self.fail_write {
+            Err(IoError("simulated write failure".into()))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn flush(&mut self) -> Result<(), IoError> {
+        if self.fail_flush {
+            Err(IoError("simulated flush failure".into()))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[test]
+fn serve_request_propagates_backend_errors() {
+    let mut buf = vec![0u8; 512];
+
+    // Read error propagation -> -EIO (-5)
+    let mut read_failing = FailingBackend {
+        fail_read: true,
+        fail_write: false,
+        fail_flush: false,
+    };
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Read, 0, 512), &mut read_failing, &mut buf),
+        -5
+    );
+
+    // Write error propagation -> -EIO (-5)
+    let mut write_failing = FailingBackend {
+        fail_read: false,
+        fail_write: true,
+        fail_flush: false,
+    };
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Write, 0, 512), &mut write_failing, &mut buf),
+        -5
+    );
+
+    // Flush error propagation -> -EIO (-5)
+    let mut flush_failing = FailingBackend {
+        fail_read: false,
+        fail_write: false,
+        fail_flush: true,
+    };
+    assert_eq!(
+        ublk_server::serve_request(&req(Command::Flush, 0, 0), &mut flush_failing, &mut buf),
         -5
     );
 }

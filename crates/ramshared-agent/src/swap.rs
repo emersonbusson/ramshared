@@ -11,6 +11,48 @@ use std::process::Command;
 
 use ramshared_broker::protocol::NbdEndpoint;
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum ResizeError {
+    TooSmall(u64),
+    ExceedsDiskSpace { size: u64, max: u64 },
+}
+
+impl std::fmt::Display for ResizeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResizeError::TooSmall(size) => {
+                write!(f, "swap size {} bytes is below 64 MiB minimum", size)
+            }
+            ResizeError::ExceedsDiskSpace { size, max } => {
+                write!(
+                    f,
+                    "swap size {} bytes exceeds physical disk space {} bytes",
+                    size, max
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ResizeError {}
+
+pub fn validate_swap_resize(
+    size_bytes: u64,
+    disk_space_bytes: u64,
+) -> std::result::Result<(), ResizeError> {
+    const MIN_SWAP_BYTES: u64 = 64 * 1024 * 1024;
+    if size_bytes < MIN_SWAP_BYTES {
+        return Err(ResizeError::TooSmall(size_bytes));
+    }
+    if size_bytes > disk_space_bytes {
+        return Err(ResizeError::ExceedsDiskSpace {
+            size: size_bytes,
+            max: disk_space_bytes,
+        });
+    }
+    Ok(())
+}
+
 /// Assembles `nbd-client` argv to attach `export` to `dev` (DT-14: `-timeout 30`, no
 /// `-persist`). Unix uses `-unix <path>`; TCP uses positional `<host> <port>`.
 pub fn nbd_args(endpoint: &NbdEndpoint, export: &str, dev: &str) -> Vec<String> {
@@ -217,5 +259,33 @@ mod tests {
         assert!(res.is_err());
         let err = res.unwrap_err();
         assert!(err.starts_with("swapoff: "));
+    }
+
+    #[test]
+    fn validate_swap_resize_too_small() {
+        let err = validate_swap_resize(63 * 1024 * 1024, 1024 * 1024 * 1024)
+            .expect_err("should fail below 64 MiB");
+        assert_eq!(err, ResizeError::TooSmall(63 * 1024 * 1024));
+    }
+
+    #[test]
+    fn validate_swap_resize_exceeds_disk() {
+        let err = validate_swap_resize(128 * 1024 * 1024, 64 * 1024 * 1024)
+            .expect_err("should fail if size exceeds disk");
+        assert_eq!(
+            err,
+            ResizeError::ExceedsDiskSpace {
+                size: 128 * 1024 * 1024,
+                max: 64 * 1024 * 1024
+            }
+        );
+    }
+
+    #[test]
+    fn validate_swap_resize_success() {
+        validate_swap_resize(128 * 1024 * 1024, 1024 * 1024 * 1024)
+            .expect("should succeed within bounds");
+        validate_swap_resize(64 * 1024 * 1024, 64 * 1024 * 1024)
+            .expect("should succeed at exact bounds");
     }
 }

@@ -8,5 +8,5 @@
 pub mod hash;
 pub mod pattern;
 
-pub use hash::{ChecksumTable, block_hash};
-pub use pattern::{Pattern, fill_block, verify_block};
+pub use hash::{ChecksumMismatchError, ChecksumTable, block_hash};
+pub use pattern::{IntegrityError, Pattern, fill_block, verify_block};
