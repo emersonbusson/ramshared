@@ -21,13 +21,17 @@
 #define IOCTL_POOLSTRESS_FREE \
 	CTL_CODE(FILE_DEVICE_UNKNOWN, 0x902, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
+#pragma pack(push, 8)
 typedef struct _POOLSTRESS_ALLOC_IN {
-	ULONG NGb;
+	UINT64 Bytes;
+	UINT32 PoolTag;
 } POOLSTRESS_ALLOC_IN;
+#pragma pack(pop)
 
 static PDEVICE_OBJECT g_Device = NULL;
 static PVOID g_Pool = NULL;
 static SIZE_T g_PoolSize = 0;
+static UINT32 g_PoolTag = 0;
 
 static VOID
 PoolstressFill(_Inout_updates_bytes_(bytes) PUCHAR pool, SIZE_T bytes)
@@ -63,81 +67,138 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	PIO_STACK_LOCATION irpSp;
 	NTSTATUS status = STATUS_SUCCESS;
 	ULONG_PTR info = 0;
+	ULONG code;
+	PVOID buf;
+	ULONG inLen;
+	ULONG outLen;
+
+	if (Irp == NULL)
+		return STATUS_INVALID_PARAMETER;
 
 	UNREFERENCED_PARAMETER(DeviceObject);
 	irpSp = IoGetCurrentIrpStackLocation(Irp);
-
-	switch (irpSp->MajorFunction) {
-	case IRP_MJ_CREATE:
-	case IRP_MJ_CLOSE:
-		break;
-
-	case IRP_MJ_DEVICE_CONTROL: {
-		ULONG code = irpSp->Parameters.DeviceIoControl.IoControlCode;
-		PVOID buf = Irp->AssociatedIrp.SystemBuffer;
-		ULONG inLen = irpSp->Parameters.DeviceIoControl.InputBufferLength;
-
-		if (code == IOCTL_POOLSTRESS_ALLOC) {
-			POOLSTRESS_ALLOC_IN *in;
-			SIZE_T bytes;
-			SIZE_T i;
-
-			if (inLen < sizeof(POOLSTRESS_ALLOC_IN) || buf == NULL) {
-				status = STATUS_INVALID_PARAMETER;
-				break;
-			}
-			if (g_Pool != NULL) {
-				status = STATUS_DEVICE_BUSY;
-				break;
-			}
-			in = (POOLSTRESS_ALLOC_IN *)buf;
-			if (in->NGb == 0 || in->NGb > 16) {
-				status = STATUS_INVALID_PARAMETER;
-				break;
-			}
-			bytes = (SIZE_T)in->NGb << 30;
-			g_Pool = ExAllocatePool2(POOL_FLAG_PAGED, bytes, 'ssPR');
-			if (!g_Pool) {
-				status = STATUS_INSUFFICIENT_RESOURCES;
-				break;
-			}
-			g_PoolSize = bytes;
-			/* Fill every byte in bounded BCrypt calls (DT-21). */
-			PoolstressFill((PUCHAR)g_Pool, bytes);
-			/* Touch every page so pages are resident then pageable. */
-			for (i = 0; i < bytes / PAGE_SIZE; i++) {
-				volatile UCHAR *p = (PUCHAR)g_Pool + i * PAGE_SIZE;
-				*p = *p;
-			}
-		} else if (code == IOCTL_POOLSTRESS_READBACK) {
-			SIZE_T i;
-			volatile UCHAR sum = 0;
-
-			if (!g_Pool) {
-				status = STATUS_INVALID_DEVICE_STATE;
-				break;
-			}
-			for (i = 0; i < g_PoolSize; i += PAGE_SIZE) {
-				sum ^= *((PUCHAR)g_Pool + i);
-			}
-			info = sum;
-		} else if (code == IOCTL_POOLSTRESS_FREE) {
-			if (g_Pool) {
-				ExFreePoolWithTag(g_Pool, 'ssPR');
-				g_Pool = NULL;
-				g_PoolSize = 0;
-			}
-		} else {
-			status = STATUS_INVALID_DEVICE_REQUEST;
-		}
-		break;
+	if (irpSp == NULL) {
+		status = STATUS_INVALID_PARAMETER;
+		goto out;
 	}
 
-	default:
+	if (irpSp->MajorFunction == IRP_MJ_CREATE || irpSp->MajorFunction == IRP_MJ_CLOSE) {
+		status = STATUS_SUCCESS;
+		goto out;
+	}
+
+	if (irpSp->MajorFunction != IRP_MJ_DEVICE_CONTROL) {
 		status = STATUS_INVALID_DEVICE_REQUEST;
-		break;
+		goto out;
 	}
 
+	code = irpSp->Parameters.DeviceIoControl.IoControlCode;
+	buf = Irp->AssociatedIrp.SystemBuffer;
+	inLen = irpSp->Parameters.DeviceIoControl.InputBufferLength;
+	outLen = irpSp->Parameters.DeviceIoControl.OutputBufferLength;
+
+	if (code == IOCTL_POOLSTRESS_ALLOC) {
+		POOLSTRESS_ALLOC_IN *in;
+		SIZE_T bytes;
+		SIZE_T i;
+		UINT8 c1, c2, c3, c4;
+
+		if (outLen != 0) {
+			status = STATUS_INVALID_PARAMETER;
+			goto out;
+		}
+		if (inLen < sizeof(POOLSTRESS_ALLOC_IN) || buf == NULL) {
+			status = STATUS_INVALID_PARAMETER;
+			goto out;
+		}
+		if (g_Pool != NULL) {
+			status = STATUS_DEVICE_BUSY;
+			goto out;
+		}
+
+		in = (POOLSTRESS_ALLOC_IN *)buf;
+		if (in->Bytes < 64 || in->Bytes > 32 * 1024 * 1024) {
+			status = STATUS_INVALID_PARAMETER;
+			goto out;
+		}
+
+		c1 = (UINT8)(in->PoolTag & 0xFF);
+		c2 = (UINT8)((in->PoolTag >> 8) & 0xFF);
+		c3 = (UINT8)((in->PoolTag >> 16) & 0xFF);
+		c4 = (UINT8)((in->PoolTag >> 24) & 0xFF);
+
+		if (c1 < 0x20 || c1 > 0x7E || c2 < 0x20 || c2 > 0x7E ||
+		    c3 < 0x20 || c3 > 0x7E || c4 < 0x20 || c4 > 0x7E) {
+			status = STATUS_INVALID_PARAMETER;
+			goto out;
+		}
+		if (c1 == c2 || c1 == c3 || c1 == c4 ||
+		    c2 == c3 || c2 == c4 || c3 == c4) {
+			status = STATUS_INVALID_PARAMETER;
+			goto out;
+		}
+
+		bytes = (SIZE_T)in->Bytes;
+		g_Pool = ExAllocatePool2(POOL_FLAG_PAGED, bytes, in->PoolTag);
+		if (!g_Pool) {
+			status = STATUS_INSUFFICIENT_RESOURCES;
+			goto out;
+		}
+
+		g_PoolSize = bytes;
+		g_PoolTag = in->PoolTag;
+
+		/* Fill every byte in bounded BCrypt calls (DT-21). */
+		PoolstressFill((PUCHAR)g_Pool, bytes);
+		/* Touch every page so pages are resident then pageable. */
+		for (i = 0; i < bytes / PAGE_SIZE; i++) {
+			volatile UCHAR *p = (PUCHAR)g_Pool + i * PAGE_SIZE;
+			*p = *p;
+		}
+
+		status = STATUS_SUCCESS;
+		goto out;
+	}
+
+	if (code == IOCTL_POOLSTRESS_READBACK) {
+		SIZE_T i;
+		volatile UCHAR sum = 0;
+
+		if (outLen != 0) {
+			status = STATUS_INVALID_PARAMETER;
+			goto out;
+		}
+		if (!g_Pool) {
+			status = STATUS_INVALID_DEVICE_STATE;
+			goto out;
+		}
+		for (i = 0; i < g_PoolSize; i += PAGE_SIZE) {
+			sum ^= *((PUCHAR)g_Pool + i);
+		}
+		(VOID)sum;
+		info = 0;
+		status = STATUS_SUCCESS;
+		goto out;
+	}
+
+	if (code == IOCTL_POOLSTRESS_FREE) {
+		if (outLen != 0) {
+			status = STATUS_INVALID_PARAMETER;
+			goto out;
+		}
+		if (g_Pool) {
+			ExFreePoolWithTag(g_Pool, g_PoolTag);
+			g_Pool = NULL;
+			g_PoolSize = 0;
+			g_PoolTag = 0;
+		}
+		status = STATUS_SUCCESS;
+		goto out;
+	}
+
+	status = STATUS_INVALID_DEVICE_REQUEST;
+
+out:
 	Irp->IoStatus.Status = status;
 	Irp->IoStatus.Information = info;
 	IoCompleteRequest(Irp, IO_NO_INCREMENT);
@@ -152,8 +213,9 @@ PoolstressUnload(_In_ PDRIVER_OBJECT DriverObject)
 
 	UNREFERENCED_PARAMETER(DriverObject);
 	if (g_Pool) {
-		ExFreePoolWithTag(g_Pool, 'ssPR');
+		ExFreePoolWithTag(g_Pool, g_PoolTag);
 		g_Pool = NULL;
+		g_PoolTag = 0;
 	}
 	RtlInitUnicodeString(&link, POOLSTRESS_LINK_NAME);
 	IoDeleteSymbolicLink(&link);
