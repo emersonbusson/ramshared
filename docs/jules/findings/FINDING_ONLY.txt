@@ -1,0 +1,5 @@
+The request to verify the active CUDA context handle is non-null before invoking device memory API functions in `crates/ramshared-cuda/src/ffi.rs` presents an architectural mismatch:
+
+1. No API Invocations: `crates/ramshared-cuda/src/ffi.rs` exclusively defines raw type aliases and FFI signatures (e.g., `FnMemAlloc`). It contains no function implementations or API invocations where a runtime guard clause could be placed.
+2. Implicit Thread-Local Context: In the CUDA Driver API, device memory functions such as `cuMemAlloc` do not take a `CuContext` handle as a parameter because the active context is implicit and thread-local.
+3. Safe Rust Function Pointers: If the request implies verifying that the FFI function pointers themselves (e.g., `unsafe extern "C" fn`) are non-null, this is an architectural mismatch. Rust guarantees these function pointers are non-null. Forcing C-style raw null pointer checks by degrading these signatures to `Option<fn>` is explicitly forbidden.
