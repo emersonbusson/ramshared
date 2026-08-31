@@ -24,6 +24,18 @@ VRAM aos aplicativos nem identifica cargas pelo nome.
   <img alt="Beta supervisionado do driver Windows" src="https://img.shields.io/badge/Windows%20driver-supervised%20beta-d97706?style=flat-square">
 </p>
 
+## Por que o RamShared? (Arquitetura e Motivação)
+
+> **"Todo servidor Linux precisa de GPU? Por que usar VRAM/GPU cara como RAM em vez de apenas ZRAM ou swap no SSD?"**
+
+- **GPU é 100% Opcional**: O RamShared não obriga o uso de GPU. Ele orquestra uma hierarquia multinível (`RAM do Host -> ZRAM -> GPU VRAM (oportunista) -> SSD de Origem`). Servidores sem GPU dedicada operam estritamente com RAM, ZRAM e SSD.
+- **Aproveitamento de Hardware Ocioso**: Em estações de desenvolvimento, ambientes de engenharia WSL2 e servidores de IA mista, GPUs frequentemente ficam ociosas entre tarefas com VRAM não utilizada. O RamShared ativa esse hardware dormente como um tier intermediário ultra-rápido.
+- **Largura de Banda PCIe vs Desgaste de SSD**:
+  - **Zero Desgaste de SSD**: Ao contrário de SSDs NAND Flash que sofrem degradação severa sob *swap thrashing* (esgotando os TBWs da unidade), a memória VRAM possui durabilidade infinita de escrita.
+  - **Transferências PCIe Ultra-Rápidas**: O swap para VRAM opera através do barramento de alta velocidade com latências sub-milissegundo, evitando os travamentos e congelamentos típicos do swap em disco.
+  - **Alívio de CPU**: Embora a ZRAM seja rápida, volumes pesados de swap comprimido consomem núcleos de CPU preciosos em LZ4/ZSTD. O cache em VRAM realiza transferências diretas por DMA sem queimar ciclos de CPU durante compilações ou cargas pesadas.
+- **Zero Fome de GPU (Revogação Instantânea)**: A VRAM é alugada estritamente como um *cache revogável write-through*. No milissegundo em que uma carga CUDA, de IA (ex: PyTorch, Ollama) ou gráfica solicitar memória de vídeo, o RamShared devolve a VRAM instantaneamente sem perda de dados ou queda de processos, pois todos os dados já estão assegurados no SSD de origem.
+
 ## Status atual
 
 Versão: **v0.9.0 (Cascata de Memória Multinível Acelerada por Hardware - MVP Estável)**. Totalmente qualificada com 100% de saturação sob pressão extrema de memória no host Hyper-V/WSL2.
