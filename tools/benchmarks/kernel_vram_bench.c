@@ -119,9 +119,19 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "[-] Error: cuMemHostAlloc failed (%d MiB).\n", chunk_mib);
 		cuCtxDestroy(ctx);
 		dlclose(lib);
-		return 1;
+		return 12; // -ENOMEM
 	}
-	memset(host_pinned, 0xA5, chunk_bytes);
+
+	// Pseudorandom Test Pattern Generation (LFSR/XOR)
+	uint32_t *host_ptr = (uint32_t *)host_pinned;
+	size_t num_words = chunk_bytes / sizeof(uint32_t);
+	uint32_t lfsr = 0xACE1ACE1u;
+	for (size_t i = 0; i < num_words; i++) {
+		lfsr ^= lfsr >> 12;
+		lfsr ^= lfsr << 25;
+		lfsr ^= lfsr >> 27;
+		host_ptr[i] = lfsr * 0x2545F491u;
+	}
 
 	// Allocate Device VRAM Buffer
 	uint64_t dev_ptr = 0;
@@ -130,7 +140,7 @@ int main(int argc, char **argv) {
 		cuMemFreeHost(host_pinned);
 		cuCtxDestroy(ctx);
 		dlclose(lib);
-		return 1;
+		return 12; // -ENOMEM
 	}
 
 	// 1. Direct DMA Host -> VRAM (Push)
@@ -144,7 +154,15 @@ int main(int argc, char **argv) {
 
 	// 2. Direct DMA VRAM -> Host (Pull)
 	void *read_pinned = NULL;
-	cuMemHostAlloc(&read_pinned, chunk_bytes, 0);
+	if (cuMemHostAlloc(&read_pinned, chunk_bytes, 0) != 0) {
+		fprintf(stderr, "[-] Error: cuMemHostAlloc failed (%d MiB) for readback.\n", chunk_mib);
+		cuMemFree(dev_ptr);
+		cuMemFreeHost(host_pinned);
+		cuCtxDestroy(ctx);
+		dlclose(lib);
+		return 12; // -ENOMEM
+	}
+
 	printf("[+] Benchmarking VRAM -> Host DMA (%d MiB)...\n", chunk_mib);
 	t0 = get_time_sec();
 	cuMemcpyDtoH(read_pinned, dev_ptr, chunk_bytes);
@@ -153,8 +171,18 @@ int main(int argc, char **argv) {
 	printf("[+] D2H PCIe DMA Read : %.2f MiB/s (%.2f GiB/s) in %.4f s\n",
 	       d2h_speed, d2h_speed / 1024.0, t1 - t0);
 
-	// 3. Bit-by-bit Verification
-	int match = (memcmp(host_pinned, read_pinned, chunk_bytes) == 0);
+	// 3. Bit-by-bit Verification (Memory Corruption Pattern Verification)
+	int match = 1;
+	uint32_t *expected = (uint32_t *)host_pinned;
+	uint32_t *actual = (uint32_t *)read_pinned;
+	for (size_t i = 0; i < num_words; i++) {
+		if (expected[i] != actual[i]) {
+			match = 0;
+			printf("[-] Corruption detected at offset 0x%zx (word %zu): Expected 0x%08x, Got 0x%08x\n",
+			       i * sizeof(uint32_t), i, expected[i], actual[i]);
+			break;
+		}
+	}
 	printf("\n[+] Data Integrity Proof: %s\n",
 	       match ? "PASS (100% Bit-Exact Match, Zero Corruption)" : "FAIL");
 
@@ -166,5 +194,5 @@ int main(int argc, char **argv) {
 	dlclose(lib);
 
 	printf("=================================================================\n");
-	return match ? 0 : 1;
+	return match ? 0 : 22; // -EINVAL (corrupted match fail equivalent for standard return)
 }
