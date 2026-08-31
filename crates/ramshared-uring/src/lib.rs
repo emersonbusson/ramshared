@@ -514,7 +514,8 @@ mod tests {
         let ps = page_size();
 
         // Test invalid alignment
-        let err = validate_fixed_buffer_params(2, ps - 1).expect_err("invalid alignment should fail");
+        let err =
+            validate_fixed_buffer_params(2, ps - 1).expect_err("invalid alignment should fail");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
 
         // Test valid alignment
