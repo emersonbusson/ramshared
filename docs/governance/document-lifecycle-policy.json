@@ -502,6 +502,13 @@
       "owner": "release-engineering",
       "reason": "Review template is governed as repository process metadata.",
       "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "jules-findings-reports",
+      "pattern": "docs/jules/findings/*.md",
+      "owner": "agent-orchestration",
+      "reason": "Agent-generated findings reports are ad-hoc point-in-time documents, not semantic documentation.",
+      "registeredAt": "2026-08-31T00:00:00Z"
     }
   ]
 }
