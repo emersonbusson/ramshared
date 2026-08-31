@@ -57,26 +57,33 @@ impl SafetyNet {
 /// (`mem_available >= vram_size`).
 pub fn vram_safety_net(vhdx_present: bool, mem_available: u64, vram_size: u64) -> SafetyNet {
     if vhdx_present {
-        SafetyNet::VhdxBelow
-    } else if mem_available >= vram_size {
-        SafetyNet::RamHeadroom
-    } else {
-        SafetyNet::None
+        return SafetyNet::VhdxBelow;
     }
+
+    if mem_available >= vram_size {
+        return SafetyNet::RamHeadroom;
+    }
+
+    SafetyNet::None
 }
 
 /// Errors that can occur during tier resizing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResizeError {
-    /// The requested tier capacity exceeds the physical hardware capacity limit.
-    ExceedsPhysicalLimit,
+    /// The requested tier capacity exceeds the physical host RAM capacity limit.
+    ExceedsHostRamCapacity,
+    /// The requested tier capacity exceeds the physical VRAM capacity limit.
+    ExceedsVramCapacity,
 }
 
 impl core::fmt::Display for ResizeError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            ResizeError::ExceedsPhysicalLimit => {
-                f.write_str("requested tier capacity exceeds the physical hardware limit")
+            ResizeError::ExceedsHostRamCapacity => {
+                f.write_str("requested tier capacity exceeds the physical host RAM limit")
+            }
+            ResizeError::ExceedsVramCapacity => {
+                f.write_str("requested tier capacity exceeds the physical VRAM limit")
             }
         }
     }
@@ -86,14 +93,18 @@ impl core::error::Error for ResizeError {}
 
 /// Validates that a requested tier resize is within physical hardware limits.
 pub fn validate_tier_resize(
+    tier: Tier,
     requested_bytes: u64,
-    physical_limit_bytes: u64,
+    host_ram_bytes: u64,
+    vram_capacity_bytes: u64,
 ) -> Result<(), ResizeError> {
-    if requested_bytes > physical_limit_bytes {
-        Err(ResizeError::ExceedsPhysicalLimit)
-    } else {
-        Ok(())
+    if requested_bytes > host_ram_bytes {
+        return Err(ResizeError::ExceedsHostRamCapacity);
     }
+    if tier == Tier::Vram && requested_bytes > vram_capacity_bytes {
+        return Err(ResizeError::ExceedsVramCapacity);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -149,20 +160,52 @@ mod tests {
 
     #[test]
     fn tier_resize_within_physical_limits_is_ok() {
-        assert_eq!(validate_tier_resize(0, GIB), Ok(()));
-        assert_eq!(validate_tier_resize(GIB, GIB), Ok(()));
-        assert_eq!(validate_tier_resize(GIB / 2, GIB), Ok(()));
+        assert_eq!(validate_tier_resize(Tier::Zram, 0, GIB, GIB), Ok(()));
+        assert_eq!(validate_tier_resize(Tier::Vram, GIB, GIB, GIB), Ok(()));
+        assert_eq!(validate_tier_resize(Tier::Vhdx, GIB / 2, GIB, GIB), Ok(()));
+        assert_eq!(validate_tier_resize(Tier::Vram, GIB / 2, GIB, GIB), Ok(()));
     }
 
     #[test]
-    fn tier_resize_exceeding_physical_limits_fails() {
+    fn tier_resize_exceeding_host_ram_fails() {
         assert_eq!(
-            validate_tier_resize(GIB + 1, GIB),
-            Err(ResizeError::ExceedsPhysicalLimit)
+            validate_tier_resize(Tier::Zram, GIB + 1, GIB, GIB),
+            Err(ResizeError::ExceedsHostRamCapacity)
         );
         assert_eq!(
-            validate_tier_resize(2 * GIB, GIB),
-            Err(ResizeError::ExceedsPhysicalLimit)
+            validate_tier_resize(Tier::Vram, GIB + 1, GIB, 2 * GIB),
+            Err(ResizeError::ExceedsHostRamCapacity)
         );
+        assert_eq!(
+            validate_tier_resize(Tier::Vhdx, 2 * GIB, GIB, GIB),
+            Err(ResizeError::ExceedsHostRamCapacity)
+        );
+    }
+
+    #[test]
+    fn tier_resize_exceeding_vram_fails() {
+        assert_eq!(
+            validate_tier_resize(Tier::Vram, GIB + 1, 2 * GIB, GIB),
+            Err(ResizeError::ExceedsVramCapacity)
+        );
+    }
+
+    #[test]
+    fn non_vram_tier_can_exceed_vram_capacity_if_within_host_ram() {
+        assert_eq!(
+            validate_tier_resize(Tier::Zram, 2 * GIB, 4 * GIB, GIB),
+            Ok(())
+        );
+        assert_eq!(
+            validate_tier_resize(Tier::Vhdx, 3 * GIB, 4 * GIB, GIB),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn vhdx_present_returns_early_ignoring_ram() {
+        // Even with insufficient RAM, vhdx_present triggers an early return.
+        let net = vram_safety_net(true, 0, GIB);
+        assert_eq!(net, SafetyNet::VhdxBelow);
     }
 }

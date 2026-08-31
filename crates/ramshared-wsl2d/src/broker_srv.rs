@@ -1126,7 +1126,7 @@ mod tests {
             ..ArbiterConfig::default()
         };
         BrokerCore::new(
-            SliceMap::new(k, 64 * 1024 * 1024),
+            SliceMap::new(k, 64 * 1024 * 1024, u64::from(k) * 64 * 1024 * 1024).unwrap(),
             BrokerCoreConfig {
                 arbiter_cfg: cfg,
                 endpoints: EndpointCfg {
@@ -1435,7 +1435,7 @@ mod tests {
         // RF-4/DT-6: a canary DEMOTE → Eviction flag on the next tick (streak=1 in helper).
         let mut c = core(1);
         reg(&mut c, 10, "a");
-        c.vram.total.store(1 << 30, Ordering::Relaxed); // has_vram (senão Partial)
+        c.vram.total.store(1 << 30, Ordering::Relaxed); // has_vram (otherwise Partial)
         c.vram.free.store(1 << 29, Ordering::Relaxed);
         c.handle(CoreEvent::Demote("latency".into()), Instant::now());
         let o = c.handle(CoreEvent::Tick, Instant::now());
@@ -1445,17 +1445,17 @@ mod tests {
                 Outbound::Telemetry(t) => Some(t.flag),
                 _ => None,
             })
-            .expect("telemetria no tick");
+            .expect("telemetry on tick");
         assert_eq!(flag, ReconcileFlag::Eviction);
     }
 
     #[test]
     fn unaccounted_when_occupied_exceeds_alloc() {
         // RF-4: occupied > borrowed + tol → Unaccounted (no demote, with VRAM).
-        let mut c = core(1); // 1 slice de 64 MiB
+        let mut c = core(1); // 1 slice of 64 MiB
         reg(&mut c, 10, "a");
         let id = *c.tenants.keys().next().expect("tenant");
-        c.slice_map.assign(0, id).expect("assign slice 0"); // Free→Active (64 MiB emprestado)
+        c.slice_map.assign(0, id).expect("assign slice 0"); // Free→Active (64 MiB borrowed)
         c.tenants.get_mut(&id).expect("tenant").occupied_bytes = 200 * 1024 * 1024; // 200 MiB > 64
         c.vram.total.store(1 << 30, Ordering::Relaxed); // has_vram
         let o = c.handle(CoreEvent::Tick, Instant::now());
@@ -1465,7 +1465,7 @@ mod tests {
                 Outbound::Telemetry(t) => Some(t.flag),
                 _ => None,
             })
-            .expect("telemetria no tick");
+            .expect("telemetry on tick");
         assert_eq!(flag, ReconcileFlag::Unaccounted);
     }
 
@@ -1476,7 +1476,7 @@ mod tests {
                 Outbound::Telemetry(t) => Some(t.flag),
                 _ => None,
             })
-            .expect("telemetria no tick")
+            .expect("telemetry on tick")
     }
 
     #[test]
@@ -1485,7 +1485,7 @@ mod tests {
         // Without the fix, the hysteresis would swallow transient eviction.
         let mut c = core_streak(1, 3);
         reg(&mut c, 10, "a");
-        c.vram.total.store(1 << 30, Ordering::Relaxed); // has_vram (senão Partial)
+        c.vram.total.store(1 << 30, Ordering::Relaxed); // has_vram (otherwise Partial)
         c.vram.free.store(1 << 29, Ordering::Relaxed);
         c.handle(CoreEvent::Demote("latency".into()), Instant::now());
         assert_eq!(tick_flag(&mut c), ReconcileFlag::Eviction);

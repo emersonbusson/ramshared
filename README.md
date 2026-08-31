@@ -14,11 +14,23 @@ RamShared neither adds VRAM to applications nor identifies workloads by name.
 <p align="center">
   <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.9.0"><img alt="Release v0.9.0" src="https://img.shields.io/badge/release-v0.9.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
-  <img alt="Git Clones" src="https://img.shields.io/badge/git_clones-2.7k%2B-blue?style=flat-square&logo=git">
+  <img alt="Git Clones" src="https://img.shields.io/badge/git_clones-5.6k%2B-blue?style=flat-square&logo=git">
   <img alt="Integrity" src="https://img.shields.io/badge/integrity-SHA--256_verified-success?style=flat-square">
   <img alt="Linux and WSL2 beta" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-production%20ready-2f855a?style=flat-square">
   <img alt="Windows driver beta" src="https://img.shields.io/badge/Windows%20driver-supervised%20beta-d97706?style=flat-square">
 </p>
+
+## Why RamShared? (Architecture & Motivation)
+
+> **"Does every Linux machine or server need a GPU? Why use expensive VRAM as RAM instead of standard ZRAM or SSD swap?"**
+
+- **GPU is 100% Optional**: RamShared does not mandate a GPU. It manages a tiered cascade (`Host RAM -> ZRAM -> GPU VRAM (opportunistic) -> SSD Origin`). Systems without dedicated GPUs operate strictly across RAM, ZRAM, and SSD.
+- **Monetizing Idle Silicon**: In developer workstations, WSL2 engineering environments, and mixed AI inference nodes, GPUs often sit idle between tasks with unused VRAM. RamShared opportunistically activates this dormant hardware as an ultra-fast intermediate memory tier.
+- **PCIe Bandwidth vs SSD Wear**:
+  - **Zero SSD Wear**: Unlike NAND flash SSDs which degrade under intensive swap thrashing (exhausting Drive TBW), VRAM has infinite write endurance.
+  - **Ultra-Fast PCIe Transfers**: Paging to PCIe VRAM operates across the high-speed bus with sub-millisecond latencies, preventing the system lockups and stalls typical of disk swap.
+  - **CPU Offloading**: While ZRAM is efficient, high swap volumes consume CPU cycles for LZ4/ZSTD compression. VRAM DMA caching provides high-throughput memory offloading without burning host CPU cores during heavy workloads.
+- **Zero GPU Starvation (Instant Revocation)**: VRAM is leased purely as a *revocable write-through cache*. The instant a CUDA, AI (e.g., PyTorch, Ollama), or graphical workload requests VRAM, RamShared yields memory back in milliseconds with zero process crashes or data loss, as data is backed by the authoritative SSD origin.
 
 ## Current Status
 

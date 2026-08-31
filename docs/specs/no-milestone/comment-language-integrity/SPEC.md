@@ -611,18 +611,67 @@ whose fresh report already clears the per-file 80% line threshold. It is a
 real coverage gate, not an exemption or a comment-only differential:
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block,ramshared-broker,ramshared-wsl2d --files crates/ramshared-block/src/handshake.rs,crates/ramshared-block/src/protocol.rs,crates/ramshared-broker/src/arbiter.rs,crates/ramshared-broker/src/protocol.rs,crates/ramshared-wsl2d/src/broker_srv.rs,crates/ramshared-wsl2d/src/canary_probe.rs,crates/ramshared-wsl2d/src/telemetry.rs --min 80 --report-json tmp/comment-language-rust-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block,ramshared-broker,ramshared-wsl2d --files crates/ramshared-block/src/handshake.rs,crates/ramshared-block/src/protocol.rs,crates/ramshared-broker/src/arbiter.rs,crates/ramshared-broker/src/protocol.rs,crates/ramshared-wsl2d/src/broker_srv.rs,crates/ramshared-wsl2d/src/canary_probe.rs,crates/ramshared-wsl2d/src/telemetry.rs,crates/ramshared-broker/src/model.rs,crates/ramshared-broker/src/slices.rs,crates/ramshared-wsl2d/src/residency.rs --min 80 --report-json tmp/comment-language-rust-cov.json
+```
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-config --files crates/ramshared-config/src/lib.rs,crates/ramshared-config/src/error.rs --min 80 --report-json tmp/config-management-core-cov.json
+```
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-integrity --files crates/ramshared-integrity/src/hash.rs,crates/ramshared-integrity/src/pattern.rs --min 80 --report-json tmp/integrity-block-verification-cov.json
+```
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vram --files crates/ramshared-vram/src/lib.rs --min 80 --report-json tmp/vram-provider-abstraction-cov.json
+```
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/probe.rs --min 80 --report-json tmp/cuda-probe-planning-cov.json
 ```
 
 | Covered path | Fresh measured line coverage |
 | --- | ---: |
-| `crates/ramshared-block/src/handshake.rs` | 94.1% |
-| `crates/ramshared-block/src/protocol.rs` | 91.0% |
-| `crates/ramshared-broker/src/arbiter.rs` | 98.9% |
-| `crates/ramshared-broker/src/protocol.rs` | 98.3% |
+| `crates/ramshared-block/src/handshake.rs` | 95.8% |
+| `crates/ramshared-block/src/protocol.rs` | 94.5% |
+| `crates/ramshared-broker/src/arbiter.rs` | 99.5% |
+| `crates/ramshared-broker/src/protocol.rs` | 96.0% |
+| `crates/ramshared-broker/src/model.rs` | 96.2% |
+| `crates/ramshared-broker/src/slices.rs` | 92.2% |
 | `crates/ramshared-wsl2d/src/broker_srv.rs` | 88.8% |
-| `crates/ramshared-wsl2d/src/canary_probe.rs` | 100.0% |
+| `crates/ramshared-wsl2d/src/canary_probe.rs` | 93.6% |
+| `crates/ramshared-wsl2d/src/residency.rs` | 99.0% |
 | `crates/ramshared-wsl2d/src/telemetry.rs` | 100.0% |
+| `crates/ramshared-config/src/lib.rs` | 90.6% |
+| `crates/ramshared-config/src/error.rs` | 100.0% |
+| `crates/ramshared-integrity/src/hash.rs` | 86.2% |
+| `crates/ramshared-integrity/src/pattern.rs` | 81.0% |
+| `crates/ramshared-vram/src/lib.rs` | 95.0% |
+| `crates/ramshared-cuda/src/probe.rs` | 82.8% |
+
+<!-- rust-slice-structural-contract-v1
+{
+  "schema_version": 1,
+  "id": "integrity-block-verification-structural",
+  "kind": "rust-structural-contract",
+  "files": [
+    "crates/ramshared-integrity/src/lib.rs"
+  ],
+  "verifications": [
+    {
+      "source": "crates/ramshared-integrity/src/lib.rs",
+      "package": "ramshared-integrity",
+      "cargo_test": [
+        "cargo",
+        "test",
+        "-p",
+        "ramshared-integrity",
+        "--lib"
+      ]
+    }
+  ]
+}
+-->
 
 ### Strict test-only Rust localization owner
 

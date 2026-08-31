@@ -1,0 +1,20 @@
+{
+  "battery_mode": false,
+  "cascade_mode": false,
+  "max_safe_pct": 30,
+  "total_allocated_mb": 4794,
+  "peak_swap_mb": 2316,
+  "tier1_zram_mb": 492,
+  "tier1_zram_pct": 48,
+  "tier2_vram_mb": 1767,
+  "tier2_vram_pct": 43,
+  "tier3_ssd_mb": 57,
+  "tier3_ssd_pct": 1,
+  "peak_pressure_index": 4.874204751594447,
+  "telemetry_readings_count": 10,
+  "active_io_cycles_completed": 4,
+  "reclaim_duration_ms": 666.980372,
+  "reclaim_speed_gbs": 7.019158016542051,
+  "post_reclaim_free_ram_mb": 7878,
+  "status": "PASS_ZERO_PANIC"
+}

@@ -500,9 +500,9 @@ fn refuse_unbound_managed_devices() -> Result<(), CascadeError> {
     match plan {
         OrphanPlan::None => Ok(()),
         OrphanPlan::RefuseDirtyBackend => Err(CascadeError::Precondition(
-            "unbound nbd/ublk com used_kb>0 — dispositivo preservado: enumeração live não autoriza recovery (risco de hang em backend morto). \
-             No Windows: capture evidencias e use apenas `wsl --terminate Ubuntu-24.04`; \
-             Nunca kill -9 ramsharedd com nbd/ublk em /proc/swaps."
+            "unbound nbd/ublk with used_kb>0 — device preserved: live enumeration does not authorize recovery (risk of hang on dead backend). \
+             On Windows: capture evidence and use only `wsl --terminate Ubuntu-24.04`; \
+             Never kill -9 ramsharedd with nbd/ublk in /proc/swaps."
                 .into(),
         )),
         OrphanPlan::DetectedUnboundZeroUsed => Err(CascadeError::Precondition(
@@ -1330,10 +1330,10 @@ use lifecycle::{
 
 /// Build lifecycle snapshot from live swaps + daemon (read-only).
 pub fn build_cascade_snapshot(entries: &[SwapEntry]) -> CascadeSnapshot {
-    let pairs: Vec<(String, u64, u64, i32)> = entries
+    let pairs: Vec<(&str, u64, u64, i32)> = entries
         .iter()
         .filter(|e| !e.is_ghost())
-        .map(|e| (e.filename.clone(), e.size_kb, e.used_kb, e.priority))
+        .map(|e| (e.filename.as_str(), e.size_kb, e.used_kb, e.priority))
         .collect();
     let (zram, vram, disk, order_ok) = lifecycle::tiers_from_swap_names(&pairs);
     let ghosts = ghost_vram_swaps(entries);

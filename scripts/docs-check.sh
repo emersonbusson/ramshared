@@ -26,6 +26,7 @@ fi
 
 run_gate documentation-governance node tools/ci/check-documentation-governance.mjs --all
 run_gate agent-orchestration node tools/ci/check-agent-orchestration.mjs --check
+run_gate comment-language node tools/ci/check-comment-language.mjs --diff origin/main
 run_gate documentation-localization node tools/ci/check-documentation-localization.mjs --all
 run_gate document-lifecycle node tools/ci/check-document-lifecycle.mjs --all
 run_gate documentation-inventory node tools/ci/generate-documentation-inventory.mjs --check

@@ -62,7 +62,7 @@ fn setup(k: u16, tick_ms: u64) -> Harness {
     };
     let (core, addr) = spawn_broker(
         cfg,
-        SliceMap::new(k, SLICE),
+        SliceMap::new(k, SLICE, u64::from(k) * SLICE).expect("valid sizes"),
         demote_rx,
         jobs_tx,
         Arc::clone(&shutdown),

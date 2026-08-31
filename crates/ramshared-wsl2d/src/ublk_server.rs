@@ -78,12 +78,37 @@ pub fn serve_request<B: BlockBackend + ?Sized>(
         return EINVAL; // request larger than the available buffer
     }
 
+    let bs = backend.block_size() as u64;
+    if bs > 0 && (!req.offset.is_multiple_of(bs) || !(req.len as u64).is_multiple_of(bs)) {
+        return EINVAL;
+    }
+
+    // Physical bounds guard
+    if req
+        .offset
+        .checked_add(req.len as u64)
+        .is_none_or(|end| end > backend.size_bytes())
+    {
+        return EINVAL;
+    }
+
+    // Command guard
+    if !matches!(
+        req.cmd,
+        Command::Read | Command::Write | Command::Flush | Command::Trim
+    ) {
+        return EINVAL;
+    }
+
+    if req.cmd == Command::Trim {
+        return 0; // discard: safe no-op in the MVP
+    }
+
     let served = match req.cmd {
         Command::Read => backend.read_at(req.offset, &mut buf[..len]).map(|()| len),
         Command::Write => backend.write_at(req.offset, &buf[..len]).map(|()| len),
         Command::Flush => backend.flush().map(|()| 0),
-        Command::Trim => return 0, // discard: safe no-op in the MVP
-        Command::Disc | Command::Unknown(_) => return EINVAL,
+        _ => unreachable!(),
     };
 
     match served {
@@ -387,13 +412,12 @@ fn dispatch_request<S: QueueServer>(
     // WRITE: kernel already copied bio->tag buffer; passes it in the yielded buffer.
     if req.cmd == Command::Write {
         let tag_buf = server.buffer_mut(tag)?;
-        if len <= tag_buf.len() {
-            buf.copy_from_slice(&tag_buf[..len]);
-        } else {
+        if len > tag_buf.len() {
             buf_pool.push(buf); // returns to pool before rejecting
             server.commit_and_fetch(tag, -22)?; // EINVAL
             return Ok(false);
         }
+        buf.copy_from_slice(&tag_buf[..len]);
     }
 
     let work = ublk::IoWork {
@@ -915,6 +939,31 @@ mod join_tests {
         };
         assert_eq!(residency.demote_count(), 3);
         residency.join().expect("residency success");
+    }
+
+    #[test]
+    fn serve_request_refuses_unaligned_and_out_of_bounds() {
+        let mut backend = RamBackend::new(4096);
+        let mut buffer = vec![0u8; 8192];
+        let mut request = Request {
+            flags: 0,
+            cmd: Command::Read,
+            handle: 1,
+            offset: 0,
+            len: 4096,
+        };
+        assert_eq!(serve_request(&request, &mut backend, &mut buffer), 4096);
+
+        request.offset = 100; // Unaligned to 512
+        assert_eq!(serve_request(&request, &mut backend, &mut buffer), EINVAL);
+
+        request.offset = 0;
+        request.len = 100; // Length unaligned
+        assert_eq!(serve_request(&request, &mut backend, &mut buffer), EINVAL);
+
+        request.len = 4096;
+        request.offset = 4096; // Out of bounds (backend is 4096, offset 4096 + len 4096 = 8192 > 4096)
+        assert_eq!(serve_request(&request, &mut backend, &mut buffer), EINVAL);
     }
 
     #[test]

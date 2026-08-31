@@ -15,6 +15,7 @@ use rustix::io::Errno;
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
 use std::fmt;
 use std::io::{self, Read};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -28,53 +29,111 @@ pub(crate) const DEFAULT_OUTPUT_LIMIT: usize = 64 * 1024;
 const FATAL_EXIT_CODE: i32 = 125;
 
 #[derive(Debug)]
-pub(crate) struct BoundedProcessError {
-    detail: String,
-    spawn_kind: Option<io::ErrorKind>,
-    fatal: bool,
+pub(crate) enum ProcessSpawnError {
+    BinaryNotFound {
+        command: String,
+    },
+    ExecutionTimeout {
+        command: String,
+        timeout: Duration,
+    },
+    NonZeroExit {
+        command: String,
+        exit_code: i32,
+        stderr: String,
+    },
+    SpawnFailed {
+        command: String,
+        kind: io::ErrorKind,
+        detail: String,
+    },
+    FatalContainment {
+        detail: String,
+    },
+    PipeError {
+        detail: String,
+    },
+    GenericError {
+        detail: String,
+    },
 }
 
-impl BoundedProcessError {
+impl ProcessSpawnError {
     fn new(detail: impl Into<String>) -> Self {
-        Self {
-            detail: detail.into(),
-            spawn_kind: None,
-            fatal: false,
+        let detail_str = detail.into();
+        if detail_str.contains("pipe") || detail_str.contains("capture") {
+            ProcessSpawnError::PipeError { detail: detail_str }
+        } else {
+            ProcessSpawnError::GenericError { detail: detail_str }
         }
     }
 
     fn spawn(label: &str, error: io::Error) -> Self {
-        Self {
-            detail: format!("spawn {label}: {error}"),
-            spawn_kind: Some(error.kind()),
-            fatal: false,
+        if error.kind() == io::ErrorKind::NotFound {
+            ProcessSpawnError::BinaryNotFound {
+                command: label.to_string(),
+            }
+        } else {
+            ProcessSpawnError::SpawnFailed {
+                command: label.to_string(),
+                kind: error.kind(),
+                detail: error.to_string(),
+            }
         }
     }
 
     pub(crate) fn is_not_found(&self) -> bool {
-        self.spawn_kind == Some(io::ErrorKind::NotFound)
+        matches!(self, ProcessSpawnError::BinaryNotFound { .. })
     }
 
     fn fatal(detail: impl Into<String>) -> Self {
-        Self {
+        ProcessSpawnError::FatalContainment {
             detail: detail.into(),
-            spawn_kind: None,
-            fatal: true,
         }
     }
 
     fn is_fatal(&self) -> bool {
-        self.fatal
+        matches!(self, ProcessSpawnError::FatalContainment { .. })
     }
 }
 
-impl fmt::Display for BoundedProcessError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.detail)
+impl fmt::Display for ProcessSpawnError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProcessSpawnError::BinaryNotFound { command } => {
+                write!(f, "spawn {command}: binary not found")
+            }
+            ProcessSpawnError::ExecutionTimeout { command, timeout } => write!(
+                f,
+                "{command} timed out after {} ms; process group killed and direct child reaped",
+                timeout.as_millis()
+            ),
+            ProcessSpawnError::NonZeroExit {
+                command,
+                exit_code,
+                stderr,
+            } => {
+                if stderr.is_empty() {
+                    write!(f, "{command} exited with {exit_code}")
+                } else {
+                    write!(f, "{command} exited with {exit_code}: {stderr}")
+                }
+            }
+            ProcessSpawnError::SpawnFailed {
+                command,
+                kind,
+                detail,
+            } => write!(f, "spawn {command} ({kind}): {detail}"),
+            ProcessSpawnError::FatalContainment { detail } => {
+                write!(f, "fatal containment selected: {detail}")
+            }
+            ProcessSpawnError::PipeError { detail } => write!(f, "{detail}"),
+            ProcessSpawnError::GenericError { detail } => write!(f, "{detail}"),
+        }
     }
 }
 
-impl std::error::Error for BoundedProcessError {}
+impl std::error::Error for ProcessSpawnError {}
 
 #[derive(Debug)]
 pub(crate) struct BoundedOutput {
@@ -139,10 +198,10 @@ impl ReapTarget for Child {
     }
 }
 
-fn fatal_error(fatal: &dyn FatalContainment, detail: impl Into<String>) -> BoundedProcessError {
+fn fatal_error(fatal: &dyn FatalContainment, detail: impl Into<String>) -> ProcessSpawnError {
     let detail = detail.into();
     fatal.contain(&detail);
-    BoundedProcessError::fatal(format!("fatal containment selected: {detail}"))
+    ProcessSpawnError::fatal(format!("fatal containment selected: {detail}"))
 }
 
 #[derive(Default)]
@@ -165,7 +224,7 @@ fn wait_for_exit_observation(
     label: &str,
     grace: Duration,
     fatal: &dyn FatalContainment,
-) -> Result<(), BoundedProcessError> {
+) -> Result<(), ProcessSpawnError> {
     let deadline = Instant::now() + grace;
     loop {
         match target.observe_exit() {
@@ -196,7 +255,7 @@ fn force_exit_observed(
     label: &str,
     grace: Duration,
     fatal: &dyn FatalContainment,
-) -> Result<GroupTerminationProof, BoundedProcessError> {
+) -> Result<GroupTerminationProof, ProcessSpawnError> {
     let mut proof = GroupTerminationProof::default();
     if let Err(error) = target.signal_group_kill() {
         proof.record(label, "before exit observation", error);
@@ -212,7 +271,7 @@ fn force_exit_observed(
 fn contain_group_errors(
     proof: GroupTerminationProof,
     fatal: &dyn FatalContainment,
-) -> Result<(), BoundedProcessError> {
+) -> Result<(), ProcessSpawnError> {
     if proof.errors.is_empty() {
         Ok(())
     } else {
@@ -225,7 +284,7 @@ fn reap_observed_target(
     label: &str,
     grace: Duration,
     fatal: &dyn FatalContainment,
-) -> Result<ExitStatus, BoundedProcessError> {
+) -> Result<ExitStatus, ProcessSpawnError> {
     let deadline = Instant::now() + grace;
     loop {
         match target.reap_observed() {
@@ -256,7 +315,7 @@ fn terminate_target_with(
     label: &str,
     grace: Duration,
     fatal: &dyn FatalContainment,
-) -> Result<(), BoundedProcessError> {
+) -> Result<(), ProcessSpawnError> {
     let proof = force_exit_observed(target, label, grace, fatal)?;
     let _ = reap_observed_target(target, label, grace, fatal)?;
     contain_group_errors(proof, fatal)
@@ -269,7 +328,7 @@ pub(crate) fn configure_process_group(command: &mut Command) -> &mut Command {
 pub(crate) fn terminate_group_and_reap(
     child: &mut Child,
     label: &str,
-) -> Result<(), BoundedProcessError> {
+) -> Result<(), ProcessSpawnError> {
     terminate_target_with(child, label, REAP_GRACE, &ExitController)
 }
 
@@ -277,7 +336,7 @@ pub(crate) fn wait_grouped_child(
     child: &mut Child,
     label: &str,
     timeout: Duration,
-) -> Result<ExitStatus, BoundedProcessError> {
+) -> Result<ExitStatus, ProcessSpawnError> {
     let deadline = Instant::now() + timeout;
     loop {
         match ReapTarget::observe_exit(child) {
@@ -293,10 +352,10 @@ pub(crate) fn wait_grouped_child(
             Ok(false) if Instant::now() < deadline => std::thread::sleep(POLL_INTERVAL),
             Ok(false) => {
                 terminate_group_and_reap(child, label)?;
-                return Err(BoundedProcessError::new(format!(
-                    "{label} timed out after {} ms; process group killed and direct child reaped",
-                    timeout.as_millis()
-                )));
+                return Err(ProcessSpawnError::ExecutionTimeout {
+                    command: label.to_string(),
+                    timeout,
+                });
             }
             Err(error) => {
                 return Err(fatal_error(
@@ -351,14 +410,12 @@ impl CaptureWorker {
         self.receiver.recv_timeout(remaining).map_err(|_| ())
     }
 
-    fn join(&mut self) -> Result<(), BoundedProcessError> {
+    fn join(&mut self) -> Result<(), ProcessSpawnError> {
         self.join
             .take()
-            .ok_or_else(|| BoundedProcessError::new("capture worker joined twice"))?
+            .ok_or_else(|| ProcessSpawnError::new("capture worker joined twice"))?
             .join()
-            .map_err(|_| {
-                BoundedProcessError::new(format!("{} capture worker panicked", self.stream))
-            })
+            .map_err(|_| ProcessSpawnError::new(format!("{} capture worker panicked", self.stream)))
     }
 }
 
@@ -367,7 +424,7 @@ fn account_single_capture_before_reap(
     label: &str,
     capture: &mut CaptureWorker,
     fatal: &dyn FatalContainment,
-) -> Result<(), BoundedProcessError> {
+) -> Result<(), ProcessSpawnError> {
     let deadline = Instant::now() + CAPTURE_CLOSE_GRACE;
     if capture.receive_until(deadline).is_err() {
         signal_owned_process_group(group_id, label, fatal)?;
@@ -390,7 +447,7 @@ fn signal_owned_process_group(
     group_id: u32,
     label: &str,
     fatal: &dyn FatalContainment,
-) -> Result<(), BoundedProcessError> {
+) -> Result<(), ProcessSpawnError> {
     let raw = i32::try_from(group_id).map_err(|_| {
         fatal_error(
             fatal,
@@ -421,7 +478,7 @@ fn collect_captures_before_reap(
     stderr: &mut CaptureWorker,
     fatal: &dyn FatalContainment,
     initial: Option<(Option<CapturedBytes>, Option<CapturedBytes>)>,
-) -> Result<(Vec<u8>, Vec<u8>), BoundedProcessError> {
+) -> Result<(Vec<u8>, Vec<u8>), ProcessSpawnError> {
     let (mut stdout_result, mut stderr_result) = initial.unwrap_or_else(|| {
         let first_deadline = Instant::now() + CAPTURE_CLOSE_GRACE;
         (
@@ -448,7 +505,7 @@ fn collect_captures_before_reap(
         }
         stdout.join()?;
         stderr.join()?;
-        return Err(BoundedProcessError::new(format!(
+        return Err(ProcessSpawnError::new(format!(
             "{label}: output pipe remained open after direct-child exit; owned process group was killed"
         )));
     }
@@ -467,8 +524,8 @@ fn collect_captures_before_reap(
             format!("{label}: stderr capture result disappeared after worker join"),
         ));
     };
-    let stdout = stdout.map_err(BoundedProcessError::new)?;
-    let stderr = stderr.map_err(BoundedProcessError::new)?;
+    let stdout = stdout.map_err(ProcessSpawnError::new)?;
+    let stderr = stderr.map_err(ProcessSpawnError::new)?;
     Ok((stdout, stderr))
 }
 
@@ -515,16 +572,45 @@ pub(crate) fn run_capture_command<F>(
     timeout: Duration,
     output_limit: usize,
     on_spawn: F,
-) -> Result<BoundedOutput, BoundedProcessError>
+) -> Result<BoundedOutput, ProcessSpawnError>
 where
     F: FnOnce(u32),
 {
+    let program = command.get_program();
+    if program.is_empty() {
+        return Err(ProcessSpawnError::spawn(
+            label,
+            io::Error::new(io::ErrorKind::InvalidInput, "empty program"),
+        ));
+    }
+    if program.as_bytes().contains(&0) {
+        return Err(ProcessSpawnError::spawn(
+            label,
+            io::Error::new(io::ErrorKind::InvalidInput, "null byte in program"),
+        ));
+    }
+    let program_path = std::path::Path::new(program);
+    if program_path.is_absolute() && !program_path.exists() {
+        return Err(ProcessSpawnError::spawn(
+            label,
+            io::Error::new(io::ErrorKind::NotFound, "binary path does not exist"),
+        ));
+    }
+    for arg in command.get_args() {
+        if arg.as_bytes().contains(&0) {
+            return Err(ProcessSpawnError::spawn(
+                label,
+                io::Error::new(io::ErrorKind::InvalidInput, "nul byte"),
+            ));
+        }
+    }
+
     configure_process_group(command)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let child = command
         .spawn()
-        .map_err(|error| BoundedProcessError::spawn(label, error))?;
+        .map_err(|error| ProcessSpawnError::spawn(label, error))?;
     let mut child = SpawnedChildGuard::new(child, label);
     let group_id = child.id();
     on_spawn(group_id);
@@ -533,7 +619,7 @@ where
         None => {
             terminate_group_and_reap(child.child_mut(), label)?;
             child.disarm();
-            return Err(BoundedProcessError::new(format!(
+            return Err(ProcessSpawnError::new(format!(
                 "{label}: stdout pipe was unavailable"
             )));
         }
@@ -544,7 +630,7 @@ where
             drop(stdout);
             terminate_group_and_reap(child.child_mut(), label)?;
             child.disarm();
-            return Err(BoundedProcessError::new(format!(
+            return Err(ProcessSpawnError::new(format!(
                 "{label}: stderr pipe was unavailable"
             )));
         }
@@ -555,7 +641,7 @@ where
             drop(stderr);
             terminate_group_and_reap(child.child_mut(), label)?;
             child.disarm();
-            return Err(BoundedProcessError::new(format!(
+            return Err(ProcessSpawnError::new(format!(
                 "{label}: start stdout capture worker: {error}"
             )));
         }
@@ -568,7 +654,7 @@ where
             let _ = reap_observed_target(child.child_mut(), label, REAP_GRACE, &ExitController)?;
             child.disarm();
             contain_group_errors(proof, &ExitController)?;
-            return Err(BoundedProcessError::new(format!(
+            return Err(ProcessSpawnError::new(format!(
                 "{label}: start stderr capture worker: {error}"
             )));
         }
@@ -596,10 +682,10 @@ where
                 let proof =
                     force_exit_observed(child.child_mut(), label, REAP_GRACE, &ExitController)?;
                 break (
-                    Some(BoundedProcessError::new(format!(
-                        "{label} timed out after {} ms; process group killed and direct child reaped",
-                        timeout.as_millis()
-                    ))),
+                    Some(ProcessSpawnError::ExecutionTimeout {
+                        command: label.to_string(),
+                        timeout,
+                    }),
                     proof,
                     None,
                 );
@@ -630,6 +716,20 @@ where
         };
     }
     let (stdout, stderr) = capture?;
+    if !status.success() {
+        if let Some(exit_code) = status.code() {
+            let stderr_str = String::from_utf8_lossy(&stderr).trim().to_string();
+            return Err(ProcessSpawnError::NonZeroExit {
+                command: label.to_string(),
+                exit_code,
+                stderr: stderr_str,
+            });
+        } else {
+            return Err(ProcessSpawnError::new(format!(
+                "{label} terminated by signal"
+            )));
+        }
+    }
     Ok(BoundedOutput {
         status,
         stdout,
@@ -940,16 +1040,26 @@ mod tests {
 
         let mut failure = Command::new("/bin/sh");
         failure.args(["-c", "printf 'failed' >&2; exit 7"]);
-        let output = run_capture_command(
+        let error = run_capture_command(
             &mut failure,
             "failure fixture",
             Duration::from_secs(1),
             DEFAULT_OUTPUT_LIMIT,
             |_| {},
         )
-        .expect("nonzero status is a completed child, not custody failure");
-        assert_eq!(output.status.code(), Some(7));
-        assert_eq!(output.stderr, b"failed");
+        .expect_err("nonzero status must return NonZeroExit");
+
+        match error {
+            ProcessSpawnError::NonZeroExit {
+                command: _,
+                exit_code,
+                stderr,
+            } => {
+                assert_eq!(exit_code, 7);
+                assert_eq!(stderr, "failed");
+            }
+            _ => panic!("Expected NonZeroExit"),
+        }
     }
 
     #[test]
@@ -965,6 +1075,70 @@ mod tests {
         )
         .expect_err("capture storage must remain bounded");
         assert!(error.to_string().contains("output exceeded"), "{error}");
+    }
+
+    #[test]
+    fn capture_runner_rejects_empty_program() {
+        let mut command = Command::new("");
+        let error = run_capture_command(
+            &mut command,
+            "empty program fixture",
+            Duration::from_secs(1),
+            1024,
+            |_| {},
+        )
+        .expect_err("should reject empty program");
+        assert!(error.to_string().contains("empty program"));
+    }
+
+    #[test]
+    fn capture_runner_rejects_non_existent_binary() {
+        let mut command = Command::new("/path/to/nowhere/does/not/exist");
+        let error = run_capture_command(
+            &mut command,
+            "non existent fixture",
+            Duration::from_secs(1),
+            1024,
+            |_| {},
+        )
+        .expect_err("should reject non existent binary");
+        assert!(
+            error.to_string().contains("binary not found")
+                || error.to_string().contains("binary path does not exist")
+        );
+    }
+
+    #[test]
+    fn capture_runner_rejects_null_bytes_in_args() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let mut command = Command::new("/bin/sh");
+        let arg = OsStr::from_bytes(b"hello\0world");
+        command.arg(arg);
+        let error = run_capture_command(
+            &mut command,
+            "null bytes fixture",
+            Duration::from_secs(1),
+            1024,
+            |_| {},
+        )
+        .expect_err("should reject null bytes in arguments");
+        assert!(error.to_string().contains("nul byte"));
+    }
+
+    #[test]
+    fn capture_runner_rejects_empty_argument() {
+        let mut command = Command::new("/bin/sh");
+        command.arg("");
+        let error = run_capture_command(
+            &mut command,
+            "empty argument fixture",
+            Duration::from_secs(1),
+            1024,
+            |_| {},
+        )
+        .expect_err("should reject empty arguments");
+        assert!(error.to_string().contains("empty argument"));
     }
 
     #[test]

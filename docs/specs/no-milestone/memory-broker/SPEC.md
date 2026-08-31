@@ -510,7 +510,7 @@ node tools/ci/check-rust-slice-coverage.mjs \
 The bounded support-policy tests imported from the PR audit use:
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent,ramshared-tier --files crates/ramshared-agent/src/explain.rs,crates/ramshared-agent/src/local.rs,crates/ramshared-agent/src/win_mem.rs,crates/ramshared-tier/src/cascade.rs --min 80 --report-json tmp/memory-broker-support-safety-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-agent,ramshared-tier --files crates/ramshared-agent/src/explain.rs,crates/ramshared-agent/src/local.rs,crates/ramshared-agent/src/win_mem.rs,crates/ramshared-tier/src/cascade.rs,crates/ramshared-agent/src/swap.rs,crates/ramshared-agent/src/watchdog.rs,crates/ramshared-tier/src/priority.rs --min 80 --report-json tmp/memory-broker-support-safety-cov.json
 ```
 
 The safe suite is necessary but not sufficient for a deployment claim. The

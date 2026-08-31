@@ -27,6 +27,9 @@ const MAX_OPT_LEN: usize = 4096; // NBD options are small; anti-allocation limit
 pub enum HandshakeError {
     Io(io::Error),
     Aborted,
+    IncompatibleVersion,
+    UnsupportedFeature,
+    InvalidFormat,
 }
 
 impl From<io::Error> for HandshakeError {
@@ -40,6 +43,9 @@ impl fmt::Display for HandshakeError {
         match self {
             HandshakeError::Io(e) => write!(f, "handshake I/O: {e}"),
             HandshakeError::Aborted => f.write_str("client aborted the handshake (NBD_OPT_ABORT)"),
+            HandshakeError::IncompatibleVersion => f.write_str("incompatible protocol version"),
+            HandshakeError::UnsupportedFeature => f.write_str("unsupported negotiation feature"),
+            HandshakeError::InvalidFormat => f.write_str("invalid protocol format"),
         }
     }
 }
@@ -82,30 +88,26 @@ fn write_export_info<W: Write>(w: &mut W, opt: u32, size: u64, tx_flags: u16) ->
     write_opt_reply(w, opt, NBD_REP_ACK, &[])
 }
 
-fn bad(msg: &'static str) -> HandshakeError {
-    HandshakeError::Io(io::Error::new(io::ErrorKind::InvalidData, msg))
-}
-
 /// Extracts the export name from the `NBD_OPT_GO`/`NBD_OPT_INFO` payload:
 /// `[u32 name_len][name][u16 n_info][...]`. Malformed/truncated ⇒ error (closes).
 fn go_export_name(data: &[u8]) -> Result<&[u8], HandshakeError> {
     if data.len() < 4 {
-        return Err(bad("GO/INFO is missing the name field"));
+        return Err(HandshakeError::InvalidFormat);
     }
     let name_len = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as usize;
     let name_end = 4usize
         .checked_add(name_len)
-        .ok_or_else(|| bad("name_len overflow"))?;
+        .ok_or(HandshakeError::InvalidFormat)?;
     // needs the name + n_info (u16) after it.
     if data.len() < name_end + 2 {
-        return Err(bad("truncated GO/INFO"));
+        return Err(HandshakeError::InvalidFormat);
     }
     Ok(&data[4..name_end])
 }
 
 /// Export names are UTF-8.
 fn name_utf8(name: &[u8]) -> Result<&str, HandshakeError> {
-    core::str::from_utf8(name).map_err(|_| bad("export name is not UTF-8"))
+    core::str::from_utf8(name).map_err(|_| HandshakeError::InvalidFormat)
 }
 
 /// Resolves the name to an index in `exports`; empty name ⇒ `exports[0]` (default, Phase B compatibility).
@@ -135,11 +137,14 @@ pub fn server_handshake<R: Read, W: Write>(
     let no_zeroes = client_flags & NBD_FLAG_C_NO_ZEROES != 0;
 
     loop {
-        let _opt_magic = read_u64(r)?; // IHAVEOPT (ignored: we trust the flow)
+        let opt_magic = read_u64(r)?;
+        if opt_magic != IHAVEOPT {
+            return Err(HandshakeError::IncompatibleVersion);
+        }
         let opt = read_u32(r)?;
         let len = read_u32(r)? as usize;
         if len > MAX_OPT_LEN {
-            return Err(bad("NBD option with excessive length"));
+            return Err(HandshakeError::UnsupportedFeature);
         }
         let mut data = vec![0u8; len];
         r.read_exact(&mut data)?;
@@ -149,7 +154,7 @@ pub fn server_handshake<R: Read, W: Write>(
                 // entire payload is the name (empty = default). EXPORT_NAME has no error reply:
                 // unknown export ⇒ closes the connection (Io).
                 let name = name_utf8(&data)?;
-                let idx = find_export(exports, name).ok_or_else(|| bad("unknown export"))?;
+                let idx = find_export(exports, name).ok_or(HandshakeError::UnsupportedFeature)?;
                 w.write_all(&exports[idx].size.to_be_bytes())?;
                 w.write_all(&tx_flags.to_be_bytes())?;
                 if !no_zeroes {
@@ -160,19 +165,17 @@ pub fn server_handshake<R: Read, W: Write>(
             }
             NBD_OPT_GO | NBD_OPT_INFO => {
                 let name = name_utf8(go_export_name(&data)?)?;
-                match find_export(exports, name) {
-                    Some(idx) => {
-                        write_export_info(w, opt, exports[idx].size, tx_flags)?;
-                        w.flush()?;
-                        if opt == NBD_OPT_GO {
-                            return Ok(idx); // GO transitions; INFO continues negotiating.
-                        }
-                    }
-                    None => {
-                        // GO/INFO have an error reply: unknown name ⇒ ERR_UNKNOWN, continue.
-                        write_opt_reply(w, opt, NBD_REP_ERR_UNKNOWN, &[])?;
-                        w.flush()?;
-                    }
+                let Some(idx) = find_export(exports, name) else {
+                    // GO/INFO have an error reply: unknown name ⇒ ERR_UNKNOWN, continue.
+                    write_opt_reply(w, opt, NBD_REP_ERR_UNKNOWN, &[])?;
+                    w.flush()?;
+                    continue;
+                };
+
+                write_export_info(w, opt, exports[idx].size, tx_flags)?;
+                w.flush()?;
+                if opt == NBD_OPT_GO {
+                    return Ok(idx); // GO transitions; INFO continues negotiating.
                 }
             }
             NBD_OPT_ABORT => {
@@ -266,6 +269,32 @@ mod tests {
     }
 
     #[test]
+    fn info_known_name_replies_info_and_continues() {
+        let exports = vec![Export {
+            name: "s1".to_string(),
+            size: 8192,
+        }];
+        // Send INFO followed by ABORT to correctly terminate the connection (since INFO continues).
+        let mut r = stream_opts(
+            NBD_FLAG_C_NO_ZEROES,
+            &[(NBD_OPT_INFO, go_data(b"s1")), (NBD_OPT_ABORT, vec![])],
+        );
+        let mut out = Vec::new();
+        let res = server_handshake(&mut r, &mut out, &exports, 1);
+
+        assert!(matches!(res, Err(HandshakeError::Aborted)));
+        assert!(has_rep(&out, NBD_REP_INFO));
+
+        // Ensure the INFO reply has the correct size
+        // greeting (18) + rep header (16) + INFO_EXPORT u16 (2) = offset 36 for the payload size.
+        // Wait, info reply:
+        // write_opt_reply: magic(8) + opt(4) + rep(4) + len(4) = 20
+        // total before info payload: 18 + 20 = 38.
+        // info payload: NBD_INFO_EXPORT(2) + size(8) + tx_flags(2) = 12
+        assert_eq!(u64::from_be_bytes(out[40..48].try_into().unwrap()), 8192);
+    }
+
+    #[test]
     fn go_replies_info_then_ack_and_transitions() {
         let mut r = client_stream(NBD_FLAG_C_NO_ZEROES, NBD_OPT_GO, &go_data(b""));
         let mut out = Vec::new();
@@ -286,6 +315,17 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_opt_magic() {
+        let mut v = Vec::new();
+        v.extend_from_slice(&0u32.to_be_bytes()); // client_flags
+        v.extend_from_slice(&0xbad_u64.to_be_bytes()); // bad magic
+        let mut r = Cursor::new(v);
+        let mut out = Vec::new();
+        let res = server_handshake(&mut r, &mut out, &one(4096), 1);
+        assert!(matches!(res, Err(HandshakeError::IncompatibleVersion)));
+    }
+
+    #[test]
     fn rejects_oversized_option_len() {
         // option with giant len must fail BEFORE allocating (M4 anti-DoS).
         let mut v = Vec::new();
@@ -296,7 +336,7 @@ mod tests {
         let mut r = Cursor::new(v);
         let mut out = Vec::new();
         let res = server_handshake(&mut r, &mut out, &one(4096), 1);
-        assert!(matches!(res, Err(HandshakeError::Io(_))));
+        assert!(matches!(res, Err(HandshakeError::UnsupportedFeature)));
     }
 
     #[test]
@@ -338,7 +378,7 @@ mod tests {
         let mut r = client_stream(0, NBD_OPT_EXPORT_NAME, b"nope");
         let mut out = Vec::new();
         let res = server_handshake(&mut r, &mut out, &one(4096), 1);
-        assert!(matches!(res, Err(HandshakeError::Io(_))));
+        assert!(matches!(res, Err(HandshakeError::UnsupportedFeature)));
     }
 
     #[test]
@@ -346,7 +386,7 @@ mod tests {
         let mut r = client_stream(0, NBD_OPT_EXPORT_NAME, &[0xff, 0xfe]);
         let mut out = Vec::new();
         let res = server_handshake(&mut r, &mut out, &one(4096), 1);
-        assert!(matches!(res, Err(HandshakeError::Io(_))));
+        assert!(matches!(res, Err(HandshakeError::InvalidFormat)));
     }
 
     #[test]

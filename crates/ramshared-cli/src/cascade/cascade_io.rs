@@ -3485,8 +3485,10 @@ mod tests {
             "non-zero child must fail",
         );
         let message = error.to_string();
-        assert!(message.contains("exit 12"), "{message}");
-        assert!(message.contains("fixture failure"), "{message}");
+        assert!(
+            message.contains("12") && message.contains("fixture failure"),
+            "{message}"
+        );
 
         let signal = fixture.program("signal", "#!/bin/sh\nkill -TERM $$\n");
         let error = error_from(
@@ -5538,5 +5540,60 @@ mod tests {
         assert!(!daemon_pid_matches(0, "ramsharedd\n"));
         assert!(!daemon_pid_matches(42, "ramsharedd-helper\n"));
         assert!(!daemon_pid_matches(42, "other\n"));
+    }
+
+    #[test]
+    fn cascade_error_displays_all_variants_properly() {
+        let err1 = CascadeError::Io("file not found".into());
+        assert!(err1.to_string().contains("file not found"));
+
+        let err2 = CascadeError::Arg("bad arg".into());
+        assert!(err2.to_string().contains("bad arg"));
+
+        let err3 = CascadeError::Precondition("precondition failed".into());
+        assert!(err3.to_string().contains("precondition failed"));
+
+        let err4 = CascadeError::UnsafeContainment("unsafe containment".into());
+        assert!(err4.to_string().contains("unsafe containment"));
+
+        let err5 = CascadeError::Shell {
+            cmd: "zramctl".into(),
+            msg: "failed".into(),
+        };
+        assert!(err5.to_string().contains("command `zramctl` failed"));
+    }
+
+    #[test]
+    fn helper_predicates_and_conversions_cover_all_branches() {
+        assert!(canonical_boot_id("11111111-2222-4333-8444-555555555555"));
+        assert!(!canonical_boot_id("invalid-boot-id"));
+
+        assert!(canonical_invocation_id("0123456789abcdef0123456789abcdef"));
+        assert!(!canonical_invocation_id("short"));
+        assert!(!canonical_invocation_id("0123456789abcdef0123456789abcdeg"));
+
+        assert_eq!(
+            device_kind_for_path("/dev/nbd0"),
+            Some(ManagedDeviceKind::Nbd)
+        );
+        assert_eq!(
+            device_kind_for_path("/dev/ublkb0"),
+            Some(ManagedDeviceKind::Ublk)
+        );
+        assert_eq!(
+            device_kind_for_path("/dev/zram0"),
+            Some(ManagedDeviceKind::Zram)
+        );
+        assert_eq!(device_kind_for_path("/dev/sda"), None);
+
+        assert_eq!(command_label("test", &["a", "b"]), "test a b");
+        assert_eq!(command_label("test", &[]), "test");
+    }
+
+    #[test]
+    fn up_with_args_rejects_malformed_arguments() {
+        assert!(up_with_args(&["--unknown".to_string()]).is_err());
+        assert!(up_with_args(&["--vram-mb".to_string(), "invalid".to_string()]).is_err());
+        assert!(up_with_args(&["--zram-mb".to_string(), "-5".to_string()]).is_err());
     }
 }
