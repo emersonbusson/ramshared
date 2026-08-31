@@ -1,0 +1,25 @@
+fix(kernel): return semantic errnos on PCIe probe failures
+
+## Resumo
+Adiciona retornos semânticos de errno (ENODEV, EBUSY) e checagem inicial de ponteiro NULL no driver RamShared.
+
+## Commits
+| Commit | O que fez | Por que fez | Detalhes |
+|---|---|---|---|
+| HEAD | Refatora probe | Seguir o contrato C-100 para sanidade física | <details><summary>detalhes</summary>Retorna -ENODEV se !pdev ou não habilitar mem, e -EBUSY em contention</details> |
+
+## Issue
+Closes #000
+
+## Responsavel
+@KernelC100
+
+## Labels
+type:kernel, type:refactor
+
+## Validacao
+- [x] Gates de build/test do escopo tocado
+Compilou com `./scripts/ci/check-kernel-style.sh`.
+
+## Rollback trigger
+Falha de inicialização em hardware válido com erro ambíguo (kernel panic, código de erro não mapeado no probe).
