@@ -396,7 +396,13 @@ VdHandleReadCapacity(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 VOID
 VdTranslateSrbNoDisk(_In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
-	UCHAR op = Srb->Cdb[0];
+	UCHAR op;
+
+	if (Srb->Function == SRB_FUNCTION_FLUSH || Srb->Function == SRB_FUNCTION_SHUTDOWN) {
+		op = SCSIOP_SYNCHRONIZE_CACHE;
+	} else {
+		op = Srb->Cdb[0];
+	}
 
 	switch (op) {
 	case SCSIOP_INQUIRY:
@@ -422,6 +428,10 @@ VdTranslateSrbNoDisk(_In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 			RtlZeroMemory(Srb->DataBuffer, Srb->DataTransferLength);
 		}
 		break;
+	case SCSIOP_SYNCHRONIZE_CACHE:
+	case 0x91: /* SYNCHRONIZE CACHE(16) */
+		Srb->SrbStatus = SRB_STATUS_SUCCESS;
+		break;
 	case 0xA0: /* REPORT LUNS — no LUN until CREATE_DISK */
 		VdHandleReportLuns(Srb, FALSE);
 		break;
@@ -440,11 +450,17 @@ VdTranslateSrb(
 	_In_ PVOID DevExt,
 	_Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
-	UCHAR op = Srb->Cdb[0];
+	UCHAR op;
 	NTSTATUS st;
 	UINT64 offset;
 	UINT32 len;
 	enum ramshared_op rop;
+
+	if (Srb->Function == SRB_FUNCTION_FLUSH || Srb->Function == SRB_FUNCTION_SHUTDOWN) {
+		op = SCSIOP_SYNCHRONIZE_CACHE;
+	} else {
+		op = Srb->Cdb[0];
+	}
 
 	switch (op) {
 	case SCSIOP_TEST_UNIT_READY:
