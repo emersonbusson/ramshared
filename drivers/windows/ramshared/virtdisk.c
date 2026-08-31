@@ -508,6 +508,13 @@ VdTranslateSrb(
 			}
 			offset *= Disk->block_size;
 			len = Srb->DataTransferLength;
+
+			if ((len % Disk->block_size) != 0) {
+				Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+				VdComplete(DevExt, Srb, Srb->SrbStatus);
+				return;
+			}
+
 			if (op == SCSIOP_READ || op == SCSIOP_READ16) {
 				rop = RAMSHARED_OP_READ;
 			} else {
