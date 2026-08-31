@@ -431,7 +431,9 @@ impl VramProvider for VulkanProvider {
         if mt >= mprops.memory_type_count {
             // SAFETY: buffer created above; destroyed before returning (no leak).
             unsafe { self.device.destroy_buffer(buffer, None) };
-            return Err(VramError::Provider("memory type index out of physical bounds".into()));
+            return Err(VramError::Provider(
+                "memory type index out of physical bounds".into(),
+            ));
         }
 
         let mai = vk::MemoryAllocateInfo::default()
