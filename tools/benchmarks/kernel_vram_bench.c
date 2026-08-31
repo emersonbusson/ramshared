@@ -6,12 +6,18 @@
  * across the PCIe bus using page-locked pinned memory and CUDA driver FFI.
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
 #include <dlfcn.h>
+#include <unistd.h>
+#include <sched.h>
+#include <errno.h>
 
 #define DEFAULT_CHUNK_MIB 256
 #define MIB_TO_BYTES(mib) ((size_t)(mib) * 1024 * 1024)
@@ -58,6 +64,25 @@ int main(int argc, char **argv) {
 			chunk_mib = val;
 		}
 	}
+
+	if (argc > 2) {
+		int core_id = atoi(argv[2]);
+		long num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+
+		if (core_id < 0 || core_id >= num_cores) {
+			fprintf(stderr, "[-] Error: Requested CPU core %d is out of range (0-%ld).\n", core_id, num_cores - 1);
+			return -ERANGE;
+		}
+
+		cpu_set_t cpuset;
+		CPU_ZERO(&cpuset);
+		CPU_SET(core_id, &cpuset);
+		if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset) != 0) {
+			fprintf(stderr, "[-] Error: Failed to set CPU affinity to core %d.\n", core_id);
+			return -EINVAL;
+		}
+	}
+
 	size_t chunk_bytes = MIB_TO_BYTES(chunk_mib);
 
 	printf("=================================================================\n");
