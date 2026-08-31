@@ -8,6 +8,7 @@ pub const ABI_VERSION: u32 = 1;
 pub const MAX_QD: u32 = 256;
 pub const MAX_IO: u32 = 1 << 20;
 pub const RING_MAGIC: u32 = 0x5253_5244; // 'RSRD'
+pub const PROTOCOL_MAGIC: u32 = 0x5241_4D53; // 'RAMS'
 
 pub const OP_READ: u32 = 0;
 pub const OP_WRITE: u32 = 1;
@@ -40,6 +41,14 @@ pub struct Cqe {
     pub tag: u64,
     pub status: i32,
     pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct ProtocolHdr {
+    pub magic: u32,
+    pub version: u32,
+    pub reserved: [u32; 2],
 }
 
 #[repr(C)]
@@ -81,6 +90,7 @@ const _: () = {
     assert!(core::mem::size_of::<Sqe>() == 32);
     assert!(core::mem::align_of::<Sqe>() <= 8);
     assert!(core::mem::size_of::<Cqe>() == 16);
+    assert!(core::mem::size_of::<ProtocolHdr>() == 16);
     assert!(core::mem::size_of::<RingHdr>() == 16);
     assert!(core::mem::size_of::<Register>() == 72);
     assert!(core::mem::size_of::<DiskParams>() == 32);
@@ -131,5 +141,6 @@ mod tests {
         assert_eq!(MAX_QD, 256);
         assert_eq!(MAX_IO, 1 << 20);
         assert_eq!(RING_MAGIC, 0x5253_5244);
+        assert_eq!(PROTOCOL_MAGIC, 0x5241_4D53);
     }
 }
