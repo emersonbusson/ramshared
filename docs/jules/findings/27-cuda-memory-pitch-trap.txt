@@ -1,0 +1,5 @@
+The prompt requested to "audit CUDA memory pitch and device pointer FFI struct layouts" in `crates/ramshared-cuda/src/ffi.rs`.
+
+First, regarding CUDA memory pitch layouts: there are no memory pitch structs (e.g., `CUDA_MEMCPY2D`) or pitched memory copy operations (e.g., `cuMemcpy2D`) in `crates/ramshared-cuda/src/ffi.rs`. The codebase strictly binds and uses 1D linear memory operations (`cuMemAlloc_v2`, `cuMemcpyHtoD_v2`, `cuMemcpyDtoH_v2`, `cuMemsetD8_v2`). Adding memory pitch FFI layouts would require fabricating non-existent CUDA structs and operations. This is an architectural mismatch that breaks the current synchronous linear VRAM design.
+
+Second, regarding device pointer FFI struct layouts for 64-bit specifications: an audit of `crates/ramshared-cuda/src/ffi.rs` confirms that `CuDevicePtr` is already correctly defined as a 64-bit unsigned integer (`pub type CuDevicePtr = u64;`), which perfectly complies with the NVIDIA CUDA Driver API 64-bit specifications. Device pointers in this 64-bit API are flat 64-bit integers, not structs. Therefore, no FFI struct modifications for device pointers are necessary or applicable.
