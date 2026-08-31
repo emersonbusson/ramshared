@@ -269,10 +269,10 @@ fn ioctl_mut<T>(file: &File, request: u64, value: &mut T) -> Result<(), DxgError
 
 #[cfg(test)]
 mod tests {
-    use std::mem::align_of;
     use super::{
         AdapterLuid, BudgetSnapshot, DxgBudgetProvider, GpuBudgetProvider, select_adapter,
     };
+    use std::mem::align_of;
 
     #[test]
     fn official_uapi_layouts_and_ioctl_numbers_match_wsl_618() {
