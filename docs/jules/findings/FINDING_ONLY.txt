@@ -1,0 +1,9 @@
+Architectural Mismatch:
+The task requested to audit all WdfRequestComplete paths to ensure memory buffers are freed exactly once for IOCTL failure unwinding in drivers/windows/ramshared/control.c.
+
+Evidence of Mismatch:
+1. WDM vs WDF: The RamShared driver uses the Windows Driver Model (WDM), not the Kernel-Mode Driver Framework (KMDF). The target file relies on `IoCompleteRequest` and raw `PIRP` handling, rather than `WdfRequestComplete` and `WDFREQUEST`. Searching for `Wdf` in the codebase yields 0 results.
+2. Buffer Management: The IOCTLs in this driver are configured with `METHOD_BUFFERED`. Under this method, the Windows I/O Manager automatically allocates the `SystemBuffer` before passing the IRP to the driver, and automatically frees it when the IRP is completed. The driver is not responsible for allocating or freeing these buffers.
+
+Conclusion:
+Attempting to implement manual deallocations for the `SystemBuffer` in failure paths would inherently introduce double-free BSOD vulnerabilities, and injecting `WdfRequestComplete` into a WDM driver is invalid. Therefore, no code modification can safely satisfy the objective.
