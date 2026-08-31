@@ -22,6 +22,20 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 	unsigned int op = bio_op(bio);
 	void __iomem *vram_ptr = rs_dev->dma.cpu_addr + pos;
 
+	if (op == REQ_OP_FLUSH) {
+		dma_wmb();
+		return BLK_STS_OK;
+	}
+
+	if (op == REQ_OP_DISCARD || op == REQ_OP_SECURE_ERASE) {
+		memset_io(vram_ptr, 0, bio->bi_iter.bi_size);
+		dma_wmb();
+		return BLK_STS_OK;
+	}
+
+	if (op != REQ_OP_READ && op != REQ_OP_WRITE)
+		return BLK_STS_NOTSUPP;
+
 	bio_for_each_segment(bvec, bio, iter) {
 		void *src_or_dst = bvec_kmap_local(&bvec);
 		size_t len = bvec.bv_len;
@@ -111,10 +125,10 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 	int is_write = op_is_write(op);
 
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
-		return -EIO;
+		return -ENODEV;
 
 	if (unlikely(pos + len > rs_dev->capacity_bytes))
-		return -EIO;
+		return -ERANGE;
 
 	vram_ptr = rs_dev->dma.cpu_addr + pos;
 	mem = kmap_local_page(page);
@@ -199,7 +213,7 @@ int ramshared_queue_init(struct ramshared_device *rs_dev,
 	if (!rs_dev)
 		return -EINVAL;
 
-	valid_depth = clamp_t(unsigned int, q_depth, 16U, 2048U);
+	valid_depth = clamp_t(unsigned int, q_depth, 16U, 1024U);
 
 	memset(&rs_dev->tag_set, 0, sizeof(rs_dev->tag_set));
 	rs_dev->tag_set.ops = &ramshared_mq_ops;
