@@ -39,6 +39,8 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 		return -EINVAL;
 	}
 
+	queue_depth = clamp_t(unsigned int, queue_depth, 16, 1024);
+
 	rs_dev = devm_kzalloc(&pdev->dev, sizeof(*rs_dev), GFP_KERNEL);
 	if (!rs_dev)
 		return -ENOMEM;
