@@ -1,0 +1,12 @@
+FINDING_ONLY: Architectural Mismatch - Vulkan ICD dispatch table non-nullness validation
+
+Date: 2026-08-30
+Target File: crates/ramshared-vulkan/src/lib.rs
+
+The task requests to "validate Vulkan ICD function dispatch table non-nullness" and "Verify all required Vulkan entry point function pointers are loaded before calling ICD" using C/Kernel guard clauses.
+
+However, this represents an architectural mismatch because the codebase utilizes the `ash` crate for Vulkan FFI bindings. In the `ash` architecture, the dispatch tables (such as `InstanceFnV1_0` and `DeviceFnV1_0`) do not store raw null pointers for missing or unsupported Vulkan entry points. Instead, during the loading phase, any function pointer that resolves to NULL via `vkGetInstanceProcAddr` or `vkGetDeviceProcAddr` is explicitly substituted with a statically compiled panicking stub function (e.g., `panic!("Unable to load vkCreateInstance")`).
+
+Because these fields are strongly typed function pointers (which in safe Rust cannot be null) and are guaranteed by `ash` to point to executable code (either the real ICD function or the panicking stub), attempting to validate their "non-nullness" is impossible and semantically invalid. Adding guard clauses to cast these pointers to raw pointers and check for null would simply result in dead code that evaluates to false and fails to prevent runtime panics.
+
+Therefore, applying raw null pointer checks to the `ash` Vulkan dispatch table degrades the safe Rust API and is architecturally incompatible with how `ash` handles function loading. No structural code modifications were made.
