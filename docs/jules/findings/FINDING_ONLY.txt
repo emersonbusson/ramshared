@@ -1,0 +1,7 @@
+FINDING_ONLY: Architectural Mismatch
+
+The task requests to "audit C SIMD CRC32 acceleration FFI bindings and buffer alignment" in the target file `crates/ramshared-integrity/src/hash.rs`.
+
+However, upon inspecting `crates/ramshared-integrity/src/hash.rs`, no C SIMD CRC32 acceleration or FFI bindings are present. The file is written in pure safe Rust and implements a basic FNV-1a 64-bit hashing algorithm (using `FNV_OFFSET` and `FNV_PRIME`). It does not rely on hardware-accelerated CRC32 routines, SIMD instructions, or C FFI boundaries, making the request to enforce 16/32-byte alignment on memory buffers passed to hardware-accelerated CRC32 routines an architectural mismatch.
+
+Therefore, no C or FFI buffer alignment modifications can be applied.
