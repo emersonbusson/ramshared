@@ -12,9 +12,68 @@
 #include <string.h>
 #include <time.h>
 #include <dlfcn.h>
+#include <errno.h>
 
 #define DEFAULT_CHUNK_MIB 256
 #define MIB_TO_BYTES(mib) ((size_t)(mib) * 1024 * 1024)
+
+#define LATENCY_HISTOGRAM_BUCKETS 100000
+#define LATENCY_HISTOGRAM_RESOLUTION_NS 1000 /* 1 us resolution */
+
+struct latency_histogram {
+	uint64_t buckets[LATENCY_HISTOGRAM_BUCKETS];
+	uint64_t overflow;
+	uint64_t total_samples;
+};
+
+static int latency_histogram_add(struct latency_histogram *hist, uint64_t latency_ns) {
+	size_t bucket;
+
+	if (!hist)
+		return -EINVAL;
+
+	bucket = latency_ns / LATENCY_HISTOGRAM_RESOLUTION_NS;
+	if (bucket < LATENCY_HISTOGRAM_BUCKETS) {
+		hist->buckets[bucket]++;
+	} else {
+		hist->overflow++;
+	}
+
+	hist->total_samples++;
+	return 0;
+}
+
+static int latency_histogram_percentile(const struct latency_histogram *hist, double percentile, uint64_t *out_ns) {
+	uint64_t target, sum;
+	size_t i;
+
+	if (!hist || !out_ns)
+		return -EINVAL;
+
+	if (percentile < 0.0 || percentile > 100.0)
+		return -ERANGE;
+
+	if (hist->total_samples == 0) {
+		*out_ns = 0;
+		return -ERANGE;
+	}
+
+	target = (uint64_t)((percentile / 100.0) * (double)hist->total_samples);
+	if (target == 0 && hist->total_samples > 0)
+		target = 1;
+
+	sum = 0;
+	for (i = 0; i < LATENCY_HISTOGRAM_BUCKETS; i++) {
+		sum += hist->buckets[i];
+		if (sum >= target) {
+			*out_ns = (uint64_t)i * LATENCY_HISTOGRAM_RESOLUTION_NS;
+			return 0;
+		}
+	}
+
+	*out_ns = (uint64_t)LATENCY_HISTOGRAM_BUCKETS * LATENCY_HISTOGRAM_RESOLUTION_NS;
+	return 0;
+}
 
 typedef int (*cuInit_t)(unsigned int);
 typedef int (*cuDeviceGet_t)(int*, int);
@@ -133,25 +192,57 @@ int main(int argc, char **argv) {
 		return 1;
 	}
 
+	struct latency_histogram h2d_hist;
+	struct latency_histogram d2h_hist;
+	memset(&h2d_hist, 0, sizeof(h2d_hist));
+	memset(&d2h_hist, 0, sizeof(d2h_hist));
+	uint64_t p50_ns, p99_ns, p999_ns;
+	size_t i;
+	size_t iters = 10;
+
 	// 1. Direct DMA Host -> VRAM (Push)
 	printf("[+] Benchmarking Host -> VRAM DMA (%d MiB)...\n", chunk_mib);
 	double t0 = get_time_sec();
-	cuMemcpyHtoD(dev_ptr, host_pinned, chunk_bytes);
+	for (i = 0; i < iters; i++) {
+		double start = get_time_sec();
+		cuMemcpyHtoD(dev_ptr, host_pinned, chunk_bytes);
+		double end = get_time_sec();
+		latency_histogram_add(&h2d_hist, (uint64_t)((end - start) * 1e9));
+	}
 	double t1 = get_time_sec();
-	double h2d_speed = (double)chunk_mib / (t1 - t0);
+	double h2d_speed = (double)(chunk_mib * iters) / (t1 - t0);
 	printf("[+] H2D PCIe DMA Write: %.2f MiB/s (%.2f GiB/s) in %.4f s\n",
 	       h2d_speed, h2d_speed / 1024.0, t1 - t0);
+
+	if (latency_histogram_percentile(&h2d_hist, 50.0, &p50_ns) == 0 &&
+	    latency_histogram_percentile(&h2d_hist, 99.0, &p99_ns) == 0 &&
+	    latency_histogram_percentile(&h2d_hist, 99.9, &p999_ns) == 0) {
+		printf("    Latency (ns): p50 = %lu, p99 = %lu, p99.9 = %lu\n",
+		       p50_ns, p99_ns, p999_ns);
+	}
 
 	// 2. Direct DMA VRAM -> Host (Pull)
 	void *read_pinned = NULL;
 	cuMemHostAlloc(&read_pinned, chunk_bytes, 0);
 	printf("[+] Benchmarking VRAM -> Host DMA (%d MiB)...\n", chunk_mib);
 	t0 = get_time_sec();
-	cuMemcpyDtoH(read_pinned, dev_ptr, chunk_bytes);
+	for (i = 0; i < iters; i++) {
+		double start = get_time_sec();
+		cuMemcpyDtoH(read_pinned, dev_ptr, chunk_bytes);
+		double end = get_time_sec();
+		latency_histogram_add(&d2h_hist, (uint64_t)((end - start) * 1e9));
+	}
 	t1 = get_time_sec();
-	double d2h_speed = (double)chunk_mib / (t1 - t0);
+	double d2h_speed = (double)(chunk_mib * iters) / (t1 - t0);
 	printf("[+] D2H PCIe DMA Read : %.2f MiB/s (%.2f GiB/s) in %.4f s\n",
 	       d2h_speed, d2h_speed / 1024.0, t1 - t0);
+
+	if (latency_histogram_percentile(&d2h_hist, 50.0, &p50_ns) == 0 &&
+	    latency_histogram_percentile(&d2h_hist, 99.0, &p99_ns) == 0 &&
+	    latency_histogram_percentile(&d2h_hist, 99.9, &p999_ns) == 0) {
+		printf("    Latency (ns): p50 = %lu, p99 = %lu, p99.9 = %lu\n",
+		       p50_ns, p99_ns, p999_ns);
+	}
 
 	// 3. Bit-by-bit Verification
 	int match = (memcmp(host_pinned, read_pinned, chunk_bytes) == 0);
