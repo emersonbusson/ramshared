@@ -1,0 +1,12 @@
+Architectural Mismatch: Cannot apply C-style guard clauses to safe Rust references
+
+The requested task requires adding null pointer guard clauses to the raw ioctl pointer parameters in the dxgkrnl bridge (crates/ramshared-dxg/src/lib.rs).
+
+However, the ioctl_mut function in crates/ramshared-dxg/src/lib.rs currently accepts a safe Rust reference &mut T:
+fn ioctl_mut<T>(file: &File, request: u64, value: &mut T) -> Result<(), DxgError>
+
+In safe Rust, a reference &mut T is guaranteed by the compiler to never be null. It is impossible to pass a null pointer through this safe interface without using unsafe blocks at the call site, which the codebase currently avoids by passing safe references (e.g., &mut query).
+
+Attempting to change the parameter type to a raw pointer (*mut T) and adding a null check (e.g., value.is_null()) breaks the safe abstraction and forces all callers to use unsafe or explicit casts, contradicting Rust's safety guarantees and the crate's purpose of keeping the ioctl interface boundary clean.
+
+Therefore, applying C-style null pointer guard clauses to safe Rust references constitutes an architectural mismatch, and safe code modification is not possible.
