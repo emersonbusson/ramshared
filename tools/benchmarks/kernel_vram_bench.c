@@ -12,6 +12,7 @@
 #include <string.h>
 #include <time.h>
 #include <dlfcn.h>
+#include <errno.h>
 
 #define DEFAULT_CHUNK_MIB 256
 #define MIB_TO_BYTES(mib) ((size_t)(mib) * 1024 * 1024)
@@ -52,12 +53,20 @@ static void *load_cuda_driver(void) {
 
 int main(int argc, char **argv) {
 	int chunk_mib = DEFAULT_CHUNK_MIB;
-	if (argc > 1) {
-		int val = atoi(argv[1]);
-		if (val > 0 && val <= 4096) {
-			chunk_mib = val;
-		}
+
+	if (argc > 1)
+		chunk_mib = atoi(argv[1]);
+
+	if (chunk_mib <= 0) {
+		fprintf(stderr, "[-] Error: Invalid chunk size.\n");
+		return -EINVAL;
 	}
+
+	if (chunk_mib > 4096) {
+		fprintf(stderr, "[-] Error: Chunk size exceeds physical bounds (4096 MiB).\n");
+		return -ERANGE;
+	}
+
 	size_t chunk_bytes = MIB_TO_BYTES(chunk_mib);
 
 	printf("=================================================================\n");
