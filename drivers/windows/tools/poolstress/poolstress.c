@@ -28,6 +28,7 @@ typedef struct _POOLSTRESS_ALLOC_IN {
 static PDEVICE_OBJECT g_Device = NULL;
 static PVOID g_Pool = NULL;
 static SIZE_T g_PoolSize = 0;
+static KMUTEX g_PoolMutex;
 
 static VOID
 PoolstressFill(_Inout_updates_bytes_(bytes) PUCHAR pool, SIZE_T bytes)
@@ -86,18 +87,22 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 				status = STATUS_INVALID_PARAMETER;
 				break;
 			}
-			if (g_Pool != NULL) {
-				status = STATUS_DEVICE_BUSY;
-				break;
-			}
 			in = (POOLSTRESS_ALLOC_IN *)buf;
 			if (in->NGb == 0 || in->NGb > 16) {
 				status = STATUS_INVALID_PARAMETER;
 				break;
 			}
+
+			KeWaitForSingleObject(&g_PoolMutex, Executive, KernelMode, FALSE, NULL);
+			if (g_Pool != NULL) {
+				KeReleaseMutex(&g_PoolMutex, FALSE);
+				status = STATUS_DEVICE_BUSY;
+				break;
+			}
 			bytes = (SIZE_T)in->NGb << 30;
 			g_Pool = ExAllocatePool2(POOL_FLAG_PAGED, bytes, 'ssPR');
 			if (!g_Pool) {
+				KeReleaseMutex(&g_PoolMutex, FALSE);
 				status = STATUS_INSUFFICIENT_RESOURCES;
 				break;
 			}
@@ -109,11 +114,14 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 				volatile UCHAR *p = (PUCHAR)g_Pool + i * PAGE_SIZE;
 				*p = *p;
 			}
+			KeReleaseMutex(&g_PoolMutex, FALSE);
 		} else if (code == IOCTL_POOLSTRESS_READBACK) {
 			SIZE_T i;
 			volatile UCHAR sum = 0;
 
+			KeWaitForSingleObject(&g_PoolMutex, Executive, KernelMode, FALSE, NULL);
 			if (!g_Pool) {
+				KeReleaseMutex(&g_PoolMutex, FALSE);
 				status = STATUS_INVALID_DEVICE_STATE;
 				break;
 			}
@@ -121,12 +129,15 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 				sum ^= *((PUCHAR)g_Pool + i);
 			}
 			info = sum;
+			KeReleaseMutex(&g_PoolMutex, FALSE);
 		} else if (code == IOCTL_POOLSTRESS_FREE) {
+			KeWaitForSingleObject(&g_PoolMutex, Executive, KernelMode, FALSE, NULL);
 			if (g_Pool) {
 				ExFreePoolWithTag(g_Pool, 'ssPR');
 				g_Pool = NULL;
 				g_PoolSize = 0;
 			}
+			KeReleaseMutex(&g_PoolMutex, FALSE);
 		} else {
 			status = STATUS_INVALID_DEVICE_REQUEST;
 		}
@@ -151,10 +162,12 @@ PoolstressUnload(_In_ PDRIVER_OBJECT DriverObject)
 	UNICODE_STRING link;
 
 	UNREFERENCED_PARAMETER(DriverObject);
+	KeWaitForSingleObject(&g_PoolMutex, Executive, KernelMode, FALSE, NULL);
 	if (g_Pool) {
 		ExFreePoolWithTag(g_Pool, 'ssPR');
 		g_Pool = NULL;
 	}
+	KeReleaseMutex(&g_PoolMutex, FALSE);
 	RtlInitUnicodeString(&link, POOLSTRESS_LINK_NAME);
 	IoDeleteSymbolicLink(&link);
 	if (g_Device) {
@@ -172,6 +185,8 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 	UNREFERENCED_PARAMETER(RegistryPath);
 	RtlInitUnicodeString(&name, POOLSTRESS_DEVICE_NAME);
 	RtlInitUnicodeString(&link, POOLSTRESS_LINK_NAME);
+
+	KeInitializeMutex(&g_PoolMutex, 0);
 
 	status = IoCreateDevice(DriverObject, 0, &name, FILE_DEVICE_UNKNOWN,
 				FILE_DEVICE_SECURE_OPEN, FALSE, &g_Device);
