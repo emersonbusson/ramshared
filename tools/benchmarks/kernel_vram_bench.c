@@ -12,6 +12,7 @@
 #include <string.h>
 #include <time.h>
 #include <dlfcn.h>
+#include <errno.h>
 
 #define DEFAULT_CHUNK_MIB 256
 #define MIB_TO_BYTES(mib) ((size_t)(mib) * 1024 * 1024)
@@ -112,6 +113,18 @@ int main(int argc, char **argv) {
 	cuMemGetInfo(&free_b, &total_b);
 	printf("[+] GPU Memory: %zu MiB free / %zu MiB total\n",
 	       free_b / (1024 * 1024), total_b / (1024 * 1024));
+
+	if (chunk_bytes > free_b) {
+		chunk_mib = free_b / (1024 * 1024);
+		if (chunk_mib == 0) {
+			fprintf(stderr, "[-] Error: Insufficient VRAM.\n");
+			cuCtxDestroy(ctx);
+			dlclose(lib);
+			return -ENOMEM;
+		}
+		chunk_bytes = MIB_TO_BYTES(chunk_mib);
+		printf("[!] Clamping benchmark allocation to %d MiB to fit physical VRAM\n", chunk_mib);
+	}
 
 	// Allocate Pinned Host Memory
 	void *host_pinned = NULL;
