@@ -1,7 +1,0 @@
-The objective requires returning STATUS_NO_MEMORY or STATUS_SUCCESS with a detailed diagnostic summary on stress test exhaustion, and previous review feedback suggested modifying poolstress.c as a user-space application (using printf and catching DeviceIoControl errors) because it is located in the tools/ directory.
-
-However, this constitutes an architectural mismatch. The file `drivers/windows/tools/poolstress/poolstress.c` is a Windows kernel driver (`.sys`), not a user-space application. This is evidenced by its inclusion of `<ntddk.h>`, its implementation of `DriverEntry`, and its direct processing of IRPs. Kernel drivers cannot use user-space functions like `printf` or exit with user-space status codes.
-
-Furthermore, regarding the IOCTL implementation, `IOCTL_POOLSTRESS_ALLOC` is defined as a `METHOD_BUFFERED` IOCTL with only an input structure (`POOLSTRESS_ALLOC_IN`). There is no output structure defined in the ABI to carry a diagnostic summary. In the Windows kernel architecture, when a driver completes a `METHOD_BUFFERED` IRP with an error NTSTATUS code (such as `STATUS_NO_MEMORY`), the Windows I/O Manager deliberately drops the payload and does not copy the `SystemBuffer` back to user-space.
-
-Because `poolstress.c` is a kernel driver and not a user-space application, and because returning a diagnostic payload alongside an error NTSTATUS via `METHOD_BUFFERED` is architecturally impossible, safe code modification to fulfill the request is not possible. This finding is reported instead.
