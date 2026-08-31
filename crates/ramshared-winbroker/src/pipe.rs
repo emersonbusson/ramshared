@@ -246,15 +246,16 @@ impl Drop for PipeServer {
 }
 
 fn run_connect(handle: HANDLE, stop: &AtomicBool, deadline: Instant) -> Result<(), PipeAuthError> {
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::from_raw_os_error(22).into());
+    }
     let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
     if event.is_null() {
         return Err(io::Error::last_os_error().into());
     }
     let event = Handle(event);
-    let mut overlapped = OVERLAPPED {
-        hEvent: event.0,
-        ..Default::default()
-    };
+    let mut overlapped = unsafe { std::mem::zeroed::<OVERLAPPED>() };
+    overlapped.hEvent = event.0;
     if unsafe { ConnectNamedPipe(handle, &mut overlapped) } == 0 {
         let error = unsafe { GetLastError() };
         if error != ERROR_IO_PENDING {
@@ -439,16 +440,17 @@ fn overlapped_io(
     write: bool,
     stop: Option<&AtomicBool>,
 ) -> io::Result<usize> {
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::from_raw_os_error(22));
+    }
     let length = u32::try_from(len).unwrap_or(u32::MAX);
     let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
     if event.is_null() {
         return Err(io::Error::last_os_error());
     }
     let event = Handle(event);
-    let mut overlapped = OVERLAPPED {
-        hEvent: event.0,
-        ..Default::default()
-    };
+    let mut overlapped = unsafe { std::mem::zeroed::<OVERLAPPED>() };
+    overlapped.hEvent = event.0;
     let started = unsafe {
         if write {
             WriteFile(
