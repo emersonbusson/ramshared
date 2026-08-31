@@ -472,6 +472,16 @@
       "freshnessDays": 90,
       "verification": { "state": "unverified" },
       "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "jules-findings",
+      "pattern": "docs/jules/findings/**/*.md",
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-31T03:00:00Z"
     }
   ],
   "exclusions": [
