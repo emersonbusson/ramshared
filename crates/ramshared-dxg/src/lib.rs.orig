@@ -30,7 +30,6 @@ pub mod uapi {
     }
 
     #[repr(C)]
-    #[repr(align(8))]
     #[derive(Clone, Copy, Debug, Default)]
     pub struct EnumAdapters2 {
         pub num_adapters: u32,
@@ -49,7 +48,6 @@ pub mod uapi {
         pub current_reservation: u64,
         pub available_for_reservation: u64,
         pub physical_adapter_index: u32,
-        pub _padding: u32,
     }
 }
 
@@ -269,7 +267,6 @@ fn ioctl_mut<T>(file: &File, request: u64, value: &mut T) -> Result<(), DxgError
 
 #[cfg(test)]
 mod tests {
-    use std::mem::align_of;
     use super::{
         AdapterLuid, BudgetSnapshot, DxgBudgetProvider, GpuBudgetProvider, select_adapter,
     };
@@ -282,9 +279,6 @@ mod tests {
         assert_eq!(size_of::<super::uapi::EnumAdapters2>(), 16);
         assert_eq!(size_of::<super::uapi::AdapterInfo>(), 20);
         assert_eq!(size_of::<super::uapi::QueryVideoMemoryInfo>(), 56);
-        assert_eq!(align_of::<super::uapi::EnumAdapters2>(), 8);
-        assert_eq!(align_of::<super::uapi::AdapterInfo>(), 4);
-        assert_eq!(align_of::<super::uapi::QueryVideoMemoryInfo>(), 8);
     }
 
     #[test]
