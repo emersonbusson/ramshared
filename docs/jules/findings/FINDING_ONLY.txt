@@ -1,0 +1,8 @@
+ARCHITECTURAL MISMATCH DETECTED:
+The task requested nullifying virtual address pointers immediately upon unmapping GPU memory and preventing wild pointer dereference in dxgkrnl memory unmap handlers within `crates/ramshared-dxg/src/lib.rs`.
+
+However, `crates/ramshared-dxg/src/lib.rs` is a high-level safe Rust wrapper over the WDDM video memory budget IOCTLs.
+1. There is no memory mapping (`mmap`) or unmapping (`munmap`) logic present in this crate. It purely queries GPU memory budget information via synchronous ioctls.
+2. Safe Rust references (`&mut T`) such as the `value` parameter in `ioctl_mut` are inherently non-null and valid. Applying C-style raw null pointer checks to safe Rust references violates Rust's ownership and safety guarantees.
+
+Therefore, safe code modification is not possible. The target file does not contain any GPU memory unmap handlers or virtual address pointers that require nullification, and attempting to force C-style raw null pointer checks on safe Rust references is architecturally unsound.
