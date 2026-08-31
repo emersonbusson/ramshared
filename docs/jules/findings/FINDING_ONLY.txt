@@ -1,0 +1,10 @@
+Task Objective: "Validate character device handle and query device capability before starting timing loop." in tools/benchmarks/kernel_vram_bench.c
+
+Finding: Architectural Mismatch - Cannot Safely Implement
+
+Evidence:
+1. The benchmark `tools/benchmarks/kernel_vram_bench.c` does not interface with a character device or issue ioctls. Instead, it dynamically loads `libcuda.so.1` and uses CUDA driver API FFI (cuInit, cuCtxCreate, cuMemAlloc, cuMemcpyHtoD, etc.) to perform direct DMA benchmarking.
+2. A search across the repository (`grep -rn "ioctl" /usr/include/linux/` and project files) shows no `ioctl` mappings or definitions within the RamShared C kernel headers (`drivers/block/ramshared/ramshared.h` and `compat.h`) that would correspond to character device capability queries (`RAMSHARED_IOC_QUERY_CAP`).
+3. The in-tree Linux kernel driver (`drivers/block/ramshared/main.c`) registers a block device (`add_disk(rs_dev->disk)`) with block multi-queue support, not a character device. The `udev` rules (`packaging/systemd/65-ramshared-observability.rules`) also confirm it acts as a block driver (`/dev/ramshared*`).
+
+Conclusion: Injecting an `open("/dev/...")` call and an ioctl capability check into the benchmark is invalid because it contradicts the fundamental CUDA FFI architecture of the benchmark and targets non-existent character device ioctl capabilities.
