@@ -48,16 +48,33 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 				       const struct blk_mq_queue_data *bd)
 {
 	struct request *rq = bd->rq;
-	struct ramshared_device *rs_dev = rq->q->queuedata;
-	loff_t pos = (loff_t)blk_rq_pos(rq) << RAMSHARED_SECTOR_SHIFT;
-	size_t len = blk_rq_bytes(rq);
+	struct ramshared_device *rs_dev;
+	loff_t pos;
+	size_t len;
 	blk_status_t status = BLK_STS_OK;
 	struct bio *bio;
+
+	if (unlikely(!rq || !rq->q || !rq->q->queuedata))
+		return BLK_STS_IOERR;
+
+	rs_dev = rq->q->queuedata;
 
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
 		return BLK_STS_IOERR;
 
-	if (unlikely(pos + len > rs_dev->capacity_bytes)) {
+	/* Checked arithmetic for sector-to-byte translation to prevent overflow */
+	if (unlikely(blk_rq_pos(rq) > (~0ULL >> RAMSHARED_SECTOR_SHIFT)))
+		return BLK_STS_IOERR;
+
+	pos = (loff_t)blk_rq_pos(rq) << RAMSHARED_SECTOR_SHIFT;
+	len = blk_rq_bytes(rq);
+
+	/* 512-byte sector alignment check */
+	if (unlikely(pos & (RAMSHARED_SECTOR_SIZE - 1)) ||
+	    unlikely(len & (RAMSHARED_SECTOR_SIZE - 1)))
+		return BLK_STS_IOERR;
+
+	if (unlikely(pos > rs_dev->capacity_bytes || len > rs_dev->capacity_bytes || pos + len > rs_dev->capacity_bytes)) {
 		dev_err_ratelimited(rs_dev->dev,
 			"I/O bounds violation: pos=%lld, len=%zu, cap=%llu\n",
 			pos, len, rs_dev->capacity_bytes);
@@ -103,18 +120,34 @@ static const struct blk_mq_ops ramshared_mq_ops = {
 static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 				  struct page *page, enum req_op op)
 {
-	struct ramshared_device *rs_dev = bdev->bd_disk->private_data;
-	loff_t pos = (loff_t)sector << RAMSHARED_SECTOR_SHIFT;
+	struct ramshared_device *rs_dev;
+	loff_t pos;
 	size_t len = PAGE_SIZE;
 	void __iomem *vram_ptr;
 	void *mem;
 	int is_write = op_is_write(op);
 
-	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
-		return -EIO;
+	if (unlikely(!bdev || !bdev->bd_disk || !bdev->bd_disk->private_data))
+		return -EINVAL;
 
-	if (unlikely(pos + len > rs_dev->capacity_bytes))
-		return -EIO;
+	rs_dev = bdev->bd_disk->private_data;
+
+	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
+		return -ENODEV;
+
+	/* Checked arithmetic for sector-to-byte translation to prevent overflow */
+	if (unlikely((u64)sector > (~0ULL >> RAMSHARED_SECTOR_SHIFT)))
+		return -ERANGE;
+
+	pos = (loff_t)sector << RAMSHARED_SECTOR_SHIFT;
+
+	/* 512-byte sector alignment check */
+	if (unlikely(pos & (RAMSHARED_SECTOR_SIZE - 1)) ||
+	    unlikely(len & (RAMSHARED_SECTOR_SIZE - 1)))
+		return -EINVAL;
+
+	if (unlikely(pos > rs_dev->capacity_bytes || len > rs_dev->capacity_bytes || pos + len > rs_dev->capacity_bytes))
+		return -ERANGE;
 
 	vram_ptr = rs_dev->dma.cpu_addr + pos;
 	mem = kmap_local_page(page);
