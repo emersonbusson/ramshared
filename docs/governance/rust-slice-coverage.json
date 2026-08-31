@@ -306,6 +306,32 @@
       "min": 80
     },
     {
+      "id": "cuda-driver-ffi-abi",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/windows-storport-cuda-vram/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-cuda",
+        "--files",
+        "crates/ramshared-cuda/src/ffi.rs,crates/ramshared-cuda/src/driver.rs,crates/ramshared-cuda/src/vram_impl.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/cuda-driver-ffi-abi-cov.json"
+      ],
+      "packages": [
+        "ramshared-cuda"
+      ],
+      "files": [
+        "crates/ramshared-cuda/src/ffi.rs",
+        "crates/ramshared-cuda/src/driver.rs",
+        "crates/ramshared-cuda/src/vram_impl.rs"
+      ],
+      "min": 80
+    },
+    {
       "id": "cuda-probe-planning-coverage",
       "kind": "rust-line-coverage",
       "spec": "docs/specs/no-milestone/comment-language-integrity/SPEC.md",

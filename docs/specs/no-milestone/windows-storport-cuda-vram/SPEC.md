@@ -532,3 +532,7 @@ those shared sources as evidence without creating a second coverage owner.
   StartIo and manufactured pagefile refuse are claimed. **Separate non-claims:** daily-host physical
   Online (policy), WSL2 freeze-elimination (env-bound isolated lab only). **SDV closed as N/A
   (DT-30), not pending.**
+
+```bash
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/ffi.rs,crates/ramshared-cuda/src/driver.rs,crates/ramshared-cuda/src/vram_impl.rs --min 80 --report-json tmp/cuda-driver-ffi-abi-cov.json
+```

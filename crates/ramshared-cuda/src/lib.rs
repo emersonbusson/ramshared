@@ -61,12 +61,12 @@ mod tests {
     fn driver_error_carries_op_and_code() {
         let e = CudaError::Driver {
             op: "cuMemAlloc",
-            code: 2,
+            code: 999,
             msg: "out of memory".to_string(),
         };
         let s = e.to_string();
         assert!(s.contains("cuMemAlloc"));
-        assert!(s.contains("CUresult=2"));
+        assert!(s.contains("CUresult=999"));
     }
 
     /// Real Host→VRAM→Host roundtrip. Requires a working CUDA GPU (WSL2/GPU-PV).

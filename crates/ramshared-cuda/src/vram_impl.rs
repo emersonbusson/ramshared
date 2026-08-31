@@ -89,7 +89,7 @@ mod tests {
     fn test_vram_error_conversion_provider() {
         let cuda_err = CudaError::Driver {
             op: "cuMemAlloc",
-            code: 2,
+            code: 999,
             msg: "out of memory".to_string(),
         };
         let vram_err: VramError = cuda_err.into();
@@ -97,7 +97,7 @@ mod tests {
         match vram_err {
             VramError::Provider(msg) => {
                 assert!(msg.contains("cuMemAlloc"));
-                assert!(msg.contains("CUresult=2"));
+                assert!(msg.contains("CUresult=999"));
             }
             _ => panic!("Expected VramError::Provider"),
         }
