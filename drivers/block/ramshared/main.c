@@ -58,16 +58,6 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 
 	pci_set_master(pdev);
 
-	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-	if (ret) {
-		dev_warn(&pdev->dev, "64-bit DMA failed, attempting 32-bit DMA\n");
-		ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
-		if (ret) {
-			dev_err(&pdev->dev, "no usable DMA configuration\n");
-			goto err_disable_pci;
-		}
-	}
-
 	ret = pci_request_mem_regions(pdev, RAMSHARED_DRIVER_NAME);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to claim PCIe memory regions\n");

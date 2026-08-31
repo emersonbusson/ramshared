@@ -16,6 +16,7 @@ int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 {
 	int bar = 0;
 	resource_size_t bar_start, bar_len;
+	int ret;
 
 	if (!rs_dev || !pdev)
 		return -EINVAL;
@@ -25,6 +26,17 @@ int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 
 	if (!bar_start || bar_len == 0) {
 		dev_err(&pdev->dev, "invalid PCIe BAR0 resource\n");
+		return -ENODEV;
+	}
+
+	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+	if (ret) {
+		dev_warn(&pdev->dev, "64-bit DMA failed, attempting 32-bit DMA\n");
+		ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+	}
+
+	if (ret) {
+		dev_err(&pdev->dev, "no usable DMA configuration\n");
 		return -ENODEV;
 	}
 
