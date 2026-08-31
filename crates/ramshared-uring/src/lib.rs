@@ -259,11 +259,59 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
     }
 }
 
+/// A typed error for io_uring completion queue entries (CQEs) returning negative errnos.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UringError {
+    Again,
+    BadFd,
+    NoMem,
+    Invalid,
+    Canceled,
+    Time,
+    Already,
+    Unknown(i32),
+}
+
+impl std::fmt::Display for UringError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Again => write!(f, "Resource temporarily unavailable (EAGAIN)"),
+            Self::BadFd => write!(f, "Bad file descriptor (EBADF)"),
+            Self::NoMem => write!(f, "Out of memory (ENOMEM)"),
+            Self::Invalid => write!(f, "Invalid argument (EINVAL)"),
+            Self::Canceled => write!(f, "Operation canceled (ECANCELED)"),
+            Self::Time => write!(f, "Timer expired (ETIME)"),
+            Self::Already => write!(f, "Operation already in progress (EALREADY)"),
+            Self::Unknown(code) => write!(f, "Unknown io_uring error code: {code}"),
+        }
+    }
+}
+
+impl std::error::Error for UringError {}
+
+impl UringError {
+    pub fn parse(res: i32) -> Result<i32, Self> {
+        if res >= 0 {
+            return Ok(res);
+        }
+        Err(match -res {
+            libc::EAGAIN => Self::Again,
+            libc::EBADF => Self::BadFd,
+            libc::ENOMEM => Self::NoMem,
+            libc::EINVAL => Self::Invalid,
+            libc::ECANCELED => Self::Canceled,
+            libc::ETIME => Self::Time,
+            libc::EALREADY => Self::Already,
+            other => Self::Unknown(other),
+        })
+    }
+}
+
 /// CQE completion of a ublk command on the ring: carries the `tag` (from `user_data`) and the `result`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UblkCompletion {
     pub tag: u16,
-    pub result: i32,
+    pub result: Result<i32, UringError>,
 }
 
 /// Validates that fixed buffer parameters are aligned to 4096 bytes and that the
@@ -353,7 +401,7 @@ impl UblkFetchRing {
             .completion()
             .map(|cqe| UblkCompletion {
                 tag: cqe.user_data() as u16,
-                result: cqe.result(),
+                result: UringError::parse(cqe.result()),
             })
             .collect()
     }
@@ -426,7 +474,7 @@ impl UblkServer {
             .completion()
             .map(|cqe| UblkCompletion {
                 tag: cqe.user_data() as u16,
-                result: cqe.result(),
+                result: UringError::parse(cqe.result()),
             })
             .collect()
     }
@@ -646,7 +694,7 @@ mod tests {
             .expect("submit regular-file refusal");
         let completions = server.wait_and_drain().expect("drain regular-file refusal");
         assert_eq!(completions.len(), 1);
-        assert!(completions[0].result < 0);
+        assert!(completions[0].result.is_err());
 
         drop(server);
         drop(file);
@@ -667,7 +715,11 @@ mod tests {
             assert!(Instant::now() < deadline, "regular-file CQE deadline");
             std::thread::yield_now();
         };
-        assert!(completions.iter().all(|completion| completion.result < 0));
+        assert!(
+            completions
+                .iter()
+                .all(|completion| completion.result.is_err())
+        );
 
         drop(ring);
         drop(file);
@@ -699,7 +751,7 @@ mod tests {
         let completions = server.wait_and_drain().expect("wait and drain timeout");
         assert_eq!(completions.len(), 1);
         assert_eq!(completions[0].tag, 99);
-        assert_eq!(completions[0].result, -libc::ETIME);
+        assert_eq!(completions[0].result, Err(UringError::Time));
 
         // Simulate Cancellation
         let ts_long = types::Timespec::new().sec(10).nsec(0);
@@ -732,10 +784,10 @@ mod tests {
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].tag, 100);
-        assert_eq!(results[0].result, -libc::ECANCELED);
+        assert_eq!(results[0].result, Err(UringError::Canceled));
 
         assert_eq!(results[1].tag, 101);
-        assert!(results[1].result == 0 || results[1].result == -libc::EALREADY);
+        assert!(results[1].result == Ok(0) || results[1].result == Err(UringError::Already));
 
         drop(server);
         drop(file);
