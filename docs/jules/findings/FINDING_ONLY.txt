@@ -1,0 +1,10 @@
+The requested task asks to "prevent kernel pool memory leaks during unaligned SCSI read/write handling" in `drivers/windows/ramshared/virtdisk.c` and specifically mentions "Ensure intermediate bounce buffers are freed in finally blocks under all error conditions."
+
+However, a thorough analysis of the RamShared `virtdisk.c` and `queue.c` kernel implementation reveals a significant architectural mismatch:
+1. The driver does NOT allocate intermediate bounce buffers via kernel pool APIs (e.g., `ExAllocatePoolWithTag`, `kmalloc`) on a per-request basis during SCSI read/write handling.
+2. Instead, RamShared utilizes a statically allocated shared memory ring with bounded, pre-allocated slots (`RAMSHARED_MAX_IO`). The "bounce" buffer is accessed directly via offsets into the mapped `Q->Data` buffer (e.g., `Q->Data + (SIZE_T)tag * Q->MaxIoBytes` in `QSubmit` and `QCommitAndFetch`). No dynamic memory allocation or freeing occurs per IO request.
+3. C does not have `finally` blocks, and there are no dynamically allocated buffers in the SCSI read/write path that would require a Linux kernel `goto cleanup` idiom or `finally`-like construct to prevent memory leaks.
+4. The LBA bounds checks and parameter parsing are present, but there is no concept of a dynamically allocated "unaligned" intermediate bounce buffer in the fast path.
+5. `METHOD_BUFFERED` IOCTLs in this driver rely on the I/O Manager to allocate and free the `SystemBuffer`.
+
+Because the architecture uses a statically sized bounded queue without per-IO dynamic memory allocation, applying a fix to "free intermediate bounce buffers in finally blocks" is an impossible request that contradicts the codebase's existing zero-allocation fast-path design.
