@@ -111,6 +111,9 @@ static void ramshared_pci_remove(struct pci_dev *pdev)
 	if (!rs_dev)
 		return;
 
+	if (test_and_set_bit(RAMSHARED_STATE_REMOVING, &rs_dev->state_flags))
+		return;
+
 	ramshared_queue_cleanup(rs_dev);
 	ramshared_dma_cleanup(rs_dev);
 	pci_release_mem_regions(pdev);

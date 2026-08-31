@@ -136,8 +136,36 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 	return 0;
 }
 
+static int ramshared_bdev_open(struct gendisk *disk, blk_mode_t mode)
+{
+	struct ramshared_device *rs_dev = disk->private_data;
+
+	if (unlikely(!rs_dev))
+		return -ENODEV;
+
+	if (test_bit(RAMSHARED_STATE_REMOVING, &rs_dev->state_flags))
+		return -ENODEV;
+
+	if (test_and_set_bit(RAMSHARED_STATE_OPEN, &rs_dev->state_flags))
+		return -EBUSY;
+
+	return 0;
+}
+
+static void ramshared_bdev_release(struct gendisk *disk)
+{
+	struct ramshared_device *rs_dev = disk->private_data;
+
+	if (unlikely(!rs_dev))
+		return;
+
+	clear_bit(RAMSHARED_STATE_OPEN, &rs_dev->state_flags);
+}
+
 static const struct block_device_operations ramshared_fops = {
 	.owner		= THIS_MODULE,
+	.open		= ramshared_bdev_open,
+	.release	= ramshared_bdev_release,
 	.rw_page	= ramshared_bdev_rw_page,
 };
 

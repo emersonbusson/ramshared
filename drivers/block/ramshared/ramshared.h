@@ -41,6 +41,7 @@ struct ramshared_dma_region {
  * @dma_transfers_total: Diagnostic counter for completed transfers
  * @read_bytes: Total bytes read
  * @write_bytes: Total bytes written
+ * @state_flags: Atomic state flags (open, removing)
  */
 struct ramshared_device {
 	struct gendisk			*disk;
@@ -52,7 +53,11 @@ struct ramshared_device {
 	atomic64_t			dma_transfers_total;
 	atomic64_t			read_bytes;
 	atomic64_t			write_bytes;
+	unsigned long			state_flags;
 };
+
+#define RAMSHARED_STATE_OPEN		0
+#define RAMSHARED_STATE_REMOVING	1
 
 int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev);
 void ramshared_dma_cleanup(struct ramshared_device *rs_dev);
