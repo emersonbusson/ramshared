@@ -29,14 +29,26 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 {
 	struct ramshared_device *rs_dev;
 	int ret;
+	resource_size_t bar_len;
+	u64 requested_bytes;
 
 	dev_info(&pdev->dev, "probing RamShared hardware (capacity=%lu MiB)\n",
 		 capacity_mb);
 
-	if (capacity_mb == 0 || capacity_mb > (1UL << 20)) {
-		dev_err(&pdev->dev, "invalid capacity_mb parameter: %lu\n",
+	/* Max capacity is 1 TiB (1048576 MiB) */
+	if (capacity_mb == 0 || capacity_mb > 1048576UL) {
+		dev_err(&pdev->dev, "invalid capacity_mb parameter: %lu (must be > 0 and <= 1048576 MiB)\n",
 			capacity_mb);
 		return -EINVAL;
+	}
+
+	requested_bytes = (u64)capacity_mb * 1024 * 1024;
+	bar_len = pci_resource_len(pdev, 0);
+
+	if (requested_bytes > bar_len) {
+		dev_err(&pdev->dev, "requested capacity (%llu bytes) exceeds PCIe BAR0 aperture (%llu bytes)\n",
+			(unsigned long long)requested_bytes, (unsigned long long)bar_len);
+		return -ERANGE;
 	}
 
 	rs_dev = devm_kzalloc(&pdev->dev, sizeof(*rs_dev), GFP_KERNEL);
