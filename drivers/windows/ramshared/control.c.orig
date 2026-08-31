@@ -103,7 +103,6 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	PIO_STACK_LOCATION irpSp;
 	ULONG code;
 	ULONG inLen;
-	ULONG outLen;
 	PVOID buf;
 	NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
 	ULONG_PTR info = 0;
@@ -115,15 +114,7 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	irpSp = IoGetCurrentIrpStackLocation(Irp);
 	code = irpSp->Parameters.DeviceIoControl.IoControlCode;
 	inLen = irpSp->Parameters.DeviceIoControl.InputBufferLength;
-	outLen = irpSp->Parameters.DeviceIoControl.OutputBufferLength;
 	buf = Irp->AssociatedIrp.SystemBuffer;
-
-	if (inLen > 4 * 1024 * 1024 || outLen > 4 * 1024 * 1024) {
-		Irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
-		Irp->IoStatus.Information = 0;
-		IoCompleteRequest(Irp, IO_NO_INCREMENT);
-		return STATUS_INVALID_PARAMETER;
-	}
 
 	switch (code) {
 	case IOCTL_RAMSHARED_REGISTER_QUEUE:
