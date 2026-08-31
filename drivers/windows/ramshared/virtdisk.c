@@ -330,6 +330,128 @@ VdHandleReportLuns(_Inout_ PSCSI_REQUEST_BLOCK Srb, _In_ BOOLEAN Present)
 }
 
 static BOOLEAN
+VdHandleModeSense(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
+{
+	UCHAR response[64];
+	ULONG responseLen;
+	ULONG transferLen;
+	ULONG allocationLen;
+	UCHAR page;
+	BOOLEAN is10;
+	ULONG64 blocks;
+	ULONG64 cyl;
+	UCHAR hdLength;
+	ULONG c;
+
+	if (Disk == NULL || Disk->block_size == 0 || Disk->size_bytes == 0) {
+		Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+		return TRUE;
+	}
+
+	RtlZeroMemory(response, sizeof(response));
+	is10 = (Srb->Cdb[0] == 0x5A) ? TRUE : FALSE; /* SCSIOP_MODE_SENSE10 */
+	page = Srb->Cdb[2] & 0x3F;
+
+	if (is10) {
+		allocationLen = ((ULONG)Srb->Cdb[7] << 8) | (ULONG)Srb->Cdb[8];
+		hdLength = 8;
+	} else {
+		allocationLen = Srb->Cdb[4];
+		hdLength = 4;
+	}
+
+	responseLen = hdLength;
+	blocks = Disk->size_bytes / Disk->block_size;
+	/* Assume standard LBA translation: 255 heads, 63 sectors per track */
+	cyl = blocks / (255 * 63);
+
+	/* Page 0x03: Format Device Page */
+	if (page == 0x03 || page == 0x3F) {
+		response[responseLen++] = 0x03;
+		response[responseLen++] = 0x16; /* Page Length = 22 */
+		response[responseLen++] = 0; /* Tracks per Zone MSB */
+		response[responseLen++] = 255; /* Tracks per Zone LSB */
+		response[responseLen++] = 0; /* Alt Sectors per Zone MSB */
+		response[responseLen++] = 0; /* Alt Sectors per Zone LSB */
+		response[responseLen++] = 0; /* Alt Tracks per Zone MSB */
+		response[responseLen++] = 0; /* Alt Tracks per Zone LSB */
+		response[responseLen++] = 0; /* Alt Tracks per LU MSB */
+		response[responseLen++] = 0; /* Alt Tracks per LU LSB */
+		response[responseLen++] = 0; /* Sectors per Track MSB */
+		response[responseLen++] = 63; /* Sectors per Track LSB */
+		response[responseLen++] = (UCHAR)((Disk->block_size >> 8) & 0xFF);
+		response[responseLen++] = (UCHAR)(Disk->block_size & 0xFF);
+		response[responseLen++] = 0; /* Interleave MSB */
+		response[responseLen++] = 0; /* Interleave LSB */
+		response[responseLen++] = 0; /* Track Skew Factor MSB */
+		response[responseLen++] = 0; /* Track Skew Factor LSB */
+		response[responseLen++] = 0; /* Cylinder Skew Factor MSB */
+		response[responseLen++] = 0; /* Cylinder Skew Factor LSB */
+		response[responseLen++] = 0; /* Flags */
+		response[responseLen++] = 0; /* Reserved */
+		response[responseLen++] = 0; /* Reserved */
+		response[responseLen++] = 0; /* Reserved */
+	}
+
+	/* Page 0x04: Rigid Disk Geometry Page */
+	if (page == 0x04 || page == 0x3F) {
+		/* Clamp cylinders to 24-bit max */
+		c = (cyl > 0xFFFFFF) ? 0xFFFFFF : (ULONG)cyl;
+		response[responseLen++] = 0x04;
+		response[responseLen++] = 0x16; /* Page Length = 22 */
+		response[responseLen++] = (UCHAR)((c >> 16) & 0xFF);
+		response[responseLen++] = (UCHAR)((c >> 8) & 0xFF);
+		response[responseLen++] = (UCHAR)(c & 0xFF);
+		response[responseLen++] = 255; /* Heads */
+		response[responseLen++] = 0; /* Starting Cyl Write Precomp */
+		response[responseLen++] = 0;
+		response[responseLen++] = 0;
+		response[responseLen++] = 0; /* Starting Cyl Reduced Write Current */
+		response[responseLen++] = 0;
+		response[responseLen++] = 0;
+		response[responseLen++] = 0; /* Drive Step Rate MSB */
+		response[responseLen++] = 0; /* Drive Step Rate LSB */
+		response[responseLen++] = 0; /* Landing Zone Cylinder */
+		response[responseLen++] = 0;
+		response[responseLen++] = 0;
+		response[responseLen++] = 0; /* RPL */
+		response[responseLen++] = 0; /* Rotational Offset */
+		response[responseLen++] = 0; /* Reserved */
+		response[responseLen++] = 0; /* Medium Rotation Rate MSB (0 = Non-rotating) */
+		response[responseLen++] = 1; /* Medium Rotation Rate LSB (1 = Non-rotating) */
+		response[responseLen++] = 0; /* Reserved */
+		response[responseLen++] = 0; /* Reserved */
+	}
+
+	if (responseLen == hdLength) {
+		Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+		return TRUE;
+	}
+
+	if (is10) {
+		response[0] = (UCHAR)(((responseLen - 2) >> 8) & 0xFF);
+		response[1] = (UCHAR)((responseLen - 2) & 0xFF);
+		/* response[2..7] already zeroed (Medium Type, DSP, Block Descriptor Length) */
+	} else {
+		response[0] = (UCHAR)(responseLen - 1);
+		/* response[1..3] already zeroed */
+	}
+
+	transferLen = min(Srb->DataTransferLength, allocationLen);
+	transferLen = min(transferLen, responseLen);
+	if (transferLen != 0 && Srb->DataBuffer == NULL) {
+		Srb->SrbStatus = SRB_STATUS_ERROR;
+		return TRUE;
+	}
+	if (transferLen != 0)
+		RtlCopyMemory(Srb->DataBuffer, response, transferLen);
+
+	Srb->DataTransferLength = transferLen;
+	Srb->SrbStatus = SRB_STATUS_SUCCESS;
+	return TRUE;
+}
+
+static BOOLEAN
 VdHandleReadCapacity(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
 	UCHAR response[32];
@@ -417,10 +539,8 @@ VdTranslateSrbNoDisk(_In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 		break;
 	case SCSIOP_MODE_SENSE:
 	case SCSIOP_MODE_SENSE10:
-		Srb->SrbStatus = SRB_STATUS_SUCCESS;
-		if (Srb->DataBuffer && Srb->DataTransferLength >= 4) {
-			RtlZeroMemory(Srb->DataBuffer, Srb->DataTransferLength);
-		}
+		/* Not ready, remain not-present */
+		Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
 		break;
 	case 0xA0: /* REPORT LUNS — no LUN until CREATE_DISK */
 		VdHandleReportLuns(Srb, FALSE);
@@ -467,10 +587,7 @@ VdTranslateSrb(
 
 	case SCSIOP_MODE_SENSE:
 	case SCSIOP_MODE_SENSE10:
-		Srb->SrbStatus = SRB_STATUS_SUCCESS;
-		if (Srb->DataBuffer && Srb->DataTransferLength >= 4) {
-			RtlZeroMemory(Srb->DataBuffer, Srb->DataTransferLength);
-		}
+		(void)VdHandleModeSense(Disk, Srb);
 		break;
 
 	case SCSIOP_READ:
