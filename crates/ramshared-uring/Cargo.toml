@@ -18,3 +18,6 @@ libc = "0.2"
 [lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+
+[dev-dependencies]
+libc = "0.2"
