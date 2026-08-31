@@ -31,6 +31,12 @@ int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 	rs_dev->dma.pci_addr = bar_start;
 	rs_dev->dma.size = min_t(size_t, bar_len, rs_dev->capacity_bytes);
 
+	if (rs_dev->capacity_bytes > rs_dev->dma.size) {
+		dev_info(&pdev->dev, "clamping capacity to PCIe BAR size: %zu bytes\n",
+			 rs_dev->dma.size);
+		rs_dev->capacity_bytes = rs_dev->dma.size;
+	}
+
 	/* Map PCIe VRAM BAR using Write-Combining for peak throughput */
 	rs_dev->dma.cpu_addr = devm_ioremap_wc(&pdev->dev, rs_dev->dma.pci_addr,
 					       rs_dev->dma.size);
