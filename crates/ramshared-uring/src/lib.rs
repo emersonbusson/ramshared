@@ -17,7 +17,10 @@ use io_uring::{IoUring, opcode, squeue, types};
 /// submission queue entry, verifying that the structure is strictly 64 bytes.
 /// This ensures ABI compatibility and that `user_data` aligns with the C kernel.
 const _: () = {
-    assert!(std::mem::size_of::<squeue::Entry>() == 64, "io_uring_sqe struct layout mismatch");
+    assert!(
+        std::mem::size_of::<squeue::Entry>() == 64,
+        "io_uring_sqe struct layout mismatch"
+    );
 };
 
 /// Returns the system page size (`sysconf(_SC_PAGESIZE)`), falling back to 4096.
@@ -769,12 +772,17 @@ mod tests {
 
     #[test]
     fn test_io_uring_sqe_user_data_offset() {
-        let e = io_uring::opcode::Nop::new().build().user_data(0xDEADBEEFCAFEBABEu64);
+        let e = io_uring::opcode::Nop::new()
+            .build()
+            .user_data(0xDEADBEEFCAFEBABEu64);
         let e_ptr = &e as *const _ as *const u8;
         // SAFETY: The Entry is guaranteed to be 64 bytes by the compile-time assertion.
         let slice = unsafe { std::slice::from_raw_parts(e_ptr, 64) };
         let expected = 0xDEADBEEFCAFEBABEu64.to_ne_bytes();
         let actual = &slice[32..40];
-        assert_eq!(actual, expected, "user_data must be exactly at offset 32 to match io_uring_sqe");
+        assert_eq!(
+            actual, expected,
+            "user_data must be exactly at offset 32 to match io_uring_sqe"
+        );
     }
 }
