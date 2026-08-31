@@ -30,6 +30,7 @@ typedef struct _RAMSHARED_ADAPTER_EXT {
 } RAMSHARED_ADAPTER_EXT, *PRAMSHARED_ADAPTER_EXT;
 
 DRIVER_INITIALIZE DriverEntry;
+DRIVER_UNLOAD EvtDriverUnload;
 
 /* Virtual miniport FindAdapter has LowerDevice (PVIRTUAL_HW_FIND_ADAPTER). */
 ULONG
