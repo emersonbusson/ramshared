@@ -472,7 +472,19 @@
       "freshnessDays": 90,
       "verification": { "state": "unverified" },
       "registeredAt": "2026-08-11T15:15:12Z"
-    }
+    },
+    {
+        "id": "jules-findings",
+        "pattern": "docs/jules/findings/*.md",
+        "owner": "wsl2-reliability",
+        "canonicalSource": "docs/jules/findings/TASK_006_FINDINGS.md",
+        "lifecycle": "historical",
+        "freshnessDays": null,
+        "verification": {
+              "state": "unverified"
+        },
+        "registeredAt": "2026-08-31T02:08:59.435Z"
+  }
   ],
   "exclusions": [
     {
