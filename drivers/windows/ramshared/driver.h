@@ -18,6 +18,8 @@
  */
 #define RAMSHARED_MATRIX_MAX_IO (256u * 1024u)
 
+#pragma pack(push, 8)
+
 /* Device extension for the StorPort adapter (virtual). */
 typedef struct _RAMSHARED_ADAPTER_EXT {
 	PVOID StorPortExt; /* reserved for StorPort-owned memory */
@@ -25,9 +27,11 @@ typedef struct _RAMSHARED_ADAPTER_EXT {
 	struct _RAMSHARED_QUEUE *Queue;
 	PDEVICE_OBJECT ControlDevice;
 	UNICODE_STRING ControlLink;
-	BOOLEAN QueueRegistered;
-	BOOLEAN AdapterStopped;
+	UINT8 QueueRegistered;
+	UINT8 AdapterStopped;
 } RAMSHARED_ADAPTER_EXT, *PRAMSHARED_ADAPTER_EXT;
+
+#pragma pack(pop)
 
 DRIVER_INITIALIZE DriverEntry;
 
