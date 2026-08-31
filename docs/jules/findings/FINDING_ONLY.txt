@@ -1,0 +1,14 @@
+Title: Architectural Mismatch: Null Pointer Checks on Safe Rust Function Pointers
+
+Task: validate CUDA driver function pointer table non-nullness before invocation
+Target: crates/ramshared-cuda/src/ffi.rs
+
+Analysis:
+The task requests adding C-style guard clauses to verify that driver FFI function pointers (like `FnInit`, `FnDeviceGet`) are non-null before invocation. However, in Rust, the `unsafe extern "C" fn` types defined in `ffi.rs` (e.g., `pub type FnInit = unsafe extern "C" fn(c_uint) -> CuResult;`) are intrinsically non-null by the language's type system, acting as safe references to executable memory.
+
+Attempting to apply raw null pointer checks to these types is an architectural mismatch. The Rust compiler enforces that a function pointer cannot be instantiated with a null address safely. To check them for null, one would either have to degrade the safe function pointer types to raw `*const c_void` pointers (forcing unsafe casts on every dispatch) or use `Option<fn...>` (which alters the struct size and is redundant).
+
+Furthermore, the non-null invariant is already correctly enforced at the boundary during library loading in `driver.rs`. The `load_sym` function explicitly verifies that the resolved raw symbol is not null (`if sym.is_null() { return Err(...); }`) before performing a safe transmute into the non-null function pointer type.
+
+Conclusion:
+Do not degrade safe Rust APIs by forcing `*mut T` signatures or raw pointer checks on types that natively guarantee non-nullness. The requested modification is rejected to preserve the integrity of the Rust type system and avoid useless pointer null checks.
