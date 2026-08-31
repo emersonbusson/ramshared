@@ -172,10 +172,7 @@ fn run_server_loop(
                 return Ok(backend); // teardown: STOP/DEL_DEV aborted the FETCH
             }
             if completion.result < 0 {
-                return Err(io::Error::other(format!(
-                    "FETCH failed: {}",
-                    completion.result
-                )));
+                return Err(io::Error::from_raw_os_error(-completion.result));
             }
 
             // result == UBLK_IO_RES_OK (0): there is a request ready at the tag.
@@ -347,10 +344,7 @@ fn run_ring_owner<S: QueueServer>(
                     return Ok(()); // teardown: STOP/DEL_DEV aborted the FETCH
                 }
                 if completion.result < 0 {
-                    return Err(io::Error::other(format!(
-                        "FETCH failed: {}",
-                        completion.result
-                    )));
+                    return Err(io::Error::from_raw_os_error(-completion.result));
                 }
                 if dispatch_request(&mut server, completion.tag, &work_tx, &mut buf_pool)? {
                     in_flight += 1;
@@ -397,7 +391,7 @@ fn dispatch_request<S: QueueServer>(
     let req = match iod.to_block_request(tag) {
         Ok(req) => req,
         Err(_) => {
-            server.commit_and_fetch(tag, -22)?; // EINVAL (no buffer taken from the pool)
+            server.commit_and_fetch(tag, EINVAL)?; // EINVAL (no buffer taken from the pool)
             return Ok(false);
         }
     };
@@ -414,7 +408,7 @@ fn dispatch_request<S: QueueServer>(
         let tag_buf = server.buffer_mut(tag)?;
         if len > tag_buf.len() {
             buf_pool.push(buf); // returns to pool before rejecting
-            server.commit_and_fetch(tag, -22)?; // EINVAL
+            server.commit_and_fetch(tag, EINVAL)?; // EINVAL
             return Ok(false);
         }
         buf.copy_from_slice(&tag_buf[..len]);
