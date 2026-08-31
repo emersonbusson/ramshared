@@ -240,14 +240,15 @@ int ramshared_queue_init(struct ramshared_device *rs_dev,
 
 void ramshared_queue_cleanup(struct ramshared_device *rs_dev)
 {
-	if (!rs_dev)
+	if (unlikely(!rs_dev))
 		return;
 
-	if (rs_dev->disk) {
+	if (likely(rs_dev->disk)) {
 		del_gendisk(rs_dev->disk);
-		put_disk(rs_dev->disk);
+		blk_cleanup_disk(rs_dev->disk);
 		rs_dev->disk = NULL;
 	}
 
-	blk_mq_free_tag_set(&rs_dev->tag_set);
+	if (likely(rs_dev->tag_set.tags))
+		blk_mq_free_tag_set(&rs_dev->tag_set);
 }
