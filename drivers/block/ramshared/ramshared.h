@@ -8,6 +8,14 @@
 #include <linux/pci.h>
 #include <linux/mutex.h>
 #include <linux/atomic.h>
+#include <linux/ioctl.h>
+
+#define RAMSHARED_IOC_MAGIC		'R'
+#define RAMSHARED_IOC_REGISTER_QUEUE	_IOW(RAMSHARED_IOC_MAGIC, 0, int)
+#define RAMSHARED_IOC_UNREGISTER_QUEUE	_IO(RAMSHARED_IOC_MAGIC, 1)
+#define RAMSHARED_IOC_COMMIT_AND_FETCH	_IOWR(RAMSHARED_IOC_MAGIC, 2, int)
+#define RAMSHARED_IOC_CREATE_DISK	_IOW(RAMSHARED_IOC_MAGIC, 3, int)
+#define RAMSHARED_IOC_DESTROY_DISK	_IO(RAMSHARED_IOC_MAGIC, 4)
 
 #define RAMSHARED_DRIVER_NAME		"ramshared"
 #define RAMSHARED_DRIVER_VERSION	"0.9.0-beta.2"
