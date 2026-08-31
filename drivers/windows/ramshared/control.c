@@ -116,6 +116,14 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	inLen = irpSp->Parameters.DeviceIoControl.InputBufferLength;
 	buf = Irp->AssociatedIrp.SystemBuffer;
 
+	status = IoValidateDeviceIoControlAccess(Irp, FILE_READ_ACCESS | FILE_WRITE_ACCESS);
+	if (!NT_SUCCESS(status)) {
+		Irp->IoStatus.Status = status;
+		Irp->IoStatus.Information = 0;
+		IoCompleteRequest(Irp, IO_NO_INCREMENT);
+		return status;
+	}
+
 	switch (code) {
 	case IOCTL_RAMSHARED_REGISTER_QUEUE:
 		if (inLen != sizeof(RAMSHARED_REGISTER) || buf == NULL) {
