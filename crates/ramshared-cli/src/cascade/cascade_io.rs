@@ -3485,7 +3485,10 @@ mod tests {
             "non-zero child must fail",
         );
         let message = error.to_string();
-        assert!(message.contains("12") && message.contains("fixture failure"), "{message}");
+        assert!(
+            message.contains("12") && message.contains("fixture failure"),
+            "{message}"
+        );
 
         let signal = fixture.program("signal", "#!/bin/sh\nkill -TERM $$\n");
         let error = error_from(
@@ -5569,9 +5572,18 @@ mod tests {
         assert!(!canonical_invocation_id("short"));
         assert!(!canonical_invocation_id("0123456789abcdef0123456789abcdeg"));
 
-        assert_eq!(device_kind_for_path("/dev/nbd0"), Some(ManagedDeviceKind::Nbd));
-        assert_eq!(device_kind_for_path("/dev/ublkb0"), Some(ManagedDeviceKind::Ublk));
-        assert_eq!(device_kind_for_path("/dev/zram0"), Some(ManagedDeviceKind::Zram));
+        assert_eq!(
+            device_kind_for_path("/dev/nbd0"),
+            Some(ManagedDeviceKind::Nbd)
+        );
+        assert_eq!(
+            device_kind_for_path("/dev/ublkb0"),
+            Some(ManagedDeviceKind::Ublk)
+        );
+        assert_eq!(
+            device_kind_for_path("/dev/zram0"),
+            Some(ManagedDeviceKind::Zram)
+        );
         assert_eq!(device_kind_for_path("/dev/sda"), None);
 
         assert_eq!(command_label("test", &["a", "b"]), "test a b");

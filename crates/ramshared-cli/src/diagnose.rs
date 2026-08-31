@@ -332,15 +332,30 @@ mod tests {
         let input = r#"{"t":10,"flag":"partial","page_io_s":15000,"vram_outros":1024}
 {"t":20,"flag":"stuck_slice","demotes":2,"vram_other":2048}
 {"t":30,"flag":"unaccounted","swap_used":5000000000,"tenant":"tenant-a","slice":1}"#;
-        let d = diagnose_jsonl(input).unwrap();
+        let d = match diagnose_jsonl(input) {
+            Ok(d) => d,
+            Err(e) => panic!("diagnose failed: {e}"),
+        };
         assert_eq!(d.samples, 3);
         assert!(d.flags.contains(&"partial".to_string()));
         assert!(d.flags.contains(&"unaccounted".to_string()));
         assert!(d.flags.contains(&"stuck_slice".to_string()));
         assert_eq!(d.max_page_io_s, Some(15000));
-        assert!(d.recommendations.iter().any(|r| r.contains("Page I/O is high")));
-        assert!(d.recommendations.iter().any(|r| r.contains("A slice was stuck draining")));
-        assert!(d.recommendations.iter().any(|r| r.contains("Swap usage exceeded")));
+        assert!(
+            d.recommendations
+                .iter()
+                .any(|r| r.contains("Page I/O is high"))
+        );
+        assert!(
+            d.recommendations
+                .iter()
+                .any(|r| r.contains("A slice was stuck draining"))
+        );
+        assert!(
+            d.recommendations
+                .iter()
+                .any(|r| r.contains("Swap usage exceeded"))
+        );
         let json_str = render_json(&d);
         assert!(json_str.contains("stuck_slice"));
         print_text(&d);
