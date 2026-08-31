@@ -1,0 +1,6 @@
+EVIDENCE FOR FINDING_ONLY:
+The task requested to "prevent integer overflow in IOCTL memory allocation size calculation" by using `RtlULongLongAdd` before allocating kernel pool memory in `drivers/windows/ramshared/control.c`.
+
+However, the file `drivers/windows/ramshared/control.c` utilizes `METHOD_BUFFERED` IOCTLs exclusively. In `METHOD_BUFFERED` IOCTLs, the Windows I/O Manager automatically handles the allocation of the `SystemBuffer` based on `InputBufferLength` and `OutputBufferLength`. The driver itself does not manually allocate kernel pool memory using `ExAllocatePool` or similar APIs within the IOCTL dispatch routine (`CtlDispatchDeviceControl`).
+
+Furthermore, there are no manual buffer allocations in `control.c` that could suffer from integer overflows related to IOCTL memory size calculations. Therefore, the requested modification is not possible because the architectural pattern described in the task (manual allocation inside the IOCTL handler) does not exist in this StorPort virtual miniport control device. The I/O manager is responsible for these allocations.
