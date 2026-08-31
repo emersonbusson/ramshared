@@ -31,7 +31,7 @@ typedef int (*cuMemcpyDtoH_t)(void*, uint64_t, size_t);
 
 static double get_time_sec(void) {
 	struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
+	clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
 	return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 
