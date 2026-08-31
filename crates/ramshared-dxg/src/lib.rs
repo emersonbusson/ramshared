@@ -242,6 +242,11 @@ fn enumerate(file: &File) -> Result<Vec<uapi::AdapterInfo>, DxgError> {
     ioctl_mut(file, uapi::ENUM_ADAPTERS2_IOCTL, &mut request)?;
     validate_enum(&request, Some(infos.len()))?;
     infos.truncate(request.num_adapters as usize);
+    for info in &infos {
+        if info.adapter_handle == 0 || (info.adapter_handle & 0x8000_0000) != 0 {
+            return Err(DxgError::Malformed("adapter_handle"));
+        }
+    }
     Ok(infos)
 }
 
@@ -262,6 +267,8 @@ fn validate_enum(request: &uapi::EnumAdapters2, capacity: Option<usize>) -> Resu
 fn validate_query(query: &uapi::QueryVideoMemoryInfo) -> Result<(), DxgError> {
     if query.process != 0 {
         Err(DxgError::Malformed("process"))
+    } else if query.adapter == 0 || (query.adapter & 0x8000_0000) != 0 {
+        Err(DxgError::Malformed("adapter"))
     } else {
         Ok(())
     }
@@ -492,6 +499,7 @@ mod tests {
 
         let mut query = super::uapi::QueryVideoMemoryInfo {
             process: 1,
+            adapter: 1,
             ..Default::default()
         };
         assert_eq!(
@@ -500,5 +508,15 @@ mod tests {
         );
         query.process = 0;
         assert_eq!(super::validate_query(&query), Ok(()));
+        query.adapter = 0;
+        assert_eq!(
+            super::validate_query(&query),
+            Err(super::DxgError::Malformed("adapter"))
+        );
+        query.adapter = 0x8000_0001;
+        assert_eq!(
+            super::validate_query(&query),
+            Err(super::DxgError::Malformed("adapter"))
+        );
     }
 }
