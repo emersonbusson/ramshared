@@ -12,6 +12,7 @@
 #include <string.h>
 #include <time.h>
 #include <dlfcn.h>
+#include <sysexits.h>
 
 #define DEFAULT_CHUNK_MIB 256
 #define MIB_TO_BYTES(mib) ((size_t)(mib) * 1024 * 1024)
@@ -54,9 +55,11 @@ int main(int argc, char **argv) {
 	int chunk_mib = DEFAULT_CHUNK_MIB;
 	if (argc > 1) {
 		int val = atoi(argv[1]);
-		if (val > 0 && val <= 4096) {
-			chunk_mib = val;
+		if (val <= 0 || val > 4096) {
+			fprintf(stderr, "[-] Error: Invalid chunk_mib argument (must be 1-4096).\n");
+			return EX_USAGE;
 		}
+		chunk_mib = val;
 	}
 	size_t chunk_bytes = MIB_TO_BYTES(chunk_mib);
 
@@ -67,7 +70,7 @@ int main(int argc, char **argv) {
 	void *lib = load_cuda_driver();
 	if (!lib) {
 		fprintf(stderr, "[-] Error: CUDA driver library (libcuda.so.1) not found.\n");
-		return 1;
+		return EX_UNAVAILABLE;
 	}
 
 	cuInit_t cuInit = (cuInit_t)dlsym(lib, "cuInit");
@@ -86,13 +89,13 @@ int main(int argc, char **argv) {
 	if (!cuInit || !cuCtxCreate || !cuMemcpyHtoD || !cuMemcpyDtoH) {
 		fprintf(stderr, "[-] Error: Required CUDA symbols missing in library.\n");
 		dlclose(lib);
-		return 1;
+		return EX_UNAVAILABLE;
 	}
 
 	if (cuInit(0) != 0) {
 		fprintf(stderr, "[-] Error: cuInit failed.\n");
 		dlclose(lib);
-		return 1;
+		return EX_UNAVAILABLE;
 	}
 
 	int dev = 0;
@@ -105,7 +108,7 @@ int main(int argc, char **argv) {
 	if (cuCtxCreate(&ctx, 0, dev) != 0) {
 		fprintf(stderr, "[-] Error: cuCtxCreate failed.\n");
 		dlclose(lib);
-		return 1;
+		return EX_UNAVAILABLE;
 	}
 
 	size_t free_b = 0, total_b = 0;
@@ -119,7 +122,7 @@ int main(int argc, char **argv) {
 		fprintf(stderr, "[-] Error: cuMemHostAlloc failed (%d MiB).\n", chunk_mib);
 		cuCtxDestroy(ctx);
 		dlclose(lib);
-		return 1;
+		return EX_OSERR;
 	}
 	memset(host_pinned, 0xA5, chunk_bytes);
 
@@ -130,7 +133,7 @@ int main(int argc, char **argv) {
 		cuMemFreeHost(host_pinned);
 		cuCtxDestroy(ctx);
 		dlclose(lib);
-		return 1;
+		return EX_OSERR;
 	}
 
 	// 1. Direct DMA Host -> VRAM (Push)
@@ -166,5 +169,5 @@ int main(int argc, char **argv) {
 	dlclose(lib);
 
 	printf("=================================================================\n");
-	return match ? 0 : 1;
+	return match ? EX_OK : EX_OSERR;
 }
