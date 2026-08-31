@@ -255,6 +255,9 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 	HW_INITIALIZATION_DATA hw;
 	NTSTATUS status;
 
+	if (!RegistryPath || !RegistryPath->Buffer || RegistryPath->Length == 0)
+		return STATUS_INVALID_PARAMETER;
+
 	RtlZeroMemory(&hw, sizeof(hw));
 	hw.HwInitializationDataSize = sizeof(HW_INITIALIZATION_DATA);
 	hw.AdapterInterfaceType = Internal;
