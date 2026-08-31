@@ -12,9 +12,11 @@
 #include <string.h>
 #include <time.h>
 #include <dlfcn.h>
+#include <errno.h>
 
 #define DEFAULT_CHUNK_MIB 256
 #define MIB_TO_BYTES(mib) ((size_t)(mib) * 1024 * 1024)
+#define PAGE_ALIGNMENT 4096
 
 typedef int (*cuInit_t)(unsigned int);
 typedef int (*cuDeviceGet_t)(int*, int);
@@ -24,8 +26,8 @@ typedef int (*cuCtxDestroy_t)(void*);
 typedef int (*cuMemGetInfo_t)(size_t*, size_t*);
 typedef int (*cuMemAlloc_t)(uint64_t*, size_t);
 typedef int (*cuMemFree_t)(uint64_t);
-typedef int (*cuMemHostAlloc_t)(void**, size_t, unsigned int);
-typedef int (*cuMemFreeHost_t)(void*);
+typedef int (*cuMemHostRegister_t)(void*, size_t, unsigned int);
+typedef int (*cuMemHostUnregister_t)(void*);
 typedef int (*cuMemcpyHtoD_t)(uint64_t, const void*, size_t);
 typedef int (*cuMemcpyDtoH_t)(void*, uint64_t, size_t);
 
@@ -52,11 +54,21 @@ static void *load_cuda_driver(void) {
 
 int main(int argc, char **argv) {
 	int chunk_mib = DEFAULT_CHUNK_MIB;
+	int ret = 0;
+	int match = 0;
+	void *lib = NULL;
+	void *ctx = NULL;
+	void *host_pinned = NULL;
+	void *read_pinned = NULL;
+	uint64_t dev_ptr = 0;
+
 	if (argc > 1) {
 		int val = atoi(argv[1]);
-		if (val > 0 && val <= 4096) {
-			chunk_mib = val;
+		if (val <= 0 || val > 4096) {
+			fprintf(stderr, "[-] Error: Invalid chunk_mib (%d). Must be 1-4096.\n", val);
+			return -ERANGE;
 		}
+		chunk_mib = val;
 	}
 	size_t chunk_bytes = MIB_TO_BYTES(chunk_mib);
 
@@ -64,10 +76,10 @@ int main(int argc, char **argv) {
 	printf("   RamShared Hardware DMA & PCIe Bandwidth Benchmark Tool         \n");
 	printf("=================================================================\n");
 
-	void *lib = load_cuda_driver();
+	lib = load_cuda_driver();
 	if (!lib) {
 		fprintf(stderr, "[-] Error: CUDA driver library (libcuda.so.1) not found.\n");
-		return 1;
+		return -ENODEV;
 	}
 
 	cuInit_t cuInit = (cuInit_t)dlsym(lib, "cuInit");
@@ -78,34 +90,37 @@ int main(int argc, char **argv) {
 	cuMemGetInfo_t cuMemGetInfo = (cuMemGetInfo_t)dlsym(lib, "cuMemGetInfo_v2");
 	cuMemAlloc_t cuMemAlloc = (cuMemAlloc_t)dlsym(lib, "cuMemAlloc_v2");
 	cuMemFree_t cuMemFree = (cuMemFree_t)dlsym(lib, "cuMemFree_v2");
-	cuMemHostAlloc_t cuMemHostAlloc = (cuMemHostAlloc_t)dlsym(lib, "cuMemHostAlloc");
-	cuMemFreeHost_t cuMemFreeHost = (cuMemFreeHost_t)dlsym(lib, "cuMemFreeHost");
+	cuMemHostRegister_t cuMemHostRegister = (cuMemHostRegister_t)dlsym(lib, "cuMemHostRegister");
+	cuMemHostUnregister_t cuMemHostUnregister = (cuMemHostUnregister_t)dlsym(lib, "cuMemHostUnregister");
 	cuMemcpyHtoD_t cuMemcpyHtoD = (cuMemcpyHtoD_t)dlsym(lib, "cuMemcpyHtoD_v2");
 	cuMemcpyDtoH_t cuMemcpyDtoH = (cuMemcpyDtoH_t)dlsym(lib, "cuMemcpyDtoH_v2");
 
-	if (!cuInit || !cuCtxCreate || !cuMemcpyHtoD || !cuMemcpyDtoH) {
+	if (!cuInit || !cuCtxCreate || !cuMemcpyHtoD || !cuMemcpyDtoH || !cuMemHostRegister || !cuMemHostUnregister) {
 		fprintf(stderr, "[-] Error: Required CUDA symbols missing in library.\n");
-		dlclose(lib);
-		return 1;
+		ret = -EOPNOTSUPP;
+		goto err_lib;
 	}
 
 	if (cuInit(0) != 0) {
 		fprintf(stderr, "[-] Error: cuInit failed.\n");
-		dlclose(lib);
-		return 1;
+		ret = -ENODEV;
+		goto err_lib;
 	}
 
 	int dev = 0;
-	cuDeviceGet(&dev, 0);
+	if (cuDeviceGet(&dev, 0) != 0) {
+		fprintf(stderr, "[-] Error: cuDeviceGet failed.\n");
+		ret = -ENODEV;
+		goto err_lib;
+	}
 	char dev_name[256] = {0};
 	cuDeviceGetName(dev_name, sizeof(dev_name), dev);
 	printf("[+] Hardware: %s (PCIe Direct DMA Channel)\n", dev_name);
 
-	void *ctx = NULL;
 	if (cuCtxCreate(&ctx, 0, dev) != 0) {
 		fprintf(stderr, "[-] Error: cuCtxCreate failed.\n");
-		dlclose(lib);
-		return 1;
+		ret = -EBUSY;
+		goto err_lib;
 	}
 
 	size_t free_b = 0, total_b = 0;
@@ -114,57 +129,89 @@ int main(int argc, char **argv) {
 	       free_b / (1024 * 1024), total_b / (1024 * 1024));
 
 	// Allocate Pinned Host Memory
-	void *host_pinned = NULL;
-	if (cuMemHostAlloc(&host_pinned, chunk_bytes, 0) != 0) {
-		fprintf(stderr, "[-] Error: cuMemHostAlloc failed (%d MiB).\n", chunk_mib);
-		cuCtxDestroy(ctx);
-		dlclose(lib);
-		return 1;
+	if (posix_memalign(&host_pinned, PAGE_ALIGNMENT, chunk_bytes) != 0) {
+		fprintf(stderr, "[-] Error: posix_memalign failed for host_pinned (%d MiB).\n", chunk_mib);
+		ret = -ENOMEM;
+		goto err_ctx;
 	}
 	memset(host_pinned, 0xA5, chunk_bytes);
 
+	if (cuMemHostRegister(host_pinned, chunk_bytes, 0) != 0) {
+		fprintf(stderr, "[-] Error: cuMemHostRegister failed for host_pinned.\n");
+		ret = -EFAULT;
+		goto err_host_pinned;
+	}
+
+	if (posix_memalign(&read_pinned, PAGE_ALIGNMENT, chunk_bytes) != 0) {
+		fprintf(stderr, "[-] Error: posix_memalign failed for read_pinned (%d MiB).\n", chunk_mib);
+		ret = -ENOMEM;
+		goto err_unreg_host;
+	}
+	memset(read_pinned, 0x00, chunk_bytes);
+
+	if (cuMemHostRegister(read_pinned, chunk_bytes, 0) != 0) {
+		fprintf(stderr, "[-] Error: cuMemHostRegister failed for read_pinned.\n");
+		ret = -EFAULT;
+		goto err_read_pinned;
+	}
+
 	// Allocate Device VRAM Buffer
-	uint64_t dev_ptr = 0;
 	if (cuMemAlloc(&dev_ptr, chunk_bytes) != 0) {
 		fprintf(stderr, "[-] Error: cuMemAlloc failed (%d MiB).\n", chunk_mib);
-		cuMemFreeHost(host_pinned);
-		cuCtxDestroy(ctx);
-		dlclose(lib);
-		return 1;
+		ret = -ENOMEM;
+		goto err_unreg_read;
 	}
 
 	// 1. Direct DMA Host -> VRAM (Push)
 	printf("[+] Benchmarking Host -> VRAM DMA (%d MiB)...\n", chunk_mib);
 	double t0 = get_time_sec();
-	cuMemcpyHtoD(dev_ptr, host_pinned, chunk_bytes);
+	if (cuMemcpyHtoD(dev_ptr, host_pinned, chunk_bytes) != 0) {
+		fprintf(stderr, "[-] Error: cuMemcpyHtoD failed.\n");
+		ret = -EFAULT;
+		goto err_dev_ptr;
+	}
 	double t1 = get_time_sec();
 	double h2d_speed = (double)chunk_mib / (t1 - t0);
 	printf("[+] H2D PCIe DMA Write: %.2f MiB/s (%.2f GiB/s) in %.4f s\n",
 	       h2d_speed, h2d_speed / 1024.0, t1 - t0);
 
 	// 2. Direct DMA VRAM -> Host (Pull)
-	void *read_pinned = NULL;
-	cuMemHostAlloc(&read_pinned, chunk_bytes, 0);
 	printf("[+] Benchmarking VRAM -> Host DMA (%d MiB)...\n", chunk_mib);
 	t0 = get_time_sec();
-	cuMemcpyDtoH(read_pinned, dev_ptr, chunk_bytes);
+	if (cuMemcpyDtoH(read_pinned, dev_ptr, chunk_bytes) != 0) {
+		fprintf(stderr, "[-] Error: cuMemcpyDtoH failed.\n");
+		ret = -EFAULT;
+		goto err_dev_ptr;
+	}
 	t1 = get_time_sec();
 	double d2h_speed = (double)chunk_mib / (t1 - t0);
 	printf("[+] D2H PCIe DMA Read : %.2f MiB/s (%.2f GiB/s) in %.4f s\n",
 	       d2h_speed, d2h_speed / 1024.0, t1 - t0);
 
 	// 3. Bit-by-bit Verification
-	int match = (memcmp(host_pinned, read_pinned, chunk_bytes) == 0);
+	match = (memcmp(host_pinned, read_pinned, chunk_bytes) == 0);
 	printf("\n[+] Data Integrity Proof: %s\n",
 	       match ? "PASS (100% Bit-Exact Match, Zero Corruption)" : "FAIL");
 
-	// Cleanup
+	if (!match) {
+		ret = -EFAULT;
+	}
+
+err_dev_ptr:
 	cuMemFree(dev_ptr);
-	cuMemFreeHost(host_pinned);
-	cuMemFreeHost(read_pinned);
+err_unreg_read:
+	cuMemHostUnregister(read_pinned);
+err_read_pinned:
+	free(read_pinned);
+err_unreg_host:
+	cuMemHostUnregister(host_pinned);
+err_host_pinned:
+	free(host_pinned);
+err_ctx:
 	cuCtxDestroy(ctx);
+err_lib:
 	dlclose(lib);
 
 	printf("=================================================================\n");
-	return match ? 0 : 1;
+	return ret;
 }
