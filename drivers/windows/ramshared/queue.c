@@ -382,13 +382,15 @@ QSubmit(
 		PIRP irp = Q->PendedFetch;
 		PDRIVER_CANCEL oldc;
 
-		Q->PendedFetch = NULL;
-		KeReleaseSpinLock(&Q->Lock, old);
 		oldc = IoSetCancelRoutine(irp, NULL);
 		if (oldc != NULL) {
+			Q->PendedFetch = NULL;
+			KeReleaseSpinLock(&Q->Lock, old);
 			irp->IoStatus.Status = STATUS_SUCCESS;
 			irp->IoStatus.Information = 0;
 			IoCompleteRequest(irp, IO_NO_INCREMENT);
+		} else {
+			KeReleaseSpinLock(&Q->Lock, old);
 		}
 		ExReleaseRundownProtection(&Q->IoRundown);
 		return STATUS_PENDING;
@@ -633,7 +635,13 @@ QTeardownOnCrash(_Inout_ PRAMSHARED_QUEUE Q)
 
 	KeAcquireSpinLock(&Q->Lock, &old);
 	pending = Q->PendedFetch;
-	Q->PendedFetch = NULL;
+	if (pending) {
+		if (IoSetCancelRoutine(pending, NULL) != NULL) {
+			Q->PendedFetch = NULL;
+		} else {
+			pending = NULL;
+		}
+	}
 	Q->Registered = FALSE;
 	InterlockedExchange(&Q->QState, (LONG)RamQClosing);
 
@@ -657,11 +665,9 @@ QTeardownOnCrash(_Inout_ PRAMSHARED_QUEUE Q)
 	}
 
 	if (pending) {
-		if (IoSetCancelRoutine(pending, NULL) != NULL) {
-			pending->IoStatus.Status = STATUS_DEVICE_NOT_CONNECTED;
-			pending->IoStatus.Information = 0;
-			IoCompleteRequest(pending, IO_NO_INCREMENT);
-		}
+		pending->IoStatus.Status = STATUS_DEVICE_NOT_CONNECTED;
+		pending->IoStatus.Information = 0;
+		IoCompleteRequest(pending, IO_NO_INCREMENT);
 	}
 
 	/* RUNDOWN_UNMAP_AFTER_COPY: wait for in-flight copies before unmap. */
