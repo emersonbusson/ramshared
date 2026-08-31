@@ -59,23 +59,15 @@ fn default_heartbeat_secs() -> u64 {
 #[derive(Debug, PartialEq)]
 pub enum ConfigError {
     Parse(String),
-    Invalid {
-        field: &'static str,
-        value: String,
-        expected: String,
-    },
+    Invalid { field: &'static str, detail: String },
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConfigError::Parse(s) => write!(f, "config parse: {s}"),
-            ConfigError::Invalid {
-                field,
-                value,
-                expected,
-            } => {
-                write!(f, "config invalid {field}: {value} (expected {expected})")
+            ConfigError::Invalid { field, detail } => {
+                write!(f, "config invalid {field}: {detail}")
             }
         }
     }
@@ -96,8 +88,7 @@ impl WinDriveConfig {
         if text.len() > MAX_CONFIG_BYTES {
             return Err(ConfigError::Invalid {
                 field: "config",
-                value: format!("{} bytes", text.len()),
-                expected: format!("<= {MAX_CONFIG_BYTES} bytes"),
+                detail: format!("config exceeds {MAX_CONFIG_BYTES} bytes"),
             });
         }
         let root: Root = toml::from_str(text).map_err(|e| ConfigError::Parse(e.to_string()))?;
@@ -110,8 +101,7 @@ impl WinDriveConfig {
         if buf.len() > MAX_CONFIG_BYTES {
             return Err(ConfigError::Invalid {
                 field: "config",
-                value: format!("{} bytes", buf.len()),
-                expected: format!("<= {MAX_CONFIG_BYTES} bytes"),
+                detail: format!("config exceeds {MAX_CONFIG_BYTES} bytes"),
             });
         }
         let text = std::str::from_utf8(buf).map_err(|e| ConfigError::Parse(e.to_string()))?;
@@ -123,29 +113,25 @@ impl WinDriveConfig {
         if self.block_size != 512 && self.block_size != 4096 {
             return Err(ConfigError::Invalid {
                 field: "block_size",
-                value: self.block_size.to_string(),
-                expected: "512 or 4096".to_string(),
+                detail: format!("must be 512 or 4096, got {}", self.block_size),
             });
         }
         if self.size_bytes < MIN_SIZE_BYTES {
             return Err(ConfigError::Invalid {
                 field: "size_bytes",
-                value: self.size_bytes.to_string(),
-                expected: format!(">= {MIN_SIZE_BYTES} (64 MiB)"),
+                detail: format!("must be >= {MIN_SIZE_BYTES} (64 MiB)"),
             });
         }
         if usize::try_from(self.size_bytes).is_err() {
             return Err(ConfigError::Invalid {
                 field: "size_bytes",
-                value: self.size_bytes.to_string(),
-                expected: "fit in usize on this host".into(),
+                detail: "must fit in usize on this host".into(),
             });
         }
         if !self.size_bytes.is_multiple_of(self.block_size as u64) {
             return Err(ConfigError::Invalid {
                 field: "size_bytes",
-                value: self.size_bytes.to_string(),
-                expected: "multiple of block_size".into(),
+                detail: "must be multiple of block_size".into(),
             });
         }
         if self.queue_depth == 0
@@ -154,51 +140,52 @@ impl WinDriveConfig {
         {
             return Err(ConfigError::Invalid {
                 field: "queue_depth",
-                value: self.queue_depth.to_string(),
-                expected: format!("power of two in 1..={MAX_QUEUE_DEPTH}"),
+                detail: format!(
+                    "must be power of two in 1..={MAX_QUEUE_DEPTH}, got {}",
+                    self.queue_depth
+                ),
             });
         }
         if self.max_io_bytes == 0 || self.max_io_bytes > MAX_IO_BYTES_CAP {
             return Err(ConfigError::Invalid {
                 field: "max_io_bytes",
-                value: self.max_io_bytes.to_string(),
-                expected: format!("non-zero and <= {MAX_IO_BYTES_CAP}"),
+                detail: format!(
+                    "must be non-zero and <= {MAX_IO_BYTES_CAP}, got {}",
+                    self.max_io_bytes
+                ),
             });
         }
         if !self.max_io_bytes.is_multiple_of(self.block_size) {
             return Err(ConfigError::Invalid {
                 field: "max_io_bytes",
-                value: self.max_io_bytes.to_string(),
-                expected: "multiple of block_size".into(),
+                detail: "must be multiple of block_size".into(),
             });
         }
         let data_area = (self.queue_depth as u64)
             .checked_mul(self.max_io_bytes as u64)
             .ok_or_else(|| ConfigError::Invalid {
                 field: "queue_depth",
-                value: "overflow".into(),
-                expected: "queue_depth * max_io_bytes without overflow".into(),
+                detail: "queue_depth * max_io_bytes overflow".into(),
             })?;
         if data_area > MAX_DATA_AREA_BYTES {
             return Err(ConfigError::Invalid {
                 field: "queue_depth",
-                value: data_area.to_string(),
-                expected: format!("<= {MAX_DATA_AREA_BYTES}"),
+                detail: format!(
+                    "queue_depth * max_io_bytes = {data_area} exceeds {MAX_DATA_AREA_BYTES}"
+                ),
             });
         }
         if !is_absolute_path(&self.evidence_path) {
             return Err(ConfigError::Invalid {
                 field: "evidence_path",
-                value: self.evidence_path.to_string_lossy().into_owned(),
-                expected: "an absolute path".into(),
+                detail: "must be an absolute path".into(),
             });
         }
         let letter = self.volume_letter.to_ascii_uppercase();
         if !('D'..='Z').contains(&letter) {
             return Err(ConfigError::Invalid {
                 field: "volume_letter",
-                value: self.volume_letter.to_string(),
-                expected: "D..=Z".into(),
+                detail: format!("must be D..=Z, got {:?}", self.volume_letter),
             });
         }
         if let Some(path) = &self.volume_mount_path {
@@ -213,46 +200,22 @@ impl WinDriveConfig {
             {
                 return Err(ConfigError::Invalid {
                     field: "volume_mount_path",
-                    value: value.clone(),
-                    expected: format!("a child of {prefix}"),
+                    detail: format!("must be a child of {prefix}"),
                 });
             }
         }
         if self.tenant.is_empty() {
             return Err(ConfigError::Invalid {
                 field: "tenant",
-                value: "".into(),
-                expected: "non-empty".into(),
+                detail: "must be non-empty".into(),
             });
         }
         if !(1..=30).contains(&self.broker_ready_timeout_secs) {
             return Err(ConfigError::Invalid {
                 field: "broker_ready_timeout_secs",
-                value: self.broker_ready_timeout_secs.to_string(),
-                expected: "1..=30".into(),
+                detail: "must be in 1..=30".into(),
             });
         }
-
-        let Some(path) = &self.volume_mount_path else {
-            return Ok(());
-        };
-
-        let value = path.to_string_lossy().replace('/', "\\");
-        let prefix = r"C:\ProgramData\RamShared\mounts\";
-        if !value
-            .to_ascii_lowercase()
-            .starts_with(&prefix.to_ascii_lowercase())
-            || value[prefix.len()..].is_empty()
-            || value.contains("..")
-            || value.contains(['\'', ';', '\r', '\n'])
-        {
-            return Err(ConfigError::Invalid {
-                field: "volume_mount_path",
-                value: value.clone(),
-                expected: format!("a child of {prefix}"),
-            });
-        }
-
         Ok(())
     }
 
@@ -636,10 +599,9 @@ volume_mount_path = "C:\\Users\\Public\\lun""#,
         assert!(p.to_string().contains("parse"));
         let i = ConfigError::Invalid {
             field: "f",
-            value: "v".into(),
-            expected: "e".into(),
+            detail: "d".into(),
         };
-        assert!(i.to_string().contains("invalid f: v (expected e)"));
+        assert!(i.to_string().contains("invalid f"));
     }
 
     #[test]

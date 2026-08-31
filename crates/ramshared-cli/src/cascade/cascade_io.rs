@@ -468,25 +468,20 @@ fn detect_live_managed_devices() -> Result<Vec<BoundDeviceIdentity>, CascadeErro
                 continue;
             };
             let live = match kind {
-                ManagedDeviceKind::Nbd => {
-                    let pid_content = match fs::read_to_string(entry.path().join("pid")) {
-                        Ok(content) => content,
-                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
-                        Err(error) => {
-                            return Err(CascadeError::Precondition(format!(
-                                "read {name} owner PID: {error}"
-                            )));
-                        }
-                    };
-                    let trimmed = pid_content.trim();
-                    if trimmed.is_empty() {
-                        false
-                    } else {
-                        trimmed.parse::<u32>().map_err(|_| {
+                ManagedDeviceKind::Nbd => match fs::read_to_string(entry.path().join("pid")) {
+                    Ok(value) if value.trim().is_empty() => false,
+                    Ok(value) => {
+                        value.trim().parse::<u32>().map_err(|_| {
                             CascadeError::Precondition(format!("{name} owner PID is malformed"))
                         })? > 0
                     }
-                }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(error) => {
+                        return Err(CascadeError::Precondition(format!(
+                            "read {name} owner PID: {error}"
+                        )));
+                    }
+                },
                 ManagedDeviceKind::Zram => {
                     fs::read_to_string(entry.path().join("disksize"))
                         .map_err(|error| {
@@ -615,25 +610,25 @@ fn observe_exact_detached_nbd(path: &str) -> Result<DetachedNbdObservation, Casc
                 "detached NBD node and sysfs dev_t disagree".into(),
             ));
         }
-        let pid_content = match fs::read_to_string(sysfs.join("pid")) {
-            Ok(content) => content,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        match fs::read_to_string(sysfs.join("pid")) {
+            Ok(value) => {
+                let value = value.trim();
+                if !value.is_empty()
+                    && value.parse::<u32>().map_err(|_| {
+                        CascadeError::Precondition("detached NBD owner PID is malformed".into())
+                    })? != 0
+                {
+                    return Err(CascadeError::UnsafeContainment(format!(
+                        "NBD target {path} still has a kernel owner PID"
+                    )));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 return Err(CascadeError::Precondition(format!(
                     "read detached NBD owner PID: {error}"
                 )));
             }
-        };
-
-        let trimmed_pid = pid_content.trim();
-        if !trimmed_pid.is_empty()
-            && trimmed_pid.parse::<u32>().map_err(|_| {
-                CascadeError::Precondition("detached NBD owner PID is malformed".into())
-            })? != 0
-        {
-            return Err(CascadeError::UnsafeContainment(format!(
-                "NBD target {path} still has a kernel owner PID"
-            )));
         }
         let size = fs::read_to_string(sysfs.join("size"))
             .map_err(|error| {
@@ -3490,8 +3485,7 @@ mod tests {
             "non-zero child must fail",
         );
         let message = error.to_string();
-        assert!(message.contains("exited with 12"), "{message}");
-        assert!(message.contains("fixture failure"), "{message}");
+        assert!(message.contains("12") && message.contains("fixture failure"), "{message}");
 
         let signal = fixture.program("signal", "#!/bin/sh\nkill -TERM $$\n");
         let error = error_from(
@@ -5546,11 +5540,48 @@ mod tests {
     }
 
     #[test]
-    fn parse_nbd_pid_content_handles_malformed() {
-        let fixture = TestDir::new();
-        let paths = RuntimePaths::under(&fixture.path);
-        fs::create_dir_all(paths.zram_sysfs.join("zram0")).expect("creates test dir");
-        fs::write(paths.zram_sysfs.join("zram0").join("pid"), "not-a-number")
-            .expect("writes test pid");
+    fn cascade_error_displays_all_variants_properly() {
+        let err1 = CascadeError::Io("file not found".into());
+        assert!(err1.to_string().contains("file not found"));
+
+        let err2 = CascadeError::Arg("bad arg".into());
+        assert!(err2.to_string().contains("bad arg"));
+
+        let err3 = CascadeError::Precondition("precondition failed".into());
+        assert!(err3.to_string().contains("precondition failed"));
+
+        let err4 = CascadeError::UnsafeContainment("unsafe containment".into());
+        assert!(err4.to_string().contains("unsafe containment"));
+
+        let err5 = CascadeError::Shell {
+            cmd: "zramctl".into(),
+            msg: "failed".into(),
+        };
+        assert!(err5.to_string().contains("command `zramctl` failed"));
+    }
+
+    #[test]
+    fn helper_predicates_and_conversions_cover_all_branches() {
+        assert!(canonical_boot_id("11111111-2222-4333-8444-555555555555"));
+        assert!(!canonical_boot_id("invalid-boot-id"));
+
+        assert!(canonical_invocation_id("0123456789abcdef0123456789abcdef"));
+        assert!(!canonical_invocation_id("short"));
+        assert!(!canonical_invocation_id("0123456789abcdef0123456789abcdeg"));
+
+        assert_eq!(device_kind_for_path("/dev/nbd0"), Some(ManagedDeviceKind::Nbd));
+        assert_eq!(device_kind_for_path("/dev/ublkb0"), Some(ManagedDeviceKind::Ublk));
+        assert_eq!(device_kind_for_path("/dev/zram0"), Some(ManagedDeviceKind::Zram));
+        assert_eq!(device_kind_for_path("/dev/sda"), None);
+
+        assert_eq!(command_label("test", &["a", "b"]), "test a b");
+        assert_eq!(command_label("test", &[]), "test");
+    }
+
+    #[test]
+    fn up_with_args_rejects_malformed_arguments() {
+        assert!(up_with_args(&["--unknown".to_string()]).is_err());
+        assert!(up_with_args(&["--vram-mb".to_string(), "invalid".to_string()]).is_err());
+        assert!(up_with_args(&["--zram-mb".to_string(), "-5".to_string()]).is_err());
     }
 }

@@ -2,6 +2,8 @@
 //!
 //! Sizes and golden layouts must match the C header. Change **both** in one commit.
 
+#![allow(dead_code)]
+
 pub const ABI_VERSION: u32 = 1;
 pub const MAX_QD: u32 = 256;
 pub const MAX_IO: u32 = 1 << 20;

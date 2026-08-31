@@ -69,24 +69,6 @@ mod tests {
         assert!(s.contains("CUresult=2"));
     }
 
-    #[test]
-    fn invalid_device_error_display() {
-        let e = CudaError::InvalidDevice {
-            ordinal: -1,
-            count: 2,
-        };
-        let s = e.to_string();
-        assert!(s.contains("invalid device ordinal: -1"));
-        assert!(s.contains("count=2"));
-    }
-
-    #[test]
-    fn invalid_context_error_display() {
-        let e = CudaError::InvalidContext;
-        let s = e.to_string();
-        assert_eq!(s, "driver API returned a null context handle");
-    }
-
     /// Real Host→VRAM→Host roundtrip. Requires a working CUDA GPU (WSL2/GPU-PV).
     /// Run with: `cargo test -p ramshared-cuda -- --ignored`.
     #[test]

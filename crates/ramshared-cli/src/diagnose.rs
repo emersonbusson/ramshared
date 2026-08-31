@@ -311,6 +311,9 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("DEMOTE occurred"))
         );
+        let rendered = render_json(&d);
+        assert!(rendered.contains("\"demotes\":1"));
+        print_text(&d);
     }
 
     #[test]
@@ -321,5 +324,31 @@ mod tests {
         };
         assert_eq!(d.samples, 0);
         assert!(d.recommendations[0].contains("--telemetry-jsonl"));
+        print_text(&d);
+    }
+
+    #[test]
+    fn diagnoses_all_flags_and_anomalies() {
+        let input = r#"{"t":10,"flag":"partial","page_io_s":15000,"vram_outros":1024}
+{"t":20,"flag":"stuck_slice","demotes":2,"vram_other":2048}
+{"t":30,"flag":"unaccounted","swap_used":5000000000,"tenant":"tenant-a","slice":1}"#;
+        let d = diagnose_jsonl(input).unwrap();
+        assert_eq!(d.samples, 3);
+        assert!(d.flags.contains(&"partial".to_string()));
+        assert!(d.flags.contains(&"unaccounted".to_string()));
+        assert!(d.flags.contains(&"stuck_slice".to_string()));
+        assert_eq!(d.max_page_io_s, Some(15000));
+        assert!(d.recommendations.iter().any(|r| r.contains("Page I/O is high")));
+        assert!(d.recommendations.iter().any(|r| r.contains("A slice was stuck draining")));
+        assert!(d.recommendations.iter().any(|r| r.contains("Swap usage exceeded")));
+        let json_str = render_json(&d);
+        assert!(json_str.contains("stuck_slice"));
+        print_text(&d);
+    }
+
+    #[test]
+    fn malformed_json_returns_error() {
+        let res = diagnose_jsonl("not json\n");
+        assert!(res.is_err());
     }
 }

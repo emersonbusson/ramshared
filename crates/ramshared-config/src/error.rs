@@ -40,3 +40,43 @@ impl fmt::Display for ConfigError {
 }
 
 impl std::error::Error for ConfigError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_all_variants() {
+        let e1 = ConfigError::Parse {
+            message: "bad token".into(),
+            line: Some(10),
+            column: Some(5),
+        };
+        assert_eq!(e1.to_string(), "parse error at line 10, col 5: bad token");
+
+        let e2 = ConfigError::Parse {
+            message: "unexpected eof".into(),
+            line: None,
+            column: None,
+        };
+        assert_eq!(e2.to_string(), "parse error: unexpected eof");
+
+        let e3 = ConfigError::Invalid {
+            key_path: "daemon.port".into(),
+            reason: "must be positive".into(),
+        };
+        assert_eq!(
+            e3.to_string(),
+            "invalid configuration at 'daemon.port': must be positive"
+        );
+
+        let e4 = ConfigError::InvalidInput("empty file".into());
+        assert_eq!(e4.to_string(), "invalid input: empty file");
+
+        let e5 = ConfigError::OutOfRange("size too large".into());
+        assert_eq!(e5.to_string(), "out of range: size too large");
+
+        let e6 = ConfigError::UnsupportedBackend("directx".into());
+        assert_eq!(e6.to_string(), "unsupported backend: directx");
+    }
+}

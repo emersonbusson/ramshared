@@ -38,7 +38,7 @@
         "-p",
         "ramshared-cli",
         "--files",
-        "crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs,crates/ramshared-cli/src/main.rs",
+        "crates/ramshared-cli/src/cascade/lifecycle.rs,crates/ramshared-cli/src/cascade/mod.rs,crates/ramshared-cli/src/main.rs,crates/ramshared-cli/src/diagnose.rs",
         "--min",
         "80",
         "--report-json",
@@ -50,7 +50,8 @@
       "files": [
         "crates/ramshared-cli/src/cascade/lifecycle.rs",
         "crates/ramshared-cli/src/cascade/mod.rs",
-        "crates/ramshared-cli/src/main.rs"
+        "crates/ramshared-cli/src/main.rs",
+        "crates/ramshared-cli/src/diagnose.rs"
       ],
       "min": 80
     },
@@ -184,7 +185,7 @@
         "-p",
         "ramshared-block,ramshared-broker,ramshared-wsl2d",
         "--files",
-        "crates/ramshared-block/src/handshake.rs,crates/ramshared-block/src/protocol.rs,crates/ramshared-broker/src/arbiter.rs,crates/ramshared-broker/src/protocol.rs,crates/ramshared-wsl2d/src/broker_srv.rs,crates/ramshared-wsl2d/src/canary_probe.rs,crates/ramshared-wsl2d/src/telemetry.rs",
+        "crates/ramshared-block/src/handshake.rs,crates/ramshared-block/src/protocol.rs,crates/ramshared-broker/src/arbiter.rs,crates/ramshared-broker/src/protocol.rs,crates/ramshared-wsl2d/src/broker_srv.rs,crates/ramshared-wsl2d/src/canary_probe.rs,crates/ramshared-wsl2d/src/telemetry.rs,crates/ramshared-broker/src/model.rs,crates/ramshared-broker/src/slices.rs,crates/ramshared-wsl2d/src/residency.rs",
         "--min",
         "80",
         "--report-json",
@@ -202,7 +203,129 @@
         "crates/ramshared-broker/src/protocol.rs",
         "crates/ramshared-wsl2d/src/broker_srv.rs",
         "crates/ramshared-wsl2d/src/canary_probe.rs",
-        "crates/ramshared-wsl2d/src/telemetry.rs"
+        "crates/ramshared-wsl2d/src/telemetry.rs",
+        "crates/ramshared-broker/src/model.rs",
+        "crates/ramshared-broker/src/slices.rs",
+        "crates/ramshared-wsl2d/src/residency.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "config-management-core",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/comment-language-integrity/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-config",
+        "--files",
+        "crates/ramshared-config/src/lib.rs,crates/ramshared-config/src/error.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/config-management-core-cov.json"
+      ],
+      "packages": [
+        "ramshared-config"
+      ],
+      "files": [
+        "crates/ramshared-config/src/lib.rs",
+        "crates/ramshared-config/src/error.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "integrity-block-verification",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/comment-language-integrity/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-integrity",
+        "--files",
+        "crates/ramshared-integrity/src/hash.rs,crates/ramshared-integrity/src/pattern.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/integrity-block-verification-cov.json"
+      ],
+      "packages": [
+        "ramshared-integrity"
+      ],
+      "files": [
+        "crates/ramshared-integrity/src/hash.rs",
+        "crates/ramshared-integrity/src/pattern.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "integrity-block-verification-structural",
+      "kind": "rust-structural-contract",
+      "spec": "docs/specs/no-milestone/comment-language-integrity/SPEC.md",
+      "files": [
+        "crates/ramshared-integrity/src/lib.rs"
+      ],
+      "verifications": [
+        {
+          "source": "crates/ramshared-integrity/src/lib.rs",
+          "package": "ramshared-integrity",
+          "cargo_test": [
+            "cargo",
+            "test",
+            "-p",
+            "ramshared-integrity",
+            "--lib"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "vram-provider-abstraction",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/comment-language-integrity/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-vram",
+        "--files",
+        "crates/ramshared-vram/src/lib.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/vram-provider-abstraction-cov.json"
+      ],
+      "packages": [
+        "ramshared-vram"
+      ],
+      "files": [
+        "crates/ramshared-vram/src/lib.rs"
+      ],
+      "min": 80
+    },
+    {
+      "id": "cuda-probe-planning-coverage",
+      "kind": "rust-line-coverage",
+      "spec": "docs/specs/no-milestone/comment-language-integrity/SPEC.md",
+      "command": [
+        "node",
+        "tools/ci/check-rust-slice-coverage.mjs",
+        "-p",
+        "ramshared-cuda",
+        "--files",
+        "crates/ramshared-cuda/src/probe.rs",
+        "--min",
+        "80",
+        "--report-json",
+        "tmp/cuda-probe-planning-cov.json"
+      ],
+      "packages": [
+        "ramshared-cuda"
+      ],
+      "files": [
+        "crates/ramshared-cuda/src/probe.rs"
       ],
       "min": 80
     },
@@ -324,7 +447,7 @@
         "-p",
         "ramshared-agent,ramshared-tier",
         "--files",
-        "crates/ramshared-agent/src/explain.rs,crates/ramshared-agent/src/local.rs,crates/ramshared-agent/src/win_mem.rs,crates/ramshared-tier/src/cascade.rs",
+        "crates/ramshared-agent/src/explain.rs,crates/ramshared-agent/src/local.rs,crates/ramshared-agent/src/win_mem.rs,crates/ramshared-tier/src/cascade.rs,crates/ramshared-agent/src/swap.rs,crates/ramshared-agent/src/watchdog.rs,crates/ramshared-tier/src/priority.rs",
         "--min",
         "80",
         "--report-json",
@@ -338,7 +461,10 @@
         "crates/ramshared-agent/src/explain.rs",
         "crates/ramshared-agent/src/local.rs",
         "crates/ramshared-agent/src/win_mem.rs",
-        "crates/ramshared-tier/src/cascade.rs"
+        "crates/ramshared-tier/src/cascade.rs",
+        "crates/ramshared-agent/src/swap.rs",
+        "crates/ramshared-agent/src/watchdog.rs",
+        "crates/ramshared-tier/src/priority.rs"
       ],
       "min": 80
     },
