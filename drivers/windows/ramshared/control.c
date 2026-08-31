@@ -203,8 +203,10 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 		break;
 
 	default:
-		status = STATUS_INVALID_DEVICE_REQUEST; /* REFUSE_UNKNOWN_IOCTL */
-		break;
+		Irp->IoStatus.Status = STATUS_INVALID_DEVICE_REQUEST; /* REFUSE_UNKNOWN_IOCTL */
+		Irp->IoStatus.Information = 0;
+		IoCompleteRequest(Irp, IO_NO_INCREMENT);
+		return STATUS_INVALID_DEVICE_REQUEST;
 	}
 
 	Irp->IoStatus.Status = status;
