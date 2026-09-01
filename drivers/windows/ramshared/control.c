@@ -118,6 +118,10 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 
 	switch (code) {
 	case IOCTL_RAMSHARED_REGISTER_QUEUE:
+		if (irpSp->Parameters.DeviceIoControl.OutputBufferLength != 0) {
+			status = STATUS_BUFFER_TOO_SMALL;
+			break;
+		}
 		if (inLen != sizeof(RAMSHARED_REGISTER) || buf == NULL) {
 			status = STATUS_INVALID_PARAMETER;
 			break;
@@ -143,6 +147,10 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 		break;
 
 	case IOCTL_RAMSHARED_UNREGISTER_QUEUE:
+		if (irpSp->Parameters.DeviceIoControl.OutputBufferLength != 0) {
+			status = STATUS_BUFFER_TOO_SMALL;
+			break;
+		}
 		/* Zero-input IOCTL: reject non-zero input length (DT-5). */
 		if (inLen != 0) {
 			status = STATUS_INVALID_PARAMETER;
@@ -161,6 +169,10 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 		break;
 
 	case IOCTL_RAMSHARED_COMMIT_AND_FETCH:
+		if (irpSp->Parameters.DeviceIoControl.OutputBufferLength != 0) {
+			status = STATUS_BUFFER_TOO_SMALL;
+			break;
+		}
 		if (inLen != 0) {
 			status = STATUS_INVALID_PARAMETER;
 			break;
@@ -181,6 +193,10 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 		break;
 
 	case IOCTL_RAMSHARED_CREATE_DISK:
+		if (irpSp->Parameters.DeviceIoControl.OutputBufferLength != 0) {
+			status = STATUS_BUFFER_TOO_SMALL;
+			break;
+		}
 		if (inLen != sizeof(RAMSHARED_DISK_PARAMS) || buf == NULL) {
 			status = STATUS_INVALID_PARAMETER;
 			break;
@@ -189,6 +205,10 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 		break;
 
 	case IOCTL_RAMSHARED_DESTROY_DISK:
+		if (irpSp->Parameters.DeviceIoControl.OutputBufferLength != 0) {
+			status = STATUS_BUFFER_TOO_SMALL;
+			break;
+		}
 		if (inLen != 0) {
 			status = STATUS_INVALID_PARAMETER;
 			break;
