@@ -98,9 +98,11 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 			bytes = (SIZE_T)in->NGb << 30;
 			g_Pool = ExAllocatePool2(POOL_FLAG_PAGED, bytes, 'ssPR');
 			if (!g_Pool) {
-				status = STATUS_INSUFFICIENT_RESOURCES;
+				DbgPrint("poolstress: ExAllocatePool2 failed for %lu GB (%Iu bytes)\n", in->NGb, bytes);
+				status = STATUS_NO_MEMORY;
 				break;
 			}
+			DbgPrint("poolstress: ExAllocatePool2 success for %lu GB (%Iu bytes)\n", in->NGb, bytes);
 			g_PoolSize = bytes;
 			/* Fill every byte in bounded BCrypt calls (DT-21). */
 			PoolstressFill((PUCHAR)g_Pool, bytes);
