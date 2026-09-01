@@ -266,14 +266,13 @@ pub struct UblkCompletion {
     pub result: i32,
 }
 
-/// Validates that fixed buffer parameters are aligned to the kernel page size and that the
+/// Validates that fixed buffer parameters are aligned to 4096 bytes and that the
 /// total allocation (`queue_depth * buf_size`) does not exceed `RLIMIT_MEMLOCK`.
 pub fn validate_fixed_buffer_params(queue_depth: u16, buf_size: usize) -> io::Result<()> {
-    let page = page_size();
-    if buf_size == 0 || !buf_size.is_multiple_of(page) {
+    if buf_size == 0 || !buf_size.is_multiple_of(4096) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "buffer size must be > 0 and a multiple of the system page size",
+            "buffer size must be > 0 and a multiple of 4096 bytes",
         ));
     }
 
@@ -511,14 +510,12 @@ mod tests {
 
     #[test]
     fn test_validate_fixed_buffer_alignment_and_limits() {
-        let page = page_size();
-
         // Test invalid alignment
-        let err = validate_fixed_buffer_params(2, page - 1).expect_err("invalid alignment should fail");
+        let err = validate_fixed_buffer_params(2, 4095).expect_err("invalid alignment should fail");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
 
         // Test valid alignment
-        assert!(validate_fixed_buffer_params(2, page).is_ok());
+        assert!(validate_fixed_buffer_params(2, 4096).is_ok());
 
         // Test buffer size 0
         let err_zero = validate_fixed_buffer_params(2, 0).expect_err("zero size should fail");
@@ -534,7 +531,7 @@ mod tests {
         if res == 0 && rlim.rlim_cur != libc::RLIM_INFINITY {
             // we create a massive buffer
             // wait, if we pass u16::MAX for queue depth and rlim_cur for buf size...
-            let massive_buf_size = (((rlim.rlim_cur / (page as u64)) + 2) as usize) * page;
+            let massive_buf_size = (((rlim.rlim_cur / 4096) + 2) * 4096) as usize;
             let huge_err = validate_fixed_buffer_params(2, massive_buf_size)
                 .expect_err("massive buffer should fail");
             assert_eq!(huge_err.raw_os_error(), Some(libc::ERANGE));
