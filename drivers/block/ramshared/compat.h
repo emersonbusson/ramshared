@@ -20,9 +20,12 @@
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(6, 9, 0)
 /* Linux 6.9 - 6.10 Paradigm: 3-arg blk_mq_alloc_disk with queue_limits */
 #define RAMSHARED_HAVE_QUEUE_LIMITS_PARAM	1
-#else
+#elif defined(blk_mq_alloc_disk) || LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
 /* Linux <= 6.8 Paradigm: 2-arg blk_mq_alloc_disk and standalone mutators */
 #define RAMSHARED_HAVE_LEGACY_BLK_ALLOC		1
+#else
+/* Fallback: older blk_alloc_disk with separate queue init */
+#define RAMSHARED_HAVE_VERY_LEGACY_BLK_ALLOC	1
 #endif
 
 /**
@@ -75,7 +78,7 @@ static inline struct gendisk *ramshared_alloc_disk(struct blk_mq_tag_set *set,
 	}
 	return disk;
 
-#else /* Linux <= 6.8 (Ubuntu 22.04 LTS, Ubuntu 24.04 LTS) */
+#elif defined(RAMSHARED_HAVE_LEGACY_BLK_ALLOC) /* Linux <= 6.8 (Ubuntu 22.04 LTS, Ubuntu 24.04 LTS) */
 	struct gendisk *disk = blk_mq_alloc_disk(set, queuedata);
 	struct request_queue *q;
 
@@ -83,6 +86,39 @@ static inline struct gendisk *ramshared_alloc_disk(struct blk_mq_tag_set *set,
 		return disk;
 
 	q = disk->queue;
+	blk_queue_flag_set(QUEUE_FLAG_NONROT, q);
+	blk_queue_flag_set(QUEUE_FLAG_SYNCHRONOUS, q);
+	blk_queue_flag_set(QUEUE_FLAG_NOWAIT, q);
+
+	blk_queue_logical_block_size(q, sector_size);
+	blk_queue_physical_block_size(q, PAGE_SIZE);
+	blk_queue_io_min(q, PAGE_SIZE);
+	blk_queue_io_opt(q, 64 * 1024);
+	blk_queue_max_hw_sectors(q, max_sectors);
+	blk_queue_max_segments(q, USHRT_MAX);
+	blk_queue_max_segment_size(q, UINT_MAX);
+	blk_queue_dma_alignment(q, 511);
+	blk_queue_max_discard_sectors(q, UINT_MAX);
+	q->limits.discard_granularity = PAGE_SIZE;
+
+	return disk;
+
+#else /* Pre blk_mq_alloc_disk era (e.g. older 5.15 forks) */
+	struct request_queue *q = blk_mq_init_queue(set);
+	struct gendisk *disk;
+
+	if (IS_ERR(q))
+		return ERR_CAST(q);
+
+	disk = blk_alloc_disk(NUMA_NO_NODE);
+	if (!disk) {
+		blk_cleanup_queue(q);
+		return ERR_PTR(-ENOMEM);
+	}
+
+	disk->queue = q;
+	disk->private_data = queuedata;
+
 	blk_queue_flag_set(QUEUE_FLAG_NONROT, q);
 	blk_queue_flag_set(QUEUE_FLAG_SYNCHRONOUS, q);
 	blk_queue_flag_set(QUEUE_FLAG_NOWAIT, q);
