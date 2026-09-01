@@ -12,7 +12,7 @@
 use core::ffi::{CStr, c_char, c_void};
 use core::fmt;
 
-use crate::ffi::{CUDA_SUCCESS, CUDA_ERROR_INVALID_VALUE, CUDA_ERROR_OUT_OF_MEMORY, CuContext, CuDevice, CuDevicePtr, CuResult, Syms};
+use crate::ffi::{CUDA_SUCCESS, CuContext, CuDevice, CuDevicePtr, CuResult, Syms};
 
 /// CUDA layer error representation. No `panic`/`unwrap` in production paths (coding.md rules).
 #[derive(Debug)]
@@ -27,10 +27,6 @@ pub enum CudaError {
         code: i32,
         msg: String,
     },
-    /// CUDA returned an invalid value error.
-    InvalidValue,
-    /// CUDA returned an out of memory error.
-    OutOfMemory,
     /// VRAM memory region access out of bounds (offset + len > size).
     OutOfRange { off: usize, len: usize, size: usize },
 }
@@ -43,8 +39,6 @@ impl fmt::Display for CudaError {
             CudaError::Driver { op, code, msg } => {
                 write!(f, "{op} failed (CUresult={code}): {msg}")
             }
-            CudaError::InvalidValue => write!(f, "invalid value provided to CUDA API"),
-            CudaError::OutOfMemory => write!(f, "CUDA out of memory"),
             CudaError::OutOfRange { off, len, size } => {
                 write!(f, "out of bounds access: off={off} len={len} > size={size}")
             }
@@ -337,10 +331,6 @@ fn load_sym_opt<T: Copy>(handle: *mut c_void, name: &CStr) -> Option<T> {
 fn check(syms: &Syms, r: CuResult, op: &'static str) -> Result<(), CudaError> {
     if r == CUDA_SUCCESS {
         Ok(())
-    } else if r == CUDA_ERROR_INVALID_VALUE {
-        Err(CudaError::InvalidValue)
-    } else if r == CUDA_ERROR_OUT_OF_MEMORY {
-        Err(CudaError::OutOfMemory)
     } else {
         Err(CudaError::Driver {
             op,
