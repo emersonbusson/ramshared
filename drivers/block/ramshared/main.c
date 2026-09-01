@@ -58,16 +58,6 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 
 	pci_set_master(pdev);
 
-	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-	if (ret) {
-		dev_warn(&pdev->dev, "64-bit DMA failed, attempting 32-bit DMA\n");
-		ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
-		if (ret) {
-			dev_err(&pdev->dev, "no usable DMA configuration\n");
-			goto err_disable_pci;
-		}
-	}
-
 	ret = pci_request_mem_regions(pdev, RAMSHARED_DRIVER_NAME);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to claim PCIe memory regions\n");
@@ -100,6 +90,7 @@ err_dma_cleanup:
 err_release_regions:
 	pci_release_mem_regions(pdev);
 err_disable_pci:
+	pci_clear_master(pdev);
 	pci_disable_device(pdev);
 	return ret;
 }
@@ -114,6 +105,7 @@ static void ramshared_pci_remove(struct pci_dev *pdev)
 	ramshared_queue_cleanup(rs_dev);
 	ramshared_dma_cleanup(rs_dev);
 	pci_release_mem_regions(pdev);
+	pci_clear_master(pdev);
 	pci_disable_device(pdev);
 
 	dev_info(&pdev->dev, "RamShared device removed successfully\n");
