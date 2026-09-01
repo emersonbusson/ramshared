@@ -234,6 +234,7 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
 
     {
         let mut sq = ring.submission();
+        sq.sync();
         if sq.is_full() {
             return Err(io::Error::other("io_uring submission queue is full"));
         }
@@ -330,6 +331,7 @@ impl UblkFetchRing {
             // while the FETCH calls are parked; the kernel only accesses the buffer when
             // serving I/O, which requires `START_DEV` (not invoked in this path).
             let mut sq = ring.submission();
+            sq.sync();
             if sq.is_full() {
                 return Err(io::Error::other("io_uring submission queue is full"));
             }
@@ -494,6 +496,7 @@ impl UblkServer {
         // to `self.buffers[tag]`, which remains valid for the server's lifetime; `self.fd`
         // remains open. The kernel only accesses the buffer to serve I/O on this thread.
         let mut sq = self.ring.submission();
+        sq.sync();
         if sq.is_full() {
             return Err(io::Error::other("io_uring submission queue is full"));
         }
