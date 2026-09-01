@@ -359,6 +359,40 @@ impl UblkFetchRing {
     }
 }
 
+impl Drop for UblkFetchRing {
+    fn drop(&mut self) {
+        let cancel_entry = opcode::AsyncCancel2::new(types::CancelBuilder::any().all())
+            .build()
+            .user_data(u64::MAX);
+        let sqe: squeue::Entry128 = cancel_entry.into();
+
+        loop {
+            let mut sq = self.ring.submission();
+            // SAFETY: `sqe` is correctly formed for a cancellation request.
+            if unsafe { sq.push(&sqe).is_ok() } {
+                break;
+            }
+            // If the SQ is full, we must submit and drain to free up space.
+            drop(sq);
+            let _ = self.ring.submit();
+        }
+
+        // Wait until we explicitly see the CQE for our cancellation command.
+        loop {
+            let _ = self.ring.submit_and_wait(1);
+            let mut acked = false;
+            for cqe in self.ring.completion() {
+                if cqe.user_data() == u64::MAX {
+                    acked = true;
+                }
+            }
+            if acked {
+                break;
+            }
+        }
+    }
+}
+
 /// Packs a `struct ublksrv_io_cmd` (16 B: q_id, tag, result, addr) into the
 /// first bytes of the SQE's 80 B `UringCmd80` buffer; the remaining bytes are zeroed.
 fn io_cmd80(q_id: u16, tag: u16, result: i32, addr: u64) -> [u8; 80] {
@@ -501,6 +535,40 @@ impl UblkServer {
             let _ = sq.push(&entry);
         }
         Ok(())
+    }
+}
+
+impl Drop for UblkServer {
+    fn drop(&mut self) {
+        let cancel_entry = opcode::AsyncCancel2::new(types::CancelBuilder::any().all())
+            .build()
+            .user_data(u64::MAX);
+        let sqe: squeue::Entry128 = cancel_entry.into();
+
+        loop {
+            let mut sq = self.ring.submission();
+            // SAFETY: `sqe` is correctly formed for a cancellation request.
+            if unsafe { sq.push(&sqe).is_ok() } {
+                break;
+            }
+            // If the SQ is full, we must submit and drain to free up space.
+            drop(sq);
+            let _ = self.ring.submit();
+        }
+
+        // Wait until we explicitly see the CQE for our cancellation command.
+        loop {
+            let _ = self.ring.submit_and_wait(1);
+            let mut acked = false;
+            for cqe in self.ring.completion() {
+                if cqe.user_data() == u64::MAX {
+                    acked = true;
+                }
+            }
+            if acked {
+                break;
+            }
+        }
     }
 }
 
