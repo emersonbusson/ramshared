@@ -243,11 +243,13 @@ void ramshared_queue_cleanup(struct ramshared_device *rs_dev)
 	if (!rs_dev)
 		return;
 
-	if (rs_dev->disk) {
-		del_gendisk(rs_dev->disk);
-		put_disk(rs_dev->disk);
-		rs_dev->disk = NULL;
-	}
+	if (!rs_dev->disk)
+		goto free_tags;
 
+	del_gendisk(rs_dev->disk);
+	put_disk(rs_dev->disk);
+	rs_dev->disk = NULL;
+
+free_tags:
 	blk_mq_free_tag_set(&rs_dev->tag_set);
 }
