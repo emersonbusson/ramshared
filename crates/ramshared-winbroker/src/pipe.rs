@@ -441,7 +441,10 @@ fn overlapped_io(
     stop: Option<&AtomicBool>,
 ) -> io::Result<usize> {
     if handle.is_null() || handle == INVALID_HANDLE_VALUE {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid handle"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid handle",
+        ));
     }
     let length = u32::try_from(len).unwrap_or(u32::MAX);
     let event = unsafe { CreateEventW(std::ptr::null(), 1, 0, std::ptr::null()) };
