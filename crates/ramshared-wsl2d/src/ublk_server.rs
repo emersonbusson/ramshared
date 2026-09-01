@@ -830,7 +830,10 @@ mod join_tests {
         let queue = FakeQueue::new(
             descriptor_bytes(ublk::UBLK_IO_OP_READ, 1),
             vec![
-                vec![ramshared_uring::UblkCompletion { tag: 0, result: Ok(0) }],
+                vec![ramshared_uring::UblkCompletion {
+                    tag: 0,
+                    result: Ok(0),
+                }],
                 vec![ramshared_uring::UblkCompletion {
                     tag: 0,
                     result: Err(ramshared_uring::UringError::NoDev),
@@ -852,7 +855,10 @@ mod join_tests {
         let unsupported = FakeQueue::new(
             descriptor_bytes(ublk::UBLK_IO_OP_WRITE_SAME, 1),
             vec![
-                vec![ramshared_uring::UblkCompletion { tag: 0, result: Ok(0) }],
+                vec![ramshared_uring::UblkCompletion {
+                    tag: 0,
+                    result: Ok(0),
+                }],
                 vec![ramshared_uring::UblkCompletion {
                     tag: 0,
                     result: Err(ramshared_uring::UringError::NoDev),

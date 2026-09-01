@@ -704,7 +704,11 @@ mod tests {
             assert!(Instant::now() < deadline, "regular-file CQE deadline");
             std::thread::yield_now();
         };
-        assert!(completions.iter().all(|completion| completion.result.is_err()));
+        assert!(
+            completions
+                .iter()
+                .all(|completion| completion.result.is_err())
+        );
 
         drop(ring);
         drop(file);
@@ -772,7 +776,10 @@ mod tests {
         assert_eq!(results[0].result, Err(UringError::Other(-libc::ECANCELED)));
 
         assert_eq!(results[1].tag, 101);
-        assert!(results[1].result == Ok(0) || results[1].result == Err(UringError::Other(-libc::EALREADY)));
+        assert!(
+            results[1].result == Ok(0)
+                || results[1].result == Err(UringError::Other(-libc::EALREADY))
+        );
 
         drop(server);
         drop(file);
