@@ -1,0 +1,66 @@
+cat << 'PATCH_EOF' > patch.diff
+--- tools/benchmarks/kernel_vram_bench.c
++++ tools/benchmarks/kernel_vram_bench.c
+@@ -24,8 +24,6 @@
+ typedef int (*cuMemGetInfo_t)(size_t*, size_t*);
+ typedef int (*cuMemAlloc_t)(uint64_t*, size_t);
+ typedef int (*cuMemFree_t)(uint64_t);
+-typedef int (*cuMemHostAlloc_t)(void**, size_t, unsigned int);
+-typedef int (*cuMemFreeHost_t)(void*);
+ typedef int (*cuMemcpyHtoD_t)(uint64_t, const void*, size_t);
+ typedef int (*cuMemcpyDtoH_t)(void*, uint64_t, size_t);
+
+@@ -78,8 +76,6 @@
+	cuMemGetInfo_t cuMemGetInfo = (cuMemGetInfo_t)dlsym(lib, "cuMemGetInfo_v2");
+	cuMemAlloc_t cuMemAlloc = (cuMemAlloc_t)dlsym(lib, "cuMemAlloc_v2");
+	cuMemFree_t cuMemFree = (cuMemFree_t)dlsym(lib, "cuMemFree_v2");
+-	cuMemHostAlloc_t cuMemHostAlloc = (cuMemHostAlloc_t)dlsym(lib, "cuMemHostAlloc");
+-	cuMemFreeHost_t cuMemFreeHost = (cuMemFreeHost_t)dlsym(lib, "cuMemFreeHost");
+	cuMemcpyHtoD_t cuMemcpyHtoD = (cuMemcpyHtoD_t)dlsym(lib, "cuMemcpyHtoD_v2");
+	cuMemcpyDtoH_t cuMemcpyDtoH = (cuMemcpyDtoH_t)dlsym(lib, "cuMemcpyDtoH_v2");
+
+@@ -115,8 +111,8 @@
+
+	// Allocate Pinned Host Memory
+	void *host_pinned = NULL;
+-	if (cuMemHostAlloc(&host_pinned, chunk_bytes, 0) != 0) {
+-		fprintf(stderr, "[-] Error: cuMemHostAlloc failed (%d MiB).\n", chunk_mib);
++	if (posix_memalign(&host_pinned, 4096, chunk_bytes) != 0) {
++		fprintf(stderr, "[-] Error: posix_memalign failed (%d MiB).\n", chunk_mib);
+		cuCtxDestroy(ctx);
+		dlclose(lib);
+		return 1;
+@@ -126,7 +122,7 @@
+	uint64_t dev_ptr = 0;
+	if (cuMemAlloc(&dev_ptr, chunk_bytes) != 0) {
+		fprintf(stderr, "[-] Error: cuMemAlloc failed (%d MiB).\n", chunk_mib);
+-		cuMemFreeHost(host_pinned);
++		free(host_pinned);
+		cuCtxDestroy(ctx);
+		dlclose(lib);
+		return 1;
+@@ -144,7 +140,9 @@
+
+	// 2. Direct DMA VRAM -> Host (Pull)
+	void *read_pinned = NULL;
+-	cuMemHostAlloc(&read_pinned, chunk_bytes, 0);
++	if (posix_memalign(&read_pinned, 4096, chunk_bytes) != 0) {
++		read_pinned = NULL;
++	}
+	printf("[+] Benchmarking VRAM -> Host DMA (%d MiB)...\n", chunk_mib);
+	t0 = get_time_sec();
+	cuMemcpyDtoH(read_pinned, dev_ptr, chunk_bytes);
+@@ -160,8 +158,8 @@
+
+	// Cleanup
+	cuMemFree(dev_ptr);
+-	cuMemFreeHost(host_pinned);
+-	cuMemFreeHost(read_pinned);
++	free(host_pinned);
++	free(read_pinned);
+	cuCtxDestroy(ctx);
+	dlclose(lib);
+
+PATCH_EOF
+patch tools/benchmarks/kernel_vram_bench.c patch.diff
+gcc -Wall -Wextra -Werror -o tools/benchmarks/bench tools/benchmarks/kernel_vram_bench.c
