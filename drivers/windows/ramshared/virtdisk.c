@@ -330,6 +330,70 @@ VdHandleReportLuns(_Inout_ PSCSI_REQUEST_BLOCK Srb, _In_ BOOLEAN Present)
 }
 
 static BOOLEAN
+VdHandleModeSense(_In_opt_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
+{
+	UCHAR response[32];
+	ULONG responseLen;
+	ULONG transferLen;
+	ULONG allocationLen;
+	UCHAR page;
+
+	UNREFERENCED_PARAMETER(Disk);
+
+	RtlZeroMemory(response, sizeof(response));
+
+	if (Srb->Cdb[0] == SCSIOP_MODE_SENSE) {
+		page = Srb->Cdb[2] & 0x3F;
+		allocationLen = Srb->Cdb[4];
+		response[0] = 3; /* Length */
+		response[1] = 0; /* Medium type */
+		response[2] = 0; /* Device-specific parameter (no write protect) */
+		response[3] = 0; /* Block descriptor length */
+		responseLen = 4;
+	} else {
+		page = Srb->Cdb[2] & 0x3F;
+		allocationLen = ((ULONG)Srb->Cdb[7] << 8) | Srb->Cdb[8];
+		response[0] = 0; /* Length MSB */
+		response[1] = 7; /* Length LSB */
+		response[2] = 0; /* Medium type */
+		response[3] = 0; /* Device-specific parameter */
+		response[6] = 0; /* Block descriptor length MSB */
+		response[7] = 0; /* Block descriptor length LSB */
+		responseLen = 8;
+	}
+
+	if (page == 0x08 || page == 0x3F) {
+		/* Caching Page (0x08) */
+		response[responseLen + 0] = 0x08; /* Page Code */
+		response[responseLen + 1] = 0x12; /* Page Length */
+		response[responseLen + 2] = 0x04; /* WCE = 1 */
+		responseLen += 20;
+		if (Srb->Cdb[0] == SCSIOP_MODE_SENSE) {
+			response[0] = (UCHAR)(responseLen - 1);
+		} else {
+			ULONG len = responseLen - 2;
+			response[0] = (UCHAR)((len >> 8) & 0xFF);
+			response[1] = (UCHAR)(len & 0xFF);
+		}
+	} else {
+		/* We don't support other pages, but we must return header */
+	}
+
+	transferLen = min(Srb->DataTransferLength, allocationLen);
+	transferLen = min(transferLen, responseLen);
+	if (transferLen != 0 && Srb->DataBuffer == NULL) {
+		Srb->SrbStatus = SRB_STATUS_ERROR;
+		return TRUE;
+	}
+	if (transferLen != 0) {
+		RtlCopyMemory(Srb->DataBuffer, response, transferLen);
+	}
+	Srb->DataTransferLength = transferLen;
+	Srb->SrbStatus = SRB_STATUS_SUCCESS;
+	return TRUE;
+}
+
+static BOOLEAN
 VdHandleReadCapacity(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
 	UCHAR response[32];
@@ -417,10 +481,7 @@ VdTranslateSrbNoDisk(_In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 		break;
 	case SCSIOP_MODE_SENSE:
 	case SCSIOP_MODE_SENSE10:
-		Srb->SrbStatus = SRB_STATUS_SUCCESS;
-		if (Srb->DataBuffer && Srb->DataTransferLength >= 4) {
-			RtlZeroMemory(Srb->DataBuffer, Srb->DataTransferLength);
-		}
+		(void)VdHandleModeSense(NULL, Srb);
 		break;
 	case 0xA0: /* REPORT LUNS — no LUN until CREATE_DISK */
 		VdHandleReportLuns(Srb, FALSE);
@@ -467,10 +528,7 @@ VdTranslateSrb(
 
 	case SCSIOP_MODE_SENSE:
 	case SCSIOP_MODE_SENSE10:
-		Srb->SrbStatus = SRB_STATUS_SUCCESS;
-		if (Srb->DataBuffer && Srb->DataTransferLength >= 4) {
-			RtlZeroMemory(Srb->DataBuffer, Srb->DataTransferLength);
-		}
+		(void)VdHandleModeSense(Disk, Srb);
 		break;
 
 	case SCSIOP_READ:
