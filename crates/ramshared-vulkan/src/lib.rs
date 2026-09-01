@@ -23,7 +23,14 @@ use ramshared_vram::{VramError, VramMemory, VramProvider};
 const STAGING_BYTES: u64 = 1 << 20;
 
 fn vk_err(ctx: &str, e: impl std::fmt::Debug) -> VramError {
-    VramError::Provider(format!("vulkan {ctx}: {e:?}"))
+    let msg = format!("{e:?}");
+    if msg == "ERROR_OUT_OF_HOST_MEMORY" || msg == "ERROR_OUT_OF_DEVICE_MEMORY" {
+        return VramError::OutOfMemory;
+    }
+    if msg == "ERROR_DEVICE_LOST" {
+        return VramError::Provider(format!("vulkan {ctx}: device lost"));
+    }
+    VramError::Provider(format!("vulkan {ctx}: {msg}"))
 }
 
 /// Selects a transfer queue family (prefers explicit `TRANSFER`; falls back to `GRAPHICS`/`COMPUTE`, which imply transfer per spec). Returns the family index.
