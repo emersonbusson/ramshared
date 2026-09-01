@@ -1,0 +1,26 @@
+FINDING ONLY REPORT
+
+Task: guard clauses on pool allocation handles in poolstress harness
+Target File: drivers/windows/tools/poolstress/poolstress.c
+Objective: Check ExAllocatePoolWithTag return pointers with guard clauses before writing test patterns.
+
+Findings:
+1. The target file `drivers/windows/tools/poolstress/poolstress.c` does not use the legacy `ExAllocatePoolWithTag` function for allocation. It has already been migrated to the modern equivalent `ExAllocatePool2`.
+2. The return pointer from `ExAllocatePool2` is already properly validated with a linear guard clause before any test patterns are written.
+
+Evidence from `drivers/windows/tools/poolstress/poolstress.c`:
+```c
+			bytes = (SIZE_T)in->NGb << 30;
+			g_Pool = ExAllocatePool2(POOL_FLAG_PAGED, bytes, 'ssPR');
+			if (!g_Pool) {
+				status = STATUS_INSUFFICIENT_RESOURCES;
+				break;
+			}
+			g_PoolSize = bytes;
+			/* Fill every byte in bounded BCrypt calls (DT-21). */
+			PoolstressFill((PUCHAR)g_Pool, bytes);
+```
+As shown in the excerpt, `g_Pool` is checked against NULL. If it is NULL, the code assigns `STATUS_INSUFFICIENT_RESOURCES` and breaks out of the switch case, successfully preventing any null-pointer dereference during the subsequent `PoolstressFill` invocation or page touching loop.
+
+Conclusion:
+No safe code modification is required or possible, as the codebase already fully implements the requested architectural principle (guard clauses on pool allocations) using the correct, modern API (`ExAllocatePool2`).
