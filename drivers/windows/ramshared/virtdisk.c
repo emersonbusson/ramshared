@@ -514,6 +514,19 @@ VdTranslateSrb(
 				rop = RAMSHARED_OP_WRITE;
 			}
 		}
+
+		if (rop != RAMSHARED_OP_FLUSH) {
+			if ((offset & (Disk->block_size - 1)) != 0 ||
+			    (len & (Disk->block_size - 1)) != 0) {
+				Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+				break;
+			}
+			if (len > Disk->size_bytes || offset > Disk->size_bytes - len) {
+				Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+				break;
+			}
+		}
+
 		st = QSubmit(&Disk->queue, DevExt, Srb, rop, offset, len);
 		if (st == STATUS_PENDING) {
 			Srb->SrbStatus = SRB_STATUS_PENDING;
