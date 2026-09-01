@@ -11,6 +11,10 @@
 #include <linux/pci.h>
 #include "ramshared.h"
 
+#ifndef check_mul_overflow
+#define check_mul_overflow(a, b, d) __builtin_mul_overflow(a, b, d)
+#endif
+
 MODULE_AUTHOR("Emerson Busson");
 MODULE_DESCRIPTION("Hardware-Accelerated VRAM Block Driver");
 MODULE_LICENSE("GPL");
@@ -44,7 +48,8 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 		return -ENOMEM;
 
 	rs_dev->dev = &pdev->dev;
-	rs_dev->capacity_bytes = (u64)capacity_mb * 1024 * 1024;
+	if (check_mul_overflow((u64)capacity_mb, 1048576ULL, &rs_dev->capacity_bytes))
+		return -ERANGE;
 	mutex_init(&rs_dev->lock);
 	atomic64_set(&rs_dev->dma_transfers_total, 0);
 	atomic64_set(&rs_dev->read_bytes, 0);
