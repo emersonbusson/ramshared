@@ -11,10 +11,70 @@
 #include <stdint.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 #include <dlfcn.h>
 
 #define DEFAULT_CHUNK_MIB 256
 #define MIB_TO_BYTES(mib) ((size_t)(mib) * 1024 * 1024)
+
+#define LATENCY_HISTOGRAM_BUCKETS 10000
+
+typedef struct {
+	uint64_t counts[LATENCY_HISTOGRAM_BUCKETS];
+	uint64_t total_samples;
+	uint32_t resolution_ns;
+} latency_histogram_t;
+
+static int histogram_init(latency_histogram_t *hist, uint32_t resolution_ns) {
+	if (!hist || resolution_ns == 0)
+		return -EINVAL;
+
+	memset(hist->counts, 0, sizeof(hist->counts));
+	hist->total_samples = 0;
+	hist->resolution_ns = resolution_ns;
+
+	return 0;
+}
+
+static int histogram_add(latency_histogram_t *hist, uint64_t latency_ns) {
+	if (!hist || hist->resolution_ns == 0)
+		return -EINVAL;
+
+	uint64_t bucket = latency_ns / hist->resolution_ns;
+	if (bucket >= LATENCY_HISTOGRAM_BUCKETS)
+		bucket = LATENCY_HISTOGRAM_BUCKETS - 1;
+
+	hist->counts[bucket]++;
+	hist->total_samples++;
+
+	return 0;
+}
+
+static int histogram_get_percentile(latency_histogram_t *hist, double percentile, uint64_t *out_latency_ns) {
+	if (!hist || !out_latency_ns || percentile < 0.0 || percentile > 100.0)
+		return -EINVAL;
+
+	if (hist->total_samples == 0) {
+		*out_latency_ns = 0;
+		return 0;
+	}
+
+	uint64_t target_count = (uint64_t)((percentile / 100.0) * hist->total_samples);
+	if (target_count == 0 && percentile > 0.0)
+		target_count = 1;
+
+	uint64_t cumulative = 0;
+	for (int i = 0; i < LATENCY_HISTOGRAM_BUCKETS; i++) {
+		cumulative += hist->counts[i];
+		if (cumulative >= target_count) {
+			*out_latency_ns = (uint64_t)i * hist->resolution_ns;
+			return 0;
+		}
+	}
+
+	*out_latency_ns = (uint64_t)(LATENCY_HISTOGRAM_BUCKETS - 1) * hist->resolution_ns;
+	return 0;
+}
 
 typedef int (*cuInit_t)(unsigned int);
 typedef int (*cuDeviceGet_t)(int*, int);
@@ -157,6 +217,25 @@ int main(int argc, char **argv) {
 	int match = (memcmp(host_pinned, read_pinned, chunk_bytes) == 0);
 	printf("\n[+] Data Integrity Proof: %s\n",
 	       match ? "PASS (100% Bit-Exact Match, Zero Corruption)" : "FAIL");
+
+	// 4. Latency Percentile Benchmark (Small Chunks)
+	printf("\n[+] Benchmarking Small Chunk (4 KiB) Latency Percentiles...\n");
+	latency_histogram_t hist;
+	if (histogram_init(&hist, 1000) == 0 && chunk_bytes >= 4096) {
+		size_t small_chunk = 4096;
+		for (int i = 0; i < 1000; i++) {
+			double iter_t0 = get_time_sec();
+			cuMemcpyHtoD(dev_ptr, host_pinned, small_chunk);
+			double iter_t1 = get_time_sec();
+			histogram_add(&hist, (uint64_t)((iter_t1 - iter_t0) * 1e9));
+		}
+		uint64_t p50 = 0, p99 = 0, p999 = 0;
+		histogram_get_percentile(&hist, 50.0, &p50);
+		histogram_get_percentile(&hist, 99.0, &p99);
+		histogram_get_percentile(&hist, 99.9, &p999);
+		printf("[+] H2D 4KiB Latency: p50 = %lu us, p99 = %lu us, p99.9 = %lu us\n",
+		       p50 / 1000, p99 / 1000, p999 / 1000);
+	}
 
 	// Cleanup
 	cuMemFree(dev_ptr);
