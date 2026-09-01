@@ -116,14 +116,6 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	inLen = irpSp->Parameters.DeviceIoControl.InputBufferLength;
 	buf = Irp->AssociatedIrp.SystemBuffer;
 
-	/* Cap IOCTL payloads to 4 MiB to prevent pool exhaustion. */
-	if (inLen > 4 * 1024 * 1024) {
-		Irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
-		Irp->IoStatus.Information = 0;
-		IoCompleteRequest(Irp, IO_NO_INCREMENT);
-		return STATUS_INVALID_PARAMETER;
-	}
-
 	switch (code) {
 	case IOCTL_RAMSHARED_REGISTER_QUEUE:
 		if (inLen != sizeof(RAMSHARED_REGISTER) || buf == NULL) {
