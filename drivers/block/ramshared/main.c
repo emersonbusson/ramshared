@@ -30,6 +30,9 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	struct ramshared_device *rs_dev;
 	int ret;
 
+	if (!pdev || !id)
+		return -EINVAL;
+
 	dev_info(&pdev->dev, "probing RamShared hardware (capacity=%lu MiB)\n",
 		 capacity_mb);
 
@@ -106,8 +109,12 @@ err_disable_pci:
 
 static void ramshared_pci_remove(struct pci_dev *pdev)
 {
-	struct ramshared_device *rs_dev = pci_get_drvdata(pdev);
+	struct ramshared_device *rs_dev;
 
+	if (!pdev)
+		return;
+
+	rs_dev = pci_get_drvdata(pdev);
 	if (!rs_dev)
 		return;
 
@@ -123,6 +130,9 @@ static void ramshared_pci_remove(struct pci_dev *pdev)
 static pci_ers_result_t ramshared_pci_error_detected(struct pci_dev *pdev,
 						     pci_channel_state_t state)
 {
+	if (!pdev)
+		return PCI_ERS_RESULT_CAN_RECOVER;
+
 	dev_err(&pdev->dev, "PCIe error detected (state=%d)\n", state);
 	if (state == pci_channel_io_frozen)
 		return PCI_ERS_RESULT_NEED_RESET;
@@ -131,6 +141,9 @@ static pci_ers_result_t ramshared_pci_error_detected(struct pci_dev *pdev,
 
 static pci_ers_result_t ramshared_pci_slot_reset(struct pci_dev *pdev)
 {
+	if (!pdev)
+		return PCI_ERS_RESULT_CAN_RECOVER;
+
 	dev_info(&pdev->dev, "PCIe slot reset recovery initiated\n");
 	pci_restore_state(pdev);
 	return PCI_ERS_RESULT_RECOVERED;
@@ -138,6 +151,9 @@ static pci_ers_result_t ramshared_pci_slot_reset(struct pci_dev *pdev)
 
 static void ramshared_pci_resume(struct pci_dev *pdev)
 {
+	if (!pdev)
+		return;
+
 	dev_info(&pdev->dev, "PCIe link resumed\n");
 }
 
