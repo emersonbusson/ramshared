@@ -12,6 +12,7 @@
 
 #include <ntddk.h>
 #include <storport.h>
+#include <wdf.h>
 #include "protocol.h"
 
 typedef enum _RAMSHARED_SLOT_STATE {
@@ -34,6 +35,13 @@ typedef struct _RAMSHARED_INFLIGHT {
 	UINT32 BufSlot;
 	RAMSHARED_SLOT_STATE State;
 } RAMSHARED_INFLIGHT, *PRAMSHARED_INFLIGHT;
+
+typedef struct _RAMSHARED_QUEUE_CONTEXT {
+	WDFQUEUE Queue;
+	WDFSPINLOCK Lock;
+} RAMSHARED_QUEUE_CONTEXT, *PRAMSHARED_QUEUE_CONTEXT;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(RAMSHARED_QUEUE_CONTEXT, QueueGetContext)
 
 typedef struct _RAMSHARED_QUEUE {
 	PMDL SqMdl;
