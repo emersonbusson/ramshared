@@ -3,7 +3,6 @@
  * Rings / doorbell / inflight / crash containment.
  * SPEC ITEM-5 / DT-2 / DT-4 / DT-10 / DT-18 / DT-22.
  */
-#include <ntintsafe.h>
 #include "queue.h"
 #include "virtdisk.h"
 
@@ -185,12 +184,8 @@ QRegister(
 	if (Reg->sq_ring_va == 0 || Reg->cq_ring_va == 0 || Reg->data_area_va == 0) {
 		return STATUS_INVALID_PARAMETER;
 	}
-	{
-		ULONGLONG expected_data_len;
-		status = RtlULongLongMult((ULONGLONG)Reg->queue_depth, Reg->max_io_bytes, &expected_data_len);
-		if (!NT_SUCCESS(status) || Reg->data_area_len < expected_data_len) {
-			return STATUS_INVALID_PARAMETER;
-		}
+	if (Reg->data_area_len < (UINT64)Reg->queue_depth * Reg->max_io_bytes) {
+		return STATUS_INVALID_PARAMETER;
 	}
 	/* Hard cap for lab safety (BSOD 0x3B AV_ramshared!QRegister on 32MiB map). */
 	if (Reg->data_area_len > RAMSHARED_MAX_DATA_MDL) {
@@ -212,23 +207,10 @@ QRegister(
 	Q->PendedFetch = NULL;
 	Q->OwnerProcess = NULL;
 
-	ULONGLONG temp_sq_mul;
-	ULONGLONG temp_sq_add;
-	ULONGLONG temp_cq_mul;
-	ULONGLONG temp_cq_add;
-
-	status = RtlULongLongMult((ULONGLONG)Reg->queue_depth, sizeof(RAMSHARED_SQE), &temp_sq_mul);
-	if (!NT_SUCCESS(status)) goto out_err;
-	status = RtlULongLongAdd(sizeof(RAMSHARED_RING_HDR), temp_sq_mul, &temp_sq_add);
-	if (!NT_SUCCESS(status)) goto out_err;
-
-	status = RtlULongLongMult((ULONGLONG)Reg->queue_depth, sizeof(RAMSHARED_CQE), &temp_cq_mul);
-	if (!NT_SUCCESS(status)) goto out_err;
-	status = RtlULongLongAdd(sizeof(RAMSHARED_RING_HDR), temp_cq_mul, &temp_cq_add);
-	if (!NT_SUCCESS(status)) goto out_err;
-
-	sq_bytes = (SIZE_T)temp_sq_add;
-	cq_bytes = (SIZE_T)temp_cq_add;
+	sq_bytes = sizeof(RAMSHARED_RING_HDR) +
+		   (SIZE_T)Reg->queue_depth * sizeof(RAMSHARED_SQE);
+	cq_bytes = sizeof(RAMSHARED_RING_HDR) +
+		   (SIZE_T)Reg->queue_depth * sizeof(RAMSHARED_CQE);
 	data_len = (SIZE_T)Reg->data_area_len;
 
 	status = QMapUserRegion(&Q->SqMdl, &mapped,
@@ -365,11 +347,7 @@ QSubmit(
 
 	/* Bounce WRITE into data slot (DT-4). */
 	if (Op == RAMSHARED_OP_WRITE && Len > 0 && sys_addr != NULL) {
-		ULONGLONG offset;
-		status = RtlULongLongMult((ULONGLONG)tag, Q->MaxIoBytes, &offset);
-		if (NT_SUCCESS(status)) {
-			RtlCopyMemory(Q->Data + (SIZE_T)offset, sys_addr, Len);
-		}
+		RtlCopyMemory(Q->Data + (SIZE_T)tag * Q->MaxIoBytes, sys_addr, Len);
 	}
 
 	/* Free -> Reserved -> Submitted (DT-6). Completing only on CQ path. */
@@ -546,14 +524,11 @@ QCommitAndFetch(_Inout_ PRAMSHARED_QUEUE Q, _In_ PIRP Irp)
 						 * Nested acquire was removed — it masked failed
 						 * outer holds and double-counted static sites.
 						 */
-						ULONGLONG offset;
-						NTSTATUS op_st = RtlULongLongMult((ULONGLONG)buf_slot, Q->MaxIoBytes, &offset);
-						if (NT_SUCCESS(op_st)) {
-							RtlCopyMemory(
-								sys_addr,
-								Q->Data + (SIZE_T)offset,
-								srb->DataTransferLength);
-						}
+						RtlCopyMemory(
+							sys_addr,
+							Q->Data + (SIZE_T)buf_slot *
+									  Q->MaxIoBytes,
+							srb->DataTransferLength);
 					}
 				}
 			}
