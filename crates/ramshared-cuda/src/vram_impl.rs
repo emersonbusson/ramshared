@@ -14,8 +14,6 @@ impl From<CudaError> for VramError {
                 len: len as u64,
                 size: size as u64,
             },
-            CudaError::OutOfMemory => VramError::OutOfMemory,
-            CudaError::InvalidValue => VramError::InvalidAlignment,
             other => VramError::Provider(other.to_string()),
         }
     }
@@ -86,29 +84,18 @@ mod tests {
     }
 
     #[test]
-    fn test_vram_error_conversion_out_of_memory() {
-        let cuda_err = CudaError::OutOfMemory;
-        let vram_err: VramError = cuda_err.into();
-
-        match vram_err {
-            VramError::OutOfMemory => (),
-            _ => panic!("Expected VramError::OutOfMemory"),
-        }
-    }
-
-    #[test]
     fn test_vram_error_conversion_provider() {
         let cuda_err = CudaError::Driver {
-            op: "someOp",
-            code: 999,
-            msg: "some error".to_string(),
+            op: "cuMemAlloc",
+            code: 2,
+            msg: "out of memory".to_string(),
         };
         let vram_err: VramError = cuda_err.into();
 
         match vram_err {
             VramError::Provider(msg) => {
-                assert!(msg.contains("someOp"));
-                assert!(msg.contains("CUresult=999"));
+                assert!(msg.contains("cuMemAlloc"));
+                assert!(msg.contains("CUresult=2"));
             }
             _ => panic!("Expected VramError::Provider"),
         }
