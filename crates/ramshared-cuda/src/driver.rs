@@ -116,6 +116,10 @@ impl Cuda {
             }
         };
 
+        if let Err(e) = syms.validate() {
+            return Err(CudaError::Symbol(e.to_string()));
+        }
+
         // SAFETY: init symbol resolved successfully.
         let r = unsafe { (syms.init)(0) };
         check(&syms, r, "cuInit")?;

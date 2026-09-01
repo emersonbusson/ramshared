@@ -52,3 +52,24 @@ pub struct Syms {
     pub mem_get_info: FnMemGetInfo,
     pub get_error_string: Option<FnGetErrorString>,
 }
+
+impl Syms {
+    /// Validates that all required function pointers are non-null before dispatch.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.init as usize == 0 { return Err("init is null"); }
+        if self.device_get_count as usize == 0 { return Err("device_get_count is null"); }
+        if self.device_get as usize == 0 { return Err("device_get is null"); }
+        if self.device_get_name as usize == 0 { return Err("device_get_name is null"); }
+        if self.ctx_create as usize == 0 { return Err("ctx_create is null"); }
+        if self.ctx_destroy as usize == 0 { return Err("ctx_destroy is null"); }
+        if self.ctx_synchronize as usize == 0 { return Err("ctx_synchronize is null"); }
+        if self.mem_alloc as usize == 0 { return Err("mem_alloc is null"); }
+        if self.mem_free as usize == 0 { return Err("mem_free is null"); }
+        if self.memcpy_htod as usize == 0 { return Err("memcpy_htod is null"); }
+        if self.memcpy_dtoh as usize == 0 { return Err("memcpy_dtoh is null"); }
+        if self.memset_d8 as usize == 0 { return Err("memset_d8 is null"); }
+        if self.mem_get_info as usize == 0 { return Err("mem_get_info is null"); }
+        // get_error_string is optional, no check needed.
+        Ok(())
+    }
+}
