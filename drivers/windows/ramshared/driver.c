@@ -249,6 +249,15 @@ HwStorFreeAdapterResources(_In_ PVOID DeviceExtension)
 	}
 }
 
+VOID
+RamsharedDriverUnload(_In_ PDRIVER_OBJECT DriverObject)
+{
+	if (!DriverObject)
+		return;
+
+	CtlDeleteControlDevice();
+}
+
 NTSTATUS
 DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 {
@@ -305,5 +314,9 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 
 	status = CtlCreateControlDevice(DriverObject, RamsharedSddl,
 					&GUID_DEVINTERFACE_RAMSHARED_CTL);
+	if (NT_SUCCESS(status)) {
+		DriverObject->DriverUnload = RamsharedDriverUnload;
+	}
+
 	return status;
 }

@@ -1,0 +1,9 @@
+RamShared control driver (`drivers/windows/ramshared/control.c` and `driver.c`) is implemented using the Windows Driver Model (WDM) and StorPort.
+It does not use the Kernel-Mode Driver Framework (KMDF) or functions like `EvtDriverUnload`.
+Tasks requesting audits or fixes for KMDF APIs (`EvtDriverUnload`) in this codebase constitute an architectural mismatch.
+
+Evidence:
+1. `driver.c` uses `StorPortInitialize` in `DriverEntry`.
+2. StorPort miniports do not register a `DriverUnload` routine (it's handled by StorPort port driver).
+3. The prompt explicitly specifies "guard clauses in EvtDriverUnload context cleanup" which is KMDF terminology.
+4. "The RamShared control driver ... is implemented using the Windows Driver Model (WDM) ... It does not use the Kernel-Mode Driver Framework (KMDF)" is explicitly recorded in Memory.
