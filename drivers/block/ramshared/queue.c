@@ -57,10 +57,10 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
 		return BLK_STS_IOERR;
 
-	if (unlikely(pos + len > rs_dev->capacity_bytes)) {
+	if (unlikely(pos > rs_dev->dma.size || len > rs_dev->dma.size - pos)) {
 		dev_err_ratelimited(rs_dev->dev,
-			"I/O bounds violation: pos=%lld, len=%zu, cap=%llu\n",
-			pos, len, rs_dev->capacity_bytes);
+			"I/O bounds violation: pos=%lld, len=%zu, mapped=%zu\n",
+			pos, len, rs_dev->dma.size);
 		return BLK_STS_IOERR;
 	}
 
@@ -113,8 +113,8 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
 		return -EIO;
 
-	if (unlikely(pos + len > rs_dev->capacity_bytes))
-		return -EIO;
+	if (unlikely(pos > rs_dev->dma.size || len > rs_dev->dma.size - pos))
+		return -ERANGE;
 
 	vram_ptr = rs_dev->dma.cpu_addr + pos;
 	mem = kmap_local_page(page);
