@@ -255,6 +255,10 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 	HW_INITIALIZATION_DATA hw;
 	NTSTATUS status;
 
+	if (DriverObject == NULL || RegistryPath == NULL) {
+		return STATUS_INVALID_PARAMETER;
+	}
+
 	RtlZeroMemory(&hw, sizeof(hw));
 	hw.HwInitializationDataSize = sizeof(HW_INITIALIZATION_DATA);
 	hw.AdapterInterfaceType = Internal;
@@ -305,5 +309,9 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 
 	status = CtlCreateControlDevice(DriverObject, RamsharedSddl,
 					&GUID_DEVINTERFACE_RAMSHARED_CTL);
-	return status;
+	if (!NT_SUCCESS(status)) {
+		return status;
+	}
+
+	return STATUS_SUCCESS;
 }
