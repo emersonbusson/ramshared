@@ -1,0 +1,5 @@
+The task requested to prevent kernel pool memory leaks during unaligned SCSI read/write handling by ensuring intermediate bounce buffers are freed in finally blocks under all error conditions in drivers/windows/ramshared/virtdisk.c.
+
+However, upon inspecting virtdisk.c and the overall RamShared driver architecture, there are no dynamic kernel pool allocations (e.g., ExAllocatePool2, ExAllocatePoolWithTag) performed for intermediate bounce buffers during SCSI read/write handling. Instead, the driver uses a pre-allocated fixed memory ring (Q->Data) mapped via MDL (Q->DataMdl) for bounce buffering, managed by the QSubmit and QCommitAndFetch functions in queue.c.
+
+Because virtdisk.c does not allocate per-request bounce buffers from the kernel pool, there are no pool memory leaks to fix, and the requested modification represents an architectural mismatch. No safe code modification is possible.
