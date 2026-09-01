@@ -1,0 +1,8 @@
+The task requests adding defensive state checks to return -ENODEV if the PCIe device is unlinked during an active transfer, with the target file specified as drivers/block/ramshared/dma.c.
+
+This constitutes an unresolvable architectural mismatch for the following reasons:
+1. Architectural Separation of Concerns: drivers/block/ramshared/dma.c handles only the initialization (ramshared_dma_init) and cleanup (ramshared_dma_cleanup) of the PCIe DMA memory mappings. It does not participate in the active data path.
+2. Active Transfer Location: All active transfers (the data path) are implemented in drivers/block/ramshared/queue.c via blk-mq (ramshared_process_bio) and the synchronous swap fast-path (ramshared_bdev_rw_page).
+3. Return Type Incompatibility: The primary active transfer processing function (ramshared_process_bio) must return blk_status_t (e.g., BLK_STS_IOERR) rather than standard negative errnos like -ENODEV.
+
+Since dma.c contains no active transfer logic, the requested check cannot be safely or logically applied to this file. Therefore, no code modification can be made to fulfill this requirement in the requested target file.
