@@ -49,6 +49,15 @@ pub mod uapi {
         pub available_for_reservation: u64,
         pub physical_adapter_index: u32,
     }
+
+    const _: () = {
+        assert!(std::mem::size_of::<AdapterInfo>() == 20);
+        assert!(std::mem::align_of::<AdapterInfo>() == 4);
+        assert!(std::mem::size_of::<EnumAdapters2>() == 16);
+        assert!(std::mem::align_of::<EnumAdapters2>() == 8);
+        assert!(std::mem::size_of::<QueryVideoMemoryInfo>() == 56);
+        assert!(std::mem::align_of::<QueryVideoMemoryInfo>() == 8);
+    };
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
