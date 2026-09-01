@@ -148,7 +148,7 @@ if (-not $SkipDriverIdentity) {
     Write-Output "PASS virtual_bus_is_explicit"
     Write-Output "PASS inf_virtual_bus_fallback"
     Write-Output "PASS no_false_physical_bus"
-    if ($virtualDisk -notmatch 'STATUS_INSUFFICIENT_RESOURCES[\s\S]*StorPortDeviceBusy' -or
+    if ($virtualDisk -notmatch 'STATUS_DEVICE_BUSY[\s\S]*StorPortDeviceBusy' -or
         $virtualDisk -notmatch 'Srb->ScsiStatus\s*=\s*SCSISTAT_BUSY' -or
         $virtualDisk -notmatch 'Srb->SrbStatus\s*=\s*SRB_STATUS_BUSY') {
         throw "queue_full_returns_storport_busy failed"
