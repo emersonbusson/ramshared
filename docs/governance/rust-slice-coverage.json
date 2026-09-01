@@ -157,7 +157,7 @@
         "-p",
         "ramshared-winsvc",
         "--files",
-        "crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs,crates/ramshared-winsvc/src/host_safety.rs",
+        "crates/ramshared-winsvc/src/config.rs,crates/ramshared-winsvc/src/evidence.rs,crates/ramshared-winsvc/src/driver_link.rs,crates/ramshared-winsvc/src/broker_tenant.rs,crates/ramshared-winsvc/src/runtime.rs,crates/ramshared-winsvc/src/service.rs,crates/ramshared-winsvc/src/host_safety.rs,crates/ramshared-winsvc/src/proto.rs",
         "--min",
         "80"
       ],
@@ -171,7 +171,8 @@
         "crates/ramshared-winsvc/src/broker_tenant.rs",
         "crates/ramshared-winsvc/src/runtime.rs",
         "crates/ramshared-winsvc/src/service.rs",
-        "crates/ramshared-winsvc/src/host_safety.rs"
+        "crates/ramshared-winsvc/src/host_safety.rs",
+        "crates/ramshared-winsvc/src/proto.rs"
       ],
       "min": 80
     },
