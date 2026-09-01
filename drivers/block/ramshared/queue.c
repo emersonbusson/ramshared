@@ -11,6 +11,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/highmem.h>
 #include <linux/io.h>
+#include <linux/overflow.h>
 #include "ramshared.h"
 #include "compat.h"
 
@@ -49,12 +50,15 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 {
 	struct request *rq = bd->rq;
 	struct ramshared_device *rs_dev = rq->q->queuedata;
-	loff_t pos = (loff_t)blk_rq_pos(rq) << RAMSHARED_SECTOR_SHIFT;
+	loff_t pos;
 	size_t len = blk_rq_bytes(rq);
 	blk_status_t status = BLK_STS_OK;
 	struct bio *bio;
 
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
+		return BLK_STS_IOERR;
+
+	if (unlikely(check_shl_overflow((loff_t)blk_rq_pos(rq), RAMSHARED_SECTOR_SHIFT, &pos)))
 		return BLK_STS_IOERR;
 
 	if (unlikely(pos + len > rs_dev->capacity_bytes)) {
@@ -104,13 +108,16 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 				  struct page *page, enum req_op op)
 {
 	struct ramshared_device *rs_dev = bdev->bd_disk->private_data;
-	loff_t pos = (loff_t)sector << RAMSHARED_SECTOR_SHIFT;
+	loff_t pos;
 	size_t len = PAGE_SIZE;
 	void __iomem *vram_ptr;
 	void *mem;
 	int is_write = op_is_write(op);
 
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
+		return -EIO;
+
+	if (unlikely(check_shl_overflow((loff_t)sector, RAMSHARED_SECTOR_SHIFT, &pos)))
 		return -EIO;
 
 	if (unlikely(pos + len > rs_dev->capacity_bytes))
