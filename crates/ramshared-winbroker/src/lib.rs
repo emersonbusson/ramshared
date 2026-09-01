@@ -48,12 +48,27 @@ impl std::fmt::Display for WinBrokerError {
     }
 }
 
+#[cfg(windows)]
+const ERROR_PIPE_BUSY: i32 = windows_sys::Win32::Foundation::ERROR_PIPE_BUSY as i32;
+#[cfg(not(windows))]
+const ERROR_PIPE_BUSY: i32 = 231;
+
+#[cfg(windows)]
+const ERROR_NO_DATA: i32 = windows_sys::Win32::Foundation::ERROR_NO_DATA as i32;
+#[cfg(not(windows))]
+const ERROR_NO_DATA: i32 = 232;
+
+#[cfg(windows)]
+const ERROR_BROKEN_PIPE: i32 = windows_sys::Win32::Foundation::ERROR_BROKEN_PIPE as i32;
+#[cfg(not(windows))]
+const ERROR_BROKEN_PIPE: i32 = 109;
+
 impl From<std::io::Error> for WinBrokerError {
     fn from(error: std::io::Error) -> Self {
         match error.raw_os_error() {
-            Some(231) => Self::PipeBusy,   // ERROR_PIPE_BUSY
-            Some(232) => Self::NoData,     // ERROR_NO_DATA
-            Some(109) => Self::BrokenPipe, // ERROR_BROKEN_PIPE
+            Some(ERROR_PIPE_BUSY) => Self::PipeBusy,
+            Some(ERROR_NO_DATA) => Self::NoData,
+            Some(ERROR_BROKEN_PIPE) => Self::BrokenPipe,
             _ => Self::Other(error),
         }
     }
@@ -319,14 +334,15 @@ mod tests {
     fn winbrokererror_mapping() {
         use super::WinBrokerError;
         use std::io;
+        use super::{ERROR_PIPE_BUSY, ERROR_NO_DATA, ERROR_BROKEN_PIPE};
 
-        let e = io::Error::from_raw_os_error(231);
+        let e = io::Error::from_raw_os_error(ERROR_PIPE_BUSY);
         assert!(matches!(WinBrokerError::from(e), WinBrokerError::PipeBusy));
 
-        let e = io::Error::from_raw_os_error(232);
+        let e = io::Error::from_raw_os_error(ERROR_NO_DATA);
         assert!(matches!(WinBrokerError::from(e), WinBrokerError::NoData));
 
-        let e = io::Error::from_raw_os_error(109);
+        let e = io::Error::from_raw_os_error(ERROR_BROKEN_PIPE);
         assert!(matches!(
             WinBrokerError::from(e),
             WinBrokerError::BrokenPipe
