@@ -1,0 +1,3 @@
+Architectural Mismatch:
+The task requested to audit WdfRequestComplete paths to ensure memory buffers are freed exactly once in drivers/windows/ramshared/control.c.
+However, the RamShared Windows codebase is a WDM/StorPort driver that uses raw PIRP handling and IoCompleteRequest. There are no WDF/KMDF functions or WDFREQUEST objects in this codebase. Thus, this constitutes an unresolvable architectural mismatch and no safe code modification can be performed.
