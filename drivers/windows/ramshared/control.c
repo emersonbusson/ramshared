@@ -2,6 +2,7 @@
 /*
  * Control device IOCTL dispatch + security (SPEC ITEM-5 / RNF-4 / DT-1 / DT-25).
  */
+#include <ntintsafe.h>
 #include "control.h"
 #include "queue.h"
 #include "virtdisk.h"
