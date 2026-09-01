@@ -146,6 +146,29 @@ impl VulkanProvider {
     pub fn open(ordinal: u32) -> Result<Self, VramError> {
         // SAFETY: loads libvulkan.so.1 via libloading; symbols remain valid as long as `entry` lives.
         let entry = unsafe { ash::Entry::load() }.map_err(|e| vk_err("load", e))?;
+
+        // Verify required Vulkan entry point function pointers are loaded to prevent
+        // ash from panicking when invoking missing driver functions (e.g., missing ICD).
+        let req_names: &[&[u8]] = &[
+            b"vkCreateInstance\0",
+            b"vkEnumerateInstanceExtensionProperties\0",
+            b"vkEnumerateInstanceLayerProperties\0",
+        ];
+        for &name in req_names {
+            // SAFETY: array elements are valid null-terminated strings.
+            let cname = unsafe { CStr::from_bytes_with_nul_unchecked(name) };
+            // SAFETY: entry is valid; name is valid.
+            let fp = unsafe {
+                entry.get_instance_proc_addr(vk::Instance::null(), cname.as_ptr())
+            };
+            if fp.is_none() {
+                return Err(VramError::Provider(format!(
+                    "missing required Vulkan entry point: {:?}",
+                    cname
+                )));
+            }
+        }
+
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
         let ci = vk::InstanceCreateInfo::default().application_info(&app);
         // SAFETY: `ci`/`app` valid during call; `None` = default allocator.
