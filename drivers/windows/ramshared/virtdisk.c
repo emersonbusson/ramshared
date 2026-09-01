@@ -490,9 +490,11 @@ VdTranslateSrb(
 			offset = 0;
 			len = 0;
 		} else {
+			UINT64 lba;
+
 			/* Parse LBA from CDB (10-byte and 16-byte forms). */
 			if (op == SCSIOP_READ16 || op == SCSIOP_WRITE16) {
-				offset = ((UINT64)Srb->Cdb[2] << 56) |
+				lba = ((UINT64)Srb->Cdb[2] << 56) |
 					 ((UINT64)Srb->Cdb[3] << 48) |
 					 ((UINT64)Srb->Cdb[4] << 40) |
 					 ((UINT64)Srb->Cdb[5] << 32) |
@@ -501,13 +503,31 @@ VdTranslateSrb(
 					 ((UINT64)Srb->Cdb[8] << 8) |
 					 ((UINT64)Srb->Cdb[9]);
 			} else {
-				offset = ((UINT64)Srb->Cdb[2] << 24) |
+				lba = ((UINT64)Srb->Cdb[2] << 24) |
 					 ((UINT64)Srb->Cdb[3] << 16) |
 					 ((UINT64)Srb->Cdb[4] << 8) |
 					 ((UINT64)Srb->Cdb[5]);
 			}
-			offset *= Disk->block_size;
 			len = Srb->DataTransferLength;
+
+			if (!VdCheckLbaBounds(Disk, lba, len, &offset)) {
+				/*
+				 * Illegal request, Logical block address out of range.
+				 * Use 0x05 (ILLEGAL_REQUEST), ASC=0x21, ASCQ=0x00.
+				 */
+				Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+				Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
+				if (Srb->SenseInfoBuffer && Srb->SenseInfoBufferLength >= 18) {
+					UCHAR *sense = (UCHAR *)Srb->SenseInfoBuffer;
+					RtlZeroMemory(sense, Srb->SenseInfoBufferLength);
+					sense[0] = 0x70;
+					sense[2] = 0x05; /* ILLEGAL REQUEST */
+					sense[7] = 10;
+					sense[12] = 0x21; /* LOGICAL BLOCK ADDRESS OUT OF RANGE */
+				}
+				break;
+			}
+
 			if (op == SCSIOP_READ || op == SCSIOP_READ16) {
 				rop = RAMSHARED_OP_READ;
 			} else {
