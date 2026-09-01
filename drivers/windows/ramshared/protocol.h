@@ -32,7 +32,16 @@ typedef uint8_t ramshared_u8;
 #define RAMSHARED_ABI_VERSION 1u
 #define RAMSHARED_MAX_QD 256u	/* queue_depth max; power of two */
 #define RAMSHARED_MAX_IO (1u << 20) /* 1 MiB per bounce slot */
+#define RAMSHARED_PROTO_MAGIC 0x52414D53u /* 'RAMS' */
 #define RAMSHARED_RING_MAGIC 0x52535244u /* 'RSRD' */
+
+/* Protocol handshake header */
+typedef struct _RAMSHARED_PROTO_HDR {
+	ramshared_u32 magic;
+	ramshared_u32 version;
+	ramshared_u32 header_len;
+	ramshared_u32 reserved;
+} RAMSHARED_PROTO_HDR, *PRAMSHARED_PROTO_HDR;
 
 enum ramshared_op {
 	RAMSHARED_OP_READ = 0,
@@ -111,6 +120,7 @@ typedef struct _RAMSHARED_DISK_PARAMS {
 #ifdef __cplusplus
 static_assert(sizeof(RAMSHARED_SQE) == 32, "RAMSHARED_SQE size");
 static_assert(sizeof(RAMSHARED_CQE) == 16, "RAMSHARED_CQE size");
+static_assert(sizeof(RAMSHARED_PROTO_HDR) == 16, "RAMSHARED_PROTO_HDR size");
 static_assert(sizeof(RAMSHARED_RING_HDR) == 16, "RAMSHARED_RING_HDR size");
 static_assert(sizeof(RAMSHARED_REGISTER) == 72, "RAMSHARED_REGISTER size");
 static_assert(sizeof(RAMSHARED_DISK_PARAMS) == 32, "RAMSHARED_DISK_PARAMS size");
