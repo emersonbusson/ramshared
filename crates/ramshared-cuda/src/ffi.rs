@@ -37,62 +37,62 @@ pub type FnGetErrorString = unsafe extern "C" fn(CuResult, *mut *const c_char) -
 
 /// Table of resolved symbols from the CUDA driver library.
 pub struct Syms {
-    pub init: FnInit,
-    pub device_get_count: FnDeviceGetCount,
-    pub device_get: FnDeviceGet,
-    pub device_get_name: FnDeviceGetName,
-    pub ctx_create: FnCtxCreate,
-    pub ctx_destroy: FnCtxDestroy,
-    pub ctx_synchronize: FnCtxSynchronize,
-    pub mem_alloc: FnMemAlloc,
-    pub mem_free: FnMemFree,
-    pub memcpy_htod: FnMemcpyHtoD,
-    pub memcpy_dtoh: FnMemcpyDtoH,
-    pub memset_d8: FnMemsetD8,
-    pub mem_get_info: FnMemGetInfo,
+    pub init: Option<FnInit>,
+    pub device_get_count: Option<FnDeviceGetCount>,
+    pub device_get: Option<FnDeviceGet>,
+    pub device_get_name: Option<FnDeviceGetName>,
+    pub ctx_create: Option<FnCtxCreate>,
+    pub ctx_destroy: Option<FnCtxDestroy>,
+    pub ctx_synchronize: Option<FnCtxSynchronize>,
+    pub mem_alloc: Option<FnMemAlloc>,
+    pub mem_free: Option<FnMemFree>,
+    pub memcpy_htod: Option<FnMemcpyHtoD>,
+    pub memcpy_dtoh: Option<FnMemcpyDtoH>,
+    pub memset_d8: Option<FnMemsetD8>,
+    pub mem_get_info: Option<FnMemGetInfo>,
     pub get_error_string: Option<FnGetErrorString>,
 }
 
 impl Syms {
     /// Validates that all required function pointers are non-null before dispatch.
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.init as usize == 0 {
+        if self.init.is_none() {
             return Err("init is null");
         }
-        if self.device_get_count as usize == 0 {
+        if self.device_get_count.is_none() {
             return Err("device_get_count is null");
         }
-        if self.device_get as usize == 0 {
+        if self.device_get.is_none() {
             return Err("device_get is null");
         }
-        if self.device_get_name as usize == 0 {
+        if self.device_get_name.is_none() {
             return Err("device_get_name is null");
         }
-        if self.ctx_create as usize == 0 {
+        if self.ctx_create.is_none() {
             return Err("ctx_create is null");
         }
-        if self.ctx_destroy as usize == 0 {
+        if self.ctx_destroy.is_none() {
             return Err("ctx_destroy is null");
         }
-        if self.ctx_synchronize as usize == 0 {
+        if self.ctx_synchronize.is_none() {
             return Err("ctx_synchronize is null");
         }
-        if self.mem_alloc as usize == 0 {
+        if self.mem_alloc.is_none() {
             return Err("mem_alloc is null");
         }
-        if self.mem_free as usize == 0 {
+        if self.mem_free.is_none() {
             return Err("mem_free is null");
         }
-        if self.memcpy_htod as usize == 0 {
+        if self.memcpy_htod.is_none() {
             return Err("memcpy_htod is null");
         }
-        if self.memcpy_dtoh as usize == 0 {
+        if self.memcpy_dtoh.is_none() {
             return Err("memcpy_dtoh is null");
         }
-        if self.memset_d8 as usize == 0 {
+        if self.memset_d8.is_none() {
             return Err("memset_d8 is null");
         }
-        if self.mem_get_info as usize == 0 {
+        if self.mem_get_info.is_none() {
             return Err("mem_get_info is null");
         }
         // get_error_string is optional, no check needed.

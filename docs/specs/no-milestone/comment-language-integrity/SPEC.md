@@ -627,7 +627,7 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-vram --files crates/ram
 ```
 
 ```bash
-node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/probe.rs --min 80 --report-json tmp/cuda-probe-planning-cov.json
+node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ramshared-cuda/src/probe.rs,crates/ramshared-cuda/src/driver.rs,crates/ramshared-cuda/src/ffi.rs --min 80 --report-json tmp/cuda-probe-planning-cov.json
 ```
 
 | Covered path | Fresh measured line coverage |
@@ -647,7 +647,7 @@ node tools/ci/check-rust-slice-coverage.mjs -p ramshared-cuda --files crates/ram
 | `crates/ramshared-integrity/src/hash.rs` | 86.2% |
 | `crates/ramshared-integrity/src/pattern.rs` | 81.0% |
 | `crates/ramshared-vram/src/lib.rs` | 95.0% |
-| `crates/ramshared-cuda/src/probe.rs` | 82.8% |
+| `crates/ramshared-cuda/src/probe.rs,crates/ramshared-cuda/src/driver.rs,crates/ramshared-cuda/src/ffi.rs` | 82.8% |
 
 <!-- rust-slice-structural-contract-v1
 {

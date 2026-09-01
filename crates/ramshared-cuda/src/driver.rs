@@ -99,19 +99,19 @@ impl Cuda {
         // Driver API function pointer conforming to the signatures in ffi.rs.
         let syms = unsafe {
             Syms {
-                init: load_sym(handle, c"cuInit")?,
-                device_get_count: load_sym(handle, c"cuDeviceGetCount")?,
-                device_get: load_sym(handle, c"cuDeviceGet")?,
-                device_get_name: load_sym(handle, c"cuDeviceGetName")?,
-                ctx_create: load_sym(handle, c"cuCtxCreate_v2")?,
-                ctx_destroy: load_sym(handle, c"cuCtxDestroy_v2")?,
-                ctx_synchronize: load_sym(handle, c"cuCtxSynchronize")?,
-                mem_alloc: load_sym(handle, c"cuMemAlloc_v2")?,
-                mem_free: load_sym(handle, c"cuMemFree_v2")?,
-                memcpy_htod: load_sym(handle, c"cuMemcpyHtoD_v2")?,
-                memcpy_dtoh: load_sym(handle, c"cuMemcpyDtoH_v2")?,
-                memset_d8: load_sym(handle, c"cuMemsetD8_v2")?,
-                mem_get_info: load_sym(handle, c"cuMemGetInfo_v2")?,
+                init: Some(load_sym(handle, c"cuInit")?),
+                device_get_count: Some(load_sym(handle, c"cuDeviceGetCount")?),
+                device_get: Some(load_sym(handle, c"cuDeviceGet")?),
+                device_get_name: Some(load_sym(handle, c"cuDeviceGetName")?),
+                ctx_create: Some(load_sym(handle, c"cuCtxCreate_v2")?),
+                ctx_destroy: Some(load_sym(handle, c"cuCtxDestroy_v2")?),
+                ctx_synchronize: Some(load_sym(handle, c"cuCtxSynchronize")?),
+                mem_alloc: Some(load_sym(handle, c"cuMemAlloc_v2")?),
+                mem_free: Some(load_sym(handle, c"cuMemFree_v2")?),
+                memcpy_htod: Some(load_sym(handle, c"cuMemcpyHtoD_v2")?),
+                memcpy_dtoh: Some(load_sym(handle, c"cuMemcpyDtoH_v2")?),
+                memset_d8: Some(load_sym(handle, c"cuMemsetD8_v2")?),
+                mem_get_info: Some(load_sym(handle, c"cuMemGetInfo_v2")?),
                 get_error_string: load_sym_opt(handle, c"cuGetErrorString"),
             }
         };
@@ -121,7 +121,7 @@ impl Cuda {
         }
 
         // SAFETY: init symbol resolved successfully.
-        let r = unsafe { (syms.init)(0) };
+        let r = unsafe { (syms.init.unwrap())(0) };
         check(&syms, r, "cuInit")?;
 
         Ok(Cuda { _lib: lib, syms })
@@ -131,7 +131,7 @@ impl Cuda {
     pub fn device_count(&self) -> Result<i32, CudaError> {
         let mut count: i32 = 0;
         // SAFETY: count points to a valid local memory location.
-        let r = unsafe { (self.syms.device_get_count)(&mut count) };
+        let r = unsafe { (self.syms.device_get_count.unwrap())(&mut count) };
         check(&self.syms, r, "cuDeviceGetCount")?;
         Ok(count)
     }
@@ -140,13 +140,13 @@ impl Cuda {
     pub fn device(&self, ordinal: i32) -> Result<Device, CudaError> {
         let mut raw: CuDevice = 0;
         // SAFETY: raw points to a valid local memory location.
-        let r = unsafe { (self.syms.device_get)(&mut raw, ordinal) };
+        let r = unsafe { (self.syms.device_get.unwrap())(&mut raw, ordinal) };
         check(&self.syms, r, "cuDeviceGet")?;
 
         let mut buf = [0_i8; 128];
         // SAFETY: buf has space for `len` bytes; the API writes a null-terminated string.
         let r = unsafe {
-            (self.syms.device_get_name)(buf.as_mut_ptr() as *mut c_char, buf.len() as i32, raw)
+            (self.syms.device_get_name.unwrap())(buf.as_mut_ptr() as *mut c_char, buf.len() as i32, raw)
         };
         check(&self.syms, r, "cuDeviceGetName")?;
         buf[buf.len() - 1] = 0; // guarantees null-termination even if the API filled the entire buffer
@@ -162,7 +162,7 @@ impl Cuda {
     pub fn create_context<'a>(&'a self, device: &Device) -> Result<Context<'a>, CudaError> {
         let mut raw: CuContext = core::ptr::null_mut();
         // SAFETY: raw points to a valid local; device.raw is a valid CUdevice handle.
-        let r = unsafe { (self.syms.ctx_create)(&mut raw, 0, device.raw) };
+        let r = unsafe { (self.syms.ctx_create.unwrap())(&mut raw, 0, device.raw) };
         check(&self.syms, r, "cuCtxCreate")?;
         Ok(Context { cuda: self, raw })
     }
@@ -203,7 +203,7 @@ impl<'a> Context<'a> {
     pub fn mem_info(&self) -> Result<(usize, usize), CudaError> {
         let (mut free, mut total) = (0_usize, 0_usize);
         // SAFETY: out-parameters are valid local pointers; CUDA context is current on the calling thread.
-        let r = unsafe { (self.cuda.syms.mem_get_info)(&mut free, &mut total) };
+        let r = unsafe { (self.cuda.syms.mem_get_info.unwrap())(&mut free, &mut total) };
         check(&self.cuda.syms, r, "cuMemGetInfo")?;
         Ok((free, total))
     }
@@ -212,7 +212,7 @@ impl<'a> Context<'a> {
     pub fn alloc(&self, bytes: usize) -> Result<DeviceMem<'_, 'a>, CudaError> {
         let mut ptr: CuDevicePtr = 0;
         // SAFETY: ptr points to a valid local; CUDA context is current.
-        let r = unsafe { (self.cuda.syms.mem_alloc)(&mut ptr, bytes) };
+        let r = unsafe { (self.cuda.syms.mem_alloc.unwrap())(&mut ptr, bytes) };
         check(&self.cuda.syms, r, "cuMemAlloc")?;
         Ok(DeviceMem {
             ctx: self,
@@ -226,7 +226,7 @@ impl Drop for Context<'_> {
     fn drop(&mut self) {
         // SAFETY: raw handle was returned by cuCtxCreate and has not been destroyed yet. Best-effort drop.
         unsafe {
-            let _ = (self.cuda.syms.ctx_destroy)(self.raw);
+            let _ = (self.cuda.syms.ctx_destroy.unwrap())(self.raw);
         }
     }
 }
@@ -251,10 +251,10 @@ impl DeviceMem<'_, '_> {
     pub fn zero(&mut self) -> Result<(), CudaError> {
         let syms = &self.ctx.cuda.syms;
         // SAFETY: ptr and len accurately describe the region allocated for this memory object.
-        let r = unsafe { (syms.memset_d8)(self.ptr, 0, self.len) };
+        let r = unsafe { (syms.memset_d8.unwrap())(self.ptr, 0, self.len) };
         check(syms, r, "cuMemsetD8")?;
         // SAFETY: cuCtxSynchronize takes no arguments.
-        let r = unsafe { (syms.ctx_synchronize)() };
+        let r = unsafe { (syms.ctx_synchronize.unwrap())() };
         check(syms, r, "cuCtxSynchronize")
     }
 
@@ -264,7 +264,7 @@ impl DeviceMem<'_, '_> {
         let syms = &self.ctx.cuda.syms;
         // SAFETY: offset and length validated by bounds(); src is a valid memory slice.
         let r = unsafe {
-            (syms.memcpy_htod)(
+            (syms.memcpy_htod.unwrap())(
                 self.ptr + off as u64,
                 src.as_ptr() as *const c_void,
                 src.len(),
@@ -279,7 +279,7 @@ impl DeviceMem<'_, '_> {
         let syms = &self.ctx.cuda.syms;
         // SAFETY: offset and length validated by bounds(); dst is a valid mutable slice.
         let r = unsafe {
-            (syms.memcpy_dtoh)(
+            (syms.memcpy_dtoh.unwrap())(
                 dst.as_mut_ptr() as *mut c_void,
                 self.ptr + off as u64,
                 dst.len(),
@@ -304,7 +304,7 @@ impl Drop for DeviceMem<'_, '_> {
     fn drop(&mut self) {
         // SAFETY: ptr was returned by a successful cuMemAlloc call and has not been freed.
         unsafe {
-            let _ = (self.ctx.cuda.syms.mem_free)(self.ptr);
+            let _ = (self.ctx.cuda.syms.mem_free.unwrap())(self.ptr);
         }
     }
 }
