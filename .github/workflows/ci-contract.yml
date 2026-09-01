@@ -167,10 +167,16 @@ jobs:
       - name: Install pinned cargo llvm-cov
         run: cargo install cargo-llvm-cov --locked --version 0.8.7
 
+      - name: Install Vulkan dependencies for coverage
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+
       - name: Run exact SPEC-selected Rust coverage
         shell: bash
         env:
           CI_EVENT_NAME: ${{ github.event_name }}
+      - name: Install Vulkan dependencies for coverage
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+
           CI_BASE_REF: ${{ github.base_ref }}
           CI_PUSH_BEFORE: ${{ github.event.before }}
         run: |
