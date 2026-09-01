@@ -147,7 +147,7 @@ mod tests {
             std::thread::yield_now();
         };
         assert_eq!(completions.len(), 1);
-        assert!(completions[0].result < 0);
+        assert!(completions[0].result.is_err());
 
         drop(session);
         drop(file);

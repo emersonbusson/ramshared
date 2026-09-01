@@ -168,12 +168,12 @@ fn run_server_loop(
         }
 
         for completion in completions {
-            if completion.result == ublk::UBLK_IO_RES_ABORT {
+            if completion.result == Err(ramshared_uring::UringError::NoDev) {
                 return Ok(backend); // teardown: STOP/DEL_DEV aborted the FETCH
             }
-            if completion.result < 0 {
+            if completion.result.is_err() {
                 return Err(io::Error::other(format!(
-                    "FETCH failed: {}",
+                    "FETCH failed: {:?}",
                     completion.result
                 )));
             }
@@ -343,12 +343,12 @@ fn run_ring_owner<S: QueueServer>(
         } else {
             // Idle: blocks until the next CQE (request served or abort).
             for completion in server.wait_and_drain()? {
-                if completion.result == ublk::UBLK_IO_RES_ABORT {
+                if completion.result == Err(ramshared_uring::UringError::NoDev) {
                     return Ok(()); // teardown: STOP/DEL_DEV aborted the FETCH
                 }
-                if completion.result < 0 {
+                if completion.result.is_err() {
                     return Err(io::Error::other(format!(
-                        "FETCH failed: {}",
+                        "FETCH failed: {:?}",
                         completion.result
                     )));
                 }
@@ -830,10 +830,10 @@ mod join_tests {
         let queue = FakeQueue::new(
             descriptor_bytes(ublk::UBLK_IO_OP_READ, 1),
             vec![
-                vec![ramshared_uring::UblkCompletion { tag: 0, result: 0 }],
+                vec![ramshared_uring::UblkCompletion { tag: 0, result: Ok(0) }],
                 vec![ramshared_uring::UblkCompletion {
                     tag: 0,
-                    result: ublk::UBLK_IO_RES_ABORT,
+                    result: Err(ramshared_uring::UringError::NoDev),
                 }],
             ],
             Arc::clone(&commits),
@@ -852,10 +852,10 @@ mod join_tests {
         let unsupported = FakeQueue::new(
             descriptor_bytes(ublk::UBLK_IO_OP_WRITE_SAME, 1),
             vec![
-                vec![ramshared_uring::UblkCompletion { tag: 0, result: 0 }],
+                vec![ramshared_uring::UblkCompletion { tag: 0, result: Ok(0) }],
                 vec![ramshared_uring::UblkCompletion {
                     tag: 0,
-                    result: ublk::UBLK_IO_RES_ABORT,
+                    result: Err(ramshared_uring::UringError::NoDev),
                 }],
             ],
             Arc::clone(&commits),
