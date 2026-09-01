@@ -172,10 +172,7 @@ fn run_server_loop(
                 return Ok(backend); // teardown: STOP/DEL_DEV aborted the FETCH
             }
             if completion.result < 0 {
-                return Err(io::Error::other(format!(
-                    "FETCH failed: {}",
-                    completion.result
-                )));
+                return Err(io::Error::from_raw_os_error(-completion.result));
             }
 
             // result == UBLK_IO_RES_OK (0): there is a request ready at the tag.
@@ -347,10 +344,7 @@ fn run_ring_owner<S: QueueServer>(
                     return Ok(()); // teardown: STOP/DEL_DEV aborted the FETCH
                 }
                 if completion.result < 0 {
-                    return Err(io::Error::other(format!(
-                        "FETCH failed: {}",
-                        completion.result
-                    )));
+                    return Err(io::Error::from_raw_os_error(-completion.result));
                 }
                 if dispatch_request(&mut server, completion.tag, &work_tx, &mut buf_pool)? {
                     in_flight += 1;

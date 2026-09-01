@@ -1,0 +1,12 @@
+<<<<<<< SEARCH
+            if completion.result < 0 {
+                return Err(io::Error::other(format!(
+                    "FETCH failed: {}",
+                    completion.result
+                )));
+            }
+=======
+            if completion.result < 0 {
+                return Err(io::Error::from_raw_os_error(-completion.result));
+            }
+>>>>>>> REPLACE
