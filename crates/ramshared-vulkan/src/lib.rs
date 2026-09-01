@@ -336,11 +336,6 @@ fn create_device_resources(
     .ok_or_else(|| {
         VramError::Provider("sem memory type HOST_VISIBLE|COHERENT p/ staging".into())
     })?;
-    if mt >= mprops.memory_type_count {
-        return Err(VramError::Provider(
-            "memory type index out of physical bounds".into(),
-        ));
-    }
     let mai = vk::MemoryAllocateInfo::default()
         .allocation_size(req.size)
         .memory_type_index(mt);
@@ -425,13 +420,6 @@ impl VramProvider for VulkanProvider {
                 ));
             }
         };
-        if mt >= mprops.memory_type_count {
-            // SAFETY: buffer created above; destroyed before returning (no leak).
-            unsafe { self.device.destroy_buffer(buffer, None) };
-            return Err(VramError::Provider(
-                "memory type index out of physical bounds".into(),
-            ));
-        }
         let mai = vk::MemoryAllocateInfo::default()
             .allocation_size(req.size)
             .memory_type_index(mt);
