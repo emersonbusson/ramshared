@@ -303,13 +303,13 @@ QSubmit(
 
 	/* DT-6: hold IoRundown for every mapped ring/data touch in this path. */
 	if (!ExAcquireRundownProtection(&Q->IoRundown))
-		return STATUS_DEVICE_NOT_CONNECTED;
+		return STATUS_CANCELLED;
 
 	qs = InterlockedOr(&Q->QState, 0);
 	if (!Q->Registered || Q->Sq == NULL ||
 	    qs == (LONG)RamQFailed || qs == (LONG)RamQClosing) {
 		ExReleaseRundownProtection(&Q->IoRundown);
-		return STATUS_DEVICE_NOT_CONNECTED;
+		return STATUS_CANCELLED;
 	}
 	if (Len > Q->MaxIoBytes) {
 		ExReleaseRundownProtection(&Q->IoRundown);
@@ -342,7 +342,7 @@ QSubmit(
 	if (tag == RAMSHARED_MAX_QD) {
 		KeReleaseSpinLock(&Q->Lock, old);
 		ExReleaseRundownProtection(&Q->IoRundown);
-		return STATUS_INSUFFICIENT_RESOURCES;
+		return STATUS_DEVICE_BUSY;
 	}
 
 	/* Bounce WRITE into data slot (DT-4). */
@@ -621,7 +621,7 @@ QTeardownOnCrash(_Inout_ PRAMSHARED_QUEUE Q)
 	 * not hang waiting for a dead userspace backend.
 	 *
 	 * Discipline:
-	 * - Registered=FALSE first so new QSubmit fails fast (STATUS_DEVICE_NOT_CONNECTED).
+	 * - Registered=FALSE first so new QSubmit fails fast (STATUS_CANCELLED).
 	 * - Snapshot SRB pointers under the lock; RequestComplete **outside** the lock
 	 *   (StorPort may re-enter StartIo — deadlock if we hold Q->Lock).
 	 * - Never pass NULL DeviceExtension (ignored → hang). Use VdGetAdapterExt().

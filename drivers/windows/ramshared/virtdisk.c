@@ -519,7 +519,7 @@ VdTranslateSrb(
 			Srb->SrbStatus = SRB_STATUS_PENDING;
 			return;
 		}
-		if (st == STATUS_INSUFFICIENT_RESOURCES) {
+		if (st == STATUS_DEVICE_BUSY) {
 			/*
 			 * The request has not started: the bounded ring is temporarily
 			 * full. Apply per-LUN backpressure and let StorPort retry after
