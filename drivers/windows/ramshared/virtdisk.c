@@ -188,6 +188,34 @@ VdSetSenseNotReady(_Inout_ PSCSI_REQUEST_BLOCK Srb)
 }
 
 /*
+ * Sense: SK=ILLEGAL_REQUEST (0x05), ASC=LOGICAL BLOCK ADDRESS OUT OF RANGE (0x21),
+ * ASCQ=0x00.
+ */
+static VOID
+VdSetSenseIllegalRequest(_Inout_ PSCSI_REQUEST_BLOCK Srb)
+{
+	UCHAR *sense;
+	ULONG senseLen;
+
+	Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
+	sense = (UCHAR *)Srb->SenseInfoBuffer;
+	senseLen = Srb->SenseInfoBufferLength;
+	if (sense != NULL && senseLen >= 18) {
+		RtlZeroMemory(sense, senseLen);
+		/* Fixed format sense data (response code 0x70). */
+		sense[0] = 0x70;
+		sense[2] = 0x05; /* ILLEGAL REQUEST */
+		sense[7] = 10;   /* additional sense length */
+		sense[12] = 0x21; /* LOGICAL BLOCK ADDRESS OUT OF RANGE */
+		sense[13] = 0x00;
+		Srb->SrbStatus = (UCHAR)(SRB_STATUS_ERROR | SRB_STATUS_AUTOSENSE_VALID);
+	} else {
+		/* No sense buffer: still fail closed. */
+		Srb->SrbStatus = SRB_STATUS_ERROR;
+	}
+}
+
+/*
  * Standard INQUIRY + VPD 0x00 / 0x80 (unit serial from 16-byte disk serial).
  * CDB[1] EVPD bit, CDB[2] page code (DT-5 / RF-4 / VPD_SERIAL_MATCH).
  */
@@ -506,8 +534,16 @@ VdTranslateSrb(
 					 ((UINT64)Srb->Cdb[4] << 8) |
 					 ((UINT64)Srb->Cdb[5]);
 			}
+			if (Disk->block_size == 0 || offset > (~0ULL) / Disk->block_size) {
+				VdSetSenseIllegalRequest(Srb);
+				break;
+			}
 			offset *= Disk->block_size;
 			len = Srb->DataTransferLength;
+			if (len > Disk->size_bytes || offset > Disk->size_bytes - len) {
+				VdSetSenseIllegalRequest(Srb);
+				break;
+			}
 			if (op == SCSIOP_READ || op == SCSIOP_READ16) {
 				rop = RAMSHARED_OP_READ;
 			} else {
