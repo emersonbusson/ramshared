@@ -35,6 +35,65 @@ pub type FnMemsetD8 = unsafe extern "C" fn(CuDevicePtr, u8, usize) -> CuResult;
 pub type FnMemGetInfo = unsafe extern "C" fn(*mut usize, *mut usize) -> CuResult;
 pub type FnGetErrorString = unsafe extern "C" fn(CuResult, *mut *const c_char) -> CuResult;
 
+pub type CuArray = *mut c_void;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+#[allow(non_snake_case)]
+pub struct CUDA_MEMCPY2D_v2 {
+    pub srcXInBytes: usize,
+    pub srcY: usize,
+    pub srcMemoryType: c_uint,
+    pub srcHost: *const c_void,
+    pub srcDevice: CuDevicePtr,
+    pub srcArray: CuArray,
+    pub srcPitch: usize,
+
+    pub dstXInBytes: usize,
+    pub dstY: usize,
+    pub dstMemoryType: c_uint,
+    pub dstHost: *mut c_void,
+    pub dstDevice: CuDevicePtr,
+    pub dstArray: CuArray,
+    pub dstPitch: usize,
+
+    pub WidthInBytes: usize,
+    pub Height: usize,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+#[allow(non_snake_case)]
+pub struct CUDA_MEMCPY3D_v2 {
+    pub srcXInBytes: usize,
+    pub srcY: usize,
+    pub srcZ: usize,
+    pub srcLOD: usize,
+    pub srcMemoryType: c_uint,
+    pub srcHost: *const c_void,
+    pub srcDevice: CuDevicePtr,
+    pub srcArray: CuArray,
+    pub reserved0: *mut c_void,
+    pub srcPitch: usize,
+    pub srcHeight: usize,
+
+    pub dstXInBytes: usize,
+    pub dstY: usize,
+    pub dstZ: usize,
+    pub dstLOD: usize,
+    pub dstMemoryType: c_uint,
+    pub dstHost: *mut c_void,
+    pub dstDevice: CuDevicePtr,
+    pub dstArray: CuArray,
+    pub reserved1: *mut c_void,
+    pub dstPitch: usize,
+    pub dstHeight: usize,
+
+    pub WidthInBytes: usize,
+    pub Height: usize,
+    pub Depth: usize,
+}
+
 /// Table of resolved symbols from the CUDA driver library.
 pub struct Syms {
     pub init: FnInit,
