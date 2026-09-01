@@ -29,6 +29,7 @@ use crate::{
 
 const EIO: i32 = -5;
 const EINVAL: i32 = -22;
+const ERANGE: i32 = -34;
 
 trait QueueServer {
     fn submit_initial_fetch(&mut self) -> io::Result<()>;
@@ -89,7 +90,7 @@ pub fn serve_request<B: BlockBackend + ?Sized>(
         .checked_add(req.len as u64)
         .is_none_or(|end| end > backend.size_bytes())
     {
-        return EINVAL;
+        return ERANGE;
     }
 
     // Command guard
@@ -142,6 +143,7 @@ pub fn spawn_server(
     buf_size: usize,
     backend: RamBackend,
 ) -> io::Result<ServerHandle> {
+    let queue_depth = queue_depth.min(1024);
     let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
     let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
 
@@ -292,6 +294,7 @@ pub fn spawn_server_dt3<B: BlockBackend + Send + 'static>(
     buf_size: usize,
     backend: B,
 ) -> io::Result<ServerHandleDt3<B>> {
+    let queue_depth = queue_depth.min(1024);
     let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
     let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
 
@@ -473,6 +476,7 @@ pub fn spawn_server_dt3_vram(
     vram_bytes: usize,
     block_size: u32,
 ) -> io::Result<ServerHandleDt3Vram> {
+    let queue_depth = queue_depth.min(1024);
     let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
     let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
 
@@ -654,6 +658,7 @@ pub fn spawn_server_dt3_vram_with_residency(
     swap_dev: String,
     residency: ResidencyConfig,
 ) -> io::Result<ServerHandleDt3VramResidency> {
+    let queue_depth = queue_depth.min(1024);
     let char_dev = OpenOptions::new().read(true).write(true).open(char_path)?;
     let server = ramshared_uring::UblkServer::new(char_dev.as_raw_fd(), queue_depth, buf_size)?;
 
@@ -963,7 +968,7 @@ mod join_tests {
 
         request.len = 4096;
         request.offset = 4096; // Out of bounds (backend is 4096, offset 4096 + len 4096 = 8192 > 4096)
-        assert_eq!(serve_request(&request, &mut backend, &mut buffer), EINVAL);
+        assert_eq!(serve_request(&request, &mut backend, &mut buffer), ERANGE);
     }
 
     #[test]
