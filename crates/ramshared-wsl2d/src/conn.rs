@@ -246,12 +246,11 @@ pub fn spawn_acceptor(
                         || kind == std::io::ErrorKind::Interrupted
                         || kind == std::io::ErrorKind::WouldBlock
                     {
-                        let jitter =
-                            (std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .subsec_nanos()
-                                % 10) as u64;
+                        let jitter = (std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .subsec_nanos()
+                            % 10) as u64;
                         std::thread::sleep(std::time::Duration::from_millis(backoff_ms + jitter));
                         backoff_ms = std::cmp::min(backoff_ms * 2, 1000);
                         continue;
@@ -301,12 +300,11 @@ pub fn spawn_acceptor_tcp(
                         || kind == std::io::ErrorKind::Interrupted
                         || kind == std::io::ErrorKind::WouldBlock
                     {
-                        let jitter =
-                            (std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .subsec_nanos()
-                                % 10) as u64;
+                        let jitter = (std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .subsec_nanos()
+                            % 10) as u64;
                         std::thread::sleep(std::time::Duration::from_millis(backoff_ms + jitter));
                         backoff_ms = std::cmp::min(backoff_ms * 2, 1000);
                         continue;
@@ -786,7 +784,10 @@ mod tests {
         let acceptor = spawn_acceptor(unix_listener, one_export(4096), 0, jobs_tx);
         std::thread::sleep(Duration::from_millis(100));
 
-        assert!(!acceptor.is_finished(), "Acceptor must back off on WouldBlock, not exit");
+        assert!(
+            !acceptor.is_finished(),
+            "Acceptor must back off on WouldBlock, not exit"
+        );
 
         let _ = std::fs::remove_file(&unix_path);
     }
@@ -800,7 +801,10 @@ mod tests {
         let acceptor = spawn_acceptor_tcp(tcp_listener, one_export(4096), 0, jobs_tx);
         std::thread::sleep(Duration::from_millis(100));
 
-        assert!(!acceptor.is_finished(), "TCP Acceptor must back off on WouldBlock, not exit");
+        assert!(
+            !acceptor.is_finished(),
+            "TCP Acceptor must back off on WouldBlock, not exit"
+        );
     }
 
     #[test]
