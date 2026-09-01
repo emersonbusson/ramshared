@@ -57,10 +57,19 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
 		return BLK_STS_IOERR;
 
-	if (unlikely(pos + len > rs_dev->capacity_bytes)) {
+	if (unlikely(pos < 0 || len > rs_dev->capacity_bytes ||
+		     pos > rs_dev->capacity_bytes - len)) {
 		dev_err_ratelimited(rs_dev->dev,
 			"I/O bounds violation: pos=%lld, len=%zu, cap=%llu\n",
 			pos, len, rs_dev->capacity_bytes);
+		return BLK_STS_IOERR;
+	}
+
+	if (unlikely((pos & (RAMSHARED_SECTOR_SIZE - 1)) ||
+		     (len & (RAMSHARED_SECTOR_SIZE - 1)))) {
+		dev_err_ratelimited(rs_dev->dev,
+			"I/O alignment violation: pos=%lld, len=%zu\n",
+			pos, len);
 		return BLK_STS_IOERR;
 	}
 
@@ -111,10 +120,15 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 	int is_write = op_is_write(op);
 
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
-		return -EIO;
+		return -ENODEV;
 
-	if (unlikely(pos + len > rs_dev->capacity_bytes))
-		return -EIO;
+	if (unlikely(pos < 0 || len > rs_dev->capacity_bytes ||
+		     pos > rs_dev->capacity_bytes - len))
+		return -ERANGE;
+
+	if (unlikely((pos & (RAMSHARED_SECTOR_SIZE - 1)) ||
+		     (len & (RAMSHARED_SECTOR_SIZE - 1))))
+		return -EINVAL;
 
 	vram_ptr = rs_dev->dma.cpu_addr + pos;
 	mem = kmap_local_page(page);
