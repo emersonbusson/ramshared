@@ -33,7 +33,7 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 			atomic64_add(len, &rs_dev->read_bytes);
 		} else if (op == REQ_OP_WRITE) {
 			memcpy_toio(vram_ptr, src_or_dst, len);
-			dma_wmb();
+			wmb();
 			atomic64_add(len, &rs_dev->write_bytes);
 		}
 		kunmap_local(src_or_dst);
@@ -77,13 +77,13 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 		}
 		break;
 	case REQ_OP_FLUSH:
-		dma_wmb();
+		wmb();
 		status = BLK_STS_OK;
 		break;
 	case REQ_OP_DISCARD:
 	case REQ_OP_SECURE_ERASE:
 		memset_io(rs_dev->dma.cpu_addr + pos, 0, len);
-		dma_wmb();
+		wmb();
 		status = BLK_STS_OK;
 		break;
 	default:
@@ -121,7 +121,7 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 
 	if (is_write) {
 		memcpy_toio(vram_ptr, mem, len);
-		dma_wmb();
+		wmb();
 		atomic64_add(len, &rs_dev->write_bytes);
 	} else {
 		dma_rmb();
