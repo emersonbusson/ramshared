@@ -173,60 +173,6 @@ impl VulkanProvider {
                 "ICD missing required instance functions".into(),
             ));
         }
-
-        // Guard Clause: ash returns panic-stubs if standard entry points are missing;
-        // enforce dispatch table validity to prevent unexpected ring 3 segmentation faults.
-        let instance_fn = entry.static_fn();
-        let has_create = unsafe {
-            (instance_fn.get_instance_proc_addr)(vk::Instance::null(), c"vkCreateInstance".as_ptr())
-        }
-        .is_some();
-        let has_ext = unsafe {
-            (instance_fn.get_instance_proc_addr)(
-                vk::Instance::null(),
-                c"vkEnumerateInstanceExtensionProperties".as_ptr(),
-            )
-        }
-        .is_some();
-        let has_layer = unsafe {
-            (instance_fn.get_instance_proc_addr)(
-                vk::Instance::null(),
-                c"vkEnumerateInstanceLayerProperties".as_ptr(),
-            )
-        }
-        .is_some();
-        if !has_create || !has_ext || !has_layer {
-            return Err(VramError::Provider(
-                "ICD missing required instance functions".into(),
-            ));
-        }
-
-        // Guard Clause: ash returns panic-stubs if standard entry points are missing;
-        // enforce dispatch table validity to prevent unexpected ring 3 segmentation faults.
-        let instance_fn = entry.static_fn();
-        let has_create = unsafe {
-            (instance_fn.get_instance_proc_addr)(vk::Instance::null(), c"vkCreateInstance".as_ptr())
-        }
-        .is_some();
-        let has_ext = unsafe {
-            (instance_fn.get_instance_proc_addr)(
-                vk::Instance::null(),
-                c"vkEnumerateInstanceExtensionProperties".as_ptr(),
-            )
-        }
-        .is_some();
-        let has_layer = unsafe {
-            (instance_fn.get_instance_proc_addr)(
-                vk::Instance::null(),
-                c"vkEnumerateInstanceLayerProperties".as_ptr(),
-            )
-        }
-        .is_some();
-        if !has_create || !has_ext || !has_layer {
-            return Err(VramError::Provider(
-                "ICD missing required instance functions".into(),
-            ));
-        }
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
         let ci = vk::InstanceCreateInfo::default().application_info(&app);
         // SAFETY: `ci`/`app` valid during call; `None` = default allocator.
@@ -671,26 +617,6 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "requires Vulkan loader + ICD (lavapipe/llvmpipe is enough; run with --ignored)"]
-    fn open_returns_err_on_missing_icd() {
-        match VulkanProvider::open(0) {
-            Err(VramError::Provider(msg))
-                if msg.contains("ERROR_INCOMPATIBLE_DRIVER")
-                    || msg.contains("load")
-                    || msg.contains("ICD missing") => {}
-            Ok(_) => panic!(
-                "Expected Provider/VK_ERROR_INCOMPATIBLE_DRIVER on systems without a GPU or ICD, got Ok"
-            ),
-            Err(e) => panic!(
-                "Expected Provider/VK_ERROR_INCOMPATIBLE_DRIVER on systems without a GPU or ICD, got: {:?}",
-                e
-            ),
-        }
-    }
-
-    #[test]
-    #[test]
-    #[ignore = "requires Vulkan loader + ICD (lavapipe/llvmpipe is enough; run with --ignored)"]
     fn open_returns_err_on_missing_icd() {
         match VulkanProvider::open(0) {
             Err(VramError::Provider(msg))
