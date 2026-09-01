@@ -1,0 +1,9 @@
+Architectural Mismatch Finding:
+The task requests mapping semantic NTSTATUS returns (STATUS_INSUFFICIENT_RESOURCES, STATUS_DEVICE_CONFIGURATION_ERROR) for context allocation failure in an EvtDeviceAdd callback within drivers/windows/ramshared/driver.c.
+
+Based on the confirmed file contents and memory context:
+1. The RamShared driver is implemented as a Windows Driver Model (WDM) StorPort virtual miniport, not a Kernel-Mode Driver Framework (KMDF) driver. It does not use KMDF APIs or callbacks such as EvtDeviceAdd.
+2. The architectural equivalent to EvtDeviceAdd in this StorPort driver is HwStorFindAdapter. However, HwStorFindAdapter must return specific ULONG StorPort status codes (e.g., SP_RETURN_FOUND, SP_RETURN_ERROR), not NTSTATUS codes like STATUS_INSUFFICIENT_RESOURCES or STATUS_DEVICE_CONFIGURATION_ERROR.
+3. There is no manual context allocation (e.g., ExAllocatePool or WdfObjectAllocateContext) in driver.c that could fail. StorPort automatically allocates the device context (DeviceExtension) based on hw.DeviceExtensionSize = sizeof(RAMSHARED_ADAPTER_EXT) declared in DriverEntry.
+
+Therefore, the requested NTSTATUS return mapping for context allocation in EvtDeviceAdd cannot be safely implemented as it relies on an incompatible framework and non-existent manual context allocation logic in this codebase.
