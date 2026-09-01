@@ -234,3 +234,56 @@ The named sparse-policy construction and convenience constructors are covered by
 ```bash
 node tools/ci/check-rust-slice-coverage.mjs -p ramshared-block --files crates/ramshared-block/src/sparse_vram.rs --min 80 --report-json tmp/cascade-vram-ondemand-policy-cov.json
 ```
+
+<!-- rust-slice-test-only-localization-differential-v1
+{
+  "schema_version": 1,
+  "id": "vulkan-icd-dispatch-validation-test",
+  "kind": "rust-test-only-localization-differential",
+  "files": [
+    "crates/ramshared-vulkan/src/lib.rs"
+  ],
+  "verifications": [
+    {
+      "source": "crates/ramshared-vulkan/src/lib.rs",
+      "package": "ramshared-vulkan",
+      "test_module": "tests",
+      "cargo_test": [
+        "cargo",
+        "test",
+        "-p",
+        "ramshared-vulkan",
+        "--lib"
+      ],
+      "ignored_gpu_tests": [
+        {
+          "name": "open_enumerates_device_and_heap",
+          "command": [
+            "cargo",
+            "test",
+            "-p",
+            "ramshared-vulkan",
+            "--",
+            "--ignored",
+            "--test-threads=1"
+          ],
+          "evidence": "validation.md"
+        },
+        {
+          "name": "vulkan_roundtrip_write_then_read",
+          "command": [
+            "cargo",
+            "test",
+            "-p",
+            "ramshared-vulkan",
+            "--",
+            "--ignored",
+            "--test-threads=1"
+          ],
+          "evidence": "validation.md"
+        }
+      ]
+    }
+  ]
+}
+-->
