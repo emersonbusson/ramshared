@@ -294,7 +294,6 @@
           "crates/ramshared-config/src/error.rs",
           "crates/ramshared-config/src/lib.rs",
           "crates/ramshared-cuda/src/lib.rs",
-          "crates/ramshared-cuda/src/probe.rs",
           "crates/ramshared-integrity/src/hash.rs",
           "crates/ramshared-integrity/src/pattern.rs",
           "crates/ramshared-vram/src/lib.rs",

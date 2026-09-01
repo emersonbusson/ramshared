@@ -346,7 +346,7 @@ Hot arm (PF Usage>0) not re-run: already proven **0x7A/c0000185** (dump 27437); 
 **Verdict:** ✅ works (docs honesty)
 **Next action:** Product CUDA Windows path + MSVC winsvc when env available; keep host-real blocked.
 
-## 2026-07-09 — wsl2-cascade-boot (SSDV3) + human docs
+## 2026-07-09 — REDACTED-LAB-VM-boot (SSDV3) + human docs
 
 **What:** Opt-in systemd cascade boot (fail-closed preflight, stop=`down`), idempotent `up`, env size defaults; rewrite root docs to plain language.
 **Category:** local-check + integration (scripts)
@@ -359,7 +359,7 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 ```
 **Measured data:**
 - `cargo test -p ramshared-cli`: **17** passed, 0 failed
-- docs-check: OK; INDEX includes `wsl2-cascade-boot` DONE
+- docs-check: OK; INDEX includes `REDACTED-LAB-VM-boot` DONE
 - Full reboot e2e on this agent host: **not claimed** (user opt-in)
 **Verdict:** ✅ code path ready / 🟡 boot e2e deferred to operator enable
 **Next action:** User with systemd: `--enable` once and log `swapon --show` after reboot.
@@ -438,12 +438,12 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 **Verdict:** ✅ dual-boot **space** ready on E:; 🟡 OS install still needs one USB boot (cannot finish from WSL alone)
 **Next action:** USB install into unallocated only; then bare-metal nvidia/`/dev/dri` for Gate B
 
-## 2026-07-10 — PRD wsl2-native-vram-tier (languages + test matrix)
+## 2026-07-10 — PRD REDACTED-LAB-VM-vram-tier (languages + test matrix)
 
 **What:** SSDV3 PRD for “native” VRAM tier on WSL2/Ubuntu kernels; where to test; implementation languages.
 **Category:** local-check
 **Measured data:**
-- PRD path: docs/specs/no-milestone/wsl2-native-vram-tier/PRD.md
+- PRD path: docs/specs/no-milestone/REDACTED-LAB-VM-vram-tier/PRD.md
 - Phases P0 cascade (product) / P1 kernel-closer / P2 device-memory research / P3 mainline
 - Test matrix: P0 on WSL; kernel builds on linux-kernel-lab VM; P2 needs bare-metal/DDA not GPU-less VM
 - Languages: Rust userspace P0; C for Linux kernel work; RfL optional later; not Python/Node as LKM
@@ -458,13 +458,13 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 - ADR-0007 Accepted: kernel context → C11 mainline style; userspace P0 → Rust; RfL exception-only
 - AUDIT-2.5 go: docs/specs/no-milestone/kernel-native-language/AUDIT-2.5.md
 - PRD policy: docs/specs/no-milestone/kernel-native-language/PRD.md
-- Cross-link wsl2-native-vram-tier §8
+- Cross-link REDACTED-LAB-VM-vram-tier §8
 **Verdict:** ✅ go — not a feature IMPL; language/architecture lock
 **Next action:** Future P1/P2 kernel SPECs must cite ADR-0007
 
 ## 2026-07-10 — Parallel: win11 recreate + custom MS 6.18 kernel build
 
-**What:** Recreate win11-drill install surface; start official WSL2-Linux-Kernel 6.18.y build with swap/VRAM-path configs.
+**What:** Recreate win11-drill install surface; start official REDACTED-LAB-VMinux-Kernel 6.18.y build with swap/VRAM-path configs.
 **Category:** integration
 **Measured data:**
 - Win11 ISO Fido Latest Pro EN x64 → R:\Hyper-V\iso\Win11_25H2_English_x64_v2.iso **7.89 GB**
@@ -487,7 +487,7 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 **Verdict:** ✅ guards applied
 **Next action:** after Win11 OOBE, eject ISO; re-run Harden-LabVms.ps1 if needed
 
-## 2026-07-10 — wsl2-custom-kernel-p1 partial green (build + qemu + arm)
+## 2026-07-10 — REDACTED-LAB-VM-kernel-p1 partial green (build + qemu + arm)
 
 **What:** Custom WSL2 kernel from MS `linux-msft-wsl-6.18.y` @ `1bd4ed3d4` with UBLK=m + ZRAM_WRITEBACK=y; qemu boot PASS; CLI + arm for next start.
 
@@ -504,7 +504,7 @@ sudo bash scripts/safety/install-cascade-boot.sh   # no --enable unless intentio
 
 **Next human:** restart WSL or `wsl-kernel.sh apply --i-know-this-stops-all-wsl`, then `enable`.
 
-## 2026-07-10 — wsl2-custom-kernel-p1 live green (kernel + modules.vhdx + ublk)
+## 2026-07-10 — REDACTED-LAB-VM-kernel-p1 live green (kernel + modules.vhdx + ublk)
 
 **What:** Custom kernel live on product WSL with MS-style `kernelModules` VHDX; `ublk_drv` loads and `/dev/ublk-control` exists.
 **Category:** boot + integration
@@ -526,7 +526,7 @@ grep -E 'kernel=|kernelModules=' /mnt/c/Users/*/ .wslconfig 2>/dev/null | head
 **Verdict:** ✅ works (P1 kernel+ublk path live)
 **Next action:** (1) re-validate cascade on custom kernel; (2) optional SPEC for cascade prefer ublk; (3) close IMPL RF-K8 as GREEN; (4) commit docs/scripts if not committed
 
-## 2026-07-10 — wsl2-custom-kernel-p1 full green (cascade smoke)
+## 2026-07-10 — REDACTED-LAB-VM-kernel-p1 full green (cascade smoke)
 
 **What:** On live custom kernel 6.18.35.2, re-validated RamShared Day-1 cascade (NBD) and CLI enable path with modules.vhdx.
 **Category:** integration + boot + fail-safe
@@ -597,11 +597,11 @@ cargo test -p ramshared-cli
 **Root cause:** `wsl --terminate` ≠ full VM teardown when restart is immediate; swap survives in shared kernel; `/run` does not; `up` fail-closes on orphan (correct safety, bad boot UX without auto-recover).
 **Next action:** boot recover path (swapoff orphan managed → re-up) in cascade-up/preflight; tighten soak success criteria to require daemon + unit active.
 
-## 2026-07-10 — wsl2-cascade-orphan-recover GREEN
+## 2026-07-10 — REDACTED-LAB-VM-orphan-recover GREEN
 
 **What:** Auto-recover zero-used managed swap orphans after WSL terminate class (SSDV3 + security AUDIT-2.5 GO).
 **Category:** fail-safe + boot UX
-**SSDV3:** `docs/specs/no-milestone/wsl2-cascade-orphan-recover/{PRD,SPEC,AUDIT-2.5,IMPL}.md`
+**SSDV3:** `docs/specs/no-milestone/REDACTED-LAB-VM-orphan-recover/{PRD,SPEC,AUDIT-2.5,IMPL}.md`
 **How to measure:**
 ```bash
 # manufacture orphan (used=0):
@@ -803,7 +803,7 @@ sudo systemctl restart ramshared-cascade.service
 
 ## 2026-07-13 14:55 -03 — SPEC↔code confrontation cascade boot + orphan
 
-**What:** Confront SPECs `wsl2-cascade-boot` and `wsl2-cascade-orphan-recover` against tree: ITEM files/symbols, unit tests, live preflight/health/BINARY_MATCH. Update SPEC test matrices in place; document matrix in `docs/reliability/SPEC-CODE-CONFRONT-cascade-2026-07-13.md`.
+**What:** Confront SPECs `REDACTED-LAB-VM-boot` and `REDACTED-LAB-VM-orphan-recover` against tree: ITEM files/symbols, unit tests, live preflight/health/BINARY_MATCH. Update SPEC test matrices in place; document matrix in `docs/reliability/SPEC-CODE-CONFRONT-cascade-2026-07-13.md`.
 **Category:** integration + fail-safe
 **How to measure:**
 ```bash
@@ -825,7 +825,7 @@ sudo ./scripts/safety/cascade-health.sh
 
 ## 2026-07-13 15:00 -03 — SPEC↔code confrontation cascade multi-SPEC
 
-**What:** Extend confrontation beyond boot/orphan to cascade-vram-ondemand, cascade-transport-policy, wsl2-cascade-swap (umbrella), wsl2-native-vram-autotier, plus sample memory-broker and windows-swap-driver. Document in `docs/reliability/SPEC-CODE-CONFRONT-cascade-2026-07-13.md` §§D–I. Hygiene: transport IMPL paths; sparse SPEC ITEM-3 telemetry wording.
+**What:** Extend confrontation beyond boot/orphan to cascade-vram-ondemand, cascade-transport-policy, REDACTED-LAB-VM-swap (umbrella), REDACTED-LAB-VM-vram-autotier, plus sample memory-broker and windows-swap-driver. Document in `docs/reliability/SPEC-CODE-CONFRONT-cascade-2026-07-13.md` §§D–I. Hygiene: transport IMPL paths; sparse SPEC ITEM-3 telemetry wording.
 **Category:** integration + fail-safe
 **How to measure:**
 ```bash
@@ -925,7 +925,7 @@ sudo mkswap /dev/nbd0 && sudo swapon -p 100 /dev/nbd0
 **How to measure:**
 ```bash
 # Charts present
-ls docs/marketing/benchmark-comparison.jpg docs/marketing/benchmark-wsl2-vs-storport.jpg
+ls docs/marketing/benchmark-comparison.jpg docs/marketing/benchmark-REDACTED-LAB-VM-storport.jpg
 # Cascade VRAM restored (no thrash)
 ./scripts/safety/cascade-health.sh
 swapon --show
@@ -1908,14 +1908,14 @@ explicit in release notes.
 
 ## 2026-07-17 00:50 -03 — StartIo READ-copy race harness + live RED diagnostics
 
-**What:** Added dedicated `STARTIO_READ_COPY_RACE` injector (queue pump + PhysicalDrive overlapped READ + second-handle UNREGISTER race) to `Invoke-WinDriveIoctlValidation.ps1`, static gate tokens, and isolated `scripts/safety/wsl2-freeze-campaign.sh` dry-run scaffold. Re-ran live guest exhaustive on `win11-drill` with signed package `97FD7B37…`.
+**What:** Added dedicated `STARTIO_READ_COPY_RACE` injector (queue pump + PhysicalDrive overlapped READ + second-handle UNREGISTER race) to `Invoke-WinDriveIoctlValidation.ps1`, static gate tokens, and isolated `scripts/safety/REDACTED-LAB-VM-campaign.sh` dry-run scaffold. Re-ran live guest exhaustive on `win11-drill` with signed package `97FD7B37…`.
 **Category:** windows / storport / isolation / e2e
 **How to measure:**
 ```text
 powershell -ExecutionPolicy Bypass -File scripts/windows/Test-WinDriveIoctlValidationStatic.ps1
 # elevated lab only:
 # C:\ramshared\bin\Run-GuestExhaustive.ps1
-./scripts/safety/wsl2-freeze-campaign.sh --json
+./scripts/safety/REDACTED-LAB-VM-campaign.sh --json
 ```
 **Measured data:**
 - Static injectors: `STATIC_INJECTOR_TEST=PASS` (includes StartIo tokens)
@@ -1926,7 +1926,7 @@ powershell -ExecutionPolicy Bypass -File scripts/windows/Test-WinDriveIoctlValid
 - PR queue: #55 merged (`f865c94`); #53 already contained; open PR count 0
 **Verdict:** 🟡 partial — StartIo READ-copy live strengthening harness landed and honestly RED; freeze-elimination still unclaimed; physical Online + SDV still blocked by policy/tooling
 **Next action:** Make storage-stack READ reach QSubmit (online/format or SPTI CDB READ under pump), re-run under Verifier; keep physical/SDV/WSL2 freeze as separate non-claims
-**Artifacts:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260717-004209/`, `scripts/safety/wsl2-freeze-campaign.sh`
+**Artifacts:** `docs/specs/no-milestone/windows-storport-cuda-vram/evidence/guest-exhaustive-20260717-004209/`, `scripts/safety/REDACTED-LAB-VM-campaign.sh`
 
 ## 2026-07-17 03:06 -03 — StartIo hang-safe SKIP + Verifier ITEM-3 PASS
 
@@ -1970,14 +1970,14 @@ powershell -ExecutionPolicy Bypass -File scripts/windows/Test-WinDriveIoctlValid
 
 ## 2026-07-17 09:50 -03 — WSL2 freeze campaign scaffold hardened (still NOT claimed)
 
-**What:** Expanded `scripts/safety/wsl2-freeze-campaign.sh` with baseline artifact capture, D-state/hung_task probes, and a full isolated-lab protocol skeleton (2× before→action→after, swap-sanitize, cgroup pressure, watchdog). Daily host still refuses thrash.
+**What:** Expanded `scripts/safety/REDACTED-LAB-VM-campaign.sh` with baseline artifact capture, D-state/hung_task probes, and a full isolated-lab protocol skeleton (2× before→action→after, swap-sanitize, cgroup pressure, watchdog). Daily host still refuses thrash.
 **Category:** wsl2 / safety / freeze
 **How to measure:**
 ```text
 bash scripts/safety/Test-Wsl2FreezeCampaignStatic.sh
-bash scripts/safety/wsl2-freeze-campaign.sh --dry-run --artifact-dir /tmp/freeze-art
+bash scripts/safety/REDACTED-LAB-VM-campaign.sh --dry-run --artifact-dir /tmp/freeze-art
 # isolated lab only (never daily host):
-# RAMSHARED_ISOLATED_LAB=1 ./scripts/safety/wsl2-freeze-campaign.sh --allow-isolated-lab --run-isolated
+# RAMSHARED_ISOLATED_LAB=1 ./scripts/safety/REDACTED-LAB-VM-campaign.sh --allow-isolated-lab --run-isolated
 ```
 **Measured data:**
 - STATIC_WSL2_FREEZE_CAMPAIGN=PASS
@@ -1986,7 +1986,7 @@ bash scripts/safety/wsl2-freeze-campaign.sh --dry-run --artifact-dir /tmp/freeze
 - SDV: sdv.exe still absent (only WDK Sdv.targets/headers)
 **Verdict:** 🟡 partial — scaffold ready for isolated lab; freeze-elimination still unclaimed; no thrash on daily host
 **Next action:** Run --run-isolated on a true isolated WSL/VM lab with RAMSHARED_ISOLATED_LAB=1; keep physical Online + SDV blocked
-**Artifacts:** docs/specs/no-milestone/wsl2-freeze/evidence/freeze-baseline-20260717-094842
+**Artifacts:** docs/specs/no-milestone/REDACTED-LAB-VM/evidence/freeze-baseline-20260717-094842
 
 ## 2026-07-17 09:58 -03 — Manufactured pagefile Gate A refusal (unit + guest inject)
 
@@ -2033,7 +2033,7 @@ powershell -ExecutionPolicy Bypass -File scripts/windows/Test-SdvProbeStatic.ps1
 **How to measure:**
 ```text
 powershell -ExecutionPolicy Bypass -File scripts/windows/Invoke-SdvProbe.ps1
-bash scripts/safety/wsl2-freeze-campaign.sh --check-gates
+bash scripts/safety/REDACTED-LAB-VM-campaign.sh --check-gates
 ```
 **Measured data:**
 - winget: Microsoft.WindowsWDK.10.0.26100 installed, no update
@@ -2052,7 +2052,7 @@ bash scripts/safety/wsl2-freeze-campaign.sh --check-gates
 ```text
 rg "DT-30|SDV N/A" docs/specs/no-milestone/windows-storport-cuda-vram/SPEC.md
 powershell -ExecutionPolicy Bypass -File scripts/windows/Invoke-SdvProbe.ps1
-bash scripts/safety/wsl2-freeze-campaign.sh --check-gates
+bash scripts/safety/REDACTED-LAB-VM-campaign.sh --check-gates
 ./scripts/docs-check.sh
 ```
 **Measured data:**
@@ -2084,14 +2084,14 @@ gh release view v0.6.3
 
 ## 2026-07-17 12:18 -03 — Freeze: RamShared-Kernel is NOT isolab + shared-desktop gate
 
-**What:** Probed WSL distro `RamShared-Kernel` (custom kernel 6.18.35.2) as candidate freeze lab. Confirmed it mounts `/mnt/c/Users` on the same Windows desktop host as Ubuntu-24.04 — not disposable isolab. Tightened `wsl2-freeze-campaign.sh` so `/mnt/c/Users` marks shared desktop (any distro) and refuses `--run-isolated` without FORCE. Restored WSL PE binfmt (`WSLInterop`) so Windows interop works again from this session. Release v0.6.4 already Latest (PR #94).
+**What:** Probed WSL distro `RamShared-Kernel` (custom kernel 6.18.35.2) as candidate freeze lab. Confirmed it mounts `/mnt/c/Users` on the same Windows desktop host as Ubuntu-24.04 — not disposable isolab. Tightened `REDACTED-LAB-VM-campaign.sh` so `/mnt/c/Users` marks shared desktop (any distro) and refuses `--run-isolated` without FORCE. Restored WSL PE binfmt (`WSLInterop`) so Windows interop works again from this session. Release v0.6.4 already Latest (PR #94).
 **Category:** safety / freeze / discipline
 **How to measure:**
 ```text
 wsl -l -v
 wsl -d RamShared-Kernel --cd ~ -e bash -lc 'echo $WSL_DISTRO_NAME; test -d /mnt/c/Users && echo MNT=1'
 ./scripts/safety/Test-Wsl2FreezeCampaignStatic.sh
-RAMSHARED_ISOLATED_LAB=1 ./scripts/safety/wsl2-freeze-campaign.sh --allow-isolated-lab --run-isolated --artifact-dir /tmp/freeze-refuse-test
+RAMSHARED_ISOLATED_LAB=1 ./scripts/safety/REDACTED-LAB-VM-campaign.sh --allow-isolated-lab --run-isolated --artifact-dir /tmp/freeze-refuse-test
 gh release view v0.6.4
 ```
 **Measured data:**
@@ -2102,7 +2102,7 @@ gh release view v0.6.4
 - v0.6.4 Latest published
 **Verdict:** ✅ works (honest env classification + safer refuse gate)
 **Next action:** True freeze claim needs separate disposable lab VM/machine — not a second WSL distro on this desktop
-**Artifacts:** docs/specs/no-milestone/wsl2-freeze/evidence/ramshared-kernel-probe-20260717/; scripts/safety/wsl2-freeze-campaign.sh
+**Artifacts:** docs/specs/no-milestone/REDACTED-LAB-VM/evidence/ramshared-kernel-probe-20260717/; scripts/safety/REDACTED-LAB-VM-campaign.sh
 ## 2026-07-17 21:10 — Memory Broker DCC code surface implemented
 
 **What:** Implemented the safe P2 code surface for the generic Windows host/DCC
@@ -2136,7 +2136,7 @@ after the generic naming/adapter changes.
 
 **Measured data:**
 
-- `wsl2-freeze-campaign.sh --check-gates --json`: `gates_ok=false`, reason
+- `REDACTED-LAB-VM-campaign.sh --check-gates --json`: `gates_ok=false`, reason
   `daily_host_refused_without_isolated_lab_flag`.
 - `Test-Wsl2FreezeCampaignStatic.sh`: `STATIC_WSL2_FREEZE_CAMPAIGN=PASS`.
 - `cascade-health.sh --once`: `ok=true`, daemon absent, no ghost swap, zero
@@ -2249,7 +2249,7 @@ access path for the Hyper-V Linux lab.
 - Local access file confirms user `emedev`, SSH keys installed, passwordless
   sudo, and MAC lookup fallback.
 - `Get-VMNetworkAdapter.IPAddresses` remained empty, but Windows neighbor
-  table mapped VM MAC `00-15-5D-00-FA-04` to `172.23.18.42`.
+  table mapped VM MAC `00-15-5D-00-FA-04` to `REDACTED-IP`.
 - New helper `Get-LinuxKernelLabAccess.ps1 -Start -Smoke`: **PASS**.
 - SSH smoke from Windows host:
   - hostname: `linux-kernel-lab`
@@ -2260,7 +2260,7 @@ access path for the Hyper-V Linux lab.
   - netplan: DHCP on `eth0`, MAC match `00:15:5d:00:fa:04`
   - root filesystem: 38G size, 7.1G used, 31G available
   - memory: 5.8Gi total, ~5.3Gi available
-- Kernel clone probe: `~/src/WSL2-Linux-Kernel` HEAD `1bd4ed3d4`.
+- Kernel clone probe: `~/src/REDACTED-LAB-VMinux-Kernel` HEAD `1bd4ed3d4`.
 - `/dev/ublk-control`: absent, consistent with the generic Ubuntu kernel.
 - Terminal state confirmed: `win11-drill=Off`, `linux-kernel-lab=Off`.
 
@@ -3188,10 +3188,10 @@ clone state is Off and host-free memory reached 12,420,276,224 bytes.
 
 **Evidence:**
 `tmp/windows-task-manager-disk-counters-e2e/20260810-vm-verifier-final.json`,
-`C:\ramshared\artifacts\ready-clone-5e48f1bf-9f55-4d32-9d98-f913a9092ed8`,
-`C:\ramshared\artifacts\guest-verifier-d0f9a571-c7bb-4f78-9e40-aa7233ed85e6`,
+`C:\ramshared\artifacts\ready-clone-REDACTED-UUID`,
+`C:\ramshared\artifacts\guest-verifier-REDACTED-UUID`,
 and exact recovery
-`C:\ramshared\artifacts\guest-verifier-recovery-156cd553-535f-4fe6-8383-f35ba823345f`.
+`C:\ramshared\artifacts\guest-verifier-recovery-REDACTED-UUID`.
 
 **Verdict:** 🟡 The disposable-VM driver, Verifier, BINARY_MATCH, refusal,
 rollback, firmware-restoration, and zero-residue slice is legitimately green.
@@ -3700,19 +3700,19 @@ kernel, or reboot evidence.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0007`.
-**Owner role:** `wsl2-nbd-operator`.
+**Owner role:** `REDACTED-LAB-VM-operator`.
 **Observed at:** `2026-08-12T13:56:34Z`.
 **Verified at:** `2026-08-12T13:58:08Z`.
 **Source revision:** `0b09518c530253a3219326ae3c0fe006e60ef99c`.
 **Lifecycle:** `reviewable`.
 **Retention:** Preserve the sanitized before/action/after receipts under
-`docs/specs/no-milestone/wsl2-nbd-product-readiness/evidence/2026-08-12-live/`.
+`docs/specs/no-milestone/REDACTED-LAB-VM-product-readiness/evidence/2026-08-12-live/`.
 **Freshness:** Revalidate after any NBD lifecycle, sealed-release, daemon,
 Relay, or swap-order change.
 **What:** Installed the sealed WSL2 NBD release with explicit approval,
 migrated the inactive legacy unit by exact SHA-256, and activated the approved
 1 GiB NBD pilot without a reboot.
-**Category:** `wsl2-nbd-live`.
+**Category:** `REDACTED-LAB-VM-live`.
 **How to measure:** `ramshared status`; `/proc/swaps`; `wsl-relay-health.sh
 --check`; `nbd-product-preflight.sh --check`; the approved `cascade-up.sh
 --execute`; and `readlink /proc/<ramsharedd-pid>/exe` under `sudo`.
@@ -3743,7 +3743,7 @@ not yet run, so this does not claim index-quality DONE.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0008`.
-**Owner role:** `wsl2-nbd-operator`.
+**Owner role:** `REDACTED-LAB-VM-operator`.
 **Observed at:** `2026-08-14T00:54:32-03:00`.
 **Verified at:** `2026-08-14T00:59:39-03:00`.
 **Source revision:** `a60c898ec6d938e6828d879d41a4b2ea0c7b6b21`.
@@ -3755,7 +3755,7 @@ controller, CUDA, NBD, or cleanup change.
 **What:** Ran the approved canonical Windows/WSL2 matrix with stop-first-RED
 against the exact sealed release. The first P1 idle disk-only cell refused on
 its second sample before NBD or any bounded/CUDA condition ran.
-**Category:** `wsl2-nbd-live`.
+**Category:** `REDACTED-LAB-VM-live`.
 **How to measure:** Canonical controller PlanOnly followed by the approved live
 controller; inventory byte/hash verification; exact terminal pinned preflight;
 and read-only process, cgroup, swap, NBD, and service residue inspection.
@@ -3784,7 +3784,7 @@ qualification or PR promotion.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0009`.
-**Owner role:** `wsl2-nbd-operator`.
+**Owner role:** `REDACTED-LAB-VM-operator`.
 **Observed at:** `2026-08-14T01:17:39-03:00`.
 **Verified at:** `2026-08-14T02:52:22-03:00`.
 **Source revision:** `a365bda0daf89a9707159b86efca8c1ba1ac760b`.
@@ -3797,7 +3797,7 @@ controller, CUDA, NBD, evidence-custody, or cleanup change.
 **What:** Ran the approved canonical Windows/WSL2 matrix against the exact
 sealed release. All 12 P1/P2/P4 idle/bounded disk-only/NBD cells and all 36
 samples completed with integrity, occupancy, and cleanup.
-**Category:** `wsl2-nbd-live`.
+**Category:** `REDACTED-LAB-VM-live`.
 **How to measure:** Canonical PlanOnly followed by the approved live controller;
 per-cell `BINARY_MATCH`; pair-scoped CUDA custody; inventory byte/hash
 verification; repository public-evidence validation; terminal pinned preflight;
@@ -3872,13 +3872,13 @@ an idempotent terminal state.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0007`.
-**Owner role:** `wsl2-nbd-operator`.
+**Owner role:** `REDACTED-LAB-VM-operator`.
 **Observed at:** `2026-08-12T13:56:34Z`.
 **Verified at:** `2026-08-12T13:58:08Z`.
 **Source revision:** `0b09518c530253a3219326ae3c0fe006e60ef99c`.
 **Lifecycle:** `reviewable`.
 **Retention:** Preserve the sanitized before/action/after receipts under
-`docs/specs/no-milestone/wsl2-nbd-product-readiness/evidence/2026-08-12-live/`.
+`docs/specs/no-milestone/REDACTED-LAB-VM-product-readiness/evidence/2026-08-12-live/`.
 **Freshness:** Revalidate after any NBD lifecycle, sealed-release, daemon,
 Relay, or swap-order change.
 **What:** Installed the sealed WSL2 NBD release with explicit approval,
@@ -3887,7 +3887,7 @@ migrated the inactive legacy unit by exact SHA-256, and activated the approved
 **Historical/non-current activation boundary:** This activation is retained as
 dated evidence only. It is superseded and does not authorize execution on the
 current disabled candidate.
-**Category:** `wsl2-nbd-live`.
+**Category:** `REDACTED-LAB-VM-live`.
 **How to measure:** `ramshared status`; `/proc/swaps`; `wsl-relay-health.sh
 --check`; `nbd-product-preflight.sh --check`; the approved `cascade-up.sh
 --execute`; and `readlink /proc/<ramsharedd-pid>/exe` under `sudo`.
@@ -3918,7 +3918,7 @@ not yet run, so this does not claim index-quality DONE.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0008`.
-**Owner role:** `wsl2-nbd-operator`.
+**Owner role:** `REDACTED-LAB-VM-operator`.
 **Observed at:** `2026-08-14T00:54:32-03:00`.
 **Verified at:** `2026-08-14T00:59:39-03:00`.
 **Source revision:** `a60c898ec6d938e6828d879d41a4b2ea0c7b6b21`.
@@ -3930,7 +3930,7 @@ controller, CUDA, NBD, or cleanup change.
 **What:** Ran the approved canonical Windows/WSL2 matrix with stop-first-RED
 against the exact sealed release. The first P1 idle disk-only cell refused on
 its second sample before NBD or any bounded/CUDA condition ran.
-**Category:** `wsl2-nbd-live`.
+**Category:** `REDACTED-LAB-VM-live`.
 **How to measure:** Canonical controller PlanOnly followed by the approved live
 controller; inventory byte/hash verification; exact terminal pinned preflight;
 and read-only process, cgroup, swap, NBD, and service residue inspection.
@@ -3959,7 +3959,7 @@ qualification or PR promotion.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0009`.
-**Owner role:** `wsl2-nbd-operator`.
+**Owner role:** `REDACTED-LAB-VM-operator`.
 **Observed at:** `2026-08-14T01:17:39-03:00`.
 **Verified at:** `2026-08-14T02:52:22-03:00`.
 **Source revision:** `a365bda0daf89a9707159b86efca8c1ba1ac760b`.
@@ -3972,7 +3972,7 @@ controller, CUDA, NBD, evidence-custody, or cleanup change.
 **What:** Ran the approved canonical Windows/WSL2 matrix against the exact
 sealed release. All 12 P1/P2/P4 idle/bounded disk-only/NBD cells and all 36
 samples completed with integrity, occupancy, and cleanup.
-**Category:** `wsl2-nbd-live`.
+**Category:** `REDACTED-LAB-VM-live`.
 **How to measure:** Canonical PlanOnly followed by the approved live controller;
 per-cell `BINARY_MATCH`; pair-scoped CUDA custody; inventory byte/hash
 verification; repository public-evidence validation; terminal pinned preflight;
@@ -4047,7 +4047,7 @@ an idempotent terminal state.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0011`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-20T17:03:32-03:00`.
 **Verified at:** `2026-08-20T17:03:32-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4097,7 +4097,7 @@ claimed.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0012`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-20T17:47:00-03:00`.
 **Verified at:** `2026-08-20T17:47:00-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4142,7 +4142,7 @@ activation, or release qualification.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0013`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-20T21:09:57Z`.
 **Verified at:** `2026-08-20T21:17:47Z`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4195,7 +4195,7 @@ and every destructive control-plane/origin matrix remain open.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0014`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-20T19:04:45-03:00`.
 **Verified at:** `2026-08-20T19:23:26-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4251,7 +4251,7 @@ before WSL2/GPU/guardian qualification can continue.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0015`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-20T19:34:00-03:00`.
 **Verified at:** `2026-08-20T19:47:17-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4292,7 +4292,7 @@ qualify an origin VHDX or a guardian termination on live hardware.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0016`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-20T20:35:00-03:00`.
 **Verified at:** `2026-08-20T21:13:01-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4349,7 +4349,7 @@ ready. 🟡 Destructive guardian, origin, GPU, and pressure matrices remain open
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0017`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-20T21:22:00-03:00`.
 **Verified at:** `2026-08-20T21:42:38-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4398,7 +4398,7 @@ open.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0018`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-20T22:29:00-03:00`.
 **Verified at:** `2026-08-20T22:35:37-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4441,7 +4441,7 @@ campaign record is evidence only; it authorizes no current VM, WSL, swap, or pre
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0019`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-20T23:18:44-03:00`.
 **Verified at:** `2026-08-20T23:22:17-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4471,7 +4471,7 @@ Generation-2/zero-checkpoint/VM-owned-VHD gates and bounded PowerShell Direct;
 **Historical non-current / no execution:** The following dated campaign recipe
 is evidence only; do not run it on the current disabled candidate.
 verify all seven deployed file hashes and executability; run
-`wsl2-freeze-campaign.sh --dry-run --json`; run `ramshared check --json`; then
+`REDACTED-LAB-VM-campaign.sh --dry-run --json`; run `ramshared check --json`; then
 **Historical non-current / no execution:** The following isolated-run flags are
 dated evidence only; do not execute them on the current disabled candidate.
 run `--allow-isolated-lab --run-isolated --rounds 2` with a 30-second
@@ -4507,7 +4507,7 @@ scope.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0020`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-20T23:24:00-03:00`.
 **Verified at:** `2026-08-20T23:31:00-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4547,7 +4547,7 @@ remains blocked; the daily host was untouched.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0021`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-20T23:35:00-03:00`.
 **Verified at:** `2026-08-20T23:48:00-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4584,7 +4584,7 @@ not pressured.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0022`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-20T23:52:00-03:00`.
 **Verified at:** `2026-08-20T23:55:00-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4619,7 +4619,7 @@ separate lab surface is supplied.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0023`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-21T01:14:21-03:00`.
 **Verified at:** `2026-08-21T01:14:21-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4643,7 +4643,7 @@ failure; all were corrected.
 `Test-SharedWslPressureCampaignStatic.ps1`, the shell artifact static test,
 the PowerShell parser, `./scripts/docs-check.sh`, and
 `git diff --check -- validation.md
-docs/specs/no-milestone/wsl2-freeze-elimination-campaign/IMPL.md`.
+docs/specs/no-milestone/REDACTED-LAB-VM-elimination-campaign/IMPL.md`.
 **Measured data:** The added module/harness contract reserves `4096` MiB and
 requires `ceil(2.92*1024)+4096 = 7087` MiB, with three one-second minimum
 samples, a runtime guardian, exact selected-distro termination, no OOM
@@ -4681,7 +4681,7 @@ approved run requires non-interactive elevation and post-VM-off host headroom
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0024`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-21T08:06:40-03:00`.
 **Verified at:** `2026-08-21T08:06:47-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4734,7 +4734,7 @@ re-run the complete preflight after the gate passes.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0025`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-21T08:07:00-03:00`.
 **Verified at:** `2026-08-21T08:07:00-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -4780,7 +4780,7 @@ the implementation record. `origin_cache.rs`, `request.rs`, `wsl2d/main.rs`,
 `cascade_io.rs`, and `lifecycle.rs` map each named unit test to source evidence;
 the five Windows-origin markers map to static/manufactured evidence. The exact
 one-to-one rows are in the Required tests matrix in
-`docs/specs/no-milestone/wsl2-revocable-vram-origin/SPEC.md` and the matching
+`docs/specs/no-milestone/REDACTED-LAB-VM-vram-origin/SPEC.md` and the matching
 table in its `IMPL.md`.
 **Category:** `source-static`.
 **How to measure:** Use the named unit/static suites and their per-file coverage
@@ -4828,7 +4828,7 @@ the origin SPEC's required-test matrix. Each source/static test below has one
 explicit production-path and evidence mapping; the sunset row remains open.
 **Category:** `source-static`.
 **How to measure:** Compare each row below with
-`docs/specs/no-milestone/wsl2-revocable-vram-origin/SPEC.md` and `IMPL.md`, run
+`docs/specs/no-milestone/REDACTED-LAB-VM-vram-origin/SPEC.md` and `IMPL.md`, run
 the named source/static suites and documentation checks recorded in `EVD-0026`.
 These documentation/source checks do not authorize a host action.
 
@@ -5173,7 +5173,7 @@ remain `BLOCKED`.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0033`.
-**Owner role:** `wsl2-reliability-mutator`.
+**Owner role:** `REDACTED-LAB-VM-mutator`.
 **Observed at:** `2026-08-23T05:12:18-03:00`.
 **Verified at:** `2026-08-23T06:18:15-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -5213,7 +5213,7 @@ Clippy with `-D warnings`, and `cargo fmt --all -- --check`. Run
 preflight, `wslconfig-ctl.sh selftest`, relevant PowerShell static harnesses,
 release-manifest Node tests, shell/PowerShell parsers, and `git diff --check`.
 **Measured data:** The user-provided pre-change snapshot
-`E:\\WSL-Work-Snapshots\\ramshared-20260823T080303Z.tar.zst` has SHA-256
+`E:\\WSL-Work-Snapshots\\REDACTED-RUNT080303Z.tar.zst` has SHA-256
 `7FA94C0F162C4012A26D7CE7C0A20951B882D3197A80EC359CF5F8B65CE61539`, zstd
 PASS, and 8293 entries. `ramshared-block --lib` passed 69/69. The daemon passed
 66/66 after two fail-closed fixtures found by the first broad run were corrected
@@ -5256,7 +5256,7 @@ activation and every live qualification remain `BLOCKED`.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0034`.
-**Owner role:** `wsl2-reliability-mutator`.
+**Owner role:** `REDACTED-LAB-VM-mutator`.
 **Observed at:** `2026-08-23T11:38:54-03:00`.
 **Verified at:** `2026-08-23T12:00:39-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -5290,7 +5290,7 @@ hermetic PowerShell canary harness, shell-controller syntax, and static
 documentation gates through the bundled host Node runtime. Do not use real
 devices or live lifecycle commands.
 **Measured data:** The pre-change snapshot
-`E:\\WSL-Work-Snapshots\\ramshared-20260823T080303Z.tar.zst` remains bound to
+`E:\\WSL-Work-Snapshots\\REDACTED-RUNT080303Z.tar.zst` remains bound to
 SHA-256
 `7FA94C0F162C4012A26D7CE7C0A20951B882D3197A80EC359CF5F8B65CE61539`.
 The focused suite passed 49/49. The complete suite passed 191 unit and 6
@@ -5344,7 +5344,7 @@ live gate and the independent documentation aggregate remain `BLOCKED`.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0035`.
-**Owner role:** `wsl2-reliability-mutator`.
+**Owner role:** `REDACTED-LAB-VM-mutator`.
 **Observed at:** `2026-08-23T12:29:21-03:00`.
 **Verified at:** `2026-08-23T13:59:17-03:00`.
 **Source revision:** `69f7469fa999b7d079341ee6bf8ebb006d517b51`.
@@ -5481,7 +5481,7 @@ Rust topology residuals remain explicit.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0037`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-25T16:17:00Z`.
 **Verified at:** `2026-08-25T16:17:00Z`.
 **Source revision:** `12924354c0e668c6792da025cb8aa083818eeb67`.
@@ -5502,7 +5502,7 @@ Rust topology residuals remain explicit.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0038`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-25T19:20:00Z`.
 **Verified at:** `2026-08-25T19:20:00Z`.
 **Source revision:** `73eb317`.
@@ -5523,7 +5523,7 @@ Rust topology residuals remain explicit.
 
 **Evidence schema:** `ramshared.validation.v2`.
 **Evidence ID:** `EVD-0039`.
-**Owner role:** `wsl2-reliability`.
+**Owner role:** `REDACTED-LAB-VM`.
 **Observed at:** `2026-08-26T14:30:00Z`.
 **Verified at:** `2026-08-26T14:30:00Z`.
 **Source revision:** `1141bcb`.

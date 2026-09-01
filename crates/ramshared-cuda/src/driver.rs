@@ -146,7 +146,11 @@ impl Cuda {
         let mut buf = [0_i8; 128];
         // SAFETY: buf has space for `len` bytes; the API writes a null-terminated string.
         let r = unsafe {
-            (self.syms.device_get_name.unwrap())(buf.as_mut_ptr() as *mut c_char, buf.len() as i32, raw)
+            (self.syms.device_get_name.unwrap())(
+                buf.as_mut_ptr() as *mut c_char,
+                buf.len() as i32,
+                raw,
+            )
         };
         check(&self.syms, r, "cuDeviceGetName")?;
         buf[buf.len() - 1] = 0; // guarantees null-termination even if the API filled the entire buffer
