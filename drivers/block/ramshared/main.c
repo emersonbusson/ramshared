@@ -17,11 +17,55 @@ MODULE_LICENSE("GPL");
 MODULE_VERSION(RAMSHARED_DRIVER_VERSION);
 
 static unsigned long capacity_mb = 1024;
-module_param(capacity_mb, ulong, 0444);
+static int capacity_mb_set(const char *val, const struct kernel_param *kp)
+{
+	unsigned long capacity;
+	int ret;
+
+	if (!val || strnlen(val, 32) > 16)
+		return -EINVAL;
+
+	ret = kstrtoul(val, 10, &capacity);
+	if (ret)
+		return ret;
+
+	if (capacity == 0 || capacity > (1UL << 20))
+		return -ERANGE;
+
+	return param_set_ulong(val, kp);
+}
+
+static const struct kernel_param_ops capacity_mb_ops = {
+	.set = capacity_mb_set,
+	.get = param_get_ulong,
+};
+module_param_cb(capacity_mb, &capacity_mb_ops, &capacity_mb, 0444);
 MODULE_PARM_DESC(capacity_mb, "Initial VRAM block device capacity in MiB (default: 1024)");
 
 static unsigned int queue_depth = RAMSHARED_DEFAULT_QUEUE_DEPTH;
-module_param(queue_depth, uint, 0444);
+static int queue_depth_set(const char *val, const struct kernel_param *kp)
+{
+	unsigned int depth;
+	int ret;
+
+	if (!val || strnlen(val, 32) > 16)
+		return -EINVAL;
+
+	ret = kstrtouint(val, 10, &depth);
+	if (ret)
+		return ret;
+
+	if (depth < 16 || depth > 2048)
+		return -ERANGE;
+
+	return param_set_uint(val, kp);
+}
+
+static const struct kernel_param_ops queue_depth_ops = {
+	.set = queue_depth_set,
+	.get = param_get_uint,
+};
+module_param_cb(queue_depth, &queue_depth_ops, &queue_depth, 0444);
 MODULE_PARM_DESC(queue_depth, "Hardware queue depth (default: 256)");
 
 static int ramshared_pci_probe(struct pci_dev *pdev,
