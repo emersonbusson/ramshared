@@ -13,6 +13,8 @@
 #include <linux/version.h>
 #include <linux/blkdev.h>
 #include <linux/blk-mq.h>
+#include <linux/io.h>
+#include <linux/err.h>
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
 /* Linux 6.11+ Paradigm: Features embedded in struct queue_limits */
@@ -100,6 +102,40 @@ static inline struct gendisk *ramshared_alloc_disk(struct blk_mq_tag_set *set,
 
 	return disk;
 #endif
+}
+
+/**
+ * ramshared_devm_ioremap_wc - Fallback compatibility wrapper for devm_ioremap_wc
+ * @dev: Pointer to struct device
+ * @offset: Physical PCIe BAR offset
+ * @size: Allocation size
+ *
+ * Provides guard clauses and unified ERR_PTR handling across kernel versions.
+ */
+static inline void __iomem *
+ramshared_devm_ioremap_wc(struct device *dev, resource_size_t offset, size_t size)
+{
+	void __iomem *addr;
+
+	if (!dev)
+		return ERR_PTR(-ENODEV);
+
+	if (size == 0)
+		return ERR_PTR(-EINVAL);
+
+	if ((offset & (PAGE_SIZE - 1)) != 0 || (size & (PAGE_SIZE - 1)) != 0)
+		return ERR_PTR(-EINVAL);
+
+#if defined(devm_ioremap_wc) || LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+	addr = devm_ioremap_wc(dev, offset, size);
+#else
+	addr = devm_ioremap(dev, offset, size);
+#endif
+
+	if (!addr)
+		return ERR_PTR(-ENOMEM);
+
+	return addr;
 }
 
 #endif /* _RAMSHARED_COMPAT_H */
