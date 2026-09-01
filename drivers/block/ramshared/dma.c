@@ -15,15 +15,26 @@
 int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 {
 	int bar = 0;
+	int ret;
 	resource_size_t bar_start, bar_len;
 
 	if (!rs_dev || !pdev)
 		return -EINVAL;
 
+	ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+	if (ret) {
+		dev_warn(&pdev->dev, "64-bit DMA failed, attempting 32-bit DMA\n");
+		ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
+		if (ret) {
+			dev_err(&pdev->dev, "no usable DMA configuration\n");
+			return -EFAULT;
+		}
+	}
+
 	bar_start = pci_resource_start(pdev, bar);
 	bar_len = pci_resource_len(pdev, bar);
 
-	if (!bar_start || bar_len == 0) {
+	if (bar_len == 0 || !bar_start) {
 		dev_err(&pdev->dev, "invalid PCIe BAR0 resource\n");
 		return -ENODEV;
 	}
@@ -34,7 +45,7 @@ int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 	/* Map PCIe VRAM BAR using Write-Combining for peak throughput */
 	rs_dev->dma.cpu_addr = devm_ioremap_wc(&pdev->dev, rs_dev->dma.pci_addr,
 					       rs_dev->dma.size);
-	if (!rs_dev->dma.cpu_addr) {
+	if (rs_dev->dma.cpu_addr == NULL) {
 		dev_err(&pdev->dev, "failed to ioremap_wc VRAM BAR0 (%zu bytes)\n",
 			rs_dev->dma.size);
 		return -ENOMEM;
