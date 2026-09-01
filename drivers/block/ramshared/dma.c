@@ -28,6 +28,11 @@ int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 		return -ENODEV;
 	}
 
+	if (bar_start & (PAGE_SIZE - 1)) {
+		dev_err(&pdev->dev, "PCIe BAR0 physical address is not page-aligned\n");
+		return -EINVAL;
+	}
+
 	rs_dev->dma.pci_addr = bar_start;
 	rs_dev->dma.size = min_t(size_t, bar_len, rs_dev->capacity_bytes);
 
