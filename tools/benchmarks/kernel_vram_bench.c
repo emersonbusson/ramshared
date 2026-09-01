@@ -83,16 +83,16 @@ int main(int argc, char **argv) {
 	cuMemcpyHtoD_t cuMemcpyHtoD = (cuMemcpyHtoD_t)dlsym(lib, "cuMemcpyHtoD_v2");
 	cuMemcpyDtoH_t cuMemcpyDtoH = (cuMemcpyDtoH_t)dlsym(lib, "cuMemcpyDtoH_v2");
 
+	int ret = 1;
+
 	if (!cuInit || !cuCtxCreate || !cuMemcpyHtoD || !cuMemcpyDtoH) {
 		fprintf(stderr, "[-] Error: Required CUDA symbols missing in library.\n");
-		dlclose(lib);
-		return 1;
+		goto err_close_lib;
 	}
 
 	if (cuInit(0) != 0) {
 		fprintf(stderr, "[-] Error: cuInit failed.\n");
-		dlclose(lib);
-		return 1;
+		goto err_close_lib;
 	}
 
 	int dev = 0;
@@ -104,8 +104,7 @@ int main(int argc, char **argv) {
 	void *ctx = NULL;
 	if (cuCtxCreate(&ctx, 0, dev) != 0) {
 		fprintf(stderr, "[-] Error: cuCtxCreate failed.\n");
-		dlclose(lib);
-		return 1;
+		goto err_close_lib;
 	}
 
 	size_t free_b = 0, total_b = 0;
@@ -117,9 +116,7 @@ int main(int argc, char **argv) {
 	void *host_pinned = NULL;
 	if (cuMemHostAlloc(&host_pinned, chunk_bytes, 0) != 0) {
 		fprintf(stderr, "[-] Error: cuMemHostAlloc failed (%d MiB).\n", chunk_mib);
-		cuCtxDestroy(ctx);
-		dlclose(lib);
-		return 1;
+		goto err_destroy_ctx;
 	}
 	memset(host_pinned, 0xA5, chunk_bytes);
 
@@ -127,10 +124,7 @@ int main(int argc, char **argv) {
 	uint64_t dev_ptr = 0;
 	if (cuMemAlloc(&dev_ptr, chunk_bytes) != 0) {
 		fprintf(stderr, "[-] Error: cuMemAlloc failed (%d MiB).\n", chunk_mib);
-		cuMemFreeHost(host_pinned);
-		cuCtxDestroy(ctx);
-		dlclose(lib);
-		return 1;
+		goto err_free_host;
 	}
 
 	// 1. Direct DMA Host -> VRAM (Push)
@@ -144,7 +138,10 @@ int main(int argc, char **argv) {
 
 	// 2. Direct DMA VRAM -> Host (Pull)
 	void *read_pinned = NULL;
-	cuMemHostAlloc(&read_pinned, chunk_bytes, 0);
+	if (cuMemHostAlloc(&read_pinned, chunk_bytes, 0) != 0) {
+		fprintf(stderr, "[-] Error: cuMemHostAlloc failed for read_pinned (%d MiB).\n", chunk_mib);
+		goto err_free_dev;
+	}
 	printf("[+] Benchmarking VRAM -> Host DMA (%d MiB)...\n", chunk_mib);
 	t0 = get_time_sec();
 	cuMemcpyDtoH(read_pinned, dev_ptr, chunk_bytes);
@@ -158,13 +155,19 @@ int main(int argc, char **argv) {
 	printf("\n[+] Data Integrity Proof: %s\n",
 	       match ? "PASS (100% Bit-Exact Match, Zero Corruption)" : "FAIL");
 
+	ret = match ? 0 : 1;
+
 	// Cleanup
+	if (read_pinned) cuMemFreeHost(read_pinned);
+err_free_dev:
 	cuMemFree(dev_ptr);
+err_free_host:
 	cuMemFreeHost(host_pinned);
-	cuMemFreeHost(read_pinned);
+err_destroy_ctx:
 	cuCtxDestroy(ctx);
+err_close_lib:
 	dlclose(lib);
 
 	printf("=================================================================\n");
-	return match ? 0 : 1;
+	return ret;
 }
