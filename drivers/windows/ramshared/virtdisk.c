@@ -330,6 +330,117 @@ VdHandleReportLuns(_Inout_ PSCSI_REQUEST_BLOCK Srb, _In_ BOOLEAN Present)
 }
 
 static BOOLEAN
+VdHandleModeSense(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
+{
+	UCHAR mode_data[64];
+	UCHAR *page;
+	ULONG allocLen;
+	ULONG transferLen;
+	ULONG64 total_sectors;
+	ULONG64 cylinders_64;
+	ULONG cylinders;
+	ULONG heads = 255;
+	ULONG sectors_per_track = 63;
+	ULONG mode_len;
+	UCHAR page_code;
+	UCHAR header_size;
+	BOOLEAN is10;
+
+	if (Disk == NULL || Disk->block_size == 0 || Disk->size_bytes == 0) {
+		Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
+		return TRUE;
+	}
+
+	is10 = (Srb->Cdb[0] == SCSIOP_MODE_SENSE10);
+	page_code = Srb->Cdb[2] & 0x3F;
+	header_size = is10 ? 8 : 4;
+	mode_len = header_size;
+
+	if (is10) {
+		allocLen = ((ULONG)Srb->Cdb[7] << 8) | (ULONG)Srb->Cdb[8];
+	} else {
+		allocLen = Srb->Cdb[4];
+	}
+
+	RtlZeroMemory(mode_data, sizeof(mode_data));
+
+	total_sectors = Disk->size_bytes / Disk->block_size;
+	cylinders_64 = total_sectors / (heads * sectors_per_track);
+
+	/* Clamp to 24-bit physical hardware limit for SCSI Rigid Drive Geometry */
+	if (cylinders_64 > 0xFFFFFF) {
+		cylinders = 0xFFFFFF;
+	} else {
+		cylinders = (ULONG)cylinders_64;
+	}
+
+	if (is10) {
+		mode_data[1] = 0; /* Medium type */
+		mode_data[2] = 0; /* Device specific parameter */
+		mode_data[3] = 0; /* Long LBA = 0 */
+		mode_data[6] = 0; /* Block descriptor length MSB */
+		mode_data[7] = 0; /* Block descriptor length LSB */
+	} else {
+		mode_data[1] = 0; /* Medium type */
+		mode_data[2] = 0; /* Device specific parameter */
+		mode_data[3] = 0; /* Block descriptor length */
+	}
+
+	if (page_code == 0x03 || page_code == 0x3F) {
+		page = &mode_data[mode_len];
+		page[0] = 0x03; /* Page Code */
+		page[1] = 0x16; /* Page Length */
+		page[10] = (UCHAR)((sectors_per_track >> 8) & 0xFF);
+		page[11] = (UCHAR)(sectors_per_track & 0xFF);
+		page[12] = (UCHAR)((Disk->block_size >> 8) & 0xFF);
+		page[13] = (UCHAR)(Disk->block_size & 0xFF);
+		mode_len += 24;
+	}
+
+	if (page_code == 0x04 || page_code == 0x3F) {
+		page = &mode_data[mode_len];
+		page[0] = 0x04; /* Page Code */
+		page[1] = 0x16; /* Page Length */
+		page[2] = (UCHAR)((cylinders >> 16) & 0xFF);
+		page[3] = (UCHAR)((cylinders >> 8) & 0xFF);
+		page[4] = (UCHAR)(cylinders & 0xFF);
+		page[5] = (UCHAR)heads;
+		/* Medium rotation rate: 0x0001 = non-rotating */
+		page[20] = 0x00;
+		page[21] = 0x01;
+		mode_len += 24;
+	}
+
+	if (mode_len == header_size && page_code != 0x3F) {
+		Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+		return TRUE;
+	}
+
+	if (is10) {
+		mode_data[0] = (UCHAR)((mode_len - 2) >> 8);
+		mode_data[1] = (UCHAR)((mode_len - 2) & 0xFF);
+	} else {
+		mode_data[0] = (UCHAR)(mode_len - 1);
+	}
+
+	transferLen = min(allocLen, mode_len);
+	transferLen = min(transferLen, Srb->DataTransferLength);
+
+	if (transferLen != 0 && Srb->DataBuffer == NULL) {
+		Srb->SrbStatus = SRB_STATUS_ERROR;
+		return TRUE;
+	}
+
+	if (transferLen != 0) {
+		RtlCopyMemory(Srb->DataBuffer, mode_data, transferLen);
+	}
+
+	Srb->DataTransferLength = transferLen;
+	Srb->SrbStatus = SRB_STATUS_SUCCESS;
+	return TRUE;
+}
+
+static BOOLEAN
 VdHandleReadCapacity(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
 	UCHAR response[32];
@@ -467,10 +578,7 @@ VdTranslateSrb(
 
 	case SCSIOP_MODE_SENSE:
 	case SCSIOP_MODE_SENSE10:
-		Srb->SrbStatus = SRB_STATUS_SUCCESS;
-		if (Srb->DataBuffer && Srb->DataTransferLength >= 4) {
-			RtlZeroMemory(Srb->DataBuffer, Srb->DataTransferLength);
-		}
+		(void)VdHandleModeSense(Disk, Srb);
 		break;
 
 	case SCSIOP_READ:
