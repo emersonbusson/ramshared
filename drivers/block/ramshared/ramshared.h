@@ -8,6 +8,7 @@
 #include <linux/pci.h>
 #include <linux/mutex.h>
 #include <linux/atomic.h>
+#include <linux/ioctl.h>
 
 #define RAMSHARED_DRIVER_NAME		"ramshared"
 #define RAMSHARED_DRIVER_VERSION	"0.9.0-beta.2"
@@ -15,6 +16,38 @@
 #define RAMSHARED_SECTOR_SHIFT		9
 #define RAMSHARED_DEFAULT_QUEUE_DEPTH	256
 #define RAMSHARED_MMIO_POISON_VALUE	0xFFFFFFFFU
+
+#define RAMSHARED_IOCTL_MAGIC 'R'
+
+/* Payload structures for IOCTLs (matching protocol.h ABI) */
+struct ramshared_register {
+	u32 abi_version;
+	u32 disk_id;
+	u32 queue_depth;
+	u32 block_size;
+	u32 max_io_bytes;
+	u32 reserved;
+	u64 sq_ring_va;
+	u64 cq_ring_va;
+	u64 data_area_va;
+	u64 data_area_len;
+	u64 sq_event_handle;
+	u64 cq_event_handle;
+};
+
+struct ramshared_disk_params {
+	u64 size_bytes;
+	u32 block_size;
+	u32 reserved;
+	u8 serial[16];
+};
+
+/* Define IOCTL numbers with magic, direction, and size */
+#define RAMSHARED_IOC_REGISTER_QUEUE	_IOW(RAMSHARED_IOCTL_MAGIC, 0, struct ramshared_register)
+#define RAMSHARED_IOC_UNREGISTER_QUEUE	_IO(RAMSHARED_IOCTL_MAGIC, 1)
+#define RAMSHARED_IOC_COMMIT_AND_FETCH	_IO(RAMSHARED_IOCTL_MAGIC, 2)
+#define RAMSHARED_IOC_CREATE_DISK	_IOW(RAMSHARED_IOCTL_MAGIC, 3, struct ramshared_disk_params)
+#define RAMSHARED_IOC_DESTROY_DISK	_IO(RAMSHARED_IOCTL_MAGIC, 4)
 
 /**
  * struct ramshared_dma_region - PCIe DMA memory descriptor
