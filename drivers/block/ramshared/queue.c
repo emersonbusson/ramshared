@@ -22,6 +22,20 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 	unsigned int op = bio_op(bio);
 	void __iomem *vram_ptr = rs_dev->dma.cpu_addr + pos;
 
+	if (op == REQ_OP_FLUSH) {
+		dma_wmb();
+		return BLK_STS_OK;
+	}
+
+	if (op == REQ_OP_DISCARD || op == REQ_OP_SECURE_ERASE) {
+		memset_io(rs_dev->dma.cpu_addr + pos, 0, bio->bi_iter.bi_size);
+		dma_wmb();
+		return BLK_STS_OK;
+	}
+
+	if (op != REQ_OP_READ && op != REQ_OP_WRITE)
+		return BLK_STS_NOTSUPP;
+
 	bio_for_each_segment(bvec, bio, iter) {
 		void *src_or_dst = bvec_kmap_local(&bvec);
 		size_t len = bvec.bv_len;
@@ -31,7 +45,7 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 			memcpy_fromio(src_or_dst, vram_ptr, len);
 			flush_dcache_page(bvec.bv_page);
 			atomic64_add(len, &rs_dev->read_bytes);
-		} else if (op == REQ_OP_WRITE) {
+		} else {
 			memcpy_toio(vram_ptr, src_or_dst, len);
 			dma_wmb();
 			atomic64_add(len, &rs_dev->write_bytes);
@@ -111,10 +125,26 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 	int is_write = op_is_write(op);
 
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
-		return -EIO;
+		return -ENODEV;
 
 	if (unlikely(pos + len > rs_dev->capacity_bytes))
-		return -EIO;
+		return -ERANGE;
+
+	if (op == REQ_OP_FLUSH) {
+		dma_wmb();
+		page_endio(page, is_write, 0);
+		return 0;
+	}
+
+	if (op == REQ_OP_DISCARD || op == REQ_OP_SECURE_ERASE) {
+		memset_io(rs_dev->dma.cpu_addr + pos, 0, len);
+		dma_wmb();
+		page_endio(page, is_write, 0);
+		return 0;
+	}
+
+	if (op != REQ_OP_READ && op != REQ_OP_WRITE)
+		return -EOPNOTSUPP;
 
 	vram_ptr = rs_dev->dma.cpu_addr + pos;
 	mem = kmap_local_page(page);
