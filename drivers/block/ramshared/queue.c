@@ -26,15 +26,15 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 		void *src_or_dst = bvec_kmap_local(&bvec);
 		size_t len = bvec.bv_len;
 
-		if (op == REQ_OP_READ) {
+		if (op == REQ_OP_WRITE) {
+			memcpy_toio(vram_ptr, src_or_dst, len);
+			dma_wmb();
+			atomic64_add(len, &rs_dev->write_bytes);
+		} else if (op == REQ_OP_READ) {
 			dma_rmb();
 			memcpy_fromio(src_or_dst, vram_ptr, len);
 			flush_dcache_page(bvec.bv_page);
 			atomic64_add(len, &rs_dev->read_bytes);
-		} else if (op == REQ_OP_WRITE) {
-			memcpy_toio(vram_ptr, src_or_dst, len);
-			dma_wmb();
-			atomic64_add(len, &rs_dev->write_bytes);
 		}
 		kunmap_local(src_or_dst);
 		vram_ptr += len;
