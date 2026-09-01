@@ -231,11 +231,31 @@ pub fn spawn_acceptor(
     jobs: SyncSender<WMsg>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
+        let mut backoff_ms = 10;
         loop {
             let stream = match listener.accept() {
-                Ok((s, _)) => s,
+                Ok((s, _)) => {
+                    backoff_ms = 10;
+                    s
+                }
                 Err(e) => {
                     eprintln!("[ramsharedd] accept failed: {e}");
+                    let kind = e.kind();
+                    if kind == std::io::ErrorKind::ConnectionAborted
+                        || kind == std::io::ErrorKind::ConnectionReset
+                        || kind == std::io::ErrorKind::Interrupted
+                        || kind == std::io::ErrorKind::WouldBlock
+                    {
+                        let jitter =
+                            (std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .subsec_nanos()
+                                % 10) as u64;
+                        std::thread::sleep(std::time::Duration::from_millis(backoff_ms + jitter));
+                        backoff_ms = std::cmp::min(backoff_ms * 2, 1000);
+                        continue;
+                    }
                     break;
                 }
             };
@@ -266,11 +286,31 @@ pub fn spawn_acceptor_tcp(
     jobs: SyncSender<WMsg>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
+        let mut backoff_ms = 10;
         loop {
             let stream = match listener.accept() {
-                Ok((s, _)) => s,
+                Ok((s, _)) => {
+                    backoff_ms = 10;
+                    s
+                }
                 Err(e) => {
                     eprintln!("[ramsharedd] TCP accept failed: {e}");
+                    let kind = e.kind();
+                    if kind == std::io::ErrorKind::ConnectionAborted
+                        || kind == std::io::ErrorKind::ConnectionReset
+                        || kind == std::io::ErrorKind::Interrupted
+                        || kind == std::io::ErrorKind::WouldBlock
+                    {
+                        let jitter =
+                            (std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .subsec_nanos()
+                                % 10) as u64;
+                        std::thread::sleep(std::time::Duration::from_millis(backoff_ms + jitter));
+                        backoff_ms = std::cmp::min(backoff_ms * 2, 1000);
+                        continue;
+                    }
                     break;
                 }
             };
@@ -733,6 +773,34 @@ mod tests {
             &ramshared_block::protocol::NBDMAGIC.to_be_bytes()
         );
         assert_only_closed(&jobs_rx);
+    }
+
+    #[test]
+    fn unix_acceptor_backs_off_on_transient_errors() {
+        let unix_path = socket_path("acceptor_backoff");
+        let _ = std::fs::remove_file(&unix_path);
+        let unix_listener = TestUnixListener::bind(&unix_path).unwrap();
+        unix_listener.set_nonblocking(true).unwrap();
+
+        let (jobs_tx, _jobs_rx) = sync_channel(2);
+        let acceptor = spawn_acceptor(unix_listener, one_export(4096), 0, jobs_tx);
+        std::thread::sleep(Duration::from_millis(100));
+
+        assert!(!acceptor.is_finished(), "Acceptor must back off on WouldBlock, not exit");
+
+        let _ = std::fs::remove_file(&unix_path);
+    }
+
+    #[test]
+    fn tcp_acceptor_backs_off_on_transient_errors() {
+        let tcp_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        tcp_listener.set_nonblocking(true).unwrap();
+
+        let (jobs_tx, _jobs_rx) = sync_channel(2);
+        let acceptor = spawn_acceptor_tcp(tcp_listener, one_export(4096), 0, jobs_tx);
+        std::thread::sleep(Duration::from_millis(100));
+
+        assert!(!acceptor.is_finished(), "TCP Acceptor must back off on WouldBlock, not exit");
     }
 
     #[test]
