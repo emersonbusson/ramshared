@@ -396,42 +396,63 @@ VdHandleReadCapacity(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 VOID
 VdTranslateSrbNoDisk(_In_ PVOID DevExt, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
-	UCHAR op = Srb->Cdb[0];
+	UCHAR op;
 
-	switch (op) {
-	case SCSIOP_INQUIRY:
+	if (DevExt == NULL || Srb == NULL || Srb->CdbLength < 1) {
+		if (Srb != NULL) {
+			Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+			VdComplete(DevExt, Srb, Srb->SrbStatus);
+		}
+		return;
+	}
+
+	op = Srb->Cdb[0];
+
+	if (op != SCSIOP_INQUIRY && op != SCSIOP_TEST_UNIT_READY &&
+	    op != SCSIOP_READ_CAPACITY && op != 0x9E &&
+	    op != SCSIOP_MODE_SENSE && op != SCSIOP_MODE_SENSE10 &&
+	    op != 0xA0) {
+		Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+		VdComplete(DevExt, Srb, Srb->SrbStatus);
+		return;
+	}
+
+	if (op == SCSIOP_INQUIRY) {
 		/* No child PDO before CREATE: avoid caching placeholder VPD identity. */
 		Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
-		break;
-	case SCSIOP_TEST_UNIT_READY:
+		VdComplete(DevExt, Srb, Srb->SrbStatus);
+		return;
+	}
+
+	if (op == SCSIOP_TEST_UNIT_READY) {
 		/*
 		 * Not ready until CREATE_DISK — never SRB_STATUS_BUSY (TM 100%).
 		 * Sense NOT_READY lets the stack back off without thrashing.
 		 */
 		VdSetSenseNotReady(Srb);
-		break;
-	case SCSIOP_READ_CAPACITY:
-	case 0x9E:
+		VdComplete(DevExt, Srb, Srb->SrbStatus);
+		return;
+	}
+
+	if (op == SCSIOP_READ_CAPACITY || op == 0x9E) {
 		/* Stale no-media request: remain not-present, never synthesize size. */
 		Srb->SrbStatus = SRB_STATUS_NO_DEVICE;
-		break;
-	case SCSIOP_MODE_SENSE:
-	case SCSIOP_MODE_SENSE10:
+		VdComplete(DevExt, Srb, Srb->SrbStatus);
+		return;
+	}
+
+	if (op == SCSIOP_MODE_SENSE || op == SCSIOP_MODE_SENSE10) {
 		Srb->SrbStatus = SRB_STATUS_SUCCESS;
 		if (Srb->DataBuffer && Srb->DataTransferLength >= 4) {
 			RtlZeroMemory(Srb->DataBuffer, Srb->DataTransferLength);
 		}
-		break;
-	case 0xA0: /* REPORT LUNS — no LUN until CREATE_DISK */
-		VdHandleReportLuns(Srb, FALSE);
-		break;
-	default:
-		Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
-		break;
-	}
-	if (Srb->SrbStatus != SRB_STATUS_PENDING) {
 		VdComplete(DevExt, Srb, Srb->SrbStatus);
+		return;
 	}
+
+	/* REPORT LUNS — no LUN until CREATE_DISK */
+	VdHandleReportLuns(Srb, FALSE);
+	VdComplete(DevExt, Srb, Srb->SrbStatus);
 }
 
 VOID
@@ -440,115 +461,140 @@ VdTranslateSrb(
 	_In_ PVOID DevExt,
 	_Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
-	UCHAR op = Srb->Cdb[0];
+	UCHAR op;
 	NTSTATUS st;
 	UINT64 offset;
 	UINT32 len;
 	enum ramshared_op rop;
 
-	switch (op) {
-	case SCSIOP_TEST_UNIT_READY:
-		if (InterlockedCompareExchange(&Disk->state, 0, 0) >=
-		    VdStateCreated) {
+	if (Disk == NULL || DevExt == NULL || Srb == NULL || Srb->CdbLength < 1) {
+		if (Srb != NULL) {
+			Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+			VdComplete(DevExt, Srb, Srb->SrbStatus);
+		}
+		return;
+	}
+
+	op = Srb->Cdb[0];
+
+	if (op != SCSIOP_TEST_UNIT_READY && op != SCSIOP_INQUIRY &&
+	    op != SCSIOP_READ_CAPACITY && op != 0x9E &&
+	    op != SCSIOP_MODE_SENSE && op != SCSIOP_MODE_SENSE10 &&
+	    op != SCSIOP_READ && op != SCSIOP_READ16 &&
+	    op != SCSIOP_WRITE && op != SCSIOP_WRITE16 &&
+	    op != SCSIOP_SYNCHRONIZE_CACHE && op != 0x91 &&
+	    op != 0xA0) {
+		Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+		VdComplete(DevExt, Srb, Srb->SrbStatus);
+		return;
+	}
+
+	if (op == SCSIOP_TEST_UNIT_READY) {
+		if (InterlockedCompareExchange(&Disk->state, 0, 0) >= VdStateCreated) {
 			Srb->SrbStatus = SRB_STATUS_SUCCESS;
 		} else {
 			VdSetSenseNotReady(Srb);
 		}
-		break;
+		VdComplete(DevExt, Srb, Srb->SrbStatus);
+		return;
+	}
 
-	case SCSIOP_INQUIRY:
+	if (op == SCSIOP_INQUIRY) {
 		(void)VdHandleInquiry(Disk, DevExt, Srb);
-		break;
+		VdComplete(DevExt, Srb, Srb->SrbStatus);
+		return;
+	}
 
-	case SCSIOP_READ_CAPACITY:
-	case 0x9E: /* READ CAPACITY(16) */
+	if (op == SCSIOP_READ_CAPACITY || op == 0x9E) {
 		(void)VdHandleReadCapacity(Disk, Srb);
-		break;
+		VdComplete(DevExt, Srb, Srb->SrbStatus);
+		return;
+	}
 
-	case SCSIOP_MODE_SENSE:
-	case SCSIOP_MODE_SENSE10:
+	if (op == SCSIOP_MODE_SENSE || op == SCSIOP_MODE_SENSE10) {
 		Srb->SrbStatus = SRB_STATUS_SUCCESS;
 		if (Srb->DataBuffer && Srb->DataTransferLength >= 4) {
 			RtlZeroMemory(Srb->DataBuffer, Srb->DataTransferLength);
 		}
-		break;
-
-	case SCSIOP_READ:
-	case SCSIOP_READ16:
-	case SCSIOP_WRITE:
-	case SCSIOP_WRITE16:
-	case SCSIOP_SYNCHRONIZE_CACHE:
-	case 0x91: /* SYNCHRONIZE CACHE(16) */
-		/* B2: backend gone / queue torn down - fail fast, do not hang. */
-		if (InterlockedCompareExchange(&Disk->state, 0, 0) ==
-		    (LONG)VdStateFailed) {
-			Srb->SrbStatus = SRB_STATUS_ERROR;
-			break;
-		}
-		if (op == SCSIOP_SYNCHRONIZE_CACHE || op == 0x91) {
-			rop = RAMSHARED_OP_FLUSH;
-			offset = 0;
-			len = 0;
-		} else {
-			/* Parse LBA from CDB (10-byte and 16-byte forms). */
-			if (op == SCSIOP_READ16 || op == SCSIOP_WRITE16) {
-				offset = ((UINT64)Srb->Cdb[2] << 56) |
-					 ((UINT64)Srb->Cdb[3] << 48) |
-					 ((UINT64)Srb->Cdb[4] << 40) |
-					 ((UINT64)Srb->Cdb[5] << 32) |
-					 ((UINT64)Srb->Cdb[6] << 24) |
-					 ((UINT64)Srb->Cdb[7] << 16) |
-					 ((UINT64)Srb->Cdb[8] << 8) |
-					 ((UINT64)Srb->Cdb[9]);
-			} else {
-				offset = ((UINT64)Srb->Cdb[2] << 24) |
-					 ((UINT64)Srb->Cdb[3] << 16) |
-					 ((UINT64)Srb->Cdb[4] << 8) |
-					 ((UINT64)Srb->Cdb[5]);
-			}
-			offset *= Disk->block_size;
-			len = Srb->DataTransferLength;
-			if (op == SCSIOP_READ || op == SCSIOP_READ16) {
-				rop = RAMSHARED_OP_READ;
-			} else {
-				rop = RAMSHARED_OP_WRITE;
-			}
-		}
-		st = QSubmit(&Disk->queue, DevExt, Srb, rop, offset, len);
-		if (st == STATUS_PENDING) {
-			Srb->SrbStatus = SRB_STATUS_PENDING;
-			return;
-		}
-		if (st == STATUS_INSUFFICIENT_RESOURCES) {
-			/*
-			 * The request has not started: the bounded ring is temporarily
-			 * full. Apply per-LUN backpressure and let StorPort retry after
-			 * one outstanding request completes. Permanent QSubmit errors
-			 * still fail below.
-			 */
-			(void)StorPortDeviceBusy(DevExt, Srb->PathId,
-						Srb->TargetId, Srb->Lun, 1);
-			Srb->ScsiStatus = SCSISTAT_BUSY;
-			Srb->SrbStatus = SRB_STATUS_BUSY;
-			break;
-		}
-		if (!NT_SUCCESS(st)) {
-			Srb->SrbStatus = SRB_STATUS_ERROR;
-		} else {
-			Srb->SrbStatus = SRB_STATUS_SUCCESS;
-		}
-		break;
-
-	case 0xA0: /* REPORT LUNS */
-		VdHandleReportLuns(Srb, TRUE);
-		break;
-
-	default:
-		Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
-		break;
-	}
-
-	if (Srb->SrbStatus != SRB_STATUS_PENDING) {
 		VdComplete(DevExt, Srb, Srb->SrbStatus);
+		return;
 	}
+
+	if (op == 0xA0) {
+		VdHandleReportLuns(Srb, TRUE);
+		VdComplete(DevExt, Srb, Srb->SrbStatus);
+		return;
+	}
+
+	/* B2: backend gone / queue torn down - fail fast, do not hang. */
+	if (InterlockedCompareExchange(&Disk->state, 0, 0) == (LONG)VdStateFailed) {
+		Srb->SrbStatus = SRB_STATUS_ERROR;
+		VdComplete(DevExt, Srb, Srb->SrbStatus);
+		return;
+	}
+
+	if (op == SCSIOP_SYNCHRONIZE_CACHE || op == 0x91) {
+		rop = RAMSHARED_OP_FLUSH;
+		offset = 0;
+		len = 0;
+	} else {
+		/* Parse LBA from CDB (10-byte and 16-byte forms). */
+		if (op == SCSIOP_READ16 || op == SCSIOP_WRITE16) {
+			if (Srb->CdbLength < 16) {
+				Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+				VdComplete(DevExt, Srb, Srb->SrbStatus);
+				return;
+			}
+			offset = ((UINT64)Srb->Cdb[2] << 56) |
+				 ((UINT64)Srb->Cdb[3] << 48) |
+				 ((UINT64)Srb->Cdb[4] << 40) |
+				 ((UINT64)Srb->Cdb[5] << 32) |
+				 ((UINT64)Srb->Cdb[6] << 24) |
+				 ((UINT64)Srb->Cdb[7] << 16) |
+				 ((UINT64)Srb->Cdb[8] << 8) |
+				 ((UINT64)Srb->Cdb[9]);
+		} else {
+			if (Srb->CdbLength < 10) {
+				Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+				VdComplete(DevExt, Srb, Srb->SrbStatus);
+				return;
+			}
+			offset = ((UINT64)Srb->Cdb[2] << 24) |
+				 ((UINT64)Srb->Cdb[3] << 16) |
+				 ((UINT64)Srb->Cdb[4] << 8) |
+				 ((UINT64)Srb->Cdb[5]);
+		}
+		offset *= Disk->block_size;
+		len = Srb->DataTransferLength;
+		if (op == SCSIOP_READ || op == SCSIOP_READ16) {
+			rop = RAMSHARED_OP_READ;
+		} else {
+			rop = RAMSHARED_OP_WRITE;
+		}
+	}
+
+	st = QSubmit(&Disk->queue, DevExt, Srb, rop, offset, len);
+	if (st == STATUS_PENDING) {
+		Srb->SrbStatus = SRB_STATUS_PENDING;
+		return;
+	}
+
+	if (st == STATUS_INSUFFICIENT_RESOURCES) {
+		/*
+		 * The request has not started: the bounded ring is temporarily
+		 * full. Apply per-LUN backpressure and let StorPort retry after
+		 * one outstanding request completes. Permanent QSubmit errors
+		 * still fail below.
+		 */
+		(void)StorPortDeviceBusy(DevExt, Srb->PathId,
+					Srb->TargetId, Srb->Lun, 1);
+		Srb->ScsiStatus = SCSISTAT_BUSY;
+		Srb->SrbStatus = SRB_STATUS_BUSY;
+	} else if (!NT_SUCCESS(st)) {
+		Srb->SrbStatus = SRB_STATUS_ERROR;
+	} else {
+		Srb->SrbStatus = SRB_STATUS_SUCCESS;
+	}
+
+	VdComplete(DevExt, Srb, Srb->SrbStatus);
 }
