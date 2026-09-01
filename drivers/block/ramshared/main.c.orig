@@ -33,7 +33,7 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	dev_info(&pdev->dev, "probing RamShared hardware (capacity=%lu MiB)\n",
 		 capacity_mb);
 
-	if (capacity_mb > (1UL << 20) || capacity_mb == 0) {
+	if (capacity_mb == 0 || capacity_mb > (1UL << 20)) {
 		dev_err(&pdev->dev, "invalid capacity_mb parameter: %lu\n",
 			capacity_mb);
 		return -EINVAL;
