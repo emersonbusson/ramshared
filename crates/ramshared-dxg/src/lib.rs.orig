@@ -85,11 +85,6 @@ pub enum DxgError {
     UnsupportedHardware,
     BufferOverflow,
     PermissionDenied,
-    InvalidPointer,
-    InvalidArgument,
-    OutOfMemory,
-    OutOfRange,
-    DeviceBusy,
     NoAdapters,
     AmbiguousAdapters(usize),
     AdapterNotFound(AdapterLuid),
@@ -106,11 +101,6 @@ impl fmt::Display for DxgError {
             Self::UnsupportedHardware => write!(f, "dxg unsupported hardware"),
             Self::BufferOverflow => write!(f, "dxg buffer overflow"),
             Self::PermissionDenied => write!(f, "dxg permission denied"),
-            Self::InvalidPointer => write!(f, "dxg invalid memory pointer"),
-            Self::InvalidArgument => write!(f, "dxg invalid argument"),
-            Self::OutOfMemory => write!(f, "dxg out of memory"),
-            Self::OutOfRange => write!(f, "dxg out of range"),
-            Self::DeviceBusy => write!(f, "dxg device busy"),
             Self::NoAdapters => write!(f, "dxg returned no adapters"),
             Self::AmbiguousAdapters(count) => {
                 write!(f, "dxg returned {count} adapters; explicit LUID required")
@@ -131,11 +121,6 @@ impl DxgError {
             Some(libc::ENOTTY) => Self::UnsupportedHardware,
             Some(libc::EOVERFLOW) => Self::BufferOverflow,
             Some(libc::EPERM) | Some(libc::EACCES) => Self::PermissionDenied,
-            Some(libc::EFAULT) => Self::InvalidPointer,
-            Some(libc::EINVAL) => Self::InvalidArgument,
-            Some(libc::ENOMEM) => Self::OutOfMemory,
-            Some(libc::ERANGE) => Self::OutOfRange,
-            Some(libc::EBUSY) => Self::DeviceBusy,
             _ => Self::Io(error.to_string()),
         }
     }
@@ -404,26 +389,6 @@ mod tests {
             super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(1)),
             super::DxgError::PermissionDenied
         );
-        assert_eq!(
-            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(libc::EFAULT)),
-            super::DxgError::InvalidPointer
-        );
-        assert_eq!(
-            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(libc::EINVAL)),
-            super::DxgError::InvalidArgument
-        );
-        assert_eq!(
-            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(libc::ENOMEM)),
-            super::DxgError::OutOfMemory
-        );
-        assert_eq!(
-            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(libc::ERANGE)),
-            super::DxgError::OutOfRange
-        );
-        assert_eq!(
-            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(libc::EBUSY)),
-            super::DxgError::DeviceBusy
-        );
         let unknown = super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(9999));
         assert!(matches!(unknown, super::DxgError::Io(_)));
     }
@@ -447,11 +412,6 @@ mod tests {
             super::DxgError::UnsupportedHardware,
             super::DxgError::BufferOverflow,
             super::DxgError::PermissionDenied,
-            super::DxgError::InvalidPointer,
-            super::DxgError::InvalidArgument,
-            super::DxgError::OutOfMemory,
-            super::DxgError::OutOfRange,
-            super::DxgError::DeviceBusy,
         ];
         for error in cases {
             assert!(!error.to_string().is_empty());
