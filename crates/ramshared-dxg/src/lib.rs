@@ -273,9 +273,15 @@ fn close_adapter(file: &File, handle: u32) {
 }
 
 fn ioctl_mut<T>(file: &File, request: u64, value: &mut T) -> Result<(), DxgError> {
+    let ptr = value as *mut T;
+    if ptr.is_null() {
+        return Err(DxgError::from_sys_error(std::io::Error::from_raw_os_error(
+            libc::EFAULT,
+        )));
+    }
     // SAFETY: `value` points to the exact repr(C) layout for `request` and stays
     // alive for the synchronous ioctl. The kernel validates nested pointers.
-    let result = unsafe { ioctl(file.as_raw_fd(), request, value as *mut T) };
+    let result = unsafe { ioctl(file.as_raw_fd(), request, ptr) };
     if result < 0 {
         Err(DxgError::from_sys_error(std::io::Error::last_os_error()))
     } else {
