@@ -1,0 +1,22 @@
+## Issue
+Explicitly handle bio REQ_OP_FLUSH and REQ_OP_DISCARD opcodes.
+
+## Responsavel
+Jules
+
+## Resumo
+Add explicit handling for REQ_OP_FLUSH and REQ_OP_DISCARD in ramshared_process_bio returning proper blk_status_t.
+
+## Commits
+| Commit | O que fez | Por que fez | Detalhes |
+|---|---|---|---|
+| drivers/block/ramshared/queue.c | Added explicit handling of flush and discard | Prevent unsupported opcodes from proceeding | Implemented linear guard clauses handling flush and discard properly. Returned proper BLK_STS_* error codes. |
+
+## Labels
+type:kernel, type:refactor
+
+## Validacao
+Ran all standalone kernel scripts.
+
+## Rollback trigger
+Any issue related to flush and discard opcodes in ramshared_process_bio execution.
