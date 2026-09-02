@@ -16,6 +16,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      security-events: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -26,6 +27,20 @@ jobs:
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+          GITLEAKS_ENABLE_SUMMARY: true
+
+      - name: Validate Gitleaks SARIF
+        run: |
+          set -euo pipefail
+          test -s results.sarif
+          jq -e '.version == "2.1.0" and (.runs | type == "array")' results.sarif >/dev/null
+
+      - name: Upload Gitleaks SARIF
+        uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4
+        if: always() && hashFiles('results.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        with:
+          sarif_file: results.sarif
 
   gitleaks-summary:
     name: gitleaks-summary

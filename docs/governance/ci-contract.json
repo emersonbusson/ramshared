@@ -115,7 +115,8 @@
       "policy": {
         "timeout_minutes": 30,
         "permissions": {
-          "contents": "read"
+          "contents": "read",
+          "security-events": "write"
         },
         "permissions_scope": "job",
         "action_pinning": "full-sha",
@@ -273,7 +274,10 @@
           "cancel_in_progress": true
         }
       },
-      "required_commands": [],
+      "required_commands": [
+        "test -s results.sarif",
+        "jq -e '.version == \"2.1.0\" and (.runs | type == \"array\")' results.sarif"
+      ],
       "open_gaps": []
     },
     {
@@ -294,7 +298,8 @@
       "policy": {
         "timeout_minutes": 30,
         "permissions": {
-          "contents": "read"
+          "contents": "read",
+          "security-events": "write"
         },
         "permissions_scope": "job",
         "action_pinning": "full-sha",
@@ -304,7 +309,10 @@
           "cancel_in_progress": true
         }
       },
-      "required_commands": [],
+      "required_commands": [
+        "test -s results.sarif",
+        "jq -e '.version == \"2.1.0\" and (.runs | type == \"array\")' results.sarif"
+      ],
       "open_gaps": []
     },
     {
