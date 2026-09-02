@@ -118,6 +118,12 @@ public static class IoctlVal {
 
   public static int LastErr() { return Marshal.GetLastWin32Error(); }
 
+public static bool IoctlSize(SafeFileHandle h, uint code, byte[] input, out uint actualSize, out int err) {
+    bool ok = DeviceIoControl(h, code, input, input == null ? 0u : (uint)input.Length, null, 0, out actualSize, IntPtr.Zero);
+    err = ok ? 0 : Marshal.GetLastWin32Error();
+    return ok;
+  }
+
   public static bool IoctlBool(SafeFileHandle h, uint code, byte[] input) {
     uint ret;
     bool ok = DeviceIoControl(h, code, input, input == null ? 0u : (uint)input.Length, null, 0, out ret, IntPtr.Zero);
@@ -343,6 +349,54 @@ public static class IoctlVal {
 '@
 
 Add-Type -TypeDefinition $cs -ErrorAction Stop
+
+function Invoke-StructuredIoctl {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNull()]
+        [Microsoft.Win32.SafeHandles.SafeFileHandle]$Handle,
+
+        [Parameter(Mandatory=$true)]
+        [uint32]$IoctlCode,
+
+        [Parameter(Mandatory=$false)]
+        [byte[]]$InputBuffer,
+
+        [Parameter(Mandatory=$false)]
+        [ValidateRange(0, 1073741824)]
+        [uint32]$ExpectedSize = 0
+    )
+
+    if ($Handle.IsInvalid -or $Handle.IsClosed) {
+        throw "Invalid handle"
+    }
+
+    if ($ExpectedSize -eq 0 -and $null -ne $InputBuffer) {
+        $ExpectedSize = $InputBuffer.Length
+    }
+
+    [uint32]$actualSize = 0
+    [int]$err = 0
+    $ok = [IoctlVal]::IoctlSize($Handle, $IoctlCode, $InputBuffer, [ref]$actualSize, [ref]$err)
+
+    if (-not $ok) {
+        $errMsg = "Win32 Error $err"
+        try {
+            $ex = New-Object System.ComponentModel.Win32Exception($err)
+            $errMsg = "$($ex.Message) (Code: $err)"
+        } catch {}
+
+        return [PSCustomObject]@{
+            IoctlCode    = $IoctlCode
+            ExpectedSize = $ExpectedSize
+            ActualSize   = $actualSize
+            ErrorMessage = $errMsg
+            ErrorCode    = $err
+        }
+    }
+    return $null
+}
 
 function Open-Ctl {
     # FILE_SHARE_READ|WRITE: concurrent probes need a second handle while COMMIT is pended.
@@ -758,11 +812,10 @@ try {
     Start-Sleep -Milliseconds 500
 
     # --- REFUSE_UNKNOWN_IOCTL ---
-    $ok = [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNKNOWN, $null)
-    $err = [IoctlVal]::LastErr()
-    if (-not $ok) {
+    $res = Invoke-StructuredIoctl -Handle $h -IoctlCode [IoctlVal]::IOCTL_UNKNOWN -InputBuffer $null
+    if ($null -ne $res) {
         $verdict.REFUSE_UNKNOWN_IOCTL = 1
-        L "REFUSE_UNKNOWN_IOCTL=1 err=$err"
+        L "REFUSE_UNKNOWN_IOCTL=1 err=$($res.ErrorCode) msg=$($res.ErrorMessage) ExpectedSize=$($res.ExpectedSize) ActualSize=$($res.ActualSize)"
     } else {
         L "REFUSE_UNKNOWN_IOCTL=0 (unexpected success)"
     }
@@ -774,10 +827,10 @@ try {
     $dp.reserved = 1
     $dp.serial = New-Object byte[] 16
     $in = [IoctlVal]::ToBytes($dp)
-    $ok = [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_CREATE, $in)
-    if (-not $ok) {
+    $res = Invoke-StructuredIoctl -Handle $h -IoctlCode [IoctlVal]::IOCTL_CREATE -InputBuffer $in
+    if ($null -ne $res) {
         $verdict.REFUSE_RESERVED_DISK_PARAMS = 1
-        L "REFUSE_RESERVED_DISK_PARAMS=1 err=$([IoctlVal]::LastErr())"
+        L "REFUSE_RESERVED_DISK_PARAMS=1 err=$($res.ErrorCode) msg=$($res.ErrorMessage)"
     } else {
         L "REFUSE_RESERVED_DISK_PARAMS=0"
         [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_DESTROY, $null)
@@ -817,9 +870,10 @@ try {
     $reg.data_area_va = [uint64]$rings.data.ToInt64()
     $reg.data_area_len = [uint64]$rings.dataBytes
     $rin = [IoctlVal]::ToBytes($reg)
-    if (-not [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_REGISTER, $rin)) {
+    $res = Invoke-StructuredIoctl -Handle $h -IoctlCode [IoctlVal]::IOCTL_REGISTER -InputBuffer $rin
+    if ($null -ne $res) {
         $verdict.REFUSE_RESERVED_REGISTER = 1
-        L "REFUSE_RESERVED_REGISTER=1 err=$([IoctlVal]::LastErr())"
+        L "REFUSE_RESERVED_REGISTER=1 err=$($res.ErrorCode) msg=$($res.ErrorMessage)"
     } else {
         L "REFUSE_RESERVED_REGISTER=0"
         [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
@@ -829,9 +883,10 @@ try {
     [Runtime.InteropServices.Marshal]::WriteInt32($rings.sq, 0, 0xDEADBEEF)
     $reg.reserved = 0
     $rin = [IoctlVal]::ToBytes($reg)
-    if (-not [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_REGISTER, $rin)) {
+    $res = Invoke-StructuredIoctl -Handle $h -IoctlCode [IoctlVal]::IOCTL_REGISTER -InputBuffer $rin
+    if ($null -ne $res) {
         $verdict.REFUSE_BAD_RING = 1
-        L "REFUSE_BAD_RING=1 err=$([IoctlVal]::LastErr())"
+        L "REFUSE_BAD_RING=1 err=$($res.ErrorCode) msg=$($res.ErrorMessage)"
     } else {
         L "REFUSE_BAD_RING=0"
         [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
@@ -848,12 +903,13 @@ try {
 
     # --- PASS_VALID_QUEUE ---
     $rin = [IoctlVal]::ToBytes($reg)
-    if ([IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_REGISTER, $rin)) {
+    $res = Invoke-StructuredIoctl -Handle $h -IoctlCode [IoctlVal]::IOCTL_REGISTER -InputBuffer $rin
+    if ($null -eq $res) {
         $verdict.PASS_VALID_QUEUE = 1
         L "PASS_VALID_QUEUE=1"
         [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
     } else {
-        L "PASS_VALID_QUEUE=0 err=$([IoctlVal]::LastErr())"
+        L "PASS_VALID_QUEUE=0 err=$($res.ErrorCode) msg=$($res.ErrorMessage)"
     }
 
     # --- VPD_SERIAL_MATCH (INQUIRY vendor/product + VPD serial after CREATE) ---
@@ -1090,9 +1146,10 @@ public static class DiskLenQuery {
     [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 8, 0)
     [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 12, 0)
     $rin = [IoctlVal]::ToBytes($reg)
-    if (-not [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_REGISTER, $rin)) {
+    $res = Invoke-StructuredIoctl -Handle $h -IoctlCode [IoctlVal]::IOCTL_REGISTER -InputBuffer $rin
+    if ($null -ne $res) {
         $verdict.REFUSE_RING_INDEX_JUMP = 1
-        L "REFUSE_RING_INDEX_JUMP=1 err=$([IoctlVal]::LastErr())"
+        L "REFUSE_RING_INDEX_JUMP=1 err=$($res.ErrorCode) msg=$($res.ErrorMessage)"
     } else {
         L "REFUSE_RING_INDEX_JUMP=0 (driver accepted jump; check DT-5)"
         [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
