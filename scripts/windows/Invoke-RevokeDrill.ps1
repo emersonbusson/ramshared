@@ -13,12 +13,28 @@
 #>
 [CmdletBinding()]
 param(
+    [ValidateNotNullOrEmpty()]
     [string]$ServiceName = "ramshared-winsvc",
+    [ValidateNotNullOrEmpty()]
     [string]$BrokerStatusCmd = "",
+    [ValidateNotNullOrEmpty()]
     [string]$ArtifactDir = ".\artifacts\revoke-drill"
 )
 
 $ErrorActionPreference = "Stop"
+
+try {
+    $svc = Get-Service -Name $ServiceName -ErrorAction Stop
+} catch {
+    Write-Error -ErrorId "ServiceNotFound" -Message "Service $ServiceName does not exist"
+    throw [System.Exception]::new("Service $ServiceName does not exist")
+}
+
+if (Get-Process -Name $ServiceName -ErrorAction SilentlyContinue) {
+    Write-Error -ErrorId "TargetLocked" -Message "Revocation target $ServiceName is locked by another process"
+    throw [System.Exception]::new("Revocation target $ServiceName is locked by another process")
+}
+
 New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
 $runId = "revoke-{0:yyyyMMdd-HHmmss}" -f (Get-Date)
 $log = Join-Path $ArtifactDir "$runId.log"
