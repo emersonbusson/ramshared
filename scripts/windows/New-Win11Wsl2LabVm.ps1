@@ -156,8 +156,15 @@ function Get-Win11LabSetupStartFailureCode {
     }
 }
 
-if (Get-VM -Name $VMName -ErrorAction SilentlyContinue) {
-    Fail "VM already exists: $VMName"
+try {
+    $existingVm = Get-VM -Name $VMName -ErrorAction Stop
+} catch {
+    $existingVm = $null
+}
+
+if ($null -ne $existingVm) {
+    Write-Output "VM already exists: $VMName"
+    exit 0
 }
 if (-not (Test-Path -LiteralPath $WindowsIso)) {
     Fail "Windows ISO not found: $WindowsIso"
