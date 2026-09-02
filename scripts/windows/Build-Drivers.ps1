@@ -8,16 +8,28 @@
 #>
 [CmdletBinding()]
 param(
+    [ValidateNotNullOrEmpty()]
     [string]$RepoRoot = "C:\ramshared\src",
+
+    [ValidateNotNullOrEmpty()]
     [string]$KitVersion = "10.0.26100.0",
+
     [switch]$CodeAnalysis
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not (Test-Path $RepoRoot)) {
+    Write-Error -ErrorId "RepoRootNotFound" -Message "Repository root path not found: $RepoRoot"
+    exit 74
+}
+
 Set-Location $RepoRoot
 $log = Join-Path $RepoRoot "artifacts\build-drivers.log"
 New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
 Start-Transcript -Path $log -Force
+
+try {
 
 function Find-VcVars {
     $p = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
@@ -96,4 +108,10 @@ Write-Output "BUILT $psSys"
 Get-Item $psSys | Format-List FullName, Length, LastWriteTime | Out-String | Write-Output
 
 Write-Output "BUILD_DRIVERS_OK"
-Stop-Transcript
+
+} catch {
+    Write-Error -ErrorId "BuildFailed" -Exception $_.Exception -Message "Build failed: $($_.Exception.Message)"
+    exit 74
+} finally {
+    Stop-Transcript
+}
