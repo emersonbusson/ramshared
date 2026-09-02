@@ -24,6 +24,9 @@ jobs:
       - name: Validate new entries in validation.md
         run: node tools/ci/check-validation-schema.mjs --diff "origin/${{ github.base_ref }}"
 
+      - name: Validate RamShared configuration files
+        run: python3 tools/ci/check-config-schemas.py .
+
   validation-schema-summary:
     name: validation-schema-summary
     if: always()
