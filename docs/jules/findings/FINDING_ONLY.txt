@@ -1,0 +1,1 @@
+No unpinned action tags found in .github/workflows/ci.yml. All third-party actions are already pinned to full 40-character SHA hashes.
