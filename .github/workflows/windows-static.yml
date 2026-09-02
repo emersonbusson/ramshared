@@ -24,6 +24,17 @@ jobs:
         with:
           toolchain: 1.98.0
 
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path -Path 'scripts/windows')) { throw [System.Exception]::new('scripts/windows directory not found') }
+          $results = Invoke-ScriptAnalyzer -Path 'scripts/windows' -Recurse -Severity Error -ErrorAction Stop
+          if ($null -ne $results -and $results.Count -gt 0) {
+            $results | Format-Table -AutoSize
+            throw [System.Exception]::new('PSScriptAnalyzer found Error severity violations')
+          }
+
       - name: Windows Rust tests
         shell: pwsh
         run: |
