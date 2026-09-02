@@ -21,17 +21,27 @@
 #>
 [CmdletBinding()]
 param(
+    [ValidateNotNullOrEmpty()]
     [string]$PagefileDrive = "D",
+    [ValidateRange(0, 3600)]
     [int]$PostKillWaitSec = 20,
+    [ValidateNotNullOrEmpty()]
     [string]$ArtifactDir = "C:\ramshared\artifacts\b2-lab",
     [switch]$RestartBackend,
+    [ValidateNotNullOrEmpty()]
     [string]$BackendPath = "C:\ramshared\bin\WinDriveBackend.exe",
+    [ValidateRange(1048576, [UInt64]::MaxValue)]
     [UInt64]$BackendSize = 67108864
 )
 
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = 'Stop'
 $drive = $PagefileDrive.TrimEnd(':')
 New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
+
+if ($RestartBackend -and -not (Test-Path $BackendPath)) {
+    [System.Environment]::ExitCode = 69
+    throw [System.IO.FileNotFoundException]::new("MissingDependency: BackendPath not found: $BackendPath")
+}
 
 function Get-PfUse {
     Get-CimInstance Win32_PageFileUsage -EA SilentlyContinue |
@@ -93,6 +103,8 @@ try {
     L "PRE_WRITE=OK"
 } catch {
     L "PRE_WRITE_FAIL=$($_.Exception.Message)"
+    [System.Environment]::ExitCode = 77
+    throw [System.IO.IOException]::new("PermissionError: $($_.Exception.Message)")
 }
 
 # --- B2 kill ---
@@ -112,6 +124,8 @@ $job = Start-Job -ScriptBlock {
         "READ_OK"
     } catch {
         "READ_FAIL:$($_.Exception.Message)"
+        [System.Environment]::ExitCode = 74
+        throw [System.IO.IOException]::new("NetworkError: $($_.Exception.Message)")
     }
 } -ArgumentList $smokePath
 
@@ -120,7 +134,12 @@ $sw.Stop()
 if (-not $completed) {
     Stop-Job $job -EA SilentlyContinue
     Remove-Job $job -Force -EA SilentlyContinue
-    $ioOutcome = "READ_TIMEOUT_15s"
+    try {
+        throw [System.TimeoutException]::new("TimeoutError: Job exceeded 15s")
+    } catch {
+        Write-Error -ErrorId 'TimeoutError' -Exception $_.Exception -Category OperationTimeout -ErrorAction Continue
+        $ioOutcome = "READ_TIMEOUT_15s"
+    }
 } else {
     $ioOutcome = Receive-Job $job
     Remove-Job $job -Force -EA SilentlyContinue
@@ -132,6 +151,8 @@ try {
     L "DISKS_POST=$((Get-Disk -EA Stop | ForEach-Object { "N=$($_.Number) $($_.FriendlyName) $($_.OperationalStatus)" }) -join '; ')"
 } catch {
     L "DISKS_POST_ERR=$($_.Exception.Message)"
+    [System.Environment]::ExitCode = 77
+    throw [System.IO.IOException]::new("PermissionError: $($_.Exception.Message)")
 }
 
 L "WAIT ${PostKillWaitSec}s for bugcheck window"
