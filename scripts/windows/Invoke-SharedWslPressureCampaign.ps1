@@ -172,8 +172,11 @@ function Stop-CampaignProcessInstanceSafely {
         if ($Process.StartTime.ToUniversalTime().Ticks -ne $originalStart) {
             return [pscustomobject]@{ stopped = $false; reason = "$Operation`_process_instance_identity_changed" }
         }
-        $Process.Kill()
-        if (-not $Process.WaitForExit(5000)) { return [pscustomobject]@{ stopped = $false; reason = "$Operation`_process_instance_kill_unreaped" } }
+        $Process.CloseMainWindow() | Out-Null
+        if (-not $Process.WaitForExit(10000)) {
+            Stop-Process -Id $Process.Id -Force -ErrorAction Stop
+            if (-not $Process.WaitForExit(5000)) { return [pscustomobject]@{ stopped = $false; reason = "$Operation`_process_instance_kill_unreaped" } }
+        }
         return [pscustomobject]@{ stopped = $true; reason = "$Operation`_process_instance_handle_terminated" }
     } catch {
         return [pscustomobject]@{ stopped = $false; reason = "$Operation`_process_instance_identity_unproven" }
