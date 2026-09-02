@@ -117,6 +117,7 @@ load_kernel_pair_manifest() {
 	local expected=(
 		schema pair_id release
 		kernel_file kernel_sha256 kernel_size_bytes
+		initramfs_file initramfs_sha256 initramfs_size_bytes
 		modules_file modules_sha256 modules_size_bytes
 		modules_layout layout_release_directory_count
 		layout_nested_release_directory_count layout_inventory_sha256

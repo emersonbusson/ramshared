@@ -24,7 +24,7 @@ fi
 usage() {
 	cat <<'EOF'
 Usage: seal-kernel-pair.sh \
-  --kernel <bzImage> --modules <modules.vhdx> --module-file <module.ko> \
+  --kernel <bzImage> --initramfs <initramfs.cpio.gz> --modules <modules.vhdx> --module-file <module.ko> \
   --release <kernelrelease> --layout-inventory <file> --qemu-stamp <file> \
   --output-root <directory> [--minimum-wsl-version 2.7.12.0]
 
@@ -36,6 +36,7 @@ EOF
 }
 
 kernel=""
+initramfs=""
 modules=""
 module_file=""
 release=""
@@ -51,13 +52,14 @@ argument_error() {
 }
 while (($#)); do
 	case "$1" in
-	--kernel|--modules|--module-file|--release|--layout-inventory|--qemu-stamp|--output-root|--minimum-wsl-version)
+	--kernel|--initramfs|--modules|--module-file|--release|--layout-inventory|--qemu-stamp|--output-root|--minimum-wsl-version)
 		key="${1#--}"
 		[[ -z "${seen[$key]+x}" ]] || argument_error "duplicate --$key"
 		[[ $# -ge 2 && -n "${2//[[:space:]]/}" && "$2" != --* ]] || argument_error "missing or blank value for --$key"
 		seen[$key]=1
 		case "$key" in
 		kernel) kernel="$2" ;;
+		initramfs) initramfs="$2" ;;
 		modules) modules="$2" ;;
 		module-file) module_file="$2" ;;
 		release) release="$2" ;;
@@ -73,7 +75,7 @@ while (($#)); do
 	esac
 done
 
-for required in kernel modules module-file release layout-inventory qemu-stamp output-root; do
+for required in kernel initramfs modules module-file release layout-inventory qemu-stamp output-root; do
 	[[ -n "${seen[$required]+x}" ]] || argument_error "missing --$required"
 done
 
@@ -105,7 +107,7 @@ assert_canonical_path() {
 	done
 }
 
-for item in kernel modules module_file layout_inventory qemu_stamp; do
+for item in kernel initramfs modules module_file layout_inventory qemu_stamp; do
 	value="${!item}"
 	assert_canonical_path "$value" "$item" 1 || exit 2
 	[[ -f "$value" && ! -L "$value" && "$(stat -c '%h' -- "$value")" == 1 ]] || {
@@ -124,12 +126,14 @@ assert_canonical_path "$output_root" output-root 0 || exit 2
 }
 
 kernel_sha="$(sha256sum -- "$kernel" | awk '{print $1}')"
+initramfs_sha="$(sha256sum -- "$initramfs" | awk '{print $1}')"
 modules_sha="$(sha256sum -- "$modules" | awk '{print $1}')"
 module_file_sha="$(sha256sum -- "$module_file" | awk '{print $1}')"
 kernel_size="$(stat -c '%s' -- "$kernel")"
+initramfs_size="$(stat -c '%s' -- "$initramfs")"
 modules_size="$(stat -c '%s' -- "$modules")"
-((kernel_size > 1048576 && modules_size > 0)) || {
-	echo "kernel must exceed 1 MiB and modules must be non-empty" >&2
+((kernel_size > 1048576 && initramfs_size > 0 && modules_size > 0)) || {
+	echo "kernel must exceed 1 MiB and initramfs/modules must be non-empty" >&2
 	exit 2
 }
 
@@ -259,7 +263,7 @@ published_here=0
 publication_complete=0
 published_identity=""
 owned_pair_leaves=(
-	kernel.bzImage modules.vhdx modules-layout.manifest
+	kernel.bzImage initramfs.cpio.gz modules.vhdx modules-layout.manifest
 	qemu-pass.stamp kernel-pair.manifest
 )
 cleanup_owned_pair_directory() {
@@ -344,7 +348,7 @@ fi
 
 declare -A source_identity=()
 declare -A source_hash=()
-for item in kernel modules layout_inventory qemu_stamp; do
+for item in kernel initramfs modules layout_inventory qemu_stamp; do
 	value="${!item}"
 	source_identity[$item]="$(stat -c '%d:%i:%h:%s' -- "$value")"
 	source_hash[$item]="$(sha256sum -- "$value" | awk '{print $1}')"
@@ -354,6 +358,7 @@ for item in kernel modules layout_inventory qemu_stamp; do
 	}
 done
 [[ "${source_hash[kernel]}" == "$kernel_sha" &&
+	"${source_hash[initramfs]}" == "$initramfs_sha" &&
 	"${source_hash[modules]}" == "$modules_sha" &&
 	"${source_hash[layout_inventory]}" == "$layout_sha" &&
 	"${source_hash[qemu_stamp]}" == "$stamp_sha" ]] || {
@@ -362,18 +367,21 @@ done
 }
 
 exec {kernel_fd}<"$kernel"
+exec {initramfs_fd}<"$initramfs"
 exec {modules_fd}<"$modules"
 exec {layout_fd}<"$layout_inventory"
 exec {qemu_fd}<"$qemu_stamp"
 dd status=none bs=1048576 <&"$kernel_fd" >"$staging/kernel.bzImage"
+dd status=none bs=1048576 <&"$initramfs_fd" >"$staging/initramfs.cpio.gz"
 dd status=none bs=1048576 <&"$modules_fd" >"$staging/modules.vhdx"
 dd status=none bs=1048576 <&"$layout_fd" >"$staging/modules-layout.manifest"
 dd status=none bs=1048576 <&"$qemu_fd" >"$staging/qemu-pass.stamp"
 exec {kernel_fd}<&-
+exec {initramfs_fd}<&-
 exec {modules_fd}<&-
 exec {layout_fd}<&-
 exec {qemu_fd}<&-
-for item in kernel modules layout_inventory qemu_stamp; do
+for item in kernel initramfs modules layout_inventory qemu_stamp; do
 	value="${!item}"
 	[[ "$(stat -c '%d:%i:%h:%s' -- "$value")" == "${source_identity[$item]}" &&
 		"$(sha256sum -- "$value" | awk '{print $1}')" == "${source_hash[$item]}" ]] || {
@@ -389,6 +397,9 @@ release=$release
 kernel_file=kernel.bzImage
 kernel_sha256=$kernel_sha
 kernel_size_bytes=$kernel_size
+initramfs_file=initramfs.cpio.gz
+initramfs_sha256=$initramfs_sha
+initramfs_size_bytes=$initramfs_size
 modules_file=modules.vhdx
 modules_sha256=$modules_sha
 modules_size_bytes=$modules_size
@@ -405,13 +416,14 @@ qemu_release=$release
 EOF
 
 [[ "$(sha256sum -- "$staging/kernel.bzImage" | awk '{print $1}')" == "$kernel_sha" &&
+	"$(sha256sum -- "$staging/initramfs.cpio.gz" | awk '{print $1}')" == "$initramfs_sha" &&
 	"$(sha256sum -- "$staging/modules.vhdx" | awk '{print $1}')" == "$modules_sha" &&
 	"$(sha256sum -- "$staging/modules-layout.manifest" | awk '{print $1}')" == "$layout_sha" &&
 	"$(sha256sum -- "$staging/qemu-pass.stamp" | awk '{print $1}')" == "$stamp_sha" ]] || {
 	echo "staged pair hash readback failed" >&2
 	exit 2
 }
-chmod 0444 -- "$staging/kernel.bzImage" "$staging/modules.vhdx" \
+chmod 0444 -- "$staging/kernel.bzImage" "$staging/initramfs.cpio.gz" "$staging/modules.vhdx" \
 	"$staging/modules-layout.manifest" "$staging/qemu-pass.stamp" "$staging/kernel-pair.manifest"
 published_identity="$staging_identity"
 sync -f "$staging" 2>/dev/null || true
@@ -434,7 +446,7 @@ published_here=1
 	echo 'published pair directory identity or permissions are not sealed' >&2
 	exit 2
 }
-for published in kernel.bzImage modules.vhdx modules-layout.manifest qemu-pass.stamp kernel-pair.manifest; do
+for published in kernel.bzImage initramfs.cpio.gz modules.vhdx modules-layout.manifest qemu-pass.stamp kernel-pair.manifest; do
 	[[ -f "$final/$published" && ! -L "$final/$published" &&
 		"$(stat -c '%u:%a:%h' -- "$final/$published")" == "$EUID:444:1" ]] || {
 		echo "published pair file identity or permissions are not sealed: $published" >&2
