@@ -272,8 +272,26 @@ stage_uninstall_recovery() {
   validate_receipt_structure "$receipt"
 }
 
+validate_socket_state() {
+  local dropin service_dir sock
+  for dropin in "${dropins[@]}"; do
+    service_dir="${dropin%%/*}"
+    sock="${service_dir%.service.d}.socket"
+    if systemctl is-active --quiet "$sock" 2>/dev/null; then
+      echo "control plane socket $sock is active; stop it before management operations" >&2
+      return 64
+    fi
+    if systemctl is-enabled --quiet "$sock" 2>/dev/null; then
+      echo "control plane socket $sock is enabled; disable it before management operations" >&2
+      return 64
+    fi
+  done
+  return 0
+}
+
 install_control_plane() {
   local relative limits_temporary
+  validate_socket_state || return 64
   compute_workload_limits || { echo 'guest memory cannot safely reserve the control plane' >&2; return 1; }
   [[ ! -e $manifest && ! -L $manifest && ! -e $transaction && ! -L $transaction ]] || { echo 'control plane installation state already exists; recover it explicitly' >&2; return 1; }
   install -d -m 0700 "$state_dir" "$backup_dir"; [[ -d $state_dir && ! -L $state_dir && -d $backup_dir && ! -L $backup_dir ]] || return 1
@@ -290,6 +308,7 @@ install_control_plane() {
 
 uninstall_control_plane() {
   local installation_id
+  validate_socket_state || return 64
   [[ -f $manifest && ! -L $manifest ]] || { echo 'owned install receipt is missing' >&2; return 1; }
   validate_active_manifest || { echo 'control-plane rollback refused; preserve operator changes and resolve them explicitly' >&2; return 1; }
   installation_id=$(read_receipt_header "$manifest") || return 1
