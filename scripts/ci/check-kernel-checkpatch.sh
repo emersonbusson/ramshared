@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-only
-# Download checkpatch.pl from torvalds/linux and validate kernel driver files.
+# Validate kernel driver files using checkpatch.pl from kernel source tree.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -9,22 +9,17 @@ cd "$ROOT"
 echo "==> Running checkpatch.pl validation on kernel driver files..."
 
 DRIVER_DIR="drivers/block/ramshared"
-CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/ramshared-ci"
-CHECKPATCH="$CACHE_DIR/checkpatch.pl"
-SPELLING="$CACHE_DIR/spelling.txt"
-CONST_STRUCTS="$CACHE_DIR/const_structs.checkpatch"
+KERNEL_DIR="${KERNEL_DIR:-/lib/modules/$(uname -r)/build}"
 
-# Download checkpatch.pl from torvalds/linux if not cached
+if [[ ! -d "$KERNEL_DIR" ]]; then
+  echo "FAIL: Kernel source path not found at $KERNEL_DIR" >&2
+  exit 69
+fi
+
+CHECKPATCH="$KERNEL_DIR/scripts/checkpatch.pl"
 if [[ ! -x "$CHECKPATCH" ]]; then
-  mkdir -p "$CACHE_DIR"
-  echo "  Downloading checkpatch.pl from torvalds/linux..."
-  curl -sSfL "https://raw.githubusercontent.com/torvalds/linux/master/scripts/checkpatch.pl" -o "$CHECKPATCH" || {
-    echo "  [SKIP] Could not download checkpatch.pl (network unavailable). PASS by grace."
-    exit 0
-  }
-  chmod +x "$CHECKPATCH"
-  curl -sSfL "https://raw.githubusercontent.com/torvalds/linux/master/scripts/spelling.txt" -o "$SPELLING" 2>/dev/null || touch "$SPELLING"
-  curl -sSfL "https://raw.githubusercontent.com/torvalds/linux/master/scripts/const_structs.checkpatch" -o "$CONST_STRUCTS" 2>/dev/null || touch "$CONST_STRUCTS"
+  echo "FAIL: checkpatch.pl not found or not executable at $CHECKPATCH" >&2
+  exit 69
 fi
 
 TARGET_FILES=()
