@@ -652,6 +652,7 @@ if (-not $isStartupResume) {
         }
         $state = [ordered]@{
             schema = 2
+            phase = "init"
             next_boot = 1
             cold_boots = $ColdBoots
             manifest = (Resolve-Path $Manifest).Path
@@ -740,6 +741,8 @@ try {
     $startWatch = [Diagnostics.Stopwatch]::StartNew()
     $serviceStartedAt = Get-Date
     $sc = Join-Path $env:SystemRoot "System32\sc.exe"
+    $state.phase = "starting_services"
+    Write-State $state
     $consumerStart = Invoke-BoundedProcess $sc @("start", "RamSharedWinSvc") 10
     if (-not $consumerStart.completed -or $consumerStart.exit_code -ne 0) {
         throw "supported start command failed: exit=$($consumerStart.exit_code); $($consumerStart.stderr)"
@@ -750,6 +753,8 @@ try {
         [int]$consumerService.ProcessId -le 0) {
         throw "consumer service has no current running process"
     }
+    $state.phase = "validating_identity"
+    Write-State $state
     $online = Get-CurrentOnlineIdentity $driveConfig.evidence_path `
         ([int]$consumerService.ProcessId) $serviceStartedAt
     if ($online.size_bytes -ne $driveConfig.size_bytes) {
@@ -779,10 +784,14 @@ try {
     }
     Assert-DriverBinaryMatch $manifestDocument $root
 
+    $state.phase = "formatting_volume"
+    Write-State $state
     Invoke-ExactDiskFormat $disk $driveConfig $online.serial
     Assert-FormattedVolumeBinding ([int]$disk.Number) $online.serial `
         $driveConfig.size_bytes $targetLetter
     $hashes = @()
+    $state.phase = "testing_payload"
+    Write-State $state
     for ($round = 1; $round -le 3; $round++) {
         $path = "$targetLetter`:\physical-$boot-$round.bin"
         $bytes = New-Object byte[] (8MB)
@@ -798,6 +807,8 @@ try {
         $hashes += $intendedHash
     }
     $stopWatch = [Diagnostics.Stopwatch]::StartNew()
+    $state.phase = "stopping_services"
+    Write-State $state
     $consumerStop = Invoke-BoundedProcess $sc @("stop", "RamSharedWinSvc") 10
     $stopRequestError = if (-not $consumerStop.completed -or
         $consumerStop.exit_code -ne 0) {
@@ -817,6 +828,8 @@ try {
         ([string](Get-Service RamSharedBroker).Status) | Out-Null
     $productStopMs = [int]$stopWatch.Elapsed.TotalMilliseconds
     Assert-ZeroResidue
+    $state.phase = "recording_results"
+    Write-State $state
     Append-Result @{
         schema = 1
         boot = $boot
