@@ -5,6 +5,21 @@ set -euo pipefail
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
+if ! command -v fio >/dev/null 2>&1; then
+  printf 'NBD_BENCHMARK_STATE=REFUSED\nNBD_BENCHMARK_REASON=FIO_MISSING\n' >&2
+  exit 69
+fi
+
+if ! ls /dev/nbd* >/dev/null 2>&1; then
+  printf 'NBD_BENCHMARK_STATE=REFUSED\nNBD_BENCHMARK_REASON=NBD_DEVICE_MISSING\n' >&2
+  exit 69
+fi
+
+if [[ ! -d /sys/fs/cgroup || ! -f /sys/fs/cgroup/cgroup.controllers ]] || ! grep -q memory /sys/fs/cgroup/cgroup.controllers; then
+  printf 'NBD_BENCHMARK_STATE=REFUSED\nNBD_BENCHMARK_REASON=CGROUP_V2_MEMORY_CONTROLLER_MISSING\n' >&2
+  exit 69
+fi
+
 ACTION=""
 MODE=""
 CONDITION=""
