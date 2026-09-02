@@ -58,8 +58,25 @@ if $BB insmod /modules/ublk_drv.ko 2>/tmp/e; then
   echo "KTEST-INSMOD=ok"
 else
   echo "KTEST-INSMOD=fail: $($BB cat /tmp/e)"
+  $BB poweroff -f
+  exit 69
 fi
-[ -e /dev/ublk-control ] && echo "KTEST-UBLK-CONTROL=present" || echo "KTEST-UBLK-CONTROL=absent"
+
+if $BB grep -q "^ublk_drv" /proc/modules; then
+  echo "KTEST-MODULE-LOADED=ok"
+else
+  echo "KTEST-MODULE-LOADED=fail"
+  $BB poweroff -f
+  exit 69
+fi
+
+if [ -c /dev/ublk-control ] && [ -r /dev/ublk-control ] && [ -w /dev/ublk-control ]; then
+  echo "KTEST-UBLK-CONTROL=present"
+else
+  echo "KTEST-UBLK-CONTROL=absent"
+  $BB poweroff -f
+  exit 69
+fi
 
 # 2) starts the daemon in the isolated generic-Linux QEMU guest (--force for best-effort mlockall)
 /ramsharedd --transport ublk --backend ram \
