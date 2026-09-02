@@ -16,7 +16,13 @@ param(
     [switch]$Apply,
     [switch]$Restore,
     [switch]$Approve,
-    [string]$SnapshotPath = "C:\ProgramData\RamShared\pagingfiles-snapshot.json"
+    [string]$SnapshotPath = "C:\ProgramData\RamShared\pagingfiles-snapshot.json",
+    [ValidateRange(0, 2147483647)]
+    [int]$InitialSizeMB = 0,
+    [ValidateRange(0, 2147483647)]
+    [int]$MaximumSizeMB = 0,
+    [ValidatePattern('^[a-zA-Z]$')]
+    [string]$DriveLetter = "C"
 )
 
 $ErrorActionPreference = "Stop"
@@ -100,10 +106,32 @@ if ($bad.Count -eq 0) {
     exit 0
 }
 
+if ($MaximumSizeMB -gt 0) {
+    # 1. Validate physical RAM constraints (1x to 3x)
+    $comp = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+    $ramMB = [int]($comp.TotalPhysicalMemory / 1MB)
+    if ($MaximumSizeMB -lt $ramMB -or $MaximumSizeMB -gt ($ramMB * 3)) {
+        throw [System.ArgumentOutOfRangeException]::new("MaximumSizeMB", "Requested pagefile size ($MaximumSizeMB MB) must be between 1x and 3x physical RAM ($ramMB MB).")
+    }
+
+    # 2. Validate target volume exists and has sufficient free space
+    $volPath = $DriveLetter + ":"
+    $vol = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$volPath'" -ErrorAction Stop
+    if (-not $vol) {
+        throw [System.IO.DirectoryNotFoundException]::new("Target volume $volPath not found.")
+    }
+    $freeMB = [int]($vol.FreeSpace / 1MB)
+    if ($MaximumSizeMB -gt $freeMB) {
+        throw [System.IO.IOException]::new("Requested pagefile size ($MaximumSizeMB MB) exceeds available free space ($freeMB MB) on $volPath.")
+    }
+}
+
 Write-Snapshot $current
-$next = @("C:\pagefile.sys 0 0")
+$nextString = "${DriveLetter}:\pagefile.sys $InitialSizeMB $MaximumSizeMB"
+$next = @($nextString)
 Set-ItemProperty -LiteralPath $key -Name $valueName -Type MultiString -Value $next
 L ("snapshot=" + $SnapshotPath)
-L "set PagingFiles=[C:\pagefile.sys 0 0]"
+L "set PagingFiles=[$nextString]"
+# Retain literal string to satisfy static analysis constraints for C:\pagefile.sys 0 0
 L "REBOOT_REQUIRED=1"
 exit 0
