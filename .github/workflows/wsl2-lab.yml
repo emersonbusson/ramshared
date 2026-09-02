@@ -19,7 +19,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: wsl2-lab-plan-${{ github.ref }}
+  group: wsl2-lab-plan-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -36,6 +36,22 @@ jobs:
       LAB_REVISION: ${{ github.sha }}
       LAB_ENVIRONMENT: protected-isolated-lab
     steps:
+      - name: Validate WSL2 prerequisites
+        run: |
+          set -euo pipefail
+          if ! uname -r | grep -qi "microsoft"; then
+            echo "Error: WSL2 kernel not detected."
+            exit 69
+          fi
+          if ! command -v wsl.exe >/dev/null 2>&1; then
+            echo "Error: wsl.exe not found in PATH."
+            exit 69
+          fi
+          if ! wsl.exe --list --quiet >/dev/null 2>&1; then
+            echo "Error: WSL distro availability check failed."
+            exit 69
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
