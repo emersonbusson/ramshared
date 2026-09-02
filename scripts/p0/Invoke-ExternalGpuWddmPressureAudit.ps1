@@ -17,7 +17,9 @@ param(
     [string]$RamsharedExe = "",
     [switch]$RunGpuGate,
     [string]$WorkloadCommand = "",
+    [ValidateRange(0, 1048576)]
     [int]$MinDeltaMib = 256,
+    [ValidateNotNullOrEmpty()]
     [string]$OutDir = "ramshared-external-gpu-wddm-pressure-audit-$(Get-Date -Format yyyyMMdd-HHmmss)"
 )
 
@@ -27,9 +29,41 @@ function L([string]$Message) {
     Write-Host "[external-gpu-wddm-pressure-audit] $Message"
 }
 
+function Assert-WddmGpuPresence {
+    $drivers = Get-CimInstance -ClassName Win32_PnPSignedDriver -Filter "DeviceClass = 'DISPLAY'" -ErrorAction SilentlyContinue
+    if (-not $drivers) {
+        throw [System.Management.Automation.ItemNotFoundException]::new("No GPU adapters found via WMI.")
+    }
+
+    $validWddm = $false
+    foreach ($driver in $drivers) {
+        if ([string]::IsNullOrWhiteSpace($driver.DriverVersion)) { continue }
+        $parts = $driver.DriverVersion.Split('.')
+        if ($parts.Length -ge 1) {
+            $major = 0
+            if ([int]::TryParse($parts[0], [ref]$major)) {
+                if ($major -ge 27) {
+                    $validWddm = $true
+                    break
+                }
+            }
+        }
+    }
+    if (-not $validWddm) {
+        throw [System.NotSupportedException]::new("External GPU adapter requires WDDM driver version >= 2.7.")
+    }
+}
+
+Assert-WddmGpuPresence
+
 function Resolve-RamsharedExe {
     param([string]$Candidate)
-    if (-not [string]::IsNullOrWhiteSpace($Candidate)) { return $Candidate }
+    if (-not [string]::IsNullOrWhiteSpace($Candidate)) {
+        if (-not (Test-Path -LiteralPath $Candidate)) {
+            throw [System.IO.FileNotFoundException]::new("Provided RamsharedExe not found.", $Candidate)
+        }
+        return $Candidate
+    }
     $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
     foreach ($path in @(
         (Join-Path $repoRoot "target\release\ramshared.exe"),
@@ -48,7 +82,7 @@ function Resolve-InputPath {
     if (Test-Path -LiteralPath $Path) {
         return (Resolve-Path -LiteralPath $Path).Path
     }
-    return $Path
+    throw [System.IO.FileNotFoundException]::new("Provided input path not found.", $Path)
 }
 
 New-Item -Force -ItemType Directory -Path $OutDir | Out-Null
