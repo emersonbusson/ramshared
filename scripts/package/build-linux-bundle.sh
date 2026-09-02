@@ -69,11 +69,18 @@ if [[ $SKIP_BUILD -eq 0 ]]; then
 fi
 
 for binary in ramshared ramsharedd; do
-  [[ -x $TARGET_DIR/$binary ]] || {
+  if [[ ! -x $TARGET_DIR/$binary ]]; then
     printf 'missing release binary: %s\n' "$TARGET_DIR/$binary" >&2
-    exit 1
-  }
+    exit 69
+  fi
 done
+
+while IFS= read -r -d '' lib; do
+  if [[ ! -f $lib || ! -r $lib ]]; then
+    printf 'missing or unreadable release shared library: %s\n' "$lib" >&2
+    exit 69
+  fi
+done < <(find "$TARGET_DIR" -maxdepth 1 -name "*.so" -print0 2>/dev/null || true)
 
 install -d -m 0755 "$STAGE_RELEASE/bin" "$STAGE_RELEASE/scripts/safety" "$STAGE_RELEASE/systemd" \
   "$STAGE_RELEASE/systemd/docker.service.d" "$STAGE_RELEASE/systemd/containerd.service.d" \
