@@ -41,7 +41,8 @@ declare -a AUXILIARY_UNIT_CREATED_SOURCES=()
 refuse() {
   printf 'NBD_INSTALL_STATE=REFUSED\n'
   printf 'NBD_INSTALL_REASON=%s\n' "$1"
-  exit 1
+  local code=${2:-1}
+  exit "$code"
 }
 
 usage() {
@@ -408,10 +409,6 @@ systemctl_status() {
   printf '%s\n' "$status"
 }
 
-is_sha256() {
-  [[ $1 =~ ^[[:xdigit:]]{64}$ ]]
-}
-
 check_unit_inert() {
   local unit=$1 active enabled
   active=$(systemctl_status is-active "$unit")
@@ -688,6 +685,34 @@ while (($# > 0)); do
   esac
 done
 
+if [[ $(id -u) -ne 0 ]]; then
+  refuse ROOT_REQUIRED 69
+fi
+
+if ! command -v systemctl >/dev/null 2>&1; then
+  refuse SYSTEMD_UNAVAILABLE 69
+fi
+
+for _unit in ramshared-cascade.service ramshared-cascade-health.service ramshared-workloads.slice; do
+  if [[ ! -f "$SOURCE_RELEASE/systemd/$_unit" ]]; then
+    refuse "UNIT_MISSING_${_unit}" 78
+  fi
+done
+
+if [[ $(id -u) -ne 0 ]]; then
+  refuse ROOT_REQUIRED 69
+fi
+
+if ! command -v systemctl >/dev/null 2>&1; then
+  refuse SYSTEMD_UNAVAILABLE 69
+fi
+
+for _unit in ramshared-cascade.service ramshared-cascade-health.service ramshared-workloads.slice; do
+  if [[ ! -f "$SOURCE_RELEASE/systemd/$_unit" ]]; then
+    refuse "UNIT_MISSING_${_unit}" 78
+  fi
+done
+
 read_release_version
 verify_release_tree "$SOURCE_RELEASE" generic
 
@@ -703,8 +728,6 @@ fi
 [[ -n $LOWER_SINK ]] || refuse LOWER_SINK_APPROVAL_REQUIRED
 [[ -z $LEGACY_UNIT_APPROVED_HASH || $LEGACY_UNIT_APPROVED_HASH =~ ^[[:xdigit:]]{64}$ ]] || refuse LEGACY_UNIT_APPROVAL_INVALID
 inspect_lower_sink "$LOWER_SINK"
-[[ $(id -u) -eq 0 ]] || refuse ROOT_REQUIRED
-command -v systemctl >/dev/null 2>&1 || refuse SYSTEMD_UNAVAILABLE
 check_unit_inert ramshared-cascade.service
 check_unit_inert ramsharedd.service
 check_existing_unit_file
