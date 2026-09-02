@@ -81,7 +81,31 @@ SPEC_EOF
 
 if command -v rpmbuild >/dev/null 2>&1; then
   echo "==> Executing rpmbuild..."
-  rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
+  RPM_LOG=$(mktemp)
+
+  if ! rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE" > "$RPM_LOG" 2>&1; then
+    cat "$RPM_LOG"
+    if grep -q "Bad exit status from .* (%prep)" "$RPM_LOG"; then
+      echo "ERROR: rpmbuild prep stage failed" >&2
+      rm -f "$RPM_LOG"
+      exit 65
+    elif grep -q "Bad exit status from .* (%build)" "$RPM_LOG"; then
+      echo "ERROR: rpmbuild build stage failed" >&2
+      rm -f "$RPM_LOG"
+      exit 74
+    elif grep -q "Bad exit status from .* (%install)" "$RPM_LOG"; then
+      echo "ERROR: rpmbuild install stage failed" >&2
+      rm -f "$RPM_LOG"
+      exit 73
+    else
+      echo "ERROR: rpmbuild failed" >&2
+      rm -f "$RPM_LOG"
+      exit 1
+    fi
+  fi
+  cat "$RPM_LOG"
+  rm -f "$RPM_LOG"
+
   cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
   echo "✓ RPM package built under $OUT_DIR/"
 else
