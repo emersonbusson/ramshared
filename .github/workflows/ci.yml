@@ -131,10 +131,35 @@ jobs:
           --test-coverage-functions=80
           tools/ci/check-campaign-evidence-lifecycle.test.mjs
 
+  shellcheck:
+    name: shellcheck bash scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: ShellCheck Scripts
+        run: |
+          set -euo pipefail
+          shopt -s globstar
+          if ! command -v shellcheck &> /dev/null; then
+            echo "Error: shellcheck is required but not installed." >&2
+            exit 69
+          fi
+          # We check if there are matching files before running
+          files=(scripts/**/*.sh)
+          if [ -e "${files[0]}" ]; then
+            shellcheck --severity=error "${files[@]}"
+          else
+            echo "No .sh files found in scripts directory."
+          fi
+
   ci-summary:
     name: ci-summary
     if: always()
-    needs: [rust, docs]
+    needs: [rust, docs, shellcheck]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
