@@ -34,6 +34,21 @@ else
   echo "  [+] Environment detected: Native Linux"
 fi
 
+# Check required build dependencies
+for cmd in cargo rustc gcc; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "Error: Required build dependency '$cmd' is missing." >&2
+    exit 69 # EX_UNAVAILABLE
+  fi
+done
+
+# Check target architecture
+ARCH="$(uname -m)"
+if [[ "$ARCH" != "x86_64" && "$ARCH" != "aarch64" ]]; then
+  echo "Error: Unsupported architecture '$ARCH'. Only x86_64 and aarch64 are supported." >&2
+  exit 64 # EX_USAGE
+fi
+
 # Check GPU / NVIDIA tools
 if command -v nvidia-smi >/dev/null 2>&1; then
   GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -n 1 || echo "NVIDIA GPU")
