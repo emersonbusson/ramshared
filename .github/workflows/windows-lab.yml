@@ -25,7 +25,7 @@ concurrency:
 jobs:
   windows-lab-plan:
     name: windows-lab-plan
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 15
     environment: protected-isolated-lab
     permissions:
@@ -36,6 +36,16 @@ jobs:
       LAB_REVISION: ${{ github.sha }}
       LAB_ENVIRONMENT: protected-isolated-lab
     steps:
+      - name: Check Hyper-V prerequisite
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (!(Get-Service -Name vmms -ErrorAction SilentlyContinue)) {
+            Write-Error -ErrorId "HyperVMissing" "Hyper-V (vmms) is not available or running"
+            [System.Environment]::ExitCode = 69
+            throw [System.Exception]::new("EX_UNAVAILABLE: Hyper-V (vmms) is not available or running on this runner.")
+          }
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
