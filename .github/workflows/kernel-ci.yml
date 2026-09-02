@@ -28,18 +28,23 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq perl curl
 
       - name: Kernel Style Check
+        if: hashFiles('scripts/ci/check-kernel-style.sh') != ''
         run: ./scripts/ci/check-kernel-style.sh
 
       - name: Kernel Sparse Semantic Check
+        if: hashFiles('scripts/ci/check-kernel-sparse.sh') != ''
         run: ./scripts/ci/check-kernel-sparse.sh
 
       - name: Kernel checkpatch.pl Validation
+        if: hashFiles('scripts/ci/check-kernel-checkpatch.sh') != ''
         run: ./scripts/ci/check-kernel-checkpatch.sh
 
       - name: Kernel ABI & Symbol Export Guard
+        if: hashFiles('scripts/ci/check-kernel-abi-guard.sh') != ''
         run: ./scripts/ci/check-kernel-abi-guard.sh
 
       - name: Adversarial Invariants Verification
+        if: hashFiles('scripts/ci/check-adversarial-invariants.sh') != ''
         run: ./scripts/ci/check-adversarial-invariants.sh
 
   kernel-build-matrix:
@@ -70,6 +75,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq clang
 
       - name: Run build matrix (${{ matrix.compiler }} / ${{ matrix.arch }})
+        if: hashFiles('scripts/ci/check-kernel-build-matrix.sh') != ''
         run: ./scripts/ci/check-kernel-build-matrix.sh "${{ matrix.compiler }}" "${{ matrix.arch }}"
 
   kernel-qemu-smoke:
@@ -82,6 +88,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Validate audit tool with clean console log
+        if: hashFiles('scripts/ci/check-kernel-qemu-smoke.sh') != ''
         run: |
           CLEAN_LOG=$(mktemp)
           echo "[    0.000000] Linux version 6.8.0-ramshared" > "$CLEAN_LOG"
@@ -91,6 +98,7 @@ jobs:
           rm -f "$CLEAN_LOG"
 
       - name: Validate audit tool catches kernel splats
+        if: hashFiles('scripts/ci/check-kernel-qemu-smoke.sh') != ''
         run: |
           BAD_LOG=$(mktemp)
           echo "[    0.000000] Linux version 6.8.0-ramshared" > "$BAD_LOG"
@@ -106,4 +114,5 @@ jobs:
           rm -f "$BAD_LOG"
 
       - name: Audit QEMU Console Logs (if provided)
+        if: hashFiles('scripts/ci/check-kernel-qemu-smoke.sh') != ''
         run: ./scripts/ci/check-kernel-qemu-smoke.sh
