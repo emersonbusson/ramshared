@@ -11,14 +11,20 @@
 # Reusable for any kernel build (Phase B+ toolkit). SPEC: docs/runbooks/FASE-B-KERNEL.md
 set -euo pipefail
 
-BZ="${1:?usage: qemu-validate.sh <bzImage> <kernelrelease> [mods...]}"
-REL="${2:?missing kernelrelease}"
+if [ "$#" -lt 2 ]; then
+  echo "usage: qemu-validate.sh <bzImage> <kernelrelease> [mods...]" >&2
+  exit 64
+fi
+
+BZ="$1"
+REL="$2"
 shift 2
 MODS=("$@")
 
-[ -f "$BZ" ] || { echo "bzImage missing: $BZ" >&2; exit 2; }
-command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 missing (apt install qemu-system-x86)" >&2; exit 2; }
-[ -x /bin/busybox ] || { echo "busybox-static missing (apt install busybox-static)" >&2; exit 2; }
+[ -f "$BZ" ] || { echo "bzImage missing: $BZ" >&2; exit 69; }
+command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 missing (apt install qemu-system-x86)" >&2; exit 69; }
+[ -w /dev/kvm ] || { echo "/dev/kvm missing or not writable (KVM required)" >&2; exit 69; }
+[ -x /bin/busybox ] || { echo "busybox-static missing (apt install busybox-static)" >&2; exit 69; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 IRD="$WORK/irfs"; mkdir -p "$IRD/bin" "$IRD/modules"
@@ -26,7 +32,7 @@ cp /bin/busybox "$IRD/bin/busybox"
 
 # numbered modules preserve dependency order
 i=0; for m in "${MODS[@]}"; do
-  [ -f "$m" ] || { echo "module missing: $m" >&2; exit 2; }
+  [ -f "$m" ] || { echo "module missing: $m" >&2; exit 69; }
   cp "$m" "$IRD/modules/$(printf '%02d' "$i")-$(basename "$m")"; i=$((i+1))
 done
 
@@ -55,9 +61,8 @@ chmod +x "$IRD/init"
 
 ( cd "$IRD" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/initramfs.gz"
 
-# KVM accelerates; without write permissions on /dev/kvm, falls back to TCG (slower but valid).
-ACCEL=(-machine accel=tcg)
-[ -w /dev/kvm ] && ACCEL=(-enable-kvm -cpu host)
+# KVM accelerates; KVM is strictly required.
+ACCEL=(-enable-kvm -cpu host)
 
 echo "[qemu-validate] booting $BZ (expected release: $REL; accel: ${ACCEL[*]})..."
 timeout 180 qemu-system-x86_64 "${ACCEL[@]}" -m 1024 -nographic -no-reboot \
