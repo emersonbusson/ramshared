@@ -40,4 +40,22 @@ Signed-off-by: Emerson Busson
 COVER_EOF
 
 echo "✓ Cover letter created: $OUT_DIR/0000-cover-letter.patch"
+CHECKPATCH="scripts/checkpatch.pl"
+if [[ ! -x "$CHECKPATCH" ]]; then
+    echo "Error: $CHECKPATCH is missing or not executable." >&2
+    exit 69
+fi
+
+echo "==> Validating generated patches with checkpatch.pl..."
+for patch in "$OUT_DIR"/*.patch; do
+    if [[ ! -f "$patch" ]]; then
+        continue
+    fi
+    echo "  -> Checking $patch..."
+    if ! "$CHECKPATCH" --strict "$patch"; then
+        echo "Error: checkpatch.pl found errors in $patch" >&2
+        exit 74
+    fi
+done
+
 echo "✓ LKML patchset generation complete."
