@@ -1,0 +1,7 @@
+The task requested adding guard clauses for disk space (15 GB) and network connectivity (HTTPS) before ISO download in `scripts/windows/Win11LabMediaContract.ps1`.
+
+However, the file `scripts/windows/Win11LabMediaContract.ps1` does not contain any code related to downloading ISO files. It is an infrastructure script designed as a sealed unattended-media contract helper for inspecting, probing, staging, and cleaning up existing ISO files, utilizing operations like `Mount-DiskImage`, `Dismount-DiskImage`, and functions like `Assert-Win11LabPrimaryIsoContract`, `Invoke-Win11LabMediaWorker`, and `Invoke-Win11LabSourceIsoStage`.
+
+There are no web request commands such as `Invoke-WebRequest`, `Invoke-RestMethod`, `Start-BitsTransfer`, or `System.Net.WebClient` in the entire file.
+
+Therefore, adding guard clauses for ISO download in this file constitutes an unresolvable architectural mismatch, as the necessary download logic does not exist in the specified target file.
