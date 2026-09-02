@@ -3,6 +3,21 @@
 # Interactive and secure LKML patchset dispatcher for RamShared
 set -euo pipefail
 
+if ! command -v git >/dev/null 2>&1; then
+    echo "❌ Error: git is not installed or not in PATH."
+    exit 69 # EX_UNAVAILABLE
+fi
+
+if ! git config --get sendemail.smtpserver >/dev/null 2>&1; then
+    echo "❌ Error: git sendemail.smtpserver is not configured."
+    exit 78 # EX_CONFIG
+fi
+
+if ! git config --get sendemail.smtpuser >/dev/null 2>&1; then
+    echo "❌ Error: git sendemail.smtpuser is not configured."
+    exit 78 # EX_CONFIG
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
