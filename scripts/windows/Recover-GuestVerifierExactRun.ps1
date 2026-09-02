@@ -19,6 +19,8 @@ param(
     [Parameter(Mandatory = $true)][string]$ExpectedSignerCertSha256,
     [string]$ExpectedPartialPublishedInf = "",
     [ValidateRange(15, 30)][int]$GuestRestartDelaySeconds = 15,
+    [Parameter(Mandatory = $true)][string]$CrashDumpPath,
+    [Parameter(Mandatory = $true)][string]$WinDbgPath,
     [switch]$PlanOnly,
     [switch]$ApproveExactRecovery
 )
@@ -34,6 +36,14 @@ foreach ($path in @($SourcePath, $HelperPath, $PasswordFile)) {
         throw "required recovery input file is missing"
     }
 }
+
+if (-not (Test-Path -LiteralPath $CrashDumpPath -PathType Leaf)) {
+    throw [System.IO.FileNotFoundException]::new("crash dump file is missing")
+}
+if (-not (Test-Path -LiteralPath $WinDbgPath -PathType Leaf)) {
+    throw [System.IO.FileNotFoundException]::new("WinDbg analysis tools are missing")
+}
+
 . $HelperPath
 
 $source = Get-Content -LiteralPath $SourcePath -Raw -ErrorAction Stop

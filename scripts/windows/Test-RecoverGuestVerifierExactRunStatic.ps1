@@ -58,7 +58,7 @@ foreach ($required in @(
         "FailedRunArtifactDirectory", "SealedPlanArtifactDirectory", "PartialActionArtifactDirectory", "PlanOnly",
         "ApproveExactRecovery", "ExpectedVMId", "ExpectedDriverSha256",
         "ExpectedInfSha256", "ExpectedCatalogSha256", "ExpectedPartialPublishedInf",
-        "GuestRestartDelaySeconds")) {
+        "GuestRestartDelaySeconds", "CrashDumpPath", "WinDbgPath")) {
     if ($parameters -notcontains $required) {
         throw "guest_verifier_recovery_static_contract_is_green failed: missing parameter $required"
     }
