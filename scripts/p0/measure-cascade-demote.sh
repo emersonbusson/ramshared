@@ -21,7 +21,15 @@
 # (--cgroupns=host is mandatory: without it, writing to cgroup.procs returns ENOENT)
 # optional environment:
 #   HOG_MB=2200 CAP_MB=512 MIN_NBD_MIB=150 RESTORE=1 RAW=/tmp/cascade-demote.txt
-set -u
+set -euo pipefail
+
+# Validate /sys/block/zram*/mm_stat and cascade sysfs entries exist before reading demotion metrics
+for entry in mm_stat bd_stat backing_dev writeback; do
+    if ! ls /sys/block/zram*/"$entry" >/dev/null 2>&1; then
+        echo "FAILURE: /sys/block/zram*/$entry not found"
+        exit 69
+    fi
+done
 
 HOG_BIN="${HOG_BIN:-}"
 if [ -z "$HOG_BIN" ]; then
@@ -245,12 +253,14 @@ fi
 log ""
 log "=== 3. post-migration integrity (hog verify through fault-in) ==="
 touch /tmp/cv-go
+set +e
 wait "$HOG_PID"
 HOG_RC=$?
+set -e
 HOG_PID=""
 log "hog rc=$HOG_RC"
-grep -E '\[hog\]' "$RAW" | tail -5 | tee -a "$RAW" >/dev/null
-grep -E '\[hog\]' "$RAW" | tail -5 | while read -r line; do log "  $line"; done
+grep -E '\[hog\]' "$RAW" | tail -5 | tee -a "$RAW" >/dev/null || true
+grep -E '\[hog\]' "$RAW" | tail -5 | while read -r line; do log "  $line"; done || true
 
 log ""
 log "=== 4. VERDICT ==="
