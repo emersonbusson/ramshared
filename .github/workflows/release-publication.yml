@@ -77,6 +77,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Error: Tag '$RELEASE_TAG' does not match format vX.Y.Z[-prerelease]" >&2
+            exit 64
+          fi
+          version="${RELEASE_TAG#v}"
+          if ! grep -q "\[${version}\]" CHANGELOG.md; then
+            echo "Error: Missing entry for version $version in CHANGELOG.md" >&2
+            exit 64
+          fi
           node tools/ci/check-release-publication.mjs \
             --policy docs/governance/release-promotion.json \
             --tag "$RELEASE_TAG" \
@@ -143,6 +152,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Error: Tag '$RELEASE_TAG' does not match format vX.Y.Z[-prerelease]" >&2
+            exit 64
+          fi
+          version="${RELEASE_TAG#v}"
+          if ! grep -q "\[${version}\]" CHANGELOG.md; then
+            echo "Error: Missing entry for version $version in CHANGELOG.md" >&2
+            exit 64
+          fi
           node tools/ci/check-release-publication.mjs \
             --policy docs/governance/release-promotion.json \
             --tag "$RELEASE_TAG" \
