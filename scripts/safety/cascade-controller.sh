@@ -15,7 +15,18 @@ managed_device=
 refuse() {
   printf 'NBD_CONTROLLER_STATE=REFUSED\n'
   printf 'NBD_CONTROLLER_REASON=%s\n' "$1"
-  exit 1
+  exit "${2:-1}"
+}
+
+check_pre_cascade_state() {
+  command -v modprobe >/dev/null || refuse MODPROBE_MISSING 69
+  modprobe -n zram 2>/dev/null || refuse ZRAM_MODULE_UNAVAILABLE 69
+  local zram_exists=0
+  for f in /sys/block/zram*; do
+    [[ -e $f ]] && zram_exists=1 && break
+  done
+  (( zram_exists == 1 )) || refuse ZRAM_DEVICE_MISSING 69
+  [[ -r /proc/swaps && ! -L /proc/swaps ]] || refuse SWAPS_UNREADABLE 69
 }
 
 [[ $distro =~ ^[A-Za-z0-9._-]+$ ]] || refuse DISTRO_INVALID
@@ -173,6 +184,10 @@ if [[ -e $marker ]]; then
   [[ $(read_marker_value release_version) == "$version" ]] || refuse RECOVERY_MARKER_VERSION_MISMATCH
   managed_device=$(read_marker_value managed_device)
   finish_stop
+fi
+
+if [[ $mode == execute ]]; then
+  check_pre_cascade_state
 fi
 
 write_marker starting
