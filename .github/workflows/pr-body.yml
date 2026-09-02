@@ -18,11 +18,21 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - name: Validate PR description sections
+      - name: Validate PR description and title
         if: github.event.pull_request.user.login != 'dependabot[bot]' && !endsWith(github.event.pull_request.user.login, '[bot]')
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
+            const title = context.payload.pull_request?.title ?? '';
+            const ccPattern = /^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([a-z0-9\-]+\))?:\s.+$/;
+            if (title.length > 72) {
+              core.setFailed(`PR title is too long (${title.length} chars). Maximum allowed is 72 characters.`);
+            } else if (!ccPattern.test(title)) {
+              core.setFailed(`PR title does not follow Conventional Commits format.`);
+            } else {
+              core.info('PR title follows Conventional Commits format and length limits.');
+            }
+
             const body = context.payload.pull_request?.body ?? '';
             const requiredSections = [
               { name: 'Resumo', pattern: /^##\s+Resumo\s*$/im },
