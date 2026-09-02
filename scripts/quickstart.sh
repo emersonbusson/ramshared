@@ -3,7 +3,18 @@
 # Usage: ./scripts/quickstart.sh
 set -euo pipefail
 
+# sysexits.h exit codes
+readonly EX_OK=0
+readonly EX_USAGE=64
+readonly EX_UNAVAILABLE=69
+readonly EX_IOERR=74
+readonly EX_CONFIG=78
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ ! -d "$ROOT" ]]; then
+  echo "Error: Could not determine repository root."
+  exit $EX_CONFIG
+fi
 cd "$ROOT"
 
 echo ""
@@ -13,11 +24,20 @@ echo "  What this does: compiles the two programs you need"
 echo "  (ramshared = commands, ramsharedd = GPU service)."
 echo ""
 
+# Check for existing installation (idempotency)
+if command -v ramshared >/dev/null 2>&1 && command -v ramsharedd >/dev/null 2>&1; then
+  echo "  [+] RamShared is already installed!"
+  echo "      Location: $(command -v ramshared)"
+  echo "      To upgrade, use the release installer or run cargo build manually."
+  echo ""
+  exit $EX_OK
+fi
+
 if ! command -v cargo >/dev/null 2>&1 || ! command -v rustc >/dev/null 2>&1; then
   echo "  Rust is not installed (need cargo + rustc)."
   echo "  Install from: https://rustup.rs/"
   echo ""
-  exit 1
+  exit $EX_UNAVAILABLE
 fi
 
 echo "  Using: $(rustc --version)"
@@ -32,7 +52,7 @@ DAEMON="$ROOT/target/release/ramsharedd"
 
 if [[ ! -x "$CLI" || ! -x "$DAEMON" ]]; then
   echo "  Build finished but binaries are missing. Please open an issue."
-  exit 1
+  exit $EX_IOERR
 fi
 
 echo ""
