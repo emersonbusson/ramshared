@@ -55,6 +55,15 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$currentPrincipal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    throw [System.UnauthorizedAccessException]::new("Administrative privileges are required.")
+}
+
+if (-not (Get-Module -ListAvailable -Name Hyper-V)) {
+    throw "Hyper-V PowerShell module is not available."
+}
+
 . (Join-Path $PSScriptRoot "Invoke-GuestPsDirectBounded.ps1")
 
 function Normalize-Win11LabReadyThumbprint {
