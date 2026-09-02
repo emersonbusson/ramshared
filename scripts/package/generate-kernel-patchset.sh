@@ -6,10 +6,44 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
+if ! command -v git >/dev/null 2>&1; then
+    echo "Error: git command not found." >&2
+    exit 69
+fi
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "Error: Not a git repository." >&2
+    exit 78
+fi
+
+if ! git rev-parse --verify origin/main >/dev/null 2>&1; then
+    echo "Error: origin/main branch does not exist." >&2
+    exit 78
+fi
+
+if ! git diff-index --quiet HEAD --; then
+    echo "Error: git working directory is not clean." >&2
+    exit 78
+fi
+
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+if [[ -z "$CURRENT_BRANCH" || "$CURRENT_BRANCH" == "main" || "$CURRENT_BRANCH" == "HEAD" ]]; then
+    echo "Error: Must be on a feature branch, not main or detached HEAD." >&2
+    exit 78
+fi
+
+COMMIT_COUNT="$(git rev-list --count origin/main..HEAD 2>/dev/null || echo 0)"
+if [[ "$COMMIT_COUNT" -eq 0 ]]; then
+    echo "Error: No commits found between origin/main and HEAD." >&2
+    exit 78
+fi
+
 OUT_DIR="artifacts/lkml-patchset"
 mkdir -p "$OUT_DIR"
 
 echo "==> Generating LKML patchset in $OUT_DIR..."
+
+git format-patch origin/main..HEAD -o "$OUT_DIR"
 
 cat << 'COVER_EOF' > "$OUT_DIR/0000-cover-letter.patch"
 From: Emerson Busson
