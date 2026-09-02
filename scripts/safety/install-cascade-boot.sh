@@ -3,7 +3,21 @@
 # read-only plan; every filesystem or systemd write needs exact version scope.
 set -euo pipefail
 
+if [[ $(id -u) -ne 0 ]]; then
+  refuse ROOT_REQUIRED 69
+fi
+
+if ! command -v systemctl >/dev/null 2>&1; then
+  refuse SYSTEMD_UNAVAILABLE 69
+fi
+
 SOURCE_RELEASE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
+for _unit in ramshared-cascade.service ramshared-cascade-health.service ramshared-workloads.slice; do
+  if [[ ! -f "$SOURCE_RELEASE/systemd/$_unit" ]]; then
+    refuse "UNIT_MISSING_${_unit}" 78
+  fi
+done
+
 PRODUCT_ROOT=/opt/ramshared
 RELEASE_ROOT="$PRODUCT_ROOT/releases"
 UNIT_PATH=/etc/systemd/system/ramshared-cascade.service
@@ -409,6 +423,10 @@ systemctl_status() {
   printf '%s\n' "$status"
 }
 
+is_sha256() {
+  [[ $1 =~ ^[[:xdigit:]]{64}$ ]]
+}
+
 check_unit_inert() {
   local unit=$1 active enabled
   active=$(systemctl_status is-active "$unit")
@@ -683,34 +701,6 @@ while (($# > 0)); do
       ;;
     *) refuse UNSUPPORTED_ARGUMENT ;;
   esac
-done
-
-if [[ $(id -u) -ne 0 ]]; then
-  refuse ROOT_REQUIRED 69
-fi
-
-if ! command -v systemctl >/dev/null 2>&1; then
-  refuse SYSTEMD_UNAVAILABLE 69
-fi
-
-for _unit in ramshared-cascade.service ramshared-cascade-health.service ramshared-workloads.slice; do
-  if [[ ! -f "$SOURCE_RELEASE/systemd/$_unit" ]]; then
-    refuse "UNIT_MISSING_${_unit}" 78
-  fi
-done
-
-if [[ $(id -u) -ne 0 ]]; then
-  refuse ROOT_REQUIRED 69
-fi
-
-if ! command -v systemctl >/dev/null 2>&1; then
-  refuse SYSTEMD_UNAVAILABLE 69
-fi
-
-for _unit in ramshared-cascade.service ramshared-cascade-health.service ramshared-workloads.slice; do
-  if [[ ! -f "$SOURCE_RELEASE/systemd/$_unit" ]]; then
-    refuse "UNIT_MISSING_${_unit}" 78
-  fi
 done
 
 read_release_version
