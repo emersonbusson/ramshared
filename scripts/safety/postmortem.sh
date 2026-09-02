@@ -31,7 +31,7 @@ PS='/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
 # --- diretorio duravel (fallback pro guest se /mnt/c indisponivel) ---
 if ! mkdir -p "$FORENSICS_DIR" 2>/dev/null; then
   FORENSICS_DIR="$HOME/wsl-forensics"
-  mkdir -p "$FORENSICS_DIR" || { echo "erro: nao consegui criar diretorio forense" >&2; exit 2; }
+  mkdir -p "$FORENSICS_DIR" || { echo "erro: nao consegui criar diretorio forense" >&2; exit 74; }
   echo "AVISO: /mnt/c indisponivel, usando fallback nao-duravel: $FORENSICS_DIR" >&2
 fi
 
@@ -49,7 +49,11 @@ CRASH_RE_OOM='Out of memory:|oom-kill:|Memory cgroup out of memory'
 CRASH_RE="${CRASH_RE_KERNEL}|${CRASH_RE_OOM}"
 
 if [[ ${1:-} == --classify ]]; then
-  [[ $# == 4 && -f $2 ]] || { echo "usage: postmortem.sh --classify JOURNAL START_ISO END_ISO" >&2; exit 2; }
+  [[ $# == 4 && -f $2 ]] || { echo "usage: postmortem.sh --classify JOURNAL START_ISO END_ISO" >&2; exit 64; }
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "erro: python3 indisponivel, requerido para --classify." >&2
+    exit 69
+  fi
   python3 - "$2" "$3" "$4" <<'PY'
 import json
 import re
@@ -99,7 +103,13 @@ fi
 # the pipefail+grep-q+SIGPIPE gotcha that caused false "no crash" reports).
 dump_boot() { # $1 = boot index -> arquivo em $TMPDIR_PM
   local idx="$1" f="$TMPDIR_PM/boot${1}.log"
-  [ -f "$f" ] || journalctl -b "$idx" --no-pager >"$f" 2>/dev/null
+  if [ ! -f "$f" ]; then
+    if command -v journalctl >/dev/null 2>&1; then
+      journalctl -b "$idx" --no-pager >"$f" 2>/dev/null || true
+    else
+      echo "(journalctl indisponivel no sistema - impossivel obter logs do boot)" > "$f"
+    fi
+  fi
   echo "$f"
 }
 
@@ -129,8 +139,17 @@ case "${1:-}" in
   * ) BOOT_INDEX="$1" ;;
 esac
 
-BOOT_ID="$(journalctl -b "$BOOT_INDEX" --no-pager -o json -n 1 2>/dev/null \
-            | grep -o '"_BOOT_ID":"[a-f0-9]*"' | head -1 | cut -d'"' -f4)"
+if ! [[ "$BOOT_INDEX" =~ ^-?[0-9]+$ ]]; then
+  echo "erro: BOOT_INDEX '$BOOT_INDEX' deve ser um numero inteiro." >&2
+  exit 64
+fi
+
+if command -v journalctl >/dev/null 2>&1; then
+  BOOT_ID="$(journalctl -b "$BOOT_INDEX" --no-pager -o json -n 1 2>/dev/null \
+              | grep -o '"_BOOT_ID":"[a-f0-9]*"' | head -1 | cut -d'"' -f4 || true)"
+else
+  BOOT_ID=""
+fi
 [ -z "$BOOT_ID" ] && BOOT_ID="unknown-$(date +%s)"
 
 if [ "$AUTO" = "1" ]; then
@@ -247,7 +266,12 @@ REPORT="$FORENSICS_DIR/postmortem-${TS}-boot${BOOT_INDEX}.md"
   echo "# nvidia-smi:"; "$NVSMI" --query-gpu=memory.used,memory.free,memory.total --format=csv 2>&1 || echo "(nvidia-smi indisponivel)"
   echo; echo "# free -h:"; free -h 2>&1
   echo; echo "# /proc/swaps:"; cat /proc/swaps 2>&1
-  echo; echo "# dmesg (ultimas 20):"; (sudo -n dmesg 2>/dev/null || dmesg 2>/dev/null || echo "(dmesg precisa de root)") | tail -20
+  echo; echo "# dmesg (ultimas 20):"
+  if command -v dmesg >/dev/null 2>&1; then
+    (sudo -n dmesg 2>/dev/null || dmesg 2>/dev/null || echo "(dmesg precisa de root)") | tail -20 || true
+  else
+    echo "(dmesg indisponivel no sistema)"
+  fi
   echo '```'
   echo
 
@@ -267,8 +291,17 @@ REPORT="$FORENSICS_DIR/postmortem-${TS}-boot${BOOT_INDEX}.md"
 
   echo "## 8. Crash dumps do WSL (se houver)"
   echo '```'
-  ls -la /var/crash/ 2>/dev/null | tail -10 || echo "(sem /var/crash)"
-  ls -la /mnt/c/Users/*/AppData/Local/Temp/*.dmp 2>/dev/null | tail -5 || echo "(sem .dmp em Temp)"
+  if [ -d "/var/crash" ]; then
+    ls -la /var/crash/ 2>/dev/null | tail -10 || echo "(sem arquivos em /var/crash)"
+  else
+    echo "(diretorio /var/crash indisponivel)"
+  fi
+
+  if [ -d "/mnt/c/Users" ]; then
+    ls -la /mnt/c/Users/*/AppData/Local/Temp/*.dmp 2>/dev/null | tail -5 || echo "(sem .dmp em Temp)"
+  else
+    echo "(diretorio /mnt/c/Users inacessivel)"
+  fi
   echo '```'
 } > "$REPORT" 2>&1
 
