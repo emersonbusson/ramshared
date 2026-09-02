@@ -324,11 +324,63 @@ function Assert-InputContract {
     if ($PlanFileName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.json$') {
         throw "plan_file_name_invalid"
     }
+
+    $rootPath = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($ArtifactRoot))
+    $driveLetter = $rootPath.TrimEnd(':\')
+    $drive = Get-PSDrive -Name $driveLetter -ErrorAction SilentlyContinue
+    if ($null -eq $drive) {
+        throw "artifact_root_drive_not_found"
+    }
+    $requiredFreeSpaceBytes = 20L * 1024 * 1024 * 1024
+    if ($drive.Free -lt $requiredFreeSpaceBytes) {
+        throw "insufficient_disk_space required_gib=20"
+    }
 }
 
 function Assert-LiveConfiguration {
     if ($ExpectedSourceCommit -notmatch '^[0-9a-f]{40}$') {
         throw "expected_source_commit_invalid"
+    }
+
+    $wslExe = Get-WslExecutable
+
+    $wslListInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $wslListInfo.FileName = $wslExe
+    $wslListInfo.Arguments = "-l -q"
+    $wslListInfo.UseShellExecute = $false
+    $wslListInfo.CreateNoWindow = $true
+    $wslListInfo.RedirectStandardOutput = $true
+    $wslListInfo.StandardOutputEncoding = [System.Text.Encoding]::Unicode
+    $wslListProcess = [System.Diagnostics.Process]::Start($wslListInfo)
+    $wslListOutput = $wslListProcess.StandardOutput.ReadToEnd()
+    $wslListProcess.WaitForExit()
+    if ($wslListProcess.ExitCode -ne 0) {
+        throw "wsl_list_failed"
+    }
+    $distroFound = $false
+    foreach ($line in ($wslListOutput -split '\r?\n')) {
+        $cleanLine = $line -replace "`0", ""
+        if ($cleanLine.Trim() -eq $Distro) {
+            $distroFound = $true
+            break
+        }
+    }
+    if (-not $distroFound) {
+        throw "wsl_distro_not_found distro=$Distro"
+    }
+
+    $binaries = @("fio", "nbd-client")
+    foreach ($binary in $binaries) {
+        $binaryInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $binaryInfo.FileName = $wslExe
+        $binaryInfo.Arguments = "-d $Distro -u root -- env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root which $binary"
+        $binaryInfo.UseShellExecute = $false
+        $binaryInfo.CreateNoWindow = $true
+        $binaryProcess = [System.Diagnostics.Process]::Start($binaryInfo)
+        $binaryProcess.WaitForExit()
+        if ($binaryProcess.ExitCode -ne 0) {
+            throw "required_binary_missing binary=$binary distro=$Distro"
+        }
     }
     if ([IO.Path]::GetExtension($NvidiaSmiPath).ToLowerInvariant() -eq ".ps1") {
         throw "live_gpu_probe_script_forbidden"
