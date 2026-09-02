@@ -4,6 +4,11 @@
 # restarts services, changes swap, or applies workload pressure.
 set -euo pipefail
 
+command -v nc >/dev/null || {
+  printf "REFUSED reason=missing_prerequisite\n" >&2
+  exit 69
+}
+
 MODE=check
 EXPECT_COUNT=
 TEST_MODE=${WSL_RELAY_TEST_MODE:-0}
@@ -144,7 +149,11 @@ classify_pid() {
 
   children=$(<"$base/task/$pid/children") || return 2
   [[ -z "${children//[[:space:]]/}" ]] || return 1
-  [[ ! -e "$RUN_ROOT/${pid}_interop" ]] || return 1
+  if [[ -e "$RUN_ROOT/${pid}_interop" ]]; then
+    if [[ "$TEST_MODE" == 1 ]] || nc -z -U "$RUN_ROOT/${pid}_interop" 2>/dev/null; then
+      return 1
+    fi
+  fi
 
   read -r -a stat_fields <"$base/stat" || return 2
   ((${#stat_fields[@]} >= 22)) || return 2
