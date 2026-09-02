@@ -20,6 +20,29 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+try {
+    $gpus = Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop
+} catch {
+    throw [System.InvalidOperationException]::new("Failed to query Win32_VideoController for GPU adapters.")
+}
+
+if (-not $gpus) {
+    throw [System.InvalidOperationException]::new("No GPU adapters detected via Win32_VideoController.")
+}
+
+$validVram = $false
+foreach ($gpu in @($gpus)) {
+    if ($null -ne $gpu.AdapterRAM -and $gpu.AdapterRAM -gt 0) {
+        $validVram = $true
+        break
+    }
+}
+
+if (-not $validVram) {
+    throw [System.NotSupportedException]::new("VRAM query availability not found: no GPU with valid AdapterRAM detected.")
+}
+
 New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
 
 function Measure-Once {
