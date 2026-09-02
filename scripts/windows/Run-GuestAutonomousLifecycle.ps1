@@ -271,8 +271,19 @@ try {
 
         $startWatch = [Diagnostics.Stopwatch]::StartNew()
         $startUtc = [DateTime]::UtcNow
-        Start-Service RamSharedWinSvc
-        (Get-Service RamSharedWinSvc).WaitForStatus("Running", [timespan]::FromSeconds(30))
+        $startJob = Start-Job -ScriptBlock {
+            $ErrorActionPreference = "Stop"
+            Start-Service RamSharedWinSvc
+            (Get-Service RamSharedWinSvc).WaitForStatus("Running", [timespan]::FromSeconds(30))
+        }
+        try {
+            if (-not (Wait-Job $startJob -Timeout 45)) {
+                Stop-Job $startJob -ErrorAction SilentlyContinue
+                throw [System.TimeoutException]::new("Start phase exceeded budget")
+            }
+            Receive-Job $startJob -ErrorAction Stop | Out-Null
+        }
+        finally { Remove-Job $startJob -Force -ErrorAction SilentlyContinue }
         $consumerService = Get-CimInstance Win32_Service `
             -Filter "Name='RamSharedWinSvc'"
         $consumerPid = [uint32]$consumerService.ProcessId
@@ -377,7 +388,8 @@ try {
             }
             try {
                 if (-not (Wait-Job $stopJob -Timeout 30)) {
-                    throw "same STOP did not complete after pagefile restoration"
+                    Stop-Job $stopJob -ErrorAction SilentlyContinue
+                    throw [System.TimeoutException]::new("same STOP did not complete after pagefile restoration")
                 }
                 $stopResult = Receive-Job $stopJob -ErrorAction Stop
             }
@@ -392,9 +404,20 @@ try {
                 "GateA refused; StopPending preserved; caller=$stopCallerState; registry restored; same STOP completed"
 
             $restartUtc = [DateTime]::UtcNow
-            Start-Service RamSharedWinSvc
-            (Get-Service RamSharedWinSvc).WaitForStatus(
-                "Running", [timespan]::FromSeconds(30))
+            $restartJob = Start-Job -ScriptBlock {
+                $ErrorActionPreference = "Stop"
+                Start-Service RamSharedWinSvc
+                (Get-Service RamSharedWinSvc).WaitForStatus(
+                    "Running", [timespan]::FromSeconds(30))
+            }
+            try {
+                if (-not (Wait-Job $restartJob -Timeout 45)) {
+                    Stop-Job $restartJob -ErrorAction SilentlyContinue
+                    throw [System.TimeoutException]::new("Restart phase exceeded budget")
+                }
+                Receive-Job $restartJob -ErrorAction Stop | Out-Null
+            }
+            finally { Remove-Job $restartJob -Force -ErrorAction SilentlyContinue }
             $restartService = Get-CimInstance Win32_Service `
                 -Filter "Name='RamSharedWinSvc'" -ErrorAction Stop
             $restartPid = [uint32]$restartService.ProcessId
@@ -502,7 +525,7 @@ try {
                         try {
                             if (-not (Wait-Job $recoveryJob -Timeout 60)) {
                                 Stop-Job $recoveryJob -ErrorAction SilentlyContinue
-                                throw "exact format recovery exceeded 60 seconds"
+                                throw [System.TimeoutException]::new("exact format recovery exceeded 60 seconds")
                             }
                             Receive-Job $recoveryJob -ErrorAction Stop | Out-Null
                         }
@@ -510,7 +533,7 @@ try {
                             Remove-Job $recoveryJob -Force `
                                 -ErrorAction SilentlyContinue
                         }
-                        throw "initialize/partition/format exceeded 60 seconds"
+                        throw [System.TimeoutException]::new("initialize/partition/format exceeded 60 seconds")
                     }
                     Receive-Job $formatJob -ErrorAction Stop | Out-Null
                 }
@@ -615,35 +638,86 @@ try {
         $stopWatch = [Diagnostics.Stopwatch]::StartNew()
         $stopRequestError = $null
         if ($brokerLossOnline) {
-            $brokerService = Get-CimInstance Win32_Service -Filter "Name='RamSharedBroker'"
-            Stop-Process -Id $brokerService.ProcessId -Force
-            (Get-Service RamSharedWinSvc).WaitForStatus(
-                "Stopped", [timespan]::FromSeconds(30))
+            $brokerLossJob = Start-Job -ScriptBlock {
+                $ErrorActionPreference = "Stop"
+                $brokerService = Get-CimInstance Win32_Service -Filter "Name='RamSharedBroker'"
+                Stop-Process -Id $brokerService.ProcessId -Force
+                (Get-Service RamSharedWinSvc).WaitForStatus(
+                    "Stopped", [timespan]::FromSeconds(30))
+            }
+            try {
+                if (-not (Wait-Job $brokerLossJob -Timeout 45)) {
+                    Stop-Job $brokerLossJob -ErrorAction SilentlyContinue
+                    throw [System.TimeoutException]::new("Broker loss stop phase exceeded budget")
+                }
+                Receive-Job $brokerLossJob -ErrorAction Stop | Out-Null
+            }
+            finally { Remove-Job $brokerLossJob -Force -ErrorAction SilentlyContinue }
+
             $consumerStopMs = [int]$stopWatch.Elapsed.TotalMilliseconds
             $diag = Get-Content "C:\ProgramData\RamShared\teardown-diag.log" -Raw
             if ($diag -notmatch "broker_lost_online" -or
                 $diag -notmatch "safe teardown completed after broker loss") {
                 throw "broker-loss containment evidence incomplete"
             }
-            $brokerNow = Get-Service RamSharedBroker
-            if ($brokerNow.Status -ne "Stopped") {
-                Stop-Service RamSharedBroker
-                $brokerNow.WaitForStatus("Stopped", [timespan]::FromSeconds(15))
+
+            $brokerNowJob = Start-Job -ScriptBlock {
+                $ErrorActionPreference = "Stop"
+                $brokerNow = Get-Service RamSharedBroker
+                if ($brokerNow.Status -ne "Stopped") {
+                    Stop-Service RamSharedBroker
+                    $brokerNow.WaitForStatus("Stopped", [timespan]::FromSeconds(15))
+                }
             }
+            try {
+                if (-not (Wait-Job $brokerNowJob -Timeout 25)) {
+                    Stop-Job $brokerNowJob -ErrorAction SilentlyContinue
+                    throw [System.TimeoutException]::new("Broker secondary stop phase exceeded budget")
+                }
+                Receive-Job $brokerNowJob -ErrorAction Stop | Out-Null
+            }
+            finally { Remove-Job $brokerNowJob -Force -ErrorAction SilentlyContinue }
+
             $productStopMs = [int]$stopWatch.Elapsed.TotalMilliseconds
             Pass "BrokerLossOnline" `
                 "consumer_stop_ms=$consumerStopMs; no reconnect; safe teardown completed"
         }
         else {
-            try { Stop-Service RamSharedWinSvc -ErrorAction Stop }
-            catch { $stopRequestError = $_.Exception.Message }
-            (Get-Service RamSharedWinSvc).WaitForStatus("Stopped", [timespan]::FromSeconds(30))
+            $consumerJob = Start-Job -ScriptBlock {
+                $stopReqErr = $null
+                try { Stop-Service RamSharedWinSvc -ErrorAction Stop }
+                catch { $stopReqErr = $_.Exception.Message }
+                (Get-Service RamSharedWinSvc).WaitForStatus("Stopped", [timespan]::FromSeconds(30))
+                return $stopReqErr
+            }
+            try {
+                if (-not (Wait-Job $consumerJob -Timeout 45)) {
+                    Stop-Job $consumerJob -ErrorAction SilentlyContinue
+                    throw [System.TimeoutException]::new("Consumer stop phase exceeded budget")
+                }
+                $stopRequestError = Receive-Job $consumerJob -ErrorAction Stop
+            }
+            finally { Remove-Job $consumerJob -Force -ErrorAction SilentlyContinue }
+
             $consumerStopMs = [int]$stopWatch.Elapsed.TotalMilliseconds
             if ($stopRequestError) {
                 throw "SCM stop returned an error despite reaching Stopped: $stopRequestError"
             }
-            Stop-Service RamSharedBroker
-            (Get-Service RamSharedBroker).WaitForStatus("Stopped", [timespan]::FromSeconds(15))
+
+            $brokerJob = Start-Job -ScriptBlock {
+                $ErrorActionPreference = "Stop"
+                Stop-Service RamSharedBroker
+                (Get-Service RamSharedBroker).WaitForStatus("Stopped", [timespan]::FromSeconds(15))
+            }
+            try {
+                if (-not (Wait-Job $brokerJob -Timeout 25)) {
+                    Stop-Job $brokerJob -ErrorAction SilentlyContinue
+                    throw [System.TimeoutException]::new("Broker stop phase exceeded budget")
+                }
+                Receive-Job $brokerJob -ErrorAction Stop | Out-Null
+            }
+            finally { Remove-Job $brokerJob -Force -ErrorAction SilentlyContinue }
+
             $productStopMs = [int]$stopWatch.Elapsed.TotalMilliseconds
             Pass "consumer_first_stop" `
                 "consumer_stop_ms=$consumerStopMs; product_stop_ms=$productStopMs"
@@ -658,7 +732,8 @@ try {
         }
         try {
             if (-not (Wait-Job $residueJob -Timeout 10)) {
-                throw "Win32_DiskDrive zero-residue query timed out"
+                Stop-Job $residueJob -ErrorAction SilentlyContinue
+                throw [System.TimeoutException]::new("Win32_DiskDrive zero-residue query timed out")
             }
             $remaining = [int](Receive-Job $residueJob -ErrorAction Stop)
         }
