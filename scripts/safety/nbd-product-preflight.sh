@@ -37,7 +37,20 @@ declare -A MANIFEST_HASHES=()
 block() {
   printf 'NBD_PRODUCT_STATE=BLOCKED\n'
   printf 'NBD_READINESS_REASON=%s\n' "$1"
-  exit 1
+  case "$1" in
+    UNSUPPORTED_ARGUMENT)
+      exit 64
+      ;;
+    UBLK_MODULE_MISSING)
+      exit 69
+      ;;
+    *UNBOUND|*TYPE_INVALID|*ALIGNMENT_INVALID|*ENV_OVERRIDE_FORBIDDEN|*CAPACITY_UNKNOWN|*CAPACITY_AMBIGUOUS|*SINK_UNKNOWN|*SINK_IDENTITY_INVALID|VRAM_SIZE_INVALID)
+      exit 78
+      ;;
+    *)
+      exit 1
+      ;;
+  esac
 }
 
 usage() {
@@ -411,6 +424,8 @@ check_legacy_ublk() {
   module_state=ABSENT
   if [[ -r $MODULES_FILE ]] && awk '$1 == "ublk_drv" { found = 1 } END { exit !found }' "$MODULES_FILE"; then
     module_state=LOADED_INERT
+  else
+    block UBLK_MODULE_MISSING
   fi
   UBLK_MODULE_STATE=$module_state
 }
