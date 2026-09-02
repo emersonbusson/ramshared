@@ -69,6 +69,14 @@ jobs:
         if: matrix.compiler == 'clang'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq clang
 
+      - name: Cache kernel object files
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: "**/*.o"
+          key: kernel-obj-${{ matrix.compiler }}-${{ matrix.arch }}-${{ hashFiles('**/*.c', '**/*.h', '**/Makefile') }}
+          restore-keys: |
+            kernel-obj-${{ matrix.compiler }}-${{ matrix.arch }}-
+
       - name: Run build matrix (${{ matrix.compiler }} / ${{ matrix.arch }})
         run: ./scripts/ci/check-kernel-build-matrix.sh "${{ matrix.compiler }}" "${{ matrix.arch }}"
 
