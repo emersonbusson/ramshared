@@ -1597,6 +1597,16 @@ function Invoke-Workload(
     [int]$QueueDepth,
     [UInt64]$AvailableBytes
 ) {
+    $drivePath = (Split-Path $Path -Qualifier) + "\"
+    if (-not (Test-Path $drivePath)) {
+        throw "target volume path does not exist: $drivePath"
+    }
+    $driveLetter = (Split-Path $Path -Qualifier) -replace ':$', ''
+    $drive = Get-PSDrive -Name $driveLetter -ErrorAction Stop
+    if ([UInt64]$drive.Free -lt 1GB) {
+        throw "target volume has insufficient free space: $($drive.Free) bytes"
+    }
+
     $workerFileBytes = [UInt64]([math]::Floor(
             ([double]$AvailableBytes * 0.25 / $QueueDepth) / 4096) * 4096)
     $workerFileBytes = [UInt64][math]::Max(1MB, [math]::Min(32MB, $workerFileBytes))
