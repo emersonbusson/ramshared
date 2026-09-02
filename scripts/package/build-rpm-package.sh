@@ -14,6 +14,16 @@ OUT_DIR="$ROOT/artifacts/packages"
 RPM_ROOT="$OUT_DIR/rpmbuild"
 SPEC_FILE="$RPM_ROOT/SPECS/ramshared.spec"
 
+# Ensure rpmbuild and rpmspec are installed
+if ! command -v rpmbuild >/dev/null 2>&1; then
+  echo "ERROR: rpmbuild binary not found. Please install rpm-build." >&2
+  exit 69 # EX_UNAVAILABLE
+fi
+if ! command -v rpmspec >/dev/null 2>&1; then
+  echo "ERROR: rpmspec binary not found. Please install rpm-build." >&2
+  exit 69 # EX_UNAVAILABLE
+fi
+
 echo "==> Building RPM package for RamShared ${VERSION} (${ARCH})..."
 
 # Ensure release binaries exist
@@ -79,11 +89,23 @@ fi
 - Official v0.9.0-beta.2 Linux RPM release with hardware DMA & ublk support.
 SPEC_EOF
 
-if command -v rpmbuild >/dev/null 2>&1; then
-  echo "==> Executing rpmbuild..."
-  rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
-  cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
-  echo "✓ RPM package built under $OUT_DIR/"
-else
-  echo "==> rpmbuild not installed on host. Spec generated at $SPEC_FILE (PASS)."
+echo "==> Validating generated spec file syntax..."
+if ! rpmspec --parse "$SPEC_FILE" >/dev/null 2>&1; then
+  echo "ERROR: Invalid RPM spec file syntax." >&2
+  exit 78 # EX_CONFIG
 fi
+
+echo "==> Validating required RPM macros..."
+if ! rpmbuild --eval '%{buildroot}' | grep -q 'BUILDROOT'; then
+  echo "ERROR: Required RPM macro 'buildroot' is not defined." >&2
+  exit 78 # EX_CONFIG
+fi
+
+echo "==> Executing rpmbuild..."
+if ! rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"; then
+  echo "ERROR: rpmbuild failed." >&2
+  exit 74 # EX_IOERR
+fi
+
+cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
+echo "✓ RPM package built under $OUT_DIR/"
