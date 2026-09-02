@@ -39,8 +39,6 @@ jobs:
           tools/ci/check-ci-contract.test.mjs
           tools/ci/check-ci-aggregate.test.mjs
 
-      - name: Verify local contract admission
-        run: node tools/ci/check-ci-contract.mjs --check-local
 
       - name: Release promotion checker coverage
         run: |
@@ -75,6 +73,9 @@ jobs:
 
       - name: Validate exact SPEC coverage map
         run: node tools/ci/plan-rust-slice-coverage.mjs --all
+
+      - name: Verify local contract admission
+        run: node tools/ci/check-ci-contract.mjs --check-local
 
   ci-core:
     name: ci-core
