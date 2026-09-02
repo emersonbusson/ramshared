@@ -14,6 +14,9 @@ TARGET_DIR="$ROOT/target/release"
 STAGE="$OUT_ROOT/ramshared-linux-$VERSION"
 STAGE_RELEASE="$STAGE/release"
 ARCHIVE="$OUT_ROOT/ramshared-linux-$VERSION.tar.gz"
+STAGE_DEBUG="$OUT_ROOT/ramshared-linux-$VERSION-debug"
+STAGE_DEBUG_RELEASE="$STAGE_DEBUG/release"
+ARCHIVE_DEBUG="$OUT_ROOT/ramshared-linux-$VERSION-debug.tar.gz"
 
 usage() {
   cat <<'EOF'
@@ -63,6 +66,13 @@ fi
   printf 'refuse to replace an existing package artifact: %s\n' "$STAGE" >&2
   exit 1
 }
+[[ ! -e $STAGE_DEBUG && ! -e $ARCHIVE_DEBUG ]] || {
+  printf 'refuse to replace an existing debug package artifact: %s\n' "$STAGE_DEBUG" >&2
+  exit 1
+}
+
+command -v objcopy >/dev/null || { printf 'missing objcopy\n' >&2; exit 69; }
+command -v strip >/dev/null || { printf 'missing strip\n' >&2; exit 69; }
 
 if [[ $SKIP_BUILD -eq 0 ]]; then
   cargo build -p ramshared-cli -p ramshared-wsl2d --release
@@ -78,8 +88,13 @@ done
 install -d -m 0755 "$STAGE_RELEASE/bin" "$STAGE_RELEASE/scripts/safety" "$STAGE_RELEASE/systemd" \
   "$STAGE_RELEASE/systemd/docker.service.d" "$STAGE_RELEASE/systemd/containerd.service.d" \
   "$STAGE_RELEASE/systemd/cron.service.d"
-install -m 0755 "$TARGET_DIR/ramshared" "$STAGE_RELEASE/bin/ramshared"
-install -m 0755 "$TARGET_DIR/ramsharedd" "$STAGE_RELEASE/bin/ramsharedd"
+install -d -m 0755 "$STAGE_DEBUG_RELEASE/bin"
+for binary in ramshared ramsharedd; do
+  install -m 0755 "$TARGET_DIR/$binary" "$STAGE_RELEASE/bin/$binary"
+  objcopy --only-keep-debug "$STAGE_RELEASE/bin/$binary" "$STAGE_DEBUG_RELEASE/bin/$binary.debug"
+  strip --strip-debug "$STAGE_RELEASE/bin/$binary"
+  objcopy --add-gnu-debuglink="$STAGE_DEBUG_RELEASE/bin/$binary.debug" "$STAGE_RELEASE/bin/$binary"
+done
 install -m 0755 "$ROOT/scripts/safety/install-cascade-boot.sh" "$STAGE_RELEASE/scripts/safety/"
 install -m 0755 "$ROOT/scripts/safety/uninstall-cascade-boot.sh" "$STAGE_RELEASE/scripts/safety/"
 install -m 0755 "$ROOT/scripts/safety/cascade-up.sh" "$STAGE_RELEASE/scripts/safety/"
@@ -114,26 +129,39 @@ install -m 0644 "$ROOT/scripts/safety/systemd/containerd.service.d/10-ramshared-
 install -m 0644 "$ROOT/scripts/safety/systemd/cron.service.d/10-ramshared-control.conf" \
   "$STAGE_RELEASE/systemd/cron.service.d/"
 printf '%s\n' "$VERSION" >"$STAGE_RELEASE/RELEASE_VERSION"
-chmod 0644 "$STAGE_RELEASE/RELEASE_VERSION"
+printf '%s\n' "$VERSION" >"$STAGE_DEBUG_RELEASE/RELEASE_VERSION"
+chmod 0644 "$STAGE_RELEASE/RELEASE_VERSION" "$STAGE_DEBUG_RELEASE/RELEASE_VERSION"
 [[ $SOURCE_COMMIT =~ ^[0-9a-f]{40}$ ]] || {
   printf 'source commit is unavailable\n' >&2
   exit 1
 }
 printf '%s\n' "$SOURCE_COMMIT" >"$STAGE_RELEASE/SOURCE_COMMIT"
+printf '%s\n' "$SOURCE_COMMIT" >"$STAGE_DEBUG_RELEASE/SOURCE_COMMIT"
 [[ $SOURCE_BRANCH =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || {
   printf 'source branch is invalid\n' >&2
   exit 1
 }
 printf '%s\n' "$SOURCE_BRANCH" >"$STAGE_RELEASE/SOURCE_BRANCH"
+printf '%s\n' "$SOURCE_BRANCH" >"$STAGE_DEBUG_RELEASE/SOURCE_BRANCH"
 printf '%s\n' "$SOURCE_TREE_STATE" >"$STAGE_RELEASE/SOURCE_TREE_STATE"
-chmod 0644 "$STAGE_RELEASE/SOURCE_COMMIT" "$STAGE_RELEASE/SOURCE_BRANCH" "$STAGE_RELEASE/SOURCE_TREE_STATE"
+printf '%s\n' "$SOURCE_TREE_STATE" >"$STAGE_DEBUG_RELEASE/SOURCE_TREE_STATE"
+chmod 0644 "$STAGE_RELEASE/SOURCE_COMMIT" "$STAGE_RELEASE/SOURCE_BRANCH" "$STAGE_RELEASE/SOURCE_TREE_STATE" \
+  "$STAGE_DEBUG_RELEASE/SOURCE_COMMIT" "$STAGE_DEBUG_RELEASE/SOURCE_BRANCH" "$STAGE_DEBUG_RELEASE/SOURCE_TREE_STATE"
 
 (
   cd "$STAGE_RELEASE"
   find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
 )
 chmod 0644 "$STAGE_RELEASE/SHA256SUMS"
+(
+  cd "$STAGE_DEBUG_RELEASE"
+  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+)
+chmod 0644 "$STAGE_DEBUG_RELEASE/SHA256SUMS"
 
 tar -C "$OUT_ROOT" -czf "$ARCHIVE" "ramshared-linux-$VERSION"
+tar -C "$OUT_ROOT" -czf "$ARCHIVE_DEBUG" "ramshared-linux-$VERSION-debug"
 printf 'bundle_release=%s\n' "$STAGE_RELEASE"
 printf 'bundle_archive=%s\n' "$ARCHIVE"
+printf 'bundle_debug_release=%s\n' "$STAGE_DEBUG_RELEASE"
+printf 'bundle_debug_archive=%s\n' "$ARCHIVE_DEBUG"
