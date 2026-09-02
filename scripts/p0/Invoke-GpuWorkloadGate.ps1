@@ -14,18 +14,27 @@
 [CmdletBinding(DefaultParameterSetName = "Attach")]
 param(
     [Parameter(ParameterSetName = "Launch", Mandatory = $true)]
+    [ValidateNotNullOrEmpty()]
     [string]$WorkloadCommand,
 
     [Parameter(ParameterSetName = "Attach")]
     [switch]$AttachOnly,
 
+    [ValidateRange(1, 86400)]
     [int]$IdleDurationSec = 15,
+    [ValidateRange(1, 86400)]
     [int]$LoadedDurationSec = 60,
+    [ValidateRange(1, 86400)]
     [int]$RecoveryDurationSec = 15,
+    [ValidateRange(100, 60000)]
     [int]$IntervalMs = 500,
+    [ValidateRange(0, 32)]
     [int]$GpuIndex = 0,
+    [ValidateRange(1, 131072)]
     [int]$MinDeltaMib = 256,
+    [ValidateNotNullOrEmpty()]
     [string]$WorkloadLabel = "external-gpu-workload",
+    [ValidateNotNullOrEmpty()]
     [string]$OutDir = "ramshared-gpu-workload-gate-$(Get-Date -Format yyyyMMdd-HHmmss)"
 )
 
@@ -70,6 +79,13 @@ Require-Positive "LoadedDurationSec" $LoadedDurationSec
 Require-Positive "RecoveryDurationSec" $RecoveryDurationSec
 Require-Positive "IntervalMs" $IntervalMs
 Require-Positive "MinDeltaMib" $MinDeltaMib
+
+$hasNvidia = [bool](Get-Command "nvidia-smi" -ErrorAction SilentlyContinue)
+$hasAmd = [bool](Get-Command "rocm-smi" -ErrorAction SilentlyContinue)
+if (-not $hasNvidia -and -not $hasAmd) {
+    [System.Environment]::ExitCode = 69
+    throw [System.Exception]::new("Neither NVIDIA (nvidia-smi) nor AMD (rocm-smi) GPU driver runtime is accessible.")
+}
 
 if ($PSCmdlet.ParameterSetName -eq "Attach" -and -not $AttachOnly) {
     throw "Use -AttachOnly when the workload is started externally, or pass -WorkloadCommand."
