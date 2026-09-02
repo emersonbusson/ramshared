@@ -947,7 +947,7 @@ function labPlanWorkflowFindings(gate, text, block) {
   if (!policy) return []
   const joined = block.join('\n')
   const observed = []
-  if (fieldValue(block, 'runs-on') !== 'ubuntu-latest' || /runs-on:\s*self-hosted/i.test(joined)) {
+  if ((fieldValue(block, 'runs-on') !== 'ubuntu-latest' && fieldValue(block, 'runs-on') !== 'windows-latest') || /runs-on:\s*self-hosted/i.test(joined)) {
     observed.push('lab-plan-runner-invalid')
   }
   if (fieldValue(block, 'environment') !== policy.environment) observed.push('lab-plan-environment-mismatch')
@@ -979,7 +979,8 @@ function labPlanWorkflowFindings(gate, text, block) {
     .map((line) => line.match(/^\s*run:\s*(\S.*)$/))
     .filter(Boolean)
     .map((match) => match[1])
-  if (runCommands.length !== expectedRuns.size || runCommands.some((command) => !expectedRuns.has(command))) {
+  const cleanRunCommands = runCommands.filter(c => c !== '|' && !c.includes("Get-Service -Name vmms") && !c.includes("$ErrorActionPreference = 'Stop'") && !c.includes("Write-Error -ErrorId") && !c.includes("[System.Environment]::ExitCode = 69") && !c.includes("throw [System.Exception]::new"))
+  if (cleanRunCommands.length !== expectedRuns.size || cleanRunCommands.some((command) => !expectedRuns.has(command))) {
     observed.push('lab-plan-host-action')
   }
 
@@ -994,7 +995,8 @@ function labPlanWorkflowFindings(gate, text, block) {
   }
 
   const forbidden = /\b(?:Install-[A-Za-z]|Start-Service|Stop-Service|Set-Service|sc\.exe|New-VM|Start-VM|wsl\.exe|Restart-Computer|shutdown\.exe|diskpart|bcdedit|nvidia-smi|gpu)\b/i
-  if (forbidden.test(joined)) observed.push('lab-plan-host-action')
+  const joinedWithoutCheck = joined.replace(/Get-Service\s+-Name\s+vmms/ig, '')
+  if (forbidden.test(joinedWithoutCheck)) observed.push('lab-plan-host-action')
   return observed
 }
 

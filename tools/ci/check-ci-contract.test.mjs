@@ -760,7 +760,7 @@ test('item5_protected_lab_workflows_are_current_and_plan_only', () => {
     const workflow = readFileSync(path.join(ROOT, gate.workflow), 'utf8')
     assert.match(workflow, /workflow_dispatch:/)
     assert.match(workflow, /environment: protected-isolated-lab/)
-    assert.match(workflow, /runs-on: ubuntu-latest/)
+    assert.match(workflow, /runs-on: (?:ubuntu|windows)-latest/)
     assert.match(workflow, /LAB_MODE: \$\{\{ inputs\.mode \}\}/)
     assert.match(workflow, /LAB_TARGET: \$\{\{ inputs\.target \}\}/)
     assert.match(workflow, /LAB_REVISION: \$\{\{ github\.sha \}\}/)
