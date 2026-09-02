@@ -4,7 +4,7 @@
 # any swap-out — NO swap on a device / daemon / block device (away from the 2026-06-09 freeze
 # scenario). Replaces the SPEC's "cargo build -j4": P0 found that a build is CPU-bound and does
 # NOT generate memory PSI (see P0-RESULTS §1, "load" cell).
-# Usage: measure-psi-load.sh [DUR_s] [OUT_csv] [WS_MB] [HIGH_MB] [MAX_MB]   (root)
+# Usage: measure-psi-load.sh [DUR_s] [OUT_csv] [WS_MB] [HIGH_MB] [MAX_MB] [WORKERS]  (root)
 # SPEC: docs/memory-broker/SPECv2.md ITEM-1; calibrates delta_psi (P0-RESULTS §5). Reusable for civm.
 set -euo pipefail
 
@@ -13,6 +13,7 @@ OUT="${2:-psi-load-$(date +%Y%m%d-%H%M%S).csv}"
 WS_MB="${3:-300}"   # anonymous hog working set
 HIGH_MB="${4:-64}"  # memory.high: throttle (stall/PSI) well below WS
 MAX_MB="${5:-512}"  # memory.max: safety CEILING (bounded — no OOM while WS < MAX)
+WORKERS="${6:-1}"   # load generation workers
 CG=/sys/fs/cgroup/p0load
 LOG_PREFIX="[p0-load]"
 log() { echo "$LOG_PREFIX $*" >&2; }
@@ -21,6 +22,13 @@ log() { echo "$LOG_PREFIX $*" >&2; }
 [ "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs ]     || { log "ERROR: cgroup v2 missing"; exit 1; }
 grep -qw memory /sys/fs/cgroup/cgroup.subtree_control || { log "ERROR: memory controller not delegated"; exit 1; }
 command -v python3 >/dev/null                       || { log "ERROR: python3 missing"; exit 1; }
+command -v stress-ng >/dev/null                     || { log "ERROR: stress-ng missing"; exit 69; }
+
+CORES="$(nproc 2>/dev/null || echo 1)"
+if [ "$WORKERS" -gt "$CORES" ]; then
+	log "WARNING: clamping worker count ($WORKERS) to available CPU cores ($CORES)"
+	WORKERS="$CORES"
+fi
 
 HOG=""
 cleanup() {
