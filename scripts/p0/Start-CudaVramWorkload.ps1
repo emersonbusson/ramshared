@@ -23,35 +23,37 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$system32 = [Environment]::GetFolderPath("System")
-$nvcudaPath = Join-Path $system32 "nvcuda.dll"
-if (-not (Test-Path $nvcudaPath)) {
-    [System.Environment]::ExitCode = 69
-    throw [System.Exception]::new("nvcuda.dll not found in $system32. Ensure NVIDIA drivers are installed.")
-}
-
-$nvidiaSmi = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
-if ($null -eq $nvidiaSmi) {
-    [System.Environment]::ExitCode = 69
-    throw [System.Exception]::new("nvidia-smi.exe not found in PATH.")
-}
-
-try {
-    $computeCapOutput = & nvidia-smi.exe --query-gpu=compute_cap --format=csv,noheader -i $Device 2>&1
-    if ($LASTEXITCODE -ne 0) {
+if (-not $CleanupSelfTest -and -not $HandshakeSelfTest) {
+    $system32 = [Environment]::GetFolderPath("System")
+    $nvcudaPath = Join-Path $system32 "nvcuda.dll"
+    if (-not (Test-Path $nvcudaPath)) {
         [System.Environment]::ExitCode = 69
-        throw [System.Exception]::new("nvidia-smi.exe failed to query GPU compute capability.")
+        throw [System.Exception]::new("nvcuda.dll not found in $system32. Ensure NVIDIA drivers are installed.")
     }
 
-    $computeCapStr = ($computeCapOutput -join "`n").Trim()
-    $computeCap = [double]$computeCapStr
-
-    if ($computeCap -lt 6.0) {
-        [System.Environment]::ExitCode = 78
-        throw [System.Exception]::new("GPU compute capability $computeCap is below minimum required 6.0.")
+    $nvidiaSmi = Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue
+    if ($null -eq $nvidiaSmi) {
+        [System.Environment]::ExitCode = 69
+        throw [System.Exception]::new("nvidia-smi.exe not found in PATH.")
     }
-} catch {
-    throw
+
+    try {
+        $computeCapOutput = & nvidia-smi.exe --query-gpu=compute_cap --format=csv,noheader -i $Device 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            [System.Environment]::ExitCode = 69
+            throw [System.Exception]::new("nvidia-smi.exe failed to query GPU compute capability.")
+        }
+
+        $computeCapStr = ($computeCapOutput -join "`n").Trim()
+        $computeCap = [double]$computeCapStr
+
+        if ($computeCap -lt 6.0) {
+            [System.Environment]::ExitCode = 78
+            throw [System.Exception]::new("GPU compute capability $computeCap is below minimum required 6.0.")
+        }
+    } catch {
+        throw
+    }
 }
 
 if (-not ("RamSharedCudaVramWorkload" -as [type])) {
