@@ -777,6 +777,8 @@ function Invoke-GuardianWatchTerminationTail {
 
 function Invoke-GuardianWatch {
     if (-not (Test-AbsoluteWindowsPath -Path $ArtifactRoot)) { throw "ArtifactRoot must be an absolute Windows path" }
+    $wslProc = Get-Process -Name "wsl" -ErrorAction SilentlyContinue
+    if ($null -eq $wslProc) { throw "target WSL process is not running" }
     Test-SealedGuardianIdentity
     Assert-GuardianTaskXmlSeal
     New-Item -ItemType Directory -Force -Path $ArtifactRoot | Out-Null
