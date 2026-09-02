@@ -16,6 +16,15 @@ LKML_TO="linux-block${EMAIL_AT}${VGER_DOMAIN}"
 AXBOE_CC="axboe${EMAIL_AT}${KERNEL_DOMAIN}"
 LKML_CC="linux-kernel${EMAIL_AT}${VGER_DOMAIN}"
 
+DRY_RUN=0
+if [ "${1:-}" = "--dry-run" ]; then
+    DRY_RUN=1
+elif [ $# -gt 0 ]; then
+    echo "❌ Error: Invalid argument: $1" >&2
+    echo "Usage: $0 [--dry-run]" >&2
+    exit 64
+fi
+
 echo "============================================================"
 echo "  🐧 RamShared — Linux Kernel LKML Patch Dispatcher"
 echo "============================================================"
@@ -36,6 +45,23 @@ echo "Sender: $SENDER_NAME <$SENDER_EMAIL>"
 echo "Destination: $LKML_TO (Jens Axboe)"
 echo "CC: $LKML_CC"
 echo ""
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    echo "==> [DRY RUN] Patch summary:"
+    for patch in "$OUT_DIR"/*.patch; do
+        if [ -f "$patch" ]; then
+            echo "  • $(basename "$patch")"
+        fi
+    done
+    echo ""
+    echo "==> [DRY RUN] Exact recipients:"
+    echo "  • To: $LKML_TO"
+    echo "  • Cc: $AXBOE_CC"
+    echo "  • Cc: $LKML_CC"
+    echo ""
+    echo "==> [DRY RUN] Execution complete. No emails were sent."
+    exit 0
+fi
 
 # Safely prompt for Gmail App Password (hidden input, no echo)
 read -r -s -p "Enter Gmail App Password (16 characters): " SMTP_PASS
