@@ -8,8 +8,40 @@
 # output: CSV on stdout plus a summary (free min/max/mean plus volatility).
 set -euo pipefail
 
+# sysexits.h codes
+readonly EX_USAGE=64
+readonly EX_UNAVAILABLE=69
+
 DUR="${1:-30}"
 STEP="${2:-2}"
+
+if ! [[ "$DUR" =~ ^[0-9]+$ ]] || ! [[ "$STEP" =~ ^[0-9]+$ ]]; then
+  echo "Error: Duration and step must be positive integers." >&2
+  exit "$EX_USAGE"
+fi
+
+if (( DUR <= 0 || STEP <= 0 || STEP > DUR )); then
+  echo "Error: Invalid duration or step values." >&2
+  exit "$EX_USAGE"
+fi
+
+if (( DUR > 86400 )); then
+  echo "Error: Duration exceeds maximum allowed (86400s)." >&2
+  exit "$EX_USAGE"
+fi
+
+gpu_detected=0
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+  gpu_detected=1
+elif command -v vulkaninfo >/dev/null 2>&1 && vulkaninfo >/dev/null 2>&1; then
+  gpu_detected=1
+fi
+
+if (( gpu_detected == 0 )); then
+  echo "Error: Neither nvidia-smi nor vulkaninfo detected a working GPU." >&2
+  exit "$EX_UNAVAILABLE"
+fi
+
 N=$(( DUR / STEP ))
 
 echo "ts_s,vram_free_mib,vram_used_mib,ram_avail_mib,ram_free_mib,swap_used_mib"
