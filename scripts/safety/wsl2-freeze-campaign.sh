@@ -375,15 +375,27 @@ if [[ "$RUN_ISOLATED" -eq 1 || "$RUN_SHARED" -eq 1 ]]; then
       fi
       if [[ -n "$action_pid" ]]; then
         watchdog_deadline=$((WATCHDOG_SEC + ACTION_CLEANUP_GRACE_SEC))
+
+        cleanup_handler() {
+          echo "action_cleanup_timeout after ${watchdog_deadline}s" >"$rdir/watchdog.txt"
+          if [[ -n "${action_pid:-}" ]]; then
+            kill -9 "$action_pid" 2>/dev/null || true
+          fi
+        }
+        trap cleanup_handler SIGALRM
+
         (
           sleep "$watchdog_deadline"
-          if kill -0 "$action_pid" 2>/dev/null; then
-            echo "action_cleanup_timeout after ${watchdog_deadline}s" >"$rdir/watchdog.txt"
-          fi
+          kill -ALRM $$ 2>/dev/null || true
         ) &
         wd_pid=$!
+
+        set +e
         wait "$action_pid"
         action_rc=$?
+        set -e
+
+        trap - SIGALRM
         kill "$wd_pid" 2>/dev/null || true
         wait "$wd_pid" 2>/dev/null || true
       fi
