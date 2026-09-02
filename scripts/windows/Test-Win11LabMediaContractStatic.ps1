@@ -63,6 +63,7 @@ Write-Output "PASS media_contract_dot_source_preserves_caller_worker_variables"
 foreach ($functionName in @(
     "New-Win11LabPersistentAutologonCommand",
     "Get-Win11LabAutounattendContract",
+    "Assert-Win11LabArtifactChecksum",
     "Assert-Win11LabSealedAutounattendContract",
     "Assert-Win11LabPrimaryIsoContract",
     "Invoke-Win11LabPrimaryIsoContract",

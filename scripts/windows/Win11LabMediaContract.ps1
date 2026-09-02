@@ -61,6 +61,29 @@ function Get-Win11LabFileSha256 {
     return Normalize-Win11LabSha256 -Sha256 $hash -FailureCode "sha256_unavailable"
 }
 
+function Assert-Win11LabArtifactChecksum {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ExpectedSha256
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw "win11_lab_media_contract_artifact_missing"
+    }
+
+    $actual = Get-Win11LabFileSha256 -Path $Path
+    $expected = Normalize-Win11LabSha256 -Sha256 $ExpectedSha256 -FailureCode "artifact_expected_sha256_invalid"
+
+    if ($actual -cne $expected) {
+        throw "win11_lab_media_contract_artifact_sha256_mismatch"
+    }
+}
+
 function Get-Win11LabSingleXmlNode {
     [CmdletBinding()]
     param(
