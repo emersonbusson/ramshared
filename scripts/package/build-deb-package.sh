@@ -10,6 +10,13 @@ VERSION_CLEAN="${VERSION#v}"
 DEB_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./-beta/")"
 ARCH="amd64"
 
+for cmd in dpkg-deb sha256sum lintian df awk; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "ERROR: Required command '$cmd' is not installed." >&2
+    exit 69
+  fi
+done
+
 OUT_DIR="$ROOT/artifacts/packages"
 STAGE_DIR="$OUT_DIR/deb-stage/ramshared_${DEB_VERSION}_${ARCH}"
 DEB_FILE="$OUT_DIR/ramshared_${DEB_VERSION}_${ARCH}.deb"
@@ -29,7 +36,7 @@ fi
 
 if [[ ! -x "$CLI_BIN" || ! -x "$DAEMON_BIN" ]]; then
   echo "ERROR: Target release binaries not found ($CLI_BIN / $DAEMON_BIN)" >&2
-  exit 1
+  exit 74
 fi
 
 # Clean previous staging
@@ -146,11 +153,34 @@ chmod 0755 "$STAGE_DIR/DEBIAN/prerm"
 
 # Build the .deb archive
 mkdir -p "$OUT_DIR"
+
+FREE_SPACE=$(df -kP "$OUT_DIR" | awk 'NR==2 {print $4}')
+if [[ "$FREE_SPACE" -lt 51200 ]]; then
+  echo "ERROR: Insufficient disk space in $OUT_DIR" >&2
+  exit 74
+fi
+
 dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
 rm -rf "$STAGE_DIR"
 
+if [[ ! -f "$DEB_FILE" ]]; then
+  echo "ERROR: Failed to create Debian package $DEB_FILE" >&2
+  exit 74
+fi
+
+echo "==> Running lintian on $DEB_FILE..."
+lintian "$DEB_FILE" || {
+  echo "ERROR: lintian failed for $DEB_FILE" >&2
+  exit 74
+}
+
 # Compute SHA-256
 (cd "$OUT_DIR" && sha256sum "$(basename "$DEB_FILE")" > "$(basename "$DEB_FILE").sha256")
+
+if [[ ! -f "${DEB_FILE}.sha256" ]]; then
+  echo "ERROR: Failed to create SHA-256 checksum file" >&2
+  exit 74
+fi
 
 echo "==> Package built: $DEB_FILE"
 echo "==> SHA-256: $(cat "${DEB_FILE}.sha256")"
