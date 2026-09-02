@@ -36,6 +36,45 @@ param(
 $ErrorActionPreference = "Stop"
 function L($m) { Write-Host ("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m) }
 
+function Assert-RamSharedPerformanceCountersAvailable {
+    $physicalDiskCount = 0
+    $logicalDiskCount = 0
+
+    try {
+        $physicalDiskCounters = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfDisk_PhysicalDisk -ErrorAction Stop
+        if ($physicalDiskCounters) {
+            $physicalDiskCount = @($physicalDiskCounters).Count
+        }
+    } catch {
+        try {
+            $physicalDiskCounters = Get-WmiObject -Class Win32_PerfFormattedData_PerfDisk_PhysicalDisk -ErrorAction Stop
+            if ($physicalDiskCounters) {
+                $physicalDiskCount = @($physicalDiskCounters).Count
+            }
+        } catch { }
+    }
+
+    try {
+        $logicalDiskCounters = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfDisk_LogicalDisk -ErrorAction Stop
+        if ($logicalDiskCounters) {
+            $logicalDiskCount = @($logicalDiskCounters).Count
+        }
+    } catch {
+        try {
+            $logicalDiskCounters = Get-WmiObject -Class Win32_PerfFormattedData_PerfDisk_LogicalDisk -ErrorAction Stop
+            if ($logicalDiskCounters) {
+                $logicalDiskCount = @($logicalDiskCounters).Count
+            }
+        } catch { }
+    }
+
+    if ($physicalDiskCount -eq 0 -or $logicalDiskCount -eq 0) {
+        throw [System.InvalidOperationException]::new("Performance counters are unavailable or zero. PhysicalDisk count: $physicalDiskCount, LogicalDisk count: $logicalDiskCount. Enable disk performance counters using 'diskperf -Y'.")
+    }
+}
+
+Assert-RamSharedPerformanceCountersAvailable
+
 function Get-Sha256Hex {
     param([byte[]]$Bytes)
     $sha256 = [System.Security.Cryptography.SHA256]::Create()
