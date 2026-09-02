@@ -1,0 +1,16 @@
+--- scripts/kernel/wsl-kernel.sh
++++ scripts/kernel/wsl-kernel.sh
+@@ -118,11 +118,11 @@
+	local ksrc="${KSRC:-$HOME/src/WSL2-Linux-Kernel}"
+	[[ -d "$ksrc" ]] || {
+		echo "build: kernel source directory not found: $ksrc" >&2
+-		exit "$E_USAGE"
++		exit 78
+	}
+	[[ -f "$ksrc/.config" ]] || {
+		echo "build: kernel .config not found in $ksrc" >&2
+-		exit "$E_USAGE"
++		exit 78
+	}
+	local tool
+	for tool in make gcc bison flex; do
