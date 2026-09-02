@@ -17,6 +17,33 @@ if [[ "${1:-}" == '--spec-test' ]]; then
 	shift 2
 fi
 
+if [[ "${1:-}" == '--validate-config' ]]; then
+	if [[ $# -ne 2 ]]; then
+		echo "usage: test-wsl-kernel-static.sh --validate-config <path/to/.config>" >&2
+		exit 64
+	fi
+	config_file="$2"
+	if [[ ! -f "$config_file" ]]; then
+		echo "config file not found: $config_file" >&2
+		exit 69
+	fi
+	if [[ ! -r "$config_file" ]]; then
+		echo "config file not readable: $config_file" >&2
+		exit 74
+	fi
+	errors=0
+	for opt in CONFIG_BLK_DEV_UBLK CONFIG_ZRAM CONFIG_PSI; do
+		if ! grep -Eq "^${opt}=[ym]$" "$config_file"; then
+			echo "missing or disabled config: $opt" >&2
+			errors=1
+		fi
+	done
+	if [[ $errors -ne 0 ]]; then
+		exit 78
+	fi
+	echo "VALIDATE_CONFIG=PASS"
+	exit 0
+fi
 if [[ "${1:-}" == '--r6-static-only' ]]; then
 	if grep -Eq 'sudo[[:space:]]+-n[[:space:]]+--[[:space:]]+modprobe|(^|[[:space:]])modprobe([[:space:]]|$)' "$ROOT/wsl-kernel.sh"; then
 		echo 'R6_RED enable still reaches a module loader' >&2; exit 1
