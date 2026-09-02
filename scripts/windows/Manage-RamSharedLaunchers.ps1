@@ -5,7 +5,8 @@ param(
     [string]$Action = "plan",
     [switch]$Run,
     [ValidatePattern('^[A-Za-z0-9._-]+$')]
-    [string]$Distro = "Ubuntu-24.04"
+    [string]$Distro = "Ubuntu-24.04",
+    [switch]$ValidateSignature
 )
 
 Set-StrictMode -Version Latest
@@ -14,6 +15,23 @@ $Root = Join-Path $env:LOCALAPPDATA "RamShared\launchers"
 $Backup = Join-Path $env:LOCALAPPDATA "RamShared\launcher-backup"
 $BackupManifest = Join-Path $Backup "launcher-backup-manifest.json"
 $Files = @("ramshared-shell.cmd", "ramshared-terminal.cmd", "ramshared-vscode.cmd")
+
+$executables = @("wsl.exe", "wt.exe", "code.cmd", "code")
+foreach ($exe in $executables) {
+    $cmd = Get-Command $exe -ErrorAction SilentlyContinue
+    if (-not $cmd -or -not (Test-Path -LiteralPath $cmd.Path -PathType Leaf)) {
+        if ($exe -eq "code.cmd" -or $exe -eq "code") {
+            continue # VS Code is optional depending on environment
+        }
+        throw [System.IO.FileNotFoundException]::new("launcher_executable_not_found: $exe")
+    }
+    if ($ValidateSignature) {
+        $sig = Get-AuthenticodeSignature -FilePath $cmd.Path -ErrorAction Stop
+        if ($sig.Status -ne 'Valid') {
+            throw [System.Security.SecurityException]::new("launcher_signature_invalid: $exe")
+        }
+    }
+}
 
 function Get-LauncherSha256 {
     param([string]$Path)
