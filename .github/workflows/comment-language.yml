@@ -6,7 +6,7 @@ on:
 permissions: {}
 
 concurrency:
-  group: comment-language-${{ github.workflow }}-${{ github.ref }}
+  group: comment-language-${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -21,10 +21,18 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Fail if script is missing
+        if: hashFiles('tools/ci/check-comment-language.mjs') == ''
+        run: |
+          echo "Error: Required script tools/ci/check-comment-language.mjs is missing."
+          exit 69
+
       - name: Check added repository text uses canonical English
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: >-
           node tools/ci/check-comment-language.mjs
-          --diff "origin/${{ github.base_ref }}"
+          --diff "origin/${BASE_REF}"
 
 
   comment-language-summary:
