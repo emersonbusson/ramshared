@@ -116,6 +116,17 @@ try {
                 throw "sc.exe $($arguments -join ' ') failed ($LASTEXITCODE): $text"
             }
         }
+        function Assert-PipesReady([string]$brokerPipe, [string]$statusPipe) {
+            $pipeNames = @()
+            for ($pipeAttempt = 0; $pipeAttempt -lt 300; $pipeAttempt++) {
+                $pipeNames = @([IO.Directory]::GetFiles("\\.\pipe\") | ForEach-Object {
+                        $_.Substring($_.LastIndexOf("\") + 1)
+                    })
+                if ($pipeNames -contains $brokerPipe -and $pipeNames -contains $statusPipe) { return }
+                Start-Sleep -Milliseconds 100
+            }
+            throw "required named pipes $brokerPipe and $statusPipe are not ready"
+        }
         $brokerExe = Join-Path $root "ramshared-winbroker.exe"
         $winsvcExe = Join-Path $root "ramshared-winsvc.exe"
         $serviceSidProbe = Join-Path $root "ramshared-service-sid-probe.exe"
@@ -237,17 +248,7 @@ try {
         Pass "broker_event_log_transition" `
             "provider=$brokerService event_id=$($event.Id); transition=process_ready"
 
-        $pipeNames = @()
-        for ($pipeAttempt = 0; $pipeAttempt -lt 60; $pipeAttempt++) {
-            $pipeNames = @([IO.Directory]::GetFiles("\\.\pipe\") | ForEach-Object {
-                    $_.Substring($_.LastIndexOf("\") + 1)
-                })
-            if ($pipeNames -contains $brokerPipe -and $pipeNames -contains $statusPipe) { break }
-            Start-Sleep -Milliseconds 100
-        }
-        if ($pipeNames -notcontains $brokerPipe -or $pipeNames -notcontains $statusPipe) {
-            throw "required named pipes are not present"
-        }
+        Assert-PipesReady $brokerPipe $statusPipe
         Pass "register_and_lease_over_named_pipe" "pipe boundary ready; product admission tested by consumer case"
 
         $adminRefused = $false
@@ -285,6 +286,7 @@ try {
                 Remove-Item $probeResultPath -Force -ErrorAction SilentlyContinue
                 Invoke-ScGuest @("config", $consumerService,
                     "binPath=", "$serviceSidProbeSc --mode $mode")
+                Assert-PipesReady $brokerPipe $statusPipe
                 & sc.exe start $consumerService 2>&1 | Out-Null
                 $modeWatch = [Diagnostics.Stopwatch]::StartNew()
                 for ($probeAttempt = 0; $probeAttempt -lt 160; $probeAttempt++) {
@@ -314,6 +316,7 @@ try {
             Remove-Item $probeResultPath -Force -ErrorAction SilentlyContinue
             Invoke-ScGuest @("config", $consumerService,
                 "binPath=", "$serviceSidProbeSc --mode deny-only --deny-sid $consumerSid")
+            Assert-PipesReady $brokerPipe $statusPipe
             & sc.exe start $consumerService 2>&1 | Out-Null
             for ($probeAttempt = 0; $probeAttempt -lt 160; $probeAttempt++) {
                 if (Test-Path $probeResultPath) { break }
@@ -336,6 +339,7 @@ try {
             Invoke-ScGuest @("config", $consumerService,
                 "binPath=", "$serviceSidProbeSc --mode blocked-read")
             Invoke-ScGuest @("config", $consumerService, "depend=", "/")
+            Assert-PipesReady $brokerPipe $statusPipe
             & sc.exe start $consumerService 2>&1 | Out-Null
             (Get-Service $consumerService).WaitForStatus(
                 "Running", [timespan]::FromSeconds(15))
@@ -365,6 +369,7 @@ try {
         }
 
         if ($selectedCase -in @("All", "PeerMatrix")) {
+            Assert-PipesReady $brokerPipe $statusPipe
             try { Start-Service $consumerService -ErrorAction Stop } catch {}
             $admitted = $false
             $observedLease = $false
@@ -410,6 +415,7 @@ try {
                 "error=", "normal",
                 "binPath=", "$serviceSidProbeSc --service-name $unrelated")
             Invoke-ScGuest @("sidtype", $unrelated, "unrestricted")
+            Assert-PipesReady $brokerPipe $statusPipe
             & sc.exe start $unrelated 2>&1 | Out-Null
             for ($probeAttempt = 0; $probeAttempt -lt 150; $probeAttempt++) {
                 if (Test-Path $probeResultPath) { break }
@@ -443,6 +449,7 @@ try {
             Pass "deadline_stops_retry" "covered by Rust retry-policy gate"
             Start-Service $brokerService
             (Get-Service $brokerService).WaitForStatus("Running", [timespan]::FromSeconds(15))
+            Assert-PipesReady $brokerPipe $statusPipe
             $restartDelays = @(5, 15, 40)
             for ($crash = 0; $crash -lt 3; $crash++) {
                 $oldPid = (Get-CimInstance Win32_Service `
