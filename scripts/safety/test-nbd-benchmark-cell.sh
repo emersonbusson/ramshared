@@ -5,6 +5,29 @@ ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 CELL="$ROOT/scripts/safety/nbd-benchmark-cell.sh"
 CGROUP_LAUNCH="$ROOT/scripts/safety/nbd-benchmark-cgroup-launch.sh"
 BENCHMARK_LIB="$ROOT/scripts/safety/nbd-benchmark-lib.sh"
+
+[[ -x $CELL ]] || {
+  printf 'FAIL benchmark cell harness missing or not executable: %s\n' "$CELL" >&2
+  exit 69
+}
+[[ -x $CGROUP_LAUNCH ]] || {
+  printf 'FAIL benchmark cgroup launcher missing or not executable: %s\n' "$CGROUP_LAUNCH" >&2
+  exit 69
+}
+[[ -f $BENCHMARK_LIB && ! -L $BENCHMARK_LIB ]] || {
+  printf 'FAIL benchmark library missing or symlinked: %s\n' "$BENCHMARK_LIB" >&2
+  exit 69
+}
+
+command -v unshare >/dev/null || {
+  printf 'FAIL unshare command is required but missing\n' >&2
+  exit 69
+}
+unshare -Cm true >/dev/null 2>&1 || {
+  printf 'FAIL cgroup namespace isolation is not available\n' >&2
+  exit 69
+}
+
 TMP=$(mktemp -d)
 declare -a TEST_CHILD_PIDS=()
 cleanup_test_children() {
@@ -22,19 +45,6 @@ pass_count=0
 pass() {
   pass_count=$((pass_count + 1))
   printf 'PASS %s\n' "$1"
-}
-
-[[ -x $CELL ]] || {
-  printf 'FAIL benchmark cell harness missing or not executable: %s\n' "$CELL" >&2
-  exit 1
-}
-[[ -x $CGROUP_LAUNCH ]] || {
-  printf 'FAIL benchmark cgroup launcher missing or not executable: %s\n' "$CGROUP_LAUNCH" >&2
-  exit 1
-}
-[[ -f $BENCHMARK_LIB && ! -L $BENCHMARK_LIB ]] || {
-  printf 'FAIL benchmark library missing or symlinked: %s\n' "$BENCHMARK_LIB" >&2
-  exit 1
 }
 # shellcheck source=nbd-benchmark-lib.sh
 source "$BENCHMARK_LIB"
