@@ -8,7 +8,8 @@ on:
     inputs:
       version:
         description: 'Release version tag (e.g. v0.9.0-beta.2)'
-        required: false
+        required: true
+        type: string
         default: 'v0.9.0-beta.2'
 
 permissions:
@@ -24,6 +25,7 @@ jobs:
 
       - name: Install Build Dependencies
         run: |
+          set -euo pipefail
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             rpm dpkg-dev binutils build-essential
@@ -33,17 +35,53 @@ jobs:
         with:
           toolchain: 1.98.0
 
+      - name: Verify Packaging Prerequisites
+        run: |
+          set -euo pipefail
+          for cmd in cargo dpkg-deb rpmbuild; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              echo "::error::Missing prerequisite command: $cmd"
+              exit 69
+            fi
+          done
+          FREE_SPACE=$(df -m . | awk 'NR==2 {print $4}')
+          if [ "$FREE_SPACE" -lt 1024 ]; then
+            echo "::error::Insufficient disk space for packaging."
+            exit 74
+          fi
+
       - name: Build Release Binaries
-        run: cargo build --release --locked
+        run: |
+          set -euo pipefail
+          cargo build --release --locked
 
       - name: Build Debian/Ubuntu Package (.deb)
-        run: ./scripts/package/build-deb-package.sh
+        run: |
+          set -euo pipefail
+          if [ ! -f "./scripts/package/build-deb-package.sh" ]; then
+            echo "::error::Missing script: ./scripts/package/build-deb-package.sh"
+            exit 69
+          fi
+          ./scripts/package/build-deb-package.sh
 
       - name: Build Fedora/RHEL Package (.rpm)
-        run: ./scripts/package/build-rpm-package.sh
+        run: |
+          set -euo pipefail
+          if [ ! -f "./scripts/package/build-rpm-package.sh" ]; then
+            echo "::error::Missing script: ./scripts/package/build-rpm-package.sh"
+            exit 69
+          fi
+          ./scripts/package/build-rpm-package.sh
 
       - name: Package Arch Linux AUR Tarball
         run: |
+          set -euo pipefail
+          for file in packaging/arch/PKGBUILD packaging/arch/ramshared.install packaging/systemd/60-ramshared.rules packaging/systemd/ramshared-vram.service; do
+            if [ ! -f "$file" ]; then
+              echo "::error::Required file missing: $file"
+              exit 69
+            fi
+          done
           mkdir -p artifacts/packages/arch
           tar -czf artifacts/packages/arch/ramshared-arch.tar.gz \
             packaging/arch/PKGBUILD \
@@ -54,6 +92,7 @@ jobs:
       - name: Generate Checksums
         working-directory: artifacts/packages
         run: |
+          set -euo pipefail
           find . -type f \( -name "*.deb" -o -name "*.rpm" -o -name "*.tar.gz" \) -exec sha256sum {} + > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
