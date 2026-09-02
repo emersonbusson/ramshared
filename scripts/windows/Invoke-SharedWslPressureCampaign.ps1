@@ -28,10 +28,18 @@ param(
     [ValidateRange(0, 120)][int]$ExternalWorkloadDelaySec = 4,
     [ValidateRange(0, 600)][int]$PostCampaignObserveSec = 120,
     [ValidateRange(4096, 2147483647)][int]$HostCommitReserveMiB = 4096,
+    [ValidateRange(0, 100)][int]$MemoryHigh = 80,
+    [ValidateRange(0, 100)][int]$MemoryMax = 90,
     [string[]]$HostDiskLetters = @()
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($MemoryHigh -ge $MemoryMax) {
+    $err = [System.ArgumentException]::new("memory_high ($MemoryHigh) must be strictly less than memory_max ($MemoryMax).")
+    Write-Error -Exception $err -ErrorId "ThresholdConflict"
+    throw $err
+}
 Import-Module (Join-Path $PSScriptRoot "SharedWslHostMemoryGate.psm1") -Force
 $hostMemoryGateOk = $false
 $hostCommitHeadroomMiB = $null
