@@ -39,6 +39,7 @@ jobs:
       RAMSHARED_PACKAGE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     steps:
       - name: Checkout trusted recovery tooling
+        timeout-minutes: 10
         if: github.event_name == 'workflow_dispatch'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

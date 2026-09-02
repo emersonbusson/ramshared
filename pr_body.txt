@@ -1,0 +1,16 @@
+## Resumo
+Add explicit `timeout-minutes` to all GitHub Actions CI/CD jobs and long-running steps. This prevents resource waste and ensures workflows fail fast if they hang, adhering to infrastructure hardening principles.
+
+## Commits
+| Commit | O que fez | Por que fez | Detalhes |
+|---|---|---|---|
+| feat: add timeout-minutes to all CI workflows | Injetou `timeout-minutes` nos jobs e steps das actions. | Evitar desperdício de recursos caso algum processo entre em hang. | Os jobs e steps de compilação/teste agora contam com timeouts adequados, com jobs variando até no máximo 30 minutos. |
+
+## Labels
+type:ci, type:scripts, type:security
+
+## Validacao
+~/go/bin/actionlint .github/workflows/*.yml
+
+## Rollback trigger
+Se algum CI falhar com timeout genuíno em operações que passaram a levar mais tempo devido a mudanças normais de workload.

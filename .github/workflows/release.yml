@@ -24,6 +24,7 @@ jobs:
       RELEASE_TARGET_TAG: v0.9.0-beta.1
     steps:
       - name: Require release GitHub App credentials
+        timeout-minutes: 10
         shell: bash
         env:
           RELEASE_APP_ID: ${{ secrets.RELEASE_APP_ID }}

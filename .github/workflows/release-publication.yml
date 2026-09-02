@@ -39,6 +39,7 @@ jobs:
       DISPATCH_ACTION: ${{ github.event.action }}
     steps:
       - name: Admit only maintainer request or exact App delegation
+        timeout-minutes: 10
         shell: bash
         run: |
           set -euo pipefail
