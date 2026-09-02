@@ -401,6 +401,11 @@ if ($Action -eq "install" -and $PARTUUID -cne "00000000-0000-0000-0000-000000000
 
 switch ($Action) {
     "install" {
+        $consumer = Get-Service -Name RamSharedWinSvc -ErrorAction SilentlyContinue
+        $broker = Get-Service -Name RamSharedBroker -ErrorAction SilentlyContinue
+        if (($null -ne $consumer -and $consumer.Status -ne "Stopped") -or ($null -ne $broker -and $broker.Status -ne "Stopped")) {
+            throw "origin install requires RamShared services to be stopped"
+        }
         $transaction = New-OriginInstallTransaction
         try {
             if (Test-Path -LiteralPath $ExistingSwapVhdx) { Write-Verbose "existing WSL swap VHDX remains untouched" }
@@ -445,6 +450,11 @@ switch ($Action) {
         [ordered]@{ state = "VERIFIED"; action = $Action; partuuid = $proof.partuuid; disk_guid = $proof.disk_guid; host_mutation = $false } | ConvertTo-Json -Depth 4
     }
     "uninstall" {
+        $consumer = Get-Service -Name RamSharedWinSvc -ErrorAction SilentlyContinue
+        $broker = Get-Service -Name RamSharedBroker -ErrorAction SilentlyContinue
+        if (($null -ne $consumer -and $consumer.Status -ne "Stopped") -or ($null -ne $broker -and $broker.Status -ne "Stopped")) {
+            throw "origin uninstall requires RamShared services to be stopped"
+        }
         if ($PartUuidWasSupplied -or $LogicalCapacityWasSupplied -or $PhysicalCacheCapWasSupplied) { throw "origin uninstall does not accept caller identity or policy values" }
         $manifest = Read-SealedOriginManifest
         $proof = Get-OriginVhdxOwnershipProof -VhdxPath $OriginVhdx
