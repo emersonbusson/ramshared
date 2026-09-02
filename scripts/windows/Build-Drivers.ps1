@@ -8,29 +8,51 @@
 #>
 [CmdletBinding()]
 param(
+    [ValidateNotNullOrEmpty()]
     [string]$RepoRoot = "C:\ramshared\src",
+
+    [ValidateNotNullOrEmpty()]
     [string]$KitVersion = "10.0.26100.0",
+
     [switch]$CodeAnalysis
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not (Test-Path $RepoRoot -PathType Container)) {
+    throw [System.IO.DirectoryNotFoundException]::new("RepoRoot directory not found: $RepoRoot")
+}
+
 Set-Location $RepoRoot
+
 $log = Join-Path $RepoRoot "artifacts\build-drivers.log"
 New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null
 Start-Transcript -Path $log -Force
 
 function Find-VcVars {
     $p = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-    if (-not (Test-Path $p)) { throw "vcvars64.bat not found: $p" }
+    if (-not (Test-Path $p)) { throw [System.IO.FileNotFoundException]::new("vcvars64.bat not found: $p") }
     return $p
 }
 
 function Invoke-CmdBat {
-    param([string]$Bat, [string]$Extra)
+    [CmdletBinding()]
+    param(
+        [ValidateNotNullOrEmpty()]
+        [string]$Bat,
+
+        [ValidateNotNullOrEmpty()]
+        [string]$Extra
+    )
     $cmd = "`"$Bat`" && $Extra"
     Write-Output "CMD> $Extra"
     & cmd.exe /c $cmd
-    if ($LASTEXITCODE -ne 0) { throw "command failed exit=$LASTEXITCODE : $Extra" }
+    if ($LASTEXITCODE -ne 0) { throw [System.Exception]::new("command failed exit=$LASTEXITCODE : $Extra") }
+}
+
+$msbuildPath = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
+if (-not (Test-Path $msbuildPath)) {
+    throw [System.IO.FileNotFoundException]::new("MSBuild.exe not found: $msbuildPath")
 }
 
 $vcvars = Find-VcVars
@@ -41,8 +63,12 @@ $incKmCrt = "$kit\Include\$KitVersion\km\crt"
 $libKm = "$kit\Lib\$KitVersion\km\x64"
 $libUcrt = "$kit\Lib\$KitVersion\ucrt\x64"
 
-if (-not (Test-Path "$incKm\storport.h")) { throw "storport.h missing under $incKm" }
-if (-not (Test-Path "$libKm\storport.lib")) { throw "storport.lib missing under $libKm" }
+if (-not (Test-Path $incKm)) { throw [System.IO.DirectoryNotFoundException]::new("WDK km includes missing: $incKm") }
+if (-not (Test-Path "$incKm\storport.h")) { throw [System.IO.FileNotFoundException]::new("storport.h missing under $incKm") }
+if (-not (Test-Path "$libKm\storport.lib")) { throw [System.IO.FileNotFoundException]::new("storport.lib missing under $libKm") }
+
+$incUm = "$kit\Include\$KitVersion\um"
+if (-not (Test-Path $incUm)) { throw [System.IO.DirectoryNotFoundException]::new("Target platform SDK (um includes) missing: $incUm") }
 
 $cflags = @(
     "/nologo", "/c", "/kernel", "/GS-", "/W4", "/WX", "/wd4324", "/O2", "/Z7",
