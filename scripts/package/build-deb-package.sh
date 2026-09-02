@@ -104,6 +104,33 @@ printf " RamShared is an R&D system that utilizes idle GPU Video RAM (VRAM)\n" >
 printf " over PCIe as an accelerated, high-throughput memory tier for Linux and WSL2.\n" >> "$STAGE_DIR/DEBIAN/control"
 printf " Absorbs memory pressure spikes and prevents desktop/WSL2 swap freezes.\n" >> "$STAGE_DIR/DEBIAN/control"
 
+echo "==> Validating DEBIAN/control mandatory fields..."
+CTRL_FILE="$STAGE_DIR/DEBIAN/control"
+if [[ ! -f "$CTRL_FILE" ]]; then
+  echo "ERROR: DEBIAN/control file missing." >&2
+  exit 78
+fi
+
+pkg_val=$(grep '^Package:' "$CTRL_FILE" | sed 's/^Package:[[:space:]]*//' || true)
+ver_val=$(grep '^Version:' "$CTRL_FILE" | sed 's/^Version:[[:space:]]*//' || true)
+arch_val=$(grep '^Architecture:' "$CTRL_FILE" | sed 's/^Architecture:[[:space:]]*//' || true)
+dep_val=$(grep '^Depends:' "$CTRL_FILE" | sed 's/^Depends:[[:space:]]*//' || true)
+
+if [[ -z "$pkg_val" || -z "$ver_val" || -z "$arch_val" || -z "$dep_val" ]]; then
+  echo "ERROR: Missing mandatory fields in DEBIAN/control (Package, Version, Architecture, Depends)" >&2
+  exit 78
+fi
+
+if [[ ! "$ver_val" =~ ^[0-9][a-zA-Z0-9.+~-]*$ ]]; then
+  echo "ERROR: Invalid Version format in DEBIAN/control: '$ver_val'" >&2
+  exit 78
+fi
+
+if [[ ! "$pkg_val" =~ ^[a-z0-9.+-]+$ ]]; then
+  echo "ERROR: Invalid Package format in DEBIAN/control: '$pkg_val'" >&2
+  exit 78
+fi
+
 # Generate DEBIAN/postinst (post-installation script)
 cat << 'POSTINST_EOF' > "$STAGE_DIR/DEBIAN/postinst"
 #!/bin/sh
