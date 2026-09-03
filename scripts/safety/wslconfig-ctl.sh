@@ -36,12 +36,12 @@ cmd_check() {
 	local cfg
 	if ! cfg="$(wslconfig_path)"; then
 		echo "CHECK: cannot resolve .wslconfig (set WSL_CONFIG= or WIN_USER=)"
-		exit 2
+		exit 69
 	fi
 	echo "CHECK path=$cfg"
 	if [[ ! -f "$cfg" ]]; then
 		echo "CHECK: MISSING (run: bash scripts/safety/wslconfig-ctl.sh apply)"
-		exit 1
+		exit 74
 	fi
 	if wslconfig_validate_file "$cfg"; then
 		echo "CHECK: OK (no unsafe escapes or unapproved sparse VHD)"
@@ -52,16 +52,24 @@ cmd_check() {
 		exit 0
 	fi
 	echo "CHECK: FAIL — fix with: bash scripts/safety/wslconfig-ctl.sh apply"
-	exit 1
+	exit 78
 }
 
 cmd_apply() {
 	local cfg
 	if ! cfg="$(wslconfig_path)"; then
 		echo "APPLY: cannot resolve .wslconfig"
-		exit 2
+		exit 69
 	fi
-	wslconfig_write_host "$cfg"
+	if [[ ! -f "$cfg" ]]; then
+		echo "APPLY: MISSING $cfg - cannot modify non-existent file"
+		exit 74
+	fi
+	if ! wslconfig_validate_file "$cfg" >/dev/null; then
+		echo "APPLY: FAIL — invalid format before modification"
+		exit 78
+	fi
+	wslconfig_write_host "$cfg" || exit 78
 	echo "APPLY: OK — restart WSL when idle to reload memory=/swap= (wsl --shutdown)"
 	echo "APPLY: cascade VRAM sizes live in /etc/ramshared/cascade.conf (not this file)"
 	exit 0
@@ -215,7 +223,7 @@ cmd_selftest() {
 	rm -rf "$td"
 	if [[ "$fail" -ne 0 ]]; then
 		echo "SELFTEST: FAIL"
-		exit 1
+		exit 78
 	fi
 	echo "SELFTEST: PASS"
 	exit 0
@@ -233,7 +241,7 @@ main() {
 	-h | --help | help) usage ;;
 	*)
 		usage >&2
-		exit 2
+		exit 64
 		;;
 	esac
 }
