@@ -8,6 +8,21 @@
 # output: CSV on stdout plus a summary (free min/max/mean plus volatility).
 set -euo pipefail
 
+if command -v nvidia-smi >/dev/null 2>&1; then
+  if ! nvidia-smi -L >/dev/null 2>&1; then
+    echo "Error: nvidia-smi found but failed to detect working GPU." >&2
+    exit 69
+  fi
+elif command -v vulkaninfo >/dev/null 2>&1; then
+  if ! vulkaninfo >/dev/null 2>&1; then
+    echo "Error: vulkaninfo found but failed to detect working GPU." >&2
+    exit 69
+  fi
+else
+  echo "Error: Neither nvidia-smi nor vulkaninfo is available." >&2
+  exit 69
+fi
+
 DUR="${1:-30}"
 STEP="${2:-2}"
 N=$(( DUR / STEP ))
