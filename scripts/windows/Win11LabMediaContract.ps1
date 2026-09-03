@@ -1011,6 +1011,56 @@ function Assert-Win11LabWorkerIsoNotAttached {
     }
 }
 
+function Assert-Win11LabArtifactChecksum {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ManifestPath,
+        [Parameter(Mandatory = $true)]
+        [string]$ArtifactPath,
+        [Parameter(Mandatory = $true)]
+        [string]$Role
+    )
+
+    if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+        throw "win11_lab_media_contract_manifest_missing"
+    }
+    if (-not (Test-Path -LiteralPath $ArtifactPath -PathType Leaf)) {
+        throw "win11_lab_media_contract_artifact_missing"
+    }
+
+    $manifest = $null
+    try {
+        $manifestJson = [System.IO.File]::ReadAllText($ManifestPath)
+        $manifest = $manifestJson | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "win11_lab_media_contract_manifest_invalid"
+    }
+
+    if ($null -eq $manifest -or $null -eq $manifest.artifacts -or $manifest.artifacts -isnot [array]) {
+        throw "win11_lab_media_contract_manifest_artifacts_missing"
+    }
+
+    $expectedSha256 = $null
+    foreach ($artifact in $manifest.artifacts) {
+        if ($null -ne $artifact.role -and [string]$artifact.role -ceq $Role) {
+            $expectedSha256 = [string]$artifact.sha256
+            break
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($expectedSha256)) {
+        throw "win11_lab_media_contract_manifest_artifact_role_missing"
+    }
+
+    $computedSha256 = Get-Win11LabFileSha256 -Path $ArtifactPath
+    $normalizedExpected = Normalize-Win11LabSha256 -Sha256 $expectedSha256 -FailureCode "manifest_artifact_sha256_invalid"
+
+    if ($computedSha256 -cne $normalizedExpected) {
+        throw "win11_lab_media_contract_artifact_hash_mismatch"
+    }
+}
+
 function Invoke-Win11LabMediaWorkerMode {
     [CmdletBinding()]
     param(

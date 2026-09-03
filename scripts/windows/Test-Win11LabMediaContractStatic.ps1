@@ -68,7 +68,8 @@ foreach ($functionName in @(
     "Invoke-Win11LabPrimaryIsoContract",
     "Invoke-Win11LabSourceIsoStage",
     "Invoke-Win11LabExternalProcessBounded",
-    "Wait-Win11LabExactVhdGrowth"
+    "Wait-Win11LabExactVhdGrowth",
+    "Assert-Win11LabArtifactChecksum"
 )) {
     if (-not (Get-Command -Name $functionName -CommandType Function -ErrorAction SilentlyContinue)) {
         throw ("win11_lab_media_static: missing function " + $functionName)
