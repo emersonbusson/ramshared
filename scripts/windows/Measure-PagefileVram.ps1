@@ -12,14 +12,34 @@
 #>
 [CmdletBinding()]
 param(
+    [ValidateRange(1, [int]::MaxValue)]
     [int]$Runs = 3,
     [ValidateSet("idle", "loaded")]
     [string]$LoadTag = "idle",
     [string]$RepoRoot = "",
+    [ValidateNotNullOrEmpty()]
     [string]$ArtifactDir = ".\artifacts\pagefile-vram-measure"
 )
 
 $ErrorActionPreference = "Stop"
+
+$gpuAdapters = Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue
+if ($null -eq $gpuAdapters -or $gpuAdapters.Count -eq 0) {
+    Write-Error -ErrorId "GPU_ADAPTER_MISSING" -Message "No GPU adapter detected via Win32_VideoController." -ErrorAction Stop
+}
+
+$hasVram = $false
+foreach ($adapter in @($gpuAdapters)) {
+    if ($null -ne $adapter.AdapterRAM) {
+        $hasVram = $true
+        break
+    }
+}
+
+if (-not $hasVram) {
+    Write-Error -ErrorId "VRAM_QUERY_UNAVAILABLE" -Message "VRAM query availability failed: AdapterRAM property is null or unavailable." -ErrorAction Stop
+}
+
 New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
 
 function Measure-Once {
