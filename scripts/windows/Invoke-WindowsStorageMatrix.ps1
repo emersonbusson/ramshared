@@ -117,7 +117,7 @@ function Get-CurrentPowerShellExecutable {
     $path = (Get-Process -Id $PID -ErrorAction Stop).Path
     if ([string]::IsNullOrWhiteSpace($path) -or
         -not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "current PowerShell executable is unavailable"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "current PowerShell executable is unavailable" -ErrorAction Stop
     }
     $path
 }
@@ -169,7 +169,7 @@ function Normalize-RamSharedText([string]$Value) {
 }
 function Assert-FreshOutDir([string]$Path) {
     if (Test-Path -LiteralPath $Path) {
-        throw "output directory already exists: $Path"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "output directory already exists: $Path" -ErrorAction Stop
     }
 }
 function ConvertFrom-RamSharedToml([string]$Text, [string]$Name) {
@@ -184,21 +184,21 @@ function ConvertFrom-RamSharedToml([string]$Text, [string]$Name) {
         if ($line -match '^\[([A-Za-z0-9_-]+)\]$') {
             $nextSection = $matches[1]
             if ($tables.ContainsKey($nextSection)) {
-                throw "duplicate TOML table name=$Name table=$nextSection"
+                Write-Error -ErrorId "StorageMatrixFailure" -Message "duplicate TOML table name=$Name table=$nextSection" -ErrorAction Stop
             }
             $tables[$nextSection] = $true
             $section = $nextSection
             continue
         }
         if ($line -notmatch '^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+?)\s*$') {
-            throw "invalid TOML scalar name=$Name line=$lineNumber"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "invalid TOML scalar name=$Name line=$lineNumber" -ErrorAction Stop
         }
         if ([string]::IsNullOrWhiteSpace($section)) {
-            throw "unscoped TOML scalar name=$Name line=$lineNumber"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "unscoped TOML scalar name=$Name line=$lineNumber" -ErrorAction Stop
         }
         $key = "$section.$($matches[1])"
         if ($values.ContainsKey($key)) {
-            throw "duplicate TOML scalar name=$Name key=$key"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "duplicate TOML scalar name=$Name key=$key" -ErrorAction Stop
         }
         $literal = $matches[2] -replace '\s+#.*$', ''
         $literal = $literal.Trim()
@@ -209,7 +209,7 @@ function ConvertFrom-RamSharedToml([string]$Text, [string]$Name) {
         } elseif ($literal -in @("true", "false")) {
             $values[$key] = [bool]::Parse($literal)
         } else {
-            throw "unsupported TOML scalar name=$Name key=$key"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "unsupported TOML scalar name=$Name key=$key" -ErrorAction Stop
         }
     }
     $values
@@ -224,12 +224,12 @@ function Set-RamSharedTomlInteger(
     $parsed = ConvertFrom-RamSharedToml $Text $Name
     $fullKey = "$Section.$Key"
     if (-not $parsed.ContainsKey($fullKey)) {
-        throw "missing TOML scalar name=$Name key=$fullKey"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "missing TOML scalar name=$Name key=$fullKey" -ErrorAction Stop
     }
     $pattern = "(?m)^(\\s*$([regex]::Escape($Key))\\s*=\\s*)\\d+(\\s*(?:#.*)?\\r?)$"
     $matches = [regex]::Matches($Text, $pattern)
     if ($matches.Count -ne 1) {
-        throw "ambiguous TOML scalar replacement name=$Name key=$fullKey count=$($matches.Count)"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "ambiguous TOML scalar replacement name=$Name key=$fullKey count=$($matches.Count)" -ErrorAction Stop
     }
     [regex]::Replace($Text, $pattern, ('${1}' + $Value + '${2}'), 1)
 }
@@ -253,12 +253,12 @@ function Assert-EffectiveCellConfig(
     foreach ($entry in $expectedWinsvc.GetEnumerator()) {
         if (-not $winsvc.ContainsKey($entry.Key) -or
             [UInt64]$winsvc[$entry.Key] -ne [UInt64]$entry.Value) {
-            throw "prepared winsvc config mismatch cell=$Cell field=$($entry.Key)"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "prepared winsvc config mismatch cell=$Cell field=$($entry.Key)" -ErrorAction Stop
         }
     }
     if (-not $broker.ContainsKey("local_broker.capacity_bytes") -or
         [UInt64]$broker["local_broker.capacity_bytes"] -ne $Size) {
-        throw "prepared broker capacity mismatch cell=$Cell"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "prepared broker capacity mismatch cell=$Cell" -ErrorAction Stop
     }
 }
 function Test-PositiveFinite([double]$Value) {
@@ -278,11 +278,11 @@ function Assert-BaselineDocument($Document) {
         [int]$Document.observed_rows -ne $expectedRows -or
         [int]$Document.expected_summaries -ne $expectedSummaries -or
         [int]$Document.observed_summaries -ne $expectedSummaries) {
-        throw "baseline schema/cardinality is invalid"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "baseline schema/cardinality is invalid" -ErrorAction Stop
     }
     $entries = @($Document.entries)
     if ($entries.Count -ne $expectedSummaries) {
-        throw "baseline entry cardinality is invalid"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "baseline entry cardinality is invalid" -ErrorAction Stop
     }
     $expectedKeyIndex = @{}
     foreach ($cell in $cells) {
@@ -291,7 +291,7 @@ function Assert-BaselineDocument($Document) {
         }
     }
     if ($expectedKeyIndex.Count -ne $expectedSummaries) {
-        throw "expected baseline key domain is internally inconsistent"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "expected baseline key domain is internally inconsistent" -ErrorAction Stop
     }
     $index = @{}
     foreach ($entry in $entries) {
@@ -307,7 +307,7 @@ function Assert-BaselineDocument($Document) {
             -not (Test-PositiveFinite ([double]$entry.max_mib_per_sec)) -or
             [double]$entry.min_mib_per_sec -gt [double]$entry.median_mib_per_sec -or
             [double]$entry.max_mib_per_sec -lt [double]$entry.median_mib_per_sec) {
-            throw "baseline positive finite metric or key is invalid"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "baseline positive finite metric or key is invalid" -ErrorAction Stop
         }
         $index[$key] = $entry
     }
@@ -316,7 +316,7 @@ function Assert-BaselineDocument($Document) {
 function Get-CounterNumber($Row, [string]$Name) {
     $property = $Row.PSObject.Properties[$Name]
     if ($null -eq $property -or -not (Test-NonNegativeFinite ([double]$property.Value))) {
-        throw "counter numeric field is invalid: $Name"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "counter numeric field is invalid: $Name" -ErrorAction Stop
     }
     [double]$property.Value
 }
@@ -329,25 +329,25 @@ function Assert-CounterJsonlSemantics(
             -not [string]::IsNullOrWhiteSpace($_)
         })
     if ($rows.Count -eq 0) {
-        throw "counter JSONL is empty"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "counter JSONL is empty" -ErrorAction Stop
     }
     $normalizedSerial = Normalize-RamSharedText $ExpectedSerial
     foreach ($line in $rows) {
         $row = $line | ConvertFrom-Json -ErrorAction Stop
         if ((Normalize-RamSharedText ([string]$row.serial)) -ne $normalizedSerial) {
-            throw "counter expected serial mismatch"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "counter expected serial mismatch" -ErrorAction Stop
         }
         if ([UInt64]$row.expected_size_bytes -ne $ExpectedSize) {
-            throw "counter expected size mismatch"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "counter expected size mismatch" -ErrorAction Stop
         }
         if ([int]$row.rounds -lt 3 -or
             [string]$row.last_sha256 -notmatch '^[0-9A-Fa-f]{64}$') {
-            throw "counter direct checksum contract failed"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "counter direct checksum contract failed" -ErrorAction Stop
         }
         if ([Int64]$row.uncached_write_bytes -le 0 -or
             [Int64]$row.uncached_read_bytes -le 0 -or
             [Int64]$row.perf_row_samples -le 0) {
-            throw "counter positive activity contract failed"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "counter positive activity contract failed" -ErrorAction Stop
         }
         $numbers = @{}
         foreach ($name in @(
@@ -360,31 +360,31 @@ function Assert-CounterJsonlSemantics(
         }
         if ($numbers["disk_read_bytes_per_sec_max"] -le 0 -and
             $numbers["disk_write_bytes_per_sec_max"] -le 0) {
-            throw "counter positive activity contract failed"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "counter positive activity contract failed" -ErrorAction Stop
         }
         $p50 = $numbers["p50_ms"]
         $p95 = $numbers["p95_ms"]
         $p99 = $numbers["p99_ms"]
         if ($p95 -lt $p50 -or $p99 -lt $p95) {
-            throw "counter latency percentile ordering failed"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "counter latency percentile ordering failed" -ErrorAction Stop
         }
     }
     $rows
 }
 function Assert-RecoveryJournal($Journal) {
     if ($null -eq $Journal -or [string]$Journal.phase -ne "partition_created") {
-        throw "recovery journal phase must be partition_created"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "recovery journal phase must be partition_created" -ErrorAction Stop
     }
     $events = @($Journal.events)
     $phases = @($events | ForEach-Object { [string]$_.phase })
     if (($phases -join ",") -ne "raw_validated,partition_created" -or
         $phases -contains "volume_published") {
-        throw "recovery journal is not monotonic exact scratch evidence"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "recovery journal is not monotonic exact scratch evidence" -ErrorAction Stop
     }
 }
 function Assert-RecoveryVolumeCardinality([int]$Count) {
     if ($Count -ne 0) {
-        throw "storage_provider_recovery volume refusal count=$Count"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "storage_provider_recovery volume refusal count=$Count" -ErrorAction Stop
     }
 }
 function Assert-OnlineStorageBinding($OnlineEvidence, [string]$ExpectedSerial,
@@ -394,35 +394,35 @@ function Assert-OnlineStorageBinding($OnlineEvidence, [string]$ExpectedSerial,
         (Normalize-RamSharedText ([string]$OnlineEvidence.serial)) -ne
             (Normalize-RamSharedText $ExpectedSerial) -or
         [UInt64]$OnlineEvidence.size -ne $ExpectedSize) {
-        throw "current Online evidence does not bind storage identity"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "current Online evidence does not bind storage identity" -ErrorAction Stop
     }
 }
 function New-MatrixPackages {
     if ($PackageRevision -notmatch '^[0-9A-Za-z][0-9A-Za-z-]*$') {
-        throw "PackageRevision is required and must be alphanumeric with optional hyphens"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "PackageRevision is required and must be alphanumeric with optional hyphens" -ErrorAction Stop
     }
     if (-not (Test-Path (Join-Path $BasePackage "product-manifest.json"))) {
-        throw "base product package missing"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "base product package missing" -ErrorAction Stop
     }
     foreach ($driverFile in @("ramshared.sys", "ramshared.inf", "ramshared.cat")) {
         if (-not (Test-Path (Join-Path $DriverPackage $driverFile))) {
-            throw "driver package missing $driverFile"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "driver package missing $driverFile" -ErrorAction Stop
         }
     }
     if (-not (Test-Path $WinsvcBinary -PathType Leaf)) {
-        throw "winsvc candidate missing"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "winsvc candidate missing" -ErrorAction Stop
     }
     if (-not (Test-Path $BrokerBinary -PathType Leaf)) {
-        throw "broker candidate missing"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "broker candidate missing" -ErrorAction Stop
     }
     New-Item -Force -ItemType Directory $PackageRoot | Out-Null
     foreach ($cell in $cells) {
         $name, $size, $sector, $qd, $maxIo = $cell
         if ([UInt64]$qd * [UInt64]$maxIo -gt 4MB) {
-            throw "matrix in-flight limit exceeded cell=$name"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "matrix in-flight limit exceeded cell=$name" -ErrorAction Stop
         }
         $root = Join-Path $PackageRoot $name
-        if (Test-Path $root) { throw "immutable matrix package already exists: $root" }
+        if (Test-Path $root) { Write-Error -ErrorId "StorageMatrixFailure" -Message "immutable matrix package already exists: $root" -ErrorAction Stop }
         New-Item -Force -ItemType Directory $root | Out-Null
         Copy-Item (Join-Path $BasePackage "*") $root -Force
         Copy-Item $WinsvcBinary (Join-Path $root "ramshared-winsvc.exe") -Force
@@ -468,7 +468,7 @@ function Assert-Admin {
     $p = [Security.Principal.WindowsPrincipal]::new(
         [Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        throw "elevated administrator token required"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "elevated administrator token required" -ErrorAction Stop
     }
 }
 function Get-ProductDisks {
@@ -485,7 +485,7 @@ function Stop-Product {
             $consumer = Get-Service RamSharedWinSvc -ErrorAction Stop
         } while ($consumer.Status -ne "Stopped" -and (Get-Date) -lt $deadline)
         if ($consumer.Status -ne "Stopped") {
-            throw "consumer-first stop timeout state=$($consumer.Status)"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "consumer-first stop timeout state=$($consumer.Status)" -ErrorAction Stop
         }
     }
     $broker = Get-Service RamSharedBroker -ErrorAction SilentlyContinue
@@ -497,14 +497,14 @@ function Stop-Product {
             $broker = Get-Service RamSharedBroker -ErrorAction Stop
         } while ($broker.Status -ne "Stopped" -and (Get-Date) -lt $deadline)
         if ($broker.Status -ne "Stopped") {
-            throw "broker stop timeout state=$($broker.Status)"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "broker stop timeout state=$($broker.Status)" -ErrorAction Stop
         }
     }
     $deadline = (Get-Date).AddSeconds(15)
     while ((Get-Date) -lt $deadline -and @(Get-ProductDisks).Length -ne 0) {
         Start-Sleep -Milliseconds 250
     }
-    if (@(Get-ProductDisks).Length -ne 0) { throw "consumer-first stop left residue" }
+    if (@(Get-ProductDisks).Length -ne 0) { Write-Error -ErrorId "StorageMatrixFailure" -Message "consumer-first stop left residue" -ErrorAction Stop }
 }
 function Arm-Watchdog {
     [IO.File]::WriteAllText($watchdogMarker, (Get-Date).ToString("o"))
@@ -531,39 +531,39 @@ function Arm-Watchdog {
 }
 function Update-WatchdogHeartbeat {
     if (-not (Test-Path $watchdogMarker -PathType Leaf)) {
-        throw "watchdog marker missing"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "watchdog marker missing" -ErrorAction Stop
     }
     [IO.File]::SetLastWriteTime($watchdogMarker, (Get-Date))
 }
 function Assert-GpuReserve([UInt64]$Size) {
     $nvidiaSmi = Join-Path $env:SystemRoot "System32\nvidia-smi.exe"
     if (-not (Test-Path $nvidiaSmi -PathType Leaf)) {
-        throw "insufficient GPU reserve: nvidia-smi unavailable"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "insufficient GPU reserve: nvidia-smi unavailable" -ErrorAction Stop
     }
     $probe = Start-BoundedExternalProcess $nvidiaSmi @(
         "--query-gpu=memory.free", "--format=csv,noheader,nounits") 15
     if (-not $probe.completed) {
-        throw "insufficient GPU reserve: nvidia-smi timeout"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "insufficient GPU reserve: nvidia-smi timeout" -ErrorAction Stop
     }
     $samples = @($probe.stdout -split "`r?`n" | Where-Object {
             -not [string]::IsNullOrWhiteSpace($_)
         })
     if ($samples.Length -ne 1 -or
         [string]$samples[0] -notmatch '^\s*(\d+)\s*$') {
-        throw "insufficient GPU reserve: nvidia-smi unavailable"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "insufficient GPU reserve: nvidia-smi unavailable" -ErrorAction Stop
     }
     $free = [UInt64]$matches[1] * 1MB
     if ($free -lt ($Size + $GpuReserveBytes)) {
-        throw "insufficient GPU reserve: free=$free need=$($Size + $GpuReserveBytes)"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "insufficient GPU reserve: free=$free need=$($Size + $GpuReserveBytes)" -ErrorAction Stop
     }
 }
 function Assert-BinaryMatch($Manifest, [string]$Root) {
     foreach ($role in @("driver_sys", "broker_exe", "winsvc_exe")) {
         $a = $Manifest.artifacts | Where-Object role -eq $role
-        if (-not $a) { throw "BINARY_MATCH missing manifest role=$role" }
+        if (-not $a) { Write-Error -ErrorId "StorageMatrixFailure" -Message "BINARY_MATCH missing manifest role=$role" -ErrorAction Stop }
         $source = Join-Path $Root $a.relative_path
         if ((Get-FileHash $source -Algorithm SHA256).Hash -ne $a.sha256) {
-            throw "BINARY_MATCH package hash failed role=$role"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "BINARY_MATCH package hash failed role=$role" -ErrorAction Stop
         }
     }
 }
@@ -571,7 +571,7 @@ function Assert-LiveBinaryMatch($Manifest, [string]$Root) {
     $driver = Get-CimInstance Win32_SystemDriver |
         Where-Object Name -eq "ramshared"
     if (-not $driver -or $driver.State -ne "Running") {
-        throw "BINARY_MATCH loaded driver is not Running"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "BINARY_MATCH loaded driver is not Running" -ErrorAction Stop
     }
     $driverPath = ([string]$driver.PathName).Trim('"') -replace '^\\\?\?\\', ''
     if ($driverPath -like "\SystemRoot\*") {
@@ -581,7 +581,7 @@ function Assert-LiveBinaryMatch($Manifest, [string]$Root) {
     $loadedDriverHash = Get-Sha256 $driverPath
     $expectedDriverHash = Get-Sha256 (Join-Path $Root $driverArtifact.relative_path)
     if ($loadedDriverHash -ne $expectedDriverHash) {
-        throw "BINARY_MATCH loaded driver hash mismatch"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "BINARY_MATCH loaded driver hash mismatch" -ErrorAction Stop
     }
     $observed = [ordered]@{
         loaded_driver_path = $driverPath
@@ -597,7 +597,7 @@ function Assert-LiveBinaryMatch($Manifest, [string]$Root) {
         $loadedHash = Get-Sha256 $process.Path
         $expectedHash = Get-Sha256 (Join-Path $Root $artifact.relative_path)
         if ($loadedHash -ne $expectedHash) {
-            throw "BINARY_MATCH live process mismatch service=$($pair[0])"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "BINARY_MATCH live process mismatch service=$($pair[0])" -ErrorAction Stop
         }
         if ($pair[0] -eq "RamSharedBroker") {
             $observed.loaded_broker_path = $process.Path
@@ -619,7 +619,7 @@ function Get-WorkerExactStorageIdentity(
 ) {
     $normalizedSerial = Normalize-RamSharedText $ExpectedSerial
     if ($normalizedSerial -notmatch '^[0-9A-F]{16}$') {
-        throw "worker expected serial is invalid"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "worker expected serial is invalid" -ErrorAction Stop
     }
     $timer = [Diagnostics.Stopwatch]::StartNew()
     $deadline = (Get-Date).AddSeconds(30)
@@ -631,17 +631,17 @@ function Get-WorkerExactStorageIdentity(
                 [UInt64]$_.Size -eq $ExpectedSize
             })
         if ($physical.Count -gt 1) {
-            throw "exact physical identity count=$($physical.Count)"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "exact physical identity count=$($physical.Count)" -ErrorAction Stop
         }
         if ($physical.Count -eq 0) { Start-Sleep -Milliseconds 250 }
     } while ($physical.Count -eq 0 -and (Get-Date) -lt $deadline)
     if ($physical.Count -ne 1) {
-        throw "exact physical identity count=0 after 30s"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "exact physical identity count=0 after 30s" -ErrorAction Stop
     }
     if ((Normalize-RamSharedText ([string]$physical[0].BusType)) -ne "VIRTUAL" -or
         (Normalize-RamSharedText ([string]$physical[0].MediaType)) -ne "SSD" -or
         [UInt64]$physical[0].SpindleSpeed -ne 0) {
-        throw "BusType Virtual MediaType SSD SpindleSpeed 0 identity failed"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "BusType Virtual MediaType SSD SpindleSpeed 0 identity failed" -ErrorAction Stop
     }
     $disk = @(Get-Disk -Number ([int]$physical[0].DeviceId) -ErrorAction Stop)
     if ($disk.Count -ne 1 -or
@@ -651,12 +651,12 @@ function Get-WorkerExactStorageIdentity(
         [UInt32]$disk[0].LogicalSectorSize -ne $ExpectedSector -or
         [UInt32]$disk[0].PhysicalSectorSize -ne $ExpectedSector -or
         $disk[0].IsBoot -or $disk[0].IsSystem) {
-        throw "exact size/sector/current-run safety identity failed"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "exact size/sector/current-run safety identity failed" -ErrorAction Stop
     }
     $partitions = @(Get-Partition -DiskNumber ([int]$disk[0].Number) -ErrorAction Stop)
     if ($RequireRaw -and
         ([string]$disk[0].PartitionStyle -ne "RAW" -or $partitions.Count -ne 0)) {
-        throw "current-run disk must be RAW with zero partitions before mutation"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "current-run disk must be RAW with zero partitions before mutation" -ErrorAction Stop
     }
     $timer.Stop()
     [pscustomobject]@{
@@ -668,10 +668,10 @@ function Get-WorkerExactStorageIdentity(
 }
 function Write-StorageJournal($Journal, [string]$Path, [string]$Phase) {
     $valid = @("raw_validated", "partition_created", "volume_published")
-    if ($Phase -notin $valid) { throw "invalid storage journal phase=$Phase" }
+    if ($Phase -notin $valid) { Write-Error -ErrorId "StorageMatrixFailure" -Message "invalid storage journal phase=$Phase" -ErrorAction Stop }
     $previous = @($Journal.events | ForEach-Object { [string]$_.phase })
     if ($previous.Count -ne ($valid.IndexOf($Phase))) {
-        throw "storage journal phase transition is invalid phase=$Phase"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "storage journal phase transition is invalid phase=$Phase" -ErrorAction Stop
     }
     $Journal.phase = $Phase
     $Journal.events += [ordered]@{
@@ -687,7 +687,7 @@ function Invoke-StorageProviderWorkerMode {
         $WorkerExpectedSerial -notmatch '^[0-9A-Fa-f]{16}$' -or
         $Letter -notmatch '^[D-Z]$' -or $WorkerSize -eq 0 -or
         $WorkerSector -notin @(512, 4096)) {
-        throw "invalid storage provider worker arguments"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "invalid storage provider worker arguments" -ErrorAction Stop
     }
     New-Item -ItemType Directory -Force (Split-Path $WorkerResult -Parent) | Out-Null
     $journalPath = "$WorkerResult.journal.json"
@@ -719,12 +719,12 @@ function Invoke-StorageProviderWorkerMode {
             -ErrorAction Stop | Out-Null
         $partition = @(Get-Partition -DriveLetter $Letter -ErrorAction Stop)
         if ($partition.Count -ne 1 -or $partition[0].DiskNumber -ne $disk.Number) {
-            throw "matrix volume partition identity mismatch"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "matrix volume partition identity mismatch" -ErrorAction Stop
         }
         $volume = @(Get-Volume -DriveLetter $Letter -ErrorAction Stop)
         if ($volume.Count -ne 1 -or $volume[0].FileSystem -ne "NTFS" -or
             [UInt64]$volume[0].Size -eq 0) {
-            throw "matrix volume publication failed"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "matrix volume publication failed" -ErrorAction Stop
         }
         Write-StorageJournal $journal $journalPath "volume_published"
         Write-Json ([ordered]@{
@@ -765,7 +765,7 @@ function Invoke-StorageProviderRecoveryWorkerMode {
         $WorkerJournalPath -eq "" -or -not (Test-Path $WorkerJournalPath -PathType Leaf) -or
         $Letter -notmatch '^[D-Z]$' -or $WorkerSize -eq 0 -or
         $WorkerSector -notin @(512, 4096)) {
-        throw "invalid storage provider recovery arguments"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "invalid storage provider recovery arguments" -ErrorAction Stop
     }
     try {
         $journal = Get-Content -LiteralPath $WorkerJournalPath -Raw | ConvertFrom-Json
@@ -775,7 +775,7 @@ function Invoke-StorageProviderRecoveryWorkerMode {
             [int]$journal.disk_number -ne $WorkerDiskNumber -or
             [UInt64]$journal.size -ne $WorkerSize -or
             [UInt32]$journal.sector -ne $WorkerSector) {
-            throw "storage_provider_recovery journal identity refusal"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "storage_provider_recovery journal identity refusal" -ErrorAction Stop
         }
         $disk = @(Get-Disk -Number $WorkerDiskNumber -ErrorAction Stop)
         $physical = @(Get-PhysicalDisk -ErrorAction Stop | Where-Object {
@@ -793,12 +793,12 @@ function Invoke-StorageProviderRecoveryWorkerMode {
             (Normalize-RamSharedText ([string]$physical[0].MediaType)) -ne "SSD" -or
             [UInt64]$physical[0].SpindleSpeed -ne 0 -or
             $disk[0].IsBoot -or $disk[0].IsSystem) {
-            throw "storage_provider_recovery exact disk refusal"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "storage_provider_recovery exact disk refusal" -ErrorAction Stop
         }
         $partitions = @(Get-Partition -DiskNumber $WorkerDiskNumber -ErrorAction Stop)
         if ($partitions.Count -ne 1 -or
             [string]$partitions[0].DriveLetter -ne $Letter) {
-            throw "storage_provider_recovery partition refusal"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "storage_provider_recovery partition refusal" -ErrorAction Stop
         }
         $volumes = @($partitions | Get-Volume -ErrorAction Stop)
         Assert-RecoveryVolumeCardinality $volumes.Count
@@ -808,7 +808,7 @@ function Invoke-StorageProviderRecoveryWorkerMode {
         if ($after.PartitionStyle -ne "RAW" -or
             @(Get-Partition -DiskNumber $WorkerDiskNumber `
                     -ErrorAction SilentlyContinue).Count -ne 0) {
-            throw "storage_provider_recovery did not restore RAW"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "storage_provider_recovery did not restore RAW" -ErrorAction Stop
         }
         Write-Json ([ordered]@{
                 schema_version = $evidenceSchemaVersion
@@ -857,7 +857,7 @@ function Invoke-StorageProviderObservationWorkerMode {
     Assert-Admin
     if ($WorkerResult -eq "" -or $WorkerObservation -eq "" -or
         $Letter -notmatch '^[D-Z]$') {
-        throw "invalid storage observation worker arguments"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "invalid storage observation worker arguments" -ErrorAction Stop
     }
     New-Item -ItemType Directory -Force (Split-Path $WorkerResult -Parent) | Out-Null
     try {
@@ -875,7 +875,7 @@ function Invoke-StorageProviderObservationWorkerMode {
                         })) {
                     $disks = @(Get-Disk -Number ([int]$physical.DeviceId) -ErrorAction Stop)
                     if ($disks.Count -ne 1) {
-                        throw "product residue disk cardinality is invalid"
+                        Write-Error -ErrorId "StorageMatrixFailure" -Message "product residue disk cardinality is invalid" -ErrorAction Stop
                     }
                     $rows += [pscustomobject](ConvertTo-StorageObservationDisk $physical $disks[0])
                 }
@@ -884,19 +884,19 @@ function Invoke-StorageProviderObservationWorkerMode {
             "target_letter" {
                 $partitions = @(Get-Partition -DriveLetter $Letter -ErrorAction SilentlyContinue)
                 if ($partitions.Count -gt 1) {
-                    throw "target letter partition cardinality is ambiguous"
+                    Write-Error -ErrorId "StorageMatrixFailure" -Message "target letter partition cardinality is ambiguous" -ErrorAction Stop
                 }
                 $result.occupied = ($partitions.Count -eq 1)
                 if ($partitions.Count -eq 1) {
                     $disks = @(Get-Disk -Number ([int]($partitions[0].DiskNumber) ) -ErrorAction Stop)
                     if ($disks.Count -ne 1) {
-                        throw "target letter disk cardinality is invalid"
+                        Write-Error -ErrorId "StorageMatrixFailure" -Message "target letter disk cardinality is invalid" -ErrorAction Stop
                     }
                     $physical = @(Get-PhysicalDisk -ErrorAction Stop | Where-Object {
                             [int]$_.DeviceId -eq [int]$disks[0].Number
                         })
                     if ($physical.Count -gt 1) {
-                        throw "target letter physical identity is ambiguous"
+                        Write-Error -ErrorId "StorageMatrixFailure" -Message "target letter physical identity is ambiguous" -ErrorAction Stop
                     }
                     $result.disk = ConvertTo-StorageObservationDisk `
                         $(if ($physical.Count -eq 1) { $physical[0] } else { $null }) $disks[0]
@@ -905,7 +905,7 @@ function Invoke-StorageProviderObservationWorkerMode {
             "final_active" {
                 if ($WorkerExpectedSerial -notmatch '^[0-9A-Fa-f]{16}$' -or
                     $WorkerSize -eq 0 -or $WorkerSector -notin @(512, 4096)) {
-                    throw "invalid final active identity arguments"
+                    Write-Error -ErrorId "StorageMatrixFailure" -Message "invalid final active identity arguments" -ErrorAction Stop
                 }
                 $identity = Get-WorkerExactStorageIdentity $WorkerExpectedSerial `
                     $WorkerSize $WorkerSector
@@ -913,7 +913,7 @@ function Invoke-StorageProviderObservationWorkerMode {
                     $identity.physical $identity.disk
                 $result.partition_count = @($identity.partitions).Count
             }
-            default { throw "unsupported storage observation operation=$WorkerObservation" }
+            default { Write-Error -ErrorId "StorageMatrixFailure" -Message "unsupported storage observation operation=$WorkerObservation" -ErrorAction Stop }
         }
         Write-Json $result $WorkerResult 10
         exit 0
@@ -942,7 +942,7 @@ function Invoke-BoundedProcessStart(
     $stdoutTask = $null
     $stderrTask = $null
     try {
-        if (-not $process.Start()) { throw "bounded child failed to start" }
+        if (-not $process.Start()) { Write-Error -ErrorId "StorageMatrixFailure" -Message "bounded child failed to start" -ErrorAction Stop }
         # Begin both reads before waiting. ReadToEndAsync keeps each redirected pipe
         # draining on a CLR task so a verbose child cannot block on a full pipe.
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
@@ -959,14 +959,14 @@ function Invoke-BoundedProcessStart(
             $processTreeTerminated = $process.WaitForExit(5000)
             if (-not $processTreeTerminated -or
                 ($taskkillExit -ne 0 -and -not $process.HasExited)) {
-                throw "bounded child process tree termination failed pid=$($process.Id)"
+                Write-Error -ErrorId "StorageMatrixFailure" -Message "bounded child process tree termination failed pid=$($process.Id)" -ErrorAction Stop
             }
         }
         if ($process.HasExited) { $null = $process.WaitForExit(5000) }
         $drained = [Threading.Tasks.Task]::WaitAll(
             [Threading.Tasks.Task[]]@($stdoutTask, $stderrTask), 5000)
         if (-not $drained) {
-            throw "bounded child redirected stream drain timeout pid=$($process.Id)"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "bounded child redirected stream drain timeout pid=$($process.Id)" -ErrorAction Stop
         }
         $stdout = $stdoutTask.GetAwaiter().GetResult()
         $stderr = $stderrTask.GetAwaiter().GetResult()
@@ -993,7 +993,7 @@ function Start-BoundedExternalProcess(
     [int]$TimeoutSeconds
 ) {
     if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
-        throw "bounded executable missing: $Executable"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "bounded executable missing: $Executable" -ErrorAction Stop
     }
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $Executable
@@ -1035,14 +1035,14 @@ function Invoke-BoundedStorageObservation(
     }
     $run = Start-BoundedHarnessChild $arguments $storageObservationTimeoutSeconds
     if (-not $run.completed) {
-        throw "storage observation timeout operation=$Operation timeout=$storageObservationTimeoutSeconds"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "storage observation timeout operation=$Operation timeout=$storageObservationTimeoutSeconds" -ErrorAction Stop
     }
     if ($run.exit_code -ne 0 -or -not (Test-Path $resultPath -PathType Leaf)) {
-        throw "storage observation failed operation=$Operation exit=$($run.exit_code) stderr=$($run.stderr)"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "storage observation failed operation=$Operation exit=$($run.exit_code) stderr=$($run.stderr)" -ErrorAction Stop
     }
     $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -ErrorAction Stop
     if ([string]$result.status -ne "PASS" -or [string]$result.operation -ne $Operation) {
-        throw "storage observation result is malformed operation=$Operation"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "storage observation result is malformed operation=$Operation" -ErrorAction Stop
     }
     $result
 }
@@ -1050,33 +1050,33 @@ function Assert-TargetLetterAvailable {
     $observation = Invoke-BoundedStorageObservation "target_letter" "" 0 0
     $script:targetLetterPreflight = $observation
     if ([bool]$observation.occupied) {
-        throw "foreign volume occupies target letter"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "foreign volume occupies target letter" -ErrorAction Stop
     }
 }
 function Invoke-BoundedController([string[]]$Arguments) {
     $run = Start-BoundedExternalProcess $Controller $Arguments $controllerTimeoutSeconds
     if (-not $run.completed) {
-        throw "controller timeout seconds=$controllerTimeoutSeconds"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "controller timeout seconds=$controllerTimeoutSeconds" -ErrorAction Stop
     }
     if ($run.exit_code -ne 0) {
-        throw "controller failed exit=$($run.exit_code) stderr=$($run.stderr)"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "controller failed exit=$($run.exit_code) stderr=$($run.stderr)" -ErrorAction Stop
     }
     $run
 }
 function Get-ManifestStorageConfig([string]$ManifestPath) {
     if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
-        throw "manifest is missing: $ManifestPath"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "manifest is missing: $ManifestPath" -ErrorAction Stop
     }
     $root = Split-Path -Parent $ManifestPath
     $winsvcPath = Join-Path $root "winsvc.toml"
     if (-not (Test-Path -LiteralPath $winsvcPath -PathType Leaf)) {
-        throw "manifest winsvc config is missing"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "manifest winsvc config is missing" -ErrorAction Stop
     }
     $winsvc = ConvertFrom-RamSharedToml (Get-Content -LiteralPath $winsvcPath -Raw) `
         "terminal-winsvc"
     foreach ($key in @("win_drive.size_bytes", "win_drive.block_size")) {
         if (-not $winsvc.ContainsKey($key) -or [UInt64]$winsvc[$key] -eq 0) {
-            throw "terminal winsvc config is invalid key=$key"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "terminal winsvc config is invalid key=$key" -ErrorAction Stop
         }
     }
     [pscustomobject]@{
@@ -1111,7 +1111,7 @@ function Invoke-BoundedStorageProvider(
 ) {
     Assert-OnlineStorageBinding $OnlineEvidence ([string]$OnlineEvidence.serial) $Size
     if ([string]$OnlineEvidence.serial -notmatch '^[0-9A-Fa-f]{16}$') {
-        throw "current Online evidence is invalid before storage mutation"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "current Online evidence is invalid before storage mutation" -ErrorAction Stop
     }
     $resultPath = Join-Path $OutDir "$Cell-storage-provider.json"
     $journalPath = "$resultPath.journal.json"
@@ -1138,7 +1138,7 @@ function Invoke-BoundedStorageProvider(
             [UInt32]$result.logical_sector -ne $Sector -or
             [UInt32]$result.physical_sector -ne $Sector -or
             [string]$result.phase -ne "volume_published") {
-            throw "storage provider result did not bind current Online identity"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "storage provider result did not bind current Online identity" -ErrorAction Stop
         }
         return $result
     }
@@ -1176,12 +1176,12 @@ function Invoke-BoundedStorageProvider(
             $recovery = Start-BoundedHarnessChild $recoveryArguments `
                 $storageProviderTimeoutSeconds
             if (-not $recovery.completed -or $recovery.exit_code -ne 0) {
-                throw "storage_provider_timeout and recovery failed cell=$Cell"
+                Write-Error -ErrorId "StorageMatrixFailure" -Message "storage_provider_timeout and recovery failed cell=$Cell" -ErrorAction Stop
             }
         }
-        throw "storage_provider_timeout cell=$Cell timeout=$storageProviderTimeoutSeconds"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "storage_provider_timeout cell=$Cell timeout=$storageProviderTimeoutSeconds" -ErrorAction Stop
     }
-    throw "storage provider worker failed cell=$Cell exit=$($run.exit_code) stderr=$($run.stderr)"
+    Write-Error -ErrorId "StorageMatrixFailure" -Message "storage provider worker failed cell=$Cell exit=$($run.exit_code) stderr=$($run.stderr)" -ErrorAction Stop
 }
 function Get-NearestRank([double[]]$Values, [double]$Percentile) {
     if ($Values.Count -eq 0) { return 0 }
@@ -1237,7 +1237,7 @@ function Get-RepositoryContext {
             $SourceDirtyEntryCount -lt 0 -or
             ($SourceTreeState -eq "clean" -and $SourceDirtyEntryCount -ne 0) -or
             ($SourceTreeState -eq "dirty" -and $SourceDirtyEntryCount -eq 0)) {
-            throw "supplied repository context is inconsistent"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "supplied repository context is inconsistent" -ErrorAction Stop
         }
         return [ordered]@{
             root = $repoRoot
@@ -1248,15 +1248,15 @@ function Get-RepositoryContext {
         }
     }
     if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
-        throw "repository revision unavailable: supply SourceCommit/SourceTreeState"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "repository revision unavailable: supply SourceCommit/SourceTreeState" -ErrorAction Stop
     }
     $commit = @(& git.exe -C $repoRoot rev-parse HEAD 2>$null)
     if ($LASTEXITCODE -ne 0 -or $commit.Count -ne 1 -or
         $commit[0] -notmatch '^[0-9a-fA-F]{40}$') {
-        throw "repository revision unavailable"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "repository revision unavailable" -ErrorAction Stop
     }
     $status = @(& git.exe -C $repoRoot status --porcelain=v1 2>$null)
-    if ($LASTEXITCODE -ne 0) { throw "repository dirty state unavailable" }
+    if ($LASTEXITCODE -ne 0) { Write-Error -ErrorId "StorageMatrixFailure" -Message "repository dirty state unavailable" -ErrorAction Stop }
     [ordered]@{
         root = $repoRoot
         commit = [string]$commit[0]
@@ -1291,12 +1291,12 @@ function Get-HostContext {
         $probe = Start-BoundedExternalProcess $nvidiaSmi @(
             "--query-gpu=name,driver_version,memory.total,memory.used,memory.free",
             "--format=csv,noheader,nounits") 15
-        if (-not $probe.completed) { throw "GPU context collection timed out" }
+        if (-not $probe.completed) { Write-Error -ErrorId "StorageMatrixFailure" -Message "GPU context collection timed out" -ErrorAction Stop }
         $gpuCondition = @($probe.stdout -split "`r?`n" | Where-Object {
                 -not [string]::IsNullOrWhiteSpace($_)
             })
         if ($gpuCondition.Count -ne 1 -or $gpuCondition[0] -notmatch ',') {
-            throw "GPU context collection failed"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "GPU context collection failed" -ErrorAction Stop
         }
     }
     [ordered]@{
@@ -1346,7 +1346,7 @@ function Get-CurrentRunOnlineEvidence([DateTime]$StartedUtc, [UInt64]$ExpectedSi
         $service = Get-CimInstance Win32_Service -Filter "Name='RamSharedWinSvc'" `
             -ErrorAction Stop
         if ([string]$service.State -ne "Running" -or [uint32]$service.ProcessId -eq 0) {
-            throw "current winsvc run is not Running while waiting for Online evidence"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "current winsvc run is not Running while waiting for Online evidence" -ErrorAction Stop
         }
         $pid = [uint32]$service.ProcessId
         $runFiles = @(Get-ChildItem -LiteralPath $evidenceRoot `
@@ -1354,7 +1354,7 @@ function Get-CurrentRunOnlineEvidence([DateTime]$StartedUtc, [UInt64]$ExpectedSi
                     $_.LastWriteTimeUtc -ge $StartedUtc.AddSeconds(-2)
                 })
         if ($runFiles.Count -gt 1) {
-            throw "ambiguous current winsvc run evidence"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "ambiguous current winsvc run evidence" -ErrorAction Stop
         }
         if ($runFiles.Count -eq 1) {
             $rows = @(Get-Content -LiteralPath $runFiles[0].FullName -ErrorAction Stop |
@@ -1363,13 +1363,13 @@ function Get-CurrentRunOnlineEvidence([DateTime]$StartedUtc, [UInt64]$ExpectedSi
             if (@($rows | Where-Object {
                     [string]$_.phase -eq "FailedSafe" -and [uint32]$_.pid -eq $pid
                 }).Count -ne 0) {
-                throw "current winsvc run entered FailedSafe before Online"
+                Write-Error -ErrorId "StorageMatrixFailure" -Message "current winsvc run entered FailedSafe before Online" -ErrorAction Stop
             }
             $online = @($rows | Where-Object {
                     [string]$_.phase -eq "Online" -and [uint32]$_.pid -eq $pid
                 })
             if ($online.Count -gt 1) {
-                throw "current winsvc Online evidence is ambiguous"
+                Write-Error -ErrorId "StorageMatrixFailure" -Message "current winsvc Online evidence is ambiguous" -ErrorAction Stop
             }
             if ($online.Count -eq 1) {
                 $row = $online[0]
@@ -1379,7 +1379,7 @@ function Get-CurrentRunOnlineEvidence([DateTime]$StartedUtc, [UInt64]$ExpectedSi
                     (Normalize-RamSharedText ([string]$row.lun_product)) -ne "VRAMDISK" -or
                     (Normalize-RamSharedText ([string]$row.lun_serial)) -notmatch '^[0-9A-F]{16}$' -or
                     [UInt64]$row.lun_size_bytes -ne $ExpectedSize) {
-                    throw "current winsvc Online identity is invalid"
+                    Write-Error -ErrorId "StorageMatrixFailure" -Message "current winsvc Online identity is invalid" -ErrorAction Stop
                 }
                 return [pscustomobject]@{
                     run_id = [string]$row.run_id
@@ -1393,7 +1393,7 @@ function Get-CurrentRunOnlineEvidence([DateTime]$StartedUtc, [UInt64]$ExpectedSi
         }
         Start-Sleep -Milliseconds 250
     } while ((Get-Date) -lt $deadline)
-    throw "current winsvc run did not reach Online within 75 seconds"
+    Write-Error -ErrorId "StorageMatrixFailure" -Message "current winsvc run did not reach Online within 75 seconds" -ErrorAction Stop
 }
 function Normalize-PagefileEntry([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
@@ -1406,7 +1406,7 @@ function Get-NormalizedPagefilePreflight(
 ) {
     $letter = $TargetLetter.Trim().TrimEnd(':').ToUpperInvariant()
     if ($letter -notmatch '^[A-Z]$') {
-        throw "invalid product-volume pagefile target letter"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "invalid product-volume pagefile target letter" -ErrorAction Stop
     }
     $active = @($ActiveEntries | ForEach-Object {
             Normalize-PagefileEntry ([string]$_)
@@ -1432,12 +1432,12 @@ function Get-NormalizedPagefilePreflight(
 function Assert-ProductVolumePagefileEntries($Preflight) {
     if ($null -eq $Preflight -or
         [string]$Preflight.target_letter -notmatch '^[A-Z]$') {
-        throw "product-volume pagefile preflight is invalid"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "product-volume pagefile preflight is invalid" -ErrorAction Stop
     }
     if (@($Preflight.active_hits).Count -ne 0 -or
         @($Preflight.configured_hits).Count -ne 0 -or
         @($Preflight.union_hits).Count -ne 0) {
-        throw "product-volume pagefile refusal"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "product-volume pagefile refusal" -ErrorAction Stop
     }
     $Preflight
 }
@@ -1464,7 +1464,7 @@ function Get-ProductState {
     }
 }
 function Assert-FinalProductState($OnlineEvidence, [UInt32]$Sector) {
-    if ($null -eq $OnlineEvidence) { throw "final Online evidence is missing" }
+    if ($null -eq $OnlineEvidence) { Write-Error -ErrorId "StorageMatrixFailure" -Message "final Online evidence is missing" -ErrorAction Stop }
     $observation = Invoke-BoundedStorageObservation "final_active" `
         ([string]$OnlineEvidence.serial) ([UInt64]$OnlineEvidence.size) $Sector
     $winsvc = Get-Service RamSharedWinSvc -ErrorAction Stop
@@ -1473,7 +1473,7 @@ function Assert-FinalProductState($OnlineEvidence, [UInt32]$Sector) {
         $null -eq $observation.disk -or
         (Normalize-RamSharedText ([string]$observation.disk.serial)) -ne
             (Normalize-RamSharedText ([string]$OnlineEvidence.serial))) {
-        throw "final active state failed winsvc=$($winsvc.Status) broker=$($broker.Status)"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "final active state failed winsvc=$($winsvc.Status) broker=$($broker.Status)" -ErrorAction Stop
     }
     $observation
 }
@@ -1496,13 +1496,13 @@ function Assert-RequiredArtifactInventory([string]$Cell) {
     foreach ($relativePath in $expected) {
         $entry = @($inventory | Where-Object path -eq $relativePath)
         if ($entry.Count -ne 1) {
-            throw "missing required cell artifact cell=$Cell path=$relativePath"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "missing required cell artifact cell=$Cell path=$relativePath" -ErrorAction Stop
         }
         if ([UInt64]$entry[0].bytes -eq 0) {
-            throw "empty required cell artifact cell=$Cell path=$relativePath"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "empty required cell artifact cell=$Cell path=$relativePath" -ErrorAction Stop
         }
         if ([string]$entry[0].sha256 -notmatch '^[0-9A-F]{64}$') {
-            throw "invalid required cell artifact hash cell=$Cell path=$relativePath"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "invalid required cell artifact hash cell=$Cell path=$relativePath" -ErrorAction Stop
         }
     }
     $counterPath = Join-Path $OutDir "$Cell-counter-direct.jsonl"
@@ -1510,7 +1510,7 @@ function Assert-RequiredArtifactInventory([string]$Cell) {
             -not [string]::IsNullOrWhiteSpace($_)
         })
     if ($counterRows.Count -eq 0) {
-        throw "empty required cell artifact cell=$Cell path=$Cell-counter-direct.jsonl"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "empty required cell artifact cell=$Cell path=$Cell-counter-direct.jsonl" -ErrorAction Stop
     }
     foreach ($row in $counterRows) {
         $null = $row | ConvertFrom-Json -ErrorAction Stop
@@ -1543,7 +1543,7 @@ function Write-CellEvidenceManifest(
 function Assert-NoDiskRetryEvents([string]$Cell, [object[]]$Events) {
     $count = @($Events).Count
     if ($count -ne 0) {
-        throw "disk retry events detected cell=$Cell EventId=153 count=$count"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "disk retry events detected cell=$Cell EventId=153 count=$count" -ErrorAction Stop
     }
 }
 function Get-CellDiskRetryEvents(
@@ -1552,7 +1552,7 @@ function Get-CellDiskRetryEvents(
     [DateTime]$CellEndUtc
 ) {
     if ($CellEndUtc -lt $CellStartUtc) {
-        throw "invalid Event 153 cell interval cell=$Cell"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "invalid Event 153 cell interval cell=$Cell" -ErrorAction Stop
     }
     $events = @()
     try {
@@ -1565,7 +1565,7 @@ function Get-CellDiskRetryEvents(
             } -ErrorAction Stop)
     } catch {
         if ($_.FullyQualifiedErrorId -notmatch '^NoMatchingEventsFound') {
-            throw "Disk Event 153 query failed cell=$Cell error=$($_.Exception.Message)"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "Disk Event 153 query failed cell=$Cell error=$($_.Exception.Message)" -ErrorAction Stop
         }
     }
     $rows = @($events | ForEach-Object {
@@ -1619,7 +1619,7 @@ function Invoke-Workload(
                 while (-not (Test-Path $start) -and (Get-Date) -lt $deadline) {
                     Start-Sleep -Milliseconds 10
                 }
-                if (-not (Test-Path $start)) { throw "worker start gate timeout" }
+                if (-not (Test-Path $start)) { Write-Error -ErrorId "StorageMatrixFailure" -Message "worker start gate timeout" -ErrorAction Stop }
                 $latencies = [Collections.Generic.List[double]]::new()
                 $hashes = [Collections.Generic.List[string]]::new()
                 $bytes = [UInt64]0
@@ -1646,7 +1646,7 @@ function Invoke-Workload(
                                 $op = [Diagnostics.Stopwatch]::StartNew()
                                 $got = $stream.Read($large, 0, $large.Length)
                                 $op.Stop(); $latencies.Add($op.Elapsed.TotalMilliseconds)
-                                if ($got -ne $large.Length) { throw "sequential short read" }
+                                if ($got -ne $large.Length) { Write-Error -ErrorId "StorageMatrixFailure" -Message "sequential short read" -ErrorAction Stop }
                                 $bytes += $large.Length
                             }
                         }
@@ -1688,13 +1688,13 @@ function Invoke-Workload(
                                 $read = New-Object byte[] $probe.Length
                                 $got = $stream.Read($read, 0, $read.Length)
                                 $op.Stop(); $latencies.Add($op.Elapsed.TotalMilliseconds)
-                                if ($got -ne $read.Length) { throw "integrity short read" }
+                                if ($got -ne $read.Length) { Write-Error -ErrorId "StorageMatrixFailure" -Message "integrity short read" -ErrorAction Stop }
                                 $sha = [Security.Cryptography.SHA256]::Create()
                                 try {
                                     $a = [BitConverter]::ToString($sha.ComputeHash($probe))
                                     $b = [BitConverter]::ToString($sha.ComputeHash($read))
                                 } finally { $sha.Dispose() }
-                                if ($a -ne $b) { throw "integrity mismatch" }
+                                if ($a -ne $b) { Write-Error -ErrorId "StorageMatrixFailure" -Message "integrity mismatch" -ErrorAction Stop }
                                 $hashes.Add($a); $bytes += [UInt64]($probe.Length * 2)
                             }
                         }
@@ -1717,15 +1717,15 @@ function Invoke-Workload(
             Start-Sleep -Milliseconds 20
         }
         if (@(Get-ChildItem $gateRoot -Filter "ready-*").Count -ne $QueueDepth) {
-            throw "queue-depth workers did not become ready"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "queue-depth workers did not become ready" -ErrorAction Stop
         }
         $sw = [Diagnostics.Stopwatch]::StartNew()
         New-Item -ItemType File -Force (Join-Path $gateRoot "start") | Out-Null
-        if (-not (Wait-Job $jobs -Timeout 120)) { throw "queued workload timeout" }
+        if (-not (Wait-Job $jobs -Timeout 120)) { Write-Error -ErrorId "StorageMatrixFailure" -Message "queued workload timeout" -ErrorAction Stop }
         $workerRows = @($jobs | Receive-Job -ErrorAction Stop)
         $sw.Stop()
         if ($workerRows.Count -ne $QueueDepth) {
-            throw "effective queue depth mismatch expected=$QueueDepth observed=$($workerRows.Count)"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "effective queue depth mismatch expected=$QueueDepth observed=$($workerRows.Count)" -ErrorAction Stop
         }
         $latencies = [double[]]@($workerRows | ForEach-Object { $_.latencies_ms })
         $bytes = [UInt64](($workerRows | Measure-Object bytes -Sum).Sum)
@@ -1753,7 +1753,7 @@ function Invoke-WorkloadWorkerMode {
     if ($WorkerResult -eq "" -or $WorkerPath -eq "" -or
         $WorkerWorkload -eq "" -or $WorkerRun -le 0 -or
         $WorkerQueueDepth -le 0 -or $WorkerAvailableBytes -eq 0) {
-        throw "invalid workload worker arguments"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "invalid workload worker arguments" -ErrorAction Stop
     }
     New-Item -ItemType Directory -Force (Split-Path $WorkerResult -Parent) | Out-Null
     try {
@@ -1796,14 +1796,14 @@ function Invoke-BoundedWorkload(
     )
     $bounded = Start-BoundedHarnessChild $arguments $workloadTimeoutSeconds
     if (-not $bounded.completed) {
-        throw "workload timeout kind=$Kind run=$Run process_tree_terminated=$($bounded.process_tree_terminated)"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "workload timeout kind=$Kind run=$Run process_tree_terminated=$($bounded.process_tree_terminated)" -ErrorAction Stop
     }
     if ($bounded.exit_code -ne 0 -or -not (Test-Path $resultPath -PathType Leaf)) {
-        throw "workload child failed kind=$Kind run=$Run exit=$($bounded.exit_code) stderr=$($bounded.stderr)"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "workload child failed kind=$Kind run=$Run exit=$($bounded.exit_code) stderr=$($bounded.stderr)" -ErrorAction Stop
     }
     $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -ErrorAction Stop
     if ([string]$result.status -ne "PASS" -or $null -eq $result.row) {
-        throw "workload child result is malformed kind=$Kind run=$Run"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "workload child result is malformed kind=$Kind run=$Run" -ErrorAction Stop
     }
     $result.row
 }
@@ -1904,7 +1904,7 @@ function Invoke-ManufacturedGuardCase([string]$Case) {
                         run_id = "run-1-2-3"; serial = "0123456789ABCDEF"; size = 64MB
                     }) "FEDCBA9876543210" 64MB
             }
-            default { throw "unsupported manufactured guard case=$Case" }
+            default { Write-Error -ErrorId "StorageMatrixFailure" -Message "unsupported manufactured guard case=$Case" -ErrorAction Stop }
         }
         [pscustomobject]@{ executed = $true; accepted = $true; error = $null }
     } catch {
@@ -1973,7 +1973,7 @@ if ($EvidenceSelfTestCase) {
             "-OutDir", (Quote-ProcessArgument $OutDir)
         ) 1
         if ($timeoutProbe.completed) {
-            throw "storage provider timeout self-test did not terminate child"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "storage provider timeout self-test did not terminate child" -ErrorAction Stop
         }
     }
     if ($EvidenceSelfTestCase -eq "counter_timeout") {
@@ -1982,7 +1982,7 @@ if ($EvidenceSelfTestCase) {
             "-OutDir", (Quote-ProcessArgument $OutDir)
         ) 1
         if ($counterTimeoutProbe.completed) {
-            throw "counter probe timeout self-test did not terminate child"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "counter probe timeout self-test did not terminate child" -ErrorAction Stop
         }
     }
     if ($EvidenceSelfTestCase -in @("recovery_phase", "recovery_volume",
@@ -1992,7 +1992,7 @@ if ($EvidenceSelfTestCase) {
             "pagefile_configured")) {
         $guardResult = Invoke-ManufacturedGuardCase $EvidenceSelfTestCase
         if (-not $guardResult.executed -or $guardResult.accepted) {
-            throw "manufactured guard case was accepted case=$EvidenceSelfTestCase"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "manufactured guard case was accepted case=$EvidenceSelfTestCase" -ErrorAction Stop
         }
     }
     if ($EvidenceSelfTestCase -eq "pipe_flood") {
@@ -2004,7 +2004,7 @@ if ($EvidenceSelfTestCase) {
             -not $pipeFloodProbe.stdout_drained -or -not $pipeFloodProbe.stderr_drained -or
             $pipeFloodProbe.stdout_bytes -lt 131072 -or
             $pipeFloodProbe.stderr_bytes -lt 131072) {
-            throw "redirected pipe flood was not drained"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "redirected pipe flood was not drained" -ErrorAction Stop
         }
     }
     $artifactInventoryComplete = $true
@@ -2022,7 +2022,7 @@ if ($EvidenceSelfTestCase) {
         try {
             $null = Assert-RequiredArtifactInventory "manufactured"
             if ($EvidenceSelfTestCase -eq "missing_artifact") {
-                throw "missing required cell artifact was accepted"
+                Write-Error -ErrorId "StorageMatrixFailure" -Message "missing required cell artifact was accepted" -ErrorAction Stop
             }
         } catch {
             if ($EvidenceSelfTestCase -ne "missing_artifact" -or
@@ -2048,7 +2048,7 @@ if ($EvidenceSelfTestCase) {
         $event153Refused = $true
     }
     if (($EvidenceSelfTestCase -eq "event_153") -ne $event153Refused) {
-        throw "physical_matrix_rejects_event_153 manufactured assertion failed"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "physical_matrix_rejects_event_153 manufactured assertion failed" -ErrorAction Stop
     }
     $testName = switch ($EvidenceSelfTestCase) {
         "pass" { "context_manifest_complete" }
@@ -2164,7 +2164,7 @@ if ($SelfTestWorkload) {
                 $_.verdict -ne "PASS" -or $_.bytes -le 0 -or
                 $_.latency_p99_ms -lt $_.latency_p50_ms
             }).Count -ne 0) {
-        throw "workload self-test failed"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "workload self-test failed" -ErrorAction Stop
     }
     $regressionProbes = @(
         Get-RegressionVerdict $null $null 100 1
@@ -2174,7 +2174,7 @@ if ($SelfTestWorkload) {
         Get-RegressionVerdict 100 1 100 2.01
     )
     if (($regressionProbes -join ",") -ne "BASELINE,PASS,YELLOW,RED,RED") {
-        throw "regression threshold self-test failed: $($regressionProbes -join ',')"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "regression threshold self-test failed: $($regressionProbes -join ',')" -ErrorAction Stop
     }
     Write-Json $selfRows (Join-Path $OutDir "workload-self-test.json")
     Write-Host "WORKLOAD_SELF_TEST=PASS OUT_DIR=$OutDir"
@@ -2185,12 +2185,12 @@ if ($PreparePackages) {
     Write-Host "PACKAGES_PREPARED=$PackageRoot"
 }
 if (-not $Run) { Write-Host "PLAN_ONLY=1 OUT_DIR=$OutDir"; exit 0 }
-if (-not $ApprovePhysicalHost) { throw "-ApprovePhysicalHost is required" }
+if (-not $ApprovePhysicalHost) { Write-Error -ErrorId "StorageMatrixFailure" -Message "-ApprovePhysicalHost is required" -ErrorAction Stop }
 Assert-Admin
-if (-not (Test-Path $RollbackManifest -PathType Leaf)) { throw "rollback manifest missing" }
-if (-not (Test-Path $Controller -PathType Leaf)) { throw "controller missing" }
+if (-not (Test-Path $RollbackManifest -PathType Leaf)) { Write-Error -ErrorId "StorageMatrixFailure" -Message "rollback manifest missing" -ErrorAction Stop }
+if (-not (Test-Path $Controller -PathType Leaf)) { Write-Error -ErrorId "StorageMatrixFailure" -Message "controller missing" -ErrorAction Stop }
 if (-not (Test-Path $CounterProbeScript -PathType Leaf)) {
-    throw "counter/direct-I/O probe missing"
+    Write-Error -ErrorId "StorageMatrixFailure" -Message "counter/direct-I/O probe missing" -ErrorAction Stop
 }
 if (-not (Test-Path (Join-Path $PackageRoot "minimum\product-manifest.json"))) {
     New-MatrixPackages
@@ -2210,7 +2210,7 @@ $baselineQualified = $false
 $baselineSupplied = -not [string]::IsNullOrWhiteSpace($BaselineSummary)
 if ($baselineSupplied) {
     if (-not (Test-Path $BaselineSummary -PathType Leaf)) {
-        throw "baseline summary missing"
+        Write-Error -ErrorId "StorageMatrixFailure" -Message "baseline summary missing" -ErrorAction Stop
     }
     $baselineDocument = Get-Content $BaselineSummary -Raw | ConvertFrom-Json -ErrorAction Stop
     $baseline = Assert-BaselineDocument $baselineDocument
@@ -2241,12 +2241,12 @@ try {
         Assert-GpuReserve $size
         $manifestPath = Join-Path (Join-Path $PackageRoot $name) "product-manifest.json"
         if (-not (Test-Path $manifestPath -PathType Leaf)) {
-            throw "matrix manifest missing cell=$name path=$manifestPath"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "matrix manifest missing cell=$name path=$manifestPath" -ErrorAction Stop
         }
         $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
         $effectiveConfig = Get-ManifestStorageConfig $manifestPath
         if ($effectiveConfig.size -ne $size -or $effectiveConfig.sector -ne $sector) {
-            throw "matrix manifest effective config mismatch cell=$name"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "matrix manifest effective config mismatch cell=$name" -ErrorAction Stop
         }
         $fingerprint = Get-CellFingerprint $hostContext $name $size $sector $qd $maxIo
         $currentContextPath = Join-Path $OutDir "$name-context.json"
@@ -2341,10 +2341,10 @@ try {
             $counterRun.stdout + [Environment]::NewLine + $counterRun.stderr,
             [Text.UTF8Encoding]::new($false))
         if (-not $counterRun.completed) {
-            throw "counter probe timeout cell=$name seconds=$counterProbeTimeoutSeconds child_terminated=true"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "counter probe timeout cell=$name seconds=$counterProbeTimeoutSeconds child_terminated=true" -ErrorAction Stop
         }
         if ($counterRun.exit_code -ne 0) {
-            throw "counter/direct-I/O probe failed cell=$name exit=$($counterRun.exit_code)"
+            Write-Error -ErrorId "StorageMatrixFailure" -Message "counter/direct-I/O probe failed cell=$name exit=$($counterRun.exit_code)" -ErrorAction Stop
         }
         Assert-CounterJsonlSemantics $counterJsonl ([string]$storage.serial) `
             ([UInt64]$storage.size) | Out-Null
