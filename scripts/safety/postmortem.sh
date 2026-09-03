@@ -99,7 +99,13 @@ fi
 # the pipefail+grep-q+SIGPIPE gotcha that caused false "no crash" reports).
 dump_boot() { # $1 = boot index -> arquivo em $TMPDIR_PM
   local idx="$1" f="$TMPDIR_PM/boot${1}.log"
-  [ -f "$f" ] || journalctl -b "$idx" --no-pager >"$f" 2>/dev/null
+  if [ ! -f "$f" ]; then
+    if ! command -v journalctl >/dev/null 2>&1; then
+      echo "(journalctl indisponivel no sistema)" >"$f"
+    else
+      journalctl -b "$idx" --no-pager >"$f" 2>/dev/null || true
+    fi
+  fi
   echo "$f"
 }
 
@@ -129,8 +135,12 @@ case "${1:-}" in
   * ) BOOT_INDEX="$1" ;;
 esac
 
-BOOT_ID="$(journalctl -b "$BOOT_INDEX" --no-pager -o json -n 1 2>/dev/null \
-            | grep -o '"_BOOT_ID":"[a-f0-9]*"' | head -1 | cut -d'"' -f4)"
+if command -v journalctl >/dev/null 2>&1; then
+  BOOT_ID="$(journalctl -b "$BOOT_INDEX" --no-pager -o json -n 1 2>/dev/null \
+              | grep -o '"_BOOT_ID":"[a-f0-9]*"' | head -1 | cut -d'"' -f4)"
+else
+  BOOT_ID=""
+fi
 [ -z "$BOOT_ID" ] && BOOT_ID="unknown-$(date +%s)"
 
 if [ "$AUTO" = "1" ]; then
@@ -247,7 +257,12 @@ REPORT="$FORENSICS_DIR/postmortem-${TS}-boot${BOOT_INDEX}.md"
   echo "# nvidia-smi:"; "$NVSMI" --query-gpu=memory.used,memory.free,memory.total --format=csv 2>&1 || echo "(nvidia-smi indisponivel)"
   echo; echo "# free -h:"; free -h 2>&1
   echo; echo "# /proc/swaps:"; cat /proc/swaps 2>&1
-  echo; echo "# dmesg (ultimas 20):"; (sudo -n dmesg 2>/dev/null || dmesg 2>/dev/null || echo "(dmesg precisa de root)") | tail -20
+  echo; echo "# dmesg (ultimas 20):"
+  if command -v dmesg >/dev/null 2>&1; then
+    (sudo -n dmesg 2>/dev/null || dmesg 2>/dev/null || echo "(dmesg precisa de root)") | tail -20
+  else
+    echo "(dmesg indisponivel no sistema)"
+  fi
   echo '```'
   echo
 
@@ -267,8 +282,19 @@ REPORT="$FORENSICS_DIR/postmortem-${TS}-boot${BOOT_INDEX}.md"
 
   echo "## 8. Crash dumps do WSL (se houver)"
   echo '```'
-  ls -la /var/crash/ 2>/dev/null | tail -10 || echo "(sem /var/crash)"
-  ls -la /mnt/c/Users/*/AppData/Local/Temp/*.dmp 2>/dev/null | tail -5 || echo "(sem .dmp em Temp)"
+  if [ -d "/var/crash" ] && [ -r "/var/crash" ]; then
+    ls -la /var/crash/ 2>/dev/null | tail -10 || echo "(sem arquivos em /var/crash)"
+  else
+    echo "(diretorio /var/crash indisponivel ou sem permissao)"
+  fi
+  shopt -s nullglob
+  dmp_files=(/mnt/c/Users/*/AppData/Local/Temp/*.dmp)
+  shopt -u nullglob
+  if [ ${#dmp_files[@]} -gt 0 ]; then
+    ls -la "${dmp_files[@]}" 2>/dev/null | tail -5 || echo "(erro acessando .dmp em Temp)"
+  else
+    echo "(sem .dmp em Temp)"
+  fi
   echo '```'
 } > "$REPORT" 2>&1
 
