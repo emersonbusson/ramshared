@@ -18,7 +18,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 if (-not (Test-Path $RepoRoot -PathType Container)) {
-    throw [System.IO.DirectoryNotFoundException]::new("Repository root directory not found: $RepoRoot")
+    Write-Error -ErrorId "RepoRootNotFound" -Message "Repository root directory not found: $RepoRoot" -ErrorAction Stop
 }
 
 Set-Location $RepoRoot
@@ -29,12 +29,11 @@ Start-Transcript -Path $log -Force
 function Find-VcVars {
     $p = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
     if (-not (Test-Path $p)) {
-        throw [System.IO.FileNotFoundException]::new("vcvars64.bat not found: $p")
+        Write-Error -ErrorId "VcVarsNotFound" -Message "vcvars64.bat not found: $p" -ErrorAction Stop
     }
 
-    $msbuild = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\MSBuild\Current\Bin\MSBuild.exe"
-    if (-not (Test-Path $msbuild)) {
-        throw [System.IO.FileNotFoundException]::new("MSBuild.exe not found: $msbuild")
+    if (-not [bool](Get-Command "MSBuild.exe" -ErrorAction SilentlyContinue)) {
+        Write-Error -ErrorId "MSBuildNotFound" -Message "MSBuild.exe not found in PATH" -ErrorAction Stop
     }
 
     return $p
@@ -46,8 +45,7 @@ function Invoke-CmdBat {
     Write-Output "CMD> $Extra"
     & cmd.exe /c $cmd
     if ($LASTEXITCODE -ne 0) {
-        $host.SetShouldExit(1)
-        throw [System.Exception]::new("command failed exit=$LASTEXITCODE : $Extra")
+        Write-Error -ErrorId "CommandFailed" -Message "command failed exit=$LASTEXITCODE : $Extra" -ErrorAction Stop
     }
 }
 
@@ -62,19 +60,19 @@ $libUcrt = "$kit\Lib\$KitVersion\ucrt\x64"
 
 foreach ($incPath in @($incKm, $incShared, $incKmCrt)) {
     if (-not (Test-Path $incPath)) {
-        throw [System.IO.DirectoryNotFoundException]::new("WDK include path missing: $incPath")
+        Write-Error -ErrorId "WdkIncludeMissing" -Message "WDK include path missing: $incPath" -ErrorAction Stop
     }
 }
 
 if (-not (Test-Path $incUm)) {
-    throw [System.IO.DirectoryNotFoundException]::new("Target platform SDK include path missing: $incUm")
+    Write-Error -ErrorId "TargetPlatformSdkMissing" -Message "Target platform SDK include path missing: $incUm" -ErrorAction Stop
 }
 
 if (-not (Test-Path "$incKm\storport.h")) {
-    throw [System.IO.FileNotFoundException]::new("storport.h missing under $incKm")
+    Write-Error -ErrorId "StorportHeaderMissing" -Message "storport.h missing under $incKm" -ErrorAction Stop
 }
 if (-not (Test-Path "$libKm\storport.lib")) {
-    throw [System.IO.FileNotFoundException]::new("storport.lib missing under $libKm")
+    Write-Error -ErrorId "StorportLibMissing" -Message "storport.lib missing under $libKm" -ErrorAction Stop
 }
 
 $cflags = @(
