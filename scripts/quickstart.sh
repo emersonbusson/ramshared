@@ -17,26 +17,32 @@ if ! command -v cargo >/dev/null 2>&1 || ! command -v rustc >/dev/null 2>&1; the
   echo "  Rust is not installed (need cargo + rustc)."
   echo "  Install from: https://rustup.rs/"
   echo ""
-  exit 1
+  exit 69
 fi
-
-echo "  Using: $(rustc --version)"
-echo ""
-echo "  Building (release)… this can take a few minutes the first time."
-echo ""
-
-cargo build -p ramshared-cli -p ramshared-wsl2d --release
 
 CLI="$ROOT/target/release/ramshared"
 DAEMON="$ROOT/target/release/ramsharedd"
 
-if [[ ! -x "$CLI" || ! -x "$DAEMON" ]]; then
-  echo "  Build finished but binaries are missing. Please open an issue."
-  exit 1
-fi
+if [[ -x "$CLI" && -x "$DAEMON" ]]; then
+  echo "  RamShared is already installed."
+  echo "  Upgrade path: Run 'git pull' to fetch latest changes, then 'cargo build --release' to upgrade."
+  echo ""
+else
+  echo "  Using: $(rustc --version)"
+  echo ""
+  echo "  Building (release)… this can take a few minutes the first time."
+  echo ""
 
-echo ""
-echo "  Build OK."
+  cargo build -p ramshared-cli -p ramshared-wsl2d --release
+
+  if [[ ! -x "$CLI" || ! -x "$DAEMON" ]]; then
+    echo "  Build finished but binaries are missing. Please open an issue."
+    exit 70
+  fi
+
+  echo ""
+  echo "  Build OK."
+fi
 echo ""
 echo "  Next steps (needs Linux/WSL2 + NVIDIA GPU + sudo):"
 echo ""
