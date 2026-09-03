@@ -14,6 +14,8 @@ param(
     [string]$Letter = "R",
     [ValidateRange(15, 30)]
     [int]$GuestShutdownDelaySeconds = 15,
+    [ValidateRange(10, 300)]
+    [int]$PhaseTimeoutSeconds = 60,
     [switch]$BrokerLossOnline,
     [switch]$RawStopOnly,
     [switch]$ManufacturedRefusalThenStop,
@@ -120,7 +122,7 @@ try {
         -ScriptBlock {
         param($expectedSize, $letter, $brokerLossOnline, $rawStopOnly,
             $manufacturedRefusalThenStop, $queueDepth,
-            $manufacturedWorkloadFailure)
+            $manufacturedWorkloadFailure, $phaseTimeoutSeconds)
         $ErrorActionPreference = "Stop"
         $rows = [Collections.Generic.List[object]]::new()
         $formatRecoveryPath =
@@ -376,7 +378,8 @@ try {
                     -Value ([string[]]$snapshot) -Type MultiString
             }
             try {
-                if (-not (Wait-Job $stopJob -Timeout 30)) {
+                if (-not (Wait-Job $stopJob -Timeout $phaseTimeoutSeconds)) {
+                    Stop-Job $stopJob -ErrorAction SilentlyContinue
                     throw "same STOP did not complete after pagefile restoration"
                 }
                 $stopResult = Receive-Job $stopJob -ErrorAction Stop
@@ -432,7 +435,7 @@ try {
                             -Confirm:$false -Force | Out-Null
                 } -ArgumentList $disk.Number, $letter
                 try {
-                    if (-not (Wait-Job $formatJob -Timeout 60)) {
+                    if (-not (Wait-Job $formatJob -Timeout $phaseTimeoutSeconds)) {
                         Stop-Job $formatJob -ErrorAction SilentlyContinue
                         $recoveryJob = Start-Job -ScriptBlock {
                             param($diskNumber, $serial, $size, $driveLetter,
@@ -500,9 +503,9 @@ try {
                             $expectedSize, $letter, $formatRecoveryPath,
                             $formatBeganRaw
                         try {
-                            if (-not (Wait-Job $recoveryJob -Timeout 60)) {
+                            if (-not (Wait-Job $recoveryJob -Timeout $phaseTimeoutSeconds)) {
                                 Stop-Job $recoveryJob -ErrorAction SilentlyContinue
-                                throw "exact format recovery exceeded 60 seconds"
+                                throw "exact format recovery exceeded budget"
                             }
                             Receive-Job $recoveryJob -ErrorAction Stop | Out-Null
                         }
@@ -657,7 +660,8 @@ try {
                 }).Count
         }
         try {
-            if (-not (Wait-Job $residueJob -Timeout 10)) {
+            if (-not (Wait-Job $residueJob -Timeout $phaseTimeoutSeconds)) {
+                Stop-Job $residueJob -ErrorAction SilentlyContinue
                 throw "Win32_DiskDrive zero-residue query timed out"
             }
             $remaining = [int](Receive-Job $residueJob -ErrorAction Stop)
@@ -686,7 +690,7 @@ try {
     } -ArgumentList @(
         $ExpectedSizeBytes, $Letter, ([bool]$BrokerLossOnline),
         ([bool]$RawStopOnly), ([bool]$ManufacturedRefusalThenStop), $QueueDepth,
-        ([bool]$ManufacturedWorkloadFailure))
+        ([bool]$ManufacturedWorkloadFailure), $PhaseTimeoutSeconds)
 
     $results | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $hostRun "results.json")
     $results.rows
