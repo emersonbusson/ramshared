@@ -21,15 +21,34 @@
 #>
 [CmdletBinding()]
 param(
+    [ValidateNotNullOrEmpty()]
+    [ValidatePattern('^[a-zA-Z]$')]
     [string]$PagefileDrive = "D",
+
+    [ValidateRange(0, 3600)]
     [int]$PostKillWaitSec = 20,
+
+    [ValidateNotNullOrEmpty()]
     [string]$ArtifactDir = "C:\ramshared\artifacts\b2-lab",
+
     [switch]$RestartBackend,
+
+    [ValidateNotNullOrEmpty()]
     [string]$BackendPath = "C:\ramshared\bin\WinDriveBackend.exe",
+
+    [ValidateRange(1048576, 1099511627776)]
     [UInt64]$BackendSize = 67108864
 )
 
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = "Stop"
+
+if (-not (Test-Path "${PagefileDrive}:" -ErrorAction SilentlyContinue)) {
+    throw [System.IO.DriveNotFoundException]::new("Drive ${PagefileDrive}: not found.")
+}
+if ($RestartBackend -and -not (Test-Path $BackendPath -ErrorAction SilentlyContinue)) {
+    throw [System.IO.FileNotFoundException]::new("BackendPath not found: $BackendPath")
+}
+
 $drive = $PagefileDrive.TrimEnd(':')
 New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
 
@@ -58,6 +77,8 @@ function L([string]$s) { $script:log += $s; Write-Host $s }
 L "=== B2 LAB DRILL $(Get-Date -Format o) ==="
 L "MODEL=$model"
 L "DRIVE=${drive}:"
+
+try {
 
 $pf = Get-CimInstance Win32_PageFileUsage -EA SilentlyContinue |
     Where-Object { $_.Name -match "^${drive}:" }
@@ -91,8 +112,18 @@ $smokePath = "${drive}:\b2-pre.txt"
 try {
     "alive-$(Get-Date -Format o)" | Set-Content $smokePath -EA Stop
     L "PRE_WRITE=OK"
+} catch [System.UnauthorizedAccessException], [System.Security.SecurityException] {
+    L "PRE_WRITE_FAIL=PermissionError: $($_.Exception.Message)"
+    throw [System.UnauthorizedAccessException]::new("PermissionError: $($_.Exception.Message)", $_.Exception)
+} catch [System.TimeoutException] {
+    L "PRE_WRITE_FAIL=TimeoutError: $($_.Exception.Message)"
+    throw [System.TimeoutException]::new("TimeoutError: $($_.Exception.Message)", $_.Exception)
+} catch [System.Net.WebException], [System.Net.Sockets.SocketException] {
+    L "PRE_WRITE_FAIL=NetworkError: $($_.Exception.Message)"
+    throw [System.Net.WebException]::new("NetworkError: $($_.Exception.Message)", $_.Exception)
 } catch {
     L "PRE_WRITE_FAIL=$($_.Exception.Message)"
+    throw [System.IO.IOException]::new("IOError: $($_.Exception.Message)", $_.Exception)
 }
 
 # --- B2 kill ---
@@ -110,6 +141,12 @@ $job = Start-Job -ScriptBlock {
     try {
         Get-Content $p -Raw -EA Stop | Out-Null
         "READ_OK"
+    } catch [System.UnauthorizedAccessException], [System.Security.SecurityException] {
+        "READ_FAIL_PermissionError:$($_.Exception.Message)"
+    } catch [System.TimeoutException] {
+        "READ_FAIL_TimeoutError:$($_.Exception.Message)"
+    } catch [System.Net.WebException], [System.Net.Sockets.SocketException] {
+        "READ_FAIL_NetworkError:$($_.Exception.Message)"
     } catch {
         "READ_FAIL:$($_.Exception.Message)"
     }
@@ -159,6 +196,16 @@ if ($RestartBackend -and (Test-Path $BackendPath)) {
     Start-Sleep 8
     L "BACKEND_RESTARTED=$([bool](Get-Process WinDriveBackend -EA SilentlyContinue))"
     L "BE_OUT=$((Get-Content C:\ramshared\bin\backend.out -Raw -EA SilentlyContinue) -replace '\s+',' ')"
+}
+
+} catch [System.UnauthorizedAccessException], [System.Security.SecurityException] {
+    throw [System.UnauthorizedAccessException]::new("PermissionError: $($_.Exception.Message)", $_.Exception)
+} catch [System.TimeoutException] {
+    throw [System.TimeoutException]::new("TimeoutError: $($_.Exception.Message)", $_.Exception)
+} catch [System.Net.WebException], [System.Net.Sockets.SocketException] {
+    throw [System.Net.WebException]::new("NetworkError: $($_.Exception.Message)", $_.Exception)
+} catch {
+    throw [System.Exception]::new("LabDrillError: $($_.Exception.Message)", $_.Exception)
 }
 
 # Verdict
