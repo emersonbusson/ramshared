@@ -175,6 +175,14 @@ if [[ -e $marker ]]; then
   finish_stop
 fi
 
+command -v modprobe >/dev/null || refuse MODPROBE_UNAVAILABLE
+modprobe zram 2>/dev/null || refuse ZRAM_MODULE_UNAVAILABLE
+shopt -s nullglob
+zram_devs=(/sys/block/zram*)
+shopt -u nullglob
+[[ ${#zram_devs[@]} -gt 0 ]] || refuse ZRAM_DEVICE_UNAVAILABLE
+strict_managed_swaps_absent || refuse SWAP_STATE_DIRTY
+
 write_marker starting
 if ! RAMSHARED_NBD_LIFECYCLE_APPROVAL="activate:$version" "$up" --execute; then
   write_marker startup_failed
