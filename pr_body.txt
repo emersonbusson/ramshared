@@ -1,0 +1,22 @@
+## Resumo
+Clamps benchmark thread counts to logical processor limits and properly enforces timeout bounds.
+
+## Commits
+| Commit | O que fez | Por que fez | Detalhes |
+|---|---|---|---|
+| fix(windows): correctly clamp thread counts and enforce timeout bounds | Removed `[Math]::Max` from timeout calculation and wrapped thread counts with `[Math]::Min`. | To prevent silent clamping from bypassing fail-fast validation, and to respect single-threaded baselines. | Modifies Invoke-NbdBenchmarkMatrix.ps1 to enforce timeout constraints strictly via guard clauses and clamps threads using `[Math]::Min([int]$threads, [Environment]::ProcessorCount)`. |
+
+## Issue
+OpsInfra-100
+
+## Responsavel
+Jules
+
+## Labels
+type:scripts, type:security
+
+## Validacao
+PSScriptAnalyzer execution documented as unavailable via local echo.
+
+## Rollback trigger
+Revert if benchmark executions fail to initialize due to thread calculation errors or incorrectly trigger false-positive timeout rejections.

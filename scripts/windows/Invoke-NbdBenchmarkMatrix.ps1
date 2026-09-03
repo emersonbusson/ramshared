@@ -365,7 +365,7 @@ function Get-CellTimeoutBudget {
     $cellOuterTimeoutMaxSec = 3900
     $sampleTimeoutMaxSec = 600
     $derivedOuterTimeoutSec = 3 * ($sampleTimeoutSec + $integrityFinalizationTimeoutSec) + $setupCleanupTimeoutSec
-    $cellOuterTimeoutSec = [Math]::Max($cellOuterTimeoutMinSec, $derivedOuterTimeoutSec)
+    $cellOuterTimeoutSec = $derivedOuterTimeoutSec
     if ($sampleTimeoutSec -lt 1 -or $sampleTimeoutSec -gt $sampleTimeoutMaxSec -or
         $cellOuterTimeoutSec -lt $cellOuterTimeoutMinSec -or $cellOuterTimeoutSec -gt $cellOuterTimeoutMaxSec) {
         throw "cell_timeout_budget_invalid"
@@ -463,7 +463,7 @@ function New-Plan {
                     pattern = "shake256-v1"
                     measurement = "allocation_to_hold_ms"
                     allocation_chunk_bytes = 67108864
-                    worker_threads = 1
+                    worker_threads = [Math]::Min(1, [Environment]::ProcessorCount)
                     workload = "anonymous_memory_sequential_write"
                     allocated_mib = $tier + 2560
                     memory_high_mib = 1200
@@ -1695,7 +1695,7 @@ function Write-PublicPairEvidence {
             condition = [string]$nbdContext.condition
             pattern = [string]$nbdContext.workload.pattern
             allocation_chunk_bytes = [int]$nbdContext.workload.allocation_chunk_bytes
-            worker_threads = [int]$nbdContext.workload.worker_threads
+            worker_threads = [Math]::Min([int]$nbdContext.workload.worker_threads, [Environment]::ProcessorCount)
             allocated_mib = [int]$nbdContext.workload.allocated_mib
             timeout_budget = $PairContext.timeout_budget
         }
@@ -2031,7 +2031,7 @@ function Get-ComparisonContract {
         memory_max_mib = [int]$workload.memory_max_mib
         memory_high_mib = [int]$workload.memory_high_mib
         allocation_chunk_bytes = [int]$workload.allocation_chunk_bytes
-        worker_threads = [int]$workload.worker_threads
+        worker_threads = [Math]::Min([int]$workload.worker_threads, [Environment]::ProcessorCount)
         allocated_mib = [int]$workload.allocated_mib
         pattern = [string]$workload.pattern
         workload = [string]$workload.name
@@ -2131,7 +2131,7 @@ function New-PairComparison {
         memory_max_mib = $diskContract.memory_max_mib
         memory_high_mib = $diskContract.memory_high_mib
         allocation_chunk_bytes = $diskContract.allocation_chunk_bytes
-        worker_threads = $diskContract.worker_threads
+        worker_threads = [Math]::Min([int]$diskContract.worker_threads, [Environment]::ProcessorCount)
         allocated_mib = $diskContract.allocated_mib
         pattern = $diskContract.pattern
         workload = $diskContract.workload
@@ -2173,7 +2173,7 @@ function New-PairComparison {
         workload = [ordered]@{
             pattern = $diskContract.pattern
             allocation_chunk_bytes = $diskContract.allocation_chunk_bytes
-            worker_threads = $diskContract.worker_threads
+            worker_threads = [Math]::Min([int]$diskContract.worker_threads, [Environment]::ProcessorCount)
             allocated_mib = $diskContract.allocated_mib
             name = $diskContract.workload
         }
@@ -3218,8 +3218,8 @@ Write-Output "[cuda-vram-workload] released"
             New-Item -ItemType Directory -Path $temp | Out-Null
             $savedBaseline = $script:BaselineFile
             try {
-                $cellDisk = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = 1 }
-                $cellNbd = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = 1 }
+                $cellDisk = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = [Math]::Min(1, [Environment]::ProcessorCount) }
+                $cellNbd = [pscustomobject]@{ tier_mib = 1024; condition = "idle"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = [Math]::Min(1, [Environment]::ProcessorCount) }
                 $sourceCommit = ("a" * 40) -join ""
                 $manifestSha256 = ("b" * 64) -join ""
                 $scriptHash = ("c" * 64) -join ""
@@ -3260,7 +3260,7 @@ Write-Output "[cuda-vram-workload] released"
                             "--expected-manifest-sha256", $manifestSha256, "--pair-id", "1024-idle", "--runs", "3", "--sample-timeout-sec", "240"
                         )
                         script_sha256 = [pscustomobject]$scriptHashes
-                        workload = [pscustomobject]@{ name = "anonymous_memory_sequential_write"; pattern = "shake256-v1"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = 1 }
+                        workload = [pscustomobject]@{ name = "anonymous_memory_sequential_write"; pattern = "shake256-v1"; allocated_mib = 3584; memory_high_mib = 1200; memory_max_mib = 4096; allocation_chunk_bytes = 67108864; worker_threads = [Math]::Min(1, [Environment]::ProcessorCount) }
                     }
                     if ($Mode -eq "nbd") {
                         $record["nbd"] = [pscustomobject]@{
@@ -3652,7 +3652,7 @@ Write-Output "[cuda-vram-workload] released"
                             sink_type = "directory"; sink_identity_sha256 = ("d" * 64) -join ""
                         }
                         workload = [pscustomobject]@{
-                            pattern = "shake256-v1"; allocation_chunk_bytes = 67108864; worker_threads = 1; allocated_mib = 3584
+                            pattern = "shake256-v1"; allocation_chunk_bytes = 67108864; worker_threads = [Math]::Min(1, [Environment]::ProcessorCount); allocated_mib = 3584
                         }
                     }
                     if ($Mode -eq "nbd") {
