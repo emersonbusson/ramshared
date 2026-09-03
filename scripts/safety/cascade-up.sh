@@ -69,6 +69,14 @@ fi
 [[ ${RAMSHARED_NBD_LIFECYCLE_APPROVAL:-} == "$EXPECTED_APPROVAL" ]] || refuse APPROVAL_MISSING
 RAMSHARED_NBD_VRAM_MIB=$VRAM_MIB "$PREFLIGHT" --check
 
+PID_FILE=${RAMSHARED_NBD_PID_FILE:-/run/ramshared/ramsharedd.pid}
+if [[ -s $PID_FILE ]] && kill -0 "$(< "$PID_FILE")" 2>/dev/null; then
+  printf 'NBD_LIFECYCLE_STATE=ALREADY_ACTIVE\n'
+  printf 'NBD_LIFECYCLE_ACTION=activate\n'
+  printf 'NBD_LIFECYCLE_VERSION=%s\n' "$RELEASE_VERSION"
+  exit 0
+fi
+
 printf 'NBD_LIFECYCLE_STATE=EXECUTING\n'
 printf 'NBD_LIFECYCLE_ACTION=activate\n'
 printf 'NBD_LIFECYCLE_VERSION=%s\n' "$RELEASE_VERSION"
