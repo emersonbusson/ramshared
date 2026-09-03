@@ -327,6 +327,37 @@ function Assert-InputContract {
 }
 
 function Assert-LiveConfiguration {
+    $wslExe = Get-WslExecutable
+    $distroOutput = & $wslExe --list --quiet 2>&1
+    if ($LASTEXITCODE -ne 0 -or (($distroOutput -join "`n") -notmatch "(?m)^$Distro$")) {
+        throw [System.IO.DirectoryNotFoundException]::new("wsl_distro_unavailable distro=" + $Distro)
+    }
+
+    & $wslExe -d $Distro which fio 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw [System.IO.FileNotFoundException]::new("fio_unavailable")
+    }
+
+    & $wslExe -d $Distro which nbd-client 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw [System.IO.FileNotFoundException]::new("nbd-client_unavailable")
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ArtifactRoot)) {
+        $driveName = [System.IO.Path]::GetPathRoot($ArtifactRoot)
+        if ([string]::IsNullOrWhiteSpace($driveName)) {
+            throw [System.ArgumentException]::new("artifact_root_invalid_no_drive")
+        }
+        $drive = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='$($driveName.TrimEnd('\'))'" -ErrorAction SilentlyContinue
+        if ($null -eq $drive) {
+            throw [System.IO.DriveNotFoundException]::new("artifact_root_drive_not_found")
+        }
+        $freeSpaceGB = [math]::Round($drive.FreeSpace / 1GB, 2)
+        if ($freeSpaceGB -lt 4) {
+            throw [System.IO.IOException]::new("insufficient_free_space required_gb=4 actual_gb=" + $freeSpaceGB)
+        }
+    }
+
     if ($ExpectedSourceCommit -notmatch '^[0-9a-f]{40}$') {
         throw "expected_source_commit_invalid"
     }

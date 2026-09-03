@@ -1,0 +1,22 @@
+## Resumo
+Adicionados guard clauses no `Assert-LiveConfiguration` do script `Invoke-NbdBenchmarkMatrix.ps1` para validar a existência da distro WSL, os binários `fio` e `nbd-client` via `which`, e garantir que o volume de artefatos possui pelo menos 4GB de espaço livre. Esses checks seguem os princípios de fail-fast e retornam erros com tipagem forte (e.g. `[System.IO.FileNotFoundException]`).
+
+## Commits
+| Commit | O que fez | Por que fez | Detalhes |
+|---|---|---|---|
+| 1 | Adicionou validação de pré-requisitos no script | Para seguir as diretrizes de hardening e evitar falhas no meio da execução | Validou Wsl, fio, nbd-client e espaço no disco. |
+
+## Issue
+OpsInfra100/2026-09-01/ps1-windows/003
+
+## Responsavel
+jules
+
+## Labels
+type:scripts, type:security
+
+## Validacao
+echo "pwsh and PSScriptAnalyzer cannot be run as they are unavailable in the environment."
+
+## Rollback trigger
+Se os checks de validação quebrarem a execução em ambientes legítimos devido a variações de distro ou paths.
