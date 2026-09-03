@@ -41,7 +41,9 @@ block() {
 }
 
 usage() {
-  block UNSUPPORTED_ARGUMENT
+  printf 'NBD_PRODUCT_STATE=BLOCKED\n'
+  printf 'NBD_READINESS_REASON=UNSUPPORTED_ARGUMENT\n'
+  exit 64
 }
 
 is_sha256() {
@@ -221,7 +223,7 @@ config_value() {
       values[++count] = value
     }
     END {
-      if (count != 1) exit 1
+      if (count != 1) exit 78
       print values[1]
     }
   ' "$config"
@@ -411,6 +413,10 @@ check_legacy_ublk() {
   module_state=ABSENT
   if [[ -r $MODULES_FILE ]] && awk '$1 == "ublk_drv" { found = 1 } END { exit !found }' "$MODULES_FILE"; then
     module_state=LOADED_INERT
+  else
+    printf 'NBD_PRODUCT_STATE=BLOCKED\n'
+    printf 'NBD_READINESS_REASON=UBLK_MODULE_MISSING\n'
+    exit 69
   fi
   UBLK_MODULE_STATE=$module_state
 }
