@@ -68,3 +68,58 @@ jobs:
           token: ${{ steps.release-app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      - name: Generate artifact checksums and verify signatures
+        if: ${{ steps.target.outputs.run == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for cmd in sha256sum gpg df awk find sort xargs; do
+            if ! command -v "$cmd" >/dev/null 2>&1; then
+              echo "Error: Required command '$cmd' is missing." >&2
+              exit 69
+            fi
+          done
+
+          ARTIFACT_DIR="${RAMSHARED_PACKAGE_OUT:-artifacts/release}"
+
+          if [ ! -d "$ARTIFACT_DIR" ]; then
+            echo "Artifact directory '$ARTIFACT_DIR' not found. Skipping checksum generation."
+            exit 0
+          fi
+
+          shopt -s nullglob
+          artifact_files=("$ARTIFACT_DIR"/*)
+          shopt -u nullglob
+          if [ ${#artifact_files[@]} -eq 0 ]; then
+            echo "Artifact directory '$ARTIFACT_DIR' is empty. Skipping."
+            exit 0
+          fi
+
+          FREE_SPACE=$(df -kP "$ARTIFACT_DIR" | awk 'NR==2 {print $4}')
+          if [ "$FREE_SPACE" -lt 1024 ]; then
+            echo "Error: Insufficient disk space in $ARTIFACT_DIR." >&2
+            exit 74
+          fi
+
+          echo "Generating SHA-256 checksums..."
+          (cd "$ARTIFACT_DIR" && find . -type f ! -name "SHA256SUMS.txt" ! -name "*.sha256" ! -name "*.sig" ! -name "*.asc" -print0 | sort -z | xargs -0 -r sha256sum > "SHA256SUMS.txt")
+
+          echo "Verifying GPG signatures if present..."
+          shopt -s nullglob
+          sig_files=("$ARTIFACT_DIR"/*.sig "$ARTIFACT_DIR"/*.asc)
+          shopt -u nullglob
+
+          if [ ${#sig_files[@]} -gt 0 ]; then
+            for sig in "${sig_files[@]}"; do
+              if [ -f "$sig" ]; then
+                gpg --verify "$sig" || {
+                  echo "Error: Signature verification failed for $sig" >&2
+                  exit 74
+                }
+              fi
+            done
+          else
+            echo "No GPG signatures found to verify."
+          fi
