@@ -398,9 +398,14 @@ mod tests {
         registered: bool,
         destroy_calls: u32,
         unreg_calls: u32,
+        fail_create: bool,
+        fail_register: bool,
     }
     impl DiskControl for MemDisk {
         fn create_disk(&mut self, _: u64, _: u32) -> Result<(), String> {
+            if self.fail_create {
+                return Err("missing dependency: port occupied".into());
+            }
             self.created = true;
             Ok(())
         }
@@ -410,6 +415,9 @@ mod tests {
             Ok(())
         }
         fn register_queue(&mut self) -> Result<(), String> {
+            if self.fail_register {
+                return Err("invalid config: invalid queue".into());
+            }
             self.registered = true;
             Ok(())
         }
@@ -1013,5 +1021,60 @@ mod tests {
                 .verify_unique(&[matching.clone(), matching])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_service_provision_disk_create_failure_port_occupied() {
+        let c = cfg();
+        let mut state = ServiceState::default();
+        let mut disk = MemDisk {
+            fail_create: true,
+            ..Default::default()
+        };
+        let mut tenant = BrokerTenant::new("wd", Duration::from_secs(5));
+        let e = provision_after_lease(
+            &c,
+            &mut state,
+            LeaseState {
+                lease: 2,
+                bytes: c.size_bytes,
+            },
+            &FixedFree(2 << 30),
+            &mut disk,
+            &mut tenant,
+        )
+        .unwrap_err();
+
+        assert!(matches!(e, ProvisionError::Disk(s) if s.contains("port occupied")));
+        assert!(!state.disk_created);
+        assert!(!state.online);
+    }
+
+    #[test]
+    fn test_service_provision_disk_register_failure_invalid_config() {
+        let c = cfg();
+        let mut state = ServiceState::default();
+        let mut disk = MemDisk {
+            fail_register: true,
+            ..Default::default()
+        };
+        let mut tenant = BrokerTenant::new("wd", Duration::from_secs(5));
+        let e = provision_after_lease(
+            &c,
+            &mut state,
+            LeaseState {
+                lease: 2,
+                bytes: c.size_bytes,
+            },
+            &FixedFree(2 << 30),
+            &mut disk,
+            &mut tenant,
+        )
+        .unwrap_err();
+
+        assert!(matches!(e, ProvisionError::Disk(s) if s.contains("invalid config")));
+        assert!(state.disk_created); // Create succeeds before register fails
+        assert!(!state.registered_queue);
+        assert!(!state.online);
     }
 }
