@@ -21,7 +21,7 @@ Start-Transcript -Path $log -Force
 
 function Find-VcVars {
     $p = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-    if (-not (Test-Path $p)) { throw "vcvars64.bat not found: $p" }
+    if (-not (Test-Path $p)) { Write-Error -ErrorId "VcVarsNotFound" -Message "vcvars64.bat not found: $p" -ErrorAction Stop }
     return $p
 }
 
@@ -30,19 +30,20 @@ function Invoke-CmdBat {
     $cmd = "`"$Bat`" && $Extra"
     Write-Output "CMD> $Extra"
     & cmd.exe /c $cmd
-    if ($LASTEXITCODE -ne 0) { throw "command failed exit=$LASTEXITCODE : $Extra" }
+    if ($LASTEXITCODE -ne 0) { Write-Error -ErrorId "CommandFailed" -Message "command failed exit=$LASTEXITCODE : $Extra" -ErrorAction Stop }
 }
 
-$vcvars = Find-VcVars
-$kit = "C:\Program Files (x86)\Windows Kits\10"
-$incKm = "$kit\Include\$KitVersion\km"
-$incShared = "$kit\Include\$KitVersion\shared"
-$incKmCrt = "$kit\Include\$KitVersion\km\crt"
-$libKm = "$kit\Lib\$KitVersion\km\x64"
-$libUcrt = "$kit\Lib\$KitVersion\ucrt\x64"
+try {
+    $vcvars = Find-VcVars
+    $kit = "C:\Program Files (x86)\Windows Kits\10"
+    $incKm = "$kit\Include\$KitVersion\km"
+    $incShared = "$kit\Include\$KitVersion\shared"
+    $incKmCrt = "$kit\Include\$KitVersion\km\crt"
+    $libKm = "$kit\Lib\$KitVersion\km\x64"
+    $libUcrt = "$kit\Lib\$KitVersion\ucrt\x64"
 
-if (-not (Test-Path "$incKm\storport.h")) { throw "storport.h missing under $incKm" }
-if (-not (Test-Path "$libKm\storport.lib")) { throw "storport.lib missing under $libKm" }
+    if (-not (Test-Path "$incKm\storport.h")) { Write-Error -ErrorId "StorportHeaderMissing" -Message "storport.h missing under $incKm" -ErrorAction Stop }
+    if (-not (Test-Path "$libKm\storport.lib")) { Write-Error -ErrorId "StorportLibMissing" -Message "storport.lib missing under $libKm" -ErrorAction Stop }
 
 $cflags = @(
     "/nologo", "/c", "/kernel", "/GS-", "/W4", "/WX", "/wd4324", "/O2", "/Z7",
@@ -95,5 +96,10 @@ Invoke-CmdBat -Bat $vcvars -Extra "link $ldflagsCommon /out:`"$psSys`" `"$psObj`
 Write-Output "BUILT $psSys"
 Get-Item $psSys | Format-List FullName, Length, LastWriteTime | Out-String | Write-Output
 
-Write-Output "BUILD_DRIVERS_OK"
-Stop-Transcript
+    Write-Output "BUILD_DRIVERS_OK"
+} catch {
+    Write-Error -ErrorId "BuildFailed" -Message $_.Exception.Message -ErrorAction Continue
+    exit 74
+} finally {
+    Stop-Transcript
+}
