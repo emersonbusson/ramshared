@@ -12,14 +12,42 @@
 #>
 [CmdletBinding()]
 param(
+    [ValidateRange(1, [int]::MaxValue)]
     [int]$Runs = 3,
     [ValidateSet("idle", "loaded")]
     [string]$LoadTag = "idle",
     [string]$RepoRoot = "",
+    [ValidateNotNullOrEmpty()]
     [string]$ArtifactDir = ".\artifacts\pagefile-vram-measure"
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($RepoRoot -ne "" -and -not (Test-Path -LiteralPath $RepoRoot -PathType Container)) {
+    throw [System.IO.DirectoryNotFoundException]::new("RepoRoot path does not exist: $RepoRoot")
+}
+
+try {
+    $gpus = Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop
+    if ($null -eq $gpus) {
+        Write-Error -ErrorId "EX_UNAVAILABLE" -Message "No GPU adapter detected." -ErrorAction Stop
+    }
+
+    $vramAvailable = $false
+    foreach ($adapter in @($gpus)) {
+        if ($null -ne $adapter.AdapterRAM) {
+            $vramAvailable = $true
+            break
+        }
+    }
+
+    if (-not $vramAvailable) {
+        Write-Error -ErrorId "EX_UNAVAILABLE" -Message "No GPU adapter with valid AdapterRAM (VRAM) detected." -ErrorAction Stop
+    }
+} catch {
+    Write-Error -ErrorId "EX_UNAVAILABLE" -Message "Failed to query GPU information: $($_.Exception.Message)" -ErrorAction Stop
+}
+
 New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
 
 function Measure-Once {
