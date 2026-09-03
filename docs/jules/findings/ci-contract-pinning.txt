@@ -1,1 +1,0 @@
-FINDING_ONLY: The requested file .github/workflows/ci-contract.yml already has all actions pinned to their full SHAs and the contract step ordering is correct according to docs/governance/ci-contract.json.
