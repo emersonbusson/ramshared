@@ -38,6 +38,18 @@ function Write-State([object]$State) {
         [Text.UTF8Encoding]::new($false))
     Move-Item $temp $StatePath -Force
 }
+function Save-Checkpoint {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Phase,
+        [Parameter(Mandatory = $true)]
+        [object]$State
+    )
+    $State.current_phase = $Phase
+    Write-State $State
+}
 function Append-Result([hashtable]$Row) {
     $line = ($Row | ConvertTo-Json -Compress -Depth 8)
     if ([Text.Encoding]::UTF8.GetByteCount($line) -gt 16384) {
@@ -737,6 +749,7 @@ try {
         throw "cold boot did not preserve demand-stopped state"
     }
     Assert-ZeroResidue
+    Save-Checkpoint -Phase "pre-service-start" -State $state
     $startWatch = [Diagnostics.Stopwatch]::StartNew()
     $serviceStartedAt = Get-Date
     $sc = Join-Path $env:SystemRoot "System32\sc.exe"
@@ -779,6 +792,7 @@ try {
     }
     Assert-DriverBinaryMatch $manifestDocument $root
 
+    Save-Checkpoint -Phase "pre-disk-format" -State $state
     Invoke-ExactDiskFormat $disk $driveConfig $online.serial
     Assert-FormattedVolumeBinding ([int]$disk.Number) $online.serial `
         $driveConfig.size_bytes $targetLetter
@@ -797,6 +811,7 @@ try {
         }
         $hashes += $intendedHash
     }
+    Save-Checkpoint -Phase "pre-service-stop" -State $state
     $stopWatch = [Diagnostics.Stopwatch]::StartNew()
     $consumerStop = Invoke-BoundedProcess $sc @("stop", "RamSharedWinSvc") 10
     $stopRequestError = if (-not $consumerStop.completed -or
