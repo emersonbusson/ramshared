@@ -16,10 +16,36 @@ param(
     [switch]$Apply,
     [switch]$Restore,
     [switch]$Approve,
-    [string]$SnapshotPath = "C:\ProgramData\RamShared\pagingfiles-snapshot.json"
+    [string]$SnapshotPath = "C:\ProgramData\RamShared\pagingfiles-snapshot.json",
+    [long]$RequestedSizeBytes = 0,
+    [string]$TargetVolume = "C:\"
 )
 
 $ErrorActionPreference = "Stop"
+
+function Assert-ValidPagefileSize {
+    param(
+        [long]$SizeBytes,
+        [string]$VolumePath
+    )
+    if ($SizeBytes -le 0) { return }
+
+    $cs = Get-CimInstance Win32_ComputerSystem
+    $physicalRam = [long]$cs.TotalPhysicalMemory
+    $minSize = $physicalRam
+    $maxSize = $physicalRam * 3
+
+    if ($SizeBytes -lt $minSize -or $SizeBytes -gt $maxSize) {
+        throw [System.ArgumentOutOfRangeException]::new("RequestedSizeBytes", "Requested pagefile size must be between 1x and 3x physical RAM.")
+    }
+
+    $driveRoot = [System.IO.Path]::GetPathRoot($VolumePath)
+    $freeSpace = [System.IO.DriveInfo]::new($driveRoot).AvailableFreeSpace
+
+    if ($SizeBytes -gt $freeSpace) {
+        throw [System.IO.IOException]::new("Requested pagefile size exceeds available free space on target volume.")
+    }
+}
 $key = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"
 $valueName = "PagingFiles"
 
@@ -64,6 +90,10 @@ function Read-Snapshot {
 
 if ($Apply -and $Restore) {
     throw "Use either -Apply or -Restore, not both."
+}
+
+if ($RequestedSizeBytes -gt 0) {
+    Assert-ValidPagefileSize -SizeBytes $RequestedSizeBytes -VolumePath $TargetVolume
 }
 
 $current = @(Read-Current)
