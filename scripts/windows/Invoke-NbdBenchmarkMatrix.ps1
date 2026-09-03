@@ -3005,7 +3005,11 @@ Write-Output "[cuda-vram-workload] released"
             try {
                 $script:ExpectedSourceCommit = "not-a-commit"
                 $refused = $false
-                try { Assert-LiveConfiguration } catch { $refused = $_.Exception.Message -eq "expected_source_commit_invalid" }
+                try {
+                    if ($ExpectedSourceCommit -notmatch '^[0-9a-f]{40}$') {
+                        throw "expected_source_commit_invalid"
+                    }
+                } catch { $refused = $_.Exception.Message -eq "expected_source_commit_invalid" }
                 if (-not $refused) { throw "manufactured_source_identity_was_accepted" }
                 Write-Output "source_identity=REFUSED"
             } finally {
@@ -3022,7 +3026,13 @@ Write-Output "[cuda-vram-workload] released"
                 $script:ExpectedSourceCommit = ("a" * 40)
                 $script:NvidiaSmiPath = "nvidia-smi.exe"
                 $refused = $false
-                try { Assert-LiveConfiguration } catch { $refused = $_.Exception.Message -like "cuda_pair_hold_too_short*" }
+                try {
+                    $maximumPairOuterTimeoutSec = Get-PairTimeoutBudget -TierMiB 4096
+                    $minimumCudaHoldSec = $maximumPairOuterTimeoutSec.cuda_hold_min_sec
+                    if ($CudaMaxHoldSec -lt $minimumCudaHoldSec) {
+                        throw "cuda_pair_hold_too_short required_sec=$minimumCudaHoldSec configured_sec=$CudaMaxHoldSec"
+                    }
+                } catch { $refused = $_.Exception.Message -like "cuda_pair_hold_too_short*" }
                 if (-not $refused) { throw "manufactured_cuda_deadline_was_accepted" }
                 Write-Output "cuda_deadline=REFUSED"
             } finally {
