@@ -21,16 +21,28 @@
 #>
 [CmdletBinding()]
 param(
+    [ValidateNotNullOrEmpty()]
     [string]$PagefileDrive = "D",
     [int]$PostKillWaitSec = 20,
+    [ValidateNotNullOrEmpty()]
     [string]$ArtifactDir = "C:\ramshared\artifacts\b2-lab",
     [switch]$RestartBackend,
+    [ValidateNotNullOrEmpty()]
     [string]$BackendPath = "C:\ramshared\bin\WinDriveBackend.exe",
     [UInt64]$BackendSize = 67108864
 )
 
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = 'Stop'
 $drive = $PagefileDrive.TrimEnd(':')
+
+if (-not (Get-PSDrive -Name $drive -ErrorAction SilentlyContinue)) {
+    throw [System.IO.DriveNotFoundException]::new("Drive ${drive}: does not exist.")
+}
+if ($RestartBackend -and -not (Test-Path $BackendPath)) {
+    throw [System.IO.FileNotFoundException]::new("Backend executable not found at $BackendPath")
+}
+
+try {
 New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
 
 function Get-PfUse {
@@ -64,21 +76,21 @@ $pf = Get-CimInstance Win32_PageFileUsage -EA SilentlyContinue |
 if (-not $pf -or $pf.AllocatedBaseSize -le 0) {
     L "INCONCLUSIVO: no active pagefile on ${drive}: (alloc missing)"
     $log | Set-Content (Join-Path $ArtifactDir "b2-inconclusive.txt")
-    exit 3
+    exit 69
 }
 $usagePct = if ($pf.AllocatedBaseSize -gt 0) { 100.0 * $pf.CurrentUsage / $pf.AllocatedBaseSize } else { 0 }
 L "PF_PRE=$($pf.Name) a=$($pf.AllocatedBaseSize) u=$($pf.CurrentUsage) pct=$([math]::Round($usagePct,2))"
 if ($pf.CurrentUsage -le 0) {
     L "INCONCLUSIVO: pagefile alloc>0 but CurrentUsage=0 (DT-21 not met for B2)"
     $log | Set-Content (Join-Path $ArtifactDir "b2-inconclusive.txt")
-    exit 3
+    exit 69
 }
 
 $be = Get-Process -Name WinDriveBackend -EA SilentlyContinue
 if (-not $be) {
     L "INCONCLUSIVO: WinDriveBackend not running (nothing to kill for lab B2)"
     $log | Set-Content (Join-Path $ArtifactDir "b2-inconclusive.txt")
-    exit 3
+    exit 69
 }
 L "BACKEND_PID=$($be.Id)"
 
@@ -120,7 +132,7 @@ $sw.Stop()
 if (-not $completed) {
     Stop-Job $job -EA SilentlyContinue
     Remove-Job $job -Force -EA SilentlyContinue
-    $ioOutcome = "READ_TIMEOUT_15s"
+    throw [System.TimeoutException]::new("I/O timed out after 15s")
 } else {
     $ioOutcome = Receive-Job $job
     Remove-Job $job -Force -EA SilentlyContinue
@@ -189,3 +201,16 @@ $log | Set-Content (Join-Path $ArtifactDir "b2-lab.log") -Encoding UTF8
 } | ConvertTo-Json | Set-Content (Join-Path $ArtifactDir "b2-lab.json") -Encoding UTF8
 
 if ($pass) { exit 0 } else { exit 1 }
+} catch [System.TimeoutException] {
+    Write-Error -ErrorId "TimeoutError" -Message "Operation timed out: $($_.Exception.Message)" -Category OperationTimeout -ErrorAction Continue
+    exit 74
+} catch [System.UnauthorizedAccessException], [System.Security.SecurityException] {
+    Write-Error -ErrorId "PermissionError" -Message "Permission denied: $($_.Exception.Message)" -Category PermissionDenied -ErrorAction Continue
+    exit 77
+} catch [System.Net.WebException], [System.Net.Sockets.SocketException] {
+    Write-Error -ErrorId "NetworkError" -Message "Network failure: $($_.Exception.Message)" -Category ResourceUnavailable -ErrorAction Continue
+    exit 69
+} catch {
+    Write-Error -ErrorId "UnknownError" -Message "An unexpected error occurred: $($_.Exception.Message)" -Category NotSpecified -ErrorAction Continue
+    exit 1
+}
