@@ -15,7 +15,7 @@ log() { echo "$LOG_PREFIX $*" >&2; }
 # Preflight: without CONFIG_PSI the file does not exist — the broker depends on PSI (DT-15).
 [ -r "$PSI" ] || {
 	log "ERROR: $PSI is unreadable. Kernel without CONFIG_PSI/PSI_DEFAULT_DISABLED? PSI is required."
-	exit 1
+	exit 69
 }
 
 log "sampling $PSI for ${DURATION}s -> $OUT"
