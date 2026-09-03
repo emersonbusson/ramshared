@@ -785,7 +785,16 @@ function Invoke-GuardianWatch {
     $eventPath = Join-Path $runDirectory "guardian-events.jsonl"
     $telemetryPath = Join-Path $ArtifactRoot "windows-telemetry.jsonl"
     Write-GuardianEvent -Path $eventPath -Event "guardian_started" -Data @{ heartbeat = $HeartbeatPath; stale_after_seconds = $StaleAfterSec }
-    while ($true) {
+
+    $script:guardianWatchCanceled = $false
+    $handler = [System.ConsoleCancelEventHandler]{
+        param($sender, $e)
+        $e.Cancel = $true
+        $script:guardianWatchCanceled = $true
+    }
+    [System.Console]::add_CancelKeyPress($handler)
+
+    while (-not $script:guardianWatchCanceled) {
         # A current heartbeat must be observed before any HEALTHY proof can be
         # published. Never let a boot probe race ahead of stale-heartbeat
         # detection and advertise health during a watchdog incident.
@@ -831,6 +840,10 @@ function Invoke-GuardianWatch {
         Start-Sleep -Seconds $PollSec
         continue
     }
+    [System.Console]::remove_CancelKeyPress($handler)
+    Write-GuardianEvent -Path $eventPath -Event "guardian_shutdown_requested" -Data @{}
+    Write-HostTelemetryRing -Path $telemetryPath
+    exit 0
 }
 
 function New-ManufacturedGuardianInstallOperations {
