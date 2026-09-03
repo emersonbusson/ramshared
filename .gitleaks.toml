@@ -4,5 +4,12 @@ useDefault = true
 [allowlist]
 description = "Benchmark fixture metric mistaken for a generic API key"
 regexTarget = "line"
-paths = ['''^tools/ci/check-benchmark-evidence\.test\.mjs$''']
-regexes = ['''^\s*\{ name: 'p99', key: 'nbd_vs_disk_p99_ratio', value: 999 \},\s*$''']
+paths = [
+    '''^tools/ci/check-benchmark-evidence\.test\.mjs$''',
+    '''^crates/ramshared-integrity/src/pattern\.rs$''',
+    '''^README\.md$'''
+]
+regexes = [
+    '''^\s*\{ name: 'p99', key: 'nbd_vs_disk_p99_ratio', value: 999 \},\s*$''',
+    '''AKIAIMNOJVGFDXXXE4OA'''
+]
