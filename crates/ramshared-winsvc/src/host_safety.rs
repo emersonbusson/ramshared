@@ -86,20 +86,111 @@ pub struct CampaignVerdict {
     pub teardown_ms: Option<u64>,
 }
 
+/// Structured error for a campaign safety failure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SafetyFailure {
+    pub check_name: String,
+    pub threshold: String,
+    pub actual_value: String,
+}
+
+impl std::fmt::Display for SafetyFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "safety check '{}' failed: expected {}, got {}",
+            self.check_name, self.threshold, self.actual_value
+        )
+    }
+}
+
+impl std::error::Error for SafetyFailure {}
+
 impl CampaignVerdict {
     pub fn is_pass(&self, teardown_budget: Duration) -> bool {
-        self.online
-            && self.binary_match
-            && self.rounds_pass
-            && self.console_exit == Some(0)
-            && !self.force_killed
-            && self.lease_released
-            && self.cuda_restored
-            && self.no_new_dump
-            && self.terminal_safe
-            && self
-                .teardown_ms
-                .is_some_and(|ms| u128::from(ms) <= teardown_budget.as_millis())
+        self.check_safety(teardown_budget).is_ok()
+    }
+
+    pub fn check_safety(&self, teardown_budget: Duration) -> Result<(), SafetyFailure> {
+        if !self.online {
+            return Err(SafetyFailure {
+                check_name: "online".into(),
+                threshold: "true".into(),
+                actual_value: "false".into(),
+            });
+        }
+        if !self.binary_match {
+            return Err(SafetyFailure {
+                check_name: "binary_match".into(),
+                threshold: "true".into(),
+                actual_value: "false".into(),
+            });
+        }
+        if !self.rounds_pass {
+            return Err(SafetyFailure {
+                check_name: "rounds_pass".into(),
+                threshold: "true".into(),
+                actual_value: "false".into(),
+            });
+        }
+        if self.console_exit != Some(0) {
+            return Err(SafetyFailure {
+                check_name: "console_exit".into(),
+                threshold: "Some(0)".into(),
+                actual_value: match self.console_exit {
+                    Some(code) => code.to_string(),
+                    None => "None".into(),
+                },
+            });
+        }
+        if self.force_killed {
+            return Err(SafetyFailure {
+                check_name: "force_killed".into(),
+                threshold: "false".into(),
+                actual_value: "true".into(),
+            });
+        }
+        if !self.lease_released {
+            return Err(SafetyFailure {
+                check_name: "lease_released".into(),
+                threshold: "true".into(),
+                actual_value: "false".into(),
+            });
+        }
+        if !self.cuda_restored {
+            return Err(SafetyFailure {
+                check_name: "cuda_restored".into(),
+                threshold: "true".into(),
+                actual_value: "false".into(),
+            });
+        }
+        if !self.no_new_dump {
+            return Err(SafetyFailure {
+                check_name: "no_new_dump".into(),
+                threshold: "true".into(),
+                actual_value: "false".into(),
+            });
+        }
+        if !self.terminal_safe {
+            return Err(SafetyFailure {
+                check_name: "terminal_safe".into(),
+                threshold: "true".into(),
+                actual_value: "false".into(),
+            });
+        }
+        match self.teardown_ms {
+            Some(ms) if u128::from(ms) <= teardown_budget.as_millis() => Ok(()),
+            Some(ms) => Err(SafetyFailure {
+                check_name: "teardown_ms".into(),
+                threshold: format!("<= {}", teardown_budget.as_millis()),
+                actual_value: ms.to_string(),
+            }),
+            None => Err(SafetyFailure {
+                check_name: "teardown_ms".into(),
+                threshold: format!("<= {}", teardown_budget.as_millis()),
+                actual_value: "None".into(),
+            }),
+        }
     }
 }
 
@@ -108,6 +199,125 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use std::time::Duration;
+
+    fn base_pass() -> CampaignVerdict {
+        CampaignVerdict {
+            online: true,
+            binary_match: true,
+            rounds_pass: true,
+            console_exit: Some(0),
+            force_killed: false,
+            lease_released: true,
+            cuda_restored: true,
+            no_new_dump: true,
+            terminal_safe: true,
+            teardown_ms: Some(2_000),
+        }
+    }
+
+    #[test]
+    fn test_host_safety_online_false_returns_error() {
+        let mut v = base_pass();
+        v.online = false;
+        let err = v.check_safety(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "online");
+        assert_eq!(err.actual_value, "false");
+    }
+
+    #[test]
+    fn test_host_safety_binary_match_false_returns_error() {
+        let mut v = base_pass();
+        v.binary_match = false;
+        let err = v.check_safety(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "binary_match");
+        assert_eq!(err.actual_value, "false");
+    }
+
+    #[test]
+    fn test_host_safety_rounds_pass_false_returns_error() {
+        let mut v = base_pass();
+        v.rounds_pass = false;
+        let err = v.check_safety(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "rounds_pass");
+        assert_eq!(err.actual_value, "false");
+    }
+
+    #[test]
+    fn test_host_safety_console_exit_nonzero_returns_error() {
+        let mut v = base_pass();
+        v.console_exit = Some(7);
+        let err = v.check_safety(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "console_exit");
+        assert_eq!(err.threshold, "Some(0)");
+        assert_eq!(err.actual_value, "7");
+
+        v.console_exit = None;
+        let err2 = v.check_safety(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err2.check_name, "console_exit");
+        assert_eq!(err2.actual_value, "None");
+    }
+
+    #[test]
+    fn test_host_safety_force_killed_true_returns_error() {
+        let mut v = base_pass();
+        v.force_killed = true;
+        let err = v.check_safety(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "force_killed");
+        assert_eq!(err.threshold, "false");
+        assert_eq!(err.actual_value, "true");
+    }
+
+    #[test]
+    fn test_host_safety_lease_released_false_returns_error() {
+        let mut v = base_pass();
+        v.lease_released = false;
+        let err = v.check_safety(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "lease_released");
+    }
+
+    #[test]
+    fn test_host_safety_cuda_restored_false_returns_error() {
+        let mut v = base_pass();
+        v.cuda_restored = false;
+        let err = v.check_safety(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "cuda_restored");
+    }
+
+    #[test]
+    fn test_host_safety_no_new_dump_false_returns_error() {
+        let mut v = base_pass();
+        v.no_new_dump = false;
+        let err = v.check_safety(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "no_new_dump");
+    }
+
+    #[test]
+    fn test_host_safety_terminal_safe_false_returns_error() {
+        let mut v = base_pass();
+        v.terminal_safe = false;
+        let err = v.check_safety(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "terminal_safe");
+    }
+
+    #[test]
+    fn test_host_safety_teardown_ms_exceeds_budget_returns_error() {
+        let mut v = base_pass();
+        v.teardown_ms = Some(30_001);
+        let err = v.check_safety(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "teardown_ms");
+        assert_eq!(err.threshold, "<= 30000");
+        assert_eq!(err.actual_value, "30001");
+    }
+
+    #[test]
+    fn test_host_safety_teardown_ms_none_returns_error() {
+        let mut v = base_pass();
+        v.teardown_ms = None;
+        let err = v.check_safety(Duration::from_secs(30)).unwrap_err();
+        assert_eq!(err.check_name, "teardown_ms");
+        assert_eq!(err.threshold, "<= 30000");
+        assert_eq!(err.actual_value, "None");
+    }
 
     #[test]
     fn pagefile_sources_are_unioned() {
