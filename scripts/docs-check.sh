@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Docs hygiene for RamShared (Node, zero deps).
-set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || exit 74
 
 declare -a DOCS_CHECK_FAILURES=()
 
@@ -10,6 +10,15 @@ run_gate() {
   local label="$1"
   shift
   echo "docs-check: RUN ${label}"
+
+  # Guard clause: Verify tools exist before execution
+  for arg in "$@"; do
+    if [[ "$arg" == *.mjs ]] && [ ! -f "$arg" ]; then
+      echo "docs-check: EX_UNAVAILABLE (69): Tool dependency $arg not found" >&2
+      exit 69
+    fi
+  done
+
   if "$@"; then
     echo "docs-check: PASS ${label}"
   else
@@ -20,8 +29,8 @@ run_gate() {
 }
 
 if ! command -v node >/dev/null 2>&1; then
-  echo "docs-check: node not found" >&2
-  exit 1
+  echo "docs-check: EX_UNAVAILABLE (69): node not found" >&2
+  exit 69
 fi
 
 run_gate documentation-governance node tools/ci/check-documentation-governance.mjs --all
@@ -36,7 +45,7 @@ run_gate space-cleanup-receipts node tools/ci/check-space-cleanup-receipts.mjs -
 run_gate campaign-evidence-lifecycle node tools/ci/check-campaign-evidence-lifecycle.mjs --check
 run_gate adr-index node tools/ci/check-adr-index.mjs --check
 run_gate docs-index node tools/generate-docs-index.mjs --check
-run_gate broken-links node tools/check-broken-links.mjs --check
+run_gate broken-links node tools/check-broken-links.mjs --all
 run_gate gap-register node tools/ci/check-gap-register.mjs
 run_gate public-hygiene node tools/ci/check-public-hygiene.mjs --candidate
 run_gate public-hygiene-tests node --test --test-reporter=dot tools/ci/check-public-hygiene.test.mjs
