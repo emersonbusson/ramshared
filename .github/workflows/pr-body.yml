@@ -23,7 +23,37 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            const body = context.payload.pull_request?.body ?? '';
+            const pr = context.payload.pull_request;
+            if (!pr) {
+              core.setFailed('Guard Clause Failed: Pull Request object is missing from payload.');
+              return;
+            }
+
+            const body = pr.body;
+            if (typeof body !== 'string') {
+              core.setFailed('Guard Clause Failed: PR body is missing or not a string.');
+              return;
+            }
+
+            const title = pr.title;
+            if (typeof title !== 'string') {
+              core.setFailed('Guard Clause Failed: PR title is missing or not a string.');
+              return;
+            }
+
+            let hasError = false;
+
+            if (title.length > 72) {
+              core.setFailed(`PR title exceeds maximum length of 72 characters (current: ${title.length}).`);
+              hasError = true;
+            }
+
+            const titleRegex = /^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?!?:\s.+$/;
+            if (!titleRegex.test(title)) {
+              core.setFailed('PR title must follow Conventional Commits format (e.g., "feat: description").');
+              hasError = true;
+            }
+
             const requiredSections = [
               { name: 'Resumo', pattern: /^##\s+Resumo\s*$/im },
               { name: 'Commits', pattern: /^##\s+Commits\s*$/im },
@@ -40,8 +70,13 @@ jobs:
 
             if (missing.length > 0) {
               core.setFailed(`PR description is missing required sections: ${missing.join(', ')}. Please check .github/pull_request_template.md.`);
+              hasError = true;
             } else {
               core.info('All required PR description sections are present.');
+            }
+
+            if (!hasError) {
+              core.info('PR title and body validation passed successfully.');
             }
 
   pr-body-summary:
