@@ -34,6 +34,29 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Assert-PerfDiskCountersAvailable {
+    try {
+        $phys = @(Get-CimInstance -ClassName Win32_PerfFormattedData_PerfDisk_PhysicalDisk -ErrorAction Stop)
+        $log = @(Get-CimInstance -ClassName Win32_PerfFormattedData_PerfDisk_LogicalDisk -ErrorAction Stop)
+    } catch {
+        try {
+            $phys = @(Get-WmiObject -Class Win32_PerfFormattedData_PerfDisk_PhysicalDisk -ErrorAction Stop)
+            $log = @(Get-WmiObject -Class Win32_PerfFormattedData_PerfDisk_LogicalDisk -ErrorAction Stop)
+        } catch {
+            Write-Error -ErrorId "MissingDiskCounters" -Message "Failed to query Disk performance counters: $($_.Exception.Message)" -ErrorAction Stop
+        }
+    }
+    if ($phys.Count -eq 0) {
+        Write-Error -ErrorId "MissingPhysicalDiskCounters" -Message "PhysicalDisk performance counters are missing or return zero instances." -ErrorAction Stop
+    }
+    if ($log.Count -eq 0) {
+        Write-Error -ErrorId "MissingLogicalDiskCounters" -Message "LogicalDisk performance counters are missing or return zero instances." -ErrorAction Stop
+    }
+}
+
+Assert-PerfDiskCountersAvailable
+
 function L($m) { Write-Host ("[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m) }
 
 function Get-Sha256Hex {
