@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # Install one already-built, sealed NBD release. The no-argument path is a
 # read-only plan; every filesystem or systemd write needs exact version scope.
-set -euo pipefail
 
 SOURCE_RELEASE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)
 PRODUCT_ROOT=/opt/ramshared
@@ -39,9 +39,11 @@ declare -a AUXILIARY_UNIT_CREATED_PATHS=()
 declare -a AUXILIARY_UNIT_CREATED_SOURCES=()
 
 refuse() {
+  local reason=$1
+  local code=${2:-1}
   printf 'NBD_INSTALL_STATE=REFUSED\n'
-  printf 'NBD_INSTALL_REASON=%s\n' "$1"
-  exit 1
+  printf 'NBD_INSTALL_REASON=%s\n' "$reason"
+  exit "$code"
 }
 
 usage() {
@@ -417,14 +419,14 @@ check_unit_inert() {
   active=$(systemctl_status is-active "$unit")
   case $active in
     3|4) ;;
-    0) refuse PRODUCT_UNIT_ACTIVE ;;
-    *) refuse PRODUCT_UNIT_ACTIVITY_UNKNOWN ;;
+    0) refuse PRODUCT_UNIT_ACTIVE 64 ;;
+    *) refuse PRODUCT_UNIT_ACTIVITY_UNKNOWN 64 ;;
   esac
   enabled=$(systemctl_status is-enabled "$unit")
   case $enabled in
     1) ;;
-    0) refuse PRODUCT_UNIT_ENABLED ;;
-    *) refuse PRODUCT_UNIT_ENABLEMENT_UNKNOWN ;;
+    0) refuse PRODUCT_UNIT_ENABLED 64 ;;
+    *) refuse PRODUCT_UNIT_ENABLEMENT_UNKNOWN 64 ;;
   esac
 }
 
@@ -704,7 +706,7 @@ fi
 [[ -z $LEGACY_UNIT_APPROVED_HASH || $LEGACY_UNIT_APPROVED_HASH =~ ^[[:xdigit:]]{64}$ ]] || refuse LEGACY_UNIT_APPROVAL_INVALID
 inspect_lower_sink "$LOWER_SINK"
 [[ $(id -u) -eq 0 ]] || refuse ROOT_REQUIRED
-command -v systemctl >/dev/null 2>&1 || refuse SYSTEMD_UNAVAILABLE
+command -v systemctl >/dev/null 2>&1 || refuse SYSTEMD_UNAVAILABLE 69
 check_unit_inert ramshared-cascade.service
 check_unit_inert ramsharedd.service
 check_existing_unit_file
