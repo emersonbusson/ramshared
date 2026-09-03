@@ -10,9 +10,27 @@ VERSION_CLEAN="${VERSION#v}"
 RPM_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./.beta/")"
 ARCH="x86_64"
 
+# Guard clauses: ensure required binaries are available
+if ! command -v rpmbuild >/dev/null 2>&1; then
+  echo "ERROR: rpmbuild command not found" >&2
+  exit 69
+fi
+
+if ! command -v rpmspec >/dev/null 2>&1; then
+  echo "ERROR: rpmspec command not found" >&2
+  exit 69
+fi
+
 OUT_DIR="$ROOT/artifacts/packages"
 RPM_ROOT="$OUT_DIR/rpmbuild"
 SPEC_FILE="$RPM_ROOT/SPECS/ramshared.spec"
+
+mkdir -p "$OUT_DIR"
+FREE_SPACE=$(df -kP "$OUT_DIR" | awk 'NR==2 {print $4}')
+if [[ "$FREE_SPACE" -lt 102400 ]]; then
+  echo "ERROR: Insufficient disk space in $OUT_DIR" >&2
+  exit 74
+fi
 
 echo "==> Building RPM package for RamShared ${VERSION} (${ARCH})..."
 
@@ -29,7 +47,7 @@ fi
 
 if [[ ! -x "$CLI_BIN" || ! -x "$DAEMON_BIN" ]]; then
   echo "ERROR: Target release binaries not found ($CLI_BIN / $DAEMON_BIN)" >&2
-  exit 1
+  exit 69
 fi
 
 # Clean previous build root
@@ -80,6 +98,12 @@ fi
 SPEC_EOF
 
 if command -v rpmbuild >/dev/null 2>&1; then
+  echo "==> Validating RPM spec file syntax..."
+  if ! rpmspec -q "$SPEC_FILE" >/dev/null 2>&1; then
+    echo "ERROR: Invalid RPM spec file syntax or missing macros in $SPEC_FILE" >&2
+    exit 78
+  fi
+
   echo "==> Executing rpmbuild..."
   rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
   cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
