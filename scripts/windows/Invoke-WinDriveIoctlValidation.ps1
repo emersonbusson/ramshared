@@ -344,6 +344,65 @@ public static class IoctlVal {
 
 Add-Type -TypeDefinition $cs -ErrorAction Stop
 
+function Invoke-IoctlWithValidation {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNull()]
+        [Microsoft.Win32.SafeHandles.SafeFileHandle]$Handle,
+
+        [Parameter(Mandatory=$true)]
+        [ValidateNotNullOrEmpty()]
+        [uint32]$IoctlCode,
+
+        [Parameter(Mandatory=$false)]
+        [byte[]]$InputBuffer,
+
+        [Parameter(Mandatory=$false)]
+        [byte[]]$OutputBuffer,
+
+        [Parameter(Mandatory=$false)]
+        [ValidateRange(0, 1073741824)]
+        [uint32]$ExpectedSize = 0
+    )
+
+    if ($Handle.IsInvalid -or $Handle.IsClosed) {
+        return [PSCustomObject]@{
+            IoctlCode    = $IoctlCode
+            ExpectedSize = $ExpectedSize
+            ActualSize   = 0
+            ErrorMessage = "Invalid or closed file handle."
+        }
+    }
+
+    $outSize = [uint32]0
+    $inLen = if ($null -ne $InputBuffer) { [uint32]$InputBuffer.Length } else { [uint32]0 }
+    $outLen = if ($null -ne $OutputBuffer) { [uint32]$OutputBuffer.Length } else { [uint32]0 }
+
+    $ok = [IoctlVal]::DeviceIoControl($Handle, $IoctlCode, $InputBuffer, $inLen, $OutputBuffer, $outLen, [ref]$outSize, [IntPtr]::Zero)
+
+    if (-not $ok) {
+        $err = [IoctlVal]::LastErr()
+        return [PSCustomObject]@{
+            IoctlCode    = $IoctlCode
+            ExpectedSize = $ExpectedSize
+            ActualSize   = $outSize
+            ErrorMessage = "DeviceIoControl failed with Win32 error code: $err"
+        }
+    }
+
+    if ($ExpectedSize -gt 0 -and $outSize -ne $ExpectedSize) {
+        return [PSCustomObject]@{
+            IoctlCode    = $IoctlCode
+            ExpectedSize = $ExpectedSize
+            ActualSize   = $outSize
+            ErrorMessage = "Size mismatch: expected $ExpectedSize bytes, actual $outSize bytes"
+        }
+    }
+
+    return $null
+}
+
 function Open-Ctl {
     # FILE_SHARE_READ|WRITE: concurrent probes need a second handle while COMMIT is pended.
     # Non-overlapped I/O serializes per handle; two handles avoid UNREGISTER/COMMIT deadlock.
@@ -421,11 +480,12 @@ function Write-Cqe($rings, [uint32]$idx, [uint64]$tag, [int]$status, [uint32]$re
 }
 
 function Ensure-RegisteredQueue($h, $rings, [uint32]$qd, [uint32]$maxIo) {
-    [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
+    Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_UNREGISTER | Out-Null
     Reset-RingHeaders $rings $qd
     $rin = New-RegisterBytes $rings $qd $maxIo
-    if (-not [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_REGISTER, $rin)) {
-        throw "REGISTER for concurrent probe failed err=$([IoctlVal]::LastErr())"
+    $res = Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_REGISTER -InputBuffer $rin
+    if ($res) {
+        throw "REGISTER for concurrent probe failed err=$($res.ErrorMessage)"
     }
 }
 
@@ -436,12 +496,14 @@ function Invoke-ReservedCqeInjection($h, $rings, [uint32]$qd, [uint32]$maxIo) {
     Write-Cqe $rings 0 0 0 1
     [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 8, 0)   # head
     [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 12, 1)  # tail
-    $ok = [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_COMMIT, $null)
-    $err1 = [IoctlVal]::LastErr()
+    $res1 = Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_COMMIT
+    $ok = if ($res1) { $false } else { $true }
+    $err1 = if ($res1) { 1 } else { 0 }
     # Failed queue must refuse further COMMIT (fail-closed).
-    $ok2 = [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_COMMIT, $null)
-    $err2 = [IoctlVal]::LastErr()
-    [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
+    $res2 = Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_COMMIT
+    $ok2 = if ($res2) { $false } else { $true }
+    $err2 = if ($res2) { 1 } else { 0 }
+    Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_UNREGISTER | Out-Null
     if ((-not $ok -and $err1 -ne 0) -or (-not $ok2)) {
         return $true
     }
@@ -457,10 +519,11 @@ function Invoke-CompletionReentryInjection($h, $rings, [uint32]$qd, [uint32]$max
     Write-Cqe $rings 1 0 0 0
     [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 8, 0)
     [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 12, 2)
-    $ok = [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_COMMIT, $null)
-    $err = [IoctlVal]::LastErr()
+    $res = Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_COMMIT
+    $ok = if ($res) { $false } else { $true }
+    $err = if ($res) { 1 } else { 0 }
     $head = [Runtime.InteropServices.Marshal]::ReadInt32($rings.cq, 8)
-    [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
+    Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_UNREGISTER | Out-Null
     # Driver advanced head past both entries; process still alive; no new dump checked later.
     if ($head -ge 2) {
         return $true
@@ -480,8 +543,9 @@ function Invoke-RundownDuringCopyInjection($h, $rings, [uint32]$qd, [uint32]$max
         $slot[0] = -3
         $thread = [IoctlVal]::StartBlockingIoctl($h, [IoctlVal]::IOCTL_COMMIT, $slot)
         Start-Sleep -Milliseconds 500
-        $unregOk = [IoctlVal]::IoctlBool($h2, [IoctlVal]::IOCTL_UNREGISTER, $null)
-        $unregErr = [IoctlVal]::LastErr()
+        $unregRes = Invoke-IoctlWithValidation -Handle $h2 -IoctlCode [IoctlVal]::IOCTL_UNREGISTER
+        $unregOk = if ($unregRes) { $false } else { $true }
+        $unregErr = if ($unregRes) { 1 } else { 0 }
         $joined = $thread.Join(8000)
         $commitErr = $slot[0]
         if ($unregOk -and $joined) {
@@ -722,8 +786,9 @@ function Invoke-StartIoReadCopyRaceInjection {
         L ("STARTIO PhysicalRead done readOk=$readOk openErr=$openErr lastReadErr=$lastReadErr drained=$drained sq=$sqHead/$sqTail pumpCommits=$($pumpStats[1])")
 
         # Race phase: UNREGISTER on second handle while pump may still drain.
-        $unregOk = [IoctlVal]::IoctlBool($h2, [IoctlVal]::IOCTL_UNREGISTER, $null)
-        $unregErr = [IoctlVal]::LastErr()
+        $unregRes = Invoke-IoctlWithValidation -Handle $h2 -IoctlCode [IoctlVal]::IOCTL_UNREGISTER
+        $unregOk = if ($unregRes) { $false } else { $true }
+        $unregErr = if ($unregRes) { 1 } else { 0 }
 
         # Pass: survived + UNREGISTER ok + StartIo posted SQEs (probe or enum pump).
         $startIoHit = ($drained -gt 0) -or ($sqTail -gt 0) -or ($sqHead -gt 0) -or ([int]$pumpStats[0] -gt 0)
@@ -740,7 +805,7 @@ function Invoke-StartIoReadCopyRaceInjection {
         $stopFlag[0] = 1
         if ($null -ne $pump) { [void]$pump.Join(2000) }
         if ($h2 -and -not $h2.IsInvalid) { $h2.Dispose() }
-        [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
+        Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_UNREGISTER | Out-Null
     }
 }
 
@@ -754,12 +819,13 @@ try {
     L "OPEN_CTL ok"
 
     # Best-effort DESTROY so leftover Online LUN does not cause DEVICE_BUSY (170).
-    [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_DESTROY, $null)
+    Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_DESTROY | Out-Null
     Start-Sleep -Milliseconds 500
 
     # --- REFUSE_UNKNOWN_IOCTL ---
-    $ok = [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNKNOWN, $null)
-    $err = [IoctlVal]::LastErr()
+    $res = Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_UNKNOWN
+    $ok = if ($res) { $false } else { $true }
+    $err = if ($res) { 1 } else { 0 }
     if (-not $ok) {
         $verdict.REFUSE_UNKNOWN_IOCTL = 1
         L "REFUSE_UNKNOWN_IOCTL=1 err=$err"
@@ -774,21 +840,23 @@ try {
     $dp.reserved = 1
     $dp.serial = New-Object byte[] 16
     $in = [IoctlVal]::ToBytes($dp)
-    $ok = [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_CREATE, $in)
+    $res = Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_CREATE -InputBuffer $in
+    $ok = if ($res) { $false } else { $true }
     if (-not $ok) {
         $verdict.REFUSE_RESERVED_DISK_PARAMS = 1
-        L "REFUSE_RESERVED_DISK_PARAMS=1 err=$([IoctlVal]::LastErr())"
+        L "REFUSE_RESERVED_DISK_PARAMS=1 err=$($res.ErrorMessage)"
     } else {
         L "REFUSE_RESERVED_DISK_PARAMS=0"
-        [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_DESTROY, $null)
+        Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_DESTROY | Out-Null
     }
 
     # --- PASS valid CREATE ---
     $dp.reserved = 0
     [Text.Encoding]::ASCII.GetBytes("ABCDEF0123456789").CopyTo($dp.serial, 0)
     $in = [IoctlVal]::ToBytes($dp)
-    if (-not [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_CREATE, $in)) {
-        throw "CREATE_DISK failed err=$([IoctlVal]::LastErr())"
+    $res = Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_CREATE -InputBuffer $in
+    if ($res) {
+        throw "CREATE_DISK failed err=$($res.ErrorMessage)"
     }
     L "CREATE_DISK ok"
 
@@ -817,24 +885,26 @@ try {
     $reg.data_area_va = [uint64]$rings.data.ToInt64()
     $reg.data_area_len = [uint64]$rings.dataBytes
     $rin = [IoctlVal]::ToBytes($reg)
-    if (-not [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_REGISTER, $rin)) {
+    $res = Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_REGISTER -InputBuffer $rin
+    if ($res) {
         $verdict.REFUSE_RESERVED_REGISTER = 1
-        L "REFUSE_RESERVED_REGISTER=1 err=$([IoctlVal]::LastErr())"
+        L "REFUSE_RESERVED_REGISTER=1 err=$($res.ErrorMessage)"
     } else {
         L "REFUSE_RESERVED_REGISTER=0"
-        [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
+        Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_UNREGISTER | Out-Null
     }
 
     # --- REFUSE_BAD_RING (bad magic) ---
     [Runtime.InteropServices.Marshal]::WriteInt32($rings.sq, 0, 0xDEADBEEF)
     $reg.reserved = 0
     $rin = [IoctlVal]::ToBytes($reg)
-    if (-not [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_REGISTER, $rin)) {
+    $res = Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_REGISTER -InputBuffer $rin
+    if ($res) {
         $verdict.REFUSE_BAD_RING = 1
-        L "REFUSE_BAD_RING=1 err=$([IoctlVal]::LastErr())"
+        L "REFUSE_BAD_RING=1 err=$($res.ErrorMessage)"
     } else {
         L "REFUSE_BAD_RING=0"
-        [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
+        Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_UNREGISTER | Out-Null
     }
     # restore magic
     [Runtime.InteropServices.Marshal]::WriteInt32($rings.sq, 0, [int][IoctlVal]::MAGIC)
@@ -848,12 +918,13 @@ try {
 
     # --- PASS_VALID_QUEUE ---
     $rin = [IoctlVal]::ToBytes($reg)
-    if ([IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_REGISTER, $rin)) {
+    $res = Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_REGISTER -InputBuffer $rin
+    if (-not $res) {
         $verdict.PASS_VALID_QUEUE = 1
         L "PASS_VALID_QUEUE=1"
-        [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
+        Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_UNREGISTER | Out-Null
     } else {
-        L "PASS_VALID_QUEUE=0 err=$([IoctlVal]::LastErr())"
+        L "PASS_VALID_QUEUE=0 err=$($res.ErrorMessage)"
     }
 
     # --- VPD_SERIAL_MATCH (INQUIRY vendor/product + VPD serial after CREATE) ---
@@ -1090,12 +1161,13 @@ public static class DiskLenQuery {
     [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 8, 0)
     [Runtime.InteropServices.Marshal]::WriteInt32($rings.cq, 12, 0)
     $rin = [IoctlVal]::ToBytes($reg)
-    if (-not [IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_REGISTER, $rin)) {
+    $res = Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_REGISTER -InputBuffer $rin
+    if ($res) {
         $verdict.REFUSE_RING_INDEX_JUMP = 1
-        L "REFUSE_RING_INDEX_JUMP=1 err=$([IoctlVal]::LastErr())"
+        L "REFUSE_RING_INDEX_JUMP=1 err=$($res.ErrorMessage)"
     } else {
         L "REFUSE_RING_INDEX_JUMP=0 (driver accepted jump; check DT-5)"
-        [void][IoctlVal]::IoctlBool($h, [IoctlVal]::IOCTL_UNREGISTER, $null)
+        Invoke-IoctlWithValidation -Handle $h -IoctlCode [IoctlVal]::IOCTL_UNREGISTER | Out-Null
     }
 
     # --- REFUSE_FOREIGN_OWNER: second process must not DESTROY owner-bound disk ---
