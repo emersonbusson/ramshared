@@ -103,6 +103,31 @@ impl CampaignVerdict {
     }
 }
 
+/// A trait for mocking sysinfo capabilities to enable hermetic testing.
+pub trait SysInfoProvider {
+    fn available_memory_mb(&self) -> Result<u64, String>;
+    fn available_disk_mb(&self) -> Result<u64, String>;
+    fn cpu_load_percentage(&self) -> Result<u8, String>;
+}
+
+/// Validates memory threshold against the sysinfo provider.
+pub fn is_memory_threshold_safe<P: SysInfoProvider>(provider: &P, threshold_mb: u64) -> Result<bool, String> {
+    let available = provider.available_memory_mb()?;
+    Ok(available >= threshold_mb)
+}
+
+/// Validates disk space threshold against the sysinfo provider.
+pub fn is_disk_space_safe<P: SysInfoProvider>(provider: &P, threshold_mb: u64) -> Result<bool, String> {
+    let available = provider.available_disk_mb()?;
+    Ok(available >= threshold_mb)
+}
+
+/// Validates CPU load threshold against the sysinfo provider.
+pub fn is_cpu_load_safe<P: SysInfoProvider>(provider: &P, threshold: u8) -> Result<bool, String> {
+    let load = provider.cpu_load_percentage()?;
+    Ok(load <= threshold)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -207,5 +232,118 @@ mod tests {
         let mut slow = pass;
         slow.teardown_ms = Some(30_001);
         assert!(!slow.is_pass(Duration::from_secs(30)));
+    }
+
+    struct MockSysInfo {
+        mem_mb: Result<u64, String>,
+        disk_mb: Result<u64, String>,
+        cpu_load: Result<u8, String>,
+    }
+
+    impl SysInfoProvider for MockSysInfo {
+        fn available_memory_mb(&self) -> Result<u64, String> {
+            self.mem_mb.clone()
+        }
+        fn available_disk_mb(&self) -> Result<u64, String> {
+            self.disk_mb.clone()
+        }
+        fn cpu_load_percentage(&self) -> Result<u8, String> {
+            self.cpu_load.clone()
+        }
+    }
+
+    #[test]
+    fn test_is_memory_threshold_safe_valid() {
+        let provider = MockSysInfo { mem_mb: Ok(2048), disk_mb: Ok(0), cpu_load: Ok(0) };
+        assert!(is_memory_threshold_safe(&provider, 1024).unwrap());
+
+        let provider = MockSysInfo { mem_mb: Ok(1024), disk_mb: Ok(0), cpu_load: Ok(0) };
+        assert!(is_memory_threshold_safe(&provider, 1024).unwrap());
+    }
+
+    #[test]
+    fn test_is_memory_threshold_safe_invalid() {
+        let provider = MockSysInfo { mem_mb: Ok(512), disk_mb: Ok(0), cpu_load: Ok(0) };
+        assert!(!is_memory_threshold_safe(&provider, 1024).unwrap());
+    }
+
+    #[test]
+    fn test_is_memory_threshold_safe_error() {
+        let provider = MockSysInfo { mem_mb: Err("WMI failed".into()), disk_mb: Ok(0), cpu_load: Ok(0) };
+        assert!(is_memory_threshold_safe(&provider, 1024).is_err());
+    }
+
+    #[test]
+    fn test_is_memory_threshold_safe_boundary() {
+        let provider = MockSysInfo { mem_mb: Ok(0), disk_mb: Ok(0), cpu_load: Ok(0) };
+        assert!(!is_memory_threshold_safe(&provider, 1).unwrap());
+        assert!(is_memory_threshold_safe(&provider, 0).unwrap());
+
+        let provider = MockSysInfo { mem_mb: Ok(u64::MAX), disk_mb: Ok(0), cpu_load: Ok(0) };
+        assert!(is_memory_threshold_safe(&provider, 1024).unwrap());
+    }
+
+    #[test]
+    fn test_is_disk_space_safe_valid() {
+        let provider = MockSysInfo { mem_mb: Ok(0), disk_mb: Ok(2048), cpu_load: Ok(0) };
+        assert!(is_disk_space_safe(&provider, 1024).unwrap());
+
+        let provider = MockSysInfo { mem_mb: Ok(0), disk_mb: Ok(1024), cpu_load: Ok(0) };
+        assert!(is_disk_space_safe(&provider, 1024).unwrap());
+    }
+
+    #[test]
+    fn test_is_disk_space_safe_invalid() {
+        let provider = MockSysInfo { mem_mb: Ok(0), disk_mb: Ok(512), cpu_load: Ok(0) };
+        assert!(!is_disk_space_safe(&provider, 1024).unwrap());
+    }
+
+    #[test]
+    fn test_is_disk_space_safe_error() {
+        let provider = MockSysInfo { mem_mb: Ok(0), disk_mb: Err("IO error".into()), cpu_load: Ok(0) };
+        assert!(is_disk_space_safe(&provider, 1024).is_err());
+    }
+
+    #[test]
+    fn test_is_disk_space_safe_boundary() {
+        let provider = MockSysInfo { mem_mb: Ok(0), disk_mb: Ok(0), cpu_load: Ok(0) };
+        assert!(!is_disk_space_safe(&provider, 1).unwrap());
+        assert!(is_disk_space_safe(&provider, 0).unwrap());
+
+        let provider = MockSysInfo { mem_mb: Ok(0), disk_mb: Ok(u64::MAX), cpu_load: Ok(0) };
+        assert!(is_disk_space_safe(&provider, 1024).unwrap());
+    }
+
+    #[test]
+    fn test_is_cpu_load_safe_valid() {
+        let provider = MockSysInfo { mem_mb: Ok(0), disk_mb: Ok(0), cpu_load: Ok(50) };
+        assert!(is_cpu_load_safe(&provider, 80).unwrap());
+
+        let provider = MockSysInfo { mem_mb: Ok(0), disk_mb: Ok(0), cpu_load: Ok(80) };
+        assert!(is_cpu_load_safe(&provider, 80).unwrap());
+    }
+
+    #[test]
+    fn test_is_cpu_load_safe_invalid() {
+        let provider = MockSysInfo { mem_mb: Ok(0), disk_mb: Ok(0), cpu_load: Ok(81) };
+        assert!(!is_cpu_load_safe(&provider, 80).unwrap());
+    }
+
+    #[test]
+    fn test_is_cpu_load_safe_error() {
+        let provider = MockSysInfo { mem_mb: Ok(0), disk_mb: Ok(0), cpu_load: Err("Permission denied".into()) };
+        assert!(is_cpu_load_safe(&provider, 80).is_err());
+    }
+
+    #[test]
+    fn test_is_cpu_load_safe_boundary() {
+        let provider = MockSysInfo { mem_mb: Ok(0), disk_mb: Ok(0), cpu_load: Ok(0) };
+        assert!(is_cpu_load_safe(&provider, 0).unwrap());
+
+        let provider = MockSysInfo { mem_mb: Ok(0), disk_mb: Ok(0), cpu_load: Ok(1) };
+        assert!(!is_cpu_load_safe(&provider, 0).unwrap());
+
+        let provider = MockSysInfo { mem_mb: Ok(0), disk_mb: Ok(0), cpu_load: Ok(u8::MAX) };
+        assert!(is_cpu_load_safe(&provider, u8::MAX).unwrap());
     }
 }
