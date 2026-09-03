@@ -25,7 +25,7 @@ concurrency:
 jobs:
   windows-lab-plan:
     name: windows-lab-plan
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 15
     environment: protected-isolated-lab
     permissions:
@@ -37,24 +37,37 @@ jobs:
       LAB_ENVIRONMENT: protected-isolated-lab
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # action pinned
 
       - name: Set up Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # action pinned
         with:
           node-version: 22.17.0
 
+      - name: Require Hyper-V infrastructure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $hv = Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -ErrorAction SilentlyContinue
+          if ($null -eq $hv) {
+              Write-Host "::error::Runner lacks Hyper-V infrastructure prerequisite."
+              exit 69
+          }
+
       - name: Prepare plan artifact directory
+        shell: bash
         run: mkdir -p tmp/ci-lab-plan
 
       - name: Write isolated Windows plan
+        shell: bash
         run: node tools/ci/plan-isolated-lab.mjs --kind windows --out tmp/ci-lab-plan/plan.json --manifest tmp/ci-lab-plan/artifact-manifest.json
 
       - name: Verify plan artifact manifest
+        shell: bash
         run: node tools/ci/check-ci-artifacts.mjs --check tmp/ci-lab-plan/artifact-manifest.json --root tmp/ci-lab-plan
 
       - name: Upload plan artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # action pinned
         with:
           name: windows-lab-plan-${{ github.sha }}
           path: tmp/ci-lab-plan
