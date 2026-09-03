@@ -17,28 +17,14 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # pinned checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
         with:
           fetch-depth: 0
 
       - name: Check added repository text uses canonical English
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          set -euo pipefail
-          if ! command -v node >/dev/null 2>&1; then
-            echo "::error::Node.js is not installed"
-            exit 69
-          fi
-          if [ ! -f "tools/ci/check-comment-language.mjs" ]; then
-            echo "::error::Scanner script not found"
-            exit 66
-          fi
-          if [ -z "${BASE_REF:-}" ]; then
-            echo "::error::github.base_ref is required for diff mode"
-            exit 64
-          fi
-          node tools/ci/check-comment-language.mjs --diff "origin/${BASE_REF}"
+        run: >-
+          node tools/ci/check-comment-language.mjs
+          --diff "origin/${{ github.base_ref }}"
 
 
   comment-language-summary:
@@ -55,12 +41,8 @@ jobs:
           COMMENT_LANGUAGE_RESULT: ${{ needs.comment-language.result }}
         run: |
           set -euo pipefail
-          if [ -z "${COMMENT_LANGUAGE_RESULT:-}" ]; then
-            echo "::error::COMMENT_LANGUAGE_RESULT is missing"
-            exit 64
-          fi
           if [ "$COMMENT_LANGUAGE_RESULT" != success ]; then
             echo "COMMENT_LANGUAGE_SUMMARY=FAIL"
-            exit 65
+            exit 1
           fi
           echo "COMMENT_LANGUAGE_SUMMARY=PASS"
