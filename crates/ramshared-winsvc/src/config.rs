@@ -291,7 +291,7 @@ tenant = "windrive-host"
     }
 
     #[test]
-    fn reject_zero_size() {
+    fn test_config_reject_zero_size_invalid() {
         let bad = GOOD.replace("536870912", "0");
         let e = WinDriveConfig::from_toml(&bad).unwrap_err();
         assert!(matches!(
@@ -610,6 +610,38 @@ volume_mount_path = "C:\\Users\\Public\\lun""#,
         assert!(is_absolute_path(Path::new(r"\\?\C:\x")));
         assert_eq!(is_absolute_path(Path::new("/tmp/x")), cfg!(unix));
         assert!(!is_absolute_path(Path::new("relative")));
+    }
+
+
+
+
+    #[test]
+    fn test_config_reject_u64_max_size_invalid() {
+        let bad = GOOD.replace("size_bytes = 536870912", "size_bytes = 18446744073709551615");
+        let e = WinDriveConfig::from_toml(&bad).unwrap_err();
+        assert!(matches!(
+            e,
+            ConfigError::Invalid {
+                field: "size_bytes",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_config_reject_negative_size_parse_error() {
+        let bad = GOOD.replace("size_bytes = 536870912", "size_bytes = -1");
+        let e = WinDriveConfig::from_toml(&bad).unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(_)));
+    }
+
+    #[test]
+    fn test_config_reject_non_utf8_string_parse_error() {
+        // Test with invalid bytes
+        let mut bad = GOOD.to_string().into_bytes();
+        bad.extend_from_slice(&[0xff, 0xfe, 0xfd]);
+        let e = WinDriveConfig::from_reader(bad.as_slice()).unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(_)));
     }
 
     #[test]
