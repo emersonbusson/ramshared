@@ -176,7 +176,7 @@ function Stop-CampaignProcessInstanceSafely {
             $Process.CloseMainWindow() | Out-Null
         } catch {}
         if (-not $Process.WaitForExit(10000)) {
-            Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
+            $Process.Kill()
             if (-not $Process.WaitForExit(5000)) { return [pscustomobject]@{ stopped = $false; reason = "$Operation`_process_instance_kill_unreaped" } }
             return [pscustomobject]@{ stopped = $true; reason = "$Operation`_process_instance_force_terminated" }
         }
