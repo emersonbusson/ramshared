@@ -77,6 +77,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Invalid tag format: $RELEASE_TAG" >&2
+            exit 65
+          fi
+          test -f CHANGELOG.md
+          VERSION="${RELEASE_TAG#v}"
+          if ! grep -Fq "## [$VERSION]" CHANGELOG.md && ! grep -Fq "## [$RELEASE_TAG]" CHANGELOG.md; then
+            echo "Missing entry for $RELEASE_TAG in CHANGELOG.md" >&2
+            exit 65
+          fi
           node tools/ci/check-release-publication.mjs \
             --policy docs/governance/release-promotion.json \
             --tag "$RELEASE_TAG" \
@@ -143,6 +153,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Invalid tag format: $RELEASE_TAG" >&2
+            exit 65
+          fi
+          test -f CHANGELOG.md
+          VERSION="${RELEASE_TAG#v}"
+          if ! grep -Fq "## [$VERSION]" CHANGELOG.md && ! grep -Fq "## [$RELEASE_TAG]" CHANGELOG.md; then
+            echo "Missing entry for $RELEASE_TAG in CHANGELOG.md" >&2
+            exit 65
+          fi
           node tools/ci/check-release-publication.mjs \
             --policy docs/governance/release-promotion.json \
             --tag "$RELEASE_TAG" \
