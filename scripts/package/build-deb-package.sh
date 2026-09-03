@@ -4,6 +4,13 @@
 # Usage: scripts/package/build-deb-package.sh [version]
 set -euo pipefail
 
+for cmd in dpkg-deb fakeroot lintian; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "ERROR: Required command '$cmd' is not available." >&2
+    exit 69
+  fi
+done
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.9.0-beta.2}}"
 VERSION_CLEAN="${VERSION#v}"
