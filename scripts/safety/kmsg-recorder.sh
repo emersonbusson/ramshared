@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 # kmsg-recorder.sh — Mirrors the kernel console (/dev/kmsg via `dmesg --follow`) to
 # a file in DURABLE Windows storage in real time. It is the closest black-box recorder
 # to the crash moment: when a `kernel BUG` triggers, the entire call trace is already
@@ -6,10 +7,20 @@
 # held before persisting (as happened in #1 — journald only captured the 1st line).
 #
 # Runs as a systemd service (root). Does not touch GPU/ublk/swap.
-set -uo pipefail
 
 FORENSICS_DIR="${RAMSHARED_FORENSICS_DIR:-/mnt/c/wsl-forensics}"
 mkdir -p "$FORENSICS_DIR" 2>/dev/null || FORENSICS_DIR="/var/log"  # fallback guest-local
+
+if [ ! -w "$FORENSICS_DIR" ]; then
+  echo "Error: Output directory $FORENSICS_DIR is not writable." >&2
+  exit 74
+fi
+
+if [ ! -r "/dev/kmsg" ]; then
+  echo "Error: /dev/kmsg is not readable." >&2
+  exit 74
+fi
+
 LOG="$FORENSICS_DIR/kernel-console.log"
 PREV="$FORENSICS_DIR/kernel-console.prev.log"
 
