@@ -16,6 +16,14 @@ DEB_FILE="$OUT_DIR/ramshared_${DEB_VERSION}_${ARCH}.deb"
 
 echo "==> Building Debian package for RamShared ${VERSION} (${ARCH})..."
 
+# Validate prerequisites
+for cmd in dpkg-deb sha256sum awk grep sed install mkdir rm df; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "ERROR: Required command not found: $cmd" >&2
+    exit 69 # EX_UNAVAILABLE
+  fi
+done
+
 # Ensure release binaries exist
 CLI_BIN="$ROOT/target/release/ramshared"
 DAEMON_BIN="$ROOT/target/release/ramsharedd"
@@ -29,7 +37,7 @@ fi
 
 if [[ ! -x "$CLI_BIN" || ! -x "$DAEMON_BIN" ]]; then
   echo "ERROR: Target release binaries not found ($CLI_BIN / $DAEMON_BIN)" >&2
-  exit 1
+  exit 69 # EX_UNAVAILABLE
 fi
 
 # Clean previous staging
@@ -143,6 +151,45 @@ fi
 exit 0
 PRERM_EOF
 chmod 0755 "$STAGE_DIR/DEBIAN/prerm"
+
+# Validate DEBIAN/control mandatory fields and format
+echo "==> Validating DEBIAN/control..."
+if [[ ! -f "$STAGE_DIR/DEBIAN/control" ]]; then
+  echo "ERROR: DEBIAN/control not found" >&2
+  exit 69 # EX_UNAVAILABLE
+fi
+
+_pkg=$(grep '^Package:' "$STAGE_DIR/DEBIAN/control" | awk '{print $2}' || true)
+_ver=$(grep '^Version:' "$STAGE_DIR/DEBIAN/control" | awk '{print $2}' || true)
+_arch=$(grep '^Architecture:' "$STAGE_DIR/DEBIAN/control" | awk '{print $2}' || true)
+_dep=$(grep '^Depends:' "$STAGE_DIR/DEBIAN/control" | cut -d: -f2- | sed -e 's/^[[:space:]]*//' || true)
+
+if [[ -z "$_pkg" || -z "$_ver" || -z "$_arch" || -z "$_dep" ]]; then
+  echo "ERROR: Missing mandatory fields in DEBIAN/control" >&2
+  exit 78 # EX_CONFIG
+fi
+
+if [[ ! "$_pkg" =~ ^[a-z0-9][a-z0-9+-.]+$ ]]; then
+  echo "ERROR: Invalid Package format: $_pkg" >&2
+  exit 78 # EX_CONFIG
+fi
+
+if [[ ! "$_ver" =~ ^[0-9][a-zA-Z0-9.+~-]*$ ]]; then
+  echo "ERROR: Invalid Version format: $_ver" >&2
+  exit 78 # EX_CONFIG
+fi
+
+if [[ ! "$_arch" =~ ^[a-z0-9-]+$ ]]; then
+  echo "ERROR: Invalid Architecture format: $_arch" >&2
+  exit 78 # EX_CONFIG
+fi
+
+# Validate disk free space before packaging
+_avail=$(df -kP "$STAGE_DIR" | awk 'NR==2 {print $4}' || true)
+if [[ -n "$_avail" && "$_avail" -lt 51200 ]]; then
+  echo "ERROR: Insufficient disk space for packaging" >&2
+  exit 74 # EX_IOERR
+fi
 
 # Build the .deb archive
 mkdir -p "$OUT_DIR"
