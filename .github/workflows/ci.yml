@@ -131,10 +131,35 @@ jobs:
           --test-coverage-functions=80
           tools/ci/check-campaign-evidence-lifecycle.test.mjs
 
+  scripts:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Run ShellCheck
+        run: |
+          set -euo pipefail
+
+          if [ ! -d "scripts" ]; then
+            echo "Error: scripts directory not found." >&2
+            exit 78
+          fi
+
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            echo "Error: shellcheck is not installed." >&2
+            exit 69
+          fi
+
+          find scripts -type f -name "*.sh" -exec shellcheck --severity=error {} +
+
   ci-summary:
     name: ci-summary
     if: always()
-    needs: [rust, docs]
+    needs: [rust, docs, scripts]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -144,9 +169,10 @@ jobs:
         env:
           RUST_RESULT: ${{ needs.rust.result }}
           DOCS_RESULT: ${{ needs.docs.result }}
+          SCRIPTS_RESULT: ${{ needs.scripts.result }}
         run: |
           set -euo pipefail
-          for result in "$RUST_RESULT" "$DOCS_RESULT"; do
+          for result in "$RUST_RESULT" "$DOCS_RESULT" "$SCRIPTS_RESULT"; do
             if [ "$result" != success ]; then
               echo "CI_CORE_SUMMARY=FAIL"
               exit 1
