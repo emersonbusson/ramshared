@@ -26,9 +26,7 @@ jobs:
             const body = context.payload.pull_request?.body ?? '';
             const requiredSections = [
               { name: 'Resumo', pattern: /^##\s+Resumo\s*$/im },
-              { name: 'Commits', pattern: /^##\s+Commits\s*$/im },
-              { name: 'Issue', pattern: /^##\s+Issue\s*$/im },
-              { name: 'Responsavel', pattern: /^##\s+Responsavel\s*$/im },
+              { name: 'Commits table', pattern: /^##\s+Commits table\s*$/im },
               { name: 'Labels', pattern: /^##\s+Labels\s*$/im },
               { name: 'Validacao', pattern: /^##\s+Validacao\s*$/im },
               { name: 'Rollback trigger', pattern: /^##\s+Rollback trigger\s*$/im }

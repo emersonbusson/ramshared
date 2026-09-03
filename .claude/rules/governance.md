@@ -17,12 +17,10 @@ These rules exist so that every PR (Patch/Pull Request) carries reviewable conte
 Every PR uses `.github/pull_request_template.md`. Mandatory sections:
 
 1. `## Summary` — English, sufficient for someone outside the conversation.
-2. `## Commits` — table with `Commit | What was done | Why it was done | Details`. Each line has hash + clickable `<details>` with context, impact, files, validation, and risk/rollback. **Every commit line is visible in the table**, even in PRs with 20+ commits — forbidden to wrap multiple lines inside a grouping `<details>` that hides commits from the initial preview. Per-row `<details>` in the `Details` field remains mandatory and serves the role of hiding deep context. Grouping by editorial category goes in the line's `summary` or in short text in `Details`, never in a `<details>` that hides commits.
-3. `## Issue` — `Closes #NNN`, `Fixes #NNN`, or `Resolves #NNN`.
-4. `## Assignee` — `@user`. PR and linked issue share assignee.
-5. `## Labels` — at least one `type:*` and one `area:*` (e.g.: `area:mm`, `area:drm`).
-6. `## Validation` — checklist with relevant gates (`checkpatch.pl`, `make modules`, `dmesg` clean of OOPs, `kselftest`).
-7. `## Rollback trigger` — numerical/observable condition that justifies reverting the kernel patch (e.g.: stall > 1ms, kernel panic).
+2. `## Commits table` — table with `Commit | What was done | Why it was done | Details`. Each line has hash + clickable `<details>` with context, impact, files, validation, and risk/rollback. **Every commit line is visible in the table**, even in PRs with 20+ commits — forbidden to wrap multiple lines inside a grouping `<details>` that hides commits from the initial preview. Per-row `<details>` in the `Details` field remains mandatory and serves the role of hiding deep context. Grouping by editorial category goes in the line's `summary` or in short text in `Details`, never in a `<details>` that hides commits.
+3. `## Labels` — at least one `type:*` and one `area:*` (e.g.: `area:mm`, `area:drm`).
+4. `## Validation` — checklist with relevant gates (`checkpatch.pl`, `make modules`, `dmesg` clean of OOPs, `kselftest`).
+5. `## Rollback trigger` — numerical/observable condition that justifies reverting the kernel patch (e.g.: stall > 1ms, kernel panic).
 
 ## Commit visibility rule
 
@@ -54,10 +52,9 @@ CI / scripts / lab harnesses are **not** SSDV3 by default (see `ssdv3.md` § Out
 
 ## Don't
 
-- ❌ Opening a PR without filling out the 7 sections.
+- ❌ Opening a PR without filling out the 5 sections.
 - ❌ Commit table without per-row `<details>` and without hash.
 - ❌ Grouping `<details>` hiding multiple commit lines from the PR preview.
 - ❌ Labels without `type:*` and `area:*`.
-- ❌ PR without assignee shared with the issue.
 - ❌ Rollback trigger in the form of "if it goes wrong, revert" — needs a numerical/observable window in the Kernel.
 - ❌ Changing `CLAUDE.md` without synchronizing `AGENTS.md` in the same commit.

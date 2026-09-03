@@ -1,5 +1,5 @@
 <!--
-Template de PR — RamShared. As 7 secoes abaixo sao OBRIGATORIAS (.claude/rules/governance.md).
+Template de PR — RamShared. As 5 secoes abaixo sao OBRIGATORIAS (.claude/rules/governance.md).
 Regra de visibilidade: TODA linha de commit fica visivel na tabela. Use <details> per-row
 no campo "Detalhes" — nunca um <details> agrupador que esconda commits do preview do PR.
 Sync rule: regra que mudar na governanca deve mudar em >=2 lugares no mesmo commit
@@ -10,23 +10,13 @@ Sync rule: regra que mudar na governanca deve mudar em >=2 lugares no mesmo comm
 
 <!-- PT-BR, suficiente para alguem fora da conversa entender o QUE e o PORQUE. -->
 
-## Commits
+## Commits table
 
 <!-- Toda linha de commit visivel. <details> per-row obrigatorio no campo Detalhes. -->
 
 | Commit | O que fez | Por que fez | Detalhes |
 |---|---|---|---|
 | `hash` | ... | ... | <details><summary>detalhes</summary>**Arquivos:** ...<br>**Validacao:** ...<br>**Risco/rollback:** ...</details> |
-
-## Issue
-
-<!-- Closes #NNN | Fixes #NNN | Resolves #NNN. Crie a issue ANTES do PR. -->
-Closes #
-
-## Responsavel
-
-<!-- @usuario. PR e issue linkada compartilham o assignee. -->
-@
 
 ## Labels
 
