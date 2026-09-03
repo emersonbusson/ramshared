@@ -19,6 +19,15 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+$svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+if ($null -eq $svc) {
+    Write-Error -ErrorId "EX_UNAVAILABLE" -Message "Revocation target service '$ServiceName' does not exist." -ErrorAction Stop
+}
+if ($svc.Status -ne 'Stopped' -and $svc.Status -ne 'Running') {
+    Write-Error -ErrorId "EX_USAGE" -Message "Revocation target service '$ServiceName' is locked in state '$($svc.Status)'." -ErrorAction Stop
+}
+
 New-Item -ItemType Directory -Force -Path $ArtifactDir | Out-Null
 $runId = "revoke-{0:yyyyMMdd-HHmmss}" -f (Get-Date)
 $log = Join-Path $ArtifactDir "$runId.log"
