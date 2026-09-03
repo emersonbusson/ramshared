@@ -16,10 +16,21 @@ set -euo pipefail
 KTAG="${KTAG:-linux-msft-wsl-6.18.y}"
 KSRC="${KSRC:-$HOME/src/WSL2-Linux-Kernel}"
 JOBS="${JOBS:-2}"; [ "$JOBS" -lt 1 ] && JOBS=1
+MAX_JOBS="$(nproc 2>/dev/null || echo 1)"
+if [ "$JOBS" -gt "$MAX_JOBS" ]; then
+  JOBS="$MAX_JOBS"
+fi
 CONFIGS=("$@"); [ ${#CONFIGS[@]} -eq 0 ] && CONFIGS=(CONFIG_BLK_DEV_UBLK=m CONFIG_ZRAM_WRITEBACK=y CONFIG_IO_URING=y)
 
 echo "[build] deps..."
 sudo apt-get install -y -q build-essential flex bison libelf-dev libssl-dev bc dwarves cpio python3 >/dev/null
+
+for cmd in make gcc flex bison; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "[build] error: required tool '$cmd' is missing." >&2
+    exit 69
+  fi
+done
 
 if [ ! -d "$KSRC/.git" ]; then
   echo "[build] cloning $KTAG -> $KSRC"
@@ -27,8 +38,21 @@ if [ ! -d "$KSRC/.git" ]; then
 fi
 cd "$KSRC"
 
+if [ ! -f "Makefile" ]; then
+  echo "[build] error: Invalid kernel source tree in $KSRC" >&2
+  exit 78
+fi
+
 echo "[build] base = Microsoft/config-wsl + extra configs"
+if [ ! -f "Microsoft/config-wsl" ]; then
+  echo "[build] error: Microsoft/config-wsl not found" >&2
+  exit 78
+fi
 cp Microsoft/config-wsl .config
+if [ ! -f ".config" ]; then
+  echo "[build] error: .config was not created" >&2
+  exit 74
+fi
 for kv in "${CONFIGS[@]}"; do
   name="${kv%%=*}"; val="${kv##*=}"
   case "$val" in
