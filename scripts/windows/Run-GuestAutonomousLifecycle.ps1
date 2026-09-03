@@ -377,6 +377,8 @@ try {
             }
             try {
                 if (-not (Wait-Job $stopJob -Timeout 30)) {
+                    Stop-Job $stopJob -ErrorAction SilentlyContinue
+                    Remove-Job $stopJob -Force -ErrorAction SilentlyContinue
                     throw "same STOP did not complete after pagefile restoration"
                 }
                 $stopResult = Receive-Job $stopJob -ErrorAction Stop
@@ -434,6 +436,7 @@ try {
                 try {
                     if (-not (Wait-Job $formatJob -Timeout 60)) {
                         Stop-Job $formatJob -ErrorAction SilentlyContinue
+                        Remove-Job $formatJob -Force -ErrorAction SilentlyContinue
                         $recoveryJob = Start-Job -ScriptBlock {
                             param($diskNumber, $serial, $size, $driveLetter,
                                 $recoveryPath, $beganRaw)
@@ -502,6 +505,7 @@ try {
                         try {
                             if (-not (Wait-Job $recoveryJob -Timeout 60)) {
                                 Stop-Job $recoveryJob -ErrorAction SilentlyContinue
+                                Remove-Job $recoveryJob -Force -ErrorAction SilentlyContinue
                                 throw "exact format recovery exceeded 60 seconds"
                             }
                             Receive-Job $recoveryJob -ErrorAction Stop | Out-Null
@@ -658,6 +662,8 @@ try {
         }
         try {
             if (-not (Wait-Job $residueJob -Timeout 10)) {
+                Stop-Job $residueJob -ErrorAction SilentlyContinue
+                Remove-Job $residueJob -Force -ErrorAction SilentlyContinue
                 throw "Win32_DiskDrive zero-residue query timed out"
             }
             $remaining = [int](Receive-Job $residueJob -ErrorAction Stop)
