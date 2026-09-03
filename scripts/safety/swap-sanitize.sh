@@ -3,13 +3,22 @@
 # Foreign nbd, zram, and ublk swaps remain evidence, never cleanup candidates.
 set -euo pipefail
 
+validate_swap_device_active() {
+  local target_device="$1"
+  local proc_swaps_content="$2"
+  if ! grep -Fqx -- "$target_device" <<<"$proc_swaps_content"; then
+    return 1
+  fi
+  return 0
+}
+
 FIX=0
 [[ ${1:-} == --fix ]] && FIX=1
 
 test_root=${RAMSHARED_SWAP_SANITIZE_TEST_ROOT:-}
 if [[ -n $test_root ]]; then
   [[ $test_root == /* && $test_root != / && -d $test_root && ! -L $test_root ]] || {
-    echo 'swap-sanitize test root is invalid' >&2; exit 2;
+    echo 'swap-sanitize test root is invalid' >&2; exit 78;
   }
   proc_swaps="$test_root/proc/swaps"
   run_root="$test_root/run/ramshared"
@@ -44,16 +53,16 @@ done <"$proc_swaps"
 
 if [[ $GHOST -eq 1 ]]; then
   echo 'ACTION: ghost swap with device deleted; preserve evidence and use attended recovery.'
-  exit 2
+  exit 69
 fi
 
 if [[ $FIX -eq 1 ]]; then
   echo '=== --fix: sealed RamShared-owned live paths only ==='
   [[ -f $ownership_manifest && ! -L $ownership_manifest ]] || {
-    echo 'swapoff_refused_missing_ownership_evidence' >&2; exit 2;
+    echo 'swapoff_refused_missing_ownership_evidence' >&2; exit 78;
   }
   owned_devices_file=$(mktemp "${run_root}/.ramshared-swap-ownership.XXXXXX") || {
-    echo 'swapoff_refused_ownership_evidence_staging_failed' >&2; exit 2;
+    echo 'swapoff_refused_ownership_evidence_staging_failed' >&2; exit 74;
   }
   if ! python3 - "$ownership_manifest" "$run_root" >"$owned_devices_file" <<'PY'
 import hashlib
@@ -103,23 +112,23 @@ PY
   then
     rm -f -- "$owned_devices_file"
     echo 'swapoff_refused_invalid_ownership_evidence' >&2
-    exit 2
+    exit 64
   fi
   mapfile -t owned_devices <"$owned_devices_file"
   rm -f -- "$owned_devices_file"
-  ((${#owned_devices[@]} > 0)) || { echo 'swapoff_refused_no_owned_devices' >&2; exit 2; }
+  ((${#owned_devices[@]} > 0)) || { echo 'swapoff_refused_no_owned_devices' >&2; exit 78; }
 
   swap_names=$(awk 'NR > 1 { print $1 }' "$proc_swaps")
   swapped=0
   for device in "${owned_devices[@]}"; do
-    if ! grep -Fqx -- "$device" <<<"$swap_names"; then
+    if ! validate_swap_device_active "$device" "$swap_names"; then
       echo "swapoff_skipped_not_live=$device"
       continue
     fi
     echo "swapoff $device"
     if ! swapoff "$device"; then
       echo "swapoff_failed=$device" >&2
-      exit 2
+      exit 74
     fi
     swapped=$((swapped + 1))
   done
