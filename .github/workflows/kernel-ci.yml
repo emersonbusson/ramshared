@@ -59,17 +59,20 @@ jobs:
           - compiler: aarch64-gcc
             arch: aarch64
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Checkout kernel source
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install cross-compilation toolchain
-        if: matrix.compiler == 'aarch64-gcc'
+        if: steps.checkout.outcome == 'success' && matrix.compiler == 'aarch64-gcc'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu
 
       - name: Install clang
-        if: matrix.compiler == 'clang'
+        if: steps.checkout.outcome == 'success' && matrix.compiler == 'clang'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq clang
 
       - name: Run build matrix (${{ matrix.compiler }} / ${{ matrix.arch }})
+        if: steps.checkout.outcome == 'success'
         run: ./scripts/ci/check-kernel-build-matrix.sh "${{ matrix.compiler }}" "${{ matrix.arch }}"
 
   kernel-qemu-smoke:
