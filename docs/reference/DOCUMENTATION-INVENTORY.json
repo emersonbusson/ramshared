@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 286,
-    "classified": 275,
+    "total": 287,
+    "classified": 276,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -883,6 +883,18 @@
     },
     {
       "path": "docs/jules/findings/README.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/test-winsvc-006-finding.md",
       "disposition": "classified",
       "ruleId": "jules-findings",
       "verification": {
