@@ -503,4 +503,95 @@ mod tests {
         let current_health: Option<bool> = None;
         assert_ne!(current_health, Some(true));
     }
+
+    #[test]
+    fn test_evidence_base_creation_sets_expected_defaults() {
+        let row = RuntimeEvidence::base("run-42", "Starting");
+        assert_eq!(row.schema, EVIDENCE_SCHEMA);
+        assert_eq!(row.run_id, "run-42");
+        assert_eq!(row.phase, "Starting");
+        assert_eq!(row.mode, "storage-only");
+        assert_eq!(row.backend, "cuda");
+        assert_eq!(row.broker_service, "RamSharedBroker");
+        assert!(row.ts_utc_ms > 0);
+        assert!(row.event_id.starts_with("evt-"));
+        assert_eq!(row.lease_id, 0);
+        assert_eq!(row.latency, None);
+    }
+
+    #[test]
+    fn test_evidence_utc_ms_returns_valid_timestamp() {
+        let ts1 = utc_ms();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let ts2 = utc_ms();
+        assert!(ts1 > 0);
+        assert!(ts2 >= ts1);
+    }
+
+    #[test]
+    fn test_evidence_json_serialization_roundtrip_preserves_fields() {
+        let mut row = RuntimeEvidence::base("run-json", "Testing");
+        row.counters.reads = 42;
+        row.latency = Some(LatencySummary {
+            p50_us: 10,
+            p95_us: 20,
+            p99_us: 30,
+            max_us: 100,
+            samples: 5,
+        });
+
+        let json = serde_json::to_string(&row).expect("serialize");
+        let deserialized: RuntimeEvidence = serde_json::from_str(&json).expect("deserialize");
+
+        assert_eq!(deserialized.run_id, "run-json");
+        assert_eq!(deserialized.counters.reads, 42);
+        let lat = deserialized.latency.unwrap();
+        assert_eq!(lat.p99_us, 30);
+    }
+
+    #[test]
+    fn test_evidence_summarize_latencies_empty_yields_default() {
+        let latencies: [u64; 0] = [];
+        let summary = summarize_latencies(&latencies);
+        assert_eq!(summary.samples, 0);
+        assert_eq!(summary.p50_us, 0);
+        assert_eq!(summary.max_us, 0);
+    }
+
+    #[test]
+    fn test_evidence_summarize_latencies_unsorted_yields_correct_percentiles() {
+        // [10, 50, 40, 20, 30] sorted is [10, 20, 30, 40, 50]
+        let samples = vec![10, 50, 40, 20, 30];
+        let summary = summarize_latencies(&samples);
+
+        assert_eq!(summary.samples, 5);
+        assert_eq!(summary.p50_us, 30);
+        assert_eq!(summary.p95_us, 50); // With 5 items, rank = ceil(0.95 * 5) = ceil(4.75) = 5 -> idx 4 -> 50
+        assert_eq!(summary.max_us, 50);
+    }
+
+    #[test]
+    fn test_evidence_summarize_latencies_boundary_values() {
+        let samples = vec![0, u64::MAX, u64::MAX / 2];
+        let summary = summarize_latencies(&samples);
+
+        assert_eq!(summary.samples, 3);
+        assert_eq!(summary.max_us, u64::MAX);
+    }
+
+    #[test]
+    fn test_evidence_writer_open_creates_parent_directories() {
+        let dir = std::env::temp_dir().join(format!("ramshared-writer-test-{}", utc_ms()));
+        let file_path = dir.join("nested").join("evidence.jsonl");
+
+        assert!(!file_path.exists());
+
+        {
+            let _writer = EvidenceWriter::open(&file_path).expect("open writer");
+            assert!(file_path.exists());
+        }
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
