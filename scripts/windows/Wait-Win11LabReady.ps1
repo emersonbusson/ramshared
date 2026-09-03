@@ -55,6 +55,18 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
+if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Error -Message "Elevated administrator token required." -ErrorId "AccessDenied"
+    throw [System.Exception]::new("Elevated administrator token required.")
+}
+
+if (-not (Get-Module -ListAvailable -Name Hyper-V)) {
+    Write-Error -Message "Hyper-V module is not available." -ErrorId "ModuleNotFound"
+    throw [System.Exception]::new("Hyper-V module is not available.")
+}
+
 . (Join-Path $PSScriptRoot "Invoke-GuestPsDirectBounded.ps1")
 
 function Normalize-Win11LabReadyThumbprint {
