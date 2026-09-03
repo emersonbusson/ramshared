@@ -61,6 +61,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Cache kernel object files
+        uses: actions/cache@6f8efc29b200d32929f49075959781ed54ec270c # v3
+        with:
+          path: drivers/block/ramshared/**/*.o
+          key: ${{ runner.os }}-kernel-${{ matrix.compiler }}-${{ hashFiles('drivers/block/ramshared/**/*.c', 'drivers/block/ramshared/**/*.h') }}
+
       - name: Install cross-compilation toolchain
         if: matrix.compiler == 'aarch64-gcc'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu
