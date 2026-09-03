@@ -19,6 +19,24 @@ echo "    RamShared Installer — High-Performance VRAM Tier     "
 echo "  ======================================================="
 echo ""
 
+# Validate architecture and build dependencies
+validate_prerequisites() {
+  local arch
+  arch="$(uname -m)"
+  if [[ "$arch" != "x86_64" && "$arch" != "aarch64" ]]; then
+    echo "Error: Unsupported architecture $arch" >&2
+    exit 69
+  fi
+
+  for cmd in cargo rustc gcc; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      echo "Error: Missing required dependency: $cmd" >&2
+      exit 69
+    fi
+  done
+}
+validate_prerequisites
+
 # Check root permissions
 if [[ $EUID -ne 0 ]]; then
   echo "Error: This installer must be run as root (use sudo)." >&2
