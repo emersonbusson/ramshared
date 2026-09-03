@@ -117,6 +117,7 @@ load_kernel_pair_manifest() {
 	local expected=(
 		schema pair_id release
 		kernel_file kernel_sha256 kernel_size_bytes
+		initramfs_file initramfs_sha256 initramfs_size_bytes
 		modules_file modules_sha256 modules_size_bytes
 		modules_layout layout_release_directory_count
 		layout_nested_release_directory_count layout_inventory_sha256
@@ -139,17 +140,19 @@ load_kernel_pair_manifest() {
 		return 1
 	fi
 	if [[ "${KERNEL_PAIR[kernel_file]}" != "kernel.bzImage" ||
+		"${KERNEL_PAIR[initramfs_file]}" != "initramfs.cpio.gz" ||
 		"${KERNEL_PAIR[modules_file]}" != "modules.vhdx" ]]; then
 		PAIR_ERROR="kernel-pair artifact names are not canonical"
 		return 1
 	fi
-	for key in kernel_sha256 modules_sha256 layout_inventory_sha256 qemu_stamp_sha256 qemu_kernel_sha256; do
+	for key in kernel_sha256 initramfs_sha256 modules_sha256 layout_inventory_sha256 qemu_stamp_sha256 qemu_kernel_sha256; do
 		if ! canonical_sha256 "${KERNEL_PAIR[$key]}"; then
 			PAIR_ERROR="kernel-pair $key is invalid"
 			return 1
 		fi
 	done
 	if [[ ! "${KERNEL_PAIR[kernel_size_bytes]}" =~ ^[1-9][0-9]*$ ||
+		! "${KERNEL_PAIR[initramfs_size_bytes]}" =~ ^[1-9][0-9]*$ ||
 		! "${KERNEL_PAIR[modules_size_bytes]}" =~ ^[1-9][0-9]*$ ]]; then
 		PAIR_ERROR="kernel-pair artifact size is invalid"
 		return 1
@@ -180,18 +183,21 @@ load_kernel_pair_manifest() {
 	KERNEL_PAIR[manifest_path]="$manifest"
 	KERNEL_PAIR[manifest_sha256]="$(sha256sum -- "$manifest" | awk '{print $1}')"
 	KERNEL_PAIR[kernel_path]="$parent/${KERNEL_PAIR[kernel_file]}"
+	KERNEL_PAIR[initramfs_path]="$parent/${KERNEL_PAIR[initramfs_file]}"
 	KERNEL_PAIR[modules_path]="$parent/${KERNEL_PAIR[modules_file]}"
 	KERNEL_PAIR[layout_inventory_path]="$parent/modules-layout.manifest"
 	KERNEL_PAIR[qemu_stamp_path]="$parent/qemu-pass.stamp"
-	for key in kernel_path modules_path layout_inventory_path qemu_stamp_path; do
+	for key in kernel_path initramfs_path modules_path layout_inventory_path qemu_stamp_path; do
 		if [[ ! -f "${KERNEL_PAIR[$key]}" || -L "${KERNEL_PAIR[$key]}" ]]; then
 			PAIR_ERROR="sealed pair artifact is missing or symlinked: ${KERNEL_PAIR[$key]}"
 			return 1
 		fi
 	done
 	if [[ "$(stat -c '%s' -- "${KERNEL_PAIR[kernel_path]}")" != "${KERNEL_PAIR[kernel_size_bytes]}" ||
+		"$(stat -c '%s' -- "${KERNEL_PAIR[initramfs_path]}")" != "${KERNEL_PAIR[initramfs_size_bytes]}" ||
 		"$(stat -c '%s' -- "${KERNEL_PAIR[modules_path]}")" != "${KERNEL_PAIR[modules_size_bytes]}" ||
 		"$(sha256sum -- "${KERNEL_PAIR[kernel_path]}" | awk '{print $1}')" != "${KERNEL_PAIR[kernel_sha256]}" ||
+		"$(sha256sum -- "${KERNEL_PAIR[initramfs_path]}" | awk '{print $1}')" != "${KERNEL_PAIR[initramfs_sha256]}" ||
 		"$(sha256sum -- "${KERNEL_PAIR[modules_path]}" | awk '{print $1}')" != "${KERNEL_PAIR[modules_sha256]}" ||
 		"$(sha256sum -- "${KERNEL_PAIR[layout_inventory_path]}" | awk '{print $1}')" != "${KERNEL_PAIR[layout_inventory_sha256]}" ||
 		"$(sha256sum -- "${KERNEL_PAIR[qemu_stamp_path]}" | awk '{print $1}')" != "${KERNEL_PAIR[qemu_stamp_sha256]}" ]]; then

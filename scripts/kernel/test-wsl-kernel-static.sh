@@ -78,9 +78,11 @@ trap cleanup EXIT
 pair="$fixture/pair"
 mkdir -- "$pair"
 truncate -s 1048577 "$pair/kernel.bzImage"
+truncate -s 1024 "$pair/initramfs.cpio.gz"
 printf 'modules-fixture\n' >"$pair/modules.vhdx"
 release='6.18.test-microsoft-standard-WSL2+'
 kernel_sha="$(sha256sum -- "$pair/kernel.bzImage" | awk '{print $1}')"
+initramfs_sha="$(sha256sum -- "$pair/initramfs.cpio.gz" | awk '{print $1}')"
 modules_sha="$(sha256sum -- "$pair/modules.vhdx" | awk '{print $1}')"
 cat >"$pair/modules-layout.manifest" <<EOF
 schema=ramshared.modules-layout.v1
@@ -107,6 +109,9 @@ release=$release
 kernel_file=kernel.bzImage
 kernel_sha256=$kernel_sha
 kernel_size_bytes=1048577
+initramfs_file=initramfs.cpio.gz
+initramfs_sha256=$initramfs_sha
+initramfs_size_bytes=1024
 modules_file=modules.vhdx
 modules_sha256=$modules_sha
 modules_size_bytes=16
@@ -143,6 +148,7 @@ EOF
 chmod 0700 "$fake_bin/modinfo"
 seal_output="$(PATH="$fake_bin:$PATH" timeout --signal=TERM --kill-after=2s 20s bash "$ROOT/seal-kernel-pair.sh" \
 	--kernel "$pair/kernel.bzImage" \
+	--initramfs "$pair/initramfs.cpio.gz" \
 	--modules "$pair/modules.vhdx" \
 	--module-file "$module_fixture" \
 	--release "$release" \
@@ -161,6 +167,7 @@ set +e
 cleanup_rename_output="$(RAMSHARED_CLEANUP_RENAME_FIXTURE=1 PATH="$fake_bin:$PATH" \
 	timeout --signal=TERM --kill-after=2s 20s bash "$ROOT/seal-kernel-pair.sh" \
 	--kernel "$pair/kernel.bzImage" \
+	--initramfs "$pair/initramfs.cpio.gz" \
 	--modules "$pair/modules.vhdx" \
 	--module-file "$module_fixture" \
 	--release "$release" \
@@ -178,6 +185,7 @@ mapfile -t moved_staging < <(find "$cleanup_rename_root" -maxdepth 1 -type d -na
 [[ ${#moved_staging[@]} -eq 1 ]]
 if PATH="$fake_bin:$PATH" timeout --signal=TERM --kill-after=2s 20s bash "$ROOT/seal-kernel-pair.sh" \
 	--kernel "$pair/kernel.bzImage" \
+	--initramfs "$pair/initramfs.cpio.gz" \
 	--modules "$pair/modules.vhdx" \
 	--module-file "$module_fixture" \
 	--release "$release" \
@@ -190,6 +198,7 @@ fi
 
 seal_args=(
 	--kernel "$pair/kernel.bzImage"
+	--initramfs "$pair/initramfs.cpio.gz"
 	--modules "$pair/modules.vhdx"
 	--module-file "$module_fixture"
 	--release "$release"
@@ -199,6 +208,7 @@ seal_args=(
 parser_probe_root="$fixture/parser-probe-output"
 if PATH="$fake_bin:$PATH" timeout --signal=TERM --kill-after=2s 10s bash "$ROOT/seal-kernel-pair.sh" \
 	--kernel "$pair/kernel.bzImage" --kernel "$pair/kernel.bzImage" \
+	--initramfs "$pair/initramfs.cpio.gz" \
 	--modules "$pair/modules.vhdx" --module-file "$module_fixture" --release "$release" \
 	--layout-inventory "$pair/modules-layout.manifest" --qemu-stamp "$pair/qemu-pass.stamp" \
 	--output-root "$parser_probe_root" >/dev/null 2>&1; then
@@ -251,7 +261,7 @@ shopt -u nullglob
 	exit 1
 }
 [[ "$(stat -c '%a' -- "${race_pairs[0]}")" == 555 ]]
-for published in kernel.bzImage modules.vhdx modules-layout.manifest qemu-pass.stamp kernel-pair.manifest; do
+for published in kernel.bzImage initramfs.cpio.gz modules.vhdx modules-layout.manifest qemu-pass.stamp kernel-pair.manifest; do
 	[[ "$(stat -c '%a:%h' -- "${race_pairs[0]}/$published")" == '444:1' ]]
 done
 if [[ $race_status_one -eq 0 ]]; then
