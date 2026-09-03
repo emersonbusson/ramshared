@@ -1597,6 +1597,16 @@ function Invoke-Workload(
     [int]$QueueDepth,
     [UInt64]$AvailableBytes
 ) {
+    $driveRoot = [System.IO.Path]::GetPathRoot($Path)
+    if (-not (Test-Path -LiteralPath $driveRoot)) {
+        Write-Error "Target volume path does not exist: $driveRoot" -ErrorId "VolumeNotFound"
+        throw [System.Exception]::new("Target volume path does not exist: $driveRoot")
+    }
+    $driveInfo = [System.IO.DriveInfo]::new($driveRoot)
+    if ($driveInfo.AvailableFreeSpace -lt 1GB) {
+        Write-Error "Target volume requires minimum 1 GB free space" -ErrorId "InsufficientFreeSpace"
+        throw [System.Exception]::new("Target volume requires minimum 1 GB free space: free=$($driveInfo.AvailableFreeSpace)")
+    }
     $workerFileBytes = [UInt64]([math]::Floor(
             ([double]$AvailableBytes * 0.25 / $QueueDepth) / 4096) * 4096)
     $workerFileBytes = [UInt64][math]::Max(1MB, [math]::Min(32MB, $workerFileBytes))
