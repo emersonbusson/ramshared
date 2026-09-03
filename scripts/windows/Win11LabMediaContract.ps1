@@ -517,6 +517,29 @@ function Assert-Win11LabPrimaryIsoContract {
     }
 }
 
+function Assert-Win11LabMediaArtifactChecksum {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ArtifactPath,
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ExpectedSha256
+    )
+
+    if (-not (Test-Path -LiteralPath $ArtifactPath -PathType Leaf)) {
+        throw "win11_lab_media_contract_artifact_missing"
+    }
+
+    $expected = Normalize-Win11LabSha256 -Sha256 $ExpectedSha256 -FailureCode "manifest_sha256_invalid"
+    $actual = Get-Win11LabFileSha256 -Path $ArtifactPath
+
+    if ($actual -cne $expected) {
+        throw "win11_lab_media_contract_artifact_checksum_mismatch"
+    }
+}
+
 function Wait-Win11LabExactVhdGrowth {
     [CmdletBinding()]
     param(
