@@ -39,8 +39,8 @@ jobs:
       - name: Audit vetted RustSec snapshot
         env:
           RUSTSEC_DB_URL: https://github.com/RustSec/advisory-db.git
-          RUSTSEC_DB_COMMIT: 5a0ebedfe8bdd2e295b171f4162f8c977bcad9a5
-          RUSTSEC_DB_COMMIT_UTC: "2026-09-02T09:13:32Z"
+          RUSTSEC_DB_COMMIT: 6420e39260b3d771b049954cf5d52b57e2118da4
+          RUSTSEC_DB_COMMIT_UTC: "2026-08-27T12:01:44Z"
           RUSTSEC_DB_MAX_AGE_DAYS: "7"
         run: |
           set -euo pipefail
