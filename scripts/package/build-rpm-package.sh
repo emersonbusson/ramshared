@@ -29,7 +29,7 @@ fi
 
 if [[ ! -x "$CLI_BIN" || ! -x "$DAEMON_BIN" ]]; then
   echo "ERROR: Target release binaries not found ($CLI_BIN / $DAEMON_BIN)" >&2
-  exit 1
+  exit 65
 fi
 
 # Clean previous build root
@@ -81,8 +81,14 @@ SPEC_EOF
 
 if command -v rpmbuild >/dev/null 2>&1; then
   echo "==> Executing rpmbuild..."
-  rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
-  cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
+  if ! rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"; then
+    echo "ERROR: rpmbuild failed" >&2
+    exit 74
+  fi
+  if ! cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null; then
+    echo "ERROR: Failed to copy RPM packages" >&2
+    exit 73
+  fi
   echo "✓ RPM package built under $OUT_DIR/"
 else
   echo "==> rpmbuild not installed on host. Spec generated at $SPEC_FILE (PASS)."
