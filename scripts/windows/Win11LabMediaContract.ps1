@@ -11,14 +11,16 @@
 [CmdletBinding()]
 param(
     [Alias("WorkerMode")]
-    [ValidateSet("", "Inspect", "Probe", "Stage", "Cleanup")]
+    [ValidateSet("", "Inspect", "Probe", "Stage", "Cleanup", "DownloadPreflight")]
     [string]$WorkerEntryMode = "",
     [Alias("IsoPath")]
     [string]$WorkerEntryIsoPath = "",
     [Alias("ResultPath")]
     [string]$WorkerEntryResultPath = "",
     [Alias("StagingRoot")]
-    [string]$WorkerEntryStagingRoot = ""
+    [string]$WorkerEntryStagingRoot = "",
+    [Alias("TestUrl")]
+    [string]$WorkerEntryTestUrl = ""
 )
 
 Set-StrictMode -Version Latest
@@ -704,7 +706,7 @@ function Invoke-Win11LabMediaWorker {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet("Inspect", "Probe", "Stage", "Cleanup")]
+        [ValidateSet("Inspect", "Probe", "Stage", "Cleanup", "DownloadPreflight")]
         [string]$Mode,
         [Parameter(Mandatory = $true)]
         [string]$IsoPath,
@@ -712,7 +714,8 @@ function Invoke-Win11LabMediaWorker {
         [string]$ResultPath,
         [string]$StagingRoot = "",
         [ValidateRange(10, 1800)]
-        [int]$TimeoutSeconds = 90
+        [int]$TimeoutSeconds = 90,
+        [string]$TestUrl = ""
     )
 
     if (-not (Test-Path -LiteralPath $script:Win11LabMediaContractPath -PathType Leaf)) {
@@ -743,6 +746,12 @@ function Invoke-Win11LabMediaWorker {
             throw "win11_lab_media_contract_staging_root_missing"
         }
         $argumentValues += @("-StagingRoot", $StagingRoot)
+    }
+    if ($Mode -eq "DownloadPreflight") {
+        if ([string]::IsNullOrWhiteSpace($TestUrl)) {
+            throw "win11_lab_media_contract_download_test_url_missing"
+        }
+        $argumentValues += @("-TestUrl", $TestUrl)
     }
 
     $workerInfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -788,6 +797,39 @@ function Invoke-Win11LabMediaWorker {
             throw
         }
         throw "win11_lab_media_contract_worker_result_invalid"
+    }
+}
+
+function Invoke-Win11LabMediaDownloadPreflight {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$DestinationPath,
+        [Parameter(Mandatory = $true)]
+        [string]$TestUrl,
+        [ValidateRange(10, 300)]
+        [int]$TimeoutSeconds = 30
+    )
+
+    $preflightResultPath = New-Win11LabMediaResultPath
+    try {
+        $preflightResult = Invoke-Win11LabMediaWorker `
+            -Mode "DownloadPreflight" `
+            -IsoPath $DestinationPath `
+            -ResultPath $preflightResultPath `
+            -TimeoutSeconds $TimeoutSeconds `
+            -TestUrl $TestUrl
+        $preflightComplete = Get-Win11LabContractReceiptProperty `
+            -Contract $preflightResult `
+            -Name "download_preflight_complete" `
+            -Role "preflight"
+        if ($preflightComplete -isnot [bool] -or -not $preflightComplete) {
+            throw "win11_lab_media_contract_preflight_receipt_invalid"
+        }
+    } finally {
+        if (Test-Path -LiteralPath $preflightResultPath -PathType Leaf) {
+            [System.IO.File]::Delete($preflightResultPath)
+        }
     }
 }
 
@@ -1015,16 +1057,17 @@ function Invoke-Win11LabMediaWorkerMode {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet("Inspect", "Probe", "Stage", "Cleanup")]
+        [ValidateSet("Inspect", "Probe", "Stage", "Cleanup", "DownloadPreflight")]
         [string]$Mode,
         [Parameter(Mandatory = $true)]
         [string]$Path,
         [Parameter(Mandatory = $true)]
         [string]$OutputPath,
-        [string]$WorkerStagingRoot = ""
+        [string]$WorkerStagingRoot = "",
+        [string]$WorkerTestUrl = ""
     )
 
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    if ($Mode -ne "DownloadPreflight" -and -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "win11_lab_media_contract_iso_missing"
     }
     Assert-Win11LabWorkerResultPath -Path $OutputPath
@@ -1083,6 +1126,13 @@ function Invoke-Win11LabMediaWorkerMode {
             }
             return
         }
+        "DownloadPreflight" {
+            Assert-Win11LabMediaDownloadPreflight -DestinationPath $Path -TestUrl $WorkerTestUrl
+            Write-Win11LabWorkerResult -Path $OutputPath -Result ([ordered]@{
+                download_preflight_complete = $true
+            })
+            return
+        }
         "Stage" {
             if ([string]::IsNullOrWhiteSpace($WorkerStagingRoot) -or
                 -not (Test-Path -LiteralPath $WorkerStagingRoot -PathType Container)) {
@@ -1129,5 +1179,6 @@ if (-not [string]::IsNullOrWhiteSpace($WorkerEntryMode)) {
         -Mode $WorkerEntryMode `
         -Path $WorkerEntryIsoPath `
         -OutputPath $WorkerEntryResultPath `
-        -WorkerStagingRoot $WorkerEntryStagingRoot
+        -WorkerStagingRoot $WorkerEntryStagingRoot `
+        -WorkerTestUrl $WorkerEntryTestUrl
 }
