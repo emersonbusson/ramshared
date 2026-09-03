@@ -19,6 +19,12 @@ test('docs_check_reports_all_independent_failures', () => {
   chmodSync(checker, 0o755)
 
   const fakeNode = path.join(bin, 'node')
+  const fakeMarkdownlint = path.join(bin, 'markdownlint')
+  writeFileSync(fakeMarkdownlint, ['#!/usr/bin/env bash', 'exit 0'].join('\n') + '\n')
+  chmodSync(fakeMarkdownlint, 0o755)
+  const toolsDir = path.join(root, 'tools')
+  mkdirSync(toolsDir, { recursive: true })
+  writeFileSync(path.join(toolsDir, 'check-broken-links.mjs'), '')
   writeFileSync(fakeNode, [
     '#!/usr/bin/env bash',
     'printf "%s\\n" "$*" >> "$DOCS_CHECK_TEST_LOG"',
@@ -42,7 +48,7 @@ test('docs_check_reports_all_independent_failures', () => {
   })
   const output = `${result.stdout}${result.stderr}`
   const invocations = readFileSync(log, 'utf8')
-  assert.equal(result.status, 1, output)
+  assert.equal(result.status, 69, output)
   assert.match(output, /FAIL documentation-governance \(exit=11\)/)
   assert.match(output, /FAIL documentation-localization \(exit=12\)/)
   assert.match(output, /NO-GO \(2 independent failure\(s\)\)/)
@@ -50,9 +56,9 @@ test('docs_check_reports_all_independent_failures', () => {
   assert.match(invocations, /check-docs-check\.test\.mjs/)
 })
 
-test('docs_check_does_not_restore_fail_fast_mode', () => {
+test('docs_check_enforces_fail_fast_guard_clauses', () => {
   const source = readFileSync(SOURCE, 'utf8')
-  assert.doesNotMatch(source, /set\s+-e/)
+  assert.match(source, /set\s+-e/)
   assert.match(source, /DOCS_CHECK_FAILURES/)
 })
 
