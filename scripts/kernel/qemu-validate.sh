@@ -16,9 +16,11 @@ REL="${2:?missing kernelrelease}"
 shift 2
 MODS=("$@")
 
-[ -f "$BZ" ] || { echo "bzImage missing: $BZ" >&2; exit 2; }
-command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 missing (apt install qemu-system-x86)" >&2; exit 2; }
-[ -x /bin/busybox ] || { echo "busybox-static missing (apt install busybox-static)" >&2; exit 2; }
+[ -f "$BZ" ] || { echo "bzImage missing: $BZ" >&2; exit 74; }
+command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 missing (apt install qemu-system-x86)" >&2; exit 69; }
+[ -x /bin/busybox ] || { echo "busybox-static missing (apt install busybox-static)" >&2; exit 69; }
+[ -c /dev/kvm ] || { echo "/dev/kvm missing, KVM not supported" >&2; exit 69; }
+[ -r /dev/kvm ] && [ -w /dev/kvm ] || { echo "Read/write permissions denied on /dev/kvm" >&2; exit 78; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 IRD="$WORK/irfs"; mkdir -p "$IRD/bin" "$IRD/modules"
@@ -26,7 +28,7 @@ cp /bin/busybox "$IRD/bin/busybox"
 
 # numbered modules preserve dependency order
 i=0; for m in "${MODS[@]}"; do
-  [ -f "$m" ] || { echo "module missing: $m" >&2; exit 2; }
+  [ -f "$m" ] || { echo "module missing: $m" >&2; exit 74; }
   cp "$m" "$IRD/modules/$(printf '%02d' "$i")-$(basename "$m")"; i=$((i+1))
 done
 
