@@ -274,6 +274,8 @@ stage_uninstall_recovery() {
 
 install_control_plane() {
   local relative limits_temporary
+  systemctl is-active docker.socket >/dev/null 2>&1 || { echo 'docker.socket is not active' >&2; return 69; }
+  systemctl is-enabled docker.socket >/dev/null 2>&1 || { echo 'docker.socket is not enabled' >&2; return 69; }
   compute_workload_limits || { echo 'guest memory cannot safely reserve the control plane' >&2; return 1; }
   [[ ! -e $manifest && ! -L $manifest && ! -e $transaction && ! -L $transaction ]] || { echo 'control plane installation state already exists; recover it explicitly' >&2; return 1; }
   install -d -m 0700 "$state_dir" "$backup_dir"; [[ -d $state_dir && ! -L $state_dir && -d $backup_dir && ! -L $backup_dir ]] || return 1
@@ -290,6 +292,8 @@ install_control_plane() {
 
 uninstall_control_plane() {
   local installation_id
+  systemctl is-active docker.socket >/dev/null 2>&1 || { echo 'docker.socket is not active' >&2; return 69; }
+  systemctl is-enabled docker.socket >/dev/null 2>&1 || { echo 'docker.socket is not enabled' >&2; return 69; }
   [[ -f $manifest && ! -L $manifest ]] || { echo 'owned install receipt is missing' >&2; return 1; }
   validate_active_manifest || { echo 'control-plane rollback refused; preserve operator changes and resolve them explicitly' >&2; return 1; }
   installation_id=$(read_receipt_header "$manifest") || return 1
