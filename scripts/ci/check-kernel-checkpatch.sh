@@ -14,6 +14,19 @@ CHECKPATCH="$CACHE_DIR/checkpatch.pl"
 SPELLING="$CACHE_DIR/spelling.txt"
 CONST_STRUCTS="$CACHE_DIR/const_structs.checkpatch"
 
+KDIR="/lib/modules/$(uname -r)/build"
+CHECKPATCH="$KDIR/scripts/checkpatch.pl"
+
+if [[ ! -d "$KDIR" ]]; then
+  echo "ERROR: Kernel source path $KDIR not found." >&2
+  exit 78
+fi
+
+if [[ ! -x "$CHECKPATCH" ]]; then
+  echo "ERROR: $CHECKPATCH not found or not executable." >&2
+  exit 69
+fi
+
 # Download checkpatch.pl from torvalds/linux if not cached
 if [[ ! -x "$CHECKPATCH" ]]; then
   mkdir -p "$CACHE_DIR"
