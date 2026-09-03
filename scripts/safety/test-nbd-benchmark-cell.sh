@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if ! grep -Fq '0::/' /proc/self/cgroup 2>/dev/null; then
+  printf 'FAIL test cgroup namespace isolation required\n' >&2
+  exit 78
+fi
+
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 CELL="$ROOT/scripts/safety/nbd-benchmark-cell.sh"
 CGROUP_LAUNCH="$ROOT/scripts/safety/nbd-benchmark-cgroup-launch.sh"
