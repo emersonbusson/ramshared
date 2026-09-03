@@ -20,11 +20,32 @@ param(
     [string]$ExpectedPartialPublishedInf = "",
     [ValidateRange(15, 30)][int]$GuestRestartDelaySeconds = 15,
     [switch]$PlanOnly,
-    [switch]$ApproveExactRecovery
+    [switch]$ApproveExactRecovery,
+    [string]$ExpectedCrashDumpPath = "",
+    [string]$ExpectedWinDbgPath = ""
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Assert-CrashDumpAndWinDbgPreconditions {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$ExpectedCrashDumpPath,
+        [Parameter(Mandatory = $true)][string]$ExpectedWinDbgPath
+    )
+
+    if (-not (Test-Path -LiteralPath $ExpectedCrashDumpPath -PathType Leaf)) {
+        throw [System.IO.FileNotFoundException]::new("crash dump file is missing at path: $ExpectedCrashDumpPath")
+    }
+    if (-not (Test-Path -LiteralPath $ExpectedWinDbgPath -PathType Leaf)) {
+        throw [System.IO.FileNotFoundException]::new("WinDbg analysis tools are missing at path: $ExpectedWinDbgPath")
+    }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($ExpectedCrashDumpPath) -and -not [string]::IsNullOrWhiteSpace($ExpectedWinDbgPath)) {
+    Assert-CrashDumpAndWinDbgPreconditions -ExpectedCrashDumpPath $ExpectedCrashDumpPath -ExpectedWinDbgPath $ExpectedWinDbgPath
+}
 
 if (-not $ApproveExactRecovery) {
     throw "exact recovery requires explicit approval"
