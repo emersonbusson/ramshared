@@ -2,7 +2,7 @@
   "schema_version": 1,
   "repository": "emersonbusson/ramshared",
   "default_branch": "main",
-  "observed_at_utc": "2026-08-10T13:55:01Z",
+  "observed_at_utc": "2026-09-02T12:00:00Z",
   "source": "github-rest-api",
   "actions": {
     "default_workflow_permissions": "read",
