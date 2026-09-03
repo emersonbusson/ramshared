@@ -36,12 +36,16 @@ cmd_check() {
 	local cfg
 	if ! cfg="$(wslconfig_path)"; then
 		echo "CHECK: cannot resolve .wslconfig (set WSL_CONFIG= or WIN_USER=)"
-		exit 2
+		exit 69
 	fi
 	echo "CHECK path=$cfg"
+	if [[ ! "$cfg" == /mnt/c/Users/* ]]; then
+		echo "CHECK: .wslconfig path ($cfg) is not in expected Windows home directory"
+		exit 78
+	fi
 	if [[ ! -f "$cfg" ]]; then
 		echo "CHECK: MISSING (run: bash scripts/safety/wslconfig-ctl.sh apply)"
-		exit 1
+		exit 74
 	fi
 	if wslconfig_validate_file "$cfg"; then
 		echo "CHECK: OK (no unsafe escapes or unapproved sparse VHD)"
@@ -52,14 +56,22 @@ cmd_check() {
 		exit 0
 	fi
 	echo "CHECK: FAIL — fix with: bash scripts/safety/wslconfig-ctl.sh apply"
-	exit 1
+	exit 78
 }
 
 cmd_apply() {
 	local cfg
 	if ! cfg="$(wslconfig_path)"; then
 		echo "APPLY: cannot resolve .wslconfig"
-		exit 2
+		exit 69
+	fi
+	if [[ ! "$cfg" == /mnt/c/Users/* ]]; then
+		echo "APPLY: .wslconfig path ($cfg) is not in expected Windows home directory"
+		exit 78
+	fi
+	if [[ -f "$cfg" ]] && ! wslconfig_validate_file "$cfg"; then
+		echo "APPLY: .wslconfig format validation failed before modification"
+		exit 78
 	fi
 	wslconfig_write_host "$cfg"
 	echo "APPLY: OK — restart WSL when idle to reload memory=/swap= (wsl --shutdown)"
@@ -215,7 +227,7 @@ cmd_selftest() {
 	rm -rf "$td"
 	if [[ "$fail" -ne 0 ]]; then
 		echo "SELFTEST: FAIL"
-		exit 1
+		exit 78
 	fi
 	echo "SELFTEST: PASS"
 	exit 0
@@ -233,7 +245,7 @@ main() {
 	-h | --help | help) usage ;;
 	*)
 		usage >&2
-		exit 2
+		exit 64
 		;;
 	esac
 }
