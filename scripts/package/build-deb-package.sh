@@ -4,6 +4,19 @@
 # Usage: scripts/package/build-deb-package.sh [version]
 set -euo pipefail
 
+EX_USAGE=64
+EX_UNAVAILABLE=69
+EX_OSFILE=72
+EX_IOERR=74
+EX_CONFIG=78
+
+for cmd in dpkg-deb sha256sum lintian install awk df; do
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "ERROR: Required command '$cmd' is not installed." >&2
+    exit "$EX_UNAVAILABLE"
+  fi
+done
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.9.0-beta.2}}"
 VERSION_CLEAN="${VERSION#v}"
@@ -29,7 +42,7 @@ fi
 
 if [[ ! -x "$CLI_BIN" || ! -x "$DAEMON_BIN" ]]; then
   echo "ERROR: Target release binaries not found ($CLI_BIN / $DAEMON_BIN)" >&2
-  exit 1
+  exit "$EX_OSFILE"
 fi
 
 # Clean previous staging
@@ -144,13 +157,24 @@ exit 0
 PRERM_EOF
 chmod 0755 "$STAGE_DIR/DEBIAN/prerm"
 
+# Validate disk space before packaging (require at least 50MB free)
+FREE_KB=$(df -kP "$STAGE_DIR" | awk 'NR==2 {print $4}')
+if [[ -n "$FREE_KB" ]] && [[ "$FREE_KB" -lt 51200 ]]; then
+  echo "ERROR: Insufficient disk space for packaging." >&2
+  exit "$EX_IOERR"
+fi
+
 # Build the .deb archive
 mkdir -p "$OUT_DIR"
 dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
 rm -rf "$STAGE_DIR"
 
+echo "==> Running lintian on generated .deb package..."
+lintian "$DEB_FILE" || true
+
 # Compute SHA-256
 (cd "$OUT_DIR" && sha256sum "$(basename "$DEB_FILE")" > "$(basename "$DEB_FILE").sha256")
+(cd "$OUT_DIR" && find . -maxdepth 1 -name "*.deb" ! -name "SHA256SUMS.txt" -execdir sha256sum {} + > SHA256SUMS.txt)
 
 echo "==> Package built: $DEB_FILE"
 echo "==> SHA-256: $(cat "${DEB_FILE}.sha256")"
