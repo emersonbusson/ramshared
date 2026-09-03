@@ -24,6 +24,12 @@ jobs:
       - name: Validate new entries in validation.md
         run: node tools/ci/check-validation-schema.mjs --diff "origin/${{ github.base_ref }}"
 
+      - name: Install Python dependencies for configuration schema validation
+        run: python3 -m pip install jsonschema==4.23.0 tomli==2.0.1 --user
+
+      - name: Validate ramshared configuration TOML/JSON files
+        run: python3 tools/ci/check-config-schemas.py --check
+
   validation-schema-summary:
     name: validation-schema-summary
     if: always()
