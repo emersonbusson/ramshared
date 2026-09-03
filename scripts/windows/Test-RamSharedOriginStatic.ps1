@@ -40,6 +40,7 @@ foreach ($required in @(
     'Remove-Item -LiteralPath $transaction.staging_vhdx -Force',
     'Remove-Item -LiteralPath $OriginVhdx -Force',
     'origin uninstall requires exact sealed ownership proof',
+    'Write-Error -ErrorId "ServiceNotStopped"',
     'New-VHD',
     'Mount-VHD',
     'Dismount-VHD -Path $VhdxPath',
