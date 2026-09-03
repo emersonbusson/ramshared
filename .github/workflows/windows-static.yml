@@ -24,6 +24,22 @@ jobs:
         with:
           toolchain: 1.98.0
 
+      - name: PSScriptAnalyzer static analysis
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path -Path 'scripts/windows' -PathType Container)) {
+            throw [System.IO.DirectoryNotFoundException]"The path 'scripts/windows' does not exist."
+          }
+          if (-not (Get-Command -Name Invoke-ScriptAnalyzer -ErrorAction SilentlyContinue)) {
+            throw [System.Management.Automation.CommandNotFoundException]"Invoke-ScriptAnalyzer is not available."
+          }
+          $findings = Invoke-ScriptAnalyzer -Path 'scripts/windows/*.ps1' -Severity Error
+          if ($findings) {
+            $findings | Format-Table
+            throw [System.Management.Automation.RuntimeException]"PSScriptAnalyzer found Error severity findings."
+          }
+
       - name: Windows Rust tests
         shell: pwsh
         run: |
