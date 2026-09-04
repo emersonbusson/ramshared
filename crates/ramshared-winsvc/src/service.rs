@@ -475,11 +475,11 @@ mod tests {
         }
 
         fn active_pagefiles(&self) -> Result<Vec<String>, String> {
-            panic!("Gate A must not run after identity refusal")
+            Err("Gate A must not run after identity refusal".into())
         }
 
         fn lock_volume(&mut self, _: char) -> Result<(), String> {
-            panic!("volume lock must not run after identity refusal")
+            Err("volume lock must not run after identity refusal".into())
         }
 
         fn unlock_volume(&mut self) -> Result<(), String> {
@@ -487,7 +487,7 @@ mod tests {
         }
 
         fn flush_and_dismount(&mut self) -> Result<(), String> {
-            panic!("dismount must not run after identity refusal")
+            Err("dismount must not run after identity refusal".into())
         }
 
         fn volume_locked(&self) -> bool {
