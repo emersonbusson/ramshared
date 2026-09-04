@@ -1,0 +1,3 @@
+FINDING_ONLY
+
+The objective to define kernel standard _IOW / _IOR / _IOWR IOCTL macros with unique magic type byte in drivers/block/ramshared/ramshared.h cannot be safely implemented. Exploration revealed that there are no existing raw IOCTL functions, macros, or payload structs (e.g. ramshared_register) currently implemented or defined in the drivers/block/ramshared/ directory for the Linux kernel. Synthesizing these macros using Windows-specific structs (from drivers/windows/ramshared/protocol.h) causes strict sizeof compilation errors due to incomplete types. Therefore, no safe code modification is possible.
