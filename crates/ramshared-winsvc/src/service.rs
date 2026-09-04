@@ -514,15 +514,15 @@ mod tests {
         }
 
         fn lock_volume(&mut self, _: char) -> Result<(), String> {
-            panic!("an exact RAW disk has no volume to lock")
+            Err("an exact RAW disk has no volume to lock".into())
         }
 
         fn unlock_volume(&mut self) -> Result<(), String> {
-            panic!("an exact RAW disk has no volume to unlock")
+            Err("an exact RAW disk has no volume to unlock".into())
         }
 
         fn flush_and_dismount(&mut self) -> Result<(), String> {
-            panic!("an exact RAW disk has no filesystem to dismount")
+            Err("an exact RAW disk has no filesystem to dismount".into())
         }
 
         fn volume_locked(&self) -> bool {
