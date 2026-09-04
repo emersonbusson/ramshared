@@ -323,6 +323,23 @@ mod tests {
     }
 
     #[test]
+    fn version_directory_formats_version_and_commit_prefix() {
+        let manifest = manifest();
+        assert_eq!(manifest.version_directory(), "1.2.3-abcdef123456");
+    }
+
+    #[test]
+    fn artifact_lookup_succeeds_and_missing_role_returns_error() {
+        let mut manifest = manifest();
+        let artifact = manifest.artifact(ArtifactRole::BrokerExe).unwrap();
+        assert_eq!(artifact.role, ArtifactRole::BrokerExe);
+
+        manifest.artifacts.retain(|a| a.role != ArtifactRole::BrokerExe);
+        let err = manifest.artifact(ArtifactRole::BrokerExe).unwrap_err();
+        assert!(err.contains("validated manifest is missing role"));
+    }
+
+    #[test]
     fn manifest_rejects_unknown_and_over_64k() {
         let mut value = serde_json::to_value(manifest()).unwrap();
         value["unknown"] = serde_json::json!(1);
