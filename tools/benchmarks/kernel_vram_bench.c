@@ -13,6 +13,7 @@
 #include <time.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <sysexits.h>
 
 #define DEFAULT_CHUNK_MIB 256
 #define MIB_TO_BYTES(mib) ((size_t)(mib) * 1024 * 1024)
@@ -64,7 +65,7 @@ int main(int argc, char **argv) {
 		int val = atoi(argv[1]);
 		if (val <= 0 || val > 4096) {
 			fprintf(stderr, "[-] Error: Invalid chunk_mib size (must be 1-4096).\n");
-			return -EINVAL;
+			return EX_USAGE;
 		}
 		chunk_mib = val;
 	}
@@ -72,7 +73,7 @@ int main(int argc, char **argv) {
 
 	if (chunk_bytes % 4096 != 0) {
 		fprintf(stderr, "[-] Error: Buffer size not 4096-byte aligned.\n");
-		return -EINVAL;
+		return EX_USAGE;
 	}
 
 	printf("=================================================================\n");
@@ -82,7 +83,7 @@ int main(int argc, char **argv) {
 	lib = load_cuda_driver();
 	if (!lib) {
 		fprintf(stderr, "[-] Error: CUDA driver library (libcuda.so.1) not found.\n");
-		return -ENODEV;
+		return EX_UNAVAILABLE;
 	}
 
 	cuInit_t cuInit = (cuInit_t)dlsym(lib, "cuInit");
@@ -100,41 +101,41 @@ int main(int argc, char **argv) {
 
 	if (!cuInit || !cuCtxCreate || !cuMemcpyHtoD || !cuMemcpyDtoH) {
 		fprintf(stderr, "[-] Error: Required CUDA symbols missing in library.\n");
-		ret = -EINVAL;
+		ret = EX_UNAVAILABLE;
 		goto out_lib;
 	}
 
 	if (cuInit(0) != 0) {
 		fprintf(stderr, "[-] Error: cuInit failed.\n");
-		ret = -ENODEV;
+		ret = EX_UNAVAILABLE;
 		goto out_lib;
 	}
 
 	int dev = 0;
 	if (cuDeviceGet(&dev, 0) != 0) {
 		fprintf(stderr, "[-] Error: cuDeviceGet failed.\n");
-		ret = -ENODEV;
+		ret = EX_UNAVAILABLE;
 		goto out_lib;
 	}
 
 	char dev_name[256] = {0};
 	if (cuDeviceGetName(dev_name, sizeof(dev_name), dev) != 0) {
 		fprintf(stderr, "[-] Error: cuDeviceGetName failed.\n");
-		ret = -ENODEV;
+		ret = EX_UNAVAILABLE;
 		goto out_lib;
 	}
 	printf("[+] Hardware: %s (PCIe Direct DMA Channel)\n", dev_name);
 
 	if (cuCtxCreate(&ctx, 0, dev) != 0) {
 		fprintf(stderr, "[-] Error: cuCtxCreate failed.\n");
-		ret = -ENODEV;
+		ret = EX_UNAVAILABLE;
 		goto out_lib;
 	}
 
 	size_t free_b = 0, total_b = 0;
 	if (cuMemGetInfo(&free_b, &total_b) != 0) {
 		fprintf(stderr, "[-] Error: cuMemGetInfo failed.\n");
-		ret = -EINVAL;
+		ret = EX_UNAVAILABLE;
 		goto out_ctx;
 	}
 	printf("[+] GPU Memory: %zu MiB free / %zu MiB total\n",
@@ -143,7 +144,7 @@ int main(int argc, char **argv) {
 	// Allocate Pinned Host Memory
 	if (cuMemHostAlloc(&host_pinned, chunk_bytes, 0) != 0) {
 		fprintf(stderr, "[-] Error: cuMemHostAlloc failed (%d MiB).\n", chunk_mib);
-		ret = -ENOMEM;
+		ret = EX_OSERR;
 		goto out_ctx;
 	}
 
@@ -161,7 +162,7 @@ int main(int argc, char **argv) {
 	// Allocate Device VRAM Buffer
 	if (cuMemAlloc(&dev_ptr, chunk_bytes) != 0) {
 		fprintf(stderr, "[-] Error: cuMemAlloc failed (%d MiB).\n", chunk_mib);
-		ret = -ENOMEM;
+		ret = EX_OSERR;
 		goto out_host_pinned;
 	}
 
@@ -170,7 +171,7 @@ int main(int argc, char **argv) {
 	double t0 = get_time_sec();
 	if (cuMemcpyHtoD(dev_ptr, host_pinned, chunk_bytes) != 0) {
 		fprintf(stderr, "[-] Error: cuMemcpyHtoD failed.\n");
-		ret = -EFAULT;
+		ret = EX_OSERR;
 		goto out_dev_ptr;
 	}
 	double t1 = get_time_sec();
@@ -181,7 +182,7 @@ int main(int argc, char **argv) {
 	// 2. Direct DMA VRAM -> Host (Pull)
 	if (cuMemHostAlloc(&read_pinned, chunk_bytes, 0) != 0) {
 		fprintf(stderr, "[-] Error: cuMemHostAlloc (read) failed.\n");
-		ret = -ENOMEM;
+		ret = EX_OSERR;
 		goto out_dev_ptr;
 	}
 
@@ -189,7 +190,7 @@ int main(int argc, char **argv) {
 	t0 = get_time_sec();
 	if (cuMemcpyDtoH(read_pinned, dev_ptr, chunk_bytes) != 0) {
 		fprintf(stderr, "[-] Error: cuMemcpyDtoH failed.\n");
-		ret = -EFAULT;
+		ret = EX_OSERR;
 		goto out_read_pinned;
 	}
 	t1 = get_time_sec();
@@ -203,7 +204,7 @@ int main(int argc, char **argv) {
 	       match ? "PASS (100% Bit-Exact Match, Zero Corruption)" : "FAIL");
 
 	if (!match) {
-		ret = -EFAULT;
+		ret = EX_OSERR;
 	}
 
 out_read_pinned:
