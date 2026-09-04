@@ -42,9 +42,12 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 		return -EINVAL;
 	}
 
-	if (queue_depth < 1 || queue_depth > 4096) {
-		dev_warn(&pdev->dev, "clamping queue_depth (%lu) to default (256)\n", queue_depth);
-		queue_depth = 256;
+	if (queue_depth < 16 || queue_depth > 1024) {
+		dev_warn(&pdev->dev, "clamping queue_depth (%u) to bounds [16, 1024]\n", queue_depth);
+		if (queue_depth < 16)
+			queue_depth = 16;
+		else
+			queue_depth = 1024;
 	}
 
 	rs_dev = devm_kzalloc(&pdev->dev, sizeof(*rs_dev), GFP_KERNEL);
