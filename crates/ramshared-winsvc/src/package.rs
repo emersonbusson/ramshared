@@ -485,4 +485,24 @@ mod tests {
         let injected_char = build_residue_script('\'');
         assert!(injected_char.is_err());
     }
+
+    #[test]
+    fn version_directory_formats_version_and_commit_prefix() {
+        let mut candidate = manifest();
+        candidate.version = "2.1.0".into();
+        candidate.commit = "1234567890abcdef1234".into();
+        assert_eq!(candidate.version_directory(), "2.1.0-1234567890ab");
+    }
+
+    #[test]
+    fn artifact_returns_matching_role_or_error() {
+        let candidate = manifest();
+        let artifact = candidate.artifact(ArtifactRole::WinsvcExe).unwrap();
+        assert_eq!(artifact.role, ArtifactRole::WinsvcExe);
+
+        let mut empty_manifest = candidate.clone();
+        empty_manifest.artifacts.clear();
+        let err = empty_manifest.artifact(ArtifactRole::WinsvcExe).unwrap_err();
+        assert!(err.contains("validated manifest is missing role WinsvcExe"));
+    }
 }
