@@ -919,11 +919,15 @@ mod tests {
         events.borrow_mut().clear();
 
         let payload = *b"cache-origin-round-trip-proof-32";
-        backend.write_at(0, &payload).unwrap();
+        backend
+            .write_at(0, &payload)
+            .expect("write to origin cache backend should succeed");
         assert_eq!(backend.release_cache(), 8);
 
         let mut read_back = [0; 32];
-        backend.read_at(0, &mut read_back).unwrap();
+        backend
+            .read_at(0, &mut read_back)
+            .expect("read from origin cache backend should succeed");
         assert_eq!(read_back, payload);
         assert_eq!(backend.telemetry().fallback_reads, 1);
         assert_eq!(
