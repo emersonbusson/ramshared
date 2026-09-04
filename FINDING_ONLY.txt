@@ -1,0 +1,13 @@
+Finding Report: Synchronous I/O in Async Context / Loop in ramshared-agent
+
+1. Architectural Analysis:
+The issue prompt reports "Synchronous IO in potentially async context or loop" in `crates/ramshared-agent/src/psi.rs:102` inside `read_memcg_swap_impl`.
+
+2. Technical Findings:
+- Entirely Synchronous Crate: `ramshared-agent` is an explicitly synchronous application built around standard library threads (`std::thread`), blocking TCP streams (`std::net::TcpStream`), and channel message passing (`std::sync::mpsc`). It does not use Tokio, `async_std`, `io_uring`, or any asynchronous runtime.
+- No Async Context Exists: There is no async runtime or executor in `ramshared-agent`.
+- Component Iteration vs. I/O Loop: Line 102 in `psi.rs` is `parse_memcg_swap(&std::fs::read_to_string(file).ok()?)`, which occurs after a `for component in ...` loop that builds a `PathBuf` synchronously in-memory. The file reading (`std::fs::read_to_string`) is executed exactly once per function call, completely outside any I/O loop.
+- Periodic Sync Telemetry: The function `read_memcg_swap()` is invoked once per second in `session()` in `crates/ramshared-agent/src/main.rs:350` as part of a 1 Hz control-plane telemetry heartbeat.
+
+3. Conclusion & Recommendation:
+Converting `ramshared-agent` or `psi.rs` to async I/O would require adding async runtime dependencies (such as Tokio), altering the 3-thread architecture, and introducing substantial complexity for no measurable benefit in a 1 Hz telemetry loop. The current implementation is simple, correct, safe, and operates entirely as designed in a synchronous context.
