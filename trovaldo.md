@@ -109,4 +109,5 @@ EVD-0039: Hardware PCIe DMA & Native ublk/io_uring Qualification
 | 2026-08-26 | Kernel Telemetry | Authored 5-pillar telemetry spec & sysfs lockless per-CPU accounting | `LINUX-KERNEL-TELEMETRY-SPEC.md` |
 | 2026-08-28 | LKML Submission | Dispatched RFC patch series v1 to Jens Axboe & linux-block mailing list | RFC v1 / `artifacts/lkml-patchset/` |
 | 2026-09-04 | Kernel Hardening | Consolidated checked arithmetic (`check_shl_overflow`), PCIe BAR0 bounds checking, linear unwinding with `pci_clear_master`, and clamped `queue_depth` [1..4096] across 383 PR audit | PRs #678, #679, #689 / `drivers/block/ramshared/` |
+| 2026-09-04 | LKML v2 Patchset | Generated hardened RFC v2 patch series with checked arithmetic, BAR0 bounds checking, and `pci_clear_master` unwinding | RFC v2 / `artifacts/lkml-patchset/` |
 

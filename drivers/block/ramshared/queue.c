@@ -61,7 +61,9 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (unlikely(check_shl_overflow((loff_t)blk_rq_pos(rq), RAMSHARED_SECTOR_SHIFT, &pos)))
 		return BLK_STS_IOERR;
 
-	if (unlikely(pos > rs_dev->dma.size || len > rs_dev->dma.size - pos || pos + len > rs_dev->capacity_bytes)) {
+	if (unlikely(pos > rs_dev->dma.size ||
+		     len > rs_dev->dma.size - pos ||
+		     pos + len > rs_dev->capacity_bytes)) {
 		dev_err_ratelimited(rs_dev->dev,
 			"I/O bounds violation: pos=%lld, len=%zu, cap=%llu, mapped=%zu\n",
 			pos, len, rs_dev->capacity_bytes, rs_dev->dma.size);
@@ -120,7 +122,9 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 	if (unlikely(check_shl_overflow((loff_t)sector, RAMSHARED_SECTOR_SHIFT, &pos)))
 		return -EIO;
 
-	if (unlikely(pos > rs_dev->dma.size || len > rs_dev->dma.size - pos || pos + len > rs_dev->capacity_bytes))
+	if (unlikely(pos > rs_dev->dma.size ||
+		     len > rs_dev->dma.size - pos ||
+		     pos + len > rs_dev->capacity_bytes))
 		return -ERANGE;
 
 	vram_ptr = rs_dev->dma.cpu_addr + pos;
