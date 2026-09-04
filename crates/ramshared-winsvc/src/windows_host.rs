@@ -1151,9 +1151,9 @@ mod tests {
         assert_eq!(pf.name, r"E:\swap.sys");
         assert_eq!(pf.volume, r"E:\");
 
-        let short = pagefile_identity("C:".to_string());
-        assert_eq!(short.name, "C:");
-        assert_eq!(short.volume, "C:");
+        let short = pagefile_identity(r"C:\".to_string());
+        assert_eq!(short.name, r"C:\");
+        assert_eq!(short.volume, r"C:\");
     }
 
     #[test]
