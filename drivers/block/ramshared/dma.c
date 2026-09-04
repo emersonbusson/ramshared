@@ -51,6 +51,8 @@ void ramshared_dma_cleanup(struct ramshared_device *rs_dev)
 	if (!rs_dev)
 		return;
 
-	rs_dev->dma.cpu_addr = NULL;
-	rs_dev->dma.size = 0;
+	if (rs_dev->dma.cpu_addr) {
+		rs_dev->dma.cpu_addr = NULL;
+		rs_dev->dma.size = 0;
+	}
 }
