@@ -151,7 +151,8 @@ impl VulkanProvider {
     /// otherwise the ordinal), and sets up logical device + transfer queue + staging. RF-V1.
     pub fn open(ordinal: u32) -> Result<Self, VramError> {
         // SAFETY: loads libvulkan.so.1 via libloading; symbols remain valid as long as `entry` lives.
-        let entry = unsafe { ash::Entry::load() }.map_err(|e| VramError::Provider(format!("vulkan load: {e:?}")))?;
+        let entry = unsafe { ash::Entry::load() }
+            .map_err(|e| VramError::Provider(format!("vulkan load: {e:?}")))?;
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
         let ci = vk::InstanceCreateInfo::default().application_info(&app);
         // SAFETY: `ci`/`app` valid during call; `None` = default allocator.
