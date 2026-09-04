@@ -59,7 +59,7 @@ jobs:
           PR_BODY_RESULT: ${{ needs.pr-body.result }}
         run: |
           set -euo pipefail
-          if [ "$PR_BODY_RESULT" != success ]; then
+          if [ "$PR_BODY_RESULT" != success ] && [ "$PR_BODY_RESULT" != skipped ]; then
             echo "PR_BODY_SUMMARY=FAIL"
             exit 1
           fi

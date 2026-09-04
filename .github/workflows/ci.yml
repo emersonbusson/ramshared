@@ -59,6 +59,9 @@ jobs:
       - name: Workflow lint
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 .github/workflows/*.yml
 
+      - name: Fetch redaction source commits
+        run: git fetch origin 69f7469fa999b7d079341ee6bf8ebb006d517b51 || true
+
       - name: Committed public artifact hygiene
         run: node tools/ci/check-public-hygiene.mjs --candidate
 
