@@ -484,5 +484,9 @@ mod tests {
 
         let injected_char = build_residue_script('\'');
         assert!(injected_char.is_err());
+
+        for injection in [';', '$', '"', '\n', '\r', '`', '&', '|'] {
+            assert!(build_residue_script(injection).is_err(), "expected injection char {injection:?} to be rejected");
+        }
     }
 }
