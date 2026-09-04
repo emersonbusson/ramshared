@@ -156,7 +156,7 @@ const MEMORY_BROKER_WSL2D_BACKEND_COVERAGE_ENTRY = {
   files: ['crates/ramshared-wsl2d/src/backend.rs'],
   min: 80,
 }
-const MEMORY_BROKER_WSL2D_BACKEND_GPU_RELOCATION_ENTRY = {
+const MEMORY_BROKER_WSL2D_BACKEND_GPU_TEST_RELOCATION_ENTRY = {
   id: 'memory-broker-wsl2d-backend-gpu-test-relocation',
   kind: 'rust-ignored-test-relocation',
   spec: 'docs/specs/no-milestone/memory-broker/SPEC.md',
@@ -1148,10 +1148,10 @@ test('memory_broker_backend_has_exact_coverage_and_pinned_gpu_relocation_owners'
   ))
   const coverage = map.entries.find((item) => item.id === MEMORY_BROKER_WSL2D_BACKEND_COVERAGE_ENTRY.id)
   const relocation = map.entries.find(
-    (item) => item.id === MEMORY_BROKER_WSL2D_BACKEND_GPU_RELOCATION_ENTRY.id,
+    (item) => item.id === MEMORY_BROKER_WSL2D_BACKEND_GPU_TEST_RELOCATION_ENTRY.id,
   )
   assert.deepEqual(coverage, MEMORY_BROKER_WSL2D_BACKEND_COVERAGE_ENTRY)
-  assert.deepEqual(relocation, MEMORY_BROKER_WSL2D_BACKEND_GPU_RELOCATION_ENTRY)
+  assert.deepEqual(relocation, MEMORY_BROKER_WSL2D_BACKEND_GPU_TEST_RELOCATION_ENTRY)
 
   const selected = selectCoverageEntries(
     { schema_version: 2, entries: [coverage, relocation] },
