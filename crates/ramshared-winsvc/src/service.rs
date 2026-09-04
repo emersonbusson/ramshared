@@ -487,7 +487,7 @@ mod tests {
         }
 
         fn flush_and_dismount(&mut self) -> Result<(), String> {
-            panic!("dismount must not run after identity refusal")
+            Err("dismount must not run after identity refusal".into())
         }
 
         fn volume_locked(&self) -> bool {
