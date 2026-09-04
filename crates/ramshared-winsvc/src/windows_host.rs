@@ -1187,4 +1187,82 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn observe_volume_identity_rejects_invalid_letters() {
+        for invalid in ['A', 'B', 'C', 'a', 'c', '1', '!', ' '] {
+            let err = WindowsHostState::observe_volume_identity(invalid).unwrap_err();
+            assert!(matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")));
+        }
+    }
+
+    #[test]
+    fn parse_identity_output_handles_success_and_failures() {
+        use std::os::windows::process::ExitStatusExt;
+
+        let status_ok = std::process::ExitStatus::from_raw(0);
+        let status_err = std::process::ExitStatus::from_raw(42);
+
+        // Success: Exact friendly name
+        let output = Output {
+            status: status_ok,
+            stdout: b"RAMSHARE VRAMDISK|67108864|ABCDEF0123456789\n".to_vec(),
+            stderr: Vec::new(),
+        };
+        let observed = WindowsHostState::parse_identity_output('E', &output).unwrap();
+        assert_eq!(observed.letter, 'E');
+        assert_eq!(observed.vendor, "RAMSHARE");
+        assert_eq!(observed.product, "VRAMDISK");
+        assert_eq!(observed.serial, "ABCDEF0123456789");
+        assert_eq!(observed.size_bytes, 67108864);
+
+        // Success: Friendly name with standard SCSI suffix
+        let output = Output {
+            status: status_ok,
+            stdout: b"RAMSHARE VRAMDISK SCSI Disk Device|1073741824|1234567890ABCDEF".to_vec(),
+            stderr: Vec::new(),
+        };
+        let observed = WindowsHostState::parse_identity_output('Z', &output).unwrap();
+        assert_eq!(observed.letter, 'Z');
+        assert_eq!(observed.vendor, "RAMSHARE");
+        assert_eq!(observed.product, "VRAMDISK");
+        assert_eq!(observed.serial, "1234567890ABCDEF");
+        assert_eq!(observed.size_bytes, 1073741824);
+
+        // Failure: Non-zero exit status
+        let output = Output {
+            status: status_err,
+            stdout: Vec::new(),
+            stderr: b"drive letter not found".to_vec(),
+        };
+        let err = WindowsHostState::parse_identity_output('F', &output).unwrap_err();
+        assert!(matches!(err, HostError::Identity(msg) if msg.contains("volume identity query failed") && msg.contains("drive letter not found")));
+
+        // Failure: Missing or non-numeric size
+        let output = Output {
+            status: status_ok,
+            stdout: b"RAMSHARE VRAMDISK|not_a_number|ABCDEF0123456789".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err = WindowsHostState::parse_identity_output('F', &output).unwrap_err();
+        assert!(matches!(err, HostError::Identity(msg) if msg.contains("missing disk size")));
+
+        // Failure: Ambiguous identity output (extra pipe field)
+        let output = Output {
+            status: status_ok,
+            stdout: b"RAMSHARE VRAMDISK|67108864|ABCDEF0123456789|extra".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err = WindowsHostState::parse_identity_output('F', &output).unwrap_err();
+        assert!(matches!(err, HostError::Identity(msg) if msg.contains("ambiguous identity output")));
+
+        // Failure: Unrecognized friendly name
+        let output = Output {
+            status: status_ok,
+            stdout: b"FOREIGN VRAMDISK|67108864|ABCDEF0123456789".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err = WindowsHostState::parse_identity_output('F', &output).unwrap_err();
+        assert!(matches!(err, HostError::Identity(msg) if msg.contains("unrecognized product friendly name")));
+    }
 }
