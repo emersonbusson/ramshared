@@ -25,10 +25,10 @@
  */
 struct ramshared_dma_region {
 	phys_addr_t	pci_addr;
+	dma_addr_t	dma_handle;
 	void __iomem	*cpu_addr;
 	size_t		size;
-	dma_addr_t	dma_handle;
-};
+} __aligned(8);
 
 /**
  * struct ramshared_device - Main in-tree block device state
@@ -43,16 +43,16 @@ struct ramshared_dma_region {
  * @write_bytes: Total bytes written
  */
 struct ramshared_device {
-	struct gendisk			*disk;
-	struct blk_mq_tag_set		tag_set;
-	struct ramshared_dma_region	dma;
 	u64				capacity_bytes;
-	struct device			*dev;
-	struct mutex			lock;
 	atomic64_t			dma_transfers_total;
 	atomic64_t			read_bytes;
 	atomic64_t			write_bytes;
-};
+	struct gendisk			*disk;
+	struct device			*dev;
+	struct ramshared_dma_region	dma;
+	struct mutex			lock;
+	struct blk_mq_tag_set		tag_set;
+} __aligned(8);
 
 int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev);
 void ramshared_dma_cleanup(struct ramshared_device *rs_dev);
