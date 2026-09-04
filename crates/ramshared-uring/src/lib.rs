@@ -216,12 +216,18 @@ fn ctrl_cmd(dev_id: u32, len: u16, addr: u64) -> [u8; 80] {
 }
 
 fn expect_zero(result: i32, context: &str) -> io::Result<()> {
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
+    match result {
+        0 => Ok(()),
+        -12 => Err(io::Error::from_raw_os_error(12)),
+        -14 => Err(io::Error::from_raw_os_error(14)),
+        -16 => Err(io::Error::from_raw_os_error(16)),
+        -19 => Err(io::Error::from_raw_os_error(19)),
+        -22 => Err(io::Error::from_raw_os_error(22)),
+        -34 => Err(io::Error::from_raw_os_error(34)),
+        -95 => Err(io::Error::from_raw_os_error(95)),
+        _ => Err(io::Error::other(format!(
             "{context} returned unexpected result {result}"
-        )))
+        ))),
     }
 }
 
