@@ -1198,7 +1198,7 @@ mod tests {
         assert!(err_a.to_string().contains("letter must be D..=Z"));
 
         let err_d = WindowsHostState::lock_volume('d').unwrap_err();
-        assert!(err_d.to_string().contains("CreateFile volume"));
+        assert!(matches!(err_d, HostError::Volume(_)));
 
         let err_b = WindowsHostState::lock_product_volume('B', Some(1)).unwrap_err();
         assert!(err_b.to_string().contains("letter must be D..=Z"));
@@ -1212,6 +1212,6 @@ mod tests {
             None,
         )
         .unwrap_err();
-        assert!(err_guid.to_string().contains("CreateFile volume"));
+        assert!(matches!(err_guid, HostError::Volume(_)));
     }
 }
