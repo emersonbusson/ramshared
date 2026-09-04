@@ -1861,7 +1861,7 @@ mod tests {
     }
 
     struct FakeExecution {
-        result: Result<Option<i32>, String>,
+        result: Option<Result<Option<i32>, String>>,
     }
 
     struct TransitionBlockingExecution {
@@ -1918,7 +1918,7 @@ mod tests {
                 .borrow_mut()
                 .push((runner_args.to_vec(), command.to_vec()));
             Ok(Box::new(FakeExecution {
-                result: self.result.clone(),
+                result: Some(self.result.clone()),
             }))
         }
     }
@@ -1929,7 +1929,11 @@ mod tests {
         }
 
         fn wait_for_completion(&mut self) -> ScopeCompletion {
-            ScopeCompletion::Terminal(self.result.clone())
+            ScopeCompletion::Terminal(
+                self.result
+                    .take()
+                    .unwrap_or_else(|| Err("already completed".into())),
+            )
         }
     }
 
