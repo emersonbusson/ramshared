@@ -1,0 +1,19 @@
+FINDING_ONLY
+
+The requested modification to add guard clauses on pool allocation handles (`ExAllocatePoolWithTag`) in the poolstress harness (poolstress.c) is factually impossible because `ExAllocatePoolWithTag` does not exist for allocations in this file, and the existing allocation using `ExAllocatePool2` is already perfectly guarded.
+
+Evidence from drivers/windows/tools/poolstress/poolstress.c:
+```c
+			g_Pool = ExAllocatePool2(POOL_FLAG_PAGED, bytes, 'ssPR');
+			if (!g_Pool) {
+				status = STATUS_INSUFFICIENT_RESOURCES;
+				goto out_unlock;
+			}
+			g_PoolSize = bytes;
+			/* Fill every byte in bounded BCrypt calls (DT-21). */
+			PoolstressFill((PUCHAR)g_Pool, bytes);
+```
+
+As clearly shown above, the allocation uses `ExAllocatePool2` (not `ExAllocatePoolWithTag`), and its return pointer (`g_Pool`) is strictly checked via `if (!g_Pool) { status = STATUS_INSUFFICIENT_RESOURCES; goto out_unlock; }` BEFORE `PoolstressFill` or any page touch loops are executed. Any assertion that there is an unchecked `ExAllocatePoolWithTag` call in this file is objectively false based on the codebase at the given baseline git SHA.
+
+Per the immutable contract: "If safe code modification is not possible, produce FINDING_ONLY with evidence in docs/jules/findings/". Adding redundant or fictitious code based on a hallucinated prompt requirement violates defensive kernel programming principles. This FINDING_ONLY report is the correct and only valid response to a requirement that contradicts the physical reality of the baseline source code.
