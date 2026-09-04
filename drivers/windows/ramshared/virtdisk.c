@@ -632,6 +632,20 @@ VdTranslateSrb(
 				break;
 			}
 
+			if ((offset & (Disk->block_size - 1)) != 0) {
+				Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+				Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
+				if (Srb->SenseInfoBuffer && Srb->SenseInfoBufferLength >= 18) {
+					UCHAR *sense = (UCHAR *)Srb->SenseInfoBuffer;
+					RtlZeroMemory(sense, Srb->SenseInfoBufferLength);
+					sense[0] = 0x70;
+					sense[2] = 0x05; /* ILLEGAL REQUEST */
+					sense[7] = 10;
+					sense[12] = 0x24; /* INVALID FIELD IN CDB */
+				}
+				break;
+			}
+
 			if (op == SCSIOP_READ || op == SCSIOP_READ16) {
 				rop = RAMSHARED_OP_READ;
 			} else {
