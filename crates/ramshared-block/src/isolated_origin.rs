@@ -711,7 +711,7 @@ mod tests {
             else {
                 panic!("expected cache read");
             };
-            sender.send(reply).unwrap();
+            let _ = sender.send(reply);
         });
         let result = cache.read(0, &mut [0; 4]);
         worker.join().unwrap();
