@@ -198,7 +198,16 @@ int main(int argc, char **argv) {
 	       d2h_speed, d2h_speed / 1024.0, t1 - t0);
 
 	// 3. Bit-by-bit Verification
-	int match = (memcmp(host_pinned, read_pinned, chunk_bytes) == 0);
+	int match = 1;
+	uint32_t *rp_ptr32 = (uint32_t *)read_pinned;
+	for (size_t i = 0; i < num_words; i++) {
+		if (rp_ptr32[i] != hp_ptr32[i]) {
+			fprintf(stderr, "[-] Corruption detected at byte offset 0x%zx: expected 0x%08x, got 0x%08x\n",
+				i * sizeof(uint32_t), hp_ptr32[i], rp_ptr32[i]);
+			match = 0;
+			break;
+		}
+	}
 	printf("\n[+] Data Integrity Proof: %s\n",
 	       match ? "PASS (100% Bit-Exact Match, Zero Corruption)" : "FAIL");
 
