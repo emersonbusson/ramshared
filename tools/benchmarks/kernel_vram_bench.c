@@ -13,6 +13,10 @@
 #include <time.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <linux/fs.h>
 
 #define DEFAULT_CHUNK_MIB 256
 #define MIB_TO_BYTES(mib) ((size_t)(mib) * 1024 * 1024)
@@ -78,6 +82,20 @@ int main(int argc, char **argv) {
 	printf("=================================================================\n");
 	printf("   RamShared Hardware DMA & PCIe Bandwidth Benchmark Tool         \n");
 	printf("=================================================================\n");
+
+	int fd = open("/dev/ramshared", O_RDWR);
+	if (fd < 0) {
+		fprintf(stderr, "[-] Error: Character device /dev/ramshared not found or permission denied.\n");
+		return -ENODEV;
+	}
+
+	uint64_t size_bytes = 0;
+	if (ioctl(fd, BLKGETSIZE64, &size_bytes) < 0) {
+		fprintf(stderr, "[-] Error: Failed to query device capability (ioctl BLKGETSIZE64).\n");
+		close(fd);
+		return -EINVAL;
+	}
+	close(fd);
 
 	lib = load_cuda_driver();
 	if (!lib) {
