@@ -276,10 +276,11 @@ pub fn run_product_online(
     let mut dlink = DriverLink::from_queue(q);
     let startup_lun_deadline = Duration::from_secs(60);
     let startup_lun_started = Instant::now();
+    let serial_arc: Arc<str> = Arc::from(serial_str.as_str());
     loop {
         // The startup LUN identity wait must pump I/O: Windows disk
         // enumeration may issue READs before Get-Disk exposes the device.
-        let want_serial = serial_str.clone();
+        let want_serial = Arc::clone(&serial_arc);
         let want_size = cfg.size_bytes;
         let startup_lun = readonly_host_call_with_io_pump(
             &mut link,
