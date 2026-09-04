@@ -161,7 +161,40 @@ static ssize_t capacity_bytes_show(struct device *dev,
 
 	return sysfs_emit(buf, "%llu\n", rs_dev->capacity_bytes);
 }
-static DEVICE_ATTR_RO(capacity_bytes);
+
+static ssize_t capacity_bytes_store(struct device *dev,
+				    struct device_attribute *attr,
+				    const char *buf, size_t count)
+{
+	struct gendisk *disk = dev_to_disk(dev);
+	struct ramshared_device *rs_dev = disk->private_data;
+	unsigned long long val;
+	char tmp[32];
+
+	if (count == 0 || count >= sizeof(tmp))
+		return -EINVAL;
+
+	memcpy(tmp, buf, count);
+	tmp[count] = '\0';
+
+	if (kstrtoull(tmp, 10, &val))
+		return -ERANGE;
+
+	if (val == 0 || val > (1ULL << 40))
+		return -ERANGE;
+
+	mutex_lock(&rs_dev->lock);
+	rs_dev->capacity_bytes = val;
+	set_capacity(rs_dev->disk, rs_dev->capacity_bytes >> RAMSHARED_SECTOR_SHIFT);
+	mutex_unlock(&rs_dev->lock);
+
+	return count;
+}
+static struct device_attribute dev_attr_capacity_bytes = {
+	.attr = { .name = "capacity_bytes", .mode = 0644 },
+	.show = capacity_bytes_show,
+	.store = capacity_bytes_store,
+};
 
 static ssize_t read_bytes_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
