@@ -741,4 +741,35 @@ mod tests {
         assert_eq!(*writes.lock().unwrap(), 0);
         assert_eq!(link.backend_writes, 0);
     }
+
+    #[test]
+    fn driver_complete_empty_cq_and_wrapping_fifo() {
+        let mut q = InMemoryQueue::new(4, 4096, 4096).unwrap();
+
+        // 1. Empty CQ returns Ok(None)
+        assert_eq!(q.driver_complete().unwrap(), None);
+
+        // 2. Single CQE push and completion pop
+        let cqe1 = Cqe {
+            tag: 101,
+            status: ST_OK,
+            reserved: 0,
+        };
+        q.push_cqe(cqe1).unwrap();
+        assert_eq!(q.driver_complete().unwrap(), Some(cqe1));
+        assert_eq!(q.driver_complete().unwrap(), None);
+
+        // 3. FIFO order and wrapping arithmetic (queue_depth = 4)
+        for i in 1..=10u64 {
+            let cqe = Cqe {
+                tag: i,
+                status: ST_OK,
+                reserved: 0,
+            };
+            q.push_cqe(cqe).unwrap();
+            let popped = q.driver_complete().unwrap().unwrap();
+            assert_eq!(popped.tag, i);
+        }
+        assert_eq!(q.driver_complete().unwrap(), None);
+    }
 }
