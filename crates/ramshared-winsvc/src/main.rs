@@ -1096,6 +1096,28 @@ mod windows_svc {
             }
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::entry;
+
+        #[test]
+        fn test_entry_invalid_args() {
+            let code = entry(vec!["ramshared-winsvc.exe".into(), "invalid_cmd".into()]);
+            assert_eq!(code, 2);
+        }
+
+        #[test]
+        fn test_entry_scm_default_duplicate_config() {
+            let _ = super::SCM_CONFIG.set("C:\\Program Files\\RamShared\\versions\\v1\\winsvc.toml".into());
+            let code = entry(vec![
+                "ramshared-winsvc.exe".into(),
+                "--config".into(),
+                "C:\\Program Files\\RamShared\\versions\\v1\\winsvc.toml".into(),
+            ]);
+            assert_eq!(code, 2);
+        }
+    }
 }
 
 #[cfg(windows)]
