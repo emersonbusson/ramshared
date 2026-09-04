@@ -1187,4 +1187,82 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn read_owned_config_rejects_relative_path() {
+        let err = WindowsHostState::read_owned_config(Path::new("winsvc.toml")).unwrap_err();
+        assert!(matches!(
+            err,
+            HostError::Config(ConfigError::Invalid {
+                field: "config",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn read_owned_config_nonexistent_file_returns_io_error() {
+        let path = std::env::temp_dir().join(format!(
+            "ramshared_nonexistent_config_{}.toml",
+            std::process::id()
+        ));
+        let err = WindowsHostState::read_owned_config(&path).unwrap_err();
+        assert!(matches!(err, HostError::Io(_)));
+    }
+
+    #[test]
+    fn read_owned_config_reads_valid_config_file() {
+        let path = std::env::temp_dir().join(format!(
+            "ramshared_valid_config_{}.toml",
+            std::process::id()
+        ));
+        let valid_toml = r#"
+[win_drive]
+size_bytes = 536870912
+block_size = 4096
+cuda_device = 0
+reserve_bytes = 536870912
+queue_depth = 4
+max_io_bytes = 1048576
+evidence_path = "C:\\ProgramData\\RamShared\\evidence"
+volume_letter = "D"
+broker_pipe = "named_pipe_v1"
+broker_ready_timeout_secs = 30
+tenant = "windrive-host"
+"#;
+        std::fs::write(&path, valid_toml).unwrap();
+        let config = WindowsHostState::read_owned_config(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(config.size_bytes, 512 * 1024 * 1024);
+        assert_eq!(config.volume_letter, 'D');
+        assert_eq!(config.tenant, "windrive-host");
+    }
+
+    #[test]
+    fn read_owned_config_rejects_oversized_config_file() {
+        let path = std::env::temp_dir().join(format!(
+            "ramshared_oversized_config_{}.toml",
+            std::process::id()
+        ));
+        let oversized_data = vec![b'a'; MAX_CONFIG_BYTES + 10];
+        std::fs::write(&path, &oversized_data).unwrap();
+        let err = WindowsHostState::read_owned_config(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(matches!(
+            err,
+            HostError::Config(ConfigError::Invalid { detail, .. }) if detail.contains("exceeds")
+        ));
+    }
+
+    #[test]
+    fn read_owned_config_rejects_invalid_toml() {
+        let path = std::env::temp_dir().join(format!(
+            "ramshared_invalid_config_{}.toml",
+            std::process::id()
+        ));
+        std::fs::write(&path, "invalid_toml_data = [").unwrap();
+        let err = WindowsHostState::read_owned_config(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert!(matches!(err, HostError::Config(ConfigError::Parse(_))));
+    }
 }
