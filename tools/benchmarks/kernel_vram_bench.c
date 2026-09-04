@@ -60,13 +60,12 @@ int main(int argc, char **argv) {
 	void *read_pinned = NULL;
 	uint64_t dev_ptr = 0;
 
-	if (argc > 1) {
-		int val = atoi(argv[1]);
-		if (val <= 0 || val > 4096) {
-			fprintf(stderr, "[-] Error: Invalid chunk_mib size (must be 1-4096).\n");
-			return -EINVAL;
-		}
-		chunk_mib = val;
+	if (argc > 1)
+		chunk_mib = atoi(argv[1]);
+
+	if (chunk_mib <= 0 || chunk_mib > 4096) {
+		fprintf(stderr, "[-] Error: Invalid chunk_mib size (must be 1-4096).\n");
+		return -EINVAL;
 	}
 	size_t chunk_bytes = MIB_TO_BYTES(chunk_mib);
 
