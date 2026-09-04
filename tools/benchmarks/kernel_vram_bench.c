@@ -30,6 +30,39 @@ typedef int (*cuMemFreeHost_t)(void*);
 typedef int (*cuMemcpyHtoD_t)(uint64_t, const void*, size_t);
 typedef int (*cuMemcpyDtoH_t)(void*, uint64_t, size_t);
 
+#define HIST_BUCKETS 100000
+
+struct latency_hist {
+	uint64_t buckets[HIST_BUCKETS];
+	uint64_t total_samples;
+	uint64_t out_of_bounds;
+};
+
+static void hist_add(struct latency_hist *hist, double latency_sec) {
+	if (!hist) return;
+	uint64_t us = (uint64_t)(latency_sec * 1e6);
+	if (us < HIST_BUCKETS) {
+		hist->buckets[us]++;
+	} else {
+		hist->out_of_bounds++;
+	}
+	hist->total_samples++;
+}
+
+static uint64_t hist_percentile(const struct latency_hist *hist, double p) {
+	if (!hist || hist->total_samples == 0) return 0;
+	uint64_t target = (uint64_t)(hist->total_samples * p);
+	if (target == 0) target = 1;
+	uint64_t count = 0;
+	for (size_t i = 0; i < HIST_BUCKETS; i++) {
+		count += hist->buckets[i];
+		if (count >= target) {
+			return i;
+		}
+	}
+	return HIST_BUCKETS;
+}
+
 static double get_time_sec(void) {
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -165,6 +198,8 @@ int main(int argc, char **argv) {
 		goto out_host_pinned;
 	}
 
+	struct latency_hist hist = {0};
+
 	// 1. Direct DMA Host -> VRAM (Push)
 	printf("[+] Benchmarking Host -> VRAM DMA (%d MiB)...\n", chunk_mib);
 	double t0 = get_time_sec();
@@ -174,6 +209,7 @@ int main(int argc, char **argv) {
 		goto out_dev_ptr;
 	}
 	double t1 = get_time_sec();
+	hist_add(&hist, t1 - t0);
 	double h2d_speed = (double)chunk_mib / (t1 - t0);
 	printf("[+] H2D PCIe DMA Write: %.2f MiB/s (%.2f GiB/s) in %.4f s\n",
 	       h2d_speed, h2d_speed / 1024.0, t1 - t0);
@@ -193,9 +229,16 @@ int main(int argc, char **argv) {
 		goto out_read_pinned;
 	}
 	t1 = get_time_sec();
+	hist_add(&hist, t1 - t0);
 	double d2h_speed = (double)chunk_mib / (t1 - t0);
 	printf("[+] D2H PCIe DMA Read : %.2f MiB/s (%.2f GiB/s) in %.4f s\n",
 	       d2h_speed, d2h_speed / 1024.0, t1 - t0);
+
+	printf("\n[+] Latency Percentiles (us):\n");
+	printf("    p50  : %lu us\n", hist_percentile(&hist, 0.50));
+	printf("    p90  : %lu us\n", hist_percentile(&hist, 0.90));
+	printf("    p99  : %lu us\n", hist_percentile(&hist, 0.99));
+	printf("    p99.9: %lu us\n", hist_percentile(&hist, 0.999));
 
 	// 3. Bit-by-bit Verification
 	int match = (memcmp(host_pinned, read_pinned, chunk_bytes) == 0);
