@@ -741,4 +741,18 @@ mod tests {
         assert_eq!(*writes.lock().unwrap(), 0);
         assert_eq!(link.backend_writes, 0);
     }
+
+    #[test]
+    fn test_driver_read_slot_direct_and_errors() {
+        let mut queue = InMemoryQueue::new(4, 4096, 4096).unwrap();
+        let payload = vec![0x42u8; 1024];
+
+        queue.driver_write_slot(0, &payload).unwrap();
+
+        let read_data = queue.driver_read_slot(0, 1024).unwrap();
+        assert_eq!(read_data, payload.as_slice());
+
+        assert!(queue.driver_read_slot(4, 1024).is_err());
+        assert!(queue.driver_read_slot(0, 4097).is_err());
+    }
 }
