@@ -43,7 +43,7 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	}
 
 	if (queue_depth < 1 || queue_depth > 4096) {
-		dev_warn(&pdev->dev, "clamping queue_depth (%lu) to default (256)\n", queue_depth);
+		dev_warn(&pdev->dev, "clamping queue_depth (%u) to default (256)\n", queue_depth);
 		queue_depth = 256;
 	}
 
@@ -109,7 +109,6 @@ err_release_regions:
 	pci_release_mem_regions(pdev);
 err_clear_master:
 	pci_clear_master(pdev);
-err_disable_pci:
 	pci_disable_device(pdev);
 	return ret;
 }
@@ -125,6 +124,7 @@ static void ramshared_pci_remove(struct pci_dev *pdev)
 	if (!rs_dev)
 		return;
 
+	pci_set_drvdata(pdev, NULL);
 	ramshared_queue_cleanup(rs_dev);
 	ramshared_dma_cleanup(rs_dev);
 	pci_release_mem_regions(pdev);
