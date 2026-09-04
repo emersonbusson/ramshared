@@ -40,3 +40,4 @@ These findings serve as an immutable record of architectural invariants in RamSh
 | 24 | [`24-pr489-broker-cross-host-civm-historical-note.md`](24-pr489-broker-cross-host-civm-historical-note.md) | `ramshared-wsl2d` | Cross-host CIVM historical race note verified. |
 | 25 | [`25-pr493-cli-read-frozen-target-error-handling.md`](25-pr493-cli-read-frozen-target-error-handling.md) | `ramshared-cli` | `read_frozen_target` uses structured Result propagation. |
 | 26 | [`26-pr497-wsl2d-dxgkrnl-mlockall-invariants.md`](26-pr497-wsl2d-dxgkrnl-mlockall-invariants.md) | `ramshared-wsl2d` | Memory locking invariants protect against dxgkrnl collisions. |
+| 27 | [`27-origin-cache-vector-allocation-trap.md`](27-origin-cache-vector-allocation-trap.md) | `ramshared-block` | Line 969 is in a unit test fixture, not a vector allocation in a loop. |
