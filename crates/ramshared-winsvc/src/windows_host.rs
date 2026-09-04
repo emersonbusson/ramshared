@@ -1187,4 +1187,88 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn observe_volume_identity_rejects_invalid_drive_letters() {
+        for invalid in ['A', 'B', 'C', '1', 'a', 'b', 'c'] {
+            let err = WindowsHostState::observe_volume_identity(invalid).unwrap_err();
+            assert!(
+                matches!(err, HostError::Volume(ref msg) if msg.contains("letter must be D..=Z"))
+            );
+        }
+    }
+
+    #[test]
+    fn observe_volume_identity_parse_output_succeeds() {
+        use std::os::windows::process::ExitStatusExt;
+
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"RAMSHARE VRAMDISK|67108864|ABCDEF0123456789\n".to_vec(),
+            stderr: Vec::new(),
+        };
+        let identity = WindowsHostState::parse_identity_output('D', &output).unwrap();
+        assert_eq!(
+            identity,
+            ObservedVolumeIdentity {
+                letter: 'D',
+                vendor: "RAMSHARE".into(),
+                product: "VRAMDISK".into(),
+                serial: "ABCDEF0123456789".into(),
+                size_bytes: 67108864,
+            }
+        );
+    }
+
+    #[test]
+    fn observe_volume_identity_parse_output_command_failed() {
+        use std::os::windows::process::ExitStatusExt;
+
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(42),
+            stdout: Vec::new(),
+            stderr: b"partition not found".to_vec(),
+        };
+        let err = WindowsHostState::parse_identity_output('D', &output).unwrap_err();
+        assert!(err.to_string().contains("volume identity query failed"));
+    }
+
+    #[test]
+    fn observe_volume_identity_parse_output_missing_or_invalid_size() {
+        use std::os::windows::process::ExitStatusExt;
+
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"RAMSHARE VRAMDISK|invalid_size|ABCDEF0123456789".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err = WindowsHostState::parse_identity_output('D', &output).unwrap_err();
+        assert!(err.to_string().contains("missing disk size"));
+    }
+
+    #[test]
+    fn observe_volume_identity_parse_output_ambiguous_fields() {
+        use std::os::windows::process::ExitStatusExt;
+
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"RAMSHARE VRAMDISK|67108864|ABCDEF0123456789|extra".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err = WindowsHostState::parse_identity_output('D', &output).unwrap_err();
+        assert!(err.to_string().contains("ambiguous identity output"));
+    }
+
+    #[test]
+    fn observe_volume_identity_parse_output_invalid_product_friendly_name() {
+        use std::os::windows::process::ExitStatusExt;
+
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"UNKNOWN DISK|67108864|ABCDEF0123456789".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err = WindowsHostState::parse_identity_output('D', &output).unwrap_err();
+        assert!(err.to_string().contains("identity"));
+    }
 }
