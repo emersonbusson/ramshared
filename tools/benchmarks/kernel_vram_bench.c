@@ -140,6 +140,17 @@ int main(int argc, char **argv) {
 	printf("[+] GPU Memory: %zu MiB free / %zu MiB total\n",
 	       free_b / (1024 * 1024), total_b / (1024 * 1024));
 
+	if (chunk_bytes > free_b) {
+		chunk_bytes = free_b & ~((size_t)4095);
+		chunk_mib = (int)(chunk_bytes / (1024 * 1024));
+		printf("[!] Clamping benchmark buffer to %zu bytes (%d MiB) to avoid OOM.\n", chunk_bytes, chunk_mib);
+		if (chunk_bytes == 0) {
+			fprintf(stderr, "[-] Error: Insufficient free VRAM.\n");
+			ret = -ENOMEM;
+			goto out_ctx;
+		}
+	}
+
 	// Allocate Pinned Host Memory
 	if (cuMemHostAlloc(&host_pinned, chunk_bytes, 0) != 0) {
 		fprintf(stderr, "[-] Error: cuMemHostAlloc failed (%d MiB).\n", chunk_mib);
