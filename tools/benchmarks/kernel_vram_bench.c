@@ -25,8 +25,6 @@ typedef int (*cuCtxDestroy_t)(void*);
 typedef int (*cuMemGetInfo_t)(size_t*, size_t*);
 typedef int (*cuMemAlloc_t)(uint64_t*, size_t);
 typedef int (*cuMemFree_t)(uint64_t);
-typedef int (*cuMemHostAlloc_t)(void**, size_t, unsigned int);
-typedef int (*cuMemFreeHost_t)(void*);
 typedef int (*cuMemcpyHtoD_t)(uint64_t, const void*, size_t);
 typedef int (*cuMemcpyDtoH_t)(void*, uint64_t, size_t);
 
@@ -93,8 +91,6 @@ int main(int argc, char **argv) {
 	cuMemGetInfo_t cuMemGetInfo = (cuMemGetInfo_t)dlsym(lib, "cuMemGetInfo_v2");
 	cuMemAlloc_t cuMemAlloc = (cuMemAlloc_t)dlsym(lib, "cuMemAlloc_v2");
 	cuMemFree_t cuMemFree = (cuMemFree_t)dlsym(lib, "cuMemFree_v2");
-	cuMemHostAlloc_t cuMemHostAlloc = (cuMemHostAlloc_t)dlsym(lib, "cuMemHostAlloc");
-	cuMemFreeHost_t cuMemFreeHost = (cuMemFreeHost_t)dlsym(lib, "cuMemFreeHost");
 	cuMemcpyHtoD_t cuMemcpyHtoD = (cuMemcpyHtoD_t)dlsym(lib, "cuMemcpyHtoD_v2");
 	cuMemcpyDtoH_t cuMemcpyDtoH = (cuMemcpyDtoH_t)dlsym(lib, "cuMemcpyDtoH_v2");
 
@@ -140,9 +136,9 @@ int main(int argc, char **argv) {
 	printf("[+] GPU Memory: %zu MiB free / %zu MiB total\n",
 	       free_b / (1024 * 1024), total_b / (1024 * 1024));
 
-	// Allocate Pinned Host Memory
-	if (cuMemHostAlloc(&host_pinned, chunk_bytes, 0) != 0) {
-		fprintf(stderr, "[-] Error: cuMemHostAlloc failed (%d MiB).\n", chunk_mib);
+	// Allocate Page-Aligned Host Memory (posix_memalign for O_DIRECT DMA)
+	if (posix_memalign(&host_pinned, 4096, chunk_bytes) != 0) {
+		fprintf(stderr, "[-] Error: posix_memalign failed (%d MiB).\n", chunk_mib);
 		ret = -ENOMEM;
 		goto out_ctx;
 	}
@@ -179,8 +175,8 @@ int main(int argc, char **argv) {
 	       h2d_speed, h2d_speed / 1024.0, t1 - t0);
 
 	// 2. Direct DMA VRAM -> Host (Pull)
-	if (cuMemHostAlloc(&read_pinned, chunk_bytes, 0) != 0) {
-		fprintf(stderr, "[-] Error: cuMemHostAlloc (read) failed.\n");
+	if (posix_memalign(&read_pinned, 4096, chunk_bytes) != 0) {
+		fprintf(stderr, "[-] Error: posix_memalign (read) failed.\n");
 		ret = -ENOMEM;
 		goto out_dev_ptr;
 	}
@@ -207,11 +203,11 @@ int main(int argc, char **argv) {
 	}
 
 out_read_pinned:
-	if (read_pinned) cuMemFreeHost(read_pinned);
+	if (read_pinned) free(read_pinned);
 out_dev_ptr:
 	if (dev_ptr) cuMemFree(dev_ptr);
 out_host_pinned:
-	if (host_pinned) cuMemFreeHost(host_pinned);
+	if (host_pinned) free(host_pinned);
 out_ctx:
 	if (ctx) cuCtxDestroy(ctx);
 out_lib:
