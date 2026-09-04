@@ -1127,6 +1127,50 @@ mod tests {
     }
 
     #[test]
+    fn pagefile_lines_parser_validates_paths() {
+        let lines = "C:\\pagefile.sys\r\nD:\\pagefile.sys\n\n";
+        let parsed = parse_pagefile_lines(lines).unwrap();
+        assert_eq!(parsed, vec![r"C:\pagefile.sys", r"D:\pagefile.sys"]);
+
+        let bad_lines = "invalid_path\n";
+        let err = parse_pagefile_lines(bad_lines).unwrap_err();
+        assert!(err.contains("invalid drive path"));
+    }
+
+    #[test]
+    fn configured_pagefile_parser_validates_entry_structure() {
+        assert!(parse_configured_pagefile_entry(r"C:\pagefile.sys").is_err());
+        assert!(parse_configured_pagefile_entry(r"C:\pagefile.sys 1000").is_err());
+        assert!(parse_configured_pagefile_entry(r"C:\pagefile.sys min max").is_err());
+        assert!(parse_configured_pagefile_entry(r"X 0 4096").is_err());
+    }
+
+    #[test]
+    fn pagefile_identity_derives_volume_prefix() {
+        let pf = pagefile_identity(r"E:\swap.sys".to_string());
+        assert_eq!(pf.name, r"E:\swap.sys");
+        assert_eq!(pf.volume, r"E:\");
+
+        let short = pagefile_identity("C:".to_string());
+        assert_eq!(short.name, "C:");
+        assert_eq!(short.volume, "C:");
+    }
+
+    #[test]
+    fn active_pagefiles_returns_pagefile_identities_or_fail_closed_host_error() {
+        match WindowsHostState::active_pagefiles() {
+            Ok(pfs) => {
+                for pf in pfs {
+                    assert_eq!(pf.volume, pf.name.get(..3).unwrap_or(&pf.name));
+                }
+            }
+            Err(e) => {
+                assert!(e.to_string().starts_with("pagefile:"));
+            }
+        }
+    }
+
+    #[test]
     fn exclusive_volume_lock_closes_pagefile_race() {
         let err = HostError::Volume("lock denied".into());
         assert!(err.to_string().contains("volume"));
