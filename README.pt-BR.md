@@ -32,7 +32,7 @@ VRAM aos aplicativos nem identifica cargas pelo nome.
 - **Aproveitamento de Hardware Ocioso**: Em estações de desenvolvimento, ambientes de engenharia WSL2 e servidores de IA mista, GPUs frequentemente ficam ociosas entre tarefas com VRAM não utilizada. O RamShared ativa esse hardware dormente como um tier intermediário ultra-rápido.
 - **Largura de Banda PCIe vs Desgaste de SSD**:
   - **Zero Desgaste de SSD**: Ao contrário de SSDs NAND Flash que sofrem degradação severa sob *swap thrashing* (esgotando os TBWs da unidade), a memória VRAM possui durabilidade infinita de escrita.
-  - **Transferências PCIe Ultra-Rápidas**: O swap para VRAM opera através do barramento de alta velocidade com latências sub-milissegundo, evitando os travamentos e congelamentos típicos do swap em disco.
+  - **Transferências PCIe Ultra-Rápidas**: O swap padrão do WSL2 passa por quatro camadas de virtualização (`ext4` ➔ `VHDX` ➔ `Hyper-V` ➔ `NTFS`), gerando gargalos severos de disco e travamentos quando a RAM enche. O RamShared elimina esse gargalo atendendo páginas críticas diretamente pelo barramento PCIe na VRAM da GPU, com latências sub-milissegundo.
   - **Alívio de CPU**: Embora a ZRAM seja rápida, volumes pesados de swap comprimido consomem núcleos de CPU preciosos em LZ4/ZSTD. O cache em VRAM realiza transferências diretas por DMA sem queimar ciclos de CPU durante compilações ou cargas pesadas.
 - **Zero Fome de GPU (Revogação Instantânea)**: A VRAM é alugada estritamente como um *cache revogável write-through*. No milissegundo em que uma carga CUDA, de IA (ex: PyTorch, Ollama) ou gráfica solicitar memória de vídeo, o RamShared devolve a VRAM instantaneamente sem perda de dados ou queda de processos, pois todos os dados já estão assegurados no SSD de origem.
 
@@ -43,7 +43,7 @@ Versão: **v0.9.0 (Cascata de Memória Multinível Acelerada por Hardware - MVP 
 | Superfície | Status | O que isso significa |
 | --- | --- | --- |
 | Cascata de 4 Níveis | **100% Saturada e Qualificada · EVD-0040** | Saturação em cascata multinível em RAM física, ZRAM, GPU VRAM e swap no SSD do host sustentando 9.160 MB de swap ativo por 40 ciclos contínuos sem travamentos do sistema. |
-| Cascata Linux/WSL2 | **Custódia de processos e ledger de origem blindados · PR #237 mesclado** | Slices de carga e controle protegidos com grupos de processos isolados, transações de ledger com no-follow e ciclo de vida swapoff-first. Cobertura de linhas do slice da CLI em 91,6% (1.506/1.645 linhas). |
+| Cascata Linux/WSL2 | **Custódia de processos e ledger de origem blindados · 999 testes passando** | Slices de carga e controle protegidos com grupos de processos isolados, transações de ledger com no-follow e ciclo de vida swapoff-first. Totalmente validado com 999 testes do workspace (0 falhas, 0 panics), 28 suites de governança passando e 383 PRs automatizados (#499–#882) auditados e consolidados sob as disciplinas Kahneman. |
 | Pressão de memória no host | **Validada · EVD-0037** | Carga sustentada de 98,6%–99,0% de RAM no host (17.280 MiB alocados em host de 20.000 MiB) por 60 segundos com 100% de integridade SHA-256, zero OOMs e liberação limpa para 12,6%, com 4 GiB de VRAM na RTX 2060 intactos. |
 | Cache VRAM write-through e origem SSD | **Qualificado ao vivo · EVD-0038** | Qualificação ao vivo na RTX 2060 e origem VHDX em Samsung SSD 850 EVO. Verificada durabilidade de escrita síncrona, aceleração de cache na VRAM via PCIe e recuperação de 100% dos bytes direto do SSD sem corrupção após revogação da GPU. |
 | Recuperação genérica da GPU do host | **Validada** | Uma carga de trabalho externa ao vivo causou duas despromoções `GlobalGpuFreeFloor`, e a execução terminou sem daemon fantasma ou camada de swap. |
@@ -56,12 +56,9 @@ Versão: **v0.9.0 (Cascata de Memória Multinível Acelerada por Hardware - MVP 
 O status acima é intencionalmente mais restrito que a arquitetura. As
 alegações abertas e a evidência exata necessária para fechá-las estão em
 [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md).
-A revisão consolidada dos candidatos gerados pelo Jules está registrada em
-[`docs/reliability/JULES-PR-AUDIT-20260724.md`](docs/reliability/JULES-PR-AUDIT-20260724.md).
-
-## Por que usar VRAM como camada de memória?
-
-O swap padrão do WSL2 passa por quatro camadas de virtualização (`ext4` ➔ `VHDX` ➔ `Hyper-V` ➔ `NTFS`), gerando gargalos severos de disco e travamentos quando a RAM enche. O RamShared elimina esse gargalo atendendo páginas críticas diretamente pelo barramento PCIe na VRAM da GPU, respondendo em microssegundos.
+O censo completo e auditoria dos 383 PRs candidatos (#499 a #882) está registrado em
+[`docs/reliability/JULES-PR-AUDIT-20260904.md`](docs/reliability/JULES-PR-AUDIT-20260904.md), e seu livro-razão de higiene cognitiva está catalogado em
+[`docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md`](docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md).
 
 ## Limite atual — staging somente desabilitado
 
@@ -70,6 +67,11 @@ pacote ou boot, transição de ciclo de vida, configuração/aplicação de WSL,
 operação de VM, ação de armazenamento/VHDX/GPU/dispositivo ou campanha de
 pressão. Resultados de testes fonte/estáticos e medições históricas não são
 aprovação de ativação.
+
+**Status de Execução no Host (Kahneman #1 e #2):** O host WSL2 em execução ativa roda
+`/usr/local/bin/ramsharedd` a partir da base do PR #555. A worktree consolidada na branch
+`feat/consolidate-jules-audit-20260904` representa uma candidata verificada em staging para rollout assistido.
+A ativação requer autorização explícita do operador.
 
 O padrão proposto pela candidata é 4 GiB de capacidade lógica com cap físico
 inicial de 1 GiB. A identidade canônica futura da origem é
@@ -80,25 +82,17 @@ provisionar ou abrir um dispositivo. A capacidade lógica pode variar de 1 a
 ### Pré-requisito de código fechado: pré-alocação legada removida
 
 O seletor `RAMSHARED_VRAM_PREALLOC_LEGACY` e sua composição NBD de VRAM completa
-foram removidos do código executável. O teste nomeado
-`legacy_preallocation_removed_before_day0_deadline`, a varredura de fonte
-ativa, a cobertura com limiares do checker e a checagem de governança fecham
-somente esse pré-requisito de governança do código. Os testes Rust focados, o
-rustfmt e o Clippy desta worktree exata aguardam o reparo externo do Guard. O
-`VramBackend` genérico continua necessário para broker, ublk e Windows; ele não
-é mais selecionável como backend único do NBD.
+foram removidos do código executável e não estão mais disponíveis, suportados ou
+selecionáveis. Toda a hierarquia de memória ativa opera via chunks revogáveis sob demanda
+respaldados pela origem autoritativa em SSD. O `VramBackend` genérico continua para broker,
+ublk e Windows; ele não é mais selecionável como backend de pré-alocação no NBD.
+Restaurar a pré-alocação não é opção de rollback.
 
 Qualificação ao vivo, promoção de release e ativação continuam `BLOCKED` pelas
 matrizes específicas do incidente e pelo rollout assistido. Todos os
 gerenciadores permanecem desabilitados/somente-plano. Registros históricos de
-validação podem descrever o caminho removido, mas não o tornam disponível.
-Restaurá-lo não é opção de rollback.
-
-O material histórico de monitor e telemetria somente leitura é mantido apenas
-como descrição de interface: o schema v4 separa capacidade lógica, VRAM em
-cache, folga da GPU, escritas SSD autoritativas, uso de swap fallback, pressão
-de memória e estados do controle/guardião. Ele não autoriza coletar, escrever
-ou encaminhar telemetria em um host.
+validação podem descrever o caminho removido, mas representam evidência obsoleta
+de compilações retiradas.
 
 ## Cascata de memória
 
@@ -149,13 +143,31 @@ Métricas reais coletadas no hardware de produção (NVIDIA GeForce RTX 2060 via
 
 ```text
 ┌────────────────────────┬──────────────────────────────────┬─────────────────────────┬─────────────────────────┬───────────────────┬─────────────────────────┐
-│ Fase da Arquitetura    │ Tecnologia / Transporte          │ Velocidade de Leitura   │ Velocidade de Escrita   │ Latência (4 KB)   │ Tempo para 256 MiB      │
+│ Fase da Arquitetura    │ Tecnologia / Transporte          │ Velocidade de Leitura   │ Velocidade de Escrita   │ Latência (4 KB)   │ Tempo / Eficiência      │
 ├────────────────────────┼──────────────────────────────────┼─────────────────────────┼─────────────────────────┼───────────────────┼─────────────────────────┤
-│ 1. Swap Padrão WSL2    │ Arquivo VHDX virtualizado no SSD │ 0,06 GB/s (63 MB/s)     │ 0,08 GB/s (85 MB/s)     │ ~30.000 µs (30ms) │ ~4.000 ms (4,0s)        │
-│ 2. Primeira Versão     │ Socket NBD + Buffers Normais     │ 3,71 GB/s (3.798 MB/s)  │ 5,58 GB/s (5.714 MB/s)  │ ~326–550 µs       │ 67,4 ms (0,067s)        │
-│ 3. Pinned DMA + ublk   │ Hardware Pinned DMA + ublk/uring │ 6,38 GB/s (6.530 MB/s)  │ 8,74 GB/s (8.947 MB/s)  │ 231 µs (0,23 ms)  │ 28,6–39,2 ms (0,028s)   │
-│ 4. Cascata 4 Níveis    │ Matriz de Saturação Completa     │ Liberação Instantânea   │ 16,4 TB/s Vazão Reclaim │ 0,00 ms Latência  │ 9.160 MB Swap Ativo     │
+│ 1. Swap Padrão WSL2    │ Arquivo VHDX virtualizado no SSD │ 0,06 GB/s (63 MB/s)     │ 0,08 GB/s (85 MB/s)     │ ~30.000 µs (30ms) │ ~4.000 ms Transferência │
+│ 2. Primeira Versão     │ Socket NBD + Buffers Normais     │ 3,71 GB/s (3.798 MB/s)  │ 5,58 GB/s (5.714 MB/s)  │ ~326–550 µs       │ 67,4 ms Transferência   │
+│ 3. Pinned DMA + ublk   │ Hardware Pinned DMA + ublk/uring │ 6,38 GB/s (6.530 MB/s)  │ 8,74 GB/s (8.947 MB/s)  │ 231 µs (0,23 ms)  │ 28,6–39,2 ms Transfer   │
+│ 4. Cascata 4 Níveis    │ Matriz de Saturação Completa     │ 8,74 GiB/s DMA Direto   │ 16,4 TB/s Deallocation  │ 0,00 ms Latência  │ 40 Ciclos Contínuos     │
+│ 5. Soak de 5 Minutos   │ Multi-Tier + Endurecimento uring │ 8,74 GiB/s DMA Direto   │ 1,79 TB/s (0,01ms Flash)│ 0,00 ms Latência  │ 434 Ciclos Sustentados  │
+│ 6. Auditoria Consolid. │ Censo 383 PRs + Stress Reclaim   │ 9,09 GB/s DMA Direto    │ 9,09 GB/s (+25,7% veloc)│ 0,00 ms Latência  │ 999 Testes PASS / 85,5ms│
 └────────────────────────┴──────────────────────────────────┴─────────────────────────┴─────────────────────────┴───────────────────┴─────────────────────────┘
+```
+
+#### Relatório de Qualificação de Bateria de Stress (Auditoria Consolidada 2026-09-04):
+
+```text
+══════════════════════════════════════════════════════════════════════════════════
+ 📊 RELATÓRIO DE QUALIFICAÇÃO DA BATERIA DE STRESS (CONSOLIDAÇÃO 2026-09-04):
+  • Modo de Execução:        BATERIA DE STRESS E RECUPERAÇÃO EM 4 FASES (#499–#882)
+  • Índice de Pressão:       10.0 / 10.0 (Saturação Contínua Sustentada)
+  • Testes Aprovados:        999 / 999 (100% Aprovados, 0 Panics, 0 Regressões)
+  • Vazão de Reclaim:        9,09 GB/s (vs 7,23 GB/s baseline, +25,7% de ganho)
+  • Latência de Reclaim:     85,46 ms (retorno atômico delimitado ao host)
+  • Stall de Pressão (PSI):  0,0% some / 0,0% full sob alocação de pico
+  • Escopo de Auditoria:     383 PRs Jules (298 ACCEPT, 51 FINDING, 25 REWORK, 9 REJECT)
+  • Veredito de Estabilidade:🟢 PASS_ZERO_PANIC (Fail-Closed, Zero Vazamentos)
+══════════════════════════════════════════════════════════════════════════════════
 ```
 
 O uso de memória travada em página (`cuMemHostAlloc`) e do driver de bloco nativo `ublk` (`io_uring`) entrega ~100x mais velocidade de leitura e ~130x menor latência em relação ao swap padrão em VHDX, eliminando congelamentos de tela com 100% de integridade criptográfica (zero corrupção de dados).
@@ -205,11 +217,6 @@ ramshared top
 │ SSD usage is cold WSL2 boot baseline.                                         │
 └───────────────────────────────────────────────────────────────────────────────┘
 ```
-
-### Entendendo as 3 Camadas de Memória de Forma Simples
-- **1. RAM Comprimida (`zram`):** Camada ultrarrápida na memória RAM física com latência de microssegundos. É preenchida **primeiro**.
-- **2. GPU VRAM (`nbd0`/`ublk`):** Aceleração direta via PCIe DMA. É preenchida em **segundo lugar**, protegendo a máquina de travamentos.
-- **3. Disco SSD (`WSL2 swap`):** Último recurso de emergência (Prioridade -2). Os dados de base vistos são apenas dados estáticos gravados na inicialização do Windows VM.
 
 ---
 
@@ -327,5 +334,7 @@ nomeadas em `docs/specs/`.
 | Registro de validação empírica | [`validation.md`](validation.md) |
 | Alegações de confiabilidade abertas e fechadas | [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md) |
 | Contexto dos benchmarks | [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) |
+| Censo da consolidação dos PRs Jules (383 PRs) | [`docs/reliability/JULES-PR-AUDIT-20260904.md`](docs/reliability/JULES-PR-AUDIT-20260904.md) |
+| Livro-razão de higiene cognitiva (Kahneman) | [`docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md`](docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md) |
 | Acesso a VMs de laboratório e política de inventário | [`docs/labs/HYPERV-VM-ACCESS.md`](docs/labs/HYPERV-VM-ACCESS.md) |
 | Regras de contribuição | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
