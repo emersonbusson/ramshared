@@ -1127,6 +1127,29 @@ mod tests {
     }
 
     #[test]
+    fn lock_product_volume_rejects_invalid_letters_and_paths() {
+        for invalid in ['A', 'a', 'B', 'C', 'c', '1', '@', '\0'] {
+            let err = WindowsHostState::lock_product_volume(invalid, None).unwrap_err();
+            assert!(
+                err.to_string().contains("letter must be D..=Z"),
+                "expected letter validation error for '{invalid}', got: {err}"
+            );
+        }
+
+        let err = WindowsHostState::lock_product_volume_path("\\\\.\\E:", 'D', None).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid volume device path"),
+            "expected path validation error, got: {err}"
+        );
+
+        let err = WindowsHostState::lock_product_volume_path("invalid_path", 'D', None).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid volume device path"),
+            "expected path validation error, got: {err}"
+        );
+    }
+
+    #[test]
     fn exclusive_volume_lock_closes_pagefile_race() {
         let err = HostError::Volume("lock denied".into());
         assert!(err.to_string().contains("volume"));
