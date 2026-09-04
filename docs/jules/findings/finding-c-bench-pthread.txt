@@ -1,0 +1,7 @@
+RamShared — Architectural Report
+Target: tools/benchmarks/kernel_vram_bench.c
+Task: multi-threaded benchmark worker synchronization using pthread barriers
+
+The requested codebase target (`tools/benchmarks/kernel_vram_bench.c`) is a strictly single-threaded, sequential benchmark application measuring Direct DMA Host-to-Device and Device-to-Host throughput via the CUDA Driver API. It does not contain any multi-threaded workers, thread pools, or `pthread_create` logic.
+
+Implementing `pthread_barrier_t` synchronization would require artificially inventing a multi-threaded architecture that does not exist in the baseline, violating the Immutable Contract ("Implement only the smallest safe orthogonal slice" and "If safe code modification is not possible, produce FINDING_ONLY"). Therefore, no code modification has been made to `kernel_vram_bench.c`. This finding satisfies the requirement.
