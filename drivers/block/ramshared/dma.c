@@ -17,6 +17,7 @@ int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 	int bar = 0;
 	resource_size_t bar_start, bar_len;
 
+	/* Validate pointers at the top of the function */
 	if (!rs_dev || !pdev)
 		return -EINVAL;
 
