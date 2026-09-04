@@ -22,8 +22,14 @@ use ramshared_vram::{VramError, VramMemory, VramProvider};
 /// Single staging buffer per provider (no alloc on hot path, DT-8): 1 MiB. Larger I/O is sliced.
 const STAGING_BYTES: u64 = 1 << 20;
 
-fn vk_err(ctx: &str, e: impl std::fmt::Debug) -> VramError {
-    VramError::Provider(format!("vulkan {ctx}: {e:?}"))
+fn vk_err(ctx: &str, e: vk::Result) -> VramError {
+    match e {
+        vk::Result::ERROR_OUT_OF_HOST_MEMORY | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+            VramError::OutOfMemory
+        }
+        vk::Result::ERROR_DEVICE_LOST => VramError::Provider(format!("vulkan {ctx}: device lost")),
+        _ => VramError::Provider(format!("vulkan {ctx}: {e:?}")),
+    }
 }
 
 /// Selects a transfer queue family (prefers explicit `TRANSFER`; falls back to `GRAPHICS`/`COMPUTE`, which imply transfer per spec). Returns the family index.
@@ -145,7 +151,7 @@ impl VulkanProvider {
     /// otherwise the ordinal), and sets up logical device + transfer queue + staging. RF-V1.
     pub fn open(ordinal: u32) -> Result<Self, VramError> {
         // SAFETY: loads libvulkan.so.1 via libloading; symbols remain valid as long as `entry` lives.
-        let entry = unsafe { ash::Entry::load() }.map_err(|e| vk_err("load", e))?;
+        let entry = unsafe { ash::Entry::load() }.map_err(|e| VramError::Provider(format!("vulkan load: {e:?}")))?;
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
         let ci = vk::InstanceCreateInfo::default().application_info(&app);
         // SAFETY: `ci`/`app` valid during call; `None` = default allocator.
