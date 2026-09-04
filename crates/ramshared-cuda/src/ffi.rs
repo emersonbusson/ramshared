@@ -52,3 +52,38 @@ pub struct Syms {
     pub mem_get_info: FnMemGetInfo,
     pub get_error_string: Option<FnGetErrorString>,
 }
+
+impl Syms {
+    /// Validates that all mandatory driver function pointers in the table are non-null.
+    /// Does not enforce non-nullness for optional symbols (e.g., `get_error_string`).
+    pub fn validate_pointers(&self) -> bool {
+        // We cast the function pointers to *const () to check for null
+        let init_ptr: *const () = self.init as *const ();
+        let dgc_ptr: *const () = self.device_get_count as *const ();
+        let dg_ptr: *const () = self.device_get as *const ();
+        let dgn_ptr: *const () = self.device_get_name as *const ();
+        let cc_ptr: *const () = self.ctx_create as *const ();
+        let cd_ptr: *const () = self.ctx_destroy as *const ();
+        let cs_ptr: *const () = self.ctx_synchronize as *const ();
+        let ma_ptr: *const () = self.mem_alloc as *const ();
+        let mf_ptr: *const () = self.mem_free as *const ();
+        let mhtod_ptr: *const () = self.memcpy_htod as *const ();
+        let mdtoh_ptr: *const () = self.memcpy_dtoh as *const ();
+        let msd8_ptr: *const () = self.memset_d8 as *const ();
+        let mgi_ptr: *const () = self.mem_get_info as *const ();
+
+        !init_ptr.is_null()
+            && !dgc_ptr.is_null()
+            && !dg_ptr.is_null()
+            && !dgn_ptr.is_null()
+            && !cc_ptr.is_null()
+            && !cd_ptr.is_null()
+            && !cs_ptr.is_null()
+            && !ma_ptr.is_null()
+            && !mf_ptr.is_null()
+            && !mhtod_ptr.is_null()
+            && !mdtoh_ptr.is_null()
+            && !msd8_ptr.is_null()
+            && !mgi_ptr.is_null()
+    }
+}

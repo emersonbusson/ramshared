@@ -29,6 +29,8 @@ pub enum CudaError {
     },
     /// VRAM memory region access out of bounds (offset + len > size).
     OutOfRange { off: usize, len: usize, size: usize },
+    /// Internal driver state is invalid (e.g. null function pointers).
+    InvalidState(&'static str),
 }
 
 impl fmt::Display for CudaError {
@@ -42,6 +44,7 @@ impl fmt::Display for CudaError {
             CudaError::OutOfRange { off, len, size } => {
                 write!(f, "out of bounds access: off={off} len={len} > size={size}")
             }
+            CudaError::InvalidState(s) => write!(f, "invalid driver state: {s}"),
         }
     }
 }
@@ -116,6 +119,10 @@ impl Cuda {
             }
         };
 
+        if !syms.validate_pointers() {
+            return Err(CudaError::InvalidState("resolved CUDA driver symbols table contains null pointers"));
+        }
+
         // SAFETY: init symbol resolved successfully.
         let r = unsafe { (syms.init)(0) };
         check(&syms, r, "cuInit")?;
@@ -125,6 +132,9 @@ impl Cuda {
 
     /// Returns the number of CUDA-capable devices visible to the system.
     pub fn device_count(&self) -> Result<i32, CudaError> {
+        if !self.syms.validate_pointers() {
+            return Err(CudaError::InvalidState("driver pointers corrupted"));
+        }
         let mut count: i32 = 0;
         // SAFETY: count points to a valid local memory location.
         let r = unsafe { (self.syms.device_get_count)(&mut count) };
@@ -134,6 +144,9 @@ impl Cuda {
 
     /// Gets the device handle for the specified `ordinal` index, resolving its name.
     pub fn device(&self, ordinal: i32) -> Result<Device, CudaError> {
+        if !self.syms.validate_pointers() {
+            return Err(CudaError::InvalidState("driver pointers corrupted"));
+        }
         let mut raw: CuDevice = 0;
         // SAFETY: raw points to a valid local memory location.
         let r = unsafe { (self.syms.device_get)(&mut raw, ordinal) };
@@ -156,6 +169,9 @@ impl Cuda {
 
     /// Creates a CUDA context on the specified device (becomes current on the calling thread).
     pub fn create_context<'a>(&'a self, device: &Device) -> Result<Context<'a>, CudaError> {
+        if !self.syms.validate_pointers() {
+            return Err(CudaError::InvalidState("driver pointers corrupted"));
+        }
         let mut raw: CuContext = core::ptr::null_mut();
         // SAFETY: raw points to a valid local; device.raw is a valid CUdevice handle.
         let r = unsafe { (self.syms.ctx_create)(&mut raw, 0, device.raw) };
@@ -197,6 +213,9 @@ pub struct Context<'a> {
 impl<'a> Context<'a> {
     /// Returns the free and total VRAM capacities in bytes (`cuMemGetInfo`).
     pub fn mem_info(&self) -> Result<(usize, usize), CudaError> {
+        if !self.cuda.syms.validate_pointers() {
+            return Err(CudaError::InvalidState("driver pointers corrupted"));
+        }
         let (mut free, mut total) = (0_usize, 0_usize);
         // SAFETY: out-parameters are valid local pointers; CUDA context is current on the calling thread.
         let r = unsafe { (self.cuda.syms.mem_get_info)(&mut free, &mut total) };
@@ -206,6 +225,9 @@ impl<'a> Context<'a> {
 
     /// Allocates `bytes` of VRAM. The allocation is released when the returned `DeviceMem` is dropped.
     pub fn alloc(&self, bytes: usize) -> Result<DeviceMem<'_, 'a>, CudaError> {
+        if !self.cuda.syms.validate_pointers() {
+            return Err(CudaError::InvalidState("driver pointers corrupted"));
+        }
         let mut ptr: CuDevicePtr = 0;
         // SAFETY: ptr points to a valid local; CUDA context is current.
         let r = unsafe { (self.cuda.syms.mem_alloc)(&mut ptr, bytes) };
@@ -220,6 +242,9 @@ impl<'a> Context<'a> {
 
 impl Drop for Context<'_> {
     fn drop(&mut self) {
+        if !self.cuda.syms.validate_pointers() {
+            return;
+        }
         // SAFETY: raw handle was returned by cuCtxCreate and has not been destroyed yet. Best-effort drop.
         unsafe {
             let _ = (self.cuda.syms.ctx_destroy)(self.raw);
@@ -245,6 +270,9 @@ impl DeviceMem<'_, '_> {
 
     /// Fills the entire region with zeroes (`cuMemsetD8` + synchronize). SPEC §6.2/§11.
     pub fn zero(&mut self) -> Result<(), CudaError> {
+        if !self.ctx.cuda.syms.validate_pointers() {
+            return Err(CudaError::InvalidState("driver pointers corrupted"));
+        }
         let syms = &self.ctx.cuda.syms;
         // SAFETY: ptr and len accurately describe the region allocated for this memory object.
         let r = unsafe { (syms.memset_d8)(self.ptr, 0, self.len) };
@@ -256,6 +284,9 @@ impl DeviceMem<'_, '_> {
 
     /// Copies `src` bytes into VRAM at the specified `off` offset (Host->Device, synchronous).
     pub fn write_at(&mut self, off: usize, src: &[u8]) -> Result<(), CudaError> {
+        if !self.ctx.cuda.syms.validate_pointers() {
+            return Err(CudaError::InvalidState("driver pointers corrupted"));
+        }
         self.bounds(off, src.len())?;
         let syms = &self.ctx.cuda.syms;
         // SAFETY: offset and length validated by bounds(); src is a valid memory slice.
@@ -271,6 +302,9 @@ impl DeviceMem<'_, '_> {
 
     /// Copies bytes from VRAM at `off` into the `dst` buffer (Device->Host, synchronous).
     pub fn read_at(&self, off: usize, dst: &mut [u8]) -> Result<(), CudaError> {
+        if !self.ctx.cuda.syms.validate_pointers() {
+            return Err(CudaError::InvalidState("driver pointers corrupted"));
+        }
         self.bounds(off, dst.len())?;
         let syms = &self.ctx.cuda.syms;
         // SAFETY: offset and length validated by bounds(); dst is a valid mutable slice.
@@ -298,6 +332,9 @@ impl DeviceMem<'_, '_> {
 
 impl Drop for DeviceMem<'_, '_> {
     fn drop(&mut self) {
+        if !self.ctx.cuda.syms.validate_pointers() {
+            return;
+        }
         // SAFETY: ptr was returned by a successful cuMemAlloc call and has not been freed.
         unsafe {
             let _ = (self.ctx.cuda.syms.mem_free)(self.ptr);
