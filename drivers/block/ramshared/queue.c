@@ -12,6 +12,7 @@
 #include <linux/highmem.h>
 #include <linux/io.h>
 #include <linux/overflow.h>
+#include <linux/align.h>
 #include "ramshared.h"
 #include "compat.h"
 
@@ -60,6 +61,12 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 	if (unlikely(check_shl_overflow((loff_t)blk_rq_pos(rq), RAMSHARED_SECTOR_SHIFT, &pos)))
 		return BLK_STS_IOERR;
+
+	if (unlikely(!IS_ALIGNED(pos, 4096) || !IS_ALIGNED(len, 4096))) {
+		dev_err_ratelimited(rs_dev->dev,
+			"Unaligned I/O request: pos=%lld, len=%zu\n", pos, len);
+		return BLK_STS_IOERR;
+	}
 
 	if (unlikely(pos > rs_dev->dma.size ||
 		     len > rs_dev->dma.size - pos ||
@@ -117,10 +124,13 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 	int is_write = op_is_write(op);
 
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
-		return -EIO;
+		return -ENODEV;
 
 	if (unlikely(check_shl_overflow((loff_t)sector, RAMSHARED_SECTOR_SHIFT, &pos)))
-		return -EIO;
+		return -EINVAL;
+
+	if (unlikely(!IS_ALIGNED(pos, 4096) || !IS_ALIGNED(len, 4096)))
+		return -EOPNOTSUPP;
 
 	if (unlikely(pos > rs_dev->dma.size ||
 		     len > rs_dev->dma.size - pos ||
