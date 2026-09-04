@@ -75,7 +75,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         )
     }
 
-    /// Same as [`new`] with explicit safety limits (tests + daemon).
+    /// Same as [`Self::new`] with explicit safety limits (tests + daemon).
     pub fn new_with_limits(
         provider: &'p P,
         capacity: u64,

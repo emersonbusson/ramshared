@@ -128,7 +128,7 @@ impl BrokerTenant {
     /// The broker may emit logs via other sessions; on a dedicated client socket we expect
     /// only our replies (plus optional `Ack` from heartbeats). Callers that need multi-tick
     /// grant should pump ticks on the broker side between `acquire` calls or use
-    /// [`Self::acquire_after_grant`].
+    /// `acquire_after_grant`.
     pub fn request_lease<S: BufRead + Write>(
         &mut self,
         stream: &mut S,
