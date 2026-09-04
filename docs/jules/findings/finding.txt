@@ -1,0 +1,4 @@
+I am submitting a FINDING_ONLY report because safe code modification to validate the dxgkrnl adapter handle against zero and reserved kernel ranges, as well as the shared resource handle, is not possible for the following reasons:
+1. The check against zero for the adapter handle is already implemented in the baseline codebase (e.g., `if selected_info.adapter_handle == 0` and `if query.adapter == 0` in `crates/ramshared-dxg/src/lib.rs`).
+2. There are no verified bounds or documentation in the codebase defining the "reserved kernel ranges" for adapter handles (the previous attempt to use `> 0x7FFFFFFF` was a hallucination). Without concrete ranges, any validation might either break valid hardware allocations or fail to catch actual out-of-bounds handles, causing regressions.
+3. The `shared_resource_handle` requested for validation does not exist in this codebase.
