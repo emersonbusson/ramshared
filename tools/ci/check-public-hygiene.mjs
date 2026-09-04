@@ -253,7 +253,16 @@ function revisionFiles(root, revision) {
 }
 
 function revisionBuffer(root, revision, file) {
-  return git(root, ['show', `${revision}:${file}`])
+  try {
+    return git(root, ['show', `${revision}:${file}`])
+  } catch {
+    try {
+      git(root, ['fetch', '--depth=1', 'origin', revision])
+      return git(root, ['show', `${revision}:${file}`])
+    } catch {
+      throw new HygieneError('file-read-failed')
+    }
+  }
 }
 
 function readWorkingTree(root, file) {
@@ -1534,7 +1543,7 @@ function validateRedactionLedger(root, mode, files, snapshot) {
     ids.add(entry.redaction_id)
     let sourceText
     let replacementText
-    try { sourceText = UTF8.decode(git(root, ['show', `${entry.source_revision}:${entry.path}`])) } catch { findings.push(redactionFinding(index + 1, 'superseded-source-unavailable')); continue }
+    try { sourceText = UTF8.decode(revisionBuffer(root, entry.source_revision, entry.path)) } catch { findings.push(redactionFinding(index + 1, 'superseded-source-unavailable')); continue }
     try { replacementText = UTF8.decode(readCandidate(root, entry.path, mode, snapshot).buffer) } catch { findings.push(redactionFinding(index + 1, 'replacement-source-unavailable')); continue }
     if (hashLine(sourceText, entry.source_line) !== entry.supersedes_line_sha256) findings.push(redactionFinding(index + 1, 'superseded-line-digest-mismatch'))
     if (hashLine(replacementText, entry.replacement_line) !== entry.replacement_line_sha256 ||
