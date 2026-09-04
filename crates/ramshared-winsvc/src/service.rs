@@ -428,11 +428,22 @@ mod tests {
     }
 
     struct CountingGates {
-        a: Result<Vec<String>, String>,
-        b: Result<Vec<String>, String>,
+        a: std::cell::RefCell<Option<Result<Vec<String>, String>>>,
+        b: std::cell::RefCell<Option<Result<Vec<String>, String>>>,
         n: std::cell::Cell<u32>,
         lock_fail: bool,
         locked: bool,
+    }
+    impl CountingGates {
+        fn new(a: Result<Vec<String>, String>, b: Result<Vec<String>, String>) -> Self {
+            Self {
+                a: std::cell::RefCell::new(Some(a)),
+                b: std::cell::RefCell::new(Some(b)),
+                n: std::cell::Cell::new(0),
+                lock_fail: false,
+                locked: false,
+            }
+        }
     }
     impl PagefileGates for CountingGates {
         fn verify_volume_identity(&self, _: char) -> Result<(), String> {
@@ -442,11 +453,8 @@ mod tests {
         fn active_pagefiles(&self) -> Result<Vec<String>, String> {
             let i = self.n.get();
             self.n.set(i + 1);
-            if i == 0 {
-                self.a.clone()
-            } else {
-                self.b.clone()
-            }
+            let slot = if i == 0 { &self.a } else { &self.b };
+            slot.borrow_mut().take().unwrap_or_else(|| Ok(vec![]))
         }
         fn lock_volume(&mut self, _: char) -> Result<(), String> {
             if self.lock_fail {
@@ -619,13 +627,10 @@ mod tests {
             ..Default::default()
         };
         let mut wipe = NopWipe;
-        let mut gates = CountingGates {
-            a: Ok(vec![r"D:\pagefile.sys".into()]),
-            b: Ok(vec![]),
-            n: std::cell::Cell::new(0),
-            lock_fail: false,
-            locked: false,
-        };
+        let mut gates = CountingGates::new(
+            Ok(vec![r"D:\pagefile.sys".into()]),
+            Ok(vec![]),
+        );
         let mut phases = Vec::new();
         let e = teardown_storage_only(
             &c,
@@ -658,13 +663,10 @@ mod tests {
         };
         let mut wipe = NopWipe;
         // Manufactured: configured/active identity points at product letter D:.
-        let mut gates = CountingGates {
-            a: Ok(vec![r"D:\pagefile.sys".into()]),
-            b: Ok(vec![r"D:\pagefile.sys".into()]),
-            n: std::cell::Cell::new(0),
-            lock_fail: false,
-            locked: false,
-        };
+        let mut gates = CountingGates::new(
+            Ok(vec![r"D:\pagefile.sys".into()]),
+            Ok(vec![r"D:\pagefile.sys".into()]),
+        );
         let mut phases = Vec::new();
         let e = teardown_storage_only(
             &c,
@@ -743,13 +745,10 @@ mod tests {
             ..Default::default()
         };
         let mut wipe = NopWipe;
-        let mut gates = CountingGates {
-            a: Err("WMI timeout".into()),
-            b: Ok(vec![]),
-            n: std::cell::Cell::new(0),
-            lock_fail: false,
-            locked: false,
-        };
+        let mut gates = CountingGates::new(
+            Err("WMI timeout".into()),
+            Ok(vec![]),
+        );
         let mut phases = Vec::new();
         let e = teardown_storage_only(
             &c,
@@ -775,13 +774,10 @@ mod tests {
             ..Default::default()
         };
         let mut wipe = NopWipe;
-        let mut gates = CountingGates {
-            a: Ok(vec![]),
-            b: Ok(vec![r"D:\pagefile.sys".into()]),
-            n: std::cell::Cell::new(0),
-            lock_fail: false,
-            locked: false,
-        };
+        let mut gates = CountingGates::new(
+            Ok(vec![]),
+            Ok(vec![r"D:\pagefile.sys".into()]),
+        );
         let mut phases = Vec::new();
         let e = teardown_storage_only(
             &c,
@@ -810,13 +806,10 @@ mod tests {
             ..Default::default()
         };
         let mut wipe = NopWipe;
-        let mut gates = CountingGates {
-            a: Ok(vec![]),
-            b: Ok(vec![]),
-            n: std::cell::Cell::new(0),
-            lock_fail: false,
-            locked: false,
-        };
+        let mut gates = CountingGates::new(
+            Ok(vec![]),
+            Ok(vec![]),
+        );
         let mut phases = Vec::new();
         teardown_storage_only(
             &c,
@@ -889,13 +882,11 @@ mod tests {
             ..Default::default()
         };
         let mut wipe = NopWipe;
-        let mut gates = CountingGates {
-            a: Ok(vec![]),
-            b: Ok(vec![]),
-            n: std::cell::Cell::new(0),
-            lock_fail: true,
-            locked: false,
-        };
+        let mut gates = CountingGates::new(
+            Ok(vec![]),
+            Ok(vec![]),
+        );
+        gates.lock_fail = true;
         let mut phases = Vec::new();
         let e = teardown_storage_only(
             &c,
@@ -925,13 +916,10 @@ mod tests {
             ..Default::default()
         };
         let mut wipe = NopWipe;
-        let mut gates = CountingGates {
-            a: Ok(vec![]),
-            b: Ok(vec![]),
-            n: std::cell::Cell::new(0),
-            lock_fail: false,
-            locked: false,
-        };
+        let mut gates = CountingGates::new(
+            Ok(vec![]),
+            Ok(vec![]),
+        );
         let mut phases = Vec::new();
         teardown_storage_only(
             &c,
