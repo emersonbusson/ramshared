@@ -1424,7 +1424,7 @@ trait ScopeRunner {
         unit: &str,
         runner_args: &[String],
         command: &[String],
-    ) -> Result<Box<dyn ScopeExecution>, String>;
+    ) -> Result<Box<dyn ScopeExecution + '_>, String>;
 }
 
 struct SystemScopeRunner;
@@ -1534,7 +1534,7 @@ impl ScopeRunner for SystemScopeRunner {
         unit: &str,
         runner_args: &[String],
         command: &[String],
-    ) -> Result<Box<dyn ScopeExecution>, String> {
+    ) -> Result<Box<dyn ScopeExecution + '_>, String> {
         let terminator = runner_args
             .iter()
             .position(|argument| argument == "--")
@@ -1864,9 +1864,9 @@ mod tests {
         result: Result<Option<i32>, String>,
     }
 
-    struct TransitionBlockingExecution {
-        ledger_root: PathBuf,
-        supervisor: OwnerIdentity,
+    struct TransitionBlockingExecution<'a> {
+        ledger_root: &'a Path,
+        supervisor: &'a OwnerIdentity,
     }
 
     struct StartPublishingRunner {
@@ -1876,9 +1876,9 @@ mod tests {
         wait_calls: Arc<AtomicUsize>,
     }
 
-    struct StartPublishingExecution {
-        ledger_root: PathBuf,
-        supervisor: OwnerIdentity,
+    struct StartPublishingExecution<'a> {
+        ledger_root: &'a Path,
+        supervisor: &'a OwnerIdentity,
         wait_calls: Arc<AtomicUsize>,
     }
 
@@ -1913,7 +1913,7 @@ mod tests {
             _unit: &str,
             runner_args: &[String],
             command: &[String],
-        ) -> Result<Box<dyn ScopeExecution>, String> {
+        ) -> Result<Box<dyn ScopeExecution + '_>, String> {
             self.calls
                 .borrow_mut()
                 .push((runner_args.to_vec(), command.to_vec()));
@@ -1939,24 +1939,24 @@ mod tests {
             _unit: &str,
             _runner_args: &[String],
             _command: &[String],
-        ) -> Result<Box<dyn ScopeExecution>, String> {
+        ) -> Result<Box<dyn ScopeExecution + '_>, String> {
             *self.calls.borrow_mut() += 1;
             Ok(Box::new(TransitionBlockingExecution {
-                ledger_root: self.ledger_root.clone(),
-                supervisor: self.supervisor.clone(),
+                ledger_root: &self.ledger_root,
+                supervisor: &self.supervisor,
             }))
         }
     }
 
-    impl ScopeExecution for TransitionBlockingExecution {
+    impl ScopeExecution for TransitionBlockingExecution<'_> {
         fn acknowledge_start(&mut self) -> ScopeStart {
             assert!(
-                LedgerPaths::new(&self.ledger_root).transition.exists(),
+                LedgerPaths::new(self.ledger_root).transition.exists(),
                 "workload start must retain the admission transition guard"
             );
             let error = publish_admission_state_at(
-                &self.ledger_root,
-                &self.supervisor,
+                self.ledger_root,
+                self.supervisor,
                 "GUARDED",
                 now_ms(),
             )
@@ -1979,11 +1979,11 @@ mod tests {
             _unit: &str,
             _runner_args: &[String],
             _command: &[String],
-        ) -> Result<Box<dyn ScopeExecution>, String> {
+        ) -> Result<Box<dyn ScopeExecution + '_>, String> {
             *self.start_calls.borrow_mut() += 1;
             Ok(Box::new(StartPublishingExecution {
-                ledger_root: self.ledger_root.clone(),
-                supervisor: self.supervisor.clone(),
+                ledger_root: &self.ledger_root,
+                supervisor: &self.supervisor,
                 wait_calls: self.wait_calls.clone(),
             }))
         }
@@ -2067,7 +2067,7 @@ mod tests {
             unit: &str,
             runner_args: &[String],
             command: &[String],
-        ) -> Result<Box<dyn ScopeExecution>, String> {
+        ) -> Result<Box<dyn ScopeExecution + '_>, String> {
             self.launches.fetch_add(1, AtomicOrdering::SeqCst);
             assert!(
                 !runner_args.iter().any(|argument| argument == "--collect"),
@@ -2086,10 +2086,10 @@ mod tests {
         }
     }
 
-    impl ScopeExecution for StartPublishingExecution {
+    impl ScopeExecution for StartPublishingExecution<'_> {
         fn acknowledge_start(&mut self) -> ScopeStart {
             assert!(
-                LedgerPaths::new(&self.ledger_root).transition.exists(),
+                LedgerPaths::new(self.ledger_root).transition.exists(),
                 "launch acknowledgement must remain serialized with admission"
             );
             ScopeStart::Acknowledged(FIXTURE_INVOCATION_ID.into())
@@ -2097,7 +2097,7 @@ mod tests {
 
         fn wait_for_completion(&mut self) -> ScopeCompletion {
             self.wait_calls.fetch_add(1, AtomicOrdering::SeqCst);
-            let reservations = load_ledger(&LedgerPaths::new(&self.ledger_root).ledger)
+            let reservations = load_ledger(&LedgerPaths::new(self.ledger_root).ledger)
                 .unwrap_or_else(|error| panic!("read identity-bound ledger: {error}"))
                 .reservations;
             assert_eq!(reservations.len(), 1);
@@ -2107,8 +2107,8 @@ mod tests {
                 "InvocationID must be durable before the admission transition is released"
             );
             match publish_admission_state_at(
-                &self.ledger_root,
-                &self.supervisor,
+                self.ledger_root,
+                self.supervisor,
                 "GUARDED",
                 now_ms(),
             ) {
