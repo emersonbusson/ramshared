@@ -234,4 +234,18 @@ mod tests {
         let result = retry_until(Instant::now(), || Err(2));
         assert_eq!(result, Err(BrokerConnectError::Deadline));
     }
+
+    #[test]
+    #[cfg(windows)]
+    fn connect_pipes_deadline_stops_retry() {
+        let deadline = Instant::now();
+        assert_eq!(
+            NamedPipeBrokerStream::connect_status_pipe(deadline).err(),
+            Some(BrokerConnectError::Deadline)
+        );
+        assert_eq!(
+            NamedPipeBrokerStream::connect_product_pipe(deadline).err(),
+            Some(BrokerConnectError::Deadline)
+        );
+    }
 }
