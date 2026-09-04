@@ -359,6 +359,25 @@ impl UblkFetchRing {
     }
 }
 
+impl Drop for UblkFetchRing {
+    fn drop(&mut self) {
+        let queue_depth = self._buffers.len() as u16;
+        let mut sq = self.ring.submission();
+        for tag in 0..queue_depth {
+            let cancel = opcode::AsyncCancel::new(tag as u64).build().user_data(u64::MAX);
+            let cancel_entry: squeue::Entry128 = cancel.into();
+            if !sq.is_full() {
+                // SAFETY: The kernel will process the cancellation and generate a CQE.
+                unsafe { let _ = sq.push(&cancel_entry); }
+            }
+        }
+        drop(sq);
+        let _ = self.ring.submit_and_wait(queue_depth as usize);
+        while let Some(_) = self.ring.completion().next() {}
+    }
+}
+
+
 /// Packs a `struct ublksrv_io_cmd` (16 B: q_id, tag, result, addr) into the
 /// first bytes of the SQE's 80 B `UringCmd80` buffer; the remaining bytes are zeroed.
 fn io_cmd80(q_id: u16, tag: u16, result: i32, addr: u64) -> [u8; 80] {
@@ -503,6 +522,24 @@ impl UblkServer {
         Ok(())
     }
 }
+
+impl Drop for UblkServer {
+    fn drop(&mut self) {
+        let mut sq = self.ring.submission();
+        for tag in 0..self.queue_depth {
+            let cancel = opcode::AsyncCancel::new(tag as u64).build().user_data(u64::MAX);
+            let cancel_entry: squeue::Entry128 = cancel.into();
+            if !sq.is_full() {
+                // SAFETY: The kernel will process the cancellation and generate a CQE.
+                unsafe { let _ = sq.push(&cancel_entry); }
+            }
+        }
+        drop(sq);
+        let _ = self.ring.submit_and_wait(self.queue_depth as usize);
+        while let Some(_) = self.ring.completion().next() {}
+    }
+}
+
 
 #[cfg(test)]
 #[allow(clippy::expect_used)]
