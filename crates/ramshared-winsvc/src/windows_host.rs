@@ -1187,4 +1187,9 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn is_elevated_returns_boolean_without_panic() {
+        let _elevated = WindowsHostState::is_elevated();
+    }
 }
