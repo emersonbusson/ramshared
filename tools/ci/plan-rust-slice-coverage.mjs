@@ -1218,12 +1218,25 @@ export function isCommentOnlyRustDifferential(baseSource, headSource) {
 }
 
 function readGitBaseFile(root, baseRevision, file) {
-  const result = spawnSync('git', ['show', `${baseRevision}:${file}`], {
+  let result = spawnSync('git', ['show', `${baseRevision}:${file}`], {
     cwd: root,
     shell: false,
     encoding: null,
     maxBuffer: 2 * 1024 * 1024,
   })
+  if ((result?.status !== 0 || result.error || !result.stdout) && FULL_SHA.test(baseRevision)) {
+    spawnSync('git', ['fetch', 'origin', baseRevision], {
+      cwd: root,
+      shell: false,
+      stdio: 'ignore',
+    })
+    result = spawnSync('git', ['show', `${baseRevision}:${file}`], {
+      cwd: root,
+      shell: false,
+      encoding: null,
+      maxBuffer: 2 * 1024 * 1024,
+    })
+  }
   if (result?.status !== 0 || result.error || !result.stdout) return null
   return result.stdout
 }

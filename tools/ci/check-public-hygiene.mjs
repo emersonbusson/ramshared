@@ -91,6 +91,24 @@ function git(root, args, encoding = 'buffer') {
       stdio: ['ignore', 'pipe', 'pipe'],
     })
   } catch {
+    const showArg = args.find((arg) => typeof arg === 'string' && (LOWER_REVISION.test(arg) || LOWER_REVISION.test(arg.split(':')[0])))
+    if (showArg) {
+      const rev = showArg.split(':')[0]
+      try {
+        execFileSync('git', ['fetch', 'origin', rev], {
+          cwd: root,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        })
+        return execFileSync('git', args, {
+          cwd: root,
+          encoding,
+          maxBuffer: 64 * 1024 * 1024,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        })
+      } catch {
+        // Fallthrough to throw below
+      }
+    }
     throw new HygieneError('git-query-failed')
   }
 }
