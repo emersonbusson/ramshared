@@ -39,11 +39,11 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	if (capacity_mb == 0 || capacity_mb > (1UL << 20)) {
 		dev_err(&pdev->dev, "invalid capacity_mb parameter: %lu\n",
 			capacity_mb);
-		return -EINVAL;
+		return -ERANGE;
 	}
 
-	if (queue_depth < 1 || queue_depth > 4096) {
-		dev_warn(&pdev->dev, "clamping queue_depth (%lu) to default (256)\n", queue_depth);
+	if (queue_depth < 1 || queue_depth > 1024) {
+		dev_warn(&pdev->dev, "clamping queue_depth (%u) to default (256)\n", queue_depth);
 		queue_depth = 256;
 	}
 
@@ -70,10 +70,11 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	if (ret) {
 		dev_warn(&pdev->dev, "64-bit DMA failed, attempting 32-bit DMA\n");
 		ret = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
-		if (ret) {
-			dev_err(&pdev->dev, "no usable DMA configuration\n");
-			goto err_clear_master;
-		}
+	}
+
+	if (ret) {
+		dev_err(&pdev->dev, "no usable DMA configuration\n");
+		goto err_clear_master;
 	}
 
 	ret = pci_request_mem_regions(pdev, RAMSHARED_DRIVER_NAME);
