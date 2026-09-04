@@ -900,7 +900,8 @@ mod tests {
         provider: &'a FakeProvider,
         origin: ScriptedOrigin,
     ) -> WriteThroughCacheBackend<'a, FakeProvider, ScriptedOrigin> {
-        WriteThroughCacheBackend::with_chunk_bytes(provider, origin, 32, 4, 8).unwrap()
+        WriteThroughCacheBackend::with_chunk_bytes(provider, origin, 32, 4, 8)
+            .expect("valid test backend geometry")
     }
 
     fn grow_one<O: OriginStorage>(backend: &mut WriteThroughCacheBackend<'_, FakeProvider, O>) {
