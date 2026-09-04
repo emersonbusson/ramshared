@@ -14,6 +14,39 @@
 #include <linux/blkdev.h>
 #include <linux/blk-mq.h>
 
+/**
+ * ramshared_devm_ioremap_wc - Fallback compatibility wrapper for devm_ioremap_wc
+ * @dev: Pointer to struct device
+ * @offset: Physical address offset (PCIe BAR start)
+ * @size: Size of the allocation
+ * @out_addr: Output pointer for mapped virtual address
+ *
+ * Returns: 0 on success, semantic errno on failure
+ */
+static inline int ramshared_devm_ioremap_wc(struct device *dev,
+					    resource_size_t offset,
+					    resource_size_t size,
+					    void __iomem **out_addr)
+{
+	if (!dev || !out_addr || size == 0)
+		return -EINVAL;
+
+	/* Physical Sanity Checks: Enforce 4096-byte page alignment */
+	if (offset & 4095)
+		return -EINVAL;
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)
+	*out_addr = devm_ioremap_wc(dev, offset, size);
+#else
+	*out_addr = devm_ioremap(dev, offset, size);
+#endif
+
+	if (!*out_addr)
+		return -ENOMEM;
+
+	return 0;
+}
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)
 /* Linux 6.11+ Paradigm: Features embedded in struct queue_limits */
 #define RAMSHARED_HAVE_QUEUE_LIMITS_FEATURES	1
