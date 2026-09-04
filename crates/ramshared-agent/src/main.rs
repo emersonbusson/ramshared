@@ -570,10 +570,10 @@ mod tests {
         v.iter().map(|s| s.to_string()).collect()
     }
 
-    fn parse_config(v: &[&str]) -> Config {
-        match parse_args(&args(v)).expect("arguments must parse as a configuration") {
-            ParsedArgs::Config(config) => config,
-            ParsedArgs::Help => panic!("test expected configuration, not help"),
+    fn parse_config(v: &[&str]) -> Result<Config, String> {
+        match parse_args(&args(v))? {
+            ParsedArgs::Config(config) => Ok(config),
+            ParsedArgs::Help => Err("test expected configuration, not help".to_string()),
         }
     }
 
@@ -618,7 +618,8 @@ mod tests {
 
     #[test]
     fn parse_minimal_agent() {
-        let c = parse_config(&["--broker", "10.0.0.1:7000", "--tenant", "wsl2"]);
+        let c = parse_config(&["--broker", "10.0.0.1:7000", "--tenant", "wsl2"])
+            .expect("valid configuration");
         assert_eq!(c.broker, "10.0.0.1:7000");
         assert_eq!(c.tenant, "wsl2");
         assert_eq!(c.nbd_base, "/dev/nbd");
@@ -643,7 +644,8 @@ mod tests {
             "unix",
             "--watchdog-secs",
             "30",
-        ]);
+        ])
+        .expect("valid configuration");
         assert_eq!(c.swap_prio, Some(-3));
         assert!(matches!(c.transport, TransportKind::NbdUnix));
         assert_eq!(c.watchdog, Duration::from_secs(30));
@@ -651,7 +653,7 @@ mod tests {
 
     #[test]
     fn status_mode_needs_no_tenant() {
-        let c = parse_config(&["--broker", "h:1", "--status"]);
+        let c = parse_config(&["--broker", "h:1", "--status"]).expect("valid configuration");
         assert!(c.status_only);
         assert!(c.tenant.is_empty());
     }
