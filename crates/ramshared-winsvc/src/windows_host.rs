@@ -607,45 +607,7 @@ impl WindowsHostState {
             )));
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut parts = stdout.trim().split('|');
-        let disk_number = parts
-            .next()
-            .and_then(|value| value.parse::<u32>().ok())
-            .ok_or_else(|| HostError::Identity("missing disk number".into()))?;
-        let name = parts.next().unwrap_or_default();
-        let observed_serial = parts.next().unwrap_or_default().trim().to_string();
-        let observed_size = parts
-            .next()
-            .and_then(|value| value.parse::<u64>().ok())
-            .ok_or_else(|| HostError::Identity("missing disk size".into()))?;
-        let volume_path_token = parts.next().unwrap_or_default();
-        let volume_path = if volume_path_token == "RAW" {
-            None
-        } else {
-            Some(volume_path_token.to_string())
-        };
-        if parts.next().is_some() {
-            return Err(HostError::Identity(
-                "ambiguous product identity output".into(),
-            ));
-        }
-        let (vendor, product) = parse_product_friendly_name(name).map_err(HostError::Identity)?;
-        if observed_size != size_bytes {
-            return Err(HostError::Identity(format!(
-                "capacity mismatch expected={size_bytes} observed={observed_size}"
-            )));
-        }
-        Ok((
-            ObservedVolumeIdentity {
-                letter,
-                vendor,
-                product,
-                serial: observed_serial,
-                size_bytes: observed_size,
-            },
-            disk_number,
-            volume_path,
-        ))
+        parse_product_volume_output(&stdout, letter, size_bytes)
     }
 
     fn parse_identity_output(
@@ -1056,6 +1018,52 @@ fn pagefile_identity(path: String) -> PagefileIdentity {
     PagefileIdentity { name: path, volume }
 }
 
+fn parse_product_volume_output(
+    stdout: &str,
+    letter: char,
+    size_bytes: u64,
+) -> Result<(ObservedVolumeIdentity, u32, Option<String>), HostError> {
+    let mut parts = stdout.trim().split('|');
+    let disk_number = parts
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or_else(|| HostError::Identity("missing disk number".into()))?;
+    let name = parts.next().unwrap_or_default();
+    let observed_serial = parts.next().unwrap_or_default().trim().to_string();
+    let observed_size = parts
+        .next()
+        .and_then(|value| value.parse::<u64>().ok())
+        .ok_or_else(|| HostError::Identity("missing disk size".into()))?;
+    let volume_path_token = parts.next().unwrap_or_default();
+    let volume_path = if volume_path_token == "RAW" {
+        None
+    } else {
+        Some(volume_path_token.to_string())
+    };
+    if parts.next().is_some() {
+        return Err(HostError::Identity(
+            "ambiguous product identity output".into(),
+        ));
+    }
+    let (vendor, product) = parse_product_friendly_name(name).map_err(HostError::Identity)?;
+    if observed_size != size_bytes {
+        return Err(HostError::Identity(format!(
+            "capacity mismatch expected={size_bytes} observed={observed_size}"
+        )));
+    }
+    Ok((
+        ObservedVolumeIdentity {
+            letter,
+            vendor,
+            product,
+            serial: observed_serial,
+            size_bytes: observed_size,
+        },
+        disk_number,
+        volume_path,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -1186,5 +1194,60 @@ mod tests {
         let error = parse_find_lun_output(r#"{"Number":7}"#, "ABCDEF0123456789", 64 * 1024 * 1024)
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
+    }
+
+    #[test]
+    fn observe_product_volume_invalid_letter_is_refused() {
+        let err = WindowsHostState::observe_product_volume('C', None, "ABCDEF0123456789", 64 * 1024 * 1024)
+            .unwrap_err();
+        assert!(err.to_string().contains("letter must be D..=Z"));
+    }
+
+    #[test]
+    fn observe_product_volume_invalid_serial_is_refused() {
+        let err = WindowsHostState::observe_product_volume('D', None, "invalid_serial", 64 * 1024 * 1024)
+            .unwrap_err();
+        assert!(err.to_string().contains("serial must be 16 hex chars"));
+    }
+
+    #[test]
+    fn parse_product_volume_output_valid_volume_succeeds() {
+        let stdout = r#"1|RAMSHARE VRAMDISK|ABCDEF0123456789|67108864|\\?\Volume{12345678-1234-1234-1234-1234567890ab}"#;
+        let (identity, disk_num, vol_path) =
+            parse_product_volume_output(stdout, 'D', 67108864).unwrap();
+        assert_eq!(disk_num, 1);
+        assert_eq!(identity.letter, 'D');
+        assert_eq!(identity.vendor, "RAMSHARE");
+        assert_eq!(identity.product, "VRAMDISK");
+        assert_eq!(identity.serial, "ABCDEF0123456789");
+        assert_eq!(identity.size_bytes, 67108864);
+        assert_eq!(
+            vol_path,
+            Some(r#"\\?\Volume{12345678-1234-1234-1234-1234567890ab}"#.into())
+        );
+    }
+
+    #[test]
+    fn parse_product_volume_output_raw_disk_succeeds() {
+        let stdout = "2|RAMSHARE VRAMDISK|ABCDEF0123456789|67108864|RAW";
+        let (identity, disk_num, vol_path) =
+            parse_product_volume_output(stdout, 'E', 67108864).unwrap();
+        assert_eq!(disk_num, 2);
+        assert_eq!(identity.letter, 'E');
+        assert_eq!(vol_path, None);
+    }
+
+    #[test]
+    fn parse_product_volume_output_capacity_mismatch_fails() {
+        let stdout = "1|RAMSHARE VRAMDISK|ABCDEF0123456789|67108864|RAW";
+        let err = parse_product_volume_output(stdout, 'D', 134217728).unwrap_err();
+        assert!(err.to_string().contains("capacity mismatch"));
+    }
+
+    #[test]
+    fn parse_product_volume_output_ambiguous_output_fails() {
+        let stdout = "1|RAMSHARE VRAMDISK|ABCDEF0123456789|67108864|RAW|extra";
+        let err = parse_product_volume_output(stdout, 'D', 67108864).unwrap_err();
+        assert!(err.to_string().contains("ambiguous product identity output"));
     }
 }
