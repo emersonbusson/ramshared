@@ -376,13 +376,13 @@ VdHandleModeSense(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 
 	if (is10) {
 		mode_data[1] = 0; /* Medium type */
-		mode_data[2] = 0; /* Device specific parameter */
+		mode_data[2] = 0x10; /* Device specific parameter (DPOFUA) */
 		mode_data[3] = 0; /* Long LBA = 0 */
 		mode_data[6] = 0; /* Block descriptor length MSB */
 		mode_data[7] = 0; /* Block descriptor length LSB */
 	} else {
 		mode_data[1] = 0; /* Medium type */
-		mode_data[2] = 0; /* Device specific parameter */
+		mode_data[2] = 0x10; /* Device specific parameter (DPOFUA) */
 		mode_data[3] = 0; /* Block descriptor length */
 	}
 
@@ -409,6 +409,15 @@ VdHandleModeSense(_In_ PVIRTUAL_DISK Disk, _Inout_ PSCSI_REQUEST_BLOCK Srb)
 		page[20] = 0x00;
 		page[21] = 0x01;
 		mode_len += 24;
+	}
+
+	if (page_code == 0x08 || page_code == 0x3F) {
+		page = &mode_data[mode_len];
+		page[0] = 0x08; /* Page Code */
+		page[1] = 0x12; /* Page Length */
+		/* WCE = 1 (Write Cache Enable) */
+		page[2] = 0x04;
+		mode_len += 20;
 	}
 
 	if (mode_len == header_size && page_code != 0x3F) {

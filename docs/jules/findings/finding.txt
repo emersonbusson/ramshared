@@ -1,0 +1,1 @@
+The codebase already handles SCSIOP_SYNCHRONIZE_CACHE and 0x91 (SYNCHRONIZE CACHE(16)). It sets rop = RAMSHARED_OP_FLUSH and submits it to QSubmit. Advertising WCE=1 and DPOFUA=1 was the missing link for the host to actually issue these commands.
