@@ -22,6 +22,11 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if (-not (Get-Command "nvidia-smi" -ErrorAction SilentlyContinue)) {
+    [System.Environment]::ExitCode = 69
+    throw [System.Exception]::new("nvidia-smi is unavailable or not in PATH")
+}
+
 function L([string]$Message) {
     Write-Host "[vram-reclaim-matrix] $Message"
 }
@@ -29,7 +34,7 @@ function L([string]$Message) {
 function Read-Gpu {
     $line = & nvidia-smi --id=$GpuIndex --query-gpu=name,memory.total,memory.free,memory.used --format=csv,noheader,nounits 2>$null |
         Select-Object -First 1
-    if (-not $line) { throw "nvidia-smi did not return GPU memory data" }
+    if (-not $line) { [System.Environment]::ExitCode = 69; throw [System.Exception]::new("nvidia-smi did not return GPU memory data") }
     $p = @($line -split ',' | ForEach-Object { $_.Trim() })
     return [pscustomobject]@{
         name = $p[0]
@@ -113,6 +118,12 @@ L ("GPU {0}: total={1}MiB free={2}MiB used={3}MiB reserve={4}MiB" -f
 
 foreach ($c in $cases) {
     $ownerPlan = [int]$c.windows_lun_mib + [int]$c.wsl2_vram_mib + 256
+    if ($ownerPlan -gt $gpu.total_mib) {
+        $msg = "Matrix configuration exceeds physical GPU memory: $ownerPlan MiB > $($gpu.total_mib) MiB"
+        L $msg
+        [System.Environment]::ExitCode = 78
+        throw [System.Exception]::new($msg)
+    }
     if ($ownerPlan -gt $gpu.free_mib -and ($c.windows_lun_mib -gt 0 -or $c.wsl2_vram_mib -gt 0)) {
         L ("REFUSE {0}: free VRAM {1}MiB < owner_allocations_plus_margin {2}MiB" -f
             $c.case, $gpu.free_mib, $ownerPlan)

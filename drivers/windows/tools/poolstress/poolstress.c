@@ -28,6 +28,7 @@ typedef struct _POOLSTRESS_ALLOC_IN {
 static PDEVICE_OBJECT g_Device = NULL;
 static PVOID g_Pool = NULL;
 static SIZE_T g_PoolSize = 0;
+static FAST_MUTEX g_Mutex;
 
 static VOID
 PoolstressFill(_Inout_updates_bytes_(bytes) PUCHAR pool, SIZE_T bytes)
@@ -67,12 +68,18 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	UNREFERENCED_PARAMETER(DeviceObject);
 	irpSp = IoGetCurrentIrpStackLocation(Irp);
 
-	switch (irpSp->MajorFunction) {
-	case IRP_MJ_CREATE:
-	case IRP_MJ_CLOSE:
-		break;
+	if (irpSp->MajorFunction == IRP_MJ_CREATE || irpSp->MajorFunction == IRP_MJ_CLOSE) {
+		goto complete;
+	}
 
-	case IRP_MJ_DEVICE_CONTROL: {
+	if (irpSp->MajorFunction != IRP_MJ_DEVICE_CONTROL) {
+		status = STATUS_INVALID_DEVICE_REQUEST;
+		goto complete;
+	}
+
+	ExAcquireFastMutex(&g_Mutex);
+
+	{
 		ULONG code = irpSp->Parameters.DeviceIoControl.IoControlCode;
 		PVOID buf = Irp->AssociatedIrp.SystemBuffer;
 		ULONG inLen = irpSp->Parameters.DeviceIoControl.InputBufferLength;
@@ -84,22 +91,22 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 
 			if (inLen < sizeof(POOLSTRESS_ALLOC_IN) || buf == NULL) {
 				status = STATUS_INVALID_PARAMETER;
-				break;
+				goto out_unlock;
 			}
 			if (g_Pool != NULL) {
 				status = STATUS_DEVICE_BUSY;
-				break;
+				goto out_unlock;
 			}
 			in = (POOLSTRESS_ALLOC_IN *)buf;
 			if (in->NGb == 0 || in->NGb > 16) {
 				status = STATUS_INVALID_PARAMETER;
-				break;
+				goto out_unlock;
 			}
 			bytes = (SIZE_T)in->NGb << 30;
 			g_Pool = ExAllocatePool2(POOL_FLAG_PAGED, bytes, 'ssPR');
 			if (!g_Pool) {
 				status = STATUS_INSUFFICIENT_RESOURCES;
-				break;
+				goto out_unlock;
 			}
 			g_PoolSize = bytes;
 			/* Fill every byte in bounded BCrypt calls (DT-21). */
@@ -115,7 +122,7 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 
 			if (!g_Pool) {
 				status = STATUS_INVALID_DEVICE_STATE;
-				break;
+				goto out_unlock;
 			}
 			for (i = 0; i < g_PoolSize; i += PAGE_SIZE) {
 				sum ^= *((PUCHAR)g_Pool + i);
@@ -130,14 +137,12 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 		} else {
 			status = STATUS_INVALID_DEVICE_REQUEST;
 		}
-		break;
 	}
 
-	default:
-		status = STATUS_INVALID_DEVICE_REQUEST;
-		break;
-	}
+out_unlock:
+	ExReleaseFastMutex(&g_Mutex);
 
+complete:
 	Irp->IoStatus.Status = status;
 	Irp->IoStatus.Information = info;
 	IoCompleteRequest(Irp, IO_NO_INCREMENT);
@@ -154,6 +159,7 @@ PoolstressUnload(_In_ PDRIVER_OBJECT DriverObject)
 	if (g_Pool) {
 		ExFreePoolWithTag(g_Pool, 'ssPR');
 		g_Pool = NULL;
+		g_PoolSize = 0;
 	}
 	RtlInitUnicodeString(&link, POOLSTRESS_LINK_NAME);
 	IoDeleteSymbolicLink(&link);
@@ -172,6 +178,8 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 	UNREFERENCED_PARAMETER(RegistryPath);
 	RtlInitUnicodeString(&name, POOLSTRESS_DEVICE_NAME);
 	RtlInitUnicodeString(&link, POOLSTRESS_LINK_NAME);
+
+	ExInitializeFastMutex(&g_Mutex);
 
 	status = IoCreateDevice(DriverObject, 0, &name, FILE_DEVICE_UNKNOWN,
 				FILE_DEVICE_SECURE_OPEN, FALSE, &g_Device);
