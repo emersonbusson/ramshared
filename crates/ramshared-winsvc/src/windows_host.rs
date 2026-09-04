@@ -137,6 +137,7 @@ fn parse_find_lun_output(
 }
 
 /// Exclusive volume lock handle.
+#[derive(Debug)]
 pub struct LockedVolume {
     pub letter: char,
     pub disk_number: u32,
@@ -1186,5 +1187,35 @@ mod tests {
         let error = parse_find_lun_output(r#"{"Number":7}"#, "ABCDEF0123456789", 64 * 1024 * 1024)
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
+    }
+
+    #[test]
+    fn lock_product_volume_path_rejects_invalid_device_paths() {
+        let err1 = WindowsHostState::lock_product_volume_path("C:\\invalid\\path", 'D', None)
+            .unwrap_err();
+        assert!(err1.to_string().contains("invalid volume device path"));
+
+        let err2 = WindowsHostState::lock_product_volume_path(r"\\.\E:", 'D', None)
+            .unwrap_err();
+        assert!(err2.to_string().contains("invalid volume device path"));
+
+        let err3 = WindowsHostState::lock_product_volume_path(r"\\?\Volume{invalid", 'D', None)
+            .unwrap_err();
+        assert!(err3.to_string().contains("invalid volume device path"));
+    }
+
+    #[test]
+    fn lock_product_volume_path_validates_path_format_before_opening() {
+        let err_drive = WindowsHostState::lock_product_volume_path(r"\\.\Z:", 'z', None)
+            .unwrap_err();
+        assert!(err_drive.to_string().contains("CreateFile volume"));
+
+        let err_guid = WindowsHostState::lock_product_volume_path(
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}",
+            'D',
+            None,
+        )
+        .unwrap_err();
+        assert!(err_guid.to_string().contains("CreateFile volume"));
     }
 }
