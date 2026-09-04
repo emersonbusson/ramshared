@@ -23,7 +23,7 @@ mod windows_probe {
     define_windows_service!(ffi_service_main, service_main);
 
     pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-        let arguments: Vec<String> = std::env::args().skip(1).collect();
+        let mut arguments: Vec<String> = std::env::args().skip(1).collect();
         let mut service_name = DEFAULT_SERVICE_NAME.to_string();
         let mut mode = "lease".to_string();
         let mut deny_sid = None;
@@ -31,32 +31,30 @@ mod windows_probe {
         while index < arguments.len() {
             match arguments.get(index).map(String::as_str) {
                 Some("--service-name") => {
-                    service_name = arguments
-                        .get(index + 1)
+                    let value = arguments
+                        .get_mut(index + 1)
                         .filter(|value| !value.is_empty())
-                        .ok_or("--service-name requires a value")?
-                        .clone();
+                        .ok_or("--service-name requires a value")?;
+                    service_name = std::mem::take(value);
                 }
                 Some("--mode") => {
-                    mode = arguments
-                        .get(index + 1)
+                    let value = arguments
+                        .get_mut(index + 1)
                         .filter(|value| {
                             matches!(
                                 value.as_str(),
                                 "lease" | "oversized" | "partial" | "blocked-read" | "deny-only"
                             )
                         })
-                        .ok_or("--mode must be lease, oversized, partial, or blocked-read")?
-                        .clone();
+                        .ok_or("--mode must be lease, oversized, partial, or blocked-read")?;
+                    mode = std::mem::take(value);
                 }
                 Some("--deny-sid") => {
-                    deny_sid = Some(
-                        arguments
-                            .get(index + 1)
-                            .filter(|value| value.starts_with("S-1-5-80-"))
-                            .ok_or("--deny-sid requires a service SID")?
-                            .clone(),
-                    );
+                    let value = arguments
+                        .get_mut(index + 1)
+                        .filter(|value| value.starts_with("S-1-5-80-"))
+                        .ok_or("--deny-sid requires a service SID")?;
+                    deny_sid = Some(std::mem::take(value));
                 }
                 _ => return Err("unknown probe argument".into()),
             }
