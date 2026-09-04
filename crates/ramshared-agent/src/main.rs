@@ -486,12 +486,9 @@ fn handle_msg(
         }
         Msg::DemoteAll => {
             eprintln!("[agent] DemoteAll: releasing {} slice(s)", active.len());
-            for (slice, dev) in active.iter() {
+            for (slice, dev) in active.drain() {
                 if cmd_tx
-                    .send(ExecCmd::Off {
-                        slice: *slice,
-                        dev: dev.clone(),
-                    })
+                    .send(ExecCmd::Off { slice, dev })
                     .is_err()
                 {
                     return false;
