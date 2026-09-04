@@ -1187,4 +1187,23 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn binary_sha256_computes_hash_and_handles_missing_file() {
+        let missing = std::env::temp_dir().join(format!("nonexistent_file_{}.tmp", std::process::id()));
+        let err = WindowsHostState::binary_sha256(&missing).unwrap_err();
+        assert!(matches!(err, HostError::Io(_)));
+
+        let empty_path = std::env::temp_dir().join(format!("empty_file_{}.tmp", std::process::id()));
+        std::fs::write(&empty_path, b"").unwrap();
+        let hash = WindowsHostState::binary_sha256(&empty_path).unwrap();
+        let _ = std::fs::remove_file(&empty_path);
+        assert_eq!(hash, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
+        let known_path = std::env::temp_dir().join(format!("known_file_{}.tmp", std::process::id()));
+        std::fs::write(&known_path, b"hello world\n").unwrap();
+        let hash = WindowsHostState::binary_sha256(&known_path).unwrap();
+        let _ = std::fs::remove_file(&known_path);
+        assert_eq!(hash, "a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447");
+    }
 }
