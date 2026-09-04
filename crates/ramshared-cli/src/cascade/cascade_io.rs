@@ -2546,12 +2546,10 @@ fn plan_nbd_lifecycle(
 ) -> Result<NbdLifecyclePlan, CascadeError> {
     validate_lifecycle_binding(binding)?;
     prove_exact_live_device_set(binding, live_devices, &binding.devices)?;
+    let active_swaps: Vec<String> = swaps.iter().map(SwapEntry::canonical_path).collect();
     let mut actions = Vec::new();
     for device in &binding.devices {
-        if swaps
-            .iter()
-            .any(|entry| entry.canonical_path() == device.path)
-        {
+        if active_swaps.iter().any(|path| path == &device.path) {
             actions.push(NbdLifecycleAction::Swapoff(device.clone()));
         }
     }
