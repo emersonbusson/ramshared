@@ -21,7 +21,26 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 	struct bio_vec bvec;
 	struct bvec_iter iter;
 	unsigned int op = bio_op(bio);
-	void __iomem *vram_ptr = rs_dev->dma.cpu_addr + pos;
+	void __iomem *vram_ptr;
+
+	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
+		     !IS_ALIGNED(bio->bi_iter.bi_size, RAMSHARED_SECTOR_SIZE))) {
+		dev_err_ratelimited(rs_dev->dev,
+			"Unaligned bio: pos=%lld, len=%u\n",
+			pos, bio->bi_iter.bi_size);
+		return BLK_STS_IOERR;
+	}
+
+	if (unlikely(pos > rs_dev->dma.size ||
+		     bio->bi_iter.bi_size > rs_dev->dma.size - pos ||
+		     pos + bio->bi_iter.bi_size > rs_dev->capacity_bytes)) {
+		dev_err_ratelimited(rs_dev->dev,
+			"Bio bounds violation: pos=%lld, len=%u, cap=%llu\n",
+			pos, bio->bi_iter.bi_size, rs_dev->capacity_bytes);
+		return BLK_STS_IOERR;
+	}
+
+	vram_ptr = rs_dev->dma.cpu_addr + pos;
 
 	bio_for_each_segment(bvec, bio, iter) {
 		void *src_or_dst = bvec_kmap_local(&bvec);
@@ -60,6 +79,14 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 	if (unlikely(check_shl_overflow((loff_t)blk_rq_pos(rq), RAMSHARED_SECTOR_SHIFT, &pos)))
 		return BLK_STS_IOERR;
+
+	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
+		     !IS_ALIGNED(len, RAMSHARED_SECTOR_SIZE))) {
+		dev_err_ratelimited(rs_dev->dev,
+			"Unaligned I/O: pos=%lld, len=%zu\n",
+			pos, len);
+		return BLK_STS_IOERR;
+	}
 
 	if (unlikely(pos > rs_dev->dma.size ||
 		     len > rs_dev->dma.size - pos ||
@@ -117,10 +144,14 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 	int is_write = op_is_write(op);
 
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
-		return -EIO;
+		return -ENODEV;
 
 	if (unlikely(check_shl_overflow((loff_t)sector, RAMSHARED_SECTOR_SHIFT, &pos)))
-		return -EIO;
+		return -EINVAL;
+
+	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
+		     !IS_ALIGNED(len, RAMSHARED_SECTOR_SIZE)))
+		return -EINVAL;
 
 	if (unlikely(pos > rs_dev->dma.size ||
 		     len > rs_dev->dma.size - pos ||
