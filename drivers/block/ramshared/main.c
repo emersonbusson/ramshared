@@ -28,6 +28,7 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 			       const struct pci_device_id *id)
 {
 	struct ramshared_device *rs_dev;
+	resource_size_t bar_len;
 	int ret;
 
 	if (!pdev || !id)
@@ -37,9 +38,21 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 		 capacity_mb);
 
 	if (capacity_mb == 0 || capacity_mb > (1UL << 20)) {
-		dev_err(&pdev->dev, "invalid capacity_mb parameter: %lu\n",
+		dev_err(&pdev->dev, "capacity_mb (%lu MiB) invalid or exceeds 1 TiB maximum\n",
 			capacity_mb);
-		return -EINVAL;
+		return -ERANGE;
+	}
+
+	bar_len = pci_resource_len(pdev, 0);
+	if (!bar_len) {
+		dev_err(&pdev->dev, "PCIe BAR0 length is zero or missing\n");
+		return -ENODEV;
+	}
+
+	if (((u64)capacity_mb << 20) > bar_len) {
+		dev_err(&pdev->dev, "capacity_mb (%lu MiB) exceeds physical PCIe BAR0 aperture (%llu bytes)\n",
+			capacity_mb, (unsigned long long)bar_len);
+		return -ERANGE;
 	}
 
 	if (queue_depth < 1 || queue_depth > 4096) {
