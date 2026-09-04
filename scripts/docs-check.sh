@@ -24,6 +24,8 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
+git fetch origin 69f7469fa999b7d079341ee6bf8ebb006d517b51 >/dev/null 2>&1 || true
+
 run_gate documentation-governance node tools/ci/check-documentation-governance.mjs --all
 run_gate agent-orchestration node tools/ci/check-agent-orchestration.mjs --check
 run_gate comment-language node tools/ci/check-comment-language.mjs --diff origin/main
