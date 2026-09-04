@@ -9,6 +9,8 @@ use crate::driver::{Context, CudaError, DeviceMem};
 impl From<CudaError> for VramError {
     fn from(e: CudaError) -> Self {
         match e {
+            CudaError::OutOfMemory { .. } => VramError::OutOfMemory,
+            CudaError::InvalidValue { .. } => VramError::Provider("invalid value".to_string()),
             CudaError::OutOfRange { off, len, size } => VramError::OutOfRange {
                 off: off as u64,
                 len: len as u64,

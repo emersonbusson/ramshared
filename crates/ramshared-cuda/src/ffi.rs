@@ -14,6 +14,8 @@ use core::ffi::{c_char, c_int, c_uint, c_void};
 
 pub type CuResult = c_int;
 pub const CUDA_SUCCESS: CuResult = 0;
+pub const CUDA_ERROR_INVALID_VALUE: CuResult = 1;
+pub const CUDA_ERROR_OUT_OF_MEMORY: CuResult = 2;
 
 pub type CuDevice = c_int;
 pub type CuContext = *mut c_void;
