@@ -741,4 +741,64 @@ mod tests {
         assert_eq!(*writes.lock().unwrap(), 0);
         assert_eq!(link.backend_writes, 0);
     }
+
+    #[test]
+    fn run_io_loop_processes_cycles_and_respects_max_cycles() {
+        let mut link = DriverLink::new(8, 4096, 4096).unwrap();
+        let mut be = RamBe {
+            data: vec![0u8; 1 << 16],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+        let payload = vec![0x11u8; 4096];
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            fake.submit_write(1, 0, &payload, 0).unwrap();
+        }
+        // max_cycles = 3, but only 1 SQE is queued in cycle 1
+        let processed = link.run_io_loop(&mut be, 3).unwrap();
+        assert_eq!(processed, 1);
+        let mut fake = FakeDriver::new(&mut link);
+        let cqe = fake.harvest().unwrap().unwrap();
+        assert_eq!(cqe.tag, 1);
+        assert_eq!(cqe.status, ST_OK);
+    }
+
+    #[test]
+    fn run_io_loop_stops_early_when_requested() {
+        let mut link = DriverLink::new(8, 4096, 4096).unwrap();
+        let mut be = RamBe {
+            data: vec![0u8; 1 << 16],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+        link.request_stop();
+        let payload = vec![0x22u8; 4096];
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            fake.submit_write(1, 0, &payload, 0).unwrap();
+        }
+        let processed = link.run_io_loop(&mut be, 5).unwrap();
+        assert_eq!(processed, 0);
+    }
+
+    #[test]
+    fn run_io_loop_zero_max_cycles() {
+        let mut link = DriverLink::new(8, 4096, 4096).unwrap();
+        let mut be = RamBe {
+            data: vec![0u8; 1 << 16],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+        let payload = vec![0x33u8; 4096];
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            fake.submit_write(1, 0, &payload, 0).unwrap();
+        }
+        let processed = link.run_io_loop(&mut be, 0).unwrap();
+        assert_eq!(processed, 0);
+    }
 }
