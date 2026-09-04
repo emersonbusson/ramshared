@@ -149,6 +149,14 @@ impl VulkanProvider {
         let app = vk::ApplicationInfo::default().api_version(vk::API_VERSION_1_1);
         let ci = vk::InstanceCreateInfo::default().application_info(&app);
         // SAFETY: `ci`/`app` valid during call; `None` = default allocator.
+        let cname = std::ffi::CStr::from_bytes_with_nul(b"vkCreateInstance\0").unwrap();
+        let proc_addr = unsafe {
+            (entry.static_fn().get_instance_proc_addr)(vk::Instance::null(), cname.as_ptr())
+        };
+        if proc_addr.is_none() {
+            return Err(VramError::Provider("vulkan loader is missing vkCreateInstance".into()));
+        }
+
         let instance = unsafe { entry.create_instance(&ci, None) }
             .map_err(|e| vk_err("create_instance", e))?;
 
