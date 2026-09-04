@@ -37,9 +37,27 @@ echo "Destination: $LKML_TO (Jens Axboe)"
 echo "CC: $LKML_CC"
 echo ""
 
-# Safely prompt for Gmail App Password (hidden input, no echo)
-read -r -s -p "Enter Gmail App Password (16 characters): " SMTP_PASS
-echo ""
+# Check if password is already configured in git or environment
+if [ -z "${SMTP_PASS:-}" ]; then
+    SMTP_PASS="$(git config --get sendemail.smtppass 2>/dev/null || true)"
+    if [ -n "$SMTP_PASS" ]; then
+        echo "🔑 Using stored Gmail App Password from git config (~/.gitconfig)."
+    fi
+fi
+
+# Prompt once and persist if not found
+if [ -z "${SMTP_PASS:-}" ]; then
+    read -r -s -p "Enter Gmail App Password (16 characters): " SMTP_PASS
+    echo ""
+    if [ -n "$SMTP_PASS" ]; then
+        git config --global sendemail.smtpserver "smtp.${GMAIL_DOMAIN}"
+        git config --global sendemail.smtpserverport 587
+        git config --global sendemail.smtpencryption tls
+        git config --global sendemail.smtpuser "$SENDER_EMAIL"
+        git config --global sendemail.smtppass "$SMTP_PASS"
+        echo "💾 Credentials saved to ~/.gitconfig. You will not be asked again."
+    fi
+fi
 
 if [ -z "$SMTP_PASS" ]; then
     echo "❌ Error: App Password cannot be empty."
@@ -61,6 +79,7 @@ git send-email \
     --cc="$LKML_CC" \
     --confirm=never \
     --quiet \
+    "$@" \
     "$OUT_DIR/0000-cover-letter.patch" \
     "$OUT_DIR/0001-drivers-block-ramshared-add-hardware-VRAM-block-driver.patch" \
     "$OUT_DIR/0002-drivers-block-integrate-ramshared-into-Kconfig-and-Makefile.patch"
