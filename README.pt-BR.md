@@ -16,7 +16,7 @@ VRAM aos aplicativos nem identifica cargas pelo nome.
 ![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram-pt.png)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.9.0"><img alt="Versão v0.9.0" src="https://img.shields.io/badge/release-v0.9.0-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.10.0"><img alt="Versão v0.10.0" src="https://img.shields.io/badge/release-v0.10.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Clones Git" src="https://img.shields.io/badge/git_clones-5.6k%2B-blue?style=flat-square&logo=git">
   <img alt="Integridade" src="https://img.shields.io/badge/integridade-SHA--256_verificado-success?style=flat-square">
@@ -39,7 +39,7 @@ VRAM aos aplicativos nem identifica cargas pelo nome.
 
 ## Status atual
 
-Versão: **v0.9.0 (Cascata de Memória Multinível Acelerada por Hardware - MVP Estável)**. Totalmente qualificada com 100% de saturação sob pressão extrema de memória no host Hyper-V/WSL2.
+Versão: **v0.10.0 (Driver Linux de Bloco Upstream LKML RFC v2 e Consolidação de 493 PRs)**. Totalmente qualificada com 100% de saturação sob pressão extrema de memória no host Hyper-V/WSL2.
 
 | Superfície | Status | O que isso significa |
 | --- | --- | --- |

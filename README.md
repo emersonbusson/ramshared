@@ -12,7 +12,7 @@ RamShared neither adds VRAM to applications nor identifies workloads by name.
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.png)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.9.0"><img alt="Release v0.9.0" src="https://img.shields.io/badge/release-v0.9.0-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.10.0"><img alt="Release v0.10.0" src="https://img.shields.io/badge/release-v0.10.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Git Clones" src="https://img.shields.io/badge/git_clones-5.6k%2B-blue?style=flat-square&logo=git">
   <img alt="Integrity" src="https://img.shields.io/badge/integrity-SHA--256_verified-success?style=flat-square">
@@ -35,7 +35,7 @@ RamShared neither adds VRAM to applications nor identifies workloads by name.
 
 ## Current Status
 
-Release: **v0.9.0 (Hardware-Accelerated Multi-Tier Memory Cascade Stable MVP)**. Fully qualified across 100% capacity saturation under live Hyper-V/WSL2 host memory pressure.
+Release: **v0.10.0 (Linux Kernel Driver Upstream LKML RFC v2 & 493 PR Consolidation)**. Fully qualified across 100% capacity saturation under live Hyper-V/WSL2 host memory pressure.
 
 | Surface | Status | What that means |
 | --- | --- | --- |
