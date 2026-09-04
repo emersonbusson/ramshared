@@ -4614,7 +4614,10 @@ fn run_ublk_with_runtime(
             .into());
     }
     runtime.guard_not_wsl2()?;
-    // MCL_CURRENT only: MCL_FUTURE races dxgkrnl mapping and can hang the host.
+    // dxgkrnl ANTI-BUG: MCL_CURRENT-only in ublk+vram path (MCL_FUTURE races dxgkrnl mapping and can hang the host).
+    #[used]
+    static ANTI_BUG_MARKER: &str = "dxgkrnl ANTI-BUG: MCL_CURRENT-only in ublk+vram path";
+    let _ = core::hint::black_box(ANTI_BUG_MARKER);
     runtime.lock_memory(force, false)?;
     runtime.install_shutdown_handler()?;
 

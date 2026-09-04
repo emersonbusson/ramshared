@@ -15,7 +15,7 @@ set -uo pipefail
 
 REPO="${RAMSHARED_REPO:-$(cd "$(dirname "$0")/../.." && pwd)}"
 BIN="${1:-$REPO/target/debug/ramsharedd}"
-FIX_MARKER='MCL_CURRENT-only no caminho ublk+vram'   # string do fix anti-dxgkrnl-BUG (#1)
+FIX_MARKER='MCL_CURRENT-only in ublk+vram path'   # string do fix anti-dxgkrnl-BUG (#1)
 MIN_VRAM_FREE_MIB="${RAMSHARED_MIN_VRAM_FREE_MIB:-256}"
 
 # nvidia-smi in WSL2 is located in /usr/lib/wsl/lib, which is NOT in systemd's minimal PATH.
