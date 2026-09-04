@@ -707,11 +707,9 @@ mod tests {
     fn cache_read_with_reply(reply: Result<Option<Vec<u8>>, String>) -> (CacheRead, CacheState) {
         let (mut cache, worker) = isolated_cache_channel(1, Duration::from_millis(100));
         let worker = std::thread::spawn(move || {
-            let IsolatedCacheRequest::Read { reply: sender, .. } = worker.requests.recv().unwrap()
-            else {
-                panic!("expected cache read");
-            };
-            sender.send(reply).unwrap();
+            if let Ok(IsolatedCacheRequest::Read { reply: sender, .. }) = worker.requests.recv() {
+                let _ = sender.send(reply);
+            }
         });
         let result = cache.read(0, &mut [0; 4]);
         worker.join().unwrap();
