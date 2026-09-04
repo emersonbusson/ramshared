@@ -263,7 +263,38 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UblkCompletion {
     pub tag: u16,
-    pub result: i32,
+    pub result: Result<i32, UringError>,
+}
+
+/// Strongly-typed error for io_uring completion results.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UringError {
+    Again,
+    BadF,
+    NoMem,
+    Other(i32),
+}
+
+impl std::fmt::Display for UringError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Again => write!(f, "Resource temporarily unavailable (-EAGAIN)"),
+            Self::BadF => write!(f, "Bad file descriptor (-EBADF)"),
+            Self::NoMem => write!(f, "Out of memory (-ENOMEM)"),
+            Self::Other(code) => write!(f, "Uring error code: {}", code),
+        }
+    }
+}
+impl std::error::Error for UringError {}
+impl From<i32> for UringError {
+    fn from(res: i32) -> Self {
+        match res {
+            code if code == -libc::EAGAIN => Self::Again,
+            code if code == -libc::EBADF => Self::BadF,
+            code if code == -libc::ENOMEM => Self::NoMem,
+            code => Self::Other(code),
+        }
+    }
 }
 
 /// Validates that fixed buffer parameters are aligned to 4096 bytes and that the
@@ -351,9 +382,16 @@ impl UblkFetchRing {
     pub fn drain(&mut self) -> Vec<UblkCompletion> {
         self.ring
             .completion()
-            .map(|cqe| UblkCompletion {
-                tag: cqe.user_data() as u16,
-                result: cqe.result(),
+            .map(|cqe| {
+                let result = cqe.result();
+                UblkCompletion {
+                    tag: cqe.user_data() as u16,
+                    result: if result < 0 {
+                        Err(UringError::from(result))
+                    } else {
+                        Ok(result)
+                    },
+                }
             })
             .collect()
     }
@@ -424,9 +462,16 @@ impl UblkServer {
     pub fn drain(&mut self) -> Vec<UblkCompletion> {
         self.ring
             .completion()
-            .map(|cqe| UblkCompletion {
-                tag: cqe.user_data() as u16,
-                result: cqe.result(),
+            .map(|cqe| {
+                let result = cqe.result();
+                UblkCompletion {
+                    tag: cqe.user_data() as u16,
+                    result: if result < 0 {
+                        Err(UringError::from(result))
+                    } else {
+                        Ok(result)
+                    },
+                }
             })
             .collect()
     }
@@ -646,7 +691,7 @@ mod tests {
             .expect("submit regular-file refusal");
         let completions = server.wait_and_drain().expect("drain regular-file refusal");
         assert_eq!(completions.len(), 1);
-        assert!(completions[0].result < 0);
+        assert!(completions[0].result.is_err());
 
         drop(server);
         drop(file);
@@ -667,7 +712,7 @@ mod tests {
             assert!(Instant::now() < deadline, "regular-file CQE deadline");
             std::thread::yield_now();
         };
-        assert!(completions.iter().all(|completion| completion.result < 0));
+        assert!(completions.iter().all(|completion| completion.result.is_err()));
 
         drop(ring);
         drop(file);
@@ -699,7 +744,7 @@ mod tests {
         let completions = server.wait_and_drain().expect("wait and drain timeout");
         assert_eq!(completions.len(), 1);
         assert_eq!(completions[0].tag, 99);
-        assert_eq!(completions[0].result, -libc::ETIME);
+        assert_eq!(completions[0].result, Err(UringError::Other(-libc::ETIME)));
 
         // Simulate Cancellation
         let ts_long = types::Timespec::new().sec(10).nsec(0);
@@ -732,10 +777,10 @@ mod tests {
 
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].tag, 100);
-        assert_eq!(results[0].result, -libc::ECANCELED);
+        assert_eq!(results[0].result, Err(UringError::Other(-libc::ECANCELED)));
 
         assert_eq!(results[1].tag, 101);
-        assert!(results[1].result == 0 || results[1].result == -libc::EALREADY);
+        assert!(results[1].result == Ok(0) || results[1].result == Err(UringError::Other(-libc::EALREADY)));
 
         drop(server);
         drop(file);
