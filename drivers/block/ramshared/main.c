@@ -61,7 +61,7 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	ret = pci_enable_device_mem(pdev);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to enable PCIe memory device\n");
-		return ret;
+		return -ENODEV;
 	}
 
 	pci_set_master(pdev);
@@ -79,6 +79,7 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	ret = pci_request_mem_regions(pdev, RAMSHARED_DRIVER_NAME);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to claim PCIe memory regions\n");
+		ret = -EBUSY;
 		goto err_clear_master;
 	}
 
