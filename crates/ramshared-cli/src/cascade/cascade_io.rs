@@ -2518,10 +2518,10 @@ fn up_with_config(mut a: UpArgs) -> Result<(), CascadeError> {
 /// One local cascade-down step. The plan is pure: it contains no process,
 /// filesystem, daemon, or device operation by itself.
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum NbdLifecycleAction {
-    Swapoff(BoundDeviceIdentity),
-    ResetZram(BoundDeviceIdentity),
-    DisconnectNbd(BoundDeviceIdentity),
+enum NbdLifecycleAction<'a> {
+    Swapoff(&'a BoundDeviceIdentity),
+    ResetZram(&'a BoundDeviceIdentity),
+    DisconnectNbd(&'a BoundDeviceIdentity),
     StopDaemon,
 }
 
@@ -2531,19 +2531,19 @@ enum NbdLifecycleAction {
 /// executor stops at the first swapoff error, so later ownership-changing
 /// actions cannot run after a failed swapoff.
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct NbdLifecyclePlan {
-    actions: Vec<NbdLifecycleAction>,
+struct NbdLifecyclePlan<'a> {
+    actions: Vec<NbdLifecycleAction<'a>>,
 }
 
 /// Constructs the local teardown sequence from already-authorized paths.
 ///
 /// Callers provide the swap, zram-reset, and NBD targets separately so the
 /// ordering contract is testable without querying a live host.
-fn plan_nbd_lifecycle(
-    binding: &LifecycleBinding,
+fn plan_nbd_lifecycle<'a>(
+    binding: &'a LifecycleBinding,
     swaps: &[SwapEntry],
     live_devices: &[BoundDeviceIdentity],
-) -> Result<NbdLifecyclePlan, CascadeError> {
+) -> Result<NbdLifecyclePlan<'a>, CascadeError> {
     validate_lifecycle_binding(binding)?;
     prove_exact_live_device_set(binding, live_devices, &binding.devices)?;
     let mut actions = Vec::new();
@@ -2552,17 +2552,17 @@ fn plan_nbd_lifecycle(
             .iter()
             .any(|entry| entry.canonical_path() == device.path)
         {
-            actions.push(NbdLifecycleAction::Swapoff(device.clone()));
+            actions.push(NbdLifecycleAction::Swapoff(device));
         }
     }
     for kind in [ManagedDeviceKind::Zram, ManagedDeviceKind::Nbd] {
         for device in binding.devices.iter().filter(|device| device.kind == kind) {
             match kind {
                 ManagedDeviceKind::Zram => {
-                    actions.push(NbdLifecycleAction::ResetZram(device.clone()))
+                    actions.push(NbdLifecycleAction::ResetZram(device))
                 }
                 ManagedDeviceKind::Nbd => {
-                    actions.push(NbdLifecycleAction::DisconnectNbd(device.clone()))
+                    actions.push(NbdLifecycleAction::DisconnectNbd(device))
                 }
                 ManagedDeviceKind::Ublk => unreachable!("validated NBD binding excludes ublk"),
             }
@@ -2583,7 +2583,7 @@ trait NbdLifecycleExecutor {
 /// Runs an injected plan. A swapoff failure is terminal for this invocation:
 /// it cannot fall through to NBD disconnect or daemon stop.
 fn execute_nbd_lifecycle_plan<E: NbdLifecycleExecutor>(
-    plan: &NbdLifecyclePlan,
+    plan: &NbdLifecyclePlan<'_>,
     executor: &E,
 ) -> Result<(), CascadeError> {
     for action in &plan.actions {
