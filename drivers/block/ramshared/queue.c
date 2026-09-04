@@ -72,30 +72,32 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 	blk_mq_start_request(rq);
 
-	switch (req_op(rq)) {
-	case REQ_OP_READ:
-	case REQ_OP_WRITE:
-		__rq_for_each_bio(bio, rq) {
-			status = ramshared_process_bio(rs_dev, bio, pos);
-			if (status != BLK_STS_OK)
-				break;
-			pos += bio->bi_iter.bi_size;
-		}
-		break;
-	case REQ_OP_FLUSH:
+	if (req_op(rq) == REQ_OP_FLUSH) {
 		dma_wmb();
 		status = BLK_STS_OK;
-		break;
-	case REQ_OP_DISCARD:
-	case REQ_OP_SECURE_ERASE:
+		goto out;
+	}
+
+	if (req_op(rq) == REQ_OP_DISCARD || req_op(rq) == REQ_OP_SECURE_ERASE) {
 		memset_io(rs_dev->dma.cpu_addr + pos, 0, len);
 		dma_wmb();
 		status = BLK_STS_OK;
-		break;
-	default:
-		status = BLK_STS_NOTSUPP;
-		break;
+		goto out;
 	}
+
+	if (unlikely(req_op(rq) != REQ_OP_READ && req_op(rq) != REQ_OP_WRITE)) {
+		status = BLK_STS_NOTSUPP;
+		goto out;
+	}
+
+	__rq_for_each_bio(bio, rq) {
+		status = ramshared_process_bio(rs_dev, bio, pos);
+		if (status != BLK_STS_OK)
+			break;
+		pos += bio->bi_iter.bi_size;
+	}
+
+out:
 
 	blk_mq_end_request(rq, status);
 	return BLK_STS_OK;
