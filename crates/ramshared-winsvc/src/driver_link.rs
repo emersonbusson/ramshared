@@ -741,4 +741,35 @@ mod tests {
         assert_eq!(*writes.lock().unwrap(), 0);
         assert_eq!(link.backend_writes, 0);
     }
+
+    #[test]
+    fn from_queue_initializes_driver_link() {
+        let q = InMemoryQueue::new(4, 4096, 4096).unwrap();
+        let mut link = DriverLink::from_queue(q);
+        assert_eq!(link.stop, false);
+        assert_eq!(link.backend_writes, 0);
+
+        let stats = link.stats();
+        assert_eq!(stats.reads, 0);
+        assert_eq!(stats.writes, 0);
+        assert_eq!(stats.flushes, 0);
+        assert_eq!(stats.errors, 0);
+
+        let mut be = RamBe {
+            data: vec![0u8; 8192],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            fake.submit_flush(1).unwrap();
+        }
+        assert_eq!(link.commit_and_fetch(&mut be).unwrap(), 1);
+        let mut fake = FakeDriver::new(&mut link);
+        let cqe = fake.harvest().unwrap().unwrap();
+        assert_eq!(cqe.tag, 1);
+        assert_eq!(cqe.status, ST_OK);
+    }
 }
