@@ -2547,11 +2547,12 @@ fn plan_nbd_lifecycle(
     validate_lifecycle_binding(binding)?;
     prove_exact_live_device_set(binding, live_devices, &binding.devices)?;
     let mut actions = Vec::new();
+    let swap_paths: std::collections::HashSet<String> = swaps
+        .iter()
+        .map(|entry| entry.canonical_path())
+        .collect();
     for device in &binding.devices {
-        if swaps
-            .iter()
-            .any(|entry| entry.canonical_path() == device.path)
-        {
+        if swap_paths.contains(&device.path) {
             actions.push(NbdLifecycleAction::Swapoff(device.clone()));
         }
     }
