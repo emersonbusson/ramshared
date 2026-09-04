@@ -13,6 +13,7 @@
 #include <time.h>
 #include <dlfcn.h>
 #include <errno.h>
+#include <signal.h>
 
 #define DEFAULT_CHUNK_MIB 256
 #define MIB_TO_BYTES(mib) ((size_t)(mib) * 1024 * 1024)
@@ -29,6 +30,13 @@ typedef int (*cuMemHostAlloc_t)(void**, size_t, unsigned int);
 typedef int (*cuMemFreeHost_t)(void*);
 typedef int (*cuMemcpyHtoD_t)(uint64_t, const void*, size_t);
 typedef int (*cuMemcpyDtoH_t)(void*, uint64_t, size_t);
+
+static volatile sig_atomic_t g_interrupted = 0;
+
+static void handle_signal(int sig) {
+	(void)sig;
+	g_interrupted = 1;
+}
 
 static double get_time_sec(void) {
 	struct timespec ts;
@@ -75,6 +83,16 @@ int main(int argc, char **argv) {
 		return -EINVAL;
 	}
 
+	struct sigaction sa;
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = handle_signal;
+	sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	if (sigaction(SIGINT, &sa, NULL) != 0 || sigaction(SIGTERM, &sa, NULL) != 0) {
+		fprintf(stderr, "[-] Error: Failed to register signal handlers.\n");
+		return -EINVAL;
+	}
+
 	printf("=================================================================\n");
 	printf("   RamShared Hardware DMA & PCIe Bandwidth Benchmark Tool         \n");
 	printf("=================================================================\n");
@@ -109,6 +127,7 @@ int main(int argc, char **argv) {
 		ret = -ENODEV;
 		goto out_lib;
 	}
+	if (g_interrupted) goto check_interrupt;
 
 	int dev = 0;
 	if (cuDeviceGet(&dev, 0) != 0) {
@@ -116,6 +135,7 @@ int main(int argc, char **argv) {
 		ret = -ENODEV;
 		goto out_lib;
 	}
+	if (g_interrupted) goto check_interrupt;
 
 	char dev_name[256] = {0};
 	if (cuDeviceGetName(dev_name, sizeof(dev_name), dev) != 0) {
@@ -124,12 +144,14 @@ int main(int argc, char **argv) {
 		goto out_lib;
 	}
 	printf("[+] Hardware: %s (PCIe Direct DMA Channel)\n", dev_name);
+	if (g_interrupted) goto check_interrupt;
 
 	if (cuCtxCreate(&ctx, 0, dev) != 0) {
 		fprintf(stderr, "[-] Error: cuCtxCreate failed.\n");
 		ret = -ENODEV;
 		goto out_lib;
 	}
+	if (g_interrupted) goto check_interrupt;
 
 	size_t free_b = 0, total_b = 0;
 	if (cuMemGetInfo(&free_b, &total_b) != 0) {
@@ -139,6 +161,7 @@ int main(int argc, char **argv) {
 	}
 	printf("[+] GPU Memory: %zu MiB free / %zu MiB total\n",
 	       free_b / (1024 * 1024), total_b / (1024 * 1024));
+	if (g_interrupted) goto check_interrupt;
 
 	// Allocate Pinned Host Memory
 	if (cuMemHostAlloc(&host_pinned, chunk_bytes, 0) != 0) {
@@ -146,17 +169,20 @@ int main(int argc, char **argv) {
 		ret = -ENOMEM;
 		goto out_ctx;
 	}
+	if (g_interrupted) goto check_interrupt;
 
 	// Fill buffers with pseudorandom test patterns (Xorshift32)
 	uint32_t seed = (uint32_t)time(NULL) | 1;
 	uint32_t *hp_ptr32 = (uint32_t *)host_pinned;
 	size_t num_words = chunk_bytes / sizeof(uint32_t);
 	for (size_t i = 0; i < num_words; i++) {
+		if (g_interrupted) goto check_interrupt;
 		seed ^= seed << 13;
 		seed ^= seed >> 17;
 		seed ^= seed << 5;
 		hp_ptr32[i] = seed;
 	}
+	if (g_interrupted) goto check_interrupt;
 
 	// Allocate Device VRAM Buffer
 	if (cuMemAlloc(&dev_ptr, chunk_bytes) != 0) {
@@ -164,6 +190,7 @@ int main(int argc, char **argv) {
 		ret = -ENOMEM;
 		goto out_host_pinned;
 	}
+	if (g_interrupted) goto check_interrupt;
 
 	// 1. Direct DMA Host -> VRAM (Push)
 	printf("[+] Benchmarking Host -> VRAM DMA (%d MiB)...\n", chunk_mib);
@@ -174,6 +201,7 @@ int main(int argc, char **argv) {
 		goto out_dev_ptr;
 	}
 	double t1 = get_time_sec();
+	if (g_interrupted) goto check_interrupt;
 	double h2d_speed = (double)chunk_mib / (t1 - t0);
 	printf("[+] H2D PCIe DMA Write: %.2f MiB/s (%.2f GiB/s) in %.4f s\n",
 	       h2d_speed, h2d_speed / 1024.0, t1 - t0);
@@ -184,6 +212,7 @@ int main(int argc, char **argv) {
 		ret = -ENOMEM;
 		goto out_dev_ptr;
 	}
+	if (g_interrupted) goto check_interrupt;
 
 	printf("[+] Benchmarking VRAM -> Host DMA (%d MiB)...\n", chunk_mib);
 	t0 = get_time_sec();
@@ -193,6 +222,7 @@ int main(int argc, char **argv) {
 		goto out_read_pinned;
 	}
 	t1 = get_time_sec();
+	if (g_interrupted) goto check_interrupt;
 	double d2h_speed = (double)chunk_mib / (t1 - t0);
 	printf("[+] D2H PCIe DMA Read : %.2f MiB/s (%.2f GiB/s) in %.4f s\n",
 	       d2h_speed, d2h_speed / 1024.0, t1 - t0);
@@ -204,6 +234,12 @@ int main(int argc, char **argv) {
 
 	if (!match) {
 		ret = -EFAULT;
+	}
+
+check_interrupt:
+	if (g_interrupted && ret == 0) {
+		fprintf(stderr, "[-] Interrupted by signal.\n");
+		ret = -EINTR;
 	}
 
 out_read_pinned:
