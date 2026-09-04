@@ -21,11 +21,30 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 	struct bio_vec bvec;
 	struct bvec_iter iter;
 	unsigned int op = bio_op(bio);
-	void __iomem *vram_ptr = rs_dev->dma.cpu_addr + pos;
 
 	bio_for_each_segment(bvec, bio, iter) {
-		void *src_or_dst = bvec_kmap_local(&bvec);
+		void *src_or_dst;
 		size_t len = bvec.bv_len;
+		void __iomem *vram_ptr;
+
+		if (unlikely(pos > rs_dev->dma.size ||
+			     len > rs_dev->dma.size - pos ||
+			     pos + len > rs_dev->capacity_bytes)) {
+			dev_err_ratelimited(rs_dev->dev,
+				"Bio bounds violation: pos=%lld, len=%zu\n",
+				pos, len);
+			return BLK_STS_IOERR;
+		}
+
+		if (unlikely(len > PAGE_SIZE || bvec.bv_offset + len > PAGE_SIZE)) {
+			dev_err_ratelimited(rs_dev->dev,
+				"Bio page bounds violation: offset=%u, len=%zu\n",
+				bvec.bv_offset, len);
+			return BLK_STS_IOERR;
+		}
+
+		vram_ptr = rs_dev->dma.cpu_addr + pos;
+		src_or_dst = bvec_kmap_local(&bvec);
 
 		if (op == REQ_OP_READ) {
 			dma_rmb();
@@ -38,7 +57,7 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 			atomic64_add(len, &rs_dev->write_bytes);
 		}
 		kunmap_local(src_or_dst);
-		vram_ptr += len;
+		pos += len;
 	}
 
 	atomic64_inc(&rs_dev->dma_transfers_total);
@@ -117,10 +136,10 @@ static int ramshared_bdev_rw_page(struct block_device *bdev, sector_t sector,
 	int is_write = op_is_write(op);
 
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
-		return -EIO;
+		return -ENODEV;
 
 	if (unlikely(check_shl_overflow((loff_t)sector, RAMSHARED_SECTOR_SHIFT, &pos)))
-		return -EIO;
+		return -EINVAL;
 
 	if (unlikely(pos > rs_dev->dma.size ||
 		     len > rs_dev->dma.size - pos ||
