@@ -1,0 +1,12 @@
+FINDING_ONLY: Architectural Mismatch / Non-existent Allocation
+Target File: drivers/windows/ramshared/control.c
+Task: prevent integer overflow in IOCTL memory allocation size calculation using RtlULongLongAdd
+
+Evidence:
+1. The driver does not manually allocate kernel pool memory for IOCTLs in control.c.
+2. The IOCTLs (e.g., IOCTL_RAMSHARED_REGISTER_QUEUE) are explicitly defined using METHOD_BUFFERED (e.g., in control.c:15).
+3. Under METHOD_BUFFERED, the Windows I/O Manager automatically allocates the Irp->AssociatedIrp.SystemBuffer before the driver's dispatch routine is called.
+4. Searches for allocation functions (like ExAllocatePool, ExAllocatePoolWithTag) within control.c return no results.
+
+Conclusion:
+Because the driver relies on the I/O Manager for IOCTL buffer allocation and does not perform its own dynamic memory allocation for IOCTL payloads, it is impossible to apply RtlULongLongAdd prior to an allocation in this context. No code modification can safely satisfy this objective without hallucinating code.
