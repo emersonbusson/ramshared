@@ -204,18 +204,18 @@ static const struct attribute_group *ramshared_attr_groups[] = {
 int ramshared_queue_init(struct ramshared_device *rs_dev,
 			 struct device *parent_dev, unsigned int q_depth)
 {
-	unsigned int valid_depth;
 	int ret;
 
-	if (!rs_dev)
+	if (!rs_dev || !parent_dev)
 		return -EINVAL;
 
-	valid_depth = clamp_t(unsigned int, q_depth, 16U, 2048U);
+	if (!q_depth || q_depth > 1024)
+		return -EINVAL;
 
 	memset(&rs_dev->tag_set, 0, sizeof(rs_dev->tag_set));
 	rs_dev->tag_set.ops = &ramshared_mq_ops;
 	rs_dev->tag_set.nr_hw_queues = num_online_cpus();
-	rs_dev->tag_set.queue_depth = valid_depth;
+	rs_dev->tag_set.queue_depth = q_depth;
 	rs_dev->tag_set.numa_node = NUMA_NO_NODE;
 	rs_dev->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
 
