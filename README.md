@@ -2,7 +2,7 @@
 
 Language: [Portuguese (Brazil)](README.pt-BR.md)
 
-RamShared is an R&D candidate for using idle NVIDIA VRAM as a revocable cache
+RamShared is an R&D candidate for using idle GPU VRAM (NVIDIA, AMD, Intel) as a revocable cache
 in a Linux and WSL2 memory tier. Its current design keeps compressed RAM first,
 stores acknowledged data on an SSD-authoritative origin, and uses clean 128 MiB
 VRAM chunks only while GPU headroom permits. The existing WSL swap VHDX remains
@@ -16,7 +16,7 @@ RamShared neither adds VRAM to applications nor identifies workloads by name.
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Git Clones" src="https://img.shields.io/badge/git_clones-5.6k%2B-blue?style=flat-square&logo=git">
   <img alt="Integrity" src="https://img.shields.io/badge/integrity-SHA--256_verified-success?style=flat-square">
-  <img alt="Linux and WSL2 beta" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-production%20ready-2f855a?style=flat-square">
+  <img alt="Linux and WSL2 beta" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-supervised%20candidate-2f855a?style=flat-square">
   <img alt="Windows driver beta" src="https://img.shields.io/badge/Windows%20driver-supervised%20beta-d97706?style=flat-square">
 </p>
 
@@ -31,6 +31,7 @@ RamShared neither adds VRAM to applications nor identifies workloads by name.
   - **Ultra-Fast PCIe Transfers**: Standard WSL2 swap traverses four virtualization layers (`ext4` ➔ `VHDX` ➔ `Hyper-V` ➔ `NTFS`), causing severe I/O bottlenecks and system freezes during memory spikes. RamShared bypasses this overhead by serving hot memory pages directly across the high-speed PCIe bus to GPU VRAM with sub-millisecond latencies.
   - **CPU Offloading**: While ZRAM is efficient, high swap volumes consume CPU cycles for LZ4/ZSTD compression. VRAM DMA caching provides high-throughput memory offloading without burning host CPU cores during heavy workloads.
 - **Zero GPU Starvation (Instant Revocation)**: VRAM is leased purely as a *revocable write-through cache*. The instant a CUDA, AI (e.g., PyTorch, Ollama), or graphical workload requests VRAM, RamShared yields memory back in milliseconds with zero process crashes or data loss, as data is backed by the authoritative SSD origin.
+- **Hardware Architecture & FAQ**: For comprehensive technical details on multi-vendor GPU support (NVIDIA, AMD, Intel), sub-millisecond 4KB random page-fault latency vs sequential NVMe RAID streaming, NAND flash write endurance (TBW), and CPU preservation vs ZRAM, see the [Frequently Asked Questions](docs/FAQ.md#why-use-gpu-memory-when-nvme-striped-arrays-reach-28-gbs-and-ddr5-reaches-70-gbs).
 
 ## Current Status
 
@@ -192,7 +193,7 @@ ramshared top
 │ 1  RAM Swap (zram)     🟢 ARMED [1st Target]  │ ⚡ 250x FASTER (0.05 µs)        │
 │    [░░░░░░░░░░░░░░░░]   0%  (   0 MB / 1024 MB) │ Priority: 100 (In-RAM)      │
 │                                                                               │
-│ 2  GPU VRAM (nbd0)     🟢 ARMED [2nd Target]  │ 🚀 20x-100x FASTER (8.74 GB/s)│
+│ 2  GPU VRAM (ramshared0) 🟢 ARMED [2nd Target]│ 🚀 20x-100x FASTER (8.74 GB/s)│
 │    [░░░░░░░░░░░░░░░░]   0%  (   0 MB / 3584 MB) │ Priority:  50 (PCIe DMA)    │
 │                                                                               │
 │ 3  SSD (WSL2 system)   🔵 COLD BOOT BASELINE  │ 🐢   1x BASELINE (150 µs disk)│
@@ -307,12 +308,15 @@ For raw sample bundles, hardware execution traces, latency histograms, and exact
 | Component | Responsibility |
 | --- | --- |
 | `ramshared` | CLI: preflight, stress testing, monitor dashboard, lifecycle, status, doctor, and diagnosis |
-| `ramsharedd` | GPU-backed block service (NBD and ublk engine) |
+| `ramsharedd` | GPU-backed block service (dual-tier ublk/chardev engine) |
 | `ramshared-tier` | Tier policy, hysteresis, and demotion safety |
 | `ramshared-cuda` | Safe wrapper and direct in-process C-FFI for NVIDIA CUDA driver |
+| `ramshared-vulkan` | Multi-vendor GPU memory engine for AMD Radeon and Intel Arc via VMA |
+| `ramshared-dxg` | Windows D3D12 and WSL2 dxgkrnl paravirtualization abstraction |
 | `ramshared-vram` | Page-locked DMA allocation and memory management |
 | `ramshared-wsl2d` | WSL2 host-pressure coordination and telemetry |
 | `ramshared-agent` | Local host observations and explanations |
+| `drivers/block/ramshared` | Native upstream Linux kernel block driver |
 | `drivers/windows/ramshared` | Supervised Windows StorPort beta driver |
 
 Low-level architecture is documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).

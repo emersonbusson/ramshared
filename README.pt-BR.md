@@ -5,7 +5,7 @@ Idioma: [English](README.md)
 > Esta tradução é informativa e não normativa. O [`README.md`](README.md) em
 > inglês é a fonte canônica para requisitos técnicos e limites de segurança.
 
-O RamShared é uma candidata de P&D para usar VRAM NVIDIA ociosa como cache
+O RamShared é uma candidata de P&D para usar VRAM de GPU (NVIDIA, AMD, Intel) ociosa como cache
 revogável em uma camada de memória para Linux e WSL2. O desenho atual mantém a
 RAM comprimida primeiro, grava os dados confirmados em uma origem SSD
 autoritativa e usa chunks limpos de 128 MiB na VRAM somente enquanto houver
@@ -20,7 +20,7 @@ VRAM aos aplicativos nem identifica cargas pelo nome.
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Clones Git" src="https://img.shields.io/badge/git_clones-5.6k%2B-blue?style=flat-square&logo=git">
   <img alt="Integridade" src="https://img.shields.io/badge/integridade-SHA--256_verificado-success?style=flat-square">
-  <img alt="Beta Linux e WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-pronto%20para%20producao-2f855a?style=flat-square">
+  <img alt="Beta Linux e WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-candidata%20supervisionada-2f855a?style=flat-square">
   <img alt="Beta supervisionado do driver Windows" src="https://img.shields.io/badge/Windows%20driver-supervised%20beta-d97706?style=flat-square">
 </p>
 
@@ -35,6 +35,7 @@ VRAM aos aplicativos nem identifica cargas pelo nome.
   - **Transferências PCIe Ultra-Rápidas**: O swap padrão do WSL2 passa por quatro camadas de virtualização (`ext4` ➔ `VHDX` ➔ `Hyper-V` ➔ `NTFS`), gerando gargalos severos de disco e travamentos quando a RAM enche. O RamShared elimina esse gargalo atendendo páginas críticas diretamente pelo barramento PCIe na VRAM da GPU, com latências sub-milissegundo.
   - **Alívio de CPU**: Embora a ZRAM seja rápida, volumes pesados de swap comprimido consomem núcleos de CPU preciosos em LZ4/ZSTD. O cache em VRAM realiza transferências diretas por DMA sem queimar ciclos de CPU durante compilações ou cargas pesadas.
 - **Zero Fome de GPU (Revogação Instantânea)**: A VRAM é alugada estritamente como um *cache revogável write-through*. No milissegundo em que uma carga CUDA, de IA (ex: PyTorch, Ollama) ou gráfica solicitar memória de vídeo, o RamShared devolve a VRAM instantaneamente sem perda de dados ou queda de processos, pois todos os dados já estão assegurados no SSD de origem.
+- **Arquitetura de Hardware e FAQ**: Para detalhes técnicos completos sobre compatibilidade multi-vendor (NVIDIA, AMD, Intel), latência de falta de página de 4KB vs vazão de streaming de RAID NVMe, durabilidade de escrita Flash (TBW) e alívio de CPU em relação ao ZRAM, consulte as [Perguntas Frequentes](docs/FAQ.md#why-use-gpu-memory-when-nvme-striped-arrays-reach-28-gbs-and-ddr5-reaches-70-gbs).
 
 ## Status atual
 
@@ -197,7 +198,7 @@ ramshared top
 │ 1  RAM Swap (zram)     🟢 ARMED [1st Target]  │ ⚡ 250x FASTER (0.05 µs)        │
 │    [░░░░░░░░░░░░░░░░]   0%  (   0 MB / 1024 MB) │ Priority: 100 (In-RAM)      │
 │                                                                               │
-│ 2  GPU VRAM (nbd0)     🟢 ARMED [2nd Target]  │ 🚀 20x-100x FASTER (8.74 GB/s)│
+│ 2  GPU VRAM (ramshared0) 🟢 ARMED [2nd Target]│ 🚀 20x-100x FASTER (8.74 GB/s)│
 │    [░░░░░░░░░░░░░░░░]   0%  (   0 MB / 3584 MB) │ Priority:  50 (PCIe DMA)    │
 │                                                                               │
 │ 3  SSD (WSL2 system)   🔵 COLD BOOT BASELINE  │ 🐢   1x BASELINE (150 µs disk)│
@@ -311,12 +312,15 @@ Para pacotes brutos de amostras, traces de execução em hardware, histogramas d
 | Componente | Responsabilidade |
 | --- | --- |
 | `ramshared` | CLI: verificação, teste de estresse, painel de monitoramento, ciclo de vida, status e diagnóstico |
-| `ramsharedd` | Serviço de bloco em GPU (motor NBD e ublk) |
+| `ramsharedd` | Serviço de bloco em GPU (motor dual-tier ublk/chardev) |
 | `ramshared-tier` | Política de camadas, histerese e segurança de despromoção |
 | `ramshared-cuda` | Wrapper seguro e FFI direto em memória para o driver NVIDIA CUDA |
+| `ramshared-vulkan` | Motor de memória GPU multi-vendor para AMD Radeon e Intel Arc via VMA |
+| `ramshared-dxg` | Camada de abstração e paravirtualização D3D12/dxgkrnl para Windows e WSL2 |
 | `ramshared-vram` | Alocação DMA travada em página e gerenciamento de memória |
 | `ramshared-wsl2d` | Coordenação de pressão e telemetria do host WSL2 |
 | `ramshared-agent` | Observações locais do host e explicações |
+| `drivers/block/ramshared` | Driver de bloco nativo para Linux upstream |
 | `drivers/windows/ramshared` | Driver beta supervisionado StorPort para Windows |
 
 A arquitetura de baixo nível está documentada em
