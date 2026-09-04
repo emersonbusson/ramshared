@@ -800,7 +800,10 @@ fn quarantine_transition_snapshot(lock: &mut LedgerLock) -> Result<(), String> {
     lock.transition_file
         .seek(SeekFrom::Start(0))
         .map_err(|error| format!("read transition owner for recovery: {error}"))?;
-    let mut contents = Vec::new();
+    let capacity = fstat(&lock.transition_file)
+        .map(|stat| (stat.st_size as usize).min(MAX_LEDGER_BYTES as usize + 1))
+        .unwrap_or(0);
+    let mut contents = Vec::with_capacity(capacity);
     (&mut lock.transition_file)
         .take(MAX_LEDGER_BYTES + 1)
         .read_to_end(&mut contents)
