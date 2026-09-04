@@ -1,0 +1,7 @@
+FINDING_ONLY: Architectural Mismatch
+
+The task requests the addition of `WDF_DECLARE_CONTEXT_TYPE_WITH_NAME` for queue private context in `drivers/windows/ramshared/queue.h`.
+However, the RamShared Windows virtual miniport driver is implemented using the WDM StorPort framework (`storport.h`), as evidenced by structures and functions like `HW_INITIALIZATION_DATA` and `HwStorFindAdapter`.
+It is not a WDF (KMDF/UMDF) driver. Therefore, implementing WDF-specific macros or callbacks such as `WDF_DECLARE_CONTEXT_TYPE_WITH_NAME` is an architectural mismatch and impossible to do safely.
+
+Per the Immutable Contract and memory guidelines, I am producing this FINDING_ONLY report instead of modifying the code.
