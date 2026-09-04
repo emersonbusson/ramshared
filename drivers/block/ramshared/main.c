@@ -93,6 +93,8 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	ret = add_disk(rs_dev->disk);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to add block disk (err=%d)\n", ret);
+		put_disk(rs_dev->disk);
+		rs_dev->disk = NULL;
 		goto err_queue_cleanup;
 	}
 
