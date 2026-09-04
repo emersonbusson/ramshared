@@ -741,4 +741,52 @@ mod tests {
         assert_eq!(*writes.lock().unwrap(), 0);
         assert_eq!(link.backend_writes, 0);
     }
+
+    #[test]
+    fn driver_complete_direct_and_wrapping() {
+        let mut q = InMemoryQueue::new(4, 4096, 4096).unwrap();
+
+        // Empty CQ returns Ok(None)
+        assert_eq!(q.driver_complete().unwrap(), None);
+
+        // Push CQEs into CQ
+        let cqe1 = Cqe {
+            tag: 101,
+            status: ST_OK,
+            reserved: 0,
+        };
+        let cqe2 = Cqe {
+            tag: 102,
+            status: ST_EINVAL,
+            reserved: 0,
+        };
+        q.push_cqe(cqe1).unwrap();
+        q.push_cqe(cqe2).unwrap();
+
+        // Pop first CQE
+        let popped1 = q.driver_complete().unwrap().unwrap();
+        assert_eq!(popped1.tag, 101);
+        assert_eq!(popped1.status, ST_OK);
+
+        // Pop second CQE
+        let popped2 = q.driver_complete().unwrap().unwrap();
+        assert_eq!(popped2.tag, 102);
+        assert_eq!(popped2.status, ST_EINVAL);
+
+        // Queue is empty again
+        assert_eq!(q.driver_complete().unwrap(), None);
+
+        // Wrapping behavior over queue_depth
+        for i in 0..10 {
+            let cqe = Cqe {
+                tag: i,
+                status: ST_OK,
+                reserved: 0,
+            };
+            q.push_cqe(cqe).unwrap();
+            let popped = q.driver_complete().unwrap().unwrap();
+            assert_eq!(popped.tag, i);
+        }
+        assert_eq!(q.driver_complete().unwrap(), None);
+    }
 }
