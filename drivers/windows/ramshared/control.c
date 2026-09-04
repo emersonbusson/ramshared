@@ -103,6 +103,7 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	PIO_STACK_LOCATION irpSp;
 	ULONG code;
 	ULONG inLen;
+	ULONG outLen;
 	PVOID buf;
 	NTSTATUS status = STATUS_INVALID_DEVICE_REQUEST;
 	ULONG_PTR info = 0;
@@ -114,6 +115,7 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	irpSp = IoGetCurrentIrpStackLocation(Irp);
 	code = irpSp->Parameters.DeviceIoControl.IoControlCode;
 	inLen = irpSp->Parameters.DeviceIoControl.InputBufferLength;
+	outLen = irpSp->Parameters.DeviceIoControl.OutputBufferLength;
 	buf = Irp->AssociatedIrp.SystemBuffer;
 
 	/* Cap maximum admin IOCTL payload length at 4 MiB to prevent kernel pool exhaustion */
@@ -126,7 +128,7 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 
 	switch (code) {
 	case IOCTL_RAMSHARED_REGISTER_QUEUE:
-		if (inLen != sizeof(RAMSHARED_REGISTER) || buf == NULL) {
+		if (inLen != sizeof(RAMSHARED_REGISTER) || outLen != 0 || buf == NULL) {
 			status = STATUS_INVALID_PARAMETER;
 			break;
 		}
@@ -152,7 +154,7 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 
 	case IOCTL_RAMSHARED_UNREGISTER_QUEUE:
 		/* Zero-input IOCTL: reject non-zero input length (DT-5). */
-		if (inLen != 0) {
+		if (inLen != 0 || outLen != 0) {
 			status = STATUS_INVALID_PARAMETER;
 			break;
 		}
@@ -169,7 +171,7 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 		break;
 
 	case IOCTL_RAMSHARED_COMMIT_AND_FETCH:
-		if (inLen != 0) {
+		if (inLen != 0 || outLen < sizeof(RAMSHARED_SQE)) {
 			status = STATUS_INVALID_PARAMETER;
 			break;
 		}
@@ -189,7 +191,7 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 		break;
 
 	case IOCTL_RAMSHARED_CREATE_DISK:
-		if (inLen != sizeof(RAMSHARED_DISK_PARAMS) || buf == NULL) {
+		if (inLen != sizeof(RAMSHARED_DISK_PARAMS) || outLen != 0 || buf == NULL) {
 			status = STATUS_INVALID_PARAMETER;
 			break;
 		}
@@ -197,7 +199,7 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 		break;
 
 	case IOCTL_RAMSHARED_DESTROY_DISK:
-		if (inLen != 0) {
+		if (inLen != 0 || outLen != 0) {
 			status = STATUS_INVALID_PARAMETER;
 			break;
 		}
