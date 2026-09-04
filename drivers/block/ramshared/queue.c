@@ -31,17 +31,14 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 			dma_rmb();
 			memcpy_fromio(src_or_dst, vram_ptr, len);
 			flush_dcache_page(bvec.bv_page);
-			atomic64_add(len, &rs_dev->read_bytes);
 		} else if (op == REQ_OP_WRITE) {
 			memcpy_toio(vram_ptr, src_or_dst, len);
 			dma_wmb();
-			atomic64_add(len, &rs_dev->write_bytes);
 		}
 		kunmap_local(src_or_dst);
 		vram_ptr += len;
 	}
 
-	atomic64_inc(&rs_dev->dma_transfers_total);
 	return BLK_STS_OK;
 }
 
@@ -54,6 +51,9 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 	size_t len = blk_rq_bytes(rq);
 	blk_status_t status = BLK_STS_OK;
 	struct bio *bio;
+	unsigned int num_bios = 0;
+	size_t processed_bytes = 0;
+	unsigned int op = req_op(rq);
 
 	if (unlikely(!rs_dev || !rs_dev->dma.cpu_addr))
 		return BLK_STS_IOERR;
@@ -72,7 +72,7 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 
 	blk_mq_start_request(rq);
 
-	switch (req_op(rq)) {
+	switch (op) {
 	case REQ_OP_READ:
 	case REQ_OP_WRITE:
 		__rq_for_each_bio(bio, rq) {
@@ -80,6 +80,8 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 			if (status != BLK_STS_OK)
 				break;
 			pos += bio->bi_iter.bi_size;
+			processed_bytes += bio->bi_iter.bi_size;
+			num_bios++;
 		}
 		break;
 	case REQ_OP_FLUSH:
@@ -95,6 +97,14 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 	default:
 		status = BLK_STS_NOTSUPP;
 		break;
+	}
+
+	if (processed_bytes > 0) {
+		if (op == REQ_OP_READ)
+			atomic64_add(processed_bytes, &rs_dev->read_bytes);
+		else if (op == REQ_OP_WRITE)
+			atomic64_add(processed_bytes, &rs_dev->write_bytes);
+		atomic64_add(num_bios, &rs_dev->dma_transfers_total);
 	}
 
 	blk_mq_end_request(rq, status);
@@ -182,6 +192,16 @@ static ssize_t write_bytes_show(struct device *dev,
 	return sysfs_emit(buf, "%lld\n", atomic64_read(&rs_dev->write_bytes));
 }
 static DEVICE_ATTR_RO(write_bytes);
+
+static ssize_t dma_transfers_total_show(struct device *dev,
+				 struct device_attribute *attr, char *buf)
+{
+	struct gendisk *disk = dev_to_disk(dev);
+	struct ramshared_device *rs_dev = disk->private_data;
+
+	return sysfs_emit(buf, "%lld\n", atomic64_read(&rs_dev->dma_transfers_total));
+}
+static DEVICE_ATTR_RO(dma_transfers_total);
 
 static struct attribute *ramshared_attrs[] = {
 	&dev_attr_capacity_bytes.attr,
