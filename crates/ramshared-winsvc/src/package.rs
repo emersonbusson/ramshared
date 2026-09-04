@@ -334,7 +334,9 @@ mod tests {
         let artifact = manifest.artifact(ArtifactRole::BrokerExe).unwrap();
         assert_eq!(artifact.role, ArtifactRole::BrokerExe);
 
-        manifest.artifacts.retain(|a| a.role != ArtifactRole::BrokerExe);
+        manifest
+            .artifacts
+            .retain(|a| a.role != ArtifactRole::BrokerExe);
         let err = manifest.artifact(ArtifactRole::BrokerExe).unwrap_err();
         assert!(err.contains("validated manifest is missing role"));
     }
