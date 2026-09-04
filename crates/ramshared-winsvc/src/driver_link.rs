@@ -554,8 +554,14 @@ mod tests {
             Ok(())
         }
         fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
-            *self.writes.lock().unwrap() += 1;
-            *self.last_write.lock().unwrap() = data.to_vec();
+            *self
+                .writes
+                .lock()
+                .map_err(|e| IoError(format!("mutex poisoned: {e}")))? += 1;
+            *self
+                .last_write
+                .lock()
+                .map_err(|e| IoError(format!("mutex poisoned: {e}")))? = data.to_vec();
             let o = off as usize;
             self.data[o..o + data.len()].copy_from_slice(data);
             Ok(())
