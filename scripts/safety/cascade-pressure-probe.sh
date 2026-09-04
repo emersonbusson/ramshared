@@ -81,6 +81,20 @@ PY
 }
 
 need_root
+
+if [[ ! -f /sys/fs/cgroup/cgroup.controllers ]]; then
+  log "FAIL: cgroup v2 required"
+  exit 69
+fi
+if ! grep -qw memory /sys/fs/cgroup/cgroup.controllers; then
+  log "FAIL: memory controller not available"
+  exit 69
+fi
+if [[ ! -f /proc/pressure/memory ]]; then
+  log "FAIL: PSI interface not available"
+  exit 69
+fi
+
 read -r PZ PN PD <<<"$(read_prios)"
 if [[ -z "${PZ:-}" || -z "${PN:-}" || -z "${PD:-}" || "$PZ" -lt 0 || "$PN" -lt 0 || "$PD" -eq -1 ]]; then
   log "FAIL: need live zram + nbd + disk (sudo ramshared up first) prios=z:$PZ n:$PN d:$PD"
@@ -95,10 +109,6 @@ log "baseline prios ok: zram=$PZ nbd=$PN disk=$PD"
 read -r UZ0 UN0 UD0 <<<"$(read_used)"
 log "baseline used_kb: zram=$UZ0 nbd=$UN0 disk=$UD0"
 
-if [[ ! -d /sys/fs/cgroup ]]; then
-  log "FAIL: cgroup v2 required"
-  exit 1
-fi
 mkdir -p "$CG"
 # enable memory controller in parent if possible
 if [[ -w /sys/fs/cgroup/cgroup.subtree_control ]]; then
