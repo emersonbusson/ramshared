@@ -82,7 +82,8 @@ int main(int argc, char **argv) {
 	lib = load_cuda_driver();
 	if (!lib) {
 		fprintf(stderr, "[-] Error: CUDA driver library (libcuda.so.1) not found.\n");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto out_lib;
 	}
 
 	cuInit_t cuInit = (cuInit_t)dlsym(lib, "cuInit");
