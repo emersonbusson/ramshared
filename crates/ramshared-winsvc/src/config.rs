@@ -291,6 +291,73 @@ tenant = "windrive-host"
     }
 
     #[test]
+    fn test_config_empty_input_fails() {
+        let bad = "";
+        let e = WinDriveConfig::from_toml(bad).unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(_)));
+    }
+
+    #[test]
+    fn test_config_missing_required_fields_fails() {
+        let bad = r#"
+[win_drive]
+size_bytes = 536870912
+block_size = 4096
+cuda_device = 0
+reserve_bytes = 536870912
+queue_depth = 4
+max_io_bytes = 1048576
+evidence_path = "C:\\ProgramData\\RamShared\\evidence"
+volume_letter = "D"
+broker_pipe = "named_pipe_v1"
+broker_ready_timeout_secs = 30
+"#;
+        let e = WinDriveConfig::from_toml(bad).unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(_)));
+    }
+
+    #[test]
+    fn test_config_missing_fields_with_defaults_parses_successfully() {
+        let toml_without_defaults = r#"
+[win_drive]
+size_bytes = 536870912
+block_size = 4096
+cuda_device = 0
+reserve_bytes = 536870912
+queue_depth = 4
+max_io_bytes = 1048576
+evidence_path = "C:\\ProgramData\\RamShared\\evidence"
+volume_letter = "D"
+broker_pipe = "named_pipe_v1"
+broker_ready_timeout_secs = 30
+tenant = "windrive-host"
+"#;
+        let c = WinDriveConfig::from_toml(toml_without_defaults).unwrap();
+        assert_eq!(c.heartbeat_secs, 5);
+        assert_eq!(c.volume_mount_path, None);
+    }
+
+    #[test]
+    fn test_config_invalid_types_fails() {
+        let bad = r#"
+[win_drive]
+size_bytes = "536870912"
+block_size = 4096
+cuda_device = 0
+reserve_bytes = 536870912
+queue_depth = 4
+max_io_bytes = 1048576
+evidence_path = "C:\\ProgramData\\RamShared\\evidence"
+volume_letter = "D"
+broker_pipe = "named_pipe_v1"
+broker_ready_timeout_secs = 30
+tenant = "windrive-host"
+"#;
+        let e = WinDriveConfig::from_toml(bad).unwrap_err();
+        assert!(matches!(e, ConfigError::Parse(_)));
+    }
+
+    #[test]
     fn reject_zero_size() {
         let bad = GOOD.replace("536870912", "0");
         let e = WinDriveConfig::from_toml(&bad).unwrap_err();

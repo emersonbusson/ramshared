@@ -112,6 +112,52 @@ No. GPU and system memory are managed by different controllers; data crosses
 PCIe. Historical bandwidth/latency figures are transport observations, not a
 promise of memory compatibility or performance.
 
+## Does RamShared only work with NVIDIA GPUs?
+
+No. While NVIDIA CUDA (`cuMemHostAlloc` pinned host memory) was the initial
+qualified MVP path because of mature GPU-PV under WSL2/Hyper-V, RamShared is
+hardware-agnostic:
+
+- **AMD Radeon and Intel Arc**: Supported via `crates/ramshared-vulkan` using
+  the Vulkan Memory Allocator (VMA) and cross-process external memory handles.
+- **Linux block driver and ublk**: Native Linux block drivers
+  (`drivers/block/ramshared/`) and `ublk` (`io_uring`) operate upstream
+  independently of GPU vendors.
+- **Headless or GPU-less systems**: If no GPU is detected or if GPU headroom is
+  exhausted, the memory cascade falls back gracefully across Host RAM, ZRAM,
+  and the authoritative SSD origin with zero GPU requirement.
+
+## Why use GPU memory when NVMe striped arrays reach 28 GB/s and DDR5 reaches 70 GB/s?
+
+This distinction separates sequential streaming throughput from virtual memory
+paging dynamics:
+
+- **4KB random page latency vs sequential throughput**: A 28 GB/s striped NVMe
+  array achieves peak bandwidth on large sequential blocks (128 KB–1 MB) at high
+  queue depths (QD=32–128). Virtual memory swap operates in **4KB pages
+  synchronously at QD=1** on page faults (`.rw_page`). At 4KB QD=1, physical
+  flash drives drop to 30–80 MB/s. Inside virtualized environments like WSL2,
+  traversing `ext4` ➔ `virtio-scsi` ➔ `Hyper-V` ➔ `NTFS` inflates 4KB latency to
+  ~30,000 µs (30 ms), causing desktop lockups. Pinned PCIe DMA transfers bypass
+  the storage stack entirely, moving 4KB pages in 231 µs down to 0.05 µs.
+- **Flash endurance and TBW exhaustion**: NAND flash has physical write limits
+  (TBW). Intensive swap thrashing writes tens of gigabytes per hour, rapidly
+  degrading SSD flash cells. VRAM (GDDR6/GDDR6X/HBM) has infinite write
+  durability and does not wear out silicon.
+- **CPU compression offload**: ZRAM runs in DDR5 but consumes host CPU cores for
+  LZ4/ZSTD compression. Pinned PCIe DMA offloads pages asynchronously without
+  burning CPU compute cycles needed by compilers or applications.
+
+## Is RamShared designed to transfer data for GPU processing?
+
+No. RamShared is not a compute pipeline or a dataset loader for CUDA shaders or
+PyTorch training. It is an operating system memory hierarchy tiering engine. In
+typical developer workstations, dedicated GPUs sit idle with 6–16 GB of unused
+VRAM. RamShared opportunistically leases that dormant silicon as a revocable L1
+cache for host virtual memory. When a real GPU workload requests VRAM,
+RamShared evicts clean cache chunks in milliseconds, leaving GPU compute
+unaffected.
+
 ## Where are the verified records?
 
 [validation.md](../validation.md) is the append-only empirical log and

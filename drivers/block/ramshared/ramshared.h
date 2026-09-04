@@ -56,7 +56,8 @@ struct ramshared_device {
 
 int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev);
 void ramshared_dma_cleanup(struct ramshared_device *rs_dev);
-int ramshared_queue_init(struct ramshared_device *rs_dev, struct device *parent_dev, unsigned int q_depth);
+int ramshared_queue_init(struct ramshared_device *rs_dev,
+			 struct device *parent_dev, unsigned int q_depth);
 void ramshared_queue_cleanup(struct ramshared_device *rs_dev);
 
 #endif /* _RAMSHARED_H */

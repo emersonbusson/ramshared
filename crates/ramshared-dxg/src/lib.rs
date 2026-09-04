@@ -190,6 +190,9 @@ impl DxgBudgetProvider {
             .find(|info| info.luid_low == selected.low && info.luid_high == selected.high)
             .copied()
             .ok_or(DxgError::AdapterNotFound(selected))?;
+        if selected_info.adapter_handle == 0 {
+            return Err(DxgError::Malformed("adapter_handle"));
+        }
         for info in &infos {
             if info.adapter_handle != selected_info.adapter_handle {
                 close_adapter(&file, info.adapter_handle);
@@ -262,6 +265,8 @@ fn validate_enum(request: &uapi::EnumAdapters2, capacity: Option<usize>) -> Resu
 fn validate_query(query: &uapi::QueryVideoMemoryInfo) -> Result<(), DxgError> {
     if query.process != 0 {
         Err(DxgError::Malformed("process"))
+    } else if query.adapter == 0 {
+        Err(DxgError::Malformed("adapter"))
     } else {
         Ok(())
     }
@@ -499,6 +504,11 @@ mod tests {
             Err(super::DxgError::Malformed("process"))
         );
         query.process = 0;
+        assert_eq!(
+            super::validate_query(&query),
+            Err(super::DxgError::Malformed("adapter"))
+        );
+        query.adapter = 1;
         assert_eq!(super::validate_query(&query), Ok(()));
     }
 }

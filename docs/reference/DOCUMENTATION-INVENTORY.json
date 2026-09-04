@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 286,
-    "classified": 275,
+    "total": 288,
+    "classified": 277,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -1261,6 +1261,30 @@
     },
     {
       "path": "docs/reliability/JULES-PR-AUDIT-20260830.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/JULES-PR-AUDIT-20260904.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md",
       "disposition": "classified",
       "ruleId": "reliability-documents",
       "verification": {
