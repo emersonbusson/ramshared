@@ -844,316 +844,304 @@ fn run_tui(options: &MonitorOptions) -> Result<(), MonitorError> {
     result
 }
 
-fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<(), MonitorError> {
-    let history_limit =
-        ((options.history_seconds * 1_000) / options.interval_ms).clamp(1, 10_000) as usize;
-    let mut history = VecDeque::with_capacity(history_limit);
-    let interval = Duration::from_millis(options.interval_ms);
-    let mut next_sample = Instant::now();
-    let mut observation = collect_observation()?;
-    let mut last_io_sample = Some((
-        observation.control_plane.swap_read_bytes,
-        observation.control_plane.swap_write_bytes,
-        observation.control_plane.zram_io.read_bytes,
-        observation.control_plane.zram_io.write_bytes,
-        observation.control_plane.vram_io.read_bytes,
-        observation.control_plane.vram_io.write_bytes,
-        observation.control_plane.disk_io.read_bytes,
-        observation.control_plane.disk_io.write_bytes,
-        Instant::now(),
-    ));
-    let mut last_faults_sample = Some((
-        observation.control_plane.pgfault_total,
-        observation.control_plane.pgmajfault_total,
-    ));
+#[derive(Default)]
+struct TierStatsAccumulator {
+    min_mbs: f64,
+    max_mbs: f64,
+    total_mbs: f64,
+    count: u64,
+}
 
-    let mut zram_min_mbs = 0.0f64;
-    let mut zram_max_mbs = 0.0f64;
-    let mut zram_total_mbs = 0.0f64;
-    let mut zram_count = 0u64;
+impl TierStatsAccumulator {
+    fn record_sample(&mut self, speed: f64) {
+        if speed > 0.05 {
+            self.min_mbs = if self.min_mbs == 0.0 {
+                speed
+            } else {
+                self.min_mbs.min(speed)
+            };
+            self.max_mbs = self.max_mbs.max(speed);
+            self.total_mbs += speed;
+            self.count += 1;
+        }
+    }
 
-    let mut vram_min_mbs = 0.0f64;
-    let mut vram_max_mbs = 0.0f64;
-    let mut vram_total_mbs = 0.0f64;
-    let mut vram_count = 0u64;
+    fn avg_mbs(&self) -> f64 {
+        if self.count > 0 {
+            self.total_mbs / self.count as f64
+        } else {
+            0.0
+        }
+    }
 
-    let mut disk_min_mbs = 0.0f64;
-    let mut disk_max_mbs = 0.0f64;
-    let mut disk_total_mbs = 0.0f64;
-    let mut disk_count = 0u64;
+    fn apply_to_tier_io(&self, tier_io: &mut TierIoStats) {
+        tier_io.min_mbs = self.min_mbs;
+        tier_io.avg_mbs = self.avg_mbs();
+        tier_io.max_mbs = self.max_mbs;
+        tier_io.peak_mbs = self.max_mbs;
+    }
+}
 
-    let mut swap_peak_mbs = 0.0f64;
+fn update_latency_estimates(
+    cp: &mut ControlPlaneObservation,
+    zram_stats: &TierStatsAccumulator,
+    vram_stats: &TierStatsAccumulator,
+    disk_stats: &TierStatsAccumulator,
+) {
+    cp.zram_io.min_lat_us = 0.04;
+    cp.zram_io.avg_lat_us = if zram_stats.count > 0 {
+        0.04 + (cp.zram_io.avg_mbs / 2000.0) * 0.08
+    } else {
+        0.08
+    };
+    cp.zram_io.max_lat_us = if zram_stats.count > 0 {
+        (0.08 + (cp.zram_io.max_mbs / 1000.0) * 0.15).max(0.15)
+    } else {
+        0.15
+    };
 
-    loop {
-        if Instant::now() >= next_sample {
-            if let Ok(new_obs) = collect_observation() {
-                observation = new_obs;
-            }
-            let now = Instant::now();
-            if let Some((
-                last_rb,
-                last_wb,
-                last_z_rb,
-                last_z_wb,
-                last_v_rb,
-                last_v_wb,
-                last_d_rb,
-                last_d_wb,
-                last_t,
-            )) = last_io_sample
-            {
-                let dt = now.duration_since(last_t).as_secs_f64();
-                if (0.05..=10.0).contains(&dt) {
-                    observation.control_plane.swap_read_mbs = (observation
-                        .control_plane
-                        .swap_read_bytes
-                        .saturating_sub(last_rb)
-                        as f64)
-                        / (dt * 1_048_576.0);
-                    observation.control_plane.swap_write_mbs = (observation
-                        .control_plane
-                        .swap_write_bytes
-                        .saturating_sub(last_wb)
-                        as f64)
-                        / (dt * 1_048_576.0);
+    cp.vram_io.min_lat_us = 0.85;
+    cp.vram_io.avg_lat_us = if vram_stats.count > 0 {
+        0.85 + (cp.vram_io.avg_mbs / 1000.0) * 1.20
+    } else {
+        1.45
+    };
+    cp.vram_io.max_lat_us = if vram_stats.count > 0 {
+        (1.45 + (cp.vram_io.max_mbs / 500.0) * 2.00).max(3.20)
+    } else {
+        3.20
+    };
 
-                    observation.control_plane.zram_io.read_mbs = (observation
-                        .control_plane
-                        .zram_io
-                        .read_bytes
-                        .saturating_sub(last_z_rb)
-                        as f64)
-                        / (dt * 1_048_576.0);
-                    observation.control_plane.zram_io.write_mbs = (observation
-                        .control_plane
-                        .zram_io
-                        .write_bytes
-                        .saturating_sub(last_z_wb)
-                        as f64)
-                        / (dt * 1_048_576.0);
+    cp.disk_io.min_lat_us = 85.0;
+    cp.disk_io.avg_lat_us = if disk_stats.count > 0 {
+        85.0 + (cp.disk_io.avg_mbs / 100.0) * 120.0
+    } else {
+        180.0
+    };
+    cp.disk_io.max_lat_us = if disk_stats.count > 0 {
+        (180.0 + (cp.disk_io.max_mbs / 50.0) * 600.0).max(1200.0)
+    } else {
+        1200.0
+    };
+}
 
-                    observation.control_plane.vram_io.read_mbs = (observation
-                        .control_plane
-                        .vram_io
-                        .read_bytes
-                        .saturating_sub(last_v_rb)
-                        as f64)
-                        / (dt * 1_048_576.0);
-                    observation.control_plane.vram_io.write_mbs = (observation
-                        .control_plane
-                        .vram_io
-                        .write_bytes
-                        .saturating_sub(last_v_wb)
-                        as f64)
-                        / (dt * 1_048_576.0);
+type IoSample = (u64, u64, u64, u64, u64, u64, u64, u64, Instant);
 
-                    observation.control_plane.disk_io.read_mbs = (observation
-                        .control_plane
-                        .disk_io
-                        .read_bytes
-                        .saturating_sub(last_d_rb)
-                        as f64)
-                        / (dt * 1_048_576.0);
-                    observation.control_plane.disk_io.write_mbs = (observation
-                        .control_plane
-                        .disk_io
-                        .write_bytes
-                        .saturating_sub(last_d_wb)
-                        as f64)
-                        / (dt * 1_048_576.0);
+struct TuiLoopState {
+    history_limit: usize,
+    history: VecDeque<u64>,
+    interval: Duration,
+    next_sample: Instant,
+    observation: Observation,
+    last_io_sample: Option<IoSample>,
+    last_faults_sample: Option<(u64, u64)>,
+    zram_stats: TierStatsAccumulator,
+    vram_stats: TierStatsAccumulator,
+    disk_stats: TierStatsAccumulator,
+    swap_peak_mbs: f64,
+}
 
-                    let total_swap_speed = observation.control_plane.swap_read_mbs
-                        + observation.control_plane.swap_write_mbs;
-                    swap_peak_mbs = swap_peak_mbs.max(total_swap_speed);
-                    observation.control_plane.swap_peak_mbs = swap_peak_mbs;
+impl TuiLoopState {
+    fn new(options: &MonitorOptions) -> Result<Self, MonitorError> {
+        let history_limit =
+            ((options.history_seconds * 1_000) / options.interval_ms).clamp(1, 10_000) as usize;
+        let history = VecDeque::with_capacity(history_limit);
+        let interval = Duration::from_millis(options.interval_ms);
+        let next_sample = Instant::now();
+        let observation = collect_observation()?;
+        let last_io_sample = Some((
+            observation.control_plane.swap_read_bytes,
+            observation.control_plane.swap_write_bytes,
+            observation.control_plane.zram_io.read_bytes,
+            observation.control_plane.zram_io.write_bytes,
+            observation.control_plane.vram_io.read_bytes,
+            observation.control_plane.vram_io.write_bytes,
+            observation.control_plane.disk_io.read_bytes,
+            observation.control_plane.disk_io.write_bytes,
+            Instant::now(),
+        ));
+        let last_faults_sample = Some((
+            observation.control_plane.pgfault_total,
+            observation.control_plane.pgmajfault_total,
+        ));
 
-                    let z_spd = observation.control_plane.zram_io.read_mbs
-                        + observation.control_plane.zram_io.write_mbs;
-                    if z_spd > 0.05 {
-                        zram_min_mbs = if zram_min_mbs == 0.0 {
-                            z_spd
-                        } else {
-                            zram_min_mbs.min(z_spd)
-                        };
-                        zram_max_mbs = zram_max_mbs.max(z_spd);
-                        zram_total_mbs += z_spd;
-                        zram_count += 1;
-                    }
-                    let z_avg = if zram_count > 0 {
-                        zram_total_mbs / zram_count as f64
-                    } else {
-                        0.0
-                    };
-                    observation.control_plane.zram_io.min_mbs = zram_min_mbs;
-                    observation.control_plane.zram_io.avg_mbs = z_avg;
-                    observation.control_plane.zram_io.max_mbs = zram_max_mbs;
-                    observation.control_plane.zram_io.peak_mbs = zram_max_mbs;
+        Ok(Self {
+            history_limit,
+            history,
+            interval,
+            next_sample,
+            observation,
+            last_io_sample,
+            last_faults_sample,
+            zram_stats: TierStatsAccumulator::default(),
+            vram_stats: TierStatsAccumulator::default(),
+            disk_stats: TierStatsAccumulator::default(),
+            swap_peak_mbs: 0.0,
+        })
+    }
 
-                    let v_spd = observation.control_plane.vram_io.read_mbs
-                        + observation.control_plane.vram_io.write_mbs;
-                    if v_spd > 0.05 {
-                        vram_min_mbs = if vram_min_mbs == 0.0 {
-                            v_spd
-                        } else {
-                            vram_min_mbs.min(v_spd)
-                        };
-                        vram_max_mbs = vram_max_mbs.max(v_spd);
-                        vram_total_mbs += v_spd;
-                        vram_count += 1;
-                    }
-                    let v_avg = if vram_count > 0 {
-                        vram_total_mbs / vram_count as f64
-                    } else {
-                        0.0
-                    };
-                    observation.control_plane.vram_io.min_mbs = vram_min_mbs;
-                    observation.control_plane.vram_io.avg_mbs = v_avg;
-                    observation.control_plane.vram_io.max_mbs = vram_max_mbs;
-                    observation.control_plane.vram_io.peak_mbs = vram_max_mbs;
+    fn sample(&mut self) {
+        if let Ok(new_obs) = collect_observation() {
+            self.observation = new_obs;
+        }
+        let now = Instant::now();
+        if let Some((
+            last_rb,
+            last_wb,
+            last_z_rb,
+            last_z_wb,
+            last_v_rb,
+            last_v_wb,
+            last_d_rb,
+            last_d_wb,
+            last_t,
+        )) = self.last_io_sample
+        {
+            let dt = now.duration_since(last_t).as_secs_f64();
+            if (0.05..=10.0).contains(&dt) {
+                let bytes_to_mbs = |bytes: u64, last_bytes: u64| {
+                    (bytes.saturating_sub(last_bytes) as f64) / (dt * 1_048_576.0)
+                };
 
-                    let d_spd = observation.control_plane.disk_io.read_mbs
-                        + observation.control_plane.disk_io.write_mbs;
-                    if d_spd > 0.05 {
-                        disk_min_mbs = if disk_min_mbs == 0.0 {
-                            d_spd
-                        } else {
-                            disk_min_mbs.min(d_spd)
-                        };
-                        disk_max_mbs = disk_max_mbs.max(d_spd);
-                        disk_total_mbs += d_spd;
-                        disk_count += 1;
-                    }
-                    let d_avg = if disk_count > 0 {
-                        disk_total_mbs / disk_count as f64
-                    } else {
-                        0.0
-                    };
-                    observation.control_plane.disk_io.min_mbs = disk_min_mbs;
-                    observation.control_plane.disk_io.avg_mbs = d_avg;
-                    observation.control_plane.disk_io.max_mbs = disk_max_mbs;
-                    observation.control_plane.disk_io.peak_mbs = disk_max_mbs;
+                self.observation.control_plane.swap_read_mbs =
+                    bytes_to_mbs(self.observation.control_plane.swap_read_bytes, last_rb);
+                self.observation.control_plane.swap_write_mbs =
+                    bytes_to_mbs(self.observation.control_plane.swap_write_bytes, last_wb);
 
-                    if let Some((last_pf, last_mpf)) = last_faults_sample {
-                        observation.control_plane.pgfault_per_sec =
-                            (observation
-                                .control_plane
-                                .pgfault_total
-                                .saturating_sub(last_pf) as f64
-                                / dt) as u64;
-                        observation.control_plane.pgmajfault_per_sec =
-                            (observation
-                                .control_plane
-                                .pgmajfault_total
-                                .saturating_sub(last_mpf) as f64
-                                / dt) as u64;
-                    }
+                self.observation.control_plane.zram_io.read_mbs =
+                    bytes_to_mbs(self.observation.control_plane.zram_io.read_bytes, last_z_rb);
+                self.observation.control_plane.zram_io.write_mbs = bytes_to_mbs(
+                    self.observation.control_plane.zram_io.write_bytes,
+                    last_z_wb,
+                );
+
+                self.observation.control_plane.vram_io.read_mbs =
+                    bytes_to_mbs(self.observation.control_plane.vram_io.read_bytes, last_v_rb);
+                self.observation.control_plane.vram_io.write_mbs = bytes_to_mbs(
+                    self.observation.control_plane.vram_io.write_bytes,
+                    last_v_wb,
+                );
+
+                self.observation.control_plane.disk_io.read_mbs =
+                    bytes_to_mbs(self.observation.control_plane.disk_io.read_bytes, last_d_rb);
+                self.observation.control_plane.disk_io.write_mbs = bytes_to_mbs(
+                    self.observation.control_plane.disk_io.write_bytes,
+                    last_d_wb,
+                );
+
+                let total_swap_speed = self.observation.control_plane.swap_read_mbs
+                    + self.observation.control_plane.swap_write_mbs;
+                self.swap_peak_mbs = self.swap_peak_mbs.max(total_swap_speed);
+                self.observation.control_plane.swap_peak_mbs = self.swap_peak_mbs;
+
+                let z_spd = self.observation.control_plane.zram_io.read_mbs
+                    + self.observation.control_plane.zram_io.write_mbs;
+                self.zram_stats.record_sample(z_spd);
+                self.zram_stats
+                    .apply_to_tier_io(&mut self.observation.control_plane.zram_io);
+
+                let v_spd = self.observation.control_plane.vram_io.read_mbs
+                    + self.observation.control_plane.vram_io.write_mbs;
+                self.vram_stats.record_sample(v_spd);
+                self.vram_stats
+                    .apply_to_tier_io(&mut self.observation.control_plane.vram_io);
+
+                let d_spd = self.observation.control_plane.disk_io.read_mbs
+                    + self.observation.control_plane.disk_io.write_mbs;
+                self.disk_stats.record_sample(d_spd);
+                self.disk_stats
+                    .apply_to_tier_io(&mut self.observation.control_plane.disk_io);
+
+                if let Some((last_pf, last_mpf)) = self.last_faults_sample {
+                    self.observation.control_plane.pgfault_per_sec =
+                        (self
+                            .observation
+                            .control_plane
+                            .pgfault_total
+                            .saturating_sub(last_pf) as f64
+                            / dt) as u64;
+                    self.observation.control_plane.pgmajfault_per_sec =
+                        (self
+                            .observation
+                            .control_plane
+                            .pgmajfault_total
+                            .saturating_sub(last_mpf) as f64
+                            / dt) as u64;
                 }
             }
-            observation.control_plane.swap_peak_mbs = swap_peak_mbs;
-            observation.control_plane.zram_io.min_mbs = zram_min_mbs;
-            observation.control_plane.zram_io.avg_mbs = if zram_count > 0 {
-                zram_total_mbs / zram_count as f64
-            } else {
-                0.0
-            };
-            observation.control_plane.zram_io.max_mbs = zram_max_mbs;
-            observation.control_plane.zram_io.peak_mbs = zram_max_mbs;
-
-            observation.control_plane.vram_io.min_mbs = vram_min_mbs;
-            observation.control_plane.vram_io.avg_mbs = if vram_count > 0 {
-                vram_total_mbs / vram_count as f64
-            } else {
-                0.0
-            };
-            observation.control_plane.vram_io.max_mbs = vram_max_mbs;
-            observation.control_plane.vram_io.peak_mbs = vram_max_mbs;
-
-            observation.control_plane.disk_io.min_mbs = disk_min_mbs;
-            observation.control_plane.disk_io.avg_mbs = if disk_count > 0 {
-                disk_total_mbs / disk_count as f64
-            } else {
-                0.0
-            };
-            observation.control_plane.disk_io.max_mbs = disk_max_mbs;
-            observation.control_plane.disk_io.peak_mbs = disk_max_mbs;
-
-            observation.control_plane.zram_io.min_lat_us = 0.04;
-            observation.control_plane.zram_io.avg_lat_us = if zram_count > 0 {
-                0.04 + (observation.control_plane.zram_io.avg_mbs / 2000.0) * 0.08
-            } else {
-                0.08
-            };
-            observation.control_plane.zram_io.max_lat_us = if zram_count > 0 {
-                (0.08 + (observation.control_plane.zram_io.max_mbs / 1000.0) * 0.15).max(0.15)
-            } else {
-                0.15
-            };
-
-            observation.control_plane.vram_io.min_lat_us = 0.85;
-            observation.control_plane.vram_io.avg_lat_us = if vram_count > 0 {
-                0.85 + (observation.control_plane.vram_io.avg_mbs / 1000.0) * 1.20
-            } else {
-                1.45
-            };
-            observation.control_plane.vram_io.max_lat_us = if vram_count > 0 {
-                (1.45 + (observation.control_plane.vram_io.max_mbs / 500.0) * 2.00).max(3.20)
-            } else {
-                3.20
-            };
-
-            observation.control_plane.disk_io.min_lat_us = 85.0;
-            observation.control_plane.disk_io.avg_lat_us = if disk_count > 0 {
-                85.0 + (observation.control_plane.disk_io.avg_mbs / 100.0) * 120.0
-            } else {
-                180.0
-            };
-            observation.control_plane.disk_io.max_lat_us = if disk_count > 0 {
-                (180.0 + (observation.control_plane.disk_io.max_mbs / 50.0) * 600.0).max(1200.0)
-            } else {
-                1200.0
-            };
-            last_io_sample = Some((
-                observation.control_plane.swap_read_bytes,
-                observation.control_plane.swap_write_bytes,
-                observation.control_plane.zram_io.read_bytes,
-                observation.control_plane.zram_io.write_bytes,
-                observation.control_plane.vram_io.read_bytes,
-                observation.control_plane.vram_io.write_bytes,
-                observation.control_plane.disk_io.read_bytes,
-                observation.control_plane.disk_io.write_bytes,
-                now,
-            ));
-            last_faults_sample = Some((
-                observation.control_plane.pgfault_total,
-                observation.control_plane.pgmajfault_total,
-            ));
-            if let Ok(flight_line) = serde_json::to_string(&observation) {
-                let _ = fs::write("/dev/shm/ramshared-flight.json", format!("{flight_line}\n"));
-            }
-            history.push_back(memory_used_pct(&observation.mem));
-            while history.len() > history_limit {
-                history.pop_front();
-            }
-            next_sample = Instant::now() + interval;
         }
-        let _ = terminal.draw(|frame| draw_dashboard(frame, &observation, &history));
+        self.observation.control_plane.swap_peak_mbs = self.swap_peak_mbs;
+        self.zram_stats
+            .apply_to_tier_io(&mut self.observation.control_plane.zram_io);
+        self.vram_stats
+            .apply_to_tier_io(&mut self.observation.control_plane.vram_io);
+        self.disk_stats
+            .apply_to_tier_io(&mut self.observation.control_plane.disk_io);
 
-        let wait = next_sample
+        update_latency_estimates(
+            &mut self.observation.control_plane,
+            &self.zram_stats,
+            &self.vram_stats,
+            &self.disk_stats,
+        );
+
+        self.last_io_sample = Some((
+            self.observation.control_plane.swap_read_bytes,
+            self.observation.control_plane.swap_write_bytes,
+            self.observation.control_plane.zram_io.read_bytes,
+            self.observation.control_plane.zram_io.write_bytes,
+            self.observation.control_plane.vram_io.read_bytes,
+            self.observation.control_plane.vram_io.write_bytes,
+            self.observation.control_plane.disk_io.read_bytes,
+            self.observation.control_plane.disk_io.write_bytes,
+            now,
+        ));
+        self.last_faults_sample = Some((
+            self.observation.control_plane.pgfault_total,
+            self.observation.control_plane.pgmajfault_total,
+        ));
+        if let Ok(flight_line) = serde_json::to_string(&self.observation) {
+            let _ = fs::write("/dev/shm/ramshared-flight.json", format!("{flight_line}\n"));
+        }
+        self.history
+            .push_back(memory_used_pct(&self.observation.mem));
+        while self.history.len() > self.history_limit {
+            self.history.pop_front();
+        }
+        self.next_sample = Instant::now() + self.interval;
+    }
+}
+
+fn poll_exit_event(wait: Duration) -> bool {
+    let event_opt = if event::poll(wait).unwrap_or(false) {
+        event::read().ok()
+    } else {
+        None
+    };
+    if let Some(Event::Key(key)) = event_opt {
+        return key.kind == KeyEventKind::Press
+            && (matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
+                || (key.code == KeyCode::Char('c')
+                    && key.modifiers.contains(KeyModifiers::CONTROL)));
+    }
+    false
+}
+
+fn tui_loop(terminal: &mut DefaultTerminal, options: &MonitorOptions) -> Result<(), MonitorError> {
+    let mut state = TuiLoopState::new(options)?;
+
+    loop {
+        if Instant::now() >= state.next_sample {
+            state.sample();
+        }
+        let _ = terminal.draw(|frame| draw_dashboard(frame, &state.observation, &state.history));
+
+        let wait = state
+            .next_sample
             .saturating_duration_since(Instant::now())
             .min(Duration::from_millis(100));
-        let event_opt = if event::poll(wait).unwrap_or(false) {
-            event::read().ok()
-        } else {
-            None
-        };
-        if let Some(Event::Key(key)) = event_opt {
-            let is_exit = key.kind == KeyEventKind::Press
-                && (matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
-                    || (key.code == KeyCode::Char('c')
-                        && key.modifiers.contains(KeyModifiers::CONTROL)));
-            if is_exit {
-                return Ok(());
-            }
+        if poll_exit_event(wait) {
+            return Ok(());
         }
     }
 }
@@ -2325,5 +2313,28 @@ mod tests {
             heartbeat: None,
         };
         assert!(run_jsonl(&jsonl_opts).is_ok());
+    }
+
+    #[test]
+    fn tier_stats_accumulator_tracks_min_max_avg() {
+        let mut stats = TierStatsAccumulator::default();
+        assert_eq!(stats.avg_mbs(), 0.0);
+
+        stats.record_sample(0.01);
+        assert_eq!(stats.count, 0);
+
+        stats.record_sample(10.0);
+        stats.record_sample(30.0);
+        assert_eq!(stats.count, 2);
+        assert_eq!(stats.min_mbs, 10.0);
+        assert_eq!(stats.max_mbs, 30.0);
+        assert_eq!(stats.avg_mbs(), 20.0);
+
+        let mut tier_io = TierIoStats::default();
+        stats.apply_to_tier_io(&mut tier_io);
+        assert_eq!(tier_io.min_mbs, 10.0);
+        assert_eq!(tier_io.avg_mbs, 20.0);
+        assert_eq!(tier_io.max_mbs, 30.0);
+        assert_eq!(tier_io.peak_mbs, 30.0);
     }
 }
