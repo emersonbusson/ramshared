@@ -30,6 +30,7 @@ static PVOID g_Pool = NULL;
 static SIZE_T g_PoolSize = 0;
 static FAST_MUTEX g_Mutex;
 
+
 static VOID
 PoolstressFill(_Inout_updates_bytes_(bytes) PUCHAR pool, SIZE_T bytes)
 {
@@ -77,8 +78,6 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 		goto complete;
 	}
 
-	ExAcquireFastMutex(&g_Mutex);
-
 	{
 		ULONG code = irpSp->Parameters.DeviceIoControl.IoControlCode;
 		PVOID buf = Irp->AssociatedIrp.SystemBuffer;
@@ -88,59 +87,75 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 			POOLSTRESS_ALLOC_IN *in;
 			SIZE_T bytes;
 			SIZE_T i;
-
+			PVOID localPool = NULL;
 			if (inLen < sizeof(POOLSTRESS_ALLOC_IN) || buf == NULL) {
 				status = STATUS_INVALID_PARAMETER;
-				goto out_unlock;
-			}
-			if (g_Pool != NULL) {
-				status = STATUS_DEVICE_BUSY;
-				goto out_unlock;
+				goto complete;
 			}
 			in = (POOLSTRESS_ALLOC_IN *)buf;
 			if (in->NGb == 0 || in->NGb > 16) {
 				status = STATUS_INVALID_PARAMETER;
-				goto out_unlock;
+				goto complete;
 			}
 			bytes = (SIZE_T)in->NGb << 30;
-			g_Pool = ExAllocatePool2(POOL_FLAG_PAGED, bytes, 'ssPR');
-			if (!g_Pool) {
+
+			localPool = ExAllocatePool2(POOL_FLAG_PAGED, bytes, 'ssPR');
+			if (!localPool) {
 				status = STATUS_INSUFFICIENT_RESOURCES;
-				goto out_unlock;
+				goto complete;
 			}
-			g_PoolSize = bytes;
+
 			/* Fill every byte in bounded BCrypt calls (DT-21). */
-			PoolstressFill((PUCHAR)g_Pool, bytes);
+			PoolstressFill((PUCHAR)localPool, bytes);
 			/* Touch every page so pages are resident then pageable. */
 			for (i = 0; i < bytes / PAGE_SIZE; i++) {
-				volatile UCHAR *p = (PUCHAR)g_Pool + i * PAGE_SIZE;
+				volatile UCHAR *p = (PUCHAR)localPool + i * PAGE_SIZE;
 				*p = *p;
 			}
+
+			ExAcquireFastMutex(&g_Mutex);
+			if (g_Pool != NULL) {
+				ExReleaseFastMutex(&g_Mutex);
+				ExFreePoolWithTag(localPool, 'ssPR');
+				status = STATUS_DEVICE_BUSY;
+				goto complete;
+			}
+			g_Pool = localPool;
+			g_PoolSize = bytes;
+			ExReleaseFastMutex(&g_Mutex);
 		} else if (code == IOCTL_POOLSTRESS_READBACK) {
 			SIZE_T i;
 			volatile UCHAR sum = 0;
 
+			ExAcquireFastMutex(&g_Mutex);
 			if (!g_Pool) {
+				ExReleaseFastMutex(&g_Mutex);
 				status = STATUS_INVALID_DEVICE_STATE;
-				goto out_unlock;
+				goto complete;
 			}
 			for (i = 0; i < g_PoolSize; i += PAGE_SIZE) {
 				sum ^= *((PUCHAR)g_Pool + i);
 			}
 			info = sum;
+			ExReleaseFastMutex(&g_Mutex);
 		} else if (code == IOCTL_POOLSTRESS_FREE) {
-			if (g_Pool) {
-				ExFreePoolWithTag(g_Pool, 'ssPR');
+			PVOID localPool;
+
+			ExAcquireFastMutex(&g_Mutex);
+			localPool = g_Pool;
+			if (localPool) {
 				g_Pool = NULL;
 				g_PoolSize = 0;
+			}
+			ExReleaseFastMutex(&g_Mutex);
+
+			if (localPool) {
+				ExFreePoolWithTag(localPool, 'ssPR');
 			}
 		} else {
 			status = STATUS_INVALID_DEVICE_REQUEST;
 		}
 	}
-
-out_unlock:
-	ExReleaseFastMutex(&g_Mutex);
 
 complete:
 	Irp->IoStatus.Status = status;
