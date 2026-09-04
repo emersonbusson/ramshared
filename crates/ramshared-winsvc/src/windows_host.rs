@@ -137,6 +137,7 @@ fn parse_find_lun_output(
 }
 
 /// Exclusive volume lock handle.
+#[derive(Debug)]
 pub struct LockedVolume {
     pub letter: char,
     pub disk_number: u32,
@@ -1186,5 +1187,31 @@ mod tests {
         let error = parse_find_lun_output(r#"{"Number":7}"#, "ABCDEF0123456789", 64 * 1024 * 1024)
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
+    }
+
+    #[test]
+    fn lock_volume_validates_letter_range_and_path() {
+        let err_c = WindowsHostState::lock_volume('C').unwrap_err();
+        assert!(err_c.to_string().contains("letter must be D..=Z"));
+
+        let err_a = WindowsHostState::lock_volume('A').unwrap_err();
+        assert!(err_a.to_string().contains("letter must be D..=Z"));
+
+        let err_d = WindowsHostState::lock_volume('d').unwrap_err();
+        assert!(err_d.to_string().contains("CreateFile volume"));
+
+        let err_b = WindowsHostState::lock_product_volume('B', Some(1)).unwrap_err();
+        assert!(err_b.to_string().contains("letter must be D..=Z"));
+
+        let err_path = WindowsHostState::lock_product_volume_path("C:\\", 'D', None).unwrap_err();
+        assert!(err_path.to_string().contains("invalid volume device path"));
+
+        let err_guid = WindowsHostState::lock_product_volume_path(
+            r"\\?\Volume{12345678-1234-1234-1234-123456789012}",
+            'D',
+            None,
+        )
+        .unwrap_err();
+        assert!(err_guid.to_string().contains("CreateFile volume"));
     }
 }
