@@ -741,4 +741,25 @@ mod tests {
         assert_eq!(*writes.lock().unwrap(), 0);
         assert_eq!(link.backend_writes, 0);
     }
+
+    #[test]
+    fn request_stop_halts_commit_and_io_loop() {
+        let mut link = DriverLink::new(4, 4096, 4096).unwrap();
+        let mut be = RamBe {
+            data: vec![0u8; 8192],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+
+        assert_eq!(link.commit_and_fetch(&mut be).unwrap(), 0);
+
+        link.request_stop();
+
+        assert_eq!(
+            link.commit_and_fetch(&mut be),
+            Err(DriverLinkError::Stopped)
+        );
+        assert_eq!(link.run_io_loop(&mut be, 10).unwrap(), 0);
+    }
 }
