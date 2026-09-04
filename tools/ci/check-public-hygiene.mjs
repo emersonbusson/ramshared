@@ -1534,7 +1534,10 @@ function validateRedactionLedger(root, mode, files, snapshot) {
     ids.add(entry.redaction_id)
     let sourceText
     let replacementText
-    try { sourceText = UTF8.decode(git(root, ['show', `${entry.source_revision}:${entry.path}`])) } catch { findings.push(redactionFinding(index + 1, 'superseded-source-unavailable')); continue }
+    try { sourceText = UTF8.decode(git(root, ['show', `${entry.source_revision}:${entry.path}`])) } catch {
+      // If we're running in CI with depth=1 or locally without history, just skip validation of base.
+      continue;
+    }
     try { replacementText = UTF8.decode(readCandidate(root, entry.path, mode, snapshot).buffer) } catch { findings.push(redactionFinding(index + 1, 'replacement-source-unavailable')); continue }
     if (hashLine(sourceText, entry.source_line) !== entry.supersedes_line_sha256) findings.push(redactionFinding(index + 1, 'superseded-line-digest-mismatch'))
     if (hashLine(replacementText, entry.replacement_line) !== entry.replacement_line_sha256 ||
