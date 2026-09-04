@@ -502,7 +502,9 @@ mod tests {
 
         let mut empty_manifest = candidate.clone();
         empty_manifest.artifacts.clear();
-        let err = empty_manifest.artifact(ArtifactRole::WinsvcExe).unwrap_err();
+        let err = empty_manifest
+            .artifact(ArtifactRole::WinsvcExe)
+            .unwrap_err();
         assert!(err.contains("validated manifest is missing role WinsvcExe"));
     }
 }
