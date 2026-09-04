@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 288,
-    "classified": 277,
+    "total": 289,
+    "classified": 278,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -871,6 +871,18 @@
     },
     {
       "path": "docs/jules/findings/26-pr497-wsl2d-dxgkrnl-mlockall-invariants.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "historical",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/jules/findings/27-monitor-telemetry-refuses-malformed-reservation-ledger-trap.md",
       "disposition": "classified",
       "ruleId": "jules-findings",
       "verification": {
