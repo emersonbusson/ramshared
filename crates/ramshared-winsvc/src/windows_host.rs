@@ -1187,4 +1187,12 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn lock_volume_invalid_letter_is_refused() {
+        let err_c = WindowsHostState::lock_volume('C').unwrap_err();
+        assert!(err_c.to_string().contains("letter must be D..=Z"));
+        let err_a = WindowsHostState::lock_volume('a').unwrap_err();
+        assert!(err_a.to_string().contains("letter must be D..=Z"));
+    }
 }
