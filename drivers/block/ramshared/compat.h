@@ -37,6 +37,15 @@ static inline struct gendisk *ramshared_alloc_disk(struct blk_mq_tag_set *set,
 						   unsigned int sector_size,
 						   unsigned int max_sectors)
 {
+	if (!set || !queuedata)
+		return ERR_PTR(-EINVAL);
+
+	if (sector_size != 512 && sector_size != 4096)
+		return ERR_PTR(-EINVAL);
+
+	if (!max_sectors)
+		return ERR_PTR(-EINVAL);
+
 #if defined(RAMSHARED_HAVE_QUEUE_LIMITS_FEATURES)
 	struct queue_limits lim = {
 		.logical_block_size	= sector_size,
