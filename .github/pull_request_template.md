@@ -12,6 +12,7 @@ Sync rule: rules changing in governance must change in >=2 places in the same co
 Clear, human-readable summary explaining WHAT and WHY directly.
 When touching performance, memory, or stress benchmarks, include a self-contained compact hardware comparison table
 (Previous vs Current with physical hardware delta, directions [🔺/🔻], and tier tree ├─ Tier 1/2/3).
+Tier 3 (Host SSD) qualification metrics are mandatory for performance PRs (CI blocks merge if omitted).
 Prohibited: internal methodology buzzwords or external links to raw JSON files.
 -->
 

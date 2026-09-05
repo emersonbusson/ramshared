@@ -46,7 +46,7 @@ The source of truth for architecture and coding rules is:
 
 Conventional Commits in **English**, imperative title, ≤72 chars. Body in **English**.
 Non-trivial commits (locks, DMA, or atomic allocation) **MUST** include `Rollback trigger: ...` in the body.
-PR descriptions must be clean, human-explanatory, and include self-contained compact hardware metrics comparison tables for performance changes, without internal methodology buzzwords (e.g. "cognitive hygiene", "Kahneman") or external links to raw JSON files. Every branch commit must appear in the PR commits table. PRs may be reviewed in PT-BR during draft/collaboration, but must transition to English before merge.
+PR descriptions must be clean, human-explanatory, and include self-contained compact hardware metrics comparison tables for performance changes, without internal methodology buzzwords (e.g. "cognitive hygiene", "Kahneman") or external links to raw JSON files. Explicit Tier 3 (SSD) qualification metrics are mandatory for performance PRs (merges are strictly blocked by CI if Tier 3 data is missing). Every branch commit must appear in the PR commits table. PRs may be reviewed in PT-BR during draft/collaboration, but must transition to English before merge.
 
 ## Methodologies (SSDV3 and Kahneman)
 

@@ -125,6 +125,10 @@ jobs:
               if (!(/zram/i.test(body) && /vram/i.test(body) && /ssd/i.test(body))) {
                 core.setFailed('Hardware table missing multi-tier memory breakdown (ZRAM, VRAM, SSD).');
               }
+              const hasTier3Data = /(?:Tier\s*3|Host\s*SSD|SSD\s*Disk|SSD\s*origin).*?(?:\d+\s*(?:MB|GB|%))/i.test(body);
+              if (!hasTier3Data) {
+                core.setFailed('Hardware table missing mandatory Tier 3 (SSD) qualification metrics (must document Tier 3 swap capacity, usage, and status). Merge is strictly blocked.');
+              }
               if (!(/reclaim/i.test(body) || /libera[çc][ãa]o/i.test(body) || /throughput/i.test(body))) {
                 core.setFailed('Hardware table missing reclaim throughput / latency metric.');
               }

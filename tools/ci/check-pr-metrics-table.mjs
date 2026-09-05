@@ -79,6 +79,12 @@ export function validatePrMetricsTable(body, { expectedCommits = [], requireEngl
       errors.push('Hardware table missing multi-tier memory breakdown (Tier 1 ZRAM, Tier 2 VRAM, Tier 3 SSD).');
     }
 
+    // Mandatory Tier 3 qualification data check (fail-closed merge blocker)
+    const hasTier3Data = /(?:Tier\s*3|Host\s*SSD|SSD\s*Disk|SSD\s*origin).*?(?:\d+\s*(?:MB|GB|%))/i.test(body);
+    if (!hasTier3Data) {
+      errors.push('Hardware table missing mandatory Tier 3 (SSD) qualification metrics (must document Tier 3 swap capacity, usage, and status). Merge blocked.');
+    }
+
     // Verify reclaim throughput / latency
     const hasReclaim = /reclaim/i.test(body) || /libera[çc][ãa]o/i.test(body) || /throughput/i.test(body);
     if (!hasReclaim) {

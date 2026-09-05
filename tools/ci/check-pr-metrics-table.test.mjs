@@ -119,3 +119,18 @@ test('language validation rejects PT-BR when English is strictly required for me
   assert.ok(res.errors.some(e => e.includes('contains Portuguese markers')));
 });
 
+test('fails when Tier 3 data is missing from hardware table', () => {
+  const missingTier3Body = VALID_TABLE.replace(/\| └─ \*Tier 3: Host SSD\* \|.*?\n/, '');
+  const res = validatePrMetricsTable(missingTier3Body);
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some(e => e.includes('missing mandatory Tier 3 (SSD) qualification metrics')));
+});
+
+test('fails when Tier 3 row has no numeric metrics', () => {
+  const badTier3Body = VALID_TABLE.replace(/\| └─ \*Tier 3: Host SSD\* \|.*?\n/, '| └─ *Tier 3: Host SSD* | N/A | N/A | 🟡 Neutral | Not measured |\n');
+  const res = validatePrMetricsTable(badTier3Body);
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some(e => e.includes('missing mandatory Tier 3 (SSD) qualification metrics')));
+});
+
+
