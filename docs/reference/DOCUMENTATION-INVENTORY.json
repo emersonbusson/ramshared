@@ -2,9 +2,9 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 291,
-    "classified": 280,
-    "excluded": 11,
+    "total": 251,
+    "classified": 248,
+    "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
   },
@@ -354,19 +354,19 @@
       "freshnessDays": null
     },
     {
-      "path": "docs/broker-telemetry-reconciliation/README.md",
+      "path": "docs/ci/CI-TOPOLOGY.md",
       "disposition": "classified",
-      "ruleId": "telemetry-reconciliation-documents",
+      "ruleId": "ci-documents",
       "verification": {
         "state": "unverified"
       },
-      "owner": "reliability",
-      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
+      "owner": "release-engineering",
+      "canonicalSource": "docs/ci/CI-TOPOLOGY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
     },
     {
-      "path": "docs/ci/CI-TOPOLOGY.md",
+      "path": "docs/ci/OFFICIAL-KERNEL-WSL2-CI.md",
       "disposition": "classified",
       "ruleId": "ci-documents",
       "verification": {
@@ -386,18 +386,6 @@
       },
       "owner": "release-engineering",
       "canonicalSource": "docs/ci/CI-TOPOLOGY.md",
-      "lifecycle": "reviewable",
-      "freshnessDays": 90
-    },
-    {
-      "path": "docs/cioficial.md",
-      "disposition": "classified",
-      "ruleId": "top-level-docs",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "documentation-governance",
-      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
     },
@@ -570,355 +558,7 @@
       "freshnessDays": 90
     },
     {
-      "path": "docs/jules/findings/01-vram-dispatcher-scope-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/02-diagnose-procfs-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/03-n3-state-transition-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/04-broker-lock-free-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/05-ipc-framing-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/06-dxg-capabilities-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/07-agent-watchdog-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/08-swap-tier-guard-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/09-config-parser-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/10-block-alignment-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/11-cuda-vram-impl-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/12-vulkan-driver-guard-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/13-nbd-readiness-socket-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/14-config-worker-threads-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/15-dxg-bar-aperture-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/16-vram-allocation-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/17-diagnose-pipeline-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/18-broker-lease-ttl-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/19-cuda-stream-priority-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/20-broker-arbiter-error-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/21-cuda-error-mapping-trap.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/22-pr482-winsvc-handle-cleanup.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/23-pr487-wsl2d-dxgkrnl-anti-bug.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/24-pr489-broker-cross-host-civm-historical-note.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/25-pr493-cli-read-frozen-target-error-handling.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/26-pr497-wsl2d-dxgkrnl-mlockall-invariants.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/jules/findings/README.md",
-      "disposition": "classified",
-      "ruleId": "jules-findings",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null
-    },
-    {
-      "path": "docs/labs/DUALBOOT-KERNEL-TRUE.md",
-      "disposition": "classified",
-      "ruleId": "lab-runbooks",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "lab-safety",
-      "canonicalSource": "docs/labs/LAB-DISK-GUARD.md",
-      "lifecycle": "reviewable",
-      "freshnessDays": 90
-    },
-    {
       "path": "docs/labs/EVIDENCE-RETENTION.md",
-      "disposition": "classified",
-      "ruleId": "lab-runbooks",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "lab-safety",
-      "canonicalSource": "docs/labs/LAB-DISK-GUARD.md",
-      "lifecycle": "reviewable",
-      "freshnessDays": 90
-    },
-    {
-      "path": "docs/labs/HYPERV-RUSSIA-LAB.md",
       "disposition": "classified",
       "ruleId": "lab-runbooks",
       "verification": {
@@ -954,18 +594,6 @@
       "freshnessDays": 90
     },
     {
-      "path": "docs/labs/PARALLEL-WINDOWS-AND-CUSTOM-KERNEL.md",
-      "disposition": "classified",
-      "ruleId": "lab-runbooks",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "lab-safety",
-      "canonicalSource": "docs/labs/LAB-DISK-GUARD.md",
-      "lifecycle": "reviewable",
-      "freshnessDays": 90
-    },
-    {
       "path": "docs/labs/WSL-KERNEL-LAB.md",
       "disposition": "classified",
       "ruleId": "lab-runbooks",
@@ -990,108 +618,16 @@
       "freshnessDays": 90
     },
     {
-      "path": "docs/marketing/DEMO.md",
+      "path": "docs/marketing/README.md",
       "disposition": "classified",
       "ruleId": "marketing-documents",
       "verification": {
         "state": "unverified"
       },
       "owner": "product-documentation",
-      "canonicalSource": "README.md",
+      "canonicalSource": "docs/marketing/README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
-    },
-    {
-      "path": "docs/marketing/LAUNCH-KIT.md",
-      "disposition": "classified",
-      "ruleId": "marketing-documents",
-      "verification": {
-        "state": "unverified"
-      },
-      "owner": "product-documentation",
-      "canonicalSource": "README.md",
-      "lifecycle": "reviewable",
-      "freshnessDays": 90
-    },
-    {
-      "path": "docs/marketing/posts/01-reddit-rust-en.md",
-      "disposition": "excluded",
-      "ruleId": "marketing-post-copy",
-      "verification": {
-        "state": "not-applicable"
-      },
-      "owner": "product-documentation",
-      "reason": "Campaign copy is not normative product documentation."
-    },
-    {
-      "path": "docs/marketing/posts/02-twitter-en.md",
-      "disposition": "excluded",
-      "ruleId": "marketing-post-copy",
-      "verification": {
-        "state": "not-applicable"
-      },
-      "owner": "product-documentation",
-      "reason": "Campaign copy is not normative product documentation."
-    },
-    {
-      "path": "docs/marketing/posts/03-twitter-pt.md",
-      "disposition": "excluded",
-      "ruleId": "marketing-post-copy",
-      "verification": {
-        "state": "not-applicable"
-      },
-      "owner": "product-documentation",
-      "reason": "Campaign copy is not normative product documentation."
-    },
-    {
-      "path": "docs/marketing/posts/04-reddit-brdev-pt.md",
-      "disposition": "excluded",
-      "ruleId": "marketing-post-copy",
-      "verification": {
-        "state": "not-applicable"
-      },
-      "owner": "product-documentation",
-      "reason": "Campaign copy is not normative product documentation."
-    },
-    {
-      "path": "docs/marketing/posts/05-linkedin-en.md",
-      "disposition": "excluded",
-      "ruleId": "marketing-post-copy",
-      "verification": {
-        "state": "not-applicable"
-      },
-      "owner": "product-documentation",
-      "reason": "Campaign copy is not normative product documentation."
-    },
-    {
-      "path": "docs/marketing/posts/06-linkedin-pt.md",
-      "disposition": "excluded",
-      "ruleId": "marketing-post-copy",
-      "verification": {
-        "state": "not-applicable"
-      },
-      "owner": "product-documentation",
-      "reason": "Campaign copy is not normative product documentation."
-    },
-    {
-      "path": "docs/marketing/posts/07-hackernews-en.md",
-      "disposition": "excluded",
-      "ruleId": "marketing-post-copy",
-      "verification": {
-        "state": "not-applicable"
-      },
-      "owner": "product-documentation",
-      "reason": "Campaign copy is not normative product documentation."
-    },
-    {
-      "path": "docs/marketing/posts/README.md",
-      "disposition": "excluded",
-      "ruleId": "marketing-post-copy",
-      "verification": {
-        "state": "not-applicable"
-      },
-      "owner": "product-documentation",
-      "reason": "Campaign copy is not normative product documentation."
     },
     {
       "path": "docs/methodology/KAHNEMAN-DISCIPLINES.md",

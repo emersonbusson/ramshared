@@ -35,6 +35,7 @@ const SKIP_DIRS = new Set([
   ".agents",
   ".codex",
   ".grok",
+  "local",
 ]);
 
 function* walk(dir) {

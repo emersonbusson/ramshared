@@ -4,16 +4,6 @@
   "registeredAt": "2026-08-11T15:15:12Z",
   "routes": [
     {
-      "id": "jules-findings",
-      "pattern": "docs/jules/findings/**/*.md",
-      "owner": "architecture",
-      "canonicalSource": "docs/jules/findings/README.md",
-      "lifecycle": "historical",
-      "freshnessDays": null,
-      "verification": { "state": "unverified" },
-      "registeredAt": "2026-08-30T00:00:00Z"
-    },
-    {
       "id": "root-product-documents",
       "pattern": "README.md",
       "owner": "product-documentation",
@@ -284,16 +274,6 @@
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
-      "id": "telemetry-reconciliation-documents",
-      "pattern": "docs/broker-telemetry-reconciliation/**/*.md",
-      "owner": "reliability",
-      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
-      "lifecycle": "historical",
-      "freshnessDays": null,
-      "verification": { "state": "unverified" },
-      "registeredAt": "2026-08-11T15:15:12Z"
-    },
-    {
       "id": "ci-documents",
       "pattern": "docs/ci/**/*.md",
       "owner": "release-engineering",
@@ -337,7 +317,7 @@
       "id": "marketing-documents",
       "pattern": "docs/marketing/*.md",
       "owner": "product-documentation",
-      "canonicalSource": "README.md",
+      "canonicalSource": "docs/marketing/README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90,
       "verification": { "state": "unverified" },
@@ -497,13 +477,6 @@
       "pattern": "docs/pt-BR/**/*.md",
       "owner": "product-documentation",
       "reason": "Localized derivative; English documentation remains canonical.",
-      "registeredAt": "2026-08-11T15:15:12Z"
-    },
-    {
-      "id": "marketing-post-copy",
-      "pattern": "docs/marketing/posts/**/*.md",
-      "owner": "product-documentation",
-      "reason": "Campaign copy is not normative product documentation.",
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
