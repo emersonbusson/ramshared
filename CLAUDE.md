@@ -18,6 +18,7 @@ Before changing code:
 4. Follow [`.claude/rules/coding.md`](.claude/rules/coding.md) for formatting, checkpatch, and tests.
 5. In Pull Requests, follow the commit table format defined in [`.claude/rules/governance.md`](.claude/rules/governance.md). For benchmark/stress changes, include a self-contained compact hardware comparison table with directions (`[Higher is better 🔺]` / `[Lower is better 🔻]`) and alarm thresholds (blocked on 🔴 ALARM via [`docs/reliability/HARDWARE-METRICS-TRIAGE.md`](docs/reliability/HARDWARE-METRICS-TRIAGE.md)). All branch commits must be listed in the PR table. PT-BR is permitted during draft review, transitioning to English for final merge.
 6. For benchmarks/measurements backing decisions, follow [`.claude/rules/benchmarks.md`](.claude/rules/benchmarks.md) (auto context + ≥3 rounds + append-only log in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)).
+7. Follow the **Zero-Sum README Policy**: keep the README bounded to the single latest verified qualification run, removing superseded historical benchmarks (which belong in `docs/benchmarks/history/`), and strictly avoiding internal agent/bot references ("Jules", "Codex", censuses) in public READMEs.
 
 ## Core Methodologies
 

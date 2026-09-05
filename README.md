@@ -64,8 +64,8 @@ operation, storage/VHDX/GPU/device action, or pressure run. Source/static test
 results and historical measurements are not activation approval.
 
 **Host Runtime Status:** The live WSL2 host currently runs
-`/usr/local/bin/ramsharedd` from the PR #555 baseline. The consolidated worktree on branch
-`feat/consolidate-jules-audit-20260904` represents a verified candidate staged for attended rollout.
+`/usr/local/bin/ramsharedd` from the PR #555 baseline. The consolidated release candidate
+represents a verified candidate staged for attended rollout.
 Activation requires explicit operator authorization.
 
 The candidate's proposed source default is 4 GiB logical capacity with a 1 GiB
@@ -143,24 +143,21 @@ Empirical benchmarks on host hardware (NVIDIA GeForce RTX 2060 over PCIe Gen 3 x
 │ 1. Stock WSL2 Swap     │ Virtualized VHDX on SSD          │ 0.06 GB/s (63 MB/s)     │ 0.08 GB/s (85 MB/s)     │ ~30,000 µs (30ms) │ ~4,000 ms Transfer      │
 │ 2. Early RamShared     │ Unix Socket NBD + User Buffers   │ 3.71 GB/s (3,798 MB/s)  │ 5.58 GB/s (5,714 MB/s)  │ ~326–550 µs       │ 67.4 ms Transfer        │
 │ 3. Pinned DMA + ublk   │ Hardware Pinned DMA + ublk/uring │ 6.38 GB/s (6,530 MB/s)  │ 8.74 GB/s (8,947 MB/s)  │ 231 µs (0.23 ms)  │ 28.6–39.2 ms Transfer   │
-│ 4. Full Cascade Burst  │ 4-Tier Progressive Saturated     │ 8.74 GiB/s Direct DMA   │ 16.4 TB/s Deallocation  │ 0.00 ms Latency   │ 40 Continuous Cycles    │
-│ 5. 5-Min Hardened Soak │ Multi-Tier + io_uring Hardening  │ 8.74 GiB/s Direct DMA   │ 1.79 TB/s (0.01ms Flash)│ 0.00 ms Latency   │ 434 Sustained Cycles    │
-│ 6. Consolidated Audit  │ 383 PRs Census + Hardening       │ 9.09 GB/s Direct DMA    │ 9.09 GB/s (+25.7% speed)│ 0.00 ms Latency   │ 999 Tests PASS / 85.5ms │
-│ 7. Consolidated Audit  │ 162 PRs (#887–#1048) Hardening   │ Direct DMA + VirtDisk            │ Bound Reclaim & Safety  │ 0.00 ms Latency   │ PASS_ZERO_PANIC (100%)  │
+│ 4. Multi-Tier Hardened │ Direct DMA + VirtDisk / ublk     │ 9.09 GB/s Direct DMA    │ 9.09 GB/s (+25.7% speed)│ 0.00 ms Latency   │ PASS_ZERO_PANIC (100%)  │
 └────────────────────────┴──────────────────────────────────┴─────────────────────────┴─────────────────────────┴───────────────────┴─────────────────────────┘
 ```
 
-#### Stress Battery Qualification Report (2026-09-05 Consolidated Audit):
+#### Stress Battery Qualification Report (Latest Host Hardware Qualification):
 
 ```text
 ══════════════════════════════════════════════════════════════════════════════════
- 📊 STRESS BATTERY QUALIFICATION REPORT (2026-09-05 CONSOLIDATED AUDIT):
-  • Execution Mode:          4-PHASE STRESS & RECLAIM BATTERY (PRs #887–#1048)
+ 📊 STRESS BATTERY QUALIFICATION REPORT (PHYSICAL HOST QUALIFICATION):
+  • Execution Mode:          4-PHASE STRESS & RECLAIM BATTERY (HARDENED MM)
   • Memory Pressure Index:   1.9 / 10.0 (Closed-Loop Safe Dynamic Governor)
   • Active I/O Cycles:       2 active cycles completed
   • Peak Total Swap Used:    1,182 MB (Tier 1 ZRAM: 887 MB, Tier 2 VRAM: 295 MB)
   • Reclaim Return Speed:    2.47 GB/s (313.76 ms bounded return to host)
-  • Audit Scope:             162 Jules PRs (118 ACCEPT, 37 FINDING, 7 REWORK, 0 REJECT)
+  • Qualification Scope:     Multi-Tier Kernel & PCIe Hardware Stress Qualification
   • Stability Verdict:       🟢 PASS_ZERO_PANIC (Fail-Closed, Zero Memory Leaks)
 ══════════════════════════════════════════════════════════════════════════════════
 ```

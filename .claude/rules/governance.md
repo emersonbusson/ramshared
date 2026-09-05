@@ -26,6 +26,17 @@ Every PR uses `.github/pull_request_template.md`. Mandatory sections:
 8. **Empirical Hardware Evidence Table & PR Completeness** — For PRs touching performance, memory management, or stress benchmarks, provide a self-contained side-by-side comparison table (Previous vs Current with physical hardware delta, compact 5-column layout with tier hierarchy `├─ Tier 1/2/3`, directionality `[Higher is better 🔺]` / `[Lower is better 🔻]`, and status icons `🟢 GAIN`, `🟡 NEUTRAL`, `🔴 ALARM`). All evidence must be directly readable and humanly explained in the PR body without excessive vertical scrolling. Every single commit in the branch must be listed in the `## Commits` table (CI fails closed if any branch commit is missing). If any metric triggers a 🔴 ALARM (>3% throughput loss, >5% latency spike, unintended SSD spill), the PR is blocked until triaged via [`docs/reliability/HARDWARE-METRICS-TRIAGE.md`](../../docs/reliability/HARDWARE-METRICS-TRIAGE.md). Do NOT point reviewers to raw JSON telemetry files or external links for core performance claims. Do NOT use internal methodology buzzwords (e.g. "cognitive hygiene", "Kahneman disciplines") in the PR description or README.
 9. **Two-Stage Language Governance** — PR descriptions may be drafted and reviewed in Portuguese (PT-BR) during active development and review cycles with the maintainer, but MUST be transitioned to English prior to final merge into `main` (enforced by CI upon `stage:ready` or merge qualification).
 
+## Zero-Sum README Policy & Public Hygiene
+
+The root `README.md` and its localized counterpart `README.pt-BR.md` are public-facing technical architectural documents, not internal scratchpads or historical changelogs.
+
+1. **Strict Fixed Ceiling & Zero-Sum Policy**:
+   - The README maintains a fixed maximum scope: Architectural Overview, Hardware Rationale/FAQ link, Single Latest Verified Hardware Benchmark, Real-Time Observability (`ramshared top`), Build/Install instructions, and Upstream roadmap (`trovaldo.md`).
+   - When a new benchmark qualification or major milestone is added to the README, older historical runs or intermediate test stages MUST be pruned from the README and archived in `docs/benchmarks/history/` or `docs/reliability/`. Never accumulate historical comparison rows or audit tallies in the README.
+2. **Anti-Jargon & Internal Agent Shielding**:
+   - The public READMEs must NEVER contain internal development tool/bot names (e.g. "Jules", "Codex", "Aider"), automated PR batch censuses (e.g. "162 Jules PRs", "383 PRs"), or methodology buzzwords.
+   - All internal audit records and PR census tallies live exclusively in canonical documentation under `docs/reliability/` (e.g. `docs/reliability/JULES-PR-AUDIT-20260905.md`).
+
 ## Commit visibility rule
 
 **Why it exists:** a PR with 16 commits collapsed into a grouping `<details>` showed only 5 lines in the preview; the human reviewer did not see the others and asked where they were. The rule guarantees that this does not happen.
@@ -65,3 +76,5 @@ CI / scripts / lab harnesses are **not** SSDV3 by default (see `ssdv3.md` § Out
 - ❌ Changing `CLAUDE.md` without synchronizing `AGENTS.md` in the same commit.
 - ❌ Putting internal methodology buzzwords ("cognitive hygiene", "Kahneman disciplines") in PR bodies or READMEs; present observable hardware metrics directly.
 - ❌ Directing reviewers to raw JSON files or external pages for core performance/stress claims instead of self-contained explanatory tables.
+- ❌ Mentioning internal agent/tool names ("Jules", "Codex", "Aider") or intermediate bot PR batch censuses in `README.md` or `README.pt-BR.md`.
+- ❌ Accumulating historical benchmark rows in the README without pruning superseded runs (violating the Zero-Sum README policy).

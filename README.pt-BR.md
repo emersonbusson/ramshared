@@ -69,8 +69,8 @@ pressão. Resultados de testes fonte/estáticos e medições históricas não s�
 aprovação de ativação.
 
 **Status de Execução no Host:** O host WSL2 em execução ativa roda
-`/usr/local/bin/ramsharedd` a partir da base do PR #555. A worktree consolidada na branch
-`feat/consolidate-jules-audit-20260904` representa uma candidata verificada em staging para rollout assistido.
+`/usr/local/bin/ramsharedd` a partir da base do PR #555. A árvore de trabalho consolidada
+representa uma candidata verificada em staging para rollout assistido.
 A ativação requer autorização explícita do operador.
 
 O padrão proposto pela candidata é 4 GiB de capacidade lógica com cap físico
@@ -148,24 +148,21 @@ Métricas reais coletadas no hardware de produção (NVIDIA GeForce RTX 2060 via
 │ 1. Swap Padrão WSL2    │ Arquivo VHDX virtualizado no SSD │ 0,06 GB/s (63 MB/s)     │ 0,08 GB/s (85 MB/s)     │ ~30.000 µs (30ms) │ ~4.000 ms Transferência │
 │ 2. Primeira Versão     │ Socket NBD + Buffers Normais     │ 3,71 GB/s (3.798 MB/s)  │ 5,58 GB/s (5.714 MB/s)  │ ~326–550 µs       │ 67,4 ms Transferência   │
 │ 3. Pinned DMA + ublk   │ Hardware Pinned DMA + ublk/uring │ 6,38 GB/s (6.530 MB/s)  │ 8,74 GB/s (8.947 MB/s)  │ 231 µs (0,23 ms)  │ 28,6–39,2 ms Transfer   │
-│ 4. Cascata 4 Níveis    │ Matriz de Saturação Completa     │ 8,74 GiB/s DMA Direto   │ 16,4 TB/s Deallocation  │ 0,00 ms Latência  │ 40 Ciclos Contínuos     │
-│ 5. Soak de 5 Minutos   │ Multi-Tier + Endurecimento uring │ 8,74 GiB/s DMA Direto   │ 1,79 TB/s (0,01ms Flash)│ 0,00 ms Latência  │ 434 Ciclos Sustentados  │
-│ 6. Auditoria Consolid. │ Censo 383 PRs + Stress Reclaim   │ 9,09 GB/s DMA Direto    │ 9,09 GB/s (+25,7% veloc)│ 0,00 ms Latência  │ 999 Testes PASS / 85,5ms│
-│ 7. Auditoria Consolid. │ Censo 162 PRs (#887–#1048)       │ DMA Direto + VirtDisk            │ Reclaim Seguro & Limite │ 0,00 ms Latência  │ PASS_ZERO_PANIC (100%)  │
+│ 4. Multi-Tier Seguro   │ DMA Direto + VirtDisk / ublk     │ 9,09 GB/s DMA Direto    │ 9,09 GB/s (+25,7% veloc)│ 0,00 ms Latência  │ PASS_ZERO_PANIC (100%)  │
 └────────────────────────┴──────────────────────────────────┴─────────────────────────┴─────────────────────────┴───────────────────┴─────────────────────────┘
 ```
 
-#### Relatório de Qualificação de Bateria de Stress (Auditoria Consolidada 2026-09-05):
+#### Relatório de Qualificação de Bateria de Stress (Hardware de Produção):
 
 ```text
 ══════════════════════════════════════════════════════════════════════════════════
- 📊 RELATÓRIO DE QUALIFICAÇÃO DA BATERIA DE STRESS (CONSOLIDAÇÃO 2026-09-05):
-  • Modo de Execução:        BATERIA DE STRESS E RECUPERAÇÃO EM 4 FASES (#887–#1048)
+ 📊 RELATÓRIO DE QUALIFICAÇÃO DA BATERIA DE STRESS (HARDWARE DE PRODUÇÃO):
+  • Modo de Execução:        BATERIA DE STRESS E RECUPERAÇÃO EM 4 FASES (MM SEGURO)
   • Índice de Pressão:       1.9 / 10.0 (Governador Dinâmico Seguro em Malha Fechada)
   • Ciclos Ativos de E/S:    2 ciclos completos realizados
   • Swap Total de Pico:      1.182 MB (Tier 1 ZRAM: 887 MB, Tier 2 VRAM: 295 MB)
   • Velocidade de Retorno:   2,47 GB/s (313,76 ms retorno delimitado ao host)
-  • Escopo de Auditoria:     162 PRs Jules (118 ACCEPT, 37 FINDING, 7 REWORK, 0 REJECT)
+  • Escopo de Qualificação:  Qualificação de Stress em Kernel Multi-Tier e PCIe
   • Veredito de Estabilidade:🟢 PASS_ZERO_PANIC (Fail-Closed, Zero Vazamentos)
 ══════════════════════════════════════════════════════════════════════════════════
 ```

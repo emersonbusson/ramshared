@@ -43,7 +43,9 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	}
 
 	if (queue_depth < 16 || queue_depth > 1024) {
-		dev_warn(&pdev->dev, "clamping queue_depth (%lu) to bounds [16, 1024]\n", queue_depth);
+		dev_warn(&pdev->dev,
+			 "clamping queue_depth (%lu) to bounds [16, 1024]\n",
+			 queue_depth);
 		if (queue_depth < 16)
 			queue_depth = 16;
 		else

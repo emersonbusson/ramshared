@@ -37,6 +37,11 @@ The source of truth for architecture and coding rules is:
 
 - Docs and agent rules describe **RamShared only**. No foreign product narratives, service names, or imported process templates from other codebases.
 
+### Zero-Sum README Policy & Public Hygiene
+
+- `README.md` and `README.pt-BR.md` have a fixed scope ceiling. When a new benchmark qualification is added, superseded historical benchmarks must be pruned from the README and archived in `docs/benchmarks/history/`.
+- The public READMEs must never mention internal agent/bot names ("Jules", "Codex", "Aider") or intermediate bot PR batch censuses. All audit census records belong exclusively in `docs/reliability/`.
+
 ## Commits and patches
 
 Conventional Commits in **English**, imperative title, ≤72 chars. Body in **English**.

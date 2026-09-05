@@ -26,8 +26,8 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
 		     !IS_ALIGNED(bio->bi_iter.bi_size, RAMSHARED_SECTOR_SIZE))) {
 		dev_err_ratelimited(rs_dev->dev,
-			"Unaligned bio: pos=%lld, len=%u\n",
-			pos, bio->bi_iter.bi_size);
+				    "Unaligned bio: pos=%lld, len=%u\n",
+				    pos, bio->bi_iter.bi_size);
 		return BLK_STS_IOERR;
 	}
 
@@ -35,8 +35,9 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 		     bio->bi_iter.bi_size > rs_dev->dma.size - pos ||
 		     pos + bio->bi_iter.bi_size > rs_dev->capacity_bytes)) {
 		dev_err_ratelimited(rs_dev->dev,
-			"Bio bounds violation: pos=%lld, len=%u, cap=%llu\n",
-			pos, bio->bi_iter.bi_size, rs_dev->capacity_bytes);
+				    "Bio bounds violation: pos=%lld, len=%u, cap=%llu\n",
+				    pos, bio->bi_iter.bi_size,
+				    rs_dev->capacity_bytes);
 		return BLK_STS_IOERR;
 	}
 
@@ -83,7 +84,8 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
 		     !IS_ALIGNED(len, RAMSHARED_SECTOR_SIZE))) {
 		dev_err_ratelimited(rs_dev->dev,
-			"Unaligned I/O request: pos=%lld, len=%zu\n", pos, len);
+				    "Unaligned I/O request: pos=%lld, len=%zu\n",
+				    pos, len);
 		return BLK_STS_IOERR;
 	}
 
@@ -91,8 +93,9 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 		     len > rs_dev->dma.size - pos ||
 		     pos + len > rs_dev->capacity_bytes)) {
 		dev_err_ratelimited(rs_dev->dev,
-			"I/O bounds violation: pos=%lld, len=%zu, cap=%llu, mapped=%zu\n",
-			pos, len, rs_dev->capacity_bytes, rs_dev->dma.size);
+				    "I/O bounds violation: pos=%lld, len=%zu, cap=%llu, mapped=%zu\n",
+				    pos, len, rs_dev->capacity_bytes,
+				    rs_dev->dma.size);
 		return BLK_STS_IOERR;
 	}
 
@@ -190,7 +193,7 @@ static ssize_t capacity_bytes_show(struct device *dev,
 static DEVICE_ATTR_RO(capacity_bytes);
 
 static ssize_t read_bytes_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
+			       struct device_attribute *attr, char *buf)
 {
 	struct gendisk *disk = dev_to_disk(dev);
 	struct ramshared_device *rs_dev = disk->private_data;
@@ -200,7 +203,7 @@ static ssize_t read_bytes_show(struct device *dev,
 static DEVICE_ATTR_RO(read_bytes);
 
 static ssize_t write_bytes_show(struct device *dev,
-				 struct device_attribute *attr, char *buf)
+				struct device_attribute *attr, char *buf)
 {
 	struct gendisk *disk = dev_to_disk(dev);
 	struct ramshared_device *rs_dev = disk->private_data;
