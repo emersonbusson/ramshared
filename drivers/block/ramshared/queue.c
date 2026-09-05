@@ -62,11 +62,13 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (unlikely(check_shl_overflow((loff_t)blk_rq_pos(rq), RAMSHARED_SECTOR_SHIFT, &pos)))
 		return BLK_STS_IOERR;
 
-	if (unlikely(!IS_ALIGNED(pos, 4096) || !IS_ALIGNED(len, 4096))) {
-		dev_err_ratelimited(rs_dev->dev,
-			"Unaligned I/O request: pos=%lld, len=%zu\n", pos, len);
-		return BLK_STS_IOERR;
-	}
+	if (unlikely(req_op(rq) != REQ_OP_READ && req_op(rq) != REQ_OP_WRITE &&
+		     req_op(rq) != REQ_OP_FLUSH && req_op(rq) != REQ_OP_DISCARD &&
+		     req_op(rq) != REQ_OP_SECURE_ERASE))
+		return BLK_STS_NOTSUPP;
+
+	if (unlikely(!IS_ALIGNED(pos, 4096) || !IS_ALIGNED(len, 4096)))
+		return BLK_STS_NOTSUPP;
 
 	if (unlikely(pos > rs_dev->dma.size ||
 		     len > rs_dev->dma.size - pos ||
