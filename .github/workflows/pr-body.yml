@@ -25,13 +25,13 @@ jobs:
           script: |
             const body = context.payload.pull_request?.body ?? '';
             const requiredSections = [
-              { name: 'Resumo/Summary', pattern: /^##\s+(?:Resumo|Summary)\s*$/im },
-              { name: 'Commits', pattern: /^##\s+Commits\s*$/im },
-              { name: 'Issue', pattern: /^##\s+Issue\s*$/im },
-              { name: 'Responsavel/Owner', pattern: /^##\s+(?:Responsavel|Responsável|Owner|Responsible)\s*$/im },
-              { name: 'Labels', pattern: /^##\s+Labels\s*$/im },
-              { name: 'Validacao/Validation', pattern: /^##\s+(?:Validacao|Validação|Validation)\s*$/im },
-              { name: 'Rollback trigger', pattern: /^##\s+Rollback trigger\s*$/im }
+              { name: 'Resumo/Summary', pattern: /^##\s+(?:Resumo|Summary)(?:\s*\(.*?\))?\s*$/im },
+              { name: 'Commits', pattern: /^##\s+Commits(?:\s*\(.*?\))?\s*$/im },
+              { name: 'Issue', pattern: /^##\s+Issue(?:\s*\(.*?\))?\s*$/im },
+              { name: 'Responsavel/Owner', pattern: /^##\s+(?:Responsavel|Responsável|Owner|Responsible)(?:\s*\(.*?\))?\s*$/im },
+              { name: 'Labels', pattern: /^##\s+Labels(?:\s*\(.*?\))?\s*$/im },
+              { name: 'Validacao/Validation', pattern: /^##\s+(?:Validacao|Validação|Validation)(?:\s*\(.*?\))?\s*$/im },
+              { name: 'Rollback trigger', pattern: /^##\s+Rollback trigger(?:\s*\(.*?\))?\s*$/im }
             ];
 
             const missing = requiredSections
