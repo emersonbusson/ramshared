@@ -235,7 +235,7 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
     {
         let mut sq = ring.submission();
         if sq.is_full() {
-            return Err(io::Error::other("io_uring submission queue is full"));
+            return Err(io::Error::from_raw_os_error(libc::EBUSY));
         }
         // SAFETY: `cmd` is copied into the SQE before submission. Public wrappers
         // in this module pass null pointers, local stack pointers, or borrowed mutable
@@ -331,7 +331,7 @@ impl UblkFetchRing {
             // serving I/O, which requires `START_DEV` (not invoked in this path).
             let mut sq = ring.submission();
             if sq.is_full() {
-                return Err(io::Error::other("io_uring submission queue is full"));
+                return Err(io::Error::from_raw_os_error(libc::EBUSY));
             }
             unsafe {
                 let _ = sq.push(&entry);
@@ -495,7 +495,7 @@ impl UblkServer {
         // remains open. The kernel only accesses the buffer to serve I/O on this thread.
         let mut sq = self.ring.submission();
         if sq.is_full() {
-            return Err(io::Error::other("io_uring submission queue is full"));
+            return Err(io::Error::from_raw_os_error(libc::EBUSY));
         }
         unsafe {
             let _ = sq.push(&entry);
@@ -752,8 +752,7 @@ mod tests {
         let err = server
             .push(0, 2, 0, 0)
             .expect_err("expected ring full error");
-        assert_eq!(err.kind(), io::ErrorKind::Other);
-        assert_eq!(err.to_string(), "io_uring submission queue is full");
+        assert_eq!(err.raw_os_error(), Some(libc::EBUSY));
 
         drop(server);
         drop(file);

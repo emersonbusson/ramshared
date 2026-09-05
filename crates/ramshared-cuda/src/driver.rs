@@ -21,6 +21,10 @@ pub enum CudaError {
     Load(String),
     /// Symbol resolution failed for a required symbol.
     Symbol(String),
+    /// A CUDA Driver API call returned out of memory.
+    OutOfMemory { op: &'static str, msg: String },
+    /// A CUDA Driver API call returned invalid value.
+    InvalidValue { op: &'static str, msg: String },
     /// A CUDA Driver API call returned an error code.
     Driver {
         op: &'static str,
@@ -36,6 +40,12 @@ impl fmt::Display for CudaError {
         match self {
             CudaError::Load(s) => write!(f, "failed to load CUDA library: {s}"),
             CudaError::Symbol(s) => write!(f, "required CUDA symbol missing: {s}"),
+            CudaError::OutOfMemory { op, msg } => {
+                write!(f, "{op} failed with out of memory: {msg}")
+            }
+            CudaError::InvalidValue { op, msg } => {
+                write!(f, "{op} failed with invalid value: {msg}")
+            }
             CudaError::Driver { op, code, msg } => {
                 write!(f, "{op} failed (CUresult={code}): {msg}")
             }
@@ -329,14 +339,21 @@ fn load_sym_opt<T: Copy>(handle: *mut c_void, name: &CStr) -> Option<T> {
 }
 
 fn check(syms: &Syms, r: CuResult, op: &'static str) -> Result<(), CudaError> {
-    if r == CUDA_SUCCESS {
-        Ok(())
-    } else {
-        Err(CudaError::Driver {
+    match r {
+        CUDA_SUCCESS => Ok(()),
+        crate::ffi::CUDA_ERROR_INVALID_VALUE => Err(CudaError::InvalidValue {
+            op,
+            msg: err_string(syms, r),
+        }),
+        crate::ffi::CUDA_ERROR_OUT_OF_MEMORY => Err(CudaError::OutOfMemory {
+            op,
+            msg: err_string(syms, r),
+        }),
+        _ => Err(CudaError::Driver {
             op,
             code: r,
             msg: err_string(syms, r),
-        })
+        }),
     }
 }
 
