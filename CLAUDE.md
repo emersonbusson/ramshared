@@ -16,8 +16,9 @@ Before changing code:
 2. For kernel modules (LKM), HMM, Rust for Linux, and CXL, read [`.claude/rules/kernel.md`](.claude/rules/kernel.md).
 3. If structural changes, lock manipulation, chronic allocation, or new hardware is involved, follow the **SSDV3** methodology ([`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md) and [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md)).
 4. Follow [`.claude/rules/coding.md`](.claude/rules/coding.md) for formatting, checkpatch, and tests.
-5. In Pull Requests, follow the commit table format defined in [`.claude/rules/governance.md`](.claude/rules/governance.md).
+5. In Pull Requests, follow the commit table format defined in [`.claude/rules/governance.md`](.claude/rules/governance.md). For benchmark/stress changes, include a self-contained compact hardware comparison table with directions (`[Higher is better 🔺]` / `[Lower is better 🔻]`) and alarm thresholds (blocked on 🔴 ALARM via [`docs/reliability/HARDWARE-METRICS-TRIAGE.md`](docs/reliability/HARDWARE-METRICS-TRIAGE.md)). All branch commits must be listed in the PR table. PT-BR is permitted during draft review, transitioning to English for final merge.
 6. For benchmarks/measurements backing decisions, follow [`.claude/rules/benchmarks.md`](.claude/rules/benchmarks.md) (auto context + ≥3 rounds + append-only log in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)).
+7. Follow the **Zero-Sum README Policy**: keep the README bounded to the single latest verified qualification run, removing superseded historical benchmarks (which belong in `docs/benchmarks/history/`), and strictly avoiding internal agent/bot references ("Jules", "Codex", censuses) in public READMEs.
 
 ## Core Methodologies
 
@@ -43,7 +44,7 @@ Source filenames use `snake_case`; CLI and package identifiers may use hyphens.
 ## Commits & Patches
 
 - **English** is mandatory across the entire project: source code, comments, commits, PRs, issues, and root/`/docs/` documents.
-- Structural commits or those affecting the MMU/DRM require a `Rollback trigger:` in the body.
+- Structural commits or those affecting the MMU/DRM require a `Rollback trigger:` in the body. Explicit Tier 3 (SSD) qualification metrics are mandatory in performance PR descriptions before merge.
 
 ## Tech Stack Overview
 

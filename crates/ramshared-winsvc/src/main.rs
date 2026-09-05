@@ -902,8 +902,14 @@ mod windows_svc {
             root.join(&manifest.artifact(ArtifactRole::WinsvcConfig)?.relative_path),
         )?)?;
         let script = ramshared_winsvc::package::build_residue_script(config.volume_letter)?;
+        let encoded_script = ramshared_winsvc::windows_host::encode_powershell_command(&script);
         let mut child = std::process::Command::new("powershell.exe")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-EncodedCommand",
+                &encoded_script,
+            ])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()?;

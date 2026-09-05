@@ -37,10 +37,16 @@ The source of truth for architecture and coding rules is:
 
 - Docs and agent rules describe **RamShared only**. No foreign product narratives, service names, or imported process templates from other codebases.
 
+### Zero-Sum README Policy & Public Hygiene
+
+- `README.md` and `README.pt-BR.md` have a fixed scope ceiling. When a new benchmark qualification is added, superseded historical benchmarks must be pruned from the README and archived in `docs/benchmarks/history/`.
+- The public READMEs must never mention internal agent/bot names ("Jules", "Codex", "Aider") or intermediate bot PR batch censuses. All audit census records belong exclusively in `docs/reliability/`.
+
 ## Commits and patches
 
 Conventional Commits in **English**, imperative title, ≤72 chars. Body in **English**.
 Non-trivial commits (locks, DMA, or atomic allocation) **MUST** include `Rollback trigger: ...` in the body.
+PR descriptions must be clean, human-explanatory, and include self-contained compact hardware metrics comparison tables for performance changes, without internal methodology buzzwords (e.g. "cognitive hygiene", "Kahneman") or external links to raw JSON files. Explicit Tier 3 (SSD) qualification metrics are mandatory for performance PRs (merges are strictly blocked by CI if Tier 3 data is missing). Every branch commit must appear in the PR commits table. PRs may be reviewed in PT-BR during draft/collaboration, but must transition to English before merge.
 
 ## Methodologies (SSDV3 and Kahneman)
 

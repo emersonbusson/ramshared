@@ -1247,7 +1247,7 @@ fn print_issues<W: Write + ?Sized>(report: &CheckReport, output: &mut W) -> std:
 }
 
 fn recommendations_for(report: &CheckReport) -> Vec<String> {
-    let mut recommendations = Vec::new();
+    let mut recommendations = Vec::with_capacity(10);
 
     if report.wsl.status == Status::Fail {
         recommendations.push(

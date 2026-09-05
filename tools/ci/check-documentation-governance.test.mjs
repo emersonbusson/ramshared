@@ -13,6 +13,7 @@ import {
   validateJourneyManifest,
   validateParityDocument,
   validatePostmortemEffectiveness,
+  validateReadmeHygiene,
   validateReferenceIndex,
   validateRouterConsistency,
   run as runGovernance,
@@ -159,6 +160,24 @@ test('allowlist_requires_owner_review_and_expiry', () => { const out = scanProve
 test('allowlist_cannot_cover_an_entire_directory', () => { const out = scanProvenance([], { entries: [{ id: 'x', rule: 'EXTERNAL', pattern: 'x', scope: ['docs/'], reason: 'fixture', owner_role: 'owner', review_by: '2026-08-10', expires: '2026-09-01' }] }, {}); assert.match(JSON.stringify(out), /ALLOWLIST_SCOPE/) })
 test('baseline_entry_requires_content_hash_and_expiry', () => { const out = scanProvenance([], { entries: [] }, { entries: [{ path: 'docs/a.md' }] }); assert.match(JSON.stringify(out), /BASELINE_SHAPE/) })
 test('changed_file_cannot_use_legacy_baseline', () => { const privatePath = ['', 'home', 'private', 'x'].join('/'); const out = scanProvenance([{ path: 'docs/a.md', text: privatePath }], { entries: [] }, { entries: [{ path: 'docs/a.md', rule: 'PRIVATE_PATH', fingerprint: 'x', file_sha256: '0'.repeat(64), reason: 'old', owner_role: 'owner', review_by: '2026-08-10', expires: '2026-09-01' }] }); assert.match(JSON.stringify(out), /PRIVATE_PATH/) })
+
+test('readme_hygiene_accepts_clean_readme', () => {
+  const files = [
+    { path: 'README.md', text: '# RamShared\nProduction hardware tiering.\n' },
+    { path: 'README.pt-BR.md', text: '# RamShared\nTiering em hardware real.\n' },
+  ]
+  assert.deepEqual(validateReadmeHygiene(files), [])
+})
+test('readme_hygiene_rejects_agent_and_census_jargon', () => {
+  const files = [
+    { path: 'README.md', text: '# Jules was here\n162 PRs consolidated\nfeat/consolidate-jules\n' },
+    { path: 'README.pt-BR.md', text: '383 PRs Census\n' },
+  ]
+  const out = JSON.stringify(validateReadmeHygiene(files))
+  assert.match(out, /FORBIDDEN_AGENT_REF/)
+  assert.match(out, /FORBIDDEN_CENSUS_JARGON/)
+  assert.match(out, /FORBIDDEN_INTERNAL_BRANCH/)
+})
 
 test('redundancy_reports_long_duplicate_normative_block', () => { const block = 'Operators must preserve the exact supported cleanup and evidence ordering for every bounded run. '.repeat(8); assert.match(JSON.stringify(findDuplicateNormativeBlocks([{ path: 'docs/a.md', text: block }, { path: 'docs/b.md', text: block }], {})), /DUPLICATE_NORMATIVE/) })
 test('redundancy_does_not_rewrite_fixture_bytes', () => { const files = [{ path: 'docs/a.md', text: 'short content' }]; const before = JSON.stringify(files); findDuplicateNormativeBlocks(files, {}); assert.equal(JSON.stringify(files), before) })

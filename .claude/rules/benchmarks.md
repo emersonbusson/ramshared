@@ -54,6 +54,22 @@ cited in a doc, PR, or decision, it becomes a registered benchmark** and must fo
 | `docs/benchmarks/results.jsonl` | **Machine-readable** data (1 line/run) |
 | `docs/memory-broker/P0-RESULTS.md` | Consolidated decisions (go/no-go) — SSDV3 gate |
 
+## Hardware Metrics Taxonomy & Regression Alarms
+
+Every release or candidate comparison is evaluated across 4 physical domains with explicit optimization directionality:
+1. **Workload & Capacity**: RAM requested, ZRAM compression, GPU VRAM offload (`[🔺 Higher is better]`), Tier 3 SSD spillover (`[🔻 Lower is better]`).
+2. **Speed & Latency**: Reclaim bus throughput (`[🔺 Higher is better]`), Reclaim duration (`[🔻 Lower is better]`), Block latency (`[🔻 Lower is better]`).
+3. **Pressure & Stalls**: Pressure index tolerance (`[🔺 Higher is better]`), PSI stall time (`[🔻 Lower is better]`, target 0.0%), Major page faults (`[🔻 Lower is better]`).
+4. **Integrity & Stability**: Bit-exactness (100%), Zero memory leaks (< 100 MB), Zero OOM kills (0), Verdict (`PASS_ZERO_PANIC`).
+
+### Regression Alarm Thresholds (🔴 ALARM)
+- **Throughput Drop**: > 3% loss vs `docs/benchmarks/baseline.json`.
+- **Latency Spike**: > 5% increase without swap volume change.
+- **Unintended SSD Spill**: > 0 MB when within Tier 1+2 budget.
+- **Status Failure**: Any verdict != `PASS_ZERO_PANIC`.
+
+When an alarm triggers, the PR is blocked and the operator must execute [`docs/reliability/HARDWARE-METRICS-TRIAGE.md`](../../docs/reliability/HARDWARE-METRICS-TRIAGE.md) to diagnose and resolve the root cause before proceeding.
+
 ## Link with SSDV3 / Kahneman
 
 - The SSDV3 **numerical P0 gate** (`P0-RESULTS.md`) consumes benchmarks that follow this rule.

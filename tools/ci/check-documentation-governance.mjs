@@ -229,6 +229,28 @@ export function scanProvenance(files, allowlist = { entries: [] }, baseline = { 
   return sorted(findings)
 }
 
+const FORBIDDEN_README_PATTERNS = [
+  ['FORBIDDEN_AGENT_REF', /\bjules\b/i],
+  ['FORBIDDEN_CENSUS_JARGON', /\b(?:162|383)\s+prs?\b/i],
+  ['FORBIDDEN_INTERNAL_BRANCH', /\bfeat\/consolidate-jules\b/i],
+]
+
+export function validateReadmeHygiene(files) {
+  const findings = []
+  const targets = files.filter((f) => f.path === 'README.md' || f.path === 'README.pt-BR.md')
+  for (const file of targets) {
+    const lines = String(file.text).split(/\r?\n/)
+    for (let index = 0; index < lines.length; index++) {
+      for (const [rule, regex] of FORBIDDEN_README_PATTERNS) {
+        if (regex.test(lines[index])) {
+          findings.push(finding(file.path, index + 1, rule, rule.toLowerCase()))
+        }
+      }
+    }
+  }
+  return sorted(findings)
+}
+
 function normalizedWords(text) {
   return text.replace(/```[\s\S]*?```/g, ' ').replace(/\[[^\]]*\]\([^)]+\)/g, ' ').replace(/^#+.*$/gm, ' ').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/).filter(Boolean).slice(0, 10000)
 }
@@ -295,7 +317,7 @@ function structuralFiles(root) {
   for (const full of walk(root)) {
     const rel = path.relative(root, full).replaceAll('\\', '/')
     if (!extensions.has(path.extname(full).toLowerCase())) continue
-    if (!(rel === 'README.md' || rel === 'ARCHITECTURE.md' || rel === 'CLAUDE.md' || rel === 'AGENTS.md' || rel === 'validation.md' || rel.startsWith('.claude/rules/') || rel.startsWith('docs/') || rel === 'scripts/docs-check.sh')) continue
+    if (!(rel === 'README.md' || rel === 'README.pt-BR.md' || rel === 'ARCHITECTURE.md' || rel === 'CLAUDE.md' || rel === 'AGENTS.md' || rel === 'validation.md' || rel.startsWith('.claude/rules/') || rel.startsWith('docs/') || rel === 'scripts/docs-check.sh')) continue
     const stat = statSync(full)
     if (stat.size > MAX_FILE_BYTES) { files.push({ path: rel, text: '', oversize: true }); continue }
     files.push({ path: rel, text: readFileSync(full, 'utf8') })
@@ -322,6 +344,7 @@ export function run({ root = ROOT } = {}) {
   const files = structuralFiles(root)
   for (const file of files.filter((item) => item.oversize)) findings.push(finding(file.path, 1, 'FILE_LIMIT', 'file-size-limit'))
   findings.push(...scanProvenance(files, readJson(root, 'docs/governance/provenance-allowlist.json'), readJson(root, 'docs/governance/provenance-baseline.json')))
+  findings.push(...validateReadmeHygiene(files))
   const journey = readJson(root, 'docs/governance/journeys/documentation-governance-smoke.json')
   for (const reason of validateJourneyManifest(journey, root)) findings.push(finding('docs/governance/journeys/documentation-governance-smoke.json', 1, 'JOURNEY', reason))
   for (const file of files.filter((item) => item.path.startsWith('docs/postmortems/') && item.path.endsWith('.md'))) for (const reason of validatePostmortemEffectiveness(file.text, file.path)) findings.push(finding(file.path, 1, 'POSTMORTEM', reason))
