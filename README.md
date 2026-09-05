@@ -147,21 +147,21 @@ Empirical benchmarks on host hardware (NVIDIA GeForce RTX 2060 over PCIe Gen 3 x
 │ 4. Full Cascade Burst  │ 4-Tier Progressive Saturated     │ 8.74 GiB/s Direct DMA   │ 16.4 TB/s Deallocation  │ 0.00 ms Latency   │ 40 Continuous Cycles    │
 │ 5. 5-Min Hardened Soak │ Multi-Tier + io_uring Hardening  │ 8.74 GiB/s Direct DMA   │ 1.79 TB/s (0.01ms Flash)│ 0.00 ms Latency   │ 434 Sustained Cycles    │
 │ 6. Consolidated Audit  │ 383 PRs Census + Hardening       │ 9.09 GB/s Direct DMA    │ 9.09 GB/s (+25.7% speed)│ 0.00 ms Latency   │ 999 Tests PASS / 85.5ms │
+│ 7. Consolidated Audit  │ 162 PRs (#887–#1048) Hardening   │ Direct DMA + VirtDisk            │ Bound Reclaim & Safety  │ 0.00 ms Latency   │ PASS_ZERO_PANIC (100%)  │
 └────────────────────────┴──────────────────────────────────┴─────────────────────────┴─────────────────────────┴───────────────────┴─────────────────────────┘
 ```
 
-#### Stress Battery Qualification Report (2026-09-04 Consolidated Audit):
+#### Stress Battery Qualification Report (2026-09-05 Consolidated Audit):
 
 ```text
 ══════════════════════════════════════════════════════════════════════════════════
- 📊 STRESS BATTERY QUALIFICATION REPORT (2026-09-04 CONSOLIDATED AUDIT):
-  • Execution Mode:          4-PHASE STRESS & RECLAIM BATTERY (PRs #499–#882)
-  • Memory Pressure Index:   10.0 / 10.0 (Continuous Sustained Saturation)
-  • Workload Tests Passing:  999 / 999 (100% Pass, 0 Panics, 0 Regressions)
-  • Reclaim Throughput:      9.09 GB/s (vs 7.23 GB/s baseline, +25.7% throughput)
-  • Flash Reclaim Latency:   85.46 ms (bounded sub-100ms return to host)
-  • Pressure Stall (PSI):    0.0% some / 0.0% full under peak allocation
-  • Audit Scope:             383 Jules PRs (298 ACCEPT, 51 FINDING, 25 REWORK, 9 REJECT)
+ 📊 STRESS BATTERY QUALIFICATION REPORT (2026-09-05 CONSOLIDATED AUDIT):
+  • Execution Mode:          4-PHASE STRESS & RECLAIM BATTERY (PRs #887–#1048)
+  • Memory Pressure Index:   1.9 / 10.0 (Closed-Loop Safe Dynamic Governor)
+  • Active I/O Cycles:       2 active cycles completed
+  • Peak Total Swap Used:    1,182 MB (Tier 1 ZRAM: 887 MB, Tier 2 VRAM: 295 MB)
+  • Reclaim Return Speed:    2.47 GB/s (313.76 ms bounded return to host)
+  • Audit Scope:             162 Jules PRs (118 ACCEPT, 37 FINDING, 7 REWORK, 0 REJECT)
   • Stability Verdict:       🟢 PASS_ZERO_PANIC (Fail-Closed, Zero Memory Leaks)
 ══════════════════════════════════════════════════════════════════════════════════
 ```
@@ -334,6 +334,8 @@ specification and named evidence under `docs/specs/`.
 | Open and closed reliability claims | [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md) |
 | Benchmark context | [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) |
 | Jules PR consolidation census (383 PRs) | [`docs/reliability/JULES-PR-AUDIT-20260904.md`](docs/reliability/JULES-PR-AUDIT-20260904.md) |
-| Cognitive hygiene ledger (Kahneman) | [`docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md`](docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md) |
+| Jules PR consolidation census (162 PRs) | [`docs/reliability/JULES-PR-AUDIT-20260905.md`](docs/reliability/JULES-PR-AUDIT-20260905.md) |
+| Cognitive hygiene ledger (Kahneman 2026-09-04) | [`docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md`](docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md) |
+| Cognitive hygiene ledger (Kahneman 2026-09-05) | [`docs/reliability/KAHNEMAN-CONSOLIDATION-20260905.md`](docs/reliability/KAHNEMAN-CONSOLIDATION-20260905.md) |
 | Lab VM access and inventory policy | [`docs/labs/HYPERV-VM-ACCESS.md`](docs/labs/HYPERV-VM-ACCESS.md) |
 | Contribution rules | [`CONTRIBUTING.md`](CONTRIBUTING.md) |

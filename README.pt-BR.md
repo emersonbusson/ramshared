@@ -152,21 +152,21 @@ Métricas reais coletadas no hardware de produção (NVIDIA GeForce RTX 2060 via
 │ 4. Cascata 4 Níveis    │ Matriz de Saturação Completa     │ 8,74 GiB/s DMA Direto   │ 16,4 TB/s Deallocation  │ 0,00 ms Latência  │ 40 Ciclos Contínuos     │
 │ 5. Soak de 5 Minutos   │ Multi-Tier + Endurecimento uring │ 8,74 GiB/s DMA Direto   │ 1,79 TB/s (0,01ms Flash)│ 0,00 ms Latência  │ 434 Ciclos Sustentados  │
 │ 6. Auditoria Consolid. │ Censo 383 PRs + Stress Reclaim   │ 9,09 GB/s DMA Direto    │ 9,09 GB/s (+25,7% veloc)│ 0,00 ms Latência  │ 999 Testes PASS / 85,5ms│
+│ 7. Auditoria Consolid. │ Censo 162 PRs (#887–#1048)       │ DMA Direto + VirtDisk            │ Reclaim Seguro & Limite │ 0,00 ms Latência  │ PASS_ZERO_PANIC (100%)  │
 └────────────────────────┴──────────────────────────────────┴─────────────────────────┴─────────────────────────┴───────────────────┴─────────────────────────┘
 ```
 
-#### Relatório de Qualificação de Bateria de Stress (Auditoria Consolidada 2026-09-04):
+#### Relatório de Qualificação de Bateria de Stress (Auditoria Consolidada 2026-09-05):
 
 ```text
 ══════════════════════════════════════════════════════════════════════════════════
- 📊 RELATÓRIO DE QUALIFICAÇÃO DA BATERIA DE STRESS (CONSOLIDAÇÃO 2026-09-04):
-  • Modo de Execução:        BATERIA DE STRESS E RECUPERAÇÃO EM 4 FASES (#499–#882)
-  • Índice de Pressão:       10.0 / 10.0 (Saturação Contínua Sustentada)
-  • Testes Aprovados:        999 / 999 (100% Aprovados, 0 Panics, 0 Regressões)
-  • Vazão de Reclaim:        9,09 GB/s (vs 7,23 GB/s baseline, +25,7% de ganho)
-  • Latência de Reclaim:     85,46 ms (retorno atômico delimitado ao host)
-  • Stall de Pressão (PSI):  0,0% some / 0,0% full sob alocação de pico
-  • Escopo de Auditoria:     383 PRs Jules (298 ACCEPT, 51 FINDING, 25 REWORK, 9 REJECT)
+ 📊 RELATÓRIO DE QUALIFICAÇÃO DA BATERIA DE STRESS (CONSOLIDAÇÃO 2026-09-05):
+  • Modo de Execução:        BATERIA DE STRESS E RECUPERAÇÃO EM 4 FASES (#887–#1048)
+  • Índice de Pressão:       1.9 / 10.0 (Governador Dinâmico Seguro em Malha Fechada)
+  • Ciclos Ativos de E/S:    2 ciclos completos realizados
+  • Swap Total de Pico:      1.182 MB (Tier 1 ZRAM: 887 MB, Tier 2 VRAM: 295 MB)
+  • Velocidade de Retorno:   2,47 GB/s (313,76 ms retorno delimitado ao host)
+  • Escopo de Auditoria:     162 PRs Jules (118 ACCEPT, 37 FINDING, 7 REWORK, 0 REJECT)
   • Veredito de Estabilidade:🟢 PASS_ZERO_PANIC (Fail-Closed, Zero Vazamentos)
 ══════════════════════════════════════════════════════════════════════════════════
 ```
@@ -339,6 +339,8 @@ nomeadas em `docs/specs/`.
 | Alegações de confiabilidade abertas e fechadas | [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md) |
 | Contexto dos benchmarks | [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) |
 | Censo da consolidação dos PRs Jules (383 PRs) | [`docs/reliability/JULES-PR-AUDIT-20260904.md`](docs/reliability/JULES-PR-AUDIT-20260904.md) |
-| Livro-razão de higiene cognitiva (Kahneman) | [`docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md`](docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md) |
+| Censo da consolidação dos PRs Jules (162 PRs) | [`docs/reliability/JULES-PR-AUDIT-20260905.md`](docs/reliability/JULES-PR-AUDIT-20260905.md) |
+| Livro-razão de higiene cognitiva (Kahneman 2026-09-04) | [`docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md`](docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md) |
+| Livro-razão de higiene cognitiva (Kahneman 2026-09-05) | [`docs/reliability/KAHNEMAN-CONSOLIDATION-20260905.md`](docs/reliability/KAHNEMAN-CONSOLIDATION-20260905.md) |
 | Acesso a VMs de laboratório e política de inventário | [`docs/labs/HYPERV-VM-ACCESS.md`](docs/labs/HYPERV-VM-ACCESS.md) |
 | Regras de contribuição | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
