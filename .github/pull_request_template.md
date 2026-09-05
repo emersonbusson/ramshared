@@ -8,7 +8,11 @@ Sync rule: regra que mudar na governanca deve mudar em >=2 lugares no mesmo comm
 
 ## Resumo
 
-<!-- PT-BR, suficiente para alguem fora da conversa entender o QUE e o PORQUE. -->
+<!--
+Clear, human-readable summary explaining WHAT and WHY directly.
+When touching performance, memory, or stress benchmarks, include a self-contained side-by-side hardware comparison table
+(Previous vs Current with physical hardware delta). Prohibited: internal methodology buzzwords or external links to raw JSON files.
+-->
 
 ## Commits
 

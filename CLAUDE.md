@@ -16,7 +16,7 @@ Before changing code:
 2. For kernel modules (LKM), HMM, Rust for Linux, and CXL, read [`.claude/rules/kernel.md`](.claude/rules/kernel.md).
 3. If structural changes, lock manipulation, chronic allocation, or new hardware is involved, follow the **SSDV3** methodology ([`.claude/rules/ssdv3.md`](.claude/rules/ssdv3.md) and [`docs/SSDV3-PROMPTS.md`](docs/SSDV3-PROMPTS.md)).
 4. Follow [`.claude/rules/coding.md`](.claude/rules/coding.md) for formatting, checkpatch, and tests.
-5. In Pull Requests, follow the commit table format defined in [`.claude/rules/governance.md`](.claude/rules/governance.md).
+5. In Pull Requests, follow the commit table format defined in [`.claude/rules/governance.md`](.claude/rules/governance.md). For benchmark/stress changes, include a self-contained hardware comparison table; do not use internal methodology buzzwords or external links to raw JSON files.
 6. For benchmarks/measurements backing decisions, follow [`.claude/rules/benchmarks.md`](.claude/rules/benchmarks.md) (auto context + ≥3 rounds + append-only log in [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md)).
 
 ## Core Methodologies

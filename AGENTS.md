@@ -41,6 +41,7 @@ The source of truth for architecture and coding rules is:
 
 Conventional Commits in **English**, imperative title, ≤72 chars. Body in **English**.
 Non-trivial commits (locks, DMA, or atomic allocation) **MUST** include `Rollback trigger: ...` in the body.
+PR descriptions must be clean, human-explanatory, and include self-contained hardware metrics comparison tables for performance changes, without internal methodology buzzwords (e.g. "cognitive hygiene", "Kahneman") or external links to raw JSON files.
 
 ## Methodologies (SSDV3 and Kahneman)
 

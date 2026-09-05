@@ -23,6 +23,7 @@ Every PR uses `.github/pull_request_template.md`. Mandatory sections:
 5. `## Labels` — at least one `type:*` and one `area:*` (e.g.: `area:mm`, `area:drm`).
 6. `## Validation` — checklist with relevant gates (`checkpatch.pl`, `make modules`, `dmesg` clean of OOPs, `kselftest`).
 7. `## Rollback trigger` — numerical/observable condition that justifies reverting the kernel patch (e.g.: stall > 1ms, kernel panic).
+8. **Empirical Hardware Evidence Table** — For PRs touching performance, memory management, or stress benchmarks, provide a self-contained side-by-side comparison table (Previous vs Current with physical hardware delta). All evidence must be directly readable and humanly explained in the PR body. Do NOT point reviewers to raw JSON telemetry files or external links for core performance claims. Do NOT use internal methodology buzzwords (e.g. "cognitive hygiene", "Kahneman disciplines") in the PR description or README.
 
 ## Commit visibility rule
 
@@ -61,3 +62,5 @@ CI / scripts / lab harnesses are **not** SSDV3 by default (see `ssdv3.md` § Out
 - ❌ PR without assignee shared with the issue.
 - ❌ Rollback trigger in the form of "if it goes wrong, revert" — needs a numerical/observable window in the Kernel.
 - ❌ Changing `CLAUDE.md` without synchronizing `AGENTS.md` in the same commit.
+- ❌ Putting internal methodology buzzwords ("cognitive hygiene", "Kahneman disciplines") in PR bodies or READMEs; present observable hardware metrics directly.
+- ❌ Directing reviewers to raw JSON files or external pages for core performance/stress claims instead of self-contained explanatory tables.
