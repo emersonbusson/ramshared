@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 290,
-    "classified": 279,
+    "total": 291,
+    "classified": 280,
     "excluded": 11,
     "unclassified": 0,
     "ambiguous": 0
@@ -1225,6 +1225,18 @@
     },
     {
       "path": "docs/reliability/HANG-FREEZE-AUDIT-2026-07-13.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/reliability/HARDWARE-METRICS-TRIAGE.md",
       "disposition": "classified",
       "ruleId": "reliability-documents",
       "verification": {

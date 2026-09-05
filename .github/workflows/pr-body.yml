@@ -40,8 +40,65 @@ jobs:
 
             if (missing.length > 0) {
               core.setFailed(`PR description is missing required sections: ${missing.join(', ')}. Please check .github/pull_request_template.md.`);
-            } else {
-              core.info('All required PR description sections are present.');
+            }
+
+            // Forbidden internal methodology buzzwords
+            const buzzwords = [/\bcognitive\s+hygiene\b/i, /\bhigiene\s+cognitiva\b/i, /\bkahneman\b/i];
+            for (const pattern of buzzwords) {
+              if (pattern.test(body)) {
+                core.setFailed(`PR description contains forbidden internal methodology buzzword matching ${pattern}.`);
+              }
+            }
+
+            // Forbidden raw JSON benchmark links
+            const jsonLinks = [
+              /\[[^\]]*benchmark-[^\]]*\.json[^\]]*\]/i,
+              /\([^)]*benchmark-[^)]*\.json[^)]*\)/i,
+              /\[[^\]]*latest\.json[^\]]*\]/i,
+              /\([^)]*latest\.json[^)]*\)/i,
+            ];
+            for (const pattern of jsonLinks) {
+              if (pattern.test(body)) {
+                core.setFailed(`PR description contains forbidden raw JSON benchmark link matching ${pattern}. Keep hardware evidence self-contained.`);
+              }
+            }
+
+            // Empirical hardware evidence table validation
+            const hasHardwareTable = 
+              body.includes('Evolução Comparativa de Hardware') ||
+              body.includes('Category / Metric') ||
+              body.includes('Hardware Benchmark Comparison') ||
+              body.includes('Dimensão / Parâmetro');
+
+            const isPerfRelated = 
+              /\barea:mm\b/i.test(body) ||
+              /\btype:perf\b/i.test(body) ||
+              /\b(benchmark|stress|reclaim throughput|page-fault latency)\b/i.test(body);
+
+            if (isPerfRelated && !hasHardwareTable) {
+              core.setFailed('Missing required Hardware Benchmark Comparison table (PR touches performance, memory, or benchmarks).');
+            }
+
+            if (hasHardwareTable) {
+              if (!(/zram/i.test(body) && /vram/i.test(body) && /ssd/i.test(body))) {
+                core.setFailed('Hardware table missing multi-tier memory breakdown (ZRAM, VRAM, SSD).');
+              }
+              if (!(/reclaim/i.test(body) || /libera[çc][ãa]o/i.test(body))) {
+                core.setFailed('Hardware table missing reclaim bandwidth/latency metric.');
+              }
+              if (!(/psi/i.test(body) || /press[ãa]o/i.test(body))) {
+                core.setFailed('Hardware table missing PSI memory pressure metric.');
+              }
+              if (!/PASS_ZERO_PANIC/i.test(body)) {
+                core.setFailed('Hardware table missing mandatory stability verdict: PASS_ZERO_PANIC.');
+              }
+              if (body.includes('🔴 ALARM') && !/\[alarm-waiver-justified:[^\]]+\]/i.test(body)) {
+                core.setFailed('Hardware table contains 🔴 ALARM regressions. Fix root-cause per docs/reliability/HARDWARE-METRICS-TRIAGE.md or add [alarm-waiver-justified: <reason>].');
+              }
+            }
+
+            if (missing.length === 0) {
+              core.info('All required PR description checks and hardware standards passed.');
             }
 
   pr-body-summary:
