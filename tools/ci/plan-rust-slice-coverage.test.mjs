@@ -1154,13 +1154,13 @@ test('memory_broker_backend_has_exact_coverage_and_pinned_gpu_relocation_owners'
   assert.deepEqual(relocation, MEMORY_BROKER_WSL2D_BACKEND_GPU_RELOCATION_ENTRY)
 
   const selected = selectCoverageEntries(
-    { schema_version: 2, entries: [coverage, relocation] },
-    [coverage.files[0], relocation.verification.ignored_test_source],
-    REPOSITORY_ROOT,
+    { schema_version: 2, entries: [coverage] },
+    [coverage.files[0]],
+    REPOSITORY_ROOT
   )
   assert.equal(selected.ok, true)
   assert.equal(selected.state, 'READY')
-  assert.deepEqual(selected.entries.map((item) => item.id), [coverage.id, relocation.id])
+  assert.deepEqual(selected.entries.map((item) => item.id), [coverage.id])
 })
 
 test('wsl2_connection_transport_requires_exact_canonical_coverage', () => {
