@@ -31,6 +31,11 @@ int ramshared_dma_init(struct ramshared_device *rs_dev, struct pci_dev *pdev)
 	rs_dev->dma.pci_addr = bar_start;
 	rs_dev->dma.size = min_t(size_t, bar_len, rs_dev->capacity_bytes);
 
+	if (!IS_ALIGNED(rs_dev->dma.pci_addr, PAGE_SIZE)) {
+		dev_err(&pdev->dev, "PCIe BAR0 address not %lu-byte aligned\n", PAGE_SIZE);
+		return -EINVAL;
+	}
+
 	/* Map PCIe VRAM BAR using Write-Combining for peak throughput */
 	rs_dev->dma.cpu_addr = devm_ioremap_wc(&pdev->dev, rs_dev->dma.pci_addr,
 					       rs_dev->dma.size);
@@ -51,6 +56,8 @@ void ramshared_dma_cleanup(struct ramshared_device *rs_dev)
 	if (!rs_dev)
 		return;
 
-	rs_dev->dma.cpu_addr = NULL;
-	rs_dev->dma.size = 0;
+	if (rs_dev->dma.cpu_addr) {
+		rs_dev->dma.cpu_addr = NULL;
+		rs_dev->dma.size = 0;
+	}
 }

@@ -114,10 +114,11 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 	irpSp = IoGetCurrentIrpStackLocation(Irp);
 	code = irpSp->Parameters.DeviceIoControl.IoControlCode;
 	inLen = irpSp->Parameters.DeviceIoControl.InputBufferLength;
+	ULONG outLen = irpSp->Parameters.DeviceIoControl.OutputBufferLength;
 	buf = Irp->AssociatedIrp.SystemBuffer;
 
 	/* Cap maximum admin IOCTL payload length at 4 MiB to prevent kernel pool exhaustion */
-	if (inLen > 4 * 1024 * 1024) {
+	if (inLen > 4 * 1024 * 1024 || outLen > 4 * 1024 * 1024) {
 		Irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
 		Irp->IoStatus.Information = 0;
 		IoCompleteRequest(Irp, IO_NO_INCREMENT);
