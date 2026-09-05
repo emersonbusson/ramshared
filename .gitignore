@@ -26,6 +26,9 @@ MEMORY.md
 *.secrets
 *.local-secret
 
+# Local operator drafts, marketing copy, and machine scratchpads
+/local/
+
 # IDEs e Editores
 .vscode/
 .idea/

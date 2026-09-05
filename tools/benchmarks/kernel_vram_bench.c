@@ -60,13 +60,12 @@ int main(int argc, char **argv) {
 	void *read_pinned = NULL;
 	uint64_t dev_ptr = 0;
 
-	if (argc > 1) {
-		int val = atoi(argv[1]);
-		if (val <= 0 || val > 4096) {
-			fprintf(stderr, "[-] Error: Invalid chunk_mib size (must be 1-4096).\n");
-			return -EINVAL;
-		}
-		chunk_mib = val;
+	if (argc > 1)
+		chunk_mib = atoi(argv[1]);
+
+	if (chunk_mib <= 0 || chunk_mib > 4096) {
+		fprintf(stderr, "[-] Error: Invalid chunk_mib size (must be 1-4096).\n");
+		return -EINVAL;
 	}
 	size_t chunk_bytes = MIB_TO_BYTES(chunk_mib);
 
@@ -140,6 +139,17 @@ int main(int argc, char **argv) {
 	printf("[+] GPU Memory: %zu MiB free / %zu MiB total\n",
 	       free_b / (1024 * 1024), total_b / (1024 * 1024));
 
+	if (chunk_bytes > free_b) {
+		chunk_bytes = free_b & ~((size_t)4095);
+		chunk_mib = (int)(chunk_bytes / (1024 * 1024));
+		printf("[!] Clamping benchmark buffer to %zu bytes (%d MiB) to avoid OOM.\n", chunk_bytes, chunk_mib);
+		if (chunk_bytes == 0) {
+			fprintf(stderr, "[-] Error: Insufficient free VRAM.\n");
+			ret = -ENOMEM;
+			goto out_ctx;
+		}
+	}
+
 	// Allocate Pinned Host Memory
 	if (cuMemHostAlloc(&host_pinned, chunk_bytes, 0) != 0) {
 		fprintf(stderr, "[-] Error: cuMemHostAlloc failed (%d MiB).\n", chunk_mib);
@@ -198,7 +208,16 @@ int main(int argc, char **argv) {
 	       d2h_speed, d2h_speed / 1024.0, t1 - t0);
 
 	// 3. Bit-by-bit Verification
-	int match = (memcmp(host_pinned, read_pinned, chunk_bytes) == 0);
+	int match = 1;
+	uint32_t *rp_ptr32 = (uint32_t *)read_pinned;
+	for (size_t i = 0; i < num_words; i++) {
+		if (rp_ptr32[i] != hp_ptr32[i]) {
+			fprintf(stderr, "[-] Corruption detected at byte offset 0x%zx: expected 0x%08x, got 0x%08x\n",
+				i * sizeof(uint32_t), hp_ptr32[i], rp_ptr32[i]);
+			match = 0;
+			break;
+		}
+	}
 	printf("\n[+] Data Integrity Proof: %s\n",
 	       match ? "PASS (100% Bit-Exact Match, Zero Corruption)" : "FAIL");
 

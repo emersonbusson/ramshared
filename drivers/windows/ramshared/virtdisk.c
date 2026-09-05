@@ -619,7 +619,7 @@ VdTranslateSrb(
 			len = Srb->DataTransferLength;
 
 			if (!VdCheckLbaBounds(Disk, lba, len, &offset)) {
-				Srb->SrbStatus = SRB_STATUS_INVALID_REQUEST;
+				Srb->SrbStatus = (UCHAR)(SRB_STATUS_ERROR | SRB_STATUS_AUTOSENSE_VALID);
 				Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
 				if (Srb->SenseInfoBuffer && Srb->SenseInfoBufferLength >= 18) {
 					UCHAR *sense = (UCHAR *)Srb->SenseInfoBuffer;

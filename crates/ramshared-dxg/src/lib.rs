@@ -90,6 +90,7 @@ pub enum DxgError {
     AdapterNotFound(AdapterLuid),
     TooManyAdapters(u32),
     Malformed(&'static str),
+    BadAddress,
 }
 
 impl fmt::Display for DxgError {
@@ -99,6 +100,7 @@ impl fmt::Display for DxgError {
             Self::Io(message) => write!(f, "dxg ioctl failed: {message}"),
             Self::DeviceNotFound => write!(f, "dxg device not found"),
             Self::UnsupportedHardware => write!(f, "dxg unsupported hardware"),
+            Self::BadAddress => write!(f, "dxg bad memory address"),
             Self::BufferOverflow => write!(f, "dxg buffer overflow"),
             Self::PermissionDenied => write!(f, "dxg permission denied"),
             Self::NoAdapters => write!(f, "dxg returned no adapters"),
@@ -118,6 +120,7 @@ impl DxgError {
     pub fn from_sys_error(error: std::io::Error) -> Self {
         match error.raw_os_error() {
             Some(libc::ENODEV) => Self::DeviceNotFound,
+            Some(libc::EFAULT) => Self::BadAddress,
             Some(libc::ENOTTY) => Self::UnsupportedHardware,
             Some(libc::EOVERFLOW) => Self::BufferOverflow,
             Some(libc::EPERM) | Some(libc::EACCES) => Self::PermissionDenied,
@@ -394,6 +397,10 @@ mod tests {
             super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(1)),
             super::DxgError::PermissionDenied
         );
+        assert_eq!(
+            super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(14)),
+            super::DxgError::BadAddress
+        );
         let unknown = super::DxgError::from_sys_error(std::io::Error::from_raw_os_error(9999));
         assert!(matches!(unknown, super::DxgError::Io(_)));
     }
@@ -417,6 +424,7 @@ mod tests {
             super::DxgError::UnsupportedHardware,
             super::DxgError::BufferOverflow,
             super::DxgError::PermissionDenied,
+            super::DxgError::BadAddress,
         ];
         for error in cases {
             assert!(!error.to_string().is_empty());

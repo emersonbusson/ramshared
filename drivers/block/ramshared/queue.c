@@ -21,7 +21,27 @@ static blk_status_t ramshared_process_bio(struct ramshared_device *rs_dev,
 	struct bio_vec bvec;
 	struct bvec_iter iter;
 	unsigned int op = bio_op(bio);
-	void __iomem *vram_ptr = rs_dev->dma.cpu_addr + pos;
+	void __iomem *vram_ptr;
+
+	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
+		     !IS_ALIGNED(bio->bi_iter.bi_size, RAMSHARED_SECTOR_SIZE))) {
+		dev_err_ratelimited(rs_dev->dev,
+				    "Unaligned bio: pos=%lld, len=%u\n",
+				    pos, bio->bi_iter.bi_size);
+		return BLK_STS_IOERR;
+	}
+
+	if (unlikely(pos > rs_dev->dma.size ||
+		     bio->bi_iter.bi_size > rs_dev->dma.size - pos ||
+		     pos + bio->bi_iter.bi_size > rs_dev->capacity_bytes)) {
+		dev_err_ratelimited(rs_dev->dev,
+				    "Bio bounds violation: pos=%lld, len=%u, cap=%llu\n",
+				    pos, bio->bi_iter.bi_size,
+				    rs_dev->capacity_bytes);
+		return BLK_STS_IOERR;
+	}
+
+	vram_ptr = rs_dev->dma.cpu_addr + pos;
 
 	bio_for_each_segment(bvec, bio, iter) {
 		void *src_or_dst = bvec_kmap_local(&bvec);
@@ -61,12 +81,21 @@ static blk_status_t ramshared_queue_rq(struct blk_mq_hw_ctx *hctx,
 	if (unlikely(check_shl_overflow((loff_t)blk_rq_pos(rq), RAMSHARED_SECTOR_SHIFT, &pos)))
 		return BLK_STS_IOERR;
 
+	if (unlikely(!IS_ALIGNED(pos, RAMSHARED_SECTOR_SIZE) ||
+		     !IS_ALIGNED(len, RAMSHARED_SECTOR_SIZE))) {
+		dev_err_ratelimited(rs_dev->dev,
+				    "Unaligned I/O request: pos=%lld, len=%zu\n",
+				    pos, len);
+		return BLK_STS_IOERR;
+	}
+
 	if (unlikely(pos > rs_dev->dma.size ||
 		     len > rs_dev->dma.size - pos ||
 		     pos + len > rs_dev->capacity_bytes)) {
 		dev_err_ratelimited(rs_dev->dev,
-			"I/O bounds violation: pos=%lld, len=%zu, cap=%llu, mapped=%zu\n",
-			pos, len, rs_dev->capacity_bytes, rs_dev->dma.size);
+				    "I/O bounds violation: pos=%lld, len=%zu, cap=%llu, mapped=%zu\n",
+				    pos, len, rs_dev->capacity_bytes,
+				    rs_dev->dma.size);
 		return BLK_STS_IOERR;
 	}
 
@@ -164,7 +193,7 @@ static ssize_t capacity_bytes_show(struct device *dev,
 static DEVICE_ATTR_RO(capacity_bytes);
 
 static ssize_t read_bytes_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
+			       struct device_attribute *attr, char *buf)
 {
 	struct gendisk *disk = dev_to_disk(dev);
 	struct ramshared_device *rs_dev = disk->private_data;
@@ -174,7 +203,7 @@ static ssize_t read_bytes_show(struct device *dev,
 static DEVICE_ATTR_RO(read_bytes);
 
 static ssize_t write_bytes_show(struct device *dev,
-				 struct device_attribute *attr, char *buf)
+				struct device_attribute *attr, char *buf)
 {
 	struct gendisk *disk = dev_to_disk(dev);
 	struct ramshared_device *rs_dev = disk->private_data;
@@ -207,10 +236,10 @@ int ramshared_queue_init(struct ramshared_device *rs_dev,
 	unsigned int valid_depth;
 	int ret;
 
-	if (!rs_dev)
+	if (!rs_dev || !parent_dev)
 		return -EINVAL;
 
-	valid_depth = clamp_t(unsigned int, q_depth, 16U, 2048U);
+	valid_depth = clamp_t(unsigned int, q_depth, 16U, 1024U);
 
 	memset(&rs_dev->tag_set, 0, sizeof(rs_dev->tag_set));
 	rs_dev->tag_set.ops = &ramshared_mq_ops;

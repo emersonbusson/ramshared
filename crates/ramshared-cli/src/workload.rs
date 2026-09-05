@@ -1372,9 +1372,10 @@ fn parse_scope_status(unit: &str, output: &str) -> Result<ScopeStatus, String> {
             "ExecMainStatus" => &mut exec_main_status,
             _ => return Err(format!("unexpected exact scope status field {name}")),
         };
-        if slot.replace(value.to_string()).is_some() {
+        if slot.is_some() {
             return Err(format!("duplicate exact scope status field {name}"));
         }
+        *slot = Some(value.to_string());
     }
     let id = id.ok_or("exact scope status omitted Id")?;
     if id != unit {

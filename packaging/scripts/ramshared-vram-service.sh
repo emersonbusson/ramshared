@@ -125,8 +125,8 @@ start_tier() {
         done
         
         if kill -0 "$daemon_pid" 2>/dev/null && [[ -S "$SOCK_PATH" ]]; then
-            echo "[+] Connecting $NBD_DEV to VRAM daemon (with 10s timeout protection)..."
-            nbd-client -timeout 10 -unix "$SOCK_PATH" "$NBD_DEV" >/dev/null 2>&1 || true
+            echo "[+] Connecting $NBD_DEV to VRAM daemon (with swap immunity & zero-timeout protection)..."
+            nbd-client -swap -timeout 0 -unix "$SOCK_PATH" "$NBD_DEV" >/dev/null 2>&1 || true
             sleep 1
             if [[ -b "$NBD_DEV" ]]; then
                 mkswap -f "$NBD_DEV" >/dev/null 2>&1 || true
