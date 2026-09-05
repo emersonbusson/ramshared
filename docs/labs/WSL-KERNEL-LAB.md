@@ -80,4 +80,4 @@ sudo sh -c 'echo ":WSLInterop:M::MZ::/init:PF" > /proc/sys/fs/binfmt_misc/regist
 | `RamShared-Kernel` (this doc) | Host WSL2 same GPU-PV / same kernel binary path as product |
 | Hyper-V `linux-kernel-lab` on R: | Isolated VM build/break when you need full VM isolation |
 
-Both keep artifacts **off C:**. See `LAB-DISK-GUARD.md` and `PARALLEL-WINDOWS-AND-CUSTOM-KERNEL.md`.
+Both keep artifacts **off C:**. See `LAB-DISK-GUARD.md`.

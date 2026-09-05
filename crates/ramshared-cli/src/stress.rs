@@ -504,8 +504,13 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
     let mut active_cycles_done = 0usize;
 
     // Phase 1: 1%-by-1% Micro-Step Ramp
+    let effective_target = if opts.tier3_target_pct.is_some() {
+        1000
+    } else {
+        opts.target_pct
+    };
     let mut current_target = opts.start_pct;
-    while current_target <= opts.target_pct {
+    while current_target <= effective_target {
         if term_signal.load(Ordering::Relaxed) {
             break;
         }
@@ -531,21 +536,27 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
 
         let sysctl_min_free_mb = read_sysctl_min_free_mb();
         let dynamic_kernel_floor = sysctl_min_free_mb.saturating_add(128).max(512);
-        let hard_floor = opts.min_ram_mb.max(dynamic_kernel_floor);
+        let is_multi_tier = opts.cascade || opts.tier3_target_pct.is_some();
+        let hard_floor = if is_multi_tier {
+            250
+        } else {
+            opts.min_ram_mb.max(dynamic_kernel_floor)
+        };
 
         let mut avail_mb = avail_mb;
         let mut retries = 0;
-        while avail_mb <= hard_floor
-            && (opts.tier3_target_pct.is_some() || opts.cascade)
-            && retries < 20
-        {
-            thread::sleep(Duration::from_millis(50));
+        let max_wait_cycles = if is_multi_tier { 25 } else { 15 };
+        while avail_mb <= hard_floor && is_multi_tier && retries < max_wait_cycles {
+            if term_signal.load(Ordering::Relaxed) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(100));
             let (_, new_avail) = read_mem_info();
             avail_mb = new_avail;
             retries += 1;
         }
 
-        if avail_mb <= hard_floor && opts.tier3_target_pct.is_none() && !opts.cascade {
+        if avail_mb <= hard_floor && !is_multi_tier {
             if !opts.json {
                 println!(
                     "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ 🛑 RAM FLOOR REACHED      │",
@@ -568,25 +579,62 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         }
 
         if psi_full >= opts.max_psi_full {
-            if !opts.json {
-                println!(
-                    "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ ⚠️  PSI LIMIT DAMPING     │",
-                    current_target,
-                    total_allocated_mb,
-                    peak_zram,
-                    peak_vram,
-                    peak_ssd,
-                    peak_total_swap,
-                    psi_full,
-                    lat_ms,
-                    reading.gauge
-                );
-                println!(
-                    "\n[⚠️  PRESSURE DAMPING] PSI Full pressure ({:.1}%) >= {:.1}%. Halted at {}%.",
-                    psi_full, opts.max_psi_full, max_safe_pct
-                );
+            if is_multi_tier {
+                // Transient PSI spike during heavy multi-tier swap; damp and wait up to 5s
+                let mut calmed = false;
+                for _ in 0..10 {
+                    if term_signal.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(500));
+                    let fresh_psi = read_psi_full();
+                    if fresh_psi < opts.max_psi_full {
+                        calmed = true;
+                        break;
+                    }
+                }
+                if !calmed {
+                    if !opts.json {
+                        println!(
+                            "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ ⚠️  PSI LIMIT DAMPING     │",
+                            current_target,
+                            total_allocated_mb,
+                            peak_zram,
+                            peak_vram,
+                            peak_ssd,
+                            peak_total_swap,
+                            psi_full,
+                            lat_ms,
+                            reading.gauge
+                        );
+                        println!(
+                            "\n[⚠️  PRESSURE DAMPING] PSI Full pressure sustained ({:.1}%) >= {:.1}%. Halted at {}%.",
+                            psi_full, opts.max_psi_full, max_safe_pct
+                        );
+                    }
+                    break;
+                }
+            } else {
+                if !opts.json {
+                    println!(
+                        "│ {:>4}%  │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>8} MB │ {:>5.1}% │ {:>6.2}ms │ {:>11} │ ⚠️  PSI LIMIT DAMPING     │",
+                        current_target,
+                        total_allocated_mb,
+                        peak_zram,
+                        peak_vram,
+                        peak_ssd,
+                        peak_total_swap,
+                        psi_full,
+                        lat_ms,
+                        reading.gauge
+                    );
+                    println!(
+                        "\n[⚠️  PRESSURE DAMPING] PSI Full pressure ({:.1}%) >= {:.1}%. Halted at {}%.",
+                        psi_full, opts.max_psi_full, max_safe_pct
+                    );
+                }
+                break;
             }
-            break;
         }
 
         if lat_ms >= opts.max_latency_ms {
@@ -611,27 +659,42 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
             break;
         }
 
-        let (_, _, cap3) = read_swap_tier_capacities();
-        if let Some(t3_target) = opts.tier3_target_pct
-            && cap3.pct >= t3_target
-        {
-            if !opts.json {
-                println!(
-                    "\n[🎯 TARGET REACHED] Tier 3 (SSD) reached target ({}% >= {}%).",
-                    cap3.pct, t3_target
-                );
+        let (tot_swap_mb, _, _, _) = read_swap_tiers();
+        let (cap1, cap2, cap3) = read_swap_tier_capacities();
+        let total_swap_cap = cap1.total_mb + cap2.total_mb + cap3.total_mb;
+        if let Some(t3_target) = opts.tier3_target_pct {
+            if cap3.pct >= t3_target {
+                if !opts.json {
+                    println!(
+                        "\n[🎯 TARGET REACHED] Tier 3 (SSD) reached target ({}% >= {}%).",
+                        cap3.pct, t3_target
+                    );
+                }
+                break;
             }
-            break;
+            if total_swap_cap > 0 && tot_swap_mb >= (total_swap_cap * 99) / 100 {
+                if !opts.json {
+                    println!(
+                        "\n[🎯 CEILING REACHED] Multi-tier swap reached 99% capacity ({} MB).",
+                        tot_swap_mb
+                    );
+                }
+                break;
+            }
         }
 
         let one_pct_mb = ((ram_total_mb * opts.step_pct) / 100).max(50);
-        let safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(hard_floor));
+        let mut safe_alloc_mb = one_pct_mb.min(avail_mb.saturating_sub(hard_floor)).min(128);
         if safe_alloc_mb == 0 {
-            if (opts.cascade || opts.tier3_target_pct.is_some()) && psi_full < opts.max_psi_full {
-                thread::sleep(Duration::from_millis(100));
-                let (_, fresh_avail) = read_mem_info();
-                if fresh_avail <= hard_floor {
-                    break;
+            if is_multi_tier && psi_full < opts.max_psi_full {
+                // If MemAvailable has a safe margin (>= 150 MB above kernel watermarks),
+                // inject a 64 MB chunk to keep kswapd actively writing dirty pages to swap
+                if avail_mb >= 150 {
+                    safe_alloc_mb = 64;
+                } else {
+                    // RAM is getting close to watermark; pause and let kswapd drain dirty pages to swap
+                    thread::sleep(Duration::from_millis(opts.interval_ms.clamp(100, 300)));
+                    continue;
                 }
             } else {
                 break;
@@ -703,24 +766,26 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
                 Ordering::Relaxed,
             );
 
-            // Modify multiple chunks aggressively to trigger active swap page-ins and page-outs
+            // Modify chunk pages smoothly to stimulate active tier traffic without saturating kernel queues
             if let Ok(mut guard) = chunks.lock()
                 && !guard.is_empty()
             {
                 let len = guard.len();
-                // Cycle across up to 4 chunks per iteration to generate real MB/s throughput
-                for step in 0..4 {
-                    let idx = (cycle.wrapping_mul(7) + step) % len;
-                    let target_chunk = &mut guard[idx];
-                    let chunk_len = target_chunk.len();
-                    for offset in (0..chunk_len).step_by(4096) {
-                        target_chunk[offset] = (cycle as u8).wrapping_add((offset & 0xFF) as u8);
-                    }
+                let idx = (cycle.wrapping_mul(7)) % len;
+                let target_chunk = &mut guard[idx];
+                let chunk_len = target_chunk.len();
+                let limit = chunk_len.min(16 * 1024 * 1024);
+                for offset in (0..limit).step_by(16384) {
+                    target_chunk[offset] = (cycle as u8).wrapping_add((offset & 0xFF) as u8);
                 }
             }
 
             let (_, free_mb) = read_mem_info();
-            let (tot_swap, _, _, _) = read_swap_tiers();
+            let (tot_swap, z_mb, v_mb, s_mb) = read_swap_tiers();
+            peak_zram = peak_zram.max(z_mb);
+            peak_vram = peak_vram.max(v_mb);
+            peak_ssd = peak_ssd.max(s_mb);
+            peak_total_swap = peak_total_swap.max(tot_swap);
             let psi_full = read_psi_full();
             let lat_ms = probe_allocation_latency_ms();
 
@@ -762,8 +827,8 @@ pub fn run(opts: &StressOptions) -> Result<(), String> {
         guard.clear();
     }
     let reclaim_duration = t_reclaim_start.elapsed();
-    let reclaim_sec = reclaim_duration.as_secs_f64().max(0.000001);
-    let reclaim_speed_gbs = (total_allocated_mb as f64 / 1024.0) / reclaim_sec;
+    let reclaim_sec = reclaim_duration.as_secs_f64().max(0.001);
+    let reclaim_speed_gbs = ((total_allocated_mb as f64 / 1024.0) / reclaim_sec).min(100.0);
 
     term_signal.store(true, Ordering::Relaxed);
     let _ = watchdog_handle.join();

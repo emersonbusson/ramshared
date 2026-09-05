@@ -39,12 +39,17 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	if (capacity_mb == 0 || capacity_mb > (1UL << 20)) {
 		dev_err(&pdev->dev, "invalid capacity_mb parameter: %lu\n",
 			capacity_mb);
-		return -EINVAL;
+		return -ERANGE;
 	}
 
-	if (queue_depth < 1 || queue_depth > 4096) {
-		dev_warn(&pdev->dev, "clamping queue_depth (%lu) to default (256)\n", queue_depth);
-		queue_depth = 256;
+	if (queue_depth < 16 || queue_depth > 1024) {
+		dev_warn(&pdev->dev,
+			 "clamping queue_depth (%lu) to bounds [16, 1024]\n",
+			 queue_depth);
+		if (queue_depth < 16)
+			queue_depth = 16;
+		else
+			queue_depth = 1024;
 	}
 
 	rs_dev = devm_kzalloc(&pdev->dev, sizeof(*rs_dev), GFP_KERNEL);
@@ -52,7 +57,10 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 		return -ENOMEM;
 
 	rs_dev->dev = &pdev->dev;
-	rs_dev->capacity_bytes = (u64)capacity_mb * 1024 * 1024;
+	if (check_mul_overflow((u64)capacity_mb, 1024ULL * 1024ULL, &rs_dev->capacity_bytes)) {
+		dev_err(&pdev->dev, "capacity_bytes integer overflow\n");
+		return -EOVERFLOW;
+	}
 	mutex_init(&rs_dev->lock);
 	atomic64_set(&rs_dev->dma_transfers_total, 0);
 	atomic64_set(&rs_dev->read_bytes, 0);
@@ -61,7 +69,7 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	ret = pci_enable_device_mem(pdev);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to enable PCIe memory device\n");
-		return ret;
+		return -ENODEV;
 	}
 
 	pci_set_master(pdev);
@@ -79,6 +87,7 @@ static int ramshared_pci_probe(struct pci_dev *pdev,
 	ret = pci_request_mem_regions(pdev, RAMSHARED_DRIVER_NAME);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to claim PCIe memory regions\n");
+		ret = -EBUSY;
 		goto err_clear_master;
 	}
 

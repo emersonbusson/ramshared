@@ -105,7 +105,8 @@ PoolstressDispatch(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 			bytes = (SIZE_T)in->NGb << 30;
 			g_Pool = ExAllocatePool2(POOL_FLAG_PAGED, bytes, 'ssPR');
 			if (!g_Pool) {
-				status = STATUS_INSUFFICIENT_RESOURCES;
+				DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL, "Poolstress: STATUS_NO_MEMORY - Exhausted allocating %Iu bytes (%lu GB)\n", bytes, in->NGb);
+				status = STATUS_NO_MEMORY;
 				goto out_unlock;
 			}
 			g_PoolSize = bytes;
