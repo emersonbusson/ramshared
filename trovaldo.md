@@ -112,4 +112,6 @@ EVD-0039: Hardware PCIe DMA & Native ublk/io_uring Qualification
 | 2026-09-04 | LKML v2 Patchset | Generated hardened RFC v2 patch series with checked arithmetic, BAR0 bounds checking, and `pci_clear_master` unwinding | RFC v2 / `artifacts/lkml-patchset/` |
 | 2026-09-05 | Kernel Hardening | Consolidated checked 64-bit capacity multiplication (`check_mul_overflow`), `PAGE_SIZE` PCIe BAR0 alignment, [16, 1024] queue depth clamping, bio sector bounds checks, and semantic errnos (`-ERANGE`, `-EBUSY`) | PR #1049 / `drivers/block/ramshared/` |
 | 2026-09-05 | WSL2 Kernel Fork Sync | Synchronized capacity, BAR0 alignment, queue depth [16..1024], and bio bounds hardening to `WSL2-Linux-Kernel` fork (`feature/ramshared-driver-6.18`), validated 0 errors 0 warnings 0 checks via strict checkpatch | Commit `5b95fb1cf` / `drivers/block/ramshared/` |
+| 2026-09-05 | In-Tree Driver Docs | Authored comprehensive `drivers/block/ramshared/README.md` and qualified WSL2 2.7.13.0 with NVIDIA driver 615.65.07 (CUDA 13.4, KMD 616.64) | `drivers/block/ramshared/README.md` |
+
 

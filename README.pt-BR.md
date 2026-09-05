@@ -139,7 +139,7 @@ Quando o Windows, jogos ou aplicações 3D solicitam memória na GPU, o RamShare
 
 ### Desempenho Medido & Evolução da Arquitetura
 
-Métricas reais coletadas no hardware de produção (NVIDIA GeForce RTX 2060 via PCIe Gen 3 x16, SSD Samsung 850 EVO de origem, WSL2 `Linux 6.18.35.2`):
+Métricas reais coletadas no hardware de produção (NVIDIA GeForce RTX 2060 via PCIe Gen 3 x16, Driver 615.65.07, CUDA 13.4, SSD Samsung 850 EVO de origem, WSL2 2.7.13.0, Linux 6.18.35.2):
 
 ```text
 ┌────────────────────────┬──────────────────────────────────┬─────────────────────────┬─────────────────────────┬───────────────────┬─────────────────────────┐
@@ -158,10 +158,10 @@ Métricas reais coletadas no hardware de produção (NVIDIA GeForce RTX 2060 via
 ══════════════════════════════════════════════════════════════════════════════════
  📊 RELATÓRIO DE QUALIFICAÇÃO DA BATERIA DE STRESS (HARDWARE DE PRODUÇÃO):
   • Modo de Execução:        BATERIA DE STRESS E RECUPERAÇÃO EM 4 FASES (MM SEGURO)
-  • Índice de Pressão:       1.9 / 10.0 (Governador Dinâmico Seguro em Malha Fechada)
-  • Ciclos Ativos de E/S:    2 ciclos completos realizados
-  • Swap Total de Pico:      1.182 MB (Tier 1 ZRAM: 887 MB, Tier 2 VRAM: 295 MB)
-  • Velocidade de Retorno:   2,47 GB/s (313,76 ms retorno delimitado ao host)
+  • Índice de Pressão:       7.5 / 10.0 (Governador Dinâmico Seguro em Malha Fechada)
+  • Ciclos Ativos de E/S:    30 ciclos completos realizados
+  • Swap Total de Pico:      2.148 MB (Tier 1 ZRAM: 1.024 MB, Tier 2 VRAM: 1.124 MB)
+  • Velocidade de Retorno:   6,33 GB/s (1.516,60 ms retorno delimitado ao host)
   • Escopo de Qualificação:  Qualificação de Stress em Kernel Multi-Tier e PCIe
   • Veredito de Estabilidade:🟢 PASS_ZERO_PANIC (Fail-Closed, Zero Vazamentos)
 ══════════════════════════════════════════════════════════════════════════════════

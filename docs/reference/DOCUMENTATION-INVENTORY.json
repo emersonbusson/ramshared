@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 251,
-    "classified": 248,
+    "total": 252,
+    "classified": 249,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -2930,6 +2930,18 @@
       "canonicalSource": "README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 30
+    },
+    {
+      "path": "drivers/block/ramshared/README.md",
+      "disposition": "classified",
+      "ruleId": "kernel-driver-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "kernel-driver",
+      "canonicalSource": "drivers/block/ramshared/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
     },
     {
       "path": "drivers/windows/README.md",

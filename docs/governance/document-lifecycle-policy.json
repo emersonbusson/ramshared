@@ -462,6 +462,16 @@
       "freshnessDays": 90,
       "verification": { "state": "unverified" },
       "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
+      "id": "kernel-driver-documents",
+      "pattern": "drivers/block/**/*.md",
+      "owner": "kernel-driver",
+      "canonicalSource": "drivers/block/ramshared/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-09-05T14:24:00Z"
     }
   ],
   "exclusions": [

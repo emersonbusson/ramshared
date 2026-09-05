@@ -134,7 +134,7 @@ When Windows, games, or 3D rendering workloads request GPU memory, RamShared imm
 
 ### Performance & Transport Evolution
 
-Empirical benchmarks on host hardware (NVIDIA GeForce RTX 2060 over PCIe Gen 3 x16, Samsung SSD 850 EVO origin, WSL2 `Linux 6.18.35.2`):
+Empirical benchmarks on host hardware (NVIDIA GeForce RTX 2060 over PCIe Gen 3 x16, Driver 615.65.07, CUDA 13.4, Samsung SSD 850 EVO origin, WSL2 2.7.13.0, Linux 6.18.35.2):
 
 ```text
 ┌────────────────────────┬──────────────────────────────────┬─────────────────────────┬─────────────────────────┬───────────────────┬─────────────────────────┐
@@ -153,10 +153,10 @@ Empirical benchmarks on host hardware (NVIDIA GeForce RTX 2060 over PCIe Gen 3 x
 ══════════════════════════════════════════════════════════════════════════════════
  📊 STRESS BATTERY QUALIFICATION REPORT (PHYSICAL HOST QUALIFICATION):
   • Execution Mode:          4-PHASE STRESS & RECLAIM BATTERY (HARDENED MM)
-  • Memory Pressure Index:   1.9 / 10.0 (Closed-Loop Safe Dynamic Governor)
-  • Active I/O Cycles:       2 active cycles completed
-  • Peak Total Swap Used:    1,182 MB (Tier 1 ZRAM: 887 MB, Tier 2 VRAM: 295 MB)
-  • Reclaim Return Speed:    2.47 GB/s (313.76 ms bounded return to host)
+  • Memory Pressure Index:   7.5 / 10.0 (Closed-Loop Safe Dynamic Governor)
+  • Active I/O Cycles:       30 active cycles completed
+  • Peak Total Swap Used:    2,148 MB (Tier 1 ZRAM: 1,024 MB, Tier 2 VRAM: 1,124 MB)
+  • Reclaim Return Speed:    6.33 GB/s (1,516.60 ms bounded return to host)
   • Qualification Scope:     Multi-Tier Kernel & PCIe Hardware Stress Qualification
   • Stability Verdict:       🟢 PASS_ZERO_PANIC (Fail-Closed, Zero Memory Leaks)
 ══════════════════════════════════════════════════════════════════════════════════
