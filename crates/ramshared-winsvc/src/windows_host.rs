@@ -869,7 +869,7 @@ fn validate_powershell_environment(
     Ok(validated)
 }
 
-fn encode_powershell_command(script: &str) -> String {
+pub fn encode_powershell_command(script: &str) -> String {
     use base64::Engine as _;
 
     let utf16le = script

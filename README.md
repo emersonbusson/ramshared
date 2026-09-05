@@ -40,7 +40,7 @@ Release: **v0.10.0 (Linux Kernel Driver Upstream LKML RFC v2 & 493 PR Consolidat
 | Surface | Status | What that means |
 | --- | --- | --- |
 | 4-Tier Memory Cascade | **100% Saturated Qualified · EVD-0040** | Multi-tier saturation across physical RAM, ZRAM, GPU VRAM, and host SSD swap holding 9,160 MB active swap across 40 continuous cycles without system stalls or lockups. |
-| Linux/WSL2 cascade | **Process custody & origin ledger hardened · 999 tests passing** | Workload and control slices are protected with isolated process groups, no-follow ledger transactions, and a swapoff-first lifecycle. Validated across 999 workspace tests (0 failures, 0 panics), 28 docs-check gates passing, and 383 automated PRs (#499–#882) audited and consolidated under Kahneman disciplines. |
+| Linux/WSL2 cascade | **Process custody & origin ledger hardened · 999 tests passing** | Workload and control slices are protected with isolated process groups, no-follow ledger transactions, and a swapoff-first lifecycle. Validated across 999 workspace tests (0 failures, 0 panics), 28 docs-check gates passing, and full multi-tier stress qualification. |
 | Host memory pressure | **Validated · EVD-0037** | Sustained 98.6%–99.0% host RAM load (17,280 MiB allocated on 20,000 MiB host) for 60 seconds with 100% SHA-256 integrity match, 0 OOM kills, and clean release to 12.6% while 4 GiB VRAM allocation on RTX 2060 remained intact. |
 | Write-through VRAM & SSD origin | **Live-Qualified · EVD-0038** | Live qualification on RTX 2060 and Samsung SSD 850 EVO VHDX origin. Verified write-through durability, accelerated VRAM PCIe cache hits, and 100% byte-exact direct SSD recovery upon GPU revocation with 0 bytes corrupted. |
 | Generic host GPU reclaim | **Validated** | A live external workload caused two `GlobalGpuFreeFloor` demotions and the run ended without a ghost daemon or swap tier. |
@@ -53,9 +53,8 @@ Release: **v0.10.0 (Linux Kernel Driver Upstream LKML RFC v2 & 493 PR Consolidat
 The status above is intentionally narrower than the architecture. Open claims
 and the exact evidence needed to close them live in
 [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md).
-The complete audit and census of 383 candidate PRs (#499 through #882) is recorded in
-[`docs/reliability/JULES-PR-AUDIT-20260904.md`](docs/reliability/JULES-PR-AUDIT-20260904.md), and its cognitive hygiene ledger is cataloged in
-[`docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md`](docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md).
+Detailed audit records, candidate censuses, and verification ledgers are cataloged under
+[`docs/reliability/`](docs/reliability/).
 
 ## Current boundary — disabled staging only
 
@@ -64,7 +63,7 @@ boot installation, lifecycle transition, WSL configuration/application, VM
 operation, storage/VHDX/GPU/device action, or pressure run. Source/static test
 results and historical measurements are not activation approval.
 
-**Host Runtime Status (Kahneman #1 & #2):** The live WSL2 host currently runs
+**Host Runtime Status:** The live WSL2 host currently runs
 `/usr/local/bin/ramsharedd` from the PR #555 baseline. The consolidated worktree on branch
 `feat/consolidate-jules-audit-20260904` represents a verified candidate staged for attended rollout.
 Activation requires explicit operator authorization.
@@ -333,9 +332,6 @@ specification and named evidence under `docs/specs/`.
 | Empirical validation log | [`validation.md`](validation.md) |
 | Open and closed reliability claims | [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md) |
 | Benchmark context | [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) |
-| Jules PR consolidation census (383 PRs) | [`docs/reliability/JULES-PR-AUDIT-20260904.md`](docs/reliability/JULES-PR-AUDIT-20260904.md) |
-| Jules PR consolidation census (162 PRs) | [`docs/reliability/JULES-PR-AUDIT-20260905.md`](docs/reliability/JULES-PR-AUDIT-20260905.md) |
-| Cognitive hygiene ledger (Kahneman 2026-09-04) | [`docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md`](docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md) |
-| Cognitive hygiene ledger (Kahneman 2026-09-05) | [`docs/reliability/KAHNEMAN-CONSOLIDATION-20260905.md`](docs/reliability/KAHNEMAN-CONSOLIDATION-20260905.md) |
+| Reliability & PR consolidation audit ledgers | [`docs/reliability/`](docs/reliability/) |
 | Lab VM access and inventory policy | [`docs/labs/HYPERV-VM-ACCESS.md`](docs/labs/HYPERV-VM-ACCESS.md) |
 | Contribution rules | [`CONTRIBUTING.md`](CONTRIBUTING.md) |

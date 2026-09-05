@@ -44,7 +44,7 @@ Versão: **v0.10.0 (Driver Linux de Bloco Upstream LKML RFC v2 e Consolidação 
 | Superfície | Status | O que isso significa |
 | --- | --- | --- |
 | Cascata de 4 Níveis | **100% Saturada e Qualificada · EVD-0040** | Saturação em cascata multinível em RAM física, ZRAM, GPU VRAM e swap no SSD do host sustentando 9.160 MB de swap ativo por 40 ciclos contínuos sem travamentos do sistema. |
-| Cascata Linux/WSL2 | **Custódia de processos e ledger de origem blindados · 999 testes passando** | Slices de carga e controle protegidos com grupos de processos isolados, transações de ledger com no-follow e ciclo de vida swapoff-first. Totalmente validado com 999 testes do workspace (0 falhas, 0 panics), 28 suites de governança passando e 383 PRs automatizados (#499–#882) auditados e consolidados sob as disciplinas Kahneman. |
+| Cascata Linux/WSL2 | **Custódia de processos e ledger de origem blindados · 999 testes passando** | Slices de carga e controle protegidos com grupos de processos isolados, transações de ledger com no-follow e ciclo de vida swapoff-first. Totalmente validado com 999 testes do workspace (0 falhas, 0 panics), 28 suites de governança passando e qualificação completa de estresse multi-tier. |
 | Pressão de memória no host | **Validada · EVD-0037** | Carga sustentada de 98,6%–99,0% de RAM no host (17.280 MiB alocados em host de 20.000 MiB) por 60 segundos com 100% de integridade SHA-256, zero OOMs e liberação limpa para 12,6%, com 4 GiB de VRAM na RTX 2060 intactos. |
 | Cache VRAM write-through e origem SSD | **Qualificado ao vivo · EVD-0038** | Qualificação ao vivo na RTX 2060 e origem VHDX em Samsung SSD 850 EVO. Verificada durabilidade de escrita síncrona, aceleração de cache na VRAM via PCIe e recuperação de 100% dos bytes direto do SSD sem corrupção após revogação da GPU. |
 | Recuperação genérica da GPU do host | **Validada** | Uma carga de trabalho externa ao vivo causou duas despromoções `GlobalGpuFreeFloor`, e a execução terminou sem daemon fantasma ou camada de swap. |
@@ -57,9 +57,8 @@ Versão: **v0.10.0 (Driver Linux de Bloco Upstream LKML RFC v2 e Consolidação 
 O status acima é intencionalmente mais restrito que a arquitetura. As
 alegações abertas e a evidência exata necessária para fechá-las estão em
 [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md).
-O censo completo e auditoria dos 383 PRs candidatos (#499 a #882) está registrado em
-[`docs/reliability/JULES-PR-AUDIT-20260904.md`](docs/reliability/JULES-PR-AUDIT-20260904.md), e seu livro-razão de higiene cognitiva está catalogado em
-[`docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md`](docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md).
+Registros detalhados de auditoria, censos de candidatos e livros-razão de verificação estão catalogados em
+[`docs/reliability/`](docs/reliability/).
 
 ## Limite atual — staging somente desabilitado
 
@@ -69,7 +68,7 @@ operação de VM, ação de armazenamento/VHDX/GPU/dispositivo ou campanha de
 pressão. Resultados de testes fonte/estáticos e medições históricas não são
 aprovação de ativação.
 
-**Status de Execução no Host (Kahneman #1 e #2):** O host WSL2 em execução ativa roda
+**Status de Execução no Host:** O host WSL2 em execução ativa roda
 `/usr/local/bin/ramsharedd` a partir da base do PR #555. A worktree consolidada na branch
 `feat/consolidate-jules-audit-20260904` representa uma candidata verificada em staging para rollout assistido.
 A ativação requer autorização explícita do operador.
@@ -338,9 +337,6 @@ nomeadas em `docs/specs/`.
 | Registro de validação empírica | [`validation.md`](validation.md) |
 | Alegações de confiabilidade abertas e fechadas | [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md) |
 | Contexto dos benchmarks | [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) |
-| Censo da consolidação dos PRs Jules (383 PRs) | [`docs/reliability/JULES-PR-AUDIT-20260904.md`](docs/reliability/JULES-PR-AUDIT-20260904.md) |
-| Censo da consolidação dos PRs Jules (162 PRs) | [`docs/reliability/JULES-PR-AUDIT-20260905.md`](docs/reliability/JULES-PR-AUDIT-20260905.md) |
-| Livro-razão de higiene cognitiva (Kahneman 2026-09-04) | [`docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md`](docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md) |
-| Livro-razão de higiene cognitiva (Kahneman 2026-09-05) | [`docs/reliability/KAHNEMAN-CONSOLIDATION-20260905.md`](docs/reliability/KAHNEMAN-CONSOLIDATION-20260905.md) |
+| Relatórios de confiabilidade e auditoria de PRs | [`docs/reliability/`](docs/reliability/) |
 | Acesso a VMs de laboratório e política de inventário | [`docs/labs/HYPERV-VM-ACCESS.md`](docs/labs/HYPERV-VM-ACCESS.md) |
 | Regras de contribuição | [`CONTRIBUTING.md`](CONTRIBUTING.md) |

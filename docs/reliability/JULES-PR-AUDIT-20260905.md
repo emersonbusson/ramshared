@@ -16,9 +16,9 @@ The evaluation was conducted under project reliability policies (RamShared Day-0
 
 | Category | Count | Percentage | Description |
 | :--- | :---: | :---: | :--- |
-| **ACCEPT (Valid Directly)** | **118** | 72.8% | Approved for clean consolidation into single release PR. |
+| **ACCEPT (Valid Directly)** | **116** | 71.6% | Approved for clean consolidation into single release PR. |
 | **FINDING_ONLY (Docs Valid)** | **37** | 22.8% | Defensive architectural reports cataloged in governance. |
-| **REWORKED (Residue Cleared)** | **7** | 4.3% | Valid concepts integrated after renaming slugs or clearing residue. |
+| **REWORKED (Residue Cleared)** | **9** | 5.6% | Valid concepts integrated after renaming slugs or decoupling headless gates. |
 | **REJECT (Invalid)** | **0** | 0.0% | Empty diffs or conflicting legacy docs rejected. |
 | **Total** | **162** | **100.0%** | Complete census from #887 through #1048. |
 
@@ -106,13 +106,13 @@ The evaluation was conducted under project reliability policies (RamShared Day-0
 | [#950](https://github.com/emersonbusson/ramshared/pull/950) | `findings` | **FINDING_ONLY** | docs: add finding for adversarial ffi-abi OVERLAPPED trap |
 | [#951](https://github.com/emersonbusson/ramshared/pull/951) | `findings` | **FINDING_ONLY** | docs: document vulkan memory type bounds trap |
 | [#952](https://github.com/emersonbusson/ramshared/pull/952) | `findings` | **REWORKED** | fix(dxg): validate adapter handle against null and kernel ranges |
-| [#953](https://github.com/emersonbusson/ramshared/pull/953) | `rust-crates` | **ACCEPT** | refactor(kernel): map VkResult codes to VulkanError |
+| [#953](https://github.com/emersonbusson/ramshared/pull/953) | `rust-crates` | **REWORKED** | refactor(kernel): map VkResult codes to VulkanError |
 | [#954](https://github.com/emersonbusson/ramshared/pull/954) | `rust-crates` | **ACCEPT** | fix(vulkan): validate vkCreateInstance presence before ICD dispatch |
 | [#955](https://github.com/emersonbusson/ramshared/pull/955) | `findings` | **FINDING_ONLY** | docs(kernel): report FINDING_ONLY for CUDA memory pitch and device pointer audit |
 | [#956](https://github.com/emersonbusson/ramshared/pull/956) | `findings` | **REWORKED** | docs: document architectural mismatch for WDF in StorPort |
 | [#957](https://github.com/emersonbusson/ramshared/pull/957) | `kernel-windows` | **ACCEPT** | test(poolstress): support concurrent allocation stress testing |
 | [#958](https://github.com/emersonbusson/ramshared/pull/958) | `findings` | **FINDING_ONLY** | docs(findings): report architectural mismatch for CRC32 FFI in hash.rs |
-| [#959](https://github.com/emersonbusson/ramshared/pull/959) | `rust-crates` | **ACCEPT** | refactor(cuda): map CUDA_ERROR_OUT_OF_MEMORY and CUDA_ERROR_INVALID_VALUE to semantic errnos |
+| [#959](https://github.com/emersonbusson/ramshared/pull/959) | `rust-crates` | **REWORKED** | refactor(cuda): map CUDA_ERROR_OUT_OF_MEMORY and CUDA_ERROR_INVALID_VALUE to semantic errnos |
 | [#960](https://github.com/emersonbusson/ramshared/pull/960) | `findings` | **FINDING_ONLY** | docs: report ublk ABI layout adversarial trap |
 | [#961](https://github.com/emersonbusson/ramshared/pull/961) | `findings` | **FINDING_ONLY** | docs: report ffi-abi-084 adversarial trap |
 | [#962](https://github.com/emersonbusson/ramshared/pull/962) | `findings` | **FINDING_ONLY** | test: document file misdirection trap for dma transfer checks |
