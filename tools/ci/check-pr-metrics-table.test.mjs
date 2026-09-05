@@ -7,16 +7,26 @@ const VALID_TABLE = `
 Test release consolidation.
 
 ### 📊 Evolução Comparativa de Hardware
-| Dimensão / Parâmetro | Baseline de Soak (PR #555) | Consolidação 383 PRs (PR #883) | Consolidação Atual 162 PRs (PR #1049) | O que isso demonstra no hardware real |
+| Métrica / Parâmetro | Baseline (#883) | Atual (#1049) | Delta & Dir | Veredito Hardware |
 | :--- | :---: | :---: | :---: | :--- |
-| **Memória RAM Alocada** | 17.364 MB | 795 MB | 795 MB | Volume de pressão gerado pelo teste |
-| **Swap Multinível Engajado** | 9.160 MB | 0 MB | 1.182 MB | Capacidade do kernel de empurrar swap |
-| **Tier 1 — ZRAM LZ4 (RAM)** | 1.024 MB | 0 MB | 887 MB | Compressão ultrarrápida transparente |
-| **Tier 2 — GPU VRAM (RTX 2060)** | 4.096 MB | 0 MB | 295 MB | Páginas alocadas na GPU via PCIe DMA |
-| **Tier 3 — Host SSD (Disco)** | 4.040 MB | 0 MB | 0 MB | Proteção de SSD: 0% de derramamento |
-| **Pressão Suportada (PSI)** | Saturação | 1.175 | 1.913 | Absorção de pico sem travar |
-| **Tempo de Liberação (Reclaim)** | Descarte | 85.46 ms | 313.76 ms | Tempo real para descarregar |
-| **Veredito de Estabilidade** | PASS_ZERO_PANIC | PASS_ZERO_PANIC | PASS_ZERO_PANIC | Zero panics, zero stalls |
+| **Memória RAM Alocada** | 795 MB | 795 MB | 🟡 Baseline | Volume sob teste |
+| **Swap Multinível Ativo** | 0 MB (Heap) | **1.182 MB** | 🟢 GAIN (+1.182 MB) [🔺] | Ativação física de ublk + GPU DMA |
+| ├─ *Tier 1: ZRAM LZ4* | 0 MB | **887 MB** | 🟢 GAIN (+887 MB) [🔺] | Compressão kernel ultrarrápida |
+| ├─ *Tier 2: GPU VRAM* | 0 MB | **295 MB** | 🟢 GAIN (+295 MB) [🔺] | Páginas alocadas na RTX 2060 |
+| └─ *Tier 3: Host SSD* | 0 MB | **0 MB** | 🟢 GAIN (0 MB) [🔻] | Proteção: 0% de spill em disco |
+| **Pressão Suportada (PSI)** | 1.175 | **1.913** | 🟢 GAIN (+62.8%) [🔺] | Pico absorvido sem travamento WSL2 |
+| **Throughput / Latência** | 9.09 GB/s (85ms) | **2.47 GB/s (313ms)** | 🟢 GAIN (PCIe DMA) [🔺] | Barramento físico real PCIe Gen3 x16 |
+| **RAM Restaurada pós-run** | 10.384 MB | **7.369 MB** | 🟢 GAIN (0 MB leak) [🔺] | Zero vazamentos pós-teste |
+| **Estabilidade Operacional** | \`PASS_ZERO_PANIC\` | \`PASS_ZERO_PANIC\` | 🟢 PASS | Zero panics / stalls / OOM-kills |
+
+## Commits
+| Commit | Tipo / Escopo | Descrição |
+| :---: | :--- | :--- |
+| \`cc916bc\` | \`feat(ci)\` | Standardize hardware metrics comparison |
+| \`0024464\` | \`docs(gov)\` | Codify empirical hardware metrics table |
+
+## Labels
+type:feat, area:core, area:mm
 `;
 
 test('valid hardware metrics table passes', () => {
@@ -46,6 +56,13 @@ test('fails on missing PASS_ZERO_PANIC', () => {
   assert.ok(res.errors.some(e => e.includes('PASS_ZERO_PANIC')));
 });
 
+test('fails on missing direction indicators', () => {
+  const badBody = VALID_TABLE.replace(/\[🔺\]/g, '').replace(/\[🔻\]/g, '');
+  const res = validatePrMetricsTable(badBody);
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some(e => e.includes('missing explicit optimization directions')));
+});
+
 test('fails on unresolved 🔴 ALARM without waiver', () => {
   const badBody = VALID_TABLE + '\n| Throughput | 9.09 GB/s | 1.50 GB/s | -83.5% | 🔴 ALARM | Stalling |';
   const res = validatePrMetricsTable(badBody);
@@ -59,11 +76,23 @@ test('allows 🔴 ALARM with explicit documented waiver', () => {
   assert.equal(res.ok, true, 'Waived alarm must pass');
 });
 
-test('non-perf PR passes without table', () => {
-  const nonPerfBody = '## Resumo\nDocumentation typo fix.\n## Commits\n- docs: fix typo';
+test('non-perf PR passes without table but with valid labels', () => {
+  const nonPerfBody = '## Resumo\nDocumentation typo fix.\n## Commits\n- docs: fix typo\n## Labels\ntype:docs, area:governance';
   const res = validatePrMetricsTable(nonPerfBody);
   assert.equal(res.ok, true);
   assert.equal(res.errors.length, 0);
+});
+
+test('fails when labels are missing or invalid', () => {
+  const missingLabelsBody = VALID_TABLE.replace(/## Labels[\s\S]*$/i, '');
+  const res = validatePrMetricsTable(missingLabelsBody);
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some(e => e.includes('missing required ## Labels section')));
+
+  const invalidLabelsBody = VALID_TABLE.replace(/type:feat, area:core, area:mm/, 'random-label');
+  const res2 = validatePrMetricsTable(invalidLabelsBody);
+  assert.equal(res2.ok, false);
+  assert.ok(res2.errors.some(e => e.includes('must specify at least one type:* and one area:* label')));
 });
 
 test('perf PR fails when table is missing', () => {
@@ -72,3 +101,21 @@ test('perf PR fails when table is missing', () => {
   assert.equal(res.ok, false);
   assert.ok(res.errors.some(e => e.includes('Missing required Hardware Benchmark Comparison table')));
 });
+
+test('commit list verification succeeds when all commits are listed', () => {
+  const res = validatePrMetricsTable(VALID_TABLE, { expectedCommits: ['cc916bc', '0024464'] });
+  assert.equal(res.ok, true);
+});
+
+test('commit list verification fails when a commit is missing', () => {
+  const res = validatePrMetricsTable(VALID_TABLE, { expectedCommits: ['cc916bc', '0024464', 'ba2a5e9'] });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some(e => e.includes('Missing commits in ## Commits table: ba2a5e9')));
+});
+
+test('language validation rejects PT-BR when English is strictly required for merge', () => {
+  const res = validatePrMetricsTable(VALID_TABLE, { requireEnglish: true });
+  assert.equal(res.ok, false);
+  assert.ok(res.errors.some(e => e.includes('contains Portuguese markers')));
+});
+

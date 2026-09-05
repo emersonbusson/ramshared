@@ -1,8 +1,8 @@
 <!--
-Template de PR — RamShared. As 7 secoes abaixo sao OBRIGATORIAS (.claude/rules/governance.md).
-Regra de visibilidade: TODA linha de commit fica visivel na tabela. Use <details> per-row
-no campo "Detalhes" — nunca um <details> agrupador que esconda commits do preview do PR.
-Sync rule: regra que mudar na governanca deve mudar em >=2 lugares no mesmo commit
+PR Template — RamShared. All sections below are MANDATORY (.claude/rules/governance.md).
+Commit visibility rule: EVERY commit line must be visible in the table.
+Two-stage language rule: PT-BR is permitted during review/drafting; English is mandatory prior to final merge.
+Sync rule: rules changing in governance must change in >=2 places in the same commit
 (CLAUDE.md, AGENTS.md, .claude/rules/<topic>.md, .github/pull_request_template.md).
 -->
 
@@ -10,8 +10,9 @@ Sync rule: regra que mudar na governanca deve mudar em >=2 lugares no mesmo comm
 
 <!--
 Clear, human-readable summary explaining WHAT and WHY directly.
-When touching performance, memory, or stress benchmarks, include a self-contained side-by-side hardware comparison table
-(Previous vs Current with physical hardware delta). Prohibited: internal methodology buzzwords or external links to raw JSON files.
+When touching performance, memory, or stress benchmarks, include a self-contained compact hardware comparison table
+(Previous vs Current with physical hardware delta, directions [🔺/🔻], and tier tree ├─ Tier 1/2/3).
+Prohibited: internal methodology buzzwords or external links to raw JSON files.
 -->
 
 ## Commits

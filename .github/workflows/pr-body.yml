@@ -25,12 +25,12 @@ jobs:
           script: |
             const body = context.payload.pull_request?.body ?? '';
             const requiredSections = [
-              { name: 'Resumo', pattern: /^##\s+Resumo\s*$/im },
+              { name: 'Resumo/Summary', pattern: /^##\s+(?:Resumo|Summary)\s*$/im },
               { name: 'Commits', pattern: /^##\s+Commits\s*$/im },
               { name: 'Issue', pattern: /^##\s+Issue\s*$/im },
-              { name: 'Responsavel', pattern: /^##\s+Responsavel\s*$/im },
+              { name: 'Responsavel/Owner', pattern: /^##\s+(?:Responsavel|Responsável|Owner|Responsible)\s*$/im },
               { name: 'Labels', pattern: /^##\s+Labels\s*$/im },
-              { name: 'Validacao', pattern: /^##\s+Validacao\s*$/im },
+              { name: 'Validacao/Validation', pattern: /^##\s+(?:Validacao|Validação|Validation)\s*$/im },
               { name: 'Rollback trigger', pattern: /^##\s+Rollback trigger\s*$/im }
             ];
 
@@ -63,12 +63,54 @@ jobs:
               }
             }
 
+            // Mandatory PR Labels validation (both in body and in GitHub PR metadata)
+            const labelsSectionMatch = body.match(/##\s+Labels[\s\S]*?(?=##\s+|$)/i);
+            const labelsSection = labelsSectionMatch ? labelsSectionMatch[0] : '';
+            if (!labelsSection) {
+              core.setFailed('PR description is missing required ## Labels section.');
+            } else {
+              const hasTypeInBody = /\btype:[a-z0-9_-]+/i.test(labelsSection);
+              const hasAreaInBody = /\barea:[a-z0-9_-]+/i.test(labelsSection);
+              if (!hasTypeInBody || !hasAreaInBody) {
+                core.setFailed('PR description ## Labels section must specify at least one type:* and one area:* label.');
+              }
+            }
+
+            const attachedLabels = (context.payload.pull_request?.labels ?? []).map(l => l.name?.toLowerCase());
+            const hasTypeAttached = attachedLabels.some(l => l.startsWith('type:'));
+            const hasAreaAttached = attachedLabels.some(l => l.startsWith('area:'));
+            if (!hasTypeAttached || !hasAreaAttached) {
+              core.setFailed(`PR is missing mandatory GitHub labels: must attach at least one type:* and one area:* label. Currently attached: [${attachedLabels.join(', ')}].`);
+            }
+
+            // Two-stage language transition: check English when ready-for-merge label is attached
+            const prLabels = (context.payload.pull_request?.labels ?? []).map(l => l.name?.toLowerCase());
+            const requireEnglish = prLabels.includes('stage:ready') || prLabels.includes('ready-for-merge') || prLabels.includes('lang:en');
+            if (requireEnglish) {
+              const ptMarkers = [
+                /##\s+Resumo/i,
+                /##\s+Valida[çc][ãa]o/i,
+                /##\s+Respons[áa]vel/i,
+                /Evolu[çc][ãa]o\s+Comparativa/i,
+                /Mem[óo]ria\s+RAM/i,
+                /Mais\s+[ée]\s+melhor/i,
+                /Menos\s+[ée]\s+melhor/i,
+              ];
+              for (const pattern of ptMarkers) {
+                if (pattern.test(body)) {
+                  core.setFailed(`PR is marked ready for merge but contains Portuguese marker matching ${pattern}. Description must be transitioned to English.`);
+                }
+              }
+            }
+
             // Empirical hardware evidence table validation
             const hasHardwareTable = 
               body.includes('Evolução Comparativa de Hardware') ||
+              body.includes('Hardware Benchmark Evolution') ||
               body.includes('Category / Metric') ||
               body.includes('Hardware Benchmark Comparison') ||
-              body.includes('Dimensão / Parâmetro');
+              body.includes('Dimensão / Parâmetro') ||
+              body.includes('Métrica / Parâmetro');
 
             const isPerfRelated = 
               /\barea:mm\b/i.test(body) ||
@@ -83,11 +125,20 @@ jobs:
               if (!(/zram/i.test(body) && /vram/i.test(body) && /ssd/i.test(body))) {
                 core.setFailed('Hardware table missing multi-tier memory breakdown (ZRAM, VRAM, SSD).');
               }
-              if (!(/reclaim/i.test(body) || /libera[çc][ãa]o/i.test(body))) {
-                core.setFailed('Hardware table missing reclaim bandwidth/latency metric.');
+              if (!(/reclaim/i.test(body) || /libera[çc][ãa]o/i.test(body) || /throughput/i.test(body))) {
+                core.setFailed('Hardware table missing reclaim throughput / latency metric.');
               }
               if (!(/psi/i.test(body) || /press[ãa]o/i.test(body))) {
                 core.setFailed('Hardware table missing PSI memory pressure metric.');
+              }
+              if (!(/restaurada/i.test(body) || /restored/i.test(body) || /leak/i.test(body) || /vazamento/i.test(body))) {
+                core.setFailed('Hardware table missing restored RAM / zero-leak metric.');
+              }
+              const hasDirections = 
+                (body.includes('🔺') || body.includes('Higher is better') || body.includes('Mais é melhor')) &&
+                (body.includes('🔻') || body.includes('Lower is better') || body.includes('Menos é melhor'));
+              if (!hasDirections) {
+                core.setFailed('Hardware table missing explicit optimization directions [🔺 Higher is better] / [🔻 Lower is better].');
               }
               if (!/PASS_ZERO_PANIC/i.test(body)) {
                 core.setFailed('Hardware table missing mandatory stability verdict: PASS_ZERO_PANIC.');
@@ -97,8 +148,37 @@ jobs:
               }
             }
 
+            // Verify complete commit list in PR description
+            const prNumber = context.payload.pull_request?.number;
+            if (prNumber) {
+              try {
+                const commits = await github.paginate(github.rest.pulls.listCommits, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: prNumber,
+                  per_page: 100
+                });
+                const commitsSectionMatch = body.match(/##\s+Commits[\s\S]*?(?=##\s+|$)/i);
+                const commitsSection = commitsSectionMatch ? commitsSectionMatch[0] : '';
+                const missingCommits = [];
+                for (const c of commits) {
+                  const shortSha = c.sha.slice(0, 7).toLowerCase();
+                  if (!commitsSection.toLowerCase().includes(shortSha)) {
+                    missingCommits.push(shortSha);
+                  }
+                }
+                if (missingCommits.length > 0) {
+                  core.setFailed(`PR description ## Commits table is missing branch commits: ${missingCommits.join(', ')}. All ${commits.length} commits must be listed.`);
+                } else {
+                  core.info(`All ${commits.length} branch commits verified in PR ## Commits table.`);
+                }
+              } catch (commitErr) {
+                core.warning(`Unable to fetch branch commits via API: ${commitErr.message}`);
+              }
+            }
+
             if (missing.length === 0) {
-              core.info('All required PR description checks and hardware standards passed.');
+              core.info('All required PR description checks, commits list, and hardware standards passed.');
             }
 
   pr-body-summary:
