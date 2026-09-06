@@ -191,7 +191,9 @@ impl WinDriveConfig {
         let is_valid_mount = self.volume_mount_path.as_ref().is_none_or(|path| {
             let value = path.to_string_lossy().replace('/', "\\");
             let prefix = r"C:\ProgramData\RamShared\mounts\";
-            value.to_ascii_lowercase().starts_with(&prefix.to_ascii_lowercase())
+            value
+                .to_ascii_lowercase()
+                .starts_with(&prefix.to_ascii_lowercase())
                 && value.len() > prefix.len()
                 && !value.contains("..")
                 && !value.contains(['\'', ';', '\r', '\n'])
