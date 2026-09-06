@@ -401,6 +401,9 @@ impl WindowsDriverLink {
 
     /// One pending COMMIT_AND_FETCH only (DT-4). Timeout uses CancelIoEx + GetOverlappedResult.
     pub fn commit_and_fetch(&mut self, timeout: Duration) -> Result<(), IoctlError> {
+        if self.handle == INVALID_HANDLE_VALUE || self.handle.is_null() {
+            return Err(IoctlError::Invalid("invalid handle".into()));
+        }
         if self.pending {
             return Err(IoctlError::Invalid("commit already pending".into()));
         }
@@ -423,35 +426,39 @@ impl WindowsDriverLink {
                 &mut ov,
             )
         };
-        if ok == FALSE {
-            let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
-            if err != ERROR_IO_PENDING {
-                return Err(IoctlError::Ioctl(format!("COMMIT win32={err}")));
-            }
-            self.pending = true;
-            let ms = timeout.as_millis().min(u32::MAX as u128) as u32;
-            let wr =
-                unsafe { WaitForSingleObject(self.event, if ms == 0 { INFINITE } else { ms }) };
-            if wr == WAIT_TIMEOUT {
-                self.cancel_and_drain(&ov);
-                return Err(IoctlError::Timeout);
-            }
-            if wr != WAIT_OBJECT_0 {
-                self.cancel_and_drain(&ov);
-                return Err(IoctlError::Ioctl(format!("WaitForSingleObject={wr}")));
-            }
-            let mut xfer = 0u32;
-            let gor = unsafe { GetOverlappedResult(self.handle, &ov, &mut xfer, 0) };
-            self.pending = false;
-            if gor == FALSE {
-                return Err(IoctlError::Ioctl(last_error_string("GetOverlappedResult")));
-            }
-            Ok(())
-        } else {
+        if ok != FALSE {
             // Completed inline.
             self.pending = false;
-            Ok(())
+            return Ok(());
         }
+
+        let err = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+        if err != ERROR_IO_PENDING {
+            return Err(IoctlError::Ioctl(format!("COMMIT win32={err}")));
+        }
+
+        self.pending = true;
+        let ms = timeout.as_millis().min(u32::MAX as u128) as u32;
+        let wr =
+            unsafe { WaitForSingleObject(self.event, if ms == 0 { INFINITE } else { ms }) };
+
+        if wr == WAIT_TIMEOUT {
+            self.cancel_and_drain(&ov);
+            return Err(IoctlError::Timeout);
+        }
+        if wr != WAIT_OBJECT_0 {
+            self.cancel_and_drain(&ov);
+            return Err(IoctlError::Ioctl(format!("WaitForSingleObject={wr}")));
+        }
+
+        let mut xfer = 0u32;
+        let gor = unsafe { GetOverlappedResult(self.handle, &ov, &mut xfer, 0) };
+        self.pending = false;
+
+        if gor == FALSE {
+            return Err(IoctlError::Ioctl(last_error_string("GetOverlappedResult")));
+        }
+        Ok(())
     }
 
     pub fn cancel_fetch(&mut self) -> Result<(), IoctlError> {
@@ -479,16 +486,26 @@ impl WindowsDriverLink {
         input: Option<&[u8]>,
         _output: Option<&mut [u8]>,
     ) -> Result<(), IoctlError> {
+        if self.handle == INVALID_HANDLE_VALUE || self.handle.is_null() {
+            return Err(IoctlError::Invalid("invalid handle".into()));
+        }
+
+        let (in_ptr, in_len) = match input {
+            Some(b) => {
+                if (b.as_ptr() as usize) % std::mem::align_of::<u64>() != 0 {
+                    return Err(IoctlError::Invalid("input buffer unaligned".into()));
+                }
+                (b.as_ptr() as *const _, b.len() as u32)
+            }
+            None => (ptr::null(), 0u32),
+        };
+
         unsafe {
             let _ = ResetEvent(self.event);
         }
         let mut ov: OVERLAPPED = unsafe { zeroed() };
         ov.hEvent = self.event;
         let mut ret = 0u32;
-        let (in_ptr, in_len) = match input {
-            Some(b) => (b.as_ptr() as *const _, b.len() as u32),
-            None => (ptr::null(), 0u32),
-        };
         let ok = unsafe {
             DeviceIoControl(
                 self.handle,
