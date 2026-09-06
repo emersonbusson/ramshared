@@ -183,13 +183,15 @@ mod tests {
             self.bs
         }
         fn read_at(&mut self, off: u64, buf: &mut [u8]) -> Result<(), IoError> {
-            let o = off as usize;
-            buf.copy_from_slice(&self.data[o..o + buf.len()]);
+            let o: usize = off.try_into().map_err(|_| IoError("offset overflow".into()))?;
+            let end = o.checked_add(buf.len()).ok_or_else(|| IoError("end overflow".into()))?;
+            buf.copy_from_slice(&self.data[o..end]);
             Ok(())
         }
         fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
-            let o = off as usize;
-            self.data[o..o + data.len()].copy_from_slice(data);
+            let o: usize = off.try_into().map_err(|_| IoError("offset overflow".into()))?;
+            let end = o.checked_add(data.len()).ok_or_else(|| IoError("end overflow".into()))?;
+            self.data[o..end].copy_from_slice(data);
             Ok(())
         }
         fn flush(&mut self) -> Result<(), IoError> {
