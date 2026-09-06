@@ -1745,8 +1745,8 @@ impl LeaseMachine {
     }
 
     fn fail_for_active(&mut self, reason: FailureReason) -> ProtocolDecision {
-        let (lease_id, generation, event_id) = if let Some(active) = &self.active_lease {
-            (
+        let (lease_id, generation, event_id) = match (&self.active_lease, &self.pending_grant) {
+            (Some(active), _) => (
                 Some(active.lease_id.clone()),
                 Some(active.generation),
                 Some(
@@ -1756,15 +1756,13 @@ impl LeaseMachine {
                         .map_or(&active.grant_event_id, |revoke| &revoke.event_id)
                         .clone(),
                 ),
-            )
-        } else if let Some(grant) = &self.pending_grant {
-            (
+            ),
+            (None, Some(grant)) => (
                 Some(grant.lease_id.clone()),
                 Some(grant.generation),
                 Some(grant.event_id.clone()),
-            )
-        } else {
-            (None, None, None)
+            ),
+            (None, None) => (None, None, None),
         };
         self.lease_state = LeaseState::Failed(reason);
         ProtocolDecision::FailAck(FailAck {
@@ -1808,16 +1806,18 @@ impl LeaseMachine {
         lease_id: &LeaseId,
         generation: u64,
     ) -> Result<(), FailureReason> {
-        if let Some((_, previous)) = self
+        let previous_gen = self
             .generation_history
             .iter()
             .find(|(known_lease, _)| known_lease == lease_id)
-        {
-            if generation <= *previous {
+            .map(|(_, g)| *g);
+
+        if let Some(previous) = previous_gen {
+            if generation <= previous {
                 return Err(FailureReason::StateTransition(
                     StateTransitionError::StaleGeneration {
                         provided: generation,
-                        expected: *previous,
+                        expected: previous,
                     },
                 ));
             }
@@ -1826,6 +1826,7 @@ impl LeaseMachine {
             }
             return Ok(());
         }
+
         if self.generation_history.len() >= MAX_GENERATION_HISTORY {
             return Err(FailureReason::MalformedRecord);
         }
@@ -1833,14 +1834,16 @@ impl LeaseMachine {
     }
 
     fn remember_generation(&mut self, lease_id: LeaseId, generation: u64) {
-        if let Some((_, previous)) = self
+        let found = self
             .generation_history
             .iter_mut()
-            .find(|(known_lease, _)| known_lease == &lease_id)
-        {
+            .find(|(known_lease, _)| known_lease == &lease_id);
+
+        if let Some((_, previous)) = found {
             *previous = generation;
             return;
         }
+
         if self.generation_history.len() < MAX_GENERATION_HISTORY {
             self.generation_history.push((lease_id, generation));
         }
@@ -1851,16 +1854,19 @@ impl LeaseMachine {
             EventFingerprint::Grant(grant) => grant.event_id.clone(),
             EventFingerprint::Revoke(revoke) => revoke.event_id.clone(),
         };
-        if let Some(seen) = self
+
+        let seen = self
             .seen_events
             .iter()
-            .find(|seen| seen.event_id == event_id)
-        {
+            .find(|seen| seen.event_id == event_id);
+
+        if let Some(seen) = seen {
             if seen.fingerprint == fingerprint {
                 return EventRegistration::Duplicate;
             }
             return EventRegistration::Conflict;
         }
+
         if self.seen_events.len() >= MAX_PROTOCOL_EVENT_HISTORY {
             return EventRegistration::Overflow;
         }
