@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 252,
-    "classified": 249,
+    "total": 253,
+    "classified": 250,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -556,6 +556,18 @@
       "canonicalSource": "docs/governance/README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
+    },
+    {
+      "path": "docs/jules/findings/finding-2026-09-05-isolated-origin-unwrap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/governance/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
     },
     {
       "path": "docs/labs/EVIDENCE-RETENTION.md",
