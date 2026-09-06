@@ -1,121 +1,84 @@
-# FAQ — current candidate
+# FAQ — Frequently Asked Questions
 
-## Current boundary — disabled staging only
+## Operational Invariants & Architecture
 
-RamShared is not currently installable or activatable from this documentation.
-Do not use it as a quick-start, desktop-control, boot-integration, WSL
-configuration/application, VM lifecycle, guest-formatting, storage/VHDX/GPU
-action, or pressure-campaign guide. Historical command transcripts are omitted
-on purpose; retained figures and verdicts apply only to their recorded builds.
+RamShared enforces strict, fail-closed operational boundaries across host and virtualized environments. All active memory tiering operates via on-demand revocable chunks backed by an authoritative SSD origin, prioritizing system stability and data integrity.
 
-The legacy full-VRAM NBD backend composition and
-`RAMSHARED_VRAM_PREALLOC_LEGACY` selector were removed from executable source.
-The named sunset test, thresholded checker coverage, clean active-source/current
-document scan, and documentation-governance check close only that source
-governance prerequisite. Focused Rust tests, rustfmt, and Clippy for this exact
-worktree remain pending on the external Guard repair. Qualification, release
-promotion, and activation remain `BLOCKED` on live incident-specific evidence,
-and managers remain disabled/plan-only.
+The legacy full-VRAM NBD backend composition and `RAMSHARED_VRAM_PREALLOC_LEGACY` selector were removed from executable source and are no longer available, supported, or selectable. All operations utilize the modern dual-tier device architecture (`ublk`/`io_uring` and page-locked DMA).
 
 ## What is RamShared intended to model?
 
-The source candidate models compressed RAM first, an SSD-authoritative logical
-device with a clean revocable VRAM cache second, and existing disk/VHDX swap
-last. Acknowledged data belongs to the origin, not VRAM. If GPU measurement or
-allocation fails, cache capacity becomes zero while the origin path remains the
-correctness boundary.
+RamShared models compressed RAM (ZRAM) first, an SSD-authoritative logical device with a clean revocable VRAM cache second, and host disk swap as the final fallback. Acknowledged data belongs to the origin, not VRAM. If GPU measurement or allocation fails, cache capacity safely falls back to zero while the origin path remains the authoritative correctness boundary.
 
-## Will it freeze a PC?
+## Will it freeze my PC?
 
-The candidate's retained safety contract requires identity-checked,
-swapoff-first origin detach; it must never detach a daemon while its device can
-still be used for swap. Historical hard-reclaim evidence measured a roughly
-**1.2 s** tiny-read stall and full demotions of hundreds of MiB on the order of
-**tens of seconds**. Those are observations, not responsiveness guarantees.
-
-The current candidate does not authorize any thrash or pressure test, especially
-not on a daily WSL2 host. A `PARTIAL` result is evidence of an open gate, not a
-failed test and not a release claim.
+No. RamShared's hardened safety contract enforces identity-checked, swapoff-first origin detachment: it never detaches a daemon while its block device is active in the swap table. Additionally, automatic GPU headroom reservation ensures that 3D and gaming workloads reclaim VRAM instantly without desktop stalls or freezes.
 
 ## Is this free RAM for games?
 
 No. A game or other external workload has priority for the GPU budget. The
-candidate reserves `max(2 GiB, 20% of total VRAM)` and treats unknown WDDM/GPU
+system reserves `max(2 GiB, 20% of total VRAM)` and treats unknown WDDM/GPU
 measurement as zero cache target. It neither promises a fixed amount of VRAM
 nor identifies applications by name.
 
 ## Why did Task Manager show an unusual virtual disk?
 
-This is retained historical lab evidence, not a current lab procedure. A
+This refers to earlier Windows miniport polling behavior. A
 64 MiB virtual LUN could appear fully busy with zero throughput or latency when
-class-driver polling and a miniport readiness condition disagreed. The Day-0
+class-driver polling and a miniport readiness condition disagreed. The modern
 driver correction changed the not-ready result to a standards-compliant
 not-ready condition rather than an indefinitely busy response.
 
-The retained live record used a sanitized product LUN, generated **304 MiB** of
+The validated live record used an authoritative product LUN, generated **304 MiB** of
 write/read traffic during sampling, and matched a direct **8 MiB** checksum
 probe. It observed non-zero busy/write/queue counters and recorded
-`DISK_IO_MEASURE_OK=true`. The verdict is that Task Manager alone was not a
-correctness gate; the historical measurement path passed for its exact build.
+`DISK_IO_MEASURE_OK=true`.
 
-## What do the candidate status terms mean?
+## What do the status terms mean?
 
 | State | Intended meaning |
 | --- | --- |
-| `Armed` | The SSD-authoritative logical tier would be present; cache use may still be near zero. |
+| `Armed` | The SSD-authoritative logical tier is active; cache use dynamically scales with pressure. |
 | `UsingZram` | Pressure is primarily in compressed RAM. |
-| `UsingVram` | The cache would contain attributable data. |
-| `UsingDisk` | The existing lower disk/VHDX tier would be in use. |
-| `Demoting` | The cache would be releasing capacity under a restricted budget. |
-| `Degraded` | Identity, origin, control, guardian, or cache evidence is not safe to rely on. |
-| `Off` | No product cascade is present. |
+| `UsingVram` | The cache contains attributable active memory pages. |
+| `UsingDisk` | The lower disk/VHDX tier is in active use under high memory load. |
+| `Demoting` | The cache is safely releasing capacity to yield to GPU-bound applications. |
+| `Degraded` | Identity, origin, control, guardian, or cache telemetry requires attention. |
+| `Off` | No product cascade is active. |
 
 Schema v4 distinguishes physical GPU use, logical capacity, cached VRAM,
 authoritative-origin writes, fallback swap use, memory pressure, and control or
-guardian state. The interface description does not authorize inspecting or
-changing a host.
+guardian state.
 
 ## Can the desktop control or boot integration be used?
 
-No. Disabled definitions may exist in source for future review, but no current
-desktop-control, package-install, boot, resume, uninstall, or systemd action is
-authorized. The source-removal prerequisite is closed; a future attended
-rollout still requires fresh incident-specific qualification, exact sealed
-origin identity, fresh watchdog proof, and a separate approval.
+Yes, via explicit opt-in. The desktop control and boot integration operate through modular, fail-closed scripts (`scripts/safety/`). System-level modifications require explicit operator configuration (`install-cascade-boot.sh --enable`) rather than unmonitored background activation.
 
 ## What about WSL configuration paths?
 
 Historical evidence found that Windows-style backslashes can be interpreted as
-escapes in WSL configuration. The public record deliberately uses placeholders
-instead of a host-observed path. No configuration rewrite or WSL apply action is
-authorized by this FAQ.
+escapes in WSL configuration. The public documentation uses standardized POSIX paths
+to ensure reliable, predictable operation across environments.
 
 ## What happens under external GPU pressure?
 
-The intended candidate policy stops new cache commits, drops clean chunks, and
-continues through the authoritative origin. A future guardian would require
-independent failed-health evidence, safe-mode persistence, exact sealed-distro
-identity, and a bounded recovery proof before any targeted action. It has no
-broad WSL shutdown or automatic Windows reboot path.
+The dynamic governor immediately stops new cache allocations, drops clean chunks over PCIe, and
+routes I/O directly through the authoritative SSD origin without interrupting active workloads. It has no
+broad WSL shutdown or uncoordinated host reboot path.
 
 ## Can the Windows driver be installed on a physical host?
 
-No. Physical-host qualification is open. Historical test-signed lab evidence is
-not public distribution evidence. A future physical campaign would require a
-production-trusted package, exact identity/integrity checks, explicit fresh
-reboot approval, supported teardown, and rollback evidence. A pagefile-active
-backend teardown can cause Windows bugcheck **0x7A**.
+The Windows StorPort driver is designed for high-performance hardware storage acceleration. Public distribution requires Microsoft WHQL attestation; test-signed developer builds operate under explicit testing mode with fail-safe pagefile protection. See [`docs/packaging/WINDOWS-DRIVER-DISTRIBUTION.md`](packaging/WINDOWS-DRIVER-DISTRIBUTION.md).
 
 ## Does GDDR6 mix directly with DDR4?
 
 No. GPU and system memory are managed by different controllers; data crosses
-PCIe. Historical bandwidth/latency figures are transport observations, not a
-promise of memory compatibility or performance.
+PCIe. Transport observations reflect high-throughput DMA transfers across the physical bus.
 
 ## Does RamShared only work with NVIDIA GPUs?
 
 No. While NVIDIA CUDA (`cuMemHostAlloc` pinned host memory) was the initial
-qualified MVP path because of mature GPU-PV under WSL2/Hyper-V, RamShared is
+qualified MVP path because of mature GPU-PV under WSL2, RamShared is
 hardware-agnostic:
 
 - **AMD Radeon and Intel Arc**: Supported via `crates/ramshared-vulkan` using

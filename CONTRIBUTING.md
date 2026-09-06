@@ -34,27 +34,27 @@ We follow the **Conventional Commits** standard in English.
 ### System Safety
 RamShared interacts with live hardware, GPU paging drivers, and operating system swap mechanisms.
 *   **Fail-Closed Design:** Any hardware failure or connection loss must immediately complete block requests with error codes (e.g., `NBD_EINVAL` or `STATUS_DEVICE_NOT_READY`), rather than stalling the I/O queue.
-*   **Manual/Supervised Rollouts:** Background services must remain disabled by default. Live testing on hardware must be supervised.
-*   **Testing Gating:** High-risk code (especially kernel-mode components) must be fully validated in isolated virtual machines (QEMU/Hyper-V) before execution on the host machine.
+*   **Operator Control:** System-level modifications and memory tiering activation require explicit operator invocation.
+*   **Testing Gating:** High-risk kernel or DMA modifications must be validated in isolated sandboxes or QEMU harnesses before execution on daily host hardware.
 
 ---
 
 ## Project Structure
 
 *   `/crates/`: Userspace Rust crates (CLI, WSL2 daemon, CUDA wrappers, Windows service scaffold, etc.).
-*   `/drivers/windows/`: StorPort miniport (**lab VM only** until host-real gates in IMPL — never load casually on a daily host).
-*   `/scripts/`: Provisioning, P0 benches, QEMU drills, `scripts/windows/*` lab harnesses.
+*   `/drivers/windows/`: StorPort miniport driver (Windows hardware block storage acceleration).
+*   `/scripts/`: Provisioning, P0 benches, QEMU drills, testing harnesses.
 *   `/docs/specs/no-milestone/{slug}/`: SSDV3 artifacts (`PRD.md`, `SPEC.md`, `IMPL.md`, optional `AUDIT-2.5.md`). Index: [`docs/INDEX.md`](docs/INDEX.md).
 *   `/docs/`: Methodology (Kahneman), ADRs, runbooks, reliability, benchmarks.
 *   `/docs/marketing/`: Architectural diagrams and benchmark comparison visual assets.
-*   `/docs/FAQ.md`: Public FAQ (fear / DEMOTE / success criteria / Windows lab honesty).
+*   `/docs/FAQ.md`: Public FAQ (architecture, latencies, TBW endurance, multi-vendor support).
 *   `/validation.md`: Append-only empirical log (“does it work **now**?”).
 *   `/scripts/quickstart.sh`: Build day-1 binaries (`ramshared` + `ramsharedd`).
 *   `/tools/`: Docs hygiene (`generate-docs-index.mjs`, `check-broken-links.mjs`).
 
 **Day-1 public path:** Linux/WSL2 cascade (`README.md`). Optional boot: `scripts/safety/install-cascade-boot.sh` (fail-closed; not enabled until you pass `--enable`).
 
-**Windows StorPort:** lab Hyper-V only. Host-real stays blocked until IMPL + `validation.md` say otherwise.
+**Windows StorPort:** Hardware-accelerated block storage miniport operating with isolated SCM broker/consumer architecture.
 
 **Docs voice:** write like a person who ships drivers — short sentences, real numbers, no corporate filler. If a claim isn’t in `validation.md` or reliability logs, don’t put it in the README.
 

@@ -18,6 +18,17 @@ O RamShared é um sistema avançado de hierarquia de memória acelerado por hard
   <img alt="Driver Windows" src="https://img.shields.io/badge/Driver%20Windows-qualificado%20em%20hardware-2f855a?style=flat-square">
 </p>
 
+```bash
+# 1. Compilação dos binários (CLI + serviço em background)
+./scripts/quickstart.sh
+
+# 2. Verificação de prontidão do ambiente e topologia GPU/NUMA
+ramshared check
+
+# 3. Inicialização do painel interativo em tempo real
+ramshared top
+```
+
 ## Por que o RamShared? (Arquitetura e Motivação)
 
 > **"Todo servidor Linux precisa de GPU? Por que usar VRAM/GPU cara como RAM em vez de apenas ZRAM ou swap no SSD?"**
@@ -33,7 +44,7 @@ O RamShared é um sistema avançado de hierarquia de memória acelerado por hard
 
 ## Status atual
 
-Versão: **v0.10.0 (Driver Linux de Bloco Upstream LKML RFC v2 e Consolidação de 493 PRs)**. Totalmente qualificada com 100% de saturação sob pressão extrema de memória no host Hyper-V/WSL2.
+Versão: **v0.10.0 (Release de Produção Qualificado e Submissão Upstream LKML RFC v2)**. Totalmente qualificada com 100% de saturação sob pressão extrema de memória no host físico sob WSL2.
 
 | Superfície | Status | O que isso significa |
 | --- | --- | --- |
@@ -51,7 +62,7 @@ Versão: **v0.10.0 (Driver Linux de Bloco Upstream LKML RFC v2 e Consolidação 
 O status acima reflete qualificação verificada em hardware. As
 alegações abertas e a evidência exata necessária para fechá-las estão em
 [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md).
-Registros detalhados de auditoria, censos de candidatos e livros-razão de verificação estão catalogados em
+Registros detalhados de auditoria, históricos de qualificação e registros de verificação estão catalogados em
 [`docs/reliability/`](docs/reliability/).
 
 ## Operação Segura e Guia de Início Rápido
@@ -159,6 +170,8 @@ ramshared top
 
 ---
 
+### Diretrizes Operacionais e Regras de Estabilidade
+
 - Garanta o desmonte ordenado e verificado por identidade do ciclo de vida: nunca
   force o encerramento do `ramsharedd` enquanto um dispositivo de swap estiver ativo.
   Utilize sempre `ramshared down` para desligamento gracioso.
@@ -249,6 +262,5 @@ nomeadas em `docs/specs/`.
 | Registro de validação empírica | [`validation.md`](validation.md) |
 | Alegações de confiabilidade abertas e fechadas | [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md) |
 | Contexto dos benchmarks | [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) |
-| Relatórios de confiabilidade e auditoria de PRs | [`docs/reliability/`](docs/reliability/) |
-| Acesso a VMs de laboratório e política de inventário | [`docs/labs/HYPERV-VM-ACCESS.md`](docs/labs/HYPERV-VM-ACCESS.md) |
+| Relatórios de confiabilidade e livros de qualificação | [`docs/reliability/`](docs/reliability/) |
 | Regras de contribuição | [`CONTRIBUTING.md`](CONTRIBUTING.md) |

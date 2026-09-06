@@ -8,12 +8,13 @@ This directory contains public architecture diagrams and benchmark comparison vi
 | :--- | :--- | :--- | :--- |
 | `cascade-diagram.svg` | Vector SVG | Primary tiering architecture diagram (English) | `README.md` |
 | `cascade-diagram-pt.svg` | Vector SVG | Primary tiering architecture diagram (Portuguese) | `README.pt-BR.md` |
-| `cascade-diagram.png` | PNG (1920x1080) | Raytraced 3D photorealistic hardware diagram (EN) | `docs/marketing/` |
-| `cascade-diagram-pt.png` | PNG (1920x1080) | Raytraced 3D photorealistic hardware diagram (PT) | `docs/marketing/` |
+| `ramshared-top.png` | PNG (1920x1080) | CLI monitoring interface (`ramshared top`) screenshot | Documentation |
 | `benchmark-comparison.svg` | Vector SVG | Direct I/O and latency comparison graph | `docs/benchmarks/public-claims.json` |
 | `benchmark-comparison.jpg` | JPEG | Benchmark throughput comparison raster artifact | `docs/governance/public-binary-digests.json` |
 | `benchmark-wsl2-vs-storport.jpg` | JPEG | WSL2 vs StorPort benchmark comparison artifact | `docs/governance/public-binary-digests.json` |
 | `social-preview.png` | PNG (1200x630) | OpenGraph social preview and repository preview card | GitHub / social |
+
+High-resolution raytraced 3D PNG renders (`cascade-diagram.png`, `cascade-diagram-pt.png`) are maintained locally in `local/marketing/` to preserve repository clone efficiency while keeping SVGs as the sharp, scalable public source of truth.
 
 ## Integrity
 

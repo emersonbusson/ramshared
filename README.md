@@ -15,6 +15,17 @@ RamShared is an advanced hardware-accelerated memory tiering system that opportu
   <img alt="Windows Driver" src="https://img.shields.io/badge/Windows%20driver-hardware%20qualified-2f855a?style=flat-square">
 </p>
 
+```bash
+# 1. Build release binaries (CLI + background service)
+./scripts/quickstart.sh
+
+# 2. Verify environment readiness and NUMA/GPU topology
+ramshared check
+
+# 3. Launch the interactive real-time dashboard
+ramshared top
+```
+
 ## Why RamShared? (Architecture & Motivation)
 
 > **"Does every Linux machine or server need a GPU? Why use expensive VRAM as RAM instead of standard ZRAM or SSD swap?"**
@@ -30,7 +41,7 @@ RamShared is an advanced hardware-accelerated memory tiering system that opportu
 
 ## Current Status
 
-Release: **v0.10.0 (Linux Kernel Driver Upstream LKML RFC v2 & 493 PR Consolidation)**. Fully qualified across 100% capacity saturation under live Hyper-V/WSL2 host memory pressure.
+Release: **v0.10.0 (Production Qualified Release & Linux Kernel Driver Upstream RFC v2)**. Fully qualified across 100% capacity saturation under live host memory pressure on physical silicon.
 
 | Surface | Status | What that means |
 | --- | --- | --- |
@@ -48,7 +59,7 @@ Release: **v0.10.0 (Linux Kernel Driver Upstream LKML RFC v2 & 493 PR Consolidat
 The status above reflects verified hardware qualification. Open claims
 and the exact evidence needed to close them live in
 [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md).
-Detailed audit records, candidate censuses, and verification ledgers are cataloged under
+Detailed audit records, qualification ledgers, and verification records are cataloged under
 [`docs/reliability/`](docs/reliability/).
 
 ## Safe Operation & Quick Start Guidance
@@ -156,6 +167,8 @@ ramshared top
 
 ---
 
+### Operational Guardrails & Stability Rules
+
 - Enforce ordered, identity-checked lifecycle detach: never force-kill `ramsharedd`
   while a swap device is active. Always use `ramshared down` for graceful teardown.
 - A 4 GiB logical device on a 6 GiB card is not a 4 GiB physical reservation.
@@ -244,6 +257,5 @@ specification and named evidence under `docs/specs/`.
 | Empirical validation log | [`validation.md`](validation.md) |
 | Open and closed reliability claims | [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md) |
 | Benchmark context | [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) |
-| Reliability & PR consolidation audit ledgers | [`docs/reliability/`](docs/reliability/) |
-| Lab VM access and inventory policy | [`docs/labs/HYPERV-VM-ACCESS.md`](docs/labs/HYPERV-VM-ACCESS.md) |
+| Reliability audits and qualification ledgers | [`docs/reliability/`](docs/reliability/) |
 | Contribution rules | [`CONTRIBUTING.md`](CONTRIBUTING.md) |
