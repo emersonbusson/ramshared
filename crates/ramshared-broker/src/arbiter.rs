@@ -156,14 +156,11 @@ impl Arbiter {
 
         // (1) Pending LEASE has priority; suppresses rebalancing (2/4) and round-robin (5) — R9.
         if let Some((holder, bytes)) = pending_lease {
-            let need = if slice_len == 0 {
-                0
-            } else {
-                bytes.div_ceil(slice_len) as usize
-            };
-            if need == 0 {
+            if slice_len == 0 || bytes == 0 {
                 return actions;
             }
+            let need = bytes.div_ceil(slice_len) as usize;
+
             let leased: Vec<SliceId> = slices
                 .iter()
                 .filter(|s| s.state == SliceState::Leased)
@@ -175,6 +172,7 @@ impl Arbiter {
                 .map(|s| s.id)
                 .collect();
             let available = leased.len() + free.len();
+
             if available < need {
                 // Revokes Active from the least pressured first (proxy by owner's psi; DT-8: the
                 // lease drains beyond never-zero). `lease` id stable until grant (does not increment).
@@ -188,9 +186,13 @@ impl Arbiter {
                     })
                     .collect();
                 active.sort_by(|a, b| by_psi(a.2, b.2).then(a.0.cmp(&b.0)));
-                for (slice, from, _) in active.into_iter().take(deficit) {
-                    actions.push(Action::RevokeForLease { slice, from });
-                }
+
+                actions.extend(
+                    active
+                        .into_iter()
+                        .take(deficit)
+                        .map(|(slice, from, _)| Action::RevokeForLease { slice, from }),
+                );
                 return actions;
             }
 
@@ -240,17 +242,16 @@ impl Arbiter {
         // (3)+(4) DIFFERENTIAL: only if no revert, streak met, no cooldown, and no Free
         // (Free slices go to round-robin in step 5; moving is for the all-assigned case).
         let has_free = slices.iter().any(|s| s.state == SliceState::Free);
-        if !moved
-            && self.streak >= self.cfg.streak
-            && !self.cooldown_active(now)
-            && !has_free
-            && let Some((receiver, donor, _)) = pair
-        {
+
+        let differential_eligible =
+            !moved && self.streak >= self.cfg.streak && !self.cooldown_active(now) && !has_free;
+
+        if differential_eligible && let Some((receiver, donor, _)) = pair {
             let donor_pressured = donor.psi.avg10 > self.cfg.psi_floor;
             // never-zero (RF-B2/DT-8): does not drain a donor UNDER PRESSURE to zero slices.
-            if !(donor_pressured && donor.slices <= 1)
-                && let Some(slice) = first_active_of(slices, donor.id)
-            {
+            let can_move = !(donor_pressured && donor.slices <= 1);
+
+            if can_move && let Some(slice) = first_active_of(slices, donor.id) {
                 actions.push(Action::MoveSlice {
                     slice,
                     from: donor.id,
@@ -269,12 +270,14 @@ impl Arbiter {
         }
 
         // (5) ROUND-ROBIN of Free slices among the present ones (DT-6).
-        if !tenants.is_empty() {
-            for s in slices.iter().filter(|s| s.state == SliceState::Free) {
-                let to = tenants[self.rr_cursor % tenants.len()].id;
-                self.rr_cursor = self.rr_cursor.wrapping_add(1);
-                actions.push(Action::AssignFree { slice: s.id, to });
-            }
+        if tenants.is_empty() {
+            return actions;
+        }
+
+        for s in slices.iter().filter(|s| s.state == SliceState::Free) {
+            let to = tenants[self.rr_cursor % tenants.len()].id;
+            self.rr_cursor = self.rr_cursor.wrapping_add(1);
+            actions.push(Action::AssignFree { slice: s.id, to });
         }
 
         actions
