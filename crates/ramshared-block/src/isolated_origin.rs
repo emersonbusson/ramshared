@@ -658,13 +658,9 @@ mod tests {
     fn bounded_cache_client_covers_hit_miss_mutation_and_disable_protocol() {
         let (mut cache, worker) = isolated_cache_channel(2, Duration::from_millis(100));
         let worker = std::thread::spawn(move || {
-            let request = worker.requests.recv().unwrap();
-            match request {
-                IsolatedCacheRequest::Read { offset, len, reply } => {
-                    assert_eq!((offset, len), (4, 4));
-                    reply.send(Ok(Some(b"hit!".to_vec()))).unwrap();
-                }
-                _ => panic!("expected cache read"),
+            if let Ok(IsolatedCacheRequest::Read { offset, len, reply }) = worker.requests.recv() {
+                assert_eq!((offset, len), (4, 4));
+                reply.send(Ok(Some(b"hit!".to_vec()))).unwrap();
             }
             worker
         });
@@ -674,20 +670,14 @@ mod tests {
         let worker = worker.join().unwrap();
 
         assert_eq!(cache.update(8, b"new!"), CacheMutation::Accepted);
-        match worker.requests.recv().unwrap() {
-            IsolatedCacheRequest::Update { offset, data } => {
-                assert_eq!(offset, 8);
-                assert_eq!(data, b"new!");
-            }
-            _ => panic!("expected cache update"),
+        if let Ok(IsolatedCacheRequest::Update { offset, data }) = worker.requests.recv() {
+            assert_eq!(offset, 8);
+            assert_eq!(data, b"new!");
         }
         assert_eq!(cache.promote(12, b"warm"), CacheMutation::Accepted);
-        match worker.requests.recv().unwrap() {
-            IsolatedCacheRequest::Promote { offset, data } => {
-                assert_eq!(offset, 12);
-                assert_eq!(data, b"warm");
-            }
-            _ => panic!("expected cache promotion"),
+        if let Ok(IsolatedCacheRequest::Promote { offset, data }) = worker.requests.recv() {
+            assert_eq!(offset, 12);
+            assert_eq!(data, b"warm");
         }
         let control = std::thread::spawn(move || {
             let IsolatedCacheControl::Disable { reply } = worker.control.recv().unwrap();

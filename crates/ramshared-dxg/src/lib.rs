@@ -267,12 +267,12 @@ fn validate_enum(request: &uapi::EnumAdapters2, capacity: Option<usize>) -> Resu
 
 fn validate_query(query: &uapi::QueryVideoMemoryInfo) -> Result<(), DxgError> {
     if query.process != 0 {
-        Err(DxgError::Malformed("process"))
-    } else if query.adapter == 0 {
-        Err(DxgError::Malformed("adapter"))
-    } else {
-        Ok(())
+        return Err(DxgError::Malformed("process"));
     }
+    if query.adapter == 0 {
+        return Err(DxgError::Malformed("adapter"));
+    }
+    Ok(())
 }
 
 fn close_adapter(file: &File, handle: u32) {
