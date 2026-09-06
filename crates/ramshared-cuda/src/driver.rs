@@ -91,7 +91,7 @@ impl Cuda {
             }
         }
         if handle.is_null() {
-            return Err(CudaError::Load(crate::loader::error()));
+            return Err(CudaError::Load(crate::loader::error().to_string()));
         }
         let lib = Lib(handle);
 
