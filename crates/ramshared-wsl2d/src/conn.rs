@@ -159,6 +159,12 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
                     break;
                 }
             };
+            // Anti-DoS: physical upper bound for IPC buffers (16 MiB) to prevent memory exhaustion.
+            if req.len > 16 * 1024 * 1024 {
+                eprintln!("[ramsharedd] conn: request len {} exceeds physical IPC buffer bound (16 MiB); disconnecting", req.len);
+                break;
+            }
+
             // Anti-DoS: a WRITE can never exceed the negotiated export (prevents allocating gigabytes).
             if req.cmd == Command::Write && req.len as u64 > export_size {
                 eprintln!(
