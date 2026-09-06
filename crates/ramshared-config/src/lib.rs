@@ -269,7 +269,10 @@ mod tests {
             column: Some(2),
             key_path: "broker".into(),
         };
-        assert_eq!(p1.to_string(), "parse error at line 1, col 2 for key 'broker': msg");
+        assert_eq!(
+            p1.to_string(),
+            "parse error at line 1, col 2 for key 'broker': msg"
+        );
 
         let p2 = ConfigError::Parse {
             message: "msg".into(),

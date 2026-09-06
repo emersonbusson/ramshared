@@ -29,10 +29,16 @@ impl fmt::Display for ConfigError {
                 if key_path.is_empty() {
                     write!(f, "parse error at line {}, col {}: {}", l, c, message)
                 } else {
-                    write!(f, "parse error at line {}, col {} for key '{}': {}", l, c, key_path, message)
+                    write!(
+                        f,
+                        "parse error at line {}, col {} for key '{}': {}",
+                        l, c, key_path, message
+                    )
                 }
             }
-            Self::Parse { message, key_path, .. } => {
+            Self::Parse {
+                message, key_path, ..
+            } => {
                 if key_path.is_empty() {
                     write!(f, "parse error: {}", message)
                 } else {
@@ -63,7 +69,10 @@ mod tests {
             column: Some(5),
             key_path: "broker.listen".into(),
         };
-        assert_eq!(e1.to_string(), "parse error at line 10, col 5 for key 'broker.listen': bad token");
+        assert_eq!(
+            e1.to_string(),
+            "parse error at line 10, col 5 for key 'broker.listen': bad token"
+        );
 
         let e2 = ConfigError::Parse {
             message: "unexpected eof".into(),
