@@ -14,6 +14,7 @@ pub enum Pattern {
 pub enum IntegrityError {
     CorruptedMemory { offset: usize, bit_flip_mask: u8 },
     InvalidStride { stride: usize, page_size: usize },
+    InvalidAlignment { required: usize },
 }
 
 impl fmt::Display for IntegrityError {
@@ -32,6 +33,12 @@ impl fmt::Display for IntegrityError {
                 write!(
                     f,
                     "pattern scanning stride ({stride}) does not evenly divide memory page size ({page_size})"
+                )
+            }
+            IntegrityError::InvalidAlignment { required } => {
+                write!(
+                    f,
+                    "buffer pointer is not aligned to the required SIMD alignment ({required} bytes)"
                 )
             }
         }
@@ -64,6 +71,20 @@ pub fn fill_block(buf: &mut [u8], idx: u64, kind: Pattern) {
 
 /// Returns `Ok(())` if `buf` matches the expected pattern for block index `idx`, or an `IntegrityError` otherwise.
 pub fn verify_block(buf: &[u8], idx: u64, kind: Pattern) -> Result<(), IntegrityError> {
+    let page_size = 4096;
+    #[allow(clippy::manual_is_multiple_of)]
+    if buf.is_empty() || buf.len() % page_size != 0 {
+        return Err(IntegrityError::InvalidStride {
+            stride: buf.len(),
+            page_size,
+        });
+    }
+
+    let simd_align = std::mem::align_of::<u64>();
+    if buf.as_ptr().align_offset(simd_align) != 0 {
+        return Err(IntegrityError::InvalidAlignment { required: simd_align });
+    }
+
     let mut expected = vec![0u8; buf.len()];
     fill_block(&mut expected, idx, kind);
     for (offset, (&actual, &exp)) in buf.iter().zip(expected.iter()).enumerate() {
@@ -115,5 +136,24 @@ mod tests {
         fill_block(&mut b, 2, Pattern::Random);
         assert_ne!(a, b); // pattern differs by block index
         assert!(verify_block(&a, 2, Pattern::Random).is_err()); // wrong index verification fails
+    }
+
+    #[test]
+    fn invalid_stride_returns_error() {
+        let buf = vec![0u8; 1000];
+        assert_eq!(
+            verify_block(&buf, 0, Pattern::Zero),
+            Err(IntegrityError::InvalidStride { stride: 1000, page_size: 4096 })
+        );
+    }
+
+    #[test]
+    fn invalid_alignment_returns_error() {
+        let buf = vec![0u8; 4096 + 8];
+        let unaligned_slice = &buf[1..4097]; // 4096 bytes, but unaligned by 1
+        assert_eq!(
+            verify_block(unaligned_slice, 0, Pattern::Zero),
+            Err(IntegrityError::InvalidAlignment { required: std::mem::align_of::<u64>() })
+        );
     }
 }
