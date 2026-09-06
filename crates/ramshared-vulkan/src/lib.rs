@@ -388,6 +388,15 @@ impl VramProvider for VulkanProvider {
         Self: 'p;
 
     fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
+        let total = self.device_local_total();
+        if bytes as u64 > total {
+            return Err(VramError::OutOfRange {
+                off: 0,
+                len: bytes as u64,
+                size: total,
+            });
+        }
+
         // Rounds buffer size to a multiple of 4 (requirement for vkCmdFillBuffer with WHOLE_SIZE
         // in zero); the logical len remains `bytes`.
         let buf_size = ((bytes as u64).max(1) + 3) & !3;
@@ -647,6 +656,27 @@ mod tests {
             total >> 20,
             free0 >> 20,
             free1 >> 20
+        );
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan loader + ICD (lavapipe is enough; run with --ignored)"]
+    fn alloc_exceeds_heap_returns_out_of_range() {
+        let p = VulkanProvider::open(0).expect("opens Vulkan");
+        let total = p.device_local_total();
+        assert!(total > 0, "total > 0");
+
+        let size = total as usize + 4096;
+        let res = p.alloc(size);
+        assert!(res.is_err(), "alloc should fail");
+        let err = match res {
+            Err(e) => e,
+            Ok(_) => panic!("alloc succeeded unexpectedly"),
+        };
+        assert!(
+            matches!(err, VramError::OutOfRange { .. }),
+            "expected OutOfRange for excessive size, got: {:?}",
+            err
         );
     }
 }
