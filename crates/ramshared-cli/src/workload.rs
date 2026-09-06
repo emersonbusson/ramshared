@@ -1856,8 +1856,8 @@ mod tests {
     }
 
     struct TransitionBlockingRunner {
-        ledger_root: PathBuf,
-        supervisor: OwnerIdentity,
+        ledger_root: Arc<PathBuf>,
+        supervisor: Arc<OwnerIdentity>,
         calls: RefCell<usize>,
     }
 
@@ -1866,8 +1866,8 @@ mod tests {
     }
 
     struct TransitionBlockingExecution {
-        ledger_root: PathBuf,
-        supervisor: OwnerIdentity,
+        ledger_root: Arc<PathBuf>,
+        supervisor: Arc<OwnerIdentity>,
     }
 
     struct StartPublishingRunner {
@@ -1943,8 +1943,8 @@ mod tests {
         ) -> Result<Box<dyn ScopeExecution>, String> {
             *self.calls.borrow_mut() += 1;
             Ok(Box::new(TransitionBlockingExecution {
-                ledger_root: self.ledger_root.clone(),
-                supervisor: self.supervisor.clone(),
+                ledger_root: Arc::clone(&self.ledger_root),
+                supervisor: Arc::clone(&self.supervisor),
             }))
         }
     }
@@ -3088,8 +3088,8 @@ mod tests {
         let ledger_root = root.join("ledger");
         publish_open_admission_state(&ledger_root, &supervisor);
         let runner = TransitionBlockingRunner {
-            ledger_root: ledger_root.clone(),
-            supervisor,
+            ledger_root: Arc::new(ledger_root.clone()),
+            supervisor: Arc::new(supervisor),
             calls: RefCell::new(0),
         };
 
