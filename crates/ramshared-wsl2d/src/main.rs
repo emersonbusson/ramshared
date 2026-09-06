@@ -1801,14 +1801,16 @@ impl AppArgs {
         }
         size -= size % BLOCK_SIZE as u64; // align to the block size
 
-        if origin.is_some() && !(MIN_ORIGIN_LOGICAL_SIZE..=MAX_ORIGIN_LOGICAL_SIZE).contains(&size) {
+        if origin.is_some() && !(MIN_ORIGIN_LOGICAL_SIZE..=MAX_ORIGIN_LOGICAL_SIZE).contains(&size)
+        {
             return Err("origin-cache logical size must be between 1024 and 24576 MiB".into());
         }
 
         if origin.as_deref().is_some_and(|p| p != ORIGIN_MANIFEST_PATH) {
             return Err(format!(
                 "--origin-manifest must use the sealed {ORIGIN_MANIFEST_PATH} path"
-            ).into());
+            )
+            .into());
         }
 
         validate_slice_flags(slices, slice_mb, matches!(transport, Transport::Ublk))?;
