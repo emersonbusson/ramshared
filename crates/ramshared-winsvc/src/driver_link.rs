@@ -715,6 +715,21 @@ mod tests {
     }
 
     #[test]
+    fn driver_read_slot_valid_and_invalid() {
+        let mut queue = InMemoryQueue::new(4, 4096, 4096).unwrap();
+        let payload = vec![0x42u8; 1024];
+        queue.driver_write_slot(1, &payload).unwrap();
+        let read_data = queue.driver_read_slot(1, 1024).unwrap();
+        assert_eq!(read_data, payload.as_slice());
+
+        let err_slot = queue.driver_read_slot(4, 1024).unwrap_err();
+        assert!(matches!(err_slot, DriverLinkError::Invalid(_)));
+
+        let err_len = queue.driver_read_slot(1, 4097).unwrap_err();
+        assert!(matches!(err_len, DriverLinkError::Invalid(_)));
+    }
+
+    #[test]
     fn invalid_slot_does_not_touch_backend() {
         let mut link = DriverLink::new(4, 4096, 4096).unwrap();
         let writes = Arc::new(Mutex::new(0));
