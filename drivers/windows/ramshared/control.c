@@ -216,6 +216,12 @@ CtlDispatchDeviceControl(_In_ PDEVICE_OBJECT DeviceObject, _Inout_ PIRP Irp)
 		break;
 	}
 
+	/* Guard against output buffer truncation for METHOD_BUFFERED */
+	if (info > outLen) {
+		status = STATUS_BUFFER_TOO_SMALL;
+		info = 0;
+	}
+
 	Irp->IoStatus.Status = status;
 	Irp->IoStatus.Information = info;
 	IoCompleteRequest(Irp, IO_NO_INCREMENT);

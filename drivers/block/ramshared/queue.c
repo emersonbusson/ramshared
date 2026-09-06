@@ -289,5 +289,8 @@ void ramshared_queue_cleanup(struct ramshared_device *rs_dev)
 		rs_dev->disk = NULL;
 	}
 
-	blk_mq_free_tag_set(&rs_dev->tag_set);
+	if (rs_dev->tag_set.tags) {
+		blk_mq_free_tag_set(&rs_dev->tag_set);
+		memset(&rs_dev->tag_set, 0, sizeof(rs_dev->tag_set));
+	}
 }

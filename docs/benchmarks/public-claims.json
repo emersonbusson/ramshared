@@ -26,7 +26,7 @@
     {
       "id": "legacy-marketing-cascade-en",
       "path": "docs/marketing/cascade-diagram.svg",
-      "file_sha256": "817d9ce9f558eea1c2505bb50bda7e07a11a9ea68636caccf15009b540a34df3",
+      "file_sha256": "dc00415f469ae697f3179da6689fd2c311e98cfa7f862706c3b4423894823710",
       "disposition": "legacy-unqualified",
       "benchmark_id": null,
       "claims": [
@@ -39,7 +39,7 @@
     {
       "id": "legacy-marketing-cascade-pt",
       "path": "docs/marketing/cascade-diagram-pt.svg",
-      "file_sha256": "1ea351eb3a01a111538086b4798efd78ce5309b7b70673eb5d7cfb306ce4f88b",
+      "file_sha256": "284ed8d38cddbca850494928d6491169e785887e9d26d9e9d96ac722a8caf065",
       "disposition": "legacy-unqualified",
       "benchmark_id": null,
       "claims": [
