@@ -1133,6 +1133,15 @@ mod tests {
     }
 
     #[test]
+    fn lock_volume_invalid_letter_is_rejected() {
+        let err = WindowsHostState::lock_volume('C').unwrap_err();
+        assert!(matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")));
+
+        let err = WindowsHostState::lock_volume('A').unwrap_err();
+        assert!(matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")));
+    }
+
+    #[test]
     fn lun_identity_requires_vendor_product_serial_and_size() {
         let lun = LunIdentity {
             vendor: "RAMSHARE".into(),
