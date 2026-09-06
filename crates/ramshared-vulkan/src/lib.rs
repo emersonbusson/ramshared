@@ -22,6 +22,35 @@ use ramshared_vram::{VramError, VramMemory, VramProvider};
 /// Single staging buffer per provider (no alloc on hot path, DT-8): 1 MiB. Larger I/O is sliced.
 const STAGING_BYTES: u64 = 1 << 20;
 
+/// Semantic VRAM backend error for Vulkan failures.
+#[derive(Debug)]
+pub enum VulkanError {
+    DeviceLost,
+    ExtensionNotPresent,
+}
+
+impl std::fmt::Display for VulkanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VulkanError::DeviceLost => write!(f, "ERROR_DEVICE_LOST"),
+            VulkanError::ExtensionNotPresent => write!(f, "ERROR_EXTENSION_NOT_PRESENT"),
+        }
+    }
+}
+
+impl std::error::Error for VulkanError {}
+
+
+
+fn vk_err_res(ctx: &str, e: vk::Result) -> VramError {
+    match e {
+        vk::Result::ERROR_OUT_OF_HOST_MEMORY | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => VramError::OutOfMemory,
+        vk::Result::ERROR_DEVICE_LOST => VramError::Provider(format!("vulkan {ctx}: {}", VulkanError::DeviceLost)),
+        vk::Result::ERROR_EXTENSION_NOT_PRESENT => VramError::Provider(format!("vulkan {ctx}: {}", VulkanError::ExtensionNotPresent)),
+        _ => VramError::Provider(format!("vulkan {ctx}: {:?}", e)),
+    }
+}
+
 fn vk_err(ctx: &str, e: impl std::fmt::Debug) -> VramError {
     VramError::Provider(format!("vulkan {ctx}: {e:?}"))
 }
@@ -150,7 +179,7 @@ impl VulkanProvider {
         let ci = vk::InstanceCreateInfo::default().application_info(&app);
         // SAFETY: `ci`/`app` valid during call; `None` = default allocator.
         let instance = unsafe { entry.create_instance(&ci, None) }
-            .map_err(|e| vk_err("create_instance", e))?;
+            .map_err(|e| vk_err_res("create_instance", e))?;
 
         // From this point on, any error must destroy the instance (goto out_err idiom).
         match Self::after_instance(&instance, ordinal) {
@@ -184,7 +213,7 @@ impl VulkanProvider {
     ) -> Result<(vk::PhysicalDevice, String, DeviceBits), VramError> {
         // SAFETY: `instance` valid.
         let pdevs = unsafe { instance.enumerate_physical_devices() }
-            .map_err(|e| vk_err("enumerate_physical_devices", e))?;
+            .map_err(|e| vk_err_res("enumerate_physical_devices", e))?;
         if pdevs.is_empty() {
             return Err(VramError::Provider("no Vulkan physical device".into()));
         }
@@ -242,23 +271,23 @@ impl VulkanProvider {
         // single-threaded usage. The recording calls inside `record` have their own `// SAFETY:`.
         unsafe {
             dev.reset_command_buffer(cmd, vk::CommandBufferResetFlags::empty())
-                .map_err(|e| vk_err("reset_command_buffer", e))?;
+                .map_err(|e| vk_err_res("reset_command_buffer", e))?;
             let begin = vk::CommandBufferBeginInfo::default()
                 .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             dev.begin_command_buffer(cmd, &begin)
-                .map_err(|e| vk_err("begin_command_buffer", e))?;
+                .map_err(|e| vk_err_res("begin_command_buffer", e))?;
             record(dev, cmd);
             dev.end_command_buffer(cmd)
-                .map_err(|e| vk_err("end_command_buffer", e))?;
+                .map_err(|e| vk_err_res("end_command_buffer", e))?;
             let cmds = [cmd];
             let submits = [vk::SubmitInfo::default().command_buffers(&cmds)];
             dev.queue_submit(self.queue, &submits, self.fence)
-                .map_err(|e| vk_err("queue_submit", e))?;
+                .map_err(|e| vk_err_res("queue_submit", e))?;
             let fences = [self.fence];
             dev.wait_for_fences(&fences, true, u64::MAX)
-                .map_err(|e| vk_err("wait_for_fences", e))?;
+                .map_err(|e| vk_err_res("wait_for_fences", e))?;
             dev.reset_fences(&fences)
-                .map_err(|e| vk_err("reset_fences", e))?;
+                .map_err(|e| vk_err_res("reset_fences", e))?;
         }
         Ok(())
     }
@@ -278,7 +307,7 @@ fn create_device_resources(
     // SAFETY: `dci`/`qci`/`prio` valid during call; `phys` enumerated from `instance`. Before
     // device creation, there are no resources to clean up (returns directly on failure).
     let device = unsafe { instance.create_device(phys, &dci, None) }
-        .map_err(|e| vk_err("create_device", e))?;
+        .map_err(|e| vk_err_res("create_device", e))?;
 
     // From here on, every `?` is covered by `guard` (destroys children + device on error).
     let mut guard = ResGuard::new(device);
@@ -291,7 +320,7 @@ fn create_device_resources(
         .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
     // SAFETY: device + pool_ci valid.
     let cmd_pool = unsafe { guard.device.create_command_pool(&pool_ci, None) }
-        .map_err(|e| vk_err("create_command_pool", e))?;
+        .map_err(|e| vk_err_res("create_command_pool", e))?;
     guard.cmd_pool = Some(cmd_pool);
 
     let cb_ai = vk::CommandBufferAllocateInfo::default()
@@ -300,7 +329,7 @@ fn create_device_resources(
         .command_buffer_count(1);
     // SAFETY: device + cb_ai valid; the cmd buffer(s) are freed together with the pool.
     let cbs = unsafe { guard.device.allocate_command_buffers(&cb_ai) }
-        .map_err(|e| vk_err("allocate_command_buffers", e))?;
+        .map_err(|e| vk_err_res("allocate_command_buffers", e))?;
     let cmd_buf = cbs
         .first()
         .copied()
@@ -312,7 +341,7 @@ fn create_device_resources(
             .device
             .create_fence(&vk::FenceCreateInfo::default(), None)
     }
-    .map_err(|e| vk_err("create_fence", e))?;
+    .map_err(|e| vk_err_res("create_fence", e))?;
     guard.fence = Some(fence);
 
     let buf_ci = vk::BufferCreateInfo::default()
@@ -321,7 +350,7 @@ fn create_device_resources(
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
     // SAFETY: device + buf_ci valid.
     let staging_buffer = unsafe { guard.device.create_buffer(&buf_ci, None) }
-        .map_err(|e| vk_err("create_buffer(staging)", e))?;
+        .map_err(|e| vk_err_res("create_buffer(staging)", e))?;
     guard.staging_buffer = Some(staging_buffer);
 
     // SAFETY: buffer valid.
@@ -341,7 +370,7 @@ fn create_device_resources(
         .memory_type_index(mt);
     // SAFETY: device + mai valid.
     let staging_memory = unsafe { guard.device.allocate_memory(&mai, None) }
-        .map_err(|e| vk_err("allocate_memory(staging)", e))?;
+        .map_err(|e| vk_err_res("allocate_memory(staging)", e))?;
     guard.staging_memory = Some(staging_memory);
 
     // SAFETY: buffer + memory valid; offset 0 satisfies the alignment of `req`.
@@ -350,7 +379,7 @@ fn create_device_resources(
             .device
             .bind_buffer_memory(staging_buffer, staging_memory, 0)
     }
-    .map_err(|e| vk_err("bind_buffer_memory(staging)", e))?;
+    .map_err(|e| vk_err_res("bind_buffer_memory(staging)", e))?;
 
     // SAFETY: newly allocated HOST_VISIBLE memory; maps the entire range.
     let raw = unsafe {
@@ -361,7 +390,7 @@ fn create_device_resources(
             vk::MemoryMapFlags::empty(),
         )
     }
-    .map_err(|e| vk_err("map_memory(staging)", e))?;
+    .map_err(|e| vk_err_res("map_memory(staging)", e))?;
     guard.mapped = true;
     let staging_mapped = raw.cast::<u8>();
 
@@ -397,7 +426,7 @@ impl VramProvider for VulkanProvider {
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
         // SAFETY: device + buf_ci valid.
         let buffer = unsafe { self.device.create_buffer(&buf_ci, None) }
-            .map_err(|e| vk_err("create_buffer", e))?;
+            .map_err(|e| vk_err_res("create_buffer", e))?;
 
         // SAFETY: buffer valid.
         let req = unsafe { self.device.get_buffer_memory_requirements(buffer) };
@@ -429,7 +458,7 @@ impl VramProvider for VulkanProvider {
             Err(e) => {
                 // SAFETY: buffer created above; destroyed on error.
                 unsafe { self.device.destroy_buffer(buffer, None) };
-                return Err(vk_err("allocate_memory", e));
+                return Err(vk_err_res("allocate_memory", e));
             }
         };
         // SAFETY: buffer + memory valid; offset 0.
@@ -439,7 +468,7 @@ impl VramProvider for VulkanProvider {
                 self.device.free_memory(memory, None);
                 self.device.destroy_buffer(buffer, None);
             }
-            return Err(vk_err("bind_buffer_memory", e));
+            return Err(vk_err_res("bind_buffer_memory", e));
         }
         self.allocated.fetch_add(bytes as u64, Ordering::Relaxed);
         Ok(VulkanMem {
@@ -588,6 +617,22 @@ impl Drop for VulkanMem<'_> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vk_err_maps_semantic_errors() {
+        let e_oom = vk::Result::ERROR_OUT_OF_DEVICE_MEMORY;
+        assert!(matches!(vk_err_res("test", e_oom), VramError::OutOfMemory));
+
+        let e_oom_host = vk::Result::ERROR_OUT_OF_HOST_MEMORY;
+        assert!(matches!(vk_err_res("test", e_oom_host), VramError::OutOfMemory));
+
+        let e_lost = vk::Result::ERROR_DEVICE_LOST;
+        assert_eq!(vk_err_res("test", e_lost).to_string(), "vram provider: vulkan test: ERROR_DEVICE_LOST");
+
+        let e_ext = vk::Result::ERROR_EXTENSION_NOT_PRESENT;
+        assert_eq!(vk_err_res("test", e_ext).to_string(), "vram provider: vulkan test: ERROR_EXTENSION_NOT_PRESENT");
+    }
+
 
     #[test]
     #[ignore = "requires Vulkan loader + ICD (lavapipe/llvmpipe is enough; run with --ignored)"]
