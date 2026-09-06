@@ -565,10 +565,12 @@ mod tests {
     }
 
     fn parse_config(v: &[&str]) -> Config {
-        match parse_args(&args(v)).expect("arguments must parse as a configuration") {
-            ParsedArgs::Config(config) => config,
-            ParsedArgs::Help => panic!("test expected configuration, not help"),
+        match parse_args(&args(v)) {
+            Ok(ParsedArgs::Config(config)) => Ok(config),
+            Ok(ParsedArgs::Help) => Err("test expected configuration, not help".to_string()),
+            Err(err) => Err(err),
         }
+        .expect("arguments must parse as a configuration")
     }
 
     fn test_config(broker: String, watchdog: Duration) -> Config {
