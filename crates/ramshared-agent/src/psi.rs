@@ -11,14 +11,37 @@ use std::io::{Error, ErrorKind, Result};
 use ramshared_broker::model::PsiSample;
 use ramshared_broker::protocol::SwapEntry;
 
+#[derive(Debug)]
+pub enum PsiError {
+    Unavailable(std::io::Error),
+    CorruptedFormat,
+}
+
+impl std::fmt::Display for PsiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PsiError::Unavailable(e) => write!(f, "PSI unavailable: {}", e),
+            PsiError::CorruptedFormat => write!(f, "PSI corrupted format"),
+        }
+    }
+}
+
+impl std::error::Error for PsiError {}
+
+impl From<std::io::Error> for PsiError {
+    fn from(err: std::io::Error) -> Self {
+        PsiError::Unavailable(err)
+    }
+}
+
 /// Core logic for `read_psi` with dependency injection for the file path.
-fn read_psi_impl(path: &str) -> Result<PsiSample> {
+fn read_psi_impl(path: &str) -> std::result::Result<PsiSample, PsiError> {
     let raw = std::fs::read_to_string(path)?;
-    parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))
+    parse_psi(&raw).ok_or(PsiError::CorruptedFormat)
 }
 
 /// Reads and parses `/proc/pressure/memory`.
-pub fn read_psi() -> Result<PsiSample> {
+pub fn read_psi() -> std::result::Result<PsiSample, PsiError> {
     read_psi_impl("/proc/pressure/memory")
 }
 
@@ -293,14 +316,15 @@ mod tests {
 
     #[test]
     fn read_psi_impl_not_found() {
-        assert!(read_psi_impl("/proc/nonexistent_psi_file_12345").is_err());
+        let err = read_psi_impl("/proc/nonexistent_psi_file_12345").unwrap_err();
+        assert!(matches!(err, PsiError::Unavailable(_)));
     }
 
     #[test]
     fn read_psi_impl_invalid_data() {
         let path = write_temp_file("invalid content\n");
         let err = read_psi_impl(&path).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(matches!(err, PsiError::CorruptedFormat));
         std::fs::remove_file(path).unwrap();
     }
 
