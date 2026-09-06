@@ -153,28 +153,26 @@ impl VulkanProvider {
             .map_err(|e| vk_err("create_instance", e))?;
 
         // From this point on, any error must destroy the instance (goto out_err idiom).
-        match Self::after_instance(&instance, ordinal) {
-            Ok((phys, name, bits)) => Ok(Self {
-                instance,
-                _entry: entry,
-                phys,
-                device: bits.device,
-                queue: bits.queue,
-                cmd_pool: bits.cmd_pool,
-                cmd_buf: bits.cmd_buf,
-                fence: bits.fence,
-                staging_buffer: bits.staging_buffer,
-                staging_memory: bits.staging_memory,
-                staging_mapped: bits.staging_mapped,
-                allocated: AtomicU64::new(0),
-                name,
-            }),
-            Err(e) => {
-                // SAFETY: `instance` created above and destroyed exactly once here.
-                unsafe { instance.destroy_instance(None) };
-                Err(e)
-            }
-        }
+        let (phys, name, bits) = Self::after_instance(&instance, ordinal).inspect_err(|_e| {
+            // SAFETY: `instance` created above and destroyed exactly once here.
+            unsafe { instance.destroy_instance(None) };
+        })?;
+
+        Ok(Self {
+            instance,
+            _entry: entry,
+            phys,
+            device: bits.device,
+            queue: bits.queue,
+            cmd_pool: bits.cmd_pool,
+            cmd_buf: bits.cmd_buf,
+            fence: bits.fence,
+            staging_buffer: bits.staging_buffer,
+            staging_memory: bits.staging_memory,
+            staging_mapped: bits.staging_mapped,
+            allocated: AtomicU64::new(0),
+            name,
+        })
     }
 
     /// Device selection + name + creation of device resources (with its own cleanup on error).
@@ -406,41 +404,34 @@ impl VramProvider for VulkanProvider {
             self.instance
                 .get_physical_device_memory_properties(self.phys)
         };
-        let mt = match pick_memory_type(
+        let Some(mt) = pick_memory_type(
             &mprops,
             req.memory_type_bits,
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        ) {
-            Some(i) => i,
-            None => {
-                // SAFETY: buffer created above; destroyed before returning (no leak).
-                unsafe { self.device.destroy_buffer(buffer, None) };
-                return Err(VramError::Provider(
-                    "no DEVICE_LOCAL memory type for the buffer".into(),
-                ));
-            }
+        ) else {
+            // SAFETY: buffer created above; destroyed before returning (no leak).
+            unsafe { self.device.destroy_buffer(buffer, None) };
+            return Err(VramError::Provider(
+                "no DEVICE_LOCAL memory type for the buffer".into(),
+            ));
         };
         let mai = vk::MemoryAllocateInfo::default()
             .allocation_size(req.size)
             .memory_type_index(mt);
         // SAFETY: device + mai valid.
-        let memory = match unsafe { self.device.allocate_memory(&mai, None) } {
-            Ok(m) => m,
-            Err(e) => {
-                // SAFETY: buffer created above; destroyed on error.
-                unsafe { self.device.destroy_buffer(buffer, None) };
-                return Err(vk_err("allocate_memory", e));
-            }
-        };
+        let memory = unsafe { self.device.allocate_memory(&mai, None) }.inspect_err(|_e| {
+            // SAFETY: buffer created above; destroyed on error.
+            unsafe { self.device.destroy_buffer(buffer, None) };
+        }).map_err(|e| vk_err("allocate_memory", e))?;
+
         // SAFETY: buffer + memory valid; offset 0.
-        if let Err(e) = unsafe { self.device.bind_buffer_memory(buffer, memory, 0) } {
+        unsafe { self.device.bind_buffer_memory(buffer, memory, 0) }.inspect_err(|_e| {
             // SAFETY: buffer + memory created above; freed in reverse order on error.
             unsafe {
                 self.device.free_memory(memory, None);
                 self.device.destroy_buffer(buffer, None);
             }
-            return Err(vk_err("bind_buffer_memory", e));
-        }
+        }).map_err(|e| vk_err("bind_buffer_memory", e))?;
         self.allocated.fetch_add(bytes as u64, Ordering::Relaxed);
         Ok(VulkanMem {
             provider: self,
@@ -488,14 +479,23 @@ pub struct VulkanMem<'p> {
 impl VulkanMem<'_> {
     /// `off + len <= self.len`, otherwise `OutOfRange` (mirrors CUDA's bounds check).
     fn check_bounds(&self, off: u64, len: usize) -> Result<(), VramError> {
-        match off.checked_add(len as u64) {
-            Some(end) if end <= self.len as u64 => Ok(()),
-            _ => Err(VramError::OutOfRange {
+        let Some(end) = off.checked_add(len as u64) else {
+            return Err(VramError::OutOfRange {
                 off,
                 len: len as u64,
                 size: self.len as u64,
-            }),
+            });
+        };
+
+        if end > self.len as u64 {
+            return Err(VramError::OutOfRange {
+                off,
+                len: len as u64,
+                size: self.len as u64,
+            });
         }
+
+        Ok(())
     }
 }
 
