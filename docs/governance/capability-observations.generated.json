@@ -349,6 +349,30 @@
         "registry_state": null
       },
       "documented_surface": {
+        "implementation_paths": [],
+        "test_paths": []
+      },
+      "documents": {
+        "implementation": null,
+        "prd": null,
+        "spec": "docs/specs/no-milestone/cuda-vram-mapping/SPEC.md"
+      },
+      "observation_state": "OBSERVED",
+      "promotion": {
+        "authority": "docs/governance/claims.json",
+        "permitted": false,
+        "reason": "Only the qualified claims registry may publish capability state."
+      },
+      "slug": "cuda-vram-mapping"
+    },
+    {
+      "claim_reconciliation": {
+        "claim_present": false,
+        "observation_is_not_a_claim": true,
+        "registry_path": "docs/governance/claims.json",
+        "registry_state": null
+      },
+      "documented_surface": {
         "implementation_paths": [
           "scripts/windows/Get-LinuxKernelLabAccess.ps1",
           "scripts/windows/Invoke-LinuxKernelLabCapabilityAudit.ps1",
