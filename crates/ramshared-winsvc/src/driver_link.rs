@@ -741,4 +741,33 @@ mod tests {
         assert_eq!(*writes.lock().unwrap(), 0);
         assert_eq!(link.backend_writes, 0);
     }
+
+    #[test]
+    fn test_driver_complete_direct() {
+        let mut q = InMemoryQueue::new(4, 4096, 4096).unwrap();
+        assert_eq!(q.driver_complete().unwrap(), None);
+
+        let cqe1 = Cqe {
+            tag: 101,
+            status: ST_OK,
+            reserved: 0,
+        };
+        let cqe2 = Cqe {
+            tag: 102,
+            status: ST_EINVAL,
+            reserved: 0,
+        };
+        q.push_cqe(cqe1).unwrap();
+        q.push_cqe(cqe2).unwrap();
+
+        let popped1 = q.driver_complete().unwrap().unwrap();
+        assert_eq!(popped1.tag, 101);
+        assert_eq!(popped1.status, ST_OK);
+
+        let popped2 = q.driver_complete().unwrap().unwrap();
+        assert_eq!(popped2.tag, 102);
+        assert_eq!(popped2.status, ST_EINVAL);
+
+        assert_eq!(q.driver_complete().unwrap(), None);
+    }
 }
