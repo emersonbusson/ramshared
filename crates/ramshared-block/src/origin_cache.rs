@@ -910,7 +910,7 @@ mod tests {
         assert_eq!(outcome.allocated_bytes, 8);
     }
 
-    fn assert_write_release_vram_read_origin_hash_matches() {
+    fn assert_write_release_vram_read_origin_hash_matches() -> Result<(), IoError> {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
@@ -919,17 +919,18 @@ mod tests {
         events.borrow_mut().clear();
 
         let payload = *b"cache-origin-round-trip-proof-32";
-        backend.write_at(0, &payload).unwrap();
+        backend.write_at(0, &payload)?;
         assert_eq!(backend.release_cache(), 8);
 
         let mut read_back = [0; 32];
-        backend.read_at(0, &mut read_back).unwrap();
+        backend.read_at(0, &mut read_back)?;
         assert_eq!(read_back, payload);
         assert_eq!(backend.telemetry().fallback_reads, 1);
         assert_eq!(
             events.borrow().as_slice(),
             ["origin_write", "cache_write", "origin_read"]
         );
+        Ok(())
     }
 
     #[test]
@@ -947,21 +948,22 @@ mod tests {
     }
 
     #[test]
-    fn write_release_vram_read_origin_hash_matches() {
-        assert_write_release_vram_read_origin_hash_matches();
+    fn write_release_vram_read_origin_hash_matches() -> Result<(), IoError> {
+        assert_write_release_vram_read_origin_hash_matches()
     }
 
     #[test]
     // TestName: write_release_vram_read_origin_hash_parallel_fixtures_are_isolated
-    fn write_release_vram_read_origin_hash_parallel_fixtures_are_isolated() {
+    fn write_release_vram_read_origin_hash_parallel_fixtures_are_isolated() -> Result<(), IoError> {
         std::thread::scope(|scope| {
             let workers = (0..4)
                 .map(|_| scope.spawn(assert_write_release_vram_read_origin_hash_matches))
                 .collect::<Vec<_>>();
             for worker in workers {
-                worker.join().unwrap();
+                worker.join().expect("worker thread panicked")?;
             }
-        });
+            Ok(())
+        })
     }
 
     #[test]
