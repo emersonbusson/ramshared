@@ -127,6 +127,29 @@ mod windows_svc {
         }
     }
 
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn test_entry_invalid_args_returns_code_2() {
+            let args = vec![
+                "ramshared-winsvc.exe".to_string(),
+                "invalid_command".to_string(),
+            ];
+            let code = entry(args);
+            assert_eq!(code, 2);
+        }
+
+        #[test]
+        fn test_entry_empty_args_handled() {
+            let args = vec!["ramshared-winsvc.exe".to_string()];
+            let code = entry(args);
+            // SCM default without service dispatcher running returns 1
+            assert_eq!(code, 1);
+        }
+    }
+
     fn service_main(_args: Vec<OsString>) {
         if let Err(e) = run_service() {
             eprintln!("service error: {e}");

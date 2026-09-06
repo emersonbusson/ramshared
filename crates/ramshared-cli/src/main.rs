@@ -1246,28 +1246,24 @@ fn print_issues<W: Write + ?Sized>(report: &CheckReport, output: &mut W) -> std:
     Ok(())
 }
 
-fn recommendations_for(report: &CheckReport) -> Vec<String> {
+fn recommendations_for(report: &CheckReport) -> Vec<&'static str> {
     let mut recommendations = Vec::with_capacity(10);
 
     if report.wsl.status == Status::Fail {
         recommendations.push(
-            "Run this only in a WSL2 distro; this project must not run on bare-metal Linux in this mode"
-                .to_string(),
+            "Run this only in a WSL2 distro; this project must not run on bare-metal Linux in this mode",
         );
     }
 
     if !report.cuda.dxg_present {
         recommendations.push(
-            "On Windows, update WSL with `wsl --update`; then use `wsl --terminate Ubuntu-24.04` when you can interrupt this distro"
-                .to_string(),
+            "On Windows, update WSL with `wsl --update`; then use `wsl --terminate Ubuntu-24.04` when you can interrupt this distro",
         );
         recommendations.push(
-            "Update the NVIDIA driver on Windows; do not install the NVIDIA Linux driver inside WSL"
-                .to_string(),
+            "Update the NVIDIA driver on Windows; do not install the NVIDIA Linux driver inside WSL",
         );
         recommendations.push(
-            "Reopen the distro and confirm that `/dev/dxg` exists before trying any VRAM test"
-                .to_string(),
+            "Reopen the distro and confirm that `/dev/dxg` exists before trying any VRAM test",
         );
     }
 
@@ -1278,29 +1274,25 @@ fn recommendations_for(report: &CheckReport) -> Vec<String> {
         .is_some_and(|output| output.contains("GPU access blocked by the operating system"))
     {
         recommendations.push(
-            "The GPU is blocked by the host; close apps that may monopolize it, update Windows/the NVIDIA driver, and restart WSL manually"
-                .to_string(),
+            "The GPU is blocked by the host; close apps that may monopolize it, update Windows/the NVIDIA driver, and restart WSL manually",
         );
     }
 
     if report.cuda.libcuda_path.is_none() {
         recommendations.push(
-            "Install only the WSL-compatible CUDA Toolkit if you need to compile; avoid `cuda`, `cuda-12-x`, or `cuda-drivers` packages inside WSL"
-                .to_string(),
+            "Install only the WSL-compatible CUDA Toolkit if you need to compile; avoid `cuda`, `cuda-12-x`, or `cuda-drivers` packages inside WSL",
         );
     }
 
     if report.backends.nbd_detail.contains("module-not-loaded") {
         recommendations.push(
-            "For a future start phase, the MVP backend must use `nbd`; loading the module with `modprobe nbd` must be a separate manual action"
-                .to_string(),
+            "For a future start phase, the MVP backend must use `nbd`; loading the module with `modprobe nbd` must be a separate manual action",
         );
     }
 
     if report.backends.ublk_status == Status::Fail {
         recommendations.push(
-            "`ublk` is unavailable in this kernel; ignore it for now and keep the MVP on `nbd`"
-                .to_string(),
+            "`ublk` is unavailable in this kernel; ignore it for now and keep the MVP on `nbd`",
         );
     }
 
@@ -1308,38 +1300,35 @@ fn recommendations_for(report: &CheckReport) -> Vec<String> {
         && mfk < 262144
     {
         recommendations.push(
-            "Apply `packaging/systemd/99-ramshared-performance.conf` to set vm.min_free_kbytes=524288 and prevent Hyper-V vCPU Direct Reclaim freezes"
-                .to_string(),
+            "Apply `packaging/systemd/99-ramshared-performance.conf` to set vm.min_free_kbytes=524288 and prevent Hyper-V vCPU Direct Reclaim freezes",
         );
     }
 
     if report.decision() == Decision::Ready {
         recommendations.push(
-            "Environment ready for the bounded NBD preflight; keep pressure and boot activation disabled until status reports a guaranteed READY profile"
-                .to_string(),
+            "Environment ready for the bounded NBD preflight; keep pressure and boot activation disabled until status reports a guaranteed READY profile",
         );
     } else {
         recommendations.push(
-            "Do not run `ramshared start`, `swapon`, memory-pressure tests, or auto-start until `ramshared check` returns `ready`"
-                .to_string(),
+            "Do not run `ramshared start`, `swapon`, memory-pressure tests, or auto-start until `ramshared check` returns `ready`",
         );
     }
 
     recommendations
 }
 
-fn print_recommendations<W: Write + ?Sized>(
-    recommendations: &[String],
+fn print_recommendations<W: Write + ?Sized, S: AsRef<str>>(
+    recommendations: &[S],
     output: &mut W,
 ) -> std::io::Result<()> {
     writeln!(output, "Recommendations:")?;
     for recommendation in recommendations {
-        writeln!(output, "  - {recommendation}")?;
+        writeln!(output, "  - {}", recommendation.as_ref())?;
     }
     Ok(())
 }
 
-fn render_doctor_json(report: &CheckReport, recommendations: &[String]) -> String {
+fn render_doctor_json<S: AsRef<str>>(report: &CheckReport, recommendations: &[S]) -> String {
     format!(
         "{{\"check\":{},\"recommendations\":[{}]}}",
         render_json(report),
@@ -1454,10 +1443,10 @@ fn render_json(report: &CheckReport) -> String {
     )
 }
 
-fn json_array(items: &[String]) -> String {
+fn json_array<S: AsRef<str>>(items: &[S]) -> String {
     items
         .iter()
-        .map(|item| format!("\"{}\"", json_escape(item)))
+        .map(|item| format!("\"{}\"", json_escape(item.as_ref())))
         .collect::<Vec<_>>()
         .join(",")
 }

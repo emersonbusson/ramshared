@@ -29,6 +29,7 @@ use crate::{
 
 const EIO: i32 = -5;
 const EINVAL: i32 = -22;
+const ERANGE: i32 = -34;
 
 trait QueueServer {
     fn submit_initial_fetch(&mut self) -> io::Result<()>;
@@ -89,7 +90,7 @@ pub fn serve_request<B: BlockBackend + ?Sized>(
         .checked_add(req.len as u64)
         .is_none_or(|end| end > backend.size_bytes())
     {
-        return EINVAL;
+        return ERANGE;
     }
 
     // Command guard
@@ -963,7 +964,7 @@ mod join_tests {
 
         request.len = 4096;
         request.offset = 4096; // Out of bounds (backend is 4096, offset 4096 + len 4096 = 8192 > 4096)
-        assert_eq!(serve_request(&request, &mut backend, &mut buffer), EINVAL);
+        assert_eq!(serve_request(&request, &mut backend, &mut buffer), ERANGE);
     }
 
     #[test]

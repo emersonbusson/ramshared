@@ -234,4 +234,22 @@ mod tests {
         let result = retry_until(Instant::now(), || Err(2));
         assert_eq!(result, Err(BrokerConnectError::Deadline));
     }
+    #[cfg(windows)]
+    #[test]
+    fn connect_product_pipe_deadline_stops_retry() {
+        let result = NamedPipeBrokerStream::connect_product_pipe(Instant::now());
+        assert!(matches!(
+            result,
+            Err(BrokerConnectError::Deadline) | Err(BrokerConnectError::NonTransient(_))
+        ));
+    }
+    #[cfg(windows)]
+    #[test]
+    fn connect_status_pipe_deadline_stops_retry() {
+        let result = NamedPipeBrokerStream::connect_status_pipe(Instant::now());
+        assert!(matches!(
+            result,
+            Err(BrokerConnectError::Deadline) | Err(BrokerConnectError::NonTransient(_))
+        ));
+    }
 }

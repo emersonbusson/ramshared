@@ -44,7 +44,7 @@ pub struct Watchdog {
 
 impl Watchdog {
     pub fn new(deadline: Duration, now: Instant) -> Result<Self, WatchdogError> {
-        if deadline < Duration::from_millis(10) {
+        if deadline <= Duration::from_millis(10) {
             return Err(WatchdogError::TooShort);
         }
         if deadline > Duration::from_secs(86400) {
@@ -100,6 +100,10 @@ mod tests {
         let t0 = Instant::now();
         assert_eq!(
             Watchdog::new(Duration::from_millis(5), t0),
+            Err(WatchdogError::TooShort)
+        );
+        assert_eq!(
+            Watchdog::new(Duration::from_millis(10), t0),
             Err(WatchdogError::TooShort)
         );
         assert_eq!(

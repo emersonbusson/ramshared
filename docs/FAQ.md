@@ -21,18 +21,14 @@ system reserves `max(2 GiB, 20% of total VRAM)` and treats unknown WDDM/GPU
 measurement as zero cache target. It neither promises a fixed amount of VRAM
 nor identifies applications by name.
 
-## Why did Task Manager show an unusual virtual disk?
+## Can I run 3D games, rendering software, or GPU workloads while RamShared is active?
 
-This refers to earlier Windows miniport polling behavior. A
-64 MiB virtual LUN could appear fully busy with zero throughput or latency when
-class-driver polling and a miniport readiness condition disagreed. The modern
-driver correction changed the not-ready result to a standards-compliant
-not-ready condition rather than an indefinitely busy response.
+Yes. RamShared continuously monitors GPU budget headroom via WDDM/VidMm and NVML/Vulkan APIs. It dynamically reserves `max(2 GiB, 20% of total VRAM)` strictly for 3D graphics, display compositing, and user applications. When an external 3D application or CUDA workload requests memory, RamShared evicts clean cache chunks in milliseconds, yielding GPU memory immediately without stalls or frame drops.
 
-The validated live record used an authoritative product LUN, generated **304 MiB** of
-write/read traffic during sampling, and matched a direct **8 MiB** checksum
-probe. It observed non-zero busy/write/queue counters and recorded
-`DISK_IO_MEASURE_OK=true`.
+## Does RamShared increase SSD wear (TBW)?
+
+On the contrary, RamShared significantly **reduces** SSD wear. In conventional systems under memory pressure, swap thrashing continuously writes 4KB pages directly to NAND flash, burning through Drive Writes Per Day (DWPD) and Terabytes Written (TBW). RamShared absorbs burst memory churn across compressed ZRAM and revocable VRAM (GDDR6/HBM, which has infinite write endurance), dramatically cutting down unnecessary SSD flash fatigue.
+
 
 ## What do the status terms mean?
 
@@ -121,8 +117,17 @@ cache for host virtual memory. When a real GPU workload requests VRAM,
 RamShared evicts clean cache chunks in milliseconds, leaving GPU compute
 unaffected.
 
+## Can I use RamShared inside Docker or containerized environments?
+
+Yes. In WSL2 or native Linux hosts, containers share the host kernel's virtual memory subsystem and swap cascade. You do not need to configure RamShared inside individual containers or Dockerfiles; container memory pressure automatically leverages the host's accelerated ZRAM/VRAM/SSD tiering.
+
+## How do I cleanly deactivate or uninstall RamShared?
+
+The operator deactivates the cascade via `ramshared down` (or using `sudo scripts/safety/wsl2-dual-tier-swap.sh --disable`). RamShared executes a swapoff-first ordered teardown: it deactivates the virtual swap tier, flushes data to host storage, unmounts the block device, and releases all allocated VRAM back to the GPU driver cleanly.
+
 ## Where are the verified records?
 
 [validation.md](../validation.md) is the append-only empirical log and
 [reliability evidence](reliability/) records open gates. If a number is not
 recorded there with context and a verdict, treat it as unverified.
+

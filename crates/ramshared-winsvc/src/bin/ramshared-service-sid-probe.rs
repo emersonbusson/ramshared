@@ -1,3 +1,61 @@
+#[allow(dead_code)]
+const DEFAULT_SERVICE_NAME: &str = "RamSharedWinSvc";
+
+#[allow(dead_code)]
+#[derive(Debug, PartialEq, Eq)]
+struct ProbeArgs {
+    service_name: String,
+    mode: String,
+    deny_sid: Option<String>,
+}
+
+#[allow(dead_code)]
+fn parse_args<I>(args: I) -> Result<ProbeArgs, Box<dyn std::error::Error>>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut service_name = DEFAULT_SERVICE_NAME.to_string();
+    let mut mode = "lease".to_string();
+    let mut deny_sid = None;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--service-name" => {
+                let value = iter
+                    .next()
+                    .filter(|value| !value.is_empty())
+                    .ok_or("--service-name requires a value")?;
+                service_name = value;
+            }
+            "--mode" => {
+                let value = iter
+                    .next()
+                    .filter(|value| {
+                        matches!(
+                            value.as_str(),
+                            "lease" | "oversized" | "partial" | "blocked-read" | "deny-only"
+                        )
+                    })
+                    .ok_or("--mode must be lease, oversized, partial, or blocked-read")?;
+                mode = value;
+            }
+            "--deny-sid" => {
+                let value = iter
+                    .next()
+                    .filter(|value| value.starts_with("S-1-5-80-"))
+                    .ok_or("--deny-sid requires a service SID")?;
+                deny_sid = Some(value);
+            }
+            _ => return Err("unknown probe argument".into()),
+        }
+    }
+    Ok(ProbeArgs {
+        service_name,
+        mode,
+        deny_sid,
+    })
+}
+
 #[cfg(windows)]
 mod windows_probe {
     use std::ffi::OsString;
@@ -14,7 +72,8 @@ mod windows_probe {
     use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
     use windows_service::service_dispatcher;
 
-    const DEFAULT_SERVICE_NAME: &str = "RamSharedWinSvc";
+    use super::{DEFAULT_SERVICE_NAME, parse_args};
+
     const RESULT_PATH: &str = r"C:\ramshared\autonomous-broker\service-sid-probe.json";
     static SERVICE_NAME: OnceLock<String> = OnceLock::new();
     static MODE: OnceLock<String> = OnceLock::new();
@@ -23,53 +82,15 @@ mod windows_probe {
     define_windows_service!(ffi_service_main, service_main);
 
     pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-        let arguments: Vec<String> = std::env::args().skip(1).collect();
-        let mut service_name = DEFAULT_SERVICE_NAME.to_string();
-        let mut mode = "lease".to_string();
-        let mut deny_sid = None;
-        let mut index = 0;
-        while index < arguments.len() {
-            match arguments.get(index).map(String::as_str) {
-                Some("--service-name") => {
-                    service_name = arguments
-                        .get(index + 1)
-                        .filter(|value| !value.is_empty())
-                        .ok_or("--service-name requires a value")?
-                        .clone();
-                }
-                Some("--mode") => {
-                    mode = arguments
-                        .get(index + 1)
-                        .filter(|value| {
-                            matches!(
-                                value.as_str(),
-                                "lease" | "oversized" | "partial" | "blocked-read" | "deny-only"
-                            )
-                        })
-                        .ok_or("--mode must be lease, oversized, partial, or blocked-read")?
-                        .clone();
-                }
-                Some("--deny-sid") => {
-                    deny_sid = Some(
-                        arguments
-                            .get(index + 1)
-                            .filter(|value| value.starts_with("S-1-5-80-"))
-                            .ok_or("--deny-sid requires a service SID")?
-                            .clone(),
-                    );
-                }
-                _ => return Err("unknown probe argument".into()),
-            }
-            index += 2;
-        }
+        let args = parse_args(std::env::args().skip(1))?;
         SERVICE_NAME
-            .set(service_name.clone())
+            .set(args.service_name.clone())
             .map_err(|_| "service name already set")?;
-        MODE.set(mode).map_err(|_| "probe mode already set")?;
-        if let Some(sid) = deny_sid {
+        MODE.set(args.mode).map_err(|_| "probe mode already set")?;
+        if let Some(sid) = args.deny_sid {
             DENY_SID.set(sid).map_err(|_| "deny SID already set")?;
         }
-        service_dispatcher::start(service_name, ffi_service_main)?;
+        service_dispatcher::start(args.service_name, ffi_service_main)?;
         Ok(())
     }
 
@@ -276,4 +297,51 @@ fn main() {
 fn main() {
     eprintln!("ramshared-service-sid-probe requires Windows SCM");
     std::process::exit(2);
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn parse_args_defaults() {
+        let args = parse_args(Vec::<String>::new()).unwrap();
+        assert_eq!(args.service_name, DEFAULT_SERVICE_NAME);
+        assert_eq!(args.mode, "lease");
+        assert_eq!(args.deny_sid, None);
+    }
+
+    #[test]
+    fn parse_args_custom() {
+        let input = vec![
+            "--service-name".to_string(),
+            "CustomSvc".to_string(),
+            "--mode".to_string(),
+            "oversized".to_string(),
+            "--deny-sid".to_string(),
+            "S-1-5-80-12345".to_string(),
+        ];
+        let args = parse_args(input).unwrap();
+        assert_eq!(args.service_name, "CustomSvc");
+        assert_eq!(args.mode, "oversized");
+        assert_eq!(args.deny_sid, Some("S-1-5-80-12345".to_string()));
+    }
+
+    #[test]
+    fn parse_args_invalid_mode() {
+        let input = vec!["--mode".to_string(), "invalid".to_string()];
+        let err = parse_args(input).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "--mode must be lease, oversized, partial, or blocked-read"
+        );
+    }
+
+    #[test]
+    fn parse_args_unknown_arg() {
+        let input = vec!["--unknown".to_string()];
+        let err = parse_args(input).unwrap_err();
+        assert_eq!(err.to_string(), "unknown probe argument");
+    }
 }

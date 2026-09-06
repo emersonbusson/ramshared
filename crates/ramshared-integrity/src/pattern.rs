@@ -64,7 +64,14 @@ pub fn fill_block(buf: &mut [u8], idx: u64, kind: Pattern) {
 
 /// Returns `Ok(())` if `buf` matches the expected pattern for block index `idx`, or an `IntegrityError` otherwise.
 pub fn verify_block(buf: &[u8], idx: u64, kind: Pattern) -> Result<(), IntegrityError> {
-    let mut expected = vec![0u8; buf.len()];
+    let page_size = 4096;
+    let stride = buf.len();
+    #[allow(clippy::manual_is_multiple_of)]
+    if stride == 0 || page_size % stride != 0 {
+        return Err(IntegrityError::InvalidStride { stride, page_size });
+    }
+
+    let mut expected = vec![0u8; stride];
     fill_block(&mut expected, idx, kind);
     for (offset, (&actual, &exp)) in buf.iter().zip(expected.iter()).enumerate() {
         if actual != exp {
@@ -80,6 +87,25 @@ pub fn verify_block(buf: &[u8], idx: u64, kind: Pattern) -> Result<(), Integrity
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_stride_is_rejected() {
+        assert_eq!(
+            verify_block(&[], 42, Pattern::Zero),
+            Err(IntegrityError::InvalidStride {
+                stride: 0,
+                page_size: 4096
+            })
+        );
+        let odd_buf = vec![0u8; 1000];
+        assert_eq!(
+            verify_block(&odd_buf, 42, Pattern::Zero),
+            Err(IntegrityError::InvalidStride {
+                stride: 1000,
+                page_size: 4096
+            })
+        );
+    }
 
     #[test]
     fn fill_then_verify_round_trips() {

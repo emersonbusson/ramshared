@@ -800,7 +800,7 @@ fn quarantine_transition_snapshot(lock: &mut LedgerLock) -> Result<(), String> {
     lock.transition_file
         .seek(SeekFrom::Start(0))
         .map_err(|error| format!("read transition owner for recovery: {error}"))?;
-    let mut contents = Vec::new();
+    let mut contents = Vec::with_capacity((MAX_LEDGER_BYTES + 1) as usize);
     (&mut lock.transition_file)
         .take(MAX_LEDGER_BYTES + 1)
         .read_to_end(&mut contents)
@@ -1856,8 +1856,8 @@ mod tests {
     }
 
     struct TransitionBlockingRunner {
-        ledger_root: PathBuf,
-        supervisor: OwnerIdentity,
+        ledger_root: Arc<PathBuf>,
+        supervisor: Arc<OwnerIdentity>,
         calls: RefCell<usize>,
     }
 
@@ -1866,20 +1866,20 @@ mod tests {
     }
 
     struct TransitionBlockingExecution {
-        ledger_root: PathBuf,
-        supervisor: OwnerIdentity,
+        ledger_root: Arc<PathBuf>,
+        supervisor: Arc<OwnerIdentity>,
     }
 
     struct StartPublishingRunner {
-        ledger_root: PathBuf,
-        supervisor: OwnerIdentity,
+        ledger_root: Arc<PathBuf>,
+        supervisor: Arc<OwnerIdentity>,
         start_calls: RefCell<usize>,
         wait_calls: Arc<AtomicUsize>,
     }
 
     struct StartPublishingExecution {
-        ledger_root: PathBuf,
-        supervisor: OwnerIdentity,
+        ledger_root: Arc<PathBuf>,
+        supervisor: Arc<OwnerIdentity>,
         wait_calls: Arc<AtomicUsize>,
     }
 
@@ -1930,7 +1930,7 @@ mod tests {
         }
 
         fn wait_for_completion(&mut self) -> ScopeCompletion {
-            ScopeCompletion::Terminal(self.result.clone())
+            ScopeCompletion::Terminal(std::mem::replace(&mut self.result, Ok(None)))
         }
     }
 
@@ -1943,8 +1943,8 @@ mod tests {
         ) -> Result<Box<dyn ScopeExecution>, String> {
             *self.calls.borrow_mut() += 1;
             Ok(Box::new(TransitionBlockingExecution {
-                ledger_root: self.ledger_root.clone(),
-                supervisor: self.supervisor.clone(),
+                ledger_root: Arc::clone(&self.ledger_root),
+                supervisor: Arc::clone(&self.supervisor),
             }))
         }
     }
@@ -1983,9 +1983,9 @@ mod tests {
         ) -> Result<Box<dyn ScopeExecution>, String> {
             *self.start_calls.borrow_mut() += 1;
             Ok(Box::new(StartPublishingExecution {
-                ledger_root: self.ledger_root.clone(),
-                supervisor: self.supervisor.clone(),
-                wait_calls: self.wait_calls.clone(),
+                ledger_root: Arc::clone(&self.ledger_root),
+                supervisor: Arc::clone(&self.supervisor),
+                wait_calls: Arc::clone(&self.wait_calls),
             }))
         }
     }
@@ -2139,21 +2139,18 @@ mod tests {
         } else {
             std::env::temp_dir()
         };
+        let ledger_bytes = serde_json::to_vec(&ReservationLedger {
+            schema_version: RESERVATION_LEDGER_SCHEMA_VERSION,
+            next_ordinal: 1,
+            reservations: Vec::new(),
+        })
+        .unwrap();
         for _ in 0..1024 {
             let number = TEMP.fetch_add(1, AtomicOrdering::SeqCst);
             let path = parent.join(format!("ramshared-ledger-{}-{number}", std::process::id()));
             match fs::create_dir(&path) {
                 Ok(()) => {
-                    fs::write(
-                        path.join("reservations.json"),
-                        serde_json::to_vec(&ReservationLedger {
-                            schema_version: RESERVATION_LEDGER_SCHEMA_VERSION,
-                            next_ordinal: 1,
-                            reservations: Vec::new(),
-                        })
-                        .unwrap(),
-                    )
-                    .unwrap();
+                    fs::write(path.join("reservations.json"), &ledger_bytes).unwrap();
                     return path;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -3088,8 +3085,8 @@ mod tests {
         let ledger_root = root.join("ledger");
         publish_open_admission_state(&ledger_root, &supervisor);
         let runner = TransitionBlockingRunner {
-            ledger_root: ledger_root.clone(),
-            supervisor,
+            ledger_root: Arc::new(ledger_root.clone()),
+            supervisor: Arc::new(supervisor.clone()),
             calls: RefCell::new(0),
         };
 
@@ -3134,8 +3131,8 @@ mod tests {
         let ledger_root = root.join("ledger");
         publish_open_admission_state(&ledger_root, &supervisor);
         let runner = StartPublishingRunner {
-            ledger_root: ledger_root.clone(),
-            supervisor,
+            ledger_root: Arc::new(ledger_root.clone()),
+            supervisor: Arc::new(supervisor),
             start_calls: RefCell::new(0),
             wait_calls: Arc::new(AtomicUsize::new(0)),
         };

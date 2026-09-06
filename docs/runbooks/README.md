@@ -1,9 +1,15 @@
-# Operations runbooks
+# Operations Runbooks
 
-This directory routes supported operator procedures. A runbook explains a
-bounded procedure; it is not authority to change an unsafe host, lab, driver,
-GPU, service, disk, swap, VM, or evidence record without the preconditions it
-names.
+This directory routes specialized operator runbooks and drill procedures.
+
+- **Primary Operator Manual:** For end-to-end installation, lifecycle commands, TUI monitoring, boot autostart, and emergency recovery, see the [Operator Guide](../OPERATOR-GUIDE.md).
+- **Primary Developer Guide:** For architecture, building from source, testing suites, code style, and PR contribution rules, see the [Developer Guide](../DEVELOPER-GUIDE.md).
+
+---
+
+## Targeted Procedures & Drills
+
+A runbook explains a bounded procedure; it is not authority to change an unsafe host, lab, driver, GPU, service, disk, swap, VM, or evidence record without the preconditions it names.
 
 | Objective | Canonical runbook | Boundary |
 | --- | --- | --- |

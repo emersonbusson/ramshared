@@ -14,7 +14,7 @@ This directory contains public architecture diagrams and benchmark comparison vi
 | `benchmark-wsl2-vs-storport.jpg` | JPEG | WSL2 vs StorPort benchmark comparison artifact | `docs/governance/public-binary-digests.json` |
 | `social-preview.png` | PNG (1200x630) | OpenGraph social preview and repository preview card | GitHub / social |
 
-High-resolution raytraced 3D PNG renders (`cascade-diagram.png`, `cascade-diagram-pt.png`) are maintained locally in `local/marketing/` to preserve repository clone efficiency while keeping SVGs as the sharp, scalable public source of truth.
+The production SVGs (`cascade-diagram.svg`, `cascade-diagram-pt.svg`) are hybrid photorealistic assets combining the raytraced 3D physical silicon hardware render with crisp vector typography, reticles, and HUD cards (~269 KB). Full-weight uncompressed master PNGs (2.3 MB) are preserved locally in `local/marketing/`.
 
 ## Integrity
 

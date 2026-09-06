@@ -37,6 +37,7 @@ pub struct Slice {
 
 impl Slice {
     /// Validates physical hardware limits, bounds, and layout overlaps (PRD §7).
+    #[allow(clippy::manual_is_multiple_of)]
     pub fn validate_layout(slices: &[Slice], max_capacity: u64) -> Result<(), std::io::Error> {
         for s in slices {
             if s.len == 0 {
@@ -45,13 +46,13 @@ impl Slice {
                     "Slice length cannot be zero",
                 ));
             }
-            if !(s.offset as usize).is_multiple_of(4096) {
+            if s.offset % 4096 != 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "Slice offset not 4096-byte aligned",
                 ));
             }
-            if !(s.len as usize).is_multiple_of(4096) {
+            if s.len % 4096 != 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "Slice length not 4096-byte aligned",
@@ -71,10 +72,16 @@ impl Slice {
             }
         }
 
+        let mut min_offset = u64::MAX;
+        let mut max_end = 0;
+        let mut total_len = 0;
         for i in 0..slices.len() {
-            for j in (i + 1)..slices.len() {
-                let a = &slices[i];
-                let b = &slices[j];
+            let a = &slices[i];
+            min_offset = std::cmp::min(min_offset, a.offset);
+            max_end = std::cmp::max(max_end, a.offset + a.len);
+            total_len += a.len;
+
+            for b in slices.iter().skip(i + 1) {
                 let a_end = a.offset + a.len;
                 let b_end = b.offset + b.len;
                 if std::cmp::max(a.offset, b.offset) < std::cmp::min(a_end, b_end) {
@@ -84,6 +91,13 @@ impl Slice {
                     ));
                 }
             }
+        }
+
+        if !slices.is_empty() && max_end.saturating_sub(min_offset) != total_len {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Slices are not contiguous",
+            ));
         }
 
         Ok(())
@@ -245,7 +259,7 @@ mod tests {
         assert_eq!(e.to_string(), "Slice length not 4096-byte aligned");
 
         let mut out_of_bounds = ok_slices.clone();
-        out_of_bounds[1].offset = 8192;
+        out_of_bounds[1].len = 8192;
         let Err(e) = Slice::validate_layout(&out_of_bounds, max_cap) else {
             panic!()
         };
@@ -265,5 +279,13 @@ mod tests {
             panic!()
         };
         assert_eq!(e.to_string(), "Slices overlap");
+
+        let mut non_contiguous = ok_slices.clone();
+        non_contiguous[1].offset = 8192;
+        let Err(e) = Slice::validate_layout(&non_contiguous, 16384) else {
+            panic!()
+        };
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(e.to_string(), "Slices are not contiguous");
     }
 }

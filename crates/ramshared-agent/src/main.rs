@@ -479,8 +479,7 @@ fn handle_msg(
         }
         Msg::SwapOff { slice } => {
             let dev = active
-                .get(&slice)
-                .cloned()
+                .remove(&slice)
                 .unwrap_or_else(|| format!("{}{}", cfg.nbd_base, slice));
             cmd_tx.send(ExecCmd::Off { slice, dev }).is_ok()
         }
@@ -517,14 +516,14 @@ fn exec_loop(cmd_rx: Receiver<ExecCmd>, res_tx: Sender<ExecResult>) {
             } => {
                 let (ok, detail) = match swap::attach_swap(&endpoint, &export, &dev, prio) {
                     Ok(()) => (true, dev),
-                    Err(e) => (false, e),
+                    Err(e) => (false, e.to_string()),
                 };
                 ExecResult::On { slice, ok, detail }
             }
             ExecCmd::Off { slice, dev } => {
                 let (ok, detail) = match swap::detach_swap(&dev) {
                     Ok(()) => (true, dev),
-                    Err(e) => (false, e),
+                    Err(e) => (false, e.to_string()),
                 };
                 ExecResult::Off { slice, ok, detail }
             }
@@ -565,10 +564,12 @@ mod tests {
     }
 
     fn parse_config(v: &[&str]) -> Config {
-        match parse_args(&args(v)).expect("arguments must parse as a configuration") {
-            ParsedArgs::Config(config) => config,
-            ParsedArgs::Help => panic!("test expected configuration, not help"),
+        match parse_args(&args(v)) {
+            Ok(ParsedArgs::Config(config)) => Ok(config),
+            Ok(ParsedArgs::Help) => Err("test expected configuration, not help".to_string()),
+            Err(err) => Err(err),
         }
+        .expect("arguments must parse as a configuration")
     }
 
     fn test_config(broker: String, watchdog: Duration) -> Config {

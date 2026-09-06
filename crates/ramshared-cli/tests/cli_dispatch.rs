@@ -269,4 +269,17 @@ fn cli_diagnose_errors_semantic_codes() {
 
     let invalid_flag = run_cli(&["diagnose", "--invalid-flag"]);
     assert_eq!(invalid_flag.status.code(), Some(22)); // EINVAL
+
+    use std::os::unix::fs::PermissionsExt;
+    let path = std::env::temp_dir().join(format!(
+        "ramshared-test-no-perm-{}.jsonl",
+        std::process::id()
+    ));
+    std::fs::write(&path, "{}").unwrap();
+    let mut perms = std::fs::metadata(&path).unwrap().permissions();
+    perms.set_mode(0o000);
+    std::fs::set_permissions(&path, perms).unwrap();
+    let permission_denied = run_cli(&["diagnose", "--events", path.to_str().unwrap()]);
+    assert_eq!(permission_denied.status.code(), Some(13)); // EACCES
+    let _ = std::fs::remove_file(path);
 }

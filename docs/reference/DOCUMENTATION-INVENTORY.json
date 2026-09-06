@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 252,
-    "classified": 249,
+    "total": 273,
+    "classified": 270,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -246,7 +246,199 @@
       "freshnessDays": null
     },
     {
+      "path": "crates/ramshared-agent/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-block/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-broker/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-cli/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-config/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-cuda/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-dxg/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-integrity/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-tier/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-uring/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-vram/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-vulkan/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-winbroker/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-winsvc/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "crates/ramshared-wsl2d/README.md",
+      "disposition": "classified",
+      "ruleId": "crate-documentation",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
       "path": "docs/BENCHMARKS.md",
+      "disposition": "classified",
+      "ruleId": "top-level-docs",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/DEVELOPER-GUIDE.md",
       "disposition": "classified",
       "ruleId": "top-level-docs",
       "verification": {
@@ -295,6 +487,18 @@
     },
     {
       "path": "docs/LIBRARIES.md",
+      "disposition": "classified",
+      "ruleId": "top-level-docs",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/OPERATOR-GUIDE.md",
       "disposition": "classified",
       "ruleId": "top-level-docs",
       "verification": {
@@ -487,6 +691,30 @@
     },
     {
       "path": "docs/decisions/ADR-0008-evidence-and-document-lifecycle.md",
+      "disposition": "classified",
+      "ruleId": "architecture-decisions",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/decisions/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/decisions/ADR-0009-typed-error-propagation-over-panics.md",
+      "disposition": "classified",
+      "ruleId": "architecture-decisions",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/decisions/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null
+    },
+    {
+      "path": "docs/decisions/ADR-0010-windows-volume-lock-isolation.md",
       "disposition": "classified",
       "ruleId": "architecture-decisions",
       "verification": {
@@ -844,6 +1072,18 @@
       "freshnessDays": 90
     },
     {
+      "path": "docs/reliability/JULES-PR-AUDIT-20260906.md",
+      "disposition": "classified",
+      "ruleId": "reliability-documents",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/GAP-REGISTER.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
       "path": "docs/reliability/KAHNEMAN-CONSOLIDATION-20260904.md",
       "disposition": "classified",
       "ruleId": "reliability-documents",
@@ -1080,6 +1320,18 @@
       },
       "owner": "security",
       "canonicalSource": "docs/security/THREAT-MODEL.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/README.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-index-readme",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
     },

@@ -655,7 +655,15 @@ impl BrokerCore {
             .lease_book
             .pending()
             .map(|pending| (pending.holder, pending.requested_bytes));
-        let actions = self.arbiter.tick(now, &present, &visible, pending_lease);
+        let actions = match self.arbiter.tick(now, &present, &visible, pending_lease) {
+            Ok(acts) => acts,
+            Err(e) => {
+                out.push(Outbound::Log(format!(
+                    "[ramsharedd] arbiter tick error: {e}"
+                )));
+                Vec::new()
+            }
+        };
         for action in actions {
             match action {
                 Action::AssignFree { slice, to } => {

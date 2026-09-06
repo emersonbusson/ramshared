@@ -554,8 +554,8 @@ mod tests {
             Ok(())
         }
         fn write_at(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
-            *self.writes.lock().unwrap() += 1;
-            *self.last_write.lock().unwrap() = data.to_vec();
+            *self.writes.lock().map_err(|e| IoError(e.to_string()))? += 1;
+            *self.last_write.lock().map_err(|e| IoError(e.to_string()))? = data.to_vec();
             let o = off as usize;
             self.data[o..o + data.len()].copy_from_slice(data);
             Ok(())
@@ -740,5 +740,110 @@ mod tests {
         assert_eq!(fake.harvest().unwrap().unwrap().status, ST_EINVAL);
         assert_eq!(*writes.lock().unwrap(), 0);
         assert_eq!(link.backend_writes, 0);
+    }
+
+    #[test]
+    fn request_stop_causes_commit_and_fetch_to_return_stopped_error() {
+        let mut link = DriverLink::new(4, 4096, 4096).unwrap();
+        let mut be = RamBe {
+            data: vec![0u8; 8192],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+        link.request_stop();
+        assert_eq!(
+            link.commit_and_fetch(&mut be),
+            Err(DriverLinkError::Stopped)
+        );
+    }
+
+    #[test]
+    fn request_stop_stops_run_io_loop() {
+        let mut link = DriverLink::new(4, 4096, 4096).unwrap();
+        let mut be = RamBe {
+            data: vec![0u8; 8192],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+        link.request_stop();
+        assert_eq!(link.run_io_loop(&mut be, 10).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_driver_complete_direct() {
+        let mut q = InMemoryQueue::new(4, 4096, 4096).unwrap();
+        assert_eq!(q.driver_complete().unwrap(), None);
+
+        let cqe1 = Cqe {
+            tag: 101,
+            status: ST_OK,
+            reserved: 0,
+        };
+        let cqe2 = Cqe {
+            tag: 102,
+            status: ST_EINVAL,
+            reserved: 0,
+        };
+        q.push_cqe(cqe1).unwrap();
+        q.push_cqe(cqe2).unwrap();
+
+        let popped1 = q.driver_complete().unwrap().unwrap();
+        assert_eq!(popped1.tag, 101);
+        assert_eq!(popped1.status, ST_OK);
+
+        let popped2 = q.driver_complete().unwrap().unwrap();
+        assert_eq!(popped2.tag, 102);
+        assert_eq!(popped2.status, ST_EINVAL);
+
+        assert_eq!(q.driver_complete().unwrap(), None);
+    }
+
+    #[test]
+    fn run_io_loop_executes_cycles_and_respects_stop() {
+        let mut link = DriverLink::new(4, 4096, 4096).unwrap();
+        let mut be = RamBe {
+            data: vec![0u8; 1 << 16],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            fake.submit_read(1, 0, 4096, 0).unwrap();
+        }
+        let processed = link.run_io_loop(&mut be, 3).unwrap();
+        assert_eq!(processed, 1);
+
+        link.request_stop();
+        let processed_after_stop = link.run_io_loop(&mut be, 5).unwrap();
+        assert_eq!(processed_after_stop, 0);
+    }
+
+    #[test]
+    fn from_queue_initializes_driver_link() {
+        let queue = InMemoryQueue::new(4, 4096, 4096).unwrap();
+        let link = DriverLink::from_queue(queue);
+        assert_eq!(link.q.queue_depth(), 4);
+        assert_eq!(link.q.max_io_bytes(), 4096);
+        assert_eq!(link.q.block_size(), 4096);
+        assert_eq!(link.backend_writes, 0);
+        assert_eq!(link.stats().reads, 0);
+    }
+
+    #[test]
+    fn driver_read_slot_valid_and_invalid() {
+        let mut queue = InMemoryQueue::new(4, 4096, 4096).unwrap();
+        let payload = vec![0x42u8; 1024];
+        queue.driver_write_slot(1, &payload).unwrap();
+        let read_data = queue.driver_read_slot(1, 1024).unwrap();
+        assert_eq!(read_data, payload.as_slice());
+
+        let err_slot = queue.driver_read_slot(4, 1024).unwrap_err();
+        assert!(matches!(err_slot, DriverLinkError::Invalid(_)));
+
+        let err_len = queue.driver_read_slot(1, 4097).unwrap_err();
+        assert!(matches!(err_len, DriverLinkError::Invalid(_)));
     }
 }
