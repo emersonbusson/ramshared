@@ -1187,4 +1187,10 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn is_elevated_queries_process_token_without_panic() {
+        let elevated = WindowsHostState::is_elevated();
+        let _ = elevated;
+    }
 }
