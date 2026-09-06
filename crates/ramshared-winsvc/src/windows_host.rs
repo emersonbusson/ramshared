@@ -1187,4 +1187,16 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn flush_and_dismount_invalid_handle_returns_volume_error() {
+        let vol = LockedVolume {
+            letter: 'Z',
+            disk_number: 1,
+            handle: INVALID_HANDLE_VALUE,
+        };
+        let err = WindowsHostState::flush_and_dismount(&vol).unwrap_err();
+        assert!(matches!(err, HostError::Volume(_)));
+        assert!(err.to_string().contains("FlushFileBuffers"));
+    }
 }
