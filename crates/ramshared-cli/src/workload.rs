@@ -3373,13 +3373,17 @@ mod tests {
         let mut acknowledgement = acknowledgement.spawn().unwrap();
         let direct_pid = acknowledgement.id();
         let pid_deadline = std::time::Instant::now() + Duration::from_secs(1);
-        while !descendant_pid_file.exists() && std::time::Instant::now() < pid_deadline {
+        let mut descendant_pid = None;
+        while std::time::Instant::now() < pid_deadline {
+            if let Ok(content) = fs::read_to_string(&descendant_pid_file) {
+                if let Ok(pid) = content.trim().parse::<u32>() {
+                    descendant_pid = Some(pid);
+                    break;
+                }
+            }
             std::thread::sleep(Duration::from_millis(5));
         }
-        let descendant_pid = fs::read_to_string(&descendant_pid_file)
-            .unwrap()
-            .parse::<u32>()
-            .unwrap();
+        let descendant_pid = descendant_pid.expect("descendant pid file must be populated");
 
         let error = wait_for_scope_start_acknowledgement(&mut acknowledgement).unwrap_err();
         std::thread::sleep(Duration::from_millis(50));

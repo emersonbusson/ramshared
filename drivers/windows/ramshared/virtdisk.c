@@ -551,11 +551,20 @@ VdTranslateSrb(
 	_In_ PVOID DevExt,
 	_Inout_ PSCSI_REQUEST_BLOCK Srb)
 {
-	UCHAR op = Srb->Cdb[0];
+	UCHAR op;
 	NTSTATUS st;
 	UINT64 offset;
 	UINT32 len;
 	enum ramshared_op rop;
+
+	if (Disk == NULL || Srb == NULL || Srb->CdbLength == 0) {
+		if (Srb != NULL) {
+			VdComplete(DevExt, Srb, SRB_STATUS_INVALID_REQUEST);
+		}
+		return;
+	}
+
+	op = Srb->Cdb[0];
 
 	switch (op) {
 	case SCSIOP_TEST_UNIT_READY:
