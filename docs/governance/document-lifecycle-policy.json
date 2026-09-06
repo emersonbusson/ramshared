@@ -254,6 +254,16 @@
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
+      "id": "jules-findings-records",
+      "pattern": "docs/jules/findings/**/*.md",
+      "owner": "reliability",
+      "canonicalSource": "docs/reliability/JULES-PR-AUDIT-20260830.md",
+      "lifecycle": "historical",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
       "id": "ssdv3-readmes",
       "pattern": "docs/specs/no-milestone/*/README.md",
       "owner": "ssdv3",
