@@ -75,7 +75,7 @@ One primary path. No shim, dual-path, dual-reader/writer, or dead code unless SP
 4. **Traceability** — RF → ITEM/DT → commit/test.  
 5. **No structural creativity in IMPL** — new decision → update SPEC first.  
 6. **Number before adjective** — P0: [`.claude/rules/benchmarks.md`](../.claude/rules/benchmarks.md).  
-7. **Host safety** — never run unsupervised swap/ublk pressure on live WSL2; prefer qemu/civm, or use the approved shared-host watchdog harness when explicitly authorized.  
+7. **Host safety** — never run unsupervised swap/ublk pressure on live WSL2; prefer QEMU/isolated VM, or use the approved shared-host watchdog harness when explicitly authorized.  
 8. **English** structural docs and code comments.  
 9. **Cover + live E2E close Step 3** — `IMPL.md` / index `DONE` is not proof.  
 10. **Platform-native gates** — Linux LKM ≠ Windows WDK ≠ pure userspace cascade; pick the row in Cover vs E2E.
