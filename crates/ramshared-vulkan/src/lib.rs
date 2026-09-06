@@ -40,13 +40,18 @@ impl std::fmt::Display for VulkanError {
 
 impl std::error::Error for VulkanError {}
 
-
-
 fn vk_err_res(ctx: &str, e: vk::Result) -> VramError {
     match e {
-        vk::Result::ERROR_OUT_OF_HOST_MEMORY | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => VramError::OutOfMemory,
-        vk::Result::ERROR_DEVICE_LOST => VramError::Provider(format!("vulkan {ctx}: {}", VulkanError::DeviceLost)),
-        vk::Result::ERROR_EXTENSION_NOT_PRESENT => VramError::Provider(format!("vulkan {ctx}: {}", VulkanError::ExtensionNotPresent)),
+        vk::Result::ERROR_OUT_OF_HOST_MEMORY | vk::Result::ERROR_OUT_OF_DEVICE_MEMORY => {
+            VramError::OutOfMemory
+        }
+        vk::Result::ERROR_DEVICE_LOST => {
+            VramError::Provider(format!("vulkan {ctx}: {}", VulkanError::DeviceLost))
+        }
+        vk::Result::ERROR_EXTENSION_NOT_PRESENT => VramError::Provider(format!(
+            "vulkan {ctx}: {}",
+            VulkanError::ExtensionNotPresent
+        )),
         _ => VramError::Provider(format!("vulkan {ctx}: {:?}", e)),
     }
 }
@@ -624,15 +629,23 @@ mod tests {
         assert!(matches!(vk_err_res("test", e_oom), VramError::OutOfMemory));
 
         let e_oom_host = vk::Result::ERROR_OUT_OF_HOST_MEMORY;
-        assert!(matches!(vk_err_res("test", e_oom_host), VramError::OutOfMemory));
+        assert!(matches!(
+            vk_err_res("test", e_oom_host),
+            VramError::OutOfMemory
+        ));
 
         let e_lost = vk::Result::ERROR_DEVICE_LOST;
-        assert_eq!(vk_err_res("test", e_lost).to_string(), "vram provider: vulkan test: ERROR_DEVICE_LOST");
+        assert_eq!(
+            vk_err_res("test", e_lost).to_string(),
+            "vram provider: vulkan test: ERROR_DEVICE_LOST"
+        );
 
         let e_ext = vk::Result::ERROR_EXTENSION_NOT_PRESENT;
-        assert_eq!(vk_err_res("test", e_ext).to_string(), "vram provider: vulkan test: ERROR_EXTENSION_NOT_PRESENT");
+        assert_eq!(
+            vk_err_res("test", e_ext).to_string(),
+            "vram provider: vulkan test: ERROR_EXTENSION_NOT_PRESENT"
+        );
     }
-
 
     #[test]
     #[ignore = "requires Vulkan loader + ICD (lavapipe/llvmpipe is enough; run with --ignored)"]
