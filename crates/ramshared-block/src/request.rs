@@ -63,29 +63,58 @@ fn errno_of(r: Result<(), IoError>) -> u32 {
     }
 }
 
+use std::fmt;
+
+#[derive(Debug, PartialEq)]
+pub enum ValidateError {
+    InvalidAlignment,
+    OutOfRange,
+    ReadOnly,
+}
+
+impl fmt::Display for ValidateError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValidateError::InvalidAlignment => write!(f, "Invalid offset or length alignment"),
+            ValidateError::OutOfRange => write!(f, "Request extent is out of bounds"),
+            ValidateError::ReadOnly => write!(f, "Write attempt on a read-only backend"),
+        }
+    }
+}
+
+impl ValidateError {
+    fn as_nbd_error(&self) -> u32 {
+        match self {
+            ValidateError::InvalidAlignment => NBD_EINVAL,
+            ValidateError::OutOfRange => NBD_ERANGE,
+            ValidateError::ReadOnly => NBD_EACCES,
+        }
+    }
+}
+
 /// Validates alignment and range (SPEC §8): unaligned or out of range = EINVAL,
 /// **before** touching the backend.
-fn validate<B: BlockBackend + ?Sized>(req: &Request, backend: &B) -> Result<(), u32> {
+fn validate<B: BlockBackend + ?Sized>(req: &Request, backend: &B) -> Result<(), ValidateError> {
     let bs = backend.block_size() as u64;
     if bs == 0 {
-        return Err(NBD_EINVAL);
+        return Err(ValidateError::InvalidAlignment);
     }
     if !req.offset.is_multiple_of(bs) {
-        return Err(NBD_EINVAL);
+        return Err(ValidateError::InvalidAlignment);
     }
     if !(req.len as u64).is_multiple_of(bs) {
-        return Err(NBD_EINVAL);
+        return Err(ValidateError::InvalidAlignment);
     }
 
     let Some(end) = req.offset.checked_add(req.len as u64) else {
-        return Err(NBD_ERANGE);
+        return Err(ValidateError::OutOfRange);
     };
     if end > backend.size_bytes() {
-        return Err(NBD_ERANGE);
+        return Err(ValidateError::OutOfRange);
     }
 
     if req.cmd == Command::Write && backend.is_read_only() {
-        return Err(NBD_EACCES);
+        return Err(ValidateError::ReadOnly);
     }
 
     Ok(())
@@ -124,7 +153,7 @@ pub fn serve<B: BlockBackend + ?Sized>(
     match req.cmd {
         Command::Read => {
             if let Err(e) = validate(req, backend) {
-                return plain(e);
+                return plain(e.as_nbd_error());
             }
             let mut read_data = vec![0u8; req.len as usize];
             let err = errno_of(backend.read_at(req.offset, &mut read_data));
@@ -142,7 +171,7 @@ pub fn serve<B: BlockBackend + ?Sized>(
                 return plain(NBD_EINVAL);
             }
             if let Err(e) = validate(req, backend) {
-                return plain(e);
+                return plain(e.as_nbd_error());
             }
             let err = errno_of(backend.write_at_with_options(req.offset, payload, options));
             plain(err)
@@ -153,7 +182,7 @@ pub fn serve<B: BlockBackend + ?Sized>(
         }
         Command::Trim => {
             if let Err(e) = validate(req, backend) {
-                return plain(e);
+                return plain(e.as_nbd_error());
             }
             plain(NBD_OK)
         }
