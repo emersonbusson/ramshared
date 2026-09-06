@@ -224,6 +224,16 @@
       "registeredAt": "2026-08-11T15:15:12Z"
     },
     {
+      "id": "jules-findings",
+      "pattern": "docs/jules/findings/**/*.md",
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
+      "lifecycle": "historical",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-08-11T15:15:12Z"
+    },
+    {
       "id": "ssdv3-contribution-checklists",
       "pattern": "docs/specs/**/CONTRIBUTION-CHECKLIST.md",
       "owner": "ssdv3",
