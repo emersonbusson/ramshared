@@ -1800,23 +1800,18 @@ impl AppArgs {
             size = DEFAULT_ORIGIN_SIZE;
         }
         size -= size % BLOCK_SIZE as u64; // align to the block size
-        if origin.is_some() && !(MIN_ORIGIN_LOGICAL_SIZE..=MAX_ORIGIN_LOGICAL_SIZE).contains(&size)
-        {
+
+        if origin.is_some() && !(MIN_ORIGIN_LOGICAL_SIZE..=MAX_ORIGIN_LOGICAL_SIZE).contains(&size) {
             return Err("origin-cache logical size must be between 1024 and 24576 MiB".into());
         }
-        if let Some(path) = origin.as_deref()
-            && path != ORIGIN_MANIFEST_PATH
-        {
+
+        if origin.as_deref().is_some_and(|p| p != ORIGIN_MANIFEST_PATH) {
             return Err(format!(
                 "--origin-manifest must use the sealed {ORIGIN_MANIFEST_PATH} path"
-            )
-            .into());
+            ).into());
         }
 
-        if let Err(e) = validate_slice_flags(slices, slice_mb, matches!(transport, Transport::Ublk))
-        {
-            return Err(e.into());
-        }
+        validate_slice_flags(slices, slice_mb, matches!(transport, Transport::Ublk))?;
 
         let listen_nbd_addr = listen_nbd
             .as_deref()
@@ -1838,6 +1833,7 @@ impl AppArgs {
         if slices > 0 && arbiter_addr.is_none() {
             return Err("--slices requires --arbiter-listen IP:PORT (broker control point)".into());
         }
+
         if slices == 0 && (arbiter_addr.is_some() || listen_nbd_addr.is_some()) {
             return Err("--arbiter-listen/--listen-nbd require --slices N (N > 0)".into());
         }
@@ -1847,13 +1843,12 @@ impl AppArgs {
             .map(|a| (a.ip().to_string(), a.port()));
         let telemetry_jsonl = telemetry_jsonl.map(std::path::PathBuf::from);
 
-        let slice_bytes = if slices > 0 {
-            slice_mb
+        let mut slice_bytes = 0;
+        if slices > 0 {
+            slice_bytes = slice_mb
                 .checked_mul(1024 * 1024)
-                .ok_or("--slice-mb: MiB value overflow")?
-        } else {
-            0
-        };
+                .ok_or("--slice-mb: MiB value overflow")?;
+        }
 
         Ok(Self {
             size,
