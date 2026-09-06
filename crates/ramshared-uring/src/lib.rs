@@ -10,6 +10,71 @@ use std::ffi::c_void;
 use std::io;
 use std::os::fd::RawFd;
 use std::ptr;
+use std::fmt;
+
+/// Semantic error types for Uring CQE failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UringError {
+    InvalidInput,
+    OutOfRange,
+    Again,
+    BadFd,
+    NoMem,
+    Busy,
+    Timeout,
+    Canceled,
+    Other(i32),
+}
+
+impl fmt::Display for UringError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UringError::InvalidInput => write!(f, "Invalid input (-EINVAL)"),
+            UringError::OutOfRange => write!(f, "Out of range (-ERANGE)"),
+            UringError::Again => write!(f, "Try again (-EAGAIN)"),
+            UringError::BadFd => write!(f, "Bad file descriptor (-EBADF)"),
+            UringError::NoMem => write!(f, "Out of memory (-ENOMEM)"),
+            UringError::Busy => write!(f, "Device or resource busy (-EBUSY)"),
+            UringError::Timeout => write!(f, "Timer expired (-ETIME)"),
+            UringError::Canceled => write!(f, "Operation canceled (-ECANCELED)"),
+            UringError::Other(e) => write!(f, "Unknown IO uring error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for UringError {}
+
+impl UringError {
+    pub fn from_i32(err: i32) -> Self {
+        match -err {
+            libc::EINVAL => UringError::InvalidInput,
+            libc::ERANGE => UringError::OutOfRange,
+            libc::EAGAIN => UringError::Again,
+            libc::EBADF => UringError::BadFd,
+            libc::ENOMEM => UringError::NoMem,
+            libc::EBUSY => UringError::Busy,
+            libc::ETIME => UringError::Timeout,
+            libc::ECANCELED => UringError::Canceled,
+            _ => UringError::Other(err),
+        }
+    }
+}
+
+impl From<UringError> for io::Error {
+    fn from(err: UringError) -> Self {
+        match err {
+            UringError::InvalidInput => io::Error::from_raw_os_error(libc::EINVAL),
+            UringError::OutOfRange => io::Error::from_raw_os_error(libc::ERANGE),
+            UringError::Again => io::Error::from_raw_os_error(libc::EAGAIN),
+            UringError::BadFd => io::Error::from_raw_os_error(libc::EBADF),
+            UringError::NoMem => io::Error::from_raw_os_error(libc::ENOMEM),
+            UringError::Busy => io::Error::from_raw_os_error(libc::EBUSY),
+            UringError::Timeout => io::Error::from_raw_os_error(libc::ETIME),
+            UringError::Canceled => io::Error::from_raw_os_error(libc::ECANCELED),
+            UringError::Other(e) => io::Error::from_raw_os_error(-e),
+        }
+    }
+}
 
 use io_uring::{IoUring, opcode, squeue, types};
 
@@ -253,7 +318,7 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
         .ok_or_else(|| io::Error::other("io_uring completion queue is empty"))?;
     let result = cqe.result();
     if result < 0 {
-        Err(io::Error::from_raw_os_error(-result))
+        Err(io::Error::from(UringError::from_i32(result)))
     } else {
         Ok(result)
     }
@@ -264,6 +329,16 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
 pub struct UblkCompletion {
     pub tag: u16,
     pub result: i32,
+}
+
+impl UblkCompletion {
+    pub fn to_error(&self) -> Option<UringError> {
+        if self.result < 0 {
+            Some(UringError::from_i32(self.result))
+        } else {
+            None
+        }
+    }
 }
 
 /// Validates that fixed buffer parameters are aligned to 4096 bytes and that the
