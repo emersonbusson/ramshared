@@ -29,10 +29,18 @@ impl VramMemory for DeviceMem<'_, '_> {
     fn zero(&mut self) -> Result<(), VramError> {
         DeviceMem::zero(self).map_err(Into::into)
     }
+    #[allow(clippy::manual_is_multiple_of)]
     fn read_at(&self, off: u64, dst: &mut [u8]) -> Result<(), VramError> {
+        if off % 256 != 0 || dst.len() as u64 % 256 != 0 {
+            return Err(VramError::InvalidAlignment);
+        }
         DeviceMem::read_at(self, off as usize, dst).map_err(Into::into)
     }
+    #[allow(clippy::manual_is_multiple_of)]
     fn write_at(&mut self, off: u64, src: &[u8]) -> Result<(), VramError> {
+        if off % 256 != 0 || src.len() as u64 % 256 != 0 {
+            return Err(VramError::InvalidAlignment);
+        }
         DeviceMem::write_at(self, off as usize, src).map_err(Into::into)
     }
 }
