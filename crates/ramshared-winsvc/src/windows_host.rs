@@ -1187,4 +1187,24 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn lock_product_volume_path_validates_path_format() {
+        let err = WindowsHostState::lock_product_volume_path(r"C:\invalid", 'D', None).unwrap_err();
+        assert!(err.to_string().contains("invalid volume device path"));
+
+        let err = WindowsHostState::lock_product_volume_path(r"\\.\E:", 'D', None).unwrap_err();
+        assert!(err.to_string().contains("invalid volume device path"));
+
+        let err = WindowsHostState::lock_product_volume_path(r"\\.\D:", 'd', None).unwrap_err();
+        assert!(err.to_string().contains("volume"));
+
+        let err = WindowsHostState::lock_product_volume_path(
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}",
+            'D',
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("volume"));
+    }
 }
