@@ -47,14 +47,22 @@ fn align_down(v: usize, align: usize) -> usize {
 
 /// Validates GPU hardware capabilities and total memory against physical sanity limits.
 pub fn validate_hardware_specs(
+    is_driver_initialized: bool,
     major: i32,
     minor: i32,
     total_memory: usize,
 ) -> Result<(), ProbePlanError> {
-    if !(1..=99).contains(&major) || !(0..=99).contains(&minor) {
+    if !is_driver_initialized {
+        return Err(ProbePlanError::DriverNotInitialized);
+    }
+    let is_major_invalid = !(1..=99).contains(&major);
+    let is_minor_invalid = !(0..=99).contains(&minor);
+    if is_major_invalid || is_minor_invalid {
         return Err(ProbePlanError::InvalidComputeCapability { major, minor });
     }
-    if total_memory == 0 || total_memory > MAX_TOTAL_MEMORY_BYTES {
+    let is_memory_empty = total_memory == 0;
+    let is_memory_excessive = total_memory > MAX_TOTAL_MEMORY_BYTES;
+    if is_memory_empty || is_memory_excessive {
         return Err(ProbePlanError::InvalidTotalMemory { size: total_memory });
     }
     Ok(())
@@ -74,6 +82,7 @@ pub enum ProbePlanError {
         mid: usize,
         last: usize,
     },
+    DriverNotInitialized,
     InvalidComputeCapability {
         major: i32,
         minor: i32,
@@ -97,6 +106,9 @@ impl std::fmt::Display for ProbePlanError {
                     f,
                     "probe offsets not distinct size={size} mid={mid} last={last}"
                 )
+            }
+            ProbePlanError::DriverNotInitialized => {
+                write!(f, "CUDA driver is not initialized")
             }
             ProbePlanError::InvalidComputeCapability { major, minor } => {
                 write!(f, "invalid compute capability major={major} minor={minor}")
@@ -147,36 +159,44 @@ mod tests {
     #[test]
     fn reject_invalid_compute_capability() {
         assert!(matches!(
-            validate_hardware_specs(0, 0, 1024),
+            validate_hardware_specs(true, 0, 0, 1024),
             Err(ProbePlanError::InvalidComputeCapability { major: 0, minor: 0 })
         ));
         assert!(matches!(
-            validate_hardware_specs(100, 0, 1024),
+            validate_hardware_specs(true, 100, 0, 1024),
             Err(ProbePlanError::InvalidComputeCapability {
                 major: 100,
                 minor: 0
             })
         ));
         assert!(matches!(
-            validate_hardware_specs(1, -1, 1024),
+            validate_hardware_specs(true, 1, -1, 1024),
             Err(ProbePlanError::InvalidComputeCapability {
                 major: 1,
                 minor: -1
             })
         ));
-        assert!(validate_hardware_specs(8, 9, 1024).is_ok());
+        assert!(validate_hardware_specs(true, 8, 9, 1024).is_ok());
     }
 
     #[test]
     fn reject_invalid_total_memory() {
         assert!(matches!(
-            validate_hardware_specs(8, 9, 0),
+            validate_hardware_specs(true, 8, 9, 0),
             Err(ProbePlanError::InvalidTotalMemory { size: 0 })
         ));
         assert!(matches!(
-            validate_hardware_specs(8, 9, MAX_TOTAL_MEMORY_BYTES + 1),
+            validate_hardware_specs(true, 8, 9, MAX_TOTAL_MEMORY_BYTES + 1),
             Err(ProbePlanError::InvalidTotalMemory { size: _ })
         ));
-        assert!(validate_hardware_specs(8, 9, 1024).is_ok());
+        assert!(validate_hardware_specs(true, 8, 9, 1024).is_ok());
+    }
+
+    #[test]
+    fn reject_uninitialized_driver() {
+        assert!(matches!(
+            validate_hardware_specs(false, 8, 9, 1024),
+            Err(ProbePlanError::DriverNotInitialized)
+        ));
     }
 }
