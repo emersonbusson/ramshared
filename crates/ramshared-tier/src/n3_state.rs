@@ -2137,10 +2137,7 @@ mod additional_tests {
             expected: None,
             actual: StateTag::Absent,
         };
-        assert_eq!(
-            err2.to_string(),
-            "illegal state transition: actual Absent"
-        );
+        assert_eq!(err2.to_string(), "illegal state transition: actual Absent");
 
         let err3 = StateTransitionError::IllegalPreflight {
             expected: Some(PreflightState::Constrained),
