@@ -96,7 +96,7 @@ test('ADR checker rejects malformed canonical index headings and unsafe filename
 test('repository ADR index is currently valid', () => {
   const result = run({ root: process.cwd() })
   assert.equal(result.ok, true, result.errors.join('\n'))
-  assert.equal(result.records, 9)
+  assert.equal(result.records, 11)
 })
 
 test('ADR checker stays read-only', async () => {

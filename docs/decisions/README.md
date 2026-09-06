@@ -26,6 +26,8 @@ match the newer profile. Their registry state is preserved, not inferred.
 | 0006 | [ADR-0006-storport-virtual-miniport.md](ADR-0006-storport-virtual-miniport.md) | StorPort virtual miniport | Accepted | legacy |
 | 0007 | [ADR-0007-kernel-native-language-c.md](ADR-0007-kernel-native-language-c.md) | Kernel-native work in C | Accepted | legacy |
 | 0008 | [ADR-0008-evidence-and-document-lifecycle.md](ADR-0008-evidence-and-document-lifecycle.md) | Evidence and document lifecycle | Accepted | governed-v1 |
+| 0009 | [ADR-0009-typed-error-propagation-over-panics.md](ADR-0009-typed-error-propagation-over-panics.md) | Typed error propagation over panics across workspace crates | Accepted | governed-v1 |
+| 0010 | [ADR-0010-windows-volume-lock-isolation.md](ADR-0010-windows-volume-lock-isolation.md) | Windows volume lock isolation and safe handle lifecycle | Accepted | governed-v1 |
 
 ## Historical filename collision
 
