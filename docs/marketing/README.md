@@ -13,6 +13,7 @@ This directory contains public architecture diagrams and benchmark comparison vi
 | `benchmark-comparison.svg` | Vector SVG | Direct I/O and latency comparison graph | `docs/benchmarks/public-claims.json` |
 | `benchmark-comparison.jpg` | JPEG | Benchmark throughput comparison raster artifact | `docs/governance/public-binary-digests.json` |
 | `benchmark-wsl2-vs-storport.jpg` | JPEG | WSL2 vs StorPort benchmark comparison artifact | `docs/governance/public-binary-digests.json` |
+| `social-preview.png` | PNG (1200x630) | OpenGraph social preview and repository preview card | GitHub / social |
 
 ## Integrity
 
