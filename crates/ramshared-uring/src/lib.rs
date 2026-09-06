@@ -7,9 +7,74 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use std::ffi::c_void;
+use std::fmt;
 use std::io;
 use std::os::fd::RawFd;
 use std::ptr;
+
+/// Semantic error types for Uring CQE failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UringError {
+    InvalidInput,
+    OutOfRange,
+    Again,
+    BadFd,
+    NoMem,
+    Busy,
+    Timeout,
+    Canceled,
+    Other(i32),
+}
+
+impl fmt::Display for UringError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UringError::InvalidInput => write!(f, "Invalid input (-EINVAL)"),
+            UringError::OutOfRange => write!(f, "Out of range (-ERANGE)"),
+            UringError::Again => write!(f, "Try again (-EAGAIN)"),
+            UringError::BadFd => write!(f, "Bad file descriptor (-EBADF)"),
+            UringError::NoMem => write!(f, "Out of memory (-ENOMEM)"),
+            UringError::Busy => write!(f, "Device or resource busy (-EBUSY)"),
+            UringError::Timeout => write!(f, "Timer expired (-ETIME)"),
+            UringError::Canceled => write!(f, "Operation canceled (-ECANCELED)"),
+            UringError::Other(e) => write!(f, "Unknown IO uring error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for UringError {}
+
+impl UringError {
+    pub fn from_i32(err: i32) -> Self {
+        match -err {
+            libc::EINVAL => UringError::InvalidInput,
+            libc::ERANGE => UringError::OutOfRange,
+            libc::EAGAIN => UringError::Again,
+            libc::EBADF => UringError::BadFd,
+            libc::ENOMEM => UringError::NoMem,
+            libc::EBUSY => UringError::Busy,
+            libc::ETIME => UringError::Timeout,
+            libc::ECANCELED => UringError::Canceled,
+            _ => UringError::Other(err),
+        }
+    }
+}
+
+impl From<UringError> for io::Error {
+    fn from(err: UringError) -> Self {
+        match err {
+            UringError::InvalidInput => io::Error::from_raw_os_error(libc::EINVAL),
+            UringError::OutOfRange => io::Error::from_raw_os_error(libc::ERANGE),
+            UringError::Again => io::Error::from_raw_os_error(libc::EAGAIN),
+            UringError::BadFd => io::Error::from_raw_os_error(libc::EBADF),
+            UringError::NoMem => io::Error::from_raw_os_error(libc::ENOMEM),
+            UringError::Busy => io::Error::from_raw_os_error(libc::EBUSY),
+            UringError::Timeout => io::Error::from_raw_os_error(libc::ETIME),
+            UringError::Canceled => io::Error::from_raw_os_error(libc::ECANCELED),
+            UringError::Other(e) => io::Error::from_raw_os_error(-e),
+        }
+    }
+}
 
 use io_uring::{IoUring, opcode, squeue, types};
 
@@ -253,7 +318,7 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
         .ok_or_else(|| io::Error::other("io_uring completion queue is empty"))?;
     let result = cqe.result();
     if result < 0 {
-        Err(io::Error::from_raw_os_error(-result))
+        Err(io::Error::from(UringError::from_i32(result)))
     } else {
         Ok(result)
     }
@@ -264,6 +329,16 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
 pub struct UblkCompletion {
     pub tag: u16,
     pub result: i32,
+}
+
+impl UblkCompletion {
+    pub fn to_error(&self) -> Option<UringError> {
+        if self.result < 0 {
+            Some(UringError::from_i32(self.result))
+        } else {
+            None
+        }
+    }
 }
 
 /// Validates that fixed buffer parameters are aligned to 4096 bytes and that the
@@ -511,11 +586,13 @@ mod tests {
     #[test]
     fn test_validate_fixed_buffer_alignment_and_limits() {
         // Test invalid alignment
-        let err = validate_fixed_buffer_params(2, 4095).expect_err("invalid alignment should fail");
+        let page = page_size();
+        let err =
+            validate_fixed_buffer_params(2, page - 1).expect_err("invalid alignment should fail");
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
 
         // Test valid alignment
-        assert!(validate_fixed_buffer_params(2, 4096).is_ok());
+        assert!(validate_fixed_buffer_params(2, page).is_ok());
 
         // Test buffer size 0
         let err_zero = validate_fixed_buffer_params(2, 0).expect_err("zero size should fail");
@@ -531,7 +608,7 @@ mod tests {
         if res == 0 && rlim.rlim_cur != libc::RLIM_INFINITY {
             // we create a massive buffer
             // wait, if we pass u16::MAX for queue depth and rlim_cur for buf size...
-            let massive_buf_size = (((rlim.rlim_cur / 4096) + 2) * 4096) as usize;
+            let massive_buf_size = (((rlim.rlim_cur / (page as u64)) + 2) * (page as u64)) as usize;
             let huge_err = validate_fixed_buffer_params(2, massive_buf_size)
                 .expect_err("massive buffer should fail");
             assert_eq!(huge_err.raw_os_error(), Some(libc::ERANGE));
@@ -632,13 +709,13 @@ mod tests {
         assert!(ublk_start_dev(fd, 9, std::process::id()).is_err());
         assert!(ublk_stop_dev(fd, 9).is_err());
 
-        let mut server = UblkServer::new(fd, 1, 4096).expect("regular-file server fixture");
+        let mut server = UblkServer::new(fd, 1, page).expect("regular-file server fixture");
         assert_eq!(
             server.io_desc_snapshot(0).expect("zero descriptor"),
             [0u8; 24]
         );
         assert!(server.io_desc_snapshot(1).is_err());
-        assert_eq!(server.buffer_mut(0).expect("tag zero buffer").len(), 4096);
+        assert_eq!(server.buffer_mut(0).expect("tag zero buffer").len(), page);
         assert!(server.buffer_mut(1).is_err());
         assert!(server.commit_and_fetch(1, 0).is_err());
         server
@@ -655,8 +732,9 @@ mod tests {
 
     #[test]
     fn regular_file_fetch_ring_drains_refusal_without_a_device() {
-        let (path, file) = regular_file_fixture("ublk-fetch-refusal", page_size());
-        let mut ring = UblkFetchRing::submit_fetch_all(file.as_raw_fd(), 2, 4096)
+        let page = page_size();
+        let (path, file) = regular_file_fixture("ublk-fetch-refusal", page);
+        let mut ring = UblkFetchRing::submit_fetch_all(file.as_raw_fd(), 2, page)
             .expect("submit regular-file fetches");
         let deadline = Instant::now() + Duration::from_secs(2);
         let completions = loop {
@@ -676,10 +754,11 @@ mod tests {
 
     #[test]
     fn test_io_uring_worker_timeout_and_cancellation() {
-        let (path, file) = regular_file_fixture("ublk-timeout-cancel", page_size());
+        let page = page_size();
+        let (path, file) = regular_file_fixture("ublk-timeout-cancel", page);
         let fd = file.as_raw_fd();
 
-        let mut server = UblkServer::new(fd, 2, 4096).expect("server fixture");
+        let mut server = UblkServer::new(fd, 2, page).expect("server fixture");
 
         // Simulate a Timeout directly in the server's ring
         let ts = types::Timespec::new().sec(0).nsec(1_000_000); // 1ms
@@ -743,8 +822,9 @@ mod tests {
     }
     #[test]
     fn ublk_server_push_guard_clause_rejects_full_ring() {
-        let (path, file) = regular_file_fixture("ublk-full-ring", page_size());
-        let mut server = UblkServer::new(file.as_raw_fd(), 2, 4096).expect("server fixture");
+        let page = page_size();
+        let (path, file) = regular_file_fixture("ublk-full-ring", page);
+        let mut server = UblkServer::new(file.as_raw_fd(), 2, page).expect("server fixture");
 
         // Ring capacity is 2. Push 2 items, 3rd should fail.
         assert!(server.push(0, 0, 0, 0).is_ok());

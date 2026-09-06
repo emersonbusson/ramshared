@@ -1804,19 +1804,14 @@ impl AppArgs {
         {
             return Err("origin-cache logical size must be between 1024 and 24576 MiB".into());
         }
-        if let Some(path) = origin.as_deref()
-            && path != ORIGIN_MANIFEST_PATH
-        {
+        if origin.as_deref().is_some_and(|p| p != ORIGIN_MANIFEST_PATH) {
             return Err(format!(
                 "--origin-manifest must use the sealed {ORIGIN_MANIFEST_PATH} path"
             )
             .into());
         }
 
-        if let Err(e) = validate_slice_flags(slices, slice_mb, matches!(transport, Transport::Ublk))
-        {
-            return Err(e.into());
-        }
+        validate_slice_flags(slices, slice_mb, matches!(transport, Transport::Ublk))?;
 
         let listen_nbd_addr = listen_nbd
             .as_deref()
@@ -3558,17 +3553,20 @@ impl Drop for OwnedUnixSocketPath {
 
 /// Retorna o menor entre somaxconn e tcp_max_syn_backlog, fallback 128.
 fn system_max_backlog() -> i32 {
-    let somaxconn: i32 = std::fs::read_to_string("/proc/sys/net/core/somaxconn")
-        .unwrap_or_default()
-        .trim()
-        .parse()
-        .unwrap_or(128);
-    let syn_backlog: i32 = std::fs::read_to_string("/proc/sys/net/ipv4/tcp_max_syn_backlog")
-        .unwrap_or_default()
-        .trim()
-        .parse()
-        .unwrap_or(128);
-    std::cmp::min(somaxconn, syn_backlog)
+    static CACHED: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(|| {
+        let somaxconn: i32 = std::fs::read_to_string("/proc/sys/net/core/somaxconn")
+            .unwrap_or_default()
+            .trim()
+            .parse()
+            .unwrap_or(128);
+        let syn_backlog: i32 = std::fs::read_to_string("/proc/sys/net/ipv4/tcp_max_syn_backlog")
+            .unwrap_or_default()
+            .trim()
+            .parse()
+            .unwrap_or(128);
+        std::cmp::min(somaxconn, syn_backlog)
+    })
 }
 
 fn apply_listen_backlog<Fd: std::os::fd::AsFd>(fd: Fd) -> std::io::Result<()> {

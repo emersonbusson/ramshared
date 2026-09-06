@@ -95,11 +95,44 @@ fn parse_meminfo(text: &str) -> Option<u64> {
 
 impl Config {
     pub fn parse(text: &str) -> Result<Self, ConfigError> {
-        toml::from_str(text).map_err(|err| {
-            let message = err.message().to_string();
+        let deserializer = match toml::Deserializer::parse(text) {
+            Ok(d) => d,
+            Err(err) => {
+                let message = err.message().to_string();
+                let mut line = None;
+                let mut column = None;
+                if let Some(span) = err.span() {
+                    let mut l = 1;
+                    let mut c = 1;
+                    for (i, ch) in text.chars().enumerate() {
+                        if i == span.start {
+                            line = Some(l);
+                            column = Some(c);
+                            break;
+                        }
+                        if ch == '\n' {
+                            l += 1;
+                            c = 1;
+                        } else {
+                            c += 1;
+                        }
+                    }
+                }
+                return Err(ConfigError::Parse {
+                    message,
+                    line,
+                    column,
+                    key_path: String::new(),
+                });
+            }
+        };
+
+        serde_path_to_error::deserialize(deserializer).map_err(|err| {
+            let inner_err = err.inner();
+            let message = inner_err.message().to_string();
             let mut line = None;
             let mut column = None;
-            if let Some(span) = err.span() {
+            if let Some(span) = inner_err.span() {
                 let mut l = 1;
                 let mut c = 1;
                 for (i, ch) in text.chars().enumerate() {
@@ -116,10 +149,13 @@ impl Config {
                     }
                 }
             }
+
+            let key_path = err.path().to_string();
             ConfigError::Parse {
                 message,
                 line,
                 column,
+                key_path,
             }
         })
     }
@@ -219,8 +255,9 @@ mod tests {
             ConfigError::Parse {
                 line: Some(2),
                 column: Some(13),
+                ref key_path,
                 ..
-            }
+            } if key_path == "broker.slice_mib"
         ));
     }
 
@@ -230,13 +267,18 @@ mod tests {
             message: "msg".into(),
             line: Some(1),
             column: Some(2),
+            key_path: "broker".into(),
         };
-        assert_eq!(p1.to_string(), "parse error at line 1, col 2: msg");
+        assert_eq!(
+            p1.to_string(),
+            "parse error at line 1, col 2 for key 'broker': msg"
+        );
 
         let p2 = ConfigError::Parse {
             message: "msg".into(),
             line: None,
             column: None,
+            key_path: "".into(),
         };
         assert_eq!(p2.to_string(), "parse error: msg");
 

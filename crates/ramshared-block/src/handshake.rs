@@ -149,44 +149,47 @@ pub fn server_handshake<R: Read, W: Write>(
         let mut data = vec![0u8; len];
         r.read_exact(&mut data)?;
 
-        match opt {
-            NBD_OPT_EXPORT_NAME => {
-                // entire payload is the name (empty = default). EXPORT_NAME has no error reply:
-                // unknown export ⇒ closes the connection (Io).
-                let name = name_utf8(&data)?;
-                let idx = find_export(exports, name).ok_or(HandshakeError::UnsupportedFeature)?;
-                w.write_all(&exports[idx].size.to_be_bytes())?;
-                w.write_all(&tx_flags.to_be_bytes())?;
-                if !no_zeroes {
-                    w.write_all(&[0u8; 124])?;
-                }
-                w.flush()?;
-                return Ok(idx);
-            }
-            NBD_OPT_GO | NBD_OPT_INFO => {
-                let name = name_utf8(go_export_name(&data)?)?;
-                let Some(idx) = find_export(exports, name) else {
-                    // GO/INFO have an error reply: unknown name ⇒ ERR_UNKNOWN, continue.
-                    write_opt_reply(w, opt, NBD_REP_ERR_UNKNOWN, &[])?;
-                    w.flush()?;
-                    continue;
-                };
+        if !matches!(
+            opt,
+            NBD_OPT_EXPORT_NAME | NBD_OPT_GO | NBD_OPT_INFO | NBD_OPT_ABORT
+        ) {
+            write_opt_reply(w, opt, NBD_REP_ERR_UNSUP, &[])?;
+            w.flush()?;
+            continue;
+        }
 
-                write_export_info(w, opt, exports[idx].size, tx_flags)?;
-                w.flush()?;
-                if opt == NBD_OPT_GO {
-                    return Ok(idx); // GO transitions; INFO continues negotiating.
-                }
+        if opt == NBD_OPT_ABORT {
+            write_opt_reply(w, opt, NBD_REP_ACK, &[])?;
+            w.flush()?;
+            return Err(HandshakeError::Aborted);
+        }
+
+        if opt == NBD_OPT_EXPORT_NAME {
+            // entire payload is the name (empty = default). EXPORT_NAME has no error reply:
+            // unknown export ⇒ closes the connection (Io).
+            let name = name_utf8(&data)?;
+            let idx = find_export(exports, name).ok_or(HandshakeError::UnsupportedFeature)?;
+            w.write_all(&exports[idx].size.to_be_bytes())?;
+            w.write_all(&tx_flags.to_be_bytes())?;
+            if !no_zeroes {
+                w.write_all(&[0u8; 124])?;
             }
-            NBD_OPT_ABORT => {
-                write_opt_reply(w, opt, NBD_REP_ACK, &[])?;
-                w.flush()?;
-                return Err(HandshakeError::Aborted);
-            }
-            _ => {
-                write_opt_reply(w, opt, NBD_REP_ERR_UNSUP, &[])?;
-                w.flush()?;
-            }
+            w.flush()?;
+            return Ok(idx);
+        }
+
+        let name = name_utf8(go_export_name(&data)?)?;
+        let Some(idx) = find_export(exports, name) else {
+            // GO/INFO have an error reply: unknown name ⇒ ERR_UNKNOWN, continue.
+            write_opt_reply(w, opt, NBD_REP_ERR_UNKNOWN, &[])?;
+            w.flush()?;
+            continue;
+        };
+
+        write_export_info(w, opt, exports[idx].size, tx_flags)?;
+        w.flush()?;
+        if opt == NBD_OPT_GO {
+            return Ok(idx); // GO transitions; INFO continues negotiating.
         }
     }
 }

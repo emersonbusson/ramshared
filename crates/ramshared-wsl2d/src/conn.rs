@@ -135,13 +135,13 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stream);
-        let idx = match server_handshake(&mut reader, &mut hs_writer, &exports, tx_flags) {
-            Ok(i) => i,
-            Err(e) => {
+        let Ok(idx) = server_handshake(&mut reader, &mut hs_writer, &exports, tx_flags)
+            .inspect_err(|e| {
                 eprintln!("[ramsharedd] conn: handshake failed: {e}");
                 let _ = jobs.send(WMsg::Closed);
-                return;
-            }
+            })
+        else {
+            return;
         };
 
         drop(hs_writer); // handshake completed; from here on only the writer thread writes replies.
@@ -159,6 +159,15 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
                     break;
                 }
             };
+            // Anti-DoS: physical upper bound for IPC buffers (16 MiB) to prevent memory exhaustion.
+            if req.len > 16 * 1024 * 1024 {
+                eprintln!(
+                    "[ramsharedd] conn: request len {} exceeds physical IPC buffer bound (16 MiB); disconnecting",
+                    req.len
+                );
+                break;
+            }
+
             // Anti-DoS: a WRITE can never exceed the negotiated export (prevents allocating gigabytes).
             if req.cmd == Command::Write && req.len as u64 > export_size {
                 eprintln!(
