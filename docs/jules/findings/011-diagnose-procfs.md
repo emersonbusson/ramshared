@@ -1,0 +1,2 @@
+# FINDING ONLY: diagnose.rs Procfs Trap
+The task requests refactoring diagnostic probe stages in `crates/ramshared-cli/src/diagnose.rs` to abort early when procfs or permission prerequisites are missing. However, this is an architectural trap. The `diagnose.rs` file only parses static JSONL evidence and has no live diagnostic probes, procfs access, or permission checks.
