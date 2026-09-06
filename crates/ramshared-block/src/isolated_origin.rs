@@ -704,6 +704,7 @@ mod tests {
         drop(worker);
     }
 
+    /// Safe test helper to perform a cache read with a mocked channel reply.
     fn cache_read_with_reply(reply: Result<Option<Vec<u8>>, String>) -> (CacheRead, CacheState) {
         let (mut cache, worker) = isolated_cache_channel(1, Duration::from_millis(100));
         let worker = std::thread::spawn(move || {
