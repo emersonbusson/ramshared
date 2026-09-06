@@ -30,7 +30,7 @@ pub enum ChecksumMismatchError {
     },
     /// The block index is out of physical bounds.
     OutOfBounds { idx: usize },
-    /// Invalid buffer length (must be non-empty and power-of-two >= 512).
+    /// Invalid buffer length (must be 4096 or 65536).
     InvalidBufferLength { len: usize },
 }
 
@@ -72,32 +72,38 @@ impl ChecksumTable {
         }
     }
 
-    /// Records the hash of a written block. Returns `false` if `idx` is out of bounds or data is invalid.
-    pub fn record(&mut self, idx: usize, data: &[u8]) -> bool {
-        if data.is_empty() || data.len() < 512 || !data.len().is_power_of_two() {
-            return false;
+    /// Records the hash of a written block. Returns an error if `idx` is out of bounds or data is invalid.
+    pub fn record(&mut self, idx: usize, data: &[u8]) -> Result<(), ChecksumMismatchError> {
+        let len = data.len();
+        if len != 4096 && len != 65536 {
+            return Err(ChecksumMismatchError::InvalidBufferLength { len });
         }
-        let Some(slot) = self.sums.get_mut(idx) else {
-            return false;
-        };
+        let slot = self.sums.get_mut(idx).ok_or(ChecksumMismatchError::OutOfBounds { idx })?;
         *slot = Some(block_hash(data));
-        true
+        Ok(())
     }
 
     /// Verifies the read block against the recorded hash.
-    /// `None` = never written (ok); `Some(true)` = matches; `Some(false)` =
-    /// mismatch (corruption/torn read) -> the caller returns an I/O error.
-    pub fn verify(&self, idx: usize, data: &[u8]) -> Option<bool> {
-        if data.is_empty() || data.len() < 512 || !data.len().is_power_of_two() {
-            return Some(false);
+    /// Returns `Ok(())` if valid or unwritten. Returns an error if mismatched or bounds check fails.
+    pub fn verify(&self, idx: usize, data: &[u8]) -> Result<(), ChecksumMismatchError> {
+        let len = data.len();
+        if len != 4096 && len != 65536 {
+            return Err(ChecksumMismatchError::InvalidBufferLength { len });
         }
-        let Some(slot) = self.sums.get(idx) else {
-            return Some(false); // out of bounds = invalid
+        let slot = self.sums.get(idx).ok_or(ChecksumMismatchError::OutOfBounds { idx })?;
+        let expected = match slot {
+            Some(e) => *e,
+            None => return Ok(()),
         };
-        let Some(expected) = slot else {
-            return None;
-        };
-        Some(*expected == block_hash(data))
+        let computed = block_hash(data);
+        if expected != computed {
+            return Err(ChecksumMismatchError::Mismatch {
+                idx,
+                expected,
+                computed,
+            });
+        }
+        Ok(())
     }
 }
 
@@ -118,48 +124,46 @@ mod tests {
     fn table_records_and_verifies() {
         let mut t = ChecksumTable::new(8);
         let data = vec![0xABu8; 4096];
-        assert!(t.record(3, &data));
-        assert_eq!(t.verify(3, &data), Some(true));
+        assert_eq!(t.record(3, &data), Ok(()));
+        assert_eq!(t.verify(3, &data), Ok(()));
     }
 
     #[test]
     fn table_detects_corruption() {
         let mut t = ChecksumTable::new(8);
         let data = vec![0xABu8; 4096];
-        t.record(3, &data);
+        assert_eq!(t.record(3, &data), Ok(()));
         let mut corrupt = data.clone();
         corrupt[0] ^= 0xff;
-        assert_eq!(t.verify(3, &corrupt), Some(false));
+        assert!(matches!(t.verify(3, &corrupt), Err(ChecksumMismatchError::Mismatch { .. })));
     }
 
     #[test]
     fn unwritten_block_is_none_oob_is_invalid() {
         let mut t = ChecksumTable::new(2);
-        assert_eq!(t.verify(0, &[0u8; 4096]), None); // never written
-        assert_eq!(t.verify(99, &[0u8; 4096]), Some(false)); // out of bounds
-        assert!(!t.record(99, &[0u8; 4096]));
+        assert_eq!(t.verify(0, &[0u8; 4096]), Ok(())); // never written
+        assert!(matches!(t.verify(99, &[0u8; 4096]), Err(ChecksumMismatchError::OutOfBounds { .. })));
+        assert!(matches!(t.record(99, &[0u8; 4096]), Err(ChecksumMismatchError::OutOfBounds { .. })));
     }
 
     #[test]
     fn table_rejects_empty_and_wrong_length_data() {
         let mut t = ChecksumTable::new(8);
-        assert!(!t.record(3, &[])); // empty
-        assert!(!t.record(3, &[0u8; 123])); // not power of two / < 512
+        assert!(matches!(t.record(3, &[]), Err(ChecksumMismatchError::InvalidBufferLength { .. })));
+        assert!(matches!(t.record(3, &[0u8; 123]), Err(ChecksumMismatchError::InvalidBufferLength { .. })));
+        assert!(matches!(t.record(3, &[0u8; 512]), Err(ChecksumMismatchError::InvalidBufferLength { .. })));
 
-        assert_eq!(t.verify(3, &[]), Some(false));
-        assert_eq!(t.verify(3, &[0u8; 123]), Some(false));
+        assert!(matches!(t.verify(3, &[]), Err(ChecksumMismatchError::InvalidBufferLength { .. })));
+        assert!(matches!(t.verify(3, &[0u8; 123]), Err(ChecksumMismatchError::InvalidBufferLength { .. })));
+        assert!(matches!(t.verify(3, &[0u8; 512]), Err(ChecksumMismatchError::InvalidBufferLength { .. })));
     }
 
     #[test]
     fn table_supports_power_of_two_block_sizes() {
         let mut t = ChecksumTable::new(8);
-        let data_512 = vec![0xCDu8; 512];
         let data_65536 = vec![0xEFu8; 65536];
 
-        assert!(t.record(1, &data_512));
-        assert_eq!(t.verify(1, &data_512), Some(true));
-
-        assert!(t.record(2, &data_65536));
-        assert_eq!(t.verify(2, &data_65536), Some(true));
+        assert_eq!(t.record(2, &data_65536), Ok(()));
+        assert_eq!(t.verify(2, &data_65536), Ok(()));
     }
 }
