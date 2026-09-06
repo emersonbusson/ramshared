@@ -3571,18 +3571,26 @@ fn system_max_backlog() -> i32 {
     std::cmp::min(somaxconn, syn_backlog)
 }
 
-fn apply_listen_backlog<Fd: std::os::fd::AsFd>(fd: Fd) -> std::io::Result<()> {
+fn apply_listen_backlog<Fd: std::os::fd::AsFd>(fd: Fd, requested_backlog: i32) -> std::io::Result<()> {
     let system_max = system_max_backlog();
-    // Limits default bound (e.g. 128 in std::net) or pushes it up to 4096 if allowed by kernel.
-    let target = 4096;
-    let backlog = std::cmp::min(target, system_max);
-    rustix::net::listen(fd, backlog).map_err(std::io::Error::from)
+    if requested_backlog > system_max {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("requested backlog {} exceeds system limit {}", requested_backlog, system_max),
+        ));
+    }
+    rustix::net::listen(fd, requested_backlog).map_err(std::io::Error::from)
 }
 
 fn bind_owned_unix_listener(path: &Path) -> std::io::Result<(UnixListener, OwnedUnixSocketPath)> {
     let target = prepare_unix_socket_path(path)?;
     let listener = UnixListener::bind(path)?;
-    apply_listen_backlog(&listener)?;
+
+    // Limits default bound (e.g. 128 in std::net) or pushes it up to 4096 if allowed by kernel.
+    let system_max = system_max_backlog();
+    let target_backlog = std::cmp::min(4096, system_max);
+    apply_listen_backlog(&listener, target_backlog)?;
+
     let stat = rustix::fs::statat(
         &target.parent,
         &target.name,
@@ -3888,7 +3896,9 @@ fn bind_broker_listeners(
     let tcp = match listen_nbd_addr {
         Some(addr) => {
             let listener = std::net::TcpListener::bind(addr)?;
-            apply_listen_backlog(&listener)?;
+            let system_max = system_max_backlog();
+            let target_backlog = std::cmp::min(4096, system_max);
+            apply_listen_backlog(&listener, target_backlog)?;
             Some(listener)
         }
         None => None,
@@ -9788,21 +9798,27 @@ Filename Type Size Used Priority
     }
 
     #[test]
-    fn daemon_listener_backlog_is_capped_to_system_limits() {
+    fn daemon_listener_backlog_exceeding_system_limits_fails() {
         let max = system_max_backlog();
         assert!(
             max >= 128,
             "system_max_backlog fallback should be at least 128"
         );
 
-        // The socket is bound and we can apply backlog up to min(4096, max)
+        // The socket is bound and we try to apply a backlog exceeding max
         let path =
             std::env::temp_dir().join(format!("ramshared-backlog-{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
 
-        let apply_result = apply_listen_backlog(&listener);
-        assert!(apply_result.is_ok(), "apply_listen_backlog should succeed");
+        let requested = max + 1;
+        let apply_result = apply_listen_backlog(&listener, requested);
+        assert!(
+            apply_result.is_err(),
+            "apply_listen_backlog should fail when requesting backlog exceeding system limit"
+        );
+        let err = apply_result.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         let _ = std::fs::remove_file(&path);
     }
 }
