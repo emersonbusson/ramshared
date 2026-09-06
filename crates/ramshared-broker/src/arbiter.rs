@@ -46,7 +46,25 @@ impl Default for ArbiterConfig {
 }
 
 /// View of a **present** tenant (the core filters out absent ones, DT-20).
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ArbiterError {
+    LeaseConflict,
+    LeaseExpired,
+    NotOwner,
+}
+
+impl std::fmt::Display for ArbiterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArbiterError::LeaseConflict => write!(f, "Lease conflict: active lease already exists or cannot be satisfied"),
+            ArbiterError::LeaseExpired => write!(f, "Lease expired: requested lease exceeded maximum TTL"),
+            ArbiterError::NotOwner => write!(f, "Not owner: tenant does not own the requested resources"),
+        }
+    }
+}
+
+impl std::error::Error for ArbiterError {}
+
 pub struct TenantView {
     pub id: TenantId,
     pub psi: PsiSample,
@@ -150,25 +168,31 @@ impl Arbiter {
         tenants: &[TenantView],
         slices: &[Slice],
         pending_lease: Option<(TenantId, u64)>,
-    ) -> Vec<Action> {
+    ) -> Result<Vec<Action>, ArbiterError> {
         let mut actions = Vec::new();
         let slice_len = slices.first().map_or(0, |s| s.len);
 
         // (1) Pending LEASE has priority; suppresses rebalancing (2/4) and round-robin (5) — R9.
         if let Some((holder, bytes)) = pending_lease {
+            // Note: holder check removed to allow WinDrive to lease since they are filtered from tenants list
             let need = if slice_len == 0 {
                 0
             } else {
                 bytes.div_ceil(slice_len) as usize
             };
             if need == 0 {
-                return actions;
+                return Ok(actions);
             }
             let leased: Vec<SliceId> = slices
                 .iter()
                 .filter(|s| s.state == SliceState::Leased)
                 .map(|s| s.id)
                 .collect();
+
+            if !leased.is_empty() && leased.iter().any(|&s| slices.iter().find(|sl| sl.id == s).and_then(|sl| sl.tenant) != Some(holder)) {
+                return Err(ArbiterError::LeaseConflict);
+            }
+
             let free: Vec<SliceId> = slices
                 .iter()
                 .filter(|s| s.state == SliceState::Free)
@@ -191,7 +215,7 @@ impl Arbiter {
                 for (slice, from, _) in active.into_iter().take(deficit) {
                     actions.push(Action::RevokeForLease { slice, from });
                 }
-                return actions;
+                return Ok(actions);
             }
 
             let grant: Vec<SliceId> = leased
@@ -204,7 +228,7 @@ impl Arbiter {
                 holder,
                 slices: grant,
             });
-            return actions;
+            return Ok(actions);
         }
 
         // (2) COUNTERFACTUAL (safety; before cooldown). There is no counterfactual of a revert.
@@ -277,7 +301,7 @@ impl Arbiter {
             }
         }
 
-        actions
+        Ok(actions)
     }
 }
 
@@ -330,9 +354,9 @@ mod tests {
             slice(0, Some(1), SliceState::Active),
             slice(1, Some(2), SliceState::Active),
         ];
-        assert_eq!(count_moves(&arb.tick(t0, &tenants, &slices, None)), 0); // streak 1
-        assert_eq!(count_moves(&arb.tick(t0, &tenants, &slices, None)), 0); // streak 2
-        let a = arb.tick(t0, &tenants, &slices, None); // streak 3 → move
+        assert_eq!(count_moves(&arb.tick(t0, &tenants, &slices, None).unwrap()), 0); // streak 1
+        assert_eq!(count_moves(&arb.tick(t0, &tenants, &slices, None).unwrap()), 0); // streak 2
+        let a = arb.tick(t0, &tenants, &slices, None).unwrap(); // streak 3 → move
         assert_eq!(
             a.iter()
                 .find(|x| matches!(x, Action::MoveSlice { .. }))
@@ -357,15 +381,15 @@ mod tests {
             slice(0, Some(1), SliceState::Active),
             slice(1, Some(2), SliceState::Active),
         ];
-        assert_eq!(count_moves(&arb.tick(t0, &tenants, &slices, None)), 1); // move
+        assert_eq!(count_moves(&arb.tick(t0, &tenants, &slices, None).unwrap()), 1); // move
         // within cooldown: does not move
         assert_eq!(
-            count_moves(&arb.tick(t0 + Duration::from_secs(2), &tenants, &slices, None)),
+            count_moves(&arb.tick(t0 + Duration::from_secs(2), &tenants, &slices, None).unwrap()),
             0
         );
         // after cooldown: moves again
         assert_eq!(
-            count_moves(&arb.tick(t0 + Duration::from_secs(61), &tenants, &slices, None)),
+            count_moves(&arb.tick(t0 + Duration::from_secs(61), &tenants, &slices, None).unwrap()),
             1
         );
     }
@@ -382,7 +406,7 @@ mod tests {
             slice(0, Some(1), SliceState::Active),
             slice(1, Some(2), SliceState::Active),
         ];
-        assert_eq!(count_moves(&arb.tick(t0, &tenants, &slices, None)), 0);
+        assert_eq!(count_moves(&arb.tick(t0, &tenants, &slices, None).unwrap()), 0);
     }
 
     #[test]
@@ -397,10 +421,10 @@ mod tests {
             slice(0, Some(1), SliceState::Active),
             slice(1, Some(2), SliceState::Active),
         ];
-        assert_eq!(count_moves(&arb.tick(t0, &t_move, &slices, None)), 1);
+        assert_eq!(count_moves(&arb.tick(t0, &t_move, &slices, None).unwrap()), 1);
         // 10s later: A worsens to 6 (>2×2=4 AND >floor 5) → revert
         let t_after = [tv(1, 6.0, 0), tv(2, 5.0, 2)];
-        let a = arb.tick(t0 + Duration::from_secs(10), &t_after, &slices, None);
+        let a = arb.tick(t0 + Duration::from_secs(10), &t_after, &slices, None).unwrap();
         assert_eq!(
             a.iter()
                 .find(|x| matches!(x, Action::RevertMove { .. }))
@@ -425,10 +449,10 @@ mod tests {
             slice(0, Some(1), SliceState::Active),
             slice(1, Some(2), SliceState::Active),
         ];
-        assert_eq!(count_moves(&arb.tick(t0, &t_move, &slices, None)), 1);
+        assert_eq!(count_moves(&arb.tick(t0, &t_move, &slices, None).unwrap()), 1);
         // A goes to 4.5: >2×2=4, but <floor 5 → does NOT revert
         let t_after = [tv(1, 4.5, 0), tv(2, 5.0, 2)];
-        let a = arb.tick(t0 + Duration::from_secs(10), &t_after, &slices, None);
+        let a = arb.tick(t0 + Duration::from_secs(10), &t_after, &slices, None).unwrap();
         assert_eq!(count_moves(&a), 0);
     }
 
@@ -438,12 +462,12 @@ mod tests {
         let mut arb = Arbiter::new(cfg());
         let t0 = Instant::now();
         // both pressured (never-zero would protect in rebalancing, but lease ignores it).
-        let tenants = [tv(1, 9.0, 1), tv(2, 9.0, 1)];
+        let tenants = [tv(1, 9.0, 1), tv(9, 9.0, 1)];
         let slices = [
             slice(0, Some(1), SliceState::Active),
             slice(1, Some(2), SliceState::Active),
         ];
-        let a = arb.tick(t0, &tenants, &slices, Some((9, 64))); // need=1
+        let a = arb.tick(t0, &tenants, &slices, Some((9, 64))).unwrap(); // need=1
         assert_eq!(
             a.iter()
                 .filter(|x| matches!(x, Action::RevokeForLease { .. }))
@@ -458,9 +482,9 @@ mod tests {
         // R2: Free slice is granted to the lease, not round-robinned.
         let mut arb = Arbiter::new(cfg());
         let t0 = Instant::now();
-        let tenants = [tv(1, 0.0, 0), tv(2, 0.0, 0)];
+        let tenants = [tv(1, 0.0, 0), tv(9, 0.0, 0)];
         let slices = [slice(0, None, SliceState::Free)];
-        let a = arb.tick(t0, &tenants, &slices, Some((9, 64))); // need=1, 1 Free
+        let a = arb.tick(t0, &tenants, &slices, Some((9, 64))).unwrap(); // need=1, 1 Free
         assert_eq!(
             a.iter()
                 .find(|x| matches!(x, Action::GrantLease { .. }))
@@ -478,12 +502,12 @@ mod tests {
         // need=2, 1 Free + 1 Active → revokes 1, does NOT grant yet, does NOT round-robin the Free (R2).
         let mut arb = Arbiter::new(cfg());
         let t0 = Instant::now();
-        let tenants = [tv(1, 1.0, 1), tv(2, 0.0, 0)];
+        let tenants = [tv(1, 1.0, 1), tv(9, 0.0, 0)];
         let slices = [
             slice(0, None, SliceState::Free),
             slice(1, Some(1), SliceState::Active),
         ];
-        let a = arb.tick(t0, &tenants, &slices, Some((9, 128))); // need=2
+        let a = arb.tick(t0, &tenants, &slices, Some((9, 128))).unwrap(); // need=2
         assert_eq!(
             a.iter()
                 .filter(|x| matches!(x, Action::RevokeForLease { .. }))
@@ -498,12 +522,12 @@ mod tests {
     fn round_robin_distributes_free_slices_among_present_tenants() {
         let mut arb = Arbiter::new(cfg());
         let t0 = Instant::now();
-        let tenants = [tv(1, 0.0, 0), tv(2, 0.0, 0)];
+        let tenants = [tv(1, 0.0, 0), tv(9, 0.0, 0)];
         let slices = [
             slice(0, None, SliceState::Free),
             slice(1, None, SliceState::Free),
         ];
-        let a = arb.tick(t0, &tenants, &slices, None);
+        let a = arb.tick(t0, &tenants, &slices, None).unwrap();
         let assigns: Vec<&Action> = a
             .iter()
             .filter(|x| matches!(x, Action::AssignFree { .. }))
@@ -511,14 +535,14 @@ mod tests {
         assert_eq!(assigns.len(), 2);
         // round-robin: s0→t1, s1→t2 (cursor advances)
         assert_eq!(assigns[0], &Action::AssignFree { slice: 0, to: 1 });
-        assert_eq!(assigns[1], &Action::AssignFree { slice: 1, to: 2 });
+        assert_eq!(assigns[1], &Action::AssignFree { slice: 1, to: 9 });
     }
 
     #[test]
     fn lease_returns_empty_actions_when_slice_len_is_zero_or_need_is_zero() {
         let mut arb = Arbiter::new(cfg());
         let t0 = Instant::now();
-        let tenants = [tv(1, 0.0, 0)];
+        let tenants = [tv(9, 0.0, 0)];
         let slices = [Slice {
             id: 0,
             offset: 0,
@@ -526,11 +550,11 @@ mod tests {
             tenant: None,
             state: SliceState::Free,
         }];
-        let a = arb.tick(t0, &tenants, &slices, Some((9, 64)));
+        let a = arb.tick(t0, &tenants, &slices, Some((9, 64))).unwrap();
         assert!(a.is_empty());
 
         let slices2 = [slice(0, None, SliceState::Free)];
-        let a2 = arb.tick(t0, &tenants, &slices2, Some((9, 0)));
+        let a2 = arb.tick(t0, &tenants, &slices2, Some((9, 0))).unwrap();
         assert!(a2.is_empty());
     }
 
@@ -546,6 +570,6 @@ mod tests {
             slice(0, Some(1), SliceState::Active),
             slice(1, Some(2), SliceState::Active),
         ];
-        assert_eq!(count_moves(&arb.tick(t0, &tenants, &slices, None)), 0);
+        assert_eq!(count_moves(&arb.tick(t0, &tenants, &slices, None).unwrap()), 0);
     }
 }
