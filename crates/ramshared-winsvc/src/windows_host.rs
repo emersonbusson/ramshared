@@ -1187,4 +1187,30 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn observe_product_volume_invalid_letter() {
+        for bad_letter in ['A', 'C', '['] {
+            let res = WindowsHostState::observe_product_volume(
+                bad_letter,
+                None,
+                "0123456789ABCDEF",
+                64 * 1024 * 1024,
+            );
+            assert!(matches!(res, Err(HostError::Volume(msg)) if msg.contains("letter must be D..=Z")));
+        }
+    }
+
+    #[test]
+    fn observe_product_volume_invalid_serial() {
+        for bad_serial in ["12345", "12345678901234567", "123456789012345Z"] {
+            let res = WindowsHostState::observe_product_volume(
+                'D',
+                None,
+                bad_serial,
+                64 * 1024 * 1024,
+            );
+            assert!(matches!(res, Err(HostError::Identity(msg)) if msg.contains("serial must be 16 hex chars")));
+        }
+    }
 }
