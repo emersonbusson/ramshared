@@ -119,21 +119,24 @@ mod tests {
             op: "cuMemAlloc",
             code: crate::ffi::CUDA_ERROR_OUT_OF_MEMORY,
             msg: "out of memory".to_string(),
-        }.into();
+        }
+        .into();
         assert!(matches!(err_oom, VramError::OutOfMemory));
 
         let err_inval: VramError = CudaError::Driver {
             op: "cuMemAlloc",
             code: crate::ffi::CUDA_ERROR_INVALID_VALUE,
             msg: "invalid value".to_string(),
-        }.into();
+        }
+        .into();
         assert!(matches!(err_inval, VramError::InvalidAlignment));
 
         let err_noinit: VramError = CudaError::Driver {
             op: "cuMemAlloc",
             code: crate::ffi::CUDA_ERROR_NOT_INITIALIZED,
             msg: "not initialized".to_string(),
-        }.into();
+        }
+        .into();
         match err_noinit {
             VramError::Provider(msg) => assert!(msg.contains("not initialized")),
             _ => panic!("Expected VramError::Provider"),
