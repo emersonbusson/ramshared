@@ -17,7 +17,7 @@ pub const MAX_IO_BYTES_CAP: u32 = 1 << 20;
 /// Max queue depth — matches ABI `MAX_QD`.
 pub const MAX_QUEUE_DEPTH: u32 = 256;
 /// Single-open config read cap (DT-1).
-pub const MAX_CONFIG_BYTES: usize = 64 * 1024;
+pub const MAX_CONFIG_BYTES: usize = 64 * 1024; //
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -59,15 +59,28 @@ fn default_heartbeat_secs() -> u64 {
 #[derive(Debug, PartialEq)]
 pub enum ConfigError {
     Parse(String),
-    Invalid { field: &'static str, detail: String },
+    OutOfRange {
+        field: &'static str,
+        value: u64,
+        min: u64,
+        max: u64,
+    },
+    InvalidFormat {
+        field: &'static str,
+        value: String,
+        expected: &'static str,
+    },
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ConfigError::Parse(s) => write!(f, "config parse: {s}"),
-            ConfigError::Invalid { field, detail } => {
-                write!(f, "config invalid {field}: {detail}")
+            ConfigError::OutOfRange { field, value, min, max } => {
+                write!(f, "config out of range {field}: {value} not in {min}..={max}")
+            }
+            ConfigError::InvalidFormat { field, value, expected } => {
+                write!(f, "config invalid format {field}: '{value}', expected {expected}")
             }
         }
     }
@@ -86,10 +99,7 @@ impl WinDriveConfig {
     /// Parse TOML text containing a `[win_drive]` section.
     pub fn from_toml(text: &str) -> Result<Self, ConfigError> {
         if text.len() > MAX_CONFIG_BYTES {
-            return Err(ConfigError::Invalid {
-                field: "config",
-                detail: format!("config exceeds {MAX_CONFIG_BYTES} bytes"),
-            });
+            return Err(ConfigError::OutOfRange { field: "config", value: text.len() as u64, min: 0, max: MAX_CONFIG_BYTES as u64 });
         }
         let root: Root = toml::from_str(text).map_err(|e| ConfigError::Parse(e.to_string()))?;
         root.win_drive.validate()?;
@@ -99,10 +109,7 @@ impl WinDriveConfig {
     /// Parse from an already-owned byte buffer (single-open path; DT-1).
     pub fn from_reader(buf: &[u8]) -> Result<Self, ConfigError> {
         if buf.len() > MAX_CONFIG_BYTES {
-            return Err(ConfigError::Invalid {
-                field: "config",
-                detail: format!("config exceeds {MAX_CONFIG_BYTES} bytes"),
-            });
+            return Err(ConfigError::OutOfRange { field: "config", value: buf.len() as u64, min: 0, max: MAX_CONFIG_BYTES as u64 });
         }
         let text = std::str::from_utf8(buf).map_err(|e| ConfigError::Parse(e.to_string()))?;
         Self::from_toml(text)
@@ -111,81 +118,63 @@ impl WinDriveConfig {
     /// Validate invariants before provision (DT-2).
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.block_size != 512 && self.block_size != 4096 {
-            return Err(ConfigError::Invalid {
-                field: "block_size",
-                detail: format!("must be 512 or 4096, got {}", self.block_size),
-            });
+            return Err(ConfigError::InvalidFormat { field: "block_size", value: self.block_size.to_string(), expected: "512 or 4096" });
         }
         if self.size_bytes < MIN_SIZE_BYTES {
-            return Err(ConfigError::Invalid {
-                field: "size_bytes",
-                detail: format!("must be >= {MIN_SIZE_BYTES} (64 MiB)"),
-            });
+            return Err(ConfigError::OutOfRange { field: "size_bytes", value: self.size_bytes, min: MIN_SIZE_BYTES, max: usize::MAX as u64 });
         }
         if usize::try_from(self.size_bytes).is_err() {
-            return Err(ConfigError::Invalid {
-                field: "size_bytes",
-                detail: "must fit in usize on this host".into(),
-            });
+            return Err(ConfigError::OutOfRange { field: "size_bytes", value: self.size_bytes, min: MIN_SIZE_BYTES, max: usize::MAX as u64 });
         }
         if !self.size_bytes.is_multiple_of(self.block_size as u64) {
-            return Err(ConfigError::Invalid {
-                field: "size_bytes",
-                detail: "must be multiple of block_size".into(),
+            return Err(ConfigError::InvalidFormat { field: "size_bytes", value: self.size_bytes.to_string(), expected: "multiple of block_size" });
+        }
+        if self.queue_depth == 0 || self.queue_depth > MAX_QUEUE_DEPTH {
+            return Err(ConfigError::OutOfRange {
+                field: "queue_depth",
+                value: self.queue_depth as u64,
+                min: 1,
+                max: MAX_QUEUE_DEPTH as u64,
             });
         }
-        if self.queue_depth == 0
-            || self.queue_depth > MAX_QUEUE_DEPTH
-            || !self.queue_depth.is_power_of_two()
-        {
-            return Err(ConfigError::Invalid {
+        if !self.queue_depth.is_power_of_two() {
+            return Err(ConfigError::InvalidFormat {
                 field: "queue_depth",
-                detail: format!(
-                    "must be power of two in 1..={MAX_QUEUE_DEPTH}, got {}",
-                    self.queue_depth
-                ),
+                value: self.queue_depth.to_string(),
+                expected: "power of two",
             });
         }
         if self.max_io_bytes == 0 || self.max_io_bytes > MAX_IO_BYTES_CAP {
-            return Err(ConfigError::Invalid {
+            return Err(ConfigError::OutOfRange {
                 field: "max_io_bytes",
-                detail: format!(
-                    "must be non-zero and <= {MAX_IO_BYTES_CAP}, got {}",
-                    self.max_io_bytes
-                ),
+                value: self.max_io_bytes as u64,
+                min: 1,
+                max: MAX_IO_BYTES_CAP as u64,
             });
         }
         if !self.max_io_bytes.is_multiple_of(self.block_size) {
-            return Err(ConfigError::Invalid {
-                field: "max_io_bytes",
-                detail: "must be multiple of block_size".into(),
-            });
+            return Err(ConfigError::InvalidFormat { field: "max_io_bytes", value: self.max_io_bytes.to_string(), expected: "multiple of block_size" });
         }
         let data_area = (self.queue_depth as u64)
-            .checked_mul(self.max_io_bytes as u64)
-            .ok_or_else(|| ConfigError::Invalid {
-                field: "queue_depth",
-                detail: "queue_depth * max_io_bytes overflow".into(),
-            })?;
+            .saturating_mul(self.max_io_bytes as u64);
+
         if data_area > MAX_DATA_AREA_BYTES {
-            return Err(ConfigError::Invalid {
+            return Err(ConfigError::OutOfRange {
                 field: "queue_depth",
-                detail: format!(
-                    "queue_depth * max_io_bytes = {data_area} exceeds {MAX_DATA_AREA_BYTES}"
-                ),
+                value: data_area,
+                min: 1,
+                max: MAX_DATA_AREA_BYTES,
             });
         }
         if !is_absolute_path(&self.evidence_path) {
-            return Err(ConfigError::Invalid {
-                field: "evidence_path",
-                detail: "must be an absolute path".into(),
-            });
+            return Err(ConfigError::InvalidFormat { field: "evidence_path", value: self.evidence_path.display().to_string(), expected: "absolute path" });
         }
         let letter = self.volume_letter.to_ascii_uppercase();
         if !('D'..='Z').contains(&letter) {
-            return Err(ConfigError::Invalid {
+            return Err(ConfigError::InvalidFormat {
                 field: "volume_letter",
-                detail: format!("must be D..=Z, got {:?}", self.volume_letter),
+                value: self.volume_letter.to_string(),
+                expected: "D..=Z",
             });
         }
         if let Some(path) = &self.volume_mount_path {
@@ -198,23 +187,18 @@ impl WinDriveConfig {
                 || value.contains("..")
                 || value.contains(['\'', ';', '\r', '\n'])
             {
-                return Err(ConfigError::Invalid {
+                return Err(ConfigError::InvalidFormat {
                     field: "volume_mount_path",
-                    detail: format!("must be a child of {prefix}"),
+                    value,
+                    expected: "child of C:\\ProgramData\\RamShared\\mounts\\",
                 });
             }
         }
         if self.tenant.is_empty() {
-            return Err(ConfigError::Invalid {
-                field: "tenant",
-                detail: "must be non-empty".into(),
-            });
+            return Err(ConfigError::InvalidFormat { field: "tenant", value: self.tenant.clone(), expected: "non-empty" });
         }
         if !(1..=30).contains(&self.broker_ready_timeout_secs) {
-            return Err(ConfigError::Invalid {
-                field: "broker_ready_timeout_secs",
-                detail: "must be in 1..=30".into(),
-            });
+            return Err(ConfigError::OutOfRange { field: "broker_ready_timeout_secs", value: self.broker_ready_timeout_secs, min: 1, max: 30 });
         }
         Ok(())
     }
@@ -363,7 +347,7 @@ tenant = "windrive-host"
         let e = WinDriveConfig::from_toml(&bad).unwrap_err();
         assert!(matches!(
             e,
-            ConfigError::Invalid {
+            ConfigError::OutOfRange {
                 field: "size_bytes",
                 ..
             }
@@ -382,7 +366,7 @@ tenant = "windrive-host"
             let e = c.validate().unwrap_err();
             assert!(matches!(
                 e,
-                ConfigError::Invalid {
+                ConfigError::OutOfRange {
                     field: "size_bytes",
                     ..
                 }
@@ -393,7 +377,7 @@ tenant = "windrive-host"
             let e = c.validate().unwrap_err();
             assert!(matches!(
                 e,
-                ConfigError::Invalid {
+                ConfigError::OutOfRange {
                     field: "size_bytes",
                     ..
                 }
@@ -407,7 +391,7 @@ tenant = "windrive-host"
         let e = WinDriveConfig::from_toml(&bad).unwrap_err();
         assert!(matches!(
             e,
-            ConfigError::Invalid {
+            ConfigError::InvalidFormat {
                 field: "max_io_bytes",
                 ..
             }
@@ -421,7 +405,7 @@ tenant = "windrive-host"
         let e = WinDriveConfig::from_toml(&bad).unwrap_err();
         assert!(matches!(
             e,
-            ConfigError::Invalid {
+            ConfigError::OutOfRange {
                 field: "queue_depth",
                 ..
             }
@@ -460,7 +444,7 @@ tenant = "windrive-host"
         let e = WinDriveConfig::from_toml(&bad).unwrap_err();
         assert!(matches!(
             e,
-            ConfigError::Invalid {
+            ConfigError::InvalidFormat {
                 field: "tenant",
                 ..
             }
@@ -473,7 +457,7 @@ tenant = "windrive-host"
         let e = WinDriveConfig::from_reader(&huge).unwrap_err();
         assert!(matches!(
             e,
-            ConfigError::Invalid {
+            ConfigError::OutOfRange {
                 field: "config",
                 ..
             }
@@ -486,7 +470,7 @@ tenant = "windrive-host"
         let e = WinDriveConfig::from_toml(&huge).unwrap_err();
         assert!(matches!(
             e,
-            ConfigError::Invalid {
+            ConfigError::OutOfRange {
                 field: "config",
                 ..
             }
@@ -512,7 +496,7 @@ tenant = "windrive-host"
         let e = WinDriveConfig::from_toml(&bad).unwrap_err();
         assert!(matches!(
             e,
-            ConfigError::Invalid {
+            ConfigError::InvalidFormat {
                 field: "block_size",
                 ..
             }
@@ -525,7 +509,7 @@ tenant = "windrive-host"
         let e = WinDriveConfig::from_toml(&bad).unwrap_err();
         assert!(matches!(
             e,
-            ConfigError::Invalid {
+            ConfigError::InvalidFormat {
                 field: "size_bytes",
                 ..
             }
@@ -538,7 +522,7 @@ tenant = "windrive-host"
         let e = WinDriveConfig::from_toml(&bad).unwrap_err();
         assert!(matches!(
             e,
-            ConfigError::Invalid {
+            ConfigError::InvalidFormat {
                 field: "queue_depth",
                 ..
             }
@@ -551,7 +535,7 @@ tenant = "windrive-host"
         let e = WinDriveConfig::from_toml(&bad).unwrap_err();
         assert!(matches!(
             e,
-            ConfigError::Invalid {
+            ConfigError::OutOfRange {
                 field: "max_io_bytes",
                 ..
             }
@@ -567,7 +551,7 @@ tenant = "windrive-host"
         let e = WinDriveConfig::from_toml(&bad).unwrap_err();
         assert!(matches!(
             e,
-            ConfigError::Invalid {
+            ConfigError::InvalidFormat {
                 field: "evidence_path",
                 ..
             }
@@ -580,7 +564,7 @@ tenant = "windrive-host"
         let e = WinDriveConfig::from_toml(&bad).unwrap_err();
         assert!(matches!(
             e,
-            ConfigError::Invalid {
+            ConfigError::InvalidFormat {
                 field: "volume_letter",
                 ..
             }
@@ -611,7 +595,7 @@ volume_mount_path = "C:\\Users\\Public\\lun""#,
         let e = WinDriveConfig::from_toml(&text).unwrap_err();
         assert!(matches!(
             e,
-            ConfigError::Invalid {
+            ConfigError::InvalidFormat {
                 field: "volume_mount_path",
                 ..
             }
@@ -641,7 +625,7 @@ volume_mount_path = "C:\\Users\\Public\\lun""#,
         );
         assert!(matches!(
             WinDriveConfig::from_toml(&bad),
-            Err(ConfigError::Invalid {
+            Err(ConfigError::OutOfRange {
                 field: "broker_ready_timeout_secs",
                 ..
             })
@@ -664,11 +648,19 @@ volume_mount_path = "C:\\Users\\Public\\lun""#,
     fn display_errors() {
         let p = ConfigError::Parse("x".into());
         assert!(p.to_string().contains("parse"));
-        let i = ConfigError::Invalid {
+        let o = ConfigError::OutOfRange {
             field: "f",
-            detail: "d".into(),
+            value: 1,
+            min: 2,
+            max: 3,
         };
-        assert!(i.to_string().contains("invalid f"));
+        assert!(o.to_string().contains("out of range f"));
+        let i = ConfigError::InvalidFormat {
+            field: "f",
+            value: "x".into(),
+            expected: "y",
+        };
+        assert!(i.to_string().contains("invalid format f"));
     }
 
     #[test]
