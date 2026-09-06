@@ -90,13 +90,17 @@ pub fn parse_memcg_swap(content: &str) -> Option<u64> {
 fn read_memcg_swap_impl(cgroup_path: &str, sysfs_base: &str) -> Option<u64> {
     let cg = std::fs::read_to_string(cgroup_path).ok()?;
     let path = cg.lines().find_map(|l| l.strip_prefix("0::"))?; // cgroup v2: single line `0::/<path>`
+    let trimmed = path.trim();
+    let rel_path = trimmed.strip_prefix('/').unwrap_or(trimmed);
+    if !std::path::Path::new(rel_path)
+        .components()
+        .all(|c| matches!(c, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
     let mut file = std::path::PathBuf::from(sysfs_base);
-    for component in std::path::Path::new(path.trim()).components() {
-        match component {
-            std::path::Component::RootDir => {}
-            std::path::Component::Normal(name) => file.push(name),
-            _ => return None,
-        }
+    if !rel_path.is_empty() {
+        file.push(rel_path);
     }
     file.push("memory.swap.current");
     parse_memcg_swap(&std::fs::read_to_string(file).ok()?)
