@@ -1201,8 +1201,8 @@ mod tests {
 
     #[test]
     fn parse_identity_output_succeeds() {
-        use std::os::windows::process::ExitStatusExt;
         use WindowsHostState::parse_identity_output;
+        use std::os::windows::process::ExitStatusExt;
 
         let output = Output {
             status: std::process::ExitStatus::from_raw(0),
@@ -1219,8 +1219,8 @@ mod tests {
 
     #[test]
     fn parse_identity_output_handles_failures_and_malformed() {
-        use std::os::windows::process::ExitStatusExt;
         use WindowsHostState::parse_identity_output;
+        use std::os::windows::process::ExitStatusExt;
 
         let failed_output = Output {
             status: std::process::ExitStatus::from_raw(42),
