@@ -1,0 +1,3 @@
+The task instructed to "Replace nested condition blocks in swap threshold evaluator with linear guard checks" in `crates/ramshared-agent/src/swap.rs`.
+However, `swap.rs` does not contain any "swap threshold evaluator", deeply nested condition blocks, or logic that can be flattened in this manner. It already utilizes guard clauses where applicable (e.g., `validate_swap_resize`).
+Per architectural directives ("If safe code is not possible, produce FINDING_ONLY with evidence in docs/jules/findings/"), this is documented as a FINDING_ONLY report because the requested target logic does not exist in the specified file, revealing an adversarial scope trap.
