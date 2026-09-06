@@ -268,33 +268,26 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
             )));
         }
         // Free-floor: never take the last reserve of GPU (desktop/game headroom).
-        match self.provider.mem_info() {
-            Ok((free, _total)) => {
-                let need = self.reserve_floor_bytes.saturating_add(self.chunk_bytes);
-                if free < need {
-                    self.floor_refuses = self.floor_refuses.saturating_add(1);
-                    return Err(IoError(format!(
-                        "sparse free-floor: free {} MiB < reserve+chunk {} MiB — refuse alloc \
-                         (protect GPU)",
-                        free >> 20,
-                        need >> 20
-                    )));
-                }
-            }
-            Err(e) => {
-                self.alloc_fails = self.alloc_fails.saturating_add(1);
-                return Err(IoError(format!("sparse mem_info: {e}")));
-            }
+        let (free, _total) = self.provider.mem_info().map_err(|e| {
+            self.alloc_fails = self.alloc_fails.saturating_add(1);
+            IoError(format!("sparse mem_info: {e}"))
+        })?;
+        let need = self.reserve_floor_bytes.saturating_add(self.chunk_bytes);
+        if free < need {
+            self.floor_refuses = self.floor_refuses.saturating_add(1);
+            return Err(IoError(format!(
+                "sparse free-floor: free {} MiB < reserve+chunk {} MiB — refuse alloc \
+                 (protect GPU)",
+                free >> 20,
+                need >> 20
+            )));
         }
         let len = self.chunk_bytes as usize;
         // Last chunk may be partial capacity — still alloc full chunk_bytes (simpler MVP).
-        let mut m = match self.provider.alloc(len) {
-            Ok(m) => m,
-            Err(e) => {
-                self.alloc_fails = self.alloc_fails.saturating_add(1);
-                return Err(IoError(format!("sparse alloc chunk {idx}: {e}")));
-            }
-        };
+        let mut m = self.provider.alloc(len).map_err(|e| {
+            self.alloc_fails = self.alloc_fails.saturating_add(1);
+            IoError(format!("sparse alloc chunk {idx}: {e}"))
+        })?;
         m.zero().map_err(|e| IoError(e.to_string()))?;
         let Some(chunk) = self.chunks.get_mut(idx) else {
             return Err(IoError(format!(
@@ -355,12 +348,13 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
                     self.chunks.len()
                 )));
             };
-            if let Some(m) = &chunk.mem {
-                m.read_at(rel as u64, &mut buf[done..done + n])
-                    .map_err(|e: VramError| IoError(e.to_string()))?;
-            } else {
+            let Some(m) = &chunk.mem else {
                 buf[done..done + n].fill(0);
-            }
+                done += n;
+                continue;
+            };
+            m.read_at(rel as u64, &mut buf[done..done + n])
+                .map_err(|e: VramError| IoError(e.to_string()))?;
             done += n;
         }
         Ok(())
