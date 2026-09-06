@@ -10,6 +10,25 @@ use ramshared_vram::{VramError, VramMemory, VramProvider};
 
 use crate::{BlockBackend, IoError};
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum SparseVramError {
+    PageFault { idx: usize, len: usize },
+    TableFull(String),
+    UnalignedAccess { off: u64, len: usize, align: u32 },
+}
+
+impl std::fmt::Display for SparseVramError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PageFault { idx, len } => write!(f, "sparse page table oob idx={idx} len={len}"),
+            Self::TableFull(msg) => write!(f, "ENOMEM: {msg}"),
+            Self::UnalignedAccess { off, len, align } => write!(f, "sparse unaligned access off={off} len={len} align={align}"),
+        }
+    }
+}
+
+impl std::error::Error for SparseVramError {}
+
 /// Default chunk size (MiB) — SPEC `RAMSHARED_VRAM_CHUNK_MIB` default 128.
 pub const DEFAULT_CHUNK_MIB: u64 = 128;
 
@@ -239,10 +258,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
 
     fn ensure_live(&mut self, idx: usize) -> Result<(), IoError> {
         let Some(chunk) = self.chunks.get(idx) else {
-            return Err(IoError(format!(
-                "sparse page table oob idx={idx} len={}",
-                self.chunks.len()
-            )));
+            return Err(IoError(SparseVramError::PageFault { idx, len: self.chunks.len() }.to_string()));
         };
         if chunk.mem.is_some() {
             return Ok(());
@@ -253,19 +269,19 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
             && let Err(message) = gate.allow_commit(self.committed_bytes(), self.chunk_bytes)
         {
             self.budget_refuses = self.budget_refuses.saturating_add(1);
-            return Err(IoError(format!(
+            return Err(IoError(SparseVramError::TableFull(format!(
                 "sparse host budget constrained before allocation: {message}"
-            )));
+            )).to_string()));
         }
         if next_commit > self.commit_cap_bytes {
             self.floor_refuses = self.floor_refuses.saturating_add(1);
-            return Err(IoError(format!(
+            return Err(IoError(SparseVramError::TableFull(format!(
                 "sparse commit_cap: committed would be {} MiB > cap {} MiB (capacity {} MiB); \
                  refusing the write because swap fallback is not guaranteed",
                 next_commit >> 20,
                 self.commit_cap_bytes >> 20,
                 self.capacity >> 20
-            )));
+            )).to_string()));
         }
         // Free-floor: never take the last reserve of GPU (desktop/game headroom).
         match self.provider.mem_info() {
@@ -273,12 +289,12 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
                 let need = self.reserve_floor_bytes.saturating_add(self.chunk_bytes);
                 if free < need {
                     self.floor_refuses = self.floor_refuses.saturating_add(1);
-                    return Err(IoError(format!(
+                    return Err(IoError(SparseVramError::TableFull(format!(
                         "sparse free-floor: free {} MiB < reserve+chunk {} MiB — refuse alloc \
                          (protect GPU)",
                         free >> 20,
                         need >> 20
-                    )));
+                    )).to_string()));
                 }
             }
             Err(e) => {
@@ -297,10 +313,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
         };
         m.zero().map_err(|e| IoError(e.to_string()))?;
         let Some(chunk) = self.chunks.get_mut(idx) else {
-            return Err(IoError(format!(
-                "sparse page table oob idx={idx} len={}",
-                self.chunks.len()
-            )));
+            return Err(IoError(SparseVramError::PageFault { idx, len: self.chunks.len() }.to_string()));
         };
         chunk.mem = Some(m);
         Ok(())
@@ -309,7 +322,7 @@ impl<'p, P: VramProvider + 'p> SparseVramBackend<'p, P> {
     fn chunk_index(&self, off: u64) -> Result<usize, IoError> {
         if off >= self.capacity {
             return Err(IoError(format!(
-                "sparse oob off={off} capacity={}",
+                "sparse oob off={off} len=0 cap={}",
                 self.capacity
             )));
         }
@@ -330,12 +343,15 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
         if buf.is_empty() {
             return Ok(());
         }
+        if off % (self.block_size as u64) != 0 || buf.len() as u64 % (self.block_size as u64) != 0 {
+            return Err(IoError(SparseVramError::UnalignedAccess { off, len: buf.len(), align: self.block_size }.to_string()));
+        }
         let end = off
             .checked_add(buf.len() as u64)
             .filter(|&e| e <= self.capacity)
             .ok_or_else(|| {
                 IoError(format!(
-                    "sparse read oob off={off} len={} cap={}",
+                    "sparse oob off={off} len={} cap={}",
                     buf.len(),
                     self.capacity
                 ))
@@ -350,10 +366,7 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
             let room = (self.chunk_bytes as usize).saturating_sub(rel);
             let n = (buf.len() - done).min(room);
             let Some(chunk) = self.chunks.get(idx) else {
-                return Err(IoError(format!(
-                    "sparse page table oob idx={idx} len={}",
-                    self.chunks.len()
-                )));
+                return Err(IoError(SparseVramError::PageFault { idx, len: self.chunks.len() }.to_string()));
             };
             if let Some(m) = &chunk.mem {
                 m.read_at(rel as u64, &mut buf[done..done + n])
@@ -370,12 +383,15 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
         if data.is_empty() {
             return Ok(());
         }
+        if off % (self.block_size as u64) != 0 || data.len() as u64 % (self.block_size as u64) != 0 {
+            return Err(IoError(SparseVramError::UnalignedAccess { off, len: data.len(), align: self.block_size }.to_string()));
+        }
         let end = off
             .checked_add(data.len() as u64)
             .filter(|&e| e <= self.capacity)
             .ok_or_else(|| {
                 IoError(format!(
-                    "sparse write oob off={off} len={} cap={}",
+                    "sparse oob off={off} len={} cap={}",
                     data.len(),
                     self.capacity
                 ))
@@ -392,10 +408,7 @@ impl<'p, P: VramProvider + 'p> BlockBackend for SparseVramBackend<'p, P> {
             let room = (self.chunk_bytes as usize).saturating_sub(rel);
             let n = (data.len() - done).min(room);
             let Some(chunk) = self.chunks.get_mut(idx) else {
-                return Err(IoError(format!(
-                    "sparse page table oob idx={idx} len={}",
-                    self.chunks.len()
-                )));
+                return Err(IoError(SparseVramError::PageFault { idx, len: self.chunks.len() }.to_string()));
             };
             let m = chunk
                 .mem
@@ -540,6 +553,24 @@ mod tests {
         fn mem_info(&self) -> Result<(u64, u64), VramError> {
             Ok((8 << 30, 8 << 30))
         }
+    }
+
+    #[test]
+    fn unaligned_access_returns_error() {
+        let p = FakeProvider::new();
+        let mut be = SparseVramBackend::new(&p, 1024 * 1024, 256 * 1024, 4096).unwrap();
+
+        let err_read = be.read_at(1, &mut [0u8; 4096]).unwrap_err();
+        assert!(err_read.0.contains("unaligned access"));
+
+        let err_read_len = be.read_at(4096, &mut [0u8; 100]).unwrap_err();
+        assert!(err_read_len.0.contains("unaligned access"));
+
+        let err_write = be.write_at(1, &[0u8; 4096]).unwrap_err();
+        assert!(err_write.0.contains("unaligned access"));
+
+        let err_write_len = be.write_at(4096, &[0u8; 100]).unwrap_err();
+        assert!(err_write_len.0.contains("unaligned access"));
     }
 
     #[test]
