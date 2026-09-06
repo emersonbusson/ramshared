@@ -1,0 +1,2 @@
+FINDING_ONLY
+The task instructs to validate IPC message magic bytes, protocol version, and length header with guard clauses before buffer allocation in crates/ramshared-broker/src/protocol.rs. However, the protocol is explicitly documented as a JSON-lines wire format (ADR-0005), which is debuggable with nc/jq. There are no binary magic bytes or length headers before the JSON payload. Adding such headers would break the JSON-lines format and the tool compatibility. Therefore, this is an architectural trap and safe code is not possible.
