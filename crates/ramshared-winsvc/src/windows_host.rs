@@ -1187,4 +1187,30 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn read_owned_config_rejects_relative_path() {
+        let err = WindowsHostState::read_owned_config(Path::new("winsvc.toml")).unwrap_err();
+        assert!(matches!(
+            err,
+            HostError::Config(ConfigError::Invalid {
+                field: "config",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn read_owned_config_handles_nonexistent_file() {
+        let path = if cfg!(windows) {
+            Path::new(r"C:\nonexistent_path_ramshared_test\winsvc.toml")
+        } else {
+            Path::new("/nonexistent_path_ramshared_test/winsvc.toml")
+        };
+        let err = WindowsHostState::read_owned_config(path).unwrap_err();
+        assert!(
+            matches!(err, HostError::Config(ConfigError::Invalid { .. }))
+                || matches!(err, HostError::Io(_))
+        );
+    }
 }
