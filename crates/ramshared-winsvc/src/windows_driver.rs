@@ -78,6 +78,20 @@ impl std::fmt::Display for IoctlError {
 
 impl std::error::Error for IoctlError {}
 
+impl From<IoctlError> for std::io::Error {
+    fn from(err: IoctlError) -> Self {
+        let kind = match err {
+            IoctlError::Open(_) => std::io::ErrorKind::NotFound,
+            IoctlError::Ioctl(_) => std::io::ErrorKind::Other,
+            IoctlError::Map(_) => std::io::ErrorKind::PermissionDenied,
+            IoctlError::Timeout => std::io::ErrorKind::TimedOut,
+            IoctlError::Cancelled => std::io::ErrorKind::Interrupted,
+            IoctlError::Invalid(_) => std::io::ErrorKind::InvalidInput,
+        };
+        std::io::Error::new(kind, err)
+    }
+}
+
 fn last_error_string(op: &str) -> String {
     let e = unsafe { windows_sys::Win32::Foundation::GetLastError() };
     format!("{op} win32={e}")
@@ -560,4 +574,37 @@ fn struct_bytes<T>(v: &T) -> Vec<u8> {
         ptr::copy_nonoverlapping((v as *const T) as *const u8, out.as_mut_ptr(), n);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::ErrorKind;
+
+    #[test]
+    fn test_ioctl_error_conversion() {
+        let err = IoctlError::Timeout;
+        let io_err: std::io::Error = err.into();
+        assert_eq!(io_err.kind(), ErrorKind::TimedOut);
+
+        let err = IoctlError::Invalid("test".into());
+        let io_err: std::io::Error = err.into();
+        assert_eq!(io_err.kind(), ErrorKind::InvalidInput);
+
+        let err = IoctlError::Cancelled;
+        let io_err: std::io::Error = err.into();
+        assert_eq!(io_err.kind(), ErrorKind::Interrupted);
+
+        let err = IoctlError::Open("test".into());
+        let io_err: std::io::Error = err.into();
+        assert_eq!(io_err.kind(), ErrorKind::NotFound);
+
+        let err = IoctlError::Map("test".into());
+        let io_err: std::io::Error = err.into();
+        assert_eq!(io_err.kind(), ErrorKind::PermissionDenied);
+
+        let err = IoctlError::Ioctl("test".into());
+        let io_err: std::io::Error = err.into();
+        assert_eq!(io_err.kind(), ErrorKind::Other);
+    }
 }
