@@ -1190,18 +1190,15 @@ mod tests {
 
     #[test]
     fn observe_volume_identity_invalid_letter_rejected() {
-        use WindowsHostState::observe_volume_identity;
-
-        let err = observe_volume_identity('C').unwrap_err();
+        let err = WindowsHostState::observe_volume_identity('C').unwrap_err();
         assert!(matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")));
 
-        let err = observe_volume_identity('A').unwrap_err();
+        let err = WindowsHostState::observe_volume_identity('A').unwrap_err();
         assert!(matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")));
     }
 
     #[test]
     fn parse_identity_output_succeeds() {
-        use WindowsHostState::parse_identity_output;
         use std::os::windows::process::ExitStatusExt;
 
         let output = Output {
@@ -1209,7 +1206,7 @@ mod tests {
             stdout: b"RAMSHARE VRAMDISK|67108864|ABCDEF0123456789\n".to_vec(),
             stderr: Vec::new(),
         };
-        let observed = parse_identity_output('D', &output).unwrap();
+        let observed = WindowsHostState::parse_identity_output('D', &output).unwrap();
         assert_eq!(observed.letter, 'D');
         assert_eq!(observed.vendor, "RAMSHARE");
         assert_eq!(observed.product, "VRAMDISK");
@@ -1219,7 +1216,6 @@ mod tests {
 
     #[test]
     fn parse_identity_output_handles_failures_and_malformed() {
-        use WindowsHostState::parse_identity_output;
         use std::os::windows::process::ExitStatusExt;
 
         let failed_output = Output {
@@ -1227,7 +1223,7 @@ mod tests {
             stdout: Vec::new(),
             stderr: b"Get-Partition failed".to_vec(),
         };
-        let err = parse_identity_output('D', &failed_output).unwrap_err();
+        let err = WindowsHostState::parse_identity_output('D', &failed_output).unwrap_err();
         assert!(err.to_string().contains("volume identity query failed"));
 
         let bad_size = Output {
@@ -1235,7 +1231,7 @@ mod tests {
             stdout: b"RAMSHARE VRAMDISK|not_a_number|ABCDEF0123456789".to_vec(),
             stderr: Vec::new(),
         };
-        let err = parse_identity_output('D', &bad_size).unwrap_err();
+        let err = WindowsHostState::parse_identity_output('D', &bad_size).unwrap_err();
         assert!(err.to_string().contains("missing disk size"));
 
         let ambiguous = Output {
@@ -1243,7 +1239,7 @@ mod tests {
             stdout: b"RAMSHARE VRAMDISK|67108864|ABCDEF0123456789|extra_field".to_vec(),
             stderr: Vec::new(),
         };
-        let err = parse_identity_output('D', &ambiguous).unwrap_err();
+        let err = WindowsHostState::parse_identity_output('D', &ambiguous).unwrap_err();
         assert!(err.to_string().contains("ambiguous identity output"));
     }
 }
