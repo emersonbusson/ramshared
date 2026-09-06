@@ -2139,21 +2139,18 @@ mod tests {
         } else {
             std::env::temp_dir()
         };
+        let ledger_bytes = serde_json::to_vec(&ReservationLedger {
+            schema_version: RESERVATION_LEDGER_SCHEMA_VERSION,
+            next_ordinal: 1,
+            reservations: Vec::new(),
+        })
+        .unwrap();
         for _ in 0..1024 {
             let number = TEMP.fetch_add(1, AtomicOrdering::SeqCst);
             let path = parent.join(format!("ramshared-ledger-{}-{number}", std::process::id()));
             match fs::create_dir(&path) {
                 Ok(()) => {
-                    fs::write(
-                        path.join("reservations.json"),
-                        serde_json::to_vec(&ReservationLedger {
-                            schema_version: RESERVATION_LEDGER_SCHEMA_VERSION,
-                            next_ordinal: 1,
-                            reservations: Vec::new(),
-                        })
-                        .unwrap(),
-                    )
-                    .unwrap();
+                    fs::write(path.join("reservations.json"), &ledger_bytes).unwrap();
                     return path;
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
