@@ -61,11 +61,66 @@ const ARMED_MARKER_CANDIDATES: &[&str] = &["/mnt/c/wsl-forensics/.armed", "/run/
 const ZRAM_ALGOS: &[&str] = &["lzo-rle", "lzo", "zstd", "lz4", "deflate"];
 
 /// Typed error for the cascade orchestration.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[allow(dead_code)]
+pub enum CascadeIoErrorKind {
+    NotFound,
+    PermissionDenied,
+    InvalidInput,
+    OutOfRange,
+    AlreadyExists,
+    TimedOut,
+    Other,
+}
+
+impl fmt::Display for CascadeIoErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotFound => write!(f, "NotFound"),
+            Self::PermissionDenied => write!(f, "PermissionDenied"),
+            Self::InvalidInput => write!(f, "InvalidInput"),
+            Self::OutOfRange => write!(f, "OutOfRange"),
+            Self::AlreadyExists => write!(f, "AlreadyExists"),
+            Self::TimedOut => write!(f, "TimedOut"),
+            Self::Other => write!(f, "Other"),
+        }
+    }
+}
+
+impl From<std::io::ErrorKind> for CascadeIoErrorKind {
+    fn from(kind: std::io::ErrorKind) -> Self {
+        match kind {
+            std::io::ErrorKind::NotFound => Self::NotFound,
+            std::io::ErrorKind::PermissionDenied => Self::PermissionDenied,
+            std::io::ErrorKind::InvalidInput => Self::InvalidInput,
+            std::io::ErrorKind::AlreadyExists => Self::AlreadyExists,
+            std::io::ErrorKind::TimedOut => Self::TimedOut,
+            _ => Self::Other,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct CascadeIoError {
+    pub kind: CascadeIoErrorKind,
+    pub path: String,
+    pub message: String,
+}
+
+impl fmt::Display for CascadeIoError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} at {}: {}", self.kind, self.path, self.message)
+    }
+}
+
+impl std::error::Error for CascadeIoError {}
+
 #[derive(Debug)]
 pub enum CascadeError {
     Shell { cmd: String, msg: String },
     Arg(String),
     Io(String),
+    SysfsIo(CascadeIoError),
     Precondition(String),
     UnsafeContainment(String),
 }
@@ -76,6 +131,7 @@ impl fmt::Display for CascadeError {
             CascadeError::Shell { cmd, msg } => write!(f, "command `{cmd}` failed: {msg}"),
             CascadeError::Arg(m) => write!(f, "invalid argument: {m}"),
             CascadeError::Io(m) => write!(f, "I/O: {m}"),
+            CascadeError::SysfsIo(e) => write!(f, "Sysfs I/O: {e}"),
             CascadeError::Precondition(m) => write!(f, "{m}"),
             CascadeError::UnsafeContainment(m) => write!(f, "unsafe containment: {m}"),
         }
@@ -2420,5 +2476,11 @@ Filename Type Size Used Priority
         );
         assert!(!daemon_kill_allowed(&live));
         assert!(active_vram_block_swap(&live));
+    }
+}
+
+impl From<CascadeIoError> for CascadeError {
+    fn from(error: CascadeIoError) -> Self {
+        CascadeError::SysfsIo(error)
     }
 }
