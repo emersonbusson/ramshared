@@ -135,13 +135,11 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut reader = BufReader::new(stream);
-        let idx = match server_handshake(&mut reader, &mut hs_writer, &exports, tx_flags) {
-            Ok(i) => i,
-            Err(e) => {
-                eprintln!("[ramsharedd] conn: handshake failed: {e}");
-                let _ = jobs.send(WMsg::Closed);
-                return;
-            }
+        let Ok(idx) = server_handshake(&mut reader, &mut hs_writer, &exports, tx_flags).inspect_err(|e| {
+            eprintln!("[ramsharedd] conn: handshake failed: {e}");
+            let _ = jobs.send(WMsg::Closed);
+        }) else {
+            return;
         };
 
         drop(hs_writer); // handshake completed; from here on only the writer thread writes replies.
@@ -152,12 +150,10 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
             if reader.read_exact(&mut hdr).is_err() {
                 break; // EOF or socket error
             }
-            let req = match parse_request(&hdr) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("[ramsharedd] conn: malformed request: {e}; disconnecting");
-                    break;
-                }
+            let Ok(req) = parse_request(&hdr).inspect_err(|e| {
+                eprintln!("[ramsharedd] conn: malformed request: {e}; disconnecting");
+            }) else {
+                break;
             };
             // Anti-DoS: a WRITE can never exceed the negotiated export (prevents allocating gigabytes).
             if req.cmd == Command::Write && req.len as u64 > export_size {
