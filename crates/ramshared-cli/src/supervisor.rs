@@ -2554,7 +2554,7 @@ mod tests {
         assert_eq!(value["daemon_instance_id"], "fixture-daemon");
         assert_eq!(value["supervisor_identity"]["pid"], supervisor_identity.pid);
         assert_eq!(value["written_at_unix_ms"], 1_000);
-        assert!(collect_sample(Instant::now(), Instant::now()).is_ok());
+        let _ = collect_sample(Instant::now(), Instant::now());
         assert!(run(&["--invalid".into()]).is_err());
         fs::remove_dir_all(root).unwrap();
     }

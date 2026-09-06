@@ -241,7 +241,8 @@ fn submit_uring_cmd80(fd: RawFd, cmd_op: u32, cmd: [u8; 80]) -> io::Result<i32> 
         // in this module pass null pointers, local stack pointers, or borrowed mutable
         // buffers, and this function awaits the CQE before returning.
         unsafe {
-            sq.push(&entry).map_err(|_| io::Error::from_raw_os_error(libc::EBUSY))?;
+            sq.push(&entry)
+                .map_err(|_| io::Error::from_raw_os_error(libc::EBUSY))?;
         }
     }
 
@@ -334,7 +335,8 @@ impl UblkFetchRing {
                 return Err(io::Error::from_raw_os_error(libc::EBUSY));
             }
             unsafe {
-                sq.push(&entry).map_err(|_| io::Error::from_raw_os_error(libc::EBUSY))?;
+                sq.push(&entry)
+                    .map_err(|_| io::Error::from_raw_os_error(libc::EBUSY))?;
             }
         }
 
@@ -498,7 +500,8 @@ impl UblkServer {
             return Err(io::Error::from_raw_os_error(libc::EBUSY));
         }
         unsafe {
-            sq.push(&entry).map_err(|_| io::Error::from_raw_os_error(libc::EBUSY))?;
+            sq.push(&entry)
+                .map_err(|_| io::Error::from_raw_os_error(libc::EBUSY))?;
         }
         Ok(())
     }
