@@ -472,6 +472,16 @@
       "freshnessDays": 90,
       "verification": { "state": "unverified" },
       "registeredAt": "2026-09-05T14:24:00Z"
+    },
+    {
+      "id": "crate-documentation",
+      "pattern": "crates/*/README.md",
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-09-06T12:00:00Z"
     }
   ],
   "exclusions": [

@@ -61,18 +61,19 @@ The supervisor's policy closes admission in `GUARDED`,
 shrinks cache and manages discardable scopes in `CRITICAL`,
 and enforces bounded termination sequences in `EMERGENCY`.
 
-### Main Components
+### Modular Architecture — 15 Workspace Crates
 
-| Piece | Responsibility |
-| --- | --- |
-| `ramshared` CLI | Lifecycle management, schema v4 monitor dashboard, workload session containment |
-| `ramsharedd` | Dual-tier ublk/chardev engine, SSD-origin persistence, and revocable VRAM cache manager |
-| `ramshared-tier` | Priority ordering, hysteresis, and demotion safety |
-| `ramshared-cuda` | Runtime NVIDIA CUDA driver wrapper and page-locked DMA management |
-| `ramshared-dxg` | Query host-authoritative WDDM budget and memory allocations |
-| `ramshared-supervisor.service` | Preventive memory pressure monitoring and telemetry |
-| `drivers/block/ramshared` | Native upstream Linux kernel block driver |
-| `drivers/windows/ramshared` | High-performance Windows StorPort virtual miniport driver |
+The codebase is organized into 15 focused Rust crates across 6 architectural tiers:
+
+| Layer | Crates | Role & Responsibility |
+| :--- | :--- | :--- |
+| **Layer 1: Frontend & CLI** | [`ramshared-cli`](crates/ramshared-cli/README.md) | Primary operator interface (`doctor`, `stress`, `monitor`, `top`, `cascade`, `diagnose`). |
+| **Layer 2: Daemons & Agents** | [`ramshared-wsl2d`](crates/ramshared-wsl2d/README.md)<br>[`ramshared-agent`](crates/ramshared-agent/README.md)<br>[`ramshared-winsvc`](crates/ramshared-winsvc/README.md)<br>[`ramshared-winbroker`](crates/ramshared-winbroker/README.md) | In-guest block device daemon (`ublk`/NBD), local kernel swap agent, Windows StorPort worker service, and SCM broker daemon. |
+| **Layer 3: Broker & Policy** | [`ramshared-broker`](crates/ramshared-broker/README.md)<br>[`ramshared-config`](crates/ramshared-config/README.md)<br>[`ramshared-tier`](crates/ramshared-tier/README.md) | Logical lease arbitration, fail-closed configuration parsing, and 3-tier cascade state machine (N1/N2/N3 hysteresis). |
+| **Layer 4: Memory & I/O** | [`ramshared-vram`](crates/ramshared-vram/README.md)<br>[`ramshared-cuda`](crates/ramshared-cuda/README.md)<br>[`ramshared-vulkan`](crates/ramshared-vulkan/README.md)<br>[`ramshared-uring`](crates/ramshared-uring/README.md) | Hardware-agnostic VRAM allocator abstraction, NVIDIA CUDA DMA, cross-vendor Vulkan allocator (AMD/Intel), and Linux `io_uring` engine. |
+| **Layer 5: Storage & Origin** | [`ramshared-block`](crates/ramshared-block/README.md)<br>[`ramshared-integrity`](crates/ramshared-integrity/README.md)<br>[`ramshared-dxg`](crates/ramshared-dxg/README.md) | Authoritative SSD origin persistence, SHA-256 block corruption prevention, and `/dev/dxg` WDDM memory budget query. |
+| **Layer 6: Kernel Drivers** | `drivers/block/ramshared`<br>`drivers/windows/ramshared` | Native upstream Linux kernel block driver and high-performance Windows StorPort virtual miniport driver (C). |
+
 
 ### Anti-hang rules (learned the hard way)
 
