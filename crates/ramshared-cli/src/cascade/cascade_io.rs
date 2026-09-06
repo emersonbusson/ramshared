@@ -2554,10 +2554,18 @@ fn plan_nbd_lifecycle(
             actions.push(NbdLifecycleAction::Swapoff(device.clone()));
         }
     }
-    for device in binding.devices.iter().filter(|device| device.kind == ManagedDeviceKind::Zram) {
+    for device in binding
+        .devices
+        .iter()
+        .filter(|device| device.kind == ManagedDeviceKind::Zram)
+    {
         actions.push(NbdLifecycleAction::ResetZram(device.clone()));
     }
-    for device in binding.devices.iter().filter(|device| device.kind == ManagedDeviceKind::Nbd) {
+    for device in binding
+        .devices
+        .iter()
+        .filter(|device| device.kind == ManagedDeviceKind::Nbd)
+    {
         actions.push(NbdLifecycleAction::DisconnectNbd(device.clone()));
     }
     actions.push(NbdLifecycleAction::StopDaemon);
