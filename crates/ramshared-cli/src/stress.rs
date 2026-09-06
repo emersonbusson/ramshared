@@ -214,7 +214,13 @@ pub fn parse_stress_args(args: &[String]) -> Result<StressOptions, String> {
         .map(|n| n.get() as u64)
         .unwrap_or(1);
 
-    opts.threads = opts.threads.clamp(1, max_threads);
+    if opts.threads > max_threads {
+        return Err(format!(
+            "thread count {} exceeds physical hardware limit ({})",
+            opts.threads, max_threads
+        ));
+    }
+    opts.threads = opts.threads.max(1);
     opts.start_pct = opts.start_pct.clamp(1, 200);
     opts.target_pct = opts.target_pct.clamp(opts.start_pct, 200);
     opts.step_pct = opts.step_pct.clamp(1, 25);
@@ -1102,13 +1108,12 @@ mod tests {
     }
 
     #[test]
-    fn clamps_thread_count_to_physical_limits() {
+    fn rejects_thread_count_exceeding_physical_limits() {
         let args = vec!["--threads".to_string(), "999999".to_string()];
-        let opts = parse_stress_args(&args).unwrap_or_default();
-        let max_threads = std::thread::available_parallelism()
-            .map(|n| n.get() as u64)
-            .unwrap_or(1);
-        assert_eq!(opts.threads, max_threads);
+        let res = parse_stress_args(&args);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert!(err.contains("exceeds physical hardware limit"));
     }
 
     #[test]
