@@ -1187,4 +1187,29 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn active_pagefiles_query_returns_result() {
+        let result = WindowsHostState::active_pagefiles();
+        if let Err(err) = result {
+            assert!(matches!(err, HostError::Pagefile(_)));
+        }
+    }
+
+    #[test]
+    fn active_pagefiles_cim_parser_handles_valid_and_invalid_paths() {
+        let output = "C:\\pagefile.sys\n  D:\\swapfile.sys  \n\nE:\\pagefile.sys";
+        let parsed = parse_pagefile_lines(output).unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                "C:\\pagefile.sys".to_string(),
+                "D:\\swapfile.sys".to_string(),
+                "E:\\pagefile.sys".to_string(),
+            ]
+        );
+
+        let invalid = "invalid_path\nC:\\pagefile.sys";
+        assert!(parse_pagefile_lines(invalid).is_err());
+    }
 }
