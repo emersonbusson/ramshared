@@ -58,6 +58,14 @@ mod tests {
     }
 
     #[test]
+    fn reject_invalid_device_ordinal() {
+        let e = CudaError::InvalidInput("device ordinal cannot be negative");
+        let s = e.to_string();
+        assert!(s.contains("invalid input"));
+        assert!(s.contains("negative"));
+    }
+
+    #[test]
     fn driver_error_carries_op_and_code() {
         let e = CudaError::Driver {
             op: "cuMemAlloc",

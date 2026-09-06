@@ -399,10 +399,15 @@ fn observe_bound_device(
             fs::canonicalize(Path::new("/sys/class/block").join(basename)).map_err(|error| {
                 CascadeError::Precondition(format!("resolve managed sysfs identity: {error}"))
             })?;
-        let sysfs_dev_t =
-            parse_sysfs_device_number(&fs::read_to_string(sysfs.join("dev")).map_err(
-                |error| CascadeError::Precondition(format!("read managed sysfs dev_t: {error}")),
-            )?)?;
+        let sysfs_dev_t = parse_sysfs_device_number(
+            &fs::read_to_string(sysfs.join("dev")).map_err(|error| {
+                CascadeError::SysfsIo(CascadeIoError {
+                    kind: error.kind().into(),
+                    path: sysfs.join("dev").to_string_lossy().into_owned(),
+                    message: format!("read managed sysfs dev_t: {error}"),
+                })
+            })?,
+        )?;
         if sysfs_dev_t != dev_t {
             return Err(CascadeError::Precondition(
                 "managed device node and sysfs dev_t disagree".into(),
@@ -411,7 +416,11 @@ fn observe_bound_device(
         let kernel_owner_instance_id = if expected_kind == ManagedDeviceKind::Nbd {
             let pid = fs::read_to_string(sysfs.join("pid"))
                 .map_err(|error| {
-                    CascadeError::Precondition(format!("read NBD kernel owner PID: {error}"))
+                    CascadeError::SysfsIo(CascadeIoError {
+                        kind: error.kind().into(),
+                        path: sysfs.join("pid").to_string_lossy().into_owned(),
+                        message: format!("read NBD kernel owner PID: {error}"),
+                    })
                 })?
                 .trim()
                 .parse::<u32>()
@@ -485,7 +494,11 @@ fn detect_live_managed_devices() -> Result<Vec<BoundDeviceIdentity>, CascadeErro
                 ManagedDeviceKind::Zram => {
                     fs::read_to_string(entry.path().join("disksize"))
                         .map_err(|error| {
-                            CascadeError::Precondition(format!("read {name} disksize: {error}"))
+                            CascadeError::SysfsIo(CascadeIoError {
+                                kind: error.kind().into(),
+                                path: entry.path().join("disksize").to_string_lossy().into_owned(),
+                                message: format!("read {name} disksize: {error}"),
+                            })
                         })?
                         .trim()
                         .parse::<u64>()
@@ -602,7 +615,11 @@ fn observe_exact_detached_nbd(path: &str) -> Result<DetachedNbdObservation, Casc
             })?;
         let sysfs_dev_t = parse_sysfs_device_number(
             &fs::read_to_string(sysfs.join("dev")).map_err(|error| {
-                CascadeError::Precondition(format!("read detached NBD sysfs dev_t: {error}"))
+                CascadeError::SysfsIo(CascadeIoError {
+                    kind: error.kind().into(),
+                    path: sysfs.join("dev").to_string_lossy().into_owned(),
+                    message: format!("read detached NBD sysfs dev_t: {error}"),
+                })
             })?,
         )?;
         if sysfs_dev_t != dev_t {
@@ -632,7 +649,11 @@ fn observe_exact_detached_nbd(path: &str) -> Result<DetachedNbdObservation, Casc
         }
         let size = fs::read_to_string(sysfs.join("size"))
             .map_err(|error| {
-                CascadeError::Precondition(format!("read detached NBD size: {error}"))
+                CascadeError::SysfsIo(CascadeIoError {
+                    kind: error.kind().into(),
+                    path: sysfs.join("size").to_string_lossy().into_owned(),
+                    message: format!("read detached NBD size: {error}"),
+                })
             })?
             .trim()
             .parse::<u64>()
@@ -643,7 +664,11 @@ fn observe_exact_detached_nbd(path: &str) -> Result<DetachedNbdObservation, Casc
             )));
         }
         let mut holders = fs::read_dir(sysfs.join("holders")).map_err(|error| {
-            CascadeError::Precondition(format!("enumerate detached NBD holders: {error}"))
+            CascadeError::SysfsIo(CascadeIoError {
+                kind: error.kind().into(),
+                path: sysfs.join("holders").to_string_lossy().into_owned(),
+                message: format!("enumerate detached NBD holders: {error}"),
+            })
         })?;
         if holders
             .next()
@@ -2554,18 +2579,11 @@ fn plan_nbd_lifecycle(
             actions.push(NbdLifecycleAction::Swapoff(device.clone()));
         }
     }
-    for kind in [ManagedDeviceKind::Zram, ManagedDeviceKind::Nbd] {
-        for device in binding.devices.iter().filter(|device| device.kind == kind) {
-            match kind {
-                ManagedDeviceKind::Zram => {
-                    actions.push(NbdLifecycleAction::ResetZram(device.clone()))
-                }
-                ManagedDeviceKind::Nbd => {
-                    actions.push(NbdLifecycleAction::DisconnectNbd(device.clone()))
-                }
-                ManagedDeviceKind::Ublk => unreachable!("validated NBD binding excludes ublk"),
-            }
-        }
+    for device in binding.devices.iter().filter(|d| d.kind == ManagedDeviceKind::Zram) {
+        actions.push(NbdLifecycleAction::ResetZram(device.clone()));
+    }
+    for device in binding.devices.iter().filter(|d| d.kind == ManagedDeviceKind::Nbd) {
+        actions.push(NbdLifecycleAction::DisconnectNbd(device.clone()));
     }
     actions.push(NbdLifecycleAction::StopDaemon);
     Ok(NbdLifecyclePlan { actions })
@@ -5560,6 +5578,16 @@ mod tests {
             msg: "failed".into(),
         };
         assert!(err5.to_string().contains("command `zramctl` failed"));
+
+        let err6 = CascadeError::SysfsIo(CascadeIoError {
+            kind: CascadeIoErrorKind::NotFound,
+            path: "mock_path".into(),
+            message: "mock message".into(),
+        });
+        assert!(
+            err6.to_string()
+                .contains("Sysfs I/O: NotFound at mock_path: mock message")
+        );
     }
 
     #[test]

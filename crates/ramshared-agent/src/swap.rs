@@ -91,6 +91,12 @@ fn run(cmd: &str, args: &[String]) -> Result<()> {
     if status.success() {
         Ok(())
     } else {
+        if let Some(code) = status.code() {
+            match code {
+                28 | 13 | 34 => return Err(Error::from_raw_os_error(code)),
+                _ => {}
+            }
+        }
         Err(Error::other(format!(
             "{cmd} {} -> {status}",
             args.join(" ")
@@ -98,21 +104,65 @@ fn run(cmd: &str, args: &[String]) -> Result<()> {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum SwapError {
+    DiskFull,
+    PermissionDenied,
+    InvalidSize,
+    Other(String),
+}
+
+impl SwapError {
+    fn from_io_err(e: Error, fallback_msg: String) -> Self {
+        if let Some(code) = e.raw_os_error() {
+            match code {
+                28 => SwapError::DiskFull,         // ENOSPC
+                13 => SwapError::PermissionDenied, // EACCES
+                34 => SwapError::InvalidSize,      // ERANGE
+                _ => SwapError::Other(fallback_msg),
+            }
+        } else {
+            SwapError::Other(fallback_msg)
+        }
+    }
+}
+
+impl std::fmt::Display for SwapError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SwapError::DiskFull => write!(f, "disk full (ENOSPC)"),
+            SwapError::PermissionDenied => write!(f, "permission denied (EACCES)"),
+            SwapError::InvalidSize => write!(f, "invalid size (ERANGE)"),
+            SwapError::Other(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+impl std::error::Error for SwapError {}
+
 pub fn attach_swap_with<F>(
     endpoint: &NbdEndpoint,
     export: &str,
     dev: &str,
     prio: Option<i32>,
     mut run_cmd: F,
-) -> std::result::Result<(), String>
+) -> std::result::Result<(), SwapError>
 where
     F: FnMut(&str, &[String]) -> Result<()>,
 {
-    run_cmd("nbd-client", &nbd_args(endpoint, export, dev))
-        .map_err(|e| format!("nbd-client: {e}"))?;
+    run_cmd("nbd-client", &nbd_args(endpoint, export, dev)).map_err(|e| {
+        let msg = format!("nbd-client: {e}");
+        SwapError::from_io_err(e, msg)
+    })?;
     // DT-16: exported VRAM returns dirty/zeroed; the swap header needs to be rewritten.
-    run_cmd("mkswap", &[dev.to_string()]).map_err(|e| format!("mkswap: {e}"))?;
-    run_cmd("swapon", &swapon_args(dev, prio)).map_err(|e| format!("swapon: {e}"))?;
+    run_cmd("mkswap", &[dev.to_string()]).map_err(|e| {
+        let msg = format!("mkswap: {e}");
+        SwapError::from_io_err(e, msg)
+    })?;
+    run_cmd("swapon", &swapon_args(dev, prio)).map_err(|e| {
+        let msg = format!("swapon: {e}");
+        SwapError::from_io_err(e, msg)
+    })?;
     Ok(())
 }
 
@@ -123,22 +173,25 @@ pub fn attach_swap(
     export: &str,
     dev: &str,
     prio: Option<i32>,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<(), SwapError> {
     attach_swap_with(endpoint, export, dev, prio, run)
 }
 
-pub fn detach_swap_with<F>(dev: &str, mut run_cmd: F) -> std::result::Result<(), String>
+pub fn detach_swap_with<F>(dev: &str, mut run_cmd: F) -> std::result::Result<(), SwapError>
 where
     F: FnMut(&str, &[String]) -> Result<()>,
 {
-    run_cmd("swapoff", &[dev.to_string()]).map_err(|e| format!("swapoff: {e}"))?;
+    run_cmd("swapoff", &[dev.to_string()]).map_err(|e| {
+        let msg = format!("swapoff: {e}");
+        SwapError::from_io_err(e, msg)
+    })?;
     let _ = run_cmd("nbd-client", &["-d".to_string(), dev.to_string()]);
     Ok(())
 }
 
 /// Detach sequence: `swapoff` → `nbd-client -d`. Best-effort on disconnect (the device might
 /// have already fallen); what matters for integrity is that `swapoff` exited successfully.
-pub fn detach_swap(dev: &str) -> std::result::Result<(), String> {
+pub fn detach_swap(dev: &str) -> std::result::Result<(), SwapError> {
     detach_swap_with(dev, run)
 }
 
@@ -211,7 +264,7 @@ mod tests {
                 Ok(())
             }
         });
-        assert_eq!(res, Err("nbd-client: mock error".into()));
+        assert_eq!(res, Err(SwapError::Other("nbd-client: mock error".into())));
     }
 
     #[test]
@@ -226,7 +279,7 @@ mod tests {
                 Ok(())
             }
         });
-        assert_eq!(res, Err("mkswap: mock error".into()));
+        assert_eq!(res, Err(SwapError::Other("mkswap: mock error".into())));
     }
 
     #[test]
@@ -241,7 +294,7 @@ mod tests {
                 Ok(())
             }
         });
-        assert_eq!(res, Err("swapon: mock error".into()));
+        assert_eq!(res, Err(SwapError::Other("swapon: mock error".into())));
     }
 
     #[test]
@@ -258,7 +311,7 @@ mod tests {
         let res = detach_swap("/dev/invalid_device_for_test");
         assert!(res.is_err());
         let err = res.unwrap_err();
-        assert!(err.starts_with("swapoff: "));
+        assert!(err.to_string().starts_with("swapoff: "));
     }
 
     #[test]

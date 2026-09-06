@@ -29,6 +29,8 @@ pub enum CudaError {
     },
     /// VRAM memory region access out of bounds (offset + len > size).
     OutOfRange { off: usize, len: usize, size: usize },
+    /// Invalid input or context state.
+    InvalidInput(&'static str),
 }
 
 impl fmt::Display for CudaError {
@@ -41,6 +43,9 @@ impl fmt::Display for CudaError {
             }
             CudaError::OutOfRange { off, len, size } => {
                 write!(f, "out of bounds access: off={off} len={len} > size={size}")
+            }
+            CudaError::InvalidInput(msg) => {
+                write!(f, "invalid input: {msg}")
             }
         }
     }
@@ -91,7 +96,7 @@ impl Cuda {
             }
         }
         if handle.is_null() {
-            return Err(CudaError::Load(crate::loader::error()));
+            return Err(CudaError::Load(crate::loader::error().to_string()));
         }
         let lib = Lib(handle);
 
@@ -134,6 +139,13 @@ impl Cuda {
 
     /// Gets the device handle for the specified `ordinal` index, resolving its name.
     pub fn device(&self, ordinal: i32) -> Result<Device, CudaError> {
+        if ordinal < 0 {
+            return Err(CudaError::InvalidInput("device ordinal cannot be negative"));
+        }
+        if ordinal >= self.device_count()? {
+            return Err(CudaError::InvalidInput("device ordinal out of bounds"));
+        }
+
         let mut raw: CuDevice = 0;
         // SAFETY: raw points to a valid local memory location.
         let r = unsafe { (self.syms.device_get)(&mut raw, ordinal) };
@@ -160,6 +172,9 @@ impl Cuda {
         // SAFETY: raw points to a valid local; device.raw is a valid CUdevice handle.
         let r = unsafe { (self.syms.ctx_create)(&mut raw, 0, device.raw) };
         check(&self.syms, r, "cuCtxCreate")?;
+        if raw.is_null() {
+            return Err(CudaError::InvalidInput("CUDA context handle is null"));
+        }
         Ok(Context { cuda: self, raw })
     }
 }

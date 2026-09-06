@@ -153,28 +153,26 @@ impl VulkanProvider {
             .map_err(|e| vk_err("create_instance", e))?;
 
         // From this point on, any error must destroy the instance (goto out_err idiom).
-        match Self::after_instance(&instance, ordinal) {
-            Ok((phys, name, bits)) => Ok(Self {
-                instance,
-                _entry: entry,
-                phys,
-                device: bits.device,
-                queue: bits.queue,
-                cmd_pool: bits.cmd_pool,
-                cmd_buf: bits.cmd_buf,
-                fence: bits.fence,
-                staging_buffer: bits.staging_buffer,
-                staging_memory: bits.staging_memory,
-                staging_mapped: bits.staging_mapped,
-                allocated: AtomicU64::new(0),
-                name,
-            }),
-            Err(e) => {
-                // SAFETY: `instance` created above and destroyed exactly once here.
-                unsafe { instance.destroy_instance(None) };
-                Err(e)
-            }
-        }
+        let (phys, name, bits) = Self::after_instance(&instance, ordinal).inspect_err(|_e| {
+            // SAFETY: `instance` created above and destroyed exactly once here.
+            unsafe { instance.destroy_instance(None) };
+        })?;
+
+        Ok(Self {
+            instance,
+            _entry: entry,
+            phys,
+            device: bits.device,
+            queue: bits.queue,
+            cmd_pool: bits.cmd_pool,
+            cmd_buf: bits.cmd_buf,
+            fence: bits.fence,
+            staging_buffer: bits.staging_buffer,
+            staging_memory: bits.staging_memory,
+            staging_mapped: bits.staging_mapped,
+            allocated: AtomicU64::new(0),
+            name,
+        })
     }
 
     /// Device selection + name + creation of device resources (with its own cleanup on error).
@@ -388,6 +386,15 @@ impl VramProvider for VulkanProvider {
         Self: 'p;
 
     fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
+        let total = self.device_local_total();
+        if bytes as u64 > total {
+            return Err(VramError::OutOfRange {
+                off: 0,
+                len: bytes as u64,
+                size: total,
+            });
+        }
+
         // Rounds buffer size to a multiple of 4 (requirement for vkCmdFillBuffer with WHOLE_SIZE
         // in zero); the logical len remains `bytes`.
         let buf_size = ((bytes as u64).max(1) + 3) & !3;
@@ -647,6 +654,25 @@ mod tests {
             total >> 20,
             free0 >> 20,
             free1 >> 20
+        );
+    }
+
+    #[test]
+    #[ignore = "requires Vulkan loader + ICD (lavapipe is enough; run with --ignored)"]
+    fn alloc_exceeds_heap_returns_out_of_range() {
+        let p = VulkanProvider::open(0).expect("opens Vulkan");
+        let total = p.device_local_total();
+        assert!(total > 0, "total > 0");
+
+        let size = total as usize + 4096;
+        let res = p.alloc(size);
+        assert!(res.is_err(), "alloc should fail");
+        let err = match res {
+            Err(e) => e,
+            Ok(_) => panic!("alloc succeeded unexpectedly"),
+        };
+        assert!(
+            matches!(err, VramError::OutOfRange { off: 0, len, size: s } if len == size as u64 && s == total)
         );
     }
 }

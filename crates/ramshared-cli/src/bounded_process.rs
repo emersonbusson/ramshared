@@ -590,13 +590,20 @@ where
         ));
     }
     let program_path = std::path::Path::new(program);
-    if program_path.is_absolute() && !program_path.exists() {
+    let is_absolute_missing = program_path.is_absolute() && !program_path.exists();
+    if is_absolute_missing {
         return Err(ProcessSpawnError::spawn(
             label,
             io::Error::new(io::ErrorKind::NotFound, "binary path does not exist"),
         ));
     }
     for arg in command.get_args() {
+        if arg.is_empty() {
+            return Err(ProcessSpawnError::spawn(
+                label,
+                io::Error::new(io::ErrorKind::InvalidInput, "empty argument"),
+            ));
+        }
         if arg.as_bytes().contains(&0) {
             return Err(ProcessSpawnError::spawn(
                 label,

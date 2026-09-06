@@ -1187,4 +1187,229 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn lock_product_volume_rejects_invalid_drive_letter() {
+        let err = WindowsHostState::lock_product_volume('A', None).unwrap_err();
+        assert!(matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")));
+
+        let err = WindowsHostState::lock_product_volume('C', None).unwrap_err();
+        assert!(matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")));
+    }
+
+    #[test]
+    fn read_owned_config_rejects_relative_path() {
+        let err = WindowsHostState::read_owned_config(Path::new("relative/path/winsvc.toml")).unwrap_err();
+        assert!(matches!(
+            err,
+            HostError::Config(ConfigError::Invalid {
+                field: "config",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn read_owned_config_handles_nonexistent_file() {
+        let path = if cfg!(windows) {
+            Path::new(r"C:\nonexistent_path_ramshared_test\winsvc.toml")
+        } else {
+            Path::new("/nonexistent_path_ramshared_test/winsvc.toml")
+        };
+        let err = WindowsHostState::read_owned_config(path).unwrap_err();
+        assert!(
+            matches!(err, HostError::Config(ConfigError::Invalid { .. }))
+                || matches!(err, HostError::Io(_))
+        );
+    }
+
+    #[test]
+    fn lock_volume_invalid_letter_is_rejected() {
+        let err = match WindowsHostState::lock_volume('C') {
+            Err(e) => e,
+            Ok(_) => panic!("expected lock_volume to fail for letter C"),
+        };
+        assert!(matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")));
+
+        let err = match WindowsHostState::lock_volume('A') {
+            Err(e) => e,
+            Ok(_) => panic!("expected lock_volume to fail for letter A"),
+        };
+        assert!(matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")));
+    }
+
+    #[test]
+    fn observe_product_volume_invalid_letter() {
+        for bad_letter in ['A', 'C', '['] {
+            let res = WindowsHostState::observe_product_volume(
+                bad_letter,
+                None,
+                "0123456789ABCDEF",
+                64 * 1024 * 1024,
+            );
+            assert!(
+                matches!(res, Err(HostError::Volume(msg)) if msg.contains("letter must be D..=Z"))
+            );
+        }
+    }
+
+    #[test]
+    fn observe_product_volume_invalid_serial() {
+        for bad_serial in ["12345", "12345678901234567", "123456789012345Z"] {
+            let res =
+                WindowsHostState::observe_product_volume('D', None, bad_serial, 64 * 1024 * 1024);
+            assert!(
+                matches!(res, Err(HostError::Identity(msg)) if msg.contains("serial must be 16 hex chars"))
+            );
+        }
+    }
+
+    #[test]
+    fn is_elevated_queries_process_token_without_panic() {
+        let elevated = WindowsHostState::is_elevated();
+        let _ = elevated;
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn flush_and_dismount_invalid_handle_returns_volume_error() {
+        let vol = LockedVolume {
+            letter: 'Z',
+            disk_number: 1,
+            handle: INVALID_HANDLE_VALUE,
+        };
+        let err = WindowsHostState::flush_and_dismount(&vol).unwrap_err();
+        assert!(matches!(err, HostError::Volume(_)));
+        assert!(err.to_string().contains("FlushFileBuffers"));
+    }
+
+    #[test]
+    fn lock_product_volume_path_validates_path_format() {
+        let err = WindowsHostState::lock_product_volume_path(r"C:\invalid", 'D', None).unwrap_err();
+        assert!(err.to_string().contains("invalid volume device path"));
+
+        let err = WindowsHostState::lock_product_volume_path(r"\\.\E:", 'D', None).unwrap_err();
+        assert!(err.to_string().contains("invalid volume device path"));
+
+        let err = WindowsHostState::lock_product_volume_path(r"\\.\D:", 'd', None).unwrap_err();
+        assert!(err.to_string().contains("volume"));
+
+        let err = WindowsHostState::lock_product_volume_path(
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}",
+            'D',
+            None,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("volume"));
+    }
+
+    #[test]
+    fn binary_sha256_computes_sha256_of_file_and_handles_missing_file() {
+        let dir = std::env::temp_dir().join(format!("ramshared-sha256-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let test_file = dir.join("test_file.bin");
+
+        std::fs::write(&test_file, b"hello world").unwrap();
+        let hash = WindowsHostState::binary_sha256(&test_file).unwrap();
+        assert_eq!(
+            hash,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+
+        let empty_file = dir.join("empty.bin");
+        std::fs::write(&empty_file, b"").unwrap();
+        let empty_hash = WindowsHostState::binary_sha256(&empty_file).unwrap();
+        assert_eq!(
+            empty_hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+
+        let missing_file = dir.join("non_existent.bin");
+        let err = WindowsHostState::binary_sha256(&missing_file).unwrap_err();
+        assert!(matches!(err, HostError::Io(_)));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn active_pagefiles_query_returns_result() {
+        let result = WindowsHostState::active_pagefiles();
+        if let Err(err) = result {
+            assert!(matches!(err, HostError::Pagefile(_)));
+        }
+    }
+
+    #[test]
+    fn active_pagefiles_cim_parser_handles_valid_and_invalid_paths() {
+        let output = "C:\\pagefile.sys\n  D:\\swapfile.sys  \n\nE:\\pagefile.sys";
+        let parsed = parse_pagefile_lines(output).unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                "C:\\pagefile.sys".to_string(),
+                "D:\\swapfile.sys".to_string(),
+                "E:\\pagefile.sys".to_string(),
+            ]
+        );
+
+        let invalid = "invalid_path\nC:\\pagefile.sys";
+        assert!(parse_pagefile_lines(invalid).is_err());
+    }
+
+    #[test]
+    fn observe_volume_identity_invalid_letter_rejected() {
+        let err = WindowsHostState::observe_volume_identity('C').unwrap_err();
+        assert!(matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")));
+
+        let err = WindowsHostState::observe_volume_identity('A').unwrap_err();
+        assert!(matches!(err, HostError::Volume(msg) if msg.contains("letter must be D..=Z")));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn parse_identity_output_succeeds() {
+        use std::os::windows::process::ExitStatusExt;
+
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"RAMSHARE VRAMDISK|67108864|ABCDEF0123456789\n".to_vec(),
+            stderr: Vec::new(),
+        };
+        let observed = WindowsHostState::parse_identity_output('D', &output).unwrap();
+        assert_eq!(observed.letter, 'D');
+        assert_eq!(observed.vendor, "RAMSHARE");
+        assert_eq!(observed.product, "VRAMDISK");
+        assert_eq!(observed.serial, "ABCDEF0123456789");
+        assert_eq!(observed.size_bytes, 67_108_864);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn parse_identity_output_handles_failures_and_malformed() {
+        use std::os::windows::process::ExitStatusExt;
+
+        let failed_output = Output {
+            status: std::process::ExitStatus::from_raw(42),
+            stdout: Vec::new(),
+            stderr: b"Get-Partition failed".to_vec(),
+        };
+        let err = WindowsHostState::parse_identity_output('D', &failed_output).unwrap_err();
+        assert!(err.to_string().contains("volume identity query failed"));
+
+        let bad_size = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"RAMSHARE VRAMDISK|not_a_number|ABCDEF0123456789".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err = WindowsHostState::parse_identity_output('D', &bad_size).unwrap_err();
+        assert!(err.to_string().contains("missing disk size"));
+
+        let ambiguous = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"RAMSHARE VRAMDISK|67108864|ABCDEF0123456789|extra_field".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err = WindowsHostState::parse_identity_output('D', &ambiguous).unwrap_err();
+        assert!(err.to_string().contains("ambiguous identity output"));
+    }
 }

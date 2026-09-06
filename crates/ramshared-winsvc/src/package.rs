@@ -485,4 +485,17 @@ mod tests {
         let injected_char = build_residue_script('\'');
         assert!(injected_char.is_err());
     }
+
+    #[test]
+    fn product_manifest_version_directory_and_artifact() {
+        let m = manifest();
+        assert_eq!(m.version_directory(), "1.2.3-abcdef123456");
+
+        let artifact = m.artifact(ArtifactRole::BrokerExe).unwrap();
+        assert_eq!(artifact.role, ArtifactRole::BrokerExe);
+
+        let mut m_missing = manifest();
+        m_missing.artifacts.retain(|a| a.role != ArtifactRole::BrokerExe);
+        assert!(m_missing.artifact(ArtifactRole::BrokerExe).is_err());
+    }
 }

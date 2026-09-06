@@ -41,7 +41,7 @@ struct Event {
 #[derive(Debug)]
 pub enum DiagnoseError {
     InvalidArgs(String),
-    Io(String),
+    Io(std::io::Error, std::path::PathBuf),
     ParseJson(String),
 }
 
@@ -49,7 +49,7 @@ impl std::fmt::Display for DiagnoseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidArgs(msg) => write!(f, "{msg}"),
-            Self::Io(msg) => write!(f, "{msg}"),
+            Self::Io(err, path) => write!(f, "read {}: {err}", path.display()),
             Self::ParseJson(msg) => write!(f, "{msg}"),
         }
     }
@@ -59,7 +59,7 @@ impl DiagnoseError {
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::InvalidArgs(_) => 22, // EINVAL
-            Self::Io(_) => 2,           // ENOENT
+            Self::Io(err, _) => err.raw_os_error().unwrap_or(5) as u8,
             Self::ParseJson(_) => 22,   // EINVAL for malformed json
         }
     }
@@ -82,7 +82,7 @@ struct Diagnosis {
 pub fn run(args: &[String]) -> Result<(), DiagnoseError> {
     let (path, json) = parse_args(args)?;
     let text = fs::read_to_string(&path)
-        .map_err(|e| DiagnoseError::Io(format!("read {}: {e}", path.display())))?;
+        .map_err(|e| DiagnoseError::Io(e, path.clone()))?;
     let diagnosis = diagnose_jsonl(&text)?;
     if json {
         println!("{}", render_json(&diagnosis));

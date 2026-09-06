@@ -78,6 +78,20 @@ impl std::fmt::Display for IoctlError {
 
 impl std::error::Error for IoctlError {}
 
+impl From<IoctlError> for std::io::Error {
+    fn from(err: IoctlError) -> Self {
+        let kind = match err {
+            IoctlError::Open(_) => std::io::ErrorKind::NotFound,
+            IoctlError::Ioctl(_) => std::io::ErrorKind::Other,
+            IoctlError::Map(_) => std::io::ErrorKind::PermissionDenied,
+            IoctlError::Timeout => std::io::ErrorKind::TimedOut,
+            IoctlError::Cancelled => std::io::ErrorKind::Interrupted,
+            IoctlError::Invalid(_) => std::io::ErrorKind::InvalidInput,
+        };
+        std::io::Error::new(kind, err.to_string())
+    }
+}
+
 fn last_error_string(op: &str) -> String {
     let e = unsafe { windows_sys::Win32::Foundation::GetLastError() };
     format!("{op} win32={e}")

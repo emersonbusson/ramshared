@@ -53,6 +53,42 @@ pub enum StateTransitionError {
     },
 }
 
+impl core::fmt::Display for StateTransitionError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::IllegalTransition { expected, actual } => {
+                if let Some(expected) = expected {
+                    write!(
+                        f,
+                        "illegal state transition: expected {:?}, actual {:?}",
+                        expected, actual
+                    )
+                } else {
+                    write!(f, "illegal state transition: actual {:?}", actual)
+                }
+            }
+            Self::IllegalPreflight { expected, actual } => {
+                if let Some(expected) = expected {
+                    write!(
+                        f,
+                        "illegal preflight transition: expected {:?}, actual {:?}",
+                        expected, actual
+                    )
+                } else {
+                    write!(f, "illegal preflight transition: actual {:?}", actual)
+                }
+            }
+            Self::StaleGeneration { provided, expected } => {
+                write!(
+                    f,
+                    "stale generation: provided {}, expected > {}",
+                    provided, expected
+                )
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FailureReason {
     /// A schema revision is not understood by this model.
@@ -2081,5 +2117,53 @@ mod additional_tests {
         assert_eq!(revoke.lease_id, lease_id);
         assert_eq!(revoke.deadline, 200);
         Ok(())
+    }
+
+    #[test]
+    fn test_state_transition_error_display() {
+        use alloc::string::ToString;
+        extern crate alloc;
+
+        let err1 = StateTransitionError::IllegalTransition {
+            expected: Some(StateTag::Granted),
+            actual: StateTag::Absent,
+        };
+        assert_eq!(
+            err1.to_string(),
+            "illegal state transition: expected Granted, actual Absent"
+        );
+
+        let err2 = StateTransitionError::IllegalTransition {
+            expected: None,
+            actual: StateTag::Absent,
+        };
+        assert_eq!(err2.to_string(), "illegal state transition: actual Absent");
+
+        let err3 = StateTransitionError::IllegalPreflight {
+            expected: Some(PreflightState::Constrained),
+            actual: PreflightState::HostUnavailable,
+        };
+        assert_eq!(
+            err3.to_string(),
+            "illegal preflight transition: expected Constrained, actual HostUnavailable"
+        );
+
+        let err4 = StateTransitionError::IllegalPreflight {
+            expected: None,
+            actual: PreflightState::HostUnavailable,
+        };
+        assert_eq!(
+            err4.to_string(),
+            "illegal preflight transition: actual HostUnavailable"
+        );
+
+        let err5 = StateTransitionError::StaleGeneration {
+            provided: 5,
+            expected: 10,
+        };
+        assert_eq!(
+            err5.to_string(),
+            "stale generation: provided 5, expected > 10"
+        );
     }
 }
