@@ -83,20 +83,19 @@ pub fn serve_request<B: BlockBackend + ?Sized>(
         return EINVAL;
     }
 
-    // Physical bounds guard
-    if req
-        .offset
-        .checked_add(req.len as u64)
-        .is_none_or(|end| end > backend.size_bytes())
-    {
-        return EINVAL;
-    }
-
     // Command guard
     if !matches!(
         req.cmd,
         Command::Read | Command::Write | Command::Flush | Command::Trim
     ) {
+        return EINVAL;
+    }
+
+    // Physical bounds guard
+    let Some(end) = req.offset.checked_add(req.len as u64) else {
+        return EINVAL;
+    };
+    if end > backend.size_bytes() {
         return EINVAL;
     }
 
@@ -111,10 +110,10 @@ pub fn serve_request<B: BlockBackend + ?Sized>(
         _ => unreachable!(),
     };
 
-    match served {
-        Ok(bytes) => i32::try_from(bytes).unwrap_or(EIO),
-        Err(_) => EIO,
-    }
+    let Ok(bytes) = served else {
+        return EIO;
+    };
+    i32::try_from(bytes).unwrap_or(EIO)
 }
 
 /// Handle of the ublk server thread; `join` waits for the loop to terminate (upon receiving the
@@ -394,12 +393,9 @@ fn dispatch_request<S: QueueServer>(
     let snapshot = server.io_desc_snapshot(tag)?;
     let iod = ublk::IoDesc::from_ne_bytes(&snapshot)
         .ok_or_else(|| io::Error::other("invalid io-desc snapshot"))?;
-    let req = match iod.to_block_request(tag) {
-        Ok(req) => req,
-        Err(_) => {
-            server.commit_and_fetch(tag, -22)?; // EINVAL (no buffer taken from the pool)
-            return Ok(false);
-        }
+    let Ok(req) = iod.to_block_request(tag) else {
+        server.commit_and_fetch(tag, -22)?; // EINVAL (no buffer taken from the pool)
+        return Ok(false);
     };
 
     // Takes a recycled buffer and sizes it to `len`. `unwrap_or_default` only allocates during
