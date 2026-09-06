@@ -91,7 +91,11 @@ impl SliceMap {
     }
 
     pub fn get(&self, id: SliceId) -> Option<&Slice> {
-        self.slices.iter().find(|s| s.id == id)
+        let idx = id as usize;
+        if idx >= self.slices.len() {
+            return None;
+        }
+        Some(&self.slices[idx])
     }
 
     pub fn slices(&self) -> &[Slice] {
@@ -99,10 +103,11 @@ impl SliceMap {
     }
 
     fn get_mut(&mut self, id: SliceId) -> Result<&mut Slice, SliceError> {
-        self.slices
-            .iter_mut()
-            .find(|s| s.id == id)
-            .ok_or(SliceError::UnknownSlice)
+        let idx = id as usize;
+        if idx >= self.slices.len() {
+            return Err(SliceError::IndexOutOfRange);
+        }
+        Ok(&mut self.slices[idx])
     }
 
     /// `Free → Active(tenant)`. Err if non-`Free` (atomicity invariant; `Leased` rejects).
@@ -267,10 +272,10 @@ mod tests {
     }
 
     #[test]
-    fn unknown_slice_is_error() {
+    fn out_of_range_slice_is_error() {
         let mut m = SliceMap::new(1, 64, 64).unwrap();
-        assert_eq!(m.assign(9, 1), Err(SliceError::UnknownSlice));
-        assert_eq!(m.drain(9), Err(SliceError::UnknownSlice));
+        assert_eq!(m.assign(9, 1), Err(SliceError::IndexOutOfRange));
+        assert_eq!(m.drain(9), Err(SliceError::IndexOutOfRange));
         assert!(m.get(9).is_none());
     }
 }
