@@ -23,6 +23,7 @@ pub enum SliceError {
     TooManySlices { requested: u16, max: u16 },
     CapacityExceeded { required: u64, available: u64 },
     AlreadyAllocated,
+    Unaligned { slice_bytes: u64 },
 }
 
 impl std::fmt::Display for SliceError {
@@ -33,6 +34,9 @@ impl std::fmt::Display for SliceError {
             Self::BadState { have } => write!(f, "slice bad state: {have:?}"),
             Self::TooManySlices { requested, max } => {
                 write!(f, "too many slices requested ({requested} > {max})")
+            }
+            Self::Unaligned { slice_bytes } => {
+                write!(f, "slice bytes not 4096-byte aligned: {slice_bytes}")
             }
             Self::CapacityExceeded {
                 required,
@@ -72,6 +76,10 @@ impl SliceMap {
                 available: backing_bytes,
             });
         }
+        #[allow(clippy::manual_is_multiple_of)]
+        if slice_bytes > 0 && slice_bytes % 4096 != 0 {
+            return Err(SliceError::Unaligned { slice_bytes });
+        }
 
         let slices = (0..k)
             .map(|i| Slice {
@@ -91,6 +99,9 @@ impl SliceMap {
     }
 
     pub fn get(&self, id: SliceId) -> Option<&Slice> {
+        if id >= MAX_SLICES {
+            return None;
+        }
         self.slices.iter().find(|s| s.id == id)
     }
 
@@ -99,6 +110,9 @@ impl SliceMap {
     }
 
     fn get_mut(&mut self, id: SliceId) -> Result<&mut Slice, SliceError> {
+        if id >= MAX_SLICES {
+            return Err(SliceError::IndexOutOfRange);
+        }
         self.slices
             .iter_mut()
             .find(|s| s.id == id)
@@ -195,13 +209,13 @@ mod tests {
 
     #[test]
     fn new_creates_k_free_disjoint_slices() {
-        let m = SliceMap::new(3, 64, 192).unwrap();
+        let m = SliceMap::new(3, 4096, 12288).unwrap();
         assert_eq!(m.slices().len(), 3);
-        assert_eq!(m.total_bytes(), 192);
+        assert_eq!(m.total_bytes(), 12288);
         for (i, s) in m.slices().iter().enumerate() {
             assert_eq!(s.id as usize, i);
-            assert_eq!(s.offset, i as u64 * 64); // disjoint offsets, no gap
-            assert_eq!(s.len, 64);
+            assert_eq!(s.offset, i as u64 * 4096); // disjoint offsets, no gap
+            assert_eq!(s.len, 4096);
             assert_eq!(s.state, SliceState::Free);
             assert_eq!(s.tenant, None);
         }
@@ -209,16 +223,16 @@ mod tests {
 
     #[test]
     fn exports_are_named_s0_s1() {
-        let m = SliceMap::new(2, 64, 128).unwrap();
+        let m = SliceMap::new(2, 4096, 8192).unwrap();
         assert_eq!(
             m.exports(),
-            vec![("s0".to_string(), 64), ("s1".to_string(), 64)]
+            vec![("s0".to_string(), 4096), ("s1".to_string(), 4096)]
         );
     }
 
     #[test]
     fn assign_drain_release_cycle() {
-        let mut m = SliceMap::new(1, 64, 64).unwrap();
+        let mut m = SliceMap::new(1, 4096, 4096).unwrap();
         m.assign(0, 7).unwrap();
         assert_eq!(m.get(0).unwrap().state, SliceState::Active);
         assert_eq!(m.get(0).unwrap().tenant, Some(7));
@@ -232,7 +246,7 @@ mod tests {
     #[test]
     fn assign_on_active_is_rejected() {
         // Atomicity boundary: an Active slice cannot be re-assigned.
-        let mut m = SliceMap::new(1, 64, 64).unwrap();
+        let mut m = SliceMap::new(1, 4096, 4096).unwrap();
         m.assign(0, 1).unwrap();
         assert_eq!(m.assign(0, 2), Err(SliceError::AlreadyAllocated));
     }
@@ -240,14 +254,14 @@ mod tests {
     #[test]
     fn assign_on_leased_is_rejected() {
         // DT-19: slice reserved for lease does not return to round-robin via assign.
-        let mut m = SliceMap::new(1, 64, 64).unwrap();
+        let mut m = SliceMap::new(1, 4096, 4096).unwrap();
         m.lease(0).unwrap();
         assert_eq!(m.assign(0, 1), Err(SliceError::AlreadyAllocated));
     }
 
     #[test]
     fn lease_unlease_cycle() {
-        let mut m = SliceMap::new(1, 64, 64).unwrap();
+        let mut m = SliceMap::new(1, 4096, 4096).unwrap();
         m.lease(0).unwrap();
         assert_eq!(m.get(0).unwrap().state, SliceState::Leased);
         m.unlease(0).unwrap();
@@ -256,7 +270,7 @@ mod tests {
 
     #[test]
     fn illegal_jumps_rejected() {
-        let mut m = SliceMap::new(1, 64, 64).unwrap();
+        let mut m = SliceMap::new(1, 4096, 4096).unwrap();
         // Free cannot drain, release, or unlease.
         assert!(matches!(m.drain(0), Err(SliceError::BadState { .. })));
         assert!(matches!(m.release(0), Err(SliceError::BadState { .. })));
@@ -268,9 +282,23 @@ mod tests {
 
     #[test]
     fn unknown_slice_is_error() {
-        let mut m = SliceMap::new(1, 64, 64).unwrap();
+        let mut m = SliceMap::new(1, 4096, 4096).unwrap();
         assert_eq!(m.assign(9, 1), Err(SliceError::UnknownSlice));
         assert_eq!(m.drain(9), Err(SliceError::UnknownSlice));
         assert!(m.get(9).is_none());
+    }
+
+    #[test]
+    fn index_out_of_range_error() {
+        let mut m = SliceMap::new(1, 4096, 4096).unwrap();
+        assert_eq!(m.assign(MAX_SLICES + 1, 1), Err(SliceError::IndexOutOfRange));
+    }
+
+    #[test]
+    fn new_rejects_unaligned_slice_bytes() {
+        assert!(matches!(
+            SliceMap::new(1, 4095, 8192),
+            Err(SliceError::Unaligned { slice_bytes: 4095 })
+        ));
     }
 }
