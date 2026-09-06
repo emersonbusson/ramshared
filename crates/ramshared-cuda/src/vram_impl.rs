@@ -14,6 +14,18 @@ impl From<CudaError> for VramError {
                 len: len as u64,
                 size: size as u64,
             },
+            CudaError::Driver {
+                code: crate::ffi::CUDA_ERROR_OUT_OF_MEMORY,
+                ..
+            } => VramError::OutOfMemory,
+            CudaError::Driver {
+                code: crate::ffi::CUDA_ERROR_INVALID_VALUE,
+                ..
+            } => VramError::InvalidAlignment,
+            CudaError::Driver {
+                code: crate::ffi::CUDA_ERROR_NOT_INITIALIZED,
+                ..
+            } => VramError::Provider("cuda driver not initialized".to_string()),
             other => VramError::Provider(other.to_string()),
         }
     }
@@ -86,17 +98,44 @@ mod tests {
     #[test]
     fn test_vram_error_conversion_provider() {
         let cuda_err = CudaError::Driver {
-            op: "cuMemAlloc",
-            code: 2,
-            msg: "out of memory".to_string(),
+            op: "cuUnknownOp",
+            code: 999,
+            msg: "unknown error".to_string(),
         };
         let vram_err: VramError = cuda_err.into();
 
         match vram_err {
             VramError::Provider(msg) => {
-                assert!(msg.contains("cuMemAlloc"));
-                assert!(msg.contains("CUresult=2"));
+                assert!(msg.contains("cuUnknownOp"));
+                assert!(msg.contains("999"));
             }
+            _ => panic!("Expected VramError::Provider"),
+        }
+    }
+
+    #[test]
+    fn test_vram_error_conversion_semantic() {
+        let err_oom: VramError = CudaError::Driver {
+            op: "cuMemAlloc",
+            code: crate::ffi::CUDA_ERROR_OUT_OF_MEMORY,
+            msg: "out of memory".to_string(),
+        }.into();
+        assert!(matches!(err_oom, VramError::OutOfMemory));
+
+        let err_inval: VramError = CudaError::Driver {
+            op: "cuMemAlloc",
+            code: crate::ffi::CUDA_ERROR_INVALID_VALUE,
+            msg: "invalid value".to_string(),
+        }.into();
+        assert!(matches!(err_inval, VramError::InvalidAlignment));
+
+        let err_noinit: VramError = CudaError::Driver {
+            op: "cuMemAlloc",
+            code: crate::ffi::CUDA_ERROR_NOT_INITIALIZED,
+            msg: "not initialized".to_string(),
+        }.into();
+        match err_noinit {
+            VramError::Provider(msg) => assert!(msg.contains("not initialized")),
             _ => panic!("Expected VramError::Provider"),
         }
     }
