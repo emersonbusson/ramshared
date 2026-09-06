@@ -1930,7 +1930,7 @@ mod tests {
         }
 
         fn wait_for_completion(&mut self) -> ScopeCompletion {
-            ScopeCompletion::Terminal(self.result.clone())
+            ScopeCompletion::Terminal(std::mem::replace(&mut self.result, Ok(None)))
         }
     }
 
