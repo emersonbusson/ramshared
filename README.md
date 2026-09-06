@@ -7,7 +7,7 @@ RamShared is an advanced hardware-accelerated memory tiering system that opportu
 ![RamShared cascade: zram, idle GPU memory, then disk](docs/marketing/cascade-diagram.svg)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.10.0"><img alt="Release v0.10.0" src="https://img.shields.io/badge/release-v0.10.0-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.11.0"><img alt="Release v0.11.0" src="https://img.shields.io/badge/release-v0.11.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Git Clones" src="https://img.shields.io/badge/git_clones-20k%2B-blue?style=flat-square&logo=git">
   <img alt="Integrity" src="https://img.shields.io/badge/integrity-SHA--256_verified-success?style=flat-square">
@@ -41,7 +41,7 @@ ramshared top
 
 ## Current Status
 
-Release: **v0.10.0 (Production Qualified Release & Linux Kernel Driver Upstream RFC v2)**. Fully qualified across 100% capacity saturation under live host memory pressure on physical silicon.
+Release: **v0.11.0 (Production Qualified Release & Multi-Tier Memory Cascade)**. Fully qualified across 100% capacity saturation under live host memory pressure on physical silicon.
 
 | Surface | Status | What that means |
 | --- | --- | --- |
@@ -201,7 +201,7 @@ scripts, systemd service templates, documentation, and `SHA256SUMS` cryptographi
 Build caches, credentials, and transient environment artifacts are excluded by policy. See
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-Official Linux release distributions (including v0.10.0 and prior milestones) and
+Official Linux release distributions (including v0.11.0 and prior milestones) and
 their detached checksums are qualified through the automated release promotion workflow.
 
 ## Windows StorPort Driver Architecture

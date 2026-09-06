@@ -10,7 +10,7 @@ O RamShared é um sistema avançado de hierarquia de memória acelerado por hard
 ![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram-pt.svg)
 
 <p align="center">
-  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.10.0"><img alt="Versão v0.10.0" src="https://img.shields.io/badge/release-v0.10.0-2f855a?style=flat-square"></a>
+  <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.11.0"><img alt="Versão v0.11.0" src="https://img.shields.io/badge/release-v0.11.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Clones Git" src="https://img.shields.io/badge/git_clones-20k%2B-blue?style=flat-square&logo=git">
   <img alt="Integridade" src="https://img.shields.io/badge/integridade-SHA--256_verificado-success?style=flat-square">
@@ -44,7 +44,7 @@ ramshared top
 
 ## Status atual
 
-Versão: **v0.10.0 (Release de Produção Qualificado e Submissão Upstream LKML RFC v2)**. Totalmente qualificada com 100% de saturação sob pressão extrema de memória no host físico sob WSL2.
+Versão: **v0.11.0 (Release de Produção Qualificado e Cascata de Memória Multi-Tier)**. Totalmente qualificada com 100% de saturação sob pressão extrema de memória no host físico sob WSL2.
 
 | Superfície | Status | O que isso significa |
 | --- | --- | --- |
@@ -205,7 +205,7 @@ segurança, modelos de serviços systemd, documentação e assinaturas criptogr�
 Caches de compilação, credenciais e artefatos de ambientes transitórios são estritamente excluídos. Consulte
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-As versões oficiais para Linux (incluindo v0.10.0 e marcos anteriores) e
+As versões oficiais para Linux (incluindo v0.11.0 e marcos anteriores) e
 seus checksums criptográficos são qualificados pelo fluxo automatizado de promoção de releases.
 
 ## Arquitetura do Driver Windows StorPort
