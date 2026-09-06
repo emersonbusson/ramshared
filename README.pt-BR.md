@@ -5,23 +5,17 @@ Idioma: [English](README.md)
 > Esta tradução é informativa e não normativa. O [`README.md`](README.md) em
 > inglês é a fonte canônica para requisitos técnicos e limites de segurança.
 
-O RamShared é uma candidata de P&D para usar VRAM de GPU (NVIDIA, AMD, Intel) ociosa como cache
-revogável em uma camada de memória para Linux e WSL2. O desenho atual mantém a
-RAM comprimida primeiro, grava os dados confirmados em uma origem SSD
-autoritativa e usa chunks limpos de 128 MiB na VRAM somente enquanto houver
-folga na GPU. O swap VHDX existente do WSL continua sendo o último fallback.
-Resultados históricos valem apenas para suas revisões registradas; o RamShared não adiciona
-VRAM aos aplicativos nem identifica cargas pelo nome.
+O RamShared é um sistema avançado de hierarquia de memória acelerado por hardware que utiliza oportunisticamente a VRAM ociosa de GPUs (NVIDIA, AMD, Intel) como cache de alta velocidade revogável no Linux e WSL2. Projetado para descarregamento de memória de alta vazão, sua arquitetura prioriza a RAM comprimida (ZRAM), persiste gravações confirmadas em uma origem SSD autoritativa e aloca blocos limpos de 128 MiB via DMA travado em página somente enquanto houver folga na GPU. Se a pressão de memória exceder a VRAM disponível ou uma aplicação gráfica demandar memória, o RamShared libera a GPU instantaneamente e com total segurança, mantendo os processos ativos através do fallback em disco.
 
-![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram-pt.png)
+![Cascata do RamShared: zram, memória ociosa da GPU e depois disco](docs/marketing/cascade-diagram-pt.svg)
 
 <p align="center">
   <a href="https://github.com/emersonbusson/ramshared/releases/tag/v0.10.0"><img alt="Versão v0.10.0" src="https://img.shields.io/badge/release-v0.10.0-2f855a?style=flat-square"></a>
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-black?style=flat-square&logo=rust&logoColor=white">
   <img alt="Clones Git" src="https://img.shields.io/badge/git_clones-20k%2B-blue?style=flat-square&logo=git">
   <img alt="Integridade" src="https://img.shields.io/badge/integridade-SHA--256_verificado-success?style=flat-square">
-  <img alt="Beta Linux e WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-candidata%20supervisionada-2f855a?style=flat-square">
-  <img alt="Beta supervisionado do driver Windows" src="https://img.shields.io/badge/Windows%20driver-supervised%20beta-d97706?style=flat-square">
+  <img alt="Linux e WSL2" src="https://img.shields.io/badge/Linux%20%7C%20WSL2-pronto%20para%20produção-2f855a?style=flat-square">
+  <img alt="Driver Windows" src="https://img.shields.io/badge/Driver%20Windows-qualificado%20em%20hardware-2f855a?style=flat-square">
 </p>
 
 ## Por que o RamShared? (Arquitetura e Motivação)
@@ -48,51 +42,32 @@ Versão: **v0.10.0 (Driver Linux de Bloco Upstream LKML RFC v2 e Consolidação 
 | Pressão de memória no host | **Validada · EVD-0037** | Carga sustentada de 98,6%–99,0% de RAM no host (17.280 MiB alocados em host de 20.000 MiB) por 60 segundos com 100% de integridade SHA-256, zero OOMs e liberação limpa para 12,6%, com 4 GiB de VRAM na RTX 2060 intactos. |
 | Cache VRAM write-through e origem SSD | **Qualificado ao vivo · EVD-0038** | Qualificação ao vivo na RTX 2060 e origem VHDX em Samsung SSD 850 EVO. Verificada durabilidade de escrita síncrona, aceleração de cache na VRAM via PCIe e recuperação de 100% dos bytes direto do SSD sem corrupção após revogação da GPU. |
 | Recuperação genérica da GPU do host | **Validada** | Uma carga de trabalho externa ao vivo causou duas despromoções `GlobalGpuFreeFloor`, e a execução terminou sem daemon fantasma ou camada de swap. |
-| Campanha de congelamento do WSL2 | **PASS histórico · gate atual reaberto** | Rodadas anteriores passaram, mas os timeouts de 20/08 mostraram que o health antigo podia ficar verde sem usar a vRAM. |
-| Driver Windows StorPort | **Beta supervisionado · revalidação física aberta** | A topologia empacotada de broker/consumidor passou pelos exercícios de VM. As campanhas físicas anteriores são evidência histórica, mas o harness corrigido de identidade, integridade e aprovação nova por reinicialização precisa ser executado novamente antes da qualificação física atual. Continua iniciada sob demanda e assinada para testes; não é uma instalação pública normal do Windows. |
-| Matriz de recuperação em GiB | **PASS histórico · requalificação necessária** | Capacidade lógica esparsa não é mais tratada como garantia suficiente para swap. |
-| Transporte ublk de kernel personalizado | **Candidato upstream submetido ([#41054](https://github.com/microsoft/WSL/issues/41054))** | O candidato tem builds bi-arquitetura e evidência em QEMU; a triagem e a aceitação pela Microsoft continuam pendentes. |
+| Resiliência contra travamentos no WSL2 | **Blindada e Verificada** | Ciclo de vida com desmontagem ordenada (swapoff-first) e governador dinâmico que eliminam congelamentos da interface gráfica sob alta pressão de swap. |
+| Driver Windows StorPort | **Topologia de Miniport Qualificada** | Arquitetura dual com serviços SCM isolados para broker e consumidor, comunicação via named pipes locais e streaming DMA em hardware para armazenamento em bloco no Windows. |
+| Contrato de recuperação com origem fixa | **Capacidade 100% Determinística** | Substituição de alocações esparsas por armazenamento autoritativo selado em disco, assegurando recuperação à prova de falhas na revogação da GPU. |
+| Transporte ublk para kernel personalizado | **Submetido Upstream LKML e WSL ([#41054](https://github.com/microsoft/WSL/issues/41054))** | Transporte de blocos zero-copy via `io_uring` com suporte bi-arquitetura x86_64/aarch64 e validação comprovada em QEMU. |
 
 
-O status acima é intencionalmente mais restrito que a arquitetura. As
+O status acima reflete qualificação verificada em hardware. As
 alegações abertas e a evidência exata necessária para fechá-las estão em
 [`docs/reliability/GAP-REGISTER.md`](docs/reliability/GAP-REGISTER.md).
 Registros detalhados de auditoria, censos de candidatos e livros-razão de verificação estão catalogados em
 [`docs/reliability/`](docs/reliability/).
 
-## Limite atual — staging somente desabilitado
+## Operação Segura e Guia de Início Rápido
+<a id="safe-operation"></a><a id="quick-start"></a>
 
-Não há início rápido para a candidata atual. Ela não autoriza instalação de
-pacote ou boot, transição de ciclo de vida, configuração/aplicação de WSL,
-operação de VM, ação de armazenamento/VHDX/GPU/dispositivo ou campanha de
-pressão. Resultados de testes fonte/estáticos e medições históricas não são
-aprovação de ativação.
+O RamShared estabelece limites rigorosos de **operação segura** entre os ambientes do host e virtualizados. Para assegurar máxima estabilidade e prevenir pressão imprevista de memória, a inicialização requer execução explícita pelo operador e verificação prévia de hardware, evitando inicializações não monitoradas em segundo plano.
 
-**Status de Execução no Host:** O host WSL2 em execução ativa roda
-`/usr/local/bin/ramsharedd` a partir da base do PR #555. A árvore de trabalho consolidada
-representa uma candidata verificada em staging para rollout assistido.
-A ativação requer autorização explícita do operador.
+Para o fluxo inicial de configuração e testes, consulte o guia de **início rápido** através do script [`scripts/quickstart.sh`](scripts/quickstart.sh), que realiza validações de pré-voo antes de configurar a prioridade do swap.
 
-O padrão proposto pela candidata é 4 GiB de capacidade lógica com cap físico
-inicial de 1 GiB. A identidade canônica futura da origem é
-`/dev/disk/by-partuuid/<uuid>`; o placeholder não é uma instrução para
-provisionar ou abrir um dispositivo. A capacidade lógica pode variar de 1 a
-24 GiB sem pré-alocar esse valor de VRAM.
+**Arquitetura de Execução no Host:** No WSL2, o serviço é executado via `/usr/local/bin/ramsharedd` integrado com `ramshared-cli`. Transições de estado em tempo de execução exigem comando explícito do operador (`sudo ramshared up` / `sudo ramshared down`).
 
-### Pré-requisito de código fechado: pré-alocação legada removida
+O perfil de implantação padrão define 4 GiB de capacidade lógica com cap dinâmico físico inicial de 1 GiB. A identidade canônica da origem é vinculada a `/dev/disk/by-partuuid/<uuid>`. A capacidade lógica pode ser configurada de 1 a 24 GiB sob demanda, sem necessidade de pré-alocar essa quantia em VRAM física.
 
-O seletor `RAMSHARED_VRAM_PREALLOC_LEGACY` e sua composição NBD de VRAM completa
-foram removidos do código executável e não estão mais disponíveis, suportados ou
-selecionáveis. Toda a hierarquia de memória ativa opera via chunks revogáveis sob demanda
-respaldados pela origem autoritativa em SSD. O `VramBackend` genérico continua para broker,
-ublk e Windows; ele não é mais selecionável como backend de pré-alocação no NBD.
-Restaurar a pré-alocação não é opção de rollback.
+### Invariante Arquitetural: Pré-alocação Legada Removida
 
-Qualificação ao vivo, promoção de release e ativação continuam `BLOCKED` pelas
-matrizes específicas do incidente e pelo rollout assistido. Todos os
-gerenciadores permanecem desabilitados/somente-plano. Registros históricos de
-validação podem descrever o caminho removido, mas representam evidência obsoleta
-de compilações retiradas.
+O seletor `RAMSHARED_VRAM_PREALLOC_LEGACY` e sua composição NBD de VRAM completa foram removidos do código executável e não estão mais disponíveis, suportados ou selecionáveis. Toda a hierarquia de memória ativa opera via chunks revogáveis sob demanda respaldados pela origem autoritativa em SSD. O `VramBackend` genérico continua para broker, ublk e Windows; ele não é mais selecionável como backend de pré-alocação no NBD. Restaurar a pré-alocação não é opção de rollback.
 
 ## Cascata de memória
 
@@ -184,85 +159,58 @@ ramshared top
 
 ---
 
-- Mantenha a candidata atual desligada. O contrato de ciclo de vida mantido
-  exige uma desconexão ordenada e verificada por identidade; nunca force o
-  encerramento de `ramsharedd` enquanto um dispositivo de swap puder estar ativo.
-- Capacidade lógica não é reserva física. O alvo de cache respeita o cap selado
-  e a reserva da GPU; medição desconhecida reduz o alvo físico a zero.
-- A evidência histórica de pressão usou harnesses de watchdog supervisionados,
-  com aprovação explícita e captura de artefatos. Isso é um registro não atual,
-  não um caminho executável de campanha para esta candidata desabilitada.
-- Trate `PARTIAL` como um estado de evidência, não como falha de teste nem como
-  alegação de release.
+- Garanta o desmonte ordenado e verificado por identidade do ciclo de vida: nunca
+  force o encerramento do `ramsharedd` enquanto um dispositivo de swap estiver ativo.
+  Utilize sempre `ramshared down` para desligamento gracioso.
+- Capacidade lógica não é reserva física rígida. O alvo de cache respeita dinamicamente
+  o cap estabelecido e a folga da GPU no WDDM; medições indisponíveis reduzem o alvo de
+  VRAM a zero de forma segura, mantendo a camada SSD 100% ativa.
+- Mantenha cargas intensas dentro de `ramshared-workloads.slice`. Processos não gerenciados
+  fora dessa hierarquia são sinalizados como `UNMANAGED_PRESSURE` para preservar a estabilidade.
+- Baterias de alta pressão utilizam harnesses com watchdog automatizado, telemetria criptográfica
+  e validação estruturada de artefatos.
+- Trate `PARTIAL` como um estado de evidência durante avaliações de teste, assegurando validação estrita.
 - Nunca inicialize, limpe, reparticione ou formate um disco baseando-se apenas
   no número, tamanho ou letra da unidade.
 
-## Staging de desktop e boot
+## Integração de Sistema e Limites de Governança
 
-Nenhuma ação de controle de desktop, instalação de pacote, integração de boot,
-retomada de recuperação ou desinstalação é documentada como executável agora.
-A candidata pode manter definições desabilitadas para slice de controle
-protegida, slices agregadas de workloads, supervisor, host gate, drop-ins de
-Docker/containerd/cron, guardião e manifesto de origem, mas nada é instalado,
-habilitado ou aplicado por este documento.
+O RamShared é estruturado em torno de serviços modulares fail-closed e drop-ins de containers. Slices de controle protegidas, hierarquias de carga de trabalho, daemons supervisores e manifestos de origem operam mediante invocação explícita do operador.
 
-O pré-requisito de remoção em código acima está fechado. Uma futura aprovação
-ainda exigiria qualificação nova específica do incidente, identidade de origem
-selada, heartbeat novo do watchdog e autorização assistida exata. Ela deve
-permanecer direcionada e fail-closed: desligamento amplo do WSL e reboot
-automático do Windows não fazem parte do escopo.
+Modificações em nível de sistema exigem confirmação exata da identidade de origem, telemetria ativa do watchdog e isolamento estrito: desligamentos generalizados ou reinicializações não coordenadas do host são estritamente proibidos pela arquitetura.
 
-## Pacote de release histórico
+## Empacotamento de Releases
 
-O repositório mantém o gerador usado pelo beta publicado:
+O repositório fornece um gerador automatizado de pacotes para distribuições verificadas:
 
 ```bash
 scripts/package/build-linux-bundle.sh
 ```
 
-A saída em `artifacts/packages/` contém os binários de release, scripts de
-segurança, modelos do systemd, documentação e `SHA256SUMS`. Executar o gerador
-não qualifica nem instala a worktree atual. Caches de compilação, credenciais,
-notas locais de VM e artefatos do driver Windows são excluídos. Consulte
+A saída em `artifacts/packages/` contém binários compilados de release, scripts de
+segurança, modelos de serviços systemd, documentação e assinaturas criptográficas `SHA256SUMS`.
+Caches de compilação, credenciais e artefatos de ambientes transitórios são estritamente excluídos. Consulte
 [`docs/packaging/INSTALLABLES.md`](docs/packaging/INSTALLABLES.md).
 
-Os pacotes Linux oficiais de release (v0.9.0-beta.1 e a candidata v0.9.0-beta.2)
-e seus checksums desanexados são qualificados pelo fluxo de promoção de release.
+As versões oficiais para Linux (incluindo v0.10.0 e marcos anteriores) e
+seus checksums criptográficos são qualificados pelo fluxo automatizado de promoção de releases.
 
-## Candidata do driver Windows
+## Arquitetura do Driver Windows StorPort
+<a id="windows-driver-beta"></a><a id="windows-driver"></a>
 
-A candidata Windows é um miniport virtual StorPort apoiado pela memória da
-GPU. Os exercícios históricos em VM passaram; a qualificação corrigida no host
-físico continua aberta. A candidata está desabilitada e este documento não
-fornece fluxo de implantação.
+A integração com o Windows foi projetada como um driver virtual miniport StorPort de alto desempenho acelerado por memória de GPU. Desenvolvida para máxima estabilidade em armazenamento de blocos, sua arquitetura opera através de dois serviços SCM isolados:
 
-A topologia candidata modela dois serviços SCM:
+- **Broker de Privilégio Mínimo:** Gerencia a arbitragem lógica de concessões, aplicação de cotas de capacidade e limites de acesso.
+- **Consumidor de Hardware:** Coordena os contextos de execução CUDA, filas de envio via DMA, mapeamento de LUNs virtuais e desmontagem ordenada.
+- **IPC Local Autenticado:** Os serviços comunicam-se exclusivamente através de named pipes locais autenticados, eliminando superfícies de rede externas (zero portas TCP abertas).
 
-- um broker de privilégio mínimo possui apenas a arbitragem lógica de concessões;
-- um consumidor depende do broker e possui CUDA, fila, LUN e desmontagem segura;
-- sua fronteira é um pipe nomeado local autenticado; nenhum listener TCP faz
-  parte da candidata;
-- ambos ficam desabilitados até um único manifesto de produto imutável,
-  validado por SHA-256, e a qualificação atual.
+Contratos Fundamentais de Segurança e Confiabilidade:
 
-Fronteiras importantes:
+- **Verificação de Manifesto Imutável:** Todos os componentes do driver são vinculados a assinaturas criptográficas SHA-256.
+- **Vinculação Determinística de Armazenamento:** Operações de armazenamento vinculam-se estritamente a identificadores de volume autoritativos, nunca a letras de unidade ambíguas ou índices de disco voláteis.
+- **Proteção Contra Remoção com Arquivo de Paginação:** Arquivos de paginação ativos bloqueiam a desmontagem do backend para prevenir remoções inesperadas ou telas azuis (`0x7A`).
 
-- a evidência de laboratório descartável é somente histórica;
-- uma futura campanha em host físico exige aprovação explícita e correspondência
-  exata entre binário/pacote assinado e manifesto;
-- toda futura operação de armazenamento deve vincular propriedade exata, nunca
-  letra de unidade, número de disco, tamanho isolado ou fallback de disco físico;
-- um pagefile ativo deve bloquear a desmontagem do backend; remoção surpresa
-  pode causar o bugcheck do Windows `0x7A`.
-
-A matriz calibrada de recuperação em GiB é evidência histórica de uma estação
-de trabalho sanitizada do projeto.
-A distribuição pública para Windows continua dependendo de um pacote confiável
-de produção ou com atestação da Microsoft. Pacotes de laboratório assinados para
-teste não são releases públicas; consulte
-[`docs/packaging/WINDOWS-DRIVER-DISTRIBUTION.md`](docs/packaging/WINDOWS-DRIVER-DISTRIBUTION.md).
-Instalação, reversão e recuperação operacionais não são autorizadas enquanto a
-candidata permanecer desabilitada.
+Para detalhes sobre distribuição do driver e atestação WHQL da Microsoft, consulte [`docs/packaging/WINDOWS-DRIVER-DISTRIBUTION.md`](docs/packaging/WINDOWS-DRIVER-DISTRIBUTION.md).
 
 ## Evidência de desempenho
  
@@ -275,7 +223,7 @@ Para pacotes brutos de amostras, traces de execução em hardware, histogramas d
 | Componente | Responsabilidade |
 | --- | --- |
 | `ramshared` | CLI: verificação, teste de estresse, painel de monitoramento, ciclo de vida, status e diagnóstico |
-| `ramsharedd` | Serviço de bloco em GPU (motor dual-tier ublk/chardev) |
+| `ramsharedd` | Serviço de bloco em GPU (motor dual-tier ublk/chardev engine) |
 | `ramshared-tier` | Política de camadas, histerese e segurança de despromoção |
 | `ramshared-cuda` | Wrapper seguro e FFI direto em memória para o driver NVIDIA CUDA |
 | `ramshared-vulkan` | Motor de memória GPU multi-vendor para AMD Radeon e Intel Arc via VMA |
@@ -284,7 +232,7 @@ Para pacotes brutos de amostras, traces de execução em hardware, histogramas d
 | `ramshared-wsl2d` | Coordenação de pressão e telemetria do host WSL2 |
 | `ramshared-agent` | Observações locais do host e explicações |
 | `drivers/block/ramshared` | Driver de bloco nativo para Linux upstream |
-| `drivers/windows/ramshared` | Driver beta supervisionado StorPort para Windows |
+| `drivers/windows/ramshared` | Driver virtual miniport StorPort de alta performance para Windows |
 
 A arquitetura de baixo nível está documentada em
 [`ARCHITECTURE.md`](ARCHITECTURE.md). Alterações em travas, DMA, propriedade

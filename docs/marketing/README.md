@@ -6,10 +6,10 @@ This directory contains public architecture diagrams and benchmark comparison vi
 
 | Asset | Format | Purpose | References |
 | :--- | :--- | :--- | :--- |
-| `cascade-diagram.png` | PNG (1920x1080) | Primary tiering architecture diagram (English) | `README.md` |
-| `cascade-diagram-pt.png` | PNG (1920x1080) | Primary tiering architecture diagram (Portuguese) | `README.pt-BR.md` |
-| `cascade-diagram.svg` | Vector SVG | High-resolution scalable cascade architecture | `docs/benchmarks/public-claims.json` |
-| `cascade-diagram-pt.svg` | Vector SVG | High-resolution scalable cascade architecture (PT) | `docs/benchmarks/public-claims.json` |
+| `cascade-diagram.svg` | Vector SVG | Primary tiering architecture diagram (English) | `README.md` |
+| `cascade-diagram-pt.svg` | Vector SVG | Primary tiering architecture diagram (Portuguese) | `README.pt-BR.md` |
+| `cascade-diagram.png` | PNG (1920x1080) | Raytraced 3D photorealistic hardware diagram (EN) | `docs/marketing/` |
+| `cascade-diagram-pt.png` | PNG (1920x1080) | Raytraced 3D photorealistic hardware diagram (PT) | `docs/marketing/` |
 | `benchmark-comparison.svg` | Vector SVG | Direct I/O and latency comparison graph | `docs/benchmarks/public-claims.json` |
 | `benchmark-comparison.jpg` | JPEG | Benchmark throughput comparison raster artifact | `docs/governance/public-binary-digests.json` |
 | `benchmark-wsl2-vs-storport.jpg` | JPEG | WSL2 vs StorPort benchmark comparison artifact | `docs/governance/public-binary-digests.json` |
