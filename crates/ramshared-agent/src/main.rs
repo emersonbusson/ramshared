@@ -479,8 +479,7 @@ fn handle_msg(
         }
         Msg::SwapOff { slice } => {
             let dev = active
-                .get(&slice)
-                .cloned()
+                .remove(&slice)
                 .unwrap_or_else(|| format!("{}{}", cfg.nbd_base, slice));
             cmd_tx.send(ExecCmd::Off { slice, dev }).is_ok()
         }
