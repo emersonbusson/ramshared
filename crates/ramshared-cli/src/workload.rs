@@ -3375,11 +3375,12 @@ mod tests {
         let pid_deadline = std::time::Instant::now() + Duration::from_secs(1);
         let mut descendant_pid = None;
         while std::time::Instant::now() < pid_deadline {
-            if let Ok(content) = fs::read_to_string(&descendant_pid_file) {
-                if let Ok(pid) = content.trim().parse::<u32>() {
-                    descendant_pid = Some(pid);
-                    break;
-                }
+            let parsed_pid = fs::read_to_string(&descendant_pid_file)
+                .ok()
+                .and_then(|content| content.trim().parse::<u32>().ok());
+            if let Some(pid) = parsed_pid {
+                descendant_pid = Some(pid);
+                break;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
