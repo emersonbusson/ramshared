@@ -38,10 +38,18 @@ pub fn parse_psi(content: &str) -> Option<PsiSample> {
             total = v.parse::<u64>().ok();
         }
     }
+    let a10 = avg10?;
+    let a60 = avg60?;
+    let t = total?;
+
+    if !(0.0..=100.0).contains(&a10) || !(0.0..=100.0).contains(&a60) {
+        return None;
+    }
+
     Some(PsiSample {
-        avg10: avg10?,
-        avg60: avg60?,
-        stall_us: total?,
+        avg10: a10,
+        avg60: a60,
+        stall_us: t,
     })
 }
 
@@ -181,6 +189,12 @@ mod tests {
     #[test]
     fn parse_psi_no_some_line_is_none() {
         assert!(parse_psi("full avg10=1.0 avg60=2.0 avg300=3.0 total=5\n").is_none());
+    }
+
+    #[test]
+    fn parse_psi_rejects_out_of_bounds_pressure() {
+        assert!(parse_psi("some avg10=100.01 avg60=0.00 avg300=0.00 total=0\n").is_none());
+        assert!(parse_psi("some avg10=0.00 avg60=-0.01 avg300=0.00 total=0\n").is_none());
     }
 
     #[test]
