@@ -188,21 +188,19 @@ impl WinDriveConfig {
                 detail: format!("must be D..=Z, got {:?}", self.volume_letter),
             });
         }
-        if let Some(path) = &self.volume_mount_path {
+        let is_valid_mount = self.volume_mount_path.as_ref().is_none_or(|path| {
             let value = path.to_string_lossy().replace('/', "\\");
             let prefix = r"C:\ProgramData\RamShared\mounts\";
-            if !value
-                .to_ascii_lowercase()
-                .starts_with(&prefix.to_ascii_lowercase())
-                || value[prefix.len()..].is_empty()
-                || value.contains("..")
-                || value.contains(['\'', ';', '\r', '\n'])
-            {
-                return Err(ConfigError::Invalid {
-                    field: "volume_mount_path",
-                    detail: format!("must be a child of {prefix}"),
-                });
-            }
+            value.to_ascii_lowercase().starts_with(&prefix.to_ascii_lowercase())
+                && value.len() > prefix.len()
+                && !value.contains("..")
+                && !value.contains(['\'', ';', '\r', '\n'])
+        });
+        if !is_valid_mount {
+            return Err(ConfigError::Invalid {
+                field: "volume_mount_path",
+                detail: format!("must be a child of {}", r"C:\ProgramData\RamShared\mounts\"),
+            });
         }
         if self.tenant.is_empty() {
             return Err(ConfigError::Invalid {
