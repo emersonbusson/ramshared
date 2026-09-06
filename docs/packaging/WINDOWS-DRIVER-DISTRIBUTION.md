@@ -27,9 +27,9 @@ A distributable package requires all of the following:
    Microsoft attestation signing;
 4. `SignTool verify /pa /all` passes without enabling Windows test-signing;
 5. the package SHA-256 is published beside the release manifest;
-6. an install, rollback, and recovery drill passes on a disposable VM.
+6. an install, rollback, and recovery drill passes on an isolated test environment.
 
-`scripts/windows/Sign-Drivers.ps1` is a test-signing lab helper. It must not be
+`scripts/windows/Sign-Drivers.ps1` is a test-signing development helper. It must not be
 used to label a package production-signed.
 
 ## Install

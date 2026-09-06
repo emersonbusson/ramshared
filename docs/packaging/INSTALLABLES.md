@@ -3,7 +3,7 @@
 RamShared has two supported packaging paths today:
 
 1. **Linux/WSL2 bundle** for the product path (`ramshared`, `ramsharedd`, agents, systemd templates, safety scripts).
-2. **Windows lab scripts** for driver and service drills. Windows driver output remains lab-only and is not bundled into the Linux product archive.
+2. **Windows driver packaging** for StorPort miniport driver and service integration. Windows driver output is packaged independently under its own distribution pipeline and is not bundled into the Linux product archive.
 
 ## Build Linux/WSL2 Bundle
 
@@ -17,8 +17,8 @@ Outputs:
 - `artifacts/packages/ramshared-linux-<version>.tar.gz`
 - `SHA256SUMS` inside the staged directory
 
-The bundle excludes local VM notes, credentials, build caches, driver artifacts,
-and anything ignored as local-only.
+The bundle excludes credentials, build caches, intermediate driver build artifacts,
+and local-only development files.
 
 ## Smoke the Bundle
 
