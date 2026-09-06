@@ -118,7 +118,7 @@ ramshared top
 
 ---
 
-## 6. Key Safety Invariants & Anti-Skynet Rules
+## 6. System Safety & Operating Invariants
 
 1. **Swapoff-First Ordering:** Never stop or detach block service daemons while their devices remain active in `/proc/swaps` or the Windows swap table.
 2. **Write-Through Persistence:** All acknowledged writes must be committed to the authoritative SSD origin before cache mutations.

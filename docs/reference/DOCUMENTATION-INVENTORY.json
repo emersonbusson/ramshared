@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 271,
-    "classified": 268,
+    "total": 273,
+    "classified": 270,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -487,6 +487,18 @@
     },
     {
       "path": "docs/LIBRARIES.md",
+      "disposition": "classified",
+      "ruleId": "top-level-docs",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "documentation-governance",
+      "canonicalSource": "docs/DOCUMENTATION-PARITY.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/OPERATOR-GUIDE.md",
       "disposition": "classified",
       "ruleId": "top-level-docs",
       "verification": {
@@ -1308,6 +1320,18 @@
       },
       "owner": "security",
       "canonicalSource": "docs/security/THREAT-MODEL.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/specs/README.md",
+      "disposition": "classified",
+      "ruleId": "ssdv3-index-readme",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "ssdv3",
+      "canonicalSource": "docs/SSDV3-PROMPTS.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
     },

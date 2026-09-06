@@ -68,6 +68,8 @@ run_gate benchmark-evidence node tools/ci/check-benchmark-evidence.mjs --check
 run_gate spec-evidence node tools/ci/check-spec-evidence.mjs --check
 run_gate doc-code-drift node tools/ci/check-doc-code-drift.mjs --check
 run_gate doc-code-drift-tests node --test --test-reporter=dot tools/ci/check-doc-code-drift.test.mjs
+run_gate doc-staleness-and-redundancy node tools/ci/check-doc-staleness-and-redundancy.mjs --check
+run_gate doc-staleness-and-redundancy-tests node --test --test-reporter=dot tools/ci/check-doc-staleness-and-redundancy.test.mjs
 
 if (( ${#DOCS_CHECK_FAILURES[@]} > 0 )); then
   echo "docs-check: NO-GO (${#DOCS_CHECK_FAILURES[@]} independent failure(s))" >&2

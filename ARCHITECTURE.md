@@ -75,33 +75,30 @@ The codebase is organized into 15 focused Rust crates across 6 architectural tie
 | **Layer 6: Kernel Drivers** | `drivers/block/ramshared`<br>`drivers/windows/ramshared` | Native upstream Linux kernel block driver and high-performance Windows StorPort virtual miniport driver (C). |
 
 
-### Anti-hang rules (learned the hard way)
+### Operational Safety & Teardown Invariants
 
-1. Never detach the origin daemon while NBD/ublk remains in the swap table.
-2. Cache chunks are clean and independently revocable; origin detach is swapoff-first.
-3. Refuse a lifecycle transition on ghost `(deleted)` swap or an unsealed/non-block PARTUUID.
-4. Missing guardian, GPU measurement, or supervisor status is never green.
-5. All system integrations operate under fail-closed, operator-invoked boundaries.
+RamShared enforces strict operating constraints to maintain data integrity and prevent kernel deadlocks:
 
-Related design record: [docs/specs/no-milestone/wsl2-cascade-boot/](docs/specs/no-milestone/wsl2-cascade-boot/)
+1. **Swapoff-First Teardown:** Cache chunks are clean and independently revocable. Origin block daemons must never detach while NBD or `ublk` block devices remain active in the kernel swap table (`/proc/swaps`).
+2. **Device Identity & Partition Sealing:** Refuse lifecycle transitions on ghost `(deleted)` swap mounts or unsealed/non-block PARTUUID targets.
+3. **Fail-Closed Health Evaluation:** Missing supervisor heartbeats, unavailable GPU headroom measurements, or stale guardian probes evaluate to degraded/unhealthy states rather than green.
+4. **Bounded Operator Invocations:** Host integrations and state mutations strictly adhere to operator-invoked, fail-closed command boundaries with isolated resource caps.
+
+Related design record: [`docs/specs/no-milestone/wsl2-cascade-boot/`](docs/specs/no-milestone/wsl2-cascade-boot/)
 
 ---
 
 ## Track 2 — Windows StorPort Architecture
 
-The native path is a StorPort virtual disk whose I/O is completed by
-`RamSharedWinSvc`. A separate least-privilege `RamSharedBroker` SCM service
-owns only logical lease arbitration. The consumer depends on the broker and
-uses an authenticated local named-pipe boundary (zero external TCP network listeners).
-Both services and their immutable configs are validated by a single SHA-256 product manifest.
+The native Windows path deploys a virtual StorPort disk miniport whose SCSI Request Blocks (SRBs) are serviced asynchronously by `RamSharedWinSvc`.
 
-**Hard rule:** Never tear the disk down under an active pagefile (BugCheck **0x7A** prevention).
-Ordered teardown (DT-9) enforces this strictly.
+Logical lease arbitration is isolated into a dedicated least-privilege `RamSharedBroker` Service Control Manager (SCM) service communicating over an authenticated local named-pipe boundary (zero external TCP network listeners). Both service binaries and their immutable configurations are pinned against a single SHA-256 product manifest.
+
+**Pagefile Safety Invariant:** Device removal is prohibited while hosting an active Windows paging file to prevent `KERNEL_DATA_INPAGE_ERROR` (`BugCheck 0x7A`). Ordered teardown (DT-9) enforces strict pre-teardown pagefile de-registration.
 
 ---
 
-## Process
+## Verification & Failure Mode Registry
 
-Structural work uses **SSDV3** (PRD → SPEC → IMPL).  
-We write failure modes in [docs/reliability/DEGRADATION-MATRIX.md](docs/reliability/DEGRADATION-MATRIX.md).  
-We don’t thrash the live WSL you work in for “fun” benchmarks.
+All architectural transitions and failure edge cases are cataloged in the [Degradation Matrix](docs/reliability/DEGRADATION-MATRIX.md). Stress testing, benchmark qualifications, and operational validation execute against controlled, isolated test harnesses with watchdog limits to prevent host resource starvation.
+
