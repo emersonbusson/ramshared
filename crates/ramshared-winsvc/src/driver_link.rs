@@ -741,4 +741,15 @@ mod tests {
         assert_eq!(*writes.lock().unwrap(), 0);
         assert_eq!(link.backend_writes, 0);
     }
+
+    #[test]
+    fn from_queue_initializes_driver_link() {
+        let queue = InMemoryQueue::new(4, 4096, 4096).unwrap();
+        let link = DriverLink::from_queue(queue);
+        assert_eq!(link.q.queue_depth(), 4);
+        assert_eq!(link.q.max_io_bytes(), 4096);
+        assert_eq!(link.q.block_size(), 4096);
+        assert_eq!(link.backend_writes, 0);
+        assert_eq!(link.stats().reads, 0);
+    }
 }
