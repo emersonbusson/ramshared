@@ -47,14 +47,24 @@ fn align_down(v: usize, align: usize) -> usize {
 
 /// Validates GPU hardware capabilities and total memory against physical sanity limits.
 pub fn validate_hardware_specs(
+    is_initialized: bool,
     major: i32,
     minor: i32,
     total_memory: usize,
 ) -> Result<(), ProbePlanError> {
-    if !(1..=99).contains(&major) || !(0..=99).contains(&minor) {
+    if !is_initialized {
+        return Err(ProbePlanError::DriverNotInitialized);
+    }
+    if !(1..=99).contains(&major) {
         return Err(ProbePlanError::InvalidComputeCapability { major, minor });
     }
-    if total_memory == 0 || total_memory > MAX_TOTAL_MEMORY_BYTES {
+    if !(0..=99).contains(&minor) {
+        return Err(ProbePlanError::InvalidComputeCapability { major, minor });
+    }
+    if total_memory == 0 {
+        return Err(ProbePlanError::InvalidTotalMemory { size: total_memory });
+    }
+    if total_memory > MAX_TOTAL_MEMORY_BYTES {
         return Err(ProbePlanError::InvalidTotalMemory { size: total_memory });
     }
     Ok(())
@@ -81,6 +91,7 @@ pub enum ProbePlanError {
     InvalidTotalMemory {
         size: usize,
     },
+    DriverNotInitialized,
 }
 
 impl std::fmt::Display for ProbePlanError {
@@ -103,6 +114,9 @@ impl std::fmt::Display for ProbePlanError {
             }
             ProbePlanError::InvalidTotalMemory { size } => {
                 write!(f, "invalid total memory size {size}")
+            }
+            ProbePlanError::DriverNotInitialized => {
+                write!(f, "CUDA driver is not initialized")
             }
         }
     }
@@ -145,38 +159,46 @@ mod tests {
     }
 
     #[test]
+    fn reject_uninitialized_driver() {
+        assert!(matches!(
+            validate_hardware_specs(false, 8, 9, 1024),
+            Err(ProbePlanError::DriverNotInitialized)
+        ));
+    }
+
+    #[test]
     fn reject_invalid_compute_capability() {
         assert!(matches!(
-            validate_hardware_specs(0, 0, 1024),
+            validate_hardware_specs(true, 0, 0, 1024),
             Err(ProbePlanError::InvalidComputeCapability { major: 0, minor: 0 })
         ));
         assert!(matches!(
-            validate_hardware_specs(100, 0, 1024),
+            validate_hardware_specs(true, 100, 0, 1024),
             Err(ProbePlanError::InvalidComputeCapability {
                 major: 100,
                 minor: 0
             })
         ));
         assert!(matches!(
-            validate_hardware_specs(1, -1, 1024),
+            validate_hardware_specs(true, 1, -1, 1024),
             Err(ProbePlanError::InvalidComputeCapability {
                 major: 1,
                 minor: -1
             })
         ));
-        assert!(validate_hardware_specs(8, 9, 1024).is_ok());
+        assert!(validate_hardware_specs(true, 8, 9, 1024).is_ok());
     }
 
     #[test]
     fn reject_invalid_total_memory() {
         assert!(matches!(
-            validate_hardware_specs(8, 9, 0),
+            validate_hardware_specs(true, 8, 9, 0),
             Err(ProbePlanError::InvalidTotalMemory { size: 0 })
         ));
         assert!(matches!(
-            validate_hardware_specs(8, 9, MAX_TOTAL_MEMORY_BYTES + 1),
+            validate_hardware_specs(true, 8, 9, MAX_TOTAL_MEMORY_BYTES + 1),
             Err(ProbePlanError::InvalidTotalMemory { size: _ })
         ));
-        assert!(validate_hardware_specs(8, 9, 1024).is_ok());
+        assert!(validate_hardware_specs(true, 8, 9, 1024).is_ok());
     }
 }
