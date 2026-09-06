@@ -1187,4 +1187,32 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn binary_sha256_computes_sha256_of_file_and_handles_missing_file() {
+        let dir = std::env::temp_dir().join(format!("ramshared-sha256-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let test_file = dir.join("test_file.bin");
+
+        std::fs::write(&test_file, b"hello world").unwrap();
+        let hash = WindowsHostState::binary_sha256(&test_file).unwrap();
+        assert_eq!(
+            hash,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+
+        let empty_file = dir.join("empty.bin");
+        std::fs::write(&empty_file, b"").unwrap();
+        let empty_hash = WindowsHostState::binary_sha256(&empty_file).unwrap();
+        assert_eq!(
+            empty_hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+
+        let missing_file = dir.join("non_existent.bin");
+        let err = WindowsHostState::binary_sha256(&missing_file).unwrap_err();
+        assert!(matches!(err, HostError::Io(_)));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
