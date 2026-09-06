@@ -1,0 +1,22 @@
+## Resumo
+Generate a FINDING_ONLY report to correctly document existing checked arithmetic bounds checks inside the primary block request logic.
+
+## Commits
+| Commit | O que fez | Por que fez | Detalhes |
+|---|---|---|---|
+| $(git rev-parse origin/jules/inbox 2>/dev/null || echo 34526c4d2543d9f9d05184ae6bd66387276b75fc) | docs: report existing checked arithmetic compliance in request.rs | Provide concrete FINDING_ONLY evidence that block calculations are secure. | |
+
+## Issue
+sanity_check/block/049
+
+## Responsavel
+CleanArch100/2026-09-06/sanity_check/block/049
+
+## Labels
+type:refactor, type:security, area:block
+
+## Validacao
+cargo test -p ramshared-block && cargo clippy -p ramshared-block -- -D warnings
+
+## Rollback trigger
+Trigger rollback if block validation tests fail abruptly.
