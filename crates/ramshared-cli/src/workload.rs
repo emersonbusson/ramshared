@@ -1985,7 +1985,7 @@ mod tests {
             Ok(Box::new(StartPublishingExecution {
                 ledger_root: self.ledger_root.clone(),
                 supervisor: self.supervisor.clone(),
-                wait_calls: self.wait_calls.clone(),
+                wait_calls: Arc::clone(&self.wait_calls),
             }))
         }
     }
