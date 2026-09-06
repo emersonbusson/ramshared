@@ -1187,4 +1187,25 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("malformed Get-Disk output"));
     }
+
+    #[test]
+    fn lock_product_volume_rejects_invalid_drive_letter() {
+        let err = WindowsHostState::lock_product_volume('A', None).unwrap_err();
+        assert!(err.to_string().contains("letter must be D..=Z"));
+
+        let err = WindowsHostState::lock_product_volume('C', None).unwrap_err();
+        assert!(err.to_string().contains("letter must be D..=Z"));
+
+        let err = WindowsHostState::lock_product_volume('a', None).unwrap_err();
+        assert!(err.to_string().contains("letter must be D..=Z"));
+    }
+
+    #[test]
+    fn lock_product_volume_valid_letter_attempts_path_lock() {
+        let err = WindowsHostState::lock_product_volume('z', Some(1)).unwrap_err();
+        assert!(err.to_string().contains("volume"));
+
+        let err = WindowsHostState::lock_product_volume('D', None).unwrap_err();
+        assert!(err.to_string().contains("volume"));
+    }
 }
