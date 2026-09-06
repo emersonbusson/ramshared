@@ -55,3 +55,15 @@ pub struct Syms {
     pub mem_get_info: FnMemGetInfo,
     pub get_error_string: Option<FnGetErrorString>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_constants() {
+        assert_eq!(CUDA_SUCCESS, 0);
+        assert_eq!(CUDA_ERROR_INVALID_VALUE, 1);
+        assert_eq!(CUDA_ERROR_OUT_OF_MEMORY, 2);
+        assert_eq!(CUDA_ERROR_NOT_INITIALIZED, 3);
+    }
+}
