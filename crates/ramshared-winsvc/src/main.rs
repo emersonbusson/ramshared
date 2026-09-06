@@ -133,7 +133,10 @@ mod windows_svc {
 
         #[test]
         fn test_entry_invalid_args_returns_code_2() {
-            let args = vec!["ramshared-winsvc.exe".to_string(), "invalid_command".to_string()];
+            let args = vec![
+                "ramshared-winsvc.exe".to_string(),
+                "invalid_command".to_string(),
+            ];
             let code = entry(args);
             assert_eq!(code, 2);
         }
