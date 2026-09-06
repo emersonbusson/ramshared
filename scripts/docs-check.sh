@@ -38,6 +38,10 @@ run_gate adr-index node tools/ci/check-adr-index.mjs --check
 run_gate docs-index node tools/generate-docs-index.mjs --check
 run_gate broken-links node tools/check-broken-links.mjs --check
 run_gate gap-register node tools/ci/check-gap-register.mjs
+run_gate gap-register-tests node --experimental-test-coverage \
+  --test-coverage-include=tools/ci/check-gap-register.mjs \
+  --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=80 \
+  --test-reporter=dot tools/ci/check-gap-register.test.mjs
 run_gate public-hygiene node tools/ci/check-public-hygiene.mjs --candidate
 run_gate public-hygiene-tests node --test --test-reporter=dot tools/ci/check-public-hygiene.test.mjs
 run_gate legacy-preallocation-removal node tools/ci/check-legacy-preallocation-removal.mjs --candidate
