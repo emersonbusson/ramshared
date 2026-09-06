@@ -19,6 +19,54 @@ use ramshared_block::handshake::Export;
 use ramshared_block::protocol::SIMPLE_REPLY_LEN;
 use ramshared_block::{Command, Request, parse_request, protocol::REQUEST_LEN, server_handshake};
 
+#[derive(Debug)]
+pub enum ConnectionError {
+    Io(std::io::Error),
+    Handshake(ramshared_block::handshake::HandshakeError),
+    Protocol(ramshared_block::protocol::ProtocolError),
+    PayloadTooLarge,
+}
+
+impl std::fmt::Display for ConnectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "io error: {e}"),
+            Self::Handshake(e) => write!(f, "handshake error: {e}"),
+            Self::Protocol(e) => write!(f, "protocol error: {e}"),
+            Self::PayloadTooLarge => write!(f, "payload too large (exceeds negotiated export size)"),
+        }
+    }
+}
+
+impl std::error::Error for ConnectionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(e) => Some(e),
+            Self::Handshake(e) => Some(e),
+            Self::Protocol(e) => Some(e),
+            Self::PayloadTooLarge => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for ConnectionError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+impl From<ramshared_block::handshake::HandshakeError> for ConnectionError {
+    fn from(e: ramshared_block::handshake::HandshakeError) -> Self {
+        Self::Handshake(e)
+    }
+}
+
+impl From<ramshared_block::protocol::ProtocolError> for ConnectionError {
+    fn from(e: ramshared_block::protocol::ProtocolError) -> Self {
+        Self::Protocol(e)
+    }
+}
+
 /// Capacity of the worker message channel (`WMsg`): the **single** point of backpressure.
 /// The replica channel per connection is unbounded (DT-7), so the worker never blocks when
 /// responding — only the readers apply backpressure when enqueuing `Job`s.
@@ -125,6 +173,42 @@ pub fn spawn_writer<S: Write + Send + 'static>(
 /// (DT-15 — error confined to the connection), negotiates export by name (RF-L1) and enqueues `Job`s with
 /// the export index. `hs_writer` is the write handle (clone made by the acceptor) used only during the
 /// handshake. Upon exiting (EOF/error/handshake failure) sends `WMsg::Closed` to balance `Opened`.
+fn process_loop<S: Read>(
+    reader: &mut BufReader<S>,
+    idx: usize,
+    export_size: u64,
+    jobs: &SyncSender<WMsg>,
+    reply_tx: &Sender<Reply>,
+) -> Result<(), ConnectionError> {
+    let mut hdr = [0u8; REQUEST_LEN];
+    loop {
+        reader.read_exact(&mut hdr)?; // EOF or socket error
+        let req = parse_request(&hdr)?;
+
+        // Anti-DoS: a WRITE can never exceed the negotiated export (prevents allocating gigabytes).
+        if req.cmd == Command::Write && req.len as u64 > export_size {
+            return Err(ConnectionError::PayloadTooLarge);
+        }
+
+        let mut payload = Vec::new();
+        if req.cmd == Command::Write {
+            payload.resize(req.len as usize, 0);
+            reader.read_exact(&mut payload)?;
+        }
+
+        let job = Job {
+            export: idx,
+            req,
+            payload,
+            reply: reply_tx.clone(),
+        };
+        if jobs.send(WMsg::Job(job)).is_err() {
+            break; // worker terminated
+        }
+    }
+    Ok(())
+}
+
 pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
     stream: S,
     mut hs_writer: W2,
@@ -147,45 +231,10 @@ pub fn spawn_reader<S: Read + Send + 'static, W2: Write + Send + 'static>(
         drop(hs_writer); // handshake completed; from here on only the writer thread writes replies.
         let export_size = exports[idx].size; // anti-DoS based on negotiated export (RF-L1)
 
-        let mut hdr = [0u8; REQUEST_LEN];
-        loop {
-            if reader.read_exact(&mut hdr).is_err() {
-                break; // EOF or socket error
-            }
-            let req = match parse_request(&hdr) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("[ramsharedd] conn: malformed request: {e}; disconnecting");
-                    break;
-                }
-            };
-            // Anti-DoS: a WRITE can never exceed the negotiated export (prevents allocating gigabytes).
-            if req.cmd == Command::Write && req.len as u64 > export_size {
-                eprintln!(
-                    "[ramsharedd] conn: WRITE len {} exceeds export; disconnecting",
-                    req.len
-                );
-                break;
-            }
-
-            let mut payload = Vec::new();
-            if req.cmd == Command::Write {
-                payload.resize(req.len as usize, 0);
-                if reader.read_exact(&mut payload).is_err() {
-                    break;
-                }
-            }
-
-            let job = Job {
-                export: idx,
-                req,
-                payload,
-                reply: reply_tx.clone(),
-            };
-            if jobs.send(WMsg::Job(job)).is_err() {
-                break; // worker terminated
-            }
+        if let Err(e) = process_loop(&mut reader, idx, export_size, &jobs, &reply_tx) {
+            eprintln!("[ramsharedd] conn: disconnected: {e}");
         }
+
         let _ = jobs.send(WMsg::Closed);
     })
 }
