@@ -476,6 +476,13 @@
   ],
   "exclusions": [
     {
+      "id": "jules-findings-reports",
+      "pattern": "docs/jules/findings/**/*.md",
+      "owner": "documentation-governance",
+      "reason": "AI finding reports generated during sanity check traps do not follow standard product document lifecycle.",
+      "registeredAt": "2026-09-06T00:00:00Z"
+    },
+    {
       "id": "localized-root-readme",
       "pattern": "README.pt-BR.md",
       "owner": "product-documentation",
