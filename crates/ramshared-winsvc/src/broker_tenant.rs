@@ -259,15 +259,18 @@ mod tests {
     use std::io::Cursor;
     use std::time::Duration;
 
-    use ramshared_broker::protocol::{Msg, write_msg};
+    use ramshared_broker::protocol::{Msg, ProtocolError, write_msg};
 
-    fn with_reply(request: Msg, reply: Msg) -> (Cursor<Vec<u8>>, Vec<u8>) {
+    fn with_reply(
+        request: Msg,
+        reply: Msg,
+    ) -> Result<(Cursor<Vec<u8>>, Vec<u8>), ProtocolError> {
         let mut out = Vec::new();
-        write_msg(&mut out, &reply).unwrap();
+        write_msg(&mut out, &reply)?;
         let mut in_buf = Vec::new();
-        write_msg(&mut in_buf, &request).unwrap(); // not used; stream is reply-only for read
+        write_msg(&mut in_buf, &request)?; // not used; stream is reply-only for read
         let _ = in_buf;
-        (Cursor::new(out), Vec::new())
+        Ok((Cursor::new(out), Vec::new()))
     }
 
     #[test]
@@ -396,7 +399,7 @@ mod tests {
     // silence unused helper
     #[test]
     fn dual_with_reply_helper_compiles() {
-        let _ = with_reply(Msg::Ack, Msg::Registered { tenant_id: 1 });
+        assert!(with_reply(Msg::Ack, Msg::Registered { tenant_id: 1 }).is_ok());
     }
 
     #[test]
