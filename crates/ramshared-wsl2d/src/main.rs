@@ -3558,17 +3558,20 @@ impl Drop for OwnedUnixSocketPath {
 
 /// Retorna o menor entre somaxconn e tcp_max_syn_backlog, fallback 128.
 fn system_max_backlog() -> i32 {
-    let somaxconn: i32 = std::fs::read_to_string("/proc/sys/net/core/somaxconn")
-        .unwrap_or_default()
-        .trim()
-        .parse()
-        .unwrap_or(128);
-    let syn_backlog: i32 = std::fs::read_to_string("/proc/sys/net/ipv4/tcp_max_syn_backlog")
-        .unwrap_or_default()
-        .trim()
-        .parse()
-        .unwrap_or(128);
-    std::cmp::min(somaxconn, syn_backlog)
+    static CACHED: std::sync::OnceLock<i32> = std::sync::OnceLock::new();
+    *CACHED.get_or_init(|| {
+        let somaxconn: i32 = std::fs::read_to_string("/proc/sys/net/core/somaxconn")
+            .unwrap_or_default()
+            .trim()
+            .parse()
+            .unwrap_or(128);
+        let syn_backlog: i32 = std::fs::read_to_string("/proc/sys/net/ipv4/tcp_max_syn_backlog")
+            .unwrap_or_default()
+            .trim()
+            .parse()
+            .unwrap_or(128);
+        std::cmp::min(somaxconn, syn_backlog)
+    })
 }
 
 fn apply_listen_backlog<Fd: std::os::fd::AsFd>(fd: Fd) -> std::io::Result<()> {
