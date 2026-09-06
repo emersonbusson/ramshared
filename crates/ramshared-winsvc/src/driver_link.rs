@@ -741,4 +741,26 @@ mod tests {
         assert_eq!(*writes.lock().unwrap(), 0);
         assert_eq!(link.backend_writes, 0);
     }
+
+    #[test]
+    fn run_io_loop_executes_cycles_and_respects_stop() {
+        let mut link = DriverLink::new(4, 4096, 4096).unwrap();
+        let mut be = RamBe {
+            data: vec![0u8; 1 << 16],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            fake.submit_read(1, 0, 4096, 0).unwrap();
+        }
+        let processed = link.run_io_loop(&mut be, 3).unwrap();
+        assert_eq!(processed, 1);
+
+        // Verify stop flag terminates the loop early
+        link.request_stop();
+        let processed_after_stop = link.run_io_loop(&mut be, 5).unwrap();
+        assert_eq!(processed_after_stop, 0);
+    }
 }
