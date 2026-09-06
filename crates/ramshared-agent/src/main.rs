@@ -517,14 +517,14 @@ fn exec_loop(cmd_rx: Receiver<ExecCmd>, res_tx: Sender<ExecResult>) {
             } => {
                 let (ok, detail) = match swap::attach_swap(&endpoint, &export, &dev, prio) {
                     Ok(()) => (true, dev),
-                    Err(e) => (false, e),
+                    Err(e) => (false, e.to_string()),
                 };
                 ExecResult::On { slice, ok, detail }
             }
             ExecCmd::Off { slice, dev } => {
                 let (ok, detail) = match swap::detach_swap(&dev) {
                     Ok(()) => (true, dev),
-                    Err(e) => (false, e),
+                    Err(e) => (false, e.to_string()),
                 };
                 ExecResult::Off { slice, ok, detail }
             }
