@@ -1,0 +1,2 @@
+# SIGTERM Graceful Teardown Coordinator
+The codebase already implements a graceful SIGTERM teardown coordinator in `crates/ramshared-wsl2d/src/main.rs`. Code comments referring to a teardown bug (e.g., incident 2026-06-09, QEMU validation) represent past historical context and resolved issues rather than pending, actionable tasks. There is no background telemetry requiring coordination. Consequently, this task requires no code modifications.
