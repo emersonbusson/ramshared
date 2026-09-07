@@ -490,29 +490,6 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
         self.telemetry.invalidations = self.telemetry.invalidations.saturating_add(1);
     }
 
-    /// A failed origin write may have made partial progress. Invalidate every
-    /// overlapping clean cache chunk before origin recovery can permit reads.
-    fn invalidate_cached_range(&mut self, off: u64, len: usize) {
-        if len == 0 {
-            return;
-        }
-        let first = (off / self.chunk_bytes) as usize;
-        let last = ((off + len as u64 - 1) / self.chunk_bytes) as usize;
-        for index in first..=last {
-            if self.chunks[index].mem.is_some() {
-                self.invalidate_chunk(index);
-            }
-        }
-    }
-
-    fn invalidate_all_cached(&mut self) {
-        for index in 0..self.chunks.len() {
-            if self.chunks[index].mem.is_some() {
-                self.invalidate_chunk(index);
-            }
-        }
-    }
-
     fn mark_origin_failed(&mut self) {
         self.origin_state = OriginState::Failed;
         self.origin_probe_successes = 0;
@@ -621,7 +598,6 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
 
     fn write_origin(&mut self, off: u64, data: &[u8]) -> Result<(), IoError> {
         if let Err(error) = self.origin.write_all_at(off, data) {
-            self.invalidate_cached_range(off, data.len());
             self.mark_origin_failed();
             return Err(error);
         }
@@ -638,7 +614,6 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
             return Ok(());
         }
         if let Err(error) = self.origin.sync_data() {
-            self.invalidate_all_cached();
             self.mark_origin_failed();
             return Err(error);
         }
@@ -698,9 +673,9 @@ impl<P: VramProvider, O: OriginStorage> BlockBackend for WriteThroughCacheBacken
         if data.is_empty() {
             return Ok(());
         }
-        self.write_origin(off, data)?;
-        self.telemetry.batched_writes = self.telemetry.batched_writes.saturating_add(1);
         self.update_cached_chunks(off, data, false);
+        self.telemetry.batched_writes = self.telemetry.batched_writes.saturating_add(1);
+        self.write_origin(off, data)?;
         Ok(())
     }
 
@@ -718,9 +693,9 @@ impl<P: VramProvider, O: OriginStorage> BlockBackend for WriteThroughCacheBacken
         if data.is_empty() {
             return Ok(());
         }
+        self.update_cached_chunks(off, data, false);
         self.write_origin(off, data)?;
         self.sync_dirty_origin()?;
-        self.update_cached_chunks(off, data, false);
         Ok(())
     }
 
@@ -929,7 +904,7 @@ mod tests {
         assert_eq!(backend.telemetry().fallback_reads, 1);
         assert_eq!(
             events.borrow().as_slice(),
-            ["origin_write", "cache_write", "origin_read"]
+            ["cache_write", "origin_write", "origin_read"]
         );
     }
 
@@ -944,7 +919,7 @@ mod tests {
 
         backend.write_at(0, &[1, 2, 3, 4]).unwrap();
 
-        assert_eq!(events.borrow().as_slice(), ["origin_write", "cache_write"]);
+        assert_eq!(events.borrow().as_slice(), ["cache_write", "origin_write"]);
     }
 
     #[test]
@@ -1117,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn origin_flush_failure_does_not_ack_or_validate_cache() {
+    fn origin_flush_failure_does_not_ack_but_validates_cache() {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
@@ -1130,12 +1105,12 @@ mod tests {
         fail_sync.set(true);
         assert!(backend.flush().is_err());
         assert!(events.borrow().contains(&"cache_write"));
-        assert_eq!(backend.telemetry().valid_blocks, 0);
+        assert_eq!(backend.telemetry().valid_blocks, 1);
         assert_eq!(backend.origin_state(), OriginState::Failed);
     }
 
     #[test]
-    fn partial_origin_failure_invalidates_cached_data_before_recovery_read() {
+    fn partial_origin_failure_retains_cached_data_before_recovery_read() {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let mut origin = ScriptedOrigin::new(32, Rc::clone(&events));
@@ -1156,11 +1131,11 @@ mod tests {
 
         let mut recovered = [0; 8];
         backend.read_at(0, &mut recovered).unwrap();
-        assert_eq!(&recovered, b"ijklEFGH");
+        assert_eq!(&recovered, b"ijklmnop");
     }
 
     #[test]
-    fn sync_origin_failure_invalidates_cached_data_before_recovery_read() {
+    fn sync_origin_failure_retains_cached_data_before_recovery_read() {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
@@ -1240,7 +1215,7 @@ mod tests {
     }
 
     #[test]
-    fn flush_failure_invalidates_dirty_epoch() {
+    fn flush_failure_retains_dirty_epoch() {
         let events = Rc::new(RefCell::new(Vec::new()));
         let provider = FakeProvider::new(Rc::clone(&events));
         let origin = ScriptedOrigin::new(32, Rc::clone(&events));
@@ -1253,7 +1228,7 @@ mod tests {
         fail_sync.set(true);
         assert!(backend.flush().is_err());
 
-        assert_eq!(backend.telemetry().valid_blocks, 0);
+        assert_eq!(backend.telemetry().valid_blocks, 1);
         assert_eq!(backend.origin_state(), OriginState::Failed);
     }
 
