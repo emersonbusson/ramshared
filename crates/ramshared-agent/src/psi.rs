@@ -10,11 +10,86 @@ use std::io::{Error, ErrorKind, Result};
 
 use ramshared_broker::model::PsiSample;
 use ramshared_broker::protocol::SwapEntry;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+/// Low-pass hysteresis filter for pressure metrics.
+struct HysteresisFilter {
+    avg10: Mutex<f32>,
+    avg60: Mutex<f32>,
+    stall_us: AtomicU64,
+    last_update: Mutex<Option<Instant>>,
+}
+
+impl HysteresisFilter {
+    const fn new() -> Self {
+        Self {
+            avg10: Mutex::new(0.0),
+            avg60: Mutex::new(0.0),
+            stall_us: AtomicU64::new(0),
+            last_update: Mutex::new(None),
+        }
+    }
+
+    #[allow(clippy::expect_used)]
+    fn apply(&self, mut sample: PsiSample) -> PsiSample {
+        let mut last_update = self.last_update.lock().expect("mutex poisoned");
+        let now = Instant::now();
+
+        #[allow(clippy::collapsible_if)]
+        if let Some(last) = *last_update {
+            if now.duration_since(last) < Duration::from_millis(500) {
+                sample.avg10 = *self.avg10.lock().expect("mutex poisoned");
+                sample.avg60 = *self.avg60.lock().expect("mutex poisoned");
+                sample.stall_us = self.stall_us.load(Ordering::Relaxed);
+                return sample;
+            }
+        }
+
+        // EMA filter alpha = 0.2
+        let mut curr_avg10 = self.avg10.lock().expect("mutex poisoned");
+        let mut curr_avg60 = self.avg60.lock().expect("mutex poisoned");
+
+        if last_update.is_none() {
+            *curr_avg10 = sample.avg10;
+            *curr_avg60 = sample.avg60;
+        } else {
+            let alpha = 0.2;
+            *curr_avg10 = *curr_avg10 * (1.0 - alpha) + sample.avg10 * alpha;
+            *curr_avg60 = *curr_avg60 * (1.0 - alpha) + sample.avg60 * alpha;
+        }
+
+        self.stall_us.store(sample.stall_us, Ordering::Relaxed);
+        *last_update = Some(now);
+
+        sample.avg10 = *curr_avg10;
+        sample.avg60 = *curr_avg60;
+        sample
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::expect_used)]
+    fn reset(&self) {
+        *self.last_update.lock().expect("mutex poisoned") = None;
+        *self.avg10.lock().expect("mutex poisoned") = 0.0;
+        *self.avg60.lock().expect("mutex poisoned") = 0.0;
+        self.stall_us.store(0, Ordering::Relaxed);
+    }
+}
+
+static HYSTERESIS: HysteresisFilter = HysteresisFilter::new();
+
+#[cfg(test)]
+pub fn reset_hysteresis_for_test() {
+    HYSTERESIS.reset();
+}
 
 /// Core logic for `read_psi` with dependency injection for the file path.
 fn read_psi_impl(path: &str) -> Result<PsiSample> {
     let raw = std::fs::read_to_string(path)?;
-    parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))
+    let sample = parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))?;
+    Ok(HYSTERESIS.apply(sample))
 }
 
 /// Reads and parses `/proc/pressure/memory`.
@@ -156,6 +231,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn read_psi_applies_hysteresis() {
+        reset_hysteresis_for_test();
+        let s1 = PsiSample {
+            avg10: 10.0,
+            avg60: 20.0,
+            stall_us: 100,
+        };
+        let out1 = HYSTERESIS.apply(s1);
+        assert_eq!(out1.avg10, 10.0);
+
+        let s2 = PsiSample {
+            avg10: 100.0,
+            avg60: 200.0,
+            stall_us: 200,
+        };
+
+        let out2 = HYSTERESIS.apply(s2);
+        // Fast burst (under 500ms) will use previous state
+        assert_eq!(out2.avg10, 10.0);
+    }
+
+    #[test]
     fn parse_psi_some_line() {
         let s = "some avg10=1.23 avg60=4.56 avg300=7.89 total=999\n\
                  full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n";
@@ -282,6 +379,7 @@ mod tests {
 
     #[test]
     fn read_psi_impl_success() {
+        reset_hysteresis_for_test();
         let content = "some avg10=1.23 avg60=4.56 avg300=7.89 total=999\n";
         let path = write_temp_file(content);
         let psi = read_psi_impl(&path).unwrap();
