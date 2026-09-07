@@ -178,7 +178,7 @@ pub struct SmokeReport {
     pub submitted: usize,
 }
 
-use std::panic::{catch_unwind, AssertUnwindSafe, UnwindSafe};
+use std::panic::{AssertUnwindSafe, UnwindSafe, catch_unwind};
 use std::thread::{self, JoinHandle};
 
 /// Spawns a resilient worker thread that wraps the given event loop with `catch_unwind`.
