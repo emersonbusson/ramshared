@@ -408,7 +408,7 @@ mod tests {
 
     fn export_name_handshake(name: &[u8]) -> Vec<u8> {
         let mut wire = Vec::new();
-        wire.extend_from_slice(&(1u32 << 1).to_be_bytes()); // NBD_FLAG_C_NO_ZEROES
+        wire.extend_from_slice(&((1u32 << 1) | ramshared_block::protocol::NBD_FLAG_FIXED_NEWSTYLE as u32).to_be_bytes()); // NBD_FLAG_C_NO_ZEROES
         wire.extend_from_slice(&IHAVEOPT.to_be_bytes());
         wire.extend_from_slice(&NBD_OPT_EXPORT_NAME.to_be_bytes());
         wire.extend_from_slice(&(name.len() as u32).to_be_bytes());
