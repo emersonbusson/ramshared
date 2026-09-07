@@ -14,6 +14,8 @@ impl From<CudaError> for VramError {
                 len: len as u64,
                 size: size as u64,
             },
+            CudaError::Driver { code: 2, .. } => VramError::OutOfMemory,
+            CudaError::Driver { code: 702, .. } | CudaError::Driver { code: 719, .. } => VramError::Busy,
             other => VramError::Provider(other.to_string()),
         }
     }
@@ -46,7 +48,9 @@ impl<'a> VramProvider for Context<'a> {
         Self: 'p;
 
     fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
-        Context::alloc(self, bytes).map_err(Into::into)
+        let mut mem = Context::alloc(self, bytes)?;
+        mem.zero()?; // SPEC: re-initialize device memory allocations cleanly
+        Ok(mem)
     }
 
     fn mem_info(&self) -> Result<(u64, u64), VramError> {
@@ -84,18 +88,37 @@ mod tests {
     }
 
     #[test]
-    fn test_vram_error_conversion_provider() {
+    fn test_vram_error_conversion_out_of_memory() {
         let cuda_err = CudaError::Driver {
             op: "cuMemAlloc",
             code: 2,
             msg: "out of memory".to_string(),
         };
+        assert!(matches!(VramError::from(cuda_err), VramError::OutOfMemory));
+    }
+
+    #[test]
+    fn test_vram_error_conversion_context_lost() {
+        let err_719 = CudaError::Driver { op: "cuMemcpy", code: 719, msg: "context destroyed".to_string() };
+        assert!(matches!(VramError::from(err_719), VramError::Busy));
+
+        let err_702 = CudaError::Driver { op: "cuMemcpy", code: 702, msg: "context lost".to_string() };
+        assert!(matches!(VramError::from(err_702), VramError::Busy));
+    }
+
+    #[test]
+    fn test_vram_error_conversion_provider() {
+        let cuda_err = CudaError::Driver {
+            op: "cuInit",
+            code: 99,
+            msg: "some other error".to_string(),
+        };
         let vram_err: VramError = cuda_err.into();
 
         match vram_err {
             VramError::Provider(msg) => {
-                assert!(msg.contains("cuMemAlloc"));
-                assert!(msg.contains("CUresult=2"));
+                assert!(msg.contains("cuInit"));
+                assert!(msg.contains("CUresult=99"));
             }
             _ => panic!("Expected VramError::Provider"),
         }
