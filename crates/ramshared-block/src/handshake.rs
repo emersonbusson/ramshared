@@ -62,14 +62,29 @@ pub struct Export {
     pub size: u64,
 }
 
-fn read_u32<R: Read>(r: &mut R) -> io::Result<u32> {
+
+
+fn read_u32_timeout<R: Read>(r: &mut R, start: std::time::Instant, timeout: std::time::Duration) -> Result<u32, HandshakeError> {
     let mut b = [0u8; 4];
-    r.read_exact(&mut b)?;
+    let mut read = 0;
+    while read < 4 {
+        if start.elapsed() > timeout { return Err(HandshakeError::Timeout); }
+        let n = r.read(&mut b[read..]).map_err(HandshakeError::Io)?;
+        if n == 0 { return Err(HandshakeError::Io(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "eof"))); }
+        read += n;
+    }
     Ok(u32::from_be_bytes(b))
 }
-fn read_u64<R: Read>(r: &mut R) -> io::Result<u64> {
+
+fn read_u64_timeout<R: Read>(r: &mut R, start: std::time::Instant, timeout: std::time::Duration) -> Result<u64, HandshakeError> {
     let mut b = [0u8; 8];
-    r.read_exact(&mut b)?;
+    let mut read = 0;
+    while read < 8 {
+        if start.elapsed() > timeout { return Err(HandshakeError::Timeout); }
+        let n = r.read(&mut b[read..]).map_err(HandshakeError::Io)?;
+        if n == 0 { return Err(HandshakeError::Io(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "eof"))); }
+        read += n;
+    }
     Ok(u64::from_be_bytes(b))
 }
 
@@ -131,33 +146,37 @@ pub fn server_handshake<R: Read, W: Write>(
 ) -> Result<usize, HandshakeError> {
     let start = std::time::Instant::now();
     let timeout = std::time::Duration::from_secs(5);
+
     // Greeting: NBDMAGIC + IHAVEOPT + handshake flags.
     w.write_all(&NBDMAGIC.to_be_bytes())?;
     w.write_all(&IHAVEOPT.to_be_bytes())?;
     w.write_all(&(NBD_FLAG_FIXED_NEWSTYLE | NBD_FLAG_NO_ZEROES).to_be_bytes())?;
     w.flush()?;
 
-    let client_flags = read_u32(r)?;
+    let client_flags = read_u32_timeout(r, start, timeout)?;
     if client_flags & crate::protocol::NBD_FLAG_FIXED_NEWSTYLE as u32 == 0 {
         return Err(HandshakeError::IncompatibleVersion);
     }
     let no_zeroes = client_flags & NBD_FLAG_C_NO_ZEROES != 0;
 
     loop {
-        if start.elapsed() > timeout {
-            return Err(HandshakeError::Timeout);
-        }
-        let opt_magic = read_u64(r)?;
+        let opt_magic = read_u64_timeout(r, start, timeout)?;
         if opt_magic != IHAVEOPT {
             return Err(HandshakeError::IncompatibleVersion);
         }
-        let opt = read_u32(r)?;
-        let len = read_u32(r)? as usize;
+        let opt = read_u32_timeout(r, start, timeout)?;
+        let len = read_u32_timeout(r, start, timeout)? as usize;
         if len > MAX_OPT_LEN {
             return Err(HandshakeError::UnsupportedFeature);
         }
         let mut data = vec![0u8; len];
-        r.read_exact(&mut data)?;
+        let mut data_read = 0;
+        while data_read < len {
+            if start.elapsed() > timeout { return Err(HandshakeError::Timeout); }
+            let n = r.read(&mut data[data_read..]).map_err(HandshakeError::Io)?;
+            if n == 0 { return Err(HandshakeError::Io(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "eof"))); }
+            data_read += n;
+        }
 
         if !matches!(
             opt,
