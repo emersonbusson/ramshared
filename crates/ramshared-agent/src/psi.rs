@@ -179,6 +179,22 @@ mod tests {
     }
 
     #[test]
+    fn parse_psi_fuzz_missing_field() {
+        let s = "some avg10=1.23 total=999\n\
+                 full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n";
+        let p = parse_psi(s);
+        assert!(p.is_none());
+    }
+
+    #[test]
+    fn parse_psi_fuzz_malformed_field() {
+        let s = "some avg10=1.23 avg60=abc total=999\n\
+                 full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n";
+        let p = parse_psi(s);
+        assert!(p.is_none());
+    }
+
+    #[test]
     fn parse_psi_no_some_line_is_none() {
         assert!(parse_psi("full avg10=1.0 avg60=2.0 avg300=3.0 total=5\n").is_none());
     }
