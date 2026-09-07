@@ -1,0 +1,8 @@
+# FINDING_ONLY: checksum mismatch rejection in serve()
+
+## Rationale
+The task instructed to implement rejection of corrupted block packets with semantic `ChecksumMismatch` error in `crates/ramshared-block/src/request.rs`. The `serve()` function receives raw byte array payload: `pub fn serve<B: BlockBackend + ?Sized>(req: &Request, payload: &[u8], backend: &mut B) -> ServeOutcome`. However, the NBD protocol header `Request` (as defined in `protocol.rs`) does not include a hash field or checksum of the payload to verify against. A checksum could only be verified if the client had sent one, which requires a custom protocol extension, not standard NBD. Furthermore, the `ChecksumMismatch` error in `crates/ramshared-block/src/protocol.rs` is an error enum specifically for parsing the header (`parse_request()`) or during transmission, which currently returns `TruncatedPayload`, `InvalidHeader`, or `ChecksumMismatch`. But `parse_request()` only processes the header, not the data payload.
+
+Adding a checksum verification within `serve()` would require either changing the NBD header (breaking protocol) or computing the hash of the data, but what is it compared against? `ChecksumTable` from `ramshared-integrity` is for storing and verifying hashes of blocks *after* they are written and read back, not for verifying incoming packets over the wire against a checksum that doesn't exist in the packet.
+
+Implementing "ChecksumMismatch" validation on incoming write packets in `serve()` without a wire-provided checksum is impossible without breaking NBD compatibility or hallucinating expected hashes.
