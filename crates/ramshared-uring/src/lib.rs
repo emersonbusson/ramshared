@@ -495,6 +495,14 @@ impl UblkServer {
         Ok(())
     }
 
+    /// Drains pending CQEs and re-arms io_uring submission queues with FETCH commands
+    /// after a host resume or recovery event.
+    pub fn drain_and_rearm_after_wake(&mut self) -> io::Result<Vec<UblkCompletion>> {
+        let completions = self.drain();
+        self.submit_initial_fetch()?;
+        Ok(completions)
+    }
+
     /// Drains available CQEs (non-blocking).
     pub fn drain(&mut self) -> Vec<UblkCompletion> {
         self.ring
@@ -833,6 +841,37 @@ mod tests {
             .push(0, 2, 0, 0)
             .expect_err("expected ring full error");
         assert_eq!(err.raw_os_error(), Some(libc::EBUSY));
+
+        drop(server);
+        drop(file);
+        fs::remove_file(path).expect("remove fixture");
+    }
+
+    #[test]
+    fn ublk_server_drain_and_rearm_after_wake_recovers_ring() {
+        let page = page_size();
+        let (path, file) = regular_file_fixture("ublk-drain-rearm", page);
+        let mut server = UblkServer::new(file.as_raw_fd(), 2, page).expect("server fixture");
+
+        // Simulate a pending completion
+        let ts = types::Timespec::new().sec(0).nsec(1_000_000); // 1ms
+        let entry = opcode::Timeout::new(&ts as *const _).build().user_data(42);
+        let timeout_entry: squeue::Entry128 = entry.into();
+
+        // SAFETY: The timespec struct outlives the kernel submission, and the server ring is local.
+        unsafe {
+            server
+                .ring
+                .submission()
+                .push(&timeout_entry)
+                .expect("push timeout");
+        }
+        server.ring.submit_and_wait(1).expect("submit timeout");
+
+        let completions = server.drain_and_rearm_after_wake().expect("drain and rearm");
+        assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0].tag, 42);
+        assert_eq!(completions[0].result, -libc::ETIME);
 
         drop(server);
         drop(file);
