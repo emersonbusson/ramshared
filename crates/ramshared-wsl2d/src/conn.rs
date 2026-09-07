@@ -105,15 +105,50 @@ pub fn spawn_writer<S: Write + Send + 'static>(
     std::thread::spawn(move || {
         let mut w = stream;
         for r in replies.iter() {
-            if w.write_all(&r.reply).is_err() {
-                break;
+            let mut attempt = 0;
+            let mut backoff = std::time::Duration::from_millis(10);
+            let max_backoff = std::time::Duration::from_millis(500);
+
+            loop {
+                let err = match w.write_all(&r.reply) {
+                    Ok(_) => {
+                        if !r.data.is_empty() {
+                            w.write_all(&r.data).err()
+                        } else {
+                            None
+                        }
+                    },
+                    Err(e) => Some(e),
+                };
+
+                let err = match err {
+                    None => w.flush().err(),
+                    Some(e) => Some(e),
+                };
+
+                if let Some(e) = err {
+                    attempt += 1;
+                    if attempt > 5 {
+                        eprintln!("[ramsharedd] conn: write failed after retries: {}", e);
+                        break;
+                    }
+                    if e.kind() != std::io::ErrorKind::WouldBlock {
+                        eprintln!("[ramsharedd] conn: fatal write error: {}", e);
+                        break;
+                    }
+                    let jitter = (std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_micros() % 20) as u64;
+                    let jitter_millis = jitter * backoff.as_millis() as u64 / 100;
+
+                    std::thread::sleep(backoff + std::time::Duration::from_millis(jitter_millis));
+                    backoff = std::cmp::min(backoff * 2, max_backoff);
+                } else {
+                    break;
+                }
             }
-            if !r.data.is_empty() && w.write_all(&r.data).is_err() {
-                break;
-            }
-            if w.flush().is_err() {
-                break;
-            }
+
             if r.disconnect {
                 break;
             }
@@ -332,6 +367,7 @@ mod tests {
         Never,
         WriteAt(usize),
         Flush,
+        Transient(usize, usize), // (fail_at, fail_count)
     }
 
     struct TestWriter {
@@ -355,6 +391,14 @@ mod tests {
                     io::ErrorKind::BrokenPipe,
                     "test write failure",
                 ));
+            }
+            if let WriterFailure::Transient(fail_at, fail_count) = self.failure {
+                if write_index >= fail_at && write_index < fail_at + fail_count {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "test transient failure",
+                    ));
+                }
             }
             self.state.bytes.lock().unwrap().extend_from_slice(bytes);
             Ok(bytes.len())
@@ -540,6 +584,28 @@ mod tests {
         expected.extend_from_slice(&[0x22, 0x33]);
         assert_eq!(*state.bytes.lock().unwrap(), expected);
         assert_eq!(state.flushes.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn writer_retries_on_transient_error() {
+        let state = Arc::new(WriterState::default());
+        let (tx, rx) = channel();
+        let writer = spawn_writer(
+            TestWriter::new(Arc::clone(&state), WriterFailure::Transient(0, 2)), // Fail twice, then succeed
+            rx,
+        );
+        let start = std::time::Instant::now();
+        tx.send(reply(0xBB, &[0xCC, 0xDD], false)).unwrap();
+        drop(tx);
+        join_with_deadline(writer);
+        let elapsed = start.elapsed();
+
+        let mut expected = vec![0xBB; SIMPLE_REPLY_LEN];
+        expected.extend_from_slice(&[0xCC, 0xDD]);
+        assert_eq!(*state.bytes.lock().unwrap(), expected);
+        assert_eq!(state.flushes.load(Ordering::SeqCst), 1);
+
+        assert!(elapsed >= Duration::from_millis(30), "writer should have backed off");
     }
 
     #[test]
