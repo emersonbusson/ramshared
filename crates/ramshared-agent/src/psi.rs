@@ -27,9 +27,9 @@ pub fn read_psi() -> Result<PsiSample> {
 ///
 /// Format: `some avg10=0.00 avg60=0.00 avg300=0.00 total=12345`.
 pub fn parse_psi(content: &str) -> Option<PsiSample> {
-    let line = content.lines().find(|l| l.starts_with("some "))?;
+    let some_line = content.lines().find(|l| l.starts_with("some "))?;
     let (mut avg10, mut avg60, mut total) = (None, None, None);
-    for tok in line.split_whitespace() {
+    for tok in some_line.split_whitespace() {
         if let Some(v) = tok.strip_prefix("avg10=") {
             avg10 = v.parse::<f32>().ok();
         } else if let Some(v) = tok.strip_prefix("avg60=") {
@@ -38,8 +38,18 @@ pub fn parse_psi(content: &str) -> Option<PsiSample> {
             total = v.parse::<u64>().ok();
         }
     }
+
+    let mut full_avg10 = 0.0;
+    if let Some(full_line) = content.lines().find(|l| l.starts_with("full ")) {
+        for tok in full_line.split_whitespace() {
+            if let Some(v) = tok.strip_prefix("avg10=") {
+                full_avg10 = v.parse::<f32>().unwrap_or(0.0);
+            }
+        }
+    }
+
     Some(PsiSample {
-        avg10: avg10?,
+        avg10: avg10?.max(full_avg10),
         avg60: avg60?,
         stall_us: total?,
     })
@@ -161,6 +171,16 @@ mod tests {
                  full avg10=0.00 avg60=0.00 avg300=0.00 total=0\n";
         let p = parse_psi(s).unwrap();
         assert_eq!(p.avg10, 1.23);
+        assert_eq!(p.avg60, 4.56);
+        assert_eq!(p.stall_us, 999);
+    }
+
+    #[test]
+    fn parse_psi_full_stall_overrides_some() {
+        let s = "some avg10=85.00 avg60=4.56 avg300=7.89 total=999\n\
+                 full avg10=90.00 avg60=0.00 avg300=0.00 total=0\n";
+        let p = parse_psi(s).unwrap();
+        assert_eq!(p.avg10, 90.00);
         assert_eq!(p.avg60, 4.56);
         assert_eq!(p.stall_us, 999);
     }

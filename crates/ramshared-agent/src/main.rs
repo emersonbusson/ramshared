@@ -350,6 +350,19 @@ fn session(
                         swap_current: psi::read_memcg_swap(),
                         diskstats_io: active.values().filter_map(|d| psi::read_diskstats(d)).sum(),
                     });
+
+                    // Objective: Trigger urgent memory shedding when PSI some/full stall averages exceed 80% over 10-second window.
+                    if sample.avg10 > 80.0 {
+                        eprintln!(
+                            "[agent] extreme memory pressure (avg10={:.2}% > 80%): shedding all swap instances",
+                            sample.avg10
+                        );
+                        if !handle_msg(cfg, Msg::DemoteAll, &mut active, cmd_tx) {
+                            session_err = Some("DemoteAll due to memory pressure failed".into());
+                            break;
+                        }
+                    }
+
                     if let Err(e) = write_msg(&mut w, &Msg::Psi { sample, swaps, mem }) {
                         session_err = Some(e.into());
                         break;
