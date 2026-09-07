@@ -162,4 +162,19 @@ mod tests {
         assert!(t.record(2, &data_65536));
         assert_eq!(t.verify(2, &data_65536), Some(true));
     }
+
+    #[test]
+    fn golden_master_deterministic_bit_flip_injection() {
+        let mut t = ChecksumTable::new(1);
+        let data = vec![0x5A; 4096];
+        assert!(t.record(0, &data));
+
+        for byte_idx in [0, 2048, 4095] {
+            for bit_idx in 0..8 {
+                let mut corrupt = data.clone();
+                corrupt[byte_idx] ^= 1 << bit_idx;
+                assert_eq!(t.verify(0, &corrupt), Some(false));
+            }
+        }
+    }
 }
