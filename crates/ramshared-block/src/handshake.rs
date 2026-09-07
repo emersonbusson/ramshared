@@ -30,6 +30,7 @@ pub enum HandshakeError {
     IncompatibleVersion,
     UnsupportedFeature,
     InvalidFormat,
+    Timeout,
 }
 
 impl From<io::Error> for HandshakeError {
@@ -46,6 +47,7 @@ impl fmt::Display for HandshakeError {
             HandshakeError::IncompatibleVersion => f.write_str("incompatible protocol version"),
             HandshakeError::UnsupportedFeature => f.write_str("unsupported negotiation feature"),
             HandshakeError::InvalidFormat => f.write_str("invalid protocol format"),
+            HandshakeError::Timeout => f.write_str("handshake timed out"),
         }
     }
 }
@@ -127,6 +129,8 @@ pub fn server_handshake<R: Read, W: Write>(
     exports: &[Export],
     tx_flags: u16,
 ) -> Result<usize, HandshakeError> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(5);
     // Greeting: NBDMAGIC + IHAVEOPT + handshake flags.
     w.write_all(&NBDMAGIC.to_be_bytes())?;
     w.write_all(&IHAVEOPT.to_be_bytes())?;
@@ -134,9 +138,15 @@ pub fn server_handshake<R: Read, W: Write>(
     w.flush()?;
 
     let client_flags = read_u32(r)?;
+    if client_flags & crate::protocol::NBD_FLAG_FIXED_NEWSTYLE as u32 == 0 {
+        return Err(HandshakeError::IncompatibleVersion);
+    }
     let no_zeroes = client_flags & NBD_FLAG_C_NO_ZEROES != 0;
 
     loop {
+        if start.elapsed() > timeout {
+            return Err(HandshakeError::Timeout);
+        }
         let opt_magic = read_u64(r)?;
         if opt_magic != IHAVEOPT {
             return Err(HandshakeError::IncompatibleVersion);
@@ -203,7 +213,8 @@ mod tests {
     /// Builds a client stream: client_flags + one option.
     fn client_stream(client_flags: u32, opt: u32, data: &[u8]) -> Cursor<Vec<u8>> {
         let mut v = Vec::new();
-        v.extend_from_slice(&client_flags.to_be_bytes());
+        let fixed_flags = client_flags | crate::protocol::NBD_FLAG_FIXED_NEWSTYLE as u32;
+        v.extend_from_slice(&fixed_flags.to_be_bytes());
         v.extend_from_slice(&IHAVEOPT.to_be_bytes());
         v.extend_from_slice(&opt.to_be_bytes());
         v.extend_from_slice(&(data.len() as u32).to_be_bytes());
@@ -214,7 +225,8 @@ mod tests {
     /// Stream with multiple options in sequence.
     fn stream_opts(client_flags: u32, opts: &[(u32, Vec<u8>)]) -> Cursor<Vec<u8>> {
         let mut v = Vec::new();
-        v.extend_from_slice(&client_flags.to_be_bytes());
+        let fixed_flags = client_flags | crate::protocol::NBD_FLAG_FIXED_NEWSTYLE as u32;
+        v.extend_from_slice(&fixed_flags.to_be_bytes());
         for (opt, data) in opts {
             v.extend_from_slice(&IHAVEOPT.to_be_bytes());
             v.extend_from_slice(&opt.to_be_bytes());
@@ -320,7 +332,8 @@ mod tests {
     #[test]
     fn rejects_invalid_opt_magic() {
         let mut v = Vec::new();
-        v.extend_from_slice(&0u32.to_be_bytes()); // client_flags
+        let fixed_flags = crate::protocol::NBD_FLAG_FIXED_NEWSTYLE as u32;
+        v.extend_from_slice(&fixed_flags.to_be_bytes()); // client_flags
         v.extend_from_slice(&0xbad_u64.to_be_bytes()); // bad magic
         let mut r = Cursor::new(v);
         let mut out = Vec::new();
@@ -332,7 +345,8 @@ mod tests {
     fn rejects_oversized_option_len() {
         // option with giant len must fail BEFORE allocating (M4 anti-DoS).
         let mut v = Vec::new();
-        v.extend_from_slice(&0u32.to_be_bytes()); // client_flags
+        let fixed_flags = crate::protocol::NBD_FLAG_FIXED_NEWSTYLE as u32;
+        v.extend_from_slice(&fixed_flags.to_be_bytes()); // client_flags
         v.extend_from_slice(&IHAVEOPT.to_be_bytes()); // opt magic
         v.extend_from_slice(&NBD_OPT_INFO.to_be_bytes()); // opt
         v.extend_from_slice(&u32::MAX.to_be_bytes()); // absurd length
