@@ -492,6 +492,16 @@
       "freshnessDays": 90,
       "verification": { "state": "unverified" },
       "registeredAt": "2026-09-06T12:00:00Z"
+    },
+    {
+      "id": "jules-finding-data-integrity-071-quarantine",
+      "pattern": "docs/jules/findings/data-integrity-071-quarantine.md",
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/data-integrity-071-quarantine.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-09-06T00:00:00Z"
     }
   ],
   "exclusions": [
