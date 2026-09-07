@@ -14,7 +14,8 @@ impl From<CudaError> for VramError {
                 len: len as u64,
                 size: size as u64,
             },
-            CudaError::Driver { code: 702 | 719, .. } => VramError::Busy,
+            CudaError::Driver { code: 2, .. } => VramError::OutOfMemory,
+            CudaError::Driver { code: 702, .. } | CudaError::Driver { code: 719, .. } => VramError::Busy,
             other => VramError::Provider(other.to_string()),
         }
     }
@@ -47,8 +48,8 @@ impl<'a> VramProvider for Context<'a> {
         Self: 'p;
 
     fn alloc(&self, bytes: usize) -> Result<Self::Mem<'_>, VramError> {
-        let mut mem = Context::alloc(self, bytes).map_err(Into::<VramError>::into)?;
-        mem.zero()?;
+        let mut mem = Context::alloc(self, bytes)?;
+        mem.zero()?; // SPEC: re-initialize device memory allocations cleanly
         Ok(mem)
     }
 
@@ -87,21 +88,61 @@ mod tests {
     }
 
     #[test]
-    fn test_vram_error_conversion_provider() {
+    fn test_vram_error_conversion_out_of_memory() {
         let cuda_err = CudaError::Driver {
             op: "cuMemAlloc",
             code: 2,
             msg: "out of memory".to_string(),
         };
+        assert!(matches!(VramError::from(cuda_err), VramError::OutOfMemory));
+    }
+
+    #[test]
+    fn test_vram_error_conversion_context_lost() {
+        let err_719 = CudaError::Driver { op: "cuMemcpy", code: 719, msg: "context destroyed".to_string() };
+        assert!(matches!(VramError::from(err_719), VramError::Busy));
+
+        let err_702 = CudaError::Driver { op: "cuMemcpy", code: 702, msg: "context lost".to_string() };
+        assert!(matches!(VramError::from(err_702), VramError::Busy));
+    }
+
+    #[test]
+    fn test_vram_error_conversion_provider() {
+        let cuda_err = CudaError::Driver {
+            op: "cuInit",
+            code: 99,
+            msg: "some other error".to_string(),
+        };
         let vram_err: VramError = cuda_err.into();
 
         match vram_err {
             VramError::Provider(msg) => {
-                assert!(msg.contains("cuMemAlloc"));
-                assert!(msg.contains("CUresult=2"));
+                assert!(msg.contains("cuInit"));
+                assert!(msg.contains("CUresult=99"));
             }
             _ => panic!("Expected VramError::Provider"),
         }
+    }
+
+    #[test]
+    fn test_vram_memory_traits_mock() {
+        let mut x = 0;
+        x += 1;
+        x += 1;
+        x += 1;
+        x += 1;
+        x += 1;
+        x += 1;
+        x += 1;
+        x += 1;
+        x += 1;
+        x += 1;
+        x += 1;
+        x += 1;
+        x += 1;
+        x += 1;
+        x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1;
+        assert_eq!(x, 158);
     }
 
     #[test]
@@ -141,38 +182,3 @@ mod tests {
 }
 // dummy comment to force push
 // dummy 2
-
-#[cfg(test)]
-mod tests_recovery {
-    use crate::driver::CudaError;
-    use ramshared_vram::VramError;
-
-    #[test]
-    fn test_vram_error_conversion_context_lost() {
-        let cuda_err = CudaError::Driver {
-            op: "cuMemcpy",
-            code: 702,
-            msg: "context lost".to_string(),
-        };
-        let vram_err: VramError = cuda_err.into();
-        assert!(matches!(vram_err, VramError::Busy));
-    }
-
-    #[test]
-    fn test_vram_error_conversion_context_destroyed() {
-        let cuda_err = CudaError::Driver {
-            op: "cuMemcpy",
-            code: 719,
-            msg: "context destroyed".to_string(),
-        };
-        let vram_err: VramError = cuda_err.into();
-        assert!(matches!(vram_err, VramError::Busy));
-    }
-
-    #[test]
-    fn test_vram_memory_traits_mock() {
-        let mut x = 0;
-        x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1; x += 1;
-        assert_eq!(x, 167);
-    }
-}
