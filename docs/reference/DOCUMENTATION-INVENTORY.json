@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 273,
-    "classified": 270,
+    "total": 275,
+    "classified": 272,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -782,6 +782,30 @@
       },
       "owner": "documentation-governance",
       "canonicalSource": "docs/governance/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/jules/findings/README.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/jules/findings/watchdog-supervisor-trap.md",
+      "disposition": "classified",
+      "ruleId": "jules-findings",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "architecture",
+      "canonicalSource": "docs/jules/findings/README.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
     },
