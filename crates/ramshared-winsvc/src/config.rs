@@ -279,7 +279,7 @@ tenant = "windrive-host"
 
     #[test]
     fn parse_product_config() {
-        let c = WinDriveConfig::from_toml(GOOD).unwrap();
+        let c = WinDriveConfig::from_toml(GOOD).expect("from_toml must succeed for GOOD config");
         assert_eq!(c.size_bytes, 512 * 1024 * 1024);
         assert_eq!(c.block_size, 4096);
         assert_eq!(c.cuda_device, 0);
@@ -384,7 +384,7 @@ tenant = "windrive-host"
     fn reject_size_over_usize() {
         // On 64-bit hosts usize max is huge; force invalid by using unaligned + below floor path
         // via a direct validate of an oversized conceptual field when possible.
-        let mut c = WinDriveConfig::from_toml(GOOD).unwrap();
+        let mut c = WinDriveConfig::from_toml(GOOD).expect("from_toml must succeed for GOOD config");
         // Use size that fails block alignment after we set a huge value that is not
         // representable only on 32-bit; on 64-bit still exercise the usize check path.
         if usize::BITS < 64 {
@@ -440,7 +440,7 @@ tenant = "windrive-host"
 
     #[test]
     fn reserve_cannot_lower_policy_floor() {
-        let c = WinDriveConfig::from_toml(GOOD).unwrap();
+        let c = WinDriveConfig::from_toml(GOOD).expect("from_toml must succeed for GOOD config");
         // Requested 1 byte would still floor to 512 MiB or 10% of total.
         let mut low = c.clone();
         low.reserve_bytes = 1;
@@ -630,7 +630,7 @@ volume_mount_path = "C:\\Users\\Public\\lun""#,
 
     #[test]
     fn accept_named_pipe_v1() {
-        let c = WinDriveConfig::from_toml(GOOD).unwrap();
+        let c = WinDriveConfig::from_toml(GOOD).expect("from_toml must succeed for GOOD config");
         assert_eq!(c.broker_pipe, BrokerPipeV1::NamedPipeV1);
     }
 
@@ -691,12 +691,13 @@ volume_mount_path = "C:\\Users\\Public\\lun""#,
 
     #[test]
     fn evidence_path_accessor() {
-        let c = WinDriveConfig::from_toml(GOOD).unwrap();
+        let c = WinDriveConfig::from_toml(GOOD).expect("from_toml must succeed for GOOD config");
         assert_eq!(c.evidence_path(), c.evidence_path.as_path());
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod reload_tests {
     use super::*;
 
@@ -717,11 +718,11 @@ tenant = "windrive-host"
 
     #[test]
     fn reload_retains_state_on_failure() {
-        let mut c = WinDriveConfig::from_toml(GOOD).unwrap();
+        let mut c = WinDriveConfig::from_toml(GOOD).expect("from_toml must succeed for GOOD config");
         let initial_size = c.size_bytes;
 
         let bad = GOOD.replace("536870912", "0");
-        let e = c.reload(&bad).unwrap_err();
+        let e = c.reload(&bad).expect_err("reload must fail for bad config");
 
         assert!(matches!(
             e,
