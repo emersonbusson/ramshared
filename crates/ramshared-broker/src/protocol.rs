@@ -181,6 +181,14 @@ pub fn read_msg<R: BufRead>(r: &mut R) -> Result<Option<Msg>, ProtocolError> {
     }
     let had_newline = buf.last() == Some(&b'\n');
     if !had_newline && buf.len() > MAX_LINE_BYTES {
+        // Discard the rest of the line up to the next newline to resynchronize the parser.
+        // We don't want to allocate indefinitely, so we use a small sink loop.
+        let mut sink = Vec::new();
+        let _ = r
+            .by_ref()
+            .take(MAX_LINE_BYTES as u64 * 10)
+            .read_until(b'\n', &mut sink);
+
         return Err(ProtocolError::PayloadTooLarge);
     }
     let line = buf.strip_suffix(b"\n").unwrap_or(&buf);
@@ -389,5 +397,30 @@ mod tests {
         assert_eq!(read_msg(&mut cur).unwrap().unwrap(), Msg::Ack);
         assert_eq!(read_msg(&mut cur).unwrap().unwrap(), Msg::DemoteAll);
         assert!(read_msg(&mut cur).unwrap().is_none());
+    }
+
+    #[test]
+    fn recover_from_truncated_and_corrupted_frames() {
+        let mut buf = Vec::new();
+        write_msg(&mut buf, &Msg::Status).unwrap();
+
+        // Truncated message (exceeds MAX_LINE_BYTES, no newline in the middle)
+        buf.extend_from_slice(&vec![b'x'; MAX_LINE_BYTES + 50]);
+        buf.push(b'\n');
+
+        // Corrupted message (bad JSON) followed by newline
+        buf.extend_from_slice(b"{\"type\":\"bogus\"}\n");
+
+        write_msg(&mut buf, &Msg::Ack).unwrap();
+
+        let mut cur = Cursor::new(buf);
+
+        assert_eq!(read_msg(&mut cur).unwrap().unwrap(), Msg::Status);
+
+        assert!(matches!(read_msg(&mut cur).unwrap_err(), ProtocolError::PayloadTooLarge));
+
+        assert!(matches!(read_msg(&mut cur).unwrap_err(), ProtocolError::BadMagic(_)));
+
+        assert_eq!(read_msg(&mut cur).unwrap().unwrap(), Msg::Ack);
     }
 }
