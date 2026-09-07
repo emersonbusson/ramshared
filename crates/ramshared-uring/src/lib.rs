@@ -178,6 +178,35 @@ pub struct SmokeReport {
     pub submitted: usize,
 }
 
+use std::panic::{catch_unwind, AssertUnwindSafe, UnwindSafe};
+use std::thread::{self, JoinHandle};
+
+/// Spawns a resilient worker thread that wraps the given event loop with `catch_unwind`.
+/// If the worker panics, the panic is contained, and a fresh worker thread is spawned
+/// to resume the event loop, ensuring idempotent recovery from panics.
+pub fn spawn_resilient_worker<F>(mut worker_fn: F) -> JoinHandle<()>
+where
+    F: FnMut() + Send + 'static + UnwindSafe,
+{
+    thread::spawn(move || {
+        loop {
+            // Run the worker inside catch_unwind on the current thread
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                worker_fn();
+            }));
+
+            match result {
+                Ok(_) => break, // Event loop completed successfully
+                Err(_) => {
+                    // Thread panicked. Apply backoff to prevent fast spin/OOM.
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    continue; // Restart the loop
+                }
+            }
+        }
+    })
+}
+
 pub fn smoke(entries: u32) -> io::Result<SmokeReport> {
     let ring = io_uring::IoUring::new(entries)?;
     let submitted = ring.submit()?;
@@ -820,6 +849,25 @@ mod tests {
         drop(file);
         fs::remove_file(path).expect("remove fixture");
     }
+    #[test]
+    fn resilient_worker_restarts_on_panic_and_completes() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let attempts = Arc::new(AtomicU32::new(0));
+        let attempts_clone = Arc::clone(&attempts);
+
+        let handle = spawn_resilient_worker(move || {
+            let count = attempts_clone.fetch_add(1, Ordering::SeqCst) + 1;
+            if count < 3 {
+                panic!("Simulated worker panic");
+            }
+        });
+
+        handle.join().unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
     #[test]
     fn ublk_server_push_guard_clause_rejects_full_ring() {
         let page = page_size();
