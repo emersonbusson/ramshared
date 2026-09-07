@@ -43,6 +43,7 @@ pub enum DiagnoseError {
     InvalidArgs(String),
     Io(std::io::Error, std::path::PathBuf),
     ParseJson(String),
+    Timeout(String),
 }
 
 impl std::fmt::Display for DiagnoseError {
@@ -51,6 +52,7 @@ impl std::fmt::Display for DiagnoseError {
             Self::InvalidArgs(msg) => write!(f, "{msg}"),
             Self::Io(err, path) => write!(f, "read {}: {err}", path.display()),
             Self::ParseJson(msg) => write!(f, "{msg}"),
+            Self::Timeout(msg) => write!(f, "timeout: {msg}"),
         }
     }
 }
@@ -61,6 +63,7 @@ impl DiagnoseError {
             Self::InvalidArgs(_) => 22, // EINVAL
             Self::Io(err, _) => err.raw_os_error().unwrap_or(5) as u8,
             Self::ParseJson(_) => 22, // EINVAL for malformed json
+            Self::Timeout(_) => 110, // ETIMEDOUT
         }
     }
 }
@@ -79,10 +82,26 @@ struct Diagnosis {
     recommendations: Vec<String>,
 }
 
+pub fn run_probe_with_timeout<T: Send + 'static, F: FnOnce() -> T + Send + 'static>(
+    name: &str,
+    timeout: std::time::Duration,
+    probe: F,
+) -> Result<T, DiagnoseError> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(probe());
+    });
+    rx.recv_timeout(timeout).map_err(|_| DiagnoseError::Timeout(format!("probe '{}' timed out", name)))
+}
+
 pub fn run(args: &[String]) -> Result<(), DiagnoseError> {
     let (path, json) = parse_args(args)?;
     let text = fs::read_to_string(&path).map_err(|e| DiagnoseError::Io(e, path.clone()))?;
-    let diagnosis = diagnose_jsonl(&text)?;
+
+    let diagnosis = run_probe_with_timeout("diagnose_jsonl", std::time::Duration::from_secs(5), move || {
+        diagnose_jsonl(&text)
+    })??;
+
     if json {
         println!("{}", render_json(&diagnosis));
     } else {
@@ -289,6 +308,21 @@ fn render_json(d: &Diagnosis) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diagnostic_probe_timeout_isolation_prevents_hang() {
+        let err = run_probe_with_timeout("hanging_probe", std::time::Duration::from_millis(10), || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            "done"
+        }).unwrap_err();
+        assert!(matches!(err, DiagnoseError::Timeout(_)));
+    }
+
+    #[test]
+    fn diagnostic_probe_success_returns_value() {
+        let val = run_probe_with_timeout("fast", std::time::Duration::from_millis(100), || 42).unwrap();
+        assert_eq!(val, 42);
+    }
 
     #[test]
     fn diagnoses_demote_without_process_attribution() {
