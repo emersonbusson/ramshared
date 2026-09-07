@@ -249,6 +249,10 @@ pub fn spawn_acceptor(
                 }
             };
 
+            // Enable keepalive to detect dead connections (unannounced host crash)
+            let sock = socket2::SockRef::from(&stream);
+            let _ = sock.set_keepalive(true);
+
             let Ok(wstream) = stream.try_clone() else {
                 eprintln!("[ramsharedd] try_clone (unix) wstream failed; skipping connection");
                 continue;
