@@ -4,6 +4,7 @@
 //! not attribute pressure to a process unless the event stream contains that
 //! attribution explicitly.
 #![forbid(unsafe_code)]
+#![allow(clippy::collapsible_if)]
 
 use std::fs;
 use std::path::PathBuf;
@@ -36,6 +37,10 @@ struct Event {
     reconcile_delta: Option<f64>,
     #[serde(default)]
     flag: Option<String>,
+    #[serde(default)]
+    acpi_sleep_state: Option<String>,
+    #[serde(default)]
+    gpu_power_mgmt: Option<String>,
 }
 
 #[derive(Debug)]
@@ -75,6 +80,8 @@ struct Diagnosis {
     max_swap_used: Option<u64>,
     max_page_io_s: Option<u64>,
     flags: Vec<String>,
+    acpi_sleep_states: Vec<String>,
+    gpu_power_mgmt: Vec<String>,
     timeline: Vec<String>,
     recommendations: Vec<String>,
 }
@@ -184,6 +191,20 @@ fn diagnose_events(events: &[Event]) -> Diagnosis {
                 event.slice
             ));
         }
+
+        if let Some(state) = event.acpi_sleep_state.as_deref() {
+            if !diagnosis.acpi_sleep_states.iter().any(|existing| existing == state) {
+                diagnosis.acpi_sleep_states.push(state.to_string());
+                diagnosis.timeline.push(format!("{} ACPI sleep state={state}", ts(event)));
+            }
+        }
+
+        if let Some(mgmt) = event.gpu_power_mgmt.as_deref() {
+            if !diagnosis.gpu_power_mgmt.iter().any(|existing| existing == mgmt) {
+                diagnosis.gpu_power_mgmt.push(mgmt.to_string());
+                diagnosis.timeline.push(format!("{} GPU power management={mgmt}", ts(event)));
+            }
+        }
     }
     diagnosis.flags = flags;
     diagnosis.recommendations = recommendations(&diagnosis);
@@ -212,6 +233,12 @@ fn recommendations(d: &Diagnosis) -> Vec<String> {
     }
     if d.max_page_io_s.unwrap_or(0) > 10_000 {
         recs.push("Page I/O is high. Compare zram, VRAM, and disk tier priorities before increasing VRAM capacity.".to_string());
+    }
+    if d.acpi_sleep_states.iter().any(|s| s == "S3" || s == "S4") {
+        recs.push("ACPI sleep state observed. Ensure write caches were flushed before suspend.".to_string());
+    }
+    if d.gpu_power_mgmt.iter().any(|m| m == "disabled" || m == "none") {
+        recs.push("GPU power management disabled. High power draw may trigger thermal throttling or PCIe resets.".to_string());
     }
     if recs.is_empty() {
         recs.push("No anomaly detected in the provided event window.".to_string());
@@ -254,6 +281,22 @@ fn print_text(d: &Diagnosis) {
             d.flags.join(",")
         }
     );
+    println!(
+        "acpi_sleep_states: {}",
+        if d.acpi_sleep_states.is_empty() {
+            "none".into()
+        } else {
+            d.acpi_sleep_states.join(",")
+        }
+    );
+    println!(
+        "gpu_power_mgmt: {}",
+        if d.gpu_power_mgmt.is_empty() {
+            "none".into()
+        } else {
+            d.gpu_power_mgmt.join(",")
+        }
+    );
     println!("timeline:");
     for item in &d.timeline {
         println!("  - {item}");
@@ -280,6 +323,8 @@ fn render_json(d: &Diagnosis) -> String {
         "max_swap_used": d.max_swap_used,
         "max_page_io_s": d.max_page_io_s,
         "flags": d.flags,
+        "acpi_sleep_states": d.acpi_sleep_states,
+        "gpu_power_mgmt": d.gpu_power_mgmt,
         "timeline": d.timeline,
         "recommendations": d.recommendations,
     })
@@ -323,6 +368,32 @@ mod tests {
         };
         assert_eq!(d.samples, 0);
         assert!(d.recommendations[0].contains("--telemetry-jsonl"));
+        print_text(&d);
+    }
+
+    #[test]
+    fn diagnoses_power_management_and_acpi_events() {
+        let input = r#"{"t":1,"acpi_sleep_state":"S3","gpu_power_mgmt":"disabled"}
+{"t":2,"acpi_sleep_state":"S4","gpu_power_mgmt":"none"}"#;
+        let d = match diagnose_jsonl(input) {
+            Ok(d) => d,
+            Err(e) => panic!("diagnose failed: {e}"),
+        };
+        assert_eq!(d.samples, 2);
+        assert!(d.acpi_sleep_states.contains(&"S3".to_string()));
+        assert!(d.gpu_power_mgmt.contains(&"disabled".to_string()));
+        assert!(
+            d.recommendations
+                .iter()
+                .any(|r| r.contains("ACPI sleep state observed"))
+        );
+        assert!(
+            d.recommendations
+                .iter()
+                .any(|r| r.contains("GPU power management disabled"))
+        );
+        let json_str = render_json(&d);
+        assert!(json_str.contains("S3"));
         print_text(&d);
     }
 
