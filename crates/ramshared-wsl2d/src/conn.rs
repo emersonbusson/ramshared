@@ -117,7 +117,7 @@ pub fn spawn_writer<S: Write + Send + 'static>(
                         } else {
                             None
                         }
-                    },
+                    }
                     Err(e) => Some(e),
                 };
 
@@ -139,7 +139,8 @@ pub fn spawn_writer<S: Write + Send + 'static>(
                     let jitter = (std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
-                        .as_micros() % 20) as u64;
+                        .as_micros()
+                        % 20) as u64;
                     let jitter_millis = jitter * backoff.as_millis() as u64 / 100;
 
                     std::thread::sleep(backoff + std::time::Duration::from_millis(jitter_millis));
@@ -605,7 +606,10 @@ mod tests {
         assert_eq!(*state.bytes.lock().unwrap(), expected);
         assert_eq!(state.flushes.load(Ordering::SeqCst), 1);
 
-        assert!(elapsed >= Duration::from_millis(30), "writer should have backed off");
+        assert!(
+            elapsed >= Duration::from_millis(30),
+            "writer should have backed off"
+        );
     }
 
     #[test]
