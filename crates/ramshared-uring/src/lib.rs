@@ -868,7 +868,9 @@ mod tests {
         }
         server.ring.submit_and_wait(1).expect("submit timeout");
 
-        let completions = server.drain_and_rearm_after_wake().expect("drain and rearm");
+        let completions = server
+            .drain_and_rearm_after_wake()
+            .expect("drain and rearm");
         assert_eq!(completions.len(), 1);
         assert_eq!(completions[0].tag, 42);
         assert_eq!(completions[0].result, -libc::ETIME);
