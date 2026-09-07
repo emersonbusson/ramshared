@@ -422,6 +422,10 @@ mod tests {
         all_ids.sort_unstable();
         let len_before = all_ids.len();
         all_ids.dedup();
-        assert_eq!(len_before, all_ids.len(), "Duplicate IDs detected under contention");
+        assert_eq!(
+            len_before,
+            all_ids.len(),
+            "Duplicate IDs detected under contention"
+        );
     }
 }
