@@ -393,13 +393,14 @@ mod tests {
                     "test write failure",
                 ));
             }
-            if let WriterFailure::Transient(fail_at, fail_count) = self.failure {
-                if write_index >= fail_at && write_index < fail_at + fail_count {
-                    return Err(io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        "test transient failure",
-                    ));
-                }
+            if let WriterFailure::Transient(fail_at, fail_count) = self.failure
+                && write_index >= fail_at
+                && write_index < fail_at + fail_count
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "test transient failure",
+                ));
             }
             self.state.bytes.lock().unwrap().extend_from_slice(bytes);
             Ok(bytes.len())
