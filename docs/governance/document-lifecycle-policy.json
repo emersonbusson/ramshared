@@ -492,6 +492,16 @@
       "freshnessDays": 90,
       "verification": { "state": "unverified" },
       "registeredAt": "2026-09-06T12:00:00Z"
+    },
+    {
+      "id": "jules-findings-vulkan-device-lost",
+      "pattern": "docs/jules/findings/084-vulkan-device-lost-recovery.md",
+      "owner": "reliability",
+      "canonicalSource": "docs/jules/findings/084-vulkan-device-lost-recovery.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-09-06T00:00:00Z"
     }
   ],
   "exclusions": [
