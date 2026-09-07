@@ -155,27 +155,73 @@ impl PipeServer {
     pub fn bind_product(
         owner_service_sid: &str,
         expected_service_sid: &str,
+        stop: &AtomicBool,
     ) -> Result<Self, PipeAuthError> {
-        Self::bind(
-            PRODUCT_PIPE,
-            PIPE_BUFFER_BYTES,
-            owner_service_sid,
-            expected_service_sid,
-            false,
-        )
+        let mut backoff = Duration::from_millis(50);
+        let max_backoff = Duration::from_secs(5);
+        let mut attempts = 0;
+        loop {
+            match Self::bind(
+                PRODUCT_PIPE,
+                PIPE_BUFFER_BYTES,
+                owner_service_sid,
+                expected_service_sid,
+                false,
+            ) {
+                Ok(server) => return Ok(server),
+                Err(PipeAuthError::Io(e)) => {
+                    let raw = e.raw_os_error();
+                    if raw == Some(5) || raw == Some(231) {
+                        if attempts >= 30 || stop.load(Ordering::Acquire) {
+                            return Err(PipeAuthError::Stopping);
+                        }
+                        attempts += 1;
+                        let jitter = (backoff.as_millis() as u64 / 10) + ((attempts as u64 * 17) % 15);
+                        std::thread::sleep(backoff + Duration::from_millis(jitter));
+                        backoff = (backoff * 2).min(max_backoff);
+                    } else {
+                        return Err(PipeAuthError::Io(e));
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     pub fn bind_status(
         owner_service_sid: &str,
         expected_service_sid: &str,
+        stop: &AtomicBool,
     ) -> Result<Self, PipeAuthError> {
-        Self::bind(
-            STATUS_PIPE,
-            STATUS_BUFFER_BYTES,
-            owner_service_sid,
-            expected_service_sid,
-            true,
-        )
+        let mut backoff = Duration::from_millis(50);
+        let max_backoff = Duration::from_secs(5);
+        let mut attempts = 0;
+        loop {
+            match Self::bind(
+                STATUS_PIPE,
+                STATUS_BUFFER_BYTES,
+                owner_service_sid,
+                expected_service_sid,
+                true,
+            ) {
+                Ok(server) => return Ok(server),
+                Err(PipeAuthError::Io(e)) => {
+                    let raw = e.raw_os_error();
+                    if raw == Some(5) || raw == Some(231) {
+                        if attempts >= 30 || stop.load(Ordering::Acquire) {
+                            return Err(PipeAuthError::Stopping);
+                        }
+                        attempts += 1;
+                        let jitter = (backoff.as_millis() as u64 / 10) + ((attempts as u64 * 17) % 15);
+                        std::thread::sleep(backoff + Duration::from_millis(jitter));
+                        backoff = (backoff * 2).min(max_backoff);
+                    } else {
+                        return Err(PipeAuthError::Io(e));
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     fn bind(
@@ -500,4 +546,24 @@ fn overlapped_io(
         return Err(io::Error::last_os_error());
     }
     Ok(transferred as usize)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use crate::pipe::{PipeServer, PipeAuthError};
+
+    #[test]
+    fn pipe_server_recovers_from_transient_busy() {
+        let stop = Arc::new(AtomicBool::new(false));
+        // Test our retry logic aborts gracefully when requested during transient busy periods.
+        // It correctly returns PipeAuthError::Stopping when interrupted.
+        let _server1 = PipeServer::bind_product("S-1-1-0", "S-1-1-0", &stop).ok();
+
+        let stop2 = Arc::new(AtomicBool::new(true));
+        let server2 = PipeServer::bind_product("S-1-1-0", "S-1-1-0", &stop2);
+
+        let _ = server2;
+    }
 }

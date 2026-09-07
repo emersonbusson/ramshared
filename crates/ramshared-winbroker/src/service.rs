@@ -179,8 +179,9 @@ pub fn run_console(config: BrokerConfigV1, stop: Arc<AtomicBool>) -> io::Result<
     let mut session_id = 1usize;
     while !stop.load(Ordering::Acquire) {
         let server =
-            match PipeServer::bind_product(BROKER_SERVICE_ACCOUNT, CONSUMER_SERVICE_ACCOUNT) {
+            match PipeServer::bind_product(BROKER_SERVICE_ACCOUNT, CONSUMER_SERVICE_ACCOUNT, &stop) {
                 Ok(server) => server,
+                Err(PipeAuthError::Stopping) if stop.load(Ordering::Acquire) => break,
                 Err(PipeAuthError::Io(error)) => {
                     append_evidence(
                         &evidence_path,
@@ -417,9 +418,10 @@ fn emit_event(transition: &str, instance_id: &str) {
 
 fn serve_status(core: Arc<Mutex<BrokerSessionCore>>, stop: Arc<AtomicBool>) -> io::Result<()> {
     while !stop.load(Ordering::Acquire) {
-        let server = match PipeServer::bind_status(BROKER_SERVICE_ACCOUNT, CONSUMER_SERVICE_ACCOUNT)
+        let server = match PipeServer::bind_status(BROKER_SERVICE_ACCOUNT, CONSUMER_SERVICE_ACCOUNT, &stop)
         {
             Ok(server) => server,
+            Err(PipeAuthError::Stopping) if stop.load(Ordering::Acquire) => break,
             Err(PipeAuthError::Io(error)) => return Err(error),
             Err(error) => return Err(io::Error::other(format!("{error:?}"))),
         };
