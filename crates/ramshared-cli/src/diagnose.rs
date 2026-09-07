@@ -63,7 +63,7 @@ impl DiagnoseError {
             Self::InvalidArgs(_) => 22, // EINVAL
             Self::Io(err, _) => err.raw_os_error().unwrap_or(5) as u8,
             Self::ParseJson(_) => 22, // EINVAL for malformed json
-            Self::Timeout(_) => 110, // ETIMEDOUT
+            Self::Timeout(_) => 110,  // ETIMEDOUT
         }
     }
 }
@@ -91,16 +91,19 @@ pub fn run_probe_with_timeout<T: Send + 'static, F: FnOnce() -> T + Send + 'stat
     std::thread::spawn(move || {
         let _ = tx.send(probe());
     });
-    rx.recv_timeout(timeout).map_err(|_| DiagnoseError::Timeout(format!("probe '{}' timed out", name)))
+    rx.recv_timeout(timeout)
+        .map_err(|_| DiagnoseError::Timeout(format!("probe '{}' timed out", name)))
 }
 
 pub fn run(args: &[String]) -> Result<(), DiagnoseError> {
     let (path, json) = parse_args(args)?;
     let text = fs::read_to_string(&path).map_err(|e| DiagnoseError::Io(e, path.clone()))?;
 
-    let diagnosis = run_probe_with_timeout("diagnose_jsonl", std::time::Duration::from_secs(5), move || {
-        diagnose_jsonl(&text)
-    })??;
+    let diagnosis = run_probe_with_timeout(
+        "diagnose_jsonl",
+        std::time::Duration::from_secs(5),
+        move || diagnose_jsonl(&text),
+    )??;
 
     if json {
         println!("{}", render_json(&diagnosis));
@@ -311,16 +314,22 @@ mod tests {
 
     #[test]
     fn diagnostic_probe_timeout_isolation_prevents_hang() {
-        let err = run_probe_with_timeout("hanging_probe", std::time::Duration::from_millis(10), || {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            "done"
-        }).unwrap_err();
+        let err = run_probe_with_timeout(
+            "hanging_probe",
+            std::time::Duration::from_millis(10),
+            || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                "done"
+            },
+        )
+        .unwrap_err();
         assert!(matches!(err, DiagnoseError::Timeout(_)));
     }
 
     #[test]
     fn diagnostic_probe_success_returns_value() {
-        let val = run_probe_with_timeout("fast", std::time::Duration::from_millis(100), || 42).unwrap();
+        let val =
+            run_probe_with_timeout("fast", std::time::Duration::from_millis(100), || 42).unwrap();
         assert_eq!(val, 42);
     }
 
