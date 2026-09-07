@@ -15,6 +15,7 @@ pub enum CacheRead {
     Hit,
     Miss,
     Failed,
+    Corrupted,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -165,6 +166,7 @@ impl BestEffortCache for BoundedCacheClient {
                 CacheRead::Hit
             }
             Ok(Ok(None)) => CacheRead::Miss,
+            Ok(Err(msg)) if msg == "CHECKSUM_MISMATCH" => CacheRead::Corrupted,
             Ok(Ok(Some(_)))
             | Ok(Err(_))
             | Err(std::sync::mpsc::RecvTimeoutError::Timeout)
@@ -405,6 +407,10 @@ impl<O: OriginStorage, C: BestEffortCache> BlockBackend for AuthoritativeOriginB
                 self.telemetry.cache_read_failures =
                     self.telemetry.cache_read_failures.saturating_add(1);
                 let _ = self.revoke_cache();
+            }
+            CacheRead::Corrupted => {
+                self.telemetry.cache_read_failures =
+                    self.telemetry.cache_read_failures.saturating_add(1);
             }
         }
         if let Err(error) = self.origin.read_exact_at(offset, destination) {
@@ -821,6 +827,25 @@ mod tests {
         assert!(backend.flush().is_ok());
         assert!(backend.read_at(8, &mut [0]).is_err());
         assert!(backend.write_at(u64::MAX, b"x").is_err());
+    }
+
+    #[test]
+    fn failover_to_origin_on_vram_checksum_mismatch() {
+        let counters = Rc::new(CacheCounters::default());
+        let mut corrupted_cache = ScriptedCache::active(Rc::clone(&counters));
+        corrupted_cache.read = CacheRead::Corrupted;
+
+        let bytes = Rc::new(RefCell::new(b"golden!!".to_vec()));
+        let mut fallback =
+            AuthoritativeOriginBackend::new(MemoryOrigin(Rc::clone(&bytes)), corrupted_cache, 8, 4)
+                .unwrap();
+
+        let mut destination = [0; 8];
+        fallback.read_at(0, &mut destination).unwrap();
+
+        assert_eq!(&destination, b"golden!!");
+        assert_eq!(fallback.telemetry().cache_read_failures, 1);
+        assert_eq!(fallback.telemetry().fallback_reads, 1);
     }
 
     #[test]
