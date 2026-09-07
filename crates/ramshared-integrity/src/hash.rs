@@ -6,17 +6,11 @@ use std::fmt;
 
 pub const DEFAULT_BLOCK_SIZE: usize = 4096;
 
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-
-/// FNV-1a 64-bit hash over block bytes.
+/// SIMD-accelerated CRC32 checksum over block bytes.
 pub fn block_hash(data: &[u8]) -> u64 {
-    let mut h = FNV_OFFSET;
-    for &b in data {
-        h ^= b as u64;
-        h = h.wrapping_mul(FNV_PRIME);
-    }
-    h
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(data);
+    hasher.finalize() as u64
 }
 
 /// Semantic error for block verification failures.
@@ -112,6 +106,25 @@ mod tests {
         assert_eq!(block_hash(&a), block_hash(&b));
         b[2048] ^= 0x01;
         assert_ne!(block_hash(&a), block_hash(&b));
+    }
+
+    #[test]
+    fn chaos_adversarial_bit_flips_and_burst_corruptions() {
+        let mut t = ChecksumTable::new(8);
+        let data = vec![0xABu8; 4096];
+        assert!(t.record(0, &data));
+
+        // Single-bit flip
+        let mut single_bit = data.clone();
+        single_bit[2048] ^= 0x01;
+        assert_eq!(t.verify(0, &single_bit), Some(false));
+
+        // Multi-bit burst corruption
+        let mut burst = data.clone();
+        for i in 1000..1010 {
+            burst[i] ^= 0xFF;
+        }
+        assert_eq!(t.verify(0, &burst), Some(false));
     }
 
     #[test]

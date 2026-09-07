@@ -10,3 +10,6 @@ publish.workspace = true
 [lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+
+[dependencies]
+crc32fast = "1.3.2"
