@@ -481,7 +481,10 @@ mod tests {
             slice(0, Some(1), SliceState::Active),
             slice(1, Some(2), SliceState::Active),
         ];
-        assert_eq!(count_moves(&arb.tick(t0, &t_move, &slices, None).unwrap()), 1);
+        assert_eq!(
+            count_moves(&arb.tick(t0, &t_move, &slices, None).unwrap()),
+            1
+        );
 
         // Simulate a system clock backward jump (e.g. host sleep)
         let t_past = t0 - Duration::from_secs(10);
