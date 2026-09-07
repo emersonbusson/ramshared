@@ -96,6 +96,8 @@ impl core::error::Error for ResizeError {}
 pub enum MigrationError {
     /// The requested tier migration speed exceeds the physical bus bandwidth limit.
     ExceedsBusBandwidth,
+    /// Background migration is refused due to critical system load or memory pressure.
+    CriticalSystemPressure,
 }
 
 impl core::fmt::Display for MigrationError {
@@ -103,6 +105,9 @@ impl core::fmt::Display for MigrationError {
         match self {
             MigrationError::ExceedsBusBandwidth => f.write_str(
                 "requested tier migration speed exceeds the physical bus bandwidth limit",
+            ),
+            MigrationError::CriticalSystemPressure => f.write_str(
+                "background migration refused due to critical system load or memory pressure",
             ),
         }
     }
@@ -119,6 +124,26 @@ pub fn validate_migration_speed(
         return Err(MigrationError::ExceedsBusBandwidth);
     }
     Ok(())
+}
+
+/// Throttles the background memory demotion speed based on system load average and memory pressure.
+///
+/// Reacts to severe memory stalls (e.g., >80%) and high load averages to prevent OOM killer triggers.
+/// If pressure is extreme, it returns a semantic error to refuse demotion entirely.
+pub fn throttle_demotion_speed(
+    base_bytes_per_sec: u64,
+    load_average: f64,
+    memory_pressure: f64,
+) -> Result<u64, MigrationError> {
+    if memory_pressure >= 0.95 || load_average >= 20.0 {
+        Err(MigrationError::CriticalSystemPressure)
+    } else if memory_pressure > 0.8 || load_average > 10.0 {
+        Ok(base_bytes_per_sec / 10)
+    } else if memory_pressure > 0.5 || load_average > 5.0 {
+        Ok(base_bytes_per_sec / 2)
+    } else {
+        Ok(base_bytes_per_sec)
+    }
 }
 
 /// Validates that a requested tier resize is within physical hardware limits.
@@ -199,6 +224,26 @@ mod tests {
         assert_eq!(
             validate_migration_speed(2 * GIB, GIB),
             Err(MigrationError::ExceedsBusBandwidth)
+        );
+    }
+
+    #[test]
+    fn demotion_speed_is_throttled_under_pressure() {
+        let base = 1000;
+
+        assert_eq!(throttle_demotion_speed(base, 1.0, 0.1), Ok(1000));
+        assert_eq!(throttle_demotion_speed(base, 6.0, 0.1), Ok(500));
+        assert_eq!(throttle_demotion_speed(base, 1.0, 0.6), Ok(500));
+        assert_eq!(throttle_demotion_speed(base, 11.0, 0.1), Ok(100));
+        assert_eq!(throttle_demotion_speed(base, 1.0, 0.85), Ok(100));
+
+        assert_eq!(
+            throttle_demotion_speed(base, 25.0, 0.1),
+            Err(MigrationError::CriticalSystemPressure)
+        );
+        assert_eq!(
+            throttle_demotion_speed(base, 1.0, 0.96),
+            Err(MigrationError::CriticalSystemPressure)
         );
     }
 
