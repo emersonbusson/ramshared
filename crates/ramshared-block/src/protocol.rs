@@ -183,4 +183,18 @@ mod tests {
         assert_eq!(Command::from_u16(2), Command::Disc);
         assert_eq!(Command::from_u16(99), Command::Unknown(99));
     }
+
+    #[test]
+    fn adversarial_fuzzing_decoder_zero_panics() {
+        let mut state = 0xdeadbeefu32;
+        let mut next_byte = || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 24) as u8
+        };
+        for _ in 0..100_000 {
+            let len = (next_byte() % 128) as usize;
+            let buf: Vec<u8> = (0..len).map(|_| next_byte()).collect();
+            let _ = parse_request(&buf);
+        }
+    }
 }
