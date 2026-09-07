@@ -20,13 +20,25 @@ pub fn parse_meminfo_fallback(content: &str) -> Option<PsiSample> {
 
     for line in content.lines() {
         if let Some(rest) = line.strip_prefix("MemTotal:") {
-            mem_total = rest.split_whitespace().next().and_then(|s| s.parse::<f32>().ok());
+            mem_total = rest
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse::<f32>().ok());
         } else if let Some(rest) = line.strip_prefix("MemAvailable:") {
-            mem_available = rest.split_whitespace().next().and_then(|s| s.parse::<f32>().ok());
+            mem_available = rest
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse::<f32>().ok());
         } else if let Some(rest) = line.strip_prefix("SwapTotal:") {
-            swap_total = rest.split_whitespace().next().and_then(|s| s.parse::<u64>().ok());
+            swap_total = rest
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse::<u64>().ok());
         } else if let Some(rest) = line.strip_prefix("SwapFree:") {
-            swap_free = rest.split_whitespace().next().and_then(|s| s.parse::<u64>().ok());
+            swap_free = rest
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse::<u64>().ok());
         }
     }
 
@@ -51,10 +63,13 @@ pub fn parse_meminfo_fallback(content: &str) -> Option<PsiSample> {
 /// Core logic for `read_psi` with dependency injection for the file path.
 fn read_psi_impl(path: &str) -> Result<PsiSample> {
     match std::fs::read_to_string(path) {
-        Ok(raw) => parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível")),
+        Ok(raw) => {
+            parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))
+        }
         Err(e) if e.kind() == ErrorKind::NotFound => {
             let meminfo = std::fs::read_to_string("/proc/meminfo")?;
-            parse_meminfo_fallback(&meminfo).ok_or_else(|| Error::new(ErrorKind::InvalidData, "Meminfo unreadable"))
+            parse_meminfo_fallback(&meminfo)
+                .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Meminfo unreadable"))
         }
         Err(e) => Err(e),
     }
