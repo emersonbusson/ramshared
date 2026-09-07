@@ -492,6 +492,16 @@
       "freshnessDays": 90,
       "verification": { "state": "unverified" },
       "registeredAt": "2026-09-06T12:00:00Z"
+    },
+    {
+      "id": "docs-jules-findings-swap-wake",
+      "pattern": "docs/jules/findings/swap_wake.md",
+      "owner": "docs",
+      "canonicalSource": "docs/jules/findings/swap_wake.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-09-07T07:28:00Z"
     }
   ],
   "exclusions": [
