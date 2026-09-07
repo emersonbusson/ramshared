@@ -492,6 +492,16 @@
       "freshnessDays": 90,
       "verification": { "state": "unverified" },
       "registeredAt": "2026-09-06T12:00:00Z"
+    },
+    {
+      "id": "zram-resume-activation-trap",
+      "pattern": "docs/jules/findings/zram-resume-activation-trap.md",
+      "owner": "jules",
+      "canonicalSource": "docs/jules/findings/zram-resume-activation-trap.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-09-06T00:00:00Z"
     }
   ],
   "exclusions": [
