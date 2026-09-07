@@ -7,6 +7,8 @@
 
 pub mod hash;
 pub mod pattern;
+pub mod telemetry;
 
 pub use hash::{ChecksumMismatchError, ChecksumTable, block_hash};
 pub use pattern::{IntegrityError, Pattern, fill_block, verify_block};
+pub use telemetry::IntegrityTelemetry;
