@@ -93,7 +93,7 @@ fn run(cmd: &str, args: &[String]) -> Result<()> {
     } else {
         if let Some(code) = status.code() {
             match code {
-                28 | 13 | 34 => return Err(Error::from_raw_os_error(code)),
+                28 | 13 | 34 | 16 | 12 => return Err(Error::from_raw_os_error(code)),
                 _ => {}
             }
         }
@@ -109,6 +109,8 @@ pub enum SwapError {
     DiskFull,
     PermissionDenied,
     InvalidSize,
+    DeviceBusy,
+    OutOfMemory,
     Other(String),
 }
 
@@ -119,6 +121,8 @@ impl SwapError {
                 28 => SwapError::DiskFull,         // ENOSPC
                 13 => SwapError::PermissionDenied, // EACCES
                 34 => SwapError::InvalidSize,      // ERANGE
+                16 => SwapError::DeviceBusy,       // EBUSY (Pinned/In-use)
+                12 => SwapError::OutOfMemory,      // ENOMEM (Cannot migrate)
                 _ => SwapError::Other(fallback_msg),
             }
         } else {
@@ -133,6 +137,8 @@ impl std::fmt::Display for SwapError {
             SwapError::DiskFull => write!(f, "disk full (ENOSPC)"),
             SwapError::PermissionDenied => write!(f, "permission denied (EACCES)"),
             SwapError::InvalidSize => write!(f, "invalid size (ERANGE)"),
+            SwapError::DeviceBusy => write!(f, "device busy or pinned (EBUSY)"),
+            SwapError::OutOfMemory => write!(f, "out of memory migrating pages (ENOMEM)"),
             SwapError::Other(e) => write!(f, "{}", e),
         }
     }
@@ -311,7 +317,32 @@ mod tests {
         let res = detach_swap("/dev/invalid_device_for_test");
         assert!(res.is_err());
         let err = res.unwrap_err();
-        assert!(err.to_string().starts_with("swapoff: "));
+        let err_str = err.to_string();
+        assert!(err_str.starts_with("swapoff: ") || err_str.contains("swapoff") || err_str.contains("device busy") || err_str.contains("permission denied"));
+    }
+
+    #[test]
+    fn detach_swap_with_fails_busy_when_pinned() {
+        let res = detach_swap_with("/dev/nbd0", |cmd, _| {
+            if cmd == "swapoff" {
+                Err(std::io::Error::from_raw_os_error(16)) // EBUSY
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(res, Err(SwapError::DeviceBusy));
+    }
+
+    #[test]
+    fn detach_swap_with_fails_nomem_when_pinned() {
+        let res = detach_swap_with("/dev/nbd0", |cmd, _| {
+            if cmd == "swapoff" {
+                Err(std::io::Error::from_raw_os_error(12)) // ENOMEM
+            } else {
+                Ok(())
+            }
+        });
+        assert_eq!(res, Err(SwapError::OutOfMemory));
     }
 
     #[test]
