@@ -10,3 +10,6 @@ publish.workspace = true
 [lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+
+[dependencies]
+xxhash-rust = { version = "0.8.18", features = ["xxh3"] }

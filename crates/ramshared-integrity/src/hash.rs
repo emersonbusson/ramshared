@@ -6,17 +6,12 @@ use std::fmt;
 
 pub const DEFAULT_BLOCK_SIZE: usize = 4096;
 
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 
-/// FNV-1a 64-bit hash over block bytes.
+
+
+/// xxHash3 64-bit hash over block bytes.
 pub fn block_hash(data: &[u8]) -> u64 {
-    let mut h = FNV_OFFSET;
-    for &b in data {
-        h ^= b as u64;
-        h = h.wrapping_mul(FNV_PRIME);
-    }
-    h
+    xxhash_rust::xxh3::xxh3_64(data)
 }
 
 /// Semantic error for block verification failures.

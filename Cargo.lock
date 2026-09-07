@@ -629,6 +629,9 @@ dependencies = [
 [[package]]
 name = "ramshared-integrity"
 version = "0.1.0"
+dependencies = [
+ "xxhash-rust",
+]
 
 [[package]]
 name = "ramshared-tier"
@@ -1171,6 +1174,12 @@ name = "winnow"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0592e1c9d151f854e6fd382574c3a0855250e1d9b2f99d9281c6e6391af352f1"
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aee1b19627c7c60102ab80d3a9cbe18de90bfe03bfa6c3715447681f0e8c8af6"
 
 [[package]]
 name = "zmij"
