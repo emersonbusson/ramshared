@@ -91,7 +91,9 @@ impl WinDriveConfig {
                 detail: format!("config exceeds {MAX_CONFIG_BYTES} bytes"),
             });
         }
-        let root: Root = toml::from_str(text).map_err(|e| ConfigError::Parse(e.to_string()))?;
+        let deserializer = toml::Deserializer::parse(text).map_err(|e| ConfigError::Parse(e.to_string()))?;
+        let root: Root = serde_path_to_error::deserialize(deserializer)
+            .map_err(|e| ConfigError::Parse(e.to_string()))?;
         root.win_drive.validate()?;
         Ok(root.win_drive)
     }
