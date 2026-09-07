@@ -239,7 +239,23 @@ mod windows_svc {
         let notifier_for_monitor = Arc::clone(&resume_notifier);
         let done_for_monitor = Arc::clone(&monitor_done);
         let status_monitor = thread::spawn(move || {
+            let mut stop_deadline: Option<std::time::Instant> = None;
             while !done_for_monitor.load(Ordering::Acquire) {
+                let is_stop = stop_for_monitor.load(Ordering::Acquire);
+
+                if is_stop && stop_deadline.is_none() {
+                    stop_deadline = Some(std::time::Instant::now() + Duration::from_secs(28));
+                } else if !is_stop {
+                    stop_deadline = None;
+                }
+
+                if let Some(deadline) = stop_deadline {
+                    if std::time::Instant::now() >= deadline {
+                        eprintln!("SCM STOP timeout exceeded, aborting worker loops");
+                        std::process::exit(1);
+                    }
+                }
+
                 if notifier_for_monitor.load(Ordering::Acquire) {
                     // Keep the one SCM STOP transaction pending. Briefly
                     // resume the I/O loop, then retry the safety gates.
