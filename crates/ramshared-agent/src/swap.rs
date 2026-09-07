@@ -140,6 +140,8 @@ impl std::fmt::Display for SwapError {
 
 impl std::error::Error for SwapError {}
 
+static SWAP_OP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub fn attach_swap_with<F>(
     endpoint: &NbdEndpoint,
     export: &str,
@@ -150,6 +152,8 @@ pub fn attach_swap_with<F>(
 where
     F: FnMut(&str, &[String]) -> Result<()>,
 {
+    let _guard = SWAP_OP_LOCK.lock().map_err(|_| SwapError::Other("lock poisoned".into()))?;
+
     run_cmd("nbd-client", &nbd_args(endpoint, export, dev)).map_err(|e| {
         let msg = format!("nbd-client: {e}");
         SwapError::from_io_err(e, msg)
@@ -181,6 +185,8 @@ pub fn detach_swap_with<F>(dev: &str, mut run_cmd: F) -> std::result::Result<(),
 where
     F: FnMut(&str, &[String]) -> Result<()>,
 {
+    let _guard = SWAP_OP_LOCK.lock().map_err(|_| SwapError::Other("lock poisoned".into()))?;
+
     run_cmd("swapoff", &[dev.to_string()]).map_err(|e| {
         let msg = format!("swapoff: {e}");
         SwapError::from_io_err(e, msg)
@@ -340,5 +346,60 @@ mod tests {
             .expect("should succeed within bounds");
         validate_swap_resize(64 * 1024 * 1024, 64 * 1024 * 1024)
             .expect("should succeed at exact bounds");
+    }
+
+    #[test]
+    fn concurrent_swap_attach_detach_lock_safety() {
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+
+        let inflight = Arc::new(Mutex::new(0));
+
+        let ep = NbdEndpoint::Unix {
+            path: "/sock".into(),
+        };
+
+        let mut handles = vec![];
+
+        // Thread 1: attach
+        let inflight_clone = Arc::clone(&inflight);
+        let ep_clone = ep.clone();
+        handles.push(thread::spawn(move || {
+            let _ = attach_swap_with(
+                &ep_clone,
+                "export",
+                "/dev/nbd0",
+                None,
+                |_, _| {
+                    let mut count = inflight_clone.lock().unwrap();
+                    assert!(*count == 0, "Race detected: concurrent swap operations");
+                    *count += 1;
+                    drop(count);
+                    thread::sleep(std::time::Duration::from_millis(50));
+                    let mut count = inflight_clone.lock().unwrap();
+                    *count -= 1;
+                    Ok(())
+                },
+            );
+        }));
+
+        // Thread 2: detach
+        let inflight_clone2 = Arc::clone(&inflight);
+        handles.push(thread::spawn(move || {
+            let _ = detach_swap_with("/dev/nbd0", |_, _| {
+                let mut count = inflight_clone2.lock().unwrap();
+                assert!(*count == 0, "Race detected: concurrent swap operations");
+                *count += 1;
+                drop(count);
+                thread::sleep(std::time::Duration::from_millis(50));
+                let mut count = inflight_clone2.lock().unwrap();
+                *count -= 1;
+                Ok(())
+            });
+        }));
+
+        for h in handles {
+            h.join().unwrap();
+        }
     }
 }
