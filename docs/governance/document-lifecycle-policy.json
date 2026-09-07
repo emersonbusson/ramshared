@@ -492,6 +492,16 @@
       "freshnessDays": 90,
       "verification": { "state": "unverified" },
       "registeredAt": "2026-09-06T12:00:00Z"
+    },
+    {
+      "id": "agent-findings-reports",
+      "pattern": "docs/jules/findings/**/*.md",
+      "owner": "architecture",
+      "canonicalSource": "ARCHITECTURE.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-09-06T12:00:00Z"
     }
   ],
   "exclusions": [
