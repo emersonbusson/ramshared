@@ -1039,8 +1039,9 @@ mod join_tests {
     fn ublk_device_destroy_and_recreate_recovery() {
         use crate::ublk_control;
 
-        let report = ublk_control::add_device("/dev/ublk-control", ublk_control::DeviceSpec::smoke_auto())
-            .expect("ublk ADD_DEV phase 1");
+        let report =
+            ublk_control::add_device("/dev/ublk-control", ublk_control::DeviceSpec::smoke_auto())
+                .expect("ublk ADD_DEV phase 1");
 
         let char_path = format!("/dev/ublkc{}", report.dev_id);
 
@@ -1053,7 +1054,8 @@ mod join_tests {
 
         ublk_control::stop_dev("/dev/ublk-control", report.dev_id).expect("ublk STOP_DEV phase 1");
         server.join().expect("server loop terminated ok phase 1");
-        ublk_control::delete_device("/dev/ublk-control", report.dev_id).expect("ublk DEL_DEV phase 1");
+        ublk_control::delete_device("/dev/ublk-control", report.dev_id)
+            .expect("ublk DEL_DEV phase 1");
 
         // Wait until device is gone
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -1062,8 +1064,9 @@ mod join_tests {
         }
 
         // Recreate device
-        let report2 = ublk_control::add_device("/dev/ublk-control", ublk_control::DeviceSpec::smoke_auto())
-            .expect("ublk ADD_DEV phase 2");
+        let report2 =
+            ublk_control::add_device("/dev/ublk-control", ublk_control::DeviceSpec::smoke_auto())
+                .expect("ublk ADD_DEV phase 2");
 
         let char_path2 = format!("/dev/ublkc{}", report2.dev_id);
 
@@ -1076,7 +1079,8 @@ mod join_tests {
 
         ublk_control::stop_dev("/dev/ublk-control", report2.dev_id).expect("ublk STOP_DEV phase 2");
         server2.join().expect("server loop terminated ok phase 2");
-        ublk_control::delete_device("/dev/ublk-control", report2.dev_id).expect("ublk DEL_DEV phase 2");
+        ublk_control::delete_device("/dev/ublk-control", report2.dev_id)
+            .expect("ublk DEL_DEV phase 2");
     }
 }
 
