@@ -157,6 +157,22 @@ impl SliceMap {
         Ok(())
     }
 
+    /// `Leased → Free` (atomic multi-slice lease release). Err if any non-`Leased`.
+    pub fn unlease_all(&mut self, ids: &[SliceId]) -> Result<(), SliceError> {
+        for &id in ids {
+            let s = self.get(id).ok_or(SliceError::UnknownSlice)?;
+            if s.state != SliceState::Leased {
+                return Err(SliceError::BadState { have: s.state });
+            }
+        }
+        for &id in ids {
+            if let Ok(s) = self.get_mut(id) {
+                s.state = SliceState::Free;
+            }
+        }
+        Ok(())
+    }
+
     /// NBD export names per slice: `("s0", len), ("s1", len), ...` (DT-3/DT-21).
     pub fn exports(&self) -> Vec<(String, u64)> {
         self.slices
@@ -251,6 +267,23 @@ mod tests {
         m.lease(0).unwrap();
         assert_eq!(m.get(0).unwrap().state, SliceState::Leased);
         m.unlease(0).unwrap();
+        assert_eq!(m.get(0).unwrap().state, SliceState::Free);
+    }
+
+    #[test]
+    fn unlease_all_is_atomic() {
+        let mut m = SliceMap::new(2, 64, 128).unwrap();
+        m.lease(0).unwrap();
+
+        // unlease_all rejects partial leased state and does not modify the map.
+        assert_eq!(
+            m.unlease_all(&[0, 1]),
+            Err(SliceError::BadState { have: SliceState::Free })
+        );
+        assert_eq!(m.get(0).unwrap().state, SliceState::Leased); // Should still be leased
+
+        m.lease(1).unwrap();
+        assert_eq!(m.unlease_all(&[0, 1]), Ok(())); // Should succeed atomcially now
         assert_eq!(m.get(0).unwrap().state, SliceState::Free);
     }
 

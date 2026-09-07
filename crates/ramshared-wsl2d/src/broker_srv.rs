@@ -468,9 +468,7 @@ impl BrokerCore {
             .filter(|s| s.state == SliceState::Leased)
             .map(|s| s.id)
             .collect();
-        for slice in leased {
-            let _ = self.slice_map.unlease(slice); // Leased → Free (round-robin re-leases)
-        }
+        let _ = self.slice_map.unlease_all(&leased);
         out.push(Outbound::Log(format!(
             "[ramsharedd] lease {lease_id} liberado; slices devolvidas ao tier de swap"
         )));
@@ -501,9 +499,7 @@ impl BrokerCore {
             .filter(|s| s.state == SliceState::Leased)
             .map(|s| s.id)
             .collect();
-        for slice in leased {
-            let _ = self.slice_map.unlease(slice);
-        }
+        let _ = self.slice_map.unlease_all(&leased);
         out.push(Outbound::Log(format!(
             "[ramsharedd] lease {lease_id} liberado; slices devolvidas ao tier de swap"
         )));
