@@ -193,16 +193,28 @@ fn diagnose_events(events: &[Event]) -> Diagnosis {
         }
 
         if let Some(state) = event.acpi_sleep_state.as_deref() {
-            if !diagnosis.acpi_sleep_states.iter().any(|existing| existing == state) {
+            if !diagnosis
+                .acpi_sleep_states
+                .iter()
+                .any(|existing| existing == state)
+            {
                 diagnosis.acpi_sleep_states.push(state.to_string());
-                diagnosis.timeline.push(format!("{} ACPI sleep state={state}", ts(event)));
+                diagnosis
+                    .timeline
+                    .push(format!("{} ACPI sleep state={state}", ts(event)));
             }
         }
 
         if let Some(mgmt) = event.gpu_power_mgmt.as_deref() {
-            if !diagnosis.gpu_power_mgmt.iter().any(|existing| existing == mgmt) {
+            if !diagnosis
+                .gpu_power_mgmt
+                .iter()
+                .any(|existing| existing == mgmt)
+            {
                 diagnosis.gpu_power_mgmt.push(mgmt.to_string());
-                diagnosis.timeline.push(format!("{} GPU power management={mgmt}", ts(event)));
+                diagnosis
+                    .timeline
+                    .push(format!("{} GPU power management={mgmt}", ts(event)));
             }
         }
     }
@@ -235,9 +247,15 @@ fn recommendations(d: &Diagnosis) -> Vec<String> {
         recs.push("Page I/O is high. Compare zram, VRAM, and disk tier priorities before increasing VRAM capacity.".to_string());
     }
     if d.acpi_sleep_states.iter().any(|s| s == "S3" || s == "S4") {
-        recs.push("ACPI sleep state observed. Ensure write caches were flushed before suspend.".to_string());
+        recs.push(
+            "ACPI sleep state observed. Ensure write caches were flushed before suspend."
+                .to_string(),
+        );
     }
-    if d.gpu_power_mgmt.iter().any(|m| m == "disabled" || m == "none") {
+    if d.gpu_power_mgmt
+        .iter()
+        .any(|m| m == "disabled" || m == "none")
+    {
         recs.push("GPU power management disabled. High power draw may trigger thermal throttling or PCIe resets.".to_string());
     }
     if recs.is_empty() {
