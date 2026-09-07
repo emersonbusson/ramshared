@@ -318,7 +318,12 @@ mod tests {
         assert!(res.is_err());
         let err = res.unwrap_err();
         let err_str = err.to_string();
-        assert!(err_str.starts_with("swapoff: ") || err_str.contains("swapoff") || err_str.contains("device busy") || err_str.contains("permission denied"));
+        assert!(
+            err_str.starts_with("swapoff: ")
+                || err_str.contains("swapoff")
+                || err_str.contains("device busy")
+                || err_str.contains("permission denied")
+        );
     }
 
     #[test]
