@@ -417,9 +417,15 @@ mod tests {
 
         assert_eq!(read_msg(&mut cur).unwrap().unwrap(), Msg::Status);
 
-        assert!(matches!(read_msg(&mut cur).unwrap_err(), ProtocolError::PayloadTooLarge));
+        assert!(matches!(
+            read_msg(&mut cur).unwrap_err(),
+            ProtocolError::PayloadTooLarge
+        ));
 
-        assert!(matches!(read_msg(&mut cur).unwrap_err(), ProtocolError::BadMagic(_)));
+        assert!(matches!(
+            read_msg(&mut cur).unwrap_err(),
+            ProtocolError::BadMagic(_)
+        ));
 
         assert_eq!(read_msg(&mut cur).unwrap().unwrap(), Msg::Ack);
     }
