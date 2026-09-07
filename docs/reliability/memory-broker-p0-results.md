@@ -66,10 +66,10 @@ Honest baseline (no custom code). Compare with Phase B: **p50 241 µs (ublk) / 3
 | generic CUDA VRAM workload, 1024 MiB hold 35 s | RTX 2060 / 6144 MiB | 2648 loaded peak (idle peak 1525; recovery peak 1540) | captured in artifact JSON | PASS: aggregate VRAM pressure observed and recovered near idle | 2026-07-17 |
 | daemon DEMOTE correlation under external pressure | RTX 2060 / 6144 MiB | 5607 MiB used peak; 348 MiB free minimum | integrity worker verified all allocated chunks; 2 DEMOTEs | PASS: `GlobalGpuFreeFloor` observed under a generic 4096 MiB external workload, checksums matched, and teardown was clean | 2026-07-22 |
 
-> **Sampler validated on dev-host** (RTX 2060): captures VRAM (nvidia-smi) + RAM free OK (e.g. VRAM 2015→1828 MiB / 6144, RAM free ~3670 MiB). **Bug caught in validation** (rule "run on host first", #13): `Get-Counter '\Memory\Available MBytes'` is **localized** and breaks on pt-BR Windows → swapped for CIM `Win32_OperatingSystem.FreePhysicalMemory` (locale-neutral). 2026-07-17 artifact: `C:\ramshared\artifacts\gpu-workload-gate-20260717-224420`; the workload is synthetic and app-agnostic by design, so it proves WDDM/CUDA VRAM pressure and recovery, not process attribution.
+> **Sampler validated on dev-host** (RTX 2060): captures VRAM (nvidia-smi) + RAM free OK (e.g. VRAM 2015→1828 MiB / 6144, RAM free ~3670 MiB). **Bug caught in validation** (rule "run on host first", #13): `Get-Counter '\Memory\Available MBytes'` is **localized** and breaks on pt-BR Windows → swapped for CIM `Win32_OperatingSystem.FreePhysicalMemory` (locale-neutral). 2026-07-17 artifact: `<artifacts-dir>\SANITIZED_RUN_REF_GPU_WORKLOAD_GATE`; the workload is synthetic and app-agnostic by design, so it proves WDDM/CUDA VRAM pressure and recovery, not process attribution.
 
 The daemon correlation row is closed by
-`C:\ramshared\artifacts\shared-wsl-pressure-20260722-015303`: a 4096 MiB
+`<artifacts-dir>\SANITIZED_RUN_REF_SHARED_WSL_PRESSURE`: a 4096 MiB
 external CUDA workload drove global free VRAM to 348 MiB, the daemon recorded
 two `GlobalGpuFreeFloor` DEMOTEs, the integrity worker retained matching
 checksums, and the terminal health snapshot had no daemon, NBD/VRAM swap, or

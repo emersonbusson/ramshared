@@ -194,7 +194,7 @@ wslconfig_render_host() {
 # Paths use forward slashes only (WSL escape-safe). See scripts/safety/wslconfig.host.example.
 
 [wsl2]
-# 16 GiB WSL hard cap; host residual for Windows + Hyper-V (civm, win11-drill).
+# 16 GiB WSL hard cap; host residual for Windows + Hyper-V (isolated guest VMs).
 memory=${mem}
 # 4 GiB WSL fallback; preserve an existing swapFile path or use WSL's default.
 swap=${swap}

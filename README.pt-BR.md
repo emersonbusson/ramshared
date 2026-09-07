@@ -134,25 +134,7 @@ Métricas reais coletadas no hardware de produção (NVIDIA GeForce RTX 2060 via
 │ 1. Swap Padrão WSL2    │ Arquivo VHDX virtualizado no SSD │ 0,06 GB/s (63 MB/s)     │ 0,08 GB/s (85 MB/s)     │ ~30.000 µs (30ms) │ ~4.000 ms Transferência │
 │ 2. Primeira Versão     │ Socket NBD + Buffers Normais     │ 3,71 GB/s (3.798 MB/s)  │ 5,58 GB/s (5.714 MB/s)  │ ~326–550 µs       │ 67,4 ms Transferência   │
 │ 3. Pinned DMA + ublk   │ Hardware Pinned DMA + ublk/uring │ 6,38 GB/s (6.530 MB/s)  │ 8,74 GB/s (8.947 MB/s)  │ 231 µs (0,23 ms)  │ 28,6–39,2 ms Transfer   │
-│ 4. Multi-Tier Seguro   │ DMA Direto + VirtDisk / ublk     │ 9,09 GB/s DMA Direto    │ 9,09 GB/s (+25,7% veloc)│ 0,00 ms Latência  │ PASS_ZERO_PANIC (100%)  │
 └────────────────────────┴──────────────────────────────────┴─────────────────────────┴─────────────────────────┴───────────────────┴─────────────────────────┘
-```
-
-#### Relatório de Qualificação de Bateria de Stress (Hardware de Produção):
-
-```text
-══════════════════════════════════════════════════════════════════════════════════
- 📊 RELATÓRIO DE QUALIFICAÇÃO DA BATERIA DE STRESS (HARDWARE DE PRODUÇÃO):
-  • Modo de Execução:        QUALIFICAÇÃO COMPLETA MULTI-TIER EM CASCATA (HOLD 180s)
-  • Índice de Pressão:       10.0 / 10.0 (Governador Dinâmico Seguro em Malha Fechada)
-  • Ciclos Ativos de E/S:    296 ciclos completos (sustentação contínua de 180s)
-  • Swap Total de Pico:      9.216 MB (100% de Capacidade em Todas as Camadas)
-  • Tier 1 (ZRAM Swap):      1.024 MB Pico (100% capacidade) ── 🟢 QUALIFICADO (LZ4 em RAM)
-  • Tier 2 (GPU VRAM Swap):  4.096 MB Pico (100% capacidade) ── 🟢 QUALIFICADO (PCIe DMA)
-  • Tier 3 (Armazenamento):  4.096 MB Pico (100% capacidade) ── 🟢 QUALIFICADO (Fallback SSD)
-  • Velocidade de Retorno:   100,00 GB/s (Retorno atômico delimitado ao host)
-  • Veredito de Estabilidade:🟢 PASS_ZERO_PANIC (Fail-Closed, Zero Vazamentos)
-══════════════════════════════════════════════════════════════════════════════════
 ```
 
 O uso de memória travada em página (`cuMemHostAlloc`) e do driver de bloco nativo `ublk` (`io_uring`) entrega ~100x mais velocidade de leitura e ~130x menor latência em relação ao swap padrão em VHDX, eliminando congelamentos de tela com 100% de integridade criptográfica (zero corrupção de dados).

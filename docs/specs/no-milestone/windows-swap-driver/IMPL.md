@@ -107,10 +107,10 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 # 2) Espelhar + Hyper-V elevado
 rsync -a --delete --exclude target --exclude .git \
-  ./ /mnt/c/Users/emedev/ramshared-src/
+  ./ /mnt/c/Users/<user>/ramshared-src/
 export RAMSHARED_DRILL_PASSWORD='…'  # lab only
 ./scripts/windows/wsl-elevated-ps.sh -File \
-  'C:\ramshared\src\scripts\windows\Invoke-DisciplinedCampaign.ps1'
+  'C:\path\to\ramshared\src\scripts\windows\Invoke-DisciplinedCampaign.ps1'
 ```
 
 ## Gaps

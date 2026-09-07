@@ -234,7 +234,7 @@ mod tests {
     fn telemetry_sample_serializes_flat_jsonl() {
         // RF-5/DT-8: `core` is flattened at the root level (one JSON line) + flag in snake_case.
         let core = TelemetryCore {
-            tenant: Some("civm".into()),
+            tenant: Some("guest-tenant".into()),
             slice: None,
             swap_used: 1024,
             alloc_active: 2048,

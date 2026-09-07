@@ -55,14 +55,32 @@ export const REPOSITORY_BOUNDARY_RULES = [
     description: 'Raw host filesystem path or out-of-tree mount leaked into repo documentation',
     // Matches raw Windows drive paths or /mnt/<drive>/ out-of-tree mounts,
     // but excludes standard Windows system paths, ProgramData\RamShared, and documentation placeholders.
-    regex: /(?:\b[A-Za-z]:\\(?!Windows\\|Program Files|ProgramData\\RamShared\\|path\\to\\|example\\|pagefile\.sys)[^\s"'`<>|]+|\/(?:mnt|mnt\/host)\/[a-z]\/(?!path\/to\/)[^\s"'`<>|]+)/i,
+    regex: /(?:\b[A-Za-z]:[\\/]+(?!(?:[\\/]*(?:Windows|Program Files|ProgramData|path|example)|pagefile\.sys))[^\s"'`<>|]+|\/(?:mnt|mnt\/host)\/[a-z]\/(?!(?:Windows|ProgramData|path|example)\/)[^\s"'`<>|]+)/i,
     remediation: 'Use repository-relative paths ($REPO_ROOT), generic placeholders (<drive>:\\...), or standard Linux paths.',
   },
   {
     name: 'foreign-project-cross-contamination',
     description: 'Cross-contamination from external private repositories or out-of-tree projects',
-    regex: /\b(?:civm|jules-operator|jules\/inbox|advoq)\b/i,
+    regex: /\b(?:civm|jules-operator|advoq)\b/i,
     remediation: 'RamShared is strictly open-source. Replace foreign project references with generic terms (e.g. "isolated VM", "QEMU environment").',
+  },
+  {
+    name: 'developer-username-leak',
+    description: 'Private workstation developer username leaked into documentation or scripts',
+    regex: /(?:(?:\/home\/|\\Users\\)(?:emedev|emdev)\b|\bemedev\b)/i,
+    remediation: 'Use generic placeholders (<user>, $env:USERNAME, or standard user placeholders).',
+  },
+  {
+    name: 'private-volume-label',
+    description: 'Physical host volume labels leaked into documentation',
+    regex: /\b(?:ESPANHA|RUSSIA)\b/,
+    remediation: 'Use generic storage labels (<lab-drive>, <backup-drive>, Secondary Storage).',
+  },
+  {
+    name: 'workstation-hostname-leak',
+    description: 'Private developer workstation hostname leaked into documentation',
+    regex: /\b(?:EMEDEV)\b/,
+    remediation: 'Use canonical placeholder dev-workstation.',
   },
   {
     name: 'unredacted-private-vm-identity',
@@ -84,6 +102,7 @@ export const BOUNDARY_PROTECTED_FILES = [
   'README.md',
   'README.pt-BR.md',
   'ARCHITECTURE.md',
+  'CHANGELOG.md',
   'docs/FAQ.md',
   'docs/DEVELOPER-GUIDE.md',
   'docs/OPERATOR-GUIDE.md',
@@ -95,6 +114,9 @@ export const BOUNDARY_PROTECTED_DIRS = [
   '.claude/rules',
   'docs/methodology',
   'docs/governance',
+  'docs/labs',
+  'docs/runbooks',
+  'docs/reliability',
 ]
 
 function scanDirectory(dir, filter, list = []) {

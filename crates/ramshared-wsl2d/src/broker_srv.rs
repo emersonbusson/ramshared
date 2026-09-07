@@ -991,7 +991,7 @@ fn core_loop(
     // by messages. Pure `recv_timeout(tick)` never expires under normal `Psi` flow
     // (~1/s per tenant) → the arbiter would never run `AssignFree`/rebalance. Here the wait shrinks
     // as messages arrive, and the Tick fires when the deadline passes, regardless of
-    // message rate. (Bug caught in e2e cross-host civm; the QEMU drill passed by luck of timing.)
+    // message rate. (Bug caught in e2e cross-host multi-tenant; the QEMU drill passed by luck of timing.)
     let mut next_tick = Instant::now() + tick;
     loop {
         if shutdown.load(Ordering::SeqCst) {

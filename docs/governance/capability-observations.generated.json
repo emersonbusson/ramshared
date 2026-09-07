@@ -349,11 +349,7 @@
         "registry_state": null
       },
       "documented_surface": {
-        "implementation_paths": [
-          "scripts/windows/Get-LinuxKernelLabAccess.ps1",
-          "scripts/windows/Invoke-LinuxKernelLabCapabilityAudit.ps1",
-          "scripts/windows/Test-LinuxKernelLabCapabilityAuditStatic.ps1"
-        ],
+        "implementation_paths": [],
         "test_paths": []
       },
       "documents": {

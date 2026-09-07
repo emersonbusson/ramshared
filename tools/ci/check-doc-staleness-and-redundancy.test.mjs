@@ -155,11 +155,40 @@ test('checkDocStalenessAndRedundancy: detects unredacted private lab VM identiti
   )
 })
 
+test('checkDocStalenessAndRedundancy: detects developer username, volume labels, and hostname leaks', () => {
+  const temp = mkdtempSync(path.join(tmpdir(), 'doc-staleness-test-'))
+  const userPath = ['/', 'home', 'emedev', 'test'].join('/')
+  writeFileSync(
+    path.join(temp, 'AGENTS.md'),
+    `# Agents\nRun script on ${userPath} or \\Users\\emdev\\data, mount ESPANHA or RUSSIA label, workstation EMEDEV.`
+  )
+
+  const result = checkDocStalenessAndRedundancy({
+    root: temp,
+    boundaryFiles: ['AGENTS.md'],
+    boundaryDirs: [],
+    skipBrokenLinks: true,
+  })
+  assert.equal(result.ok, false)
+  assert.ok(
+    result.findings.some((f) => f.includes('developer-username-leak') && f.includes('emedev'))
+  )
+  assert.ok(
+    result.findings.some((f) => f.includes('private-volume-label') && f.includes('ESPANHA'))
+  )
+  assert.ok(
+    result.findings.some((f) => f.includes('private-volume-label') && f.includes('RUSSIA'))
+  )
+  assert.ok(
+    result.findings.some((f) => f.includes('workstation-hostname-leak') && f.includes('EMEDEV'))
+  )
+})
+
 test('checkDocStalenessAndRedundancy: allows canonical paths, placeholders, and sanitized generic terms', () => {
   const temp = mkdtempSync(path.join(tmpdir(), 'doc-staleness-test-'))
   writeFileSync(
     path.join(temp, 'README.md'),
-    '# RamShared\nConfig is in C:\\ProgramData\\RamShared\\config.toml.\nSystem file: C:\\Windows\\System32\\drivers.\nExample: C:\\path\\to\\dir.\nVirtual swap: X:\\pagefile.sys.\nRun in isolated VM or QEMU environment.'
+    '# RamShared\nConfig is in C:\\ProgramData\\RamShared\\config.toml.\nDouble slash: kernel=C:\\\\path\\\\to\\\\wsl\\kernel-ramshared.\nWSL mount: /mnt/c/Windows/System32/wsl.exe and /mnt/c/path/to/wsl.\nSystem file: C:\\Windows\\System32\\drivers.\nExample: C:\\path\\to\\dir.\nVirtual swap: X:\\pagefile.sys.\nRun in isolated VM or QEMU environment.'
   )
 
   const result = checkDocStalenessAndRedundancy({
@@ -177,3 +206,4 @@ test('checkDocStalenessAndRedundancy: passes on live repository tree', () => {
   assert.equal(result.ok, true, `Expected repo to be clean, got: ${result.findings.join('\n')}`)
   assert.equal(result.findings.length, 0)
 })
+

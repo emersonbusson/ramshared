@@ -426,7 +426,7 @@
 
 ### Documentation
 
-* record win11-drill PSD guest lab drill PASS ([2d07fd4](https://github.com/emersonbusson/ramshared/commit/2d07fd4c716a2ae9a56c1ed2a181b3343cab3164))
+* record isolated-win-vm PSD guest lab drill PASS ([2d07fd4](https://github.com/emersonbusson/ramshared/commit/2d07fd4c716a2ae9a56c1ed2a181b3343cab3164))
 * **ssdv3:** PRD cascade lifecycle observability (Step 1) ([9a88e7e](https://github.com/emersonbusson/ramshared/commit/9a88e7ed85bc423c7229579fb513815ff2989c55))
 * **ssdv3:** SPEC cascade lifecycle observability (Step 2) ([015196f](https://github.com/emersonbusson/ramshared/commit/015196f7c5c6f30e2943aa03d0129c0887af92b1))
 
@@ -513,7 +513,7 @@
 * **mm:** add StorPort virtual miniport sources (ITEM-5) ([f149541](https://github.com/emersonbusson/ramshared/commit/f14954106460d7b77ee5f7a856ed90ad29cd66fe))
 * **mm:** add TransportKind::WinDrive lease-only path (ITEM-3) ([ae9cc44](https://github.com/emersonbusson/ramshared/commit/ae9cc44c86529d5fa8b8613e9d254d6fc7ef5d11))
 * **mm:** auto-recover zero-used cascade orphans after WSL terminate ([688504c](https://github.com/emersonbusson/ramshared/commit/688504c76153b3e7ad16f0b5007d7b2fbc154848))
-* **mm:** build and load StorPort + poolstress on win11-drill ([ad7701b](https://github.com/emersonbusson/ramshared/commit/ad7701ba9b5bc6db375c23ea807244023050043f))
+* **mm:** build and load StorPort + poolstress on isolated-win-vm ([ad7701b](https://github.com/emersonbusson/ramshared/commit/ad7701ba9b5bc6db375c23ea807244023050043f))
 * **mm:** cascade transport auto→NBD on WSL2; boot unit policy ([e0b8a33](https://github.com/emersonbusson/ramshared/commit/e0b8a33cc3446948a1cf872364ab8795085c3f96))
 * **mm:** dedicated residency canary (§9.4) with hysteresis sampler ([#8](https://github.com/emersonbusson/ramshared/issues/8)) ([8fc1a27](https://github.com/emersonbusson/ramshared/commit/8fc1a27f9f98b43558d97f4f0fa4e917b2ed8c26))
 * **mm:** dedicated residency canary (§9.4) with hysteresis sampler ([#8](https://github.com/emersonbusson/ramshared/issues/8)) ([e808daa](https://github.com/emersonbusson/ramshared/commit/e808daa7970fd35f77875281621cbe6dd6fc891f))
@@ -575,7 +575,7 @@
 * **scripts:** harden lab VMs against disk fill and host C: pressure ([7ee3ddf](https://github.com/emersonbusson/ramshared/commit/7ee3ddf05b85a65f598f8fec3be1d5b110eade78))
 * **scripts:** launcher fail-safe — disarm determinístico + retry + finally que não escapa ([#3](https://github.com/emersonbusson/ramshared/issues/3)) ([9fc50da](https://github.com/emersonbusson/ramshared/commit/9fc50dad8dd02751c9444fde009d518e66ad069e))
 * **scripts:** make Windows harnesses parse on PS 5.1 guest ([58c6986](https://github.com/emersonbusson/ramshared/commit/58c698673f21b38a1e564337ee19fc941926c60f))
-* **scripts:** move win11-drill off C: and protect system disk ([5f3bfdc](https://github.com/emersonbusson/ramshared/commit/5f3bfdccb47225e7d7cce43fa2d27cfe2b324f01))
+* **scripts:** move isolated-win-vm off C: and protect system disk ([5f3bfdc](https://github.com/emersonbusson/ramshared/commit/5f3bfdccb47225e7d7cce43fa2d27cfe2b324f01))
 * **scripts:** persist WSL kernel boot logs ([#3](https://github.com/emersonbusson/ramshared/issues/3)) ([f5691f1](https://github.com/emersonbusson/ramshared/commit/f5691f11102b0088fa3f89bc530d79fe9ef10ce8))
 * **windows:** resolve remote driver load and backend loop validation ([14b7900](https://github.com/emersonbusson/ramshared/commit/14b79003007d16732a8efb7c8015c976b73594a1))
 * **wsl2d:** add io_uring smoke gate ([#3](https://github.com/emersonbusson/ramshared/issues/3)) ([a52a2bb](https://github.com/emersonbusson/ramshared/commit/a52a2bb879470118024967787622b7f2250da0de))
@@ -623,7 +623,7 @@
 * add REVIEW-ADR runbook (revisao periodica anti-cargo-cult) ([7549f6f](https://github.com/emersonbusson/ramshared/commit/7549f6f89ac8d3ed6e4cdf045995f6116bd00038))
 * **core:** add kernel-adapted superprompt (noise audit + model clarity) ([823515b](https://github.com/emersonbusson/ramshared/commit/823515b6fac17cd97a1379f1a5a22a2ef21a2c62))
 * **core:** add postmortem + degradation-matrix anchors (Kahneman [#5](https://github.com/emersonbusson/ramshared/issues/5)/[#7](https://github.com/emersonbusson/ramshared/issues/7)) ([a7121e5](https://github.com/emersonbusson/ramshared/commit/a7121e524f2d76335a2de985762c2bdbb939bf4d))
-* **core:** CIVM-TENANT runbook for cross-host e2e (ITEM-12) ([129c177](https://github.com/emersonbusson/ramshared/commit/129c17756a6e712477243c77d888c40bdae3585e))
+* **core:** multi-tenant runbook for cross-host e2e (ITEM-12) ([129c177](https://github.com/emersonbusson/ramshared/commit/129c17756a6e712477243c77d888c40bdae3585e))
 * **core:** DT-29 server-only safety boundary + status updates ([651360b](https://github.com/emersonbusson/ramshared/commit/651360bbfaa4fc4f4f0c2a33d9ab88cf2198cd46))
 * **core:** ITEM-12 Fase B (VRAM cross-host) = PASS ([f134dfa](https://github.com/emersonbusson/ramshared/commit/f134dfa65d75f73ba57914da0fe3e49f2cc8a84d))
 * **core:** MEMORY — fechamento do branch p1-hardening (gate supply-chain + PR) ([afdfd23](https://github.com/emersonbusson/ramshared/commit/afdfd23bc74d025948341977be64d92f6f56401e))
@@ -677,7 +677,7 @@
 * **mm:** record windows-swap-driver IMPL Passo 3 status ([6d3fb4a](https://github.com/emersonbusson/ramshared/commit/6d3fb4a707716e56ccbea1e986da713349a83fac))
 * **mm:** SSDV3 cascade-vram-ondemand PRD/SPEC/AUDIT-2.5 ([622175f](https://github.com/emersonbusson/ramshared/commit/622175f8ae12ad330a58a9fa88979ff338cd8ebd))
 * **mm:** SSDV3 decision PRD for kernel-true VRAM memory ([0f4f430](https://github.com/emersonbusson/ramshared/commit/0f4f430496a39e4d05386bf7c4d2207890c70a6c))
-* **mm:** unblock dual-boot space on E: ESPANHA for kernel-true ([8c6082c](https://github.com/emersonbusson/ramshared/commit/8c6082cd26094b0b238c91bbc9fd0adca3eb9de5))
+* **mm:** unblock dual-boot space on secondary storage for kernel-true ([8c6082c](https://github.com/emersonbusson/ramshared/commit/8c6082cd26094b0b238c91bbc9fd0adca3eb9de5))
 * point README to per-channel post files ([0400a5f](https://github.com/emersonbusson/ramshared/commit/0400a5fc98d9e2376fad11a5371fe78496851cec))
 * PT comment rule + CUDA Context thread doc ([#3](https://github.com/emersonbusson/ramshared/issues/3) M3/LOW) ([9cd6e22](https://github.com/emersonbusson/ramshared/commit/9cd6e225ed1034586694e8538038b9bd89b912bc))
 * public onboarding — human README, FAQ, quickstart, demo script ([69a0638](https://github.com/emersonbusson/ramshared/commit/69a0638a222cdf9b9c68323d9708b26f0578985d))
@@ -747,7 +747,7 @@
 * **ssdv3:** PRD da P2 — ponte Windows + MVP DCC (RF-W1..W3) ([1fba443](https://github.com/emersonbusson/ramshared/commit/1fba4433272f9f1d66b2c60d7085855d7ef7c8f2))
 * **ssdv3:** PRD do backend Vulkan (RF-G2) ([7f195a1](https://github.com/emersonbusson/ramshared/commit/7f195a1e2f4d77260ffa1e208effbc17d7be966d))
 * **ssdv3:** PRD do canario de residencia dedicado (§9.4) ([#8](https://github.com/emersonbusson/ramshared/issues/8) Passo 1) ([07f47ba](https://github.com/emersonbusson/ramshared/commit/07f47ba1ec8296cd611684efbb470937ddecf8e3))
-* **ssdv3:** PRD do tier vram multi-tenant wsl2-civm ([#3](https://github.com/emersonbusson/ramshared/issues/3)) ([439b461](https://github.com/emersonbusson/ramshared/commit/439b4613bd404bde56528703bdb655525fdada01))
+* **ssdv3:** PRD do tier vram multi-tenant wsl2-guest ([#3](https://github.com/emersonbusson/ramshared/issues/3)) ([439b461](https://github.com/emersonbusson/ramshared/commit/439b4613bd404bde56528703bdb655525fdada01))
 * **ssdv3:** PRD unificado final do memory broker ([#3](https://github.com/emersonbusson/ramshared/issues/3)) ([f189bde](https://github.com/emersonbusson/ramshared/commit/f189bde276cf2a541c0ed70f39901bf15c1f9fc8))
 * **ssdv3:** PRD/SPEC/SPECv2 — coletor de telemetria & reconciliação do broker ([7a95ee9](https://github.com/emersonbusson/ramshared/commit/7a95ee9cd22de420726047a451867df08947e9cc))
 * **ssdv3:** runbook — add make modules_install (pego ao instalar o kernel) ([#3](https://github.com/emersonbusson/ramshared/issues/3)) ([d8c0a23](https://github.com/emersonbusson/ramshared/commit/d8c0a23d762149014ee74cac796f91ca5c7f8edf))

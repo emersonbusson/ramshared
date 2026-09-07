@@ -567,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-agent"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "ramshared-broker",
  "serde",
@@ -576,14 +576,14 @@ dependencies = [
 
 [[package]]
 name = "ramshared-block"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "ramshared-vram",
 ]
 
 [[package]]
 name = "ramshared-broker"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -591,7 +591,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-cli"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "libc",
  "ramshared-cuda",
@@ -604,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-config"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "serde",
  "serde_path_to_error",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-cuda"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "ramshared-vram",
  "windows-sys",
@@ -621,22 +621,22 @@ dependencies = [
 
 [[package]]
 name = "ramshared-dxg"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "ramshared-integrity"
-version = "0.1.0"
+version = "0.11.0"
 
 [[package]]
 name = "ramshared-tier"
-version = "0.1.0"
+version = "0.11.0"
 
 [[package]]
 name = "ramshared-uring"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "io-uring",
  "libc",
@@ -644,11 +644,11 @@ dependencies = [
 
 [[package]]
 name = "ramshared-vram"
-version = "0.1.0"
+version = "0.11.0"
 
 [[package]]
 name = "ramshared-vulkan"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "ash",
  "ramshared-vram",
@@ -656,7 +656,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-winbroker"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "ramshared-broker",
  "serde",
@@ -669,7 +669,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-winsvc"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "base64",
  "ramshared-block",
@@ -687,7 +687,7 @@ dependencies = [
 
 [[package]]
 name = "ramshared-wsl2d"
-version = "0.1.0"
+version = "0.11.0"
 dependencies = [
  "ramshared-block",
  "ramshared-broker",

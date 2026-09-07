@@ -4201,7 +4201,7 @@ fn serve_broker_jobs_with_poll_and_reply_hook<B: BlockBackend>(
 /// VRAM broker path (ITEM-8): slices VRAM into `slices` NBD exports served by Unix +
 /// (optional) TCP, with the arbiter deciding who uses each slice. The single worker owns the
 /// VRAM/CUDA context and runs residency §9/§9.4. Live execution is the QEMU gate (`--backend
-/// ram`, ITEM-11) / civm (ITEM-12) — real VRAM does not run in QEMU (no GPU).
+/// ram`, ITEM-11) / secondary VM (ITEM-12) — real VRAM does not run in QEMU (no GPU).
 #[allow(clippy::too_many_arguments)] // entry-point do daemon: config de geometria + rede + provider
 fn run_broker<P: VramProvider>(
     provider: P,

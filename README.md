@@ -131,25 +131,7 @@ Empirical benchmarks on host hardware (NVIDIA GeForce RTX 2060 over PCIe Gen 3 x
 │ 1. Stock WSL2 Swap     │ Virtualized VHDX on SSD          │ 0.06 GB/s (63 MB/s)     │ 0.08 GB/s (85 MB/s)     │ ~30,000 µs (30ms) │ ~4,000 ms Transfer      │
 │ 2. Early RamShared     │ Unix Socket NBD + User Buffers   │ 3.71 GB/s (3,798 MB/s)  │ 5.58 GB/s (5,714 MB/s)  │ ~326–550 µs       │ 67.4 ms Transfer        │
 │ 3. Pinned DMA + ublk   │ Hardware Pinned DMA + ublk/uring │ 6.38 GB/s (6,530 MB/s)  │ 8.74 GB/s (8,947 MB/s)  │ 231 µs (0.23 ms)  │ 28.6–39.2 ms Transfer   │
-│ 4. Multi-Tier Hardened │ Direct DMA + VirtDisk / ublk     │ 9.09 GB/s Direct DMA    │ 9.09 GB/s (+25.7% speed)│ 0.00 ms Latency   │ PASS_ZERO_PANIC (100%)  │
 └────────────────────────┴──────────────────────────────────┴─────────────────────────┴─────────────────────────┴───────────────────┴─────────────────────────┘
-```
-
-#### Stress Battery Qualification Report (Latest Host Hardware Qualification):
-
-```text
-══════════════════════════════════════════════════════════════════════════════════
- 📊 STRESS BATTERY QUALIFICATION REPORT (PHYSICAL HOST QUALIFICATION):
-  • Execution Mode:          FULL MULTI-TIER CASCADE QUALIFICATION (180s HOLD)
-  • Memory Pressure Index:   10.0 / 10.0 (Closed-Loop Safe Dynamic Governor)
-  • Active I/O Cycles:       296 active cycles completed (180s sustained hold)
-  • Peak Total Swap Used:    9,216 MB (100% Capacity Across All Tiers)
-  • Tier 1 (ZRAM Swap):      1,024 MB Peak (100% capacity) ── 🟢 QUALIFIED (In-RAM LZ4)
-  • Tier 2 (GPU VRAM Swap):  4,096 MB Peak (100% capacity) ── 🟢 QUALIFIED (PCIe DMA)
-  • Tier 3 (SSD Storage):    4,096 MB Peak (100% capacity) ── 🟢 QUALIFIED (Fallback)
-  • Reclaim Return Speed:    100.00 GB/s (Bounded atomic return to host)
-  • Stability Verdict:       🟢 PASS_ZERO_PANIC (Fail-Closed, Zero Memory Leaks)
-══════════════════════════════════════════════════════════════════════════════════
 ```
 
 Zero-copy pinned memory (`cuMemHostAlloc`) and native `ublk` (`io_uring`) kernel block devices provide ~100x higher read throughput and ~130x lower latency than virtualized VHDX swap, eliminating desktop thrashing stalls while retaining 100% cryptographic integrity (0 bit flips).

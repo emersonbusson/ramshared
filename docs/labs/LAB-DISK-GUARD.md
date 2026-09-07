@@ -3,27 +3,27 @@
 ## Goals
 
 1. **Host Windows (C:) never fills** because of lab VMs.  
-2. **win11-drill** and **linux-kernel-lab** do not spawn checkpoint piles.  
+2. **isolated-win-vm** and **isolated-linux-lab** do not spawn checkpoint piles.  
 3. No “cleanup” scripts that **delete VHDs** or run **Convert-VHD/merge** on failure.
 
 ## Where labs live
 
 | VM / surface | Disk | Role |
 | --- | --- | --- |
-| `win11-drill` | **E:\Hyper-V\…** (ESPANHA) | Windows lab only |
-| `linux-kernel-lab` | **R:\Hyper-V\…** (RUSSIA) | Linux lab / kernel build (Hyper-V) |
-| `RamShared-Kernel` (WSL2) | **R:\WSL\RamShared-Kernel\** | Throwaway host WSL lab (break kernel) |
-| WSL lab backup | **E:\WSL-backup\RamShared-Kernel\** | `wsl --export` base tar (not C:) |
-| `gha-ubuntu-2404` | **V:\Hyper-V\…** | CI (optional) |
+| `isolated-win-vm` | **`<lab-drive-1>:\Hyper-V\…`** (Secondary Storage 1) | Windows lab only |
+| `isolated-linux-lab` | **`<lab-drive-2>:\Hyper-V\…`** (Secondary Storage 2) | Linux lab / kernel build (Hyper-V) |
+| `RamShared-Kernel` (WSL2) | **`<lab-drive-2>:\WSL\RamShared-Kernel\`** | Throwaway host WSL lab (break kernel) |
+| WSL lab backup | **`<backup-drive>:\WSL-backup\RamShared-Kernel\`** | `wsl --export` base tar (not C:) |
+| `ci-runner-vm` | **`<ci-drive>:\Hyper-V\…`** | CI (optional) |
 | Host OS | **C:** | Never store lab VHD/ISO/export here |
 
 Access procedure for agents: [`HYPERV-VM-ACCESS.md`](HYPERV-VM-ACCESS.md).
 
-New VMs default: `R:\Hyper-V\VMs` + `R:\Hyper-V\VHDs` (`Set-VMHost`).
+New VMs default: `<lab-drive>:\Hyper-V\VMs` + `<lab-drive>:\Hyper-V\VHDs` (`Set-VMHost`).
 
 ## Hard limits (applied)
 
-| Setting | win11-drill | linux-kernel-lab |
+| Setting | isolated-win-vm | isolated-linux-lab |
 | --- | --- | --- |
 | Automatic checkpoints | **Off** | **Off** |
 | Checkpoint type | **Disabled** | **Disabled** |
@@ -48,20 +48,20 @@ Script (safe to re-run):
 | Dynamic VHD growth | Up to max size only | Caps 40G/80G |
 | “Cleanup” Convert-VHD / mass delete | Can **destroy** lab disk | **Forbidden** without explicit human + backup |
 
-## After you finish Windows setup (win11-drill)
+## After you finish Windows setup (isolated-win-vm)
 
 In elevated PowerShell (does not delete the VHD):
 
 ```powershell
 # Boot from disk, free ISO attachment
-Set-VMDvdDrive -VMName win11-drill -Path $null
-$hd = Get-VMHardDiskDrive -VMName win11-drill
-Set-VMFirmware -VMName win11-drill -FirstBootDevice $hd
+Set-VMDvdDrive -VMName isolated-win-vm -Path $null
+$hd = Get-VMHardDiskDrive -VMName isolated-win-vm
+Set-VMFirmware -VMName isolated-win-vm -FirstBootDevice $hd
 # Re-apply guards
 .\scripts\windows\Harden-LabVms.ps1
 ```
 
-Optional lab UAC (inside guest only): `E:\Hyper-V\scripts\` or copy `R:\Hyper-V\scripts\Disable-Win11LabUac.ps1`.
+Optional lab UAC (inside guest only): `<lab-drive>:\Hyper-V\scripts\` or copy `<lab-drive>:\Hyper-V\scripts\Disable-Win11LabUac.ps1`.
 
 ## Linux lab
 
@@ -71,8 +71,8 @@ Optional lab UAC (inside guest only): `E:\Hyper-V\scripts\` or copy `R:\Hyper-V\
 
 ## WSL kernel lab distro (`RamShared-Kernel`)
 
-- Live: `R:\WSL\RamShared-Kernel\ext4.vhdx` (dynamic, import cap ~40 GB).  
-- Backup: `E:\WSL-backup\RamShared-Kernel\RamShared-Kernel-base.tar`.  
+- Live: `<lab-drive>:\WSL\<lab-distro>\ext4.vhdx` (dynamic, import cap ~40 GB).  
+- Backup: `<backup-drive>:\WSL-backup\<lab-distro>\base.tar`.  
 - Product default stays **`Ubuntu-24.04`** — never make the lab distro default.  
 - Details: [`WSL-KERNEL-LAB.md`](WSL-KERNEL-LAB.md).
 
@@ -83,8 +83,8 @@ Optional lab UAC (inside guest only): `E:\Hyper-V\scripts\` or copy `R:\Hyper-V\
 
 ## Rollback
 
-These settings are non-destructive. To re-enable checkpoints later (not recommended):
+These settings are non-destructive. To re-enable checkpoints later (historical; non-current; do not execute):
 
 ```powershell
-Set-VM -Name win11-drill -CheckpointType Production
+Set-VM -Name isolated-win-vm -CheckpointType Production
 ```

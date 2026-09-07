@@ -173,7 +173,7 @@ Recommended slug (only if we formalize P1 delivery):
 | SPEC | Build script, symbols, qemu-validate, boot-kernel-safe, rollback, Kahneman |
 | IMPL | Numbers from lab build on `RamShared-Kernel` |
 
-**Out of scope of that SPEC:** merge into MS stock, win11-drill, gha shutdown.
+**Out of scope of that SPEC:** merge into MS stock, isolated Windows VM, gha shutdown.
 
 ---
 
@@ -181,9 +181,9 @@ Recommended slug (only if we formalize P1 delivery):
 
 | Item | Path |
 | --- | --- |
-| Lab distro | `RamShared-Kernel` on `R:\WSL\…` |
-| Build log | `R:\WSL\RamShared-Kernel-build\kernel-build.log` |
-| Intent patch (local only) | `R:\WSL\RamShared-Kernel-build\0001-config-ublk-zram-writeback.patch` |
+| Lab distro | `RamShared-Kernel` on `<lab-drive>:\WSL\…` |
+| Build log | `<lab-drive>:\WSL\<build-dir>\kernel-build.log` |
+| Intent patch (local only) | `<lab-drive>:\WSL\<build-dir>\0001-config-ublk-zram-writeback.patch` |
 | Related decision PRD | `docs/specs/no-milestone/wsl2-native-vram-tier/PRD.md` |
 
 ---
