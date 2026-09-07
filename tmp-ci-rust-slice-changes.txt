@@ -1,4 +1,0 @@
-crates/ramshared-agent/src/main.rs
-crates/ramshared-agent/src/psi.rs
-docs/governance/rust-slice-coverage.json
-docs/specs/no-milestone/memory-broker/SPEC.md
