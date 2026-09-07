@@ -61,13 +61,13 @@ pub fn parse_meminfo_fallback(content: &str) -> Option<PsiSample> {
 }
 
 /// Core logic for `read_psi` with dependency injection for the file path.
-fn read_psi_impl(path: &str) -> Result<PsiSample> {
+fn read_psi_impl(path: &str, meminfo_path: &str) -> Result<PsiSample> {
     match std::fs::read_to_string(path) {
         Ok(raw) => {
-            parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI ilegível"))
+            parse_psi(&raw).ok_or_else(|| Error::new(ErrorKind::InvalidData, "PSI unreadable"))
         }
         Err(e) if e.kind() == ErrorKind::NotFound => {
-            let meminfo = std::fs::read_to_string("/proc/meminfo")?;
+            let meminfo = std::fs::read_to_string(meminfo_path)?;
             parse_meminfo_fallback(&meminfo)
                 .ok_or_else(|| Error::new(ErrorKind::InvalidData, "Meminfo unreadable"))
         }
@@ -77,7 +77,7 @@ fn read_psi_impl(path: &str) -> Result<PsiSample> {
 
 /// Reads and parses `/proc/pressure/memory`.
 pub fn read_psi() -> Result<PsiSample> {
-    read_psi_impl("/proc/pressure/memory")
+    read_psi_impl("/proc/pressure/memory", "/proc/meminfo")
 }
 
 /// Parses the content of `/proc/pressure/memory`. Uses the `some` line (partial stall), which is
@@ -342,7 +342,7 @@ mod tests {
     fn read_psi_impl_success() {
         let content = "some avg10=1.23 avg60=4.56 avg300=7.89 total=999\n";
         let path = write_temp_file(content);
-        let psi = read_psi_impl(&path).unwrap();
+        let psi = read_psi_impl(&path, "/proc/meminfo").unwrap();
         assert_eq!(psi.avg10, 1.23);
         assert_eq!(psi.avg60, 4.56);
         assert_eq!(psi.stall_us, 999);
@@ -369,13 +369,19 @@ mod tests {
         // Will try to read /proc/meminfo which should exist and be valid on linux test hosts,
         // but might fail or succeed depending on the environment.
         // We'll just verify it returns a result without panicking.
-        let _ = read_psi_impl("/proc/nonexistent_psi_file_12345");
+        let content = "MemTotal:       1000000 kB\nMemAvailable:   250000 kB\nSwapTotal: 1000 kB\nSwapFree: 500 kB\n";
+        let meminfo_path = write_temp_file(content);
+
+        let psi = read_psi_impl("/proc/nonexistent_psi_file_12345", &meminfo_path).unwrap();
+        assert_eq!(psi.avg10, 75.0);
+
+        std::fs::remove_file(meminfo_path).unwrap();
     }
 
     #[test]
     fn read_psi_impl_invalid_data() {
         let path = write_temp_file("invalid content\n");
-        let err = read_psi_impl(&path).unwrap_err();
+        let err = read_psi_impl(&path, "/proc/meminfo").unwrap_err();
         assert_eq!(err.kind(), ErrorKind::InvalidData);
         std::fs::remove_file(path).unwrap();
     }
