@@ -321,16 +321,16 @@ mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(100));
                 "done"
             },
-        )
-        .unwrap_err();
-        assert!(matches!(err, DiagnoseError::Timeout(_)));
+        );
+
+        assert!(matches!(err, Err(DiagnoseError::Timeout(_))));
     }
 
     #[test]
     fn diagnostic_probe_success_returns_value() {
         let val =
-            run_probe_with_timeout("fast", std::time::Duration::from_millis(100), || 42).unwrap();
-        assert_eq!(val, 42);
+            run_probe_with_timeout("fast", std::time::Duration::from_millis(100), || 42);
+        assert!(matches!(val, Ok(42)));
     }
 
     #[test]
