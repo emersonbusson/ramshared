@@ -547,6 +547,24 @@ impl UblkServer {
         Ok(())
     }
 
+    /// Submits `IORING_OP_ASYNC_CANCEL` for a specific user_data to cancel a pending SQE.
+    pub fn cancel_request(&mut self, target_user_data: u64, cancel_user_data: u64) -> io::Result<()> {
+        let cancel_entry = opcode::AsyncCancel::new(target_user_data)
+            .build()
+            .user_data(cancel_user_data);
+
+        let mut sq = self.ring.submission();
+        if sq.is_full() {
+            return Err(io::Error::from_raw_os_error(libc::EBUSY));
+        }
+        unsafe {
+            let _ = sq.push(&cancel_entry.into());
+        }
+        drop(sq);
+        self.ring.submit()?;
+        Ok(())
+    }
+
     fn validate_tag(&self, tag: u16) -> io::Result<()> {
         if tag < self.queue_depth {
             Ok(())
@@ -787,9 +805,6 @@ mod tests {
             .user_data(100);
         let timeout_entry2: squeue::Entry128 = entry2.into();
 
-        let centry = opcode::AsyncCancel::new(100).build().user_data(101);
-        let cancel_entry: squeue::Entry128 = centry.into();
-
         // SAFETY: The timespec lives in the same frame, we wait before drop.
         unsafe {
             server
@@ -797,12 +812,9 @@ mod tests {
                 .submission()
                 .push(&timeout_entry2)
                 .expect("push long timeout");
-            server
-                .ring
-                .submission()
-                .push(&cancel_entry)
-                .expect("push cancel");
         }
+
+        server.cancel_request(100, 101).expect("push cancel");
 
         // Wait for both the cancellation and the cancelled timeout
         server.ring.submit_and_wait(2).expect("submit cancel");
