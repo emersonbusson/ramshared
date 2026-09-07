@@ -3,6 +3,7 @@
 
 use std::error::Error;
 use std::fmt;
+use subtle::ConstantTimeEq;
 
 pub const DEFAULT_BLOCK_SIZE: usize = 4096;
 
@@ -97,7 +98,7 @@ impl ChecksumTable {
         let Some(expected) = slot else {
             return None;
         };
-        Some(*expected == block_hash(data))
+        Some(expected.ct_eq(&block_hash(data)).into())
     }
 }
 
@@ -161,5 +162,20 @@ mod tests {
 
         assert!(t.record(2, &data_65536));
         assert_eq!(t.verify(2, &data_65536), Some(true));
+    }
+
+    #[test]
+    fn table_verifies_with_constant_time_comparison() {
+        let mut t = ChecksumTable::new(2);
+        let data1 = vec![0x00u8; 4096];
+        let data2 = vec![0xffu8; 4096];
+
+        t.record(0, &data1);
+        t.record(1, &data2);
+
+        assert_eq!(t.verify(0, &data1), Some(true));
+        assert_eq!(t.verify(0, &data2), Some(false));
+        assert_eq!(t.verify(1, &data1), Some(false));
+        assert_eq!(t.verify(1, &data2), Some(true));
     }
 }

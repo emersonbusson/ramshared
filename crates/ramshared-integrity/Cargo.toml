@@ -10,3 +10,6 @@ publish.workspace = true
 [lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"
+
+[dependencies]
+subtle = "2.6.1"
