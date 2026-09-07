@@ -1033,6 +1033,51 @@ mod join_tests {
         assert_eq!(err.to_string(), "ring failure");
         assert!(completed.load(Ordering::Acquire));
     }
+
+    #[test]
+    #[ignore = "requires root; exercises ublk device deletion and recreation"]
+    fn ublk_device_destroy_and_recreate_recovery() {
+        use crate::ublk_control;
+
+        let report = ublk_control::add_device("/dev/ublk-control", ublk_control::DeviceSpec::smoke_auto())
+            .expect("ublk ADD_DEV phase 1");
+
+        let char_path = format!("/dev/ublkc{}", report.dev_id);
+
+        let backend = RamBackend::new(4096);
+        let server = spawn_server(&char_path, report.queue_depth, 4096, backend)
+            .expect("spawn server phase 1");
+
+        ublk_control::start_dev("/dev/ublk-control", report.dev_id, std::process::id())
+            .expect("ublk START_DEV phase 1");
+
+        ublk_control::stop_dev("/dev/ublk-control", report.dev_id).expect("ublk STOP_DEV phase 1");
+        server.join().expect("server loop terminated ok phase 1");
+        ublk_control::delete_device("/dev/ublk-control", report.dev_id).expect("ublk DEL_DEV phase 1");
+
+        // Wait until device is gone
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::fs::metadata(&char_path).is_ok() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        // Recreate device
+        let report2 = ublk_control::add_device("/dev/ublk-control", ublk_control::DeviceSpec::smoke_auto())
+            .expect("ublk ADD_DEV phase 2");
+
+        let char_path2 = format!("/dev/ublkc{}", report2.dev_id);
+
+        let backend2 = RamBackend::new(4096);
+        let server2 = spawn_server(&char_path2, report2.queue_depth, 4096, backend2)
+            .expect("spawn server phase 2");
+
+        ublk_control::start_dev("/dev/ublk-control", report2.dev_id, std::process::id())
+            .expect("ublk START_DEV phase 2");
+
+        ublk_control::stop_dev("/dev/ublk-control", report2.dev_id).expect("ublk STOP_DEV phase 2");
+        server2.join().expect("server loop terminated ok phase 2");
+        ublk_control::delete_device("/dev/ublk-control", report2.dev_id).expect("ublk DEL_DEV phase 2");
+    }
 }
 
 #[cfg(test)]
