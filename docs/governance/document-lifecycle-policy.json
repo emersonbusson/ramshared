@@ -484,6 +484,16 @@
       "registeredAt": "2026-09-05T14:24:00Z"
     },
     {
+      "id": "finding-reports",
+      "pattern": "docs/jules/findings/**/*.md",
+      "owner": "reliability",
+      "canonicalSource": "docs/governance/README.md",
+      "lifecycle": "immutable",
+      "freshnessDays": null,
+      "verification": { "state": "unverified" },
+      "registeredAt": "2026-09-06T12:00:00Z"
+    },
+    {
       "id": "crate-documentation",
       "pattern": "crates/*/README.md",
       "owner": "architecture",
