@@ -243,7 +243,7 @@ impl Arbiter {
         // (2) COUNTERFACTUAL (safety; before cooldown). There is no counterfactual of a revert.
         let mut moved = false;
         if let Some(rec) = self.last_move {
-            if now.duration_since(rec.at) > self.cfg.cf_window {
+            if now.saturating_duration_since(rec.at) > self.cfg.cf_window {
                 self.last_move = None; // window expired
             } else if let Some(from_now) = owner_psi(tenants, rec.from)
                 && from_now > self.cfg.cf_factor * rec.from_psi_at_move
@@ -468,6 +468,29 @@ mod tests {
                 to: 1
             })
         );
+    }
+
+    #[test]
+    fn clock_jump_backwards_after_sleep_does_not_panic() {
+        let mut c = cfg();
+        c.streak = 1;
+        let mut arb = Arbiter::new(c);
+        let t0 = Instant::now();
+        let t_move = [tv(1, 2.0, 1), tv(2, 20.0, 1)];
+        let slices = [
+            slice(0, Some(1), SliceState::Active),
+            slice(1, Some(2), SliceState::Active),
+        ];
+        assert_eq!(count_moves(&arb.tick(t0, &t_move, &slices, None).unwrap()), 1);
+
+        // Simulate a system clock backward jump (e.g. host sleep)
+        let t_past = t0 - Duration::from_secs(10);
+        let t_after = [tv(1, 6.0, 0), tv(2, 5.0, 2)];
+
+        let a = arb.tick(t_past, &t_after, &slices, None).unwrap();
+        // Since saturating_duration_since returns 0 which is not > cf_window, and
+        // the conditions for a revert are met, it should perform the revert without panicking.
+        assert_eq!(count_moves(&a), 1);
     }
 
     #[test]
