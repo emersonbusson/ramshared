@@ -2,8 +2,8 @@
   "schemaVersion": "ramshared.documentation-inventory.v1",
   "source": "Public-safe Markdown references visible in the repository worktree; classification is not content verification",
   "counts": {
-    "total": 273,
-    "classified": 270,
+    "total": 274,
+    "classified": 271,
     "excluded": 3,
     "unclassified": 0,
     "ambiguous": 0
@@ -782,6 +782,18 @@
       },
       "owner": "documentation-governance",
       "canonicalSource": "docs/governance/README.md",
+      "lifecycle": "reviewable",
+      "freshnessDays": 90
+    },
+    {
+      "path": "docs/jules/findings/ipc-resilience-005.md",
+      "disposition": "classified",
+      "ruleId": "finding-ipc-resilience-005",
+      "verification": {
+        "state": "unverified"
+      },
+      "owner": "reliability",
+      "canonicalSource": "docs/jules/findings/ipc-resilience-005.md",
       "lifecycle": "reviewable",
       "freshnessDays": 90
     },
