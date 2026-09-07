@@ -134,6 +134,24 @@ mod tests {
     }
 
     #[test]
+    fn multi_bit_burst_corruption_breaks_verify() {
+        let mut buf = vec![0u8; 4096];
+        fill_block(&mut buf, 8, Pattern::Sequential);
+        // Multi-bit burst corruption on a single byte
+        buf[2048] ^= 0x5a; // 01011010
+        let Err(err) = verify_block(&buf, 8, Pattern::Sequential) else {
+            panic!("Expected an error for multi-bit burst corrupted buffer");
+        };
+        assert_eq!(
+            err,
+            IntegrityError::CorruptedMemory {
+                offset: 2048,
+                bit_flip_mask: 0x5a,
+            }
+        );
+    }
+
+    #[test]
     fn different_blocks_differ_and_wrong_index_fails() {
         let mut a = vec![0u8; 4096];
         let mut b = vec![0u8; 4096];
