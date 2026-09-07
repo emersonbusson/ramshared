@@ -71,16 +71,42 @@ pub fn verify_block(buf: &[u8], idx: u64, kind: Pattern) -> Result<(), Integrity
         return Err(IntegrityError::InvalidStride { stride, page_size });
     }
 
-    let mut expected = vec![0u8; stride];
-    fill_block(&mut expected, idx, kind);
-    for (offset, (&actual, &exp)) in buf.iter().zip(expected.iter()).enumerate() {
-        if actual != exp {
-            return Err(IntegrityError::CorruptedMemory {
-                offset,
-                bit_flip_mask: actual ^ exp,
-            });
+    let mut offset = 0;
+    let mut s = idx.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
+
+    for chunk in buf.chunks(64) {
+        let mut expected = [0u8; 64];
+        let cmp_len = chunk.len();
+        let expected_chunk = &mut expected[..cmp_len];
+
+        match kind {
+            Pattern::Zero => {}
+            Pattern::Sequential => {
+                for (i, b) in expected_chunk.iter_mut().enumerate() {
+                    *b = (idx.wrapping_add((offset + i) as u64) & 0xff) as u8;
+                }
+            }
+            Pattern::Random => {
+                for b in expected_chunk.iter_mut() {
+                    s ^= s << 13;
+                    s ^= s >> 7;
+                    s ^= s << 17;
+                    *b = (s & 0xff) as u8;
+                }
+            }
         }
+
+        for (i, (&actual, &exp)) in chunk.iter().zip(expected_chunk.iter()).enumerate() {
+            if actual != exp {
+                return Err(IntegrityError::CorruptedMemory {
+                    offset: offset + i,
+                    bit_flip_mask: actual ^ exp,
+                });
+            }
+        }
+        offset += cmp_len;
     }
+
     Ok(())
 }
 
