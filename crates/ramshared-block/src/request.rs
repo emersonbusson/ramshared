@@ -11,6 +11,31 @@ pub const NBD_EACCES: u32 = 13;
 pub const NBD_EINVAL: u32 = 22;
 pub const NBD_ERANGE: u32 = 34;
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Generates monotonically increasing request IDs for lockless tracing.
+pub struct RequestIdGenerator {
+    next: AtomicU64,
+}
+
+impl RequestIdGenerator {
+    pub const fn new() -> Self {
+        Self {
+            next: AtomicU64::new(1),
+        }
+    }
+
+    pub fn next_id(&self) -> u64 {
+        self.next.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
+impl Default for RequestIdGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Storage backend error (e.g., CUDA failure in the hot path).
 #[derive(Debug)]
 pub struct IoError(pub String);
@@ -368,5 +393,35 @@ mod tests {
             u32::from_be_bytes([r.reply[4], r.reply[5], r.reply[6], r.reply[7]]),
             NBD_ERANGE
         );
+    }
+
+    #[test]
+    fn concurrent_request_id_allocation_is_unique() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let generator = Arc::new(RequestIdGenerator::new());
+        let mut handles = vec![];
+
+        for _ in 0..10 {
+            let generator = generator.clone();
+            handles.push(thread::spawn(move || {
+                let mut ids = vec![];
+                for _ in 0..1000 {
+                    ids.push(generator.next_id());
+                }
+                ids
+            }));
+        }
+
+        let mut all_ids = vec![];
+        for h in handles {
+            all_ids.extend(h.join().unwrap());
+        }
+
+        all_ids.sort_unstable();
+        let len_before = all_ids.len();
+        all_ids.dedup();
+        assert_eq!(len_before, all_ids.len(), "Duplicate IDs detected under contention");
     }
 }
