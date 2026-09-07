@@ -324,6 +324,7 @@ impl<'p, P: VramProvider + 'p, O: OriginStorage> WriteThroughCacheBackend<'p, P,
     pub fn release_cache(&mut self) -> u64 {
         let released = self.release_lru_to(0);
         self.cache_state = CacheState::Off;
+        let _ = self.flush();
         released
     }
 
@@ -929,7 +930,7 @@ mod tests {
         assert_eq!(backend.telemetry().fallback_reads, 1);
         assert_eq!(
             events.borrow().as_slice(),
-            ["origin_write", "cache_write", "origin_read"]
+            ["origin_write", "cache_write", "origin_sync", "origin_read"]
         );
     }
 
