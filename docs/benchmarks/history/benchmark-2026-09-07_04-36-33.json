@@ -10,11 +10,11 @@
   "tier2_vram_pct": 0,
   "tier3_ssd_mb": 0,
   "tier3_ssd_pct": 0,
-  "peak_pressure_index": 1.07145469058927,
+  "peak_pressure_index": 1.07086589058927,
   "telemetry_readings_count": 4,
   "active_io_cycles_completed": 2,
-  "reclaim_duration_ms": 7.382019,
-  "reclaim_speed_gbs": 20.90171740278642,
-  "post_reclaim_free_ram_mb": 7299,
+  "reclaim_duration_ms": 6.028922,
+  "reclaim_speed_gbs": 25.592780102313483,
+  "post_reclaim_free_ram_mb": 7204,
   "status": "PASS_ZERO_PANIC"
 }
