@@ -40,6 +40,7 @@ impl std::error::Error for WatchdogError {}
 pub struct Watchdog {
     deadline: Duration,
     last: Instant,
+    paused_at: Option<Instant>,
 }
 
 impl Watchdog {
@@ -53,6 +54,7 @@ impl Watchdog {
         Ok(Self {
             deadline,
             last: now,
+            paused_at: None,
         })
     }
 
@@ -62,6 +64,7 @@ impl Watchdog {
         Self {
             deadline: clamped,
             last: now,
+            paused_at: None,
         }
     }
 
@@ -72,12 +75,33 @@ impl Watchdog {
         }
     }
 
+    /// Pauses the watchdog. No expiration will occur while paused.
+    pub fn pause(&mut self, now: Instant) {
+        if self.paused_at.is_none() && now >= self.last {
+            self.paused_at = Some(now);
+        }
+    }
+
+    /// Resumes the watchdog, compensating the missed time.
+    #[allow(clippy::collapsible_if)]
+    pub fn resume(&mut self, now: Instant) {
+        if let Some(paused) = self.paused_at.take() {
+            if now > paused {
+                self.last += now.saturating_duration_since(paused);
+            }
+        }
+    }
+
     /// `true` if `deadline` has passed since the last signal.
     pub fn expired(&self, now: Instant) -> bool {
-        if now < self.last {
+        let effective_now = match self.paused_at {
+            Some(p) if now > p => p,
+            _ => now,
+        };
+        if effective_now < self.last {
             return false;
         }
-        now.saturating_duration_since(self.last) >= self.deadline
+        effective_now.saturating_duration_since(self.last) >= self.deadline
     }
 
     /// Checks if `deadline` has passed since the last signal.
@@ -158,5 +182,27 @@ mod tests {
         assert!(!wd.expired(t_past));
         wd.touch(t_past);
         assert_eq!(wd.last, t0);
+    }
+
+    #[test]
+    fn watchdog_pause_during_system_suspend_and_resumption() {
+        let t0 = Instant::now();
+        let mut wd = Watchdog::new(Duration::from_secs(90), t0).expect("valid");
+
+        let t_pause = t0 + Duration::from_secs(50);
+        wd.pause(t_pause);
+
+        // Simulating long system suspend (2 hours)
+        let t_suspend_during = t_pause + Duration::from_secs(3600);
+        assert!(!wd.expired(t_suspend_during));
+
+        let t_resume = t_pause + Duration::from_secs(7200);
+        wd.resume(t_resume);
+
+        // The time during pause should be compensated,
+        // 50 seconds have elapsed before pause, 40 seconds remaining.
+        assert!(!wd.expired(t_resume));
+        assert!(!wd.expired(t_resume + Duration::from_secs(39)));
+        assert!(wd.expired(t_resume + Duration::from_secs(40)));
     }
 }
