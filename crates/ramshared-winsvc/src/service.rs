@@ -442,7 +442,11 @@ mod tests {
         fn active_pagefiles(&self) -> Result<Vec<String>, String> {
             let i = self.n.get();
             self.n.set(i + 1);
-            (if i == 0 { &self.a } else { &self.b }).clone()
+            if i == 0 {
+                self.a.clone()
+            } else {
+                self.b.clone()
+            }
         }
         fn lock_volume(&mut self, _: char) -> Result<(), String> {
             if self.lock_fail {
