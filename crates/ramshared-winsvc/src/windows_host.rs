@@ -597,6 +597,14 @@ impl WindowsHostState {
             .collect::<Vec<_>>();
         let output = run_powershell_bounded(&script, Duration::from_secs(12), &env_refs)
             .map_err(HostError::Identity)?;
+        Self::parse_product_volume_output(letter, size_bytes, &output)
+    }
+
+    fn parse_product_volume_output(
+        letter: char,
+        expected_size_bytes: u64,
+        output: &Output,
+    ) -> Result<(ObservedVolumeIdentity, u32, Option<String>), HostError> {
         if !output.status.success() {
             return Err(HostError::Identity(format!(
                 "product volume query failed status={:?} stderr={}",
@@ -631,9 +639,9 @@ impl WindowsHostState {
             ));
         }
         let (vendor, product) = parse_product_friendly_name(name).map_err(HostError::Identity)?;
-        if observed_size != size_bytes {
+        if observed_size != expected_size_bytes {
             return Err(HostError::Identity(format!(
-                "capacity mismatch expected={size_bytes} observed={observed_size}"
+                "capacity mismatch expected={expected_size_bytes} observed={observed_size}"
             )));
         }
         Ok((
@@ -1414,5 +1422,113 @@ mod tests {
         };
         let err = WindowsHostState::parse_identity_output('D', &ambiguous).unwrap_err();
         assert!(err.to_string().contains("ambiguous identity output"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn parse_product_volume_output_succeeds_formatted() {
+        use std::os::windows::process::ExitStatusExt;
+
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"1|RAMSHARE VRAMDISK|0123456789ABCDEF|67108864|\\\\?\\Volume{12345678-1234-1234-1234-1234567890ab}\n".to_vec(),
+            stderr: Vec::new(),
+        };
+        let (observed, disk_num, path) =
+            WindowsHostState::parse_product_volume_output('E', 67_108_864, &output).unwrap();
+        assert_eq!(observed.letter, 'E');
+        assert_eq!(observed.vendor, "RAMSHARE");
+        assert_eq!(observed.product, "VRAMDISK");
+        assert_eq!(observed.serial, "0123456789ABCDEF");
+        assert_eq!(observed.size_bytes, 67_108_864);
+        assert_eq!(disk_num, 1);
+        assert_eq!(
+            path.as_deref(),
+            Some(r"\\?\Volume{12345678-1234-1234-1234-1234567890ab}")
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn parse_product_volume_output_succeeds_raw() {
+        use std::os::windows::process::ExitStatusExt;
+
+        let output = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"2|RAMSHARE VRAMDISK|ABCDEF0123456789|134217728|RAW".to_vec(),
+            stderr: Vec::new(),
+        };
+        let (observed, disk_num, path) =
+            WindowsHostState::parse_product_volume_output('F', 134_217_728, &output).unwrap();
+        assert_eq!(observed.letter, 'F');
+        assert_eq!(observed.vendor, "RAMSHARE");
+        assert_eq!(observed.product, "VRAMDISK");
+        assert_eq!(observed.serial, "ABCDEF0123456789");
+        assert_eq!(observed.size_bytes, 134_217_728);
+        assert_eq!(disk_num, 2);
+        assert_eq!(path, None);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn parse_product_volume_output_handles_failures_and_malformed() {
+        use std::os::windows::process::ExitStatusExt;
+
+        let failed_output = Output {
+            status: std::process::ExitStatus::from_raw(42),
+            stdout: Vec::new(),
+            stderr: b"disk_count=0".to_vec(),
+        };
+        let err =
+            WindowsHostState::parse_product_volume_output('D', 67_108_864, &failed_output)
+                .unwrap_err();
+        assert!(err.to_string().contains("product volume query failed"));
+
+        let bad_disk_num = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"not_a_num|RAMSHARE VRAMDISK|0123456789ABCDEF|67108864|RAW".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err =
+            WindowsHostState::parse_product_volume_output('D', 67_108_864, &bad_disk_num)
+                .unwrap_err();
+        assert!(err.to_string().contains("missing disk number"));
+
+        let bad_size = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"1|RAMSHARE VRAMDISK|0123456789ABCDEF|not_a_num|RAW".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err =
+            WindowsHostState::parse_product_volume_output('D', 67_108_864, &bad_size).unwrap_err();
+        assert!(err.to_string().contains("missing disk size"));
+
+        let cap_mismatch = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"1|RAMSHARE VRAMDISK|0123456789ABCDEF|67108864|RAW".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err =
+            WindowsHostState::parse_product_volume_output('D', 134_217_728, &cap_mismatch)
+                .unwrap_err();
+        assert!(err.to_string().contains("capacity mismatch"));
+
+        let bad_name = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"1|INVALIDNAME|0123456789ABCDEF|67108864|RAW".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err =
+            WindowsHostState::parse_product_volume_output('D', 67_108_864, &bad_name).unwrap_err();
+        assert!(matches!(err, HostError::Identity(_)));
+
+        let ambiguous = Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"1|RAMSHARE VRAMDISK|0123456789ABCDEF|67108864|RAW|extra_field".to_vec(),
+            stderr: Vec::new(),
+        };
+        let err =
+            WindowsHostState::parse_product_volume_output('D', 67_108_864, &ambiguous).unwrap_err();
+        assert!(err.to_string().contains("ambiguous product identity output"));
     }
 }
