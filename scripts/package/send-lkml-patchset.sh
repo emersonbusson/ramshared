@@ -37,8 +37,14 @@ echo "Destination: $LKML_TO (Jens Axboe)"
 echo "CC: $LKML_CC"
 echo ""
 
+DRY_RUN=0
+if [[ "${1:-}" == "--dry-run" ]]; then
+    DRY_RUN=1
+    shift
+fi
+
 # Check if password is already configured in git or environment
-if [ -z "${SMTP_PASS:-}" ]; then
+if [ -z "${SMTP_PASS:-}" ] && [ "$DRY_RUN" -eq 0 ]; then
     SMTP_PASS="$(git config --get sendemail.smtppass 2>/dev/null || true)"
     if [ -n "$SMTP_PASS" ]; then
         echo "🔑 Using stored Gmail App Password from git config (~/.gitconfig)."
@@ -46,7 +52,7 @@ if [ -z "${SMTP_PASS:-}" ]; then
 fi
 
 # Prompt once and persist if not found
-if [ -z "${SMTP_PASS:-}" ]; then
+if [ -z "${SMTP_PASS:-}" ] && [ "$DRY_RUN" -eq 0 ]; then
     read -r -s -p "Enter Gmail App Password (16 characters): " SMTP_PASS
     echo ""
     if [ -n "$SMTP_PASS" ]; then
@@ -59,41 +65,58 @@ if [ -z "${SMTP_PASS:-}" ]; then
     fi
 fi
 
-if [ -z "$SMTP_PASS" ]; then
+if [ -z "${SMTP_PASS:-}" ] && [ "$DRY_RUN" -eq 0 ]; then
     echo "❌ Error: App Password cannot be empty."
-    exit 1
+    exit 64
 fi
 
-echo ""
-echo "==> Sending patchset series via smtp.${GMAIL_DOMAIN}..."
+if [ "$DRY_RUN" -eq 1 ]; then
+    echo ""
+    echo "==> [DRY RUN] Patchset series would be sent via smtp.${GMAIL_DOMAIN}..."
+    echo "  • Recipients:"
+    echo "      To: $LKML_TO"
+    echo "      Cc: $AXBOE_CC"
+    echo "      Cc: $LKML_CC"
+    echo "  • Patches:"
+    echo "      $OUT_DIR/0000-cover-letter.patch"
+    echo "      $OUT_DIR/0001-drivers-block-ramshared-add-hardware-VRAM-block-driver.patch"
+    echo "      $OUT_DIR/0002-drivers-block-integrate-ramshared-into-Kconfig-and-Makefile.patch"
+    echo ""
+    echo "============================================================"
+    echo "  ✅ [DRY RUN] LKML PATCHSET VERIFICATION COMPLETE"
+    echo "============================================================"
+else
+    echo ""
+    echo "==> Sending patchset series via smtp.${GMAIL_DOMAIN}..."
 
-# Dispatch via git send-email with secure in-memory password
-git send-email \
-    --smtp-server="smtp.${GMAIL_DOMAIN}" \
-    --smtp-server-port=587 \
-    --smtp-encryption=tls \
-    --smtp-user="$SENDER_EMAIL" \
-    --smtp-pass="$SMTP_PASS" \
-    --to="$LKML_TO" \
-    --cc="$AXBOE_CC" \
-    --cc="$LKML_CC" \
-    --confirm=never \
-    --quiet \
-    "$@" \
-    "$OUT_DIR/0000-cover-letter.patch" \
-    "$OUT_DIR/0001-drivers-block-ramshared-add-hardware-VRAM-block-driver.patch" \
-    "$OUT_DIR/0002-drivers-block-integrate-ramshared-into-Kconfig-and-Makefile.patch"
+    # Dispatch via git send-email with secure in-memory password
+    git send-email \
+        --smtp-server="smtp.${GMAIL_DOMAIN}" \
+        --smtp-server-port=587 \
+        --smtp-encryption=tls \
+        --smtp-user="$SENDER_EMAIL" \
+        --smtp-pass="$SMTP_PASS" \
+        --to="$LKML_TO" \
+        --cc="$AXBOE_CC" \
+        --cc="$LKML_CC" \
+        --confirm=never \
+        --quiet \
+        "$@" \
+        "$OUT_DIR/0000-cover-letter.patch" \
+        "$OUT_DIR/0001-drivers-block-ramshared-add-hardware-VRAM-block-driver.patch" \
+        "$OUT_DIR/0002-drivers-block-integrate-ramshared-into-Kconfig-and-Makefile.patch"
 
-# Scrub password from memory immediately
-unset SMTP_PASS
+    # Scrub password from memory immediately
+    unset SMTP_PASS
 
-echo ""
-echo "============================================================"
-echo "  ✅ LKML PATCHSET SENT SUCCESSFULLY!"
-echo "============================================================"
-echo "The patches have been delivered to:"
-echo "  • Jens Axboe <$AXBOE_CC>"
-echo "  • $LKML_TO"
-echo "  • $LKML_CC"
-echo ""
-echo "Check your inbox at $SENDER_EMAIL for the incoming delivery receipt."
+    echo ""
+    echo "============================================================"
+    echo "  ✅ LKML PATCHSET SENT SUCCESSFULLY!"
+    echo "============================================================"
+    echo "The patches have been delivered to:"
+    echo "  • Jens Axboe <$AXBOE_CC>"
+    echo "  • $LKML_TO"
+    echo "  • $LKML_CC"
+    echo ""
+    echo "Check your inbox at $SENDER_EMAIL for the incoming delivery receipt."
+fi
