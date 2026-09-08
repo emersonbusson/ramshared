@@ -17,10 +17,18 @@ CG=/sys/fs/cgroup/p0load
 LOG_PREFIX="[p0-load]"
 log() { echo "$LOG_PREFIX $*" >&2; }
 
-[ "$(id -u)" -eq 0 ]                                || { log "ERROR: root is required (cgroup write)"; exit 1; }
-[ "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs ]     || { log "ERROR: cgroup v2 missing"; exit 1; }
-grep -qw memory /sys/fs/cgroup/cgroup.subtree_control || { log "ERROR: memory controller not delegated"; exit 1; }
-command -v python3 >/dev/null                       || { log "ERROR: python3 missing"; exit 1; }
+[ "$(id -u)" -eq 0 ]                                || { log "ERROR: root is required (cgroup write)"; exit 69; }
+[ "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs ]     || { log "ERROR: cgroup v2 missing"; exit 69; }
+grep -qw memory /sys/fs/cgroup/cgroup.subtree_control || { log "ERROR: memory controller not delegated"; exit 78; }
+command -v python3 >/dev/null                       || { log "ERROR: python3 missing"; exit 69; }
+command -v stress-ng >/dev/null                     || { log "ERROR: stress-ng missing"; exit 69; }
+
+CORES=$(nproc 2>/dev/null || echo 1)
+WORKERS="${WORKERS:-$CORES}"
+if [ "$WORKERS" -gt "$CORES" ]; then
+	log "WARNING: requested workers ($WORKERS) exceeds available cores ($CORES). Clamping to $CORES."
+	WORKERS="$CORES"
+fi
 
 HOG=""
 cleanup() {
