@@ -37,7 +37,7 @@ while [[ $# -gt 0 ]]; do
   case $1 in
     --skip-build) SKIP_BUILD=1 ;;
     --help|-h) usage; exit 0 ;;
-    *) printf 'unsupported argument: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+    *) printf 'unsupported argument: %s\n' "$1" >&2; usage >&2; exit 64 ;;
   esac
   shift
 done
@@ -45,23 +45,23 @@ done
 if [[ -n ${RAMSHARED_PACKAGE_TARGET_DIR:-} ]]; then
   [[ ${RAMSHARED_PACKAGE_TEST_MODE:-} == 1 && $SKIP_BUILD -eq 1 ]] || {
     printf 'custom package target is test-only and requires --skip-build\n' >&2
-    exit 2
+    exit 64
   }
   [[ $RAMSHARED_PACKAGE_TARGET_DIR == /* && -d $RAMSHARED_PACKAGE_TARGET_DIR \
     && ! -L $RAMSHARED_PACKAGE_TARGET_DIR ]] || {
     printf 'invalid package test target directory\n' >&2
-    exit 2
+    exit 64
   }
   TARGET_DIR=$RAMSHARED_PACKAGE_TARGET_DIR
 fi
 
 [[ $VERSION =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || {
   printf 'invalid package version: %s\n' "$VERSION" >&2
-  exit 2
+  exit 64
 }
 [[ ! -e $STAGE && ! -e $ARCHIVE ]] || {
   printf 'refuse to replace an existing package artifact: %s\n' "$STAGE" >&2
-  exit 1
+  exit 74
 }
 
 if [[ $SKIP_BUILD -eq 0 ]]; then
@@ -71,7 +71,15 @@ fi
 for binary in ramshared ramsharedd; do
   [[ -x $TARGET_DIR/$binary ]] || {
     printf 'missing release binary: %s\n' "$TARGET_DIR/$binary" >&2
-    exit 1
+    exit 69
+  }
+done
+
+for lib in "$TARGET_DIR"/*.so; do
+  [[ -e $lib ]] || continue
+  [[ -f $lib ]] || {
+    printf 'missing shared library: %s\n' "$lib" >&2
+    exit 69
   }
 done
 
@@ -117,12 +125,12 @@ printf '%s\n' "$VERSION" >"$STAGE_RELEASE/RELEASE_VERSION"
 chmod 0644 "$STAGE_RELEASE/RELEASE_VERSION"
 [[ $SOURCE_COMMIT =~ ^[0-9a-f]{40}$ ]] || {
   printf 'source commit is unavailable\n' >&2
-  exit 1
+  exit 69
 }
 printf '%s\n' "$SOURCE_COMMIT" >"$STAGE_RELEASE/SOURCE_COMMIT"
 [[ $SOURCE_BRANCH =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || {
   printf 'source branch is invalid\n' >&2
-  exit 1
+  exit 69
 }
 printf '%s\n' "$SOURCE_BRANCH" >"$STAGE_RELEASE/SOURCE_BRANCH"
 printf '%s\n' "$SOURCE_TREE_STATE" >"$STAGE_RELEASE/SOURCE_TREE_STATE"
@@ -130,7 +138,8 @@ chmod 0644 "$STAGE_RELEASE/SOURCE_COMMIT" "$STAGE_RELEASE/SOURCE_BRANCH" "$STAGE
 
 (
   cd "$STAGE_RELEASE"
-  find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+  find . -type f ! -name "SHA256SUMS*" -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.tmp
+  mv SHA256SUMS.tmp SHA256SUMS
 )
 chmod 0644 "$STAGE_RELEASE/SHA256SUMS"
 
