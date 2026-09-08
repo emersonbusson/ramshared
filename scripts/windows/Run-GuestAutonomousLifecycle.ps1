@@ -377,6 +377,7 @@ try {
             }
             try {
                 if (-not (Wait-Job $stopJob -Timeout 30)) {
+                    Stop-Job $stopJob -ErrorAction SilentlyContinue
                     throw "same STOP did not complete after pagefile restoration"
                 }
                 $stopResult = Receive-Job $stopJob -ErrorAction Stop
@@ -658,6 +659,7 @@ try {
         }
         try {
             if (-not (Wait-Job $residueJob -Timeout 10)) {
+                Stop-Job $residueJob -ErrorAction SilentlyContinue
                 throw "Win32_DiskDrive zero-residue query timed out"
             }
             $remaining = [int](Receive-Job $residueJob -ErrorAction Stop)
