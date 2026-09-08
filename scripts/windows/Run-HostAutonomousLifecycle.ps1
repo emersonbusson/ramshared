@@ -38,6 +38,25 @@ function Write-State([object]$State) {
         [Text.UTF8Encoding]::new($false))
     Move-Item $temp $StatePath -Force
 }
+function Write-Checkpoint {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$State,
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Phase
+    )
+    $dir = Split-Path $StatePath
+    if (-not (Test-Path $dir -PathType Container)) {
+        throw [System.IO.DirectoryNotFoundException]::new("Checkpoint directory not found: $dir")
+    }
+    $path = Join-Path $dir "checkpoint-$Phase.json"
+    $temp = "$path.new"
+    [IO.File]::WriteAllText($temp, ($State | ConvertTo-Json -Depth 6),
+        [Text.UTF8Encoding]::new($false))
+    Move-Item $temp $path -Force
+}
 function Append-Result([hashtable]$Row) {
     $line = ($Row | ConvertTo-Json -Compress -Depth 8)
     if ([Text.Encoding]::UTF8.GetByteCount($line) -gt 16384) {
@@ -207,6 +226,7 @@ function Use-ResumeApproval {
     $State.approval_consumed = $true
     $State.approval_token_sha256 = ""
     $State.status = "running"
+    Write-Checkpoint $State "running"
     $State
 }
 function Get-ScheduledResumeArguments {
@@ -684,6 +704,7 @@ if (-not $isStartupResume) {
     $state.approval_token_sha256 = $approval.token_sha256
     $state.approval_expires_utc = $approval.expires_utc
     $state.approval_consumed = $false
+    Write-Checkpoint $state "scheduled"
     Write-State $state
     $arguments = Get-ScheduledResumeArguments $PSCommandPath $state.manifest `
         $ColdBoots $Controller $CampaignRoot $approval.token `
@@ -702,6 +723,7 @@ if (-not $isStartupResume) {
         $state.approval_token_sha256 = ""
         $state.approval_expires_utc = ""
         $state.approval_consumed = $true
+        Write-Checkpoint $state "awaiting_approval"
         Write-State $state
         throw
     }
@@ -834,11 +856,13 @@ try {
     }
     $state.last_completed_boot = $boot
     $state.next_boot = $boot + 1
-    $state.status = if ($boot -eq $ColdBoots) { "complete" } else { "awaiting_approval" }
+    $checkpointPhase = if ($boot -eq $ColdBoots) { "complete" } else { "awaiting_approval" }
+    $state.status = $checkpointPhase
     $state.approval_boot = 0
     $state.approval_token_sha256 = ""
     $state.approval_expires_utc = ""
     $state.approval_consumed = $true
+    Write-Checkpoint $state $checkpointPhase
     Write-State $state
     if ($boot -eq $ColdBoots) {
         Invoke-CampaignSafetyCleanup $WatchdogMarker $TaskName
@@ -874,6 +898,7 @@ catch {
     $state.approval_token_sha256 = ""
     $state.approval_expires_utc = ""
     $state.approval_consumed = $true
+    Write-Checkpoint $state "failed"
     Write-State $state
     throw
 }
