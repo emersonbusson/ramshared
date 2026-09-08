@@ -39,9 +39,18 @@ function Assert-ValidPagefileSize {
         throw [System.ArgumentOutOfRangeException]::new("RequestedSizeBytes", "Requested pagefile size must be between 1x and 3x physical RAM.")
     }
 
-    $driveRoot = [System.IO.Path]::GetPathRoot($VolumePath)
-    $freeSpace = [System.IO.DriveInfo]::new($driveRoot).AvailableFreeSpace
+    if ($VolumePath -match "^([A-Za-z]):") {
+        $driveLetter = $Matches[1]
+    } else {
+        throw [System.ArgumentException]::new("Invalid volume path format.")
+    }
 
+    $drive = Get-PSDrive -Name $driveLetter -ErrorAction SilentlyContinue
+    if (-not $drive) {
+        throw [System.Management.Automation.ItemNotFoundException]::new("Target volume not found.")
+    }
+
+    $freeSpace = [long]$drive.Free
     if ($SizeBytes -gt $freeSpace) {
         throw [System.IO.IOException]::new("Requested pagefile size exceeds available free space on target volume.")
     }
