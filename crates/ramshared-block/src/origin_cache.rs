@@ -956,11 +956,10 @@ mod tests {
     // TestName: write_release_vram_read_origin_hash_parallel_fixtures_are_isolated
     fn write_release_vram_read_origin_hash_parallel_fixtures_are_isolated() {
         std::thread::scope(|scope| {
-            let mut workers = Vec::with_capacity(4);
-            for _ in 0..4 {
-                workers.push(scope.spawn(assert_write_release_vram_read_origin_hash_matches));
-            }
-            for worker in workers.drain(..) {
+            let workers: [_; 4] = std::array::from_fn(|_| {
+                scope.spawn(assert_write_release_vram_read_origin_hash_matches)
+            });
+            for worker in workers {
                 worker.join().unwrap();
             }
         });
