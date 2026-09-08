@@ -784,6 +784,16 @@ function Invoke-GuardianWatch {
     New-Item -ItemType Directory -Path $runDirectory | Out-Null
     $eventPath = Join-Path $runDirectory "guardian-events.jsonl"
     $telemetryPath = Join-Path $ArtifactRoot "windows-telemetry.jsonl"
+
+    [console]::TreatControlCAsInput = $false
+    $cancelHandler = [ConsoleCancelEventHandler]({
+        param($sender, $e)
+        $e.Cancel = $true
+        Write-GuardianEvent -Path $eventPath -Event "guardian_stopped" -Data @{ reason = "CancelKeyPress" }
+        Write-HostTelemetryRing -Path $telemetryPath
+        [Environment]::Exit(0)
+    }.GetNewClosure())
+    [Console]::add_CancelKeyPress($cancelHandler)
     Write-GuardianEvent -Path $eventPath -Event "guardian_started" -Data @{ heartbeat = $HeartbeatPath; stale_after_seconds = $StaleAfterSec }
     while ($true) {
         # A current heartbeat must be observed before any HEALTHY proof can be
