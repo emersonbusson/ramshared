@@ -832,6 +832,48 @@ mod tests {
         assert_eq!(link.stats().reads, 0);
     }
 
+    struct MockQueue {
+        qd: u32,
+    }
+
+    impl QueueAccess for MockQueue {
+        fn queue_depth(&self) -> u32 {
+            self.qd
+        }
+        fn max_io_bytes(&self) -> u32 {
+            4096
+        }
+        fn block_size(&self) -> u32 {
+            512
+        }
+        fn sq_pending(&self) -> u32 {
+            0
+        }
+        fn pop_sqe_snapshot(&mut self) -> Option<Sqe> {
+            None
+        }
+        fn read_slot_owned(&self, _slot: u32, _len: u32) -> Result<Vec<u8>, DriverLinkError> {
+            Ok(Vec::new())
+        }
+        fn write_slot_from(&mut self, _slot: u32, _data: &[u8]) -> Result<(), DriverLinkError> {
+            Ok(())
+        }
+        fn push_cqe(&mut self, _cqe: Cqe) -> Result<(), DriverLinkError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_driver_link_from_queue() {
+        let mock = MockQueue { qd: 16 };
+        let link = DriverLink::from_queue(mock);
+        assert_eq!(link.q.queue_depth(), 16);
+        assert_eq!(link.q.max_io_bytes(), 4096);
+        assert_eq!(link.q.block_size(), 512);
+        assert_eq!(link.backend_writes, 0);
+        assert_eq!(link.stats().reads, 0);
+    }
+
     #[test]
     fn driver_read_slot_valid_and_invalid() {
         let mut queue = InMemoryQueue::new(4, 4096, 4096).unwrap();
