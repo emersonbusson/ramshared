@@ -144,6 +144,33 @@ exit 0
 PRERM_EOF
 chmod 0755 "$STAGE_DIR/DEBIAN/prerm"
 
+# Validate DEBIAN/control fields before build
+CONTROL_FILE="$STAGE_DIR/DEBIAN/control"
+if [[ ! -f "$CONTROL_FILE" ]]; then
+  echo "ERROR: Control file not found at $CONTROL_FILE" >&2
+  exit 69
+fi
+
+if ! grep -qE '^Package:[[:space:]]+[a-z0-9][a-z0-9+.-]+$' "$CONTROL_FILE"; then
+  echo "ERROR: Invalid or missing 'Package' field in control file." >&2
+  exit 78
+fi
+
+if ! grep -qE '^Version:[[:space:]]+([0-9]+:)?[0-9a-zA-Z.+~-]+$' "$CONTROL_FILE"; then
+  echo "ERROR: Invalid or missing 'Version' field in control file." >&2
+  exit 78
+fi
+
+if ! grep -qE '^Architecture:[[:space:]]+[a-zA-Z0-9-]+$' "$CONTROL_FILE"; then
+  echo "ERROR: Invalid or missing 'Architecture' field in control file." >&2
+  exit 78
+fi
+
+if ! grep -qE '^Depends:[[:space:]]+.+$' "$CONTROL_FILE"; then
+  echo "ERROR: Invalid or missing 'Depends' field in control file." >&2
+  exit 78
+fi
+
 # Build the .deb archive
 mkdir -p "$OUT_DIR"
 dpkg-deb --build --root-owner-group "$STAGE_DIR" "$DEB_FILE"
