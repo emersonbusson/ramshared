@@ -11,6 +11,7 @@
 #>
 [CmdletBinding()]
 param(
+    [ValidateSet("win11-drill")]
     [string]$VMName = "win11-drill",
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
@@ -63,6 +64,19 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# Guard clause: Ensure Hyper-V module is available
+if (-not (Get-Module -ListAvailable -Name Hyper-V)) {
+    Write-Error -Message "Hyper-V module is not available. Please install the Hyper-V module." -ErrorId "HyperVModuleMissing"
+    throw [System.Management.Automation.ItemNotFoundException]::new("Hyper-V module missing.")
+}
+
+# Guard clause: Ensure VM exists
+$vm = Get-VM -Name $VMName -ErrorAction SilentlyContinue
+if ($null -eq $vm) {
+    Write-Error -Message "Virtual machine '$VMName' does not exist." -ErrorId "VMNotFound"
+    throw [System.Management.Automation.ItemNotFoundException]::new("VM $VMName missing.")
+}
 
 . (Join-Path $PSScriptRoot "Invoke-GuestPsDirectBounded.ps1")
 
