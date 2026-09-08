@@ -79,11 +79,15 @@ jobs:
           set -euo pipefail
 
           # Prerequisite checks
-          command -v gh >/dev/null 2>&1 || exit 69
-          command -v sha256sum >/dev/null 2>&1 || exit 69
+          if ! command -v gh >/dev/null 2>&1; then
+            exit 69
+          fi
+          if ! command -v sha256sum >/dev/null 2>&1; then
+            exit 69
+          fi
 
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release download "$RELEASE_TAG" --dir artifacts/release || true
+            gh release download "$RELEASE_TAG" --dir artifacts/release ;
           fi
           if [ -d "artifacts/release" ]; then
             cd artifacts/release
@@ -108,5 +112,5 @@ jobs:
               done
             fi
             cd -
-            gh release upload "$RELEASE_TAG" "artifacts/release/SHA256SUMS.txt" --clobber || true
+            gh release upload "$RELEASE_TAG" "artifacts/release/SHA256SUMS.txt" --clobber ;
           fi
