@@ -17,29 +17,38 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node
+        if: steps.checkout.conclusion == 'success'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
 
       - name: Install static analysis tools
+        if: steps.checkout.conclusion == 'success'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq perl curl
 
       - name: Kernel Style Check
+        if: steps.checkout.conclusion == 'success'
         run: ./scripts/ci/check-kernel-style.sh
 
       - name: Kernel Sparse Semantic Check
+        if: steps.checkout.conclusion == 'success'
         run: ./scripts/ci/check-kernel-sparse.sh
 
       - name: Kernel checkpatch.pl Validation
+        if: steps.checkout.conclusion == 'success'
         run: ./scripts/ci/check-kernel-checkpatch.sh
 
       - name: Kernel ABI & Symbol Export Guard
+        if: steps.checkout.conclusion == 'success'
         run: ./scripts/ci/check-kernel-abi-guard.sh
 
       - name: Adversarial Invariants Verification
+        if: steps.checkout.conclusion == 'success'
         run: ./scripts/ci/check-adversarial-invariants.sh
 
   kernel-build-matrix:
@@ -59,17 +68,20 @@ jobs:
           - compiler: aarch64-gcc
             arch: aarch64
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install cross-compilation toolchain
-        if: matrix.compiler == 'aarch64-gcc'
+        if: steps.checkout.conclusion == 'success' && matrix.compiler == 'aarch64-gcc'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-aarch64-linux-gnu
 
       - name: Install clang
-        if: matrix.compiler == 'clang'
+        if: steps.checkout.conclusion == 'success' && matrix.compiler == 'clang'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq clang
 
       - name: Run build matrix (${{ matrix.compiler }} / ${{ matrix.arch }})
+        if: steps.checkout.conclusion == 'success'
         run: ./scripts/ci/check-kernel-build-matrix.sh "${{ matrix.compiler }}" "${{ matrix.arch }}"
 
   kernel-qemu-smoke:
@@ -79,9 +91,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Validate audit tool with clean console log
+        if: steps.checkout.conclusion == 'success'
         run: |
           CLEAN_LOG=$(mktemp)
           echo "[    0.000000] Linux version 6.8.0-ramshared" > "$CLEAN_LOG"
@@ -91,6 +106,7 @@ jobs:
           rm -f "$CLEAN_LOG"
 
       - name: Validate audit tool catches kernel splats
+        if: steps.checkout.conclusion == 'success'
         run: |
           BAD_LOG=$(mktemp)
           echo "[    0.000000] Linux version 6.8.0-ramshared" > "$BAD_LOG"
@@ -106,4 +122,5 @@ jobs:
           rm -f "$BAD_LOG"
 
       - name: Audit QEMU Console Logs (if provided)
+        if: steps.checkout.conclusion == 'success'
         run: ./scripts/ci/check-kernel-qemu-smoke.sh
