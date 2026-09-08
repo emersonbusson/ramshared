@@ -82,6 +82,17 @@ PY
 
 need_root
 
+# Validate cgroup v2 mount explicitly
+if ! command -v findmnt >/dev/null 2>&1; then
+  log "FAIL: findmnt required for validation"
+  exit 69
+fi
+
+if ! findmnt -t cgroup2 /sys/fs/cgroup >/dev/null 2>&1; then
+  log "FAIL: cgroup v2 mount not found at /sys/fs/cgroup"
+  exit 69
+fi
+
 if [[ ! -f /sys/fs/cgroup/cgroup.controllers ]]; then
   log "FAIL: cgroup v2 required"
   exit 69
