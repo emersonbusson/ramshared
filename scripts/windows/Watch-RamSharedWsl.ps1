@@ -776,6 +776,10 @@ function Invoke-GuardianWatchTerminationTail {
 }
 
 function Invoke-GuardianWatch {
+    $wslProcess = Get-Process -Name vmmemWSL -ErrorAction SilentlyContinue
+    if ($null -eq $wslProcess -or -not (Get-Process -Id $wslProcess.Id -ErrorAction SilentlyContinue)) {
+        throw [System.Management.Automation.ItemNotFoundException]::new("Target vmmemWSL process not found. Guest must be running before attaching guardian.")
+    }
     if (-not (Test-AbsoluteWindowsPath -Path $ArtifactRoot)) { throw "ArtifactRoot must be an absolute Windows path" }
     Test-SealedGuardianIdentity
     Assert-GuardianTaskXmlSeal
