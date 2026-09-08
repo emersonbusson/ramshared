@@ -13,6 +13,14 @@ echo "  What this does: compiles the two programs you need"
 echo "  (ramshared = commands, ramsharedd = GPU service)."
 echo ""
 
+# Guard Clause: Detect existing installation
+if command -v ramshared >/dev/null 2>&1; then
+  echo "  RamShared is already installed at: $(command -v ramshared)"
+  echo "  Upgrade path: Please run 'sudo ./scripts/install.sh' to upgrade your system installation."
+  echo ""
+  exit 0
+fi
+
 if ! command -v cargo >/dev/null 2>&1 || ! command -v rustc >/dev/null 2>&1; then
   echo "  Rust is not installed (need cargo + rustc)."
   echo "  Install from: https://rustup.rs/"
