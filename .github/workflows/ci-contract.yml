@@ -197,7 +197,7 @@ jobs:
   aggregate:
     name: required-checks
     if: always()
-    needs: [contract, ci-core, security, gitleaks, comment-language, pr-body, validation-schema, windows-static, artifact-hygiene, slice-coverage]
+    needs: [contract, artifact-hygiene, slice-coverage, ci-core, security, gitleaks, comment-language, pr-body, validation-schema, windows-static]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
