@@ -863,12 +863,12 @@ mod tests {
         }
 
         // Before request_stop, stop is false and processing succeeds.
-        assert_eq!(link.stop, false);
+        assert!(!link.stop);
 
         // Signal stop request.
         link.request_stop();
 
-        assert_eq!(link.stop, true);
+        assert!(link.stop);
 
         // Attempting to commit and fetch after request_stop returns DriverLinkError::Stopped.
         let res = link.commit_and_fetch(&mut be);
