@@ -24,7 +24,7 @@ while [[ $# -gt 0 ]]; do
     --integrity-result) INTEGRITY_RESULT="$2"; shift 2 ;;
     --prove-disk) PROVE_DISK=1; shift ;;
     -h|--help) sed -n '1,16p' "$0"; exit 0 ;;
-    *) echo "unknown: $1" >&2; exit 2 ;;
+    *) echo "unknown: $1" >&2; exit 64 ;;
   esac
 done
 
@@ -33,7 +33,7 @@ log() { echo "[pressure] $*"; }
 need_root() {
   if [[ "$(id -u)" -ne 0 ]]; then
     log "FAIL: run as root (cgroup + accurate swaps)"
-    exit 1
+    exit 64
   fi
 }
 
@@ -99,11 +99,11 @@ read -r PZ PN PD <<<"$(read_prios)"
 if [[ -z "${PZ:-}" || -z "${PN:-}" || -z "${PD:-}" || "$PZ" -lt 0 || "$PN" -lt 0 || "$PD" -eq -1 ]]; then
   log "FAIL: need live zram + nbd + disk (sudo ramshared up first) prios=z:$PZ n:$PN d:$PD"
   swapon --show || true
-  exit 1
+  exit 69
 fi
 if ! (( PZ > PN && PN > PD )); then
   log "FAIL: priority not zram($PZ) > nbd($PN) > disk($PD)"
-  exit 1
+  exit 78
 fi
 log "baseline prios ok: zram=$PZ nbd=$PN disk=$PD"
 read -r UZ0 UN0 UD0 <<<"$(read_used)"
@@ -140,10 +140,10 @@ cleanup() {
   swapon --show || true
   if [[ "$worker_rc" -ne 0 ]]; then
     log "FAIL: integrity worker exit=$worker_rc"
-    rc=1
+    rc=74
   elif [[ ! -s "$INTEGRITY_RESULT" ]]; then
     log "FAIL: integrity_result_missing path=$INTEGRITY_RESULT"
-    rc=1
+    rc=74
   elif ! python3 - "$INTEGRITY_RESULT" <<'PY'
 import json
 import sys
@@ -157,7 +157,7 @@ if result.get("checksum_before") != result.get("checksum_after"):
 PY
   then
     log "FAIL: integrity_result_failed path=$INTEGRITY_RESULT"
-    rc=1
+    rc=74
   else
     log "PASS: integrity result=$INTEGRITY_RESULT"
   fi
