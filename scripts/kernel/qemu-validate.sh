@@ -11,14 +11,21 @@
 # Reusable for any kernel build (Phase B+ toolkit). SPEC: docs/runbooks/FASE-B-KERNEL.md
 set -euo pipefail
 
-BZ="${1:?usage: qemu-validate.sh <bzImage> <kernelrelease> [mods...]}"
-REL="${2:?missing kernelrelease}"
+if [ $# -lt 2 ]; then
+  echo "usage: qemu-validate.sh <bzImage> <kernelrelease> [mods...]" >&2
+  exit 64 # EX_USAGE
+fi
+
+BZ="$1"
+REL="$2"
 shift 2
 MODS=("$@")
 
-[ -f "$BZ" ] || { echo "bzImage missing: $BZ" >&2; exit 2; }
-command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 missing (apt install qemu-system-x86)" >&2; exit 2; }
-[ -x /bin/busybox ] || { echo "busybox-static missing (apt install busybox-static)" >&2; exit 2; }
+[ -f "$BZ" ] || { echo "bzImage missing: $BZ" >&2; exit 66; } # EX_NOINPUT
+command -v qemu-system-x86_64 >/dev/null || { echo "qemu-system-x86_64 missing (apt install qemu-system-x86)" >&2; exit 69; } # EX_UNAVAILABLE
+[ -e /dev/kvm ] || { echo "ERROR: /dev/kvm is missing. KVM is required." >&2; exit 69; }
+[ -w /dev/kvm ] || { echo "ERROR: /dev/kvm is not writable. KVM access is required." >&2; exit 77; } # EX_NOPERM
+[ -x /bin/busybox ] || { echo "busybox-static missing (apt install busybox-static)" >&2; exit 69; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 IRD="$WORK/irfs"; mkdir -p "$IRD/bin" "$IRD/modules"
@@ -26,7 +33,7 @@ cp /bin/busybox "$IRD/bin/busybox"
 
 # numbered modules preserve dependency order
 i=0; for m in "${MODS[@]}"; do
-  [ -f "$m" ] || { echo "module missing: $m" >&2; exit 2; }
+  [ -f "$m" ] || { echo "module missing: $m" >&2; exit 66; }
   cp "$m" "$IRD/modules/$(printf '%02d' "$i")-$(basename "$m")"; i=$((i+1))
 done
 
@@ -55,9 +62,7 @@ chmod +x "$IRD/init"
 
 ( cd "$IRD" && find . | cpio -o -H newc 2>/dev/null | gzip ) > "$WORK/initramfs.gz"
 
-# KVM accelerates; without write permissions on /dev/kvm, falls back to TCG (slower but valid).
-ACCEL=(-machine accel=tcg)
-[ -w /dev/kvm ] && ACCEL=(-enable-kvm -cpu host)
+ACCEL=(-enable-kvm -cpu host)
 
 echo "[qemu-validate] booting $BZ (expected release: $REL; accel: ${ACCEL[*]})..."
 timeout 180 qemu-system-x86_64 "${ACCEL[@]}" -m 1024 -nographic -no-reboot \
