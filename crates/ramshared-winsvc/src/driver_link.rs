@@ -846,4 +846,32 @@ mod tests {
         let err_len = queue.driver_read_slot(1, 4097).unwrap_err();
         assert!(matches!(err_len, DriverLinkError::Invalid(_)));
     }
+
+    #[test]
+    fn request_stop_sets_stop_flag_and_prevents_further_io() {
+        let mut link = DriverLink::new(4, 4096, 4096).unwrap();
+        let mut be = RamBe {
+            data: vec![0u8; 8192],
+            bs: 4096,
+            last_write: Arc::new(Mutex::new(Vec::new())),
+            writes: Arc::new(Mutex::new(0)),
+        };
+
+        {
+            let mut fake = FakeDriver::new(&mut link);
+            fake.submit_flush(10).unwrap();
+        }
+
+        // Before request_stop, stop is false and processing succeeds.
+        assert_eq!(link.stop, false);
+
+        // Signal stop request.
+        link.request_stop();
+
+        assert_eq!(link.stop, true);
+
+        // Attempting to commit and fetch after request_stop returns DriverLinkError::Stopped.
+        let res = link.commit_and_fetch(&mut be);
+        assert_eq!(res, Err(DriverLinkError::Stopped));
+    }
 }
