@@ -30,6 +30,23 @@ jobs:
           cargo test -p ramshared-winbroker
           cargo test -p ramshared-winsvc
 
+      - name: PowerShell PSScriptAnalyzer static analysis
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path "scripts/windows")) {
+            throw "Directory scripts/windows does not exist"
+          }
+          if (-not (Get-Command Invoke-ScriptAnalyzer -ErrorAction SilentlyContinue)) {
+            Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+          }
+          $findings = Invoke-ScriptAnalyzer -Path scripts/windows/*.ps1 -Severity Error
+          if ($findings) {
+            $findings | Format-Table
+            Write-Error "PSScriptAnalyzer found Error severity issues" -ErrorId "PSScriptAnalyzerErrors"
+            exit 64
+          }
+
       - name: Static-only Windows suite
         shell: pwsh
         run: |
