@@ -78,8 +78,24 @@ done
 install -d -m 0755 "$STAGE_RELEASE/bin" "$STAGE_RELEASE/scripts/safety" "$STAGE_RELEASE/systemd" \
   "$STAGE_RELEASE/systemd/docker.service.d" "$STAGE_RELEASE/systemd/containerd.service.d" \
   "$STAGE_RELEASE/systemd/cron.service.d"
-install -m 0755 "$TARGET_DIR/ramshared" "$STAGE_RELEASE/bin/ramshared"
-install -m 0755 "$TARGET_DIR/ramsharedd" "$STAGE_RELEASE/bin/ramsharedd"
+STAGE_DEBUG_DIR="$OUT_ROOT/ramshared-linux-$VERSION-debug"
+STAGE_DEBUG="$STAGE_DEBUG_DIR/debug"
+ARCHIVE_DEBUG="$OUT_ROOT/ramshared-linux-$VERSION-debug.tar.gz"
+
+for binary in ramshared ramsharedd; do
+  command -v objcopy >/dev/null || { printf 'missing prerequisite: objcopy\n' >&2; exit 69; }
+  command -v strip >/dev/null || { printf 'missing prerequisite: strip\n' >&2; exit 69; }
+done
+
+install -d -m 0755 "$STAGE_DEBUG/bin"
+
+for binary in ramshared ramsharedd; do
+  install -m 0755 "$TARGET_DIR/$binary" "$STAGE_RELEASE/bin/$binary"
+  objcopy --only-keep-debug "$STAGE_RELEASE/bin/$binary" "$STAGE_DEBUG/bin/$binary.debug"
+  strip --strip-debug "$STAGE_RELEASE/bin/$binary"
+
+  objcopy --add-gnu-debuglink="$STAGE_DEBUG/bin/$binary.debug" "$STAGE_RELEASE/bin/$binary"
+done
 install -m 0755 "$ROOT/scripts/safety/install-cascade-boot.sh" "$STAGE_RELEASE/scripts/safety/"
 install -m 0755 "$ROOT/scripts/safety/uninstall-cascade-boot.sh" "$STAGE_RELEASE/scripts/safety/"
 install -m 0755 "$ROOT/scripts/safety/cascade-up.sh" "$STAGE_RELEASE/scripts/safety/"
@@ -135,5 +151,7 @@ chmod 0644 "$STAGE_RELEASE/SOURCE_COMMIT" "$STAGE_RELEASE/SOURCE_BRANCH" "$STAGE
 chmod 0644 "$STAGE_RELEASE/SHA256SUMS"
 
 tar -C "$OUT_ROOT" -czf "$ARCHIVE" "ramshared-linux-$VERSION"
+tar -C "$OUT_ROOT" -czf "$ARCHIVE_DEBUG" "ramshared-linux-$VERSION-debug"
 printf 'bundle_release=%s\n' "$STAGE_RELEASE"
 printf 'bundle_archive=%s\n' "$ARCHIVE"
+printf 'bundle_debug_archive=%s\n' "$ARCHIVE_DEBUG"
