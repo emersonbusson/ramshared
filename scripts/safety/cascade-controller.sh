@@ -15,7 +15,7 @@ managed_device=
 refuse() {
   printf 'NBD_CONTROLLER_STATE=REFUSED\n'
   printf 'NBD_CONTROLLER_REASON=%s\n' "$1"
-  exit 1
+  exit "${2:-1}"
 }
 
 [[ $distro =~ ^[A-Za-z0-9._-]+$ ]] || refuse DISTRO_INVALID
@@ -163,6 +163,10 @@ if [[ $mode == recover ]]; then
   managed_device=$(read_marker_value managed_device)
   finish_stop
 fi
+
+command -v modprobe >/dev/null 2>&1 || refuse KMOD_MISSING 69
+modprobe -n zram >/dev/null 2>&1 || ls -d /sys/block/zram* >/dev/null 2>&1 || refuse ZRAM_UNAVAILABLE 69
+[[ -r /proc/swaps ]] || refuse SWAP_UNAVAILABLE 69
 
 # A controller crash or restart may leave a live origin behind. Never start a
 # second lifecycle over that evidence: finish the old teardown first and leave
