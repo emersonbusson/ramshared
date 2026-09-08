@@ -6,8 +6,28 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
+if ! command -v perl >/dev/null 2>&1; then
+    echo "Error: perl is required but not installed." >&2
+    exit 69 # EX_UNAVAILABLE
+fi
+
+if [[ ! -f "scripts/checkpatch.pl" ]]; then
+    echo "Error: scripts/checkpatch.pl not found." >&2
+    exit 69 # EX_UNAVAILABLE
+fi
+
+if [[ ! -x "scripts/checkpatch.pl" ]]; then
+    echo "Error: scripts/checkpatch.pl is not executable." >&2
+    exit 69 # EX_UNAVAILABLE
+fi
+
 OUT_DIR="artifacts/lkml-patchset"
 mkdir -p "$OUT_DIR"
+
+if [[ ! -d "$OUT_DIR" ]]; then
+    echo "Error: Failed to create output directory $OUT_DIR." >&2
+    exit 74 # EX_IOERR
+fi
 
 echo "==> Generating LKML patchset in $OUT_DIR..."
 
@@ -41,3 +61,17 @@ COVER_EOF
 
 echo "✓ Cover letter created: $OUT_DIR/0000-cover-letter.patch"
 echo "✓ LKML patchset generation complete."
+
+echo "==> Validating generated patches with checkpatch.pl..."
+# Find generated patches and validate them
+while IFS= read -r patch_file; do
+    if [[ -f "$patch_file" ]]; then
+        echo "Validating: $patch_file"
+        if ! scripts/checkpatch.pl --strict "$patch_file"; then
+            echo "Error: checkpatch.pl failed on $patch_file." >&2
+            exit 65 # EX_DATAERR
+        fi
+    fi
+done < <(find "$OUT_DIR" -maxdepth 1 -type f -name "*.patch" | sort)
+
+echo "✓ All patches validated successfully."
