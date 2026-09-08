@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VERSION="${1:-${RAMSHARED_PACKAGE_VERSION:-v0.9.0-beta.2}}"
 VERSION_CLEAN="${VERSION#v}"
-RPM_VERSION="$(echo "$VERSION_CLEAN" | sed "s/-beta\./.beta/")"
+RPM_VERSION="${VERSION_CLEAN//-beta./.beta}"
 ARCH="x86_64"
 
 OUT_DIR="$ROOT/artifacts/packages"
@@ -15,6 +15,18 @@ RPM_ROOT="$OUT_DIR/rpmbuild"
 SPEC_FILE="$RPM_ROOT/SPECS/ramshared.spec"
 
 echo "==> Building RPM package for RamShared ${VERSION} (${ARCH})..."
+
+# Guard clause: Verify rpmbuild exists
+if ! command -v rpmbuild >/dev/null 2>&1; then
+  echo "ERROR: rpmbuild is not installed. Please install rpm-build package." >&2
+  exit 69
+fi
+
+# Guard clause: Verify rpmspec exists
+if ! command -v rpmspec >/dev/null 2>&1; then
+  echo "ERROR: rpmspec is not installed. Please install rpm package." >&2
+  exit 69
+fi
 
 # Ensure release binaries exist
 CLI_BIN="$ROOT/target/release/ramshared"
@@ -29,7 +41,7 @@ fi
 
 if [[ ! -x "$CLI_BIN" || ! -x "$DAEMON_BIN" ]]; then
   echo "ERROR: Target release binaries not found ($CLI_BIN / $DAEMON_BIN)" >&2
-  exit 1
+  exit 74
 fi
 
 # Clean previous build root
@@ -79,11 +91,13 @@ fi
 - Official v0.9.0-beta.2 Linux RPM release with hardware DMA & ublk support.
 SPEC_EOF
 
-if command -v rpmbuild >/dev/null 2>&1; then
-  echo "==> Executing rpmbuild..."
-  rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
-  cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
-  echo "✓ RPM package built under $OUT_DIR/"
-else
-  echo "==> rpmbuild not installed on host. Spec generated at $SPEC_FILE (PASS)."
+# Guard clause: Validate spec file syntax
+if ! rpmspec -q "$SPEC_FILE" >/dev/null 2>&1; then
+  echo "ERROR: Invalid RPM spec file syntax in $SPEC_FILE" >&2
+  exit 78
 fi
+
+echo "==> Executing rpmbuild..."
+rpmbuild --define "_topdir $RPM_ROOT" -bb "$SPEC_FILE"
+cp "$RPM_ROOT"/RPMS/*/*.rpm "$OUT_DIR/" 2>/dev/null || true
+echo "✓ RPM package built under $OUT_DIR/"
