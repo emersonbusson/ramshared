@@ -18,7 +18,9 @@ param(
     [Alias("ResultPath")]
     [string]$WorkerEntryResultPath = "",
     [Alias("StagingRoot")]
-    [string]$WorkerEntryStagingRoot = ""
+    [string]$WorkerEntryStagingRoot = "",
+    [Alias("ExpectedIsoSha256")]
+    [string]$WorkerEntryExpectedSha256 = ""
 )
 
 Set-StrictMode -Version Latest
@@ -1021,13 +1023,18 @@ function Invoke-Win11LabMediaWorkerMode {
         [string]$Path,
         [Parameter(Mandatory = $true)]
         [string]$OutputPath,
-        [string]$WorkerStagingRoot = ""
+        [string]$WorkerStagingRoot = "",
+        [string]$ExpectedIsoSha256 = ""
     )
 
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         throw "win11_lab_media_contract_iso_missing"
     }
     Assert-Win11LabWorkerResultPath -Path $OutputPath
+
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedIsoSha256)) {
+        Assert-Win11LabMediaChecksum -FilePath $Path -ExpectedSha256 $ExpectedIsoSha256
+    }
 
     switch ($Mode) {
         "Inspect" {
@@ -1124,10 +1131,37 @@ function Invoke-Win11LabMediaWorkerMode {
     }
 }
 
+function Assert-Win11LabMediaChecksum {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$FilePath,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$ExpectedSha256
+    )
+
+    if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
+        Write-Error -Message "Media file not found at path: $FilePath" -ErrorId "win11_lab_media_contract_artifact_missing" -Category ObjectNotFound
+        throw [System.Management.Automation.ItemNotFoundException]::new("Media file not found at path: $FilePath")
+    }
+
+    $actualSha256 = Get-Win11LabFileSha256 -Path $FilePath
+    $normalizedExpected = Normalize-Win11LabSha256 -Sha256 $ExpectedSha256 -FailureCode "expected_sha256_invalid"
+
+    if ($actualSha256 -cne $normalizedExpected) {
+        Write-Error -Message "Checksum mismatch for file: $FilePath. Expected: $normalizedExpected, Actual: $actualSha256" -ErrorId "win11_lab_media_contract_checksum_mismatch" -Category InvalidData
+        throw [System.Management.Automation.ValidationMetadataException]::new("Checksum mismatch for file: $FilePath")
+    }
+}
+
 if (-not [string]::IsNullOrWhiteSpace($WorkerEntryMode)) {
     Invoke-Win11LabMediaWorkerMode `
         -Mode $WorkerEntryMode `
         -Path $WorkerEntryIsoPath `
         -OutputPath $WorkerEntryResultPath `
-        -WorkerStagingRoot $WorkerEntryStagingRoot
+        -WorkerStagingRoot $WorkerEntryStagingRoot `
+        -ExpectedIsoSha256 $WorkerEntryExpectedSha256
 }
