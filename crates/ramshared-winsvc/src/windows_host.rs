@@ -1199,6 +1199,48 @@ mod tests {
     }
 
     #[test]
+    fn read_owned_config_succeeds_for_valid_config() {
+        let dir = std::env::temp_dir().join(format!("ramshared-config-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let config_file = dir.join("winsvc.toml");
+
+        let valid_toml = r#"
+[win_drive]
+size_bytes = 536870912
+block_size = 4096
+cuda_device = 0
+reserve_bytes = 536870912
+queue_depth = 4
+max_io_bytes = 1048576
+evidence_path = "C:\\ProgramData\\RamShared\\evidence"
+volume_letter = "D"
+broker_pipe = "named_pipe_v1"
+broker_ready_timeout_secs = 30
+tenant = "windrive-host"
+"#;
+        std::fs::write(&config_file, valid_toml).unwrap();
+
+        let cfg = WindowsHostState::read_owned_config(&config_file).unwrap();
+        assert_eq!(cfg.size_bytes, 536_870_912);
+        assert_eq!(cfg.block_size, 4096);
+        assert_eq!(cfg.volume_letter, 'D');
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_owned_config_rejects_empty_path() {
+        let err = WindowsHostState::read_owned_config(Path::new("")).unwrap_err();
+        assert!(matches!(
+            err,
+            HostError::Config(ConfigError::Invalid {
+                field: "config",
+                ref detail
+            }) if detail.contains("empty path")
+        ));
+    }
+
+    #[test]
     fn read_owned_config_rejects_relative_path() {
         let err = WindowsHostState::read_owned_config(Path::new("relative/path/winsvc.toml"))
             .unwrap_err();
@@ -1223,6 +1265,75 @@ mod tests {
             matches!(err, HostError::Config(ConfigError::Invalid { .. }))
                 || matches!(err, HostError::Io(_))
         );
+    }
+
+    #[test]
+    fn read_owned_config_rejects_invalid_toml() {
+        let dir = std::env::temp_dir().join(format!("ramshared-badtoml-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let config_file = dir.join("bad.toml");
+
+        std::fs::write(&config_file, "invalid_toml = [unclosed").unwrap();
+
+        let err = WindowsHostState::read_owned_config(&config_file).unwrap_err();
+        assert!(matches!(err, HostError::Config(ConfigError::Parse(_))));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_owned_config_rejects_oversized_file() {
+        let dir = std::env::temp_dir().join(format!("ramshared-oversize-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let config_file = dir.join("huge.toml");
+
+        let oversized_content = vec![b'a'; crate::config::MAX_CONFIG_BYTES + 10];
+        std::fs::write(&config_file, oversized_content).unwrap();
+
+        let err = WindowsHostState::read_owned_config(&config_file).unwrap_err();
+        assert!(matches!(
+            err,
+            HostError::Config(ConfigError::Invalid {
+                field: "config",
+                ref detail
+            }) if detail.contains("exceeds")
+        ));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn read_owned_config_rejects_invalid_schema() {
+        let dir = std::env::temp_dir().join(format!("ramshared-badschema-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let config_file = dir.join("badschema.toml");
+
+        let bad_schema_toml = r#"
+[win_drive]
+size_bytes = 536870912
+block_size = 4096
+cuda_device = 0
+reserve_bytes = 536870912
+queue_depth = 4
+max_io_bytes = 1048576
+evidence_path = "C:\\ProgramData\\RamShared\\evidence"
+volume_letter = "A"
+broker_pipe = "named_pipe_v1"
+broker_ready_timeout_secs = 30
+tenant = "windrive-host"
+"#;
+        std::fs::write(&config_file, bad_schema_toml).unwrap();
+
+        let err = WindowsHostState::read_owned_config(&config_file).unwrap_err();
+        assert!(matches!(
+            err,
+            HostError::Config(ConfigError::Invalid {
+                field: "volume_letter",
+                ..
+            })
+        ));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
