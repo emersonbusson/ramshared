@@ -1335,6 +1335,41 @@ mod tests {
     }
 
     #[test]
+    fn pagefile_identity_extracts_volume_prefix() {
+        let pf1 = pagefile_identity(r"C:\pagefile.sys".to_string());
+        assert_eq!(pf1.name, r"C:\pagefile.sys");
+        assert_eq!(pf1.volume, r"C:\");
+
+        let pf2 = pagefile_identity(r"D:\swapfile.sys".to_string());
+        assert_eq!(pf2.name, r"D:\swapfile.sys");
+        assert_eq!(pf2.volume, r"D:\");
+
+        let pf_short = pagefile_identity("C:".to_string());
+        assert_eq!(pf_short.volume, "C:");
+
+        let pf_empty = pagefile_identity(String::new());
+        assert_eq!(pf_empty.volume, "");
+    }
+
+    #[test]
+    fn active_pagefiles_handles_query_and_identity_merging() {
+        let result = WindowsHostState::active_pagefiles();
+        match result {
+            Ok(identities) => {
+                for id in identities {
+                    assert!(!id.name.is_empty());
+                    assert_eq!(id.volume.len(), 3);
+                    assert!(id.volume.ends_with('\\'));
+                }
+            }
+            Err(err) => {
+                assert!(matches!(err, HostError::Pagefile(_)));
+                assert!(err.to_string().contains("pagefile"));
+            }
+        }
+    }
+
+    #[test]
     fn active_pagefiles_query_returns_result() {
         let result = WindowsHostState::active_pagefiles();
         if let Err(err) = result {
