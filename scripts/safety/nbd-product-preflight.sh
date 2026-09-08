@@ -42,7 +42,7 @@ block() {
 }
 
 usage() {
-  block UNSUPPORTED_ARGUMENT 64
+  block UNSUPPORTED_ARGUMENT 64 64
 }
 
 is_sha256() {
