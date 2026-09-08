@@ -1,0 +1,22 @@
+## Summary
+Refactor scripts/safety/cascade-pressure-probe.sh to use semantic exit codes from sysexits.h (EX_USAGE=64, EX_UNAVAILABLE=69, EX_IOERR=74, EX_CONFIG=78) in guard clauses according to infrastructure hardening principles.
+
+## Commits
+| Commit | What was done | Why it was done | Details |
+|---|---|---|---|
+| 8b48f378b481869aea815da2622e0028d48acefa | Refactored cascade-pressure-probe.sh to use sysexits.h | Adhere to hardening principles | Replaced generic error codes (1, 2) with sysexits.h standard codes |
+
+## Issue
+None
+
+## Owner
+OpsInfra100/2026-09-06/p0-observability/099
+
+## Labels
+type:scripts, area:p0-observability, type:safety
+
+## Validation
+shellcheck scripts/safety/cascade-pressure-probe.sh
+
+## Rollback trigger
+Revert if the pipeline breaks or cascade-pressure-probe fails unexpectedly with a semantic error.
