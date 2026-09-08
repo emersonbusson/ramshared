@@ -33,6 +33,22 @@ jobs:
         with:
           toolchain: 1.98.0
 
+      - name: Validate Packaging Prerequisites
+        run: |
+          set -euo pipefail
+          if ! command -v cargo >/dev/null 2>&1; then
+            echo "Error: cargo is not available" >&2
+            exit 69
+          fi
+          if ! command -v dpkg-deb >/dev/null 2>&1; then
+            echo "Error: dpkg-deb is not available" >&2
+            exit 69
+          fi
+          if ! command -v rpmbuild >/dev/null 2>&1; then
+            echo "Error: rpmbuild is not available" >&2
+            exit 69
+          fi
+
       - name: Build Release Binaries
         run: cargo build --release --locked
 
